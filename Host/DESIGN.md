@@ -84,10 +84,13 @@ binds Turns). Ingress bytes travel inside the turn record (KERNEL decides what a
   dropped dirty pages, so retrying it is a lie (PostgreSQL fsyncgate, 2018).
 - **Open/recover:** the newest checkpoint whose MAC verifies (absent/torn checkpoints are skipped,
   never trusted), then every segment from it, frame by frame. The first frame that is incomplete
-  or fails its tag ends the log. Because a batch is fsynced before the next is written, at most
-  ONE batch can be unsynced at a crash: a bad region no longer than `frameBytesMax` at the end of
-  the last segment is a torn tail and is truncated (reported by name with its byte count); anything
-  larger, or bad bytes in a non-last segment, is corruption and refuses by name (`storeCorrupt`).
+  or fails its tag ends the log. Because a batch is fsynced before the next is written, only the
+  LAST frame can be torn: the bad bytes are truncated as a torn tail only if they are ≤ `frameMax`
+  AND no frame verifies anywhere after them (each frame is preceded on disk by the tag it chains
+  from, so a forward scan can check candidates without the bad frame). A verifying frame after
+  bad bytes means acknowledged data follows: refuse by name (`storeCorrupt`), never truncate.
+  The one case no format decides: a corruption inside the last frame reads as torn; the client
+  holding its receipt and the follower that folded it both see the height go back.
 - **Physical IO** is one C file, `Host/native/file.c` (~120 lines: `open`, `write_all`, `fsync`,
   `fsync_dir`, `read_at`, `size`, `truncate`, `flock`, `rename`): Lean's `IO.FS.Handle` is a
   `FILE*` with no `fsync`, no positioned read and no truncate-to-length.
@@ -113,7 +116,8 @@ special-cased streamed ops: an op whose reply is large has a large declared boun
 | plant | where | expected |
 |---|---|---|
 | `plant-torn-tail K` | truncate the last segment K bytes into its last frame | open truncates, reports `tornTail K`, height = previous batch |
-| `plant-flip-byte N` | flip one byte inside a non-last frame | open refuses `storeCorrupt` |
+| `plant-flip-byte N` | flip one byte (body or length header) inside a non-last frame | open refuses `storeCorrupt` |
+| `plant-flip-last-frame` | flip a byte of the last frame | reads as torn: the stated undecidable case |
 | `plant-fsync-fail` | the shim returns EIO on the next fsync | every reply of that batch is `uncertain`; exit 3; reopen height ∈ {before, after} |
 | `plant-kill-at P` | `kill -9` at each of {after write, after fsync, after reply} | reopen root = follower fold root |
 

@@ -58,30 +58,39 @@ theorem frame_fields (s : Sealer) (prev r c : ByteArray) :
   rw [s.tag_size] at this
   exact this
 
-/-- `step` reads a well-formed frame at its offset. -/
-theorem step_frame (s : Sealer) {recordMax : Nat} (a : ByteArray) (prev r c : ByteArray)
+/-- `frameAt` reads a well-formed frame at its offset. -/
+theorem frameAt_frame (s : Sealer) {recordMax : Nat} (a : ByteArray) (prev r c : ByteArray)
     (hr : r.size ≤ recordMax) (hr32 : r.size < 2 ^ 32) :
-    step s recordMax (a ++ (frame s prev r ++ c)) a.size prev =
-      .next r (a.size + (frame s prev r).size) (s.tag (prev ++ r)) := by
+    frameAt s recordMax (a ++ (frame s prev r ++ c)) a.size prev =
+      some ⟨r, a.size + (frame s prev r).size, s.tag (prev ++ r)⟩ := by
   obtain ⟨f0, f1, f2⟩ := frame_fields s prev r c
   have hsz : (a ++ (frame s prev r ++ c)).size = a.size + (4 + r.size + tagBytes) + c.size := by
     simp [size_append, size_frame]; omega
   have hread : readLe32 (a ++ (frame s prev r ++ c)) a.size = some r.size := by
     unfold readLe32
     rw [if_pos (by rw [hsz]; omega)]
-    rw [show a.size + 4 = a.size + 4 from rfl,
-      show a.size = a.size + 0 from rfl]
+    rw [show a.size = a.size + 0 from rfl]
     rw [extract_right rfl 0 4, f0, ofLe32_le32 hr32]
   have e1 := extract_right (rfl : a ++ (frame s prev r ++ c) = _) 4 (4 + r.size)
   have e2 := extract_right (rfl : a ++ (frame s prev r ++ c) = _) (4 + r.size) (4 + r.size + tagBytes)
   rw [f1] at e1; rw [f2] at e2
-  unfold step
-  rw [if_neg (by rw [hsz]; simp [tagBytes]; omega), hread]
+  unfold frameAt
+  rw [hread]
   simp only
   rw [if_neg (by omega), if_neg (by rw [hsz]; omega)]
   rw [show a.size + 4 + r.size = a.size + (4 + r.size) by omega,
     show a.size + (4 + r.size) + tagBytes = a.size + (4 + r.size + tagBytes) by omega, e1, e2,
     if_pos rfl, size_frame]
+
+/-- `step` reads a well-formed frame at its offset. -/
+theorem step_frame (s : Sealer) {recordMax : Nat} (a : ByteArray) (prev r c : ByteArray)
+    (hr : r.size ≤ recordMax) (hr32 : r.size < 2 ^ 32) :
+    step s recordMax (a ++ (frame s prev r ++ c)) a.size prev =
+      .next r (a.size + (frame s prev r).size) (s.tag (prev ++ r)) := by
+  have hsz : (a ++ (frame s prev r ++ c)).size = a.size + (4 + r.size + tagBytes) + c.size := by
+    simp [size_append, size_frame]; omega
+  unfold step
+  rw [if_neg (by rw [hsz]; simp [tagBytes]; omega), frameAt_frame s a prev r c hr hr32]
 
 /-- Size of a segment. -/
 theorem size_encodeAll_ge (s : Sealer) (prev : ByteArray) (rs : List ByteArray) :
@@ -136,47 +145,60 @@ theorem recover_encodeAll (s : Sealer) {recordMax : Nat} (initial : ByteArray) (
   rw [hk]
   simp [go, step, List.reverse_reverse]
 
+/-- No frame verifies inside the cut: what an unforgeable tag gives. -/
+def NoFrameInside (s : Sealer) (recordMax : Nat) (E p : ByteArray) : Prop :=
+  ∀ i, i < p.size → verifiesAt s recordMax (E ++ p) (E.size + 1 + i) = false
+
 /-- The step after a clean run, when the next frame was cut after `p`. -/
 theorem step_cut (s : Sealer) {recordMax : Nat} (E prev r p q : ByteArray)
     (hr : r.size ≤ recordMax ∧ r.size < 2 ^ 32)
-    (hcut : p ++ q = frame s prev r) (hq : 0 < q.size) :
+    (hcut : p ++ q = frame s prev r) (hq : 0 < q.size) (hin : NoFrameInside s recordMax E p) :
     step s recordMax (E ++ p) E.size prev =
       if p.size = 0 then .stop .clean else .stop (.torn p.size) := by
   have hpq : p.size + q.size = 4 + r.size + tagBytes := by
     rw [← size_frame s prev r, ← hcut, size_append]
   have hsize : (E ++ p).size = E.size + p.size := size_append
-  have hbad : badTail recordMax (E ++ p) E.size = .torn p.size := by
-    unfold badTail frameMax; rw [if_pos (by rw [hsize]; omega), hsize, Nat.add_sub_cancel_left]
+  have hbad : badTail s recordMax (E ++ p) E.size = .torn p.size := by
+    unfold badTail frameMax
+    rw [if_neg (by rw [hsize]; have := hr.1; omega), hsize, Nat.add_sub_cancel_left]
+    rw [if_neg]
+    simp only [List.any_eq_true, List.mem_range, not_exists, not_and, Bool.not_eq_true]
+    intro i hi
+    exact hin i hi
   by_cases hp0 : p.size = 0
   · rw [if_pos hp0]; unfold step; rw [if_pos (by rw [hsize]; omega)]
   · rw [if_neg hp0]
     unfold step
     rw [if_neg (by rw [hsize]; omega)]
-    by_cases h4 : p.size < 4
-    · have : readLe32 (E ++ p) E.size = none := by
-        unfold readLe32; rw [if_neg (by rw [hsize]; omega)]
-      rw [this, hbad]
-    · have hhead : (E ++ p).extract E.size (E.size + 4) = le32 r.size := by
-        have := extract_right (rfl : E ++ p = _) 0 4
-        simp only [Nat.add_zero] at this
+    have hnone : frameAt s recordMax (E ++ p) E.size prev = none := by
+      unfold frameAt
+      by_cases h4 : p.size < 4
+      · have : readLe32 (E ++ p) E.size = none := by
+          unfold readLe32; rw [if_neg (by rw [hsize]; omega)]
         rw [this]
-        have hp4 : p.extract 0 4 = (p ++ q).extract 0 4 := by
-          rw [extract_append, show 4 - p.size = 0 by omega, Nat.zero_sub, extract_same, append_empty]
-        rw [hp4, hcut]
-        have := (frame_fields s prev r ByteArray.empty).1
-        rwa [append_empty] at this
-      have : readLe32 (E ++ p) E.size = some r.size := by
-        unfold readLe32; rw [if_pos (by rw [hsize]; omega), hhead, ofLe32_le32 hr.2]
-      rw [this]
-      simp only
-      have h1 := hr.1
-      rw [if_neg (by omega), if_pos (by rw [hsize]; omega), hbad]
+      · have hhead : (E ++ p).extract E.size (E.size + 4) = le32 r.size := by
+          have := extract_right (rfl : E ++ p = _) 0 4
+          simp only [Nat.add_zero] at this
+          rw [this]
+          have hp4 : p.extract 0 4 = (p ++ q).extract 0 4 := by
+            rw [extract_append, show 4 - p.size = 0 by omega, Nat.zero_sub, extract_same, append_empty]
+          rw [hp4, hcut]
+          have := (frame_fields s prev r ByteArray.empty).1
+          rwa [append_empty] at this
+        have : readLe32 (E ++ p) E.size = some r.size := by
+          unfold readLe32; rw [if_pos (by rw [hsize]; omega), hhead, ofLe32_le32 hr.2]
+        rw [this]
+        simp only
+        have h1 := hr.1
+        rw [if_neg (by omega), if_pos (by rw [hsize]; omega)]
+    rw [hnone, hbad]
 
 /-- A cut inside the frame after a clean run reads as `torn` with the cut length. -/
 theorem recover_torn (s : Sealer) {recordMax : Nat} (initial : ByteArray) (rs : List ByteArray)
     (hrs : ∀ r ∈ rs, r.size ≤ recordMax ∧ r.size < 2 ^ 32)
     (r p q : ByteArray) (hr : r.size ≤ recordMax ∧ r.size < 2 ^ 32)
-    (hcut : p ++ q = frame s (lastTag s initial rs) r) (hq : 0 < q.size) :
+    (hcut : p ++ q = frame s (lastTag s initial rs) r) (hq : 0 < q.size)
+    (hin : NoFrameInside s recordMax (encodeAll s initial rs) p) :
     recover s recordMax initial (encodeAll s initial rs ++ p) =
       ⟨rs, (encodeAll s initial rs).size, lastTag s initial rs,
         if p.size = 0 then .clean else .torn p.size⟩ := by
@@ -190,7 +212,7 @@ theorem recover_torn (s : Sealer) {recordMax : Nat} (initial : ByteArray) (rs : 
     ⟨(encodeAll s initial rs ++ p).size - rs.length, by simp [size_append, tagBytes] at hge ⊢; omega⟩
   rw [hk]
   simp only [go, List.reverse_reverse]
-  rw [step_cut s _ _ r p q hr hcut hq]
+  rw [step_cut s _ _ r p q hr hcut hq hin]
   by_cases hp0 : p.size = 0 <;> simp [hp0]
 
 /-- Every four bytes are the encoding of their value. -/
@@ -220,6 +242,40 @@ theorem lastTag_snoc (s : Sealer) (prev : ByteArray) (xs : List ByteArray) (r : 
   | nil => simp [lastTag]
   | cons x xs ih => simp [lastTag, ih]
 
+/-- What `frameAt` reads is literally a frame on disk. -/
+theorem frameAt_some {s : Sealer} {recordMax : Nat} {log : ByteArray} {off : Nat} {prev : ByteArray}
+    {rd : Read} (h : frameAt s recordMax log off prev = some rd) :
+    off ≤ rd.next ∧ rd.next ≤ log.size ∧ log.extract off rd.next = frame s prev rd.record ∧
+      rd.tag = s.tag (prev ++ rd.record) := by
+  unfold frameAt at h
+  split at h
+  · cases h
+  · rename_i len hread
+    split at h
+    · cases h
+    · split at h
+      · cases h
+      · rename_i hlen hfit
+        dsimp only at h
+        split at h
+        · rename_i htag
+          cases h
+          unfold readLe32 at hread
+          split at hread
+          · rename_i h4
+            cases hread
+            refine ⟨by simp only; omega, by simp only; omega, ?_, htag.symm⟩
+            dsimp only
+            have hr : (log.extract (off + 4) (off + 4 + ofLe32 (log.extract off (off + 4)))).size =
+                ofLe32 (log.extract off (off + 4)) := by simp; omega
+            unfold frame
+            rw [hr, le32_ofLe32 (by simp; omega), htag,
+              ← extract_eq_extract_append_extract (off + 4) (by omega) (by omega),
+              ← extract_eq_extract_append_extract (off + 4 + ofLe32 (log.extract off (off + 4)))
+                (by omega) (by omega)]
+          · cases hread
+        · cases h
+
 /-- What a `next` step read is literally a frame on disk. -/
 theorem step_next {s : Sealer} {recordMax : Nat} {log : ByteArray} {off : Nat} {prev r : ByteArray}
     {o : Nat} {t : ByteArray} (h : step s recordMax log off prev = .next r o t) :
@@ -228,31 +284,10 @@ theorem step_next {s : Sealer} {recordMax : Nat} {log : ByteArray} {off : Nat} {
   split at h
   · cases h
   · split at h
+    · rename_i rd hrd
+      cases h
+      exact frameAt_some hrd
     · cases h
-    · rename_i len hread
-      split at h
-      · cases h
-      · split at h
-        · cases h
-        · rename_i hlen hfit
-          dsimp only at h
-          split at h
-          · rename_i htag
-            cases h
-            unfold readLe32 at hread
-            split at hread
-            · rename_i h4
-              cases hread
-              refine ⟨by omega, by omega, ?_, htag.symm⟩
-              have hr : (log.extract (off + 4) (off + 4 + ofLe32 (log.extract off (off + 4)))).size =
-                  ofLe32 (log.extract off (off + 4)) := by simp; omega
-              unfold frame
-              rw [hr, le32_ofLe32 (by simp; omega), htag,
-                ← extract_eq_extract_append_extract (off + 4) (by omega) (by omega),
-                ← extract_eq_extract_append_extract (off + 4 + ofLe32 (log.extract off (off + 4)))
-                  (by omega) (by omega)]
-            · cases hread
-          · cases h
 
 /-- For any bytes: the records recovered re-encode to exactly the bytes before `validLen`. -/
 theorem go_sound (s : Sealer) (recordMax : Nat) (initial log : ByteArray) :

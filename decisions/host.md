@@ -141,3 +141,26 @@ practice).
 **Meta-critique.** I took the per-request signature because it needs no state, and I like stateless
 loops. I have not measured whether verification dominates a cold follow at THE BAR's scale.
 **Status.** open (KERNEL: `grantOf`'s name and shape; CODEC: the verifier and request domain tag).
+
+## HOST-12 · torn vs corrupt is decided by a forward scan, not by size (2026-10-16; found by plant-flip-byte)
+**Decision.** Bad bytes after the last verifying frame count as the torn tail only if (a) there are at most
+`frameMax` of them and (b) no frame verifies at any later offset. A frame verifies at offset `o` when it
+checks against the 32 bytes before `o`; every frame except a segment's first is preceded on disk by the
+tag it chains from, so the check does not need the bad frame. Anything else is `corrupt`: the Host refuses
+to open and truncates nothing.
+**How it was found.** The first rule was "bad region ≤ frameMax ⇒ torn". `frameMax` is ~256 KiB (the
+record bound) and the simulated log is 9.4 KB. So `plant-flip-byte`, a single flipped byte in the FIRST
+of 59 frames, came back `torn`, and the rule would have truncated 58 acknowledged batches without a word.
+The torn-tail theorem stayed true throughout, because it only speaks about cuts of the last frame. The
+plant is what caught it.
+**Cost.** On the failure path only: per candidate offset one length check, plus one tag over at most
+`recordMax` bytes when the length is sane. `recover_torn` gains a premise, `NoFrameInside` (no frame
+verifies inside the cut). An unforgeable tag discharges it, and the plants check it on every cut.
+**Critique.** The undecidable case remains, and it is stated. A flip inside the LAST frame reads as torn
+(`plant-flip-last-frame` asserts exactly this). The data loss is bounded to one batch and is detectable by
+receipt holders and followers, but the Host itself cannot tell. Only an out-of-band durable length closes
+it, at the price of a second fsync per batch.
+**Meta-critique.** I wrote the first rule from the crash model ("at most one unsynced frame") and forgot
+that corruption does not follow the crash model. That is the familiar mistake of testing only the failure
+you designed for.
+**Status.** open.
