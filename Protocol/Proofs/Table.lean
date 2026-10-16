@@ -8,7 +8,7 @@
 * no two operations name the same receiver: no function has two wires (`Op.receiver_injective`) —
   minidregg's twin class (one receiver behind a family opcode and behind op 2, 34 beside 164);
 * exactly one operation may append (`Op.effect_write_iff`): one admission path (law 1);
-* the client's bounds fit inside one frame.
+* the client's bounds fit inside one frame, and the supervisor's buffers inside 32 MiB.
 -/
 import Protocol.Table
 
@@ -59,5 +59,8 @@ theorem code_of_ofCode? {b : UInt8} {s : Step} (h : ofCode? b = some s) : s.code
 end Step
 
 theorem argv_fits_frame : Bounds.argvBytesMax + 1 ≤ Bounds.frameBytesMax := by decide
+
+/-- The supervisor's buffers, at most one frame per connection per direction, fit in 32 MiB. -/
+theorem mux_buffers_bounded : 2 * Bounds.connectionsMax * Bounds.frameBytesMax ≤ 33554432 := by decide
 
 end Nanodregg.Protocol
