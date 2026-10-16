@@ -1,0 +1,19 @@
+# nanodregg — the one build (owner: BUILD-GATES).
+#
+# - No package dependencies. Lean core and Std only: no Mathlib, no Batteries (DECISIONS G1).
+# - One `lean_lib` per top-level layer directory, rooted by glob, so every file in the directory
+#   is built and none can be an orphan (gates/closure.py refuses a .lean file outside a lib).
+#   A layer adds its entry here in the same commit as its first .lean file (a glob over a
+#   directory that does not exist in the commit fails the build).
+# - Warnings are errors; implicit auto-bound variables are off.
+name = "nanodregg"
+defaultTargets = ["Kernel"]
+
+[leanOptions]
+autoImplicit = false
+relaxedAutoImplicit = false
+warningAsError = true
+
+[[lean_lib]]
+name = "Kernel"
+globs = ["Kernel.+"]
