@@ -15,10 +15,15 @@ their critiques: `DECISIONS.md` CLIENT-1..7.
 ```
 
 - `nd` is one process per command. It opens two sockets in the workspace and spawns nothing.
-- The **supervisor** (`nd-supervise`, same crate) is the byte mux HOST-2 asks for: it binds a Unix
+  The operations, status bytes, step tags and bounds are `Protocol/Table.lean` (6 ops: `submit`,
+  `lookup`, `read`, `log` on host.sock; `command`, `resume` on follow.sock), reaching Rust only as
+  CODEC's generated file.
+- The **supervisor** (`nd-supervise`, same crate; core in `src/mux.rs`) is the byte mux HOST-2 asks for: it binds a Unix
   socket, accepts connections, and moves `(conn, op, payload)` frames to a Lean child's stdin and
   `(conn, status, payload)` replies back by `conn`. It parses no payload. It serves both `host serve`
-  and `host follow` (HOST-7: consent is `host follow`). It is started by the service manager, never by `nd`.
+  and `host follow` (HOST-7: consent is `host follow`). It is started by the service manager, never by `nd`; it launches its child through `sandbox/`
+  so the child cannot read the member's seed (CLIENT-8, plant in `sandbox/tests/confine.rs`), and it
+  exits when the child does (one restart path: the service manager's).
 - `host.sock` may be a local socket or an OpenSSH `StreamLocalForward` of the remote one; the client
   cannot tell and does not care (CLIENT-4).
 
