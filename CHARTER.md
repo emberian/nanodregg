@@ -24,7 +24,9 @@ in `~/dev/redregg/work/`: `ARCHITECTURE-20261016.md`, `CYCLE-TIME-20261016.md`,
    canonical decoders with a canonicity proof; content-addressed tags.
 4. **TigerStyle.** A static bound on everything (`Bounds`), an assertion for every invariant a
    theorem states, placed in pairs; no `partial def` in deployed code; no unbounded recursion; no
-   allocation per byte; O(touched) work per request, never O(store).
+   allocation per byte; O(touched) work per request, never O(store). The ONE unbounded loop is the
+   resident's top-level fuel-and-restart loop; everything under it is bounded (ROOT ruling on
+   HOST's LAW-4 critique, 10-16).
 5. **Performance is designed.** The resident Host is one deterministic loop per Store holding the
    World, the trie and the memo; admission is batched; the follower is the only replayer. Measure
    at range ends with `perf stat --no-scale`; the waste ratio of every operation is pinned and may
@@ -59,7 +61,8 @@ above has committed, never against prose.
 
 | layer | owner | owns | first deliverable |
 |---|---|---|---|
-| KERNEL | DISCOVER-KERNEL → BUILD-KERNEL | `Kernel/`: World, Turn, Leg, History, `World.admit`, `fold`, Bounds, the Store model (log of Turns, checkpoint = World, roots), the simulation generator | `Kernel/World.lean` + `Kernel/Turn.lean` + `Kernel/Bounds.lean` with the admit/fold theorems (determinism, follower soundness, charge exactness, guard-from-intent staleness refusal) and `Kernel/Sim.lean` (seeded generator + Host/follower side-by-side check) |
+| KERNEL | DISCOVER-KERNEL → BUILD-KERNEL | `Kernel/`: World, Turn, Leg, History, `World.admit`, `fold`, Bounds, the Store model (log of Turns, checkpoint = World, roots), the simulation generator, AND `Kernel/Receive/`: the RECEIVERS (signed request → Turn: authority, law, funding; one derivation per operation kind, each a def with its theorem; derive-then-admit, the World's guard check is the one staleness refusal) — ROOT ruling 10-16 on HOST-1; HOST drives and decides nothing |
+| LANG | BUILD-LANG | `Lang/`: Objective Bend — the Core4 term language, typing/checking, the demand machine, compilation of a checked term to an installed law / invocable package, and the hosted-resident surface (what a Hermes resident can author and install); minidregg's `Theory/ObjectiveBend*` (46 files) and `Compiler/ObjectiveBend*` (28) are the SPEC to restate smaller, never copy; consumes KERNEL's `install`/`invoke` receiver signatures | `Lang/Term.lean` + `Lang/Check.lean` with the preservation/determinism theorems, and one law compiled end to end through a KERNEL receiver | `Kernel/World.lean` + `Kernel/Turn.lean` + `Kernel/Bounds.lean` with the admit/fold theorems (determinism, follower soundness, charge exactness, guard-from-intent staleness refusal) and `Kernel/Sim.lean` (seeded generator + Host/follower side-by-side check) |
 | CODEC | DISCOVER-CODEC → BUILD-CODEC | `Codec/`: the one `StreamCodec` family over ByteArray, `Digest256`, content-addressed tags, canonicity proofs, the generated operation table and bounds for Rust | `Codec/Stream.lean` with canonicity theorem, `Codec/Tag.lean`, and the generator for `protocol/*.json` |
 | HOST | DISCOVER-HOST → BUILD-HOST | `Host/`: the resident loop (one per Store), batched admission, the single dispatcher over the op table, the durable Store (SQLite or a flat log: decide and critique), checkpoints, crash protocol, the consent provider as the SAME code path in a second process | `Host/Loop.lean` admitting Turns through `World.admit`, persisting through one append, with the crash-restart plant |
 | PROTOCOL | DISCOVER-PROTOCOL → BUILD-PROTOCOL | `protocol/`: the operation table (target ≤ 40 ops), consent frames (merged), client commands, the SPK broker verbs; every op's receiver named; the conformance rows (the journeys rewritten as executable rows against nanodregg) | `protocol/operations.lean` (the table as data with a theorem that every op has exactly one receiver) + `rows/` (journey J0–J8, JPAY, jwell, m6grain, hermes as nanodregg rows) |
