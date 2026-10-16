@@ -13,7 +13,7 @@ Every codec carries its `Shape`. A tag is the hash of a label and a shape
 (`Codec.Tag`), so a codec whose structure changes gets a new tag without anyone
 editing a literal.
 
-Integers are fixed width, big-endian. Lengths and counts are `u32` and every
+Integers are fixed width, little-endian. Lengths and counts are `u32` and every
 variable-size value carries its bound in its type (`Bytes max`, `Bounded max α`):
 a value past its bound cannot be built, so it cannot be written, and a length
 past the bound is refused by name before anything is read. -/
@@ -77,35 +77,35 @@ def u8 : Stream UInt8 where
   put v buf := buf.push v
   get b i := if h : i < b.size then .ok (b[i], i + 1) else .error (.truncated i 1)
 
-/-- The `UInt32` whose big-endian bytes are `a b c d`. -/
-@[inline] def ofBE32 (a b c d : UInt8) : UInt32 :=
-  ((a.toUInt32 * 256 + b.toUInt32) * 256 + c.toUInt32) * 256 + d.toUInt32
+/-- The `UInt32` whose little-endian bytes are `a b c d` (`a` least significant). -/
+@[inline] def ofLE32 (a b c d : UInt8) : UInt32 :=
+  ((d.toUInt32 * 256 + c.toUInt32) * 256 + b.toUInt32) * 256 + a.toUInt32
 
-/-- The `UInt64` whose big-endian bytes are `a … h`. -/
-@[inline] def ofBE64 (a b c d e f g h : UInt8) : UInt64 :=
-  ((((((a.toUInt64 * 256 + b.toUInt64) * 256 + c.toUInt64) * 256 + d.toUInt64) * 256
-    + e.toUInt64) * 256 + f.toUInt64) * 256 + g.toUInt64) * 256 + h.toUInt64
+/-- The `UInt64` whose little-endian bytes are `a … h` (`a` least significant). -/
+@[inline] def ofLE64 (a b c d e f g h : UInt8) : UInt64 :=
+  ((((((h.toUInt64 * 256 + g.toUInt64) * 256 + f.toUInt64) * 256 + e.toUInt64) * 256
+    + d.toUInt64) * 256 + c.toUInt64) * 256 + b.toUInt64) * 256 + a.toUInt64
 
-/-- Four bytes, big-endian. -/
+/-- Four bytes, little-endian. -/
 def u32 : Stream UInt32 where
   shape := .u32
   put v buf :=
-    (((buf.push (v >>> 24).toUInt8).push (v >>> 16).toUInt8).push (v >>> 8).toUInt8).push v.toUInt8
+    (((buf.push v.toUInt8).push (v >>> 8).toUInt8).push (v >>> 16).toUInt8).push (v >>> 24).toUInt8
   get b i :=
     if h : i + 4 ≤ b.size then
-      .ok (ofBE32 b[i] b[i+1] b[i+2] b[i+3], i + 4)
+      .ok (ofLE32 b[i] b[i+1] b[i+2] b[i+3], i + 4)
     else .error (.truncated i 4)
 
-/-- Eight bytes, big-endian. -/
+/-- Eight bytes, little-endian. -/
 def u64 : Stream UInt64 where
   shape := .u64
   put v buf :=
-    (((((((buf.push (v >>> 56).toUInt8).push (v >>> 48).toUInt8).push (v >>> 40).toUInt8).push
-      (v >>> 32).toUInt8).push (v >>> 24).toUInt8).push (v >>> 16).toUInt8).push
-      (v >>> 8).toUInt8).push v.toUInt8
+    (((((((buf.push v.toUInt8).push (v >>> 8).toUInt8).push (v >>> 16).toUInt8).push
+      (v >>> 24).toUInt8).push (v >>> 32).toUInt8).push (v >>> 40).toUInt8).push
+      (v >>> 48).toUInt8).push (v >>> 56).toUInt8
   get b i :=
     if h : i + 8 ≤ b.size then
-      .ok (ofBE64 b[i] b[i+1] b[i+2] b[i+3] b[i+4] b[i+5] b[i+6] b[i+7], i + 8)
+      .ok (ofLE64 b[i] b[i+1] b[i+2] b[i+3] b[i+4] b[i+5] b[i+6] b[i+7], i + 8)
     else .error (.truncated i 8)
 
 /-- A digest: its 32 bytes, raw. -/
@@ -183,6 +183,9 @@ def getMany (c : Stream α) (b : ByteArray) : Nat → Nat → Array α → Excep
     match c.get b i with
     | .ok (v, j) => getMany c b n j (acc.push v)
     | .error e => .error e
+
+/-- The bytes of a sequence of values, one after the other (the spec of `array`'s body). -/
+def manyBytes (c : Stream α) (l : List α) : ByteArray := l.foldl (fun out x => c.put x out) ByteArray.empty
 
 /-- At most `max` values: their `u32` count, then each value. -/
 def array (max : Nat) (c : Stream α) (_fits : max < 2 ^ 32 := by decide) : Stream (Bounded max α) where

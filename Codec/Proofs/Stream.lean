@@ -118,42 +118,42 @@ theorem bytes_of_put_eq {c : Stream α} (h : ∀ v buf, c.put v buf = buf ++ c.b
 
 /-! ## Fixed-width integers -/
 
-theorem ofBE32_split (v : UInt32) :
-    ofBE32 (v >>> 24).toUInt8 (v >>> 16).toUInt8 (v >>> 8).toUInt8 v.toUInt8 = v := by
+theorem ofLE32_split (v : UInt32) :
+    ofLE32 v.toUInt8 (v >>> 8).toUInt8 (v >>> 16).toUInt8 (v >>> 24).toUInt8 = v := by
   apply UInt32.toNat_inj.mp
-  simp only [ofBE32, UInt32.toNat_add, UInt32.toNat_mul, UInt32.toNat_shiftRight, UInt32.toNat_toUInt8,
+  simp only [ofLE32, UInt32.toNat_add, UInt32.toNat_mul, UInt32.toNat_shiftRight, UInt32.toNat_toUInt8,
     UInt8.toNat_toUInt32, Nat.shiftRight_eq_div_pow]
   have := v.toNat_lt
   simp
   omega
 
-theorem split_ofBE32 (a b c d : UInt8) :
-    (ofBE32 a b c d >>> 24).toUInt8 = a ∧ (ofBE32 a b c d >>> 16).toUInt8 = b ∧
-    (ofBE32 a b c d >>> 8).toUInt8 = c ∧ (ofBE32 a b c d).toUInt8 = d := by
+theorem split_ofLE32 (a b c d : UInt8) :
+    (ofLE32 a b c d).toUInt8 = a ∧ (ofLE32 a b c d >>> 8).toUInt8 = b ∧
+    (ofLE32 a b c d >>> 16).toUInt8 = c ∧ (ofLE32 a b c d >>> 24).toUInt8 = d := by
   have ha := a.toNat_lt; have hb := b.toNat_lt; have hc := c.toNat_lt; have hd := d.toNat_lt
-  simp only [← UInt8.toNat_inj, ofBE32, UInt32.toNat_add, UInt32.toNat_mul, UInt32.toNat_shiftRight,
+  simp only [← UInt8.toNat_inj, ofLE32, UInt32.toNat_add, UInt32.toNat_mul, UInt32.toNat_shiftRight,
     UInt32.toNat_toUInt8, UInt8.toNat_toUInt32, Nat.shiftRight_eq_div_pow]
   simp
   omega
 
-theorem ofBE64_split (v : UInt64) :
-    ofBE64 (v >>> 56).toUInt8 (v >>> 48).toUInt8 (v >>> 40).toUInt8 (v >>> 32).toUInt8
-      (v >>> 24).toUInt8 (v >>> 16).toUInt8 (v >>> 8).toUInt8 v.toUInt8 = v := by
+theorem ofLE64_split (v : UInt64) :
+    ofLE64 v.toUInt8 (v >>> 8).toUInt8 (v >>> 16).toUInt8 (v >>> 24).toUInt8
+      (v >>> 32).toUInt8 (v >>> 40).toUInt8 (v >>> 48).toUInt8 (v >>> 56).toUInt8 = v := by
   apply UInt64.toNat_inj.mp
-  simp only [ofBE64, UInt64.toNat_add, UInt64.toNat_mul, UInt64.toNat_shiftRight, UInt64.toNat_toUInt8,
+  simp only [ofLE64, UInt64.toNat_add, UInt64.toNat_mul, UInt64.toNat_shiftRight, UInt64.toNat_toUInt8,
     UInt8.toNat_toUInt64, Nat.shiftRight_eq_div_pow]
   have := v.toNat_lt
   simp
   omega
 
-theorem split_ofBE64 (a b c d e f g h : UInt8) :
-    (ofBE64 a b c d e f g h >>> 56).toUInt8 = a ∧ (ofBE64 a b c d e f g h >>> 48).toUInt8 = b ∧
-    (ofBE64 a b c d e f g h >>> 40).toUInt8 = c ∧ (ofBE64 a b c d e f g h >>> 32).toUInt8 = d ∧
-    (ofBE64 a b c d e f g h >>> 24).toUInt8 = e ∧ (ofBE64 a b c d e f g h >>> 16).toUInt8 = f ∧
-    (ofBE64 a b c d e f g h >>> 8).toUInt8 = g ∧ (ofBE64 a b c d e f g h).toUInt8 = h := by
+theorem split_ofLE64 (a b c d e f g h : UInt8) :
+    (ofLE64 a b c d e f g h).toUInt8 = a ∧ (ofLE64 a b c d e f g h >>> 8).toUInt8 = b ∧
+    (ofLE64 a b c d e f g h >>> 16).toUInt8 = c ∧ (ofLE64 a b c d e f g h >>> 24).toUInt8 = d ∧
+    (ofLE64 a b c d e f g h >>> 32).toUInt8 = e ∧ (ofLE64 a b c d e f g h >>> 40).toUInt8 = f ∧
+    (ofLE64 a b c d e f g h >>> 48).toUInt8 = g ∧ (ofLE64 a b c d e f g h >>> 56).toUInt8 = h := by
   have ha := a.toNat_lt; have hb := b.toNat_lt; have hc := c.toNat_lt; have hd := d.toNat_lt
   have he := e.toNat_lt; have hf := f.toNat_lt; have hg := g.toNat_lt; have hh := h.toNat_lt
-  simp only [← UInt8.toNat_inj, ofBE64, UInt64.toNat_add, UInt64.toNat_mul, UInt64.toNat_shiftRight,
+  simp only [← UInt8.toNat_inj, ofLE64, UInt64.toNat_add, UInt64.toNat_mul, UInt64.toNat_shiftRight,
     UInt64.toNat_toUInt8, UInt8.toNat_toUInt64, Nat.shiftRight_eq_div_pow]
   simp
   omega
@@ -201,7 +201,7 @@ theorem u8_lawful : Lawful u8 where
 @[simp] theorem u64_size (v : UInt64) : (u64.bytes v).size = 8 := rfl
 
 @[simp] theorem u32_bytes (v : UInt32) :
-    u32.bytes v = ⟨#[(v >>> 24).toUInt8, (v >>> 16).toUInt8, (v >>> 8).toUInt8, v.toUInt8]⟩ := rfl
+    u32.bytes v = ⟨#[v.toUInt8, (v >>> 8).toUInt8, (v >>> 16).toUInt8, (v >>> 24).toUInt8]⟩ := rfl
 
 theorem u32_lawful : Lawful u32 where
   put_eq v buf := by
@@ -210,20 +210,20 @@ theorem u32_lawful : Lawful u32 where
   get_of_occurs v b i h := by
     obtain ⟨hs, hk⟩ := occursAt_iff_getElem.mp h
     have hs' : i + 4 ≤ b.size := hs
-    have h0 : b[i + 0] = (v >>> 24).toUInt8 := hk 0 (Nat.lt_of_lt_of_le (by decide) (Nat.le_of_eq (u32_size v).symm))
-    have h1 : b[i + 1] = (v >>> 16).toUInt8 := hk 1 (Nat.lt_of_lt_of_le (by decide) (Nat.le_of_eq (u32_size v).symm))
-    have h2 : b[i + 2] = (v >>> 8).toUInt8 := hk 2 (Nat.lt_of_lt_of_le (by decide) (Nat.le_of_eq (u32_size v).symm))
-    have h3 : b[i + 3] = v.toUInt8 := hk 3 (Nat.lt_of_lt_of_le (by decide) (Nat.le_of_eq (u32_size v).symm))
-    have h0' : b[i] = (v >>> 24).toUInt8 := h0
+    have h0 : b[i + 0] = v.toUInt8 := hk 0 (Nat.lt_of_lt_of_le (by decide) (Nat.le_of_eq (u32_size v).symm))
+    have h1 : b[i + 1] = (v >>> 8).toUInt8 := hk 1 (Nat.lt_of_lt_of_le (by decide) (Nat.le_of_eq (u32_size v).symm))
+    have h2 : b[i + 2] = (v >>> 16).toUInt8 := hk 2 (Nat.lt_of_lt_of_le (by decide) (Nat.le_of_eq (u32_size v).symm))
+    have h3 : b[i + 3] = (v >>> 24).toUInt8 := hk 3 (Nat.lt_of_lt_of_le (by decide) (Nat.le_of_eq (u32_size v).symm))
+    have h0' : b[i] = v.toUInt8 := h0
     simp only [u32, hs', ↓reduceDIte, h0', h1, h2, h3]
-    rw [ofBE32_split]
+    rw [ofLE32_split]
     rfl
   occurs_of_get {b i v j} h := by
     simp only [u32] at h
     split at h
     · rename_i hi
       cases h
-      obtain ⟨e0, e1, e2, e3⟩ := split_ofBE32 b[i] b[i+1] b[i+2] b[i+3]
+      obtain ⟨e0, e1, e2, e3⟩ := split_ofLE32 b[i] b[i+1] b[i+2] b[i+3]
       refine ⟨rfl, occursAt_iff_getElem.mpr ⟨hi, fun k hk => ?_⟩⟩
       have hk' : k < 4 := hk
       rcases k with _ | _ | _ | _ | k
@@ -235,8 +235,8 @@ theorem u32_lawful : Lawful u32 where
     · cases h
 
 @[simp] theorem u64_bytes (v : UInt64) :
-    u64.bytes v = ⟨#[(v >>> 56).toUInt8, (v >>> 48).toUInt8, (v >>> 40).toUInt8, (v >>> 32).toUInt8,
-      (v >>> 24).toUInt8, (v >>> 16).toUInt8, (v >>> 8).toUInt8, v.toUInt8]⟩ := rfl
+    u64.bytes v = ⟨#[v.toUInt8, (v >>> 8).toUInt8, (v >>> 16).toUInt8, (v >>> 24).toUInt8,
+      (v >>> 32).toUInt8, (v >>> 40).toUInt8, (v >>> 48).toUInt8, (v >>> 56).toUInt8]⟩ := rfl
 
 theorem u64_lawful : Lawful u64 where
   put_eq v buf := by
@@ -245,24 +245,24 @@ theorem u64_lawful : Lawful u64 where
   get_of_occurs v b i h := by
     obtain ⟨hs, hk⟩ := occursAt_iff_getElem.mp h
     have hs' : i + 8 ≤ b.size := hs
-    have h0 : b[i + 0] = (v >>> 56).toUInt8 := hk 0 (Nat.lt_of_lt_of_le (by decide) (Nat.le_of_eq (u64_size v).symm))
-    have h1 : b[i + 1] = (v >>> 48).toUInt8 := hk 1 (Nat.lt_of_lt_of_le (by decide) (Nat.le_of_eq (u64_size v).symm))
-    have h2 : b[i + 2] = (v >>> 40).toUInt8 := hk 2 (Nat.lt_of_lt_of_le (by decide) (Nat.le_of_eq (u64_size v).symm))
-    have h3 : b[i + 3] = (v >>> 32).toUInt8 := hk 3 (Nat.lt_of_lt_of_le (by decide) (Nat.le_of_eq (u64_size v).symm))
-    have h4 : b[i + 4] = (v >>> 24).toUInt8 := hk 4 (Nat.lt_of_lt_of_le (by decide) (Nat.le_of_eq (u64_size v).symm))
-    have h5 : b[i + 5] = (v >>> 16).toUInt8 := hk 5 (Nat.lt_of_lt_of_le (by decide) (Nat.le_of_eq (u64_size v).symm))
-    have h6 : b[i + 6] = (v >>> 8).toUInt8 := hk 6 (Nat.lt_of_lt_of_le (by decide) (Nat.le_of_eq (u64_size v).symm))
-    have h7 : b[i + 7] = v.toUInt8 := hk 7 (Nat.lt_of_lt_of_le (by decide) (Nat.le_of_eq (u64_size v).symm))
-    have h0' : b[i] = (v >>> 56).toUInt8 := h0
+    have h0 : b[i + 0] = v.toUInt8 := hk 0 (Nat.lt_of_lt_of_le (by decide) (Nat.le_of_eq (u64_size v).symm))
+    have h1 : b[i + 1] = (v >>> 8).toUInt8 := hk 1 (Nat.lt_of_lt_of_le (by decide) (Nat.le_of_eq (u64_size v).symm))
+    have h2 : b[i + 2] = (v >>> 16).toUInt8 := hk 2 (Nat.lt_of_lt_of_le (by decide) (Nat.le_of_eq (u64_size v).symm))
+    have h3 : b[i + 3] = (v >>> 24).toUInt8 := hk 3 (Nat.lt_of_lt_of_le (by decide) (Nat.le_of_eq (u64_size v).symm))
+    have h4 : b[i + 4] = (v >>> 32).toUInt8 := hk 4 (Nat.lt_of_lt_of_le (by decide) (Nat.le_of_eq (u64_size v).symm))
+    have h5 : b[i + 5] = (v >>> 40).toUInt8 := hk 5 (Nat.lt_of_lt_of_le (by decide) (Nat.le_of_eq (u64_size v).symm))
+    have h6 : b[i + 6] = (v >>> 48).toUInt8 := hk 6 (Nat.lt_of_lt_of_le (by decide) (Nat.le_of_eq (u64_size v).symm))
+    have h7 : b[i + 7] = (v >>> 56).toUInt8 := hk 7 (Nat.lt_of_lt_of_le (by decide) (Nat.le_of_eq (u64_size v).symm))
+    have h0' : b[i] = v.toUInt8 := h0
     simp only [u64, hs', ↓reduceDIte, h0', h1, h2, h3, h4, h5, h6, h7]
-    rw [ofBE64_split]
+    rw [ofLE64_split]
     rfl
   occurs_of_get {b i v j} h := by
     simp only [u64] at h
     split at h
     · rename_i hi
       cases h
-      obtain ⟨e0, e1, e2, e3, e4, e5, e6, e7⟩ := split_ofBE64 b[i] b[i+1] b[i+2] b[i+3] b[i+4] b[i+5] b[i+6] b[i+7]
+      obtain ⟨e0, e1, e2, e3, e4, e5, e6, e7⟩ := split_ofLE64 b[i] b[i+1] b[i+2] b[i+3] b[i+4] b[i+5] b[i+6] b[i+7]
       refine ⟨rfl, occursAt_iff_getElem.mpr ⟨hi, fun k hk => ?_⟩⟩
       have hk' : k < 8 := hk
       rcases k with _ | _ | _ | _ | _ | _ | _ | _ | k
@@ -532,9 +532,6 @@ theorem bytesOf_lawful (max : Nat) (fits : max < 2 ^ 32) : Lawful (bytesOf max f
           exact ⟨by rw [hsz]; exact hb, by rw [hsz]⟩
         · cases h
       · cases h
-
-/-- The bytes of a sequence of values, one after the other. -/
-def manyBytes (c : Stream α) (l : List α) : ByteArray := l.foldl (fun out x => c.put x out) ByteArray.empty
 
 theorem foldl_put {c : Stream α} (hc : Lawful c) (l : List α) (buf : ByteArray) :
     l.foldl (fun out x => c.put x out) buf = buf ++ manyBytes c l := by

@@ -6,7 +6,7 @@
 | metric | now | ceiling |
 |---|---|---|
 | Lean modules in the Host closure | 0 | 150 |
-| Lean lines (deployed) | 2749 | — |
+| Lean lines (deployed) | 2752 | — |
 | protocol operations | 6 | 6 |
 | call kinds (Receive.Call constructors) | 0 | 7 |
 | command verbs (the one command language) | 0 | 20 |
