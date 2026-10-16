@@ -29,3 +29,12 @@ globs = ["Host.+"]
 [[lean_lib]]
 name = "Codec"
 globs = ["Codec.+"]
+
+# The Rust copy of the protocol table (client/src/generated.rs). Imports Protocol; nothing imports it.
+[[lean_lib]]
+name = "Emit"
+globs = ["Emit.+"]
+
+[[lean_exe]]
+name = "emit-rust"
+root = "Emit.Rust"
