@@ -14,7 +14,7 @@ import Protocol.Table
 
 namespace Nanodregg.Host
 
-open Nanodregg.Host.Log (le32 ofLe32)
+open Nanodregg.Codec (Stream)
 
 /-- One request from the supervisor. -/
 structure Frame where
@@ -35,19 +35,19 @@ inductive Stop where
   | badLength (len : Nat)
   deriving DecidableEq, Repr
 
-/-- The frame a body holds (`5 ≤ body.size`). -/
-def decodeBody (body : ByteArray) : Frame :=
-  { conn := UInt32.ofNat (ofLe32 (body.extract 0 4))
-    op := body[4]!
-    payload := body.extract 5 body.size }
+/-- The frame a body holds: `u32 conn ‖ u8 op ‖ payload`. -/
+def decodeBody (body : ByteArray) : Except Stop Frame :=
+  match Stream.u32.get body 0, Stream.u8.get body 4 with
+  | .ok (conn, _), .ok (op, _) => .ok { conn, op, payload := body.extract 5 body.size }
+  | _, _ => .error (.badLength body.size)
 
 /-- A body's frame on the wire. -/
 def encodeFrame (f : Frame) : ByteArray :=
-  le32 (5 + f.payload.size) ++ le32 f.conn.toNat ++ ByteArray.mk #[f.op] ++ f.payload
+  Stream.u8.put f.op (Stream.u32.put f.conn (Log.lenBytes (5 + f.payload.size))) ++ f.payload
 
 /-- A reply on the wire. -/
 def encodeReply (r : Reply) : ByteArray :=
-  le32 (5 + r.payload.size) ++ le32 r.conn.toNat ++ ByteArray.mk #[r.status] ++ r.payload
+  Stream.u8.put r.status (Stream.u32.put r.conn (Log.lenBytes (5 + r.payload.size))) ++ r.payload
 
 /-- Read exactly `n` bytes, in at most `n + 1` reads (each read that returns bytes makes
 progress; an empty read is the end of the stream). -/
@@ -71,10 +71,10 @@ def readFrame (s : IO.FS.Stream) : IO (Except Stop Frame) := do
     | some rest => pure (some (head ++ rest))
     | none => pure none
   let some head := head | return .error .truncated
-  let len := ofLe32 head
+  let some len := Log.lenAt head 0 | return .error .truncated
   if len < 5 ∨ bodyMax < len then return .error (.badLength len)
   match ← readExact s len with
   | none => return .error .truncated
-  | some body => return .ok (decodeBody body)
+  | some body => return decodeBody body
 
 end Nanodregg.Host

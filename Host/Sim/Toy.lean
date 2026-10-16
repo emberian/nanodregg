@@ -9,6 +9,7 @@ those land.
 -/
 import Kernel.World
 import Host.Log
+import Codec.Stream
 
 namespace Nanodregg.Host.Sim
 
@@ -17,14 +18,16 @@ open Nanodregg.Kernel
 def fnv (b : ByteArray) : Nat :=
   (b.foldl (fun h x => ((h ^^^ x.toUInt64) * 1099511628211)) (14695981039346656037 : UInt64)).toNat
 
-def le64 (n : Nat) : ByteArray :=
-  ⟨(List.range 8).toArray.map fun i => UInt8.ofNat (n / 256 ^ i)⟩
+/-- CODEC's little-endian `u64` of `n mod 2^64`. -/
+def le64 (n : Nat) : ByteArray := Codec.Stream.u64.bytes (UInt64.ofNat n)
 
-private theorem size_le64 (n : Nat) : (le64 n).size = 8 := by
-  simp [le64, ByteArray.size]
+private theorem size_le64 (n : Nat) : (le64 n).size = 8 := rfl
 
+/-- The u64 at `off` (callers check the eight bytes are there; none reads as 0). -/
 def ofLe64 (b : ByteArray) (off : Nat) : Nat :=
-  (List.range 8).foldl (fun acc i => acc + 256 ^ i * (b[off + i]!).toNat) 0
+  match Codec.Stream.u64.get b off with
+  | .ok (v, _) => v.toNat
+  | .error _ => 0
 
 /-- The simulated turn shape. -/
 def turnBytes (t : Turn Nat) : ByteArray :=

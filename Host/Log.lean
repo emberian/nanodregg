@@ -4,7 +4,7 @@
 A segment is a sequence of frames. A frame holds one record — opaque bytes; for the Host, one
 encoded batch — and a tag:
 
-    frame prev r = le32 r.size ‖ r ‖ tag (prev ‖ r)
+    frame prev r = u32 r.size ‖ r ‖ tag (prev ‖ r)
 
 `prev` is the previous frame's tag (the segment's `initial` for the first), so the tags chain:
 a frame cannot be dropped, reordered or spliced in from another segment without a tag failing.
@@ -29,6 +29,8 @@ Theorems (`Host.Proofs.Log`): `recover_encodeAll` (a clean segment reads back ex
 guarantees), and `encodeAll_recover` (whatever bytes are on disk, the records
 `recover` returns re-encode to exactly the bytes before `validLen`: it never invents a record).
 -/
+import Codec.Stream
+
 namespace Nanodregg.Host.Log
 
 /-- Bytes in a tag. -/
@@ -40,21 +42,14 @@ structure Sealer where
   tag : ByteArray → ByteArray
   tag_size : ∀ b, (tag b).size = tagBytes
 
-/-! ## Little-endian u32
+/-- A frame's length field: CODEC's one little-endian `u32` (`Codec.Stream.u32`). -/
+def lenBytes (n : Nat) : ByteArray := Codec.Stream.u32.bytes (UInt32.ofNat n)
 
-HOST-5: a private twin of CODEC's `u32le`, deleted the day `Codec.Stream` lands. -/
-
-/-- `n mod 2^32`, little-endian. -/
-def le32 (n : Nat) : ByteArray :=
-  ⟨#[UInt8.ofNat n, UInt8.ofNat (n / 256), UInt8.ofNat (n / 65536), UInt8.ofNat (n / 16777216)]⟩
-
-/-- The value of four bytes, little-endian (bytes past the end read as 0). -/
-def ofLe32 (b : ByteArray) : Nat :=
-  b[0]!.toNat + 256 * b[1]!.toNat + 65536 * b[2]!.toNat + 16777216 * b[3]!.toNat
-
-/-- The u32 at `off`, if four bytes are there. -/
-def readLe32 (log : ByteArray) (off : Nat) : Option Nat :=
-  if off + 4 ≤ log.size then some (ofLe32 (log.extract off (off + 4))) else none
+/-- The length field at `off`, if four bytes are there. -/
+def lenAt (log : ByteArray) (off : Nat) : Option Nat :=
+  match Codec.Stream.u32.get log off with
+  | .ok (v, _) => some v.toNat
+  | .error _ => none
 
 /-! ## Frames -/
 
@@ -63,7 +58,7 @@ def frameMax (recordMax : Nat) : Nat := 4 + recordMax + tagBytes
 
 /-- One frame: length, record, tag over the previous tag and the record. -/
 def frame (s : Sealer) (prev r : ByteArray) : ByteArray :=
-  le32 r.size ++ r ++ s.tag (prev ++ r)
+  lenBytes r.size ++ r ++ s.tag (prev ++ r)
 
 /-- The tag after a sequence of records. -/
 def lastTag (s : Sealer) : ByteArray → List ByteArray → ByteArray
@@ -99,7 +94,7 @@ structure Read where
 /-- The frame at `off`, if one is there and its tag chains from `prev`. -/
 def frameAt (s : Sealer) (recordMax : Nat) (log : ByteArray) (off : Nat) (prev : ByteArray) :
     Option Read :=
-  match readLe32 log off with
+  match lenAt log off with
   | none => none
   | some len =>
     if recordMax < len then none else

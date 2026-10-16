@@ -60,3 +60,7 @@ extern_lib «ndhost» pkg := do
     buildO o (← inputTextFile src) #["-I", leanInc] #["-fPIC", "-O2", "-Wall", "-Wextra", "-Werror"]
       "cc" getLeanTrace
   buildStaticLib (pkg.staticLibDir / nameToStaticLib "ndhost") objs
+
+-- The Host's loop end to end over the in-memory disk, with the crash plants (standing: seeds 1 2 3).
+@[default_target] lean_exe «host-sim» where
+  root := `Host.Sim.Main

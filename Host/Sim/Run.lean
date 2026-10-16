@@ -4,8 +4,9 @@
 `Nanodregg.Host.Sim.run [seed]` drives `serve` (the deployed loop) over the
 in-memory disk with toy parameters, admitting every Turn through `Kernel.World.admit`, and checks:
 
-1. one reply per request; replays answer `ok` with the original receipt, conflicts and
-   double spends answer `refused`;
+1. one reply per request; a resend of the same txId (the same bytes, or other bytes under it:
+   a txId is the digest of the signed call, KERNEL-7) answers `ok` with the original receipt and
+   admits nothing; double spends answer `refused`;
 2. `recover` of the disk is `clean`, and `World.fold` of the recovered records from genesis
    reaches the loop's World (height and chain);
 3. a different seeded batch split reaches the same chain;
@@ -16,8 +17,8 @@ in-memory disk with toy parameters, admitting every Turn through `Kernel.World.a
    multi-frame segment is `corrupt`; plant-flip-last-frame: a flip in the last frame reads as
    `torn` (the one case no format can decide; DESIGN §4).
 
-Returns 0 iff every check holds; each failure prints `FAIL <name>`. (No `main` here: the census
-imports every module and one `main` already exists; the `host-sim` exe waits on GATES.)
+Returns 0 iff every check holds; each failure prints `FAIL <name>`. `lake exe host-sim SEED`
+(`Host.Sim.Main`) is the exe; standing runs seeds 1 2 3.
 -/
 import Host.Sim.MemStore
 import Host.Sim.Toy
@@ -48,10 +49,10 @@ def machine : Machine (World Nat) (Turn Nat) (Reject Nat) Frame where
 
 def genesis : World Nat := World.genesis env "sim".toUTF8 (2 ^ 40)
 
-inductive Kind | fresh | replay | conflict | doubleSpend
+inductive Kind | fresh | replay | sameTxId | doubleSpend
   deriving DecidableEq
 
-/-- `n` requests from a seed: each a fresh turn, an exact replay, a txId conflict or a double spend. -/
+/-- `n` requests from a seed: each a fresh turn, an exact replay, other bytes under a used txId, or a double spend. -/
 def scenario (seed n : Nat) : List (Frame × Kind) :=
   (go n seed [] []).reverse
 where
@@ -67,7 +68,7 @@ where
         | m :: _ =>
           if pick < 7 then (mkTurn (1000 + i) 0 1024 [5000 + i], .fresh)
           else if pick < 8 then (m, .replay)
-          else if pick < 9 then (mkTurn m.txId 0 1024 [9000 + i], .conflict)
+          else if pick < 9 then (mkTurn m.txId 0 1024 [9000 + i], .sameTxId)
           else (mkTurn (1000 + i) 0 1024 m.nullifiers, .doubleSpend)
       let f : Frame := ⟨UInt32.ofNat i, Protocol.Op.submit.code, record genesis #[t]⟩
       go k s' (if kind = .fresh then t :: made else made) ((f, kind) :: acc)
@@ -115,7 +116,7 @@ def run (args : List String) : IO UInt32 := do
   check "loop ended at eof" (match r.exit with | .eof => true | _ => false) failures
   check "fresh turns admitted" ((statusOf .fresh).all (· = Protocol.Status.ok.code)) failures
   check "replays answered ok" ((statusOf .replay).all (· = Protocol.Status.ok.code)) failures
-  check "conflicts refused" ((statusOf .conflict).all (· = Protocol.Status.refused.code)) failures
+  check "a used txId answers ok, admitting nothing" ((statusOf .sameTxId).all (· = Protocol.Status.ok.code)) failures
   check "double spends refused" ((statusOf .doubleSpend).all (· = Protocol.Status.refused.code)) failures
   check "height = fresh turns" (r.world.height = (statusOf .fresh).length) failures
   IO.println s!"admitted {r.world.height} turns in {r.disk.syncs} batches, {r.disk.synced.size} bytes"

@@ -7,25 +7,48 @@
 * `encodeAll_recover` — for ANY bytes, the records `recover` returns re-encode to exactly the
   bytes before `validLen`, and `lastTag` is their chain's tag: recovery never invents a record.
 -/
+import Codec.Proofs.Stream
 import Host.Log
 
 namespace Nanodregg.Host.Log
 
 open ByteArray
 
-theorem size_le32 (n : Nat) : (le32 n).size = 4 := rfl
+theorem size_lenBytes (n : Nat) : (lenBytes n).size = 4 := rfl
 
-theorem ofLe32_le32 {n : Nat} (h : n < 2 ^ 32) : ofLe32 (le32 n) = n := by
-  have e0 : (le32 n)[0]! = UInt8.ofNat n := rfl
-  have e1 : (le32 n)[1]! = UInt8.ofNat (n / 256) := rfl
-  have e2 : (le32 n)[2]! = UInt8.ofNat (n / 65536) := rfl
-  have e3 : (le32 n)[3]! = UInt8.ofNat (n / 16777216) := rfl
-  simp only [ofLe32, e0, e1, e2, e3, UInt8.toNat_ofNat', Nat.reducePow]
-  omega
+/-- Where a length field's bytes are, `lenAt` reads its value. -/
+theorem lenAt_of_occurs {log : ByteArray} {off n : Nat}
+    (h : Codec.Stream.OccursAt log off (lenBytes n)) (hn : n < 2 ^ 32) : lenAt log off = some n := by
+  unfold lenAt
+  rw [Codec.Stream.u32_lawful.get_of_occurs _ _ _ h]
+  simp only [Option.some.injEq]
+  exact UInt32.toNat_ofNat_of_lt' hn
+
+/-- Fewer than four bytes at `off`: no length field. -/
+theorem lenAt_none {log : ByteArray} {off : Nat} (h : log.size < off + 4) : lenAt log off = none := by
+  unfold lenAt
+  split
+  · rename_i v j hget
+    have := (Codec.Stream.u32_lawful.occurs_of_get hget).2.1
+    simp at this; omega
+  · rfl
+
+/-- What `lenAt` reads is literally a length field on disk. -/
+theorem lenAt_some {log : ByteArray} {off n : Nat} (h : lenAt log off = some n) :
+    off + 4 ≤ log.size ∧ log.extract off (off + 4) = lenBytes n := by
+  unfold lenAt at h
+  split at h
+  · rename_i v j hget
+    cases h
+    obtain ⟨_, hs, he⟩ := Codec.Stream.u32_lawful.occurs_of_get hget
+    simp only [Codec.Stream.u32_size] at hs he
+    refine ⟨hs, ?_⟩
+    rw [he, lenBytes, UInt32.ofNat_toNat]
+  · cases h
 
 theorem size_frame (s : Sealer) (prev r : ByteArray) :
     (frame s prev r).size = 4 + r.size + tagBytes := by
-  simp [frame, size_append, size_le32, s.tag_size]
+  simp [frame, size_append, size_lenBytes, s.tag_size]
 
 /-- Reading inside the right half of an append. -/
 theorem extract_right {log a b : ByteArray} (h : log = a ++ b) (i j : Nat) :
@@ -51,10 +74,10 @@ theorem fields {L R T C : ByteArray} (hl : L.size = 4) :
     exact extract_append_eq_left rfl
 
 theorem frame_fields (s : Sealer) (prev r c : ByteArray) :
-    (frame s prev r ++ c).extract 0 4 = le32 r.size ∧
+    (frame s prev r ++ c).extract 0 4 = lenBytes r.size ∧
     (frame s prev r ++ c).extract 4 (4 + r.size) = r ∧
     (frame s prev r ++ c).extract (4 + r.size) (4 + r.size + tagBytes) = s.tag (prev ++ r) := by
-  have := fields (R := r) (T := s.tag (prev ++ r)) (C := c) (size_le32 r.size)
+  have := fields (R := r) (T := s.tag (prev ++ r)) (C := c) (size_lenBytes r.size)
   rw [s.tag_size] at this
   exact this
 
@@ -66,11 +89,10 @@ theorem frameAt_frame (s : Sealer) {recordMax : Nat} (a : ByteArray) (prev r c :
   obtain ⟨f0, f1, f2⟩ := frame_fields s prev r c
   have hsz : (a ++ (frame s prev r ++ c)).size = a.size + (4 + r.size + tagBytes) + c.size := by
     simp [size_append, size_frame]; omega
-  have hread : readLe32 (a ++ (frame s prev r ++ c)) a.size = some r.size := by
-    unfold readLe32
-    rw [if_pos (by rw [hsz]; omega)]
-    rw [show a.size = a.size + 0 from rfl]
-    rw [extract_right rfl 0 4, f0, ofLe32_le32 hr32]
+  have hread : lenAt (a ++ (frame s prev r ++ c)) a.size = some r.size := by
+    have e0 := extract_right (rfl : a ++ (frame s prev r ++ c) = _) 0 4
+    simp only [Nat.add_zero] at e0
+    exact lenAt_of_occurs ⟨by rw [size_lenBytes, hsz]; omega, by rw [size_lenBytes, e0, f0]⟩ hr32
   have e1 := extract_right (rfl : a ++ (frame s prev r ++ c) = _) 4 (4 + r.size)
   have e2 := extract_right (rfl : a ++ (frame s prev r ++ c) = _) (4 + r.size) (4 + r.size + tagBytes)
   rw [f1] at e1; rw [f2] at e2
@@ -173,10 +195,8 @@ theorem step_cut (s : Sealer) {recordMax : Nat} (E prev r p q : ByteArray)
     have hnone : frameAt s recordMax (E ++ p) E.size prev = none := by
       unfold frameAt
       by_cases h4 : p.size < 4
-      · have : readLe32 (E ++ p) E.size = none := by
-          unfold readLe32; rw [if_neg (by rw [hsize]; omega)]
-        rw [this]
-      · have hhead : (E ++ p).extract E.size (E.size + 4) = le32 r.size := by
+      · rw [lenAt_none (by rw [hsize]; omega)]
+      · have hhead : (E ++ p).extract E.size (E.size + 4) = lenBytes r.size := by
           have := extract_right (rfl : E ++ p = _) 0 4
           simp only [Nat.add_zero] at this
           rw [this]
@@ -185,9 +205,7 @@ theorem step_cut (s : Sealer) {recordMax : Nat} (E prev r p q : ByteArray)
           rw [hp4, hcut]
           have := (frame_fields s prev r ByteArray.empty).1
           rwa [append_empty] at this
-        have : readLe32 (E ++ p) E.size = some r.size := by
-          unfold readLe32; rw [if_pos (by rw [hsize]; omega), hhead, ofLe32_le32 hr.2]
-        rw [this]
+        rw [lenAt_of_occurs ⟨by rw [size_lenBytes, hsize]; omega, by rw [size_lenBytes, hhead]⟩ hr.2]
         simp only
         have h1 := hr.1
         rw [if_neg (by omega), if_pos (by rw [hsize]; omega)]
@@ -215,21 +233,6 @@ theorem recover_torn (s : Sealer) {recordMax : Nat} (initial : ByteArray) (rs : 
   rw [step_cut s _ _ r p q hr hcut hq hin]
   by_cases hp0 : p.size = 0 <;> simp [hp0]
 
-/-- Every four bytes are the encoding of their value. -/
-theorem le32_ofLe32 {b : ByteArray} (h : b.size = 4) : le32 (ofLe32 b) = b := by
-  obtain ⟨⟨l⟩⟩ := b
-  match l, h with
-  | [a0, a1, a2, a3], _ =>
-    have e0 : (ByteArray.mk #[a0, a1, a2, a3])[0]! = a0 := rfl
-    have e1 : (ByteArray.mk #[a0, a1, a2, a3])[1]! = a1 := rfl
-    have e2 : (ByteArray.mk #[a0, a1, a2, a3])[2]! = a2 := rfl
-    have e3 : (ByteArray.mk #[a0, a1, a2, a3])[3]! = a3 := rfl
-    simp only [le32, ofLe32, e0, e1, e2, e3]
-    have b0 := a0.toNat_lt; have b1 := a1.toNat_lt; have b2 := a2.toNat_lt; have b3 := a3.toNat_lt
-    simp only [ByteArray.mk.injEq, Array.mk.injEq, List.cons.injEq, and_true]
-    refine ⟨?_, ?_, ?_, ?_⟩ <;>
-      (apply UInt8.toNat_inj.mp; simp only [UInt8.toNat_ofNat', Nat.reducePow] at *; omega)
-
 theorem encodeAll_snoc (s : Sealer) (prev : ByteArray) (xs : List ByteArray) (r : ByteArray) :
     encodeAll s prev (xs ++ [r]) = encodeAll s prev xs ++ frame s (lastTag s prev xs) r := by
   induction xs generalizing prev with
@@ -251,6 +254,7 @@ theorem frameAt_some {s : Sealer} {recordMax : Nat} {log : ByteArray} {off : Nat
   split at h
   · cases h
   · rename_i len hread
+    obtain ⟨_, hext⟩ := lenAt_some hread
     split at h
     · cases h
     · split at h
@@ -260,20 +264,13 @@ theorem frameAt_some {s : Sealer} {recordMax : Nat} {log : ByteArray} {off : Nat
         split at h
         · rename_i htag
           cases h
-          unfold readLe32 at hread
-          split at hread
-          · rename_i h4
-            cases hread
-            refine ⟨by simp only; omega, by simp only; omega, ?_, htag.symm⟩
-            dsimp only
-            have hr : (log.extract (off + 4) (off + 4 + ofLe32 (log.extract off (off + 4)))).size =
-                ofLe32 (log.extract off (off + 4)) := by simp; omega
-            unfold frame
-            rw [hr, le32_ofLe32 (by simp; omega), htag,
-              ← extract_eq_extract_append_extract (off + 4) (by omega) (by omega),
-              ← extract_eq_extract_append_extract (off + 4 + ofLe32 (log.extract off (off + 4)))
-                (by omega) (by omega)]
-          · cases hread
+          refine ⟨by simp only; omega, by simp only; omega, ?_, htag.symm⟩
+          dsimp only
+          have hr : (log.extract (off + 4) (off + 4 + len)).size = len := by simp; omega
+          unfold frame
+          rw [hr, ← hext, htag,
+            ← extract_eq_extract_append_extract (off + 4) (by omega) (by omega),
+            ← extract_eq_extract_append_extract (off + 4 + len) (by omega) (by omega)]
         · cases h
 
 /-- What a `next` step read is literally a frame on disk. -/
