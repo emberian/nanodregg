@@ -110,8 +110,9 @@ class Decl:
 
     @property
     def is_prop(self) -> bool:
-        """A declaration whose type is `Prop` (a statement, e.g. a structure of facts)."""
-        return re.search(r":\s*Prop\s*$", self.header) is not None
+        """A declaration whose result type is `Prop` (a statement: a structure of facts, a typing
+        relation `inductive HasType : Ctx → Term → Ty → Prop`, a predicate `def P : X → Prop`)."""
+        return re.search(r"(?::|→|->)\s*(?:Prop|Sort\s+0)\s*$", self.header) is not None
 
 
 @dataclass

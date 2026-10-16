@@ -5,7 +5,9 @@
   C2 an import that is neither a tree module nor Init/Std (Lean only from Census);
   C3 a def-module exporting a theorem, or a proof-module (a `Proofs` path component)
      exporting a definition whose type is not `Prop`; private helpers are allowed on either
-     side, and a proof-module may export statements (`structure Checked … : Prop`);
+     side; statements (a declaration whose result type is Prop: `structure Checked … : Prop`,
+     `inductive HasType : … → Prop`, `def P : X → Prop`) live in proof-modules, and a
+     def-module exporting one is red;
   C4 a def-module importing a proof-module;
   C5 a module outside Census importing Census;
   C6 a lean_exe root that is a proof-module or not a tree module.
@@ -48,6 +50,9 @@ def check(t: tree.Tree) -> list[str]:
                 continue  # example/axiom are refusals.py's
             if m.is_proof and d.kind in tree.DEF_KINDS and not d.is_prop:
                 red.append(f"C3 {m.path}:{d.line} proof-module exports {d.kind} {d.name}")
+            if not m.is_proof and d.kind in tree.DEF_KINDS and d.is_prop:
+                red.append(f"C3 {m.path}:{d.line} def-module exports statement {d.kind} {d.name} (its type is "
+                           f"Prop); statements belong in a Proofs module")
             if not m.is_proof and d.kind in tree.THEOREM_KINDS:
                 red.append(f"C3 {m.path}:{d.line} def-module exports theorem {d.name}; "
                            f"move it to a Proofs module or make it private")
