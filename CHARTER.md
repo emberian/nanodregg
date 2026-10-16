@@ -37,15 +37,21 @@ in `~/dev/redregg/work/`: `ARCHITECTURE-20261016.md`, `CYCLE-TIME-20261016.md`,
    that representation (KERNEL's K1 critique, accepted 10-16). Measure
    at range ends with `perf stat --no-scale`; the waste ratio of every operation is pinned and may
    only fall.
-6. **Named theorems, never `#guard`.** `theorem … := by decide/rfl` + `#assert_axioms`; only where
-   the compiler must be trusted, `native_decide` + `#assert_compiled`. No `sorry` ever lands. Every
+6. **Named theorems, never `#guard`.** `theorem … := by decide/rfl`; the ONE tree-wide axiom census
+   (`Census/Axioms.lean`, gate `gates/census.py`) replaces per-theorem `#assert_axioms` lines, because
+   it checks every declaration rather than the ones someone remembered (GATES-4, accepted 10-16);
+   only where the compiler must be trusted, `native_decide` with an allow row in
+   `gates/axioms-allow.tsv`, which is its record. No `sorry` ever lands. Every
    theorem statement is read by a second agent before it lands (vacuity check: identity carriers,
    `P → P`, empty premises).
 7. **Refusals by name.** Every refusal is a constructor with a name on the wire; a parse failure is
    never rendered as a verdict; "uncertain" is a real outcome.
 8. **Small modules, split proofs.** A module exports definitions OR proofs about them, not both,
-   so a proof edit rebuilds nothing downstream. No import hubs. Target: the Host closure under
-   150 modules; a one-module edit rebuilds its dependents in under 2 minutes on a laptop.
+   so a proof edit rebuilds nothing downstream; the split is BY FILE (a `Proofs` path component),
+   because Lean v4.30.0's `module` system still rebuilds importers on a proof-only edit (GATES-2,
+   measured 10-16). "No import hubs" is measured as the SIZE metric `max dependents of one module`
+   with a ceiling (GATES-6). Target: the Host closure under 150 modules; a one-module edit rebuilds
+   its dependents in under 2 minutes on a laptop.
 9. **Every commit builds.** `lake build` of the commit's import closure (and `cargo check` where
    Rust exists) passes BEFORE push. Main is the only branch. Small commits, often. A red on main is
    fixed forward within the hour by whoever sees it; `git revert` is always allowed.
