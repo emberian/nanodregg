@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Installed by scripts/install-hooks (core.hooksPath = scripts/hooks). Every commit to main is
-# judged by scripts/pre-push against exactly the tree it records. There is no bypass flag here;
-# `git commit --no-verify` exists and a reviewer reverts what it lands.
-exec "$(git rev-parse --show-toplevel)/scripts/pre-push" --index --message "$1"
+# Installed by scripts/install-hooks (core.hooksPath = scripts/hooks). A plain `git commit` builds
+# from the shared index, which is how five commits on 2026-10-16 reverted other layers' work; it is
+# refused. Commit with scripts/commit (private index from current main + CAS); it never runs hooks.
+echo "nanodregg: plain 'git commit' is refused. Use: scripts/commit -m MSG PATH...  (see its header)" >&2
+exit 1
