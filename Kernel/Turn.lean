@@ -7,8 +7,8 @@ log with `World.admit` alone, and nothing it would have to trust. It carries
 * `pins` — the intent's observation: for each cell the turn depends on, the digest of what the
   signer saw (`pinOf (some cell)`, or `pinOf none` for "this cell does not exist"). The pin check
   is the one staleness refusal (`Reject.stale`).
-* `creates` — cells born by this turn; their ids are derived from `txId` and the index, so ids
-  never need coordination.
+* `creates` — cells born by this turn; a ROM cell's id is its content digest (a package's
+  identity), any other's is derived from `txId` and the index: ids never need coordination.
 * `legs` — slot operations on existing cells, at most one leg per cell, one op per key.
 * `retires` — cells that die; a retired id is never live again.
 * `nullifiers` — one-time tokens; each may be spent once in the life of the World.

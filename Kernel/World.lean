@@ -80,6 +80,7 @@ def tagCell : ByteArray := "nanodregg/kernel/pin-cell/v1".toUTF8
 def tagTurn : ByteArray := "nanodregg/kernel/turn/v1".toUTF8
 def tagChain : ByteArray := "nanodregg/kernel/chain/v1".toUTF8
 def tagCellId : ByteArray := "nanodregg/kernel/cell-id/v1".toUTF8
+def tagRomId : ByteArray := "nanodregg/kernel/rom-id/v1".toUTF8
 
 /-- Four little-endian bytes (indexes are below `Bounds.createsMax`). -/
 def le32 (n : Nat) : ByteArray :=
@@ -100,8 +101,19 @@ def chainNext (E : Env D) (prev : D) (t : Turn D) : D :=
 def cellIdOf (E : Env D) (txId : D) (i : Nat) : D :=
   E.hash (tagCellId ++ E.bytes txId ++ le32 i)
 
+/-- A ROM cell's id is its content digest: the same immutable content is one cell, whoever
+installs it (a package's identity IS its cell id). -/
+def romIdOf (E : Env D) (c : Cell) : D := E.hash (tagRomId ++ E.cellBytes c)
+
+/-- The id a turn gives its `i`-th born cell: content-addressed for ROM, else derived from the
+transaction. -/
+def bornId (E : Env D) (txId : D) (p : Cell × Nat) : D :=
+  match p.1.discipline with
+  | .rom => romIdOf E p.1
+  | _ => cellIdOf E txId p.2
+
 def createdIds (E : Env D) (t : Turn D) : List D :=
-  (List.range t.creates.length).map (cellIdOf E t.txId)
+  t.creates.zipIdx.map (bornId E t.txId)
 
 def createdPairs (E : Env D) (t : Turn D) : List (D × Cell) :=
   (createdIds E t).zip t.creates
@@ -191,7 +203,9 @@ def checkCharge (w : World D) (t : Turn D) : Except (Reject D) Unit := do
   req (t.charge = t.weight) (.chargeMismatch t.weight)
   req (t.charge ≤ w.allowance) .overAllowance
 
-def checkCreates (E : Env D) (w : World D) (t : Turn D) : Except (Reject D) Unit :=
+/-- Born ids are fresh: not in the World (live or tombstoned) and not twice in the turn. -/
+def checkCreates (E : Env D) (w : World D) (t : Turn D) : Except (Reject D) Unit := do
+  noDup (createdIds E t) .idTaken
   forEx (fun c => req (!w.cells.contains c) (.idTaken c)) (createdIds E t)
 
 def checkRetire (w : World D) (c : D) : Except (Reject D) Unit :=
@@ -265,5 +279,13 @@ def World.fold (E : Env D) (w : World D) : List (Turn D) → Except (Nat × Reje
           | .ok w'' => .ok w''
           | .error (i, r) => .error (i + 1, r)
       | .error r => .error (0, r)
+
+/-- The chain a log reaches from `c`, without admitting it: what `World.fold` stamps. -/
+def chainOf (E : Env D) (c : D) : List (Turn D) → D
+  | [] => c
+  | t :: rest => chainOf E (chainNext E c t) rest
+
+/-- Two different inputs with one digest. -/
+def Collision (hash : ByteArray → D) : Prop := ∃ a b, a ≠ b ∧ hash a = hash b
 
 end Nanodregg.Kernel

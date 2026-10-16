@@ -137,18 +137,3 @@ minidregg are exactly law 11's worry; each should be derived from the largest ro
 **Status.** ruled by ROOT 2026-10-16: the ≤40-ops ceiling becomes four ratchet rows in SIZE.md (ops,
 call kinds, command verbs, refusal constructors); law 11 gets the carve-out: conformance rows RESTATE
 the minidregg journeys because the journeys are the spec.
-
-## PROTOCOL-8 · connectionsMax = 64 (2026-10-16)
-**Decision.** `Protocol.Bounds.connectionsMax := 64`: the connections one `nd-supervise` holds open at
-once, per socket. With one buffered frame per connection per direction the mux holds ≤ 2·64·256 KiB =
-32 MiB (`mux_buffers_bounded`). Past the bound the supervisor stops accepting (back-pressure, no queue).
-**Alternatives.** Unbounded accept (minidregg's `mini serve`); one per member key (needs the supervisor to
-know keys: it parses nothing, so no); a much larger bound for public ingress.
-**Why.** A deployment is friends plus their agents and followers; 64 is generous for that and makes the
-memory bound a theorem.
-**Critique.** A hosted operator serving many grains, or a BAR load generator with many concurrent clients,
-could hit 64 and see refused connects that look like an outage; a slow-loris peer holds a slot (the
-supervisor needs a per-connection idle deadline, CLIENT's). 64 is a chosen number, not derived from a row.
-**Meta-critique.** The number was picked to make the 32 MiB theorem round; the bound that matters may be
-file descriptors or the Lean child's queue, not supervisor memory.
-**Status.** open.

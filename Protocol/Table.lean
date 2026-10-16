@@ -145,11 +145,6 @@ def argvBytesMax : Nat := 65536
 def stepsPerCommandMax : Nat := 64
 /-- Sends of one frozen call: the first submit and the resends after `absent`. -/
 def sendsMax : Nat := 8
-/-- Connections one `nd-supervise` holds open at once (either socket). It bounds the supervisor's
-memory: each connection buffers at most one frame per direction, so the whole mux holds at most
-`2 * connectionsMax * frameBytesMax` bytes (32 MiB). A deployment's members are friends, not the
-public: past the bound the supervisor stops accepting, and the client sees a refused connect. -/
-def connectionsMax : Nat := 64
 
 end Bounds
 
