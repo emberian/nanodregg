@@ -116,3 +116,99 @@ The fuel workaround (HOST-6) satisfies the letter. Proposal: keep the law; name 
 shape — "a fuel-bounded top-level loop whose fuel exhaustion is a clean exit the supervisor restarts" —
 so nobody reaches for `repeat` (which is `partial` in disguise) and believes the law holds.
 **Critique.** A carve-out invites more. **Meta-critique.** I want the law to bless my HOST-6.
+
+## CLIENT-1 · should a Rust client exist at all? (BUILD-CLIENT, 2026-10-16)
+**Decision.** Yes, and only as custody + transport: a seed holder, a frozen-attempt store and a frame
+mover over two Unix sockets (`client/`, ceiling 2,000 lines). Everything a command MEANS — parsing the
+argv, deriving the request, the plan, the challenge, assembling the call, rendering any reply — is done
+by `host follow` (Lean), which drives `nd` through five step tags (CLIENT-2).
+**Alternatives.** (a) A Lean client: `nd` is a Lean executable over the same codecs, custody through an
+FFI signer. (b) minidregg's shape: a Rust client that parses commands, encodes requests and decodes
+outcomes (113,757 lines for `mini`; dossier §1). (c) No separate client: the member talks to `host
+follow` directly and follow holds the seed.
+**Why.** For (a): Lean 4.34's standard library has no Unix-domain sockets (READ: `Std/Internal/UV/` holds
+TCP, UDP, DNS, Signal, Timer, System, Loop only) — the reason HOST-2 needs a supervisor — and no
+constant-time signature code, so a Lean client still needs native code for both halves of its job; what
+it would remove is ~600 lines of byte moving. Its startup is a Lean runtime init plus the codec closure's
+module initializers per command (minidregg W5: 0.38 G instructions for a codec child). For (c): the seed
+would sit in the heap of the one process that parses untrusted log bytes; keeping custody in a separate,
+small, memory-safe process with no parser is the isolation that makes "follow decides, custody signs"
+meaningful. Against (b): every Rust struct mirroring a Lean shape is a twin, and in minidregg the Rust
+client became the place features went because it was the easiest place to write them.
+**Critique (of keeping Rust).** Two languages remain. The step encoding (§2 of proposals/client.md) is a
+small codec the Rust side must read: a twin unless CODEC generates the reader too. Custody signs what
+follow hands it, so a compromised follow can get anything signed — the isolation protects the key's
+bytes, not its use. The supervisor (HOST-2) is a second process in every request path.
+**Critique (of the Lean alternative, so the comparison is fair).** If Lean gains Unix sockets and a
+verified signer (e.g. a Lean-callable libsodium or an extracted HACL* via FFI), (a) becomes one language
+end to end and the step protocol disappears into function calls — strictly fewer moving parts. The
+socket gap is a library gap, not a design reason.
+**Meta-critique.** I am the Rust owner arguing Rust should exist. I also arrived from a dossier of Rust
+bloat and may be over-correcting into a client too thin to be convenient (every rendering a round trip).
+The ceiling is the honesty check: if `client/src` passes 2,000 lines, re-argue (a).
+
+## CLIENT-2 · follow drives, the client executes steps
+**Decision.** `nd` sends its raw argv to follow (`command`) and loops: `done | sign | host | submit`,
+each with an opaque continuation it echoes back (`resume`). The order challenge → prepare → assemble →
+submit → lookup is follow's; Rust holds no op sequence except submit/lookup inside an attempt.
+**Alternatives.** (a) The charter's literal reading: Rust performs the five ops itself in a fixed order.
+(b) Follow connects to the Host itself and Rust only signs.
+**Why.** (a) puts the choreography — protocol knowledge — in Rust and needs a Rust request encoder per
+command; (b) needs follow to open a socket, which Lean cannot (CLIENT-1). Stateless continuations let a
+command survive a follow restart and keep follow's per-connection state at zero.
+**Critique.** A round trip per step costs latency on the BAR path (two socket hops per signature);
+continuations must be authenticated or bounded by follow, or a client can replay a stale one (harmless
+— follow re-derives — but it is follow's theorem to state). If one command needs many signatures, the
+step loop is the hot path.
+**Meta-critique.** The pull of "Rust knows nothing" may be making the protocol chattier than a fixed,
+generated op sequence would be.
+
+## CLIENT-3 · attempts are custody, frozen on disk, state by file presence
+**Decision.** As `client/src/attempt.rs`: `call` written once; `sent.<n>` before every send; one
+settlement file. Lost reply ⇒ `Uncertain` ⇒ lookup only; `absent` ⇒ resend the same bytes ≤ `sendsMax`.
+**Alternatives.** An append-only attempt log with records; SQLite; keeping attempts in follow (Lean).
+**Why.** File presence needs no format and so no parser; O_EXCL makes "one call per attempt" and "one
+settlement" a property of the file system, not of code. Attempts belong to custody because the key
+holder is the party that must never sign two variants of one intent and must never resend different bytes.
+**Critique.** File-presence state is still a format (names, ordering of markers) — an implicit one.
+Per-attempt directories grow without bound unless settled ones are pruned (nobody prunes yet). On APFS
+`sync_all` is `F_FULLFSYNC` (correct, slow: one per marker); the marker fsync is on the latency path.
+**Meta-critique.** Format-aversion after minidregg's twin census may be driving me to a cleverness (state
+in directory listings) that a reader finds less obvious than a tagged record.
+
+## CLIENT-4 · the workspace is a directory with no config file; remote is OpenSSH stream forwarding
+**Decision.** `seed`, `host.sock`, `follow.sock`, `attempts/`. A remote Host is reached by
+`ssh -N -o StreamLocalBindUnlink=yes -L ws/host.sock:/srv/nd/host.sock friend@box`; `nd` cannot tell.
+No Rust ssh client, no socket proxy, no `ssh:DEST` addresses, no host-image pin.
+**Alternatives.** minidregg's `ssh:DEST` relayed by a forced-command `mini socket-proxy`; a JSON workspace.
+**Why.** OpenSSH already authenticates both ends and refuses unknown/planted host keys and unauthorised
+keys by name (the sshe2e row's checks). The host-image pin protected `mini` exec-ing a Host locally; with
+sockets only, the member's trust anchor is its own follow, not the Host binary.
+**Critique.** sshd cannot restrict which socket path a key may forward to (no `permitopen` for stream
+local), so the per-friend restriction becomes filesystem permission on the Host socket (group-readable
+by members) plus `Match User` forwarding policy; a forced-command relay restricts more precisely. A
+long-lived `ssh -N` is one more thing the member must run.
+**Meta-critique.** Minimalism bias; I have not run the sshe2e row's refusals against this shape.
+
+## CLIENT-5 · Ed25519 custody until KERNEL names the scheme
+**Decision.** Custody signs with Ed25519 from the 32-byte seed; no hybrid yet.
+**Critique.** minidregg signed hybrid Ed25519 + ML-DSA-65; retrofitting changes `sign`'s return type and
+the seed derivation (one seed, two keys, domain-separated KDF). **Meta-critique.** Doing the easy half first.
+
+## CLIENT-6 · no binary until the generated table exists
+**Decision.** `client/` is a library (frames, custody, attempts) until CODEC emits `generated.rs`; the
+binaries `nd` and `nd-supervise` land with it. Tests use test-chosen bounds, never protocol values.
+**Critique.** Delays the first end-to-end. If CODEC slips, a JSON-at-build-time reader of the Lean table
+(`build.rs`) is the fallback, not hand-copied constants. **Meta-critique.** Law-following can be a way to
+postpone the integration risk; the round trip is the real test and it is blocked on two other layers.
+
+## CLIENT-7 · the CLIENT row attacked: sandbox/ is a different trust domain, and grain-runtime dies
+**Decision (proposed to ROOT).** Keep `sandbox/` with this owner but as a separate crate from `client/`.
+A hosted Hermes (or any resident agent) is a MEMBER: it runs `nd` inside one bwrap shape with its own
+seed; `sandbox/` is only the launcher (bwrap argv from a Lean-decided profile, fds, cgroup limits, uid
+mapping) and the SPK broker's physical verbs. minidregg's grain-runtime (55,896 lines: an agent
+controller with its own control socket, credentials and provider logic) has no counterpart.
+**Critique.** The agent needs model-provider egress and BYOK credentials; something must hold those
+keys and meter calls, and "a member with a seed" does not cover provider custody. That is a second
+custody (provider keys) and may deserve its own small component. **Meta-critique.** I want the biggest
+deletion to be mine to announce.
