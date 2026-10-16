@@ -51,7 +51,9 @@ impl std::fmt::Display for CustodyError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::NotRegularFile => write!(f, "custody: seed is not a regular file"),
-            Self::WrongLength { len } => write!(f, "custody: seed is {len} bytes, not {SEED_BYTES}"),
+            Self::WrongLength { len } => {
+                write!(f, "custody: seed is {len} bytes, not {SEED_BYTES}")
+            }
             Self::Permissions { mode } => write!(f, "custody: seed mode {mode:o}, not 600"),
             Self::Owner { uid, euid } => write!(f, "custody: seed owned by uid {uid}, not {euid}"),
             Self::Exists => write!(f, "custody: a seed already exists"),
@@ -86,11 +88,15 @@ impl Custody {
 
     /// Open the seed at `path` under the custody checks.
     pub fn open(path: &Path) -> Result<Self, CustodyError> {
-        let fd = rustix::fs::open(path, OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC, Mode::empty())
-            .map_err(|e| match e {
-                rustix::io::Errno::LOOP => CustodyError::NotRegularFile,
-                e => CustodyError::Io(e.into()),
-            })?;
+        let fd = rustix::fs::open(
+            path,
+            OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+        )
+        .map_err(|e| match e {
+            rustix::io::Errno::LOOP => CustodyError::NotRegularFile,
+            e => CustodyError::Io(e.into()),
+        })?;
         let mut file = File::from(fd);
         let meta = file.metadata()?;
         if !meta.file_type().is_file() {
@@ -102,7 +108,10 @@ impl Custody {
         }
         let euid = rustix::process::geteuid().as_raw();
         if meta.uid() != euid {
-            return Err(CustodyError::Owner { uid: meta.uid(), euid });
+            return Err(CustodyError::Owner {
+                uid: meta.uid(),
+                euid,
+            });
         }
         if meta.len() != SEED_BYTES as u64 {
             return Err(CustodyError::WrongLength { len: meta.len() });
@@ -111,9 +120,13 @@ impl Custody {
         file.read_exact(seed.as_mut())?;
         let mut extra = [0u8; 1];
         if file.read(&mut extra)? != 0 {
-            return Err(CustodyError::WrongLength { len: SEED_BYTES as u64 + 1 });
+            return Err(CustodyError::WrongLength {
+                len: SEED_BYTES as u64 + 1,
+            });
         }
-        Ok(Self { key: SigningKey::from_bytes(&seed) })
+        Ok(Self {
+            key: SigningKey::from_bytes(&seed),
+        })
     }
 
     /// The public key consent and the Host know this member by.

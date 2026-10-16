@@ -12,7 +12,11 @@ pub(crate) const PRIVATE: u32 = 0o600;
 
 /// Create `dir/name` holding exactly `bytes`; `AlreadyExists` if it is there.
 pub(crate) fn create_once(dir: &Path, name: &str, bytes: &[u8]) -> io::Result<()> {
-    let mut file = OpenOptions::new().write(true).create_new(true).mode(PRIVATE).open(dir.join(name))?;
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(PRIVATE)
+        .open(dir.join(name))?;
     file.write_all(bytes)?;
     file.sync_all()?;
     sync_dir(dir)

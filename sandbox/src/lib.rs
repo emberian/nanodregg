@@ -52,8 +52,12 @@ const MECHANISM: &str = "/usr/bin/bwrap";
 const MECHANISM: &str = "/usr/bin/sandbox-exec";
 
 fn canonical(path: &Path) -> Result<String, ConfineError> {
-    let real = path.canonicalize().map_err(|e| ConfineError::HiddenPathMissing(path.to_path_buf(), e))?;
-    let text = real.to_str().ok_or_else(|| ConfineError::UnnameablePath(real.clone()))?;
+    let real = path
+        .canonicalize()
+        .map_err(|e| ConfineError::HiddenPathMissing(path.to_path_buf(), e))?;
+    let text = real
+        .to_str()
+        .ok_or_else(|| ConfineError::UnnameablePath(real.clone()))?;
     if text.contains(['"', '\\']) {
         return Err(ConfineError::UnnameablePath(real));
     }
@@ -62,7 +66,11 @@ fn canonical(path: &Path) -> Result<String, ConfineError> {
 
 /// The command that runs `program args…` under `policy`.
 pub fn command(policy: &Policy, program: &OsStr, args: &[&OsStr]) -> Result<Command, ConfineError> {
-    let hidden = policy.hidden.iter().map(|p| canonical(p)).collect::<Result<Vec<_>, _>>()?;
+    let hidden = policy
+        .hidden
+        .iter()
+        .map(|p| canonical(p))
+        .collect::<Result<Vec<_>, _>>()?;
     platform(&hidden, program, args)
 }
 
@@ -87,8 +95,20 @@ fn platform(hidden: &[String], program: &OsStr, args: &[&OsStr]) -> Result<Comma
     }
     let mut c = Command::new(MECHANISM);
     c.args([
-        "--die-with-parent", "--new-session", "--unshare-all", "--disable-userns", "--cap-drop", "ALL",
-        "--clearenv", "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc",
+        "--die-with-parent",
+        "--new-session",
+        "--unshare-all",
+        "--disable-userns",
+        "--cap-drop",
+        "ALL",
+        "--clearenv",
+        "--ro-bind",
+        "/",
+        "/",
+        "--dev",
+        "/dev",
+        "--proc",
+        "/proc",
     ]);
     for p in hidden {
         c.args(["--tmpfs", p]);

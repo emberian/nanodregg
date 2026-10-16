@@ -94,7 +94,9 @@ impl std::fmt::Display for AttemptError {
             Self::NotAnAttempt => write!(f, "attempt: no call in this directory"),
             Self::Inconsistent => write!(f, "attempt: inconsistent directory"),
             Self::UnexpectedReply => write!(f, "attempt: reply does not answer the request"),
-            Self::SendsExhausted { sends_max } => write!(f, "attempt: uncertain after {sends_max} sends"),
+            Self::SendsExhausted { sends_max } => {
+                write!(f, "attempt: uncertain after {sends_max} sends")
+            }
             Self::Io(e) => write!(f, "attempt: {e}"),
         }
     }
@@ -126,7 +128,10 @@ impl Attempt {
             fsx::sync_dir(parent)?;
         }
         fsx::create_once(dir, CALL, call)?;
-        Ok(Self { dir: dir.to_path_buf(), call: call.to_vec() })
+        Ok(Self {
+            dir: dir.to_path_buf(),
+            call: call.to_vec(),
+        })
     }
 
     /// Reopen the attempt in `dir` and read its state from the files present.
@@ -140,13 +145,27 @@ impl Attempt {
         let not_committed = read_optional(&dir.join(NOT_COMMITTED))?;
         let state = match (committed, not_committed) {
             (Some(_), Some(_)) => return Err(AttemptError::Inconsistent),
-            (Some(_), None) | (None, Some(_)) if sends == 0 => return Err(AttemptError::Inconsistent),
-            (Some(reply), None) => State::Settled { committed: true, reply },
-            (None, Some(reply)) => State::Settled { committed: false, reply },
+            (Some(_), None) | (None, Some(_)) if sends == 0 => {
+                return Err(AttemptError::Inconsistent);
+            }
+            (Some(reply), None) => State::Settled {
+                committed: true,
+                reply,
+            },
+            (None, Some(reply)) => State::Settled {
+                committed: false,
+                reply,
+            },
             (None, None) if sends == 0 => State::Signed,
             (None, None) => State::Uncertain { sends },
         };
-        Ok((Self { dir: dir.to_path_buf(), call }, state))
+        Ok((
+            Self {
+                dir: dir.to_path_buf(),
+                call,
+            },
+            state,
+        ))
     }
 
     /// The frozen signed bytes.
@@ -199,7 +218,11 @@ impl Attempt {
     }
 
     fn settle(&self, committed: bool, reply: Vec<u8>) -> Result<State, AttemptError> {
-        fsx::create_once(&self.dir, if committed { COMMITTED } else { NOT_COMMITTED }, &reply)?;
+        fsx::create_once(
+            &self.dir,
+            if committed { COMMITTED } else { NOT_COMMITTED },
+            &reply,
+        )?;
         Ok(State::Settled { committed, reply })
     }
 }

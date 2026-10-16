@@ -119,7 +119,11 @@ impl std::fmt::Display for RunError {
             Self::Follow(e) => write!(f, "nd: follow: {e}"),
             Self::Host(e) => write!(f, "nd: host: {e}"),
             Self::Attempt(e) => write!(f, "nd: {e}"),
-            Self::Uncertain(p) => write!(f, "nd: uncertain: the call in {} may or may not have committed", p.display()),
+            Self::Uncertain(p) => write!(
+                f,
+                "nd: uncertain: the call in {} may or may not have committed",
+                p.display()
+            ),
         }
     }
 }
@@ -149,7 +153,11 @@ pub fn run(
     let mut step = follow.command(argv).map_err(RunError::Follow)?;
     for _ in 0..t.steps_max {
         let (k, outcome) = match step {
-            Step::Done { exit, stdout, stderr } => return Ok((exit, stdout, stderr)),
+            Step::Done {
+                exit,
+                stdout,
+                stderr,
+            } => return Ok((exit, stdout, stderr)),
             Step::Sign { message, k } => (k, Outcome::Signature(custody.sign(&message).to_vec())),
             Step::Host { op, payload, k } => {
                 let (status, payload) = host.exchange(op, &payload).map_err(RunError::Host)?;
@@ -170,9 +178,17 @@ pub fn run(
                 match state {
                     State::Settled { committed, reply } => {
                         let status = if committed { t.ok } else { t.refused };
-                        (k, Outcome::Reply { status, payload: reply })
+                        (
+                            k,
+                            Outcome::Reply {
+                                status,
+                                payload: reply,
+                            },
+                        )
                     }
-                    State::Signed | State::Uncertain { .. } => return Err(RunError::Uncertain(dir)),
+                    State::Signed | State::Uncertain { .. } => {
+                        return Err(RunError::Uncertain(dir));
+                    }
                 }
             }
         };
@@ -185,7 +201,11 @@ pub fn run(
 fn fresh(attempts: &Path) -> io::Result<PathBuf> {
     let mut next = 0u64;
     for entry in fs::read_dir(attempts)? {
-        if let Some(n) = entry?.file_name().to_str().and_then(|s| s.parse::<u64>().ok()) {
+        if let Some(n) = entry?
+            .file_name()
+            .to_str()
+            .and_then(|s| s.parse::<u64>().ok())
+        {
             next = next.max(n.saturating_add(1));
         }
     }

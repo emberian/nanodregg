@@ -179,9 +179,14 @@ name = "nanodregg-client"
 version = "0.0.0"
 dependencies = [
  "ed25519-dalek",
+ "nanodregg-sandbox",
  "rustix",
  "zeroize",
 ]
+
+[[package]]
+name = "nanodregg-sandbox"
+version = "0.0.0"
 
 [[package]]
 name = "pkcs8"

@@ -52,9 +52,13 @@ impl std::fmt::Display for FrameError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Closed => write!(f, "frame: closed"),
-            Self::Truncated { wanted, got } => write!(f, "frame: truncated ({got} of {wanted} bytes)"),
+            Self::Truncated { wanted, got } => {
+                write!(f, "frame: truncated ({got} of {wanted} bytes)")
+            }
             Self::Empty => write!(f, "frame: empty body"),
-            Self::PastBound { len, max } => write!(f, "frame: pastBound frameBytesMax ({len} > {max})"),
+            Self::PastBound { len, max } => {
+                write!(f, "frame: pastBound frameBytesMax ({len} > {max})")
+            }
             Self::Io(e) => write!(f, "frame: {e}"),
         }
     }
@@ -84,10 +88,18 @@ pub fn read_body(r: &mut impl Read, max: u32) -> Result<Vec<u8>, FrameError> {
     match fill(r, &mut header)? {
         0 => return Err(FrameError::Closed),
         HEADER => {}
-        got => return Err(FrameError::Truncated { wanted: HEADER, got }),
+        got => {
+            return Err(FrameError::Truncated {
+                wanted: HEADER,
+                got,
+            });
+        }
     }
     let len = u32::from_le_bytes(header);
-    let past = FrameError::PastBound { len: u64::from(len), max };
+    let past = FrameError::PastBound {
+        len: u64::from(len),
+        max,
+    };
     if len == 0 {
         return Err(FrameError::Empty);
     }
@@ -119,7 +131,11 @@ pub fn write_body(w: &mut impl Write, max: u32, parts: &[&[u8]]) -> Result<(), F
     for part in parts {
         bytes.extend_from_slice(part);
     }
-    assert_eq!(bytes.len() as u64, HEADER as u64 + total, "frame layout: header + body");
+    assert_eq!(
+        bytes.len() as u64,
+        HEADER as u64 + total,
+        "frame layout: header + body"
+    );
     w.write_all(&bytes).map_err(FrameError::Io)?;
     w.flush().map_err(FrameError::Io)
 }
@@ -128,7 +144,10 @@ pub fn write_body(w: &mut impl Write, max: u32, parts: &[&[u8]]) -> Result<(), F
 pub fn read(r: &mut impl Read, limits: Limits) -> Result<Frame, FrameError> {
     let mut body = read_body(r, limits.frame_bytes_max)?;
     let payload = body.split_off(1);
-    Ok(Frame { op: body[0], payload })
+    Ok(Frame {
+        op: body[0],
+        payload,
+    })
 }
 
 /// Write one frame, refusing a body past the bound before writing anything.

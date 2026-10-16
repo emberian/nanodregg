@@ -13,8 +13,8 @@
 | protocol status / step codes | 4 / 4 | — |
 | conformance rows | 11 (Protocol/Rows.lean; every op reached: every_op_has_a_row) | — |
 | refusal constructors | 41 | — (ratchet: may only fall without a row that needs the new one) |
-| Rust lines | 1397 | — |
-| Rust lines (client/src) | 915 | 2000 |
+| Rust lines | 1976 | — |
+| Rust lines (client/src) | 1165 | 2000 |
 | partial defs (deployed) | 0 | 0 |
 | theorems | 126 | — |
 | sorry | 0 | 0 |

@@ -60,14 +60,22 @@ fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 }
 
 /// Run the mux until the child closes. `child_in`/`child_out` are the child's stdin and stdout.
-pub fn serve<I, O>(listener: UnixListener, child_in: I, mut child_out: O, limits: MuxLimits) -> MuxEnd
+pub fn serve<I, O>(
+    listener: UnixListener,
+    child_in: I,
+    mut child_out: O,
+    limits: MuxLimits,
+) -> MuxEnd
 where
     I: Write + Send + 'static,
     O: Read,
 {
     let shared = Arc::new(Shared {
         child_in: Mutex::new(Some(child_in)),
-        conns: Mutex::new(Conns { open: HashMap::new(), next: Some(0) }),
+        conns: Mutex::new(Conns {
+            open: HashMap::new(),
+            next: Some(0),
+        }),
         exhausted: AtomicBool::new(false),
     });
     let accepting = Arc::clone(&shared);
@@ -82,10 +90,16 @@ where
     end
 }
 
-fn accept<I: Write + Send + 'static>(listener: &UnixListener, shared: &Arc<Shared<I>>, limits: MuxLimits) {
+fn accept<I: Write + Send + 'static>(
+    listener: &UnixListener,
+    shared: &Arc<Shared<I>>,
+    limits: MuxLimits,
+) {
     for stream in listener.incoming() {
         let Ok(stream) = stream else { continue };
-        let Ok(writer) = stream.try_clone() else { continue };
+        let Ok(writer) = stream.try_clone() else {
+            continue;
+        };
         let id = {
             let mut conns = lock(&shared.conns);
             match conns.next {
@@ -100,7 +114,8 @@ fn accept<I: Write + Send + 'static>(listener: &UnixListener, shared: &Arc<Share
         };
         let Some(id) = id else {
             let _ = stream.shutdown(Shutdown::Both);
-            if lock(&shared.conns).next.is_none() && !shared.exhausted.swap(true, Ordering::SeqCst) {
+            if lock(&shared.conns).next.is_none() && !shared.exhausted.swap(true, Ordering::SeqCst)
+            {
                 lock(&shared.child_in).take();
             }
             continue;
@@ -137,13 +152,22 @@ fn route<I>(child_out: &mut impl Read, shared: &Shared<I>, limits: MuxLimits) ->
             Err(e) => return MuxEnd::ChildMalformed(e),
         };
         let Some((conn, rest)) = body.split_first_chunk::<CONN>() else {
-            return MuxEnd::ChildMalformed(FrameError::Truncated { wanted: CONN + 1, got: body.len() });
+            return MuxEnd::ChildMalformed(FrameError::Truncated {
+                wanted: CONN + 1,
+                got: body.len(),
+            });
         };
         let Some((&status, payload)) = rest.split_first() else {
-            return MuxEnd::ChildMalformed(FrameError::Truncated { wanted: CONN + 1, got: body.len() });
+            return MuxEnd::ChildMalformed(FrameError::Truncated {
+                wanted: CONN + 1,
+                got: body.len(),
+            });
         };
         let id = u32::from_le_bytes(*conn);
-        let writer = lock(&shared.conns).open.get(&id).and_then(|s| s.try_clone().ok());
+        let writer = lock(&shared.conns)
+            .open
+            .get(&id)
+            .and_then(|s| s.try_clone().ok());
         if let Some(mut writer) = writer
             && frame::write(&mut writer, limits.frame, status, payload).is_err()
             && let Some(s) = lock(&shared.conns).open.remove(&id)

@@ -10,7 +10,9 @@ use std::time::Duration;
 use nanodregg_client::frame::{self, FrameError, Limits};
 use nanodregg_client::mux::{self, MuxEnd, MuxLimits};
 
-const L: Limits = Limits { frame_bytes_max: 64 }; // test bound, not a protocol constant
+const L: Limits = Limits {
+    frame_bytes_max: 64,
+}; // test bound, not a protocol constant
 
 fn socket(name: &str) -> (UnixListener, std::path::PathBuf) {
     let p = std::env::temp_dir().join(format!("nd-mux-{}-{name}.sock", std::process::id()));
@@ -29,7 +31,12 @@ fn echo_child(n: usize) -> (io::PipeWriter, io::PipeReader) {
             let (conn, rest) = body.split_at(4);
             let mut payload = rest[1..].to_vec();
             payload.reverse();
-            frame::write_body(&mut rep_w, L.frame_bytes_max + 4, &[conn, &[rest[0] + 1], &payload]).unwrap();
+            frame::write_body(
+                &mut rep_w,
+                L.frame_bytes_max + 4,
+                &[conn, &[rest[0] + 1], &payload],
+            )
+            .unwrap();
         }
     });
     (req_w, rep_r)
@@ -39,7 +46,17 @@ fn echo_child(n: usize) -> (io::PipeWriter, io::PipeReader) {
 fn replies_route_by_connection_and_child_close_ends_serve() {
     let (listener, path) = socket("route");
     let (child_in, child_out) = echo_child(2);
-    let server = thread::spawn(move || mux::serve(listener, child_in, child_out, MuxLimits { frame: L, connections_max: 4 }));
+    let server = thread::spawn(move || {
+        mux::serve(
+            listener,
+            child_in,
+            child_out,
+            MuxLimits {
+                frame: L,
+                connections_max: 4,
+            },
+        )
+    });
     let mut a = UnixStream::connect(&path).unwrap();
     a.set_read_timeout(Some(Duration::from_secs(5))).unwrap(); // before: macOS refuses it after shutdown
     let mut b = UnixStream::connect(&path).unwrap();
@@ -60,7 +77,17 @@ fn replies_route_by_connection_and_child_close_ends_serve() {
 fn past_the_connection_bound_is_closed() {
     let (listener, path) = socket("bound");
     let (child_in, child_out) = echo_child(2); // stays alive after the first answer
-    thread::spawn(move || mux::serve(listener, child_in, child_out, MuxLimits { frame: L, connections_max: 1 }));
+    thread::spawn(move || {
+        mux::serve(
+            listener,
+            child_in,
+            child_out,
+            MuxLimits {
+                frame: L,
+                connections_max: 1,
+            },
+        )
+    });
     let mut a = UnixStream::connect(&path).unwrap();
     frame::write(&mut a, L, 1, b"q").unwrap();
     assert_eq!(frame::read(&mut a, L).unwrap().op, 2); // a is registered before b connects
@@ -76,7 +103,18 @@ fn a_child_frame_without_a_status_is_malformed() {
     let (_req_r, req_w) = io::pipe().unwrap();
     let (rep_r, mut rep_w) = io::pipe().unwrap();
     frame::write_body(&mut rep_w, 68, &[&0u32.to_le_bytes()]).unwrap();
-    let end = mux::serve(listener, req_w, rep_r, MuxLimits { frame: L, connections_max: 1 });
-    assert!(matches!(end, MuxEnd::ChildMalformed(FrameError::Truncated { .. })));
+    let end = mux::serve(
+        listener,
+        req_w,
+        rep_r,
+        MuxLimits {
+            frame: L,
+            connections_max: 1,
+        },
+    );
+    assert!(matches!(
+        end,
+        MuxEnd::ChildMalformed(FrameError::Truncated { .. })
+    ));
     let _ = std::fs::remove_file(&_path);
 }

@@ -16,10 +16,18 @@ fn confined_child_cannot_read_the_seed() {
     let cat = OsStr::new("/bin/cat");
 
     let control = std::process::Command::new(cat).arg(&seed).output().unwrap();
-    assert_eq!(control.stdout, b"SEED-BYTES", "control: unconfined, the seed is readable");
+    assert_eq!(
+        control.stdout, b"SEED-BYTES",
+        "control: unconfined, the seed is readable"
+    );
 
-    let policy = Policy { hidden: vec![ws.clone()] };
-    let out = command(&policy, cat, &[seed.as_os_str()]).unwrap().output().unwrap();
+    let policy = Policy {
+        hidden: vec![ws.clone()],
+    };
+    let out = command(&policy, cat, &[seed.as_os_str()])
+        .unwrap()
+        .output()
+        .unwrap();
     assert!(!out.status.success(), "isolation: child read the seed");
     assert!(out.stdout.is_empty(), "isolation: child read the seed");
     fs::remove_dir_all(&ws).unwrap();
@@ -27,6 +35,8 @@ fn confined_child_cannot_read_the_seed() {
 
 #[test]
 fn a_missing_hidden_path_refuses_to_launch() {
-    let policy = Policy { hidden: vec!["/nonexistent/nd-confine".into()] };
+    let policy = Policy {
+        hidden: vec!["/nonexistent/nd-confine".into()],
+    };
     assert!(command(&policy, OsStr::new("/bin/true"), &[]).is_err());
 }
