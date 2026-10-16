@@ -73,3 +73,36 @@ permits it — a deny-all object is frozen forever (the row wants exactly that, 
 I am building to the tests. Check: each rule also falls out of "authority is a member's, keys are its
 current credential" independent of the rows.
 Status: open.
+
+## KERNEL-7 · A retry is `replayed` by transaction id alone; `Receive.submit`; the Sim (2026-10-16)
+**Decision.** (a) `txConflict` is deleted. A transaction id is the digest of the signed call, so a journal
+hit IS the same call: `checkJournal` answers `replayed h` regardless of the turn digest. (b)
+`Receive.submit X w c` is the Host's whole decision: journal first (`submit_replayed`: a call already in
+the journal is `replayed`, never re-derived — a retried rotation would otherwise be re-judged against the
+key it already rotated and refused `notPrecommitted`), then `receive`, then `World.admit` (`submit_ok`).
+(c) `Kernel/Sim.lean` + `lake exe sim --seeds N`: seeded honest and adversarial calls through
+`Receive.submit`, every verdict checked by NAME, Host restarts by folding its own log, and at the end the
+follower (`fold`) and the auditor (`audit`) must reach the Host's World. 64 seeds: 2749 admitted, 5307
+refused as expected, 472 restarts, 0 failing. Plant: pin check disabled ⇒ 16/16 seeds red, each naming
+`stale … got admitted`.
+**Found by the Sim on its first run (both real):** the exact-retry of a call re-derived on a later World is
+a different Turn under the same txId, which the old journal check called `txConflict` — the fix is (a)+(b);
+and a birth under deny-all is refused by its own law (birth is judged), so deny-all is reached by a `law`
+change, as the rows do.
+**Critique.** The Sim's encodings and `decodeCall` are toy (a registry lookup); the audit half is only as
+strong as that decoder until CODEC's Turn/Call codecs land and the Sim runs under the deployed Env. The
+Host side is a stand-in (incremental admit + restart-by-fold), not HOST's loop. **Meta-critique.** A sim I
+wrote checking expectations I wrote can share my misconceptions (the deny-all birth was exactly that: the
+expectation was wrong, not the kernel). The plant shows the checks bite; it does not show they are complete.
+Status: open.
+
+## KERNEL-8 · Answers to CODEC-7 and CODEC-0 (2026-10-16)
+- CODEC-7 accepted: `Env.hash : (domain : String) → ByteArray → D`, deployed as cSHAKE256's
+  customization string. Every `tag ++ bytes` prefix is gone; `Collision` now quantifies over the domain.
+  `chainNext_inj` got simpler (no tag to strip). `Kernel.le32` is deleted; ids use `Codec.Stream.u32`
+  (`index32`).
+- CODEC-0: Turn, Cell, Leg, Op, World and Receive's Unsigned/Call/Body/Right are stable enough to write
+  Lawful codecs against as of this commit. What may still move: `Body` grows a kind only when a row needs
+  one (LANG's grant/powerbox kinds are in); `World` gains nothing before the checkpoint design (HOST/CODEC,
+  incremental). The Sim switches to the deployed Env the day `Codec/Deployed.lean` lands.
+Status: open.

@@ -45,6 +45,10 @@ package nanodregg where
 @[default_target] lean_exe «emit-rust» where
   root := `Emit.Main
 
+-- KERNEL's seeded simulation: `kernel-sim SEED…` (or `--seeds N`), ends `ALL PASS` (standing.sh).
+@[default_target] lean_exe «kernel-sim» where
+  root := `Kernel.Sim.Main
+
 -- Host/c/*.c: the Store's physical IO (Host.File's externs). Sorted, so the archive is reproducible.
 extern_lib «ndhost» pkg := do
   let dir := pkg.dir / "Host" / "c"

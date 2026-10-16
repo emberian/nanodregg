@@ -10,6 +10,14 @@ open Nanodregg.Kernel
 
 variable {D : Type} [Ord D] [DecidableEq D]
 
+/-- A log every Turn of which is exactly what `receive` derives from its own event, on the World
+before it: a log in which the writer decided nothing. -/
+def Honest (X : Ctx D) : World D → List (Turn D) → Prop
+  | _, [] => True
+  | w, t :: rest => ∃ c, X.decodeCall t.event = some c ∧ receive X w c = .ok t ∧
+      ∀ w', World.admit X.env w t = .ok w' → Honest X w' rest
+
+
 theorem auditStep_ok {X : Ctx D} {w w' : World D} {t : Turn D} :
     auditStep X w t = .ok w' ↔
       (∃ c, X.decodeCall t.event = some c ∧ receive X w c = .ok t) ∧

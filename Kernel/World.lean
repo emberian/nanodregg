@@ -16,12 +16,15 @@ import Std.Data.TreeMap
 import Std.Data.TreeSet
 import Kernel.Check
 import Kernel.Turn
+import Codec.Stream
 
 namespace Nanodregg.Kernel
 
 /-- The hash and the canonical encodings the kernel digests. CODEC supplies the deployed one. -/
 structure Env (D : Type) where
-  hash : ByteArray → D
+  /-- the hash under a domain (deployed: cSHAKE256 with the domain as customization string,
+  CODEC-7), so domains are separated by the hash, not by byte prefixes -/
+  hash : (domain : String) → ByteArray → D
   /-- the digest's canonical bytes (32 for the deployed digest) -/
   bytes : D → ByteArray
   turnBytes : Turn D → ByteArray
@@ -36,10 +39,9 @@ inductive Entry
 /-- Every refusal, by name (law 7). -/
 inductive Reject (D : Type)
   | overBound (which : Bound)
-  /-- the transaction is already in the journal with this turn's digest, at `height` -/
+  /-- the transaction is already in the journal, admitted at `height` (an exact retry: the
+  transaction id is the digest of the signed call, so the same id is the same call) -/
   | replayed (height : Nat)
-  /-- the transaction id is in the journal with a different turn -/
-  | txConflict (height : Nat)
   | duplicateLeg (cell : D)
   | duplicatePin (cell : D)
   | duplicateRetire (cell : D)
@@ -73,37 +75,35 @@ structure World (D : Type) [Ord D] where
   /-- the storage budget left, in bytes -/
   allowance : Nat
 
-/-- Domain tags of the kernel's digests. -/
-def tagGenesis : ByteArray := "nanodregg/kernel/genesis/v1".toUTF8
-def tagAbsent : ByteArray := "nanodregg/kernel/pin-absent/v1".toUTF8
-def tagCell : ByteArray := "nanodregg/kernel/pin-cell/v1".toUTF8
-def tagTurn : ByteArray := "nanodregg/kernel/turn/v1".toUTF8
-def tagChain : ByteArray := "nanodregg/kernel/chain/v1".toUTF8
-def tagCellId : ByteArray := "nanodregg/kernel/cell-id/v1".toUTF8
-def tagRomId : ByteArray := "nanodregg/kernel/rom-id/v1".toUTF8
+/-- The kernel's hash domains. -/
+def domGenesis : String := "nanodregg/kernel/genesis/v1"
+def domAbsent : String := "nanodregg/kernel/pin-absent/v1"
+def domCell : String := "nanodregg/kernel/pin-cell/v1"
+def domTurn : String := "nanodregg/kernel/turn/v1"
+def domChain : String := "nanodregg/kernel/chain/v1"
+def domCellId : String := "nanodregg/kernel/cell-id/v1"
+def domRomId : String := "nanodregg/kernel/rom-id/v1"
 
-/-- Four little-endian bytes (indexes are below `Bounds.createsMax`). -/
-def le32 (n : Nat) : ByteArray :=
-  ⟨#[(n % 256).toUInt8, (n / 256 % 256).toUInt8, (n / 65536 % 256).toUInt8,
-     (n / 16777216 % 256).toUInt8]⟩
+/-- An index as CODEC's four little-endian bytes (indexes are below `Bounds.createsMax`). -/
+def index32 (n : Nat) : ByteArray := Nanodregg.Codec.Stream.u32.bytes (UInt32.ofNat n)
 
 /-- What a pin asserts about a cell: its digest, or the digest of absence. -/
 def pinOf (E : Env D) : Option Cell → D
-  | none => E.hash tagAbsent
-  | some c => E.hash (tagCell ++ E.cellBytes c)
+  | none => E.hash domAbsent ByteArray.empty
+  | some c => E.hash domCell (E.cellBytes c)
 
-def turnDigest (E : Env D) (t : Turn D) : D := E.hash (tagTurn ++ E.turnBytes t)
+def turnDigest (E : Env D) (t : Turn D) : D := E.hash domTurn (E.turnBytes t)
 
 def chainNext (E : Env D) (prev : D) (t : Turn D) : D :=
-  E.hash (tagChain ++ E.bytes prev ++ E.bytes (turnDigest E t))
+  E.hash domChain (E.bytes prev ++ E.bytes (turnDigest E t))
 
 /-- The id of the `i`-th cell a transaction creates. -/
 def cellIdOf (E : Env D) (txId : D) (i : Nat) : D :=
-  E.hash (tagCellId ++ E.bytes txId ++ le32 i)
+  E.hash domCellId (E.bytes txId ++ index32 i)
 
 /-- A ROM cell's id is its content digest: the same immutable content is one cell, whoever
 installs it (a package's identity IS its cell id). -/
-def romIdOf (E : Env D) (c : Cell) : D := E.hash (tagRomId ++ E.cellBytes c)
+def romIdOf (E : Env D) (c : Cell) : D := E.hash domRomId (E.cellBytes c)
 
 /-- The id a turn gives its `i`-th born cell: content-addressed for ROM, else derived from the
 transaction. -/
@@ -122,7 +122,7 @@ namespace World
 
 def genesis (E : Env D) (name : ByteArray) (allowance : Nat) : World D :=
   { cells := {}, journal := {}, spent := {}, height := 0,
-    chain := E.hash (tagGenesis ++ name), allowance }
+    chain := E.hash domGenesis name, allowance }
 
 /-- The live cell at an id, if any (a tombstone reads as absent). -/
 def live (w : World D) (c : D) : Option Cell :=
@@ -163,11 +163,11 @@ def checkBounds (t : Turn D) : Except (Reject D) Unit := do
 
 variable [DecidableEq D]
 
-/-- A transaction id is admitted at most once; an exact retry names the height it landed at. -/
-def checkJournal (E : Env D) (w : World D) (t : Turn D) : Except (Reject D) Unit :=
+/-- A transaction id is admitted at most once; a retry names the height it landed at. -/
+def checkJournal (w : World D) (t : Turn D) : Except (Reject D) Unit :=
   match w.journal[t.txId]? with
   | none => .ok ()
-  | some (h, d) => if d = turnDigest E t then .error (.replayed h) else .error (.txConflict h)
+  | some (h, _) => .error (.replayed h)
 
 def noDup {α : Type} [Ord α] (l : List α) (e : α → Reject D) : Except (Reject D) Unit :=
   match firstDup l with
@@ -234,7 +234,7 @@ def postLeg (w : World D) (l : Leg D) : Except (Reject D) (D × Cell) :=
 /-- Every check, against the pre-state only; on success, the post-cells of the legs. -/
 def check (E : Env D) (w : World D) (t : Turn D) : Except (Reject D) (List (D × Cell)) := do
   checkBounds t
-  checkJournal E w t
+  checkJournal w t
   checkShape t
   checkWindow w t
   checkPins E w t
@@ -284,8 +284,5 @@ def World.fold (E : Env D) (w : World D) : List (Turn D) → Except (Nat × Reje
 def chainOf (E : Env D) (c : D) : List (Turn D) → D
   | [] => c
   | t :: rest => chainOf E (chainNext E c t) rest
-
-/-- Two different inputs with one digest. -/
-def Collision (hash : ByteArray → D) : Prop := ∃ a b, a ≠ b ∧ hash a = hash b
 
 end Nanodregg.Kernel

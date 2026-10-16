@@ -1,7 +1,7 @@
 /-
 # Kernel.Proofs.Receive — what a derived Turn guarantees before `World.admit` sees it
 -/
-import Kernel.Receive.Derive
+import Kernel.Receive.Submit
 import Kernel.Proofs.Check
 
 namespace Nanodregg.Kernel.Receive
@@ -85,5 +85,31 @@ theorem receiveWith_key {X : Ctx D} {look : Pinned D} {c : Call D} {t : Turn D}
   simp only [except_bind_ok] at h
   obtain ⟨⟨⟩, _, ⟨⟩, hk, _⟩ := h
   exact hk
+
+/-- A submission commits exactly `World.admit` of exactly what `receive` derived, for a call not
+yet in the journal. -/
+theorem submit_ok {X : Ctx D} {w w' : World D} {c : Call D} {t : Turn D}
+    (h : submit X w c = .ok (t, w')) :
+    w.journal[txIdOf X c]? = none ∧ receive X w c = .ok t ∧ World.admit X.env w t = .ok w' := by
+  unfold submit at h
+  split at h
+  · simp at h
+  · rename_i hj
+    split at h
+    · simp at h
+    · rename_i t' hr
+      split at h
+      · simp at h
+      · rename_i w'' ha
+        simp only [Except.ok.injEq, Prod.mk.injEq] at h
+        obtain ⟨rfl, rfl⟩ := h
+        exact ⟨hj, hr, ha⟩
+
+/-- **A retry is never re-judged.** A call already in the journal is `replayed` at its height,
+whatever the World and the call's own derivation would say now. -/
+theorem submit_replayed {X : Ctx D} {w : World D} {c : Call D} {h : Nat} {d : D}
+    (hj : w.journal[txIdOf X c]? = some (h, d)) :
+    submit X w c = .error (.rejected (.replayed h)) := by
+  unfold submit; rw [hj]
 
 end Nanodregg.Kernel.Receive

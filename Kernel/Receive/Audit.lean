@@ -45,11 +45,4 @@ def audit (X : Ctx D) (w : World D) : List (Turn D) → Except (Nat × AuditFaul
           | .error (i, f) => .error (i + 1, f)
       | .error f => .error (0, f)
 
-/-- A log every Turn of which is exactly what `receive` derives from its own event, on the World
-before it: a log in which the writer decided nothing. -/
-def Honest (X : Ctx D) : World D → List (Turn D) → Prop
-  | _, [] => True
-  | w, t :: rest => ∃ c, X.decodeCall t.event = some c ∧ receive X w c = .ok t ∧
-      ∀ w', World.admit X.env w t = .ok w' → Honest X w' rest
-
 end Nanodregg.Kernel.Receive

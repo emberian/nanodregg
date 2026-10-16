@@ -178,8 +178,8 @@ def rightKey : Right → Nat
 /-- The longest grant chain a call walks. -/
 def grantDepthMax : Nat := 8
 
-def tagTx : ByteArray := "nanodregg/kernel/tx/v1".toUTF8
-def tagNextKey : ByteArray := "nanodregg/kernel/next-key/v1".toUTF8
+def domTx : String := "nanodregg/kernel/tx/v1"
+def domNextKey : String := "nanodregg/kernel/next-key/v1"
 def tagPossession : ByteArray := "nanodregg/kernel/possession/v1".toUTF8
 
 variable {D : Type} [Ord D]
@@ -188,10 +188,10 @@ def pinned [DecidableEq D] (w : World D) (pins : List (D × D)) : Pinned D := fu
   if pins.any (fun p => p.1 = c) then .ok (w.live c) else .error (.unpinned c)
 
 /-- The transaction id: the digest of the call's canonical bytes. -/
-def txIdOf (X : Ctx D) (c : Call D) : D := X.env.hash (tagTx ++ X.callBytes c)
+def txIdOf (X : Ctx D) (c : Call D) : D := X.env.hash domTx (X.callBytes c)
 
 /-- The digest a member precommits for its next key. -/
-def nextKeyDigest (X : Ctx D) (key : ByteArray) : D := X.env.hash (tagNextKey ++ key)
+def nextKeyDigest (X : Ctx D) (key : ByteArray) : D := X.env.hash domNextKey key
 
 /-- What a new key signs to prove its holder asked to be enrolled by this sponsor. -/
 def possessionMessage (X : Ctx D) (sponsor : D) (next : D) (key : ByteArray) : ByteArray :=

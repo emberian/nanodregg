@@ -33,14 +33,14 @@ def followChain (X : Ctx D) (w : World D) : Nat → D → D → Bool
 def mayFollow (X : Ctx D) (w : World D) (member g : D) : Bool :=
   followChain X w grantDepthMax g member
 
-def tagFounder : ByteArray := "nanodregg/kernel/founder/v1".toUTF8
-def tagFounderFollow : ByteArray := "nanodregg/kernel/founder-follow/v1".toUTF8
+def domFounder : String := "nanodregg/kernel/founder/v1"
+def domFounderFollow : String := "nanodregg/kernel/founder-follow/v1"
 
 def founderId (X : Ctx D) (name : ByteArray) (i : Nat) : D :=
-  X.env.hash (tagFounder ++ name ++ le32 i)
+  X.env.hash domFounder (name ++ index32 i)
 
 def founderFollowId (X : Ctx D) (name : ByteArray) (i : Nat) : D :=
-  X.env.hash (tagFounderFollow ++ name ++ le32 i)
+  X.env.hash domFounderFollow (name ++ index32 i)
 
 def founderMember (X : Ctx D) (f : ByteArray × D) : Cell :=
   { kind := kindMember, discipline := .ram, slots := slotsOf [(slotKey, f.1), (slotNext, X.env.bytes f.2)] }

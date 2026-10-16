@@ -44,11 +44,6 @@ structure Cell where
 namespace Slots
 
 /-- Strictly ascending keys: the canonical form. -/
-def Ascending : Slots → Prop
-  | [] => True
-  | [_] => True
-  | a :: b :: rest => a.1 < b.1 ∧ Ascending (b :: rest)
-
 def ascending : Slots → Bool
   | [] => true
   | [_] => true

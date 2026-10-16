@@ -13,6 +13,10 @@ namespace Nanodregg.Kernel
 section Chain
 variable {D : Type}
 
+/-- Two different inputs with one digest. -/
+def Collision (hash : String → ByteArray → D) : Prop :=
+  ∃ dom a b, a ≠ b ∧ hash dom a = hash dom b
+
 theorem chainOf_concat {E : Env D} :
     ∀ {c : D} {l : List (Turn D)} {t : Turn D},
       chainOf E c (l ++ [t]) = chainNext E (chainOf E c l) t
@@ -34,18 +38,16 @@ theorem chainNext_inj {E : Env D} {n : Nat} (hsz : ∀ d, (E.bytes d).size = n)
     {c₁ c₂ : D} {t₁ t₂ : Turn D} (h : chainNext E c₁ t₁ = chainNext E c₂ t₂) :
     (c₁ = c₂ ∧ t₁ = t₂) ∨ Collision E.hash := by
   unfold chainNext at h
-  by_cases hin : tagChain ++ E.bytes c₁ ++ E.bytes (turnDigest E t₁) =
-      tagChain ++ E.bytes c₂ ++ E.bytes (turnDigest E t₂)
-  · obtain ⟨hpre, hd⟩ := bytes_append_inj hin (by simp [ByteArray.size_append, hsz])
-    obtain ⟨_, hc⟩ := bytes_append_inj hpre rfl
+  by_cases hin : E.bytes c₁ ++ E.bytes (turnDigest E t₁) =
+      E.bytes c₂ ++ E.bytes (turnDigest E t₂)
+  · obtain ⟨hc, hd⟩ := bytes_append_inj hin (by simp [hsz])
     have hc' := hb hc
     have hd' := hb hd
     unfold turnDigest at hd'
-    by_cases hti : tagTurn ++ E.turnBytes t₁ = tagTurn ++ E.turnBytes t₂
-    · obtain ⟨_, htb⟩ := bytes_append_inj hti rfl
-      exact Or.inl ⟨hc', ht htb⟩
-    · exact Or.inr ⟨_, _, hti, hd'⟩
-  · exact Or.inr ⟨_, _, hin, h⟩
+    by_cases hti : E.turnBytes t₁ = E.turnBytes t₂
+    · exact Or.inl ⟨hc', ht hti⟩
+    · exact Or.inr ⟨_, _, _, hti, hd'⟩
+  · exact Or.inr ⟨_, _, _, hin, h⟩
 
 /-- **Follower soundness.** Two logs of one length that reach one chain from one start are one
 log, or the hash collides. With `fold_chain` and `fold_height`: a follower holding a trusted

@@ -13,7 +13,7 @@ variable {D : Type} [Ord D] [DecidableEq D]
 /-- Every check `admit` runs, as facts. -/
 structure Checked (E : Env D) (w : World D) (t : Turn D) (posts : List (D × Cell)) : Prop where
   bounds : checkBounds t = .ok ()
-  journal : checkJournal E w t = .ok ()
+  journal : checkJournal w t = .ok ()
   shape : checkShape t = .ok ()
   window : checkWindow w t = .ok ()
   pins : checkPins E w t = .ok ()
@@ -85,7 +85,7 @@ theorem stale_refused {E : Env D} {w : World D} {t : Turn D} {p : D × D}
 /-- If every check before the pins passes, a stale pin is refused BY NAME: `stale c` for a
 pinned cell `c` whose digest disagrees. -/
 theorem stale_named {E : Env D} {w : World D} {t : Turn D}
-    (hb : checkBounds t = .ok ()) (hj : checkJournal E w t = .ok ())
+    (hb : checkBounds t = .ok ()) (hj : checkJournal w t = .ok ())
     (hs : checkShape t = .ok ()) (hw : checkWindow w t = .ok ())
     (hstale : ∃ p ∈ t.pins, pinOf E (w.live p.1) ≠ p.2) :
     ∃ p ∈ t.pins, pinOf E (w.live p.1) ≠ p.2 ∧ World.admit E w t = .error (.stale p.1) := by
@@ -117,12 +117,12 @@ theorem stale_named {E : Env D} {w : World D} {t : Turn D}
         have hq' : pinCheck E w q = .error (.stale q.1) := by simp [pinCheck, req, hq]
         simp [forEx, hq']
 
-/-- An exact retry of an admitted transaction is answered `replayed` with its height, whatever
-else is true of the World now (only the static bounds are checked first). -/
-theorem replay_named {E : Env D} {w : World D} {t : Turn D} {h : Nat}
-    (hb : checkBounds t = .ok ()) (hj : w.journal[t.txId]? = some (h, turnDigest E t)) :
+/-- A retry of an admitted transaction is answered `replayed` with its height, whatever else is
+true of the World now (only the static bounds are checked first). -/
+theorem replay_named {E : Env D} {w : World D} {t : Turn D} {h : Nat} {d : D}
+    (hb : checkBounds t = .ok ()) (hj : w.journal[t.txId]? = some (h, d)) :
     World.admit E w t = .error (.replayed h) := by
-  have : checkJournal E w t = .error (.replayed h) := by simp [checkJournal, hj]
+  have : checkJournal w t = .error (.replayed h) := by simp [checkJournal, hj]
   unfold World.admit check
   simp [hb, this, bind, Except.bind]
 
@@ -138,7 +138,6 @@ theorem admit_journal [Std.TransOrd D] {E : Env D} {w w' : World D} {t : Turn D}
   | none => rfl
   | some e =>
       obtain ⟨hh, d⟩ := e
-      simp only [hjt] at hj
-      split at hj <;> simp at hj
+      simp [hjt] at hj
 
 end Nanodregg.Kernel

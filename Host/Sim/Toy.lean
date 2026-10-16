@@ -32,7 +32,7 @@ def turnBytes (t : Turn Nat) : ByteArray :=
     ++ t.nullifiers.foldl (fun acc n => acc ++ le64 n) ByteArray.empty ++ le64 t.charge
 
 def env : Env Nat where
-  hash := fnv
+  hash := fun dom b => fnv (dom.toUTF8 ++ b)
   bytes := le64
   turnBytes := turnBytes
   cellBytes c := le64 c.weight
