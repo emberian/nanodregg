@@ -91,7 +91,7 @@ binds Turns). Ingress bytes travel inside the turn record (KERNEL decides what a
   bad bytes means acknowledged data follows: refuse by name (`storeCorrupt`), never truncate.
   The one case no format decides: a corruption inside the last frame reads as torn; the client
   holding its receipt and the follower that folded it both see the height go back.
-- **Physical IO** is one C file, `Host/native/file.c` (~120 lines: `open`, `write_all`, `fsync`,
+- **Physical IO** is one C file, `Host/c/file.c` (~120 lines: `open`, `write_all`, `fsync`,
   `fsync_dir`, `read_at`, `size`, `truncate`, `flock`, `rename`): Lean's `IO.FS.Handle` is a
   `FILE*` with no `fsync`, no positioned read and no truncate-to-length.
 

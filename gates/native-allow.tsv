@@ -1,0 +1,2 @@
+# module<TAB>reason — the only modules that may declare @[extern] / @[implemented_by]
+Host.File	the Store's physical IO (fsync/F_FULLFSYNC, pread, ftruncate, flock): Lean core has none; Host/c/file.c, ROOT ruling 2026-10-16

@@ -15,7 +15,7 @@ condition. These are the things SQLite did for us, and who does each now:
   append-only, so a reader (the follower, `host follow`) reads up to the last complete verifying frame
   and treats an incomplete last frame as *not yet written*. It never truncates; only the lock holder may.
 - **fsync discipline per platform.** SQLite knows `F_FULLFSYNC` on Darwin and directory fsync on Linux.
-  Ours: `Host/native/file.c` uses `fcntl(F_FULLFSYNC)` on Darwin, `fdatasync` elsewhere, and fsyncs the
+  Ours: `Host/c/file.c` uses `fcntl(F_FULLFSYNC)` on Darwin, `fdatasync` elsewhere, and fsyncs the
   directory after create and rename.
 - **Single-writer locking.** SQLite's file locks. Ours: `flock(LOCK)` held for the writer's lifetime.
 - **Not owned by anyone (absent in both):** media failure (a dead disk). That is replication, not the Store.
@@ -164,3 +164,15 @@ it, at the price of a second fsync per batch.
 that corruption does not follow the crash model. That is the familiar mistake of testing only the failure
 you designed for.
 **Status.** open.
+
+## HOST-13 · a def-module structure with a proof field proves its instances' witnesses privately (2026-10-16; accepted as cost by ROOT)
+**Decision.** `Log.Sealer` carries `tag_size : ∀ b, (tag b).size = tagBytes`, and an instance in a def-module
+(`Host.Sim.Toy.sealer`) proves it with a `private theorem` (`size_le64`). The closure gate's C3 rule ("a
+def-module exports no theorems") allows private helpers. Do not "fix" this by moving the witness into a
+Proofs module: C4 forbids a def-module importing a proof-module, and the instance needs the witness.
+**Alternatives.** Drop the proof field and carry the size as a premise of every theorem, which spreads
+the obligation to every caller. Or carve an exception into C3 for structure-instance witnesses, which
+makes the gate weaker.
+**Critique.** Private lemmas cannot be reused across modules, so two instances may prove the same fact
+twice. **Meta-critique.** None worth recording: this is a gate's cost, written down so nobody re-litigates it.
+**Status.** ruled by ROOT 2026-10-16 (accepted as cost).
