@@ -83,11 +83,15 @@ elif [ -n "$mods" ]; then
   # shellcheck disable=SC2086
   step build env -C "$G/tree" LEAN_NUM_THREADS="${LEAN_NUM_THREADS:-4}" lake build $mods
   step census python3 "$G/tree/gates/census.py" "$G/tree"
+else
+  echo "  build: nothing to build"
+fi
+
+# Generated files are checked on every commit: a Rust-only commit can make them stale too.
+if [ "$build" = 1 ]; then
   while read -r exe out; do
     [ -n "$exe" ] && step "generated:$out" env -C "$G/tree" lake exe "$exe" --check "$out"
   done < <(generated_checks "$G/tree")
-else
-  echo "  build: nothing to build"
 fi
 
 for crate in $(rust_changed "$base" "$cand"); do
