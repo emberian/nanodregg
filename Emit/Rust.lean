@@ -56,11 +56,8 @@ def file : Except String String := do
      byteModule "status" Status.all Status.code,
      byteModule "step" Step.all Step.code] ++ "\n"
 
-end Nanodregg.Emit.Rust
-
-open Nanodregg.Emit.Rust in
 /-- `emit-rust PATH` writes the file; `emit-rust --check PATH` exits 1 if PATH differs. -/
-def main (args : List String) : IO UInt32 := do
+def run (args : List String) : IO UInt32 := do
   match file with
   | .error e => IO.eprintln s!"emit-rust: {e}"; return 2
   | .ok text =>
@@ -72,3 +69,5 @@ def main (args : List String) : IO UInt32 := do
       IO.eprintln s!"emit-rust: {path} differs from the table; regenerate it"
       return 1
     | _ => IO.eprintln "usage: emit-rust [--check] PATH"; return 2
+
+end Nanodregg.Emit.Rust

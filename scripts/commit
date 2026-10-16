@@ -8,17 +8,29 @@
 #  1. reads the CURRENT main into a private GIT_INDEX_FILE (never the shared index);
 #  2. adds exactly PATH... from the working tree (a directory means every file under it;
 #     a deleted file is recorded as deleted);
-#  3. regenerates SIZE.md for that candidate (SIZE.md is generated; it is never a PATH you hand-edit);
+#  3. regenerates SIZE.md's `now` column for that candidate. Pass SIZE.md as a PATH only to change
+#     a ceiling or add a row: its ceilings are taken, its `now` column is recomputed anyway;
 #  4. refuses if the candidate differs from main anywhere outside PATH... and SIZE.md;
 #  5. runs scripts/pre-push on the candidate: ownership (the subject prefix `kernel:` … names the
 #     layer, gates/OWNERS; --cross-layer records `CROSS-LAYER: REASON`), the source gates, the
 #     build of the changed modules + every importer, the axiom census, cargo for changed crates
 #     (--no-build records `NO-BUILD: REASON` and skips build + census);
 #  6. commit-tree on main + compare-and-swap `update-ref refs/heads/main NEW BASE`: if main moved
-#     while you were being judged, nothing is written and you re-run;
+#     while you were being judged, nothing is written and steps 1-6 re-run (COMMIT_RETRIES, 5);
 #  7. resets the shared index to the new main for exactly those paths, so `git status` agrees.
 set -uo pipefail
 . "$(dirname "$0")/gate-lib.sh"
+# A moved main is the normal case with six layers: re-run the whole judgement on the new main,
+# up to COMMIT_RETRIES times (default 5). Each attempt is a full re-read; nothing is reused.
+if [ -z "${ND_COMMIT_ATTEMPT:-}" ]; then
+  for attempt in $(seq 1 "${COMMIT_RETRIES:-5}"); do
+    out=$(ND_COMMIT_ATTEMPT=$attempt "$0" "$@" 2>&1); rc=$?
+    printf '%s\n' "$out"
+    [ $rc -eq 75 ] || exit $rc
+    echo "scripts/commit: main moved (attempt $attempt); re-reading main"
+  done
+  echo "scripts/commit: main kept moving; gave up after ${COMMIT_RETRIES:-5} attempts"; exit 1
+fi
 msgsrc="" msgfile="" cross="" nobuild=""
 paths=()
 while [ $# -gt 0 ]; do
@@ -35,9 +47,6 @@ while [ $# -gt 0 ]; do
 done
 [ ${#paths[@]} -gt 0 ] && { [ -n "$msgsrc" ] || [ -n "$msgfile" ]; } || {
   echo "usage: scripts/commit (-m MSG | -F FILE) [--cross-layer REASON] [--no-build REASON] PATH..." >&2; exit 2; }
-for p in "${paths[@]}"; do
-  [ "$p" = SIZE.md ] && { echo "scripts/commit: SIZE.md is generated; do not pass it" >&2; exit 2; }
-done
 
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 msg=$tmp/msg
@@ -80,7 +89,7 @@ pp=(--index --message "$msg"); [ -n "$nobuild" ] && pp+=(--no-build)
 
 new=$(git -C "$repo" commit-tree "$cand" -p "$base" -F "$msg") || exit 2
 if ! git -C "$repo" update-ref refs/heads/main "$new" "$base"; then
-  echo "scripts/commit: main moved while this commit was judged; nothing written. Re-run."; exit 1
+  echo "scripts/commit: main moved while this commit was judged; nothing written."; exit 75
 fi
 unset GIT_INDEX_FILE
 (cd "$repo" && git reset -q "$new" -- SIZE.md $(git diff --name-only "$base" "$new") 2>/dev/null)

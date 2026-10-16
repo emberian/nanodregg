@@ -1,5 +1,5 @@
 # path-prefix<TAB>layer — the longest matching prefix owns a path. SHARED may be touched by any
-# layer (SIZE.md: every commit re-measures it; lakefile.toml: a layer adds its lean_lib entry in
+# layer (SIZE.md: every commit re-measures it; lakefile.lean: a layer adds its lean_lib entry in
 # the commit that adds its first .lean file). gates/owners.py reads this.
 Kernel/	KERNEL
 Codec/	CODEC
@@ -10,12 +10,14 @@ rows/	PROTOCOL
 client/	CLIENT
 sandbox/	CLIENT
 Lang/	LANG
+Emit/	CODEC
 gates/	GATES
 scripts/	GATES
 Census/	GATES
 lean-toolchain	GATES
 lake-manifest.json	GATES
 .gitignore	GATES
+lakefile.lean	SHARED
 lakefile.toml	SHARED
 SIZE.md	SHARED
 CHARTER.md	ROOT

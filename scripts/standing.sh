@@ -8,7 +8,9 @@
 # lean_exe, no rows/run) is ABSENT, and any ABSENT stage or unmeasured ceiling makes the verdict
 # INCOMPLETE, never GREEN: a gate that cannot run is not a pass. The line is also appended to
 # <git-common-dir>/nanodregg-standing/verdicts.log.
-#   sim:  `lake exe sim --seeds 64` in the judged tree (KERNEL's Kernel/Sim + a lean_exe "sim")
+#   sim:  every lean_exe named `*-sim` (host-sim, kernel-sim, …), run as `lake exe X SEED` for
+#         SEED in ${SIM_SEEDS:-1 2 3}: each must exit 0 with a last line `ALL PASS`, else RED
+#         naming the first `FAIL <check>`. No `*-sim` exe => sim=ABSENT => INCOMPLETE.
 #   rows: `rows/run` in the judged tree, exit 0 = every required row passed
 set -uo pipefail
 . "$(dirname "$0")/gate-lib.sh"
@@ -36,8 +38,19 @@ if [ "$build" = ok ]; then
   while read -r exe out; do
     [ -n "$exe" ] && [ "$(run env -C "$T" lake exe "$exe" --check "$out")" = RED ] && census=RED
   done < <(generated_checks "$T")
-  if python3 -c 'import sys,tomllib; sys.exit(0 if any(e["name"]=="sim" for e in tomllib.load(open(sys.argv[1],"rb")).get("lean_exe",[])) else 1)' "$T/lakefile.toml"; then
-    sim=$(run env -C "$T" lake exe sim --seeds "${SIM_SEEDS:-64}")
+  sims=$(for e in $(lean_exes "$T"); do case $e in *-sim) echo "$e" ;; esac; done)
+  if [ -n "$sims" ]; then
+    sim=ok
+    for exe in $sims; do
+      for seed in ${SIM_SEEDS:-1 2 3}; do
+        out=$(env -C "$T" lake exe "$exe" "$seed" 2>&1); rc=$?
+        printf '%s\n' "$out" >> "$log"
+        if [ $rc -ne 0 ] || [ "$(printf '%s\n' "$out" | tail -1)" != "ALL PASS" ]; then
+          sim="RED($exe $seed: $(printf '%s\n' "$out" | grep -m1 '^FAIL ' || echo "exit $rc"))"
+          break 2
+        fi
+      done
+    done
   fi
   if [ -x "$T/rows/run" ]; then rows=$(run env -C "$T" ./rows/run); fi
 fi

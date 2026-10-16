@@ -9,7 +9,7 @@ A path no OWNERS row covers belongs to ROOT.
 import os
 import re
 
-SUBJECT = {"kernel": "KERNEL", "codec": "CODEC", "host": "HOST", "protocol": "PROTOCOL",
+SUBJECT = {"kernel": "KERNEL", "codec": "CODEC", "emit": "CODEC", "host": "HOST", "protocol": "PROTOCOL",
            "rows": "PROTOCOL", "client": "CLIENT", "sandbox": "CLIENT", "lang": "LANG",
            "gates": "GATES", "build": "GATES", "charter": "ROOT", "root": "ROOT"}
 

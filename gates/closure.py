@@ -1,5 +1,7 @@
 """gates/closure.py TREE — the module-graph gate. Red on:
 
+  C0 a lakefile.lean form tree.lakefile does not know, or a package without
+     autoImplicit = false, relaxedAutoImplicit = false, warningAsError = true;
   C1 a .lean file outside a declared lib (a lib is `[[lean_lib]] name = X, globs = ["X.+"]`
      and owns exactly the directory X/), or a lib that is not rooted that way;
   C2 an import that is neither a tree module nor Init/Std (Lean only from Census);
@@ -10,15 +12,26 @@
      def-module exporting one is red;
   C4 a def-module importing a proof-module;
   C5 a module outside Census importing Census;
-  C6 a lean_exe root that is a proof-module or not a tree module.
+  C6 a lean_exe root that is a proof-module or not a tree module;
+  C7 a lean_exe root that declares anything but `main` (logic lives in a lib module, which the
+     census sees; the census skips exe roots, so two exes' `main`s never meet);
+  C8 a C source outside an extern_lib's <Lib>/c directory, or an extern_lib directory that is
+     not <Lib>/c of a declared lib.
 """
+import os
 import sys
 
 import tree
 
 
+OPTIONS = ("⟨`autoImplicit, false⟩", "⟨`relaxedAutoImplicit, false⟩", "⟨`warningAsError, true⟩")
+
+
 def check(t: tree.Tree) -> list[str]:
-    red = []
+    red = [f"C0 lakefile.lean: {e}" for e in t.lake.get("errors", [])]
+    for o in OPTIONS:
+        if o not in t.lake.get("options", ""):
+            red.append(f"C0 lakefile.lean: package leanOptions must contain {o}")
     libs = {}
     for lib in t.lake.get("lean_lib", []):
         name = lib["name"]
@@ -29,7 +42,7 @@ def check(t: tree.Tree) -> list[str]:
         if "." not in m.name:
             red.append(f"C1 {m.path}: a top-level module is an umbrella hub; put it in a layer directory")
         elif m.lib not in libs:
-            red.append(f"C1 {m.path}: directory {m.lib}/ is not a declared lean_lib in lakefile.toml")
+            red.append(f"C1 {m.path}: directory {m.lib}/ is not a declared lean_lib in lakefile.lean")
     for m in t.modules.values():
         for i in m.imports:
             root = i.split(".")[0]
@@ -61,6 +74,24 @@ def check(t: tree.Tree) -> list[str]:
             red.append(f"C6 lean_exe {exe}: root {root} is not a tree module")
         elif t.modules[root].is_proof:
             red.append(f"C6 lean_exe {exe}: root {root} is a proof-module")
+        else:
+            others = [f"{d.kind} {d.name}" for d in t.modules[root].decls if not (d.kind == "def" and d.name == "main")]
+            if others or not any(d.name == "main" for d in t.modules[root].decls):
+                red.append(f"C7 lean_exe {exe}: root {root} must declare only `main` "
+                           f"(found: {', '.join(others) or 'no main'})")
+    cdirs = set()
+    for ext in t.lake.get("extern_lib", []):
+        for d in ext["cdirs"]:
+            if d.split("/")[0] not in libs or d != d.split("/")[0] + "/c":
+                red.append(f"C8 extern_lib {ext['name']}: {d} is not <Lib>/c of a declared lib")
+            cdirs.add(d)
+    for d, dirs, files in os.walk(t.root):
+        dirs[:] = [x for x in dirs if x not in tree.SKIP_DIRS]
+        for f in files:
+            if f.endswith((".c", ".h", ".cc", ".cpp", ".m")):
+                rel = os.path.relpath(os.path.join(d, f), t.root)
+                if os.path.dirname(rel) not in cdirs:
+                    red.append(f"C8 {rel}: C source outside every extern_lib directory")
     return red
 
 

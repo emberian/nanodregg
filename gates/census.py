@@ -1,6 +1,7 @@
 """gates/census.py TREE — run the axiom census over every built module of TREE.
 
-Writes .lake/gates/CensusRun.lean importing every module outside Census, then runs
+Writes .lake/gates/CensusRun.lean importing every module outside Census except the lean_exe roots (they hold only `main`,
+closure C7, and two `main`s cannot share one environment), then runs
 `#axiom_census "gates/axioms-allow.tsv" <every lib but Census>` under `lake env lean`.
 Every module must already be built (scripts/pre-push builds first).
 """
@@ -13,7 +14,8 @@ import tree
 
 def main(root: str) -> int:
     t = tree.read(root)
-    mods = sorted(m for m in t.modules if t.modules[m].lib != "Census")
+    roots = set(t.exes.values())  # exe roots hold only `main` (closure C7); two would collide
+    mods = sorted(m for m in t.modules if t.modules[m].lib != "Census" and m not in roots)
     libs = sorted(set(t.modules[m].lib for m in mods))
     if not mods:
         print("census: ok (no modules)")

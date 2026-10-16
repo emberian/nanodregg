@@ -1,6 +1,6 @@
 """The one reader of a nanodregg tree. Every gate reads modules, imports and declarations here.
 
-A tree is a directory holding `lakefile.toml`. Its modules are the `.lean` files below it,
+A tree is a directory holding `lakefile.lean`, read here with a strict grammar (see `lakefile`). Its modules are the `.lean` files below it,
 outside `.lake/` and `.git/`. Text is read with comments and string literals blanked (newlines
 kept), so a word inside a docstring or a string is never mistaken for code.
 """
@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import os
 import re
-import tomllib
 from dataclasses import dataclass, field
 
 SKIP_DIRS = {".lake", ".git", "target", "node_modules"}
@@ -32,8 +31,9 @@ _DECL = re.compile(
     re.M)
 
 
-def blank(text: str) -> str:
-    """Replace comments and string/char literals by spaces, keeping every newline."""
+def blank(text: str, strings: bool = True) -> str:
+    """Replace comments (and, unless strings=False, string/char literals) by spaces, keeping
+    every newline."""
     out = []
     i, n = 0, len(text)
     while i < n:
@@ -54,14 +54,14 @@ def blank(text: str) -> str:
                     j += 1
             out.append(re.sub(r"[^\n]", " ", text[i:j]))
             i = j
-        elif c == '"':
+        elif c == '"' and strings:
             j = i + 1
             while j < n and text[j] != '"':
                 j += 2 if text[j] == "\\" else 1
             j = min(j + 1, n)
             out.append(re.sub(r"[^\n]", " ", text[i:j]))
             i = j
-        elif c == "'" and (i == 0 or not (text[i - 1].isalnum() or text[i - 1] in "_'.!?")):
+        elif c == "'" and strings and (i == 0 or not (text[i - 1].isalnum() or text[i - 1] in "_'.!?")):
             m = re.match(r"'(\\.[^']*|[^'\\])'", text[i:])
             if m:
                 out.append(" " * len(m.group(0)))
@@ -192,10 +192,64 @@ def decls(code: str) -> list[Decl]:
     return out
 
 
+_LIB = re.compile(r"(?:@\[default_target\]\s+)?lean_lib\s+(\w+)\s+where\s+globs\s*:=\s*#\[\s*\.submodules\s+`(\w+)\s*\]\s*$", re.S)
+_EXE = re.compile(r"(?:@\[default_target\]\s+)?lean_exe\s+«([\w-]+)»\s+where\s+root\s*:=\s*`([\w.]+)\s*$", re.S)
+_EXTERN = re.compile(r"extern_lib\s+«([\w-]+)»\s+pkg\s*:=\s*do\b(.*)$", re.S)
+_PACKAGE = re.compile(r"package\s+nanodregg\s+where\s+leanOptions\s*:=\s*#\[(.*)\]\s*$", re.S)
+
+
+def lakefile(root: str) -> dict:
+    """Read lakefile.lean as a table. Top-level forms (a form starts at column 0): `import Lake`,
+    `open Lake DSL System`, the package, `lean_lib X where globs := #[.submodules `X]`,
+    `lean_exe «n» where root := `M`, `extern_lib «n» pkg := do …` whose C directory is
+    `pkg.dir / "<Lib>" / "c"`. Anything else lands in `errors` (closure C0 is red on it)."""
+    lean = os.path.join(root, "lakefile.lean")
+    if not os.path.exists(lean):
+        # A parent tree from before the switch (2026-10-16): read its lakefile.toml so the
+        # transition gate can compare target sets. A candidate without lakefile.lean is C0-red.
+        import tomllib
+        with open(os.path.join(root, "lakefile.toml"), "rb") as f:
+            t = tomllib.load(f)
+        return {"lean_lib": [{"name": x["name"], "globs": x.get("globs", [])} for x in t.get("lean_lib", [])],
+                "lean_exe": [{"name": x["name"], "root": x.get("root", x["name"])} for x in t.get("lean_exe", [])],
+                "extern_lib": [], "errors": ["no lakefile.lean"], "options": ""}
+    text = open(lean, encoding="utf-8").read()
+    code = blank(text, strings=False)
+    forms, cur = [], []
+    for line in code.split("\n"):
+        if line and not line[0].isspace() and not (cur and cur[-1].strip().startswith("@[")):
+            if cur:
+                forms.append("\n".join(cur))
+            cur = [line]
+        elif cur or line.strip():
+            cur.append(line)
+    if cur:
+        forms.append("\n".join(cur))
+    out = {"lean_lib": [], "lean_exe": [], "extern_lib": [], "errors": [], "options": ""}
+    for f in (x.strip() for x in forms):
+        if not f or f in ("import Lake", "open Lake DSL System"):
+            continue
+        if m := _LIB.match(f):
+            if m.group(1) != m.group(2):
+                out["errors"].append(f"lean_lib {m.group(1)} globs a different directory {m.group(2)}")
+            out["lean_lib"].append({"name": m.group(1), "globs": [f"{m.group(2)}.+"]})
+        elif m := _EXE.match(f):
+            out["lean_exe"].append({"name": m.group(1), "root": m.group(2)})
+        elif m := _EXTERN.match(f):
+            dirs = re.findall(r'pkg\.dir\s*/\s*"(\w+)"\s*/\s*"c"', m.group(2))
+            if len(dirs) != 1:
+                out["errors"].append(f"extern_lib {m.group(1)} must compile exactly one <Lib>/c directory")
+            out["extern_lib"].append({"name": m.group(1), "cdirs": [f"{d}/c" for d in dirs]})
+        elif m := _PACKAGE.match(f):
+            out["options"] = m.group(1)
+        else:
+            out["errors"].append("unknown top-level form: " + f.splitlines()[0][:100])
+    return out
+
+
 def read(root: str) -> Tree:
     root = os.path.abspath(root)
-    with open(os.path.join(root, "lakefile.toml"), "rb") as f:
-        lake = tomllib.load(f)
+    lake = lakefile(root)
     modules = {}
     for d, dirs, files in os.walk(root):
         dirs[:] = sorted(x for x in dirs if x not in SKIP_DIRS)
@@ -203,9 +257,27 @@ def read(root: str) -> Tree:
             if not f.endswith(".lean"):
                 continue
             rel = os.path.relpath(os.path.join(d, f), root)
+            if rel == "lakefile.lean":
+                continue
             name = rel[:-5].replace(os.sep, ".")
             with open(os.path.join(d, f), encoding="utf-8") as fh:
                 text = fh.read()
             code = blank(text)
             modules[name] = Module(name, rel, text, code, header_imports(code), decls(code))
     return Tree(root, lake, modules)
+
+
+if __name__ == "__main__":
+    # `tree.py targets DIR`: every lean_lib and lean_exe name; `tree.py exes DIR`: exe names;
+    # `tree.py has-exe DIR NAME`: exit 0 iff NAME is a lean_exe.
+    import sys
+    cmd, d = sys.argv[1], sys.argv[2]
+    lk = lakefile(d)
+    if cmd == "targets":
+        print(" ".join([x["name"] for x in lk["lean_lib"]] + [x["name"] for x in lk["lean_exe"]]))
+    elif cmd == "exes":
+        print(" ".join(x["name"] for x in lk["lean_exe"]))
+    elif cmd == "has-exe":
+        sys.exit(0 if any(x["name"] == sys.argv[3] for x in lk["lean_exe"]) else 1)
+    else:
+        sys.exit(f"tree.py: unknown command {cmd}")

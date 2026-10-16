@@ -14,7 +14,7 @@
 #      (a message line `GATE-CHANGE: <why>` lets a deliberate gate change pass the parent's
 #      gates; it is printed in the verdict);
 #   2. `lake build` of the changed modules and every module that imports them (everything when
-#      lakefile.toml or lean-toolchain changed);
+#      lakefile.lean or lean-toolchain changed; every exe whenever anything builds or C changed);
 #   3. the axiom census over every module, and every gates/generated.tsv file equal to what its
 #      Lean generator emits (`lake exe emit-rust --check client/src/generated.rs`);
 #   4. `cargo check --all-targets` + `cargo clippy -D warnings` + `cargo fmt --check` for each

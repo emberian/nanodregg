@@ -24,6 +24,10 @@ t = tree.read(a.root)
 msg = open(a.message, encoding="utf-8").read() if a.message else ""
 
 
+def has_lakefile(d):
+    return any(os.path.exists(os.path.join(d, f)) for f in ("lakefile.lean", "lakefile.toml"))
+
+
 def read(p):
     return open(p, encoding="utf-8").read() if p and os.path.exists(p) else None
 
@@ -33,16 +37,26 @@ results = {
     "closure": closure.check(t),
     "refusals": refusals.check(t),
     "size": size.check(t, read(os.path.join(t.root, "SIZE.md")) or "", read(a.base_size), msg,
-                    tree.read(a.base_tree) if a.base_tree and os.path.exists(os.path.join(a.base_tree, "lakefile.toml")) else None),
+                    tree.read(a.base_tree) if a.base_tree and has_lakefile(a.base_tree) else None),
     "waste": waste.check(read(os.path.join(t.root, "gates", "waste.tsv")) or "", read(a.base_waste), msg),
 }
 if changed is not None:
     results["owners"] = owners.check(t.root, changed, msg)
+# Targets: a lib or exe the parent's lakefile declared and the candidate's does not is red by
+# name, unless the message says `LAKE-DROP: <name>: <why>` (the toml -> lean switch must carry
+# every target across).
+if a.base_tree and has_lakefile(a.base_tree):
+    bl = tree.lakefile(a.base_tree)
+    before = {x["name"] for k in ("lean_lib", "lean_exe") for x in bl[k]}
+    after = {x["name"] for k in ("lean_lib", "lean_exe") for x in t.lake[k]}
+    results["targets"] = [f"lakefile dropped target {n}; needs 'LAKE-DROP: {n}: <why>'"
+                          for n in sorted(before - after)
+                          if not re.search(r"(?m)^LAKE-DROP:\s*" + re.escape(n) + r"\s*:\s*\S", msg)]
 # A commit is refused for the reds it introduces. Reds its parent already had are printed (they
 # are some layer's to fix forward, and scripts/standing.sh counts every one) but do not block an
 # unrelated commit: otherwise one layer's red stops all six.
 old = set()
-if a.base_tree and os.path.exists(os.path.join(a.base_tree, "lakefile.toml")):
+if a.base_tree and has_lakefile(a.base_tree):
     bt = tree.read(a.base_tree)
     old = {re.sub(r":\d+", ":", r) for r in closure.check(bt) + refusals.check(bt)}
 red = False

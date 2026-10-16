@@ -74,6 +74,10 @@ def measure(t: tree.Tree) -> dict[str, int]:
     out["sorry"] = sum(len(re.findall(r"\bsorry\b", m.code)) for m in mods)
     out["native (extern/implemented_by)"] = sum(
         len(re.findall(r"@\[[^\]]*\b(?:implemented_by|extern)\b", m.code)) for m in mods)
+    out["C lines"] = sum(
+        sum(1 for _ in open(os.path.join(d, f), encoding="utf-8", errors="replace"))
+        for d, dirs, files in os.walk(t.root) if not (set(d.split(os.sep)) & tree.SKIP_DIRS)
+        for f in files if f.endswith((".c", ".h")))
     out["Rust lines"] = rust_lines(t.root)
     out["Rust lines (client/src)"] = rust_lines(os.path.join(t.root, "client", "src"))
     for metric, sources in CONSTRUCTORS.items():

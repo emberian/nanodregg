@@ -32,17 +32,19 @@ lock() {
   trap 'rm -rf "'"$d"'"' EXIT
 }
 
-# lean_targets DIR: every lean_lib and lean_exe name in DIR's lakefile.
-lean_targets() {
-  python3 -c 'import sys,tomllib; t=tomllib.load(open(sys.argv[1],"rb")); print(" ".join([l["name"] for l in t.get("lean_lib",[])]+[e["name"] for e in t.get("lean_exe",[])]))' "$1/lakefile.toml"
-}
+# lean_targets DIR: every lean_lib and lean_exe name in DIR's lakefile.lean.
+lean_targets() { python3 "$1/gates/tree.py" targets "$1"; }
+
+# lean_exes DIR: every lean_exe name (each links the extern_libs, so building them builds the C).
+lean_exes() { python3 "$1/gates/tree.py" exes "$1"; }
 
 # affected DIR BASE CAND: modules changed between two trees plus everything that imports them;
-# prints ALL when the build itself changed (lakefile, toolchain) or DIR has never built.
+# prints ALL when the build itself changed (lakefile, toolchain) or DIR has never built. Every
+# exe is appended whenever anything is built or a C source changed: exes link the C shim.
 affected() {
   local dir=$1 base=$2 cand=$3 changed
   changed=$(git -C "$repo" diff --name-only "$base" "$cand")
-  if [ ! -d "$dir/.lake/build" ] || printf '%s\n' "$changed" | grep -qxE 'lakefile.toml|lean-toolchain'; then
+  if [ ! -d "$dir/.lake/build" ] || printf '%s\n' "$changed" | grep -qxE 'lakefile.lean|lakefile.toml|lean-toolchain'; then
     echo ALL; return
   fi
   printf '%s\n' "$changed" | python3 -c '
@@ -53,7 +55,7 @@ for p in sys.stdin.read().split():
     if p.endswith(".lean"):
         m = p[:-5].replace("/", ".")
         if m in t.modules: want |= {m} | deps[m]
-print(" ".join(sorted(want)))' "$dir"
+print(" ".join(sorted(want)))' "$dir" | { read -r mods; if [ -n "$mods" ] || printf '%s\n' "$changed" | grep -qE '\.(c|h)$'; then echo "$mods $(lean_exes "$dir")"; fi; }
 }
 
 # rust_changed BASE CAND: the Cargo manifests whose crate changed.
