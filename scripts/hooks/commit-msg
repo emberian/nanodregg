@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Installed by scripts/install-hooks (core.hooksPath = scripts/hooks). Every commit to main is
+# judged by scripts/pre-push against exactly the tree it records. There is no bypass flag here;
+# `git commit --no-verify` exists and a reviewer reverts what it lands.
+exec "$(git rev-parse --show-toplevel)/scripts/pre-push" --index --message "$1"

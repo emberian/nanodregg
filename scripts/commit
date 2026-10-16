@@ -1,0 +1,87 @@
+#!/usr/bin/env bash
+# scripts/commit — THE way to commit to nanodregg main (ROOT ruling 2026-10-16, after five
+# stale-index incidents in one day: a commit built from a private or shared index read before
+# someone else's commit silently reverted their files).
+#
+#   scripts/commit (-m MSG | -F FILE) [--cross-layer REASON] [--no-build REASON] PATH...
+#
+#  1. reads the CURRENT main into a private GIT_INDEX_FILE (never the shared index);
+#  2. adds exactly PATH... from the working tree (a directory means every file under it;
+#     a deleted file is recorded as deleted);
+#  3. regenerates SIZE.md for that candidate (SIZE.md is generated; it is never a PATH you hand-edit);
+#  4. refuses if the candidate differs from main anywhere outside PATH... and SIZE.md;
+#  5. runs scripts/pre-push on the candidate: ownership (the subject prefix `kernel:` … names the
+#     layer, gates/OWNERS; --cross-layer records `CROSS-LAYER: REASON`), the source gates, the
+#     build of the changed modules + every importer, the axiom census, cargo for changed crates
+#     (--no-build records `NO-BUILD: REASON` and skips build + census);
+#  6. commit-tree on main + compare-and-swap `update-ref refs/heads/main NEW BASE`: if main moved
+#     while you were being judged, nothing is written and you re-run;
+#  7. resets the shared index to the new main for exactly those paths, so `git status` agrees.
+set -uo pipefail
+. "$(dirname "$0")/gate-lib.sh"
+msgsrc="" msgfile="" cross="" nobuild=""
+paths=()
+while [ $# -gt 0 ]; do
+  case $1 in
+    -m) msgsrc=$2; shift ;;
+    -F) msgfile=$2; shift ;;
+    --cross-layer) cross=$2; shift ;;
+    --no-build) nobuild=$2; shift ;;
+    --) shift; paths+=("$@"); break ;;
+    -*) echo "scripts/commit: unknown flag $1" >&2; exit 2 ;;
+    *) paths+=("$1") ;;
+  esac
+  shift
+done
+[ ${#paths[@]} -gt 0 ] && { [ -n "$msgsrc" ] || [ -n "$msgfile" ]; } || {
+  echo "usage: scripts/commit (-m MSG | -F FILE) [--cross-layer REASON] [--no-build REASON] PATH..." >&2; exit 2; }
+for p in "${paths[@]}"; do
+  [ "$p" = SIZE.md ] && { echo "scripts/commit: SIZE.md is generated; do not pass it" >&2; exit 2; }
+done
+
+tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+msg=$tmp/msg
+if [ -n "$msgfile" ]; then cat "$msgfile" > "$msg"; else printf '%s\n' "$msgsrc" > "$msg"; fi
+if [ -n "$cross" ] || [ -n "$nobuild" ]; then
+  printf '\n' >> "$msg"
+  [ -n "$cross" ] && printf 'CROSS-LAYER: %s\n' "$cross" >> "$msg"
+  [ -n "$nobuild" ] && printf 'NO-BUILD: %s\n' "$nobuild" >> "$msg"
+fi
+grep -q '^Co-Authored-By:' "$msg" || printf '\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\n' >> "$msg"
+
+base=$(git -C "$repo" rev-parse refs/heads/main) || exit 2
+idx=$tmp/index
+export GIT_INDEX_FILE=$idx
+git -C "$repo" read-tree "$base" || exit 2
+# Paths are taken relative to the caller's directory, like git.
+git add -A -- "${paths[@]}" || exit 2
+# SIZE.md for exactly this candidate (rows main has that size.py does not compute are kept).
+S=$common/nanodregg-commit-size
+mkdir -p "$S"
+materialize "$(git -C "$repo" write-tree)" "$S/tree" || exit 2
+python3 "$S/tree/gates/size.py" "$S/tree" --write > /dev/null || exit 2
+b=$(git -C "$repo" hash-object -w "$S/tree/SIZE.md") && git -C "$repo" update-index --add --cacheinfo "100644,$b,SIZE.md"
+cand=$(git -C "$repo" write-tree)
+
+# Every changed path must be one you named.
+prefix=$(git rev-parse --show-prefix)
+prefixes=$(for p in "${paths[@]}"; do r=$prefix${p#./}; echo "${r%/}"; done)
+extra=$(git -C "$repo" diff --name-only "$base" "$cand" | while read -r f; do
+  ok=0; [ "$f" = SIZE.md ] && ok=1
+  while read -r p; do case $f in "$p"|"$p"/*) ok=1 ;; esac; done <<< "$prefixes"
+  [ $ok = 1 ] || echo "$f"
+done)
+if [ -n "$extra" ]; then echo "scripts/commit: REFUSED — the candidate changes files you did not name:"; echo "$extra"; exit 1; fi
+if git -C "$repo" diff --quiet "$base" "$cand"; then echo "scripts/commit: nothing to commit"; exit 1; fi
+git -C "$repo" diff --stat "$base" "$cand"
+
+pp=(--index --message "$msg"); [ -n "$nobuild" ] && pp+=(--no-build)
+"$repo/scripts/pre-push" "${pp[@]}" || { echo "scripts/commit: REFUSED by scripts/pre-push"; exit 1; }
+
+new=$(git -C "$repo" commit-tree "$cand" -p "$base" -F "$msg") || exit 2
+if ! git -C "$repo" update-ref refs/heads/main "$new" "$base"; then
+  echo "scripts/commit: main moved while this commit was judged; nothing written. Re-run."; exit 1
+fi
+unset GIT_INDEX_FILE
+(cd "$repo" && git reset -q "$new" -- SIZE.md $(git diff --name-only "$base" "$new") 2>/dev/null)
+echo "scripts/commit: main = $(git -C "$repo" log --oneline -1 "$new")"

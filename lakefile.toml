@@ -1,6 +1,6 @@
 # nanodregg — the one build (owner: BUILD-GATES).
 #
-# - No package dependencies. Lean core and Std only: no Mathlib, no Batteries (DECISIONS G1).
+# - No package dependencies. Lean core and Std only: no Mathlib, no Batteries (decisions/gates.md GATES-1).
 # - One `lean_lib` per top-level layer directory, rooted by glob, so every file in the directory
 #   is built and none can be an orphan (gates/closure.py refuses a .lean file outside a lib).
 #   A layer adds its entry here in the same commit as its first .lean file (a glob over a
@@ -13,6 +13,12 @@ defaultTargets = ["Codec", "Kernel", "Protocol"]
 autoImplicit = false
 relaxedAutoImplicit = false
 warningAsError = true
+
+# The axiom census command (Census.Axioms): build tooling, the only place `import Lean` is
+# allowed; nothing outside Census may import it (gates/closure.py C2, C5).
+[[lean_lib]]
+name = "Census"
+globs = ["Census.+"]
 
 [[lean_lib]]
 name = "Kernel"

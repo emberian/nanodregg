@@ -1,0 +1,102 @@
+#!/usr/bin/env bash
+# scripts/pre-push — judge one candidate commit before it reaches main.
+#
+#   scripts/pre-push --index [--message FILE]   the tree `git commit` is about to record (the
+#                                               commit-msg hook runs this; --only commits work)
+#   scripts/pre-push --rev REV                  an existing commit, judged against its parent
+#   --no-build                                  skip build + census; needs `NO-BUILD: <reason>`
+#
+# Steps, all against a private copy of exactly that tree (never the shared working tree):
+#   0. ownership: every changed path belongs to the layer named by the subject prefix
+#      (gates/OWNERS); a `CROSS-LAYER: <reason>` message line is the recorded override;
+#   1. source gates (gates/check.py) as the PARENT defines them and as the candidate defines
+#      them; both must pass, so a commit cannot weaken a gate and pass by its own weakened gate
+#      (a message line `GATE-CHANGE: <why>` lets a deliberate gate change pass the parent's
+#      gates; it is printed in the verdict);
+#   2. `lake build` of the changed modules and every module that imports them (everything when
+#      lakefile.toml or lean-toolchain changed);
+#   3. the axiom census over every module;
+#   4. `cargo check --all-targets` + `cargo clippy -D warnings` + `cargo fmt --check` for each
+#      changed crate.
+# Prints one verdict line. Exit 0 = may land.
+set -uo pipefail
+. "$(dirname "$0")/gate-lib.sh"
+
+mode=index rev="" msg="" build=1
+while [ $# -gt 0 ]; do
+  case $1 in
+    --index) mode=index ;;
+    --rev) mode=rev; rev=$2; shift ;;
+    --message) msg=$2; shift ;;
+    --no-build) build=0 ;;
+    *) echo "usage: scripts/pre-push [--index | --rev REV] [--message FILE] [--no-build]" >&2; exit 2 ;;
+  esac
+  shift
+done
+
+if [ "$mode" = index ]; then
+  cand=$(git -C "$repo" write-tree) || exit 2
+  base=$(git -C "$repo" rev-parse -q --verify 'HEAD^{tree}' || echo "$empty_tree")
+else
+  cand=$(git -C "$repo" rev-parse "$rev^{tree}") || exit 2
+  base=$(git -C "$repo" rev-parse -q --verify "$rev^^{tree}" || echo "$empty_tree")
+  msg=$(mktemp); git -C "$repo" log -1 --format=%B "$rev" > "$msg"
+fi
+[ -n "$msg" ] || { msg=$(mktemp); : > "$msg"; }
+
+G=$common/nanodregg-gate
+lock nanodregg-gate || exit 2
+materialize "$cand" "$G/tree" || exit 2
+materialize "$base" "$G/base" || exit 2
+log=$G/last.log
+: > "$log"
+fail=""
+note=""
+
+step() { # step NAME CMD...: run, log, remember failure
+  local name=$1; shift
+  if "$@" >> "$log" 2>&1; then echo "  $name: ok"; else echo "  $name: RED"; fail="$fail $name"; fi
+}
+
+git -C "$repo" diff --name-only "$base" "$cand" > "$G/changed"
+args=(--base-tree "$G/base" --base-size "$G/base/SIZE.md" --base-waste "$G/base/gates/waste.tsv" --message "$msg" --changed "$G/changed")
+step gates python3 "$G/tree/gates/check.py" "$G/tree" "${args[@]}"
+if [ -f "$G/base/gates/check.py" ]; then
+  if ! python3 "$G/base/gates/check.py" "$G/tree" "${args[@]}" >> "$log" 2>&1; then
+    if grep -qE '^GATE-CHANGE:[[:space:]]*[^[:space:]]' "$msg"; then
+      note=" (parent's gates RED; passed on GATE-CHANGE)"; echo "  parent-gates: RED, accepted by GATE-CHANGE"
+    else
+      echo "  parent-gates: RED"; fail="$fail parent-gates"
+    fi
+  else
+    echo "  parent-gates: ok"
+  fi
+fi
+
+mods=$(affected "$G/tree" "$base" "$cand")
+if [ "$mods" = ALL ]; then mods=$(lean_targets "$G/tree"); fi
+if [ "$build" = 0 ]; then
+  if grep -qE '^NO-BUILD:[[:space:]]*[^[:space:]]' "$msg"; then echo "  build: SKIPPED (NO-BUILD in message)"; note="$note (build skipped)"
+  else echo "  build: --no-build needs a 'NO-BUILD: <reason>' message line"; fail="$fail no-build"; fi
+elif [ -n "$mods" ]; then
+  # shellcheck disable=SC2086
+  step build env -C "$G/tree" LEAN_NUM_THREADS="${LEAN_NUM_THREADS:-4}" lake build $mods
+  step census python3 "$G/tree/gates/census.py" "$G/tree"
+else
+  echo "  build: nothing to build"
+fi
+
+for crate in $(rust_changed "$base" "$cand"); do
+  export CARGO_TARGET_DIR=$G/cargo-target
+  step "cargo-check:$crate" cargo check --quiet --all-targets --manifest-path "$G/tree/$crate/Cargo.toml"
+  step "clippy:$crate" cargo clippy --quiet --all-targets --manifest-path "$G/tree/$crate/Cargo.toml" -- -D warnings
+  step "fmt:$crate" cargo fmt --check --manifest-path "$G/tree/$crate/Cargo.toml"
+done
+
+short=${cand:0:12}
+if [ -n "$fail" ]; then
+  echo "PRE-PUSH RED tree $short:$fail — log: $log"
+  grep -E '^  (closure|refusals|size|waste|owners): |AXIOM-CENSUS red|^[^ ]+ \([^)]*\) uses |error:|^Diff in|^warning:' "$log" | head -40
+  exit 1
+fi
+echo "PRE-PUSH GREEN tree $short$note"
