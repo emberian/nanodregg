@@ -111,6 +111,7 @@ echo "scripts/commit: main = $(git -C "$repo" log --oneline -1 "$new")"
 if [ "$(git -C "$repo" symbolic-ref -q HEAD)" = refs/heads/main ]; then
   (cd "$repo" && git reset -q "$new" -- SIZE.md $(git diff --name-only "$base" "$new") 2>/dev/null)
 elif ! { (cd "$repo" && git reset -q "$new" -- SIZE.md $(git diff --name-only "$base" "$new") 2>/dev/null)
+         git -C "$repo" checkout -q "$new" -- SIZE.md   # generated: the landed copy replaces the local one
          git -C "$repo" checkout -q --detach "$new"; }; then
   echo "scripts/commit: landed, but this worktree could not move to $new (an uncommitted edit"
   echo "  conflicts with main); resolve it, then: git checkout --detach main"
