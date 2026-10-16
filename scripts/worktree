@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# scripts/worktree LAYER — make ~/dev/nanodregg-wt/LAYER, a git worktree of nanodregg at the
+# current main (detached HEAD: main is a shared ref that only scripts/commit moves). Each layer
+# edits only in its own worktree; the primary checkout is nobody's editing surface (ROOT
+# 2026-10-16). It installs nothing else: hooks are per repository (core.hooksPath =
+# scripts/hooks), and .lake builds on first use. Commit from inside it with scripts/commit;
+# after landing, scripts/commit leaves the worktree on the new main.
+set -eu
+layers="kernel codec host protocol client lang gates root"
+[ $# -eq 1 ] && case " $layers " in *" $1 "*) ;; *) false ;; esac || {
+  echo "usage: scripts/worktree LAYER   (LAYER: $layers)" >&2; exit 2; }
+primary=$(cd "$(git rev-parse --git-common-dir)/.." && pwd)
+dest=$HOME/dev/nanodregg-wt/$1
+[ -e "$dest" ] && { echo "scripts/worktree: $dest exists" >&2; exit 1; }
+mkdir -p "$(dirname "$dest")"
+git -C "$primary" worktree add --detach "$dest" refs/heads/main
+echo "worktree: $dest at $(git -C "$dest" log --oneline -1)"

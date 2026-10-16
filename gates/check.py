@@ -18,6 +18,7 @@ ap.add_argument("--base-size")
 ap.add_argument("--base-waste")
 ap.add_argument("--base-tree", help="the parent tree: size rises are measured against it, and a\n                closure/refusal red the parent already had is reported as PRE-EXISTING, not red")
 ap.add_argument("--message")
+ap.add_argument("--owners-from", help="tree whose gates/OWNERS judges ownership (the parent)")
 ap.add_argument("--changed", help="file listing the paths the commit changes (enables the owners gate)")
 a, _unknown = ap.parse_known_args()  # a parent's check.py must accept a child's new flags
 t = tree.read(a.root)
@@ -41,7 +42,8 @@ results = {
     "waste": waste.check(read(os.path.join(t.root, "gates", "waste.tsv")) or "", read(a.base_waste), msg),
 }
 if changed is not None:
-    results["owners"] = owners.check(t.root, changed, msg)
+    src = a.owners_from if a.owners_from and os.path.exists(os.path.join(a.owners_from, "gates", "OWNERS")) else t.root
+    results["owners"] = owners.check(src, changed, msg)
 # Targets: a lib or exe the parent's lakefile declared and the candidate's does not is red by
 # name, unless the message says `LAKE-DROP: <name>: <why>` (the toml -> lean switch must carry
 # every target across).

@@ -17,20 +17,29 @@
 #     (--no-build records `NO-BUILD: REASON` and skips build + census);
 #  6. commit-tree on main + compare-and-swap `update-ref refs/heads/main NEW BASE`: if main moved
 #     while you were being judged, nothing is written and steps 1-6 re-run (COMMIT_RETRIES, 5);
-#  7. resets the shared index to the new main for exactly those paths, so `git status` agrees.
+#  7. leaves this checkout on the new main (a layer worktree: `checkout --detach NEW`).
+# Works from any worktree of the repo (scripts/worktree LAYER makes one).
 set -uo pipefail
 . "$(dirname "$0")/gate-lib.sh"
-# A moved main is the normal case with six layers: re-run the whole judgement on the new main,
-# up to COMMIT_RETRIES times (default 5). Each attempt is a full re-read; nothing is reused.
+# Every attempt runs main's OWN copy of scripts/commit and scripts/pre-push, materialized fresh
+# from refs/heads/main: a worktree's scripts, OWNERS and gates may be behind main, and the
+# parent's gates are the judge. A moved main (exit 75) re-reads main and re-runs, up to
+# COMMIT_RETRIES (default 5) times.
 if [ -z "${ND_COMMIT_ATTEMPT:-}" ]; then
   for attempt in $(seq 1 "${COMMIT_RETRIES:-5}"); do
-    out=$(ND_COMMIT_ATTEMPT=$attempt "$0" "$@" 2>&1); rc=$?
+    # A private copy per process: a running bash script must never be rewritten under it.
+    M=$common/nanodregg-commit-main/$$
+    rm -rf "$M"; materialize refs/heads/main "$M/tree" || exit 2
+    if [ -x "$M/tree/scripts/commit" ]; then runner=$M/tree/scripts/commit; else runner=$0; fi
+    out=$(ND_COMMIT_ATTEMPT=$attempt ND_COMMIT_SCRIPTS="$M/tree/scripts" "$runner" "$@" 2>&1); rc=$?
     printf '%s\n' "$out"
+    rm -rf "$M" "$M/tree.index"
     [ $rc -eq 75 ] || exit $rc
     echo "scripts/commit: main moved (attempt $attempt); re-reading main"
   done
   echo "scripts/commit: main kept moving; gave up after ${COMMIT_RETRIES:-5} attempts"; exit 1
 fi
+scripts=${ND_COMMIT_SCRIPTS:-$(dirname "$0")}
 msgsrc="" msgfile="" cross="" nobuild=""
 paths=()
 while [ $# -gt 0 ]; do
@@ -85,12 +94,21 @@ if git -C "$repo" diff --quiet "$base" "$cand"; then echo "scripts/commit: nothi
 git -C "$repo" diff --stat "$base" "$cand"
 
 pp=(--index --message "$msg"); [ -n "$nobuild" ] && pp+=(--no-build)
-"$repo/scripts/pre-push" "${pp[@]}" || { echo "scripts/commit: REFUSED by scripts/pre-push"; exit 1; }
+"$scripts/pre-push" "${pp[@]}" || { echo "scripts/commit: REFUSED by scripts/pre-push"; exit 1; }
 
 new=$(git -C "$repo" commit-tree "$cand" -p "$base" -F "$msg") || exit 2
 if ! git -C "$repo" update-ref refs/heads/main "$new" "$base"; then
   echo "scripts/commit: main moved while this commit was judged; nothing written."; exit 75
 fi
 unset GIT_INDEX_FILE
-(cd "$repo" && git reset -q "$new" -- SIZE.md $(git diff --name-only "$base" "$new") 2>/dev/null)
 echo "scripts/commit: main = $(git -C "$repo" log --oneline -1 "$new")"
+# Leave this checkout on the new main. In a layer worktree (detached HEAD) that is a checkout of
+# the new commit, which carries uncommitted edits along and refuses if one conflicts. In the
+# primary checkout (on branch main, whose ref just moved) the files are already right and only
+# the index entries of the landed paths are reset.
+if [ "$(git -C "$repo" symbolic-ref -q HEAD)" = refs/heads/main ]; then
+  (cd "$repo" && git reset -q "$new" -- SIZE.md $(git diff --name-only "$base" "$new") 2>/dev/null)
+elif ! git -C "$repo" checkout -q --detach "$new"; then
+  echo "scripts/commit: landed, but this worktree could not move to $new (an uncommitted edit"
+  echo "  conflicts with main); resolve it, then: git checkout --detach main"
+fi
