@@ -21,3 +21,7 @@ globs = ["Kernel.+"]
 [[lean_lib]]
 name = "Protocol"
 globs = ["Protocol.+"]
+
+[[lean_lib]]
+name = "Host"
+globs = ["Host.+"]
