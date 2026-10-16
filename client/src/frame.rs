@@ -78,8 +78,8 @@ fn fill(r: &mut impl Read, buf: &mut [u8]) -> Result<usize, FrameError> {
     Ok(got)
 }
 
-/// Read one frame.
-pub fn read(r: &mut impl Read, limits: Limits) -> Result<Frame, FrameError> {
+/// Read one length-prefixed body of `1 ..= max` bytes.
+pub fn read_body(r: &mut impl Read, max: u32) -> Result<Vec<u8>, FrameError> {
     let mut header = [0u8; HEADER];
     match fill(r, &mut header)? {
         0 => return Err(FrameError::Closed),
@@ -87,37 +87,51 @@ pub fn read(r: &mut impl Read, limits: Limits) -> Result<Frame, FrameError> {
         got => return Err(FrameError::Truncated { wanted: HEADER, got }),
     }
     let len = u32::from_le_bytes(header);
+    let past = FrameError::PastBound { len: u64::from(len), max };
     if len == 0 {
         return Err(FrameError::Empty);
     }
-    if len > limits.frame_bytes_max {
-        return Err(FrameError::PastBound { len: u64::from(len), max: limits.frame_bytes_max });
+    if len > max {
+        return Err(past);
     }
-    let len = usize::try_from(len).map_err(|_| FrameError::PastBound {
-        len: u64::from(len),
-        max: limits.frame_bytes_max,
-    })?;
+    let len = usize::try_from(len).map_err(|_| past)?;
     let mut body = vec![0u8; len];
     let got = fill(r, &mut body)?;
     if got != len {
         return Err(FrameError::Truncated { wanted: len, got });
     }
+    Ok(body)
+}
+
+/// Write one body made of `parts`, in a single `write_all`, refusing a body past `max` (or empty)
+/// before writing anything.
+pub fn write_body(w: &mut impl Write, max: u32, parts: &[&[u8]]) -> Result<(), FrameError> {
+    let total: u64 = parts.iter().map(|p| p.len() as u64).sum();
+    if total == 0 {
+        return Err(FrameError::Empty);
+    }
+    if total > u64::from(max) {
+        return Err(FrameError::PastBound { len: total, max });
+    }
+    let len = u32::try_from(total).map_err(|_| FrameError::PastBound { len: total, max })?;
+    let mut bytes = Vec::with_capacity(HEADER + parts.iter().map(|p| p.len()).sum::<usize>());
+    bytes.extend_from_slice(&len.to_le_bytes());
+    for part in parts {
+        bytes.extend_from_slice(part);
+    }
+    assert_eq!(bytes.len() as u64, HEADER as u64 + total, "frame layout: header + body");
+    w.write_all(&bytes).map_err(FrameError::Io)?;
+    w.flush().map_err(FrameError::Io)
+}
+
+/// Read one frame.
+pub fn read(r: &mut impl Read, limits: Limits) -> Result<Frame, FrameError> {
+    let mut body = read_body(r, limits.frame_bytes_max)?;
     let payload = body.split_off(1);
     Ok(Frame { op: body[0], payload })
 }
 
-/// Write one frame in a single `write_all`, refusing a body past the bound before writing anything.
+/// Write one frame, refusing a body past the bound before writing anything.
 pub fn write(w: &mut impl Write, limits: Limits, op: u8, payload: &[u8]) -> Result<(), FrameError> {
-    let body = payload.len() as u64 + 1;
-    if body > u64::from(limits.frame_bytes_max) {
-        return Err(FrameError::PastBound { len: body, max: limits.frame_bytes_max });
-    }
-    let len = u32::try_from(body).map_err(|_| FrameError::PastBound { len: body, max: limits.frame_bytes_max })?;
-    let mut bytes = Vec::with_capacity(HEADER + payload.len() + 1);
-    bytes.extend_from_slice(&len.to_le_bytes());
-    bytes.push(op);
-    bytes.extend_from_slice(payload);
-    assert_eq!(bytes.len(), HEADER + payload.len() + 1, "frame layout: header + op + payload");
-    w.write_all(&bytes).map_err(FrameError::Io)?;
-    w.flush().map_err(FrameError::Io)
+    write_body(w, limits.frame_bytes_max, &[&[op], payload])
 }

@@ -6,7 +6,7 @@
 | Lean lines (deployed) | 0 | — |
 | protocol operations | 0 | 40 |
 | refusal constructors | 0 | — |
-| Rust lines | 517 (client/src; +169 plant lines in client/tests) | 2,000 (client/src) |
+| Rust lines | 686 (client/src; +251 plant lines in client/tests) | 2,000 (client/src) |
 | partial defs (deployed) | 0 | 0 |
 | theorems | 0 | — |
 | sorry | 0 | 0 |

@@ -13,6 +13,7 @@ pub const FRAME_BYTES_MAX: u32;          // Bounds.frameBytesMax (both sockets, 
 pub const ARGV_BYTES_MAX: u32;           // Bounds.argvBytesMax (sum over argv + 4·count)
 pub const STEPS_PER_COMMAND_MAX: u32;    // Bounds.stepsPerCommandMax
 pub const SENDS_MAX: u32;                // Bounds.sendsMax (submits of one frozen call)
+pub const CONNECTIONS_MAX: u32;          // Bounds.connectionsMax (supervisor)
 
 pub mod host_op   { pub const SUBMIT: u8; pub const LOOKUP: u8; }
 pub mod follow_op { pub const COMMAND: u8; pub const RESUME: u8; }
@@ -58,11 +59,15 @@ function. If CODEC prefers the generator to emit the step decoder as Rust, the c
   definitive refusal (if the Host keeps none, lookup never answers `refused`).
 - **Idempotent submit of identical bytes** (the journal): a resend after `absent` that races an
   in-flight batch must replay, never double-admit. The client relies on this; it is the Host's theorem.
-- **The supervisor is CLIENT's** (HOST-2): `nd-supervise SOCKET -- host serve STORE`. Child frames
-  `u32le len ‖ u32le conn ‖ u8 op ‖ payload`, replies `u32le len ‖ u32le conn ‖ u8 status ‖ payload`.
-  Proposal: a reply for an unknown or closed conn is dropped; child exit closes every conn (clients see
-  EOF → `Unknown` → lookup); the supervisor restarts the child with backoff and never buffers more than
-  `FRAME_BYTES_MAX` per conn in either direction (back-pressure by not reading).
+- **The supervisor is CLIENT's** (HOST-2; core is `client/src/mux.rs`): `nd-supervise SOCKET -- host
+  serve STORE`. Child frames `u32le len ‖ u32le conn ‖ u8 op ‖ payload`, replies `u32le len ‖ u32le conn
+  ‖ u8 status ‖ payload`; `len` counts everything after itself, so `5 ≤ len ≤ FRAME_BYTES_MAX + 4`.
+  As built: a reply for an unknown or closed conn is dropped; the child closing its stdout closes every
+  conn (clients see EOF → `Unknown` → lookup) and the supervisor EXITS — the service manager restarts
+  the pair, so there is one restart path and no backoff code; conn ids are never reused (at 2^32 the mux
+  closes the child's stdin to force that restart); at most `CONNECTIONS_MAX` conns (one more is closed
+  on accept); a child frame shorter than conn + status ends the mux (`ChildMalformed`).
+  Needs one more generated bound: `CONNECTIONS_MAX`.
 
 ## 4. Asked of PROTOCOL / `host follow`
 
