@@ -358,3 +358,193 @@ broker enforces grants that a Lean receiver issued (the authorization is a Lean 
 only checks a signature and moves bytes). *Critique:* the most moving parts; providers do not accept
 signed grants, so the broker must still hold a real key at the moment of the call. *Meta:* it is the
 "everyone gets what they want" option, which is how minidregg grew.
+
+## LANG-0 · LANG attacks its own row (BUILD-LANG, 2026-10-16)
+**Decision.** Keep LANG as a layer, but cut three things out of the row and merge two inside it.
+1. *Law and package are one thing.* minidregg had two languages: Core4 for methods and the
+   `LawExpr → Pred` fragment for laws (`Compiler/ObjectiveBendLaw.lean`, `PredCompile`), the second
+   restricted so it could lower to a circuit. Admission has no proof system (memory
+   `project-no-proof-system-in-mini-admission`; laws are checked by RE-EXECUTION), so the restriction buys
+   nothing. In nanodregg a law is a method of type `Bool` run by the same evaluator under the same budget
+   (LANG-4). "Compile a checked term into a law" stops being a compiler; it is a typing judgement.
+2. *The front end is not in admission.* What is installed is the CHECKED CORE term, not source
+   (LANG-5). The surface language (`.obend`, mixins, templates, C4) is an authoring tool that runs in the
+   resident's client; it never runs in a receiver. This deletes minidregg's per-frame front-end replay
+   (`Program.runs_front_end_output`, `PERF-MEMO`) and keeps Parse+Elaborate (~3,000 lines) out of the
+   deployed closure. v0 ships a core s-expression reader (names → de Bruijn), which is what a Hermes
+   resident writes.
+3. *The resident surface is not a layer.* "What a resident can author and install" = three protocol ops
+   (`install`, `create`, `invoke`; LANG-7) whose receivers are KERNEL's (`Kernel/Receive/`), each calling
+   one pure LANG function. LANG owns those functions and the language; it owns no op, no World access,
+   no codec of Turns.
+**Module direction.** `Lang/*` imports no `Kernel/World`; `Kernel/Receive/{Install,Invoke}` import
+`Lang.Invoke`. LANG consumes KERNEL's `Cell`/`Bounds` and CODEC's digest and stream primitives only.
+**Alternatives.** (a) The row as written (LANG compiles laws, owns the resident surface). (b) Fold LANG
+into KERNEL's receivers (the evaluator is "just a receiver helper"). (c) Split LANG into Core (term,
+check, eval) and Front (surface, elaboration).
+**Why.** (b) puts a language's metatheory inside the layer whose job is to be read whole; (c) is right
+eventually but Front has no deployed consumer, so it is a tool directory, not a layer.
+**Critique.** Installing the core means a reader of an object sees core, not source: trust that the core
+is what the published source says requires re-running the front end yourself (anyone can, offline, but
+nobody is forced to). minidregg's rule "install nothing not re-derivable from source" was a real
+property, and this drops it from admission. Laws as arbitrary `Bool` terms lose DECIDABLE ENTAILMENT:
+minidregg's `adopt_floors_entailed` decided that a new law implies the policy's floors; with a
+Turing-complete-under-fuel law that is undecidable, so upgrade must be restricted structurally (LANG-4).
+**Meta-critique.** Both cuts make my layer smaller and my proofs easier, which is exactly the bias the
+charter warns about. Counter-check: the cut parts do not move to another layer; they are DELETED (the law
+fragment) or leave the deployed path (the front end). If Ember wants the source-is-the-pin property back,
+it costs one field (`source digest` beside the core) and an offline gate, not a front end in the kernel.
+
+## LANG-L · The laws, attacked from the language (BUILD-LANG, 2026-10-16)
+- **Law 4 (a static bound on everything) reaches inside user programs.** Core4 naturals were unbounded
+  (`nat (value : Nat)`, `binary multiply`), so one `multiply` step could square a number's size: a
+  fuel bound is not a memory bound. Nanodregg: a natural is a value `< 2^64`; an arithmetic result outside
+  it is the named fault `overflow`; bytes are `≤ Bounds.valueBytesMax`; terms, stacks and environments
+  have static ceilings. Critique: u64 forces programs that want bignums (token supply products) to split
+  limbs by hand. Meta: I am picking the TigerStyle reading because it gives every step O(1) cost, which
+  makes the tick a real work unit; that is also why the tick bound theorem means anything.
+- **Law 3 (bytes end to end) vs record labels.** Labels are Lean `String` (validated UTF-8, never
+  `List UInt8`); the wire carries their UTF-8 bytes and decode refuses invalid UTF-8 by name. A
+  `ByteArray` label would need a hand-written lexicographic order for canonical rows; `String` has one.
+  Critique: two byte representations of one name (term-side `String`, wire-side bytes). Meta: convenience.
+- **Law 1 (one of everything) is violated by minidregg's language twice over** (two languages: Core4
+  and the law fragment; two identities: artifact pin and the front-end manifest SHA-256, ARCHITECTURE
+  §3.7). Nanodregg keeps one language, one evaluator, one identity (`H(canonical package bytes)`, CODEC's
+  digest).
+- **Law 2 (Lean decides) holds for user code** because user code is data the Lean evaluator interprets;
+  there is no C backend (minidregg's `runtime.c` was differential-only) and no compiled closure.
+- **Law 6 (named theorems).** "Determinism" of a Lean function is `rfl` and vacuous; the deliverable's
+  determinism theorems are stated where they say something: typing is unique (an interface hash is
+  well-defined) and a halted run's outcome is independent of any extra budget (two executors that both
+  finish agree — what re-execution checking needs). See LANG-2.
+
+## LANG-1 · The term language: what Core4 keeps, what dies (BUILD-LANG, 2026-10-16)
+**Keeps (13 constructors).** `var i` (de Bruijn), `lam A b` (annotated), `app f a`, `fix t`
+(the record knot), `nat n`, `bool b`, `bytes s`, `prim p a b` (strict binary primitive), `record fs`,
+`get t ℓ`, `extend t fs`, `inj T ℓ t` (annotated sum injection), `case t arms`, `ite c t e`, `ref i`
+(the i-th import of the package; LANG-5). `let` is `app (lam …)`; `ifZero` is `ite (n == 0)` plus
+`sub`; `mix l u` is the lambda `λself.λsuper. u self (l self super)` (Core4's own machine already expanded
+it, `stepRaw .mix => mixBody`), so it is front-end sugar.
+**Dies.** `specification`, `prototype`, `reflect`, `metadata`, `project`: a prototype is a record
+`{spec, target}` whose fields are lazy (LANG-2), so reflection-without-forcing is `get`; metadata is a
+field. `perform`/`done` and the computation type: no cross-turn suspension in v0 (LANG-6). `label`
+scalars: a tag is a sum label or `bytes`. Quantities (affine/linear) and `custody` types: authority is the
+receiver's (capabilities checked by KERNEL), not the type system's. Row variables, rigid bounds and
+`variable` types: the core is MONOMORPHIC; modular typing (templates instantiated at `fix`, minidregg D1/D2
+"the emitted program is an ordinary closed Core4 program") is the authoring tool's job, so every core
+theorem is about closed monomorphic terms, which is what admission ran anyway.
+**Why.** Each kept constructor is used by the one law and the one package we must run (owner-only tally,
+grant object); each dead one either is definable (mix, let, ifZero, prototype) or carried a feature the
+kernel already owns (custody, activities' checkpoint machinery: ~30 `Demand*` files).
+**Critique.** Reflection on construction history (`metadata` of a `compose`, probes R01/R02) is a real
+Faré feature and is gone; a resident cannot ask "which layers made this object". No recursive data types:
+lists only as bounded records/sums written out, so a wiki page's list of links has no type. That is the
+first language extension a real app will demand (μ-types or a built-in `list`), and it must come with its
+codec and size bound. Monomorphic core means the authoring tool must instantiate every template, so code
+size grows with instances (minidregg measured nothing here).
+**Meta-critique.** Familiarity: the kept set is Core4 minus the parts whose proofs scared me. The test I
+applied — "used by the first law and package" — is a phase ordering that avoids the hard part (activities,
+reflection). Recorded as `cv task` items, not as "later".
+
+## LANG-2 · Evaluation: a small-step CEK machine, call-by-value with lazy record fields (BUILD-LANG, 2026-10-16)
+**Decision.** One evaluator: `step : State → State` over (control, environment, continuation stack), run
+under a `Budget {ticks, stack}`. Call-by-value except RECORD FIELDS, which are suspended closures forced at
+`get` (call-by-name per access, no memo). `fix t` with `t : R → R` (R a record type) evaluates to a knot
+value `knot clo` whose `get ℓ` applies `clo` to the knot and selects `ℓ`. No heap.
+**Alternatives.** (a) minidregg's call-by-need demand machine: heap of cells, update frames, blackholes,
+`fix` ties one heap address. (b) A big-step evaluator with fuel (`eval : Nat → Env → Term → Result`).
+(c) Strict records, `fix` over functions only (self thunked by the front end).
+**Why.** Laziness is needed exactly where Faré needs it: the final self and fields (`{good = 7, bad =
+self.bad}.good = 7`); everywhere else CBV is cheaper and simpler. (c) loses that. (b) makes fuel a DEPTH
+bound, not a work bound (a branching big-step tree does exponential work at linear depth), and recursion in
+the evaluator is the unbounded recursion law 4 forbids. Small-step gives: one tick = one O(1) transition,
+an explicit stack with a static ceiling, a state that is data. Delvetalk's measurement (KERNEL-HANDOFF §14:
+"the machine is not where turns spend their time; checkpoint work, compiles and state walks were")
+says the machine's constant factor is not where to spend design; lazy fields also give O(touched) reads of
+an object's state for free (a state field is decoded only when forced, delvetalk §15: 292,448 → 270 ticks).
+**Critique of mine.** No sharing: `{a = 1, b = self.a + self.a, c = self.b + self.b, …}` re-evaluates
+`a` 2^n times. It is metered (the run pays ticks, never unsafe), but a program that is linear under
+call-by-need is exponential here. If a real package hits it, the fix is a per-run memo heap, which brings
+back (a)'s proof obligations. Also `get` on a knot rebuilds the layer record each access: O(layers) per
+self-access.
+**Critique of (a).** The heap made every proof carry heap typing and blackhole states; minidregg's
+checkpointing of yielded heaps is the ~25-file `DemandForcing*`/`Collect*` mass, and `stepRaw` is linear in
+the heap (an open item). Delvetalk had to fix shared-`Array` copying per push (`DemandMachineFast` header).
+**Meta-critique.** I chose the semantics with the smaller preservation proof and found reasons it is
+also faster. The exponential case is real and I have not measured whether any law hits it.
+
+## LANG-3 · Types: monomorphic, exact, annotated; checking is a function proved equal to a relation (BUILD-LANG, 2026-10-16)
+**Decision.** `Ty := nat | bool | bytes | fn A B | rec (ℓ:T)* | sum (ℓ:T)*` with rows in strictly
+ascending label order (canonical: `=` is type equality, no subtyping). `HasType Δ Γ t T` (Δ = import
+types, Γ = locals) is the spec; `infer : Δ → Γ → Term → Option Ty` the decision, with
+`infer_sound`/`infer_complete`. `fix` types at a record type only. Theorems: `hasType_unique`,
+preservation + progress for `step` (so `checked_never_stuck`: a checked closed term's run ends only in a
+value or a budget fault or `overflow`).
+**Alternatives.** Core4's types (row tails, rigid variables, quantities, custody, computation); a
+bidirectional checker with fewer annotations.
+**Critique.** Annotations make core terms bigger to write by hand (an LLM resident will write them). Exact
+row equality means a method expecting `{x}` cannot take `{x, y}`: the authoring tool must coerce.
+Delvetalk measured type comparison as the checker's hot spot (interning: 2,320 ms → 26 ms); exact
+structural equality without interning will show the same curve on large rows.
+**Meta-critique.** "Proved equal to a relation" doubles the definitions (relation + function); the relation
+exists so proofs can induct on derivations. It is a spec, not a second implementation: nothing runs it.
+
+## LANG-4 · A law is a `Bool` method; laws compose by conjunction; upgrade only appends (BUILD-LANG, 2026-10-16)
+**Decision.** A package declares `laws : List (Label)`, names of fields of its body of type
+`fn Old (fn New (fn Req bool))`. An object's judged law list = the package's laws ++ the creator's laws
+(each a `(package digest, label)`), and every write is admitted only if every law returns `true`
+within the invocation's budget; a law that runs out of budget REFUSES the write (`lawExhausted ℓ`), never
+admits. An upgrade may only APPEND laws, so "the new law entails the floors" is the prefix relation
+(decidable, structural), replacing minidregg's `LawExpr` entailment.
+**Critique.** Prefix-only upgrade cannot RELAX a law that was too strict, ever; the object must be
+re-created. A law that is expensive makes every write expensive and the payer pays it. Law budget comes
+from the invoker's budget, so an attacker who can make a law expensive (large state) can make honest
+writes refuse with `lawExhausted` — a liveness, not safety, hole.
+**Meta-critique.** I deleted a decidable logic because it was a second language; a logic that can be
+reasoned about statically (entailment, conflict detection between domains) may be worth a second language.
+
+## LANG-5 · Install the checked core; identity is the digest of the package's canonical bytes, imports included (BUILD-LANG, 2026-10-16)
+**Decision.** `Package := {imports : List Digest, body : Term, iface : Ty, state : Ty, laws : List Label}`.
+`identity p = H("nanodregg/lang/package/v1" ‖ encode p)`; because `encode` includes the import digests, the
+identity is a Merkle commitment to the whole closure (content-addressed from the first commit, the mistake
+minidregg fixed late). Install checks: decode is canonical, every import is a live installed package (the
+receiver pins its cell) whose `iface` is the type `ref i` gets, `infer [imports' ifaces] [] body = iface`,
+`iface` is a record type, each law label is a field of `iface` at the law type over `state`. The package
+cell is ROM (OB-WORLD R4: minidregg's package body was RAM). A checked package never needs re-checking:
+its cell cannot change, and the receiver re-checks nothing at invoke (the check is install's theorem).
+**Alternatives.** Delvetalk's "pin = CID of the sealed SOURCE closure, never a compiler output" with the
+front end re-run (cached) at use; minidregg's artifact pin over the front end's output plus a front-end
+manifest hash.
+**Critique.** Install-time checking is only trustworthy if invoke decodes the SAME bytes install checked;
+it does (ROM, pinned), but a follower that never ran install trusts the log (it does anyway: it folds Turns,
+not receivers). A compiler change that would emit a better core cannot "move" installed code; authors
+reinstall. Large packages hit `valueBytesMax` (64 KiB) in one slot; chunking is a later CODEC question.
+**Meta-critique.** I am reacting against minidregg's front-end-in-kernel pain; delvetalk solved the same
+pain the other way (source pin + caches) and is live.
+
+## LANG-6 · No `perform` in v0: a method is a pure function from (state, args, request) to (state, result) (BUILD-LANG, 2026-10-16)
+**Decision.** A method has type `fn State (fn Args (fn Req (rec {result : R, state : State})))`. Multi-turn
+behaviour is explicit data in the object's state (a defunctionalised state machine), not a suspended
+machine. Cross-object synchronous calls are a genuine design fork (Kernel-side call trees with grants,
+minidregg `ObjectiveCall`, vs. messages as separate turns); not in v0, `cv task` filed.
+**Why.** Delvetalk: checkpointing yielded states was where time went; minidregg: ~25 files of
+checkpoint/settle/collect metatheory. A pure method has nothing to checkpoint, and re-entrancy (the DAO
+row) cannot happen.
+**Critique.** The powerbox (OB-WORLD §8) is a call tree (`grant.exercise` calls `target.method`); without
+calls it must be a target law that reads a grant object's state, which needs the receiver to load more than
+one object per invoke. Residents that wait (await an answer) must hand-write their state machines.
+**Meta-critique.** "v0" is the phase word the doctrine warns about; the honest statement is that I do not
+yet know the right call design and will not copy minidregg's.
+
+## LANG-7 · What a resident does: three ops, one pure function each (BUILD-LANG, 2026-10-16)
+**Decision.** `install pkg` (ROM birth of a package cell; LANG checks, KERNEL charges and pins imports),
+`create pkg state0 laws` (RAM birth of an object cell: slot 0 = package digest, slot 1 = extra laws,
+state fields at slots 16+i in label order, each a canonical data encoding; the seed is judged by the laws
+with `old = new = state0`), `invoke obj method args budget` (LANG runs the method and the laws; KERNEL turns
+the new state into one leg of `set` ops on exactly the changed field slots, pins the object, package and
+law-package cells). A resident authors in the core s-expression syntax, can `check` offline with the same
+`infer` (pure; no op needed), and installs with one signed call.
+**Critique.** State-field-per-slot couples the language's record layout to the kernel's slot keys: changing
+the state type is a migration (new object). Slot 16+i by label order means adding a field renumbers later
+fields. **Meta-critique.** I am designing KERNEL's receiver shape; BUILD-KERNEL owns it and may cut it
+differently.
