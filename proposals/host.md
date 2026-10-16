@@ -90,20 +90,6 @@ def Log.recover : … → ByteArray → Recovered      -- frames + valid length 
 The client (BUILD-CLIENT) needs only the frame shape `u32 len ‖ u32 conn ‖ u8 op ‖ payload` and
 the reply shape `u32 len ‖ u32 conn ‖ u8 status ‖ payload`, `status ∈ {0 ok, 1 refused, 2 uncertain, 3 absent}` (HOST-8).
 
-## The step protocol `host follow` ⇄ `nd` (HOST-9, with PROTOCOL)
+## The step protocol `host follow` ⇄ `nd`
 
-```lean
-namespace Nanodregg.Host.Follow
-inductive Step where
-  | done   (exit : UInt8) (stdout stderr : ByteArray)
-  | sign   (message : ByteArray) (k : ByteArray)          -- custody signs `message` with the member key
-  | host   (op : UInt8) (payload : ByteArray) (k : ByteArray)
-  | submit (call : ByteArray) (k : ByteArray)              -- an attempt: custody's frozen submit/lookup loop
-inductive Result where
-  | signature (bytes : ByteArray) | reply (status : UInt8) (bytes : ByteArray) | settled (status : UInt8) (bytes : ByteArray)
-def command : World → Array String → Except Refusal Step
-def resume  : World → (k : ByteArray) → Result → Except Refusal Step     -- `k` decoded canonically, ≤ continuationBytesMax
-theorem resume_rederives : …   -- the next `sign` message is a function of (World, command, step index)
-```
-Wire: `nd → follow`: `u32 len ‖ u8 tag(command=0|resume=1) ‖ body`; `follow → nd`: `u32 len ‖ u8 step ‖ body`.
-Tags and bounds come from PROTOCOL's generated table.
+Superseded: the step tags, statuses and bounds are PROTOCOL's (`Protocol/Table.lean`, PROTOCOL-0..7); Host consumes them (decisions/host.md HOST-9).

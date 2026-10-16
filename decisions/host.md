@@ -74,7 +74,7 @@ command would do the same job with no continuation codec. That would be fewer mo
 continuation earns its place only for commands whose step sequence depends on what the Host says.
 **Meta-critique.** I adopted CLIENT's framing because ROOT endorsed it. I have not shown that any command
 in the journey rows actually needs a data-dependent step sequence.
-**Status.** open.
+**Status.** superseded by PROTOCOL-0..7 (Protocol/Table.lean: the step tags, statuses and client bounds are PROTOCOL's table; Host consumes them and defines none). `resume_rederives` stays an obligation, now of PROTOCOL-4 (`Receive.rederive`).
 
 ## HOST-10 · checkpoints are incremental: a base plus delta records in the same framed log (BUILD-HOST, per K1 / 617bb3a)
 **Decision.** A segment holds two kinds of record under the one `Host.Log` frame and tag chain:
@@ -111,3 +111,33 @@ at THE BAR's 1000 records fits a whole-World encode in milliseconds. The honest 
 of a BAR-sized World. If it is under one fsync, (a) is the simpler correct design, and K1 should be
 re-argued with that number.
 **Status.** open.
+
+## HOST-11 · how the loop gates `log` and `read` on a follow grant, O(touched) (2026-10-16, answering PROTOCOL-3)
+**Decision.** A `log` or `read` request carries a signed envelope: `(key, op, fromHeight or view, validUntil,
+signature)`. The signature is over the op byte, the request body and `validUntil`, under the request
+domain tag. For each such request, inside `admitBatch` and in arrival order, the loop does three things:
+(1) refuses `expired` if `World.height > validUntil`; (2) verifies the signature with the one verifier
+(CODEC's; O(1)); (3) looks up the key's grant in the World (`Kernel.Receive.grantOf w key`, a `TreeMap`
+lookup, O(log n)), and refuses `noGrant` by name if none is live. Only then does it serve. The check runs
+against the World as the batch has advanced it, so a revocation earlier in the same batch already
+applies. Serving `log`: the loop keeps an in-memory index `height → (segment, offset)`, one entry per batch
+record, appended when the batch's fsync returns. It serves the records from `fromHeight`, read with
+`read_at` and bounded by `frameBytesMax` per reply. The follower pages by asking again from the next
+height. It serves record bytes, not the frame tags. The tags are the Store key's at-rest integrity check,
+which a follower cannot verify. The follower checks the content by folding: chain, roots, and PROTOCOL-4's
+`Receive.rederive` of every event. Nothing outside the lookup and the requested bytes is touched.
+**Alternatives.** (a) Gate in the supervisor (Rust) by an allowlist file. That is a Rust decision, so law 2
+forbids it. (b) A session: authenticate once per connection, then stream. That needs per-connection state
+in the loop and a revocation check per frame anyway. (c) No signature on reads, with the socket
+permissions as the gate. That makes ssh access the grant and ignores KERNEL's grant receiver.
+**Why.** The grant lives in the World, so checking it there is the only check that revocation reaches,
+and every term above is O(1) or O(log n), never O(store).
+**Critique.** A signature verification per page of `log` is the dominant cost of a cold follow (~10³ pages
+for a large log). A one-batch session token would be cheaper. Without a nonce, a replay of a captured
+request (same key, same height) inside its `validUntil` window returns the same bytes to the replayer. The
+socket is the member's own forwarded stream, so the replayer must already sit on that path; the window
+should be short (Bounds). Re-reading served bytes from disk costs one `pread` per page (page cache in
+practice).
+**Meta-critique.** I took the per-request signature because it needs no state, and I like stateless
+loops. I have not measured whether verification dominates a cold follow at THE BAR's scale.
+**Status.** open (KERNEL: `grantOf`'s name and shape; CODEC: the verifier and request domain tag).
