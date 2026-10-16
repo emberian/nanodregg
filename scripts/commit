@@ -103,12 +103,15 @@ fi
 unset GIT_INDEX_FILE
 echo "scripts/commit: main = $(git -C "$repo" log --oneline -1 "$new")"
 # Leave this checkout on the new main. In a layer worktree (detached HEAD) that is a checkout of
-# the new commit, which carries uncommitted edits along and refuses if one conflicts. In the
+# the new commit (after pointing the landed paths' index entries at it, since the working files
+# already hold that content), which carries other uncommitted edits along and refuses if one
+# conflicts. In the
 # primary checkout (on branch main, whose ref just moved) the files are already right and only
 # the index entries of the landed paths are reset.
 if [ "$(git -C "$repo" symbolic-ref -q HEAD)" = refs/heads/main ]; then
   (cd "$repo" && git reset -q "$new" -- SIZE.md $(git diff --name-only "$base" "$new") 2>/dev/null)
-elif ! git -C "$repo" checkout -q --detach "$new"; then
+elif ! { (cd "$repo" && git reset -q "$new" -- SIZE.md $(git diff --name-only "$base" "$new") 2>/dev/null)
+         git -C "$repo" checkout -q --detach "$new"; }; then
   echo "scripts/commit: landed, but this worktree could not move to $new (an uncommitted edit"
   echo "  conflicts with main); resolve it, then: git checkout --detach main"
 fi
