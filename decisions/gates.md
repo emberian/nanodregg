@@ -141,3 +141,24 @@ nothing here can tell; PRE-EXISTING lets a red sit as steady state ("red as stea
 **Meta-critique.** A wrapper script is the tool I can build fastest; the class is "a write without a
 read of the current version", and only the CAS addresses it, the rest is convenience.
 **Status.** open.
+
+## GATES-9 · The waste ratchet measures from the sims' own output: `WASTE <op> <metric> <ratio>` (2026-10-16)
+
+**Decision.** Law 5's waste ratio is pinned in gates/waste.tsv (`op metric ceiling measured source`). The
+measurement is a line `WASTE <op> <metric> <ratio>` printed by any `*-sim` exe (ratio = work done / work the
+operation must do, e.g. bytes appended per byte of Turn frame, cells read per cell touched, fsyncs per batch).
+standing.sh collects them: a pinned row above its ceiling is RED, a pinned row nothing measured is RED, a
+measurement without a row is listed `unpinned`. Commit-time (`gates/waste.py` in pre-push) only checks the table:
+ceilings never rise and rows never vanish without `WASTE: <op>: <why>`. No measurement and no row = ABSENT =>
+standing INCOMPLETE.
+**Alternatives.** `perf stat --no-scale` instruction counts (law 5's wording); running the sims in every
+pre-push.
+**Why.** perf does not exist on the Mac and instruction counts are noisy across machines; a ratio of logical
+work the code itself counts is deterministic under the seeded sim, so the ceiling can be exact and only fall.
+Sims in pre-push would put the slowest stage in front of every commit; standing runs them at HEAD.
+**Critique.** A ratio the code reports about itself can lie (the counter sits next to the work it counts and
+drifts from it); and logical work misses constant factors (a `List UInt8` copy counts as one "byte appended").
+The ratio is only as good as HOST's counter. **Meta-critique.** I chose the measurement I can gate without a
+perf box; wall time on the laptop is the measure THE BAR actually uses (write ≤ 5 s, reopen ≤ 60 s) and this
+does not see it.
+**Status.** open.
