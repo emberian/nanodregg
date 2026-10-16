@@ -7,7 +7,7 @@
 #   directory that does not exist in the commit fails the build).
 # - Warnings are errors; implicit auto-bound variables are off.
 name = "nanodregg"
-defaultTargets = ["Kernel", "Protocol"]
+defaultTargets = ["Codec", "Kernel", "Protocol"]
 
 [leanOptions]
 autoImplicit = false
@@ -25,3 +25,7 @@ globs = ["Protocol.+"]
 [[lean_lib]]
 name = "Host"
 globs = ["Host.+"]
+
+[[lean_lib]]
+name = "Codec"
+globs = ["Codec.+"]
