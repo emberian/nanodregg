@@ -49,7 +49,7 @@ in `~/dev/redregg/work/`: `ARCHITECTURE-20261016.md`, `CYCLE-TIME-20261016.md`,
 9. **Every commit builds.** `lake build` of the commit's import closure (and `cargo check` where
    Rust exists) passes BEFORE push. Main is the only branch. Small commits, often. A red on main is
    fixed forward within the hour by whoever sees it; `git revert` is always allowed.
-10. **Decisions are examined, then re-examined.** Every design decision goes in `decisions/<layer>.md` (one file per layer; `DECISIONS.md` is frozen after 10-16: seven writers on one append-only file collided twice):
+10. **Decisions are examined, then re-examined.** Every design decision goes in `DECISIONS.md`:
     the decision, the alternatives, why this one, the CRITIQUE (what would make it wrong), and the
     META-CRITIQUE (what bias produced it: familiarity with minidregg's shape, an estimate mistaken
     for a constraint, a phase ordering chosen to avoid a hard part). A decision without both
@@ -88,16 +88,9 @@ reads the proposals before committing signatures and answers each in `DECISIONS.
 - Build on the Mac: `lake build` / `cargo check` of your import closure before every push. Keep
   `.lake` small; the Mac data volume is nearly full: no large artifacts, no fixtures over 1 MB, no
   copies of minidregg. hbox is Ember's: do not use it. No box builds until ROOT says.
-- Seven agents, one tree, side by side: pull before you commit, commit small, commit only your
-  layer's files (`git commit --only <paths>`), never `git add -A`, never `git stash`, never rewrite
-  history. THE SHARED INDEX IS NOT YOURS: never stage into the default index (another agent's
-  stale index reverted a charter commit on 10-16, 65e3c1c → fixed forward feeaed3). Either commit
-  with explicit paths (`git commit --only`) or use a private index (`GIT_INDEX_FILE=$(mktemp)`,
-  `git read-tree HEAD`, add your paths, `write-tree`, `commit-tree`, `update-ref`). Before every
-  push, `git show --stat HEAD` must list ONLY your files; a commit that touches another layer's file
-  or reverts someone's hunk is a defect: fix forward, tell the owner.
-- Lakefile rule (GATES): add your `lean_lib` entry (`globs = ["X.+"]`) in the SAME commit as your
-  first `.lean` file; a glob over a directory missing from the commit breaks everyone's build. A conflict in a shared file (lakefile, DECISIONS.md, SIZE.md) is resolved by reading
+- Six agents, one tree, side by side: pull before you commit, commit small, commit only your
+  layer's files (`git commit --only …`), never `git add -A`, never `git stash`, never rewrite
+  history. A conflict in a shared file (lakefile, DECISIONS.md, SIZE.md) is resolved by reading
   both sides. Talk to the owner of a layer you need something from (SendMessage); do not build
   your own copy of their thing.
 - Tests are theorems, plants and rows. A plant is a mutation that must go red by name; record the
