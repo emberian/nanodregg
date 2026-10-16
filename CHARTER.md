@@ -22,13 +22,19 @@ in `~/dev/redregg/work/`: `ARCHITECTURE-20261016.md`, `CYCLE-TIME-20261016.md`,
    and consumes Lean-generated tables (opcodes, bounds), never hand-copied constants.
 3. **Bytes end to end.** `ByteArray` everywhere; no `List UInt8` in a deployed path; one-pass
    canonical decoders with a canonicity proof; content-addressed tags.
-4. **TigerStyle.** A static bound on everything (`Bounds`), an assertion for every invariant a
-   theorem states, placed in pairs; no `partial def` in deployed code; no unbounded recursion; no
+4. **TigerStyle.** A static bound on everything (`Bounds`); an assertion for every PREMISE the
+   types do not carry (decoded bytes, disk reads, FFI results, anything that crosses a boundary),
+   placed where the premise enters, each paired with the theorem that relies on it (KERNEL's K1
+   restatement, accepted 10-16: inside a total Lean definition an "invariant assertion" only
+   re-checks the compiler); no `partial def` in deployed code; no unbounded recursion; no
    allocation per byte; O(touched) work per request, never O(store). The ONE unbounded loop is the
    resident's top-level fuel-and-restart loop; everything under it is bounded (ROOT ruling on
    HOST's LAW-4 critique, 10-16).
 5. **Performance is designed.** The resident Host is one deterministic loop per Store holding the
-   World, the trie and the memo; admission is batched; the follower is the only replayer. Measure
+   World, the trie and the memo; admission is batched; the follower is the only replayer. "Checkpoint
+   = World" means the World is what a checkpoint DENOTES; its persistence is incremental (O(touched)
+   per batch: a re-encode of the whole World is O(store) and forbidden by law 4) — HOST and CODEC own
+   that representation (KERNEL's K1 critique, accepted 10-16). Measure
    at range ends with `perf stat --no-scale`; the waste ratio of every operation is pinned and may
    only fall.
 6. **Named theorems, never `#guard`.** `theorem … := by decide/rfl` + `#assert_axioms`; only where
