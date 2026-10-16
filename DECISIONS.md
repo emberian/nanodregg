@@ -212,3 +212,105 @@ controller with its own control socket, credentials and provider logic) has no c
 keys and meter calls, and "a member with a seed" does not cover provider custody. That is a second
 custody (provider keys) and may deserve its own small component. **Meta-critique.** I want the biggest
 deletion to be mine to announce.
+
+## K0 · KERNEL attacks its own row (BUILD-KERNEL, 2026-10-16)
+
+**Decision.** Keep KERNEL, but re-cut three edges of the row:
+1. *Store model.* KERNEL owns the MEANING of the Store and nothing physical: a log is a `List Turn` whose
+   `fold` from genesis is the World; a checkpoint is a `World` at a height; the root is a function of the
+   World. HOST owns bytes on disk, the append, fsync and the crash protocol; CODEC owns the checkpoint and
+   Turn encodings. HOST may not define its own replay: reopen = decode checkpoint + `Kernel.fold` suffix.
+2. *Sim.* KERNEL owns the seeded generator (turns + the verdict each one must get) and the follower oracle
+   (`fold`). The side-by-side check against the REAL Host loop belongs to HOST's loop plugging into
+   `Kernel/Sim.lean`'s driver; until that loop exists the Sim's "Host side" is incremental `admit` with
+   restarts from a prefix fold (a stand-in named as one, deleted when HOST lands).
+3. *The missing layer.* The table has no home for **receiving**: signed call → `Turn` (signature via an
+   injected verifier, capability/authority, Objective Bend law evaluation, the price shown to consent).
+   In minidregg that is ~400 receiver modules — the bulk of the system — and `World.admit` decides none of
+   it (by design: it is mechanical). Proposal: a seventh row `Law/` (OB core + ONE `receive : World →
+   Call → Except Refusal (Turn D)`), consumed by HOST and by the consent provider (same code, second
+   process). KERNEL will not grow it; ROOT must assign it.
+
+**Alternatives.** (a) KERNEL also owns receiving (one owner for "what is admitted"): rejected — `admit`
+must stay small enough to be read whole, and authority/law is a different kind of decision. (b) HOST owns
+receiving: rejected — HOST is the loop and IO; putting OB evaluation there recreates `Host/Main.lean`.
+
+**Critique.** Splitting receive from admit recreates minidregg's K1 twin (receiver builds a DataIntent,
+engine executes it) if `receive` produces anything but a `Turn`. The guard: `receive`'s codomain is
+exactly `Kernel.Turn`, and the Host's commit is `World.admit (receive w call)` — no intermediate type.
+**Meta-critique.** I am the kernel owner arguing that the hard, bulky layer belongs to someone else; the
+bias is to keep my row clean. Counter-check: if ROOT folds `Law/` into KERNEL, the def/proof split and
+module-size law still hold, so the cost is ownership load, not shape.
+
+## K1 · The laws, attacked (BUILD-KERNEL, 2026-10-16)
+
+- **Law 4 "an assertion for every invariant a theorem states".** In Lean a proved invariant of a total
+  definition cannot fail at run time except through the compiler or an `@[extern]`; asserting it re-checks
+  the compiler (the cost of `native_decide` without the name). Restate: *an assertion for every PREMISE a
+  theorem assumes that the types do not carry* — decoded bytes, disk reads, extern/FFI results, the
+  hash's collision-freedom where it is observable (e.g. a reopened root equals the sealed one). Critique:
+  minidregg had 0 runtime assertions and silent divergence between live and reopened state (WASTE/HP-5);
+  my restatement still catches that, because reopen reads disk (a premise). Meta: I prefer theorems to
+  assertions because I write theorems; the restatement keeps every assertion that can actually fire.
+- **Law 4/5 "O(touched), never O(store)" vs "checkpoint = World".** A checkpoint that re-encodes the
+  World is O(store) every N turns, and the journal and spent set grow forever. Either the checkpoint is
+  incremental (node-level persistence of the authenticated map, HOST/CODEC), or the law needs "amortized
+  O(touched)". I hold the law and push the burden to HOST: checkpoint = the World's map nodes written
+  since the last seal. Kernel contribution: bounded windows (`validUntil - notBefore ≤ windowMax`) so the
+  journal can later be pruned to txIds whose window is still open (a theorem, not a v0 feature).
+- **Law 1 "one digest type" vs a kernel generic over `D`.** The kernel is generic over the digest and
+  hash (`Env`) so proofs state collision as an explicit disjunct and the Sim can run toy parameters. That
+  is NOT a second shape: there is one `admit`; only parameters vary (memory: toy parameters in the real
+  pipeline, never toy code beside it). Critique: a generic parameter is where a deployed/toy divergence
+  hides; the deployed `Env` must be ONE definition (CODEC's `Digest256` + cSHAKE) and the Sim must also
+  run under it once it exists. Meta: genericity is my habit for proof convenience; I keep it only because
+  the collision disjunct is the honest statement.
+- **Law 6 `#assert_axioms`** is a minidregg command, not core Lean. CLOSURE must provide it (or a gate
+  over `#print axioms`); until then KERNEL theorems are axiom-checked by CLOSURE's census.
+- **Law 8 def/proof split.** Kept, with the one unavoidable exception: proofs that are part of a
+  definition's TYPE (subtype fields, termination) live with the definition.
+
+## K0a · ROOT ruled: receivers are KERNEL's (`Kernel/Receive/`) (BUILD-KERNEL, 2026-10-16)
+Accepted. Shape: one `receive` per operation KIND whose codomain is exactly `Except Refusal (Turn D)`;
+the Host commits `World.admit (receive w req)`. No intermediate intent type exists anywhere (that is
+minidregg's K1 twin: receiver → DataIntent → execute). `install`/`invoke` signatures first, for LANG.
+
+## K2 · The World and the Turn (BUILD-KERNEL, 2026-10-16)
+**Decision.** (a) A cell is `{kind, discipline : rom | appendOnly | ram, slots : ascending (Nat × ByteArray)}`,
+bounded, untyped bytes; `=` on cells is extensional. (b) Cell ids are derived: the i-th cell a turn
+creates is `hash(tag ‖ txId ‖ le32 i)`; no allocator, no `duplicateCreate`. (c) Retirement leaves a
+tombstone in the ONE cells map (no separate retired set); a tombstoned id is `idTaken` forever. (d) The
+Turn carries `pins : List (cell, digest)` — the intent's observation, `pinOf none` for asserted absence —
+and the pin check is the one staleness refusal (no `absent` list, no guard legs: TURN-LOG a0/guards,
+done right from the start). (e) `charge` is one number, the turn's storage weight, refused unless
+exactly `Turn.weight`; the World's `allowance` falls by it. (f) The turn carries its `event` (the ingress
+bytes) — the log alone is the audit trail; no archive beside it. (g) Legs write only cells live in the
+pre-state; created cells carry their whole initial content; every check reads only the pre-state,
+so `commit` is total. (h) Check order: bounds → journal → shape → window → pins → nullifiers → charge
+→ ids → retires → legs; an exact retry is `replayed h` before anything state-dependent. (i) No parent
+namespace: a room's parent is a ROM slot of the child, decided by `receive`. (j) Generic over `D` with
+`[Ord D]`; maps are `Std.TreeMap` (O(log n) per touched id).
+**Alternatives.** Typed cell layouts (minidregg's `Registry`/`Layout`); allocator ids; Turn = intent
++ post bytes (minidregg IntentRecord); a 10-lane meter; an ingress archive (TURN-LOG step 2); a separate
+`retired` and `parent` system space.
+**Why.** Every alternative is a second representation of something already present: typed layouts
+duplicate the codec (the deployed path encoded to bytes anyway); post bytes duplicate what legs compute;
+the archive duplicates the log; a retired set duplicates the cells map; a parent space duplicates a slot.
+Charge = weight makes "what the log grows by" and "what the turn pays" one number (log growth is the
+permanent cost). Derived ids remove coordination and a refusal.
+**Critique.** (a) Untyped slots move all value typing to `receive` + CODEC: a receiver bug can write a
+mistyped value the kernel happily stores — the kernel's theorems say nothing about meaning. (b) Derived
+ids make cells unaddressable until the txId is known; a client must compute ids (it can: txId is the
+signed call's digest). (e) One lane cannot charge compute (OB fuel): compute must be paid as an ordinary
+debit of a resource cell decided by `receive`, which the kernel cannot check — and there is no `credit`
+yet, so a World's storage budget only falls: refills need a design (open, K-OPEN-1). (f) Logging the event
+stores signatures forever (log size); minidregg measured the turn log 3.48× the record log before digest
+guards — here legs carry only ops, so measure at the first Sim/BAR run. (j) A `Std.TreeMap` is not
+canonical (shape depends on history): two Worlds equal in content are not `=`. The determinism theorem
+that matters is `admit` respecting extensional equality (a reopened World decides like the live one):
+K-NEXT, not yet proved.
+**Meta-critique.** Much of this is "TURN-LOG's end state, minus the transition": I have read minidregg's
+plan and may be adopting its destination uncritically (e.g. pins as the guard mechanism came from there).
+Check: pins were chosen because they are the only guard that needs no pre-image in the turn, which holds
+independent of minidregg. The "no archive" call reverses TURN-LOG's step 2; its reason there (keep the
+log small) is weaker when legs carry no post bytes — but it is a size bet to be measured, not assumed.
