@@ -33,6 +33,10 @@ name = "Host"
 globs = ["Host.+"]
 
 [[lean_lib]]
+name = "Lang"
+globs = ["Lang.+"]
+
+[[lean_lib]]
 name = "Codec"
 globs = ["Codec.+"]
 
