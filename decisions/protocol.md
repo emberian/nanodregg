@@ -61,7 +61,7 @@ environment and compares the resolved constants, not the strings.
 **Meta-critique.** Refusing the literal ask can be a way to avoid the hard version; the hard version is the
 call-kind level (each `Receive.Call` kind derived by exactly one receiver arm), which is KERNEL's
 exhaustive match, also structural. I believe no non-vacuous form of it exists below the injectivity above.
-**Status.** open; ROOT to rule.
+**Status.** ruled by ROOT 2026-10-16: ACCEPTED (receiver injectivity + single-writer replace the one-receiver statement).
 
 ## PROTOCOL-3 · consent-by-follow vs authorized reads: a conflict in the spec (2026-10-16)
 **Finding.** HOST-7 makes consent = `host follow`, which folds the WHOLE log. Rows J5 ("a key with no
@@ -81,7 +81,7 @@ HOST-7a's declared absence made explicit. (b) is cleaner but turns every confide
 cryptography row. **Meta-critique.** I found this by reading rows against a decision another layer
 made; I may be wrong about how much a follower must see if KERNEL's `Pinned` view lets consent run on
 the pinned cells only (consent needs only the pinned cells + a proof they are current — again (c)).
-**Status.** open; needs HOST and ROOT; maybe Ember (product: who may consent).
+**Status.** ruled by ROOT 2026-10-16: ACCEPTED for v0. `log` and `read` are served only to keys holding a FOLLOW GRANT; membership gates the whole log; per-cell hiding/blinding from members is a DECLARED ABSENCE for v1, tied to the blinding-key custody question open with Ember. J5/K10/KH hold: a key without a grant is refused at `log`/`read` by name.
 
 ## PROTOCOL-4 · follow must re-run the receiver on every logged event (2026-10-16)
 **Finding.** `World.fold` admits Turns; `World.admit` decides no authority ("`admit` decides none of
@@ -96,7 +96,7 @@ uses it. The `audit` row's plant is exactly this ("follow folds without re-runni
 replay (determinism of every installed law becomes a replay obligation — it already is, for consent).
 **Meta-critique.** I take minidregg's audit as the spec; nanodregg could instead make receivers
 themselves logged-and-checked-by-construction, but I see no way without signatures over Turns.
-**Status.** open; KERNEL and HOST to answer.
+**Status.** ruled by ROOT 2026-10-16: ACCEPTED; KERNEL told (Receive.rederive).
 
 ## PROTOCOL-5 · rows are Lean data, not scripts or Markdown (2026-10-16)
 **Decision.** `Protocol/Rows.lean`: each row = actor, argv, expected outcome by refusal NAME, the ops and
@@ -134,4 +134,6 @@ minidregg are exactly law 11's worry; each should be derived from the largest ro
   risk is PROTOCOL-2/5 (declared reach). Asking ROOT to assign the reader.
 - **Charter's "target ≤ 40 ops"** is the wrong ratchet unit: minidregg's mass was in call kinds and CLI
   verbs, not opcodes. The ratchet should count (ops, call kinds, command verbs, refusal constructors).
-**Status.** open.
+**Status.** ruled by ROOT 2026-10-16: the ≤40-ops ceiling becomes four ratchet rows in SIZE.md (ops,
+call kinds, command verbs, refusal constructors); law 11 gets the carve-out: conformance rows RESTATE
+the minidregg journeys because the journeys are the spec.
