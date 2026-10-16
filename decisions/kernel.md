@@ -46,3 +46,30 @@ Status: open.
   `Kernel.Reject`. `unknownKey` and `notPrecommitted` arrive with members/rotation (next commit): a
   constructor nothing produces would be a no-op shape (CLAUDE.md), so it lands with its producer.
 Status: open.
+
+## KERNEL-6 · Members, keys, rotation, rights, data objects, follow grants, audit (2026-10-16)
+**Decision.** (a) Identity is a member cell (kind 4: current key, digest of the next key, sponsor). A call
+names `member` and the `key` it signs with; `unknownKey` unless it is the member's current key. `rotate`
+is signed by the INCOMING key, whose digest must be the precommitted one (`notPrecommitted`): a stolen
+current key cannot rotate. `enroll` is signed by a sponsoring member and carries the new key's
+possession signature (`badPossession`). (b) Rights are `observe | mutate | invoke m`; a grant carries
+rights as slots; attenuation only narrows (`grantWidens`). (c) Objects: slot 0 package (absent = a data
+object), 1 owner, 2..15 extra laws, state at 16+. `write`/`law` act on data objects only (`hasMethods`),
+by the owner or a grant chain whose root issuer is the owner (`noGrant`); `invoke` acts on programmed
+objects only (`noMethods`), principal = signer or root issuer. Every state change is judged by
+`Program.judge` with the laws in force in the pre-state (a law change is judged by the old laws:
+"deny-all refuses the repair"). (d) Follow grants (kind 5) gate `log`/`read` (`mayFollow`, a live chain
+to a founder's root); founders and their root grants ARE the genesis World (`Receive.genesis`).
+(e) `audit` re-derives every logged Turn from its decoded event; `audit_ok`: audit accepts ⇔ fold
+accepts ∧ the log is `Honest` (every Turn is what its event derives on the World before it).
+**Alternatives.** Raw keys as identity (rotation breaks every grant); `write` as a method of a built-in
+package (needs LANG for the most basic row); laws judged by the post-state's laws (lets a law change
+license itself); a follower that trusts the writer's derivations (minidregg's follower).
+**Critique.** Any member may sponsor: the World is open to whoever one member admits, and the sponsor
+pays. Laws judged by pre-state laws make "tighten the law" always possible only if the current law
+permits it — a deny-all object is frozen forever (the row wants exactly that, and it is a footgun).
+`audit` re-runs LANG for every invoke: an audit is as expensive as the writer's work, by design.
+**Meta-critique.** Much of this is shaped by PROTOCOL's rows (unknownKey after rotation, deny-all repair):
+I am building to the tests. Check: each rule also falls out of "authority is a member's, keys are its
+current credential" independent of the rows.
+Status: open.

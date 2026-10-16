@@ -44,31 +44,46 @@ theorem sealTurn_ok {X : Ctx D} {c : Call D} {cr : List Cell} {lg : List (Leg D)
   · simp at h
 
 omit [Ord D] in
-/-- Every derived Turn is a seal of the call. -/
-theorem receiveWith_sealed {X : Ctx D} {look : Pinned D} {c : Call D} {t : Turn D}
-    (h : receiveWith X look c = .ok t) :
-    X.verify c.unsigned.signer (X.unsignedBytes c.unsigned) c.signature = true ∧
-      ∃ cr lg rt, sealTurn X c cr lg rt = .ok t := by
-  unfold receiveWith at h
-  rw [except_bind_ok] at h
-  obtain ⟨⟨⟩, hs, h⟩ := h
-  refine ⟨by unfold checkSignature at hs; split at hs <;> simp_all, ?_⟩
-  cases hb : c.unsigned.body <;> rw [hb] at h <;>
-    simp only [install, create, invoke, grant, revoke, except_bind_ok] at h <;>
+/-- Every derivation of a kind ends in a seal of the call. -/
+theorem dispatch_sealed {X : Ctx D} {look : Pinned D} {c : Call D} {b : Body D} {t : Turn D}
+    (h : dispatch X look c b = .ok t) : ∃ cr lg rt, sealTurn X c cr lg rt = .ok t := by
+  cases b <;>
+    simp only [dispatch, enroll, rotate, install, create, write, law, invoke, grant, follow, revoke,
+      except_bind_ok] at h <;>
     (repeat' (first | (obtain ⟨_, _, h⟩ := h) | exact ⟨_, _, _, h⟩))
 
-/-- **Derive-then-admit, the receive half.** A derived Turn is signed by its caller, pays exactly
-its weight within the signed price, and carries exactly the caller's pins and window — so
-`World.admit`'s charge check passes by construction and its pin check is the caller's own
-observation. -/
+omit [Ord D] in
+theorem receiveWith_sealed {X : Ctx D} {look : Pinned D} {c : Call D} {t : Turn D}
+    (h : receiveWith X look c = .ok t) :
+    X.verify c.unsigned.key (X.unsignedBytes c.unsigned) c.signature = true ∧
+      ∃ cr lg rt, sealTurn X c cr lg rt = .ok t := by
+  unfold receiveWith at h
+  simp only [except_bind_ok] at h
+  obtain ⟨⟨⟩, hs, ⟨⟩, _, h⟩ := h
+  unfold checkSignature at hs
+  exact ⟨req_ok.mp hs, dispatch_sealed h⟩
+
+/-- **Derive-then-admit, the receive half.** A derived Turn is signed with the key the call
+names, pays exactly its weight within the signed price, and carries exactly the caller's pins
+and window — so `World.admit`'s charge check passes by construction and its pin check is the
+caller's own observation. -/
 theorem receive_ok {X : Ctx D} {w : World D} {c : Call D} {t : Turn D}
     (h : receive X w c = .ok t) :
-    X.verify c.unsigned.signer (X.unsignedBytes c.unsigned) c.signature = true ∧
+    X.verify c.unsigned.key (X.unsignedBytes c.unsigned) c.signature = true ∧
       t.charge = t.weight ∧ t.charge ≤ c.unsigned.maxCharge ∧ t.pins = c.unsigned.pins ∧
       t.event = X.callBytes c ∧ t.txId = txIdOf X c ∧ t.notBefore = c.unsigned.notBefore ∧
       t.validUntil = c.unsigned.validUntil := by
   obtain ⟨hv, cr, lg, rt, hs⟩ := receiveWith_sealed h
   obtain ⟨h1, h2, h3, h4, h5, h6, h7, _⟩ := sealTurn_ok hs
   exact ⟨hv, h1, h2, h3, h4, h5, h6, h7⟩
+
+omit [Ord D] in
+/-- Every call but a rotation is signed by its member's current key. -/
+theorem receiveWith_key {X : Ctx D} {look : Pinned D} {c : Call D} {t : Turn D}
+    (h : receiveWith X look c = .ok t) : keyRule look c.unsigned = .ok () := by
+  unfold receiveWith at h
+  simp only [except_bind_ok] at h
+  obtain ⟨⟨⟩, _, ⟨⟩, hk, _⟩ := h
+  exact hk
 
 end Nanodregg.Kernel.Receive
