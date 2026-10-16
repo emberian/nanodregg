@@ -56,6 +56,8 @@ in `~/dev/redregg/work/`: `ARCHITECTURE-20261016.md`, `CYCLE-TIME-20261016.md`,
     critiques is not made.
 11. **No twins of minidregg.** Reading minidregg is allowed to learn the spec and the mistakes;
     copying a file is not. If a minidregg definition is right, restate it from its theorem, smaller.
+    Carve-out (PROTOCOL, 10-16): the conformance ROWS restate the minidregg journeys step for step,
+    because the journeys ARE the spec; that is restating the spec, not copying code.
 12. **Size is a ratchet.** `SIZE.md` holds the counts (modules, lines per layer, opcodes,
     constructors, Rust lines, partial defs, theorems); a commit that raises a count explains why in
     the message or is reverted.
