@@ -81,3 +81,15 @@ faster than waiting, which is how twins start.
 ## LANG-15 No Mathlib (2026-10-16; GATES-1 not challenged)
 The language's metatheory (typing, CEK soundness, budget theorems) needed only core `omega`/`simp`
 and structural recursion over nested inductives. Nothing pulls for Mathlib.
+
+## LANG-16 Loading a closure re-checks every package in it (2026-10-16; amends LANG-5)
+**Decision.** `Lang.load` runs `Package.checkWith` on each package of the closure against its
+imports' interfaces as loaded, before appending it. **Why.** LANG-5 said invoke re-checks nothing
+because install checked and the cell is ROM; that makes `run`'s soundness a WORLD invariant ("every
+package cell was born by install, which checked") that no theorem states. Re-checking makes it local:
+`load`'s closure satisfies `LibTy` by construction (Lang.Proofs.Relocate: relocation preserves
+typing), so `checked_never_stuck` applies to the deployed path. **Critique.** O(closure size) checker
+work on every invoke and every law judged; delvetalk measured re-check at ~1/5 of an entry's compile.
+The fix when measured is a Host memo keyed by package id (ROM: the id determines the bytes), not
+dropping the check. **Meta-critique.** I chose the check whose theorem is local over the cheaper one
+whose theorem is global — the bias toward what I can prove this session.

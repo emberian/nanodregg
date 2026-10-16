@@ -66,23 +66,61 @@ def indexIn (b : ByteArray) : List ByteArray → Option Nat
   | [] => none
   | x :: xs => if x = b then some 0 else (indexIn b xs).map (· + 1)
 
-/-- Load package `idb` and its closure into `acc`; its index in the closure. -/
-def load (look : Pinned D) : Nat → ByteArray → Loaded → Except (Refusal D) (Loaded × Nat)
-  | fuel, idb, acc =>
-    match indexIn idb acc.ids with
-    | some i => .ok (acc, i)
-    | none =>
-      match fuel with
-      | 0 => .error (.program "imports too deep")
-      | fuel + 1 => do
-        let id ← idOf digestOf idb
-        let p ← readPackage look id
-        let (acc, gis) ← p.imports.foldlM (init := (acc, ([] : List Nat))) fun (acc, gis) d => do
-          let (acc, g) ← load look fuel d acc
-          pure (acc, gis ++ [g])
-        let body := p.body.relocate fun i => gis.getD i 0
-        pure ({ ids := acc.ids ++ [idb], lib := acc.lib ++ [body], pkgs := acc.pkgs ++ [p] },
-          acc.ids.length)
+/-- The interfaces of the closure's packages at positions `gs`. -/
+def ifacesAt (pkgs : List Package) : List Nat → Option (List Ty)
+  | [] => some []
+  | g :: gs =>
+    match pkgs[g]?, ifacesAt pkgs gs with
+    | some P, some r => some (P.iface :: r)
+    | _, _ => none
+
+/-- Append package `p` (imports already loaded at `gis`) to the closure, RE-CHECKING it against its
+imports' interfaces (decisions/lang.md LANG-16), its body relocated to the closure's indices. -/
+def admitPackage (idb : ByteArray) (p : Package) (acc : Loaded) (gis : List Nat) :
+    Except (Refusal D) (Loaded × Nat) :=
+  match ifacesAt acc.pkgs gis with
+  | none => .error (.program "closure")
+  | some ifs =>
+    match p.checkWith ifs with
+    | .error e => .error (.program e.text)
+    | .ok () =>
+      .ok ({ ids := acc.ids ++ [idb], lib := acc.lib ++ [p.body.relocate fun i => gis.getD i 0],
+             pkgs := acc.pkgs ++ [p] }, acc.ids.length)
+
+mutual
+/-- Load package `idb` and its closure into `acc` (each package once); its index in the closure. -/
+def load (look : Pinned D) (fuel : Nat) (idb : ByteArray) (acc : Loaded) :
+    Except (Refusal D) (Loaded × Nat) :=
+  match indexIn idb acc.ids with
+  | some i => .ok (acc, i)
+  | none =>
+    match fuel with
+    | 0 => .error (.program "imports too deep")
+    | fuel + 1 =>
+      match idOf digestOf idb with
+      | .error e => .error e
+      | .ok id =>
+        match readPackage look id with
+        | .error e => .error e
+        | .ok p =>
+          match loadAll look fuel p.imports acc with
+          | .error e => .error e
+          | .ok (acc', gis) => admitPackage idb p acc' gis
+termination_by (fuel, 0)
+
+def loadAll (look : Pinned D) (fuel : Nat) (ds : List ByteArray) (acc : Loaded) :
+    Except (Refusal D) (Loaded × List Nat) :=
+  match ds with
+  | [] => .ok (acc, [])
+  | d :: ds =>
+    match load look fuel d acc with
+    | .error e => .error e
+    | .ok (acc', g) =>
+      match loadAll look fuel ds acc' with
+      | .error e => .error e
+      | .ok (acc'', gs) => .ok (acc'', g :: gs)
+termination_by (fuel, ds.length + 1)
+end
 
 def checkInstall (look : Pinned D) (b : ByteArray) : Except (Refusal D) Unit := do
   let p ← match Wire.decodePackage b with

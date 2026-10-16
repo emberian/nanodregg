@@ -49,6 +49,10 @@ package nanodregg where
 @[default_target] lean_exe «kernel-sim» where
   root := `Kernel.Sim.Main
 
+-- LANG's first law end to end: install → create → invoke through KERNEL's receivers.
+@[default_target] lean_exe «lang-journey» where
+  root := `Lang.Journey.Main
+
 -- Host/c/*.c: the Store's physical IO (Host.File's externs). Sorted, so the archive is reproducible.
 extern_lib «ndhost» pkg := do
   let dir := pkg.dir / "Host" / "c"
