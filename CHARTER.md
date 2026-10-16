@@ -96,9 +96,14 @@ reads the proposals before committing signatures and answers each in `DECISIONS.
 - Build on the Mac: `lake build` / `cargo check` of your import closure before every push. Keep
   `.lake` small; the Mac data volume is nearly full: no large artifacts, no fixtures over 1 MB, no
   copies of minidregg. hbox is Ember's: do not use it. No box builds until ROOT says.
-- Seven agents, one tree, side by side: pull before you commit, commit small, commit only your
-  layer's files (`git commit --only <paths>`), never `git add -A`, never `git stash`, never rewrite
-  history. THE SHARED INDEX IS NOT YOURS: never stage into the default index (another agent's
+- Seven agents, ONE REPO, SEPARATE WORKTREES (ruled 10-16 after six collisions in one shared
+  checkout): every layer edits in its own `git worktree` (`scripts/worktree <layer>` →
+  `~/dev/nanodregg-wt/<layer>`, same `.git`, same `refs/heads/main`); the primary checkout
+  `~/dev/nanodregg` is nobody's editing surface. Commit ONLY with `scripts/commit -m MSG PATH...`
+  from your worktree: it builds the candidate from CURRENT main plus exactly your paths, runs the
+  gates, and lands on main by compare-and-swap (retrying when main moved). A plain `git commit` is
+  refused by the hook. Commit small, commit only your layer's files, never `git add -A`, never
+  `git stash`, never rewrite history. THE SHARED INDEX IS NOT YOURS: never stage into the default index (another agent's
   stale index reverted a charter commit on 10-16, 65e3c1c → fixed forward feeaed3). Either commit
   with explicit paths (`git commit --only`) or use a private index (`GIT_INDEX_FILE=$(mktemp)`,
   `git read-tree HEAD`, add your paths, `write-tree`, `commit-tree`, `update-ref`). Before every
