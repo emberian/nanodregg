@@ -12,6 +12,10 @@ description = "Custody, transport and workspace for one member: moves bytes betw
 path = "src/lib.rs"
 
 [[bin]]
+name = "nd"
+path = "src/bin/nd.rs"
+
+[[bin]]
 name = "nd-supervise"
 path = "src/bin/nd-supervise.rs"
 

@@ -26,3 +26,16 @@ in use; hbox is off limits).
 **Meta-critique.** I chose the shape that makes today's plant pass on the machine I have; the allow-list
 is harder and I postponed it by calling the deny-list "exact".
 **Status.** open (allow-list is the named next step).
+
+## CLIENT-10 the step layout read by hand until it is emitted — a twin with an expiry (2026-10-16)
+**Decision.** `client/src/wire.rs` reads and writes the step layouts of proposals/client.md §2
+(argv, the four steps, resume) by hand, so `nd` runs end to end now. It is deleted the day PROTOCOL /
+CODEC commit the layout in Lean and `Emit/Rust.lean` emits its reader; the step TAGS already come
+from `generated.rs`. Asked of PROTOCOL/CODEC: the layout as a `Codec` in Lean and its Rust reader.
+**Alternatives.** Wait (no `nd`, no end-to-end plant); have follow speak a layout the generator
+already covers (it covers none yet).
+**Critique.** This is exactly the shape law 1 forbids and HOST-5 already named: a Rust codec of a
+Lean-owned shape, with a promised expiry. If the Lean layout differs, the round-trip test still passes
+against its own scripted follow (a mirror) — the integration with BUILD-HOST's follow is the real check.
+**Meta-critique.** ROOT asked for running binaries before my handoff, and that deadline chose this.
+**Status.** open, expires with the emitted reader.
