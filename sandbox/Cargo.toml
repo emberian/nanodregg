@@ -1,0 +1,23 @@
+[package]
+name = "nanodregg-sandbox"
+version = "0.0.0"
+edition = "2024"
+publish = false
+description = "Launch a child under one confinement shape. Plumbing only: what the child may see is a policy given to it, never chosen here."
+
+# Standalone until GATES owns a root workspace.
+[workspace]
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
