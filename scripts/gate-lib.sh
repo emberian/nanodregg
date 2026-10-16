@@ -62,3 +62,8 @@ rust_changed() {
     [ -f "$repo/$d/Cargo.toml" ] && echo "$d"
   done
 }
+
+# generated_checks DIR: one "exe path" line per gates/generated.tsv row.
+generated_checks() {
+  [ -f "$1/gates/generated.tsv" ] && grep -v -e '^#' -e '^[[:space:]]*$' "$1/gates/generated.tsv" | tr '\t' ' '
+}

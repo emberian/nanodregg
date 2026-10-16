@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # scripts/standing.sh [REV] — the standing verdict of one commit (default HEAD), on a laptop.
 #
-#   tip -> gates -> full build -> census -> sim -> rows -> one line:
+#   tip -> gates -> full build -> census + generated files -> sim -> rows -> one line:
 #   STANDING <sha> gates=… build=… census=… sim=… rows=… unmeasured=N waste=N => GREEN|RED|INCOMPLETE
 #
 # GREEN needs every stage to have RUN and passed. A stage that does not exist yet (no `sim`
@@ -33,6 +33,9 @@ build=$(run env -C "$T" LEAN_NUM_THREADS="${LEAN_NUM_THREADS:-4}" lake build $(l
 census=ABSENT; sim=ABSENT; rows=ABSENT
 if [ "$build" = ok ]; then
   census=$(run python3 "$T/gates/census.py" "$T")
+  while read -r exe out; do
+    [ -n "$exe" ] && [ "$(run env -C "$T" lake exe "$exe" --check "$out")" = RED ] && census=RED
+  done < <(generated_checks "$T")
   if python3 -c 'import sys,tomllib; sys.exit(0 if any(e["name"]=="sim" for e in tomllib.load(open(sys.argv[1],"rb")).get("lean_exe",[])) else 1)' "$T/lakefile.toml"; then
     sim=$(run env -C "$T" lake exe sim --seeds "${SIM_SEEDS:-64}")
   fi

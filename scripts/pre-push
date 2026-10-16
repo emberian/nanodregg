@@ -15,7 +15,8 @@
 #      gates; it is printed in the verdict);
 #   2. `lake build` of the changed modules and every module that imports them (everything when
 #      lakefile.toml or lean-toolchain changed);
-#   3. the axiom census over every module;
+#   3. the axiom census over every module, and every gates/generated.tsv file equal to what its
+#      Lean generator emits (`lake exe emit-rust --check client/src/generated.rs`);
 #   4. `cargo check --all-targets` + `cargo clippy -D warnings` + `cargo fmt --check` for each
 #      changed crate.
 # Prints one verdict line. Exit 0 = may land.
@@ -82,6 +83,9 @@ elif [ -n "$mods" ]; then
   # shellcheck disable=SC2086
   step build env -C "$G/tree" LEAN_NUM_THREADS="${LEAN_NUM_THREADS:-4}" lake build $mods
   step census python3 "$G/tree/gates/census.py" "$G/tree"
+  while read -r exe out; do
+    [ -n "$exe" ] && step "generated:$out" env -C "$G/tree" lake exe "$exe" --check "$out"
+  done < <(generated_checks "$G/tree")
 else
   echo "  build: nothing to build"
 fi
