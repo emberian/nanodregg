@@ -1068,3 +1068,22 @@ assumption is the kind of premise this repo names and then forgets.
 every World changes, and every Store re-geneses (also due under KERNEL-33's charges). Nothing
 re-emits. A call signed for an old origin is `wrongWorld`. CODEC-22's carried codec (CODEC-5) and
 HOST-28's export and import (HOST-8) build on this.
+
+## KERNEL-34 · The phone's read takes the leaf's bytes: KERNEL-31's last premise, discharged by CODEC's leaf decoder (KERNEL-8, 2026-10-17; CLIENT-16, ROOT-accepted)
+**Decision.** `deployed_head_read_sound_bytes` (from a reached World) and
+`deployed_head_read_sound_decoded_bytes` (from a reopened base) take the served leaf BYTES and
+`Codec.Kernel.leaf.decode b = .ok lf` in place of `hlf : lf.CellFit Cell.Fits`.
+`Codec.Kernel.leaf_decode_cellFit` (CODEC-4, ee49de8) supplies the fit, so no premise about the leaf
+is left. KERNEL-31's open premise (the claimed leaf's fit, routed to CLIENT-3 and then CLIENT-16) is
+closed on the Lean side. The phone must show only what Lean's leaf decoder returns (CLIENT-16's
+condition; no Rust parse).
+**Tooth.** CODEC's `leaf_decode_refuses_misfit` (a misfit leaf never decodes) and its sim plant
+`kernel/leaf-fit`. These theorems compose existing ones, and the decoder premise is what makes
+them stronger than the `hlf` forms they keep.
+**Critique.** No head-read path exists in the client yet (PROTOCOL-14 option B, pending Ember's
+phone ruling), so these theorems state what that path must call. The old `hlf` forms stay,
+because the bytes forms are corollaries of them, not a second shape.
+**Meta-critique.** I considered deleting the `hlf` forms. They are the general statement (any
+fitting leaf), and the bytes forms only specialize them, so keeping both keeps one fact at two
+strengths, not two shapes.
+**Flag day.** None. Nothing refuses, nothing re-geneses, nothing re-emits.

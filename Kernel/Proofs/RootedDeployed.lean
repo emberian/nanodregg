@@ -144,4 +144,31 @@ theorem deployed_head_read_sound (program : Program Digest) {name nonce : ByteAr
     w'.trie.get (trieSpec env) s = some leaf ∨ Collision env.hash :=
   deployed_head_read_sound_from (deployed_reach program hg hl).1 (deployed_reach program hg hl).2 h hhead hlf hv
 
+/-- **Deployed: the phone's read over the leaf's BYTES** (CLIENT-16). The leaf the phone shows is
+what CODEC's leaf decoder returns from the served bytes, so `CellFit` comes from the decoder
+(`Codec.Kernel.leaf_decode_cellFit`, toothed by `leaf_decode_refuses_misfit`) and no premise about
+the leaf is left: a reached World, one admitted turn, the head record, the proof. -/
+theorem deployed_head_read_sound_bytes (program : Program Digest) {name nonce : ByteArray} {allowance : Nat}
+    {founders : List (ByteArray × Digest)} {g w w' : World Digest} {l : List (Turn Digest)} {t : Turn Digest}
+    (hg : genesis (ctx program) name nonce allowance founders = .ok g) (hl : World.fold env g l = .ok w)
+    (h : World.admit env w t = .ok w') {prev td root' : Digest}
+    (hhead : env.hash domChain (env.bytes prev ++ env.bytes td ++ env.bytes root') = w'.chain)
+    {s : Slot Digest} {b : ByteArray} {lf : Leaf} (hd : Nanodregg.Codec.Kernel.leaf.decode b = .ok lf)
+    {p : Trie.Proof (Slot Digest) Digest}
+    (hv : Trie.verifyInclusion (trieSpec env) root' s (leafDigest env lf) p = true) :
+    w'.trie.get (trieSpec env) s = some lf ∨ Collision env.hash :=
+  deployed_head_read_sound program hg hl h hhead (Nanodregg.Codec.Kernel.leaf_decode_cellFit hd).1 hv
+
+/-- **Deployed: the phone's read over leaf bytes, on a reopened base**: the World from the base
+decoder, the leaf from the leaf decoder; no premise about either. -/
+theorem deployed_head_read_sound_decoded_bytes {bw : ByteArray} {w w' : World Digest} {t : Turn Digest}
+    (hdw : Codec.Deployed.world.decode bw = .ok w) (h : World.admit env w t = .ok w')
+    {prev td root' : Digest}
+    (hhead : env.hash domChain (env.bytes prev ++ env.bytes td ++ env.bytes root') = w'.chain)
+    {s : Slot Digest} {b : ByteArray} {lf : Leaf} (hd : Nanodregg.Codec.Kernel.leaf.decode b = .ok lf)
+    {p : Trie.Proof (Slot Digest) Digest}
+    (hv : Trie.verifyInclusion (trieSpec env) root' s (leafDigest env lf) p = true) :
+    w'.trie.get (trieSpec env) s = some lf ∨ Collision env.hash :=
+  deployed_head_read_sound_decoded hdw h hhead (Nanodregg.Codec.Kernel.leaf_decode_cellFit hd).1 hv
+
 end Nanodregg.Kernel.Receive
