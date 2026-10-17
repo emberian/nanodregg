@@ -310,6 +310,24 @@ theorem Entry.page_lawfulOn :
     Codec.Stream.LawfulOn (fun l => l.length ≤ indexMax ∧ ∀ e ∈ l, e.fits = true) Entry.page :=
   Codec.Stream.rawList_lawfulOn Entry.codec_lawfulOn indexMax (by decide)
 
+/-- The base record's codec reads back every base whose World its World codec reads back (`P`)
+and whose two u64 fields are below 2^64; the two tags are digests, read back whole. Generic in
+the World codec: the deployed World reads back only up to `Equiv` (`Codec.Proofs.World`), so
+the deployed base gets no `LawfulOn` instance from this; what open relies on there is
+`Base.read_decode` over `Codec.Deployed.world_decode_canon`. -/
+theorem Base.codec_lawfulOn {W : Type} {P : W → Prop} {world : Codec.Stream W}
+    (hw : Codec.Stream.LawfulOn P world) :
+    Codec.Stream.LawfulOn (fun b : Base W => P b.world ∧ b.offset < 2 ^ 64 ∧ b.indexOffset < 2 ^ 64)
+      (Base.codec world) := by
+  have h := Codec.Stream.refine_lawfulOn
+    (Codec.Stream.product_lawfulOn hw (Codec.Stream.product_lawfulOn Codec.Stream.nat64_lawfulOn
+      (Codec.Stream.product_lawfulOn Codec.Stream.digest_lawful.on
+        (Codec.Stream.product_lawfulOn Codec.Stream.nat64_lawfulOn Codec.Stream.digest_lawful.on))))
+    "host/base" (accept := fun (w, o, t, io, it) => some (⟨w, o, t, io, it⟩ : Base W))
+    (back := fun b => (b.world, b.offset, b.tag, b.indexOffset, b.indexTag))
+    (fun _ _ => rfl) (fun x y hxy => by obtain ⟨a, b, c, d, e⟩ := x; cases hxy; rfl)
+  exact h.mono (fun _ hv => ⟨hv.1, hv.2.1, hv.2.2.2.1⟩) (fun _ hv => ⟨hv.1, hv.2.1, trivial, hv.2.2, trivial⟩)
+
 /-- The pages of an `index.log` read back: an `encodeAll` of page encodings, each a list of at
 most `indexMax` fit entries (`Entry.fits`, what `Base.page` checks) whose frame fits, reads back
 under the tag its last page chains to as every entry of every page in order (the round trip is
