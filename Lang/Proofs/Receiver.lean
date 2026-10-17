@@ -9,7 +9,7 @@ module closes the chain from the deployed judge to those statements (LANG-20's n
 3. `relocate_noRef`: relocation is the identity on a term with no `ref` (`NoRef`), and every stdlib
    law is one (`noRef_quorumLaw`, `noRef_windowedLaw`, `noRef_machineLaw`, `noRef_bounded`,
    `noRef_allowlist`, `noRef_ownerSigns`);
-4. `find_of_mem_nodup` + `sortRow_perm`: a `pkgOf` body's field `ℓ` is the generator's term.
+4. `find_of_mem_nodup` + `Row.sort_perm`: a `pkgOf` body's field `ℓ` is the generator's term.
 `judgeOne_pkgOf_admits` composes them. `judgeOne_quorum_change`, `judgeOne_quorum_relaw` and
 `judgeOne_machine_invoke` are the spec theorems restated about the receiver's run. They are no longer
 about a test's closed term, and "the receiver admitting a Std package means its spec" is now a
@@ -176,18 +176,6 @@ theorem find_relocateRow (f : Nat → Nat) (ℓ : Label) : ∀ fs : List (Label 
 
 /-! ## Link 4: a `pkgOf` body's field `ℓ` is the generator's term -/
 
-theorem insertRow_perm {α : Type} (x : Label × α) : ∀ ys : List (Label × α), (Std.insertRow x ys).Perm (x :: ys)
-  | [] => .refl _
-  | y :: ys => by
-    unfold Std.insertRow
-    split
-    · exact .refl _
-    · exact ((insertRow_perm x ys).cons y).trans (.swap x y ys)
-
-theorem sortRow_perm {α : Type} : ∀ xs : List (Label × α), (Std.sortRow xs).Perm xs
-  | [] => .refl _
-  | x :: xs => (insertRow_perm x (Std.sortRow xs)).trans ((sortRow_perm xs).cons x)
-
 theorem find_of_mem_nodup {α : Type} {ℓ : Label} {t : α} : ∀ {ys : List (Label × α)},
     (ys.map (·.1)).Nodup → (ℓ, t) ∈ ys → Row.find? ℓ ys = some t
   | [], _, h => by cases h
@@ -279,7 +267,7 @@ theorem noRef_ownerSigns (S : Ty) : NoRef (ownerSigns S) := by
   exact lawOf_ this this this this
 
 open Std NoRefStd in
-theorem noRef_allowlist (S : Ty) (ids : List ByteArray) : NoRef (allowlist S ids) := by
+theorem noRef_allowlist (S : Ty) (ids : List ByteArray) : NoRef (allowlistLaw S ids) := by
   have : NoRef (allOf [(anyOf (ids.map fun i => .prim .beq ((⟨1⟩ : At).reqF "agent") (.bytes i)),
       "not on the allowlist")]) := allOf_ (by
         simp only [List.mem_singleton, forall_eq]
@@ -397,22 +385,22 @@ theorem judgeOne_pkgOf_admits {S : Ty} {laws : List (Label × Term)} {methods : 
   obtain ⟨A, B, C, b, ht⟩ := hlaw
   simp only at ht hfree
   subst ht
-  have hsl : (ℓ, Term.lam A (.lam B (.lam C b))) ∈ Std.sortRow laws := (sortRow_perm laws).mem_iff.2 hx
+  have hsl : (ℓ, Term.lam A (.lam B (.lam C b))) ∈ Row.sort laws := (Row.sort_perm laws).mem_iff.2 hx
   have hmem : ℓ ∈ (Std.pkgOf S laws methods).laws := by
     simp only [Std.pkgOf, List.mem_map]
     exact ⟨_, hsl, rfl⟩
   have hrun := hall ℓ hmem
-  let xs := Std.sortRow laws ++ (Std.sortRow methods).map (fun (l, _, t) => (l, t))
+  let xs := Row.sort laws ++ (Row.sort methods).map (fun (l, _, t) => (l, t))
   have hxs : (xs.map (·.1)).Perm (laws.map (·.1) ++ methods.map (·.1)) := by
     simp only [xs, List.map_append, List.map_map]
-    refine List.Perm.append ((sortRow_perm laws).map _) ?_
-    have := (sortRow_perm methods).map (fun (y : Label × Ty × Term) => y.1)
+    refine List.Perm.append ((Row.sort_perm laws).map _) ?_
+    have := (Row.sort_perm methods).map (fun (y : Label × Ty × Term) => y.1)
     simpa [Function.comp_def] using this
-  have hfind : Row.find? ℓ (Std.sortRow xs) = some (.lam A (.lam B (.lam C b))) :=
-    find_of_mem_nodup (((sortRow_perm xs).map _).trans hxs |>.nodup_iff.2 hnd)
-      ((sortRow_perm xs).mem_iff.2 (List.mem_append_left _ hsl))
+  have hfind : Row.find? ℓ (Row.sort xs) = some (.lam A (.lam B (.lam C b))) :=
+    find_of_mem_nodup (((Row.sort_perm xs).map _).trans hxs |>.nodup_iff.2 hnd)
+      ((Row.sort_perm xs).mem_iff.2 (List.mem_append_left _ hsl))
   refine ⟨L.lib, Std.runLaw_ref_admits (g := 0)
-    (fs := Term.relocateRow (fun i => ([] : List Nat).getD i 0) (Std.sortRow xs)) ?_ ?_ hrun⟩
+    (fs := Term.relocateRow (fun i => ([] : List Nat).getD i 0) (Row.sort xs)) ?_ ?_ hrun⟩
   · rw [hlib]; simp only [Std.pkgOf, Term.relocate]; rfl
   · rw [find_relocateRow, hfind]
     simp only [Option.map_some]
@@ -512,19 +500,6 @@ end
 
 /-! ## Machine edges name the method the kernel runs -/
 
-theorem insertRow_map {α β : Type} (g : Label × α → Label × β) (hg : ∀ z, (g z).1 = z.1)
-    (x : Label × α) : ∀ ys : List (Label × α), (Std.insertRow x ys).map g = Std.insertRow (g x) (ys.map g)
-  | [] => rfl
-  | z :: ys => by
-    by_cases hxz : x.1 ≤ z.1 <;> simp [Std.insertRow, hg, hxz, insertRow_map g hg x ys]
-
-theorem sortRow_map {α β : Type} (g : Label × α → Label × β) (hg : ∀ z, (g z).1 = z.1) :
-    ∀ xs : List (Label × α), (Std.sortRow xs).map g = Std.sortRow (xs.map g)
-  | [] => rfl
-  | x :: xs => by
-    show (Std.insertRow x (Std.sortRow xs)).map g = Std.insertRow (g x) (Std.sortRow (xs.map g))
-    rw [insertRow_map g hg, sortRow_map g hg xs]
-
 theorem methodIndex_go : ∀ {ls : List Label} {m : Label} {j i : Nat}, Std.methodIndex.go m ls j = some i →
     j ≤ i ∧ ls[i - j]? = some m
   | [], _, _, _, h => by simp [Std.methodIndex.go] at h
@@ -547,9 +522,9 @@ theorem methodIndex_pkgOf {S : Ty} {laws : List (Label × Term)} {methods : List
   unfold Std.methodIndex at h
   obtain ⟨_, hget⟩ := methodIndex_go h
   simp only [Nat.sub_zero] at hget
-  have hl : (Std.sortRow (((methods.map (·.1)).map fun x => (x, ())))).map (·.1) =
-      (Std.sortRow methods).map (·.1) := by
-    have := sortRow_map (fun (z : Label × Ty × Term) => (z.1, ())) (fun _ => rfl) methods
+  have hl : (Row.sort (((methods.map (·.1)).map fun x => (x, ())))).map (·.1) =
+      (Row.sort methods).map (·.1) := by
+    have := Row.sort_map (fun (z : Label × Ty × Term) => (z.1, ())) (fun _ => rfl) methods
     rw [List.map_map]
     simp only [Function.comp_def] at this ⊢
     rw [← this, List.map_map]

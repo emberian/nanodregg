@@ -14,7 +14,9 @@ Not admission: a resident (or its client) reads text into a `Package`, checks it
     package ::= (package (imports "hex"…) (state T) (iface T) (methods l…) (laws l…) (body e))
 
 Fields and arms may be written in any order: they are sorted into the canonical (ascending) order.
-Every recursion is bounded by `depthMax`. A refusal is a `ReadRefusal`: a named constructor with
+Forms nest at most `depthMax` deep and a list holds at most `listMax` elements: the reader's fuel
+counts nesting only, so a long chain (`anyOf` over 63 members) costs its depth, not its length.
+A refusal is a `ReadRefusal`: a named constructor with
 the character offset of the form it is about (law 7), never prose.
 -/
 import Lang.Package
@@ -34,10 +36,16 @@ def SExp.pos : SExp → Nat
 
 def depthMax : Nat := 512
 
+/-- The most elements one list holds: a row of `Wire.rowMax` entries after the head words of
+`(case e arm…)` / `(extend e field…)`, so every form the wire carries has a text that fits. -/
+def listMax : Nat := Wire.rowMax + 2
+
 /-- Why the reader refuses, by name, at a character offset. -/
 inductive ReadRefusal
-  /-- forms nested (or a list longer) than `depthMax` -/
+  /-- forms nested deeper than `depthMax` -/
   | tooDeep (pos : Nat)
+  /-- a list (opened at `pos`) of more than `listMax` elements -/
+  | tooLong (pos : Nat)
   /-- the text ended where a form was expected -/
   | unexpectedEnd (pos : Nat)
   /-- a `)` with no `(` -/
@@ -68,7 +76,7 @@ inductive ReadRefusal
 
 /-- The refusal's name on the wire (law 7). -/
 def ReadRefusal.name : ReadRefusal → String
-  | .tooDeep _ => "tooDeep" | .unexpectedEnd _ => "unexpectedEnd" | .stray _ => "stray"
+  | .tooDeep _ => "tooDeep" | .tooLong _ => "tooLong" | .unexpectedEnd _ => "unexpectedEnd" | .stray _ => "stray"
   | .unterminatedString _ => "unterminatedString" | .unclosed _ => "unclosed"
   | .trailing _ => "trailing" | .notAType _ => "notAType" | .badEntry _ => "badEntry"
   | .unbound _ _ => "unbound" | .badRef _ => "badRef" | .emptyApplication _ => "emptyApplication"
@@ -76,7 +84,7 @@ def ReadRefusal.name : ReadRefusal → String
   | .notPackage _ => "notPackage" | .notOfType _ => "notOfType"
 
 def ReadRefusal.pos : ReadRefusal → Nat
-  | .tooDeep p | .unexpectedEnd p | .stray p | .unterminatedString p | .unclosed p | .trailing p
+  | .tooDeep p | .tooLong p | .unexpectedEnd p | .stray p | .unterminatedString p | .unclosed p | .trailing p
   | .notAType p | .badEntry p | .unbound p _ | .badRef p | .emptyApplication p | .badBinder p
   | .badImport p | .badLabel p | .notPackage p | .notOfType p => p
 
@@ -103,7 +111,24 @@ def skipLine : Nat → List Char → Nat × List Char
   | p, c :: cs => if c = '\n' then skip (p + 1) cs else skipLine (p + 1) cs
 end
 
-mutual
+/-- The rest of a list opened at `o`, from offset `p`, each element read by `elem`, at most `n`
+more of them (`tooLong` past that). -/
+def sexpsWith (elem : Nat → List Char → P (SExp × Nat × List Char)) (o : Nat) :
+    Nat → Nat → List Char → List SExp → P (List SExp × Nat × List Char)
+  | n, p, cs, acc =>
+    match skip p cs with
+    | (p, ')' :: rest) => .ok (acc.reverse, p + 1, rest)
+    | (_, []) => .error (.unclosed o)
+    | (p, cs') =>
+      match n with
+      | 0 => .error (.tooLong o)
+      | n + 1 =>
+        match elem p cs' with
+        | .ok (x, q, r) => sexpsWith elem o n q r (x :: acc)
+        | .error e => .error e
+
+/-- One form within `d` levels of nesting: an atom or a string costs 1, a list 1 more than its
+deepest element; a list's length is bounded by `listMax`, not by the fuel. -/
 def sexp : Nat → Nat → List Char → P (SExp × Nat × List Char)
   | 0, p, _ => .error (.tooDeep p)
   | d + 1, p, cs =>
@@ -111,7 +136,7 @@ def sexp : Nat → Nat → List Char → P (SExp × Nat × List Char)
     | (p, []) => .error (.unexpectedEnd p)
     | (p, '(' :: rest) =>
       let (q, rest) := skip (p + 1) rest
-      (sexps d p q rest []).map fun (xs, r) => (.list p xs, r)
+      (sexpsWith (fun p cs => sexp d p cs) p listMax q rest []).map fun (xs, r) => (.list p xs, r)
     | (p, ')' :: _) => .error (.stray p)
     | (p, '"' :: rest) =>
       let body := rest.takeWhile (· ≠ '"')
@@ -121,19 +146,6 @@ def sexp : Nat → Nat → List Char → P (SExp × Nat × List Char)
     | (p, cs') =>
       let a := cs'.takeWhile (fun c => !isDelim c)
       .ok (.atom p (String.ofList a), p + a.length, cs'.dropWhile (fun c => !isDelim c))
-
-/-- The rest of a list opened at `open`, from offset `p`. -/
-def sexps : Nat → Nat → Nat → List Char → List SExp → P (List SExp × Nat × List Char)
-  | 0, _, p, _, _ => .error (.tooDeep p)
-  | d + 1, o, p, cs, acc =>
-    match skip p cs with
-    | (p, ')' :: rest) => .ok (acc.reverse, p + 1, rest)
-    | (_, []) => .error (.unclosed o)
-    | (p, cs') =>
-      match sexp d p cs' with
-      | .ok (x, q, r) => sexps d o q r (x :: acc)
-      | .error e => .error e
-end
 
 def parse (text : String) : P SExp :=
   match sexp depthMax 0 text.toList with
@@ -145,31 +157,26 @@ def parse (text : String) : P SExp :=
 
 /-! ## Elaboration to the core -/
 
-def sortRow {α : Type} (r : List (Label × α)) : List (Label × α) :=
-  r.mergeSort fun a b => decide (a.1 ≤ b.1)
-
 def primOf : String → Option Prim
   | "+" => some .add | "-" => some .sub | "*" => some .mul | "/" => some .div | "%" => some .mod
   | "==" => some .eq | "<" => some .lt | "<=" => some .le | "beq" => some .beq | "cat" => some .cat
   | _ => none
 
-mutual
+/-- The entries `(label x)…` of a row, each `x` read by `f`. -/
+def entries {α : Type} (f : SExp → P α) : List SExp → P (List (Label × α))
+  | [] => .ok []
+  | .list _ [.atom _ ℓ, e] :: rest => do pure ((ℓ, ← f e) :: (← entries f rest))
+  | x :: _ => .error (.badEntry x.pos)
+
 def ty : Nat → SExp → P Ty
   | 0, x => .error (.tooDeep x.pos)
   | _ + 1, .atom _ "nat" => .ok .nat
   | _ + 1, .atom _ "bool" => .ok .bool
   | _ + 1, .atom _ "bytes" => .ok .bytes
   | d + 1, .list _ [.atom _ "->", a, b] => do pure (.fn (← ty d a) (← ty d b))
-  | d + 1, .list _ (.atom _ "rec" :: fs) => do pure (.record (sortRow (← tyRow d fs)))
-  | d + 1, .list _ (.atom _ "sum" :: fs) => do pure (.sum (sortRow (← tyRow d fs)))
+  | d + 1, .list _ (.atom _ "rec" :: fs) => do pure (.record (Row.sort (← entries (fun t => ty d t) fs)))
+  | d + 1, .list _ (.atom _ "sum" :: fs) => do pure (.sum (Row.sort (← entries (fun t => ty d t) fs)))
   | _ + 1, x => .error (.notAType x.pos)
-
-def tyRow : Nat → List SExp → P (List (Label × Ty))
-  | _, [] => .ok []
-  | 0, x :: _ => .error (.tooDeep x.pos)
-  | d + 1, .list _ [.atom _ ℓ, t] :: rest => do pure ((ℓ, ← ty d t) :: (← tyRow d rest))
-  | _ + 1, x :: _ => .error (.badEntry x.pos)
-end
 
 def hexVal (c : Char) : Option Nat :=
   if '0' ≤ c && c ≤ '9' then some (c.toNat - '0'.toNat)
@@ -194,7 +201,20 @@ def appAll (f : Term) : List Term → Term
   | [] => f
   | a :: as => appAll (.app f a) as
 
-mutual
+/-- The arms `(label name body)…` of a case, each body read by `f` with `name` bound. -/
+def arms (f : String → SExp → P Term) : List SExp → P (List (Label × Term))
+  | [] => .ok []
+  | .list _ [.atom _ ℓ, .atom _ x, e] :: rest => do pure ((ℓ, ← f x e) :: (← arms f rest))
+  | x :: _ => .error (.badEntry x.pos)
+
+/-- `(fn (x T)… body)` after `fn`: each binder's type read by `tyOf`, the body by `body` in the
+scope the binders extend. -/
+def fnWith (tyOf : SExp → P Ty) (body : List String → SExp → P Term) : List String → List SExp → P Term
+  | sc, [b] => body sc b
+  | sc, .list _ [.atom _ x, t] :: rest => do pure (.lam (← tyOf t) (← fnWith tyOf body (x :: sc) rest))
+  | _, x :: _ => .error (.badBinder x.pos)
+  | _, [] => .error (.badBinder 0)
+
 def term : Nat → List String → SExp → P Term
   | 0, _, x => .error (.tooDeep x.pos)
   | _ + 1, _, .atom _ "true" => .ok (.bool true)
@@ -212,17 +232,18 @@ def term : Nat → List String → SExp → P Term
   | _ + 1, _, .str _ s => .ok (.bytes s.toUTF8)
   | d + 1, sc, .list _ [.atom _ "lam", .atom _ x, t, b] => do
     pure (.lam (← ty d t) (← term d (x :: sc) b))
-  | d + 1, sc, .list _ (.atom _ "fn" :: rest) => fnBinders d sc rest
+  | d + 1, sc, .list _ (.atom _ "fn" :: rest) => fnWith (fun t => ty d t) (fun sc b => term d sc b) sc rest
   | d + 1, sc, .list _ [.atom _ "let", .atom _ x, t, e, b] => do
     pure (.app (.lam (← ty d t) (← term d (x :: sc) b)) (← term d sc e))
   | d + 1, sc, .list _ [.atom _ "fix", e] => do pure (.fix (← term d sc e))
   | d + 1, sc, .list _ [.atom _ ".", e, .atom _ ℓ] => do pure (.get (← term d sc e) ℓ)
-  | d + 1, sc, .list _ (.atom _ "record" :: fs) => do pure (.record (sortRow (← fields d sc fs)))
+  | d + 1, sc, .list _ (.atom _ "record" :: fs) => do
+    pure (.record (Row.sort (← entries (fun e => term d sc e) fs)))
   | d + 1, sc, .list _ (.atom _ "extend" :: e :: fs) => do
-    pure (.extend (← term d sc e) (sortRow (← fields d sc fs)))
+    pure (.extend (← term d sc e) (Row.sort (← entries (fun e => term d sc e) fs)))
   | d + 1, sc, .list _ [.atom _ "inj", t, .atom _ ℓ, e] => do pure (.inj (← ty d t) ℓ (← term d sc e))
-  | d + 1, sc, .list _ (.atom _ "case" :: e :: arms) => do
-    pure (.case (← term d sc e) (sortRow (← armsOf d sc arms)))
+  | d + 1, sc, .list _ (.atom _ "case" :: e :: as) => do
+    pure (.case (← term d sc e) (Row.sort (← arms (fun x b => term d (x :: sc) b) as)))
   | d + 1, sc, .list _ [.atom _ "if", c, a, b] => do
     pure (.ite (← term d sc c) (← term d sc a) (← term d sc b))
   | _ + 1, _, .list p [.atom _ "ref", .atom _ i] =>
@@ -233,34 +254,8 @@ def term : Nat → List String → SExp → P Term
     match primOf op with
     | some p => do pure (.prim p (← term d sc a) (← term d sc b))
     | none => do pure (appAll (← term d sc (.atom q op)) [← term d sc a, ← term d sc b])
-  | d + 1, sc, .list _ (f :: args) => do pure (appAll (← term d sc f) (← termList d sc args))
+  | d + 1, sc, .list _ (f :: args) => do pure (appAll (← term d sc f) (← args.mapM fun e => term d sc e))
   | _ + 1, _, .list p [] => .error (.emptyApplication p)
-
-def termList : Nat → List String → List SExp → P (List Term)
-  | _, _, [] => .ok []
-  | 0, _, x :: _ => .error (.tooDeep x.pos)
-  | d + 1, sc, e :: es => do pure ((← term d sc e) :: (← termList d sc es))
-
-def fields : Nat → List String → List SExp → P (List (Label × Term))
-  | _, _, [] => .ok []
-  | 0, _, x :: _ => .error (.tooDeep x.pos)
-  | d + 1, sc, .list _ [.atom _ ℓ, e] :: rest => do pure ((ℓ, ← term d sc e) :: (← fields d sc rest))
-  | _ + 1, _, x :: _ => .error (.badEntry x.pos)
-
-def armsOf : Nat → List String → List SExp → P (List (Label × Term))
-  | _, _, [] => .ok []
-  | 0, _, x :: _ => .error (.tooDeep x.pos)
-  | d + 1, sc, .list _ [.atom _ ℓ, .atom _ x, e] :: rest => do
-    pure ((ℓ, ← term d (x :: sc) e) :: (← armsOf d sc rest))
-  | _ + 1, _, x :: _ => .error (.badEntry x.pos)
-
-def fnBinders : Nat → List String → List SExp → P Term
-  | 0, _, _ => .error (.tooDeep 0)
-  | d + 1, sc, [b] => term d sc b
-  | d + 1, sc, .list _ [.atom _ x, t] :: rest => do pure (.lam (← ty d t) (← fnBinders d (x :: sc) rest))
-  | _ + 1, _, x :: _ => .error (.badBinder x.pos)
-  | _ + 1, _, [] => .error (.badBinder 0)
-end
 
 def labels : List SExp → P (List Label)
   | [] => .ok []
@@ -313,13 +308,20 @@ def dataFields : List SExp → P (List (Label × SExp))
   | .list _ [.atom _ ℓ, v] :: rest => do pure ((ℓ, v) :: (← dataFields rest))
   | x :: _ => .error (.badEntry x.pos)
 
-mutual
+/-- Read sorted fields at the record row: the same labels in the same order, each by `f` at its type. -/
+def dataRowWith (f : Ty → SExp → P Data) (p : Nat) :
+    List (Label × Ty) → List (Label × SExp) → P (List (Label × Data))
+  | [], [] => .ok []
+  | (ℓ, A) :: row, (k, v) :: fs =>
+    if ℓ = k then do pure ((ℓ, ← f A v) :: (← dataRowWith f p row fs)) else .error (.notOfType v.pos)
+  | _, _ => .error (.notOfType p)
+
 def dataAt : Nat → Ty → SExp → P Data
   | 0, _, x => .error (.tooDeep x.pos)
   | d + 1, T, x =>
     match T, x with
     | .record row, .list p (.atom _ "record" :: fs) => do
-      pure (.record (← dataRow d p row (sortRow (← dataFields fs))))
+      pure (.record (← dataRowWith (fun A v => dataAt d A v) p row (Row.sort (← dataFields fs))))
     | .sum row, .list p [.atom _ ℓ, v] =>
       match Row.find? ℓ row with
       | some A => do pure (.inj ℓ (← dataAt d A v))
@@ -330,15 +332,6 @@ def dataAt : Nat → Ty → SExp → P Data
       | _ => .error (.notOfType p)
     | .record _, y | .sum _, y | .fn _ _, y => .error (.notOfType y.pos)
     | T, y => scalarAt T y
-
-/-- Read sorted fields at the record row: the same labels in the same order, each at its type. -/
-def dataRow : Nat → Nat → List (Label × Ty) → List (Label × SExp) → P (List (Label × Data))
-  | _, _, [], [] => .ok []
-  | 0, p, _, _ => .error (.tooDeep p)
-  | d + 1, p, (ℓ, A) :: row, (k, v) :: fs =>
-    if ℓ = k then do pure ((ℓ, ← dataAt d A v) :: (← dataRow d p row fs)) else .error (.notOfType v.pos)
-  | _ + 1, p, _, _ => .error (.notOfType p)
-end
 
 /-- Text to data at type `T`. -/
 def readData (T : Ty) (text : String) : P Data := do dataAt depthMax T (← parse text)

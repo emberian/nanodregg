@@ -2,7 +2,7 @@
 # Lang.Proofs.PrintParse — the reader's parser gives back the form the printer wrote
 
 `sexp_chars`: `Read.sexp` over `Print.chars x` returns `x` up to offsets (`Same`), for a form whose
-atoms are atoms and whose strings hold no `"` (`Ok`), within the reader's fuel (`Print.need`).
+atoms are atoms and whose strings hold no `"` (`Ok`), within the reader's depth (`Print.need`) and list cap (`Print.width`).
 `sexps_items` is the same for the elements of a list under any whitespace separator (`Sep`), and
 `parse_text` / `parse_layout` are the two entry points `Lang.Proofs.Print` uses: one form, and a
 package laid out one section per line.
@@ -102,9 +102,10 @@ theorem skip_items {sep : List Char} (p : Nat) (rest : List Char) {xs : List SEx
   obtain ⟨c, cs, hc, hw, hs⟩ := items_head rest (sep := sep) h
   rw [hc, skip_stop p cs hw hs]
 
-theorem sexps_ws (d o p : Nat) (ws cs : List Char) (acc : List SExp) (h : ∀ c ∈ ws, c.isWhitespace = true) :
-    sexps (d + 1) o p (ws ++ cs) acc = sexps (d + 1) o (p + ws.length) cs acc := by
-  simp only [sexps, skip_ws ws p cs h]
+theorem sexpsWith_ws (elem : Nat → List Char → P (SExp × Nat × List Char)) (o n p : Nat) (ws cs : List Char)
+    (acc : List SExp) (h : ∀ c ∈ ws, c.isWhitespace = true) :
+    sexpsWith elem o n p (ws ++ cs) acc = sexpsWith elem o n (p + ws.length) cs acc := by
+  rw [sexpsWith, sexpsWith, skip_ws ws p cs h]
 
 theorem sexp_atom (d p : Nat) (s : String) (rest : List Char) (hne : s.toList ≠ [])
     (hd : ∀ c ∈ s.toList, isDelim c = false) (hr : rest = [] ∨ ∃ c r, rest = c :: r ∧ isDelim c = true) :
@@ -139,95 +140,111 @@ theorem sexp_str (d p : Nat) (s : String) (rest : List Char) (hq : '"' ∉ s.toL
   simp only [List.nil_append, h1, h2, String.ofList_toList]
   exact ⟨_, rfl⟩
 
+theorem need_pos (x : SExp) : 1 ≤ need x := by cases x <;> simp [need]
+
+theorem needs_cons {x : SExp} {xs : List SExp} {d : Nat} (h : needs (x :: xs) ≤ d) :
+    need x ≤ d ∧ needs xs ≤ d := by
+  simp only [needs] at h; omega
+
+theorem widths_cons {x : SExp} {xs : List SExp} {w : Nat} (h : widths (x :: xs) ≤ w) :
+    width x ≤ w ∧ widths xs ≤ w := by
+  simp only [widths] at h; omega
+
 mutual
-theorem sexp_chars : ∀ (d : Nat) {x : SExp}, Ok x → need x ≤ d → ∀ (p : Nat) (rest : List Char),
-    (rest = [] ∨ ∃ c r, rest = c :: r ∧ isDelim c = true) →
+theorem sexp_chars : ∀ (d : Nat) {x : SExp}, Ok x → need x ≤ d → width x ≤ listMax → ∀ (p : Nat)
+    (rest : List Char), (rest = [] ∨ ∃ c r, rest = c :: r ∧ isDelim c = true) →
     ∃ y q, sexp d p (chars x ++ rest) = .ok (y, q, rest) ∧ Same x y
-  | 0, .atom _ _, _, hn, _, _, _ => by simp [need] at hn
-  | 0, .str _ _, _, hn, _, _, _ => by simp [need] at hn
-  | 0, .list _ _, _, hn, _, _, _ => by simp [need] at hn
-  | d + 1, .atom _ s, .atom hne hd, _, p, rest, hr =>
+  | 0, x, _, hn, _, _, _, _ => absurd hn (by have := need_pos x; omega)
+  | d + 1, .atom _ s, .atom hne hd, _, _, p, rest, hr =>
     ⟨_, _, sexp_atom d p s rest hne hd hr, .atom⟩
-  | d + 1, .str _ s, .str hq, _, p, rest, _ => by
+  | d + 1, .str _ s, .str hq, _, _, p, rest, _ => by
     obtain ⟨q, h⟩ := sexp_str d p s rest hq
     exact ⟨_, q, by simpa [chars] using h, .str⟩
-  | d + 1, .list _ xs, .list hxs, hn, p, rest, _ => by
+  | d + 1, .list _ xs, .list hxs, hn, hw, p, rest, _ => by
     simp only [need] at hn
+    simp only [width] at hw
     obtain ⟨ys, q, hys, hsame⟩ :=
-      sexps_items d [' '] ⟨by decide, by decide⟩ hxs (by omega) p (p + 1) rest []
+      sexps_items d [' '] ⟨by decide, by decide⟩ hxs (by omega) (by omega) listMax p (p + 1) rest []
+        (by omega)
     refine ⟨.list p ys, q, ?_, .list hsame⟩
     rw [sexp, chars, List.cons_append, skip_stop p _ (by decide) (by decide)]
     simp only [skip_items (p + 1) rest hxs, hys, List.reverse_nil, List.nil_append, Except.map]
 
 theorem sexps_items : ∀ (d : Nat) (sep : List Char), Sep sep → ∀ {xs : List SExp}, OkL xs →
-    needs xs ≤ d → ∀ (o p : Nat) (rest : List Char) (acc : List SExp),
-    ∃ ys q, sexps d o p (items sep xs ++ rest) acc = .ok (acc.reverse ++ ys, q, rest) ∧ SameL xs ys
-  | 0, _, _, [], _, hn, _, _, _, _ => by simp [needs] at hn
-  | 0, _, _, _ :: _, _, hn, _, _, _, _ => by simp [needs] at hn
-  | d + 1, _, _, [], _, _, o, p, rest, acc => by
+    needs xs ≤ d → widths xs ≤ listMax → ∀ (n o p : Nat) (rest : List Char) (acc : List SExp),
+    xs.length ≤ n →
+    ∃ ys q, sexpsWith (fun p cs => sexp d p cs) o n p (items sep xs ++ rest) acc = .ok (acc.reverse ++ ys, q, rest) ∧
+      SameL xs ys
+  | d, _, _, [], _, _, _, n, o, p, rest, acc, _ => by
     refine ⟨[], p + 1, ?_, .nil⟩
-    simp [items, sexps, skip]
-  | d + 1, sep, hsep, [x], .cons hx _, hn, o, p, rest, acc => by
-    simp only [needs] at hn
-    obtain ⟨y, q, hy, hxy⟩ := sexp_chars d hx (by omega) p (')' :: rest) (.inr ⟨')', rest, rfl, by decide⟩)
-    obtain ⟨ys, q', hys, hnil⟩ := sexps_items d sep hsep .nil (by simp [needs]; omega) o q rest (y :: acc)
+    rw [sexpsWith]
+    simp [items, skip]
+  | d, sep, hsep, [x], .cons hx _, hn, hw, n, o, p, rest, acc, hl => by
+    obtain ⟨hnx, -⟩ := needs_cons hn
+    obtain ⟨hwx, -⟩ := widths_cons hw
+    obtain ⟨n, rfl⟩ : ∃ m, n = m + 1 := ⟨n - 1, by simp at hl; omega⟩
+    obtain ⟨y, q, hy, hxy⟩ := sexp_chars d hx hnx hwx p (')' :: rest) (.inr ⟨')', rest, rfl, by decide⟩)
+    obtain ⟨ys, q', hys, hnil⟩ := sexps_items d sep hsep .nil (by simp [needs]) (by simp [widths]) n o q rest
+      (y :: acc) (by simp)
     cases hnil
     refine ⟨[y], q', ?_, .cons hxy .nil⟩
     obtain ⟨c, cs, hc, hw, hs, hcp⟩ := chars_head hx
     have e : items sep [x] ++ rest = c :: (cs ++ ')' :: rest) := by simp [items, hc]
-    rw [e, sexps, skip_stop p _ hw hs]
+    rw [e, sexpsWith, skip_stop p _ hw hs]
     split
     · rename_i heq; simp only [Prod.mk.injEq, List.cons.injEq] at heq; exact absurd heq.2.1 hcp
     · simp_all
     · rename_i heq
       simp only [Prod.mk.injEq] at heq
       obtain ⟨rfl, rfl⟩ := heq
+      simp only
       rw [show c :: (cs ++ ')' :: rest) = chars x ++ ')' :: rest by simp [hc], hy]
       simpa using hys
-  | d + 1, sep, hsep, x :: y :: ys, .cons hx hys, hn, o, p, rest, acc => by
-    rw [needs] at hn
-    have hpos : 1 ≤ needs (y :: ys) := by simp only [needs]; omega
+  | d, sep, hsep, x :: y :: ys, .cons hx hys, hn, hw, n, o, p, rest, acc, hl => by
+    obtain ⟨hnx, hnr⟩ := needs_cons hn
+    obtain ⟨hwx, hwr⟩ := widths_cons hw
+    obtain ⟨n, rfl⟩ : ∃ m, n = m + 1 := ⟨n - 1, by simp at hl; omega⟩
     obtain ⟨s0, sr, hs0, hws⟩ : ∃ s0 sr, sep = s0 :: sr ∧ s0.isWhitespace = true := by
       match sep, hsep with
       | s0 :: sr, ⟨_, h⟩ => exact ⟨s0, sr, rfl, h s0 (List.mem_cons_self ..)⟩
-    obtain ⟨x', q, hx', hxx⟩ := sexp_chars d hx (by omega) p (sep ++ items sep (y :: ys) ++ rest)
+    obtain ⟨x', q, hx', hxx⟩ := sexp_chars d hx hnx hwx p (sep ++ items sep (y :: ys) ++ rest)
       (.inr ⟨s0, sr ++ items sep (y :: ys) ++ rest, by simp [hs0], by simp [isDelim, hws]⟩)
     obtain ⟨ys', q', hys', hsame⟩ :=
-      sexps_items d sep hsep hys (by omega) o (q + sep.length) rest (x' :: acc)
+      sexps_items d sep hsep hys hnr hwr n o (q + sep.length) rest (x' :: acc) (by simp at hl ⊢; omega)
     refine ⟨x' :: ys', q', ?_, .cons hxx hsame⟩
     obtain ⟨c, cs, hc, hw, hs, hcp⟩ := chars_head hx
     have e : items sep (x :: y :: ys) ++ rest = c :: (cs ++ (sep ++ items sep (y :: ys) ++ rest)) := by
       simp [items, hc]
-    rw [e, sexps, skip_stop p _ hw hs]
+    rw [e, sexpsWith, skip_stop p _ hw hs]
     split
     · rename_i heq; simp only [Prod.mk.injEq, List.cons.injEq] at heq; exact absurd heq.2.1 hcp
     · simp_all
     · rename_i heq
       simp only [Prod.mk.injEq] at heq
       obtain ⟨rfl, rfl⟩ := heq
+      simp only
       rw [show c :: (cs ++ (sep ++ items sep (y :: ys) ++ rest)) = chars x ++ (sep ++ items sep (y :: ys) ++ rest)
         by simp [hc], hx']
-      cases d with
-      | zero => omega
-      | succ d' =>
-        simp only
-        rw [List.append_assoc, sexps_ws d' o q sep _ _ hsep.2, hys']
-        simp
+      simp only
+      rw [List.append_assoc, sexpsWith_ws _ o n q sep _ _ hsep.2, hys']
+      simp
 end
 
-theorem parse_text {x : SExp} (h : Ok x) (hn : need x ≤ depthMax) :
+theorem parse_text {x : SExp} (h : Ok x) (hn : need x ≤ depthMax) (hw : width x ≤ listMax) :
     ∃ y, parse (text x) = .ok y ∧ Same x y := by
-  obtain ⟨y, q, hy, hs⟩ := sexp_chars depthMax h hn 0 [] (.inl rfl)
+  obtain ⟨y, q, hy, hs⟩ := sexp_chars depthMax h hn hw 0 [] (.inl rfl)
   refine ⟨y, ?_, hs⟩
   simp only [parse, text, String.toList_ofList]
   rw [← List.append_nil (chars x), hy]
   simp [skip]
 
 theorem parse_layout {sep : List Char} (hsep : Sep sep) {xs : List SExp} (h : OkL xs)
-    (hn : need (.list 0 xs) ≤ depthMax) :
+    (hn : need (.list 0 xs) ≤ depthMax) (hw : width (.list 0 xs) ≤ listMax) :
     ∃ ys, parse (String.ofList ('(' :: items sep xs ++ ['\n'])) = .ok (.list 0 ys) ∧ SameL xs ys := by
   simp only [need] at hn
-  obtain ⟨ys, q, hys, hsame⟩ := sexps_items (depthMax - 1) sep hsep h (by omega) 0 1 ['\n'] []
+  simp only [width] at hw
+  obtain ⟨ys, q, hys, hsame⟩ :=
+    sexps_items (depthMax - 1) sep hsep h (by omega) (by omega) listMax 0 1 ['\n'] [] (by omega)
   refine ⟨ys, ?_, hsame⟩
   simp only [depthMax] at hys
   simp only [parse, String.toList_ofList, depthMax]

@@ -298,13 +298,13 @@ theorem isListed {ids : List ByteArray} {a : At} {rq : Data} (hr : env[a.depth]?
   obtain ⟨m, hm, rfl⟩ := List.mem_map.1 hc
   exact ⟨m, hm, beq_field_lit hr hct⟩
 
-/-- `allowlist`: every admitted act, of every occasion, is signed by a listed member. -/
+/-- `allowlistLaw`: every admitted act, of every occasion, is signed by a listed member. -/
 theorem allowlist_spec {ids : List ByteArray} {S : Ty} {rq n o x : Data} {ℓ : Label}
-    (h : Admits lib (allowlist S ids) rq n o)
+    (h : Admits lib (allowlistLaw S ids) rq n o)
     (ho : rq.field "occasion" = some (.inj ℓ x)) :
     ∃ m ∈ ids, rq.field "agent" = some (.bytes m) := by
   obtain ⟨cenv, w, hb⟩ := h
-  simp only [allowlist, lawOf, lawBody] at hb
+  simp only [allowlistLaw, lawOf, lawBody] at hb
   obtain ⟨body, hf, hbody⟩ := lawCase_arm rfl ho hb
   have hc := find_const (t := allOf [(anyOf (ids.map fun i => .prim .beq ((⟨1⟩ : At).reqF "agent") (.bytes i)),
       "not on the allowlist")]) (by simp) hf
@@ -939,9 +939,9 @@ theorem need_ok {c : Bool} {e : StdRefusal} (h : need c e = .ok ()) : c = true :
 theorem is about) over DISTINCT members with `1 ≤ k ≤ members`, so every approval bit belongs to a distinct member. -/
 theorem quorum_ok {S T : Ty} {ms : List ByteArray} {k : Nat} {g : Label} {t : Term}
     (h : quorum S T ms k g = .ok t) :
-    t = quorumLaw S T ms k g ∧ ms.Nodup ∧ 1 ≤ k ∧ k ≤ ms.length ∧ ms.length ≤ 63 := by
+    t = quorumLaw S T ms k g ∧ ms.Nodup ∧ 1 ≤ k ∧ k ≤ ms.length ∧ ms.length ≤ membersMax := by
   unfold quorum need at h
-  by_cases h1 : ms.length ≤ 63
+  by_cases h1 : ms.length ≤ membersMax
   · by_cases h2 : ms.Nodup
     · by_cases h3 : 1 ≤ k ∧ k ≤ ms.length
       · simp only [h1, h2, h3, decide_true, Bool.and_self, if_true] at h
@@ -954,6 +954,55 @@ theorem quorum_ok {S T : Ty} {ms : List ByteArray} {k : Nat} {g : Label} {t : Te
       cases h
   · rw [if_neg (by simpa using h1)] at h
     cases h
+
+theorem allowlist_ok {S : Ty} {ids : List ByteArray} {t : Term} (h : allowlist S ids = .ok t) :
+    t = allowlistLaw S ids ∧ ids.length ≤ idsMax := by
+  unfold allowlist need at h
+  by_cases h1 : ids.length ≤ idsMax
+  · simp only [h1, decide_true, if_true] at h
+    exact ⟨(Except.ok.inj h).symm, h1⟩
+  · rw [if_neg (by simpa using h1)] at h
+    cases h
+
+theorem mapM_length {α β ε : Type} {f : α → Except ε β} : ∀ {l : List α} {r : List β}, l.mapM f = .ok r →
+    r.length = l.length
+  | [], r, h => by simp only [List.mapM_nil, pure, Except.pure, Except.ok.injEq] at h; subst h; rfl
+  | a :: l, r, h => by
+    rw [List.mapM_cons] at h
+    cases hf : f a with
+    | error e => simp [hf, bind, Except.bind] at h
+    | ok b =>
+      cases hl : l.mapM f with
+      | error e => simp [hf, hl, bind, Except.bind] at h
+      | ok bs =>
+        simp only [hf, hl, bind, Except.bind, pure, Except.pure, Except.ok.injEq] at h
+        subst h
+        simp [mapM_length hl]
+
+/-- What `machine` accepting its parameters guarantees: the law is `machineLaw` over resolved edges,
+one per named edge, at most `edgesMax` of them, over at most `Wire.rowMax` distinct states. -/
+theorem machine_ok {S : Ty} {f : Label} {states : List Label} {initial : Label} {methods : List Label}
+    {edges : List (Label × Label × Label)} {t : Term} (h : machine S f states initial methods edges = .ok t) :
+    ∃ es, t = machineLaw S f states initial es ∧ es.length = edges.length ∧ edges.length ≤ edgesMax ∧
+      states.length ≤ Wire.rowMax ∧ states.Nodup := by
+  unfold machine need at h
+  by_cases h1 : states.Nodup
+  · by_cases h2 : states.length ≤ Wire.rowMax
+    · by_cases h3 : edges.length ≤ edgesMax
+      · by_cases h4 : states.contains initial = true
+        · simp only [h1, h2, h3, h4, decide_true, if_true, bind, Except.bind, pure, Except.pure] at h
+          cases he : resolveEdges states methods edges with
+          | error e => rw [he] at h; cases h
+          | ok es =>
+            rw [he] at h
+            exact ⟨es, (Except.ok.inj h).symm, mapM_length he, h3, h2, h1⟩
+        · simp only [h1, h2, h3, decide_true, if_true, bind, Except.bind] at h
+          rw [if_neg h4] at h; cases h
+      · simp only [h1, h2, decide_true, if_true, bind, Except.bind] at h
+        rw [if_neg (by simpa using h3)] at h; cases h
+    · simp only [h1, decide_true, if_true, bind, Except.bind] at h
+      rw [if_neg (by simpa using h2)] at h; cases h
+  · rw [if_neg (by simpa using h1)] at h; cases h
 
 theorem windowed_ok {S T : Ty} {W limit : Nat} {g : Label} {t : Term}
     (h : windowed S T W limit g = .ok t) : t = windowedLaw S T W limit g ∧ 0 < W := by

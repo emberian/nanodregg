@@ -52,7 +52,7 @@ theorem dataAt_conforms : (d : Nat) → (T : Ty) → (x : SExp) → ∀ {v : Dat
       | error e => rw [hf] at h; cases h
       | ok fs' =>
         rw [hf] at h
-        cases hr : dataRow d p row (sortRow fs') with
+        cases hr : dataRowWith (fun A v => dataAt d A v) p row (Row.sort fs') with
         | error e => simp only [bind, Except.bind, hr] at h; cases h
         | ok ds =>
           simp only [bind, Except.bind, hr, pure, Except.pure] at h
@@ -79,27 +79,25 @@ theorem dataAt_conforms : (d : Nat) → (T : Ty) → (x : SExp) → ∀ {v : Dat
     · exact scalarAt_conforms _ _ h
 
 theorem dataRow_conforms : ∀ (d p : Nat) (row : List (Label × Ty)) (fs : List (Label × SExp))
-    {ds : List (Label × Data)}, dataRow d p row fs = .ok ds → RowConforms ds row
-  | _, _, [], [], _, h => by simp [dataRow] at h; subst h; exact .nil
-  | 0, _, _ :: _, _, _, h => by simp [dataRow] at h
-  | 0, _, [], _ :: _, _, h => by simp [dataRow] at h
-  | d + 1, p, (ℓ, A) :: row, (k, v) :: fs, ds, h => by
-    unfold dataRow at h
+    {ds : List (Label × Data)}, dataRowWith (fun A v => dataAt d A v) p row fs = .ok ds → RowConforms ds row
+  | _, _, [], [], _, h => by simp [dataRowWith] at h; subst h; exact .nil
+  | _, _, [], _ :: _, _, h => by simp [dataRowWith] at h
+  | _, _, _ :: _, [], _, h => by simp [dataRowWith] at h
+  | d, p, (ℓ, A) :: row, (k, v) :: fs, ds, h => by
+    unfold dataRowWith at h
     split at h
     · rename_i hk
       subst hk
       cases hv : dataAt d A v with
       | error e => simp only [bind, Except.bind, hv] at h; cases h
       | ok u =>
-        cases hr : dataRow d p row fs with
+        cases hr : dataRowWith (fun A v => dataAt d A v) p row fs with
         | error e => simp only [bind, Except.bind, hv, hr] at h; cases h
         | ok us =>
           simp only [bind, Except.bind, hv, hr, pure, Except.pure] at h
           cases h
           exact .cons (dataAt_conforms d A v hv) (dataRow_conforms d p row fs hr)
     · cases h
-  | d + 1, _, [], _ :: _, _, h => by simp [dataRow] at h
-  | d + 1, _, _ :: _, [], _, h => by simp [dataRow] at h
 end
 
 end Nanodregg.Lang.Read

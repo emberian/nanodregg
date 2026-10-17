@@ -175,11 +175,22 @@ theorem bounded_adopt :
 theorem bounded_adopts :
     admits (runLaw [] (bounded OS "total" 100) (os "a" 5) (os "a" 5) (req "a" "a" (adopt "L"))) = true := by
   decide +kernel
+/-- The law the CHECKED allowlist generator emits for {a, b}. -/
+private def al : Term := match allowlist OS [b "a", b "b"] with
+  | .ok t => t
+  | .error _ => .nat 0
+
+theorem allowlist_accepts : accepted (allowlist OS [b "a", b "b"]) = true := by decide +kernel
+/-- One id past `idsMax` is refused by name. -/
+theorem allowlist_refuses_too_many :
+    refusedBy .tooManyIds (allowlist OS ((List.range (idsMax + 1)).map fun i => ByteArray.mk #[UInt8.ofNat i])) = true := by
+  decide +kernel
+
 theorem allowlist_adopt_refuses :
-    refusedWith "not on the allowlist" (runLaw [] (allowlist OS [b "a", b "b"]) (os "a" 0) (os "a" 0) (req "c" "c" (adopt "L"))) = true := by
+    refusedWith "not on the allowlist" (runLaw [] al (os "a" 0) (os "a" 0) (req "c" "c" (adopt "L"))) = true := by
   decide +kernel
 theorem allowlist_adopts :
-    admits (runLaw [] (allowlist OS [b "a", b "b"]) (os "a" 0) (os "a" 0) (req "b" "b" (adopt "L"))) = true := by
+    admits (runLaw [] al (os "a" 0) (os "a" 0) (req "b" "b" (adopt "L"))) = true := by
   decide +kernel
 theorem ownerSigns_adopts :
     admits (runLaw [] (ownerSigns OS) (os "a" 0) (os "a" 0) (req "a" "a" (adopt "L"))) = true := by
@@ -199,10 +210,10 @@ theorem ownerSigns_owner :
     admits (runLaw [] (ownerSigns OS) (os "a" 0) (os "a" 7) (req "a" "a" write)) = true := by
   decide +kernel
 theorem allowlist_admits :
-    admits (runLaw [] (allowlist OS [b "a", b "b"]) (os "a" 0) (os "a" 7) (req "b" "b" write)) = true := by
+    admits (runLaw [] al (os "a" 0) (os "a" 7) (req "b" "b" write)) = true := by
   decide +kernel
 theorem allowlist_refuses :
-    refusedWith "not on the allowlist" (runLaw [] (allowlist OS [b "a", b "b"]) (os "a" 0) (os "a" 7) (req "c" "c" write)) = true := by
+    refusedWith "not on the allowlist" (runLaw [] al (os "a" 0) (os "a" 7) (req "c" "c" write)) = true := by
   decide +kernel
 /-! ## machine: installed →start→ running →stop→ stopped, by methods 1 and 2 -/
 
@@ -214,6 +225,14 @@ private def mc : Term :=
       [("installed", "start", "running"), ("running", "stop", "stopped")] with
   | .ok t => t
   | .error _ => .nat 0
+/-- One edge past `edgesMax`, and one state past a row, are refused by name. -/
+theorem machine_refuses_too_many_edges :
+    refusedBy .tooManyEdges (machine MS "phase" phases "installed" ["start"]
+      ((List.range (edgesMax + 1)).map fun _ => ("installed", "start", "running"))) = true := by
+  decide +kernel
+theorem machine_refuses_too_many_states :
+    refusedBy .tooManyStates (machine MS "phase" ((List.range (Wire.rowMax + 1)).map Nat.repr) "0" ["start"] []) = true := by
+  decide +kernel
 private def ph (s : Label) : Data := .record [("phase", .inj s (.record []))]
 private def invoke (m : Nat) : Data := .inj "invoke" (.nat m)
 

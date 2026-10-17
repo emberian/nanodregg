@@ -7,10 +7,9 @@ back exactly what was printed.
 
 When something has no text, the printer returns `none`. It never guesses. Three things have no text:
 a label that is not one atom (empty, or holding a `Read.isDelim` character), a term with a free
-variable, and a form needing more than `Read.depthMax` of the reader's fuel (`need`: the reader
-spends one per nesting level AND one per list element, so a long chain such as `anyOf` over many
-ids costs fuel in proportion to its length; measured 10-17, a 63-member `Std.quorum` law needs 385
-and a 63-id `allowlist` 351). The reader would refuse such a text `tooDeep`. A bound variable prints as `x<depth>`, which names the binder that introduced it. Bytes
+variable, and a form nested deeper than `Read.depthMax` (`need`, one per nesting level: what the
+reader's fuel counts) or holding a list of more than `Read.listMax` elements (`width`). The reader
+would refuse such a text `tooDeep` / `tooLong`. A bound variable prints as `x<depth>`, which names the binder that introduced it. Bytes
 print as `"text"` when they are UTF-8 with no `"`, and otherwise as `#hex` (lowercase, two digits per
 byte). `Read` reads both spellings in a term and in a data literal.
 
@@ -50,20 +49,35 @@ end
 def text (x : SExp) : String := String.ofList (chars x)
 
 mutual
-/-- The reader's fuel for a form: one per nesting level, and one per element of a list, because
-`Read.sexps` spends one per element. The printer refuses a form needing more than `Read.depthMax`,
-since the reader would refuse it with `tooDeep`. -/
+/-- The reader's fuel for a form: its nesting depth (an atom or a string 1, a list one more than its
+deepest element). The printer refuses a form needing more than `Read.depthMax`, since the reader
+would refuse it with `tooDeep`. -/
 def need : SExp → Nat
   | .atom _ _ | .str _ _ => 1
   | .list _ xs => needs xs + 1
 
+/-- The deepest element's need (0 for none). -/
 def needs : List SExp → Nat
-  | [] => 1
-  | x :: xs => max (need x) (needs xs) + 1
+  | [] => 0
+  | x :: xs => max (need x) (needs xs)
 end
 
-/-- The text of a form the reader can read: `none` past `Read.depthMax`. -/
-def fits (x : SExp) : Option String := if need x ≤ Read.depthMax then some (text x) else none
+mutual
+/-- The longest list in a form; the reader refuses one longer than `Read.listMax` (`tooLong`). -/
+def width : SExp → Nat
+  | .atom _ _ | .str _ _ => 0
+  | .list _ xs => max xs.length (widths xs)
+
+def widths : List SExp → Nat
+  | [] => 0
+  | x :: xs => max (width x) (widths xs)
+end
+
+/-- The reader reads the form: nested at most `Read.depthMax`, no list past `Read.listMax`. -/
+def fitsB (x : SExp) : Bool := need x ≤ Read.depthMax && width x ≤ Read.listMax
+
+/-- The text of a form the reader can read: `none` past `Read.depthMax` or `Read.listMax`. -/
+def fits (x : SExp) : Option String := if fitsB x then some (text x) else none
 
 def hexDigit (n : Nat) : Char := if n < 10 then Char.ofNat (48 + n) else Char.ofNat (87 + n)
 
@@ -173,7 +187,7 @@ def sectionsSx (p : Package) : Option (List SExp) := do
 /-- The package's text, one section per line. -/
 def package (p : Package) : Option String := do
   let xs := atom "package" :: (← sectionsSx p)
-  if need (list xs) ≤ Read.depthMax then
+  if fitsB (list xs) then
     pure (String.ofList ('(' :: items ['\n', ' ', ' '] xs ++ ['\n']))
   else none
 

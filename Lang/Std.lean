@@ -66,14 +66,6 @@ def anyOf : List Term → Term
 
 def natT (k : Nat) : Term := .nat k
 
-/-- Rows into canonical order (the order `pkgOf` and `Read` give them). -/
-def insertRow {α : Type} (x : Label × α) : List (Label × α) → List (Label × α)
-  | [] => [x]
-  | y :: ys => if x.1 ≤ y.1 then x :: y :: ys else y :: insertRow x ys
-
-/-- Stable insertion sort by label, structural so the kernel can evaluate it (`decide +kernel`
-over a generated package; `List.mergeSort` is well-founded and does not reduce there). -/
-def sortRow {α : Type} (fs : List (Label × α)) : List (Label × α) := fs.foldr insertRow []
 
 /-- Why a generator refuses its parameters (law 7): a law it emitted would mean something other
 than its name says, or nothing at all. -/
@@ -82,8 +74,14 @@ inductive StdRefusal
   | duplicateMember
   /-- a quorum threshold outside `1 ≤ k ≤ members` (k = 0 commits unapproved) -/
   | badThreshold
-  /-- more members than mask bits below `2^64` -/
+  /-- more members than mask bits below `2^64` (`membersMax`) -/
   | tooManyMembers
+  /-- an allowlist of more than `idsMax` ids -/
+  | tooManyIds
+  /-- a machine of more than `edgesMax` edges -/
+  | tooManyEdges
+  /-- a machine of more states than a row holds (`Wire.rowMax`) -/
+  | tooManyStates
   /-- an epoch of width 0 (every act would fault) -/
   | zeroWidth
   | duplicateState
@@ -93,7 +91,8 @@ inductive StdRefusal
 
 def StdRefusal.name : StdRefusal → String
   | .duplicateMember => "duplicateMember" | .badThreshold => "badThreshold"
-  | .tooManyMembers => "tooManyMembers" | .zeroWidth => "zeroWidth"
+  | .tooManyMembers => "tooManyMembers" | .tooManyIds => "tooManyIds"
+  | .tooManyEdges => "tooManyEdges" | .tooManyStates => "tooManyStates" | .zeroWidth => "zeroWidth"
   | .duplicateState => "duplicateState" | .unknownState _ => "unknownState"
   | .unknownMethod _ => "unknownMethod"
 
@@ -134,11 +133,21 @@ def ownerSigns (S : Ty) : Term :=
   let c (a : At) := allOf [(.prim .beq (a.reqF "agent") (a.reqF "principal"), "not signed by the owner")]
   lawOf S c c c c
 
-/-- Only the listed members (`agent`, the signer) may create, change or re-law the object. -/
-def allowlist (S : Ty) (ids : List ByteArray) : Term :=
+/-- Only the listed members (`agent`, the signer) may create, change or re-law the object.
+`allowlistLaw` is the unchecked term (what the theorems are about); `allowlist` refuses more than
+`idsMax` ids. The membership test is a chain one level deep per id, so the cap keeps the law's text
+within the reader's depth (`Lang.Proofs.StdFits`). -/
+def allowlistLaw (S : Ty) (ids : List ByteArray) : Term :=
   let listed (a : At) := anyOf (ids.map fun i => .prim .beq (a.reqF "agent") (.bytes i))
   let c (a : At) := allOf [(listed a, "not on the allowlist")]
   lawOf S c c c c
+
+/-- The most ids an allowlist names. -/
+def idsMax : Nat := 256
+
+def allowlist (S : Ty) (ids : List ByteArray) : Except StdRefusal Term := do
+  need (ids.length ≤ idsMax) .tooManyIds
+  pure (allowlistLaw S ids)
 
 /-! ## Bounds -/
 
@@ -166,8 +175,11 @@ were written under the previous laws, not the quorum's, so they prove nothing (L
 that keeps the quorum is not re-judged by it). Any member may
 propose, which resets every approval: a member can stall the quorum (liveness, not safety).
 `quorum` refuses duplicate members (one member, two votes), `k` outside `1 ≤ k ≤ members`, and
-more than 63 members (a mask bit is a natural below `2^64`). `quorumLaw` is the unchecked term,
+more than `membersMax` = 63 members (a mask bit is a natural below `2^64`). `quorumLaw` is the unchecked term,
 what the theorems are about. -/
+
+/-- The most quorum members: one mask bit each, below `2^64`. -/
+def membersMax : Nat := 63
 
 def proposalTy (T : Ty) : Ty := .sum [("laws", .bytes), ("set", T)]
 
@@ -235,7 +247,7 @@ def quorumLaw (S T : Ty) (members : List ByteArray) (k : Nat) (guarded : Label) 
   lawOf S fresh fresh relawC change
 
 def quorum (S T : Ty) (members : List ByteArray) (k : Nat) (guarded : Label) : Except StdRefusal Term := do
-  need (members.length ≤ 63) .tooManyMembers
+  need (members.length ≤ membersMax) .tooManyMembers
   need (decide members.Nodup) .duplicateMember
   need (1 ≤ k && k ≤ members.length) .badThreshold
   pure (quorumLaw S T members k guarded)
@@ -277,11 +289,11 @@ programmed object the kernel refuses both before any law runs, `hasMethods`: the
 depth). `stepTo` is the method that takes the edge. -/
 
 /-- The type of a machine field over `states`. -/
-def stateTy (states : List Label) : Ty := .sum (sortRow (states.map fun s => (s, .record [])))
+def stateTy (states : List Label) : Ty := .sum (Row.sort (states.map fun s => (s, .record [])))
 
 /-- `t` (a term of `stateTy states`) is the state `s`. -/
 def isState (states : List Label) (t : Term) (s : Label) : Term :=
-  .case t ((sortRow (states.map fun x => (x, ()))).map fun (x, _) => (x, .bool (decide (x = s))))
+  .case t ((Row.sort (states.map fun x => (x, ()))).map fun (x, _) => (x, .bool (decide (x = s))))
 
 def machineLaw (S : Ty) (f : Label) (states : List Label) (initial : Label)
     (edges : List (Label × Nat × Label)) : Term :=
@@ -299,14 +311,14 @@ def stepLaw (S : Ty) (f : Label) (states : List Label) (m : Nat) (edges : List (
   let row := match S with | .record r => r | _ => []
   let target (x : Label) : Label := ((edges.find? fun (a, k, _) => a = x && k = m).map (·.2.2)).getD x
   let next : Term := .case (.get (.var 2) f)
-    ((sortRow (states.map fun x => (x, ()))).map fun (x, _) => (x, .inj (stateTy states) (target x) (.record [])))
+    ((Row.sort (states.map fun x => (x, ()))).map fun (x, _) => (x, .inj (stateTy states) (target x) (.record [])))
   .lam S (.lam (.record []) (.lam reqTy
     (.record (row.map fun (ℓ, _) => (ℓ, if ℓ = f then next else .get (.var 2) ℓ)))))
 
 /-- A method's index in a package: its place among the package's method labels in `pkgOf`'s
 (sorted) order. -/
 def methodIndex (methods : List Label) (m : Label) : Option Nat :=
-  go ((sortRow (methods.map fun x => (x, ()))).map (·.1)) 0
+  go ((Row.sort (methods.map fun x => (x, ()))).map (·.1)) 0
 where
   go : List Label → Nat → Option Nat
     | [], _ => none
@@ -323,10 +335,17 @@ def resolveEdges (states methods : List Label) (edges : List (Label × Label × 
     | some i => pure (x, i, y)
     | none => throw (.unknownMethod m)
 
-/-- The machine law, edges `(from, method label, to)` over the package's `methods` labels. -/
+/-- The most edges a machine has: the invoke clause is a chain one level deep per edge, so the cap
+keeps the law's text within the reader's depth (`Lang.Proofs.StdFits`). -/
+def edgesMax : Nat := 256
+
+/-- The machine law, edges `(from, method label, to)` over the package's `methods` labels. At most
+`edgesMax` edges and `Wire.rowMax` states (the state type is one row). -/
 def machine (S : Ty) (f : Label) (states : List Label) (initial : Label) (methods : List Label)
     (edges : List (Label × Label × Label)) : Except StdRefusal Term := do
   need (decide states.Nodup) .duplicateState
+  need (states.length ≤ Wire.rowMax) .tooManyStates
+  need (edges.length ≤ edgesMax) .tooManyEdges
   need (states.contains initial) (.unknownState initial)
   pure (machineLaw S f states initial (← resolveEdges states methods edges))
 
@@ -334,6 +353,7 @@ def machine (S : Ty) (f : Label) (states : List Label) (initial : Label) (method
 def stepTo (S : Ty) (f : Label) (states : List Label) (methods : List Label) (m : Label)
     (edges : List (Label × Label × Label)) : Except StdRefusal Term := do
   need (decide states.Nodup) .duplicateState
+  need (states.length ≤ Wire.rowMax) .tooManyStates
   match methodIndex methods m with
   | some i => pure (stepLaw S f states i (← resolveEdges states methods edges))
   | none => throw (.unknownMethod m)
@@ -344,16 +364,16 @@ def stepTo (S : Ty) (f : Label) (states : List Label) (methods : List Label) (m 
 /-- A package over state `S`: its laws and its methods `(label, argument type, term)`, rows sorted
 into canonical order. Authority is the kernel's (KERNEL-25); the laws only narrow it. -/
 def pkgOf (S : Ty) (laws : List (Label × Term)) (methods : List (Label × Ty × Term)) : Package :=
-  let laws := sortRow laws
-  let ms := sortRow methods
+  let laws := Row.sort laws
+  let ms := Row.sort methods
   { imports := [], state := S,
-    iface := .record (sortRow (laws.map (fun (l, _) => (l, lawTy S)) ++ ms.map (fun (l, A, _) => (l, methodTy S A)))),
-    body := .record (sortRow (laws ++ ms.map (fun (l, _, t) => (l, t)))),
+    iface := .record (Row.sort (laws.map (fun (l, _) => (l, lawTy S)) ++ ms.map (fun (l, A, _) => (l, methodTy S A)))),
+    body := .record (Row.sort (laws ++ ms.map (fun (l, _, t) => (l, t)))),
     methods := ms.map (·.1), laws := laws.map (·.1) }
 
 /-- A method: `λ state arg req. {fields}` with the state at `var 2`, the argument at `var 1`. -/
 def methodOf (S A : Ty) (fields : List (Label × Term)) : Term :=
-  .lam S (.lam A (.lam reqTy (.record (sortRow fields))))
+  .lam S (.lam A (.lam reqTy (.record (Row.sort fields))))
 
 /-- The body under a law's three binders (a stdlib law is always `λ old new req. body`). -/
 def lawBody : Term → Term

@@ -11,6 +11,8 @@ the owner and the owner never changes). Rows:
 * L0 the text form of `Owned` (`Lang.Read`, what a resident writes) reads to the same bytes.
 * L0c `Lang.Print` gives `Owned` its text, which reads back to the same bytes; a non-atom label
   has no text; bytes that are not quote-free UTF-8 print as `#hex` and read back.
+* L0d the reader's fuel counts nesting only: an allowlist at `Std.idsMax` ids prints and reads
+  back; a list past `Read.listMax` is refused `tooLong`, a form past `Read.depthMax` `tooDeep`.
 * L1 founder A installs `Owned` (a ROM cell, id `romIdOf`) — admitted.
 * L2 A creates an object owned by A, seed `{owner = A, total = 0}`, judged by both laws — admitted.
 * L3 A invokes `set 50` — admitted; the object's `total` slot decodes to 50.
@@ -42,6 +44,7 @@ import Kernel.Sim
 import Lang.Program
 import Lang.Print
 import Lang.Resident
+import Lang.Std
 
 namespace Nanodregg.Lang.Journey
 
@@ -266,6 +269,29 @@ def journey (mode : Mode) : Run := Id.run do
       | _ => false) && t == "(cat #ff22 \"q\")"
     | none => false
   r := note r "L0c bytes that are not quote-free UTF-8 print as #hex and read back" hexBack
+  -- L0d the reader's fuel counts nesting, not length: an allowlist at `Std.idsMax` (a chain one
+  -- level per id) prints and reads back; a list past `Read.listMax` is refused `tooLong`, a form
+  -- nested past `Read.depthMax` `tooDeep`, and each bound itself is read
+  let ids := (List.range Std.idsMax).map fun i => ByteArray.mk #[UInt8.ofNat (i / 256), UInt8.ofNat (i % 256)]
+  let longOk := match Std.allowlist S ids with
+    | .ok law => match Print.term law with
+      | some t => (match Read.readTerm t with
+        | .ok law' => Wire.encodePackage (Std.pkgOf S [("al", law')] []) == Wire.encodePackage (Std.pkgOf S [("al", law)] [])
+        | .error _ => false)
+      | none => false
+    | .error _ => false
+  r := note r s!"L0d an allowlist of {Std.idsMax} ids prints and reads back (the same package bytes)" longOk
+  let recordOf (n : Nat) : String :=
+    "(record" ++ String.join ((List.range n).map fun i => s!" (a{i} 1)") ++ ")"
+  let wideOk := match Read.readTerm (recordOf (Read.listMax - 1)) with | .ok _ => true | .error _ => false
+  r := note r s!"L0d a list of {Read.listMax} elements reads" wideOk
+  let tooLong := match Read.readTerm (recordOf Read.listMax) with | .error (.tooLong _) => true | _ => false
+  r := note r s!"L0d a list of {Read.listMax + 1} elements: tooLong" tooLong
+  let nested (n : Nat) : String := String.join (List.replicate (n - 1) "(fix ") ++ "1" ++ String.join (List.replicate (n - 1) ")")
+  let deepOk := match Read.readTerm (nested Read.depthMax) with | .ok _ => true | .error _ => false
+  r := note r s!"L0d a form nested {Read.depthMax} deep reads" deepOk
+  let tooDeep := match Read.readTerm (nested (Read.depthMax + 1)) with | .error (.tooDeep _) => true | _ => false
+  r := note r s!"L0d a form nested {Read.depthMax + 1} deep: tooDeep" tooDeep
   -- L0b a seed state read at the package's state type (Read.readData): fields in any order; a
   -- missing field, a wrong-typed value, an unknown sum arm refused `notOfType`
   let seedOk := match Read.readData S "(record (total 5) (owner \"a\"))" with

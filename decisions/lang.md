@@ -578,3 +578,55 @@ unreachable. The reader should refuse such a binder by name.
 said "the general fact". The fuel bound became a printer check partly so the theorem could drop a
 premise. It is also right on its own terms: the printer must not emit a text the reader refuses.
 **Status.** built.
+
+## LANG-30 The reader's fuel is nesting depth; a list's length has its own bound (2026-10-17; LANG-29's MEDIUM)
+**Decision.** `Read.sexp` spends one unit of fuel per nesting level and nothing per list element.
+A list's elements are read by `Read.sexpsWith`, at most `Read.listMax = Wire.rowMax + 2` of them,
+and one more is refused `tooLong` (a new `ReadRefusal`, at the list's open offset). The
+elaborator works the same way: `entries`, `arms`, `fnWith` and `dataRowWith` recurse on the list
+and give every element the same fuel. `Print.need` is the nesting depth, `Print.width` is the
+longest list, and `Print.fits` checks both. So a printed text the reader would refuse is still
+`none`. Every form the wire carries fits the width (a row is at most `Wire.rowMax` entries after
+at most two head words; an application prints as two elements), so for an installable package
+only depth can fail. Each stdlib chain that grows with its parameter now has a named cap in its
+checked generator: `Std.membersMax = 63` (was the literal 63), `Std.idsMax = 256` (`allowlist`
+is now checked and refuses `tooManyIds`; `allowlistLaw` is the unchecked term), `Std.edgesMax =
+256` (`machine` refuses `tooManyEdges`), and states at most `Wire.rowMax` (`tooManyStates`, in
+`machine` and `stepTo`). `Lang.Proofs.StdFits` bounds each law's printed depth as a function of
+its parameter and of the state type: quorum `max d(S) (n + 14) + 3`, allowlist
+`max d(S) (n + 8) + 3`, machine `max d(S) (e + 8) + 3`. `quorum_text`, `allowlist_text` and
+`machine_text` show that every checked output over a state type at most 256 deep has a text, and
+the `_reads` forms show that it reads back once it checks. Measured on the printer (10-17): a
+63-member quorum now needs 80 (was 385), a 63-id allowlist 72 (was 351). The two row sorts are
+now one: `Row.sort`, an insertion sort. The kernel evaluates it, so it still serves the teeth.
+`Std.sortRow` and `Read.sortRow` (a mergeSort) are deleted. Both were stable sorts by label, so
+every sorted row and every package id is unchanged.
+**Alternatives.** Keeping per-element fuel and raising `depthMax`: the cost would still grow with
+chain length, and a deeper bound would only move the cliff. Fuel-free elaboration by structural
+recursion on `SExp`: it is possible, but every round-trip lemma would have to be restated around
+it, and the parser's depth bound already makes the elaborator's fuel inert. Moving the caps into
+`Package.checkWith`: install already has the wire's bounds, and these caps are about the TEXT,
+which is the generators' business.
+**Critique.** The `_text` theorems take the state type's depth (`TyPrints 256 S`) as a premise.
+They do not derive it from the install check, and they cannot yet. The wire's bound is a TREE
+depth of 1024 (`Wire.depthMax`), and printing nests a row entry one level deeper than its tree
+node, so an installable package can be deeper than the reader's 512. The wire also accepts labels
+the printer cannot print (a space, a parenthesis). So today a wire-valid package can have no text
+(vacuity read a773ed76, MEDIUM). The fix is to align the bounds: one label rule shared by the
+wire and the printer, and a reader depth that covers the wire's. Then prove `encodePackage p = some b
+→ (package p).isSome` and delete the 256 premise. That is LANG-31, LANG-6's next commit. The reader still elaborates `fn` binders and multi-argument applications into
+terms deeper than their text (n binders in a depth-2 form). Nothing relies on the term's depth
+being bounded by the text's, and the wire's own bound refuses a term too deep to carry. `Prints`
+bounds are upper bounds composed by `mono`, not exact. The printer's figures are 80 and 72; the
+theorem says at most 80 and at most 74. Teeth: `quorum_at_cap_text` and `allowlist_at_cap_text`
+(premises met at the caps), `allowlist_past_cap_no_text` (600 ids: no text, so the cap carries
+the weight), `machine_at_cap_accepted`/`_text`, refusal teeth for each new cap in StdTeeth, and
+`allowlist_at_cap_reads` (the law checks at the cap, so the `_reads` premise is met), and
+journey L0d: an allowlist of `idsMax` ids prints and reads back to the same package bytes, a list of `listMax + 1` elements
+is `tooLong`, and a form `depthMax + 1` deep is `tooDeep`, each next to the bound that reads.
+**Meta-critique.** The measured 385 made "raise the bound" look sufficient. The design question was
+which quantity the fuel should count, and only nesting has a reason to be bounded. I priced the
+general fit theorems as heavy and was tempted by instance checks at each cap. Those would have
+said nothing about any other member list. The constructor-bound toolkit (`prints_*`, about 500
+lines) gives the general statements.
+**Status.** built.

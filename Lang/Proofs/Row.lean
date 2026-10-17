@@ -75,4 +75,32 @@ theorem Rel.labels {R : α → β → Prop} {xs : List (Label × α)} {ys : List
   | nil => rfl
   | cons _ _ ih => simp [ih]
 
+theorem insert_perm (x : Label × α) : ∀ ys : List (Label × α), (insert x ys).Perm (x :: ys)
+  | [] => .refl _
+  | y :: ys => by
+    unfold insert
+    split
+    · exact .refl _
+    · exact ((insert_perm x ys).cons y).trans (.swap x y ys)
+
+theorem sort_perm : ∀ xs : List (Label × α), (sort xs).Perm xs
+  | [] => .refl _
+  | x :: xs => (insert_perm x (sort xs)).trans ((sort_perm xs).cons x)
+
+theorem insert_map (g : Label × α → Label × β) (hg : ∀ z, (g z).1 = z.1)
+    (x : Label × α) : ∀ ys : List (Label × α), (insert x ys).map g = insert (g x) (ys.map g)
+  | [] => rfl
+  | z :: ys => by
+    by_cases hxz : x.1 ≤ z.1 <;> simp [insert, hg, hxz, insert_map g hg x ys]
+
+/-- Sorting commutes with a map that keeps every label. -/
+theorem sort_map (g : Label × α → Label × β) (hg : ∀ z, (g z).1 = z.1) :
+    ∀ xs : List (Label × α), (sort xs).map g = sort (xs.map g)
+  | [] => rfl
+  | x :: xs => by
+    show (insert x (sort xs)).map g = insert (g x) (sort (xs.map g))
+    rw [insert_map g hg, sort_map g hg xs]
+
+theorem length_sort (xs : List (Label × α)) : (sort xs).length = xs.length := (sort_perm xs).length_eq
+
 end Nanodregg.Lang.Row

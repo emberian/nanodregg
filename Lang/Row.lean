@@ -38,5 +38,14 @@ def merge (base : List (Label × α)) : List (Label × α) → List (Label × α
   | [] => base
   | (ℓ, a) :: rest => merge (put ℓ a base) rest
 
+/-- Insert one entry before the first entry whose label is not below it. -/
+def insert (x : Label × α) : List (Label × α) → List (Label × α)
+  | [] => [x]
+  | y :: ys => if x.1 ≤ y.1 then x :: y :: ys else y :: insert x ys
+
+/-- A row into canonical (ascending) order, stably: the one sort of `Read`, `Std` and `pkgOf`.
+Insertion, so the kernel evaluates it (rows are at most `Wire.rowMax` long). -/
+def sort (r : List (Label × α)) : List (Label × α) := r.foldr insert []
+
 end Row
 end Nanodregg.Lang

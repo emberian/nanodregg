@@ -45,16 +45,6 @@ theorem sameL_nil {l : List SExp} (h : SameL [] l) : l = [] := by cases h; rfl
 theorem label_some {ℓ : String} {x : SExp} (h : label ℓ = some x) : x = atom ℓ ∧ labelOk ℓ = true := by
   unfold label at h; split at h <;> simp_all
 
-theorem sortRow_ascending {α : Type} : ∀ {r : List (Label × α)}, Row.ascending r = true → sortRow r = r := by
-  intro r h
-  apply List.mergeSort_of_pairwise
-  induction r with
-  | nil => exact .nil
-  | cons a r ih =>
-    obtain ⟨k, v⟩ := a
-    obtain ⟨hall, hr⟩ := Row.ascending_cons_iff.mp h
-    exact .cons (fun b hb => by simpa using String.not_lt.mp (String.lt_asymm (hall b hb))) (ih hr)
-
 mutual
 theorem ty_tySx : ∀ (T : Ty) (d : Nat) {x y : SExp}, tySx T = some x → Same x y → need x ≤ d →
     T.wf = true → Read.ty d y = .ok T
@@ -104,7 +94,7 @@ theorem ty_tySx : ∀ (T : Ty) (d : Nat) {x y : SExp}, tySx T = some x → Same 
     | succ d =>
       simp only [need, needs, list, atom] at hn
       simp only [Read.ty, tyRow_rowSx row d hr hrow (by omega) hwf.2]
-      simp only [bind, Except.bind, pure, Except.pure, sortRow_ascending hwf.1]
+      simp only [bind, Except.bind, pure, Except.pure, Row.sort_of_ascending hwf.1]
   | .sum row, d, x, y, h, hs, hn, hwf => by
     simp only [tySx, bind, Option.bind_eq_some_iff, pure, Option.some.injEq] at h
     obtain ⟨xs, hr, rfl⟩ := h
@@ -117,14 +107,14 @@ theorem ty_tySx : ∀ (T : Ty) (d : Nat) {x y : SExp}, tySx T = some x → Same 
     | succ d =>
       simp only [need, needs, list, atom] at hn
       simp only [Read.ty, tyRow_rowSx row d hr hrow (by omega) hwf.2]
-      simp only [bind, Except.bind, pure, Except.pure, sortRow_ascending hwf.1]
+      simp only [bind, Except.bind, pure, Except.pure, Row.sort_of_ascending hwf.1]
 
 theorem tyRow_rowSx : ∀ (row : List (Label × Ty)) (d : Nat) {xs ys : List SExp}, rowSx row = some xs →
-    SameL xs ys → needs xs ≤ d → Ty.rowWf row = true → Read.tyRow d ys = .ok row
+    SameL xs ys → needs xs ≤ d → Ty.rowWf row = true → Read.entries (fun t => Read.ty d t) ys = .ok row
   | [], d, xs, ys, h, hs, _, _ => by
     simp only [rowSx, Option.some.injEq] at h; subst h
     cases sameL_nil hs
-    simp [Read.tyRow]
+    simp [Read.entries]
   | (ℓ, t) :: row, d, xs, ys, h, hs, hn, hwf => by
     simp only [rowSx, bind, Option.bind_eq_some_iff, pure, Option.some.injEq] at h
     obtain ⟨xl, hl, xt, ht, xr, hr, rfl⟩ := h
@@ -136,17 +126,12 @@ theorem tyRow_rowSx : ∀ (row : List (Label × Ty)) (d : Nat) {xs ys : List SEx
     obtain ⟨e1, es, rfl, h1, hes⟩ := sameL_cons hes
     cases sameL_nil hes
     obtain ⟨r, rfl⟩ := same_atom h0
-    cases d with
-    | zero => simp [needs] at hn
-    | succ d =>
-      simp only [need, needs, list, atom] at hn
-      simp [Read.tyRow, ty_tySx t d ht h1 (by omega) hwf.1, tyRow_rowSx row d hr hrest (by omega) hwf.2]
-      rfl
+    simp only [need, needs, list, atom] at hn
+    simp [Read.entries, ty_tySx t d ht h1 (by omega) hwf.1, tyRow_rowSx row d hr hrest (by omega) hwf.2]
+    rfl
 end
 
 /-! ## Bytes and numerals -/
-
-theorem need_pos (x : SExp) : 1 ≤ need x := by cases x <;> simp [need]
 
 theorem hexVal_hexDigit : ∀ n, n < 16 → hexVal (hexDigit n) = some n := by decide
 
@@ -238,7 +223,7 @@ theorem dataAt_dataSx : ∀ (v : Data) (T : Ty) (d : Nat) {x y : SExp}, dataSx v
       have hasc : Row.ascending ps = true := by
         rw [Row.ascending_of_labels (ys := fs) hlab, Row.ascending_of_labels (rowConforms_labels hrow)]
         exact hwf.1
-      simp only [dataAt, hps, bind, Except.bind, sortRow_ascending hasc, hrun, pure, Except.pure]
+      simp only [dataAt, hps, bind, Except.bind, Row.sort_of_ascending hasc, hrun, pure, Except.pure]
   | .inj ℓ v, _, d, x, y, h, hs, hn, .inj hf hv, hwf => by
     simp only [dataSx, bind, Option.bind_eq_some_iff, pure, Option.some.injEq] at h
     obtain ⟨xl, hl, xv, hxv, rfl⟩ := h
@@ -259,11 +244,12 @@ theorem dataAt_dataSx : ∀ (v : Data) (T : Ty) (d : Nat) {x y : SExp}, dataSx v
 theorem dataRow_dataFieldsSx : ∀ (fs : List (Label × Data)) (row : List (Label × Ty)) (d p : Nat)
     {xs ys : List SExp}, dataFieldsSx fs = some xs → SameL xs ys → needs xs ≤ d →
     RowConforms fs row → Ty.rowWf row = true →
-    ∃ ps, dataFields ys = .ok ps ∧ ps.map Prod.fst = fs.map Prod.fst ∧ dataRow d p row ps = .ok fs
+    ∃ ps, dataFields ys = .ok ps ∧ ps.map Prod.fst = fs.map Prod.fst ∧
+      dataRowWith (fun A v => dataAt d A v) p row ps = .ok fs
   | [], _, d, p, xs, ys, h, hs, _, .nil, _ => by
     simp only [dataFieldsSx, Option.some.injEq] at h; subst h
     cases sameL_nil hs
-    exact ⟨[], by simp [dataFields], rfl, by simp [dataRow]⟩
+    exact ⟨[], by simp [dataFields], rfl, by simp [dataRowWith]⟩
   | (ℓ, v) :: fs, (_, A) :: row, d, p, xs, ys, h, hs, hn, .cons hv hrow, hwf => by
     simp only [dataFieldsSx, bind, Option.bind_eq_some_iff, pure, Option.some.injEq] at h
     obtain ⟨xl, hl, xv, hxv, xr, hr, rfl⟩ := h
@@ -275,14 +261,11 @@ theorem dataRow_dataFieldsSx : ∀ (fs : List (Label × Data)) (row : List (Labe
     obtain ⟨e1, es, rfl, h1, hes⟩ := sameL_cons hes
     cases sameL_nil hes
     obtain ⟨r, rfl⟩ := same_atom h0
-    cases d with
-    | zero => simp [needs] at hn
-    | succ d =>
-      simp only [need, needs, list, atom] at hn
-      obtain ⟨ps, hps, hlab, hrun⟩ := dataRow_dataFieldsSx fs row d p hr hrest (by omega) hrow hwf.2
-      refine ⟨(ℓ, e1) :: ps, ?_, by simp [hlab], ?_⟩
-      · simp [dataFields, hps]; rfl
-      · simp [dataRow, dataAt_dataSx v A d hxv h1 (by omega) hv hwf.1, hrun]; rfl
+    simp only [need, needs, list, atom] at hn
+    obtain ⟨ps, hps, hlab, hrun⟩ := dataRow_dataFieldsSx fs row d p hr hrest (by omega) hrow hwf.2
+    refine ⟨(ℓ, e1) :: ps, ?_, by simp [hlab], ?_⟩
+    · simp [dataFields, hps]; rfl
+    · simp [dataRowWith, dataAt_dataSx v A d hxv h1 (by omega) hv hwf.1, hrun]; rfl
 end
 
 /-! ## Terms -/
@@ -452,20 +435,18 @@ theorem head_not_kw {k : Nat} {f : Term} {F Y : SExp} (h : termSx k f = some F) 
 
 theorem term_app {d : Nat} {sc : List String} {p : Nat} {Y1 Y2 : SExp} {f a : Term}
     (hkw : ∀ q s, Y1 = .atom q s → s ≠ "fn" ∧ s ≠ "fix" ∧ s ≠ "record" ∧ s ≠ "extend" ∧ s ≠ "case" ∧ s ≠ "ref")
-    (h1 : Read.term (d + 1) sc Y1 = .ok f) (h2 : Read.term d sc Y2 = .ok a) :
-    Read.term (d + 2) sc (.list p [Y1, Y2]) = .ok (.app f a) := by
+    (h1 : Read.term d sc Y1 = .ok f) (h2 : Read.term d sc Y2 = .ok a) :
+    Read.term (d + 1) sc (.list p [Y1, Y2]) = .ok (.app f a) := by
   cases Y1 with
   | atom q s =>
     obtain ⟨k1, k2, k3, k4, k5, k6⟩ := hkw q s rfl
-    simp [Read.term, termList, appAll, h1, h2, k1, k2, k3, k4, k5, k6]
+    simp [Read.term, appAll, h1, h2, k1, k2, k3, k4, k5, k6]
     rfl
   | str q s =>
-    simp only [Read.term] at h1
-    cases h1
-    simp [Read.term, termList, appAll, h2]
+    simp [Read.term, appAll, h1, h2]
     rfl
   | list q xs =>
-    simp [Read.term, termList, appAll, h1, h2]
+    simp [Read.term, appAll, h1, h2]
     rfl
 
 mutual
@@ -542,10 +523,10 @@ theorem term_termSx : ∀ (t : Term) (k d : Nat) {x y : SExp}, termSx k t = some
     obtain ⟨y2, ys, rfl, h2, hl⟩ := sameL_cons hl
     cases sameL_nil hl
     match d with
-    | 0 | 1 => simp only [need, needs, list] at hn; omega
-    | d + 2 =>
+    | 0 => simp only [need, needs, list] at hn; omega
+    | d + 1 =>
       simp only [need, needs, list] at hn
-      exact term_app (head_not_kw hxf h1) (term_termSx f k (d + 1) hxf h1 (by omega) hf)
+      exact term_app (head_not_kw hxf h1) (term_termSx f k d hxf h1 (by omega) hf)
         (term_termSx a k d hxa h2 (by omega) ha)
   | .fix t, k, d, x, y, h, hs, hn, .fix ht => by
     simp only [termSx, bind, Option.bind_eq_some_iff, pure, Option.some.injEq] at h
@@ -640,7 +621,7 @@ theorem term_termSx : ∀ (t : Term) (k d : Nat) {x y : SExp}, termSx k t = some
     | succ d =>
       simp only [need, needs, list, atom] at hn
       simp only [Read.term, fields_fieldsSx fs k d hxs hrow (by omega) hfs]
-      simp only [bind, Except.bind, pure, Except.pure, sortRow_ascending hasc]
+      simp only [bind, Except.bind, pure, Except.pure, Row.sort_of_ascending hasc]
   | .extend t fs, k, d, x, y, h, hs, hn, .extend ht hasc hfs => by
     simp only [termSx, bind, Option.bind_eq_some_iff, pure, Option.some.injEq] at h
     obtain ⟨xt, hxt, xs, hxs, rfl⟩ := h
@@ -653,7 +634,7 @@ theorem term_termSx : ∀ (t : Term) (k d : Nat) {x y : SExp}, termSx k t = some
     | succ d =>
       simp only [need, needs, list, atom] at hn
       simp only [Read.term, term_termSx t k d hxt h1 (by omega) ht, fields_fieldsSx fs k d hxs hrow (by omega) hfs]
-      simp only [bind, Except.bind, pure, Except.pure, sortRow_ascending hasc]
+      simp only [bind, Except.bind, pure, Except.pure, Row.sort_of_ascending hasc]
   | .case t arms, k, d, x, y, h, hs, hn, .case ht hasc harms => by
     simp only [termSx, bind, Option.bind_eq_some_iff, pure, Option.some.injEq] at h
     obtain ⟨xt, hxt, xs, hxs, rfl⟩ := h
@@ -666,14 +647,14 @@ theorem term_termSx : ∀ (t : Term) (k d : Nat) {x y : SExp}, termSx k t = some
     | succ d =>
       simp only [need, needs, list, atom] at hn
       simp only [Read.term, term_termSx t k d hxt h1 (by omega) ht, arms_armsSx arms k d hxs hrow (by omega) harms]
-      simp only [bind, Except.bind, pure, Except.pure, sortRow_ascending hasc]
+      simp only [bind, Except.bind, pure, Except.pure, Row.sort_of_ascending hasc]
 
 theorem fields_fieldsSx : ∀ (fs : List (Label × Term)) (k d : Nat) {xs ys : List SExp}, fieldsSx k fs = some xs →
-    SameL xs ys → needs xs ≤ d → CanonRow fs → Read.fields d (List.map name (List.range k)).reverse ys = .ok fs
+    SameL xs ys → needs xs ≤ d → CanonRow fs → Read.entries (fun e => Read.term d (List.map name (List.range k)).reverse e) ys = .ok fs
   | [], k, d, xs, ys, h, hs, _, _ => by
     simp only [fieldsSx, Option.some.injEq] at h; subst h
     cases sameL_nil hs
-    simp [Read.fields]
+    simp [Read.entries]
   | (ℓ, t) :: fs, k, d, xs, ys, h, hs, hn, .cons ht hfs => by
     simp only [fieldsSx, bind, Option.bind_eq_some_iff, pure, Option.some.injEq] at h
     obtain ⟨xl, hl, xt, hxt, xr, hr, rfl⟩ := h
@@ -684,19 +665,16 @@ theorem fields_fieldsSx : ∀ (fs : List (Label × Term)) (k d : Nat) {xs ys : L
     obtain ⟨e1, es, rfl, h1, hes⟩ := sameL_cons hes
     cases sameL_nil hes
     obtain ⟨r, rfl⟩ := same_atom h0
-    cases d with
-    | zero => simp [needs] at hn
-    | succ d =>
-      simp only [need, needs, list, atom] at hn
-      simp [Read.fields, term_termSx t k d hxt h1 (by omega) ht, fields_fieldsSx fs k d hr hrest (by omega) hfs]
-      rfl
+    simp only [need, needs, list, atom] at hn
+    simp [Read.entries, term_termSx t k d hxt h1 (by omega) ht, fields_fieldsSx fs k d hr hrest (by omega) hfs]
+    rfl
 
 theorem arms_armsSx : ∀ (arms : List (Label × Term)) (k d : Nat) {xs ys : List SExp}, armsSx k arms = some xs →
-    SameL xs ys → needs xs ≤ d → CanonRow arms → Read.armsOf d (List.map name (List.range k)).reverse ys = .ok arms
+    SameL xs ys → needs xs ≤ d → CanonRow arms → Read.arms (fun x b => Read.term d (x :: (List.map name (List.range k)).reverse) b) ys = .ok arms
   | [], k, d, xs, ys, h, hs, _, _ => by
     simp only [armsSx, Option.some.injEq] at h; subst h
     cases sameL_nil hs
-    simp [Read.armsOf]
+    simp [Read.arms]
   | (ℓ, t) :: arms, k, d, xs, ys, h, hs, hn, .cons ht harms => by
     simp only [armsSx, bind, Option.bind_eq_some_iff, pure, Option.some.injEq] at h
     obtain ⟨xl, hl, xt, hxt, xr, hr, rfl⟩ := h
@@ -709,14 +687,11 @@ theorem arms_armsSx : ∀ (arms : List (Label × Term)) (k d : Nat) {xs ys : Lis
     cases sameL_nil hes
     obtain ⟨r, rfl⟩ := same_atom h0
     obtain ⟨r', rfl⟩ := same_atom h1
-    cases d with
-    | zero => simp [needs] at hn
-    | succ d =>
-      simp only [need, needs, list, atom] at hn
-      have et := term_termSx t (k + 1) d hxt h2 (by omega) ht
-      rw [← scope_succ] at et
-      simp [Read.armsOf, et, arms_armsSx arms k d hr hrest (by omega) harms]
-      rfl
+    simp only [need, needs, list, atom] at hn
+    have et := term_termSx t (k + 1) d hxt h2 (by omega) ht
+    rw [← scope_succ] at et
+    simp [Read.arms, et, arms_armsSx arms k d hr hrest (by omega) harms]
+    rfl
 end
 
 /-! ## Part 3: what the printer prints is `Ok` -/
@@ -914,8 +889,14 @@ end
 
 /-! ## The round trip -/
 
-theorem fits_some {x : SExp} {s : String} (h : fits x = some s) : need x ≤ depthMax ∧ s = text x := by
-  unfold fits at h; split at h <;> simp_all
+theorem fitsB_iff {x : SExp} : fitsB x = true ↔ need x ≤ depthMax ∧ width x ≤ listMax := by
+  simp [fitsB]
+
+theorem fits_some {x : SExp} {s : String} (h : fits x = some s) :
+    need x ≤ depthMax ∧ width x ≤ listMax ∧ s = text x := by
+  unfold fits at h; split at h
+  · rename_i hf; simp only [Option.some.injEq] at h; exact ⟨(fitsB_iff.mp hf).1, (fitsB_iff.mp hf).2, h.symm⟩
+  · cases h
 
 theorem scope_zero : (List.map name (List.range 0)).reverse = [] := rfl
 
@@ -923,8 +904,8 @@ theorem scope_zero : (List.map name (List.range 0)).reverse = [] := rfl
 theorem readTy_ty {T : Ty} {s : String} (hwf : T.wf = true) (h : ty T = some s) : readTy s = .ok T := by
   simp only [ty, Option.bind_eq_some_iff] at h
   obtain ⟨x, hx, hf⟩ := h
-  obtain ⟨hn, rfl⟩ := fits_some hf
-  obtain ⟨y, hy, hs⟩ := parse_text (tySx_ok T hx) hn
+  obtain ⟨hn, hw, rfl⟩ := fits_some hf
+  obtain ⟨y, hy, hs⟩ := parse_text (tySx_ok T hx) hn hw
   simp only [readTy, hy, bind, Except.bind]
   exact ty_tySx T depthMax hx hs hn hwf
 
@@ -932,8 +913,8 @@ theorem readTy_ty {T : Ty} {s : String} (hwf : T.wf = true) (h : ty T = some s) 
 theorem readTerm_term {t : Term} {s : String} (hc : Canon t) (h : term t = some s) : readTerm s = .ok t := by
   simp only [term, Option.bind_eq_some_iff] at h
   obtain ⟨x, hx, hf⟩ := h
-  obtain ⟨hn, rfl⟩ := fits_some hf
-  obtain ⟨y, hy, hs⟩ := parse_text (termSx_ok t 0 hx) hn
+  obtain ⟨hn, hw, rfl⟩ := fits_some hf
+  obtain ⟨y, hy, hs⟩ := parse_text (termSx_ok t 0 hx) hn hw
   simp only [readTerm, hy, bind, Except.bind]
   have := term_termSx t 0 depthMax hx hs hn hc
   rwa [scope_zero] at this
@@ -943,8 +924,8 @@ theorem readData_data {v : Data} {T : Ty} {s : String} (hc : Conforms v T) (hwf 
     (h : data v = some s) : readData T s = .ok v := by
   simp only [data, Option.bind_eq_some_iff] at h
   obtain ⟨x, hx, hf⟩ := h
-  obtain ⟨hn, rfl⟩ := fits_some hf
-  obtain ⟨y, hy, hs⟩ := parse_text (dataSx_ok v hx) hn
+  obtain ⟨hn, hw, rfl⟩ := fits_some hf
+  obtain ⟨y, hy, hs⟩ := parse_text (dataSx_ok v hx) hn hw
   simp only [readData, hy, bind, Except.bind]
   exact dataAt_dataSx v T depthMax hx hs hn hc hwf
 
@@ -1003,7 +984,8 @@ theorem readPackage_package {p : Package} {s : String} (hs : p.state.wf = true) 
   simp only [package, bind, Option.bind_eq_some_iff] at h
   obtain ⟨xs, hxs, h⟩ := h
   split at h
-  · rename_i hn
+  · rename_i hf
+    obtain ⟨hn, hw⟩ := fitsB_iff.mp hf
     simp only [pure, Option.some.injEq] at h; subst h
     simp only [sectionsSx, bind, Option.bind_eq_some_iff, pure, Option.some.injEq] at hxs
     obtain ⟨xS, hS, xI, hI, xm, hm, xl, hlw, xB, hB, rfl⟩ := hxs
@@ -1016,7 +998,7 @@ theorem readPackage_package {p : Package} {s : String} (hs : p.state.wf = true) 
         (.cons (.list (.cons (kw_ok _) (labels_ok _ hm)))
         (.cons (.list (.cons (kw_ok _) (labels_ok _ hlw)))
         (.cons (.list (.cons (kw_ok _) (.cons (termSx_ok _ 0 hB) .nil))) .nil))))))
-    obtain ⟨ys, hy, hsame⟩ := parse_layout (sep := ['\n', ' ', ' ']) ⟨by decide, by decide⟩ hok hn
+    obtain ⟨ys, hy, hsame⟩ := parse_layout (sep := ['\n', ' ', ' ']) ⟨by decide, by decide⟩ hok hn hw
     simp only [readPackage, hy, bind, Except.bind]
     obtain ⟨y0, ys, rfl, h0, hl⟩ := sameL_cons hsame
     obtain ⟨y1, ys, rfl, h1, hl⟩ := sameL_cons hl

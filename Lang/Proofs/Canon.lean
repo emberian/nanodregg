@@ -35,6 +35,18 @@ theorem ascending_cons_iff {k : Label} {a : α} :
     · rintro ⟨hall, hr⟩
       exact ⟨hall _ (List.mem_cons_self ..), hr⟩
 
+
+/-- An ascending row is already sorted. -/
+theorem sort_of_ascending : ∀ {r : List (Label × α)}, ascending r = true → sort r = r
+  | [], _ => rfl
+  | (k, a) :: r, h => by
+    obtain ⟨hall, hr⟩ := ascending_cons_iff.mp h
+    show insert (k, a) (sort r) = (k, a) :: r
+    rw [sort_of_ascending hr]
+    cases r with
+    | nil => rfl
+    | cons e r => simp [insert, String.lt_asymm (hall e (List.mem_cons_self ..))]
+
 theorem lt_of_not_lt_ne {a b : Label} (h1 : ¬ a < b) (h2 : a ≠ b) : b < a := by
   rcases String.le_total a b with h | h
   · exact absurd (String.le_antisymm h (String.not_lt.mp h1)) h2
