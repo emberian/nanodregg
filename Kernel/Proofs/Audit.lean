@@ -18,11 +18,11 @@ def Honest (X : Ctx D) : World D → List (Turn D) → Prop
       ∀ w', World.admit X.env w t = .ok w' → Honest X w' rest
 
 
-theorem auditStep_ok {X : Ctx D} {w w' : World D} {t : Turn D} :
-    auditStep X w t = .ok w' ↔
-      (∃ c, X.decodeCall t.event = some c ∧ receive X w c = .ok t) ∧
-        World.admit X.env w t = .ok w' := by
-  unfold auditStep
+/-- **Re-derivation (PROTOCOL-4).** A logged Turn passes exactly when its event decodes to a call
+that derives that very Turn on the World before it. -/
+theorem rederive_ok {X : Ctx D} {w : World D} {t : Turn D} :
+    rederive X w t = .ok () ↔ ∃ c, X.decodeCall t.event = some c ∧ receive X w c = .ok t := by
+  unfold rederive
   constructor
   · intro h
     split at h
@@ -34,15 +34,30 @@ theorem auditStep_ok {X : Ctx D} {w w' : World D} {t : Turn D} :
         split at h
         · rename_i ht
           subst ht
-          split at h
-          · rename_i v ha
-            simp only [Except.ok.injEq] at h
-            subst h
-            exact ⟨⟨c, hd, hr⟩, ha⟩
-          · simp at h
+          exact ⟨c, hd, hr⟩
         · simp at h
-  · rintro ⟨⟨c, hd, hr⟩, ha⟩
-    simp [hd, hr, ha]
+  · rintro ⟨c, hd, hr⟩
+    simp [hd, hr]
+
+theorem auditStep_ok {X : Ctx D} {w w' : World D} {t : Turn D} :
+    auditStep X w t = .ok w' ↔
+      (∃ c, X.decodeCall t.event = some c ∧ receive X w c = .ok t) ∧
+        World.admit X.env w t = .ok w' := by
+  rw [← rederive_ok]
+  unfold auditStep
+  constructor
+  · intro h
+    split at h
+    · simp at h
+    · rename_i hr
+      split at h
+      · rename_i v ha
+        simp only [Except.ok.injEq] at h
+        subst h
+        exact ⟨hr, ha⟩
+      · simp at h
+  · rintro ⟨hr, ha⟩
+    simp [hr, ha]
 
 /-- **The audit theorem.** A follower's audit accepts a log exactly when folding it succeeds and
 every Turn in it is what its own signed event derives: the writer's authority decided nothing

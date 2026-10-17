@@ -150,4 +150,48 @@ theorem fold_head_binds {E : Env D} {n : Nat} (hsz : ∀ d, (E.bytes d).size = n
   rw [fold_chain h₁, fold_chain h₂] at hc
   exact chain_binds hsz hb ht l₁.length l₁ l₂ rfl hl.symm hc
 
+/-- `World.fold` is the monadic left fold of `World.admit` (HOST's `staged_foldlM` carries over). -/
+theorem fold_foldlM {E : Env D} :
+    ∀ {w w' : World D} {l : List (Turn D)},
+      World.fold E w l = .ok w' ↔ l.foldlM (World.admit E) w = .ok w'
+  | w, w', [] => by simp [World.fold, List.foldlM, pure, Except.pure]
+  | w, w', t :: rest => by
+      rw [fold_cons_ok, List.foldlM_cons]
+      cases ha : World.admit E w t with
+      | error r => simp [bind, Except.bind]
+      | ok w₁ => simp [bind, Except.bind, fold_foldlM]
+
+/-- An admitted turn lands inside its window. -/
+theorem admit_window {E : Env D} {w w' : World D} {t : Turn D}
+    (h : World.admit E w t = .ok w') : t.notBefore ≤ w.height + 1 ∧ w.height + 1 ≤ t.validUntil := by
+  obtain ⟨_, hc, _⟩ := admit_ok h
+  have hw := hc.window
+  unfold checkWindow at hw
+  rw [req_ok] at hw
+  simpa using hw
+
+/-- **`absent` becomes final by expiry (HOST-8).** If the journal of `w` lacks `k` and some later
+World of an admitted log has it, a turn of that log carries `k` and a window still open after
+`w`: its `validUntil` exceeds `w.height`. So once `w.height ≥ v`, a transaction whose signed window
+ends at `v` and is absent stays absent, unless another call with a LATER window has the same
+transaction id — two different signed calls with one digest (`txIdOf`), a collision. -/
+theorem absent_final [Std.TransOrd D] [Std.LawfulEqOrd D] {E : Env D} {k : D} :
+    ∀ {w w' : World D} {l : List (Turn D)}, World.fold E w l = .ok w' →
+      w.journal[k]? = none → w'.journal[k]? ≠ none →
+        ∃ t ∈ l, t.txId = k ∧ w.height < t.validUntil
+  | w, w', [], h, ha, hj => by simp [World.fold] at h; subst h; exact absurd ha hj
+  | w, w', t :: rest, h, ha, hj => by
+      obtain ⟨w₁, h₁, h₂⟩ := fold_cons_ok.mp h
+      have hwin := (admit_window h₁).2
+      by_cases hk : t.txId = k
+      · exact ⟨t, by simp, hk, by omega⟩
+      · have ha₁ : w₁.journal[k]? = none := by
+          obtain ⟨_, _, rfl⟩ := admit_ok h₁
+          show (w.journal.insert t.txId _)[k]? = none
+          rw [Std.TreeMap.getElem?_insert]
+          have : compare t.txId k ≠ .eq := fun he => hk (Std.LawfulEqCmp.eq_of_compare he)
+          simp [this, ha]
+        obtain ⟨u, hu, huk, hlt⟩ := absent_final h₂ ha₁ hj
+        exact ⟨u, by simp [hu], huk, by rw [admit_height h₁] at hlt; omega⟩
+
 end Nanodregg.Kernel

@@ -195,3 +195,28 @@ attractive because it turns HOST-14's ask into a theorem I can prove from the al
 the allowance should be ONE budget at all (a member's storage vs the World's storage is the
 refill/credit question, KERNEL-13).
 Status: open.
+
+## KERNEL-13 · Answers: PROTOCOL-4 `rederive`, HOST-8 `absent_final`, HOST's `fold ↔ foldlM`, `mayFollow` (KERNEL-2, 2026-10-16)
+- **PROTOCOL-4.** `Receive.rederive X w t : Except (Refusal D) Unit`, with `rederive_ok : rederive X w t
+  = .ok () ↔ ∃ c, X.decodeCall t.event = some c ∧ receive X w c = .ok t` (the statement PROTOCOL asked
+  for). New refusals `undecodableEvent` and `eventMismatch` (PROTOCOL's name). `auditStep` IS
+  `rederive` then `World.admit`, and `AuditFault` is deleted: an audit refuses in `submit`'s own
+  `Verdict` (`refused r | rejected r`). That is one refusal shape for the writer and the follower,
+  not two. Plant: rederive's comparison skipped ⇒ kernel-sim 64/64 red ("forgery at i: audit
+  accepted"). The Sim now forges every seed's log at its last write (new values, re-priced, so `fold`
+  accepts it) and requires `audit` to refuse `eventMismatch` at that index.
+- **HOST-8.** `absent_final` (Kernel/Proofs/Fold): if `w.journal[k]? = none` and a later World of an
+  admitted log has `k`, then some turn of that log has `txId = k` and `validUntil > w.height`. With
+  `receive_ok` (a derived Turn's txId is `txIdOf c` and its window is the call's), an absent call whose
+  window ended at or before `w.height` stays absent forever, unless a different call with a later window
+  has the same `txIdOf`: a collision. HOST answers `absent` with the height; the client compares it
+  with its own call's `validUntil`.
+- **HOST (HOST-LOG item 6).** `fold_foldlM : World.fold E w l = .ok w' ↔ l.foldlM (World.admit E) w =
+  .ok w'`; also `admit_window`.
+- **HOST-11.** The gate is `Receive.mayFollow X w member g` (Kernel/Receive/Follow), a walk of ≤
+  `grantDepthMax` lookups; there is no `grantOf` key-indexed lookup. A request names its follow grant
+  `g`, which costs the requester one more field and saves the World an index from key to grant (an
+  index is a second copy of state). Critique: a member must remember its grant's id; it is in the
+  member's own log, which they follow. Meta-critique: I am refusing an index because indexes are a
+  minidregg smell; the test is that every lookup on the gate is O(depth), and it is.
+Status: open.

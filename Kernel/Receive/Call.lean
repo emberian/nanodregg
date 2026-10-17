@@ -109,6 +109,10 @@ inductive Refusal (D : Type)
   | notIssuer (grant : D)
   | grantTooDeep
   | overPrice (charge : Nat)
+  /-- a logged event is not a canonical call (the follower's re-derivation, `rederive`) -/
+  | undecodableEvent
+  /-- a logged Turn is not what its own event derives on the World before it -/
+  | eventMismatch
   deriving DecidableEq, Repr
 
 /-- A receiver's only access to state: live cells at pinned ids. -/

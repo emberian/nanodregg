@@ -381,6 +381,24 @@ def reopened (w : World D) : World D :=
 
 def worldName : ByteArray := "sim".toUTF8
 
+/-- The log up to its last write, that write's values replaced and its charge re-priced: a log
+`fold` accepts (later turns, which pinned the honest value, are cut) and no signed call derives. -/
+def forge (log : List (Turn D)) : Option (Nat × List (Turn D)) :=
+  let forged (x : Touch D) : Touch D := match x.act with
+    | .write ops => { x with act := .write (ops.map fun o => match o with
+        | .set k _ => .set k "forged".toUTF8
+        | o => o) }
+    | _ => x
+  let isWrite (t : Turn D) := t.touches.any fun x => match x.act with
+    | .write ops => ops.any fun o => match o with | .set _ _ => true | _ => false
+    | _ => false
+  match (log.zipIdx.filter fun (t, _) => isWrite t).getLast? with
+  | none => none
+  | some (t, i) =>
+      let t0 := { t with touches := t.touches.map forged }
+      let t1 := { t0 with charge := t0.weight }
+      some (i, log.take i ++ [t1])
+
 def run (seed : Nat) (steps : Nat) : State :=
   let rng : Rng := ⟨seed.toUInt64 * 0x2545F4914F6CDD1D + 1⟩
   let fk : List (ByteArray × ByteArray) :=
@@ -413,9 +431,21 @@ def run (seed : Nat) (steps : Nat) : State :=
   let st := match World.fold env g st.log with
     | .ok w => if same w st.host then st else { st with failures := "follower differs" :: st.failures }
     | .error (i, r) => { st with failures := s!"follower refused at {i}: {nameOf r}" :: st.failures }
-  match audit (ctx st.reg) g st.log with
-  | .ok w => if same w st.host then st else { st with failures := "audit differs" :: st.failures }
-  | .error (i, f) => { st with failures := s!"audit refused at {i}: {reprStr f}" :: st.failures }
+  let st := match audit (ctx st.reg) g st.log with
+    | .ok w => if same w st.host then st else { st with failures := "audit differs" :: st.failures }
+    | .error (i, f) => { st with failures := s!"audit refused at {i}: {reprStr f}" :: st.failures }
+  -- a forged log: the writer changes what the last write of the log wrote (its event, the signed
+  -- call, still says otherwise) and re-prices it, so `fold` accepts it; `audit` must not
+  match forge st.log with
+  | none => st
+  | some (i, bad) =>
+      match World.fold env g bad, audit (ctx st.reg) g bad with
+      | .ok _, .error (j, .refused .eventMismatch) =>
+          if i = j then { st with refusedAsExpected := st.refusedAsExpected + 1 }
+          else { st with failures := s!"forgery at {i} named at {j}" :: st.failures }
+      | .ok _, .error (j, f) => { st with failures := s!"forgery at {i}: audit said {reprStr f} at {j}" :: st.failures }
+      | .ok _, .ok _ => { st with failures := s!"forgery at {i}: audit accepted" :: st.failures }
+      | .error _, _ => { st with failures := s!"forgery at {i}: fold refused it (not a forgery test)" :: st.failures }
 
 /-- `--seeds N` runs seeds `0 … N-1`; otherwise each argument is a seed. -/
 def parseSeeds : List String → List Nat
