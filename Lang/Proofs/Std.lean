@@ -113,11 +113,12 @@ theorem getVar_bytes {i : Nat} {d : Data} {f : Label} {s : ByteArray} (hi : env[
 
 /-! ## The law skeleton -/
 
-/-- An admitted `lawCase4` ran the arm of the request's occasion, on its payload. -/
-theorem lawCase4_arm {b rl wr iv : At → Term} {rq : Data} {ℓ : Label} {x : Data} {v : Val}
+/-- An admitted `lawCase5` ran the arm of the request's occasion, on its payload. -/
+theorem lawCase5_arm {b ad rl wr iv : At → Term} {rq : Data} {ℓ : Label} {x : Data} {v : Val}
     (hr : env[0]? = some rq.toVal) (ho : rq.field "occasion" = some (.inj ℓ x))
-    (h : BigStep lib env (lawCase4 b rl wr iv) (.ok v)) :
-    ∃ body, Row.find? ℓ [("birth", b ⟨1⟩), ("invoke", iv ⟨1⟩), ("relaw", rl ⟨1⟩), ("write", wr ⟨1⟩)] = some body ∧
+    (h : BigStep lib env (lawCase5 b ad rl wr iv) (.ok v)) :
+    ∃ body, Row.find? ℓ [("adopt", ad ⟨1⟩), ("birth", b ⟨1⟩), ("invoke", iv ⟨1⟩), ("relaw", rl ⟨1⟩),
+      ("write", wr ⟨1⟩)] = some body ∧
       BigStep lib (x.toVal :: env) body (.ok v) := by
   obtain ⟨ℓ', w, body, hs, hf, hb⟩ := bigStep_case_ok h
   obtain ⟨y, hy, hv⟩ := bigStep_getVar hr hs
@@ -126,19 +127,20 @@ theorem lawCase4_arm {b rl wr iv : At → Term} {rq : Data} {ℓ : Label} {x : D
   cases hy'; subst hw
   exact ⟨body, hf, hb⟩
 
-theorem lawCase_arm {b rl c : At → Term} {rq : Data} {ℓ : Label} {x : Data} {v : Val}
+theorem lawCase_arm {b ad rl c : At → Term} {rq : Data} {ℓ : Label} {x : Data} {v : Val}
     (hr : env[0]? = some rq.toVal) (ho : rq.field "occasion" = some (.inj ℓ x))
-    (h : BigStep lib env (lawCase b rl c) (.ok v)) :
-    ∃ body, Row.find? ℓ [("birth", b ⟨1⟩), ("invoke", c ⟨1⟩), ("relaw", rl ⟨1⟩), ("write", c ⟨1⟩)] = some body ∧
+    (h : BigStep lib env (lawCase b ad rl c) (.ok v)) :
+    ∃ body, Row.find? ℓ [("adopt", ad ⟨1⟩), ("birth", b ⟨1⟩), ("invoke", c ⟨1⟩), ("relaw", rl ⟨1⟩),
+      ("write", c ⟨1⟩)] = some body ∧
       BigStep lib (x.toVal :: env) body (.ok v) :=
-  lawCase4_arm hr ho h
+  lawCase5_arm hr ho h
 
 /-- Which arm the change clause is: a write or an invoke. -/
 def IsChange (o : Data) : Prop := (∃ x, o = .inj "write" x) ∨ (∃ x, o = .inj "invoke" x)
 
-theorem lawCase_change {b rl c : At → Term} {rq occ : Data} {v : Val}
+theorem lawCase_change {b ad rl c : At → Term} {rq occ : Data} {v : Val}
     (hr : env[0]? = some rq.toVal) (ho : rq.field "occasion" = some occ) (hc : IsChange occ)
-    (h : BigStep lib env (lawCase b rl c) (.ok v)) :
+    (h : BigStep lib env (lawCase b ad rl c) (.ok v)) :
     ∃ x : Data, BigStep lib (x.toVal :: env) (c ⟨1⟩) (.ok v) := by
   rcases hc with ⟨x, rfl⟩ | ⟨x, rfl⟩
   · obtain ⟨body, hf, hb⟩ := lawCase_arm hr ho h
@@ -146,17 +148,24 @@ theorem lawCase_change {b rl c : At → Term} {rq occ : Data} {v : Val}
   · obtain ⟨body, hf, hb⟩ := lawCase_arm hr ho h
     simp [Row.find?] at hf; subst hf; exact ⟨x, hb⟩
 
-theorem lawCase_birth {b rl c : At → Term} {rq x : Data} {v : Val}
+theorem lawCase_birth {b ad rl c : At → Term} {rq x : Data} {v : Val}
     (hr : env[0]? = some rq.toVal) (ho : rq.field "occasion" = some (.inj "birth" x))
-    (h : BigStep lib env (lawCase b rl c) (.ok v)) :
+    (h : BigStep lib env (lawCase b ad rl c) (.ok v)) :
     BigStep lib (x.toVal :: env) (b ⟨1⟩) (.ok v) := by
   obtain ⟨body, hf, hb⟩ := lawCase_arm hr ho h
   simp [Row.find?] at hf; subst hf; exact hb
 
-theorem lawCase_relaw {b rl c : At → Term} {rq x : Data} {v : Val}
+theorem lawCase_relaw {b ad rl c : At → Term} {rq x : Data} {v : Val}
     (hr : env[0]? = some rq.toVal) (ho : rq.field "occasion" = some (.inj "relaw" x))
-    (h : BigStep lib env (lawCase b rl c) (.ok v)) :
+    (h : BigStep lib env (lawCase b ad rl c) (.ok v)) :
     BigStep lib (x.toVal :: env) (rl ⟨1⟩) (.ok v) := by
+  obtain ⟨body, hf, hb⟩ := lawCase_arm hr ho h
+  simp [Row.find?] at hf; subst hf; exact hb
+
+theorem lawCase_adopt {b ad rl c : At → Term} {rq x : Data} {v : Val}
+    (hr : env[0]? = some rq.toVal) (ho : rq.field "occasion" = some (.inj "adopt" x))
+    (h : BigStep lib env (lawCase b ad rl c) (.ok v)) :
+    BigStep lib (x.toVal :: env) (ad ⟨1⟩) (.ok v) := by
   obtain ⟨body, hf, hb⟩ := lawCase_arm hr ho h
   simp [Row.find?] at hf; subst hf; exact hb
 
@@ -168,11 +177,12 @@ and `runLaw_ref_admits` (a package field, as the receiver runs it) produce exact
 def Admits (lib : List Term) (t : Term) (rq n o : Data) : Prop :=
   ∃ cenv w, BigStep lib (rq.toVal :: n.toVal :: o.toVal :: cenv) (lawBody t) (.ok (.inj "ok" w))
 
-/-- `bounded S f max`: in every admitted birth, write and invoke, the NEW value of `f` is a natural
-at most `max`. -/
+/-- `bounded S f max`: in every admitted birth, adoption, write and invoke, the NEW value of `f` is a
+natural at most `max` (so the law cannot be added over a state that already breaks it). -/
 theorem bounded_spec {S : Ty} {f : Label} {max : Nat} {rq n o occ : Data}
     (h : Admits lib (bounded S f max) rq n o)
-    (ho : rq.field "occasion" = some occ) (hc : IsChange occ ∨ ∃ x, occ = .inj "birth" x) :
+    (ho : rq.field "occasion" = some occ)
+    (hc : IsChange occ ∨ (∃ x, occ = .inj "birth" x) ∨ ∃ x, occ = .inj "adopt" x) :
     ∃ m, n.field f = some (.nat m) ∧ m ≤ max := by
   obtain ⟨cenv, w, hb⟩ := h
   simp only [bounded, lawOf, lawBody] at hb
@@ -185,10 +195,11 @@ theorem bounded_spec {S : Ty} {f : Label} {max : Nat} {rq n o occ : Data}
     obtain ⟨a', b', rfl, rfl, hab⟩ := primEval_le_true hp
     cases bigStep_nat_inv hb
     exact ⟨a', getVar_nat (d := n) (i := 2) rfl ha, hab⟩
-  rcases hc with hc | ⟨x, rfl⟩
+  rcases hc with hc | ⟨x, rfl⟩ | ⟨x, rfl⟩
   · obtain ⟨x, hx⟩ := lawCase_change rfl ho hc hb
     exact key x hx
   · exact key x (lawCase_birth rfl ho hb)
+  · exact key x (lawCase_adopt rfl ho hb)
 
 /-! ## Scalars: equality of data through equality of values -/
 
@@ -524,6 +535,24 @@ theorem quorum_relaw_needs_k {S T : Ty} {ms : List ByteArray} {k : Nat} {g : Lab
   exact ⟨hm, quorate_true hpos (allOf_ok hr _ (List.mem_cons_self ..)),
     proposedLaws_true (allOf_ok hr _ (List.mem_cons_of_mem _ (List.mem_singleton_self _)))⟩
 
+/-- **Quorum at its adoption**: the quorum can be added over a state only by a member, with `k`
+approvals in that state of a proposal to install EXACTLY the incoming laws (its own adopt arm is its
+relaw arm, ROOT 2026-10-17): its members consented, in state, to being its quorum. -/
+theorem quorum_adopt_needs_k {S T : Ty} {ms : List ByteArray} {k : Nat} {g : Label} {rq n o x : Data}
+    (h : Admits lib (quorumLaw S T ms k g) rq n o)
+    (ho : rq.field "occasion" = some (.inj "adopt" x)) :
+    (∃ m ∈ ms, rq.field "agent" = some (.bytes m)) ∧
+    (∃ a, o.field "approvals" = some (.nat a) ∧ k ≤ popcountNat a ms.length) ∧
+    ∃ s, o.field "proposal" = some (.inj "laws" (.bytes s)) ∧ x = .bytes s := by
+  obtain ⟨cenv, w, hb⟩ := h
+  simp only [quorumLaw, lawOf, lawBody] at hb
+  obtain ⟨hg, hr⟩ := guards_ok (lawCase_adopt rfl ho hb)
+  have hm := member_true (hg _ (List.mem_singleton_self _))
+  have hpos : 0 < ms.length := by
+    obtain ⟨m, hm', _⟩ := hm; exact List.length_pos_of_mem hm'
+  exact ⟨hm, quorate_true hpos (allOf_ok hr _ (List.mem_cons_self ..)),
+    proposedLaws_true (allOf_ok hr _ (List.mem_cons_of_mem _ (List.mem_singleton_self _)))⟩
+
 /-- **Quorum on a change** (a write or an invoke): the act is by a member, the new approvals are a
 mask over the members, and it is exactly one of
 * a COMMIT: the guarded field changes, to the value the old proposal named, with `k` approvals,
@@ -655,13 +684,16 @@ epoch is that epoch. Since `World.admit` lands the Turn at a height inside the s
 Turn lands in the epoch the state records. -/
 theorem windowed_lands_in_epoch {S T : Ty} {W limit : Nat} {g : Label} {rq n o x : Data} {ℓ : Label}
     (h : Admits lib (windowedLaw S T W limit g) rq n o)
-    (ho : rq.field "occasion" = some (.inj ℓ x)) (hl : ℓ = "birth" ∨ ℓ = "write" ∨ ℓ = "invoke") :
+    (ho : rq.field "occasion" = some (.inj ℓ x))
+    (hl : ℓ = "birth" ∨ ℓ = "adopt" ∨ ℓ = "write" ∨ ℓ = "invoke") :
     ∃ nb vu, rq.field "notBefore" = some (.nat nb) ∧ rq.field "validUntil" = some (.nat vu) ∧
       vu / W = nb / W ∧ n.field "epoch" = some (.nat (nb / W)) := by
   obtain ⟨cenv, w, hb⟩ := h
   simp only [windowedLaw, lawOf, lawBody] at hb
-  rcases hl with rfl | hl
+  rcases hl with rfl | rfl | hl
   · obtain ⟨hg, _⟩ := guards_ok (lawCase_birth rfl ho hb)
+    exact inOneEpoch_true (hg _ (List.mem_cons_self ..)) (hg _ (List.mem_cons_of_mem _ (List.mem_singleton_self _)))
+  · obtain ⟨hg, _⟩ := guards_ok (lawCase_adopt rfl ho hb)
     exact inOneEpoch_true (hg _ (List.mem_cons_self ..)) (hg _ (List.mem_cons_of_mem _ (List.mem_singleton_self _)))
   · obtain ⟨y, hy⟩ := lawCase_change rfl ho
       (by rcases hl with rfl | rfl; exact .inl ⟨x, rfl⟩; exact .inr ⟨x, rfl⟩) hb
@@ -826,8 +858,20 @@ theorem machine_birth {S : Ty} {f : Label} {states : List Label} {initial : Labe
     (h : Admits lib (machineLaw S f states initial edges) rq n o)
     (ho : rq.field "occasion" = some (.inj "birth" x)) : ∃ y, n.field f = some (.inj initial y) := by
   obtain ⟨cenv, w, hb⟩ := h
-  simp only [machineLaw, lawOf4, lawBody] at hb
-  obtain ⟨body, hf, hbody⟩ := lawCase4_arm rfl ho hb
+  simp only [machineLaw, lawOf5, lawBody] at hb
+  obtain ⟨body, hf, hbody⟩ := lawCase5_arm rfl ho hb
+  simp [Row.find?] at hf; subst hf
+  exact isState_true (d := n) (i := 2) rfl (allOf_ok hbody _ (List.mem_singleton_self _))
+
+/-- **A machine is adopted only at its initial state**: added over an existing state, the field must
+already be `initial`, as at a birth. -/
+theorem machine_adopt {S : Ty} {f : Label} {states : List Label} {initial : Label}
+    {edges : List (Label × Nat × Label)} {rq n o x : Data}
+    (h : Admits lib (machineLaw S f states initial edges) rq n o)
+    (ho : rq.field "occasion" = some (.inj "adopt" x)) : ∃ y, n.field f = some (.inj initial y) := by
+  obtain ⟨cenv, w, hb⟩ := h
+  simp only [machineLaw, lawOf5, lawBody] at hb
+  obtain ⟨body, hf, hbody⟩ := lawCase5_arm rfl ho hb
   simp [Row.find?] at hf; subst hf
   exact isState_true (d := n) (i := 2) rfl (allOf_ok hbody _ (List.mem_singleton_self _))
 
@@ -840,8 +884,8 @@ theorem machine_invoke {S : Ty} {f : Label} {states : List Label} {initial : Lab
     ∃ a m b, (a, m, b) ∈ edges ∧ x = .nat m ∧ (∃ y, o.field f = some (.inj a y)) ∧
       ∃ y, n.field f = some (.inj b y) := by
   obtain ⟨cenv, w, hb⟩ := h
-  simp only [machineLaw, lawOf4, lawBody] at hb
-  obtain ⟨body, hf, hbody⟩ := lawCase4_arm rfl ho hb
+  simp only [machineLaw, lawOf5, lawBody] at hb
+  obtain ⟨body, hf, hbody⟩ := lawCase5_arm rfl ho hb
   simp [Row.find?] at hf; subst hf
   obtain ⟨c, hc, hct⟩ := anyOf_true (allOf_ok hbody _ (List.mem_singleton_self _))
   obtain ⟨⟨a, m, b⟩, he, rfl⟩ := List.mem_map.1 hc
@@ -862,8 +906,8 @@ theorem machine_write_refused {S : Ty} {f : Label} {states : List Label} {initia
     (ho : rq.field "occasion" = some (.inj "write" x)) :
     ¬ Admits lib (machineLaw S f states initial edges) rq n o := by
   rintro ⟨cenv, w, hb⟩
-  simp only [machineLaw, lawOf4, lawBody] at hb
-  obtain ⟨body, hf, hbody⟩ := lawCase4_arm rfl ho hb
+  simp only [machineLaw, lawOf5, lawBody] at hb
+  obtain ⟨body, hf, hbody⟩ := lawCase5_arm rfl ho hb
   simp [Row.find?] at hf; subst hf
   exact refusedT_not_ok hbody
 
@@ -873,8 +917,8 @@ theorem machine_relaw_refused {S : Ty} {f : Label} {states : List Label} {initia
     (ho : rq.field "occasion" = some (.inj "relaw" x)) :
     ¬ Admits lib (machineLaw S f states initial edges) rq n o := by
   rintro ⟨cenv, w, hb⟩
-  simp only [machineLaw, lawOf4, lawBody] at hb
-  obtain ⟨body, hf, hbody⟩ := lawCase4_arm rfl ho hb
+  simp only [machineLaw, lawOf5, lawBody] at hb
+  obtain ⟨body, hf, hbody⟩ := lawCase5_arm rfl ho hb
   simp [Row.find?] at hf; subst hf
   exact refusedT_not_ok hbody
 

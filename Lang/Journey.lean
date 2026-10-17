@@ -23,11 +23,14 @@ the owner and the owner never changes). Rows:
 * L9 (ID-1) `Frozen`, an extra law on a data object, refuses its own replacement; writes pass.
 * L10 the relaw carries the incoming law ids: `OnlyTo [Frozen]` refuses a replacement by `[Tally]`
   and admits one by `[Frozen]`.
+* L11 (KERNEL-27 `adopt`) `BirthOnly` admits a birth and refuses its adoption: an object may be
+  born under it (L11b), and adding it to an existing object is refused (L11c) by the incoming law
+  itself, which a birth-conflated occasion could not say.
 * L7 the follower (`World.fold` from genesis) and the auditor reach the Host's World.
 * PLANT skip-judge: the same rows against a program whose `judge` admits everything: L4 must be
   ADMITTED there (the row flips), proving the refusal in L4 came from the law, not from elsewhere.
 * PLANT erase-occasion: the same rows against a program whose judge is told every act is a write
-  (the judge before ID-1): L8b, L8e, L9d and L10c must be ADMITTED there, so their refusals came
+  (the judge before ID-1): L8b, L8e, L9d, L10c and L11c must be ADMITTED there, so their refusals came
   from the occasion.
 * PLANT erase-payload: the occasion's payload is lost (a relaw names no laws, every invoke is
   method 0): L8e must be admitted and L10d refused, so the payload reaches the law.
@@ -126,7 +129,7 @@ def T : Ty := .record [("approvals", .nat), ("total", .nat)]
 arm's payload. -/
 def tallyFresh : Term :=
   .lam T (.lam T (.lam reqTy (.case (.get (.var 0) "occasion")
-    [("birth", .ite (.prim .eq (.get (.var 2) "approvals") (.nat 0)) ok (refused "seeded")),
+    [("adopt", ok), ("birth", .ite (.prim .eq (.get (.var 2) "approvals") (.nat 0)) ok (refused "seeded")),
      ("invoke", .ite (.prim .eq (.var 0) (.nat 1)) (refused "method b is closed") ok),
      ("relaw", ok), ("write", ok)])))
 
@@ -142,16 +145,23 @@ def tally : Package :=
 
 def frozenLaw : Term :=
   .lam (.record []) (.lam (.record []) (.lam reqTy (.case (.get (.var 0) "occasion")
-    [("birth", ok), ("invoke", ok), ("relaw", refused "laws are frozen"), ("write", ok)])))
+    [("adopt", ok), ("birth", ok), ("invoke", ok), ("relaw", refused "laws are frozen"), ("write", ok)])))
 
 def frozen : Package :=
   { imports := [], state := .record [], iface := .record [("frozen", lawTy (.record []))],
     body := .record [("frozen", frozenLaw)], methods := [], laws := ["frozen"] }
 
+/-- A law that may govern an object from its birth but refuses to be added to one later. -/
+def birthOnly : Package :=
+  let law := Term.lam (.record []) (.lam (.record []) (.lam reqTy (.case (.get (.var 0) "occasion")
+    [("adopt", refused "only at birth"), ("birth", ok), ("invoke", ok), ("relaw", ok), ("write", ok)])))
+  { imports := [], state := .record [], iface := .record [("birthOnly", lawTy (.record []))],
+    body := .record [("birthOnly", law)], methods := [], laws := ["birthOnly"] }
+
 /-- A law package admitting a replacement of the laws only by exactly the ids whose bytes are `to`. -/
 def onlyTo (to : ByteArray) : Package :=
   let law := Term.lam (.record []) (.lam (.record []) (.lam reqTy (.case (.get (.var 0) "occasion")
-    [("birth", ok), ("invoke", ok),
+    [("adopt", ok), ("birth", ok), ("invoke", ok),
      ("relaw", .ite (.prim .beq (.var 0) (.bytes to)) ok (refused "not the agreed laws")), ("write", ok)])))
   { imports := [], state := .record [], iface := .record [("onlyTo", lawTy (.record []))],
     body := .record [("onlyTo", law)], methods := [], laws := ["onlyTo"] }
@@ -174,7 +184,7 @@ def eraseOccasion : Program D :=
 def erasePayload : Program D :=
   { langProgram with judge := fun look p ls o n r =>
       let occasion : Occasion D := match r.occasion with
-        | .relaw _ => .relaw [] | .invoke _ => .invoke 0 | o => o
+        | .relaw _ => .relaw [] | .adopt _ => .adopt [] | .invoke _ => .invoke 0 | o => o
       langProgram.judge look p ls o n { r with occasion } }
 
 /-- Which program the journey runs under. -/
@@ -365,6 +375,22 @@ def journey (mode : Mode) : Run := Id.run do
       r := note r s!"PLANT erase-payload: L10d the agreed replacement must now be refused: {v10d}" (deniedWith v10d "onlyTo: not the agreed laws")
     else
       r := note r s!"L10d A replaces OnlyTo by [Frozen]: {v10d}" (v10d == "admitted")
+  -- L11 adopt: `birthOnly` may be born under, never added later
+  let some boBytes := Wire.encodePackage birthOnly | return note r "L11 BirthOnly has no bytes" false
+  let (r11, v11, t11) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id]) (.install boBytes))
+  r := note r11 s!"L11a install BirthOnly: {v11}" (v11 == "admitted")
+  let some bid := t11.bind fun t => (createdIds Sim.env t).head? | return note r "L11 no BirthOnly id" false
+  let (r11b, v11b, _) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id, bid]) (.create none [bid] []))
+  r := note r11b s!"L11b A creates a data object under BirthOnly: {v11b}" (v11b == "admitted")
+  let (r11o, v11o, t11o) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id]) (.create none [] []))
+  r := note r11o s!"L11o A creates a lawless data object: {v11o}" (v11o == "admitted")
+  let some lobj := t11o.bind fun t => (createdIds Sim.env t).head? | return note r "L11 no object id" false
+  let (r11c, v11c, _) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id, lobj, bid]) (.law lobj [bid] none))
+  r := { r11c with log := r.log, bad := r.bad }
+  if mode = .eraseOccasion then
+    r := note r s!"PLANT erase-occasion: L11c adding BirthOnly must now be admitted: {v11c}" (v11c == "admitted")
+  else if mode != .skipJudge then
+    r := note r s!"L11c A adds BirthOnly to an existing object: {v11c}" (deniedWith v11c "birthOnly: only at birth")
   -- L7 follower and auditor
   match World.fold Sim.env g r.st.log with
   | .ok w => r := note r s!"L7 follower reaches the Host's World ({r.st.log.length} turns)" (Sim.same w r.st.host)

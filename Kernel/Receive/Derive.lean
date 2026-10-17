@@ -154,9 +154,9 @@ def law (X : Ctx D) (look : Pinned D) (c : Call D) (obj : D) (laws' : List D) (v
   checkLaws look laws'
   let laws ← lawsOf X obj cell
   X.program.judge look none laws (stateOf cell) (stateOf cell) (reqOf u principal (.relaw laws'))
-  -- LANG-19 (KERNEL-27): the new laws judge the state they are adopted over AS A BIRTH (is this a
-  -- state the object could begin under them?), so a law that would deny it cannot be installed
-  X.program.judge look none laws' (stateOf cell) (stateOf cell) (reqOf u principal .birth)
+  -- LANG-19 (KERNEL-27): the incoming laws judge the state they are adopted over, as `.adopt`, so a
+  -- law that would deny it cannot be installed
+  X.program.judge look none laws' (stateOf cell) (stateOf cell) (reqOf u principal (.adopt laws'))
   sealTurn X c [] (writeOf obj (diffOps (lawSlotsOf cell) (lawSlots X laws'))) []
 
 def requireMethods (obj : D) : Option D → Except (Refusal D) D

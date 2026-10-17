@@ -54,6 +54,9 @@ theorem reqOk_conforms {D : Type} {bytesOf : D → ByteArray} {r : Req D} (h : r
   | relaw ls =>
     rw [hr] at ho; simp only [occasionOk, decide_eq_true_eq] at ho
     exact .inj rfl (.bytes ho)
+  | adopt ls =>
+    rw [hr] at ho; simp only [occasionOk, decide_eq_true_eq] at ho
+    exact .inj rfl (.bytes ho)
   | invoke m =>
     rw [hr] at ho; simp only [occasionOk, decide_eq_true_eq] at ho
     exact .inj rfl (.nat ho)

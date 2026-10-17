@@ -161,19 +161,20 @@ where
         | _, .error e => .error e
         | _, _ => .error "state"
 
-/-- The occasion as data at `occasionTy`; a law replacement's ids as their bytes, concatenated in
-the call's order (digests are fixed-width, so the concatenation is unambiguous). -/
+/-- The occasion as data at `occasionTy`; a law replacement's (and an adoption's) incoming ids as
+their bytes, concatenated in the call's order (digests are fixed-width, so the concatenation is unambiguous). -/
 def occasionData : Occasion D → Data
   | .birth => .inj "birth" (.record [])
   | .write => .inj "write" (.record [])
   | .relaw ls => .inj "relaw" (.bytes (ls.foldl (fun acc l => acc ++ bytesOf l) .empty))
+  | .adopt ls => .inj "adopt" (.bytes (ls.foldl (fun acc l => acc ++ bytesOf l) .empty))
   | .invoke m => .inj "invoke" (.nat m)
 
 /-- The occasion fits the language's data: a method index is a natural, a law list's bytes one
 byte value. -/
 def occasionOk : Occasion D → Bool
   | .birth | .write => true
-  | .relaw ls => decide ((ls.foldl (fun acc l => acc ++ bytesOf l) .empty).size ≤ Bounds.bytesMax)
+  | .relaw ls | .adopt ls => decide ((ls.foldl (fun acc l => acc ++ bytesOf l) .empty).size ≤ Bounds.bytesMax)
   | .invoke m => decide (m < Bounds.natLimit)
 
 /-- The request fits the language's data: its member digests fit a byte value, its window fits

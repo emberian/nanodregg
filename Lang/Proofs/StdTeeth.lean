@@ -32,6 +32,7 @@ private def req (agent principal : String) (occ : Data) (lo hi : Nat := 0) : Dat
 private def write : Data := .inj "write" (.record [])
 private def birth : Data := .inj "birth" (.record [])
 private def relaw (laws : String) : Data := .inj "relaw" (.bytes (b laws))
+private def adopt (laws : String) : Data := .inj "adopt" (.bytes (b laws))
 
 /-! ## quorum: 2 of {a, b, c} over `total` -/
 
@@ -87,6 +88,23 @@ theorem quorum_relaw_not_by_set_approvals :
     refusedWith "not the proposal" (runLaw [] q (qs 3 (set 9) 5) (qs 3 (set 9) 5) (req "a" "a" (relaw "L"))) = true := by
   decide +kernel
 
+/-- Adopting the quorum over a state needs `k` approvals of exactly the incoming laws, as its relaw. -/
+theorem quorum_adopts : admits (runLaw [] q (qs 3 (.inj "laws" (.bytes (b "L"))) 5)
+    (qs 3 (.inj "laws" (.bytes (b "L"))) 5) (req "a" "a" (adopt "L"))) = true := by
+  decide +kernel
+theorem quorum_adopt_needs_two :
+    refusedWith "no quorum" (runLaw [] q (qs 1 (.inj "laws" (.bytes (b "L"))) 5)
+      (qs 1 (.inj "laws" (.bytes (b "L"))) 5) (req "a" "a" (adopt "L"))) = true := by
+  decide +kernel
+theorem quorum_adopt_only_the_proposal :
+    refusedWith "not the proposal" (runLaw [] q (qs 3 (.inj "laws" (.bytes (b "L"))) 5)
+      (qs 3 (.inj "laws" (.bytes (b "L"))) 5) (req "a" "a" (adopt "M"))) = true := by
+  decide +kernel
+theorem quorum_adopt_members_only :
+    refusedWith "not a member" (runLaw [] q (qs 3 (.inj "laws" (.bytes (b "L"))) 5)
+      (qs 3 (.inj "laws" (.bytes (b "L"))) 5) (req "d" "d" (adopt "L"))) = true := by
+  decide +kernel
+
 private def accepted : Except StdRefusal Term → Bool
   | .ok _ => true
   | .error _ => false
@@ -134,6 +152,16 @@ theorem windowed_limit_zero :
   decide +kernel
 theorem windowed_birth : admits (runLaw [] wd (ws 0 0 0) (ws 0 0 0) (req "a" "a" birth 10 49)) = true := by
   decide +kernel
+/-- Adopted over a state, the window is the call's epoch and the count starts at 0: a stale epoch
+(which would wedge every later change) or a spent count is refused. -/
+theorem windowed_adopts : admits (runLaw [] wd (ws 0 1 7) (ws 0 1 7) (req "a" "a" (adopt "L") 50 99)) = true := by
+  decide +kernel
+theorem windowed_adopt_stale_epoch :
+    refusedWith "epoch is not the call's window" (runLaw [] wd (ws 0 9 7) (ws 0 9 7) (req "a" "a" (adopt "L") 50 99)) = true := by
+  decide +kernel
+theorem windowed_adopt_spent_count :
+    refusedWith "count at birth" (runLaw [] wd (ws 2 1 7) (ws 2 1 7) (req "a" "a" (adopt "L") 50 99)) = true := by
+  decide +kernel
 theorem windowed_counts_changes :
     refusedWith "count not bumped" (runLaw [] wd (ws 1 0 1) (ws 1 0 2) (req "a" "a" write 10 49)) = true := by
   decide +kernel
@@ -147,6 +175,15 @@ theorem bounded_admits : admits (runLaw [] (bounded OS "total" 100) (os "a" 0) (
   decide +kernel
 theorem bounded_refuses :
     refusedWith "total over 100" (runLaw [] (bounded OS "total" 100) (os "a" 0) (os "a" 101) (req "a" "a" write)) = true := by
+  decide +kernel
+theorem bounded_adopt :
+    refusedWith "total over 100" (runLaw [] (bounded OS "total" 100) (os "a" 500) (os "a" 500) (req "a" "a" (adopt "L"))) = true := by
+  decide +kernel
+theorem bounded_adopts :
+    admits (runLaw [] (bounded OS "total" 100) (os "a" 5) (os "a" 5) (req "a" "a" (adopt "L"))) = true := by
+  decide +kernel
+theorem allowlist_adopt_refuses :
+    refusedWith "not on the allowlist" (runLaw [] (allowlist OS [b "a", b "b"]) (os "a" 0) (os "a" 0) (req "c" "c" (adopt "L"))) = true := by
   decide +kernel
 theorem bounded_birth :
     refusedWith "total over 100" (runLaw [] (bounded OS "total" 100) (os "a" 500) (os "a" 500) (req "a" "a" birth)) = true := by
@@ -190,6 +227,11 @@ theorem machine_step_needs_its_method :
   decide +kernel
 theorem machine_no_skip :
     refusedWith "no edge" (runLaw [] mc (ph "installed") (ph "stopped") (req "a" "a" (invoke 1))) = true := by
+  decide +kernel
+theorem machine_adopts : admits (runLaw [] mc (ph "installed") (ph "installed") (req "a" "a" (adopt "L"))) = true := by
+  decide +kernel
+theorem machine_adopt_initial :
+    refusedWith "phase does not start at installed" (runLaw [] mc (ph "running") (ph "running") (req "a" "a" (adopt "L"))) = true := by
   decide +kernel
 theorem machine_no_write :
     refusedWith "a machine changes only by its methods" (runLaw [] mc (ph "installed") (ph "running") (req "a" "a" write)) = true := by

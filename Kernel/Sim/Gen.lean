@@ -37,7 +37,7 @@ def methods : ByteArray := "methods".toUTF8
 /-- The acts `freeze` refuses. -/
 def frozenAct {D : Type} : Occasion D → Bool
   | .write | .invoke _ => true
-  | .birth | .relaw _ => false
+  | .birth | .relaw _ | .adopt _ => false
 
 /-- The law-program stub both instances run (`deny-all` refuses every act, `freeze` refuses writes
 and invokes, anything else admits; method 0 sets the first state slot). LANG's real program runs

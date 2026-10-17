@@ -199,6 +199,10 @@ inductive Occasion (D : Type)
   | write
   /-- `law` on a data object: the laws in force judge their replacement by `laws` (state unchanged) -/
   | relaw (laws : List D)
+  /-- `law` on a data object: each INCOMING law judges the state it is adopted over, knowing the
+  whole incoming list `laws` (KERNEL-27; a law that refuses `relaw` may still accept its own
+  adoption, and adoption onto a populated object is not a birth) -/
+  | adopt (laws : List D)
   /-- `invoke` of method `method` -/
   | invoke (method : Nat)
   deriving DecidableEq

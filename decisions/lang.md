@@ -357,6 +357,10 @@ And it was incomplete by its author's statement: fields assembled from arguments
 power. A structural check that is known incomplete is one the next reader trusts. The guard is the
 kernel's: KERNEL-25's owner-gated invoke, grants naming which method, and principal = the calling
 object spending only that object's authority; a callee's law still sees `agent` = the signer.
+ROOT APPROVED the withdrawal (2026-10-17) on condition that the guard is a THEOREM: KERNEL-5 owes
+`effect_as_signed` with LEDGER-5 (b) (an emitted call derives exactly as the calling object signing
+it over the same pinned view; plant: the emission under the invoker's principal goes red), beside
+`invoke_stranger_noGrant`. That theorem is what replaced the check.
 **Not taken from LANG-3's answer:** "callTy is GENERATED from KERNEL's Body codec shape". No
 generator from a `Codec.Kernel` stream to a `Lang.Ty` exists, and the meaning is `Body`, not its
 bytes. The round trip is stated against `Body`.
@@ -386,3 +390,33 @@ example, which the check refuses. I accepted `Body` as the effect type partly be
 already agreed, so I am not the right judge of whether a narrower posting type would have been
 safer for value.
 **Status.** agreed with LEDGER (sent 2026-10-17); KERNEL-5's signature pending; not built.
+
+## LANG-24 The fifth occasion: `adopt laws'` — every Std law states what it does when it is ADDED over existing state (2026-10-17; with KERNEL-5's KERNEL-27, ROOT ruled `.adopt`)
+**Decision.** `occasionTy` gains `adopt : bytes`: the incoming laws' ids, encoded as `relaw`'s
+are. `law` on a data object first runs the laws in force on `relaw laws'`. Then each INCOMING law
+judges the unchanged state on `adopt laws'`. The payload is LANG's ask, agreed by KERNEL-5: ROOT's
+"quorum's adopt arm = its relaw arm" needs the incoming set, and an incoming law does not know the
+rest of the list it arrives with. `Std.lawCase5`/`lawOf5` replace `lawCase4`/`lawOf4`, and
+`lawOf S birth adopt relaw change` takes the adopt clause explicitly (no default arm). The arms:
+`ownerSigns`/`allowlist` = their one clause; `bounded` = its clause (the bound holds in the state it
+is added over); `quorum` = its relaw clause (a member, `k` approvals of exactly the incoming
+laws in the state it is added over); `windowed` = its birth clause (the call's epoch, count 0);
+`machine` = its birth clause (the field at `initial`). Theorems: `lawCase_adopt`,
+`quorum_adopt_needs_k`, `machine_adopt`, `bounded_spec` and `windowed_lands_in_epoch` extended to
+adopt. Teeth (StdTeeth): quorum_adopts / _needs_two / _only_the_proposal / _members_only,
+windowed_adopts / _adopt_stale_epoch / _adopt_spent_count, bounded_adopt(s),
+allowlist_adopt_refuses, machine_adopts / _adopt_initial. Journey L11: `BirthOnly` (adopt refused)
+may be born under (L11b) but not added later (L11c); plant erase-occasion admits L11c.
+**Alternatives.** KERNEL-27 as first built: adoption judged as `.birth`. It cannot say "only at
+birth", and it makes a quorum adoptable with no consent. `adopt` with no payload: quorum's arm does
+not typecheck. Windowed adopt = ok: an adopted window with a stale epoch refuses every later change
+forever (same-epoch needs the call's epoch, a later one needs an unreachable window).
+**Critique.** A quorum added over a state must find `proposal = laws L` with `k` approvals already in
+that state, so a data object that did not run the quorum's fields cannot adopt it (it fails at the
+state type). That is the point (the members consent in state), but it means a quorum is in practice
+born, not adopted. Windowed's adopt is stricter than needed (count 0, not count ≤ limit). Every
+package with a law re-ids.
+**Meta-critique.** I picked each adopt arm by "the clause that asks the same question of a state",
+which is the birth clause for every state-predicate law. That is the conflation KERNEL-27 first
+made, now per law and visible, rather than a different idea.
+**Status.** built (this commit).

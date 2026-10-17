@@ -177,12 +177,12 @@ def lawPackage (l verdict : String) : String :=
     (body (record ({l} (fn (old (rec)) (new (rec)) (r {reqTy}) {verdict})))))"
 
 def permitAll : String := lawPackage "permit" s!"(inj {verdictTy} ok (record))"
-/-- Admits a birth (so it can be adopted: LANG-19 judges a new law over the state it is adopted
-over as a birth, KERNEL-27) and refuses every other act: writes, invokes and its own replacement.
-A deny-all law cannot be adopted at all, so this is what "deny the newcomer and the repair" is. -/
+/-- Admits a birth and its own adoption (KERNEL-27: a new law judges the state it is adopted over
+under `adopt`) and refuses every other act: writes, invokes and its own replacement. A deny-all law
+cannot be adopted at all, so this is what "deny the newcomer and the repair" is. -/
 def sealedLaw : String :=
   let no := s!"(inj {verdictTy} refused \"sealed\")"
-  lawPackage "sealed" s!"(case (. r occasion) (birth x (inj {verdictTy} ok (record))) (invoke x {no}) (relaw x {no}) (write x {no}))"
+  lawPackage "sealed" s!"(case (. r occasion) (adopt x (inj {verdictTy} ok (record))) (birth x (inj {verdictTy} ok (record))) (invoke x {no}) (relaw x {no}) (write x {no}))"
 def hermesLaw : String := lawPackage "hermes" s!"(inj {verdictTy} ok (record))"
 
 /-- THE BAR's programmed object: a counter whose method `add n` adds to its total, judged by one

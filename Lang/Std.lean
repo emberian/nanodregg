@@ -100,22 +100,24 @@ def StdRefusal.name : StdRefusal → String
 def need (c : Bool) (e : StdRefusal) : Except StdRefusal Unit := if c then .ok () else .error e
 
 /-- The law skeleton: `λ old new req. case req.occasion` with one arm per act. In every arm the
-payload is `var 0` and the clause sits at depth 1; `relaw`'s clause also receives the new laws'
-bytes (`At.payload`). -/
-def lawCase4 (birth relaw write invoke : At → Term) : Term :=
+payload is `var 0` and the clause sits at depth 1; the `adopt` and `relaw` clauses also receive the
+incoming laws' bytes (`At.payload`). `adopt` is this law judging the state it is being ADDED over
+(KERNEL-27: after the laws in force admitted `relaw laws'`, each incoming law judges the unchanged
+state); `relaw` is this law, in force, judging its replacement. -/
+def lawCase5 (birth adopt relaw write invoke : At → Term) : Term :=
   let a : At := ⟨1⟩
   .case (.get (.var 0) "occasion")
-    [("birth", birth a), ("invoke", invoke a), ("relaw", relaw a), ("write", write a)]
+    [("adopt", adopt a), ("birth", birth a), ("invoke", invoke a), ("relaw", relaw a), ("write", write a)]
 
 /-- A law with one clause per act. -/
-def lawOf4 (S : Ty) (birth relaw write invoke : At → Term) : Term :=
-  .lam S (.lam S (.lam reqTy (lawCase4 birth relaw write invoke)))
+def lawOf5 (S : Ty) (birth adopt relaw write invoke : At → Term) : Term :=
+  .lam S (.lam S (.lam reqTy (lawCase5 birth adopt relaw write invoke)))
 
 /-- The common case: writes and invokes judged alike, as a CHANGE. -/
-def lawCase (birth relaw change : At → Term) : Term := lawCase4 birth relaw change change
+def lawCase (birth adopt relaw change : At → Term) : Term := lawCase5 birth adopt relaw change change
 
-def lawOf (S : Ty) (birth relaw change : At → Term) : Term :=
-  .lam S (.lam S (.lam reqTy (lawCase birth relaw change)))
+def lawOf (S : Ty) (birth adopt relaw change : At → Term) : Term :=
+  .lam S (.lam S (.lam reqTy (lawCase birth adopt relaw change)))
 
 /-! ## Authority narrowing
 
@@ -130,20 +132,20 @@ against a copy of the owner in state, a twin) and no "anyone" law (strangers nev
 "only the owner's own key"; before it, an invoke without a grant has principal = signer = anyone. -/
 def ownerSigns (S : Ty) : Term :=
   let c (a : At) := allOf [(.prim .beq (a.reqF "agent") (a.reqF "principal"), "not signed by the owner")]
-  lawOf S c c c
+  lawOf S c c c c
 
 /-- Only the listed members (`agent`, the signer) may create, change or re-law the object. -/
 def allowlist (S : Ty) (ids : List ByteArray) : Term :=
   let listed (a : At) := anyOf (ids.map fun i => .prim .beq (a.reqF "agent") (.bytes i))
   let c (a : At) := allOf [(listed a, "not on the allowlist")]
-  lawOf S c c c
+  lawOf S c c c c
 
 /-! ## Bounds -/
 
 /-- Natural field `f` is at most `max` in every state the object reaches, its seed included. -/
 def bounded (S : Ty) (f : Label) (max : Nat) : Term :=
   let c (a : At) := allOf [(.prim .le (a.newF f) (natT max), s!"{f} over {max}")]
-  lawOf S c (fun _ => okT) c
+  lawOf S c c (fun _ => okT) c
 
 /-! ## Quorum: k of n members approve one proposal, which is then the only change admitted
 
@@ -223,10 +225,11 @@ def quorumLaw (S T : Ty) (members : List ByteArray) (k : Nat) (guarded : Label) 
           (allOf [(reset a, "approvals not reset")])
           (.ite (.prim .eq (a.newF "approvals") (a.oldF "approvals")) okT
             (guard (anyOf (members.zipIdx.map fun (m, i) => approvalBy a m i)) "not an approval" okT))))
+  let relawC (a : At) := guards [(isMember members a, "not a member")]
+    (allOf [(quorate a, "no quorum"), (proposedLaws a, "not the proposal")])
   lawOf S
     (fun a => allOf [(reset a, "approvals at birth")])
-    (fun a => guards [(isMember members a, "not a member")]
-      (allOf [(quorate a, "no quorum"), (proposedLaws a, "not the proposal")]))
+    relawC relawC
     change
 
 def quorum (S T : Ty) (members : List ByteArray) (k : Nat) (guarded : Label) : Except StdRefusal Term := do
@@ -249,8 +252,8 @@ def windowedLaw (S T : Ty) (W limit : Nat) (guarded : Label) : Term :=
     [(.prim .eq (.prim .div (a.reqF "validUntil") (natT W)) (e a), "window spans epochs"),
      (.prim .eq (a.newF "epoch") (e a), "epoch is not the call's window")]
   let inc (a : At) := Term.ite (eqAt T (a.newF guarded) (a.oldF guarded)) (natT 0) (natT 1)
-  lawOf S
-    (fun a => guards (inOneEpoch a) (allOf [(.prim .eq (a.newF "count") (natT 0), "count at birth")]))
+  let fresh (a : At) := guards (inOneEpoch a) (allOf [(.prim .eq (a.newF "count") (natT 0), "count at birth")])
+  lawOf S fresh fresh
     (fun _ => okT)
     (fun a => guards (inOneEpoch a)
       (.ite (.prim .eq (a.newF "epoch") (a.oldF "epoch"))
@@ -281,8 +284,8 @@ def isState (states : List Label) (t : Term) (s : Label) : Term :=
 def machineLaw (S : Ty) (f : Label) (states : List Label) (initial : Label)
     (edges : List (Label × Nat × Label)) : Term :=
   let frozen (_ : At) := refusedT "a machine changes only by its methods"
-  lawOf4 S
-    (fun a => allOf [(isState states (a.newF f) initial, s!"{f} does not start at {initial}")])
+  let start (a : At) := allOf [(isState states (a.newF f) initial, s!"{f} does not start at {initial}")]
+  lawOf5 S start start
     frozen frozen
     (fun a => allOf [(anyOf (edges.map fun (x, m, y) =>
       andT (.prim .eq a.payload (natT m))

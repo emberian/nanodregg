@@ -28,7 +28,7 @@ replacement by the listed law ids (their digest bytes concatenated in order; the
 or an invoke of method `i`. A law cases on it; the checker requires one arm per label, so a law
 written with `case` has no default arm. -/
 def occasionTy : Ty :=
-  .sum [("birth", .record []), ("invoke", .nat), ("relaw", .bytes), ("write", .record [])]
+  .sum [("adopt", .bytes), ("birth", .record []), ("invoke", .nat), ("relaw", .bytes), ("write", .record [])]
 
 /-- What a law and a method see of the call: the signing member, whose authority it uses, the
 call's signed window (the Turn lands at a height in `[notBefore, validUntil]`, KERNEL-10), and the
