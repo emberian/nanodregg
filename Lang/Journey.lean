@@ -13,12 +13,24 @@ the owner and the owner never changes). Rows:
 * L2 A creates an object owned by A, seed `{owner = A, total = 0}`, judged by both laws — admitted.
 * L3 A invokes `set 50` — admitted; the object's `total` slot decodes to 50.
 * L4 A invokes `set 101` — refused `lawDenied` by `bounded`, nothing written.
-* L5 B, holding A's grant to invoke method 0 (so the kernel's authority check passes with principal
-  A), invokes `set 7` — refused `lawDenied` by `ownerOnly`: a law can be stricter than authority.
+* L5 B invokes `set 7` through A's grant for method 0 (so the principal is A, the grant's root
+  issuer) — refused `lawDenied` by `ownerOnly`, which checks the SIGNER: a law can be stricter than
+  the principal.
 * L6 a package whose body does not check at its interface — refused `program` at install.
+* L8 (ID-1) `Tally`'s law `fresh` cases on the occasion: a birth seeded with approvals is refused,
+  a zero seed admitted.
+* L8d/e the invoke's method index reaches the law: `fresh` closes method `b`, `a` passes.
+* L9 (ID-1) `Frozen`, an extra law on a data object, refuses its own replacement; writes pass.
+* L10 the relaw carries the incoming law ids: `OnlyTo [Frozen]` refuses a replacement by `[Tally]`
+  and admits one by `[Frozen]`.
 * L7 the follower (`World.fold` from genesis) and the auditor reach the Host's World.
-* PLANT: the Sim.same rows against a program whose `judge` admits everything: L4 must be ADMITTED
-  there (the row flips), proving the refusal in L4 came from the law, not from elsewhere.
+* PLANT skip-judge: the same rows against a program whose `judge` admits everything: L4 must be
+  ADMITTED there (the row flips), proving the refusal in L4 came from the law, not from elsewhere.
+* PLANT erase-occasion: the same rows against a program whose judge is told every act is a write
+  (the judge before ID-1): L8b, L8e, L9d and L10c must be ADMITTED there, so their refusals came
+  from the occasion.
+* PLANT erase-payload: the occasion's payload is lost (a relaw names no laws, every invoke is
+  method 0): L8e must be admitted and L10d refused, so the payload reaches the law.
 -/
 import Kernel.Sim
 import Lang.Program
@@ -62,39 +74,86 @@ def illTyped : Package :=
   { owned with body := .record [("bounded", bounded), ("ownerOnly", ownerOnly),
       ("set", .lam S (.lam .nat (.lam reqTy (.var 1))))] }
 
+/-- The request type as the resident pastes it (printed from `reqTy`, so it is never restated). -/
+def rq : String := Read.showTy reqTy
+
 /-- `Owned`, as a resident writes it (Lang.Read): must read to exactly the package above. -/
-def ownedText : String := "
+def ownedText : String := s!"
 (package (imports)
   (state (rec (owner bytes) (total nat)))
   (iface (rec (set (-> (rec (owner bytes) (total nat))
-                    (-> nat (-> (rec (agent bytes) (notBefore nat) (principal bytes) (validUntil nat))
+                    (-> nat (-> {rq}
                                 (rec (owner bytes) (total nat))))))
               (bounded (-> (rec (owner bytes) (total nat)) (-> (rec (owner bytes) (total nat))
-                (-> (rec (agent bytes) (notBefore nat) (principal bytes) (validUntil nat))
+                (-> {rq}
                     (sum (ok (rec)) (refused bytes))))))
               (ownerOnly (-> (rec (owner bytes) (total nat)) (-> (rec (owner bytes) (total nat))
-                (-> (rec (agent bytes) (notBefore nat) (principal bytes) (validUntil nat))
+                (-> {rq}
                     (sum (ok (rec)) (refused bytes))))))))
   (methods set)
   (laws bounded ownerOnly)
   (body
     (record
       (set (fn (s (rec (owner bytes) (total nat))) (n nat)
-               (r (rec (agent bytes) (notBefore nat) (principal bytes) (validUntil nat)))
+               (r {rq})
              (record (owner (. s owner)) (total n))))
       (bounded (fn (old (rec (owner bytes) (total nat))) (new (rec (owner bytes) (total nat)))
-                   (r (rec (agent bytes) (notBefore nat) (principal bytes) (validUntil nat)))
+                   (r {rq})
                  (if (<= (. new total) 100)
                      (inj (sum (ok (rec)) (refused bytes)) ok (record))
                      (inj (sum (ok (rec)) (refused bytes)) refused \"over 100\"))))
       (ownerOnly (fn (old (rec (owner bytes) (total nat))) (new (rec (owner bytes) (total nat)))
-                     (r (rec (agent bytes) (notBefore nat) (principal bytes) (validUntil nat)))
+                     (r {rq})
                    (if (beq (. r agent) (. new owner))
                        (if (beq (. old owner) (. new owner))
                            (inj (sum (ok (rec)) (refused bytes)) ok (record))
                            (inj (sum (ok (rec)) (refused bytes)) refused \"owner changed\"))
                        (inj (sum (ok (rec)) (refused bytes)) refused \"not the owner\")))))))
 "
+
+/-! ### The occasion rows (ID-1): a law that knows which act it judges
+
+`Tally` keeps `{approvals : nat, total : nat}`; its law `fresh` refuses a birth whose seed carries
+approvals and admits every other act. `Frozen` is a law package over a data object whose law
+refuses any replacement of the laws and admits every other act. Without the occasion both were
+unwritable: `create` judges the seed as `old = new`, and `law` judges the unchanged state, so each
+looked like a no-op write. -/
+
+def T : Ty := .record [("approvals", .nat), ("total", .nat)]
+
+/-- Under `case req.occasion`, inside an arm: var 3 = old, var 2 = new, var 1 = req, var 0 = the
+arm's payload. -/
+def tallyFresh : Term :=
+  .lam T (.lam T (.lam reqTy (.case (.get (.var 0) "occasion")
+    [("birth", .ite (.prim .eq (.get (.var 2) "approvals") (.nat 0)) ok (refused "seeded")),
+     ("invoke", .ite (.prim .eq (.var 0) (.nat 1)) (refused "method b is closed") ok),
+     ("relaw", ok), ("write", ok)])))
+
+/-- `set state n req = {approvals = state.approvals, total = n}`, as both methods `a` and `b`. -/
+def tallySet : Term :=
+  .lam T (.lam .nat (.lam reqTy (.record [("approvals", .get (.var 2) "approvals"), ("total", .var 1)])))
+
+def tally : Package :=
+  { imports := [], state := T,
+    iface := .record [("a", methodTy T .nat), ("b", methodTy T .nat), ("fresh", lawTy T)],
+    body := .record [("a", tallySet), ("b", tallySet), ("fresh", tallyFresh)],
+    methods := ["a", "b"], laws := ["fresh"] }
+
+def frozenLaw : Term :=
+  .lam (.record []) (.lam (.record []) (.lam reqTy (.case (.get (.var 0) "occasion")
+    [("birth", ok), ("invoke", ok), ("relaw", refused "laws are frozen"), ("write", ok)])))
+
+def frozen : Package :=
+  { imports := [], state := .record [], iface := .record [("frozen", lawTy (.record []))],
+    body := .record [("frozen", frozenLaw)], methods := [], laws := ["frozen"] }
+
+/-- A law package admitting a replacement of the laws only by exactly the ids whose bytes are `to`. -/
+def onlyTo (to : ByteArray) : Package :=
+  let law := Term.lam (.record []) (.lam (.record []) (.lam reqTy (.case (.get (.var 0) "occasion")
+    [("birth", ok), ("invoke", ok),
+     ("relaw", .ite (.prim .beq (.var 0) (.bytes to)) ok (refused "not the agreed laws")), ("write", ok)])))
+  { imports := [], state := .record [], iface := .record [("onlyTo", lawTy (.record []))],
+    body := .record [("onlyTo", law)], methods := [], laws := ["onlyTo"] }
 
 /-- A u64 argument or slot (`none` past `2^64`). -/
 def nat64 (n : Nat) : Option ByteArray := Wire.encodeData .nat (.nat n)
@@ -103,8 +162,33 @@ def ctxWith (prog : Program D) : Ctx D := Sim.ctxWith prog
 
 def langProgram : Program D := Lang.program Sim.dc.bytes Sim.digestOf
 
-/-- The plant: a program whose judge admits every write. -/
+/-- Plant 1: a program whose judge admits every write. -/
 def skipJudge : Program D := { langProgram with judge := fun _ _ _ _ _ _ => .ok () }
+
+/-- Plant 2: a program whose judge is told every act is a write (the judge before ID-1). -/
+def eraseOccasion : Program D :=
+  { langProgram with judge := fun look p ls o n r => langProgram.judge look p ls o n { r with occasion := .write } }
+
+/-- Plant 3: the occasion's payload is lost (a relaw names no laws, every invoke is method 0). -/
+def erasePayload : Program D :=
+  { langProgram with judge := fun look p ls o n r =>
+      let occasion : Occasion D := match r.occasion with
+        | .relaw _ => .relaw [] | .invoke _ => .invoke 0 | o => o
+      langProgram.judge look p ls o n { r with occasion } }
+
+/-- Which program the journey runs under. -/
+inductive Mode
+  | honest | skipJudge | eraseOccasion | erasePayload
+  deriving DecidableEq
+
+def Mode.program : Mode → Program D
+  | .honest => langProgram
+  | .skipJudge => Journey.skipJudge
+  | .eraseOccasion => Journey.eraseOccasion
+  | .erasePayload => Journey.erasePayload
+
+/-- A refusal by a law, with `why` in its reason. -/
+def deniedWith (v why : String) : Bool := v.startsWith "refused lawDenied" && (v.splitOn why).length > 1
 
 structure Run where
   st : Sim.State
@@ -132,7 +216,8 @@ def totalOf (w : World D) (obj : D) : Option Nat :=
     | none => none
   | none => none
 
-def journey (prog : Program D) (plant : Bool) : Run := Id.run do
+def journey (mode : Mode) : Run := Id.run do
+  let prog := mode.program
   let fk : List (ByteArray × ByteArray) :=
     [("f0".toUTF8, "f0-next".toUTF8), ("f1".toUTF8, "f1-next".toUTF8)]
   let X := ctxWith prog
@@ -176,7 +261,7 @@ def journey (prog : Program D) (plant : Bool) : Run := Id.run do
   -- L4 set 101
   let c4 := Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id, obj, pkg]) (.invoke obj 0 n101 10000 none)
   let (r4, v4, _) := go prog r c4
-  if plant then
+  if mode = .skipJudge then
     r := note r4 s!"PLANT skip-judge: L4 A set 101 must now be admitted: {v4}" (v4 == "admitted")
   else
     r := note r4 s!"L4 A set 101: {v4}, total = {totalOf r4.st.host obj}"
@@ -188,9 +273,73 @@ def journey (prog : Program D) (plant : Bool) : Run := Id.run do
   let some gr := tg.bind fun t => (createdIds Sim.env t).head? | return note r "L5 no grant id" false
   let c5 := Sim.signed r.st b b.key (Sim.S.pinsFor r.st.host [b.id, obj, pkg, gr]) (.invoke obj 0 n7 10000 (some gr))
   let (r5, v5, _) := go prog r c5
-  unless plant do
+  unless mode = .skipJudge do
     r := note r5 s!"L5 B (granted) set 7: {v5}" (v5.startsWith "refused lawDenied" && (v5.splitOn "ownerOnly: not the owner").length > 1)
   r := { r5 with log := r.log, bad := r.bad }
+  -- L8 a birth is judged as a birth: a seed carrying approvals is refused by `fresh`
+  let some tallyBytes := Wire.encodePackage tally | return note r "L8 Tally has no bytes" false
+  let (r8, v8, t8) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id]) (.install tallyBytes))
+  r := note r8 s!"L8a install Tally: {v8}" (v8 == "admitted")
+  let some tid := t8.bind fun t => (createdIds Sim.env t).head? | return note r "L8 no Tally id" false
+  let some n7' := nat64 7 | return note r "L8 no bytes for 7" false
+  let seeded : Slots := [(stateBase, n7'), (stateBase + 1, n0)]
+  let (r8b, v8b, _) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id, tid]) (.create (some tid) [] seeded))
+  r := { r8b with log := r.log, bad := r.bad }
+  if mode = .eraseOccasion then
+    r := note r s!"PLANT erase-occasion: L8b the seeded birth must now be admitted: {v8b}" (v8b == "admitted")
+  else if mode = .honest then
+    r := note r s!"L8b A creates Tally seeded approvals = 7: {v8b}"
+      (v8b.startsWith "refused lawDenied" && (v8b.splitOn "fresh: seeded").length > 1)
+  let (r8c, v8c, t8c) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id, tid]) (.create (some tid) [] [(stateBase, n0), (stateBase + 1, n0)]))
+  r := note r8c s!"L8c A creates Tally seeded approvals = 0: {v8c}" (v8c == "admitted")
+  let some tobj := t8c.bind fun t => (createdIds Sim.env t).head? | return note r "L8 no Tally object" false
+  -- the invoke's method index reaches the law: `b` (method 1) is closed, `a` (method 0) open
+  let (r8d, v8d, _) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id, tobj, tid]) (.invoke tobj 0 n7 10000 none))
+  r := note r8d s!"L8d A invokes Tally.a 7: {v8d}" (v8d == "admitted")
+  let (r8e, v8e, _) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id, tobj, tid]) (.invoke tobj 1 n7 10000 none))
+  r := { r8e with log := r.log, bad := r.bad }
+  if mode = .eraseOccasion || mode = .erasePayload then
+    r := note r s!"PLANT {if mode = .eraseOccasion then "erase-occasion" else "erase-payload"}: L8e Tally.b must now be admitted: {v8e}" (v8e == "admitted")
+  else if mode = .honest then
+    r := note r s!"L8e A invokes Tally.b 7: {v8e}" (deniedWith v8e "fresh: method b is closed")
+  -- L9 a law replacement is judged as one: `frozen` refuses its own removal
+  let some frozenBytes := Wire.encodePackage frozen | return note r "L9 Frozen has no bytes" false
+  let (r9, v9, t9) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id]) (.install frozenBytes))
+  r := note r9 s!"L9a install Frozen: {v9}" (v9 == "admitted")
+  let some fid := t9.bind fun t => (createdIds Sim.env t).head? | return note r "L9 no Frozen id" false
+  let (r9b, v9b, t9b) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id, fid]) (.create none [fid] [(stateBase, n0)]))
+  r := note r9b s!"L9b A creates a data object under Frozen: {v9b}" (v9b == "admitted")
+  let some dobj := t9b.bind fun t => (createdIds Sim.env t).head? | return note r "L9 no object id" false
+  let (r9c, v9c, _) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id, dobj, fid]) (.write dobj [(0, some n7)] none))
+  r := note r9c s!"L9c A writes under Frozen: {v9c}" (v9c == "admitted")
+  let (r9d, v9d, _) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id, dobj, fid]) (.law dobj [] none))
+  r := { r9d with log := r.log, bad := r.bad }
+  if mode = .eraseOccasion then
+    r := note r s!"PLANT erase-occasion: L9d removing Frozen must now be admitted: {v9d}" (v9d == "admitted")
+  else if mode = .honest then
+    r := note r s!"L9d A removes Frozen: {v9d}"
+      (v9d.startsWith "refused lawDenied" && (v9d.splitOn "frozen: laws are frozen").length > 1)
+  -- L10 the relaw carries the incoming laws: `onlyTo [Frozen]` admits exactly that replacement
+  let some onlyBytes := Wire.encodePackage (onlyTo (Sim.dc.bytes fid)) | return note r "L10 OnlyTo has no bytes" false
+  let (r10, v10, t10) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id]) (.install onlyBytes))
+  r := note r10 s!"L10a install OnlyTo [Frozen]: {v10}" (v10 == "admitted")
+  let some oid := t10.bind fun t => (createdIds Sim.env t).head? | return note r "L10 no OnlyTo id" false
+  let (r10b, v10b, t10b) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id, oid]) (.create none [oid] []))
+  r := note r10b s!"L10b A creates a data object under OnlyTo: {v10b}" (v10b == "admitted")
+  let some oobj := t10b.bind fun t => (createdIds Sim.env t).head? | return note r "L10 no object id" false
+  let (r10c, v10c, _) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id, oobj, oid, tid]) (.law oobj [tid] none))
+  r := { r10c with log := r.log, bad := r.bad }
+  if mode = .eraseOccasion then
+    r := note r s!"PLANT erase-occasion: L10c the wrong replacement must now be admitted: {v10c}" (v10c == "admitted")
+  else if mode != .skipJudge then
+    r := note r s!"L10c A replaces OnlyTo by [Tally]: {v10c}" (deniedWith v10c "onlyTo: not the agreed laws")
+  if mode != .eraseOccasion then
+    let (r10d, v10d, _) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id, oobj, oid, fid]) (.law oobj [fid] none))
+    r := { r10d with log := r.log, bad := r.bad }
+    if mode = .erasePayload then
+      r := note r s!"PLANT erase-payload: L10d the agreed replacement must now be refused: {v10d}" (deniedWith v10d "onlyTo: not the agreed laws")
+    else
+      r := note r s!"L10d A replaces OnlyTo by [Frozen]: {v10d}" (v10d == "admitted")
   -- L7 follower and auditor
   match World.fold Sim.env g r.st.log with
   | .ok w => r := note r s!"L7 follower reaches the Host's World ({r.st.log.length} turns)" (Sim.same w r.st.host)
@@ -201,10 +350,9 @@ def journey (prog : Program D) (plant : Bool) : Run := Id.run do
   return r
 
 def runAll : IO UInt32 := do
-  let honest := journey langProgram false
-  let planted := journey skipJudge true
-  for l in honest.log ++ planted.log do IO.println l
-  let bad := honest.bad + planted.bad
+  let runs := [Mode.honest, .skipJudge, .eraseOccasion, .erasePayload].map journey
+  for r in runs do for l in r.log do IO.println l
+  let bad := (runs.map (·.bad)).foldl (· + ·) 0
   IO.println s!"lang-journey: {if bad = 0 then "GREEN" else s!"RED ({bad})"}"
   return if bad = 0 then 0 else 1
 

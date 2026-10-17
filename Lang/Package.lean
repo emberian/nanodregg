@@ -23,10 +23,20 @@ structure Package where
   laws : List Label
   deriving Inhabited
 
-/-- What a law and a method see of the call: the signing member, whose authority it uses, and the
-call's signed window (the Turn lands at a height in `[notBefore, validUntil]`, KERNEL-10). -/
+/-- Which act is judged (KERNEL's `Occasion`): a birth (the seed is `old = new`), a write, a law
+replacement by the listed law ids (their digest bytes concatenated in order; the state is unchanged),
+or an invoke of method `i`. A law cases on it; the checker requires one arm per label, so a law
+written with `case` has no default arm. -/
+def occasionTy : Ty :=
+  .sum [("birth", .record []), ("invoke", .nat), ("relaw", .bytes), ("write", .record [])]
+
+/-- What a law and a method see of the call: the signing member, whose authority it uses, the
+call's signed window (the Turn lands at a height in `[notBefore, validUntil]`, KERNEL-10), and the
+act being judged. -/
 def reqTy : Ty :=
-  .record [("agent", .bytes), ("notBefore", .nat), ("principal", .bytes), ("validUntil", .nat)]
+  .record [("agent", .bytes), ("notBefore", .nat), ("occasion", occasionTy), ("principal", .bytes),
+    ("validUntil", .nat)]
+
 
 /-- A law's verdict: `ok`, or `refused` with the author's reason. -/
 def verdictTy : Ty := .sum [("ok", .record []), ("refused", .bytes)]

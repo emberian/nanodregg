@@ -207,6 +207,21 @@ def package (x : SExp) : P Package :=
            methods := ← labels ms, laws := ← labels ls }
   | _ => .error "(package (imports …) (state T) (iface T) (methods …) (laws …) (body e))"
 
+/-! ## Printing types (what a resident pastes into an annotation) -/
+
+mutual
+/-- A type as text `ty` reads back (rows are printed in their own order). -/
+def showTy : Ty → String
+  | .nat => "nat" | .bool => "bool" | .bytes => "bytes"
+  | .fn a b => s!"(-> {showTy a} {showTy b})"
+  | .record r => s!"(rec{showRow r})"
+  | .sum r => s!"(sum{showRow r})"
+
+def showRow : List (Label × Ty) → String
+  | [] => ""
+  | (ℓ, t) :: r => s!" ({ℓ} {showTy t}){showRow r}"
+end
+
 /-- Text to a package. -/
 def readPackage (text : String) : P Package := do package (← parse text)
 

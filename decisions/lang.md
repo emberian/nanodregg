@@ -155,3 +155,43 @@ whose argument faults "means" the argument's fault) was read off `step`. The old
 the wrong language choice for mixins; it is now a named, toothed decision rather than an accident.
 **Meta-critique.** The rules were written by reading `step`; their independence is of control only.
 A truly independent reference would define `primEval`'s arithmetic on `Nat`/`ByteArray` directly.
+
+## LANG-19 The judge is told what it judges: `Req.occasion` (2026-10-16; ID-1, with KERNEL-4)
+**Decision.** KERNEL's `Req` carries `occasion : Occasion D` (`birth | write | relaw (laws : List D)
+| invoke (method : Nat)`), and each receiver passes its own: `create` birth, `write` write, `law`
+relaw with the NEW law ids, `invoke` its method. LANG's `reqTy` gains `occasion : occasionTy`,
+`occasionTy = sum {birth : {}, invoke : nat, relaw : bytes, write : {}}`; a relaw's ids are their
+digest bytes concatenated in order (`occasionData`), and `reqOk` asserts they fit one byte value.
+The ids are fixed-width digests, so the concatenation is unambiguous. A law that cases on the
+occasion must give every arm (the checker requires exactly one arm per label, in the sum's order),
+so the case form has no default. Rows (lang-journey): L8b a seed carrying approvals is refused at
+birth (`fresh: seeded`); L8e the invoke's method index reaches the law (method `b` closed, `a`
+open); L9d an extra law refuses its own replacement (`frozen: laws are frozen`); L10 a law admits
+a replacement by exactly the agreed ids (`[Tally]` refused, `[Frozen]` admitted). Plants: the judge
+told every act is a write (the judge before this entry) admits L8b, L8e, L9d and L10c; the judge
+that loses the payload (a relaw names no laws, every invoke is method 0) admits L8e and refuses
+L10d. **Alternatives.** (a) A package `init` constructor `create` runs, so a seed is
+computed, never supplied: closes only a programmed object's birth; data objects and relaw stay
+open. (b) `Req.birth : Bool`: misses relaw. (c) `old : Option S`: changes `lawTy`, misses relaw.
+(d) The assembly's `relaw` with no payload. **Why.** One field closes all three `old = new` sites.
+Against (d): with no payload a law can refuse its replacement or allow it under a state condition,
+but cannot bind consent to WHAT replaces it, so a quorum's approvals for one proposal would license
+deleting the quorum (the unbound-approval bug LANG-20's proposal field fixes for commits, moved to
+the law slots). With the ids a law can require an exact replacement or bind approvals to it.
+**Critique.** It fails open by omission: a hand-written law that ignores `occasion` keeps both
+holes, and install cannot tell (only the stdlib's `lawOf`, LANG-20, makes the clauses unavoidable).
+The relaw payload is bytes, not a list: the language has no list type, so a law can compare the
+whole replacement for equality but cannot ask "is my id among them" (a package cannot contain its
+own id anyway). KERNEL-6 judges a law change by the OLD laws only, so a newly adopted law never
+judges the state it is adopted over (adding `total ≤ 100` to an object at 500 is admitted); that
+is KERNEL's, named here. Every law term grows by one `case`. **Meta-critique.** I took the shape
+with fewest mechanisms and the one I could run today; the constructor (a) is what a Hermes author
+would expect and has a real property (a package's methods may rely on invariants no law states,
+which only a constructor establishes) that this loses. Nobody has asked an author.
+**Flag day.** `reqTy` changes, so `lawTy` and `methodTy`, so the interface, bytes and id
+(`romIdOf`) of every package with a law or a method (a pure library package that never mentions
+`reqTy` keeps its id). Such a package from before refuses to load: `load` re-checks it, and
+`checkFields` refuses `badLaw`/`badMethod` against the new `reqTy` (`program` on the wire).
+Re-genesis. Re-emitted:
+`Journey.ownedText` (now printed from `reqTy` by `Read.showTy`, never restated), PROTOCOL's
+`Protocol/Rows.lean` `reqTy` string (cross-layer; PROTOCOL asked to print it from `Lang.reqTy`).

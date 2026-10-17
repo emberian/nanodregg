@@ -161,7 +161,7 @@ private def okBind (actor : String) (argv : List String) (b : String) : Line :=
 
 /-! ## Packages the rows install (LANG's text form; `install` reads it) -/
 
-def reqTy : String := "(rec (agent bytes) (notBefore nat) (principal bytes) (validUntil nat))"
+def reqTy : String := "(rec (agent bytes) (notBefore nat) (occasion (sum (birth (rec)) (invoke nat) (relaw bytes) (write (rec)))) (principal bytes) (validUntil nat))"
 def verdictTy : String := "(sum (ok (rec)) (refused bytes))"
 
 /-- A law package over a data object, with one law `l` whose body is `verdict`. -/

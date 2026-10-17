@@ -159,6 +159,21 @@ def Refusal.name {D : Type} : Refusal D → String
 /-- A receiver's only access to state: live cells at pinned ids. -/
 abbrev Pinned (D : Type) := D → Except (Refusal D) (Option Cell)
 
+/-- Which act the laws in force are judging. A law sees `old` and `new` state; without the
+occasion a birth (`create` judges the seed as `old = new`) and a law replacement (`law` judges the
+unchanged state) look exactly like a no-op write, so a transition law admitting no-ops admitted a
+seeded birth and its own removal (ASSEMBLY-lang-docs H1/H2). -/
+inductive Occasion (D : Type)
+  /-- `create`: `old = new` is the seed -/
+  | birth
+  /-- `write` on a data object -/
+  | write
+  /-- `law` on a data object: the laws in force judge their replacement by `laws` (state unchanged) -/
+  | relaw (laws : List D)
+  /-- `invoke` of method `method` -/
+  | invoke (method : Nat)
+  deriving DecidableEq
+
 /-- Who a call acts for, as member ids: `agent` signed; `principal` is whose authority it
 exercises (the agent, or the root issuer of the grant chain). Laws judge by these. -/
 structure Req (D : Type) where
@@ -168,6 +183,8 @@ structure Req (D : Type) where
   (`World.admit` enforces it), so a law can say "not before h" without reading the World -/
   notBefore : Nat
   validUntil : Nat
+  /-- the act being judged -/
+  occasion : Occasion D
   deriving DecidableEq
 
 /-- What KERNEL's receivers need from LANG. Every function reads state only through the pinned
@@ -244,8 +261,8 @@ variable {D : Type} [Ord D]
 def pinned [DecidableEq D] (w : World D) (pins : List (D × D)) : Pinned D := fun c =>
   if pins.any (fun p => p.1 = c) then .ok (w.live c) else .error (.unpinned c)
 
-def reqOf (u : Unsigned D) (principal : D) : Req D :=
-  { agent := u.member, principal, notBefore := u.notBefore, validUntil := u.validUntil }
+def reqOf (u : Unsigned D) (principal : D) (occasion : Occasion D) : Req D :=
+  { agent := u.member, principal, notBefore := u.notBefore, validUntil := u.validUntil, occasion }
 
 /-- The transaction id: the digest of the call's canonical bytes. -/
 def txIdOf (X : Ctx D) (c : Call D) : D := X.env.hash domTx (X.callBytes c)

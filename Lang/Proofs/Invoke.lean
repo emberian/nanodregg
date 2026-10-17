@@ -45,7 +45,17 @@ theorem readState_conforms {row : List (Label × Ty)} {s : Slots} {d : Data}
 theorem reqOk_conforms {D : Type} {bytesOf : D → ByteArray} {r : Req D} (h : reqOk bytesOf r = true) :
     Conforms (reqData bytesOf r) reqTy := by
   simp only [reqOk, Bool.and_eq_true, decide_eq_true_eq] at h
-  exact .record (.cons (.bytes h.1.1.1) (.cons (.nat h.1.2) (.cons (.bytes h.1.1.2) (.cons (.nat h.2) .nil))))
+  obtain ⟨⟨⟨⟨ha, hp⟩, hnb⟩, hvu⟩, ho⟩ := h
+  refine .record (.cons (.bytes ha) (.cons (.nat hnb) (.cons ?_ (.cons (.bytes hp) (.cons (.nat hvu) .nil)))))
+  cases hr : r.occasion with
+  | birth => exact .inj rfl (.record .nil)
+  | write => exact .inj rfl (.record .nil)
+  | relaw ls =>
+    rw [hr] at ho; simp only [occasionOk, decide_eq_true_eq] at ho
+    exact .inj rfl (.bytes ho)
+  | invoke m =>
+    rw [hr] at ho; simp only [occasionOk, decide_eq_true_eq] at ho
+    exact .inj rfl (.nat ho)
 
 theorem checkShape_ok {p : Package} (h : p.checkShape = .ok ()) :
     isRecordData p.state = true ∧ p.iface.wf = true := by

@@ -162,15 +162,33 @@ where
         | _, .error e => .error e
         | _, _ => .error "state"
 
-/-- The request fits the language's data: its member digests fit a byte value and its window fits
-a natural. KERNEL bounds the window only at admission (`checkBounds`, after the receivers ran), so
-the language asserts it where the request enters a run (law 4). -/
+/-- The occasion as data at `occasionTy`; a law replacement's ids as their bytes, concatenated in
+the call's order (digests are fixed-width, so the concatenation is unambiguous). -/
+def occasionData : Occasion D → Data
+  | .birth => .inj "birth" (.record [])
+  | .write => .inj "write" (.record [])
+  | .relaw ls => .inj "relaw" (.bytes (ls.foldl (fun acc l => acc ++ bytesOf l) .empty))
+  | .invoke m => .inj "invoke" (.nat m)
+
+/-- The occasion fits the language's data: a method index is a natural, a law list's bytes one
+byte value. -/
+def occasionOk : Occasion D → Bool
+  | .birth | .write => true
+  | .relaw ls => decide ((ls.foldl (fun acc l => acc ++ bytesOf l) .empty).size ≤ Bounds.bytesMax)
+  | .invoke m => decide (m < Bounds.natLimit)
+
+/-- The request fits the language's data: its member digests fit a byte value, its window fits
+a natural, its occasion fits `occasionTy`. KERNEL bounds the window only at admission
+(`checkBounds`, after the receivers ran), so the language asserts it where the request enters a
+run (law 4). -/
 def reqOk (r : Req D) : Bool :=
   decide ((bytesOf r.agent).size ≤ Bounds.bytesMax) && decide ((bytesOf r.principal).size ≤ Bounds.bytesMax) &&
-    decide (r.notBefore < Bounds.natLimit) && decide (r.validUntil < Bounds.natLimit)
+    decide (r.notBefore < Bounds.natLimit) && decide (r.validUntil < Bounds.natLimit) &&
+    occasionOk bytesOf r.occasion
 
 def reqData (r : Req D) : Data :=
   .record [("agent", .bytes (bytesOf r.agent)), ("notBefore", .nat r.notBefore),
+    ("occasion", occasionData bytesOf r.occasion),
     ("principal", .bytes (bytesOf r.principal)), ("validUntil", .nat r.validUntil)]
 
 /-- Apply field `ℓ` of closure body `g` to values bound as `var 2, var 1, var 0`. -/

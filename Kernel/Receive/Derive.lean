@@ -156,7 +156,7 @@ def create (X : Ctx D) (look : Pinned D) (c : Call D) (pkg : Option D) (laws : L
   checkPackage look pkg
   checkLaws look laws
   checkState state
-  X.program.judge look pkg laws state state (reqOf u u.member)
+  X.program.judge look pkg laws state state (reqOf u u.member .birth)
   sealTurn X c [objectCell X u.member pkg laws state] [] []
 
 def applyEdits (s : Slots) (edits : List (Nat × Option ByteArray)) : Slots :=
@@ -175,7 +175,7 @@ def write (X : Ctx D) (look : Pinned D) (c : Call D) (obj : D)
   let old := stateOf cell
   let new := applyEdits old edits
   let laws ← lawsOf X obj cell
-  X.program.judge look none laws old new (reqOf u principal)
+  X.program.judge look none laws old new (reqOf u principal .write)
   sealTurn X c [] (writeOf obj (diffOps old new)) []
 
 /-- Replace a data object's extra laws; the laws in force judge the change. -/
@@ -188,7 +188,7 @@ def law (X : Ctx D) (look : Pinned D) (c : Call D) (obj : D) (laws' : List D) (v
   let principal ← ownerAuthority X look u obj cell .mutate via
   checkLaws look laws'
   let laws ← lawsOf X obj cell
-  X.program.judge look none laws (stateOf cell) (stateOf cell) (reqOf u principal)
+  X.program.judge look none laws (stateOf cell) (stateOf cell) (reqOf u principal (.relaw laws'))
   sealTurn X c [] (writeOf obj (diffOps (lawSlotsOf cell) (lawSlots X laws'))) []
 
 def requireMethods (obj : D) : Option D → Except (Refusal D) D
@@ -202,7 +202,7 @@ def invoke (X : Ctx D) (look : Pinned D) (c : Call D) (obj : D) (method : Nat) (
   let pkg ← packageOf X obj cell
   let p ← requireMethods obj pkg
   let principal ← principalOf X look u obj (.invoke method) via
-  let r : Req D := (reqOf u principal)
+  let r : Req D := reqOf u principal (.invoke method)
   let old := stateOf cell
   let new ← X.program.run look p old method args r budget
   checkState new
