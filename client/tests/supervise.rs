@@ -64,7 +64,7 @@ fn nothing_hidden_is_refused() {
     );
 }
 
-/// The lake-built `host` this tree deploys (`ND_HOST_EXE` overrides). Missing is a failed plant,
+/// The lake-built `host` this tree deploys (devtools' `lean_bin`). Missing is a failed plant,
 /// never a skip: a confinement plant that ran no Lean child proves nothing about one.
 /// The confinement plant runs a LEAN child (ASSEMBLY-perf ID-1). The real `host serve`, under
 /// the real `nd-supervise`, must answer a frame within 3 s. Measured 2026-10-16 on 87c721e: under
@@ -73,7 +73,7 @@ fn nothing_hidden_is_refused() {
 /// Silence is the failure this names; any reply (a refusal included) passes.
 #[test]
 fn a_confined_lean_host_answers_within_the_deadline() {
-    let host = common::lean_host();
+    let host = nanodregg_devtools::lean_bin("host");
     let ws = std::env::temp_dir().join(format!("nd-sup-lean-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&ws);
     std::fs::create_dir_all(ws.join("ws")).unwrap();
@@ -99,12 +99,15 @@ fn a_confined_lean_host_answers_within_the_deadline() {
         .arg(&host)
         .arg("serve")
         .arg(&store);
-    let _sup = common::Supervisor(
+    let mut pid = sock.as_os_str().to_owned();
+    pid.push(".pid");
+    let _sup = common::Supervisor::hold(
         c.stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .spawn()
             .unwrap(),
+        pid.into(),
     );
     let deadline = std::time::Instant::now() + Duration::from_secs(10);
     let mut conn = loop {

@@ -1,0 +1,6 @@
+# The one Cargo workspace (ROOT 2026-10-17): one lock, one target dir, every crate a member.
+# Owned SHARED, like the lakefile. A crate directory that is not listed here is refused by
+# devtools/tests/workspace.rs.
+[workspace]
+resolver = "3"
+members = ["attach", "client", "devtools", "launcher", "sandbox"]

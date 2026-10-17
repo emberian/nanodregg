@@ -5,8 +5,6 @@ edition = "2024"
 publish = false
 description = "grain-launch: starts and stops grains exactly as the Lean controller's frames say, each through nanodregg_sandbox::command. Decides nothing."
 
-# Standalone until GATES owns a root workspace.
-[workspace]
 
 [lib]
 path = "src/lib.rs"

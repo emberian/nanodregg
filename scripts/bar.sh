@@ -44,7 +44,7 @@ before=$(load)
 cargo build --quiet --release --manifest-path "$here/client/Cargo.toml" --bin nd --bin nd-supervise \
   || { echo "BAR verdict RED build:client"; exit 1; }
 HOST=$here/.lake/build/bin/host
-BIN=${CARGO_TARGET_DIR:-$here/client/target}/release
+BIN=${CARGO_TARGET_DIR:-$here/target}/release
 [ -x "$HOST" ] && [ -x "$BIN/nd" ] && [ -x "$BIN/nd-supervise" ] || { echo "BAR verdict RED binaries-missing"; exit 1; }
 
 # A short real root: a socket path must fit 104 bytes on macOS, and the sandbox checks real paths.

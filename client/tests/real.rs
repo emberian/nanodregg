@@ -4,15 +4,13 @@
 //! the rotated key → read. Every accept and refuse here is Lean's (Ed25519 verify, the receivers,
 //! follow's audit and rendering); the client only signs and moves bytes.
 //!
-//! It needs the Lean binary (`common::lean_host`: `$ND_HOST_EXE`, else this tree's
+//! It needs the Lean binary (`devtools::lean_bin("host")`: `$ND_LEAN_BIN/host`, else this tree's
 //! `.lake/build/bin/host`); missing, the test FAILS by name, it never skips.
 #![allow(clippy::unwrap_used, clippy::panic)] // a plant that cannot set up is a failed plant
 use std::path::Path;
-use std::process::{Child, Command, Output, Stdio};
-use std::time::{Duration, Instant};
+use std::process::{Command, Output};
 
-mod common;
-use common::Supervisor;
+use nanodregg_devtools::Supervisor;
 
 fn line<'a>(out: &'a str, key: &str) -> &'a str {
     out.lines()
@@ -21,38 +19,13 @@ fn line<'a>(out: &'a str, key: &str) -> &'a str {
 }
 
 fn supervise(sock: &Path, ws: &Path, store: &Path, args: &[&str]) -> Supervisor {
-    let child: Child = Command::new(env!("CARGO_BIN_EXE_nd-supervise"))
-        .arg(sock)
-        .arg("--hide")
-        .arg(ws)
-        .arg("--write")
-        .arg(store)
-        .arg("--exec")
-        .arg(common::lean_host())
-        .arg("--")
-        .arg(common::lean_host())
-        .args(args)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .unwrap();
-    let s = Supervisor(child);
-    let deadline = Instant::now() + Duration::from_secs(20);
-    while std::os::unix::net::UnixStream::connect(sock).is_err() {
-        assert!(
-            Instant::now() < deadline,
-            "supervisor never bound {}",
-            sock.display()
-        );
-        std::thread::sleep(Duration::from_millis(50));
-    }
-    s
+    let sup = Path::new(env!("CARGO_BIN_EXE_nd-supervise"));
+    nanodregg_devtools::supervise_host(sup, sock, ws, store, args)
 }
 
 #[test]
 fn real_host_create_write_read_rotate_write_read() {
-    let host = common::lean_host();
+    let host = nanodregg_devtools::lean_bin("host");
     // A short root: a Unix socket path must fit SUN_LEN (104 bytes on macOS).
     let root = std::env::temp_dir().join(format!("ndreal-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);

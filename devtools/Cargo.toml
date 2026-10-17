@@ -1,0 +1,19 @@
+[package]
+name = "nanodregg-devtools"
+version = "0.0.0"
+edition = "2024"
+publish = false
+description = "Test harness shared by the workspace's integration tests: where the Lean exes and the client binaries are, and a supervised host. A DEV-DEPENDENCY ONLY: no deployed crate may depend on it (devtools/tests/workspace.rs refuses one that does)."
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"

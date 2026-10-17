@@ -388,3 +388,40 @@ the theorem; the uncalled emitted `cell_fits` is deleted (CODEC). Nothing of cli
 `deployed_head_read_sound_decoded_bytes` (a reopened base) take the served leaf bytes `b` and
 `Codec.Kernel.leaf.decode b = .ok lf`, with no premise about the leaf (`leaf_decode_cellFit`). The
 phone shows only what that decoder returns: those two theorems are what its read cites.
+
+## CLIENT-17 one Cargo workspace, and one dev crate for the test harness (2026-10-17, CLIENT-3; ROOT ruling, HOSTING-4's stage 2b ask)
+
+**Decision.** The repository root holds the one `Cargo.toml` (`[workspace]`, resolver 3, members
+attach, client, devtools, launcher, sandbox, listed explicitly) and the one `Cargo.lock`; the
+per-crate locks and per-crate `[workspace]` stanzas are deleted; one target dir (`/target`). Owned
+SHARED (GATES-2's OWNERS rows, 248fcea). `devtools/` (`nanodregg-devtools`, OWNERS CLIENT) is a
+DEV-DEPENDENCY ONLY and holds what a second crate's tests would otherwise copy, nothing else:
+`lean_bin(name)` / `lean_bin_in(dir, name)` (`$ND_LEAN_BIN`, else `.lake/build/bin`; missing FAILS
+by name; `ND_HOST_EXE` is gone, one variable, the one gates/runs.py sets), `nd()` / `nd_supervise()`
+(built once per test process from this tree into `<target>/devtools-bins`, its own target dir so it
+never waits on the outer `cargo test`'s lock and is never stale; `BUILD_DEADLINE` 900 s, failing
+`buildTimedOut` / `buildFailed` with cargo's stderr tail), `Supervisor::hold(child, pid_file)` (stops
+by its own handle on drop, pid file while alive) and `supervise_host(nd_supervise, sock, hide, store,
+args)` (host under nd-supervise with `--write STORE`, binds within 20 s or fails `neverBound`). The
+API was agreed with HOSTING-4. client/tests (common's Supervisor and lean_host, real.rs's
+supervise) and attach/tests (Held, lean_host) use it and their copies are deleted; launcher/tests
+switch in HOSTING-4's next commit. Client tests keep `CARGO_BIN_EXE_*` for their own binaries.
+**Alternatives.** (a) `ND_CLIENT_BIN` env for launcher tests: a third discovery, and a stale binary
+is found silently. (b) Nested `cargo build` into the shared target dir: blocks on the outer
+`cargo test`'s build lock. (c) Cargo artifact dependencies (`-Z bindeps`): unstable. (d)
+`RealStore::genesis`: one caller today; it moves in when a second appears (ROOT's scope rule).
+**Critique.** `nd()` builds the client a second time (into devtools-bins) the first time a
+non-client test asks; that is compile work, not a copy of code. The workspace unifies versions: libc
+is 0.2.190 for all (launcher's lock had 0.2.191), syn 3.0.9 as client had. `devtools` may panic: its
+asserts are test failures, and no deployed crate depends on it (plant).
+**Meta-critique.** I parse the root manifest's `members` line by hand in the plant rather than
+adding a TOML parser to devtools; the plant breaks loudly (not silently) if the line's shape
+changes.
+**Plants.** devtools/tests/workspace.rs: every crate directory is a member and holds no lock or
+workspace of its own; no crate depends on devtools outside `[dev-dependencies]`; a missing Lean exe
+fails by name; the built supervisor runs the built host and its holder removes its pid file.
+Mutations, each red: a member dropped (`notAMember`), a per-crate lock (`ownLock`), devtools in
+attach's `[dependencies]` (`devtoolsDeployed`), lean_bin's existence check removed, the pid file
+kept. "The workspace builds every member" is GATES-2's workspace judgement (cargo check/clippy
+--workspace), landing after this.
+**Status.** landed (this commit).

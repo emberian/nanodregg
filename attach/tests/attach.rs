@@ -7,7 +7,9 @@
 #![allow(clippy::unwrap_used, clippy::panic)] // a plant that cannot set up is a failed plant
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Command, Stdio};
+
+use nanodregg_devtools::Supervisor;
 use std::thread;
 use std::time::Duration;
 
@@ -15,27 +17,12 @@ use nanodregg_client::frame::{self, Frame, FrameError, Limits};
 use nanodregg_client::generated::{self as g, CloseReason, status};
 use nanodregg_client::{mux, table};
 
-/// A process this test started, stopped by its own handle even when an assertion fails.
-struct Held(Child);
-impl Drop for Held {
-    fn drop(&mut self) {
-        let _ = self.0.kill();
-        let _ = self.0.wait();
-    }
+fn lean_host() -> PathBuf {
+    nanodregg_devtools::lean_bin("host")
 }
 
-/// The lake-built Lean `host` (`$ND_HOST_EXE`, else this tree's); missing, the test FAILS by name.
-fn lean_host() -> PathBuf {
-    let p = std::env::var_os("ND_HOST_EXE").map_or_else(
-        || Path::new(env!("CARGO_MANIFEST_DIR")).join("../.lake/build/bin/host"),
-        PathBuf::from,
-    );
-    assert!(
-        p.is_file(),
-        "plant: no lake-built host at {} (run `lake build host`)",
-        p.display()
-    );
-    p
+fn held(root: &Path, name: &str, c: &mut Command) -> Supervisor {
+    Supervisor::hold(c.spawn().unwrap(), root.join(format!("{name}.pid")))
 }
 
 fn ask(s: &mut UnixStream, l: Limits, op: u8, p: &[u8]) -> Result<Frame, FrameError> {
@@ -68,32 +55,35 @@ fn nd_attach_bridges_to_the_real_host_caps_a_session_and_frees_a_slot_on_hang_up
         .status()
         .unwrap();
     assert!(made.success(), "host genesis");
-    let mut host = Held(
+    let mut host = held(
+        &root,
+        "host",
         Command::new(lean_host())
             .arg("serve")
             .arg(&store)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()
-            .unwrap(),
+            .stderr(Stdio::null()),
     );
-    let (hin, hout) = (host.0.stdin.take().unwrap(), host.0.stdout.take().unwrap());
+    let (hin, hout) = (
+        host.child().stdin.take().unwrap(),
+        host.child().stdout.take().unwrap(),
+    );
     let box_sock = root.join("box.sock");
     let box_l = UnixListener::bind(&box_sock).unwrap();
     thread::spawn(move || mux::serve(box_l, hin, hout, table::MUX));
-    let mut attach = Held(
+    let mut attach = held(
+        &root,
+        "attach",
         Command::new(env!("CARGO_BIN_EXE_nd-attach"))
             .arg(&box_sock)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()
-            .unwrap(),
+            .stderr(Stdio::null()),
     );
     let (ain, aout) = (
-        attach.0.stdin.take().unwrap(),
-        attach.0.stdout.take().unwrap(),
+        attach.child().stdin.take().unwrap(),
+        attach.child().stdout.take().unwrap(),
     );
     let friend_sock = root.join("friend.sock");
     let friend_l = UnixListener::bind(&friend_sock).unwrap();

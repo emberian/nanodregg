@@ -175,12 +175,33 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "df1d3c3b53da64cf5760482273a98e575c651a67eec7f77df96b5b642de8f039"
 
 [[package]]
+name = "nanodregg-attach"
+version = "0.0.0"
+dependencies = [
+ "nanodregg-client",
+ "nanodregg-devtools",
+]
+
+[[package]]
 name = "nanodregg-client"
 version = "0.0.0"
 dependencies = [
  "ed25519-dalek",
+ "nanodregg-devtools",
  "nanodregg-sandbox",
  "rustix",
+ "zeroize",
+]
+
+[[package]]
+name = "nanodregg-devtools"
+version = "0.0.0"
+
+[[package]]
+name = "nanodregg-launcher"
+version = "0.0.0"
+dependencies = [
+ "nanodregg-sandbox",
  "zeroize",
 ]
 
