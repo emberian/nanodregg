@@ -6,6 +6,7 @@ result of the step it asked for and answers the next one, with follow's World af
 any log the result carried. A write runs
 
   sign(envelope) → host(log, envelope) → [absorb: every logged event re-derived, PROTOCOL-4]
+  → (page again, from the page's height, until it is the writer's tip)
   → plan on the caught-up World → sign(unsignedBytes u) → submit(call) → done
 
 and a `read` stops after the catch-up; `init` needs no World (sign twice, print a join token).
@@ -58,6 +59,9 @@ inductive Refusal (D : Type)
   | chainMismatch (height : Nat)
   /-- the derivation asked for more cells than `Kernel.Bounds.touchesMax` -/
   | tooManyPins
+  /-- the catch-up read `Bounds.pagesPerCommandMax` pages and follow is still at `height`, the
+  writer at `tip`: what was absorbed is kept, and the member runs the command again -/
+  | behind (height tip : Nat)
 
 /-- A step answered to the client. -/
 inductive Reply
@@ -88,6 +92,7 @@ def Refusal.name : Refusal D → String
   | .missingCell _ => "missingCell"
   | .tooManyPins => "tooManyPins"
   | .chainMismatch _ => "chainMismatch"
+  | .behind _ _ => "behind"
 
 def refused (r : Refusal D) : Reply := .done 1 ByteArray.empty s!"refused {r.name}\n".toUTF8
 def printed (out : String) : Reply := .done 0 out.toUTF8 ByteArray.empty
@@ -213,10 +218,14 @@ def absorb (X : Ctx D) : World D → Array (Turn D) → List ByteArray →
 def hostReply (b : ByteArray) : Option (Status × ByteArray) :=
   if h : 0 < b.size then (Status.ofCode? b[0]).map (·, b.extract 1 b.size) else none
 
-/-- A log page: the events, and the writer's height and chain after the last of them. -/
-def logPage (b : ByteArray) : Option (List ByteArray × Nat × ByteArray) :=
+/-- A log page: the events, the writer's height and chain after the last of them, and the
+writer's tip when it built the page. A tip below the page's own height is not a page. -/
+def logPage (b : ByteArray) : Option (List ByteArray × Nat × ByteArray × Nat) :=
   match logReplyFrame.decode b with
-  | .ok (l, h, c, ()) => (Text.ofU64 h.1).map fun n => (Text.unlist l, n, c.1)
+  | .ok (l, h, c, t, ()) => do
+      let n ← Text.ofU64 h.1
+      let tip ← Text.ofU64 t.1
+      if n ≤ tip then some (Text.unlist l, n, c.1, tip) else none
   | .error _ => none
 
 /-- Absorb a page and require follow's fold to reach the writer's stated height and chain. -/
@@ -257,7 +266,7 @@ def start (X : Ctx D) (me : Self D) (w : World D) (argv : List ByteArray) : Repl
   | .error r => refused (D := D) (.parse r)
   | .ok (.init _) => next (D := D) ⟨argv, 1, []⟩ fun k => .sign whoami k
   | .ok _ =>
-      next (D := D) ⟨argv, 1, [Text.u64 w.height]⟩ fun k =>
+      next (D := D) ⟨argv, 1, [Text.u64 w.height, Text.u64 0]⟩ fun k =>
         .sign (Envelope.message X me.member me.grant w.height (w.height + me.window)) k
 
 /-- One step: the continuation, the result of the step it asked for, and follow's World. It
@@ -288,8 +297,8 @@ def step (X : Ctx D) (me : Self D) (w : World D) (kb result : ByteArray) :
                   { key := s0.key, next := nextKeyDigest X s0.next, possession := s1.signature })}\n")
               else same (refused (D := D) .badResult)
           | _, _ => same (refused (D := D) .badResult)
-      -- every other verb: the envelope, signed; ask for the log
-      | _, 1, [startB] =>
+      -- every other verb: the envelope, signed; ask for the log (page `pages` of this command)
+      | _, 1, [startB, pagesB] =>
           match Signed.ofBytes result, Text.ofU64 startB with
           | some s, some h =>
               let e : Envelope D :=
@@ -300,19 +309,28 @@ def step (X : Ctx D) (me : Self D) (w : World D) (kb result : ByteArray) :
                   key := s.key
                   signature := s.signature }
               match Envelope.bytes X e with
-              | some p => same (again 2 [startB, result] fun k => .host .log p k)
+              | some p => same (again 2 [startB, result, pagesB] fun k => .host .log p k)
               | none => same (refused (D := D) .badState)
           | _, _ => same (refused (D := D) .badResult)
-      -- the log: absorb it, then read, or plan and ask for the signature
-      | _, 2, [startB, signedB] =>
+      -- the log: absorb the page; page again until the tip; then read, or plan and ask for the
+      -- signature
+      | _, 2, [startB, signedB, pagesB] =>
           match hostReply result with
           | some (.ok, p) =>
-              match logPage p with
-              | none => same (refused (D := D) .badResult)
-              | some (evs, height, chain) =>
+              match logPage p, Text.ofU64 pagesB with
+              | none, _ | _, none => same (refused (D := D) .badResult)
+              | some (evs, height, chain, tip), some pages =>
+                  -- a page short of the tip that carries nothing would be asked for again forever
+                  if evs.isEmpty && height < tip then same (refused (D := D) .badResult) else
                   match absorbPage X w evs height chain with
                   | .error r => same (refused (D := D) r)
                   | .ok (w', ts) =>
+                      if height < tip then
+                        if Bounds.pagesPerCommandMax ≤ pages + 1 then
+                          (w', ts, refused (D := D) (.behind height tip))
+                        else (w', ts, again 1 [Text.u64 height, Text.u64 (pages + 1)] fun k =>
+                          .sign (Envelope.message X me.member me.grant height (height + me.window)) k)
+                      else
                       match cmd, Signed.ofBytes signedB with
                       | .read obj ex, _ => (w', ts, render w' obj ex)
                       | .rotate, some _ => (w', ts, again 5 [startB, signedB] fun k => .precommit k)

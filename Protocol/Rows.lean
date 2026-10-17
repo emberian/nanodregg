@@ -109,6 +109,8 @@ inductive Mutation
   | zeroDeadline
   /-- custody advances to the next key when it signs a rotation, not on its settlement -/
   | advanceOnSend
+  /-- the writer states every log page's own end as its tip, hiding the log after it -/
+  | lieTip
   deriving DecidableEq, Repr
 
 /-- A row's plant: the mutation, and the line that must catch it with the outcome it then gets. -/
@@ -276,6 +278,23 @@ def audit : Row where
       fault := .dropLastEvent }])
   plant := .caught .followVerifyAll 13 (.refused "chainMismatch")
 
+/-- A log page holds at most a page budget of events (HOST-17), so it can end before the writer's
+tip, even inside a batch; a cold follower pages from each page's height until it reaches the tip
+the writer states. New in nanodregg (minidregg served the whole log in one frame), so it replaces
+no row. The rows' writer pages with a 4096-byte budget (`Writer.pageBudget`), so forty writes are
+several pages. -/
+def paging : Row where
+  name := "paging"
+  replaces := []
+  ops := everyWrite
+  kinds := ["enroll", "install", "create", "grant", "write"]
+  drive := .members (welcome ++ join "sponsor" "auditor" ++ [
+    { actor := "newcomer", act := .cmd ["write", "@shared", "2", "1", "--via", "@g"], expect := .ok,
+      times := 40 },
+    ok "sponsor" ["write", "@shared", "3", "9"],
+    { actor := "auditor", act := .cmd ["read", "@shared", "2=1", "3=9"], expect := .ok, fault := .cold }])
+  plant := .caught .lieTip 11 (.refused "expect")
+
 /-- JPAY1–4, JPAY6: observed payments become credit. Pay is an installed package (LANG's to
 write, `world/pay/Book`), invoked by members and by the watcher, not a receiver family. -/
 def pay : Row where
@@ -379,7 +398,7 @@ def langJourney : Row where
   plant := .internal "a program whose judge admits everything: L4 set 101 must be admitted"
 
 def rows : List Row :=
-  [journey, reopen, laws, rotate, audit, pay, well, bounty, grain, hermes, bar,
+  [journey, reopen, laws, rotate, audit, paging, pay, well, bounty, grain, hermes, bar,
    langJourney]
 
 end Nanodregg.Protocol

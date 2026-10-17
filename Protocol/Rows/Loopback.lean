@@ -51,6 +51,7 @@ def sys : Option Mutation → Sys
   | some .resendFresh => { writer := { X := Sim.ctx }, follow := Sim.ctx, resendFresh := true }
   | some .zeroDeadline => { writer := { X := Sim.ctx }, follow := Sim.ctx, zeroDeadline := true }
   | some .advanceOnSend => { writer := { X := Sim.ctx }, follow := Sim.ctx, advanceOnSend := true }
+  | some .lieTip => { writer := { X := Sim.ctx, lieTip := true }, follow := Sim.ctx }
 
 /-! ## Actors -/
 
@@ -216,9 +217,9 @@ def editPage (f : List ByteArray → List ByteArray) (reply : ByteArray) : ByteA
   match Command.hostReply reply with
   | some (.ok, p) =>
       match logReplyFrame.decode p with
-      | .ok (l, h, c, ()) =>
+      | .ok (l, h, c, t, ()) =>
           match Text.fitList Bounds.frameBytesMax (f (Text.unlist l)) with
-          | some l' => ByteArray.mk #[Status.ok.code] ++ logReplyFrame.bytes (l', h, c, ())
+          | some l' => ByteArray.mk #[Status.ok.code] ++ logReplyFrame.bytes (l', h, c, t, ())
           | none => reply
       | .error _ => reply
   | _ => reply

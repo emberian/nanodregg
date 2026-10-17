@@ -198,10 +198,24 @@ def envelopeLayout : Codec.Layout :=
   [.bytes "member", .bytes "grant", .bytes "from", .bytes "validUntil", .bytes "key", .bytes "signature"]
 
 /-- The `log` reply's payload: the signed calls (events) logged from the requested height, in log
-order, then the writer's World height and log chain after the last of them. A follower re-derives
-every Turn from the events (PROTOCOL-4) and asserts that its own fold reached the same height and
-chain (a pair assertion, law 4): an omitted, truncated or reordered event is caught at the page. -/
-def logReplyLayout : Codec.Layout := [.list "events", .bytes "height", .bytes "chain"]
+order, then the writer's World height and log chain after the last of them, then `tip`, the
+writer's World height when the page was built. A follower re-derives every Turn from the events
+(PROTOCOL-4) and asserts that its own fold reached the same height and chain (a pair assertion,
+law 4): an omitted, truncated or reordered event is caught at the page. A page holds at most a
+frame of events (HOST-17), so it may end before the tip, even inside a writer batch: follow pages
+again from `height` until `height = tip` (at most `Bounds.pagesPerCommandMax` pages a command). -/
+def logReplyLayout : Codec.Layout := [.list "events", .bytes "height", .bytes "chain", .bytes "tip"]
+
+/-- The `read` reply's payload: one page of the World bytes of the writer's NEWEST base (HOST-14,
+HOST-15), for a thin member (PROTOCOL-14, option A). The request is the read envelope, its `start`
+read as a byte offset into those World bytes. `height` and `chain` are the base World's,
+`total` its World bytes' length, `digest` = `Hash.digest "nanodregg/host/base/v1"` of them, and
+`bytes` = World bytes `[start, start + chunk)`. All numbers are u64le. A seal between two pages
+changes `height` and `digest`, and the member starts its download again. The member trusts none of
+it: it accepts the assembled bytes only if they hash to a base digest it pinned out of band
+(`Protocol.Thin.accept`; a forged byte is `baseMismatch`). -/
+def readReplyLayout : Codec.Layout :=
+  [.bytes "height", .bytes "total", .bytes "digest", .bytes "chain", .bytes "bytes"]
 
 /-! The bounds the client and the supervisor enforce before allocating. -/
 namespace Bounds
@@ -214,6 +228,11 @@ def argvBytesMax : Nat := 65536
 def stepsPerCommandMax : Nat := 64
 /-- Sends of one frozen call: the first submit and the resends after `absent`. -/
 def sendsMax : Nat := 8
+/-- `log` pages one command may read while it catches up (two steps each: sign the envelope from
+the page's start, relay `log`). A follow further behind than this ends the command `behind`,
+keeping what it absorbed, and the member runs it again. With the at most four other steps of any
+command it fits `stepsPerCommandMax` (`Bounds.pages_fit_steps`). -/
+def pagesPerCommandMax : Nat := 28
 /-- Connections one `nd-supervise` holds open at once (either socket). It bounds the supervisor's
 memory: each connection buffers at most one frame per direction, so the whole mux holds at most
 `2 * connectionsMax * frameBytesMax` bytes (32 MiB). A deployment's members are friends, not the

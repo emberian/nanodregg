@@ -63,4 +63,9 @@ theorem argv_fits_frame : Bounds.argvBytesMax + 1 ≤ Bounds.frameBytesMax := by
 /-- The supervisor's buffers, at most one frame per connection per direction, fit in 32 MiB. -/
 theorem mux_buffers_bounded : 2 * Bounds.connectionsMax * Bounds.frameBytesMax ≤ 33554432 := by decide
 
+/-- A command that reads its whole page budget still has room for its other steps: the first
+envelope's signature, then two per page, then at most a plan's signature, a precommit, a submit
+and the settlement's `done`. -/
+theorem Bounds.pages_fit_steps : 2 * Bounds.pagesPerCommandMax + 5 ≤ Bounds.stepsPerCommandMax := by decide
+
 end Nanodregg.Protocol

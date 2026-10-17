@@ -18,17 +18,30 @@ open Nanodregg.Kernel Nanodregg.Kernel.Receive Nanodregg.Codec
 
 abbrev D := UInt64
 
-/-- The digest's codec (the Kernel Sim's: CODEC's `Stream.u64`). -/
-def dc : Stream D := Kernel.Sim.dc
+/-- The digest's codec. -/
+def dc : Stream D := Stream.u64
 
-def digestOf (b : ByteArray) : Option D := Kernel.Sim.digestOf b
+def digestOf (b : ByteArray) : Option D :=
+  match dc.decode b with
+  | .ok d => some d
+  | .error _ => none
 
-def env : Env D := Kernel.Sim.env
+def env : Env D :=
+  { hash := fun dom b => Kernel.Sim.fnv (dom.toUTF8 ++ b)
+    bytes := dc.bytes
+    turnBytes := Codec.Kernel.turnBytes dc
+    cellBytes := Codec.Kernel.cellBytes }
 
 def sign (key msg : ByteArray) : ByteArray := Kernel.Sim.toySign key msg
 
-/-- The Kernel Sim's toy `Ctx` with LANG's program. -/
-def ctx : Ctx D := Kernel.Sim.ctxWith (Lang.program dc.bytes digestOf)
+def ctx : Ctx D :=
+  { env
+    unsignedBytes := Codec.Kernel.unsignedBytes dc
+    callBytes := Codec.Kernel.callBytes dc
+    decodeCall := Codec.Kernel.decodeCall dc
+    digestOf
+    verify := fun key msg sig => sign key msg == sig
+    program := Lang.program dc.bytes digestOf }
 
 /-- The World's codec (a base's World part, CODEC-14). -/
 def world : Stream (World D) := Codec.Kernel.world dc

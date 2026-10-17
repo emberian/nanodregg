@@ -48,7 +48,7 @@ def pager (keys : Keys) (seg : File) (r : Resident (World D)) (start : Nat) : IO
       Page.budget (fun off len => seg.readAt off.toUInt64 len.toUSize) r.index (recorder.mark r.world)
       start with
   | .error f => return named f.name
-  | .ok a => match Page.bytes a with
+  | .ok a => match Page.bytes a r.world.height with
     | .ok b => return (Protocol.Status.ok.code, b)
     | .error f => return named f.name
 

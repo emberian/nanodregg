@@ -116,12 +116,13 @@ where
             let a := acc.getD { height := e.height, chain := e.chain }
             go fuel (i + 1) (some (walkTurns E budget start c e.height ts a))
 
-/-- The page on the wire: `logReplyLayout` (events, height u64, chain). -/
-def bytes (a : Acc) : Except Fault ByteArray :=
+/-- The page on the wire: `logReplyLayout` (events, height u64, chain, tip u64), `tip` the World's
+height the page was built at (a member pages again until its height reaches it). -/
+def bytes (a : Acc) (tip : Nat) : Except Fault ByteArray :=
   let f := Protocol.Text.fit Protocol.Bounds.frameBytesMax
   match Protocol.Text.fitList Protocol.Bounds.frameBytesMax a.events.toList,
-      f (Protocol.Text.u64 a.height), f a.chain with
-  | some l, some h, some c => .ok (Protocol.logReplyFrame.bytes (l, h, c, ()))
-  | _, _, _ => .error .tooLarge
+      f (Protocol.Text.u64 a.height), f a.chain, f (Protocol.Text.u64 tip) with
+  | some l, some h, some c, some t => .ok (Protocol.logReplyFrame.bytes (l, h, c, t, ()))
+  | _, _, _, _ => .error .tooLarge
 
 end Nanodregg.Host.Page
