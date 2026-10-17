@@ -10,7 +10,7 @@ namespace Nanodregg.Kernel
 /-- The name of each bound, carried by `Reject.overBound` on the wire. -/
 inductive Bound
   | touches | opsPerWrite | creates | nullifiers
-  | event | slotsPerCell | slotKey | valueBytes | window | weight
+  | event | slotsPerCell | slotKey | valueBytes | window | weight | counter
   deriving DecidableEq, Repr
 
 namespace Bounds
@@ -25,6 +25,11 @@ def slotsPerCellMax : Nat := 1024
 /-- Slot keys are below `2^32`, so they encode in four bytes. -/
 def slotKeyLimit : Nat := 4294967296
 def valueBytesMax : Nat := 65536
+/-- Every counter a turn carries (window ends, charge) is below `2^64`, and a cell kind below
+`2^32`, so CODEC's fixed-width encoding is injective on every admitted turn (CODEC-4). A World's
+height is below every admitted window end, so it is below `2^64` too (`admit_window`). -/
+def counterLimit : Nat := 18446744073709551616
+def kindLimit : Nat := 4294967296
 /-- The widest validity window, in heights. Bounds how long a transaction id must be remembered. -/
 def windowMax : Nat := 1024
 /-- The most one turn may weigh (its charge: log record plus World growth). The per-field bounds

@@ -165,6 +165,9 @@ def checkBounds (t : Turn D) : Except (Reject D) Unit := do
     (.overBound .valueBytes)
   req (t.validUntil ≤ t.notBefore + Bounds.windowMax) (.overBound .window)
   req (t.weight ≤ Bounds.weightMax) (.overBound .weight)
+  req (t.validUntil < Bounds.counterLimit && t.notBefore < Bounds.counterLimit &&
+       t.charge < Bounds.counterLimit && t.creates.all fun c => c.kind < Bounds.kindLimit)
+    (.overBound .counter)
 
 variable [DecidableEq D]
 

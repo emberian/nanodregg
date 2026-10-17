@@ -87,7 +87,7 @@ theorem admit_weight {E : Env D} {w w' : World D} {t : Turn D}
   have hb := hc.bounds
   unfold checkBounds at hb
   simp only [except_bind_ok] at hb
-  obtain ⟨⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, hw⟩ := hb
+  obtain ⟨⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, hw, _⟩ := hb
   rw [req_ok, decide_eq_true_eq] at hw
   exact ⟨(admit_charge h).1, Nat.le_add_right _ _, hw⟩
 
