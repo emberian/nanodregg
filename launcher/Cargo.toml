@@ -28,10 +28,20 @@ path = "src/bin/keybroker.rs"
 nanodregg-sandbox = { path = "../sandbox" }
 # The key bytes are zeroized on drop (the type custody::read_private returns).
 zeroize = { version = "=1.8.2", default-features = false, features = ["alloc"] }
+# keybroker's upstream TLS (HOSTING-15): rustls with ring's primitives (ring =0.17.14, pinned by
+# Cargo.lock), TLS 1.3 only (no `tls12`), no aws-lc, no logging. Trusted, unverified: in the TCB
+# beside SHA-512, swapped only for a verified provider.
+rustls = { version = "=0.23.40", default-features = false, features = ["std", "ring"] }
 
 # The test harness (CLIENT's): lean_bin, the client's nd / nd-supervise, supervise_host.
 [dev-dependencies]
 nanodregg-devtools = { path = "../devtools" }
+# The broker test's own CA and server certificates (ring's primitives, as keybroker's).
+rcgen = { version = "=0.14.8", default-features = false, features = ["ring", "pem"] }
+# The TLS 1.2-only server plant. Feature unification turns `tls12` on in the TEST build of
+# keybroker too (never in its own build: resolver 3 keeps dev features out), so keybroker's
+# `with_protocol_versions(&[TLS13])` is the line the plant tests.
+rustls = { version = "=0.23.40", default-features = false, features = ["std", "ring", "tls12"] }
 
 [lints.rust]
 unsafe_code = "forbid"

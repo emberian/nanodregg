@@ -92,20 +92,21 @@ theorem decide_ok {b : Broker} {now : Nat} {r : ByteArray} {ask : Ask} {b' : Bro
   repeat' split at h
   all_goals first | cases h | skip
   all_goals first
-    | (rename_i _ _ _ e he hm _ _ _ _ _ _ _ _
+    | (rename_i _ _ _ e he hm _ _ _ _ _ _ _ _ _ _ _
        refine ⟨by omega, e, he, ?_, by dsimp only; omega, rfl⟩
        simp [Allowance.malformed] at hm; omega)
     | skip
 
 /-- What a grant is for: the ONE allowance of the resident on the asked model (any second one
-refuses, `ambiguous_refused`), well formed, whose key slot keybroker holds a key for; a token count
+refuses, `ambiguous_refused`), well formed, served by the provider Lean's table names for that model
+(so the host keybroker verifies is the table's), whose key slot keybroker holds a key for; a token count
 within the allowance and the ceiling; exactly the body `requestBody` prints; the worst-case charge. -/
 theorem grant_allowed {b : Broker} {now : Nat} {r : ByteArray} {ask : Ask} {b' : Broker} {g : Grant}
     (h : Broker.decide b now r ask = .ok (b', g)) :
     ∃ e ∈ b.entries, e.resident = r ∧ e.allowance.model = ask.model ∧
       (∀ x ∈ b.entries, x.resident = r → x.allowance.model = ask.model → x = e) ∧
       0 < e.allowance.microPerKTok ∧ e.allowance.keySlot < 2 ^ 32 ∧ e.allowance.keySlot ∈ b.keys ∧
-      g.keySlot = e.allowance.keySlot.toUInt32 ∧
+      g.keySlot = e.allowance.keySlot.toUInt32 ∧ providerOf ask.model = some g.upstream ∧
       0 < ask.maxTokens ∧ ask.maxTokens ≤ e.allowance.maxTokens ∧ ask.maxTokens ≤ Bounds.tokensCeiling ∧
       requestBody ask = .ok g.body ∧ g.body.size ≤ Bounds.bodyMax ∧
       g.charged = cost e.allowance (g.body.size + ask.maxTokens) := by
@@ -113,14 +114,15 @@ theorem grant_allowed {b : Broker} {now : Nat} {r : ByteArray} {ask : Ask} {b' :
   simp only [bind, Except.bind, pure, Except.pure] at h
   repeat' split at h
   all_goals first | cases h | skip
-  rename_i _ _ _ e he hm hk htz hto _ body hb hbs _
+  rename_i _ _ _ e he hm _ up hup hk htz hto _ body hb hbs _
   obtain ⟨hmem, hp, hu⟩ := filter_one he
   simp only [Entry.is, Bool.and_eq_true, ba_beq, decide_eq_true_eq] at hp
   have hm' : e.allowance.microPerKTok ≠ 0 ∧ e.allowance.keySlot < 2 ^ 32 := by
     simp only [Allowance.malformed, Bool.or_eq_true, beq_iff_eq, decide_eq_true_eq, not_or] at hm
     refine ⟨?_, ?_⟩ <;> omega
   refine ⟨e, hmem, hp.1, hp.2, fun x hx h1 h2 => hu x hx (by simp [Entry.is, ba_beq, h1, h2]),
-    by omega, by omega, by simpa using hk, rfl, by omega, ?_, ?_, hb, by dsimp only; omega, rfl⟩
+    by omega, by omega, by simpa using hk, rfl, by rw [← hp.2]; exact hup, by omega, ?_, ?_, hb,
+    by dsimp only; omega, rfl⟩
   · have := Nat.min_le_left e.allowance.maxTokens Bounds.tokensCeiling; omega
   · have := Nat.min_le_right e.allowance.maxTokens Bounds.tokensCeiling; omega
 
@@ -255,7 +257,7 @@ theorem fresh_decide {b : Broker} {now : Nat} {r : ByteArray} {ask : Ask} {b' : 
 /-- Every grant costs something: its token count is positive and its price is not 0. -/
 theorem charged_pos {b : Broker} {now : Nat} {r : ByteArray} {ask : Ask} {b' : Broker} {g : Grant}
     (h : Broker.decide b now r ask = .ok (b', g)) : 0 < g.charged := by
-  obtain ⟨e, -, -, -, -, hp, -, -, -, ht, -, -, -, -, hc⟩ := grant_allowed h
+  obtain ⟨e, -, -, -, -, hp, -, -, -, -, ht, -, -, -, -, hc⟩ := grant_allowed h
   rw [hc]; unfold cost
   have : 1 ≤ (g.body.size + ask.maxTokens) * e.allowance.microPerKTok :=
     Nat.mul_pos (by omega) hp
@@ -326,14 +328,14 @@ by name, gets the key slot, the charge and Lean's request bytes). -/
 theorem verdictOf_wire {v : Verdict} {w : Wire.VerdictTy} (h : Wire.verdictWire? v = some w) :
     Wire.verdictOf w = v := by
   cases v with
-  | grant k c t hd kh bd =>
+  | grant k c hs t hd kh bd =>
     simp only [Wire.verdictWire?] at h
     split at h
     · simp only [bind, Option.bind_eq_some_iff] at h
-      obtain ⟨t', ht, hd', hhd, kh', hkh, bd', hbd, hw⟩ := h
+      obtain ⟨hs', hhs, t', ht, hd', hhd, kh', hkh, bd', hbd, hw⟩ := h
       simp only [pure, Option.some.injEq] at hw
       subst hw
-      simp only [Wire.verdictOf, bytes?_val ht, bytes?_val hhd, bytes?_val hkh, bytes?_val hbd]
+      simp only [Wire.verdictOf, bytes?_val hhs, bytes?_val ht, bytes?_val hhd, bytes?_val hkh, bytes?_val hbd]
       simp
     · cases h
   | refuse why =>
@@ -476,7 +478,7 @@ theorem grant_cap {b : Broker} {now : Nat} {r : ByteArray} {ask : Ask} {b' : Bro
   simp only [bind, Except.bind, pure, Except.pure] at h
   repeat' split at h
   all_goals first | cases h | skip
-  rename_i _ _ _ e he hm _ _ _ _ _ _ _ hc
+  rename_i _ _ _ e he hm _ _ _ _ _ _ _ _ _ _ hc
   have hcap : e.allowance.cap < Bounds.capMax := by
     simp only [Allowance.malformed, Bool.or_eq_true, beq_iff_eq, decide_eq_true_eq, not_or] at hm
     omega
@@ -491,8 +493,19 @@ private theorem refuse_size (w : Wire.VerdictTy) (hw : w.1 = ⟨1, by decide⟩)
   subst hw
   rfl
 
+/-- Every provider's fixed request fields fit the 4096 bytes `bodyMax` leaves in a verdict frame. -/
+theorem providerOf_fits {m : ByteArray} {u : Upstream} (h : providerOf m = some u) :
+    u.host.size + u.target.size + u.headers.size + u.keyHeader.size ≤ 4096 - 33 := by
+  unfold providerOf at h
+  obtain ⟨x, hf, rfl⟩ := Option.map_eq_some_iff.mp h
+  have hm := List.mem_of_find?_eq_some hf
+  simp only [providers, List.mem_cons, List.not_mem_nil, or_false] at hm
+  subst hm
+  decide
+
 /-- The verdict of every `step` encodes in one frame: a refusal is two bytes, and a grant's fields
-(Lean's body within `bodyMax`, the fixed request lines, a charge below `capMax`) fit `frameMax`. So
+(Lean's body within `bodyMax`, the provider's fixed request fields, a charge below `capMax`) fit
+`frameMax`. So
 `hosting-broker`'s `unencodable` end is unreachable: an assertion, never a path. -/
 theorem step_encodes (b : Broker) (r : ByteArray) (now : Nat) (askBytes : ByteArray) :
     (Wire.encodeVerdict (Broker.step b r now askBytes).2).isSome = true := by
@@ -506,29 +519,30 @@ theorem step_encodes (b : Broker) (r : ByteArray) (now : Nat) (askBytes : ByteAr
   · split
     · rename_i ask _ b'' g hd
       have hc := grant_cap hd
-      obtain ⟨-, -, -, -, -, -, -, -, -, -, -, -, -, hbs, -⟩ := grant_allowed hd
+      obtain ⟨-, -, -, -, -, -, -, -, -, hpv, -, -, -, -, hbs, -⟩ := grant_allowed hd
+      have hsz := providerOf_fits hpv
       have hc64 : g.charged < 2 ^ 64 := by unfold Bounds.capMax at hc; omega
       have hb : g.body.size ≤ Bounds.frameMax := by unfold Bounds.bodyMax at hbs; omega
-      have ht : anthropic.target.size ≤ Bounds.frameMax := by decide
-      have hh : anthropic.headers.size ≤ Bounds.frameMax := by decide
-      have hk : anthropic.keyHeader.size ≤ Bounds.frameMax := by decide
-      have hsz : anthropic.target.size + anthropic.headers.size + anthropic.keyHeader.size ≤ 4096 - 29 := by
-        decide
-      simp only [Wire.encodeVerdict, Wire.verdictWire?, hc64, dite_true, Wire.bytes?, ht, hh, hk, hb,
+      have hs : g.upstream.host.size ≤ Bounds.frameMax := by unfold Bounds.frameMax; omega
+      have ht : g.upstream.target.size ≤ Bounds.frameMax := by unfold Bounds.frameMax; omega
+      have hh : g.upstream.headers.size ≤ Bounds.frameMax := by unfold Bounds.frameMax; omega
+      have hk : g.upstream.keyHeader.size ≤ Bounds.frameMax := by unfold Bounds.frameMax; omega
+      simp only [Wire.encodeVerdict, Wire.verdictWire?, hc64, dite_true, Wire.bytes?, hs, ht, hh, hk, hb,
         bind, Option.bind, pure]
       rw [← verdictCodec_lawful.size_eq]
-      show (if 1 + (4 + (8 + ((4 + anthropic.target.size) + ((4 + anthropic.headers.size) +
-          ((4 + anthropic.keyHeader.size) + ((4 + g.body.size) + 0)))))) ≤ Bounds.frameMax then _ else none).isSome = true
+      show (if 1 + (4 + (8 + ((4 + g.upstream.host.size) + ((4 + g.upstream.target.size) +
+          ((4 + g.upstream.headers.size) + ((4 + g.upstream.keyHeader.size) + ((4 + g.body.size) + 0))))))) ≤
+          Bounds.frameMax then _ else none).isSome = true
       rw [if_pos (by unfold Bounds.bodyMax Bounds.frameMax at hbs; unfold Bounds.frameMax; omega)]
       rfl
     · exact refuse _
 
 /-! ## Teeth: closed instances that make the general theorems non-vacuous -/
 
-private def alw : Allowance := ⟨"m".toUTF8, 7, 1000, 60000, 1000, 100⟩
+private def alw : Allowance := ⟨"claude-m".toUTF8, 7, 1000, 60000, 1000, 100⟩
 private def res : ByteArray := "r1".toUTF8
 private def b0 : Broker := Broker.start 0 [7] [(res, alw)]
-private def ask1 : Ask := ⟨"m".toUTF8, 10, .empty, ⟨#[0]⟩, ["hi\",\"max_tokens\":99999".toUTF8]⟩
+private def ask1 : Ask := ⟨"claude-m".toUTF8, 10, .empty, ⟨#[0]⟩, ["hi\",\"max_tokens\":99999".toUTF8]⟩
 
 private def refusedBy (why : Broker.Refusal) : Except Broker.Refusal (Broker × Grant) → Bool
   | .error w => w == why
@@ -544,7 +558,7 @@ private def bodyIs (x : ByteArray) : Except Broker.Refusal ByteArray → Bool
   | .ok b => b == x
   | .error _ => false
 
-theorem body_tooth : bodyIs "{\"model\":\"m\",\"max_tokens\":10,\"messages\":[{\"role\":\"user\",\"content\":\"hi\\\",\\\"max_tokens\\\":99999\"}]}".toUTF8 (requestBody ask1) = true := by
+theorem body_tooth : bodyIs "{\"model\":\"claude-m\",\"max_tokens\":10,\"messages\":[{\"role\":\"user\",\"content\":\"hi\\\",\\\"max_tokens\\\":99999\"}]}".toUTF8 (requestBody ask1) = true := by
   decide +kernel
 
 /-- A fresh life refuses a costing ask in its start window (`overSpend`), and grants it in the next
@@ -559,7 +573,7 @@ theorem forfeit_tooth :
 theorem refusal_teeth :
     refusedBy .noAllowance (Broker.decide b0 60000 "r2".toUTF8 ask1) = true ∧
     refusedBy .clockRegressed (Broker.decide { b0 with last := 70000 } 60000 res ask1) = true ∧
-    refusedBy .modelNotAllowed (Broker.decide b0 60000 res { ask1 with model := "n".toUTF8 }) = true ∧
+    refusedBy .modelNotAllowed (Broker.decide b0 60000 res { ask1 with model := "claude-n".toUTF8 }) = true ∧
     refusedBy .tokensZero (Broker.decide b0 60000 res { ask1 with maxTokens := 0 }) = true ∧
     refusedBy .tokensOver (Broker.decide b0 60000 res { ask1 with maxTokens := 101 }) = true ∧
     refusedBy .messagesMalformed (Broker.decide b0 60000 res { ask1 with roles := ⟨#[2]⟩ }) = true ∧
@@ -575,30 +589,48 @@ theorem refusal_teeth :
     refusedBy .keyMissing (Broker.decide (Broker.start 0 [8] [(res, alw)]) 60000 res ask1) = true ∧
     refusedBy .keyMissing (Broker.decide (Broker.start 0 [8] [(res, alw)]) 5 res ask1) = true ∧
     refusedBy .allowanceAmbiguous
-      (Broker.decide (Broker.start 0 [7] [(res, alw), (res, { alw with cap := 5 })]) 60000 res ask1) = true := by
+      (Broker.decide (Broker.start 0 [7] [(res, alw), (res, { alw with cap := 5 })]) 60000 res ask1) = true ∧
+    refusedBy .noProvider
+      (Broker.decide (Broker.start 0 [7] [(res, { alw with model := "gpt-m".toUTF8 })]) 60000 res
+        { ask1 with model := "gpt-m".toUTF8 }) = true ∧
+    refusedBy .noProvider
+      (Broker.decide (Broker.start 0 [8] [(res, { alw with model := "gpt-m".toUTF8 })]) 5 res
+        { ask1 with model := "gpt-m".toUTF8 }) = true := by
+  decide +kernel
+
+/-- The provider table names Anthropic for `claude-…` and nothing for a name that only resembles it,
+and a grant carries the table's provider (`Grant.upstream`). With one row, `step` writing the constant
+`anthropic` into the verdict instead of `g.upstream` would pass this too (HOSTING-15's CRITIQUE). -/
+theorem provider_teeth :
+    providerOf "claude-m".toUTF8 = some anthropic ∧ anthropic.host = "api.anthropic.com".toUTF8 ∧
+    providerOf "claude".toUTF8 = none ∧ providerOf "xclaude-m".toUTF8 = none ∧
+    providerOf "Claude-m".toUTF8 = none ∧
+    (match Broker.decide b0 60000 res ask1 with
+     | .ok (_, g) => g.upstream == anthropic
+     | _ => false) = true := by
   decide +kernel
 
 /-- `keyMissing` is Lean's, by the slot set keybroker passed: the ask on model `n` (slot 9) is
 refused when keybroker holds only slot 7, and granted on slot 9 when it holds both. Two allowances of
 one resident on DIFFERENT models are not ambiguous: each is its own meter. -/
 theorem keyMissing_tooth :
-    chargedIs 9 ((requestBody { ask1 with model := "n".toUTF8 }).toOption.map (fun bd => bd.size + 10) |>.getD 0) (Broker.decide (Broker.start 0 [7, 9] [(res, alw), (res, { alw with model := "n".toUTF8, keySlot := 9 })])
-      60000 res { ask1 with model := "n".toUTF8 }) = true ∧
-    refusedBy .keyMissing (Broker.decide (Broker.start 0 [7] [(res, alw), (res, { alw with model := "n".toUTF8, keySlot := 9 })])
-      60000 res { ask1 with model := "n".toUTF8 }) = true := by
+    chargedIs 9 ((requestBody { ask1 with model := "claude-n".toUTF8 }).toOption.map (fun bd => bd.size + 10) |>.getD 0) (Broker.decide (Broker.start 0 [7, 9] [(res, alw), (res, { alw with model := "claude-n".toUTF8, keySlot := 9 })])
+      60000 res { ask1 with model := "claude-n".toUTF8 }) = true ∧
+    refusedBy .keyMissing (Broker.decide (Broker.start 0 [7] [(res, alw), (res, { alw with model := "claude-n".toUTF8, keySlot := 9 })])
+      60000 res { ask1 with model := "claude-n".toUTF8 }) = true := by
   decide +kernel
 
 private def ask2 : Ask := { ask1 with texts := ["hi".toUTF8] }
 private def b100 : Broker := Broker.start 0 [7] [(res, { alw with cap := 100 })]
 
-/-- Spend accumulates within a window: with a cap of 100, the first ask (charged 83: 73 body bytes
+/-- Spend accumulates within a window: with a cap of 100, the first ask (charged 90: 80 body bytes
 and 10 tokens) is granted, the same ask again in that window is refused `overSpend`, and in the next
 window it is granted again. -/
 theorem accumulate_tooth :
     (match Broker.decide b100 60000 res ask2 with
      | .ok (b1, g1) =>
-       g1.charged == 83 && refusedBy .overSpend (Broker.decide b1 60001 res ask2) &&
-         chargedIs 7 83 (Broker.decide b1 120000 res ask2)
+       g1.charged == 90 && refusedBy .overSpend (Broker.decide b1 60001 res ask2) &&
+         chargedIs 7 90 (Broker.decide b1 120000 res ask2)
      | .error _ => false) = true := by
   decide +kernel
 
@@ -611,7 +643,7 @@ theorem follow_tooth :
      | .ok (b1, _) =>
        refusedBy .overSpend (Broker.decide (b1.follow 60001 [(res, { alw with cap := 100 })]) 60001 res ask2) &&
        refusedBy .overSpend (Broker.decide (b1.follow 60001 [(res, { alw with cap := 200 })]) 60001 res ask2) &&
-       chargedIs 7 83 (Broker.decide (b1.follow 60001 [(res, { alw with cap := 200 })]) 120000 res ask2) &&
+       chargedIs 7 90 (Broker.decide (b1.follow 60001 [(res, { alw with cap := 200 })]) 120000 res ask2) &&
        refusedBy .noAllowance (Broker.decide (b1.follow 60001 []) 120000 res ask2)
      | .error _ => false) = true := by
   decide +kernel
@@ -624,7 +656,7 @@ theorem badAsk_tooth : (match Broker.step b0 res 60000 ⟨#[7, 0]⟩ with
 
 /-- A system text is printed as one escaped string too. -/
 theorem system_tooth : bodyIs
-    "{\"model\":\"m\",\"max_tokens\":10,\"system\":\"s\\\"\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]}".toUTF8
+    "{\"model\":\"claude-m\",\"max_tokens\":10,\"system\":\"s\\\"\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]}".toUTF8
     (requestBody { ask1 with system := "s\"".toUTF8, texts := ["hi".toUTF8] }) = true := by
   decide +kernel
 

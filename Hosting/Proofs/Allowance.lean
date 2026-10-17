@@ -180,7 +180,7 @@ theorem seed_state {r : ByteArray} {a : Broker.Allowance} {s : Kernel.Slots} (h 
 
 private def pid : ByteArray := "P".toUTF8
 private def op : ByteArray := "O".toUTF8
-private def alw : Broker.Allowance := ⟨"m".toUTF8, 7, 1000, 60000, 5000, 100⟩
+private def alw : Broker.Allowance := ⟨"claude-m".toUTF8, 7, 1000, 60000, 5000, 100⟩
 private def rid : ByteArray := ⟨#[0xab, 0x01]⟩
 
 private def cellOf (pkg owner : ByteArray) (s : Kernel.Slots) : Cell :=

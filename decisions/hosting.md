@@ -539,7 +539,7 @@ recorded as a platform fact, not proved. A text-only ask (system plus role/text 
 express tool use or images: Hermes will need more fields, and each one is a printer case with its
 own bound. Upstream is plain HTTP/1.1 to an operator-configured address. A real provider speaks TLS,
 so either the operator runs a local terminator or keybroker takes a TLS dependency into the
-key-holding process. That is decided at stage 2, not by default. A restart forfeits up to a window
+key-holding process. That is decided at stage 2, not by default. (Decided by HOSTING-15: keybroker speaks TLS 1.3 with rustls on ring.) A restart forfeits up to a window
 of budget (availability).
 **META.** I picked worst-case-final because it deletes settle, tickets, overrun and freeze: the
 smaller design, and I like small. The test is whether real asks starve under it, which is measurable
@@ -745,3 +745,151 @@ mutation): `absorb_tracks` and the test's live create (`allowanceAmbiguous`) are
 `Allow.absorb` with `absorb_tracks`, and a live create in the test. (2) "Exact" rested on two
 unproved pure facts. Both are now theorems (`tail_absorb_fold`, `allIds_complete` / `start_tracks`),
 and what remains is the CRITIQUE's two premises about code.
+
+## HOSTING-15 keybroker speaks TLS to the provider; Lean names the host, the operator names the anchors (HOSTING-5, 2026-10-18)
+
+**Rulings it builds under** (ROOT, 10-18, on HOSTING-12's critique "a real provider speaks TLS"):
+rustls =0.23.40 with the ring =0.17.14 provider; trust anchors are operator DATA; the host comes from a
+Lean model→provider table carried in the grant frame; no custom verifier; refusals by name. And
+(10-18, on OPS-7's critique) v0 trusts the full pinned bundle, with the exposure named and the
+narrowing filed (cv 01a14a7d-55c3).
+
+**Decision.**
+- **Lean names the host.** `Broker.Upstream` gains `host`. `Broker.providers` is the provider table,
+  `[("claude-", anthropic)]` with `anthropic.host = api.anthropic.com`. `providerOf model` is the
+  first row whose prefix the model starts with (a `ByteArray` prefix test, `startsWith`). `decide`
+  refuses `noProvider` right after `allowanceMalformed`, so before `keyMissing`, the token checks and
+  the meter. A grant carries its provider (`Grant.upstream`), and the `grant` frame gains `host`
+  (`.bytes`, between `charged` and `target`). Theorems: `grant_allowed` now also concludes
+  `providerOf ask.model = some g.upstream`, and `providerOf_fits` says every provider's fixed fields fit
+  the 4096 bytes `bodyMax` leaves, so `step_encodes` holds for every provider, not only for the
+  constant. Teeth: `provider_teeth` (`claude-m` → anthropic; `claude`, `xclaude-m` and `Claude-m` →
+  none; a grant's upstream is anthropic), and `refusal_teeth` gains `noProvider`, both in a costing
+  window and in the start window (so it precedes the meter).
+- **The operator names the dial address and the anchors.** keybroker is
+  `keybroker KEYS ANCHORS SOCKDIR PIDS UPSTREAM STORE OPERATOR RESIDENTS DECIDER`. UPSTREAM stays the
+  operator's `addr:port` (where the bytes go). SNI, certificate verification and the HTTP `Host:`
+  header all use the grant's `host` (whom they must reach). So a misrouted dial fails verification,
+  and an operator who points UPSTREAM at a proxy cannot make keybroker accept that proxy's certificate
+  for another name. ANCHORS is read once, at start, through CLIENT's `custody::read_public` (CLIENT-18,
+  with CLIENT-19's directory chain): a regular file, not a symlink, owned by the euid, no group or
+  other write bit, no setuid/setgid/sticky bit, size 1..=1 MiB, and every directory up to / owned by the
+  euid or root and not group- or other-writable. Each refusal ends keybroker by name before any socket
+  opens: `anchorsLink`, `anchorsNotRegular`, `anchorsOwner`, `anchorsMode`, `anchorsLength`,
+  `anchorsDir`, `anchorsMissing` (NotFound), `anchorsIo`. The file must be concatenated PEM
+  `CERTIFICATE` blocks only, each one an anchor webpki accepts (`RootCertStore::add`, strict). Any
+  other section, an undecodable block, a refused anchor, or no block at all is `anchorsMalformed`.
+  Nothing in the file is skipped, because the file is the whole trust set.
+- **Production anchors** are OPS's `deploy/tls/anchors.pem` (f77c564): 121 roots from the pinned
+  `webpki-root-certs =1.0.9` in crate order, emitted by `emit-anchors`, and checked byte for byte
+  against the crate on every commit (`gates/generated.tsv` row `cargo:emit-anchors`). The installed
+  copy is `/etc/nd/keybroker/anchors.pem` (nd, 0644, under root 0755 `/etc/nd` and nd 0700
+  `/etc/nd/keybroker`: OPS-2's RUNBOOK §2a, 60a12e5), and the test checks that keybroker accepts
+  the bundle whole. **An operator who edits the installed anchor file widens (or narrows) trust. That is
+  the operator's act: keybroker cannot tell. In the repository, the emitted-vs-crate check is what
+  detects an edit**, so a hand edit of `deploy/tls/anchors.pem` is red on the next commit. Nothing
+  checks the installed copy against the repository's, and OPS's unit install is where that check
+  belongs.
+- **The client.** rustls `ClientConfig::builder_with_provider(ring::default_provider())`, **TLS 1.3
+  only** (`tls12` is off in the build, and `with_protocol_versions(&[TLS13])`), the operator's
+  `RootCertStore`, rustls' own WebPKI server verifier (no custom verifier, none possible without the
+  `dangerous` API, which nothing calls), SNI on, no client certificate. rustls has no renegotiation.
+  The request is HTTP/1.0 as before. The response must end with the server's `close_notify`. A close
+  without it is a truncation nobody authenticated, and it is `tlsProtocol`, not a short answer.
+- **Refusals** (append-only codes): `noProvider` 16 (Lean), `tlsCertificate` 17, `tlsHostname` 18 and
+  `tlsProtocol` 19 (keybroker, by an exhaustive match on rustls' error). `InvalidCertificate(NotValidForName
+  | NotValidForNameContext)` is `tlsHostname`, and any other `InvalidCertificate` (unknown issuer,
+  expired, bad encoding, a bad signature) is `tlsCertificate`. Any other rustls error (version, alert,
+  bad record, a missing close_notify) is `tlsProtocol`. A host Lean named that `ServerName` refuses
+  (neither a DNS name nor an IP literal) is `tlsHostname`, and the table makes that unreachable.
+  (An IP literal would be verified against the certificate's IP SANs, and no row names one.) A dial or socket failure stays `upstreamFailed`.
+  No upstream text is ever relayed in a refusal. `broker_generated.rs` is re-emitted (CODEC-5 agreed
+  that this commit carries it: `lake exe emit-broker`, unedited).
+- **TCB.** rustls 0.23.40 + ring 0.17.14 (versions pinned in launcher/Cargo.toml and Cargo.lock;
+  `--locked` holds them) are in keybroker's TCB **by trust, not by proof**, beside SHA-512
+  (`decisions/codec.md`: trusted as computed by `Sha512.hash`, vectors only): "trusted, unverified;
+  swapped only for a verified provider". They are the first two rows of the tree-wide TCB table, `gates/tcb.tsv`, which this commit creates (ROOT ruling 10-18: SHARED data in the gates family; CODEC, CLIENT and GATES add their rows; GATES owns its gate). Also trusted: the CA bundle's contents (see the
+  exposure below), and the operator's clock for certificate validity (rustls takes it from the
+  system clock).
+- **Test** (`launcher/tests/broker.rs`, row `cargo:launcher:broker`). The test has its own CA (the
+  `rcgen =0.14.8` dev-dependency on ring). Its fake upstream is a rustls `ServerConfig` on 127.0.0.1
+  holding a CA-signed certificate for `api.anthropic.com`, and the operator's ANCHORS is that CA's
+  certificate. **CONTROL**: the canary run over real TLS. The grant reaches the fake upstream with
+  `Host: api.anthropic.com`, the canary in `x-api-key`, and Lean's exact body, and no byte the
+  resident receives holds the canary. The production bundle passes the anchor checks (keybroker goes on
+  to its decider). **Plants, each red by name**: a self-signed certificate for the right host gives
+  `tlsCertificate`, and a CA-signed certificate for `other.example` gives `tlsHostname`. Neither upstream
+  receives a request byte (the handshake fails before the request is written). Anchor files with mode
+  0666 give `anchorsMode`, and a missing one gives `anchorsMissing`. A file with the CA plus a PEM key,
+  or with the CA plus a corrupted certificate, gives `anchorsMalformed` (each would pass a lenient
+  reader). An upstream that speaks only TLS 1.2 gives `tlsProtocol` with no request byte. The test
+  build has `tls12` compiled in by Cargo's feature unification, from the server's dev-dependency, so
+  keybroker's version list is the line under test. An upstream that answers in full but closes
+  without `close_notify` gives `tlsProtocol`, and its answer never reaches the resident (CONTROL: the
+  request did arrive). The models are renamed `claude-*` in the teeth, the sim's Allowance journey and the test.
+  The charge in `accumulate_tooth`/`follow_tooth` is 90 (80 body bytes + 10), was 83.
+
+**Alternatives.** (1) An operator-run local TLS terminator, with keybroker kept on plain HTTP: the
+key crosses a second process and a loopback socket in the clear, and the terminator's verification
+is configuration nobody checks. Refused. (2) OpenSSL or native-tls: C in the TCB, and the system
+store. Refused by ruling. (3) The rustcrypto provider: a crate not in the cache, fetched, and no more
+verified than ring. Refused by ruling. (4) The system CA bundle (/etc/ssl): root-owned, so custody
+refuses it (`Owner(0)`, CLIENT-18 ruling), and it changes under the operator with package updates.
+Refused. (5) Anchors compiled into keybroker (`webpki-roots` as code): trust is then a build input that
+the operator cannot narrow, and narrowing is the follow-up below. Refused, but the emitted file comes
+from the same crate. (6) The host from the dial address, or from the resident's ask: the dial address is
+where the bytes go, not whom they must reach, and the ask is untrusted. Refused. (7) A per-provider
+CA or SPKI pin as the ONLY check: it breaks silently when the provider rotates its chain (ROOT's
+ruling). Not v0; it comes back as an addition, below. (8) TLS 1.2 kept for reach: more code (CBC
+suites are already absent in rustls; the TLS 1.2 key schedule and the extended master secret
+handling) for no provider we call. Refused until a provider needs it, and then it costs one feature
+flag.
+
+**CRITIQUE.** **The exposure: any of the 121 bundled CAs mis-issuing a certificate for
+`api.anthropic.com` passes verification, and keybroker sends that issuer's holder the operator's key.**
+The narrowing is filed as cv task 01a14a7d-55c3: a per-provider SPKI pin set as operator DATA beside the
+model→provider table, enforced IN ADDITION to the chain check, refused `tlsPin` by name, with a plant.
+It is not built in v0. Other points: certificate validity uses the operator's clock (a clock set far
+forward or back accepts an expired or not-yet-valid certificate). That is a premise, like the meter's
+clock. rustls' own buffers hold the key and the plaintext request without zeroizing (keybroker's
+`Zeroizing` covers only its own buffer). The test exercises the handshake and the verifier against its
+own CA only. Nothing here has talked to api.anthropic.com, so whether that endpoint answers an HTTP/1.0
+request with `close_notify` and a body under `RESPONSE_MAX` is unmeasured. The first real call, an
+ops act, is where that is checked, and a missing close_notify there would refuse every answer
+`tlsProtocol`, loudly. OCSP and CRLs are not checked (rustls' default). A revoked provider certificate
+passes until it expires. The trust set is the anchor file and only that: the tests check that the
+file is parsed strictly, but a keybroker that ADDED roots of its own (rustls' or webpki's bundled
+roots) to the store would pass every test, because the plants' certificates chain to no public root.
+The code builds the store from the file alone (`RootCertStore::empty`), and a review is what guards
+it. The one-row table makes `step`'s use of `g.upstream` indistinguishable from a
+constant `anthropic` (a plant writing the constant survives), and a second provider row makes it
+observable.
+**META.** I chose TLS 1.3 only because a smaller protocol surface is easier to defend, and I like
+small. The test that would prove me wrong is a provider the operator needs that speaks only 1.2. I
+kept HTTP/1.0 because it is what HOSTING-12 shipped, and "connection close ends the body" plus
+close_notify is the least parsing. The pull is to avoid writing a Content-Length or chunked reader
+in the key-holding process. If real responses need HTTP/1.1, that reader is new parsing and gets its
+own decision. I put `noProvider` after `allowanceMalformed` and not inside it because ROOT named it
+as its own refusal. It is a property of the allowance's model, though, so a reader may fairly ask
+why `follow` does not refuse it at read time.
+**Plants (run, 10-18; hbox logs/hosting5-plants.py, hosting5-lplants.py).** Rust: verification on
+the dial address instead of Lean's host (the main test goes red: the grant is `tlsHostname`);
+`NotValidForName` mapped to `tlsCertificate` (the TLS test goes red); a reader that skips non-certificate
+sections, a reader that skips anchors webpki refuses, and a plain `fs::read` of ANCHORS (each makes the
+custody test red: `anchorsMalformed`, `anchorsMalformed`, `anchorsMode`). After the vacuity read,
+three more: a missing close_notify accepted as the end of the answer, non-certificate TLS errors
+mapped to `upstreamFailed`, and TLS 1.2 offered beside 1.3 (each makes the TLS test red). Lean: the `noProvider` check
+deleted (`refusal_teeth`, plus `decide_ok`/`grant_allowed`/`grant_cap`, structurally); the prefix test
+ignored (`provider_teeth`); `noProvider` moved after the meter (`refusal_teeth`, `grant_allowed`).
+**Vacuity read (10-18, VACUITY-READER-H4).** No empty premise. `step_encodes` depends on
+`grant_allowed`'s new conjunct and on `providerOf_fits`. The reader found two holes, both now fixed by
+the plants above. (1) No test reached `tlsProtocol`, so accepting a missing close_notify and mapping
+protocol errors to `upstreamFailed` both survived. (2) Nothing tested "TLS 1.3 only". It also found
+two wording faults (the `provider_teeth` docstring and the IP-literal case, both corrected) and the
+added-roots residue now stated in the CRITIQUE. Second pass: ACCEPT. Its one residue is that "tls12 is never in
+keybroker's own build" is a build-graph fact no test covers. It was measured 10-18:
+`cargo tree -p nanodregg-launcher -e normal,features -i rustls` shows only `ring` and `std`. And if it
+were wrong, the version list would still refuse 1.2.
+**Flag day.** The `grant` verdict frame gains `host` and four refusal codes appear, so
+`broker_generated.rs` is re-emitted. keybroker's argv gains ANCHORS (OPS-2 renders the unit). Nothing
+persisted changes.

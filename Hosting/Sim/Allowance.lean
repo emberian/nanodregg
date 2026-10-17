@@ -8,7 +8,7 @@ the REAL receive path (`Receive.submit`, `Lang.program`), then reads the World w
 
 * A0 `world/hosting/Allowance` is the generated text (`Lang.Print.package allowance`), byte for byte.
 * A1 A installs the allowance package; its id is `Allow.allowanceId`.
-* A2 A creates an allowance for resident `R` on model `m`; the broker reads it.
+* A2 A creates an allowance for resident `R` on model `claude-m`; the broker reads it.
 * A3 B creates a look-alike allowance (same package, B owns it) for `R` on `m`: admitted by the World,
   never read (owner ≠ operator), so the broker's allowance stays A's alone.
 * A4 B invokes `set` on A's allowance: refused `noGrant` (KERNEL-25).
@@ -32,13 +32,13 @@ open Nanodregg.Hosting Nanodregg.Hosting.Sim
 def textPath : System.FilePath := "world" / "hosting" / "Allowance"
 
 def resident : ByteArray := "resident-R".toUTF8
-def alw : Broker.Allowance := ⟨"m".toUTF8, 7, 1000, 60000, 5000, 100⟩
+def alw : Broker.Allowance := ⟨"claude-m".toUTF8, 7, 1000, 60000, 5000, 100⟩
 
 /-- Every allowance the operator holds in the World, as the broker reads it. -/
 def readAll (w : World D) (pkgId operator : ByteArray) : List (ByteArray × Broker.Allowance) :=
   (Loop.allIds w).filterMap fun i => (w.live Kernel.Sim.env i).bind (Allow.allowanceOf pkgId operator)
 
-def ask : Broker.Ask := ⟨"m".toUTF8, 10, .empty, ⟨#[0]⟩, ["hi".toUTF8]⟩
+def ask : Broker.Ask := ⟨"claude-m".toUTF8, 10, .empty, ⟨#[0]⟩, ["hi".toUTF8]⟩
 
 def verdict : Except Broker.Refusal (Broker.Broker × Broker.Grant) → String
   | .ok (_, g) => s!"granted {g.charged}"

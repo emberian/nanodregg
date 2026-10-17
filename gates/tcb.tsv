@@ -1,0 +1,5 @@
+# component	pin	kind	owner	trusted for	lift condition
+# The TCB table (ROOT ruling 10-18): every component a verdict trusts without a proof in this tree. kind is
+# trusted-unverified | verified | platform-fact. A layer adds its rows in the commit that introduces the trust.
+rustls	0.23.40	trusted-unverified	HOSTING	keybroker upstream TLS 1.3: the handshake, record layer and WebPKI server verification for the host Lean names (HOSTING-15)	swapped only for a verified TLS implementation
+ring	0.17.14	trusted-unverified	HOSTING	rustls crypto provider for keybroker (AEAD, ECDHE, signature verification, HKDF) (HOSTING-15)	swapped only for a verified provider

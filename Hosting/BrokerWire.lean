@@ -8,15 +8,18 @@ pipe and socket a frame is `u32le len ‖ payload`, `1 ≤ len ≤ Bounds.frameM
 
     ask       ask      1  model, maxTokens : u32, system, roles (one byte per message), texts : list
     request   decide   1  resident, atMs : u64          (followed by the resident's ask frame, unread)
-    verdict   grant    1  keySlot : u32, charged : u64, target, headers, keyHeader, body
+    verdict   grant    1  keySlot : u32, charged : u64, host, target, headers, keyHeader, body
               refuse   2  brokerRefusal : Refusal
     answer    answer   1  status : u32, body             (the upstream's status and body)
               refused  2  brokerRefusal : Refusal
 
 keybroker never decodes an ask: it puts a `decide` frame naming the socket's resident in front of
 the ask's bytes and hands both to Lean. So identity is the socket, and the only decoder of what a
-resident sent is Lean's. A `grant` carries the upstream request Lean printed (target, extra headers,
-the NAME of the key header, the JSON body); keybroker adds the key's bytes and nothing else.
+resident sent is Lean's. A `grant` carries the upstream request Lean printed (the provider's TLS
+host, target, extra headers, the NAME of the key header, the JSON body); keybroker adds the key's
+bytes and nothing else. `host` is the name keybroker sends as SNI and `Host:` and verifies the
+provider's certificate for, so the operator's dial address chooses where bytes go and Lean's table
+chooses whom they must reach (HOSTING-15).
 This module imports no decision, so the emitter's closure is the Codec family and these lists.
 -/
 import Codec.Layout
@@ -35,8 +38,9 @@ private theorem frameMax_fits : frameMax < 2 ^ 32 := by decide
 
 end Bounds
 
-/-- Why the broker refuses an ask, by name (law 7). `Broker.decide` refuses every case but the last
-three of keybroker (`keyEchoed`, `upstreamFailed`, `busy`, mapped from its transport outcomes by an exhaustive match);
+/-- Why the broker refuses an ask, by name (law 7). `Broker.decide` refuses every case but keybroker's
+(`keyEchoed`, `upstreamFailed`, `busy`, `tlsCertificate`, `tlsHostname`, `tlsProtocol`, mapped from its
+transport outcomes by an exhaustive match);
 `keyMissing` is both: Lean refuses a slot keybroker has no key for, and keybroker re-checks it. -/
 inductive Refusal
   /-- no allowance names this resident -/
@@ -72,6 +76,15 @@ inductive Refusal
   /-- two allowances the operator holds name this resident and model: which meter is meant is not
   the broker's to guess (the operator revokes one) -/
   | allowanceAmbiguous
+  /-- the asked model is in no row of Lean's provider table (`Broker.providerOf`): no host to verify -/
+  | noProvider
+  /-- keybroker: the provider's certificate does not chain to an operator anchor, or is invalid -/
+  | tlsCertificate
+  /-- keybroker: the provider's certificate is valid but not for the host Lean named -/
+  | tlsHostname
+  /-- keybroker: the TLS session failed for any other reason (version, alert, a close without
+  `close_notify`); the upstream's own text is never relayed -/
+  | tlsProtocol
   deriving DecidableEq, Repr
 
 namespace Refusal
@@ -79,13 +92,14 @@ namespace Refusal
 def all : List Refusal :=
   [noAllowance, allowanceMalformed, clockRegressed, badAsk, modelNotAllowed, tokensZero, tokensOver,
    messagesMalformed, textNotUtf8, overSpend, requestTooLarge, keyMissing, keyEchoed, upstreamFailed, busy,
-   allowanceAmbiguous]
+   allowanceAmbiguous, noProvider, tlsCertificate, tlsHostname, tlsProtocol]
 
 def code : Refusal → UInt8
   | noAllowance => 0 | allowanceMalformed => 1 | clockRegressed => 2 | badAsk => 3
   | modelNotAllowed => 4 | tokensZero => 5 | tokensOver => 6 | messagesMalformed => 7
   | textNotUtf8 => 8 | overSpend => 9 | requestTooLarge => 10 | keyMissing => 11 | keyEchoed => 12
-  | upstreamFailed => 13 | busy => 14 | allowanceAmbiguous => 15
+  | upstreamFailed => 13 | busy => 14 | allowanceAmbiguous => 15 | noProvider => 16
+  | tlsCertificate => 17 | tlsHostname => 18 | tlsProtocol => 19
 
 def name : Refusal → String
   | noAllowance => "noAllowance" | allowanceMalformed => "allowanceMalformed"
@@ -94,7 +108,8 @@ def name : Refusal → String
   | textNotUtf8 => "textNotUtf8" | overSpend => "overSpend" | requestTooLarge => "requestTooLarge"
   | keyMissing => "keyMissing"
   | keyEchoed => "keyEchoed" | upstreamFailed => "upstreamFailed" | busy => "busy"
-  | allowanceAmbiguous => "allowanceAmbiguous"
+  | allowanceAmbiguous => "allowanceAmbiguous" | noProvider => "noProvider"
+  | tlsCertificate => "tlsCertificate" | tlsHostname => "tlsHostname" | tlsProtocol => "tlsProtocol"
 
 def ofCode? (b : UInt8) : Option Refusal := all.find? (·.code == b)
 
@@ -111,8 +126,9 @@ structure Ask where
 
 /-- What Lean tells keybroker for one ask. -/
 inductive Verdict
-  /-- call the upstream: `POST target`, the `headers` lines, `keyHeader: <the slot's key>`, `body` -/
-  | grant (keySlot : UInt32) (charged : Nat) (target headers keyHeader body : ByteArray)
+  /-- call the upstream over TLS verified for `host`: `POST target`, `Host: host`, the `headers`
+  lines, `keyHeader: <the slot's key>`, `body` -/
+  | grant (keySlot : UInt32) (charged : Nat) (host target headers keyHeader body : ByteArray)
   | refuse (why : Refusal)
   deriving DecidableEq
 
@@ -127,8 +143,8 @@ def requestCases : Tagged :=
   [("decide", 1, [.bytes "resident", .u64 "atMs"])]
 
 def verdictCases : Tagged :=
-  [("grant", 1, [.u32 "keySlot", .u64 "charged", .bytes "target", .bytes "headers", .bytes "keyHeader",
-     .bytes "body"]),
+  [("grant", 1, [.u32 "keySlot", .u64 "charged", .bytes "host", .bytes "target", .bytes "headers",
+     .bytes "keyHeader", .bytes "body"]),
    ("refuse", 2, [refusalField])]
 
 def answerCases : Tagged :=
@@ -171,15 +187,15 @@ def decodeRequest (b : ByteArray) : Except Codec.Refusal (ByteArray × Nat) :=
     | ⟨⟨0, _⟩, (r, t, ())⟩ => (r.val, t.toNat)
 
 def verdictWire? : Verdict → Option VerdictTy
-  | .grant k c t h kh b => do
+  | .grant k c hs t h kh b => do
     if hc : c < 2 ^ 64 then
-      let t ← bytes? t; let h ← bytes? h; let kh ← bytes? kh; let b ← bytes? b
-      pure ⟨⟨0, by decide⟩, (k, ⟨c, hc⟩, t, h, kh, b, ())⟩
+      let hs ← bytes? hs; let t ← bytes? t; let h ← bytes? h; let kh ← bytes? kh; let b ← bytes? b
+      pure ⟨⟨0, by decide⟩, (k, ⟨c, hc⟩, hs, t, h, kh, b, ())⟩
     else none
   | .refuse why => pure ⟨⟨1, by decide⟩, (⟨why.code, contains_of_mem why⟩, ())⟩
 
 def verdictOf : VerdictTy → Verdict
-  | ⟨⟨0, _⟩, (k, c, t, h, kh, b, ())⟩ => .grant k c.toNat t.val h.val kh.val b.val
+  | ⟨⟨0, _⟩, (k, c, hs, t, h, kh, b, ())⟩ => .grant k c.toNat hs.val t.val h.val kh.val b.val
   | ⟨⟨1, _⟩, (why, ())⟩ => .refuse ((Refusal.ofCode? why.val).get (refusal_of_contains _ why.property))
 
 /-- A verdict's payload, when it fits one frame. -/

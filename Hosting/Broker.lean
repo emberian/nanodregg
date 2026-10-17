@@ -11,7 +11,10 @@ The meter is broker memory, one per allowance. An allowance is ONE meter: one re
 its key slot, its price, its window and its cap (HOSTING-13). The broker learns the World's
 allowances by `Broker.follow`: an allowance it already held, unchanged, keeps its meter; any other
 (new, or changed in any field) is opened at the follow's time with `spent = cap`, so a restart or
-an operator's change never refunds a window: `Proofs.Broker.start_window_free`.
+an operator's change never refunds a window: `Proofs.Broker.start_window_refused`.
+
+Which provider a model is, and so which TLS host keybroker must verify, is Lean's table
+(`providerOf`), never the resident's word and never the operator's dial address (HOSTING-15).
 -/
 import Hosting.BrokerWire
 
@@ -124,17 +127,30 @@ def messages (acc : ByteArray) : List (String × ByteArray) → ByteArray
 
 end Json
 
-/-- The provider an allowance's key slots call: its request target, the fixed header lines, and the
-name of the header that carries the key. -/
+/-- A provider: the TLS host keybroker verifies the certificate for (and sends as SNI and `Host:`),
+its request target, the fixed header lines, and the name of the header that carries the key. -/
 structure Upstream where
+  host : ByteArray
   target : ByteArray
   headers : ByteArray
   keyHeader : ByteArray
+  deriving DecidableEq
 
 /-- Anthropic's Messages API. -/
 def anthropic : Upstream :=
-  ⟨"/v1/messages".toUTF8, "anthropic-version: 2023-06-01\r\ncontent-type: application/json\r\n".toUTF8,
-   "x-api-key".toUTF8⟩
+  ⟨"api.anthropic.com".toUTF8, "/v1/messages".toUTF8,
+   "anthropic-version: 2023-06-01\r\ncontent-type: application/json\r\n".toUTF8, "x-api-key".toUTF8⟩
+
+/-- The provider table: a model whose name starts with a row's prefix is served by that row's
+provider. A model in no row is refused `noProvider`, so there is no default host. -/
+def providers : List (ByteArray × Upstream) := [("claude-".toUTF8, anthropic)]
+
+/-- Whether `p` is a prefix of `b`. -/
+def startsWith (b p : ByteArray) : Bool := decide (p.size ≤ b.size) && b.extract 0 p.size == p
+
+/-- The provider of `model`: the first row of `providers` whose prefix it starts with. -/
+def providerOf (model : ByteArray) : Option Upstream :=
+  (providers.find? fun x => startsWith model x.1).map Prod.snd
 
 def roleName : UInt8 → Option String
   | 0 => some "user"
@@ -163,6 +179,7 @@ def requestBody (ask : Ask) : Except Refusal ByteArray := do
 /-- What a grant gives keybroker. -/
 structure Grant where
   keySlot : UInt32
+  upstream : Upstream
   charged : Nat
   body : ByteArray
   deriving DecidableEq
@@ -185,6 +202,9 @@ def decide (b : Broker) (now : Nat) (r : ByteArray) (ask : Ask) : Except Refusal
     | _ => throw .allowanceAmbiguous
   let a := e.allowance
   if a.malformed then throw .allowanceMalformed
+  let up ← match providerOf a.model with
+    | some u => pure u
+    | none => throw .noProvider
   unless b.keys.contains a.keySlot do throw .keyMissing
   if ask.maxTokens = 0 then throw .tokensZero
   if min a.maxTokens Bounds.tokensCeiling < ask.maxTokens then throw .tokensOver
@@ -195,7 +215,7 @@ def decide (b : Broker) (now : Nat) (r : ByteArray) (ask : Ask) : Except Refusal
   if a.cap < m.spent + c then throw .overSpend
   let e' := { e with meter := ⟨m.window, m.spent + c⟩ }
   pure ({ b with last := now, entries := b.entries.map fun x => if Entry.is r ask.model x then e' else x },
-        ⟨a.keySlot.toUInt32, c, body⟩)
+        ⟨a.keySlot.toUInt32, up, c, body⟩)
 
 /-- One `decide` frame and the ask frame after it, as `hosting-broker` runs them: the next broker
 and the verdict to write. A refusal leaves the broker unchanged. -/
@@ -204,7 +224,8 @@ def step (b : Broker) (r : ByteArray) (now : Nat) (askBytes : ByteArray) : Broke
   | .error _ => (b, .refuse .badAsk)
   | .ok ask =>
     match decide b now r ask with
-    | .ok (b', g) => (b', .grant g.keySlot g.charged anthropic.target anthropic.headers anthropic.keyHeader g.body)
+    | .ok (b', g) =>
+      (b', .grant g.keySlot g.charged g.upstream.host g.upstream.target g.upstream.headers g.upstream.keyHeader g.body)
     | .error why => (b, .refuse why)
 
 end Nanodregg.Hosting.Broker

@@ -23,6 +23,7 @@ lake-manifest.json	GATES
 .gitignore	GATES
 lakefile.lean	SHARED
 gates/runs.tsv	SHARED
+gates/tcb.tsv	SHARED
 lakefile.toml	SHARED
 Cargo.toml	SHARED
 Cargo.lock	SHARED

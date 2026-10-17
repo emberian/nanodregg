@@ -1,20 +1,27 @@
-//! `keybroker KEYS SOCKDIR PIDS UPSTREAM STORE OPERATOR RESIDENTS DECIDER`
+//! `keybroker KEYS ANCHORS SOCKDIR PIDS UPSTREAM STORE OPERATOR RESIDENTS DECIDER`
 //!
 //! The provider-key broker's byte mover (HOSTING-12). It holds the operator's provider keys (the
-//! file KEYS, read once under the custody checks of `nanodregg_sandbox::custody`) and serves one Unix
+//! file KEYS, read once under the custody checks of `nanodregg_sandbox::custody`) and the TLS trust
+//! anchors (the PEM file ANCHORS, the operator's data: in production the installed copy of
+//! `deploy/tls/anchors.pem`, read once under `custody::read_public`), and serves one Unix
 //! socket per resident, `SOCKDIR/<resident>.sock` for each name in the comma-separated RESIDENTS.
 //! Identity is the socket: keybroker puts a `decide` frame naming that socket's resident in front
 //! of each ask, unread, and hands both to DECIDER (the Lean `hosting-broker`, started confined as
 //! `DECIDER T0 SLOTS STORE OPERATOR`: the operator clock, the comma-separated key slots the key file
 //! holds (so Lean refuses `keyMissing` before it charges anything), and the World it follows for
 //! the allowances OPERATOR owns, which it may read and nothing else). A `grant` names a key slot and the
-//! upstream request Lean printed; keybroker sends it to UPSTREAM (`host:port`, HTTP/1.0) with the
-//! slot's key in the header Lean named, and relays the status and body, unless the response holds
-//! the key (`keyEchoed`, withheld). It decides nothing: every verdict is the decider's, and every
-//! way it ends is a name on stderr. One ask at a time per resident (`busy`).
+//! upstream request Lean printed; keybroker dials UPSTREAM (`addr:port`, the operator's dial
+//! address), speaks TLS 1.3 (rustls with the ring provider, HOSTING-15) with SNI and certificate
+//! verification for the HOST the grant names (Lean's provider table, never the dial address), sends
+//! the request (HTTP/1.0, `Host:` Lean's host) with the slot's key in the header Lean named, and
+//! relays the status and body, unless the response holds the key (`keyEchoed`, withheld). A TLS
+//! failure is `tlsCertificate`, `tlsHostname` or `tlsProtocol`, never the upstream's text. It
+//! decides nothing: every verdict is the decider's, and every way it ends is a name on stderr. One
+//! ask at a time per resident (`busy`).
 
 use std::collections::BTreeMap;
 use std::ffi::OsString;
+use std::io::ErrorKind;
 use std::io::{Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::os::unix::net::{UnixListener, UnixStream};
@@ -29,10 +36,15 @@ use nanodregg_launcher::broker_generated::{FRAME_MAX, read_frame, write_frame};
 use nanodregg_launcher::grain_name_ok;
 use nanodregg_sandbox::custody::{self, Refused};
 use nanodregg_sandbox::{Policy, command};
+use rustls::pki_types::pem::{PemObject, SectionKind};
+use rustls::pki_types::{CertificateDer, ServerName};
+use rustls::{CertificateError, ClientConfig, ClientConnection, RootCertStore, StreamOwned};
 use zeroize::Zeroizing;
 
 /// The largest key file read.
 const KEYFILE_MAX: usize = 65536;
+/// The largest anchor file read (the pinned webpki bundle is about 200 KB).
+const ANCHORS_MAX: usize = 1 << 20;
 /// How long one upstream call may take, connect to last byte.
 const UPSTREAM_TIMEOUT: Duration = Duration::from_secs(120);
 /// How long a resident's connection may sit idle between asks.
@@ -46,6 +58,9 @@ enum End {
     Usage,
     KeyFile(&'static str),
     KeyFileFormat,
+    Anchors(&'static str),
+    AnchorsMalformed,
+    Tls(String),
     Socket(String),
     DeciderRefused(String),
     DeciderEnded(Option<i32>),
@@ -56,11 +71,14 @@ impl End {
     fn describe(&self) -> String {
         match self {
             End::Usage => {
-                "usage: keybroker KEYS SOCKDIR PIDS UPSTREAM STORE OPERATOR RESIDENTS DECIDER"
+                "usage: keybroker KEYS ANCHORS SOCKDIR PIDS UPSTREAM STORE OPERATOR RESIDENTS DECIDER"
                     .into()
             }
             End::KeyFile(n) => (*n).into(),
             End::KeyFileFormat => "keyFileFormat".into(),
+            End::Anchors(n) => (*n).into(),
+            End::AnchorsMalformed => "anchorsMalformed".into(),
+            End::Tls(e) => format!("tlsConfig {e}"),
             End::Socket(e) => format!("socket {e}"),
             End::DeciderRefused(e) => format!("deciderRefused {e}"),
             End::DeciderEnded(c) => format!("deciderEnded {c:?}"),
@@ -90,6 +108,46 @@ fn key_file_name(e: &Refused) -> &'static str {
         Refused::Dir(_) => "keyFileDir",
         Refused::Io(_) => "keyFileIo",
     }
+}
+
+/// The anchor file's custody refusal, by name. A file that is not there is `anchorsMissing`.
+fn anchors_name(e: &Refused) -> &'static str {
+    match e {
+        Refused::Link => "anchorsLink",
+        Refused::NotRegular => "anchorsNotRegular",
+        Refused::Owner(_) => "anchorsOwner",
+        Refused::Mode(_) => "anchorsMode",
+        Refused::Length(_) => "anchorsLength",
+        Refused::Dir(_) => "anchorsDir",
+        Refused::Io(e) if e.kind() == ErrorKind::NotFound => "anchorsMissing",
+        Refused::Io(_) => "anchorsIo",
+    }
+}
+
+/// Concatenated PEM `CERTIFICATE` blocks, each a trust anchor webpki accepts. Any other PEM
+/// section, a block that does not decode, an anchor webpki refuses, or no block at all is `None`
+/// (`anchorsMalformed`): the file is the operator's whole trust set, so nothing in it is skipped.
+fn parse_anchors(pem: &[u8]) -> Option<RootCertStore> {
+    let mut roots = RootCertStore::empty();
+    for item in <(SectionKind, Vec<u8>)>::pem_slice_iter(pem) {
+        let (kind, der) = item.ok()?;
+        if kind != SectionKind::Certificate {
+            return None;
+        }
+        roots.add(CertificateDer::from(der)).ok()?;
+    }
+    if roots.is_empty() { None } else { Some(roots) }
+}
+
+/// The client side of every upstream call: TLS 1.3 only, ring's primitives, the operator's anchors,
+/// SNI on, rustls' own WebPKI verifier (no custom verifier), no client certificate.
+fn tls_config(roots: RootCertStore) -> Result<ClientConfig, rustls::Error> {
+    Ok(
+        ClientConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
+            .with_protocol_versions(&[&rustls::version::TLS13])?
+            .with_root_certificates(roots)
+            .with_no_client_auth(),
+    )
 }
 
 type Keys = BTreeMap<u32, Zeroizing<Vec<u8>>>;
@@ -122,12 +180,14 @@ struct Shared {
     decider: Mutex<(ChildStdin, ChildStdout)>,
     keys: Keys,
     upstream: String,
+    tls: Arc<ClientConfig>,
 }
 
 fn run() -> End {
     let args: Vec<OsString> = std::env::args_os().skip(1).collect();
     let [
         keys_path,
+        anchors_path,
         sockdir,
         pids,
         upstream,
@@ -146,6 +206,17 @@ fn run() -> End {
     };
     let Some(keys) = parse_keys(&text) else {
         return End::KeyFileFormat;
+    };
+    let anchors = match custody::read_public(&PathBuf::from(anchors_path), 1..=ANCHORS_MAX) {
+        Ok(a) => a,
+        Err(e) => return End::Anchors(anchors_name(&e)),
+    };
+    let Some(roots) = parse_anchors(&anchors) else {
+        return End::AnchorsMalformed;
+    };
+    let tls = match tls_config(roots) {
+        Ok(c) => Arc::new(c),
+        Err(e) => return End::Tls(e.to_string()),
     };
     let Some(upstream) = upstream.to_str().map(str::to_owned) else {
         return End::Usage;
@@ -204,6 +275,7 @@ fn run() -> End {
         decider: Mutex::new((din, dout)),
         keys,
         upstream,
+        tls,
     });
 
     for r in residents {
@@ -291,6 +363,7 @@ fn ask_once(sh: &Shared, resident: &[u8], ask: &[u8]) -> Option<Answer> {
         Verdict::Refuse { broker_refusal } => refused(broker_refusal),
         Verdict::Grant {
             key_slot,
+            host,
             target,
             headers,
             key_header,
@@ -300,10 +373,17 @@ fn ask_once(sh: &Shared, resident: &[u8], ask: &[u8]) -> Option<Answer> {
             let Some(key) = sh.keys.get(&key_slot) else {
                 return Some(refused(BrokerRefusal::KeyMissing));
             };
-            match call(&sh.upstream, &target, &headers, &key_header, key, &body) {
-                None => refused(BrokerRefusal::UpstreamFailed),
-                Some(resp) if contains(&resp, key) => refused(BrokerRefusal::KeyEchoed),
-                Some(resp) => match split_response(&resp) {
+            let req = Call {
+                host: &host,
+                target: &target,
+                headers: &headers,
+                key_header: &key_header,
+                body: &body,
+            };
+            match call(sh, &req, key) {
+                Err(why) => refused(why),
+                Ok(resp) if contains(&resp, key) => refused(BrokerRefusal::KeyEchoed),
+                Ok(resp) => match split_response(&resp) {
                     Some((status, body)) => Answer::Answer {
                         status,
                         body: body.to_vec(),
@@ -319,44 +399,88 @@ fn contains(hay: &[u8], needle: &[u8]) -> bool {
     !needle.is_empty() && hay.windows(needle.len()).any(|w| w == needle)
 }
 
-/// `POST target HTTP/1.0` with Lean's headers, the key header, and Lean's body; the whole response,
-/// at most `RESPONSE_MAX` bytes.
-fn call(
-    upstream: &str,
-    target: &[u8],
-    headers: &[u8],
-    key_header: &[u8],
-    key: &[u8],
-    body: &[u8],
-) -> Option<Vec<u8>> {
-    let addr = upstream.to_socket_addrs().ok()?.next()?;
-    let mut t = TcpStream::connect_timeout(&addr, UPSTREAM_TIMEOUT).ok()?;
-    t.set_read_timeout(Some(UPSTREAM_TIMEOUT)).ok()?;
-    t.set_write_timeout(Some(UPSTREAM_TIMEOUT)).ok()?;
-    let host = upstream.rsplit_once(':').map_or(upstream, |(h, _)| h);
-    let mut req = Zeroizing::new(Vec::with_capacity(body.len() + 512));
+/// The request Lean printed for one grant.
+struct Call<'a> {
+    host: &'a [u8],
+    target: &'a [u8],
+    headers: &'a [u8],
+    key_header: &'a [u8],
+    body: &'a [u8],
+}
+
+/// A TLS error, by name: a certificate for another name is `tlsHostname`, any other certificate
+/// fault (an unknown issuer, an expired or malformed certificate) `tlsCertificate`, and everything
+/// else (a protocol version, an alert, a bad record) `tlsProtocol`.
+fn tls_refusal(e: &rustls::Error) -> BrokerRefusal {
+    match e {
+        rustls::Error::InvalidCertificate(
+            CertificateError::NotValidForName | CertificateError::NotValidForNameContext { .. },
+        ) => BrokerRefusal::TlsHostname,
+        rustls::Error::InvalidCertificate(_) => BrokerRefusal::TlsCertificate,
+        _ => BrokerRefusal::TlsProtocol,
+    }
+}
+
+/// An I/O error on the TLS stream: rustls' own error by its name, a plain transport fault
+/// `upstreamFailed`.
+fn io_refusal(e: &std::io::Error) -> BrokerRefusal {
+    match e.get_ref().and_then(|i| i.downcast_ref::<rustls::Error>()) {
+        Some(t) => tls_refusal(t),
+        None => BrokerRefusal::UpstreamFailed,
+    }
+}
+
+/// Dial UPSTREAM, complete a TLS 1.3 handshake verified for Lean's host, then `POST target
+/// HTTP/1.0` with `Host:` Lean's host, Lean's headers, the key header, and Lean's body; the whole
+/// response, at most `RESPONSE_MAX` bytes, ended by the server's `close_notify` (a close without
+/// it is a truncation nobody authenticated: `tlsProtocol`).
+fn call(sh: &Shared, r: &Call<'_>, key: &[u8]) -> Result<Vec<u8>, BrokerRefusal> {
+    let name = std::str::from_utf8(r.host)
+        .ok()
+        .and_then(|h| ServerName::try_from(h.to_owned()).ok())
+        .ok_or(BrokerRefusal::TlsHostname)?;
+    let failed = |_: std::io::Error| BrokerRefusal::UpstreamFailed;
+    let addr = sh
+        .upstream
+        .to_socket_addrs()
+        .map_err(failed)?
+        .next()
+        .ok_or(BrokerRefusal::UpstreamFailed)?;
+    let mut t = TcpStream::connect_timeout(&addr, UPSTREAM_TIMEOUT).map_err(failed)?;
+    t.set_read_timeout(Some(UPSTREAM_TIMEOUT)).map_err(failed)?;
+    t.set_write_timeout(Some(UPSTREAM_TIMEOUT))
+        .map_err(failed)?;
+    let mut conn = ClientConnection::new(Arc::clone(&sh.tls), name).map_err(|e| tls_refusal(&e))?;
+    while conn.is_handshaking() {
+        conn.complete_io(&mut t).map_err(|e| io_refusal(&e))?;
+    }
+    let mut s = StreamOwned::new(conn, t);
+    let mut req = Zeroizing::new(Vec::with_capacity(r.body.len() + 512));
     req.extend_from_slice(b"POST ");
-    req.extend_from_slice(target);
+    req.extend_from_slice(r.target);
     req.extend_from_slice(b" HTTP/1.0\r\nHost: ");
-    req.extend_from_slice(host.as_bytes());
+    req.extend_from_slice(r.host);
     req.extend_from_slice(b"\r\n");
-    req.extend_from_slice(headers);
-    req.extend_from_slice(key_header);
+    req.extend_from_slice(r.headers);
+    req.extend_from_slice(r.key_header);
     req.extend_from_slice(b": ");
     req.extend_from_slice(key);
-    req.extend_from_slice(format!("\r\nContent-Length: {}\r\n\r\n", body.len()).as_bytes());
-    req.extend_from_slice(body);
-    t.write_all(&req).ok()?;
-    t.flush().ok()?;
+    req.extend_from_slice(format!("\r\nContent-Length: {}\r\n\r\n", r.body.len()).as_bytes());
+    req.extend_from_slice(r.body);
+    s.write_all(&req).map_err(|e| io_refusal(&e))?;
+    s.flush().map_err(|e| io_refusal(&e))?;
     let mut resp = Vec::new();
-    let n = t
+    let n = (&mut s)
         .take(RESPONSE_MAX as u64 + 1)
         .read_to_end(&mut resp)
-        .ok()?;
+        .map_err(|e| match e.kind() {
+            ErrorKind::UnexpectedEof => BrokerRefusal::TlsProtocol,
+            _ => io_refusal(&e),
+        })?;
     if n > RESPONSE_MAX {
-        return None;
+        return Err(BrokerRefusal::UpstreamFailed);
     }
-    Some(resp)
+    Ok(resp)
 }
 
 /// The status code of `HTTP/1.x NNN …` and the bytes after the blank line.

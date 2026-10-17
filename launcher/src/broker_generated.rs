@@ -216,6 +216,10 @@ pub mod wire {
         UpstreamFailed,
         Busy,
         AllowanceAmbiguous,
+        NoProvider,
+        TlsCertificate,
+        TlsHostname,
+        TlsProtocol,
     }
 
     impl BrokerRefusal {
@@ -237,6 +241,10 @@ pub mod wire {
                 BrokerRefusal::UpstreamFailed => 13,
                 BrokerRefusal::Busy => 14,
                 BrokerRefusal::AllowanceAmbiguous => 15,
+                BrokerRefusal::NoProvider => 16,
+                BrokerRefusal::TlsCertificate => 17,
+                BrokerRefusal::TlsHostname => 18,
+                BrokerRefusal::TlsProtocol => 19,
             }
         }
 
@@ -258,6 +266,10 @@ pub mod wire {
                 13 => Some(BrokerRefusal::UpstreamFailed),
                 14 => Some(BrokerRefusal::Busy),
                 15 => Some(BrokerRefusal::AllowanceAmbiguous),
+                16 => Some(BrokerRefusal::NoProvider),
+                17 => Some(BrokerRefusal::TlsCertificate),
+                18 => Some(BrokerRefusal::TlsHostname),
+                19 => Some(BrokerRefusal::TlsProtocol),
                 _ => None,
             }
         }
@@ -281,6 +293,10 @@ pub mod wire {
                 BrokerRefusal::UpstreamFailed => "upstreamFailed",
                 BrokerRefusal::Busy => "busy",
                 BrokerRefusal::AllowanceAmbiguous => "allowanceAmbiguous",
+                BrokerRefusal::NoProvider => "noProvider",
+                BrokerRefusal::TlsCertificate => "tlsCertificate",
+                BrokerRefusal::TlsHostname => "tlsHostname",
+                BrokerRefusal::TlsProtocol => "tlsProtocol",
             }
         }
     }
@@ -382,6 +398,7 @@ pub mod wire {
         Grant {
             key_slot: u32,
             charged: u64,
+            host: Vec<u8>,
             target: Vec<u8>,
             headers: Vec<u8>,
             key_header: Vec<u8>,
@@ -400,6 +417,7 @@ pub mod wire {
                 1 => {
                     let key_slot = c.u32()? as u32;
                     let charged = c.u64()?;
+                    let host = c.bytes(131072)?;
                     let target = c.bytes(131072)?;
                     let headers = c.bytes(131072)?;
                     let key_header = c.bytes(131072)?;
@@ -407,6 +425,7 @@ pub mod wire {
                     Verdict::Grant {
                         key_slot,
                         charged,
+                        host,
                         target,
                         headers,
                         key_header,
@@ -429,6 +448,7 @@ pub mod wire {
                 Verdict::Grant {
                     key_slot,
                     charged,
+                    host,
                     target,
                     headers,
                     key_header,
@@ -437,6 +457,7 @@ pub mod wire {
                     out.push(1);
                     out.extend_from_slice(&key_slot.to_le_bytes());
                     out.extend_from_slice(&charged.to_le_bytes());
+                    put_bytes(&mut out, host, 131072)?;
                     put_bytes(&mut out, target, 131072)?;
                     put_bytes(&mut out, headers, 131072)?;
                     put_bytes(&mut out, key_header, 131072)?;
