@@ -30,7 +30,12 @@ a split would put one edge list's consumers in two layers.
   *chooses to* is cost. `lifecycle_text_reads` is kernel-reachable in principle and took > 200 s for the
   printer alone (11 KB of `String` appends; measured). The law should name the test: a kernel proof
   that does not finish in the per-module budget is one the compiler must be trusted for, and the
-  allow row records the measurement. Proposed amendment, not a violation.
+  allow row records the measurement. Proposed amendment, not a violation. **Dissolved (HOSTING-3,
+  10-17):** the example was a wrong statement, not a hard proof. `lifecycle_text_reads` is now LANG-29's
+  general `readPackage_checked` at the lifecycle; the one closed fact left, that the printer gives
+  `some` (`lifecycle_prints`), is `decide +kernel`, because `Option.isSome` never forces the text.
+  Both allow rows are deleted. A cost that looked like "the compiler must be trusted" was really a
+  missing general theorem, which is the case the law should keep in view.
 - Law 7, "every refusal a constructor with a name": a law's refusal is `lawDenied law reason` with the
   reason free text. The NAME on the wire is `lawDenied`; which edge was refused lives in prose. That is
   right for an author's law (a package cannot add constructors to KERNEL), and the rows already judge
@@ -165,7 +170,9 @@ build is a FAIL by name in the sim, `lifecycle_built` proves it builds), state
 with occasions, until KERNEL-25 lands; then it and the `owner` field go. Theorems moved to the
 occasion-aware body: `phase_birth`, `phase_invoke`, `phase_frozen`, `method_writes`,
 `method_iff_step`, `owner_born`, `owner_invoke`, `lifecycle_methods`, `laws_in_force`,
-`lifecycle_checks`, `lifecycle_text_reads`, `method_at_index`; and `Proofs.Deployed.invoke_slots`
+`lifecycle_checks`, `lifecycle_text_reads` (since HOSTING-3: `∃ p s, lifecycle? = .ok p ∧
+Print.package p = some s ∧ readPackage s = .ok p`, from `readPackage_checked`; with `lifecycle_prints`
+and `lifecycle_encodes`, all kernel-checked), `method_at_index`; and `Proofs.Deployed.invoke_slots`
 (native_decide, allow row): on the DEPLOYED path — `Lang.program`'s `run` from slots, then its
 `judge` — for both kinds × every phase × event, admitted iff `step` is some, phase slot = `target`,
 entry/kind/owner slots unchanged. Vacuity read (10-17): `method_writes` tested only `kind = app` and
@@ -419,8 +426,10 @@ visibility, not what runs. The test names the errno the OS gave.
 **Alternatives.** The real controller over a real Store holding a grain (needs genesis, install,
 create, invoke through a member client: the row harness's job, PROTOCOL's grain row); a Rust-built
 plan (forbidden: law 2).
-**CRITIQUE.** The test does not run in pre-push or standing (cargo test is not in the gate): it is
-evidence at 10-17, not a standing tooth until GATES runs it (asked). `hosting-drive` is a second
+**CRITIQUE.** The test is a standing tooth since GATES-2's 23a1f31: the `gates/runs.tsv` row
+`cargo:launcher:isolation` runs it in every standing run, and pre-push runs it when `launcher/` or
+`hosting-drive`'s import closure changes (GATES-2 planted the row). It runs only where nd-bwrap
+exists (hbox), so a Mac reader's green says nothing about it. `hosting-drive` is a second
 caller of `plan` beside the controller: it shares the definitions, not the round. Kill is SIGKILL to
 bwrap (`--die-with-parent` takes the grain); there is no graceful stop.
 **META.** I read the brief's "EPERM" literally at first; the OS says ENOENT under a mount namespace,

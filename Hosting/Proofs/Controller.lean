@@ -10,6 +10,7 @@ own cell at a touched id and names that id's directory.
 -/
 import Hosting.Controller
 import Lang.Print
+import Lang.Proofs.Print
 
 namespace Nanodregg.Hosting.Proofs
 
@@ -87,38 +88,10 @@ theorem crashLoop_refused {label pkgId : ByteArray} {now : Nat} {live : List Liv
     decideCell label pkgId now live g (some c) = some (.refuse .crashLoop) := by
   simp [decideCell, hg, hgr, hu, hc]
 
-private theorem digit_inj : ∀ a b : Fin 16, Lang.Print.hexDigit a.val = Lang.Print.hexDigit b.val → a = b := by
-  decide
-
-private theorem byte_inj {x y : UInt8}
-    (h1 : Lang.Print.hexDigit (x.toNat / 16) = Lang.Print.hexDigit (y.toNat / 16))
-    (h2 : Lang.Print.hexDigit (x.toNat % 16) = Lang.Print.hexDigit (y.toNat % 16)) : x = y := by
-  have hx := x.toNat_lt; have hy := y.toNat_lt
-  have e1 := congrArg Fin.val (digit_inj ⟨x.toNat / 16, by omega⟩ ⟨y.toNat / 16, by omega⟩ h1)
-  have e2 := congrArg Fin.val (digit_inj ⟨x.toNat % 16, by omega⟩ ⟨y.toNat % 16, by omega⟩ h2)
-  simp only at e1 e2
-  apply UInt8.toNat_inj.mp
-  omega
-
-private def hexL (l : List UInt8) : List Char :=
-  l.foldr (fun x cs => Lang.Print.hexDigit (x.toNat / 16) :: Lang.Print.hexDigit (x.toNat % 16) :: cs) []
-
-private theorem hexL_inj : ∀ {a b : List UInt8}, hexL a = hexL b → a = b
-  | [], [], _ => rfl
-  | [], _ :: _, h => by simp [hexL] at h
-  | _ :: _, [], h => by simp [hexL] at h
-  | x :: xs, y :: ys, h => by
-    simp only [hexL, List.foldr_cons, List.cons.injEq] at h
-    obtain ⟨h1, h2, h3⟩ := h
-    rw [byte_inj h1 h2, hexL_inj h3]
-
-/-- Distinct ids get distinct directories. -/
+/-- Distinct ids get distinct directories: LANG's `hex_injective` through UTF-8. -/
 theorem dirOf_injective {a b : ByteArray} (h : dirOf a = dirOf b) : a = b := by
-  unfold dirOf Lang.Print.hex Lang.Print.hexChars at h
-  have h' := String.ofList_inj.mp (String.toByteArray_inj.mp h)
-  rw [← Array.foldr_toList, ← Array.foldr_toList] at h'
-  have := hexL_inj h'
-  cases a; cases b; simp_all
+  unfold dirOf at h
+  exact Lang.Print.hex_injective (String.toByteArray_inj.mp h)
 
 variable {D : Type} [Ord D] [DecidableEq D]
 

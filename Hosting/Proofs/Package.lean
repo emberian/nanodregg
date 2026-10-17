@@ -17,6 +17,7 @@ import Lang.Print
 import Hosting.Proofs.Lifecycle
 import Lang.Read
 import Lang.Eval
+import Lang.Proofs.Print
 
 namespace Nanodregg.Hosting.Proofs
 
@@ -134,14 +135,32 @@ theorem method_iff_step :
         (lawOn "phase" (rqD (invokeD e.index)) (stD (target p e)) (stD p)) = true := by
   decide +kernel
 
-/-- The text a member installs reads, by `Lang.Read`, to the package's own bytes. The kernel
-cannot reach it: evaluating the printer alone (about 10 KB of `String` appends) did not finish in
-200 s (measured 10-17), so this is the compiler's evaluation, recorded in gates/axioms-allow.tsv. -/
+/-- The package prints: `Print.package` gives the lifecycle a text (every depth within
+`Read.depthMax`). Whether a text EXISTS needs no string built, so the kernel decides it. -/
+theorem lifecycle_prints : (Grain.lifecycle?.toOption.bind Print.package).isSome = true := by
+  decide +kernel
+
+/-- The text a member installs reads back, by `Lang.Read`, as exactly the package: LANG-29's
+`readPackage_checked` over `lifecycle_checks` (no imports), at the text `lifecycle_prints` says
+exists. -/
 theorem lifecycle_text_reads :
-    ((Grain.lifecycle?.toOption.bind Print.package).bind fun t =>
-      (Read.readPackage t).toOption.bind Wire.encodePackage) =
-        Grain.lifecycle?.toOption.bind Wire.encodePackage ∧
-    (Grain.lifecycle?.toOption.bind Wire.encodePackage).isSome := by
-  native_decide
+    ∃ p s, Grain.lifecycle? = .ok p ∧ Print.package p = some s ∧ Read.readPackage s = .ok p := by
+  have hc := lifecycle_checks
+  have hp := lifecycle_prints
+  cases hl : Grain.lifecycle? with
+  | error e => rw [hl] at hc; cases hc
+  | ok p =>
+    rw [hl] at hc hp
+    have hc' : p.checkWith [] = .ok () := by
+      simp only [Except.toOption, Option.map_some, Option.some.injEq] at hc
+      split at hc
+      · assumption
+      · cases hc
+    obtain ⟨s, hs⟩ := Option.isSome_iff_exists.mp (by simpa [Except.toOption] using hp)
+    exact ⟨p, s, rfl, hs, Print.readPackage_checked (by simp) hc' hs⟩
+
+/-- The package has wire bytes (what `install` carries and `lifecycleId` digests). -/
+theorem lifecycle_encodes : (Grain.lifecycle?.toOption.bind Wire.encodePackage).isSome = true := by
+  decide +kernel
 
 end Nanodregg.Hosting.Proofs
