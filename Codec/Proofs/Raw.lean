@@ -434,4 +434,40 @@ theorem rawList_lawfulOn {P : α → Prop} {c : Stream α} (hc : LawfulOn P c) (
         · cases h
       · cases h
 
+/-! ## Reading a component -/
+
+/-- A product read returns its first component as the first codec's read at the same offset. -/
+theorem product_get_fst {a : Stream α} {c : Stream β} {b : ByteArray} {i k : Nat} {v : α × β}
+    (h : (product a c).get b i = .ok (v, k)) : ∃ j, a.get b i = .ok (v.1, j) := by
+  simp only [product] at h
+  split at h
+  · cases h
+  · rename_i x j hx
+    split at h
+    · cases h; exact ⟨j, hx⟩
+    · cases h
+
+/-- A product read returns its second component as the second codec's read where the first stopped. -/
+theorem product_get_snd {a : Stream α} {c : Stream β} {b : ByteArray} {i k : Nat} {v : α × β}
+    (h : (product a c).get b i = .ok (v, k)) : ∃ j, a.get b i = .ok (v.1, j) ∧ c.get b j = .ok (v.2, k) := by
+  simp only [product] at h
+  split at h
+  · cases h
+  · rename_i x j hx
+    split at h
+    · rename_i y k' hy; cases h; exact ⟨j, hx, hy⟩
+    · cases h
+
+/-- A refined read is an accepted read of the inner codec, ending where it ended. -/
+theorem refine_get_inner {γ : Type} {c : Stream α} {name : String} {accept : α → Option γ} {back : γ → α}
+    {b : ByteArray} {i j : Nat} {y : γ} (h : (refine name c accept back).get b i = .ok (y, j)) :
+    ∃ x, c.get b i = .ok (x, j) ∧ accept x = some y := by
+  simp only [refine] at h
+  split at h
+  · cases h
+  · rename_i x j' hx
+    split at h
+    · rename_i y' hy; cases h; exact ⟨x, hx, hy⟩
+    · cases h
+
 end Nanodregg.Codec.Stream

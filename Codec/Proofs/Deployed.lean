@@ -67,4 +67,9 @@ theorem turnBytes_size (t : Turn Digest) : (env.turnBytes t).size = t.logWeight 
   show ((turn digestCodec).bytes t).size = t.logWeight
   rw [← (turn_lawfulOn digestCodec_lawful.on).size_eq, turn_size_logWeight (fun _ => rfl)]
 
+/-- A World read as a component of a larger record (HOST's base) satisfies the kernel's trie invariant. -/
+theorem world_get_canon {b : ByteArray} {i j : Nat} {w : World Digest} (h : world.get b i = .ok (w, j)) :
+    w.Canon env ∧ ∀ p ∈ w.trie.toList, Leaf.fits p.1 p.2 = true :=
+  Nanodregg.Codec.Kernel.world_get_canon digestCodec_lawful.on h
+
 end Nanodregg.Codec.Deployed

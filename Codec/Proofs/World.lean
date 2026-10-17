@@ -378,6 +378,20 @@ theorem world_decode_canon {E : Env D} {PD : D → Prop} {dc : Stream D} (hd : L
   · cases h
 
 omit [TransOrd D] [LawfulEqOrd D] in
+/-- What a World read returns at any offset — the World as a COMPONENT of a larger record (HOST's base) —
+satisfies the kernel's trie invariant, and every slot holds the leaf of its kind. -/
+theorem world_get_canon {E : Env D} {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc)
+    {b : ByteArray} {i j : Nat} {w : World D} (h : (world E dc).get b i = .ok (w, j)) :
+    w.Canon E ∧ ∀ p ∈ w.trie.toList, Leaf.fits p.1 p.2 = true := by
+  simp only [world] at h
+  split at h
+  · rename_i x j' hx
+    cases h
+    obtain ⟨hf, _⟩ := (worldWire_lawfulOn E hd).occurs_of_get hx
+    exact ⟨hf.1.2, hf.1.1.2⟩
+  · cases h
+
+omit [TransOrd D] [LawfulEqOrd D] in
 /-- A decoded World has every slot holding the leaf of its kind (the kernel's `World.Slotted`). -/
 theorem world_decode_slotted {E : Env D} {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc)
     {b : ByteArray} {w : World D} (h : (world E dc).decode b = .ok w) : w.Slotted E := by
