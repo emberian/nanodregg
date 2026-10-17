@@ -599,8 +599,10 @@ points (`mul2_of_chunks`, the CODEC-20 shape: 1.6 GB, 55 s for the module), and 
 `[L] B`. Tooth `B_not_small`: `[8] B ≠ 0`, so the order is not the cofactor's. This closes critique (1) above
 for `B` (`L` prime is RFC 8032's statement; its primality is not proved here). The intermediate literals were
 printed by evaluating the deployed ladder (hbox logs/codec4-order.lean) and are checked, not trusted.
+`L` prime: `Codec/Proofs/PrimeL.lean`, `Prime.L_prime : IsPrime Ed25519.L` (a 35-node Pratt tree over the
+known factorization of `L − 1`, built by `pratt_check` as `p_prime` was; 0.9 GB, 5 s).
 Status: parts 1–3 built. Open: decode ∘ encode (signature correctness: `verify (publicKey s) m (sign s m)`
-for every seed), and `L` prime.
+for every seed).
 
 ## CODEC-24 · The broker frames are a second generated file, `emit-broker` (HOSTING-3's ask; CODEC-3, 2026-10-17)
 **Decision.** `Emit/Broker.lean` prints `launcher/src/broker_generated.rs` by `Rust.taggedFile` from
