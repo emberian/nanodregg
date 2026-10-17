@@ -931,3 +931,76 @@ host/base, and adds kernel/journal (71 vectors, 27 sites). What re-geneses: ever
 (`Base.shapeStamp`, over the World codec's tag) moved. What refuses to load: an old base refuses `shapeMismatch` by
 stamp before decoding. An old carried export file refuses by its stamp (the carried tag moved with the rename),
 and so does a base whose journal is outside the window (`kernel/journal`).
+
+## CODEC-29 · `kernel/trie-order` is the order of the bytes, stated without the trie (CODEC-28 step 2; CODEC-7, 2026-10-17, agreed with KERNEL-10)
+**Decision.** The predicate behind the trie-order refinement was KERNEL-relative: `Trie.Canon (trieSpec E)`. A change to
+`slotBit` or `byteBit` would therefore have moved which listings decode, and every Codec theorem would have stayed
+green. Three proof modules now restate it in bytes.
+- `Codec/Proofs/TrieOrder.lean`, the generic half:
+  - `BitLt S d k k'` means that at the first bit in `[d, depth)` where k and k' differ, k's bit is clear.
+  - `build_listing_iff`: under `Trie.SepAt S d l`, `(build l).toList = l ∧ leavesNodup (build l)` holds exactly when
+    `l.Pairwise (BitLt S d)` holds on its keys. The proof is by the recursion of `build`. At a node, the listing is
+    its bit-d-clear filter followed by its bit-d-set filter. At depth, two keys in one leaf would contradict SepAt.
+  - `cells_get_ok`, `cells_get_refused` (`rejected i "kernel/trie-order"`) and `cells_get_ordered`, all under
+    `Trie.Separates`.
+- `Codec/Proofs/SlotOrder.lean`, the bytes half:
+  - `compare_lt_iff_bits`: for two byte strings of one size, `compare` is `.lt` exactly when, at the first differing
+    `byteBit` (MSB of byte 0 first), the first string's bit is clear. Two lemmas build it. `nat_lt_of_testBit`
+    proves it from div/mod by a power of two. `first_bit_diff` proves it by strong recursion.
+  - `SlotBefore E s s'` puts cells before nullifiers, then compares the ids' bytes with `compare`. No trie appears.
+  - `bitLt_trieSpec_iff (hE : E.Lawful n)` shows `BitLt (trieSpec E) 0 ↔ SlotBefore E`.
+  - The cells theorems are restated over `SlotBefore`.
+- `Codec/Proofs/TrieOrderDeployed.lean`:
+  - `trieOrder_iff`: given `fitList.get b i = ok (l, j)`, `cells.get b i = ok (build l, j)` holds exactly when
+    `l.Pairwise SlotBefore env`. `slotBefore_iff` shows that `SlotBefore env` is the kind first, then `Digest`'s
+    `compare`.
+  - `trieOrder_refuses` and `trieOrder_accepted`.
+  - Teeth, over the ids lo = 01 00… and hi = 80 00…:
+    - `cells_refuses_bytes_descending`: the listing hi, lo decodes to `rejected 0 "kernel/trie-order"`.
+    - `cells_reads_bytes_ascending`: the listing lo, hi reads back.
+    - `lsbRouting_refuted`: a routing that reads each id byte low bit first falsifies the order theorem, and its own
+      check admits hi, lo, which the deployed codec refuses.
+- maxrss is 0.77 GB per module, about 2 s each, which is the import floor.
+**Contract (KERNEL-10).** Routing stays a kernel decision. A deliberate change to `slotBit`, `byteBit` or `trieDepth` lands
+as `kernel!` together with the Codec re-proof of `bitLt_trieSpec_iff` and a re-pin of the vectors. It cannot pass silently.
+No tag moves, no vectors change, and nothing re-emits or re-geneses.
+**Critique.**
+- (1) The theorem pins the order relative to `E.bytes`. A lawful Env whose `bytes` permuted the digest's bytes would
+  route "by its bytes" yet differ from `Digest.compare` on the raw digest. At deployment `env.bytes = Digest.bytes`
+  (`slotBefore_iff` is `Iff.rfl`), so the deployed statement is the real one.
+- (2) `Pairwise` is the strong form. The adjacent (`Chain'`) form follows by transitivity and is not stated, because
+  nothing consumes it.
+- (3) The teeth use the deployed digest and no `Sim`. Every `decide` there evaluates `byteBit` only. `Array.compareLex`
+  is well-founded and is never reduced: `lo_hi` goes through `compare_lt_iff_bits`.
+**Meta-critique.** "A routing change breaks a Codec theorem" is only a detector if someone reads the break as a meaning
+change rather than a proof to patch. The real guard is the vectors: a routing change moves which listings decode, and
+`codec-vectors --check` refuses the old trie-order rows under the unchanged tag. The theorem names what changed. The
+vectors refuse it.
+
+## CODEC-30 · Law-6 read of the two Equiv allow rows (GATES-3's request; CODEC-7, 2026-10-17)
+**Read.** gates/refines-allow.tsv excuses `kernel/world` and `kernel/carried` from a plain lawfulness theorem. For each row
+I read the theorems it names:
+- `world_decode_bytes` (hd, `World.CodecFits E PD w`): `∃ w', (world E dc).decode ((world E dc).bytes w) = .ok w' ∧ w'.Equiv w`.
+- `eq_bytes_of_world_decode`: `(world E dc).decode b = .ok w → b = (world E dc).bytes w`.
+- `carried_decode_iff` (hd, `Carried.CodecFits`): `(∃ c', (carried E dc).decode b = .ok c' ∧ CarriedEquiv c' c) ↔ b = (carried E dc).bytes c`.
+- `eq_bytes_of_carried_decode`: whatever decodes is exactly its own bytes.
+Each row names theorems that state `decode` of the excused constant (the census checks the head constant). Neither theorem
+is a `P → P` restatement: both go through `journalWire_lawfulOn` / `carriedWire_lawfulOn`, which carry the
+`kernel/journal`, `kernel/ascending` and `kernel/trie-order` checks. `World.Equiv` is `=` on the trie, height, chain,
+allowance and origin, and `TreeMap.Equiv` on the journal.
+**Is Equiv the right relation? Yes, for the type KERNEL carries.** `World.journal : Std.TreeMap D (Nat × D) compare`.
+Two TreeMaps with one key set can differ in balancing: `ofList` of the sorted listing and the map a fold built by
+`insert`/`erase` are generally not `=`. So `decode ∘ bytes = id` is false, and a plain `Lawful`/`LawfulOn` theorem is
+unprovable for this type. The direction that matters is `eq_bytes_of_*_decode`, which is exact (`=` on bytes). So the
+bytes are a function of the contents, and the codec is canonical.
+**Could `=` be reached?** Only if KERNEL changed the journal's type to a canonical representation. Candidates are a
+strictly sorted list (a subtype), or the journal as a second `Trie.T`, whose `build_toList` already gives `=`. Then the
+allow rows go and plain `LawfulOn` theorems replace them. That is KERNEL's call (lookup cost: the journal is at most
+`Bounds.journalMax` entries and read on every admission), so I state it here rather than decide it. The allow rows stand.
+**Critique.** An allow row is a standing exception, and exceptions accrete. Both rows exist for one reason, the
+`TreeMap`. If KERNEL ever moves the journal into a canonical type, both rows must be deleted in that commit. The
+census makes this automatic: a row that excuses a site with a plain lawfulness theorem is an error.
+**Meta-critique.** "TreeMap balancing is not contents" is true, but it is also the kind of argument that keeps a
+weaker statement because it is the one we have. The test is whether any consumer needs `=` on a decoded World. Today
+none does: every kernel theorem over a decoded base takes `World.Equiv` congruences (`live_congr`, `root_congr`), or
+reads the trie, which is `=`.

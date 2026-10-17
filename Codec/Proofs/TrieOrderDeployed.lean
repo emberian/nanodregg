@@ -1,0 +1,136 @@
+import Codec.Proofs.SlotOrder
+import Kernel.Proofs.RootedDeployed
+
+/-!
+# The deployed World listing is ordered by its bytes (CODEC-28 step 2)
+
+At the deployed codec, `kernel/trie-order` accepts the World's trie listing exactly when it is
+strictly ascending by (kind: cells first, then the id's 32 bytes in `Digest` order), and refuses every
+other listing by name (`trieOrder_iff`, `trieOrder_refuses`, `trieOrder_accepted`). The statement
+names no trie: it is pinned to `Digest`'s `compare`, so a change of KERNEL's routing (`slotBit`,
+`byteBit`, `trieSpec`'s depth) breaks `Codec.Kernel.bitLt_trieSpec_iff` here instead of moving what
+a base's bytes must look like.
+
+Teeth, over two cell ids that differ in byte 0 (`lo` = 0x01…, `hi` = 0x80…):
+* `cells_refuses_bytes_descending`: the listing `hi, lo` is refused `kernel/trie-order` by name;
+  `cells_reads_bytes_ascending`: `lo, hi` is read back.
+* `lsbRouting_refuted`: a routing that reads each id byte low bit first is not the byte order (the
+  order theorem is false for it), and its check admits the listing `hi, lo` that the deployed codec
+  refuses: the mutation would have changed which bytes decode.
+-/
+
+namespace Nanodregg.Codec.Deployed
+
+open Nanodregg.Kernel Nanodregg.Codec.Kernel Nanodregg.Codec.Stream
+
+/-- At the deployed digest, `SlotBefore` is cells first, then `Digest`'s own order. -/
+theorem slotBefore_iff (s s' : Slot Digest) :
+    SlotBefore env s s' ↔ (s.isNullifier = false ∧ s'.isNullifier = true) ∨
+      (s.isNullifier = s'.isNullifier ∧ compare s.id s'.id = .lt) := Iff.rfl
+
+/-- **The deployed trie listing is accepted exactly when strictly ascending by (kind, id bytes).** -/
+theorem trieOrder_iff {b : ByteArray} {i j : Nat} {l : List (Slot Digest × Leaf)}
+    (h : (fitList digestCodec).get b i = .ok (l, j)) :
+    (cells env digestCodec).get b i = .ok (Trie.build (trieSpec env) (trieSpec env).depth 0 l, j) ↔
+      l.Pairwise (fun p q => SlotBefore env p.1 q.1) := by
+  constructor
+  · intro hc
+    by_cases ho : l.Pairwise (fun p q => SlotBefore env p.1 q.1)
+    · exact ho
+    · rw [cells_get_refused_slotBefore Receive.deployed_lawful h ho] at hc; cases hc
+  · exact cells_get_ok_slotBefore Receive.deployed_lawful h
+
+/-- **Any other deployed listing is refused `kernel/trie-order` by name.** -/
+theorem trieOrder_refuses {b : ByteArray} {i j : Nat} {l : List (Slot Digest × Leaf)}
+    (h : (fitList digestCodec).get b i = .ok (l, j)) (ho : ¬ l.Pairwise (fun p q => SlotBefore env p.1 q.1)) :
+    (cells env digestCodec).get b i = .error (.rejected i "kernel/trie-order") :=
+  cells_get_refused_slotBefore Receive.deployed_lawful h ho
+
+/-- Whatever the deployed trie part reads was a listing strictly ascending by (kind, id bytes). -/
+theorem trieOrder_accepted {b : ByteArray} {i j : Nat} {t : Cells Digest}
+    (h : (cells env digestCodec).get b i = .ok (t, j)) :
+    ∃ l, (fitList digestCodec).get b i = .ok (l, j) ∧ l.Pairwise (fun p q => SlotBefore env p.1 q.1) ∧
+      t = Trie.build (trieSpec env) (trieSpec env).depth 0 l :=
+  cells_get_slotBefore Receive.deployed_lawful h
+
+/-! ## Teeth -/
+
+private def lo : Digest := ⟨⟨#[1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]⟩, by decide⟩
+private def hi : Digest := ⟨⟨#[128, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]⟩, by decide⟩
+
+private theorem lo_hi : compare lo hi = .lt :=
+  (compare_lt_iff_bits (a := lo.bytes) (b := hi.bytes) (by decide)).mpr
+    ⟨0, fun _ h => absurd h (by omega), by decide, by decide⟩
+
+private theorem hi_lo : compare hi lo = .gt := by
+  rw [Std.OrientedCmp.eq_swap (cmp := compare), lo_hi]; rfl
+
+private theorem fitList_get (l : List (Slot Digest × Leaf))
+    (hf : TrieListFits (fun _ => True) l ∧ ∀ p ∈ l, Leaf.fits p.1 p.2 = true) :
+    (fitList digestCodec).get ((fitList digestCodec).bytes l) 0 =
+      .ok (l, ((fitList digestCodec).bytes l).size) := by
+  simpa using (fitList_lawfulOn digest_lawful.on).get_of_occurs l _ 0 hf (occursAt_self _)
+
+/-- **Tooth.** Two cells listed with their ids in descending byte order are refused
+`kernel/trie-order` by name. -/
+theorem cells_refuses_bytes_descending :
+    (cells env digestCodec).decode
+        ((fitList digestCodec).bytes [(.cell hi, .entry .tomb), (.cell lo, .entry .tomb)]) =
+      .error (.rejected 0 "kernel/trie-order") := by
+  have hg := fitList_get [(.cell hi, .entry .tomb), (.cell lo, .entry .tomb)]
+    ⟨⟨by decide, by simp [Entry.Fits, Leaf.Fits]⟩, by decide⟩
+  have ho : ¬ [((Slot.cell hi : Slot Digest), Leaf.entry .tomb), (.cell lo, .entry .tomb)].Pairwise
+      (fun p q => SlotBefore env p.1 q.1) := by
+    intro hp
+    rcases (List.pairwise_cons.mp hp).1 _ (List.mem_singleton_self _) with ⟨_, h⟩ | ⟨_, h⟩
+    · cases h
+    · have : compare hi lo = .lt := h
+      rw [hi_lo] at this; cases this
+  unfold Stream.decode
+  rw [trieOrder_refuses hg ho]
+
+/-- The same two cells in ascending byte order are read back. -/
+theorem cells_reads_bytes_ascending :
+    (cells env digestCodec).decode
+        ((fitList digestCodec).bytes [(.cell lo, .entry .tomb), (.cell hi, .entry .tomb)]) =
+      .ok (Trie.build (trieSpec env) (trieSpec env).depth 0 [(.cell lo, .entry .tomb), (.cell hi, .entry .tomb)]) := by
+  have hg := fitList_get [(.cell lo, .entry .tomb), (.cell hi, .entry .tomb)]
+    ⟨⟨by decide, by simp [Entry.Fits, Leaf.Fits]⟩, by decide⟩
+  have ho : [((Slot.cell lo : Slot Digest), Leaf.entry .tomb), (.cell hi, .entry .tomb)].Pairwise
+      (fun p q => SlotBefore env p.1 q.1) :=
+    List.pairwise_pair.mpr (Or.inr ⟨rfl, lo_hi⟩)
+  unfold Stream.decode
+  rw [(trieOrder_iff hg).mpr ho]
+  simp
+
+/-- **Tooth (the routing mutation).** A trie that reads each id byte low bit first is not ordered by
+the bytes: `bitLt_trieSpec_iff` is false for it, and its listing check admits `hi, lo`, the listing
+the deployed codec refuses (`cells_refuses_bytes_descending`). -/
+theorem lsbRouting_refuted :
+    let S' : Trie.Spec (Slot Digest) Leaf Digest :=
+      { trieSpec env with
+        bit := fun s i => match i with
+          | 0 => s.isNullifier
+          | i + 1 => if h : i / 8 < (env.bytes s.id).size
+              then ((env.bytes s.id)[i / 8]'h).toNat.testBit (i % 8) else false }
+    let l : List (Slot Digest × Leaf) := [(.cell hi, .entry .tomb), (.cell lo, .entry .tomb)]
+    (¬ ∀ s s' : Slot Digest, BitLt S' 0 s s' ↔ SlotBefore env s s') ∧
+      (Trie.build S' S'.depth 0 l).toList = l ∧ leavesNodup (Trie.build S' S'.depth 0 l) = true := by
+  intro S' l
+  have hhl : BitLt S' 0 (.cell hi) (.cell lo) :=
+    ⟨1, Nat.zero_le _, by decide, fun j _ hj => by
+      have : j = 0 := by omega
+      subst this; rfl, by decide, by decide⟩
+  refine ⟨fun H => ?_, (build_listing_iff S' _ 0 l rfl ?_).mpr ?_⟩
+  · have hlh : BitLt S' 0 (.cell lo) (.cell hi) := (H _ _).mpr (Or.inr ⟨rfl, lo_hi⟩)
+    exact bitLt_asymm S' hlh hhl
+  · intro p hp q hq hne
+    simp only [l, List.mem_cons, List.not_mem_nil, or_false] at hp hq
+    rcases hp with rfl | rfl <;> rcases hq with rfl | rfl
+    · exact absurd rfl hne
+    · exact ⟨1, Nat.zero_le _, by decide, by decide⟩
+    · exact ⟨1, Nat.zero_le _, by decide, by decide⟩
+    · exact absurd rfl hne
+  · exact List.pairwise_pair.mpr hhl
+
+end Nanodregg.Codec.Deployed
