@@ -317,6 +317,68 @@ def originPlants (exe : String) (dir : System.FilePath) : IO Nat := do
       failed := failed + 1
   return failed
 
+/-- HOST-31's `indexMoved` (48, restart), live: a writer whose `index.log` grows under it (another
+process appended a byte) must refuse its next seal by name, and the restart's open must truncate
+the byte as an orphan page and reopen at the durable height. The byte is appended after the
+writer is serving and before its first seal; the writer is then fed until the seal is due. -/
+def indexMovedPlant (exe : String) (dir : System.FilePath) : IO Nat := do
+  let m := dir / "M"
+  let g ← host exe (["genesis", m.toString, name] ++ Founder.genesisArgs)
+  unless g.code = 0 do IO.eprintln s!"genesis M: {g.out}"; return 1
+  let w0 ← match Founder.world name with
+    | .ok w => pure w
+    | .error r => do IO.eprintln s!"genesis refused {r.name}"; return 1
+  let n := 24
+  let (frames, _) ← (List.range n).foldlM (init := (#[], w0)) fun (fs, w) i => do
+    let c := Founder.create w i (bigState i)
+    match submit X w c with
+    | .ok (_, w') => pure (fs.push (Founder.submitFrame c), w')
+    | .error _ => throw (IO.userError s!"indexMoved call {i} does not admit in process")
+  let child ← IO.Process.spawn
+    { cmd := exe, args := #["serve", m.toString], stdin := .piped, stdout := .piped, stderr := .piped }
+  let (input, child) ← child.takeStdin
+  let out ← IO.asTask child.stdout.readBinToEnd (prio := .dedicated)
+  let err ← IO.asTask child.stderr.readToEnd (prio := .dedicated)
+  let waited ← IO.asTask child.wait (prio := .dedicated)
+  -- two calls durable, no seal yet
+  for i in [0:2] do input.write frames[i]!
+  input.flush
+  let some st ← awaitStatus exe m (field · "height" ≥ 2) | IO.eprintln "indexMoved writer never reached height 2"; return 1
+  let idx0 := (← IO.FS.readBinFile (m / "index.log")).size
+  if field st "base_height" ≠ 0 then IO.eprintln "indexMoved: the writer sealed before the byte"; return 1
+  let h ← IO.FS.Handle.mk (m / "index.log") .append
+  h.write (ByteArray.mk #[0x5a])
+  h.flush
+  let idx1 := (← IO.FS.readBinFile (m / "index.log")).size
+  -- feed until the seal is due; the writer may stop reading once it refuses
+  try
+    for i in [2:n] do input.write frames[i]!
+    input.flush
+  catch _ => pure ()
+  let mut steps := 0
+  while !(← IO.hasFinished waited) && steps < pollSteps do
+    IO.sleep pollMs
+    steps := steps + 1
+  unless ← IO.hasFinished waited do
+    child.kill
+    IO.println s!"PLANT index-moved-under-writer FAIL :: the writer did not end within the deadline (killed by its own Child handle)"
+    return 1
+  let code ← IO.ofExcept waited.get
+  let _ ← IO.ofExcept out.get
+  let errText ← IO.ofExcept err.get
+  let mut failed := 0
+  let moved := idx1 = idx0 + 1 && code = Status.indexMoved.code.toUInt32
+  IO.println s!"PLANT index-moved-under-writer {if moved then "PASS" else "FAIL"} :: index.log {idx0} -> {idx1} bytes under the writer; exit={code} want=indexMoved({Status.indexMoved.code}) :: {((errText.splitOn "\n").filter (·.startsWith "STATUS seal")).take 1}"
+  unless moved do failed := failed + 1
+  let durable := field ((← status exe m).getD []) "height"
+  let r ← host exe ["serve", m.toString]
+  let idx2 := (← IO.FS.readBinFile (m / "index.log")).size
+  let some st2 ← status exe m | do IO.println "PLANT index-moved-restart-truncates FAIL :: check refuses after the restart"; return failed + 1
+  let ok := r.code = 0 && idx2 = idx0 && field st2 "height" = durable && durable ≥ 2
+  IO.println s!"PLANT index-moved-restart-truncates {if ok then "PASS" else "FAIL"} :: restart exit={r.code}; index.log {idx1} -> {idx2} bytes (want {idx0}); height {field st2 "height"} (durable {durable})"
+  unless ok do failed := failed + 1
+  return failed
+
 def run (exe : String) (dir : System.FilePath) : IO UInt32 := do
   if ← dir.pathExists then IO.eprintln s!"store-plants: {dir} exists"; return 2
   IO.FS.createDirAll dir
@@ -399,6 +461,7 @@ def run (exe : String) (dir : System.FilePath) : IO UInt32 := do
   failed := failed + (← live exe dir)
   failed := failed + (← replay exe dir)
   failed := failed + (← originPlants exe dir)
+  failed := failed + (← indexMovedPlant exe dir)
   if failed = 0 then IO.println "ALL PASS"; return 0
   IO.println s!"FAIL {failed} of {plants.length}"; return 1
 
