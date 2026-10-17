@@ -38,6 +38,10 @@ def recorder : Recorder (World D) (Turn D) where
 def foldStep : World D → ByteArray → Except (Record.Fault (Reject D)) (World D) :=
   Record.step Codec.Deployed.digestCodec (World.fold X.env)
 
+/-- A tail's step (`Host.Tail`, HOSTING-7): the writer's fold, with each record's Turns. -/
+def tailStep : World D → ByteArray → Except (Record.Fault (Reject D)) (World D × List (Turn D)) :=
+  Record.stepTurns Codec.Deployed.digestCodec (World.fold X.env)
+
 /-- A follower's reopen and absorb: every Turn re-derived from its event. -/
 def auditStep : World D → ByteArray → Except (Record.Fault (Verdict D)) (World D) :=
   Record.step Codec.Deployed.digestCodec (audit X)

@@ -582,3 +582,44 @@ refused. The bound is a guarantee about Stores this loop wrote, and a named refu
 removing a check needs a ruling. That is the right order, and also the comfortable one: alternative (a)
 may make this whole decision unnecessary, and I have priced it in prose, not measured it.
 **Status.** landed (this commit). Alternative (a) is raised with ROOT.
+
+## HOST-23 · a follower tail over the one open: `Host.Tail` (2026-10-17, HOST-5; HOSTING-7's ask)
+**The ask.** The hosting controller, a per-Store exe run by the operator, needs the World at open
+and then, for each newly appended batch, the World after it and what the batch did. It must never
+write, never truncate, and never become a second replayer.
+**Decision.** `Host/Tail.lean`:
+- `Tail.open` is THE open (`openAt` over a fresh read handle: no lock, no truncation), with the
+  open's step being `Prod.fst` of the tail's step.
+- `Tail.next` makes one read of at most `Log.frameMax recordBytesMax` bytes at the tail's position.
+  The read is O(appended bytes) and bounded.
+- `Tail.absorb` (pure) runs the same `Log.recover`, chained from the tail's tag, and the same
+  per-record step, collecting each record's output.
+- `Tail.await` polls `next` with `tailPollMs` (a named Bound, 50 ms) between empty reads, for at
+  most `rounds` reads. There is no notify primitive.
+- The deployed step is `Deployed.tailStep = Record.stepTurns digestCodec (World.fold X.env)`, the
+  writer's own fold. The controller reads the writer's own files, so it trusts what the writer's
+  reopen trusts. `Record.step` is now `stepTurns`'s World, which keeps the decode and the chain
+  check in one definition.
+- Refusals, by name: `corrupt` at an absolute offset (bad bytes with a verifying frame after
+  them, or a full frame bound holding no whole frame), `record i f`, `shortRead`, `tagWidth`. A
+  cut last frame is the writer mid-append and stays for the next call.
+- Theorems (`Host.Proofs.Tail`): `absorbRecords_ok` (the fold is `foldlM`, outputs in order) and
+  `absorb_encodeAll` (absorbing a clean run of frames written after the tail's position reaches
+  the fold of exactly those records and stands where a writer would chain the next frame).
+- Plant (host-sim, seeds 1–3): `plant-tail` reaches the writer's World from genesis in 3 bounded
+  reads, with every Turn reported once. A flipped byte is refused `corrupt`. With the corrupt arm
+  answering "nothing new", the plant goes red (seen).
+**Alternatives.** (a) The controller as a `host follow` client over the socket (log pages): it
+needs a member key and a follow grant, and the controller must hold no key (HOSTING). (b) Reopen
+per poll: O(store) per poll. (c) inotify/kqueue notification: platform plumbing for a 50 ms
+latency nobody has asked for.
+**Critique.** The tail does not follow base replacement: it reads the segment only, which is
+append-only (the writer truncates a torn frame at its own reopen, never past a synced frame, and
+the tail never stands inside one). A future segment rotation would break this silently, so the
+tail must re-open on any rotation once one exists. `absorb_encodeAll` covers clean runs. A
+mid-append cut is covered by `open_torn`'s analogue only through the plant, not a theorem.
+**Meta-critique.** I gave the shape HOSTING proposed, and that is the comfortable answer. The test
+is whether a second reader of a Store's files should exist at all, given law 5's "the follower is
+the only replayer". It folds with the writer's fold, from the writer's bytes, so it replays nothing
+the writer did not, but it IS a second process folding.
+**Status.** landed (this commit).

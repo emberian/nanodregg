@@ -33,6 +33,7 @@ import Kernel.World
 import Host.Open
 import Host.Page
 import Host.Serve
+import Host.Tail
 import Kernel.Sim
 
 namespace Nanodregg.Host.Sim
@@ -335,6 +336,36 @@ def run (args : List String) : IO UInt32 := do
     (tight.tailTurnsMax < looseTail) failures
   check "plant-tail-too-many-turns: under the tight cadence the same Store is refused `tailTooManyTurns`"
     (faultName (reopenWith tight lr.bases.file lr.disk.synced) = "tailTooManyTurns") failures
+  -- plant-tail (HOSTING-7): a tail opened at genesis absorbs the writer's whole segment one frame
+  -- bound at a time and reaches the writer's World, with every admitted Turn reported once in order.
+  -- Its mutation: a byte flipped inside an early frame must be refused `corrupt`, not skipped.
+  let tailRun (seg : ByteArray) : Except String (Tail (World Nat) × Nat × Nat) := Id.run do
+    let mut t : Tail (World Nat) := ⟨genesis, origin⟩
+    let mut turns := 0
+    let mut calls := 0
+    let bound := Log.frameMax cadence.recordBytesMax
+    for _ in [0:seg.size + 1] do
+      if seg.size ≤ t.pos.offset then break
+      let len := min (seg.size - t.pos.offset) bound
+      match Tail.absorb keys.segment cadence.recordBytesMax tailStep t
+          (seg.extract t.pos.offset (t.pos.offset + len)) (decide (bound < seg.size - t.pos.offset)) with
+      | .error f => return .error f.name
+      | .ok (t', os) =>
+        calls := calls + 1
+        turns := turns + os.foldl (fun n ts => n + ts.length) 0
+        if t'.pos.offset == t.pos.offset then return .error "stuck"
+        t := t'
+    return .ok (t, turns, calls)
+  match tailRun r.disk.synced with
+  | .ok (t, turns, calls) =>
+    check s!"plant-tail: a tail from genesis reaches the writer's World in {calls} reads, every one of {turns} Turns reported once"
+      (sameWorld t.world r.resident.world && turns = r.resident.world.height && 1 < calls &&
+        t.pos.offset = r.disk.synced.size) failures
+  | .error e => check s!"plant-tail: a tail from genesis reaches the writer's World ({e})" false failures
+  check "plant-tail: a flipped byte in an early frame is refused `corrupt`, never skipped"
+    (match tailRun (flipByte r.disk.synced (origin.offset + 6)) with
+     | .error e => e = "corrupt"
+     | .ok _ => false) failures
   let r2 ← runOnce (seed + 7919) frames none
   IO.println s!"second split: {r2.disk.syncs} batches"
   check "a different batch split reaches the same chain" (r2.resident.world.chain = w.chain) failures

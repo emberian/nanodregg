@@ -23,6 +23,9 @@ import Host.Log
 
 namespace Nanodregg.Host
 
+/-- How long a tail (`Host.Tail.await`) sleeps between reads that found nothing new, in ms. -/
+def tailPollMs : Nat := 50
+
 /-- The most Turns one batch record holds: the loop's batch bound (CODEC's batch codec is bounded by it). -/
 def recordTurnsMax : Nat := 64
 

@@ -76,6 +76,9 @@ def recorder : Recorder (World Nat) (Turn Nat) where
   mark w := (w.height, env.bytes w.chain)
 
 /-- One batch record folded into the World: what open does per record (the writer's fold). -/
+def tailStep : World Nat → ByteArray → Except (Record.Fault (Reject Nat)) (World Nat × List (Turn Nat)) :=
+  Record.stepTurns dc (World.fold env)
+
 def foldStep : World Nat → ByteArray → Except (Record.Fault (Reject Nat)) (World Nat) :=
   Record.step dc (World.fold env)
 

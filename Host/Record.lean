@@ -37,14 +37,20 @@ def codec (dc : Stream D) : Stream (List (Turn D) × D) := Nanodregg.Codec.Kerne
 def encode (dc : Stream D) (after : World D) (staged : Array (Turn D)) : ByteArray :=
   (codec dc).bytes (staged.toList, after.chain)
 
-/-- Fold one record with `advance` and check the chain it states. -/
-def step {F : Type} (dc : Stream D) (advance : World D → List (Turn D) → Except (Nat × F) (World D))
-    (w : World D) (r : ByteArray) : Except (Fault F) (World D) :=
+/-- Fold one record with `advance`, check the chain it states, and return its Turns beside the
+World (what a tail reports per batch, `Host.Tail`). -/
+def stepTurns {F : Type} (dc : Stream D) (advance : World D → List (Turn D) → Except (Nat × F) (World D))
+    (w : World D) (r : ByteArray) : Except (Fault F) (World D × List (Turn D)) :=
   match (codec dc).decode r with
   | .error e => .error (.undecodable e)
   | .ok (ts, chain) =>
     match advance w ts with
     | .error (i, f) => .error (.turn i f)
-    | .ok w' => if w'.chain = chain then .ok w' else .error .chainMismatch
+    | .ok w' => if w'.chain = chain then .ok (w', ts) else .error .chainMismatch
+
+/-- Fold one record with `advance` and check the chain it states: `stepTurns`'s World. -/
+def step {F : Type} (dc : Stream D) (advance : World D → List (Turn D) → Except (Nat × F) (World D))
+    (w : World D) (r : ByteArray) : Except (Fault F) (World D) :=
+  (stepTurns dc advance w r).map Prod.fst
 
 end Nanodregg.Host.Record
