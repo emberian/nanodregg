@@ -163,4 +163,9 @@ remote conns (PROTOCOL-8 names an idle deadline as CLIENT's). Asked of PROTOCOL 
 pipes stand in for sshd); A's real check is sshd configuration, which no test here can run. minidregg had
 a forced-command `mini socket-proxy` (CLIENT-4's rejected alternative), so B is also familiarity; the
 difference I claim is that B carries the existing conn-tagged frame, not a new proxy protocol.
-**Status.** open, design only.
+**PROTOCOL's answer (a45ff664477fefd42, 10-16).** B. A remote follow catches up only through
+`host(log, envelope)` steps relayed by nd over host.sock (so over the bridge); the envelope (member,
+follow-grant id, fromHeight, validUntil, signature) becomes layout data in Protocol/Table.lean; revocation
+refuses `noFollowGrant`; an unknown ssh key is a refused connect (no frame, no protocol name);
+`Protocol.Bounds.idleMsMax` will be generated for remote conns; CONNECTIONS_MAX stays 64.
+**Status.** B chosen; build waits for PROTOCOL's rows and `idleMsMax` in generated.rs (sha to come).
