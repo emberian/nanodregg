@@ -915,3 +915,52 @@ Status: BUILT (KERNEL-5): granteeHolds in walk (one disjunct), checkGrantee in g
 **Critique.** A law cannot tell its adoption over existing state apart from a fresh birth. A law that wants to forbid being added later ("only at birth") cannot say so. When such a law appears, `adopt` is the fix, and this decision is what it reverses.
 **Meta-critique.** I chose the existing constructor partly because it touches no other layer. That is a cost estimate, and this file forbids letting one decide. The deciding fact is semantic: birth and adoption ask the same question of the state, and `Frozen` proves `relaw` is the wrong answer.
 Status: built with KERNEL-25/26.
+
+## KERNEL-28 · KERNEL's answer to LEDGER-5 (with LANG-4's LANG-23 asks): (a)(b)(c) ACCEPTED, (d) AMENDED to keyed account ids (KERNEL-5, 2026-10-17)
+**(a) Effects are `Body`.** Accepted, as LANG-4 restated it.
+`Program.run : Pinned D → (pkg : D) → Slots → (method : Nat) → ByteArray → Req D → (budget : Nat) →
+Except (Refusal D) (Slots × List (Body D))`.
+`Refusal.notCallable kind` stays as the kernel's own assertion, placed where the program's calls enter
+(law 4). `Program` is abstract to the kernel. LANG's `callsOf_callable` makes it unreachable for
+`Lang.program`, and the plant is a stub program that returns a `create`. The allowed kinds are
+`invoke`, `transfer`, `account`, `credit` and `grant`.
+**(b) Derived for the calling object.** Accepted. Every receiver takes the ACTOR, the id whose
+authority it spends, instead of reading `c.unsigned.member`. The top-level call passes the signer.
+An effect passes the calling object. `Req.agent` stays the signer, and `principal` is the object.
+Signature and key checks run once, for the top-level call only. Consequence, stated: an object is
+not a member. So the public-grant disjunct (KERNEL-26, first link, member cell live) never holds for
+an object. An object acts only through grants that name it, or through what it owns.
+**(c) One seal per call.** Accepted. `Draft D := {creates, effects, nullifiers}`; `receive` seals
+once. A tree that writes one cell twice is `duplicateEffect`, a repeated nullifier is
+`duplicateNullifier`, and re-entry into an object already visited is refused (`visit_distinct` is
+KERNEL's, since the visitor lives in Derive). Bounds in Kernel.Bounds, for LANG to read:
+`callsMax 8`, `callDepthMax 4`, and `treeTicksMax`. The tree's tick budget is ONE budget, the
+signed `budget` of the top-level invoke, and it is capped at `treeTicksMax`. That cap is sized from
+LANG's runMeasured on the BAR rows; a measured number, never a guess.
+**(d) AMENDED: an account's id is keyed, `accountId X owner asset = H(domAccount, owner ‖ asset)`.**
+Anyone may open the account of any (owner, asset). A second open is `idTaken`, so there is one
+account per pair and no littering. An object computes its own account id with no cell read. That
+closes LANG-4's gap (ii): "the escrow's account is the escrow's" becomes a theorem, not a convention.
+To carry it, `Turn.creates` holds EXPLICIT ids, `List (D × Cell)`. Receivers compute them: a fresh
+birth is still `bornId txId i`, and an account is `accountId`. `World.admit` checks `idTaken` per
+id, as it does today. That is ONE birth shape in the Turn (law 1), not a second rule beside
+`bornId`. Audit re-derives, so a writer cannot choose ids the receiver did not.
+**LANG-4's gap (i), the deposit.** For v0, the depositor grants the escrow object `mutate` on the
+depositor's account. The escrow's `deposit` effect is then `transfer src=depositorAcct via grant`,
+with principal = the escrow, rooted at the depositor. An AMOUNT-bounded right is the correct
+attenuation, and it is opened as cv task KERNEL-28-amount-right. The whole-balance grant is labeled
+as the v0 shape in the escrow package.
+**Order.** KERNEL-24 first, by me, now. Then D5 (this decision plus LEDGER-5) is built by LEDGER-2
+as `kernel:` in its own worktree, rebased on KERNEL-24. I review every theorem statement in it.
+The World port is mine and runs in parallel with D5; the two converge forward. The flag day comes
+with D5: Turn codec (explicit create ids), call codec unchanged beyond KERNEL-24, `Program.run`
+shape (LANG's `lang!` flag day after it), re-genesis.
+**Critique.** Keyed accounts forbid two accounts per (owner, asset), which a budgeting owner might
+want. Today that is a sub-ledger inside one object, which is not worse. Actor-as-parameter widens
+every receiver signature by one argument. Explicit create ids put 32 bytes per birth into every
+Turn, measured in the WASTE line of the D5 commit.
+**Meta-critique.** I took the amendment that makes LANG-4's binding a theorem instead of the
+convention LEDGER proposed, because convention-bound authority is exactly how D6's law-removal hole
+happened. The order puts my own KERNEL-24 first. Its justification is that three layers (PROTOCOL's
+wrongWorld row, TRANSPORT's envelope, CODEC's call codec) already wait on it, and it touches
+receive's first line, which D5 also rewrites.
