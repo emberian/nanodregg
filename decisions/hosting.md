@@ -157,3 +157,65 @@ Authority" has no constructor meaning "KERNEL's gate only" (asked of LANG-3). **
 `last` and `owner` laws feels like progress because it is fewer lines; the test is that the plants
 survive the move: P1 stays mine, P2 becomes KERNEL's invoke_authorized plant. Status: waiting on
 LANG ID-1 + `machine`, KERNEL-25.
+
+## HOSTING-6 The plan, as built (ASSEMBLY HOSTING-5) (2026-10-17)
+
+**Decision.** `Hosting/Plan.lean`: `plan (label : ByteArray) (g : Grain) : Except Refusal Plan`, total,
+with `Plan` = `sandbox::Policy` field for field plus `program` and `connect`. Paths are component
+lists relative to the operator's hosting root (the launcher joins the root; Lean never sees the OS).
+Layout `worlds/<l>/{store, members, grains/<id>/{pkg, vol}}`: an app reads `pkg`, runs
+`pkg/<entry>`, reads and writes `vol`; `store` and `members` are hidden. Refused by name:
+`labelUnclean`, `idUnclean`, `entryUnclean`, `residentUnsupported` (until HOSTING-6 of the assembly:
+`Policy.connect`, `nd --stdio`, the broker). No volume request exists (no `resolve`).
+**Theorems** (`Hosting.Proofs.Plan`): `plan_paths` (every allowed path lies under the grain's dir),
+`plan_not_exposed` (no allowed path is a prefix of a hidden one or inside one), `plan_components_clean`
+(every component of every allowed and hidden path is clean: what makes the list facts directory
+facts), `plan_no_store_no_workspace`, `plan_app_only`, `plan_refuses_{label,id,entry}`,
+`Refusal.name_injective`. **Vacuity read (10-17)**: the first version never checked `idHex` and no
+public theorem said a component was clean, so `idHex = "../../<other>/grains/<g>"` gave read+write on
+another world's volume with every theorem green. Fixed: `idUnclean`, `plan_components_clean`.
+**Plants** (run 10-17): `worldRoot l` added to `read` ⇒ `plan_paths` red; the `idHex` check deleted ⇒
+`plan_components_clean` and `plan_refuses_id` red.
+**CRITIQUE.** Everything here is about component strings; symlinks are the OS's. A symlinked
+`pkg/<entry>` is followed by `sandbox::command`'s canonicalisation and becomes the allowed program,
+wherever it points: `grain-launch` must refuse a program whose canonical path leaves the canonical
+`pkg` dir (to build with the launcher). On a case-insensitive filesystem two labels differing in case
+name one world: labels must be lowercase (not yet refused). Cross-world isolation is still the
+sandbox's deny-default plus the launcher's physical plant, not a theorem over other labels.
+**META.** I wrote `plan_paths` first because it was in H1 and easy; it was the weakest. The reader
+found the hole in one pass, which says the discipline works and my first statements are not to be
+trusted. Status: built.
+
+## HOSTING-7 The controller's decisions (ASSEMBLY HOSTING-4) (2026-10-17)
+
+**Decision.** `Hosting/Controller.lean`: `reconcile bytesOf label pkgId now live w ids :
+List Action` (each touched id once, ≤ `grainsMax` = 256 per call; the caller pages), `Action =
+{grain, verdict}`, `Verdict = launch plan | kill | refuse why`. The grain's directory is rendered
+HERE from the World id (`dirOf`, lowercase hex), and each decision is made on `w.live i`: no caller
+pairs a cell with a name. Per id: gone ⇒ kill a running child; not a lifecycle OBJECT (kind object
+and package slot = `lifecycleId`, the `romIdOf` of the ROM cell `install` makes for the package's
+bytes) ⇒ kill a running child, never launch; undecodable ⇒ kill a running child, else
+`malformedGrain` (fail closed); desired `running` with no child ⇒ `crashLoop` if ≥ `restartsMax` (5)
+exits within `restartWindowMs` (60 s, ADVISORY: the launcher reports both), else the plan or its
+refusal; desired not `running` with a child ⇒ kill.
+**Theorems** (`Hosting.Proofs.Controller`): `launch_sound`, `kill_sound`, `launch_complete`,
+`malformed_running_killed`, `crashLoop_refused`, `reconcile_names` (every action is decided on the
+World's cell at a touched id and names that id's directory), `reconcile_one_per_id` (one action per
+grain, given distinct directories), `reconcile_bounded`. **Vacuity read (10-17)**: the first
+version took `(name, cell)` pairs from the caller (pair A's cell with B's name: launch B's dir with
+A's entry, or kill B), checked the package slot but not the cell kind (a GRANT aimed at the package
+cell passed), took `pkgId` as an unchecked input, kept a running child of a malformed cell, and could
+emit two actions for a duplicated id. All five fixed as above. **Plants** (run 10-17): the
+`isGrain` test skipped ⇒ `launch_sound`, `kill_sound` red. hosting-sim G15/G16: `lifecycleId` is the
+installed package's id; launch with the exact expected plan (the id listed twice, one action);
+nothing with a running child; a started LOOK-ALIKE never launched; kill of a removed grain's child.
+**Owed.** `dirOf` injective (lowercase hex is; not yet a theorem), so `reconcile_one_per_id`'s
+premise is discharged for all ids.
+**CRITIQUE.** The controller folds the log beside `host follow` (law 5's "the follower is the only
+replayer"): a second replayer unless it IS a follower (HOST's tail API, asked). `now` and exit times
+come from the launcher, so the crash-loop bound is only as honest as the operator's own process. A
+restart of the controller forgets exits and relaunches every desired grain at once.
+**META.** Desired-vs-observed is the Kubernetes shape, which I reached for by familiarity; the test is
+that no observed fact enters the World, which holds by construction (nothing here writes a Turn).
+Status: decisions built; the exe (tail + frames to `grain-launch`) waits on HOST's tail API and
+CODEC's Action layout.

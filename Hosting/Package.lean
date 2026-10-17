@@ -148,6 +148,24 @@ def noArgs : Option ByteArray := Wire.encodeData unit unitD
 
 def phaseOfLabel (l : String) : Option Phase := Phase.all.find? (·.label == l)
 
+def kindOfLabel (l : String) : Option Kind := Kind.all.find? (·.label == l)
+
+/-- The kind a grain's state slots hold, decoded at `kindTy`. -/
+def kindOf (s : Kernel.Slots) : Option Kind :=
+  match s.get slotKind with
+  | none => none
+  | some b => match Wire.decodeData kindTy b with
+    | .ok (.inj l _) => kindOfLabel l
+    | _ => none
+
+/-- The entry a grain's state slots hold, decoded at `bytes`. -/
+def entryOf (s : Kernel.Slots) : Option ByteArray :=
+  match s.get slotEntry with
+  | none => none
+  | some b => match Wire.decodeData .bytes b with
+    | .ok (.bytes e) => some e
+    | _ => none
+
 /-- The phase a grain's state slots hold, decoded at `phaseTy`. -/
 def phaseOf (s : Kernel.Slots) : Option Phase :=
   match s.get slotPhase with
