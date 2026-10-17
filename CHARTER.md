@@ -19,7 +19,11 @@ in `~/dev/redregg/work/`: `ARCHITECTURE-20261016.md`, `CYCLE-TIME-20261016.md`,
    defect, not a transition. Old shapes refuse to load; nothing migrates; re-genesis is free.
 2. **Lean decides, Rust moves bytes.** Every accept/refuse/select/order/digest decision is a Lean
    definition with a named theorem. Rust (if any) is transport, custody, sockets, sandbox plumbing,
-   and consumes Lean-generated tables (opcodes, bounds), never hand-copied constants.
+   and consumes Lean-generated tables (opcodes, bounds), never hand-copied constants. A PLATFORM
+   FACT (an OS sandbox floor: which paths a process must see to start at all) is a table in the layer
+   that touches the platform, not a decision; it carries a plant proving it does not over-allow (a
+   file nobody named must be unreadable) and a recorded bisection for its minimality (CLIENT-9,
+   accepted 10-16; CLIENT-2's correction: the plant proves no-over-allow, the bisection minimality).
 3. **Bytes end to end.** `ByteArray` everywhere; no `List UInt8` in a deployed path; one-pass
    canonical decoders with a canonicity proof; content-addressed tags.
 4. **TigerStyle.** A static bound on everything (`Bounds`); an assertion for every PREMISE the
@@ -29,7 +33,10 @@ in `~/dev/redregg/work/`: `ARCHITECTURE-20261016.md`, `CYCLE-TIME-20261016.md`,
    re-checks the compiler); no `partial def` in deployed code; no unbounded recursion; no
    allocation per byte; O(touched) work per request, never O(store). The ONE unbounded loop is the
    resident's top-level fuel-and-restart loop; everything under it is bounded (ROOT ruling on
-   HOST's LAW-4 critique, 10-16).
+   HOST's LAW-4 critique, 10-16). A resource whose LIFETIME is the guarantee (a lock, a lease, a
+   PID-file descriptor) must be the handle actually in use, never a held-but-unused value: compiled
+   Lean frees a value at its last use, which dropped the writer lock mid-serve until the lock became
+   the append fd itself (HOST 7e23642; the plant was a second writer).
 5. **Performance is designed.** The resident Host is one deterministic loop per Store holding the
    World, the trie and the memo; admission is batched; the follower is the only replayer. "Checkpoint
    = World" means the World is what a checkpoint DENOTES. O(store) work is forbidden on the REQUEST
