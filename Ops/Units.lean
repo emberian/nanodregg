@@ -61,6 +61,8 @@ structure Node where
   hide : List String
   /-- `User=` of a system unit; `none` renders a user unit -/
   user : Option String
+  /-- where a follow unit's `NAME.env` lives (the deployed member: `%h/.nd`) -/
+  envDir : String := "%h/.nd"
   deriving Repr
 
 inductive Refusal where
@@ -125,7 +127,7 @@ def preventCodes : List Nat := Status.codesOf .fatal ++ SupervisorExit.codesOf .
 
 def Service.ofNode (n : Node) : Except Refusal Service :=
   if n.hide.isEmpty then .error .nothingHidden else
-  match checkAll ([n.bin, n.store, n.socket] ++ n.hide) with
+  match checkAll ([n.bin, n.store, n.socket, n.envDir] ++ n.hide) with
   | .error e => .error e
   | .ok _ => .ok { node := n, exec := n.exec, prevent := preventCodes }
 
@@ -150,7 +152,7 @@ def Service.systemd (u : Service) : String :=
   let n := u.node
   let env := match n.role with
     | .serve => []
-    | .follow => [s!"EnvironmentFile=%h/.nd/{n.name}.env"]
+    | .follow => [s!"EnvironmentFile={n.envDir}/{n.name}.env"]
   let user := match n.user with
     | some us => [s!"User={us}"]
     | none => []
@@ -310,6 +312,25 @@ def files : Except Refusal (List (String × String)) := do
   let units ← emitted.mapM fun (path, n) => do return (path, (← Service.ofNode n).systemd)
   return units ++ [("EXITS.md", exitsTable)]
 
+/-- The live harness's nodes (deploy/live/): user units whose every path lies under `root`, so the
+harness writes nothing outside it but the unit links. Two writers on ONE Store (the second must
+stop `locked`, never restart), a follower, and a writer the harness gives a file-size limit (an
+append that fails). Rendered by the same `Service.ofNode`/`systemd`
+as the deployed units, so the harness judges the renderer, not a copy of it. -/
+def liveNodes (root : String) : List Node :=
+  let base : Node :=
+    { name := "nd-ops-live-serve", role := .serve, bin := root ++ "/bin", store := root ++ "/store",
+      socket := root ++ "/ws/serve.sock", hide := [root ++ "/ws"], user := none, envDir := root ++ "/env" }
+  [base,
+   { base with name := "nd-ops-live-serve2", socket := root ++ "/ws/serve2.sock" },
+   { base with name := "nd-ops-live-follow", role := .follow, store := root ++ "/follow-store",
+               socket := root ++ "/ws/follow.sock" },
+   -- the harness adds `LimitFSIZE=` to this one (fault injection, deploy/live/harness.sh)
+   { base with name := "nd-ops-live-fsize", store := root ++ "/fsize-store", socket := root ++ "/ws/fsize.sock" }]
+
+def liveFiles (root : String) : Except Refusal (List (String × String)) :=
+  (liveNodes root).mapM fun n => do return (n.name ++ ".service", (← Service.ofNode n).systemd)
+
 /-- `emit-units DIR` writes; `emit-units --check DIR` refuses a file that differs. -/
 def run : List String → IO UInt32
   | args => do
@@ -322,6 +343,13 @@ def run : List String → IO UInt32
           IO.FS.createDirAll ((System.FilePath.mk dir / p).parent.getD dir)
           IO.FS.writeFile (System.FilePath.mk dir / p) t
         return 0
+      | ["--live", root, dir] =>
+        match liveFiles root with
+        | .error r => IO.eprintln s!"emit-units: refused {r.name}"; return 2
+        | .ok ls =>
+          IO.FS.createDirAll dir
+          for (p, t) in ls do IO.FS.writeFile (System.FilePath.mk dir / p) t
+          return 0
       | ["--check", dir] =>
         let mut bad := 0
         for (p, t) in fs do
@@ -329,6 +357,6 @@ def run : List String → IO UInt32
           let cur ← if ← path.pathExists then IO.FS.readFile path else pure ""
           unless cur == t do IO.eprintln s!"emit-units: {path} differs from the table; regenerate it"; bad := bad + 1
         return if bad = 0 then 0 else 1
-      | _ => IO.eprintln "usage: emit-units [--check] DIR"; return 2
+      | _ => IO.eprintln "usage: emit-units [--check] DIR | emit-units --live ROOT DIR"; return 2
 
 end Nanodregg.Ops.Units

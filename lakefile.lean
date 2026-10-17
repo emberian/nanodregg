@@ -101,6 +101,10 @@ extern_lib «ndhost» pkg := do
 @[default_target] lean_exe «store-plants» where
   root := `Ops.PlantsMain
 
+-- The live harness's calls (deploy/live/): `live-calls DIR N`, the test founder's genesis args and N payloads.
+@[default_target] lean_exe «live-calls» where
+  root := `Ops.LiveCallsMain
+
 -- The loop over a real Store directory (Host.Store + Host/c/file.c): lock, torn-file truncation.
 @[default_target] lean_exe «host-file-sim» where
   root := `Host.Sim.FileMain

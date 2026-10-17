@@ -40,6 +40,13 @@ Member machine (user unit `nd-host-follow.service`; `%h/.nd/nd-host-follow.env` 
 
     nd-supervise %h/.nd/ws/follow.sock --write %h/.nd/follow-store --exec /opt/nd/bin/host --hide %h/.nd/ws --hide %h/.nd/holding -- /opt/nd/bin/host follow %h/.nd/follow-store ${ND_MEMBER} ${ND_GRANT}
 
+Before the first start the member makes the follow Store and the hidden directories,
+`mkdir -m 0700 ~/.nd ~/.nd/follow-store ~/.nd/ws ~/.nd/holding` (the writer's node likewise
+`/srv/nd/store`'s parent, `/srv/nd/ws`): nd-supervise refuses a `--write` or `--hide` path that does
+not exist with 64 refusedAtLaunch, which stops the unit (measured on burst5, deploy/live/README.md).
+A host killed by a signal is nd-supervise's 66 childSignaled, restarted (on Linux bwrap reports it
+as 128+N; CLIENT's c6e4abf maps that to 66).
+
 systemd restarts every failure except the fatal codes of both tables (`RestartPreventExitStatus`:
 the Host's fatal class and nd-supervise's 64 refusedAtLaunch and 65 childUnroutable); a fatal
 refusal stops the unit and its name is in the journal. A restart-class exit that repeats more
