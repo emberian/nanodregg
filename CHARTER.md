@@ -16,7 +16,11 @@ in `~/dev/redregg/work/`: `ARCHITECTURE-20261016.md`, `CYCLE-TIME-20261016.md`,
 1. **One of everything.** One World, one Turn, one admission path (`World.admit` IS the receive
    path), one Store format, one codec family, one digest type (32 fixed bytes), one dispatch over
    one operation table, one sandbox shape, one build. A second shape of an existing thing is a
-   defect, not a transition. Old shapes refuse to load; nothing migrates; re-genesis is free.
+   defect, not a transition. Old SHAPES refuse to load; STATE may be carried only by re-genesis
+   from a checked export (export = the fold, the World a Store opens to; import = genesis under a
+   new epoch whose initial World is that World's cells re-sealed; check = canonical World bytes equal
+   up to the epoch header; every signature over old bytes is NOT carried, so history is never
+   carried, only state); re-genesis is free (OPS-1, accepted 10-17).
 2. **Lean decides, Rust moves bytes.** Every accept/refuse/select/order/digest decision is a Lean
    definition with a named theorem. Rust (if any) is transport, custody, sockets, sandbox plumbing,
    and consumes Lean-generated tables (opcodes, bounds), never hand-copied constants. A PLATFORM
