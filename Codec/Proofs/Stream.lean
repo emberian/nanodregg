@@ -23,6 +23,7 @@ def OccursAt (b : ByteArray) (i : Nat) (w : ByteArray) : Prop :=
 
 structure Lawful (c : Stream α) : Prop where
   put_eq : ∀ v buf, c.put v buf = buf ++ c.bytes v
+  size_eq : ∀ v, c.size v = (c.bytes v).size
   get_of_occurs : ∀ v b i, OccursAt b i (c.bytes v) → c.get b i = .ok (v, i + (c.bytes v).size)
   occurs_of_get : ∀ {b i v j}, c.get b i = .ok (v, j) →
     j = i + (c.bytes v).size ∧ OccursAt b i (c.bytes v)
@@ -162,6 +163,7 @@ theorem split_ofLE64 (a b c d e f g h : UInt8) :
 
 theorem unit_lawful : Lawful unit where
   put_eq _ buf := by simp [unit, bytes, ByteArray.append_empty]
+  size_eq _ := rfl
   get_of_occurs _ b i h := by
     have := h.1
     simp only [unit, bytes, ByteArray.size_empty, Nat.add_zero] at this ⊢
@@ -177,6 +179,7 @@ theorem unit_lawful : Lawful unit where
 
 theorem u8_lawful : Lawful u8 where
   put_eq v buf := push_eq_append buf v
+  size_eq _ := rfl
   get_of_occurs v b i h := by
     obtain ⟨hs, hk⟩ := occursAt_iff_getElem.mp h
     have hs' : i < b.size := hs
@@ -207,6 +210,7 @@ theorem u32_lawful : Lawful u32 where
   put_eq v buf := by
     simp only [u32, push_eq_append, ByteArray.append_assoc]
     rfl
+  size_eq _ := rfl
   get_of_occurs v b i h := by
     obtain ⟨hs, hk⟩ := occursAt_iff_getElem.mp h
     have hs' : i + 4 ≤ b.size := hs
@@ -242,6 +246,7 @@ theorem u64_lawful : Lawful u64 where
   put_eq v buf := by
     simp only [u64, push_eq_append, ByteArray.append_assoc]
     rfl
+  size_eq _ := rfl
   get_of_occurs v b i h := by
     obtain ⟨hs, hk⟩ := occursAt_iff_getElem.mp h
     have hs' : i + 8 ≤ b.size := hs
@@ -282,6 +287,7 @@ theorem u64_lawful : Lawful u64 where
 
 theorem digest_lawful : Lawful digest where
   put_eq d buf := by rw [digest_bytes]; rfl
+  size_eq d := by rw [digest_bytes, d.size_eq]; rfl
   get_of_occurs d b i h := by
     obtain ⟨hs, he⟩ := h
     simp only [digest_bytes, d.size_eq] at hs he ⊢
@@ -309,6 +315,7 @@ theorem product_lawful {a : Stream α} {c : Stream β} (ha : Lawful a) (hc : Law
     rw [product_bytes hc]
     simp only [product]
     rw [hc.put_eq, ha.put_eq, ByteArray.append_assoc]
+  size_eq v := by rw [product_bytes hc, ByteArray.size_append, ← ha.size_eq, ← hc.size_eq]; rfl
   get_of_occurs v b i h := by
     rw [product_bytes hc] at h ⊢
     obtain ⟨h1, h2⟩ := occursAt_append.mp h
@@ -335,6 +342,7 @@ theorem refine_lawful {c : Stream α} (hc : Lawful c) (name : String) {accept : 
     (accept_back : ∀ y, accept (back y) = some y) (back_accept : ∀ x y, accept x = some y → back y = x) :
     Lawful (refine name c accept back) where
   put_eq v buf := by simp only [refine]; exact hc.put_eq _ _
+  size_eq v := hc.size_eq (back v)
   get_of_occurs v b i h := by
     rw [refine_bytes] at h ⊢
     simp [refine, hc.get_of_occurs _ _ _ h, accept_back]
@@ -347,6 +355,40 @@ theorem refine_lawful {c : Stream α} (hc : Lawful c) (name : String) {accept : 
       · rename_i y hy
         cases h
         rw [refine_bytes, back_accept _ _ hy]
+        exact hc.occurs_of_get hx
+      · cases h
+
+theorem oneOf_lawful (codes : Array UInt8) : Lawful (oneOf codes) where
+  put_eq v buf := push_eq_append buf v.val
+  size_eq _ := rfl
+  get_of_occurs v b i h := by
+    have g := u8_lawful.get_of_occurs v.val b i h
+    simp only [oneOf, g, v.2, ↓reduceDIte]
+    rfl
+  occurs_of_get {b i v j} h := by
+    simp only [oneOf] at h
+    split at h
+    · cases h
+    · rename_i t k hk
+      split at h
+      · cases h
+        exact u8_lawful.occurs_of_get hk
+      · cases h
+
+theorem within_lawful {c : Stream α} (hc : Lawful c) (limit : Nat) : Lawful (within limit c) where
+  put_eq v buf := hc.put_eq v.val buf
+  size_eq v := hc.size_eq v.val
+  get_of_occurs v b i h := by
+    have g := hc.get_of_occurs v.val b i h
+    simp only [within, g, v.2, ↓reduceDIte]
+    rfl
+  occurs_of_get {b i v j} h := by
+    simp only [within] at h
+    split at h
+    · cases h
+    · rename_i x k hx
+      split at h
+      · cases h
         exact hc.occurs_of_get hx
       · cases h
 
@@ -368,6 +410,7 @@ theorem framed_lawful {c : Stream α} (hc : Lawful c) (tag : Digest) : Lawful (f
     rw [framed_bytes hc]
     simp only [framed]
     rw [hc.put_eq, ByteArray.append_assoc]
+  size_eq v := by rw [framed_bytes hc, ByteArray.size_append, tag.size_eq, ← hc.size_eq]; rfl
   get_of_occurs v b i h := by
     rw [framed_bytes hc] at h ⊢
     obtain ⟨⟨hs, he⟩, h2⟩ := occursAt_append.mp h
@@ -403,6 +446,10 @@ theorem option_lawful {c : Stream α} (hc : Lawful c) : Lawful (option c) where
       rw [option_bytes_some hc]
       simp only [option]
       rw [hc.put_eq, push_eq_append, ByteArray.append_assoc]; rfl
+  size_eq v := by
+    cases v with
+    | none => rfl
+    | some v => rw [option_bytes_some hc, ByteArray.size_append, ← hc.size_eq]; rfl
   get_of_occurs v b i h := by
     cases v with
     | none =>
@@ -454,6 +501,10 @@ theorem sum_lawful {a : Stream α} {c : Stream β} (ha : Lawful a) (hc : Lawful 
       rw [sum_bytes_inr hc]
       simp only [sum]
       rw [hc.put_eq, push_eq_append, ByteArray.append_assoc]; rfl
+  size_eq v := by
+    cases v with
+    | inl v => rw [sum_bytes_inl ha, ByteArray.size_append, ← ha.size_eq]; rfl
+    | inr v => rw [sum_bytes_inr hc, ByteArray.size_append, ← hc.size_eq]; rfl
   get_of_occurs v b i h := by
     cases v with
     | inl v =>
@@ -502,6 +553,7 @@ theorem bytesOf_lawful (max : Nat) (fits : max < 2 ^ 32) : Lawful (bytesOf max f
     rw [bytesOf_bytes]
     simp only [bytesOf]
     rw [u32_lawful.put_eq, ByteArray.append_assoc]
+  size_eq v := by rw [bytesOf_bytes, ByteArray.size_append]; rfl
   get_of_occurs v b i h := by
     rw [bytesOf_bytes] at h ⊢
     obtain ⟨h1, ⟨hs, he⟩⟩ := occursAt_append.mp h
@@ -580,6 +632,12 @@ theorem occurs_of_getMany {c : Stream α} (hc : Lawful c) (n : Nat) (b : ByteArr
       · rw [manyBytes_cons hc]; exact occursAt_append.mpr ⟨o1, o2⟩
     · cases h
 
+theorem foldl_size {c : Stream α} (hc : Lawful c) (l : List α) (k : Nat) :
+    l.foldl (fun n x => n + c.size x) k = k + (manyBytes c l).size := by
+  induction l generalizing k with
+  | nil => simp [manyBytes]
+  | cons x l ih => rw [List.foldl_cons, ih, manyBytes_cons hc, ByteArray.size_append, hc.size_eq, Nat.add_assoc]
+
 theorem array_bytes {c : Stream α} (hc : Lawful c) (max : Nat) (fits : max < 2 ^ 32) (v : Bounded max α) :
     (array max c fits).bytes v = u32.bytes (UInt32.ofNat v.val.size) ++ manyBytes c v.val.toList := by
   show v.val.foldl _ (u32.put _ ByteArray.empty) = _
@@ -591,6 +649,10 @@ theorem array_lawful {c : Stream α} (hc : Lawful c) (max : Nat) (fits : max < 2
     rw [array_bytes hc]
     show v.val.foldl _ (u32.put _ buf) = _
     rw [← Array.foldl_toList, foldl_put hc, u32_lawful.put_eq, ByteArray.append_assoc]
+  size_eq v := by
+    rw [array_bytes hc, ByteArray.size_append, u32_size, ← foldl_size hc]
+    show Array.foldl _ 4 v.val = _
+    rw [← Array.foldl_toList]
   get_of_occurs v b i h := by
     rw [array_bytes hc] at h ⊢
     obtain ⟨h1, h2⟩ := occursAt_append.mp h
@@ -643,6 +705,7 @@ theorem tagged_lawful {σ : Type} {F : σ → Type} (all : List σ) {code : σ �
     rw [tagged_bytes hc]
     simp only [tagged]
     rw [(hc v.1).put_eq, push_eq_append, ByteArray.append_assoc]; rfl
+  size_eq v := by rw [tagged_bytes hc, ByteArray.size_append, ← (hc v.1).size_eq]; rfl
   get_of_occurs v b i h := by
     rw [tagged_bytes hc] at h ⊢
     obtain ⟨h1, h2⟩ := occursAt_append.mp h

@@ -183,3 +183,22 @@ weakness, in its largest instance. A per-node payload costs 4 length bytes even 
 A typed fixpoint would carry more of the structure into the Shape. I have not measured whether the
 simpler proof is worth the opaque tag.
 Status: open (LANG to adopt; LANG/Wire.lean's readers become `ofTree`).
+
+## CODEC-10 · Every codec knows its size; `oneOf` and `within` bounds; the argv total is Lean's (2026-10-16)
+**Decision.** (1) `Stream` gains `size : α → Nat`, and `Lawful` gains `size_eq : c.size v = (c.bytes v).size`,
+so a value's encoded length is computed structurally without encoding it. HOST asked for this for
+`worldBytesMax`, and `within` needs it. (2) `Stream.oneOf codes : Stream {b // codes.contains b}` refuses
+any byte outside `codes` as `badTag`. It is the layout field `.oneOf name [(case, code)]`, which emits a
+Rust `enum` with `code`/`from_code` (PROTOCOL-9 finding 1: a `host` step's op must not be `submit`).
+(3) `Stream.within limit c : Stream {v // c.size v ≤ limit}` is a total bound over separately bounded
+fields, refused `pastBound offset limit got`. `Protocol.commandFrame` is `within argvBytesMax`, and the
+emitted `Command::decode/encode` apply the same check at the same point, so the Rust side no longer
+decides it (CLIENT-2).
+**Alternatives.** Measure with `(c.bytes v).size`, which re-encodes to check (minidregg's sin, W8). Or
+check the total only in the Rust client.
+**Critique.** `size` is a second computation of the length that must agree with `put`. The law
+proves it agrees, but every new combinator now owes one more proof. `within` checks after decoding the
+fields, so an over-total argv is read (bounded by the frame) before it is refused.
+**Meta-critique.** I added `size` because two asks needed it at once. A single user would have
+justified a local helper instead of a field on the one structure.
+Status: open.

@@ -152,6 +152,13 @@ pub mod layout {
         pub fn decode(b: &[u8]) -> Result<Self, Refusal> {
             let mut c = Cursor { b, i: 0 };
             let argv = c.list(65536)?;
+            if c.i > 65536 {
+                return Err(Refusal::PastBound {
+                    offset: 0,
+                    limit: 65536,
+                    got: c.i,
+                });
+            }
             c.end()?;
             Ok(Command { argv })
         }
@@ -160,6 +167,13 @@ pub mod layout {
             let mut out = Vec::new();
             let Command { argv } = self;
             put_list(&mut out, argv, 65536)?;
+            if out.len() > 65536 {
+                return Err(Refusal::PastBound {
+                    offset: 0,
+                    limit: 65536,
+                    got: out.len(),
+                });
+            }
             Ok(out)
         }
     }

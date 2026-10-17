@@ -58,16 +58,19 @@ def rustType : Field → String
   | .byte _ => "u8"
   | .bytes _ => "Vec<u8>"
   | .list _ => "Vec<Vec<u8>>"
+  | .oneOf n _ => camel n
 
 def readField (max : Nat) : Field → String
   | .byte n => s!"let {n} = c.byte()?;"
   | .bytes n => s!"let {n} = c.bytes({max})?;"
   | .list n => s!"let {n} = c.list({max})?;"
+  | .oneOf n _ => s!"let {n} = c.one_of({camel n}::from_code)?;"
 
 def writeField (max : Nat) : Field → String
   | .byte n => s!"out.push(*{n});"
   | .bytes n => s!"put_bytes(&mut out, {n}, {max})?;"
   | .list n => s!"put_list(&mut out, {n}, {max})?;"
+  | .oneOf n _ => s!"out.push({n}.code());"
 
 def fieldNames (l : Layout) : String := String.intercalate ", " (l.map Field.name)
 
@@ -80,19 +83,57 @@ def structLit (indent name : String) (l : Layout) : String :=
 def fieldDecls (indent vis : String) (l : Layout) : List String :=
   l.map fun f => s!"{indent}{vis}{f.name}: {rustType f},"
 
+/-- A Rust enum for a `oneOf` field: its cases, their codes, and the inverse. -/
+def oneOfEnum (name : String) (cases : List (String × UInt8)) : String :=
+  let ty := camel name
+  String.intercalate "\n" <|
+    ["    #[derive(Debug, Clone, Copy, PartialEq, Eq)]", s!"    pub enum {ty} \{"] ++
+    cases.map (fun c => s!"        {camel c.1},") ++
+    ["    }", "", s!"    impl {ty} \{", "        pub fn code(self) -> u8 {", "            match self {"] ++
+    cases.map (fun c => s!"                {ty}::{camel c.1} => {c.2},") ++
+    ["            }", "        }", "", "        pub fn from_code(b: u8) -> Option<Self> {", "            match b {"] ++
+    cases.map (fun c => s!"                {c.2} => Some({ty}::{camel c.1}),") ++
+    ["                _ => None,", "            }", "        }", "    }"]
+
+/-- The cursor's `oneOf` reader, emitted only when some layout has a `oneOf` field. -/
+def oneOfReader : String := String.intercalate "\n" [
+  "    impl Cursor<'_> {",
+  "        fn one_of<T>(&mut self, from_code: fn(u8) -> Option<T>) -> Result<T, Refusal> {",
+  "            let at = self.i;",
+  "            let tag = self.byte()?;",
+  "            from_code(tag).ok_or(Refusal::BadTag { offset: at, tag })",
+  "        }",
+  "    }"]
+
+/-- Every `oneOf` field of the given layouts, once per name. -/
+def oneOfs (ls : List Layout) : List (String × List (String × UInt8)) :=
+  ls.flatten.foldl (fun acc f => match f with
+    | .oneOf n cs => if acc.any (·.1 == n) then acc else acc ++ [(n, cs)]
+    | _ => acc) []
+
 /-- A struct for one untagged layout. -/
-def structFor (name : String) (max : Nat) (l : Layout) : String :=
+def structFor (name : String) (max : Nat) (l : Layout) (total : Option Nat := none) : String :=
+  let totalRead := match total with
+    | some t => [s!"            if c.i > {t} \{", s!"                return Err(Refusal::PastBound \{",
+        "                    offset: 0,", s!"                    limit: {t},", "                    got: c.i,",
+        "                });", "            }"]
+    | none => []
+  let totalWrite := match total with
+    | some t => [s!"            if out.len() > {t} \{", s!"                return Err(Refusal::PastBound \{",
+        "                    offset: 0,", s!"                    limit: {t},", "                    got: out.len(),",
+        "                });", "            }"]
+    | none => []
   String.intercalate "\n" <|
     [s!"    #[derive(Debug, Clone, PartialEq, Eq)]", s!"    pub struct {name} \{"] ++ fieldDecls "        " "pub " l ++
     ["    }", "", s!"    impl {name} \{",
      "        pub fn decode(b: &[u8]) -> Result<Self, Refusal> {",
      "            let mut c = Cursor { b, i: 0 };"] ++
-    l.map (fun f => "            " ++ readField max f) ++
+    l.map (fun f => "            " ++ readField max f) ++ totalRead ++
     ["            c.end()?;", s!"            Ok({structLit "            " name l})", "        }", "",
      "        pub fn encode(&self) -> Result<Vec<u8>, Refusal> {",
      "            let mut out = Vec::new();",
      s!"            let {structLit "            " name l} = self;"] ++
-    l.map (fun f => "            " ++ writeField max f) ++
+    l.map (fun f => "            " ++ writeField max f) ++ totalWrite ++
     ["            Ok(out)", "        }", "    }"]
 
 /-- An enum for the tagged step frame. -/
@@ -233,12 +274,14 @@ def layoutPrelude : String := String.intercalate "\n" [
   "    }"]
 
 /-- The follow socket's payloads. -/
-def layoutModule : String := String.intercalate "\n\n" [
+def layoutModule : String := String.intercalate "\n\n" ([
   "/// The follow socket's payloads (Protocol.Table layouts; Lean codec: Protocol.Frames).\npub mod layout {",
-  layoutPrelude,
-  structFor "Command" Bounds.argvBytesMax commandLayout,
+  layoutPrelude] ++
+  (let es := oneOfs (commandLayout :: resumeLayout :: Step.all.map Step.layout)
+   (if es.isEmpty then [] else [oneOfReader]) ++ es.map fun p => oneOfEnum p.1 p.2) ++ [
+  structFor "Command" Bounds.argvBytesMax commandLayout (some Bounds.argvBytesMax),
   structFor "Resume" Bounds.frameBytesMax resumeLayout,
-  stepEnum Bounds.frameBytesMax ++ "\n}"]
+  stepEnum Bounds.frameBytesMax ++ "\n}"])
 
 def header : String :=
   "// @generated from Nanodregg.Protocol (Protocol/Table.lean) by Emit/Rust.lean. DO NOT EDIT.\n" ++

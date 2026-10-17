@@ -59,6 +59,19 @@ theorem putD_node (d : Nat) (tag : UInt8) (p : ByteArray) (cs : List Tree) :
 theorem ofNat_toNat_of_le {max n : Nat} (small : max < 2 ^ 32) (h : n ≤ max) : (UInt32.ofNat n).toNat = n :=
   UInt32.toNat_ofNat_of_lt' (by simp only [UInt32.size]; omega)
 
+theorem sizeD_eq (d : Nat) (t : Tree) : sizeD d t = (putD d t ByteArray.empty).size := by
+  induction d generalizing t with
+  | zero => rfl
+  | succ d ih =>
+    obtain ⟨tag, p, cs⟩ := t
+    have fold : ∀ (l : List Tree) (k : Nat), l.foldl (fun n c => n + sizeD d c) k = k + (kidsBytes d l).size := by
+      intro l
+      induction l with
+      | nil => intro k; simp [kidsBytes_nil]
+      | cons c l ihl => intro k; rw [List.foldl_cons, ihl, kidsBytes_cons, ByteArray.size_append, ih, Nat.add_assoc]
+    rw [putD_node]
+    simp only [sizeD, fold, ByteArray.size_append, u8_size, u32_size]
+
 theorem getD_of_occurs (max limit : Nat) (small : max < 2 ^ 32) (b : ByteArray) (d : Nat) :
     ∀ (t : Tree) (h : t.fits max d = true) (i : Nat), OccursAt b i (putD d t ByteArray.empty) →
       getD max limit b d i = .ok (⟨t, h⟩, i + (putD d t ByteArray.empty).size) := by
@@ -200,6 +213,7 @@ namespace Stream
 
 theorem tree_lawful (max depth : Nat) (fits : max < 2 ^ 32) : Lawful (tree max depth fits) where
   put_eq t buf := Tree.putD_eq depth t.val buf
+  size_eq t := Tree.sizeD_eq depth t.val
   get_of_occurs t b i h := Tree.getD_of_occurs max depth fits b depth t.val t.2 i h
   occurs_of_get {b i v j} h := Tree.occurs_of_getD max depth b depth i v j h
 

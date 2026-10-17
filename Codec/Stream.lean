@@ -41,6 +41,10 @@ inductive Shape where
   /-- `Codec.Tree`: nodes of a tag, a payload of at most `max` bytes, at most `max` children, nested at
   most `depth` levels. -/
   | tree (max depth : Nat)
+  /-- One byte from an enumerated set. -/
+  | oneOf (codes : Array UInt8)
+  /-- `s`, whose whole encoding is at most `limit` bytes. -/
+  | within (limit : Nat) (s : Shape)
   deriving Repr
 
 /-- A byte string of at most `max` bytes. -/
@@ -53,6 +57,8 @@ abbrev Bounded (max : Nat) (α : Type) := { a : Array α // a.size ≤ max }
 starting at offset `i` and returns it with the offset just past it. -/
 structure Stream (α : Type) where
   shape : Shape
+  /-- The number of bytes `put` appends, computed without encoding. -/
+  size : α → Nat
   put : α → ByteArray → ByteArray
   get : ByteArray → Nat → Except Refusal (α × Nat)
 
@@ -74,11 +80,13 @@ def decode (c : Stream α) (b : ByteArray) : Except Refusal α :=
 /-- The empty encoding of the one value of `Unit`. -/
 def unit : Stream Unit where
   shape := .unit
+  size _ := 0
   put _ buf := buf
   get b i := if i ≤ b.size then .ok ((), i) else .error (.truncated i 0)
 
 def u8 : Stream UInt8 where
   shape := .u8
+  size _ := 1
   put v buf := buf.push v
   get b i := if h : i < b.size then .ok (b[i], i + 1) else .error (.truncated i 1)
 
@@ -94,6 +102,7 @@ def u8 : Stream UInt8 where
 /-- Four bytes, little-endian. -/
 def u32 : Stream UInt32 where
   shape := .u32
+  size _ := 4
   put v buf :=
     (((buf.push v.toUInt8).push (v >>> 8).toUInt8).push (v >>> 16).toUInt8).push (v >>> 24).toUInt8
   get b i :=
@@ -104,6 +113,7 @@ def u32 : Stream UInt32 where
 /-- Eight bytes, little-endian. -/
 def u64 : Stream UInt64 where
   shape := .u64
+  size _ := 8
   put v buf :=
     (((((((buf.push v.toUInt8).push (v >>> 8).toUInt8).push (v >>> 16).toUInt8).push
       (v >>> 24).toUInt8).push (v >>> 32).toUInt8).push (v >>> 40).toUInt8).push
@@ -116,6 +126,7 @@ def u64 : Stream UInt64 where
 /-- A digest: its 32 bytes, raw. -/
 def digest : Stream Digest where
   shape := .digest
+  size _ := 32
   put d buf := buf ++ d.bytes
   get b i :=
     if h : i + 32 ≤ b.size then
@@ -125,6 +136,7 @@ def digest : Stream Digest where
 /-- A byte string of at most `max` bytes: its `u32` length, then its bytes. -/
 def bytesOf (max : Nat) (_fits : max < 2 ^ 32 := by decide) : Stream (Bytes max) where
   shape := .bytes max
+  size v := 4 + v.val.size
   put v buf := u32.put (UInt32.ofNat v.val.size) buf ++ v.val
   get b i :=
     match u32.get b i with
@@ -141,6 +153,9 @@ def bytesOf (max : Nat) (_fits : max < 2 ^ 32 := by decide) : Stream (Bytes max)
 /-- Tag byte 0 for none, 1 then the value for some. -/
 def option (c : Stream α) : Stream (Option α) where
   shape := .option c.shape
+  size
+    | none => 1
+    | some v => 1 + c.size v
   put
     | none, buf => buf.push 0
     | some v, buf => c.put v (buf.push 1)
@@ -156,6 +171,7 @@ def option (c : Stream α) : Stream (Option α) where
 /-- One value after the other; no delimiter (each side knows its own end). -/
 def product (a : Stream α) (c : Stream β) : Stream (α × β) where
   shape := .product a.shape c.shape
+  size v := a.size v.1 + c.size v.2
   put v buf := c.put v.2 (a.put v.1 buf)
   get b i :=
     match a.get b i with
@@ -167,6 +183,9 @@ def product (a : Stream α) (c : Stream β) : Stream (α × β) where
 /-- Tag byte 0 then the left value, or 1 then the right value. -/
 def sum (a : Stream α) (c : Stream β) : Stream (α ⊕ β) where
   shape := .sum a.shape c.shape
+  size
+    | .inl v => 1 + a.size v
+    | .inr v => 1 + c.size v
   put
     | .inl v, buf => a.put v (buf.push 0)
     | .inr v, buf => c.put v (buf.push 1)
@@ -195,6 +214,7 @@ def manyBytes (c : Stream α) (l : List α) : ByteArray := l.foldl (fun out x =>
 /-- At most `max` values: their `u32` count, then each value. -/
 def array (max : Nat) (c : Stream α) (_fits : max < 2 ^ 32 := by decide) : Stream (Bounded max α) where
   shape := .array max c.shape
+  size v := v.val.foldl (fun n x => n + c.size x) 4
   put v buf := v.val.foldl (fun out x => c.put x out) (u32.put (UInt32.ofNat v.val.size) buf)
   get b i :=
     match u32.get b i with
@@ -212,6 +232,7 @@ def array (max : Nat) (c : Stream α) (_fits : max < 2 ^ 32 := by decide) : Stre
 `accept x = some y → back y = x`: one spelling per value. -/
 def refine (name : String) (c : Stream α) (accept : α → Option β) (back : β → α) : Stream β where
   shape := .refine name c.shape
+  size v := c.size (back v)
   put v buf := c.put (back v) buf
   get b i :=
     match c.get b i with
@@ -219,6 +240,27 @@ def refine (name : String) (c : Stream α) (accept : α → Option β) (back : �
     | .ok (x, j) => match accept x with
       | some y => .ok (y, j)
       | none => .error (.rejected i name)
+
+/-- A byte from `codes`; any other byte is refused as `badTag`. -/
+def oneOf (codes : Array UInt8) : Stream { b : UInt8 // codes.contains b = true } where
+  shape := .oneOf codes
+  size _ := 1
+  put v buf := buf.push v.val
+  get b i :=
+    match u8.get b i with
+    | .error e => .error e
+    | .ok (t, j) => if h : codes.contains t = true then .ok (⟨t, h⟩, j) else .error (.badTag i t)
+
+/-- The values of `c` whose whole encoding is at most `limit` bytes; a longer one is refused as
+`pastBound` (a total bound over fields that are each bounded separately). -/
+def within (limit : Nat) (c : Stream α) : Stream { v : α // c.size v ≤ limit } where
+  shape := .within limit c.shape
+  size v := c.size v.val
+  put v buf := c.put v.val buf
+  get b i :=
+    match c.get b i with
+    | .error e => .error e
+    | .ok (v, j) => if h : c.size v ≤ limit then .ok (⟨v, h⟩, j) else .error (.pastBound i limit (j - i))
 
 /-- `false` is 0, `true` is 1; every other byte is refused. -/
 def bool : Stream Bool :=
@@ -228,6 +270,7 @@ def bool : Stream Bool :=
 /-- `tag`'s 32 bytes, then the value. Any other 32 bytes are refused as `wrongFrame`. -/
 def framed (tag : Digest) (c : Stream α) : Stream α where
   shape := .framed tag c.shape
+  size v := 32 + c.size v
   put v buf := c.put v (buf ++ tag.bytes)
   get b i :=
     if i + 32 ≤ b.size then
@@ -239,6 +282,7 @@ def framed (tag : Digest) (c : Stream α) : Stream α where
 def tagged {σ : Type} {F : σ → Type} (all : List σ) (code : σ → UInt8) (ofCode? : UInt8 → Option σ)
     (c : (s : σ) → Stream (F s)) : Stream ((s : σ) × F s) where
   shape := .tagged (all.map fun s => (code s, (c s).shape))
+  size v := 1 + (c v.1).size v.2
   put v buf := (c v.1).put v.2 (buf.push (code v.1))
   get b i :=
     match u8.get b i with

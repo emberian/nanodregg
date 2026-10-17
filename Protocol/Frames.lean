@@ -19,8 +19,12 @@ abbrev Step.Frame := (s : Step) × Layout.Ty Bounds.frameBytesMax s.layout
 def Step.frame : Stream Step.Frame :=
   Stream.tagged Step.all Step.code Step.ofCode? fun s => Layout.codec Bounds.frameBytesMax (by decide) s.layout
 
-def commandFrame : Stream (Layout.Ty Bounds.argvBytesMax commandLayout) :=
-  Layout.codec Bounds.argvBytesMax (by decide) commandLayout
+/-- The argv layout, its items and count bounded by `argvBytesMax`, and the whole payload too:
+a payload over `argvBytesMax` bytes is refused as `pastBound` (CLIENT-2: the total is Lean's). -/
+def commandFrame :
+    Stream { v : Layout.Ty Bounds.argvBytesMax commandLayout //
+      (Layout.codec Bounds.argvBytesMax (by decide) commandLayout).size v ≤ Bounds.argvBytesMax } :=
+  Stream.within Bounds.argvBytesMax (Layout.codec Bounds.argvBytesMax (by decide) commandLayout)
 
 def resumeFrame : Stream (Layout.Ty Bounds.frameBytesMax resumeLayout) :=
   Layout.codec Bounds.frameBytesMax (by decide) resumeLayout

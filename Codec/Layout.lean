@@ -17,23 +17,27 @@ inductive Field where
   | bytes (name : String)
   /-- `u32 count ‖ (u32 len ‖ bytes)*`, at most `max` items of at most `max` bytes each -/
   | list (name : String)
+  /-- one byte, one of the named `cases` (name, code); any other byte is refused as `badTag` -/
+  | oneOf (name : String) (cases : List (String × UInt8))
   deriving DecidableEq, Repr
 
 namespace Field
 
 def name : Field → String
-  | byte n | bytes n | list n => n
+  | byte n | bytes n | list n | oneOf n _ => n
 
 /-- The Lean value of a field. -/
 abbrev Ty (max : Nat) : Field → Type
   | byte _ => UInt8
   | bytes _ => Bytes max
   | list _ => Bounded max (Bytes max)
+  | oneOf _ cases => { b : UInt8 // (cases.map Prod.snd).toArray.contains b = true }
 
 def codec (max : Nat) (fits : max < 2 ^ 32) : (f : Field) → Stream (f.Ty max)
   | byte _ => Stream.u8
   | bytes _ => Stream.bytesOf max fits
   | list _ => Stream.array max (Stream.bytesOf max fits) fits
+  | oneOf _ cases => Stream.oneOf (cases.map Prod.snd).toArray
 
 end Field
 

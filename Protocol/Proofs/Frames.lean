@@ -18,7 +18,8 @@ theorem Step.frame_lawful : Stream.Lawful Step.frame :=
   Stream.tagged_lawful Step.all (fun s => Layout.codec_lawful _ _ s.layout) Step.ofCode?_code
     (fun _ _ h => Step.code_of_ofCode? h)
 
-theorem commandFrame_lawful : Stream.Lawful commandFrame := Layout.codec_lawful _ _ _
+theorem commandFrame_lawful : Stream.Lawful commandFrame :=
+  Stream.within_lawful (Layout.codec_lawful _ _ _) _
 
 theorem resumeFrame_lawful : Stream.Lawful resumeFrame := Layout.codec_lawful _ _ _
 

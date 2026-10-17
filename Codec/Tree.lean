@@ -30,6 +30,11 @@ def fits (max : Nat) : Nat → Tree → Bool
 /-- The trees `fits` accepts. -/
 abbrev Fitting (max d : Nat) := { t : Tree // t.fits max d = true }
 
+/-- The bytes `putD d t` appends, without writing them. -/
+def sizeD : Nat → Tree → Nat
+  | 0, _ => 0
+  | d + 1, node _ p cs => cs.foldl (fun n c => n + sizeD d c) (1 + 4 + p.size + 4)
+
 /-- Write `t` with fuel `d` (enough when `fits max d t`). -/
 def putD : Nat → Tree → ByteArray → ByteArray
   | 0, _, buf => buf
@@ -92,6 +97,7 @@ namespace Stream
 /-- Trees nested at most `depth` levels, with payloads and child lists of at most `max`. -/
 def tree (max depth : Nat) (_fits : max < 2 ^ 32 := by decide) : Stream (Tree.Fitting max depth) where
   shape := .tree max depth
+  size t := Tree.sizeD depth t.val
   put t buf := Tree.putD depth t.val buf
   get b i := Tree.getD max depth b depth i
 
