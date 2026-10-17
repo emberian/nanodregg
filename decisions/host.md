@@ -499,3 +499,42 @@ epoch, and I did not look hard.
 key and framing have not changed), but its record starts with World bytes. The new `Base.read`
 reads the first 32 of those as the stamp and refuses `shapeMismatch`. Re-genesis every Store.
 **Status.** landed (this commit).
+
+## HOST-21 · `lookup` of a dead call answers `refused expired`, final by `absent_final`; adopt's genesis check is PROTOCOL's and suffices (2026-10-17, HOST-5; closes HOST-8's debt and HOST-3's adopt ask)
+**The defect.** `lookup` answered `absent` for every call not in the journal, including one whose
+signed window had already ended. Such a call can never be admitted, because admission needs
+`w.height + 1 ≤ validUntil`. The client was left to work out finality itself, by comparing a height
+the Host did not send against its own `validUntil` (KERNEL-13's suggestion). An `absent` that can
+never change into anything else is a verdict wearing the clothes of an "uncertain" (law 7).
+**Decision.** In `Host.handle`'s `lookup` arm, if the call is not journaled and
+`c.unsigned.validUntil ≤ w.height`, answer `refused expired` (`FrameRefusal.expired`, name only).
+Otherwise answer `absent` as before. The finality is KERNEL's theorem, not a Host assumption:
+`Host.Proofs.Serve.lookup_expired_final` restates `Kernel.absent_final` for this case. Over any
+admitted log from that World, the call's txId is journaled only by a Turn whose window ends strictly
+AFTER the call's own. `receive` copies the call's window into its Turn, so that Turn belongs to
+another call with the same `txIdOf`, which is a collision. `handle_lookup_expired` states the arm
+itself. Plant (host-sim, seeds 1–3), through the real `Host.handle` over the kernel-sim Ctx (CODEC's
+call codec): `plant-lookup-expired: a dead call's lookup answers refused expired, not absent`, plus
+its `absent` twin at `validUntil = height + 1`. With the comparison replaced by `false`, the first
+goes red (seen).
+**Adopt (HOST-3's ask).** PROTOCOL-4 already refuses `thin notAtGenesis` in `Command.start`'s
+adopt (`Protocol/Command/Machine.lean`: `w.height ≠ 0`), and follow's World is the Store's World. In
+`Host.Follow.loop`, `.turns []` never appends and every record holds at least one Turn, so height
+0 means no record after the genesis image. That makes "measured against the image's end" the same
+fact as "height 0". A second Host-side check of it would be one fact checked twice (law 1), so none
+is added.
+**Alternatives.** (a) Send the height with `absent` and let the client decide (KERNEL-13): every
+client re-derives a kernel fact, and a client that forgets waits forever. (b) A typed lookup reply
+(`absent | expired | ok`) as a Status code: `expired` is a refusal of the request's purpose, and the
+Status table is PROTOCOL's to grow. The name rides in `refused` the way every other refusal does.
+**Critique.** `expired` is decided against the World at the start of the batch's step, not the
+durable one. A lookup in the same batch as an admission at the boundary height answers against
+the advanced World, which is still correct, because a window that ended stays ended. The name
+`expired` is also `ReadRefusal.expired`'s name. Both mean "your signed window is behind this
+World", but the read one carries the writer's height (PROTOCOL-19) and this one carries nothing,
+since a lookup has no re-sign to do: a dead call is dead. The CLIENT must treat `refused expired`
+on lookup as final (not retry-safe-unknown). It relays bytes, so the decision is in the rows.
+**Meta-critique.** I closed the adopt item by argument rather than by code. The argument rests on
+an IO fact (`.turns []` is never appended) that no theorem states. If someone makes follow append
+an empty record (a heartbeat, say), the two facts come apart silently.
+**Status.** landed (this commit).

@@ -8,7 +8,10 @@ is the kernel's or the receive layer's.
   the original receipt and derives nothing (KERNEL-7); otherwise `Receive.receive` derives the Turn
   and the loop admits it with `World.admit`. This is `Receive.submit` cut at the point where the loop
   batches (`Host.Proofs.Serve.admitBatch_submit`).
-* `lookup` — the same call bytes: `ok` with the receipt if journaled, `absent` otherwise (HOST-8).
+* `lookup` — the same call bytes: `ok` with the receipt if journaled; otherwise `refused expired`
+  when the call's signed window ended at or before this World's height (final: it can never be
+  admitted, `Host.Proofs.Serve.lookup_expired_final` over KERNEL's `absent_final`), else `absent`
+  (it may still land: HOST-8).
 * `log` — PROTOCOL's read envelope (`Envelope.check`: a live member, its current key, the signature,
   `validUntil`, a follow grant live to a root) against the World as the batch has advanced it, so
   a revocation earlier in the batch applies; then a page of the durable log from `start`, built
@@ -42,6 +45,10 @@ inductive FrameRefusal where
   /-- the resident stopped before this frame reached a batch: nothing of it was admitted, and
   resending it to the restarted Host is safe -/
   | stopped
+  /-- `lookup`: the call is not journaled and its window ended at or before this World's height,
+  so no admission of it can ever happen (`lookup_expired_final`); `absent` would leave the caller
+  waiting on a call that is dead -/
+  | expired
   deriving Repr
 
 /-- The refusal's name on the wire. -/
@@ -51,6 +58,7 @@ def FrameRefusal.name : FrameRefusal → String
   | .notServed _ => "notServed"
   | .wrongSocket _ => "wrongSocket"
   | .stopped => "stopped"
+  | .expired => "expired"
 
 /-- A `refused` reply carrying a refusal's name. -/
 def named (name : String) : UInt8 × ByteArray :=
@@ -80,7 +88,9 @@ def handle (X : Ctx D) (w : World D) (f : Frame) : Answer (World D) (Turn D) :=
     | some c =>
       match w.journal[txIdOf X c]? with
       | some (h, d) => .reply Protocol.Status.ok.code (receipt X h d)
-      | none => .reply Protocol.Status.absent.code ByteArray.empty
+      | none =>
+        if c.unsigned.validUntil ≤ w.height then refuse (named FrameRefusal.expired.name)
+        else .reply Protocol.Status.absent.code ByteArray.empty
   | some .read =>
     match Protocol.Envelope.ofBytes X f.payload with
     | none => refuse (named Protocol.ReadRefusal.badEnvelope.name)

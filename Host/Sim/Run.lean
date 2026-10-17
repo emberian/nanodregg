@@ -32,6 +32,8 @@ import Host.Sim.Toy
 import Kernel.World
 import Host.Open
 import Host.Page
+import Host.Serve
+import Kernel.Sim
 
 namespace Nanodregg.Host.Sim
 
@@ -428,6 +430,27 @@ def run (args : List String) : IO UInt32 := do
           (segReader r.disk.synced))) = "opened") failures
     check "plant-old-shape: the running binary refuses the old shape `shapeMismatch` (never decoded)"
       (faultName (reopen ob r.disk.synced) = "shapeMismatch") failures
+  -- plant-lookup-expired (HOST-21): the writer's `lookup` arm (Host.handle) over the kernel-sim
+  -- Ctx (CODEC's call codec and decodeCall). At genesis (height 0) an un-journaled call whose window
+  -- ends at 0 can never be admitted: `refused expired`; one ending at 1 may still land: `absent`.
+  let kx := Kernel.Sim.ctx
+  let kw : World Kernel.Sim.D := World.genesis kx.env "lookup".toUTF8 (2 ^ 40)
+  let callUntil (v : Nat) : Receive.Call Kernel.Sim.D :=
+    { unsigned := { member := 0, key := ByteArray.empty, notBefore := 0, validUntil := v, pins := [],
+                    maxCharge := 0, body := .revoke 0 },
+      signature := ByteArray.empty }
+  let lookupAt (v : Nat) : String :=
+    match handle kx kw ⟨0, Protocol.Op.lookup.code, kx.callBytes (callUntil v)⟩ with
+    | .reply s p =>
+      if s == Protocol.Status.absent.code then "absent"
+      else if s == Protocol.Status.refused.code then (String.fromUTF8? p).getD "?" else "other"
+    | _ => "other"
+  check "plant-lookup-expired fires: the call decodes, and its window is the one asked"
+    ((kx.decodeCall (kx.callBytes (callUntil 0))).map (·.unsigned.validUntil) == some 0) failures
+  check "plant-lookup-expired: a dead call's lookup answers `refused expired`, not `absent`"
+    (lookupAt 0 == "expired") failures
+  check "plant-lookup-expired: a call that may still land answers `absent`"
+    (lookupAt 1 == "absent") failures
   let n ← failures.get
   IO.println (if n = 0 then "ALL PASS" else s!"{n} FAILED")
   return (if n = 0 then 0 else 1)

@@ -9,8 +9,16 @@ own between the signed call and the log.
 `step_journaled`: a call already in the journal answers `ok` with its ORIGINAL receipt (height and
 turn digest from the journal) and leaves the World and the staged Turns as they were — whatever
 `receive` would now say about it (a retried rotation must not be re-judged, KERNEL-7).
+
+`handle_lookup_expired` / `lookup_expired_final` (HOST-21): a `lookup` of an un-journaled call whose
+window ended at or before the World's height answers `refused expired`, and that answer is final:
+if any later World of an admitted log journals the call's transaction id, some Turn of that log
+carries the id with a window ending strictly AFTER the call's own. A Turn derived from the call has
+the call's window (`receive` copies it), so that Turn is another call with the same `txIdOf`: a
+collision.
 -/
 import Host.Serve
+import Kernel.Proofs.Fold
 
 namespace Nanodregg.Host
 
@@ -44,5 +52,22 @@ theorem step_journaled (X : Ctx D) (w : World D) (out : Out (Turn D)) (q : Reque
     (machine X).step (w, out) q =
       (w, { out with replies := out.replies.push ⟨q.conn, Protocol.Status.ok.code, receipt X h d⟩ }) := by
   simp only [Machine.step, machine, handle, hop, hc, hj]
+
+theorem handle_lookup_expired (X : Ctx D) (w : World D) (f : Frame) (c : Call D)
+    (hop : Protocol.Op.ofCode? f.op = some .lookup) (hc : X.decodeCall f.payload = some c)
+    (hj : w.journal[txIdOf X c]? = none) (hv : c.unsigned.validUntil ≤ w.height) :
+    handle X w f = .reply Protocol.Status.refused.code "expired".toUTF8 := by
+  simp only [handle, hop, hc, hj, hv, if_true, named, FrameRefusal.name]
+
+/-- **`expired` is final.** Over any admitted log from the World a lookup answered `expired` at,
+the call's transaction id is journaled only by a Turn whose window ends after the call's own:
+never by the call itself. -/
+theorem lookup_expired_final [Std.TransOrd D] [Std.LawfulEqOrd D] (X : Ctx D) (c : Call D)
+    {w w' : World D} {l : List (Turn D)} (hf : World.fold X.env w l = .ok w')
+    (hj : w.journal[txIdOf X c]? = none) (hv : c.unsigned.validUntil ≤ w.height)
+    (hj' : w'.journal[txIdOf X c]? ≠ none) :
+    ∃ t ∈ l, t.txId = txIdOf X c ∧ c.unsigned.validUntil < t.validUntil := by
+  obtain ⟨t, ht, hk, hlt⟩ := absent_final hf hj hj'
+  exact ⟨t, ht, hk, by omega⟩
 
 end Nanodregg.Host
