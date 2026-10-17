@@ -37,15 +37,23 @@ or its refusal. -/
 def world (name : String) : Except GenesisRefusal (World D) :=
   Receive.genesis X name.toUTF8 nonce allowanceMax [(key, nextKeyDigest X next)]
 
-/-- The `i`-th call: founder 0 creates an empty data object, pinned on its own member cell as it
-is in `w` (distinct `i < windowMax / 2`, distinct `validUntil`, distinct txId), holding `state`
-(empty by default; the sealed-Store plants fill one slot to reach a seal in few calls). -/
-def create (w : World D) (i : Nat) (state : Slots := []) : Call D :=
-  let me := founderId X w.origin 0
+/-- `create` as the member `me`: after a carry (KERNEL-29) the members keep their old ids, keyed by
+the EXPORTED World's origin, while every call names the new World (`Unsigned.world`). -/
+def createAs (me : D) (w : World D) (i : Nat) (state : Slots := []) : Call D :=
   let u : Unsigned D :=
     { world := w.origin, member := me, key, notBefore := 0, validUntil := Bounds.windowMax / 2 + i,
       pins := [(me, pinOf X.env (w.live X.env me))], maxCharge := 1 <<< 40, body := .create none [] state }
   { unsigned := u, signature := Ed25519.sign seed (X.unsignedBytes u) }
+
+/-- The `i`-th call: founder 0 creates an empty data object, pinned on its own member cell as it
+is in `w` (distinct `i < windowMax / 2`, distinct `validUntil`, distinct txId), holding `state`
+(empty by default; the sealed-Store plants fill one slot to reach a seal in few calls). -/
+def create (w : World D) (i : Nat) (state : Slots := []) : Call D :=
+  createAs (founderId X w.origin 0) w i state
+
+/-- A `lookup` frame toward `host serve`: the same call bytes (Protocol.Op.lookup). -/
+def lookupFrame (c : Call D) : ByteArray :=
+  encodeFrame { conn := 1, op := Protocol.Op.lookup.code, payload := X.callBytes c }
 
 /-- A `submit` frame toward `host serve`. -/
 def submitFrame (c : Call D) : ByteArray :=

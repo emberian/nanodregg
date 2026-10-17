@@ -103,7 +103,7 @@ on the first call enough?
 - OPS plant added: carry-roundtrip also asserts "a call committed at the old tip is `lookup`
   committed after import".
 
-**Status.** AGREED by all four (KERNEL-29, HOST-28, PROTOCOL-29, CODEC-22, each amending). Build order: KERNEL-29
+**Status.** BUILT (KERNEL-29 b8e0f82, CODEC-22 28b4a38, HOST-28 6b89d6f, OPS plants + RUNBOOK §6). Was: AGREED by all four (KERNEL-29, HOST-28, PROTOCOL-29, CODEC-22, each amending). Build order: KERNEL-29
 (Carried, Receive.carry, theorems; after the World port) → CODEC-22 (`carried`, lawfulness,
 canonicity) → HOST-28 (`export`, `import --digest`, `carryMismatch` with its hostAction arm) → OPS
 (store-plants carry rows, RUNBOOK §6) and PROTOCOL's carry row.

@@ -29,6 +29,7 @@ the origin), or it FAILS instead of passing on a Store that never sealed.
 -/
 import Ops.Founder
 import Host.Exit
+import Host.Carry
 
 namespace Nanodregg.Ops.Plants
 
@@ -53,6 +54,18 @@ def host (exe : String) (args : List String) (stdin : ByteArray := ByteArray.emp
   -- `serve` answers in binary frames; only text output (check's STATUS line) is shown
   let text := (String.fromUTF8? out).getD s!"<{out.size} bytes>"
   return ⟨code, (text ++ err).trimAsciiEnd.toString⟩
+
+/-- `host` with its stdout kept as bytes (a `serve` reply), and its stderr as text. -/
+def hostRaw (exe : String) (args : List String) (stdin : ByteArray) : IO (UInt32 × ByteArray × String) := do
+  let child ← IO.Process.spawn
+    { cmd := exe, args := args.toArray, stdin := .piped, stdout := .piped, stderr := .piped }
+  let (input, child) ← child.takeStdin
+  input.write stdin
+  input.flush
+  let out ← IO.asTask child.stdout.readBinToEnd
+  let err ← child.stderr.readToEnd
+  let code ← child.wait
+  return (code, ← IO.ofExcept out.get, err)
 
 def files : List String := Host.Store.backupOrder
 
@@ -379,6 +392,120 @@ def indexMovedPlant (exe : String) (dir : System.FilePath) : IO Nat := do
   unless ok do failed := failed + 1
   return failed
 
+/-- The field `k` of a `k VALUE` line of `out`. -/
+def lineField (out k : String) : Option String :=
+  (out.splitOn "\n").findSome? fun l => match l.splitOn " " with
+    | [a, v] => if a == k then some v else none
+    | _ => none
+
+/-- OPS-P1 / HOST-28: law 1's state carry through the real exe, from the sealed live Store `L`
+(48 calls, real bases). Export reads only; import is refused by name before any Store file for
+a missing or wrong digest, a byte flipped in transit, another stamp; a good import keeps the
+height under a new origin and chain (checked against KERNEL's `Receive.carry` in process); a call
+committed before the export is `lookup` committed after (PROTOCOL-29: the journal is carried);
+a call signed for the old origin does not land, one signed for the new origin (as the carried
+member) does; two imports are two Worlds. -/
+def carryPlants (exe : String) (dir : System.FilePath) : IO Nat := do
+  let l := dir / "L"
+  let w0 ← match Founder.world name with
+    | .ok w => pure w
+    | .error r => do IO.eprintln s!"genesis refused {r.name}"; return 1
+  let n := 48
+  let (calls, wL) ← (List.range n).foldlM (init := (([] : List (Call D)), w0)) fun (cs, w) i => do
+    let c := Founder.create w i (bigState i)
+    match submit X w c with
+    | .ok (_, w') => pure (c :: cs, w')
+    | .error _ => throw (IO.userError s!"carry fixture call {i} does not admit in process")
+  let mut failed := 0
+  let say (label : String) (ok : Bool) (detail : String) : IO Bool := do
+    IO.println s!"PLANT {label} {if ok then "PASS" else "FAIL"} :: {detail}"
+    return ok
+  let snap (d : System.FilePath) : IO (List ByteArray) := Host.Store.backupOrder.mapM fun (f : String) => IO.FS.readBinFile (d / System.FilePath.mk f)
+  let before ← snap l
+  let out := dir / "L.carried"
+  let e ← host exe ["export", l.toString, out.toString]
+  let after ← snap l
+  let digest := (lineField e.out "carried").getD ""
+  let ok1 := e.code = 0 && before == after && lineField e.out "anchor" = some (anchorArg wL) &&
+    lineField e.out "from" = some wL.origin.toHex && digest.length = 64
+  unless ← say "carry-export-reads-only" ok1 s!"exit={e.code} store unchanged={before == after} :: {e.out.replace "\n" " "}" do
+    failed := failed + 1
+  unless ← judge ⟨"carry-export-over-existing", .exists, host exe ["export", l.toString, out.toString]⟩ do failed := failed + 1
+  let file ← IO.FS.readBinFile out
+  let empty (d : System.FilePath) : IO Bool := do
+    if !(← d.pathExists) then return true
+    return (← d.readDir).isEmpty
+  -- refusals before any Store file
+  let refusedEmpty (label : String) (want : Status) (args : List String) (d : System.FilePath) : IO Bool := do
+    let r ← host exe args
+    let ok := r.code = want.code.toUInt32 && (← empty d)
+    say label ok s!"exit={r.code} want={want.name}({want.code}) no Store file={← empty d} :: {r.out.replace "\n" " "}"
+  let c0 := dir / "carry-refused"
+  unless ← refusedEmpty "carry-import-no-digest" .usage ["import", c0.toString, "plants-carry", out.toString] c0 do failed := failed + 1
+  unless ← refusedEmpty "carry-import-wrong-digest" .carryMismatch
+      ["import", c0.toString, "plants-carry", out.toString, "--digest", String.ofList (List.replicate 64 '0')] c0 do
+    failed := failed + 1
+  let flipAt := file.size - 7
+  let flipped := file.set! flipAt (file.get! flipAt ^^^ 1)
+  if flipped == file then IO.eprintln "the in-transit flip is a no-op"; return failed + 1
+  let fOut := dir / "flipped.carried"
+  IO.FS.writeBinFile fOut flipped
+  unless ← refusedEmpty "carry-import-flipped-in-transit" .carryMismatch
+      ["import", c0.toString, "plants-carry", fOut.toString, "--digest", digest] c0 do failed := failed + 1
+  let stamped := file.set! 0 (file.get! 0 ^^^ 1)
+  let sOut := dir / "stamp.carried"
+  IO.FS.writeBinFile sOut stamped
+  unless ← refusedEmpty "carry-import-other-stamp" .shapeMismatch
+      ["import", c0.toString, "plants-carry", sOut.toString, "--digest", (Carry.digestOf stamped).toHex] c0 do
+    failed := failed + 1
+  -- the good import, under a fixed nonce so KERNEL's carry is rebuilt here
+  let nonce2 := Founder.nonce.set! 2 (Founder.nonce.get! 2 ^^^ 1)
+  let wC ← match Receive.carry X "plants-carry".toUTF8 nonce2 wL.origin wL.carried with
+    | .ok w => pure w
+    | .error r => do IO.eprintln s!"the in-process carry refused {r.name}"; return failed + 1
+  let c := dir / "C"
+  let i ← host exe ["import", c.toString, "plants-carry", out.toString, "--digest", digest,
+    "--nonce", Protocol.Text.toHex nonce2]
+  let st ← status exe c
+  let h := (st.map (field · "height")).getD 0
+  let chainC := (st.bind (·.lookup "chain")).getD ""
+  let ok2 := i.code = 0 && h = n && chainC = wC.chain.toHex && chainC ≠ wL.chain.toHex &&
+    lineField i.out "origin" = some wC.origin.toHex && wC.origin ≠ wL.origin
+  unless ← say "carry-import-keeps-height-new-origin" ok2
+      s!"exit={i.code} height={h} (want {n}) chain=KERNEL's carry {decide (chainC = wC.chain.toHex)} new {decide (chainC ≠ wL.chain.toHex)} :: {i.out.replace "\n" " "}" do
+    failed := failed + 1
+  -- PROTOCOL-29: the last call before the export answers `lookup` committed in the new World
+  let some last := calls.head? | IO.eprintln "no fixture calls"; return failed + 1
+  let (lc, lout, _) ← hostRaw exe ["serve", c.toString] (Founder.lookupFrame last)
+  let st8 := if lout.size > 8 then lout.get! 8 else 255
+  let ok3 := lc = 0 && st8 = Protocol.Status.ok.code
+  unless ← say "carry-lookup-committed-after-import" ok3 s!"serve exit={lc} reply status={st8} (ok = {Protocol.Status.ok.code})" do
+    failed := failed + 1
+  -- a fresh call signed for the OLD origin does not land; one for the new origin, as the carried member, does
+  let old := Founder.create wL n
+  -- the control: a call never committed is NOT answered ok, so the row above is not vacuous
+  let (_, lout2, _) ← hostRaw exe ["serve", c.toString] (Founder.lookupFrame old)
+  let stNo := if lout2.size > 8 then lout2.get! 8 else 255
+  unless ← say "carry-lookup-uncommitted-not-ok-control" (stNo ≠ Protocol.Status.ok.code) s!"reply status={stNo}" do
+    failed := failed + 1
+  let _ ← host exe ["serve", c.toString] (Founder.submitFrame old)
+  let h1 := ((← status exe c).map (field · "height")).getD 0
+  unless ← say "carry-old-origin-call-not-admitted" (h1 = n) s!"height {h1} (want {n})" do failed := failed + 1
+  let me := founderId X wL.origin 0
+  let fresh := Founder.createAs me wC n
+  let inProc := (submit X wC fresh).isOk
+  let _ ← host exe ["serve", c.toString] (Founder.submitFrame fresh)
+  let h2 := ((← status exe c).map (field · "height")).getD 0
+  unless ← say "carry-new-origin-call-admitted" (inProc && h2 = n + 1)
+      s!"in process {inProc}; height {h2} (want {n + 1})" do failed := failed + 1
+  -- two imports of one export are two Worlds
+  let c2 := dir / "C2"
+  let i2 ← host exe ["import", c2.toString, "plants-carry", out.toString, "--digest", digest]
+  let o2 := lineField i2.out "origin"
+  let ok4 := i2.code = 0 && o2.isSome && o2 ≠ some wC.origin.toHex && o2 ≠ some wL.origin.toHex
+  unless ← say "carry-two-imports-two-worlds" ok4 s!"exit={i2.code} origin {o2.getD "?"}" do failed := failed + 1
+  return failed
+
 def run (exe : String) (dir : System.FilePath) : IO UInt32 := do
   if ← dir.pathExists then IO.eprintln s!"store-plants: {dir} exists"; return 2
   IO.FS.createDirAll dir
@@ -462,6 +589,7 @@ def run (exe : String) (dir : System.FilePath) : IO UInt32 := do
   failed := failed + (← replay exe dir)
   failed := failed + (← originPlants exe dir)
   failed := failed + (← indexMovedPlant exe dir)
+  failed := failed + (← carryPlants exe dir)
   if failed = 0 then IO.println "ALL PASS"; return 0
   IO.println s!"FAIL {failed} of {plants.length}"; return 1
 

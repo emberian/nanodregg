@@ -113,16 +113,33 @@ Copy the files (`deploy/units/STORE.md`) into an empty STORE, then:
 cut at a frame boundary, a single foreign last frame and a rollback to an older complete copy ALL
 open cleanly at a lower height; that is why the anchor is not optional.
 
-## 6. Re-genesis (flag day) — PENDING (OPS-1 export/import: KERNEL-29, CODEC's carried codec, HOST-28)
+## 6. Re-genesis with state carried (flag day) — RAN (store-plants `carry-*`, HOST-28 6b89d6f, KERNEL-29)
 
-1. Stop the writer unit and every member's follow unit (by unit name). An export is taken from a
-   STOPPED writer only (HOST-28): the carried state is the writer's last durable World.
-2. The operator moves the old Store aside BY HAND (`mv STORE STORE.old-<date>`); nothing deletes it.
-3. `host genesis STORE NEW-LABEL …` (a new label: §1).
-4. State carry (law 1, OPS-1) is export = the old Store's fold, import = genesis whose World is
-   those cells re-sealed, check = canonical bytes equal up to the epoch header. No verb exists yet.
-   Without it, a flag day starts from an empty World. Old receipts and signed calls are never valid
-   in the new World.
+State crosses a flag day only by re-genesis from a checked export (law 1, OPS-1). History never
+crosses: every old call and receipt is for the old World.
+
+1. Stop the writer unit and every member's follow unit, by unit name. Export only from a STOPPED
+   writer (HOST-28): the carried state is its last durable World.
+2. With the OLD binary: `host export STORE OUT`. It reads STORE only (`carry-export-reads-only`),
+   refuses an existing OUT (`refused out`, 17), and prints `carried HEX` (the file's digest),
+   `from HEX` (the old origin) and `anchor H:C`. Record all three beside the backup.
+3. The operator moves the old Store aside BY HAND (`mv STORE STORE.old-<date>`); nothing deletes it.
+4. With the NEW binary: `host import STORE NAME OUT --digest HEX` (the `carried` digest; a fresh
+   nonce is drawn unless `--nonce`). Refused by name, before any Store file is written:
+   no `--digest` → `refused digest` (8); a wrong digest or a byte changed in transit →
+   `refused carryMismatch digest` (49); a file written under another carried shape →
+   `refused carried` (43, shapeMismatch): that flag day changed the carried shape and cannot
+   carry, so it is a plain re-genesis (§1) and the old Store stays aside; `carryMismatch decode`,
+   `anchor`, `tooLarge`, `carry NAME`. A `carryMismatch reopen` may leave a Store: move it aside.
+5. `host check STORE`: the height is the old anchor's (the carry keeps it), the chain is the new
+   World's own, `origin` (printed by import) is new.
+6. Publish the new origin to members. Every call signed for the old origin does not land
+   (`carry-old-origin-call-not-admitted`); members sign the new origin as their SAME member ids
+   (`carry-new-origin-call-admitted`); a call committed before the export still answers `lookup`
+   committed (`carry-lookup-committed-after-import`: the journal is carried, PROTOCOL-29).
+7. Members re-create their follow Stores from the new World (§2: reproduce the import with its
+   printed nonce, or adopt). Two imports of one export are two Worlds (`carry-two-imports-two-worlds`):
+   import once.
 
 ## 7. Refusals and what the operator does
 

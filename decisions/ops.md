@@ -64,7 +64,12 @@ keep old ids that no new derivation produces; that is acceptable only while ids 
 part I declined (ids by role). Nothing here is built: the export/import verbs do not exist, so
 this is a law, not a capability, until HOST/KERNEL build `export`/`import` and a plant (import a
 World whose bytes differ → refused by name).
-**Status.** ACCEPTED by ROOT 10-16; charter b3787d3.
+**Status.** ACCEPTED by ROOT 10-16; charter b3787d3. BUILT 2026-10-17: KERNEL-29 (b8e0f82, Carried
+{trie, allowance, height, journal}), CODEC-22 (28b4a38, content-addressed carried codec), HOST-28
+(6b89d6f, `export` / `import --digest`), planted through the real exe by OPS (store-plants
+`carry-*`, 13 rows) with RUNBOOK §6. The "up to the epoch header" worry of the CRITIQUE is closed by
+byte equality of the carried codec plus the required digest; the id worry stands (carried member
+ids keep the old-origin keying; members sign the new origin under their old ids).
 
 ## OPS-2 · cross-World replay: reproduced against the real `host`, routed to KERNEL-4 (2026-10-16)
 
