@@ -13,6 +13,8 @@ Not admission: a resident (or its client) reads text into a `Package`, checks it
             | (case e (l x e)…) | (if e e e) | (ref i) | (e e…)
     package ::= (package (imports "hex"…) (state T) (iface T) (methods l…) (laws l…) (body e))
 
+A binder (`lam`, `let`, `fn`, a `case` arm) may not be named like a literal, a head word or a
+primitive (`reservedBinder`).
 Fields and arms may be written in any order: they are sorted into the canonical (ascending) order.
 Forms nest at most `depthMax` deep and a list holds at most `listMax` elements: the reader's fuel
 counts nesting only, so a long chain (`anyOf` over 63 members) costs its depth, not its length.
@@ -64,6 +66,9 @@ inductive ReadRefusal
   | emptyApplication (pos : Nat)
   /-- `fn` takes `(name type)…` and a body -/
   | badBinder (pos : Nat)
+  /-- a binder named like a literal (`true`, `false`, a numeral, `#hex`) or a form's head word (`if`,
+  `+`, …): a use would read as the literal or the form, so the binder could not be referred to -/
+  | reservedBinder (pos : Nat) (name : String)
   /-- an import is a hex digest string -/
   | badImport (pos : Nat)
   /-- `methods` and `laws` list labels -/
@@ -80,18 +85,20 @@ def ReadRefusal.name : ReadRefusal → String
   | .unterminatedString _ => "unterminatedString" | .unclosed _ => "unclosed"
   | .trailing _ => "trailing" | .notAType _ => "notAType" | .badEntry _ => "badEntry"
   | .unbound _ _ => "unbound" | .badRef _ => "badRef" | .emptyApplication _ => "emptyApplication"
-  | .badBinder _ => "badBinder" | .badImport _ => "badImport" | .badLabel _ => "badLabel"
+  | .badBinder _ => "badBinder" | .reservedBinder _ _ => "reservedBinder" | .badImport _ => "badImport" | .badLabel _ => "badLabel"
   | .notPackage _ => "notPackage" | .notOfType _ => "notOfType"
 
 def ReadRefusal.pos : ReadRefusal → Nat
   | .tooDeep p | .tooLong p | .unexpectedEnd p | .stray p | .unterminatedString p | .unclosed p | .trailing p
   | .notAType p | .badEntry p | .unbound p _ | .badRef p | .emptyApplication p | .badBinder p
+  | .reservedBinder p _
   | .badImport p | .badLabel p | .notPackage p | .notOfType p => p
 
 /-- `name @offset`, plus the unbound name: what a resident reads. -/
 def ReadRefusal.text (e : ReadRefusal) : String :=
   match e with
   | .unbound p x => s!"unbound @{p} {x}"
+  | .reservedBinder p x => s!"reservedBinder @{p} {x}"
   | e => s!"{e.name} @{e.pos}"
 
 abbrev P (α : Type) := Except ReadRefusal α
@@ -193,6 +200,18 @@ def hexBytes? (a : String) : Option ByteArray :=
   | '#' :: hs => unhex .empty hs
   | _ => none
 
+/-- An atom that `term` reads as a literal before it looks at the scope. -/
+def isLiteral (a : String) : Bool := a = "true" || a = "false" || a.toNat?.isSome || (hexBytes? a).isSome
+
+/-- The head words of the forms `term` reads (besides the primitives, `primOf`). -/
+def keywords : List String := ["lam", "fn", "let", "fix", ".", "record", "extend", "inj", "case", "if", "ref"]
+
+/-- A name `term` reads as something other than a variable: a literal, a head word, a primitive. -/
+def isReserved (a : String) : Bool := isLiteral a || keywords.contains a || (primOf a).isSome
+
+/-- A binder name is not reserved (`reservedBinder` at its offset). -/
+def binder (p : Nat) (x : String) : P Unit := if isReserved x then .error (.reservedBinder p x) else .ok ()
+
 def indexOf (x : String) : List String → Option Nat
   | [] => none
   | y :: ys => if x = y then some 0 else (indexOf x ys).map (· + 1)
@@ -204,14 +223,15 @@ def appAll (f : Term) : List Term → Term
 /-- The arms `(label name body)…` of a case, each body read by `f` with `name` bound. -/
 def arms (f : String → SExp → P Term) : List SExp → P (List (Label × Term))
   | [] => .ok []
-  | .list _ [.atom _ ℓ, .atom _ x, e] :: rest => do pure ((ℓ, ← f x e) :: (← arms f rest))
+  | .list _ [.atom _ ℓ, .atom q x, e] :: rest => do binder q x; pure ((ℓ, ← f x e) :: (← arms f rest))
   | x :: _ => .error (.badEntry x.pos)
 
 /-- `(fn (x T)… body)` after `fn`: each binder's type read by `tyOf`, the body by `body` in the
 scope the binders extend. -/
 def fnWith (tyOf : SExp → P Ty) (body : List String → SExp → P Term) : List String → List SExp → P Term
   | sc, [b] => body sc b
-  | sc, .list _ [.atom _ x, t] :: rest => do pure (.lam (← tyOf t) (← fnWith tyOf body (x :: sc) rest))
+  | sc, .list _ [.atom q x, t] :: rest => do
+    binder q x; pure (.lam (← tyOf t) (← fnWith tyOf body (x :: sc) rest))
   | _, x :: _ => .error (.badBinder x.pos)
   | _, [] => .error (.badBinder 0)
 
@@ -230,11 +250,11 @@ def term : Nat → List String → SExp → P Term
         | some i => .ok (.var i)
         | none => .error (.unbound p a)
   | _ + 1, _, .str _ s => .ok (.bytes s.toUTF8)
-  | d + 1, sc, .list _ [.atom _ "lam", .atom _ x, t, b] => do
-    pure (.lam (← ty d t) (← term d (x :: sc) b))
+  | d + 1, sc, .list _ [.atom _ "lam", .atom q x, t, b] => do
+    binder q x; pure (.lam (← ty d t) (← term d (x :: sc) b))
   | d + 1, sc, .list _ (.atom _ "fn" :: rest) => fnWith (fun t => ty d t) (fun sc b => term d sc b) sc rest
-  | d + 1, sc, .list _ [.atom _ "let", .atom _ x, t, e, b] => do
-    pure (.app (.lam (← ty d t) (← term d (x :: sc) b)) (← term d sc e))
+  | d + 1, sc, .list _ [.atom _ "let", .atom q x, t, e, b] => do
+    binder q x; pure (.app (.lam (← ty d t) (← term d (x :: sc) b)) (← term d sc e))
   | d + 1, sc, .list _ [.atom _ "fix", e] => do pure (.fix (← term d sc e))
   | d + 1, sc, .list _ [.atom _ ".", e, .atom _ ℓ] => do pure (.get (← term d sc e) ℓ)
   | d + 1, sc, .list _ (.atom _ "record" :: fs) => do

@@ -331,6 +331,74 @@ theorem name_hex (m : Nat) : hexBytes? (name m) = none := by
 theorem name_ne {m : Nat} {s : String} (h : s.toList.head? ≠ some 'x') : name m ≠ s := by
   intro e; apply h; rw [← e, name_toList]; rfl
 
+/-- A printed binder name is never reserved, so the reader accepts it as a binder. -/
+theorem isLiteral_name (m : Nat) : isLiteral (name m) = false := by
+  have h1 : name m ≠ "true" := name_ne (by simp)
+  have h2 : name m ≠ "false" := name_ne (by simp)
+  simp [isLiteral, h1, h2, name_toNat, name_hex]
+
+theorem isReserved_name (m : Nat) : isReserved (name m) = false := by
+  have hk : ∀ w ∈ keywords, name m ≠ w := by
+    intro w hw
+    simp only [keywords, List.mem_cons, List.not_mem_nil, or_false] at hw
+    rcases hw with rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl <;> exact name_ne (by simp)
+  have hp : primOf (name m) = none := by
+    unfold primOf; split <;> first | rfl | (rename_i h; exact absurd h (name_ne (by simp)))
+  simp only [isReserved, isLiteral_name, hp, Option.isSome_none, Bool.or_false, Bool.false_or]
+  simpa using fun h => hk _ h rfl
+
+theorem binder_name (p m : Nat) : binder p (name m) = .ok () := by simp [binder, isReserved_name]
+
+theorem mapM_cons_ok {f : SExp → P Term} {a : SExp} {as : List SExp} {r : List Term}
+    (h : (a :: as).mapM f = .ok r) : ∃ t ts, f a = .ok t ∧ as.mapM f = .ok ts ∧ r = t :: ts := by
+  rw [List.mapM_cons] at h
+  cases hf : f a with
+  | error e => simp [hf, bind, Except.bind] at h
+  | ok t =>
+    cases hl : as.mapM f with
+    | error e => simp [hf, hl, bind, Except.bind] at h
+    | ok ts =>
+      simp only [hf, hl, bind, Except.bind, pure, Except.pure, Except.ok.injEq] at h
+      exact ⟨t, ts, rfl, rfl, h.symm⟩
+
+/-- `keywords` covers `term`'s head words: a list headed by a bound name that is not reserved, with
+any arguments, reads as that variable applied to them, never as a form. A form added to `term`
+whose word is not in `keywords` makes this theorem false. -/
+theorem term_unreserved_head {d : Nat} {sc : List String} {p q i : Nat} {w : String}
+    (hw : isReserved w = false) (hi : indexOf w sc = some i) :
+    ∀ {args : List SExp} {targs : List Term}, args.mapM (fun a => Read.term d sc a) = .ok targs →
+    args ≠ [] → Read.term (d + 1) sc (.list p (.atom q w :: args)) = .ok (appAll (.var i) targs) := by
+  have hw' := hw
+  simp only [isReserved, Bool.or_eq_false_iff] at hw'
+  obtain ⟨⟨hl, hk⟩, hp⟩ := hw'
+  have hk2 : w ∉ keywords := fun h => by simp [h] at hk
+  have hp2 : primOf w = none := by cases h : primOf w <;> simp_all
+  simp only [keywords, List.mem_cons, List.not_mem_nil, or_false, not_or] at hk2
+  obtain ⟨k1, k2, k3, k4, k5, k6, k7, k8, k9, k10, k11⟩ := hk2
+  simp only [isLiteral, Bool.or_eq_false_iff, decide_eq_false_iff_not, Option.isSome_eq_false_iff,
+    Option.isNone_iff_eq_none] at hl
+  obtain ⟨⟨⟨ht, hf⟩, hn⟩, hh⟩ := hl
+  clear hw hk hp
+  intro args targs hm hne
+  cases d with
+  | zero =>
+    match args, hm with
+    | [], _ => exact absurd rfl hne
+    | a :: _, hm => simp [List.mapM_cons, Read.term, bind, Except.bind] at hm
+  | succ d =>
+  match args, hm with
+  | [], _ => exact absurd rfl hne
+  | [a], hm =>
+    simp [Read.term, hn, hh, hi, hm, k2, k4, k6, k7, k9, k11]; rfl
+  | [a, b], hm =>
+    obtain ⟨ta, ts, ha, hm1, h1⟩ := mapM_cons_ok hm
+    obtain ⟨tb, ts2, hb, hm2, h2⟩ := mapM_cons_ok hm1
+    simp only [List.mapM_nil, pure, Except.pure, Except.ok.injEq] at hm2
+    subst h1 h2 hm2
+    simp [Read.term, appAll, hn, hh, hi, ha, hb, hp2, k5]; rfl
+  | a :: b :: c :: rest, hm =>
+    simp [Read.term, hn, hh, hi, hm, k1, k2, k3, k6, k7, k8, k9, k10]; rfl
+
 theorem name_injective {a b : Nat} (h : name a = name b) : a = b := by
   have : (Nat.repr a).toList = (Nat.repr b).toList := by
     have := congrArg String.toList h
@@ -513,7 +581,7 @@ theorem term_termSx : ∀ (t : Term) (k d : Nat) {x y : SExp}, termSx k t = some
       simp only [need, needs, list, atom] at hn
       have eb := term_termSx b (k + 1) d hxb h3 (by omega) hb
       rw [← scope_succ] at eb
-      simp [Read.term, ty_tySx A d ha h2 (by omega) hA, eb]
+      simp [Read.term, ty_tySx A d ha h2 (by omega) hA, eb, binder_name]
       rfl
   | .app f a, k, d, x, y, h, hs, hn, .app hf ha => by
     simp only [termSx, bind, Option.bind_eq_some_iff, pure, Option.some.injEq] at h
@@ -690,7 +758,7 @@ theorem arms_armsSx : ∀ (arms : List (Label × Term)) (k d : Nat) {xs ys : Lis
     simp only [need, needs, list, atom] at hn
     have et := term_termSx t (k + 1) d hxt h2 (by omega) ht
     rw [← scope_succ] at et
-    simp [Read.arms, et, arms_armsSx arms k d hr hrest (by omega) harms]
+    simp [Read.arms, et, arms_armsSx arms k d hr hrest (by omega) harms, binder_name]
     rfl
 end
 

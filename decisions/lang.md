@@ -630,3 +630,31 @@ general fit theorems as heavy and was tempted by instance checks at each cap. Th
 said nothing about any other member list. The constructor-bound toolkit (`prints_*`, about 500
 lines) gives the general statements.
 **Status.** built.
+
+## LANG-32 A binder may not have a reserved name: `reservedBinder` (2026-10-17; LANG-29's vacuity point 8; LANG-31 is the bound alignment, next)
+**Decision.** `Read.term` reads an atom as a literal (`true`, `false`, a numeral, `#hex`) before it
+looks at the scope, and a list headed by a form's word (`if`, `lam`, `case`, …) or a primitive
+(`+`, `beq`, …) as that form. So a binder named like any of these could not be referred to.
+`(lam true bool true)` silently meant the constant, and `(lam if nat (if a b c))` the
+conditional. `Read.binder` refuses a reserved name at every binding site (`lam`, `let`, a `fn`
+binder, a `case` arm) as `reservedBinder @pos name`, a new `ReadRefusal`. `Read.isReserved` is
+`isLiteral` (the test `term` applies to atoms), `keywords` (the head words `term` matches) and
+`primOf`. The printer names binders `x<depth>` (`isReserved_name`, `binder_name`), so the
+round-trip theorems keep their statements. No shipped text uses such a binder:
+`world/grain/Lifecycle` is printed by `Lang.Print`, and the Std laws are terms, not texts. So no
+package re-ids. Journey L0e plants seven refusals (`true`, `5`, `#ab`, `false`, an arm named `7`,
+`if`, `+`) and one acceptance (`x5`).
+**Alternatives.** Let the scope shadow reserved words, so a bound `true` or `if` reads as the
+variable: then a text means different things depending on its context. Renaming silently would
+be a twin of the binder.
+**Critique.** `keywords` is a list written beside `term`'s patterns. `term_unreserved_head` ties
+the two together. A bound name that is not reserved, heading a list of ANY arguments, reads as an
+application of that variable. Its proof needs the head words of every form, so a form added to
+`term` without its word in `keywords` makes the theorem false (vacuity read a773ed76's
+suggestion: stated for one and two arguments only, it left `lam`/`if`/`inj`/`let` covered only
+by the journey). An atom like `#6` (an odd hex count) is not reserved: it
+reads as a variable, so it is reachable and fine.
+**Meta-critique.** I first wrote this for literals only and noted keywords as "the same class,
+narrower, not refused". That is the honest-label move. The class is one fault, so the refusal is
+one refusal.
+**Status.** built.

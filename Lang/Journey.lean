@@ -13,6 +13,8 @@ the owner and the owner never changes). Rows:
   has no text; bytes that are not quote-free UTF-8 print as `#hex` and read back.
 * L0d the reader's fuel counts nesting only: an allowlist at `Std.idsMax` ids prints and reads
   back; a list past `Read.listMax` is refused `tooLong`, a form past `Read.depthMax` `tooDeep`.
+* L0e a binder named like a literal (`true`, `5`, `#ab`), a head word or a primitive is refused
+  `reservedBinder`.
 * L1 founder A installs `Owned` (a ROM cell, id `romIdOf`) — admitted.
 * L2 A creates an object owned by A, seed `{owner = A, total = 0}`, judged by both laws — admitted.
 * L3 A invokes `set 50` — admitted; the object's `total` slot decodes to 50.
@@ -295,6 +297,17 @@ def journey (mode : Mode) : Run := Id.run do
   r := note r s!"L0d a form nested {Read.depthMax} deep reads" deepOk
   let tooDeep := match Read.readTerm (nested (Read.depthMax + 1)) with | .error (.tooDeep _) => true | _ => false
   r := note r s!"L0d a form nested {Read.depthMax + 1} deep: tooDeep" tooDeep
+  -- L0e a binder named like a literal is refused by name (every use would read as the literal)
+  for (txt, why) in [("(lam true bool true)", "true"), ("(lam 5 nat 5)", "a numeral"), ("(let #ab nat 1 #ab)", "#hex"),
+                     ("(fn (false bool) false)", "false"),
+                     ("(case (inj (sum (a nat)) a 1) (a 7 7))", "a numeral in a case arm"),
+                     ("(lam if nat if)", "a head word"), ("(lam + nat +)", "a primitive")] do
+    let refused := match Read.readTerm txt with
+      | .error (.reservedBinder _ _) => true
+      | _ => false
+    r := note r s!"L0e refuse a binder named {why}: reservedBinder" refused
+  let named := match Read.readTerm "(lam x5 nat x5)" with | .ok (.lam .nat (.var 0)) => true | _ => false
+  r := note r "L0e a binder named x5 reads as a variable" named
   -- L0b a seed state read at the package's state type (Read.readData): fields in any order; a
   -- missing field, a wrong-typed value, an unknown sum arm refused `notOfType`
   let seedOk := match Read.readData S "(record (total 5) (owner \"a\"))" with
