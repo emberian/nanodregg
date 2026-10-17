@@ -302,3 +302,27 @@ to the caller; no law spans the objects changed together; the client must pin th
 **Meta-critique.** "Build it with LEDGER" is a phase ordering (R7): if LEDGER decides value moves
 only by client-signed ledger calls, this is never built and LANG-13 stays open. The guard is this
 entry, written with a decided shape, and LEDGER's design answering it by name.
+
+## LANG-22 The resident readers: a seed and a method's arguments read as TEXT at the package's types; `#HEX` bytes (2026-10-17; written by PROTOCOL-5 for LANG-3, agreed)
+**Decision.** `Program.resolveMethod p method` is the ONE method resolution (index → label →
+iface field → `methodArg`); `runMeasured` calls it. `seedOf look pkg TEXT` reads TEXT at the
+package's state type and writes the state slots (`stateSlots`; no bytes is refused by name, never
+an empty seed); `argsOf look pkg method TEXT` reads TEXT at the method's argument type and encodes
+it. A reader refusal is `program` with its `name @offset` text. `Read.scalarAt` reads `#HEX` (an
+even count of lowercase hex digits) at type `bytes` only, which is what `ob`'s `showData` prints for
+bytes that are not quote-free UTF-8, so `ob`'s output now reads back. Theorems
+(Lang/Proofs/Invoke.lean): `argsOf_decodes` (the bytes decode, at the type `resolveMethod` gives,
+to the data the text read to: the run decodes a planned call's arguments), `seedOf_reads` (the slots
+read back through `readState` to the data the text read to), with `readState_go_stateSlots` and
+`readData_record`; `scalarAt_conforms` extended. Journey L0b: an owner written as a member id
+(ob's printing), and three refusals (odd hex, uppercase hex, hex at a nat).
+**Alternatives.** The readers in Protocol (method resolution restated a second time: a twin);
+args as raw hex of the wire bytes (the member signs bytes it cannot read); a `(hex …)` form (a
+second spelling of a scalar where an atom suffices).
+**Critique.** `argsOf_decodes` is about `readPackage`'s package, while the run resolves the method
+on `load`'s copy of it (the closure's relocated package); they agree on methods, iface and state
+because load relocates only bodies, but that is not a theorem here. Reading at plan time and
+running at admission are two reads of the package; a package cell is ROM, so they cannot disagree.
+**Meta-critique.** I wrote this from PROTOCOL's side because the verbs needed it; the shape of
+`seedOf` (slots, not data) is what `Body.create` takes, which a LANG owner might have cut at data.
+**Status.** landed; LANG's successor reviews.

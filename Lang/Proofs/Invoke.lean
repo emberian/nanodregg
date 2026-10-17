@@ -15,6 +15,7 @@ left about the request is `reqOk`, the very bound `Program.run`/`judge` assert b
 import Lang.Proofs.Load
 import Lang.Proofs.Data
 import Lang.Proofs.Canon
+import Lang.Proofs.Read
 
 namespace Nanodregg.Lang
 
@@ -220,5 +221,120 @@ theorem law_never_stuck {D : Type} {bytesOf : D → ByteArray} {digestOf : ByteA
     .app (.app (.app (.get href hfind) (.var rfl)) (.var rfl)) (.var rfl)
   exact run_sound hlib _ _ _ (.eval (.cons (toVal_typed (reqOk_conforms hr))
     (.cons (toVal_typed hnw) (.cons (toVal_typed ho) .nil))) ht .nil)
+
+/-! ## The resident readers -/
+
+/-- What `argsOf` produces decodes, at the argument type `resolveMethod` gives the package, to the
+data the text read to: so the run (`runMeasured`, which resolves the same method) decodes a
+planned call's arguments. -/
+theorem argsOf_decodes {D : Type} [DecidableEq D] {look : Pinned D} {pkg : D} {method : Nat}
+    {text : String} {b : ByteArray} (h : argsOf look pkg method text = .ok b) :
+    ∃ p ℓ A d, readPackage look pkg = .ok p ∧ resolveMethod (D := D) p method = .ok (ℓ, A) ∧
+      readAt (D := D) A text = .ok d ∧ Wire.decodeData A b = .ok d := by
+  unfold argsOf at h
+  simp only [bind, Except.bind] at h
+  split at h
+  · cases h
+  · rename_i p hp
+    split at h
+    · cases h
+    · rename_i la hr
+      obtain ⟨ℓ, A⟩ := la
+      split at h
+      · cases h
+      · rename_i d hd
+        split at h
+        · rename_i b' he
+          cases h
+          exact ⟨p, ℓ, A, d, hp, hr, hd, Wire.decodeData_eq_ok_iff.mpr he⟩
+        · cases h
+
+theorem lookup_append_of_lt {pre t : Slots} {k : Nat} (h : ∀ e ∈ pre, e.1 < k) :
+    (pre ++ t).lookup k = t.lookup k := by
+  induction pre with
+  | nil => rfl
+  | cons e pre ih =>
+    have he : e.1 ≠ k := Nat.ne_of_lt (h e (by simp))
+    have hk : (k == e.1) = false := by simp; exact fun h' => he h'.symm
+    simp only [List.cons_append, List.lookup, hk]
+    exact ih fun x hx => h x (by simp [hx])
+
+/-- The state slots `stateSlots` writes read back, through `readState`'s own loop, to the data they
+were written from. -/
+theorem readState_go_stateSlots : ∀ (row : List (Label × Ty)) (ds : List (Label × Data)) (i : Nat)
+    (t pre : Slots), RowConforms ds row → stateSlots row ds i = some t →
+      (∀ e ∈ pre, e.1 < stateBase + i) → readState.go (pre ++ t) row i = .ok (.record ds)
+  | [], [], i, t, pre, _, ht, _ => by
+    simp only [stateSlots, Option.some.injEq] at ht
+    subst ht
+    simp [readState.go]
+  | (ℓ, T) :: r, (ℓ', d) :: ds, i, t, pre, hc, ht, hpre => by
+    cases hc with
+    | cons hd0 hr0 =>
+    unfold stateSlots at ht
+    split at ht
+    · rename_i b s he hs
+      cases ht
+      have hl : (pre ++ (stateBase + i, b) :: s).lookup (stateBase + i) = some b := by
+        rw [lookup_append_of_lt hpre]; simp [List.lookup]
+      have hd : Wire.decodeData T b = .ok d := Wire.decodeData_eq_ok_iff.mpr he
+      have hrest : readState.go (pre ++ (stateBase + i, b) :: s) r (i + 1) = .ok (.record ds) := by
+        have := readState_go_stateSlots r ds (i + 1) s (pre ++ [(stateBase + i, b)]) hr0 hs (by
+          intro e he'
+          simp only [List.mem_append, List.mem_singleton] at he'
+          rcases he' with he' | rfl
+          · have := hpre e he'; omega
+          · simp)
+        simpa using this
+      unfold readState.go
+      simp only [Slots.get] at hl ⊢
+      rw [hl]
+      simp only [hd, hrest]
+    · cases ht
+  | [], _ :: _, _, _, _, hc, _, _ => by cases hc
+  | _ :: _, [], _, _, _, hc, _, _ => by cases hc
+
+theorem readData_record {T : Ty} {text : String} {ds : List (Label × Data)}
+    (h : Read.readData T text = .ok (.record ds)) : ∃ row, T = .record row ∧ RowConforms ds row := by
+  unfold Read.readData at h
+  simp only [bind, Except.bind] at h
+  split at h
+  · cases h
+  · have hc := Read.dataAt_conforms _ _ _ h
+    cases hc with
+    | record hrow => exact ⟨_, rfl, hrow⟩
+
+/-- What `seedOf` produces reads back, at the package's state type, to the data the text read to:
+a seed object's state is the resident's text, and nothing else. -/
+theorem seedOf_reads {D : Type} [DecidableEq D] {look : Pinned D} {pkg : D} {text : String}
+    {s : Slots} (h : seedOf look pkg text = .ok s) :
+    ∃ p d, readPackage look pkg = .ok p ∧ readAt (D := D) p.state text = .ok d ∧
+      readState (recordRow p.state) s = .ok d := by
+  unfold seedOf at h
+  simp only [bind, Except.bind] at h
+  split at h
+  · cases h
+  · rename_i p hp
+    split at h
+    · cases h
+    · rename_i d hd
+      split at h
+      · rename_i ds
+        split at h
+        · rename_i t ht
+          cases h
+          refine ⟨p, .record ds, hp, hd, ?_⟩
+          have hr : Read.readData p.state text = .ok (.record ds) := by
+            unfold readAt at hd
+            split at hd
+            · rename_i d' h'
+              cases hd
+              exact h'
+            · cases hd
+          obtain ⟨row, hrow, hc⟩ := readData_record hr
+          rw [hrow] at ht ⊢
+          simpa [readState, recordRow] using readState_go_stateSlots row ds 0 _ [] hc ht (by simp)
+        · cases h
+      · cases h
 
 end Nanodregg.Lang

@@ -16,14 +16,14 @@ edit it, never pass it as a PATH). Ceilings live in `gates/ceilings.tsv`. A rise
 | Lean lines (Host) | 4334 | — |
 | Lean lines (Hosting) | 1258 | — |
 | Lean lines (Kernel) | 7033 | — |
-| Lean lines (Lang) | 7709 | — |
+| Lean lines (Lang) | 7886 | — |
 | Lean lines (Ops) | 495 | — |
 | Lean lines (Protocol) | 3675 | — |
-| Lean lines (deployed) | 10513 | — |
-| Lean lines (tooling: Sim, Rows, Journey, Census, Emit, Ops) | 4831 | — |
+| Lean lines (deployed) | 10559 | — |
+| Lean lines (tooling: Sim, Rows, Journey, Census, Emit, Ops) | 4841 | — |
 | foundation modules | 7 | 8 |
 | max dependents of a non-foundation module | 94 | — |
-| theorems | 983 | — |
+| theorems | 988 | — |
 | partial defs (deployed) | 0 | 0 |
 | sorry | 0 | 0 |
 | native (extern/implemented_by) | 8 | 8 |

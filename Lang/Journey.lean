@@ -35,6 +35,7 @@ the owner and the owner never changes). Rows:
 import Kernel.Sim
 import Lang.Program
 import Lang.Read
+import Lang.Resident
 
 namespace Nanodregg.Lang.Journey
 
@@ -240,8 +241,17 @@ def journey (mode : Mode) : Run := Id.run do
     | .ok (.record [("owner", .bytes o), ("total", .nat 5)]) => o == "a".toUTF8
     | _ => false
   r := note r "L0b read a seed at Owned's state type" seedOk
+  -- the owner as a member's id: bytes that need not be UTF-8, written `#HEX`
+  let ownerHex := Resident.showData (.bytes (Sim.dc.bytes a.id))
+  let hexOk := match Read.readData S s!"(record (owner {ownerHex}) (total 0))" with
+    | .ok (.record [("owner", .bytes o), ("total", .nat 0)]) => o == Sim.dc.bytes a.id
+    | _ => false
+  r := note r "L0b read a seed whose owner is a member id, as ob prints it (#HEX)" hexOk
   for (txt, why) in [("(record (total 5))", "missing field"), ("(record (owner 1) (total 5))", "wrong type"),
-                     ("(record (owner \"a\") (total 18446744073709551616))", "past natLimit")] do
+                     ("(record (owner \"a\") (total 18446744073709551616))", "past natLimit"),
+                     ("(record (owner #6) (total 5))", "odd count of hex digits"),
+                     ("(record (owner #6A) (total 5))", "uppercase hex digit"),
+                     ("(record (owner \"a\") (total #05))", "hex at a nat")] do
     let refused := match Read.readData S txt with
       | .error (.notOfType _) => true
       | _ => false

@@ -18,6 +18,7 @@ closure must be pinned, or the receiver refuses `unpinned`.
 import Kernel.Receive.Call
 import Lang.Law
 import Lang.Wire.Data
+import Lang.Read
 
 namespace Nanodregg.Lang
 
@@ -223,6 +224,14 @@ def judge (look : Pinned D) (pkg : Option D) (laws : List D) (old new : Slots) (
   if let some p := pkg then judgeOne bytesOf digestOf look p old new r
   for l in laws do judgeOne bytesOf digestOf look l old new r
 
+/-- Method `method` of package `p`: its label and its argument type (the one resolution: the run
+and the resident readers below all ask here). -/
+def resolveMethod (p : Package) (method : Nat) : Except (Refusal D) (Label × Ty) := do
+  let some ℓ := p.methods[method]? | throw (.program s!"no method {method}")
+  let some mty := Row.find? ℓ (recordRow p.iface) | throw (.program s!"no method {ℓ}")
+  let some A := methodArg p.state mty | throw (.program s!"method {ℓ}")
+  pure (ℓ, A)
+
 /-- Run method `method` of package `pkg` on `state`: the new state slots, with what the run cost
 (WASTE rows, PROTOCOL-4): the machine steps the method and its extraction used, and the packages
 of the closure loaded and re-checked (LANG-16). `runMethod` is its first component, so a measured
@@ -232,10 +241,8 @@ def runMeasured (look : Pinned D) (pkg : D) (state : Slots) (method : Nat) (args
   unless reqOk bytesOf r do throw (.program "request out of bounds")
   let (L, g) ← load digestOf look closureDepthMax (bytesOf pkg) ⟨[], [], []⟩
   let some p := L.pkgs[g]? | throw (.program "closure")
-  let some ℓ := p.methods[method]? | throw (.program s!"no method {method}")
+  let (ℓ, A) ← resolveMethod p method
   let row := recordRow p.state
-  let some mty := Row.find? ℓ (recordRow p.iface) | throw (.program s!"no method {ℓ}")
-  let some A := methodArg p.state mty | throw (.program s!"method {ℓ}")
   let s ← match readState row state with | .ok d => pure d | .error e => throw (.program e)
   let a ← match Wire.decodeData A args with
     | .ok d => pure d
@@ -255,6 +262,34 @@ def runMeasured (look : Pinned D) (pkg : D) (state : Slots) (method : Nat) (args
 def runMethod (look : Pinned D) (pkg : D) (state : Slots) (method : Nat) (args : ByteArray)
     (r : Req D) (budget : Nat) : Except (Refusal D) Slots :=
   (runMeasured bytesOf digestOf look pkg state method args r budget).map (·.1)
+
+/-! ## The resident readers: TEXT at a package's types (what `nd create --pkg` and `nd invoke` sign)
+
+A reader refusal is `program` with its `name @offset` text (law 7's convention for `program`
+reasons: the first token is the name). -/
+
+def readAt (T : Ty) (text : String) : Except (Refusal D) Data :=
+  match Read.readData T text with
+  | .ok d => .ok d
+  | .error e => .error (.program e.text)
+
+/-- A seed state read at package `pkg`'s state type, as the object's state slots. -/
+def seedOf (look : Pinned D) (pkg : D) (text : String) : Except (Refusal D) Slots := do
+  let p ← readPackage look pkg
+  match ← readAt p.state text with
+  | .record ds =>
+    match stateSlots (recordRow p.state) ds 0 with
+    | some s => pure s
+    | none => throw (.program "seed: no bytes at the state type")
+  | _ => throw (.program "seed: not a record")
+
+/-- Method `method`'s arguments read at its argument type, as the bytes the run decodes. -/
+def argsOf (look : Pinned D) (pkg : D) (method : Nat) (text : String) : Except (Refusal D) ByteArray := do
+  let p ← readPackage look pkg
+  let (_, A) ← resolveMethod p method
+  match Wire.encodeData A (← readAt A text) with
+  | some b => pure b
+  | none => throw (.program "arguments: no bytes at the argument type")
 
 end
 

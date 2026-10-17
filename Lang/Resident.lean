@@ -37,7 +37,7 @@ def hex (b : ByteArray) : String :=
 
 mutual
 /-- Data as the literal `Read.dataAt` reads back (bytes that are not quote-free UTF-8 print as
-`#hex`, which the reader does not accept: they are shown, not round-tripped). -/
+`#hex`, which the reader reads at type `bytes`). -/
 def showData : Data → String
   | .nat n => toString n
   | .bool b => if b then "true" else "false"

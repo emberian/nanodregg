@@ -275,10 +275,17 @@ def package (x : SExp) : P Package :=
 /-! ## Data literals at a known type
 
 What a resident writes for an object's seed state or a method's arguments: `123`, `true`/`false`,
-`"text"`, `(record (l v)…)` (fields in any order, exactly the type's), and for a sum `(l v)` or a
+`"text"`, `#0a1b` (a byte string as lowercase hex, an even count of digits: bytes that are not
+UTF-8, such as a member's id; what `ob` prints such bytes as), `(record (l v)…)` (fields in any order, exactly the type's), and for a sum `(l v)` or a
 bare `l` for an arm whose payload is the empty record. The type directs the reading, so a literal
 needs no annotation, and only a value of the type is accepted (`Lang.Proofs.Read.dataAt_conforms`):
 a natural below `Bounds.natLimit`, a byte string of at most `Bounds.bytesMax`. -/
+
+/-- `#HEX`: the bytes of an even count of lowercase hex digits after `#`. -/
+def hexBytes? (a : String) : Option ByteArray :=
+  match a.toList with
+  | '#' :: hs => unhex .empty hs
+  | _ => none
 
 /-- A scalar literal at a scalar type. -/
 def scalarAt : Ty → SExp → P Data
@@ -291,6 +298,10 @@ def scalarAt : Ty → SExp → P Data
     else .error (.notOfType x.pos)
   | .bytes, .str p s =>
     if s.toUTF8.size ≤ Bounds.bytesMax then .ok (.bytes s.toUTF8) else .error (.notOfType p)
+  | .bytes, .atom p a =>
+    match hexBytes? a with
+    | some b => if b.size ≤ Bounds.bytesMax then .ok (.bytes b) else .error (.notOfType p)
+    | none => .error (.notOfType p)
   | _, x => .error (.notOfType x.pos)
 
 /-- The fields of a record literal, unread: `(label value)…`. -/
