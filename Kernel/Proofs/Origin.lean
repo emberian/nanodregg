@@ -43,18 +43,60 @@ theorem fold_origin {E : Env D} : ∀ {w w' : World D} {l : List (Turn D)}, Worl
       · cases h
 
 theorem genesis_origin (X : Ctx D) (name nonce : ByteArray) (allowance : Nat) (founders : List (ByteArray × D)) :
-    (genesis X name nonce allowance founders).origin = originOf X name nonce allowance founders := rfl
+    (genesisWorld X name nonce allowance founders).origin = originOf X name nonce allowance founders := rfl
 
 theorem genesis_chain (X : Ctx D) (name nonce : ByteArray) (allowance : Nat) (founders : List (ByteArray × D)) :
-    (genesis X name nonce allowance founders).chain =
-      World.genesisChain X.env (genesis X name nonce allowance founders).origin := rfl
+    (genesisWorld X name nonce allowance founders).chain =
+      World.genesisChain X.env (genesisWorld X name nonce allowance founders).origin := rfl
 
 /-- A genesis input within the raw codec's bounds (every length at most `Bounds.eventBytesMax`,
-the allowance below 2^64). HOST's `host genesis` refuses a NAME past it. -/
+the allowance below 2^64). `genesis` refuses by name outside it (`genesis_ok`). -/
 def GenesisFits (X : Ctx D) (name nonce : ByteArray) (allowance : Nat) (founders : List (ByteArray × D)) : Prop :=
   name.size ≤ Bounds.eventBytesMax ∧ nonce.size ≤ Bounds.eventBytesMax ∧ allowance < 2 ^ 64 ∧
     founders.length ≤ Bounds.eventBytesMax ∧
       ∀ f ∈ founders, f.1.size ≤ Bounds.eventBytesMax ∧ (X.env.bytes f.2).size ≤ Bounds.eventBytesMax
+
+omit [Ord D] [DecidableEq D] in
+/-- Distinct refusals have distinct wire names: equal names, same constructor. -/
+theorem GenesisRefusal.name_injective (a b : GenesisRefusal) (h : a.name = b.name) : a.ctorIdx = b.ctorIdx := by
+  cases a <;> cases b <;> simp_all [GenesisRefusal.name] <;> rfl
+
+theorem req_bind_ok {ε β : Type} {b : Bool} {e : ε} {f : Unit → Except ε β} {x : β} :
+    (req b e >>= f) = .ok x ↔ b = true ∧ f () = .ok x := by
+  cases b <;> simp [req, bind, Except.bind]
+
+omit [Ord D] [DecidableEq D] in
+theorem checkFounders_ok {X : Ctx D} : ∀ {i : Nat} {fs : List (ByteArray × D)},
+    checkFounders X i fs = .ok () ↔
+      ∀ f ∈ fs, f.1.size ≤ Bounds.eventBytesMax ∧ (X.env.bytes f.2).size ≤ Bounds.eventBytesMax
+  | _, [] => by simp [checkFounders]
+  | i, f :: rest => by
+      simp only [checkFounders, req_bind_ok, decide_eq_true_eq, List.mem_cons, forall_eq_or_imp]
+      rw [checkFounders_ok, and_assoc]
+
+omit [Ord D] [DecidableEq D] in
+/-- **The genesis check is `GenesisFits`**, clause by clause. -/
+theorem checkGenesis_ok {X : Ctx D} {name nonce : ByteArray} {allowance : Nat} {founders : List (ByteArray × D)} :
+    checkGenesis X name nonce allowance founders = .ok () ↔ GenesisFits X name nonce allowance founders := by
+  have hc : Bounds.counterLimit = 2 ^ 64 := by decide
+  simp only [checkGenesis, req_bind_ok, decide_eq_true_eq, checkFounders_ok, hc]
+  exact Iff.rfl
+
+/-- **Genesis is checked** (KERNEL-31): it returns a World exactly on a `GenesisFits` input, and
+that World is `genesisWorld`. Every theorem about `genesisWorld` is a theorem about what `genesis`
+returns; `genesis_inj`'s premises hold for every genesis that returned. -/
+theorem genesis_ok {X : Ctx D} {name nonce : ByteArray} {allowance : Nat} {founders : List (ByteArray × D)}
+    {w : World D} :
+    genesis X name nonce allowance founders = .ok w ↔
+      GenesisFits X name nonce allowance founders ∧ w = genesisWorld X name nonce allowance founders := by
+  unfold genesis
+  rw [except_bind_ok]
+  constructor
+  · rintro ⟨⟨⟩, hc, hw⟩
+    simp only [pure, Except.pure, Except.ok.injEq] at hw
+    exact ⟨checkGenesis_ok.mp hc, hw.symm⟩
+  · rintro ⟨hf, rfl⟩
+    exact ⟨(), checkGenesis_ok.mpr hf, rfl⟩
 
 theorem genesisInput_lawfulOn :
     LawfulOn (fun v : GenesisInput => v.1.size ≤ Bounds.eventBytesMax ∧ (v.2.1.size ≤ Bounds.eventBytesMax ∧

@@ -32,15 +32,16 @@ def nonce : ByteArray := hex "6e616e6f64726567672f6f70732f74657374206e6f6e63652f
 def genesisArgs : List String :=
   ["--nonce", Protocol.Text.toHex nonce, Protocol.Text.toHex key, Protocol.Text.toHex next]
 
-/-- The genesis World `host genesis STORE name …genesisArgs` writes (the same `Receive.genesis`). -/
-def world (name : String) : World D :=
+/-- The genesis World `host genesis STORE name …genesisArgs` writes (the same `Receive.genesis`),
+or its refusal. -/
+def world (name : String) : Except GenesisRefusal (World D) :=
   Receive.genesis X name.toUTF8 nonce allowanceMax [(key, nextKeyDigest X next)]
 
 /-- The `i`-th call: founder 0 creates an empty data object, pinned on its own member cell as it
 is in `w` (distinct `i < windowMax / 2`, distinct `validUntil`, distinct txId), holding `state`
 (empty by default; the sealed-Store plants fill one slot to reach a seal in few calls). -/
-def create (name : String) (w : World D) (i : Nat) (state : Slots := []) : Call D :=
-  let me := founderId X (world name).origin 0
+def create (w : World D) (i : Nat) (state : Slots := []) : Call D :=
+  let me := founderId X w.origin 0
   let u : Unsigned D :=
     { world := w.origin, member := me, key, notBefore := 0, validUntil := Bounds.windowMax / 2 + i,
       pins := [(me, pinOf X.env (w.live X.env me))], maxCharge := 1 <<< 40, body := .create none [] state }

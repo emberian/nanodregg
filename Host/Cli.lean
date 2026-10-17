@@ -82,12 +82,14 @@ def genesisNonce : Option String → IO (Except Status ByteArray)
 
 def genesisVerb (store name : String) (nonceArg : Option String) (fs : List String) : IO UInt32 := do
   let some fs := founders fs | refuse .usage "founders"
-  if name.toUTF8.size > Kernel.Bounds.eventBytesMax then return ← refuse .usage "name"
   let nonce ← match ← genesisNonce nonceArg with
     | .ok b => pure b
     | .error s => return ← refuse s "nonce"
+  -- KERNEL's genesis refuses, by name, any input past the raw codec's bounds (`GenesisRefusal`)
+  let w₀ ← match Receive.genesis X name.toUTF8 nonce allowanceMax fs with
+    | .ok w => pure w
+    | .error r => return ← refuse .usage r.name
   let some key := Digest.ofBytes? (← IO.getRandomBytes 32) | refuse .entropy
-  let w₀ := Receive.genesis X name.toUTF8 nonce allowanceMax fs
   match ← (Host.genesis store key (Keys.ofKey key shapes) c world recorder.mark w₀ :
       IO (Except (StoreFault (Record.Fault (Reject D))) Unit)) with
   | .error f => refuseStore f

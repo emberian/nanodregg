@@ -545,7 +545,9 @@ def secondWriter (sameNonce : Bool) : M (Except String Writer.Running) := do
   let X := st.sys.writer.X
   let nonce := if sameNonce || st.sys.nonceRepeats then Sim.nonce else flipLast Sim.nonce
   let fs := founders.map fun n => (keyOf n 0, nextKeyDigest X (keyOf n 1))
-  let g := Receive.genesis X Sim.worldName nonce Sim.allowance fs
+  let g ← match Receive.genesis X Sim.worldName nonce Sim.allowance fs with
+    | .ok g => pure g
+    | .error r => return .error s!"genesis refused {r.name}"
   match ← Writer.genesisStore st.sys.writer g with
   | .error e => return .error e
   | .ok (mem, r₀) => return .ok (← Writer.start st.sys.writer mem r₀)
@@ -641,7 +643,9 @@ structure Result where
 def run (m : Option Mutation) (lines : List Line) (times : Option Nat) : IO Result := do
   let s := sys m
   let fs := founders.map fun n => (keyOf n 0, nextKeyDigest s.writer.X (keyOf n 1))
-  let g := Receive.genesis s.writer.X Sim.worldName Sim.nonce Sim.allowance fs
+  let g ← match Receive.genesis s.writer.X Sim.worldName Sim.nonce Sim.allowance fs with
+    | .ok g => pure g
+    | .error r => throw (IO.userError s!"genesis refused {r.name}")
   let (mem, r₀) ← match ← Writer.genesisStore s.writer g with
     | .ok m => pure m
     | .error e => throw (IO.userError s!"genesis: {e}")

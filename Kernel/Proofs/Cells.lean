@@ -15,10 +15,10 @@ KERNEL-23 part 2, at the World:
 Premises: `E.bytes` is injective with one size `n`, `n ≤ 32` (CODEC proves this for the deployed
 digest); `E.cellBytes` is injective on a predicate `F` (`InjOn F E`), and every live cell of the World
 satisfies `F` (`w.CellsFit F E`). At the deployed codec `F` must be `Cell.Fits`: `cellBytes` is
-injective only there (`Codec.Kernel.cellBytes_injective`). OPEN GAP (KERNEL-30, cv 01a1498e-853e):
-no theorem yet shows that genesis, admit and fold keep `CellsFit Cell.Fits`, so these read theorems
-cover a World whose cells are known to fit, and the kernel does not yet prove that its own Worlds do.
-That proof lands with KERNEL-31.
+injective only there (`Codec.Kernel.cellBytes_injective`). `Kernel.Proofs.CellsFit` proves that
+genesis, admit and fold keep `CellsFit Cell.Fits` (KERNEL-31), and `Kernel.Proofs.RootedDeployed`
+discharges every premise at the deployed codec (`deployed_head_read_sound` and the inclusion
+instances), for every World a checked genesis and a fold reach.
 -/
 import Kernel.Proofs.Frame
 import Kernel.Proofs.TrieMap
@@ -62,7 +62,7 @@ theorem fold_canon {E : Env D} :
       exact fold_canon (admit_canon hc h₁) h₂
 
 theorem receive_genesis_canon (X : Receive.Ctx D) (name nonce : ByteArray) (allowance : Nat)
-    (founders : List (ByteArray × D)) : (Receive.genesis X name nonce allowance founders).Canon X.env :=
+    (founders : List (ByteArray × D)) : (Receive.genesisWorld X name nonce allowance founders).Canon X.env :=
   insertAll_canon _ (Trie.canon_empty _ 0)
 
 /-! ## The deployed parameters satisfy the trie's premises -/

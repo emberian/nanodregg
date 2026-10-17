@@ -1041,7 +1041,7 @@ there share their bytes. They now take `TurnBytesInjOn E`, which says injective 
 `fold_bounded`, since an admitted turn is bounded (`admit_bounded`).
 `Receive.deployed_fold_reaches_host` is the instance with every premise discharged at the deployed
 codec, so the follower theorem is proved at Deployed.env, not only stated. Closes cv 01a1498e-8530.
-(b) *OPEN GAP: `CellsFit` is not yet discharged.* The read theorems (`slot_inclusion_sound`,
+(b) *CLOSED by KERNEL-31 (was: OPEN GAP, `CellsFit` is not yet discharged).* The read theorems (`slot_inclusion_sound`,
 `live_inclusion_sound`, `head_read_sound`) take `InjOn F E` and `w.CellsFit F E`. At the deployed
 codec `F` must be `Cell.Fits`, because `cellBytes` is injective only on fitting cells. No theorem
 yet shows that genesis, admit and fold keep `CellsFit Cell.Fits`. So these theorems are true
@@ -1058,3 +1058,59 @@ machine and Protocol's absorb both use these two, so no layer keeps its own copy
 `Kernel/Proofs/RootedFold.lean` holds `Rooted.snoc`, `RootedFold.fold` and `RootedFold.chain`.
 Numbering: the carry (OPS-P1) is KERNEL-29, as proposals/ops.md and decisions/protocol.md already
 cite it. This port is KERNEL-30, and the genesisFits refusal is KERNEL-31.
+
+## KERNEL-31 · genesis refuses by name outside `GenesisFits`, and every kernel World's cells fit
+
+**Decision.** (A) `Receive.genesis` is no longer total. It returns `Except GenesisRefusal (World D)`
+and is the only entry point. `GenesisRefusal` has one constructor per clause of `GenesisFits`, in
+the same order: `nameTooLong`, `nonceTooLong`, `allowanceTooLarge`, `tooManyFounders`,
+`founderKeyTooLong i`, `founderNextTooLong i`. `.name` is the constructor's name
+(`GenesisRefusal.name_injective`). `checkGenesis` checks the clauses in order, and
+`checkGenesis_ok` proves that its `.ok` is exactly `GenesisFits`. The unchecked builder is
+`genesisWorld`, and every theorem about the genesis World (`genesis_origin`, `genesis_chain`,
+`genesis_rooted`, `genesis_romContent`, `receive_genesis_canon`, `receive_genesis_slotted`) is over
+it. `genesis_ok : genesis … = .ok w ↔ GenesisFits … ∧ w = genesisWorld …` connects the two, so
+`genesis_inj`'s premises hold for every genesis that returned. Before this, an oversize founder
+key was truncated by `rawBytes` on the way into the origin, which gave an origin collision with no
+hash collision. `host genesis` now prints `refused <name>` and exits with the usage code for any
+refusal; its own NAME check is deleted, because the kernel's check covers it. Tooth: kernel-sim
+`probeGenesis`, arm `genesis-founder-key:founderKeyTooLong` (in `plantedArms`, with
+`founderKeyTooLong` in `planted`). It adds a third founder whose key is `Bounds.eventBytesMax + 1`
+bytes, and it must be refused by that name at that founder's index. The control is the run's own
+genesis, which is admitted.
+(B) `Kernel/Proofs/CellsFit.lean` proves `genesis_cellsFit` (premises `GenesisFits` and
+`∀ d, (X.env.bytes d).size ≤ Bounds.valueBytesMax`), `admit_cellsFit` and `fold_cellsFit` for
+CODEC's own `Cell.Fits`, with no kernel twin. A born cell fits by `checkBounds_fits`. A written
+cell fits by `mem_applyOps` (each slot is an old slot or a `set` op's pair), the op bounds, and
+`postWrite_ok` (the post-write slot-count check). `RootedDeployed` gains `deployed_injOn`,
+`deployed_bytes_fit`, `deployed_reach` (Canon and CellsFit for every World a checked genesis and a
+fold reach), `deployed_slot_inclusion_sound`, `deployed_live_inclusion_sound`,
+`deployed_head_read_sound`, and `deployed_head_read_sound_from`, which covers any canonical,
+fitting World, so a reopened base (CODEC's `world_decode_canon` and `world_decode_cellsFit`) is
+covered too.
+**Alternatives.** Keep `genesis` total and add `GenesisFits` as a premise wherever `genesis_inj`
+is cited. That is a premise nothing on the request path discharges, which is the gap this closes.
+Clamp or hash oversize keys instead of refusing them: a silent reinterpretation (law 7). Define a
+kernel `CellFits` and prove it equivalent to CODEC's: that is two shapes where one will do, and
+`Codec.Proofs.Kernel` sits below `Kernel.Proofs` in the import graph with no cycle.
+**Critique.** `genesis_cellsFit` takes a bound on every digest's bytes, not only on the digests a
+genesis uses. That bound is a fact about the Env (32 at the deployed codec), so the strength it
+gives up is nothing a real Env needs. The read theorems still take `hlf : leaf.CellFit Cell.Fits`
+for the CLAIMED leaf. That premise is genuinely needed, because a non-fitting cell can share bytes
+with a fitting one. A phone that decodes the leaf with CODEC's cell codec gets it from
+`cell_lawfulOn` (whatever decodes fits), but no theorem here ties the phone's decoder to it.
+Every Sim, Ops and Protocol caller now matches the refusal. Their inputs are constants that fit,
+so the error arm is dead code there, but it is a named failure, never a fallback World. The Sim's
+failure State uses an empty World only so that it can carry the failure.
+**Meta-critique.** The pull was towards proving `GenesisFits` once in Host (where the name was
+already checked) and leaving the kernel total. The kernel is the receive path, though, and HOST's
+check only ever covered the NAME. A founder key from any other caller was unchecked, which is why
+the refusal belongs in Kernel. I took CODEC's `Cell.Fits` as the predicate without checking
+whether a weaker one would serve the read theorems. It is exactly where `cellBytes` is injective,
+so a weaker one would not.
+**Flag day.** `Receive.genesis`'s type changes, so every caller breaks loudly and is ported
+(Host/Cli, Ops/Founder, Ops/LiveCalls, Ops/Plants, Protocol/Rows/Loopback, Kernel/Sim/Gen,
+Lang/Journey, Hosting/Sim/Journey). `Ops.Founder.create` loses its `name` argument, because the
+founder's id is read from `w.origin`. `host genesis NAME` with a name past `Bounds.eventBytesMax`
+now prints `refused nameTooLong`, not `refused name`. Nothing persisted changes: no codec, no
+chain head, and no Store needs a re-genesis.

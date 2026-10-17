@@ -4,7 +4,8 @@
 The whole log is served only to a member holding a live World grant carrying `observe` whose
 chain reaches a founder's root (PROTOCOL-3). Revoking any link revokes everything issued through
 it. The founders' root grants (observe, enrol up to `enrollMax`) and member cells are the genesis
-World; nothing else is trusted without a signature.
+World; nothing else is trusted without a signature. `genesis` refuses, by name, an input past the
+raw codec's bounds (`GenesisRefusal`), so the origin commits to everything genesis was made from.
 -/
 import Kernel.Receive.Derive
 import Codec.Raw
@@ -69,12 +70,61 @@ def founderEntries (X : Ctx D) (o : D) (founders : List (ByteArray × D)) : List
     [(founderId X o p.2, .live (founderMember X p.1)),
      (founderGrantId X o p.2, .live (founderRoot X (founderId X o p.2)))]
 
-/-- The genesis World: founders `(key, digest of next key)` as members, each with a root World
-grant; its origin commits to the name, HOST's `nonce`, the allowance and the founders. -/
-def genesis (X : Ctx D) (name nonce : ByteArray) (allowance : Nat) (founders : List (ByteArray × D)) :
+/-- The World a genesis builds, UNCHECKED: founders `(key, digest of next key)` as members, each
+with a root World grant; its origin commits to the name, HOST's `nonce`, the allowance and the
+founders. Only `genesis` calls it on the request path; the theorems about the genesis World are
+stated over it (`genesis_ok` says `genesis` returns exactly it). -/
+def genesisWorld (X : Ctx D) (name nonce : ByteArray) (allowance : Nat) (founders : List (ByteArray × D)) :
     World D :=
   let o := originOf X name nonce allowance founders
   let w := World.genesis X.env o allowance
   { w with trie := insertAll X.env w.trie (founderEntries X o founders) }
+
+/-- Why a genesis is refused (law 7): one constructor per clause of `GenesisFits`, in its order.
+Past these bounds `genesisInput`'s raw codec truncates, so two different geneses would share one
+origin with no hash collision (KERNEL-31). -/
+inductive GenesisRefusal
+  | nameTooLong
+  | nonceTooLong
+  | allowanceTooLarge
+  | tooManyFounders
+  /-- founder `index`'s key is longer than `Bounds.eventBytesMax` -/
+  | founderKeyTooLong (index : Nat)
+  /-- founder `index`'s next-key digest bytes are longer than `Bounds.eventBytesMax` -/
+  | founderNextTooLong (index : Nat)
+  deriving DecidableEq, Repr
+
+/-- The refusal's name on the wire: its constructor's, arguments dropped. -/
+def GenesisRefusal.name : GenesisRefusal → String
+  | .nameTooLong => "nameTooLong"
+  | .nonceTooLong => "nonceTooLong"
+  | .allowanceTooLarge => "allowanceTooLarge"
+  | .tooManyFounders => "tooManyFounders"
+  | .founderKeyTooLong _ => "founderKeyTooLong"
+  | .founderNextTooLong _ => "founderNextTooLong"
+
+/-- Each founder from index `i` on: its key, then its next-key digest bytes. -/
+def checkFounders (X : Ctx D) : Nat → List (ByteArray × D) → Except GenesisRefusal Unit
+  | _, [] => .ok ()
+  | i, f :: rest => do
+      req (f.1.size ≤ Bounds.eventBytesMax) (.founderKeyTooLong i)
+      req ((X.env.bytes f.2).size ≤ Bounds.eventBytesMax) (.founderNextTooLong i)
+      checkFounders X (i + 1) rest
+
+/-- The genesis input is within the raw codec's bounds, checked in `GenesisFits`'s order
+(`checkGenesis_ok`). -/
+def checkGenesis (X : Ctx D) (name nonce : ByteArray) (allowance : Nat) (founders : List (ByteArray × D)) :
+    Except GenesisRefusal Unit := do
+  req (name.size ≤ Bounds.eventBytesMax) .nameTooLong
+  req (nonce.size ≤ Bounds.eventBytesMax) .nonceTooLong
+  req (allowance < Bounds.counterLimit) .allowanceTooLarge
+  req (founders.length ≤ Bounds.eventBytesMax) .tooManyFounders
+  checkFounders X 0 founders
+
+/-- THE genesis: refused by name outside `GenesisFits`, else `genesisWorld` (`genesis_ok`). -/
+def genesis (X : Ctx D) (name nonce : ByteArray) (allowance : Nat) (founders : List (ByteArray × D)) :
+    Except GenesisRefusal (World D) := do
+  checkGenesis X name nonce allowance founders
+  pure (genesisWorld X name nonce allowance founders)
 
 end Nanodregg.Kernel.Receive

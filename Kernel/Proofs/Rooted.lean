@@ -504,7 +504,7 @@ section Genesis
 /-- A live cell of the genesis World is one of the founders' entries. -/
 theorem genesis_live {X : Ctx D} {name nonce : ByteArray} {allowance : Nat}
     {founders : List (ByteArray × D)} {id : D} {cell : Cell}
-    (hl : (genesis X name nonce allowance founders).live X.env id = some cell) :
+    (hl : (genesisWorld X name nonce allowance founders).live X.env id = some cell) :
     (id, Entry.live cell) ∈ founderEntries X (originOf X name nonce allowance founders) founders := by
   have hg := live_get hl
   rcases insertAll_get_some (m := Trie.T.empty)
@@ -529,7 +529,7 @@ theorem mem_founderEntries {X : Ctx D} {o : D} {founders : List (ByteArray × D)
 theorem genesis_rooted (X : Ctx D) (name nonce : ByteArray) (allowance : Nat)
     (founders : List (ByteArray × D)) :
     WorldRooted X (GenesisRoot X (originOf X name nonce allowance founders))
-      (genesis X name nonce allowance founders) := by
+      (genesisWorld X name nonce allowance founders) := by
   intro id cell hl hk
   obtain ⟨p, _, ⟨_, he⟩ | ⟨hid, he⟩⟩ := mem_founderEntries (genesis_live hl)
   · simp only [Entry.live.injEq] at he
@@ -548,7 +548,7 @@ theorem empty_romContent (E : Env D) (o : D) (a : Nat) : RomContent E (World.gen
 RAM member and an append-only grant. -/
 theorem genesis_romContent (X : Ctx D) (name nonce : ByteArray) (allowance : Nat)
     (founders : List (ByteArray × D)) :
-    RomContent X.env (genesis X name nonce allowance founders) := by
+    RomContent X.env (genesisWorld X name nonce allowance founders) := by
   intro id cell hl hrom
   exfalso
   obtain ⟨p, _, ⟨_, he⟩ | ⟨_, he⟩⟩ := mem_founderEntries (genesis_live hl)

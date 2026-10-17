@@ -928,17 +928,37 @@ def forge (log : List (Turn D)) : Option (Nat × List (Turn D)) :=
       let t1 := { t0 with charge := t0.weight }
       some (i, log.take i ++ [t1])
 
+/-- The genesis probe (KERNEL-31): past `Bounds.eventBytesMax` the raw codec truncates, so an
+oversize founder key would give two geneses one origin with no hash collision. A third founder
+whose key is one byte too long must be refused `founderKeyTooLong`, naming its index; the control
+is the run's own genesis, which was admitted. -/
+def probeGenesis (P : Params D) (st : State D) (founders : List (ByteArray × D)) : State D :=
+  let long : ByteArray := ⟨Array.replicate (Bounds.eventBytesMax + 1) 7⟩
+  let bad := founders ++ [(long, nextKeyDigest P.ctx (P.pub "f2-next".toUTF8))]
+  match genesis P.ctx worldName (nonceOf 0) 100000000 bad with
+  | .error (.founderKeyTooLong i) =>
+      if i = founders.length then
+        { st with refusedAsExpected := st.refusedAsExpected + 1,
+                  seen := "genesis-founder-key:founderKeyTooLong" :: "founderKeyTooLong" :: st.seen }
+      else failWith st s!"probe genesis: founderKeyTooLong named founder {i}, not {founders.length}"
+  | .error r => failWith st s!"probe genesis: expected founderKeyTooLong, got {r.name}"
+  | .ok _ => failWith st "probe genesis: a founder key past eventBytesMax was admitted"
+
 def run (P : Params D) (seed : Nat) (steps : Nat) : State D :=
   let rng : Rng := ⟨seed.toUInt64 * 0x2545F4914F6CDD1D + 1⟩
   let fk : List (ByteArray × ByteArray) :=
     [("f0".toUTF8, "f0-next".toUTF8), ("f1".toUTF8, "f1-next".toUTF8)]
   let X := P.ctx
   let founders := fk.map fun (k, n) => (P.pub k, nextKeyDigest X (P.pub n))
-  let g := genesis X worldName (nonceOf seed) 100000000 founders
+  match genesis X worldName (nonceOf seed) 100000000 founders with
+  | .error r =>
+      { rng, host := World.genesis P.env P.zero 0, members := [], failures := [s!"genesis refused {r.name}"] }
+  | .ok g =>
   let members := fk.zipIdx.map fun ((k, n), i) => (⟨founderId X g.origin i, k, n⟩ : Member D)
   let holds := (List.range fk.length).map fun i =>
     (founderId X g.origin i, (⟨[founderGrantId X g.origin i], true, enrollMax⟩ : Holding D))
   let st0 : State D := { rng, host := g, members, holds }
+  let st0 := probeGenesis P st0 founders
   -- install the deny-all law package first
   let f := founder0 P st0
   let c := signed P st0 f f.key (S.pinsFor P.env g [f.id]) (.install denyAll)
@@ -984,7 +1004,9 @@ def run (P : Params D) (seed : Nat) (steps : Nat) : State D :=
     | .error (i, f) => { st with failures := s!"audit refused at {i}: {vname f}" :: st.failures }
   -- KERNEL-24: the same log's calls against a second genesis (same name and founders, another
   -- nonce) are each refused `wrongWorld`; another nonce, or the founders swapped, is another chain
-  let g2 := genesis X worldName (nonceOf (seed + 1000000)) 100000000 founders
+  match genesis X worldName (nonceOf (seed + 1000000)) 100000000 founders with
+  | .error r => failWith st s!"second genesis refused {r.name}"
+  | .ok g2 =>
   let st := st.log.foldl (fun st t =>
     match X.decodeCall t.event with
     | none => { st with failures := "replay elsewhere: a logged event does not decode" :: st.failures }
@@ -994,7 +1016,9 @@ def run (P : Params D) (seed : Nat) (steps : Nat) : State D :=
             { st with refusedAsExpected := st.refusedAsExpected + 1, seen := "wrongWorld" :: st.seen }
         | .error v => { st with failures := s!"replay elsewhere: got {vname v}" :: st.failures }
         | .ok _ => { st with failures := "replay elsewhere: admitted on a second World" :: st.failures }) st
-  let swapped := genesis X worldName (nonceOf seed) 100000000 founders.reverse
+  match genesis X worldName (nonceOf seed) 100000000 founders.reverse with
+  | .error r => failWith st s!"swapped genesis refused {r.name}"
+  | .ok swapped =>
   let st := if swapped.chain = g.chain ∨ g2.chain = g.chain then
       { st with failures := "genesis: swapped founders or another nonce gave the same chain" :: st.failures }
     else st
@@ -1015,19 +1039,20 @@ def run (P : Params D) (seed : Nat) (steps : Nat) : State D :=
 name is reached through a signed call on the Host path, except `duplicateEffect`, which no
 receiver can produce and the probe meets straight at `sealTurn` (`probeSeal`), and
 `notConserved`, `floorNotConserved`, `valueMalformed` and `overBound` (nine denominations), which
-no receiver derives and `probeValue` meets straight at `World.admit` with forged turns. -/
+no receiver derives and `probeValue` meets straight at `World.admit` with forged turns, and
+`founderKeyTooLong`, genesis's refusal, which `probeGenesis` meets at `genesis`. -/
 def planted : List String :=
   ["wrongWorld", "lawDenied", "noGrant", "unknownKey", "replayed", "stale", "notPrecommitted", "notIssuer",
    "missingCell", "enrollSpent", "grantRight", "grantWidens", "unrooted", "duplicateEffect",
    "overflow", "sameAccount", "zeroAmount", "assetMismatch", "belowFloor", "spent",
-   "notConserved", "floorNotConserved", "valueMalformed", "overBound", "notWell"]
+   "notConserved", "floorNotConserved", "valueMalformed", "overBound", "notWell", "founderKeyTooLong"]
 
 /-- The arms a run of 16 or more seeds must each reach with the named verdict (`what:verdict`): a
 refusal name met somewhere else does not test the receiver this arm exercises. -/
 def plantedArms : List String :=
   ["invoke-owner:ok", "invoke-no-grant:noGrant", "invoke-public:ok", "invoke-public-method-1:grantRight", "carve-public:noGrant",
    "law-self:lawDenied", "law:ok", "create-frozen:ok", "write:lawDenied", "write-no-grant:noGrant",
-   "rom-id:notContentId",
+   "rom-id:notContentId", "genesis-founder-key:founderKeyTooLong",
    "proof-sibling:refused", "proof-leaf:refused", "proof-tomb-live:refused", "proof-spent-unspent:refused",
    "proof-stale:refused", "proof-overlong:refused", "proof-spent-empty:refused",
    "account-twice:idTaken", "account-for-other:ok", "transfer-ref-not-well:notWell"]

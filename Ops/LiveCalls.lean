@@ -30,9 +30,12 @@ def run : List String → IO UInt32
     IO.FS.createDirAll d
     IO.FS.writeFile (d / "genesis.args") ("\n".intercalate (label :: Founder.genesisArgs) ++ "\n")
     IO.FS.writeFile (d / "op") s!"{Protocol.Op.submit.code}\n"
-    let mut w := Founder.world label
+    let w₀ ← match Founder.world label with
+      | .ok w => pure w
+      | .error r => do IO.eprintln s!"live-calls: genesis refused {r.name}"; return 1
+    let mut w := w₀
     for i in [0:n] do
-      let c := Founder.create label w i (Plants.bigState i)
+      let c := Founder.create w i (Plants.bigState i)
       match submit X w c with
       | .ok (_, w') => w := w'
       | .error _ => IO.eprintln s!"live-calls: call {i} does not admit in process"; return 1

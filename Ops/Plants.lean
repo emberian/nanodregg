@@ -63,12 +63,13 @@ def backup (src dst : System.FilePath) : IO Unit := do
 
 /-- The World the Store should open to, and the calls that make it; every call must admit in
 process, or the plants refuse to run. -/
-def expected (n : Nat) : Except Nat (List (Call D) × World D) :=
+def expected (n : Nat) : Except String (List (Call D) × World D) := do
+  let w₀ ← (Founder.world name).mapError fun r => s!"genesis refused {r.name}"
   (List.range n).foldlM (fun (cs, w) i =>
-    let c := Founder.create name w i
+    let c := Founder.create w i
     match submit X w c with
     | .ok (_, w') => .ok (cs ++ [c], w')
-    | .error _ => .error i) ([], Founder.world name)
+    | .error _ => .error s!"call {i} does not admit") ([], w₀)
 
 def anchorArg (w : World D) : String := s!"{w.height}:{w.chain.toHex}"
 
@@ -130,10 +131,12 @@ def live (exe : String) (dir : System.FilePath) : IO Nat := do
   -- the calls and their folds, in process; enough bytes for two seals
   let n := 48
   -- anchors[h] is the kernel's own `HEIGHT:CHAIN` after the first h calls
-  let w0 := Founder.world name
+  let w0 ← match Founder.world name with
+    | .ok w => pure w
+    | .error r => do IO.eprintln s!"genesis refused {r.name}"; return 1
   let (frames, anchors, _) ← (List.range n).foldlM (init := (#[], #[anchorArg w0], w0))
     fun (cs, as, w) i => do
-      let c := Founder.create name w i (bigState i)
+      let c := Founder.create w i (bigState i)
       match submit X w c with
       | .ok (_, w') => pure (cs.push (Founder.submitFrame c), as.push (anchorArg w'), w')
       | .error v =>
@@ -228,7 +231,10 @@ it must not land (height stays 0; the writer answers `wrongWorld`); under the SA
 restore case by design, it lands (height 1). The control row keeps the first from passing on a
 writer that admits nothing. -/
 def replay (exe : String) (dir : System.FilePath) : IO Nat := do
-  let c := Founder.create name (Founder.world name) 0
+  let w₀ ← match Founder.world name with
+    | .ok w => pure w
+    | .error r => do IO.eprintln s!"genesis refused {r.name}"; return 1
+  let c := Founder.create w₀ 0
   let other := Founder.nonce.set! 0 (Founder.nonce.get! 0 ^^^ 1)
   if other == Founder.nonce then IO.eprintln "the other nonce is the test nonce"; return 1
   let otherArgs := ["--nonce", Protocol.Text.toHex other] ++ Founder.genesisArgs.drop 2
@@ -255,7 +261,9 @@ key file was shared would hold it. Over a sealed base it is `foreignOrigin`; ove
 the anchor refuses first, `foreignSegment`. -/
 def originPlants (exe : String) (dir : System.FilePath) : IO Nat := do
   let other := Founder.nonce.set! 0 (Founder.nonce.get! 0 ^^^ 1)
-  let wOther := Receive.genesis X name.toUTF8 other allowanceMax [(Founder.key, nextKeyDigest X Founder.next)]
+  let wOther ← match Receive.genesis X name.toUTF8 other allowanceMax [(Founder.key, nextKeyDigest X Founder.next)] with
+    | .ok w => pure w
+    | .error r => do IO.eprintln s!"the other genesis refused {r.name}"; return 1
   let mut failed := 0
   for (store, sealed) in [("A", false), ("L", true)] do
     let src := dir / store
@@ -304,7 +312,7 @@ def run (exe : String) (dir : System.FilePath) : IO UInt32 := do
   let mut wb := w2
   let mut wb3 := w2
   for i in [4, 5] do
-    let c := Founder.create name wb i
+    let c := Founder.create wb i
     let r ← host exe ["serve", b.toString] (Founder.submitFrame c)
     unless r.code = 0 do IO.eprintln s!"serve B: {r.out}"; return 1
     match submit X wb c with

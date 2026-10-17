@@ -238,7 +238,10 @@ def journey (mode : Mode) : Run := Id.run do
   let fk : List (ByteArray × ByteArray) :=
     [("f0".toUTF8, "f0-next".toUTF8), ("f1".toUTF8, "f1-next".toUTF8)]
   let X := ctxWith prog
-  let g := genesis X Sim.worldName (Sim.nonceOf 0) 100000000 (fk.map fun (k, n) => (k, nextKeyDigest X n))
+  let g ← match genesis X Sim.worldName (Sim.nonceOf 0) 100000000 (fk.map fun (k, n) => (k, nextKeyDigest X n)) with
+    | .ok g => pure g
+    | .error e =>
+        return note { st := { rng := ⟨1⟩, host := World.genesis X.env 0 0, members := [] } } s!"genesis refused {e.name}" false
   let members := fk.zipIdx.map fun ((k, n), i) => (⟨founderId X g.origin i, k, n⟩ : Sim.Member)
   let mut r : Run := { st := { rng := ⟨1⟩, host := g, members } }
   let a := members.headD ⟨0, .empty, .empty⟩
