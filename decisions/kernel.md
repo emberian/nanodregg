@@ -671,3 +671,102 @@ every mint and burn pins it, so concurrent minters conflict `stale`.
 **Meta-critique.** Deleting the asset cell is the law-1 move I wanted; the test is that nothing
 reads it: `open` does not, `transfer` reads only accounts, and the cap is the kernel's floor sum.
 Status: in progress.
+
+## KERNEL-24 · A call names its World: `Unsigned.world` = the World's genesis ORIGIN, refused `wrongWorld` before anything else; genesis commits to everything it was made from (KERNEL-4, 2026-10-17; DESIGN, ROOT's D3, not yet built)
+**Defect (measured by OPS on 87c721e, with the real `host` exe).** The SAME signed `create` frame was
+admitted by two Stores both named "w": nothing in `Unsigned` binds a call to a World. And CLIENT-2's
+round trip found that `host genesis` prints the same genesis `chain` for different founder keys under one
+name, because the genesis chain commits to the name alone.
+**Decision.**
+(a) `World.genesis X.env (name) (nonce : ByteArray) (allowance) (founders)` takes the nonce as a SEPARATE
+argument, not folded into the name. HOST draws it: 32 OS-random bytes. `origin := H(domOrigin, blob name
+‖ blob nonce ‖ u64 allowance ‖ Σ (blob key ‖ bytes nextDigest))` over the founders in order, and the
+genesis chain is `H(domGenesis, bytes origin)`. So the chain commits to the name, the nonce, the
+founders' keys and next-key digests, and the allowance.
+(b) `World.origin : D`, set by genesis and never written again. Theorems `admit_origin` (`w'.origin =
+w.origin`) and `fold_origin`.
+(c) Founder ids and founder-grant ids are keyed by the ORIGIN, not the name (`founderId X origin i`), so
+two Stores with the same name share no member id.
+(d) `Unsigned.world : D` is signed, and the call codec changes (CODEC). In `receive`, the FIRST check,
+before the key, the signature or any pinned read: `req (u.world = w.origin) .wrongWorld`.
+`Receive.Refusal.wrongWorld` gets a name arm, and `name_injective` is kept. A cross-World call is never
+`badSignature` or `unknownKey`, whatever else is wrong with it. `Receive.submit` checks the journal
+first, and a cross-World txId is not in this journal, so `wrongWorld` is what it answers.
+(e) ONE field and ONE refusal. TRANSPORT's read envelope compares `e.world = w.origin` against the same
+accessor. HOST adds no check of its own: an old base, which has no origin, refuses by the World codec's
+tag change (CODEC-2's `formatMismatch` stamp).
+**Theorems.**
+- `receive_wrongWorld`: `c.unsigned.world ≠ w.origin → receive X w c = .error (.wrongWorld)`.
+- `admitted_elsewhere_refused`: a call `submit` admits on W₁ is refused `wrongWorld` by every W₂ with
+  `W₂.origin ≠ W₁.origin`.
+- `genesis_inj`: two geneses with equal origins have equal (name, nonce, allowance, founders), or a
+  collision. Therefore equal chains imply equal inputs, or a collision.
+**Sim plant.** Replay a seed's whole log into a second genesis with another nonce: every call must be
+refused `wrongWorld` at turn 1. Also: genesis with the founders' keys swapped must give a different
+chain. Both are in the generator and both are named in `planted`.
+**Flag day.** The call codec changes, so every signed call re-signs. Origins and founder ids change.
+Every Store re-genesises. The Turn codec is unchanged, but a Turn's event (the call bytes) carries the
+world field.
+**Alternatives.** The nonce inside the name: it conflates the label people read with the entropy, and a
+Store relabelled by its operator would change identity. Distinct names giving disjoint member ids: the
+names are chosen by people and collide; OPS reproduced exactly that. A Host-side check: a second check of
+one fact, law 1.
+**Critique.** The origin is only as unique as HOST's randomness. Two Stores with the SAME nonce, name and
+founders are the same World, by design, and admit each other's calls: a restore from backup is that
+case, and is intended. A phone needs the origin out of band, from the invitation, to know which World it
+is joining.
+**Meta-critique.** "Bind the call to its domain" is the textbook anti-replay answer, and here it is also
+the measured defect. The fork worth checking: should the origin be the genesis CHAIN? It should not.
+The chain advances, and a call must be bound to the World, not to a height. That is the window's job.
+Status: proposed (ROOT ruled the shape on 10-17). Build after LEDGER's D2 lands in Call/Derive, which
+touch the same files.
+
+## KERNEL-25 · `invoke` is authorized like write: the owner, or a chain for `invoke m` rooted at the owner (KERNEL-4, 2026-10-17; ROOT's ruling on HOSTING-4, not yet built)
+**Defect (HOSTING, measured in hosting-sim).** `Derive.invoke` computes the principal with
+`principalOf` and never compares it to the owner. With `via = none`, any member could invoke any method
+of any programmed object, and every package had to carry its own owner law. That contradicts
+`write_authorized`.
+**Decision.** In `invoke`, `principalOf X look u obj (.invoke method) via` becomes `ownerAuthority X look
+u obj cell (.invoke method) via`. That is ONE line. A stranger with no grant is refused `noGrant obj`,
+the same constructor as write's identical case. I am departing from ROOT's suggested name
+`unauthorized`: one condition gets one refusal name, law 7, and the condition is exactly the one
+`noGrant` names for write and law.
+Theorem `invoke_authorized`, the twin of `write_authorized`: a derived invoke has principal = owner, and
+either via = none and signer = owner, or a `Chain` for `invoke m` from `via` to the signer rooted at the
+owner. Laws then only REFINE: they run after this check.
+Sim plant: a non-owner without a grant invokes a method and is refused `noGrant` (already a planted
+name; the plant goes in the invoke arm). Rows that relied on open invoke (pay/well/bounty, where
+non-owners invoke) must grant explicitly. That is LANG and PROTOCOL's flag day.
+**Critique.** Owner-gated invoke makes shared objects (a well anyone may draw from) need a broad grant per
+member, where before they needed nothing. A "public method" would be a grant to the World, which needs
+a grantee-is-anyone form we do not have. Until a row needs that, the explicit grant is the honest
+shape.
+**Meta-critique.** I left invoke open in KERNEL-6 because LANG's laws could check the principal. That is
+"a check exists somewhere" reasoning, and the default every package author inherits was OPEN. The kernel
+should decide authority once, and laws should narrow it.
+Status: ruled by ROOT, not yet built (one line plus a theorem; Mac builds are frozen, 10-17).
+
+## KERNEL-26 · Public objects: a grant whose grantee is the World means "any enrolled member" (KERNEL-4, 2026-10-17; ROOT ruled, not yet built)
+**Decision.** Under KERNEL-25 a non-owner invokes only through a grant chain. A public object (any hunter
+may claim a bounty) is the owner issuing a grant for `invoke m` whose GRANTEE is `worldId X`. `walk`
+accepts such a link for any signer whose member cell is live. Strangers are already refused
+`unknownKey` before that. One mechanism: the World is already a grant TARGET (KERNEL-20) and now also a
+grantee meaning. LANG-3's `Authority.anyone` is this grant. Theorem: `invoke_authorized` covers it
+(the chain's root issuer is still the owner).
+**Alternatives.** Open invoke (KERNEL-25 ruled it out); a per-package "public" flag (a second authority
+mechanism); one grant per member (does not scale, and misses members enrolled later).
+**Critique.** A World grant is still revocable and attenuable like any other: revoking it closes the
+object to everyone at once, and a carved child grant may narrow it (fewer methods) but never widen it.
+"Any enrolled member" includes members enrolled AFTER the grant, which is the intent for a public object
+and a surprise for anyone who reads it as a snapshot.
+**Meta-critique.** Reusing `worldId` as a grantee is the economical move; the test is that `walk`'s
+grantee check gains exactly one disjunct and no other code learns about it.
+Status: ruled by ROOT; build after KERNEL-25.
+
+## ROOT rulings on KERNEL-24..26 and LANG-19 (2026-10-17, recorded by KERNEL-4)
+- KERNEL-25: `noGrant` stands for a stranger's invoke (one condition, one name).
+- KERNEL-26: ACCEPTED as written.
+- LANG-19 (cv 01a14805-3d5a): ACCEPTED. `law` also judges the NEW laws over old = new with occasion
+  `relaw laws'`: a law that would deny its own current state cannot be installed; the install is
+  governed by what it installs.
+- Order for KERNEL-5 (hbox): LEDGER D2 → LANG-3 Occasion → KERNEL-25 → KERNEL-24 → the World port.
