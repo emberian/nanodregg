@@ -379,4 +379,8 @@ the phone's build, written here so it is findable. CODEC-4 emitted `generated::c
 predicate nobody calls is a check that cannot go red. Whether it stays is CODEC's and ROOT's call.
 **Meta-critique.** The pull was to build the asked refusal because it was asked; the codec's
 `LawfulOn` theorem is what decides that there is nothing to refuse at runtime.
-**Status.** routed to CODEC-4 and KERNEL-8 (and PROTOCOL-6, ROOT); nothing of client/ changes.
+**Condition (ROOT, 2026-10-17).** The phone's head-read path, when it is built (after THE BAR), goes
+through Lean's leaf decoder and NEVER through a Rust parse of the leaf.
+**Status.** ACCEPTED by ROOT 2026-10-17. Routed: CODEC-4 proves the decode-to-CellFit lemma, KERNEL-8
+states `deployed_head_read_sound_bytes` over leaf bytes, PROTOCOL-6 closes cv 01a149bf-8b34 against
+the theorem; the uncalled emitted `cell_fits` is deleted (CODEC). Nothing of client/ changes.
