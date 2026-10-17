@@ -816,3 +816,30 @@ row text. Running the row was what refuted it (a plant that does nothing would h
 caught" and turned the row red). The real question was where the refusal is decided, and the answer
 (the client first) dictated the hostile-client act.
 **Status.** BUILT (this commit). Rows 17 PASS, 1 PENDING (bounty).
+
+## PROTOCOL-33 · row forgotten: past KERNEL-33's prune a lookup is `uncertain forgotten`, never `refused`; `Expect.unsettled` names why (2026-10-17, PROTOCOL-6; KERNEL-33 at 17e2d3f, HOST's arm)
+**Decision.** `Expect.unsettled (why)`: the Host's reply was `uncertain` and stated a name. The rows'
+`statusOutcome` reads an `uncertain` with a payload as `unsettled NAME` (an empty one stays
+`uncertain`), so a line can expect `forgotten` BY NAME. Row `forgotten`:
+- a committed call whose reply was lost (newcomer, settled by lookup), and a never-forwarded one
+  (sponsor, `absent`);
+- 110 heights later the never-forwarded call is `refused expired` (true: the journal still
+  answers, `notBefore + 2·windowMax > height`, `Kernel.fold_answers`), and the committed one is
+  `ok`;
+- 3100 heights later both are `uncertain forgotten`. The committed one is NEVER `refused`.
+Plant `forgottenRefused` (the writer sends `forgotten` as a refusal, the shape PROTOCOL-6 asked
+KERNEL-8 and HOST-7 not to take), caught at line 13: `refused forgotten`.
+**Why the status, not the name.** The attempt store decides by the status byte (`classify`), and
+`Attempt.next` after a lookup that is `unknown` ends `uncertain` with no resubmit
+(`next_after_lookup`). A `refused forgotten` would end the attempt REFUSED for a call that may have
+committed. That is the false verdict the plant shows.
+**Critique.** 3100 heights is chosen to pass the prune that drops a committed entry (entries kept
+under `3·windowMax`, pruned every `windowMax`), not just `journalForgets` (2·windowMax). Between
+those two, a committed call can still be answered `ok` from a not-yet-pruned entry, which is true,
+so the row checks the far end only. The counts are heights, so `rows --times` scaling would break
+the row; the docstring says so, and the standing run does not scale. The client's Rust attempt store
+is CODEC's emitted `attempt::next` over the same statuses, so it inherits the rule; no Rust change.
+**Meta-critique.** The new Expect constructor exists because a status-only expectation could not
+tell `forgotten` from any other uncertain answer. That is the same move as `expired` stating its
+height: an outcome a client acts on must be named on the wire and in the row.
+**Status.** BUILT (this commit). Rows 18 PASS, 1 PENDING (bounty), re-run after KERNEL-33's charge change.

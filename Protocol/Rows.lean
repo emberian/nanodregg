@@ -30,6 +30,9 @@ inductive Expect
   | absent
   /-- the Host's reply was `uncertain` (a failed append): a real outcome, never a guess -/
   | uncertain
+  /-- the Host's reply was `uncertain` and named why (`forgotten`: the journal no longer answers,
+  KERNEL-33): not a verdict on the call, and never a refusal -/
+  | unsettled (why : String)
   /-- the line ran past its LIVENESS deadline (`withinMs`): the system did not answer in time. A
   non-verdict by name, never a judgement of speed (Ember: no wall-clock verdict until the end, on a
   quiet box; THE BAR's ≤ 5 s is PERF's final spec, `scripts/bar.sh`, not a row criterion) -/
@@ -38,7 +41,7 @@ inductive Expect
 
 def Expect.text : Expect → String
   | .ok => "ok" | .refused n => s!"refused {n}" | .absent => "absent" | .uncertain => "uncertain"
-  | .hang => "hang"
+  | .unsettled n => s!"uncertain {n}" | .hang => "hang"
 
 /-- What a line does. A member command goes through the one command language; the others are the
 operator's and the attempt store's acts, which are not member commands. -/
@@ -149,6 +152,9 @@ inductive Mutation
   /-- the writer's read gate skips the envelope's lower bound: a `notYet` envelope is served (the
   shape before PROTOCOL-27, when an envelope was good at every height up to `validUntil`) -/
   | ignoreNotBefore
+  /-- the writer answers `forgotten` as a REFUSAL (`refused forgotten`), the shape KERNEL-33 did not
+  take: a client would read a call committed long ago as refused -/
+  | forgottenRefused
   /-- a second genesis draws the first one's nonce (HOST's randomness repeats): the origin is only
   as unique as the nonce (KERNEL-24's critique) -/
   | nonceRepeats
@@ -465,6 +471,32 @@ def wrongWorldRead : Row where
     { actor := "operator", act := .readElsewhere true, expect := .ok }])
   plant := .caught .nonceRepeats 6 .ok
 
+/-- KERNEL-33's journal prune, as an attempt store meets it. A call the Host never saw (`sponsor`'s,
+never forwarded) is, past its window, `refused expired`: true while the journal still answers
+(`notBefore + 2·windowMax > height`). A call that COMMITTED (`newcomer`'s, its reply lost and
+settled by lookup) is still `ok` there. Past `journalForgets`, and past the prune that drops the
+committed entry (entries under `3·windowMax`), both are `uncertain forgotten`: never `refused`, so
+a call committed long ago is never reported refused. The counts are heights, so this row is not
+for `rows --times` scaling (it would cut them). -/
+def forgotten : Row where
+  name := "forgotten"
+  replaces := []
+  ops := settled
+  kinds := ["enroll", "install", "create", "grant", "write"]
+  drive := .members (welcome ++ [
+    { actor := "newcomer", act := .cmd ["write", "@shared", "2", "1", "--via", "@g"], expect := .ok,
+      fault := .dropReply },
+    { actor := "sponsor", act := .cmd ["write", "@shared", "3", "1"], expect := .absent,
+      fault := .neverForward },
+    okBind "operator" ["create", "@permit"] "own",
+    { actor := "operator", act := .cmd ["write", "@own", "2", "1"], expect := .ok, times := 110 },
+    { actor := "sponsor", act := .retry, expect := .refused "expired" },
+    { actor := "newcomer", act := .retry, expect := .ok },
+    { actor := "operator", act := .cmd ["write", "@own", "2", "1"], expect := .ok, times := 3100 },
+    { actor := "sponsor", act := .retry, expect := .unsettled "forgotten" },
+    { actor := "newcomer", act := .retry, expect := .unsettled "forgotten" }])
+  plant := .caught .forgottenRefused 13 (.refused "forgotten")
+
 /-- JPAY (the payment half): a transfer spends a once-only key of its source (`--once`), and the
 same key again is `spent`, whether the client checks it (follow's own admission, line 3) or a
 hostile client skips that check and the WRITER refuses it (line 4). Another key pays again. -/
@@ -602,7 +634,7 @@ def langJourney : Row where
   plant := .internal "a program whose judge admits everything: L4 set 101 must be admitted"
 
 def rows : List Row :=
-  [journey, reopen, laws, rotate, audit, paging, coldCatchUp, inflatedHeight, thin, wrongWorld, wrongWorldRead, pay, well, bounty, grain, hermes, bar,
+  [journey, reopen, laws, rotate, audit, paging, coldCatchUp, inflatedHeight, forgotten, thin, wrongWorld, wrongWorldRead, pay, well, bounty, grain, hermes, bar,
    langJourney]
 
 end Nanodregg.Protocol

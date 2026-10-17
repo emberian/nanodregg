@@ -65,6 +65,7 @@ def sys : Option Mutation → Sys
   | some .forgeBase => { writer := { X := Sim.ctx, forgeBase := true }, follow := Sim.ctx }
   | some .unstatedExpiry => { writer := { X := Sim.ctx, unstatedExpiry := true }, follow := Sim.ctx }
   | some .ignoreNotBefore => { writer := { X := Sim.ctx, ignoreNotBefore := true }, follow := Sim.ctx }
+  | some .forgottenRefused => { writer := { X := Sim.ctx, forgottenRefused := true }, follow := Sim.ctx }
   | some .nonceRepeats => { writer := { X := Sim.ctx }, follow := Sim.ctx, nonceRepeats := true }
   | some .accountByAsset =>
       { writer := { X := accountByAsset Sim.ctx }, follow := accountByAsset Sim.ctx }
@@ -402,7 +403,7 @@ def statusOutcome (reply : ByteArray) : Expect :=
   match Command.hostReply reply with
   | some (.ok, _) => .ok
   | some (.absent, _) => .absent
-  | some (.uncertain, _) => .uncertain
+  | some (.uncertain, p) => if p.isEmpty then .uncertain else .unsettled (Command.hostName p)
   | some (.refused, p) => .refused (Command.hostName p)
   -- a closed connection is not a verdict on the call
   | some (.closed, _) => .uncertain

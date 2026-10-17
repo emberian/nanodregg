@@ -49,6 +49,9 @@ structure Params where
   /-- admit against the World with every spent nullifier forgotten (a plant: a writer that does
   not keep its spent set) -/
   forgetSpent : Bool := false
+  /-- an `uncertain forgotten` reply is sent as `refused forgotten` (a plant: the status rule
+  KERNEL-33 / PROTOCOL-6 fixed) -/
+  forgottenRefused : Bool := false
 
 /-- Small enough that a row of a few dozen turns seals bases; the deployed bounds on size. -/
 def cadence : Cadence :=
@@ -92,7 +95,10 @@ def machine (P : Params) : Machine (World D) (Turn D) (Reject D) Frame D where
       | none => Host.handle P.X w f
     else match Host.handle P.X w f with
       | .reply c p =>
-        if P.unstatedExpiry && (expiredHeight? p).isSome then .reply c "expired".toUTF8 else .reply c p
+        if P.unstatedExpiry && (expiredHeight? p).isSome then .reply c "expired".toUTF8
+        else if P.forgottenRefused && c = Status.uncertain.code && p = "forgotten".toUTF8 then
+          .reply Status.refused.code p
+        else .reply c p
       | a => a
   refuse w t r := Host.onReject P.X w t r
   ok := Status.ok.code
