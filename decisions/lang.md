@@ -432,7 +432,11 @@ state, `quorum_adopt_forged_approvals` refused). A relaw that KEEPS the quorum w
 (`laws'.filter (· ∉ laws)`, agreed by KERNEL-5): a kept law already judged the change as
 `relaw laws'`. Journey L11d: keep BirthOnly and add Frozen, admitted. Also `windowed_fresh` (birth or
 adopt ⇒ count = 0, the per-epoch bound's base case) and positive adopt teeth for allowlist and
-ownerSigns. This departs from ROOT's 10-17 wording for quorum. The departure is reported to ROOT.
+ownerSigns. This departs from ROOT's 10-17 wording for quorum. ROOT accepted it (907b55d) and records that its ruling
+was the error: approvals written under the previous laws are the previous owner's word, not member
+consent, so "adopt = relaw arm" was forgeable by construction. The consent to an adoption is the OLD
+laws' `relaw` judgement, which is where it belongs; the incoming quorum's adopt only requires a fresh
+state.
 Meta-critique of the first arm: I took a ruling's wording as a specification, without asking
 whose writes the arm reads.
 
