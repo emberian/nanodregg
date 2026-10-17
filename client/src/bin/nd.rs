@@ -49,10 +49,10 @@ fn go() -> Result<u8, String> {
         println!("key {}\nnext {}", hex(&key), hex(&next));
         return Ok(0);
     }
-    let mut follow =
-        FollowSocket::connect(&ws.join("follow.sock")).map_err(|e| format!("follow.sock: {e}"))?;
-    let mut host =
-        HostSocket::connect(&ws.join("host.sock")).map_err(|e| format!("host.sock: {e}"))?;
+    let mut follow = FollowSocket::connect(&ws.join("follow.sock"), table::REPLY)
+        .map_err(|e| format!("follow.sock: {e}"))?;
+    let mut host = HostSocket::connect(&ws.join("host.sock"), table::REPLY)
+        .map_err(|e| format!("host.sock: {e}"))?;
     let argv: Vec<Vec<u8>> = argv.into_iter().map(OsString::into_vec).collect();
     let (exit, stdout, stderr) = run::run(
         &argv,

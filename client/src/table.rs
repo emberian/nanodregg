@@ -31,4 +31,8 @@ pub const RUN: Table = Table {
     ok: g::status::OK,
     refused: g::status::REFUSED,
     absent: g::status::ABSENT,
+    uncertain: g::status::UNCERTAIN,
 };
+
+/// `Bounds.replyMsMax`: how long either socket waits for one reply (PROTOCOL-20).
+pub const REPLY: Duration = Duration::from_millis(g::REPLY_MS_MAX as u64);

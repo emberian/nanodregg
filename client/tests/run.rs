@@ -17,6 +17,7 @@ const T: Table = Table {
     ok: 0,
     refused: 1,
     absent: 3,
+    uncertain: 2,
 };
 
 struct ScriptedFollow {
@@ -111,13 +112,16 @@ fn round_trip_with_a_lost_submit_reply() {
     );
     assert_eq!(
         follow.seen[1].1,
-        Outcome::Custody(custody.sign(b"observation").unwrap().encode().unwrap())
+        Outcome {
+            status: 0,
+            payload: custody.sign(b"observation").unwrap().encode().unwrap(),
+        }
     );
     assert_eq!(
         follow.seen[3],
         (
             b"k4".to_vec(),
-            Outcome::Reply {
+            Outcome {
                 status: 0,
                 payload: b"receipt".to_vec()
             }
@@ -261,10 +265,8 @@ fn sign_next_then_a_committed_submit_advances_custody_in_one_command() {
         T,
     )
     .unwrap();
-    let bytes = match &follow.seen[0].1 {
-        Outcome::Custody(b) => b.clone(),
-        o => Vec::from(format!("{o:?}")),
-    };
+    assert_eq!(follow.seen[0].1.status, T.ok);
+    let bytes = follow.seen[0].1.payload.clone();
     let s = nanodregg_client::generated::layout::SignResult::decode(&bytes).unwrap();
     assert_eq!((s.key, s.next), (next.to_vec(), pending.to_vec()));
     assert_eq!(
@@ -363,6 +365,88 @@ fn a_submit_answered_closed_is_settled_by_lookup() {
     assert_eq!(
         host.asked,
         vec![(1, b"CALL".to_vec()), (2, b"CALL".to_vec())]
+    );
+    std::fs::remove_dir_all(&d).unwrap();
+}
+
+#[test]
+fn a_custody_refusal_is_a_result_follow_renders_not_an_exit() {
+    let (d, custody) = setup("custody-refused");
+    let mut follow = ScriptedFollow {
+        steps: VecDeque::from([
+            // No precommit came first: custody has no pending key.
+            Step::SignNext {
+                message: b"rotate".to_vec(),
+                k: b"k1".to_vec(),
+            },
+            Step::Done {
+                exit: 1,
+                stdout: Vec::new(),
+                stderr: b"refused noPending\n".to_vec(),
+            },
+        ]),
+        seen: Vec::new(),
+    };
+    let mut host = ScriptedHost {
+        replies: VecDeque::new(),
+        asked: Vec::new(),
+    };
+    let (exit, _, _) = run::run(
+        &[],
+        &mut follow,
+        &mut host,
+        &custody,
+        &d.join("attempts"),
+        T,
+    )
+    .unwrap();
+    assert_eq!(exit, 1, "follow's done, not an nd error");
+    let o = &follow.seen[0].1;
+    assert_eq!(o.status, T.refused);
+    let r = nanodregg_client::generated::layout::CustodyRefused::decode(&o.payload).unwrap();
+    assert_eq!(r.refusal.name(), "noPending");
+    std::fs::remove_dir_all(&d).unwrap();
+}
+
+#[test]
+fn a_submit_whose_reply_is_lost_is_looked_up_never_resent() {
+    let (d, custody) = setup("lost");
+    let mut follow = ScriptedFollow {
+        steps: VecDeque::from([
+            Step::Submit {
+                call: b"CALL".to_vec(),
+                k: b"k1".to_vec(),
+            },
+            Step::Done {
+                exit: 0,
+                stdout: Vec::new(),
+                stderr: Vec::new(),
+            },
+        ]),
+        seen: Vec::new(),
+    };
+    let mut host = ScriptedHost {
+        replies: VecDeque::from([
+            Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "timeout (replyMsMax)",
+            )),
+            Ok((T.ok, b"receipt".to_vec())),
+        ]),
+        asked: Vec::new(),
+    };
+    run::run(
+        &[],
+        &mut follow,
+        &mut host,
+        &custody,
+        &d.join("attempts"),
+        T,
+    )
+    .unwrap();
+    assert_eq!(
+        host.asked,
+        vec![(T.submit, b"CALL".to_vec()), (T.lookup, b"CALL".to_vec())]
     );
     std::fs::remove_dir_all(&d).unwrap();
 }

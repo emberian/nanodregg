@@ -7,6 +7,8 @@ use std::path::Path;
 use crate::frame::{self, FrameError};
 use crate::generated::{self as g, layout};
 use crate::run::{Follow, Host, Outcome};
+use std::time::Duration;
+
 use crate::table::LIMITS;
 use layout::Step;
 
@@ -21,10 +23,28 @@ fn malformed(what: &str, r: layout::Refusal) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, format!("{what}: {r:?}"))
 }
 
+/// One request, one reply, each bounded by `replyMsMax`; past it the error is `timeout` by name
+/// (the step loop then treats a frozen call as lost: uncertain, settled by lookup).
 fn exchange(s: &mut UnixStream, op: u8, payload: &[u8]) -> io::Result<(u8, Vec<u8>)> {
-    frame::write(s, LIMITS, op, payload).map_err(io_err)?;
-    let f = frame::read(s, LIMITS).map_err(io_err)?;
+    let timeout = |e: io::Error| match e.kind() {
+        io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut => {
+            io::Error::new(io::ErrorKind::TimedOut, "timeout (replyMsMax)")
+        }
+        _ => e,
+    };
+    frame::write(s, LIMITS, op, payload)
+        .map_err(io_err)
+        .map_err(timeout)?;
+    let f = frame::read(s, LIMITS).map_err(io_err).map_err(timeout)?;
     Ok((f.op, f.payload))
+}
+
+/// Connect, with both directions bounded by `reply` (nd passes `table::REPLY`, replyMsMax).
+fn connect(path: &Path, reply: Duration) -> io::Result<UnixStream> {
+    let s = UnixStream::connect(path)?;
+    s.set_read_timeout(Some(reply))?;
+    s.set_write_timeout(Some(reply))?;
+    Ok(s)
 }
 
 /// `follow.sock`.
@@ -34,9 +54,9 @@ pub struct FollowSocket(UnixStream);
 pub struct HostSocket(UnixStream);
 
 impl FollowSocket {
-    /// Connect.
-    pub fn connect(path: &Path) -> io::Result<Self> {
-        UnixStream::connect(path).map(Self)
+    /// Connect; each reply is waited for at most `reply`.
+    pub fn connect(path: &Path, reply: Duration) -> io::Result<Self> {
+        connect(path, reply).map(Self)
     }
     fn ask(&mut self, op: u8, payload: &[u8]) -> io::Result<Step> {
         let (status, reply) = exchange(&mut self.0, op, payload)?;
@@ -85,9 +105,9 @@ impl Follow for FollowSocket {
 }
 
 impl HostSocket {
-    /// Connect.
-    pub fn connect(path: &Path) -> io::Result<Self> {
-        UnixStream::connect(path).map(Self)
+    /// Connect; each reply is waited for at most `reply`.
+    pub fn connect(path: &Path, reply: Duration) -> io::Result<Self> {
+        connect(path, reply).map(Self)
     }
 }
 

@@ -3,7 +3,8 @@
 #![allow(clippy::unwrap_used)] // a plant that cannot set up is a failed plant
 use std::fs;
 
-use nanodregg_client::attempt::{Attempt, AttemptError, Request, Settlement, State};
+use nanodregg_client::attempt::{Attempt, AttemptError, Settlement, State};
+use nanodregg_client::generated::attempt::{Action, Request};
 
 fn scratch(name: &str) -> std::path::PathBuf {
     let d = std::env::temp_dir().join(format!("nd-attempt-{}-{name}", std::process::id()));
@@ -81,10 +82,7 @@ fn absent_resends_the_same_bytes_up_to_the_bound() {
             Request::Lookup => Settlement::Absent,
         }
     });
-    assert!(matches!(
-        r,
-        Err(AttemptError::SendsExhausted { sends_max: 2 })
-    ));
+    assert!(matches!(r, Err(AttemptError::Ended(Action::Absent))));
     assert_eq!(
         seen.iter().filter(|(r, _)| *r == Request::Submit).count(),
         2

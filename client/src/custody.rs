@@ -23,6 +23,7 @@ use zeroize::Zeroizing;
 
 use crate::fsx;
 pub use crate::fsx::Refused;
+use crate::generated::CustodyRefusal;
 use crate::generated::layout::SignResult;
 
 /// Seed length in bytes.
@@ -60,6 +61,22 @@ impl std::fmt::Display for CustodyError {
             Self::Mismatch(w) => write!(f, "custody: mismatch: {w}"),
             Self::Io(e) => write!(f, "custody: {e}"),
             e => write!(f, "custody: {e:?}"),
+        }
+    }
+}
+
+impl CustodyError {
+    /// The refusal follow renders (`Protocol.CustodyRefusal`, emitted).
+    pub fn refusal(&self) -> CustodyRefusal {
+        match self {
+            Self::File(..) => CustodyRefusal::FileRefused,
+            Self::Exists => CustodyRefusal::Exists,
+            Self::Shape => CustodyRefusal::Shape,
+            Self::HoldingAbsent => CustodyRefusal::HoldingAbsent,
+            Self::NoPending => CustodyRefusal::NoPending,
+            Self::RotationInFlight => CustodyRefusal::RotationInFlight,
+            Self::Mismatch(_) => CustodyRefusal::Mismatch,
+            Self::Io(_) => CustodyRefusal::Io,
         }
     }
 }

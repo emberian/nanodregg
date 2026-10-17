@@ -29,7 +29,7 @@ HOST_EXE = "host"
 
 
 # A file Emit/Rust.lean wrote starts with its stable marker (CODEC 23a1445), and is registered in
-# gates/generated.tsv, whose rows `lake exe emit-rust --check` gates. The client/src ceiling bounds
+# gates/generated.tsv, whose rows `lake exe emit-rust --check` gates. The client/src ceilings bound
 # hand-written Rust (CLIENT-1, ROOT 10-16), so it excludes generated files; `Rust lines (generated)`
 # keeps their growth visible. Only a REGISTERED file with the header counts as generated: a
 # hand-written file that copies the header is counted as hand-written AND shows in the ceiling-0 row
@@ -140,8 +140,15 @@ def measure(t: tree.Tree) -> dict[str, int]:
     out["Rust lines"] = rust_lines(t.root)
     gen = registered(t.root)
     rs = list(rust_files(t.root))
-    out["Rust lines (client/src)"] = sum(
-        n for p, n, h in rs if p.startswith("client" + os.sep + "src" + os.sep) and not (h and p in gen))
+    # client/src, hand-written only, in three parts (ROOT 10-17): each binary is bounded alone, and
+    # the library is EVERYTHING else under client/src, so a new file (or binary) cannot escape a row.
+    hand = {p: n for p, n, h in rs
+            if p.startswith(os.path.join("client", "src") + os.sep) and not (h and p in gen)}
+    bins = {"Rust lines (nd)": os.path.join("client", "src", "bin", "nd.rs"),
+            "Rust lines (nd-supervise)": os.path.join("client", "src", "bin", "nd-supervise.rs")}
+    for metric, path in bins.items():
+        out[metric] = hand.get(path, 0)
+    out["Rust lines (client library)"] = sum(n for p, n in hand.items() if p not in bins.values())
     out["Rust lines (generated)"] = sum(n for p, n, h in rs if h and p in gen)
     out["Rust files with an unregistered generated header"] = sum(
         1 for p, _, h in rs if h and p not in gen)

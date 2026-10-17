@@ -10,16 +10,20 @@
 //! | `call`, `sent.*`                      | [`State::Uncertain`]   |
 //! | `call`, `sent.*`, one settlement file | [`State::Settled`]     |
 //!
-//! A send whose reply did not arrive is uncertain, never failed: the only way out is a lookup of
-//! the same bytes. A lookup that answers absent permits one more send of the same bytes, up to the
-//! caller's bound. Nothing here re-signs or re-plans: whether the call committed is the Host's
-//! answer, classified by the generated outcome table into a [`Settlement`].
+//! WHAT to send next is not decided here: it is `Protocol.Attempt.next` (PROTOCOL-17), emitted as
+//! [`crate::generated::attempt::next`], a function of whether a send remains and of the last
+//! request with what its reply said. This module only performs the action it names and keeps the
+//! files. So a send whose reply did not arrive is never failed, only looked up; a lookup that
+//! answers absent permits another send of the same bytes while sends remain; a lookup the Host
+//! cannot answer ends the run uncertain (the next run looks up again). Nothing here re-signs or
+//! re-plans.
 
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
 use crate::fsx;
+use crate::generated::attempt::{self as table, Action, Request, Seen};
 
 const CALL: &str = "call";
 const COMMITTED: &str = "committed";
@@ -33,19 +37,24 @@ pub enum Settlement {
     Committed(Vec<u8>),
     /// The call is definitively not in the log and never will be (a named refusal).
     NotCommitted(Vec<u8>),
-    /// The Host cannot say (its append did not read back, it is reopening, the batch is contended).
+    /// The Host said it cannot say (`uncertain`: its append did not read back).
     Unknown,
     /// Lookup only: the Host has no record of these bytes.
     Absent,
+    /// No reply: the transport failed, timed out (`replyMsMax`), or the reply was unreadable.
+    Lost,
 }
 
-/// Which request the attempt needs sent; the caller maps it to an operation from the table.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Request {
-    /// Send the frozen call for admission.
-    Submit,
-    /// Ask whether the frozen call is in the log.
-    Lookup,
+impl Settlement {
+    fn seen(&self) -> Seen {
+        match self {
+            Self::Committed(_) => Seen::Committed,
+            Self::NotCommitted(_) => Seen::Refused,
+            Self::Unknown => Seen::Unknown,
+            Self::Absent => Seen::Absent,
+            Self::Lost => Seen::Lost,
+        }
+    }
 }
 
 /// Where an attempt stands.
@@ -76,13 +85,9 @@ pub enum AttemptError {
     NotAnAttempt,
     /// The directory holds both settlements, or a settlement without a send.
     Inconsistent,
-    /// The reply did not fit the request (an `Absent` answer to a submit).
-    UnexpectedReply,
-    /// Every permitted send was used and the call is still not settled.
-    SendsExhausted {
-        /// The bound in force.
-        sends_max: u32,
-    },
+    /// `Attempt.next` ended the attempt without a settlement: `absent` (every permitted send was
+    /// used and the Host has no record of the call) or `badReply` (an `absent` answer to a submit).
+    Ended(Action),
     /// The file system failed.
     Io(io::Error),
 }
@@ -93,10 +98,7 @@ impl std::fmt::Display for AttemptError {
             Self::AlreadyFrozen => write!(f, "attempt: already frozen"),
             Self::NotAnAttempt => write!(f, "attempt: no call in this directory"),
             Self::Inconsistent => write!(f, "attempt: inconsistent directory"),
-            Self::UnexpectedReply => write!(f, "attempt: reply does not answer the request"),
-            Self::SendsExhausted { sends_max } => {
-                write!(f, "attempt: uncertain after {sends_max} sends")
-            }
+            Self::Ended(a) => write!(f, "attempt: {}", a.name()),
             Self::Io(e) => write!(f, "attempt: {e}"),
         }
     }
@@ -173,48 +175,47 @@ impl Attempt {
         &self.call
     }
 
-    /// Advance from `state` until settled, sending through `exchange`, which performs one
-    /// request/reply on the transport and returns the table's classification of the reply.
-    /// A transport error inside `exchange` must be reported as [`Settlement::Unknown`].
-    /// Returns the final state: `Settled`, or `Uncertain` when the Host could not say.
+    /// Advance from `state`, performing what `Attempt.next` names, until it names an end. Each
+    /// request goes through `exchange`, which performs one request/reply on the transport and
+    /// returns the table's classification of the reply (a transport failure is
+    /// [`Settlement::Lost`]). Returns `Settled`, or `Uncertain` when the Host could not say; the
+    /// table's theorem `next_after_lookup` bounds a run at `2 · sends_max` requests, and the loop
+    /// is bounded by that number again.
     pub fn drive(
         &self,
-        mut state: State,
+        state: State,
         sends_max: u32,
         mut exchange: impl FnMut(Request, &[u8]) -> Settlement,
     ) -> Result<State, AttemptError> {
-        loop {
-            state = match state {
-                State::Settled { .. } => return Ok(state),
-                State::Signed => self.send(0, sends_max, &mut exchange)?,
-                State::Uncertain { sends } => match exchange(Request::Lookup, &self.call) {
-                    Settlement::Committed(reply) => self.settle(true, reply)?,
-                    Settlement::NotCommitted(reply) => self.settle(false, reply)?,
-                    Settlement::Unknown => return Ok(State::Uncertain { sends }),
-                    Settlement::Absent => self.send(sends, sends_max, &mut exchange)?,
-                },
+        let (mut sends, mut last) = match state {
+            State::Settled { .. } => return Ok(state),
+            State::Signed => (0, None),
+            // Reloaded after a send: its reply is lost to this run.
+            State::Uncertain { sends } => (sends, Some((Request::Submit, Seen::Lost))),
+        };
+        let mut reply = Vec::new();
+        for _ in 0..=2 * u64::from(sends_max) {
+            let request = match table::next(sends < sends_max, last) {
+                Action::Committed => return self.settle(true, reply),
+                Action::Refused => return self.settle(false, reply),
+                Action::Uncertain => return Ok(State::Uncertain { sends }),
+                end @ (Action::Absent | Action::BadReply) => return Err(AttemptError::Ended(end)),
+                Action::Submit => {
+                    // The marker is durable before a byte leaves: a crash from here on loads as
+                    // uncertain.
+                    fsx::create_once(&self.dir, &format!("{SENT_PREFIX}{sends}"), &[])?;
+                    sends += 1;
+                    Request::Submit
+                }
+                Action::Lookup => Request::Lookup,
             };
+            let s = exchange(request, &self.call);
+            last = Some((request, s.seen()));
+            if let Settlement::Committed(r) | Settlement::NotCommitted(r) = s {
+                reply = r;
+            }
         }
-    }
-
-    fn send(
-        &self,
-        sends: u32,
-        sends_max: u32,
-        exchange: &mut impl FnMut(Request, &[u8]) -> Settlement,
-    ) -> Result<State, AttemptError> {
-        if sends >= sends_max {
-            return Err(AttemptError::SendsExhausted { sends_max });
-        }
-        // The marker is durable before a byte leaves: a crash from here on loads as uncertain.
-        fsx::create_once(&self.dir, &format!("{SENT_PREFIX}{sends}"), &[])?;
-        let sends = sends + 1;
-        match exchange(Request::Submit, &self.call) {
-            Settlement::Committed(reply) => self.settle(true, reply),
-            Settlement::NotCommitted(reply) => self.settle(false, reply),
-            Settlement::Unknown => Ok(State::Uncertain { sends }),
-            Settlement::Absent => Err(AttemptError::UnexpectedReply),
-        }
+        Ok(State::Uncertain { sends })
     }
 
     fn settle(&self, committed: bool, reply: Vec<u8>) -> Result<State, AttemptError> {

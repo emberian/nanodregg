@@ -10,33 +10,26 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use crate::attempt::{Attempt, AttemptError, Request, Settlement, State};
+use crate::attempt::{Attempt, AttemptError, Settlement, State};
 use crate::custody::{Custody, CustodyError, Rotation};
-use crate::generated::layout::{PrecommitResult, Refusal, Step};
+use crate::generated::attempt::Request;
+use crate::generated::layout::{CustodyRefused, PrecommitResult, Refusal, Step};
 
-/// What a performed step hands back to follow.
+/// What a performed step hands back to follow (PROTOCOL-21): `u8 status ‖ payload`. Custody
+/// answers `ok ‖ SignResult | PrecommitResult` or `refused ‖ CustodyRefused`; a Host reply is
+/// passed verbatim. Follow, not this crate, renders a refusal.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Outcome {
-    /// Custody's encoded answer: `SignResult` (sign, signNext) or `PrecommitResult` (precommit).
-    Custody(Vec<u8>),
-    /// The Host's reply: status byte and payload, verbatim.
-    Reply {
-        /// Status byte.
-        status: u8,
-        /// Payload.
-        payload: Vec<u8>,
-    },
+pub struct Outcome {
+    /// Status byte.
+    pub status: u8,
+    /// Payload.
+    pub payload: Vec<u8>,
 }
 
 impl Outcome {
-    /// The `result` field of `resume` (`Protocol.resumeLayout`): every result is
-    /// `u8 status ‖ payload` — custody's answer under `status::OK`, or the Host's reply frame body
-    /// as it arrived (the shape [`crate::frame`] reads).
+    /// The `result` field of `resume` (`Protocol.resumeLayout`).
     pub fn result(&self) -> Vec<u8> {
-        match self {
-            Self::Custody(s) => [&[crate::generated::status::OK][..], s].concat(),
-            Self::Reply { status, payload } => [&[*status][..], payload].concat(),
-        }
+        [&[self.status][..], &self.payload].concat()
     }
 }
 
@@ -71,6 +64,8 @@ pub struct Table {
     pub refused: u8,
     /// `Status.absent.code`.
     pub absent: u8,
+    /// `Status.uncertain.code`.
+    pub uncertain: u8,
 }
 
 /// Why a command stopped without follow's `done`.
@@ -116,8 +111,10 @@ fn settlement(t: &Table, reply: io::Result<(u8, Vec<u8>)>) -> Settlement {
         Ok((s, p)) if s == t.ok => Settlement::Committed(p),
         Ok((s, p)) if s == t.refused => Settlement::NotCommitted(p),
         Ok((s, _)) if s == t.absent => Settlement::Absent,
-        // `uncertain`, an unknown status, or a transport failure: the Host could not say.
-        _ => Settlement::Unknown,
+        Ok((s, _)) if s == t.uncertain => Settlement::Unknown,
+        // A transport failure, a timeout (replyMsMax), or a status the table does not name
+        // (`closed`): no reply this run.
+        _ => Settlement::Lost,
     }
 }
 
@@ -179,27 +176,31 @@ pub fn run(
                 stdout,
                 stderr,
             } => return Ok((exit, stdout, stderr)),
-            Step::Sign { message, k } => {
-                let signed = custody.sign(&message).map_err(RunError::Custody)?;
-                (k, Outcome::Custody(encoded(signed.encode())?))
-            }
+            Step::Sign { message, k } => (
+                k,
+                custody_result(&t, custody.sign(&message).map(|s| s.encode()))?,
+            ),
             Step::SignNext { message, k } => {
-                let (signed, r) = custody.sign_next(&message).map_err(RunError::Custody)?;
-                rotation = Some(r);
-                (k, Outcome::Custody(encoded(signed.encode())?))
+                let signed = custody.sign_next(&message).map(|(s, r)| {
+                    rotation = Some(r);
+                    s.encode()
+                });
+                (k, custody_result(&t, signed)?)
             }
             Step::Precommit { k } => {
-                let (next, pending) = custody.precommit().map_err(RunError::Custody)?;
-                let result = PrecommitResult {
-                    next: next.to_vec(),
-                    pending: pending.to_vec(),
-                };
-                (k, Outcome::Custody(encoded(result.encode())?))
+                let result = custody.precommit().map(|(next, pending)| {
+                    PrecommitResult {
+                        next: next.to_vec(),
+                        pending: pending.to_vec(),
+                    }
+                    .encode()
+                });
+                (k, custody_result(&t, result)?)
             }
             Step::Host { op, payload, k } => {
                 let (status, payload) =
                     host.exchange(op.code(), &payload).map_err(RunError::Host)?;
-                (k, Outcome::Reply { status, payload })
+                (k, Outcome { status, payload })
             }
             Step::Submit { call, k } => {
                 let (n, dir) =
@@ -219,7 +220,7 @@ pub fn run(
                         let status = if committed { t.ok } else { t.refused };
                         (
                             k,
-                            Outcome::Reply {
+                            Outcome {
                                 status,
                                 payload: reply,
                             },
@@ -234,6 +235,24 @@ pub fn run(
         step = follow.resume(&k, &outcome).map_err(RunError::Follow)?;
     }
     Err(RunError::StepsExhausted)
+}
+
+/// Custody's answer as follow reads it: `ok ‖ result`, or `refused ‖ CustodyRefused` naming why
+/// (PROTOCOL-21). Custody's own refusals are results, never an nd exit.
+fn custody_result(
+    t: &Table,
+    r: Result<Result<Vec<u8>, Refusal>, CustodyError>,
+) -> Result<Outcome, RunError> {
+    let (status, payload) = match r {
+        Ok(bytes) => (t.ok, encoded(bytes)?),
+        Err(e) => {
+            let refused = CustodyRefused {
+                refusal: e.refusal(),
+            };
+            (t.refused, encoded(refused.encode())?)
+        }
+    };
+    Ok(Outcome { status, payload })
 }
 
 /// A custody result's encoding (fixed-size keys and signatures: a refusal is a custody bug).
