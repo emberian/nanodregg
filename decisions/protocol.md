@@ -210,3 +210,48 @@ not written; PENDING is honest only while the member driver is the very next com
 not rows (standing's sim stage is their one judge); the "call kinds" metric counts `Receive.Body`
 (10) with ceiling 10. PROTOCOL-9 findings 1 (oneOf, CODEC told) and 2 (argv total in Command.parse)
 endorsed.
+
+## PROTOCOL-11 · Protocol.Command: eleven verbs, one parser, a five-phase machine that re-derives at every step (2026-10-16)
+**Decision.** `Protocol/Command/Verb.lean`: `Verb` (init enroll follow install create write law
+invoke grant revoke read; 11 against a ceiling of 20, `Verb.at_most_twenty`), `Cmd`, and THE parser
+`parse : List ByteArray → Except ParseRefusal (Cmd D)` (the argv total refused as `argvPastBound`,
+`parse_past_bound`; every other refusal by name). `Protocol/Command/Machine.lean`: `start`/`step` over
+`k = (argv, phase, acc)`. A write: sign(envelope) → host(log, envelope) → absorb (every logged event
+re-derived by `Receive.submit` on follow's World, a failure is `eventMismatch h`) → `plan` → sign
+(unsignedBytes u) → re-plan and compare bytes (`planMoved`) → submit(callBytes) → done(receipt). `read`
+stops after the catch-up; `init` signs twice and prints a join token. `plan` discovers pins by
+deriving and adding each `unpinned` cell (≤ touchesMax), prices at the derived charge + 4096, and
+returns `u` only if follow's own `World.admit` accepts the Turn. Theorems: `plan_admits` and
+`step_submit_planned` (consent: the only call `step` ever hands the client to submit is
+`callBytes ⟨u, sig⟩` for a `u` that `plan` produced on follow's World, hence derived and admitted
+there). Custody's sign result is `signResultLayout` = key, NEXT key, signature (the next key's
+digest is what a sponsor/rotation commits to). Ids are hex; petnames are not in the language.
+**Alternatives.** (a) Follow keeps per-command state server-side (then a follow restart loses
+commands, and `k` would need a MAC). (b) A fixed generated step sequence per verb (HOST-9's critique):
+the catch-up length depends on the log, so the sequence is data-dependent. (c) Petnames in the World
+(an index nobody else needs) or in follow (state outside the World).
+**Critique.** Signing an envelope costs one more custody round trip per command, on THE BAR path.
+`maxCharge` = charge + 4096 is a ceiling the member signs without seeing; a Host that charges up to
+it is within the signature. The rotate and retry verbs are absent: rotation needs custody to sign
+with the NEXT key and then advance (a custody step CLIENT has not designed), and retry is the
+attempt store's (Rust) — both rows stay PENDING. Refusal names come from derived `Repr` (`ctorName`),
+which is exact for constructors but would silently change if someone hand-wrote a `Repr`.
+**Meta-critique.** I proved the consent property at `plan` and `step` because those proofs were
+reachable; the stronger statement (the Host derives the SAME Turn from the signed call) needs the
+signature-independence of `dispatch`, which I did not attempt.
+**Status.** open.
+
+## PROTOCOL-12 · the READ ENVELOPE (HOST-11's gate as data) and Bounds.idleMsMax (2026-10-16)
+**Decision.** `envelopeLayout` (member, grant, from, validUntil, key, signature; digests as
+`Env.bytes`, heights u64le) in Protocol/Table.lean, `envelopeFrame` + `envelopeFrame_lawful` in
+Frames, and `Protocol.Envelope.check` (Protocol/Envelope.lean): current key of a live member
+(`unknownKey`), signature over `Envelope.message` (`badSignature`), `height ≤ validUntil`
+(`expired`), `mayFollow` (`noFollowGrant`); undecodable is `badEnvelope`. `logReplyLayout` = the
+signed calls from the height: a follower re-derives every Turn (PROTOCOL-4), so the log serves events,
+not Turns. `idleMsMax = 300000` for remote connections (CLIENT-12's ask; PROTOCOL-8 named it).
+**Critique.** Heights as `.bytes` holding u64le are untyped fields (a `u64` field kind would let the
+codec refuse a 7-byte height); a stranger and a revoked member are told apart (`unknownKey` vs
+`noFollowGrant`), which leaks membership to anyone who can reach host.sock; a reply larger than a
+frame is HOST's to split. **Meta-critique.** "Serve events, not Turns" is the cheaper wire and it
+makes the follower's CPU the audit; I chose it partly because there is no Turn codec yet.
+**Status.** open.

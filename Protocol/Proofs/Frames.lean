@@ -23,4 +23,10 @@ theorem commandFrame_lawful : Stream.Lawful commandFrame :=
 
 theorem resumeFrame_lawful : Stream.Lawful resumeFrame := Layout.codec_lawful _ _ _
 
+theorem signResultFrame_lawful : Stream.Lawful signResultFrame := Layout.codec_lawful _ _ _
+
+theorem envelopeFrame_lawful : Stream.Lawful envelopeFrame := Layout.codec_lawful _ _ _
+
+theorem logReplyFrame_lawful : Stream.Lawful logReplyFrame := Layout.codec_lawful _ _ _
+
 end Nanodregg.Protocol

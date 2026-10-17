@@ -136,7 +136,8 @@ pub fn run(
             } => return Ok((exit, stdout, stderr)),
             Step::Sign { message, k } => (k, Outcome::Signature(custody.sign(&message).to_vec())),
             Step::Host { op, payload, k } => {
-                let (status, payload) = host.exchange(op, &payload).map_err(RunError::Host)?;
+                let (status, payload) =
+                    host.exchange(op.code(), &payload).map_err(RunError::Host)?;
                 (k, Outcome::Reply { status, payload })
             }
             Step::Submit { call, k } => {

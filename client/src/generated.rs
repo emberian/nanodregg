@@ -143,6 +143,40 @@ pub mod layout {
         v.iter().try_for_each(|x| put_bytes(out, x, max))
     }
 
+    impl Cursor<'_> {
+        fn one_of<T>(&mut self, from_code: fn(u8) -> Option<T>) -> Result<T, Refusal> {
+            let at = self.i;
+            let tag = self.byte()?;
+            from_code(tag).ok_or(Refusal::BadTag { offset: at, tag })
+        }
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum Op {
+        Lookup,
+        Read,
+        Log,
+    }
+
+    impl Op {
+        pub fn code(self) -> u8 {
+            match self {
+                Op::Lookup => 2,
+                Op::Read => 3,
+                Op::Log => 4,
+            }
+        }
+
+        pub fn from_code(b: u8) -> Option<Self> {
+            match b {
+                2 => Some(Op::Lookup),
+                3 => Some(Op::Read),
+                4 => Some(Op::Log),
+                _ => None,
+            }
+        }
+    }
+
     #[derive(Debug, Clone, PartialEq, Eq)]
     pub struct Command {
         pub argv: Vec<Vec<u8>>,
@@ -214,7 +248,7 @@ pub mod layout {
             k: Vec<u8>,
         },
         Host {
-            op: u8,
+            op: Op,
             payload: Vec<u8>,
             k: Vec<u8>,
         },
@@ -245,7 +279,7 @@ pub mod layout {
                     Step::Sign { message, k }
                 }
                 2 => {
-                    let op = c.byte()?;
+                    let op = c.one_of(Op::from_code)?;
                     let payload = c.bytes(262144)?;
                     let k = c.bytes(262144)?;
                     Step::Host { op, payload, k }
@@ -281,7 +315,7 @@ pub mod layout {
                 }
                 Step::Host { op, payload, k } => {
                     out.push(2);
-                    out.push(*op);
+                    out.push(op.code());
                     put_bytes(&mut out, payload, 262144)?;
                     put_bytes(&mut out, k, 262144)?;
                 }

@@ -79,6 +79,15 @@ def receiver : Op → String
   | command => "Nanodregg.Protocol.Command.start"
   | resume => "Nanodregg.Protocol.Command.step"
 
+/-- The operations a `host` step may ask the client to relay. Not `submit`: a call reaches the
+writer only through a `submit` step, which the client freezes as an attempt first (CLIENT-3), so
+follow cannot make the client send a call outside the attempt store (PROTOCOL-9). -/
+def relayable : List Op := [lookup, read, log]
+
+def name : Op → String
+  | submit => "submit" | lookup => "lookup" | read => "read" | log => "log"
+  | command => "command" | resume => "resume"
+
 /-- Decode a request byte; anything else is refused before a payload is read. -/
 def ofCode? (b : UInt8) : Option Op := all.find? (·.code == b)
 
@@ -139,7 +148,7 @@ opaque continuation; the client echoes it back in `resume` and never reads it. -
 def layout : Step → Codec.Layout
   | done => [.byte "exit", .bytes "stdout", .bytes "stderr"]
   | sign => [.bytes "message", .bytes "k"]
-  | host => [.byte "op", .bytes "payload", .bytes "k"]
+  | host => [.oneOf "op" (Op.relayable.map fun o => (o.name, o.code)), .bytes "payload", .bytes "k"]
   | submit => [.bytes "call", .bytes "k"]
 
 end Step
@@ -150,6 +159,22 @@ def commandLayout : Codec.Layout := [.list "argv"]
 /-- The `resume` payload: the continuation from the step, and that step's result (the signature
 for `sign`; the Host's reply, `u8 status ‖ payload`, for `host` and `submit`). -/
 def resumeLayout : Codec.Layout := [.bytes "k", .bytes "result"]
+
+/-- What custody answers to a `sign` step (the `result` of the `resume`): its current public key,
+its precommitted NEXT public key (so follow can state the digest a sponsor or a rotation commits
+to), and the current key's signature over exactly the step's message. -/
+def signResultLayout : Codec.Layout := [.bytes "key", .bytes "next", .bytes "signature"]
+
+/-- The READ ENVELOPE: the payload of `log` (and `read`). A member's request to read the writer's
+log from a height, signed by its current key and gated by its follow grant (PROTOCOL-3, HOST-11):
+digests are `Env.bytes`, heights are u64le. The signed message is `Envelope.message` (domain tag,
+member, grant, from, validUntil); `validUntil` bounds a replay to a window of heights. -/
+def envelopeLayout : Codec.Layout :=
+  [.bytes "member", .bytes "grant", .bytes "from", .bytes "validUntil", .bytes "key", .bytes "signature"]
+
+/-- The `log` reply's payload: the signed calls (events) logged from the requested height, in log
+order. A follower re-derives every Turn from them (PROTOCOL-4), so it needs nothing else. -/
+def logReplyLayout : Codec.Layout := [.list "events"]
 
 /-! The bounds the client and the supervisor enforce before allocating. -/
 namespace Bounds
@@ -167,6 +192,10 @@ memory: each connection buffers at most one frame per direction, so the whole mu
 `2 * connectionsMax * frameBytesMax` bytes (32 MiB). A deployment's members are friends, not the
 public: past the bound the supervisor stops accepting, and the client sees a refused connect. -/
 def connectionsMax : Nat := 64
+/-- A remote (ssh-bridged) connection idle this long, with no frame in either direction, is closed
+by the supervisor (PROTOCOL-11). Five minutes: longer than any command's step round trip, and a
+slow-loris peer holds one of `connectionsMax` slots for at most this long. -/
+def idleMsMax : Nat := 300000
 
 end Bounds
 

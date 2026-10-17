@@ -5,7 +5,7 @@ use std::collections::VecDeque;
 use std::io;
 
 use nanodregg_client::custody::Custody;
-use nanodregg_client::generated::layout::Step;
+use nanodregg_client::generated::layout::{Op, Step};
 use nanodregg_client::run::{self, Follow, Host, Outcome, RunError, Table};
 
 // Test values, not the protocol's: the real ones are generated from Protocol/Table.lean.
@@ -59,7 +59,7 @@ fn round_trip_with_a_lost_submit_reply() {
     let mut follow = ScriptedFollow {
         steps: VecDeque::from([
             Step::Host {
-                op: 3,
+                op: Op::Read,
                 payload: b"challenge?".to_vec(),
                 k: b"k1".to_vec(),
             },

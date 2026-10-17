@@ -29,4 +29,13 @@ def commandFrame :
 def resumeFrame : Stream (Layout.Ty Bounds.frameBytesMax resumeLayout) :=
   Layout.codec Bounds.frameBytesMax (by decide) resumeLayout
 
+def signResultFrame : Stream (Layout.Ty Bounds.frameBytesMax signResultLayout) :=
+  Layout.codec Bounds.frameBytesMax (by decide) signResultLayout
+
+def envelopeFrame : Stream (Layout.Ty Bounds.frameBytesMax envelopeLayout) :=
+  Layout.codec Bounds.frameBytesMax (by decide) envelopeLayout
+
+def logReplyFrame : Stream (Layout.Ty Bounds.frameBytesMax logReplyLayout) :=
+  Layout.codec Bounds.frameBytesMax (by decide) logReplyLayout
+
 end Nanodregg.Protocol
