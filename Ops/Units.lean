@@ -103,10 +103,12 @@ structure Service where
 def supervisor (n : Node) : String := n.bin ++ "/nd-supervise"
 def hostExe (n : Node) : String := n.bin ++ "/host"
 
-/-- nd-supervise's grammar applied to the node: socket, `--write STORE`, every `--hide`, `--`,
-the host program and its arguments. -/
+/-- nd-supervise's grammar applied to the node: socket, `--write STORE`, `--exec HOST` (the
+program must lie under a read or exec entry, CLIENT's `ProgramOutside`; without it every unit
+exits 64 refusedAtLaunch, found by running the rendered argv on hbox), every `--hide`, `--`, the
+host program and its arguments. -/
 def Node.exec (n : Node) : List Arg :=
-  [.lit (supervisor n), .lit n.socket, .lit "--write", .lit n.store] ++
+  [.lit (supervisor n), .lit n.socket, .lit "--write", .lit n.store, .lit "--exec", .lit (hostExe n)] ++
   n.hide.flatMap (fun h => [.lit "--hide", .lit h]) ++ [.lit "--", .lit (hostExe n)] ++ n.args
 
 /-- Every path checks, or the first that does not. -/

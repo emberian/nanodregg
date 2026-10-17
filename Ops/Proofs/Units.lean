@@ -26,6 +26,21 @@ theorem ofNode_supervised (n : Node) (u : Service) (h : Service.ofNode n = .ok u
     · cases h
     · cases h; simp [Node.exec]
 
+/-- A rendered unit lets the child execute exactly its own program: `--exec HOST` precedes every
+`--hide`, and HOST is the program after `--` (CLIENT's `ProgramOutside` refuses a program outside
+every read and exec entry, so a unit without it exits 64 at every start). -/
+theorem ofNode_exec_program (n : Node) (u : Service) (h : Service.ofNode n = .ok u) :
+    u.exec.take 6 = [.lit (supervisor n), .lit n.socket, .lit "--write", .lit n.store,
+      .lit "--exec", .lit (hostExe n)] ∧ .lit (hostExe n) ∈ u.exec.drop 6 := by
+  unfold Service.ofNode at h
+  split at h
+  · cases h
+  · split at h
+    · cases h
+    · cases h
+      refine ⟨by simp [Node.exec], ?_⟩
+      simp [Node.exec]
+
 /-- Every rendered unit prevents exactly `preventCodes`. -/
 theorem ofNode_prevent_eq (n : Node) (u : Service) (h : Service.ofNode n = .ok u) :
     u.prevent = preventCodes := by

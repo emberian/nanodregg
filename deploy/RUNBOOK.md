@@ -33,12 +33,12 @@ Writer's node (systemd system unit, `deploy/units/linux/nd-host-serve.service`, 
 `emit-units deploy/units` from Host.Status and Protocol.SupervisorExit; `gates/generated.tsv`
 refuses a unit file that differs from the tables):
 
-    nd-supervise /run/nd/host.sock --write /srv/nd/store --hide /srv/nd/ws --hide /home -- /opt/nd/bin/host serve /srv/nd/store
+    nd-supervise /run/nd/host.sock --write /srv/nd/store --exec /opt/nd/bin/host --hide /srv/nd/ws --hide /home -- /opt/nd/bin/host serve /srv/nd/store
 
 Member machine (user unit `nd-host-follow.service`; `%h/.nd/nd-host-follow.env` holds
 `ND_MEMBER=<hex>` and `ND_GRANT=<hex>` from genesis/enrol):
 
-    nd-supervise %h/.nd/ws/follow.sock --write %h/.nd/follow-store --hide %h/.nd/ws --hide %h/.nd/holding -- /opt/nd/bin/host follow %h/.nd/follow-store ${ND_MEMBER} ${ND_GRANT}
+    nd-supervise %h/.nd/ws/follow.sock --write %h/.nd/follow-store --exec /opt/nd/bin/host --hide %h/.nd/ws --hide %h/.nd/holding -- /opt/nd/bin/host follow %h/.nd/follow-store ${ND_MEMBER} ${ND_GRANT}
 
 systemd restarts every failure except the fatal codes of both tables (`RestartPreventExitStatus`:
 the Host's fatal class and nd-supervise's 64 refusedAtLaunch and 65 childUnroutable); a fatal
