@@ -16,14 +16,16 @@ namespace Nanodregg.Lang
 
 open Nanodregg.Kernel.Receive
 
-/-- The closure invariant: ids, bodies and packages line up, and every body has its package's
-interface type in the closure. -/
+/-- The closure invariant: ids, bodies and packages line up, every body has its package's interface
+type in the closure, and every package passed its shape and field checks (so its state is a record
+and its methods and laws are interface fields at their shapes). -/
 def Inv (L : Loaded) : Prop :=
   L.ids.length = L.pkgs.length ∧ L.lib.length = L.pkgs.length ∧
-  ∀ (i : Nat) (t : Term) (P : Package), L.lib[i]? = some t → L.pkgs[i]? = some P →
-    HasType (Loaded.ifaces L) [] t P.iface
+  (∀ (i : Nat) (t : Term) (P : Package), L.lib[i]? = some t → L.pkgs[i]? = some P →
+    HasType (Loaded.ifaces L) [] t P.iface) ∧
+  ∀ (i : Nat) (P : Package), L.pkgs[i]? = some P → P.checkShape = .ok () ∧ P.checkFields = .ok ()
 
-theorem Inv.empty : Inv ⟨[], [], []⟩ := ⟨rfl, rfl, by simp⟩
+theorem Inv.empty : Inv ⟨[], [], []⟩ := ⟨rfl, rfl, by simp, by simp⟩
 
 mutual
 theorem relocate_id : ∀ t : Term, t.relocate (fun i => i) = t
@@ -82,6 +84,14 @@ theorem checkWith_typed {ifs : List Ty} {p : Package} (h : p.checkWith ifs = .ok
   · simp at h
   · rename_i hc; exact check_iff.mp hc
 
+theorem checkWith_checked {ifs : List Ty} {p : Package} (h : p.checkWith ifs = .ok ()) :
+    p.checkShape = .ok () ∧ p.checkFields = .ok () := by
+  unfold Package.checkWith at h
+  split at h
+  · simp at h
+  · simp at h
+  · rename_i hs _; exact ⟨hs, h⟩
+
 theorem indexIn_lt {b : ByteArray} : ∀ {ids : List ByteArray} {i : Nat}, indexIn b ids = some i →
     i < ids.length
   | [], _, h => by simp [indexIn] at h
@@ -101,7 +111,7 @@ theorem admitPackage_inv {D : Type} {idb : ByteArray} {p : Package} {acc L : Loa
     {gis : List Nat} {g : Nat} (hi : Inv acc)
     (h : admitPackage (D := D) idb p acc gis = .ok (L, g)) :
     Inv L ∧ g < L.pkgs.length ∧ L.pkgs = acc.pkgs ++ [p] := by
-  obtain ⟨hids, hlib, hty⟩ := hi
+  obtain ⟨hids, hlib, hty, hck⟩ := hi
   unfold admitPackage at h
   split at h
   · simp at h
@@ -113,7 +123,19 @@ theorem admitPackage_inv {D : Type} {idb : ByteArray} {p : Package} {acc L : Loa
       obtain ⟨rfl, rfl⟩ := h
       have hΔ : Loaded.ifaces ⟨acc.ids ++ [idb], acc.lib ++ [p.body.relocate fun i => gis.getD i 0],
           acc.pkgs ++ [p]⟩ = Loaded.ifaces acc ++ [p.iface] := by simp [Loaded.ifaces]
-      refine ⟨⟨by simp [hids], by simp [hlib], ?_⟩, by simp [hids], rfl⟩
+      refine ⟨⟨by simp [hids], by simp [hlib], ?_, ?_⟩, by simp [hids], rfl⟩
+      rotate_left
+      · intro i P hP
+        simp only at hP
+        by_cases lt : i < acc.pkgs.length
+        · rw [List.getElem?_append_left lt] at hP; exact hck i P hP
+        · rw [List.getElem?_append_right (by omega)] at hP
+          have e1 : i - acc.pkgs.length = 0 := by
+            cases h' : i - acc.pkgs.length with
+            | zero => rfl
+            | succ k => rw [h'] at hP; simp at hP
+          rw [e1] at hP; simp at hP; subst hP
+          exact checkWith_checked hc
       intro i t P ht hP
       rw [hΔ]
       simp only at ht hP
@@ -191,12 +213,19 @@ end
 
 end
 
+/-- Every package of a loaded closure passed its install checks again at load. -/
+theorem load_checked {D : Type} {digestOf : ByteArray → Option D} {look : Pinned D}
+    {fuel : Nat} {idb : ByteArray} {L : Loaded} {g : Nat}
+    (h : load digestOf look fuel idb ⟨[], [], []⟩ = .ok (L, g)) :
+    ∀ (i : Nat) (P : Package), L.pkgs[i]? = some P → P.checkShape = .ok () ∧ P.checkFields = .ok () :=
+  (load_inv digestOf look fuel idb _ Inv.empty h).1.2.2.2
+
 /-- Every closure a receiver loads is a well-typed library for its packages' interfaces. -/
 theorem load_libTy {D : Type} {digestOf : ByteArray → Option D} {look : Pinned D}
     {fuel : Nat} {idb : ByteArray} {L : Loaded} {g : Nat}
     (h : load digestOf look fuel idb ⟨[], [], []⟩ = .ok (L, g)) :
     LibTy (Loaded.ifaces L) L.lib ∧ g < L.pkgs.length := by
-  obtain ⟨⟨_, hlib, hty⟩, hg, _⟩ := load_inv digestOf look fuel idb _ Inv.empty h
+  obtain ⟨⟨_, hlib, hty, _⟩, hg, _⟩ := load_inv digestOf look fuel idb _ Inv.empty h
   refine ⟨fun i T hT => ?_, hg⟩
   simp only [Loaded.ifaces, List.getElem?_map, Option.map_eq_some_iff] at hT
   obtain ⟨P, hP, rfl⟩ := hT
@@ -221,7 +250,7 @@ theorem recordRow_find {T : Ty} {ℓ : Label} {t : Ty} (h : Row.find? ℓ (recor
 /-- A method of a loaded package, applied to a state, arguments and a request of the right types,
 runs in the loaded closure without ever reaching `stuck`: it ends with a new state of the package's
 state type, or a named budget/arithmetic fault. (That the values decoded from the cells HAVE those
-types is the decoder's conformance, not yet a theorem.) -/
+types is `decodeData_conforms`/`readState_conforms`; `Lang.Proofs.Invoke` composes them.) -/
 theorem method_run_sound {D : Type} {digestOf : ByteArray → Option D} {look : Pinned D}
     {fuel : Nat} {idb : ByteArray} {L : Loaded} {g : Nat} {p : Package} {ℓ : Label} {mty A : Ty}
     {sv av rv : Val} {ticks : Nat}

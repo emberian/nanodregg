@@ -16,17 +16,17 @@
 | Rust lines | 2826 | — |
 | Rust lines (client/src) | 1625 | 2000 |
 | partial defs (deployed) | 0 | 0 |
-| theorems | 433 | — |
+| theorems | 446 | — |
 | sorry | 0 | 0 |
-| Lean modules | 103 | — |
-| Lean proof-modules | 40 | — |
+| Lean modules | 104 | — |
+| Lean proof-modules | 41 | — |
 | Lean lines (Census) | 89 | — |
 | Lean lines (Codec) | 3185 | — |
 | Lean lines (Emit) | 344 | — |
 | Lean lines (Host) | 1677 | — |
 | Lean lines (Kernel) | 3248 | — |
 | Lean lines (Protocol) | 1646 | — |
-| max dependents of one module | 75 | — |
+| max dependents of one module | 76 | — |
 | native (extern/implemented_by) | 8 | 8 |
 | C lines | 0 | 146 |
-| Lean lines (Lang) | 4120 | — |
+| Lean lines (Lang) | 4281 | — |
