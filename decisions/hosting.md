@@ -966,3 +966,125 @@ code is red. The pass-through mapped to `deciderSignaled` (the reader's survivin
 **Flag day.** keybroker's and hosting-broker's exit codes change (1/2 to the table), and
 `broker_generated.rs` gains `keybroker_exit`. OPS renders the unit from the tables. Nothing persisted
 changes.
+
+## HOSTING-17 Who may connect to a resident's broker socket, and where it sits (HOSTING-6, 2026-10-18, owed to OPS)
+
+**Question** (OPS-2, from 11a9c97): keybroker binds its resident sockets 0600 under `UMask=0077` in
+`/run/nd-keybroker/sock`, so only uid `nd` can connect. Which uid do hosted residents connect as, where
+must SOCKDIR sit, and what does a connector check?
+
+**The premise that decides it: a grain must never run as the key holder's uid.** keybroker runs as `nd`
+and reads `/etc/nd/keybroker/provider.key` (nd, 0600); `host serve` runs as `nd` and writes `/srv/nd/store`.
+The sandbox separates grains by mount namespace, not by uid (HOSTING-11: bwrap in a user namespace, the
+outside credentials are the launcher's). So a grain run as `nd` that escapes its sandbox reads the
+operator's provider keys and can write the Store. Today the only way a resident reaches a 0600 nd socket
+is to BE nd. That is the widest arrangement there is, so the answer starts by narrowing it.
+
+**Decision.**
+1. **Two uids.** `nd` runs host serve and keybroker (and its decider). A new system user **`nd-hosted`**
+   (primary group `nd-hosted`, no supplementary groups, no login) runs `grain-launch`, the controller
+   and every grain. `nd` is not in group `nd-hosted`. A sandbox escape is then the hosted uid: it cannot
+   read the provider key (nd 0600) or write the Store.
+2. **One directory per resident, owned by the broker, reachable by the hosted group only.**
+   SOCKDIR = `/run/nd-broker`, made by the operator (tmpfiles.d `d /run/nd-broker 2710 nd nd-hosted -`),
+   NOT a systemd `RuntimeDirectory` (systemd deletes those at every stop; see 4). Mode 02710: nd writes,
+   the group may only traverse (no listing), others nothing, and the setgid bit makes every inode made
+   inside it group `nd-hosted` without nd being a member of that group. Resident `r`'s socket is
+   `SOCKDIR/<r>/broker.sock` with `<r>` = `Controller.dirOf` of the resident grain's World id (the name
+   HOSTING-13 already uses). keybroker makes `SOCKDIR/<r>` (02710, inherited group) and binds the socket,
+   then sets it **0660** (owner nd, group nd-hosted). There is no shared socket directory a grain can see:
+   a resident's sandbox binds exactly its own `SOCKDIR/<r>` (Policy.connect, below), so another resident's
+   socket is absent (ENOENT), as a neighbour's volume is.
+3. **keybroker checks what it serves on, by name, before any socket opens** (custody plumbing, like the
+   key file): SOCKDIR is a directory, not a symlink, owned by the euid, mode exactly 02710, and every ancestor passes CLIENT-19's StrictModes rule (owner euid or root, no
+   g/o write); an existing `SOCKDIR/<r>` must be a directory owned by the euid with SOCKDIR's group and mode
+   02710; an existing `broker.sock` must be a socket owned by the euid (the last life's, unlinked and
+   rebound); anything else at either path ends keybroker `sockDir` (a new KeybrokerExit row, fatal). After
+   bind the socket's group must equal SOCKDIR's (`sockDir` otherwise: the setgid bit was lost).
+   **On every accept**, keybroker reads the peer's credentials (`SO_PEERCRED`, which the kernel translates
+   out of the bwrap user namespace) and serves only a peer whose gid is SOCKDIR's group AND whose uid is
+   the hosted uid, keybroker's new argument PEER (operator data: the uid of `nd-hosted`; ROOT's condition,
+   10-18, so that a second user given the group is still refused). Any other peer (nd itself, root, a user
+   holding the group, a user of the right gid and another uid) gets the wire refusal **`peerRefused`** (a
+   new keybroker-reported `Broker.Refusal`, code 20) and the connection closes. Never served silently.
+   **keybroker creates nothing in `SOCKDIR/<r>` but `broker.sock`** (PROTOCOL-7's condition): the sandbox
+   binds that directory, so anything else keybroker put there would be in the resident's view. The row
+   checks that the bound directory, listed inside, is exactly `broker.sock` (one uid; at 02710 the hosted
+   uid cannot list it at all in the deployment).
+4. **Restart without relaunch.** The sandbox binds the resident's DIRECTORY, not the socket inode. A
+   restarted keybroker unlinks and rebinds `broker.sock`; a socket-file bind inside a running sandbox would
+   still name the dead inode (ECONNREFUSED until the resident is relaunched), and a directory bind sees the
+   new one. That is why SOCKDIR outlives the unit (tmpfiles, not RuntimeDirectory) and why `<r>` is a
+   directory.
+5. **What the connector checks (CLIENT's `Policy.connect`, asked of CLIENT-3).** `connect` is a list of
+   socket paths, at most `connectMax` = 2 (a named bound; a third entry is refused by name). Why two, not
+   one: no process of the resident design reaches more than two sockets. The model driver reaches its
+   broker socket and its own `nd`. The resident's `nd` (its custody) reaches the host socket and its
+   follow socket. One would force one of those through a proxy; three admits a socket nobody has named.
+   Each entry is one socket path. At resolve, before any process exists: `lstat` is a socket (`ConnectNotSocket`, a symlink
+   `ConnectLink`); no other-bits (`ConnectMode`); EITHER owner = euid and mode exactly 0600 (one uid: the
+   test, and a single-user box) OR owner ≠ euid, group = egid and mode exactly 0660 (the deployment) —
+   anything else is `ConnectMode` / `ConnectOwner`; every ancestor owned by root, the euid or the socket's
+   owner, with no g/o write (`Dir(path)`). Linux binds the entry's parent directory read-only (which, by
+   2, holds that socket and nothing else); macOS allows `network-outbound` to that one `path-literal`. A
+   socket outside the policy is unreachable from inside (ENOENT on Linux): CLIENT's plant.
+6. **Where the path comes from.** Lean's plan for `kind = resident` carries `connect = [[<dirOf id>,
+   "broker.sock"]]`, relative to the operator's broker root, as `read`/`write` are relative to the hosting
+   root (Lean never sees the OS). grain-launch gains the argument BROKER (= SOCKDIR) and joins it; the
+   launch frame gains `connect : paths` (a re-emit of `launcher/src/generated.rs`, CODEC's).
+7. **For OPS-3 to render** (both users' units, and tmpfiles for SOCKDIR). nd-keybroker.service: SOCKDIR
+   argument `/run/nd-broker`, a new PEER argument (the `nd-hosted` uid);
+   `RuntimeDirectory=nd-keybroker` only (PIDS; the `nd-keybroker/sock` entry is deleted); a tmpfiles.d
+   file for `/run/nd-broker` as in 2; `UMask=0077` stays (keybroker sets 0660 on the socket explicitly);
+   no `SupplementaryGroups`. A grain-launch unit (when OPS renders one): `User=nd-hosted`,
+   `Group=nd-hosted`, its argv gains BROKER; and an `nd-hosted` follower unit (`host follow` into the
+   hosted user's own Store) that the controller tails. RUNBOOK §2a gains the `nd-hosted` user and the
+   tmpfiles line.
+
+**Alternatives.** (a) ROOT's starting default: the socket owned by the resident's uid, 0600, under the
+resident's own 0700 directory. The socket's owner is whoever binds it, and the binder is keybroker; for
+the inode to be the resident's, keybroker would have to BE the resident's uid (the shared-uid hole above)
+or receive listening descriptors bound by the hosting side over a control socket (SCM_RIGHTS: a control
+protocol, re-registration on every keybroker restart, and the same impersonation exposure as below).
+Kept from it: one socket per resident in its own directory, no shared directory, refusals by name for a
+wrong owner or mode. Changed: the owner is the broker and access is the hosted group at 0660. (b) Grains
+run as nd: refused (key theft on escape). (c) Abstract sockets: no file permissions at all. Refused. (d)
+systemd `.socket` units: static, and residents come from the World. Refused. (e) A socket-file bind:
+breaks on broker restart (4). (f) keybroker in group nd-hosted and an explicit chgrp: membership gives nd
+the hosted group's files for nothing; the setgid directory does it with no membership. (g) A peer UID
+argument instead of the group rule: one more operator argument for the same fact SOCKDIR's group states.
+
+**CRITIQUE.** All grains share `nd-hosted`. A grain that escapes its sandbox can connect to EVERY
+resident's socket (the group grants it; only the mount namespace withheld it) and spend any resident's
+allowances, and it can read every resident's custody files. It still cannot read a provider key or write
+the Store. Per-grain uids (subordinate uid ranges and a privileged mapper) are the fix, and they change the
+grain design, not this decision. `peerRefused` keys on the peer's gid, which a process can drop only toward
+less access, but root passes nothing and a root peer is refused, which is right. On one uid (every test on
+hbox) the owner/0600 branch runs and the cross-uid branch, `ConnectOwner` and `peerRefused`, cannot
+be produced; those are review-guarded until a two-uid box runs them (the plant for `peerRefused` uses a
+SOCKDIR whose group is a supplementary group of the test user: every ask is refused). keybroker cannot tell a SOCKDIR whose
+group is its own primary group (grains run as nd: the hole of the premise) from the one-uid test, so that
+misconfiguration is the install's to refuse (OPS: the tmpfiles line names `nd-hosted`), not keybroker's. The fix is cv task
+01a14aad-fc83 whose trigger is the first deployment that hosts grains for more than one
+principal. **The controller runs as `nd-hosted` against its OWN follower Store** (ROOT, 10-18): a `host
+follow` running as `nd-hosted`, its Store under an `nd-hosted` 0700 chain, which the controller tails (law
+5: the follower is the replayer). It never reads the writer's files or their key. HOST-9 agrees the
+follower's socket path shape. `peerRefused`'s uid half is planted on one uid by configuring PEER as
+another uid (every ask is then refused): the same comparison as a wrong-uid peer, which one uid cannot
+produce. The resident's own nd (its custody,
+the ASSEMBLY's second process) connects to host.sock across the same uid boundary; that is CLIENT-12's
+attach design, not this.
+**META.** I started from ROOT's default and kept its shape until the binder question broke it, which is
+the anchoring a default invites; the reason to leave it is a concrete hole (escape = keys), not taste. I
+reached for the group-plus-setgid idiom by familiarity with how mail spools and X sockets do it; the test is
+whether the per-uid fix (CRITIQUE) arrives and makes the group unnecessary, and then this decision is
+deleted, not kept beside it.
+**Custody.** This widens who may connect to keybroker from uid nd to the `nd-hosted` group, and narrows
+what a hosted process can read (no key, no Store write). ROOT APPROVED 10-18 with the
+conditions folded in above (the peer uid, the named residue and its cv task, the StrictModes check of
+SOCKDIR and each per-resident directory, `connectMax` = 2, the controller on its own follower Store), and
+puts it to Ember to ratify as a custody change.
+**Flag day.** keybroker gains PEER and its SOCKDIR layout changes (`<r>.sock` → `<r>/broker.sock`), KeybrokerExit gains
+`sockDir`, Broker.Refusal gains `peerRefused` (broker_generated.rs re-emitted), the launch frame gains
+`connect` (generated.rs re-emitted), grain-launch gains BROKER, the keybroker unit is re-rendered. Nothing
+persisted changes.
