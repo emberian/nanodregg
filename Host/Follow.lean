@@ -46,8 +46,10 @@ def Refusal.name : Refusal → String
 /-- How many heights a call or envelope follow plans stays valid. -/
 def window : Nat := 128
 
-/-- One frame's answer: follow's World after it, the Turns it absorbed, the reply. -/
-def answer (me : Command.Self D) (w : World D) (f : Frame) : World D × List (Turn D) × UInt8 × ByteArray :=
+/-- One frame's answer: follow's World after it, the Turns it absorbed, the reply. Generic in the
+`Ctx`, so PROTOCOL's rows drive this very function on their toy digest. -/
+def answer {D : Type} [Ord D] [DecidableEq D] (X : Receive.Ctx D) (me : Command.Self D) (w : World D)
+    (f : Frame) : World D × List (Turn D) × UInt8 × ByteArray :=
   let refused (r : Refusal) := (w, [], named r.name)
   let stepOut (w' : World D) (ts : List (Turn D)) (r : Command.Reply) :=
     match r.bytes with
@@ -76,7 +78,7 @@ def loop (keys : Keys) (me : Command.Self D) (store : Store) (ck : Checkpoint (W
       | .ok r => pure r
       | .error f => return (.sealFailed f, { r with pending := none })
     let some f ← port.recv | finish .eof r
-    let (w', ts, status, payload) := answer me r.world f
+    let (w', ts, status, payload) := answer X me r.world f
     if ts.isEmpty then
       port.send ⟨f.conn, status, payload⟩
       loop keys me store ck port fuel { r with world := w' }
