@@ -191,6 +191,25 @@ theorem leaf_lawfulOn : LawfulOn Leaf.Fits leaf := by
     | entry e => exact h
     | spent => exact trivial
 
+/-- A leaf in the leaf codec's domain holds, if a live cell, a cell in the cell codec's domain. -/
+theorem leaf_fits_cellFit : ∀ {l : Leaf}, Leaf.Fits l → l.CellFit Cell.Fits
+  | .entry (.live _), h => h
+  | .entry .tomb, _ => trivial
+  | .spent, _ => trivial
+
+/-- Every leaf Lean's leaf decoder returns is `CellFit Cell.Fits`, and is the decoding of exactly those
+bytes: a read over leaf BYTES needs no premise about the leaf (CLIENT-16; KERNEL's phone read). -/
+theorem leaf_decode_cellFit {b : ByteArray} {l : Leaf} (h : leaf.decode b = .ok l) :
+    l.CellFit Cell.Fits ∧ b = leaf.bytes l :=
+  let ⟨hf, hb⟩ := leaf_lawfulOn.eq_bytes_of_decode h
+  ⟨leaf_fits_cellFit hf, hb⟩
+
+/-- Tooth: `CellFit Cell.Fits` excludes something — no bytes decode to a leaf holding a cell of kind
+`2^32` (outside the cell codec's domain), so `leaf_decode_cellFit` is not `True`. -/
+theorem leaf_decode_refuses_misfit (b : ByteArray) :
+    leaf.decode b ≠ .ok (.entry (.live ⟨2 ^ 32, .ram, []⟩)) := fun h =>
+  absurd (leaf_decode_cellFit h).1.1 (by decide)
+
 section Leaves
 variable {K V D' : Type} [DecidableEq K] (S : Trie.Spec K V D')
 

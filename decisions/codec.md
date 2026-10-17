@@ -600,4 +600,11 @@ caller can pass a wrong length.
 **Meta-critique.** I chose the template over a Lean-evaluated test table because the predicate has four
 clauses and the differential theorem I owe for `path_clean` (CODEC-21) is the general fix for both; this
 adds a second instance of the same debt rather than a new kind.
-Status: built.
+Status: DELETED (ROOT's ruling on CLIENT-16). `cell_fits` had no caller: a leaf refusal is a decision, so it
+belongs to Lean's leaf decoder, and the phone reads through that decoder. What replaced it is a theorem:
+`Codec.Kernel.leaf_decode_cellFit : leaf.decode b = .ok l → l.CellFit Cell.Fits ∧ b = leaf.bytes l`
+(Codec/Proofs/World.lean, from `leaf_lawfulOn`), with the tooth `leaf_decode_refuses_misfit` (no bytes decode
+to a leaf holding a kind-2^32 cell). `cell_fits_iff_bounds` and `cell_fits_kind_strict` went with it, because
+nothing in Lean used them.
+**Critique of the first version.** I emitted a predicate before asking whether anything would call it. An
+emitted check with no caller cannot go red, which is the no-op-for-later that the charter forbids.

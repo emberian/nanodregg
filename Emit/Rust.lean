@@ -2,7 +2,6 @@ import Protocol.Table
 import Protocol.Attempt
 import Protocol.Exit
 import Codec.Layout
-import Kernel.Bounds
 
 /-!
 # Emit.Rust — the Rust copy of the protocol table
@@ -590,40 +589,9 @@ def header : String :=
   "// Regenerate: lake exe emit-rust client/src/generated.rs\n" ++
   "// Check:      lake exe emit-rust --check client/src/generated.rs"
 
-/-- `Codec.Kernel.Cell.Fits` (the cell codec's domain) as Rust, for CLIENT's leaf-fit refusal: the four
-numbers are `Kernel.Bounds`' own, the ones `Codec.Kernel.cell_fits_iff_bounds` states `Cell.Fits` by, so
-the phone re-derives no bound. A bound that does not fit `u64` refuses to emit. -/
-def cellFitsModule : Except String String := do
-  let consts : List (String × String × Nat) :=
-    [("KIND_LIMIT", "A cell's kind is below this (Kernel.Bounds.kindLimit).", Nanodregg.Kernel.Bounds.kindLimit),
-     ("SLOTS_MAX", "A cell has at most this many slots (Kernel.Bounds.slotsPerCellMax).",
-       Nanodregg.Kernel.Bounds.slotsPerCellMax),
-     ("SLOT_KEY_LIMIT", "Every slot key is below this (Kernel.Bounds.slotKeyLimit).",
-       Nanodregg.Kernel.Bounds.slotKeyLimit),
-     ("VALUE_BYTES_MAX", "Every slot value is at most this many bytes (Kernel.Bounds.valueBytesMax).",
-       Nanodregg.Kernel.Bounds.valueBytesMax)]
-  let lines ← consts.mapM fun (n, doc, v) =>
-    if v < 2 ^ 64 then pure s!"    /// {doc}\n    pub const {n}: u64 = {v};"
-    else throw s!"bound {n} = {v} does not fit u64"
-  pure <| String.intercalate "\n" ([
-    "/// The cell codec's domain, `Codec.Kernel.Cell.Fits` (`Codec.Kernel.cell_fits_iff_bounds`): a cell",
-    "/// encodes, and reads back from its bytes, exactly when `fits` holds.",
-    "pub mod cell_fits {"] ++ lines ++ [
-    "",
-    "    /// `Cell.Fits` of a cell with this kind and these slots, each as (key, value length).",
-    "    pub fn fits(kind: u64, slots: &[(u64, usize)]) -> bool {",
-    "        kind < KIND_LIMIT",
-    "            && slots.len() as u64 <= SLOTS_MAX",
-    "            && slots",
-    "                .iter()",
-    "                .all(|&(k, len)| k < SLOT_KEY_LIMIT && len as u64 <= VALUE_BYTES_MAX)",
-    "    }",
-    "}"])
-
 /-- The whole file. -/
 def file : Except String String := do
   let consts ← bounds.mapM u32Const
-  let cellFits ← cellFitsModule
   let opsOn (s : Socket) := Op.all.filter (·.socket == s)
   pure <| String.intercalate "\n\n"
     [header,
@@ -637,8 +605,7 @@ def file : Except String String := do
      byteModule "step" Step.all Step.code,
      byteModule "supervisor_exit" SupervisorExit.all (fun s => s.code.toUInt8),
      layoutModule,
-     attemptModule,
-     cellFits] ++ "\n"
+     attemptModule] ++ "\n"
 
 /-- `EXE PATH` writes the file; `EXE --check PATH` exits 1 if PATH differs. -/
 def runWith (exe : String) (file : Except String String) (args : List String) : IO UInt32 := do
