@@ -537,4 +537,26 @@ formulas (every point on the curve, each step the Edwards law), ladder by vector
 it), and I stopped there because the next step needs a primality certificate for 2^255 − 19 in Lean core with
 no Mathlib. That is a cost estimate, not a constraint: it is CODEC-23 part 2, the next codec obligation after
 the owed flag-day work, and it is recorded here so this half is not read as the group law.
-Status: part 1 built; part 2 (primality of p, d non-square, completeness `Z₃ ≠ 0`, `mul2` = `[a]P + [b]Q`) open.
+**Part 2 (CODEC-3, 2026-10-17): completeness.** `Codec/Prime.lean` (def): `powMod`, structural square-and-multiply.
+`Codec/Proofs/Prime.lean`: `IsPrime`, `powMod_spec`, and `pratt` — if `qs` are primes with product `n − 1`,
+`a^(n−1) ≡ 1` and `a^((n−1)/q) ≢ 1` for each `q`, then `n` is prime — proved in core Lean with no library
+(the order of `a` is exactly `n − 1`; its powers are `n − 1` distinct nonzero residues, hence all of them
+by a counting lemma `card_lt`; so a proper divisor of `n` is a unit, and a unit dividing `n` is 1); with
+`pratt_fermat`. `p_prime` / `p_fermat`: `2^255 − 19` by a 52-node certificate tree generated offline
+(sympy `factorint`/`primitive_root`) and checked node by node by `decide +kernel` (4 s, 1.2 GB).
+Tooth `fermat_alone_is_not_prime`: 341 passes `2^340 ≡ 1` and fails the order condition.
+`Codec/Proofs/Complete.lean`: `fin_inv` (`Fin p` is a field, inverse `x^(p−2)`), `d_nonsquare` (Euler:
+`powMod d ((p−1)/2) p = p − 1`, and a square would give 1 by Fermat), `sqrtM1_sq`; `complete_affineR`
+(Bernstein–Lange: with `−1 = i²` and `d` a non-square, `(d x₁x₂y₁y₂)² ≠ 1` on the curve), its projective
+forms `add_properR` / `double_properR`, and `Point.Proper` (on the curve, `Z ≠ 0`) kept by
+add/double/neg/zero/step/ladder/mul2, with `B_proper` and `decodePoint_proper`. So the cross-multiplied
+laws of part 1 are the affine Edwards law at every point `verify` computes. Tooth
+`onCurve_admits_degenerate`: `(0,0,0,0)` satisfies the curve equations and its sum has `Z = 0`, so the
+`Z ≠ 0` of `Proper` is what makes the laws non-vacuous. Lesson (kernel): a defeq goal `(P.neg.Z …) = (P.Z …)`
+left to `exact` makes the kernel try structure eta on `Point.neg P =?= P`, which unfolds the limb
+arithmetic (20 GB, deep recursion); reduce the projection first (`unfold; dsimp only`).
+**Critique of part 2.** Still not the GROUP: `mul2 P Q PQ a b n = [a]P + [b]Q` needs associativity of
+the law on projective classes (and that `PQ = P.add Q` is what `verify` passes), and `verify`'s final
+check is then the RFC's cofactored equation. The primality proof trusts `decide +kernel` (the kernel's
+GMP-accelerated `Nat` arithmetic), as every literal check here does.
+Status: parts 1–2 built; part 3 (`mul2` = `[a]P + [b]Q` via associativity; `verify` = the RFC equation) open.
