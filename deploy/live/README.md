@@ -73,3 +73,18 @@ before anything runs). On hbox at 8be4026:
   `sharedDirRefused: Dir(...)`: the rendered `--group ${ND_GID}` sits where its grammar takes it and
   the shared-dir check refuses a chain another can write, by name. The positive run (a passing
   chain, the follower serving, an nd-group peer connecting) needs burst5's `/srv/scratch`: PENDING.
+
+## The keybroker unit (OPS-3): `broker.sh SRC ROOT`
+
+`emit-units --live ROOT DIR` also renders `nd-ops-live-keybroker.service` from `Ops.Units.liveBroker`:
+the deployed keybroker render as a user unit (no `User=`, no RuntimeDirectory, PIDS under ROOT),
+upstream an unreachable local port. Rows: keybroker-unit-starts (ExecStartPre passes on the pinned
+anchors; the resident socket 0660 in its 02710 directory; the decider running confined under
+NoNewPrivileges=yes), decider-killed-is-restarted (SIGKILL by keybroker's own PID file →
+deciderSignaled, restarted), anchors-edited-refused-at-start (one byte → ExecStartPre refuses every
+start, start limit, no socket), key-mode-0644-stops (keyFileMode, NRestarts=0), sockdir-mode-stops
+(SOCKDIR 0755 → sockDir, no socket). Codes are read from EXITS.md by name. ROOT's chain must pass
+StrictModes (the script sets umask 022 and ROOT 0755: hbox's umask 002 made a first preflight end
+`keyFileDir`). Preflight outside systemd on hbox (`~/.cache/nd-t`, the broker test's scratch):
+keybroker binds `broker/01/broker.sock` 0660, writes `pids/decider.pid`, and runs until stopped.
+Run under systemd: PENDING (burst5, INTEGRATOR-6's window).
