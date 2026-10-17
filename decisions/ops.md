@@ -202,3 +202,23 @@ transient BY ASSUMPTION in both tables; the limit is the only check of that assu
 the test is whether anything else would have caught the stale table: nothing did for ten commits.
 I did not argue (b) with HOST/CLIENT, whose classes it reinterprets as "transient up to 5 in 120 s".
 **Status.** landed with this commit; HOST-5 and CLIENT told of the coupling.
+
+## OPS-7 · the broker's production TLS anchors are a build-pinned generated file (HOSTING-15, 2026-10-17)
+
+**Decision.** `deploy/tls/anchors.pem` is the keybroker's ANCHORS for production: concatenated PEM
+CERTIFICATE blocks, one per `webpki_root_certs::TLS_SERVER_ROOT_CERTS` entry in the crate's order,
+emitted by `emit-anchors` (workspace member `deploy/anchors`, webpki-root-certs `=1.0.9`). The
+`cargo:emit-anchors deploy/tls/anchors.pem` row of gates/generated.tsv (GATES-2's 2ed0386) checks
+it byte for byte on every commit, so an edit that widens trust is red, and so is a version bump
+without a re-emit. A test passes its own CA file; production never does.
+**Alternatives.** (1) The broker reads webpki-root-certs at runtime: no operator data, but then the
+test cannot pass its own CA without a second code path (HOSTING-15's reason for ANCHORS). (2) The
+OS trust store: not pinned by build, and differs per box. (3) A Lean emitter: the roots are a Rust
+crate's bytes; a Lean copy would be a twin.
+**CRITIQUE.** The pin decides trust: 121 public roots is wider than the one upstream the broker
+calls. A per-upstream pin (one root, or the upstream's own CA) would be narrower; that is
+HOSTING's call per upstream, and this file is the default. The base64 encoder is hand-written
+(no dependency) and tested only on RFC 4648's vectors and by openssl parsing all 121 blocks once.
+**META-CRITIQUE.** "Generated + checked" is the shape I already own (emit-units, STORE.md), so I
+reached for it; the test of it is the alternative (1)'s second path, which it avoids.
+**Status.** landed with the file it checks.

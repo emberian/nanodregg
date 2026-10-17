@@ -3,4 +3,4 @@
 # devtools/tests/workspace.rs.
 [workspace]
 resolver = "3"
-members = ["attach", "client", "devtools", "launcher", "sandbox"]
+members = ["attach", "client", "deploy/anchors", "devtools", "launcher", "sandbox"]
