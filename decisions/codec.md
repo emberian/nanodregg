@@ -601,8 +601,44 @@ for `B` (`L` prime is RFC 8032's statement; its primality is not proved here). T
 printed by evaluating the deployed ladder (hbox logs/codec4-order.lean) and are checked, not trusted.
 `L` prime: `Codec/Proofs/PrimeL.lean`, `Prime.L_prime : IsPrime Ed25519.L` (a 35-node Pratt tree over the
 known factorization of `L − 1`, built by `pratt_check` as `p_prime` was; 0.9 GB, 5 s).
-Status: parts 1–3 built. Open: decode ∘ encode (signature correctness: `verify (publicKey s) m (sign s m)`
-for every seed).
+**Part 4 (CODEC-5, 2026-10-18): decode ∘ encode and signature correctness — CODEC-23 is COMPLETE.**
+`Codec/Proofs/Ed25519/Bytes.lean`: `leNat_le32Bytes` (reading `le32Bytes n` back is `n mod 2^256`), `leNat_lt`
+(32 bytes spell a number below `2^256`, so the sign bit is 0 or 1), `leNat_append_left/right`, `le32Bytes_size`.
+`Codec/Proofs/Ed25519/Decode.lean`: `pow_toNat` / `pow_val` (`Fe.pow` is the power of the value; powers are taken
+through `Nat`, never `Fin`'s unary `npow`), `inv_val` (`Fe.inv` inverts every unit, Fermat), `sqrtRatio_some` (if
+`u = v x²`, `v ≠ 0`, the candidate `u v³ (u v⁷)^((p−5)/8) = x^((p+3)/4)` satisfies `v c² = ±u` by Euler's criterion,
+`x^((p−1)/2) = ±1`, so `rootCheck` returns), `den_ne_zero` (`d y² + 1 ≠ 0` since `d` is a non-square and `−1` a
+square), `recoverX_root` (what `recoverX` returns is `±x`), `signed_some`, and the two halves of the RFC 8032
+§5.1.3 specification: `decodePoint_affine` — what decode returns names the affine `(x, y)` with `y = n mod 2^255
+< p`, on the curve, `x` of the sign bit's parity — and `decodePoint_some` — for every such `(x, y)` decode returns a
+point naming it. Together: decode accepts exactly the RFC's encodings and returns the RFC's point (the root of the
+right parity; `x = 0` with sign 1 refused because no `x` of value 0 is odd; `y ≥ p` refused).
+`Codec/Proofs/Ed25519/Sign.lean`: `encode_affine` (a proper point names the `(x, y)` `encodePoint` writes),
+`decode_encode` (an honestly encoded proper point decodes to itself projectively, whatever bytes follow),
+`baseMul_same` (`baseMul k = [k] B`), `rep_mul` (`[m n] P = [m][n] P`), `rep_mod_L` (`[m] B = [m mod L] B`, from
+`B_order`), `rfc_holds`, and **`sign_verifies : verify (publicKey seed) msg (sign seed msg) = true`** for every
+seed and message. Tooth: `decode_flipped_sign` — a point with `x ≠ 0` encoded with the sign bit flipped decodes
+to its negation, which is not the point — and `B_sign_bit_needed`, that instance at `B` (`B_x_ne_zero` by kernel
+arithmetic), so the sign rule is load-bearing and the premise is satisfiable.
+What the Ed25519 chain now proves end to end, all kernel-checked: the field (`mul/add/sub/ofNat_toNat`, CODEC-18),
+`p` prime (`p_prime`), `L` prime (`L_prime`), the curve (every point verify computes is on it, add/double are the
+Edwards law, `Point.Proper` kept by every step; `d` non-square, completeness), the group law (associative,
+commutative, identity, inverse, `same_add_assoc`), the ladder (`mul2_spec`: `[a]P + [b]Q`), `verify_iff`
+(verify is the cofactored RFC equation), `B_order` (`[L]B = 0`), decode ∘ encode (`decodePoint_affine`,
+`decodePoint_some`, `decode_encode`), and signature correctness (`sign_verifies`). Axioms of `sign_verifies`,
+`decode_encode`, `decodePoint_affine/some`, `B_sign_bit_needed`: propext, Classical.choice, Quot.sound (no
+`native_decide`, no `sorry`). Cost: Bytes / Decode / Sign each check in under 3 s at ≤ 0.78 GB maxrss (leaves; no
+literal point next to literal bytes, so far below CODEC-20's line).
+**Critique of part 4.** (1) SHA-512 is still trusted as computed by `Sha512.hash` (RFC vectors only); signature
+correctness does not depend on it (any function would do), but unforgeability is not a theorem here and cannot
+be without a hardness assumption. (2) `sign_verifies` is about Lean's `sign`, the test-tooling signer; the deployed
+signer is custody's Rust, and the bridge is the RFC vectors and the cross-checks, not a theorem. (3) `verify` is
+cofactored: `verify_iff` + `sign_verifies` say it accepts honest signatures and exactly the cofactored equation;
+the stricter non-cofactored check is not what is deployed, by design (CODEC-11).
+**Meta-critique.** The last gap was priced as "sqrtRatio with a 2^252 exponent near the CODEC-20 memory line"; it
+was not near it at all, because every fact here is symbolic (a power is `Nat` exponent algebra, Fermat is the
+existing `fin_fermat`). The memory line binds literal points next to literal bytes, and decode ∘ encode has none.
+Status: parts 1–4 built; CODEC-23 complete.
 
 ## CODEC-24 · The broker frames are a second generated file, `emit-broker` (HOSTING-3's ask; CODEC-3, 2026-10-17)
 **Decision.** `Emit/Broker.lean` prints `launcher/src/broker_generated.rs` by `Rust.taggedFile` from
