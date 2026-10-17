@@ -747,6 +747,54 @@ LEDGER-2's choice to conserve floors (without it, this entry would need its own 
 kernel exception), but it is also the choice I already liked, so I am not the right judge of it.
 Status: built.
 
+## LEDGER-5 · Methods move value: a method's effects are `Body` calls, derived for the calling object (BUILD-LEDGER, 2026-10-17; PROPOSAL to KERNEL-5 and LANG-3, answering LANG-21 by name)
+**Proposal.** LANG-21 decided effects as DATA, visited depth first, each object once, re-entry refused,
+callee principal = the calling object, and named LEDGER's first method-triggered receiver as its build
+trigger. This is that trigger, and it narrows one choice of LANG-21's: the effect type.
+(a) *One call language.* `Program.run … : Except (Refusal D) (Slots × List (Body D))`. An effect IS a
+`Body` (LANG-21's `Effect {target, method, args, budget, via}` is exactly `Body.invoke`), restricted to
+the kinds an object may exercise: `invoke`, `transfer`, `account`, `credit`, `grant`; every other kind is
+refused `notCallable kind` (new Refusal). LANG's `methodTy S A := fn S (fn A (fn reqTy (rec {state : S,
+calls : list body})))`, with `body` the generated Body codec's LANG type.
+(b) *Derived for the object.* Each effect is derived by its OWN receiver over the same pinned view, with
+`Req.agent` = the signer and `principal` = the calling object, so `ownerAuthority` compares an account's
+owner slot with the OBJECT's id: an object moves only value it owns, and grants may name an object as
+grantee. No receiver changes its authority rule; only who the principal is.
+(c) *One seal per call.* Receivers return a `Draft D := {creates : List Cell, effects : List (D × Act),
+nullifiers : List D}` and `receive` seals once. A receiver that needs its own born id (`issue`) is given its
+draft's create offset. The visited drafts concatenate; one cell written twice in a tree is
+`duplicateEffect` (already a name), a nullifier twice the kernel's `duplicateNullifier`. Bounds:
+LANG-21's `callDepthMax 4`, `callsMax 8`, one consensus tick budget for the tree.
+(d) *Accounts for objects.* `account (asset : D) (owner : Option D)`: anyone may open an account for any
+owner (an empty account with floor 0 is harmless: only its owner can debit it, and it costs the opener
+its storage), so a depositor opens the escrow's account and funds it in one tree, or an object opens its
+own by effect.
+(e) *Escrow on top* (the next deliverable, a LANG package + a PROTOCOL row): state {phase, depositor,
+beneficiary, amount, acct}; `deposit` (the depositor's transfer into `acct` happens in the same tree),
+`release` → `[transfer acct beneficiary amount]`, `refund` → `[transfer acct depositor amount]`, each
+guarded by `phase = held` and moving to an absorbing phase. "Never paid twice" is then the kernel's
+(acct's floor is 0: a second payout is `belowFloor`), and "never both released and refunded" is the
+package's lifecycle theorem (L4's `Spec`/`Run`), on a PROGRAMMED object so D6's law-removal hole does
+not apply.
+**Theorems owed.** `visit_distinct` (each object once, LANG-21); `invoke_authorized` restated per visited
+object; `effect_principal` (every effect's derivation has principal = its caller); `transfer_authorized`
+already covers object-owned accounts unchanged; `admit_value` needs nothing (it is about every turn).
+**Alternatives.** (1) LANG-21's own `Effect` record beside `Body` (two call shapes, law 1). (2) Postings
+`{src, dst, amount}` as a third effect type (D5 of the brief): value only, so `account` and `grant` by an
+object would each need another. (3) Value inside object state with a `conserve` law (rejected in LEDGER-2).
+(4) `invokeAll` batches (rejected in LANG-21).
+**Critique.** The Draft refactor touches every receiver and every `sealTurn`-shaped theorem (sealTurn_ok,
+dispatch_sealed, dispatch_born, dispatch_value_born, enroll_authorized, grant_carves): a big diff in
+KERNEL-5's files while KERNEL-24/25/26 and the World port queue behind it. Object-as-principal is the
+confused-deputy LANG-21 names: a callee sees the calling object, not the signer, so a package that
+forwards caller-supplied calls lends its own authority (the package's methods must not take raw `Body`
+arguments, a LANG check). `account` for any owner lets anyone litter an owner's id with empty accounts
+(bounded by storage charge). The client must pin the whole tree before signing.
+**Meta-critique.** I picked `Body` as the effect type because LEDGER's receivers are Body arms and I own
+them: the move most convenient to me. The independent test is law 1 (an `Effect` record would duplicate
+`Body.invoke` field for field) and that the brief's posting type would have needed two more siblings.
+Status: proposed (KERNEL-5 owns (b)(c) in Call/Derive and its sequencing; LANG-3 owns (a)'s `methodTy`).
+
 ## KERNEL-24 · A call names its World: `Unsigned.world` = the World's genesis ORIGIN, refused `wrongWorld` before anything else; genesis commits to everything it was made from (KERNEL-4, 2026-10-17; DESIGN, ROOT's D3, not yet built)
 **Defect (measured by OPS on 87c721e, with the real `host` exe).** The SAME signed `create` frame was
 admitted by two Stores both named "w": nothing in `Unsigned` binds a call to a World. And CLIENT-2's
