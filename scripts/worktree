@@ -6,7 +6,7 @@
 # scripts/hooks), and .lake builds on first use. Commit from inside it with scripts/commit;
 # after landing, scripts/commit leaves the worktree on the new main.
 set -eu
-layers="kernel codec host protocol client lang gates root"
+layers="kernel codec host protocol client lang gates root hosting ledger transport ops perf"
 [ $# -eq 1 ] && case " $layers " in *" $1 "*) ;; *) false ;; esac || {
   echo "usage: scripts/worktree LAYER   (LAYER: $layers)" >&2; exit 2; }
 primary=$(cd "$(git rev-parse --git-common-dir)/.." && pwd)
