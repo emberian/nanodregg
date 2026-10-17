@@ -130,6 +130,7 @@ reads the proposals before committing signatures and answers each in `DECISIONS.
   `git read-tree HEAD`, add your paths, `write-tree`, `commit-tree`, `update-ref`). Before every
   push, `git show --stat HEAD` must list ONLY your files; a commit that touches another layer's file
   or reverts someone's hunk is a defect: fix forward, tell the owner.
+- The primary checkout `~/dev/nanodregg` is the READ-ONLY reference (scouts, evaluators, `lake env lean` against its .lake); `scripts/commit` refuses to commit from it and moves it to each new main when clean. Lane-private file names in the shared scratchpad (a message file overwritten by another lane was judged under the wrong subject).
 - Lakefile rule (GATES): add your `lean_lib` entry (`globs = ["X.+"]`) in the SAME commit as your
   first `.lean` file; a glob over a directory missing from the commit breaks everyone's build. A conflict in a shared file (lakefile, DECISIONS.md, SIZE.md) is resolved by reading
   both sides. Talk to the owner of a layer you need something from (SendMessage); do not build
