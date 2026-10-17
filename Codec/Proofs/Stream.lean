@@ -358,6 +358,14 @@ theorem refine_lawful {c : Stream α} (hc : Lawful c) (name : String) {accept : 
         exact hc.occurs_of_get hx
       · cases h
 
+@[simp] theorem i64_bytes (v : Int64) : i64.bytes v = u64.bytes v.toUInt64 := rfl
+
+@[simp] theorem i64_size (v : Int64) : (i64.bytes v).size = 8 := rfl
+
+theorem i64_lawful : Lawful i64 :=
+  refine_lawful u64_lawful "i64" (fun y => by simp) (fun x y h => by
+    simp only [Option.some.injEq] at h; subst h; simp)
+
 theorem oneOf_lawful (codes : Array UInt8) : Lawful (oneOf codes) where
   put_eq v buf := push_eq_append buf v.val
   size_eq _ := rfl

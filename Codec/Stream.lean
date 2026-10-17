@@ -243,6 +243,10 @@ def refine (name : String) (c : Stream α) (accept : α → Option β) (back : �
       | some y => .ok (y, j)
       | none => .error (.rejected i name)
 
+/-- Eight bytes, little-endian two's complement: `u64` of the `Int64`'s bit pattern. Every 8-byte
+input is one value, so the refinement refuses nothing (`i64_lawful`). -/
+def i64 : Stream Int64 := refine "i64" u64 (fun x => some x.toInt64) Int64.toUInt64
+
 /-- A byte from `codes`; any other byte is refused as `badTag`. -/
 def oneOf (codes : Array UInt8) : Stream { b : UInt8 // codes.contains b = true } where
   shape := .oneOf codes
