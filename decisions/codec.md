@@ -642,3 +642,22 @@ to a leaf holding a kind-2^32 cell). `cell_fits_iff_bounds` and `cell_fits_kind_
 nothing in Lean used them.
 **Critique of the first version.** I emitted a predicate before asking whether anything would call it. An
 emitted check with no caller cannot go red, which is the no-op-for-later that the charter forbids.
+
+## CODEC-26 · A turn's record is exactly `Turn.logWeight` bytes (KERNEL-32's numbers; CODEC-4, 2026-10-17)
+**Decision.** `Codec.Kernel.turn_size_logWeight : (∀ d, dc.size d = 32) → (turn dc).size t = t.logWeight`, for EVERY
+turn (no `Fits` premise: `size` is structural), from `op_size` (`Op.weight`: set 9 + v, erase 5), `act_size`
+(`Act.logWeight`), `cell_size` (`Cell.weight` = 9 + `Slots.weight`), `touch_size` (`Touch.weight`), and
+`foldl_add_size` (a list's size is its u32 header plus the sum). Deployed: `Codec.Deployed.turnBytes_size :
+(env.turnBytes t).size = t.logWeight` (through `LawfulOn.size_eq`). Tooth `turn_size_needs_digest32`: with a
+length-prefixed digest the empty turn is 44 bytes against a weight of 72, so the 32-byte premise carries content.
+**Alternatives.** `≤` (what Admit.lean's docblock used to claim without a proof): an over-charge would be
+invisible. A Rust or sim comparison only: KERNEL-8's `Gen.checkLogWeight` (3883 of 3883) is evidence, and this
+is the theorem behind it.
+**Why.** KERNEL-2 chose equality, so the charge for the log is the log's size, not a bound on it. KERNEL-32 moved
+the weights to the codec's numbers, and this pins them there: if either side changes, this proof breaks.
+**Critique.** `size` is the codec's size FUNCTION. That it is the byte count of `bytes` is `LawfulOn.size_eq`,
+which holds for the lawful deployed digest (used in `turnBytes_size`) but is not a premise of the generic
+theorem. The equality is for the record, not for what the World grows (`Turn.growth`), which has no codec.
+**Meta-critique.** I stated the generic theorem over `size`, not `bytes.size`, so it holds for every turn with no
+fit premise. The deployed corollary carries the bytes meaning.
+Status: built.

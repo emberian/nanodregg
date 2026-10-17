@@ -8,7 +8,8 @@ import Codec.Proofs.Raw
 2^32, every list and byte string within KERNEL's bounds. Each codec is `LawfulOn Fits`: a fitting
 value reads back from its bytes, and whatever is read fits and is spelled exactly one way
 (`LawfulOn.decode_eq_ok_iff`). `checkBounds_fits` closes the gap to the kernel: every Turn that
-`World.admit` accepts fits, so `turnBytes` is injective on admitted turns.
+`World.admit` accepts fits, so `turnBytes` is injective on admitted turns. And a turn's record is exactly
+`Turn.logWeight` bytes at a 32-byte digest (`turn_size_logWeight`), so KERNEL's log charge is the log's size.
 -/
 
 namespace Nanodregg.Codec.Kernel
@@ -368,5 +369,51 @@ theorem turnBytes_injective {dc : Stream D} (hd : Lawful dc) {t t' : Turn D}
     (ht : checkBounds t = .ok ()) (ht' : checkBounds t' = .ok ()) (h : turnBytes dc t = turnBytes dc t') :
     t = t' :=
   (turn_lawfulOn hd.on).bytes_injective (checkBounds_fits t ht) (checkBounds_fits t' ht') h
+
+/-! ## A turn's record is `Turn.logWeight` bytes (KERNEL-32)
+
+KERNEL charges a turn's log record by `Turn.logWeight`; these say that number IS the record's byte
+count at a 32-byte digest, field by field, so a charge is never a guess about the codec. -/
+
+private theorem foldl_add_size {β : Type} (f : β → Nat) : ∀ (l : List β) (a : Nat),
+    l.foldl (fun n x => n + f x) a = a + (l.map f).sum
+  | [], a => by simp
+  | x :: l, a => by rw [List.foldl_cons, foldl_add_size f l, List.map_cons, List.sum_cons]; omega
+
+theorem op_size (o : Op) : op.size o = o.weight := by
+  cases o <;> simp [op, opWire, Op.weight, refine, choice, tagged, product, nat32, rawBytes] <;> omega
+
+theorem act_size (a : Act) : act.size a = a.logWeight := by
+  cases a <;> simp [act, actWire, Act.logWeight, headerWeight, refine, choice, tagged, unit, rawList,
+    foldl_add_size, op_size] <;> omega
+
+private theorem slot_size_eq : (fun v : Nat × ByteArray => 4 + (4 + v.snd.size)) = fun p => 8 + p.snd.size :=
+  funext fun _ => by omega
+
+theorem cell_size (c : Cell) : cell.size c = c.weight := by
+  simp [cell, Cell.weight, Slots.weight, slots, discipline, refine, product, nat32, u8, rawList, rawBytes,
+    foldl_add_size]
+  rw [slot_size_eq]
+  omega
+
+theorem touch_size {dc : Stream D} (hdc : ∀ d, dc.size d = 32) (x : Touch D) :
+    (touch dc).size x = x.weight := by
+  simp [touch, Touch.weight, digestWeight, refine, product, hdc, act_size]
+  omega
+
+/-- **The record's size is the turn's log weight**, for any digest codec of 32 bytes (the deployed one). -/
+theorem turn_size_logWeight {dc : Stream D} (hdc : ∀ d, dc.size d = 32) (t : Turn D) :
+    (turn dc).size t = t.logWeight := by
+  simp [turn, Turn.logWeight, digestWeight, counterWeight, headerWeight, refine, product, nat64, rawList,
+    rawBytes, hdc, foldl_add_size, touch_size hdc, cell_size]
+  omega
+
+
+/-- Tooth: the digest premise is load-bearing — with a length-prefixed digest (4 bytes for the empty
+one) the empty turn's record is 44 bytes, not its log weight 72. -/
+theorem turn_size_needs_digest32 :
+    (turn (rawBytes 64)).size (⟨ByteArray.empty, 0, 0, [], [], [], 0, ByteArray.empty⟩ : Turn ByteArray) = 44 ∧
+      Turn.logWeight (⟨ByteArray.empty, 0, 0, [], [], [], 0, ByteArray.empty⟩ : Turn ByteArray) = 72 := by
+  decide
 
 end Nanodregg.Codec.Kernel

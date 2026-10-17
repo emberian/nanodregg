@@ -61,4 +61,10 @@ theorem world_decode_cellsFit {b : ByteArray} {w : World Digest} (h : world.deco
     w.CellsFit Nanodregg.Codec.Kernel.Cell.Fits env :=
   Nanodregg.Codec.Kernel.world_decode_cellsFit digestCodec_lawful.on h
 
+/-- **A deployed turn's record is `Turn.logWeight` bytes**: the charge KERNEL computes for the log is the
+log's byte count (KERNEL-32). -/
+theorem turnBytes_size (t : Turn Digest) : (env.turnBytes t).size = t.logWeight := by
+  show ((turn digestCodec).bytes t).size = t.logWeight
+  rw [← (turn_lawfulOn digestCodec_lawful.on).size_eq, turn_size_logWeight (fun _ => rfl)]
+
 end Nanodregg.Codec.Deployed
