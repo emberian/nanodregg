@@ -1287,3 +1287,56 @@ was to discharge `hv` by putting it in a convenient premise of the corollary. It
 premise with its refuting arm instead.
 **Flag day.** None. No definition on the deployed path changed. Nothing re-geneses, re-emits or
 refuses to load. `admit_prune_verdict`'s statement is unchanged; it is now proved from `check_prune`.
+
+## KERNEL-39 · A decoded base carries `JournalOk`: `journalFits`, the kernel's half of CODEC's `kernel/journal` refusal (KERNEL-10, 2026-10-18; KERNEL-33 Critique (b), agreed with CODEC-6)
+**Defect.** `reach_journal_bounded` covers Worlds that a fold reaches. A World decoded from a base
+holds whatever journal was written, and the World codec bounds that listing only by `worldMax`
+(2^32 − 1); `journalMax` bounds only the carried codec. A base can therefore hold an entry above its
+height. That entry is never pruned (`kept H e` holds while H < e.1 + 2W), so it answers `replayed`
+forever to a call that never ran. A base can also hold more than 3W entries, or two entries at one
+height. None of these is a state that any fold reaches, and nothing refuses it.
+**Decision.** (1) Kernel/World.lean (deployed): `journalFits height l : Bool`. Every entry satisfies
+`e.1 ≤ height ∧ height < e.1 + 2W + height % W`, and the heights are pairwise distinct. The
+distinctness check sorts the heights (`mergeSort`) and checks that the result is strictly
+ascending (`ascendingNat`): O(n log n) with n < 3W, run once per decode, never on the request path.
+(2) Kernel/Proofs/Journal.lean: `journalOk_of_fits` (a listing that fits is a `JournalOk`
+journal) and `journalFits_of_ok` (every `JournalOk` journal fits). Together these say the check is
+EXACTLY the invariant, so it refuses no base that a fold wrote (`fold_journalOk`). (3) CODEC-6
+(agreed, its half lands next): the World's shape gains the named refinement `kernel/journal`, and
+its decoder refuses `rejected i "kernel/journal"` when `journalFits` fails. The journal list is
+bounded by `Bounds.journalMax` (refused `pastBound`), and `World.CodecFits` gains `journalFits` as a
+conjunct, which `journalFits_of_ok` discharges for the round trip. CODEC writes
+`world_decode_journalOk` and its deployed corollary. A Kernel-side `deployed_base_journalOk` would be
+a twin, so there is none.
+**Teeth.** `journalFits_future` (an entry at height + 1), `journalFits_stale` (an entry past due
+for pruning at the last prune) and `journalFits_twice` (two entries at one height) are named
+refutations, one per clause, so no clause is `true`. kernel-sim arm `journal-fits:misfit`: at the
+end of the journal probe, the reached World's listing fits, and a listing with one future entry,
+one stale entry, or a second entry at a journaled height, does not. Mutation
+(the distinctness half replaced by `true`): kernel-sim seed 0 FAILs "a future or a doubled entry
+fits", and `journalOk_of_fits` / `journalFits_of_ok` stop compiling. CODEC's WorldTooth plants
+the bytes-level refusals. kernel-sim --seeds 64 ALL PASS, and no WASTE row moves.
+Second-agent vacuity read (before landing): LAND; the characterization is exact (an iff on
+`w.journal.toList`); the stale clause lacked a refutation (added). CODEC's obligation, named to
+CODEC-6: the list `journalFits` reads at decode must be provably the decoded map's own `toList` (the
+decoder already refuses keys that are not strictly ascending, so `toList_ofList_of_sorted` gives it).
+**Alternatives.** (a) A kernel check at HOST's reopen: a second place where a decoded World becomes
+trusted, outside the one decoder. Every reader of World bytes would have to remember to call it.
+(b) Refuse only future entries, the cheap half. Two entries at one height break
+`journal_bounded`'s counting, so that half is needed. (c) Prune a decoded journal on read instead of
+refusing it. That reinterprets bytes nobody wrote, which law 1 forbids ("old shapes refuse").
+**Critique.** The check costs a sort per decode (< 3072 heights). A base is decoded once per open,
+so this is not request-path work, and it is not measured as a WASTE row. `journalFits` reads
+heights only. A journal entry's digest is still whatever the base says, and nothing checks it
+against a turn. That is the same trust every base field gets: the base seal and HOST's audit
+answer for it, not the decoder. The carried codec does not call `journalFits`, because
+`Receive.carry` already refuses outside `CarryFits`. That leaves two places stating journal
+bounds, CarryFits for a carry and journalFits for a base. They state different facts: a carry's
+height is the carried one, while a base's entries must also be distinct and within the window.
+**Meta-critique.** The pull was to put the check where the defect was noticed, at the kernel, as a
+reopen assertion. The premise enters at decode (law 4: an assertion where the premise crosses the
+boundary), so the decoder is where it belongs, and the kernel supplies only the predicate and its
+exactness.
+**Flag day.** Kernel side: none (a new definition with no consumer yet). CODEC-6's half moves the
+World's tag (`kernel/world` gains the `kernel/journal` node), so every Store base re-seals or
+re-geneses, and an old base refuses `shapeMismatch`. CODEC states this in its commit.

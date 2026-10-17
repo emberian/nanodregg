@@ -1196,6 +1196,21 @@ def probeJournal (P : Params D) (st : State D) (seed : Nat) : State D :=
         else
           let st := { st with refusedAsExpected := st.refusedAsExpected + 1,
                               seen := "journal-shadow:filtered" :: "filtered" :: st.seen }
+          -- KERNEL-39: the reached World's journal fits (`journalFits_of_ok`); one entry above the
+          -- height, a second entry at a journaled height, or one past due for pruning, does not
+          -- (`kernel/journal` at decode)
+          let l := w.journal.toList
+          let future := (tx (n + 7), (w.height + 1, P.zero)) :: l
+          let twice := match l.head? with
+            | some (_, (h, _)) => (tx (n + 8), (h, P.zero)) :: l
+            | none => l
+          let stale := (tx (n + 9), (0, P.zero)) :: l
+          let st := if !(journalFits w.height l) then
+              failWith st s!"probe journal: the journal at height {w.height} does not fit"
+            else if journalFits w.height future || journalFits w.height twice || journalFits w.height stale then
+              failWith st "probe journal: a future, a doubled or a stale entry fits"
+            else { st with refusedAsExpected := st.refusedAsExpected + 1,
+                           seen := "journal-fits:misfit" :: "misfit" :: st.seen }
           let st := journalExpect P st wS (journalTurn P k H H) "journal-shadow-kept" "replayed"
           journalExpect P st wS (journalTurn P 0 H H) "journal-shadow-reuse" "replayed"
 
@@ -1370,7 +1385,7 @@ def plantedArms : List String :=
    "object-pays:ok", "object-pays-twice:spent", "reenter:revisited", "call-not-callable:notCallable",
    "too-many-calls:tooManyCalls", "over-ticks:overTicks", "grant-to-object:ok", "call-chain:ok",
    "call-too-deep:callTooDeep", "journal-expired:outsideWindow", "journal-window-first:outsideWindow",
-   "journal-kept:replayed", "journal-reuse:ok", "journal-shadow:filtered",
+   "journal-kept:replayed", "journal-reuse:ok", "journal-shadow:filtered", "journal-fits:misfit",
    "journal-shadow-kept:replayed", "journal-shadow-reuse:replayed", "carry-name:nameTooLong", "carry-old-call:replayed",
    "carry-old-world:wrongWorld", "carry-new:ok", "hash-count:empty-per-insert"]
 

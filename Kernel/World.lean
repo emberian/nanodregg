@@ -558,6 +558,23 @@ was never admitted (`Kernel.Proofs.Journal.fold_retains`); at and past it, absen
 (HOST answers `forgotten`, uncertain, never `expired`). -/
 def journalForgets (H notBefore : Nat) : Bool := decide (notBefore + 2 * Bounds.windowMax ≤ H)
 
+/-- Strictly ascending. -/
+def ascendingNat : List Nat → Bool
+  | a :: b :: l => decide (a < b) && ascendingNat (b :: l)
+  | _ => true
+
+/-- A journal listing a World at `height` can hold (KERNEL-39): every entry at most `height` and
+not yet due for pruning (fewer than `2 * windowMax` heights behind the last prune), and no two
+entries at one height. It is exactly `World.JournalOk` read off the listing
+(`Kernel.Proofs.Journal.journalOk_of_fits`, `journalFits_of_ok`), so it holds of every World a fold
+reaches and a decoded base is refused (`kernel/journal`, CODEC) unless it holds. Without it a base
+could hold an entry above its height, which is never pruned and answers `replayed` forever. One
+pass, and one sort of fewer than `3 * windowMax` heights. -/
+def journalFits (height : Nat) (l : List (D × (Nat × D))) : Bool :=
+  l.all (fun p => decide (p.2.1 ≤ height ∧
+      height < p.2.1 + 2 * Bounds.windowMax + height % Bounds.windowMax)) &&
+    ascendingNat ((l.map fun p => p.2.1).mergeSort)
+
 /-- The World after a checked turn. Total: everything that can fail failed in `check`. -/
 def commit (E : Env D) (w : World D) (t : Turn D) (posts : List (Post D)) : World D :=
   let trie := commitTrie E w t posts

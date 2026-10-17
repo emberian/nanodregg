@@ -172,6 +172,113 @@ theorem journal_bounded {w : World D} (hw : w.JournalOk) : w.journal.size < 3 * 
   have hm : w.height % Bounds.windowMax < Bounds.windowMax := Nat.mod_lt _ (by decide)
   omega
 
+/-! ## A journal read from bytes (KERNEL-39) -/
+
+omit [Ord D] [Std.TransOrd D] [Std.LawfulEqOrd D] [DecidableEq D] in
+theorem ascendingNat_lt : ∀ {a : Nat} {l : List Nat}, ascendingNat (a :: l) = true → ∀ y ∈ l, a < y
+  | _, [], _, y, hy => absurd hy List.not_mem_nil
+  | a, b :: l, h, y, hy => by
+      simp only [ascendingNat, Bool.and_eq_true, decide_eq_true_eq] at h
+      rcases List.mem_cons.mp hy with rfl | hy
+      · exact h.1
+      · exact Nat.lt_trans h.1 (ascendingNat_lt h.2 y hy)
+
+omit [Ord D] [Std.TransOrd D] [Std.LawfulEqOrd D] [DecidableEq D] in
+theorem ascendingNat_nodup : ∀ {l : List Nat}, ascendingNat l = true → l.Nodup
+  | [], _ => List.nodup_nil
+  | [_], _ => List.nodup_cons.mpr ⟨List.not_mem_nil, List.nodup_nil⟩
+  | a :: b :: l, h => by
+      have ht : ascendingNat (b :: l) = true := by
+        simp only [ascendingNat, Bool.and_eq_true] at h; exact h.2
+      refine List.nodup_cons.mpr ⟨fun hm => ?_, ascendingNat_nodup ht⟩
+      exact Nat.lt_irrefl a (ascendingNat_lt h a hm)
+
+omit [Ord D] [Std.TransOrd D] [Std.LawfulEqOrd D] [DecidableEq D] in
+theorem ascendingNat_of_sorted : ∀ {l : List Nat}, l.Pairwise (fun a b => a ≤ b) → l.Nodup →
+    ascendingNat l = true
+  | [], _, _ => rfl
+  | [_], _, _ => rfl
+  | a :: b :: l, hs, hn => by
+      simp only [ascendingNat, Bool.and_eq_true, decide_eq_true_eq]
+      have hab : a ≤ b := List.rel_of_pairwise_cons hs (List.mem_cons_self ..)
+      have hne : a ≠ b := fun he => (List.nodup_cons.mp hn).1 (he ▸ List.mem_cons_self ..)
+      exact ⟨Nat.lt_of_le_of_ne hab hne, ascendingNat_of_sorted hs.of_cons hn.of_cons⟩
+
+omit [Ord D] [Std.TransOrd D] [Std.LawfulEqOrd D] [DecidableEq D] in
+theorem eq_of_nodup_map {α β : Type} {f : α → β} :
+    ∀ {l : List α}, (l.map f).Nodup → ∀ {x y : α}, x ∈ l → y ∈ l → f x = f y → x = y
+  | [], _, _, _, hx, _, _ => absurd hx List.not_mem_nil
+  | a :: l, h, x, y, hx, hy, he => by
+      rw [List.map_cons, List.nodup_cons] at h
+      rcases List.mem_cons.mp hx with rfl | hxl <;> rcases List.mem_cons.mp hy with rfl | hyl
+      · rfl
+      · exact absurd (show f x ∈ l.map f by rw [he]; exact List.mem_map_of_mem hyl) h.1
+      · exact absurd (show f y ∈ l.map f by rw [← he]; exact List.mem_map_of_mem hxl) h.1
+      · exact eq_of_nodup_map h.2 hxl hyl he
+
+omit [DecidableEq D] in
+/-- **A listing that `journalFits` is a `JournalOk` journal**: what the World decoder's
+`kernel/journal` refusal gives every decoded base. -/
+theorem journalOk_of_fits {w : World D} (h : journalFits w.height w.journal.toList = true) :
+    w.JournalOk := by
+  simp only [journalFits, Bool.and_eq_true, List.all_eq_true, decide_eq_true_eq] at h
+  obtain ⟨hall, hasc⟩ := h
+  have hmem : ∀ {k : D} {e : Nat × D}, w.journal[k]? = some e → (k, e) ∈ w.journal.toList :=
+    fun he => Std.TreeMap.mem_toList_iff_getElem?_eq_some.mpr he
+  have hnd : (w.journal.toList.map fun p => p.2.1).Nodup :=
+    (List.mergeSort_perm _ _).nodup_iff.mp (ascendingNat_nodup hasc)
+  refine ⟨fun k e he => hall (k, e) (hmem he), fun k₁ k₂ e₁ e₂ h₁ h₂ heq => ?_⟩
+  have := eq_of_nodup_map hnd (hmem h₁) (hmem h₂) heq
+  exact (Prod.mk.inj this).1
+
+omit [DecidableEq D] in
+/-- **Every `JournalOk` journal fits**, so the refusal never refuses a base a fold wrote
+(`fold_journalOk`, `reach_journal_bounded`'s invariant). -/
+theorem journalFits_of_ok {w : World D} (hw : w.JournalOk) :
+    journalFits w.height w.journal.toList = true := by
+  have hmem : ∀ p ∈ w.journal.toList, w.journal[p.1]? = some p.2 := fun p hp =>
+    Std.TreeMap.mem_toList_iff_getElem?_eq_some.mp hp
+  have hnd : (w.journal.toList.map fun p => p.2.1).Nodup := by
+    apply List.pairwise_map.mpr
+    exact Std.TreeMap.distinct_keys_toList.imp_of_mem fun {p q} hp hq hpq heq =>
+      hpq (by
+        have hpq' := hw.2 p.1 q.1 p.2 q.2 (hmem p hp) (hmem q hq) heq
+        rw [hpq']; exact Std.ReflCmp.compare_self)
+  simp only [journalFits, Bool.and_eq_true, List.all_eq_true, decide_eq_true_eq]
+  refine ⟨fun p hp => hw.1 p.1 p.2 (hmem p hp), ?_⟩
+  apply ascendingNat_of_sorted
+  · have := List.pairwise_mergeSort (le := fun a b : Nat => decide (a ≤ b))
+      (fun a b c hab hbc => by simp only [decide_eq_true_eq] at *; omega)
+      (fun a b => by simp only [Bool.or_eq_true, decide_eq_true_eq]; omega)
+      (w.journal.toList.map fun p => p.2.1)
+    exact this.imp fun h => by simpa using h
+  · exact (List.mergeSort_perm _ _).nodup_iff.mpr hnd
+
+omit [Ord D] [Std.TransOrd D] [Std.LawfulEqOrd D] [DecidableEq D] in
+/-- The refusal refuses: an entry above the World's height does not fit (the entry that would
+never be pruned and answer `replayed` forever). -/
+theorem journalFits_future (h : Nat) (k d : D) : journalFits h [(k, (h + 1, d))] = false := by
+  simp only [journalFits, List.all_cons, List.all_nil, Bool.and_true, Bool.and_eq_false_iff]
+  left
+  simp only [decide_eq_false_iff_not, not_and, Nat.not_lt]
+  omega
+
+omit [Ord D] [Std.TransOrd D] [Std.LawfulEqOrd D] [DecidableEq D] in
+/-- The refusal refuses: an entry already due for pruning at the last prune does not fit. -/
+theorem journalFits_stale (h e : Nat) (k d : D)
+    (hs : e + 2 * Bounds.windowMax + h % Bounds.windowMax ≤ h) : journalFits h [(k, (e, d))] = false := by
+  simp only [journalFits, List.all_cons, List.all_nil, Bool.and_true, Bool.and_eq_false_iff]
+  left
+  simp only [decide_eq_false_iff_not, not_and, Nat.not_lt]
+  intro _
+  exact hs
+
+omit [Ord D] [Std.TransOrd D] [Std.LawfulEqOrd D] [DecidableEq D] in
+/-- The refusal refuses: two entries at one height do not fit. -/
+theorem journalFits_twice (h : Nat) (k₁ k₂ d₁ d₂ : D) :
+    journalFits h [(k₁, (h, d₁)), (k₂, (h, d₂))] = false := by
+  simp [journalFits, List.mergeSort, ascendingNat]
+
 /-! ## What the journal still answers -/
 
 /-- **An entry stays while it is kept.** -/
