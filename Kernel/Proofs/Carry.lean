@@ -187,4 +187,49 @@ theorem carry_replayed [DecidableEq D] {X : Ctx D} {name nonce : ByteArray} {w w
   obtain ⟨_, rfl⟩ := carry_ok.mp h
   exact submit_replayed hj
 
+/-! ## Ids are names: a carry changes no authority (KERNEL-40)
+
+A carried World keeps its members' ids, derived at the lineage's genesis from the FIRST origin
+(KERNEL-24). That is sound because nothing reads an origin out of an id: `receive` reads the
+World's origin only in its first check (`wrongWorld`), and admission never reads it. -/
+
+/-- **`receive` reads the World's origin and chain only in the `wrongWorld` check.** Give a World
+any new origin and chain: a call naming the new origin is derived from the OLD World's pinned
+state (`pinned` reads only the trie), whatever the origin and chain were. -/
+theorem receive_reorigin [DecidableEq D] {X : Ctx D} {w : World D} {c : Call D} {o ch : D}
+    (hc : c.unsigned.world = o) :
+    receive X { w with origin := o, chain := ch } c = receiveWith X (pinned X.env w c.unsigned.pins) c := by
+  unfold receive
+  simp only [req, decide_eq_true hc, if_true]
+  rfl
+
+/-- A call that names its World is derived from the World's pinned state alone. -/
+theorem receive_named [DecidableEq D] {X : Ctx D} {w : World D} {c : Call D}
+    (hc : c.unsigned.world = w.origin) :
+    receive X w c = receiveWith X (pinned X.env w c.unsigned.pins) c := by
+  unfold receive
+  simp only [req, decide_eq_true hc, if_true]
+  rfl
+
+/-- **A carry changes no authority.** The carried World derives every call that names it exactly
+as the exported World's own state does past the World check: through the same pinned view (the
+same members, keys, grants and cells at the same ids), so the members keep their ids and their
+rights. (On the old World the same call is `wrongWorld`: it names the new origin.) -/
+theorem carry_receive [DecidableEq D] {X : Ctx D} {name nonce : ByteArray} {w w' : World D}
+    (h : carry X name nonce w.origin w.carried = .ok w') {c : Call D} (hc : c.unsigned.world = w'.origin) :
+    receive X w' c = receiveWith X (pinned X.env w c.unsigned.pins) c := by
+  obtain ⟨_, rfl⟩ := carry_ok.mp h
+  exact receive_reorigin (w := w) hc
+
+/-- **Admission is blind to the origin and the chain.** -/
+theorem check_origin_blind [DecidableEq D] {E : Env D} {w : World D} {t : Turn D} {o ch : D} :
+    check E { w with origin := o, chain := ch } t = check E w t := rfl
+
+/-- **A carry changes no admission**: the carried World checks every turn as the exported one. -/
+theorem carry_check [DecidableEq D] {X : Ctx D} {name nonce : ByteArray} {w w' : World D}
+    (h : carry X name nonce w.origin w.carried = .ok w') (t : Turn D) :
+    check X.env w' t = check X.env w t := by
+  obtain ⟨_, rfl⟩ := carry_ok.mp h
+  exact check_origin_blind
+
 end Nanodregg.Kernel.Receive

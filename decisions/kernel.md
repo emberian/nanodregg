@@ -1340,3 +1340,71 @@ exactness.
 **Flag day.** Kernel side: none (a new definition with no consumer yet). CODEC-6's half moves the
 World's tag (`kernel/world` gains the `kernel/journal` node), so every Store base re-seals or
 re-geneses, and an old base refuses `shapeMismatch`. CODEC states this in its commit.
+
+## KERNEL-40 · Ids are names: a carried World keeps its members' ids, and a carry changes no authority (KERNEL-10, 2026-10-18; ROOT's item from OPS-2's OPS-1 critique, agreed with PROTOCOL-6)
+**Question.** A carry (KERNEL-29) keeps every cell at its id. Member and founder-grant ids were
+derived at genesis from the World's origin (`founderId X origin i`, KERNEL-24), so after a carry
+they are keyed by the OLD origin. There are two ways to handle that: (a) the carry re-keys every id
+under the new origin, or (b) ids are opaque names, with a theorem that nothing in receive derives
+meaning from an id's origin.
+**Decision: (b), opacity.** An id is a name. Its derivation at genesis is a fresh-name generator,
+which makes ids unique across Worlds. A lineage's ids are namespaced by its FIRST origin, and every
+carried origin commits to that one through `fromOrigin`. Nothing may recompute an id from the
+CURRENT origin. A consumer that needs founder ids after a carry reads them from the World (the
+member cells) or from the lineage's genesis.
+**Enumeration** (main f6b6b60). In deployed Kernel code `founderId`/`founderGrantId` are computed
+only in Receive.Follow's genesis. `receive` reads `w.origin` exactly once (Derive.lean,
+`req (c.unsigned.world = w.origin) .wrongWorld`). A World-targeted grant names `worldId X`, a Ctx
+constant. Admission (`check`) never reads the origin or the chain. Consumers that recompute an id
+from a World's current origin: Ops/Founder.create (its docstring already says to use `createAs` with
+the old id after a carry, and Ops/Plants does), Host/Cli's founder print (a genesis World only),
+Lang/Journey (genesis), and Protocol/Rows/Loopback.freshActor. That last one was a LATENT DEFECT:
+after the carry act it derived a founder's id from the carried origin, so a founder acting first
+after a carry would have been `unknownKey`. PROTOCOL-6 fixed it in 4147b9b (PROTOCOL-36:
+`St.lineage` keys founder ids, and row carry gains a first act after the carry). The client takes
+member ids from its invitation and never derives them.
+**Theorems.** Kernel/Proofs/Carry.lean: `receive_reorigin` (give a World any new origin and chain:
+a call naming the new origin is derived through the OLD World's pinned view, so `receive` reads the
+origin and chain only in the World check), `receive_named` (a call
+that names its World is derived from the pinned state alone), `carry_receive` (the carried World
+derives every call that names it through the exported World's own pinned view: the same members,
+keys, grants and cells at the same ids; a corollary of `receive_reorigin`), `check_origin_blind`
+and `carry_check` (the carried World
+checks every turn as the exported one). Kernel/Proofs/CarryRooted.lean (new): `carry_rooted` (a
+carry keeps `WorldRooted` with the SAME roots) and `deployed_carry_rooted`. On a World audited from
+genesis, carried, and audited again, every World grant is rooted at the FIRST genesis's founder
+grants, with no premise beyond the two audits and the carry.
+**Teeth.** Mutation: a carry that drops the trie (`trie := .empty` in carryWorld). `carry_receive`
+and `carry_check` stop compiling, as do carry_carried and carry_canon, and kernel-sim seed 0 FAILs
+"probe carry: the carried World differs". The standing arm `carry-new:ok` (an old member's fresh
+call for the new World is admitted) is the runtime form of `carry_receive`. PROTOCOL's row carry now
+runs a founder's first act after a carry; with the old derivation it fails "got refused
+unknownKey".
+**Alternatives.** (a) Re-key at carry. That rewrites every member cell id, every grant's
+grantee/issuer/parent slot, and every keyed ledger account (KERNEL-28). The carried trie would no
+longer be the exported trie, which breaks law 1's check (canonical World bytes equal up to the
+epoch header), `carry_inj`'s binding of the trie by root, and HOST-28's `--digest`. It is also a
+second state transform beside the fold, with an authority-preservation theorem to prove over every
+id-bearing slot. (b′) Opacity with no theorem. That leaves "nothing reads an origin out of an id"
+as prose, which is exactly what Loopback.freshActor violated unnoticed.
+**Critique.** `carry_rooted` is true by construction (the trie is copied), and an empty trie is
+also rooted. The content that a carry KEEPS the members is `carry_receive` and `carry_carried`, not
+`carry_rooted`. The rule "never recompute an id from the current origin" is enforced by no gate, so
+a new consumer can repeat Loopback's mistake. Its guard is a row or plant that acts after a carry,
+as row carry now does. "Nothing reads an origin out of an id" is PROVED for the World's origin
+(`receive_reorigin`, `check_origin_blind`: `pinned` and `check` read neither origin nor chain). It is
+only ENUMERATED for the call's own `c.unsigned.world`: after a carry that field is the new origin,
+and a `receiveWith` that recomputed an id from it (Loopback's mistake, inside the kernel) would pass
+every theorem here, since both sides of `carry_receive` take the same call. Derive.lean reads
+`.world` only in the World check today; the statement that closes it is cv task 01a14aa3-ca32. A lineage's first origin is not a field of the World. It is reachable only
+through the chain of carry inputs (`fromOrigin`), so a consumer must carry it (PROTOCOL's
+`St.lineage`, HOST's export file).
+Second-agent vacuity read (before landing): LAND after two edits, both made. The first draft's
+`receive_origin_blind` (an iff premise) compared nothing past the World check and was replaced by
+`receive_reorigin`. `carry_receive`'s docstring overclaimed (on the old World the same call is
+`wrongWorld`). The call-field gap above is the reader's finding.
+**Meta-critique.** The pull toward re-keying was aesthetic: ids that "belong" to the current World.
+Ids belonging to their lineage is the same property one level up, and it is the one that keeps
+state carried by bytes. The enumeration was what decided it. It found one reader, and that reader
+was a defect in a consumer, not a reason to re-key.
+**Flag day.** None. No definition changed. Nothing re-geneses, re-emits or refuses to load.
