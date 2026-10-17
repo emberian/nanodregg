@@ -373,8 +373,12 @@ would hold a disqualified child up undecided (reports of strangers now ignored, 
 unbounded memory (`prune`, `step_kept`); no proof the exit report returns the id (`remember_has`,
 `returning_complete`); no one-action-per-grain over the whole round (`step_one_per_grain`); the
 restart/orphan and ordering assumptions were unstated (now the launcher's laws above). Accepted: the
-batch-level frame property (a cell whose state changes is in `touchedIds`) is KERNEL's
-`admit_frame` per Turn and is not lifted to a batch here — owed, asked of KERNEL; `now` is advisory
+batch-level frame property (a cell whose state changes is in `touchedIds`) was KERNEL's
+`admit_frame` per Turn and not lifted to a batch. It is now proved here (HOSTING-3,
+`Hosting.Proofs.Frame`): `fold_frame` (an id outside a batch's `touchedIds` keeps its entry) and
+`decide_frame` (so its decision is unchanged). One gap remains outside both: `reconcile` decides at
+most `grainsMax` ids per call, so deciding only the touched ids is complete only while the caller
+pages through all of them, which `Loop.step` does (`roundIds`); `now` is advisory
 (one far-future report disables the window); a `crashLoop` grain is retried only when a Turn touches
 it.
 **Plants** (run): `afterOne` not marking a launch ⇒ `step_launch_marks` red and G17 "touched again:
