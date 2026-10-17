@@ -52,7 +52,10 @@ pub fn supervise(
         .arg("--exec")
         .arg(&prefix)
         .arg("--");
-    c.arg(&py).args(["-I", "-c", script]).args(args);
+    // The mux tells the child each connection's end (`HANGUP`, generated): every script may read
+    // it as `HANGUP` and must skip such frames (the wait-for-bind probe above makes one).
+    let script = format!("HANGUP = {}\n{script}", nanodregg_client::generated::HANGUP);
+    c.arg(&py).args(["-I", "-c", &script]).args(args);
     let s = Supervisor(
         c.stdin(Stdio::null())
             .stdout(Stdio::null())

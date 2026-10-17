@@ -19,6 +19,7 @@ while True:
     if len(h) < 4: break
     body = i.read(struct.unpack('<I', h)[0])
     conn, op = body[:4], body[4]
+    if op == HANGUP: continue
     try:
         open(seed, 'rb').read(); answer = b'read'
     except OSError:
@@ -136,4 +137,34 @@ fn a_confined_lean_host_answers_within_the_deadline() {
         reply.err()
     );
     eprintln!("confined lean host replied in {ms:.1} ms");
+}
+
+/// A confined child killed by a signal ends the supervisor `childSignaled` (66), whatever the
+/// mechanism makes of the death (OPS-2, hbox: bwrap exits 128 + N, so the unit saw 137/153, a code
+/// in neither table). The child kills itself with SIGKILL before reading a frame.
+#[test]
+fn a_confined_child_killed_by_a_signal_is_child_signaled() {
+    let ws = std::env::temp_dir().join(format!("nd-sup-sig-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&ws);
+    std::fs::create_dir(&ws).unwrap();
+    let ws = ws.canonicalize().unwrap();
+    let sock = std::env::temp_dir().join(format!("nd-sup-sig-{}.sock", std::process::id()));
+    let out = Command::new(env!("CARGO_BIN_EXE_nd-supervise"))
+        .arg(&sock)
+        .args(["--hide"])
+        .arg(&ws)
+        .args(["--exec", "/bin/sh", "--", "/bin/sh", "-c", "kill -KILL $$"])
+        .stdin(std::process::Stdio::null())
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_file(&sock);
+    std::fs::remove_dir_all(&ws).unwrap();
+    assert_eq!(
+        out.status.code(),
+        Some(i32::from(
+            nanodregg_client::generated::supervisor_exit::CHILD_SIGNALED
+        )),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 }

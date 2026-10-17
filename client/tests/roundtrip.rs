@@ -19,7 +19,8 @@ def frames():
     while True:
         h = i.read(4)
         if len(h) < 4: return
-        b = i.read(struct.unpack('<I', h)[0]); yield b[:4], b[4], b[5:]
+        b = i.read(struct.unpack('<I', h)[0])
+        if b[4] != HANGUP: yield b[:4], b[4], b[5:]
 def reply(conn, status, payload):
     out = conn + bytes([status]) + payload
     o.write(struct.pack('<I', len(out)) + out); o.flush()

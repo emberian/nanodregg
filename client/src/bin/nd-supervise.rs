@@ -115,9 +115,10 @@ fn run() -> Result<ExitCode, String> {
         .wait()
         .map_err(|e| format!("nd-supervise: wait: {e}"))?;
     eprintln!("nd-supervise: {end:?}; child {status}");
+    // How a signal death reaches us is the mechanism's (sandbox::killed_by_signal).
     Ok(match (end, status.code()) {
         (MuxEnd::ChildMalformed(_), _) => ExitCode::from(exit::CHILD_UNROUTABLE),
-        // A Unix exit status is one byte; anything else is no status, as a signal is.
+        _ if nanodregg_sandbox::killed_by_signal(status) => ExitCode::from(exit::CHILD_SIGNALED),
         (_, Some(c)) => ExitCode::from(u8::try_from(c).unwrap_or(exit::CHILD_SIGNALED)),
         (_, None) => ExitCode::from(exit::CHILD_SIGNALED),
     })

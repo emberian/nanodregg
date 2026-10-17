@@ -28,9 +28,9 @@ edit it, never pass it as a PATH). Ceilings live in `gates/ceilings.tsv`. A rise
 | sorry | 0 | 0 |
 | native (extern/implemented_by) | 8 | 8 |
 | C lines | 146 | 146 |
-| Rust lines | 5220 | — |
+| Rust lines | 5269 | — |
 | Rust lines (nd) | 69 | 100 |
-| Rust lines (nd-supervise) | 124 | 160 |
+| Rust lines (nd-supervise) | 125 | 160 |
 | Rust lines (client library) | 1852 | 2000 |
 | Rust lines (attach/src) | 148 | 300 |
 | Rust lines (generated) | 611 | — |

@@ -109,6 +109,19 @@ pub const EXEC_FILTERED: bool = false;
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
 pub const EXEC_FILTERED: bool = true;
 
+/// A platform fact (charter law 2): how the mechanism reports a child killed by a signal. macOS
+/// `sandbox-exec` execs the program in its own place, so a signal death is seen as one (no exit
+/// code). Linux `bwrap` stays the parent and turns the inner death into its own exit `128 + N`
+/// (measured by OPS-2 on hbox: SIGXFSZ → 153, SIGKILL → 137). So on Linux a status of 128 or more
+/// IS a signal death; a confined child's own code can then not be read above 127 (the Host's stay
+/// below 64, `Host.Proofs.Exit`). Plant: client/tests/supervise.rs
+/// `a_confined_child_killed_by_a_signal_is_child_signaled`.
+pub fn killed_by_signal(status: std::process::ExitStatus) -> bool {
+    use std::os::unix::process::ExitStatusExt;
+    status.signal().is_some()
+        || (cfg!(target_os = "linux") && status.code().is_some_and(|c| c >= 128))
+}
+
 #[cfg(target_os = "linux")]
 /// Not `/usr/bin/bwrap`: Ubuntu 24.04+ (`kernel.apparmor_restrict_unprivileged_userns = 1`) gives an
 /// unprivileged user namespace no capabilities, so the distro bwrap fails `setting up uid map:
