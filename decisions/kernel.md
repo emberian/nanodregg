@@ -220,3 +220,73 @@ Status: open.
   member's own log, which they follow. Meta-critique: I am refusing an index because indexes are a
   minidregg smell; the test is that every lookup on the gate is O(depth), and it is.
 Status: open.
+
+## KERNEL-14 · Answers: CODEC's counter widths, CLIENT-11's signature (KERNEL-2, 2026-10-16)
+- **CODEC (counters).** `Bound.counter`: notBefore, validUntil and charge are < 2^64, and a born cell's
+  kind < 2^32, checked in `checkBounds` (d310846). A World's height < 2^64 follows from `admit_window`.
+  Alternative (CODEC's own preference): make those fields `UInt64`/`UInt32`, so the bound is in the
+  type. I chose the check because the window and charge arithmetic is `Nat` in every proof
+  (`omega`), and the premise is asserted where it enters (law 4). Critique: a `Nat` field says nothing
+  about its width, so every encoder must cite the check; the type route makes that impossible to
+  forget. Meta: I picked the route that does not churn my proofs. If CODEC hits a second field of
+  this kind, switch to the types.
+- **CLIENT-11 (which signature a Turn carries).** The Turn carries the call's bytes as its `event`,
+  signature included. The kernel's shape is already agnostic: `key` and `signature` are opaque
+  `ByteArray`s and `Ctx.verify` is the only check, run by the Host's `receive` and by every follower's
+  `rederive`, so Lean decides on both sides. CLIENT-11's hybrid (Ed25519 ‖ ML-DSA-65, AND, one message,
+  one seed) needs no kernel shape change except splitting `badSignature` into one name per half. That
+  split lands with the verifier that produces it, because a constructor nothing produces is a no-op
+  shape. The scheme itself is key material: **ROOT/Ember rules** (CHARTER pause list item 1). My
+  recommendation is hybrid, with CLIENT's two plants (each half flipped alone must be refused by its
+  name), because the log is permanent and re-verified by every new follower. Critique: 3.4 KB per
+  call; a two-friends World pays now for a hypothetical threat. Meta: "permanent log" is an argument
+  I find persuasive in general, and I have not priced how many follower re-verifies THE BAR implies.
+Status: open (signature scheme: ROOT).
+
+## KERNEL-15 · Storage is one World budget; no refill in v0, credit on retirement is the next step (KERNEL-2, 2026-10-16)
+**Decision.** The allowance only falls. Since KERNEL-12 it budgets the whole Store (log + World),
+so a World whose allowance is spent refuses every further turn `overAllowance`: its useful life is set
+at genesis. Proposed next (not built): a retirement CREDITS the World bytes it frees (the retired
+cell's `Cell.weight`, computed from the one lookup `touchCheck` already makes). That is exact and
+keeps the invariant World + log ≤ budget, because the log bytes of the cell's birth are never
+refunded. Operator refill (a founder-signed `fund n` kind) is NOT decided here. Who may mint storage
+is an authority question, and per-member budgets are a fork (KERNEL-16).
+**Alternatives.** (a) Refill by a founder call. (b) Per-member allowances, each member paying for its
+own turns. (c) No budget at all, bounded only by the disk (minidregg).
+**Critique.** A World that dies when its budget is spent is a footgun at genesis: pick the number too
+small and only a re-genesis recovers (free here, not free in a deployment with friends' data). Credit
+on retirement rewards churn-free designs and does nothing for a log that only grows. **Meta-critique.**
+I am deferring the refill call because it needs an authority decision. Check: the credit half needs
+none and is mechanical, so it is not deferred for difficulty; it waits for the World-weight theorem,
+which is what makes "exact" a claim rather than a hope.
+Status: open (refill authority: ROOT).
+
+## KERNEL-16 · Open sponsoring is wrong as stated: the sponsor does NOT pay (KERNEL-2, 2026-10-16)
+**Finding.** KERNEL-6's critique says "any member may sponsor … and the sponsor pays". There is one
+World allowance, so no member pays anything personally. Any member can enrol members without limit,
+and any member can spend the whole World budget. **Decision (recommended, ROOT to rule).** Enrolment
+requires authority, using machinery the kernel already has: `enroll` is admitted only for a sponsor
+holding a live grant chain to a founder that carries a new right `.enroll` (one `Right` constructor).
+The founders, who are the genesis World, can then delegate and revoke the power to admit. Budget per
+member (allowance per member cell, charged to the signer) is the stronger fix to the "spend it all"
+half. It changes `checkCharge` to read the signer's member cell, one more touch per turn, and it is
+the fork ROOT should pick between: (a) rights-gated enrolment only, (b) plus per-member budgets.
+**Critique.** (a) does not stop a trusted member from exhausting storage; (b) costs a member-cell
+write on every turn (a hot cell per member, so a member's concurrent calls conflict `stale`).
+**Meta-critique.** Two friends and a Hermes resident do not need either. I may be designing for a
+public World that THE BAR does not include.
+Status: open (ROOT).
+
+## KERNEL-17 · The journal is not pruned (KERNEL-2, 2026-10-16)
+**Decision.** Every admitted txId stays in the journal (72 bytes, charged in `Turn.growth`).
+**Why not prune by window.** After `height > validUntil`, a replay is refused anyway (`outsideWindow`),
+so the journal entry is not needed for safety. But it IS the receipt: `lookup` (HOST-8) answers
+`committed (height, digest)` from it, and `submit` answers a late retry `replayed h` with the
+original height. A pruned entry turns a committed call into `absent` or `outsideWindow`, which is a
+false answer to the client, worse than the bytes it saves. **Alternatives.** (a) Prune entries older
+than `windowMax` heights and answer lookups from the log (O(log) per lookup, not O(1)). (b) Keep a
+txId → height index outside the World (a second copy of state). **Critique.** The journal is O(turns)
+forever: at THE BAR, 1000 turns cost 72 KB; at 10^6 turns, 72 MB resident. **Meta-critique.**
+"Pruning loses receipts" is a correctness argument, and I may be leaning on it so I don't have to build
+(a). Revisit when a World passes 10^6 turns. Nothing earlier forces it.
+Status: open.
