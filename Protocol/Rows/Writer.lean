@@ -50,9 +50,12 @@ def cadence : Cadence :=
     recordBytesMax := Cadence.deployed.recordBytesMax, sealTurns := Cadence.deployed.sealTurns }
 
 /-- The page budget the rows' writer pages with: HOST's `Page.budget` is a frame, which no row's
-log reaches, so a row would never see a page end before the tip. 4096 bytes holds every single
-event the rows log (the largest is a package install) and makes a cold follower page. -/
-def pageBudget : Nat := 4096
+log reaches, so a row would never see a page end before the tip. It must hold every single event
+the rows log (HOST's own premise, `Host.Page.budget_fits_event`, restated for the rows' events):
+the largest is the grain row's install of the shipped lifecycle package (9000 bytes of text). An
+event past it is never served, and the follower refuses the empty page short of the tip
+`badResult` (how the 4096 this replaced was found). 16384 still makes a cold follower page. -/
+def pageBudget : Nat := 16384
 
 def limits : Limits := ⟨16, 1 <<< 20⟩
 /-- Batches one round of the loop serves before it ends `fuel` (`Host.restarts` reopens in process). -/

@@ -563,3 +563,30 @@ plant (the child's dispatch is total over the wire bytes), not a message anyone 
 **Meta-critique (PROTOCOL-5's).** The hang-up/op split could be read as taste; the reason is that
 receiver uniqueness has to stay a non-vacuous theorem.
 **Status.** landed.
+
+## PROTOCOL-24 · programmed objects from the command language: `create --pkg PKG STATE`, `invoke` reads ARGS as TEXT; rows grain and THE BAR's invoke (2026-10-17, PROTOCOL-5)
+**Decision.** `create --pkg PKG STATE LAW…` births an object programmed by PKG; `invoke OBJ METHOD
+ARGS` carries ARGS as TEXT. Neither is read by the parser (which has no World): `Machine.body`
+reads them on follow's World when the call is planned, by LANG's readers (`Lang.seedOf`,
+`Lang.argsOf`, LANG-22) through `worldLook w` (follow's whole World as a pinned view; the call's
+pins are discovered afterwards by `derivePins`). `body` is `Except`: a text that does not read is
+`refused` with LANG's `program` reason, an invoke of a data object is the receiver's own `noMethods`,
+a missing object `missingCell`. Rows: `grain` now drives the SHIPPED `world/grain/Lifecycle` (a row
+argument `<PATH` is the file's text; `{@NAME}` substitutes a binding inside a text) through
+create/start/second start/stranger stop/grant-to-start/stop, plant skipJudge @6 → ok (the second
+start admitted). THE BAR installs `counter` (method `add`, law `bounded`), creates one, and invokes
+`add 1` 64 times within 5 s each (`add 999999` after them is refused `lawDenied`, so the adds
+landed). `reqTy`/`verdictTy` are printed from LANG's types (`Lang.Read.showTy`). The rows' page budget
+is 16384 (it must hold every event the rows log, HOST's `budget_fits_event` premise; the grain
+install broke 4096 as `badResult`), and `paging` writes 100 times to keep paging.
+**Alternatives.** Parse-time reading (the parser would need the World: a second reader of it);
+args as raw hex (the member signs bytes it cannot read); the package text inlined in Rows from
+`Hosting.Text` (tests the generator, not the file a member installs).
+**Critique.** `body` reads the package from follow's World, the receiver from the call's pins: a
+package not yet in follow's World is `missingCell`/`unpinned` at plan time, the right refusal, but
+by a different name than the writer would give. The rows' page budget is a parameter that must
+dominate the rows' largest event, and nothing checks that statically. **Meta-critique.** The `<PATH`
+and `{@NAME}` substitutions make the rows a little shell; I chose them over a Lean import because the
+row should exercise the bytes a member actually pastes.
+**Status.** landed. The WASTE lines of THE BAR's invokes wait on KERNEL-5's `invokeRun` (one
+derivation of the run's inputs, after KERNEL-25).

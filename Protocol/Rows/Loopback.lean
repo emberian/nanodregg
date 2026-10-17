@@ -156,14 +156,44 @@ def bind (b hex : String) : M Unit := do
     setActor who (if isFollow then { a with self := { a.self with grant := d } }
                   else { a with self := { a.self with member := d } })
 
+/-- The most `{@NAME}` one argument substitutes. -/
+def substMax : Nat := 64
+
+/-- Every `{@NAME}` inside a text argument replaced by the hex `NAME` is bound to (a seed naming a
+member: `(owner #{@sponsor})`). -/
+def substInner (binds : List (String × String)) : Nat → String → Except String String
+  | 0, s => .ok s
+  | fuel + 1, s =>
+    match s.splitOn "{@" with
+    | [_] => .ok s
+    | pre :: rest =>
+      let tail := "{@".intercalate rest
+      match tail.splitOn "}" with
+      | name :: after => match binds.lookup name with
+        | some v => (substInner binds fuel ("}".intercalate after)).map (pre ++ v ++ ·)
+        | none => .error s!"unbound @{name}"
+      | [] => .error s!"unclosed in {s}"
+    | [] => .ok s
+
+/-- A line's argv as the member's shell would hand it to `nd`: `@NAME` is the hex bound to NAME,
+`{@NAME}` the same inside a text, and `<PATH` the text of the file PATH in this tree (a shipped
+package, `nd install "$(cat PATH)"`). -/
 def subst (argv : List String) : M (Except String (List String)) := do
   let binds := (← get).binds
-  pure <| argv.mapM fun a =>
+  let mut out : Array String := #[]
+  for a in argv do
     if a.startsWith "@" then
       match binds.lookup (a.drop 1).toString with
-      | some v => .ok v
-      | none => .error s!"unbound {a}"
-    else .ok a
+      | some v => out := out.push v
+      | none => return .error s!"unbound {a}"
+    else if a.startsWith "<" then
+      match ← (IO.FS.readFile (a.drop 1).toString).toBaseIO with
+      | .ok t => out := out.push t
+      | .error e => return .error s!"{a}: {e}"
+    else match substInner binds substMax a with
+      | .ok t => out := out.push t
+      | .error e => return .error e
+  return .ok out.toList
 
 /-- The first `id HEX` or `join HEX` a command printed. -/
 def boundToken (out : String) : Option String :=

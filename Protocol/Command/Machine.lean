@@ -33,6 +33,7 @@ only if follow's own World admits the Turn it derives (consent: `Protocol.Proofs
 import Kernel.Receive.Submit
 import Protocol.Command.Verb
 import Protocol.Envelope
+import Lang.Program
 
 namespace Nanodregg.Protocol.Command
 
@@ -209,19 +210,40 @@ def invokeBudget : Nat := 100000
 /-- Headroom of the signed price over the charge derived before the signature exists. -/
 def chargeSlack : Nat := 4096
 
-/-- The call body of a command; `s` is the key it is signed with (for `rotate`: the next key, and
-the pending key it precommits). -/
-def body (X : Ctx D) (me : Self D) (s : Signed) : Cmd D → Option (Body D)
-  | .enroll j => some (.enroll j.key j.next j.possession me.grant)
-  | .install p => some (.install p)
-  | .create ls => some (.create none ls [])
-  | .write o k v via => some (.write o [(k, some v)] via)
-  | .law o ls via => some (.law o ls via)
-  | .invoke o m a via => some (.invoke o m a invokeBudget via)
-  | .grant t g rs via => some (.grant (t.getD (worldId X)) g rs via)
-  | .revoke g => some (.revoke g)
-  | .rotate => some (.rotate s.key (nextKeyDigest X s.next))
-  | .init _ | .read _ _ | .adopt _ => none
+/-- Follow's own World as a pinned view: every cell it holds (planning reads the World it has
+folded; the call's pins are discovered afterwards by `derivePins`). -/
+def worldLook (w : World D) : Pinned D := fun c => .ok (w.live c)
+
+/-- The package an invoke runs: the object's, if it is a live programmed object (KERNEL's
+`packageOf`, `requireMethods`: the receiver's own refusals). -/
+def invokedPackage (X : Ctx D) (w : World D) (obj : D) : Except (Refusal D) D :=
+  match w.live obj with
+  | none => .error (.missingCell obj)
+  | some cell => match packageOf X obj cell >>= requireMethods obj with
+    | .ok p => .ok p
+    | .error r => .error (.receive r)
+
+/-- The call body of a command, on follow's World `w` (a seed or an argument TEXT is read there
+at its package's type: `Lang.seedOf`, `Lang.argsOf`); `s` is the key it is signed with (for
+`rotate`: the next key, and the pending key it precommits). -/
+def body (X : Ctx D) (me : Self D) (w : World D) (s : Signed) : Cmd D → Except (Refusal D) (Body D)
+  | .enroll j => .ok (.enroll j.key j.next j.possession me.grant)
+  | .install p => .ok (.install p)
+  | .create none ls => .ok (.create none ls [])
+  | .create (some (p, t)) ls => match Lang.seedOf (worldLook w) p t with
+    | .ok seed => .ok (.create (some p) ls seed)
+    | .error r => .error (.receive r)
+  | .write o k v via => .ok (.write o [(k, some v)] via)
+  | .law o ls via => .ok (.law o ls via)
+  | .invoke o m a via => do
+      let p ← invokedPackage X w o
+      match Lang.argsOf (worldLook w) p m a with
+      | .ok args => .ok (.invoke o m args invokeBudget via)
+      | .error r => .error (.receive r)
+  | .grant t g rs via => .ok (.grant (t.getD (worldId X)) g rs via)
+  | .revoke g => .ok (.revoke g)
+  | .rotate => .ok (.rotate s.key (nextKeyDigest X s.next))
+  | .init _ | .read _ _ | .adopt _ => .error .badState
 
 /-- Derive with the signature not yet known, pinning each cell the derivation asks for. -/
 def derivePins (X : Ctx D) (w : World D) : Nat → Unsigned D → Except (Refusal D) (Unsigned D × Turn D)
@@ -426,9 +448,9 @@ def step (X : Ctx D) (B : Thin.Base (World D)) (me : Self D) (f : Follow D) (kb 
                       match cmd, Signed.ofBytes signedB with
                       | .read obj ex, _ => moved w' ts (render w' obj ex)
                       | .rotate, some _ => moved w' ts (again 5 [startB, signedB] fun k => .precommit k)
-                      | _, some s => match body X me s cmd with
-                        | none => moved w' ts (refused (D := D) .badState)
-                        | some b =>
+                      | _, some s => match body X me w' s cmd with
+                        | .error r => moved w' ts (refused (D := D) r)
+                        | .ok b =>
                           match plan X me w' s.key b with
                           | .error r => moved w' ts (refused (D := D) r)
                           | .ok u => moved w' ts (again 3 [startB, signedB, X.unsignedBytes u] fun k =>
@@ -447,9 +469,9 @@ def step (X : Ctx D) (B : Thin.Base (World D)) (me : Self D) (f : Follow D) (kb 
       -- the call's signature: re-plan, compare with what was signed, submit
       | _, 3, [startB, signedB, ub] =>
           match Signed.ofBytes signedB, Signed.ofBytes result with
-          | some s, some s2 => match body X me s cmd with
-            | none => same (refused (D := D) .badState)
-            | some b =>
+          | some s, some s2 => match body X me w s cmd with
+            | .error r => same (refused (D := D) r)
+            | .ok b =>
               if s2.key ≠ s.key then same (refused (D := D) .badResult) else
               match plan X me w s.key b with
               | .error r => same (refused (D := D) r)
@@ -467,8 +489,8 @@ def step (X : Ctx D) (B : Thin.Base (World D)) (me : Self D) (f : Follow D) (kb 
           | none => same (refused (D := D) .badResult)
           | some (nk, pk) =>
               let s : Signed := ⟨nk, pk, ByteArray.empty⟩
-              match s.bytes, body X me s .rotate with
-              | some sb, some b =>
+              match s.bytes, body X me w s .rotate with
+              | some sb, .ok b =>
                   match plan X me w s.key b with
                   | .error r => same (refused (D := D) r)
                   | .ok u => same (again 3 [startB, sb, X.unsignedBytes u] fun k =>

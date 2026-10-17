@@ -29,13 +29,16 @@ inductive Verb
   | enroll
   /-- `install TEXT`: install the package TEXT reads to (LANG's text form) -/
   | install
-  /-- `create LAW…`: birth a data object owned by the signer, judged by the laws -/
+  /-- `create LAW…`: birth a data object owned by the signer, judged by the laws;
+  `create --pkg PKG STATE LAW…`: birth an object programmed by package PKG, its seed STATE read
+  (at the package's state type, by LANG's reader, on follow's World) -/
   | create
   /-- `write OBJ KEY VALUE [--via GRANT]`: set one state slot -/
   | write
   /-- `law OBJ LAW… [--via GRANT]`: replace a data object's laws -/
   | law
-  /-- `invoke OBJ METHOD ARGS [--via GRANT]`: run a method -/
+  /-- `invoke OBJ METHOD ARGS [--via GRANT]`: run a method; ARGS is read at the method's argument
+  type (LANG's reader, on follow's World) -/
   | invoke
   /-- `grant TARGET MEMBER RIGHTS [--via PARENT]`: TARGET is an object or `world` (the World,
   KERNEL-20: `observe` on it is following the log, `enroll:N` is sponsoring N members); RIGHTS is
@@ -78,10 +81,12 @@ inductive Cmd (D : Type)
   | init (sponsor : D)
   | enroll (join : Join D)
   | install (pkg : ByteArray)
-  | create (laws : List D)
+  /-- `pkg` = the package and the seed state's TEXT -/
+  | create (pkg : Option (D × String)) (laws : List D)
   | write (obj : D) (key : Nat) (value : ByteArray) (via : Option D)
   | law (obj : D) (laws : List D) (via : Option D)
-  | invoke (obj : D) (method : Nat) (args : ByteArray) (via : Option D)
+  /-- `args` is TEXT, read at the method's argument type when the call is planned -/
+  | invoke (obj : D) (method : Nat) (args : String) (via : Option D)
   /-- `target = none` is the World -/
   | grant (target : Option D) (grantee : D) (rights : List Right) (via : Option D)
   | revoke (grant : D)
@@ -123,7 +128,7 @@ def ParseRefusal.tag : ParseRefusal → Nat
 
 def usage : Verb → String
   | .init => "init SPONSOR" | .enroll => "enroll TOKEN"
-  | .install => "install TEXT" | .create => "create LAW..."
+  | .install => "install TEXT" | .create => "create [--pkg PKG STATE] LAW..."
   | .write => "write OBJ KEY VALUE [--via GRANT]" | .law => "law OBJ LAW... [--via GRANT]"
   | .invoke => "invoke OBJ METHOD ARGS [--via GRANT]" | .grant => "grant TARGET MEMBER RIGHTS [--via PARENT]"
   | .revoke => "revoke GRANT" | .read => "read OBJ [KEY=VALUE...]" | .rotate => "rotate"
@@ -207,14 +212,16 @@ def parseVerb (v : Verb) (args : List String) : Except ParseRefusal (Cmd D) :=
       | some j => .ok (.enroll j)
       | none => .error (.badToken t)
   | .install, [t] => (.install ·) <$> packageArg t
-  | .create, ls => .create <$> mapEx (digestArg digestOf) ls
+  | .create, "--pkg" :: p :: st :: ls => do
+      pure (.create (some (← digestArg digestOf p, st)) (← mapEx (digestArg digestOf) ls))
+  | .create, ls => .create none <$> mapEx (digestArg digestOf) ls
   | .write, o :: k :: val :: via => do
       pure (.write (← digestArg digestOf o) (← numArg k) val.toUTF8 (← viaArg digestOf .write via))
   | .law, o :: rest =>
       let (ls, via) := splitVia rest
       do pure (.law (← digestArg digestOf o) (← mapEx (digestArg digestOf) ls) (← viaArg digestOf .law via))
   | .invoke, o :: m :: a :: via => do
-      pure (.invoke (← digestArg digestOf o) (← numArg m) a.toUTF8 (← viaArg digestOf .invoke via))
+      pure (.invoke (← digestArg digestOf o) (← numArg m) a (← viaArg digestOf .invoke via))
   | .grant, t :: m :: rs :: via => do
       let target ← if t = "world" then pure none else some <$> digestArg digestOf t
       pure (.grant target (← digestArg digestOf m) (← mapEx rightArg (rs.splitOn ","))

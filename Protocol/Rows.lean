@@ -18,6 +18,7 @@ minidregg row checked that nanodregg does not have (a codec child, a host-image 
 filter) is gone with the thing; what it checked about the WORLD stays.
 -/
 import Protocol.Table
+import Lang.Read
 
 namespace Nanodregg.Protocol
 
@@ -164,8 +165,10 @@ private def okBind (actor : String) (argv : List String) (b : String) : Line :=
 
 /-! ## Packages the rows install (LANG's text form; `install` reads it) -/
 
-def reqTy : String := "(rec (agent bytes) (notBefore nat) (occasion (sum (birth (rec)) (invoke nat) (relaw bytes) (write (rec)))) (principal bytes) (validUntil nat))"
-def verdictTy : String := "(sum (ok (rec)) (refused bytes))"
+/-- The request and verdict types as a resident pastes them: printed from LANG's own types, never
+restated. -/
+def reqTy : String := Lang.Read.showTy Lang.reqTy
+def verdictTy : String := Lang.Read.showTy Lang.verdictTy
 
 /-- A law package over a data object, with one law `l` whose body is `verdict`. -/
 def lawPackage (l verdict : String) : String :=
@@ -181,6 +184,21 @@ def sealedLaw : String :=
   let no := s!"(inj {verdictTy} refused \"sealed\")"
   lawPackage "sealed" s!"(case (. r occasion) (birth x (inj {verdictTy} ok (record))) (invoke x {no}) (relaw x {no}) (write x {no}))"
 def hermesLaw : String := lawPackage "hermes" s!"(inj {verdictTy} ok (record))"
+
+/-- THE BAR's programmed object: a counter whose method `add n` adds to its total, judged by one
+law `bounded` (total at most 10^6), so every invoke runs a method AND a law. -/
+def counter : String :=
+  let S := "(rec (total nat))"
+  s!"(package (imports) (state {S})
+    (iface (rec (add (-> {S} (-> nat (-> {reqTy} {S}))))
+                (bounded (-> {S} (-> {S} (-> {reqTy} {verdictTy}))))))
+    (methods add) (laws bounded)
+    (body (record
+      (add (fn (s {S}) (n nat) (r {reqTy}) (record (total (+ (. s total) n)))))
+      (bounded (fn (old {S}) (new {S}) (r {reqTy})
+        (if (<= (. new total) 1000000)
+            (inj {verdictTy} ok (record))
+            (inj {verdictTy} refused \"over a million\")))))))"
 
 /-! ## The rows -/
 
@@ -300,8 +318,8 @@ def audit : Row where
 /-- A log page holds at most a page budget of events (HOST-17), so it can end before the writer's
 tip, even inside a batch; a cold follower pages from each page's height until it reaches the tip
 the writer states. New in nanodregg (minidregg served the whole log in one frame), so it replaces
-no row. The rows' writer pages with a 4096-byte budget (`Writer.pageBudget`), so forty writes are
-several pages. -/
+no row. The rows' writer pages with a 16384-byte budget (`Writer.pageBudget`), so a hundred writes
+are several pages. -/
 def paging : Row where
   name := "paging"
   replaces := []
@@ -309,7 +327,7 @@ def paging : Row where
   kinds := ["enroll", "install", "create", "grant", "write"]
   drive := .members (welcome ++ join "sponsor" "auditor" ++ [
     { actor := "newcomer", act := .cmd ["write", "@shared", "2", "1", "--via", "@g"], expect := .ok,
-      times := 40 },
+      times := 100 },
     ok "sponsor" ["write", "@shared", "3", "9"],
     { actor := "auditor", act := .cmd ["read", "@shared", "2=1", "3=9"], expect := .ok, fault := .cold }])
   plant := .caught .lieTip 11 (.refused "expect")
@@ -410,19 +428,29 @@ def bounty : Row where
   plant := .caught .skipJudge 2 .ok
   blockedOn := some "LEDGER: escrow accounts; LANG: the bounty package world/bounty/BountyEscrow"
 
-/-- m6grain: an SPK app started by the user-mode broker under the one sandbox shape; a second
-world's volume is refused. The broker verbs are CLIENT's sandbox, not this language. -/
+/-- m6grain (HOSTING-5, 6095c5b): a grain is an object programmed by the SHIPPED lifecycle package
+(`world/grain/Lifecycle`, `Hosting.Text.package` of `Hosting.lifecycle?`, G0 byte for byte), born
+`installed` with its owner named in its seed. Methods remove 0, start 1, stop 2, each taking the
+empty record. The owner starts it; a second start has no edge (the package's own phase law); a
+member who is not the owner cannot stop it (invoke is owner-gated, KERNEL-25: `noGrant`); the owner's grant of `invoke:1` (start)
+does not let the grantee stop it (`grantRight`). The sandbox half (the broker launching the grain,
+a second world's volume refused) is CLIENT's and HOSTING's, judged by their plants, not by rows. -/
 def grain : Row where
   name := "grain"
   replaces := ["m6grain", "journey/M6"]
   ops := everyWrite
-  kinds := ["install", "invoke"]
-  drive := .members [
-    okBind "operator" ["install", "world/grain/Lifecycle"] "grain",
-    ok "owner" ["grain", "start"],
-    no "owner" ["grain", "mount", "b"] "crossWorldVolume"]
-  plant := .caught .skipJudge 2 .ok
-  blockedOn := some "LANG: Read.dataAt (a seed's text at a state type); PROTOCOL: `create --pkg PKG --state TEXT`; HOSTING: world/grain/Lifecycle landing (HOSTING-3/11: methods start 0 stop 1 remove 2, args empty; rewrite this row's drive to HOSTING's proposed lines, delete crossWorldVolume)"
+  kinds := ["enroll", "grant", "install", "create", "invoke"]
+  drive := .members (join "sponsor" "newcomer" ++ [
+    okBind "operator" ["install", "<world/grain/Lifecycle"] "lifecycle",
+    okBind "sponsor" ["create", "--pkg", "@lifecycle",
+      "(record (entry \"app\") (kind app) (owner #{@sponsor}) (phase installed))"] "app",
+    ok "sponsor" ["invoke", "@app", "1", "(record)"],
+    no "sponsor" ["invoke", "@app", "1", "(record)"] "lawDenied",
+    no "newcomer" ["invoke", "@app", "2", "(record)"] "noGrant",
+    okBind "sponsor" ["grant", "@app", "@newcomer", "invoke:1"] "gs",
+    no "newcomer" ["invoke", "@app", "2", "(record)", "--via", "@gs"] "grantRight",
+    ok "sponsor" ["invoke", "@app", "2", "(record)"]])
+  plant := .caught .skipJudge 6 .ok
 
 /-- hermes: a hosted agent is a member with its own seed; the reply to its install is lost (killed
 after the send); the attempt settles by lookup, once, and is never signed afresh (a second install
@@ -441,16 +469,23 @@ def hermes : Row where
     ok "hermes" ["read", "@shared", "2=5"]])
   plant := .caught .resendFresh 10 (.refused "idTaken")
 
-/-- THE BAR, in process: N births by one member, each within 5 s; a cold reopen within 60 s; the
-state read back. (64 per landing; `rows --times 1000 bar` for the nightly number.) -/
+/-- THE BAR, in process: N births by one member, each within 5 s; one law installed and N invokes of
+it on one programmed object, each within 5 s (`add 1`; after them `add 999999` passes the law's
+bound, so the invokes really added: refused `lawDenied`); a cold reopen within 60 s; the state read
+back. The invokes print `WASTE invoke ticks-per-call` and `packages-checked-per-call`. (64 per landing; `rows --times 1000 bar` for the nightly number.) -/
 def bar : Row where
   name := "bar"
   replaces := ["births", "perf", "growth", "journey/G"]
   ops := everyWrite
-  kinds := ["create", "write"]
+  kinds := ["install", "create", "invoke", "write"]
   drive := .members [
     { actor := "sponsor", act := .cmd ["create"], expect := .ok, bind := some "obj", times := 64,
       withinMs := some 5000 },
+    okBind "sponsor" ["install", counter] "counter",
+    okBind "sponsor" ["create", "--pkg", "@counter", "(record (total 0))"] "tally",
+    { actor := "sponsor", act := .cmd ["invoke", "@tally", "0", "1"], expect := .ok, times := 64,
+      withinMs := some 5000 },
+    no "sponsor" ["invoke", "@tally", "0", "999999"] "lawDenied",
     { actor := "operator", act := .restart, expect := .ok, withinMs := some 60000 },
     { actor := "sponsor", act := .cmd ["write", "@obj", "1", "x"], expect := .ok, withinMs := some 5000 },
     ok "sponsor" ["read", "@obj", "1=x"]]
