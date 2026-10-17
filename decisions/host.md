@@ -1127,3 +1127,147 @@ call had been admitted at any earlier World, and any admitted log led on to this
 There was no Host plant for the forgotten arm, only kernel-sim and PROTOCOL's row. plant-lookup-forgotten
 covers it in host-sim: the same dead call at height 2·windowMax − 1 answers `refused expired`, and at
 2·windowMax it answers `uncertain forgotten`.
+
+## HOST-32 · what a live backup in `backupOrder` guarantees: it opens to its base with at least the live records, or refuses by name (2026-10-18, HOST-8; HOST-30's law-6 read, item (c))
+**Context.** `backupOrder_appendOnly_after_base` was only an ORDER fact over the layout data. It did
+not say what a backup taken in that order gets you.
+**Decision.** State it, and prove it over the one open (Host/Proofs/Backup.lean). The model:
+- `file`, `I` and `S` are base.world, index.log and seg.log as they stood when the backup copied
+  base.world;
+- the Store opened at that instant (the writer's invariant, which host-sim's crash plants test at
+  every seal and every cut);
+- the backup holds that `file`, plus `I ++ x` and `S ++ y`. The append-only files are copied after
+  the base, so each copy is the file then plus whatever the writer appended since.
+
+`openWith_backup`: the backup's open either
+- opens to the SAME base, with `records = live records + more.length`, a World and index that are the
+  live ones advanced by the extra records' fold (`foldRecords` from the live state), and a position no
+  earlier; or
+- refuses by name: `tailTooLong` (the writer sealed and kept appending while the copy ran), `corrupt`,
+  or `record j` with j ≥ the live record count.
+
+It never opens to fewer records. It never refuses `indexShort`, `indexCorrupt`, `foreignSegment`,
+`foreignOrigin`, `tagWidth` or `shortRead`, because the prefixes the base names were in the files
+when the base was copied. The extra records fold from the live state at the live position and end at the backup's
+position, so their index entries name their true offsets. A `corrupt` refusal names bytes at or
+past the live position. Lemmas:
+- `recover_append`: appending bytes never loses a recovered frame (`frameAt_append`, `step_append`,
+  `go_append`);
+- `openLog_append`;
+- `openWith_seg_ok`: the one open over bytes, its success decomposed into each check it passed.
+
+Plants (host-sim):
+- plant-backup: for every base k before the last, the live Store is base k at the instant before base
+  k+1 was renamed in. That is a non-empty tail with base k+1's page as an orphan, which
+  crash-before-rename shows opens. The backup (base k, then the files as they stand at the end)
+  opens to base k with at least the live records and EXACTLY the frames `recover` finds past base k's
+  offset (an independent count), or refuses `tailTooLong`. It fires on at least two live Stores with
+  a non-empty tail. HOST-8's law-6 reader found that the first cut (the live Store at the install,
+  an empty tail) could not see a short read; this is the fix;
+- plant-backup-wrong-order: seg.log copied as it stood one base earlier, under a later base, is
+  refused `segmentShort`, never opened short.
+
+**Critique.** The theorem assumes the copies are the files then, plus appended bytes. Three live-writer
+behaviours fall outside that:
+- a restarting writer that TRUNCATES a torn tail or an orphan page between two copies. The copy can
+  then hold the truncated file, which is a prefix of S, not an extension of it. The open of a prefix of
+  S that still reaches the base's offset is the open of fewer records, so it is not covered here.
+  RUNBOOK §6 already says to copy from a stopped writer or under no restart;
+- a writer that installs a NEWER base between copying base.world and copying index.log. That is
+  covered: the copied base is still one the writer installed, and its prefixes are still in the files;
+- copying a file while bytes are being written into it. A torn last frame is `torn` (the open folds the
+  frames before it).
+
+The writer's invariant (the live Store opens at every instant) is a premise, not a theorem. No IO model
+proves it. host-sim checks it at every seal (crash-before-rename) and every cut (restart-at-every-cut).
+**Meta-critique.** I proved the theorem over the Id open with in-memory readers, not over `openAt`'s
+IO. The two are the same `openWith` code with different readers, which `openWith_reads` already relies
+on. Restricting to readers that return the file's bytes (`segReader`) is the honest model of a copy,
+and what a copy cannot model (concurrent truncation) is named above. No refusal is new, no shape
+changed, no re-genesis.
+
+## HOST-33 · HOST-14 at size, as counts: the seal bound holds once stated correctly; open reads O(history) of index.log, so open must stop reading it (2026-10-18, HOST-8; ROOT's framing of HOST-14's re-check: counts, no timing) — PROPOSED, needs ROOT's ruling (it moves a check)
+**Context.** ROOT asked for HOST-14 re-checked at size as counts. The questions: do seal bytes stay
+within HOST-14's claimed bound now that HOST-30 removed the index term, and does reopen read at most one
+base plus the index pages plus the tail? host-sim `sizeRows` measures them under `sizeCadence`: the
+toy Store, with a 256-byte seal floor, so it seals in the base/4 regime a deployed Store enters past a
+4 MiB World. Two workloads:
+- `grow`: every Turn spends a fresh nullifier, so the World grows with history;
+- `steady`: Turns touch nothing and spend nothing, in a moving window. The World plateaus (the journal
+  is pruned to the window, KERNEL-33) while the log and the index keep growing.
+
+Max over seeds 1–3:
+
+| count | grow @1000 | steady @1000 | @4000 | @8000 |
+|---|---|---|---|---|
+| seals | 32–36 | 38–42 | 55–60 | 74 (seed 1) |
+| base bytes | 31–32 K | 23–24 K | 68–70 K | 69 K (plateau) |
+| index.log bytes | 9.9–10.6 K | 10.4–11.0 K | 38–40 K | 78 K |
+| seal bytes ÷ appended | **4.032** | 4.134 | 4.212 | 4.185 |
+| (seal − pages − base growth) ÷ appended | **3.489** | 3.633 | 3.819 | **3.921** |
+| open reads ÷ (base + index prefix + origin + tailMax) | 0.792 | 0.768 | 0.798 | 0.795 |
+| open index bytes ÷ base bytes | 0.331 | 0.473 | **0.569** | **1.179** |
+| bytes hashed ÷ appended | **5.012** | 5.113 | 5.192 | 5.165 |
+
+Findings:
+- **HOST-14's "≤ 4 + floor" is FALSE as written.** It is broken by 4.032 at 1000 records of a growing
+  World and by 4.21 in the steady runs. The correct bound telescopes. Seal i writes `B_i`, and fires
+  after `a_i ≥ max(sealMin, B_{i−1}/4)` appended bytes. So `B_{i−1} ≤ 4·a_i`, and
+  `Σ B_i ≤ 4·Σ a_i + (B_last − B_genesis)`. Seal bytes ≤ 4·appended + the World's growth over the run
+  + every page. Net of growth and pages, the measured ratio is 3.49–3.92, under 4 everywhere. The
+  design holds, and the claim was misstated. The pinned row is the net one; the raw ratio is pinned
+  beside it.
+- **Open reads O(history) of index.log.** In a World that has stopped growing, the index is 0.47 of the
+  base at 1000 records, 0.57 at 4000, and 1.18 at 8000. It is linear in records: 52 deployed bytes per
+  record, 80 with the frame share. Open reads and MAC-verifies all of it, and holds it in memory as one
+  Array entry per record (HOST-30's named residue). The only bound is the lifetime `indexTooLarge` at
+  `worldBytesMax` (256 MiB, about 5·10⁶ records). HOST-14's claim that open reads one base and a tail
+  therefore holds only for the base and tail. With the index it is O(store-history), the very shape
+  HOST-14 was built to avoid, bounded only by law 4's static ceiling. Before HOST-30 the same term
+  sat inside the base. HOST-30 moved it and did not cure it.
+- The open-reads ratio (≤ 0.80) is `openWith_reads`'s bound seen from a run; it cannot pass 1.
+- Bytes hashed are about 5 per appended byte: one for the frames themselves, about 4 for the seals.
+  The 32-byte prev of every frame adds a little.
+
+**Proposal (not built).** `index.log` becomes fixed-width, individually MAC'd entries, and open stops
+reading it:
+- entry k is `u64 height ‖ u64 offset ‖ chain32 ‖ tag32`, 80 bytes, at byte k·80. Its tag is keyed
+  over the index domain and `(k, height, offset, chain)`, so an entry cannot be moved, reordered or
+  spliced across positions or Stores;
+- the base names `indexCount` (no offset or tag). Open checks `index.log.size ≥ indexCount·80`
+  (`indexShort` otherwise), verifies ONE entry (the last named), and truncates bytes past the count
+  (orphans, as now);
+- the loop holds in memory only the entries since the last base (bounded by the tail);
+- `Page.build`'s `locate` becomes a binary search over on-disk entries: O(log records) 80-byte reads,
+  each MAC-checked, refused `badIndex` by name on failure. The walk then reads one contiguous range of
+  entries.
+
+Open becomes base + 1 entry + origin + tail (HOST-14's claim, honestly). RAM becomes O(tail). The
+`chain` is a Digest, so `entryUnfit` loses its chain arm. The flag day: the base shape changes and so
+does the stamp, so every Store refuses `shapeMismatch` and re-geneses; `indexCorrupt` keeps its name
+for the one entry open reads.
+
+**Critique (of the proposal).**
+- **It MOVES a check, which is a pause item.** Today an open refuses `indexCorrupt` if ANY index byte
+  is wrong. Afterwards a corrupt middle entry is found only when a `log` request reads it (`badIndex`
+  on that request, never wrong data served), or by `host check`, which would verify every entry.
+  Corruption of derived data stops failing loudly at open and starts failing loudly at use. That is
+  a weaker open, so it goes to ROOT, not into a commit.
+- **Bigger index.** 80 bytes per record against today's ~56: +43%. Measured against appended bytes it
+  stays flat, about 0.2.
+- **A MAC per log request per probe.** log₂(5·10⁶) ≈ 23 tag computations. That is O(log) on the
+  request path, which law 5 allows.
+
+**Alternatives.**
+- (a) Keep the chained pages, and have open verify only the newest page against `indexTag`. That does
+  not work: a chain is verified from its start or not at all.
+- (b) Put a page DIRECTORY in the base, one entry per seal. The base then grows with seals: O(history ÷
+  cadence), smaller but still history in the base, which HOST-30 just removed.
+- (c) Accept O(history) open as law 4's static bound. That is what the tree does now, and this
+  measurement argues against it.
+
+**Meta-critique.** The steady workload is the honest one for an always-on Store: Worlds plateau,
+histories do not. Both HOST-17's count and this one see the index grow only when the World does not
+outgrow it. If I had measured only `grow` (the existing scenario), I would have reported 0.33 as
+flat and stopped. The seal finding is a misstated claim, not a defect. I am pinning the corrected
+statement, not changing the cadence.

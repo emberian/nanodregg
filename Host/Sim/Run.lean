@@ -217,9 +217,127 @@ def indexTerm (seed n : Nat) : IO (Nat × Nat × Nat × Nat) := do
 /-- The Store lengths (fresh Turns) HOST-17's count is measured at. -/
 def indexLengths : List Nat := [100, 200, 400, 800]
 
+/-- The cadence HOST-14's at-size count runs under: the deployed RATIOS at toy scale. The seal
+floor is small against the World, so a Store of THE BAR's 1000 records seals in the base/4 regime
+the deployed Store reaches once its World passes 4 MiB (`Cadence.deployed`: sealMin 1 MiB). -/
+def sizeCadence : Cadence := { cadence with sealMinBytes := 256 }
+
+/-- HOST-14 at size, as counts (no timing): one run under `sizeCadence`. -/
+structure SizeCount where
+  turns : Nat
+  seals : Nat
+  /-- bytes seals wrote: every page and every base after genesis's -/
+  sealed : Nat
+  pages : Nat
+  genesisBase : Nat
+  finalBase : Nat
+  appended : Nat
+  /-- bytes the final reopen reads: the base file, the index prefix, the origin frame, the tail -/
+  read : Nat
+  /-- what HOST-14 + HOST-30 allow it: the base file + the index prefix + the origin frame + `tailMax` -/
+  bound : Nat
+  named : Nat
+  /-- bytes the sealers hash: each frame's prev tag + record in seg.log, every page, every base -/
+  hashed : Nat
+
+/-- `n` Turns made by `mk` (fresh txIds), served under `sizeCadence`, and counted. -/
+def sizeTerm (seed n : Nat) (mk : Nat → Turn Nat) : IO SizeCount := do
+  let frames : List Frame := (List.range n).map fun i =>
+    ⟨UInt32.ofNat i, Protocol.Op.submit.code, turnCodec.bytes (mk i)⟩
+  let r ← runWith sizeCadence seed frames none
+  let genesisBase := r.bases.history[0]!.1.size
+  let hashedOf (s : Log.Sealer) (initial log : ByteArray) : Nat :=
+    ((Log.recover s (1 <<< 30) initial log).records.map (·.size + Log.tagBytes)).foldl (· + ·) 0
+  let hashed := hashedOf keys.segment segmentInitial r.disk.synced + hashedOf keys.index indexInitial r.bases.index +
+    (r.bases.history.toList.drop 1).foldl (fun a (f, _) => a + (f.size - 4)) 0
+  let c : SizeCount := ⟨n, r.bases.history.size - 1, r.bases.written - genesisBase, r.bases.index.size,
+    genesisBase, r.bases.file.size, r.disk.synced.size, 0, 1, 0, hashed⟩
+  match reopenWith sizeCadence r.bases.index r.bases.file r.disk.synced with
+  | .error _ => return c
+  | .ok o =>
+    let named := o.sealed.index.offset
+    let head := r.bases.file.size + named + originLen o.sealed.offset
+    let read := head + (o.pos.offset - o.sealed.offset)
+    let bound := head + sizeCadence.tailMax o.sealed.bytes
+    return ⟨c.turns, c.seals, c.sealed, c.pages, c.genesisBase, c.finalBase, c.appended, read, bound, named, c.hashed⟩
+
+/-- A Turn that spends a fresh nullifier: the World grows by one nullifier per Turn. -/
+def growTurn (i : Nat) : Turn Nat := mkTurn (1000 + i) 0 1024 [5000 + i]
+
+/-- A Turn that touches nothing and spends nothing, in a window around its height: the World
+stays the same size (its journal is pruned to the window, KERNEL-33), while the log and the index
+grow with history. -/
+def steadyTurn (i : Nat) : Turn Nat := mkTurn (1000 + i) (i - min i 400) (i + 400) []
+
+/-- HOST-32's plant (`Host.Proofs.Backup.openWith_backup` on the run's own Store). For every base
+k the run installed before its last: the LIVE Store at the instant just before base k+1 was
+renamed in (base k, index.log with base k+1's page as an orphan, seg.log as base k+1 found it: a
+non-empty tail, which crash-before-rename shows opens), and a backup that copied base k and then
+the files as they stand at the end (`Store.backupOrder`). The backup opens to base k with at
+least the live records and EXACTLY the frames `recover` finds past base k's offset (an
+independent count), or refuses `tailTooLong`; and a copy in the WRONG order (seg.log as it stood
+one base earlier, under base k) is refused `segmentShort`. -/
+def backupPlants (r : RunResult) (failures : IO.Ref Nat) : IO Unit := do
+  let h := r.bases.history
+  let mut opened := 0
+  let mut held := true
+  let mut wrongOrder := true
+  for k in [0:h.size - 1] do
+    let (file, segAt) := h[k]!
+    let liveSeg := r.disk.synced.extract 0 h[k + 1]!.2
+    let live := reopenIn (r.bases.index.extract 0 r.bases.indexAt[k + 1]!) file liveSeg
+    match live, reopenIn r.bases.index file r.disk.synced with
+    | .ok lo, .ok bo =>
+      let tagK := match Base.read keys cadence world file with
+        | .ok (b, _, _) => b.tag.bytes
+        | .error _ => ByteArray.empty
+      let frames := (Log.recover keys.segment cadence.recordBytesMax tagK
+        (r.disk.synced.extract lo.sealed.offset r.disk.synced.size)).records.length
+      if 0 < lo.opened.records then opened := opened + 1
+      held := held && bo.sealed.offset == lo.sealed.offset && lo.opened.records ≤ bo.opened.records &&
+        bo.opened.records == frames && lo.pos.offset ≤ bo.pos.offset
+    | .ok _, .error f => held := held && f.name == "tailTooLong"
+    | .error _, _ => held := false
+    if 0 < k then
+      wrongOrder := wrongOrder &&
+        faultName (reopenIn r.bases.index file (r.disk.synced.extract 0 h[k - 1]!.2)) == "segmentShort"
+    let _ := segAt
+  check "plant-backup fires: at least two live Stores with a non-empty tail have a backup that opens" (2 ≤ opened) failures
+  check "plant-backup: every backup in backupOrder opens to its base with at least the live records and exactly the frames past it, or refuses `tailTooLong`"
+    held failures
+  check "plant-backup-wrong-order: seg.log copied before a later base is refused `segmentShort`, never opened short"
+    wrongOrder failures
+
+/-- HOST-14's at-size rows: THE BAR's 1000 records in a growing World, and a steady World at 1000
+and 4000 records. -/
+def sizeRows (seed : Nat) : IO Unit := do
+  -- every count as text; the rows HOST-14/HOST-33 pin as WASTE lines
+  let show_ (label : String) (c : SizeCount) (pins : List String) : IO Unit := do
+    IO.println s!"size {label} at {c.turns} turns: {c.seals} seals; base {c.genesisBase} -> {c.finalBase} bytes, index.log {c.pages} (prefix {c.named}), segment {c.appended}; seals wrote {c.sealed}; the reopen read {c.read} of {c.bound}; sealers hashed {c.hashed}"
+    -- HOST-14 corrected (HOST-33): a seal writes at most 4x the bytes appended since the base
+    -- before it, plus that base's growth since (telescoping), plus its page
+    let rows : List (String × String) :=
+      [("seal base-bytes-net-of-growth-per-appended-byte", ratio (c.sealed - c.pages - (c.finalBase - c.genesisBase)) c.appended),
+       ("seal bytes-per-appended-byte", ratio c.sealed c.appended),
+       ("open bytes-read-per-allowed-byte", ratio c.read c.bound),
+       ("open index-bytes-per-base-byte", ratio c.named c.finalBase),
+       ("seal hashed-bytes-per-appended-byte", ratio c.hashed c.appended)]
+    for (m, v) in rows do
+      let line := s!"{m}-{label}-at-{c.turns} {v}"
+      if pins.contains m then IO.println s!"WASTE {line}" else IO.println s!"count {line}"
+  show_ "grow" (← sizeTerm seed 1000 growTurn)
+    ["seal base-bytes-net-of-growth-per-appended-byte", "seal bytes-per-appended-byte",
+     "open bytes-read-per-allowed-byte", "seal hashed-bytes-per-appended-byte"]
+  show_ "steady" (← sizeTerm seed 1000 steadyTurn) []
+  show_ "steady" (← sizeTerm seed 4000 steadyTurn) ["open index-bytes-per-base-byte"]
+  show_ "steady" (← sizeTerm seed 8000 steadyTurn)
+    ["open index-bytes-per-base-byte", "seal base-bytes-net-of-growth-per-appended-byte"]
+
 /-- HOST-31's plants: a seal refuses an `index.log` that is not the size of the base's prefix
 (`indexMoved`), and a page refuses an entry its codec cannot spell (`entryUnfit`). -/
-def indexPlants (seed : Nat) (frames : List Frame) (failures : IO.Ref Nat) : IO Unit := do
+def indexPlants (seed : Nat) (frames : List Frame) (r : RunResult) (failures : IO.Ref Nat) : IO Unit := do
+  backupPlants r failures
+  sizeRows seed
   -- plant-index-moved (HOST-31): index.log one byte longer than the prefix the base names
   match genesisStore cadence with
   | .error _ => check "plant-index-moved: genesis opens" false failures
@@ -491,7 +609,7 @@ def run (args : List String) : IO UInt32 := do
   let t ← runWith tiny seed frames none
   check "plant-world-too-large: the loop stops `sealFailed worldTooLarge`"
     (match t.exit with | .sealFailed f => f.name = "worldTooLarge" | _ => false) failures
-  indexPlants seed frames failures
+  indexPlants seed frames r failures
   -- plant-fsync-fail, then plant-restart-at-every-cut
   let p ← runOnce seed frames (some 3)
   let pendingSize := p.disk.pending.size
