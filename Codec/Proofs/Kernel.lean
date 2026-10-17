@@ -63,6 +63,18 @@ theorem slots_lawfulOn : LawfulOn Slots.Fits slots :=
 
 def Cell.Fits (c : Cell) : Prop := c.kind < 2 ^ 32 ∧ Slots.Fits c.slots
 
+/-- `Cell.Fits` in `Kernel.Bounds`' own names: the four numbers `Emit.Rust.cellFitsModule` prints for the
+phone's leaf-fit check (law 2). -/
+theorem cell_fits_iff_bounds (c : Cell) :
+    Cell.Fits c ↔ c.kind < Bounds.kindLimit ∧ c.slots.length ≤ Bounds.slotsPerCellMax ∧
+      ∀ p ∈ c.slots, p.1 < Bounds.slotKeyLimit ∧ p.2.size ≤ Bounds.valueBytesMax := Iff.rfl
+
+/-- Tooth: the kind bound is strict — a cell of kind `kindLimit` (no slots) is outside `Cell.Fits`, one of
+kind `kindLimit - 1` is inside, so a Rust `<=` in place of `<` would accept a cell the codec cannot carry. -/
+theorem cell_fits_kind_strict :
+    ¬ Cell.Fits ⟨Bounds.kindLimit, .ram, []⟩ ∧ Cell.Fits ⟨Bounds.kindLimit - 1, .ram, []⟩ := by
+  refine ⟨fun h => absurd h.1 (by decide), ⟨by decide, by decide, fun _ h => nomatch h⟩⟩
+
 theorem cell_lawfulOn : LawfulOn Cell.Fits cell := by
   unfold cell
   refine (refine_lawfulOn (product_lawfulOn nat32_lawfulOn (product_lawfulOn discipline_lawful.on slots_lawfulOn))

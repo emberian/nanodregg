@@ -581,3 +581,23 @@ modules, so this is not a collision, but a reader has to check which `FRAME_MAX`
 **Meta-critique.** I matched rustfmt's output rather than making the emitter's layout independent of rustfmt,
 because the crate's fmt check is HOSTING's gate and a generated file has to pass it.
 Status: built.
+
+## CODEC-25 · `Cell.Fits` is emitted for the phone: `cell_fits::{KIND_LIMIT, SLOTS_MAX, SLOT_KEY_LIMIT, VALUE_BYTES_MAX, fits}` (CLIENT-3's need; CODEC-4, 2026-10-17)
+**Decision.** `client/src/generated.rs` gains `pub mod cell_fits`: the four bounds of the cell codec's domain
+as `u64` constants read from `Kernel.Bounds` (`kindLimit`, `slotsPerCellMax`, `slotKeyLimit`,
+`valueBytesMax`), and `fits(kind, &[(key, value_len)])`, their conjunction. `Codec.Kernel.cell_fits_iff_bounds`
+states `Cell.Fits` in exactly those names (so the emitted numbers are the predicate's, not a copy), and
+`cell_fits_kind_strict` is the tooth: kind `kindLimit` is outside, `kindLimit - 1` inside.
+**Alternatives.** Constants only, CLIENT writing the conjunction (a hand rule in Rust). A Lean `Bool`
+`Cell.fits` with a decide-equivalence theorem, printed as Rust (the printer would still be a template). Moving
+`Cell.Fits` into a def module (it is a `Prop` in a proof module by C3; nothing deployed needs a `Bool`).
+**Why.** The phone must refuse what the codec cannot carry with no bound of its own (law 2); the numbers come
+from one table and the theorem pins the predicate to that table.
+**Critique.** The Rust conjunction is a template, like `path_clean` (CODEC-21): the numbers are tied to
+`Cell.Fits` by a theorem, the control flow (`<` vs `<=`, which list length) is not. The tooth catches a `<=`
+for the kind only by the reader's comparison, not mechanically. `fits` takes value lengths, not bytes, so a
+caller can pass a wrong length.
+**Meta-critique.** I chose the template over a Lean-evaluated test table because the predicate has four
+clauses and the differential theorem I owe for `path_clean` (CODEC-21) is the general fix for both; this
+adds a second instance of the same debt rather than a new kind.
+Status: built.

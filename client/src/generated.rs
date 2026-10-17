@@ -618,3 +618,25 @@ pub mod attempt {
         }
     }
 }
+
+/// The cell codec's domain, `Codec.Kernel.Cell.Fits` (`Codec.Kernel.cell_fits_iff_bounds`): a cell
+/// encodes, and reads back from its bytes, exactly when `fits` holds.
+pub mod cell_fits {
+    /// A cell's kind is below this (Kernel.Bounds.kindLimit).
+    pub const KIND_LIMIT: u64 = 4294967296;
+    /// A cell has at most this many slots (Kernel.Bounds.slotsPerCellMax).
+    pub const SLOTS_MAX: u64 = 1024;
+    /// Every slot key is below this (Kernel.Bounds.slotKeyLimit).
+    pub const SLOT_KEY_LIMIT: u64 = 4294967296;
+    /// Every slot value is at most this many bytes (Kernel.Bounds.valueBytesMax).
+    pub const VALUE_BYTES_MAX: u64 = 65536;
+
+    /// `Cell.Fits` of a cell with this kind and these slots, each as (key, value length).
+    pub fn fits(kind: u64, slots: &[(u64, usize)]) -> bool {
+        kind < KIND_LIMIT
+            && slots.len() as u64 <= SLOTS_MAX
+            && slots
+                .iter()
+                .all(|&(k, len)| k < SLOT_KEY_LIMIT && len as u64 <= VALUE_BYTES_MAX)
+    }
+}
