@@ -33,10 +33,28 @@ def read(p):
 
 
 changed = open(a.changed, encoding="utf-8").read().split() if a.changed else None
+
+
+def case_collisions(root: str) -> list[str]:
+    """Two paths (files or directories) that differ only in case are ONE path on a case-insensitive
+    disk (the Mac reader's APFS): `ops/RUNBOOK.md` silently became `Ops/RUNBOOK.md` inside the
+    Lean library on 10-17 (OPS). Red by name."""
+    seen: dict[str, set[str]] = {}
+    for d, dirs, files in os.walk(root):
+        dirs[:] = [x for x in dirs if x not in tree.SKIP_DIRS]
+        rel = os.path.relpath(d, root)
+        for x in dirs + files:
+            path = os.path.normpath(os.path.join(rel, x))
+            seen.setdefault(path.lower(), set()).add(path)
+    return [f"{' and '.join(sorted(v))} differ only in case: one path on a case-insensitive disk"
+            for v in seen.values() if len(v) > 1]
+
+
 results = {
     "closure": closure.check(t),
     "refusals": refusals.check(t),
     "size": size.check(t, msg, tree.read(a.base_tree) if a.base_tree and has_lakefile(a.base_tree) else None),
+    "paths": case_collisions(t.root),
     "waste": waste.check(read(os.path.join(t.root, "gates", "waste.tsv")) or "", read(a.base_waste), msg),
 }
 if changed is not None:

@@ -21,9 +21,11 @@ DEF_KINDS = {"def", "abbrev", "structure", "inductive", "class", "instance", "op
              "infixl", "infixr", "prefix", "postfix", "initialize", "builtin_initialize",
              "declare_syntax_cat", "register_option"}
 THEOREM_KINDS = {"theorem", "lemma"}
-# Test and build tooling (Module.is_tooling): what the simulations, the conformance rows, the
-# journeys, the census and the Rust emitter are made of. SIZE.md counts it in its own row.
-TOOLING_LIBS = {"Census", "Emit"}
+# Test, build and operator tooling (Module.is_tooling): what the simulations, the conformance rows,
+# the journeys, the census, the Rust emitter and Ops (the unit renderer and the store plants, run by
+# an operator beside the node, never inside it; closure C10) are made of. SIZE.md counts it in its
+# own row; closure C9 keeps every deployed module from importing it.
+TOOLING_LIBS = {"Census", "Emit", "Ops"}
 TOOLING_COMPONENTS = {"Sim", "Rows", "Journey"}
 MODIFIERS = {"private", "protected", "noncomputable", "partial", "unsafe", "nonrec", "public",
              "meta", "scoped", "local"}

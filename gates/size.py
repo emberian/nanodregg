@@ -124,7 +124,7 @@ def measure(t: tree.Tree) -> dict[str, int]:
     # emitter: tree.Module.is_tooling) is informational, and closure C9 keeps it out of deployed
     # imports. Proof-modules are in neither.
     out["Lean lines (deployed)"] = sum(m.lines for m in mods if not m.is_proof and not m.is_tooling)
-    out["Lean lines (tooling: Sim, Rows, Journey, Census, Emit)"] = sum(
+    out["Lean lines (tooling: Sim, Rows, Journey, Census, Emit, Ops)"] = sum(
         m.lines for m in mods if not m.is_proof and m.is_tooling)
     deps = t.dependents()
     found = foundations(t)

@@ -51,7 +51,7 @@ Kernel/Receive/Ledger.lean	LEDGER
 Kernel/Proofs/Ledger.lean	LEDGER
 decisions/ledger.md	LEDGER
 Ops/	OPS
-ops/	OPS
+deploy/	OPS
 decisions/ops.md	OPS
 proposals/ops.md	OPS
 Bench/	PERF
