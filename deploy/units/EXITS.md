@@ -54,4 +54,4 @@ code space holds both tables: `host` (Host.Status, below 64) and nd-supervise's 
 |---|---|---|---|---|
 | 64 | refusedAtLaunch | fatal | stopped (RestartPreventExitStatus) | refused before the child ran (nothing hidden, an unreadable argument, a socket it cannot bind, the sandbox's policy or mechanism): fix the unit or the box; the reason is on stderr |
 | 65 | childUnroutable | fatal | stopped (RestartPreventExitStatus) | the child wrote a frame the mux cannot route: a defect in the child, report to HOST and CLIENT |
-| 66 | childSignaled | restart | restarted after 2 s; failed past 5 starts in 120 s | automatic; the child was killed by a signal (the OOM killer, an operator); a crash on every start stops at the start limit |
+| 66 | childSignaled | restart | restarted after 2 s; failed past 5 starts in 120 s | automatic; the child was killed by a signal (the OOM killer, an operator; on Linux any mechanism exit of 128 or more, bwrap's 128+N); a crash on every start stops at the start limit |

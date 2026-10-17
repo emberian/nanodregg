@@ -40,10 +40,13 @@ Member machine (user unit `nd-host-follow.service`; `%h/.nd/nd-host-follow.env` 
 
     nd-supervise %h/.nd/ws/follow.sock --write %h/.nd/follow-store --exec /opt/nd/bin/host --hide %h/.nd/ws --hide %h/.nd/holding -- /opt/nd/bin/host follow %h/.nd/follow-store ${ND_MEMBER} ${ND_GRANT}
 
-Before the first start the member makes the follow Store and the hidden directories,
-`mkdir -m 0700 ~/.nd ~/.nd/follow-store ~/.nd/ws ~/.nd/holding` (the writer's node likewise
-`/srv/nd/store`'s parent, `/srv/nd/ws`): nd-supervise refuses a `--write` or `--hide` path that does
-not exist with 64 refusedAtLaunch, which stops the unit (measured on burst5, deploy/live/README.md).
+Before the first start the member makes the hidden directories, `mkdir -m 0700 ~/.nd ~/.nd/ws
+~/.nd/holding` (the writer's node likewise `/srv/nd/ws`), and its follow Store, which is the
+writer's genesis REPRODUCED with the writer's nonce: `host genesis ~/.nd/follow-store LABEL --nonce
+NONCE KEY_HEX NEXT_HEX…` with the label, nonce and founders the writer's genesis printed (KERNEL-24:
+same label, nonce and founders = the same World; its printed `chain` must equal the writer's).
+nd-supervise refuses a `--write` or `--hide` path that does not exist (64), and `host follow` on a
+directory with no Store is `io` (13); both stop the unit (measured on burst5, deploy/live/README.md).
 A host killed by a signal is nd-supervise's 66 childSignaled, restarted (on Linux bwrap reports it
 as 128+N; CLIENT's c6e4abf maps that to 66).
 

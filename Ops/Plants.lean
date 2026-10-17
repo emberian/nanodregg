@@ -245,6 +245,40 @@ def replay (exe : String) (dir : System.FilePath) : IO Nat := do
     unless ok do failed := failed + 1
   return failed
 
+/-- HOST-25's origin check through the real exe's own open (`serve`, not only `check`), on the
+genesis-base Store `A` and the sealed Store `L`. A flip inside the origin RECORD (offset 4..35,
+not its tag: under a genesis-only base the origin's tag is HOST-18's anchor) is `corrupt`. A
+foreign origin is an origin frame that verifies under THIS Store's key but states another World's
+genesis chain (the same founders and label, another nonce): it is built here with HOST's own
+`Log.frame`, `Keys.ofKey` and `Deployed.originChain` from the copy's key file, as a Store whose
+key file was shared would hold it. Over a sealed base it is `foreignOrigin`; over the genesis base
+the anchor refuses first, `foreignSegment`. -/
+def originPlants (exe : String) (dir : System.FilePath) : IO Nat := do
+  let other := Founder.nonce.set! 0 (Founder.nonce.get! 0 ^^^ 1)
+  let wOther := Receive.genesis X name.toUTF8 other allowanceMax [(Founder.key, nextKeyDigest X Founder.next)]
+  let mut failed := 0
+  for (store, sealed) in [("A", false), ("L", true)] do
+    let src := dir / store
+    let seg ← IO.FS.readBinFile (src / "seg.log")
+    let some key := Codec.Digest.ofBytes? (← IO.FS.readBinFile (src / "key"))
+      | IO.eprintln s!"{store}: key file is not a digest"; return failed + 1
+    let flipD := dir / s!"origin-flip-{store}"
+    backup src flipD
+    damage flipD (seg.set! 5 (seg.get! 5 ^^^ 1))
+    let r ← host exe ["serve", flipD.toString]
+    unless ← judge ⟨s!"origin-record-flip-serve-{store}", .corrupt, pure r⟩ do failed := failed + 1
+    let frame := Log.frame (Keys.ofKey key shapes).segment segmentInitial (originChain wOther)
+    let fD := dir / s!"foreign-origin-{store}"
+    backup src fD
+    if frame.size > seg.size then IO.eprintln "the foreign origin frame is longer than the segment"; return failed + 1
+    damage fD (frame ++ seg.extract frame.size seg.size)
+    let want : Status := if sealed then .foreignOrigin else .foreignSegment
+    let r ← host exe ["serve", fD.toString]
+    unless ← judge ⟨s!"foreign-origin-serve-{store}", want, pure r⟩ do failed := failed + 1
+    unless ← judge ⟨s!"foreign-origin-check-{store}", want, host exe ["check", fD.toString]⟩ do
+      failed := failed + 1
+  return failed
+
 def run (exe : String) (dir : System.FilePath) : IO UInt32 := do
   if ← dir.pathExists then IO.eprintln s!"store-plants: {dir} exists"; return 2
   IO.FS.createDirAll dir
@@ -326,6 +360,7 @@ def run (exe : String) (dir : System.FilePath) : IO UInt32 := do
   unless ro do failed := failed + 1
   failed := failed + (← live exe dir)
   failed := failed + (← replay exe dir)
+  failed := failed + (← originPlants exe dir)
   if failed = 0 then IO.println "ALL PASS"; return 0
   IO.println s!"FAIL {failed} of {plants.length}"; return 1
 

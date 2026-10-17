@@ -255,7 +255,7 @@ def supervisorName : SupervisorExit → String
 def supervisorAction : SupervisorExit → String
   | .refusedAtLaunch => "refused before the child ran (nothing hidden, an unreadable argument, a socket it cannot bind, the sandbox's policy or mechanism): fix the unit or the box; the reason is on stderr"
   | .childUnroutable => "the child wrote a frame the mux cannot route: a defect in the child, report to HOST and CLIENT"
-  | .childSignaled => "automatic; the child was killed by a signal (the OOM killer, an operator); a crash on every start stops at the start limit"
+  | .childSignaled => "automatic; the child was killed by a signal (the OOM killer, an operator; on Linux any mechanism exit of 128 or more, bwrap's 128+N); a crash on every start stops at the start limit"
 
 def classWord : ExitClass → String
   | .done => "done"

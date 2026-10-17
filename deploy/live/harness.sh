@@ -35,12 +35,11 @@ host_child() { # the host process under unit $1, by its MainPID's descendants
 for u in $UNITS; do systemctl --user stop "$u" 2>/dev/null; systemctl --user reset-failed "$u" 2>/dev/null; done
 
 mkdir -p "$ROOT/ws" "$ROOT/env" "$U" "$ROOT/report"
-# a follow Store is a directory the operator makes (RUNBOOK §2): nd-supervise refuses a --write
-# path that does not exist (64)
-mkdir -m 0700 "$ROOT/follow-store"
 [ -x /usr/local/libexec/nd-bwrap ] || { echo "no mechanism at /usr/local/libexec/nd-bwrap (README.md)"; exit 2; }
 "$B/live-calls" "$C" 12 >/dev/null || exit 2
-for s in store fsize-store; do
+# the member's follow Store is the writer's genesis reproduced with the writer's nonce (KERNEL-24,
+# RUNBOOK §2): genesis.args carries the nonce, so all three are one World
+for s in store fsize-store follow-store; do
   mapfile -t g < "$C/genesis.args"
   "$B/host" genesis "$ROOT/$s" "${g[@]}" > "$ROOT/report/genesis-$s.txt" || exit 2
 done
@@ -116,10 +115,12 @@ case $ex in
 esac
 systemctl --user stop nd-ops-live-fsize
 
-# F. the follower unit under its rendered EnvironmentFile
+# F. the follower unit under its rendered EnvironmentFile: the confined follower opens its Store
 systemctl --user start nd-ops-live-follow
-wait_for 15 settled nd-ops-live-follow
-row follower-unit INFO "$(prop nd-ops-live-follow ActiveState)/$(prop nd-ops-live-follow Result) $(exits nd-ops-live-follow) :: $(journalctl --user -u nd-ops-live-follow -o cat --no-pager 2>/dev/null | tail -n 3 | tr '\n' ';')"
+fl() { journalctl --user -u nd-ops-live-follow -o cat --no-pager 2>/dev/null | grep -q '^STATUS follow'; }
+if wait_for 30 fl && active nd-ops-live-follow; then
+  row follower-unit-starts PASS "active; $(journalctl --user -u nd-ops-live-follow -o cat --no-pager | grep -m1 '^STATUS follow' | cut -c1-160)"
+else row follower-unit-starts FAIL "$(prop nd-ops-live-follow ActiveState)/$(prop nd-ops-live-follow Result) $(exits nd-ops-live-follow) :: $(journalctl --user -u nd-ops-live-follow -o cat --no-pager 2>/dev/null | tail -n 3 | tr '\n' ';')"; fi
 
 for u in $UNITS; do systemctl --user stop "$u"; systemctl --user reset-failed "$u" 2>/dev/null; done
 if [ $fail = 0 ]; then echo "ALL PASS"; exit 0; fi

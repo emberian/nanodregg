@@ -33,6 +33,15 @@ is visible, not what may run.
 | append-failure-is-uncertain-restarted | **FAIL** | `LimitFSIZE` just above the segment: the host dies by SIGXFSZ, the unit sees `status=153`, not 3; restarted (153 is in no prevent list) |
 | follower-unit | INFO | exit 64: nd-supervise refuses a `--write` path that does not exist (the follow Store directory); the harness now makes it, RUNBOOK §2 says the operator does |
 
+## Runs 2 and 3 — burst5-a, 2026-10-17 (main 46a1189: nd-supervise with c6e4abf, host with HOST-25)
+
+All rows PASS but one. host-killed-is-restarted: `status=66` (childSignaled, CLIENT's c6e4abf), was
+137. crash-loop-hits-start-limit: PASS on the journal. append-failure-is-uncertain-restarted: still
+FAIL, now `status=66` (SIGXFSZ, named), restarted; exit 3 waits on HOST-6's SIG_IGN. Run 2's
+follower exited 13 (`io`: a follow Store is a reproduced genesis, not a directory); run 3 reproduces
+the writer's genesis with its nonce and follower-unit-starts PASSES (confined `STATUS follow
+height=0`, the writer's genesis chain).
+
 Findings, routed:
 - **No signal death is named on Linux** (CLIENT): nd-supervise's direct child is bwrap, which turns
   the host's signal death into a normal exit 128+N (137 for SIGKILL, 153 for SIGXFSZ), so
