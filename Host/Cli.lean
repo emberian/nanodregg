@@ -178,7 +178,8 @@ def followVerb (store memberHex grantHex : String) : IO UInt32 := do
     | .ok wr => serving do
       let download ← IO.mkRef none
       let code ← runResident "follow" wr.opening.resident fun port =>
-        restarts (Follow.loop keys ⟨member, grant, Follow.window⟩ (fileStore wr.segment)
+        -- the World this member was invited to: its own Store's genesis origin, never the writer's word
+        restarts (Follow.loop keys ⟨wr.opening.opened.world.origin, member, grant, Follow.window⟩ (fileStore wr.segment)
             (fileCheckpoint store keys c world recorder.mark) port download fuelBatches)
           (reopenAt store keys c world recorder.mark originChain foldStep) recorder.mark restartsMax
       wr.segment.sync  -- the follower's handle, and so its lock, lives to here

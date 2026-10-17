@@ -726,3 +726,31 @@ constant nonce would pass this row, and only HOST's own test of the draw can cat
 refused would do) and that is deliberate: a partial binding (say, only `create` carried the world)
 would show up as `mixed`.
 **Status.** BUILT (this commit). Rows 14 PASS, 3 PENDING (pay well bounty).
+
+## PROTOCOL-29 · the read envelope names its World; a member signs for the World it was invited to (2026-10-17, BUILD-TRANSPORT; ASSEMBLY D3, KERNEL-24; shape with PROTOCOL-6)
+**Decision.** `Envelope.world` (the World's genesis origin, `World.origin`, KERNEL-24) is the first
+field, inside the signed message (domain `read-envelope/v3`); `Envelope.check` refuses
+`wrongWorld` FIRST, before the window, key or signature (`check_wrongWorld`), so a read replayed
+against another World — a clone with the same name and founders, or another Store on the same box
+— is refused by its own name, never `unknownKey`/`badSignature`. `Command.Self.world` is the World
+the member was invited to, taken from the member's own Store (its genesis, built from the
+invitation), never from the Host it talks to; every envelope and every call follow plans names it
+(replacing KERNEL-24's `w.origin` placeholder in `plan`), and follow's own `receive` refuses a call
+for another World. A thin member asserts `adopted.origin = me.world` after `Thin.accept`
+(`Thin.Refusal.wrongWorld`): the pin's digest already binds the World's bytes, origin included;
+the assertion names the case.
+**Alternatives.** (a) Bind the World implicitly (the signature over a message that includes it,
+but no field): a cross-World read then refuses `badSignature`, the wrong name (law 7). (b) Leave
+reads unbound: a captured envelope re-reads a clone within its window. (c) `Self.world` from the
+Host's first answer: trust on first use, which is exactly the mis-routing the binding exists for.
+**Critique.** `wrongWorld` before the signature is an oracle: an unauthenticated prober confirms an
+origin guess. The origin is not secret, and socket access is the real gate, but it is one bit more
+than before. No theorem says the signature binds the world BYTES: `message_heights_inj` fixes the world, and the step from equal messages to equal worlds needs `Env.bytes` injective, a property of the Ctx that no Ctx states yet (the deployed digest is 32 fixed bytes, the toy a u64), so it is named here as a gap, not proved. A copied Store directory keeps its origin, so a fork is the same World to this check;
+only followers comparing chains see it. The invitation that carries the origin to a new member
+does not exist yet (HOST-4's `host genesis --nonce` reproduces a writer's genesis; the founder
+copies label, nonce and founders to the member by hand).
+**Meta-critique.** Symmetry with KERNEL-24's call binding is doing much of the arguing; the read
+replayed against a clone leaks only what that clone holds, so the binding is cheap insurance as
+much as a closed hole.
+**Status.** landed (this commit); the cross-World envelope line in row wrongWorld follows
+PROTOCOL-6's rebuild of that row.

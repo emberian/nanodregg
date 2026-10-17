@@ -24,6 +24,9 @@ namespace Nanodregg.Protocol
 open Nanodregg.Kernel Nanodregg.Kernel.Receive
 
 structure Envelope (D : Type) where
+  /-- the World (its genesis origin, KERNEL-24) the envelope is for: checked first, so a read
+  replayed against another World is refused `wrongWorld` before anything about the member -/
+  world : D
   member : D
   grant : D
   start : Nat
@@ -36,6 +39,8 @@ structure Envelope (D : Type) where
 
 /-- Why the Host refuses to serve a read. -/
 inductive ReadRefusal
+  /-- the envelope names another World than this one (`World.origin`) -/
+  | wrongWorld
   | badEnvelope
   /-- not a live member, or not its current key -/
   | unknownKey
@@ -53,7 +58,7 @@ inductive ReadRefusal
 
 /-- The refusal's name on the wire (law 7; `ReadRefusal.name_injective`). -/
 def ReadRefusal.name : ReadRefusal → String
-  | .badEnvelope => "badEnvelope" | .unknownKey => "unknownKey" | .badSignature => "badSignature"
+  | .wrongWorld => "wrongWorld" | .badEnvelope => "badEnvelope" | .unknownKey => "unknownKey" | .badSignature => "badSignature"
   | .expired _ => "expired" | .noFollowGrant => "noFollowGrant" | .notYet => "notYet"
   | .wideWindow => "wideWindow"
 
@@ -71,13 +76,13 @@ def expiredHeight? (b : ByteArray) : Option Nat :=
   | .ok (n, h, ()) => if n.1 = expiredName then some h.toNat else none
   | .error _ => none
 
-def domEnvelope : ByteArray := "nanodregg/protocol/read-envelope/v2".toUTF8
+def domEnvelope : ByteArray := "nanodregg/protocol/read-envelope/v3".toUTF8
 
 variable {D : Type} [Ord D] [DecidableEq D]
 
 /-- What the member signs: the domain tag, then each field at its fixed width. -/
-def Envelope.message (X : Ctx D) (member grant : D) (start notBefore validUntil : Nat) : ByteArray :=
-  domEnvelope ++ X.env.bytes member ++ X.env.bytes grant ++ Text.u64 start ++ Text.u64 notBefore ++
+def Envelope.message (X : Ctx D) (world member grant : D) (start notBefore validUntil : Nat) : ByteArray :=
+  domEnvelope ++ X.env.bytes world ++ X.env.bytes member ++ X.env.bytes grant ++ Text.u64 start ++ Text.u64 notBefore ++
     Text.u64 validUntil
 
 /-- The member's current key, if `member` is a live member. -/
@@ -87,23 +92,24 @@ def currentKey (w : World D) (member : D) : Option ByteArray :=
   | none => none
 
 def Envelope.check (X : Ctx D) (w : World D) (e : Envelope D) : Except ReadRefusal Unit := do
+  req (e.world = w.origin) .wrongWorld
   req (e.validUntil ≤ e.notBefore + Kernel.Bounds.windowMax) .wideWindow
   req (currentKey w e.member = some e.key) .unknownKey
-  req (X.verify e.key (Envelope.message X e.member e.grant e.start e.notBefore e.validUntil) e.signature) .badSignature
+  req (X.verify e.key (Envelope.message X e.world e.member e.grant e.start e.notBefore e.validUntil) e.signature) .badSignature
   req (mayFollow X w e.member e.grant) .noFollowGrant
   req (e.notBefore ≤ w.height) .notYet
   req (w.height ≤ e.validUntil) (.expired w.height)
 
 def Envelope.bytes (X : Ctx D) (e : Envelope D) : Option ByteArray := do
   let f := Text.fit Bounds.frameBytesMax
-  pure (envelopeFrame.bytes (← f (X.env.bytes e.member), ← f (X.env.bytes e.grant),
+  pure (envelopeFrame.bytes (← f (X.env.bytes e.world), ← f (X.env.bytes e.member), ← f (X.env.bytes e.grant),
     ← f (Text.u64 e.start), ← f (Text.u64 e.notBefore), ← f (Text.u64 e.validUntil), ← f e.key,
     ← f e.signature, ()))
 
 def Envelope.ofBytes (X : Ctx D) (b : ByteArray) : Option (Envelope D) :=
   match envelopeFrame.decode b with
-  | .ok (m, g, s, nb, v, k, sig, ()) => do
-      pure { member := ← X.digestOf m.1, grant := ← X.digestOf g.1, start := ← Text.ofU64 s.1,
+  | .ok (o, m, g, s, nb, v, k, sig, ()) => do
+      pure { world := ← X.digestOf o.1, member := ← X.digestOf m.1, grant := ← X.digestOf g.1, start := ← Text.ofU64 s.1,
              notBefore := ← Text.ofU64 nb.1, validUntil := ← Text.ofU64 v.1, key := k.1,
              signature := sig.1 }
   | .error _ => none

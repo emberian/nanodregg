@@ -158,9 +158,9 @@ def freshActor (name : String) : M Actor := do
   let st ← get
   let X := st.sys.writer.X
   let self : Self D := match founderIndex name with
-    | some i => { member := founderId X st.genesis.origin i, grant := founderGrantId X st.genesis.origin i,
+    | some i => { world := st.genesis.origin, member := founderId X st.genesis.origin i, grant := founderGrantId X st.genesis.origin i,
                   window := 100 }
-    | none => { member := X.env.hash "nanodregg/rows/stranger/v1" name.toUTF8,
+    | none => { world := st.genesis.origin, member := X.env.hash "nanodregg/rows/stranger/v1" name.toUTF8,
                 grant := X.env.hash "nanodregg/rows/stranger-grant/v1" name.toUTF8, window := 100 }
   pure { self, follow := { world := st.genesis } }
 

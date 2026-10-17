@@ -41,6 +41,10 @@ open Nanodregg.Codec Nanodregg.Kernel Nanodregg.Kernel.Receive
 
 /-- What one `host follow` knows about the member it serves. -/
 structure Self (D : Type) where
+  /-- the World this member was invited to (its genesis origin, KERNEL-24), from the member's own
+  side — its own Store's genesis, built from the invitation — never from the Host it talks to.
+  Every call and envelope it signs names it. -/
+  world : D
   member : D
   /-- the member's World grant (observe; enroll, if it carries it), which its envelopes name and
   its enrolments spend (KERNEL-16) -/
@@ -265,9 +269,9 @@ price the derived charge plus headroom, and only if follow's World admits the Tu
 def plan (X : Ctx D) (me : Self D) (w : World D) (key : ByteArray) (b : Body D) :
     Except (Refusal D) (Unsigned D) := do
   let u0 : Unsigned D :=
-    -- KERNEL-24: the World this member follows; TRANSPORT replaces it with the invitation's
-    -- `Self.world` (never the Host's word) when the envelope half lands
-    { world := w.origin
+    -- the invitation's World (KERNEL-24): follow's own `receive` below refuses `wrongWorld` if
+    -- the World it follows is not that one, so it never signs a call for another World
+    { world := me.world
       member := me.member
       key := key
       notBefore := w.height
@@ -360,11 +364,12 @@ heights ending at `upTo` (PROTOCOL-27). Every `upTo` follow chooses is a height 
 `me.window` (its own, the stated tip, the stated `expired` height, the pin's), so the window starts
 at that height. -/
 def envelopeMessage (X : Ctx D) (me : Self D) (start upTo : Nat) : ByteArray :=
-  Envelope.message X me.member me.grant start (upTo - me.window) upTo
+  Envelope.message X me.world me.member me.grant start (upTo - me.window) upTo
 
 /-- The envelope follow sends: `envelopeMessage`'s fields, signed. -/
 def envelopeOf (me : Self D) (start upTo : Nat) (s : Signed) : Envelope D :=
-  { member := me.member, grant := me.grant, start, notBefore := upTo - me.window, validUntil := upTo,
+  { world := me.world, member := me.member, grant := me.grant, start, notBefore := upTo - me.window,
+    validUntil := upTo,
     key := s.key, signature := s.signature }
 
 /-- The envelope a thin member signs for the base page at byte `offset`, valid until `upTo`
@@ -540,6 +545,8 @@ def step (X : Ctx D) (B : Thin.Base (World D)) (me : Self D) (f : Follow D) (kb 
                     match Thin.accept B pin f.download page with
                     | .error r => drop r
                     | .ok (.done w') =>
+                        -- the pin binds the World's bytes, origin included; this says so by name
+                        if w'.origin ≠ me.world then drop .wrongWorld else
                         ({ world := w', download := none }, .adopt w',
                           printed s!"adopted {pin.height} {Text.toHex pin.digest}\n")
                     | .ok (.more d) =>

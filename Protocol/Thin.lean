@@ -89,17 +89,20 @@ inductive Refusal
   | notAtGenesis (height : Nat)
   /-- the command read its page budget; the download is kept and the member runs it again -/
   | incomplete (got total : Nat)
+  /-- the adopted World is another World than the one the member was invited to (KERNEL-24) -/
+  | wrongWorld
   deriving DecidableEq, Repr
 
 def Refusal.name : Refusal → String
   | .badPage => "badPage" | .baseMoved _ => "baseMoved" | .baseMismatch => "baseMismatch"
   | .pageMismatch => "pageMismatch" | .baseTooLarge _ => "baseTooLarge"
   | .baseUndecodable => "baseUndecodable" | .notBehind _ => "notBehind" | .incomplete _ _ => "incomplete"
-  | .notAtGenesis _ => "notAtGenesis"
+  | .notAtGenesis _ => "notAtGenesis" | .wrongWorld => "wrongWorld"
 
 def Refusal.tag : Refusal → Nat
   | .badPage => 0 | .baseMoved _ => 1 | .baseMismatch => 2 | .pageMismatch => 3
   | .baseTooLarge _ => 4 | .baseUndecodable => 5 | .notBehind _ => 6 | .incomplete _ _ => 7 | .notAtGenesis _ => 8
+  | .wrongWorld => 9
 
 /-- The download held for `pin`, if any (a download for another pin is dropped). -/
 def held (pin : Pin) : Option Download → Option Download
