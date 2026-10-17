@@ -13,8 +13,9 @@ import Std.Data.TreeMap
 * `world_decode_bytes`: a fitting World decodes from its bytes to a World `Equiv` to it — the SAME
   trie (`=`), an `Equiv` journal, the same counters and origin.
 * `eq_bytes_of_world_decode`: whatever decodes IS the encoding of what it decoded to.
-* `world_decode_canon` / `world_decode_slotted`: a decoded World satisfies the kernel's invariants
-  (`World.Canon`, `World.Slotted`), so every kernel theorem that takes them applies to a reopened base.
+* `world_decode_canon` / `world_decode_slotted` / `world_decode_cellsFit`: a decoded World satisfies the
+  kernel's invariants (`World.Canon`, `World.Slotted`, `World.CellsFit Cell.Fits`), so every kernel
+  theorem that takes them applies to a reopened base.
 * `world_bytes_equiv`: `Equiv` Worlds have the same bytes.
 -/
 
@@ -364,6 +365,27 @@ theorem world_decode_slotted {E : Env D} {PD : D → Prop} {dc : Stream D} (hd :
   obtain ⟨hc, hf⟩ := world_decode_canon hd h
   intro s l hg
   exact hf (s, l) ((Trie.mem_toList (trieSpec E) 0 w.trie hc.1 s l).mpr hg)
+
+omit [TransOrd D] [LawfulEqOrd D] in
+/-- Every live cell of a decoded World is in the cell codec's domain (`Cell.Fits`): a reopened base
+carries the kernel's `World.CellsFit` from the codec, so only admission has to keep it (KERNEL-31). -/
+theorem world_decode_cellsFit {E : Env D} {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc)
+    {b : ByteArray} {w : World D} (h : (world E dc).decode b = .ok w) : w.CellsFit Cell.Fits E := by
+  rw [world_decode] at h
+  split at h
+  · rename_i x hx
+    cases h
+    obtain ⟨hf, _⟩ := (worldWire_lawfulOn E hd).eq_bytes_of_decode hx
+    intro s l hg
+    have hm := (Trie.mem_toList (trieSpec E) 0 x.1 hf.1.2.1 s l).mpr hg
+    have hl := (hf.1.1.1.2 (s, l) hm).2
+    cases l with
+    | entry e =>
+      cases e with
+      | live c => exact hl
+      | tomb => trivial
+    | spent => trivial
+  · cases h
 
 omit [LawfulEqOrd D] in
 /-- Extensionally equal Worlds have the same bytes: a checkpoint is a function of the contents. -/

@@ -56,4 +56,9 @@ theorem world_decode_canon {b : ByteArray} {w : World Digest} (h : world.decode 
 theorem world_decode_slotted {b : ByteArray} {w : World Digest} (h : world.decode b = .ok w) : w.Slotted env :=
   Nanodregg.Codec.Kernel.world_decode_slotted digestCodec_lawful.on h
 
+/-- A reopened base's live cells are in the cell codec's domain (the kernel's `World.CellsFit`). -/
+theorem world_decode_cellsFit {b : ByteArray} {w : World Digest} (h : world.decode b = .ok w) :
+    w.CellsFit Nanodregg.Codec.Kernel.Cell.Fits env :=
+  Nanodregg.Codec.Kernel.world_decode_cellsFit digestCodec_lawful.on h
+
 end Nanodregg.Codec.Deployed

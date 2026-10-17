@@ -388,7 +388,7 @@ in the def module: `decodePoint` is now a composition of small functions (`candi
 lemma is about variables (the module checks in 18 s / 1.25 GB). The computation is unchanged.
 Status: open (owed: the Edwards addition law and `mul2` correctness against a Nat-coordinate spec).
 
-## CODEC-19 · The trie World codec: entries in trie order, rebuilt by `build`, refused unless canonical (CODEC-2, 2026-10-17; design, waits on KERNEL-23 part 2)
+## CODEC-19 · The trie World codec: entries in trie order, rebuilt by `build`, refused unless canonical (CODEC-2, 2026-10-17; built at KERNEL-23 part 2, 7c43273)
 **Decision.** When `World.cells` (cells + nullifiers, KERNEL-23) is a `Trie.T`, the World codec writes
 the trie's `toList` (left-to-right by key bits) and the decoder rebuilds with `build S S.depth 0 l`
 (each node hashed once, O(n) hashes; no node hash is ever read from the wire), then refuses
@@ -410,7 +410,18 @@ before refusal). The equality check runs after the build, so a non-canonical bas
 before it is refused (bounded by the base's size bound).
 **Meta-critique.** I picked the check that is cheapest to PROVE; its runtime cost is a second key
 pass I have not measured against the decode itself.
-Status: open (built at the KERNEL-23 flag day).
+**As built (7c43273, KERNEL-7's flag day; CODEC-3's follow-up).** The check as landed is stronger than the
+design: `cells` refuses unless the rebuilt trie's listing EQUALS the decoded listing (keys and leaves,
+`t.toList == l`) and no leaf holds a key twice (`leavesNodup`); before it, `fitList` refuses
+`kernel/leaf-fit` unless every slot holds the leaf of its kind. Read-back is exact for the trie
+(`build_toList`, CODEC-2's history independence). Teeth (`Codec/Proofs/WorldTooth.lean`, over
+`Kernel.Sim`'s toy env, `decide +kernel`): the canonical two-slot listing decodes and lists back the same
+entries; the same entries swapped are refused `kernel/trie-order`; a nullifier slot holding a cell entry
+is refused `kernel/leaf-fit`. And `world_decode_cellsFit`: every live cell of a decoded World is in
+`Cell.Fits`, so a reopened base carries the kernel's `World.CellsFit` from the codec (KERNEL-31 proves
+admission keeps it). The critique stands: the build runs before the refusal, and its list work is
+unmeasured.
+Status: built.
 
 ## CODEC-20 · The RFC 8032 checks are staged, so no proof module peaks above ~3 GB (CODEC-2, 2026-10-17; GATES-2's ask via ROOT)
 **Decision.** `Point.mul2` is now `Point.ladder … Point.zero`, where `ladder P Q PQ R a b n` runs the Shamir ladder
