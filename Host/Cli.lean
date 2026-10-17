@@ -1,8 +1,10 @@
 /-
 # Host.Cli — the `host` executable's verbs (Host/Main.lean holds only `main`)
 
-    host genesis STORE NAME [KEY_HEX NEXT_HEX]...   create a Store: founders (Ed25519 key,
-                                                   digest of the precommitted next key)
+    host genesis STORE NAME [KEY_HEX NEXT_HEX]...   create a Store: founders (Ed25519 key, the
+                                                   precommitted NEXT public key; the Store
+                                                   holds its digest, `Receive.nextKeyDigest`, which
+                                                   only Lean computes: law 2)
     host serve STORE                               the writer loop on stdin/stdout
     host follow STORE MEMBER_HEX GRANT_HEX         the follower loop on stdin/stdout (Host.Follow)
 
@@ -42,14 +44,14 @@ def usage : String :=
 
 def hexDigest (s : String) : Option Digest := Protocol.Text.ofHex s >>= Digest.ofBytes?
 
-/-- `(key, next)` pairs from the argv tail. -/
+/-- `(key, digest of next key)` pairs from the argv tail of `(key, next key)` public keys. -/
 def founders : List String → Option (List (ByteArray × Digest))
   | [] => some []
   | k :: n :: rest => do
     let key ← Protocol.Text.ofHex k
-    if key.size ≠ 32 then none
-    let next ← hexDigest n
-    return (key, next) :: (← founders rest)
+    let next ← Protocol.Text.ofHex n
+    if key.size ≠ 32 ∨ next.size ≠ 32 then none
+    return (key, Receive.nextKeyDigest X next) :: (← founders rest)
   | [_] => none
 
 def genesisVerb (store name : String) (fs : List String) : IO UInt32 := do
