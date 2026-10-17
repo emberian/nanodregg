@@ -5,8 +5,9 @@
 caller's `Pinned` view (so `receive_congr` covers LANG's reads): a package and every package in its
 closure must be pinned, or the receiver refuses `unpinned`.
 
-* `checkInstall` decodes the package (canonical bytes or a named decode refusal), reads each
-  import's interface from its pinned ROM cell, and runs `Package.checkWith`.
+* `checkInstall` decodes the package (canonical bytes or a named decode refusal), loads its imports'
+  closure exactly as a run does (each import pinned, decoded and RE-CHECKED, depth one below the
+  package's own load), and runs `Package.checkWith` over those interfaces (LANG-35).
 * `run` loads the closure (each package once, depth ≤ `closureDepthMax`, bodies relocated to the
   closure's indices), decodes the state at the package's state type and the arguments at the
   method's argument type, runs `method state args req` under the call's tick budget and extracts
@@ -131,9 +132,10 @@ def checkInstall (look : Pinned D) (b : ByteArray) : Except (Refusal D) Unit := 
   let p ← match Wire.decodePackage b with
     | .ok p => pure p
     | .error e => throw (.program (decodeText e))
-  let ifaces ← p.imports.mapM fun d => do
-    let id ← idOf digestOf d
-    pure (← readPackage look id).iface
+  -- the imports' closure, loaded and re-checked exactly as a run loads it (one depth below the
+  -- package's own load), so every interface the check reads passed `checkShape` (LANG-35)
+  let (L, gis) ← loadAll digestOf look (closureDepthMax - 1) p.imports ⟨[], [], []⟩
+  let some ifaces := ifacesAt L.pkgs gis | throw (.program "closure")
   match p.checkWith ifaces with
   | .ok () => pure ()
   | .error e => throw (.program e.wire)

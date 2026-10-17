@@ -5,8 +5,8 @@
 `find_merge` is their spec: a merged row reads every new field, the last write winning, and
 otherwise the base). With them, `hasType_wf`/`infer_wf`: under canonical package and local types,
 the type a term has is canonical (`Ty.wf`), so `extend` cannot manufacture a row the annotations
-could not write. (Discharged on the LOAD path, where every closure interface passed `checkShape`;
-`checkInstall` reads its imports' interfaces without re-checking their shape.)
+could not write. (Discharged wherever interfaces come from the loader, where each passed `checkShape`: the run,
+the judge and, since LANG-35, `checkInstall`.)
 -/
 import Lang.Proofs.Typing
 import Lang.Proofs.Row

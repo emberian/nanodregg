@@ -838,3 +838,40 @@ uniqueness of the size is what makes "the" derivation's size mean anything. The 
 check is the teeth (4 for `(λx.x) 1`, refuted 3) and the plant's measured rise.
 **Status.** built (this commit). Nothing re-ids: no deployed definition changed. `gates/waste.tsv`
 loses one row and gains one (`WASTE: invoke:` in the commit).
+
+## LANG-35 The install check reads its imports through the loader (2026-10-18; cv 01a14a52-4721, the LANG-31 vacuity read; LANG-2's gap 3)
+**Decision.** `checkInstall` takes the interfaces it checks a package against from
+`loadAll digestOf look (closureDepthMax - 1) p.imports` and `ifacesAt` (refusal `closure`). That is
+the loader a run and a judge use, one depth below the package's own load. Before, it read each
+import's cell with `readPackage` (decode only). So the install check now re-checks the imports'
+whole closure: every package in it must be pinned, decode, pass `checkWith` against its own
+imports, and fit the depth a run will load. Theorems (`Lang/Proofs/PrintWire.lean`):
+`checkInstall_checked` (the interfaces the check read are canonical, by `loadAll_inv` and
+`checkShape_wf`) and `install_reads` (every package `checkInstall` admits has a text that reads
+back to it, with no premise). Canon's docstring no longer names the install path as the
+exception.
+**Why.** `installed_reads` took `∀ A ∈ ifaces, A.wf` as a premise that nothing discharged for a
+package with imports. Proving that pinned package cells were installed would be a KERNEL World
+invariant, on another layer and in another induction. Loading at install is one code path with
+run and judge (law 1), and it also refuses at install a package a run could never load (an
+import closure that is unpinned, too deep or no longer checks), where before it installed and
+then failed at every invoke.
+**Alternatives.** (1) A World invariant "every kindPackage cell passed checkInstall" (KERNEL). It
+is true of the deployed receivers, but it is a theorem about all of KERNEL's writes. (2) Drop the
+premise by proving `readPackage_checked` without it. I could not build a counterexample: every
+annotation is itself checked wf, so an unsorted import row cannot reach an annotation (`badType`).
+The premise may be an artifact of `hasType_canon`'s statement, but that proof is not done.
+**Critique.** The tooth is weak. No journey row installs a package whose import closure is
+unpinned or fails its re-check, so the new refusals are reached by no test, only by the theorem's
+hypothesis. Owed (cv task, rated LOW by the vacuity reader, to be done soon): that row, with a
+plant restoring the raw read that flips it to admitted; and `install_loads` (an installed
+package's own load succeeds under the same pins), which is the property clients rely on and
+which no theorem states yet. A client-visible change: install now needs the import CLOSURE
+pinned, not only the direct imports; a call pinning only direct imports is refused `unpinned`. Install now costs a closure load: each import is decoded and re-checked once per
+install, which is bounded by `closureDepthMax` and the packages' sizes, and is what every invoke
+already pays.
+**Meta-critique.** The cv task asked for "a theorem over the loader or a refusal by name at
+load". I took the code-path change because it made the theorem a two-line corollary. The
+independent check is that lang-journey and rows stay green (no installed package changed its
+verdict) while the theorem's premise disappeared.
+**Status.** built (this commit). Nothing re-ids: no package bytes changed.

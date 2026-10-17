@@ -14,6 +14,9 @@ A package's sections add the second level. So:
   check accepts has a text (`Print.package` is `some`);
 * `installed_prints` / `installed_reads`: the same for any bytes `decodePackage` accepts, and that
   text reads back to exactly the package (`readPackage_checked`);
+* `checkInstall_checked` / `install_reads`: the install check reads its imports' interfaces from
+  the loader, so they are canonical, and every package it admits has a text that reads back to
+  it, with no premise (LANG-35);
 * `state_prints`: the state type of an encodable package prints within `Wire.depthMax`, which is
   `StdFits`' premise `TyPrints (Read.depthMax - 2) S`, so `quorum_text_at`, `allowlist_text_at`
   and `machine_text_at` state the stdlib's text theorems over a package's own state type.
@@ -26,6 +29,7 @@ import Lang.Proofs.Prints
 import Lang.Proofs.Print
 import Lang.Proofs.Wire
 import Lang.Proofs.StdFits
+import Lang.Proofs.Load
 
 namespace Nanodregg.Lang.Print
 
@@ -265,6 +269,36 @@ theorem installed_reads {ifaces : List Ty} {b : ByteArray} {p : Package} (hΔ : 
     ∃ s, package p = some s ∧ Read.readPackage s = .ok p :=
   ⟨(package p).get (installed_prints hd hc), (Option.some_get _).symm,
     readPackage_checked hΔ hc (Option.some_get _).symm⟩
+
+/-- **The install check reads canonical interfaces**: `checkInstall` takes its imports' interfaces
+from the loader (LANG-35), which re-checks every package of the closure, so each one passed
+`checkShape` and is canonical. That is `installed_reads`' premise, discharged by the check itself. -/
+theorem checkInstall_checked {D : Type} {digestOf : ByteArray → Option D} {look : Kernel.Receive.Pinned D}
+    {b : ByteArray} (h : checkInstall digestOf look b = .ok ()) :
+    ∃ (p : Package) (ifaces : List Ty), Wire.decodePackage b = .ok p ∧ p.checkWith ifaces = .ok () ∧
+      ∀ A ∈ ifaces, A.wf = true := by
+  unfold checkInstall at h
+  simp only [bind, Except.bind, pure, Except.pure] at h
+  repeat' split at h
+  all_goals first | (simp at h; done) | skip
+  all_goals
+    rename_i p hd _ L hl _ ifaces hif _ hc
+    refine ⟨p, ifaces, hd, hc, fun A hA => ?_⟩
+    obtain ⟨i, hi⟩ := List.getElem?_of_mem hA
+    have hm := ifacesAt_spec hif i A hi
+    simp only [List.getElem?_map, Option.map_eq_some_iff] at hm
+    obtain ⟨P, hP, rfl⟩ := hm
+    exact (checkShape_wf ((loadAll_inv digestOf look _ _ _ Inv.empty hl).1.2.2.2 _ P hP).1).2
+
+/-- **Every package the install check admits has a text that reads back to it**, with no premise:
+`installed_reads` over the interfaces `checkInstall` itself supplied. -/
+theorem install_reads {D : Type} {digestOf : ByteArray → Option D} {look : Kernel.Receive.Pinned D}
+    {b : ByteArray} (h : checkInstall digestOf look b = .ok ()) :
+    ∃ (p : Package) (s : String), Wire.decodePackage b = .ok p ∧ package p = some s ∧
+      Read.readPackage s = .ok p := by
+  obtain ⟨p, ifaces, hd, hc, hΔ⟩ := checkInstall_checked h
+  obtain ⟨s, hs, hr⟩ := installed_reads hΔ hd hc
+  exact ⟨p, s, hd, hs, hr⟩
 
 /-- An encodable package's state type prints within the wire's depth: `StdFits`' premise. -/
 theorem state_prints {p : Package} {b : ByteArray} (he : Wire.encodePackage p = some b) :
