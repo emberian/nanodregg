@@ -60,6 +60,11 @@ package nanodregg where
 @[default_target] lean_exe «lang-journey» where
   root := `Lang.Journey.Main
 
+-- LANG's resident check: `ob FORM` reads, checks, prints bytes and id, evaluates, runs a law;
+-- no admission (Lang.Resident).
+@[default_target] lean_exe «ob» where
+  root := `Lang.Resident.Main
+
 -- PROTOCOL's conformance rows: `rows [NAME…]` (rows/run, standing's rows stage), ends `ALL PASS`.
 @[default_target] lean_exe «rows» where
   root := `Protocol.Rows.Main
