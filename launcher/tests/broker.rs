@@ -650,15 +650,21 @@ fn an_echoed_key_is_withheld() {
     );
 }
 
-/// keybroker over KEYS and ANCHORS with no World: how it ends, by its stderr, within 20 s.
-fn ends(d: &Path, keys: &Path, anchors: &Path) -> String {
+/// keybroker over KEYS and ANCHORS with no World: how it ends (its stderr and exit code), within
+/// 20 s.
+fn ends(d: &Path, keys: &Path, anchors: &Path) -> (String, Option<i32>) {
+    ends_over(d, keys, anchors, &d.join("no-store"))
+}
+
+/// keybroker over KEYS, ANCHORS and STORE: how it ends, within 20 s.
+fn ends_over(d: &Path, keys: &Path, anchors: &Path, store: &Path) -> (String, Option<i32>) {
     let mut kb = Command::new(env!("CARGO_BIN_EXE_keybroker"))
         .arg(keys)
         .arg(anchors)
         .arg(fs::read_link(d.join("socks")).unwrap())
         .arg(d.join("pids"))
         .arg("127.0.0.1:9")
-        .arg(d.join("no-store"))
+        .arg(store)
         .arg("00")
         .arg("01")
         .arg(lean_bin("hosting-broker"))
@@ -676,7 +682,10 @@ fn ends(d: &Path, keys: &Path, anchors: &Path) -> String {
         std::thread::sleep(Duration::from_millis(20));
     }
     let out = kb.wait_with_output().unwrap();
-    String::from_utf8_lossy(&out.stderr).into_owned()
+    (
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+        out.status.code(),
+    )
 }
 
 /// A file of mode 0644 holding `bytes`.
@@ -726,19 +735,51 @@ fn exposed_or_malformed_custody_files_stop_keybroker_by_name() {
         pki.ca_pem.as_bytes(),
         "the mutation happened"
     );
+    let link_keys = d.join("link-keys");
+    std::os::unix::fs::symlink(&keys, &link_keys).unwrap();
+    let link_anchors = d.join("link-anchors.pem");
+    std::os::unix::fs::symlink(&anchors, &link_anchors).unwrap();
+    let bad_keys = {
+        let p = d.join("bad-keys");
+        fs::write(&p, b"seven KEY\n").unwrap();
+        fs::set_permissions(&p, fs::Permissions::from_mode(0o600)).unwrap();
+        p
+    };
+    // a key file of the right mode in a directory its group may write (CLIENT-19's chain rule)
+    let gw_keys = {
+        let g = d.join("gw");
+        nanodregg_devtools::mkdirs(&g).unwrap();
+        fs::set_permissions(&g, fs::Permissions::from_mode(0o770)).unwrap();
+        let p = g.join("keys");
+        fs::write(&p, [b"7 ".as_slice(), KEY, b"\n"].concat()).unwrap();
+        fs::set_permissions(&p, fs::Permissions::from_mode(0o600)).unwrap();
+        p
+    };
+    // each ends by name on stderr and with Lean's code (Hosting.KeybrokerExit, all fatal)
+    use nanodregg_launcher::broker_generated::keybroker_exit as k;
     let cases = [
-        ("keyFileMode", &open_keys, &anchors),
-        ("anchorsMode", &keys, &open_anchors),
-        ("anchorsMissing", &keys, &d.join("no-anchors.pem")),
-        ("anchorsMalformed", &keys, &key_pem),
-        ("anchorsMalformed", &keys, &bad_pem),
+        ("keyFileMode", k::KEY_FILE_MODE, &open_keys, &anchors),
+        ("keyFileLink", k::KEY_FILE_LINK, &link_keys, &anchors),
+        ("keyFileFormat", k::KEY_FILE_FORMAT, &bad_keys, &anchors),
+        ("keyFileDir", k::KEY_FILE_DIR, &gw_keys, &anchors),
+        ("anchorsLink", k::ANCHORS_LINK, &keys, &link_anchors),
+        ("anchorsMode", k::ANCHORS_MODE, &keys, &open_anchors),
+        (
+            "anchorsMissing",
+            k::ANCHORS_MISSING,
+            &keys,
+            &d.join("no-anchors.pem"),
+        ),
+        ("anchorsMalformed", k::ANCHORS_MALFORMED, &keys, &key_pem),
+        ("anchorsMalformed", k::ANCHORS_MALFORMED, &keys, &bad_pem),
     ];
-    for (want, k, a) in cases {
-        let err = ends(&d, k, a);
+    for (want, code, k, a) in cases {
+        let (err, got) = ends(&d, k, a);
         assert!(
             err.contains(&format!("keybroker: {want}\n")),
             "{want}: stderr: {err}"
         );
+        assert_eq!(got, Some(i32::from(code)), "{want}: exit code");
         assert!(
             !d.join("socks/01.sock").exists(),
             "{want}: a socket was opened"
@@ -750,11 +791,27 @@ fn exposed_or_malformed_custody_files_stop_keybroker_by_name() {
         d.join("prod-anchors.pem"),
         &fs::read(repo().join("deploy/tls/anchors.pem")).unwrap(),
     );
-    let err = ends(&d, &keys, &prod);
+    let (err, got) = ends(&d, &keys, &prod);
     assert!(
-        err.contains("keybroker: decider"),
+        err.contains("keybroker: deciderRefused"),
         "production anchors: stderr: {err}"
     );
+    assert_eq!(
+        got,
+        Some(i32::from(k::DECIDER_REFUSED)),
+        "production anchors: exit code"
+    );
+    // the decider's own end is passed through: over a STORE that exists but holds no Store (no key
+    // file to open), the decider ends `io` (DeciderExit, fatal), and so does keybroker, with that code
+    let empty = d.join("empty-store");
+    nanodregg_devtools::mkdirs(&empty).unwrap();
+    let (err, got) = ends_over(&d, &keys, &anchors, &empty);
+    let store = nanodregg_launcher::broker_generated::decider_exit::IO;
+    assert!(
+        err.contains(&format!("keybroker: deciderEnded {store}\n")),
+        "pass-through: stderr: {err}"
+    );
+    assert_eq!(got, Some(i32::from(store)), "pass-through: exit code");
 }
 
 #[test]

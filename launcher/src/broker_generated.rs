@@ -515,3 +515,43 @@ pub mod wire {
         }
     }
 }
+
+pub mod keybroker_exit {
+    pub const USAGE: u8 = 80;
+    pub const KEY_FILE_LINK: u8 = 81;
+    pub const KEY_FILE_NOT_REGULAR: u8 = 82;
+    pub const KEY_FILE_OWNER: u8 = 83;
+    pub const KEY_FILE_MODE: u8 = 84;
+    pub const KEY_FILE_LENGTH: u8 = 85;
+    pub const KEY_FILE_DIR: u8 = 86;
+    pub const KEY_FILE_IO: u8 = 87;
+    pub const KEY_FILE_FORMAT: u8 = 88;
+    pub const ANCHORS_LINK: u8 = 89;
+    pub const ANCHORS_NOT_REGULAR: u8 = 90;
+    pub const ANCHORS_OWNER: u8 = 91;
+    pub const ANCHORS_MODE: u8 = 92;
+    pub const ANCHORS_LENGTH: u8 = 93;
+    pub const ANCHORS_DIR: u8 = 94;
+    pub const ANCHORS_MISSING: u8 = 95;
+    pub const ANCHORS_IO: u8 = 96;
+    pub const ANCHORS_MALFORMED: u8 = 97;
+    pub const TLS_CONFIG: u8 = 98;
+    pub const SOCKET: u8 = 99;
+    pub const DECIDER_REFUSED: u8 = 100;
+    pub const PID_FILE: u8 = 103;
+    pub const DECIDER_SIGNALED: u8 = 102;
+    pub const DECIDER_LOST: u8 = 104;
+}
+
+pub mod decider_exit {
+    pub const KEYBROKER_GONE: u8 = 0;
+    pub const USAGE: u8 = 70;
+    pub const BAD_FRAME: u8 = 71;
+    pub const BAD_REQUEST: u8 = 72;
+    pub const UNENCODABLE: u8 = 73;
+    pub const LIFETIME: u8 = 74;
+    pub const NO_PACKAGE: u8 = 75;
+    pub const STORE: u8 = 76;
+    pub const BEHIND: u8 = 77;
+    pub const IO: u8 = 78;
+}

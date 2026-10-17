@@ -905,3 +905,64 @@ were wrong, the version list would still refuse 1.2.
 **Flag day.** The `grant` verdict frame gains `host` and four refusal codes appear, so
 `broker_generated.rs` is re-emitted. keybroker's argv gains ANCHORS (OPS-2 renders the unit). Nothing
 persisted changes.
+
+## HOSTING-16 keybroker's exits are a Lean table (HOSTING-5, 2026-10-18, OPS-2's ask)
+
+**Decision.** `Hosting/BrokerExit.lean` holds two tables with the Host's `ExitClass`.
+`DeciderExit` covers every way `hosting-broker` ends, at codes 70-78 (0 = `keybrokerGone`, the normal end).
+`KeybrokerExit` covers every way keybroker ends on its own account, at codes 80-100 and 102-104, skipping 101, the exit of a Rust panic (`usage`, the
+seven `keyFile*` custody refusals and `keyFileFormat`, the eight `anchors*` and `anchorsMalformed`,
+`tlsConfig`, `socket`, `deciderRefused`, `pidFile`, `deciderSignaled`, and `deciderLost`, for a `wait` on the
+decider that failed: fatal, because nothing says a restart is safe). keybroker passes a decider's
+exit code through, as nd-supervise passes the Host's, so its unit sees one code space: the two tables.
+`hosting-broker`'s `Exit.code` is `Exit.kind`'s code. keybroker reads its own codes only from the
+emitted `broker_generated::keybroker_exit`, and the test reads the decider's from `decider_exit` (CODEC-6 agreed that this commit carries the Emit/Broker
+change and the re-emit). Before this, keybroker exited 1 for every refusal and the decider exited 0/2/1,
+so a unit could not stop on a custody refusal while restarting a transient end.
+- Classes. Every own keybroker end except `deciderSignaled` is `fatal` (`keybroker_fatal_iff`): each is a
+  file, an argument or the build, and a restart reads the same one. The decider restarts on
+  `lifetime` and `behind` only (`decider_restart_iff`). A fresh open reads the World whole, so a
+  broker that fell behind recovers. `store` and `io` are fatal: a Store that refuses to open or to be
+  followed is the operator's to look at, as for the Host.
+- Theorems (`Hosting.Proofs.BrokerExit`), stated over the `.all` lists the emitter and `Ops.Units`
+  read: `codes_nodup` (across both tables), `codes_disjoint` (no Host.Status and no SupervisorExit code;
+  0 only for the decider's normal end), `codes_reserved` (never 1 or 2, keybroker's never 101, the code a panicking Rust main exits with, below 256, and 0 iff `done`),
+  `restart_fatal_disjoint`, `keybroker_fatal_iff`, `decider_restart_iff`.
+- The test asserts exit codes from the emitted constants. It covers keybroker's own ends (`keyFileMode`,
+  `keyFileLink`, `keyFileFormat`, `keyFileDir`, `anchorsMode`, `anchorsLink`, `anchorsMissing`, `anchorsMalformed`,
+  and `deciderRefused` for the production-bundle control) and the decider pass-through. In that case a
+  STORE that exists but holds no Store makes the decider end `io` (78), and keybroker must exit 78.
+- Routing: `Ops.Units.preventCodes` does not read these tables yet. Rendering the keybroker unit's
+  `RestartPreventExitStatus` from `DeciderExit.codesOf .fatal ++ KeybrokerExit.codesOf .fatal` is
+  OPS-2's next step. Until then nothing deployed consumes the classes.
+
+**Alternatives.** (1) keybroker maps the decider's end to one code of its own per class: this loses
+the decider's name, which is on stderr, but the unit's exit code is what an operator's tooling reads.
+Refused. (2) Reuse Host.Status codes for the same meanings: two programs would share one name space
+and disagree on what a code means. Refused. (3) Rust decides the classes: law 2. Refused.
+
+**CRITIQUE.** `store` fatal means a transient Store read error while following stops the broker. The
+Host makes the same split (open refusals fatal, `ioServing` restart), but the decider cannot yet tell
+an open refusal from a follow refusal, because both arrive as `.store name`. Splitting them is a
+`DeciderExit` row, cheap when a run shows the need. `io` fatal is the conservative choice for the same
+reason. `deciderSignaled` restarts a deterministic crash until the unit's start limit, as
+nd-supervise's `childSignaled` does. A decider exit code that does not fit u8 cannot occur on Unix, and
+keybroker would report it as `deciderSignaled`.
+**META.** OPS asked for exactly this shape and I followed Host.Status, which is familiarity. The test
+that it is right is that `Ops.Units` renders the prevent list with no list of its own.
+A Rust panic exits 101, outside both tables, so systemd restarts it. That means a panic
+restarts (and the lints do not rule out an indexing or overflow panic).
+**Vacuity read (10-18, VACUITY-READER-H4).** Pass 1 found holes. (1) No test reached the decider
+pass-through, so mapping a decider's fatal end to a restart code survived. It is now the `io`
+case above. (2) A failed `wait` read as `deciderSignaled`, a restart. It is now `deciderLost`, fatal.
+(3) The Rust map was covered by four cases only. It now has nine. (4) "Ops.Units renders" overclaimed,
+and now says pending. Pass 2: ACCEPT. Its residue: only one decider code (io) is exercised, so a pass-through hard-coded
+to 78 would survive. Also, a Store with no key file ends `io` (HOST's `readKey` throws), not `store`. Both are
+fatal, so the class is right, but the name is not. HOST-9 is told.
+**Plants (run).** `anchorsMalformed` made restart (`keybroker_fatal_iff`); keybroker `usage` = 8, a
+Host code (`codes_disjoint`); the decider's `store` made restart (`decider_restart_iff`). In Rust, the
+test's exit-code assertions read the emitted constants, so a keybroker that exits a hand-written
+code is red. The pass-through mapped to `deciderSignaled` (the reader's surviving mutation) is red.
+**Flag day.** keybroker's and hosting-broker's exit codes change (1/2 to the table), and
+`broker_generated.rs` gains `keybroker_exit`. OPS renders the unit from the tables. Nothing persisted
+changes.

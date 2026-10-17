@@ -19,6 +19,7 @@ stdout. Every frame is `u32le len ‖ payload`, `1 ≤ len ≤ Broker.Bounds.fra
 is an `Exit` by name on stderr; asks are bounded by `lifetime`.
 -/
 import Hosting.Broker
+import Hosting.BrokerExit
 import Hosting.Allowance
 import Hosting.Loop
 import Host.Deployed
@@ -62,10 +63,13 @@ def Exit.name : Exit → String
   | .badRequest => "badRequest" | .unencodable => "unencodable" | .lifetime => "lifetime"
   | .noPackage => "noPackage" | .store n => s!"store {n}" | .behind => "behind" | .io m => s!"io {m}"
 
-def Exit.code : Exit → UInt32
-  | .keybrokerGone => 0
-  | .usage => 2
-  | _ => 1
+/-- The kind of an end, in the exit table (`Hosting.BrokerExit`). -/
+def Exit.kind : Exit → DeciderExit
+  | .keybrokerGone => .keybrokerGone | .usage => .usage | .badFrame => .badFrame
+  | .badRequest => .badRequest | .unencodable => .unencodable | .lifetime => .lifetime
+  | .noPackage => .noPackage | .store _ => .store | .behind => .behind | .io _ => .io
+
+def Exit.code (e : Exit) : UInt32 := e.kind.code.toUInt32
 
 /-- One frame: `none` at end of input, `.error` for a length outside `1 ≤ len ≤ frameMax`. -/
 def readFrame (input : IO.FS.Stream) : IO (Option (Except Exit ByteArray)) := do

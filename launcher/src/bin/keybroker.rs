@@ -32,7 +32,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use nanodregg_launcher::broker_generated::wire::{Answer, BrokerRefusal, Request, Verdict};
-use nanodregg_launcher::broker_generated::{FRAME_MAX, read_frame, write_frame};
+use nanodregg_launcher::broker_generated::{FRAME_MAX, keybroker_exit, read_frame, write_frame};
 use nanodregg_launcher::grain_name_ok;
 use nanodregg_sandbox::custody::{self, Refused};
 use nanodregg_sandbox::{Policy, command};
@@ -54,16 +54,19 @@ const LIFETIME: u64 = 1 << 48;
 /// The largest upstream response read: its body must fit one `answer` frame.
 const RESPONSE_MAX: usize = FRAME_MAX as usize - 64;
 
+/// How keybroker ends. Each end's exit code is Lean's (`Hosting.KeybrokerExit`, emitted as
+/// `keybroker_exit`); a decider that exits is passed through with its own code (`DeciderExit`).
 enum End {
     Usage,
-    KeyFile(&'static str),
-    KeyFileFormat,
-    Anchors(&'static str),
-    AnchorsMalformed,
+    /// a key-file or anchor-file refusal: its name and its code
+    File(&'static str, u8),
     Tls(String),
     Socket(String),
     DeciderRefused(String),
+    /// the decider's exit code, or `None` for a signal
     DeciderEnded(Option<i32>),
+    /// `wait` on the decider failed
+    DeciderLost(String),
     Pid(String),
 }
 
@@ -74,14 +77,13 @@ impl End {
                 "usage: keybroker KEYS ANCHORS SOCKDIR PIDS UPSTREAM STORE OPERATOR RESIDENTS DECIDER"
                     .into()
             }
-            End::KeyFile(n) => (*n).into(),
-            End::KeyFileFormat => "keyFileFormat".into(),
-            End::Anchors(n) => (*n).into(),
-            End::AnchorsMalformed => "anchorsMalformed".into(),
+            End::File(n, _) => (*n).into(),
             End::Tls(e) => format!("tlsConfig {e}"),
             End::Socket(e) => format!("socket {e}"),
             End::DeciderRefused(e) => format!("deciderRefused {e}"),
-            End::DeciderEnded(c) => format!("deciderEnded {c:?}"),
+            End::DeciderEnded(Some(c)) => format!("deciderEnded {c}"),
+            End::DeciderEnded(None) => "deciderSignaled".into(),
+            End::DeciderLost(e) => format!("deciderLost {e}"),
             End::Pid(e) => format!("pidFile {e}"),
         }
     }
@@ -90,37 +92,48 @@ impl End {
 fn main() -> ExitCode {
     let end = run();
     eprintln!("keybroker: {}", end.describe());
-    match end {
-        End::DeciderEnded(Some(0)) => ExitCode::SUCCESS,
-        End::Usage => ExitCode::from(2),
-        _ => ExitCode::from(1),
-    }
+    ExitCode::from(match end {
+        End::Usage => keybroker_exit::USAGE,
+        End::File(_, code) => code,
+        End::Tls(_) => keybroker_exit::TLS_CONFIG,
+        End::Socket(_) => keybroker_exit::SOCKET,
+        End::DeciderRefused(_) => keybroker_exit::DECIDER_REFUSED,
+        End::Pid(_) => keybroker_exit::PID_FILE,
+        // the decider's own code, passed through; a code past u8 is not an exit status
+        End::DeciderEnded(Some(c)) => u8::try_from(c).unwrap_or(keybroker_exit::DECIDER_SIGNALED),
+        End::DeciderEnded(None) => keybroker_exit::DECIDER_SIGNALED,
+        End::DeciderLost(_) => keybroker_exit::DECIDER_LOST,
+    })
 }
 
 /// The key file's custody refusal, by name (one per `custody::Refused` case).
-fn key_file_name(e: &Refused) -> &'static str {
+fn key_file_end(e: &Refused) -> End {
+    use keybroker_exit as k;
     match e {
-        Refused::Link => "keyFileLink",
-        Refused::NotRegular => "keyFileNotRegular",
-        Refused::Owner(_) => "keyFileOwner",
-        Refused::Mode(_) => "keyFileMode",
-        Refused::Length(_) => "keyFileLength",
-        Refused::Dir(_) => "keyFileDir",
-        Refused::Io(_) => "keyFileIo",
+        Refused::Link => End::File("keyFileLink", k::KEY_FILE_LINK),
+        Refused::NotRegular => End::File("keyFileNotRegular", k::KEY_FILE_NOT_REGULAR),
+        Refused::Owner(_) => End::File("keyFileOwner", k::KEY_FILE_OWNER),
+        Refused::Mode(_) => End::File("keyFileMode", k::KEY_FILE_MODE),
+        Refused::Length(_) => End::File("keyFileLength", k::KEY_FILE_LENGTH),
+        Refused::Dir(_) => End::File("keyFileDir", k::KEY_FILE_DIR),
+        Refused::Io(_) => End::File("keyFileIo", k::KEY_FILE_IO),
     }
 }
 
 /// The anchor file's custody refusal, by name. A file that is not there is `anchorsMissing`.
-fn anchors_name(e: &Refused) -> &'static str {
+fn anchors_end(e: &Refused) -> End {
+    use keybroker_exit as k;
     match e {
-        Refused::Link => "anchorsLink",
-        Refused::NotRegular => "anchorsNotRegular",
-        Refused::Owner(_) => "anchorsOwner",
-        Refused::Mode(_) => "anchorsMode",
-        Refused::Length(_) => "anchorsLength",
-        Refused::Dir(_) => "anchorsDir",
-        Refused::Io(e) if e.kind() == ErrorKind::NotFound => "anchorsMissing",
-        Refused::Io(_) => "anchorsIo",
+        Refused::Link => End::File("anchorsLink", k::ANCHORS_LINK),
+        Refused::NotRegular => End::File("anchorsNotRegular", k::ANCHORS_NOT_REGULAR),
+        Refused::Owner(_) => End::File("anchorsOwner", k::ANCHORS_OWNER),
+        Refused::Mode(_) => End::File("anchorsMode", k::ANCHORS_MODE),
+        Refused::Length(_) => End::File("anchorsLength", k::ANCHORS_LENGTH),
+        Refused::Dir(_) => End::File("anchorsDir", k::ANCHORS_DIR),
+        Refused::Io(e) if e.kind() == ErrorKind::NotFound => {
+            End::File("anchorsMissing", k::ANCHORS_MISSING)
+        }
+        Refused::Io(_) => End::File("anchorsIo", k::ANCHORS_IO),
     }
 }
 
@@ -202,17 +215,17 @@ fn run() -> End {
     let keys_path = PathBuf::from(keys_path);
     let text = match custody::read_private(&keys_path, 1..=KEYFILE_MAX) {
         Ok(t) => t,
-        Err(e) => return End::KeyFile(key_file_name(&e)),
+        Err(e) => return key_file_end(&e),
     };
     let Some(keys) = parse_keys(&text) else {
-        return End::KeyFileFormat;
+        return End::File("keyFileFormat", keybroker_exit::KEY_FILE_FORMAT);
     };
     let anchors = match custody::read_public(&PathBuf::from(anchors_path), 1..=ANCHORS_MAX) {
         Ok(a) => a,
-        Err(e) => return End::Anchors(anchors_name(&e)),
+        Err(e) => return anchors_end(&e),
     };
     let Some(roots) = parse_anchors(&anchors) else {
-        return End::AnchorsMalformed;
+        return End::File("anchorsMalformed", keybroker_exit::ANCHORS_MALFORMED);
     };
     let tls = match tls_config(roots) {
         Ok(c) => Arc::new(c),
@@ -297,7 +310,10 @@ fn run() -> End {
     // The decider's end is keybroker's end: an ask could no longer be decided.
     let status = child.wait();
     let _ = std::fs::remove_file(&pid_file);
-    End::DeciderEnded(status.ok().and_then(|s| s.code()))
+    match status {
+        Ok(s) => End::DeciderEnded(s.code()),
+        Err(e) => End::DeciderLost(e.to_string()),
+    }
 }
 
 /// One resident's socket: one connection at a time; a second, while one is open, is told `busy`.
