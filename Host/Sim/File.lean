@@ -16,6 +16,10 @@
    same length) is refused `corrupt` by the forward scan.
 5. plant-missing-FILE, per Store file (HOST-35): removed from a fresh Store, the open refuses
    `missing FILE` by name and the writer never re-creates it.
+6. plant-backup-restart (HOST-32, `restartPlants`): a backup whose writer restarts (cutting a torn
+   tail of seg.log and an orphan of index.log) between the base copy and the later copies, right
+   after the copy or after sealing a newer base, opens to the copied base with at least the live
+   records; its control, seg.log cut below the live valid end, does not.
 Prints `FAIL <check>` per failure and `ALL PASS` when none.
 -/
 import Host.Store
@@ -135,6 +139,127 @@ def missingPlants (root : System.FilePath) (key : Digest) (keys : Keys) (failure
     check "plant-seal-missing-base: the seal refuses `io` and base.world stays absent"
       ((match r with | .error (.io _) => true | _ => false) && !(← (basePath d).pathExists)) failures
 
+/-- plant-backup-restart (HOST-32, `openWith_backup_restart`): a live backup whose writer RESTARTS
+between the copy of `base.world` and the copies of `index.log` and `seg.log`. The Store serves and
+seals; a follower open is the live Store at the copy instant (every byte it read was synced by the
+writer); base.world is copied. With `sealFirst` the writer then serves until it seals a NEWER base
+(asserted). Then half a frame is appended to seg.log (a torn tail) and half an entry to index.log
+(an orphan), both asserted (each file grew); `openWriter` restarts, in its own scope so its handle
+and lock are released before the next writer opens (asserted: a fresh handle takes the lock), and
+cuts both back (asserted: seg.log to its open's valid end, index.log to its base's
+`count · entryBytes`); the writer serves on and seals again. The later copies are the cuts plus
+appends and NOT the torn files plus appends (asserted: `openWith_backup` alone does not cover
+them). The backup must open to the copied base with at least the live records. The control copies
+seg.log as it stood at the copy with its last whole frame cut off (below the live valid end): it
+must NOT open to at least the live records, so the plant tells the two apart. -/
+def restartPlant (root : System.FilePath) (key : Digest) (keys : Keys) (seed : Nat) (frames : List Frame)
+    (sealFirst : Bool) (failures : IO.Ref Nat) : IO Unit := do
+  let p := if sealFirst then "plant-backup-restart-newer-base" else "plant-backup-restart"
+  let dir := root / "live"
+  let _ ← (Host.genesis dir key keys cadence world recorder.mark Sim.genesis : IO (Except Fault Unit))
+  match ← serveDir dir keys cadence seed (frames.take 120) with
+  | .error e => check s!"{p}: the writer serves ({e})" false failures
+  | .ok _ =>
+  -- a few frames more, so the live tail after the newest base holds records
+  match ← serveDir dir keys cadence seed ((frames.drop 120).take 3) with
+  | .error e => check s!"{p}: the writer serves a tail ({e})" false failures
+  | .ok _ =>
+  match ← follow dir keys cadence with
+  | .error e => check s!"{p}: the live Store opens at the copy ({e.name})" false failures
+  | .ok live =>
+  check s!"{p} fires: the live Store sealed (its base is off genesis) and its tail holds records"
+    (0 < live.sealed.offset && 0 < live.opened.records) failures
+  let baseCopy ← IO.FS.readBinFile (basePath dir)
+  let segAtCopy ← IO.FS.readBinFile (segmentPath dir)
+  let rest := if sealFirst then frames.drop 163 else frames.drop 123
+  if sealFirst then
+    match ← serveDir dir keys cadence seed ((frames.drop 123).take 40) with
+    | .error e => check s!"{p}: the writer serves to a newer base ({e})" false failures
+    | .ok (r1, _) =>
+      check s!"{p} fires: the writer sealed a newer base after the copy, before the restart"
+        (live.sealed.offset < r1.sealed.offset) failures
+  match ← follow dir keys cadence with
+  | .error e => check s!"{p}: the Store opens before the tear ({e.name})" false failures
+  | .ok cur =>
+  let segBefore ← fileSize (segmentPath dir)
+  let idxBefore ← fileSize (indexPath dir)
+  let extra := Log.frame keys.segment cur.pos.tag.bytes
+    (recorder.encode cur.opened.world #[(mkTurn 77777 0 1024 [77777], 0)])
+  let half := extra.extract 0 (extra.size / 2)
+  let orphan := ByteArray.mk (Array.replicate (entryBytes keys / 2) 0xAB)
+  let f ← File.open (segmentPath dir) .append
+  f.writeAll half
+  f.sync
+  let g ← File.open (indexPath dir) .append
+  g.writeAll orphan
+  g.sync
+  let segTorn ← fileSize (segmentPath dir)
+  let idxTorn ← fileSize (indexPath dir)
+  check s!"{p} fires: half a frame appended to seg.log and half an entry to index.log, both grew"
+    (segBefore = cur.pos.offset && segBefore < segTorn &&
+      idxBefore = cur.sealed.index.count * entryBytes keys && idxBefore < idxTorn) failures
+  let tornSeg ← IO.FS.readBinFile (segmentPath dir)
+  let tornIdx ← IO.FS.readBinFile (indexPath dir)
+  -- the restart, scoped: only a Bool leaves it, so the Writer (its handles and lock) is freed here
+  let opened ← do
+    let w ← (openWriter dir keys cadence world recorder.mark originChain foldStep : IO (Except Fault _))
+    pure (match w with | .ok _ => true | .error _ => false)
+  let released ← do
+    let h ← File.open (segmentPath dir) .append
+    h.tryLock
+  let segCut ← fileSize (segmentPath dir)
+  let idxCut ← fileSize (indexPath dir)
+  check s!"{p}: the restart opens, cuts seg.log to its valid end and index.log to count · entryBytes, and releases its lock"
+    (opened && released && segCut = cur.pos.offset && idxCut = cur.sealed.index.count * entryBytes keys)
+    failures
+  let segCutBytes ← IO.FS.readBinFile (segmentPath dir)
+  let idxCutBytes ← IO.FS.readBinFile (indexPath dir)
+  match ← serveDir dir keys cadence seed rest with
+  | .error e => check s!"{p}: the restarted writer serves on ({e})" false failures
+  | .ok (r2, _) =>
+  check s!"{p} fires: the restarted writer sealed again (its base moved past the copied one)"
+    (cur.sealed.offset < r2.sealed.offset) failures
+  let idx ← IO.FS.readBinFile (indexPath dir)
+  let seg ← IO.FS.readBinFile (segmentPath dir)
+  check s!"{p} fires: the later seg.log and index.log are the cuts plus appends, NOT the torn files plus appends"
+    (seg.extract 0 segCutBytes.size == segCutBytes && seg.extract 0 tornSeg.size != tornSeg &&
+      idx.extract 0 idxCutBytes.size == idxCutBytes && idx.extract 0 tornIdx.size != tornIdx) failures
+  let keyBytes ← IO.FS.readBinFile (keyPath dir)
+  let writeBackup (d : System.FilePath) (s : ByteArray) : IO Unit := do
+    IO.FS.createDirAll d
+    IO.FS.writeBinFile (keyPath d) keyBytes
+    IO.FS.writeBinFile (basePath d) baseCopy
+    IO.FS.writeBinFile (indexPath d) idx
+    IO.FS.writeBinFile (segmentPath d) s
+  let atLeast : Except Fault (Opening (World Nat)) → Bool
+    | .ok o => o.sealed.offset == live.sealed.offset && live.opened.records ≤ o.opened.records
+    | .error _ => false
+  let outcome : Except Fault (Opening (World Nat)) → String
+    | .ok o => s!"opened at base {o.sealed.offset} with {o.opened.records} records, live {live.opened.records} at base {live.sealed.offset}"
+    | .error e => s!"refused {e.name}"
+  writeBackup (root / "backup") seg
+  let b ← follow (root / "backup") keys cadence
+  check s!"{p}: the backup opens to the copied base with at least the live records ({outcome b})"
+    (atLeast b) failures
+  -- the control: seg.log as it stood at the copy, its last whole frame cut off
+  let rv := Log.recover keys.segment cadence.recordBytesMax segmentInitial segAtCopy
+  let lastLen := (rv.records.getLast?.map frameSize).getD 0
+  let short := segAtCopy.extract 0 (segAtCopy.size - lastLen)
+  check s!"{p} control fires: seg.log cut by its last whole frame, below the live valid end"
+    (segAtCopy.size == live.pos.offset && rv.validLen == segAtCopy.size && 0 < lastLen &&
+      short.size < live.pos.offset) failures
+  writeBackup (root / "short") short
+  let s ← follow (root / "short") keys cadence
+  check s!"{p} control: the short copy does NOT open to at least the live records ({outcome s})"
+    (!atLeast s) failures
+
+/-- Both restart orders: a restart right after the base copy, and one after the writer sealed a
+newer base. -/
+def restartPlants (root : System.FilePath) (key : Digest) (keys : Keys) (seed : Nat) (frames : List Frame)
+    (failures : IO.Ref Nat) : IO Unit := do
+  restartPlant (root / "after-copy") key keys seed frames false failures
+  restartPlant (root / "after-newer-base") key keys seed frames true failures
+
 def body (seed : Nat) (dirA dirB : System.FilePath) : IO UInt32 := do
   let failures ← IO.mkRef 0
   let frames := (scenario seed 200).map (·.1)
@@ -229,6 +354,7 @@ def body (seed : Nat) (dirA dirB : System.FilePath) : IO UInt32 := do
         check "plant-foreign-segment: the writer refuses `foreignSegment` and the file is unchanged"
           ((match opened with | .error f => f.name = "foreignSegment" | .ok _ => false) && before = after) failures
   missingPlants (dirB / "missing") key keys failures
+  restartPlants (dirB / "restart") key keys seed frames failures
   let n ← failures.get
   IO.println (if n = 0 then "ALL PASS" else s!"{n} FAILED")
   return (if n = 0 then 0 else 1)

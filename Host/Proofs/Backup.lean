@@ -19,11 +19,22 @@ base was copied, plus whatever the writer appended since (`I ++ x`, `S ++ y`).
   `indexShort`, `indexCorrupt`, `foreignSegment` or `foreignOrigin`: the base's prefixes are in the
   copies because they were in the files when the base was copied.
 
-NOT covered (named in decisions/host.md HOST-32): a writer that RESTARTS between two copies
-truncates a torn tail or orphan entries (`openWriter`), so its later copy is a valid-prefix cut of
-the file followed by new appends, not the file then plus appends. RUNBOOK §6 copies a stopped
-writer. The premise that the live Store opened at the instant the base was copied is the writer's
-invariant, tested by host-sim's crash plants, not proved.
+* `openWith_cut` — the files cut to an open's valid end and to the entries its base counts open
+  to the same Store, with no torn tail and no orphans: every read the open makes lies in the cut;
+* `openWith_backup_restart` — **the backup theorem across restarts.** A writer that RESTARTS
+  between two copies truncates a torn tail and orphan entries (`openWriter`), so its later copies
+  are `S.extract 0 o.pos.offset ++ y` and `I.extract 0 (count * entryBytes) ++ x`, not `S ++ y` and
+  `I ++ x`. They open as `openWith_backup` says (`openWith_cut`, then `openWith_backup` on the cut
+  files), which this generalizes.
+
+Premises, the writer's invariants, not proved; tested by host-sim's crash plants and
+host-file-sim's `restartPlants`: the Store as it stood when the backup copied base.world opens (to
+`o`), and the live open read only synced bytes, which the writer's own opens do (a follower can
+read page-cache bytes never synced, and a power loss then shrinks seg.log below `o.pos.offset`
+with no restart involved); seg.log[0, o.pos.offset) and index.log[0, count · entryBytes) were
+durable when the backup copied base.world, and are never rewritten; a restart (`openWriter`) cuts
+only past its own open's valid end and count, which are at or past these (a later base sits at or
+past the live valid end and counts at least the live entries).
 -/
 import Host.Proofs.Base
 import Host.Proofs.Open
@@ -533,5 +544,177 @@ theorem openWith_backup (keys : Keys) (c : Cadence) (world : Codec.Stream W) (ma
       exact Or.inr (Or.inr (Or.inl ⟨_, rfl, show b.offset + op.validLen ≤ b.offset + off by omega⟩))
     · rw [ho']
       exact Or.inr (Or.inr (Or.inr ⟨j, f, rfl, hj⟩))
+
+/-! ## A restart between copies: the valid-prefix cut -/
+
+theorem lenAt_lt {log : ByteArray} {off n : Nat} (h : lenAt log off = some n) : n < 2 ^ 32 := by
+  unfold lenAt at h
+  split at h
+  · rename_i v _ _
+    cases h
+    exact UInt32.toNat_lt v
+  · cases h
+
+/-- A record `frameAt` reads fits its bound and a `u32` length field. -/
+theorem frameAt_record_size {s : Sealer} {m : Nat} {log : ByteArray} {off : Nat} {prev : ByteArray}
+    {rd : Read} (h : frameAt s m log off prev = some rd) : rd.record.size ≤ m ∧ rd.record.size < 2 ^ 32 := by
+  unfold frameAt at h
+  split at h
+  · cases h
+  · rename_i len hlen
+    have h32 := lenAt_lt hlen
+    split at h
+    · cases h
+    · split at h
+      · cases h
+      · rename_i hm hfit
+        dsimp only at h
+        split at h
+        · cases h
+          simp only [size_extract]
+          omega
+        · cases h
+
+theorem go_record_size (s : Sealer) (m : Nat) (log : ByteArray) :
+    ∀ (fuel off : Nat) (prev : ByteArray) (acc : List ByteArray),
+      (∀ r ∈ acc, r.size ≤ m ∧ r.size < 2 ^ 32) →
+      ∀ r ∈ (go s m log fuel off prev acc).records, r.size ≤ m ∧ r.size < 2 ^ 32 := by
+  intro fuel
+  induction fuel with
+  | zero => intro off prev acc ha r hr; simp only [go, List.mem_reverse] at hr; exact ha r hr
+  | succ fuel ih =>
+    intro off prev acc ha
+    simp only [go]
+    split
+    · intro r hr; simp only [List.mem_reverse] at hr; exact ha r hr
+    · rename_i r₀ o t hstep
+      apply ih o t (r₀ :: acc)
+      intro r hr
+      rcases List.mem_cons.mp hr with rfl | hr
+      · unfold step at hstep
+        split at hstep
+        · cases hstep
+        · split at hstep
+          · rename_i rd hrd
+            cases hstep
+            exact frameAt_record_size hrd
+          · cases hstep
+      · exact ha r hr
+
+/-- `open_sound`, with the bounds a recovered record meets (what `open_encodeAll` asks). -/
+theorem open_sound_bounded (s : Sealer) {m : Nat} (step : W → ByteArray → Except F W) (w₀ : W)
+    (initial log : ByteArray) {o : Opened W} (h : openLog s m step w₀ initial log = .ok o) :
+    ∃ rs : List ByteArray, log.extract 0 o.validLen = encodeAll s initial rs ∧
+      rs.foldlM step w₀ = .ok o.world ∧ o.lastTag = lastTag s initial rs ∧ o.records = rs.length ∧
+      ∀ r ∈ rs, r.size ≤ m ∧ r.size < 2 ^ 32 := by
+  obtain ⟨he, ht⟩ := encodeAll_recover s m initial log
+  have hb := go_record_size s m log (log.size + 1) 0 initial [] (by simp)
+  unfold openLog at h
+  unfold recover at he ht
+  unfold recover at h
+  generalize go s m log (log.size + 1) 0 initial [] = rv at h he ht hb
+  simp only at h
+  split at h
+  · cases h
+  · split at h
+    · rename_i w hw
+      cases h
+      exact ⟨rv.records, he, (foldRecords_ok step rv.records w₀ w 0).mp hw, ht, rfl, hb⟩
+    · cases h
+
+theorem extract_prefix (S : ByteArray) {n i j : Nat} (h : j ≤ n) :
+    (S.extract 0 n).extract i j = S.extract i j := by
+  rw [extract_extract]; congr 1 <;> omega
+
+/-- **The cut a restart leaves opens to the same Store, clean.** If `file`, `I`, `S` open to `o`,
+then the files cut to `o`'s valid end (`S.extract 0 o.pos.offset`: no torn tail) and to the
+entries its base counts (`I.extract 0 (count * entryBytes)`: no orphans) open to `o` with
+`torn = 0` and `orphan = 0`: every read the open makes lies inside the cut. -/
+theorem openWith_cut (keys : Keys) (c : Cadence) (world : Codec.Stream W) (mark : W → Nat × ByteArray)
+    (origin : W → ByteArray) (step : W → ByteArray → Except F W) (file I S : ByteArray) {o : Opening W}
+    (h : Id.run (openWith keys c world mark origin step file S.size I.size (segReader I) (segReader S)) = .ok o) :
+    Id.run (openWith keys c world mark origin step file (S.extract 0 o.pos.offset).size
+      (I.extract 0 (o.sealed.index.count * entryBytes keys)).size
+      (segReader (I.extract 0 (o.sealed.index.count * entryBytes keys)))
+      (segReader (S.extract 0 o.pos.offset))) =
+      .ok { o with opened := { o.opened with torn := 0 }, orphan := 0 } := by
+  have hfile : ¬ frameMax c.baseRecordMax < file.size := by
+    intro hf; unfold openWith at h; rw [if_pos hf] at h; exact absurd h (by simp [Id.run, pure])
+  obtain ⟨b, baseBytes, digest, len, op, tag, hb, hlen, hoff, htag, hof, hw, hi, hix, hop, htg, rfl⟩ :=
+    openWith_seg_ok keys c world mark origin step file I S h
+  obtain ⟨hs, hmax⟩ := tailRead_ok hlen
+  have hvl := openLog_validLen_le hop
+  simp only [size_extract] at hvl
+  dsimp only
+  have hS' : (S.extract 0 (b.offset + op.validLen)).size = b.offset + op.validLen := by
+    simp only [size_extract]; omega
+  have hI' : (I.extract 0 (b.indexCount * entryBytes keys)).size = b.indexCount * entryBytes keys := by
+    simp only [size_extract]; omega
+  have htr : tailRead c baseBytes b.offset (S.extract 0 (b.offset + op.validLen)).size = .ok op.validLen := by
+    unfold tailRead
+    rw [hS', if_neg (by omega), if_neg (by omega)]
+    congr 1; omega
+  obtain ⟨rs, he, hf, hlt, hn, hrs⟩ := open_sound_bounded keys.segment (indexed mark step) _ _ _ hop
+  have hes : (encodeAll keys.segment b.tag.bytes rs).size = op.validLen := by
+    rw [← he]; simp only [size_extract]; omega
+  have hcut : (S.extract 0 (b.offset + op.validLen)).extract b.offset
+      (S.extract 0 (b.offset + op.validLen)).size = encodeAll keys.segment b.tag.bytes rs := by
+    rw [hS', extract_prefix S (Nat.le_refl _), ← he, extract_extract]
+    congr 1 <;> omega
+  have hopc := open_encodeAll keys.segment (recordMax := c.recordBytesMax) (indexed mark step)
+    (b.world, #[], b.offset) op.world b.tag.bytes rs hrs hf
+  rw [hes, ← hlt, ← hn] at hopc
+  have ⟨q1, q2, q3⟩ := tail_read (S.extract 0 (b.offset + op.validLen)) (len := op.validLen) hoff
+    (by rw [hS'])
+  have hol : originLen b.offset ≤ b.offset := by unfold originLen; omega
+  have hla := lastAt_within keys b.indexCount
+  unfold openWith
+  simp only [segReader, pure_bind, Nat.zero_add]
+  rw [if_neg hfile, hb]
+  dsimp only
+  rw [htr]
+  dsimp only
+  rw [if_neg (by omega), if_neg (by rw [q1]; simp), q2, extract_prefix S (by omega),
+    if_neg (by simpa using htag), if_neg (by simp [hS']; omega), extract_prefix S (by omega), hof]
+  dsimp only
+  rw [if_neg (by omega), if_neg (by rw [hI']; omega), if_neg (by simp [hI']; omega),
+    extract_prefix I (by omega), hix]
+  dsimp only
+  rw [q3, hcut, hopc]
+  dsimp only
+  rw [htg]
+  simp only [Id.run, pure, hI', Nat.sub_self]
+
+/-- **What a live backup opens to across writer restarts (HOST-32).** `file`, `I`, `S` are
+`base.world`, `index.log` and `seg.log` as they stood when the backup copied `base.world`, and that
+Store opens to `o`, having read only synced bytes (the writer's own opens do). The premise is
+about bytes (the writer's invariant): `seg.log[0, o.pos.offset)` and
+`index.log[0, o.sealed.index.count · entryBytes)` were durable when the backup copied `base.world`
+and are never rewritten; a restart (`openWriter`) cuts only past its own open's valid end and
+count, which are at or past these (a later base sits at or past the live valid end and counts at
+least the live entries). So after any number of restarts and appends the later copies are the cut files
+plus whatever was appended since: `S.extract 0 o.pos.offset ++ y` and
+`I.extract 0 (o.sealed.index.count * entryBytes keys) ++ x`. The conclusion is `openWith_backup`'s:
+the same base with at least the live records, or a refusal by name (`tailTooLong`, `corrupt` at or
+past the live position, `record j` past the live records). It generalizes `openWith_backup`, whose
+`S ++ y` is `S.extract 0 o.pos.offset ++ (S.extract o.pos.offset S.size ++ y)`. -/
+theorem openWith_backup_restart (keys : Keys) (c : Cadence) (world : Codec.Stream W)
+    (mark : W → Nat × ByteArray) (origin : W → ByteArray) (step : W → ByteArray → Except F W)
+    (file I S x y : ByteArray) {o : Opening W} {R : Except (StoreFault F) (Opening W)}
+    (h : Id.run (openWith keys c world mark origin step file S.size I.size (segReader I) (segReader S)) = .ok o)
+    (hR : Id.run (openWith keys c world mark origin step file (S.extract 0 o.pos.offset ++ y).size
+      (I.extract 0 (o.sealed.index.count * entryBytes keys) ++ x).size
+      (segReader (I.extract 0 (o.sealed.index.count * entryBytes keys) ++ x))
+      (segReader (S.extract 0 o.pos.offset ++ y))) = R) :
+    (∃ o' more, R = .ok o' ∧ o'.sealed = o.sealed ∧
+      o'.opened.records = o.opened.records + more.length ∧ o.pos.offset ≤ o'.pos.offset ∧
+      foldRecords (indexed mark step) (o.opened.world, o.index, o.pos.offset) o.opened.records more =
+        .ok (o'.opened.world, o'.index, o'.pos.offset)) ∨
+    (∃ n mx, R = .error (.base (.tailTooLong n mx))) ∨
+    (∃ off, R = .error (.log (.corrupt off)) ∧ o.pos.offset ≤ off) ∨
+    (∃ j f, R = .error (.log (.record j f)) ∧ o.opened.records ≤ j) := by
+  have hb := openWith_backup keys c world mark origin step file _ _ x y
+    (openWith_cut keys c world mark origin step file I S h) hR
+  exact hb
 
 end Nanodregg.Host

@@ -1703,3 +1703,71 @@ and stay green.
 that an effect record can hide an extra write inside an effect that is not `genesis`. That is why the
 record's docstring names genesis as the only Store writer, and why the IO instance sits beside it in
 the same file, where a reader can check the claim in one screen.
+
+## HOST-37 · a backup across a writer restart: what HOST-32 left uncovered, proved (2026-10-17, HOST-10; HOST-32's critique, item 1)
+
+**The gap.** `openWith_backup` (HOST-32) models each copy of an append-only file as "the file when
+base.world was copied, plus appended bytes" (`S ++ y`, `I ++ x`). A writer that RESTARTS between two
+copies breaks that model: `openWriter` truncates a torn seg.log tail to its open's valid end, and
+index.log orphans to its base's count. The later copy is then a cut of the file followed by new
+appends, not the file plus appends.
+
+**Decision.** Restate the backup over the cut and prove it (Host/Proofs/Backup.lean):
+- `openWith_cut`: if the live files open to `o`, then the files cut at `o.pos.offset` (seg.log) and
+  at `o.sealed.index.count · entryBytes` (index.log) open to exactly `o` with `torn = 0` and
+  `orphan = 0`. Every read of the open (the base tag, the origin range, the one named entry) lies
+  inside the cut, and the tail is `encodeAll` of the same records (`open_sound_bounded`, then
+  `open_encodeAll`).
+- `openWith_backup_restart`: a backup whose copies are `S.extract 0 o.pos.offset ++ y` and
+  `I.extract 0 (count · eb) ++ x` opens as `openWith_backup` says. Either it gives the same base with
+  at least the live records, folded on from the live state, or it refuses `tailTooLong`, `corrupt`
+  at or past the live end, or `record j` past the live records. It is `openWith_cut` composed with
+  `openWith_backup` over the cut files, and it strictly generalizes `openWith_backup`
+  (`S ++ y = S.extract 0 pos ++ (S.extract pos S.size ++ y)`).
+
+**The premise, named (the writer's invariant; a law-6 reader corrected its first wording).** It is
+about bytes:
+- `seg.log[0, o.pos.offset)` and `index.log[0, count · eb)` were durable when the backup copied
+  base.world, and are never rewritten;
+- a restart (`openWriter`) cuts only past its own open's valid end and count, which are at or past
+  these (a later base sits at or past the live valid end and counts at least the live entries).
+
+The live open must have read only synced bytes, which the writer's own opens do. A follower that read
+page-cache bytes never synced, followed by a power loss, can see seg.log shrink below
+`o.pos.offset` with no restart at all; that case is outside the premise.
+
+So any number of restarts, seals and appends between the copies leaves copies of the stated shape.
+This is read off `openWriter` and the loop, not proved over IO. host-file-sim's plant checks it on a
+real Store.
+
+**Plant (host-file-sim `restartPlants`, seeds 1–3).**
+- Serve with sealing, then three more frames, so the live tail holds records. The live state is taken
+  from a follower open.
+- Copy base.world. Tear half a frame onto seg.log, and append half an index entry onto index.log
+  (both asserted: the file grew). Restart with `openWriter`, which truncates; it is asserted to cut
+  seg.log back to the live valid end and index.log back to `count · entryBytes`, and its lock is
+  asserted released. Serve on until the writer seals again (asserted: its base moved past the
+  copied one).
+- A second order, `after-newer-base`: after the copy, the writer seals a newer base (asserted)
+  BEFORE the tear and the restart.
+- The backup is the key, the copied base, and the later index.log and seg.log. It is asserted to be
+  the cut plus appends, not the torn file plus appends. It opens to the copied base with at least
+  the live records, asserted alone with no `tailTooLong` escape. Seed 1: 22 records (20 in the
+  newer-base order) against 2 live; seed 2: 25 and 27 against 1; seed 3: 33 and 35 against 4.
+- Control: seg.log as the restart left it, minus its last whole frame (below the live valid end). It
+  opens with FEWER than the live records (seeds 1–3: 1 of 2, 0 of 1, 3 of 4), so the plant tells
+  the two apart. Seventeen restart checks per seed, all PASS.
+
+**Critique.**
+- The premise is the writer's behaviour, over IO. It would fail for a writer that truncated below its
+  valid end, which `openWriter` does not do: it truncates only `0 < torn` bytes past `o.pos.offset`
+  and orphans past `count · eb`. A defect there is caught by this plant and by host-sim's
+  restart-at-every-cut.
+- Copying a file while it is mid-truncate is still a torn read. The open reads it as a shorter or
+  torn tail and refuses or folds by name, as HOST-32 states.
+
+**Meta-critique.** The question was "prove what a backup gets, or refuse by name at open". Refusing at
+open is impossible: a backup does not record when it straddled a restart, and a cut-plus-appends
+file is byte-identical to a file a writer appended to without a restart. So the theorem is the
+answer. The plant's control is what keeps "at least the live records" from being true of every
+copy.
