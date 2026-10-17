@@ -6,7 +6,7 @@
 | metric | now | ceiling |
 |---|---|---|
 | Lean modules in the Host closure | 0 | 150 |
-| Lean lines (deployed) | 5545 | — |
+| Lean lines (deployed) | 5800 | — |
 | protocol operations | 6 | 6 |
 | call kinds (Receive.Call constructors) | 0 | 7 |
 | command verbs (the one command language) | 0 | 20 |
@@ -18,7 +18,7 @@
 | partial defs (deployed) | 0 | 0 |
 | theorems | 278 | — |
 | sorry | 0 | 0 |
-| Lean modules | 77 | — |
+| Lean modules | 78 | — |
 | Lean proof-modules | 29 | — |
 | Lean lines (Census) | 89 | — |
 | Lean lines (Codec) | 1392 | — |
@@ -26,7 +26,7 @@
 | Lean lines (Host) | 1372 | — |
 | Lean lines (Kernel) | 2641 | — |
 | Lean lines (Protocol) | 815 | — |
-| max dependents of one module | 53 | — |
+| max dependents of one module | 54 | — |
 | native (extern/implemented_by) | 8 | 8 |
 | C lines | 0 | 146 |
-| Lean lines (Lang) | 3047 | — |
+| Lean lines (Lang) | 3302 | — |

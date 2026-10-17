@@ -8,6 +8,7 @@ package `Owned` keeps `{owner : bytes, total : nat}`; its method `set n` writes 
 laws are `bounded` (`new.total ≤ 100`, else "over 100") and `ownerOnly` (the SIGNING member must be
 the owner and the owner never changes). Rows:
 
+* L0 the text form of `Owned` (`Lang.Read`, what a resident writes) reads to the same bytes.
 * L1 founder A installs `Owned` (a ROM cell, id `romIdOf`) — admitted.
 * L2 A creates an object owned by A, seed `{owner = A, total = 0}`, judged by both laws — admitted.
 * L3 A invokes `set 50` — admitted; the object's `total` slot decodes to 50.
@@ -21,6 +22,7 @@ the owner and the owner never changes). Rows:
 -/
 import Kernel.Sim
 import Lang.Program
+import Lang.Read
 
 namespace Nanodregg.Lang.Journey
 
@@ -59,6 +61,40 @@ def owned : Package :=
 def illTyped : Package :=
   { owned with body := .record [("bounded", bounded), ("ownerOnly", ownerOnly),
       ("set", .lam S (.lam .nat (.lam reqTy (.var 1))))] }
+
+/-- `Owned`, as a resident writes it (Lang.Read): must read to exactly the package above. -/
+def ownedText : String := "
+(package (imports)
+  (state (rec (owner bytes) (total nat)))
+  (iface (rec (set (-> (rec (owner bytes) (total nat))
+                    (-> nat (-> (rec (agent bytes) (notBefore nat) (principal bytes) (validUntil nat))
+                                (rec (owner bytes) (total nat))))))
+              (bounded (-> (rec (owner bytes) (total nat)) (-> (rec (owner bytes) (total nat))
+                (-> (rec (agent bytes) (notBefore nat) (principal bytes) (validUntil nat))
+                    (sum (ok (rec)) (refused bytes))))))
+              (ownerOnly (-> (rec (owner bytes) (total nat)) (-> (rec (owner bytes) (total nat))
+                (-> (rec (agent bytes) (notBefore nat) (principal bytes) (validUntil nat))
+                    (sum (ok (rec)) (refused bytes))))))))
+  (methods set)
+  (laws bounded ownerOnly)
+  (body
+    (record
+      (set (fn (s (rec (owner bytes) (total nat))) (n nat)
+               (r (rec (agent bytes) (notBefore nat) (principal bytes) (validUntil nat)))
+             (record (owner (. s owner)) (total n))))
+      (bounded (fn (old (rec (owner bytes) (total nat))) (new (rec (owner bytes) (total nat)))
+                   (r (rec (agent bytes) (notBefore nat) (principal bytes) (validUntil nat)))
+                 (if (<= (. new total) 100)
+                     (inj (sum (ok (rec)) (refused bytes)) ok (record))
+                     (inj (sum (ok (rec)) (refused bytes)) refused \"over 100\"))))
+      (ownerOnly (fn (old (rec (owner bytes) (total nat))) (new (rec (owner bytes) (total nat)))
+                     (r (rec (agent bytes) (notBefore nat) (principal bytes) (validUntil nat)))
+                   (if (beq (. r agent) (. new owner))
+                       (if (beq (. old owner) (. new owner))
+                           (inj (sum (ok (rec)) (refused bytes)) ok (record))
+                           (inj (sum (ok (rec)) (refused bytes)) refused \"owner changed\"))
+                       (inj (sum (ok (rec)) (refused bytes)) refused \"not the owner\")))))))
+"
 
 def nat64 (n : Nat) : ByteArray := Wire.encodeData .nat (.nat n)
 
@@ -106,6 +142,12 @@ def journey (prog : Program D) (plant : Bool) : Run := Id.run do
   let mut r : Run := { st := { rng := ⟨1⟩, reg := {}, host := g, members } }
   let a := members.headD ⟨0, .empty, .empty⟩
   let b := members.getD 1 ⟨0, .empty, .empty⟩
+  -- L0 the resident's text reads to exactly the package
+  match Read.readPackage ownedText with
+  | .error e => r := note r s!"L0 read Owned: {e}" false
+  | .ok q =>
+    let same := Wire.encodePackage q == Wire.encodePackage owned
+    r := note r "L0 read Owned from text: same bytes as the AST" same
   -- L1 install
   let c1 := Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id]) (.install (Wire.encodePackage owned))
   let (r1, v1, t1) := go prog r c1
