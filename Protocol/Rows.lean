@@ -78,6 +78,9 @@ inductive Fault
   | dropLastEvent
   /-- this command's follow starts from genesis -/
   | cold
+  /-- this command's follow starts from genesis, and every `expired` a log page is refused with
+  states `extra` more than the writer's height (a man in the middle on the member's path, PROTOCOL-27) -/
+  | inflateExpired (extra : Nat)
   /-- the actor signs as member `victim` with the victim's CURRENT key (stolen), its own custody
   holding every other key -/
   | stolenKey (victim : String)
@@ -132,6 +135,9 @@ inductive Mutation
   /-- the writer refuses an expired envelope by the name alone, stating no height (PROTOCOL-12's
   shape, before PROTOCOL-19) -/
   | unstatedExpiry
+  /-- the writer's read gate skips the envelope's lower bound: a `notYet` envelope is served (the
+  shape before PROTOCOL-27, when an envelope was good at every height up to `validUntil`) -/
+  | ignoreNotBefore
   deriving DecidableEq, Repr
 
 /-- A row's plant: the mutation, and the line that must catch it with the outcome it then gets. -/
@@ -361,6 +367,22 @@ def coldCatchUp : Row where
     { actor := "auditor", act := .cmd ["read", "@shared", "2=1"], expect := .ok, fault := .cold }])
   plant := .caught .unstatedExpiry 10 (.refused "expired")
 
+/-- PROTOCOL-27: a man in the middle on a cold follower's path inflates the height `expired`
+states. Follow re-signs for the window starting at that height, and the writer refuses it `notYet`:
+the inflation buys a window in the future, never a longer one (`Envelope.check_ok_within`). Under the
+old gate (no lower bound) the inflated envelope reads. -/
+def inflatedHeight : Row where
+  name := "inflatedHeight"
+  replaces := []
+  ops := everyWrite
+  kinds := ["enroll", "install", "create", "grant", "write"]
+  drive := .members (welcome ++ join "sponsor" "auditor" ++ [
+    { actor := "newcomer", act := .cmd ["write", "@shared", "2", "1", "--via", "@g"], expect := .ok,
+      times := 110 },
+    { actor := "auditor", act := .cmd ["read", "@shared", "2=1"], expect := .refused "notYet",
+      fault := .inflateExpired 1000000 }])
+  plant := .caught .ignoreNotBefore 10 .ok
+
 /-- THIN (PROTOCOL-14, option A; minidregg's `journey.d/jthin-consent.sh`, which drove the
 deleted thin consent frames 230–232): a member that never folded the log adopts the writer's
 newest base, pinned by a full follower's word, then is an ordinary follower from the base on: it
@@ -524,7 +546,7 @@ def langJourney : Row where
   plant := .internal "a program whose judge admits everything: L4 set 101 must be admitted"
 
 def rows : List Row :=
-  [journey, reopen, laws, rotate, audit, paging, coldCatchUp, thin, wrongWorld, pay, well, bounty, grain, hermes, bar,
+  [journey, reopen, laws, rotate, audit, paging, coldCatchUp, inflatedHeight, thin, wrongWorld, pay, well, bounty, grain, hermes, bar,
    langJourney]
 
 end Nanodregg.Protocol

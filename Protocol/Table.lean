@@ -310,9 +310,11 @@ def custodyRefusalLayout : Codec.Layout :=
 /-- The READ ENVELOPE: the payload of `log` (and `read`). A member's request to read the writer's
 log from a height, signed by its current key and gated by its follow grant (PROTOCOL-3, HOST-11):
 digests are `Env.bytes`, heights are u64le. The signed message is `Envelope.message` (domain tag,
-member, grant, from, validUntil); `validUntil` bounds a replay to a window of heights. -/
+member, grant, from, notBefore, validUntil); `[notBefore, validUntil]`, at most the kernel's
+`windowMax` wide, bounds a replay to one window of heights (PROTOCOL-27). -/
 def envelopeLayout : Codec.Layout :=
-  [.bytes "member", .bytes "grant", .bytes "from", .bytes "validUntil", .bytes "key", .bytes "signature"]
+  [.bytes "member", .bytes "grant", .bytes "from", .bytes "notBefore", .bytes "validUntil", .bytes "key",
+   .bytes "signature"]
 
 /-- The `refused` payload of `log` and `read` when the envelope's `validUntil` is below the writer's
 height (PROTOCOL-19): the name `expired` as bytes, then that height, so an authenticated member

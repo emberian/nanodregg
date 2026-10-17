@@ -16,7 +16,8 @@ theorem ReadRefusal.name_injective : ∀ a b : ReadRefusal, a.name = b.name →
 
 /-- Every refusal but `expired` travels as its name. -/
 theorem ReadRefusal.payload_name : ∀ r : ReadRefusal, (∀ h, r ≠ .expired h) → r.payload = r.name.toUTF8
-  | .badEnvelope, _ | .unknownKey, _ | .badSignature, _ | .noFollowGrant, _ => rfl
+  | .badEnvelope, _ | .unknownKey, _ | .badSignature, _ | .noFollowGrant, _ | .notYet, _
+  | .wideWindow, _ => rfl
   | .expired h, hr => absurd rfl (hr h)
 
 /-- An `expired` payload states the writer's height, which `expiredHeight?` reads back. -/
@@ -60,39 +61,114 @@ theorem expiredHeight?_of_head {b : ByteArray} (hb : b[0]? ≠ some 7) : expired
 
 /-- The names `ReadRefusal` sends as UTF-8 state no height. -/
 theorem expiredHeight?_name : ∀ r : ReadRefusal, (∀ h, r ≠ .expired h) → expiredHeight? r.payload = none
-  | .badEnvelope, _ | .unknownKey, _ | .badSignature, _ | .noFollowGrant, _ =>
+  | .badEnvelope, _ | .unknownKey, _ | .badSignature, _ | .noFollowGrant, _ | .notYet, _
+  | .wideWindow, _ =>
     expiredHeight?_of_head (by decide)
   | .expired h, hr => absurd rfl (hr h)
 
 variable {D : Type} [Ord D] [DecidableEq D]
 
-/-- The Host serves a read exactly when the member's current key signed the envelope, the
-member's follow grant is live to a root, and it has not expired. -/
+/-- The Host serves a read exactly when the envelope's window is at most `windowMax` wide, the
+member's current key signed it, the member's follow grant is live to a root, and the World's height
+is inside the window. -/
 theorem Envelope.check_ok_iff (X : Ctx D) (w : World D) (e : Envelope D) :
     Envelope.check X w e = .ok () ↔
+      e.validUntil ≤ e.notBefore + Kernel.Bounds.windowMax ∧
       currentKey w e.member = some e.key ∧
-      X.verify e.key (Envelope.message X e.member e.grant e.start e.validUntil) e.signature = true ∧
-      mayFollow X w e.member e.grant = true ∧ w.height ≤ e.validUntil := by
+      X.verify e.key (Envelope.message X e.member e.grant e.start e.notBefore e.validUntil) e.signature = true ∧
+      mayFollow X w e.member e.grant = true ∧ e.notBefore ≤ w.height ∧ w.height ≤ e.validUntil := by
   simp only [Envelope.check, bind, Except.bind, req]
+  by_cases h0 : e.validUntil ≤ e.notBefore + Kernel.Bounds.windowMax <;>
   by_cases h1 : currentKey w e.member = some e.key <;>
-  by_cases h2 : X.verify e.key (Envelope.message X e.member e.grant e.start e.validUntil) e.signature = true <;>
+  by_cases h2 : X.verify e.key (Envelope.message X e.member e.grant e.start e.notBefore e.validUntil) e.signature = true <;>
   by_cases h3 : mayFollow X w e.member e.grant = true <;>
+  by_cases h5 : e.notBefore ≤ w.height <;>
   by_cases h4 : w.height ≤ e.validUntil <;>
-  simp [h1, h2, h3, h4]
+  simp [h0, h1, h2, h3, h4, h5]
+
+/-- One signature reads inside one window of heights, whatever height anyone stated to its signer
+(PROTOCOL-27): an accepted envelope has `notBefore ≤ height ≤ validUntil ≤ notBefore + windowMax`. -/
+theorem Envelope.check_ok_within {X : Ctx D} {w : World D} {e : Envelope D}
+    (h : Envelope.check X w e = .ok ()) :
+    e.notBefore ≤ w.height ∧ w.height ≤ e.validUntil ∧ e.validUntil ≤ e.notBefore + Kernel.Bounds.windowMax := by
+  obtain ⟨h0, -, -, -, h5, h4⟩ := (Envelope.check_ok_iff X w e).mp h
+  exact ⟨h5, h4, h0⟩
+
+/-- `notYet` reaches only an authenticated reader, like `expired`: the current key of a live member
+that signed the envelope and whose follow grant is live; the World is below `notBefore`. -/
+theorem Envelope.check_notYet_authenticated (X : Ctx D) (w : World D) (e : Envelope D)
+    (he : Envelope.check X w e = .error .notYet) :
+      currentKey w e.member = some e.key ∧
+      X.verify e.key (Envelope.message X e.member e.grant e.start e.notBefore e.validUntil) e.signature = true ∧
+      mayFollow X w e.member e.grant = true ∧ w.height < e.notBefore := by
+  simp only [Envelope.check, bind, Except.bind, req] at he
+  by_cases h0 : e.validUntil ≤ e.notBefore + Kernel.Bounds.windowMax <;>
+  by_cases h1 : currentKey w e.member = some e.key <;>
+  by_cases h2 : X.verify e.key (Envelope.message X e.member e.grant e.start e.notBefore e.validUntil) e.signature = true <;>
+  by_cases h3 : mayFollow X w e.member e.grant = true <;>
+  by_cases h5 : e.notBefore ≤ w.height <;>
+  by_cases h4 : w.height ≤ e.validUntil <;>
+  simp_all <;> omega
 
 /-- The writer's height reaches only an authenticated reader: `expired` is refused only to the
 current key of a live member that signed the envelope and whose follow grant is live, and the
 height it states is the World's. A stranger, a revoked member, a forged signature learn nothing. -/
 theorem Envelope.check_expired_authenticated (X : Ctx D) (w : World D) (e : Envelope D) (h : Nat)
     (he : Envelope.check X w e = .error (.expired h)) :
-      currentKey w e.member = some e.key ∧
-      X.verify e.key (Envelope.message X e.member e.grant e.start e.validUntil) e.signature = true ∧
+      e.notBefore ≤ w.height ∧ currentKey w e.member = some e.key ∧
+      X.verify e.key (Envelope.message X e.member e.grant e.start e.notBefore e.validUntil) e.signature = true ∧
       mayFollow X w e.member e.grant = true ∧ e.validUntil < w.height ∧ h = w.height := by
   simp only [Envelope.check, bind, Except.bind, req] at he
+  by_cases h0 : e.validUntil ≤ e.notBefore + Kernel.Bounds.windowMax <;>
   by_cases h1 : currentKey w e.member = some e.key <;>
-  by_cases h2 : X.verify e.key (Envelope.message X e.member e.grant e.start e.validUntil) e.signature = true <;>
+  by_cases h2 : X.verify e.key (Envelope.message X e.member e.grant e.start e.notBefore e.validUntil) e.signature = true <;>
   by_cases h3 : mayFollow X w e.member e.grant = true <;>
+  by_cases h5 : e.notBefore ≤ w.height <;>
   by_cases h4 : w.height ≤ e.validUntil <;>
   simp_all <;> omega
+
+/-- The width bound is checked FIRST: an envelope wider than `windowMax` is refused `wideWindow`,
+whoever signed it (it states nothing about the member, so a stranger learns nothing from it). -/
+theorem Envelope.check_wideWindow (X : Ctx D) (w : World D) (e : Envelope D)
+    (h : e.notBefore + Kernel.Bounds.windowMax < e.validUntil) :
+    Envelope.check X w e = .error .wideWindow := by
+  simp [Envelope.check, bind, Except.bind, req, Nat.not_le.mpr h]
+
+/-- The converse of `check_notYet_authenticated`: an authenticated reader whose window is in
+bounds and starts above the World's height is refused `notYet`, by that name and no other. -/
+theorem Envelope.check_notYet_of (X : Ctx D) (w : World D) (e : Envelope D)
+    (h0 : e.validUntil ≤ e.notBefore + Kernel.Bounds.windowMax)
+    (h1 : currentKey w e.member = some e.key)
+    (h2 : X.verify e.key (Envelope.message X e.member e.grant e.start e.notBefore e.validUntil) e.signature = true)
+    (h3 : mayFollow X w e.member e.grant = true) (h5 : w.height < e.notBefore) :
+    Envelope.check X w e = .error .notYet := by
+  simp [Envelope.check, bind, Except.bind, req, h0, h1, h2, h3, Nat.not_le.mpr h5]
+
+theorem Text.u64_inj {n m : Nat} (hn : n < 2 ^ 64) (hm : m < 2 ^ 64) (h : Text.u64 n = Text.u64 m) :
+    n = m := by
+  have := Stream.bytes_injective Stream.u64_lawful h
+  have h1 := congrArg UInt64.toNat this
+  simpa [Nat.toUInt64, UInt64.toNat_ofNat_of_lt' hn, UInt64.toNat_ofNat_of_lt' hm] using h1
+
+theorem Text.u64_data_size (n : Nat) : (Text.u64 n).data.size = 8 := Stream.u64_size n.toUInt64
+
+omit [Ord D] [DecidableEq D] in
+/-- The signature binds the heights (PROTOCOL-27): two envelope messages of one member and grant
+are equal only if their `start`, `notBefore` and `validUntil` are, so a signature over one window
+is not a signature over another. -/
+theorem Envelope.message_heights_inj {X : Ctx D} {m g : D} {s nb v s' nb' v' : Nat}
+    (hs : s < 2 ^ 64) (hnb : nb < 2 ^ 64) (hv : v < 2 ^ 64)
+    (hs' : s' < 2 ^ 64) (hnb' : nb' < 2 ^ 64) (hv' : v' < 2 ^ 64)
+    (h : Envelope.message X m g s nb v = Envelope.message X m g s' nb' v') :
+    s = s' ∧ nb = nb' ∧ v = v' := by
+  have hd := congrArg ByteArray.data h
+  simp only [Envelope.message, ByteArray.data_append, Array.append_assoc] at hd
+  have hd := (Array.append_right_inj _).mp hd
+  have hd := (Array.append_right_inj _).mp hd
+  have hd := (Array.append_right_inj _).mp hd
+  obtain ⟨e1, hd⟩ := Array.append_inj hd (by rw [Text.u64_data_size, Text.u64_data_size])
+  obtain ⟨e2, e3⟩ := Array.append_inj hd (by rw [Text.u64_data_size, Text.u64_data_size])
+  exact ⟨Text.u64_inj hs hs' (ByteArray.ext e1), Text.u64_inj hnb hnb' (ByteArray.ext e2),
+    Text.u64_inj hv hv' (ByteArray.ext e3)⟩
 
 end Nanodregg.Protocol

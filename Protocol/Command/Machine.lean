@@ -355,10 +355,22 @@ def reSign (me : Self D) (tried : Bool) (upTo height : Nat) : Except (Refusal D)
 
 /-! ## The machine -/
 
+/-- The one message follow signs for an envelope: read from `start`, good for the one window of
+heights ending at `upTo` (PROTOCOL-27). Every `upTo` follow chooses is a height it signs from plus
+`me.window` (its own, the stated tip, the stated `expired` height, the pin's), so the window starts
+at that height. -/
+def envelopeMessage (X : Ctx D) (me : Self D) (start upTo : Nat) : ByteArray :=
+  Envelope.message X me.member me.grant start (upTo - me.window) upTo
+
+/-- The envelope follow sends: `envelopeMessage`'s fields, signed. -/
+def envelopeOf (me : Self D) (start upTo : Nat) (s : Signed) : Envelope D :=
+  { member := me.member, grant := me.grant, start, notBefore := upTo - me.window, validUntil := upTo,
+    key := s.key, signature := s.signature }
+
 /-- The envelope a thin member signs for the base page at byte `offset`, valid until `upTo`
 (first the pin's height + window; after an `expired`, the writer's stated height + window). -/
 def adoptEnvelope (X : Ctx D) (me : Self D) (upTo offset : Nat) : ByteArray :=
-  Envelope.message X me.member me.grant offset upTo
+  envelopeMessage X me offset upTo
 
 def start (X : Ctx D) (me : Self D) (f : Follow D) (argv : List ByteArray) : Reply :=
   let w := f.world
@@ -375,7 +387,7 @@ def start (X : Ctx D) (me : Self D) (f : Follow D) (argv : List ByteArray) : Rep
   | .ok _ =>
       let upTo := w.height + me.window
       next (D := D) ⟨argv, 1, [Text.u64 w.height, Text.u64 0, Text.u64 upTo, Text.u64 0]⟩ fun k =>
-        .sign (Envelope.message X me.member me.grant w.height upTo) k
+        .sign (envelopeMessage X me w.height upTo) k
 
 /-- One step: the continuation, the result of the step it asked for, and follow's state. It
 answers follow's state after the step, what to persist (a log page's Turns, re-derived; a base it
@@ -419,14 +431,7 @@ def step (X : Ctx D) (B : Thin.Base (World D)) (me : Self D) (f : Follow D) (kb 
       | _, 1, [startB, pagesB, upToB, triedB] =>
           match Signed.ofBytes result, Text.ofU64 startB, Text.ofU64 upToB with
           | some s, some h, some upTo =>
-              let e : Envelope D :=
-                { member := me.member
-                  grant := me.grant
-                  start := h
-                  validUntil := upTo
-                  key := s.key
-                  signature := s.signature }
-              match Envelope.bytes X e with
+              match Envelope.bytes X (envelopeOf me h upTo s) with
               | some p => same (again 2 [startB, result, pagesB, upToB, triedB] fun k => .host .log p k)
               | none => same (refused (D := D) .badState)
           | _, _, _ => same (refused (D := D) .badResult)
@@ -450,7 +455,7 @@ def step (X : Ctx D) (B : Thin.Base (World D)) (me : Self D) (f : Follow D) (kb 
                         -- behind by more than a window is not refused on every page
                         else moved w' ts (again 1 [Text.u64 height, Text.u64 (pages + 1),
                             Text.u64 (tip + me.window), triedB] fun k =>
-                          .sign (Envelope.message X me.member me.grant height (tip + me.window)) k)
+                          .sign (envelopeMessage X me height (tip + me.window)) k)
                       else
                       match cmd, Signed.ofBytes signedB with
                       | .read obj ex, _ => moved w' ts (render w' obj ex)
@@ -470,7 +475,7 @@ def step (X : Ctx D) (B : Thin.Base (World D)) (me : Self D) (f : Follow D) (kb 
                   match reSign (D := D) me (tried ≠ 0) upTo height with
                   | .error r => same (refused (D := D) r)
                   | .ok upTo' => same (again 1 [startB, pagesB, Text.u64 upTo', Text.u64 1] fun k =>
-                      .sign (Envelope.message X me.member me.grant h upTo') k)
+                      .sign (envelopeMessage X me h upTo') k)
               | some _, _, _, _ => same (refused (D := D) .badState)
           | _ => same (refused (D := D) .badResult)
       -- the call's signature: re-plan, compare with what was signed, submit
@@ -516,10 +521,7 @@ def step (X : Ctx D) (B : Thin.Base (World D)) (me : Self D) (f : Follow D) (kb 
       | .adopt _, 6, [offB, pagesB, upToB, triedB] =>
           match Signed.ofBytes result, Text.ofU64 offB, Text.ofU64 upToB with
           | some s, some off, some upTo =>
-              let e : Envelope D :=
-                { member := me.member, grant := me.grant, start := off,
-                  validUntil := upTo, key := s.key, signature := s.signature }
-              match Envelope.bytes X e with
+              match Envelope.bytes X (envelopeOf me off upTo s) with
               | some p => same (again 7 [offB, pagesB, upToB, triedB] fun k => .host .read p k)
               | none => same (refused (D := D) .badState)
           | _, _, _ => same (refused (D := D) .badResult)

@@ -56,6 +56,7 @@ def sys : Option Mutation → Sys
   | some .lieTip => { writer := { X := Sim.ctx, lieTip := true }, follow := Sim.ctx }
   | some .forgeBase => { writer := { X := Sim.ctx, forgeBase := true }, follow := Sim.ctx }
   | some .unstatedExpiry => { writer := { X := Sim.ctx, unstatedExpiry := true }, follow := Sim.ctx }
+  | some .ignoreNotBefore => { writer := { X := Sim.ctx, ignoreNotBefore := true }, follow := Sim.ctx }
 
 /-! ## Actors -/
 
@@ -305,10 +306,16 @@ def editPage (f : List ByteArray → List ByteArray) (reply : ByteArray) : ByteA
 def pageFault : Fault → ByteArray → ByteArray
   | .flipEvent i => editPage fun evs => evs.mapIdx fun j e => if j = i then flipLast e else e
   | .dropLastEvent => editPage List.dropLast
+  | .inflateExpired n => fun reply =>
+      match Command.hostReply reply with
+      | some (.refused, p) => match expiredHeight? p with
+        | some h => ByteArray.mk #[Status.refused.code] ++ (ReadRefusal.expired (h + n)).payload
+        | none => reply
+      | _ => reply
   | _ => id
 
 def coldFault : Fault → Bool
-  | .flipEvent _ | .dropLastEvent | .cold => true
+  | .flipEvent _ | .dropLastEvent | .cold | .inflateExpired _ => true
   | _ => false
 
 /-! ## The attempt store -/

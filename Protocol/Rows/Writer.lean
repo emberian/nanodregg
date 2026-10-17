@@ -43,6 +43,9 @@ structure Params where
   /-- an `expired` refusal states the name alone, no height (a plant: the shape before
   PROTOCOL-19, which leaves a follower more than a window behind unable to catch up) -/
   unstatedExpiry : Bool := false
+  /-- `log` serves an envelope the gate refuses `notYet` (a plant: the read gate without the
+  envelope's lower bound, PROTOCOL-27) -/
+  ignoreNotBefore : Bool := false
 
 /-- Small enough that a row of a few dozen turns seals bases; the deployed bounds on size. -/
 def cadence : Cadence :=
@@ -69,6 +72,12 @@ def machine (P : Params) : Machine (World D) (Turn D) (Reject D) Frame where
     if !P.gateLog && f.op = Op.log.code then
       match Envelope.ofBytes P.X f.payload with
       | some e => .defer (.log e.start)
+      | none => Host.handle P.X w f
+    else if P.ignoreNotBefore && f.op = Op.log.code then
+      match Envelope.ofBytes P.X f.payload with
+      | some e => match Envelope.check P.X w e with
+        | .error .notYet => .defer (.log e.start)
+        | _ => Host.handle P.X w f
       | none => Host.handle P.X w f
     else match Host.handle P.X w f with
       | .reply c p =>

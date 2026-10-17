@@ -626,3 +626,77 @@ positive path through `write`; the bounty row (invoke by a hunter) still waits o
 **Meta-critique.** I put the tooth in `journey` rather than a new row because no existing mutation
 reaches KERNEL's link walk; the row would have had a borrowed plant.
 **Status.** landed.
+
+## PROTOCOL-27 · an envelope's life is a window of heights, whatever the writer states: `notBefore`, `notYet`, `wideWindow` (2026-10-17, PROTOCOL-6; PROTOCOL-19's open critique)
+**The question.** PROTOCOL-19 lets `expired` state the writer's height, and follow re-signs for that
+height + window. Every later page's envelope is likewise signed for the `tip` the previous page
+stated + window. Both numbers are the writer's word, unauthenticated, so a man in the middle on the
+member's socket can inflate either. Today the envelope signs only `validUntil`, and `check` bounds
+it from one side (`w.height ≤ validUntil`). An inflated stated height H therefore buys an envelope
+the Host accepts at EVERY height up to H + window: a bearer credential for the member's reads, usable
+off the path, long after the member stopped reading, until its grant is revoked or its key rotates.
+**Option rejected: take the height from the follower.** The follower's own height is verified, but
+the only reason `expired` states a height is that a cold follower (or a thin pin older than a window)
+is more than a window behind and CANNOT sign for the tip from what it knows. Signing from its own
+height is PROTOCOL-19's defect, back. No verified upper bound on the tip exists at the member.
+**Option rejected: "the writer's word is enough".** The arguments for it: the client decides nothing
+on the stated height, every reply is unauthenticated anyway, and the MITM already sees every page the
+member reads. The first two are true and beside the point. The harm is not a wrong decision, it is a
+LONGER-LIVED SIGNATURE the member gives out. The third is only true while the member keeps reading
+on that path; the inflated envelope keeps working after it stops. A credential whose lifetime the
+attacker chooses is a widened check (CLAUDE.md's short list, item 2), not a cosmetic one.
+**Decision.** Bound the envelope from both sides, and bound the gap, at the CHECKER:
+- `Envelope.notBefore : Nat`, signed (`Envelope.message` gains it after `start`; layout
+  `[member, grant, from, notBefore, validUntil, key, signature]`; domain
+  `nanodregg/protocol/read-envelope/v2`).
+- `Envelope.check`: FIRST `validUntil ≤ notBefore + Kernel.Bounds.windowMax` else `wideWindow` (the
+  kernel's own window bound for calls, `World.admit`'s `overBound .window`: one notion of a window);
+  then key, signature, follow grant as before; then `notBefore ≤ w.height` else `notYet`; then
+  expiry, last, stating the height.
+- Follow signs every envelope as `[base, base + window]` for the height it signs from: its own
+  height (first page), the stated tip (later pages), the stated `expired` height (re-sign), the pin's
+  height (adopt). `notBefore = upTo - window` is computed at the one place that builds an envelope.
+So an inflated H gives `[H, H + window]`: refused `notYet` now, and when the World does reach H it is
+a credential of ONE window, the same an honest capture gives. A deflated H is refused `expired`
+again and the command ends `expired`: a denial of service, which a MITM has anyway.
+**Theorems.** `Envelope.check_ok_within`: an accepted envelope has `notBefore ≤ w.height ≤
+validUntil ≤ notBefore + windowMax`, so the heights at which any one signature reads are at most
+`windowMax + 1` (writer-side, whatever the client did). `check_ok_iff` restated with both new
+conjuncts; `check_expired_authenticated` and `check_notYet_authenticated` (the order: a stranger or
+forger learns neither) with the converse `check_notYet_of` (an authenticated reader above the
+World is refused by that name, no other); `check_wideWindow` (width first, whoever signed);
+`message_heights_inj` (the signature binds `start`, `notBefore`, `validUntil`: one window's
+signature is not another's); `ReadRefusal.name_injective` over the two new names. A second agent
+read the statements for vacuity; its findings (no injectivity of the message in `notBefore`, no
+precedence for the width check, one-directional `notYet`) are the last three theorems. Still open
+from that read: nothing ties `Host.Follow.window` (128) to `windowMax` (1024) by a theorem; a
+deployed window past it would refuse every read `wideWindow`, loudly, and HOST is asked for
+`window_le_windowMax`.
+**Row.** `inflatedHeight` (its own row, so its plant runs): 110 writes (the rows' window is 100),
+then the auditor reads cold with the transport fault `inflateExpired 1000000`, which adds a million to
+the height an `expired` states. Expected `refused notYet`. Plant `ignoreNotBefore` (the writer's gate
+skips the lower bound, the shape before this decision), caught at line 10: the inflated envelope is
+served and the read is `ok`. Rows: 13 PASS, 4 PENDING.
+**Flag day.** The envelope frame and its signed message change (v2 domain); nothing persisted holds
+an envelope (they live one command). No Rust reads or writes envelopes (follow signs through custody's
+byte-signing step), so CODEC emits nothing new. Old-shape envelopes do not decode: `badEnvelope`.
+**Alternatives.** A per-member window in the envelope with no checker bound (the client's honesty
+would be the bound). A `retryAt` hint signed by the writer (writers have no signing key on this
+socket; the base MAC is the Store's, not a reply key). Authenticating replies: that is the
+channel's job (TRANSPORT), and the envelope must stay bounded even when the channel is not.
+**Critique.** The stated height can still be inflated; what changed is what the inflation buys.
+A MITM can still MOVE an envelope's window into the future and hold it until the World gets there,
+where an honest capture would be a window of the present. That is the same length of credential at
+a time of the attacker's choosing, and a member that keeps a grant open accepts exactly that risk
+for any capture. `notYet` is terminal (no re-sign): an honest writer never states a height above
+its own, so a `notYet` is always a liar or a clock of a different World, and a retry would only buy
+the liar another signature. `wideWindow` reuses the kernel's 1024: a deployed `Host.Follow.window`
+past it would refuse every read, loudly, by name.
+**Meta-critique.** My predecessor framed it as "take the height from the follower, or the writer's
+word is enough". Both answers accept that the envelope's lifetime is whatever the number says; the
+fix lives in neither the follower nor the writer's word but in the checker's bound. I am
+also adding a second refusal name (`wideWindow`) where `badEnvelope` would have done: law 7 says one
+condition one name, and "too wide" is not "undecodable". TRANSPORT's planned world field (v2 by its
+own plan) now lands as v3, or folds into this flag day if it lands first; either way one shape at a
+time and the old one refuses.
+**Status.** BUILT (this commit).
