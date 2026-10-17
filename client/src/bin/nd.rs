@@ -5,6 +5,8 @@
 //! directory on removable media or under another account); `nd --init-hosted` creates a hosted
 //! resident's one-record keys; `nd --keys` prints custody's public keys (`key HEX`, `next HEX`)
 //! for the operator's `host genesis`. `$ND_HOLDING` is read again only to rotate.
+//! `$ND_FOLLOW_SOCK` / `$ND_HOST_SOCK` name the two sockets when they are not the workspace's
+//! (HOSTING-17 §7: nd, as nd, drives the nd-hosted follower through its socket in /run/nd-follow).
 
 use std::ffi::OsString;
 use std::io::Write;
@@ -32,10 +34,7 @@ fn go() -> Result<u8, String> {
     let argv: Vec<OsString> = std::env::args_os().skip(1).collect();
     let holding = std::env::var_os("ND_HOLDING").map(PathBuf::from);
     if argv.len() == 1 && (argv[0] == "--init" || argv[0] == "--init-hosted") {
-        // The workspace is the member's alone: 0700 whatever the umask (custody's chain check).
-        std::os::unix::fs::DirBuilderExt::mode(std::fs::DirBuilder::new().recursive(true), 0o700)
-            .create(ws.join("attempts"))
-            .map_err(|e| e.to_string())?;
+        nd_dir(&ws.join("attempts"))?;
         let made = match holding {
             _ if argv[0] == "--init-hosted" => Custody::create_same_record(&ws),
             Some(h) => Custody::create_separate(&ws, &h),
@@ -52,9 +51,11 @@ fn go() -> Result<u8, String> {
         println!("key {}\nnext {}", hex(&key), hex(&next));
         return Ok(0);
     }
-    let mut follow = FollowSocket::connect(&ws.join("follow.sock"), table::REPLY)
+    let sock =
+        |var: &str, name: &str| std::env::var_os(var).map_or_else(|| ws.join(name), PathBuf::from);
+    let mut follow = FollowSocket::connect(&sock("ND_FOLLOW_SOCK", "follow.sock"), table::REPLY)
         .map_err(|e| format!("follow.sock: {e}"))?;
-    let mut host = HostSocket::connect(&ws.join("host.sock"), table::REPLY)
+    let mut host = HostSocket::connect(&sock("ND_HOST_SOCK", "host.sock"), table::REPLY)
         .map_err(|e| format!("host.sock: {e}"))?;
     let argv: Vec<Vec<u8>> = argv.into_iter().map(OsString::into_vec).collect();
     let (exit, stdout, stderr) = run::run(
@@ -69,4 +70,11 @@ fn go() -> Result<u8, String> {
     let _ = std::io::stdout().write_all(&stdout);
     let _ = std::io::stderr().write_all(&stderr);
     Ok(exit)
+}
+
+/// `mkdir -p` at 0700 whatever the umask: the workspace is the member's alone (custody's chain).
+fn nd_dir(p: &std::path::Path) -> Result<(), String> {
+    std::os::unix::fs::DirBuilderExt::mode(std::fs::DirBuilder::new().recursive(true), 0o700)
+        .create(p)
+        .map_err(|e| e.to_string())
 }

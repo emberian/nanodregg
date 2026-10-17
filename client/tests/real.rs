@@ -123,6 +123,26 @@ fn real_host_create_write_read_rotate_write_read() {
     // The writer accepts the rotated key (Lean's verify against the member's new key).
     ok(&["write", &obj, "2", "after"]);
     assert_eq!(ok(&["read", &obj]), "1=hello\n2=after\n");
+
+    // HOSTING-17 §7: ND_FOLLOW_SOCK / ND_HOST_SOCK name the sockets when they are not the
+    // workspace's. Pointed elsewhere, nd fails naming the socket; pointed at them, it reads.
+    let over = |follow: &Path, host: &Path| {
+        Command::new(env!("CARGO_BIN_EXE_nd"))
+            .env("ND_WORKSPACE", &ws)
+            .env("ND_HOLDING", &holding)
+            .env("ND_FOLLOW_SOCK", follow)
+            .env("ND_HOST_SOCK", host)
+            .args(["read", &obj])
+            .output()
+            .unwrap()
+    };
+    let nowhere = root.join("nowhere.sock");
+    let o = over(&nowhere, &ws.join("host.sock"));
+    assert!(!o.status.success() && String::from_utf8_lossy(&o.stderr).contains("follow.sock"));
+    let o = over(&ws.join("follow.sock"), &nowhere);
+    assert!(!o.status.success() && String::from_utf8_lossy(&o.stderr).contains("host.sock"));
+    let o = over(&ws.join("follow.sock"), &ws.join("host.sock"));
+    assert_eq!(text(&o), "1=hello\n2=after\n");
     drop((_h, _f));
     std::fs::remove_dir_all(&root).unwrap();
 }
