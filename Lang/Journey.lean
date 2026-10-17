@@ -25,7 +25,8 @@ the owner and the owner never changes). Rows:
   and admits one by `[Frozen]`.
 * L11 (KERNEL-27 `adopt`) `BirthOnly` admits a birth and refuses its adoption: an object may be
   born under it (L11b), and adding it to an existing object is refused (L11c) by the incoming law
-  itself, which a birth-conflated occasion could not say.
+  itself, which a birth-conflated occasion could not say. L11d: a relaw that KEEPS BirthOnly and adds
+  Frozen is admitted, since only ADDED laws judge adopt (KERNEL-27).
 * L7 the follower (`World.fold` from genesis) and the auditor reach the Host's World.
 * PLANT skip-judge: the same rows against a program whose `judge` admits everything: L4 must be
   ADMITTED there (the row flips), proving the refusal in L4 came from the law, not from elsewhere.
@@ -380,8 +381,9 @@ def journey (mode : Mode) : Run := Id.run do
   let (r11, v11, t11) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id]) (.install boBytes))
   r := note r11 s!"L11a install BirthOnly: {v11}" (v11 == "admitted")
   let some bid := t11.bind fun t => (createdIds Sim.env t).head? | return note r "L11 no BirthOnly id" false
-  let (r11b, v11b, _) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id, bid]) (.create none [bid] []))
+  let (r11b, v11b, t11b) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id, bid]) (.create none [bid] []))
   r := note r11b s!"L11b A creates a data object under BirthOnly: {v11b}" (v11b == "admitted")
+  let some bobj := t11b.bind fun t => (createdIds Sim.env t).head? | return note r "L11 no BirthOnly object" false
   let (r11o, v11o, t11o) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id]) (.create none [] []))
   r := note r11o s!"L11o A creates a lawless data object: {v11o}" (v11o == "admitted")
   let some lobj := t11o.bind fun t => (createdIds Sim.env t).head? | return note r "L11 no object id" false
@@ -391,6 +393,11 @@ def journey (mode : Mode) : Run := Id.run do
     r := note r s!"PLANT erase-occasion: L11c adding BirthOnly must now be admitted: {v11c}" (v11c == "admitted")
   else if mode != .skipJudge then
     r := note r s!"L11c A adds BirthOnly to an existing object: {v11c}" (deniedWith v11c "birthOnly: only at birth")
+  -- L11d a law KEPT across a relaw is not adopted again: only the added Frozen judges adopt
+  let (r11d, v11d, _) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id, bobj, bid, fid]) (.law bobj [bid, fid] none))
+  r := { r11d with log := r.log, bad := r.bad }
+  if mode = .honest then
+    r := note r s!"L11d A keeps BirthOnly and adds Frozen: {v11d}" (v11d == "admitted")
   -- L7 follower and auditor
   match World.fold Sim.env g r.st.log with
   | .ok w => r := note r s!"L7 follower reaches the Host's World ({r.st.log.length} turns)" (Sim.same w r.st.host)

@@ -535,23 +535,17 @@ theorem quorum_relaw_needs_k {S T : Ty} {ms : List ByteArray} {k : Nat} {g : Lab
   exact ⟨hm, quorate_true hpos (allOf_ok hr _ (List.mem_cons_self ..)),
     proposedLaws_true (allOf_ok hr _ (List.mem_cons_of_mem _ (List.mem_singleton_self _)))⟩
 
-/-- **Quorum at its adoption**: the quorum can be added over a state only by a member, with `k`
-approvals in that state of a proposal to install EXACTLY the incoming laws (its own adopt arm is its
-relaw arm, ROOT 2026-10-17): its members consented, in state, to being its quorum. -/
-theorem quorum_adopt_needs_k {S T : Ty} {ms : List ByteArray} {k : Nat} {g : Label} {rq n o x : Data}
+/-- **Quorum at its adoption is fresh**: the quorum can be added over a state only if that state
+holds no approvals, so every approval it ever counts is one it judged (`quorum_change`'s approve
+case). Approvals written under the previous laws would prove nothing about the members. -/
+theorem quorum_adopt_fresh {S T : Ty} {ms : List ByteArray} {k : Nat} {g : Label} {rq n o x : Data}
     (h : Admits lib (quorumLaw S T ms k g) rq n o)
     (ho : rq.field "occasion" = some (.inj "adopt" x)) :
-    (∃ m ∈ ms, rq.field "agent" = some (.bytes m)) ∧
-    (∃ a, o.field "approvals" = some (.nat a) ∧ k ≤ popcountNat a ms.length) ∧
-    ∃ s, o.field "proposal" = some (.inj "laws" (.bytes s)) ∧ x = .bytes s := by
+    n.field "approvals" = some (.nat 0) := by
   obtain ⟨cenv, w, hb⟩ := h
   simp only [quorumLaw, lawOf, lawBody] at hb
-  obtain ⟨hg, hr⟩ := guards_ok (lawCase_adopt rfl ho hb)
-  have hm := member_true (hg _ (List.mem_singleton_self _))
-  have hpos : 0 < ms.length := by
-    obtain ⟨m, hm', _⟩ := hm; exact List.length_pos_of_mem hm'
-  exact ⟨hm, quorate_true hpos (allOf_ok hr _ (List.mem_cons_self ..)),
-    proposedLaws_true (allOf_ok hr _ (List.mem_cons_of_mem _ (List.mem_singleton_self _)))⟩
+  have hc := allOf_ok (lawCase_adopt rfl ho hb) _ (List.mem_singleton_self _)
+  exact eq_field_lit (d := n) (i := 2) rfl hc
 
 /-- **Quorum on a change** (a write or an invoke): the act is by a member, the new approvals are a
 mask over the members, and it is exactly one of
@@ -679,7 +673,7 @@ theorem inc_val {T : Ty} {g : Label} {v : Nat} {x rq n o : Data} {E : Env}
     exact .inr ⟨rfl, by rw [ha, hb]; intro he; simpa using hiff.1 (Option.some.inj he)⟩
 
 /-- **Windowed lands in the call's epoch** (the assembly's `windowed_lands_in_epoch`): an admitted
-birth, write or invoke was signed for a window inside one epoch of width `W`, and the new state's
+birth, adoption, write or invoke was signed for a window inside one epoch of width `W`, and the new state's
 epoch is that epoch. Since `World.admit` lands the Turn at a height inside the signed window, the
 Turn lands in the epoch the state records. -/
 theorem windowed_lands_in_epoch {S T : Ty} {W limit : Nat} {g : Label} {rq n o x : Data} {ℓ : Label}
@@ -699,6 +693,20 @@ theorem windowed_lands_in_epoch {S T : Ty} {W limit : Nat} {g : Label} {rq n o x
       (by rcases hl with rfl | rfl; exact .inl ⟨x, rfl⟩; exact .inr ⟨x, rfl⟩) hb
     obtain ⟨hg, _⟩ := guards_ok hy
     exact inOneEpoch_true (hg _ (List.mem_cons_self ..)) (hg _ (List.mem_cons_of_mem _ (List.mem_singleton_self _)))
+
+/-- **Windowed starts at zero**: an admitted birth or adoption has `count = 0`, the base case of
+"at most `limit` changes per epoch" (`windowed_counts` is its step). -/
+theorem windowed_fresh {S T : Ty} {W limit : Nat} {g : Label} {rq n o x : Data} {ℓ : Label}
+    (h : Admits lib (windowedLaw S T W limit g) rq n o)
+    (ho : rq.field "occasion" = some (.inj ℓ x)) (hl : ℓ = "birth" ∨ ℓ = "adopt") :
+    n.field "count" = some (.nat 0) := by
+  obtain ⟨cenv, w, hb⟩ := h
+  simp only [windowedLaw, lawOf, lawBody] at hb
+  rcases hl with rfl | rfl
+  · obtain ⟨_, hr⟩ := guards_ok (lawCase_birth rfl ho hb)
+    exact eq_field_lit (d := n) (i := 2) rfl (allOf_ok hr _ (List.mem_singleton_self _))
+  · obtain ⟨_, hr⟩ := guards_ok (lawCase_adopt rfl ho hb)
+    exact eq_field_lit (d := n) (i := 2) rfl (allOf_ok hr _ (List.mem_singleton_self _))
 
 /-- **Windowed counts**: in an admitted write or invoke, the new `count` is the old one plus one
 for a change of `guarded` (and at most `limit`) within the old epoch, or restarts at that one

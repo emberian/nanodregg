@@ -262,7 +262,8 @@ changes per epoch" for `windowed`. Any member may propose, which resets every ap
 can stall a quorum forever (liveness, not safety). The chain from the receiver to these theorems
 is not closed: `judgeOne` admitting ⇒ `runLaw` admitting each law, `L.lib[g]` = the relocated
 body, relocation of a ref-free term is the identity, and a `pkgOf` body's field is the generator's
-term are each still to prove; until then "the receiver's run means this" is a hypothesis. A hand-written law that ignores the occasion keeps H1/H2; only
+term are each still to prove; until then "the receiver's run means this" is a hypothesis. (CLOSED for an
+import-free `pkgOf` package by LANG-26, `Lang.Proofs.Receiver`; a package with imports is still open.) A hand-written law that ignores the occasion keeps H1/H2; only
 `lawOf` makes the clauses unavoidable, and install cannot tell a stdlib term from a hand-written
 one. The relaw payload is the ids' bytes, so `quorum` binds to an exact replacement but cannot say
 "any list containing me". `quorum` supports ≤ 63 members (a mask bit is a natural below 2^64). `windowed`'s epoch is the signer's window, which the signer picks: a
@@ -419,7 +420,21 @@ package with a law re-ids.
 **Meta-critique.** I picked each adopt arm by "the clause that asks the same question of a state",
 which is the birth clause for every state-predicate law. That is the conflation KERNEL-27 first
 made, now per law and visible, rather than a different idea.
-**Status.** built (this commit).
+**Status.** built (a533d7a), then AMENDED the same day (below).
+**Amendment (LANG-4, 2026-10-17, after the vacuity read by a773ed76).** "quorum's adopt arm = its relaw
+arm" was UNSOUND. At adoption the quorum is not in force yet, so the `approvals` and `proposal` it reads
+were written under the previous laws: the owner writes every approval bit and `proposal = laws L`,
+then adopts L, and the k-check passes with no member's consent. `quorum_adopt_needs_k` was true and
+its gloss false; the tooth `quorum_adopts` tested exactly the forgeable state. Now quorum adopt =
+its birth clause (`approvals = 0`; theorem `quorum_adopt_fresh`; teeth `quorum_adopts` on a fresh
+state, `quorum_adopt_forged_approvals` refused). A relaw that KEEPS the quorum would then refuse
+(its state holds k approvals at that moment), so KERNEL-27's second judge runs on the ADDED laws only
+(`laws'.filter (· ∉ laws)`, agreed by KERNEL-5): a kept law already judged the change as
+`relaw laws'`. Journey L11d: keep BirthOnly and add Frozen, admitted. Also `windowed_fresh` (birth or
+adopt ⇒ count = 0, the per-epoch bound's base case) and positive adopt teeth for allowlist and
+ownerSigns. This departs from ROOT's 10-17 wording for quorum. The departure is reported to ROOT.
+Meta-critique of the first arm: I took a ruling's wording as a specification, without asking
+whose writes the arm reads.
 
 ## LANG-25 An object names accounts by reference, not by hashing: `Req.self` yes, an `accountOf` builtin no (2026-10-17; answers LEDGER-6 (b), PROPOSED to LEDGER-2 for D5)
 **Decision.** `Req.self : D` (the object judged or run on, set by KERNEL where it builds a `Req`)
@@ -442,6 +457,35 @@ account the object does not own; the transfer is then refused by authority, as f
 **Meta-critique.** Refusing the builtin keeps hashing out of my layer, which is convenient for me. The
 independent tests are the teeth (b) and law 1 (c), not my convenience.
 **Status.** agreed (LEDGER-7, 7229d95); built in D5 (kernel) and the post-D5 `lang!` day (callTy, reqTy).
+
+## LANG-26 The receiver's verdict on a stdlib package is its laws' meaning (2026-10-17; closes LANG-20's chain)
+**Decision.** `Lang/Proofs/Receiver.lean` proves `judgeOne_pkgOf_admits`. If the receiver's judge admits
+`old → new` and the pinned package is `Std.pkgOf S laws methods` (distinct labels, digest round trip),
+then both states read at `S` and every law of the package with no `ref` and a law's shape `Admits`
+the transition with the receiver's request. The proof has four links: `judgeOne_ok` (the for-loop over
+`p.laws` inverted), `load_leaf` (an import-free package loads as itself at 0), `relocate_noRef`
+with `noRef_<law>` for every Std law, and `find_of_mem_nodup` with `sortRow_perm`. Corollaries restate
+three specs on the deployed run: `judgeOne_quorum_change`, `judgeOne_quorum_relaw` and
+`judgeOne_machine_invoke`.
+**Alternatives.** Evaluate `judgeOne` on concrete packages by `decide +kernel`: impossible, because
+`decodePackage` is well-founded (LANG-2's gap 4), and it would be one instance, not the general fact.
+Change `admitPackage` to skip relocation for import-free packages: it changes deployed code to suit a
+proof, and it would be a second code path.
+After the vacuity read (a773ed76): the quorum corollaries take the CHECKED generator
+(`quorum … = .ok t`) and conclude `ms.Nodup ∧ 1 ≤ k ≤ |ms|`; `methodIndex_pkgOf` shows an edge's method
+label is what the kernel's index runs; `load_top` shows the loaded package at `load`'s index is
+`readPackage`'s (imports or not), which closes LANG-22's critique. `reqData_agent` states the agent
+field over `r`.
+**Critique.** The premise `readPackage … = .ok (pkgOf …)` is about the decoded package, so a package
+built by hand that equals a `pkgOf` output is covered and one that differs is not. The chain does not
+reach packages with imports (`load_leaf`). `NoRef`/`IsLaw` are per-law premises in the conclusion,
+discharged for every Std generator but not for a hand-written law. The conclusion is `∃ lib, Admits …`:
+sound for the Std specs, which hold for every `lib`, but weaker than naming `L.lib`.
+**Meta-critique.** I proved the import-free case because it is all the Std packages produce today.
+That is "the case that went quickly" once more, and it is labelled as such above. The distinct-labels
+premise could be derived from the install check (a non-ascending row does not check), and
+`load_leaf` names fuel 7 by `closureDepthMax = 8` definitionally; both are left as stated.
+**Status.** built.
 
 ## LANG-27 Type errors by name and path: `inferE` is the checker, `infer` its `toOption` (2026-10-17; LANG-3's open item 3)
 **Decision.** `Lang.Check.inferE Δ Γ t : Except TypeErr Ty` is the one checker. `TypeErr` holds a

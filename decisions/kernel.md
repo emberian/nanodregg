@@ -925,6 +925,7 @@ Status: BUILT (KERNEL-5): granteeHolds in walk (one disjunct), checkGrantee in g
 **Critique.** Every law author now writes one more arm, and a sum arm a law forgets is a type error (good: exhaustive), not a silent admit. Adoption and birth are now separate. A law that wants them equal says so by writing the same arm twice.
 **Meta-critique.** My first build picked the existing constructor partly because it touched no other layer: a cost estimate deciding a design, which this file forbids. ROOT caught it.
 Status: built with the LANG half (LANG-4).
+Amended (LANG-4, 2026-10-17, agreed by KERNEL-5): second judge: ADDED laws only (LANG-4, the forged-approvals adoption). `law` runs the incoming laws' `adopt` on `laws'.filter (· ∉ laws)`. A kept law already judged the change as `relaw laws'`, and re-judging it on `adopt` refused every relaw that keeps a quorum, once quorum's adopt arm became its birth clause.
 
 ## KERNEL-28 · KERNEL's answer to LEDGER-5 (with LANG-4's LANG-23 asks): (a)(b)(c) ACCEPTED, (d) AMENDED to keyed account ids (KERNEL-5, 2026-10-17)
 **(a) Effects are `Body`.** Accepted, as LANG-4 restated it.

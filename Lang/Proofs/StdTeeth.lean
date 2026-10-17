@@ -88,21 +88,14 @@ theorem quorum_relaw_not_by_set_approvals :
     refusedWith "not the proposal" (runLaw [] q (qs 3 (set 9) 5) (qs 3 (set 9) 5) (req "a" "a" (relaw "L"))) = true := by
   decide +kernel
 
-/-- Adopting the quorum over a state needs `k` approvals of exactly the incoming laws, as its relaw. -/
-theorem quorum_adopts : admits (runLaw [] q (qs 3 (.inj "laws" (.bytes (b "L"))) 5)
-    (qs 3 (.inj "laws" (.bytes (b "L"))) 5) (req "a" "a" (adopt "L"))) = true := by
+/-- Adopting the quorum is a fresh start: a state with no approvals is admitted, and approvals the
+previous laws let the owner write (all three bits, a proposal of exactly the incoming laws) are
+refused: they were not judged by the quorum. -/
+theorem quorum_adopts : admits (runLaw [] q (qs 0 (set 9) 5) (qs 0 (set 9) 5) (req "a" "a" (adopt "L"))) = true := by
   decide +kernel
-theorem quorum_adopt_needs_two :
-    refusedWith "no quorum" (runLaw [] q (qs 1 (.inj "laws" (.bytes (b "L"))) 5)
-      (qs 1 (.inj "laws" (.bytes (b "L"))) 5) (req "a" "a" (adopt "L"))) = true := by
-  decide +kernel
-theorem quorum_adopt_only_the_proposal :
-    refusedWith "not the proposal" (runLaw [] q (qs 3 (.inj "laws" (.bytes (b "L"))) 5)
-      (qs 3 (.inj "laws" (.bytes (b "L"))) 5) (req "a" "a" (adopt "M"))) = true := by
-  decide +kernel
-theorem quorum_adopt_members_only :
-    refusedWith "not a member" (runLaw [] q (qs 3 (.inj "laws" (.bytes (b "L"))) 5)
-      (qs 3 (.inj "laws" (.bytes (b "L"))) 5) (req "d" "d" (adopt "L"))) = true := by
+theorem quorum_adopt_forged_approvals :
+    refusedWith "approvals at birth" (runLaw [] q (qs 7 (.inj "laws" (.bytes (b "L"))) 5)
+      (qs 7 (.inj "laws" (.bytes (b "L"))) 5) (req "a" "a" (adopt "L"))) = true := by
   decide +kernel
 
 private def accepted : Except StdRefusal Term → Bool
@@ -184,6 +177,15 @@ theorem bounded_adopts :
   decide +kernel
 theorem allowlist_adopt_refuses :
     refusedWith "not on the allowlist" (runLaw [] (allowlist OS [b "a", b "b"]) (os "a" 0) (os "a" 0) (req "c" "c" (adopt "L"))) = true := by
+  decide +kernel
+theorem allowlist_adopts :
+    admits (runLaw [] (allowlist OS [b "a", b "b"]) (os "a" 0) (os "a" 0) (req "b" "b" (adopt "L"))) = true := by
+  decide +kernel
+theorem ownerSigns_adopts :
+    admits (runLaw [] (ownerSigns OS) (os "a" 0) (os "a" 0) (req "a" "a" (adopt "L"))) = true := by
+  decide +kernel
+theorem ownerSigns_adopt_delegate :
+    refusedWith "not signed by the owner" (runLaw [] (ownerSigns OS) (os "a" 0) (os "a" 0) (req "d" "a" (adopt "L"))) = true := by
   decide +kernel
 theorem bounded_birth :
     refusedWith "total over 100" (runLaw [] (bounded OS "total" 100) (os "a" 500) (os "a" 500) (req "a" "a" birth)) = true := by

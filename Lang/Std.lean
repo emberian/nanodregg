@@ -159,7 +159,11 @@ A change is exactly one of:
 * no-op: nothing the law watches changes.
 Every change and relaw is by a member (`agent`); a birth (by the creator, who is the owner) has
 no approvals. A relaw needs ≥ k approvals of exactly the incoming laws (and consumes none: a relaw
-cannot change state, so the same relaw may be replayed, which is idempotent). Any member may
+cannot change state, so the same relaw may be replayed, which is idempotent). An ADOPTION (the
+quorum added over existing state) is judged like a birth, no approvals: the approvals in that state
+were written under the previous laws, not the quorum's, so they prove nothing (LANG-24's first arm,
+"adopt = relaw arm", let an owner forge them; KERNEL-27 judges only ADDED laws on adopt, so a relaw
+that keeps the quorum is not re-judged by it). Any member may
 propose, which resets every approval: a member can stall the quorum (liveness, not safety).
 `quorum` refuses duplicate members (one member, two votes), `k` outside `1 ≤ k ≤ members`, and
 more than 63 members (a mask bit is a natural below `2^64`). `quorumLaw` is the unchecked term,
@@ -227,10 +231,8 @@ def quorumLaw (S T : Ty) (members : List ByteArray) (k : Nat) (guarded : Label) 
             (guard (anyOf (members.zipIdx.map fun (m, i) => approvalBy a m i)) "not an approval" okT))))
   let relawC (a : At) := guards [(isMember members a, "not a member")]
     (allOf [(quorate a, "no quorum"), (proposedLaws a, "not the proposal")])
-  lawOf S
-    (fun a => allOf [(reset a, "approvals at birth")])
-    relawC relawC
-    change
+  let fresh (a : At) := allOf [(reset a, "approvals at birth")]
+  lawOf S fresh fresh relawC change
 
 def quorum (S T : Ty) (members : List ByteArray) (k : Nat) (guarded : Label) : Except StdRefusal Term := do
   need (members.length ≤ 63) .tooManyMembers
