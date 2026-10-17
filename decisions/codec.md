@@ -851,8 +851,8 @@ It still cannot see three things.
 - (d) A semantic pin keyed by tag: for each codec, the decoded `repr` of bytes sampled deterministically from
   its shape, with the gate refusing when the repr changes under an unchanged tag. This would see relabellings
   that (a) cannot. But it is a pin table, which is what CODEC-5 deleted. It needs `Repr` for every kernel type.
-  It sees only what one sample distinguishes, and it moves on a field RENAME. Not built; put to ROOT as the one
-  open fork.
+  It sees only what one sample distinguishes, and it moves on a field RENAME. Put to ROOT as the one open fork;
+  ROOT ruled: BUILD it, as a detector (below).
 
 **Why (a).** It turns the accepted-set half of the promise into a check, with no table, no hash, and no
 coupling to refactors. The theorems it rests on were already the codecs' canonicity proofs, so the new
@@ -870,5 +870,38 @@ write them anyway, because "a theorem per refine" was the brief. Restating what 
 have been 26 twins. The bias that remains is the one CODEC-22 named: I favour the mechanism I already have
 (content tags plus canonicity) and priced (d) as a pin table partly because CODEC-5 rejected pins. That
 rejection was about pins as IDENTITY, and (d) would be a pin as DETECTOR, so the fork is real and ROOT's.
-Status: built (census, refine_accept_iff, teeth); step 2 (trie-order stated in bytes) and the version-suffix
+Status: built (census, refine_accept_iff, teeth, and (d) below); step 2 (trie-order stated in bytes) and the version-suffix
 deletion are in progress.
+**Built: (d) as a detector (ROOT ruling, 10-17).** The rule it enforces: **a change of meaning under the same bytes bumps
+the label.** CODEC-5's rejection stands for pins as identity (the tag is the identity). This table's only power is to
+go red. `Emit/Vectors.lean` is the `codec-vectors` exe, and gates/generated.tsv runs its `--check` on every commit.
+`gates/codec-vectors.tsv` holds 69 vectors of the census's 26 sites: one per constructor of each sum, two for each
+record. Each vector is bytes encoded from values drawn from `Kernel.Sim`'s generator, seeded by the site's name (none
+written by hand), plus the site's tag and the decoded text. The kernel codecs are taken at Sim's parameters. The one
+printer is `print`: `ok` + the value's `Repr` on one line (field and constructor names), or `refused` + the refusal.
+A trie is printed as its listing and a journal as its list, so a hash or balancing change is not a change of meaning.
+- `--check`: for every row under the site's current tag, the bytes must decode to the pinned text. Otherwise red:
+  `MEANING CHANGED under the same tag …: rename the refinement`. A site with no row under its current tag, a stale
+  tag, or a row naming no site is also red.
+- `--write`: keeps every row whose tag did not move VERBATIM and draws fresh rows only for a moved or new tag. Re-running
+  the generator therefore cannot launder a relabelling.
+
+Plants, run in wt/codec and reverted:
+- `kernel/slot` relabelled under the same name (`slot_relabel_unseen`'s swap): RED (12). Both slot vectors went red,
+  and so did every site containing a slot (leaf-fit, trie-order, world, carried, host/base).
+- the same, after `--write`: still RED (12).
+- the same swap renamed `kernel/slot/relabelled`: `--check` first says `no vector under its current tag … stale tag`.
+  `--write` then re-pins exactly host/base, kernel/carried, kernel/leaf-fit, kernel/slot, kernel/trie-order and
+  kernel/world (the re-genesis set the rename implies), and `--check` is ok.
+
+**Critique (d).**
+- It is a differential detector. A relabelling of two positions that hold EQUAL values in every vector is not seen.
+  The values are 64-bit draws, so two fields collide only by chance, but an empty list or `none` pins nothing about
+  its element type. The generators therefore draw at least one element for tries, journals and paths, and options
+  are drawn both ways across the vectors.
+- The text is `Repr`, so a field or namespace RENAME in KERNEL turns the table red under an unchanged tag. The table
+  then demands a label bump for a change that is not one of meaning. That cost is accepted: the bump is a rebuild.
+- A hand edit of a same-tag row's text would hide a relabelling from `--check`. Closing that needs the gate to compare
+  the candidate's table with its parent's: rows keyed by (site, tag) are immutable. GATES-3 is asked.
+- Only Sim's instantiation is pinned. A relabelling that only the deployed digest codec could show does not exist,
+  because the sites are generic in `dc`.

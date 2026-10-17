@@ -76,6 +76,10 @@ package nanodregg where
 @[default_target] lean_exe «emit-broker» where
   root := `Emit.BrokerMain
 
+-- The codec vectors (gates/codec-vectors.tsv, CODEC-28): a change of meaning under the same tag is red.
+@[default_target] lean_exe «codec-vectors» where
+  root := `Emit.VectorsMain
+
 -- KERNEL's seeded simulation: `kernel-sim SEED…` (or `--seeds N`), ends `ALL PASS` (standing.sh).
 @[default_target] lean_exe «kernel-sim» where
   root := `Kernel.Sim.Main
