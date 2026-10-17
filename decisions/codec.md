@@ -372,8 +372,16 @@ group-law proof is the next obligation if Ed25519 verification is ever claimed a
 **Meta-critique.** I proved the part the brief named (Fe.mul/carry) and stopped at the boundary where
 the proof stops being mechanical. The curve law is exactly the "hard part" a phase ordering avoids;
 it is recorded here so it is not mistaken for done.
-Status: open (owed: Edwards addition law and `mul2` correctness against a Nat-coordinate spec). NOT YET LANDED:
-the arithmetic part checks; the `*_carried` section for points is being reworked onto `Point.ladder` (CODEC-20).
+**As landed (10-17).** `Fe.Carried` and `Point.Carried` are STRUCTURES, not conjunctions: as a `def`, every
+`exact` that compared `(P.add Q).X.Carried` with a field lemma unfolded the limbs of a symbolic product
+(20 GB, heartbeat timeouts); as structures elaboration never looks inside, and the whole module checks in
+20 s / 1.35 GB. Landed: carry/mul/add/sub/sq/ofNat/zero/one/eq_iff, the tooth, `pow_carried`,
+`point_add/double/neg/zero_carried`, `step_carried`, `ladder_carried`, `mul2_carried`. NOT landed:
+`B_carried` and `decodePoint_carried` (the latter's `split at h` over the unfolded decoder still reaches 21 GB);
+until then the field theorems cover the ladder from carried inputs, and the base point and decompressed points
+are carried by inspection, not by theorem.
+Status: open (owed: decodePoint_carried, B_carried; the Edwards addition law and `mul2` correctness against a
+Nat-coordinate spec).
 
 ## CODEC-19 · The trie World codec: entries in trie order, rebuilt by `build`, refused unless canonical (CODEC-2, 2026-10-17; design, waits on KERNEL-23 part 2)
 **Decision.** When `World.cells` (cells + nullifiers, KERNEL-23) is a `Trie.T`, the World codec writes
