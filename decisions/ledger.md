@@ -488,3 +488,80 @@ I accepted the placement change because one place for shipped texts is the prope
 reader needs, and narrow rows keep it from costing ownership.
 Status: ruled by ROOT 2026-10-17; owners.py and the OWNERS rows landed by GATES-2 in cb99f02.
 
+
+## LEDGER-10 · The escrow package as built: Ledger/Escrow.lean, its law's theorems over all data, ledger-sim with three plants (LEDGER-3, 2026-10-18; builds LEDGER-6 on LANG-33)
+**Decision.** The package is Lean data, `Ledger.Escrow.escrow = Std.pkgOf stateTy [("escrow", law)]
+methods`; its shipped text `world/escrow/Escrow` is `Lang.Print.package escrow`, byte-compared and
+read back by `ledger-sim` E0 and proved to read back (`escrow_text_reads`, LANG-29's
+`readPackage_checked`). State `{amount, arbiter, asset, beneficiary, depositor, phase}`, phase over
+`held | open | refunded | released`. Methods in `pkgOf`'s sorted order: **0 deposit, 1 refund,
+2 release** (LEDGER-2's hand-off had release 1 / refund 2; the label sort decides, and
+`escrow_indices` pins it). Each method has ONE call slot of `callOf ["transfer"]` and runs
+unconditionally (deposit: `of depositor → of self`, via the argument grant, once `self`; refund /
+release: `of self → of depositor / of beneficiary`, no via, once `"payout"`); the LAW decides:
+(a) birth and adoption: the OLD and the new phase are `open` (`notOpen`). Checking the old phase too
+is what makes settled absorbing under KERNEL-27's adopt (mutation M3 below); (b) write, relaw:
+`frozen`; (c) invoke: from `released`/`refunded` `settled`; method 0 from `open` (`notOpen`) signed
+by the depositor, 1 from `held` (`notHeld`) by the beneficiary or arbiter, 2 from `held` by the
+depositor or arbiter (`notParty`); the new phase must be the target (`badPhase`); other indices
+`noMethod`. "Signed by" is `req.agent`, the signing member: KERNEL's owner-gated invoke
+(KERNEL-25) lets a grantee reach the law, the law narrows to the parties. The names beyond the four
+agreed with LANG-7 (`badPhase`, `noMethod`, `frozen`) are the package's own; they reach the wire as
+`lawDenied … "escrow: NAME"`.
+**Theorems (Ledger/Proofs/Escrow.lean).** Over ANY request, old and new state as data
+(`Std.Admits`; `escrow_judge_admits`: the receiver's `runLaw` of the loaded body's field gives it):
+`escrow_invoke` (an admitted invoke is one of the three edges, signed by a named party),
+`escrow_start`, `escrow_frozen`, `escrow_occasion`, `escrow_absorbing` (from settled nothing is
+admitted), `escrow_law_payout_once` (along any `Chain` of law-admitted acts from any state, at most
+one payout), `escrow_deposit_first` (from `open`, a deposit before any payout). `escrow_admits`: a
+birth, deposit, refund and release are each admitted, so no premise is empty. For every value of
+the terms, object id, grant, signer and phase (symbolic bytes, `rfl` over `Lang.eval`):
+`escrow_calls_payout` (the transfer each method emits, field by field), `escrow_method_state` (terms
+carried, phase the target); `escrow_slots` (one call slot per method, a transfer).
+`escrow_one_payout`, the package's statement: along any chain of law-admitted ACTS on an escrow, at
+most one act's call (the call of `escrow.methods[m]` for its invoke of `m`) spends the payout key
+out of the escrow's own account (depositor ≠ self; a depositor that is the object is refused
+`sameAccount` by KERNEL). `escrow_verdicts` (decide +kernel through `runLaw`, representative distinct
+party bytes): every phase pair × method 0..3 × signer role gives the Lean spec's NAME.
+`escrow_text_reads`, `escrow_decodes`. The kernel's second line is `transfer_once` on the one
+nullifier `onceNullifier (accountId e asset) "payout"` (LEDGER-6 (d)).
+**Teeth.** ledger-sim (standing runs it; gates/runs.tsv `ledger-sim 1 ALL PASS`), four modes each
+asserting its own lines: honest (E0–E15: unfunded deposit refused `grantTarget` with phase `open`;
+deposit moves 30; `notOpen`, `notParty`; release pays B; a TOP-UP of 30 into the escrow account is
+admitted; then release and refund are `settled`; follower and auditor agree); skip-judge (no law:
+the second deposit and the payouts after the top-up are the kernel's `spent`; a stranger's release
+pays); two-keys + skip-judge (refund spends its own key AND no law: the escrow PAYS TWICE, the plant
+LEDGER-6 named); drop-calls (calls never reach the kernel: the unfunded deposit is admitted, `held`
+with nothing in it). Mutations run by hand and reverted, each red in Ledger.Proofs.Escrow: M1 refund
+also by the depositor (escrow_invoke, escrow_verdicts); M2 refund spends its own key
+(escrow_calls_payout); M3 adoption checks only the new phase (escrow_start, so escrow_absorbing);
+M4 deposit pays from the escrow itself on the payout key (escrow_calls_payout, escrow_one_payout).
+**Gaps at Deployed, named (module docstring).** (1) No slot-level restatement (`Lang.program`'s run
++ judge on the codec bytes, HOSTING's `invoke_slots` shape); ledger-sim exercises that path. (2)
+The calls are read as `Val`s at 1000 ticks; the receiver's `extract`/`callsOf` into `Body D` at the
+method budget, and `of self asset` → `accountId X e asset`, are LANG's/KERNEL's theorems, not composed
+here (no fuel-monotonicity lemma exists). (3) A programmed object changes only by its methods is
+KERNEL's `hasMethods`; the chain theorems do not need it.
+**Review.** Second-agent vacuity read (a fresh reviewer, 10-18) found no vacuous statement, and two
+WEAK ones that this commit fixed before landing: the first `escrow_one_payout` was a conjunction
+that never linked a chain step to the call it makes (now `spendCount` over the acts' own calls,
+via `escrow.methods[m]`), and `escrow_verdicts` ran `eval`, not `runLaw` (now `runLaw`, and the
+`ok` rows are `Admits` witnesses). Its other asks are in (2) above.
+**Alternatives.** (1) `Std.machine` for the phase plus a separate party law: LANG's general
+`machine_invoke` would carry the edge theorem, but refusals would read `phase: no edge`, not the
+names the bounty row and a client need; and two laws judging one act split the spec across two
+statements. (2) Methods that branch on the phase and make no call off-edge: a second copy of the
+law in the method text; the law is the one place. (3) The law checking the terms unchanged: a twin
+of the methods' text, which `escrow_method_state` already pins.
+**Critique.** The verdict-NAME table is at representative party bytes (the admitted/refused facts
+are general; the names are an instance). The calls theorem reads the reference evaluator's value of
+each field, not `Lang.callsOf`'s `Body`; the bridge is LANG's `runMeasured_calls` /
+`callData_bodyOf`. The deposit grant is still the whole balance (cv 01a14938).
+**Meta-critique.** I chose the hand-written law over Std.machine partly because the names were
+already agreed; the honest reason it is better is that `escrow_invoke` states edge AND party in one
+theorem the chain argument consumes directly. The mutation M3 is the one I would have missed
+without the chain proof forcing it: an adopt arm copied from Std.machine (`new` only) would have
+let a relaw reopen a settled escrow.
+**Re-emits.** None on chain or schema: a new package and text. A LANG re-id day re-emits
+`world/escrow/Escrow` by `ledger-sim --write-text`.
+Status: BUILT (this commit). The bounty row (PROTOCOL's) is re-cut by PROTOCOL-6 on this text.

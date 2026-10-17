@@ -6,6 +6,7 @@ kernel-sim	--seeds 64	ALL PASS
 host-sim	1 ; 2 ; 3	ALL PASS
 host-file-sim	1 ; 2 ; 3	ALL PASS
 hosting-sim	1 ; 2 ; 3	ALL PASS
+ledger-sim	1	ALL PASS
 hosting-controller	-	the deployed controller; hosting-sim G17 runs its Loop.step, the launcher isolation test runs the exe
 hosting-drive	-	a test driver: launcher/tests/isolation.rs runs it (one Lean-planned launch)
 hosting-broker	-	keybroker decider (follows a Store); the launcher broker test runs the exe over a real Store

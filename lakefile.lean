@@ -41,6 +41,10 @@ package nanodregg where
 @[default_target] lean_lib Hosting where
   globs := #[.submodules `Hosting]
 
+-- LEDGER: packages over the ledger receivers (the escrow), their proofs and their journey.
+@[default_target] lean_lib Ledger where
+  globs := #[.submodules `Ledger]
+
 -- HOSTING's grain lifecycle through KERNEL's receivers, with its plants (standing's sim stage).
 @[default_target] lean_exe «hosting-sim» where
   root := `Hosting.Sim.Main
@@ -75,6 +79,11 @@ package nanodregg where
 -- KERNEL's seeded simulation: `kernel-sim SEED…` (or `--seeds N`), ends `ALL PASS` (standing.sh).
 @[default_target] lean_exe «kernel-sim» where
   root := `Kernel.Sim.Main
+
+-- LEDGER's escrow through KERNEL's receivers, with its plants (standing's sim stage); --write-text
+-- rewrites world/escrow/Escrow.
+@[default_target] lean_exe «ledger-sim» where
+  root := `Ledger.Sim.Main
 
 -- LANG's first law end to end: install → create → invoke through KERNEL's receivers.
 @[default_target] lean_exe «lang-journey» where
