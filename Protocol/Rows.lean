@@ -430,8 +430,8 @@ def bounty : Row where
 
 /-- m6grain (HOSTING-5, 6095c5b): a grain is an object programmed by the SHIPPED lifecycle package
 (`world/grain/Lifecycle`, `Hosting.Text.package` of `Hosting.lifecycle?`, G0 byte for byte), born
-`installed` with its owner named in its seed. Methods remove 0, start 1, stop 2, each taking the
-empty record. The owner starts it; a second start has no edge (the package's own phase law); a
+`installed` (state entry, kind, phase; its owner is the cell's, KERNEL's: the package names none
+since 6577e82). Methods remove 0, start 1, stop 2, each taking the empty record. The owner starts it; a second start has no edge (the package's own phase law); a
 member who is not the owner cannot stop it (invoke is owner-gated, KERNEL-25: `noGrant`); the owner's grant of `invoke:1` (start)
 does not let the grantee stop it (`grantRight`). The sandbox half (the broker launching the grain,
 a second world's volume refused) is CLIENT's and HOSTING's, judged by their plants, not by rows. -/
@@ -443,7 +443,7 @@ def grain : Row where
   drive := .members (join "sponsor" "newcomer" ++ [
     okBind "operator" ["install", "<world/grain/Lifecycle"] "lifecycle",
     okBind "sponsor" ["create", "--pkg", "@lifecycle",
-      "(record (entry \"app\") (kind app) (owner #{@sponsor}) (phase installed))"] "app",
+      "(record (entry \"app\") (kind app) (phase installed))"] "app",
     ok "sponsor" ["invoke", "@app", "1", "(record)"],
     no "sponsor" ["invoke", "@app", "1", "(record)"] "lawDenied",
     no "newcomer" ["invoke", "@app", "2", "(record)"] "noGrant",
