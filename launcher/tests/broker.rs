@@ -603,8 +603,12 @@ fn a_peer_of_another_uid_or_group_is_refused_by_name() {
         let mut r = Resident::connect(b);
         r.ask(&ask(b"claude-m", 10, b"hi"))
     };
-    // CONTROL: this uid with SOCKDIR's group is served (a decision, not peerRefused)
-    let b = start(&d, &keys, &anchors, &up, &w);
+    // CONTROL: this uid with SOCKDIR's group is served (a decision, not peerRefused). It asks
+    // through an upstream of its own: whether that ask is the start window's overSpend or, if a
+    // window boundary passed, a grant that calls upstream, is timing, and must not reach `seen`,
+    // the refused peers' upstream (HOST-11 saw it red once).
+    let (up_control, _) = upstream(Mode::Ok, pki.server(HOST, false));
+    let b = start(&d, &keys, &anchors, &up_control, &w);
     let a = first(&b);
     assert!(
         !is_refused(&a, BrokerRefusal::PeerRefused),
