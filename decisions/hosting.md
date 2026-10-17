@@ -1041,6 +1041,22 @@ is to BE nd. That is the widest arrangement there is, so the answer starts by na
    hosted user's own Store) that the controller tails. RUNBOOK §2a gains the `nd-hosted` user and the
    tmpfiles line.
 
+8. **SOCKDIR is outside every grain's grant, by construction** (ROOT's condition, 10-18, from CLIENT-20's
+   measurement: on Linux a directory a grain may read, write or exec is already a connect grant to every
+   unix socket in it, sockets made there after launch included, because bwrap filters by mount, not by
+   operation; the class of `EXEC_FILTERED = false`). Three facts make it so. (i) Lean's plan names only
+   component lists relative to the hosting ROOT (`plan_paths`: every allowed path lies under the grain's
+   own directory `worlds/<l>/grains/<id>`), and `connect` entries relative to the separate broker root
+   BROKER; Lean never names an absolute path, so no plan can grant a read on `/run` or on anything above
+   or beside its grain. (ii) The Linux floor (`sandbox::FLOOR`: /usr, /lib, /lib64, /bin,
+   /etc/ld.so.cache) holds no `/run`. (iii) grain-launch refuses at start, by name, a BROKER that lies
+   under or contains ROOT (they must be disjoint trees: `/run/nd-broker` against the `nd-hosted` hosting
+   root, e.g. `/srv/nd-hosted`; in tests, two sibling `devtools::scratch` directories). CLIENT's resolver
+   adds `ConnectOverlap` (a connect directory under or containing a read/write/exec entry) and
+   `SocketInGrant` (a read/write/exec tree holding a socket at launch), and the sandbox binds exactly
+   `BROKER/<id>` and nothing above it. What no check sees: a grain may bind a socket in its own `vol`
+   after launch; only that grain sees its `vol`, so that socket reaches nobody else.
+
 **Alternatives.** (a) ROOT's starting default: the socket owned by the resident's uid, 0600, under the
 resident's own 0700 directory. The socket's owner is whoever binds it, and the binder is keybroker; for
 the inode to be the resident's, keybroker would have to BE the resident's uid (the shared-uid hole above)
