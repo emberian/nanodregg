@@ -30,11 +30,13 @@ nothing (accepted in ASSEMBLY §1 O1: the Mac is a member machine, never the wri
 import Host.Exit
 import Protocol.Exit
 import Host.Base
+import Hosting.BrokerExit
 
 namespace Nanodregg.Ops.Units
 
 open Nanodregg.Host
 open Nanodregg.Protocol (SupervisorExit)
+open Nanodregg.Hosting (DeciderExit KeybrokerExit)
 
 /-- An argument of the supervised program: a literal, or a variable the unit's environment file
 supplies (systemd `${NAME}`). -/
@@ -277,10 +279,112 @@ def classSystemd : ExitClass → String
 def exitRow (code : Nat) (name : String) (k : ExitClass) (action : String) : String :=
   s!"| {code} | {name} | {classWord k} | {classSystemd k} | {action} |"
 
+/-! ## The provider-key broker (HOSTING-12/15/16): keybroker and its decider -/
+
+/-- What the operator does when the decider (`hosting-broker`) ends; keybroker passes its code
+through. Exhaustive: HOSTING adds an end, OPS says what an operator does, or nothing builds. -/
+def deciderAction : DeciderExit → String
+  | .keybrokerGone => "nothing: keybroker closed the decider's pipe (its own end is in keybroker's line)"
+  | .usage => "the unit's argv for the decider is wrong: fix the keybroker unit"
+  | .badFrame | .badRequest => "a defect in keybroker's framing: report to HOSTING"
+  | .unencodable => "unreachable by theorem (step_encodes); seen, a defect: report to HOSTING"
+  | .lifetime => "automatic: the decider's lifetime ended, a fresh one continues"
+  | .noPackage => "the allowance package has no id: a build defect, report to HOSTING"
+  | .store => "the Store the decider follows refused to open: run `host check STORE`; restore if it refuses (RUNBOOK §5)"
+  | .behind => "automatic: the decider fell behind the writer's tail; a fresh open reads the World whole"
+  | .io => "an IO error escaped the decider (the call and error are on stderr): check the Store's disk and permissions"
+
+/-- What the operator does when keybroker ends on its own account. -/
+def keybrokerAction : KeybrokerExit → String
+  | .usage => "fix the unit's argv"
+  | .keyFileLink | .keyFileNotRegular | .keyFileOwner | .keyFileMode | .keyFileLength | .keyFileIo =>
+    "the provider key file fails custody: a regular file owned by `nd`, mode 0600 (RUNBOOK §2a)"
+  | .keyFileDir => "a directory above the provider key file is writable by another or owned by another user: fix the chain (RUNBOOK §2a, Dir)"
+  | .keyFileFormat => "the provider key file is not `SLOT KEY` lines, or repeats a slot: rewrite it"
+  | .anchorsLink | .anchorsNotRegular | .anchorsOwner | .anchorsMode | .anchorsLength | .anchorsIo | .anchorsMissing =>
+    "the anchors file fails custody or is missing: reinstall deploy/tls/anchors.pem owned by `nd`, mode 0644 (RUNBOOK §2a)"
+  | .anchorsDir => "a directory above the anchors file is writable by another or owned by another user: fix the chain (RUNBOOK §2a, Dir)"
+  | .anchorsMalformed => "the anchors file is not certificates only: reinstall deploy/tls/anchors.pem (the unit's ExecStartPre checks the installed copy)"
+  | .tlsConfig => "rustls refused the client configuration: a build defect, report to HOSTING"
+  | .socket => "a resident socket could not be bound (a stale socket, a missing directory): stop the unit, check the runtime directory, start it"
+  | .deciderRefused => "the sandbox refused the decider's policy or could not spawn it: check the mechanism (deploy/live/README.md) and the DECIDER path"
+  | .pidFile => "the decider's PID file could not be written: check the runtime directory"
+  | .deciderSignaled => "automatic; the decider was killed by a signal (OOM, an operator); a crash on every start stops at the start limit"
+  | .deciderLost => "keybroker could not read its decider's end: nothing says a restart is safe; read the journal, then start the unit"
+
+/-- The codes the keybroker unit must not restart: both broker tables' fatal classes. -/
+def brokerPreventCodes : List Nat := DeciderExit.codesOf .fatal ++ KeybrokerExit.codesOf .fatal
+
+/-- The keybroker unit's operator data: paths through `checkPath`, the rest literal or from the
+unit's environment file (`ND_OPERATOR`, `ND_RESIDENTS`). -/
+structure Broker where
+  name : String
+  bin : String
+  /-- the directory holding the provider key, the anchors and the environment file (RUNBOOK §2a) -/
+  etc : String
+  /-- systemd's `RuntimeDirectory=` name: `/run/NAME` holds the PID file, `/run/NAME/sock` the sockets -/
+  runtime : String
+  upstream : String
+  store : String
+  user : String
+  deriving Repr
+
+def keybroker : Broker :=
+  { name := "nd-keybroker", bin := "/opt/nd/bin", etc := "/etc/nd/keybroker", runtime := "nd-keybroker",
+    upstream := "api.anthropic.com:443", store := "/srv/nd/store", user := "nd" }
+
+/-- A host:port with nothing a unit file would re-quote. -/
+def plainAddr (a : String) : Bool :=
+  !a.isEmpty && a.toList.all fun c => c.isAlphanum || c == '.' || c == '-' || c == ':'
+
+def Broker.check (b : Broker) : Except Refusal _root_.Unit := do
+  checkAll [b.bin, b.etc, b.store, "/run/" ++ b.runtime]
+  unless plainAddr b.upstream do throw (.badPath b.upstream)
+  unless b.runtime.toList.all plainChar && !b.runtime.contains '/' do throw (.badPath b.runtime)
+
+/-- keybroker's argv, in its order: KEYS ANCHORS SOCKDIR PIDS UPSTREAM STORE OPERATOR RESIDENTS DECIDER. -/
+def Broker.exec (b : Broker) : List Arg :=
+  [.lit (b.bin ++ "/keybroker"), .lit (b.etc ++ "/provider.key"), .lit (b.etc ++ "/anchors.pem"),
+   .lit ("/run/" ++ b.runtime ++ "/sock"), .lit ("/run/" ++ b.runtime), .lit b.upstream, .lit b.store,
+   .var "ND_OPERATOR", .var "ND_RESIDENTS", .lit (b.bin ++ "/hosting-broker")]
+
+def Broker.systemd (b : Broker) : Except Refusal String := do
+  b.check
+  return "\n".intercalate [
+    "# GENERATED by emit-units from Ops/Units.lean and Hosting/BrokerExit.lean — do not edit",
+    "[Unit]",
+    "Description=nanodregg keybroker (the provider-key broker) and its decider",
+    "Wants=network-online.target",
+    "After=network-online.target",
+    s!"StartLimitIntervalSec={startIntervalSeconds}",
+    s!"StartLimitBurst={startBurst}",
+    "",
+    "[Service]",
+    "Type=simple",
+    s!"User={b.user}",
+    s!"EnvironmentFile={b.etc}/keybroker.env",
+    s!"RuntimeDirectory={b.runtime} {b.runtime}/sock",
+    "# the installed anchors must be the build's pinned roots, byte for byte, at every start (OPS-7)",
+    s!"ExecStartPre={b.bin}/emit-anchors --check {b.etc}/anchors.pem",
+    s!"ExecStart={spaced (b.exec.map Arg.systemd)}",
+    "Restart=on-failure",
+    s!"RestartSec={restartSeconds}",
+    s!"RestartPreventExitStatus={spaced (brokerPreventCodes.map toString)}",
+    "UMask=0077",
+    "NoNewPrivileges=yes",
+    "RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6",
+    s!"TimeoutStopSec={stopSeconds}",
+    "",
+    "[Install]",
+    "WantedBy=multi-user.target",
+    ""]
+
 def exitsTable : String :=
   let host := (Status.all.map fun s => (s.code, exitRow s.code s.name s.cls (hostAction s))).mergeSort
     fun a b => decide (a.1 ≤ b.1)
   let sup := SupervisorExit.all.map fun e => exitRow e.code (supervisorName e) e.cls (supervisorAction e)
+  let kb := KeybrokerExit.all.map fun e => exitRow e.code e.name e.cls (keybrokerAction e)
+  let dec := DeciderExit.all.map fun e => exitRow e.code ((toString (repr e)).splitOn ".").getLast! e.cls (deciderAction e)
   "
 ".intercalate ([
     "<!-- GENERATED by emit-units from Ops/Units.lean, Host/Exit.lean and Protocol/Exit.lean — do not edit -->",
@@ -298,7 +402,17 @@ def exitsTable : String :=
     "## nd-supervise",
     "",
     "| code | name | class | systemd | operator |",
-    "|---|---|---|---|---|"] ++ sup ++ [""])
+    "|---|---|---|---|---|"] ++ sup ++ [
+    "",
+    "## keybroker (the nd-keybroker unit; its decider's codes below are passed through)",
+    "",
+    "| code | name | class | systemd | operator |",
+    "|---|---|---|---|---|"] ++ kb ++ [
+    "",
+    "## hosting-broker (the decider, under keybroker)",
+    "",
+    "| code | name | class | systemd | operator |",
+    "|---|---|---|---|---|"] ++ dec ++ [""])
 
 /-! ## The Store's files (deploy/units/STORE.md), rendered from `Host.Store.layout` -/
 
@@ -343,7 +457,8 @@ def emitted : List (String × Node) :=
 
 def files : Except Refusal (List (String × String)) := do
   let units ← emitted.mapM fun (path, n) => do return (path, (← Service.ofNode n).systemd)
-  return units ++ [("EXITS.md", exitsTable), ("STORE.md", storeTable)]
+  return units ++ [("linux/nd-keybroker.service", ← keybroker.systemd), ("EXITS.md", exitsTable),
+    ("STORE.md", storeTable)]
 
 /-- The live harness's nodes (deploy/live/): user units whose every path lies under `root`, so the
 harness writes nothing outside it but the unit links. Two writers on ONE Store (the second must

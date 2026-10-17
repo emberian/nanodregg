@@ -5,11 +5,13 @@ both exit tables (the child's `Host.Status`, nd-supervise's own `SupervisorExit`
 import Ops.Units
 import Host.Proofs.Exit
 import Protocol.Proofs.Exit
+import Hosting.Proofs.BrokerExit
 
 namespace Nanodregg.Ops.Units
 
 open Nanodregg.Host
 open Nanodregg.Protocol (SupervisorExit)
+open Nanodregg.Hosting (DeciderExit KeybrokerExit)
 
 /-- A unit exists only for a node that hides something. -/
 theorem ofNode_hidden (n : Node) (u : Service) (h : Service.ofNode n = .ok u) : n.hide ≠ [] := by
@@ -95,5 +97,23 @@ theorem preventCodes_supervisor_split :
 /-- The planted node: nothing hidden → refused by name, never rendered. -/
 theorem plant_nothing_hidden : Service.ofNode { writer with hide := [] } = .error .nothingHidden := by
   simp [Service.ofNode]
+
+/-- The keybroker unit stops on a decider end iff HOSTING's table calls it fatal. -/
+theorem mem_brokerPrevent_decider (e : DeciderExit) : e.code ∈ brokerPreventCodes ↔ e.cls = .fatal := by
+  cases e <;> decide
+
+/-- ... and on keybroker's own end iff fatal. -/
+theorem mem_brokerPrevent_keybroker (e : KeybrokerExit) : e.code ∈ brokerPreventCodes ↔ e.cls = .fatal := by
+  cases e <;> decide
+
+/-- A Rust panic (101) is in no table and is restarted; a clean decider end (0) is never prevented. -/
+theorem brokerPrevent_panic_and_done : 101 ∉ brokerPreventCodes ∧ 0 ∉ brokerPreventCodes := by decide
+
+/-- The tooth: a custody refusal of the key file's chain (86) is prevented, a signalled decider
+(102) and a decider behind the tail (77) are restarted. False if either table's half is dropped. -/
+theorem brokerPrevent_split :
+    KeybrokerExit.keyFileDir.code ∈ brokerPreventCodes ∧ DeciderExit.store.code ∈ brokerPreventCodes ∧
+    KeybrokerExit.deciderSignaled.code ∉ brokerPreventCodes ∧ DeciderExit.behind.code ∉ brokerPreventCodes := by
+  decide
 
 end Nanodregg.Ops.Units

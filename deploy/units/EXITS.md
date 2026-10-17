@@ -60,3 +60,47 @@ code space holds both tables: `host` (Host.Status, below 64) and nd-supervise's 
 | 64 | refusedAtLaunch | fatal | stopped (RestartPreventExitStatus) | refused before the child ran (nothing hidden, an unreadable argument, a socket it cannot bind, the sandbox's policy or mechanism): fix the unit or the box; the reason is on stderr |
 | 65 | childUnroutable | fatal | stopped (RestartPreventExitStatus) | the child wrote a frame the mux cannot route: a defect in the child, report to HOST and CLIENT |
 | 66 | childSignaled | restart | restarted after 2 s; failed past 5 starts in 120 s | automatic; the child was killed by a signal (the OOM killer, an operator; on Linux any mechanism exit of 128 or more, bwrap's 128+N); a crash on every start stops at the start limit |
+
+## keybroker (the nd-keybroker unit; its decider's codes below are passed through)
+
+| code | name | class | systemd | operator |
+|---|---|---|---|---|
+| 80 | usage | fatal | stopped (RestartPreventExitStatus) | fix the unit's argv |
+| 81 | keyFileLink | fatal | stopped (RestartPreventExitStatus) | the provider key file fails custody: a regular file owned by `nd`, mode 0600 (RUNBOOK §2a) |
+| 82 | keyFileNotRegular | fatal | stopped (RestartPreventExitStatus) | the provider key file fails custody: a regular file owned by `nd`, mode 0600 (RUNBOOK §2a) |
+| 83 | keyFileOwner | fatal | stopped (RestartPreventExitStatus) | the provider key file fails custody: a regular file owned by `nd`, mode 0600 (RUNBOOK §2a) |
+| 84 | keyFileMode | fatal | stopped (RestartPreventExitStatus) | the provider key file fails custody: a regular file owned by `nd`, mode 0600 (RUNBOOK §2a) |
+| 85 | keyFileLength | fatal | stopped (RestartPreventExitStatus) | the provider key file fails custody: a regular file owned by `nd`, mode 0600 (RUNBOOK §2a) |
+| 86 | keyFileDir | fatal | stopped (RestartPreventExitStatus) | a directory above the provider key file is writable by another or owned by another user: fix the chain (RUNBOOK §2a, Dir) |
+| 87 | keyFileIo | fatal | stopped (RestartPreventExitStatus) | the provider key file fails custody: a regular file owned by `nd`, mode 0600 (RUNBOOK §2a) |
+| 88 | keyFileFormat | fatal | stopped (RestartPreventExitStatus) | the provider key file is not `SLOT KEY` lines, or repeats a slot: rewrite it |
+| 89 | anchorsLink | fatal | stopped (RestartPreventExitStatus) | the anchors file fails custody or is missing: reinstall deploy/tls/anchors.pem owned by `nd`, mode 0644 (RUNBOOK §2a) |
+| 90 | anchorsNotRegular | fatal | stopped (RestartPreventExitStatus) | the anchors file fails custody or is missing: reinstall deploy/tls/anchors.pem owned by `nd`, mode 0644 (RUNBOOK §2a) |
+| 91 | anchorsOwner | fatal | stopped (RestartPreventExitStatus) | the anchors file fails custody or is missing: reinstall deploy/tls/anchors.pem owned by `nd`, mode 0644 (RUNBOOK §2a) |
+| 92 | anchorsMode | fatal | stopped (RestartPreventExitStatus) | the anchors file fails custody or is missing: reinstall deploy/tls/anchors.pem owned by `nd`, mode 0644 (RUNBOOK §2a) |
+| 93 | anchorsLength | fatal | stopped (RestartPreventExitStatus) | the anchors file fails custody or is missing: reinstall deploy/tls/anchors.pem owned by `nd`, mode 0644 (RUNBOOK §2a) |
+| 94 | anchorsDir | fatal | stopped (RestartPreventExitStatus) | a directory above the anchors file is writable by another or owned by another user: fix the chain (RUNBOOK §2a, Dir) |
+| 95 | anchorsMissing | fatal | stopped (RestartPreventExitStatus) | the anchors file fails custody or is missing: reinstall deploy/tls/anchors.pem owned by `nd`, mode 0644 (RUNBOOK §2a) |
+| 96 | anchorsIo | fatal | stopped (RestartPreventExitStatus) | the anchors file fails custody or is missing: reinstall deploy/tls/anchors.pem owned by `nd`, mode 0644 (RUNBOOK §2a) |
+| 97 | anchorsMalformed | fatal | stopped (RestartPreventExitStatus) | the anchors file is not certificates only: reinstall deploy/tls/anchors.pem (the unit's ExecStartPre checks the installed copy) |
+| 98 | tlsConfig | fatal | stopped (RestartPreventExitStatus) | rustls refused the client configuration: a build defect, report to HOSTING |
+| 99 | socket | fatal | stopped (RestartPreventExitStatus) | a resident socket could not be bound (a stale socket, a missing directory): stop the unit, check the runtime directory, start it |
+| 100 | deciderRefused | fatal | stopped (RestartPreventExitStatus) | the sandbox refused the decider's policy or could not spawn it: check the mechanism (deploy/live/README.md) and the DECIDER path |
+| 103 | pidFile | fatal | stopped (RestartPreventExitStatus) | the decider's PID file could not be written: check the runtime directory |
+| 102 | deciderSignaled | restart | restarted after 2 s; failed past 5 starts in 120 s | automatic; the decider was killed by a signal (OOM, an operator); a crash on every start stops at the start limit |
+| 104 | deciderLost | fatal | stopped (RestartPreventExitStatus) | keybroker could not read its decider's end: nothing says a restart is safe; read the journal, then start the unit |
+
+## hosting-broker (the decider, under keybroker)
+
+| code | name | class | systemd | operator |
+|---|---|---|---|---|
+| 0 | keybrokerGone | done | stays stopped (success) | nothing: keybroker closed the decider's pipe (its own end is in keybroker's line) |
+| 70 | usage | fatal | stopped (RestartPreventExitStatus) | the unit's argv for the decider is wrong: fix the keybroker unit |
+| 71 | badFrame | fatal | stopped (RestartPreventExitStatus) | a defect in keybroker's framing: report to HOSTING |
+| 72 | badRequest | fatal | stopped (RestartPreventExitStatus) | a defect in keybroker's framing: report to HOSTING |
+| 73 | unencodable | fatal | stopped (RestartPreventExitStatus) | unreachable by theorem (step_encodes); seen, a defect: report to HOSTING |
+| 74 | lifetime | restart | restarted after 2 s; failed past 5 starts in 120 s | automatic: the decider's lifetime ended, a fresh one continues |
+| 75 | noPackage | fatal | stopped (RestartPreventExitStatus) | the allowance package has no id: a build defect, report to HOSTING |
+| 76 | store | fatal | stopped (RestartPreventExitStatus) | the Store the decider follows refused to open: run `host check STORE`; restore if it refuses (RUNBOOK §5) |
+| 77 | behind | restart | restarted after 2 s; failed past 5 starts in 120 s | automatic: the decider fell behind the writer's tail; a fresh open reads the World whole |
+| 78 | io | fatal | stopped (RestartPreventExitStatus) | an IO error escaped the decider (the call and error are on stderr): check the Store's disk and permissions |

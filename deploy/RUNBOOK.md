@@ -77,7 +77,17 @@ So never place these files under a group-writable tree: on hbox the umask-002 `/
 
 A member's own files live under its home (`~/.nd`, 0700, made by `nd --init`); its home and every
 parent must also pass (a group-writable home is refused `Dir(/home/USER)`). The keybroker unit is
-rendered (emit-units) with the /etc/nd/keybroker paths, PENDING HOSTING-5's argv.
+rendered by emit-units as `deploy/units/linux/nd-keybroker.service` (system unit, User=nd):
+- install `keybroker`, `hosting-broker` and `emit-anchors` in `/opt/nd/bin`; write
+  `/etc/nd/keybroker/keybroker.env` (owned by root or nd, not group/other writable) with
+  `ND_OPERATOR=<operator member hex>` and `ND_RESIDENTS=<comma-separated resident socket names>`;
+- every start first runs `emit-anchors --check /etc/nd/keybroker/anchors.pem`: an installed copy
+  that differs from the build's pinned roots by one byte refuses to start (and, failing on every
+  start, stops at the start limit; the journal names it);
+- sockets are made in `/run/nd-keybroker/sock` (systemd's RuntimeDirectory), mode 0600 under the
+  unit's UMask: which residents may connect is HOSTING's stage 3, PENDING;
+- keybroker's and the decider's ends are `deploy/units/EXITS.md`'s two broker tables (HOSTING-16):
+  every custody refusal stops the unit, a signalled or lagging decider restarts.
 
 ## 3. Status — RAN
 

@@ -227,3 +227,30 @@ HOSTING's call per upstream, and this file is the default. The base64 encoder is
 **META-CRITIQUE.** "Generated + checked" is the shape I already own (emit-units, STORE.md), so I
 reached for it; the test of it is the alternative (1)'s second path, which it avoids.
 **Status.** landed with the file it checks.
+
+## OPS-8 · the keybroker unit, rendered from HOSTING-16's exit tables, checks its anchors at every start (2026-10-17)
+
+**Decision.** `deploy/units/linux/nd-keybroker.service` is rendered by emit-units from `Ops.Units.keybroker`
+(paths through checkPath, upstream a plain host:port): User=nd, keybroker's nine arguments in its
+order with ND_OPERATOR/ND_RESIDENTS from `/etc/nd/keybroker/keybroker.env`, RuntimeDirectory
+`nd-keybroker` (PID file) and `nd-keybroker/sock` (sockets), `ExecStartPre=emit-anchors --check` on
+the installed anchors (HOSTING-15's install check, made a start condition), and
+`RestartPreventExitStatus` = `DeciderExit.codesOf .fatal ++ KeybrokerExit.codesOf .fatal`
+(HOSTING-16, 12ce0ff; asked by OPS because keybroker exited 1 for a custody refusal and a transient
+end alike). Theorems: mem_brokerPrevent_decider / _keybroker (prevented iff fatal),
+brokerPrevent_panic_and_done (101 and 0 never prevented), brokerPrevent_split (the tooth).
+EXITS.md gains both broker tables with exhaustive operator sentences. Measured on hbox (AppArmor
+userns restriction ON): nd-supervise's confinement runs under NoNewPrivileges (`setpriv
+--no-new-privs`), so the units' NoNewPrivileges=yes does not break the nd-bwrap profile.
+**Alternatives.** (1) The install check as an operator step only (HOSTING-15's wording): an edited
+installed copy would then be read at the next restart, long after the check. (2) keybroker
+confined by nd-supervise: it needs outbound TCP 443, which the sandbox (no network) refuses by
+design; it confines its decider itself.
+**CRITIQUE.** An ExecStartPre failure is not the main process's exit, so RestartPreventExitStatus does
+not stop it: a bad anchors file is retried until the start limit (5 in 120 s), named in the journal
+each time. The sockets' mode (0600 under UMask=0077) admits only `nd`: a grain under another uid
+cannot connect until HOSTING's stage 3 says who may. The unit is RENDERED, not RUN: no box has
+run it under systemd (the burst5 harness was torn down); its first run is a deploy-time fact.
+**META-CRITIQUE.** Making the check a start condition is stricter than asked; the cost is an
+emit-anchors binary on the node, which I chose without asking HOSTING.
+**Status.** landed; run PENDING a box.
