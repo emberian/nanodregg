@@ -7,6 +7,8 @@
   reaches exactly the World the Host keeps. The follower folds the log; this is why its root is
   the Host's.
 * `replies_size` — every request gets exactly one reply.
+* `replies_conns` — and the replies' connections are the requests', in order: reply `i` is request
+  `i`'s (the mux's in-flight count per connection relies on it).
 -/
 import Host.Batch
 
@@ -74,5 +76,29 @@ theorem Machine.replies_size (m : Machine W T R Q) (w : W) (qs : List (Request Q
     intro acc
     show (m.run (m.step acc q) qs).2.replies.size = _
     rw [ih, m.step_replies]; simp; omega
+
+theorem Machine.step_conns (m : Machine W T R Q) (acc : W × Out T) (q : Request Q) :
+    (m.step acc q).2.replies.toList.map (·.conn) = acc.2.replies.toList.map (·.conn) ++ [q.conn] := by
+  obtain ⟨w, out⟩ := acc
+  unfold Machine.step
+  simp only
+  split
+  · simp
+  · simp
+  · split
+    · simp
+    · simp
+
+theorem Machine.replies_conns (m : Machine W T R Q) (w : W) (qs : List (Request Q)) :
+    (m.admitBatch w qs).2.replies.toList.map (·.conn) = qs.map (·.conn) := by
+  suffices ∀ acc : W × Out T,
+      (m.run acc qs).2.replies.toList.map (·.conn) = acc.2.replies.toList.map (·.conn) ++ qs.map (·.conn) by
+    simpa using this (w, {})
+  induction qs with
+  | nil => intro acc; simp [Machine.run]
+  | cons q qs ih =>
+    intro acc
+    show (m.run (m.step acc q) qs).2.replies.toList.map (·.conn) = _
+    rw [ih, m.step_conns]; simp
 
 end Nanodregg.Host

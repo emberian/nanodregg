@@ -10,6 +10,7 @@ holds nothing between batches but the port (`serve` takes no carried frame), a r
 batched: no accepted frame is lost across a restart.
 -/
 import Host.Loop
+import Host.Proofs.Batch
 
 namespace Nanodregg.Host
 
@@ -129,5 +130,63 @@ silent), holding the state it was given. -/
 theorem restarts_spent {W : Type} (round : Resident W → IO (Exit × Resident W))
     (reopen : IO (Except Exit (Resident W))) (mark : W → Nat × ByteArray) (r : Resident W) :
     restarts round reopen mark 0 r = pure (.lifetime, r) := rfl
+
+/-! ## One reply per request frame, on its own connection (owed by HOST to the mux, CLIENT-14)
+
+A batch's replies are sent on exactly one of two paths in `serve`: after the sync,
+`fillPages` = `applyPages` over the built pages; when the append did not complete,
+`uncertainAll`. Both keep every reply's connection, so with `Machine.replies_conns` the replies
+sent for a batch carry exactly the batch frames' connections, in order, `uncertain` included. With
+`drainM_conserves` (no frame lost or duplicated by the cut) and `refuseQueued` (every frame still
+queued at an exit answered), each accepted request frame is answered once on its own connection.
+Not covered: a process killed between the sync and the send (the client's recovery is lookup). -/
+
+private theorem modify_conns (rs : Array Reply) (i : Nat) (st : UInt8) (p : ByteArray) :
+    (rs.modify i fun rep => { rep with status := st, payload := p }).toList.map (·.conn) =
+      rs.toList.map (·.conn) := by
+  apply List.ext_getElem
+  · simp
+  · intro j h1 h2
+    simp only [List.getElem_map, Array.getElem_toList, Array.getElem_modify]
+    split <;> rfl
+
+theorem applyPages_conns (rs : Array Reply) (pages : Array (Nat × UInt8 × ByteArray)) :
+    (applyPages rs pages).toList.map (·.conn) = rs.toList.map (·.conn) := by
+  unfold applyPages
+  rw [← Array.foldl_toList]
+  induction pages.toList generalizing rs with
+  | nil => rfl
+  | cons p ps ih =>
+    obtain ⟨i, st, pl⟩ := p
+    simp only [List.foldl_cons]
+    rw [ih, modify_conns]
+
+theorem uncertainAll_conns (rs : Array Reply) :
+    (uncertainAll rs).toList.map (·.conn) = rs.toList.map (·.conn) ∧
+      ∀ r ∈ (uncertainAll rs).toList, r.status = Protocol.Status.uncertain.code := by
+  unfold uncertainAll
+  refine ⟨by simp, ?_⟩
+  intro r hr
+  simp only [Array.toList_map, List.mem_map] at hr
+  obtain ⟨_, _, rfl⟩ := hr
+  rfl
+
+/-- The batch the loop cuts (`drain`'s frames, as `serve` hands them to the machine), answered
+after its sync: one reply per frame, each on the frame's own connection, in order. -/
+theorem served_conns {W T R : Type} (m : Machine W T R Frame) (w : W) (frames : Array Frame)
+    (built : Array (Nat × UInt8 × ByteArray)) :
+    (applyPages (m.admitBatch w (frames.toList.map fun f => ⟨f.conn, f⟩)).2.replies built).toList.map (·.conn) =
+      frames.toList.map (·.conn) := by
+  rw [applyPages_conns, m.replies_conns]; simp
+
+/-- The same batch when its append did not complete: one `uncertain` reply per frame, each on the
+frame's own connection, in order. -/
+theorem uncertain_conns {W T R : Type} (m : Machine W T R Frame) (w : W) (frames : Array Frame) :
+    (uncertainAll (m.admitBatch w (frames.toList.map fun f => ⟨f.conn, f⟩)).2.replies).toList.map (·.conn) =
+      frames.toList.map (·.conn) ∧
+    ∀ r ∈ (uncertainAll (m.admitBatch w (frames.toList.map fun f => ⟨f.conn, f⟩)).2.replies).toList,
+      r.status = Protocol.Status.uncertain.code := by
+  obtain ⟨h1, h2⟩ := uncertainAll_conns (m.admitBatch w (frames.toList.map fun f => ⟨f.conn, f⟩)).2.replies
+  exact ⟨by rw [h1, m.replies_conns]; simp, h2⟩
 
 end Nanodregg.Host

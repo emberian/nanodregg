@@ -219,12 +219,19 @@ def finish (exit : Exit) (r : Resident W) : IO (Exit × Resident W) := do
     | .ok sealed => return (exit, { r with sealed, pending := none })
     | .error f => return (.sealFailed f, { r with pending := none })
 
-/-- Fill the replies that wait for a log page, from the durable state. -/
+/-- Put built pages into their replies: reply `i` takes page `(i, status, payload)`'s status and
+payload, and nothing else of any reply changes (its conn above all: `Proofs.Loop.applyPages_conns`). -/
+def applyPages (replies : Array Reply) (pages : Array (Nat × UInt8 × ByteArray)) : Array Reply :=
+  pages.foldl (fun rs (i, status, payload) => rs.modify i fun rep => { rep with status, payload }) replies
+
+/-- Fill the replies that wait for a log page, from the durable state: build every page, then
+`applyPages`. -/
 def fillPages (pager : Resident W → Deferred → IO (UInt8 × ByteArray)) (r : Resident W) (out : Out T) :
-    IO (Array Reply) :=
-  out.pages.foldlM (init := out.replies) fun rs (i, d) => do
+    IO (Array Reply) := do
+  let built ← out.pages.mapM fun (i, d) => do
     let (status, payload) ← pager r d
-    return rs.modify i fun rep => { rep with status, payload }
+    return (i, status, payload)
+  return applyPages out.replies built
 
 /-- Append one record that takes the World to `w'`, durably, within the tail bound, and index it;
 start a seal if the cadence is reached. The writer's loop and the follower's (`Host.Follow`) both
