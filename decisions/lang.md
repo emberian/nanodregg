@@ -134,3 +134,25 @@ CODEC, which I did not ask for.
 **Flag day.** Package bytes (hence every package id, `romIdOf` of the bytes) and every data slot's
 bytes change: an installed package or object state from before this commit refuses to load
 (`malformedCell` at its package slot; state fields as `decode …` refusals). Re-genesis.
+
+## LANG-18 A reference semantics beside the machine; `extend` keeps the old self (2026-10-17)
+**Decision.** `Lang/Proofs/BigStep.lean` defines what a term MEANS as a big-step relation
+(`BigStep`/`Sel`/`Ext`, results `Except Fault Val`), and the machine is proved to compute exactly it:
+`run_bigStep`/`run_fault_bigStep` (machine result ⇒ meaning, any budget) and
+`bigStep_run`/`bigStep_run_fault` (meaning ⇒ the machine reaches it under every large enough stack
+bound and tick budget), with `bigStep_deterministic`. `stuck` is never a meaning. Ticks and the stack
+bound are resources, not meanings: a meaning may need more than `Bounds.stackMax`, and then the
+deployed run ends `.stack`. The language decision this exposed: `extend (fix f) fs` unrolls the knot
+once and merges, so inherited fields keep the OLD self (`bigStep_extend_keeps_old_self`): no late
+binding of self through `extend`; open recursion is `fix` over a mixin the authoring tool writes
+(LANG-1's `mix`), not `extend` of a knot.
+**Alternatives.** A denotational interpreter (a second evaluator: ruled out by "one language, one
+evaluator"); a relation only, with no completeness (then any non-overlapping added rule is invisible:
+the reviewer's appNat example). **Why.** A relation in a Proofs module runs nowhere, so it is a spec,
+not a twin; the two directions make it the machine's graph exactly, and its rules can be read.
+**Critique.** It shares the value domain with the machine (`Val`, `suspend`, `primEval`, `Row`), so a
+bug there is inherited, not caught; call-by-value order in ill-typed corners (an applied natural
+whose argument faults "means" the argument's fault) was read off `step`. The old-self `extend` may be
+the wrong language choice for mixins; it is now a named, toothed decision rather than an accident.
+**Meta-critique.** The rules were written by reading `step`; their independence is of control only.
+A truly independent reference would define `primEval`'s arithmetic on `Nat`/`ByteArray` directly.
