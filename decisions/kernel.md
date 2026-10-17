@@ -310,3 +310,16 @@ because it falls out of KERNEL-12's charge change, so I may have shaped KERNEL-1
 independent test: the allowance already claimed to be "the storage budget", and only now is that a
 theorem about storage.
 Status: open.
+
+## ROOT rulings on KERNEL-14..17 (2026-10-16, recorded by KERNEL-2)
+- KERNEL-14: v0 is Ed25519 ONLY. The kernel stays scheme-agnostic and the signature stays opaque
+  bytes, so a hybrid is a later flag day (a re-genesis). CLIENT-11's hybrid ships only with its two
+  flip-one-half plants. Reason: the hybrid needs a second verifier nobody has built, and minidregg's
+  half-verified hybrid was worse than none (cv 01a14700). Ember is informed.
+- KERNEL-15: credit-on-retire ACCEPTED as the next mechanical step. Any other refill is a grant, later.
+- KERNEL-16: ONE mechanism (law 1). Enrolment is a RIGHT (`Right.enroll`) exercised through an
+  attenuating grant chain rooted at the founders, the same shape as write/law authority, with the
+  theorem `enroll_authorized` (twin of `write_authorized`). Per-member budgets fall out of
+  attenuation: a grant can be attenuated to "may enrol ≤ n", so no second budget mechanism exists.
+  Plant: the drained-World scenario; a member without the right, or past its count, is refused by name.
+- KERNEL-17: the journal is the receipt. ACCEPTED.
