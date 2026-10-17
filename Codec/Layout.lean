@@ -13,6 +13,8 @@ namespace Nanodregg.Codec
 inductive Field where
   /-- one byte -/
   | byte (name : String)
+  /-- eight bytes, little-endian -/
+  | u64 (name : String)
   /-- `u32 len ‖ bytes`, at most `max` bytes -/
   | bytes (name : String)
   /-- `u32 count ‖ (u32 len ‖ bytes)*`, at most `max` items of at most `max` bytes each -/
@@ -24,17 +26,19 @@ inductive Field where
 namespace Field
 
 def name : Field → String
-  | byte n | bytes n | list n | oneOf n _ => n
+  | byte n | u64 n | bytes n | list n | oneOf n _ => n
 
 /-- The Lean value of a field. -/
 abbrev Ty (max : Nat) : Field → Type
   | byte _ => UInt8
+  | u64 _ => UInt64
   | bytes _ => Bytes max
   | list _ => Bounded max (Bytes max)
   | oneOf _ cases => { b : UInt8 // (cases.map Prod.snd).toArray.contains b = true }
 
 def codec (max : Nat) (fits : max < 2 ^ 32) : (f : Field) → Stream (f.Ty max)
   | byte _ => Stream.u8
+  | u64 _ => Stream.u64
   | bytes _ => Stream.bytesOf max fits
   | list _ => Stream.array max (Stream.bytesOf max fits) fits
   | oneOf _ cases => Stream.oneOf (cases.map Prod.snd).toArray

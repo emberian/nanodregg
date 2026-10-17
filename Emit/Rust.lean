@@ -56,18 +56,21 @@ def camel (s : String) : String :=
 
 def rustType : Field → String
   | .byte _ => "u8"
+  | .u64 _ => "u64"
   | .bytes _ => "Vec<u8>"
   | .list _ => "Vec<Vec<u8>>"
   | .oneOf n _ => camel n
 
 def readField (max : Nat) : Field → String
   | .byte n => s!"let {n} = c.byte()?;"
+  | .u64 n => s!"let {n} = c.u64()?;"
   | .bytes n => s!"let {n} = c.bytes({max})?;"
   | .list n => s!"let {n} = c.list({max})?;"
   | .oneOf n _ => s!"let {n} = c.one_of({camel n}::from_code)?;"
 
 def writeField (max : Nat) : Field → String
   | .byte n => s!"out.push(*{n});"
+  | .u64 n => s!"out.extend_from_slice(&{n}.to_le_bytes());"
   | .bytes n => s!"put_bytes(&mut out, {n}, {max})?;"
   | .list n => s!"put_list(&mut out, {n}, {max})?;"
   | .oneOf n _ => s!"out.push({n}.code());"
@@ -102,6 +105,21 @@ def oneOfReader : String := String.intercalate "\n" [
   "            let at = self.i;",
   "            let tag = self.byte()?;",
   "            from_code(tag).ok_or(Refusal::BadTag { offset: at, tag })",
+  "        }",
+  "    }"]
+
+/-- The cursor's `u64` reader, emitted only when some layout has a `u64` field. -/
+def u64Reader : String := String.intercalate "\n" [
+  "    impl Cursor<'_> {",
+  "        fn u64(&mut self) -> Result<u64, Refusal> {",
+  "            let eight = self.b.get(self.i..self.i + 8).ok_or(Refusal::Truncated {",
+  "                offset: self.i,",
+  "                need: 8,",
+  "            })?;",
+  "            self.i += 8;",
+  "            let mut v = [0u8; 8];",
+  "            v.copy_from_slice(eight);",
+  "            Ok(u64::from_le_bytes(v))",
   "        }",
   "    }"]
 
@@ -278,9 +296,13 @@ def layoutModule : String := String.intercalate "\n\n" ([
   "/// The follow socket's payloads (Protocol.Table layouts; Lean codec: Protocol.Frames).\npub mod layout {",
   layoutPrelude] ++
   (let es := oneOfs (commandLayout :: resumeLayout :: Step.all.map Step.layout)
-   (if es.isEmpty then [] else [oneOfReader]) ++ es.map fun p => oneOfEnum p.1 p.2) ++ [
+   let ls := commandLayout :: resumeLayout :: signResultLayout :: Step.all.map Step.layout
+   let hasU64 := ls.flatten.any fun f => match f with | .u64 _ => true | _ => false
+   (if es.isEmpty then [] else [oneOfReader]) ++ (if hasU64 then [u64Reader] else []) ++
+     es.map fun p => oneOfEnum p.1 p.2) ++ [
   structFor "Command" Bounds.argvBytesMax commandLayout (some Bounds.argvBytesMax),
   structFor "Resume" Bounds.frameBytesMax resumeLayout,
+  structFor "SignResult" Bounds.frameBytesMax signResultLayout,
   stepEnum Bounds.frameBytesMax ++ "\n}"])
 
 def header : String :=

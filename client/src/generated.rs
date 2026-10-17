@@ -237,6 +237,41 @@ pub mod layout {
     }
 
     #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct SignResult {
+        pub key: Vec<u8>,
+        pub next: Vec<u8>,
+        pub signature: Vec<u8>,
+    }
+
+    impl SignResult {
+        pub fn decode(b: &[u8]) -> Result<Self, Refusal> {
+            let mut c = Cursor { b, i: 0 };
+            let key = c.bytes(262144)?;
+            let next = c.bytes(262144)?;
+            let signature = c.bytes(262144)?;
+            c.end()?;
+            Ok(SignResult {
+                key,
+                next,
+                signature,
+            })
+        }
+
+        pub fn encode(&self) -> Result<Vec<u8>, Refusal> {
+            let mut out = Vec::new();
+            let SignResult {
+                key,
+                next,
+                signature,
+            } = self;
+            put_bytes(&mut out, key, 262144)?;
+            put_bytes(&mut out, next, 262144)?;
+            put_bytes(&mut out, signature, 262144)?;
+            Ok(out)
+        }
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
     pub enum Step {
         Done {
             exit: u8,

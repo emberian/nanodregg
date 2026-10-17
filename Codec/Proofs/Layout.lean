@@ -8,6 +8,7 @@ namespace Nanodregg.Codec
 theorem Field.codec_lawful (max : Nat) (fits : max < 2 ^ 32) :
     (f : Field) → Stream.Lawful (f.codec max fits)
   | .byte _ => Stream.u8_lawful
+  | .u64 _ => Stream.u64_lawful
   | .bytes _ => Stream.bytesOf_lawful max fits
   | .list _ => Stream.array_lawful (Stream.bytesOf_lawful max fits) max fits
   | .oneOf _ cases => Stream.oneOf_lawful (cases.map Prod.snd).toArray
