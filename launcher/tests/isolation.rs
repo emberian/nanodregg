@@ -67,7 +67,7 @@ fn tree(name: &str) -> Tree {
     fs::write(w1.join("store/key"), b"STORE-KEY").unwrap();
     fs::write(w1.join("members/seed"), b"SEED").unwrap();
     fs::write(w2.join("grains").join(B).join("vol/secret"), b"NEIGHBOUR").unwrap();
-    fs::copy(env!("CARGO_BIN_EXE_probe"), t.pkg.join("probe")).unwrap();
+    place_exe(Path::new(env!("CARGO_BIN_EXE_probe")), &t.pkg.join("probe"));
     let nb = w2.join("grains").join(B).join("vol");
     let targets = [
         ("vol-write", "write", t.vol.join("own")),
@@ -82,6 +82,28 @@ fn tree(name: &str) -> Tree {
         .collect();
     fs::write(t.pkg.join("probe.targets"), text).unwrap();
     t
+}
+
+/// Put a copy of the executable `src` at `dst` without this process ever holding `dst` open for
+/// writing. Tests run on parallel threads, and a thread that spawns a child copies this process's
+/// file table into it; until that child execs, it holds every fd open at that moment (`O_CLOEXEC`
+/// closes them only AT exec). If one of them is a write fd on `dst`, an exec of `dst` in that
+/// window fails `ETXTBSY` (HOST-10 saw it once at the CONTROL's exec). `cp` holds the only write fd,
+/// in its own process, and it has exited before `dst` is run.
+fn place_exe(src: &Path, dst: &Path) {
+    let st = Command::new("cp")
+        .arg("--")
+        .arg(src)
+        .arg(dst)
+        .stdin(Stdio::null())
+        .status()
+        .unwrap();
+    assert!(
+        st.success(),
+        "plant: cp {} {}: {st}",
+        src.display(),
+        dst.display()
+    );
 }
 
 fn verdicts(t: &Tree) -> Vec<(String, String)> {
@@ -426,4 +448,50 @@ fn a_resident_reaches_its_own_broker_socket_and_nothing_else() {
     );
     drop(held);
     let _ = fs::remove_dir_all(&t.broker);
+}
+
+/// The ETXTBSY race (`place_exe`): while another thread spawns children as fast as it can (as
+/// parallel tests do), place and run a fresh copy of the probe `ROUNDS` times. Not one exec may
+/// be refused `ETXTBSY` (os error 26). The race is not deterministic. Planted with `fs::copy` in
+/// `place_exe`, this test was red in each of three runs on hbox (23, 30 and 41
+/// of 300 execs ETXTBSY).
+#[test]
+fn a_placed_executable_is_never_busy_under_concurrent_spawns() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    const ROUNDS: usize = 300;
+    let d = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("iso-{}-busy", std::process::id()));
+    let _ = fs::remove_dir_all(&d);
+    fs::create_dir_all(&d).unwrap();
+    let stop = Arc::new(AtomicBool::new(false));
+    let s2 = Arc::clone(&stop);
+    let spawner = std::thread::spawn(move || {
+        let mut n = 0u64;
+        while !s2.load(Ordering::Relaxed) {
+            if let Ok(mut c) = Command::new("true").stdin(Stdio::null()).spawn() {
+                let _ = c.wait();
+                n += 1;
+            }
+        }
+        n
+    });
+    let mut busy = 0;
+    for i in 0..ROUNDS {
+        let p = d.join(format!("probe{i}"));
+        place_exe(Path::new(env!("CARGO_BIN_EXE_probe")), &p);
+        // the probe finds no targets beside it and ends 2: only the exec matters here
+        match Command::new(&p).env_clear().stdin(Stdio::null()).status() {
+            Ok(_) => {}
+            Err(e) if e.raw_os_error() == Some(26) => busy += 1,
+            Err(e) => panic!("exec {}: {e}", p.display()),
+        }
+    }
+    stop.store(true, Ordering::Relaxed);
+    let spawned = spawner.join().unwrap();
+    let _ = fs::remove_dir_all(&d);
+    assert!(spawned > 0, "control: the spawner thread spawned nothing");
+    assert_eq!(
+        busy, 0,
+        "{busy} of {ROUNDS} execs were ETXTBSY ({spawned} concurrent spawns)"
+    );
 }
