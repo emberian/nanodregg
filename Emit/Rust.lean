@@ -127,7 +127,10 @@ def oneOfEnum (name : String) (cases : List (String × UInt8)) : String :=
     cases.map (fun c => s!"                {ty}::{camel c.1} => {c.2},") ++
     ["            }", "        }", "", "        pub fn from_code(b: u8) -> Option<Self> {", "            match b {"] ++
     cases.map (fun c => s!"                {c.2} => Some({ty}::{camel c.1}),") ++
-    ["                _ => None,", "            }", "        }", "    }"]
+    ["                _ => None,", "            }", "        }", "",
+     "        /// The Lean name of the case.", "        pub fn name(self) -> &'static str {", "            match self {"] ++
+    cases.map (fun c => s!"                {ty}::{camel c.1} => \"{c.1}\",") ++
+    ["            }", "        }", "    }"]
 
 /-- The cursor's `oneOf` reader, emitted only when some layout has a `oneOf` field. -/
 def oneOfReader : String := String.intercalate "\n" [

@@ -279,6 +279,15 @@ pub mod layout {
                 _ => None,
             }
         }
+
+        /// The Lean name of the case.
+        pub fn name(self) -> &'static str {
+            match self {
+                Op::Lookup => "lookup",
+                Op::Read => "read",
+                Op::Log => "log",
+            }
+        }
     }
 
     #[derive(Debug, Clone, PartialEq, Eq)]

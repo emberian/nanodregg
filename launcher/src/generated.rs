@@ -277,6 +277,18 @@ pub mod wire {
                 _ => None,
             }
         }
+
+        /// The Lean name of the case.
+        pub fn name(self) -> &'static str {
+            match self {
+                GrainRefusal::LabelUnclean => "labelUnclean",
+                GrainRefusal::EntryUnclean => "entryUnclean",
+                GrainRefusal::IdUnclean => "idUnclean",
+                GrainRefusal::MalformedGrain => "malformedGrain",
+                GrainRefusal::CrashLoop => "crashLoop",
+                GrainRefusal::ResidentUnsupported => "residentUnsupported",
+            }
+        }
     }
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -316,6 +328,20 @@ pub mod wire {
                 6 => Some(LaunchFailure::Exposed),
                 7 => Some(LaunchFailure::SpawnFailed),
                 _ => None,
+            }
+        }
+
+        /// The Lean name of the case.
+        pub fn name(self) -> &'static str {
+            match self {
+                LaunchFailure::Unsupported => "unsupported",
+                LaunchFailure::MechanismMissing => "mechanismMissing",
+                LaunchFailure::UnnameablePath => "unnameablePath",
+                LaunchFailure::PathMissing => "pathMissing",
+                LaunchFailure::ProgramNotAbsolute => "programNotAbsolute",
+                LaunchFailure::ProgramOutside => "programOutside",
+                LaunchFailure::Exposed => "exposed",
+                LaunchFailure::SpawnFailed => "spawnFailed",
             }
         }
     }
