@@ -124,3 +124,26 @@ the prefix and prove the tags prefix-free (a decidable fact about a closed list)
 **Meta-critique.** Prefix-freeness is a decidable property of seven literals. A theorem would be cheaper
 than an interface change. I prefer the interface because it cannot regress.
 Status: open (KERNEL to answer in decisions/kernel.md).
+
+## CODEC-8 · The follow payloads are layouts as data; every field is self-delimiting (2026-10-16)
+**Decision.** The step frames (`Step.layout`), `commandLayout` and `resumeLayout` are `Codec.Layout`
+data in Protocol/Table.lean. Field kinds are `byte | bytes | list`, every byte-string is `u32le len ‖
+bytes`, and the bound is the frame's. `Codec.Layout.codec` turns a layout into the one Stream, and
+`Stream.tagged` reads the step tag and then that step's layout. `Emit.Rust` prints `generated::layout::
+{Command, Resume, Step}` with `decode`/`encode` that follow the Lean codec byte for byte (same
+order, bounds, refusals and offsets). **Wire change accepted by ROOT:** the continuation `k` (in
+sign/host/submit) and `resume.result` are length-prefixed fields, no longer "the rest of the
+payload". CLIENT's successor deletes client/src/wire.rs (CLIENT-10) and uses `generated::layout`.
+`resume.result` is the signature for `sign`, or the Host reply `u8 status ‖ payload` for host/submit,
+opaque to the codec.
+**Alternatives.** Keep `k…` as the rest of the payload (CLIENT-10's layout). Or a per-step hand
+codec in Protocol.
+**Why.** A field that is "the rest" is not a prefix codec. Its bytes depend on what follows it, so
+`get_of_occurs` cannot hold and the layout could not be proved canonical. With every field
+self-delimiting, `Step.frame_lawful` follows from the combinator theorems with no new proof.
+**Critique.** 4 extra bytes per k/result. Field types are untyped bytes: `op` is a raw byte, not
+`Op`, and `result`'s inner structure is not in the layout. A follow that sends an unknown op inside
+a `host` step is caught by the Host, not by this codec.
+**Meta-critique.** I made the layout as simple as the client's existing reader. A typed layout
+(op ∈ Op) would let the codec refuse more, and I deferred it because nothing yet depends on it.
+Status: open.

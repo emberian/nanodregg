@@ -1,0 +1,28 @@
+import Protocol.Table
+import Codec.Layout
+
+/-!
+# Protocol.Frames — the follow socket's payloads as codecs
+
+Each payload's layout is data in `Protocol.Table`. This module turns it into the one codec
+(`Codec.Layout.codec`), and `Emit.Rust` prints the Rust reader and writer from the same data, so the
+client holds no hand-written copy (CLIENT-10). Canonicity: `Protocol.Proofs.Frames`.
+-/
+
+namespace Nanodregg.Protocol
+
+open Nanodregg.Codec
+
+/-- A step as it travels: its tag, then that step's fields. -/
+abbrev Step.Frame := (s : Step) × Layout.Ty Bounds.frameBytesMax s.layout
+
+def Step.frame : Stream Step.Frame :=
+  Stream.tagged Step.all Step.code Step.ofCode? fun s => Layout.codec Bounds.frameBytesMax (by decide) s.layout
+
+def commandFrame : Stream (Layout.Ty Bounds.argvBytesMax commandLayout) :=
+  Layout.codec Bounds.argvBytesMax (by decide) commandLayout
+
+def resumeFrame : Stream (Layout.Ty Bounds.frameBytesMax resumeLayout) :=
+  Layout.codec Bounds.frameBytesMax (by decide) resumeLayout
+
+end Nanodregg.Protocol

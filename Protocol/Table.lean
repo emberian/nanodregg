@@ -18,6 +18,8 @@ own seal; consent frames are `host follow` (HOST-7).
 Each operation names the one function that answers it (`receiver`). The names are data until the
 receiving layers commit those declarations; a gate then resolves each name in the environment.
 -/
+import Codec.Layout
+
 namespace Nanodregg.Protocol
 
 /-- The two sockets of a deployment. -/
@@ -132,7 +134,22 @@ def code : Step → UInt8
 
 def ofCode? (b : UInt8) : Option Step := all.find? (·.code == b)
 
+/-- The fields of each step's frame, after its tag byte (CLIENT-10). `k` is the follow machine's
+opaque continuation; the client echoes it back in `resume` and never reads it. -/
+def layout : Step → Codec.Layout
+  | done => [.byte "exit", .bytes "stdout", .bytes "stderr"]
+  | sign => [.bytes "message", .bytes "k"]
+  | host => [.byte "op", .bytes "payload", .bytes "k"]
+  | submit => [.bytes "call", .bytes "k"]
+
 end Step
+
+/-- The `command` payload: the member's argv. -/
+def commandLayout : Codec.Layout := [.list "argv"]
+
+/-- The `resume` payload: the continuation from the step, and that step's result (the signature
+for `sign`; the Host's reply, `u8 status ‖ payload`, for `host` and `submit`). -/
+def resumeLayout : Codec.Layout := [.bytes "k", .bytes "result"]
 
 /-! The bounds the client and the supervisor enforce before allocating. -/
 namespace Bounds

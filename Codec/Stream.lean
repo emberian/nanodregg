@@ -36,7 +36,9 @@ inductive Shape where
   whenever the accepted set changes; the shape cannot see inside a function. -/
   | refine (name : String) (s : Shape)
   | framed (tag : Digest) (s : Shape)
-  deriving DecidableEq, Repr
+  /-- One tag byte, then the shape that tag selects. -/
+  | tagged (cases : List (UInt8 × Shape))
+  deriving Repr
 
 /-- A byte string of at most `max` bytes. -/
 abbrev Bytes (max : Nat) := { b : ByteArray // b.size ≤ max }
@@ -228,6 +230,21 @@ def framed (tag : Digest) (c : Stream α) : Stream α where
     if i + 32 ≤ b.size then
       if b.extract i (i + 32) = tag.bytes then c.get b (i + 32) else .error (.wrongFrame i)
     else .error (.truncated i 32)
+
+/-- One of several cases: its tag byte `code s`, then that case's value. `ofCode?` is the inverse of
+`code`; a byte it does not know is refused as `badTag`. `all` lists the cases for the shape. -/
+def tagged {σ : Type} {F : σ → Type} (all : List σ) (code : σ → UInt8) (ofCode? : UInt8 → Option σ)
+    (c : (s : σ) → Stream (F s)) : Stream ((s : σ) × F s) where
+  shape := .tagged (all.map fun s => (code s, (c s).shape))
+  put v buf := (c v.1).put v.2 (buf.push (code v.1))
+  get b i :=
+    match u8.get b i with
+    | .error e => .error e
+    | .ok (t, j) => match ofCode? t with
+      | none => .error (.badTag i t)
+      | some s => match (c s).get b j with
+        | .ok (v, k) => .ok (⟨s, v⟩, k)
+        | .error e => .error e
 
 end Stream
 end Nanodregg.Codec

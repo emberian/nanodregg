@@ -628,4 +628,43 @@ theorem array_lawful {c : Stream α} (hc : Lawful c) (max : Nat) (fits : max < 2
         · cases h
       · cases h
 
+theorem tagged_bytes {σ : Type} {F : σ → Type} {all : List σ} {code : σ → UInt8}
+    {ofCode? : UInt8 → Option σ} {c : (s : σ) → Stream (F s)} (hc : ∀ s, Lawful (c s))
+    (v : (s : σ) × F s) :
+    (tagged all code ofCode? c).bytes v = u8.bytes (code v.1) ++ (c v.1).bytes v.2 := by
+  simp only [bytes, tagged]
+  rw [(hc v.1).put_eq]; rfl
+
+theorem tagged_lawful {σ : Type} {F : σ → Type} (all : List σ) {code : σ → UInt8}
+    {ofCode? : UInt8 → Option σ} {c : (s : σ) → Stream (F s)} (hc : ∀ s, Lawful (c s))
+    (of_code : ∀ s, ofCode? (code s) = some s) (code_of : ∀ t s, ofCode? t = some s → code s = t) :
+    Lawful (tagged all code ofCode? c) where
+  put_eq v buf := by
+    rw [tagged_bytes hc]
+    simp only [tagged]
+    rw [(hc v.1).put_eq, push_eq_append, ByteArray.append_assoc]; rfl
+  get_of_occurs v b i h := by
+    rw [tagged_bytes hc] at h ⊢
+    obtain ⟨h1, h2⟩ := occursAt_append.mp h
+    have h2' : OccursAt b (i + 1) ((c v.1).bytes v.2) := h2
+    simp [tagged, u8_lawful.get_of_occurs _ _ _ h1, of_code, (hc v.1).get_of_occurs _ _ _ h2',
+      ByteArray.size_append, Nat.add_assoc]
+  occurs_of_get {b i v j} h := by
+    simp only [tagged] at h
+    split at h
+    · cases h
+    · rename_i t k hk
+      split at h
+      · cases h
+      · rename_i s hs
+        split at h
+        · rename_i w m hw
+          cases h
+          obtain ⟨rfl, o1⟩ := u8_lawful.occurs_of_get hk
+          obtain ⟨rfl, o2⟩ := (hc s).occurs_of_get hw
+          rw [tagged_bytes hc]
+          simp only [code_of _ _ hs]
+          exact ⟨by simp [ByteArray.size_append, Nat.add_assoc], occursAt_append.mpr ⟨o1, o2⟩⟩
+        · cases h
+
 end Nanodregg.Codec.Stream

@@ -6,27 +6,27 @@
 | metric | now | ceiling |
 |---|---|---|
 | Lean modules in the Host closure | 0 | 150 |
-| Lean lines (deployed) | 4749 | — |
+| Lean lines (deployed) | 5068 | — |
 | protocol operations | 6 | 6 |
 | call kinds (Receive.Call constructors) | 0 | 7 |
 | command verbs (the one command language) | 0 | 20 |
 | protocol status / step codes | 4 / 4 | — |
 | conformance rows | 11 (Protocol/Rows.lean; every op reached: every_op_has_a_row) | — |
 | refusal constructors | 40 | — (ratchet: may only fall without a row that needs the new one) |
-| Rust lines | 2389 | — |
-| Rust lines (client/src) | 1436 | 2000 |
+| Rust lines | 2637 | — |
+| Rust lines (client/src) | 1684 | 2000 |
 | partial defs (deployed) | 0 | 0 |
-| theorems | 198 | — |
+| theorems | 205 | — |
 | sorry | 0 | 0 |
-| Lean modules | 59 | — |
-| Lean proof-modules | 18 | — |
+| Lean modules | 63 | — |
+| Lean proof-modules | 20 | — |
 | Lean lines (Census) | 89 | — |
-| Lean lines (Codec) | 951 | — |
-| Lean lines (Emit) | 77 | — |
+| Lean lines (Codec) | 1081 | — |
+| Lean lines (Emit) | 279 | — |
 | Lean lines (Host) | 1204 | — |
 | Lean lines (Kernel) | 2112 | — |
-| Lean lines (Protocol) | 493 | — |
-| max dependents of one module | 33 | — |
+| Lean lines (Protocol) | 563 | — |
+| max dependents of one module | 39 | — |
 | native (extern/implemented_by) | 8 | 8 |
 | C lines | 0 | 146 |
 | Lean lines (Lang) | 2559 | — |
