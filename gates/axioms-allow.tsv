@@ -1,1 +1,3 @@
 # decl	axiom	reason
+Nanodregg.Hosting.Proofs.lifecycle_text_reads	Nanodregg.Hosting.Proofs.lifecycle_text_reads._native.native_decide.ax_1_1	the shipped grain text reads to the package bytes; the kernel did not finish the printer alone in 200 s (11 KB of String appends, measured 10-17, decisions/hosting.md HOSTING-0)
+Nanodregg.Hosting.Proofs.lifecycle_text_reads._native.native_decide.ax_1_1	Nanodregg.Hosting.Proofs.lifecycle_text_reads._native.native_decide.ax_1_1	the auxiliary axiom native_decide declares for lifecycle_text_reads (the census visits it as a declaration of Hosting.Proofs.Package)

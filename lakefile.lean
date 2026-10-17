@@ -38,6 +38,13 @@ package nanodregg where
 @[default_target] lean_lib Codec where
   globs := #[.submodules `Codec]
 
+@[default_target] lean_lib Hosting where
+  globs := #[.submodules `Hosting]
+
+-- HOSTING's grain lifecycle through KERNEL's receivers, with its plants (standing's sim stage).
+@[default_target] lean_exe «hosting-sim» where
+  root := `Hosting.Sim.Main
+
 -- The Rust copy of the protocol table (client/src/generated.rs). Imports Protocol; nothing imports it.
 @[default_target] lean_lib Emit where
   globs := #[.submodules `Emit]
