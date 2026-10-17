@@ -46,6 +46,7 @@ proposals/gates.md	GATES
 Hosting/	HOSTING
 launcher/	HOSTING
 launcher/src/generated.rs	CODEC
+launcher/src/broker_generated.rs	CODEC
 world/	HOSTING
 decisions/hosting.md	HOSTING
 proposals/hosting.md	HOSTING
