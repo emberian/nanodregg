@@ -1,42 +1,127 @@
-//! The isolation plant (DECISIONS CLIENT-8): a confined child cannot read a seed under a hidden
-//! directory, while the same command unconfined can (so the plant is not vacuous).
+//! The isolation plants (CLIENT-8, CLIENT-9). A confined child reads what its policy allows and
+//! nothing else: not the seed under the hidden workspace, and not a file nobody mentioned (the
+//! allow-list property a deny-list fails). The same commands unconfined succeed, and an allowed
+//! file is read confined, so neither plant is vacuous. A policy that reaches the workspace is
+//! refused before anything runs.
 #![allow(clippy::unwrap_used)] // a plant that cannot set up is a failed plant
 use std::ffi::OsStr;
 use std::fs;
+use std::path::PathBuf;
+use std::process::Output;
 
-use nanodregg_sandbox::{Policy, command};
+use nanodregg_sandbox::{ConfineError, Policy, command};
 
-#[test]
-fn confined_child_cannot_read_the_seed() {
-    let ws = std::env::temp_dir().join(format!("nd-confine-{}", std::process::id()));
-    let _ = fs::remove_dir_all(&ws);
-    fs::create_dir(&ws).unwrap();
-    let seed = ws.join("seed");
-    fs::write(&seed, b"SEED-BYTES").unwrap();
-    let cat = OsStr::new("/bin/cat");
+const CAT: &str = "/bin/cat";
 
-    let control = std::process::Command::new(cat).arg(&seed).output().unwrap();
-    assert_eq!(
-        control.stdout, b"SEED-BYTES",
-        "control: unconfined, the seed is readable"
-    );
+struct Tree {
+    root: PathBuf,
+    ws: PathBuf,
+    allowed: PathBuf,
+    other: PathBuf,
+}
 
-    let policy = Policy {
-        hidden: vec![ws.clone()],
+fn tree(name: &str) -> Tree {
+    let root = std::env::temp_dir().join(format!("nd-confine-{}-{name}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).unwrap();
+    // The child is given real paths: the profile allows `/private/var/…`, not the `/var` link.
+    let root = root.canonicalize().unwrap();
+    let t = Tree {
+        ws: root.join("ws"),
+        allowed: root.join("allowed"),
+        other: root.join("other"),
+        root,
     };
-    let out = command(&policy, cat, &[seed.as_os_str()])
+    for (d, f, b) in [
+        (&t.ws, "seed", "SEED-BYTES"),
+        (&t.allowed, "f", "ALLOWED"),
+        (&t.other, "g", "OTHER"),
+    ] {
+        fs::create_dir_all(d).unwrap();
+        fs::write(d.join(f), b).unwrap();
+    }
+    t
+}
+
+fn confined(policy: &Policy, file: &std::path::Path) -> Output {
+    command(policy, OsStr::new(CAT), &[file.as_os_str()])
         .unwrap()
         .output()
-        .unwrap();
-    assert!(!out.status.success(), "isolation: child read the seed");
-    assert!(out.stdout.is_empty(), "isolation: child read the seed");
-    fs::remove_dir_all(&ws).unwrap();
+        .unwrap()
 }
 
 #[test]
-fn a_missing_hidden_path_refuses_to_launch() {
+fn confined_child_reads_what_is_allowed_and_nothing_else() {
+    let t = tree("read");
+    let (seed, f, g) = (t.ws.join("seed"), t.allowed.join("f"), t.other.join("g"));
+    for (p, b) in [(&seed, &b"SEED-BYTES"[..]), (&g, b"OTHER")] {
+        let control = std::process::Command::new(CAT).arg(p).output().unwrap();
+        assert_eq!(
+            control.stdout,
+            b,
+            "control: unconfined, {} is readable",
+            p.display()
+        );
+    }
     let policy = Policy {
-        hidden: vec!["/nonexistent/nd-confine".into()],
+        read: vec![t.allowed.clone()],
+        hidden: vec![t.ws.clone()],
+        ..Policy::default()
     };
-    assert!(command(&policy, OsStr::new("/bin/true"), &[]).is_err());
+    let ok = confined(&policy, &f);
+    assert_eq!(
+        ok.stdout,
+        b"ALLOWED",
+        "confined: the allowed file is read: {}",
+        String::from_utf8_lossy(&ok.stderr)
+    );
+    let out = confined(&policy, &seed);
+    assert!(
+        !out.status.success() && out.stdout.is_empty(),
+        "isolation: child read the seed"
+    );
+    let out = confined(&policy, &g);
+    assert!(
+        !out.status.success() && out.stdout.is_empty(),
+        "allow-list: child read an unmentioned file"
+    );
+    fs::remove_dir_all(&t.root).unwrap();
+}
+
+#[test]
+fn a_policy_that_reaches_the_workspace_is_refused() {
+    let t = tree("exposed");
+    let wider = Policy {
+        read: vec![t.root.clone()],
+        hidden: vec![t.ws.clone()],
+        ..Policy::default()
+    };
+    let inside = Policy {
+        write: vec![t.ws.clone()],
+        hidden: vec![t.ws.clone()],
+        ..Policy::default()
+    };
+    for p in [wider, inside] {
+        assert!(matches!(
+            command(&p, OsStr::new(CAT), &[]),
+            Err(ConfineError::Exposed { .. })
+        ));
+    }
+    fs::remove_dir_all(&t.root).unwrap();
+}
+
+#[test]
+fn a_missing_path_or_a_relative_program_refuses_to_launch() {
+    let missing = Policy {
+        hidden: vec!["/nonexistent/nd-confine".into()],
+        ..Policy::default()
+    };
+    assert!(matches!(
+        command(&missing, OsStr::new("/bin/true"), &[]),
+        Err(ConfineError::PathMissing(..))
+    ));
+    assert!(matches!(
+        command(&Policy::default(), OsStr::new("true"), &[]),
+        Err(ConfineError::ProgramNotAbsolute(_))
+    ));
 }

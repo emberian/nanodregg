@@ -22,7 +22,8 @@ their critiques: `DECISIONS.md` CLIENT-1..7.
   socket, accepts connections, and moves `(conn, op, payload)` frames to a Lean child's stdin and
   `(conn, status, payload)` replies back by `conn`. It parses no payload. It serves both `host serve`
   and `host follow` (HOST-7: consent is `host follow`). It is started by the service manager, never by `nd`; it launches its child through `sandbox/`
-  so the child cannot read the member's seed (CLIENT-8, plant in `sandbox/tests/confine.rs`), and it
+  so the child sees only its program, its Store and the platform floor, never the member's seed
+  (CLIENT-8/9, deny by default; plants in `sandbox/tests/confine.rs`), and it
   exits when the child does (one restart path: the service manager's).
 - `host.sock` may be a local socket or an OpenSSH `StreamLocalForward` of the remote one; the client
   cannot tell and does not care (CLIENT-4).

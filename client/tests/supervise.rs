@@ -3,20 +3,12 @@
 //! CLIENT-8 plant through the real binary: the answer must be "denied".
 #![allow(clippy::unwrap_used)] // a plant that cannot set up is a failed plant
 use std::os::unix::net::UnixStream;
-use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
+use std::process::Command;
+use std::time::Duration;
 
 use nanodregg_client::{frame, table};
 
-/// Stops the supervisor this test started, by its own handle, even when an assertion fails;
-/// its stdio is not inherited, so a leaked one could not hold the test runner's pipes either.
-struct Supervisor(std::process::Child);
-impl Drop for Supervisor {
-    fn drop(&mut self) {
-        let _ = self.0.kill();
-        let _ = self.0.wait();
-    }
-}
+mod common;
 
 const CHILD: &str = r#"
 import struct, sys
@@ -40,33 +32,11 @@ fn supervised_child_answers_and_cannot_read_the_seed() {
     let ws = std::env::temp_dir().join(format!("nd-sup-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&ws);
     std::fs::create_dir(&ws).unwrap();
+    let ws = ws.canonicalize().unwrap();
     std::fs::write(ws.join("seed"), b"SEED").unwrap();
     let sock = std::env::temp_dir().join(format!("nd-sup-{}.sock", std::process::id()));
-    let _sup = Supervisor(
-        Command::new(env!("CARGO_BIN_EXE_nd-supervise"))
-            .arg(&sock)
-            .arg("--hide")
-            .arg(&ws)
-            .arg("--")
-            .args(["python3", "-c", CHILD])
-            .arg(ws.join("seed"))
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .unwrap(),
-    );
-    let deadline = Instant::now() + Duration::from_secs(10);
-    let mut c = loop {
-        if let Ok(c) = UnixStream::connect(&sock) {
-            break c;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "supervisor never bound its socket"
-        );
-        std::thread::sleep(Duration::from_millis(50));
-    };
+    let _sup = common::supervise(&sock, &ws, &[], CHILD, &[&ws.join("seed")]);
+    let mut c = UnixStream::connect(&sock).unwrap();
     c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
     frame::write(&mut c, table::LIMITS, 5, b"").unwrap();
     let reply = frame::read(&mut c, table::LIMITS).unwrap();

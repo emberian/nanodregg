@@ -6,26 +6,51 @@ transport only, ≤ 2,000 lines), CLIENT-2 (follow drives by steps; ruled, proto
 scheme), CLIENT-6 (no binary until the generated table), CLIENT-7 (sandbox/ own crate, Hermes is a member;
 ruled), CLIENT-8 (isolation invariant), KEY-CUSTODY (open, for Ember).
 
-## CLIENT-9 one confinement shape, one mechanism per platform, no fallback (2026-10-16)
+## CLIENT-9 one confinement shape, deny by default, one mechanism per platform, no fallback (2026-10-16; allow-list landed by CLIENT-2)
 **Decision.** `sandbox/` exposes one function: `command(policy, program, args) -> Command`. The policy
-is a list of hidden paths (an input; for a Lean child it is "the member's workspace", for a hosted
-resident it will be Lean's profile). Linux: `bwrap --unshare-all --disable-userns --cap-drop ALL
---clearenv --ro-bind / / --dev /dev --proc /proc --tmpfs <hidden>…`. macOS: `sandbox-exec` with
-`(allow default)(deny file-read* file-write* (subpath <hidden>))…`. Any other platform, a missing
-mechanism, a hidden path that does not exist or cannot be named safely: refused by name, never launched.
-**Alternatives.** (a) An allow-list profile (deny default, allow the Store and the binary's libraries);
-(b) Landlock on Linux (in-process, no bwrap); (c) minidregg's two bwrap profiles (SPK floor and the
-weaker Hermes worker profile, P3).
-**Why.** The invariant CLIENT-8 states is a deny ("cannot read the seed"), so a deny-list states it
-exactly and the plant tests exactly it. One argv shape for every child is law 1 (minidregg's P3 twin).
-**Critique.** A deny-list hides only what it names: the child still reads the rest of the member's home
-(other keys, ssh agent socket, browser profiles). An allow-list (a) is the honest shape for a parser of
-untrusted bytes, and on Linux `--ro-bind / /` is the opposite of minimal. `sandbox-exec` is deprecated
-by Apple and could vanish. The Linux branch is `cargo check`ed on the Mac but has not run (no Linux box
-in use; hbox is off limits).
-**Meta-critique.** I chose the shape that makes today's plant pass on the machine I have; the allow-list
-is harder and I postponed it by calling the deny-list "exact".
-**Status.** open (allow-list is the named next step).
+is ALLOWS plus an invariant: `read`, `write`, `exec` (paths the child may touch; the program, which must
+be absolute, is always read+exec) and `hidden` (paths that must lie outside every allowed path and the
+platform floor; a policy where one reaches the other, either way, is refused as `Exposed` before
+launch). macOS: `sandbox-exec` with `(deny default)`, `process-exec` of the program and `exec`,
+`file-read*` of the floor + read/exec/write, `file-write*` of write, `file-read-metadata` of each
+allowed path's ancestors (realpath stats them). The macOS floor was MEASURED by bisecting a deny-default
+profile until `/bin/cat` and a lake-built Lean exe (host-sim, ALL PASS) ran: the `/` listing (literal;
+dyld aborts with rc 134 without it — the predecessor's failed attempt), `/dev/urandom` (the Lean
+runtime opens it at start), `/usr/lib`, `/System/Volumes/Preboot/Cryptexes` (the dyld shared cache).
+No network, no mach/IPC, no fork, no sysctl. Linux: `bwrap --unshare-all --disable-userns --cap-drop
+ALL --clearenv --dev /dev --proc /proc`, read-only binds of the floor (`/usr`, `/lib`, `/lib64`,
+`/etc/ld.so.cache`, the optional ones `-try`) and of read/exec/program, `--bind` of write, nothing else
+mounted. The environment is cleared on both. Any other platform, a missing mechanism, a missing or
+unnameable path: refused by name, never launched. `nd-supervise` takes `--hide/--read/--write/--exec`.
+A Host child gets `--write STORE --hide WORKSPACE` and nothing else (HOST-2's answer: STORE is the only
+path it reads or writes). It gets NO socket: the child speaks only stdio, the supervisor holds the
+sockets, so the brief's "allow the sockets" is deliberately not granted.
+**Alternatives.** (a) The deny-list this replaced (`(allow default)` minus the hidden paths, `--ro-bind
+/ /` + tmpfs); (b) Landlock on Linux (in-process, no bwrap); (c) minidregg's two bwrap profiles (P3);
+(d) a whole-volume read allow with only writes restricted.
+**Why.** The child is a parser of bytes from the network (a friend's frames); it should see the Store
+and its own runtime, not the member's home (other keys, the ssh agent socket, browser profiles), which a
+deny-list exposed. With deny-by-default the CLIENT-8 invariant is a CHECK on the policy plus a plant on
+the profile, not a rule that might be forgotten. One argv shape for every child is law 1.
+**Critique.** The floor is a hand list measured on ONE macOS version; an update that moves the dyld cache
+breaks every child at launch (loudly: abort, which is the right failure, but a dead node). `/usr/lib`
+and `/System/…/Cryptexes` are subtrees, wider than the dylibs one exe links. Children must be given
+REAL paths (a `/var/…` argument fails: the `/var` link is not readable); nd-supervise does not rewrite
+argv, so the service file must. `sandbox-exec` is deprecated by Apple. The Linux branch has only been
+`cargo clippy --target x86_64-unknown-linux-gnu`-checked, never run (no Linux box; hbox is Ember's):
+merged-/usr distributions with `/lib → usr/lib` symlinks may need `--symlink` instead of a bind, and
+that is unknown. The tests' python children need their framework prefix as read+exec (it re-execs
+itself), which is a test fixture's need leaking into the policy surface (`exec`).
+**Meta-critique.** I measured the floor with the two binaries I had and stopped when they ran; a real
+`host serve` (FFI to Host/c, fsync, flock on LOCK) may need more, and I am assuming flock/fsync on an
+allowed fd need no extra operation. The "no sockets" call contradicts my brief; I think the brief
+assumed the child dials, and HOST-2 says it does not.
+**Plants.** sandbox/tests/confine.rs: confined cat reads an allowed file (control), fails on the seed in
+the hidden workspace AND on an unmentioned sibling file (the allow-list property: red under the old
+deny-list), a policy reaching the workspace (read its parent, or write it) is `Exposed`. Mutations:
+adding `(subpath "/")` to the read clause, or `(allow default)`, turns both confine and
+client/tests/supervise.rs red (`isolation: child read the seed`).
+**Status.** landed (macOS run; Linux check-only).
 
 ## CLIENT-10 the step layout read by hand until it is emitted — a twin with an expiry (2026-10-16)
 **Decision.** `client/src/wire.rs` reads and writes the step layouts of proposals/client.md §2

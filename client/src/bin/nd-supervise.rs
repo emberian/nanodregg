@@ -1,7 +1,8 @@
-//! `nd-supervise SOCKET [--hide PATH]… -- PROGRAM [ARG]…`
+//! `nd-supervise SOCKET (--hide|--read|--write|--exec PATH)… -- /ABS/PROGRAM [ARG]…`
 //!
-//! Binds SOCKET (mode 0600), starts PROGRAM confined by `sandbox` with every `--hide` path hidden
-//! (CLIENT-8: the member's workspace, so the child cannot read the seed), and moves frames between
+//! Binds SOCKET (mode 0600), starts PROGRAM confined by `sandbox` (CLIENT-9: the child sees only
+//! its program, the `--read`/`--write`/`--exec` paths and the platform floor; every `--hide` path,
+//! the member's workspace first, must lie outside all of them, CLIENT-8), and moves frames between
 //! the socket's connections and the child's stdio (`mux`). It exits when the child does, with the
 //! child's status; the service manager restarts the pair. Nothing is parsed but frame headers.
 
@@ -17,26 +18,31 @@ use nanodregg_client::mux::{self, MuxEnd};
 use nanodregg_client::table;
 use nanodregg_sandbox::{Policy, command};
 
-const USAGE: &str = "usage: nd-supervise SOCKET [--hide PATH]... -- PROGRAM [ARG]...";
+const USAGE: &str =
+    "usage: nd-supervise SOCKET (--hide|--read|--write|--exec PATH)... -- /ABS/PROGRAM [ARG]...";
 
 struct Args {
     socket: PathBuf,
-    hidden: Vec<PathBuf>,
+    policy: Policy,
     program: OsString,
     args: Vec<OsString>,
 }
 
 fn parse(mut argv: impl Iterator<Item = OsString>) -> Result<Args, String> {
     let socket = PathBuf::from(argv.next().ok_or(USAGE)?);
-    let mut hidden = Vec::new();
+    let mut policy = Policy::default();
     loop {
-        match argv.next() {
-            Some(a) if a == "--hide" => hidden.push(PathBuf::from(argv.next().ok_or(USAGE)?)),
+        let list = match argv.next() {
             Some(a) if a == "--" => break,
+            Some(a) if a == "--hide" => &mut policy.hidden,
+            Some(a) if a == "--read" => &mut policy.read,
+            Some(a) if a == "--write" => &mut policy.write,
+            Some(a) if a == "--exec" => &mut policy.exec,
             _ => return Err(USAGE.into()),
-        }
+        };
+        list.push(PathBuf::from(argv.next().ok_or(USAGE)?));
     }
-    if hidden.is_empty() {
+    if policy.hidden.is_empty() {
         return Err(
             "nd-supervise: refusing to start a child with nothing hidden (CLIENT-8)".into(),
         );
@@ -44,7 +50,7 @@ fn parse(mut argv: impl Iterator<Item = OsString>) -> Result<Args, String> {
     let program = argv.next().ok_or(USAGE)?;
     Ok(Args {
         socket,
-        hidden,
+        policy,
         program,
         args: argv.collect(),
     })
@@ -87,7 +93,7 @@ fn run() -> Result<ExitCode, String> {
     let listener =
         bind(&a.socket).map_err(|e| format!("nd-supervise: {}: {e}", a.socket.display()))?;
     let args: Vec<&std::ffi::OsStr> = a.args.iter().map(OsString::as_os_str).collect();
-    let mut child = command(&Policy { hidden: a.hidden }, &a.program, &args)
+    let mut child = command(&a.policy, &a.program, &args)
         .map_err(|e| format!("nd-supervise: {e}"))?
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

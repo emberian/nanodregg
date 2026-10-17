@@ -4,20 +4,12 @@
 //! `host follow` once HOST commits those executables (CLIENT-LOG, next 1). Follow asks: host(read "challenge?") → sign
 //! "observation" → submit "CALL" → done. The host answers the submit `uncertain`, so nd must look
 //! the SAME bytes up, and the lookup answers committed. Both children are confined away from the
-//! workspace (they cannot read the seed); follow verifies nothing here — it is a script.
+//! workspace and see only their python and the log directory (CLIENT-9); follow verifies nothing here — it is a script.
 #![allow(clippy::unwrap_used)] // a plant that cannot set up is a failed plant
-use std::os::unix::net::UnixStream;
-use std::path::Path;
-use std::process::{Child, Command, Stdio};
-use std::time::{Duration, Instant};
+use std::process::Command;
 
-struct Supervisor(Child);
-impl Drop for Supervisor {
-    fn drop(&mut self) {
-        let _ = self.0.kill();
-        let _ = self.0.wait();
-    }
-}
+mod common;
+use common::supervise;
 
 const LIB: &str = r#"
 import struct, sys
@@ -57,39 +49,14 @@ for conn, op, p in frames():
     elif op == 2: reply(conn, 0, b'receipt')
 "#;
 
-fn supervise(sock: &Path, hide: &Path, script: &str, log: &Path) -> Supervisor {
-    let s = Supervisor(
-        Command::new(env!("CARGO_BIN_EXE_nd-supervise"))
-            .arg(sock)
-            .arg("--hide")
-            .arg(hide)
-            .arg("--")
-            .args(["python3", "-c", &format!("{LIB}{script}")])
-            .arg(log)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .unwrap(),
-    );
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while UnixStream::connect(sock).is_err() {
-        assert!(
-            Instant::now() < deadline,
-            "supervisor never bound {}",
-            sock.display()
-        );
-        std::thread::sleep(Duration::from_millis(50));
-    }
-    s
-}
-
 #[test]
 fn stand_in_follow_and_host_challenge_sign_submit_lookup_done_through_the_binaries() {
     let root = std::env::temp_dir().join(format!("nd-rt-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
-    let ws = root.join("ws");
-    std::fs::create_dir_all(&ws).unwrap();
+    std::fs::create_dir_all(root.join("ws")).unwrap();
+    std::fs::create_dir_all(root.join("logs")).unwrap();
+    let root = root.canonicalize().unwrap();
+    let (ws, logs) = (root.join("ws"), root.join("logs"));
     let nd = |args: &[&str]| {
         Command::new(env!("CARGO_BIN_EXE_nd"))
             .env("ND_WORKSPACE", &ws)
@@ -98,9 +65,11 @@ fn stand_in_follow_and_host_challenge_sign_submit_lookup_done_through_the_binari
             .unwrap()
     };
     assert!(nd(&["--init"]).status.success());
-    let (flog, hlog) = (root.join("follow.log"), root.join("host.log"));
-    let _f = supervise(&ws.join("follow.sock"), &ws, FOLLOW, &flog);
-    let _h = supervise(&ws.join("host.sock"), &ws, HOST, &hlog);
+    let (flog, hlog) = (logs.join("follow.log"), logs.join("host.log"));
+    let follow = format!("{LIB}{FOLLOW}");
+    let host = format!("{LIB}{HOST}");
+    let _f = supervise(&ws.join("follow.sock"), &ws, &[&logs], &follow, &[&flog]);
+    let _h = supervise(&ws.join("host.sock"), &ws, &[&logs], &host, &[&hlog]);
 
     let out = nd(&["write", "note", "hi"]);
     assert!(
