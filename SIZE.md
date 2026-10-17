@@ -13,9 +13,9 @@
 | protocol status / step codes | 4 / 4 | — |
 | conformance rows | 12 (Protocol/Rows.lean: 11 member rows + lang-journey; every op reached: every_op_has_a_row) | — |
 | refusal constructors | 40 | — (ratchet: may only fall without a row that needs the new one) |
-| Rust lines | 2859 | — |
-| Rust lines (client/src) | 1658 | 2000 |
-| Rust lines (generated) | 0 | — |
+| Rust lines | 3544 | — |
+| Rust lines (client/src) | 1703 | 2000 |
+| Rust lines (generated) | 393 | — |
 | Rust files with an unregistered generated header | 0 | 0 |
 | partial defs (deployed) | 0 | 0 |
 | theorems | 577 | — |

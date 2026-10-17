@@ -232,4 +232,12 @@ by a follow step (above).
 one, which is a phase ordering chosen to avoid a hard part. Option 2 is harder to build and to use; I have
 not priced how often a two-friends deployment rotates, and that number decides whether Option 2's
 friction is paid once a year or every week.
-**Status.** open, for Ember (KEY-CUSTODY). CODEC emits `SignResult` (ROOT). Nothing implemented.
+**Status.** RULED by Ember (10-16): Option 2 for members (separate holding); a hosted resident has
+no offline and gets Option 1 (same record), with the rotate row's claim narrowed for it as above.
+Implemented in client/src/custody.rs: `Keys` with `Separate` and `SameRecord`; `precommit` (idempotent,
+durable), `sign_next`, `arm` (`ws/rotation` = attempt ‖ incoming ‖ pending, written before the first
+send), `settle` (advance on committed, drop pending on refused; idempotent); nd settles an armed
+rotation by lookup before every command. Custody refusals become tagged resume results that follow
+renders (PROTOCOL-2's answer) once PROTOCOL-3 adds the `precommit`/`signNext` steps; until then rotation
+is reachable only through the library and reconcile. The holding's checks (a 0700 directory, 0600
+files, owner) refuse FAT/exFAT media, which have no modes: a removable holding needs a POSIX file system.

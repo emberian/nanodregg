@@ -48,8 +48,8 @@ fn setup(name: &str) -> (std::path::PathBuf, Custody) {
     let d = std::env::temp_dir().join(format!("nd-run-{}-{name}", std::process::id()));
     let _ = std::fs::remove_dir_all(&d);
     std::fs::create_dir_all(d.join("attempts")).unwrap();
-    Custody::create(&d, "seed").unwrap();
-    let c = Custody::open(&d.join("seed")).unwrap();
+    Custody::create_same_record(&d).unwrap();
+    let c = Custody::open(&d, None).unwrap();
     (d, c)
 }
 
@@ -111,7 +111,7 @@ fn round_trip_with_a_lost_submit_reply() {
     );
     assert_eq!(
         follow.seen[1].1,
-        Outcome::Signature(custody.sign(b"observation").to_vec())
+        Outcome::Signed(custody.sign(b"observation").unwrap().encode().unwrap())
     );
     assert_eq!(
         follow.seen[3],
@@ -177,5 +177,102 @@ fn an_unsettled_call_is_reported_uncertain_with_its_attempt() {
         T,
     );
     assert!(matches!(r, Err(RunError::Uncertain(ref p)) if p.ends_with("0")));
+    std::fs::remove_dir_all(&d).unwrap();
+}
+
+#[test]
+fn an_armed_rotation_is_settled_by_lookup_before_the_command() {
+    use nanodregg_client::attempt::{Attempt, Settlement, State};
+    let (d, custody) = setup("reconcile");
+    let (next, _) = custody.precommit().unwrap();
+    let (_, r) = custody.sign_next(b"rotate").unwrap();
+    let a = Attempt::freeze(&d.join("attempts/0"), b"ROTATE").unwrap();
+    custody.arm(0, &r).unwrap();
+    // Sent, and its reply lost: uncertain on disk.
+    a.drive(State::Signed, 1, |_, _| Settlement::Unknown)
+        .unwrap();
+    let mut follow = ScriptedFollow {
+        steps: VecDeque::from([Step::Done {
+            exit: 0,
+            stdout: Vec::new(),
+            stderr: Vec::new(),
+        }]),
+        seen: Vec::new(),
+    };
+    let mut host = ScriptedHost {
+        replies: VecDeque::from([Ok((0, b"receipt".to_vec()))]),
+        asked: Vec::new(),
+    };
+    run::run(
+        &[],
+        &mut follow,
+        &mut host,
+        &custody,
+        &d.join("attempts"),
+        T,
+    )
+    .unwrap();
+    assert_eq!(
+        host.asked,
+        vec![(T.lookup, b"ROTATE".to_vec())],
+        "a lookup of the frozen bytes, never a resend"
+    );
+    assert_eq!(
+        custody.public_key().unwrap(),
+        next,
+        "advanced on custody's own settlement"
+    );
+    assert!(custody.armed().unwrap().is_none());
+    std::fs::remove_dir_all(&d).unwrap();
+}
+
+#[test]
+fn sign_next_then_a_committed_submit_advances_custody_in_one_command() {
+    let (d, custody) = setup("signnext");
+    let (next, pending) = custody.precommit().unwrap();
+    let mut follow = ScriptedFollow {
+        steps: VecDeque::from([
+            Step::Signnext {
+                message: b"rotate".to_vec(),
+                k: b"k1".to_vec(),
+            },
+            Step::Submit {
+                call: b"ROTATE".to_vec(),
+                k: b"k2".to_vec(),
+            },
+            Step::Done {
+                exit: 0,
+                stdout: Vec::new(),
+                stderr: Vec::new(),
+            },
+        ]),
+        seen: Vec::new(),
+    };
+    let mut host = ScriptedHost {
+        replies: VecDeque::from([Ok((0, b"receipt".to_vec()))]),
+        asked: Vec::new(),
+    };
+    run::run(
+        &[],
+        &mut follow,
+        &mut host,
+        &custody,
+        &d.join("attempts"),
+        T,
+    )
+    .unwrap();
+    let bytes = match &follow.seen[0].1 {
+        Outcome::Signed(b) => b.clone(),
+        o => Vec::from(format!("{o:?}")),
+    };
+    let s = nanodregg_client::generated::layout::SignResult::decode(&bytes).unwrap();
+    assert_eq!((s.key, s.next), (next.to_vec(), pending.to_vec()));
+    assert_eq!(
+        custody.public_key().unwrap(),
+        next,
+        "advanced on the committed settlement"
+    );
+    assert_eq!(custody.sign(b"").unwrap().next, pending.to_vec());
+    assert!(custody.armed().unwrap().is_none());
     std::fs::remove_dir_all(&d).unwrap();
 }

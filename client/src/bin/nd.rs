@@ -1,7 +1,9 @@
 //! `nd ARG…` — one member command. The workspace is `$ND_WORKSPACE` (`seed`, `follow.sock`,
 //! `host.sock`, `attempts/`). Every argument goes to `host follow` unread; `nd` performs the steps
-//! follow returns and prints what follow says to print. The one local verb is `nd --init`, which
-//! creates the workspace's seed and attempts directory (custody, not protocol).
+//! follow returns and prints what follow says to print. The local verbs are custody, not protocol
+//! (CLIENT-13): `nd --init` creates a member's keys, the next secret in `$ND_HOLDING` (a 0700
+//! directory on removable media or under another account); `nd --init-hosted` creates a hosted
+//! resident's one-record keys. `$ND_HOLDING` is read again only to rotate.
 
 use std::ffi::OsString;
 use std::io::Write;
@@ -27,12 +29,18 @@ fn main() -> ExitCode {
 fn go() -> Result<u8, String> {
     let ws = PathBuf::from(std::env::var_os("ND_WORKSPACE").ok_or("ND_WORKSPACE is not set")?);
     let argv: Vec<OsString> = std::env::args_os().skip(1).collect();
-    if argv.len() == 1 && argv[0] == "--init" {
+    let holding = std::env::var_os("ND_HOLDING").map(PathBuf::from);
+    if argv.len() == 1 && (argv[0] == "--init" || argv[0] == "--init-hosted") {
         std::fs::create_dir_all(ws.join("attempts")).map_err(|e| e.to_string())?;
-        Custody::create(&ws, "seed").map_err(|e| e.to_string())?;
+        let made = match holding {
+            _ if argv[0] == "--init-hosted" => Custody::create_same_record(&ws),
+            Some(h) => Custody::create_separate(&ws, &h),
+            None => return Err("nd --init: ND_HOLDING is not set (CLIENT-13)".into()),
+        };
+        made.map_err(|e| e.to_string())?;
         return Ok(0);
     }
-    let custody = Custody::open(&ws.join("seed")).map_err(|e| e.to_string())?;
+    let custody = Custody::open(&ws, holding).map_err(|e| e.to_string())?;
     let mut follow =
         FollowSocket::connect(&ws.join("follow.sock")).map_err(|e| format!("follow.sock: {e}"))?;
     let mut host =

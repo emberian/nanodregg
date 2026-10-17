@@ -11,14 +11,15 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use crate::attempt::{Attempt, AttemptError, Request, Settlement, State};
-use crate::custody::Custody;
+use crate::custody::{Custody, CustodyError, Rotation};
+use crate::generated::layout::SignResult;
 use crate::generated::layout::Step;
 
 /// What a performed step hands back to follow.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Outcome {
-    /// A signature over the asked bytes.
-    Signature(Vec<u8>),
+    /// Custody's answer to a `sign` step: the encoded `SignResult` (key, next, signature).
+    Signed(Vec<u8>),
     /// The Host's reply: status byte and payload, verbatim.
     Reply {
         /// Status byte.
@@ -33,7 +34,7 @@ impl Outcome {
     /// reply frame body as it arrived (`u8 status ‖ payload`, the shape [`crate::frame`] reads).
     pub fn result(&self) -> Vec<u8> {
         match self {
-            Self::Signature(s) => s.clone(),
+            Self::Signed(s) => s.clone(),
             Self::Reply { status, payload } => [&[*status][..], payload].concat(),
         }
     }
@@ -84,11 +85,12 @@ pub enum RunError {
     Host(io::Error),
     /// An attempt could not be frozen, loaded or driven.
     Attempt(AttemptError),
+    /// Custody could not sign or settle a rotation.
+    Custody(CustodyError),
+    /// A step custody cannot answer yet (its result layout is not emitted).
+    RotationStep(&'static str),
     /// The attempt is still uncertain; its directory is named so a later run resumes it.
     Uncertain(PathBuf),
-    /// Follow asked for a custody rotation step (`precommit`, `signNext`) this custody does not
-    /// perform yet (CLIENT-13 lands it); refused by the step's name, nothing signed.
-    RotationStep(&'static str),
 }
 
 impl std::fmt::Display for RunError {
@@ -98,6 +100,7 @@ impl std::fmt::Display for RunError {
             Self::Follow(e) => write!(f, "follow: {e}"),
             Self::Host(e) => write!(f, "host: {e}"),
             Self::Attempt(e) => write!(f, "{e}"),
+            Self::Custody(e) => write!(f, "{e}"),
             Self::RotationStep(s) => write!(f, "custody does not perform {s} yet"),
             Self::Uncertain(p) => write!(
                 f,
@@ -121,6 +124,44 @@ fn settlement(t: &Table, reply: io::Result<(u8, Vec<u8>)>) -> Settlement {
     }
 }
 
+/// Drive `attempt` from `state` over host.sock until it settles or the Host cannot say.
+fn drive(
+    attempt: &Attempt,
+    state: State,
+    host: &mut impl Host,
+    t: &Table,
+) -> Result<State, RunError> {
+    attempt
+        .drive(state, t.sends_max, |r, bytes| {
+            let op = match r {
+                Request::Submit => t.submit,
+                Request::Lookup => t.lookup,
+            };
+            settlement(t, host.exchange(op, bytes))
+        })
+        .map_err(RunError::Attempt)
+}
+
+/// Finish an armed rotation before anything is signed: settle its attempt (a lookup if it was
+/// sent; CLIENT-3) and hand the settlement to custody, which alone advances its keys. Still
+/// uncertain: the rotation stays armed and the command goes on under the current key.
+fn reconcile(
+    custody: &Custody,
+    attempts: &Path,
+    host: &mut impl Host,
+    t: &Table,
+) -> Result<(), RunError> {
+    let Some((n, _)) = custody.armed().map_err(RunError::Custody)? else {
+        return Ok(());
+    };
+    let (attempt, state) =
+        Attempt::load(&attempts.join(n.to_string())).map_err(RunError::Attempt)?;
+    if let State::Settled { committed, .. } = drive(&attempt, state, host, t)? {
+        custody.settle(committed).map_err(RunError::Custody)?;
+    }
+    Ok(())
+}
+
 /// Run one command to follow's `done`.
 pub fn run(
     argv: &[Vec<u8>],
@@ -130,6 +171,9 @@ pub fn run(
     attempts: &Path,
     t: Table,
 ) -> Result<(u8, Vec<u8>, Vec<u8>), RunError> {
+    reconcile(custody, attempts, host, &t)?;
+    // Set by `signNext`; the next `submit` is that rotation's attempt (CLIENT-13).
+    let mut rotation: Option<Rotation> = None;
     let mut step = follow.command(argv).map_err(RunError::Follow)?;
     for _ in 0..t.steps_max {
         let (k, outcome) = match step {
@@ -138,26 +182,37 @@ pub fn run(
                 stdout,
                 stderr,
             } => return Ok((exit, stdout, stderr)),
-            Step::Sign { message, k } => (k, Outcome::Signature(custody.sign(&message).to_vec())),
+            Step::Sign { message, k } => {
+                let signed = custody.sign(&message).map_err(RunError::Custody)?;
+                (k, Outcome::Signed(encoded(&signed)?))
+            }
+            Step::Signnext { message, k } => {
+                let (signed, r) = custody.sign_next(&message).map_err(RunError::Custody)?;
+                rotation = Some(r);
+                (k, Outcome::Signed(encoded(&signed)?))
+            }
+            // Its result layout (precommitResultLayout) is not emitted yet; no hand-written codec.
+            Step::Precommit { .. } => return Err(RunError::RotationStep("precommit")),
             Step::Host { op, payload, k } => {
                 let (status, payload) =
                     host.exchange(op.code(), &payload).map_err(RunError::Host)?;
                 (k, Outcome::Reply { status, payload })
             }
             Step::Submit { call, k } => {
-                let dir = fresh(attempts).map_err(|e| RunError::Attempt(AttemptError::Io(e)))?;
+                let (n, dir) =
+                    fresh(attempts).map_err(|e| RunError::Attempt(AttemptError::Io(e)))?;
                 let attempt = Attempt::freeze(&dir, &call).map_err(RunError::Attempt)?;
-                let state = attempt
-                    .drive(State::Signed, t.sends_max, |r, bytes| {
-                        let op = match r {
-                            Request::Submit => t.submit,
-                            Request::Lookup => t.lookup,
-                        };
-                        settlement(&t, host.exchange(op, bytes))
-                    })
-                    .map_err(RunError::Attempt)?;
-                match state {
+                // Armed after the freeze and before the first send: a crash between the two
+                // leaves an unsent attempt and nothing armed.
+                let armed = rotation.take();
+                if let Some(r) = &armed {
+                    custody.arm(n, r).map_err(RunError::Custody)?;
+                }
+                match drive(&attempt, State::Signed, host, &t)? {
                     State::Settled { committed, reply } => {
+                        if armed.is_some() {
+                            custody.settle(committed).map_err(RunError::Custody)?;
+                        }
                         let status = if committed { t.ok } else { t.refused };
                         (
                             k,
@@ -172,16 +227,23 @@ pub fn run(
                     }
                 }
             }
-            Step::Precommit { .. } => return Err(RunError::RotationStep("precommit")),
-            Step::Signnext { .. } => return Err(RunError::RotationStep("signNext")),
         };
         step = follow.resume(&k, &outcome).map_err(RunError::Follow)?;
     }
     Err(RunError::StepsExhausted)
 }
 
-/// A new attempt directory `attempts/<n>`, n one past the largest present.
-fn fresh(attempts: &Path) -> io::Result<PathBuf> {
+/// The encoded `SignResult` (three bounded fields; a refusal would be a custody bug).
+fn encoded(s: &SignResult) -> Result<Vec<u8>, RunError> {
+    s.encode().map_err(|r| {
+        RunError::Custody(CustodyError::Io(io::Error::other(format!(
+            "signResult: {r:?}"
+        ))))
+    })
+}
+
+/// A new attempt `(n, attempts/<n>)`, n one past the largest present.
+fn fresh(attempts: &Path) -> io::Result<(u64, PathBuf)> {
     let mut next = 0u64;
     for entry in fs::read_dir(attempts)? {
         if let Some(n) = entry?
@@ -192,5 +254,5 @@ fn fresh(attempts: &Path) -> io::Result<PathBuf> {
             next = next.max(n.saturating_add(1));
         }
     }
-    Ok(attempts.join(next.to_string()))
+    Ok((next, attempts.join(next.to_string())))
 }

@@ -1,65 +1,199 @@
-//! Custody plants: a seed that is not owner-only, not exactly 32 bytes, or a link is refused.
+//! Custody plants (CLIENT-13). A member's next secret is born fresh, lives only in its separate
+//! holding (never in the workspace), and becomes current only when custody settles the rotate
+//! committed; a refusal drops the pending key; every advance finishes after a crash; a tampered
+//! next.pub or a second rotation is refused by name. The hosted one-record shape rotates the same
+//! way. Every custody file is refused unless regular, 0600, the owner's, and exactly its length.
 #![allow(clippy::unwrap_used)] // a plant that cannot set up is a failed plant
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
+use std::path::{Path, PathBuf};
 
-use nanodregg_client::custody::{Custody, CustodyError};
+use ed25519_dalek::{Signature, VerifyingKey};
+use nanodregg_client::custody::{Custody, CustodyError, Refused, Rotation};
 
-fn scratch(name: &str) -> std::path::PathBuf {
+fn scratch(name: &str) -> (PathBuf, PathBuf) {
     let d = std::env::temp_dir().join(format!("nd-custody-{}-{name}", std::process::id()));
     let _ = fs::remove_dir_all(&d);
-    fs::create_dir(&d).unwrap();
-    d
+    let (ws, h) = (d.join("ws"), d.join("holding"));
+    fs::create_dir_all(&ws).unwrap();
+    fs::create_dir(&h).unwrap();
+    fs::set_permissions(&h, fs::Permissions::from_mode(0o700)).unwrap();
+    (ws, h)
+}
+
+fn done(ws: &Path) {
+    fs::remove_dir_all(ws.parent().unwrap()).unwrap();
+}
+
+fn verifies(key: &[u8], msg: &[u8], sig: &[u8]) -> bool {
+    let k = VerifyingKey::from_bytes(key.try_into().unwrap()).unwrap();
+    k.verify_strict(msg, &Signature::from_slice(sig).unwrap())
+        .is_ok()
+}
+
+fn files(dir: &Path) -> Vec<Vec<u8>> {
+    fs::read_dir(dir)
+        .unwrap()
+        .map(|e| fs::read(e.unwrap().path()).unwrap_or_default())
+        .collect()
 }
 
 #[test]
-fn create_open_sign() {
-    let d = scratch("ok");
-    Custody::create(&d, "seed").unwrap();
+fn a_member_signs_with_current_names_next_and_never_holds_the_next_secret() {
+    let (ws, h) = scratch("member");
+    Custody::create_separate(&ws, &h).unwrap();
     assert!(matches!(
-        Custody::create(&d, "seed"),
+        Custody::create_separate(&ws, &h),
         Err(CustodyError::Exists)
     ));
-    let c = Custody::open(&d.join("seed")).unwrap();
-    let sig = c.sign(b"header");
-    let vk = ed25519_dalek::VerifyingKey::from_bytes(&c.public_key()).unwrap();
-    vk.verify_strict(b"header", &ed25519_dalek::Signature::from_bytes(&sig))
-        .unwrap();
-    fs::remove_dir_all(&d).unwrap();
+    // Opened WITHOUT the holding: daily signing needs only the workspace.
+    let c = Custody::open(&ws, None).unwrap();
+    let s = c.sign(b"header").unwrap();
+    assert_eq!(s.key, c.public_key().unwrap());
+    assert_eq!(s.next, fs::read(ws.join("next.pub")).unwrap());
+    assert!(verifies(&s.key, b"header", &s.signature));
+    let next_secret = fs::read(h.join("next")).unwrap();
+    assert!(
+        files(&ws).iter().all(|f| *f != next_secret),
+        "the next secret is in the workspace"
+    );
+    assert!(matches!(c.precommit(), Err(CustodyError::HoldingAbsent)));
+    done(&ws);
 }
 
 #[test]
-fn group_readable_is_refused() {
-    let d = scratch("mode");
-    Custody::create(&d, "seed").unwrap();
-    fs::set_permissions(d.join("seed"), fs::Permissions::from_mode(0o640)).unwrap();
+fn a_committed_rotation_advances_and_finishes_after_a_crash() {
+    let (ws, h) = scratch("rotate");
+    Custody::create_separate(&ws, &h).unwrap();
+    let c = Custody::open(&ws, Some(h.clone())).unwrap();
+    let (old_current, old_next) = (c.public_key().unwrap(), c.sign(b"").unwrap().next);
+    let (next, pending) = c.precommit().unwrap();
+    assert_eq!(
+        c.precommit().unwrap(),
+        (next, pending),
+        "precommit is idempotent"
+    );
+    assert_eq!(next.to_vec(), old_next);
+    let (s, r) = c.sign_next(b"rotate").unwrap();
+    assert_eq!(
+        (s.key.clone(), s.next.clone()),
+        (next.to_vec(), pending.to_vec())
+    );
+    assert!(
+        verifies(&next, b"rotate", &s.signature),
+        "signed by the NEXT key"
+    );
+    c.arm(7, &r).unwrap();
     assert!(matches!(
-        Custody::open(&d.join("seed")),
-        Err(CustodyError::Permissions { mode: 0o640 })
+        c.sign_next(b"x"),
+        Err(CustodyError::RotationInFlight)
     ));
-    fs::remove_dir_all(&d).unwrap();
+    assert_eq!(c.armed().unwrap(), Some((7, r)));
+    // Not yet settled: still the old key.
+    assert_eq!(c.public_key().unwrap(), old_current);
+    // A crash after advance's first step: the seed already replaced, the holding not.
+    fs::copy(h.join("next"), ws.join("seed")).unwrap();
+    c.settle(true).unwrap();
+    c.settle(true).unwrap(); // idempotent
+    assert_eq!(c.public_key().unwrap(), next);
+    assert_eq!(fs::read(ws.join("next.pub")).unwrap(), pending);
+    assert!(!h.join("pending").exists() && !ws.join("rotation").exists());
+    let held = fs::read(h.join("next")).unwrap();
+    let held = ed25519_dalek::SigningKey::from_bytes(&held.try_into().unwrap());
+    assert_eq!(
+        held.verifying_key().to_bytes(),
+        pending,
+        "the holding holds the new next"
+    );
+    done(&ws);
 }
 
 #[test]
-fn wrong_length_is_refused() {
-    let d = scratch("len");
-    fs::write(d.join("seed"), [0u8; 33]).unwrap();
-    fs::set_permissions(d.join("seed"), fs::Permissions::from_mode(0o600)).unwrap();
-    assert!(matches!(
-        Custody::open(&d.join("seed")),
-        Err(CustodyError::WrongLength { len: 33 })
-    ));
-    fs::remove_dir_all(&d).unwrap();
+fn a_refused_rotation_drops_the_pending_key_and_keeps_the_keys() {
+    let (ws, h) = scratch("refused");
+    Custody::create_separate(&ws, &h).unwrap();
+    let c = Custody::open(&ws, Some(h.clone())).unwrap();
+    let before = (c.public_key().unwrap(), c.sign(b"").unwrap().next);
+    let (_, pending) = c.precommit().unwrap();
+    let (_, r) = c.sign_next(b"rotate").unwrap();
+    c.arm(0, &r).unwrap();
+    c.settle(false).unwrap();
+    assert_eq!((c.public_key().unwrap(), c.sign(b"").unwrap().next), before);
+    assert!(!h.join("pending").exists());
+    assert_ne!(
+        c.precommit().unwrap().1,
+        pending,
+        "a fresh pending key next time"
+    );
+    done(&ws);
 }
 
 #[test]
-fn a_link_is_refused() {
-    let d = scratch("link");
-    Custody::create(&d, "seed").unwrap();
-    std::os::unix::fs::symlink(d.join("seed"), d.join("alias")).unwrap();
+fn a_tampered_next_pub_is_refused() {
+    let (ws, h) = scratch("tamper");
+    Custody::create_separate(&ws, &h).unwrap();
+    fs::write(ws.join("next.pub"), [7u8; 32]).unwrap();
+    let c = Custody::open(&ws, Some(h)).unwrap();
+    c.precommit().unwrap();
     assert!(matches!(
-        Custody::open(&d.join("alias")),
-        Err(CustodyError::NotRegularFile)
+        c.sign_next(b"rotate"),
+        Err(CustodyError::Mismatch(_))
     ));
-    fs::remove_dir_all(&d).unwrap();
+    done(&ws);
+}
+
+#[test]
+fn a_hosted_record_rotates_the_same_way() {
+    let (ws, _) = scratch("hosted");
+    Custody::create_same_record(&ws).unwrap();
+    let c = Custody::open(&ws, None).unwrap();
+    let (next, pending) = c.precommit().unwrap();
+    assert_eq!(fs::metadata(ws.join("keys")).unwrap().len(), 96);
+    let (s, r) = c.sign_next(b"rotate").unwrap();
+    assert!(verifies(&next, b"rotate", &s.signature));
+    c.arm(1, &r).unwrap();
+    c.settle(true).unwrap();
+    assert_eq!(c.public_key().unwrap(), next);
+    assert_eq!(c.sign(b"").unwrap().next, pending);
+    assert_eq!(fs::metadata(ws.join("keys")).unwrap().len(), 64);
+    // A settle naming keys the record does not hold is refused, not applied.
+    let wrong = Rotation {
+        incoming: [1; 32],
+        pending: [2; 32],
+    };
+    c.arm(2, &wrong).unwrap();
+    assert!(matches!(c.settle(true), Err(CustodyError::Mismatch(_))));
+    done(&ws);
+}
+
+#[test]
+fn custody_files_are_refused_unless_private_regular_and_exact() {
+    let (ws, h) = scratch("checks");
+    Custody::create_separate(&ws, &h).unwrap();
+    fs::set_permissions(ws.join("seed"), fs::Permissions::from_mode(0o640)).unwrap();
+    assert!(matches!(
+        Custody::open(&ws, None),
+        Err(CustodyError::File(_, Refused::Mode(0o640)))
+    ));
+    fs::remove_file(ws.join("seed")).unwrap();
+    std::os::unix::fs::symlink(h.join("next"), ws.join("seed")).unwrap();
+    assert!(matches!(
+        Custody::open(&ws, None),
+        Err(CustodyError::File(_, Refused::NotRegular))
+    ));
+    fs::remove_file(ws.join("seed")).unwrap();
+    fs::write(ws.join("seed"), [0u8; 33]).unwrap();
+    fs::set_permissions(ws.join("seed"), fs::Permissions::from_mode(0o600)).unwrap();
+    assert!(matches!(
+        Custody::open(&ws, None),
+        Err(CustodyError::File(_, Refused::Length(33)))
+    ));
+    fs::write(ws.join("keys"), [0u8; 64]).unwrap();
+    assert!(matches!(Custody::open(&ws, None), Err(CustodyError::Shape)));
+    fs::set_permissions(&h, fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(matches!(
+        Custody::create_separate(&ws, &h),
+        Err(CustodyError::File(_, Refused::Mode(0o755)))
+    ));
+    done(&ws);
 }

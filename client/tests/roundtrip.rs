@@ -10,6 +10,7 @@ use std::process::Command;
 
 mod common;
 use common::supervise;
+use nanodregg_client::generated::layout::SignResult;
 
 const LIB: &str = r#"
 import struct, sys
@@ -57,9 +58,17 @@ fn stand_in_follow_and_host_challenge_sign_submit_lookup_done_through_the_binari
     std::fs::create_dir_all(root.join("logs")).unwrap();
     let root = root.canonicalize().unwrap();
     let (ws, logs) = (root.join("ws"), root.join("logs"));
+    let holding = root.join("holding");
+    std::fs::create_dir(&holding).unwrap();
+    std::fs::set_permissions(
+        &holding,
+        std::os::unix::fs::PermissionsExt::from_mode(0o700),
+    )
+    .unwrap();
     let nd = |args: &[&str]| {
         Command::new(env!("CARGO_BIN_EXE_nd"))
             .env("ND_WORKSPACE", &ws)
+            .env("ND_HOLDING", &holding)
             .args(args)
             .output()
             .unwrap()
@@ -98,11 +107,18 @@ fn stand_in_follow_and_host_challenge_sign_submit_lookup_done_through_the_binari
         &[&[1u8][..], &10u32.to_le_bytes(), &[0], b"challenge"].concat()[..]
     );
     assert_eq!(f[15], 2);
-    assert_eq!(
-        u32::from_le_bytes(f[16..20].try_into().unwrap()),
-        64,
-        "an Ed25519 signature"
-    );
+    // Custody's answer: SignResult = (current key, next key, Ed25519 signature), each u32le-prefixed.
+    let seed = std::fs::read(ws.join("seed")).unwrap();
+    let key = ed25519_dalek::SigningKey::from_bytes(&seed.try_into().unwrap());
+    let next = std::fs::read(ws.join("next.pub")).unwrap();
+    let n = u32::from_le_bytes(f[16..20].try_into().unwrap()) as usize;
+    let got = SignResult::decode(&f[20..20 + n]).unwrap();
+    assert_eq!(got.key, key.verifying_key().to_bytes(), "the current key");
+    assert_eq!(got.next, next, "the precommitted next key");
+    let sig = ed25519_dalek::Signature::from_slice(&got.signature).unwrap();
+    key.verifying_key()
+        .verify_strict(b"observation", &sig)
+        .unwrap();
     // The attempt is frozen and settled on disk.
     assert_eq!(std::fs::read(ws.join("attempts/0/call")).unwrap(), b"CALL");
     assert_eq!(
