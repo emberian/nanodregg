@@ -84,7 +84,7 @@ def serveVerb (store : String) : IO UInt32 := do
     | .ok wr =>
       let port ← stdioPort
       let (exit, _) ← serve (machine X) recorder keys.segment (fileCheckpoint store keys c world) c
-        (fileStore wr.segment) (pager keys (← File.open (segmentPath store) .read)) port limits
+        (fileStore wr.segment) (pager keys store (← File.open (segmentPath store) .read)) port limits
         fuelBatches wr.opening.resident none
       wr.segment.sync  -- the writer's handle, and so its lock, lives to here
       if exitCode exit ≠ 0 then IO.eprintln s!"exit {exit.name}"

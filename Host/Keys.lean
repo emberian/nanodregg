@@ -24,5 +24,6 @@ def macSealer (key : Digest) (domain : String) : Log.Sealer where
 def Keys.ofKey (key : Digest) : Keys where
   segment := macSealer key domSegment
   base := macSealer key domBase
+  worldDigest b := (Hash.digest domBase b).bytes
 
 end Nanodregg.Host

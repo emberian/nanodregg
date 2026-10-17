@@ -67,7 +67,7 @@ def fileCheckpoint (dir : System.FilePath) (keys : Keys) (c : Cadence) (world : 
         writeNew (baseTmpPath dir) bytes
         IO.FS.rename (baseTmpPath dir) (basePath dir)
         syncDir dir.toString
-        return .ok (world.size w)
+        return .ok (world.size w, keys.worldDigest (worldBytesOf bytes (world.size w)))
       catch e => return .error (.io (toString e))
 
 /-- The one open (writer and follower) over a Store directory: `openWith` reading the files. -/

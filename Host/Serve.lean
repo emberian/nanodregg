@@ -13,7 +13,8 @@ is the kernel's or the receive layer's.
   `validUntil`, a follow grant live to a root) against the World as the batch has advanced it, so
   a revocation earlier in the batch applies; then a page of the durable log from `start`, built
   after the batch's sync (`Host.Page`);
-* `read` — refused `notServed` until PROTOCOL-14's base page layout lands (HOST-15);
+* `read` — the same envelope, then a page of the newest base's World bytes from byte `start`
+  (`readReplyLayout`: height, total, digest, chain, bytes; HOST-15);
   `command`, `resume` belong to `follow.sock` and are refused `wrongSocket`.
 
 A receipt is `u64 height ‖ turn digest`. A refusal's payload is its NAME as UTF-8, from its owner's
@@ -76,14 +77,20 @@ def handle (X : Ctx D) (w : World D) (f : Frame) : Answer (World D) (Turn D) :=
       match w.journal[txIdOf X c]? with
       | some (h, d) => .reply Protocol.Status.ok.code (receipt X h d)
       | none => .reply Protocol.Status.absent.code ByteArray.empty
-  | some .read => refuse (named (FrameRefusal.notServed .read).name)
+  | some .read =>
+    match Protocol.Envelope.ofBytes X f.payload with
+    | none => refuse (named Protocol.ReadRefusal.badEnvelope.name)
+    | some e =>
+      match Protocol.Envelope.check X w e with
+      | .error r => refuse (named r.name)
+      | .ok () => .defer (.read e.start)
   | some .log =>
     match Protocol.Envelope.ofBytes X f.payload with
     | none => refuse (named Protocol.ReadRefusal.badEnvelope.name)
     | some e =>
       match Protocol.Envelope.check X w e with
       | .error r => refuse (named r.name)
-      | .ok () => .page e.start
+      | .ok () => .defer (.log e.start)
   | some .command => refuse (named (FrameRefusal.wrongSocket .command).name)
   | some .resume => refuse (named (FrameRefusal.wrongSocket .resume).name)
 

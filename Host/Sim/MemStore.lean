@@ -7,6 +7,7 @@ not code in the loop: `failSyncAt n` makes the n-th sync throw (the loop must an
 `uncertain` and stop), and `crashImage` / `flipByte` produce the bytes `recover` must judge.
 -/
 import Host.Loop
+import Host.Page
 
 namespace Nanodregg.Host.Sim
 
@@ -49,7 +50,16 @@ def memCheckpoint {W : Type} (disk : IO.Ref Disk) (bases : IO.Ref Bases) (keys :
     | .ok file =>
       let synced := (← disk.get).synced.size
       bases.modify fun b => { file, history := b.history.push (file, synced), written := b.written + file.size }
-      return .ok (world.size w)
+      return .ok (world.size w, keys.worldDigest (worldBytesOf file (world.size w)))
+
+/-- A `read` page over the in-memory base (`Host.Page.basePage`, what `Host.Deployed.pager` does
+over base.world). -/
+def memBasePage {W : Type} (budget : Nat) (bases : IO.Ref Bases) (r : Resident W) (start : Nat) :
+    IO (UInt8 × ByteArray) := do
+  let file := (← bases.get).file
+  match Id.run (Page.basePage budget (fun off len => pure (file.extract off (off + len))) r.sealed start) with
+  | .ok b => return (Protocol.Status.ok.code, b)
+  | .error f => return (Protocol.Status.refused.code, f.name.toUTF8)
 
 /-- Flip one byte (xor 0x01) at `i`; out of range leaves the bytes unchanged. -/
 def flipByte (b : ByteArray) (i : Nat) : ByteArray :=

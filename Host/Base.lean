@@ -67,10 +67,12 @@ def segmentInitial : ByteArray := Digest.zero.bytes
 /-- The `prev` of the base's one frame. -/
 def baseInitial : ByteArray := Digest.zero.bytes
 
-/-- The keyed tags of one Store: its segment frames and its base, under separate domains. -/
+/-- The keyed tags of one Store (its segment frames and its base, under separate domains), and the
+UNKEYED digest of a base's World bytes, which a thin member pins (HOST-15). -/
 structure Keys where
   segment : Log.Sealer
   base : Log.Sealer
+  worldDigest : ByteArray → ByteArray
 
 /-- Why a seal did not produce a base (law 7). -/
 inductive SealFault where
@@ -95,6 +97,13 @@ def Base.file {W : Type} (keys : Keys) (c : Cadence) (world : Stream W) (w : W) 
   if c.worldBytesMax < world.size w then .error (.worldTooLarge (world.size w)) else
   if c.worldBytesMax < ib then .error (.indexTooLarge ib) else
   .ok (Log.frame keys.base baseInitial ((Base.codec world).bytes ⟨w, offset, tag, index⟩))
+
+/-- Where a base file's World bytes are: right after the frame's length field. -/
+def worldStart : Nat := 4
+
+/-- The World bytes of a base file whose World is `bytes` long. -/
+def worldBytesOf (file : ByteArray) (bytes : Nat) : ByteArray :=
+  file.extract worldStart (worldStart + bytes)
 
 /-- Why a Store's base does not open (law 7). -/
 inductive BaseFault where
@@ -121,7 +130,7 @@ def BaseFault.name : BaseFault → String
 
 /-- The base a base file holds, and its World's encoded size. -/
 def Base.read {W : Type} (keys : Keys) (c : Cadence) (world : Stream W) (file : ByteArray) :
-    Except BaseFault (Base W × Nat) :=
+    Except BaseFault (Base W × Nat × ByteArray) :=
   if Log.frameMax c.baseRecordMax < file.size then .error (.baseTooLarge file.size) else
   match Log.frameAt keys.base c.baseRecordMax file 0 baseInitial with
   | none => .error .baseCorrupt
@@ -129,7 +138,7 @@ def Base.read {W : Type} (keys : Keys) (c : Cadence) (world : Stream W) (file : 
     if r.next ≠ file.size then .error .baseCorrupt else
     match (Base.codec world).decode r.record with
     | .error e => .error (.baseUndecodable e)
-    | .ok b => .ok (b, world.size b.world)
+    | .ok b => .ok (b, world.size b.world, keys.worldDigest (worldBytesOf file (world.size b.world)))
 
 /-- How many segment bytes open reads after a base at `offset` whose World is `baseBytes` long,
 in a segment of `size` bytes. -/
@@ -140,11 +149,20 @@ def tailRead (c : Cadence) (baseBytes offset size : Nat) : Except BaseFault Nat 
 
 /-! ## The seal policy: a pure function the loop calls -/
 
-/-- The newest durable base, as the loop counts it: the segment offset it starts from and its
-World's encoded size. -/
+/-- The newest durable base, as the loop counts it: the segment offset it starts from, its World's
+encoded size, height and chain (`Env.bytes`), and the digest of its World bytes (what `read`
+pages state, HOST-15). -/
 structure Sealed where
   offset : Nat
   bytes : Nat
+  height : Nat
+  chain : ByteArray
+  digest : ByteArray
+
+/-- The genesis base as the loop counts it: offset 0, the World `w`, its mark and digest. -/
+def Sealed.genesis {W : Type} (keys : Keys) (world : Stream W) (mark : W → Nat × ByteArray) (w : W) :
+    Sealed :=
+  ⟨0, world.size w, (mark w).1, (mark w).2, keys.worldDigest (world.bytes w)⟩
 
 /-- Where the segment stands: every byte before `offset` is synced, and `tag` chains the next
 frame. -/
@@ -154,19 +172,6 @@ structure Position where
 
 /-- The bytes of the frame holding `record`. -/
 def frameSize (record : ByteArray) : Nat := 4 + record.size + Log.tagBytes
-
-/-- What the loop does before appending a frame of `n` bytes at segment offset `pos`. -/
-inductive Gate where
-  /-- the tail stays within `tailMax`: append -/
-  | commit
-  /-- a seal is in flight: wait for it, then ask again -/
-  | waitPending
-  /-- no seal is in flight: seal the World as it stands, wait for it, then ask again -/
-  | sealNow
-
-def gate (c : Cadence) (sealed : Sealed) (pending : Bool) (pos n : Nat) : Gate :=
-  if pos + n - sealed.offset ≤ c.tailMax sealed.bytes then .commit
-  else if pending then .waitPending else .sealNow
 
 /-- After a commit that reached `pos`: start a seal in the background? -/
 def shouldSeal (c : Cadence) (sealed : Sealed) (pending : Bool) (pos : Nat) : Bool :=

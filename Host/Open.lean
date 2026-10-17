@@ -123,7 +123,7 @@ def openWith {m : Type → Type} [Monad m] (keys : Keys) (c : Cadence) (world : 
   if Log.frameMax c.baseRecordMax < file.size then return .error (.base (.baseTooLarge file.size)) else
   match Base.read keys c world file with
   | .error e => return .error (.base e)
-  | .ok (b, baseBytes) =>
+  | .ok (b, baseBytes, digest) =>
   match tailRead c baseBytes b.offset size with
   | .error e => return .error (.base e)
   | .ok len =>
@@ -139,6 +139,7 @@ def openWith {m : Type → Type} [Monad m] (keys : Keys) (c : Cadence) (world : 
     | none => return .error .tagWidth
     | some tag =>
       let opened : Opened W := ⟨o.world.1, o.records, o.validLen, o.lastTag, o.torn⟩
-      return .ok ⟨opened, ⟨b.offset, baseBytes⟩, ⟨b.offset + o.validLen, tag⟩, o.world.2.1⟩
+      let (h, chain) := mark b.world
+      return .ok ⟨opened, ⟨b.offset, baseBytes, h, chain, digest⟩, ⟨b.offset + o.validLen, tag⟩, o.world.2.1⟩
 
 end Nanodregg.Host

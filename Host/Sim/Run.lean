@@ -108,7 +108,8 @@ def genesisBases (c : Cadence) : Bases :=
   | .error _ => {}
 
 def genesisResident : Resident (World Nat) :=
-  { world := genesis, pos := ⟨0, Codec.Digest.zero⟩, sealed := ⟨0, world.size genesis⟩, index := #[] }
+  { world := genesis, pos := ⟨0, Codec.Digest.zero⟩, sealed := Sealed.genesis keys world recorder.mark genesis,
+    index := #[] }
 
 structure RunResult where
   exit : Exit
@@ -198,6 +199,27 @@ def run (args : List String) : IO UInt32 := do
     (faultName (reopen r.bases.history[0]!.1 r.disk.synced) = "tailTooLong") failures
   check "plant-base-flip: a flipped base byte is `baseCorrupt`"
     (faultName (reopen (flipByte r.bases.file 40) r.disk.synced) = "baseCorrupt") failures
+  -- read pages (HOST-15): the newest base's World bytes, paged at 100 bytes
+  let basesRef ← IO.mkRef r.bases
+  let mut got := ByteArray.empty
+  let mut readOk := true
+  let mut readPages := 0
+  for _ in List.range (r.resident.sealed.bytes / 100 + 2) do
+    if r.resident.sealed.bytes ≤ got.size then break
+    let (st, p) ← memBasePage 100 basesRef r.resident got.size
+    match Protocol.readReplyFrame.decode p with
+    | .ok (h, t, d, c, b, ()) =>
+      unless st = Protocol.Status.ok.code ∧ Protocol.Text.ofU64 h.1 = some r.resident.sealed.height do
+        readOk := false
+      unless Protocol.Text.ofU64 t.1 = some r.resident.sealed.bytes ∧ d.1 = r.resident.sealed.digest ∧
+          c.1 = r.resident.sealed.chain ∧ 0 < b.1.size do readOk := false
+      got := got ++ b.1; readPages := readPages + 1
+    | .error _ => readOk := false; break
+  check s!"read pages: {readPages} pages assemble the base's World bytes, and they hash to the stated digest"
+    (readOk && got == worldBytesOf r.bases.file r.resident.sealed.bytes &&
+      keys.worldDigest got == r.resident.sealed.digest) failures
+  check "plant-read-past-end: a read past the World bytes is refused `pastEnd`"
+    ((← memBasePage 100 basesRef r.resident (r.resident.sealed.bytes + 1)).2 == "pastEnd".toUTF8) failures
   -- waste (law 5): work done ÷ work the operation must do
   let records := (Log.recover keys.segment cadence.recordBytesMax segmentInitial r.disk.synced).records
   let turns := records.foldl (fun acc rec => match (Record.codec dc).decode rec with

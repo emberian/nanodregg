@@ -76,7 +76,8 @@ prefix `[0, offset)` chained to `tag`, durably, and returns its World's encoded 
 (`host serve`) it runs in a dedicated Task over the immutable `w`, off the loop; without it (the
 simulation) it runs inline, so a seeded run seals at the same points every time. -/
 structure Checkpoint (W : Type) where
-  write : W → Nat → Digest → Array Entry → IO (Except SealFault Nat)
+  /-- returns the World's encoded size and the digest of its bytes (`Keys.worldDigest`) -/
+  write : W → Nat → Digest → Array Entry → IO (Except SealFault (Nat × ByteArray))
   async : Bool
 
 /-- How the loop writes a batch record and indexes it: the record of the staged Turns given the
@@ -85,10 +86,12 @@ structure Recorder (W T : Type) where
   encode : W → Array T → ByteArray
   mark : W → Nat × ByteArray
 
-/-- A seal in flight: the offset it seals at, and its Task. -/
+/-- A seal in flight: the offset it seals at, the sealed World's height and chain, and its Task. -/
 structure Pending where
   offset : Nat
-  task : Task (Except IO.Error (Except SealFault Nat))
+  height : Nat
+  chain : ByteArray
+  task : Task (Except IO.Error (Except SealFault (Nat × ByteArray)))
 
 /-- Everything the resident loop holds. -/
 structure Resident (W : Type) where
@@ -136,18 +139,20 @@ def commitBatch (c : Cadence) (sealed : Sealed) (store : Store) (s : Log.Sealer)
   catch e => return .error (toString e)
 
 /-- Start sealing `w` at `pos` in a dedicated Task. -/
-def spawnSeal (ck : Checkpoint W) (w : W) (pos : Position) (index : Array Entry) : IO Pending := do
+def spawnSeal (ck : Checkpoint W) (mark : W → Nat × ByteArray) (w : W) (pos : Position)
+    (index : Array Entry) : IO Pending := do
+  let (h, chain) := mark w
   if ck.async then
-    return ⟨pos.offset, ← IO.asTask (ck.write w pos.offset pos.tag index) .dedicated⟩
+    return ⟨pos.offset, h, chain, ← IO.asTask (ck.write w pos.offset pos.tag index) .dedicated⟩
   else
-    return ⟨pos.offset, .pure (.ok (← ck.write w pos.offset pos.tag index))⟩
+    return ⟨pos.offset, h, chain, .pure (.ok (← ck.write w pos.offset pos.tag index))⟩
 
 /-- Wait for a seal; the base it made is the newest durable one. -/
 def settle (p : Pending) : IO (Except SealFault Sealed) := do
   match ← IO.wait p.task with
   | .error e => return .error (.io (toString e))
   | .ok (.error f) => return .error f
-  | .ok (.ok bytes) => return .ok ⟨p.offset, bytes⟩
+  | .ok (.ok (bytes, digest)) => return .ok ⟨p.offset, bytes, p.height, p.chain, digest⟩
 
 /-- A finished seal is taken up without waiting. -/
 def reap (r : Resident W) : IO (Except SealFault (Resident W)) := do
@@ -163,7 +168,7 @@ def reap (r : Resident W) : IO (Except SealFault (Resident W)) := do
 /-- Make room for a frame of `n` bytes: wait for the seal in flight, and if the tail is still too
 long, seal the World as it stands and wait for that. After the second step the newest base is at
 `pos`, so any frame up to `Log.frameMax c.recordBytesMax` fits (`Host.Proofs.Base.within_after_seal`). -/
-def makeRoom (ck : Checkpoint W) (c : Cadence) (r : Resident W) (n : Nat) :
+def makeRoom (ck : Checkpoint W) (mark : W → Nat × ByteArray) (c : Cadence) (r : Resident W) (n : Nat) :
     IO (Except SealFault (Resident W)) := do
   if withinTail c r.sealed r.pos.offset n then return .ok r
   let r ← match r.pending with
@@ -172,7 +177,7 @@ def makeRoom (ck : Checkpoint W) (c : Cadence) (r : Resident W) (n : Nat) :
       | .ok sealed => pure { r with sealed, pending := none }
       | .error f => return .error f
   if withinTail c r.sealed r.pos.offset n then return .ok r
-  match ← settle (← spawnSeal ck r.world r.pos r.index) with
+  match ← settle (← spawnSeal ck mark r.world r.pos r.index) with
   | .ok sealed => return .ok { r with sealed, pending := none }
   | .error f => return .error f
 
@@ -186,10 +191,10 @@ def finish (exit : Exit) (r : Resident W) : IO (Exit × Resident W) := do
     | .error f => return (.sealFailed f, { r with pending := none })
 
 /-- Fill the replies that wait for a log page, from the durable state. -/
-def fillPages (pager : Resident W → Nat → IO (UInt8 × ByteArray)) (r : Resident W) (out : Out T) :
+def fillPages (pager : Resident W → Deferred → IO (UInt8 × ByteArray)) (r : Resident W) (out : Out T) :
     IO (Array Reply) :=
-  out.pages.foldlM (init := out.replies) fun rs (i, start) => do
-    let (status, payload) ← pager r start
+  out.pages.foldlM (init := out.replies) fun rs (i, d) => do
+    let (status, payload) ← pager r d
     return rs.modify i fun rep => { rep with status, payload }
 
 /-- Append one record that takes the World to `w'`, durably, within the tail bound, and index it;
@@ -199,7 +204,7 @@ past what was synced, and the caller answers its requests `uncertain`. -/
 def append (rec : Recorder W T) (s : Log.Sealer) (ck : Checkpoint W) (c : Cadence) (store : Store)
     (r : Resident W) (w' : W) (record : ByteArray) : IO (Except Exit (Resident W)) := do
   if c.recordBytesMax < record.size then return .error (.recordTooLarge record.size)
-  let r ← match ← makeRoom ck c r (frameSize record) with
+  let r ← match ← makeRoom ck rec.mark c r (frameSize record) with
     | .ok r => pure r
     | .error f => return .error (.sealFailed f)
   if within : withinTail c r.sealed r.pos.offset (frameSize record) = true then
@@ -209,16 +214,16 @@ def append (rec : Recorder W T) (s : Log.Sealer) (ck : Checkpoint W) (c : Cadenc
       let (h, chain) := rec.mark r.world
       let r := { r with world := w', pos, index := r.index.push ⟨h, r.pos.offset, chain⟩ }
       if shouldSeal c r.sealed r.pending.isSome pos.offset then
-        return .ok { r with pending := some (← spawnSeal ck w' pos r.index) }
+        return .ok { r with pending := some (← spawnSeal ck rec.mark w' pos r.index) }
       return .ok r
   else
     -- not proved unreachable (makeRoom's inline seal is IO): a named stop
     return .error (.recordTooLarge record.size)
 
-/-- The loop. `rec.encode after staged` is the batch record (`Host.Record.encode`); `pager r start`
-builds a `log` page (status, payload) from the durable state `r`. -/
+/-- The loop. `rec.encode after staged` is the batch record (`Host.Record.encode`); `pager r d`
+builds a deferred reply (a `log` or `read` page: status, payload) from the durable state `r`. -/
 def serve (m : Machine W T R Frame) (rec : Recorder W T) (s : Log.Sealer) (ck : Checkpoint W)
-    (c : Cadence) (store : Store) (pager : Resident W → Nat → IO (UInt8 × ByteArray)) (port : Port)
+    (c : Cadence) (store : Store) (pager : Resident W → Deferred → IO (UInt8 × ByteArray)) (port : Port)
     (limits : Limits) : Nat → Resident W → Option Frame → IO (Exit × Resident W)
   | 0, r, _ => finish .fuel r
   | fuel + 1, r, carried => do

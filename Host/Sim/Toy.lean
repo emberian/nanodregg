@@ -46,7 +46,7 @@ def fnvSealer (domain : UInt8) : Log.Sealer where
     le64 (fnv b) ++ le64 (fnv (b.push 1)) ++ le64 (fnv (b.push 2)) ++ le64 (fnv (b.push 3))
   tag_size _ := by simp [ByteArray.size_append, size_le64, Log.tagBytes]
 
-def keys : Keys := ⟨fnvSealer 0, fnvSealer 1⟩
+def keys : Keys := ⟨fnvSealer 0, fnvSealer 1, fun b => le64 (fnv b)⟩
 
 /-- Toy numbers: a seal every 2 KiB at least, so a 200-turn scenario seals several times, and a
 record bound (4 KiB; a 16-turn batch record is ~1.3 KiB) small enough that `tailMax` is shorter

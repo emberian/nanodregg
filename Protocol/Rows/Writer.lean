@@ -59,7 +59,7 @@ def machine (P : Params) : Machine (World D) (Turn D) (Reject D) Frame where
   handle w f :=
     if !P.gateLog && f.op = Op.log.code then
       match Envelope.ofBytes P.X f.payload with
-      | some e => .page e.start
+      | some e => .defer (.log e.start)
       | none => Host.handle P.X w f
     else Host.handle P.X w f
   refuse w t r := Host.onReject P.X w t r
@@ -76,7 +76,10 @@ def checkpoint (m : Mem) : Checkpoint (World D) :=
 
 /-- HOST's pager (`Host.Page.build` + `Host.Page.bytes`) over the in-memory segment's synced bytes:
 what `Host.Deployed.pager` does over the segment file. -/
-def pager (X : Ctx D) (lieTip : Bool) (m : Mem) (r : Resident (World D)) (start : Nat) : IO (UInt8 × ByteArray) := do
+def pager (X : Ctx D) (lieTip : Bool) (m : Mem) (r : Resident (World D)) :
+    Deferred → IO (UInt8 × ByteArray)
+  | .read start => Host.Sim.memBasePage Page.budget m.bases r start
+  | .log start => do
   let seg := (← m.disk.get).synced
   match Id.run (Page.build X.env Sim.dc X.digestOf Host.Sim.keys.segment cadence.recordBytesMax
       pageBudget (fun off len => pure (seg.extract off (off + len))) r.index
@@ -93,7 +96,8 @@ def genesisStore (g : World D) : IO (Except String Mem) := do
   | .ok file => return .ok ⟨← IO.mkRef {}, ← IO.mkRef { file, history := #[(file, 0)] }⟩
 
 def genesisResident (g : World D) : Resident (World D) :=
-  { world := g, pos := ⟨0, Codec.Digest.zero⟩, sealed := ⟨0, Sim.world.size g⟩, index := #[] }
+  { world := g, pos := ⟨0, Codec.Digest.zero⟩, index := #[],
+    sealed := Sealed.genesis Host.Sim.keys Sim.world (fun w => (w.height, Sim.ctx.env.bytes w.chain)) g }
 
 /-- The one open over the in-memory Store: HOST's `openWith`, the writer's fold. -/
 def reopen (P : Params) (base seg : ByteArray) : Except String (Resident (World D)) :=

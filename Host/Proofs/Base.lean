@@ -82,7 +82,7 @@ theorem openWith_reads {W F : Type} (keys : Keys) (c : Cadence) (world : Codec.S
     refine ⟨by omega, ?_⟩
     split at h
     · simp only [StateT.run, StateT.pure, pure] at h; injection h with h1; cases h1
-    · rename_i b bb hb
+    · rename_i b bb dg hb
       split at h
       · simp only [StateT.run, StateT.pure, pure] at h; injection h with h1; cases h1
       · rename_i len hlen
@@ -110,8 +110,8 @@ theorem openWith_reads {W F : Type} (keys : Keys) (c : Cadence) (world : Codec.S
               show b.offset + op.validLen ≤ b.offset + len
               omega
 
-theorem within_after_seal (c : Cadence) (pos bytes n : Nat) (hn : n ≤ Log.frameMax c.recordBytesMax) :
-    withinTail c ⟨pos, bytes⟩ pos n = true := by
+theorem within_after_seal (c : Cadence) (sealed : Sealed) (n : Nat) (hn : n ≤ Log.frameMax c.recordBytesMax) :
+    withinTail c sealed sealed.offset n = true := by
   unfold withinTail Cadence.tailMax
   simp only [decide_eq_true_eq]
   omega

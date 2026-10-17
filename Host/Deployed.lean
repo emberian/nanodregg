@@ -42,8 +42,16 @@ def auditStep : World D → ByteArray → Except (Record.Fault (Verdict D)) (Wor
 /-- The loop's batch bounds: a record's Turns, and a megabyte of request payload. -/
 def limits : Limits := ⟨Record.turnsMax, 1 <<< 20⟩
 
-/-- A `log` page from the segment file. -/
-def pager (keys : Keys) (seg : File) (r : Resident (World D)) (start : Nat) : IO (UInt8 × ByteArray) := do
+/-- A deferred reply from the Store's files: a `log` page from the segment, a `read` page from the
+newest base (opened per page: the base is replaced, never written in place). -/
+def pager (keys : Keys) (dir : System.FilePath) (seg : File) (r : Resident (World D)) :
+    Deferred → IO (UInt8 × ByteArray)
+  | .read start => do
+    let base ← File.open (basePath dir) .read
+    match ← Page.basePage Page.budget (fun off len => base.readAt off.toUInt64 len.toUSize) r.sealed start with
+    | .error f => return named f.name
+    | .ok b => return (Protocol.Status.ok.code, b)
+  | .log start => do
   match ← Page.build X.env Codec.Deployed.digestCodec X.digestOf keys.segment c.recordBytesMax
       Page.budget (fun off len => seg.readAt off.toUInt64 len.toUSize) r.index (recorder.mark r.world)
       start with

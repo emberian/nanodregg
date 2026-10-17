@@ -6,7 +6,7 @@
 | metric | now | ceiling |
 |---|---|---|
 | Lean modules in the Host closure | 59 | 150 |
-| Lean lines (deployed) | 7396 | — |
+| Lean lines (deployed) | 7453 | — |
 | protocol operations | 6 | 6 |
 | call kinds (Receive.Body constructors) | 9 | 10 |
 | command verbs (the one command language) | 11 | 20 |
@@ -25,11 +25,11 @@
 | Lean lines (Census) | 89 | — |
 | Lean lines (Codec) | 4133 | — |
 | Lean lines (Emit) | 351 | — |
-| Lean lines (Host) | 3021 | — |
+| Lean lines (Host) | 3110 | — |
 | Lean lines (Kernel) | 4268 | — |
-| Lean lines (Protocol) | 2743 | — |
+| Lean lines (Protocol) | 2747 | — |
 | max dependents of one module | 105 | — |
 | native (extern/implemented_by) | 8 | 8 |
 | C lines | 0 | 146 |
 | Lean lines (Lang) | 5462 | — |
-| Lean lines (tooling: Sim, Rows, Journey, Census, Emit) | 3189 | — |
+| Lean lines (tooling: Sim, Rows, Journey, Census, Emit) | 3225 | — |
