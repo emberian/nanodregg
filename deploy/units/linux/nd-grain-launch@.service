@@ -2,8 +2,8 @@
 [Unit]
 Description=nanodregg grain launcher and controller of World %i
 # the controller tails the World's own follow Store (HOSTING-17); residents reach keybroker
-Wants=nd-hosted-follow@%i.service
-After=nd-hosted-follow@%i.service nd-keybroker.service
+Wants=nd-hosted-follow@%i.service nd-follow-drive@%i.service
+After=nd-hosted-follow@%i.service nd-follow-drive@%i.service nd-keybroker.service
 StartLimitIntervalSec=120
 StartLimitBurst=5
 

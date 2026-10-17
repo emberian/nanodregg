@@ -464,7 +464,9 @@ def Broker.systemd (b : Broker) : Except Refusal String := do
     s!"RestartPreventExitStatus={spaced (brokerPreventCodes.map toString)}",
     "UMask=0077",
     "NoNewPrivileges=yes",
-    "RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6",
+    "# AF_NETLINK: bwrap --unshare-net brings up the decider sandbox loopback over NETLINK_ROUTE; without it",
+    "# the decider dies at every start (measured on burst5, systemd 255, OPS-3 run 1)",
+    "RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK",
     s!"TimeoutStopSec={stopSeconds}",
     "",
     "[Install]",
@@ -558,6 +560,11 @@ structure Launcher where
   /-- `none`: PIDS is `/run/runtime/%i` (RuntimeDirectory); `some DIR`: PIDS is `DIR/%i` of a user
   unit, no RuntimeDirectory (the live harness) -/
   pidsDir : Option String := none
+  /-- the unit stem of the follower's driver (`nd-follow-drive`): a HARD dependency (HOSTING-7's
+  resident row, 113537f: the follow Store advances only while `nd sync` drives it, so a stopped
+  driver is a resident that never sees a new turn). `none` only in the live harness, which has no
+  writer to drive from -/
+  driver : Option String := some "nd-follow-drive"
   deriving Repr
 
 /-- grain-launch's PIDS argument. -/
@@ -591,8 +598,8 @@ def Launcher.systemd (l : Launcher) : Except Refusal String := do
     "[Unit]",
     "Description=nanodregg grain launcher and controller of World %i",
     "# the controller tails the World's own follow Store (HOSTING-17); residents reach keybroker",
-    s!"Wants={fol}",
-    s!"After={fol} {keybroker.name}.service",
+    s!"Wants={fol}{match l.driver with | some d => s!" {d}@%i.service" | none => ""}",
+    s!"After={fol}{match l.driver with | some d => s!" {d}@%i.service" | none => ""} {keybroker.name}.service",
     s!"StartLimitIntervalSec={startIntervalSeconds}",
     s!"StartLimitBurst={startBurst}",
     "",
@@ -825,6 +832,7 @@ def liveLauncher (root : String) : Launcher :=
     broker := root ++ "/broker"
     user := none
     follower := liveHostedFollower root
+    driver := none
     pidsDir := some (root ++ "/pids") }
 
 def liveFiles (root : String) : Except Refusal (List (String × String)) := do

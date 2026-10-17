@@ -26,7 +26,7 @@ signed for another World is refused `wrongWorld` before its key or signature is 
   rebuilds, and every call of the old one lands in it (`replay-same-nonce-admitted-control`).
   Never pass an old `--nonce` to a genesis meant to be a new World.
 
-## 2. Start — PENDING (OPS: deploy/live on burst5)
+## 2. Start — RAN as user units (deploy/live on burst5: host units OPS-2 runs 1–4; keybroker, hosted follower, grain-launch OPS-3 run 2)
 
 Writer's node (systemd system unit, `deploy/units/linux/nd-host-serve.service`, emitted by
 `emit-units deploy/units` from Host.Status and Protocol.SupervisorExit; `gates/generated.tsv`
@@ -116,8 +116,15 @@ rendered by emit-units as `deploy/units/linux/nd-keybroker.service` (system unit
   decider's PID file;
 - keybroker's and the decider's ends are `deploy/units/EXITS.md`'s two broker tables (HOSTING-16):
   every custody refusal stops the unit, a signalled or lagging decider restarts.
+- RAN under systemd 255 (burst5, the rendered unit as a user unit, `deploy/live/broker.sh` run 2, all
+  PASS): it starts under NoNewPrivileges=yes with the decider confined by nd-bwrap; a SIGKILLed
+  decider ends keybroker `deciderSignaled` (102) and the unit restarts; a one-byte edit of the
+  installed anchors makes ExecStartPre refuse every start until the start limit (keybroker never
+  runs); key mode 0644 stops it `keyFileMode` (84), SOCKDIR 0755 stops it `sockDir` (105), each with
+  no restart. Run 1 found that `RestrictAddressFamilies` without AF_NETLINK kills the decider at
+  every start (bwrap brings the sandbox's loopback up over NETLINK_ROUTE); the unit now allows it.
 
-### 2b. The hosted follower (HOSTING-17 §7, ROOT's ruling) — RENDERED, PENDING a run (OPS: burst5)
+### 2b. The hosted follower (HOSTING-17 §7, ROOT's ruling) — follower and launcher RAN as user units (burst5, OPS-3 run 2); the driver PENDING
 
 The controller never reads the writer's files: it tails its OWN follow Store, written by `host follow`
 running as `nd-hosted`, one per hosted World, from the template
@@ -138,7 +145,7 @@ Install, per World `L` (after §2a's users):
 
     sudo install -m 0644 deploy/units/linux/tmpfiles/nd-follow.conf /etc/tmpfiles.d/nd-follow.conf
     sudo systemd-tmpfiles --create /etc/tmpfiles.d/nd-follow.conf
-    sudo install -d -o nd-hosted -g nd-hosted -m 0700 /srv/nd-hosted /srv/nd-hosted/worlds /srv/nd-hosted/worlds/L
+    sudo install -d -o nd-hosted -g nd-hosted -m 0700 /srv/nd-hosted /srv/nd-hosted/worlds /srv/nd-hosted/worlds/L /srv/nd-hosted/worlds/L/members
     sudo -u nd-hosted /opt/nd/bin/host genesis /srv/nd-hosted/worlds/L/store L --nonce NONCE KEY_HEX NEXT_HEX...
 
 (the writer's genesis REPRODUCED, as for a member, §2; its printed `chain` must equal the writer's),
@@ -169,18 +176,30 @@ start limit), with
 Its ends are EXITS.md's `nd sync` table (PROTOCOL-38's CommandExit): a refusal by name (1) stops
 it; `uncertain` (2), `behind` (51, still behind after the page bound: the next run continues) and
 `client` (52, nd could not run: a socket or the workspace, named on stderr) run again. The
-workspace is the follower's OBSERVE-ONLY custody (CLIENT-22, cfb789b), which signs read envelopes
-and nothing else (`refused envelopeOnly` for any other step):
+workspace is the follower's OBSERVE-ONLY custody (CLIENT-22, cfb789b; enrolment ROOT-ruled at
+3e09d67), which, once sealed, signs read envelopes and nothing else (`refused envelopeOnly` for any
+other step). Made in this order, as nd (`/etc/nd` root 0755, §2a: the whole chain must pass
+StrictModes):
 
     sudo install -d -o nd -g nd -m 0700 /etc/nd/follow /etc/nd/follow/L
-    sudo -u nd env ND_WORKSPACE=/etc/nd/follow/L /opt/nd/bin/nd --init-observer
+    sudo -u nd env ND_WORKSPACE=/etc/nd/follow/L /opt/nd/bin/nd --init-hosted
+    sudo -u nd env ND_WORKSPACE=/etc/nd/follow/L ND_FOLLOW_SOCK=<the operator's follower socket> ND_HOST_SOCK=/run/nd/host.sock /opt/nd/bin/nd init OPERATOR_MEMBER   # prints `join HEX`
+    # the operator's own nd: `enroll HEX` → `id OBSERVER`; `grant world OBSERVER observe --via OPERATOR_GRANT` → `id GRANT`
+    #   OBSERVER and GRANT are the follower's ND_MEMBER / ND_GRANT in /etc/nd/hosted/L.env
+    sudo -u nd env ND_WORKSPACE=/etc/nd/follow/L /opt/nd/bin/nd --seal-observer                # LAST: ws/keys → ws/observer, once
 
-(`/etc/nd` root 0755, §2a: the whole chain must pass StrictModes). Then the operator's member enrols
-the observer's key as a member and grants it `grant world MEMBER observe --via GRANT`; that member
-and grant are the follower's `ND_MEMBER`/`ND_GRANT`. Run through the real nd
+`--seal-observer` is irreversible (`exists` if run again, `rotationInFlight` while a rotation is
+pending). `nd --init-observer` makes a sealed record directly, for tests only: it cannot join. Run through the real nd
 (`deploy/live/unit-argv.py`, hbox): over an observer workspace with no follower socket, `nd sync`
 exits 52 `nd: follow.sock: No such file or directory`: the rendered environment is the one nd reads,
-and a missing socket is named and retried. A run against a serving follower: PENDING (burst5).
+and a missing socket is named and retried. A run against a serving writer and follower: PENDING.
+
+A resident sees a new turn only after the driver's next `sync` (HOSTING-7's resident row,
+113537f): the driver is a HARD dependency of hosting, so `nd-grain-launch@L` Wants=/After=
+`nd-follow-drive@L` as well as the follower. A stopped or refused driver is a resident that never
+sees new turns (liveness, not safety); every launch and stop waits up to `RestartSec` (40 s) plus
+one sync. `worlds/L/members` must exist before the first launch (every plan hides it; a missing
+hidden path is `pathMissing` at each launch, then `crashLoop`): the install line above makes it.
 
 ## 3. Status — RAN
 

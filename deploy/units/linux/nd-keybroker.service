@@ -19,7 +19,9 @@ RestartSec=2
 RestartPreventExitStatus=70 71 72 73 75 76 78 80 81 82 83 84 85 86 87 88 89 90 91 92 93 94 95 96 97 98 99 100 103 104 105
 UMask=0077
 NoNewPrivileges=yes
-RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+# AF_NETLINK: bwrap --unshare-net brings up the decider sandbox loopback over NETLINK_ROUTE; without it
+# the decider dies at every start (measured on burst5, systemd 255, OPS-3 run 1)
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
 TimeoutStopSec=10
 
 [Install]

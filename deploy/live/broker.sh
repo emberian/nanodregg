@@ -35,7 +35,11 @@ wait_for() { local end=$((SECONDS+$1)); shift
 active() { [ "$(prop ActiveState)" = active ]; }
 settled() { local s; s=$(prop ActiveState); [ "$s" = failed ] || [ "$s" = inactive ]; }
 restarted_past() { [ "$(prop NRestarts)" -gt "$1" ] && active; }
-exits() { journalctl --user -u "$UNIT" -o cat --no-pager 2>/dev/null | grep -o 'Main process exited, code=[a-z]*, status=[0-9A-Z]*' | tail -n 1; }
+# journal reads are this run's, from SINCE on (a link kept across runs keeps one journal: run 2's
+# first draft read run 1's lines)
+SINCE=$(date '+%Y-%m-%d %H:%M:%S')
+jr() { journalctl --user -u "${1:-$UNIT}" --since "$SINCE" -o cat --no-pager 2>/dev/null; }
+exits() { jr | grep -o 'Main process exited, code=[a-z]*, status=[0-9A-Z]*' | tail -n 1; }
 fresh() { systemctl --user stop "$UNIT" 2>/dev/null; systemctl --user reset-failed "$UNIT" 2>/dev/null; return 0; }
 for nt in deciderSignaled:keybroker keyFileMode:keybroker sockDir:keybroker store:hosting-controller; do
   [ -n "$(code "${nt%%:*}" "${nt#*:}")" ] || { echo "no code for $nt in EXITS.md"; exit 2; }; done
@@ -73,7 +77,7 @@ if wait_for 30 up; then
   if [ "$m" = "660 $(id -g)" ] && [ "$dm" = 2710 ] && [ "$nnp" = yes ] && [ -n "$dexe" ]; then
     row keybroker-unit-starts PASS "active; socket $m dir $dm; decider pid $dp exe $dexe; NoNewPrivileges=$nnp"
   else row keybroker-unit-starts FAIL "socket '$m' dir '$dm' NoNewPrivileges=$nnp decider exe '$dexe'"; fi
-else row keybroker-unit-starts FAIL "$(prop ActiveState)/$(prop Result) $(exits) :: $(journalctl --user -u "$UNIT" -o cat --no-pager 2>/dev/null | tail -n 4 | tr '\n' ';')"; fi
+else row keybroker-unit-starts FAIL "$(prop ActiveState)/$(prop Result) $(exits) :: $(jr | tail -n 4 | tr '\n' ';')"; fi
 
 # H. a signalled decider: keybroker ends deciderSignaled (restart class), systemd restarts it
 n0=$(prop NRestarts)
@@ -91,14 +95,15 @@ else row decider-killed-is-restarted FAIL "keybroker not up with a decider PID f
 # I. an installed anchors copy edited by one byte: ExecStartPre refuses every start, the unit
 # stops at the start limit, keybroker never runs
 fresh
+SINCE=$(date '+%Y-%m-%d %H:%M:%S')
 cp "$R/etc/anchors.pem" "$R/report/anchors.good"
 python3 -I -c 'import sys; p=sys.argv[1]; b=bytearray(open(p,"rb").read()); i=len(b)//2; b[i]^=1; open(p,"wb").write(b)' "$R/etc/anchors.pem"
 if cmp -s "$R/etc/anchors.pem" "$R/report/anchors.good"; then row anchors-edited-refused-at-start FAIL "the edit is a no-op"; else
   rm -f "$sock"
   systemctl --user start "$UNIT"
   wait_for 60 settled
-  lim=$(journalctl --user -u "$UNIT" -o cat --no-pager 2>/dev/null | grep -c 'Start request repeated too quickly')
-  pre=$(journalctl --user -u "$UNIT" -o cat --no-pager 2>/dev/null | grep -m1 -i 'emit-anchors' | cut -c1-160)
+  lim=$(jr | grep -c 'Start request repeated too quickly')
+  pre=$(jr | grep -m1 -i 'emit-anchors' | cut -c1-160)
   if settled && [ "$lim" -ge 1 ] && [ ! -S "$sock" ]; then
     row anchors-edited-refused-at-start PASS "Result=$(prop Result); start limit hit; journal: $pre"
   else row anchors-edited-refused-at-start FAIL "$(prop ActiveState)/$(prop Result) limit=$lim :: $pre"; fi
@@ -132,7 +137,7 @@ fresh
 # L. the hosted follower (template, instance w) under nd-supervise --group: the World's genesis
 # reproduced into ROOT/hosted/worlds/w/store, its socket 0660 of the shared directory's group
 F=nd-ops-live-hfollow@w G=nd-ops-live-grain@w
-mkdir -p "$R/hosted/worlds/w" "$R/nd-follow" "$R/ws" "$R/env" "$R/pids/w" && chmod 0700 "$R/hosted" "$R/hosted/worlds" "$R/hosted/worlds/w" && chmod 2710 "$R/nd-follow" || exit 2
+mkdir -p "$R/hosted/worlds/w/members" "$R/nd-follow" "$R/ws" "$R/env" "$R/pids/w" && chmod 0700 "$R/hosted" "$R/hosted/worlds" "$R/hosted/worlds/w" && chmod 2710 "$R/nd-follow" || exit 2
 "$B/host" genesis "$R/hosted/worlds/w/store" "${g[@]}" > "$R/report/genesis-hosted.txt" || exit 2
 gr=$(awk '/^founder 0 /{print $6}' "$R/report/genesis.txt")
 printf 'ND_MEMBER=%s\nND_GRANT=%s\nND_GID=%s\n' "$op" "$gr" "$(id -g)" > "$R/env/w.env"
@@ -143,7 +148,7 @@ if wait_for 30 fup; then
   m=$(stat -c '%a %g' "$fsock")
   if [ "$m" = "660 $(id -g)" ]; then row hosted-follower-starts PASS "active; socket $m (--group)"
   else row hosted-follower-starts FAIL "socket '$m'"; fi
-else row hosted-follower-starts FAIL "$(prop ActiveState "$F")/$(prop Result "$F") :: $(journalctl --user -u "$F" -o cat --no-pager 2>/dev/null | tail -n 3 | tr '\n' ';')"; fi
+else row hosted-follower-starts FAIL "$(prop ActiveState "$F")/$(prop Result "$F") :: $(jr "$F" | tail -n 3 | tr '\n' ';')"; fi
 
 # M. grain-launch (template, instance w) starts its confined controller over the follow Store and
 # keeps running (the World has no grain: nothing is launched)
@@ -151,7 +156,7 @@ systemctl --user start "$G"
 sleep 10
 if [ "$(prop ActiveState "$G")" = active ] && [ "$(prop NRestarts "$G")" = 0 ]; then
   row grain-launch-starts PASS "active after 10 s, NRestarts=0, MainPID $(prop MainPID "$G")"
-else row grain-launch-starts FAIL "$(prop ActiveState "$G")/$(prop Result "$G") status=$(prop ExecMainStatus "$G") :: $(journalctl --user -u "$G" -o cat --no-pager 2>/dev/null | tail -n 3 | tr '\n' ';')"; fi
+else row grain-launch-starts FAIL "$(prop ActiveState "$G")/$(prop Result "$G") status=$(prop ExecMainStatus "$G") :: $(jr "$G" | tail -n 3 | tr '\n' ';')"; fi
 systemctl --user stop "$G"
 
 # N. a controller Store refusal stops the launcher by name: instance x over an empty store directory

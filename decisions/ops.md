@@ -421,3 +421,31 @@ step no row runs here.
 **META-CRITIQUE.** I nearly rendered the timer everyone named, because two owners had said
 "timer"; the stop-on-fatal property, not the word, picked the shape.
 **Status.** landed; run PENDING burst5.
+
+## OPS-14 · the units under systemd: keybroker needs AF_NETLINK; grain-launch depends on its driver (OPS-3, 2026-10-18; burst5 run, HOSTING-7's resident row)
+
+**Decision.** (1) `nd-keybroker.service`'s `RestrictAddressFamilies` gains AF_NETLINK: on burst5
+(systemd 255) the decider died at every start because `bwrap --unshare-net` brings the sandbox's
+loopback up over NETLINK_ROUTE (run 1, two rows red by name); with it all eight rows pass (run 2:
+start under NoNewPrivileges with the decider confined, decider SIGKILL → deciderSignaled 102
+restarted, edited anchors refused by ExecStartPre to the start limit, keyFileMode 84 and sockDir 105
+stopped, the hosted follower 0660 under `--group`, grain-launch running, controller `store` 109
+stopping its launcher). (2) `nd-grain-launch@` Wants=/After= `nd-follow-drive@` as well as the
+follower (Launcher.driver): HOSTING-7's resident row measured that the follow Store advances only
+while `nd sync` drives it. (3) RUNBOOK §2b makes `worlds/L/members` at install (every plan hides
+it) and gives ROOT's observer enrolment order (3e09d67: `--init-hosted`, `init`, the operator's
+`enroll` + `grant … observe`, `--seal-observer` last).
+**Alternatives.** (1) Drop `RestrictAddressFamilies` on keybroker: the process needs only UNIX, INET
+and netlink, so a named list still narrows it. (2) `Requires=` on the driver: a driver restart (every
+40 s by design) would stop every grain.
+**CRITIQUE.** AF_NETLINK lets keybroker itself open netlink sockets (route, audit…), a widening of
+the unit's own filter to make its child's sandbox work; the narrower fix (the decider's sandbox
+setup outside the filter) is not a unit setting. A missing `members` directory still ends in
+`crashLoop` after `pathMissing`, not a refusal at start (asked of HOSTING-7). The harness runs one
+uid: the two-uid branches (`peerRefused`, ConnectOwner, the group crossing) are still the broker
+test's. The deployed (system) units were run as user units; `User=`, `RuntimeDirectory=` and the
+system sockets' parents are still unrun.
+**META-CRITIQUE.** I had predicted the netlink failure for grain-launch (OPS-12: not rendering the
+restriction there) and did not apply the same reading to the keybroker unit OPS-2 rendered: I
+audited my own new unit and trusted the inherited one.
+**Status.** landed.
