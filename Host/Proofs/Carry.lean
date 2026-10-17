@@ -122,11 +122,11 @@ theorem exportFile_reads [Std.TransOrd D] [Std.LawfulEqOrd D] {E : Env D} {dc : 
   obtain ⟨rfl, hr⟩ := exportCheck_reads h
   exact hr
 
-/-- **Export refuses no fitting World** (completeness). NOT discharged at Deployed: an opened World's
-`Carried.CodecFits` needs `World.CodecFits` of a decoded base folded by admission (no theorem yet)
-and `journal.size < journalMax` (KERNEL's bound, strict, where `CodecFits` allows `≤`). Soundness
-does not rest on it: export re-reads its file (`exportCheck`) and refuses rather than write a bad
-one. -/
+/-- **Export refuses no fitting World** (completeness). At Deployed, `Host.Deployed.openWith_exportFile_ok`
+proves every part of `hfit` for every World the deployed open returns except its allowance below
+2^64: that is its ONE named premise, waiting on cv 01a14ba9-cbf4 (KERNEL must bound weight +
+allowance below 2^64), and reachable through `host import` until then. Soundness does not rest on it: export re-reads its file (`exportCheck`) and refuses rather than
+write a bad one. -/
 theorem exportFile_ok [Std.TransOrd D] [Std.LawfulEqOrd D] {E : Env D} {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc) {w : World D}
     (hfit : Carried.CodecFits E PD w.carried) (ho : PD w.origin) (hc : PD w.chain) (hh : w.height < 2 ^ 64) :
     exportFile E dc w = .ok (file E dc w) := by

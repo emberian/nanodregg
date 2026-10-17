@@ -1921,3 +1921,55 @@ journal). Both fell out of trying to state "what genesis writes, opens" with no 
 the proof could not discharge was the signal both times. The tempting move was to leave
 `hroom`/`hj` at the theorem's head as "named premises". That would have been an honest label on
 a broken writer.
+
+## HOST-40 · HOST-28's last gap: `host export` refuses no World the deployed open returns, with the two facts it cannot have named (2026-10-17, HOST-11; proof lane a5a9c62bf7f200e53)
+
+**Gap.** `Carry.exportFile_ok` (export refuses no World whose carried state fits the codec) was
+stated generically. Its docstring said it was NOT discharged at Deployed, because an opened World's
+`World.CodecFits` needed a theorem about a decoded base folded by admission.
+
+**Decision.** `Host.Deployed.openWith_exportFile_ok`: for every `o` the deployed open returns,
+`Carry.exportFile X.env digestCodec o.opened.world = .ok (Carry.file … o.opened.world)`, with ONE
+premise, `hallow`.
+- `Kept w` is the part of `World.CodecFits` that admission keeps: trie Canon, Slotted, every live
+  cell fits, `JournalOk` and height < 2^64.
+  - `kept_admit` preserves it (KERNEL's admit_canon, admit_slotted, admit_cellsFit,
+    admit_journalOk, admit_height_lt).
+  - `Record.foldlM_kept` carries it over records.
+  - `openWith_kept`: the base World has it because the deployed codec read it
+    (`world_get_fits`).
+- The cell listing ≤ worldMax is DERIVED: `openWith_listing_lt` shows every World the deployed open
+  returns lists < 2^24 leaves. Its three lemmas:
+  - `world_size_listing`: each listed leaf costs ≥ 33 bytes of the World's encoding;
+  - `admit_listing`: an admitted Turn adds at most one leaf per touch, created cell or nullifier,
+    each costing ≥ 32 bytes of its logWeight;
+  - `record_turns_le`: a record's bytes ≥ its Turns' logWeight.
+  Over the base bound (`baseRecordMax`) and `tailMax`, this gives 32·L < 2^29. A first draft
+  carried it as "a codec limit"; the reader showed that the open's byte bounds imply it.
+- `fits_of_kept` assembles `World.CodecFits` (`journal_bounded`, `journalFits_of_ok`), and then
+  `carried_fits` and `exportFile_ok` finish.
+- `hallow` (allowance < 2^64) is a REAL KERNEL defect, cv 01a14ba9-cbf4, reachable through
+  `host import`.
+  - Import a carried allowance of 2^64−1 (CarryFits allows it) holding a live heavy cell, then
+    submit a light Turn that retires that cell. The retire credits the full weight, and the
+    allowance passes 2^64.
+  - The next seal then writes a World whose nat64 does not read back, and export refuses.
+  - `host genesis` cannot reach it (allowanceMax 2^27, `fold_conserves`).
+  - Fix (KERNEL/CODEC): GenesisFits, CarryFits and World.CodecFits bound weight + allowance
+    < 2^64. ROOT is told.
+- `exportFile_ok`'s docstring now says what Deployed proves and names the one open premise.
+
+**Plant.** None new. export/import plants exist (host-sim carryPlants, store-plants). A theorem of
+completeness has no runtime refusal to plant. Its tooth is the existing
+`exportCheck` refusal of a World outside the codec (CODEC's carried teeth).
+
+**Critique.** One premise remains on a theorem stated at Deployed: a missing upstream bound with a cv.
+The theorem is still worth landing. It is the first statement that the opened World meets every
+OTHER conjunct, so the cv's fix is the whole remaining distance. The listing bound is stated at the
+deployed numbers (2^24 against 2^32 − 1) and rests on them. A Cadence with a far larger base would
+have to re-prove it, and the theorem would not silently cover it.
+
+**Meta-critique.** The lane wanted `hallow` dischargeable and found it was not. The cause is a
+genesis predicate that bounds a field instead of the invariant `fold_conserves` actually carries.
+The first draft also called `hcount` terminal. It was transmutable, and the reader caught it. A
+label of "limit" on a premise is a claim, and it is checked like any other.
