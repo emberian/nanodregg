@@ -9,6 +9,7 @@ Protocol/	PROTOCOL
 protocol/	PROTOCOL
 rows/	PROTOCOL
 client/	CLIENT
+attach/	CLIENT
 client/src/generated.rs	CODEC
 sandbox/	CLIENT
 Lang/	LANG

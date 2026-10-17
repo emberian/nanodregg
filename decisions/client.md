@@ -200,6 +200,17 @@ follow-grant id, fromHeight, validUntil, signature) becomes layout data in Proto
 refuses `noFollowGrant`; an unknown ssh key is a refused connect (no frame, no protocol name);
 `Protocol.Bounds.idleMsMax` will be generated for remote conns; CONNECTIONS_MAX stays 64.
 **Status.** B chosen; build waits for PROTOCOL's rows and `idleMsMax` in generated.rs (sha to come).
+**Built (2026-10-17, BUILD-TRANSPORT).** `attach/` (its own crate and SIZE row, ROOT): `nd-attach
+HOST_SOCK`, no peer label (one ssh session is one process, so the cap `peerConnectionsMax` is per
+session). Every end is named: `closed full` past the cap, `closed unreachable` when the Store's
+socket refuses or goes away, `closed ended` for a frame of an ended conn; the friend supervisor's
+hang-up (PROTOCOL-23) closes the upstream connection, frees the slot and is acknowledged by name; a
+box `closed` is relayed and ends the conn on the friend's side too. Exits are Lean's
+(`SupervisorExit`: refusedAtLaunch for argv, childUnroutable for a malformed frame from the friend's
+supervisor). Tested with two pipes for sshd in front of the real `host serve`
+(attach/tests/attach.rs). **Declared absence:** a friend with several ssh sessions has several caps;
+only sshd's MaxSessions/MaxStartups bind across sessions, so "one friend cannot take all
+`connectionsMax` slots" does NOT hold.
 
 ## CLIENT-13 the precommitted next key: where custody holds it, and the rotation step (2026-10-16, FOR EMBER: key custody)
 **Why this exists.** PROTOCOL's 5f7d90f makes a `sign` result `signResultLayout = (key, next, signature)`:

@@ -6,6 +6,7 @@ call kinds (Receive.Body constructors)	13	KERNEL's receivers: one derivation per
 command verbs (the one command language)	20	PROTOCOL's one command language
 Rust lines (client library)	2000	CLIENT-1 split by ROOT 10-17: client/src minus the two binaries (hand-written only); custody with rotation and precommit (CLIENT-13), the mux's per-connection writers, frame and reply deadlines and named closes (CLIENT-14), the attempt table and reply deadline (PROTOCOL-17/20/21)
 Rust lines (nd)	100	CLIENT-1 split by ROOT 10-17: the member command (argv to follow, the local custody verbs)
+Rust lines (attach/src)	300	ROOT 10-17: nd-attach, the box end of a friend's ssh session (CLIENT-12 B), its own crate and row
 Rust lines (nd-supervise)	160	CLIENT-1 split by ROOT 10-17: the supervisor binary (policy flags, launch, exit)
 Rust files with an unregistered generated header	0	a hand-written file wearing the emit-rust header (ROOT 10-16)
 partial defs (deployed)	0	law 4: no partial def in deployed code

@@ -149,6 +149,9 @@ def measure(t: tree.Tree) -> dict[str, int]:
     for metric, path in bins.items():
         out[metric] = hand.get(path, 0)
     out["Rust lines (client library)"] = sum(n for p, n in hand.items() if p not in bins.values())
+    # attach/ is its own program (ROOT 10-17): the ssh forced-command endpoint, its own row.
+    out["Rust lines (attach/src)"] = sum(
+        n for p, n, h in rs if p.startswith(os.path.join("attach", "src") + os.sep) and not (h and p in gen))
     out["Rust lines (generated)"] = sum(n for p, n, h in rs if h and p in gen)
     out["Rust files with an unregistered generated header"] = sum(
         1 for p, _, h in rs if h and p not in gen)

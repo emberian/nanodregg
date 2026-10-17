@@ -1,0 +1,25 @@
+[package]
+name = "nanodregg-attach"
+version = "0.0.0"
+edition = "2024"
+publish = false
+description = "nd-attach: the box end of a friend's ssh session (CLIENT-12 B). The supervisor's child wire, read the other way, onto one Store's socket. Decides nothing."
+
+# Standalone until GATES owns a root workspace.
+[workspace]
+
+[[bin]]
+name = "nd-attach"
+path = "src/main.rs"
+
+[dependencies]
+nanodregg-client = { path = "../client" }
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
