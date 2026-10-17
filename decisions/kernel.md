@@ -1137,3 +1137,38 @@ theorems, and that could also mean they do not see the new argument. Mutation (2
 the proofs DO see a wrong `e`. The optional-argument form also lets any caller pass a wrong `e`
 and get a non-WF trie. That is allowed by the types and refused by the proofs (no theorem holds of
 it), the same position as any caller building a `T.node` by hand.
+
+## KERNEL-36 · The trie hash rows are INSTRUMENTS: kernel-sim counts the calls the real admission makes (KERNEL-9, 2026-10-18; ROOT ruling on KERNEL-35's critique)
+**Decision.** `Kernel.Sim.Gen.countingEnv E` is `E` with every trie-domain (`domTrie`) hash
+marked. It writes one `#` through core's `dbgTrace`, which is `never_extract`, so the compiler
+neither shares nor hoists a marked call, and then returns `E`'s digest unchanged. For every
+admitted turn, `countTurn` runs the REAL `World.admit` (bracket `<A`), the REAL `commitTrie` with
+the turn's nullifiers dropped (`<C`, the cell share), and the plant (`<P`) under it. Each result is
+checked against the uncounted call ("the counter changed the computation" otherwise). `report`
+captures stderr per seed (`IO.setStderr` onto a buffer, the run forced by `IO.lazyPure`) and
+computes cell = C, nullifier = A - C. Sim.insertHashes, the model, is DELETED. Sim-only: no
+deployed module names countingEnv.
+**Why not an IO.Ref.** ROOT's wording was "one IO.Ref or a counting Env". A pure `Env.hash` can
+bump a ref only through `unsafeBaseIO` (law 4 refuses `unsafe`) or an `@[extern]` C counter (a
+gates/native-allow.tsv row and a C file in the sim). `dbgTrace` is core, safe and already compiled.
+A probe on hbox (logs/kernel9-probe) showed that it lands in a buffer installed by `IO.setStderr`
+and that `h i + h i` counts 2.
+**Measured.** 8.915 / 3.211. These are exactly the values KERNEL-35's model gave, so the model was
+right, and from now on the code is what is counted.
+**Tooth.** (1) Plant `plantCommitPerInsert`: the same map, with the empty digest per insert. It must
+count MORE than the real admission in every 16+-seed run, or arm `hash-count:empty-per-insert` is
+unmet and the sim FAILS (it is in plantedArms). (2) Mutation of the REAL code: World.insertAll and
+spendAll ignoring the shared `e` (per-insert recomputation) => hashes-per-touched-cell 9.006 >
+8.915 (standing RED) AND kernel-sim FAIL "planted refusals never met: [hash-count:empty-per-insert]",
+because the plant then equals the code. This catches exactly what KERNEL-35's "wrong e" tooth
+could not: a recomputed but CORRECT e.
+**Critique.** `never_extract` makes the counted Env a slight upper bound: if the deployed compiler
+ever shared two identical `E.hash` calls in one body, the counted run would still count both.
+There are none on the trie path today. The rows count the trie domain only, and a hash added
+under another domain on the admission path is invisible to them. stderr is now the counter's
+channel during a run: if any future pure code in the sim writes there, its `#`s would be counted
+(none does; the bracket parse counts only `#`).
+**Meta-critique.** I measured A for the turn and C as the cell share. A turn's lazy empty digest
+lands in C if a cell insert forces it, else in A - C. That is the same attribution the model used,
+and it is a choice: the floor is per turn, and the rows are per slot.
+**Flag day.** None. Nothing refuses, nothing re-geneses, nothing re-emits.

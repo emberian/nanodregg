@@ -166,11 +166,9 @@ structure State (D : Type) [Ord D] where
   /-- each account's floor in the model: a well's starts at its cap, credit lines move it -/
   floors : List (D × Nat) := []
   onces : List (D × ByteArray) := []
-  /-- KERNEL-23 (h): node hashes the admitted turns' inserts cost, and the slots they changed,
-  cells and nullifiers apart -/
-  cellHashes : Nat := 0
+  /-- KERNEL-23 (h): the slots the admitted turns changed, cells and nullifiers apart (their hashes
+  are COUNTED, not modelled: `countingEnv`, `report`) -/
   cellSlots : Nat := 0
-  nullHashes : Nat := 0
   nullSlots : Nat := 0
   /-- the call-tree arms (D5c) ran in this seed -/
   treeDone : Bool := false
@@ -206,19 +204,60 @@ def freshKey (st : State D) (tag : String) : ByteArray × State D :=
 
 /-! ## The World's root (KERNEL-23): every admitted turn's slots proved, verified, and forged -/
 
-/-- The hashes one insert costs, read off the tries before and after it: one per node on the
-slot's new path, one for its leaf, one for the leaf a split moves down, and one for the empty
-subtree if this is the turn's first insert whose new path has an empty sibling (`forced`: the
-turn's lazy copy in `commitTrie` is already forced; KERNEL-35). Returns the count and whether the
-copy is forced after it. A count, never a clock. -/
-def insertHashes (E : Env D) (pre post : Cells D) (s : Slot D) (forced : Bool) : Nat × Bool :=
+def failWith (st : State D) (f : String) : State D := { st with failures := f :: st.failures }
+
+/-! ### The hash counter (KERNEL-36): the rows count the calls the kernel makes
+
+`countingEnv E` is `E` with every trie-domain hash marked: it writes one `#` to stderr through
+core's `dbgTrace` (never extracted, so the compiler neither shares nor hoists a marked call), then
+returns `E`'s digest unchanged. `checkRoot` runs the REAL `World.admit` and the REAL `commitTrie`
+under it, each inside a bracket (`<A`, `<C`), and `report` captures stderr and counts the marks
+per bracket. Sim-only: no deployed code names it. -/
+
+def countingEnv (E : Env D) : Env D :=
+  { E with hash := fun dom b =>
+      if dom == domTrie then dbgTrace "#" fun _ => E.hash dom b else E.hash dom b }
+
+/-- PLANT (the counter's tooth): `commitTrie` with the empty digest recomputed per insert, the
+regression KERNEL-35 removed. The same map, more hashes; `report` must count more for it (arm
+`hash-count:empty-per-insert`). -/
+def plantCommitPerInsert (E : Env D) (w : World D) (t : Turn D) (posts : List (Post D)) : Cells D :=
   let S := trieSpec E
-  let p := post.prove S s
-  let meets := p.sibs.any fun h => h == Trie.emptyHash S
-  let split := match (pre.prove S s).term with
-    | some kds => if kds.any (fun q => q.1 == s) then 0 else 1
-    | none => 0
-  (p.sibs.length + 1 + split + (if meets && !forced then 1 else 0), forced || meets)
+  let m := (posts.map Post.pair ++ bornEntries t).foldl
+    (fun m p => m.insert S (.cell p.1) (.entry p.2)) w.trie
+  t.nullifiers.foldl (fun m n => m.insert S (.nullifier n) .spent) m
+
+/-- The counted calls for one admitted turn `w → w'`: the whole admission (`<A`), its trie write
+without the nullifiers (`<C`, the cell share), and the plant (`<P`). Each result must be what the
+uncounted call gives, or the counter changed the computation. -/
+def countTurn (E : Env D) (st : State D) (w w' : World D) (t : Turn D) : State D :=
+  let cE := countingEnv E
+  let S := trieSpec E
+  match check E w t with
+  | .error _ => failWith st "hash count: an admitted turn does not re-check"
+  | .ok posts =>
+      let t0 := { t with nullifiers := [] }
+      let a := dbgTrace "<A" fun _ => World.admit cE w t
+      let c := dbgTrace "<C" fun _ => commitTrie cE w t0 posts
+      let p := dbgTrace "<P" fun _ => plantCommitPerInsert cE w t posts
+      let st := match a with
+        | .ok w'' => if w''.root E == w'.root E then st
+            else failWith st "hash count: the counted admission reached another root"
+        | .error _ => failWith st "hash count: the counted admission refused an admitted turn"
+      let st := if c.hashOf S == (commitTrie E w t0 posts).hashOf S then st
+        else failWith st "hash count: the counted cell write reached another root"
+      if p.hashOf S == w'.root E then st
+      else failWith st "hash count: the per-insert plant reached another root"
+
+/-- `report`'s side: the marks of one captured run, summed per bracket tag (`A`, `C`, `P`). -/
+def countMarks (out : String) : Nat × Nat × Nat :=
+  (out.splitOn "<").foldl (fun (a, c, p) seg =>
+    let n := (seg.toList.filter (· == '#')).length
+    match seg.toList.head? with
+    | some 'A' => (a + n, c, p)
+    | some 'C' => (a, c + n, p)
+    | some 'P' => (a, c, p + n)
+    | _ => (a, c, p)) (0, 0, 0)
 
 /-- The slots a turn changed, in `commitTrie`'s order: its non-`keep` touches, its born cells,
 its nullifiers. -/
@@ -228,8 +267,6 @@ def changedSlots (t : Turn D) : List (Slot D) :=
 
 def meet (st : State D) (arm : String) : State D :=
   { st with refusedAsExpected := st.refusedAsExpected + 1, seen := arm :: st.seen }
-
-def failWith (st : State D) (f : String) : State D := { st with failures := f :: st.failures }
 
 /-- At a 32-byte digest (`digestWeight`, the deployed one), an admitted turn's record is exactly
 `Turn.logWeight` bytes of the instance's turn codec: the charge prices the bytes the log holds.
@@ -249,18 +286,16 @@ def checkRoot (P : Params D) (st : State D) (w w' : World D) (t : Turn D) : Stat
   let E := P.env
   let S := trieSpec E
   let slots := changedSlots t
-  -- `commitTrie`'s one lazy copy of the empty subtree's digest, shared by every insert of the turn
-  let e : Trie.EmptyDigest D := Thunk.mk fun _ => Trie.emptyHash S
-  let (tr, st, _) := slots.foldl (fun (tr, st, forced) s =>
+  let st := countTurn E st w w' t
+  let (tr, st) := slots.foldl (fun (tr, st) s =>
     match w'.trie.get S s with
-    | none => (tr, failWith st "root: a changed slot is absent after the turn", forced)
+    | none => (tr, failWith st "root: a changed slot is absent after the turn")
     | some l =>
-        let tr' := tr.insert S s l e
-        let (h, forced) := insertHashes E tr tr' s forced
+        let tr' := tr.insert S s l
         let st := match s with
-          | .cell _ => { st with cellHashes := st.cellHashes + h, cellSlots := st.cellSlots + 1 }
-          | .nullifier _ => { st with nullHashes := st.nullHashes + h, nullSlots := st.nullSlots + 1 }
-        (tr', st, forced)) (w.trie, st, false)
+          | .cell _ => { st with cellSlots := st.cellSlots + 1 }
+          | .nullifier _ => { st with nullSlots := st.nullSlots + 1 }
+        (tr', st)) (w.trie, st)
   let st := if tr.hashOf S == w'.root E then st
     else failWith st "root: replaying the turn's inserts does not reach the admitted root"
   let root := w'.root E
@@ -1320,7 +1355,7 @@ def plantedArms : List String :=
    "too-many-calls:tooManyCalls", "over-ticks:overTicks", "grant-to-object:ok", "call-chain:ok",
    "call-too-deep:callTooDeep", "journal-expired:outsideWindow", "journal-window-first:outsideWindow",
    "journal-kept:replayed", "journal-reuse:ok", "carry-name:nameTooLong", "carry-old-call:replayed",
-   "carry-old-world:wrongWorld", "carry-new:ok"]
+   "carry-old-world:wrongWorld", "carry-new:ok", "hash-count:empty-per-insert"]
 
 /-- `--seeds N` runs seeds `0 … N-1`; otherwise each argument is a seed. -/
 def parseSeeds : List String → List Nat
@@ -1341,7 +1376,14 @@ def report (P : Params D) (seeds : List Nat) : IO UInt32 := do
   let mut weighed := 0
   let mut journal : Nat × Nat × Nat := (0, 0, 0)
   for seed in seeds do
-    let st := run P seed 120
+    -- the run's trie hashes are counted off its stderr (`countingEnv`); nothing else writes there
+    let buf ← IO.mkRef ({} : IO.FS.Stream.Buffer)
+    let old ← IO.setStderr (IO.FS.Stream.ofBuffer buf)
+    let st ← IO.lazyPure fun _ => run P seed 120
+    let _ ← IO.setStderr old
+    let (ha, hc, hp) := countMarks (String.fromUTF8! (← buf.get).data)
+    -- the plant must cost more whenever the run met an empty sibling, or the counter is blind
+    let st := if hp > ha then { st with seen := "hash-count:empty-per-insert" :: st.seen } else st
     let (a, b) := maxWork st.log
     work := (max work.1 a, max work.2 b)
     admitted := admitted + st.admitted
@@ -1349,7 +1391,7 @@ def report (P : Params D) (seeds : List Nat) : IO UInt32 := do
     journal := (max journal.1 st.journalMax, journal.2.1 + st.journalScanned, journal.2.2 + st.journalTurns)
     refused := refused + st.refusedAsExpected
     restarts := restarts + st.restarts
-    hashes := (hashes.1 + st.cellHashes, hashes.2.1 + st.cellSlots, hashes.2.2.1 + st.nullHashes,
+    hashes := (hashes.1 + hc, hashes.2.1 + st.cellSlots, hashes.2.2.1 + (ha - hc),
       hashes.2.2.2 + st.nullSlots)
     seen := (st.seen ++ seen).eraseDups
     match st.failures.reverse with
