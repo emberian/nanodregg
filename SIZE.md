@@ -15,6 +15,8 @@
 | refusal constructors | 40 | — (ratchet: may only fall without a row that needs the new one) |
 | Rust lines | 2826 | — |
 | Rust lines (client/src) | 1625 | 2000 |
+| Rust lines (generated) | 0 | — |
+| Rust files with an unregistered generated header | 0 | 0 |
 | partial defs (deployed) | 0 | 0 |
 | theorems | 550 | — |
 | sorry | 0 | 0 |

@@ -21,15 +21,38 @@ import tree
 HOST_EXE = "nanodregg-host"
 
 
-def rust_lines(root: str) -> int:
-    n = 0
-    for d, dirs, files in os.walk(root):
+# A file Emit/Rust.lean wrote starts with this line (CODEC's header), and is registered in
+# gates/generated.tsv, whose rows `lake exe emit-rust --check` gates. The client/src ceiling bounds
+# hand-written Rust (CLIENT-1, ROOT 10-16), so it excludes generated files; `Rust lines (generated)`
+# keeps their growth visible. Only a REGISTERED file with the header counts as generated: a
+# hand-written file that copies the header is counted as hand-written AND shows in the ceiling-0 row
+# `Rust files with an unregistered generated header`.
+GENERATED = re.compile(r"^// @generated .* by Emit/Rust\.lean\. DO NOT EDIT\.$")
+
+
+def registered(root: str) -> set[str]:
+    p = os.path.join(root, "gates", "generated.tsv")
+    if not os.path.isfile(p):
+        return set()
+    rows = (l.split("\t") for l in open(p, encoding="utf-8") if l.strip() and not l.startswith("#"))
+    return {os.path.normpath(r[1].strip()) for r in rows if len(r) > 1}
+
+
+def rust_files(root: str, sub: str = ""):
+    """(path relative to root, line count, has the generated header) for each .rs under root/sub."""
+    for d, dirs, files in os.walk(os.path.join(root, sub)):
         dirs[:] = [x for x in dirs if x not in tree.SKIP_DIRS]
         for f in files:
             if f.endswith(".rs"):
-                with open(os.path.join(d, f), encoding="utf-8", errors="replace") as fh:
-                    n += sum(1 for _ in fh)
-    return n
+                path = os.path.join(d, f)
+                with open(path, encoding="utf-8", errors="replace") as fh:
+                    lines = fh.readlines()
+                header = bool(lines) and bool(GENERATED.match(lines[0].rstrip("\n")))
+                yield os.path.normpath(os.path.relpath(path, root)), len(lines), header
+
+
+def rust_lines(root: str) -> int:
+    return sum(n for _, n, _ in rust_files(root))
 
 
 # Constructor-count metrics (ROOT ruling 2026-10-16: PROTOCOL's rows are computed, never hand
@@ -79,7 +102,13 @@ def measure(t: tree.Tree) -> dict[str, int]:
         for d, dirs, files in os.walk(t.root) if not (set(d.split(os.sep)) & tree.SKIP_DIRS)
         for f in files if f.endswith((".c", ".h")))
     out["Rust lines"] = rust_lines(t.root)
-    out["Rust lines (client/src)"] = rust_lines(os.path.join(t.root, "client", "src"))
+    gen = registered(t.root)
+    rs = list(rust_files(t.root))
+    out["Rust lines (client/src)"] = sum(
+        n for p, n, h in rs if p.startswith("client" + os.sep + "src" + os.sep) and not (h and p in gen))
+    out["Rust lines (generated)"] = sum(n for p, n, h in rs if h and p in gen)
+    out["Rust files with an unregistered generated header"] = sum(
+        1 for p, _, h in rs if h and p not in gen)
     for metric, sources in CONSTRUCTORS.items():
         out[metric] = sum(constructors(t, p, n) for p, n in sources)
     mdir = os.path.join(t.root, "gates", "metrics")
