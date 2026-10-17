@@ -12,6 +12,7 @@ The parser half is `Lang.Proofs.PrintParse`. Elaboration is proved over any form
 printed one (`ty_tySx`, `term_termSx`, `dataAt_dataSx`), since the parser assigns real offsets.
 The printed forms are `Ok` (`tySx_ok`, `termSx_ok`, `dataSx_ok`): every label passes `labelOk`, a
 bound variable is `x<depth>`, and bytes are a quote-free string or `#hex`.
+`hex_injective`: distinct byte strings print distinct hex (what HOSTING's grain directory names rest on).
 -/
 import Lang.Proofs.PrintParse
 import Lang.Proofs.Canon
@@ -755,7 +756,8 @@ theorem name_ok (m : Nat) : Ok (atom (name m)) := by
 
 theorem hexDigit_not_delim : ∀ n, n < 16 → isDelim (hexDigit n) = false := by decide
 
-theorem mem_hexChars {b : ByteArray} {c : Char} (h : c ∈ hexChars b) : isDelim c = false := by
+/-- Every character of `hexChars b` is one hex digit. -/
+theorem hexChars_digit {b : ByteArray} {c : Char} (h : c ∈ hexChars b) : ∃ n, n < 16 ∧ c = hexDigit n := by
   simp only [hexChars] at h
   rw [← Array.foldr_toList] at h
   generalize b.data.toList = l at h
@@ -764,9 +766,23 @@ theorem mem_hexChars {b : ByteArray} {c : Char} (h : c ∈ hexChars b) : isDelim
   | cons x l ih =>
     simp only [List.foldr_cons, List.mem_cons] at h
     rcases h with rfl | rfl | h
-    · exact hexDigit_not_delim _ (by have := x.toNat_lt; omega)
-    · exact hexDigit_not_delim _ (by omega)
+    · exact ⟨_, by have := x.toNat_lt; omega, rfl⟩
+    · exact ⟨_, by omega, rfl⟩
     · exact ih h
+
+theorem mem_hexChars {b : ByteArray} {c : Char} (h : c ∈ hexChars b) : isDelim c = false := by
+  obtain ⟨n, hn, rfl⟩ := hexChars_digit h
+  exact hexDigit_not_delim n hn
+
+theorem hexDigit_lower : ∀ n, n < 16 → ('0' ≤ hexDigit n ∧ hexDigit n ≤ '9') ∨ ('a' ≤ hexDigit n ∧ hexDigit n ≤ 'f') := by
+  decide
+
+/-- Hex is lowercase `0-9a-f` only, so case folding is the identity on it: two hex names that a
+case-insensitive file system identifies are equal (with `hex_injective`, name the same bytes). -/
+theorem hexChars_lower {b : ByteArray} {c : Char} (h : c ∈ hexChars b) :
+    ('0' ≤ c ∧ c ≤ '9') ∨ ('a' ≤ c ∧ c ≤ 'f') := by
+  obtain ⟨n, hn, rfl⟩ := hexChars_digit h
+  exact hexDigit_lower n hn
 
 theorem hexAtom_ok (b : ByteArray) : Ok (atom ("#" ++ hex b)) := by
   refine .atom (by simp) (fun c hc => ?_)
@@ -936,6 +952,15 @@ theorem unhex_hexChars (b : ByteArray) : unhex .empty (hexChars b) = some b := b
   simp only [hexChars]
   rw [← Array.foldr_toList, unhex_hex]
   simp
+
+/-- Distinct byte strings print distinct hex: `Read.unhex` inverts `hexChars`. -/
+theorem hexChars_injective {a b : ByteArray} (h : hexChars a = hexChars b) : a = b := by
+  have e := unhex_hexChars a
+  rw [h, unhex_hexChars] at e
+  exact (Option.some.inj e).symm
+
+theorem hex_injective {a b : ByteArray} (h : hex a = hex b) : a = b :=
+  hexChars_injective (by simpa [hex] using congrArg String.toList h)
 
 theorem mapM_imports {f : SExp → P ByteArray} (hf : ∀ q i, f (.str q (hex i)) = .ok i) :
     ∀ (is : List ByteArray) {ys : List SExp}, SameL (is.map fun i => .str 0 (hex i)) ys → ys.mapM f = .ok is
