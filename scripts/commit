@@ -131,7 +131,9 @@ if git -C "$repo" diff --quiet "$base" "$cand"; then echo "scripts/commit: nothi
 git -C "$repo" diff --stat "$base" "$cand"
 
 pp=(--index --base "$base" --message "$msg"); [ -n "$nobuild" ] && pp+=(--no-build)
-"$scripts/pre-push" "${pp[@]}" || { echo "scripts/commit: REFUSED by scripts/pre-push"; exit 1; }
+"$scripts/pre-push" "${pp[@]}"; rc=$?
+if [ $rc -eq 76 ]; then echo "scripts/commit: NOT JUDGED — the judge was killed under load (KILLED(load)); nothing written: re-run scripts/commit"; exit 76; fi
+[ $rc -eq 0 ] || { echo "scripts/commit: REFUSED by scripts/pre-push"; exit 1; }
 
 new=$(git -C "$repo" commit-tree "$cand" -p "$base" -F "$msg") || exit 2
 if ! git -C "$repo" update-ref refs/heads/main "$new" "$base"; then

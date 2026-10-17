@@ -25,7 +25,7 @@
 #      Lean generator emits (`lake exe emit-rust --check client/src/generated.rs`);
 #   4. `cargo check --all-targets` + `cargo clippy -D warnings` + `cargo fmt --check` for each
 #      changed crate.
-# Prints one verdict line. Exit 0 = may land.
+# Prints one verdict line. Exit 0 = may land; 1 = RED; 76 = KILLED(load), not judged.
 set -uo pipefail
 . "$(dirname "$0")/gate-lib.sh"
 
@@ -56,14 +56,27 @@ fi
 gate_slot || exit 2
 materialize "$cand" "$G/tree" || exit 2
 materialize "$base" "$G/base" || exit 2
-log=$G/last.log
+# One log per judged tree, kept (the newest 20 per slot): a slot's next judge must not overwrite
+# the log a refused lane is about to read.
+log=$G/${cand:0:12}.log
 : > "$log"
+ls -t "$G"/*.log 2>/dev/null | tail -n +21 | while read -r old; do rm -f "$old"; done
 fail=""
 note=""
+killed=""
 
-step() { # step NAME CMD...: run, log, remember failure
+# step NAME CMD...: run, log, remember failure. A step whose Lean or cargo process was killed by a
+# signal (earlyoom's SIGTERM: `Lean exited with code 143`; the cgroup's SIGKILL: 137) is not a
+# verdict about the commit: it is KILLED(load), named, never RED, and the commit is not judged.
+step() {
   local name=$1; shift
-  if "$@" >> "$log" 2>&1; then echo "  $name: ok"; else echo "  $name: RED"; fail="$fail $name"; fi
+  "$@" > "$G/step.out" 2>&1; local rc=$?
+  cat "$G/step.out" >> "$log"
+  if [ $rc -eq 0 ]; then echo "  $name: ok"
+  elif { [ $rc -eq 137 ] || [ $rc -eq 143 ] || grep -qE 'exited with code (137|143)|signal: (9|15)|\(signal (9|15)\)' "$G/step.out"; } &&
+       ! grep -qE '^error: [^ ]+\.lean:[0-9]+:[0-9]+:' "$G/step.out"; then  # a real error beside a kill is RED
+    echo "  $name: KILLED(load) — re-run"; killed="$killed $name"
+  else echo "  $name: RED"; fail="$fail $name"; fi
 }
 
 git -C "$repo" diff --name-only "$base" "$cand" > "$G/changed"
@@ -91,11 +104,12 @@ if [ "$build" = 0 ]; then
 else
   # shellcheck disable=SC2046
   step build wrapped env -C "$G/tree" LEAN_NUM_THREADS="${LEAN_NUM_THREADS:-4}" lake build $(lean_targets "$G/tree")
-  step census wrapped python3 "$G/tree/gates/census.py" "$G/tree"
+  if [ -n "$killed" ]; then echo "  census: SKIPPED (the build was killed)"
+  else step census wrapped python3 "$G/tree/gates/census.py" "$G/tree"; fi
 fi
 
 # Generated files are checked on every commit: a Rust-only commit can make them stale too.
-if [ "$build" = 1 ]; then
+if [ "$build" = 1 ] && [ -z "$killed" ]; then
   while read -r exe out; do
     [ -n "$exe" ] && step "generated:$out" wrapped env -C "$G/tree" lake exe "$exe" --check "$out"
   done < <(generated_checks "$G/tree")
@@ -112,7 +126,12 @@ short=${cand:0:12}
 if [ -n "$fail" ]; then
   echo "PRE-PUSH RED tree $short:$fail — log: $log"
   # every gate's named reds (check.py prints `  <gate>: <red>`), once each, without PRE-EXISTING
-  grep -E '^  [a-z-]+: |AXIOM-CENSUS red|^[^ ]+ \([^)]*\) uses |error:|^Diff in|^warning:' "$log" | grep -v ': PRE-EXISTING ' | awk '!seen[$0]++' | head -40
+  grep -E '^  [a-z-]+: |AXIOM-CENSUS red|^[^ ]+ \([^)]*\) uses |^allow row matches nothing|error:|^Diff in|^warning:' "$log" | grep -v ': PRE-EXISTING ' | awk '!seen[$0]++' | head -40
   exit 1
+fi
+# Exit 76: not judged. scripts/commit says so and writes nothing; the lane re-runs it.
+if [ -n "$killed" ]; then
+  echo "PRE-PUSH KILLED(load) tree $short:$killed — killed by a signal under memory pressure, not by this commit; re-run — log: $log"
+  exit 76
 fi
 echo "PRE-PUSH GREEN tree $short$note"
