@@ -137,17 +137,28 @@ inductive Step
   | host
   /-- freeze this call as an attempt, settle it by submit/lookup, resume with the settlement -/
   | submit
+  /-- custody: make sure a PENDING key (the one after the next) exists, durably, before any rotate
+  call is frozen; idempotent (a retried command never mints a second one). Result:
+  `precommitResultLayout` (CLIENT-13) -/
+  | precommit
+  /-- custody: sign exactly these bytes with the NEXT key. Result: `signResultLayout` with
+  `key` = the next key, `next` = the pending key. It arms the rotation: the following `submit`
+  step's attempt is the rotation attempt, and custody advances (current := next, next := pending)
+  only on ITS OWN settlement of that attempt as committed, never on a follow step (CLIENT-13) -/
+  | signNext
   deriving DecidableEq, Repr
 
 namespace Step
 
-def all : List Step := [done, sign, host, submit]
+def all : List Step := [done, sign, host, submit, precommit, signNext]
 
 def code : Step → UInt8
   | done => 0
   | sign => 1
   | host => 2
   | submit => 3
+  | precommit => 4
+  | signNext => 5
 
 def ofCode? (b : UInt8) : Option Step := all.find? (·.code == b)
 
@@ -158,6 +169,8 @@ def layout : Step → Codec.Layout
   | sign => [.bytes "message", .bytes "k"]
   | host => [.oneOf "op" (Op.relayable.map fun o => (o.name, o.code)), .bytes "payload", .bytes "k"]
   | submit => [.bytes "call", .bytes "k"]
+  | precommit => [.bytes "k"]
+  | signNext => [.bytes "message", .bytes "k"]
 
 end Step
 
@@ -172,6 +185,10 @@ def resumeLayout : Codec.Layout := [.bytes "k", .bytes "result"]
 its precommitted NEXT public key (so follow can state the digest a sponsor or a rotation commits
 to), and the current key's signature over exactly the step's message. -/
 def signResultLayout : Codec.Layout := [.bytes "key", .bytes "next", .bytes "signature"]
+
+/-- What custody answers to a `precommit` step: its NEXT public key and its PENDING public key (the
+one a rotation to `next` precommits, by digest). -/
+def precommitResultLayout : Codec.Layout := [.bytes "next", .bytes "pending"]
 
 /-- The READ ENVELOPE: the payload of `log` (and `read`). A member's request to read the writer's
 log from a height, signed by its current key and gated by its follow grant (PROTOCOL-3, HOST-11):

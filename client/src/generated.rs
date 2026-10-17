@@ -32,6 +32,8 @@ pub mod step {
     pub const SIGN: u8 = 1;
     pub const HOST: u8 = 2;
     pub const SUBMIT: u8 = 3;
+    pub const PRECOMMIT: u8 = 4;
+    pub const SIGNNEXT: u8 = 5;
 }
 
 /// The follow socket's payloads (Protocol.Table layouts; Lean codec: Protocol.Frames).
@@ -291,6 +293,13 @@ pub mod layout {
             call: Vec<u8>,
             k: Vec<u8>,
         },
+        Precommit {
+            k: Vec<u8>,
+        },
+        Signnext {
+            message: Vec<u8>,
+            k: Vec<u8>,
+        },
     }
 
     impl Step {
@@ -323,6 +332,15 @@ pub mod layout {
                     let call = c.bytes(262144)?;
                     let k = c.bytes(262144)?;
                     Step::Submit { call, k }
+                }
+                4 => {
+                    let k = c.bytes(262144)?;
+                    Step::Precommit { k }
+                }
+                5 => {
+                    let message = c.bytes(262144)?;
+                    let k = c.bytes(262144)?;
+                    Step::Signnext { message, k }
                 }
                 tag => return Err(Refusal::BadTag { offset: at, tag }),
             };
@@ -357,6 +375,15 @@ pub mod layout {
                 Step::Submit { call, k } => {
                     out.push(3);
                     put_bytes(&mut out, call, 262144)?;
+                    put_bytes(&mut out, k, 262144)?;
+                }
+                Step::Precommit { k } => {
+                    out.push(4);
+                    put_bytes(&mut out, k, 262144)?;
+                }
+                Step::Signnext { message, k } => {
+                    out.push(5);
+                    put_bytes(&mut out, message, 262144)?;
                     put_bytes(&mut out, k, 262144)?;
                 }
             }

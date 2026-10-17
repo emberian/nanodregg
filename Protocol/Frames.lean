@@ -32,6 +32,9 @@ def resumeFrame : Stream (Layout.Ty Bounds.frameBytesMax resumeLayout) :=
 def signResultFrame : Stream (Layout.Ty Bounds.frameBytesMax signResultLayout) :=
   Layout.codec Bounds.frameBytesMax (by decide) signResultLayout
 
+def precommitResultFrame : Stream (Layout.Ty Bounds.frameBytesMax precommitResultLayout) :=
+  Layout.codec Bounds.frameBytesMax (by decide) precommitResultLayout
+
 def envelopeFrame : Stream (Layout.Ty Bounds.frameBytesMax envelopeLayout) :=
   Layout.codec Bounds.frameBytesMax (by decide) envelopeLayout
 

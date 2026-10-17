@@ -60,6 +60,8 @@ inductive Reply
   | sign (message k : ByteArray)
   | host (op : Op) (payload k : ByteArray)
   | submit (call k : ByteArray)
+  | precommit (k : ByteArray)
+  | signNext (message k : ByteArray)
   deriving Inhabited
 
 variable {D : Type} [Ord D] [DecidableEq D]

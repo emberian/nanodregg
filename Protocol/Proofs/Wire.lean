@@ -43,6 +43,13 @@ theorem Reply.ofFrame_frame {r : Reply} {f : Step.Frame} (h : r.frame = some f) 
       cases hx : Text.fit Bounds.frameBytesMax c <;> cases hy : Text.fit Bounds.frameBytesMax k <;>
         simp [Reply.frame, hx, hy] at h
       subst h; simp [Reply.ofFrame, fit_val hx, fit_val hy]
+  | precommit k =>
+      cases hx : Text.fit Bounds.frameBytesMax k <;> simp [Reply.frame, hx] at h
+      subst h; simp [Reply.ofFrame, fit_val hx]
+  | signNext m k =>
+      cases hx : Text.fit Bounds.frameBytesMax m <;> cases hy : Text.fit Bounds.frameBytesMax k <;>
+        simp [Reply.frame, hx, hy] at h
+      subst h; simp [Reply.ofFrame, fit_val hx, fit_val hy]
 
 theorem Reply.ofBytes_bytes {r : Reply} {b : ByteArray} (h : r.bytes = some b) :
     Reply.ofBytes b = some r := by

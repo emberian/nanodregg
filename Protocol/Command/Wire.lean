@@ -25,12 +25,16 @@ def Reply.frame : Reply → Option Step.Frame
   | .sign m k => do pure ⟨.sign, (← Text.fit _ m, ← Text.fit _ k, ())⟩
   | .host op p k => do pure ⟨.host, (← relayCode op, ← Text.fit _ p, ← Text.fit _ k, ())⟩
   | .submit c k => do pure ⟨.submit, (← Text.fit _ c, ← Text.fit _ k, ())⟩
+  | .precommit k => do pure ⟨.precommit, (← Text.fit _ k, ())⟩
+  | .signNext m k => do pure ⟨.signNext, (← Text.fit _ m, ← Text.fit _ k, ())⟩
 
 def Reply.ofFrame : Step.Frame → Option Reply
   | ⟨.done, (e, o, r, ())⟩ => some (.done e o.1 r.1)
   | ⟨.sign, (m, k, ())⟩ => some (.sign m.1 k.1)
   | ⟨.host, (c, p, k, ())⟩ => (Op.ofCode? c.1).map fun op => .host op p.1 k.1
   | ⟨.submit, (c, k, ())⟩ => some (.submit c.1 k.1)
+  | ⟨.precommit, (k, ())⟩ => some (.precommit k.1)
+  | ⟨.signNext, (m, k, ())⟩ => some (.signNext m.1 k.1)
 
 def Reply.bytes (r : Reply) : Option ByteArray := r.frame.map Step.frame.bytes
 

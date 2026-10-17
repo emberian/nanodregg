@@ -86,6 +86,9 @@ pub enum RunError {
     Attempt(AttemptError),
     /// The attempt is still uncertain; its directory is named so a later run resumes it.
     Uncertain(PathBuf),
+    /// Follow asked for a custody rotation step (`precommit`, `signNext`) this custody does not
+    /// perform yet (CLIENT-13 lands it); refused by the step's name, nothing signed.
+    RotationStep(&'static str),
 }
 
 impl std::fmt::Display for RunError {
@@ -95,6 +98,7 @@ impl std::fmt::Display for RunError {
             Self::Follow(e) => write!(f, "follow: {e}"),
             Self::Host(e) => write!(f, "host: {e}"),
             Self::Attempt(e) => write!(f, "{e}"),
+            Self::RotationStep(s) => write!(f, "custody does not perform {s} yet"),
             Self::Uncertain(p) => write!(
                 f,
                 "uncertain: the call in {} may or may not have committed",
@@ -168,6 +172,8 @@ pub fn run(
                     }
                 }
             }
+            Step::Precommit { .. } => return Err(RunError::RotationStep("precommit")),
+            Step::Signnext { .. } => return Err(RunError::RotationStep("signNext")),
         };
         step = follow.resume(&k, &outcome).map_err(RunError::Follow)?;
     }
