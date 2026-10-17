@@ -38,8 +38,8 @@ end Status
 /-- The exit status determines the refusal's printed name: one code, one name. -/
 theorem StoreFault.status_iff_name {F : Type} (a b : StoreFault F) :
     a.status = b.status ↔ a.name = b.name := by
-  rcases a with _ | _ | _ | _ | (_ | _ | _ | _ | _ | _ | _) | (_ | _) | (_ | _ | _) | _ <;>
-  rcases b with _ | _ | _ | _ | (_ | _ | _ | _ | _ | _ | _) | (_ | _) | (_ | _ | _) | _ <;>
+  rcases a with _ | _ | _ | _ | (_ | _ | _ | _ | _ | _ | _ | _) | (_ | _) | (_ | _ | _) | _ <;>
+  rcases b with _ | _ | _ | _ | (_ | _ | _ | _ | _ | _ | _ | _) | (_ | _) | (_ | _ | _) | _ <;>
   simp [StoreFault.status, StoreFault.name, BaseFault.status, BaseFault.name, SealFault.status,
     SealFault.name]
 

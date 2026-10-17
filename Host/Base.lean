@@ -2,7 +2,15 @@
 # Host.Base — the sealed whole-World base, and what open reads (HOST-14)
 
     STORE/base.world = one Log frame (under the base sealer) of
-                       world bytes ‖ u64 offset ‖ tag32
+                       shapes32 ‖ world bytes ‖ u64 offset ‖ tag32 ‖ index
+
+`shapes32` is the SHAPE STAMP (D2, HOST-20): the digest of the tags of the base codec (which holds
+CODEC's World codec) and of the batch record codec, `Base.shapeStamp`. A Store's bytes are
+judged under the shapes of the binary that opens it: a base whose stamp is not the running one is
+refused `shapeMismatch` by name, after its MAC verifies and BEFORE any byte of it is decoded. No
+segment byte is ever read without its base (`openWith` reads the base first and the segment only
+from the base's offset), so the base's stamp covers the batch records after it: an old shape
+refuses to load, it is never reinterpreted (law 1).
 
 `offset` is where in `seg.log` the batches after this World begin, and `tag` is the segment's
 chain tag there (the `prev` of the frame at `offset`). The World part is exactly CODEC's World
@@ -21,6 +29,7 @@ writes a longer tail (`Host.Loop.Tail`).
 import Host.Bounds
 import Codec.Raw
 import Codec.World
+import Codec.Tag
 
 namespace Nanodregg.Host
 
@@ -58,6 +67,20 @@ def Base.codec {W : Type} (world : Stream W) : Stream (Base W) :=
       (Stream.rawList indexMax Entry.codec))))
     (fun (w, o, t, i) => some ⟨w, o, t, i⟩) (fun b => (b.world, b.offset, b.tag, b.index))
 
+/-- The domain of the shape stamp. -/
+def domShapes : String := "nanodregg/host/shapes/v1"
+
+/-- The shape stamp of a Store whose bases hold `world` and whose segment holds `record`s: the
+digest of CODEC's content-addressed tags (`Tag.of`) of the base codec and the batch record codec.
+The base codec's shape contains the World codec's and the index entry's, so a change to any of
+the World, the base or a batch record changes the stamp (`Codec.Proofs.Tag.Tag.of_eq`: equal tags
+mean equal labels and shapes). Computed from the codecs, never written as a literal. -/
+def Base.shapeStamp {W R : Type} (world : Stream W) (record : Stream R) : Digest :=
+  Hash.digest domShapes ((Tag.of "host/base" (Base.codec world)).bytes ++ (Tag.of "host/batch" record).bytes)
+
+/-- The width of the stamp at the head of a base record (a digest). -/
+def stampBytes : Nat := 32
+
 /-- A tag as a digest (every tag is `Log.tagBytes` long). -/
 def tagDigest (s : Log.Sealer) (b : ByteArray) : Digest := ⟨s.tag b, s.tag_size b⟩
 
@@ -73,6 +96,9 @@ structure Keys where
   segment : Log.Sealer
   base : Log.Sealer
   worldDigest : ByteArray → ByteArray
+  /-- the shape stamp this binary writes and accepts (`Base.shapeStamp`, D2): unkeyed, a
+  function of the codecs alone -/
+  shapes : Digest
 
 /-- Why a seal did not produce a base (law 7). -/
 inductive SealFault where
@@ -96,7 +122,7 @@ def Base.file {W : Type} (keys : Keys) (c : Cadence) (world : Stream W) (w : W) 
   let ib := (Stream.rawList indexMax Entry.codec).size index
   if c.worldBytesMax < world.size w then .error (.worldTooLarge (world.size w)) else
   if c.worldBytesMax < ib then .error (.indexTooLarge ib) else
-  .ok (Log.frame keys.base baseInitial ((Base.codec world).bytes ⟨w, offset, tag, index⟩))
+  .ok (Log.frame keys.base baseInitial (keys.shapes.bytes ++ (Base.codec world).bytes ⟨w, offset, tag, index⟩))
 
 /-- A Store as genesis writes it, before any file exists: the segment holding ONE frame, the
 ORIGIN frame `Log.frame keys.segment segmentInitial origin` whose record is the genesis World's
@@ -117,8 +143,8 @@ def genesisImage {W : Type} (keys : Keys) (c : Cadence) (world : Stream W)
   | .error f => .error f
   | .ok base => .ok ⟨segment, base⟩
 
-/-- Where a base file's World bytes are: right after the frame's length field. -/
-def worldStart : Nat := 4
+/-- Where a base file's World bytes are: after the frame's length field and the shape stamp. -/
+def worldStart : Nat := 4 + stampBytes
 
 /-- The World bytes of a base file whose World is `bytes` long. -/
 def worldBytesOf (file : ByteArray) (bytes : Nat) : ByteArray :=
@@ -141,6 +167,9 @@ inductive BaseFault where
   segment is not the one this base was sealed over (another Store's, or a pre-HOST-18 Store
   whose base sat at offset 0). Never read as a torn tail, so nothing is truncated (HOST-18). -/
   | foreignSegment
+  /-- the base was written under other shapes (`stored`, the stamp on disk) than the running
+  binary's (`running`): an old (or a newer) shape refuses, never decoded (D2, HOST-20) -/
+  | shapeMismatch (stored running : Array UInt8)
   deriving Repr
 
 def BaseFault.name : BaseFault → String
@@ -151,6 +180,7 @@ def BaseFault.name : BaseFault → String
   | .segmentShort _ _ => "segmentShort"
   | .tailTooLong _ _ => "tailTooLong"
   | .foreignSegment => "foreignSegment"
+  | .shapeMismatch _ _ => "shapeMismatch"
 
 /-- The base a base file holds, and its World's encoded size. -/
 def Base.read {W : Type} (keys : Keys) (c : Cadence) (world : Stream W) (file : ByteArray) :
@@ -160,7 +190,9 @@ def Base.read {W : Type} (keys : Keys) (c : Cadence) (world : Stream W) (file : 
   | none => .error .baseCorrupt
   | some r =>
     if r.next ≠ file.size then .error .baseCorrupt else
-    match (Base.codec world).decode r.record with
+    let stored := r.record.extract 0 stampBytes
+    if stored ≠ keys.shapes.bytes then .error (.shapeMismatch stored.data keys.shapes.bytes.data) else
+    match (Base.codec world).decode (r.record.extract stampBytes r.record.size) with
     | .error e => .error (.baseUndecodable e)
     | .ok b => .ok (b, world.size b.world, keys.worldDigest (worldBytesOf file (world.size b.world)))
 

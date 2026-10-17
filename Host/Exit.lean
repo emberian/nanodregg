@@ -92,6 +92,9 @@ inductive Status where
   /-- a `.dedicated` task did not get its own thread (the runtime ran it inline): the reader would
   block the loop, and the resident would answer nothing -/
   | noThreads
+  /-- the base was written under other codec shapes than this binary's (D2, HOST-20): an old
+  shape refuses to load; re-genesis from a checked export carries the state (law 1) -/
+  | shapeMismatch
   deriving DecidableEq, Repr
 
 namespace Status
@@ -100,7 +103,8 @@ def all : List Status :=
   [eof, uncertain, fuel, sealIo, usage, entropy, recordTooLarge, worldTooLarge, indexTooLarge, io, ioServing,
    locked, .exists, badKey, shortRead, noBase, baseTooLarge, baseCorrupt, baseUndecodable,
    segmentShort, tailTooLong, foreignSegment, corrupt, record, tagWidth, behindAnchor, chainMismatch,
-   badIndex, pageTooLarge, pastEnd, shortBase, reopenFailed, reopenDiverged, lifetime, stream, noThreads]
+   badIndex, pageTooLarge, pastEnd, shortBase, reopenFailed, reopenDiverged, lifetime, stream, noThreads,
+   shapeMismatch]
 
 def code : Status → Nat
   | eof => 0
@@ -139,6 +143,7 @@ def code : Status → Nat
   | lifetime => 40
   | stream => 41
   | noThreads => 42
+  | shapeMismatch => 43
 
 def cls : Status → ExitClass
   | eof => .done
@@ -146,7 +151,8 @@ def cls : Status → ExitClass
   | usage | entropy | recordTooLarge | worldTooLarge | indexTooLarge | io
   | locked | .exists | badKey | shortRead | noBase | baseTooLarge | baseCorrupt | baseUndecodable
   | segmentShort | tailTooLong | foreignSegment | corrupt | record | tagWidth | behindAnchor | chainMismatch
-  | badIndex | pageTooLarge | pastEnd | shortBase | reopenFailed | reopenDiverged | noThreads => .fatal
+  | badIndex | pageTooLarge | pastEnd | shortBase | reopenFailed | reopenDiverged | noThreads
+  | shapeMismatch => .fatal
 
 /-- The name printed beside the code (`refused NAME` / `exit NAME` on stderr). -/
 def name (s : Status) : String := ((toString (repr s)).splitOn ".").getLast!
@@ -169,6 +175,7 @@ def BaseFault.status : BaseFault → Status
   | .segmentShort _ _ => .segmentShort
   | .tailTooLong _ _ => .tailTooLong
   | .foreignSegment => .foreignSegment
+  | .shapeMismatch _ _ => .shapeMismatch
 
 def StoreFault.status {F : Type} : StoreFault F → Status
   | .locked => .locked

@@ -74,7 +74,7 @@ def run (store : String) (anchor : Option Anchor) : IO UInt32 := do
   match ← (readKey store : IO (Except (StoreFault (Record.Fault (Reject D))) Digest)) with
   | .error f => refuse f.status f.name
   | .ok key =>
-    let keys := Keys.ofKey key
+    let keys := Keys.ofKey key shapes
     match ← openFollower store keys c world recorder.mark foldStep with
     | .error f => refuse f.status f.name
     | .ok o =>

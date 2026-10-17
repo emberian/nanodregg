@@ -27,6 +27,9 @@ def c : Cadence := Cadence.deployed
 
 def world : Stream (World D) := Codec.Deployed.world
 
+/-- The deployed shape stamp (D2): the tags of the deployed base and batch record codecs. -/
+def shapes : Digest := Base.shapeStamp world (Record.codec Codec.Deployed.digestCodec)
+
 def recorder : Recorder (World D) (Turn D) where
   encode := Record.encode Codec.Deployed.digestCodec
   mark w := (w.height, w.chain.bytes)

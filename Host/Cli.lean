@@ -74,7 +74,7 @@ def genesisVerb (store name : String) (fs : List String) : IO UInt32 := do
   let some fs := founders fs | refuse .usage "founders"
   let some key := Digest.ofBytes? (← IO.getRandomBytes 32) | refuse .entropy
   let w₀ := Receive.genesis X name.toUTF8 allowanceMax fs
-  match ← (Host.genesis store key (Keys.ofKey key) c world recorder.mark w₀ :
+  match ← (Host.genesis store key (Keys.ofKey key shapes) c world recorder.mark w₀ :
       IO (Except (StoreFault (Record.Fault (Reject D))) Unit)) with
   | .error f => refuseStore f
   | .ok () =>
@@ -136,7 +136,7 @@ def serveVerb (store : String) : IO UInt32 := do
   match ← (readKey store : IO (Except (StoreFault (Record.Fault (Reject D))) Digest)) with
   | .error f => refuseStore f
   | .ok key =>
-    let keys := Keys.ofKey key
+    let keys := Keys.ofKey key shapes
     match ← openWriter store keys c world recorder.mark foldStep with
     | .error f => refuseStore f
     | .ok wr => serving do
@@ -154,7 +154,7 @@ def followVerb (store memberHex grantHex : String) : IO UInt32 := do
   match ← (readKey store : IO (Except (StoreFault (Record.Fault (Receive.Verdict D))) Digest)) with
   | .error f => refuseStore f
   | .ok key =>
-    let keys := Keys.ofKey key
+    let keys := Keys.ofKey key shapes
     -- follow's own Store, reopened by the audit: every Turn of its tail re-derived
     match ← openWriter store keys c world recorder.mark auditStep with
     | .error f => refuseStore f

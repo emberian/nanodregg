@@ -21,9 +21,11 @@ def macSealer (key : Digest) (domain : String) : Log.Sealer where
   tag b := (Hash.mac key domain b).bytes
   tag_size b := (Hash.mac key domain b).size_eq
 
-def Keys.ofKey (key : Digest) : Keys where
+/-- The keys of a Store under `key`, judging its bases under the shape stamp `shapes`. -/
+def Keys.ofKey (key : Digest) (shapes : Digest) : Keys where
   segment := macSealer key domSegment
   base := macSealer key domBase
   worldDigest b := (Hash.digest domBase b).bytes
+  shapes := shapes
 
 end Nanodregg.Host

@@ -78,7 +78,7 @@ def body (seed : Nat) (dirA dirB : System.FilePath) : IO UInt32 := do
   let failures ← IO.mkRef 0
   let frames := (scenario seed 200).map (·.1)
   let key ← newKey
-  let keys := Keys.ofKey key
+  let keys := Keys.ofKey key shapes
   do
     let dir := dirA
     let made ← (Host.genesis dir key keys cadence world recorder.mark Sim.genesis : IO (Except Fault Unit))
@@ -110,7 +110,7 @@ def body (seed : Nat) (dirA dirB : System.FilePath) : IO UInt32 := do
           (o.opened.torn = half.size ∧ before = after ∧
             sameWorld o.opened.world r.world) failures
       -- plant-foreign-key
-      let other := Keys.ofKey (← newKey)
+      let other := Keys.ofKey (← newKey) shapes
       check "plant-foreign-key: the Store under another key is refused `baseCorrupt`"
         (match ← follow dir other cadence with | .error f => f.name = "baseCorrupt" | _ => false) failures
       match ← serveDir dir keys cadence seed (frames.drop 120) (viaChannel := true) with
@@ -138,7 +138,7 @@ def body (seed : Nat) (dirA dirB : System.FilePath) : IO UInt32 := do
       | o0 :: r1 :: _ :: _ :: _ =>
         -- the first frame after genesis's origin frame, re-sealed under another key
         let cut := frameSize o0
-        let foreign := Log.frame (Keys.ofKey (← newKey)).segment segmentInitial r1
+        let foreign := Log.frame (Keys.ofKey (← newKey) shapes).segment segmentInitial r1
         let spliced := seg.extract 0 cut ++ foreign ++ seg.extract (cut + foreign.size) seg.size
         IO.FS.writeBinFile (segmentPath dir) spliced
         check "plant-foreign-frame: a frame under another key is refused `corrupt`"
@@ -152,7 +152,7 @@ def body (seed : Nat) (dirA dirB : System.FilePath) : IO UInt32 := do
     let _ ← (Host.genesis dir key keys still world recorder.mark Sim.genesis : IO (Except Fault Unit))
     do
       let key2 ← newKey
-      let keys2 := Keys.ofKey key2
+      let keys2 := Keys.ofKey key2 shapes
       let _ ← (Host.genesis dir2 key2 keys2 still world recorder.mark Sim.genesis : IO (Except Fault Unit))
       match ← serveDir dir2 keys2 still seed (frames.take 30) with
       | .error e => check s!"plant-foreign-segment: the other Store serves ({e})" false failures

@@ -451,3 +451,51 @@ the channel) is code, not proof.
 fact is what I can prove. The restart reads as a self-check, and that may be making a 5 s stall at
 size look like a virtue.
 **Status.** landed (written by HOST-4, compiled, fixed and landed by HOST-5 on hbox).
+
+## HOST-20 · the shape stamp: a base names the codec shapes it was written under, and an old shape refuses by name (2026-10-17, HOST-5; D2, agreed with CODEC-2)
+**The defect.** Nothing on disk said which codecs wrote a Store. A binary with another World, base
+or batch codec opened an old Store and either decoded it into garbage that might still decode
+(the codecs are canonical, not self-describing) or refused it `baseUndecodable`, which is a parse
+failure. Law 1 asks for an old shape that REFUSES TO LOAD, by name. KERNEL-23 (the cell root) and
+KERNEL-24 (the origin) both change the World codec, so this had to land before them.
+**Decision.** Each base record starts with 32 bytes, `Base.shapeStamp world record =
+Hash.digest "nanodregg/host/shapes/v1" (Tag.of "host/base" (Base.codec world) ‖ Tag.of "host/batch"
+record)`. These are CODEC's content-addressed tags (`Codec.Tag`), so the stamp is computed from the
+codecs and never written as a literal. `Codec.Proofs.Tag.Tag.of_eq` says equal tags mean equal labels
+and shapes. The deployed stamp is the closed def `Host.Deployed.shapes`; the toy one is
+`Host.Sim.shapes`, the same function over the toy codecs. It travels in `Keys.shapes`, because
+`Keys` is already everything that judges a Store's bytes on disk. `Base.read` checks the base MAC
+first, then compares the stamp, then decodes. A mismatch refuses
+`BaseFault.shapeMismatch stored running` (exit `shapeMismatch` 43, fatal), and none of the
+base's bytes after the stamp is ever decoded. `worldStart` moves 4 → 36, and `Page.basePage` reads
+from it. **The premise:** no segment byte is read without its base. `openWith` reads the base and
+then the segment only from the base's offset. The stamp covers the batch codec, so the base also
+vouches for the records after it. The base shape contains the World and index-entry shapes, so
+CODEC-2's separate `Tag.of "host/world"` term would add nothing. I dropped it and told CODEC-2.
+Theorems (`Host.Proofs.Base`): `read_stamped` (a base that reads carries the running stamp under a
+verified frame) and `read_shapeMismatch` (a verified base with another stamp is refused with both
+stamps). Plant (host-sim, seeds 1–3): `plant-old-shape` re-seals the newest base, byte for byte,
+with the stamp of a batch codec that admits one more Turn. The binary that wrote it opens it, and
+the running one refuses it `shapeMismatch`. With the compare replaced by `false` the plant goes red
+(`FAIL plant-old-shape: the running binary refuses …`, seen) and the old shape OPENS.
+**Alternatives.** (a) A version number in the base: someone has to remember to bump it, and
+nothing checks that they did (the CODEC-5 lesson). (b) A stamp per segment frame: 32 bytes per
+batch to re-state what the base already states, with no reader that needs it under the premise. (c)
+A clear-text stamp outside the MAC, read first: it decodes unverified bytes into a refusal (law 7),
+and a flipped stamp byte would read as `shapeMismatch` rather than `baseCorrupt`.
+**Critique.** The stamp sees SHAPES, not meanings. A kernel change that keeps every codec shape and
+changes what the bytes mean (a new hash domain, a new fold rule) passes it, and a refine's name is
+the only thing that sees inside a function (CODEC-5). Those changes show up as a chain mismatch at
+the first audit, or not at all. Log framing (`u32 ‖ record ‖ tag`) is not a Stream, so a framing
+change refuses `baseCorrupt` (by name, but the wrong name). `Keys` now holds an unkeyed constant
+beside the sealers, so its name lies a little. The stamp costs one cSHAKE256 over two 32-byte tags,
+once per process.
+**Meta-critique.** I took CODEC-2's agreed shape and trimmed it. The trim (dropping the World tag)
+rests on reading `Base.codec`'s structure, and that is exactly the kind of fact that drifts. If the
+base ever stops embedding the World codec's shape, the World's own term has to come back. The
+"semantic change" hole in the critique is one I do not know how to close without a kernel-side
+epoch, and I did not look hard.
+**Flag day.** Every base re-encodes (stamp first). An older Store's base frame still verifies (the
+key and framing have not changed), but its record starts with World bytes. The new `Base.read`
+reads the first 32 of those as the stamp and refuses `shapeMismatch`. Re-genesis every Store.
+**Status.** landed (this commit).

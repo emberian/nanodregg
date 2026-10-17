@@ -408,6 +408,26 @@ def run (args : List String) : IO UInt32 := do
   check "plant-foreign-segment: under the newest base (offset > 0), refused `foreignSegment`"
     (0 < (match reopen r.bases.file r.disk.synced with | .ok o => o.sealed.offset | .error _ => 0) &&
       faultName (reopen r.bases.file foreignAll) = "foreignSegment") failures
+  -- plant-old-shape (D2, HOST-20): the newest base re-sealed, byte for byte the same base, by a
+  -- binary whose batch record admits one more Turn (another batch shape, so another stamp). The
+  -- running binary must refuse it `shapeMismatch` by name; the binary that wrote it opens it.
+  let oldKeys : Keys := { keys with shapes := Base.shapeStamp world (Codec.Kernel.batch (Record.turnsMax + 1) dc) }
+  let oldBase : Option ByteArray :=
+    match Base.read keys cadence world r.bases.file with
+    | .ok (b, _, _) =>
+      match Base.file oldKeys cadence world b.world b.offset b.tag b.index with
+      | .ok f => some f
+      | .error _ => none
+    | .error _ => none
+  match oldBase with
+  | none => check "plant-old-shape: the newest base re-seals under the old shapes" false failures
+  | some ob =>
+    check "plant-old-shape fires: another stamp, and the writing binary opens it"
+      (oldKeys.shapes.bytes != keys.shapes.bytes &&
+        faultName (Id.run (openWith oldKeys cadence world recorder.mark foldStep ob r.disk.synced.size
+          (segReader r.disk.synced))) = "opened") failures
+    check "plant-old-shape: the running binary refuses the old shape `shapeMismatch` (never decoded)"
+      (faultName (reopen ob r.disk.synced) = "shapeMismatch") failures
   let n ← failures.get
   IO.println (if n = 0 then "ALL PASS" else s!"{n} FAILED")
   return (if n = 0 then 0 else 1)

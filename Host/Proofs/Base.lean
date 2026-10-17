@@ -13,6 +13,9 @@
 * `openWith_anchored` / `openWith_foreign` (HOST-18) — an open that succeeds found the base's own
   tag in the 32 bytes before the base's offset; a segment without it is refused `foreignSegment`
   (never read as a torn tail, so the writer truncates nothing);
+* `read_stamped` / `read_shapeMismatch` (D2, HOST-20) — a base that reads carries the running
+  shape stamp at the head of its verified record; a verified base whose head is another stamp is
+  refused `shapeMismatch` with both stamps, before its bytes are decoded;
 * `within_after_seal` — once the newest durable base sits at the loop's position, every frame up to
   the record bound fits. NOT proved: that `Loop.makeRoom`'s inline seal leaves the base there (it
   is IO over `Checkpoint.write`); the loop's `else` branch after `makeRoom` is therefore a named
@@ -188,6 +191,42 @@ theorem openWith_foreign {W F : Type} (keys : Keys) (c : Cadence) (world : Codec
       rw [ByteArray.size_extract]; omega
     rw [if_neg (by rw [hsz]; exact fun h => h rfl), e, if_pos hf]
     rfl
+/-- **D2: a base that reads was written under the running shapes.** Its frame verified under the
+Store's base sealer, and the first `stampBytes` of its record are `keys.shapes`. -/
+theorem read_stamped {W : Type} (keys : Keys) (c : Cadence) (world : Codec.Stream W) (file : ByteArray)
+    {b : Base W} {bb : Nat} {d : ByteArray} (h : Base.read keys c world file = .ok (b, bb, d)) :
+    ∃ r, Log.frameAt keys.base c.baseRecordMax file 0 baseInitial = some r ∧
+      r.record.extract 0 stampBytes = keys.shapes.bytes := by
+  unfold Base.read at h
+  split at h
+  · cases h
+  · split at h
+    · cases h
+    · rename_i r hr
+      refine ⟨r, hr, ?_⟩
+      by_cases hs : r.record.extract 0 stampBytes = keys.shapes.bytes
+      · exact hs
+      · exfalso
+        split at h
+        · cases h
+        · simp only [ne_eq, hs, not_false_eq_true, if_true] at h
+          cases h
+
+/-- **D2: an old shape refuses by name.** A base file that verifies, but whose record starts with
+another stamp, is refused `shapeMismatch stored running`, and nothing after the stamp is decoded. -/
+theorem read_shapeMismatch {W : Type} (keys : Keys) (c : Cadence) (world : Codec.Stream W)
+    (file : ByteArray) (r : Log.Read)
+    (hsize : file.size ≤ Log.frameMax c.baseRecordMax)
+    (hr : Log.frameAt keys.base c.baseRecordMax file 0 baseInitial = some r)
+    (hn : r.next = file.size)
+    (hs : r.record.extract 0 stampBytes ≠ keys.shapes.bytes) :
+    Base.read keys c world file =
+      .error (.shapeMismatch (r.record.extract 0 stampBytes).data keys.shapes.bytes.data) := by
+  unfold Base.read
+  simp only [show ¬ Log.frameMax c.baseRecordMax < file.size by omega, if_false, hr, hn,
+    ne_eq, not_true_eq_false]
+  rw [if_pos hs]
+
 theorem within_after_seal (c : Cadence) (sealed : Sealed) (n : Nat) (hn : n ≤ Log.frameMax c.recordBytesMax) :
     withinTail c sealed sealed.offset n = true := by
   unfold withinTail Cadence.tailMax
