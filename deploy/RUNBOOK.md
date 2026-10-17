@@ -97,6 +97,16 @@ rendered by emit-units as `deploy/units/linux/nd-keybroker.service` (system unit
 Read-only (no lock, writes nothing; works while the writer runs or is down). `torn>0` is the
 writer's unsynced last frame. `anchor=none` means: integrity and height only, NOT completeness.
 
+`check` reads EVERY `index.log` entry the base counts; an open reads only the last one (HOST-33).
+So a corrupt middle entry is refused at first read or by check, not at open: the writer opens and
+serves, the first `log` page whose search reads that entry is answered `refused badIndex` (the
+writer keeps serving), and `host check` refuses `indexCorrupt` (46)
+naming it, `refused indexCorrupt entry K`. Planted in store-plants on the sealed Store:
+`index-middle-flip-opens-page-badIndex`, `index-middle-flip-check-indexCorrupt-names-entry` (with
+`index-middle-log-page-intact-control`). A damaged entry nobody pages through is found only by
+`check`: run it on every backup (§4) and after any unclean stop. A corrupt LAST entry still stops
+the open (`indexCorrupt`, the unit stops).
+
 ## 4. Backup — RAN (stopped and LIVE: store-plants)
 
 Copy the files in the order `deploy/units/STORE.md` lists (generated from
@@ -104,9 +114,9 @@ Copy the files in the order `deploy/units/STORE.md` lists (generated from
 the writer runs, across a seal: a seal installs a new `base.world` atomically and the append-only
 files only grow, so each one copied after `base.world` holds the prefix the copied base names.
 Planted in store-plants: `live-copy-raced-a-seal` / `live-copy-anchor-at-segment-copy` (the right
-order across a seal opens at the writer's height); `orphan-index-page-*` (an index page past the
-stale base's prefix: a reader ignores it, the writer's open truncates it and reopens at the same
-height). The OTHER orders are refused by name: `seg.log` copied before a seal is `segmentShort`
+order across a seal opens at the writer's height); `orphan-index-entries-*` (index entries past
+the ones the stale base counts: a reader ignores them, the writer's open truncates them and
+reopens at the same height). The OTHER orders are refused by name: `seg.log` copied before a seal is `segmentShort`
 (`copy-segment-before-base-wrong-order`), `index.log` copied before a seal is `indexShort`
 (`copy-index-before-base-wrong-order`); neither opens short. Record an anchor at the
 same time: `HEIGHT:CHAIN` from a member follower's head (its own `host check` on its follow

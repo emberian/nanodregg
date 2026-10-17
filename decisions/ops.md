@@ -254,3 +254,35 @@ run it under systemd (the burst5 harness was torn down); its first run is a depl
 **META-CRITIQUE.** Making the check a start condition is stricter than asked; the cost is an
 emit-anchors binary on the node, which I chose without asking HOSTING.
 **Status.** landed; run PENDING a box.
+
+## OPS-9 · HOST-33's moved check, planted through the real exe; the operator runs `check` (OPS-3, 2026-10-18)
+
+**Decision.** HOST-33 (ff60a08) moved the detection of a corrupt middle `index.log` entry from open to
+first read or `host check`. store-plants plants it on the sealed live Store `L` (48 calls, base at
+height 40, 6 counted entries of 80 bytes at hbox): `index-middle-entry-is-counted-not-last` (the
+precondition: whole entries, the flipped entry `k = total/2` is counted and not the last, so open does
+not read it and every page's binary search reads it second), `index-middle-log-page-intact-control`
+(founder 0's signed read envelope, `Founder.logFrame`, answered `ok` by the intact copy),
+`index-middle-flip-opens-page-badIndex` (`serve` exits 0 and answers that page `refused badIndex`),
+`index-middle-flip-check-indexCorrupt-names-entry` (46, `refused indexCorrupt entry 3`). The RUNBOOK
+(§3) says where the detection now sits and tells the operator to run `check` on every backup; the
+`badIndex` operator sentence says a writer never exits 34 on a page (only `host check --anchor` does);
+the `orphan-index-page-*` rows are renamed `orphan-index-entries-*` and STORE.md's wording follows
+(there are no index pages since HOST-33).
+**Tooth (measured, not committed).** With `Entry.read`'s tag comparison removed in Host/Base.lean, the
+two flip rows FAIL by name: the page is SERVED (status 0, 247 243 bytes, built from the flipped entry,
+since the walk reads frames by offset) and `check` exits 0.
+**Alternatives.** (1) Flip entry 0 (the other always-read entry): it is not a middle entry, and HOST's
+host-sim already flips every position in process; the exe row exists for the middle. (2) Assert the
+probe sequence of `Page.locate` from outside: it would copy HOST's search into OPS (a twin); the row
+instead asserts the precondition it relies on and FAILS if `total/2` stops being a counted middle entry.
+**CRITIQUE.** The row depends on `locate` reading `total/2` second; if HOST changes the search the
+precondition row still passes and the page row may go red on an honest page that never read the
+flipped entry. That red is loud and points at the change, but it is a coupling to HOST's search, named
+here. The plant has 6 entries: it says nothing about large indexes (host-sim's entryRows does). A
+Store whose damaged entry nobody pages through serves until `check` runs: the operator step is the
+whole defence for history nobody reads, and nothing schedules it.
+**META-CRITIQUE.** I chose the row HOST-9 described rather than asking whether OPS should schedule
+`check` (a timer unit) — the gap the CRITIQUE names; a periodic check is a unit OPS could render, and
+I deferred it as not asked for (cv task below).
+**Status.** landed with this decision.

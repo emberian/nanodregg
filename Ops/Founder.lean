@@ -55,6 +55,20 @@ def create (w : World D) (i : Nat) (state : Slots := []) : Call D :=
 def lookupFrame (c : Call D) : ByteArray :=
   encodeFrame { conn := 1, op := Protocol.Op.lookup.code, payload := X.callBytes c }
 
+/-- A `log` frame toward `host serve` (Protocol.Op.log): founder 0's read envelope for the World
+`origin`, from height `start`, good for heights `[0, Bounds.windowMax]`, naming founder 0's own
+genesis grant (`founderGrantId`) as its follow grant and signed with the founder's current key. -/
+def logFrame (origin : D) (start : Nat) : Option ByteArray := do
+  let me := founderId X origin 0
+  let grant := founderGrantId X origin 0
+  let validUntil := Bounds.windowMax
+  let msg := Protocol.Envelope.message X origin me grant start 0 validUntil
+  let e : Protocol.Envelope D :=
+    { world := origin, member := me, grant, start, notBefore := 0, validUntil, key,
+      signature := Ed25519.sign seed msg }
+  let p ← Protocol.Envelope.bytes X e
+  pure (encodeFrame { conn := 1, op := Protocol.Op.log.code, payload := p })
+
 /-- A `submit` frame toward `host serve`. -/
 def submitFrame (c : Call D) : ByteArray :=
   encodeFrame { conn := 1, op := Protocol.Op.submit.code, payload := X.callBytes c }

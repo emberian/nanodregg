@@ -13,7 +13,7 @@
 
 Copy the files in this order, each whole. The base comes before every append-only file, so each
 append-only copy holds at least the prefix the copied base names (`Host.Proofs.Base`
-`backupOrder_appendOnly_after_base`); a longer copy is a torn tail or an orphan index page, which
+`backupOrder_appendOnly_after_base`); a longer copy is a torn tail or orphan index entries, which
 an open handles. Restore with `host check STORE --anchor HEIGHT:CHAIN` (RUNBOOK §5).
 
 1. `key`

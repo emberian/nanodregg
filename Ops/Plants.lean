@@ -220,10 +220,10 @@ def live (exe : String) (dir : System.FilePath) : IO Nat := do
   let plain (label : String) (want : Status) (r : IO Run) : IO Nat := do
     return if ← judge ⟨label, want, r⟩ then 0 else 1
   failed := failed + (← plain "live-copy-anchor-at-segment-copy" .eof (check copy (anchorAt hCopy)))
-  -- (a) the live copy holds a stale base and an index.log copied after a newer seal: the pages past
-  -- the base's prefix are an orphan, which a reader ignores and the writer's open truncates
+  -- (a) the live copy holds a stale base and an index.log copied after a newer seal: the entries
+  -- past the ones the base counts are orphans, which a reader ignores and the writer's open truncates
   let orphan := indexCopied.size > indexAtBase.size
-  say "orphan-index-page-present" orphan
+  say "orphan-index-entries-present" orphan
     s!"index.log {indexAtBase.size} bytes at the base copy, {indexCopied.size} copied after the seal"
   unless orphan do failed := failed + 1
   let ow := dir / "orphan-writer"
@@ -231,10 +231,10 @@ def live (exe : String) (dir : System.FilePath) : IO Nat := do
   let r ← host exe ["serve", ow.toString]
   let after := (← IO.FS.readBinFile (ow / "index.log")).size
   let truncated := r.code = 0 && after ≤ indexAtBase.size
-  say "orphan-index-page-writer-truncates" truncated
+  say "orphan-index-entries-writer-truncates" truncated
     s!"serve exit={r.code}; index.log {indexCopied.size} -> {after} bytes (the base names at most {indexAtBase.size})"
   unless truncated do failed := failed + 1
-  failed := failed + (← plain "orphan-index-page-writer-reopens-at-height" .eof (check ow (anchorAt hCopy)))
+  failed := failed + (← plain "orphan-index-entries-writer-reopens-at-height" .eof (check ow (anchorAt hCopy)))
   -- the sealed Store: it must have a base past the origin, or the rows below test nothing
   let some stS ← status exe l | IO.eprintln "the finished live Store does not check"; return failed + 1
   let off := field stS "base_offset"
@@ -255,7 +255,7 @@ def live (exe : String) (dir : System.FilePath) : IO Nat := do
   failed := failed + (← plain "sealed-flip-history-before-base" .corrupt (check flipped))
   -- the wrong order: seg.log copied before a seal, base.world after it
   let wrong ← sealedCopy "wrong-order" fun d => damage d wrongOrderSeg
-  -- (b) index.log copied BEFORE base.world, across seals: the newer base names pages the copy lacks.
+  -- (b) index.log copied BEFORE base.world, across seals: the newer base counts entries the copy lacks.
   -- It must refuse `indexShort` by name or open to the writer's height; never open short.
   let finalIndex ← IO.FS.readBinFile (l / "index.log")
   let wrongIdx ← sealedCopy "wrong-order-index" fun d => IO.FS.writeBinFile (d / "index.log") indexAtBase
@@ -332,7 +332,7 @@ def originPlants (exe : String) (dir : System.FilePath) : IO Nat := do
 
 /-- HOST-31's `indexMoved` (48, restart), live: a writer whose `index.log` grows under it (another
 process appended a byte) must refuse its next seal by name, and the restart's open must truncate
-the byte as an orphan page and reopen at the durable height. The byte is appended after the
+the byte as an orphan and reopen at the durable height. The byte is appended after the
 writer is serving and before its first seal; the writer is then fed until the seal is due. -/
 def indexMovedPlant (exe : String) (dir : System.FilePath) : IO Nat := do
   let m := dir / "M"
@@ -390,6 +390,65 @@ def indexMovedPlant (exe : String) (dir : System.FilePath) : IO Nat := do
   let ok := r.code = 0 && idx2 = idx0 && field st2 "height" = durable && durable ≥ 2
   IO.println s!"PLANT index-moved-restart-truncates {if ok then "PASS" else "FAIL"} :: restart exit={r.code}; index.log {idx1} -> {idx2} bytes (want {idx0}); height {field st2 "height"} (durable {durable})"
   unless ok do failed := failed + 1
+  return failed
+
+/-- HOST-33's moved check, through the real exe on the sealed live Store `L`: a byte flipped in a
+MIDDLE `index.log` entry (one the base counts, not the last, which open verifies) still OPENS;
+the first `log` page that reads that entry is refused `badIndex` and the writer keeps serving
+(exit 0 at eof); `host check` refuses `indexCorrupt` naming the entry. The entry flipped is the
+one every page's binary search reads second (`Page.locate`: entry 0, then `total / 2` with total
+= the base's count + the tail's records), so the page must read it whatever its start. The
+control serves the same signed envelope to the intact copy and must be answered `ok`, so the
+refusal is the entry's, not the envelope's. -/
+def middleEntryPlant (exe : String) (dir : System.FilePath) : IO Nat := do
+  let l := dir / "L"
+  let w0 ← match Founder.world name with
+    | .ok w => pure w
+    | .error r => do IO.eprintln s!"genesis refused {r.name}"; return 1
+  let some key := Codec.Digest.ofBytes? (← IO.FS.readBinFile (l / "key"))
+    | IO.eprintln "L: key file is not a digest"; return 1
+  let eb := entryBytes (Keys.ofKey key shapes)
+  let idx ← IO.FS.readBinFile (l / "index.log")
+  let some st ← status exe l | IO.eprintln "the sealed Store L does not check"; return 1
+  let count := idx.size / eb
+  let total := count + field st "records"
+  let k := total / 2
+  let say (label : String) (ok : Bool) (detail : String) : IO Bool := do
+    IO.println s!"PLANT {label} {if ok then "PASS" else "FAIL"} :: {detail}"
+    return ok
+  -- the precondition: whole entries, and the probed entry a counted one before the last
+  let pre := idx.size % eb = 0 && 0 < k && k + 1 < count
+  unless ← say "index-middle-entry-is-counted-not-last" pre
+      s!"index.log {idx.size} bytes = {count} entries of {eb} (+{idx.size % eb}); tail records {field st "records"}; probe entry {k}" do
+    return 1
+  let some frame := Founder.logFrame w0.origin 1 | IO.eprintln "the log envelope does not fit its frame"; return 1
+  let reply (d : System.FilePath) : IO (UInt32 × UInt8 × String) := do
+    let (c, out, _) ← hostRaw exe ["serve", d.toString] frame
+    let st8 := if out.size > 8 then out.get! 8 else 255
+    return (c, st8, (String.fromUTF8? (out.extract 9 out.size)).getD s!"<{out.size} bytes>")
+  let mut failed := 0
+  let ctl := dir / "index-middle-control"
+  backup l ctl
+  let (c0, s0, _) ← reply ctl
+  unless ← say "index-middle-log-page-intact-control" (c0 = 0 && s0 = Protocol.Status.ok.code)
+      s!"serve exit={c0} reply status={s0} (ok = {Protocol.Status.ok.code})" do
+    failed := failed + 1
+  let d := dir / "index-middle-flip"
+  backup l d
+  let at_ := k * eb + eb / 2
+  let flipped := idx.set! at_ (idx.get! at_ ^^^ 1)
+  if flipped == idx then IO.eprintln "the index flip is a no-op"; return failed + 1
+  IO.FS.writeBinFile (d / "index.log") flipped
+  let (c1, s1, p1) ← reply d
+  unless ← say "index-middle-flip-opens-page-badIndex"
+      (c1 = 0 && s1 = Protocol.Status.refused.code && p1 = Page.Fault.name (.badIndex k))
+      s!"serve exit={c1} (open ok = 0) reply status={s1} (refused = {Protocol.Status.refused.code}) payload={p1}" do
+    failed := failed + 1
+  let r ← host exe ["check", d.toString]
+  unless ← say "index-middle-flip-check-indexCorrupt-names-entry"
+      (r.code = Status.indexCorrupt.code.toUInt32 && (r.out.splitOn s!"indexCorrupt entry {k}").length = 2)
+      s!"exit={r.code} want=indexCorrupt({Status.indexCorrupt.code}) entry {k} :: {r.out.replace "\n" " "}" do
+    failed := failed + 1
   return failed
 
 /-- The field `k` of a `k VALUE` line of `out`. -/
@@ -588,6 +647,7 @@ def run (exe : String) (dir : System.FilePath) : IO UInt32 := do
   failed := failed + (← live exe dir)
   failed := failed + (← replay exe dir)
   failed := failed + (← originPlants exe dir)
+  failed := failed + (← middleEntryPlant exe dir)
   failed := failed + (← indexMovedPlant exe dir)
   failed := failed + (← carryPlants exe dir)
   if failed = 0 then IO.println "ALL PASS"; return 0

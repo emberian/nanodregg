@@ -244,7 +244,7 @@ def hostAction : Status → String
   | .tagWidth => "a broken sealer: a defect, report to HOST"
   | .behindAnchor => "the copy is truncated or rolled back: use a newer copy"
   | .chainMismatch => "the copy is another history: do not serve it"
-  | .badIndex => "an index.log entry a page read does not verify at its position (HOST-33): run `host check` on the stopped Store, restore index.log from this Store's own backup, and report to HOST"
+  | .badIndex => "an index.log entry a page read does not verify at its position (HOST-33); an exit only of `host check --anchor` (a writer answers that page `refused badIndex` and keeps serving): run `host check` on the stopped Store (it names the entry, indexCorrupt), restore index.log from this Store's own backup, and report to HOST"
   | .pageTooLarge | .pastEnd => "a page fault: report to HOST"
   | .shortBase => "the base changed under a read: run `host check`; if it repeats, report to HOST"
   | .reopenFailed => "the in-process reopen after a fuel round refused: run `host check STORE`; restore if it refuses"
@@ -441,7 +441,7 @@ def storeTable : String :=
     "",
     "Copy the files in this order, each whole. The base comes before every append-only file, so each",
     "append-only copy holds at least the prefix the copied base names (`Host.Proofs.Base`",
-    "`backupOrder_appendOnly_after_base`); a longer copy is a torn tail or an orphan index page, which",
+    "`backupOrder_appendOnly_after_base`); a longer copy is a torn tail or orphan index entries, which",
     "an open handles. Restore with `host check STORE --anchor HEIGHT:CHAIN` (RUNBOOK §5).",
     ""] ++ order ++ [""])
 

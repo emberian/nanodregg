@@ -37,7 +37,7 @@ code space holds both tables: `host` (Host.Status, below 64) and nd-supervise's 
 | 30 | foreignOrigin | fatal | stopped (RestartPreventExitStatus) | the segment's origin frame verifies under this Store's key but names another World (two Stores share a key file, one's seg.log spliced over the other's): restore seg.log from this Store's own backup; never restart it |
 | 32 | behindAnchor | fatal | stopped (RestartPreventExitStatus) | the copy is truncated or rolled back: use a newer copy |
 | 33 | chainMismatch | fatal | stopped (RestartPreventExitStatus) | the copy is another history: do not serve it |
-| 34 | badIndex | fatal | stopped (RestartPreventExitStatus) | an index.log entry a page read does not verify at its position (HOST-33): run `host check` on the stopped Store, restore index.log from this Store's own backup, and report to HOST |
+| 34 | badIndex | fatal | stopped (RestartPreventExitStatus) | an index.log entry a page read does not verify at its position (HOST-33); an exit only of `host check --anchor` (a writer answers that page `refused badIndex` and keeps serving): run `host check` on the stopped Store (it names the entry, indexCorrupt), restore index.log from this Store's own backup, and report to HOST |
 | 35 | pageTooLarge | fatal | stopped (RestartPreventExitStatus) | a page fault: report to HOST |
 | 36 | pastEnd | fatal | stopped (RestartPreventExitStatus) | a page fault: report to HOST |
 | 37 | shortBase | fatal | stopped (RestartPreventExitStatus) | the base changed under a read: run `host check`; if it repeats, report to HOST |
