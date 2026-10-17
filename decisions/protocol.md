@@ -871,3 +871,28 @@ is added to deployed admission (PROTOCOL-32's ruling).
 resolved by the client. A member who names the wrong owner gets a grant over an empty or foreign
 account, which the kernel's authority check refuses at use, not at grant.
 **Status.** BUILT (this commit). Rows: ALL PASS, 19 rows.
+
+## PROTOCOL-35 · row carry: export, import by digest, the carried World answers the old journal, an old-origin call is `wrongWorld` (2026-10-17, PROTOCOL-6; KERNEL-29 b8e0f82, CODEC-5 28b4a38, HOST-28 6b89d6f)
+**Decision.** Act `carry (rightDigest)`: the operator stops the writer, exports its World
+(`Host.Carry.exportFile`), and imports it through `Host.Carry.importWorld`. That is the ONE
+decision `host import` makes (HOST-8 factored it out for this row), under the rows' name and
+another nonce. The digest is the file's own, or that digest with its last bit flipped. A refused
+import leaves the old writer serving. A successful one must answer at the exported height with the
+exported journal (else `carryMismatch`'s sibling `carryMoved`, a row check), and the carried World
+becomes the writer through `Writer.genesisStore`. This is the first in-memory genesis of a carried
+World (HOST-25's origin frame passes, as HOST-8 predicted). Act `rejoin`: the actor is re-invited,
+its `Self.world` set to the new origin and its follow started from the carried World. Row carry:
+- a committed call (reply lost);
+- a wrong-digest import is `refused carryMismatch`, and the old writer still serves a write;
+- the right import is ok, and the last committed call is still `ok` by lookup (the carried journal,
+  PROTOCOL-30);
+- a NEW call signed for the old origin (a forge from a member's stale follow) is `wrongWorld`;
+- the newcomer, re-invited, writes and reads its write on the carried cells.
+Plant `importTrustsFile` (the import is handed the file's own digest), caught at line 7: ok.
+**Critique.** An exact resubmit of a call committed before the carry answers from the carried
+journal (ok), not `wrongWorld`: the journal holds the old txIds by design (PROTOCOL-30). Only an
+un-journaled old-origin call is refused by origin. The digest is the only link from the old Store
+to the bytes imported, and it travels out of band; the plant shows the import trusts nothing else.
+`rejoin` stands in for an invitation, which does not exist yet: the member is handed the new origin
+and the carried World by the row, as a founder would by hand.
+**Status.** BUILT (this commit). Rows: ALL PASS, 20 rows.

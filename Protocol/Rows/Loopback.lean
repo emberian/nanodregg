@@ -22,6 +22,7 @@ import Protocol.Rows.Judge
 import Protocol.Command.Wire
 import Host.Follow
 import Protocol.Attempt
+import Host.Carry
 
 namespace Nanodregg.Protocol.Rows.Loopback
 
@@ -41,6 +42,8 @@ structure Sys where
   advanceOnSend : Bool := false
   /-- a second genesis draws the first one's nonce (a plant) -/
   nonceRepeats : Bool := false
+  /-- the import is handed the file's own digest (a plant) -/
+  importTrustsFile : Bool := false
 
 def skipJudge (X : Ctx D) : Ctx D :=
   { X with program := { X.program with judge := fun _ _ _ _ _ _ => .ok () } }
@@ -70,6 +73,7 @@ def sys : Option Mutation → Sys
   | some .accountByAsset =>
       { writer := { X := accountByAsset Sim.ctx }, follow := accountByAsset Sim.ctx }
   | some .writerForgetsSpent => { writer := { X := Sim.ctx, forgetSpent := true }, follow := Sim.ctx }
+  | some .importTrustsFile => { writer := { X := Sim.ctx }, follow := Sim.ctx, importTrustsFile := true }
 
 /-! ## Actors -/
 
@@ -612,6 +616,43 @@ def runAct (l : Line) : M (Expect × String) := do
                 if classify res = .committed then
                   modify fun st => { st with committed := st.committed.push call }
                 pure (statusOutcome res, "")
+  | .carry rightDigest => do
+      let st ← get
+      match ← st.host.stop with
+      | .error e => pure (.refused s!"writerFailed {e}", "")
+      | .ok (.eof, r0) =>
+        let X := st.sys.writer.X
+        match Host.Carry.exportFile X.env Sim.dc r0.world with
+        | .error f => do
+            set { st with host := ← Writer.start st.sys.writer st.mem r0 }
+            pure (.refused f.name, "")
+        | .ok f =>
+          let d := Host.Carry.digestOf f
+          let want := if rightDigest || st.sys.importTrustsFile then d
+            else match Codec.Digest.ofBytes? (flipLast d.bytes) with
+              | some d' => d'
+              | none => d
+          match Host.Carry.importWorld X Sim.dc Sim.worldName (flipLast Sim.nonce) want f with
+          | .error (s, _) => do
+              -- refused before anything is written: the old writer serves on
+              set { st with host := ← Writer.start st.sys.writer st.mem r0 }
+              pure (.refused s.name, "")
+          | .ok (w', _) =>
+            -- the carried World answers at the exported height, with the exported journal
+            if w'.height ≠ r0.world.height ∨ w'.journal.toList ≠ r0.world.journal.toList then
+              return (.refused "carryMoved", "")
+            match ← Writer.genesisStore st.sys.writer w' with
+            | .error e => pure (.refused e, "")
+            | .ok (mem, r) =>
+                let h ← Writer.start st.sys.writer mem r
+                set { st with host := h, mem, genesis := w' }
+                pure (.ok, "")
+      | .ok (exit, _) => pure (.refused s!"writer{exit.name}", "")
+  | .rejoin => do
+      let a ← actor l.actor
+      let g := (← get).genesis
+      setActor l.actor { a with self := { a.self with world := g.origin }, follow := { world := g } }
+      pure (.ok, "")
   | .replayLog sameNonce => do
       -- a SECOND writer from a genesis of the same name, allowance and founders, and the writer's
       -- committed calls submitted to it byte-identical, in order (OPS's cross-World replay)

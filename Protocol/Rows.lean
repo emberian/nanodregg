@@ -70,6 +70,15 @@ inductive Act
   follow's own admission; what the writer answers is the outcome. Custody is not advanced (only
   a rotation advances it, and a forged rotation is not a row's business) -/
   | forge (argv : List String)
+  /-- the operator stops the writer, exports its World (`Host.Carry.exportFile`) and imports it as
+  a NEW World (`Host.Carry.importWorld`: the one decision `host import` makes), under the rows'
+  name and another nonce, with the file's digest (`rightDigest`) or a digest with one bit flipped;
+  an import that succeeds is the writer from then on (`Writer.genesisStore` of the carried World),
+  one that is refused leaves the old writer serving -/
+  | carry (rightDigest : Bool)
+  /-- the actor is re-invited to the carried World: its `Self.world` is the new origin and its
+  follow starts from the carried World (members, grants and accounts are carried cells) -/
+  | rejoin
   /-- the actor signs a `log` read envelope for ITS World (from height 0, one window from 0) and
   sends it to a second writer made as `replayLog` makes one (PROTOCOL-29's cross-World read); the
   outcome is that writer's answer -/
@@ -165,6 +174,9 @@ inductive Mutation
   keeps the World that admission reaches (so it forgets them for good, and diverges from its
   followers): a writer that does not keep its spent set -/
   | writerForgetsSpent
+  /-- the import is handed the file's OWN digest whatever the operator gave: no out-of-band link
+  from the old Store to the bytes imported -/
+  | importTrustsFile
   deriving DecidableEq, Repr
 
 /-- A row's plant: the mutation, and the line that must catch it with the outcome it then gets. -/
@@ -499,6 +511,30 @@ def forgotten : Row where
     { actor := "newcomer", act := .retry, expect := .unsettled "forgotten" }])
   plant := .caught .forgottenRefused 13 (.refused "forgotten")
 
+/-- OPS-P1's carry (KERNEL-29, HOST-28 at 6b89d6f): state crosses to a NEW World by export and
+import, never by history. A committed call; an import with a wrong digest is refused
+`carryMismatch` and the old writer still serves; the import with the file's digest makes the
+carried World the writer. There the last committed call is still answered `ok` by lookup (the
+journal is carried, PROTOCOL-30); a NEW call signed for the old origin is `wrongWorld`; a member
+re-invited to the new origin writes on the carried cells. -/
+def carry : Row where
+  name := "carry"
+  replaces := ["ops/OPS-P1"]
+  ops := settled
+  kinds := ["enroll", "install", "create", "grant", "write"]
+  drive := .members (welcome ++ [
+    { actor := "newcomer", act := .cmd ["write", "@shared", "2", "1", "--via", "@g"], expect := .ok,
+      fault := .dropReply },
+    { actor := "operator", act := .carry false, expect := .refused "carryMismatch" },
+    ok "newcomer" ["write", "@shared", "2", "2", "--via", "@g"],
+    { actor := "operator", act := .carry true, expect := .ok },
+    { actor := "newcomer", act := .retry, expect := .ok },
+    { actor := "sponsor", act := .forge ["write", "@shared", "3", "1"], expect := .refused "wrongWorld" },
+    { actor := "newcomer", act := .rejoin, expect := .ok },
+    ok "newcomer" ["write", "@shared", "2", "3", "--via", "@g"],
+    ok "newcomer" ["read", "@shared", "2=3"]])
+  plant := .caught .importTrustsFile 7 .ok
+
 /-- JPAY (the payment half): a transfer spends a once-only key of its source (`--once`), and the
 same key again is `spent`, whether the client checks it (follow's own admission, line 3) or a
 hostile client skips that check and the WRITER refuses it (line 4). Another key pays again. -/
@@ -655,7 +691,7 @@ def langJourney : Row where
   plant := .internal "a program whose judge admits everything: L4 set 101 must be admitted"
 
 def rows : List Row :=
-  [journey, reopen, laws, rotate, audit, paging, coldCatchUp, inflatedHeight, forgotten, thin, wrongWorld, wrongWorldRead, pay, well, bounty, grain, hermes, bar,
+  [journey, reopen, laws, rotate, audit, paging, coldCatchUp, inflatedHeight, forgotten, carry, thin, wrongWorld, wrongWorldRead, pay, well, bounty, grain, hermes, bar,
    langJourney]
 
 end Nanodregg.Protocol
