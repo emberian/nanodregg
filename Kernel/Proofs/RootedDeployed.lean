@@ -32,8 +32,9 @@ theorem deployed_enroll_founder (program : Program Digest) (name nonce : ByteArr
     (founders : List (ByteArray × Digest)) {w : World Digest} {l : List (Turn Digest)}
     (hw : audit (ctx program) (genesisWorld (ctx program) name nonce allowance founders) l = .ok w)
     {c : Call Digest} {key : ByteArray} {next : Digest} {possession : ByteArray} {via : Digest}
-    {t : Turn Digest}
-    (h : enroll (ctx program) (pinned (ctx program).env w c.unsigned.pins) c key next possession via = .ok t) :
+    {base : Nat} {d : Draft Digest}
+    (h : enroll (ctx program) (pinned (ctx program).env w c.unsigned.pins) c ⟨c.unsigned.member, base⟩ key next possession via
+      = .ok d) :
     ∃ p r cell, GenesisRoot (ctx program) (originOf (ctx program) name nonce allowance founders) r ∧ w.live (ctx program).env r = some cell ∧
       slotDigest (ctx program) r cell grantIssuer = .ok p ∧
       Chain (ctx program) (pinned (ctx program).env w c.unsigned.pins) (worldId (ctx program)) (.enroll 0) true via

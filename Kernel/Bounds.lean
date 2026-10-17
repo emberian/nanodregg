@@ -46,6 +46,16 @@ def denomBytesMax : Nat := 64
 /-- The World trie's depth (KERNEL-23): one kind bit, then 256 id bits (a 32-byte digest). A proof
 carries at most this many siblings, and a leaf holds two keys only past it. -/
 def trieDepth : Nat := 257
+/-- The calls one method run may return (LEDGER-5, LANG-23: LANG's `callsTy` has this arity). -/
+def callsMax : Nat := 8
+/-- How deep a tree of calls may nest below the signed call (an object's call is depth 1). -/
+def callDepthMax : Nat := 4
+/-- The ticks one call's whole tree of runs may use (KERNEL-28 (c), LEDGER-8 (e)): the signed
+top-level budget, capped here. Sized from two measured numbers, not guessed: it must admit the
+budget PROTOCOL's client signs for every invoke (`invokeBudget` = 100000), and 2^17 is the least
+power of two that does; THE BAR's invoke measures 30 ticks per call (gates/waste.tsv), so the cap
+is ~4000 such runs. -/
+def treeTicksMax : Nat := 131072
 
 end Bounds
 end Nanodregg.Kernel

@@ -39,10 +39,34 @@ def frozenAct {D : Type} : Occasion D → Bool
   | .write | .invoke _ => true
   | .birth | .relaw _ | .adopt _ => false
 
+/-- `b` cut into digests of `width` bytes (a short tail is dropped). -/
+def idsOf (digestOf : ByteArray → Option D) (width : Nat) (b : ByteArray) : List D :=
+  (List.range (b.size / width)).filterMap fun i => digestOf (b.extract (i * width) (i * width + width))
+
+/-- The calls the stub's methods make (D5c's arms; every one is a test of the kernel's visitor):
+1 pays 1 of the asset named by its argument from the object's own account to the signer's, under
+the once key `payout`; 2 re-enters the object; 3 makes a call no object may make; 4 makes nine;
+6 invokes the next object of its argument (`obj ‖ grant ‖ rest`) through the grant, passing the
+rest on. -/
+def stubCalls (digestOf : ByteArray → Option D) (width : Nat) (method : Nat) (args : ByteArray)
+    (r : Req D) (budget : Nat) : List (Body D) :=
+  match method with
+  | 1 => match digestOf args with
+    | some asset => [.transfer (.of r.self asset) (.of r.agent asset) 1 none (some "payout".toUTF8)]
+    | none => []
+  | 2 => [.invoke r.self 0 ByteArray.empty budget none]
+  | 3 => [.issue 1]
+  | 4 => List.replicate 9 (.issue 1)
+  | 6 => match idsOf digestOf width args with
+    | o :: g :: _ => [.invoke o 6 (args.extract (2 * width) args.size) budget (some g)]
+    | _ => []
+  | _ => []
+
 /-- The law-program stub both instances run (`deny-all` refuses every act, `freeze` refuses writes
-and invokes, anything else admits; method 0 sets the first state slot). LANG's real program runs
-in `lang-journey`. -/
-def program : Program D :=
+and invokes, anything else admits; method 0 sets the first state slot, the others make the calls
+of `stubCalls`; method 5 reports one tick more than it was given). Each run uses one tick. LANG's
+real program runs in `lang-journey`. -/
+def program (digestOf : ByteArray → Option D) (width : Nat) : Program D :=
   { checkInstall := fun _ _ => .ok ()
     judge := fun look _ laws _ _ r =>
       forEx (fun l => match look l with
@@ -52,8 +76,11 @@ def program : Program D :=
             else .ok ()
         | .ok none => .error (.missingCell l)
         | .error e => .error e) laws
-    run := fun _ _ state method args _ _ =>
-      if method = 0 then .ok (state.set stateBase args) else .error (.program "no such method") }
+    run := fun _ _ state method args r budget =>
+      if method = 0 then .ok (state.set stateBase args, [], min 1 budget)
+      else if method = 5 then .ok (state, [], budget + 1)
+      else if method ≤ 6 then .ok (state, stubCalls digestOf width method args r budget, min 1 budget)
+      else .error (.program "no such method") }
 
 /-- What an instance supplies: its `Ctx` (whose `env` the generator hashes and encodes with), how
 a secret becomes a public key and signs, a default digest, and a name for the report. -/
@@ -145,6 +172,8 @@ structure State (D : Type) [Ord D] where
   cellSlots : Nat := 0
   nullHashes : Nat := 0
   nullSlots : Nat := 0
+  /-- the call-tree arms (D5c) ran in this seed -/
+  treeDone : Bool := false
 
 def nameOf {α : Type} [Repr α] (a : α) : String :=
   match (reprStr a).splitOn " " with
@@ -464,7 +493,8 @@ def ledgerAct (P : Params D) (st : State D) (k : Nat) : State D :=
       | w0 :: _ =>
           let (well, st) := pick st st.wells w0
           let issuer := memberOf P st (((st.accounts.find? fun a => a.1 = well.1).map fun a => a.2.1).getD (founder0 P st).id)
-          let holders := st.accounts.filter fun a => a.2.2 = well.1 ∧ a.1 ≠ well.1
+          let holders := st.accounts.filter fun a =>
+            a.2.2 = well.1 ∧ a.1 ≠ well.1 ∧ st.members.any (·.id = a.2.1)
           match holders with
           | [] => st
           | h0 :: _ =>
@@ -491,15 +521,16 @@ def ledgerAct (P : Params D) (st : State D) (k : Nat) : State D :=
                 match t with
                 | some _ => setFloorM (setFloorM st well.1 (wf - amt)) acct.1 (floorOfAcct st acct.1 + amt)
                 | none => st
-  | _ => -- a transfer
-      match st.accounts with
+  | _ => -- a transfer, out of an account a member owns (an object's moves only by its calls)
+      let acs := st.accounts.filter fun a => st.members.any (·.id = a.2.1)
+      match acs with
       | [] => st
       | a0 :: _ =>
           let (kind, st) := st.rng.below 8 |> fun (x, rr) => (x, { st with rng := rr })
           -- kind 7 replays a once key already spent: from a source that spent one
-          let spentFrom := st.accounts.filter fun a => st.onces.any fun p => p.1 = a.1
+          let spentFrom := acs.filter fun a => st.onces.any fun p => p.1 = a.1
           let (src, st) := if kind = 7 && !spentFrom.isEmpty then pick st spentFrom a0
-            else pick st st.accounts a0
+            else pick st acs a0
           let same := st.accounts.filter fun a => a.2.2 = src.2.2 ∧ a.1 ≠ src.1
           let other := st.accounts.filter fun a => a.2.2 ≠ src.2.2
           let owner := memberOf P st src.2.1
@@ -568,15 +599,109 @@ def probeSeal (P : Params D) (st : State D) : State D :=
           | .error r => { st with failures := s!"probe seal: got {r.name}" :: st.failures }
           | .ok _ => { st with failures := "probe: two effects on one cell sealed" :: st.failures }
 
+/-- A programmed object of the stub package, owned by `m`. -/
+def mkObj (P : Params D) (st : State D) (m : Member D) (pkg : D) : State D × Option D :=
+  let c := signed P st m m.key (S.pinsFor P.env st.host [m.id, pkg]) (.create (some pkg) [] [(stateBase, nat 0)])
+  let (st, t) := submit P st c .ok "tree-create"
+  (st, t.map fun t => (createdIds t).headD P.zero)
+
+/-- `m` grants object `grantee` `invoke 6` on object `target` (an object as grantee, D5c). -/
+def grantObj (P : Params D) (st : State D) (m : Member D) (target grantee : D) : State D × Option D :=
+  let c := signed P st m m.key (S.pinsFor P.env st.host [m.id, target, grantee]) (.grant target grantee [.invoke 6] none)
+  let (st, t) := submit P st c .ok "grant-to-object"
+  (st, t.map fun t => (createdIds t).headD P.zero)
+
+/-- The call-tree arms (D5c, once a seed): an object pays out of the account IT owns, through its
+own call (`effect_as_signed`'s tooth: derived as the invoker it is `noGrant`), and a second payout
+under the same once key is `spent`; re-entry is `revisited`; a call no object may make is
+`notCallable`; nine calls are `tooManyCalls`; a run claiming more ticks than it had is
+`overTicks`; a chain of grants between objects nests to depth 3 (admitted) and to depth 5
+(`callTooDeep`). -/
+def treeArms (P : Params D) (st : State D) : State D :=
+  match st.methodsPkg, st.wells with
+  | some pkg, w0 :: _ =>
+    let st := { st with treeDone := true }
+    let (well, st) := pick st st.wells w0
+    let (m, st) := pick st st.members (founder0 P st)
+    let issuer := memberOf P st (((st.accounts.find? fun a => a.1 = well.1).map fun a => a.2.1).getD (founder0 P st).id)
+    let avail : Int := balOf st well.1 + floorOfAcct st well.1
+    match mkObj P st m pkg with
+    | (st, none) => st
+    | (st, some o) =>
+      let X := P.ctx
+      let oa := accountId X o well.1
+      let ma := accountId X m.id well.1
+      -- the object's account, opened by its owner; the owner's own, if it has none
+      let c := signed P st m m.key (S.pinsFor P.env st.host [m.id]) (.account well.1 o)
+      let (st, _) := submit P st c .ok "tree-account"
+      let st := { st with accounts := st.accounts ++ [(oa, o, well.1)] }
+      let st := if st.accounts.any (fun a => a.1 = ma) then st else
+        let c := signed P st m m.key (S.pinsFor P.env st.host [m.id]) (.account well.1 m.id)
+        let (st, _) := submit P st c .ok "tree-account"
+        { st with accounts := st.accounts ++ [(ma, m.id, well.1)] }
+      -- the issuer funds the object's account out of the well
+      let st := if avail < 2 then st else
+        let c := signed P st issuer issuer.key (S.pinsFor P.env st.host [issuer.id, well.1, oa])
+          (.transfer (.well well.1) (.of o well.1) 2 none none)
+        let (st, t) := submit P st c .ok "tree-fund"
+        match t with
+        | some _ => setBal (setBal st well.1 (balOf st well.1 - 2)) oa (balOf st oa + 2)
+        | none => st
+      let st := if avail < 2 then st else
+        let pins := S.pinsFor P.env st.host [m.id, o, oa, ma]
+        let c := signed P st m m.key pins (.invoke o 1 (P.env.bytes well.1) 1000 none)
+        let (st, t) := submit P st c .ok "object-pays"
+        let st := match t with
+          | some _ => { setBal (setBal st oa (balOf st oa - 1)) ma (balOf st ma + 1) with
+              onces := (oa, "payout".toUTF8) :: st.onces }
+          | none => st
+        let c := signed P st m m.key (S.pinsFor P.env st.host [m.id, o, oa, ma]) (.invoke o 1 (P.env.bytes well.1) 1000 none)
+        (submit P st c (.rejected "spent") "object-pays-twice").1
+      let one := fun (st : State D) (method : Nat) (want : Expect) (what : String) =>
+        let c := signed P st m m.key (S.pinsFor P.env st.host [m.id, o]) (.invoke o method ByteArray.empty 1000 none)
+        (submit P st c want what).1
+      let st := one st 2 (.refused "revisited") "reenter"
+      let st := one st 3 (.refused "notCallable") "call-not-callable"
+      let st := one st 4 (.refused "tooManyCalls") "too-many-calls"
+      let st := one st 5 (.refused "overTicks") "over-ticks"
+      -- a chain o1 → o2 → … through grants naming the calling object
+      let mk := fun (st : State D) => mkObj P st m pkg
+      let (st, o1) := mk st
+      let (st, o2) := mk st
+      let (st, o3) := mk st
+      let (st, o4) := mk st
+      let (st, o5) := mk st
+      match o1, o2, o3, o4, o5 with
+      | some o1, some o2, some o3, some o4, some o5 =>
+        let (st, g2) := grantObj P st m o2 o1
+        let (st, g3) := grantObj P st m o3 o2
+        let (st, g4) := grantObj P st m o4 o3
+        let (st, g5) := grantObj P st m o5 o4
+        match g2, g3, g4, g5 with
+        | some g2, some g3, some g4, some g5 =>
+          let b := P.env.bytes
+          let pins := S.pinsFor P.env st.host [m.id, o1, o2, o3, o4, o5, g2, g3, g4, g5]
+          -- o2 → o3 → o4 → o5: depth 3, admitted
+          let c := signed P st m m.key pins (.invoke o2 6 (b o3 ++ b g3 ++ b o4 ++ b g4 ++ b o5 ++ b g5) 1000 none)
+          let st := (submit P st c .ok "call-chain").1
+          -- o1 → o2 → o3 → o4 → o5 → (o1): o5's call is at depth 5, past the bound
+          let c := signed P st m m.key pins
+            (.invoke o1 6 (b o2 ++ b g2 ++ b o3 ++ b g3 ++ b o4 ++ b g4 ++ b o5 ++ b g5 ++ b o1 ++ b g2) 1000 none)
+          (submit P st c (.refused "callTooDeep") "call-too-deep").1
+        | _, _, _, _ => st
+      | _, _, _, _, _ => st
+  | _, _ => st
+
 /-- One generated action. -/
 def act (P : Params D) (st : State D) : State D :=
-  let (k, rng) := st.rng.below 23
+  let (k, rng) := st.rng.below 24
   let st := { st with rng }
   let w := st.host
   match k with
   | 15 | 16 => ledgerAct P st (k - 15)
   | 17 | 18 => ledgerAct P st 2
   | 19 => probeRom P (probeValue P st)
+  | 23 => if st.treeDone then st else treeArms P st
   | 20 => ledgerAct P st 3
   | 21 => -- birth a programmed object; half the time its owner makes method 0 public (KERNEL-26:
           -- a grant whose grantee is the World)
@@ -1055,7 +1180,10 @@ def plantedArms : List String :=
    "rom-id:notContentId", "genesis-founder-key:founderKeyTooLong",
    "proof-sibling:refused", "proof-leaf:refused", "proof-tomb-live:refused", "proof-spent-unspent:refused",
    "proof-stale:refused", "proof-overlong:refused", "proof-spent-empty:refused",
-   "account-twice:idTaken", "account-for-other:ok", "transfer-ref-not-well:notWell"]
+   "account-twice:idTaken", "account-for-other:ok", "transfer-ref-not-well:notWell",
+   "object-pays:ok", "object-pays-twice:spent", "reenter:revisited", "call-not-callable:notCallable",
+   "too-many-calls:tooManyCalls", "over-ticks:overTicks", "grant-to-object:ok", "call-chain:ok",
+   "call-too-deep:callTooDeep"]
 
 /-- `--seeds N` runs seeds `0 … N-1`; otherwise each argument is a seed. -/
 def parseSeeds : List String → List Nat

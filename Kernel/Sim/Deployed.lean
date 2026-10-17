@@ -24,7 +24,7 @@ def seed (secret : ByteArray) : ByteArray := (Deployed.env.hash "nanodregg/sim/s
 
 def params : Gen.Params Digest :=
   { name := "deployed parameters (Digest, cSHAKE256, CODEC codecs and decodeCall, Ed25519)"
-    ctx := Deployed.ctx Gen.program
+    ctx := Deployed.ctx (Gen.program Digest.ofBytes? 32)
     pub := fun s => Ed25519.publicKey (seed s)
     sign := fun s m => Ed25519.sign (seed s) m
     zero := Digest.zero }

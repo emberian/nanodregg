@@ -298,6 +298,8 @@ end
 def program (bytesOf : D → ByteArray) (digestOf : ByteArray → Option D) : Program D where
   checkInstall := checkInstall digestOf
   judge := judge bytesOf digestOf
-  run := runMethod bytesOf digestOf
+  -- D5c (LEDGER-8 (e)): the slots, no calls until LANG's `lang!` day, and runMeasured's own tick count
+  run := fun look pkg state method args r budget =>
+    (runMeasured bytesOf digestOf look pkg state method args r budget).map fun x => (x.1, [], x.2.1)
 
 end Nanodregg.Lang

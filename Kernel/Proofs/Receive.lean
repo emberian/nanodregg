@@ -77,9 +77,16 @@ theorem sealTurn_ok {X : Ctx D} {c : Call D} {cr : List (D × Cell)} {efs : List
 
 omit [Ord D] [DecidableEq D] in
 /-- A seal bears exactly the receiver's cells, each at its `bornId`. -/
-theorem bornAt_cells {X : Ctx D} {c : Call D} {cr : List Cell} : (bornAt X c cr).map Prod.snd = cr := by
+theorem bornAt_cells {X : Ctx D} {c : Call D} {base : Nat} {cr : List Cell} :
+    (bornAt X c base cr).map Prod.snd = cr := by
   unfold bornAt; rw [List.map_map]
-  exact List.zipIdx_map_fst 0 cr
+  exact List.zipIdx_map_fst base cr
+
+omit [Ord D] [DecidableEq D] in
+theorem mem_bornAt_cell {X : Ctx D} {c : Call D} {base : Nat} {cr : List Cell} {p : D × Cell}
+    (h : p ∈ bornAt X c base cr) : p.2 ∈ cr := by
+  have := List.mem_map_of_mem (f := Prod.snd) h
+  rwa [bornAt_cells] at this
 
 omit [Ord D] in
 theorem touchesOf_pins (pins : List (D × D)) (efs : List (D × Act)) :
@@ -88,23 +95,20 @@ theorem touchesOf_pins (pins : List (D × D)) (efs : List (D × Act)) :
   | nil => rfl
   | cons p rest ih => simp only [touchesOf, List.map_cons] at ih ⊢; rw [ih]
 
-/-- Every derivation of a kind ends in a seal of the call. -/
-theorem dispatch_sealed {X : Ctx D} {look : Pinned D} {c : Call D} {b : Body D} {t : Turn D}
-    (h : dispatch X look c b = .ok t) : ∃ cr efs ns, sealTurn X c cr efs ns = .ok t := by
-  cases b <;>
-    simp only [dispatch, enroll, rotate, install, create, write, law, invoke, grant, revoke,
-      issue, account, transfer, credit, except_bind_ok] at h <;>
-    (repeat' (first | (obtain ⟨_, _, h⟩ := h) | exact ⟨_, _, _, h⟩))
-
+/-- **One seal per call** (KERNEL-28 (c)). A derived Turn is the ONE seal of the call's whole
+Draft: what its Body derived at the signer, and every call of its tree. -/
 theorem receiveWith_sealed {X : Ctx D} {look : Pinned D} {c : Call D} {t : Turn D}
     (h : receiveWith X look c = .ok t) :
     X.verify c.unsigned.key (X.unsignedBytes c.unsigned) c.signature = true ∧
-      ∃ cr efs ns, sealTurn X c cr efs ns = .ok t := by
+      ∃ d, derive X look c = .ok d ∧ sealTurn X c d.creates d.effects d.nullifiers = .ok t := by
   unfold receiveWith at h
   simp only [except_bind_ok] at h
   obtain ⟨⟨⟩, hs, ⟨⟩, _, h⟩ := h
+  unfold deriveTurn at h
+  simp only [except_bind_ok] at h
+  obtain ⟨d, hd, h⟩ := h
   unfold checkSignature at hs
-  exact ⟨req_ok.mp hs, dispatch_sealed h⟩
+  exact ⟨req_ok.mp hs, d, hd, h⟩
 
 /-- **Derive-then-admit, the receive half.** A derived Turn is signed with the key the call
 names, pays exactly its weight within the signed price, and touches exactly the caller's pins,
@@ -117,7 +121,7 @@ theorem receive_ok {X : Ctx D} {w : World D} {c : Call D} {t : Turn D}
       t.touches.map (fun x => (x.cell, x.seen)) = c.unsigned.pins ∧
       t.event = X.callBytes c ∧ t.txId = txIdOf X c ∧ t.notBefore = c.unsigned.notBefore ∧
       t.validUntil = c.unsigned.validUntil := by
-  obtain ⟨hv, cr, efs, ns, hs⟩ := receiveWith_sealed (receive_ok_with h).2
+  obtain ⟨hv, _, _, hs⟩ := receiveWith_sealed (receive_ok_with h).2
   obtain ⟨h1, h2, h3, h4, h5, h6, h7, _⟩ := sealTurn_ok hs
   exact ⟨hv, h1, h2, by rw [h3]; exact touchesOf_pins _ _, h4, h5, h6, h7⟩
 

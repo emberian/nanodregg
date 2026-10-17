@@ -53,7 +53,7 @@ theorem derivePins_keeps {X : Ctx D} {w : World D} :
 theorem plan_admits {X : Ctx D} {me : Self D} {w : World D} {key : ByteArray} {b : Body D}
     {u : Unsigned D} (h : plan X me w key b = .ok u) :
     u.member = me.member ∧ u.key = key ∧ u.body = b ∧
-    ∃ t w', dispatch X (pinned X.env w u.pins) ⟨u, ByteArray.empty⟩ u.body = .ok t ∧
+    ∃ t w', deriveTurn X (pinned X.env w u.pins) ⟨u, ByteArray.empty⟩ = .ok t ∧
       World.admit X.env w t = .ok w' := by
   simp only [plan, bind, Except.bind] at h
   split at h

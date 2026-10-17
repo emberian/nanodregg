@@ -134,7 +134,7 @@ def measureInvoke (X : Ctx D) (w : World D) (c : Call D) : Option (Nat × Nat) :
   match c.unsigned.body with
   | .invoke obj method args budget via =>
     let look := pinned X.env w c.unsigned.pins
-    match invokeRun X look c obj method via with
+    match invokeRun X look c c.unsigned.member obj method via with
     | .ok (cell, p, r) =>
       match Lang.runMeasured X.env.bytes X.digestOf look p (stateOf cell) method args r budget with
       | .ok (_, ticks, pkgs) => some (ticks, pkgs)

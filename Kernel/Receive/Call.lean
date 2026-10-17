@@ -161,6 +161,17 @@ inductive Refusal (D : Type)
   | overflow (cell : D)
   /-- a credit line out of an account that is not a well (its denomination is not its own id) -/
   | notWell (cell : D)
+  /-- a method returned a call of a kind an object may not exercise (only `invoke`, `transfer`,
+  `account`, `credit` and `grant` are callable): the kernel's own assertion where calls enter -/
+  | notCallable (kind : String)
+  /-- a call nested past `Bounds.callDepthMax` -/
+  | callTooDeep
+  /-- an invoke of an object already invoked in this call's tree (re-entry) -/
+  | revisited (obj : D)
+  /-- a method run returned more than `Bounds.callsMax` calls -/
+  | tooManyCalls
+  /-- a run reported more ticks than it was given: the kernel's assertion where `used` enters -/
+  | overTicks
   deriving DecidableEq, Repr
 
 /-- The refusal's name on the wire (law 7): its constructor's, arguments dropped
@@ -198,6 +209,11 @@ def Refusal.name {D : Type} : Refusal D → String
   | .assetMismatch _ => "assetMismatch"
   | .overflow _ => "overflow"
   | .notWell _ => "notWell"
+  | .notCallable _ => "notCallable"
+  | .callTooDeep => "callTooDeep"
+  | .revisited _ => "revisited"
+  | .tooManyCalls => "tooManyCalls"
+  | .overTicks => "overTicks"
 
 /-- A receiver's only access to state: live cells at pinned ids. -/
 abbrev Pinned (D : Type) := D → Except (Refusal D) (Option Cell)
@@ -226,6 +242,8 @@ exercises (the agent, or the root issuer of the grant chain). Laws judge by thes
 structure Req (D : Type) where
   agent : D
   principal : D
+  /-- the object the act is judged or run on (LEDGER-6 (b)): a method names its own accounts by it -/
+  self : D
   /-- the call's signed window: the Turn lands at a height in `[notBefore, validUntil]`
   (`World.admit` enforces it), so a law can say "not before h" without reading the World -/
   notBefore : Nat
@@ -242,9 +260,10 @@ structure Program (D : Type) where
   /-- every law in force (the package's, if any, then the extra `laws`) admits `old → new` -/
   judge : Pinned D → (pkg : Option D) → (laws : List D) → (old new : Slots) → Req D →
     Except (Refusal D) Unit
-  /-- run a method; the new state slots (the receiver then judges them) -/
+  /-- run a method: the new state slots (the receiver then judges them), the calls it makes as
+  the object (LEDGER-5, LANG-23), and the ticks it used of `budget` (LEDGER-8 (e)) -/
   run : Pinned D → (pkg : D) → (state : Slots) → (method : Nat) → (args : ByteArray) → Req D →
-    (budget : Nat) → Except (Refusal D) Slots
+    (budget : Nat) → Except (Refusal D) (Slots × List (Body D) × Nat)
 
 /-- What the receive layer needs beyond the kernel's `Env`: the call's canonical bytes (the
 signed message and the logged event), the digest decoder, the verifier, the program. CODEC
@@ -308,8 +327,8 @@ variable {D : Type} [Ord D]
 def pinned [DecidableEq D] (E : Env D) (w : World D) (pins : List (D × D)) : Pinned D := fun c =>
   if pins.any (fun p => p.1 = c) then .ok (w.live E c) else .error (.unpinned c)
 
-def reqOf (u : Unsigned D) (principal : D) (occasion : Occasion D) : Req D :=
-  { agent := u.member, principal, notBefore := u.notBefore, validUntil := u.validUntil, occasion }
+def reqOf (u : Unsigned D) (self principal : D) (occasion : Occasion D) : Req D :=
+  { agent := u.member, principal, self, notBefore := u.notBefore, validUntil := u.validUntil, occasion }
 
 /-- The transaction id: the digest of the call's canonical bytes. -/
 def txIdOf (X : Ctx D) (c : Call D) : D := X.env.hash domTx (X.callBytes c)
@@ -352,9 +371,43 @@ def effectsPinned [Ord D] [DecidableEq D] (pins : List (D × D)) (effects : List
   | some c => .error (.duplicateEffect c)
 
 /-- The ids a call's fresh births get (`bornId`: content for ROM, else the transaction and the
-index), paired with the cells. -/
-def bornAt (X : Ctx D) (c : Call D) (creates : List Cell) : List (D × Cell) :=
-  creates.zipIdx.map fun p => (bornId X.env (txIdOf X c) p, p.1)
+index, counted from `base`, the births before them in the call's tree), paired with the cells. -/
+def bornAt (X : Ctx D) (c : Call D) (base : Nat) (creates : List Cell) : List (D × Cell) :=
+  creates.zipIdx base |>.map fun p => (bornId X.env (txIdOf X c) p, p.1)
+
+/-- What one receiver derives (KERNEL-28 (c)): births at their ids, effects, nullifiers. A call's
+tree of receivers concatenates its Drafts and `receiveWith` seals them ONCE. -/
+structure Draft (D : Type) where
+  creates : List (D × Cell)
+  effects : List (D × Act)
+  nullifiers : List D
+
+def Draft.append (a b : Draft D) : Draft D :=
+  ⟨a.creates ++ b.creates, a.effects ++ b.effects, a.nullifiers ++ b.nullifiers⟩
+
+/-- Where in a call's tree a receiver runs (LEDGER-8 (b)): `actor` is whose authority it spends
+(the signer at the top, the calling object for an effect, KERNEL-28 (b)); `base` is the fresh
+births before it in the tree. -/
+structure At (D : Type) where
+  actor : D
+  base : Nat
+
+/-- The kinds an object may exercise as a call (KERNEL-28 (a)). -/
+def Body.callable : Body D → Bool
+  | .invoke .. | .transfer .. | .account .. | .credit .. | .grant .. => true
+  | _ => false
+
+/-- The body is an invoke (the one receiver that derives calls through `sub`). -/
+def Body.isInvoke : Body D → Bool
+  | .invoke .. => true
+  | _ => false
+
+/-- A Body's kind, by name (`notCallable`'s argument). -/
+def Body.kindName : Body D → String
+  | .enroll .. => "enroll" | .rotate .. => "rotate" | .install .. => "install"
+  | .create .. => "create" | .write .. => "write" | .law .. => "law" | .invoke .. => "invoke"
+  | .grant .. => "grant" | .revoke .. => "revoke" | .issue .. => "issue"
+  | .account .. => "account" | .transfer .. => "transfer" | .credit .. => "credit"
 
 /-- The Turn a call's effects become: its births at the ids the receiver computed, the caller's window, the caller's pins as touches carrying
 the effects (a receiver writes or retires only cells it read, so only pinned ones: `unpinned`

@@ -34,7 +34,7 @@ private def look (id : D) (c : Cell) : Pinned D := fun i => if i = id then .ok (
 private def owner : D := 7
 
 private def reqFor (e : Event) : Req D :=
-  { agent := owner, principal := owner, notBefore := 0, validUntil := 0, occasion := .invoke e.index }
+  { agent := owner, principal := owner, self := owner, notBefore := 0, validUntil := 0, occasion := .invoke e.index }
 
 private def slotsAt (k : Kind) (p : Phase) : Option Slots := do
   let s ← seed k "app.bin".toUTF8
@@ -47,7 +47,7 @@ private def slotCase (k : Kind) (p : Phase) (e : Event) : Bool :=
   | some c, some id, some s, some args =>
     match prog.run (look id c) id s e.index args (reqFor e) 100000 with
     | .error _ => false
-    | .ok s' =>
+    | .ok (s', _, _) =>
       (prog.judge (look id c) (some id) [] s s' (reqFor e) matches .ok ()) == (step p e).isSome &&
       phaseOf s' == some (target p e) && entryOf s' == entryOf s && kindOf s' == kindOf s &&
       s'.length == s.length

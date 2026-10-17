@@ -46,17 +46,17 @@ def walk (X : Ctx D) (look : Pinned D) (obj : D) (right : Right) :
         | none => .error (.malformedCell g grantParent)
         | some parent => walk X look obj right false fuel parent issuer
 
-/-- Whose authority a call exercises on `obj`: the signer's, or the root issuer of its grant. -/
-def principalOf (X : Ctx D) (look : Pinned D) (u : Unsigned D) (obj : D) (right : Right) :
+/-- Whose authority an actor exercises on `obj`: its own, or the root issuer of its grant. -/
+def principalOf (X : Ctx D) (look : Pinned D) (actor : D) (obj : D) (right : Right) :
     Option D → Except (Refusal D) D
-  | none => .ok u.member
-  | some g => walk X look obj right true grantDepthMax g u.member
+  | none => .ok actor
+  | some g => walk X look obj right true grantDepthMax g actor
 
 /-- Ownership authority (observe, mutate): the principal must be the object's owner. -/
-def ownerAuthority (X : Ctx D) (look : Pinned D) (u : Unsigned D) (obj : D) (cell : Cell)
+def ownerAuthority (X : Ctx D) (look : Pinned D) (actor : D) (obj : D) (cell : Cell)
     (right : Right) (via : Option D) : Except (Refusal D) D := do
   let owner ← slotDigest X obj cell slotOwner
-  let principal ← principalOf X look u obj right via
+  let principal ← principalOf X look actor obj right via
   req (principal = owner) (.noGrant obj)
   pure principal
 

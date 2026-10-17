@@ -12,6 +12,7 @@ The kernel half is structural: an append-only cell never loses or changes a slot
 so a write can neither strip a grant's parent nor retarget it, whoever the receiver is.
 -/
 import Kernel.Proofs.Authority
+import Kernel.Proofs.Tree
 import Kernel.Proofs.Audit
 import Kernel.Proofs.Frame
 import Kernel.Receive.Follow
@@ -344,98 +345,118 @@ theorem sealTurn_creates {X : Ctx D} {c : Call D} {cr : List (D × Cell)} {efs :
     {ns : List D} {t : Turn D} (h : sealTurn X c cr efs ns = .ok t) : t.born = cr.map Prod.snd := by
   rw [Turn.born, (sealTurn_ok h).2.2.2.2.2.2.2.1]
 
-/-- A seal of fresh births bears exactly those cells. -/
-theorem sealTurn_born {X : Ctx D} {c : Call D} {cr : List Cell} {efs : List (D × Act)}
-    {ns : List D} {t : Turn D} (h : sealTurn X c (bornAt X c cr) efs ns = .ok t) : t.born = cr := by
-  rw [sealTurn_creates h, bornAt_cells]
-
-/-- **No receiver bears an unrooted grant.** Only `grant` bears a grant cell, append-only, and on
-the World only with a parent (`grant_rooted`). Needs the digest's bytes to be injective (a target
-read back as the World's bytes IS the World). -/
-theorem dispatch_born {X : Ctx D} {look : Pinned D} {c : Call D} {b : Body D} {t : Turn D}
+omit [Ord D] in
+/-- **No receiver bears an unrooted grant**, anywhere in a call's tree. Only `grant` bears a grant
+cell, append-only, and on the World only with a parent (`grant_rooted`). Needs the digest's bytes
+to be injective (a target read back as the World's bytes IS the World). -/
+theorem derive_born {X : Ctx D} {look : Pinned D} {c : Call D} {d : Draft D}
     (hinj : ∀ a b : D, X.env.bytes a = X.env.bytes b → a = b)
-    (h : dispatch X look c b = .ok t) : ∀ cell ∈ t.born, BornRooted X cell := by
-  have kind_ne : ∀ (cell : Cell) (cr : List Cell), cr = [cell] → cell.kind ≠ kindGrant →
-      ∀ x ∈ cr, BornRooted X x := by
-    intro cell cr hcr hk x hx; subst hcr; simp at hx; subst hx; intro h; exact absurd h hk
-  cases b with
-  | enroll key next possession via =>
-      simp only [dispatch, enroll, except_bind_ok] at h
-      obtain ⟨_, _, _, _, _, _, ⟨⟩, _, h⟩ := h
-      rw [sealTurn_born h]
-      exact kind_ne _ _ rfl (by simp [kindMember, kindGrant])
-  | rotate key next =>
-      simp only [dispatch, rotate, except_bind_ok] at h
-      obtain ⟨_, _, ⟨⟩, _, _, _, ⟨⟩, _, h⟩ := h
-      rw [sealTurn_creates h]; simp
-  | install pkg =>
-      simp only [dispatch, install, except_bind_ok] at h
-      obtain ⟨⟨⟩, _, h⟩ := h
-      rw [sealTurn_born h]
-      exact kind_ne _ _ rfl (by simp [kindPackage, kindGrant])
-  | create pkg laws state =>
-      simp only [dispatch, create, except_bind_ok] at h
-      obtain ⟨⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, h⟩ := h
-      rw [sealTurn_born h]
-      exact kind_ne _ _ rfl (by simp [objectCell, kindObject, kindGrant])
-  | write obj edits via =>
-      simp only [dispatch, write, except_bind_ok] at h
-      obtain ⟨_, _, _, _, ⟨⟩, _, _, _, ⟨⟩, _, _, _, ⟨⟩, _, h⟩ := h
-      rw [sealTurn_creates h]; simp
-  | law obj laws via =>
-      simp only [dispatch, law, except_bind_ok] at h
-      obtain ⟨_, _, _, _, ⟨⟩, _, _, _, ⟨⟩, _, _, _, ⟨⟩, _, ⟨⟩, _, h⟩ := h
-      rw [sealTurn_creates h]; simp
-  | invoke obj method args budget via =>
-      simp only [dispatch, invoke, except_bind_ok] at h
-      obtain ⟨_, _, _, _, ⟨⟩, _, _, _, ⟨⟩, _, h⟩ := h
-      rw [sealTurn_creates h]; simp
-  | grant target grantee rights parent =>
-      have hroot := grant_rooted (X := X) (look := look) (c := c) (target := target)
-        (grantee := grantee) (rights := rights) (parent := parent) (t := t)
-      simp only [dispatch] at h
-      have h' := h
-      unfold grant at h
-      simp only [except_bind_ok] at h
-      obtain ⟨_, _, _, _, h⟩ := h
-      rw [sealTurn_born h]
-      intro x hx _
-      simp only [List.mem_singleton] at hx
-      subst hx
-      obtain ⟨ht, hp⟩ := grantCell_slots X target grantee c.unsigned.member parent rights
-      refine ⟨rfl, by simp only at ht ⊢; rw [ht]; rfl, fun hw => ?_⟩
-      simp only at ht hp hw ⊢
-      rw [ht] at hw
-      have := hinj _ _ (Option.some.inj hw)
-      rw [hp]; exact hroot h' (.inl this)
-  | revoke g =>
-      simp only [dispatch, revoke, except_bind_ok] at h
-      obtain ⟨_, _, _, _, ⟨⟩, _, h⟩ := h
-      rw [sealTurn_creates h]; simp
-  | issue cap =>
-      simp only [dispatch, issue, except_bind_ok] at h
-      obtain ⟨⟨⟩, _, h⟩ := h
-      rw [sealTurn_born h]
-      exact kind_ne _ _ rfl (by simp [accountCell, kindAccount, kindGrant])
-  | account asset owner =>
-      simp only [dispatch, account] at h
-      rw [sealTurn_creates h]
-      exact kind_ne _ _ rfl (by simp [accountCell, kindAccount, kindGrant])
-  | transfer src dst amount via once =>
-      simp only [dispatch, transfer, except_bind_ok] at h
-      obtain ⟨_, _, _, _, _, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, h⟩ := h
-      rw [sealTurn_creates h]; simp
-  | credit well acct amount via =>
-      simp only [dispatch, credit, except_bind_ok] at h
-      obtain ⟨_, _, _, _, _, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, h⟩ := h
-      rw [sealTurn_creates h]; simp
+    (h : derive X look c = .ok d) : ∀ p ∈ d.creates, BornRooted X p.2 := by
+  have notGrant : ∀ (cell : Cell) (base : Nat), cell.kind ≠ kindGrant →
+      ∀ p ∈ bornAt X c base [cell], BornRooted X p.2 := by
+    intro cell base hk p hp hpk
+    have := mem_bornAt_cell hp
+    simp only [List.mem_singleton] at this
+    rw [this] at hpk; exact absurd hpk hk
+  refine derive_all (P := fun d => ∀ p ∈ d.creates, BornRooted X p.2) ?_ ?_ ?_ h
+  · intro a b ha hb p hp
+    rcases List.mem_append.mp hp with hp | hp
+    · exact ha p hp
+    · exact hb p hp
+  · intro _ _ p hp; simp at hp
+  · intro sub wk actor b r hb h
+    cases b with
+    | invoke => simp [Body.isInvoke] at hb
+    | enroll key next possession via =>
+        have hd := stepped_draft h
+        simp only [enroll, except_bind_ok, pure, Except.pure, Except.ok.injEq] at hd
+        obtain ⟨_, _, _, _, _, _, ⟨⟩, _, hr⟩ := hd
+        rw [← hr]
+        exact notGrant _ _ (by simp [kindMember, kindGrant])
+    | rotate key next =>
+        have hd := stepped_draft h
+        simp only [rotate, except_bind_ok, pure, Except.pure, Except.ok.injEq] at hd
+        obtain ⟨_, _, ⟨⟩, _, _, _, ⟨⟩, _, hr⟩ := hd
+        rw [← hr]
+        simp
+    | install pkg =>
+        have hd := stepped_draft h
+        simp only [install, except_bind_ok, pure, Except.pure, Except.ok.injEq] at hd
+        obtain ⟨⟨⟩, _, hr⟩ := hd
+        rw [← hr]
+        exact notGrant _ _ (by simp [kindPackage, kindGrant])
+    | create pkg laws state =>
+        have hd := stepped_draft h
+        simp only [create, except_bind_ok, pure, Except.pure, Except.ok.injEq] at hd
+        obtain ⟨⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, hr⟩ := hd
+        rw [← hr]
+        exact notGrant _ _ (by simp [objectCell, kindObject, kindGrant])
+    | write obj edits via =>
+        have hd := stepped_draft h
+        simp only [write, except_bind_ok, pure, Except.pure, Except.ok.injEq] at hd
+        obtain ⟨_, _, _, _, ⟨⟩, _, _, _, ⟨⟩, _, _, _, ⟨⟩, _, hr⟩ := hd
+        rw [← hr]
+        simp
+    | law obj laws via =>
+        have hd := stepped_draft h
+        simp only [law, except_bind_ok, pure, Except.pure, Except.ok.injEq] at hd
+        obtain ⟨_, _, _, _, ⟨⟩, _, _, _, ⟨⟩, _, _, _, ⟨⟩, _, ⟨⟩, _, hr⟩ := hd
+        rw [← hr]
+        simp
+    | grant target grantee rights parent =>
+        have hd := stepped_draft h
+        have hroot := grant_rooted hd
+        simp only [grant, except_bind_ok, pure, Except.pure, Except.ok.injEq] at hd
+        obtain ⟨_, _, _, _, hr⟩ := hd
+        rw [← hr]
+        intro x hx _
+        have := mem_bornAt_cell hx
+        simp only [List.mem_singleton] at this
+        rw [this]
+        obtain ⟨ht, hp⟩ := grantCell_slots X target grantee actor parent rights
+        refine ⟨rfl, by simp only at ht ⊢; rw [ht]; rfl, fun hw => ?_⟩
+        simp only at ht hp hw ⊢
+        rw [ht] at hw
+        have := hinj _ _ (Option.some.inj hw)
+        rw [hp]; exact hroot (.inl this)
+    | revoke g =>
+        have hd := stepped_draft h
+        simp only [revoke, except_bind_ok, pure, Except.pure, Except.ok.injEq] at hd
+        obtain ⟨_, _, _, _, ⟨⟩, _, hr⟩ := hd
+        rw [← hr]
+        simp
+    | issue cap =>
+        have hd := stepped_draft h
+        simp only [issue, except_bind_ok, pure, Except.pure, Except.ok.injEq] at hd
+        obtain ⟨⟨⟩, _, hr⟩ := hd
+        rw [← hr]
+        exact notGrant _ _ (by simp [accountCell, kindAccount, kindGrant])
+    | account asset owner =>
+        have hd := stepped_draft h
+        simp only [account, pure, Except.pure, Except.ok.injEq] at hd
+        rw [← hd]
+        intro p hp hk
+        simp only [List.mem_singleton] at hp
+        rw [hp] at hk
+        simp [accountCell, kindAccount, kindGrant] at hk
+    | transfer src dst amount via once =>
+        have hd := stepped_draft h
+        simp only [transfer, except_bind_ok, pure, Except.pure, Except.ok.injEq] at hd
+        obtain ⟨_, _, _, _, _, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, hr⟩ := hd
+        rw [← hr]
+        simp
+    | credit well acct amount via =>
+        have hd := stepped_draft h
+        simp only [credit, except_bind_ok, pure, Except.pure, Except.ok.injEq] at hd
+        obtain ⟨_, _, _, _, _, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, hr⟩ := hd
+        rw [← hr]
+        simp
 
-theorem receiveWith_dispatch {X : Ctx D} {look : Pinned D} {c : Call D} {t : Turn D}
-    (h : receiveWith X look c = .ok t) : dispatch X look c c.unsigned.body = .ok t := by
-  unfold receiveWith at h
-  simp only [except_bind_ok] at h
-  obtain ⟨⟨⟩, _, ⟨⟩, _, h⟩ := h
-  exact h
+/-- What a derived Turn bears: the call's Draft, sealed once. -/
+theorem receiveWith_born {X : Ctx D} {look : Pinned D} {c : Call D} {t : Turn D}
+    (h : receiveWith X look c = .ok t) : ∃ d, derive X look c = .ok d ∧ t.creates = d.creates := by
+  obtain ⟨_, d, hd, hs⟩ := receiveWith_sealed h
+  exact ⟨d, hd, (sealTurn_ok hs).2.2.2.2.2.2.2.1⟩
 
 section Steps
 
@@ -443,7 +464,12 @@ section Steps
 theorem step_rooted {X : Ctx D} {R : D → Prop} {w w' : World D} {c : Call D} {t : Turn D}
     (hinj : ∀ a b : D, X.env.bytes a = X.env.bytes b → a = b) (hw : WorldRooted X R w)
     (hr : receive X w c = .ok t) (ha : World.admit X.env w t = .ok w') : WorldRooted X R w' :=
-  admit_rooted hw (dispatch_born hinj (receiveWith_dispatch (receive_ok_with hr).2)) ha
+  by
+    obtain ⟨d, hd, hc⟩ := receiveWith_born (receive_ok_with hr).2
+    refine admit_rooted hw (fun cell hcell => ?_) ha
+    rw [Turn.born, hc] at hcell
+    obtain ⟨p, hp, rfl⟩ := List.mem_map.mp hcell
+    exact derive_born hinj hd p hp
 
 /-- **The Host keeps the World rooted**: every committed submission. -/
 theorem submit_rooted {X : Ctx D} {R : D → Prop} {w w' : World D} {c : Call D} {t : Turn D}

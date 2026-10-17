@@ -9,6 +9,7 @@ an admitted transfer does to the two accounts and nothing else (`transfer_exact`
 -/
 import Kernel.Proofs.Value
 import Kernel.Proofs.Origin
+import Kernel.Proofs.Tree
 import Codec.Proofs.Stream
 
 namespace Nanodregg.Kernel
@@ -253,28 +254,29 @@ theorem account_keyed {X : Ctx D} (hb : ∀ a b : D, X.env.bytes a = X.env.bytes
   · right
     exact ⟨_, _, he, h⟩
 
+omit [Ord D] [DecidableEq D] in
 /-- **An account is born at its keyed id**, owned by the named owner, of the named denomination,
 balance and floor 0; it bears nothing else and writes nothing. -/
-theorem account_creates {X : Ctx D} {c : Call D} {asset owner : D} {t : Turn D}
-    (h : account X c asset owner = .ok t) :
-    t.creates = [(accountId X owner asset, accountCell X owner (X.env.bytes asset) 0)] ∧
-      t.touches.all (fun x => x.act = .keep) ∧ t.nullifiers = [] := by
-  unfold account at h
-  obtain ⟨_, _, ht, _, _, _, _, hc, hn, _⟩ := sealTurn_ok h
-  refine ⟨hc, ?_, hn⟩
-  rw [ht]
-  simp [touchesOf, actFor]
+theorem account_creates {X : Ctx D} {asset owner : D} {d : Draft D}
+    (h : account X asset owner = .ok d) :
+    d.creates = [(accountId X owner asset, accountCell X owner (X.env.bytes asset) 0)] ∧
+      d.effects = [] ∧ d.nullifiers = [] := by
+  simp only [account, pure, Except.pure, Except.ok.injEq] at h
+  subst h
+  exact ⟨rfl, rfl, rfl⟩
 
+omit [Ord D] in
 /-- **Transfer authority** (the twin of `write_authorized`). A derived transfer moves value out of
-an account only for its owner: the signer, or an agent holding a grant chain for `mutate` on the
-source whose root issuer is the owner. The source is the account the reference resolves to. -/
-theorem transfer_authorized {X : Ctx D} {look : Pinned D} {c : Call D} {srcR dstR : AcctRef D}
-    {amount : Nat} {via : Option D} {once : Option ByteArray} {t : Turn D}
-    (h : transfer X look c srcR dstR amount via once = .ok t) :
+an account only for its owner: the actor (the signer, or the calling object for an effect), or an
+actor holding a grant chain for `mutate` on the source whose root issuer is the owner. The source
+is the account the reference resolves to. -/
+theorem transfer_authorized {X : Ctx D} {look : Pinned D} {a : At D} {srcR dstR : AcctRef D}
+    {amount : Nat} {via : Option D} {once : Option ByteArray} {d : Draft D}
+    (h : transfer X look a srcR dstR amount via once = .ok d) :
     ∃ cell owner, readKind look (srcR.resolve X) kindAccount = .ok cell ∧
       slotDigest X (srcR.resolve X) cell slotOwner = .ok owner ∧
-      (via = none ∧ c.unsigned.member = owner ∨
-        ∃ g, via = some g ∧ Chain X look (srcR.resolve X) .mutate true g c.unsigned.member owner) := by
+      (via = none ∧ a.actor = owner ∨
+        ∃ g, via = some g ∧ Chain X look (srcR.resolve X) .mutate true g a.actor owner) := by
   unfold transfer at h
   simp only [except_bind_ok] at h
   obtain ⟨⟨src, scell, sv⟩, hs, ⟨_, _, _⟩, _, principal, ha, _⟩ := h
@@ -290,16 +292,32 @@ theorem transfer_authorized {X : Ctx D} {look : Pinned D} {c : Call D} {srcR dst
   | none => left; simp [principalOf] at hp; exact ⟨rfl, hp⟩
   | some g => right; exact ⟨g, rfl, walk_chain hp⟩
 
+omit [Ord D] in
+/-- **An object pays only from what it owns** (KERNEL-28 (b) with `effect_as_signed`). A transfer an
+object's run asks for moves value out of an account only if the OBJECT owns it, or holds a grant
+chain for `mutate` on it rooted at its owner; the signer's own authority is not lent. -/
+theorem effect_transfer_authorized {X : Ctx D} {look : Pinned D} {c : Call D} {n : Nat} {wk : Walk D}
+    {obj : D} {srcR dstR : AcctRef D} {amount : Nat} {via : Option D} {once : Option ByteArray}
+    {r : Draft D × Walk D} (h : tree X look c n wk obj (.transfer srcR dstR amount via once) = .ok r) :
+    ∃ cell owner, readKind look (srcR.resolve X) kindAccount = .ok cell ∧
+      slotDigest X (srcR.resolve X) cell slotOwner = .ok owner ∧
+      (via = none ∧ obj = owner ∨
+        ∃ g, via = some g ∧ Chain X look (srcR.resolve X) .mutate true g obj owner) := by
+  obtain ⟨_, _, _, hd⟩ := effect_as_signed h
+  simp only [dispatch] at hd
+  exact transfer_authorized (a := ⟨obj, wk.born⟩) (stepped_draft hd)
+
+omit [Ord D] in
 /-- **Credit authority.** A derived credit line moves floor only out of a WELL (an account whose
 denomination is its own id), only with the authority of the well's owner slot (the signer, or a
 grant chain for `mutate` rooted at that owner; `issue` sets it to the issuer and no receiver
 writes an account's owner slot), and only into a live account of the same denomination. -/
-theorem credit_authorized {X : Ctx D} {look : Pinned D} {c : Call D} {well : D} {acctR : AcctRef D}
-    {amount : Nat} {via : Option D} {t : Turn D} (h : credit X look c well acctR amount via = .ok t) :
+theorem credit_authorized {X : Ctx D} {look : Pinned D} {a : At D} {well : D} {acctR : AcctRef D}
+    {amount : Nat} {via : Option D} {d : Draft D} (h : credit X look a well acctR amount via = .ok d) :
     ∃ cell v owner, readKind look well kindAccount = .ok cell ∧ Value.ofCell cell = some v ∧
       v.denom = X.env.bytes well ∧ slotDigest X well cell slotOwner = .ok owner ∧
-      (via = none ∧ c.unsigned.member = owner ∨
-        ∃ g, via = some g ∧ Chain X look well .mutate true g c.unsigned.member owner) ∧
+      (via = none ∧ a.actor = owner ∨
+        ∃ g, via = some g ∧ Chain X look well .mutate true g a.actor owner) ∧
       ∃ acell av, readKind look (acctR.resolve X) kindAccount = .ok acell ∧ Value.ofCell acell = some av ∧
         av.denom = v.denom := by
   unfold credit at h
@@ -319,19 +337,21 @@ theorem credit_authorized {X : Ctx D} {look : Pinned D} {c : Call D} {well : D} 
   | none => left; simp [principalOf] at hp; exact ⟨rfl, hp⟩
   | some g => right; exact ⟨g, rfl, walk_chain hp⟩
 
+omit [Ord D] in
 /-- **A transfer's once key is spent.** A derived transfer carries exactly the nullifier of its
 once key (if it has one) in its source's namespace, so (`admit_nullifiers`) a transfer with the
 same key from the same source lands at most once in the life of the World. Without a key, replay
 protection is the transaction id's journal alone. -/
-theorem transfer_once {X : Ctx D} {look : Pinned D} {c : Call D} {srcR dstR : AcctRef D}
-    {amount : Nat} {via : Option D} {once : Option ByteArray} {t : Turn D}
-    (h : transfer X look c srcR dstR amount via once = .ok t) :
-    t.nullifiers = (once.map (onceNullifier X (srcR.resolve X))).toList := by
+theorem transfer_once {X : Ctx D} {look : Pinned D} {a : At D} {srcR dstR : AcctRef D}
+    {amount : Nat} {via : Option D} {once : Option ByteArray} {d : Draft D}
+    (h : transfer X look a srcR dstR amount via once = .ok d) :
+    d.nullifiers = (once.map (onceNullifier X (srcR.resolve X))).toList := by
   unfold transfer at h
   simp only [except_bind_ok] at h
   obtain ⟨⟨src, _, _⟩, hs, _, _, _, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, h⟩ := h
   obtain ⟨rfl, _, _⟩ := readRef_ok hs
-  exact (sealTurn_ok h).2.2.2.2.2.2.2.2.1
+  simp only [pure, Except.pure, Except.ok.injEq] at h
+  rw [← h]
 
 /-! ## Births -/
 
@@ -339,88 +359,182 @@ omit [Ord D] [DecidableEq D] in
 theorem ofCell_not_value {cell : Cell} (h : cell.discipline ≠ .value) : Value.ofCell cell = none := by
   unfold Value.ofCell; simp [h]
 
-/-- **Which value cells a receiver bears.** Every born value cell has balance 0; its floor is 0
-unless the call is `issue cap`, and then the floor IS the signed cap and the denomination is the
-bytes of the turn's first born id: the well names itself. With `Kernel.Proofs.Value.admit_birth`
-and `fold_floors_held`, the cap is the denomination's floor sum forever. -/
-theorem dispatch_value_born {X : Ctx D} {look : Pinned D} {c : Call D} {b : Body D} {t : Turn D}
-    (h : dispatch X look c b = .ok t) :
-    ∀ cell ∈ t.born, ∀ v, Value.ofCell cell = some v →
-      v.balance = 0 ∧ (v.floor = 0 ∨ ∃ cap, b = .issue cap ∧ v.floor = cap ∧
-        v.denom = X.env.bytes (cellIdOf X.env t.txId 0)) := by
-  have notv : ∀ (cell : Cell) (cr : List Cell), cr = [cell] → cell.discipline ≠ .value →
-      ∀ x ∈ cr, ∀ v, Value.ofCell x = some v → False := by
-    intro cell cr hcr hd x hx v hv
-    subst hcr; simp at hx; subst hx; rw [ofCell_not_value hd] at hv; cases hv
+/-- Every value cell a Draft bears is empty: balance 0, floor 0. -/
+def ZeroBorn (d : Draft D) : Prop :=
+  ∀ p ∈ d.creates, ∀ v, Value.ofCell p.2 = some v → v.balance = 0 ∧ v.floor = 0
+
+omit [Ord D] in
+/-- **An object's calls bear only empty value cells**: no callable receiver issues (`issue` is not
+callable), `account` bears balance and floor 0, and the rest bear no value cell. -/
+theorem tree_zeroBorn {X : Ctx D} {look : Pinned D} {c : Call D} :
+    ∀ n wk a b r, tree X look c n wk a b = .ok r → ZeroBorn r.1 := by
+  refine tree_all ?_ ?_ ?_
+  · intro a b ha hb p hp
+    rcases List.mem_append.mp hp with hp | hp
+    · exact ha p hp
+    · exact hb p hp
+  · intro _ _ p hp; simp at hp
+  · intro sub wk actor b r hc hi h
+    cases b with
+    | invoke => simp [Body.isInvoke] at hi
+    | account asset owner =>
+        have hd := stepped_draft h
+        simp only [account, pure, Except.pure, Except.ok.injEq] at hd
+        rw [← hd]
+        intro p hp v hv
+        simp only [List.mem_singleton] at hp
+        rw [hp] at hv
+        obtain ⟨_, hb, hf⟩ := accountCell_value hv
+        exact ⟨hb, by rw [hf]⟩
+    | grant target grantee rights parent =>
+        have hd := stepped_draft h
+        simp only [grant, except_bind_ok, pure, Except.pure, Except.ok.injEq] at hd
+        obtain ⟨_, _, _, _, hr⟩ := hd
+        rw [← hr]
+        intro p hp v hv
+        have := mem_bornAt_cell hp
+        simp only [List.mem_singleton] at this
+        rw [this, ofCell_not_value (by simp)] at hv
+        cases hv
+    | transfer src dst amount via once =>
+        have hd := stepped_draft h
+        simp only [transfer, except_bind_ok, pure, Except.pure, Except.ok.injEq] at hd
+        obtain ⟨_, _, _, _, _, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, hr⟩ := hd
+        rw [← hr]; simp [ZeroBorn]
+    | credit well acct amount via =>
+        have hd := stepped_draft h
+        simp only [credit, except_bind_ok, pure, Except.pure, Except.ok.injEq] at hd
+        obtain ⟨_, _, _, _, _, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, hr⟩ := hd
+        rw [← hr]; simp [ZeroBorn]
+    | _ => simp [Body.callable] at hc
+
+omit [Ord D] in
+theorem map_fst_ok {α β ε : Type} {x : Except ε (α × β)} {a : α} (h : x.map (·.1) = .ok a) :
+    ∃ r, x = .ok r ∧ r.1 = a := by
+  cases x with
+  | error e => cases h
+  | ok r => simp only [Except.map, Except.ok.injEq] at h; exact ⟨r, rfl, h⟩
+
+omit [Ord D] in
+/-- **Which value cells a call bears**, anywhere in its tree. Every born value cell has balance 0;
+its floor is 0 unless the signed call is `issue cap`, and then the floor IS the signed cap and the
+denomination is the bytes of the turn's first born id: the well names itself. With
+`Kernel.Proofs.Value.admit_birth` and `fold_floors_held`, the cap is the denomination's floor sum
+forever. -/
+theorem derive_value_born {X : Ctx D} {look : Pinned D} {c : Call D} {d : Draft D}
+    (h : derive X look c = .ok d) :
+    ∀ p ∈ d.creates, ∀ v, Value.ofCell p.2 = some v →
+      v.balance = 0 ∧ (v.floor = 0 ∨ ∃ cap, c.unsigned.body = .issue cap ∧ v.floor = cap ∧
+        v.denom = X.env.bytes (cellIdOf X.env (txIdOf X c) 0)) := by
+  have zero : ZeroBorn d → ∀ p ∈ d.creates, ∀ v, Value.ofCell p.2 = some v →
+      v.balance = 0 ∧ (v.floor = 0 ∨ ∃ cap, c.unsigned.body = .issue cap ∧ v.floor = cap ∧
+        v.denom = X.env.bytes (cellIdOf X.env (txIdOf X c) 0)) := by
+    intro hz p hp v hv
+    obtain ⟨hb, hf⟩ := hz p hp v hv
+    exact ⟨hb, .inl hf⟩
+  rw [derive_eq] at h
+  obtain ⟨r, hr, rfl⟩ := map_fst_ok h
+  generalize hb : c.unsigned.body = b at hr
   cases b with
-  | enroll key next possession via =>
-      simp only [dispatch, enroll, except_bind_ok] at h
-      obtain ⟨_, _, _, _, _, _, ⟨⟩, _, h⟩ := h
-      rw [sealTurn_born h]
-      exact fun x hx v hv => (notv _ _ rfl (by simp) x hx v hv).elim
-  | rotate key next =>
-      simp only [dispatch, rotate, except_bind_ok] at h
-      obtain ⟨_, _, ⟨⟩, _, _, _, ⟨⟩, _, h⟩ := h
-      rw [sealTurn_creates h]; simp
-  | install pkg =>
-      simp only [dispatch, install, except_bind_ok] at h
-      obtain ⟨⟨⟩, _, h⟩ := h
-      rw [sealTurn_born h]
-      exact fun x hx v hv => (notv _ _ rfl (by simp) x hx v hv).elim
-  | create pkg laws state =>
-      simp only [dispatch, create, except_bind_ok] at h
-      obtain ⟨⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, h⟩ := h
-      rw [sealTurn_born h]
-      exact fun x hx v hv => (notv _ _ rfl (by simp [objectCell]) x hx v hv).elim
-  | write obj edits via =>
-      simp only [dispatch, write, except_bind_ok] at h
-      obtain ⟨_, _, _, _, ⟨⟩, _, _, _, ⟨⟩, _, _, _, ⟨⟩, _, h⟩ := h
-      rw [sealTurn_creates h]; simp
-  | law obj laws via =>
-      simp only [dispatch, law, except_bind_ok] at h
-      obtain ⟨_, _, _, _, ⟨⟩, _, _, _, ⟨⟩, _, _, _, ⟨⟩, _, ⟨⟩, _, h⟩ := h
-      rw [sealTurn_creates h]; simp
   | invoke obj method args budget via =>
-      simp only [dispatch, invoke, except_bind_ok] at h
-      obtain ⟨_, _, _, _, ⟨⟩, _, _, _, ⟨⟩, _, h⟩ := h
-      rw [sealTurn_creates h]; simp
-  | grant target grantee rights parent =>
-      simp only [dispatch, grant, except_bind_ok] at h
-      obtain ⟨_, _, _, _, h⟩ := h
-      rw [sealTurn_born h]
-      exact fun x hx v hv => (notv _ _ rfl (by simp) x hx v hv).elim
-  | revoke g =>
-      simp only [dispatch, revoke, except_bind_ok] at h
-      obtain ⟨_, _, _, _, ⟨⟩, _, h⟩ := h
-      rw [sealTurn_creates h]; simp
+      obtain ⟨_, _, _, _, _, _, _, _, _, _, _, hd⟩ := invoke_ok hr
+      have hz : ZeroBorn r.1 := by
+        refine foldCalls_all (P := ZeroBorn) ?_ (fun wk a b r h => tree_zeroBorn _ wk a b r h) _ _ ?_ hd
+        · intro a b ha hb p hp
+          rcases List.mem_append.mp hp with hp | hp
+          · exact ha p hp
+          · exact hb p hp
+        · intro p hp; simp at hp
+      have := zero hz
+      rwa [hb] at this
   | issue cap =>
-      simp only [dispatch, issue, except_bind_ok] at h
-      obtain ⟨⟨⟩, hcap, h⟩ := h
+      have hd := stepped_draft hr
+      simp only [issue, except_bind_ok, pure, Except.pure, Except.ok.injEq] at hd
+      obtain ⟨⟨⟩, hcap, hd⟩ := hd
       rw [req_ok, decide_eq_true_eq] at hcap
-      have htx := (sealTurn_ok h).2.2.2.2.1
-      rw [sealTurn_born h]
+      rw [← hd]
       intro x hx v hv
-      simp only [List.mem_singleton] at hx
-      subst hx
-      obtain ⟨hd, hb, hf⟩ := accountCell_value hv
-      refine ⟨hb, .inr ⟨cap, rfl, ?_, by rw [hd, htx]⟩⟩
+      have := mem_bornAt_cell hx
+      simp only [List.mem_singleton] at this
+      rw [this] at hv
+      obtain ⟨hden, hbal, hf⟩ := accountCell_value hv
+      refine ⟨hbal, .inr ⟨cap, rfl, ?_, hden⟩⟩
       rw [hf]; exact Nat.mod_eq_of_lt (by unfold capMax at hcap; omega)
   | account asset owner =>
-      simp only [dispatch, account] at h
-      rw [sealTurn_creates h]
-      intro x hx v hv
-      simp only [List.map_cons, List.map_nil, List.mem_singleton] at hx
-      subst hx
-      obtain ⟨_, hb, hf⟩ := accountCell_value hv
-      exact ⟨hb, .inl (by rw [hf])⟩
+      have hd := stepped_draft hr
+      simp only [account, pure, Except.pure, Except.ok.injEq] at hd
+      rw [← hd]
+      intro p hp v hv
+      simp only [List.mem_singleton] at hp
+      rw [hp] at hv
+      obtain ⟨_, hbal, hf⟩ := accountCell_value hv
+      exact ⟨hbal, .inl (by rw [hf])⟩
+  | enroll key next possession via =>
+      have hd := stepped_draft hr
+      simp only [enroll, except_bind_ok, pure, Except.pure, Except.ok.injEq] at hd
+      obtain ⟨_, _, _, _, _, _, ⟨⟩, _, hd⟩ := hd
+      rw [← hd]
+      intro p hp v hv
+      have := mem_bornAt_cell hp
+      simp only [List.mem_singleton] at this
+      rw [this, ofCell_not_value (by simp)] at hv; cases hv
+  | install pkg =>
+      have hd := stepped_draft hr
+      simp only [install, except_bind_ok, pure, Except.pure, Except.ok.injEq] at hd
+      obtain ⟨⟨⟩, _, hd⟩ := hd
+      rw [← hd]
+      intro p hp v hv
+      have := mem_bornAt_cell hp
+      simp only [List.mem_singleton] at this
+      rw [this, ofCell_not_value (by simp)] at hv; cases hv
+  | create pkg laws state =>
+      have hd := stepped_draft hr
+      simp only [create, except_bind_ok, pure, Except.pure, Except.ok.injEq] at hd
+      obtain ⟨⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, hd⟩ := hd
+      rw [← hd]
+      intro p hp v hv
+      have := mem_bornAt_cell hp
+      simp only [List.mem_singleton] at this
+      rw [this, ofCell_not_value (by simp [objectCell])] at hv; cases hv
+  | grant target grantee rights parent =>
+      have hd := stepped_draft hr
+      simp only [grant, except_bind_ok, pure, Except.pure, Except.ok.injEq] at hd
+      obtain ⟨_, _, _, _, hd⟩ := hd
+      rw [← hd]
+      intro p hp v hv
+      have := mem_bornAt_cell hp
+      simp only [List.mem_singleton] at this
+      rw [this, ofCell_not_value (by simp)] at hv; cases hv
+  | rotate key next =>
+      have hd := stepped_draft hr
+      simp only [rotate, except_bind_ok, pure, Except.pure, Except.ok.injEq] at hd
+      obtain ⟨_, _, ⟨⟩, _, _, _, ⟨⟩, _, hd⟩ := hd
+      rw [← hd]; simp
+  | write obj edits via =>
+      have hd := stepped_draft hr
+      simp only [write, except_bind_ok, pure, Except.pure, Except.ok.injEq] at hd
+      obtain ⟨_, _, _, _, ⟨⟩, _, _, _, ⟨⟩, _, _, _, ⟨⟩, _, hd⟩ := hd
+      rw [← hd]; simp
+  | law obj laws via =>
+      have hd := stepped_draft hr
+      simp only [law, except_bind_ok, pure, Except.pure, Except.ok.injEq] at hd
+      obtain ⟨_, _, _, _, ⟨⟩, _, _, _, ⟨⟩, _, _, _, ⟨⟩, _, ⟨⟩, _, hd⟩ := hd
+      rw [← hd]; simp
+  | revoke g =>
+      have hd := stepped_draft hr
+      simp only [revoke, except_bind_ok, pure, Except.pure, Except.ok.injEq] at hd
+      obtain ⟨_, _, _, _, ⟨⟩, _, hd⟩ := hd
+      rw [← hd]; simp
   | transfer src dst amount via once =>
-      simp only [dispatch, transfer, except_bind_ok] at h
-      obtain ⟨_, _, _, _, _, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, h⟩ := h
-      rw [sealTurn_creates h]; simp
+      have hd := stepped_draft hr
+      simp only [transfer, except_bind_ok, pure, Except.pure, Except.ok.injEq] at hd
+      obtain ⟨_, _, _, _, _, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, hd⟩ := hd
+      rw [← hd]; simp
   | credit well acct amount via =>
-      simp only [dispatch, credit, except_bind_ok] at h
-      obtain ⟨_, _, _, _, _, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, h⟩ := h
-      rw [sealTurn_creates h]; simp
+      have hd := stepped_draft hr
+      simp only [credit, except_bind_ok, pure, Except.pure, Except.ok.injEq] at hd
+      obtain ⟨_, _, _, _, _, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, hd⟩ := hd
+      rw [← hd]; simp
 
 /-! ## What an admitted transfer does -/
 
@@ -522,9 +636,11 @@ theorem transfer_exact {X : Ctx D} {w w' : World D} {c : Call D} {t : Turn D} {s
       (w'.live X.env (srcR.resolve X)).bind Value.ofCell = some { sv with balance := sv.balance - amount } ∧
       (w'.live X.env (dstR.resolve X)).bind Value.ofCell = some { dv with balance := dv.balance + amount } ∧
       ∀ k, k ≠ srcR.resolve X → k ≠ dstR.resolve X → k ∉ createdIds t → w'.entry X.env k = w.entry X.env k := by
-  have hd := receiveWith_dispatch (receive_ok_with hr).2
-  rw [hb] at hd
-  simp only [dispatch, transfer, except_bind_ok] at hd
+  obtain ⟨_, d, hdd, hsl⟩ := receiveWith_sealed (receive_ok_with hr).2
+  rw [derive_eq, hb] at hdd
+  simp only [dispatch, stepped_map] at hdd
+  have hd := hdd
+  simp only [transfer, except_bind_ok] at hd
   obtain ⟨⟨src, scell, sv⟩, hs, ⟨dst, dcell, dv⟩, hdd, _, _, ⟨⟩, hne, ⟨⟩, _, ⟨⟩, _, ⟨⟩, hfs, ⟨⟩, hfd, hseal⟩ := hd
   obtain ⟨rfl, hs, _⟩ := readRef_ok hs
   obtain ⟨rfl, hdd, _⟩ := readRef_ok hdd
@@ -535,7 +651,7 @@ theorem transfer_exact {X : Ctx D} {w w' : World D} {c : Call D} {t : Turn D} {s
   obtain ⟨hkd, hvd⟩ := readAccount_ok hdd
   have hls := pinned_live (readKind_ok hks).1
   have hld := pinned_live (readKind_ok hkd).1
-  obtain ⟨⟨c1, p1, hc1, hw1, hl1⟩, ⟨c2, p2, hc2, hw2, hl2⟩, hframe⟩ := sealed_two_writes hseal hne ha
+  obtain ⟨⟨c1, p1, hc1, hw1, hl1⟩, ⟨c2, p2, hc2, hw2, hl2⟩, hframe⟩ := sealed_two_writes (by simp only [pure, Except.pure, Except.ok.injEq] at hseal; rw [← hseal] at hsl; exact hsl) hne ha
   rw [hls] at hc1; cases hc1
   rw [hld] at hc2; cases hc2
   refine ⟨sv, dv, by rw [hls]; exact hvs, by rw [hld]; exact hvd, ?_, ?_, hframe⟩
@@ -557,9 +673,11 @@ theorem credit_exact {X : Ctx D} {w w' : World D} {c : Call D} {t : Turn D} {wel
       (w'.live X.env well).bind Value.ofCell = some { wv with floor := wv.floor - amount } ∧
       (w'.live X.env (acctR.resolve X)).bind Value.ofCell = some { av with floor := av.floor + amount } ∧
       ∀ k, k ≠ well → k ≠ acctR.resolve X → k ∉ createdIds t → w'.entry X.env k = w.entry X.env k := by
-  have hd := receiveWith_dispatch (receive_ok_with hr).2
-  rw [hb] at hd
-  simp only [dispatch, credit, except_bind_ok] at hd
+  obtain ⟨_, d, hdd, hsl⟩ := receiveWith_sealed (receive_ok_with hr).2
+  rw [derive_eq, hb] at hdd
+  simp only [dispatch, stepped_map] at hdd
+  have hd := hdd
+  simp only [credit, except_bind_ok] at hd
   obtain ⟨⟨wcell, wv⟩, hs, ⟨acct, acell, av⟩, hdd, _, _, ⟨⟩, hwell, ⟨⟩, hne, ⟨⟩, hpos, ⟨⟩, hden, ⟨⟩, hle,
     ⟨⟩, hcap, hseal⟩ := hd
   obtain ⟨rfl, hdd, _⟩ := readRef_ok hdd
@@ -569,7 +687,7 @@ theorem credit_exact {X : Ctx D} {w w' : World D} {c : Call D} {t : Turn D} {wel
   obtain ⟨hkd, hvd⟩ := readAccount_ok hdd
   have hls := pinned_live (readKind_ok hks).1
   have hld := pinned_live (readKind_ok hkd).1
-  obtain ⟨⟨c1, p1, hc1, hw1, hl1⟩, ⟨c2, p2, hc2, hw2, hl2⟩, hframe⟩ := sealed_two_writes hseal hne ha
+  obtain ⟨⟨c1, p1, hc1, hw1, hl1⟩, ⟨c2, p2, hc2, hw2, hl2⟩, hframe⟩ := sealed_two_writes (by simp only [pure, Except.pure, Except.ok.injEq] at hseal; rw [← hseal] at hsl; exact hsl) hne ha
   rw [hls] at hc1; cases hc1
   rw [hld] at hc2; cases hc2
   refine ⟨wv, av, by rw [hls]; exact hvs, by rw [hld]; exact hvd, hwell, hden, hpos, hle, ?_, ?_, hframe⟩

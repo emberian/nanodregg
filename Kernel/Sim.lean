@@ -63,7 +63,7 @@ def ctxWith (program : Program D) : Ctx D :=
     verify := fun key msg sig => toySign key msg == sig
     program }
 
-def ctx : Ctx D := ctxWith Gen.program
+def ctx : Ctx D := ctxWith (Gen.program digestOf 8)
 
 /-- The toy parameters: a secret IS its public key, and its "signature" is a hash. -/
 def toy : Gen.Params D :=
