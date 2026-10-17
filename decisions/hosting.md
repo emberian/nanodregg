@@ -195,8 +195,12 @@ another world's volume with every theorem green. Fixed: `idUnclean`, `plan_compo
 `plan_components_clean` and `plan_refuses_id` red.
 **CRITIQUE.** Everything here is about component strings; symlinks are the OS's. A symlinked
 `pkg/<entry>` is followed by `sandbox::command`'s canonicalisation and becomes the allowed program,
-wherever it points: `grain-launch` must refuse a program whose canonical path leaves the canonical
-`pkg` dir (to build with the launcher). On a case-insensitive filesystem two labels differing in case
+wherever it points. CLOSED by CLIENT 6278ab8: `sandbox::command` refuses `ProgramOutside` unless the
+canonical program lies under (or is) a canonical `read`/`exec` entry; the plan's program lies under
+its `read` entry `pkg`, so a symlinked `pkg/<entry>` pointing outside is refused before launch (the
+launcher's plant repeats it). Linux caveat (CLIENT-2): bwrap mounts, it does not filter exec, so
+everything under the read-only floor (/usr) is executable inside; `exec` bounds what is VISIBLE on
+Linux, what RUNS only on macOS (sandbox-exec filters process-exec). On a case-insensitive filesystem two labels differing in case
 name one world: labels must be lowercase (not yet refused). Cross-world isolation is still the
 sandbox's deny-default plus the launcher's physical plant, not a theorem over other labels.
 **META.** I wrote `plan_paths` first because it was in H1 and easy; it was the weakest. The reader
