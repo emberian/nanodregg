@@ -9,7 +9,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::Output;
 
-use nanodregg_sandbox::{ConfineError, Policy, command};
+use nanodregg_sandbox::{ConfineError, EXEC_FILTERED, Policy, command};
 
 const CAT: &str = "/bin/cat";
 
@@ -151,5 +151,38 @@ fn a_symlinked_program_does_not_widen_the_policy_to_its_target() {
         ..policy
     };
     assert!(command(&named, prog.as_os_str(), &[]).is_ok());
+    fs::remove_dir_all(&t.root).unwrap();
+}
+
+/// The EXEC_FILTERED row, measured: a shell allowed to run only itself starts /usr/bin/true, which
+/// no `exec` entry names. Where the platform filters exec it is refused; where it does not
+/// (Linux bwrap) it runs. Either way the row must say what happened.
+#[test]
+fn exec_is_filtered_exactly_where_the_platform_says() {
+    let t = tree("exec");
+    let sh = "/bin/sh";
+    let policy = Policy {
+        exec: vec![sh.into()],
+        hidden: vec![t.ws.clone()],
+        ..Policy::default()
+    };
+    let out = command(
+        &policy,
+        std::ffi::OsStr::new(sh),
+        &[
+            std::ffi::OsStr::new("-c"),
+            std::ffi::OsStr::new("/usr/bin/true && echo RAN"),
+        ],
+    )
+    .unwrap()
+    .output()
+    .unwrap();
+    let ran = out.stdout == b"RAN\n";
+    assert_eq!(
+        ran,
+        !EXEC_FILTERED,
+        "EXEC_FILTERED = {EXEC_FILTERED}, but an unlisted /usr/bin/true ran = {ran} ({})",
+        String::from_utf8_lossy(&out.stderr)
+    );
     fs::remove_dir_all(&t.root).unwrap();
 }

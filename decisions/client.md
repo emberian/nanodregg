@@ -75,7 +75,13 @@ red (`isolation: child read the seed`).
 refused `MechanismMissing` (the right failure, but a dead node). The macOS branch is now the
 check-only one in the gates (scripts/commit runs on Linux). A distro bwrap update does not update the
 copy: the install lines check the sha256, and whoever upgrades the distro must re-copy it.
-**Status.** landed (macOS run 10-16; Linux run 10-17; nd-bwrap install pending for Ember).
+**Platform row: `EXEC_FILTERED` (sandbox/src/lib.rs, ROOT 10-17).** macOS filters exec
+(`process-exec` only for the program and `exec`); Linux bwrap does not, so every program under the
+read-only /usr floor runs inside and `Policy::exec` bounds what is visible there, not what runs.
+Nobody may read `exec` as an exec bound on Linux. Plant: `exec_is_filtered_exactly_where_the_platform_says`
+(a shell allowed only itself starts an unlisted /usr/bin/true: ran on Linux, row false; flipping the
+Linux row to true turns it red). The macOS half of the plant has not run since main moved to hbox.
+**Status.** landed (macOS run 10-16; Linux run 10-17; nd-bwrap installed by ROOT 10-17).
 
 ## CLIENT-10 the step layout read by hand until it is emitted — a twin with an expiry (2026-10-16)
 **Decision.** `client/src/wire.rs` reads and writes the step layouts of proposals/client.md §2

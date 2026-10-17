@@ -95,6 +95,20 @@ impl std::fmt::Display for ConfineError {
 
 impl std::error::Error for ConfineError {}
 
+/// A platform fact (charter law 2, CLIENT-9): whether the mechanism filters EXEC. macOS
+/// `sandbox-exec` does (`process-exec` is allowed only for the program and `exec`). Linux `bwrap`
+/// does not: it only decides what is mounted, so every program under the read-only floor (/usr)
+/// runs inside, and `Policy::exec` bounds what is VISIBLE there, not what may run. Plant:
+/// tests/confine.rs `exec_is_filtered_exactly_where_the_platform_says`.
+#[cfg(target_os = "macos")]
+pub const EXEC_FILTERED: bool = true;
+/// See the macOS row.
+#[cfg(target_os = "linux")]
+pub const EXEC_FILTERED: bool = false;
+/// No mechanism, no launch, so nothing runs at all.
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+pub const EXEC_FILTERED: bool = true;
+
 #[cfg(target_os = "linux")]
 /// Not `/usr/bin/bwrap`: Ubuntu 24.04+ (`kernel.apparmor_restrict_unprivileged_userns = 1`) gives an
 /// unprivileged user namespace no capabilities, so the distro bwrap fails `setting up uid map:
