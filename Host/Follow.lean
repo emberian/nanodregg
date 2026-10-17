@@ -59,7 +59,10 @@ def answer {D : Type} [Ord D] [DecidableEq D] (X : Receive.Ctx D) (B : Protocol.
     | some b => (fs', p, Status.ok.code, b)
     | none => (fs', p, named Refusal.stepTooLarge.name)
   match Protocol.Op.ofCode? f.op with
-  | none => refused (.unknownOp f.op)
+  | none =>
+    match hangUpAnswer f with
+    | some (s, p) => (fs, .turns [], s, p)
+    | none => refused (.unknownOp f.op)
   | some .command =>
     match commandFrame.decode f.payload with
     | .error _ => refused .undecodableCommand

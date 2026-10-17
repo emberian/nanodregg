@@ -50,6 +50,8 @@ inductive FrameRefusal where
   so no admission of it can ever happen (`lookup_expired_final`); `absent` would leave the caller
   waiting on a call that is dead -/
   | expired
+  /-- a hang-up (PROTOCOL-23) whose payload names no `CloseReason`: the supervisor is broken -/
+  | badHangup
   deriving Repr
 
 /-- The refusal's name on the wire. -/
@@ -60,6 +62,7 @@ def FrameRefusal.name : FrameRefusal → String
   | .wrongSocket _ => "wrongSocket"
   | .stopped => "stopped"
   | .expired => "expired"
+  | .badHangup => "badHangup"
 
 /-- A `refused` reply carrying a refusal's name. -/
 def named (name : String) : UInt8 × ByteArray :=
@@ -68,11 +71,25 @@ def named (name : String) : UInt8 × ByteArray :=
 def receipt (X : Ctx D) (height : Nat) (d : D) : ByteArray :=
   Codec.Stream.u64.bytes (UInt64.ofNat height) ++ X.env.bytes d
 
+/-- A hang-up frame's one reply (PROTOCOL-23): the supervisor ended connection `f.conn`; the child
+acknowledges it by name, `closed ‖ the same reason` (`Protocol.ack`), and changes nothing else.
+`none`: `f` is not a hang-up. Every child of a supervisor answers hang-ups with this function. -/
+def hangUpAnswer (f : Frame) : Option (UInt8 × ByteArray) :=
+  match Protocol.childKindOf? f.op with
+  | some .hangup =>
+    some (match Protocol.CloseReason.ofBytes? f.payload with
+      | some r => (Protocol.Status.closed.code, r.name.toUTF8)
+      | none => named FrameRefusal.badHangup.name)
+  | _ => none
+
 /-- A frame's answer from the World as the batch has advanced it. -/
 def handle (X : Ctx D) (w : World D) (f : Frame) : Answer (World D) (Turn D) :=
   let refuse := fun (p : UInt8 × ByteArray) => Answer.reply p.1 p.2
   match Protocol.Op.ofCode? f.op with
-  | none => refuse (named (FrameRefusal.unknownOp f.op).name)
+  | none =>
+    match hangUpAnswer f with
+    | some p => refuse p
+    | none => refuse (named (FrameRefusal.unknownOp f.op).name)
   | some .submit =>
     match X.decodeCall f.payload with
     | none => refuse (named FrameRefusal.undecodableCall.name)

@@ -128,7 +128,7 @@ def runResident (verb : String) (r₀ : Resident (World D))
       | .ok stop => pure (Exit.stream stop)
       | .error _ => pure (Exit.stream .readFailed)
     | e => pure e
-  let refused ← refuseQueued port (named FrameRefusal.stopped.name) (queueMax + 1)
+  let refused ← refuseQueued port (named FrameRefusal.stopped.name) hangUpAnswer (queueMax + 1)
   status verb (("exit", exit.status.name) :: ("refused_queued", toString refused) :: residentFields r)
   return exitCode exit
 

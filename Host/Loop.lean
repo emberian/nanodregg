@@ -305,8 +305,10 @@ def restarts (round : Resident W → IO (Exit × Resident W))
     | e => return (e, r)
 
 /-- At an exit that ends the resident: stop the port and answer every frame still queued
-`refused stopped`, so no accepted request goes unanswered. At most `bound` frames. -/
-def refuseQueued (port : Port) (stopped : UInt8 × ByteArray) (bound : Nat) : IO Nat := do
+`refused stopped`, so no accepted request goes unanswered; a queued hang-up is acknowledged by
+`hangUp` (its name, never `stopped`). At most `bound` frames. -/
+def refuseQueued (port : Port) (stopped : UInt8 × ByteArray) (hangUp : Frame → Option (UInt8 × ByteArray))
+    (bound : Nat) : IO Nat := do
   port.close
   go bound 0
 where
@@ -315,7 +317,9 @@ where
     | k + 1, n => do
       match ← port.poll with
       | none => pure n
-      | some f => port.send ⟨f.conn, stopped.1, stopped.2⟩; go k (n + 1)
+      | some f =>
+        let (s, p) := (hangUp f).getD stopped
+        port.send ⟨f.conn, s, p⟩; go k (n + 1)
 
 /-! ## The stdio port: a reader task frames stdin into a bounded channel -/
 

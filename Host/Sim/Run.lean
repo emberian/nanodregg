@@ -48,6 +48,9 @@ def receipt (h d : Nat) : ByteArray := le64 h ++ le64 d
 def machine : Machine (World Nat) (Turn Nat) (Reject Nat) Frame where
   admit := World.admit env
   handle _ f :=
+    match hangUpAnswer f with
+    | some (st, p) => .reply st p
+    | none =>
     match turnCodec.decode f.payload with
     | .ok t => .admit t fun w' => receipt w'.height (turnDigest env t)
     | .error _ => .reply Protocol.Status.refused.code "undecodable".toUTF8
@@ -509,6 +512,20 @@ def run (args : List String) : IO UInt32 := do
     (lookupAt 0 == "expired") failures
   check "plant-lookup-expired: a call that may still land answers `absent`"
     (lookupAt 1 == "absent") failures
+  -- plant-hangup (PROTOCOL-23): a hang-up after every 7th request, for connections that are not
+  -- the requests' own; each is acknowledged exactly once by name, and every other reply is the
+  -- reply of the run without them
+  let hangs := (List.range 200).filter (· % 7 = 3)
+  let mixed := (frames.zipIdx.flatMap fun (f, i) =>
+    if hangs.contains i then [f, ⟨UInt32.ofNat (900000 + i), Protocol.hangupCode, "idle".toUTF8⟩] else [f])
+  let h ← runOnce seed mixed none
+  let (acks, rest) := h.replies.toList.partition (900000 ≤ ·.conn.toNat)
+  check s!"plant-hangup: {hangs.length} hang-ups mid-batch each acked once `closed idle`, no other reply changed"
+    (acks.length = hangs.length &&
+      acks.all (fun a => a.status = Protocol.Status.closed.code && a.payload == "idle".toUTF8) &&
+      (acks.map (·.conn.toNat)) == hangs.map (900000 + ·) &&
+      rest.map (fun a => (a.conn, a.status, a.payload)) == r.replies.toList.map (fun a => (a.conn, a.status, a.payload)) &&
+      h.resident.world.chain = w.chain) failures
   let n ← failures.get
   IO.println (if n = 0 then "ALL PASS" else s!"{n} FAILED")
   return (if n = 0 then 0 else 1)

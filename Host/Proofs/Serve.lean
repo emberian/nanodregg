@@ -53,6 +53,33 @@ theorem step_journaled (X : Ctx D) (w : World D) (out : Out (Turn D)) (q : Reque
       (w, { out with replies := out.replies.push ⟨q.conn, Protocol.Status.ok.code, receipt X h d⟩ }) := by
   simp only [Machine.step, machine, handle, hop, hc, hj]
 
+/-- A hang-up naming `r` is answered with exactly its acknowledgement, `closed ‖ r.name`
+(`Protocol.ack r`, whose reason is `r`: `Protocol.ackReason?_ack`), stages nothing and leaves the
+World as it was: it changes no other connection's reply. -/
+theorem step_hangup (X : Ctx D) (w : World D) (out : Out (Turn D)) (q : Request Frame)
+    (r : Protocol.CloseReason) (hop : q.body.op = Protocol.hangupCode)
+    (hp : Protocol.CloseReason.ofBytes? q.body.payload = some r) :
+    (machine X).step (w, out) q =
+      (w, { out with replies := out.replies.push ⟨q.conn, Protocol.Status.closed.code, r.name.toUTF8⟩ }) := by
+  have hn : Protocol.Op.ofCode? Protocol.hangupCode = none := by decide
+  have hk : Protocol.childKindOf? Protocol.hangupCode = some .hangup := by decide
+  simp only [Machine.step, machine, handle, hop, hn, hangUpAnswer, hk, hp]
+
+/-- A hang-up whose payload names no `CloseReason` is refused `badHangup` by name, and changes
+nothing else either. -/
+theorem step_hangup_bad (X : Ctx D) (w : World D) (out : Out (Turn D)) (q : Request Frame)
+    (hop : q.body.op = Protocol.hangupCode) (hp : Protocol.CloseReason.ofBytes? q.body.payload = none) :
+    (machine X).step (w, out) q =
+      (w, { out with
+        replies := out.replies.push ⟨q.conn, Protocol.Status.refused.code, FrameRefusal.badHangup.name.toUTF8⟩ }) := by
+  have hn : Protocol.Op.ofCode? Protocol.hangupCode = none := by decide
+  have hk : Protocol.childKindOf? Protocol.hangupCode = some .hangup := by decide
+  simp only [Machine.step, machine, handle, hop, hn, hangUpAnswer, hk, hp, named]
+
+/-- The acknowledgement as a reply's `status ‖ payload` is `Protocol.ack r`. -/
+theorem hangup_reply_is_ack (r : Protocol.CloseReason) :
+    ByteArray.mk #[Protocol.Status.closed.code] ++ r.name.toUTF8 = Protocol.ack r := rfl
+
 theorem handle_lookup_expired (X : Ctx D) (w : World D) (f : Frame) (c : Call D)
     (hop : Protocol.Op.ofCode? f.op = some .lookup) (hc : X.decodeCall f.payload = some c)
     (hj : w.journal[txIdOf X c]? = none) (hv : c.unsigned.validUntil ≤ w.height) :
