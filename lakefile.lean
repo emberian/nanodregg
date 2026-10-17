@@ -84,6 +84,18 @@ extern_lib «ndhost» pkg := do
 @[default_target] lean_exe «host» where
   root := `Host.Main
 
+-- OPS: renderers and drivers over the real `host` (nothing imports Ops).
+@[default_target] lean_lib Ops where
+  globs := #[.submodules `Ops]
+
+-- The service-manager units, rendered from Host.Status: `emit-units [--check] ops/units`.
+@[default_target] lean_exe «emit-units» where
+  root := `Ops.Main
+
+-- Backup/restore plants against the real `host`: `store-plants HOST_EXE DIR`, ends `ALL PASS`.
+@[default_target] lean_exe «store-plants» where
+  root := `Ops.PlantsMain
+
 -- The loop over a real Store directory (Host.Store + Host/c/file.c): lock, torn-file truncation.
 @[default_target] lean_exe «host-file-sim» where
   root := `Host.Sim.FileMain
