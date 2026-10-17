@@ -15,7 +15,8 @@ Every node caches its digest. One byte domain separates the three shapes: `empty
 the branching bit needs no committing: a proof's i-th sibling sits at depth i, and the side is the
 key's bit i. That makes EXCLUSION proofs as sound as inclusion ones (Kernel.Proofs.Trie).
 
-Work per `insert`: one path from the root to the key's leaf is rebuilt, one hash per node on it.
+Work per `insert`: one path from the root to the key's leaf is rebuilt, one hash per node on it
+(and one for its leaf); the empty subtree's digest is hashed at most once per turn (KERNEL-35).
 -/
 namespace Nanodregg.Kernel.Trie
 
@@ -57,14 +58,23 @@ def nodeHash (l r : D) : D := S.hash (tagged 2 (S.dbytes l ++ S.dbytes r))
 
 def digests (kvs : List (K × V)) : List (K × D) := kvs.map fun p => (p.1, S.vdigest p.2)
 
-def T.hashOf : T K V D → D
-  | .empty => emptyHash S
+/-- The empty subtree's digest, forced at most once by whoever holds it (KERNEL-35). -/
+abbrev EmptyDigest (D : Type) := Thunk D
+
+/-- A subtree's digest. `e` is the empty subtree's, `emptyHash S` unless a caller passes its own
+lazy copy: the mutation path makes one per `World.commitTrie` and forces it only if a path meets an
+empty sibling, so an insert pays no hash for an empty sibling and a turn pays at most one. Every
+theorem is stated at the default. -/
+def T.hashOf (t : T K V D) (e : EmptyDigest D := Thunk.mk fun _ => emptyHash S) : D :=
+  match t with
+  | .empty => e.get
   | .leaf h _ => h
   | .node h _ _ => h
 
 def mkLeaf (kvs : List (K × V)) : T K V D := .leaf (leafHash S (digests S kvs)) kvs
 
-def mkNode (l r : T K V D) : T K V D := .node (nodeHash S (l.hashOf S) (r.hashOf S)) l r
+def mkNode (l r : T K V D) (e : EmptyDigest D := Thunk.mk fun _ => emptyHash S) : T K V D :=
+  .node (nodeHash S (l.hashOf S e) (r.hashOf S e)) l r
 
 variable [DecidableEq K]
 
@@ -80,34 +90,42 @@ def getAt (k : K) : Nat → T K V D → Option V
       | true => getAt k (d + 1) r
       | false => getAt k (d + 1) l
 
-/-- The canonical subtree at depth `d` holding `kvs` (`fuel` levels left before `depth`). -/
-def build : Nat → Nat → List (K × V) → T K V D
+/-- The canonical subtree at depth `d` holding `kvs` (`fuel` levels left before `depth`); `e` as in
+`T.hashOf`. -/
+def build (f d : Nat) (kvs : List (K × V)) (e : EmptyDigest D := Thunk.mk fun _ => emptyHash S) :
+    T K V D :=
+  match f, d, kvs with
   | _, _, [] => .empty
   | _, _, [x] => mkLeaf S [x]
   | 0, _, kvs => mkLeaf S kvs
   | f + 1, d, kvs =>
-      mkNode S (build f (d + 1) (kvs.filter fun p => !S.bit p.1 d))
-        (build f (d + 1) (kvs.filter fun p => S.bit p.1 d))
+      mkNode S (build f (d + 1) (kvs.filter fun p => !S.bit p.1 d) e)
+        (build f (d + 1) (kvs.filter fun p => S.bit p.1 d) e) e
 
-/-- Set `k` to `v`, from depth `d`: one path rebuilt. -/
-def insAt (k : K) (v : V) : Nat → T K V D → T K V D
+/-- Set `k` to `v`, from depth `d`: one path rebuilt; `e` as in `T.hashOf`. -/
+def insAt (k : K) (v : V) (d : Nat) (t : T K V D)
+    (e : EmptyDigest D := Thunk.mk fun _ => emptyHash S) : T K V D :=
+  match d, t with
   | _, .empty => mkLeaf S [(k, v)]
   | d, .leaf _ kvs =>
       if kvs.any (fun p => p.1 = k) then mkLeaf S (kvs.map fun p => if p.1 = k then (k, v) else p)
-      else build S (S.depth - d) d (kvs ++ [(k, v)])
+      else build S (S.depth - d) d (kvs ++ [(k, v)]) e
   | d, .node _ l r =>
       match S.bit k d with
-      | true => mkNode S l (insAt k v (d + 1) r)
-      | false => mkNode S (insAt k v (d + 1) l) r
+      | true => mkNode S l (insAt k v (d + 1) r e) e
+      | false => mkNode S (insAt k v (d + 1) l e) r e
 
-/-- The proof for `k`, from depth `d`: the siblings down its path and what the path ends at. -/
-def proveAt (k : K) : Nat → T K V D → Proof K D
+/-- The proof for `k`, from depth `d`: the siblings down its path and what the path ends at; `e` as
+in `T.hashOf` (an empty sibling costs at most one hash per proof). -/
+def proveAt (k : K) (d : Nat) (t : T K V D) (e : EmptyDigest D := Thunk.mk fun _ => emptyHash S) :
+    Proof K D :=
+  match d, t with
   | _, .empty => ⟨none, []⟩
   | _, .leaf _ kvs => ⟨some (digests S kvs), []⟩
   | d, .node _ l r =>
       match S.bit k d with
-      | true => let p := proveAt k (d + 1) r; ⟨p.term, l.hashOf S :: p.sibs⟩
-      | false => let p := proveAt k (d + 1) l; ⟨p.term, r.hashOf S :: p.sibs⟩
+      | true => let p := proveAt k (d + 1) r e; ⟨p.term, l.hashOf S e :: p.sibs⟩
+      | false => let p := proveAt k (d + 1) l e; ⟨p.term, r.hashOf S e :: p.sibs⟩
 
 def termHash : Option (List (K × D)) → D
   | none => emptyHash S
@@ -123,8 +141,12 @@ def climb (k : K) : Nat → List D → D → D
       | false => nodeHash S c s
 
 def T.get (t : T K V D) (k : K) : Option V := getAt S k 0 t
-def T.insert (t : T K V D) (k : K) (v : V) : T K V D := insAt S k v 0 t
-def T.prove (t : T K V D) (k : K) : Proof K D := proveAt S k 0 t
+def T.insert (t : T K V D) (k : K) (v : V) (e : EmptyDigest D := Thunk.mk fun _ => emptyHash S) :
+    T K V D :=
+  insAt S k v 0 t e
+def T.prove (t : T K V D) (k : K) (e : EmptyDigest D := Thunk.mk fun _ => emptyHash S) :
+    Proof K D :=
+  proveAt S k 0 t e
 
 /-- Every entry, left to right. -/
 def T.toList : T K V D → List (K × V)

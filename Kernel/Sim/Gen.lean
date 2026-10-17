@@ -207,16 +207,18 @@ def freshKey (st : State D) (tag : String) : ByteArray × State D :=
 /-! ## The World's root (KERNEL-23): every admitted turn's slots proved, verified, and forged -/
 
 /-- The hashes one insert costs, read off the tries before and after it: one per node on the
-slot's new path, one per EMPTY sibling on it (`Trie.emptyHash` is recomputed, not cached), one for
-its leaf, and one for the leaf a split moves down. A count, never a clock. -/
-def insertHashes (E : Env D) (pre post : Cells D) (s : Slot D) : Nat :=
+slot's new path, one for its leaf, one for the leaf a split moves down, and one for the empty
+subtree if this is the turn's first insert whose new path has an empty sibling (`forced`: the
+turn's lazy copy in `commitTrie` is already forced; KERNEL-35). Returns the count and whether the
+copy is forced after it. A count, never a clock. -/
+def insertHashes (E : Env D) (pre post : Cells D) (s : Slot D) (forced : Bool) : Nat × Bool :=
   let S := trieSpec E
   let p := post.prove S s
-  let empties := (p.sibs.filter fun h => h == Trie.emptyHash S).length
+  let meets := p.sibs.any fun h => h == Trie.emptyHash S
   let split := match (pre.prove S s).term with
     | some kds => if kds.any (fun q => q.1 == s) then 0 else 1
     | none => 0
-  p.sibs.length + empties + 1 + split
+  (p.sibs.length + 1 + split + (if meets && !forced then 1 else 0), forced || meets)
 
 /-- The slots a turn changed, in `commitTrie`'s order: its non-`keep` touches, its born cells,
 its nullifiers. -/
@@ -247,16 +249,18 @@ def checkRoot (P : Params D) (st : State D) (w w' : World D) (t : Turn D) : Stat
   let E := P.env
   let S := trieSpec E
   let slots := changedSlots t
-  let (tr, st) := slots.foldl (fun (tr, st) s =>
+  -- `commitTrie`'s one lazy copy of the empty subtree's digest, shared by every insert of the turn
+  let e : Trie.EmptyDigest D := Thunk.mk fun _ => Trie.emptyHash S
+  let (tr, st, _) := slots.foldl (fun (tr, st, forced) s =>
     match w'.trie.get S s with
-    | none => (tr, failWith st "root: a changed slot is absent after the turn")
+    | none => (tr, failWith st "root: a changed slot is absent after the turn", forced)
     | some l =>
-        let tr' := tr.insert S s l
-        let h := insertHashes E tr tr' s
+        let tr' := tr.insert S s l e
+        let (h, forced) := insertHashes E tr tr' s forced
         let st := match s with
           | .cell _ => { st with cellHashes := st.cellHashes + h, cellSlots := st.cellSlots + 1 }
           | .nullifier _ => { st with nullHashes := st.nullHashes + h, nullSlots := st.nullSlots + 1 }
-        (tr', st)) (w.trie, st)
+        (tr', st, forced)) (w.trie, st, false)
   let st := if tr.hashOf S == w'.root E then st
     else failWith st "root: replaying the turn's inserts does not reach the admitted root"
   let root := w'.root E

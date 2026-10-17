@@ -1087,3 +1087,53 @@ because the bytes forms are corollaries of them, not a second shape.
 fitting leaf), and the bytes forms only specialize them, so keeping both keeps one fact at two
 strengths, not two shapes.
 **Flag day.** None. Nothing refuses, nothing re-geneses, nothing re-emits.
+
+## KERNEL-35 · The empty subtree's digest is hashed at most once per turn: one lazy copy handed down the mutation path (KERNEL-9, 2026-10-18; cv 01a1498e, KERNEL-8's handoff item 1)
+**Decision.** `Trie.T.hashOf`, `mkNode`, `build`, `insAt`, `proveAt`, `T.insert` and `T.prove` take a
+trailing `e : EmptyDigest D := Thunk.mk fun _ => emptyHash S` (`EmptyDigest D := Thunk D`), and
+`.empty` hashes to `e.get`. `World.insertAll` and `spendAll` take the same trailing `e`. `commitTrie`
+makes ONE lazy copy (`let e := Thunk.mk fun _ => Trie.emptyHash (trieSpec E)`) and passes it to every
+insert of the turn, so the empty digest is hashed at most once per admitted turn, and only if some
+new path has an empty sibling. Before this, `T.hashOf .empty` recomputed `S.hash (tagged 0 [])` once
+per empty sibling (1.44 per touched cell). A decoded trie (`Codec.World`'s `Trie.build`) and a served
+proof (`T.prove`) get the same at most one by default, because the recursion passes its one copy down.
+**Wire.** None. The empty digest is the same `H(0)` and every node hash is unchanged. Nothing
+re-geneses or re-emits, and nothing refuses to load.
+**The two designs (KERNEL-8's handoff).** (a) A `Spec` field `empty : D`, with a proof-side
+hypothesis `S.empty = S.hash (tagged 0 [])` threaded like `hL hN`. (b) Thread `e` computed once per
+`commitTrie`. I chose (b), as an optional trailing argument, for three reasons. First, Lean is strict:
+a `Spec` field is computed every time a `trieSpec E` is built, which happens on every
+`get`/`insert`/`root` (there are 182 `trieSpec` sites). Under (a) a lookup that never meets an
+empty subtree would START paying one hash, and inserts would pay once each unless every caller
+bound `S` once. Second, (a) adds a premise to every generic soundness theorem (Canon preserved,
+inclusion and exclusion sound, climb_sound, build_toList), which changes their statements. Third,
+under (b) every statement elaborates to exactly what it said before: `t.hashOf S` now means
+`T.hashOf S t (Thunk.mk fun _ => emptyHash S)`, and its unfolding is defeq. Not one proof line
+changed in Kernel/, Codec/ or anywhere else (403 jobs green).
+**Strict or lazy.** Measured both. With a strict `e` (one hash per turn, met or not), the row came
+to 9.166 = 8.275 path + 0.891. With the lazy `Thunk`, it came to 8.915 = 8.275 + 0.640, because about
+28% of turns meet no empty sibling. Lazy is the exact design (pay iff needed), and it cost no proof.
+**Tooth.** (1) The WASTE rows re-pinned DOWN: `admit hashes-per-touched-cell` 9.715 -> 8.915 and
+`hashes-per-nullifier` 3.451 -> 3.211 (ceilings 9.985 / 3.634 -> the measured values). The sim's
+`insertHashes` now counts what the code does: path nodes + leaf + split + 1 for the first insert
+of the turn whose new path has an empty sibling. Its replay in `checkRoot` shares one lazy copy,
+as `commitTrie` does. (2) Mutation: `commitTrie`'s `e := H(tagged 9 [])` (a wrong empty digest)
+makes kernel-sim 64/64 seeds FAIL "replaying the turn's inserts does not reach the admitted root",
+and makes Kernel.Proofs.Frame stop compiling (commitTrie_cell, spendAll_spent_of_spent: the
+theorems are stated at the default, and the `let`-reduced commitTrie IS the default form, so a
+wrong `e` is not a World any theorem describes). (3) The existing forged-proof arms (proof-sibling,
+proof-leaf, proof-stale) all PASS.
+**Critique.** The WASTE row is a MODEL of the hash count read off the tries (`insertHashes`), not
+an instrument on the hash calls. If someone dropped the `e` argument from `commitTrie` (back to
+one default per insert), the row would stay at 8.915 and only the code would regress. Only a
+counting hash could see that, and a pure `Env.hash` cannot count its own calls (GATES-9's critique,
+in this instance). The remaining 0.640 per cell is one hash per turn of a value that is constant
+per Env. Caching it across turns needs a field in the Env (an `Env.Lawful` obligation on a
+trie-internal value) or in the World (a cached field with an invariant on every decoded base).
+Both would put a derived copy into an interface in exchange for 7% of this row, and I took
+neither.
+**Meta-critique.** "Not one proof changed" is evidence that the refactor is invisible to the
+theorems, and that could also mean they do not see the new argument. Mutation (2) is the check:
+the proofs DO see a wrong `e`. The optional-argument form also lets any caller pass a wrong `e`
+and get a non-WF trie. That is allowed by the types and refused by the proofs (no theorem holds of
+it), the same position as any caller building a `T.node` by hand.

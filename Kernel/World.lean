@@ -518,17 +518,25 @@ def check (E : Env D) (w : World D) (t : Turn D) : Except (Reject D) (List (Post
 def bornEntries (t : Turn D) : List (D × Entry) :=
   t.creates.map fun p => (p.1, .live p.2)
 
-/-- Write cell entries into the map, one path each. -/
-def insertAll (E : Env D) (m : Cells D) (ps : List (D × Entry)) : Cells D :=
-  ps.foldl (fun m p => m.insert (trieSpec E) (.cell p.1) (.entry p.2)) m
+/-- Write cell entries into the map, one path each (`e`: the empty subtree's digest, as in
+`Trie.T.hashOf`). -/
+def insertAll (E : Env D) (m : Cells D) (ps : List (D × Entry))
+    (e : Trie.EmptyDigest D := Thunk.mk fun _ => Trie.emptyHash (trieSpec E)) : Cells D :=
+  ps.foldl (fun m p => m.insert (trieSpec E) (.cell p.1) (.entry p.2) e) m
 
 /-- Mark nullifiers spent, one path each. -/
-def spendAll (E : Env D) (m : Cells D) (ns : List D) : Cells D :=
-  ns.foldl (fun m n => m.insert (trieSpec E) (.nullifier n) .spent) m
+def spendAll (E : Env D) (m : Cells D) (ns : List D)
+    (e : Trie.EmptyDigest D := Thunk.mk fun _ => Trie.emptyHash (trieSpec E)) : Cells D :=
+  ns.foldl (fun m n => m.insert (trieSpec E) (.nullifier n) .spent e) m
 
-/-- The map after a checked turn: its touches' entries, its born cells, its nullifiers. -/
+/-- The map after a checked turn: its touches' entries, its born cells, its nullifiers. One lazy
+copy of the empty subtree's digest is handed down every path, so it is hashed at most once per turn
+and only if a path meets an empty sibling (KERNEL-35); with the `let` reduced this is the
+default-argument form every theorem states. -/
 def commitTrie (E : Env D) (w : World D) (t : Turn D) (posts : List (Post D)) : Cells D :=
-  spendAll E (insertAll E (insertAll E w.trie (posts.map Post.pair)) (bornEntries t)) t.nullifiers
+  let e : Trie.EmptyDigest D := Thunk.mk fun _ => Trie.emptyHash (trieSpec E)
+  spendAll E (insertAll E (insertAll E w.trie (posts.map Post.pair) e) (bornEntries t) e)
+    t.nullifiers e
 
 
 /-- A journal entry `(h, d)` is still kept at height `H`: fewer than `2 * Bounds.windowMax`
