@@ -874,4 +874,19 @@ already pays.
 load". I took the code-path change because it made the theorem a two-line corollary. The
 independent check is that lang-journey and rows stay green (no installed package changed its
 verdict) while the theorem's premise disappeared.
+**The owed tooth (cv 01a14a91-be1e, LANG-10).** lang-journey LI: `Mid` imports `Owned`, `Top`
+imports `Mid`; installing `Top` pinning only `Mid` is refused `unpinned` naming `Owned` (LI2), pinning
+both is admitted (LI3). PLANT raw-install puts back the pre-LANG-35 check (each import's interface
+read raw from its cell) and LI2 flips to admitted, so the refusal comes from the closure load and
+from nothing else. `install_loads` (Lang/Proofs/Load.lean): `checkInstall look b = ok`, `idb` a digest
+of a pinned package cell whose slot 0 is `b` ⇒ `load look closureDepthMax idb` succeeds and the
+package at its index is `b`'s. LI3 meets its premises.
+**Critique of the tooth.** `install_loads` holds the pinned view fixed: install and a later run see
+the same `look`. Import cells are ROM, so a later World agrees on them, but that is KERNEL's fact
+and not stated here; a run that pins less than the install did is still refused `unpinned`, as it
+should be. No row covers an import closure that fails its re-check (every package that got into a
+cell passed the install check of its day; one would need a package cell written some other way).
+**Meta-critique.** The plant is the right control: it is the old code, verbatim, so a pass under it
+measures exactly what LANG-35 changed. The theorem is a direct unfolding (install's `loadAll` IS the
+load's `loadAll` one fuel down), which is the point of LANG-35, not a weakness of the statement.
 **Status.** built (this commit). Nothing re-ids: no package bytes changed.

@@ -27,6 +27,9 @@ the owner and the owner never changes). Rows:
   issuer) — refused `lawDenied` by `ownerOnly`, which checks the SIGNER: a law can be stricter than
   the principal.
 * L6 a package whose body does not check at its interface — refused `program` at install.
+* LI (LANG-35) install loads the import closure: `Mid` imports `Owned` and installs; `Top` imports
+  `Mid`, and its install pinning only `Mid` is refused `unpinned` naming `Owned` (LI2: the check loads
+  `Mid`'s own closure, so `Owned` must be pinned too); pinning both, it is admitted (LI3).
 * L8 (ID-1) `Tally`'s law `fresh` cases on the occasion: a birth seeded with approvals is refused,
   a zero seed admitted.
 * L8d/e the invoke's method index reaches the law: `fresh` closes method `b`, `a` passes.
@@ -43,6 +46,9 @@ the owner and the owner never changes). Rows:
 * PLANT erase-occasion: the same rows against a program whose judge is told every act is a write
   (the judge before ID-1): L8b, L8e, L9d, L10c and L11c must be ADMITTED there, so their refusals came
   from the occasion.
+* PLANT raw-install: the install check before LANG-35, each import's interface read raw from its
+  cell and its closure never loaded: LI2 must be ADMITTED there, so its refusal came from the loader.
+  That mode stops after LI2: the plant runs the rows before LI and LI2, not the rows after.
 * PLANT erase-payload: the occasion's payload is lost (a relaw names no laws, every invoke is
   method 0): L8e must be admitted and L10d refused, so the payload reaches the law.
 -/
@@ -246,9 +252,27 @@ def erasePayload : Program D :=
 def dropCalls : Program D :=
   { langProgram with run := fun look p s m a r b => (langProgram.run look p s m a r b).map fun x => (x.1, [], x.2.2) }
 
+/-- Plant 5: the install check before LANG-35: each import's interface read raw from its cell
+(decoded, never re-checked), the import's own closure never loaded. -/
+def rawInstall : Program D :=
+  { langProgram with checkInstall := fun look b => do
+      let p ← match Wire.decodePackage b with
+        | .ok p => pure p
+        | .error e => throw (.program (decodeText e))
+      let ifaces ← p.imports.mapM fun d => do
+        let id ← idOf Sim.digestOf d
+        pure (← readPackage look id).iface
+      match p.checkWith ifaces with
+      | .ok () => pure ()
+      | .error e => throw (.program e.wire) }
+
+/-- A package with nothing in it but its imports (LI). -/
+def importer (imports : List ByteArray) : Package :=
+  { imports, state := .record [], iface := .record [], body := .record [], methods := [], laws := [] }
+
 /-- Which program the journey runs under. -/
 inductive Mode
-  | honest | skipJudge | eraseOccasion | erasePayload | dropCalls
+  | honest | skipJudge | eraseOccasion | erasePayload | dropCalls | rawInstall
   deriving DecidableEq
 
 def Mode.program : Mode → Program D
@@ -257,6 +281,7 @@ def Mode.program : Mode → Program D
   | .eraseOccasion => Journey.eraseOccasion
   | .erasePayload => Journey.erasePayload
   | .dropCalls => Journey.dropCalls
+  | .rawInstall => Journey.rawInstall
 
 /-- A refusal by a law, with `why` in its reason. -/
 def deniedWith (v why : String) : Bool := v.startsWith "refused lawDenied" && (v.splitOn why).length > 1
@@ -310,6 +335,23 @@ object `i+1`): each level's arguments nest the next level's, and the last object
 def chainArgs : List ByteArray → Option ByteArray
   | [] => relayArgs .empty .empty
   | g :: gs => do relayArgs (← chainArgs gs) g
+
+/-- The install-closure rows (LI, LANG-35): `Top` imports `Mid` imports `Owned` (`pkg`). -/
+def installRows (mode : Mode) (r0 : Run) (a : Sim.Member) (pkg : D) : Run := Id.run do
+  let prog := mode.program
+  let mut r := r0
+  let some midBytes := Wire.encodePackage (importer [Sim.dc.bytes pkg]) | return note r "LI Mid has no bytes" false
+  let (ri1, vi1, ti1) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id, pkg]) (.install midBytes))
+  r := note ri1 s!"LI1 install Mid importing Owned: {vi1}" (vi1 == "admitted")
+  let some mid := ti1.bind fun t => (createdIds t).head? | return note r "LI no Mid id" false
+  let some topBytes := Wire.encodePackage (importer [Sim.dc.bytes mid]) | return note r "LI Top has no bytes" false
+  let (ri2, vi2, _) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id, mid]) (.install topBytes))
+  if mode = .rawInstall then
+    return note ri2 s!"PLANT raw-install: LI2 Top pinning only Mid must now be admitted: {vi2}" (vi2 == "admitted")
+  r := note ri2 s!"LI2 install Top importing Mid, pinning only Mid: {vi2}" (vi2.startsWith "refused unpinned" && (vi2.splitOn s!"unpinned {reprStr pkg}").length > 1)
+  let (ri3, vi3, _) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id, mid, pkg]) (.install topBytes))
+  r := note ri3 s!"LI3 install Top pinning Mid and Owned: {vi3}" (vi3 == "admitted")
+  return r
 
 /-- The call rows (LC): Relay chains through the real receivers. -/
 def callRows (mode : Mode) (r0 : Run) (a : Sim.Member) : Run := Id.run do
@@ -500,6 +542,7 @@ def journey (mode : Mode) : Run := Id.run do
   let c6 := Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id]) (.install illBytes)
   let (r6, v6, _) := go prog r c6
   r := note r6 s!"L6 install ill-typed: {v6}" (v6.startsWith "refused program")
+  r := installRows mode r a pkg
   -- L2 create
   let some ownerBytes := Wire.encodeData .bytes (.bytes (Sim.dc.bytes a.id)) | return note r "L2 no owner bytes" false
   let some n0 := nat64 0 | return note r "L2 no bytes for 0" false
@@ -633,7 +676,7 @@ def journey (mode : Mode) : Run := Id.run do
   return r
 
 def runAll : IO UInt32 := do
-  let runs := [Mode.honest, .skipJudge, .eraseOccasion, .erasePayload, .dropCalls].map journey
+  let runs := [Mode.honest, .skipJudge, .eraseOccasion, .erasePayload, .dropCalls, .rawInstall].map journey
   for r in runs do for l in r.log do IO.println l
   let bad := (runs.map (·.bad)).foldl (· + ·) 0
   IO.println s!"lang-journey: {if bad = 0 then "GREEN" else s!"RED ({bad})"}"
