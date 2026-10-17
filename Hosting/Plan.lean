@@ -39,8 +39,8 @@ def labelFrom (c : ByteArray) (i : Nat) : (n : Nat) → Bool
   | n + 1 => (if h : i < c.size then labelByte c[i] else true) && labelFrom c (i + 1) n
 
 /-- A Store label: one clean component of label bytes. A grain's directory name must be one too
-(`dirOf`'s lowercase hex is), so two grains never share a directory on a case-insensitive file
-system either. -/
+(`dirOf`'s lowercase hex is: `Proofs.Controller.reconcile_labels_deployed`), so two grains never share a
+directory on a case-insensitive file system either. -/
 def labelOk (l : ByteArray) : Bool := Codec.Path.clean l && labelFrom l 0 l.size
 
 /-- ASCII case folding of one byte, as a case-insensitive file system compares names (the

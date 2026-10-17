@@ -334,6 +334,10 @@ case shared a volume on APFS (now `labelOk`); no deployed instance of `reconcile
 **Alternatives.** Fold case in the plan (lowercase the label): a second spelling of one Store that
 the operator never wrote. Allow any clean label and rely on a case-sensitive FS: true on hbox's ZFS,
 false on the Mac where lanes read.
+**Later (HOSTING-3):** `dirOf_labelOk` (Proofs.Controller): for an id of 1 to 32 bytes, `dirOf`
+is an accepted label (`labelOk_of` plus LANG's `hexChars_digit`, with a closed check that each hex
+digit encodes as one label byte). So a controller plan never refuses `idUnclean` for a World id.
+Plant (run): `dirOf` with a `.` appended turns `dirOf_labelOk` (and `dirOf_injective`) red.
 **CRITIQUE.** The FS's identification relation is modelled as ASCII folding (`foldByte`); that it is
 APFS's relation on ASCII names is a platform fact, not a theorem.
 **META.** The charset is the one I would pick for a hostname, by familiarity; it is narrower than
@@ -451,8 +455,9 @@ layer exist" is answered: option A keeps the broker, so HOSTING stays a layer.
   serves one Unix socket per resident. **Identity is the socket an ask arrived on**: keybroker puts
   the resident's member id in front of the ask's bytes, so a resident can name neither itself nor
   another resident. At start it checks the key file's custody: a regular file, not a symlink, owned
-  by the euid, with no group or other bits. Each failure ends the run by name (`keyFileLink`,
-  `keyFileOwner`, `keyFileExposed`, `keyFileMalformed`). It does not decode the ask. It sends Lean's
+  by the euid, mode exactly 0600. Each failure ends the run by name (`keyFileLink`,
+  `keyFileNotRegular`, `keyFileOwner`, `keyFileMode` (mode must be exactly 0600), `keyFileLength`, `keyFileIo`:
+  one per refusal of the sandbox crate's shared `custody::read_private`, CLIENT-3). It does not decode the ask. It sends Lean's
   request bytes upstream with the key slot's header, and withholds any response that contains the
   key (`keyEchoed`). It moves bytes and decides nothing. One call at a time per socket: a second
   concurrent ask gets `busy`.
