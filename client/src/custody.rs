@@ -328,6 +328,11 @@ impl Custody {
         Ok(public(&self.keys.current()?))
     }
 
+    /// The precommitted next public key.
+    pub fn next_public_key(&self) -> Result<Public, CustodyError> {
+        self.keys.next_public()
+    }
+
     /// A `sign` step's result: the current key, the next key, the current key's signature over
     /// exactly `message`.
     pub fn sign(&self, message: &[u8]) -> Result<SignResult, CustodyError> {

@@ -10,7 +10,7 @@
 //! hidden path, or lie inside one, is refused by name (`Exposed`), never launched.
 //!
 //! - macOS: `sandbox-exec` with `(deny default)` and allow rules for exactly the policy's paths.
-//!   No network, no IPC, no fork, no exec but the policy's.
+//!   No network, no IPC, no fork, no exec but the policy's, no sysctl but `hw.ncpu`.
 //! - Linux: `bwrap` with every namespace unshared and nothing mounted but the policy's paths, the
 //!   floor, `/dev` and `/proc`. NEVER RUN: only `cargo check --target x86_64-unknown-linux-gnu`.
 //!
@@ -206,7 +206,12 @@ fn platform(r: &Resolved) -> Result<Command, ConfineError> {
             meta += &lit(a);
         }
     }
-    let mut profile = String::from("(version 1)(deny default)");
+    // The Lean runtime sizes its task manager from `hw.ncpu`; denied, `IO.asTask .dedicated`
+    // runs inline and a resident that reads stdin on a task never answers before EOF (measured
+    // 2026-10-16 with `host follow`: no reply until stdin closed; allowing exactly this name fixes
+    // it, and no other sysctl is needed).
+    let mut profile =
+        String::from("(version 1)(deny default)(allow sysctl-read (sysctl-name \"hw.ncpu\"))");
     profile += &format!("(allow process-exec{}", lit(&r.program));
     for p in &r.exec {
         profile += &sub(p);

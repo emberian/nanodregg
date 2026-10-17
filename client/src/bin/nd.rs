@@ -3,7 +3,8 @@
 //! follow returns and prints what follow says to print. The local verbs are custody, not protocol
 //! (CLIENT-13): `nd --init` creates a member's keys, the next secret in `$ND_HOLDING` (a 0700
 //! directory on removable media or under another account); `nd --init-hosted` creates a hosted
-//! resident's one-record keys. `$ND_HOLDING` is read again only to rotate.
+//! resident's one-record keys; `nd --keys` prints custody's public keys (`key HEX`, `next HEX`)
+//! for the operator's `host genesis`. `$ND_HOLDING` is read again only to rotate.
 
 use std::ffi::OsString;
 use std::io::Write;
@@ -41,6 +42,13 @@ fn go() -> Result<u8, String> {
         return Ok(0);
     }
     let custody = Custody::open(&ws, holding).map_err(|e| e.to_string())?;
+    if argv.len() == 1 && argv[0] == "--keys" {
+        let hex = |b: &[u8]| b.iter().map(|x| format!("{x:02x}")).collect::<String>();
+        let key = custody.public_key().map_err(|e| e.to_string())?;
+        let next = custody.next_public_key().map_err(|e| e.to_string())?;
+        println!("key {}\nnext {}", hex(&key), hex(&next));
+        return Ok(0);
+    }
     let mut follow =
         FollowSocket::connect(&ws.join("follow.sock")).map_err(|e| format!("follow.sock: {e}"))?;
     let mut host =
