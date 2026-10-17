@@ -72,7 +72,12 @@ idx=$tmp/index
 export GIT_INDEX_FILE=$idx
 git -C "$repo" read-tree "$base" || exit 2
 # Paths are taken relative to the caller's directory, like git.
-git add -A -- "${paths[@]}" || exit 2
+# A path gone from the working tree is recorded as deleted with `rm --cached` (plain `add -A`
+# refuses a tracked file that .gitignore now lists, so such a file could never be untracked).
+present=() gone=()
+for p in "${paths[@]}"; do if [ -e "$p" ]; then present+=("$p"); else gone+=("$p"); fi; done
+if [ ${#gone[@]} -gt 0 ]; then git rm -r -q --cached --ignore-unmatch -- "${gone[@]}" || exit 2; fi
+if [ ${#present[@]} -gt 0 ]; then git add -A -- "${present[@]}" || exit 2; fi
 # SIZE.md for exactly this candidate (rows main has that size.py does not compute are kept).
 S=$common/nanodregg-commit-size
 mkdir -p "$S"

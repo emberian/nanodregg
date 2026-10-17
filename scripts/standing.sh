@@ -9,7 +9,8 @@
 # INCOMPLETE, never GREEN: a gate that cannot run is not a pass. The line is also appended to
 # <git-common-dir>/nanodregg-standing/verdicts.log.
 #   sim:  every lean_exe named `*-sim` (host-sim, kernel-sim, …), run as `lake exe X SEED` for
-#         SEED in ${SIM_SEEDS:-1 2 3}: each must exit 0 with a last line `ALL PASS`, else RED
+#         SEED in ${SIM_SEEDS:-1 2 3} (kernel-sim: once, `--seeds 64`, so its planted-refusal
+#         coverage gate runs): each must exit 0 with a last line `ALL PASS`, else RED
 #         naming the first `FAIL <check>`. No `*-sim` exe => sim=ABSENT => INCOMPLETE.
 #   rows: `rows/run` in the judged tree (PROTOCOL's runner, Protocol.Rows.Run): one line per row
 #         `ROW <name> PASS|FAIL <why>|PENDING <why>`; exit 0 (`ALL PASS`) = ok, exit 3 (no FAIL,
@@ -49,8 +50,11 @@ if [ "$build" = ok ]; then
   if [ -n "$sims" ]; then
     sim=ok
     for exe in $sims; do
-      for seed in ${SIM_SEEDS:-1 2 3}; do
-        out=$(env -C "$T" lake exe "$exe" "$seed" 2>&1); rc=$?
+      # kernel-sim runs once over 64 seeds: its planted-refusal coverage gate (every planted
+      # name met at least once) only judges a run of >= 16 seeds (KERNEL-20, ROOT 10-16).
+      case $exe in kernel-sim) runs=("--seeds 64") ;; *) runs=(${SIM_SEEDS:-1 2 3}) ;; esac
+      for seed in "${runs[@]}"; do
+        out=$(env -C "$T" lake exe "$exe" $seed 2>&1); rc=$?
         printf '%s\n' "$out" >> "$log"
         printf '%s\n' "$out" | grep '^WASTE ' >> "$G/waste.measured"
         if [ $rc -ne 0 ] || [ "$(printf '%s\n' "$out" | tail -1)" != "ALL PASS" ]; then
