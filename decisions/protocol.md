@@ -668,10 +668,9 @@ World is refused by that name, no other); `check_wideWindow` (width first, whoev
 `message_heights_inj` (the signature binds `start`, `notBefore`, `validUntil`: one window's
 signature is not another's); `ReadRefusal.name_injective` over the two new names. A second agent
 read the statements for vacuity; its findings (no injectivity of the message in `notBefore`, no
-precedence for the width check, one-directional `notYet`) are the last three theorems. Still open
-from that read: nothing ties `Host.Follow.window` (128) to `windowMax` (1024) by a theorem; a
-deployed window past it would refuse every read `wideWindow`, loudly, and HOST is asked for
-`window_le_windowMax`.
+precedence for the width check, one-directional `notYet`) are the last three theorems. The last gap
+from that read (nothing tied `Host.Follow.window`, 128, to `windowMax`, 1024) is closed by HOST-6's
+`Host.Follow.window_le_windowMax` (79f5860).
 **Row.** `inflatedHeight` (its own row, so its plant runs): 110 writes (the rows' window is 100),
 then the auditor reads cold with the transport fault `inflateExpired 1000000`, which adds a million to
 the height an `expired` states. Expected `refused notYet`. Plant `ignoreNotBefore` (the writer's gate
@@ -754,3 +753,31 @@ replayed against a clone leaks only what that clone holds, so the binding is che
 much as a closed hole.
 **Status.** landed (this commit); the cross-World envelope line in row wrongWorld follows
 PROTOCOL-6's rebuild of that row.
+
+## PROTOCOL-29 · a carry (OPS-P1) must keep the live journal, or the attempt store calls a committed call refused (2026-10-17, PROTOCOL-6; answers OPS-P1's question to PROTOCOL)
+**The question.** After a carry (re-genesis under a new origin, carried cells, no history), does a
+client need a refusal `worldChanged`, or is `wrongWorld` on the first call enough?
+**Finding.** The name is enough. The danger is in the attempt store. An attempt whose reply was lost,
+for a call the old World committed just before the export, settles against the new Store as
+`lookup absent` (empty journal), then `submit refused wrongWorld`, so it ends REFUSED. The call's
+effect is in the carried cells. nd reports a lie, and a retrying user acts twice.
+**Decision (asked of OPS and KERNEL).** (A) The carry keeps every journal entry still inside its
+window (at most `windowMax` heights): `lookup` in the new World answers committed for those calls.
+Then `wrongWorld` on a resubmit is a true final verdict: a call the old World never committed can
+land nowhere, because the carry ends the old World. Fallback (B), if the journal cannot be carried:
+`Attempt` classifies a `wrongWorld` reply to a frozen attempt as not a verdict and ends `uncertain`
+(a new `Seen`), with a row of a frozen attempt across a carry. (B) is strictly worse: every
+attempt in flight at a carry stays uncertain forever.
+Members re-pin by `adopt` or a re-invite. TRANSPORT's v3 envelope names the invited origin, so the
+first read after a carry is `refused wrongWorld` before anything is signed.
+**Critique.** (A) makes a carried Store hold another World's txIds, a second meaning for "journal"
+(receipts of calls that name another origin). `lookup` must not check the call's world against the
+origin, or (A) silently becomes (B). That is a premise the carry row must test, not assume.
+**Meta-critique.** "Is the name enough" was the wrong question to be asked. The right one is "what
+verdict does the client reach", and a name cannot answer it: the verdict comes from the order
+lookup-then-submit, and only the journal decides what lookup says.
+**Status.** (A) agreed by OPS-2 and taken by KERNEL-6 as KERNEL-29: the carried World keeps the old
+height and the journal entries admitted above height - windowMax (theorem carry_lookup), with a
+fresh chain and an origin over the carried contents. Consequence for PROTOCOL: height 0 no longer
+means genesis. adopt notAtGenesis and follow from a carried Store must be re-read against
+KERNEL-29 when it lands. A carry row is built then.
