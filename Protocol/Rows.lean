@@ -30,10 +30,15 @@ inductive Expect
   | absent
   /-- the Host's reply was `uncertain` (a failed append): a real outcome, never a guess -/
   | uncertain
+  /-- the line ran past its LIVENESS deadline (`withinMs`): the system did not answer in time. A
+  non-verdict by name, never a judgement of speed (Ember: no wall-clock verdict until the end, on a
+  quiet box; THE BAR's ≤ 5 s is PERF's final spec, `scripts/bar.sh`, not a row criterion) -/
+  | hang
   deriving DecidableEq, Repr
 
 def Expect.text : Expect → String
   | .ok => "ok" | .refused n => s!"refused {n}" | .absent => "absent" | .uncertain => "uncertain"
+  | .hang => "hang"
 
 /-- What a line does. A member command goes through the one command language; the others are the
 operator's and the attempt store's acts, which are not member commands. -/
@@ -88,7 +93,8 @@ structure Line where
   bind : Option String := none
   /-- run the act this many times (each must get `expect`); the driver may scale it -/
   times : Nat := 1
-  /-- each run must end within this many milliseconds of wall time (THE BAR) -/
+  /-- a liveness deadline: a run that has not ended after this many milliseconds of wall time is
+  `hang` (a non-verdict), never a speed verdict -/
   withinMs : Option Nat := none
   deriving Repr
 
@@ -115,7 +121,7 @@ inductive Mutation
   | forgetJournal
   /-- after a lost reply the client signs the command afresh instead of looking up -/
   | resendFresh
-  /-- every `withinMs` bound is 0: the timing check must be live -/
+  /-- every `withinMs` bound is 0: the liveness check must be live -/
   | zeroDeadline
   /-- custody advances to the next key when it signs a rotation, not on its settlement -/
   | advanceOnSend
@@ -469,10 +475,13 @@ def hermes : Row where
     ok "hermes" ["read", "@shared", "2=5"]])
   plant := .caught .resendFresh 10 (.refused "idTaken")
 
-/-- THE BAR, in process: N births by one member, each within 5 s; one law installed and N invokes of
-it on one programmed object, each within 5 s (`add 1`; after them `add 999999` passes the law's
-bound, so the invokes really added: refused `lawDenied`); a cold reopen within 60 s; the state read
-back. The invokes print `WASTE invoke ticks-per-call` and `packages-checked-per-call`. (64 per landing; `rows --times 1000 bar` for the nightly number.) -/
+/-- THE BAR's workload, in process: N births by one member; one law installed and N invokes of it
+on one programmed object (`add 1`; after them `add 999999` passes the law's bound, so the invokes
+really added: refused `lawDenied`); a cold reopen; the state read back. The 5 s and 60 s are
+LIVENESS deadlines (a miss is `hang`, a non-verdict), not THE BAR's speed spec, which PERF judges at
+the end on a quiet box (`scripts/bar.sh`). The deterministic measures are the `WASTE invoke
+ticks-per-call` and `packages-checked-per-call` lines, pinned in gates/waste.tsv; the `BAR` lines
+are printed for the record and judged by nothing. (64 per landing; `rows --times 1000 bar` for the nightly number.) -/
 def bar : Row where
   name := "bar"
   replaces := ["births", "perf", "growth", "journey/G"]
@@ -489,7 +498,7 @@ def bar : Row where
     { actor := "operator", act := .restart, expect := .ok, withinMs := some 60000 },
     { actor := "sponsor", act := .cmd ["write", "@obj", "1", "x"], expect := .ok, withinMs := some 5000 },
     ok "sponsor" ["read", "@obj", "1=x"]]
-  plant := .caught .zeroDeadline 0 (.refused "overTime")
+  plant := .caught .zeroDeadline 0 .hang
 
 /-! ## Lean-internal rows
 

@@ -99,6 +99,9 @@ structure St where
   log : Array String := #[]
   times : Array Timed := #[]
   reopenNs : List Nat := []
+  /-- each invoke a client froze: the machine ticks its run used and the packages it loaded and
+  re-checked (`Lang.runMeasured` on the inputs `Kernel.Receive.invokeRun` derives) -/
+  invokes : Array (Nat × Nat) := #[]
 
 abbrev M := StateT St IO
 
@@ -116,11 +119,31 @@ def kindName : Body D → String
   | .grant .. => "grant" | .revoke .. => "revoke"
   | .issue .. => "issue" | .account .. => "account" | .transfer .. => "transfer" | .credit .. => "credit"
 
-def sawCall (call : ByteArray) : M Unit := do
-  let k := match Sim.ctx.decodeCall call with
+/-- What an invoke's run costs, measured on the World the call was planned on (the actor's
+follow, caught up to the writer's tip): the receiver's own inputs (`invokeRun` over the call's
+pins), then LANG's `runMeasured`, whose first component IS the deployed `Program.run`. A call
+whose run refuses costs nothing here (it is not admitted). -/
+def measureInvoke (X : Ctx D) (w : World D) (c : Call D) : Option (Nat × Nat) :=
+  match c.unsigned.body with
+  | .invoke obj method args budget via =>
+    let look := pinned w c.unsigned.pins
+    match invokeRun X look c obj method via with
+    | .ok (cell, p, r) =>
+      match Lang.runMeasured X.env.bytes X.digestOf look p (stateOf cell) method args r budget with
+      | .ok (_, ticks, pkgs) => some (ticks, pkgs)
+      | .error _ => none
+    | .error _ => none
+  | _ => none
+
+def sawCall (name : String) (call : ByteArray) : M Unit := do
+  let decoded := Sim.ctx.decodeCall call
+  let k := match decoded with
     | some c => kindName c.unsigned.body
     | none => "undecodable"
   modify fun st => if st.kinds.contains k then st else { st with kinds := st.kinds ++ [k] }
+  if let (some c, some a) := (decoded, (← get).actors.lookup name) then
+    if let some m := measureInvoke (← get).sys.writer.X a.follow.world c then
+      modify fun st => { st with invokes := st.invokes.push m }
 
 def founderIndex (name : String) : Option Nat := founders.idxOf? name
 
@@ -423,7 +446,7 @@ def steps (name : String) (argv : List String) (fault : Fault) (depth : Nat) (b 
           | none => pure (.refused "writerStopped", "")
           | some res => resume name argv fault depth k (if op = .log then pageFault fault res else res) fuel
       | some (.submit call k) => do
-          sawCall call
+          sawCall name call
           let a ← actor name
           setActor name { a with last := some call, arming := false,
                                  armed := if a.arming then some call else a.armed }
@@ -530,7 +553,7 @@ def runAct (l : Line) : M (Expect × String) := do
   | .reopenFlipped off => pure (← reopenFlipped off, "")
 
 /-- Run a line `times` times; the first outcome that is not the declared one, else the declared
-one. A run past `withinMs` is `overTime`. -/
+one. A run past `withinMs` (a liveness deadline) is `hang`. -/
 def runLine (i : Nat) (l : Line) (times : Nat) : M Expect := do
   let mut got := l.expect
   let mut ns : List Nat := []
@@ -544,7 +567,7 @@ def runLine (i : Nat) (l : Line) (times : Nat) : M Expect := do
         if let some h := boundToken out then bind b h
     let bound := if (← get).sys.zeroDeadline then l.withinMs.map fun _ => 0 else l.withinMs
     let o := match bound with
-      | some ms => if o = l.expect ∧ dt > ms * 1000000 then .refused "overTime" else o
+      | some ms => if o = l.expect ∧ dt > ms * 1000000 then .hang else o
       | none => o
     if o ≠ l.expect && got = l.expect then got := o
   let what := match l.act with
@@ -560,6 +583,7 @@ structure Result where
   log : Array String
   times : Array Timed
   reopenNs : List Nat
+  invokes : Array (Nat × Nat)
 
 /-- Run a member row against a fresh deployment under `m`; `times` scales every repeated line. -/
 def run (m : Option Mutation) (lines : List Line) (times : Option Nat) : IO Result := do
@@ -578,6 +602,6 @@ def run (m : Option Mutation) (lines : List Line) (times : Option Nat) : IO Resu
      (n ++ ".grant", hex (founderGrantId s.writer.X Sim.worldName i))]
   let (outcomes, st) ← go.run { sys := s, host, mem, genesis := g, binds }
   let _ ← st.host.stop
-  pure ⟨{ outcomes, ops := st.ops, kinds := st.kinds }, st.log, st.times, st.reopenNs⟩
+  pure ⟨{ outcomes, ops := st.ops, kinds := st.kinds }, st.log, st.times, st.reopenNs, st.invokes⟩
 
 end Nanodregg.Protocol.Rows.Loopback

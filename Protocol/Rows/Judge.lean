@@ -27,6 +27,9 @@ structure Observed where
 inductive Verdict
   | pass
   | fail (why : String)
+  /-- the first line that differs got `hang`: the system missed a liveness deadline. Not a pass
+  and not a fail; the runner reports it by name -/
+  | hang (why : String)
   deriving DecidableEq, Repr
 
 /-- The first line whose outcome differs from the declared one, if any. -/
@@ -36,6 +39,11 @@ def mismatch : Nat → List Expect → List Expect → Option String
   | i, _ :: _, [] => some s!"line {i}: an outcome the row does not declare"
   | i, g :: gs, e :: es =>
       if g = e then mismatch (i + 1) gs es else some s!"line {i}: got {g.text}, expected {e.text}"
+
+/-- The first line whose outcome differs from the declared one got `hang`. -/
+def firstDiffHangs : List Expect → List Expect → Bool
+  | g :: gs, e :: es => if g = e then firstDiffHangs gs es else g = .hang
+  | _, _ => false
 
 /-- Two lists name the same set. -/
 def sameSet {α : Type} [BEq α] (a b : List α) : Bool := a.all (b.contains ·) && b.all (a.contains ·)
@@ -48,7 +56,7 @@ def judge (r : Row) (o : Observed) : Verdict :=
       else .pass
   | .members ls =>
       match mismatch 0 o.outcomes (ls.map Line.expect) with
-      | some why => .fail why
+      | some why => if firstDiffHangs o.outcomes (ls.map Line.expect) then .hang why else .fail why
       | none =>
           if !sameSet o.ops r.ops then .fail s!"observed ops {repr o.ops}, declared {repr r.ops}"
           else if !sameSet o.kinds r.kinds then .fail s!"observed kinds {o.kinds}, declared {r.kinds}"

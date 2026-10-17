@@ -163,14 +163,21 @@ def requireMethods (obj : D) : Option D → Except (Refusal D) D
   | none => .error (.noMethods obj)
   | some p => .ok p
 
-def invoke (X : Ctx D) (look : Pinned D) (c : Call D) (obj : D) (method : Nat) (args : ByteArray)
-    (budget : Nat) (via : Option D) : Except (Refusal D) (Turn D) := do
+/-- What an invoke hands the program to run: the object's cell, its package, and the request,
+after the owner authority (KERNEL-25). `invoke` is this, then the run; a measurement of the run
+(THE BAR's WASTE lines, LANG's `runMeasured`) starts from the same inputs, never a restatement. -/
+def invokeRun (X : Ctx D) (look : Pinned D) (c : Call D) (obj : D) (method : Nat) (via : Option D) :
+    Except (Refusal D) (Cell × D × Req D) := do
   let u := c.unsigned
   let cell ← readKind look obj kindObject
   let pkg ← packageOf X obj cell
   let p ← requireMethods obj pkg
   let principal ← ownerAuthority X look u obj cell (.invoke method) via
-  let r : Req D := reqOf u principal (.invoke method)
+  pure (cell, p, reqOf u principal (.invoke method))
+
+def invoke (X : Ctx D) (look : Pinned D) (c : Call D) (obj : D) (method : Nat) (args : ByteArray)
+    (budget : Nat) (via : Option D) : Except (Refusal D) (Turn D) := do
+  let (cell, p, r) ← invokeRun X look c obj method via
   let old := stateOf cell
   let new ← X.program.run look p old method args r budget
   checkState new

@@ -84,12 +84,21 @@ def load : IO String := do
     return (← IO.FS.readFile "/proc/loadavg").trimAscii.toString
   catch _ => return "unknown"
 
+/-- `a ÷ b` with three decimals, rounded (`b = 0` prints `a`: no division hidden). -/
+def ratio (a b : Nat) : String :=
+  if b = 0 then toString a else
+  let m := (a * 1000 + b / 2) / b
+  let frac := toString (m % 1000)
+  s!"{m / 1000}.{"".pushn '0' (3 - frac.length)}{frac}"
+
 /-- Nanoseconds as milliseconds with three decimals. -/
 def ms (ns : Nat) : String :=
   let f := toString ((ns / 1000) % 1000)
   s!"{ns / 1000000}.{"".pushn '0' (3 - f.length)}{f}"
 
-def barLines (r : Row) (res : Loopback.Result) : IO Unit := do
+/-- THE BAR's record lines and its WASTE lines; an error if the invokes went unmeasured (a WASTE line
+over no calls would read as zero cost and pass the ratchet: a fail-open). -/
+def barLines (r : Row) (res : Loopback.Result) : IO (Option String) := do
   let timed := res.times.toList.filter fun t => (r.lines[t.line]?.bind (·.withinMs)).isSome
   let writes := (timed.filter fun t => match r.lines[t.line]? with
     | some { act := .cmd _, .. } => true | _ => false).flatMap (·.ns)
@@ -98,6 +107,15 @@ def barLines (r : Row) (res : Loopback.Result) : IO Unit := do
   for ns in res.reopenNs do
     IO.println s!"BAR reopen-ms {ms ns}"
   IO.println s!"BAR load {← load}"
+  -- the deterministic measures (pinned in gates/waste.tsv): per invoke, the machine ticks its run
+  -- used and the packages it loaded and re-checked
+  let n := res.invokes.size
+  IO.println s!"WASTE invoke ticks-per-call {ratio (res.invokes.foldl (· + ·.1) 0) n}"
+  IO.println s!"WASTE invoke packages-checked-per-call {ratio (res.invokes.foldl (· + ·.2) 0) n}"
+  let invokeLines := (r.lines.filter fun l => match l.act with
+    | .cmd ("invoke" :: _) => true
+    | _ => false).length
+  return if n = 0 && invokeLines > 0 then some "bar: no invoke was measured" else none
 
 def drive (r : Row) (times : Option Nat) : IO Ran :=
   if let some why := r.blockedOn then pure (.pending s!"blocked on {why}") else
@@ -107,7 +125,8 @@ def drive (r : Row) (times : Option Nat) : IO Ran :=
       match ← runMembers none ls times with
       | .error e => pure (.broken e)
       | .ok res =>
-          if r.name = "bar" then barLines r res
+          if r.name = "bar" then
+            if let some e ← barLines r res then return .broken e
           let t := String.intercalate "\n" res.log.toList
           match judge r res.observed, r.plant with
           | .pass, .caught m line got =>
@@ -128,6 +147,7 @@ def tail (t : String) : String :=
 def runAll (selected : List Row) (times : Option Nat) (verbose : Bool) : IO UInt32 := do
   let mut failed := 0
   let mut pending := 0
+  let mut hung := 0
   for r in selected do
     match ← drive r times with
     | .pending why =>
@@ -147,10 +167,14 @@ def runAll (selected : List Row) (times : Option Nat) (verbose : Bool) : IO UInt
             failed := failed + 1
             IO.println s!"ROW {r.name} FAIL {why}"
             IO.println (tail t)
+        | .hang why =>
+            hung := hung + 1
+            IO.println s!"ROW {r.name} HANG {why} (a liveness deadline missed: not a verdict)"
+            IO.println (tail t)
   if failed > 0 then
     IO.println s!"FAIL {failed} of {selected.length}"; pure 1
-  else if pending > 0 then
-    IO.println s!"INCOMPLETE {pending} pending"; pure 3
+  else if pending + hung > 0 then
+    IO.println s!"INCOMPLETE {pending} pending{if hung > 0 then s!", {hung} hang" else ""}"; pure 3
   else
     IO.println "ALL PASS"; pure 0
 

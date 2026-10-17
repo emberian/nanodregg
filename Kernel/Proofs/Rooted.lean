@@ -352,7 +352,7 @@ theorem dispatch_born {X : Ctx D} {look : Pinned D} {c : Call D} {b : Body D} {t
       rw [sealTurn_creates h]; simp
   | invoke obj method args budget via =>
       simp only [dispatch, invoke, except_bind_ok] at h
-      obtain ⟨_, _, _, _, _, _, _, _, _, _, ⟨⟩, _, _, _, ⟨⟩, _, h⟩ := h
+      obtain ⟨_, _, _, _, ⟨⟩, _, _, _, ⟨⟩, _, h⟩ := h
       rw [sealTurn_creates h]; simp
   | grant target grantee rights parent =>
       have hroot := grant_rooted (X := X) (look := look) (c := c) (target := target)

@@ -38,7 +38,7 @@ theorem judge_members_pass_iff {r : Row} {o : Observed} {ls : List Line}
   | some why =>
       have : o.outcomes ≠ ls.map Line.expect := fun he => by
         rw [(mismatch_none_iff 0 _ _).mpr he] at hm; cases hm
-      simp only [hm]; simp [this]
+      simp only [hm]; split <;> simp [this]
   | none =>
       have he := (mismatch_none_iff 0 _ _).mp hm
       simp only [hm]

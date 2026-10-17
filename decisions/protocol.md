@@ -590,3 +590,25 @@ and `{@NAME}` substitutions make the rows a little shell; I chose them over a Le
 row should exercise the bytes a member actually pastes.
 **Status.** landed. The WASTE lines of THE BAR's invokes wait on KERNEL-5's `invokeRun` (one
 derivation of the run's inputs, after KERNEL-25).
+
+## PROTOCOL-25 · THE BAR's invokes are measured, not timed: `WASTE invoke …` pinned; a missed deadline is `hang`, a non-verdict (2026-10-17, PROTOCOL-5; ROOT's correction)
+**Decision.** Each invoke a rows client freezes is measured on the World it was planned on:
+KERNEL's `invokeRun` (the receiver's own inputs, factored out of `invoke` with KERNEL-5's
+agreement, so nothing is restated) then LANG's `runMeasured` (whose first component IS
+`Program.run`). The bar row prints `WASTE invoke ticks-per-call 30.000` and `WASTE invoke
+packages-checked-per-call 1.000`, pinned in gates/waste.tsv (ceiling = first measurement). The
+`withinMs` deadlines are LIVENESS deadlines: a run past one is `Expect.hang`, and a row whose first
+differing line hung is `Verdict.hang` (`ROW x HANG … not a verdict`; the runner ends INCOMPLETE,
+exit 3), never FAIL and never a PASS on speed (Ember: no wall-clock judgement until the end on a
+quiet box; THE BAR's ≤ 5 s is PERF's `scripts/bar.sh`). Plant `zeroDeadline` now expects `hang`.
+**Alternatives.** A cost field in the Turn (KERNEL-5: a separate decision); measuring in the
+Host (the Host decides nothing and would need LANG's measured run); keeping `overTime` as a refusal
+(a speed verdict in a refusal's clothes).
+**Critique.** ticks-per-call counts the method's run and extraction, not the laws' ticks (judge
+runs under `lawTicks` and is not measured); a law-heavy workload's cost is invisible to this
+line. The measure is taken on the actor's follow World, which equals the writer's only when the
+actor is caught up (true in the bar row, one actor; not asserted). **Meta-critique.** The number
+30 is a property of the counter package, so the ratchet guards the evaluator and the closure
+loader against regressions on ONE program; a second workload would make it a measure of the
+machine rather than of a fixture.
+**Status.** landed.

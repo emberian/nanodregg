@@ -121,7 +121,10 @@ theorem invoke_authorized {X : Ctx D} {look : Pinned D} {c : Call D} {obj : D} {
         ∃ g, via = some g ∧ Chain X look obj (.invoke method) true g c.unsigned.member owner) := by
   unfold invoke at h
   simp only [except_bind_ok] at h
-  obtain ⟨cell, hc, _, _, _, _, principal, ha, _⟩ := h
+  obtain ⟨⟨_, _, _⟩, hrun, _⟩ := h
+  unfold invokeRun at hrun
+  simp only [except_bind_ok] at hrun
+  obtain ⟨cell, hc, _, _, _, _, principal, ha, _⟩ := hrun
   unfold ownerAuthority at ha
   simp only [except_bind_ok] at ha
   obtain ⟨owner, ho, p, hp, ⟨⟩, hpo, _⟩ := ha
@@ -140,7 +143,7 @@ theorem invoke_stranger_noGrant {X : Ctx D} {look : Pinned D} {c : Call D} {obj 
     (hc : readKind look obj kindObject = .ok cell) (hp : packageOf X obj cell = .ok (some p))
     (ho : slotDigest X obj cell slotOwner = .ok owner) (hne : c.unsigned.member ≠ owner) :
     invoke X look c obj method args budget none = .error (.noGrant obj) := by
-  simp [invoke, hc, hp, requireMethods, ownerAuthority, ho, principalOf, req, hne, bind, Except.bind]
+  simp [invoke, invokeRun, hc, hp, requireMethods, ownerAuthority, ho, principalOf, req, hne, bind, Except.bind]
 
 omit [Ord D] in
 /-- **The laws only refine** (KERNEL-25). The authority gate does not read the program: under any
