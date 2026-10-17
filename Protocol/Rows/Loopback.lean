@@ -537,6 +537,19 @@ def retry (name : String) : M Expect := do
 
 /-! ## A row -/
 
+/-- A SECOND writer, from a genesis of the same name, allowance and founders as the rows' writer, and
+the same nonce (`sameNonce`, or under the `nonceRepeats` plant: a restore of the same World) or
+another one (another World). -/
+def secondWriter (sameNonce : Bool) : M (Except String Writer.Running) := do
+  let st ← get
+  let X := st.sys.writer.X
+  let nonce := if sameNonce || st.sys.nonceRepeats then Sim.nonce else flipLast Sim.nonce
+  let fs := founders.map fun n => (keyOf n 0, nextKeyDigest X (keyOf n 1))
+  let g := Receive.genesis X Sim.worldName nonce Sim.allowance fs
+  match ← Writer.genesisStore st.sys.writer g with
+  | .error e => return .error e
+  | .ok (mem, r₀) => return .ok (← Writer.start st.sys.writer mem r₀)
+
 /-- Run one act once; its outcome and what it printed. -/
 def runAct (l : Line) : M (Expect × String) := do
   match l.act with
@@ -546,19 +559,32 @@ def runAct (l : Line) : M (Expect × String) := do
       | .ok av => command l.actor av l.fault 4
   | .restart => pure (← restart false, "")
   | .seal => pure (← restart true, "")
+  | .readElsewhere sameNonce => do
+      -- the actor's own log envelope, for its own World, to a SECOND writer (as replayLog's)
+      let st ← get
+      let a ← actor l.actor
+      let X := st.sys.writer.X
+      let upTo := a.self.window
+      let key := a.key l.actor
+      let sig := Sim.sign key (Command.envelopeMessage X a.self 0 upTo)
+      let some p := Envelope.bytes X (Command.envelopeOf a.self 0 upTo ⟨key, a.next l.actor, sig⟩)
+        | return (.refused "badState", "")
+      match ← secondWriter sameNonce with
+      | .error e => return (.refused e, "")
+      | .ok h =>
+          let r ← h.ask ⟨0, Op.log.code, p⟩
+          let _ ← h.stop
+          match r with
+          | some r => pure (statusOutcome (ByteArray.mk #[r.status] ++ r.payload), "")
+          | none => pure (.refused "writerStopped", "")
   | .replayLog sameNonce => do
       -- a SECOND writer from a genesis of the same name, allowance and founders, and the writer's
       -- committed calls submitted to it byte-identical, in order (OPS's cross-World replay)
       let st ← get
       if st.committed.isEmpty then return (.refused "noCommitted", "")
-      let X := st.sys.writer.X
-      let nonce := if sameNonce || st.sys.nonceRepeats then Sim.nonce else flipLast Sim.nonce
-      let fs := founders.map fun n => (keyOf n 0, nextKeyDigest X (keyOf n 1))
-      let g := Receive.genesis X Sim.worldName nonce Sim.allowance fs
-      match ← Writer.genesisStore st.sys.writer g with
+      match ← secondWriter sameNonce with
       | .error e => return (.refused e, "")
-      | .ok (mem, r₀) =>
-          let h ← Writer.start st.sys.writer mem r₀
+      | .ok h =>
           let mut outs : Array Expect := #[]
           for (call, i) in st.committed.toList.zipIdx do
             let r ← h.ask ⟨UInt32.ofNat i, Op.submit.code, call⟩

@@ -62,6 +62,10 @@ inductive Act
   (`sameNonce`: a restore of the same World) or another one (OPS's cross-World replay). The outcome
   is the one every call got; calls that got different outcomes are `refused mixed:I:OUTCOME` -/
   | replayLog (sameNonce : Bool)
+  /-- the actor signs a `log` read envelope for ITS World (from height 0, one window from 0) and
+  sends it to a second writer made as `replayLog` makes one (PROTOCOL-29's cross-World read); the
+  outcome is that writer's answer -/
+  | readElsewhere (sameNonce : Bool)
   deriving Repr
 
 /-- A fault the transport or the client injects into one command. -/
@@ -434,6 +438,21 @@ def wrongWorld : Row where
     { actor := "operator", act := .replayLog true, expect := .ok }])
   plant := .caught .nonceRepeats 7 .ok
 
+/-- The read half of `wrongWorld` (PROTOCOL-29): a member's signed `log` envelope, carried to a
+Store whose genesis differs only in its nonce, is refused `wrongWorld` by that name (the envelope
+names its World, checked first: never `unknownKey`, though the founder ids differ too); the same
+envelope to a Store of the same nonce, a restore of the same World, is served. The plant holds the
+nonce: with the second Store's nonce repeated, line 6 is served. -/
+def wrongWorldRead : Row where
+  name := "wrongWorldRead"
+  replaces := ["ops/replay-20261016"]
+  ops := everyWrite
+  kinds := ["enroll", "install", "create", "grant"]
+  drive := .members (welcome ++ [
+    { actor := "operator", act := .readElsewhere false, expect := .refused "wrongWorld" },
+    { actor := "operator", act := .readElsewhere true, expect := .ok }])
+  plant := .caught .nonceRepeats 6 .ok
+
 /-- JPAY1–4, JPAY6: observed payments become credit. Pay is an installed package (LANG's to
 write, `world/pay/Book`), invoked by members and by the watcher, not a receiver family. -/
 def pay : Row where
@@ -557,7 +576,7 @@ def langJourney : Row where
   plant := .internal "a program whose judge admits everything: L4 set 101 must be admitted"
 
 def rows : List Row :=
-  [journey, reopen, laws, rotate, audit, paging, coldCatchUp, inflatedHeight, thin, wrongWorld, pay, well, bounty, grain, hermes, bar,
+  [journey, reopen, laws, rotate, audit, paging, coldCatchUp, inflatedHeight, thin, wrongWorld, wrongWorldRead, pay, well, bounty, grain, hermes, bar,
    langJourney]
 
 end Nanodregg.Protocol
