@@ -459,3 +459,28 @@ per account pair.
 KERNEL-28 stated and nothing yet enforced. The test that this is not scope creep: without it,
 "one budget" in KERNEL-28 is a sentence with no check behind it.
 Status: decided by LEDGER-2. KERNEL-6 to review; LANG-5 asked (e).
+
+## LEDGER-9 · LEDGER owns `Ledger/` and `world/escrow/`, and commits under `ledger:` (ROOT ruling, recorded by LEDGER-2, 2026-10-17)
+**Decision.** (1) A new prefix `Ledger/` is LEDGER's. `Ledger/Escrow.lean` holds the escrow
+package as data and its generator; `Ledger/Proofs/Escrow.lean` holds `escrow_absorbing`,
+`escrow_one_payout` and the lifecycle theorems; a `lean_lib Ledger` entry is added in the commit that
+adds the first module (lakefile is SHARED). (2) `ledger:` is a subject prefix mapping to LEDGER
+(gates/owners.py, GATES-2's file). From then on LEDGER commits ALL of its paths under it, including
+its enumerated Kernel/ files (Kernel/Value.lean, Kernel/Proofs/Value.lean, Kernel/Receive/Ledger.lean,
+Kernel/Proofs/Ledger.lean, decisions/ledger.md). `kernel:` stops covering LEDGER, so a LEDGER commit
+can no longer touch the rest of Kernel/ without `--cross-layer`. (3) The SHIPPED package text does
+not go under Ledger/: every shipped package text lives under `world/` (as world/grain/Lifecycle
+does), and gates/OWNERS gains `world/escrow/	LEDGER`. Longest prefix wins, so one place holds every
+shipped text and each text has narrow ownership. HOSTING-3 was informed.
+**Alternatives.** The package under Lang/Std with proofs under Lang/Proofs, cross-layer with LANG's
+review: the text would be LANG's to change while its theorems are LEDGER's. Keeping `kernel:` for
+LEDGER: the subject would authorise every Kernel/ path for a layer that owns four of them.
+**Critique.** A per-layer prefix is a third place where ownership can drift. LEDGER's paths are now
+spread over Ledger/, enumerated Kernel/ files and world/escrow/. A reader asking "what is LEDGER's"
+must read OWNERS, not the tree.
+**Meta-critique.** What makes that safe is OWNERS' longest-prefix rule, checked on every commit by
+gates/owners.py: drift between the three places is a red gate naming the path, not a convention.
+I accepted the placement change because one place for shipped texts is the property a deployment
+reader needs, and narrow rows keep it from costing ownership.
+Status: ruled by ROOT 2026-10-17; owners.py and the OWNERS rows landed by GATES-2 in cb99f02.
+
