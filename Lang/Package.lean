@@ -131,48 +131,71 @@ def Term.relocateRow (f : Nat → Nat) : List (Label × Term) → List (Label ×
   | (ℓ, t) :: fs => (ℓ, t.relocate f) :: Term.relocateRow f fs
 end
 
-/-! ## Wire -/
+/-! ## Wire: a package is one `Codec.Tree` -/
 
 namespace Wire
 open Nanodregg.Codec
 
-def putLabels (ls : List Label) (buf : ByteArray) : ByteArray :=
-  ls.foldl (fun b ℓ => putLabel ℓ b) (putU32 ls.length buf)
+/-- The digest bytes an import id may have (the deployed digest is 32; the Sim's is 8). -/
+def importBytesMax : Nat := 32
 
-def getLabels (b : ByteArray) : Nat → Nat → Read (List Label)
-  | 0, i => .ok ([], i)
-  | n + 1, i =>
-    match getLabel b i with
-    | .error e => .error e
-    | .ok (ℓ, j) => (getLabels b n j).map fun (ls, k) => (ℓ :: ls, k)
+def labelLeaf (ℓ : Label) : Tree := .node 1 ℓ.toUTF8 []
 
-/-- Import ids: each its digest's bytes, length-prefixed (32 for the deployed digest; any
-digest the kernel's `digestOf` accepts). -/
-def getDigests (b : ByteArray) : Nat → Nat → Read (List ByteArray)
-  | 0, i => .ok ([], i)
-  | n + 1, i =>
-    match getRaw 32 b i with
-    | .error e => .error e
-    | .ok (d, j) => (getDigests b n j).map fun (ds, k) => (d :: ds, k)
+def labelsOf : List Tree → Option (List Label)
+  | [] => some []
+  | .node 1 p [] :: ts =>
+    match labelOf p, labelsOf ts with
+    | some ℓ, some ls => some (ℓ :: ls)
+    | _, _ => none
+  | _ => none
 
-/-- `imports` (count, then each id length-prefixed), state, interface, body, methods, laws. -/
-def encodePackage (p : Package) : ByteArray :=
-  let b0 := p.imports.foldl (fun b d => putRaw d b) (putU32 p.imports.length ByteArray.empty)
-  putLabels p.laws (putLabels p.methods (putTerm p.body (putTy p.iface (putTy p.state b0))))
+def importsOf : List Tree → Option (List ByteArray)
+  | [] => some []
+  | .node 0 p [] :: ts =>
+    if p.size ≤ importBytesMax then (importsOf ts).map (p :: ·) else none
+  | _ => none
 
-def getPackage (b : ByteArray) (i : Nat) : Except Refusal (Package × Nat) := do
-  let (n, i) ← getCount b i
-  let (imports, i) ← getDigests b n i
-  let (state, i) ← getTy b depthMax i
-  let (iface, i) ← getTy b depthMax i
-  let (body, i) ← getTerm b depthMax i
-  let (nm, i) ← getCount b i
-  let (methods, i) ← getLabels b nm i
-  let (nl, i) ← getCount b i
-  let (laws, i) ← getLabels b nl i
-  pure ({ imports, state, iface, body, methods, laws }, i)
+/-- `node 0 [imports state iface body methods laws]`; imports are `node 0 id` leaves under a
+`node 0`, methods and laws `node 1 ℓ` leaves under a `node 1`. -/
+def packageTree (p : Package) : Tree :=
+  .node 0 .empty
+    [.node 0 .empty (p.imports.map fun d => .node 0 d []), tyTree p.state, tyTree p.iface,
+     termTree p.body, .node 1 .empty (p.methods.map labelLeaf), .node 1 .empty (p.laws.map labelLeaf)]
 
-def decodePackage (b : ByteArray) : Except Refusal Package := whole (getPackage b 0) b
+def packageOf : Tree → Option Package
+  | .node 0 e [.node 0 ei is, s, i, b, .node 1 em ms, .node 1 el ls] =>
+    if e = .empty ∧ ei = .empty ∧ em = .empty ∧ el = .empty then
+      match importsOf is, tyOf s, tyOf i, termOf b, labelsOf ms, labelsOf ls with
+      | some imports, some state, some iface, some body, some methods, some laws =>
+        some { imports, state, iface, body, methods, laws }
+      | _, _, _, _, _, _ => none
+    else none
+  | _ => none
+
+/-- The package has a tree that reads back to it. -/
+def packageWire (p : Package) : Bool :=
+  p.imports.all (fun d => decide (d.size ≤ importBytesMax)) && tyWire p.state && tyWire p.iface &&
+    termWire p.body && p.methods.all labelOk && p.laws.all labelOk
+
+/-- The one codec of a package: the tree stream at the language's bounds. -/
+def packageStream : Stream (Tree.Fitting nodeMax depthMax) := Stream.tree nodeMax depthMax (by decide)
+
+/-- The bytes of a package; `none` when it has no tree in bounds (a label, row, index or literal
+past its bound, or nested deeper than `depthMax`). -/
+def encodePackage (p : Package) : Option ByteArray :=
+  if packageWire p then
+    if h : (packageTree p).fits nodeMax depthMax then some (packageStream.bytes ⟨packageTree p, h⟩)
+    else none
+  else none
+
+/-- Exactly one package tree, which reads as a package. -/
+def decodePackage (b : ByteArray) : Except Refusal Package :=
+  match packageStream.decode b with
+  | .error e => .error e
+  | .ok t =>
+    match packageOf t.val with
+    | some p => .ok p
+    | none => .error (.rejected 0 "lang/package")
 
 end Wire
 end Nanodregg.Lang

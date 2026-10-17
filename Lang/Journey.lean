@@ -96,7 +96,8 @@ def ownedText : String := "
                        (inj (sum (ok (rec)) (refused bytes)) refused \"not the owner\")))))))
 "
 
-def nat64 (n : Nat) : ByteArray := Wire.encodeData .nat (.nat n)
+/-- A u64 argument or slot (`none` past `2^64`). -/
+def nat64 (n : Nat) : Option ByteArray := Wire.encodeData .nat (.nat n)
 
 def ctxWith (prog : Program D) (reg : Sim.Registry) : Ctx D :=
   { Sim.ctx reg with program := prog }
@@ -143,32 +144,39 @@ def journey (prog : Program D) (plant : Bool) : Run := Id.run do
   let a := members.headD ⟨0, .empty, .empty⟩
   let b := members.getD 1 ⟨0, .empty, .empty⟩
   -- L0 the resident's text reads to exactly the package
+  let some ownedBytes := Wire.encodePackage owned | return note r "L0 Owned has no bytes" false
+  let some illBytes := Wire.encodePackage illTyped | return note r "L0 illTyped has no bytes" false
   match Read.readPackage ownedText with
   | .error e => r := note r s!"L0 read Owned: {e}" false
   | .ok q =>
-    let same := Wire.encodePackage q == Wire.encodePackage owned
+    let same := Wire.encodePackage q == some ownedBytes
     r := note r "L0 read Owned from text: same bytes as the AST" same
   -- L1 install
-  let c1 := Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id]) (.install (Wire.encodePackage owned))
+  let c1 := Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id]) (.install ownedBytes)
   let (r1, v1, t1) := go prog r c1
   r := note r1 s!"L1 install Owned: {v1}" (v1 == "admitted")
   let some pkg := t1.bind fun t => (createdIds Sim.env t).head? | return note r "L1 no package id" false
   -- L6 an ill-typed package
-  let c6 := Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id]) (.install (Wire.encodePackage illTyped))
+  let c6 := Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id]) (.install illBytes)
   let (r6, v6, _) := go prog r c6
   r := note r6 s!"L6 install ill-typed: {v6}" (v6.startsWith "refused program")
   -- L2 create
-  let seed : Slots := [(stateBase, Wire.encodeData .bytes (.bytes (Sim.u64le a.id))), (stateBase + 1, nat64 0)]
+  let some ownerBytes := Wire.encodeData .bytes (.bytes (Sim.u64le a.id)) | return note r "L2 no owner bytes" false
+  let some n0 := nat64 0 | return note r "L2 no bytes for 0" false
+  let some n50 := nat64 50 | return note r "L3 no bytes for 50" false
+  let some n101 := nat64 101 | return note r "L4 no bytes for 101" false
+  let some n7 := nat64 7 | return note r "L5 no bytes for 7" false
+  let seed : Slots := [(stateBase, ownerBytes), (stateBase + 1, n0)]
   let c2 := Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id, pkg]) (.create (some pkg) [] seed)
   let (r2, v2, t2) := go prog r c2
   r := note r2 s!"L2 create object: {v2}" (v2 == "admitted")
   let some obj := t2.bind fun t => (createdIds Sim.env t).head? | return note r "L2 no object id" false
   -- L3 set 50
-  let c3 := Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id, obj, pkg]) (.invoke obj 0 (nat64 50) 10000 none)
+  let c3 := Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id, obj, pkg]) (.invoke obj 0 n50 10000 none)
   let (r3, v3, _) := go prog r c3
   r := note r3 s!"L3 A set 50: {v3}, total = {totalOf r3.st.host obj}" (v3 == "admitted" && totalOf r3.st.host obj == some 50)
   -- L4 set 101
-  let c4 := Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id, obj, pkg]) (.invoke obj 0 (nat64 101) 10000 none)
+  let c4 := Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id, obj, pkg]) (.invoke obj 0 n101 10000 none)
   let (r4, v4, _) := go prog r c4
   if plant then
     r := note r4 s!"PLANT skip-judge: L4 A set 101 must now be admitted: {v4}" (v4 == "admitted")
@@ -180,7 +188,7 @@ def journey (prog : Program D) (plant : Bool) : Run := Id.run do
   let (rg, vg, tg) := go prog r cg
   r := note rg s!"L5a A grants B invoke 0: {vg}" (vg == "admitted")
   let some gr := tg.bind fun t => (createdIds Sim.env t).head? | return note r "L5 no grant id" false
-  let c5 := Sim.signed r.st b b.key (Sim.S.pinsFor r.st.host [b.id, obj, pkg, gr]) (.invoke obj 0 (nat64 7) 10000 (some gr))
+  let c5 := Sim.signed r.st b b.key (Sim.S.pinsFor r.st.host [b.id, obj, pkg, gr]) (.invoke obj 0 n7 10000 (some gr))
   let (r5, v5, _) := go prog r c5
   unless plant do
     r := note r5 s!"L5 B (granted) set 7: {v5}" (v5.startsWith "refused lawDenied" && (v5.splitOn "ownerOnly: not the owner").length > 1)

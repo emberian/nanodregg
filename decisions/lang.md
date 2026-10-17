@@ -77,6 +77,7 @@ second codec SHAPE outside `Stream` (it has no `Shape`, so no derived tag), whic
 defect; it exists because `Stream`/`Shape` cannot express a recursive type. The fix is CODEC's: a
 `Shape.rec`/fixpoint combinator; proposals/lang.md asks. **Meta-critique.** Writing it myself was
 faster than waiting, which is how twins start.
+Status: CLOSED by LANG-17 (the hand readers are deleted).
 
 ## LANG-15 No Mathlib (2026-10-16; GATES-1 not challenged)
 The language's metatheory (typing, CEK soundness, budget theorems) needed only core `omega`/`simp`
@@ -93,3 +94,43 @@ work on every invoke and every law judged; delvetalk measured re-check at ~1/5 o
 The fix when measured is a Host memo keyed by package id (ROM: the id determines the bytes), not
 dropping the check. **Meta-critique.** I chose the check whose theorem is local over the cheaper one
 whose theorem is global — the bias toward what I can prove this session.
+
+## LANG-17 The port onto `Codec.Tree`: terms on the tree, data on the combinators (2026-10-16; closes LANG-14, answers CODEC-9)
+**Decision.** (1) A type, a term and a package are each one `Codec.Tree` (`Lang/Wire.lean`,
+`Lang/Package.lean`): one node per constructor, scalars as a payload written by CODEC's ordinary
+codecs, subterms as children, a row entry as a field node (label payload, one child). The decoder is
+`Stream.tree nodeMax depthMax` then `packageOf`; the encoder is `Option`-valued: `encodePackage p` is
+`none` unless `packageWire p` (labels ≤ 64 bytes UTF-8, rows ≤ 256, indices < 2^32, literal naturals
+< 2^64, import ids ≤ 32 bytes) and the tree fits. (2) DATA does not go on the tree: `dataStream T` is
+built from `u64`/`bool`/`bytesOf`/`product`/`sum` by recursion on the TYPE (`Lang/Wire/Data.lean`),
+over a type family `DataAt T`, so data's `Shape` is the type's structure and its canonicity is the
+combinators' (no Lang inverse proof at the byte level). Only a canonical (`wf`) type has a data codec.
+(3) Theorems: `decodePackage_eq_ok_iff` and `decodeData_eq_ok_iff` (`decode b = ok v ↔ encode v =
+some b`), `decodeData_conforms` (re-proved), teeth in `Proofs/WireTeeth`.
+**Alternatives.** CODEC-9's literal recipe, `Stream.refine "lang/term" tree ofTree toTree` with
+`β = Term`: impossible, since `toTree` is not total into `Tree.Fitting` (an unbounded label or a
+2^64 literal has no fitting tree), so `β` would be a subtype of representable terms carried through
+every `Package` field. Data on the tree too (self-describing): 9 bytes of node framing per value (a
+`nat` slot 8 → 17 bytes) for a reader that already knows the type. A re-encode-and-compare decoder
+(decode, then check `tree (decode t) = t`): canonical by construction but a second pass on every
+load. **Why.** The tree is the one recursive codec (law 1); data needs no recursion over the input
+(the type is finite), so a combinator stream is the smaller and better-typed answer; an `Option`
+encoder names the representable values once (`*Wire`) instead of threading a subtype. **Critique.**
+The sum encoding is unary (arm `i` costs `i+1` tag bytes; at most 256 arms) where the old wire had a
+fixed `u32`; a 200-arm enum's last arm is 200 bytes. `packageOf` refuses with one name
+(`rejected 0 "lang/package"`): a resident does not learn WHICH node is wrong (their `encodePackage`
+is `none` first, equally nameless). `depthMax = 1024` now counts tree levels, and a record field is
+two (field node + type), so a type of nested records reaches the bound at ~512 records deep; the old
+1024 counted constructors. The tree's one bound `nodeMax = 65536` caps both a payload and a child
+list, so the READER accepts a 65536-byte label or 65536 children before `labelOf`/`rowMax` refuse
+them after the node is read (bounded by the input, but looser than the old length-prefix refusal).
+The framing is 9 bytes per node (`u8` tag, `u32` payload length, `u32` child count): measured by the
+second-agent review, Journey's `Owned` is 2529 bytes against ~1181 on the old wire (2.1×), so the
+largest package one 64 KiB cell holds roughly halves. The fix is CODEC's (varint lengths: ~3 bytes per
+node) and is asked of CODEC, not worked around here. **Meta-critique.** I chose
+the combinator data codec because it made the proof nearly free, and only then argued its wire
+size; the unary sum is the price of using `Stream.sum` rather than adding an n-ary tagged sum to
+CODEC, which I did not ask for.
+**Flag day.** Package bytes (hence every package id, `romIdOf` of the bytes) and every data slot's
+bytes change: an installed package or object state from before this commit refuses to load
+(`malformedCell` at its package slot; state fields as `decode …` refusals). Re-genesis.
