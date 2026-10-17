@@ -744,7 +744,7 @@ reads unbound: a captured envelope re-reads a clone within its window. (c) `Self
 Host's first answer: trust on first use, which is exactly the mis-routing the binding exists for.
 **Critique.** `wrongWorld` before the signature is an oracle: an unauthenticated prober confirms an
 origin guess. The origin is not secret, and socket access is the real gate, but it is one bit more
-than before. No theorem says the signature binds the world BYTES: `message_heights_inj` fixes the world, and the step from equal messages to equal worlds needs `Env.bytes` injective, a property of the Ctx that no Ctx states yet (the deployed digest is 32 fixed bytes, the toy a u64), so it is named here as a gap, not proved. A copied Store directory keeps its origin, so a fork is the same World to this check;
+than before. That the signature binds the world BYTES was named here as a gap (it needs `Env.bytes` injective and of one width). It is CLOSED (PROTOCOL-6, after KERNEL-37 stated `Env.Lawful`): `Envelope.message_inj` (under `X.env.Lawful n`, equal messages have equal world, member, grant, start, notBefore, validUntil) and `Envelope.deployed_message_inj` (no premise, by `Receive.deployed_lawful`). A copied Store directory keeps its origin, so a fork is the same World to this check;
 only followers comparing chains see it. The invitation that carries the origin to a new member
 does not exist yet (HOST-4's `host genesis --nonce` reproduces a writer's genesis; the founder
 copies label, nonce and founders to the member by hand).

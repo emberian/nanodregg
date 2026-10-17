@@ -3,6 +3,7 @@
 -/
 import Protocol.Envelope
 import Protocol.Proofs.Frames
+import Kernel.Proofs.RootedDeployed
 
 namespace Nanodregg.Protocol
 
@@ -184,5 +185,40 @@ theorem Envelope.message_heights_inj {X : Ctx D} {o m g : D} {s nb v s' nb' v' :
   obtain ⟨e2, e3⟩ := Array.append_inj hd (by rw [Text.u64_data_size, Text.u64_data_size])
   exact ⟨Text.u64_inj hs hs' (ByteArray.ext e1), Text.u64_inj hnb hnb' (ByteArray.ext e2),
     Text.u64_inj hv hv' (ByteArray.ext e3)⟩
+
+omit [DecidableEq D] in
+/-- The signature binds EVERY field it covers (PROTOCOL-29's named gap, closed with KERNEL-37's
+`Env.Lawful`): under a lawful `Env` (one digest size, injective bytes), two envelope messages
+are equal only if their world, member, grant, start, notBefore and validUntil are. A signature
+over one World's envelope is not a signature over another's. -/
+theorem Envelope.message_inj {X : Ctx D} {n : Nat} (hE : X.env.Lawful n) {o m g o' m' g' : D}
+    {s nb v s' nb' v' : Nat}
+    (hs : s < 2 ^ 64) (hnb : nb < 2 ^ 64) (hv : v < 2 ^ 64)
+    (hs' : s' < 2 ^ 64) (hnb' : nb' < 2 ^ 64) (hv' : v' < 2 ^ 64)
+    (h : Envelope.message X o m g s nb v = Envelope.message X o' m' g' s' nb' v') :
+    o = o' ∧ m = m' ∧ g = g' ∧ s = s' ∧ nb = nb' ∧ v = v' := by
+  have sz : ∀ d : D, (X.env.bytes d).data.size = n := fun d => hE.size d
+  have hd := congrArg ByteArray.data h
+  simp only [Envelope.message, ByteArray.data_append, Array.append_assoc] at hd
+  have hd := (Array.append_right_inj _).mp hd
+  obtain ⟨eo, hd⟩ := Array.append_inj hd (by rw [sz, sz])
+  obtain ⟨em, hd⟩ := Array.append_inj hd (by rw [sz, sz])
+  obtain ⟨eg, hd⟩ := Array.append_inj hd (by rw [sz, sz])
+  obtain ⟨e1, hd⟩ := Array.append_inj hd (by rw [Text.u64_data_size, Text.u64_data_size])
+  obtain ⟨e2, e3⟩ := Array.append_inj hd (by rw [Text.u64_data_size, Text.u64_data_size])
+  exact ⟨hE.bytes_eq (ByteArray.ext eo), hE.bytes_eq (ByteArray.ext em), hE.bytes_eq (ByteArray.ext eg),
+    Text.u64_inj hs hs' (ByteArray.ext e1), Text.u64_inj hnb hnb' (ByteArray.ext e2),
+    Text.u64_inj hv hv' (ByteArray.ext e3)⟩
+
+/-- At the deployed `Env`, with no premise on it (`Receive.deployed_lawful`): an envelope signature
+binds the World's origin bytes and every other field. -/
+theorem Envelope.deployed_message_inj {program : Program Codec.Digest} {o m g o' m' g' : Codec.Digest}
+    {s nb v s' nb' v' : Nat}
+    (hs : s < 2 ^ 64) (hnb : nb < 2 ^ 64) (hv : v < 2 ^ 64)
+    (hs' : s' < 2 ^ 64) (hnb' : nb' < 2 ^ 64) (hv' : v' < 2 ^ 64)
+    (h : Envelope.message (Codec.Deployed.ctx program) o m g s nb v =
+      Envelope.message (Codec.Deployed.ctx program) o' m' g' s' nb' v') :
+    o = o' ∧ m = m' ∧ g = g' ∧ s = s' ∧ nb = nb' ∧ v = v' :=
+  Envelope.message_inj Receive.deployed_lawful hs hnb hv hs' hnb' hv' h
 
 end Nanodregg.Protocol
