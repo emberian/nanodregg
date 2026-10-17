@@ -18,12 +18,27 @@ namespace Nanodregg.Kernel.Receive
 
 open Nanodregg.Kernel Nanodregg.Codec Nanodregg.Codec.Deployed
 
+/-- The deployed cell codec is injective on exactly the cells the kernel keeps (`Cell.Fits`). -/
+theorem deployed_injOn : InjOn Nanodregg.Codec.Kernel.Cell.Fits env :=
+  fun _ _ ha hb h => Nanodregg.Codec.Kernel.cellBytes_injective ha hb h
+
+/-- **The deployed `Env` is lawful at 32** (KERNEL-37): 32-byte digests, injective digest bytes
+(`bytes_injective`), turn bytes injective on bounded turns (`turnBytes_injective`), cell bytes
+injective on `Cell.Fits` (`cellBytes_injective`). Every kernel theorem stated over a lawful `Env`
+holds at the deployed codec with no premise about it. -/
+theorem deployed_lawful : env.Lawful 32 where
+  size d := d.size_eq
+  n_le := Nat.le_refl 32
+  bytes_inj := fun _ _ h => bytes_injective h
+  turnBytes_injOn := fun ht ht' h => turnBytes_injective ht ht' h
+  cellBytes_injOn := deployed_injOn
+
 /-- **Deployed: an audited World is rooted at its founders.** -/
 theorem deployed_audit_rooted (program : Program Digest) (name nonce : ByteArray) (allowance : Nat)
     (founders : List (ByteArray × Digest)) {w' : World Digest} {l : List (Turn Digest)}
     (h : audit (ctx program) (genesisWorld (ctx program) name nonce allowance founders) l = .ok w') :
     WorldRooted (ctx program) (GenesisRoot (ctx program) (originOf (ctx program) name nonce allowance founders)) w' :=
-  audit_rooted (fun _ _ hb => bytes_injective hb) (genesis_rooted _ name nonce allowance founders) h
+  audit_rooted deployed_lawful (genesis_rooted _ name nonce allowance founders) h
 
 /-- **Deployed: every enrolment is a founder's.** On a World an audited log reached from genesis,
 a derived enrolment's grant chain ends at a founder's live genesis grant, issued by the founder the
@@ -57,14 +72,9 @@ theorem deployed_fold_reaches_host {g host follower : World Digest} {lh lf : Lis
     (hh : World.fold env g lh = .ok host) (hf : World.fold env g lf = .ok follower)
     (hht : follower.height = host.height) (hc : follower.chain = host.chain) :
     follower = host ∨ Collision env.hash :=
-  fold_reaches_host (n := 32) (fun d => d.size_eq) (fun _ _ h => bytes_injective h)
-    (fun ht ht' h => turnBytes_injective ht ht' h) hh hf hht hc
+  fold_reaches_host deployed_lawful hh hf hht hc
 
 /-! ## The phone's reads at the deployed codec (KERNEL-31) -/
-
-/-- The deployed cell codec is injective on exactly the cells the kernel keeps (`Cell.Fits`). -/
-theorem deployed_injOn : InjOn Nanodregg.Codec.Kernel.Cell.Fits env :=
-  fun _ _ ha hb h => Nanodregg.Codec.Kernel.cellBytes_injective ha hb h
 
 /-- A deployed digest's bytes fit a value slot (32 bytes). -/
 theorem deployed_bytes_fit (d : Digest) : (env.bytes d).size ≤ Bounds.valueBytesMax := by
@@ -88,8 +98,8 @@ theorem deployed_slot_inclusion_sound (program : Program Digest) {name nonce : B
     {p : Trie.Proof (Slot Digest) Digest}
     (hv : Trie.verifyInclusion (trieSpec env) (w.root env) s (leafDigest env leaf) p = true) :
     w.trie.get (trieSpec env) s = some leaf ∨ Collision env.hash :=
-  slot_inclusion_sound (n := 32) (fun d => d.size_eq) (fun _ _ h => bytes_injective h) deployed_injOn
-    (deployed_reach program hg hl).1 (deployed_reach program hg hl).2 hlf hv
+  slot_inclusion_sound deployed_lawful (deployed_reach program hg hl).1 (deployed_reach program hg hl).2
+    hlf hv
 
 /-- **Deployed: a live cell proved against the root is the World's live cell**, or a collision. -/
 theorem deployed_live_inclusion_sound (program : Program Digest) {name nonce : ByteArray} {allowance : Nat}
@@ -98,8 +108,8 @@ theorem deployed_live_inclusion_sound (program : Program Digest) {name nonce : B
     {c : Digest} {cell : Cell} (hcf : Nanodregg.Codec.Kernel.Cell.Fits cell) {p : Trie.Proof (Slot Digest) Digest}
     (hv : Trie.verifyInclusion (trieSpec env) (w.root env) (.cell c) (leafDigest env (.entry (.live cell))) p = true) :
     w.live env c = some cell ∨ Collision env.hash :=
-  live_inclusion_sound (n := 32) (fun d => d.size_eq) (fun _ _ h => bytes_injective h) deployed_injOn
-    (deployed_reach program hg hl).1 (deployed_reach program hg hl).2 hcf hv
+  live_inclusion_sound deployed_lawful (deployed_reach program hg hl).1 (deployed_reach program hg hl).2
+    hcf hv
 
 /-- **Deployed: the phone's read from any canonical, fitting World** (a reopened base as well as a
 folded one): a head record that hashes to the chain the next admitted turn reached, and a proof
@@ -112,8 +122,7 @@ theorem deployed_head_read_sound_from {w w' : World Digest} {t : Turn Digest} (h
     {p : Trie.Proof (Slot Digest) Digest}
     (hv : Trie.verifyInclusion (trieSpec env) root' s (leafDigest env leaf) p = true) :
     w'.trie.get (trieSpec env) s = some leaf ∨ Collision env.hash :=
-  head_read_sound (n := 32) (fun d => d.size_eq) (fun _ _ h => bytes_injective h) deployed_injOn hc h
-    (admit_cellsFit hwf h) hhead hlf hv
+  head_read_sound deployed_lawful hc h (admit_cellsFit hwf h) hhead hlf hv
 
 /-- **Deployed: the phone's read on a reopened base.** A World decoded from base bytes by the
 deployed World codec, then one admitted turn: `Canon` and `CellsFit` come from the decoder

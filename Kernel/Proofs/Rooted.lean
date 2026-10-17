@@ -11,6 +11,7 @@ World right through such a World then ends at a root in `R` (`chain_rooted`).
 The kernel half is structural: an append-only cell never loses or changes a slot (`postWrite`),
 so a write can neither strip a grant's parent nor retarget it, whoever the receiver is.
 -/
+import Kernel.Proofs.Lawful
 import Kernel.Proofs.Authority
 import Kernel.Proofs.Tree
 import Kernel.Proofs.Audit
@@ -345,12 +346,11 @@ theorem sealTurn_creates {X : Ctx D} {c : Call D} {cr : List (D × Cell)} {efs :
     {ns : List D} {t : Turn D} (h : sealTurn X c cr efs ns = .ok t) : t.born = cr.map Prod.snd := by
   rw [Turn.born, (sealTurn_ok h).2.2.2.2.2.2.2.1]
 
-omit [Ord D] in
 /-- **No receiver bears an unrooted grant**, anywhere in a call's tree. Only `grant` bears a grant
 cell, append-only, and on the World only with a parent (`grant_rooted`). Needs the digest's bytes
 to be injective (a target read back as the World's bytes IS the World). -/
 theorem derive_born {X : Ctx D} {look : Pinned D} {c : Call D} {d : Draft D}
-    (hinj : ∀ a b : D, X.env.bytes a = X.env.bytes b → a = b)
+    {n : Nat} (hE : X.env.Lawful n)
     (h : derive X look c = .ok d) : ∀ p ∈ d.creates, BornRooted X p.2 := by
   have notGrant : ∀ (cell : Cell) (base : Nat), cell.kind ≠ kindGrant →
       ∀ p ∈ bornAt X c base [cell], BornRooted X p.2 := by
@@ -417,7 +417,7 @@ theorem derive_born {X : Ctx D} {look : Pinned D} {c : Call D} {d : Draft D}
         refine ⟨rfl, by simp only at ht ⊢; rw [ht]; rfl, fun hw => ?_⟩
         simp only at ht hp hw ⊢
         rw [ht] at hw
-        have := hinj _ _ (Option.some.inj hw)
+        have := hE.bytes_eq (Option.some.inj hw)
         rw [hp]; exact hroot (.inl this)
     | revoke g =>
         have hd := stepped_draft h
@@ -462,25 +462,25 @@ section Steps
 
 /-- **Derive-then-admit keeps the World rooted.** -/
 theorem step_rooted {X : Ctx D} {R : D → Prop} {w w' : World D} {c : Call D} {t : Turn D}
-    (hinj : ∀ a b : D, X.env.bytes a = X.env.bytes b → a = b) (hw : WorldRooted X R w)
+    {n : Nat} (hE : X.env.Lawful n) (hw : WorldRooted X R w)
     (hr : receive X w c = .ok t) (ha : World.admit X.env w t = .ok w') : WorldRooted X R w' :=
   by
     obtain ⟨d, hd, hc⟩ := receiveWith_born (receive_ok_with hr).2
     refine admit_rooted hw (fun cell hcell => ?_) ha
     rw [Turn.born, hc] at hcell
     obtain ⟨p, hp, rfl⟩ := List.mem_map.mp hcell
-    exact derive_born hinj hd p hp
+    exact derive_born hE hd p hp
 
 /-- **The Host keeps the World rooted**: every committed submission. -/
 theorem submit_rooted {X : Ctx D} {R : D → Prop} {w w' : World D} {c : Call D} {t : Turn D}
-    (hinj : ∀ a b : D, X.env.bytes a = X.env.bytes b → a = b) (hw : WorldRooted X R w)
+    {n : Nat} (hE : X.env.Lawful n) (hw : WorldRooted X R w)
     (h : submit X w c = .ok (t, w')) : WorldRooted X R w' := by
   obtain ⟨_, hr, ha⟩ := submit_ok h
-  exact step_rooted hinj hw hr ha
+  exact step_rooted hE hw hr ha
 
 /-- **Every audited log keeps the World rooted**: the follower's World too. -/
 theorem audit_rooted {X : Ctx D} {R : D → Prop}
-    (hinj : ∀ a b : D, X.env.bytes a = X.env.bytes b → a = b) :
+    {n : Nat} (hE : X.env.Lawful n) :
     ∀ {w w' : World D} {l : List (Turn D)}, WorldRooted X R w → audit X w l = .ok w' →
       WorldRooted X R w'
   | w, w', [], hw, h => by simp [audit] at h; subst h; exact hw
@@ -504,7 +504,7 @@ theorem audit_rooted {X : Ctx D} {R : D → Prop}
                       simp only [hd, hadm, Except.ok.injEq] at hs
                       subst hs
                       obtain ⟨c, _, hr⟩ := rederive_ok.mp hd
-                      exact audit_rooted hinj (step_rooted hinj hw hr hadm) ha
+                      exact audit_rooted hE (step_rooted hE hw hr hadm) ha
 
 end Steps
 

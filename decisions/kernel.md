@@ -1172,3 +1172,45 @@ channel during a run: if any future pure code in the sim writes there, its `#`s 
 lands in C if a cell insert forces it, else in A - C. That is the same attribution the model used,
 and it is a choice: the floor is per turn, and the rows are per slot.
 **Flag day.** None. Nothing refuses, nothing re-geneses, nothing re-emits.
+
+## KERNEL-37 · `Env.Lawful`: what the kernel's theorems assume of an `Env`, in one premise, proved at the deployed codec (KERNEL-9, 2026-10-18; agreed CODEC-3 / KERNEL-7, KERNEL-8's handoff item 2)
+**Decision.** `Kernel/Proofs/Lawful.lean` defines `structure Env.Lawful [Ord D] (E : Env D) (n : Nat) :
+Prop` with the fields `size`, `n_le` (n ≤ 32), `bytes_inj`, `turnBytes_injOn` (TurnBytesInjOn E) and
+`cellBytes_injOn` (InjOn Codec.Kernel.Cell.Fits E). `TurnBytesInjOn` (from Fold) and `InjOn` (from
+Cells) move there unchanged. Every Kernel/ theorem that took a loose Env premise takes
+`hE : E.Lawful n` instead:
+- Fold: chainNext_inj, chain_binds, fold_head_binds, fold_reaches_host (hsz hb ht).
+- Cells: slots_separate (hn too), slotBytes_inj, dbytes_pair_inj, leafBody_size, leafBody_inj,
+  slot_inclusion_sound, slot_exclusion_sound, live_inclusion_sound, unspent_sound, trie_ext (hn
+  too), head_root, head_read_sound, head_absent_sound (hsz hb hcb).
+- Rooted: derive_born, step_rooted, submit_rooted, audit_rooted (pointwise hinj).
+- Origin: genesis_inj, genesis_chain_inj. Carry: carry_inj (pointwise hb).
+
+The World-level inclusion theorems fix `F := Cell.Fits` instead of taking a generic `F` with
+`InjOn F E`. The two lemmas about any `F` (leafBytes_inj, leafDigest_inj) stay generic, because they
+are facts about `InjOn F`, not about the Env. `Receive.deployed_lawful : env.Lawful 32` is proved in
+RootedDeployed from CODEC's d.size_eq, bytes_injective, turnBytes_injective and
+cellBytes_injective, and every deployed_* theorem now passes it. Their statements are unchanged.
+**CODEC's side.** The handoff planned CODEC-5's `env_lawful : env.Lawful 32`. Every fact it needs is
+already a CODEC theorem, and RootedDeployed already imports Codec.Proofs.Deployed, so I proved it
+here in eight lines. CODEC-5 has nothing to write, and a second copy in Codec/ would be a twin.
+**What it closes.** PROTOCOL's named gap (decisions/protocol.md, "No theorem says the signature
+binds the world BYTES ... needs `Env.bytes` injective, a property of the Ctx that no Ctx states
+yet"). The property is now stated (`Env.Lawful.bytes_eq`) and discharged at Deployed
+(`deployed_lawful`). PROTOCOL-6 is told.
+**Tooth.** The premise is SATISFIABLE (`deployed_lawful`, from CODEC's non-vacuous codec theorems)
+and REFUTABLE (`Env.Lawful.refutable`: an Env whose digests share their bytes is lawful at no size).
+So no theorem taking it is vacuous at Deployed, and it is not a premise any Env meets for free. The
+statements' content is unchanged, and the existing teeth of each theorem (follower forge arms,
+proof-forgery arms, carry and genesis arms) are untouched (kernel-sim ALL PASS). Second-agent vacuity read (before landing): no vacuous theorem, no conclusion changed, deployed_* statements byte-identical, every Lawful field from a non-vacuous CODEC theorem; WEAKENED at the generic level only (theorems that used bytes_inj alone now take all of Lawful, and [Ord D] is required where it was omitted), harmless at Deployed (the Critique below); a docstring overclaim fixed.
+**Critique.** A theorem that needed only `bytes_inj` (genesis_inj, the rooted chain) now asks for
+all five fields, so it no longer applies to an Env that is injective but not, say, 32-bounded (the
+toy UInt64 Env has no Lawful proof, and no theorem is applied to it). That narrows generality on
+purpose: one premise that the deployed Env meets, instead of five shapes. LEDGER-3's
+Kernel/Proofs/Value.lean (3 theorems) and Ledger.lean (account_keyed) still take the pointwise form.
+They are LEDGER's files, so I asked LEDGER-3 to convert them.
+**Meta-critique.** I considered keeping the pointwise theorems' minimal premise, on the grounds that
+"assume less" is the better theorem. That would mean keeping two shapes of one fact (pointwise and
+bundled) and leaving every caller to pick, and that drift is exactly what this structure exists to
+end. The deployed instance is the only consumer.
+**Flag day.** None. Nothing refuses, nothing re-geneses, nothing re-emits.

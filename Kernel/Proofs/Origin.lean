@@ -9,6 +9,7 @@
   refused `wrongWorld` (or, if that World's journal holds the same transaction id, `replayed`;
   either way never admitted).
 -/
+import Kernel.Proofs.Lawful
 import Kernel.Proofs.Receive
 import Kernel.Receive.Follow
 import Codec.Proofs.Raw
@@ -157,11 +158,11 @@ theorem sum_inl_ne_inr {α β : Type} {P : α → Prop} {Q : β → Prop} {a : S
     Array.getElem?_append_left (by simp [u8, Stream.bytes])] at this
   simp [u8, Stream.bytes] at this
 
-omit [Ord D] [DecidableEq D] in
+omit [DecidableEq D] in
 /-- **Genesis commits to everything it was made from.** Two geneses with equal origins had equal
 names, nonces, allowances and founders (keys and next-key digests, in order), or the origin hash
 has a collision. -/
-theorem genesis_inj {X : Ctx D} (hb : ∀ a b : D, X.env.bytes a = X.env.bytes b → a = b)
+theorem genesis_inj {X : Ctx D} {n : Nat} (hE : X.env.Lawful n)
     {name nonce name' nonce' : ByteArray} {allowance allowance' : Nat}
     {founders founders' : List (ByteArray × D)}
     (hf : GenesisFits X name nonce allowance founders) (hf' : GenesisFits X name' nonce' allowance' founders')
@@ -181,20 +182,20 @@ theorem genesis_inj {X : Ctx D} (hb : ∀ a b : D, X.env.bytes a = X.env.bytes b
     have hinj : Function.Injective (fun f : ByteArray × D => (f.1, X.env.bytes f.2)) := by
       intro a b hab
       simp only [Prod.mk.injEq] at hab
-      exact Prod.ext hab.1 (hb _ _ hab.2)
+      exact Prod.ext hab.1 (hE.bytes_eq hab.2)
     exact map_inj hinj hl
   · right
     exact ⟨_, _, hbytes, h⟩
 
-omit [Ord D] [DecidableEq D] in
+omit [DecidableEq D] in
 /-- **The genesis chain commits to the origin** (one more hash): equal genesis chains, equal
 origins, or a collision of the genesis hash. With `genesis_inj`, equal genesis chains mean equal
 inputs, up to two collisions. -/
-theorem genesis_chain_inj {X : Ctx D} (hb : ∀ a b : D, X.env.bytes a = X.env.bytes b → a = b)
+theorem genesis_chain_inj {X : Ctx D} {n : Nat} (hE : X.env.Lawful n)
     {o o' : D} (h : X.env.hash domGenesis (X.env.bytes o) = X.env.hash domGenesis (X.env.bytes o')) :
     o = o' ∨ HashColl X.env domGenesis := by
   by_cases he : X.env.bytes o = X.env.bytes o'
-  · exact .inl (hb _ _ he)
+  · exact .inl (hE.bytes_eq he)
   · exact .inr ⟨_, _, he, h⟩
 
 

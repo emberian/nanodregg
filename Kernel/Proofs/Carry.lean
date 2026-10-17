@@ -18,6 +18,7 @@ re-genesis, never by a migration). It is checked like genesis (`carry_ok`: refus
 * `carry_replayed`: a call the exported World journaled is answered `replayed` at its height by
   the new World — answered, never re-run (PROTOCOL-29).
 -/
+import Kernel.Proofs.Lawful
 import Kernel.Proofs.Origin
 import Kernel.Proofs.Journal
 import Kernel.Proofs.CellsFit
@@ -119,7 +120,7 @@ theorem carry_fits_input {X : Ctx D} {name nonce : ByteArray} {fromOrigin : D} {
 name, nonce, exported origin, trie root, allowance, height and journal (up to `Equiv`), or the
 origin hash has a collision. -/
 theorem carry_inj [Std.TransOrd D] [Std.LawfulEqOrd D] {X : Ctx D}
-    (hb : ∀ a b : D, X.env.bytes a = X.env.bytes b → a = b)
+    {n : Nat} (hE : X.env.Lawful n)
     {name nonce name' nonce' : ByteArray} {f f' : D} {c c' : Carried D}
     (hf : CarryFits X name nonce f c) (hf' : CarryFits X name' nonce' f' c')
     (h : carryOriginOf X name nonce f c = carryOriginOf X name' nonce' f' c') :
@@ -135,11 +136,11 @@ theorem carry_inj [Std.TransOrd D] [Std.LawfulEqOrd D] {X : Ctx D}
       (ba_append_cancel _ _ _ hbytes)
     simp only [carryInputOf, Prod.mk.injEq] at he
     obtain ⟨rfl, rfl, hfo, hr, ha, hh, hl⟩ := he
-    refine ⟨rfl, rfl, hb _ _ hfo, hb _ _ hr, ha, hh, ?_⟩
+    refine ⟨rfl, rfl, hE.bytes_eq hfo, hE.bytes_eq hr, ha, hh, ?_⟩
     have hinj : Function.Injective (fun p : D × Nat × D => (X.env.bytes p.1, p.2.1, X.env.bytes p.2.2)) := by
       intro a b hab
       simp only [Prod.mk.injEq] at hab
-      exact Prod.ext (hb _ _ hab.1) (Prod.ext hab.2.1 (hb _ _ hab.2.2))
+      exact Prod.ext (hE.bytes_eq hab.1) (Prod.ext hab.2.1 (hE.bytes_eq hab.2.2))
     exact Std.TreeMap.equiv_iff_toList_eq.mpr (map_inj hinj hl)
   · right
     exact ⟨_, _, hbytes, h⟩

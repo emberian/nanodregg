@@ -8,6 +8,7 @@ turn before it.
 -/
 import Kernel.Proofs.Admit
 import Kernel.Proofs.Bytes
+import Kernel.Proofs.Lawful
 
 namespace Nanodregg.Kernel
 
@@ -17,14 +18,6 @@ variable {D : Type}
 /-- Two different inputs with one digest. -/
 def Collision (hash : String → ByteArray → D) : Prop :=
   ∃ dom a b, a ≠ b ∧ hash dom a = hash dom b
-
-/-- `E.turnBytes` is injective on the turns `checkBounds` passes. That is what the deployed codec
-proves (`Codec.Proofs.Deployed.turnBytes_injective`). Over ALL turns it is false there: `nat64`
-truncates a counter past 2^64, so two turns that differ only in such a counter share their bytes.
-No theorem here assumes the unrestricted form. -/
-def TurnBytesInjOn [Ord D] (E : Env D) : Prop :=
-  ∀ {t t' : Turn D}, checkBounds t = .ok () → checkBounds t' = .ok () →
-    E.turnBytes t = E.turnBytes t' → t = t'
 
 theorem chainOf_concat {E : Env D} :
     ∀ {c : D} {l : List (Turn D × D)} {t : Turn D} {r : D},
@@ -36,11 +29,11 @@ theorem chainOf_concat {E : Env D} :
 
 /-- One chain step between bounded turns determines its predecessor, its turn and the root after
 it, or exhibits a collision. -/
-theorem chainNext_inj [Ord D] {E : Env D} {n : Nat} (hsz : ∀ d, (E.bytes d).size = n)
-    (hb : Function.Injective E.bytes) (ht : TurnBytesInjOn E)
+theorem chainNext_inj [Ord D] {E : Env D} {n : Nat} (hE : E.Lawful n)
     {c₁ c₂ r₁ r₂ : D} {t₁ t₂ : Turn D} (hb₁ : checkBounds t₁ = .ok ()) (hb₂ : checkBounds t₂ = .ok ())
     (h : chainNext E c₁ t₁ r₁ = chainNext E c₂ t₂ r₂) :
     (c₁ = c₂ ∧ t₁ = t₂ ∧ r₁ = r₂) ∨ Collision E.hash := by
+  obtain ⟨hsz, _, hb, ht, _⟩ := hE
   unfold chainNext at h
   by_cases hin : E.bytes c₁ ++ E.bytes (turnDigest E t₁) ++ E.bytes r₁ =
       E.bytes c₂ ++ E.bytes (turnDigest E t₂) ++ E.bytes r₂
@@ -58,8 +51,7 @@ theorem chainNext_inj [Ord D] {E : Env D} {n : Nat} (hsz : ∀ d, (E.bytes d).si
 log with one root after every turn, or the hash collides, provided every turn of both logs is
 bounded (an admitted turn always is: `fold_bounded`). With `fold_chain` and `fold_height`: a
 follower holding a trusted `(height, chain)` holds the only log that produces it. -/
-theorem chain_binds [Ord D] {E : Env D} {n : Nat} (hsz : ∀ d, (E.bytes d).size = n)
-    (hb : Function.Injective E.bytes) (ht : TurnBytesInjOn E) {c : D} :
+theorem chain_binds [Ord D] {E : Env D} {n : Nat} (hE : E.Lawful n) {c : D} :
     ∀ (k : Nat) (l₁ l₂ : List (Turn D × D)), l₁.length = k → l₂.length = k →
       (∀ p ∈ l₁, checkBounds p.1 = .ok ()) → (∀ p ∈ l₂, checkBounds p.1 = .ok ()) →
       chainOf E c l₁ = chainOf E c l₂ → l₁ = l₂ ∨ Collision E.hash
@@ -72,10 +64,10 @@ theorem chain_binds [Ord D] {E : Env D} {n : Nat} (hsz : ∀ d, (E.bytes d).size
       · simp at h₂
       simp only [List.concat_eq_append] at h h₁ h₂ hl₁ hl₂ ⊢
       rw [chainOf_concat, chainOf_concat] at h
-      rcases chainNext_inj hsz hb ht (hl₁ _ (List.mem_append_right _ (List.mem_singleton_self _)))
+      rcases chainNext_inj hE (hl₁ _ (List.mem_append_right _ (List.mem_singleton_self _)))
           (hl₂ _ (List.mem_append_right _ (List.mem_singleton_self _))) h with ⟨hc, rfl, rfl⟩ | hcol
       · simp only [List.length_append, List.length_singleton, Nat.add_right_cancel_iff] at h₁ h₂
-        rcases chain_binds hsz hb ht k a₁ a₂ h₁ h₂ (fun p hp => hl₁ p (List.mem_append_left _ hp))
+        rcases chain_binds hE k a₁ a₂ h₁ h₂ (fun p hp => hl₁ p (List.mem_append_left _ hp))
             (fun p hp => hl₂ p (List.mem_append_left _ hp)) hc with rfl | hcol
         · exact Or.inl rfl
         · exact Or.inr hcol
@@ -171,8 +163,7 @@ theorem fold_bounded {E : Env D} :
 
 /-- The follower's theorem in its usable form: same start, same head after folding, same log
 (or a collision). -/
-theorem fold_head_binds {E : Env D} {n : Nat} (hsz : ∀ d, (E.bytes d).size = n)
-    (hb : Function.Injective E.bytes) (ht : TurnBytesInjOn E)
+theorem fold_head_binds {E : Env D} {n : Nat} (hE : E.Lawful n)
     {g w₁ w₂ : World D} {l₁ l₂ : List (Turn D)}
     (h₁ : World.fold E g l₁ = .ok w₁) (h₂ : World.fold E g l₂ = .ok w₂)
     (hh : w₁.height = w₂.height) (hc : w₁.chain = w₂.chain) :
@@ -182,7 +173,7 @@ theorem fold_head_binds {E : Env D} {n : Nat} (hsz : ∀ d, (E.bytes d).size = n
   obtain ⟨rs₁, hr₁, hc₁, _⟩ := fold_chain h₁
   obtain ⟨rs₂, hr₂, hc₂, _⟩ := fold_chain h₂
   rw [hc₁, hc₂] at hc
-  rcases chain_binds hsz hb ht l₁.length (l₁.zip rs₁) (l₂.zip rs₂) (by simp [hr₁])
+  rcases chain_binds hE l₁.length (l₁.zip rs₁) (l₂.zip rs₂) (by simp [hr₁])
       (by simp [hr₂, hl]) (fun p hp => fold_bounded h₁ p.1 (List.of_mem_zip hp).1)
       (fun p hp => fold_bounded h₂ p.1 (List.of_mem_zip hp).1) hc with he | hcol
   · left
@@ -198,13 +189,12 @@ theorem fold_det {E : Env D} {g w₁ w₂ : World D} {l : List (Turn D)}
 /-- **The fold reaches the host's World.** A follower that folds a log from the host's genesis and
 reaches the host's `(height, chain)` holds the host's World — every cell, nullifier, journal entry,
 the budget and the root — or the hash has a collision. -/
-theorem fold_reaches_host {E : Env D} {n : Nat} (hsz : ∀ d, (E.bytes d).size = n)
-    (hb : Function.Injective E.bytes) (ht : TurnBytesInjOn E)
+theorem fold_reaches_host {E : Env D} {n : Nat} (hE : E.Lawful n)
     {g host follower : World D} {lh lf : List (Turn D)}
     (hh : World.fold E g lh = .ok host) (hf : World.fold E g lf = .ok follower)
     (hht : follower.height = host.height) (hc : follower.chain = host.chain) :
     follower = host ∨ Collision E.hash := by
-  rcases fold_head_binds hsz hb ht hf hh hht hc with rfl | hcol
+  rcases fold_head_binds hE hf hh hht hc with rfl | hcol
   · exact .inl (fold_det hf hh)
   · exact .inr hcol
 

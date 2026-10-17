@@ -12,10 +12,9 @@ KERNEL-23 part 2, at the World:
 * `head_read_sound`: the phone's theorem. Take a head record `(prev, turnDigest, root')` that hashes
   to the chain of a World an admitted turn reached, and a proof that verifies against `root'`. Then
   that World holds the slot, or the hash collides.
-Premises: `E.bytes` is injective with one size `n`, `n ≤ 32` (CODEC proves this for the deployed
-digest); `E.cellBytes` is injective on a predicate `F` (`InjOn F E`), and every live cell of the World
-satisfies `F` (`w.CellsFit F E`). At the deployed codec `F` must be `Cell.Fits`: `cellBytes` is
-injective only there (`Codec.Kernel.cellBytes_injective`). `Kernel.Proofs.CellsFit` proves that
+Premises: `hE : E.Lawful n` (`Kernel.Proofs.Lawful`: one digest size `n ≤ 32`, injective digest
+bytes, `cellBytes` injective on `Cell.Fits`; it is not injective on every cell, CODEC-12), and every live
+cell of the World fits (`w.CellsFit Cell.Fits E`). `Kernel.Proofs.CellsFit` proves that
 genesis, admit and fold keep `CellsFit Cell.Fits` (KERNEL-31), and `Kernel.Proofs.RootedDeployed`
 discharges every premise at the deployed codec (`deployed_head_read_sound` and the inclusion
 instances), for every World a checked genesis and a fold reach.
@@ -23,6 +22,7 @@ instances), for every World a checked genesis and a fold reach.
 import Kernel.Proofs.Frame
 import Kernel.Proofs.TrieMap
 import Kernel.Receive.Follow
+import Kernel.Proofs.Lawful
 
 namespace Nanodregg.Kernel
 
@@ -68,7 +68,7 @@ theorem receive_genesis_canon (X : Receive.Ctx D) (name nonce : ByteArray) (allo
 /-! ## The deployed parameters satisfy the trie's premises -/
 
 section Params
-variable {E : Env D} {n : Nat} (hsz : ∀ d, (E.bytes d).size = n) (hb : Function.Injective E.bytes)
+variable {E : Env D} {n : Nat} (hE : E.Lawful n)
 
 omit [Ord D] [DecidableEq D] in
 theorem testBit_byte {x : UInt8} {k : Nat} (hk : 8 ≤ k) : x.toNat.testBit k = false :=
@@ -93,79 +93,80 @@ theorem byteBit_ext {a b : ByteArray} (hs : a.size = b.size)
     exact hi
   · rw [testBit_byte (by omega), testBit_byte (by omega)]
 
-include hsz hb in
-omit [Ord D] [DecidableEq D] in
+include hE in
+omit [DecidableEq D] in
 /-- The slot bits tell any two slots apart within the trie's depth. -/
-theorem slots_separate (hn : n ≤ 32) : Trie.Separates (trieSpec E) := by
+theorem slots_separate : Trie.Separates (trieSpec E) := by
+  have hn := hE.n_le
   intro k k' hne
   by_cases hk : k.isNullifier = k'.isNullifier
   · have hid : k.id ≠ k'.id := by
       intro he; apply hne
       cases k <;> cases k' <;> simp_all [Slot.isNullifier, Slot.id]
-    have hbne : E.bytes k.id ≠ E.bytes k'.id := fun he => hid (hb he)
+    have hbne : E.bytes k.id ≠ E.bytes k'.id := fun he => hid (hE.bytes_inj he)
     have : ∃ i, i < 8 * n ∧ byteBit (E.bytes k.id) i ≠ byteBit (E.bytes k'.id) i := by
       apply Classical.byContradiction; intro hno
-      apply hbne; apply byteBit_ext (by rw [hsz, hsz])
+      apply hbne; apply byteBit_ext (by rw [hE.size, hE.size])
       intro i hi
-      exact Classical.byContradiction fun hneq => hno ⟨i, by rw [hsz] at hi; exact hi, hneq⟩
+      exact Classical.byContradiction fun hneq => hno ⟨i, by rw [hE.size] at hi; exact hi, hneq⟩
     obtain ⟨i, hi, hbit⟩ := this
     exact ⟨i + 1, by show i + 1 < Bounds.trieDepth; unfold Bounds.trieDepth; omega, hbit⟩
   · exact ⟨0, by show 0 < Bounds.trieDepth; decide, hk⟩
 
-include hb in
-omit [Ord D] [DecidableEq D] in
+include hE in
+omit [DecidableEq D] in
 theorem slotBytes_inj {s s' : Slot D} (h : slotBytes E s = slotBytes E s') : s = s' := by
   unfold slotBytes at h
   obtain ⟨ht, hi⟩ := bytes_append_inj h rfl
-  have hid := hb hi
+  have hid := hE.bytes_inj hi
   have htag : s.isNullifier = s'.isNullifier := by
     by_cases a : s.isNullifier <;> by_cases b : s'.isNullifier <;> simp_all
   cases s <;> cases s' <;> simp_all [Slot.isNullifier, Slot.id]
 
-include hsz hb in
-omit [Ord D] [DecidableEq D] in
+include hE in
+omit [DecidableEq D] in
 theorem dbytes_pair_inj : ∀ a b c e : D, E.bytes a ++ E.bytes b = E.bytes c ++ E.bytes e → a = c ∧ b = e := by
   intro a b c e h
-  obtain ⟨h1, h2⟩ := bytes_append_inj h (by rw [hsz, hsz])
-  exact ⟨hb h1, hb h2⟩
+  obtain ⟨h1, h2⟩ := bytes_append_inj h (by rw [hE.size, hE.size])
+  exact ⟨hE.bytes_inj h1, hE.bytes_inj h2⟩
 
-omit [Ord D] [DecidableEq D] in
-theorem leafBody_size (kds : List (Slot D × D)) (hsz : ∀ d, (E.bytes d).size = n) :
+omit [DecidableEq D] in
+theorem leafBody_size (kds : List (Slot D × D)) (hE : E.Lawful n) :
     (Trie.leafBody (trieSpec E) kds).size = (1 + 2 * n) * kds.length := by
   induction kds with
   | nil => rfl
   | cons p rest ih =>
       show (slotBytes E p.1 ++ E.bytes p.2 ++ Trie.leafBody (trieSpec E) rest).size = _
-      simp only [ByteArray.size_append, ih, slotBytes, hsz, List.length_cons]
+      simp only [ByteArray.size_append, ih, slotBytes, hE.size, List.length_cons]
       simp only [ByteArray.size, Array.size]
       simp; rw [Nat.mul_add, Nat.mul_one]; omega
 
-include hsz hb in
-omit [Ord D] [DecidableEq D] in
+include hE in
+omit [DecidableEq D] in
 theorem leafBody_inj : ∀ x y : List (Slot D × D),
     Trie.leafBody (trieSpec E) x = Trie.leafBody (trieSpec E) y → x = y
   | [], [], _ => rfl
   | [], q :: ys, h => by
       have := congrArg ByteArray.size h
-      rw [leafBody_size _ hsz, leafBody_size _ hsz] at this
+      rw [leafBody_size _ hE, leafBody_size _ hE] at this
       simp only [List.length_nil, List.length_cons, Nat.mul_zero, Nat.mul_add, Nat.mul_one] at this
       omega
   | p :: xs, [], h => by
       have := congrArg ByteArray.size h
-      rw [leafBody_size _ hsz, leafBody_size _ hsz] at this
+      rw [leafBody_size _ hE, leafBody_size _ hE] at this
       simp only [List.length_nil, List.length_cons, Nat.mul_zero, Nat.mul_add, Nat.mul_one] at this
       omega
   | p :: xs, q :: ys, h => by
       change slotBytes E p.1 ++ E.bytes p.2 ++ Trie.leafBody (trieSpec E) xs =
         slotBytes E q.1 ++ E.bytes q.2 ++ Trie.leafBody (trieSpec E) ys at h
       have hs : ∀ (r : Slot D × D), (slotBytes E r.1 ++ E.bytes r.2).size = 1 + 2 * n := by
-        intro r; simp only [ByteArray.size_append, slotBytes, hsz]; simp [ByteArray.size]; omega
+        intro r; simp only [ByteArray.size_append, slotBytes, hE.size]; simp [ByteArray.size]; omega
       obtain ⟨hh, ht⟩ := bytes_append_inj h (by rw [hs, hs])
       have hk : (slotBytes E p.1).size = (slotBytes E q.1).size := by
-        simp only [slotBytes, ByteArray.size_append, hsz]; rfl
+        simp only [slotBytes, ByteArray.size_append, hE.size]; rfl
       obtain ⟨hk', hd⟩ := bytes_append_inj hh hk
       have := leafBody_inj xs ys ht
-      rw [Prod.ext (slotBytes_inj hb hk') (hb hd), this]
+      rw [Prod.ext (slotBytes_inj hE hk') (hE.bytes_inj hd), this]
 
 end Params
 
@@ -185,10 +186,6 @@ def Leaf.CellFit (F : Cell → Prop) : Leaf → Prop
 /-- Every leaf the World holds satisfies `F`. -/
 def World.CellsFit (F : Cell → Prop) (E : Env D) (w : World D) : Prop :=
   ∀ s l, w.trie.get (trieSpec E) s = some l → l.CellFit F
-
-/-- The cell codec is injective on `F`. -/
-def InjOn (F : Cell → Prop) (E : Env D) : Prop :=
-  ∀ a b, F a → F b → E.cellBytes a = E.cellBytes b → a = b
 
 omit [Ord D] [DecidableEq D] in
 theorem leafBytes_inj {E : Env D} {F : Cell → Prop} (hcb : InjOn F E) {l l' : Leaf}
@@ -238,18 +235,19 @@ theorem leafDigest_inj {E : Env D} {F : Cell → Prop} (hcb : InjOn F E) {l l' :
   · exact .inr ⟨domLeaf, _, _, hb, h⟩
 
 section Sound
-variable {E : Env D} {n : Nat} (hsz : ∀ d, (E.bytes d).size = n) (hb : Function.Injective E.bytes)
-include hsz hb
+variable {E : Env D} {n : Nat} (hE : E.Lawful n)
+include hE
 
-/-- **Inclusion is sound at the World**, for a claimed leaf and a World whose cells the cell codec
-encodes injectively (`F`). -/
-theorem slot_inclusion_sound {F : Cell → Prop} (hcb : InjOn F E) {w : World D} (hc : w.Canon E)
-    (hwf : w.CellsFit F E) {s : Slot D} {l : Leaf} (hlf : l.CellFit F)
+/-- **Inclusion is sound at the World**, for a claimed leaf and a World whose cells fit
+(`Cell.Fits`, where a lawful `Env`'s cell codec is injective). -/
+theorem slot_inclusion_sound {w : World D} (hc : w.Canon E)
+    (hwf : w.CellsFit Codec.Kernel.Cell.Fits E) {s : Slot D} {l : Leaf}
+    (hlf : l.CellFit Codec.Kernel.Cell.Fits)
     {p : Trie.Proof (Slot D) D} (hv : Trie.verifyInclusion (trieSpec E) (w.root E) s (leafDigest E l) p = true) :
     w.trie.get (trieSpec E) s = some l ∨ Collision E.hash := by
-  rcases Trie.inclusion_sound (trieSpec E) (leafBody_inj hsz hb) (dbytes_pair_inj hsz hb) hc.2.1 hv
+  rcases Trie.inclusion_sound (trieSpec E) (leafBody_inj hE) (dbytes_pair_inj hE) hc.2.1 hv
     with ⟨v, hg, hd⟩ | c
-  · rcases leafDigest_inj hcb (hwf s v hg) hlf hd with rfl | c
+  · rcases leafDigest_inj hE.cellBytes_injOn (hwf s v hg) hlf hd with rfl | c
     · exact .inl hg
     · exact .inr c
   · exact .inr (coll_collision c)
@@ -258,17 +256,18 @@ theorem slot_inclusion_sound {F : Cell → Prop} (hcb : InjOn F E) {w : World D}
 theorem slot_exclusion_sound {w : World D} (hc : w.Canon E) {s : Slot D} {p : Trie.Proof (Slot D) D}
     (hv : Trie.verifyExclusion (trieSpec E) (w.root E) s p = true) :
     w.trie.get (trieSpec E) s = none ∨ Collision E.hash := by
-  rcases Trie.exclusion_sound (trieSpec E) (leafBody_inj hsz hb) (dbytes_pair_inj hsz hb) hc.2.1 hv
+  rcases Trie.exclusion_sound (trieSpec E) (leafBody_inj hE) (dbytes_pair_inj hE) hc.2.1 hv
     with h | c
   · exact .inl h
   · exact .inr (coll_collision c)
 
 /-- A live cell proved against the root is the World's live cell, or the hash collides. -/
-theorem live_inclusion_sound {F : Cell → Prop} (hcb : InjOn F E) {w : World D} (hc : w.Canon E)
-    (hwf : w.CellsFit F E) {c : D} {cell : Cell} (hcf : F cell) {p : Trie.Proof (Slot D) D}
+theorem live_inclusion_sound {w : World D} (hc : w.Canon E)
+    (hwf : w.CellsFit Codec.Kernel.Cell.Fits E) {c : D} {cell : Cell} (hcf : Codec.Kernel.Cell.Fits cell)
+    {p : Trie.Proof (Slot D) D}
     (hv : Trie.verifyInclusion (trieSpec E) (w.root E) (.cell c) (leafDigest E (.entry (.live cell))) p = true) :
     w.live E c = some cell ∨ Collision E.hash := by
-  rcases slot_inclusion_sound hsz hb hcb hc hwf (l := .entry (.live cell)) hcf hv with hg | col
+  rcases slot_inclusion_sound hE hc hwf (l := .entry (.live cell)) hcf hv with hg | col
   · left; unfold World.live World.entry; rw [hg]
   · exact .inr col
 
@@ -276,15 +275,15 @@ theorem live_inclusion_sound {F : Cell → Prop} (hcb : InjOn F E) {w : World D}
 theorem unspent_sound {w : World D} (hc : w.Canon E) {nf : D} {p : Trie.Proof (Slot D) D}
     (hv : Trie.verifyExclusion (trieSpec E) (w.root E) (.nullifier nf) p = true) :
     w.isSpent E nf = false ∨ Collision E.hash := by
-  rcases slot_exclusion_sound hsz hb hc hv with hg | col
+  rcases slot_exclusion_sound hE hc hv with hg | col
   · left; unfold World.isSpent; rw [hg]; rfl
   · exact .inr col
 
 /-- **History independence at the World.** Two canonical Worlds that hold one leaf at every slot
 hold one trie, so one root. -/
-theorem trie_ext (hn : n ≤ 32) {a b : World D} (ha : a.Canon E) (hb' : b.Canon E)
+theorem trie_ext {a b : World D} (ha : a.Canon E) (hb' : b.Canon E)
     (he : ∀ s, a.trie.get (trieSpec E) s = b.trie.get (trieSpec E) s) : a.trie = b.trie :=
-  Trie.eq_of_get_eq (trieSpec E) (slots_separate hsz hb hn) ha hb' he
+  Trie.eq_of_get_eq (trieSpec E) (slots_separate hE) ha hb' he
 
 /-- A head record that hashes to an admitted World's chain names that World's root, or the hash
 collides. -/
@@ -295,20 +294,22 @@ theorem head_root {w w' : World D} {t : Turn D} (h : World.admit E w t = .ok w')
   unfold chainNext at hhead
   by_cases hin : E.bytes prev ++ E.bytes td ++ E.bytes root' =
       E.bytes w.chain ++ E.bytes (turnDigest E t) ++ E.bytes (w'.root E)
-  · obtain ⟨_, hr⟩ := bytes_append_inj hin (by simp [hsz])
-    exact .inl (hb hr)
+  · obtain ⟨_, hr⟩ := bytes_append_inj hin (by simp [hE.size])
+    exact .inl (hE.bytes_inj hr)
   · exact .inr ⟨domChain, _, _, hin, hhead⟩
 
 /-- **The phone's read.** A head record that hashes to the chain an admitted turn reached, and a
 proof that verifies against the record's root, show a slot of that World, or a collision. -/
-theorem head_read_sound {F : Cell → Prop} (hcb : InjOn F E) {w w' : World D} {t : Turn D}
-    (hc : w.Canon E) (h : World.admit E w t = .ok w') (hwf : w'.CellsFit F E) {prev td root' : D}
+theorem head_read_sound {w w' : World D} {t : Turn D}
+    (hc : w.Canon E) (h : World.admit E w t = .ok w') (hwf : w'.CellsFit Codec.Kernel.Cell.Fits E)
+    {prev td root' : D}
     (hhead : E.hash domChain (E.bytes prev ++ E.bytes td ++ E.bytes root') = w'.chain)
-    {s : Slot D} {l : Leaf} (hlf : l.CellFit F) {p : Trie.Proof (Slot D) D}
+    {s : Slot D} {l : Leaf} (hlf : l.CellFit Codec.Kernel.Cell.Fits)
+    {p : Trie.Proof (Slot D) D}
     (hv : Trie.verifyInclusion (trieSpec E) root' s (leafDigest E l) p = true) :
     w'.trie.get (trieSpec E) s = some l ∨ Collision E.hash := by
-  rcases head_root hsz hb h hhead with rfl | col
-  · exact slot_inclusion_sound hsz hb hcb (admit_canon hc h) hwf hlf hv
+  rcases head_root hE h hhead with rfl | col
+  · exact slot_inclusion_sound hE (admit_canon hc h) hwf hlf hv
   · exact .inr col
 
 /-- **The phone's read of an absence** (an unspent nullifier, an unused id) against a head. -/
@@ -318,8 +319,8 @@ theorem head_absent_sound {w w' : World D} {t : Turn D} (hc : w.Canon E)
     {s : Slot D} {p : Trie.Proof (Slot D) D}
     (hv : Trie.verifyExclusion (trieSpec E) root' s p = true) :
     w'.trie.get (trieSpec E) s = none ∨ Collision E.hash := by
-  rcases head_root hsz hb h hhead with rfl | col
-  · exact slot_exclusion_sound hsz hb (admit_canon hc h) hv
+  rcases head_root hE h hhead with rfl | col
+  · exact slot_exclusion_sound hE (admit_canon hc h) hv
   · exact .inr col
 
 end Sound
