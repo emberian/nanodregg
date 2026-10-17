@@ -6,13 +6,15 @@ goes through this same `parse`). Every verb is a constructor of `Verb` (the SIZE
 them, ceiling 20), and every way an argv can be wrong is a constructor of `ParseRefusal`.
 
 Arguments: a digest (a cell, a member, a grant, a package) is lowercase hex of its canonical
-bytes; a number is decimal; a value or package text is taken as its UTF-8 bytes; a join token
+bytes; a number is decimal; a value is taken as its UTF-8 bytes; a package is its TEXT form, read
+by LANG's one reader (`Lang.Read.readPackage`) and installed as its canonical bytes; a join token
 (what `init` prints) is lowercase hex. A member names objects by id: petnames are not part of the
 language (a member's own index of names is a later row, not a guess now).
 -/
 import Kernel.Receive.Call
 import Protocol.Table
 import Protocol.Command.Text
+import Lang.Read
 
 namespace Nanodregg.Protocol.Command
 
@@ -26,7 +28,7 @@ inductive Verb
   | enroll
   /-- `follow MEMBER`: let MEMBER follow the World, under the signer's follow grant -/
   | follow
-  /-- `install TEXT`: install a package -/
+  /-- `install TEXT`: install the package TEXT reads to (LANG's text form) -/
   | install
   /-- `create LAW…`: birth a data object owned by the signer, judged by the laws -/
   | create
@@ -92,6 +94,8 @@ inductive ParseRefusal
   | badRight (arg : String)
   | badToken (arg : String)
   | badExpect (arg : String)
+  /-- `install`'s text does not read as a package in bounds; LANG's reason -/
+  | badPackage (why : String)
   deriving DecidableEq, Repr
 
 /-- The refusal's name on the wire (law 7): the constructor, without its arguments. Distinct
@@ -100,12 +104,13 @@ def ParseRefusal.name : ParseRefusal → String
   | .argvPastBound _ => "argvPastBound" | .notUtf8 _ => "notUtf8" | .noVerb => "noVerb"
   | .unknownVerb _ => "unknownVerb" | .usage _ _ => "usage" | .badDigest _ => "badDigest"
   | .badNumber _ => "badNumber" | .badRight _ => "badRight" | .badToken _ => "badToken"
-  | .badExpect _ => "badExpect"
+  | .badExpect _ => "badExpect" | .badPackage _ => "badPackage"
 
 /-- The constructor's index, the thing a name must determine. -/
 def ParseRefusal.tag : ParseRefusal → Nat
   | .argvPastBound _ => 0 | .notUtf8 _ => 1 | .noVerb => 2 | .unknownVerb _ => 3 | .usage _ _ => 4
   | .badDigest _ => 5 | .badNumber _ => 6 | .badRight _ => 7 | .badToken _ => 8 | .badExpect _ => 9
+  | .badPackage _ => 10
 
 def usage : Verb → String
   | .init => "init SPONSOR" | .enroll => "enroll TOKEN" | .follow => "follow MEMBER"
@@ -161,6 +166,14 @@ def expectArg (s : String) : Except ParseRefusal (Nat × ByteArray) :=
     | none => .error (.badExpect s)
   | _ => .error (.badExpect s)
 
+/-- A package's text, read by LANG's reader, as its canonical bytes. -/
+def packageArg (t : String) : Except ParseRefusal ByteArray :=
+  match Lang.Read.readPackage t with
+  | .error e => .error (.badPackage e)
+  | .ok p => match Lang.Wire.encodePackage p with
+    | some b => .ok b
+    | none => .error (.badPackage "past the package bounds")
+
 /-- A trailing `--via GRANT`, or none. -/
 def viaArg (v : Verb) : List String → Except ParseRefusal (Option D)
   | [] => .ok none
@@ -182,7 +195,7 @@ def parseVerb (v : Verb) (args : List String) : Except ParseRefusal (Cmd D) :=
       | some j => .ok (.enroll j)
       | none => .error (.badToken t)
   | .follow, [m] => .follow <$> digestArg digestOf m
-  | .install, [t] => .ok (.install t.toUTF8)
+  | .install, [t] => (.install ·) <$> packageArg t
   | .create, ls => .create <$> mapEx (digestArg digestOf) ls
   | .write, o :: k :: val :: via => do
       pure (.write (← digestArg digestOf o) (← numArg k) val.toUTF8 (← viaArg digestOf .write via))

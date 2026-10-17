@@ -62,20 +62,16 @@ inductive Reply
   | submit (call k : ByteArray)
   deriving Inhabited
 
-/-- A constructor's name from its derived `Repr`: the last component of the head token. -/
-def ctorName (s : String) : String :=
-  (((s.splitOn " ").headD "").splitOn ".").getLastD ""
+variable {D : Type} [Ord D] [DecidableEq D]
 
-variable {D : Type} [Ord D] [DecidableEq D] [Repr D]
-
-/-- The refusal's name on the wire (law 7). PROTOCOL's own constructors and `ParseRefusal` are
-named here; `Receive.Refusal` and `Reject` are KERNEL's to name (ROOT ruling 2026-10-16: each owner
-provides a total `name` with `name_injective`). Until KERNEL's land, those two go through
-`ctorName` of the derived Repr, which is NOT a wire name: replace both arms with KERNEL's `name`. -/
+/-- The refusal's name on the wire (law 7): the constructor, arguments dropped. PROTOCOL's own
+constructors are named here; a receive refusal or a kernel rejection carries its owner's name
+(`Receive.Refusal.name`, `Reject.name`, each with `name_injective`), and a parse refusal the
+parser's. -/
 def Refusal.name : Refusal D → String
   | .parse r => r.name
-  | .receive r => ctorName (toString (repr r))
-  | .reject r => ctorName (toString (repr r))
+  | .receive r => r.name
+  | .reject r => r.name
   | .host n => n
   | .eventMismatch _ => "eventMismatch"
   | .badState => "badState"

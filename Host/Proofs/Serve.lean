@@ -16,7 +16,7 @@ namespace Nanodregg.Host
 
 open Nanodregg.Kernel Nanodregg.Kernel.Receive
 
-variable {D : Type} [Ord D] [DecidableEq D] [Repr D]
+variable {D : Type} [Ord D] [DecidableEq D]
 
 theorem step_submit (X : Ctx D) (w : World D) (out : Out (Turn D)) (q : Request Frame) (c : Call D)
     (hop : Protocol.Op.ofCode? q.body.op = some .submit) (hc : X.decodeCall q.body.payload = some c) :

@@ -12,9 +12,9 @@ is the kernel's or the receive layer's.
 * `read`, `log` — refused `notServed` by name until the signed read envelope exists (HOST-11);
   `command`, `resume` belong to `follow.sock` and are refused `wrongSocket`.
 
-A receipt is `u64 height ‖ turn digest`. A refusal's payload is its constructor rendered as UTF-8
-(`repr`): a name, never a parse failure posing as a verdict (law 7); CODEC's refusal codec replaces
-the rendering when it exists.
+A receipt is `u64 height ‖ turn digest`. A refusal's payload is its NAME as UTF-8, from its owner's
+total `name` (`Receive.Refusal.name`, `Reject.name`, `FrameRefusal.name`): never a parse failure
+posing as a verdict, never a derived `Repr` (law 7, ROOT ruling 2026-10-16).
 -/
 import Host.Batch
 import Host.Wire
@@ -25,7 +25,7 @@ namespace Nanodregg.Host
 
 open Nanodregg.Kernel Nanodregg.Kernel.Receive
 
-variable {D : Type} [Ord D] [DecidableEq D] [Repr D]
+variable {D : Type} [Ord D] [DecidableEq D]
 
 /-- Why the writer refuses a frame before any kernel decision. -/
 inductive FrameRefusal where
@@ -35,8 +35,16 @@ inductive FrameRefusal where
   | wrongSocket (op : Protocol.Op)
   deriving Repr
 
-def named {α : Type} [Repr α] (a : α) : UInt8 × ByteArray :=
-  (Protocol.Status.refused.code, (toString (repr a)).toUTF8)
+/-- The refusal's name on the wire. -/
+def FrameRefusal.name : FrameRefusal → String
+  | .unknownOp _ => "unknownOp"
+  | .undecodableCall => "undecodableCall"
+  | .notServed _ => "notServed"
+  | .wrongSocket _ => "wrongSocket"
+
+/-- A `refused` reply carrying a refusal's name. -/
+def named (name : String) : UInt8 × ByteArray :=
+  (Protocol.Status.refused.code, name.toUTF8)
 
 def receipt (X : Ctx D) (height : Nat) (d : D) : ByteArray :=
   Codec.Stream.u64.bytes (UInt64.ofNat height) ++ X.env.bytes d
@@ -45,28 +53,28 @@ def receipt (X : Ctx D) (height : Nat) (d : D) : ByteArray :=
 def handle (X : Ctx D) (w : World D) (f : Frame) : Answer (World D) (Turn D) :=
   let refuse := fun (p : UInt8 × ByteArray) => Answer.reply p.1 p.2
   match Protocol.Op.ofCode? f.op with
-  | none => refuse (named (FrameRefusal.unknownOp f.op))
+  | none => refuse (named (FrameRefusal.unknownOp f.op).name)
   | some .submit =>
     match X.decodeCall f.payload with
-    | none => refuse (named FrameRefusal.undecodableCall)
+    | none => refuse (named FrameRefusal.undecodableCall.name)
     | some c =>
       match w.journal[txIdOf X c]? with
       | some (h, d) => .reply Protocol.Status.ok.code (receipt X h d)
       | none =>
         match receive X w c with
-        | .error r => refuse (named r)
+        | .error r => refuse (named r.name)
         | .ok t => .admit t fun w' => receipt X w'.height (turnDigest X.env t)
   | some .lookup =>
     match X.decodeCall f.payload with
-    | none => refuse (named FrameRefusal.undecodableCall)
+    | none => refuse (named FrameRefusal.undecodableCall.name)
     | some c =>
       match w.journal[txIdOf X c]? with
       | some (h, d) => .reply Protocol.Status.ok.code (receipt X h d)
       | none => .reply Protocol.Status.absent.code ByteArray.empty
-  | some .read => refuse (named (FrameRefusal.notServed .read))
-  | some .log => refuse (named (FrameRefusal.notServed .log))
-  | some .command => refuse (named (FrameRefusal.wrongSocket .command))
-  | some .resume => refuse (named (FrameRefusal.wrongSocket .resume))
+  | some .read => refuse (named (FrameRefusal.notServed .read).name)
+  | some .log => refuse (named (FrameRefusal.notServed .log).name)
+  | some .command => refuse (named (FrameRefusal.wrongSocket .command).name)
+  | some .resume => refuse (named (FrameRefusal.wrongSocket .resume).name)
 
 /-- A Turn the kernel rejects at admission. `replayed` here means an identical call earlier in the
 same batch was staged: answer with its receipt, as for any journaled call. -/
@@ -75,8 +83,8 @@ def onReject (X : Ctx D) (w : World D) (t : Turn D) (r : Reject D) : UInt8 × By
   | .replayed _ =>
     match w.journal[t.txId]? with
     | some (h, d) => (Protocol.Status.ok.code, receipt X h d)
-    | none => named r
-  | _ => named r
+    | none => named r.name
+  | _ => named r.name
 
 /-- The writer's machine. -/
 def machine (X : Ctx D) : Machine (World D) (Turn D) (Reject D) Frame where

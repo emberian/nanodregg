@@ -70,7 +70,7 @@ theorem plan_admits {X : Ctx D} {me : Self D} {w : World D} {key : ByteArray} {b
 
 /-- Consent at the wire: the only call `step` hands the client to submit is a call over a `u`
 that `plan` produced on follow's own World (hence derived and admitted there, `plan_admits`). -/
-theorem step_submit_planned [Repr D] {X : Ctx D} {me : Self D} {w w' : World D}
+theorem step_submit_planned {X : Ctx D} {me : Self D} {w w' : World D}
     {kb result call k : ByteArray} (h : step X me w kb result = (w', .submit call k)) :
     w' = w ∧ ∃ key b u sig, plan X me w key b = .ok u ∧ call = X.callBytes ⟨u, sig⟩ := by
   unfold step next at h
