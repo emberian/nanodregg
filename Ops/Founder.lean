@@ -43,7 +43,7 @@ def createAs (me : D) (w : World D) (i : Nat) (state : Slots := []) : Call D :=
   let u : Unsigned D :=
     { world := w.origin, member := me, key, notBefore := 0, validUntil := Bounds.windowMax / 2 + i,
       pins := [(me, pinOf X.env (w.live X.env me))], maxCharge := 1 <<< 40, body := .create none [] state }
-  { unsigned := u, signature := Ed25519.sign seed (X.unsignedBytes u) }
+  { unsigned := u, signature := Ed25519.sign seed (X.callMessage u) }
 
 /-- The `i`-th call: founder 0 creates an empty data object, pinned on its own member cell as it
 is in `w` (distinct `i < windowMax / 2`, distinct `validUntil`, distinct txId), holding `state`

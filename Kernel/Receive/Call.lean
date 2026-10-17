@@ -347,6 +347,14 @@ def countOf (b : ByteArray) : Option Nat :=
 /-- The digest a member precommits for its next key. -/
 def nextKeyDigest (X : Ctx D) (key : ByteArray) : D := X.env.hash domNextKey key
 
+/-- The call signature's domain (KERNEL-42): every message a member key signs begins with its own
+domain, so a call's signature is never one over another protocol's message (a read envelope, a
+possession proof, an identity probe): `Protocol.Proofs.Domains`. -/
+def domCall : ByteArray := "nanodregg/kernel/call-signature".toUTF8
+
+/-- What a call's signature is over: `domCall`, then the call's canonical unsigned bytes. -/
+def Ctx.callMessage (X : Ctx D) (u : Unsigned D) : ByteArray := domCall ++ X.unsignedBytes u
+
 /-- What a new key signs to prove its holder asked to be enrolled by this sponsor. -/
 def possessionMessage (X : Ctx D) (sponsor : D) (next : D) (key : ByteArray) : ByteArray :=
   tagPossession ++ X.env.bytes sponsor ++ X.env.bytes next ++ key

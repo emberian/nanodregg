@@ -99,7 +99,7 @@ theorem touchesOf_pins (pins : List (D × D)) (efs : List (D × Act)) :
 Draft: what its Body derived at the signer, and every call of its tree. -/
 theorem receiveWith_sealed {X : Ctx D} {look : Pinned D} {c : Call D} {t : Turn D}
     (h : receiveWith X look c = .ok t) :
-    X.verify c.unsigned.key (X.unsignedBytes c.unsigned) c.signature = true ∧
+    X.verify c.unsigned.key (X.callMessage c.unsigned) c.signature = true ∧
       ∃ d, derive X look c = .ok d ∧ sealTurn X c d.creates d.effects d.nullifiers = .ok t := by
   unfold receiveWith at h
   simp only [except_bind_ok] at h
@@ -116,7 +116,7 @@ in order, with what the signer saw — so `World.admit`'s charge check passes by
 its pin check is the caller's own observation. -/
 theorem receive_ok {X : Ctx D} {w : World D} {c : Call D} {t : Turn D}
     (h : receive X w c = .ok t) :
-    X.verify c.unsigned.key (X.unsignedBytes c.unsigned) c.signature = true ∧
+    X.verify c.unsigned.key (X.callMessage c.unsigned) c.signature = true ∧
       t.charge = t.weight ∧ t.charge ≤ c.unsigned.maxCharge ∧
       t.touches.map (fun x => (x.cell, x.seen)) = c.unsigned.pins ∧
       t.event = X.callBytes c ∧ t.txId = txIdOf X c ∧ t.notBefore = c.unsigned.notBefore ∧

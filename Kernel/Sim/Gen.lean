@@ -198,7 +198,7 @@ def signed (P : Params D) (st : State D) (m : Member D) (key : ByteArray) (pins 
   let u : Unsigned D :=
     { world := st.host.origin, member := m.id, key := P.pub key, notBefore := 0, validUntil := st.host.height + 1 + 100, pins,
       maxCharge := 1000000, body }
-  { unsigned := u, signature := P.sign key (P.ctx.unsignedBytes u) }
+  { unsigned := u, signature := P.sign key (P.ctx.callMessage u) }
 
 def freshKey (st : State D) (tag : String) : ByteArray × State D :=
   ((s!"key-{tag}-{st.fresh}").toUTF8, { st with fresh := st.fresh + 1 })
@@ -1272,7 +1272,18 @@ def carryExpect (P : Params D) (st : State D) (w : World D) (c : Call D) (what w
       | .rejected r => r.name
   if got = want then
     { st with refusedAsExpected := st.refusedAsExpected + 1, seen := s!"{what}:{want}" :: want :: st.seen }
-  else failWith st s!"probe carry {what}: expected {want}, got {got}"
+  else failWith st s!"probe {what}: expected {want}, got {got}"
+
+/-- The call-signature domain (KERNEL-42): a fresh call signed over its bare unsigned bytes, without
+`domCall`, is refused `badSignature` at the signature check, before any derivation (so it adds
+no trie hash to the WASTE counts). That the same call signed over `callMessage` is admitted is
+every other arm's `ok` (each call the generator signs). Arm `sig-bare:badSignature`. -/
+def probeSigDomain (P : Params D) (st : State D) : State D :=
+  let X := P.ctx
+  let f := founder0 P st
+  let c := signed P st f f.key (S.pinsFor P.env st.host [f.id]) (.create none [] [])
+  let bare : Call D := { c with signature := P.sign f.key (X.unsignedBytes c.unsigned) }
+  carryExpect P st st.host bare "sig-bare" "badSignature"
 
 /-- The carry probe (KERNEL-29), at the end of every seed: the Host's World is carried under a new
 nonce. The carried World holds the same trie, allowance, height and journal (`carry_carried`)
@@ -1376,6 +1387,7 @@ def run (P : Params D) (seed : Nat) (steps : Nat) : State D :=
   let st := match audit P.ctx g st.log with
     | .ok w => if same P.env w st.host then st else { st with failures := "audit differs" :: st.failures }
     | .error (i, f) => { st with failures := s!"audit refused at {i}: {vname f}" :: st.failures }
+  let st := probeSigDomain P st
   let st := probeCarry P st
   -- KERNEL-24: the same log's calls against a second genesis (same name and founders, another
   -- nonce) are each refused `wrongWorld`; another nonce, or the founders swapped, is another chain
@@ -1436,7 +1448,7 @@ def plantedArms : List String :=
    "call-too-deep:callTooDeep", "journal-expired:outsideWindow", "journal-window-first:outsideWindow",
    "journal-kept:replayed", "journal-reuse:ok", "journal-shadow:filtered", "journal-fits:misfit",
    "journal-shadow-kept:replayed", "journal-shadow-reuse:replayed", "carry-name:nameTooLong", "carry-old-call:replayed",
-   "carry-old-world:wrongWorld", "carry-new:ok", "hash-count:empty-per-insert", "retain:canonical",
+   "carry-old-world:wrongWorld", "carry-new:ok", "sig-bare:badSignature", "hash-count:empty-per-insert", "retain:canonical",
    "retain-plant:refuted"]
 
 /-- `--seeds N` runs seeds `0 … N-1`; otherwise each argument is a seed. -/

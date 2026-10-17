@@ -1632,3 +1632,25 @@ root) was the more expensive one in theorems.
   proves plain lawfulness for World and Carried, deletes both allow rows, and re-pins the vectors.
 - HOST (HOST-10): stamp, reopen theorems, Serve's reads through `journalAt`.
 - PROTOCOL (PROTOCOL-7): rows' journal reads.
+
+## KERNEL-42 · Every message a member key signs begins with its own domain: a call's signature is over `callMessage = domCall ‖ unsignedBytes` (PROTOCOL-7 for KERNEL-11, 2026-10-17; CODEC-6's finding, ROOT ruling)
+**Decision.** `Receive.domCall` ("nanodregg/kernel/call-signature") and `Ctx.callMessage X u := domCall ++ X.unsignedBytes u`.
+- `checkSignature` (Derive) verifies `callMessage`.
+- Every signer signs it: Sim/Gen's `signed`, Ops' founder calls, and Protocol's command machine for both `sign` and `signNext`, where planMoved compares callMessage.
+- `unsignedBytes`, the call codec, txId and every tag are unchanged.
+- `receiveWith_sealed` and `receive_ok` keep their conclusions over the new message term.
+- `Protocol.Proofs.Domains` proves the four signed shapes pairwise disjoint (call, possession, envelope, whoami: six pairs), whatever follows each domain, with no hash premise.
+
+**Why.** Before this, a call's signed bytes began with the World digest. A signature over them could equal one over a read envelope (35 ASCII domain bytes) only if an origin matched those bytes, so the separation held only up to cSHAKE256 preimage resistance. That is a cross-protocol signature confusion by construction, under one key. It became load-bearing when ROOT ruled an envelope-only custody for observer keys (HOSTING-17 §7).
+
+**Teeth.**
+- kernel-sim arm `sig-bare:badSignature`: the same fresh call signed over its bare unsigned bytes is refused at Derive's verify. Its domain-signed twin is not submitted again, since every call the generator signs is that twin and an extra admission would move the WASTE hash counts; `carry-new:ok` is the nearest.
+- Each of the six pair theorems fails to build when one domain is mutated to share the other's byte at the compared index (a scratch run of six mutants, six errors).
+
+**Critique.**
+- The domains share the prefix `nanodregg/`, and disjointness rests on ONE byte per pair (index 10, 17 or 19). That is exact, but a new signed shape must pick a domain differing from all four at a byte both hold, and nothing forces a new shape to be added to the theorem set.
+- The census does not know "a member key signs this", so a fifth shape, an unprefixed one, would be invisible until someone reads the signers.
+
+**Meta-critique.** The call message was left bare because the envelope came later and added its own domain, a familiar pattern: the newer protocol is careful, and the older one is assumed safe because it was first.
+
+**Flag day.** Every signed call changes, and so does every rotation (signNext). No codec, tag or vector moves. Rows and kernel-sim re-run, and every Store re-geneses, because a log of old-signed calls re-verifies `badSignature` on replay and at audit.

@@ -15,7 +15,7 @@ open Nanodregg.Kernel
 variable {D : Type} [Ord D] [DecidableEq D]
 
 def checkSignature (X : Ctx D) (c : Call D) : Except (Refusal D) Unit :=
-  req (X.verify c.unsigned.key (X.unsignedBytes c.unsigned) c.signature) .badSignature
+  req (X.verify c.unsigned.key (X.callMessage c.unsigned) c.signature) .badSignature
 
 /-- The signer's member exists and `key` is its current key. -/
 def checkKey (look : Pinned D) (u : Unsigned D) : Except (Refusal D) Unit :=

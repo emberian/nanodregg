@@ -641,7 +641,7 @@ def runAct (l : Line) : M (Expect × String) := do
               planUnchecked X a.self w key b with
           | .error r => pure (.refused r.name, "")
           | .ok (u, _) =>
-            let call := X.callBytes ⟨u, Sim.sign key (X.unsignedBytes u)⟩
+            let call := X.callBytes ⟨u, Sim.sign key (X.callMessage u)⟩
             sawCall l.actor call
             match ← ask .submit call with
             | none => pure (.refused "writerStopped", "")

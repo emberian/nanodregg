@@ -967,3 +967,23 @@ than its docstring names. The `baseMoved` red caught it only because the expecta
 **Meta-critique.** The first reflex was to give the driver what it asked for ("no custody step"), because the request came with a ruling attached. The envelope gate is what decided it. A verb shaped by its caller's convenience is how an unsigned read would have shipped.
 
 **Status.** BUILT (this commit). Rows ALL PASS, 21.
+
+## PROTOCOL-39 · the signed shapes are pairwise disjoint by domain; the command machine signs `callMessage` (2026-10-17, PROTOCOL-7; KERNEL-42)
+**Decision.** As KERNEL-42. Protocol's part is threefold.
+- The machine has custody sign `X.callMessage u` for a call and for a rotation (`signNext`), and compares it at the call step (planMoved).
+- The rows' hostile client (`forge`) signs the same.
+- `Protocol.Proofs.Domains` (new) holds `append_ne_of_byte`, the six domain pair theorems, and the message forms:
+  - `call_not_envelope`: `domEnvelope ++ r ≠ X.callMessage u`, the observer custody's fence (CLIENT-22);
+  - `envelope_call_disjoint`;
+  - `possession_not_envelope`;
+  - `whoami_not_envelope`;
+  - `call_not_possession`;
+  - `call_not_whoami`.
+
+**Alternatives.**
+- A length check on envelope messages (155 bytes at deployed). Rejected: a call can be 155 bytes, and a fence that can never go red beside an exact one only misleads.
+- Prefixing `unsignedBytes` itself. Rejected: it would change the codec, txId and every vector, which is a larger flag day for no gain.
+
+**Critique.** `whoami` is a constant that init signs, so its signature is the same bytes for every key holder, and anyone who sees one can replay it. It is used only to learn the key at init, never as authority, but no theorem says so.
+
+**Status.** BUILT (this commit). Rows ALL PASS 21; kernel-sim ALL PASS 64 seeds, arm sig-bare met; WASTE unchanged.

@@ -7,7 +7,7 @@ any log the result carried. A write runs
 
   sign(envelope) → host(log, envelope) → [absorb: every logged event re-derived, PROTOCOL-4]
   → (page again, from the page's height, until it is the writer's tip)
-  → plan on the caught-up World → sign(unsignedBytes u) → submit(call) → done
+  → plan on the caught-up World → sign(callMessage u) → submit(call) → done
 
 and a `read` stops after the catch-up; `init` needs no World (sign twice, print a join token).
 The first envelope is valid for follow's own height + window, every later one for the tip the last
@@ -493,8 +493,8 @@ def step (X : Ctx D) (B : Thin.Base (World D)) (me : Self D) (f : Follow D) (kb 
                         | .ok b =>
                           match plan X me w' s.key b with
                           | .error r => moved w' ts (refused (D := D) r)
-                          | .ok u => moved w' ts (again 3 [startB, signedB, X.unsignedBytes u] fun k =>
-                              .sign (X.unsignedBytes u) k)
+                          | .ok u => moved w' ts (again 3 [startB, signedB, X.callMessage u] fun k =>
+                              .sign (X.callMessage u) k)
                       | _, none => moved w' ts (refused (D := D) .badState)
           | some (.refused, p) =>
               match expiredHeight? p, Text.ofU64 startB, Text.ofU64 upToB, Text.ofU64 triedB with
@@ -516,7 +516,7 @@ def step (X : Ctx D) (B : Thin.Base (World D)) (me : Self D) (f : Follow D) (kb 
               match plan X me w s.key b with
               | .error r => same (refused (D := D) r)
               | .ok u =>
-                  if X.unsignedBytes u ≠ ub then same (refused (D := D) .planMoved) else
+                  if X.callMessage u ≠ ub then same (refused (D := D) .planMoved) else
                   let c : Call D := ⟨u, s2.signature⟩
                   match receive X w c with
                   | .error r => same (refused (D := D) (.receive r))
@@ -533,8 +533,8 @@ def step (X : Ctx D) (B : Thin.Base (World D)) (me : Self D) (f : Follow D) (kb 
               | some sb, .ok b =>
                   match plan X me w s.key b with
                   | .error r => same (refused (D := D) r)
-                  | .ok u => same (again 3 [startB, sb, X.unsignedBytes u] fun k =>
-                      .signNext (X.unsignedBytes u) k)
+                  | .ok u => same (again 3 [startB, sb, X.callMessage u] fun k =>
+                      .signNext (X.callMessage u) k)
               | _, _ => same (refused (D := D) .badState)
       -- the settlement
       | _, 4, [_, _, _, out] =>
