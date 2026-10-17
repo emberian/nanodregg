@@ -488,3 +488,42 @@ Status: accepted by OPS-2 (7f7b6da); built after KERNEL-29's Carried lands.
 `i64 = refine "i64" u64 (some ∘ toInt64) toUInt64` and `i64_lawful` via `refine_lawful u64_lawful` with
 both inverse laws: a bijection on 8 bytes, so canonicity is exact and nothing is refused. The shape is
 `refine "i64" u64`, distinct from `u64`'s, so a field moving from u64 to i64 moves its tag. Accepted.
+
+## CODEC-23 · The curve formulas are proved over the field: every point `verify` computes is on edwards25519, and add/double are the Edwards law (CODEC-18's owed curve half, part 1; CODEC-3, 2026-10-17)
+**Decision.** `Codec/Proofs/Curve.lean`. The value map `⟦f⟧ := (f.toNat : Fin p)` (written out as the cast in the module: a proof module exports no notation) is a ring map on carried
+elements (`val_mul`, `val_add`, `val_sub`, `val_sq`, `val_d2 : ⟦d2⟧ = 2⟦d⟧`), so every coordinate of `P.add Q`
+and `P.double` is a polynomial in the inputs' values (`point_add_vals`, `point_double_vals`). `Point.OnCurve P`
+(a structure Prop: carried, `X Y = Z T`, `Y² − X² = Z² + d T²` in `ℤ/p`, the extended twisted Edwards curve with
+`a = −1`). In extended coordinates the curve is closed under the RFC's formulas with NO division and no
+`Z ≠ 0` (checked first with a Gröbner reduction: the result's curve equation lies in the ideal of the inputs'
+`ext` and `curve` equations; in the `Z`-only form `(Y² − X²) Z² = Z⁴ + d X² Y²` it does not, only after
+multiplying by `(Z₁Z₂)²`, which would need `ℤ/p` to be a field). Proved: `point_add_onCurve`,
+`point_double_onCurve`, `point_neg_onCurve`, `point_zero_onCurve`, `step/ladder/mul2_onCurve`, `B_onCurve`
+(by kernel arithmetic on the RFC constants), `rootCheck_solves` (what `rootCheck` returns solves `v r² = u`,
+using `⟦√−1⟧² = −1`), `signed_onCurve`, `decodePoint_onCurve`. And the laws: `point_add_law` —
+`X₃ (Z₁²Z₂² + d X₁X₂Y₁Y₂) = Z₃ (X₁Y₂ + X₂Y₁) Z₁Z₂` and `Y₃ (Z₁²Z₂² − d X₁X₂Y₁Y₂) = Z₃ (Y₁Y₂ + X₁X₂) Z₁Z₂`, i.e.
+`x₃ = (x₁y₂ + x₂y₁)/(1 + d x₁x₂y₁y₂)`, `y₃ = (y₁y₂ + x₁x₂)/(1 − d x₁x₂y₁y₂)` — and `point_double_law` (the same
+with `P = Q`). Each ring identity is proved once over any `Lean.Grind.CommRing` by `grind` and instantiated at
+`Fin p`. Tooth: `add_law_needs_ext` — `(4, 5, 3, 0)` satisfies the curve half but not `X Y = Z T`, and the
+addition law's `x` equation is false for it (`decide +kernel`, no axioms), so `ext` is a load-bearing premise.
+Cost: the module checks in ~2 s / 0.77 GB (a leaf; nothing imports it).
+**Alternatives.** (a) Prove `p` prime and work in a field, stating the laws affinely (`x₃ = …/…`). Needed for
+the remaining half (below), not for this one: the cross-multiplied statements say the same where the
+denominators are units, and need no primality. (b) Keep the RFC vectors as the only evidence for the formulas.
+(c) A Nat-coordinate spec `def` beside the deployed one, compared by a differential theorem — a second
+definition of the curve, refused (law 1); the spec here is the curve EQUATION, which is not a computation.
+**Why.** CODEC-18 proved the field and named the curve as the gap: a wrong formula with correct field
+arithmetic passed every theorem. Now a wrong addition, doubling or decompression formula fails `point_add_law`,
+`point_double_law` or `decodePoint_onCurve`.
+**Critique.** This is the curve LAW, not yet the GROUP: (1) completeness — that the denominators
+`1 ± d x₁x₂y₁y₂` (the `F`, `G` of the RFC formula, so `Z₃`) are never zero — needs `p` prime and `d` a
+non-square mod `p`; without it, `Z₃ = 0` would make both law equations hold trivially. (2) `mul2 P Q PQ a b n =
+[a]P + [b]Q` needs associativity of the law on projective classes (a much larger polynomial certificate, with
+`Z ≠ 0` cancellations, so again the field). (3) That `verify`'s final projective comparison of `[8]` multiples is
+the RFC's cofactored check is then a corollary. Until (1)–(3), the honest claim is "verified field, verified
+formulas (every point on the curve, each step the Edwards law), ladder by vectors".
+**Meta-critique.** The cross-multiplied form is exactly where a vacuous statement could hide (`Z₃ = 0` satisfies
+it), and I stopped there because the next step needs a primality certificate for 2^255 − 19 in Lean core with
+no Mathlib. That is a cost estimate, not a constraint: it is CODEC-23 part 2, the next codec obligation after
+the owed flag-day work, and it is recorded here so this half is not read as the group law.
+Status: part 1 built; part 2 (primality of p, d non-square, completeness `Z₃ ≠ 0`, `mul2` = `[a]P + [b]Q`) open.
