@@ -12,6 +12,7 @@ import runs
 import size
 import tcb
 import tree
+import vectors
 import waste
 
 ap = argparse.ArgumentParser()
@@ -82,6 +83,7 @@ results = {
     "paths": case_collisions(t.root) + conflict_markers(t.root),
     "runs": runs.check(t),
     "tcb": tcb.check(t.root),
+    "vectors": vectors.check(t.root, a.base_tree if a.base_tree and has_lakefile(a.base_tree) else None),
     "waste": waste.check(read(os.path.join(t.root, "gates", "waste.tsv")) or "", read(a.base_waste), msg),
 }
 if changed is not None:

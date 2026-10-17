@@ -282,3 +282,30 @@ build graph, every transitive crate) partly because strictness is easy to defend
 say "trusted for nothing", which is noise a reader must skip, and the unmatched-name hole is the one that matters.
 Reopen if a crypto crate lands that the list did not name: then the list is wrong, not the commit.
 **Status.** built (this commit).
+
+## GATES-13 · A codec vector is immutable under an unchanged tag (2026-10-17)
+
+**Decision.** (CODEC-6's ask on CODEC-28 (d), ec2db07.) `gates/vectors.py`, check.py gate `vectors`: for every
+(site, tag) present in both the parent's and the candidate's gates/codec-vectors.tsv, the candidate's rows are the
+parent's rows byte for byte: an edited, removed or added row under an unchanged tag is red by name. A site whose
+tag moved is free (`codec-vectors --write` re-draws it, and `--check`, a gates/generated.tsv row, proves every row's
+tag is the site's CURRENT tag and its bytes decode to its text).
+**Why.** `--check` is a decode check, not byte equality, so a hand edit of a same-tag row's text to the relabelled
+meaning checks green: the relabelling CODEC-28 (d) exists to catch would pass with the table edited to agree. The
+two halves cover each other: a hand edit that also invents a tag is refused by `--check` (tag != current tag); a
+hand edit under the real tag is refused here.
+**Alternatives.** Byte equality of the whole table against `--write`'s output (refuses CODEC's design, which keeps
+old-tag rows verbatim and draws from a generator only on a move); OWNERS `gates/codec-vectors.tsv SHARED` so a
+re-pin needs no CROSS-LAYER (not done: that loosens the owners check, a pause item, and this gate does not need it).
+**Plants** (`logs/gates3-vplants.sh`, main + gate files + one mutation, pre-push --no-build): control `PRE-PUSH
+GREEN`; `vectors: gates/codec-vectors.tsv: bool vector 0 edited under its unchanged tag c4615aa8e59d: 'ok false' ->
+'ok true' (a change of meaning needs a new tag: rename the refinement)`; `… i64 vector 1 removed under its unchanged
+tag 7ea896dd7e23`; `… bool vector 2 added under its unchanged tag c4615aa8e59d`; and the control that a moved tag
+re-draws freely: bool's two rows under a new tag with new text, `PRE-PUSH GREEN` (this gate; `--check` judges the tag).
+**Critique.** The comparison is against the PARENT only: a row's history is one commit deep, so two commits that
+each change nothing per-commit cannot exist, but a tag that moves away and later moves BACK to an old value lets
+that old tag's rows be re-drawn with no record of the first meaning. Tags are content hashes of the codec's shape,
+so returning to one means the shape returned too; the meaning of the old vectors is then the meaning of that shape.
+**Meta-critique.** I took the 20-line version CODEC-6 specified; the deeper question, whether "decoded text" is a
+faithful enough witness of meaning (Repr can print two different values alike), belongs to CODEC's printer.
+**Status.** built (this commit).
