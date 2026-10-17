@@ -6,7 +6,7 @@
 | metric | now | ceiling |
 |---|---|---|
 | Lean modules in the Host closure | 59 | 150 |
-| Lean lines (deployed) | 7609 | — |
+| Lean lines (deployed) | 7648 | — |
 | protocol operations | 6 | 6 |
 | call kinds (Receive.Body constructors) | 9 | 10 |
 | command verbs (the one command language) | 11 | 20 |
@@ -18,12 +18,12 @@
 | Rust lines (generated) | 417 | — |
 | Rust files with an unregistered generated header | 0 | 0 |
 | partial defs (deployed) | 0 | 0 |
-| theorems | 651 | — |
+| theorems | 656 | — |
 | sorry | 0 | 0 |
-| Lean modules | 140 | — |
-| Lean proof-modules | 58 | — |
+| Lean modules | 141 | — |
+| Lean proof-modules | 59 | — |
 | Lean lines (Census) | 89 | — |
-| Lean lines (Codec) | 4133 | — |
+| Lean lines (Codec) | 4219 | — |
 | Lean lines (Emit) | 351 | — |
 | Lean lines (Host) | 3110 | — |
 | Lean lines (Kernel) | 4837 | — |

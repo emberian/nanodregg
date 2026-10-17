@@ -215,4 +215,43 @@ def verify (pk msg sig : ByteArray) : Bool :=
     sbka.double.double.double.eq R.double.double.double
   | _, _ => false
 
+/-! ## Key derivation and signing (RFC 8032 §5.1.5–5.1.6)
+
+Test tooling and the reference for custody: the simulation signs with these. The deployed
+signer is custody's, in Rust, and nothing deployed calls `sign`. Not constant time. -/
+
+def Fe.inv (f : Fe) : Fe := f.pow (p - 2) 255
+
+/-- The 32 little-endian bytes of `n < 2^256`. -/
+def le32Bytes (n : Nat) : ByteArray := ⟨Array.ofFn fun i : Fin 32 => ((n >>> (8 * i.val)) % 256).toUInt8⟩
+
+/-- RFC 8032 §5.1.2: `y` little-endian with the sign of `x` in the top bit. -/
+def encodePoint (P : Point) : ByteArray :=
+  let zi := P.Z.inv
+  let x := (P.X.mul zi).toNat
+  let y := (P.Y.mul zi).toNat
+  le32Bytes (y + (x % 2) * 2 ^ 255)
+
+/-- `[k] B` for `k < 2^256`. -/
+def baseMul (k : Nat) : Point := Point.mul2 B B (B.add B) k 0 256
+
+/-- The secret scalar and the prefix of a 32-byte seed (§5.1.5). -/
+def expand (seed : ByteArray) : Nat × ByteArray :=
+  let h := (Sha512.hash seed).val
+  let a := leNat h 0 32
+  let a := (a - a % 8) % 2 ^ 254 + 2 ^ 254
+  (a, h.extract 32 64)
+
+/-- The public key of a 32-byte seed. -/
+def publicKey (seed : ByteArray) : ByteArray := encodePoint (baseMul (expand seed).1)
+
+/-- The RFC 8032 signature of `msg` under the 32-byte `seed`. -/
+def sign (seed msg : ByteArray) : ByteArray :=
+  let (a, pre) := expand seed
+  let pk := encodePoint (baseMul a)
+  let r := leNat (Sha512.hash (pre ++ msg)).val 0 64 % L
+  let R := encodePoint (baseMul r)
+  let k := leNat (Sha512.hash (R ++ pk ++ msg)).val 0 64 % L
+  R ++ le32Bytes ((r + k * a) % L)
+
 end Nanodregg.Codec.Ed25519

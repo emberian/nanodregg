@@ -322,3 +322,26 @@ tag yet; until one does, this is machinery without a consumer.
 precondition of "a tag collision is a hash collision". The consumer (HOST's Store header) is the
 part that makes it matter, and it is HOST-3's.
 Status: open (HOST to stamp `Tag.of` of `Deployed.world` and `batch` into base/segment headers).
+
+### CODEC-14 addendum · World encode/decode measured (2026-10-16)
+Measured on HOST-3's BAR-shaped World (each record: a 2-slot cell with a 128-byte value, plus a
+journal entry), compiled, this Mac, best of 5, one process per size. 290 KB: encode 0.40 ms,
+decode 3.1 ms. 29 MB: 102 ms / 687 ms. 87 MB: 263 ms / 1.57 s. That is 3 ns/B encode at both large
+sizes, so linear: one `toList` and one `foldl` per map, a unique buffer, geometric growth. The superlinear
+1.5 s at 87 MB that HOST-3 first saw is run-to-run variance in a long-lived process: a bare
+`TreeMap.foldl` over the same 3e5-node map varied 8–55 ms there. It is not an algorithmic term. The
+generic codec is ~8× a raw memcpy of the same bytes (32 ms at 87 MB), so a proven-equal specialized
+writer is the lever if a seal ever binds. Decode (~20 ns/B, the `ofList` rebuild) is the cold-reopen
+term.
+
+## CODEC-17 · An Ed25519 signer beside the verifier, as test tooling (2026-10-16)
+**Decision.** `Ed25519.publicKey seed` and `Ed25519.sign seed msg` (RFC 8032 §5.1.5–5.1.6) in Codec/Ed25519.lean,
+with RFC 8032 TEST 1 (key and signature), TEST 2 (key and signature), and `verify (publicKey s) m (sign s m)`
+on TEST 2 as kernel-checked theorems (Codec/Proofs/Ed25519Sign.lean). KERNEL's simulation signs with it.
+Custody signs in Rust, and nothing deployed calls `sign`.
+**Alternatives.** A copy inside Kernel.Sim. Or a fake verifier in the Sim (no real signatures).
+**Critique.** A signer in a deployed library tempts a later layer to sign in Lean with a secret held by
+the Host, which is a custody question (pause list). It is not constant time. Its checks cost ~13 min
+of kernel reduction in one leaf proof module.
+**Meta-critique.** I built it because the Sim needed real signatures and a twin in Kernel would be worse.
+Status: open (custody ruling stays CLIENT's).
