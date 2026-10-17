@@ -58,7 +58,7 @@ def genesisVerb (store name : String) (fs : List String) : IO UInt32 := do
   let some fs := founders fs | refuse "founders"
   let some key := Digest.ofBytes? (← IO.getRandomBytes 32) | refuse "random"
   let w₀ := Receive.genesis X name.toUTF8 allowanceMax fs
-  match ← (Host.genesis store key (Keys.ofKey key) c world w₀ :
+  match ← (Host.genesis store key (Keys.ofKey key) c world recorder.mark w₀ :
       IO (Except (StoreFault (Record.Fault (Reject D))) Unit)) with
   | .error f => refuse f.name
   | .ok () =>

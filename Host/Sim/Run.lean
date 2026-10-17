@@ -101,15 +101,9 @@ def faultName (r : Except Fault (Opening (World Nat))) : String :=
   | .error f => f.name
   | .ok _ => "opened"
 
-/-- A Store as genesis leaves it: the genesis base at offset 0 and an empty segment. -/
-def genesisBases (c : Cadence) : Bases :=
-  match Base.file keys c world genesis 0 Codec.Digest.zero [] with
-  | .ok file => { file, history := #[(file, 0)] }
-  | .error _ => {}
-
-def genesisResident : Resident (World Nat) :=
-  { world := genesis, pos := ⟨0, Codec.Digest.zero⟩, sealed := Sealed.genesis keys world recorder.mark genesis,
-    index := #[] }
+/-- The in-memory Store as genesis leaves it (`memGenesis`). -/
+def genesisStore (c : Cadence) : Except Fault (Disk × Bases × Resident (World Nat)) :=
+  memGenesis keys c world recorder.mark foldStep genesis
 
 structure RunResult where
   exit : Exit
@@ -131,8 +125,16 @@ def serveFrom (c : Cadence) (seed : Nat) (frames : List Frame) (failSyncAt : Opt
     (frames.length + 1) r none
   return ⟨exit, r, ← sent.get, ← disk.get, ← bases.get⟩
 
-def runWith (c : Cadence) (seed : Nat) (frames : List Frame) (failSyncAt : Option Nat) : IO RunResult :=
-  serveFrom c seed frames failSyncAt {} (genesisBases c) genesisResident
+def runWith (c : Cadence) (seed : Nat) (frames : List Frame) (failSyncAt : Option Nat) : IO RunResult := do
+  match genesisStore c with
+  | .ok (d, b, r) => serveFrom c seed frames failSyncAt d b r
+  | .error f => throw (IO.userError s!"genesis: {f.name}")
+
+/-- Where the log after genesis's origin frame starts (every record the loop writes is after it). -/
+def origin : Position :=
+  match genesisStore cadence with
+  | .ok (_, _, r) => r.pos
+  | .error _ => ⟨0, Codec.Digest.zero⟩
 
 def runOnce (seed : Nat) (frames : List Frame) (failSyncAt : Option Nat) : IO RunResult :=
   runWith cadence seed frames failSyncAt
@@ -221,7 +223,8 @@ def run (args : List String) : IO UInt32 := do
   check "plant-read-past-end: a read past the World bytes is refused `pastEnd`"
     ((← memBasePage 100 basesRef r.resident (r.resident.sealed.bytes + 1)).2 == "pastEnd".toUTF8) failures
   -- waste (law 5): work done ÷ work the operation must do
-  let records := (Log.recover keys.segment cadence.recordBytesMax segmentInitial r.disk.synced).records
+  let records := (Log.recover keys.segment cadence.recordBytesMax origin.tag.bytes
+    (r.disk.synced.extract origin.offset r.disk.synced.size)).records
   let turns := records.foldl (fun acc rec => match (Record.codec dc).decode rec with
     | .ok (ts, _) => acc ++ ts | .error _ => acc) []
   let admittedBytes := turns.foldl (fun n t => n + (turnCodec.bytes t).size) 0
@@ -261,10 +264,10 @@ def run (args : List String) : IO UInt32 := do
     (pagesOk && served = w.height && lastOk) failures
   check "plant-page-flip: a flipped byte in a served frame is refused `corrupt`"
     (match Id.run (Page.build env dc digestOf keys.segment cadence.recordBytesMax Page.budget
-        (fun off len => pure ((flipByte r.disk.synced 6).extract off (off + len))) r.resident.index
+        (fun off len => pure ((flipByte r.disk.synced (origin.offset + 6)).extract off (off + len))) r.resident.index
         (recorder.mark w) 0) with
      | .error f => f.name = "corrupt" | .ok _ => false) failures
-  IO.println s!"WASTE submit bytes-per-turn {ratio r.disk.synced.size admittedBytes}"
+  IO.println s!"WASTE submit bytes-per-turn {ratio (r.disk.synced.size - origin.offset) admittedBytes}"
   IO.println s!"WASTE submit fsyncs-per-batch {ratio r.disk.syncs records.length}"
   let tailBytes := match opened with | .ok o => o.pos.offset - o.sealed.offset | .error _ => 0
   -- what open must read: the base record (World, offset, tag, index) and the tail; the excess is
@@ -318,9 +321,9 @@ def run (args : List String) : IO UInt32 := do
   let (g, _) := r.bases.history[0]!
   let firstSeg := r.disk.synced.extract 0 r.bases.history[1]!.2
   let full := match reopen g firstSeg with | .ok o => o.opened.records | .error _ => 0
-  check "plant-flip-byte: corrupt" (1 < full && isCorrupt (reopen g (flipByte firstSeg 6)) 0) failures
+  check "plant-flip-byte: corrupt" (1 < full && isCorrupt (reopen g (flipByte firstSeg (origin.offset + 6))) 0) failures
   check "plant-flip-header: corrupt (the frames after it are found by the forward scan)"
-    (isCorrupt (reopen g (flipByte firstSeg 0)) 0) failures
+    (isCorrupt (reopen g (flipByte firstSeg origin.offset)) 0) failures
   check "plant-flip-last-frame: torn (the stated undecidable case: one frame lost, loudly)"
     (match reopen g (flipByte firstSeg (firstSeg.size - 1)) with
      | .ok o => 0 < o.opened.torn ∧ o.opened.records + 1 = full

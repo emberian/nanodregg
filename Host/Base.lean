@@ -98,6 +98,25 @@ def Base.file {W : Type} (keys : Keys) (c : Cadence) (world : Stream W) (w : W) 
   if c.worldBytesMax < ib then .error (.indexTooLarge ib) else
   .ok (Log.frame keys.base baseInitial ((Base.codec world).bytes ⟨w, offset, tag, index⟩))
 
+/-- A Store as genesis writes it, before any file exists: the segment holding ONE frame, the
+ORIGIN frame `Log.frame keys.segment segmentInitial origin` whose record is the genesis World's
+chain (`(mark w₀).2`: the Store's identity at height 0), and the base of `w₀` at that frame's end,
+chained from its tag. So every base sits after a frame of its own segment, and the 32 bytes
+before any base's offset are that base's tag (HOST-18). Writers of a Store (`Host.genesis` on
+files, `Host.Sim.memGenesis` in memory) write exactly these bytes; the loop's start state is what
+opening them gives (one start path). -/
+structure Image where
+  segment : ByteArray
+  base : ByteArray
+
+def genesisImage {W : Type} (keys : Keys) (c : Cadence) (world : Stream W)
+    (mark : W → Nat × ByteArray) (w₀ : W) : Except SealFault Image :=
+  let origin := (mark w₀).2
+  let segment := Log.frame keys.segment segmentInitial origin
+  match Base.file keys c world w₀ segment.size (tagDigest keys.segment (segmentInitial ++ origin)) [] with
+  | .error f => .error f
+  | .ok base => .ok ⟨segment, base⟩
+
 /-- Where a base file's World bytes are: right after the frame's length field. -/
 def worldStart : Nat := 4
 

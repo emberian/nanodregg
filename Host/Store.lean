@@ -2,7 +2,8 @@
 # Host.Store — a Store directory: genesis, the writer, the follower, and the base on disk
 
     STORE/key          32 bytes, 0600: the integrity-at-rest key (HOST-16); written once by genesis
-    STORE/seg.log      the frames (Host.Log), append-only; its append handle is flock'd
+    STORE/seg.log      the frames (Host.Log), append-only, from genesis's origin frame; its
+                       append handle is flock'd
     STORE/base.world   the newest sealed base (Host.Base); replaced atomically through base.tmp
 
 The lock IS the append handle: `openWriter` flocks the descriptor it appends through, so no byte
@@ -53,8 +54,15 @@ def readKey (dir : System.FilePath) : IO (Except (StoreFault F) Digest) := do
     | some k => return .ok k
     | none => return .error (.badKey b.size)
 
-/-- The base sealer over a Store directory: `base.tmp` → sync → rename over `base.world` → sync
-the directory. A crash leaves the old base or the new one. -/
+/-- Make `bytes` the Store's base: `base.tmp` → sync → rename over `base.world` → sync the
+directory. A crash leaves the old base or the new one. -/
+def installBase (dir : System.FilePath) (bytes : ByteArray) : IO Unit := do
+  if ← (baseTmpPath dir).pathExists then IO.FS.removeFile (baseTmpPath dir)
+  writeNew (baseTmpPath dir) bytes
+  IO.FS.rename (baseTmpPath dir) (basePath dir)
+  syncDir dir.toString
+
+/-- The base sealer over a Store directory (`installBase`). -/
 def fileCheckpoint (dir : System.FilePath) (keys : Keys) (c : Cadence) (world : Stream W)
     (async : Bool := true) : Checkpoint W where
   async
@@ -63,10 +71,7 @@ def fileCheckpoint (dir : System.FilePath) (keys : Keys) (c : Cadence) (world : 
     | .error f => return .error f
     | .ok bytes =>
       try
-        if ← (baseTmpPath dir).pathExists then IO.FS.removeFile (baseTmpPath dir)
-        writeNew (baseTmpPath dir) bytes
-        IO.FS.rename (baseTmpPath dir) (basePath dir)
-        syncDir dir.toString
+        installBase dir bytes
         return .ok (world.size w, keys.worldDigest (worldBytesOf bytes (world.size w)))
       catch e => return .error (.io (toString e))
 
@@ -110,18 +115,22 @@ def openFollower (dir : System.FilePath) (keys : Keys) (c : Cadence) (world : St
     IO (Except (StoreFault F) (Opening W)) := do
   openAt dir keys c world mark step (← File.open (segmentPath dir) .read)
 
-/-- Create a Store holding `w₀` under `key`: the key, an empty segment, and the base at offset 0.
-Refuses a directory that already holds any of them. -/
+/-- Create a Store holding `w₀` under `key`: the key, then `genesisImage`'s segment (its origin
+frame) and base, each durable before the next. Refuses a directory that already holds any of
+them; a genesis that crashed part way leaves such a directory, which opens `noBase` and is
+removed by the operator. -/
 def genesis (dir : System.FilePath) (key : Digest) (keys : Keys) (c : Cadence) (world : Stream W)
-    (w₀ : W) : IO (Except (StoreFault F) Unit) := do
+    (mark : W → Nat × ByteArray) (w₀ : W) : IO (Except (StoreFault F) Unit) := do
   for p in [keyPath dir, segmentPath dir, basePath dir, baseTmpPath dir] do
     if ← p.pathExists then return .error .exists
-  IO.FS.createDirAll dir
-  writeNew (keyPath dir) key.bytes
-  writeNew (segmentPath dir) ByteArray.empty
-  syncDir dir.toString
-  match ← (fileCheckpoint dir keys c world).write w₀ 0 ⟨segmentInitial, Digest.zero.size_eq⟩ #[] with
+  match genesisImage keys c world mark w₀ with
   | .error f => return .error (.seal f)
-  | .ok _ => return .ok ()
+  | .ok img =>
+    IO.FS.createDirAll dir
+    writeNew (keyPath dir) key.bytes
+    writeNew (segmentPath dir) img.segment
+    syncDir dir.toString
+    installBase dir img.base
+    return .ok ()
 
 end Nanodregg.Host

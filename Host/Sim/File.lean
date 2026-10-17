@@ -65,9 +65,9 @@ def run (args : List String) : IO UInt32 := do
   let key ← newKey
   let keys := Keys.ofKey key
   IO.FS.withTempDir fun dir => do
-    let made ← (Host.genesis dir key keys cadence world Sim.genesis : IO (Except Fault Unit))
+    let made ← (Host.genesis dir key keys cadence world recorder.mark Sim.genesis : IO (Except Fault Unit))
     check "genesis creates the Store" (match made with | .ok () => true | .error _ => false) failures
-    let again ← (Host.genesis dir key keys cadence world Sim.genesis : IO (Except Fault Unit))
+    let again ← (Host.genesis dir key keys cadence world recorder.mark Sim.genesis : IO (Except Fault Unit))
     check "a second genesis is refused `exists`"
       (match again with | .error .exists => true | _ => false) failures
     match ← serveDir dir keys cadence seed (frames.take 120) with
@@ -111,16 +111,18 @@ def run (args : List String) : IO UInt32 := do
   -- plant-foreign-frame, on a Store that never seals (its tail is every frame)
   IO.FS.withTempDir fun dir => do
     let still := { cadence with sealMinBytes := 1 <<< 20, recordBytesMax := 1 <<< 16 }
-    let _ ← (Host.genesis dir key keys still world Sim.genesis : IO (Except Fault Unit))
+    let _ ← (Host.genesis dir key keys still world recorder.mark Sim.genesis : IO (Except Fault Unit))
     match ← serveDir dir keys still seed (frames.take 60) with
     | .error e => check s!"plant-foreign-frame: serve ({e})" false failures
     | .ok _ =>
       let seg ← IO.FS.readBinFile (segmentPath dir)
       let rv := Log.recover keys.segment still.recordBytesMax segmentInitial seg
       match rv.records with
-      | r0 :: _ :: _ :: _ =>
-        let foreign := Log.frame (Keys.ofKey (← newKey)).segment segmentInitial r0
-        let spliced := foreign ++ seg.extract foreign.size seg.size
+      | o0 :: r1 :: _ :: _ :: _ =>
+        -- the first frame after genesis's origin frame, re-sealed under another key
+        let cut := frameSize o0
+        let foreign := Log.frame (Keys.ofKey (← newKey)).segment segmentInitial r1
+        let spliced := seg.extract 0 cut ++ foreign ++ seg.extract (cut + foreign.size) seg.size
         IO.FS.writeBinFile (segmentPath dir) spliced
         check "plant-foreign-frame: a frame under another key is refused `corrupt`"
           (match ← follow dir keys still with | .error f => f.name = "corrupt" | _ => false) failures

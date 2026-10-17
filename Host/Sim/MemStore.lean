@@ -7,6 +7,7 @@ not code in the loop: `failSyncAt n` makes the n-th sync throw (the loop must an
 `uncertain` and stop), and `crashImage` / `flipByte` produce the bytes `recover` must judge.
 -/
 import Host.Loop
+import Host.Open
 import Host.Page
 
 namespace Nanodregg.Host.Sim
@@ -51,6 +52,22 @@ def memCheckpoint {W : Type} (disk : IO.Ref Disk) (bases : IO.Ref Bases) (keys :
       let synced := (← disk.get).synced.size
       bases.modify fun b => { file, history := b.history.push (file, synced), written := b.written + file.size }
       return .ok (world.size w, keys.worldDigest (worldBytesOf file (world.size w)))
+
+/-- An in-memory Store as genesis leaves it: `genesisImage`'s segment (synced) and base, and the
+loop's state as the one open (`openWith`, with the caller's own fold step) reads them back. The
+start state is therefore never built by hand. -/
+def memGenesis {W F : Type} (keys : Keys) (c : Cadence) (world : Codec.Stream W)
+    (mark : W → Nat × ByteArray) (step : W → ByteArray → Except F W) (w₀ : W) :
+    Except (StoreFault F) (Disk × Bases × Resident W) :=
+  match genesisImage keys c world mark w₀ with
+  | .error f => .error (.seal f)
+  | .ok img =>
+    match Id.run (openWith keys c world mark step img.base img.segment.size fun off len =>
+        pure (.ok (img.segment.extract off (off + len)))) with
+    | .error f => .error f
+    | .ok o =>
+      .ok ({ synced := img.segment }, { file := img.base, history := #[(img.base, img.segment.size)] },
+        { world := o.opened.world, pos := o.pos, sealed := o.sealed, index := o.index })
 
 /-- A `read` page over the in-memory base (`Host.Page.basePage`, what `Host.Deployed.pager` does
 over base.world). -/
