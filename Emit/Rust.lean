@@ -1,5 +1,6 @@
 import Protocol.Table
 import Protocol.Attempt
+import Protocol.Exit
 import Codec.Layout
 
 /-!
@@ -402,6 +403,7 @@ def file : Except String String := do
      closeReasonEnum,
      custodyRefusalEnum,
      byteModule "step" Step.all Step.code,
+     byteModule "supervisor_exit" SupervisorExit.all (fun s => s.code.toUInt8),
      layoutModule,
      attemptModule] ++ "\n"
 

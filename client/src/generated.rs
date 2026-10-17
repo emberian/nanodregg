@@ -127,6 +127,12 @@ pub mod step {
     pub const SIGN_NEXT: u8 = 5;
 }
 
+pub mod supervisor_exit {
+    pub const REFUSED_AT_LAUNCH: u8 = 64;
+    pub const CHILD_UNROUTABLE: u8 = 65;
+    pub const CHILD_SIGNALED: u8 = 66;
+}
+
 /// The follow socket's payloads (Protocol.Table layouts; Lean codec: Protocol.Frames).
 pub mod layout {
 

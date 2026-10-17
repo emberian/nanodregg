@@ -54,6 +54,13 @@ fn nothing_hidden_is_refused() {
         .unwrap();
     assert!(!out.status.success());
     assert!(String::from_utf8_lossy(&out.stderr).contains("nothing hidden"));
+    assert_eq!(
+        out.status.code(),
+        Some(i32::from(
+            nanodregg_client::generated::supervisor_exit::REFUSED_AT_LAUNCH
+        )),
+        "the supervisor's own exit is Protocol.Exit's, so a unit prevents its restart"
+    );
 }
 
 /// The lake-built `host` this tree deploys (`ND_HOST_EXE` overrides). Missing is a failed plant,

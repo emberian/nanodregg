@@ -4,7 +4,8 @@
 //! its program, the `--read`/`--write`/`--exec` paths and the platform floor; every `--hide` path,
 //! the member's workspace first, must lie outside all of them, CLIENT-8), and moves frames between
 //! the socket's connections and the child's stdio (`mux`). It exits when the child does, with the
-//! child's status; the service manager restarts the pair. Nothing is parsed but frame headers.
+//! child's status, or with one of its own (`Protocol.Exit`, emitted: refusedAtLaunch,
+//! childUnroutable, childSignaled); the service manager restarts the pair. Nothing is parsed but frame headers.
 
 use std::ffi::OsString;
 use std::fs;
@@ -14,6 +15,7 @@ use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::process::{ExitCode, Stdio};
 
+use nanodregg_client::generated::supervisor_exit as exit;
 use nanodregg_client::mux::{self, MuxEnd};
 use nanodregg_client::table;
 use nanodregg_sandbox::{Policy, command};
@@ -83,7 +85,7 @@ fn main() -> ExitCode {
         Ok(code) => code,
         Err(e) => {
             eprintln!("{e}");
-            ExitCode::from(2)
+            ExitCode::from(exit::REFUSED_AT_LAUNCH)
         }
     }
 }
@@ -114,8 +116,9 @@ fn run() -> Result<ExitCode, String> {
         .map_err(|e| format!("nd-supervise: wait: {e}"))?;
     eprintln!("nd-supervise: {end:?}; child {status}");
     Ok(match (end, status.code()) {
-        (MuxEnd::ChildMalformed(_), _) => ExitCode::from(70),
-        (_, Some(c)) => ExitCode::from(u8::try_from(c).unwrap_or(1)),
-        (_, None) => ExitCode::from(1),
+        (MuxEnd::ChildMalformed(_), _) => ExitCode::from(exit::CHILD_UNROUTABLE),
+        // A Unix exit status is one byte; anything else is no status, as a signal is.
+        (_, Some(c)) => ExitCode::from(u8::try_from(c).unwrap_or(exit::CHILD_SIGNALED)),
+        (_, None) => ExitCode::from(exit::CHILD_SIGNALED),
     })
 }
