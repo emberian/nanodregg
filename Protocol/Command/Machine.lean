@@ -70,6 +70,8 @@ inductive Refusal (D : Type)
   | behind (height tip : Nat)
   /-- a base download refused, by `Protocol.Thin`'s name -/
   | thin (r : Thin.Refusal)
+  /-- custody refused the step, by its name (`CustodyRefusal`) -/
+  | custody (r : CustodyRefusal)
 
 /-- A step answered to the client. -/
 inductive Reply
@@ -102,6 +104,7 @@ def Refusal.name : Refusal D → String
   | .chainMismatch _ => "chainMismatch"
   | .behind _ _ => "behind"
   | .thin r => r.name
+  | .custody r => r.name
 
 def refused (r : Refusal D) : Reply := .done 1 ByteArray.empty s!"refused {r.name}\n".toUTF8
 def printed (out : String) : Reply := .done 0 out.toUTF8 ByteArray.empty
@@ -161,6 +164,29 @@ def Signed.ofBytes (b : ByteArray) : Option Signed :=
 def Signed.bytes (s : Signed) : Option ByteArray := do
   let f := Text.fit Bounds.frameBytesMax
   pure (signResultFrame.bytes (← f s.key, ← f s.next, ← f s.signature, ()))
+
+/-- A reply as `u8 status ‖ payload`, the shape of every step result. -/
+def hostReply (b : ByteArray) : Option (Status × ByteArray) :=
+  if h : 0 < b.size then (Status.ofCode? b[0]).map (·, b.extract 1 b.size) else none
+
+/-- The phases whose result is custody's: 1 (an envelope's or init's signature), 2 for `init`
+only (its possession signature; every other verb's phase 2 is a `log` reply), 3 (a call's
+signature, by `sign` or `signNext`), 5 (`precommit`), 6 (an adopt envelope's signature). -/
+def custodyPhase (isInit : Bool) (phase : UInt8) : Bool :=
+  phase == 1 || phase == 3 || phase == 5 || phase == 6 || (isInit && phase == 2)
+
+/-- Custody's result (`u8 status ‖ payload`): ok hands on the payload, refused carries one of
+`CustodyRefusal` by `custodyRefusalLayout`; anything else is `badResult`. -/
+def custodyResult (b : ByteArray) : Except (Refusal D) ByteArray :=
+  match hostReply b with
+  | some (.ok, p) => .ok p
+  | some (.refused, p) =>
+      match custodyRefusalFrame.decode p with
+      | .ok (c, ()) => match CustodyRefusal.ofCode? c.1 with
+        | some r => .error (.custody r)
+        | none => .error .badResult
+      | .error _ => .error .badResult
+  | _ => .error .badResult
 
 /-- Custody's answer to `precommit`: its next and pending public keys. -/
 def precommitOf (b : ByteArray) : Option (ByteArray × ByteArray) :=
@@ -238,8 +264,6 @@ def absorb (X : Ctx D) : World D → Array (Turn D) → List ByteArray →
         | .ok (t, w') => absorb X w' (ts.push t) es
         | .error _ => .error (.eventMismatch (w.height + 1))
 
-def hostReply (b : ByteArray) : Option (Status × ByteArray) :=
-  if h : 0 < b.size then (Status.ofCode? b[0]).map (·, b.extract 1 b.size) else none
 
 /-- A log page: the events, the writer's height and chain after the last of them, and the
 writer's tip when it built the page. A tip below the page's own height is not a page. -/
@@ -295,6 +319,7 @@ def start (X : Ctx D) (me : Self D) (f : Follow D) (argv : List ByteArray) : Rep
   | .error r => refused (D := D) (.parse r)
   | .ok (.init _) => next (D := D) ⟨argv, 1, []⟩ fun k => .sign whoami k
   | .ok (.adopt pin) =>
+      if w.height ≠ 0 then refused (D := D) (.thin (.notAtGenesis w.height)) else
       if pin.height ≤ w.height then refused (D := D) (.thin (.notBehind w.height)) else
       let off := Thin.offset pin f.download
       next (D := D) ⟨argv, 6, [Text.u64 off, Text.u64 0]⟩ fun k => .sign (adoptEnvelope X me pin off) k
@@ -318,6 +343,12 @@ def step (X : Ctx D) (B : Thin.Base (World D)) (me : Self D) (f : Follow D) (kb 
   | some st, .ok cmd =>
       let again (phase : UInt8) (acc : List ByteArray) (f : ByteArray → Reply) : Reply :=
         next (D := D) ⟨st.argv, phase, acc⟩ f
+      -- the phases that asked custody (sign, signNext, precommit) get `status ‖ payload` from it:
+      -- a refusal ends the command by custody's name, an ok hands on its payload
+      let isInit := match cmd with | .init _ => true | _ => false
+      match (if custodyPhase isInit st.phase then custodyResult (D := D) result else .ok result) with
+      | .error r => same (refused (D := D) r)
+      | .ok result =>
       match cmd, st.phase, st.acc with
       -- init: learn the key, sign the possession, print the token
       | .init sponsor, 1, [] =>

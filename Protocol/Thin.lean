@@ -12,7 +12,9 @@ served base is `baseMismatch`. From the adopted World on, the member is an ordin
 same catch-up re-derives every event after the base (PROTOCOL-4), so consent is full from the pin
 on; what it trusts is the history before it.
 
-Bytes are checked against the pin BEFORE they are decoded: undecodable bytes that hash to the pin
+The pin binds the World's every byte, so its height AND its chain (both in the World bytes): the
+decoded World's height is checked against the pin's, and its chain is what the next `log` page
+must continue (`chainMismatch` otherwise). Bytes are checked against the pin BEFORE they are decoded: undecodable bytes that hash to the pin
 are the pin's fault (`baseUndecodable`), never a guess about the writer.
 -/
 import Protocol.Frames
@@ -81,6 +83,10 @@ inductive Refusal
   | baseUndecodable
   /-- follow's World is already at or past the pin: nothing to adopt -/
   | notBehind (height : Nat)
+  /-- follow's own Store already holds Turns past genesis: an adopted base over them would leave
+  two histories in one Store, follow's own up to `height` and the writer's from the pin, with the
+  heights between in neither (HOST-3's review; law 1). A thin member adopts from a fresh Store. -/
+  | notAtGenesis (height : Nat)
   /-- the command read its page budget; the download is kept and the member runs it again -/
   | incomplete (got total : Nat)
   deriving DecidableEq, Repr
@@ -89,10 +95,11 @@ def Refusal.name : Refusal → String
   | .badPage => "badPage" | .baseMoved _ => "baseMoved" | .baseMismatch => "baseMismatch"
   | .pageMismatch => "pageMismatch" | .baseTooLarge _ => "baseTooLarge"
   | .baseUndecodable => "baseUndecodable" | .notBehind _ => "notBehind" | .incomplete _ _ => "incomplete"
+  | .notAtGenesis _ => "notAtGenesis"
 
 def Refusal.tag : Refusal → Nat
   | .badPage => 0 | .baseMoved _ => 1 | .baseMismatch => 2 | .pageMismatch => 3
-  | .baseTooLarge _ => 4 | .baseUndecodable => 5 | .notBehind _ => 6 | .incomplete _ _ => 7
+  | .baseTooLarge _ => 4 | .baseUndecodable => 5 | .notBehind _ => 6 | .incomplete _ _ => 7 | .notAtGenesis _ => 8
 
 /-- The download held for `pin`, if any (a download for another pin is dropped). -/
 def held (pin : Pin) : Option Download → Option Download

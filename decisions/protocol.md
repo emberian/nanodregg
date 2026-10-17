@@ -378,6 +378,56 @@ CLIENT's nd calls through the generated table or follow, and which the loopback 
 of restating CLIENT-3's Rust rule. **Critique.** It moves a step across the follow socket per
 settlement, or needs a Lean runtime in nd. **Meta-critique.** I found this because my loopback had
 to restate it; a twin I wrote is the evidence. **Status.** open; CLIENT-3 implements when spawned.
+**Built (2026-10-17, PROTOCOL-4).** `Protocol/Attempt.lean`: `next (sendsLeft : Bool) (last :
+Option (Request × Seen)) : Action` over `Seen` = committed | refused | unknown | absent | lost (no
+reply: a dropped connection, a crash, `replyMsMax`) and `Action` = submit | lookup | committed |
+refused | absent | badReply | uncertain. Never sent ⇒ submit; committed/refused ⇒ over; a submit
+unknown or lost ⇒ lookup (never a second submit: the first may still be queued); a lookup absent ⇒
+submit while sends remain, else over `absent`; absent to a submit ⇒ `badReply`; a lookup unknown or
+lost ⇒ the run ends `uncertain`, the attempt unsettled on disk for the next run (CLIENT-2's
+objection: an unbounded lookup loop; `next_after_lookup` bounds a run at two requests per send). `Attempt.table` is the
+decision as 22 rows of data for CODEC to emit; `table_complete` + `inputs_nodup` say the table IS
+the function. Theorems: `next_submit` (a submit only for a never-sent call or after a lookup said
+absent with a send left), `next_after_unknown`, `next_committed`, `next_no_send_left`. The rows'
+attempt store (`Loopback.drive`) now runs `next` for every request; `neverForward` drops every
+submit, so the rotation that never reached the writer ends `absent` after `sendsMax` sends.
+**Critique of the built shape.** `absent` is not final: a lookup cannot tell "not yet" from "never"
+until the Host answers a dead call (past its `validUntil`, not journaled) as refused `expired`,
+which needs KERNEL's `absent_final` (HOST-8's ask, routed through ROOT). Until then a call dead by
+window is resent up to `sendsMax` times and ends `absent`, not `expired`. `sendsLeft` is computed
+by the client (`sends < Bounds.sendsMax`): a comparison, not a decision, but it is Rust.
+
+## PROTOCOL-20 · `Bounds.replyMsMax` = 120000: the client's per-request reply deadline (2026-10-17, ROOT's ask for CLIENT-2)
+**Decision.** One request (a frame on either socket) waits at most `replyMsMax` for its reply; past
+it the client reports `timeout` by name, and a request carrying a frozen call is `Attempt.Seen.lost`
+(uncertain: the attempt goes on by lookup), never refused. 120 s: above a writer's worst
+legitimate wait (an inline seal before an append, plus a supervisor restart whose cold reopen THE
+BAR bounds at 60 s) and below `idleMsMax` (`Bounds.reply_within_idle`), so the supervisor never
+closes a connection a client still waits on.
+**Alternatives.** A per-op deadline (submit longer than lookup); no deadline (the hang ROOT found);
+the BAR's 5 s (a correct writer mid-seal would read as dead).
+**Critique.** One number for both sockets: a follow step that absorbs a full page of events (each
+re-derived, LANG laws included) or hashes a 256 MiB base on its last adopt page may legitimately
+take seconds; 120 s covers it, but nothing measures it. A timeout that fires on a slow but alive
+writer only costs a lookup. **Meta-critique.** The number is the BAR's 60 s doubled, not measured.
+**Status.** open.
+
+## PROTOCOL-21 · custody results are `status ‖ payload` with named refusals (2026-10-17, CLIENT-2's ask)
+**Decision.** Every step result is `u8 status ‖ payload`: the Host's for `host`/`submit`; custody's
+for `sign`/`signNext`/`precommit` is `ok ‖ signResultLayout|precommitResultLayout` or `refused ‖
+custodyRefusalLayout` (one `oneOf` byte of `CustodyRefusal`: fileRefused exists shape holdingAbsent
+noPending rotationInFlight mismatch io — CLIENT-2's CustodyError, its `Mismatch` detail dropped).
+Follow unwraps it at every custody phase (`custodyPhase`, `custodyResult`) and ends the command
+`refused NAME`; an undecodable custody result is `badResult`. `CustodyRefusal.name_injective`,
+`code_injective`, `custodyRefusalFrame_lawful`. client/src/run.rs prefixes `status::OK` to custody's
+answer (`Outcome::result`); CLIENT-2 maps its errors to the refused form once CODEC emits the codes.
+**Alternatives.** Refusal names as UTF-8 (the Host's form): an open set, so a typo is a new name.
+**Critique.** `mismatch`'s detail (which key disagreed) is lost on the wire; it stays in nd's
+stderr. No row drives a custody refusal yet (the loopback's custody never refuses).
+**Meta-critique.** The set is CLIENT's enum read today; a custody refusal CLIENT adds later needs
+a table row here first, which is the point.
+**Status.** open.
+
 
 ## PROTOCOL-18 · thin consent BUILT (option A): `adopt HEIGHT DIGEST`, `Protocol.Thin.accept`, follow's state holds the download (2026-10-16)
 **Decision.** `read` is unreserved (and `Op.reserved` deleted: a function that is always false is a

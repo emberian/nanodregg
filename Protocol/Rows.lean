@@ -51,6 +51,9 @@ inductive Act
   /-- the actor, a full follower, states the pin of its own World out of band (the channel is
   Ember's, unbuilt): binds `NAME` to the digest of its World bytes and `NAME.h` to its height -/
   | attest (name : String)
+  /-- the actor's last frozen call is submitted, byte-identical, to a SECOND writer made by a second
+  genesis with the same name and founders (OPS's cross-World replay) -/
+  | replayElsewhere
   deriving Repr
 
 /-- A fault the transport or the client injects into one command. -/
@@ -329,6 +332,20 @@ def thin : Row where
     no "late" ["adopt", "@pin.h", "@pin"] "baseMoved"])
   plant := .caught .forgeBase 17 (.refused "baseMismatch")
 
+/-- Cross-World replay (OPS, ASSEMBLY-ops D3; reproduced on 87c721e against the `host` exe): two
+`host genesis` runs with the same name and founders make two Worlds that admit each other's calls,
+so a call committed in A is admitted in B. The call must be bound to its World's genesis. -/
+def wrongWorld : Row where
+  name := "wrongWorld"
+  replaces := ["ops/replay-20261016"]
+  ops := everyWrite
+  kinds := ["enroll", "install", "create", "grant", "write"]
+  drive := .members (welcome ++ [
+    ok "newcomer" ["write", "@shared", "2", "1", "--via", "@g"],
+    { actor := "newcomer", act := .replayElsewhere, expect := .refused "wrongWorld" }])
+  plant := .caught .skipJudge 7 .ok
+  blockedOn := some "KERNEL: a signed World binding in every call (genesis origin or a per-genesis nonce) and its refusal `wrongWorld`; the plant becomes 'B ignores the binding' when it lands"
+
 /-- JPAY1–4, JPAY6: observed payments become credit. Pay is an installed package (LANG's to
 write, `world/pay/Book`), invoked by members and by the watcher, not a receiver family. -/
 def pay : Row where
@@ -381,7 +398,7 @@ def grain : Row where
     ok "owner" ["grain", "start"],
     no "owner" ["grain", "mount", "b"] "crossWorldVolume"]
   plant := .caught .skipJudge 2 .ok
-  blockedOn := some "CLIENT: the sandbox broker (grain start/get/mount, crossWorldVolume); LANG: world/grain/Lifecycle"
+  blockedOn := some "LANG: Read.dataAt (a seed's text at a state type); PROTOCOL: `create --pkg PKG --state TEXT`; HOSTING: world/grain/Lifecycle landing (HOSTING-3/11: methods start 0 stop 1 remove 2, args empty; rewrite this row's drive to HOSTING's proposed lines, delete crossWorldVolume)"
 
 /-- hermes: a hosted agent is a member with its own seed; the reply to its install is lost (killed
 after the send); the attempt settles by lookup, once, and is never signed afresh (a second install
@@ -432,7 +449,7 @@ def langJourney : Row where
   plant := .internal "a program whose judge admits everything: L4 set 101 must be admitted"
 
 def rows : List Row :=
-  [journey, reopen, laws, rotate, audit, paging, thin, pay, well, bounty, grain, hermes, bar,
+  [journey, reopen, laws, rotate, audit, paging, thin, wrongWorld, pay, well, bounty, grain, hermes, bar,
    langJourney]
 
 end Nanodregg.Protocol

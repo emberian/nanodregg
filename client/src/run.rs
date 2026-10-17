@@ -29,11 +29,12 @@ pub enum Outcome {
 }
 
 impl Outcome {
-    /// The `result` field of `resume` (`Protocol.resumeLayout`): the signature, or the Host's
-    /// reply frame body as it arrived (`u8 status ‖ payload`, the shape [`crate::frame`] reads).
+    /// The `result` field of `resume` (`Protocol.resumeLayout`): every result is
+    /// `u8 status ‖ payload` — custody's answer under `status::OK`, or the Host's reply frame body
+    /// as it arrived (the shape [`crate::frame`] reads).
     pub fn result(&self) -> Vec<u8> {
         match self {
-            Self::Custody(s) => s.clone(),
+            Self::Custody(s) => [&[crate::generated::status::OK][..], s].concat(),
             Self::Reply { status, payload } => [&[*status][..], payload].concat(),
         }
     }

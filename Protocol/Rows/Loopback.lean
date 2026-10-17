@@ -21,6 +21,7 @@ import Protocol.Rows.Writer
 import Protocol.Rows.Judge
 import Protocol.Command.Wire
 import Host.Follow
+import Protocol.Attempt
 
 namespace Nanodregg.Protocol.Rows.Loopback
 
@@ -172,17 +173,18 @@ def boundToken (out : String) : Option String :=
 
 /-! ## Custody and the writer's socket -/
 
-/-- Custody's answer to a sign step: `(key, next, signature)`; `stolen` replaces the key it signs
+/-- Custody's answer to a sign step: `ok ‖ (key, next, signature)` (every step result is
+`status ‖ payload`); `stolen` replaces the key it signs
 with (a thief holding a victim's current key). -/
 def signWith (key next msg : ByteArray) : ByteArray :=
   match Text.fit Bounds.frameBytesMax key, Text.fit Bounds.frameBytesMax next,
       Text.fit Bounds.frameBytesMax (Sim.sign key msg) with
-  | some k, some n, some s => signResultFrame.bytes (k, n, s, ())
+  | some k, some n, some s => ByteArray.mk #[Status.ok.code] ++ signResultFrame.bytes (k, n, s, ())
   | _, _, _ => ByteArray.empty
 
 def precommitResult (next pending : ByteArray) : ByteArray :=
   match Text.fit Bounds.frameBytesMax next, Text.fit Bounds.frameBytesMax pending with
-  | some n, some p => precommitResultFrame.bytes (n, p, ())
+  | some n, some p => ByteArray.mk #[Status.ok.code] ++ precommitResultFrame.bytes (n, p, ())
   | _, _ => ByteArray.empty
 
 /-- The actor's custody name and current key under a fault (a thief signs with a stolen key). -/
@@ -253,6 +255,56 @@ def pageFault : Fault → ByteArray → ByteArray
 def coldFault : Fault → Bool
   | .flipEvent _ | .dropLastEvent | .cold => true
   | _ => false
+
+/-! ## The attempt store -/
+
+/-- A reply, as the attempt decision sees it (its status byte; no reply at all is `lost`). -/
+def classify (res : ByteArray) : Attempt.Seen :=
+  match Command.hostReply res with
+  | some (.ok, _) => .committed
+  | some (.refused, _) => .refused
+  | some (.uncertain, _) => .unknown
+  | some (.absent, _) => .absent
+  | none => .lost
+
+/-- Requests one attempt may make in one run: every send, and at most one lookup after each
+(`Proofs.Attempt.next_after_lookup`), and one more for the decision that ends it. -/
+def attemptFuel : Nat := 2 * Bounds.sendsMax + 2
+
+/-- The attempt store settles the frozen `call` with `Protocol.Attempt.next` deciding every
+request (PROTOCOL-17): the rows run the decision CLIENT-3 runs, not a restatement of it. Faults:
+`dropReply` loses the reply to the FIRST submit after the writer took it; `neverForward` keeps
+every submit from reaching the writer. The settling reply, `status ‖ payload`, is what follow is
+resumed with; custody settles an armed rotation on it. -/
+def drive (name : String) (call : ByteArray) (fault : Fault) :
+    Nat → Nat → Option (Attempt.Request × Attempt.Seen) → Option ByteArray → M (Except String ByteArray)
+  | 0, _, _, _ => pure (.error "attemptFuel")
+  | fuel + 1, sends, last, reply => do
+      match Attempt.next (decide (sends < Bounds.sendsMax)) last with
+      | .submit =>
+          match fault with
+          | .neverForward => drive name call fault fuel (sends + 1) (some (.submit, .lost)) reply
+          | _ =>
+              match ← ask .submit call with
+              | none => pure (.error "writerStopped")
+              | some res =>
+                  match fault, sends with
+                  | .dropReply, 0 => drive name call fault fuel (sends + 1) (some (.submit, .lost)) reply
+                  | _, _ => drive name call fault fuel (sends + 1) (some (.submit, classify res)) (some res)
+      | .lookup =>
+          match ← ask .lookup call with
+          | none => pure (.error "writerStopped")
+          | some res => drive name call fault fuel sends (some (.lookup, classify res)) (some res)
+      | .committed | .refused | .absent =>
+          match reply with
+          | some r => settle name call r; pure (.ok r)
+          | none => pure (.error "noReply")
+      | .badReply => pure (.error Attempt.Action.badReply.name)
+      | .uncertain =>
+          -- the run stops unsettled: follow is told `uncertain`
+          match reply with
+          | some r => pure (.ok r)
+          | none => pure (.ok (ByteArray.mk #[Status.uncertain.code]))
 
 /-! ## One command -/
 
@@ -348,21 +400,15 @@ def steps (name : String) (argv : List String) (fault : Fault) (depth : Nat) (b 
                   let (o, _) ← command other av .none depth
                   if o ≠ .ok then return (.refused s!"race:{o.text}", "")
           | _ => pure ()
-          match fault with
-          | .dropReply =>
+          match fault, (← get).sys.resendFresh with
+          | .dropReply, true =>
+              -- the plant: the reply is lost and the client signs the command afresh
               let _ ← ask .submit call
-              if (← get).sys.resendFresh then command name argv .none depth
-              else match ← ask .lookup call with
-                | none => pure (.refused "writerStopped", "")
-                | some res => settle name call res; resume name argv fault depth k res fuel
-          | .neverForward =>
-              match ← ask .lookup call with
-              | none => pure (.refused "writerStopped", "")
-              | some res => settle name call res; resume name argv fault depth k res fuel
-          | _ =>
-              match ← ask .submit call with
-              | none => pure (.refused "writerStopped", "")
-              | some res => settle name call res; resume name argv fault depth k res fuel
+              command name argv .none depth
+          | _, _ =>
+              match ← drive name call fault attemptFuel 0 none none with
+              | .error e => pure (.refused e, "")
+              | .ok res => resume name argv fault depth k res fuel
 termination_by fuel => (depth, fuel + 1)
 end
 
@@ -408,6 +454,9 @@ def retry (name : String) : M Expect := do
   match (← actor name).last with
   | none => pure (.refused "noAttempt")
   | some call =>
+      -- a probe of a call the attempt store already settled: ONE lookup of the same bytes, so a
+      -- journal that forgot it answers `absent` here (reopen's plant), instead of the attempt
+      -- decision resending it (which a forgotten journal would admit twice)
       match ← ask .lookup call with
       | none => pure (.refused "writerStopped")
       | some res => settle name call res; pure (statusOutcome res)
@@ -423,6 +472,20 @@ def runAct (l : Line) : M (Expect × String) := do
       | .ok av => command l.actor av l.fault 4
   | .restart => pure (← restart false, "")
   | .seal => pure (← restart true, "")
+  | .replayElsewhere => do
+      -- a SECOND writer from the same genesis (same name, same founders), and the actor's last
+      -- frozen call submitted to it byte-identical (OPS's cross-World replay)
+      let st ← get
+      let some call := (← actor l.actor).last | return (.refused "noAttempt", "")
+      match ← Writer.genesisStore st.sys.writer st.genesis with
+      | .error e => return (.refused e, "")
+      | .ok (mem, r₀) =>
+          let h ← Writer.start st.sys.writer mem r₀
+          let r ← h.ask ⟨0, Op.submit.code, call⟩
+          let _ ← h.stop
+          match r with
+          | some r => pure (statusOutcome (ByteArray.mk #[r.status] ++ r.payload), "")
+          | none => pure (.refused "writerStopped", "")
   | .attest pin => do
       let w := (← actor l.actor).follow.world
       bind pin (Text.toHex (base.digest (Sim.world.bytes w)))

@@ -170,8 +170,11 @@ end Step
 /-- The `command` payload: the member's argv. -/
 def commandLayout : Codec.Layout := [.list "argv"]
 
-/-- The `resume` payload: the continuation from the step, and that step's result (the signature
-for `sign`; the Host's reply, `u8 status ‖ payload`, for `host` and `submit`). -/
+/-- The `resume` payload: the continuation from the step, and that step's result. EVERY result is
+`u8 status ‖ payload` (`Status`): for `host` and `submit` the Host's reply; for the custody steps
+(`sign`, `signNext`, `precommit`) `ok ‖ signResultLayout` / `ok ‖ precommitResultLayout`, or
+`refused ‖ custodyRefusalLayout` when custody refuses, so follow ends the command with the
+refusal's name instead of the client exiting with a code (CLIENT-2's ask). -/
 def resumeLayout : Codec.Layout := [.bytes "k", .bytes "result"]
 
 /-- What custody answers to a `sign` step (the `result` of the `resume`): its current public key,
@@ -182,6 +185,51 @@ def signResultLayout : Codec.Layout := [.bytes "key", .bytes "next", .bytes "sig
 /-- What custody answers to a `precommit` step: its NEXT public key and its PENDING public key (the
 one a rotation to `next` precommits, by digest). -/
 def precommitResultLayout : Codec.Layout := [.bytes "next", .bytes "pending"]
+
+/-- Why custody refuses a step (CLIENT-2's `CustodyError`, as names on the wire). A custody result
+that is `refused` carries exactly one of these (`custodyRefusalLayout`); follow renders it by
+name. -/
+inductive CustodyRefusal
+  /-- a custody file or the holding directory failed the custody checks (mode, owner, kind) -/
+  | fileRefused
+  /-- a key file already exists where a new one was asked for -/
+  | exists
+  /-- the workspace has both custody shapes, or neither -/
+  | shape
+  /-- the separate holding of the next key is not named or not present -/
+  | holdingAbsent
+  /-- `signNext` without a precommitted pending key -/
+  | noPending
+  /-- a rotation is already armed; it is settled first -/
+  | rotationInFlight
+  /-- a key file disagrees with the keys the rotation or the workspace names -/
+  | mismatch
+  /-- the file system failed -/
+  | io
+  deriving DecidableEq, Repr
+
+namespace CustodyRefusal
+
+def all : List CustodyRefusal :=
+  [fileRefused, .exists, shape, holdingAbsent, noPending, rotationInFlight, mismatch, io]
+
+def code : CustodyRefusal → UInt8
+  | fileRefused => 0 | .exists => 1 | shape => 2 | holdingAbsent => 3 | noPending => 4
+  | rotationInFlight => 5 | mismatch => 6 | io => 7
+
+def name : CustodyRefusal → String
+  | fileRefused => "fileRefused" | .exists => "exists" | shape => "shape"
+  | holdingAbsent => "holdingAbsent" | noPending => "noPending"
+  | rotationInFlight => "rotationInFlight" | mismatch => "mismatch" | io => "io"
+
+def ofCode? (b : UInt8) : Option CustodyRefusal := all.find? (·.code == b)
+
+end CustodyRefusal
+
+/-- A refused custody result's payload: the refusal, one byte, refused as `badTag` unless it is
+one of `CustodyRefusal`'s codes (by the Lean codec and the emitted Rust reader alike). -/
+def custodyRefusalLayout : Codec.Layout :=
+  [.oneOf "refusal" (CustodyRefusal.all.map fun r => (r.name, r.code))]
 
 /-- The READ ENVELOPE: the payload of `log` (and `read`). A member's request to read the writer's
 log from a height, signed by its current key and gated by its follow grant (PROTOCOL-3, HOST-11):
@@ -235,6 +283,15 @@ def connectionsMax : Nat := 64
 by the supervisor (PROTOCOL-11). Five minutes: longer than any command's step round trip, and a
 slow-loris peer holds one of `connectionsMax` slots for at most this long. -/
 def idleMsMax : Nat := 300000
+/-- How long a client waits for the reply to ONE request (one frame to `host.sock` or
+`follow.sock`) before it stops waiting. Past it the client reports `timeout` by name; a request
+that carried a frozen call is then UNCERTAIN (its attempt goes on by lookup: `Attempt.Seen.lost`),
+never refused. It bounds one request, not a command (that is `stepsPerCommandMax` of these).
+Two minutes: above a writer's worst legitimate wait for one request (a batch that seals inline
+before it can append, plus a supervisor restart of the child, whose cold reopen THE BAR bounds
+at 60 s), and below `idleMsMax`, so the supervisor never closes a connection a client is still
+waiting on (`Bounds.reply_within_idle`). -/
+def replyMsMax : Nat := 120000
 
 end Bounds
 

@@ -31,6 +31,8 @@ theorem envelopeFrame_lawful : Stream.Lawful envelopeFrame := Layout.codec_lawfu
 
 theorem logReplyFrame_lawful : Stream.Lawful logReplyFrame := Layout.codec_lawful _ _ _
 
+theorem custodyRefusalFrame_lawful : Stream.Lawful custodyRefusalFrame := Layout.codec_lawful _ _ _
+
 theorem readReplyFrame_lawful : Stream.Lawful readReplyFrame := Layout.codec_lawful _ _ _
 
 end Nanodregg.Protocol

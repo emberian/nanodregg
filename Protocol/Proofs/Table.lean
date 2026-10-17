@@ -58,6 +58,20 @@ theorem code_of_ofCode? {b : UInt8} {s : Step} (h : ofCode? b = some s) : s.code
 
 end Step
 
+namespace CustodyRefusal
+
+theorem ofCode?_code (r : CustodyRefusal) : ofCode? r.code = some r := by cases r <;> decide
+
+theorem code_injective {a b : CustodyRefusal} (h : a.code = b.code) : a = b := by
+  cases a <;> cases b <;> first | rfl | (simp [code] at h)
+
+theorem name_injective {a b : CustodyRefusal} (h : a.name = b.name) : a = b := by
+  cases a <;> cases b <;> first | rfl | (simp [name] at h)
+
+theorem mem_all (r : CustodyRefusal) : r ∈ all := by cases r <;> decide
+
+end CustodyRefusal
+
 theorem argv_fits_frame : Bounds.argvBytesMax + 1 ≤ Bounds.frameBytesMax := by decide
 
 /-- The supervisor's buffers, at most one frame per connection per direction, fit in 32 MiB. -/
@@ -67,5 +81,8 @@ theorem mux_buffers_bounded : 2 * Bounds.connectionsMax * Bounds.frameBytesMax �
 envelope's signature, then two per page, then at most a plan's signature, a precommit, a submit
 and the settlement's `done`. -/
 theorem Bounds.pages_fit_steps : 2 * Bounds.pagesPerCommandMax + 5 ≤ Bounds.stepsPerCommandMax := by decide
+
+/-- A client gives up on a reply before the supervisor would close the idle connection under it. -/
+theorem Bounds.reply_within_idle : Bounds.replyMsMax < Bounds.idleMsMax := by decide
 
 end Nanodregg.Protocol
