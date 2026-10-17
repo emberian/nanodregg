@@ -468,10 +468,10 @@ def run (m : Option Mutation) (lines : List Line) (times : Option Nat) : IO Resu
   let s := sys m
   let fs := founders.map fun n => (keyOf n 0, nextKeyDigest s.writer.X (keyOf n 1))
   let g := Receive.genesis s.writer.X Sim.worldName Sim.allowance fs
-  let mem ← match ← Writer.genesisStore g with
+  let (mem, r₀) ← match ← Writer.genesisStore s.writer g with
     | .ok m => pure m
     | .error e => throw (IO.userError s!"genesis: {e}")
-  let host ← Writer.start s.writer mem (Writer.genesisResident g)
+  let host ← Writer.start s.writer mem r₀
   let go : M (List Expect) := lines.zipIdx.mapM fun (l, i) =>
     runLine i l (if l.times > 1 then times.getD l.times else l.times)
   let hex (d : D) := Text.toHex (s.writer.X.env.bytes d)

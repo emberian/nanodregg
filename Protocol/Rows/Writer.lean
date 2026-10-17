@@ -98,15 +98,13 @@ def pager (X : Ctx D) (lieTip forgeBase : Bool) (m : Mem) (r : Resident (World D
     | .ok b => pure (Status.ok.code, b)
     | .error f => pure (Status.refused.code, f.name.toUTF8)
 
-/-- A Store as genesis leaves it: the genesis base at offset 0, an empty segment. -/
-def genesisStore (g : World D) : IO (Except String Mem) := do
-  match Base.file Host.Sim.keys cadence Sim.world g 0 Codec.Digest.zero [] with
+/-- A Store as genesis leaves it (HOST's `memGenesis`: the origin frame, the base after it), and
+the loop's state the one open gives over it. -/
+def genesisStore (P : Params) (g : World D) : IO (Except String (Mem × Resident (World D))) := do
+  match Host.Sim.memGenesis Host.Sim.keys cadence Sim.world (fun w => (w.height, P.X.env.bytes w.chain))
+      (Record.step Sim.dc (World.fold P.X.env)) g with
   | .error f => return .error f.name
-  | .ok file => return .ok ⟨← IO.mkRef {}, ← IO.mkRef { file, history := #[(file, 0)] }⟩
-
-def genesisResident (g : World D) : Resident (World D) :=
-  { world := g, pos := ⟨0, Codec.Digest.zero⟩, index := #[],
-    sealed := Sealed.genesis Host.Sim.keys Sim.world (fun w => (w.height, Sim.ctx.env.bytes w.chain)) g }
+  | .ok (d, b, r) => return .ok (⟨← IO.mkRef d, ← IO.mkRef b⟩, r)
 
 /-- The one open over the in-memory Store: HOST's `openWith`, the writer's fold. -/
 def reopen (P : Params) (base seg : ByteArray) : Except String (Resident (World D)) :=
