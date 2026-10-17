@@ -459,3 +459,117 @@ Rust has its own row.
 my layer's deployed count; the test is that every module it moves is reached only from a test or
 build exe, which C9 now enforces.
 Status: built.
+
+## KERNEL-23 · An authenticated cell root: the World's cell map IS a canonical binary Merkle trie, and the chain commits its root (KERNEL-4, 2026-10-16; DESIGN, not yet built)
+**Why.** Ember ruled phones in scope, thin in SPACE (ROOT, 10-16). A phone that holds no World
+must check one cell against a head it trusts. That needs a root over the cells, kept up to date
+in O(touched) per admitted turn and bound into the chain. The same structure later serves
+per-cell hiding (a leaf commits a commitment instead of a digest) and a cheap `read` for everyone
+(a cell plus its path, not the World).
+**Decision.**
+(a) *One structure.* `World.cells` stops being a `Std.TreeMap` and becomes `Trie D`: a persistent,
+path-compressed BINARY trie over the bits of `E.bytes id`. Its shape is a function of its key set
+alone: a leaf sits at the shortest prefix that tells it apart, and an internal node branches at
+the first bit where its subtree's keys differ. So the trie is history-independent, and two
+Worlds with the same contents have the same root, whatever order the turns ran in. Every node
+caches its hash. Lookup, insert and tombstoning walk one path. The trie is the cell map, not an
+index beside one, because two maps over one key set are two shapes that would one day disagree
+(law 1). The kernel's 30 `.cells` uses go through `live` / `insertAll` / `contains`, and their
+TreeMap lemmas are restated for the trie: get_insert_self, get_insert_ne, contains_iff, and
+toList sorted and duplicate-free. CODEC's 3 uses go through the World codec.
+(b) *What a leaf commits.* `leaf = H(domLeaf, bytes id ‖ bytes (entryDigest e))`, where
+`entryDigest (.live c) = pinOf E (some c)` (the existing pin digest of the cell bytes) and
+`entryDigest .tomb = H(domTomb, ∅)`. Internal: `node = H(domNode, u16 bit ‖ bytes l ‖ bytes r)`.
+The branching bit is committed, so an EXCLUSION proof is sound as well: following the id's bits
+ends at a leaf with a different key, or at an empty side. Owner and law are not committed
+separately: they are slots of the cell, so the cell digest already commits them, and a second
+encoding of them would be a twin. The root of the empty trie is `H(domEmpty, ∅)`.
+(c) *Proofs.* `Proof D := {leaf : Option (D × D), path : List (Nat × D)}` (bit, sibling), from
+the leaf up. `verifyInclusion E root id d p : Bool` and `verifyExclusion E root id p : Bool` are
+both total and bounded by the key's bit width. `World.prove w id : Proof D` returns a path of
+length ≤ depth.
+(d) *Chain.* `chainNext E prev t root' := H(domChain, bytes prev ‖ bytes (turnDigest t) ‖ bytes root')`,
+where root' is the root after the turn. The root goes INTO the chain, not beside it: a phone then
+trusts ONE digest (a chain head), receives (prev, turnDigest, root'), checks the hash, and from
+then on verifies cells against root'. With the root beside the chain, a countersigner would have
+to sign two things, and a head and a root could be paired that were never one state.
+(e) *Turn unchanged.* The root is computed by `commit`, never carried in the Turn. A receiver
+cannot know the post-root before admission (it does not hold the World), and a Turn field that
+admit fills in would make the Turn's digest depend on admission. So the Turn codec does NOT
+change. I am departing from ROOT's "the Turn codec" here: the root lives in the World codec and,
+for a phone, in the head record PROTOCOL serves, (height, prev, turnDigest, root).
+(f) *Theorems.*
+- `root_congr`: `World.Equiv` worlds have equal roots.
+- `admit_root`: `w'.root = rootOf w'.cells`, where `rootOf` is a specification by recursion over
+  the sorted key list, and the incremental trie computes exactly it.
+- `prove_verifies`: `verifyInclusion E w.root id (entryDigest e) (w.prove id)` when
+  `w.cells.get? id = some e`, and `verifyExclusion …` when it is absent.
+- THE soundness statement, `inclusion_sound`: `verifyInclusion E w.root id d p = true →
+  w.cells.get? id = some e ∧ entryDigest e = d ∨ Collision E.hash`, given `E.bytes` injective
+  (the premise CODEC already discharges for `Digest`). `exclusion_sound` is the twin with
+  `get? id = none`.
+- `chain_binds_root`: equal chain heads after equal-length logs give equal roots, or a collision.
+  Collision is the existing `Collision` (two inputs, one digest, under any domain), so "a forged
+  proof fails unless a hash collision" is a disjunction with an exhibited witness, not prose.
+(g) *Sim and plants.* After every admitted turn the Sim proves and verifies every touched cell
+and one untouched cell against the Host's root, and verifies them again against the follower's
+root. Then it forges: it flips one sibling, swaps the leaf digest, and claims a tombstone live;
+each must fail by name (`verifyInclusion = false`). Plants: drop the bit from the node hash ⇒
+`exclusion_sound` no longer builds; leave a touched path unrehashed ⇒ the Sim's
+follower/Host root check goes red; keep the root out of `chainNext` ⇒ `chain_binds_root` no
+longer builds.
+(h) *WASTE.* `cells-touched-per-turn` stays 1.0: the trie walk IS the lookup. A new row,
+`admit hashes-per-touched-cell`, counts node rehashes ÷ cells changed. It is pinned at the
+measured value with a ceiling of ⌈log₂(cells)⌉ + 2. Estimate, not a measurement: the Sim's
+Worlds hold ~50–150 cells, so ~8 hashes per changed cell; at the bar's 1000 records, ~11. A batch
+that touches k cells shares the top of their paths, so the honest count is |⋃ paths| and not
+k·depth. I will build the batched rehash (rehash the union once) only if the measured ratio
+shows the sequential version paying for the shared top twice.
+**Alternatives.**
+- Fixed-depth sparse Merkle tree over all 256 bits: 256 hashes per touch and 8 KiB proofs. Rejected.
+- Radix-16 (Ethereum MPT / Jellyfish): fewer levels, but 15 siblings per level, so proofs ~7×
+  larger. That is the wrong trade for a phone, whose scarce resource is bytes, not hashes.
+- A TreeMap plus a separate Merkle index kept equal by an invariant: two structures, law 1.
+- A root carried beside the chain: (d).
+- A root field in the Turn: (e).
+- Committing digest + owner + law in the leaf: (b).
+- A Merkle mountain range over the log instead: it authenticates history, not current state, so
+  a phone would replay to read one cell.
+**Critique.**
+- Every changed cell now costs ~log₂ n cSHAKE256 calls on admit. At 1000 records that is ~11 per
+  cell, against today's single pin hash. The 5 s write bar has room, but this is a real constant,
+  and the follower pays it too (it recomputes the root; it must, or it trusts the writer).
+- The trie's lemmas are ours, not Std's: an extra proof surface of maybe 400–600 lines, plus a
+  rewrite of Frame/Equiv/Weight/Rooted proofs from TreeMap lemmas to trie lemmas.
+- The proofs are on keys hashed through `E.bytes`. The toy's 8-byte digests give 64-bit keys, so
+  the Sim's trie is shallow and adversarially weak, which is fine because the toy is not where
+  soundness is claimed.
+- The spent set and the journal are NOT authenticated. A phone cannot verify "this nullifier is
+  unspent" or "this txId landed", and LEDGER's pay on a phone will need the first.
+  Recommendation: spent nullifiers become leaves of the SAME trie under a domain-separated key
+  (`H(domNullifier, n)`), so one authenticated map holds both. That moves `spent` into `cells`,
+  which is LEDGER's call when it is spawned, and is a ruling for ROOT now: is v0 cells only, or
+  cells + nullifiers?
+- History-independence holds only if the canonical-shape invariant is proved (`Trie.WF`), not
+  assumed. A trie built by a buggy insert that is still a valid map would give a different root
+  for the same contents, and the follower would disagree with the Host by root only.
+  `admit_root` against the specification `rootOf` is what closes that.
+**Meta-critique.**
+- Binary path-compressed Merkle tries are the textbook answer (Diem's JMF, Aptos, Celestia's
+  NMT), and I chose the textbook. The independent test is the phone's budget: proof bytes =
+  32·log₂ n, the minimum for any hash-based tree with fan-out 2, and fan-out 2 minimises proof
+  size for a fixed hash.
+- Making the trie the map rather than an index is the law-1 move I like, and it is also the more
+  expensive one: it rewrites proofs that are green today. The cost estimate ("a rewrite of four
+  proof files") is not a reason to keep two maps (CLAUDE.md: an estimate is not a constraint).
+- I am departing from ROOT on the Turn codec on the grounds that the root is post-state. Check:
+  if someone wanted a Turn to state the root it expects (an optimistic check), that would be a
+  pin on the whole World, and every concurrent turn would be stale. So no.
+Status: proposed (ROOT to rule on (e) and the nullifier question before the flag day).
+**Flag day when built.**
+- `World` gains the trie in place of the TreeMap, and its codec changes (CODEC-14 checkpoint
+  base). A base written before refuses to load, through the base's schema epoch.
+- Every chain head changes (`chainNext` takes the root). A log is still a list of the same Turns,
+  so it refolds, but a stored base's chain no longer matches, so Stores re-genesis.
+- The Turn codec is unchanged. PROTOCOL gains a head record (height, prev, turnDigest, root) and
+  the `read` reply gains a `Proof`.
