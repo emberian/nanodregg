@@ -9,9 +9,13 @@ A path no OWNERS row covers belongs to ROOT.
 import os
 import re
 
-SUBJECT = {"kernel": "KERNEL", "codec": "CODEC", "emit": "CODEC", "host": "HOST", "protocol": "PROTOCOL",
-           "rows": "PROTOCOL", "client": "CLIENT", "sandbox": "CLIENT", "lang": "LANG",
-           "gates": "GATES", "build": "GATES", "charter": "ROOT", "root": "ROOT"}
+# subject prefix -> the layers whose paths it may change. LEDGER is a KERNEL deliverable with the
+# prefix `kernel:` (CHARTER, 10-17), so `kernel:` owns LEDGER's paths as well as KERNEL's.
+SUBJECT = {"kernel": {"KERNEL", "LEDGER"}, "codec": {"CODEC"}, "emit": {"CODEC"}, "host": {"HOST"},
+           "protocol": {"PROTOCOL"}, "rows": {"PROTOCOL"}, "client": {"CLIENT"}, "sandbox": {"CLIENT"},
+           "lang": {"LANG"}, "hosting": {"HOSTING"}, "ops": {"OPS"}, "perf": {"PERF"},
+           "transport": {"TRANSPORT"}, "gates": {"GATES"}, "build": {"GATES"}, "charter": {"ROOT"},
+           "root": {"ROOT"}}
 
 
 def table(root: str) -> list[tuple[str, str]]:
@@ -35,10 +39,11 @@ def check(root: str, changed: list[str], message: str) -> list[str]:
     m = re.match(r"([a-z]+)(?:\([^)]*\))?!?:", subject)
     if not m or m.group(1) not in SUBJECT:
         return [f"subject must start with a layer prefix ({', '.join(sorted(SUBJECT))}): {subject!r}"]
-    layer = SUBJECT[m.group(1)]
+    layers = SUBJECT[m.group(1)]
     rows = table(root)
-    foreign = [(p, owner(rows, p)) for p in changed if owner(rows, p) not in (layer, "SHARED")]
+    foreign = [(p, owner(rows, p)) for p in changed if owner(rows, p) not in layers | {"SHARED"}]
     if not foreign or re.search(r"(?m)^CROSS-LAYER:\s*\S", message):
         return []
-    return [f"{layer} commit touches {p}, owned by {o}" for p, o in foreign] + [
+    who = "/".join(sorted(layers))
+    return [f"{who} commit touches {p}, owned by {o}" for p, o in foreign] + [
         "split the commit, or add 'CROSS-LAYER: <reason>' to the message"]

@@ -13,6 +13,8 @@ strings removed), so prose may name them. Red on:
   set_option maxHeartbeats / maxRecDepth / synthInstance.*  a slow proof is fixed, not fed
   set_option autoImplicit / relaxedAutoImplicit / warningAsError / linter.*  lakefile's options hold
   List UInt8 in a def-module        bytes are ByteArray (law 3)
+  createTempFile/createTempDir/withTempFile/withTempDir
+                                    segfault under a missing TMPDIR (v4.30); name the path
 """
 import os
 import re
@@ -31,6 +33,10 @@ PATTERNS = [
     (r"\bunsafe\b", "unsafe"),
     (r"\bset_option\s+(maxHeartbeats|maxRecDepth|synthInstance\.\w+)\b", "set_option budget"),
     (r"\bset_option\s+(autoImplicit|relaxedAutoImplicit|warningAsError|linter\.[\w.]+)\b", "set_option override"),
+    # Lean v4.30's temp-file primitives segfault (exit 139, no output) when TMPDIR names a missing
+    # directory, instead of raising an IO error: a crash is never a refusal (law 7). Measured
+    # 10-17 (OPS D9). A process names its own paths.
+    (r"\b(?:createTempFile|createTempDir|withTempFile|withTempDir)\b", "temp file"),
 ]
 NATIVE = re.compile(r"@\[[^\]]*\b(implemented_by|extern)\b")
 LIST_BYTES = re.compile(r"\bList\s+UInt8\b")

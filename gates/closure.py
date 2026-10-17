@@ -20,6 +20,8 @@
   C9 a deployed def-module (neither a proof-module nor tooling, tree.Module.is_tooling)
      importing a tooling module: the size ratchet's deployed count excludes tooling, so deployed
      code may not depend on it.
+  C10 a module outside Ops importing an Ops module: Ops is a renderer and driver over the
+     Host/Protocol/Client tables, never an "ops utilities" hub (ROOT 10-17, OPS's request).
 """
 import os
 import sys
@@ -55,6 +57,8 @@ def check(t: tree.Tree) -> list[str]:
                     red.append(f"C4 {m.name} (def-module) imports proof-module {i}")
                 if not m.is_proof and not m.is_tooling and target.is_tooling:
                     red.append(f"C9 {m.name} (deployed) imports tooling module {i}")
+                if target.lib == "Ops" and m.lib != "Ops":
+                    red.append(f"C10 {m.name} imports {i}: Ops renders and drives the other layers' tables, nothing depends on it")
                 if target.lib == "Census" and m.lib != "Census":
                     red.append(f"C5 {m.name} imports {i}: Census is build tooling, never a dependency")
             elif root in ("Init", "Std"):

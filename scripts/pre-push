@@ -67,7 +67,7 @@ step() { # step NAME CMD...: run, log, remember failure
 }
 
 git -C "$repo" diff --name-only "$base" "$cand" > "$G/changed"
-args=(--owners-from "$G/base" --base-tree "$G/base" --base-size "$G/base/SIZE.md" --base-waste "$G/base/gates/waste.tsv" --message "$msg" --changed "$G/changed")
+args=(--owners-from "$G/base" --base-tree "$G/base" --base-waste "$G/base/gates/waste.tsv" --message "$msg" --changed "$G/changed")
 step gates python3 "$G/tree/gates/check.py" "$G/tree" "${args[@]}"
 if [ -f "$G/base/gates/check.py" ]; then
   if ! python3 "$G/base/gates/check.py" "$G/tree" "${args[@]}" >> "$log" 2>&1; then

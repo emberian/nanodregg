@@ -47,7 +47,7 @@ run() { "$@" >> "$log" 2>&1 && echo ok || echo RED; }
 
 git -C "$repo" log -1 --format=%B "$sha" > "$G/msg"
 git -C "$repo" diff --name-only "$base" "$sha^{tree}" > "$G/changed"
-gates=$(run python3 "$T/gates/check.py" "$T" --changed "$G/changed" --base-tree "$G/base" --base-size "$G/base/SIZE.md" --base-waste "$G/base/gates/waste.tsv" --message "$G/msg")
+gates=$(run python3 "$T/gates/check.py" "$T" --changed "$G/changed" --base-tree "$G/base" --base-waste "$G/base/gates/waste.tsv" --message "$G/msg")
 unmeasured=$(grep -c '^WARN ' "$log" || true)
 # shellcheck disable=SC2046
 build=$(run env -C "$T" LEAN_NUM_THREADS="${LEAN_NUM_THREADS:-4}" lake build $(lean_targets "$T"))
