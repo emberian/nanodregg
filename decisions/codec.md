@@ -380,8 +380,13 @@ it is recorded here so it is not mistaken for done.
 `B_carried` and `decodePoint_carried` (the latter's `split at h` over the unfolded decoder still reaches 21 GB);
 until then the field theorems cover the ladder from carried inputs, and the base point and decompressed points
 are carried by inspection, not by theorem.
-Status: open (owed: decodePoint_carried, B_carried; the Edwards addition law and `mul2` correctness against a
-Nat-coordinate spec).
+**Addendum (10-17).** `B_carried` and `decodePoint_carried` landed. The decoder's 21 GB was zeta: its `let` chain
+named `x` once, but `x` is built from `u`, `v`, `v3`, `v7`, and inlining the lets makes the proof term a TREE
+of the DAG (each Fe expression duplicated wherever it is used), which the kernel then re-checks. The fix was
+in the def module: `decodePoint` is now a composition of small functions (`candidateFrom`, `rootCheck`,
+`sqrtRatio`, `recoverX`, `signed`), each taking computed values as ARGUMENTS, so sharing survives and each
+lemma is about variables (the module checks in 18 s / 1.25 GB). The computation is unchanged.
+Status: open (owed: the Edwards addition law and `mul2` correctness against a Nat-coordinate spec).
 
 ## CODEC-19 · The trie World codec: entries in trie order, rebuilt by `build`, refused unless canonical (CODEC-2, 2026-10-17; design, waits on KERNEL-23 part 2)
 **Decision.** When `World.cells` (cells + nullifiers, KERNEL-23) is a `Trie.T`, the World codec writes
@@ -459,3 +464,27 @@ and is used only by the decoder.
 component list (and so required `split` and its proofs) rather than the joined bytes, the simpler type.
 The wiring of `--hosting` waits on HOSTING-2's `Hosting/Wire.lean`.
 Status: open.
+
+## CODEC-22 · The carried state's version is its tag, not a policy (OPS-P1; CODEC-2, 2026-10-17)
+**Decision.** `Codec.Kernel.carried E dc : Stream (Carried D)` reuses `cells E dc` (the trie listing, with its
+`kernel/leaf-fit` and `kernel/trie-order` refusals) for KERNEL-29's `Carried`, under refine
+`kernel/carried/v1`. An export file stamps `Tag.of "kernel/carried" carried`; an import compares the stamp
+before decoding and refuses `shapeMismatch` by name. The import's check is byte equality of carried bytes
+(the codec is canonical).
+**Alternatives.** OPS-P1's: a carried codec versioned by hand, changed only on an explicit carry flag day. Or
+a second reader of the old carried shape (law 1 forbids it).
+**Why.** The carried bytes embed the cell, entry, slot and leaf codecs, so a hand version can say "unchanged"
+while the bytes changed. The content-addressed tag cannot. A World-codec change that leaves those codecs alone
+keeps the tag (the carry crosses that flag day), and one that changes them refuses the carry loudly; that
+flag day is a plain re-genesis.
+**Critique.** The tag cannot see inside refine functions (CODEC-5): a semantic change to the trie-order check
+that keeps the names would keep the stamp. Carry across a cell-spelling change is impossible by design, which
+an operator may find surprising; the refusal must say so.
+**Meta-critique.** I prefer the mechanism I already built (Tag.of) to a new rule, which is the familiar-tool
+bias; the test is that it removes a promise someone would have to keep.
+Status: accepted by OPS-2 (7f7b6da); built after KERNEL-29's Carried lands.
+
+### Review · LEDGER's `Stream.i64` (b2d60e7), CODEC-2 10-17
+`i64 = refine "i64" u64 (some ∘ toInt64) toUInt64` and `i64_lawful` via `refine_lawful u64_lawful` with
+both inverse laws: a bijection on 8 bytes, so canonicity is exact and nothing is refused. The shape is
+`refine "i64" u64`, distinct from `u64`'s, so a field moving from u64 to i64 moves its tag. Accepted.

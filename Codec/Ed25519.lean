@@ -185,28 +185,35 @@ def B : Point :=
 def leNat (b : ByteArray) (off n : Nat) : Nat :=
   (List.range n).foldr (fun i acc => acc * 256 + (b.get! (off + i)).toNat) 0
 
+/-- The candidate root of `u/v` (RFC 8032 §5.1.3): `u v³ (u v⁷)^((p − 5)/8)`, given `v3 = v³`. -/
+def candidateFrom (u v v3 : Fe) : Fe := (u.mul v3).mul ((u.mul (v3.sq.mul v)).pow ((p - 5) / 8) 252)
+
+/-- `x` if `v x² = u`, `x √−1` if `v x² = −u`, otherwise no root. -/
+def rootCheck (u v x : Fe) : Option Fe :=
+  let vxx := v.mul x.sq
+  if vxx.eq u then some x else if vxx.eq (Fe.zero.sub u) then some (x.mul sqrtM1) else none
+
+/-- A square root of `u/v`, if one exists. -/
+def sqrtRatio (u v : Fe) : Option Fe := rootCheck u v (candidateFrom u v (v.sq.mul v))
+
+/-- The x of a point with this y: a root of `(y² − 1)/(d y² + 1)`, if one exists. -/
+def recoverX (y : Fe) : Option Fe := sqrtRatio (y.sq.sub Fe.one) ((d.mul y.sq).add Fe.one)
+
+/-- The point from a root `x`, the sign bit and `y`: refused when `x = 0` and the sign is 1. -/
+def signed (x y : Fe) (sign : Nat) : Option Point :=
+  if x.toNat == 0 && sign == 1 then none else
+  let x := if x.toNat % 2 == sign then x else Fe.zero.sub x
+  some ⟨x, y, Fe.one, x.mul y⟩
+
 /-- RFC 8032 §5.1.3: decode a 32-byte point, or refuse. -/
 def decodePoint (b : ByteArray) (off : Nat) : Option Point :=
   let n := leNat b off 32
   let yn := n % 2 ^ 255
-  let sign := n >>> 255
   if yn ≥ p then none else
   let y := Fe.ofNat yn
-  let yy := y.sq
-  let u := yy.sub Fe.one
-  let v := (d.mul yy).add Fe.one
-  let v3 := v.sq.mul v
-  let v7 := v3.sq.mul v
-  let x := (u.mul v3).mul ((u.mul v7).pow ((p - 5) / 8) 252)
-  let vxx := v.mul x.sq
-  let x? := if vxx.eq u then some x else if vxx.eq (Fe.zero.sub u) then some (x.mul sqrtM1) else none
-  match x? with
+  match recoverX y with
   | none => none
-  | some x =>
-    let xn := x.toNat
-    if xn == 0 && sign == 1 then none else
-    let x := if xn % 2 == sign then x else Fe.zero.sub x
-    some ⟨x, y, Fe.one, x.mul y⟩
+  | some x => signed x y (n >>> 255)
 
 /-- RFC 8032 §5.1.7, cofactored: does `sig` sign `msg` under the 32-byte public key `pk`? Every
 malformed input is `false`. -/

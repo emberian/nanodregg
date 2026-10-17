@@ -434,4 +434,63 @@ theorem mul2_carried {P Q PQ : Point} (hP : P.Carried) (hQ : Q.Carried) (hPQ : P
     (a b n : Nat) : (Point.mul2 P Q PQ a b n).Carried :=
   ladder_carried hP hQ hPQ point_zero_carried a b n
 
+theorem B_carried : B.Carried := by
+  have hx := ofNat_carried (x := 15112221349535400772501151409588531511454012693041857206046113283949847762202) (by decide)
+  have hy := ofNat_carried (x := 46316835694926478169428394003475163141307993866256225615783033603165251855960) (by decide)
+  unfold B
+  refine Point.Carried.mk ?_ ?_ ?_ ?_ <;> dsimp only
+  · exact hx
+  · exact hy
+  · exact one_carried
+  · exact mul_carried hx hy
+
+theorem candidateFrom_carried {u v v3 : Fe} (hu : u.Carried) (hv : v.Carried) (hv3 : v3.Carried) :
+    (candidateFrom u v v3).Carried := by
+  unfold candidateFrom
+  exact mul_carried (mul_carried hu hv3) (pow_carried (mul_carried hu (mul_carried (sq_carried hv3) hv)) _ _)
+
+theorem rootCheck_carried {u v x r : Fe} (hx : x.Carried) (h : rootCheck u v x = some r) : r.Carried := by
+  unfold rootCheck at h
+  dsimp only at h
+  split at h
+  · cases h; exact hx
+  · split at h
+    · cases h; exact mul_carried hx sqrtM1_carried
+    · cases h
+
+theorem recoverX_carried {y x : Fe} (hy : y.Carried) (h : recoverX y = some x) : x.Carried := by
+  unfold recoverX sqrtRatio at h
+  have hu := sub_carried (sq_carried hy) one_carried
+  have hv := add_carried (mul_carried d_carried (sq_carried hy)) one_carried
+  exact rootCheck_carried (candidateFrom_carried hu hv (mul_carried (sq_carried hv) hv)) h
+
+theorem signed_carried {x y : Fe} {sign : Nat} {P : Point} (hx : x.Carried) (hy : y.Carried)
+    (h : signed x y sign = some P) : P.Carried := by
+  unfold signed at h
+  split at h
+  · cases h
+  · have cs : (if (x.toNat % 2 == sign) = true then x else Fe.zero.sub x).Carried := by
+      split
+      · exact hx
+      · exact sub_carried zero_carried hx
+    rw [← Option.some.inj h]
+    refine Point.Carried.mk ?_ ?_ ?_ ?_ <;> dsimp only
+    · exact cs
+    · exact hy
+    · exact one_carried
+    · exact mul_carried cs hy
+
+/-- Every point `decodePoint` returns is carried, so the field theorems apply to `verify`'s inputs. -/
+theorem decodePoint_carried {b : ByteArray} {off : Nat} {P : Point} (h : decodePoint b off = some P) :
+    P.Carried := by
+  unfold decodePoint at h
+  dsimp only at h
+  split at h
+  · cases h
+  · have hy := ofNat_carried (x := leNat b off 32 % 2 ^ 255) (Nat.mod_lt _ (by decide))
+    split at h
+    · cases h
+    · rename_i x hx
+      exact signed_carried (recoverX_carried hy hx) hy h
+
 end Nanodregg.Codec.Ed25519
