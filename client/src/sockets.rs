@@ -43,8 +43,14 @@ impl FollowSocket {
         if status != g::status::OK {
             // Follow answers every command, its own refusals included, with a `done` step; any
             // other status is follow refusing the frame itself, and is not rendered as a verdict.
+            // A supervisor close is named by its emitted CloseReason name (PROTOCOL-22).
+            let what = if status == g::status::CLOSED {
+                "closed".to_string()
+            } else {
+                format!("status {status}:")
+            };
             return Err(io::Error::other(format!(
-                "status {status}: {}",
+                "{what} {}",
                 String::from_utf8_lossy(&reply)
             )));
         }

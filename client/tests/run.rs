@@ -321,3 +321,48 @@ fn a_refused_rotation_submit_leaves_custody_on_its_current_key() {
     assert!(custody.armed().unwrap().is_none());
     std::fs::remove_dir_all(&d).unwrap();
 }
+
+/// A submit answered `closed` (the supervisor ended the connection, PROTOCOL-22) is not a verdict:
+/// the call is settled by lookup, never resent blind and never reported refused.
+#[test]
+fn a_submit_answered_closed_is_settled_by_lookup() {
+    let (d, custody) = setup("closed");
+    let mut follow = ScriptedFollow {
+        steps: VecDeque::from([
+            Step::Submit {
+                call: b"CALL".to_vec(),
+                k: b"k1".to_vec(),
+            },
+            Step::Done {
+                exit: 0,
+                stdout: b"ok\n".to_vec(),
+                stderr: vec![],
+            },
+        ]),
+        seen: vec![],
+    };
+    let closed = nanodregg_client::generated::status::CLOSED;
+    let idle = nanodregg_client::generated::CloseReason::Idle.name();
+    let mut host = ScriptedHost {
+        replies: VecDeque::from([
+            Ok((closed, idle.as_bytes().to_vec())), // the submit's connection closed `idle`
+            Ok((0, b"receipt".to_vec())),           // lookup: committed
+        ]),
+        asked: vec![],
+    };
+    let (exit, _, _) = run::run(
+        &[b"nd".to_vec()],
+        &mut follow,
+        &mut host,
+        &custody,
+        &d.join("attempts"),
+        T,
+    )
+    .unwrap();
+    assert_eq!(exit, 0);
+    assert_eq!(
+        host.asked,
+        vec![(1, b"CALL".to_vec()), (2, b"CALL".to_vec())]
+    );
+    std::fs::remove_dir_all(&d).unwrap();
+}

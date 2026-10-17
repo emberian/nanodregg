@@ -266,3 +266,36 @@ rotation by lookup before every command. Custody refusals become tagged resume r
 renders (PROTOCOL-2's answer) once PROTOCOL-3 adds the `precommit`/`signNext` steps; until then rotation
 is reachable only through the library and reconcile. The holding's checks (a 0700 directory, 0600
 files, owner) refuse FAT/exFAT media, which have no modes: a removable holding needs a POSIX file system.
+
+## CLIENT-14 the mux: one writer per connection, the idle rule waits for nothing in flight, every close named (2026-10-17, BUILD-TRANSPORT; PROTOCOL-22; scout T2)
+**Decision.** `client/src/mux.rs` reworked in place (no second mux). Each connection has its own
+writer thread that owns the write half and is fed through a two-slot channel holding at most one
+reply (an atomic `slot` flag) and the one last frame; `route` never writes to a peer, it only
+`try_send`s, and a reply arriving while the previous one is unread closes that connection
+`replyBacklog`. The reader (`forward`) records each request's send time; at a frame boundary it
+wakes every quarter of `min(idle, reply)` and closes `replyTimeout` when the oldest request in flight
+is older than `REPLY_MS_MAX`, or `idle` when nothing is in flight and the connection has been quiet
+for `IDLE_MS_MAX`; a started frame is read through a deadline reader and closes `frameStalled` past
+`FRAME_MS_MAX`, an empty or oversized one `frameRefused`. Every close is one last frame
+`status::CLOSED ‖ CloseReason::name()` from the connection's own writer (so frames never interleave),
+then shutdown; the over-the-bound accept answers `full`; a `closed` from the child ends that
+connection after delivering it; when the child closes its stdout, queued replies are delivered and
+the writers joined before `serve` returns (found by the route test going red 3 of 5 runs: the old
+end shut streams under queued replies). On the client: host.sock reads `closed` as an unknown
+status (settled by lookup, `tests/run.rs a_submit_answered_closed_is_settled_by_lookup`);
+follow.sock renders `closed NAME`.
+**Alternatives.** (a) One epoll loop: fewer threads, more Rust and unsafe-adjacent code under
+`unsafe_code = "forbid"`. (b) Per-connection writers with an unbounded queue: a non-reading peer
+then holds memory instead of a slot. (c) Write timeout only (no slot): T2's mutation shows a route
+blocked for the whole write timeout per stalled peer.
+**Critique.** Two threads per connection (≤ 2·64 + accept). The idle and reply clocks are Rust's
+(law 2 stretch, PROTOCOL-22). The FIFO reply assumption per connection is stated, not enforced:
+a reordering Host would make `replyTimeout` later, never sooner. `replyBacklog` closes a pipelining
+client. The child is never told a connection ended: harmless for `host serve`, but it is why
+`nd-attach` (CLIENT-12 B) cannot land yet — its per-session cap would leak upstream connections
+until the box's idle close (a hang-up frame on the child wire is a HOST + PROTOCOL decision, asked).
+Size: client/src rises 1715 → 1959 of its 2000 ceiling; `nd-attach` (~127 lines) does not fit.
+**Meta-critique.** The mechanisms are T2's, ported because the head-of-line block is readable in the
+old `route`; the mutation checks (six, each red) are the evidence, not a deployed measurement over
+sshd.
+**Status.** landed (this commit). `nd-attach` waits on the hang-up frame and the size ceiling.

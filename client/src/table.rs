@@ -1,5 +1,7 @@
 //! The parameters every module takes, built from [`crate::generated`] and nothing else.
 
+use std::time::Duration;
+
 use crate::frame::Limits;
 use crate::generated as g;
 use crate::mux::MuxLimits;
@@ -14,6 +16,10 @@ pub const LIMITS: Limits = Limits {
 pub const MUX: MuxLimits = MuxLimits {
     frame: LIMITS,
     connections_max: g::CONNECTIONS_MAX,
+    idle: Duration::from_millis(g::IDLE_MS_MAX as u64),
+    frame_deadline: Duration::from_millis(g::FRAME_MS_MAX as u64),
+    reply: Duration::from_millis(g::REPLY_MS_MAX as u64),
+    reply_write: Duration::from_millis(g::REPLY_WRITE_MS_MAX as u64),
 };
 
 /// What the step loop compares against.
