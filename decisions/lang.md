@@ -1070,3 +1070,30 @@ middle.
 check into one that also catches a plant that silently weakened, the same discipline as GATES-13's
 immutable vectors.
 **Status.** built (this commit). Nothing re-ids: tooling and rows only.
+
+## LANG-40 The required counter is complete: `requiredOf` never refuses fuel on an admitted invoke (2026-10-17; cv 01a14aba-1281, LANG-37's critique (1))
+**Decision.** `Lang/Proofs/NeedComplete.lean` (new). `need_complete`: a derivation of size `n` is what
+`need` returns under any fuel `≥ n`. It is mutual with the `Sel`/`Ext` twins. `needExtract_complete`: what
+extraction must force, of total size `m`, is counted under any fuel `≥ m`. It goes through
+`needForce_complete` and `needUnknot_complete`; rounds suffice because every unfolding is a derivation of
+size ≥ 1, by `derives_pos`. Corollary `requiredOf_total`: for every invoke `runMeasured` admits,
+`requiredOf` returns a count `N < ticks`. So `required: fuel` and `required: extraction` are unreachable on
+an admitted invoke, and THE BAR's ratio row can no longer read UNMEASURED there. Teeth: `need_idApp_short`
+(under fuel 1 `need` finds nothing) and `need_idApp_depth` (under fuel 2 it finds the size-4 derivation).
+`need`'s fuel is nesting depth, so "fuel ≥ size" is sufficient and not necessary.
+**Why.** LANG-37 left the reachability half of cv 01a14a87-33b2 open. `required_lt_ticks` assumed
+`requiredOf = .ok N`, so it said nothing about an invoke on which the counter gave up.
+The floor keeps ONE source: `requiredOf_total` produces the count and takes `N < ticks` from
+`required_lt_ticks`. Rows' break on a `requiredOf` refusal (`bar: an invoke's required count failed`) is
+now provably unreachable on an admitted invoke. It stays as defence in depth and does not count as a gate
+that can go red (vacuity read a773ed76).
+**Alternatives.** Giving `requiredOf` unbounded fuel (a `partial def`): refused by the gates, and a count
+with no bound is a hang, not a refusal. Raising its fuel to `budget * k`: unnecessary, since the budget
+already suffices by the theorem.
+**Critique.** (1) The bound is loose (depth vs. size), and it does not need to be tight. (2) Only
+`runMeasured`-admitted invokes are covered. A faulting run has no requirement by design
+(`required: a fault is not a run`).
+**Meta-critique.** The completeness proof is one structural recursion per relation, the mirror of
+`need_derives_all`. That was cheap once `Derives` carried sizes, which is LANG-37's shape paying off a
+second time.
+**Status.** built (this commit). Nothing re-ids: one new proof module.
