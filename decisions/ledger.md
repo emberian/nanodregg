@@ -366,6 +366,10 @@ by the kernel, `settled` by the package); with the shared key replaced by two ke
 guard removed, the second payout is ADMITTED, so the sim goes red. (2) Unfunded deposit (no grant):
 the whole call is refused (`noGrant`), the phase stays `open`.
 Status: decided; (b) asked of LANG-4 and KERNEL-5 for D5's flag day; the package after `lang!`
+(f) corrected by PROTOCOL-6 (PROTOCOL-32, 4669195): my `.skipJudge` plants did nothing, because
+belowFloor and spent are kernel admission and follow's own admit meets them before anything is
+signed. The rows' plants are now `accountByAsset` (caught as idTaken) and a hostile-client `forge`
+(caught as the writer's spent under `writerForgetsSpent`). Rows well and pay PASS.
 (b) amended by LEDGER-7: no `accountOf`; accounts are `AcctRef` in Body.
 
 ## LEDGER-7 · Accounts are named by reference in `Body`: `AcctRef = well asset | of owner asset`; no LANG builtin (LEDGER-2, 2026-10-17; amends LEDGER-6 (b), LANG-4's counter-proposal, to be LANG-25)
