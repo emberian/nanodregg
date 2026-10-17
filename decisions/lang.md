@@ -764,5 +764,12 @@ program requires (e.g. the BigStep derivation's size), pinned near 1.
 **Meta-critique.** I built the fixed row exactly as LANG-23 said, saw the journey green, and found
 the cost only when a row in another layer went red. The size of a type had never been measured.
 The independent check is the Lifecycle's byte count in the commit, and G0's byte gate on it.
+**Addendum (LANG-8, cv 01a14a39-c253).** The converse is proved in `Lang.Proofs.CallLive`:
+`bodyOf_live` / `callsOf_live` (data conforming to `callTy` / `callsTy ks` is refused only as
+`FIELD: not a digest`, for bytes the digest decoder refuses), `extract_conforms` (extraction of a
+typed value conforms), and `runMeasured_kinds` / `runMeasured_calls_le` (the deployed run's calls
+match, in order and one to one, a sublist of the method's declared slots, each of its own slot's
+kinds; so at most one call per slot). The refused bytes are bytes OF the data (`BytesIn`), not any
+byte string (the reviewer's MEDIUM on the first draft). `sim_digest_roundtrip` discharges `bodyOf_callData`'s premise at the Sim.
 **Status.** built (this commit). Re-ids every package with a method or a law (`reqTy` changed):
 `world/grain/Lifecycle` re-emitted, and THE BAR's counter re-ids.

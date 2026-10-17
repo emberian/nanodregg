@@ -11,8 +11,8 @@
   and that data reads back as exactly that Body; `callData_bodyOf`: every Body read back has call
   data reading back to it. `callData_not_callable`: a kind an object may not exercise has none.
   `callData_conforms`: call data of a Body within the language's bounds (`callFits`) is a value
-  of `callTy`, so a method can return it. Not proved: the converse liveness, that conforming data
-  is refused only for a field whose bytes are not a digest.
+  of `callTy`, so a method can return it. The converse (liveness: conforming data is refused only
+  for a field whose bytes are not a digest) and extraction conformance are `Lang.Proofs.CallLive`.
 -/
 import Lang.Program
 import Lang.Proofs.Load

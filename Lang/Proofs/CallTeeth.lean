@@ -6,9 +6,15 @@ sit, a slot that names a cell by non-digest bytes refuses the run with the slot 
 a grant with five rights has no call data, and `bodyOf_callData`'s premise holds for the identity
 digest (`bodyOf_callData_bytes`), so the round trip is not vacuous. At install: an `invoke`-only
 slot carrying an invoke checks; a slot arm with the right label at the wrong type, and an empty
-sum, are refused `badMethod`; a transfer in an `invoke`-only slot is `illTyped`.
+sum, are refused `badMethod`; a transfer in an `invoke`-only slot is `illTyped`. Liveness
+(`Lang.Proofs.CallLive`): its premises are met by a real calls row (`invokeRow_conforms`), the
+non-digest refusal above is the one it allows (`not_digest_is_live`), a call read from an
+invoke-only slot is an invoke (`skip_none_kind`), and the Sim's digest codec meets
+`bodyOf_callData`'s premise (`sim_digest_roundtrip`, `bodyOf_callData_sim`).
 -/
 import Lang.Proofs.Call
+import Lang.Proofs.CallLive
+import Kernel.Sim
 
 namespace Nanodregg.Lang.Teeth
 
@@ -118,5 +124,55 @@ theorem slot_kind_outside :
       ("src", .inj acctRefTy "well" (.bytes .empty)), ("via", .inj (optTy .bytes) "none" (.record []))])
     isIllTyped ((slotPkg [invokeOnly] (goWith (someCallT invokeOnly tr))).checkWith []) = true := by
   decide +kernel
+
+/-! ## Liveness: its premises are met, and the refusal it allows is the real one -/
+
+private def invokeSlot : Ty := callOf ["invoke"]
+
+theorem invokeSlot_ok : callSlotOk invokeSlot = true := by decide
+
+theorem invokeD_conforms (obj : ByteArray) (h : obj.size ≤ Bounds.bytesMax) : Conforms (invokeD obj) invokeSlot :=
+  .inj rfl (.record (.cons (.bytes (by decide)) (.cons (.nat (by decide)) (.cons (.nat (by decide))
+    (.cons (.bytes h) (.cons (.inj (A := .record []) rfl (.record .nil)) .nil))))))
+
+/-- A one-slot calls row holding an invoke conforms to `callsTy [invoke-only]`. -/
+theorem invokeRow_conforms (obj : ByteArray) (h : obj.size ≤ Bounds.bytesMax) :
+    Conforms (.record [("c0", .inj "some" (invokeD obj))]) (callsTy [invokeSlot]) :=
+  .record (.cons (.inj (A := invokeSlot) rfl (invokeD_conforms obj h)) .nil)
+
+/-- `callsOf_not_digest`'s refusal is the one `callsOf_live` allows: bytes the digest refuses. -/
+theorem not_digest_is_live :
+    ∀ e, callsOf dig8 (.record [("c0", .inj "some" (invokeD ⟨#[120, 121, 122]⟩))]) = .error e →
+      DigestRefusal dig8 (.record [("c0", .inj "some" (invokeD ⟨#[120, 121, 122]⟩))]) e :=
+  callsOf_live (by simp [invokeSlot_ok]) (invokeRow_conforms _ (by decide))
+
+/-- A call read from an invoke-only slot is an invoke, the row's one call. -/
+theorem skip_none_kind {bs : List (Body ByteArray)}
+    (h : callsOf dig8 (.record [("c0", .inj "some" (invokeD obj8))]) = .ok bs) :
+    ∀ b ∈ bs, b.kindName = "invoke" := by
+  have hc := invokeRow_conforms obj8 (by decide)
+  cases hc with
+  | record hrow =>
+    obtain ⟨ts, hts, hf⟩ := callsOf_go_kinds hrow (slotRow_callsTy (ks := [invokeSlot]) (by simp [invokeSlot_ok]))
+      (by simpa [callsOf] using h)
+    intro b hb
+    obtain ⟨t, ht, arms, hta, hk⟩ := hf.mem_left b hb
+    have htm := hts.subset ht
+    simp only [slotLabels, List.range, List.range.loop, List.map, List.zip, List.zipWith, List.mem_cons,
+      List.not_mem_nil, or_false] at htm
+    subst htm
+    simp only [invokeSlot, callOf, optTy, Ty.sum.injEq, List.cons.injEq, Prod.mk.injEq, true_and, and_true] at hta
+    subst hta
+    simpa [callArms] using hk
+
+/-- The Sim's digest codec (`u64`, little-endian) reads back what it writes: `bodyOf_callData`'s
+premise at the deployed toy parameters. -/
+theorem sim_digest_roundtrip (x : Kernel.Sim.D) : Kernel.Sim.digestOf (Kernel.Sim.dc.bytes x) = some x := by
+  unfold Kernel.Sim.digestOf Kernel.Sim.dc
+  rw [Codec.Stream.decode_bytes Codec.Stream.u64_lawful]
+
+theorem bodyOf_callData_sim {b : Body Kernel.Sim.D} {d : Data} (h : callData Kernel.Sim.dc.bytes b = some d) :
+    bodyOf Kernel.Sim.digestOf d = .ok b :=
+  bodyOf_callData sim_digest_roundtrip h
 
 end Nanodregg.Lang.Teeth
