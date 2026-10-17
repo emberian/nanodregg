@@ -181,7 +181,7 @@ def expectArg (s : String) : Except ParseRefusal (Nat × ByteArray) :=
 /-- A package's text, read by LANG's reader, as its canonical bytes. -/
 def packageArg (t : String) : Except ParseRefusal ByteArray :=
   match Lang.Read.readPackage t with
-  | .error e => .error (.badPackage e)
+  | .error e => .error (.badPackage e.text)
   | .ok p => match Lang.Wire.encodePackage p with
     | some b => .ok b
     | none => .error (.badPackage "past the package bounds")

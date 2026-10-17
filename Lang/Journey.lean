@@ -230,10 +230,22 @@ def journey (mode : Mode) : Run := Id.run do
   let some ownedBytes := Wire.encodePackage owned | return note r "L0 Owned has no bytes" false
   let some illBytes := Wire.encodePackage illTyped | return note r "L0 illTyped has no bytes" false
   match Read.readPackage ownedText with
-  | .error e => r := note r s!"L0 read Owned: {e}" false
+  | .error e => r := note r s!"L0 read Owned: {e.text}" false
   | .ok q =>
     let same := Wire.encodePackage q == some ownedBytes
     r := note r "L0 read Owned from text: same bytes as the AST" same
+  -- L0b a seed state read at the package's state type (Read.readData): fields in any order; a
+  -- missing field, a wrong-typed value, an unknown sum arm refused `notOfType`
+  let seedOk := match Read.readData S "(record (total 5) (owner \"a\"))" with
+    | .ok (.record [("owner", .bytes o), ("total", .nat 5)]) => o == "a".toUTF8
+    | _ => false
+  r := note r "L0b read a seed at Owned's state type" seedOk
+  for (txt, why) in [("(record (total 5))", "missing field"), ("(record (owner 1) (total 5))", "wrong type"),
+                     ("(record (owner \"a\") (total 18446744073709551616))", "past natLimit")] do
+    let refused := match Read.readData S txt with
+      | .error (.notOfType _) => true
+      | _ => false
+    r := note r s!"L0b refuse a seed with a {why}: notOfType" refused
   -- L1 install
   let c1 := Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id]) (.install ownedBytes)
   let (r1, v1, t1) := go prog r c1
