@@ -494,6 +494,23 @@ an operator may find surprising; the refusal must say so.
 **Meta-critique.** I prefer the mechanism I already built (Tag.of) to a new rule, which is the familiar-tool
 bias; the test is that it removes a promise someone would have to keep.
 Status: accepted by OPS-2 (7f7b6da); built after KERNEL-29's Carried lands.
+**Built (CODEC-5, 2026-10-18, on KERNEL-29 b8e0f82).** `Codec/World.lean`: `carriedWire E dc` = `cells E dc ‖
+nat64 allowance ‖ nat64 height ‖ ascendingList Bounds.journalMax Prod.fst (dc ‖ nat64 ‖ dc)` (KERNEL-29's
+`Carried` = {trie, allowance, height, journal}; the same order as KERNEL's `carryInput`), and `carried E dc`
+under refine `kernel/carried/v1`. `Codec/Proofs/Carried.lean`: `carriedWire_lawfulOn`, `carriedWire_decode_iff`
+(on the wire, `decode b = .ok x ↔ b = bytes x` exactly), `carried_decode_iff` (canonicity of the state: for a
+fitting `c`, `b` decodes to a state `CarriedEquiv` to `c` ↔ `b = bytes c`), `eq_bytes_of_carried_decode`,
+`carried_decode_bytes`, `carried_bytes_equiv` (so HOST's byte equality on import IS contents equality),
+`carried_decode_canon` (the decoded trie is `Trie.Canon`, every slot holds its kind's leaf), `carried_fits`
+(the carried state of a `World.CodecFits` World with `journal.size < Bounds.journalMax` — every reached World,
+`Kernel.reach_journal_bounded` — is in the codec's domain). Teeth (Codec/Proofs/WorldTooth.lean, `decide +kernel`
+over `Kernel.Sim`): `carried_reads_ascending_journal`, `carried_refuses_swapped_journal` and
+`carried_refuses_repeated_txId` (both refused `kernel/ascending` by name); the trie's own plants are CODEC-19's.
+**Critique (built).** Canonicity of the decoded STATE is up to `CarriedEquiv`, not `=`: the journal is a `TreeMap`
+whose balancing is not its contents, so two maps with one listing can be unequal terms. Everything else (the
+trie, both counters) is `=`, the wire is exact, and the bytes are a function of the contents
+(`carried_bytes_equiv`), which is what the import's byte comparison needs. Making it `=` would need KERNEL to
+carry the journal as a sorted list rather than a `TreeMap`.
 
 ### Review · LEDGER's `Stream.i64` (b2d60e7), CODEC-2 10-17
 `i64 = refine "i64" u64 (some ∘ toInt64) toUInt64` and `i64_lawful` via `refine_lawful u64_lawful` with

@@ -34,4 +34,27 @@ theorem cells_refuses_misfit_leaf :
      | .error (.rejected _ "kernel/leaf-fit") => true
      | _ => false) = true := by decide +kernel
 
+/-! ## The carried codec's teeth (CODEC-22) -/
+
+/-- A carried state whose journal ascends by transaction id decodes, and lists back the same journal. -/
+theorem carried_reads_ascending_journal :
+    (match (carried Sim.env Sim.dc).decode
+        ((carriedWire Sim.env Sim.dc).bytes (.empty, 5, 7, [(1, (2, 3)), (4, (5, 6))])) with
+     | .ok c => c.journal.toList == [(1, (2, 3)), (4, (5, 6))] && c.allowance == 5 && c.height == 7
+     | .error _ => false) = true := by decide +kernel
+
+/-- The plant: the same journal entries swapped are refused `kernel/ascending` by name. -/
+theorem carried_refuses_swapped_journal :
+    (match (carried Sim.env Sim.dc).decode
+        ((carriedWire Sim.env Sim.dc).bytes (.empty, 5, 7, [(4, (5, 6)), (1, (2, 3))])) with
+     | .error (.rejected _ "kernel/ascending") => true
+     | _ => false) = true := by decide +kernel
+
+/-- A transaction id listed twice is refused `kernel/ascending` too: the order is strict. -/
+theorem carried_refuses_repeated_txId :
+    (match (carried Sim.env Sim.dc).decode
+        ((carriedWire Sim.env Sim.dc).bytes (.empty, 5, 7, [(1, (2, 3)), (1, (5, 6))])) with
+     | .error (.rejected _ "kernel/ascending") => true
+     | _ => false) = true := by decide +kernel
+
 end Nanodregg.Codec.Kernel

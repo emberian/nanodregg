@@ -114,4 +114,32 @@ def world [DecidableEq D] (E : Env D) (dc : Stream D) : Stream (World D) where
 def batch (max : Nat) (dc : Stream D) : Stream (List (Turn D × D)) :=
   rawList max (product (turn dc) dc)
 
+/-! ## The carried state (CODEC-22, KERNEL-29)
+
+`trie ‖ allowance u64 ‖ height u64 ‖ journal`: the trie as the World codec's listing (its `kernel/leaf-fit` and
+`kernel/trie-order` refusals), the journal strictly ascending by transaction id and at most
+`Bounds.journalMax` entries (every reached World holds fewer: `Kernel.reach_journal_bounded`). An export
+stamps the shape's tag; the import compares it before decoding. -/
+
+/-- The carried state's contents, in canonical order. -/
+abbrev CarriedWire (D : Type) := Cells D × Nat × Nat × List (D × (Nat × D))
+
+def carriedWire [DecidableEq D] (E : Env D) (dc : Stream D) : Stream (CarriedWire D) :=
+  product (cells E dc) (product nat64 (product nat64
+    (ascendingList Bounds.journalMax Prod.fst (product dc (product nat64 dc)))))
+
+def carriedToWire (c : Carried D) : CarriedWire D := (c.trie, c.allowance, c.height, c.journal.toList)
+
+def carriedOfWire (x : CarriedWire D) : Carried D :=
+  ⟨x.1, x.2.1, x.2.2.1, Std.TreeMap.ofList x.2.2.2 compare⟩
+
+def carried [DecidableEq D] (E : Env D) (dc : Stream D) : Stream (Carried D) where
+  shape := .refine "kernel/carried/v1" (carriedWire E dc).shape
+  size c := (carriedWire E dc).size (carriedToWire c)
+  put c buf := (carriedWire E dc).put (carriedToWire c) buf
+  get b i :=
+    match (carriedWire E dc).get b i with
+    | .ok (x, j) => .ok (carriedOfWire x, j)
+    | .error e => .error e
+
 end Nanodregg.Codec.Kernel
