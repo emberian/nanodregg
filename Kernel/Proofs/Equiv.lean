@@ -54,7 +54,7 @@ theorem spendAll_congr {s₁ s₂ : Std.TreeSet D compare} (h : s₁.Equiv s₂)
 
 omit [Std.LawfulEqOrd D] [DecidableEq D] in
 theorem commit_congr {E : Env D} {a b : World D} (h : a.Equiv b) (t : Turn D)
-    (posts : List (D × Entry)) : (commit E a t posts).Equiv (commit E b t posts) := by
+    (posts : List (Post D)) : (commit E a t posts).Equiv (commit E b t posts) := by
   obtain ⟨hc, hj, hs, hh, hch, hal⟩ := h
   refine ⟨?_, ?_, spendAll_congr hs _, by simp [commit, hh], by simp [commit, hch],
     by simp [commit, hal]⟩

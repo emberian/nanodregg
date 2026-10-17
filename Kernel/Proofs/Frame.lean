@@ -26,8 +26,8 @@ theorem insertAll_get_of_not_mem {c : D} :
 
 omit [Std.TransOrd D] [Std.LawfulEqOrd D] in
 /-- A touch that leaves something behind leaves it at its own cell, and is not a `keep`. -/
-theorem touchCheck_some {E : Env D} {w : World D} {x : Touch D} {p : D × Entry}
-    (h : touchCheck E w x = .ok (some p)) : p.1 = x.cell ∧ x.act ≠ .keep := by
+theorem touchCheck_some {E : Env D} {w : World D} {x : Touch D} {p : Post D}
+    (h : touchCheck E w x = .ok (some p)) : p.cell = x.cell ∧ x.act ≠ .keep := by
   unfold touchCheck at h
   simp only [except_bind_ok] at h
   obtain ⟨⟨⟩, _, h⟩ := h
@@ -54,8 +54,8 @@ theorem touchCheck_some {E : Env D} {w : World D} {x : Touch D} {p : D × Entry}
 
 omit [Std.TransOrd D] [Std.LawfulEqOrd D] in
 /-- What a checked turn changes is exactly at its non-`keep` touches. -/
-theorem posts_touched {E : Env D} {w : World D} {t : Turn D} {posts : List (D × Entry)}
-    (hk : Checked E w t posts) : ∀ p ∈ posts, ∃ x ∈ t.touches, p.1 = x.cell ∧ x.act ≠ .keep := by
+theorem posts_touched {E : Env D} {w : World D} {t : Turn D} {posts : List (Post D)}
+    (hk : Checked E w t posts) : ∀ p ∈ posts, ∃ x ∈ t.touches, p.cell = x.cell ∧ x.act ≠ .keep := by
   obtain ⟨raw, hm, rfl⟩ := hk.touches
   intro p hp
   have hp : some p ∈ raw := by simpa [List.reduceOption, List.mem_filterMap] using hp
@@ -75,17 +75,18 @@ theorem admit_frame {E : Env D} {w w' : World D} {t : Turn D} {c : D}
     have : (Prod.fst ∘ fun p : D × Cell => (p.1, Entry.live p.2)) = Prod.fst := rfl
     rw [this, List.map_fst_zip (by simp [createdIds])] at hm
     exact hm
-  have hpc : c ∉ posts.map Prod.fst := by
+  have hpc : c ∉ (posts.map Post.pair).map Prod.fst := by
     intro hm
+    rw [List.map_map] at hm
     obtain ⟨p, hp, rfl⟩ := List.mem_map.mp hm
     obtain ⟨x, hx, he, hne⟩ := posts_touched hk p hp
     exact hne (hl x hx he.symm)
-  show (insertAll (insertAll w.cells posts) (bornEntries E t))[c]? = _
+  show (insertAll (insertAll w.cells (posts.map Post.pair)) (bornEntries E t))[c]? = _
   rw [insertAll_get_of_not_mem hcp, insertAll_get_of_not_mem hpc]
 
 omit [Std.TransOrd D] [Std.LawfulEqOrd D] in
 /-- A live ROM cell is only ever kept: a write refuses `romWrite`, a retirement `romRetire`. -/
-theorem rom_keep {E : Env D} {w : World D} {t : Turn D} {posts : List (D × Entry)}
+theorem rom_keep {E : Env D} {w : World D} {t : Turn D} {posts : List (Post D)}
     (hk : Checked E w t posts) {c : D} {cell : Cell} (hlive : w.live c = some cell)
     (hrom : cell.discipline = .rom) : ∀ x ∈ t.touches, x.cell = c → x.act = .keep := by
   intro x hx hxc
@@ -118,7 +119,7 @@ theorem live_contains {w : World D} {c : D} {cell : Cell} (h : w.live c = some c
 
 omit [Std.LawfulEqOrd D] in
 /-- A live cell's id is never born again (`idTaken`). -/
-theorem live_not_created {E : Env D} {w : World D} {t : Turn D} {posts : List (D × Entry)}
+theorem live_not_created {E : Env D} {w : World D} {t : Turn D} {posts : List (Post D)}
     (hk : Checked E w t posts) {c : D} {cell : Cell} (hlive : w.live c = some cell) :
     c ∉ createdIds E t := by
   intro hm

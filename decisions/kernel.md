@@ -259,7 +259,7 @@ on retirement rewards churn-free designs and does nothing for a log that only gr
 I am deferring the refill call because it needs an authority decision. Check: the credit half needs
 none and is mechanical, so it is not deferred for difficulty; it waits for the World-weight theorem,
 which is what makes "exact" a claim rather than a hope.
-Status: open (refill authority: ROOT).
+Status: credit BUILT as KERNEL-19 (exact; writes too). Refill: a grant, later (ROOT).
 
 ## KERNEL-16 · Open sponsoring is wrong as stated: the sponsor does NOT pay (KERNEL-2, 2026-10-16)
 **Finding.** KERNEL-6's critique says "any member may sponsor … and the sponsor pays". There is one
@@ -323,3 +323,37 @@ Status: open.
   attenuation: a grant can be attenuated to "may enrol ≤ n", so no second budget mechanism exists.
   Plant: the drained-World scenario; a member without the right, or past its count, is refused by name.
 - KERNEL-17: the journal is the receipt. ACCEPTED.
+
+## KERNEL-19 · Credit on retirement, exact: storage is CONSERVED (KERNEL-3, 2026-10-16)
+**Decision.** ROOT's KERNEL-15 ruling, built: `touchCheck` returns a `Post {cell, entry, freed}`
+computed from its one lookup. `freed` is what the touch was charged for and does not hold: a
+retired cell's whole `Cell.weight` (its id stays as a tombstone, so `idTaken` still holds, and the
+id is not refunded), and a write's ops weight minus what the cell actually grew (≥ 0 by
+`postWrite_weight`). `credit posts` is their sum; `checkCharge` requires `charge ≤ allowance +
+credit` (a drained World can still retire a cell heavier than the retirement); `commit` sets
+`allowance + credit − charge`. Theorems (Kernel/Proofs/Weight): `admit_world_weight` is now an
+EQUALITY (`w'.weight + credit = w.weight + growth`); `admit_conserves`: `w'.weight + logWeight +
+w'.allowance = w.weight + w.allowance`; `fold_conserves` over a log; `fold_world_weight` (the World
+never exceeds its start's storage plus budget) as its corollary; `admit_retire`: a turn that only
+keeps and retires leaves `allowance + charge = allowance before + Σ retired cells' weight`.
+`admit_charge` restated with the credit; `fold_charge` keeps only "each charge is its weight".
+Sim: grants, revokes (a non-issuer refused `notIssuer`), writes through a grant and through a
+revoked one (`missingCell`); every revoke must hand back exactly the grant cell's weight. Plant:
+credit dropped from `commit` ⇒ kernel-sim 63/64 red ("revoke: allowance … ≠ …") and
+`admit_charge` / `admit_conserves` no longer build.
+**Why the write refund too.** ROOT ruled the retire credit; the write slack is the same quantity
+for the same reason (the charge is an upper bound on growth, settled against the one lookup), and
+with it the budget identity is an equality instead of an inequality: no byte is lost or minted.
+Without it a value overwritten in place cost its size again on every write, forever.
+**Alternatives.** Retire-only credit (inequality kept, overwrites leak budget); recomputing the
+freed weight with a second lookup (cells-touched would rise to 2.0 on retiring turns); charging
+net instead of gross (the signer could no longer state its own price before the lookup).
+**Critique.** The charge the signer signs is gross; what it actually costs depends on the World
+(how big the cell it retires is), so a client cannot read its net cost off its `maxCharge`.
+`Cell.weight` is O(cell) and now runs twice per written touch (bounded by `slotsPerCellMax`, still
+O(touched)). Credit rewards deleting state, which is the intent, and invites retire-and-recreate
+churn, which costs log bytes that are never refunded, so it cannot be farmed.
+**Meta-critique.** I widened ROOT's ruling (writes as well as retires) because the equality is
+prettier. Independent test: the inequality version leaves an unexplained gap between the World's
+storage and its budget that grows with every overwrite; the equality has no such gap to explain.
+Status: built (ROOT may narrow it to retires only by deleting one term).

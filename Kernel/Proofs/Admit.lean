@@ -16,32 +16,33 @@ theorem Reject.name_injective (a b : Reject D) (h : a.name = b.name) : a.ctorIdx
   cases a <;> cases b <;> simp_all [Reject.name] <;> rfl
 
 /-- Every check `admit` runs, as facts; `raw` is what each touch leaves (`none`: unchanged). -/
-structure Checked (E : Env D) (w : World D) (t : Turn D) (posts : List (D × Entry)) : Prop where
+structure Checked (E : Env D) (w : World D) (t : Turn D) (posts : List (Post D)) : Prop where
   bounds : checkBounds t = .ok ()
   journal : checkJournal w t = .ok ()
   shape : checkShape t = .ok ()
   window : checkWindow w t = .ok ()
   touches : ∃ raw, mapEx (touchCheck E w) t.touches = .ok raw ∧ posts = raw.reduceOption
   nullifiers : checkNullifiers w t = .ok ()
-  charge : checkCharge w t = .ok ()
+  charge : checkCharge w t (credit posts) = .ok ()
   creates : checkCreates E w t = .ok ()
 
-theorem check_ok {E : Env D} {w : World D} {t : Turn D} {posts : List (D × Entry)}
+theorem check_ok {E : Env D} {w : World D} {t : Turn D} {posts : List (Post D)}
     (h : check E w t = .ok posts) : Checked E w t posts := by
   unfold check at h
   simp only [except_bind_ok] at h
   obtain ⟨⟨⟩, h1, ⟨⟩, h2, ⟨⟩, h3, ⟨⟩, h4, raw, h5, ⟨⟩, h6, ⟨⟩, h7, ⟨⟩, h8, h9⟩ := h
   simp only [pure, Except.pure, Except.ok.injEq] at h9
-  exact ⟨h1, h2, h3, h4, ⟨raw, h5, h9.symm⟩, h6, h7, h8⟩
+  subst h9
+  exact ⟨h1, h2, h3, h4, ⟨raw, h5, rfl⟩, h6, h7, h8⟩
 
 /-- Every touch of a checked turn passed `touchCheck`. -/
-theorem Checked.touch {E : Env D} {w : World D} {t : Turn D} {posts : List (D × Entry)}
+theorem Checked.touch {E : Env D} {w : World D} {t : Turn D} {posts : List (Post D)}
     (hk : Checked E w t posts) : ∀ x ∈ t.touches, ∃ r, touchCheck E w x = .ok r := by
   obtain ⟨raw, hm, _⟩ := hk.touches
   exact mapEx_each hm
 
 /-- A touch that passes saw what the signer saw. -/
-theorem touchCheck_pin {E : Env D} {w : World D} {x : Touch D} {r : Option (D × Entry)}
+theorem touchCheck_pin {E : Env D} {w : World D} {x : Touch D} {r : Option (Post D)}
     (h : touchCheck E w x = .ok r) : pinOf E (w.live x.cell) = x.seen := by
   unfold touchCheck at h
   simp only [except_bind_ok] at h
@@ -66,19 +67,20 @@ theorem admit_chain {E : Env D} {w w' : World D} {t : Turn D}
     (h : World.admit E w t = .ok w') : w'.chain = chainNext E w.chain t := by
   obtain ⟨_, _, rfl⟩ := admit_ok h; rfl
 
-/-- **Charge exactness.** An admitted turn paid exactly its weight, could afford it, and the
-budget fell by exactly that. -/
+/-- **Charge exactness.** An admitted turn paid exactly its weight, could afford it with what
+its touches give back, and the budget moved by exactly the charge less that credit (KERNEL-15). -/
 theorem admit_charge {E : Env D} {w w' : World D} {t : Turn D}
     (h : World.admit E w t = .ok w') :
-    t.charge = t.weight ∧ t.charge ≤ w.allowance ∧ w'.allowance + t.charge = w.allowance := by
-  obtain ⟨_, hc, rfl⟩ := admit_ok h
+    t.charge = t.weight ∧ ∃ posts, Checked E w t posts ∧ t.charge ≤ w.allowance + credit posts ∧
+      w'.allowance + t.charge = w.allowance + credit posts := by
+  obtain ⟨posts, hc, rfl⟩ := admit_ok h
   have hch := hc.charge
   unfold checkCharge at hch
   simp only [except_bind_ok] at hch
   obtain ⟨⟨⟩, h1, h2⟩ := hch
   rw [req_ok, decide_eq_true_eq] at h1 h2
-  refine ⟨h1, h2, ?_⟩
-  show w.allowance - t.charge + t.charge = w.allowance
+  refine ⟨h1, posts, hc, h2, ?_⟩
+  show w.allowance + credit posts - t.charge + t.charge = w.allowance + credit posts
   omega
 
 /-- **The weight bound.** An admitted turn costs at most `Bounds.weightMax`, its log record

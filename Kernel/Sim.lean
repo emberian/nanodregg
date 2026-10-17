@@ -9,7 +9,9 @@ a fold of its own log prefix at random points, and at the end requires
 * the follower (`World.fold` from genesis over the admitted log) to reach the Host's World,
 * the auditor (`Receive.audit`) to accept the same log and reach the same World,
 * every planted mutation (stale pin, replay, wrong charge, stolen-key rotation, stranger, missing
-  grant, deny-all law) to have been refused by its name.
+  grant, deny-all law, a revoke by a non-issuer, a write through a revoked grant) to have been
+  refused by its name,
+* every revocation to have handed the grant cell's weight back to the budget (KERNEL-15).
 
 Toy PARAMETERS in the real pipeline (memory: never toy code beside it): the digest is `UInt64`,
 the hash FNV-1a, a signature is the hash of key ‖ message, and the program is a two-law stub
@@ -154,6 +156,10 @@ structure State where
   log : List (Turn D) := []
   members : List Member
   objects : List (D × D) := []
+  /-- live grants: (grant, object, grantee, issuer) -/
+  grants : List (D × D × D × D) := []
+  /-- revoked grants: (grant, object, grantee) -/
+  revoked : List (D × D × D) := []
   denyPkg : Option D := none
   fresh : Nat := 0
   lastCall : Option (Call D) := none
@@ -208,7 +214,7 @@ def founder0 (st : State) : Member := st.members.headD ⟨0, ByteArray.empty, By
 
 /-- One generated action. -/
 def act (st : State) : State :=
-  let (k, rng) := st.rng.below 10
+  let (k, rng) := st.rng.below 13
   let st := { st with rng }
   let w := st.host
   match k with
@@ -312,6 +318,62 @@ def act (st : State) : State :=
           let old := signed st m m.key (S.pinsFor st.host [m.id]) (.create none [] [])
           (submit st old (.refused "unknownKey") "old-key").1
       | none => st
+  | 9 => -- the owner grants `mutate` on its object to another member
+      match st.objects with
+      | [] => st
+      | o :: _ =>
+          let (obj, st) := pick st st.objects o
+          let owner := (st.members.find? fun m => m.id = obj.2).getD (founder0 st)
+          let (ge, st) := pick st st.members (founder0 st)
+          let c := signed st owner owner.key (S.pinsFor w [owner.id, ge.id]) (.grant obj.1 ge.id [.mutate] none)
+          let (st, t) := submit st c .ok "grant"
+          match t with
+          | some t => { st with grants := st.grants ++ [((createdIds env t).headD 0, obj.1, ge.id, owner.id)] }
+          | none => st
+  | 10 => -- revoke: a non-issuer is refused; the issuer retires the grant and the budget gets the
+          -- grant cell's weight back (KERNEL-15, `admit_retire`)
+      match st.grants with
+      | [] => st
+      | g0 :: _ =>
+          let (g, st) := pick st st.grants g0
+          let (gid, obj, ge, iss) := g
+          let issuer := (st.members.find? fun m => m.id = iss).getD (founder0 st)
+          let st := match st.members.find? fun m => m.id ≠ iss with
+            | some m => (submit st (signed st m m.key (S.pinsFor w [m.id, gid]) (.revoke gid))
+                (.refused "notIssuer") "revoke-not-issuer").1
+            | none => st
+          let w := st.host
+          let back := ((w.live gid).map Cell.weight).getD 0
+          let (st, t) := submit st (signed st issuer issuer.key (S.pinsFor w [issuer.id, gid]) (.revoke gid))
+            .ok "revoke"
+          match t with
+          | some t =>
+              let st := { st with grants := st.grants.filter (·.1 ≠ gid),
+                                  revoked := st.revoked ++ [(gid, obj, ge)] }
+              if st.host.allowance + t.charge = w.allowance + back ∧ 0 < back then st
+              else { st with failures := s!"revoke: allowance {st.host.allowance} + charge {t.charge} ≠ {w.allowance} + {back}" :: st.failures }
+          | none => st
+  | 11 => -- a grantee writes through its grant (admitted unless the object is under deny-all),
+          -- or through a revoked one (refused: the grant cell is gone)
+      let (useRevoked, st) := st.rng.below 3 |> fun (x, r) => (x == 0, { st with rng := r })
+      let cand := if useRevoked then st.revoked else st.grants.map fun (g, o, ge, _) => (g, o, ge)
+      match cand with
+      | [] => st
+      | g0 :: _ =>
+          let (g, st) := pick st cand g0
+          let (gid, obj, ge) := g
+          match st.members.find? fun m => m.id = ge with
+          | none => st
+          | some m =>
+              let laws := match w.live obj with
+                | some cell => (lawSlotsOf cell).filterMap fun (p : Nat × ByteArray) => ofLe p.2
+                | none => []
+              let denied := laws.any fun l => some l = st.denyPkg
+              let c := signed st m m.key (S.pinsFor w (m.id :: obj :: gid :: laws))
+                (.write obj [(1, nat st.steps)] (some gid))
+              let expect := if useRevoked then .refused "missingCell"
+                else if denied then .refused "lawDenied" else .ok
+              (submit st c expect "write-via-grant").1
   | _ => -- a probe straight at admit: an admitted-shape turn with the wrong charge
       match st.log.getLast? with
       | none => st

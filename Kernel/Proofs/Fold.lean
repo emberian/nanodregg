@@ -119,23 +119,18 @@ theorem fold_chain {E : Env D} :
       obtain ⟨w₁, h₁, h₂⟩ := fold_cons_ok.mp h
       rw [fold_chain h₂, admit_chain h₁]; rfl
 
-/-- **Charge exactness over a log.** The budget falls by exactly the sum of the charges, and
-each charge is its turn's weight. -/
+/-- **Charge exactness over a log.** Each turn of an admitted log paid exactly its weight (where
+the budget went is `Kernel.Proofs.Weight.fold_conserves`). -/
 theorem fold_charge {E : Env D} :
-    ∀ {w w' : World D} {l : List (Turn D)}, World.fold E w l = .ok w' →
-      w'.allowance + (l.map Turn.charge).sum = w.allowance ∧ ∀ t ∈ l, t.charge = t.weight
-  | w, w', [], h => by simp [World.fold] at h; subst h; simp
+    ∀ {w w' : World D} {l : List (Turn D)}, World.fold E w l = .ok w' → ∀ t ∈ l, t.charge = t.weight
+  | w, w', [], _ => by simp
   | w, w', t :: rest, h => by
       obtain ⟨w₁, h₁, h₂⟩ := fold_cons_ok.mp h
-      obtain ⟨ih₁, ih₂⟩ := fold_charge h₂
-      obtain ⟨c₁, _, c₃⟩ := admit_charge h₁
-      refine ⟨?_, ?_⟩
-      · simp only [List.map_cons, List.sum_cons]; omega
-      · intro x hx
-        simp only [List.mem_cons] at hx
-        rcases hx with rfl | hx
-        · exact c₁
-        · exact ih₂ x hx
+      intro x hx
+      simp only [List.mem_cons] at hx
+      rcases hx with rfl | hx
+      · exact (admit_charge h₁).1
+      · exact fold_charge h₂ x hx
 
 /-- The follower's theorem in its usable form: same start, same head after folding, same log
 (or a collision). -/

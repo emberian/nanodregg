@@ -243,9 +243,19 @@ def postWrite (c : D) (cell : Cell) (ops : List Op) : Except (Reject D) Cell :=
       req (post.slots.length ≤ Bounds.slotsPerCellMax) (.overBound .slotsPerCell)
       pure post
 
+/-- What a touch leaves at its cell, and the World storage it charged for but does not hold:
+a retired cell's whole weight, a write's ops minus what the cell actually grew (KERNEL-15). -/
+structure Post (D : Type) where
+  cell : D
+  entry : Entry
+  freed : Nat
+
+def Post.pair {D : Type} (p : Post D) : D × Entry := (p.cell, p.entry)
+
 /-- What a touch leaves at its cell (`none`: unchanged), or why not. The cell is looked up ONCE:
-the pin is checked against it (the one staleness refusal), then the act applies to it. -/
-def touchCheck (E : Env D) (w : World D) (x : Touch D) : Except (Reject D) (Option (D × Entry)) := do
+the pin is checked against it (the one staleness refusal), then the act applies to it, and what it
+frees is computed from the same lookup. -/
+def touchCheck (E : Env D) (w : World D) (x : Touch D) : Except (Reject D) (Option (Post D)) := do
   let cur := w.live x.cell
   req (pinOf E cur = x.seen) (.stale x.cell)
   match x.act, cur with
@@ -253,19 +263,23 @@ def touchCheck (E : Env D) (w : World D) (x : Touch D) : Except (Reject D) (Opti
   | .write _, none => .error (.missingCell x.cell)
   | .write ops, some cell => do
       let post ← postWrite x.cell cell ops
-      pure (some (x.cell, .live post))
+      pure (some ⟨x.cell, .live post, cell.weight + (ops.map Op.weight).sum - post.weight⟩)
   | .retire, none => .error (.missingCell x.cell)
   | .retire, some cell => do
       req (cell.discipline != .rom) (.romRetire x.cell)
-      pure (some (x.cell, .tomb))
+      pure (some ⟨x.cell, .tomb, cell.weight⟩)
 
 def checkNullifiers (w : World D) (t : Turn D) : Except (Reject D) Unit :=
   forEx (fun n => req (!w.spent.contains n) (.spent n)) t.nullifiers
 
-/-- The turn pays exactly its weight, and can afford it. -/
-def checkCharge (w : World D) (t : Turn D) : Except (Reject D) Unit := do
+/-- The storage a turn's touches give back to the budget. -/
+def credit (posts : List (Post D)) : Nat := (posts.map Post.freed).sum
+
+/-- The turn pays exactly its weight, and can afford it with what its touches give back (so a
+drained World can still retire a cell heavier than the retirement). -/
+def checkCharge (w : World D) (t : Turn D) (back : Nat) : Except (Reject D) Unit := do
   req (t.charge = t.weight) (.chargeMismatch t.weight)
-  req (t.charge ≤ w.allowance) .overAllowance
+  req (t.charge ≤ w.allowance + back) .overAllowance
 
 /-- Born ids are fresh: not in the World (live or tombstoned), not twice in the turn, and not
 touched by it. -/
@@ -275,16 +289,16 @@ def checkCreates (E : Env D) (w : World D) (t : Turn D) : Except (Reject D) Unit
   forEx (fun c => req (!w.cells.contains c) (.idTaken c)) (createdIds E t)
 
 /-- Every check, against the pre-state only; on success, what the touches leave behind. -/
-def check (E : Env D) (w : World D) (t : Turn D) : Except (Reject D) (List (D × Entry)) := do
+def check (E : Env D) (w : World D) (t : Turn D) : Except (Reject D) (List (Post D)) := do
   checkBounds t
   checkJournal w t
   checkShape t
   checkWindow w t
-  let posts ← mapEx (touchCheck E w) t.touches
+  let posts := (← mapEx (touchCheck E w) t.touches).reduceOption
   checkNullifiers w t
-  checkCharge w t
+  checkCharge w t (credit posts)
   checkCreates E w t
-  pure posts.reduceOption
+  pure posts
 
 def insertAll (m : Std.TreeMap D Entry compare) (ps : List (D × Entry)) :
     Std.TreeMap D Entry compare :=
@@ -297,13 +311,13 @@ def bornEntries (E : Env D) (t : Turn D) : List (D × Entry) :=
   (createdPairs E t).map fun p => (p.1, .live p.2)
 
 /-- The World after a checked turn. Total: everything that can fail failed in `check`. -/
-def commit (E : Env D) (w : World D) (t : Turn D) (posts : List (D × Entry)) : World D :=
-  { cells := insertAll (insertAll w.cells posts) (bornEntries E t)
+def commit (E : Env D) (w : World D) (t : Turn D) (posts : List (Post D)) : World D :=
+  { cells := insertAll (insertAll w.cells (posts.map Post.pair)) (bornEntries E t)
     journal := w.journal.insert t.txId (w.height + 1, turnDigest E t)
     spent := spendAll w.spent t.nullifiers
     height := w.height + 1
     chain := chainNext E w.chain t
-    allowance := w.allowance - t.charge }
+    allowance := w.allowance + credit posts - t.charge }
 
 /-- THE transition. Fail-closed: a refusal returns no World. -/
 def World.admit (E : Env D) (w : World D) (t : Turn D) : Except (Reject D) (World D) :=
