@@ -290,3 +290,23 @@ forever: at THE BAR, 1000 turns cost 72 KB; at 10^6 turns, 72 MB resident. **Met
 "Pruning loses receipts" is a correctness argument, and I may be leaning on it so I don't have to build
 (a). Revisit when a World passes 10^6 turns. Nothing earlier forces it.
 Status: open.
+
+## KERNEL-18 · `worldBytesMax` is the genesis budget; the theorem is `fold_world_weight` (KERNEL-2, 2026-10-16)
+**Decision.** `World.weight` (each cell entry with its id, journal entries, spent nullifiers, at the
+same per-field costs as `Turn.weight`) is bounded by the budget. `admit_world_weight`: an admitted
+turn adds at most `Turn.growth`. `fold_world_weight`: over any admitted log, `World.weight + Σ
+logWeight + allowance` never exceeds its starting value. So a World folded from a genesis with budget
+`A` never holds more than its genesis storage plus `A`, and a turn that would push it past that is
+refused `overAllowance` by name. HOST-14's `worldBytesMax` is therefore HOST's choice of genesis
+allowance, sized to its memory. No second constant is kept in Kernel.Bounds, because two bounds on
+one quantity drift apart. Plant: dropping the write ops from `Turn.growth` breaks
+`admit_world_weight` (omega fails).
+**Critique.** `World.weight` is the kernel's measure, not CODEC's encoded size or the resident
+memory of the TreeMaps (node overhead is several times 32 bytes per entry). HOST must scale its memory
+budget by that factor, and CODEC owes `size (encode w) ≤ c · World.weight w`. The bound is by the
+WHOLE budget, so a World that spends most of its budget on log bytes has a smaller World than the
+bound says. That is an over-approximation, not an error. **Meta-critique.** This was attractive
+because it falls out of KERNEL-12's charge change, so I may have shaped KERNEL-12 to get it. The
+independent test: the allowance already claimed to be "the storage budget", and only now is that a
+theorem about storage.
+Status: open.

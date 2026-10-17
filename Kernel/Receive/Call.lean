@@ -115,6 +115,33 @@ inductive Refusal (D : Type)
   | eventMismatch
   deriving DecidableEq, Repr
 
+/-- The refusal's name on the wire (law 7): its constructor's, arguments dropped
+(`Refusal.name_injective`). -/
+def Refusal.name {D : Type} : Refusal D → String
+  | .badSignature => "badSignature"
+  | .unknownKey _ => "unknownKey"
+  | .notPrecommitted _ => "notPrecommitted"
+  | .badPossession => "badPossession"
+  | .unpinned _ => "unpinned"
+  | .missingCell _ => "missingCell"
+  | .wrongKind _ _ => "wrongKind"
+  | .malformedCell _ _ => "malformedCell"
+  | .lawDenied _ _ => "lawDenied"
+  | .program _ => "program"
+  | .stateKey _ => "stateKey"
+  | .tooManyLaws => "tooManyLaws"
+  | .hasMethods _ => "hasMethods"
+  | .noMethods _ => "noMethods"
+  | .noGrant _ => "noGrant"
+  | .grantTarget _ => "grantTarget"
+  | .grantRight _ => "grantRight"
+  | .grantWidens _ => "grantWidens"
+  | .notIssuer _ => "notIssuer"
+  | .grantTooDeep => "grantTooDeep"
+  | .overPrice _ => "overPrice"
+  | .undecodableEvent => "undecodableEvent"
+  | .eventMismatch => "eventMismatch"
+
 /-- A receiver's only access to state: live cells at pinned ids. -/
 abbrev Pinned (D : Type) := D → Except (Refusal D) (Option Cell)
 

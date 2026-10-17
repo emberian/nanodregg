@@ -10,6 +10,11 @@ open Nanodregg.Kernel
 
 variable {D : Type} [Ord D] [DecidableEq D]
 
+omit [Ord D] [DecidableEq D] in
+/-- Distinct constructors have distinct wire names (law 7): equal names, same constructor. -/
+theorem Refusal.name_injective (a b : Refusal D) (h : a.name = b.name) : a.ctorIdx = b.ctorIdx := by
+  cases a <;> cases b <;> simp_all [Refusal.name] <;> rfl
+
 /-- **Consent determinism.** A derivation depends only on the cells the caller pinned: two
 Worlds that agree there derive the same Turn (or the same refusal) from the same call. -/
 theorem receive_congr {X : Ctx D} {w₁ w₂ : World D} {c : Call D}

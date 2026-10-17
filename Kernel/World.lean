@@ -63,6 +63,27 @@ inductive Reject (D : Type)
   | appendOnly (cell : D) (key : Nat)
   deriving DecidableEq, Repr
 
+/-- The refusal's name on the wire (law 7): its constructor's, arguments dropped
+(`Reject.name_injective`). -/
+def Reject.name {D : Type} : Reject D → String
+  | .overBound _ => "overBound"
+  | .replayed _ => "replayed"
+  | .duplicateTouch _ => "duplicateTouch"
+  | .duplicateNullifier _ => "duplicateNullifier"
+  | .duplicateKey _ _ => "duplicateKey"
+  | .nonCanonicalCell _ => "nonCanonicalCell"
+  | .outsideWindow => "outsideWindow"
+  | .stale _ => "stale"
+  | .spent _ => "spent"
+  | .chargeMismatch _ => "chargeMismatch"
+  | .overAllowance => "overAllowance"
+  | .idTaken _ => "idTaken"
+  | .bornTouched _ => "bornTouched"
+  | .missingCell _ => "missingCell"
+  | .romWrite _ => "romWrite"
+  | .romRetire _ => "romRetire"
+  | .appendOnly _ _ => "appendOnly"
+
 variable {D : Type} [Ord D]
 
 structure World (D : Type) [Ord D] where
@@ -130,6 +151,21 @@ def live (w : World D) (c : D) : Option Cell :=
   match w.cells[c]? with
   | some (.live cell) => some cell
   | _ => none
+
+/-- What an entry costs in the World: a live cell its weight, a tombstone nothing beyond its id. -/
+def _root_.Nanodregg.Kernel.Entry.weight : Entry → Nat
+  | .live c => c.weight
+  | .tomb => 0
+
+/-- The weight of a cell map: each entry with its id. -/
+def _root_.Nanodregg.Kernel.cellsWeight (m : Std.TreeMap D Entry compare) : Nat :=
+  (m.toList.map fun p => digestWeight + p.2.weight).sum
+
+/-- The storage a World holds, by the same per-field costs as `Turn.weight`: each cell entry with
+its id, each journal entry, each spent nullifier. A specification measure (O(store)), never
+computed on the request path; `Kernel.Proofs.Weight` bounds it by the budget spent. -/
+def weight (w : World D) : Nat :=
+  cellsWeight w.cells + journalWeight * w.journal.size + digestWeight * w.spent.size
 
 end World
 

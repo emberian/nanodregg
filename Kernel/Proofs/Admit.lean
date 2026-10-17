@@ -10,6 +10,11 @@ namespace Nanodregg.Kernel
 
 variable {D : Type} [Ord D] [DecidableEq D]
 
+omit [Ord D] [DecidableEq D] in
+/-- Distinct constructors have distinct wire names (law 7): equal names, same constructor. -/
+theorem Reject.name_injective (a b : Reject D) (h : a.name = b.name) : a.ctorIdx = b.ctorIdx := by
+  cases a <;> cases b <;> simp_all [Reject.name] <;> rfl
+
 /-- Every check `admit` runs, as facts; `raw` is what each touch leaves (`none`: unchanged). -/
 structure Checked (E : Env D) (w : World D) (t : Turn D) (posts : List (D × Entry)) : Prop where
   bounds : checkBounds t = .ok ()
