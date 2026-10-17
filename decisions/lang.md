@@ -539,4 +539,42 @@ starts with `#`, just as a numeral shadows a binder named `5`.
 **Meta-critique.** I kept HOSTING's package layout so that their shipped file stays byte-identical. That
 is a compatibility reason, which CLAUDE.md says is not a reason. The real reason is that one section
 per line is the layout a member reads.
-**Status.** built (the round trip theorem is LANG-28's next commit).
+**Status.** built; the round trip is LANG-29.
+
+## LANG-29 The printer's round trip is a theorem (2026-10-17; LANG-28's next commit)
+**Decision.** `Lang.Proofs.PrintParse` + `Lang.Proofs.Print` prove that reading the printed text
+gives back exactly what was printed: `readTy_ty` (a `wf` type), `readTerm_term` (a `Canon` closed
+term: ascending rows, `wf` annotations), `readData_data` (data conforming to a `wf` type, at that
+type), `readPackage_package`, and the corollaries `readTerm_checked` / `readPackage_checked`: every
+closed term that checks, and every package `checkWith` accepts over canonical import interfaces,
+is canonical (`hasType_canon`) and so reads back. The proof has two halves. The parser half
+(`sexp_chars`, `sexps_items`) shows that `Read.sexp` over `chars x` returns `x` up to offsets
+(`Same`) for an `Ok` form within the fuel `need x`. The elaboration half (`ty_tySx`,
+`term_termSx`, `dataAt_dataSx`) runs over any form `Same` as the printed one. The printer now
+refuses (`none`) a form past `Read.depthMax` (`fits`), so its `some` covers every case the theorem
+does: the fuel is not a premise. Teeth: `reqTy_reads`, `five_reads`, `id_reads`, `empty_package_reads`, three refusals by `decide`;
+journey L0c prints `Owned` and reads it back to the same bytes, refuses a non-atom label, and
+round-trips non-UTF-8 bytes as `#hex`.
+**Alternatives.** One closed instance per shipped package by `native_decide` (HOSTING's
+`lifecycle_text_reads`): an instance of a general fact, trusting the compiler. A bisimulation over
+strings without the `SExp` step: the offsets and the string appends would be tangled together in
+every case.
+**Critique.** `Canon` is a premise of `readTerm_term`, discharged for checked terms. A term that does not
+check but has unsorted rows prints to a text that reads back as the SORTED term. The theorem
+says nothing about such a term, and nothing should. `readPackage_checked` needs canonical
+import interfaces: an import whose interface is not `wf` could make a `case` over its sum read back
+reordered. Installed interfaces are checked, but this file does not prove that (LANG-2's item 3).
+The parser theorem covers only the printer's own layout (one space, or "\n  " per section), not
+arbitrary whitespace or comments. That is enough for a round trip, and it is not a statement
+about every text. The fuel bound is the reader's, and the reader spends fuel per list ELEMENT as
+well as per nesting level (`Read.sexps`), so a long `anyOf`/`guards` chain costs in proportion to
+its length: measured 10-17, a 63-member `Std.quorum` law needs 385 of 512 and a 63-id `allowlist`
+351. An installed package that goes past 512 has no text at all, for the reader and the printer
+alike. The fix is on the reader side: fuel by nesting depth only, with list length bounded
+separately. It is open (vacuity read a773ed76, MEDIUM). Also open from that read: `Read` accepts a
+binder named `true`, `5` or `#ab`, and every use of it reads as the literal, so that binder is
+unreachable. The reader should refuse such a binder by name.
+**Meta-critique.** I proved the round trip because HOSTING held a compiled instance and the brief
+said "the general fact". The fuel bound became a printer check partly so the theorem could drop a
+premise. It is also right on its own terms: the printer must not emit a text the reader refuses.
+**Status.** built.

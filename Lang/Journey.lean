@@ -9,6 +9,8 @@ laws are `bounded` (`new.total ≤ 100`, else "over 100") and `ownerOnly` (the S
 the owner and the owner never changes). Rows:
 
 * L0 the text form of `Owned` (`Lang.Read`, what a resident writes) reads to the same bytes.
+* L0c `Lang.Print` gives `Owned` its text, which reads back to the same bytes; a non-atom label
+  has no text; bytes that are not quote-free UTF-8 print as `#hex` and read back.
 * L1 founder A installs `Owned` (a ROM cell, id `romIdOf`) — admitted.
 * L2 A creates an object owned by A, seed `{owner = A, total = 0}`, judged by both laws — admitted.
 * L3 A invokes `set 50` — admitted; the object's `total` slot decodes to 50.
@@ -246,6 +248,24 @@ def journey (mode : Mode) : Run := Id.run do
   | .ok q =>
     let same := Wire.encodePackage q == some ownedBytes
     r := note r "L0 read Owned from text: same bytes as the AST" same
+  -- L0c the printer (Lang.Print) gives Owned a text that reads back to the same bytes; a label
+  -- that is not one atom has no text; non-UTF-8 bytes in a term print as #hex and read back
+  match Print.package owned with
+  | none => r := note r "L0c print Owned: no text" false
+  | some t =>
+    let same := match Read.readPackage t with
+      | .ok q => Wire.encodePackage q == some ownedBytes
+      | .error _ => false
+    r := note r "L0c print Owned, read the text: same bytes" same
+  r := note r "L0c a method label with a space has no text"
+    (Print.package { owned with methods := ["s et"] }).isNone
+  let ff : ByteArray := ⟨#[0xff, 0x22]⟩
+  let hexBack := match Print.term (.prim .cat (.bytes ff) (.bytes "q".toUTF8)) with
+    | some t => (match Read.readTerm t with
+      | .ok (.prim .cat (.bytes x) (.bytes y)) => x == ff && y == "q".toUTF8
+      | _ => false) && t == "(cat #ff22 \"q\")"
+    | none => false
+  r := note r "L0c bytes that are not quote-free UTF-8 print as #hex and read back" hexBack
   -- L0b a seed state read at the package's state type (Read.readData): fields in any order; a
   -- missing field, a wrong-typed value, an unknown sum arm refused `notOfType`
   let seedOk := match Read.readData S "(record (total 5) (owner \"a\"))" with
