@@ -1,23 +1,106 @@
-//! The isolation test's grain (`launcher/tests/isolation.rs`). Run as `<grain>/pkg/probe`, with no
-//! arguments and an empty environment (the sandbox clears both), it reads `probe.targets` beside
-//! itself — lines `NAME read|write|connect|list PATH` — tries each, and writes one line per target,
+//! The launcher tests' grain (`launcher/tests/isolation.rs`, `launcher/tests/resident.rs`). Run as
+//! `<grain>/pkg/probe`, with no arguments and an empty environment (the sandbox clears both), it
+//! reads `probe.targets` beside itself (lines `NAME OP PATH`), tries each in order, and appends one
+//! line per target to `<grain>/vol/probe.out` as soon as it is tried, so a test can follow it:
 //! `NAME ok` (a `list` prints `ok` and the sorted names, comma-separated) or `NAME denied <errno
-//! name>`, to `<grain>/vol/probe.out`. `connect` opens a unix socket (a resident's broker socket,
-//! HOSTING-17). It finds itself by argv[0]
-//! (no /proc under bwrap). Exit 3 when it cannot write its own volume.
+//! name>`. The ops:
+//! - `read`, `write`, `list`: the file system;
+//! - `connect`: open a unix socket (a resident's broker socket, HOSTING-17);
+//! - `ask`: connect to a broker socket and send one ask (model `claude-m`, 10 tokens, `hello`),
+//!   then print `ok answer <status>` or `ok refused <broker refusal>`. Every byte received is
+//!   appended to `<grain>/vol/probe.recv`, so the test can check that no key reached the grain;
+//! - `wait`: wait (at most `WAIT`) until the file PATH exists, so a test can sequence the grain
+//!   with what it does outside (`ok`, or `denied timeout`).
+//!
+//! It finds itself by argv[0] (no /proc under bwrap). Exit 3 when it cannot write its own volume.
 
-use std::io::{ErrorKind, Read};
-use std::path::PathBuf;
+use std::io::{ErrorKind, Read, Write};
+use std::os::unix::net::UnixStream;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::time::{Duration, Instant};
 
-fn attempt(op: &str, path: &str) -> String {
+use nanodregg_launcher::broker_generated::wire::{Answer, Ask};
+use nanodregg_launcher::broker_generated::{read_frame, write_frame};
+
+/// The longest a `wait` target waits.
+const WAIT: Duration = Duration::from_secs(120);
+/// The longest an `ask` waits for its answer.
+const ASK: Duration = Duration::from_secs(60);
+
+fn errno(e: &std::io::Error) -> String {
+    let name = match e.kind() {
+        ErrorKind::PermissionDenied => "EACCES/EPERM".to_string(),
+        ErrorKind::NotFound => "ENOENT".to_string(),
+        ErrorKind::ReadOnlyFilesystem => "EROFS".to_string(),
+        ErrorKind::ConnectionRefused => "ECONNREFUSED".to_string(),
+        k => format!("{k:?}"),
+    };
+    format!("denied {name}")
+}
+
+fn ask(path: &str, recv: &Path) -> String {
+    let s = UnixStream::connect(path).and_then(|s| {
+        s.set_read_timeout(Some(ASK))?;
+        Ok(s)
+    });
+    let mut s = match s {
+        Ok(s) => s,
+        Err(e) => return errno(&e),
+    };
+    let Ok(a) = (Ask::Ask {
+        model: b"claude-m".to_vec(),
+        max_tokens: 10,
+        system: vec![],
+        roles: vec![0],
+        texts: vec![b"hello".to_vec()],
+    })
+    .encode() else {
+        return "bad-ask".into();
+    };
+    if write_frame(&mut s, &a).is_err() {
+        return "denied write".into();
+    }
+    let f = match read_frame(&mut s) {
+        Ok(f) => f,
+        Err(e) => return format!("denied read {e:?}"),
+    };
+    let kept = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(recv)
+        .and_then(|mut r| r.write_all(&f));
+    if kept.is_err() {
+        return "denied recv".into();
+    }
+    match Answer::decode(&f) {
+        Ok(Answer::Answer { status, .. }) => format!("ok answer {status}"),
+        Ok(Answer::Refused { broker_refusal }) => format!("ok refused {}", broker_refusal.name()),
+        Err(e) => format!("denied decode {e:?}"),
+    }
+}
+
+fn wait(path: &str) -> String {
+    let deadline = Instant::now() + WAIT;
+    while Instant::now() < deadline {
+        if Path::new(path).exists() {
+            return "ok".into();
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    "denied timeout".into()
+}
+
+fn attempt(op: &str, path: &str, recv: &Path) -> String {
     let r = match op {
         "read" => std::fs::File::open(path).and_then(|mut f| {
             let mut b = Vec::new();
             f.read_to_end(&mut b).map(|_| ())
         }),
         "write" => std::fs::write(path, b"probe"),
-        "connect" => std::os::unix::net::UnixStream::connect(path).map(|_| ()),
+        "connect" => UnixStream::connect(path).map(|_| ()),
+        "ask" => return ask(path, recv),
+        "wait" => return wait(path),
         "list" => match std::fs::read_dir(path) {
             Ok(rd) => {
                 let mut names: Vec<String> = rd
@@ -33,16 +116,7 @@ fn attempt(op: &str, path: &str) -> String {
     };
     match r {
         Ok(()) => "ok".into(),
-        Err(e) => {
-            let name = match e.kind() {
-                ErrorKind::PermissionDenied => "EACCES/EPERM".to_string(),
-                ErrorKind::NotFound => "ENOENT".to_string(),
-                ErrorKind::ReadOnlyFilesystem => "EROFS".to_string(),
-                ErrorKind::ConnectionRefused => "ECONNREFUSED".to_string(),
-                k => format!("{k:?}"),
-            };
-            format!("denied {name}")
-        }
+        Err(e) => errno(&e),
     }
 }
 
@@ -59,15 +133,26 @@ fn main() -> ExitCode {
     let Ok(targets) = std::fs::read_to_string(pkg.join("probe.targets")) else {
         return ExitCode::from(2);
     };
-    let mut out = String::new();
+    let vol = grain.join("vol");
+    let recv = vol.join("probe.recv");
+    let Ok(mut out) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(vol.join("probe.out"))
+    else {
+        return ExitCode::from(3);
+    };
     for line in targets.lines() {
         let mut f = line.splitn(3, ' ');
         if let (Some(name), Some(op), Some(path)) = (f.next(), f.next(), f.next()) {
-            out += &format!("{name} {}\n", attempt(op, path));
+            let v = attempt(op, path, &recv);
+            if writeln!(out, "{name} {v}")
+                .and_then(|()| out.flush())
+                .is_err()
+            {
+                return ExitCode::from(3);
+            }
         }
     }
-    match std::fs::write(grain.join("vol").join("probe.out"), out) {
-        Ok(()) => ExitCode::SUCCESS,
-        Err(_) => ExitCode::from(3),
-    }
+    ExitCode::SUCCESS
 }

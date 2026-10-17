@@ -14,6 +14,9 @@
 #![cfg(target_os = "linux")]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // a plant that cannot set up is a failed plant
 
+mod common;
+
+use common::place_exe;
 use nanodregg_devtools::lean_bin;
 use nanodregg_launcher::generated::{controller_exit, launch_exit};
 use std::fs;
@@ -82,28 +85,6 @@ fn tree(name: &str) -> Tree {
         .collect();
     fs::write(t.pkg.join("probe.targets"), text).unwrap();
     t
-}
-
-/// Put a copy of the executable `src` at `dst` without this process ever holding `dst` open for
-/// writing. Tests run on parallel threads, and a thread that spawns a child copies this process's
-/// file table into it; until that child execs, it holds every fd open at that moment (`O_CLOEXEC`
-/// closes them only AT exec). If one of them is a write fd on `dst`, an exec of `dst` in that
-/// window fails `ETXTBSY` (HOST-10 saw it once at the CONTROL's exec). `cp` holds the only write fd,
-/// in its own process, and it has exited before `dst` is run.
-fn place_exe(src: &Path, dst: &Path) {
-    let st = Command::new("cp")
-        .arg("--")
-        .arg(src)
-        .arg(dst)
-        .stdin(Stdio::null())
-        .status()
-        .unwrap();
-    assert!(
-        st.success(),
-        "plant: cp {} {}: {st}",
-        src.display(),
-        dst.display()
-    );
 }
 
 fn verdicts(t: &Tree) -> Vec<(String, String)> {

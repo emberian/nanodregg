@@ -7,7 +7,9 @@
 //! socket per resident, `SOCKDIR/<resident>/broker.sock` for each name in the comma-separated
 //! RESIDENTS (HOSTING-17). SOCKDIR is the operator's (nd:nd-hosted, mode 02710, every directory above
 //! it StrictModes-clean); keybroker makes each resident's directory in it (02710, SOCKDIR's group by
-//! the setgid bit), puts nothing there but the socket, and sets the socket 0660. Anything else at
+//! the setgid bit), puts nothing there but the socket, and sets the socket 0660 (0600 when PEER is
+//! keybroker's own uid: a one-uid box, where no group is needed and the sandbox's connect rule
+//! accepts exactly 0600; HOSTING-17 §5, HOSTING-21). Anything else at
 //! those paths ends it `sockDir` before any socket opens. On every accept the peer's credentials must
 //! be uid PEER (the hosted uid) and SOCKDIR's group, or the connection is answered `peerRefused`.
 //! Identity is the socket: keybroker puts a `decide` frame naming that socket's resident in front
@@ -260,10 +262,12 @@ fn run() -> End {
         return End::Usage;
     };
     let sockdir = PathBuf::from(sockdir);
-    let (group, sockets) = match socket_paths(&sockdir, &residents) {
+    let (group, own, sockets) = match socket_paths(&sockdir, &residents) {
         Ok(v) => v,
         Err(why) => return End::SockDir(why),
     };
+    // The socket admits exactly PEER: its owner alone when PEER is this uid, else SOCKDIR's group.
+    let mode = if peer == own { 0o600 } else { 0o660 };
     let decider = PathBuf::from(decider);
     let pid_file = PathBuf::from(pids).join("decider.pid");
 
@@ -318,7 +322,7 @@ fn run() -> End {
     });
 
     for (r, path) in residents.iter().zip(&sockets) {
-        let listener = match bind(path, group) {
+        let listener = match bind(path, group, mode) {
             Ok(l) => l,
             Err(end) => {
                 let _ = child.kill();
@@ -346,10 +350,14 @@ fn run() -> End {
 /// resident's directory in it, made here when absent, which must carry SOCKDIR's group. A resident's
 /// directory holds nothing but its socket (the sandbox binds the directory: anything else here would
 /// be in the resident's view), and a socket already there must be a socket of this uid, the last
-/// life's, which is unlinked to be bound again. Returns SOCKDIR's group and each socket's path.
-fn socket_paths(sockdir: &Path, residents: &[&str]) -> Result<(u32, Vec<PathBuf>), String> {
+/// life's, which is unlinked to be bound again. Returns SOCKDIR's group, its owner (the euid, by
+/// `check_shared_dir`) and each socket's path.
+fn socket_paths(sockdir: &Path, residents: &[&str]) -> Result<(u32, u32, Vec<PathBuf>), String> {
     let at = |p: &Path, e: &dyn std::fmt::Debug| format!("{} {e:?}", p.display());
     let group = custody::check_shared_dir(sockdir).map_err(|e| at(sockdir, &e))?;
+    let owner = std::fs::symlink_metadata(sockdir)
+        .map_err(|e| at(sockdir, &e))?
+        .uid();
     let mut out = Vec::new();
     for r in residents {
         let d = sockdir.join(r);
@@ -384,19 +392,20 @@ fn socket_paths(sockdir: &Path, residents: &[&str]) -> Result<(u32, Vec<PathBuf>
         }
         out.push(sock);
     }
-    Ok((group, out))
+    Ok((group, owner, out))
 }
 
-/// Bind one resident's socket and open it to the hosted group: 0660, with SOCKDIR's group (from
-/// the setgid bit), or keybroker ends `sockDir` (the bit was lost).
-fn bind(path: &Path, group: u32) -> Result<UnixListener, End> {
+/// Bind one resident's socket at `mode`: 0660 opens it to the hosted group, with SOCKDIR's group
+/// (from the setgid bit), 0600 to this uid alone; otherwise keybroker ends `sockDir` (the bit was
+/// lost).
+fn bind(path: &Path, group: u32, mode: u32) -> Result<UnixListener, End> {
     let socket = |e: std::io::Error| End::Socket(format!("{} {e}", path.display()));
     let l = UnixListener::bind(path).map_err(socket)?;
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o660)).map_err(socket)?;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).map_err(socket)?;
     let m = std::fs::symlink_metadata(path).map_err(socket)?;
-    if m.gid() != group || m.permissions().mode() & 0o7777 != 0o660 {
+    if m.gid() != group || m.permissions().mode() & 0o7777 != mode {
         return Err(End::SockDir(format!(
-            "{} group {} mode {:o}, not {group} 660",
+            "{} group {} mode {:o}, not {group} {mode:o}",
             path.display(),
             m.gid(),
             m.permissions().mode() & 0o7777

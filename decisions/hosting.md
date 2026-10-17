@@ -1188,3 +1188,114 @@ code of 64 (`codes_disjoint`); a code of 128 (`codes_reserved`); the pass-throug
 **Flag day.** grain-launch's and hosting-controller's exit codes change (1/2 become the table), and
 `generated.rs` gains `launch_exit` and `controller_exit`. Nothing persisted changes, and no unit renders
 grain-launch yet (OPS-3 renders it from these tables).
+
+## HOSTING-20 A resident reaches the World through its own member socket, served by nd (HOSTING-7, 2026-10-18, ROOT ruling; for CLIENT-3's `nd --stdio`)
+
+**Decision (ROOT approved; the fourth point of Ember's HOSTING-17 ratification bundle).** A resident's
+World access goes through `nd --stdio`. That process runs as `nd`, the trusted side, never inside a
+grain. Its workspace is the resident's MEMBER workspace `<hosting root>/worlds/<l>/members/<dirOf id>`,
+which every plan already hides (`Plan.plan`: `hidden := [storeDir l, membersDir l]`), so the resident's
+seed never enters a sandbox. It is the child of `nd-supervise --group <nd-hosted gid> --peer <nd-hosted
+uid>`, run as nd. nd-supervise serves `/run/nd-member/<dirOf id>/nd.sock`, 0660 in a setgid 02710
+nd:nd-hosted directory (the SOCKDIR idiom of HOSTING-17 §2), and closes `peerRefused` on any peer whose
+uid and gid are not PEER's. That socket is the resident plan's SECOND connect entry (connectMax 2,
+HOSTING-17 §5: "the model driver reaches its broker socket and its own nd"). `nd --stdio` is itself
+confined, like every nd-supervise child: write = the member workspace, connect = [host.sock, the follow
+socket] (CLIENT-3).
+- **The direction principle, stated precisely (ROOT).** The less-trusted side may initiate ONLY to
+  per-resident, peer-checked, narrow-surface services owned by nd: the broker socket, and now the member
+  socket. Never to the writer (host.sock stays nd-only, ruling (B)), and never to anything shared between
+  residents.
+- **Placement: a typed MEMBER root beside BROKER.** grain-launch takes `ROOT BROKER MEMBER …`, the plan's
+  connect entries are typed by root so a plan cannot confuse the two, and grain-launch refuses
+  `rootsOverlap` for every pair of the three. `/run/nd-member` is outside every grain mount for the same
+  three reasons as §8: plans are ROOT-relative component lists, the Linux floor holds no `/run`, and
+  grain-launch refuses a MEMBER root that overlaps ROOT or BROKER. It is a root separate from
+  `/run/nd-broker` because keybroker's directory must list exactly `broker.sock` (PROTOCOL-7's R5b).
+- **The command surface IS the custody condition**, each refused by name with a plant (CLIENT-3,
+  CLIENT-23). `argv[0] ∈ STDIO_VERBS`, emitted by PROTOCOL-7 from Lean (the World verbs minus rotate,
+  adopt and init), else `notOnSurface VERB`. Custody in stdio mode refuses precommit and signNext
+  (`noRotation`). A request is argv words only, and the workspace, holding, sockets and environment are
+  fixed at start. No argument is a path that nd reads: `install TEXT` takes the package text inline as
+  one argv word, and nothing in nd or follow reads a file named in argv (CLIENT-3 checked main). That holds
+  by construction, and a canary plant keeps it so: an argv word naming a canary file is passed as text, and
+  the canary's bytes never appear in the reply.
+**Alternatives.** (1) The resident holds its own seed in its volume and its own nd reaches host.sock and a
+follow socket (HOSTING-17 §5's first sketch). Refused: the seed would sit inside the sandbox, and the
+resident would initiate to the writer, against ruling (B). (2) Put nd.sock beside broker.sock in
+`/run/nd-broker/<r>/`. Refused: two servers write one directory, and keybroker's listing condition (exactly
+`broker.sock`) would have to admit a second name. (3) An untyped second connect entry under BROKER: a plan
+could name a member socket as a broker socket. Refused for the typed root.
+**CRITIQUE.** This is a second resident-initiated socket, so a second surface where the less-trusted side
+speaks first. It is bounded by the peer check, one socket per resident, the verb surface and confinement.
+But `STDIO_VERBS` is a list, and a World verb added later is on the surface unless PROTOCOL leaves it out.
+The surface is only as narrow as the list's review. nd --stdio signs as the resident's member, so a
+compromised resident can do anything that member's grants allow. That is the grant model working, not a
+leak, but it means a resident's authority is exactly its member's grants and must be granted narrowly.
+**META-CRITIQUE.** The "no path arguments" condition was first argued from an `install <path` form that
+does not exist (corrected by CLIENT-3 and ROOT). The condition stands, but its first justification was a
+claim about nd made without reading nd: the brief was the least-checked source. The record now carries the
+measured fact.
+**Owed (HOSTING).** After `nd --stdio` lands: the MEMBER root in `Hosting/Plan.lean` (typed connect
+entries, the theorems restated per root), grain-launch's third root and pairwise `rootsOverlap`, the
+re-emit of the launch frame, and the resident row's second socket.
+
+## HOSTING-21 The resident row, and keybroker's socket admits exactly PEER (HOSTING-7, 2026-10-18)
+
+**Decision.** `launcher/tests/resident.rs` is row `cargo:launcher:resident`, PROTOCOL-7's agreed need
+(R1-R6, R5b, the refusals at resolve, plants (a)-(e); hbox logs/protocol7-resident-need.md). It runs the
+deployed path end to end. A real Store: `host genesis`, `host serve`, and the operator's `host follow`
+Store placed at `<hosting root>/worlds/w/store`, the Store the controller tails. The operator's `nd
+install`s Lifecycle and Allowance, `create`s a resident grain, gives it an allowance and `invoke`s start,
+then `sync`s (the operator's nd drives the follower, ruling (B)). keybroker runs from the emitted unit's
+argv. grain-launch runs from ITS emitted unit's argv (`nd-grain-launch@.service`: every rendered word
+mapped, unmapped or unused values red) over the real `hosting-controller`. The resident is the probe,
+sequenced by files the test writes into its volume, never by time. Verdicts (measured): ask1 `ok answer
+200`; key file `denied ENOENT`; the other resident's socket `denied ENOENT`; SOCKDIR lists only `<dirOf>`
+(bwrap's scaffolding); the bound directory lists exactly `broker.sock`; keybroker is stopped and restarted
+mid-row, and ask2 is `ok answer 200` with no relaunch; the canary is in both upstream requests and absent
+from the resident's received bytes (which are not empty); the operator's stop ends the child.
+`refusals_at_resolve_by_name`: a regular file `connectNotSocket`, a symlink `connectLink`, a 0666 socket and
+a 0660 socket of this uid `connectMode`, a group-writable directory `connectDir`; CONTROL: the right socket
+launches.
+- **R1 reads Lean's plan, never computes it.** grain-launch prints `grain-launch: <g> connect <path>` for
+  each connect entry of each launch, as it joined it onto BROKER. The row asserts that list is exactly
+  `[BROKER/<dirOf>/broker.sock]`.
+- **keybroker's socket admits exactly PEER.** When PEER is keybroker's own uid it binds the socket 0600
+  (its owner alone); otherwise it binds 0660 to SOCKDIR's group, as before. These are exactly the two
+  shapes `Policy.connect` accepts (HOSTING-17 §5: euid+0600, or another uid with our group at 0660), so a
+  one-uid box is the deployment's shape minus the group, not a test mode. This is what lets the row run
+  on a one-uid box: before it, keybroker's 0660 socket of the same uid was refused `connectMode` at
+  resolve. It narrows nothing in the deployment: OPS's render refuses `hostedIsKeyHolder`, so PEER is
+  never nd there, and the socket stays 0660. ROOT: fine, land it with the row.
+- Shared helpers move to `launcher/tests/common/mod.rs` (World, PKI, fake provider, keybroker from the
+  unit's argv). broker.rs's socket-directory control now expects 0600 serving its own uid and 0660 serving
+  another.
+**Declared UNRUN (one uid on hbox).** Policy.connect's other-uid branch (`ConnectOwner`, and the 0660 group
+socket it would accept), and keybroker's `peerRefused` for a real second uid. The broker test's PEER plant
+runs the same comparison.
+**CRITIQUE.** The restart step stops keybroker by its own handle (the pid the test wrote to its PID file),
+not by the unit, so it does not cover systemd's restart path (OPS-3's live harness does). SOCKDIR's
+listing is `ok <dirOf>`, not ENOENT as the need first said: bwrap makes the bound directory's parents as
+scaffolding (isolation.rs measured it). The row accepts that listing or a refusal, never the other
+resident. The row's ask uses one fixed model, so it shows the path is open, not the broker's verdicts
+(broker.rs owns those). The follower advances only when the operator's nd syncs it. In deployment that is
+OPS's nd-follow driver, and a lagging driver delays every launch (liveness, not safety).
+**META-CRITIQUE.** The first run hung silently. The follower lagged the writer by the last turn, because
+nothing drove it, and the controller rightly launched nothing. Separately, a missing `members` directory
+failed every launch `pathMissing` and was crash-looped. Both are deployment facts the row now states (the
+members directory must exist; the follower must be driven), found only by running the real path. A row
+built on the decider's writer Store, as broker.rs's is, would have hidden the first.
+**Vacuity read (10-18, VACUITY-READER-H4): ACCEPT, no surviving mutation.** R1's printed list is the very
+`Policy` handed to `command`; R3's grant proves the socket named `g` (only `g` has an allowance); R4/R5
+probe host paths that exist; broker.rs asserts 0600 and 0660 by literal, not through the helper's mirror of
+keybroker's rule; the refactor's asserts are a superset of the old ones.
+**Plants (run, hbox logs/hosting7-rplants.py, each red at its named step).** (a) the sandbox binds SOCKDIR
+instead of SOCKDIR/<r>: red at R5 (the other resident's socket connects). (b) Lean's `connectOf` gives a
+resident no socket: red at R1. (c) the connect mode check skipped: red at `connectMode` (the 0666 socket
+launches). (d) the sandbox binds the socket FILE: red at the restart (ask2 not granted). (e) keybroker
+writes a second file beside the socket: red at R5b. (f) keybroker always 0660: red at its bind (the
+helper waits for the mode that admits exactly PEER), across the broker test and the row.
+**Flag day.** keybroker's socket is 0600 when PEER is its own uid. grain-launch prints its connect paths.
+The probe gains `ask` and `wait` and appends as it goes. New row `cargo:launcher:resident`. Nothing
+persisted changes, and the deployed units are unchanged.

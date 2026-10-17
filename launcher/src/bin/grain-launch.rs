@@ -173,6 +173,15 @@ impl Launcher {
             }
         }
         let program = under(&self.root, program);
+        // Each socket the plan lets this grain connect to, as joined onto BROKER: the resident row
+        // reads its connect path here, never computes it (PROTOCOL-7's R1).
+        for c in &policy.connect {
+            eprintln!(
+                "grain-launch: {} connect {}",
+                String::from_utf8_lossy(&grain),
+                c.display()
+            );
+        }
         let mut cmd = match command(policy, program.as_os_str(), &[]) {
             Ok(c) => c,
             Err(e) => return self.failed(grain, failure_of(&e)),
