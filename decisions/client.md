@@ -50,6 +50,13 @@ the hidden workspace AND on an unmentioned sibling file (the allow-list property
 deny-list), a policy reaching the workspace (read its parent, or write it) is `Exposed`. Mutations:
 adding `(subpath "/")` to the read clause, or `(allow default)`, turns both confine and
 client/tests/supervise.rs red (`isolation: child read the seed`).
+**Amended (a1bd695, a53bffc).** The floor also allows exactly `sysctl-read (sysctl-name "hw.ncpu")`:
+the Lean runtime sizes its task pool from it, and denied, `IO.asTask .dedicated` runs inline, so ANY
+Lean resident that reads stdin on a task (`host serve`, `host follow`) answers nothing until EOF and
+then exits 0, which every rc-only check passes. The bisect above used `host-sim`, which never reads
+stdin on a task, so it missed this: a floor measured with a binary that does not exercise the
+runtime's concurrency is not a floor for the residents. Plant: a confined `host serve` must answer
+within 3 s (tests/supervise.rs).
 **Status.** landed (macOS run; Linux check-only).
 
 ## CLIENT-10 the step layout read by hand until it is emitted — a twin with an expiry (2026-10-16)
