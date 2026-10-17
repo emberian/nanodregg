@@ -38,7 +38,7 @@ the owner and the owner never changes). Rows:
 -/
 import Kernel.Sim
 import Lang.Program
-import Lang.Read
+import Lang.Print
 import Lang.Resident
 
 namespace Nanodregg.Lang.Journey
@@ -80,7 +80,7 @@ def illTyped : Package :=
       ("set", .lam S (.lam .nat (.lam reqTy (.var 1))))] }
 
 /-- The request type as the resident pastes it (printed from `reqTy`, so it is never restated). -/
-def rq : String := Read.showTy reqTy
+def rq : String := Print.tyText reqTy
 
 /-- `Owned`, as a resident writes it (Lang.Read): must read to exactly the package above. -/
 def ownedText : String := s!"
@@ -253,7 +253,7 @@ def journey (mode : Mode) : Run := Id.run do
     | _ => false
   r := note r "L0b read a seed at Owned's state type" seedOk
   -- the owner as a member's id: bytes that need not be UTF-8, written `#HEX`
-  let ownerHex := Resident.showData (.bytes (Sim.dc.bytes a.id))
+  let ownerHex := Print.bytesText (Sim.dc.bytes a.id)
   let hexOk := match Read.readData S s!"(record (owner {ownerHex}) (total 0))" with
     | .ok (.record [("owner", .bytes o), ("total", .nat 0)]) => o == Sim.dc.bytes a.id
     | _ => false

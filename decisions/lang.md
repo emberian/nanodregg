@@ -512,3 +512,31 @@ before argument, condition before branches). The error carries types, so its tex
 taxonomy is the implementation's. A resident might have wanted names for the mistakes people
 actually make (a missing case arm, a wrong field).
 **Status.** built.
+
+## LANG-28 One printer: `Lang.Print` (2026-10-17; LANG-3's open item 4, for HOSTING)
+**Decision.** `Lang/Print.lean` is the one printer of the core as the text `Lang.Read` reads. Types,
+terms, data and packages print first as a `Read.SExp` (offsets 0) and then as characters
+(`chars`/`items`, one separator between elements). Anything with no text is `none`: a label that is
+not one atom (empty, or holding a `Read.isDelim` character) and a free variable. A bound variable
+is `x<depth>`. Bytes print as `"text"` when they are UTF-8 with no `"`, otherwise as `#hex`.
+`Read.term` now reads `#hex` atoms as bytes too, as `Read.dataAt` already did, so every term with
+atom labels and no free variable has a text. `Read.showTy`, `Resident.showData` and `Resident.hex`
+are deleted. `ob` refuses `unprintable` when there is no text. The rows and the journey use
+`Print.tyText T`, whose argument `(tySx T).isSome` is decided where the constant is written, so the
+printer has no fallback string. HOSTING deletes `Hosting/Text.lean` and uses `Print.package`, which
+keeps that file's layout of one section per line: `world/grain/Lifecycle` does not change.
+**Alternatives.** Keep HOSTING's string printer and give `showTy` a home in it: that leaves two printers
+of types, and the second one checks no labels. A total printer that prints any label as given: an
+unreadable label would then print as text that reads back as something else, or as nothing, with
+no refusal at all. Print straight to `String` without the `SExp` step: then the round trip has to be
+proved through string appends, rather than as two separate facts, the parser over `chars` and
+elaboration over an `SExp`.
+**Critique.** The label check is looser than HOSTING's `atomOk` (that one excluded `true`, `false` and
+numerals). This is correct because `Read` takes any atom in a label position, but it is a claim, and
+`Lang.Proofs.Print` (the next commit) is what makes it a theorem. Until then the only check is
+HOSTING's compiled instance, `lifecycle_text_reads`. `#hex` in a term shadows a binder whose name
+starts with `#`, just as a numeral shadows a binder named `5`.
+**Meta-critique.** I kept HOSTING's package layout so that their shipped file stays byte-identical. That
+is a compatibility reason, which CLAUDE.md says is not a reason. The real reason is that one section
+per line is the layout a member reads.
+**Status.** built (the round trip theorem is LANG-28's next commit).

@@ -19,7 +19,7 @@ A package with imports cannot be checked here: the imports' interfaces live in t
 tool reads none (`refused imports`). The id is the deployed one only for an import-free package,
 which is exactly what it can check.
 -/
-import Lang.Read
+import Lang.Print
 import Lang.Law
 import Kernel.Receive.Call
 import Codec.Deployed
@@ -31,26 +31,7 @@ open Nanodregg.Kernel Nanodregg.Kernel.Receive Read
 /-- The most input one invocation reads, in bytes. -/
 def inputMax : Nat := 1048576
 
-def hex (b : ByteArray) : String :=
-  let digit (n : UInt8) : Char := if n < 10 then Char.ofNat (48 + n.toNat) else Char.ofNat (87 + n.toNat)
-  b.foldl (fun s x => (s.push (digit (x >>> 4))).push (digit (x &&& 15))) ""
-
-mutual
-/-- Data as the literal `Read.dataAt` reads back (bytes that are not quote-free UTF-8 print as
-`#hex`, which the reader reads at type `bytes`). -/
-def showData : Data → String
-  | .nat n => toString n
-  | .bool b => if b then "true" else "false"
-  | .bytes s => match String.fromUTF8? s with
-    | some t => if t.any (· = '"') then s!"#{hex s}" else s!"\"{t}\""
-    | none => s!"#{hex s}"
-  | .record fs => s!"(record{showFields fs})"
-  | .inj ℓ d => s!"({ℓ} {showData d})"
-
-def showFields : List (Label × Data) → String
-  | [] => ""
-  | (ℓ, d) :: fs => s!" ({ℓ} {showData d}){showFields fs}"
-end
+open Print (hex)
 
 def faultName : Fault → String
   | .stuck => "stuck" | .overflow => "overflow" | .underflow => "underflow"
@@ -65,6 +46,9 @@ def ok (line : String) : Answer := ⟨line, false⟩
 def no (line : String) : Answer := ⟨s!"refused {line}", true⟩
 
 def readRefused (e : ReadRefusal) : Answer := no e.text
+
+/-- A type or value with no text: a label that is not one atom (`Print`). -/
+def unprintable : Answer := no "unprintable (a label that is not one atom)"
 
 /-- The package's bytes and id, or the install check's refusal. -/
 def checkPackage (p : Package) : Except Answer (ByteArray × String) := do
@@ -96,7 +80,9 @@ def answer : SExp → Answer
     match term depthMax [] tx with
     | .error e => readRefused e
     | .ok t => match inferE [] [] t with
-      | .ok T => ok (showTy T)
+      | .ok T => match Print.ty T with
+        | some s => ok s
+        | none => unprintable
       | .error e => no s!"illTyped {e.text}"
   | .list _ [.atom _ "eval", .atom p n, tx] =>
     match n.toNat?, term depthMax [] tx with
@@ -111,9 +97,13 @@ def answer : SExp → Answer
         | .value v used =>
           if T.isData then
             match (Machine.mk []).extract T (ticks - used) v with
-            | .ok (d, left) => ok s!"{showData d} : {showTy T} used {ticks - left} of {ticks}"
+            | .ok (d, left) => match Print.data d, Print.ty T with
+              | some v, some s => ok s!"{v} : {s} used {ticks - left} of {ticks}"
+              | _, _ => unprintable
             | .error f => no s!"fault {faultName f} extracting, {ticks} ticks"
-          else ok s!"<{showTy T}> used {used} of {ticks}"
+          else match Print.ty T with
+            | some s => ok s!"<{s}> used {used} of {ticks}"
+            | none => unprintable
   | .list _ [.atom _ "law", px, .atom _ ℓ, ox, nx, rx] =>
     match readSub px >>= fun p => (checkPackage p).map fun _ => p with
     | .error a => a

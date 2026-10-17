@@ -7,7 +7,7 @@ Not admission: a resident (or its client) reads text into a `Package`, checks it
 `(f a b)`, `(let x T e body)` = `((lam x T body) e)`, and `(fn (x T) (y U) body)` = nested `lam`.
 
     type  ::= nat | bool | bytes | (-> T U) | (rec (l T)…) | (sum (l T)…)
-    term  ::= x | 123 | true | false | "text" | (lam x T e) | (fn (x T)… e) | (let x T e e)
+    term  ::= x | 123 | true | false | "text" | #hex | (lam x T e) | (fn (x T)… e) | (let x T e e)
             | (fix e) | (OP e e) with OP ∈ + - * / % == < <= beq cat
             | (record (l e)…) | (. e l) | (extend e (l e)…) | (inj T l e)
             | (case e (l x e)…) | (if e e e) | (ref i) | (e e…)
@@ -171,6 +171,21 @@ def tyRow : Nat → List SExp → P (List (Label × Ty))
   | _ + 1, x :: _ => .error (.badEntry x.pos)
 end
 
+def hexVal (c : Char) : Option Nat :=
+  if '0' ≤ c && c ≤ '9' then some (c.toNat - '0'.toNat)
+  else if 'a' ≤ c && c ≤ 'f' then some (c.toNat - 'a'.toNat + 10) else none
+
+def unhex (acc : ByteArray) : List Char → Option ByteArray
+  | [] => some acc
+  | a :: b :: rest => do unhex (acc.push (UInt8.ofNat ((← hexVal a) * 16 + (← hexVal b)))) rest
+  | _ => none
+
+/-- `#HEX`: the bytes of an even count of lowercase hex digits after `#`. -/
+def hexBytes? (a : String) : Option ByteArray :=
+  match a.toList with
+  | '#' :: hs => unhex .empty hs
+  | _ => none
+
 def indexOf (x : String) : List String → Option Nat
   | [] => none
   | y :: ys => if x = y then some 0 else (indexOf x ys).map (· + 1)
@@ -188,9 +203,12 @@ def term : Nat → List String → SExp → P Term
     match a.toNat? with
     | some n => .ok (.nat n)
     | none =>
-      match indexOf a sc with
-      | some i => .ok (.var i)
-      | none => .error (.unbound p a)
+      match hexBytes? a with
+      | some b => .ok (.bytes b)
+      | none =>
+        match indexOf a sc with
+        | some i => .ok (.var i)
+        | none => .error (.unbound p a)
   | _ + 1, _, .str _ s => .ok (.bytes s.toUTF8)
   | d + 1, sc, .list _ [.atom _ "lam", .atom _ x, t, b] => do
     pure (.lam (← ty d t) (← term d (x :: sc) b))
@@ -244,15 +262,6 @@ def fnBinders : Nat → List String → List SExp → P Term
   | _ + 1, _, [] => .error (.badBinder 0)
 end
 
-def hexVal (c : Char) : Option Nat :=
-  if '0' ≤ c && c ≤ '9' then some (c.toNat - '0'.toNat)
-  else if 'a' ≤ c && c ≤ 'f' then some (c.toNat - 'a'.toNat + 10) else none
-
-def unhex (acc : ByteArray) : List Char → Option ByteArray
-  | [] => some acc
-  | a :: b :: rest => do unhex (acc.push (UInt8.ofNat ((← hexVal a) * 16 + (← hexVal b)))) rest
-  | _ => none
-
 def labels : List SExp → P (List Label)
   | [] => .ok []
   | .atom _ ℓ :: rest => do pure (ℓ :: (← labels rest))
@@ -280,12 +289,6 @@ UTF-8, such as a member's id; what `ob` prints such bytes as), `(record (l v)…
 bare `l` for an arm whose payload is the empty record. The type directs the reading, so a literal
 needs no annotation, and only a value of the type is accepted (`Lang.Proofs.Read.dataAt_conforms`):
 a natural below `Bounds.natLimit`, a byte string of at most `Bounds.bytesMax`. -/
-
-/-- `#HEX`: the bytes of an even count of lowercase hex digits after `#`. -/
-def hexBytes? (a : String) : Option ByteArray :=
-  match a.toList with
-  | '#' :: hs => unhex .empty hs
-  | _ => none
 
 /-- A scalar literal at a scalar type. -/
 def scalarAt : Ty → SExp → P Data
@@ -339,21 +342,6 @@ end
 
 /-- Text to data at type `T`. -/
 def readData (T : Ty) (text : String) : P Data := do dataAt depthMax T (← parse text)
-
-/-! ## Printing types (what a resident pastes into an annotation) -/
-
-mutual
-/-- A type as text `ty` reads back (rows are printed in their own order). -/
-def showTy : Ty → String
-  | .nat => "nat" | .bool => "bool" | .bytes => "bytes"
-  | .fn a b => s!"(-> {showTy a} {showTy b})"
-  | .record r => s!"(rec{showRow r})"
-  | .sum r => s!"(sum{showRow r})"
-
-def showRow : List (Label × Ty) → String
-  | [] => ""
-  | (ℓ, t) :: r => s!" ({ℓ} {showTy t}){showRow r}"
-end
 
 /-- Text to a package. -/
 def readPackage (text : String) : P Package := do package (← parse text)

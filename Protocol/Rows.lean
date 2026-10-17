@@ -18,7 +18,7 @@ minidregg row checked that nanodregg does not have (a codec child, a host-image 
 filter) is gone with the thing; what it checked about the WORLD stays.
 -/
 import Protocol.Table
-import Lang.Read
+import Lang.Print
 
 namespace Nanodregg.Protocol
 
@@ -184,8 +184,8 @@ private def okBind (actor : String) (argv : List String) (b : String) : Line :=
 
 /-- The request and verdict types as a resident pastes them: printed from LANG's own types, never
 restated. -/
-def reqTy : String := Lang.Read.showTy Lang.reqTy
-def verdictTy : String := Lang.Read.showTy Lang.verdictTy
+def reqTy : String := Lang.Print.tyText Lang.reqTy
+def verdictTy : String := Lang.Print.tyText Lang.verdictTy
 
 /-- A law package over a data object, with one law `l` whose body is `verdict`. -/
 def lawPackage (l verdict : String) : String :=
