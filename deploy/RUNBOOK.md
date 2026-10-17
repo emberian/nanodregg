@@ -57,6 +57,28 @@ start does not loop forever); `systemctl reset-failed UNIT` after the cause is f
 (launchd) restarts every non-zero exit every `ThrottleInterval` seconds: a fatal refusal repeats
 by name, truncating nothing.
 
+### 2a. Custody paths (CLIENT-19, eb0ec6a)
+
+Every custody read (a member's key and holding directory, the keybroker's provider key file and
+its TLS anchors) checks, before it opens the file, that EVERY directory from the file up to `/` is
+owned by the reading user or root and has no group or other write bit, as sshd's StrictModes does.
+A sticky world-writable directory (`/tmp`) fails too. Refused by name: `Dir(PATH)`, naming the
+first directory that fails (the keybroker reports it as `keyFileDir`). The file itself must be
+owned by the reading user (`Owner(UID)` otherwise; a root-owned system CA bundle is refused):
+- a private file (a key) at mode 0600 exactly (`Mode(M)` otherwise);
+- a public custody file (the anchors) with no group/other write and no set-id bit (0644 passes).
+So never place these files under a group-writable tree: on hbox the umask-002 `/tank` tree and
+`/tmp` both fail. The deployed layout, which passes by construction:
+
+    sudo install -d -o root -g root -m 0755 /etc/nd
+    sudo install -d -o nd -g nd -m 0700 /etc/nd/keybroker
+    sudo install -o nd -g nd -m 0644 deploy/tls/anchors.pem /etc/nd/keybroker/anchors.pem
+    sudo install -o nd -g nd -m 0600 PROVIDER_KEY_FILE /etc/nd/keybroker/provider.key
+
+A member's own files live under its home (`~/.nd`, 0700, made by `nd --init`); its home and every
+parent must also pass (a group-writable home is refused `Dir(/home/USER)`). The keybroker unit is
+rendered (emit-units) with the /etc/nd/keybroker paths, PENDING HOSTING-5's argv.
+
 ## 3. Status — RAN
 
     host check STORE
