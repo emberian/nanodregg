@@ -101,7 +101,7 @@ reads the proposals before committing signatures and answers each in `DECISIONS.
 
 ## Working rules
 
-- Repo: `~/dev/nanodregg` (git, branch `main`, no other branches). Commit messages: what, why, what
+- Repo: `~/dev/nanodregg` (git, branch `main`, no other branches); remote `origin` = github.com/emberian/nanodregg (public, created by Ember's order 10-17). Until scripts/commit pushes after landing (a GATES successor item), ROOT pushes main to origin at each report. Commit messages: what, why, what
   it refuses, with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>` (unsigned is fine).
 - Build on the Mac: `lake build` / `cargo check` of your import closure before every push. Keep
   `.lake` small; the Mac data volume is nearly full: no large artifacts, no fixtures over 1 MB, no
