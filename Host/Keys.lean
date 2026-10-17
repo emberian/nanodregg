@@ -17,7 +17,7 @@ open Nanodregg.Codec
 def domSegment : String := "nanodregg/host/segment/v1"
 def domBase : String := "nanodregg/host/base/v1"
 /-- The UNKEYED digest a thin member pins (HOST-15): its own customization string, never the base
-MAC's (HOST-25: one string, one purpose). -/
+MAC's (HOST-26: one string, one purpose). -/
 def domBaseDigest : String := "nanodregg/host/base-digest/v1"
 
 def macSealer (key : Digest) (domain : String) : Log.Sealer where
