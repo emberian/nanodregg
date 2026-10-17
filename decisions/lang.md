@@ -1043,3 +1043,30 @@ member/owner/quorum specs and Receiver's now conclude `.digest m`; `Call.callDat
 `invoke_never_stuck`/`law_never_stuck` take `digestOf`; `readState_go_stateSlots` gains a `digestsOk` premise,
 discharged at its one consumer (`seedOf_reads`) by `readAt`'s own check. New teeth: `args_named_not_live`, `no_digest_at_args`.
 **Status.** built (this commit). Re-ids every package with a method or law; re-genesis.
+
+## LANG-39 THE BAR's ratio has an extraction tooth (2026-10-17; cv 01a14abb-aa73, the LANG-37 vacuity read; with PROTOCOL-7)
+**Decision.** `Lang.Need.extractTicksTwice` (tooling) runs the deployed method run and the deployed
+`Machine.extract`, then the same extraction again on the same value. Fields are not memoized, so this
+re-forces every suspension extraction forced. It returns the ticks with one extraction and with two. The
+rows (`Loopback.measureInvoke`) require the one-extraction count to equal `runMeasured`'s ticks, or the
+count is refused by name (`extraction recount N is not the run's M`). They sum the two-extraction count as
+`Invoked.extracted` and print `PLANT waste-extract ticks-per-required-step` (2.136 on THE BAR, = 47/22)
+beside `PLANT waste-app` (1.818). The bar row is red by name if either plant differs from its stated value
+(`Rows.Run.plantAppStated`/`plantExtractStated`: `plant NAME MOVED R≠S`) or is not above the honest ratio
+(`BLIND`). This was observed: with the stated value still a placeholder, the row went red
+`plant waste-extract MOVED 2.136≠0.000`.
+**Why.** LANG-37's tooth (`skipStep`) and waste-app plant the METHOD RUN only. A machine that re-forced
+extraction's suspensions would have raised the ratio, and nothing showed the row would see it.
+**Alternatives.** A twin of `Machine.extract` with a force-twice arm: a second extractor whose honest mode
+would need an equality theorem to be trusted. Refused, since running the deployed extractor twice IS the
+waste, with no twin. A parameter on `Machine.extract`: a knob in deployed code (PROTOCOL-32), refused.
+**Critique.** (1) The plant doubles all of extraction. It does not plant a SINGLE field forced twice, so
+the row is shown to see extraction waste in bulk, not a one-field regression. Here, though, one extra
+force of the smallest field (a literal, 1 tick plus its unknot) would move the printed ratio by
+≥ 1/22 ≈ 0.045, well above the 0.001 resolution. (2) The honest recount is a runtime check on every run,
+not a theorem. The deployed functions are the same ones, so a theorem would restate `runMeasured`'s
+middle.
+**Meta-critique.** Stating plant values exactly (PROTOCOL-7's condition) turned a "plant above honest"
+check into one that also catches a plant that silently weakened, the same discipline as GATES-13's
+immutable vectors.
+**Status.** built (this commit). Nothing re-ids: tooling and rows only.

@@ -16,6 +16,9 @@ with the same deployed functions. In place of the machine it counts the method's
 extraction's forced suspensions (`needExtract`, shaped like `Machine.extract`). A count past its
 fuel is a named refusal (`required: fuel`), never a zero.
 
+The extraction plant (`extractTicksTwice`): the deployed run and extraction, then the same
+extraction once more on the same value, re-forcing every suspension it forced.
+
 The plant (`wasteStep`, `runBy`): a machine that takes two needless transitions per application
 (it returns through an `ite true` detour before entering the body). It has the same meaning and
 more ticks. `runBy (step lib)` is the deployed `run` (`Lang.Proofs.Need.runBy_step`), so the
@@ -278,6 +281,25 @@ def runTicksBy (stp : List Term → State → Step) (look : Pinned D) (pkg : D) 
   match runBy (stp lib) Bounds.stackMax budget 0 (State.init t env) with
   | .value _ used => pure used
   | .fault f _ => throw (.program s!"run: {faultText f}")
+
+/-- The extraction plant (cv 01a14abb-aa73): the deployed method run and the deployed extraction
+(`Machine.extract`, unchanged), then the same extraction AGAIN on the same value, which re-forces
+every suspension it forces (fields are not memoized), with the same meaning and more ticks. It
+returns the ticks of the run with one extraction (what `runMeasured` charges, recounted by the
+deployed functions) and with two. No knob: admission never calls it. -/
+def extractTicksTwice (look : Pinned D) (pkg : D) (state : Slots) (method : Nat) (args : ByteArray)
+    (r : Req D) (budget : Nat) : Except (Refusal D) (Nat × Nat) := do
+  let (lib, t, env, T) ← setupOf bytesOf digestOf look pkg state method args r
+  match run lib Bounds.stackMax budget 0 (State.init t env) with
+  | .fault f _ => throw (.program s!"run: {faultText f}")
+  | .value v used =>
+    let m : Machine := ⟨lib⟩
+    match m.extract T (budget - used) v with
+    | .error f => throw (.program s!"extract: {faultText f}")
+    | .ok (_, left) =>
+      match m.extract T left v with
+      | .error f => throw (.program s!"extract again: {faultText f}")
+      | .ok (_, left') => pure (budget - left, budget - left')
 end
 
 /-- PLANT (the ratio's tooth): the deployed step, except that entering a closure first returns

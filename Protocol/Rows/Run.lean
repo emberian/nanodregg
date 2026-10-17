@@ -91,6 +91,11 @@ def ratio (a b : Nat) : String :=
   let frac := toString (m % 1000)
   s!"{m / 1000}.{"".pushn '0' (3 - frac.length)}{frac}"
 
+/-- The plants' ratios on THE BAR's workload, stated: a plant is a tooth only while it bites by
+exactly this much (both above the waste.tsv ceiling 1.546). -/
+def plantAppStated : String := "1.818"
+def plantExtractStated : String := "2.136"
+
 /-- Nanoseconds as milliseconds with three decimals. -/
 def ms (ns : Nat) : String :=
   let f := toString ((ns / 1000) % 1000)
@@ -121,10 +126,17 @@ def barLines (r : Row) (res : Loopback.Result) : IO (Option String) := do
   if required = 0 then return some "bar: the invokes required no steps (a ratio over nothing)"
   IO.println s!"WASTE invoke ticks-per-required-step {ratio ticks required}"
   IO.println s!"WASTE invoke packages-checked-per-call {ratio (ms.foldl (· + ·.pkgs) 0) n}"
-  -- the ratio's tooth: two needless transitions per application must raise it
-  IO.println s!"PLANT waste-app ticks-per-required-step {ratio planted required}"
-  if planted * 1000 / required ≤ ticks * 1000 / required then
-    return some s!"bar: plant waste-app BLIND: {ratio planted required} is not above {ratio ticks required}"
+  -- the ratio's teeth, each at its STATED value (a plant whose waste shrank is red, MOVED) and above
+  -- the honest ratio (BLIND): two needless transitions per application (waste-app), and extraction
+  -- run twice on the same value (waste-extract, cv 01a14abb-aa73)
+  let extracted := ms.foldl (· + ·.extracted) 0
+  for (name, total, stated) in [("waste-app", planted, plantAppStated),
+      ("waste-extract", extracted, plantExtractStated)] do
+    IO.println s!"PLANT {name} ticks-per-required-step {ratio total required}"
+    if ratio total required ≠ stated then
+      return some s!"bar: plant {name} MOVED {ratio total required}≠{stated}"
+    if total * 1000 / required ≤ ticks * 1000 / required then
+      return some s!"bar: plant {name} BLIND: {ratio total required} is not above {ratio ticks required}"
   return none
 
 def drive (r : Row) (times : Option Nat) : IO Ran :=

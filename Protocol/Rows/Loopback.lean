@@ -112,6 +112,8 @@ structure Invoked where
   ticks : Nat
   required : Nat
   planted : Nat
+  /-- the ticks with extraction run twice on the same value (cv 01a14abb-aa73) -/
+  extracted : Nat
   pkgs : Nat
 
 structure St where
@@ -177,7 +179,10 @@ def measureInvoke (X : Ctx D) (w : World D) (c : Call D) : Option (Except String
             method args r budget
           let wasted ← Lang.Need.runTicksBy X.env.bytes X.digestOf Lang.Need.wasteStep look p
             (stateOf cell) method args r budget
-          pure ({ ticks, required, planted := ticks - honest + wasted, pkgs } : Invoked)
+          let (once, twice) ← Lang.Need.extractTicksTwice X.env.bytes X.digestOf look p (stateOf cell)
+            method args r budget
+          if once ≠ ticks then throw (Receive.Refusal.program s!"extraction recount {once} is not the run's {ticks}")
+          pure ({ ticks, required, planted := ticks - honest + wasted, extracted := twice, pkgs } : Invoked)
         some (count.mapError text)
       | .error _ => none
     | .error _ => none
