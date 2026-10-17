@@ -913,3 +913,32 @@ from `Self` (set from the invitation) and never derive them, so the client needs
 **Critique.** The standing plant of row carry is still `importTrustsFile`; this tooth is held by
 the line's expectation and was shown red by a manual code plant, not a standing mutation.
 **Status.** BUILT (this commit). Rows ALL PASS, 20.
+
+## PROTOCOL-37 · row thinStale: a thin member adopts a pin more than a window old; the rows' `window` act (2026-10-17, PROTOCOL-7)
+**Decision.** This closes a PROTOCOL-4 leftover: adopt's `reSign` arm (Machine step 7, `.refused`
+with a stated height) had never been run. In row `thinStale` the thin member's client signs for a
+window of 5 heights (new act `window n`: it sets the actor's `Self.window`, a client's own setting
+that the writer's read gate bounds by `Bounds.windowMax`). The operator seals and attests, then 12
+writes run past the pin. `adopt @pin.h @pin` signs its first envelope for pin.h + 5. The writer
+refuses it `expired` at its own height, follow re-signs ONCE for that height + 5, and pages the
+unmoved base. The member's first write then catches up from the base's height (12 behind a window
+of 5, so by the arithmetic it re-signs by the same rule). That line is held by its expectation only:
+the plant stops the row at 15, so the write's own reSign is not shown red. Plant `unstatedExpiry` (the writer states no height) turns line 15,
+the adopt, into `refused expired`. Because the plant changes that line's outcome, it is the evidence
+that the honest run did go through the expired → reSign arm there.
+**Alternatives.** (1) Keep window 100 and run 110 writes. Tried first: the rows' seal cadence
+(sealMinBytes 8192) seals a newer base inside 110 writes, and the adopt is `baseMoved`, an honest
+refusal of a different case. (2) Raise the rows' seal cadence for one row: a writer knob for one
+row's convenience. A short client window is a real client choice, and it leaves the writer exactly
+as every other row has it.
+**Critique.** The case depends on the seal cadence outlasting the window. With the rows' cadence that
+holds only because 12 writes stay under 8192 bytes. If turns grow (a fatter Turn codec), the row
+turns `baseMoved` at line 15, red by that name and not silent, and the fix is fewer writes or a
+smaller window. A deployed writer whose cadence is shorter than its members' window never produces
+this case at all: then every stale pin is `baseMoved`, and the reSign arm is reachable only by a pin
+under one seal of age. Whether that is true of the deployed cadence is HOST's number, not
+established here.
+**Meta-critique.** The first draft copied coldCatchUp's "110 writes" without asking what else 110
+writes do to the writer. Familiarity with a sibling row's numbers is how a row tests a different case
+than its docstring names. The `baseMoved` red caught it only because the expectation was by name.
+**Status.** BUILT (this commit). Rows ALL PASS, 21.

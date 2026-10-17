@@ -675,6 +675,10 @@ def runAct (l : Line) : M (Expect × String) := do
                 set { st with host := h, mem, genesis := w' }
                 pure (.ok, "")
       | .ok (exit, _) => pure (.refused s!"writer{exit.name}", "")
+  | .window n => do
+      let a ← actor l.actor
+      setActor l.actor { a with self := { a.self with window := n } }
+      pure (.ok, "")
   | .rejoin => do
       let a ← actor l.actor
       let g := (← get).genesis

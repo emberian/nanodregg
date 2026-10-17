@@ -83,6 +83,9 @@ inductive Act
   sends it to a second writer made as `replayLog` makes one (PROTOCOL-29's cross-World read); the
   outcome is that writer's answer -/
   | readElsewhere (sameNonce : Bool)
+  /-- the actor's client signs every later envelope for `n` heights (its own `Self.window`, a
+  client's setting; the writer's read gate bounds it by `Bounds.windowMax`) -/
+  | window (n : Nat)
   deriving Repr
 
 /-- A fault the transport or the client injects into one command. -/
@@ -450,6 +453,34 @@ def thin : Row where
     no "late" ["adopt", "@pin.h", "@pin"] "baseMoved"])
   plant := .caught .forgeBase 17 (.refused "baseMismatch")
 
+/-- A thin member whose pin is more than a window old (PROTOCOL-37; PROTOCOL-4's leftover, adopt's
+`reSign` path). The thin member's client signs for a window of 5 heights; the operator seals and
+states the pin, then the log runs 12 writes past it, fewer than the rows' seal cadence needs, so the
+newest base is still the pinned one (a deployed writer's seal cadence is in bytes, its window in
+heights: a pin a window old with the base unmoved is the ordinary case). `adopt`'s first envelope is signed for the pin's height + window. The
+writer refuses it `expired` and states its height, and follow re-signs ONCE for that height + window
+(`Command.reSign`, the same rule as a cold follower's, `reSign_ok`), then pages the base. Its first
+write after that catches up from the base's height, again more than a window behind (held by its
+expectation; the plant stops the row at the adopt). Without the stated height (`unstatedExpiry`) the adopt is `refused expired`.
+New in nanodregg: no minidregg journey adopted a stale pin. -/
+def thinStale : Row where
+  name := "thinStale"
+  replaces := []
+  ops := everyWrite ++ [.read]
+  kinds := ["enroll", "install", "create", "grant", "write"]
+  drive := .members (welcome ++ join "sponsor" "thin" ++ [
+    okBind "sponsor" ["grant", "@shared", "@thin", "observe,mutate"] "gt",
+    { actor := "thin", act := .window 5, expect := .ok },
+    ok "operator" ["read", "@shared"],
+    { actor := "operator", act := .seal, expect := .ok },
+    { actor := "operator", act := .attest "pin", expect := .ok },
+    { actor := "newcomer", act := .cmd ["write", "@shared", "2", "1", "--via", "@g"], expect := .ok,
+      times := 12 },
+    ok "thin" ["adopt", "@pin.h", "@pin"],
+    ok "thin" ["write", "@shared", "3", "7", "--via", "@gt"],
+    ok "thin" ["read", "@shared", "2=1", "3=7"]])
+  plant := .caught .unstatedExpiry 15 (.refused "expired")
+
 /-- Cross-World replay (OPS, ASSEMBLY-ops D3; reproduced on 87c721e against the `host` exe): two
 `host genesis` runs with the same name and founders made two Worlds that admitted each other's
 calls. KERNEL-24 binds every call to its World's origin (`Unsigned.world`, checked first;
@@ -696,7 +727,7 @@ def langJourney : Row where
   plant := .internal "a program whose judge admits everything: L4 set 101 must be admitted"
 
 def rows : List Row :=
-  [journey, reopen, laws, rotate, audit, paging, coldCatchUp, inflatedHeight, forgotten, carry, thin, wrongWorld, wrongWorldRead, pay, well, bounty, grain, hermes, bar,
+  [journey, reopen, laws, rotate, audit, paging, coldCatchUp, inflatedHeight, forgotten, carry, thin, thinStale, wrongWorld, wrongWorldRead, pay, well, bounty, grain, hermes, bar,
    langJourney]
 
 end Nanodregg.Protocol
