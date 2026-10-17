@@ -13,7 +13,7 @@ resolved to the method indices `Event.index` names, decide `step`.
 There is no owner law: authority is KERNEL's gate (KERNEL-25, `invoke_authorized`).
 -/
 import Hosting.Package
-import Hosting.Text
+import Lang.Print
 import Hosting.Proofs.Lifecycle
 import Lang.Read
 import Lang.Eval
@@ -138,7 +138,7 @@ theorem method_iff_step :
 cannot reach it: evaluating the printer alone (about 10 KB of `String` appends) did not finish in
 200 s (measured 10-17), so this is the compiler's evaluation, recorded in gates/axioms-allow.tsv. -/
 theorem lifecycle_text_reads :
-    ((Grain.lifecycle?.toOption.bind Text.package).bind fun t =>
+    ((Grain.lifecycle?.toOption.bind Print.package).bind fun t =>
       (Read.readPackage t).toOption.bind Wire.encodePackage) =
         Grain.lifecycle?.toOption.bind Wire.encodePackage ∧
     (Grain.lifecycle?.toOption.bind Wire.encodePackage).isSome := by

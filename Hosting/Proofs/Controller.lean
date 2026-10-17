@@ -9,6 +9,7 @@ does not decode, or does not desire `running`. `launch_complete`: such a grain I
 own cell at a touched id and names that id's directory.
 -/
 import Hosting.Controller
+import Lang.Print
 
 namespace Nanodregg.Hosting.Proofs
 
@@ -86,6 +87,39 @@ theorem crashLoop_refused {label pkgId : ByteArray} {now : Nat} {live : List Liv
     decideCell label pkgId now live g (some c) = some (.refuse .crashLoop) := by
   simp [decideCell, hg, hgr, hu, hc]
 
+private theorem digit_inj : ∀ a b : Fin 16, Lang.Print.hexDigit a.val = Lang.Print.hexDigit b.val → a = b := by
+  decide
+
+private theorem byte_inj {x y : UInt8}
+    (h1 : Lang.Print.hexDigit (x.toNat / 16) = Lang.Print.hexDigit (y.toNat / 16))
+    (h2 : Lang.Print.hexDigit (x.toNat % 16) = Lang.Print.hexDigit (y.toNat % 16)) : x = y := by
+  have hx := x.toNat_lt; have hy := y.toNat_lt
+  have e1 := congrArg Fin.val (digit_inj ⟨x.toNat / 16, by omega⟩ ⟨y.toNat / 16, by omega⟩ h1)
+  have e2 := congrArg Fin.val (digit_inj ⟨x.toNat % 16, by omega⟩ ⟨y.toNat % 16, by omega⟩ h2)
+  simp only at e1 e2
+  apply UInt8.toNat_inj.mp
+  omega
+
+private def hexL (l : List UInt8) : List Char :=
+  l.foldr (fun x cs => Lang.Print.hexDigit (x.toNat / 16) :: Lang.Print.hexDigit (x.toNat % 16) :: cs) []
+
+private theorem hexL_inj : ∀ {a b : List UInt8}, hexL a = hexL b → a = b
+  | [], [], _ => rfl
+  | [], _ :: _, h => by simp [hexL] at h
+  | _ :: _, [], h => by simp [hexL] at h
+  | x :: xs, y :: ys, h => by
+    simp only [hexL, List.foldr_cons, List.cons.injEq] at h
+    obtain ⟨h1, h2, h3⟩ := h
+    rw [byte_inj h1 h2, hexL_inj h3]
+
+/-- Distinct ids get distinct directories. -/
+theorem dirOf_injective {a b : ByteArray} (h : dirOf a = dirOf b) : a = b := by
+  unfold dirOf Lang.Print.hex Lang.Print.hexChars at h
+  have h' := String.ofList_inj.mp (String.toByteArray_inj.mp h)
+  rw [← Array.foldr_toList, ← Array.foldr_toList] at h'
+  have := hexL_inj h'
+  cases a; cases b; simp_all
+
 variable {D : Type} [Ord D] [DecidableEq D]
 
 /-- Every action is decided on the World's own cell at a touched id, and names that id's directory:
@@ -134,5 +168,38 @@ theorem reconcile_bounded (bytesOf : D → ByteArray) (label pkgId : ByteArray) 
     (reconcile bytesOf label pkgId now live w ids).length ≤ Bounds.grainsMax := by
   unfold reconcile
   exact Nat.le_trans (List.length_filterMap_le _ _) (List.length_take_le _ _)
+
+omit [Ord D] in
+private theorem eraseDups_nodup_le : ∀ (n : Nat) (l : List D), l.length ≤ n → l.eraseDups.Nodup
+  | 0, [], _ => by simp
+  | 0, _ :: _, h => absurd h (by simp)
+  | _ + 1, [], _ => by simp
+  | n + 1, a :: as, h => by
+    rw [List.eraseDups_cons]
+    refine List.nodup_cons.mpr ⟨fun hm => ?_, eraseDups_nodup_le n _ ?_⟩
+    · have := List.mem_eraseDups.mp hm
+      simp at this
+    · exact Nat.le_trans (List.length_filter_le _ _) (by simp at h; omega)
+
+omit [Ord D] in
+private theorem eraseDups_nodup (l : List D) : l.eraseDups.Nodup := eraseDups_nodup_le _ l (Nat.le_refl _)
+
+/-- One action per grain whenever distinct ids have distinct bytes (`reconcile_one_per_id` with its
+premise discharged by `dirOf_injective`). -/
+theorem reconcile_distinct {bytesOf : D → ByteArray} (hb : Function.Injective bytesOf)
+    {label pkgId : ByteArray} {now : Nat} {live : List Live} {w : World D} {ids : List D} :
+    ((reconcile bytesOf label pkgId now live w ids).map (·.grain)).Nodup :=
+  reconcile_one_per_id (List.Pairwise.map (fun i => dirOf (bytesOf i))
+    (fun _ _ hne heq => hne (hb (dirOf_injective heq)))
+    ((eraseDups_nodup ids).sublist (List.take_sublist _ _)))
+
+theorem digest_bytes_injective : Function.Injective Codec.Digest.bytes := by
+  intro a b h; cases a; cases b; simp_all
+
+/-- On the deployed ids (32-byte digests), one action per grain per call. -/
+theorem reconcile_distinct_deployed {label pkgId : ByteArray} {now : Nat} {live : List Live}
+    {w : World Codec.Digest} {ids : List Codec.Digest} :
+    ((reconcile Codec.Digest.bytes label pkgId now live w ids).map (·.grain)).Nodup :=
+  reconcile_distinct digest_bytes_injective
 
 end Nanodregg.Hosting.Proofs

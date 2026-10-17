@@ -6,7 +6,7 @@
 founders: A (the grain's owner, KERNEL's slot 1) and B (another member, later the operator A
 grants `start` to).
 
-* G0 `world/grain/Lifecycle` is the generated text (`Text.package lifecycle`), byte for byte.
+* G0 `world/grain/Lifecycle` is the generated text (`Lang.Print.package lifecycle`), byte for byte.
 * G1 A installs the grain package — admitted.
 * G2 A creates a grain born `installed`, owned by A — admitted; its phase reads `installed`.
 * G3 a grain born `running` — refused `lawDenied` by `phase` (born-only-initial).
@@ -32,7 +32,7 @@ The run is deterministic: a SEED argument (standing passes 1 2 3) changes nothin
 import Kernel.Sim
 import Lang.Program
 import Hosting.Package
-import Hosting.Text
+import Lang.Print
 import Hosting.Controller
 
 namespace Nanodregg.Hosting.Sim
@@ -159,7 +159,7 @@ def journey (plant : Plant) (pkg : Package) : Run := Id.run do
   let some pid := Controller.lifecycleId Kernel.Sim.env | return note r "G15 the lifecycle has no id" false
   r := note r "G15 Controller.lifecycleId is the installed package's id" (pid == p)
   let pkgId := Kernel.Sim.dc.bytes pid
-  let hx := (Text.hex (Kernel.Sim.dc.bytes gr)).toUTF8
+  let hx := (Lang.Print.hex (Kernel.Sim.dc.bytes gr)).toUTF8
   let ctl := fun (r : Run) (live : List Controller.Live) (g : D) (_ : ByteArray) =>
     Controller.reconcile Kernel.Sim.dc.bytes label pkgId 0 live r.st.host [g, g]
   let want := wantPlan label hx
@@ -177,7 +177,7 @@ def journey (plant : Plant) (pkg : Package) : Run := Id.run do
   let some lg := created tl2 | return note rl2 "G15 look-alike create" false
   let (rl3, vl3, _) := go prog rl2 (call rl2 a [a.id, lg, lp] (.invoke lg Event.start.index args 100000 none))
   r := rl3
-  let lhx := (Text.hex (Kernel.Sim.dc.bytes lg)).toUTF8
+  let lhx := (Lang.Print.hex (Kernel.Sim.dc.bytes lg)).toUTF8
   r := note r s!"G15 a started look-alike ({vl3}, phase {phaseName (phaseAt r.st.host lg)}) is never launched"
     (vl3 == "admitted" && phaseAt r.st.host lg == some .running && (ctl r [] lg lhx).isEmpty)
   let (r12a, v12a, _) := ev r a .stop none
@@ -197,14 +197,14 @@ def journey (plant : Plant) (pkg : Package) : Run := Id.run do
 
 /-- G0: the shipped text is the generated one. -/
 def textLine : IO (String × Bool) := do
-  let some want := lifecycle.bind Text.package | return ("G0 the grain package has no text", false)
+  let some want := lifecycle.bind Lang.Print.package | return ("G0 the grain package has no text", false)
   let have_ ← try IO.FS.readFile textPath catch _ => pure ""
   if have_ == want then return (s!"G0 {textPath} is the generated text ({want.length} bytes)", true)
-  return (s!"G0 {textPath} differs from Text.package lifecycle (hosting-sim --write-text rewrites it)", false)
+  return (s!"G0 {textPath} differs from Lang.Print.package lifecycle (hosting-sim --write-text rewrites it)", false)
 
 def runAll (args : List String) : IO UInt32 := do
   if args == ["--write-text"] then
-    let some t := lifecycle.bind Text.package | IO.eprintln "no text"; return 1
+    let some t := lifecycle.bind Lang.Print.package | IO.eprintln "no text"; return 1
     IO.FS.createDirAll (textPath.parent.getD ".")
     IO.FS.writeFile textPath t
     IO.println s!"wrote {textPath}"

@@ -114,7 +114,7 @@ needs native_decide.
 **Alternatives.** Hand-write the text (a second source of the package); ship only Lean constructors
 (members install TEXT, so no). **CRITIQUE.** A printer is general LANG tooling living in HOSTING; if LANG
 grows one, this is a twin and must be deleted. **META.** Built here because I needed it now. Offered to
-LANG-3 to own; status: open.
+LANG-3 to own; status: DELETED (HOSTING-9) for LANG's `Lang.Print` (LANG-28).
 
 ## HOSTING-4 KERNEL's `invoke` is default-open; the law is the only owner check (finding, 2026-10-17)
 
@@ -300,4 +300,35 @@ CLIENT's error list by hand; the exhaustive match keeps it from going stale, not
 **META.** I matched the names my predecessor promised CODEC-2, then renamed `Event` to `Report` (a
 clash with the lifecycle's `Event`): CODEC-2 is told. One bound for everything is the Layout
 family's shape, accepted because it is the codec's, not because it is tight.
+Status: built.
+
+## HOSTING-9 Labels are lowercase ASCII; directory names are injective; the printer is LANG's (HOSTING-2, 2026-10-17)
+
+**Decision.** (1) `plan` refuses `labelUnclean` unless `labelOk l`, and `idUnclean` unless `labelOk g.idHex`: one clean component whose every
+byte is `a-z`, `0-9` or `-` (`labelByte`). The label names `worlds/<l>`; on a case-insensitive or
+Unicode-normalising file system (APFS, the operator's Mac) `W1` and `w1`, or two normal forms of
+`é`, would name ONE world's directory, so a grain of one Store could be planned into another's.
+(2) `dirOf` is `Lang.Print.hex` (LANG-28, 615e452) as UTF-8 and is injective (`dirOf_injective`), so
+`reconcile_one_per_id`'s premise is discharged for any injective `bytesOf` (`reconcile_distinct`).
+(3) `Hosting/Text.lean` is DELETED (HOSTING-3b's twin): G0 and `lifecycle_text_reads` use
+`Lang.Print.package`; world/grain/Lifecycle is byte-identical. (4) The oneOf fields are named
+`grainRefusal` and `launchFailure` (CODEC-2: the emitter dedups oneOf enums by field name, and
+`refusal` collides with `wire::Refusal`; CODEC-2 makes both collisions refuse to emit).
+**Theorems.** `labelOk_clean`, `labelOk_bytes`, `labelByte_folds_to_itself` (no accepted byte is
+ASCII uppercase or ≥ 128), teeth `labelOk_refuses_upper`, `labelOk_refuses_nonascii`,
+`labelOk_accepts`, `foldByte_folds`; `labels_fold_injective` (accepted labels equal after ASCII
+folding are equal), `plan_disjoint` (two Stores' or two grains' plans allow disjoint trees);
+`plan_refuses_label/id/entry` restated over `labelOk`; `dirOf_injective`, `reconcile_distinct`,
+`reconcile_distinct_deployed`. **Vacuity read (10-17):** the FS claim was a docstring (now
+`labels_fold_injective` + `plan_disjoint`); grain ids were only `clean`, so two ids differing in
+case shared a volume on APFS (now `labelOk`); no deployed instance of `reconcile_distinct`.
+**Plants** (run): `labelByte` widened to accept from 65 ⇒ `labelByte_folds_to_itself`,
+`labelOk_refuses_upper` red; `dirOf` of the first byte only ⇒ `dirOf_injective` red.
+**Alternatives.** Fold case in the plan (lowercase the label): a second spelling of one Store that
+the operator never wrote. Allow any clean label and rely on a case-sensitive FS: true on hbox's ZFS,
+false on the Mac where lanes read.
+**CRITIQUE.** The FS's identification relation is modelled as ASCII folding (`foldByte`); that it is
+APFS's relation on ASCII names is a platform fact, not a theorem.
+**META.** The charset is the one I would pick for a hostname, by familiarity; it is narrower than
+needed, which is the safe direction.
 Status: built.

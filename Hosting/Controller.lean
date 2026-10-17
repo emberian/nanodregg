@@ -18,7 +18,7 @@ does not desire `running` is killed. Restart backoff is ADVISORY: `now` and the 
 launcher's report, so the crash-loop refusal is only as honest as the operator's own process.
 -/
 import Hosting.Plan
-import Hosting.Text
+import Lang.Print
 import Kernel.World
 
 namespace Nanodregg.Hosting.Controller
@@ -48,8 +48,9 @@ def lifecycleId {D : Type} (E : Env D) : Option D :=
 def isGrain (pkgId : ByteArray) (c : Cell) : Bool :=
   c.kind == Receive.kindObject && c.slots.get Receive.slotPackage == some pkgId
 
-/-- The directory name of a grain: its id's bytes in lowercase hex. -/
-def dirOf (idBytes : ByteArray) : ByteArray := (Text.hex idBytes).toUTF8
+/-- The directory name of a grain: its id's bytes in lowercase hex (`Lang.Print.hex`); injective,
+`Proofs.Controller.dirOf_injective`. -/
+def dirOf (idBytes : ByteArray) : ByteArray := (Lang.Print.hex idBytes).toUTF8
 
 /-- The grain a lifecycle cell describes, and its desired phase; `none` when a slot does not
 decode. -/

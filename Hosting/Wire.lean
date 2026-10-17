@@ -8,10 +8,10 @@ path rule (law 2). On the pipe each frame is `u32le len ‖ payload`, `1 ≤ len
 
     actions  launch 1   grain, program : path, read write exec hidden : paths
              kill   2   grain
-             refuse 3   grain, why : Refusal
+             refuse 3   grain, grainRefusal : Refusal
     reports  started 1  grain, atMs
              exited  2  grain, status (the raw wait status), atMs
-             failed  3  grain, why : LaunchFailure, atMs
+             failed  3  grain, launchFailure : LaunchFailure, atMs
 
 `grain` is the grain's directory name (`Controller.dirOf`): the key a later kill and every report
 name the child by. Paths are relative to the operator's hosting root; the launcher joins the root
@@ -51,11 +51,11 @@ structure Plan where
 
 /-- Why the controller refuses to plan or launch a grain, by name (law 7). -/
 inductive Refusal
-  /-- the Store label is not one clean path component -/
+  /-- the Store label is not one clean path component of lowercase ASCII letters, digits and `-` -/
   | labelUnclean
   /-- the grain's entry is not one clean path component -/
   | entryUnclean
-  /-- the grain's id directory name is not one clean path component -/
+  /-- the grain's id directory name is not one clean component of lowercase ASCII letters, digits and `-` -/
   | idUnclean
   /-- a lifecycle cell whose kind, entry or phase does not decode -/
   | malformedGrain
@@ -144,12 +144,12 @@ def actionCases : Tagged :=
   [("launch", 1, [.bytes "grain", .path "program", .paths "read", .paths "write", .paths "exec",
      .paths "hidden"]),
    ("kill", 2, [.bytes "grain"]),
-   ("refuse", 3, [.bytes "grain", .oneOf "why" (Refusal.all.map fun r => (r.name, r.code))])]
+   ("refuse", 3, [.bytes "grain", .oneOf "grainRefusal" (Refusal.all.map fun r => (r.name, r.code))])]
 
 def reportCases : Tagged :=
   [("started", 1, [.bytes "grain", .u64 "atMs"]),
    ("exited", 2, [.bytes "grain", .u32 "status", .u64 "atMs"]),
-   ("failed", 3, [.bytes "grain", .oneOf "why" (LaunchFailure.all.map fun r => (r.name, r.code)),
+   ("failed", 3, [.bytes "grain", .oneOf "launchFailure" (LaunchFailure.all.map fun r => (r.name, r.code)),
      .u64 "atMs"])]
 
 abbrev ActionTy := Tagged.Ty Bounds.frameMax actionCases
