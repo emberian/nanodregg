@@ -240,17 +240,18 @@ theorem readRef_ok {X : Ctx D} {look : Pinned D} {r : AcctRef D} {id : D} {cell 
       obtain ⟨rfl, rfl, rfl⟩ := h
       exact ⟨rfl, hr, fun a' ha => by cases ha⟩
 
-omit [Ord D] [DecidableEq D] in
+omit [DecidableEq D] in
 /-- **One account per (owner, denomination)** (KERNEL-28 (d)): two pairs with one account id are
-the same pair, or the account hash has a collision. With digest bytes of one size (the deployed
-32), the hash's input splits back into the owner and the denomination. -/
-theorem account_keyed {X : Ctx D} (hb : ∀ a b : D, X.env.bytes a = X.env.bytes b → a = b)
-    (hl : ∀ a b : D, (X.env.bytes a).size = (X.env.bytes b).size) {a s b t : D}
+the same pair, or the account hash has a collision. Over a lawful `Env` (digest bytes injective and
+all of one size `n`, the deployed 32), the hash's input splits back into the owner and the
+denomination. -/
+theorem account_keyed {X : Ctx D} {n : Nat} (hE : X.env.Lawful n) {a s b t : D}
     (h : accountId X a s = accountId X b t) : (a, s) = (b, t) ∨ HashColl X.env domAccount := by
   by_cases he : X.env.bytes a ++ X.env.bytes s = X.env.bytes b ++ X.env.bytes t
   · left
-    obtain ⟨h1, h2⟩ := (ByteArray.append_eq_append_iff_of_size_eq_left (hl a b)).mp he
-    rw [hb _ _ h1, hb _ _ h2]
+    obtain ⟨h1, h2⟩ := (ByteArray.append_eq_append_iff_of_size_eq_left
+      (by rw [hE.size a, hE.size b])).mp he
+    rw [hE.bytes_eq h1, hE.bytes_eq h2]
   · right
     exact ⟨_, _, he, h⟩
 

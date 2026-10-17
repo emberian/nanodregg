@@ -25,6 +25,7 @@ forged log (`eventMismatch`).
 -/
 import Kernel.Proofs.Weight
 import Kernel.Proofs.Rooted
+import Kernel.Proofs.Lawful
 
 namespace Nanodregg.Kernel
 
@@ -620,15 +621,15 @@ omit [Std.TransOrd D] [Std.LawfulEqOrd D] in
 /-- **A denomination's floor is set at its birth.** Before the turn that bears it, its floor sum is
 0, given the digest's bytes injective (a fresh id's bytes are no held id's bytes). With
 `fold_floors_held`, its floor sum after birth is what the birth turn set, forever. -/
-theorem admit_birth {E : Env D} {w w' : World D} {t : Turn D} (hb : FloorsBorn E w)
-    (hinj : ∀ a b : D, E.bytes a = E.bytes b → a = b) (h : World.admit E w t = .ok w')
+theorem admit_birth {E : Env D} {n : Nat} {w w' : World D} {t : Turn D} (hb : FloorsBorn E w)
+    (hE : E.Lawful n) (h : World.admit E w t = .ok w')
     {d : ByteArray} (hd : d ∈ (createdIds t).map E.bytes) : w.floorSum d = 0 := by
   obtain ⟨posts, hk, _⟩ := admit_ok h
   obtain ⟨id, hid, rfl⟩ := List.mem_map.mp hd
   apply Classical.byContradiction
   intro hne
   obtain ⟨id', hc, he⟩ := hb _ hne
-  have := hinj _ _ he
+  have := hE.bytes_eq he
   subst this
   have hcr := hk.creates
   unfold checkCreates at hcr
@@ -648,15 +649,15 @@ theorem fold_floorsBorn {E : Env D} :
 
 
 omit [Std.TransOrd D] [Std.LawfulEqOrd D] in
-/-- A turn never bears an id the World already holds, so never a held id's denomination (given the
-digest's bytes injective): `checkCreates` refuses a live or tombstoned id (`idTaken`). -/
-theorem admit_not_born {E : Env D} {w w' : World D} {t : Turn D}
-    (hinj : ∀ a b : D, E.bytes a = E.bytes b → a = b) (h : World.admit E w t = .ok w')
+/-- A turn never bears an id the World already holds, so never a held id's denomination (given a
+lawful `Env`: its digest bytes are injective): `checkCreates` refuses a live or tombstoned id (`idTaken`). -/
+theorem admit_not_born {E : Env D} {n : Nat} {w w' : World D} {t : Turn D}
+    (hE : E.Lawful n) (h : World.admit E w t = .ok w')
     {id : D} (hc : w.taken E id = true) : E.bytes id ∉ (createdIds t).map E.bytes := by
   obtain ⟨posts, hk, _⟩ := admit_ok h
   intro hm
   obtain ⟨id', hid, he⟩ := List.mem_map.mp hm
-  have := hinj _ _ he
+  have := hE.bytes_eq he
   subst this
   have hcr := hk.creates
   unfold checkCreates at hcr
@@ -669,7 +670,7 @@ theorem admit_not_born {E : Env D} {w w' : World D} {t : Turn D}
 /-- **The cap is fixed forever.** Once a World holds the id that names a denomination (its well:
 from the turn that bore it on), no admitted log moves that denomination's floor sum. With
 `admit_birth` (0 before) and `dispatch_value_born` (the birth sets it to the signed cap). -/
-theorem fold_floors_held {E : Env D} (hinj : ∀ a b : D, E.bytes a = E.bytes b → a = b) {id : D} :
+theorem fold_floors_held {E : Env D} {n : Nat} (hE : E.Lawful n) {id : D} :
     ∀ {w w' : World D} {l : List (Turn D)}, w.Canon E → World.fold E w l = .ok w' →
       w.taken E id = true → w'.floorSum (E.bytes id) = w.floorSum (E.bytes id)
   | w, w', [], _, h, _ => by simp [World.fold] at h; subst h; rfl
@@ -678,8 +679,8 @@ theorem fold_floors_held {E : Env D} (hinj : ∀ a b : D, E.bytes a = E.bytes b 
       have hc₁ : w₁.taken E id = true := by
         obtain ⟨posts, _, rfl⟩ := admit_ok h₁
         exact commit_taken (.inl hc)
-      rw [fold_floors_held hinj (admit_canon hcn h₁) h₂ hc₁,
-        admit_floors hcn h₁ (admit_not_born hinj h₁ hc)]
+      rw [fold_floors_held hE (admit_canon hcn h₁) h₂ hc₁,
+        admit_floors hcn h₁ (admit_not_born hE h₁ hc)]
 
 /-! ## Genesis holds no value -/
 
