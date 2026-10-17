@@ -7,6 +7,7 @@ the hash has a collision — so a follower that checks one signed `(height, chai
 turn before it.
 -/
 import Kernel.Proofs.Admit
+import Kernel.Proofs.Bytes
 
 namespace Nanodregg.Kernel
 
@@ -24,13 +25,6 @@ theorem chainOf_concat {E : Env D} :
   | c, x :: rest, t => by
       show chainOf E (chainNext E c x) (rest ++ [t]) = _
       rw [chainOf_concat]; rfl
-
-theorem bytes_append_inj {x y x' y' : ByteArray} (h : x ++ y = x' ++ y') (hs : x.size = x'.size) :
-    x = x' ∧ y = y' := by
-  have hd : x.data ++ y.data = x'.data ++ y'.data := by
-    rw [← ByteArray.data_append, ← ByteArray.data_append, h]
-  obtain ⟨h₁, h₂⟩ := Array.append_inj hd hs
-  exact ⟨ByteArray.ext h₁, ByteArray.ext h₂⟩
 
 /-- One chain step determines its predecessor and its turn, or exhibits a collision. -/
 theorem chainNext_inj {E : Env D} {n : Nat} (hsz : ∀ d, (E.bytes d).size = n)
