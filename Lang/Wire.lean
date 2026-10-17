@@ -39,10 +39,16 @@ def nodeMax : Nat := Bounds.bytesMax
 
 /-! ## Leaves -/
 
-def labelOk (ℓ : Label) : Bool := decide (ℓ.toUTF8.size ≤ labelBytesMax)
+/-- A label is one atom of the text (`labelAtom`) of at most `labelBytesMax` bytes of UTF-8: the one
+label rule of the wire, the reader and the printer. -/
+def labelOk (ℓ : Label) : Bool := labelAtom ℓ && decide (ℓ.toUTF8.size ≤ labelBytesMax)
 
 def labelOf (p : ByteArray) : Option Label :=
-  if p.size ≤ labelBytesMax then String.fromUTF8? p else none
+  if p.size ≤ labelBytesMax then
+    match String.fromUTF8? p with
+    | some ℓ => if labelAtom ℓ then some ℓ else none
+    | none => none
+  else none
 
 def u32Of (p : ByteArray) : Option Nat :=
   match Stream.u32.decode p with

@@ -15,21 +15,34 @@ open Nanodregg.Codec
 
 /-! ## Leaves -/
 
-theorem labelOf_toUTF8 {ℓ : Label} (h : labelOk ℓ = true) : labelOf ℓ.toByteArray = some ℓ := by
-  simp only [labelOk, decide_eq_true_eq, String.toUTF8_eq_toByteArray] at h
-  unfold labelOf
-  rw [if_pos h]
+theorem fromUTF8_toByteArray (ℓ : Label) : String.fromUTF8? ℓ.toByteArray = some ℓ := by
   unfold String.fromUTF8?
   exact dif_pos ℓ.isValidUTF8
+
+theorem labelOf_toUTF8 {ℓ : Label} (h : labelOk ℓ = true) : labelOf ℓ.toByteArray = some ℓ := by
+  simp only [labelOk, Bool.and_eq_true, decide_eq_true_eq, String.toUTF8_eq_toByteArray] at h
+  unfold labelOf
+  rw [if_pos h.2, fromUTF8_toByteArray]
+  simp only [h.1, if_true]
 
 theorem labelOf_some {p : ByteArray} {ℓ : Label} (h : labelOf p = some ℓ) :
     ℓ.toByteArray = p ∧ labelOk ℓ = true := by
   unfold labelOf at h
   split at h
   · rename_i hs
-    unfold String.fromUTF8? at h
     split at h
-    · cases h; exact ⟨rfl, by simpa [labelOk] using hs⟩
+    · rename_i ℓ' hf
+      split at h
+      · rename_i ha
+        cases h
+        unfold String.fromUTF8? at hf
+        split at hf
+        · cases hf
+          refine ⟨rfl, ?_⟩
+          simp only [labelOk, ha, Bool.true_and, decide_eq_true_eq, String.toUTF8_eq_toByteArray]
+          exact hs
+        · simp at hf
+      · simp at h
     · simp at h
   · simp at h
 

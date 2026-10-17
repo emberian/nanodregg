@@ -246,8 +246,8 @@ theorem parse_layout {sep : List Char} (hsep : Sep sep) {xs : List SExp} (h : Ok
   obtain ⟨ys, q, hys, hsame⟩ :=
     sexps_items (depthMax - 1) sep hsep h (by omega) (by omega) listMax 0 1 ['\n'] [] (by omega)
   refine ⟨ys, ?_, hsame⟩
-  simp only [depthMax] at hys
-  simp only [parse, String.toList_ofList, depthMax]
+  simp only [depthMax, Wire.depthMax] at hys
+  simp only [parse, String.toList_ofList, depthMax, Wire.depthMax]
   rw [sexp, List.cons_append, skip_stop 0 _ (by decide) (by decide)]
   simp only [skip_items 1 ['\n'] h]
   simp [hys, Except.map, skip]

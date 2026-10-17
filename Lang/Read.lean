@@ -36,7 +36,10 @@ inductive SExp
 def SExp.pos : SExp → Nat
   | .atom p _ | .str p _ | .list p _ => p
 
-def depthMax : Nat := 512
+/-- The deepest nesting the reader reads: the wire's tree depth plus 2. A printed form nests at most
+one level deeper than its tree (`(ref i)` is a list, its tree a leaf), and the package's sections
+one more, so every package the wire carries has a text within it (`Lang.Proofs.PrintWire`). -/
+def depthMax : Nat := Wire.depthMax + 2
 
 /-- The most elements one list holds: a row of `Wire.rowMax` entries after the head words of
 `(case e arm…)` / `(extend e field…)`, so every form the wire carries has a text that fits. -/
@@ -105,7 +108,6 @@ abbrev P (α : Type) := Except ReadRefusal α
 
 /-! ## Reading text (the offset of the head of the remaining characters is carried) -/
 
-def isDelim (c : Char) : Bool := c = '(' || c = ')' || c = '"' || c.isWhitespace || c = ';'
 
 mutual
 /-- Skip whitespace and `;` comments to end of line. -/

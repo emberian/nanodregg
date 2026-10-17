@@ -10,6 +10,14 @@ namespace Nanodregg.Lang
 
 abbrev Label := String
 
+/-- The characters that end an atom of the text (`Lang.Read`): parentheses, the string quote,
+whitespace and the comment mark. -/
+def isDelim (c : Char) : Bool := c = '(' || c = ')' || c = '"' || c.isWhitespace || c = ';'
+
+/-- A label is one atom of the text: nonempty, no delimiter. The wire (`Wire.labelOk`) and the
+printer share this rule, so every label a package carries can be written and read back. -/
+def labelAtom (ℓ : Label) : Bool := !ℓ.toList.isEmpty && ℓ.toList.all (fun c => !isDelim c)
+
 namespace Row
 
 variable {α : Type}

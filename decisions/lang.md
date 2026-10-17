@@ -631,6 +631,62 @@ said nothing about any other member list. The constructor-bound toolkit (`prints
 lines) gives the general statements.
 **Status.** built.
 
+## LANG-31 One label rule for the wire, the reader and the printer; the reader reads two levels past the wire; every installable package has a text (2026-10-18; LANG-30's critique, vacuity MEDIUM; LANG-6's WIP finished by LANG-8)
+**Decision.** A label is one atom of the text (`labelAtom`: nonempty, no `Read.isDelim` character;
+both now live in `Lang/Row.lean`) of at most 64 bytes of UTF-8. `Wire.labelOk` is that rule, and
+`Wire.labelOf` refuses a non-atom label when decoding, so the wire, the reader and the printer all
+use one predicate (`Print.labelOk` is deleted; the printer and every proof `open Wire (labelOk)`).
+`Read.depthMax = Wire.depthMax + 2` (1026, was 512). The reason for the 2: a printed form is at most one
+level deeper than its tree. A row entry is one tree node and one list. Only the leaves `(ref i)`,
+`(rec)` and `(record)` print as a list over a tree leaf. A package's sections add the second
+level. `Lang.Proofs.Prints` is the constructor-bound toolkit, split out of `StdFits`.
+`Lang.Proofs.PrintWire` proves the alignment:
+`tyWire_prints` (a type whose tree fits depth `D` prints within `D + 1`), `hasType_prints` /
+`fieldsTy_prints` / `armsTy_prints` (the same for a well-typed term under its context's binders,
+by recursion on the typing derivation), `package_prints` (wire-valid + tree in bounds + install
+check accepts ⇒ `Print.package p` is `some`), `installed_prints` / `installed_reads` (for any
+bytes `decodePackage` accepts, and the text reads back to exactly the package), `state_prints`
+(an encodable package's state type prints within `Wire.depthMax`, which is `StdFits`' premise:
+`quorum_text_at`, `allowlist_text_at`, `machine_text_at` take the package instead of the depth).
+`StdFits`' law skeleton bound is now `max (M + 2) (max 9 (N + 5))` (was `max M (max 6 (N + 2)) + 3`:
+the state type sits one level less deep than that said; the 9 is the request type's lambda).
+**What breaks.** The decoder now refuses bytes it used to accept: a package with a label that is
+not one atom (a space, a parenthesis, a quote, `;`, or empty) is refused `lang/package`, and
+`encodePackage` returns `none` for it. No bytes change for any other package, so nothing
+re-ids. Every package on main has atom labels: `world/grain/Lifecycle`'s bytes are unchanged (its
+generated row), and the journey's and the rows' packages (THE BAR's counter) encode as before
+(their verdict exes in this commit's judge). LEDGER's escrow and HOSTING's Allowance must use
+atom labels; identifiers are.
+**Alternatives.** (1) Escape labels in the printer (`|a b|`): a second label syntax in the reader,
+plus an escape round-trip proof, all for labels no program needs. (2) Keep the reader at 512 and
+lower `Wire.depthMax` to 510: the wire's bound is CODEC's tree depth shared with the size
+accounting, and the reader's fuel costs nothing past the text's own length. (3) Prove
+`package_prints` only for Std's generators (LANG-30's state): that leaves a hand-written package
+with no text.
+**Critique.** `Read.depthMax` is exact for packages but not for a standalone term or type: a
+closed term whose tree is 1024 deep prints within 1025, so `Print.term` has one level of slack.
+The theorems state upper bounds. The tooth `deep_needs_depthMax` shows the package bound is met
+exactly: `deepPkg` is 511 record levels in body and interface, its tree is `Wire.depthMax` deep,
+and its text needs exactly `Read.depthMax`. `deeper_unfit` shows one more level has no tree, and
+`spaced_label_tree_refused` / `atom_label_tree_reads` tooth the decoder's side over a tree, and
+journey L0f runs the same package text-first (read, check, encode, print, read: same bytes; one
+level deeper `tooDeep`). `package_prints` needs the install check only for two things: the typing
+(to rule out free variables) and `checkShape`'s list lengths (imports ≤ 16, methods ≤ 64, laws ≤
+16, so the section lists fit `Read.listMax`). A wire-valid package that fails the check may have
+no text, and that is by design: `ob` prints what can be installed. `installed_reads` assumes
+canonical import interfaces (`∀ A ∈ ifaces, A.wf`), as `readPackage_checked` does. The loader's
+interfaces come from installed packages whose `checkShape` passed, but no theorem here connects the
+two (LANG-4's Receiver leftovers; cv task). At a state type 1024 deep the stdlib's laws need exactly
+`Read.depthMax` (`max (M + 2) …` at M = 1024): the `_text_at` corollaries hold with zero margin.
+**Meta-critique.** LANG-30 measured the gap and named it MEDIUM. Then it bounded only the stdlib,
+because a general theorem looked heavy. The general theorem took one recursion on the typing
+derivation (the template was `hasType_canon`). The "+1 overall" argument (a row entry's extra list is absorbed by its own tree node, so the
+printed form is one level deeper than the tree in total, not per level) was the only real
+content, and it was cheaper to prove than the Std-specific bounds. The narrowing of the wire
+looked like a flag day and was priced as one. Checking what holds the old shape took one grep:
+nothing does.
+**Status.** built (this commit). `lang!`: the decoder narrows. Nothing re-emits.
+
 ## LANG-32 A binder may not have a reserved name: `reservedBinder` (2026-10-17; LANG-29's vacuity point 8; LANG-31 is the bound alignment, next)
 **Decision.** `Read.term` reads an atom as a literal (`true`, `false`, a numeral, `#hex`) before it
 looks at the scope, and a list headed by a form's word (`if`, `lam`, `case`, …) or a primitive

@@ -15,6 +15,10 @@ the owner and the owner never changes). Rows:
   back; a list past `Read.listMax` is refused `tooLong`, a form past `Read.depthMax` `tooDeep`.
 * L0e a binder named like a literal (`true`, `5`, `#ab`), a head word or a primitive is refused
   `reservedBinder`.
+* L0f (LANG-31) one label rule, and the reader two levels past the wire: a package written as text
+  with its body and interface nested to the wire's depth bound reads, checks, encodes, prints and
+  reads back to the same bytes; one level deeper the reader refuses it `tooDeep`; a label with a
+  space has no bytes.
 * L1 founder A installs `Owned` (a ROM cell, id `romIdOf`) — admitted.
 * L2 A creates an object owned by A, seed `{owner = A, total = 0}`, judged by both laws — admitted.
 * L3 A invokes `set 50` — admitted; the object's `total` slot decodes to 50.
@@ -447,6 +451,25 @@ def journey (mode : Mode) : Run := Id.run do
     r := note r s!"L0e refuse a binder named {why}: reservedBinder" refused
   let named := match Read.readTerm "(lam x5 nat x5)" with | .ok (.lam .nat (.var 0)) => true | _ => false
   r := note r "L0e a binder named x5 reads as a variable" named
+  -- L0f (LANG-31) a package at the wire's depth bound, written as text: `n` record levels through field `f`
+  -- make a body and an interface whose trees are `2n + 1` deep, so n = 511 puts the package's tree at
+  -- Wire.depthMax and its text at Read.depthMax
+  let nestTy (n : Nat) : String := String.join (List.replicate n "(rec (f ") ++ "(rec)" ++ String.join (List.replicate n "))")
+  let nestT (n : Nat) : String := String.join (List.replicate n "(record (f ") ++ "(record)" ++ String.join (List.replicate n "))")
+  let deepText (n : Nat) : String :=
+    s!"(package\n  (imports)\n  (state (rec))\n  (iface {nestTy n})\n  (methods)\n  (laws)\n  (body {nestT n}))\n"
+  let deepOk := match Read.readPackage (deepText 511) with
+    | .ok p => (p.checkWith []).toBool && (match Wire.encodePackage p, Print.package p with
+      | some b, some t => (match Read.readPackage t with
+        | .ok q => Wire.encodePackage q == some b
+        | .error _ => false)
+      | _, _ => false)
+    | .error _ => false
+  r := note r s!"L0f a package {Wire.depthMax} deep as a tree reads, checks, encodes, prints, reads back: same bytes" deepOk
+  let deeper := match Read.readPackage (deepText 512) with | .error (.tooDeep _) => true | _ => false
+  r := note r "L0f one level deeper: tooDeep" deeper
+  r := note r "L0f a label with a space has no bytes"
+    (Wire.encodePackage { owned with methods := ["s et"] }).isNone
   -- L0b a seed state read at the package's state type (Read.readData): fields in any order; a
   -- missing field, a wrong-typed value, an unknown sum arm refused `notOfType`
   let seedOk := match Read.readData S "(record (total 5) (owner \"a\"))" with

@@ -6,7 +6,7 @@ offset 0), then as characters (`chars`). `Lang.Proofs.Print` proves the round tr
 back exactly what was printed.
 
 When something has no text, the printer returns `none`. It never guesses. Three things have no text:
-a label that is not one atom (empty, or holding a `Read.isDelim` character), a term with a free
+a label the wire refuses (`Wire.labelOk`: not one atom, or past 64 bytes), a term with a free
 variable, and a form nested deeper than `Read.depthMax` (`need`, one per nesting level: what the
 reader's fuel counts) or holding a list of more than `Read.listMax` elements (`width`). The reader
 would refuse such a text `tooDeep` / `tooLong`. A bound variable prints as `x<depth>`, which names the binder that introduced it. Bytes
@@ -20,12 +20,11 @@ import Lang.Read
 
 namespace Nanodregg.Lang.Print
 
-open Read (SExp isDelim)
+open Read (SExp)
+open Wire (labelOk)
 
 /-! ## Characters -/
 
-/-- A label prints as one atom: nonempty, with no delimiter (over `toList`, so the kernel reduces it). -/
-def labelOk (s : String) : Bool := !s.toList.isEmpty && s.toList.all (fun c => !isDelim c)
 
 def atom (s : String) : SExp := .atom 0 s
 def list (xs : List SExp) : SExp := .list 0 xs

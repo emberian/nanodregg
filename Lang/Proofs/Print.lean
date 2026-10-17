@@ -23,6 +23,7 @@ import Std.Data.String.ToNat
 namespace Nanodregg.Lang.Print
 
 open Read
+open Wire (labelOk)
 
 /-! ## Part 2: elaboration of a printed form -/
 
@@ -769,10 +770,10 @@ theorem lit_ok (s : String) (h1 : s.toList ≠ []) (h2 : s.toList.all (fun c => 
 
 theorem label_ok {ℓ : String} {x : SExp} (h : label ℓ = some x) : Ok x := by
   obtain ⟨rfl, hl⟩ := label_some h
-  unfold labelOk at hl
+  unfold Wire.labelOk labelAtom at hl
   simp only [Bool.and_eq_true, List.isEmpty_eq_false_iff, List.all_eq_true,
     Bool.not_eq_eq_eq_not, Bool.not_true] at hl
-  exact .atom hl.1 hl.2
+  exact .atom hl.1.1 hl.1.2
 
 theorem digit_not_delim {c : Char} (h : c.isDigit = true ∨ c = '_') : isDelim c = false := by
   cases hc : isDelim c with
