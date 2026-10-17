@@ -700,3 +700,29 @@ condition one name, and "too wide" is not "undecodable". TRANSPORT's planned wor
 own plan) now lands as v3, or folds into this flag day if it lands first; either way one shape at a
 time and the old one refuses.
 **Status.** BUILT (this commit).
+
+## PROTOCOL-28 · row wrongWorld: the writer's whole log, replayed into a Store that differs only in its nonce, is refused `wrongWorld` call by call; the same nonce is a restore (2026-10-17, PROTOCOL-6; KERNEL-24 at 9e91ede)
+**Decision.** The act `replayElsewhere` (the actor's last call into a second genesis) is replaced by
+`replayLog (sameNonce : Bool)`: every call the attempt store settled as committed (`St.committed`,
+in order) is submitted byte-identical to a second writer whose genesis has the same name,
+allowance and founders, and either the same nonce or the rows' nonce with its last byte flipped. The
+outcome is the one EVERY call got (`refused mixed:I:OUTCOME` if two differ). Line 7: another nonce,
+`refused wrongWorld`. Line 8: the same nonce, `ok`. Plant `nonceRepeats` (the second genesis draws
+the first one's nonce), caught at line 7: `ok`. Theorem cited: `Kernel.Receive.admitted_elsewhere_refused`.
+**Why a whole log, not one call.** One call into a fresh genesis is refused for unrelated reasons
+(its member was enrolled by an earlier call that is not there), so the old act could not tell
+"bound to another World" from "a stranger". With the whole log the same-nonce Store re-admits
+every call, so line 7's refusal can only come from the origin. HOST-6 pointed out that the old act
+would have PASSED the replay after KERNEL-24 (same genesis = same origin).
+**Why no "binding removed" plant.** It needs a switch in `Receive.receive`, which is deployed code;
+I will not add a test knob there. Removing the check is already caught by NAME: founder ids are keyed
+by the origin, so the replay without the check answers `unknownKey`, not `wrongWorld`. The plant
+covers the other half of the fact, the origin's dependence on the nonce.
+**Critique.** The row checks the call binding only. The read envelope's binding (TRANSPORT's v3,
+`ReadRefusal.wrongWorld`) is not in it yet. `nonceRepeats` is a mutation of the rows' own genesis
+parameters, not of HOST's nonce draw (`host genesis` reads `--nonce` or the OS): a Host that drew a
+constant nonce would pass this row, and only HOST's own test of the draw can catch that.
+**Meta-critique.** "Every call got the same outcome" is stricter than the claim (the first call
+refused would do) and that is deliberate: a partial binding (say, only `create` carried the world)
+would show up as `mixed`.
+**Status.** BUILT (this commit). Rows 14 PASS, 3 PENDING (pay well bounty).

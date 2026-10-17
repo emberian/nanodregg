@@ -39,6 +39,8 @@ structure Sys where
   zeroDeadline : Bool := false
   /-- custody advances when it signs a rotation, not on settlement (a plant) -/
   advanceOnSend : Bool := false
+  /-- a second genesis draws the first one's nonce (a plant) -/
+  nonceRepeats : Bool := false
 
 def skipJudge (X : Ctx D) : Ctx D :=
   { X with program := { X.program with judge := fun _ _ _ _ _ _ => .ok () } }
@@ -57,6 +59,7 @@ def sys : Option Mutation → Sys
   | some .forgeBase => { writer := { X := Sim.ctx, forgeBase := true }, follow := Sim.ctx }
   | some .unstatedExpiry => { writer := { X := Sim.ctx, unstatedExpiry := true }, follow := Sim.ctx }
   | some .ignoreNotBefore => { writer := { X := Sim.ctx, ignoreNotBefore := true }, follow := Sim.ctx }
+  | some .nonceRepeats => { writer := { X := Sim.ctx }, follow := Sim.ctx, nonceRepeats := true }
 
 /-! ## Actors -/
 
@@ -103,6 +106,9 @@ structure St where
   /-- each invoke a client froze: the machine ticks its run used and the packages it loaded and
   re-checked (`Lang.runMeasured` on the inputs `Kernel.Receive.invokeRun` derives) -/
   invokes : Array (Nat × Nat) := #[]
+  /-- every call the attempt store settled as committed, in order: the writer's log, as its clients
+  sent it -/
+  committed : Array ByteArray := #[]
 
 abbrev M := StateT St IO
 
@@ -360,7 +366,10 @@ def drive (name : String) (call : ByteArray) (fault : Fault) :
           | some res => drive name call fault fuel sends (some (.lookup, classify res)) (some res)
       | .committed | .refused | .absent =>
           match reply with
-          | some r => settle name call r; pure (.ok r)
+          | some r =>
+              if classify r = .committed then
+                modify fun st => { st with committed := st.committed.push call }
+              settle name call r; pure (.ok r)
           | none => pure (.error "noReply")
       | .badReply => pure (.error Attempt.Action.badReply.name)
       | .uncertain =>
@@ -537,20 +546,30 @@ def runAct (l : Line) : M (Expect × String) := do
       | .ok av => command l.actor av l.fault 4
   | .restart => pure (← restart false, "")
   | .seal => pure (← restart true, "")
-  | .replayElsewhere => do
-      -- a SECOND writer from the same genesis (same name, same founders), and the actor's last
-      -- frozen call submitted to it byte-identical (OPS's cross-World replay)
+  | .replayLog sameNonce => do
+      -- a SECOND writer from a genesis of the same name, allowance and founders, and the writer's
+      -- committed calls submitted to it byte-identical, in order (OPS's cross-World replay)
       let st ← get
-      let some call := (← actor l.actor).last | return (.refused "noAttempt", "")
-      match ← Writer.genesisStore st.sys.writer st.genesis with
+      if st.committed.isEmpty then return (.refused "noCommitted", "")
+      let X := st.sys.writer.X
+      let nonce := if sameNonce || st.sys.nonceRepeats then Sim.nonce else flipLast Sim.nonce
+      let fs := founders.map fun n => (keyOf n 0, nextKeyDigest X (keyOf n 1))
+      let g := Receive.genesis X Sim.worldName nonce Sim.allowance fs
+      match ← Writer.genesisStore st.sys.writer g with
       | .error e => return (.refused e, "")
       | .ok (mem, r₀) =>
           let h ← Writer.start st.sys.writer mem r₀
-          let r ← h.ask ⟨0, Op.submit.code, call⟩
+          let mut outs : Array Expect := #[]
+          for (call, i) in st.committed.toList.zipIdx do
+            let r ← h.ask ⟨UInt32.ofNat i, Op.submit.code, call⟩
+            outs := outs.push (match r with
+              | some r => statusOutcome (ByteArray.mk #[r.status] ++ r.payload)
+              | none => .refused "writerStopped")
           let _ ← h.stop
-          match r with
-          | some r => pure (statusOutcome (ByteArray.mk #[r.status] ++ r.payload), "")
-          | none => pure (.refused "writerStopped", "")
+          let first := (outs[0]?).getD (.refused "noCommitted")
+          match outs.toList.zipIdx.find? (fun (o, _) => decide (o ≠ first)) with
+          | some (o, i) => pure (.refused s!"mixed:{i}:{o.text}", "")
+          | none => pure (first, "")
   | .attest pin => do
       let w := (← actor l.actor).follow.world
       bind pin (Text.toHex (base.digest (Sim.world.bytes w)))

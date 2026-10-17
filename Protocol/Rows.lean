@@ -57,9 +57,11 @@ inductive Act
   /-- the actor, a full follower, states the pin of its own World out of band (the channel is
   Ember's, unbuilt): binds `NAME` to the digest of its World bytes and `NAME.h` to its height -/
   | attest (name : String)
-  /-- the actor's last frozen call is submitted, byte-identical, to a SECOND writer made by a second
-  genesis with the same name and founders (OPS's cross-World replay) -/
-  | replayElsewhere
+  /-- every call the writer committed so far is submitted, byte-identical and in order, to a SECOND
+  writer made by a second genesis with the same name, allowance and founders, and the same nonce
+  (`sameNonce`: a restore of the same World) or another one (OPS's cross-World replay). The outcome
+  is the one every call got; calls that got different outcomes are `refused mixed:I:OUTCOME` -/
+  | replayLog (sameNonce : Bool)
   deriving Repr
 
 /-- A fault the transport or the client injects into one command. -/
@@ -138,6 +140,9 @@ inductive Mutation
   /-- the writer's read gate skips the envelope's lower bound: a `notYet` envelope is served (the
   shape before PROTOCOL-27, when an envelope was good at every height up to `validUntil`) -/
   | ignoreNotBefore
+  /-- a second genesis draws the first one's nonce (HOST's randomness repeats): the origin is only
+  as unique as the nonce (KERNEL-24's critique) -/
+  | nonceRepeats
   deriving DecidableEq, Repr
 
 /-- A row's plant: the mutation, and the line that must catch it with the outcome it then gets. -/
@@ -410,8 +415,14 @@ def thin : Row where
   plant := .caught .forgeBase 17 (.refused "baseMismatch")
 
 /-- Cross-World replay (OPS, ASSEMBLY-ops D3; reproduced on 87c721e against the `host` exe): two
-`host genesis` runs with the same name and founders make two Worlds that admit each other's calls,
-so a call committed in A is admitted in B. The call must be bound to its World's genesis. -/
+`host genesis` runs with the same name and founders made two Worlds that admitted each other's
+calls. KERNEL-24 binds every call to its World's origin (`Unsigned.world`, checked first;
+`Kernel.Receive.admitted_elsewhere_refused`), and the origin commits to the genesis nonce. So the
+writer's whole log replayed into a Store whose genesis differs ONLY in its nonce is refused
+`wrongWorld`, every call, by that name. The same log into a Store of the same nonce is a restore of
+the same World and is admitted, every call: the binding is the origin, not the process or the
+Store. Without the check, line 7 is `unknownKey` (founder ids are keyed by the origin), so the
+expectation by name holds the check; the plant holds the nonce. -/
 def wrongWorld : Row where
   name := "wrongWorld"
   replaces := ["ops/replay-20261016"]
@@ -419,9 +430,9 @@ def wrongWorld : Row where
   kinds := ["enroll", "install", "create", "grant", "write"]
   drive := .members (welcome ++ [
     ok "newcomer" ["write", "@shared", "2", "1", "--via", "@g"],
-    { actor := "newcomer", act := .replayElsewhere, expect := .refused "wrongWorld" }])
-  plant := .caught .skipJudge 7 .ok
-  blockedOn := some "KERNEL: a signed World binding in every call (genesis origin or a per-genesis nonce) and its refusal `wrongWorld`; the plant becomes 'B ignores the binding' when it lands"
+    { actor := "operator", act := .replayLog false, expect := .refused "wrongWorld" },
+    { actor := "operator", act := .replayLog true, expect := .ok }])
+  plant := .caught .nonceRepeats 7 .ok
 
 /-- JPAY1–4, JPAY6: observed payments become credit. Pay is an installed package (LANG's to
 write, `world/pay/Book`), invoked by members and by the watcher, not a receiver family. -/
