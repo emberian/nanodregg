@@ -7,6 +7,7 @@ StartLimitBurst=5
 [Service]
 Type=simple
 User=nd
+RuntimeDirectory=nd
 ExecStart=/opt/nd/bin/nd-supervise /run/nd/host.sock --write /srv/nd/store --exec /opt/nd/bin/host --hide /srv/nd/ws --hide /home -- /opt/nd/bin/host serve /srv/nd/store
 Restart=on-failure
 RestartSec=2

@@ -39,6 +39,9 @@ Member machine (user unit `nd-host-follow.service`; `%h/.nd/nd-host-follow.env` 
 
     nd-supervise %h/.nd/ws/follow.sock --write %h/.nd/follow-store --exec /opt/nd/bin/host --hide %h/.nd/ws --hide %h/.nd/holding -- /opt/nd/bin/host follow %h/.nd/follow-store ${ND_MEMBER} ${ND_GRANT}
 
+The writer's unit has `RuntimeDirectory=nd`: systemd makes `/run/nd` (owner nd) before every start
+and removes it at stop, and nd-supervise binds `/run/nd/host.sock` (0600, nd only) in it afresh.
+Without it nothing makes `/run/nd` on a fresh box and nd-supervise cannot bind its socket (not yet run under systemd: PENDING with §2).
 Before the first start the member makes the hidden directories, `mkdir -m 0700 ~/.nd ~/.nd/ws
 ~/.nd/holding` (the writer's node likewise `/srv/nd/ws`), and its follow Store, which is the
 writer's genesis REPRODUCED with the writer's nonce: `host genesis ~/.nd/follow-store LABEL --nonce
@@ -68,7 +71,27 @@ owned by the reading user (`Owner(UID)` otherwise; a root-owned system CA bundle
 - a private file (a key) at mode 0600 exactly (`Mode(M)` otherwise);
 - a public custody file (the anchors) with no group/other write and no set-id bit (0644 passes).
 So never place these files under a group-writable tree: on hbox the umask-002 `/tank` tree and
-`/tmp` both fail. The deployed layout, which passes by construction:
+`/tmp` both fail.
+
+The node's two system users (HOSTING-17 §1), from `deploy/units/linux/sysusers/nd.conf`
+(generated): `nd` runs `host serve` and keybroker (and its decider); `nd-hosted` runs grain-launch,
+the controller and every grain. Each has its own primary group and neither is in the other's, so a
+sandbox escape is the hosted uid: it reads no provider key and writes no Store. Then SOCKDIR,
+from `deploy/units/linux/tmpfiles/nd-broker.conf` (generated; `d /run/nd-broker 2710 nd nd-hosted -`:
+nd writes, the hosted group only traverses, the setgid bit gives every inode inside the group
+nd-hosted). It is NOT a RuntimeDirectory: it outlives the unit, so a restarted keybroker is
+reachable inside running sandboxes (HOSTING-17 §4). Users first, then tmpfiles (measured on hbox,
+systemd 256: the tmpfiles line fails `Failed to resolve user 'nd'` until the users exist):
+
+    sudo install -m 0644 deploy/units/linux/sysusers/nd.conf /etc/sysusers.d/nd.conf
+    sudo systemd-sysusers
+    sudo install -m 0644 deploy/units/linux/tmpfiles/nd-broker.conf /etc/tmpfiles.d/nd-broker.conf
+    sudo systemd-tmpfiles --create /etc/tmpfiles.d/nd-broker.conf
+
+The render refuses a hosted user equal to the key holder (`hostedIsKeyHolder`,
+`Ops.Units.Broker.check_hosted_ne_user`): keybroker cannot tell that misconfiguration from the
+one-uid test, so the install refuses it. The keybroker's custody layout, which passes by
+construction:
 
     sudo install -d -o root -g root -m 0755 /etc/nd
     sudo install -d -o nd -g nd -m 0700 /etc/nd/keybroker
@@ -80,12 +103,17 @@ parent must also pass (a group-writable home is refused `Dir(/home/USER)`). The 
 rendered by emit-units as `deploy/units/linux/nd-keybroker.service` (system unit, User=nd):
 - install `keybroker`, `hosting-broker` and `emit-anchors` in `/opt/nd/bin`; write
   `/etc/nd/keybroker/keybroker.env` (owned by root or nd, not group/other writable) with
-  `ND_OPERATOR=<operator member hex>` and `ND_RESIDENTS=<comma-separated resident socket names>`;
+  `ND_OPERATOR=<operator member hex>`, `ND_RESIDENTS=<comma-separated resident names>` and
+  `ND_PEER=<the uid of nd-hosted>` (`id -u nd-hosted`: the one uid keybroker serves, HOSTING-17 §3);
 - every start first runs `emit-anchors --check /etc/nd/keybroker/anchors.pem`: an installed copy
   that differs from the build's pinned roots by one byte refuses to start (and, failing on every
   start, stops at the start limit; the journal names it);
-- sockets are made in `/run/nd-keybroker/sock` (systemd's RuntimeDirectory), mode 0600 under the
-  unit's UMask: which residents may connect is HOSTING's stage 3, PENDING;
+- resident `r`'s socket is `/run/nd-broker/<r>/broker.sock`: keybroker makes `<r>` (02710, the
+  hosted group by setgid) and binds the socket 0660 nd:nd-hosted; on every accept it serves only a
+  peer of uid ND_PEER and SOCKDIR's group, anything else is refused `peerRefused` on the wire. A
+  SOCKDIR of any other owner, group or mode, or a directory above it writable by another, ends
+  keybroker `sockDir` (105, the unit stops). `/run/nd-keybroker` (RuntimeDirectory) holds only the
+  decider's PID file;
 - keybroker's and the decider's ends are `deploy/units/EXITS.md`'s two broker tables (HOSTING-16):
   every custody refusal stops the unit, a signalled or lagging decider restarts.
 

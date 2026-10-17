@@ -286,3 +286,52 @@ whole defence for history nobody reads, and nothing schedules it.
 `check` (a timer unit) — the gap the CRITIQUE names; a periodic check is a unit OPS could render, and
 I deferred it as not asked for (cv task below).
 **Status.** landed with this decision.
+
+## OPS-10 · the node's two users, SOCKDIR and the writer's runtime directory are rendered; the nd-hosted follower waits for CLIENT-3's socket group (OPS-3, 2026-10-18; ROOT ruling on HOSTING-17 §7)
+
+**Decision.** emit-units renders, from `Ops.Units.keybroker` (which gains `hosted := "nd-hosted"`):
+`deploy/units/linux/sysusers/nd.conf` (`u nd`, `u nd-hosted`, each its own primary group, no `m`
+line) and `deploy/units/linux/tmpfiles/nd-broker.conf` (`d /run/nd-broker 2710 nd nd-hosted -`).
+`Broker.check` refuses `hostedIsKeyHolder` first (HOSTING-17's CRITIQUE: keybroker cannot tell a
+SOCKDIR of its own primary group from the one-uid test, so the install refuses it), with
+`Broker.check_hosted_ne_user`, `tmpfiles_hosted_ne_user`, `sysusers_hosted_ne_user` and the plant
+`plant_hosted_is_key_holder`. The writer's unit gains `RuntimeDirectory=nd`: nothing made `/run/nd`
+on a fresh box, so the rendered `nd-supervise /run/nd/host.sock` had no directory to bind in. A
+node with a runtime directory names its socket by FILE NAME and `Node.sock` composes `/run/NAME/FILE`,
+so a socket outside its runtime directory cannot be written (`ofNode_runtime_system`); a runtime
+directory on a user unit is refused `runtimeOnUserUnit` (`plant_runtime_on_user_unit`). The
+ofNode proofs now go through one `ofNode_ok`. Measured on hbox (systemd 256, `--dry-run`, no box
+change): sysusers parses and would create both users and groups; the tmpfiles line fails
+`Failed to resolve user 'nd'` until they exist, so the RUNBOOK orders users before tmpfiles.
+**The follower (ROOT's ruling, recorded here and owed to HOSTING-17).** `host follow` advances only
+when a client drives it over its socket and relays its log asks to host.sock, and nd-supervise binds
+every socket 0600, so nothing running as nd-hosted could be fed. ROOT ruled (B): the TRUSTED side
+initiates to the less-trusted side, never the reverse. host.sock stays nd-only (unchanged: no
+widening of who may connect to the writer). The nd-hosted follower binds its socket in
+`/run/nd-follow` (tmpfiles `d /run/nd-follow 2710 nd-hosted nd -`; setgid gives it group nd, and
+nd-hosted joins no group), nd-supervise binds it 0660 under CLIENT-3's `--group GID` (refused at
+launch unless the directory is the unit user's, 02710, a trusted chain, group GID), and the driver is
+the existing client `nd` running as nd (`nd-follow-drive`), the relay the client already is. What
+widens: nd may connect to the follower's socket (a process nd already fully trusts). The gid is
+operator data (`ND_GID` in the unit's environment file, `getent group nd`), as ND_PEER is: no NSS
+lookup in Rust, no number in a generated file. Rendered when CLIENT-3's flag and HOST-10's path
+shape land.
+**Alternatives.** (1) The users and SOCKDIR as RUNBOOK prose only (OPS-2's §2a): an operator types the
+mode, and nothing refuses `nd-hosted` = `nd`. (2) `RuntimeDirectory=` for SOCKDIR: deleted at every
+stop, which breaks running sandboxes (HOSTING-17 §4). (3) A free socket path plus a check that it
+lies under `/run/NAME/`: string containment cannot be planted by `decide` (String does not reduce in
+the kernel), and by construction is stronger than a check. (4) Pinned numeric uids in sysusers: the
+renderer would then know ND_PEER/ND_GID, but a pinned id collides with whatever a box already
+allocated; ids stay the box's.
+**CRITIQUE.** sysusers and tmpfiles are systemd-only; the Mac (a member machine) needs neither, but a
+non-systemd Linux writer node has no rendered equivalent. `Broker.check` refuses only `hosted =
+user` by NAME: two different names for one uid (an operator who aliases) pass, and only keybroker's
+PEER/SO_PEERCRED check at runtime sees uids. `RuntimeDirectory=nd` is removed at stop, so a client
+holding the old socket path sees ENOENT until the restart binds it: the same as before for the
+socket, now also for the directory. None of these units has run under systemd yet (§2 PENDING).
+**META-CRITIQUE.** I first wrote the runtime check as a string test and turned to construction only
+when the plant would not reduce — the right design arrived from a proof obstacle, not from the
+question "can it be wrong?", which I should have asked first. I lean toward rendering more files
+(two new ones) where the RUNBOOK sufficed; the test is whether an operator ever types a mode by hand.
+**Status.** landed with this decision; follower and grain-launch units PENDING (CLIENT-3 `--group`,
+HOST-10 path shape, HOSTING-6 grain-launch exit table).

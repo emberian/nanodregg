@@ -13,6 +13,18 @@ open Nanodregg.Host
 open Nanodregg.Protocol (SupervisorExit)
 open Nanodregg.Hosting (DeciderExit KeybrokerExit)
 
+/-- What a rendered unit is: the node, its nd-supervise command line and `preventCodes`. -/
+theorem ofNode_ok (n : Node) (u : Service) (h : Service.ofNode n = .ok u) :
+    u = { node := n, exec := n.exec, prevent := preventCodes } := by
+  unfold Service.ofNode at h
+  split at h
+  · cases h
+  · split at h
+    · cases h
+    · split at h
+      · cases h
+      · cases h; rfl
+
 /-- A unit exists only for a node that hides something. -/
 theorem ofNode_hidden (n : Node) (u : Service) (h : Service.ofNode n = .ok u) : n.hide ≠ [] := by
   intro he
@@ -21,37 +33,21 @@ theorem ofNode_hidden (n : Node) (u : Service) (h : Service.ofNode n = .ok u) : 
 /-- A rendered unit's command line starts with nd-supervise: the host is never run unconfined. -/
 theorem ofNode_supervised (n : Node) (u : Service) (h : Service.ofNode n = .ok u) :
     u.exec.head? = some (.lit (supervisor n)) := by
-  unfold Service.ofNode at h
-  split at h
-  · cases h
-  · split at h
-    · cases h
-    · cases h; simp [Node.exec]
+  obtain rfl := ofNode_ok n u h; simp [Node.exec]
 
 /-- A rendered unit lets the child execute exactly its own program: `--exec HOST` precedes every
 `--hide`, and HOST is the program after `--` (CLIENT's `ProgramOutside` refuses a program outside
 every read and exec entry, so a unit without it exits 64 at every start). -/
 theorem ofNode_exec_program (n : Node) (u : Service) (h : Service.ofNode n = .ok u) :
-    u.exec.take 6 = [.lit (supervisor n), .lit n.socket, .lit "--write", .lit n.store,
+    u.exec.take 6 = [.lit (supervisor n), .lit n.sock, .lit "--write", .lit n.store,
       .lit "--exec", .lit (hostExe n)] ∧ .lit (hostExe n) ∈ u.exec.drop 6 := by
-  unfold Service.ofNode at h
-  split at h
-  · cases h
-  · split at h
-    · cases h
-    · cases h
-      refine ⟨by simp [Node.exec], ?_⟩
-      simp [Node.exec]
+  obtain rfl := ofNode_ok n u h
+  exact ⟨by simp [Node.exec], by simp [Node.exec]⟩
 
 /-- Every rendered unit prevents exactly `preventCodes`. -/
 theorem ofNode_prevent_eq (n : Node) (u : Service) (h : Service.ofNode n = .ok u) :
     u.prevent = preventCodes := by
-  unfold Service.ofNode at h
-  split at h
-  · cases h
-  · split at h
-    · cases h
-    · cases h; rfl
+  obtain rfl := ofNode_ok n u h; rfl
 
 /-- A Host status is in the prevent list iff HOST's table calls it fatal: the supervisor's half
 adds no Host code (`code_disjoint_host`). -/
@@ -115,5 +111,54 @@ theorem brokerPrevent_split :
     KeybrokerExit.keyFileDir.code ∈ brokerPreventCodes ∧ DeciderExit.store.code ∈ brokerPreventCodes ∧
     KeybrokerExit.deciderSignaled.code ∉ brokerPreventCodes ∧ DeciderExit.behind.code ∉ brokerPreventCodes := by
   decide
+
+/-- A unit with a runtime directory is a system unit (systemd makes `/run/NAME` only for one),
+and its socket is in that directory by construction (`Node.sock`). -/
+theorem ofNode_runtime_system (n : Node) (u : Service) (h : Service.ofNode n = .ok u) (r : String)
+    (hr : n.runtime = some r) : n.user.isSome ∧ n.sock = "/run/" ++ r ++ "/" ++ n.socket := by
+  refine ⟨?_, by simp [Node.sock, hr]⟩
+  unfold Service.ofNode at h
+  split at h
+  · cases h
+  · split at h
+    · cases h
+    · rename_i hu
+      cases hus : n.user <;> simp_all
+
+/-- The planted node: the writer's runtime directory on a user unit is refused by name. -/
+theorem plant_runtime_on_user_unit :
+    Service.ofNode { writer with user := none } = .error .runtimeOnUserUnit := by
+  simp [Service.ofNode, writer]
+
+/-- The broker check's first refusal: a hosted group equal to the key holder. -/
+theorem Broker.check_of_hosted_eq (b : Broker) (he : b.hosted = b.user) :
+    b.check = .error .hostedIsKeyHolder := by
+  simp only [Broker.check, he, beq_self_eq_true, if_true]
+  rfl
+
+/-- A broker that renders never serves its key holder's own group: no tmpfiles line or sysusers
+file is emitted for `hosted = user` (HOSTING-17: a grain under the key holder's uid reads the
+provider keys). -/
+theorem Broker.check_hosted_ne_user (b : Broker) (h : b.check = .ok ()) : b.hosted ≠ b.user := by
+  intro he
+  rw [Broker.check_of_hosted_eq b he] at h
+  cases h
+
+theorem Broker.tmpfiles_hosted_ne_user (b : Broker) (t : String) (h : b.tmpfiles = .ok t) :
+    b.hosted ≠ b.user := by
+  intro he
+  simp only [Broker.tmpfiles, Broker.check_of_hosted_eq b he, bind, Except.bind] at h
+  cases h
+
+theorem Broker.sysusers_hosted_ne_user (b : Broker) (t : String) (h : b.sysusers = .ok t) :
+    b.hosted ≠ b.user := by
+  intro he
+  simp only [Broker.sysusers, Broker.check_of_hosted_eq b he, bind, Except.bind] at h
+  cases h
+
+/-- The planted broker: the hosted group set to the key holder is refused by name. -/
+theorem plant_hosted_is_key_holder :
+    ({ keybroker with hosted := keybroker.user } : Broker).check = .error .hostedIsKeyHolder :=
+  Broker.check_of_hosted_eq _ rfl
 
 end Nanodregg.Ops.Units
