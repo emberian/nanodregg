@@ -123,16 +123,16 @@ theorem admit_written {E : Env D} {w w' : World D} {t : Turn D} {x : Touch D} {o
       have hcr := hk.creates
       unfold checkCreates at hcr
       simp only [except_bind_ok] at hcr
-      obtain ⟨⟨⟩, _, ⟨⟩, hnbt, _⟩ := hcr
-      have hnb : x.cell ∉ (bornEntries E t).map Prod.fst := by
+      obtain ⟨⟨⟩, _, ⟨⟩, _, ⟨⟩, hnbt, _⟩ := hcr
+      have hnb : x.cell ∉ (bornEntries t).map Prod.fst := by
         intro hm'
-        unfold bornEntries createdPairs at hm'
+        unfold bornEntries at hm'
         rw [List.map_map] at hm'
         have : (Prod.fst ∘ fun p : D × Cell => (p.1, Entry.live p.2)) = Prod.fst := rfl
-        rw [this, List.map_fst_zip (by simp [createdIds])] at hm'
+        rw [this] at hm'
         exact (List.nodup_append.mp (noDup_nodup hnbt)).2.2 _ (List.mem_map_of_mem hx) _ hm' rfl
       unfold World.live
-      show (match (insertAll (insertAll w.cells (posts.map Post.pair)) (bornEntries E t))[x.cell]? with
+      show (match (insertAll (insertAll w.cells (posts.map Post.pair)) (bornEntries t))[x.cell]? with
         | some (.live cell) => some cell | _ => none) = some post
       rw [insertAll_get_of_not_mem hnb,
         insertAll_get_of_mem hnodup (List.mem_map_of_mem (f := Post.pair) hpost)]
@@ -294,7 +294,7 @@ bytes of the turn's first born id: the well names itself. With `Kernel.Proofs.Va
 and `fold_floors_held`, the cap is the denomination's floor sum forever. -/
 theorem dispatch_value_born {X : Ctx D} {look : Pinned D} {c : Call D} {b : Body D} {t : Turn D}
     (h : dispatch X look c b = .ok t) :
-    ∀ cell ∈ t.creates, ∀ v, Value.ofCell cell = some v →
+    ∀ cell ∈ t.born, ∀ v, Value.ofCell cell = some v →
       v.balance = 0 ∧ (v.floor = 0 ∨ ∃ cap, b = .issue cap ∧ v.floor = cap ∧
         v.denom = X.env.bytes (cellIdOf X.env t.txId 0)) := by
   have notv : ∀ (cell : Cell) (cr : List Cell), cr = [cell] → cell.discipline ≠ .value →
@@ -429,7 +429,7 @@ theorem sealed_two_writes {X : Ctx D} {w w' : World D} {c : Call D} {t : Turn D}
     (ha : World.admit X.env w t = .ok w') :
     (∃ ca pa, w.live a = some ca ∧ postWrite a ca opsA = .ok pa ∧ w'.live a = some pa) ∧
       (∃ cb pb, w.live b = some cb ∧ postWrite b cb opsB = .ok pb ∧ w'.live b = some pb) ∧
-      ∀ k, k ≠ a → k ≠ b → k ∉ createdIds X.env t → w'.cells[k]? = w.cells[k]? := by
+      ∀ k, k ≠ a → k ≠ b → k ∉ createdIds t → w'.cells[k]? = w.cells[k]? := by
   obtain ⟨_, _, htouch, _, _, _, _, _, _, hpin⟩ := sealTurn_ok hseal
   let efs : List (D × Act) := [(a, .write opsA), (b, .write opsB)]
   have hact : ∀ k, actFor efs k = if k = a then .write opsA else if k = b then .write opsB else .keep := by
@@ -468,7 +468,7 @@ theorem transfer_exact {X : Ctx D} {w w' : World D} {c : Call D} {t : Turn D} {s
     ∃ sv dv, (w.live src).bind Value.ofCell = some sv ∧ (w.live dst).bind Value.ofCell = some dv ∧
       (w'.live src).bind Value.ofCell = some { sv with balance := sv.balance - amount } ∧
       (w'.live dst).bind Value.ofCell = some { dv with balance := dv.balance + amount } ∧
-      ∀ k, k ≠ src → k ≠ dst → k ∉ createdIds X.env t → w'.cells[k]? = w.cells[k]? := by
+      ∀ k, k ≠ src → k ≠ dst → k ∉ createdIds t → w'.cells[k]? = w.cells[k]? := by
   have hd := receiveWith_dispatch (receive_ok_with hr).2
   rw [hb] at hd
   simp only [dispatch, transfer, except_bind_ok] at hd
@@ -500,7 +500,7 @@ theorem credit_exact {X : Ctx D} {w w' : World D} {c : Call D} {t : Turn D} {wel
       wv.denom = X.env.bytes well ∧ av.denom = wv.denom ∧ 0 < amount ∧ amount ≤ wv.floor ∧
       (w'.live well).bind Value.ofCell = some { wv with floor := wv.floor - amount } ∧
       (w'.live acct).bind Value.ofCell = some { av with floor := av.floor + amount } ∧
-      ∀ k, k ≠ well → k ≠ acct → k ∉ createdIds X.env t → w'.cells[k]? = w.cells[k]? := by
+      ∀ k, k ≠ well → k ≠ acct → k ∉ createdIds t → w'.cells[k]? = w.cells[k]? := by
   have hd := receiveWith_dispatch (receive_ok_with hr).2
   rw [hb] at hd
   simp only [dispatch, credit, except_bind_ok] at hd

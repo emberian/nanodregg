@@ -9,9 +9,12 @@ log with `World.admit` alone, and nothing it would have to trust. It carries
   what the turn does to it (`keep`, `write ops`, `retire`). The pin is the one staleness refusal
   (`Reject.stale`); a turn writes or retires only a cell it observed, so its effect on every cell
   it changes is a function of the observation, and admit looks each cell up exactly once.
-* `creates` — cells born by this turn; a ROM cell's id is its content digest (a package's
-  identity), any other's is derived from `txId` and the index: ids never need coordination.
-  A born id is never also touched (`Reject.bornTouched`).
+* `creates` — cells born by this turn, each with its id (D5, KERNEL-28: one birth shape). The
+  receiver computes the id: a ROM cell's is its content digest (a package's identity, and
+  `World.admit` checks it: `notContentId`), an account's is keyed by its owner and denomination,
+  any other's is derived from `txId` and the index. A follower's audit re-derives the Turn, so a
+  writer cannot choose an id its receiver did not. A born id is never also touched
+  (`Reject.bornTouched`).
 * `nullifiers` — one-time tokens; each may be spent once in the life of the World.
 * `charge` — what the turn pays, which must equal `Turn.weight` exactly: the storage it costs,
   its log record plus everything it can add to the World (KERNEL-12). The signer signs the price.
@@ -41,11 +44,14 @@ structure Turn (D : Type) where
   notBefore : Nat
   validUntil : Nat
   touches : List (Touch D)
-  creates : List Cell
+  creates : List (D × Cell)
   nullifiers : List D
   charge : Nat
   event : ByteArray
   deriving DecidableEq
+
+/-- The cells a turn bears, without their ids. -/
+def Turn.born {D : Type} (t : Turn D) : List Cell := t.creates.map Prod.snd
 
 /-- Fixed per-field costs, in bytes, for a digest and a counter. -/
 def digestWeight : Nat := 32
@@ -58,12 +64,12 @@ def Act.opsWeight : Act → Nat
 /-- A touch in the log: id, seen digest, a tag, and the ops of a write. -/
 def Touch.weight {D : Type} (x : Touch D) : Nat := 2 * digestWeight + 1 + x.act.opsWeight
 
-/-- What a turn's log record costs: fixed fields, touches, born cells, nullifiers, the charge
-and the event. -/
+/-- What a turn's log record costs: fixed fields, touches, born cells with their ids, nullifiers,
+the charge and the event. -/
 def Turn.logWeight {D : Type} (t : Turn D) : Nat :=
   digestWeight + 2 * counterWeight
     + (t.touches.map Touch.weight).sum
-    + (t.creates.map Cell.weight).sum
+    + (t.creates.map fun p => digestWeight + p.2.weight).sum
     + digestWeight * t.nullifiers.length
     + counterWeight
     + t.event.size
@@ -76,7 +82,7 @@ journal entry, each born cell with its id, each write's ops, each spent nullifie
 and an overwrite only shrink or keep a cell. -/
 def Turn.growth {D : Type} (t : Turn D) : Nat :=
   journalWeight
-    + (t.creates.map fun c => digestWeight + c.weight).sum
+    + (t.creates.map fun p => digestWeight + p.2.weight).sum
     + (t.touches.map fun x => x.act.opsWeight).sum
     + digestWeight * t.nullifiers.length
 

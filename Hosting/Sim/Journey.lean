@@ -86,7 +86,7 @@ def phaseName : Option Phase → String
   | some p => p.label
   | none => "none"
 
-def created (t : Option (Turn D)) : Option D := t.bind fun t => (createdIds Kernel.Sim.env t).head?
+def created (t : Option (Turn D)) : Option D := t.bind fun t => (createdIds t).head?
 
 def lawSays (v why : String) : Bool := v.startsWith "refused lawDenied" && (v.splitOn why).length > 1
 
@@ -168,7 +168,7 @@ def journey (plant : Plant) (pkg : Package) : Run := Id.run do
     (ctl r [] gr hx == [{ grain := hx, verdict := .launch want }])
   r := note r "G15 the ids of the log's Turns, reconciled, launch exactly the grain"
     (Controller.reconcile Kernel.Sim.dc.bytes label pkgId 0 [] r.st.host
-      (Controller.touchedIds Kernel.Sim.env r.st.log) == [{ grain := hx, verdict := .launch want }])
+      (Controller.touchedIds r.st.log) == [{ grain := hx, verdict := .launch want }])
   r := note r "G15 controller, child running: nothing"
     ((ctl r [upLive hx] gr hx).isEmpty)
   let some lookBytes := lookAlike.bind Wire.encodePackage | return note r "G15 no look-alike bytes" false

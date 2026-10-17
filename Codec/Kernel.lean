@@ -15,7 +15,7 @@ Layouts (all integers little-endian, every count a u32, every byte string `u32 l
 * `Op`: tag 0 ‖ key u32 ‖ value, or tag 1 ‖ key u32.
 * `Cell`: kind u32 ‖ discipline u8 ‖ slots (count ‖ (key u32 ‖ value)*).
 * `Act`: tag 0 (keep), tag 1 ‖ ops, or tag 2 (retire). `Touch`: cell ‖ seen ‖ act.
-* `Turn`: txId ‖ notBefore u64 ‖ validUntil u64 ‖ touches ‖ creates ‖ nullifiers ‖ charge u64 ‖ event.
+* `Turn`: txId ‖ notBefore u64 ‖ validUntil u64 ‖ touches ‖ creates (id ‖ cell each, D5) ‖ nullifiers ‖ charge u64 ‖ event.
 * `Call`: unsigned ‖ signature. `Unsigned`: member ‖ key ‖ notBefore ‖ validUntil ‖ pins ‖ maxCharge ‖
   body. `Body`: a tag (its constructor's index) ‖ its fields.
 -/
@@ -84,7 +84,7 @@ def touch (dc : Stream D) : Stream (Touch D) :=
 def turn (dc : Stream D) : Stream (Turn D) :=
   refine "kernel/turn"
     (product dc (product nat64 (product nat64 (product (rawList Bounds.touchesMax (touch dc))
-      (product (rawList Bounds.createsMax cell) (product (rawList Bounds.nullifiersMax dc)
+      (product (rawList Bounds.createsMax (product dc cell)) (product (rawList Bounds.nullifiersMax dc)
         (product nat64 (rawBytes Bounds.eventBytesMax))))))))
     (fun (tx, nb, vu, ts, cs, ns, ch, ev) => some ⟨tx, nb, vu, ts, cs, ns, ch, ev⟩)
     (fun t => (t.txId, t.notBefore, t.validUntil, t.touches, t.creates, t.nullifiers, t.charge, t.event))

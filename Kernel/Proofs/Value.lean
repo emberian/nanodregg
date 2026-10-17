@@ -127,9 +127,9 @@ omit [Ord D] [DecidableEq D] in
 moves no denomination's balance sum, nor the floor sum of any denomination it does not bear. -/
 theorem checkValue_ok {E : Env D} {t : Turn D} {posts : List (Post D)}
     (h : checkValue E t posts = .ok ()) :
-    (∀ p ∈ createdPairs E t, checkValueCell p.1 p.2 = .ok ()) ∧
-      (∀ d, sumBy Flow.balance d (valueFlows E t posts) = 0) ∧
-      (∀ d, d ∉ (createdIds E t).map E.bytes → sumBy Flow.floor d (valueFlows E t posts) = 0) := by
+    (∀ p ∈ t.creates, checkValueCell p.1 p.2 = .ok ()) ∧
+      (∀ d, sumBy Flow.balance d (valueFlows t posts) = 0) ∧
+      (∀ d, d ∉ (createdIds t).map E.bytes → sumBy Flow.floor d (valueFlows t posts) = 0) := by
   unfold checkValue at h
   simp only [except_bind_ok] at h
   obtain ⟨⟨⟩, hb, h⟩ := h
@@ -138,7 +138,7 @@ theorem checkValue_ok {E : Env D} {t : Turn D} {posts : List (Post D)}
   · simp at h
   · rename_i acc hacc
     have hall := forEx_ok.mp h
-    have each : ∀ a ∈ acc, a.balance = 0 ∧ (a.floor = 0 ∨ a.denom ∈ (createdIds E t).map E.bytes) := by
+    have each : ∀ a ∈ acc, a.balance = 0 ∧ (a.floor = 0 ∨ a.denom ∈ (createdIds t).map E.bytes) := by
       intro a ha
       have := hall a ha
       simp only [except_bind_ok] at this
@@ -318,7 +318,7 @@ theorem born_sum (f : Entry → Int) :
 /-- **An admitted turn moves every sum by exactly its flows.** -/
 theorem admit_sum {E : Env D} {w w' : World D} {t : Turn D} {g : Flow → Int} (hg : Linear g)
     (d : ByteArray) (h : World.admit E w t = .ok w') :
-    ∃ posts, Checked E w t posts ∧ w'.sumOf g d = w.sumOf g d + sumBy g d (valueFlows E t posts) := by
+    ∃ posts, Checked E w t posts ∧ w'.sumOf g d = w.sumOf g d + sumBy g d (valueFlows t posts) := by
   obtain ⟨posts, hk, rfl⟩ := admit_ok h
   refine ⟨posts, hk, ?_⟩
   obtain ⟨raw, hm, hposts⟩ := hk.touches
@@ -329,21 +329,21 @@ theorem admit_sum {E : Env D} {w w' : World D} {t : Turn D} {g : Flow → Int} (
   have hcr := hk.creates
   unfold checkCreates at hcr
   simp only [except_bind_ok] at hcr
-  obtain ⟨⟨⟩, hnb, ⟨⟩, hnbt, hfresh⟩ := hcr
+  obtain ⟨⟨⟩, _, ⟨⟩, hnb, ⟨⟩, hnbt, hfresh⟩ := hcr
   have nt := noDup_nodup hnt
   have nb := noDup_nodup hnb
   have nbt := noDup_nodup hnbt
   have ht := touches_sum hg d t.touches raw w.cells nt hm (fun _ _ => rfl)
   rw [← hposts] at ht
-  have hids : (createdPairs E t).map Prod.fst = createdIds E t := by
-    unfold createdPairs; exact List.map_fst_zip (by simp [createdIds])
+  have hids : t.creates.map Prod.fst = createdIds t := by
+    rfl
   have hpk : ∀ p ∈ posts, p.cell ∈ t.touches.map Touch.cell := by
     intro p hp
     obtain ⟨x, hx, he, _⟩ := posts_touched hk p hp
     rw [he]; exact List.mem_map_of_mem hx
-  have hfr : ∀ p ∈ createdPairs E t, (insertAll w.cells (posts.map Post.pair))[p.1]? = none := by
+  have hfr : ∀ p ∈ t.creates, (insertAll w.cells (posts.map Post.pair))[p.1]? = none := by
     intro p hp
-    have hb : p.1 ∈ createdIds E t := by rw [← hids]; exact List.mem_map_of_mem hp
+    have hb : p.1 ∈ createdIds t := by rw [← hids]; exact List.mem_map_of_mem hp
     have hnot : p.1 ∉ (posts.map Post.pair).map Prod.fst := by
       intro hm'
       rw [List.map_map] at hm'
@@ -358,14 +358,14 @@ theorem admit_sum {E : Env D} {w w' : World D} {t : Turn D} {g : Flow → Int} (
     cases hh : w.cells[p.1]? with
     | none => rfl
     | some e => rw [Std.TreeMap.contains_eq_isSome_getElem?, hh] at this; simp at this
-  have hb := born_sum (entrySum g d) (createdPairs E t) (insertAll w.cells (posts.map Post.pair))
+  have hb := born_sum (entrySum g d) t.creates (insertAll w.cells (posts.map Post.pair))
     (by rw [hids]; exact nb) hfr
-  have hbsum : ((createdPairs E t).map fun p => entrySum g d (.live p.2)) =
-      (createdPairs E t).map fun p => sumBy g d (flowsOf none (some p.2)) := rfl
+  have hbsum : (t.creates.map fun p => entrySum g d (.live p.2)) =
+      t.creates.map fun p => sumBy g d (flowsOf none (some p.2)) := rfl
   unfold World.sumOf commit valueFlows
   dsimp only
   unfold bornEntries
-  rw [hb, ht, hbsum, sumBy_append, sumBy_flatMap g d (fun p => flowsOf none (some p.2)) (createdPairs E t)]
+  rw [hb, ht, hbsum, sumBy_append, sumBy_flatMap g d (fun p => flowsOf none (some p.2)) t.creates]
   omega
 
 /-- **Value is conserved.** Whatever turn `World.admit` admits, every denomination's balance sum
@@ -379,7 +379,7 @@ theorem admit_value {E : Env D} {w w' : World D} {t : Turn D}
 /-- **Floors are conserved outside a birth.** A turn moves no floor sum but that of a
 denomination it bears. -/
 theorem admit_floors {E : Env D} {w w' : World D} {t : Turn D}
-    (h : World.admit E w t = .ok w') {d : ByteArray} (hd : d ∉ (createdIds E t).map E.bytes) :
+    (h : World.admit E w t = .ok w') {d : ByteArray} (hd : d ∉ (createdIds t).map E.bytes) :
     w'.floorSum d = w.floorSum d := by
   obtain ⟨posts, hk, hs⟩ := admit_sum linear_floor d h
   unfold World.floorSum
@@ -397,7 +397,7 @@ theorem fold_value {E : Env D} (d : ByteArray) :
 does not move. -/
 theorem fold_floors {E : Env D} {d : ByteArray} :
     ∀ {w w' : World D} {l : List (Turn D)}, World.fold E w l = .ok w' →
-      (∀ t ∈ l, d ∉ (createdIds E t).map E.bytes) → w'.floorSum d = w.floorSum d
+      (∀ t ∈ l, d ∉ (createdIds t).map E.bytes) → w'.floorSum d = w.floorSum d
   | w, w', [], h, _ => by simp [World.fold] at h; subst h; rfl
   | w, w', t :: rest, h, hn => by
       obtain ⟨w₁, h₁, h₂⟩ := fold_cons_ok.mp h
@@ -438,18 +438,6 @@ theorem postWrite_valueOk {c : D} {cell post : Cell} {ops : List Op}
     obtain ⟨⟨⟩, _, ⟨⟩, hcv, rfl⟩ := h
     exact checkValueCell_valueOk hcv hv
 
-omit [Ord D] [DecidableEq D] [Std.TransOrd D] [Std.LawfulEqOrd D] in
-theorem mem_createdPairs_of_mem {E : Env D} {t : Turn D} {c : Cell} (h : c ∈ t.creates) :
-    ∃ id, (id, c) ∈ createdPairs E t := by
-  obtain ⟨i, hi, rfl⟩ := List.getElem_of_mem h
-  have hlen : (createdIds E t).length = t.creates.length := by simp [createdIds]
-  refine ⟨(createdIds E t)[i]'(by omega), ?_⟩
-  unfold createdPairs
-  have hz : i < ((createdIds E t).zip t.creates).length := by simp [hlen, hi]
-  have := List.getElem_mem hz
-  rw [List.getElem_zip] at this
-  exact this
-
 /-- **Every live value cell stays within its floor**, whatever turn is admitted: a written one
 because `postWrite` judged it, a born one because `checkValue` did, an untouched one because it
 was before. -/
@@ -458,8 +446,7 @@ theorem admit_floorOk {E : Env D} {w w' : World D} {t : Turn D} (hf : FloorOk w)
   intro c cell hl
   rcases admit_live h hl with hb | ⟨pre, hpre, rfl | ⟨ops, hw⟩⟩
   · obtain ⟨posts, hk, _⟩ := admit_ok h
-    obtain ⟨id, hid⟩ := mem_createdPairs_of_mem (E := E) hb
-    exact checkValueCell_valueOk ((checkValue_ok hk.value).1 _ hid)
+    exact checkValueCell_valueOk ((checkValue_ok hk.value).1 _ hb)
   · exact hf c _ hpre
   · exact postWrite_valueOk hw
 
@@ -554,20 +541,20 @@ theorem admit_floorsBorn {E : Env D} {w w' : World D} {t : Turn D} (hb : FloorsB
   intro d hd
   have hw' := h
   obtain ⟨posts, hk, rfl⟩ := admit_ok hw'
-  by_cases hborn : d ∈ (createdIds E t).map E.bytes
+  by_cases hborn : d ∈ (createdIds t).map E.bytes
   · obtain ⟨id, hid, rfl⟩ := List.mem_map.mp hborn
     refine ⟨id, ?_, rfl⟩
-    show (insertAll (insertAll w.cells (posts.map Post.pair)) (bornEntries E t)).contains id = true
+    show (insertAll (insertAll w.cells (posts.map Post.pair)) (bornEntries t)).contains id = true
     apply insertAll_contains; right
-    unfold bornEntries createdPairs
+    unfold bornEntries
     rw [List.map_map]
     have : (Prod.fst ∘ fun p : D × Cell => (p.1, Entry.live p.2)) = Prod.fst := rfl
-    rw [this, List.map_fst_zip (by simp [createdIds])]
+    rw [this]
     exact hid
   · rw [admit_floors h hborn] at hd
     obtain ⟨id, hc, he⟩ := hb d hd
     refine ⟨id, ?_, he⟩
-    show (insertAll (insertAll w.cells (posts.map Post.pair)) (bornEntries E t)).contains id = true
+    show (insertAll (insertAll w.cells (posts.map Post.pair)) (bornEntries t)).contains id = true
     exact insertAll_contains (.inl (insertAll_contains (.inl hc)))
 
 omit [Std.TransOrd D] [Std.LawfulEqOrd D] in
@@ -576,7 +563,7 @@ omit [Std.TransOrd D] [Std.LawfulEqOrd D] in
 `fold_floors_held`, its floor sum after birth is what the birth turn set, forever. -/
 theorem admit_birth {E : Env D} {w w' : World D} {t : Turn D} (hb : FloorsBorn E w)
     (hinj : ∀ a b : D, E.bytes a = E.bytes b → a = b) (h : World.admit E w t = .ok w')
-    {d : ByteArray} (hd : d ∈ (createdIds E t).map E.bytes) : w.floorSum d = 0 := by
+    {d : ByteArray} (hd : d ∈ (createdIds t).map E.bytes) : w.floorSum d = 0 := by
   obtain ⟨posts, hk, _⟩ := admit_ok h
   obtain ⟨id, hid, rfl⟩ := List.mem_map.mp hd
   apply Classical.byContradiction
@@ -587,7 +574,7 @@ theorem admit_birth {E : Env D} {w w' : World D} {t : Turn D} (hb : FloorsBorn E
   have hcr := hk.creates
   unfold checkCreates at hcr
   simp only [except_bind_ok] at hcr
-  obtain ⟨⟨⟩, _, ⟨⟩, _, hfresh⟩ := hcr
+  obtain ⟨⟨⟩, _, ⟨⟩, _, ⟨⟩, _, hfresh⟩ := hcr
   have := (forEx_ok.mp hfresh) id' hid
   rw [req_ok] at this
   simp [hc] at this
@@ -605,7 +592,7 @@ omit [Std.TransOrd D] [Std.LawfulEqOrd D] in
 digest's bytes injective): `checkCreates` refuses a live or tombstoned id (`idTaken`). -/
 theorem admit_not_born {E : Env D} {w w' : World D} {t : Turn D}
     (hinj : ∀ a b : D, E.bytes a = E.bytes b → a = b) (h : World.admit E w t = .ok w')
-    {id : D} (hc : w.cells.contains id = true) : E.bytes id ∉ (createdIds E t).map E.bytes := by
+    {id : D} (hc : w.cells.contains id = true) : E.bytes id ∉ (createdIds t).map E.bytes := by
   obtain ⟨posts, hk, _⟩ := admit_ok h
   intro hm
   obtain ⟨id', hid, he⟩ := List.mem_map.mp hm
@@ -614,7 +601,7 @@ theorem admit_not_born {E : Env D} {w w' : World D} {t : Turn D}
   have hcr := hk.creates
   unfold checkCreates at hcr
   simp only [except_bind_ok] at hcr
-  obtain ⟨⟨⟩, _, ⟨⟩, _, hfresh⟩ := hcr
+  obtain ⟨⟨⟩, _, ⟨⟩, _, ⟨⟩, _, hfresh⟩ := hcr
   have := (forEx_ok.mp hfresh) id' hid
   rw [req_ok] at this
   simp [hc] at this

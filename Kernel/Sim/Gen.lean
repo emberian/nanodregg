@@ -226,7 +226,8 @@ def metAtAdmit (st : State D) (what want : String) : Except (Reject D) (World D)
 /-- A forged turn: the given touches and births, re-priced, in the Host's window. -/
 def forgedTurn (P : Params D) (w : World D) (tag : String) (touches : List (Touch D)) (creates : List Cell) : Turn D :=
   let txId := P.env.hash "nanodregg/sim/forge" (tag.toUTF8 ++ P.env.bytes w.chain)
-  let t0 : Turn D := ⟨txId, 0, w.height + 1, touches, creates, [], 0, ByteArray.empty⟩
+  let t0 : Turn D := ⟨txId, 0, w.height + 1, touches,
+    creates.zipIdx.map (fun p => (bornId P.env txId p, p.1)), [], 0, ByteArray.empty⟩
   { t0 with charge := t0.weight }
 
 /-- The value probes: forged turns no receiver derives, each refused by the kernel by name. -/
@@ -257,6 +258,24 @@ def probeValue (P : Params D) (st : State D) : State D :=
                slots := slotsOf [(Value.denomKey, nat i), (Value.balanceKey, Value.balanceBytes 0),
                  (Value.floorKey, Value.floorBytes 0)] } : Cell)
           metAtAdmit st "denoms" "overBound" (World.admit P.env w (forgedTurn P w "denoms" [] born))
+
+/-- The content-id probe (D5): a Turn carries its births' ids, so `World.admit` checks a ROM
+birth's id is its content digest. The same ROM cell is admitted at `romIdOf` (the control: the
+forgery differs only in the id) and refused `notContentId` at a transaction-derived id. -/
+def probeRom (P : Params D) (st : State D) : State D :=
+  let w := st.host
+  let cell : Cell :=
+    { kind := kindPackage, discipline := .rom, slots := [(0, ("sim/rom/" ++ toString w.height).toUTF8)] }
+  let honest := forgedTurn P w "rom" [] [cell]
+  let forged := { honest with creates := [(cellIdOf P.env honest.txId 0, cell)] }
+  match World.admit P.env w honest, World.admit P.env w forged with
+  | .ok _, .error r =>
+      if r.name = "notContentId" then
+        { st with steps := st.steps + 1, refusedAsExpected := st.refusedAsExpected + 1,
+                  seen := "rom-id:notContentId" :: "notContentId" :: st.seen }
+      else { st with failures := s!"probe rom-id: expected notContentId, got {r.name}" :: st.failures }
+  | .error r, _ => { st with failures := s!"probe rom-id: the control at its content id refused {r.name}" :: st.failures }
+  | _, .ok _ => { st with failures := "probe rom-id: a ROM birth at a non-content id was admitted" :: st.failures }
 
 /-- After every step: the World's value agrees with the model, every denomination sums to 0, its
 floor sum is its cap, and every account is within its floor. A whole-World scan (Sim only). -/
@@ -297,7 +316,7 @@ def ledgerAct (P : Params D) (st : State D) (k : Nat) : State D :=
         let (st, t) := submit P st c .ok "issue"
         match t with
         | some t =>
-            let well := (createdIds P.env t).headD P.zero
+            let well := (createdIds t).headD P.zero
             setFloorM { st with wells := st.wells ++ [(well, cap)], accounts := st.accounts ++ [(well, m.id, well)] } well cap
         | none => st
   | 1 => -- open an account of a denomination
@@ -309,7 +328,7 @@ def ledgerAct (P : Params D) (st : State D) (k : Nat) : State D :=
           let c := signed P st m m.key (S.pinsFor P.env w [m.id]) (.account well.1)
           let (st, t) := submit P st c .ok "account"
           match t with
-          | some t => { st with accounts := st.accounts ++ [((createdIds P.env t).headD P.zero, m.id, well.1)] }
+          | some t => { st with accounts := st.accounts ++ [((createdIds t).headD P.zero, m.id, well.1)] }
           | none => st
   | 3 => -- a credit line (LEDGER-4): the issuer moves floor out of its well into an account;
          -- past the well's floor `overflow`, past its unissued headroom `belowFloor`; a non-issuer
@@ -427,7 +446,7 @@ def act (P : Params D) (st : State D) : State D :=
   match k with
   | 15 | 16 => ledgerAct P st (k - 15)
   | 17 | 18 => ledgerAct P st 2
-  | 19 => probeValue P st
+  | 19 => probeRom P (probeValue P st)
   | 20 => ledgerAct P st 3
   | 21 => -- birth a programmed object; half the time its owner makes method 0 public (KERNEL-26:
           -- a grant whose grantee is the World)
@@ -440,7 +459,7 @@ def act (P : Params D) (st : State D) : State D :=
           match t with
           | none => st
           | some t =>
-              let obj := (createdIds P.env t).headD P.zero
+              let obj := (createdIds t).headD P.zero
               let st := { st with progs := st.progs ++ [(obj, m.id)] }
               let (pub, st) := st.rng.below 2 |> fun (x, r) => (x == 0, { st with rng := r })
               if !pub then st else
@@ -448,7 +467,7 @@ def act (P : Params D) (st : State D) : State D :=
                 (.grant obj (worldId P.ctx) [.invoke 0] none)
               let (st, t) := submit P st c .ok "grant-public"
               match t with
-              | some t => { st with publics := st.publics ++ [((createdIds P.env t).headD P.zero, obj)] }
+              | some t => { st with publics := st.publics ++ [((createdIds t).headD P.zero, obj)] }
               | none => st
   | 22 => -- invoke (KERNEL-25): the owner is admitted; another member without a grant is refused
           -- `noGrant`; any member through a public grant is admitted for method 0 and refused
@@ -502,7 +521,7 @@ def act (P : Params D) (st : State D) : State D :=
           let (st, t) := submit P st c expect "enroll"
           match t with
           | some t =>
-              let id := (createdIds P.env t).headD P.zero
+              let id := (createdIds t).headD P.zero
               let st := setHold st sp.id { hs with left := hs.left - 1 }
               { st with members := st.members ++ [{ id, key, nextKey := nk }] }
           | none => st
@@ -528,7 +547,7 @@ def act (P : Params D) (st : State D) : State D :=
           let (st, t) := submit P st c expect "delegate"
           match t with
           | some t =>
-              let gid := (createdIds P.env t).headD P.zero
+              let gid := (createdIds t).headD P.zero
               let st := setHold st m.id { hm with left := hm.left - units }
               -- the grantee now acts through the new grant (its old one, if any, is forgotten;
               -- when the grantee is the granter, the carved grant replaces the spent one)
@@ -544,7 +563,7 @@ def act (P : Params D) (st : State D) : State D :=
       let (st, t) := submit P st c (if denied then .refused "lawDenied" else .ok)
         (if d = 1 then "create-frozen" else "create")
       match t with
-      | some t => { st with objects := st.objects ++ [((createdIds P.env t).headD P.zero, m.id)] }
+      | some t => { st with objects := st.objects ++ [((createdIds t).headD P.zero, m.id)] }
       | none => st
   | 3 => -- the owner replaces an object's laws: judged by the laws in force (deny-all refuses) AND by
          -- the new laws over the unchanged state (LANG-19: deny-all denies its own adoption; freeze
@@ -637,7 +656,7 @@ def act (P : Params D) (st : State D) : State D :=
           let c := signed P st owner owner.key (S.pinsFor P.env w [owner.id, ge.id]) (.grant obj.1 ge.id [.mutate] none)
           let (st, t) := submit P st c .ok "grant"
           match t with
-          | some t => { st with grants := st.grants ++ [((createdIds P.env t).headD P.zero, obj.1, ge.id, owner.id)] }
+          | some t => { st with grants := st.grants ++ [((createdIds t).headD P.zero, obj.1, ge.id, owner.id)] }
           | none => st
   | 10 => -- revoke: a non-issuer is refused; the issuer retires the grant and the budget gets the
           -- grant cell's weight back (KERNEL-15, `admit_retire`)
@@ -728,8 +747,8 @@ def showRatio (milli : Nat) : String :=
 
 /-- (World cell lookups ÷ cells named, map operations ÷ things named), in thousandths. (Pins
 checked per pinned cell is no longer a ratio: a cell is touched once by shape, `duplicateTouch`.) -/
-def turnWork (E : Env D) (t : Turn D) : Nat × Nat :=
-  let ids := createdIds E t
+def turnWork (t : Turn D) : Nat × Nat :=
+  let ids := createdIds t
   let cells := t.touches.map Touch.cell
   let named := (cells ++ ids).eraseDups.length
   let cellLookups := t.touches.length + ids.length
@@ -738,8 +757,8 @@ def turnWork (E : Env D) (t : Turn D) : Nat × Nat :=
     (changed + ids.length + t.nullifiers.length + 1)
   (ratio cellLookups named, ratio ops (named + t.nullifiers.length + 1))
 
-def maxWork (E : Env D) (log : List (Turn D)) : Nat × Nat :=
-  log.foldl (fun (a, b) t => let (x, y) := turnWork E t; (max a x, max b y)) (0, 0)
+def maxWork (log : List (Turn D)) : Nat × Nat :=
+  log.foldl (fun (a, b) t => let (x, y) := turnWork t; (max a x, max b y)) (0, 0)
 
 /-- Same contents (TreeMap shapes may differ; contents may not). -/
 def same (a b : World D) : Bool :=
@@ -795,11 +814,11 @@ def run (P : Params D) (seed : Nat) (steps : Nat) : State D :=
   let f := founder0 P st0
   let c := signed P st0 f f.key (S.pinsFor P.env g [f.id]) (.install denyAll)
   let (st, t) := submit P st0 c .ok "install"
-  let st := { st with denyPkg := t.bind fun t => (createdIds P.env t).head? }
+  let st := { st with denyPkg := t.bind fun t => (createdIds t).head? }
   let (st, t) := submit P st (signed P st f f.key (S.pinsFor P.env st.host [f.id]) (.install freeze)) .ok "install"
-  let st := { st with freezePkg := t.bind fun t => (createdIds P.env t).head? }
+  let st := { st with freezePkg := t.bind fun t => (createdIds t).head? }
   let (st, t) := submit P st (signed P st f f.key (S.pinsFor P.env st.host [f.id]) (.install methods)) .ok "install"
-  let st := { st with methodsPkg := t.bind fun t => (createdIds P.env t).head? }
+  let st := { st with methodsPkg := t.bind fun t => (createdIds t).head? }
   let st := (List.range steps).foldl (fun st _ =>
     let st := scanValue P (act P st)
     -- restart: the Host reopens by folding its own log from genesis
@@ -866,7 +885,8 @@ def planted : List String :=
 refusal name met somewhere else does not test the receiver this arm exercises. -/
 def plantedArms : List String :=
   ["invoke-owner:ok", "invoke-no-grant:noGrant", "invoke-public:ok", "invoke-public-method-1:grantRight", "carve-public:noGrant",
-   "law-self:lawDenied", "law:ok", "create-frozen:ok", "write:lawDenied", "write-no-grant:noGrant"]
+   "law-self:lawDenied", "law:ok", "create-frozen:ok", "write:lawDenied", "write-no-grant:noGrant",
+   "rom-id:notContentId"]
 
 /-- `--seeds N` runs seeds `0 … N-1`; otherwise each argument is a seed. -/
 def parseSeeds : List String → List Nat
@@ -885,7 +905,7 @@ def report (P : Params D) (seeds : List Nat) : IO UInt32 := do
   let mut seen : List String := []
   for seed in seeds do
     let st := run P seed 120
-    let (a, b) := maxWork P.env st.log
+    let (a, b) := maxWork st.log
     work := (max work.1 a, max work.2 b)
     admitted := admitted + st.admitted
     refused := refused + st.refusedAsExpected

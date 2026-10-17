@@ -271,7 +271,7 @@ def journey (mode : Mode) : Run := Id.run do
   let c1 := Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id]) (.install ownedBytes)
   let (r1, v1, t1) := go prog r c1
   r := note r1 s!"L1 install Owned: {v1}" (v1 == "admitted")
-  let some pkg := t1.bind fun t => (createdIds Sim.env t).head? | return note r "L1 no package id" false
+  let some pkg := t1.bind fun t => (createdIds t).head? | return note r "L1 no package id" false
   -- L6 an ill-typed package
   let c6 := Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id]) (.install illBytes)
   let (r6, v6, _) := go prog r c6
@@ -286,7 +286,7 @@ def journey (mode : Mode) : Run := Id.run do
   let c2 := Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id, pkg]) (.create (some pkg) [] seed)
   let (r2, v2, t2) := go prog r c2
   r := note r2 s!"L2 create object: {v2}" (v2 == "admitted")
-  let some obj := t2.bind fun t => (createdIds Sim.env t).head? | return note r "L2 no object id" false
+  let some obj := t2.bind fun t => (createdIds t).head? | return note r "L2 no object id" false
   -- L3 set 50
   let c3 := Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id, obj, pkg]) (.invoke obj 0 n50 10000 none)
   let (r3, v3, _) := go prog r c3
@@ -303,7 +303,7 @@ def journey (mode : Mode) : Run := Id.run do
   let cg := Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id, b.id, obj]) (.grant obj b.id [.invoke 0] none)
   let (rg, vg, tg) := go prog r cg
   r := note rg s!"L5a A grants B invoke 0: {vg}" (vg == "admitted")
-  let some gr := tg.bind fun t => (createdIds Sim.env t).head? | return note r "L5 no grant id" false
+  let some gr := tg.bind fun t => (createdIds t).head? | return note r "L5 no grant id" false
   let c5 := Sim.signed r.st b b.key (Sim.S.pinsFor r.st.host [b.id, obj, pkg, gr]) (.invoke obj 0 n7 10000 (some gr))
   let (r5, v5, _) := go prog r c5
   unless mode = .skipJudge do
@@ -313,7 +313,7 @@ def journey (mode : Mode) : Run := Id.run do
   let some tallyBytes := Wire.encodePackage tally | return note r "L8 Tally has no bytes" false
   let (r8, v8, t8) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id]) (.install tallyBytes))
   r := note r8 s!"L8a install Tally: {v8}" (v8 == "admitted")
-  let some tid := t8.bind fun t => (createdIds Sim.env t).head? | return note r "L8 no Tally id" false
+  let some tid := t8.bind fun t => (createdIds t).head? | return note r "L8 no Tally id" false
   let some n7' := nat64 7 | return note r "L8 no bytes for 7" false
   let seeded : Slots := [(stateBase, n7'), (stateBase + 1, n0)]
   let (r8b, v8b, _) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id, tid]) (.create (some tid) [] seeded))
@@ -325,7 +325,7 @@ def journey (mode : Mode) : Run := Id.run do
       (v8b.startsWith "refused lawDenied" && (v8b.splitOn "fresh: seeded").length > 1)
   let (r8c, v8c, t8c) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id, tid]) (.create (some tid) [] [(stateBase, n0), (stateBase + 1, n0)]))
   r := note r8c s!"L8c A creates Tally seeded approvals = 0: {v8c}" (v8c == "admitted")
-  let some tobj := t8c.bind fun t => (createdIds Sim.env t).head? | return note r "L8 no Tally object" false
+  let some tobj := t8c.bind fun t => (createdIds t).head? | return note r "L8 no Tally object" false
   -- the invoke's method index reaches the law: `b` (method 1) is closed, `a` (method 0) open
   let (r8d, v8d, _) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id, tobj, tid]) (.invoke tobj 0 n7 10000 none))
   r := note r8d s!"L8d A invokes Tally.a 7: {v8d}" (v8d == "admitted")
@@ -339,10 +339,10 @@ def journey (mode : Mode) : Run := Id.run do
   let some frozenBytes := Wire.encodePackage frozen | return note r "L9 Frozen has no bytes" false
   let (r9, v9, t9) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id]) (.install frozenBytes))
   r := note r9 s!"L9a install Frozen: {v9}" (v9 == "admitted")
-  let some fid := t9.bind fun t => (createdIds Sim.env t).head? | return note r "L9 no Frozen id" false
+  let some fid := t9.bind fun t => (createdIds t).head? | return note r "L9 no Frozen id" false
   let (r9b, v9b, t9b) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id, fid]) (.create none [fid] [(stateBase, n0)]))
   r := note r9b s!"L9b A creates a data object under Frozen: {v9b}" (v9b == "admitted")
-  let some dobj := t9b.bind fun t => (createdIds Sim.env t).head? | return note r "L9 no object id" false
+  let some dobj := t9b.bind fun t => (createdIds t).head? | return note r "L9 no object id" false
   let (r9c, v9c, _) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id, dobj, fid]) (.write dobj [(0, some n7)] none))
   r := note r9c s!"L9c A writes under Frozen: {v9c}" (v9c == "admitted")
   let (r9d, v9d, _) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id, dobj, fid]) (.law dobj [] none))
@@ -356,10 +356,10 @@ def journey (mode : Mode) : Run := Id.run do
   let some onlyBytes := Wire.encodePackage (onlyTo (Sim.dc.bytes fid)) | return note r "L10 OnlyTo has no bytes" false
   let (r10, v10, t10) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id]) (.install onlyBytes))
   r := note r10 s!"L10a install OnlyTo [Frozen]: {v10}" (v10 == "admitted")
-  let some oid := t10.bind fun t => (createdIds Sim.env t).head? | return note r "L10 no OnlyTo id" false
+  let some oid := t10.bind fun t => (createdIds t).head? | return note r "L10 no OnlyTo id" false
   let (r10b, v10b, t10b) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id, oid]) (.create none [oid] []))
   r := note r10b s!"L10b A creates a data object under OnlyTo: {v10b}" (v10b == "admitted")
-  let some oobj := t10b.bind fun t => (createdIds Sim.env t).head? | return note r "L10 no object id" false
+  let some oobj := t10b.bind fun t => (createdIds t).head? | return note r "L10 no object id" false
   let (r10c, v10c, _) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id, oobj, oid, tid]) (.law oobj [tid] none))
   r := { r10c with log := r.log, bad := r.bad }
   if mode = .eraseOccasion then
@@ -380,13 +380,13 @@ def journey (mode : Mode) : Run := Id.run do
   let some boBytes := Wire.encodePackage birthOnly | return note r "L11 BirthOnly has no bytes" false
   let (r11, v11, t11) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id]) (.install boBytes))
   r := note r11 s!"L11a install BirthOnly: {v11}" (v11 == "admitted")
-  let some bid := t11.bind fun t => (createdIds Sim.env t).head? | return note r "L11 no BirthOnly id" false
+  let some bid := t11.bind fun t => (createdIds t).head? | return note r "L11 no BirthOnly id" false
   let (r11b, v11b, t11b) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id, bid]) (.create none [bid] []))
   r := note r11b s!"L11b A creates a data object under BirthOnly: {v11b}" (v11b == "admitted")
-  let some bobj := t11b.bind fun t => (createdIds Sim.env t).head? | return note r "L11 no BirthOnly object" false
+  let some bobj := t11b.bind fun t => (createdIds t).head? | return note r "L11 no BirthOnly object" false
   let (r11o, v11o, t11o) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id]) (.create none [] []))
   r := note r11o s!"L11o A creates a lawless data object: {v11o}" (v11o == "admitted")
-  let some lobj := t11o.bind fun t => (createdIds Sim.env t).head? | return note r "L11 no object id" false
+  let some lobj := t11o.bind fun t => (createdIds t).head? | return note r "L11 no object id" false
   let (r11c, v11c, _) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id, lobj, bid]) (.law lobj [bid] none))
   r := { r11c with log := r.log, bad := r.bad }
   if mode = .eraseOccasion then

@@ -345,7 +345,7 @@ def render (w : World D) (obj : D) (expect : List (Nat × ByteArray)) : Reply :=
 
 /-- What a committed write prints: its transaction id and every cell it created. -/
 def receipt (X : Ctx D) (t : Turn D) : String :=
-  s!"tx {hex X t.txId}\n" ++ String.join ((createdIds X.env t).map fun d => s!"id {hex X d}\n")
+  s!"tx {hex X t.txId}\n" ++ String.join ((createdIds t).map fun d => s!"id {hex X d}\n")
 
 /-! ## Expiry (PROTOCOL-19) -/
 

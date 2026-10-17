@@ -342,6 +342,11 @@ def effectsPinned [Ord D] [DecidableEq D] (pins : List (D × D)) (effects : List
   | none => .ok ()
   | some c => .error (.duplicateEffect c)
 
+/-- The ids a call's fresh births get (`bornId`: content for ROM, else the transaction and the
+index), paired with the cells. -/
+def bornAt (X : Ctx D) (c : Call D) (creates : List Cell) : List (D × Cell) :=
+  creates.zipIdx.map fun p => (bornId X.env (txIdOf X c) p, p.1)
+
 /-- The Turn a call's effects become: the caller's window, the caller's pins as touches carrying
 the effects (a receiver writes or retires only cells it read, so only pinned ones: `unpinned`
 otherwise; at most one effect per cell: `duplicateEffect`), the receiver's nullifiers, the call as
@@ -352,7 +357,9 @@ def sealTurn [DecidableEq D] (X : Ctx D) (c : Call D) (creates : List Cell)
   effectsPinned pins effects
   let t0 : Turn D :=
     { txId := txIdOf X c, notBefore := c.unsigned.notBefore, validUntil := c.unsigned.validUntil,
-      touches := touchesOf pins effects, creates, nullifiers, charge := 0,
+      touches := touchesOf pins effects,
+      creates := bornAt X c creates,
+      nullifiers, charge := 0,
       event := X.callBytes c }
   let t := { t0 with charge := t0.weight }
   if t.charge ≤ c.unsigned.maxCharge then .ok t else .error (.overPrice t.charge)

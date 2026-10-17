@@ -353,7 +353,7 @@ theorem admit_world_weight {E : Env D} {w w' : World D} {t : Turn D} {posts : Li
   have hcr := hk.creates
   unfold checkCreates at hcr
   simp only [except_bind_ok] at hcr
-  obtain ⟨⟨⟩, hnb, ⟨⟩, hnbt, hfresh⟩ := hcr
+  obtain ⟨⟨⟩, _, ⟨⟩, hnb, ⟨⟩, hnbt, hfresh⟩ := hcr
   have nt := noDup_nodup hnt
   have nb := noDup_nodup hnb
   have nbt := noDup_nodup hnbt
@@ -362,17 +362,14 @@ theorem admit_world_weight {E : Env D} {w w' : World D} {t : Turn D} {posts : Li
   have ht := touches_weight t.touches raw w.cells nt hm (fun _ _ => rfl)
   rw [← hposts] at ht
   -- the births
-  have hids : (createdPairs E t).map Prod.fst = createdIds E t := by
-    unfold createdPairs; exact List.map_fst_zip (by simp [createdIds])
-  have hsnd : (createdPairs E t).map Prod.snd = t.creates := by
-    unfold createdPairs; exact List.map_snd_zip (by simp [createdIds])
+  have hids : t.creates.map Prod.fst = createdIds t := rfl
   have hpk : ∀ p ∈ posts, p.cell ∈ t.touches.map Touch.cell := by
     intro p hp
     obtain ⟨x, hx, he, _⟩ := posts_touched hk p hp
     rw [he]; exact List.mem_map_of_mem hx
-  have hfr : ∀ p ∈ createdPairs E t, (insertAll w.cells (posts.map Post.pair))[p.1]? = none := by
+  have hfr : ∀ p ∈ t.creates, (insertAll w.cells (posts.map Post.pair))[p.1]? = none := by
     intro p hp
-    have hb : p.1 ∈ createdIds E t := by rw [← hids]; exact List.mem_map_of_mem hp
+    have hb : p.1 ∈ createdIds t := by rw [← hids]; exact List.mem_map_of_mem hp
     have hnot : p.1 ∉ (posts.map Post.pair).map Prod.fst := by
       intro hm'
       rw [List.map_map] at hm'
@@ -387,11 +384,8 @@ theorem admit_world_weight {E : Env D} {w w' : World D} {t : Turn D} {posts : Li
     cases hh : w.cells[p.1]? with
     | none => rfl
     | some e => rw [Std.TreeMap.contains_eq_isSome_getElem?, hh] at this; simp at this
-  have hb := born_weight (createdPairs E t) (insertAll w.cells (posts.map Post.pair))
+  have hb := born_weight t.creates (insertAll w.cells (posts.map Post.pair))
     (by rw [hids]; exact nb) hfr
-  have hbsum : ((createdPairs E t).map fun p => digestWeight + p.2.weight).sum =
-      (t.creates.map fun c => digestWeight + c.weight).sum := by
-    rw [← hsnd, List.map_map]; rfl
   -- the journal entry is new, and so is every nullifier
   have hj : (w.journal.insert t.txId (w.height + 1, turnDigest E t)).size = w.journal.size + 1 := by
     have hjr := hk.journal
@@ -409,10 +403,10 @@ theorem admit_world_weight {E : Env D} {w w' : World D} {t : Turn D} {posts : Li
     simpa using this
   unfold World.weight commit Turn.growth
   dsimp only
-  have hc : cellsWeight (insertAll (insertAll w.cells (posts.map Post.pair)) (bornEntries E t)) +
+  have hc : cellsWeight (insertAll (insertAll w.cells (posts.map Post.pair)) (bornEntries t)) +
       credit posts = cellsWeight w.cells + (t.touches.map fun x => x.act.opsWeight).sum +
-        (t.creates.map fun c => digestWeight + c.weight).sum := by
-    unfold bornEntries; rw [hb, ← hbsum]; omega
+        (t.creates.map fun p => digestWeight + p.2.weight).sum := by
+    unfold bornEntries; rw [hb]; omega
   rw [hj, hs, Nat.mul_add, Nat.mul_add, Nat.mul_one]
   omega
 

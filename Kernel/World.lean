@@ -57,6 +57,9 @@ inductive Reject (D : Type)
   | chargeMismatch (expected : Nat)
   | overAllowance
   | idTaken (cell : D)
+  /-- a born ROM cell whose id is not its content digest (`romIdOf`): a package's identity IS its
+  id (KERNEL-3), and the Turn carries ids explicitly (D5), so admit checks it -/
+  | notContentId (cell : D)
   /-- a born id is also touched: a born cell did not exist to be observed -/
   | bornTouched (cell : D)
   | missingCell (cell : D)
@@ -88,6 +91,7 @@ def Reject.name {D : Type} : Reject D → String
   | .chargeMismatch _ => "chargeMismatch"
   | .overAllowance => "overAllowance"
   | .idTaken _ => "idTaken"
+  | .notContentId _ => "notContentId"
   | .bornTouched _ => "bornTouched"
   | .missingCell _ => "missingCell"
   | .romWrite _ => "romWrite"
@@ -144,18 +148,15 @@ def cellIdOf (E : Env D) (txId : D) (i : Nat) : D :=
 installs it (a package's identity IS its cell id). -/
 def romIdOf (E : Env D) (c : Cell) : D := E.hash domRomId (E.cellBytes c)
 
-/-- The id a turn gives its `i`-th born cell: content-addressed for ROM, else derived from the
-transaction. -/
+/-- The id a receiver gives the `i`-th cell its transaction bears fresh: content-addressed for
+ROM, else derived from the transaction. (An account's id is keyed instead: D5b.) -/
 def bornId (E : Env D) (txId : D) (p : Cell × Nat) : D :=
   match p.1.discipline with
   | .rom => romIdOf E p.1
   | _ => cellIdOf E txId p.2
 
-def createdIds (E : Env D) (t : Turn D) : List D :=
-  t.creates.zipIdx.map (bornId E t.txId)
-
-def createdPairs (E : Env D) (t : Turn D) : List (D × Cell) :=
-  (createdIds E t).zip t.creates
+/-- The ids a turn's births carry (explicit in the Turn, D5). -/
+def createdIds (t : Turn D) : List D := t.creates.map Prod.fst
 
 namespace World
 
@@ -238,16 +239,16 @@ def checkBounds (t : Turn D) : Except (Reject D) Unit := do
   req (t.creates.length ≤ Bounds.createsMax) (.overBound .creates)
   req (t.nullifiers.length ≤ Bounds.nullifiersMax) (.overBound .nullifiers)
   req (t.event.size ≤ Bounds.eventBytesMax) (.overBound .event)
-  req (t.creates.all fun c => c.slots.length ≤ Bounds.slotsPerCellMax) (.overBound .slotsPerCell)
-  req ((t.creates.all fun c => c.slots.all fun p => p.1 < Bounds.slotKeyLimit) &&
+  req (t.creates.all fun c => c.2.slots.length ≤ Bounds.slotsPerCellMax) (.overBound .slotsPerCell)
+  req ((t.creates.all fun c => c.2.slots.all fun p => p.1 < Bounds.slotKeyLimit) &&
        (t.touches.all fun x => x.ops.all fun o => o.key < Bounds.slotKeyLimit)) (.overBound .slotKey)
-  req ((t.creates.all fun c => c.slots.all fun p => p.2.size ≤ Bounds.valueBytesMax) &&
+  req ((t.creates.all fun c => c.2.slots.all fun p => p.2.size ≤ Bounds.valueBytesMax) &&
        (t.touches.all fun x => x.ops.all fun o => opValueSize o ≤ Bounds.valueBytesMax))
     (.overBound .valueBytes)
   req (t.validUntil ≤ t.notBefore + Bounds.windowMax) (.overBound .window)
   req (t.weight ≤ Bounds.weightMax) (.overBound .weight)
   req (t.validUntil < Bounds.counterLimit && t.notBefore < Bounds.counterLimit &&
-       t.charge < Bounds.counterLimit && t.creates.all fun c => c.kind < Bounds.kindLimit)
+       t.charge < Bounds.counterLimit && t.creates.all fun c => c.2.kind < Bounds.kindLimit)
     (.overBound .counter)
 
 variable [DecidableEq D]
@@ -268,7 +269,7 @@ def checkShape (t : Turn D) : Except (Reject D) Unit := do
   noDup (t.touches.map Touch.cell) .duplicateTouch
   noDup t.nullifiers .duplicateNullifier
   forEx (fun x => noDup (opKeys x.ops) (.duplicateKey x.cell)) t.touches
-  forEx (fun (c, i) => req (Slots.ascending c.slots) (.nonCanonicalCell i)) t.creates.zipIdx
+  forEx (fun (c, i) => req (Slots.ascending c.2.slots) (.nonCanonicalCell i)) t.creates.zipIdx
 
 def checkWindow (w : World D) (t : Turn D) : Except (Reject D) Unit :=
   req (t.notBefore ≤ w.height + 1 && w.height + 1 ≤ t.validUntil) .outsideWindow
@@ -344,26 +345,28 @@ def checkCharge (w : World D) (t : Turn D) (back : Nat) : Except (Reject D) Unit
   req (t.charge ≤ w.allowance + back) .overAllowance
 
 /-- Born ids are fresh: not in the World (live or tombstoned), not twice in the turn, and not
-touched by it. -/
+touched by it; and a born ROM cell sits at its content digest. -/
 def checkCreates (E : Env D) (w : World D) (t : Turn D) : Except (Reject D) Unit := do
-  noDup (createdIds E t) .idTaken
-  noDup (t.touches.map Touch.cell ++ createdIds E t) .bornTouched
-  forEx (fun c => req (!w.cells.contains c) (.idTaken c)) (createdIds E t)
+  forEx (fun p => req (p.2.discipline != .rom || decide (p.1 = romIdOf E p.2)) (.notContentId p.1))
+    t.creates
+  noDup (createdIds t) .idTaken
+  noDup (t.touches.map Touch.cell ++ createdIds t) .bornTouched
+  forEx (fun c => req (!w.cells.contains c) (.idTaken c)) (createdIds t)
 
 /-- Every flow a turn moves: its touches', then its born cells'. -/
-def valueFlows (E : Env D) (t : Turn D) (posts : List (Post D)) : List Flow :=
-  posts.flatMap Post.flows ++ (createdPairs E t).flatMap fun p => flowsOf none (some p.2)
+def valueFlows (t : Turn D) (posts : List (Post D)) : List Flow :=
+  posts.flatMap Post.flows ++ t.creates.flatMap fun p => flowsOf none (some p.2)
 
 /-- Value is conserved (LEDGER-2): every value cell the turn bears decodes and is within its
 floor, and over the touches' and births' flows, at most `Bounds.denomsMax` denominations move,
 each one's balance sum is unchanged, and so is its floor sum unless the turn bears it (the
 denomination is the bytes of an id born here: its birth is the only turn that sets its floor). -/
 def checkValue (E : Env D) (t : Turn D) (posts : List (Post D)) : Except (Reject D) Unit := do
-  forEx (fun p => checkValueCell p.1 p.2) (createdPairs E t)
-  match accumulate (valueFlows E t posts) with
+  forEx (fun p => checkValueCell p.1 p.2) t.creates
+  match accumulate (valueFlows t posts) with
   | none => .error (.overBound .denoms)
   | some acc =>
-      let bornDenoms := (createdIds E t).map E.bytes
+      let bornDenoms := (createdIds t).map E.bytes
       forEx (fun a => do
         req (decide (a.balance = 0)) (.notConserved a.denom)
         req (decide (a.floor = 0) || bornDenoms.any fun b => decide (b = a.denom))
@@ -389,12 +392,12 @@ def insertAll (m : Std.TreeMap D Entry compare) (ps : List (D × Entry)) :
 def spendAll (s : Std.TreeSet D compare) (ns : List D) : Std.TreeSet D compare :=
   ns.foldl (fun s n => s.insert n) s
 
-def bornEntries (E : Env D) (t : Turn D) : List (D × Entry) :=
-  (createdPairs E t).map fun p => (p.1, .live p.2)
+def bornEntries (t : Turn D) : List (D × Entry) :=
+  t.creates.map fun p => (p.1, .live p.2)
 
 /-- The World after a checked turn. Total: everything that can fail failed in `check`. -/
 def commit (E : Env D) (w : World D) (t : Turn D) (posts : List (Post D)) : World D :=
-  { cells := insertAll (insertAll w.cells (posts.map Post.pair)) (bornEntries E t)
+  { cells := insertAll (insertAll w.cells (posts.map Post.pair)) (bornEntries t)
     journal := w.journal.insert t.txId (w.height + 1, turnDigest E t)
     spent := spendAll w.spent t.nullifiers
     height := w.height + 1

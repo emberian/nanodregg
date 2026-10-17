@@ -189,7 +189,7 @@ theorem touchCheck_live {E : Env D} {w : World D} {x : Touch D} {p : Post D} {c'
 untouched or what a write of it left. -/
 theorem admit_live {E : Env D} {w w' : World D} {t : Turn D} {id : D} {c' : Cell}
     (h : World.admit E w t = .ok w') (hl : w'.live id = some c') :
-    c' ∈ t.creates ∨ ∃ cell, w.live id = some cell ∧
+    (id, c') ∈ t.creates ∨ ∃ cell, w.live id = some cell ∧
       (c' = cell ∨ ∃ ops, postWrite id cell ops = .ok c') := by
   obtain ⟨posts, hk, rfl⟩ := admit_ok h
   have hg : (commit E w t posts).cells[id]? = some (.live c') := by
@@ -198,10 +198,11 @@ theorem admit_live {E : Env D} {w w' : World D} {t : Turn D} {id : D} {c' : Cell
     · simp at hl
   rcases insertAll_get_some hg with hb | ⟨_, hm⟩
   · left
-    unfold bornEntries createdPairs at hb
+    unfold bornEntries at hb
     obtain ⟨q, hq, hqe⟩ := List.mem_map.mp hb
     simp only [Prod.mk.injEq, Entry.live.injEq] at hqe
-    rw [← hqe.2]; exact List.of_mem_zip hq |>.2
+    have : q = (id, c') := Prod.ext hqe.1 hqe.2
+    exact this ▸ hq
   · right
     rcases insertAll_get_some hm with hp | ⟨_, hw⟩
     · obtain ⟨p, hp, hpe⟩ := List.mem_map.mp hp
@@ -241,14 +242,47 @@ def BornRooted (X : Ctx D) (cell : Cell) : Prop :=
 section Step
 variable [Std.TransOrd D] [Std.LawfulEqOrd D]
 
+/-- Every live ROM cell sits at its content digest: a package's identity IS its id (KERNEL-3). -/
+def RomContent (E : Env D) (w : World D) : Prop :=
+  ∀ id cell, w.live id = some cell → cell.discipline = .rom → id = romIdOf E cell
+
+/-- **ROM ids are content, one step** (D5): the Turn names its births' ids, and `World.admit`
+refuses a ROM birth at any other id (`notContentId`); a ROM cell is never written. -/
+theorem admit_romContent {E : Env D} {w w' : World D} {t : Turn D} (hw : RomContent E w)
+    (h : World.admit E w t = .ok w') : RomContent E w' := by
+  intro id c' hl hrom
+  rcases admit_live h hl with hb | ⟨cell, hold, rfl | ⟨ops, hp⟩⟩
+  · obtain ⟨posts, hk, _⟩ := admit_ok h
+    have hc := hk.creates
+    unfold checkCreates at hc
+    simp only [except_bind_ok] at hc
+    obtain ⟨⟨⟩, hr, _⟩ := hc
+    have := (forEx_ok.mp hr) _ hb
+    rw [req_ok] at this
+    simpa [hrom] using this
+  · exact hw id _ hold hrom
+  · have hd : cell.discipline = .rom := (postWrite_keeps hp).2.1 ▸ hrom
+    unfold postWrite at hp
+    rw [hd] at hp
+    cases hp
+
+/-- **ROM ids are content, forever.** -/
+theorem fold_romContent {E : Env D} :
+    ∀ {w w' : World D} {l : List (Turn D)}, RomContent E w → World.fold E w l = .ok w' → RomContent E w'
+  | w, w', [], hw, h => by simp [World.fold] at h; subst h; exact hw
+  | w, w', t :: rest, hw, h => by
+      obtain ⟨w₁, h₁, h₂⟩ := fold_cons_ok.mp h
+      exact fold_romContent (admit_romContent hw h₁) h₂
+
+
 /-- **The kernel keeps a World rooted** whatever turn it admits, given rooted births: a write to
 an append-only grant cannot strip its parent or move its target. -/
 theorem admit_rooted {X : Ctx D} {R : D → Prop} {w w' : World D} {t : Turn D}
-    (hw : WorldRooted X R w) (hb : ∀ c ∈ t.creates, BornRooted X c)
+    (hw : WorldRooted X R w) (hb : ∀ c ∈ t.born, BornRooted X c)
     (h : World.admit X.env w t = .ok w') : WorldRooted X R w' := by
   intro id c' hl hk
   rcases admit_live h hl with hc | ⟨cell, hold, rfl | ⟨ops, hp⟩⟩
-  · obtain ⟨h1, h2, h3⟩ := hb c' hc hk
+  · obtain ⟨h1, h2, h3⟩ := hb c' (List.mem_map_of_mem (f := Prod.snd) hc) hk
     exact ⟨h1, h2, fun ht => .inl (h3 ht)⟩
   · exact hw id _ hold hk
   · obtain ⟨hkind, hdisc, hkeep⟩ := postWrite_keeps hp
@@ -310,15 +344,15 @@ theorem grantCell_slots (X : Ctx D) (target grantee member : D) (parent : Option
     cases parent <;> simp [grantTarget, grantGrantee, grantIssuer, grantParent]
 
 theorem sealTurn_creates {X : Ctx D} {c : Call D} {cr : List Cell} {efs : List (D × Act)}
-    {ns : List D} {t : Turn D} (h : sealTurn X c cr efs ns = .ok t) : t.creates = cr :=
-  (sealTurn_ok h).2.2.2.2.2.2.2.1
+    {ns : List D} {t : Turn D} (h : sealTurn X c cr efs ns = .ok t) : t.born = cr := by
+  rw [Turn.born, (sealTurn_ok h).2.2.2.2.2.2.2.1]; exact bornAt_cells
 
 /-- **No receiver bears an unrooted grant.** Only `grant` bears a grant cell, append-only, and on
 the World only with a parent (`grant_rooted`). Needs the digest's bytes to be injective (a target
 read back as the World's bytes IS the World). -/
 theorem dispatch_born {X : Ctx D} {look : Pinned D} {c : Call D} {b : Body D} {t : Turn D}
     (hinj : ∀ a b : D, X.env.bytes a = X.env.bytes b → a = b)
-    (h : dispatch X look c b = .ok t) : ∀ cell ∈ t.creates, BornRooted X cell := by
+    (h : dispatch X look c b = .ok t) : ∀ cell ∈ t.born, BornRooted X cell := by
   have kind_ne : ∀ (cell : Cell) (cr : List Cell), cr = [cell] → cell.kind ≠ kindGrant →
       ∀ x ∈ cr, BornRooted X x := by
     intro cell cr hcr hk x hx; subst hcr; simp at hx; subst hx; intro h; exact absurd h hk
@@ -510,6 +544,54 @@ theorem genesis_rooted (X : Ctx D) (name nonce : ByteArray) (allowance : Nat)
     simp only [Option.some.injEq] at hl
     subst hl
     exact hP id _ hh hk
+  · simp at hl
+
+omit [DecidableEq D] [Std.LawfulEqOrd D] in
+/-- The empty World holds no ROM cell at a wrong id: it holds none. -/
+theorem empty_romContent (E : Env D) (o : D) (a : Nat) : RomContent E (World.genesis E o a) := by
+  intro id cell hl _
+  simp [World.live, World.genesis] at hl
+
+omit [DecidableEq D] [Std.LawfulEqOrd D] in
+/-- **Genesis bears no ROM cell**, so `fold_romContent` starts from it: the founders' cells are a
+RAM member and an append-only grant. -/
+theorem genesis_romContent (X : Ctx D) (name nonce : ByteArray) (allowance : Nat)
+    (founders : List (ByteArray × D)) :
+    RomContent X.env (genesis X name nonce allowance founders) := by
+  let o := originOf X name nonce allowance founders
+  let P : Std.TreeMap D Entry compare → Prop := fun m => ∀ (id : D) (cell : Cell),
+    m[id]? = some (Entry.live cell) → cell.discipline ≠ Discipline.rom
+  have step : ∀ (l : List ((ByteArray × D) × Nat)) (m : Std.TreeMap D Entry compare), P m →
+      P (l.foldl (fun (m : Std.TreeMap D Entry compare) (p : (ByteArray × D) × Nat) =>
+        (m.insert (founderId X o p.2) (.live (founderMember X p.1))).insert
+          (founderGrantId X o p.2) (.live (founderRoot X (founderId X o p.2)))) m) := by
+    intro l
+    induction l with
+    | nil => intro m hm; exact hm
+    | cons p rest ih =>
+        intro m hm
+        apply ih
+        intro id cell hg
+        rw [Std.TreeMap.getElem?_insert] at hg
+        split at hg
+        · simp only [Option.some.injEq, Entry.live.injEq] at hg
+          subst hg
+          simp [founderRoot]
+        · rw [Std.TreeMap.getElem?_insert] at hg
+          split at hg
+          · simp only [Option.some.injEq, Entry.live.injEq] at hg
+            subst hg
+            simp [founderMember]
+          · exact hm id cell hg
+  have hP := step founders.zipIdx {} (by intro id cell hg; simp at hg)
+  intro id cell hl hrom
+  exfalso
+  unfold World.live at hl
+  split at hl
+  · rename_i hh
+    simp only [Option.some.injEq] at hl
+    subst hl
+    exact hP id _ hh hrom
   · simp at hl
 
 end Genesis

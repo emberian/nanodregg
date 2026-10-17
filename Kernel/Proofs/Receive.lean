@@ -56,7 +56,7 @@ theorem sealTurn_ok {X : Ctx D} {c : Call D} {cr : List Cell} {efs : List (D × 
     t.charge = t.weight ∧ t.charge ≤ c.unsigned.maxCharge ∧
       t.touches = touchesOf c.unsigned.pins efs ∧
       t.event = X.callBytes c ∧ t.txId = txIdOf X c ∧ t.notBefore = c.unsigned.notBefore ∧
-      t.validUntil = c.unsigned.validUntil ∧ t.creates = cr ∧ t.nullifiers = ns ∧
+      t.validUntil = c.unsigned.validUntil ∧ t.creates = bornAt X c cr ∧ t.nullifiers = ns ∧
       (∀ e ∈ efs, ∃ p ∈ c.unsigned.pins, p.1 = e.1) := by
   unfold sealTurn at h
   simp only [except_bind_ok] at h
@@ -74,6 +74,12 @@ theorem sealTurn_ok {X : Ctx D} {c : Call D} {cr : List Cell} {efs : List (D × 
     obtain ⟨p, hp, hpe⟩ := List.any_eq_true.mp this
     exact ⟨p, hp, of_decide_eq_true hpe⟩
   · simp at h
+
+omit [Ord D] [DecidableEq D] in
+/-- A seal bears exactly the receiver's cells, each at its `bornId`. -/
+theorem bornAt_cells {X : Ctx D} {c : Call D} {cr : List Cell} : (bornAt X c cr).map Prod.snd = cr := by
+  unfold bornAt; rw [List.map_map]
+  exact List.zipIdx_map_fst 0 cr
 
 omit [Ord D] in
 theorem touchesOf_pins (pins : List (D × D)) (efs : List (D × Act)) :

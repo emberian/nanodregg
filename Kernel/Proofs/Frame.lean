@@ -65,15 +65,15 @@ theorem posts_touched {E : Env D} {w : World D} {t : Turn D} {posts : List (Post
 /-- **Frame.** A cell the turn neither writes, retires nor bears is unchanged. -/
 theorem admit_frame {E : Env D} {w w' : World D} {t : Turn D} {c : D}
     (h : World.admit E w t = .ok w') (hl : ∀ x ∈ t.touches, x.cell = c → x.act = .keep)
-    (hc : c ∉ createdIds E t) : w'.cells[c]? = w.cells[c]? := by
+    (hc : c ∉ createdIds t) : w'.cells[c]? = w.cells[c]? := by
   obtain ⟨posts, hk, rfl⟩ := admit_ok h
-  have hcp : c ∉ (bornEntries E t).map Prod.fst := by
+  have hcp : c ∉ (bornEntries t).map Prod.fst := by
     intro hm
     apply hc
-    unfold bornEntries createdPairs at hm
+    unfold bornEntries at hm
     rw [List.map_map] at hm
     have : (Prod.fst ∘ fun p : D × Cell => (p.1, Entry.live p.2)) = Prod.fst := rfl
-    rw [this, List.map_fst_zip (by simp [createdIds])] at hm
+    rw [this] at hm
     exact hm
   have hpc : c ∉ (posts.map Post.pair).map Prod.fst := by
     intro hm
@@ -81,7 +81,7 @@ theorem admit_frame {E : Env D} {w w' : World D} {t : Turn D} {c : D}
     obtain ⟨p, hp, rfl⟩ := List.mem_map.mp hm
     obtain ⟨x, hx, he, hne⟩ := posts_touched hk p hp
     exact hne (hl x hx he.symm)
-  show (insertAll (insertAll w.cells (posts.map Post.pair)) (bornEntries E t))[c]? = _
+  show (insertAll (insertAll w.cells (posts.map Post.pair)) (bornEntries t))[c]? = _
   rw [insertAll_get_of_not_mem hcp, insertAll_get_of_not_mem hpc]
 
 omit [Std.TransOrd D] [Std.LawfulEqOrd D] in
@@ -121,12 +121,12 @@ omit [Std.LawfulEqOrd D] in
 /-- A live cell's id is never born again (`idTaken`). -/
 theorem live_not_created {E : Env D} {w : World D} {t : Turn D} {posts : List (Post D)}
     (hk : Checked E w t posts) {c : D} {cell : Cell} (hlive : w.live c = some cell) :
-    c ∉ createdIds E t := by
+    c ∉ createdIds t := by
   intro hm
   have hc := hk.creates
   unfold checkCreates at hc
   simp only [except_bind_ok] at hc
-  obtain ⟨⟨⟩, _, ⟨⟩, _, hf⟩ := hc
+  obtain ⟨⟨⟩, _, ⟨⟩, _, ⟨⟩, _, hf⟩ := hc
   have := (forEx_ok.mp hf) c hm
   simp [req, live_contains hlive] at this
 

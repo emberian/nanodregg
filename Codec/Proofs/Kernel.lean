@@ -115,7 +115,7 @@ theorem touch_lawfulOn {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc) :
 def Turn.Fits (PD : D → Prop) (t : Turn D) : Prop :=
   PD t.txId ∧ t.notBefore < 2 ^ 64 ∧ t.validUntil < 2 ^ 64 ∧
   (t.touches.length ≤ Bounds.touchesMax ∧ ∀ x ∈ t.touches, Touch.Fits PD x) ∧
-  (t.creates.length ≤ Bounds.createsMax ∧ ∀ c ∈ t.creates, Cell.Fits c) ∧
+  (t.creates.length ≤ Bounds.createsMax ∧ ∀ c ∈ t.creates, PD c.1 ∧ Cell.Fits c.2) ∧
   (t.nullifiers.length ≤ Bounds.nullifiersMax ∧ ∀ n ∈ t.nullifiers, PD n) ∧
   t.charge < 2 ^ 64 ∧ t.event.size ≤ Bounds.eventBytesMax
 
@@ -125,7 +125,7 @@ theorem turn_lawfulOn {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc) :
   refine (refine_lawfulOn
     (product_lawfulOn hd (product_lawfulOn nat64_lawfulOn (product_lawfulOn nat64_lawfulOn
       (product_lawfulOn (rawList_lawfulOn (touch_lawfulOn hd) _ (by decide))
-        (product_lawfulOn (rawList_lawfulOn cell_lawfulOn _ (by decide))
+        (product_lawfulOn (rawList_lawfulOn (product_lawfulOn hd cell_lawfulOn) _ (by decide))
           (product_lawfulOn (rawList_lawfulOn hd _ (by decide))
             (product_lawfulOn nat64_lawfulOn (rawBytes_lawfulOn _ (by decide)))))))))
     "kernel/turn" ?_ ?_).mono ?_ ?_
@@ -292,7 +292,7 @@ theorem checkBounds_fits (t : Turn D) (h : checkBounds t = .ok ()) : Turn.Fits (
   simp only [bind_req, ite_req, List.all_eq_true, Bool.and_eq_true, decide_eq_true_eq] at h
   obtain ⟨hT, hOps, hC, hN, hE, hS, ⟨hKc, hKt⟩, ⟨hVc, hVt⟩, _, _, ⟨⟨⟨hVu, hNb⟩, hCh⟩, hKind⟩⟩ := h
   refine ⟨trivial, by simpa [Bounds.counterLimit] using hNb, by simpa [Bounds.counterLimit] using hVu,
-    ⟨hT, fun x hx => ⟨trivial, trivial, ?_⟩⟩, ⟨hC, fun c hc => ⟨?_, hS c hc, fun p hp => ⟨?_, hVc c hc p hp⟩⟩⟩,
+    ⟨hT, fun x hx => ⟨trivial, trivial, ?_⟩⟩, ⟨hC, fun c hc => ⟨trivial, ?_, hS c hc, fun p hp => ⟨?_, hVc c hc p hp⟩⟩⟩,
     ⟨hN, fun _ _ => trivial⟩, by simpa [Bounds.counterLimit] using hCh, hE⟩
   · have hops := hOps x hx
     have hk := hKt x hx
