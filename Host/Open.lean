@@ -110,6 +110,7 @@ bound the tail (`tailRead`), read exactly that tail, and `openLog` it from the b
 def openWith {m : Type → Type} [Monad m] (keys : Keys) (c : Cadence) (world : Codec.Stream W)
     (step : W → ByteArray → Except F W) (file : ByteArray) (size : Nat)
     (readTail : Nat → Nat → m (Except (StoreFault F) ByteArray)) : m (Except (StoreFault F) (Opening W)) := do
+  if Log.frameMax c.baseRecordMax < file.size then return .error (.base (.baseTooLarge file.size)) else
   match Base.read keys c world file with
   | .error e => return .error (.base e)
   | .ok (b, baseBytes) =>
@@ -119,6 +120,7 @@ def openWith {m : Type → Type} [Monad m] (keys : Keys) (c : Cadence) (world : 
   match ← readTail b.offset len with
   | .error e => return .error e
   | .ok tail =>
+  if tail.size ≠ len then return .error (.shortRead tail.size len) else
   match openLog keys.segment c.recordBytesMax step b.world b.tag.bytes tail with
   | .error e => return .error (.log e)
   | .ok o =>

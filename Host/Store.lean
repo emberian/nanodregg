@@ -79,8 +79,7 @@ def openAt (dir : System.FilePath) (keys : Keys) (c : Cadence) (world : Stream W
   | .ok file =>
     let size := (← segment.size).toNat
     openWith keys c world step file size fun off len => do
-      let tail ← segment.readAt off.toUInt64 len.toUSize
-      if tail.size = len then return .ok tail else return .error (.shortRead tail.size len)
+      return .ok (← segment.readAt off.toUInt64 len.toUSize)
 
 /-- An open writer: the locked append handle, and the loop's state. -/
 structure Writer (W : Type) where
