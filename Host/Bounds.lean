@@ -25,6 +25,9 @@ def tailPollMs : Nat := 50
 /-- The most Turns one batch record holds: the loop's batch bound (CODEC's batch codec is bounded by it). -/
 def recordTurnsMax : Nat := 64
 
+/-- The width of the shape stamp at the head of a base record (a digest, `Base.shapeStamp`). -/
+def stampBytes : Nat := 32
+
 structure Cadence where
   /-- the fewest segment bytes between two seals -/
   sealMinBytes : Nat
@@ -45,9 +48,11 @@ while the seal runs, and the frame that crossed. -/
 def tailMax (c : Cadence) (baseBytes : Nat) : Nat :=
   2 * c.cadence baseBytes + Log.frameMax c.recordBytesMax
 
-/-- A base record: the World's bytes (bounded by `worldBytesMax`, `Base.file`), the segment
-offset (u64) and tag (32) it starts from, and the `index.log` offset (u64) and tag (32) it names. -/
-def baseRecordMax (c : Cadence) : Nat := c.worldBytesMax + 2 * (8 + Log.tagBytes)
+/-- A base record: the shape stamp (`stampBytes`), the World's bytes (bounded by `worldBytesMax`,
+`Base.file`), the segment offset (u64) and tag (32) it starts from, and the `index.log` count (u64)
+and tag (32) it names. So every base `Base.file` writes is within one base frame
+(`Host.Proofs.Genesis.Base.read_file`). -/
+def baseRecordMax (c : Cadence) : Nat := c.worldBytesMax + stampBytes + 2 * (8 + Log.tagBytes)
 
 /-- `host serve`'s numbers. The base: THE BAR's World is ~290 KB (HOST-14), so 256 MiB is ~900 BAR
 stores; at CODEC's measured KMAC (184 MB/s) its seal is ~1.5 s of Task time and its decode at open

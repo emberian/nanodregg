@@ -1849,3 +1849,75 @@ grow-at-1000 reason ("one more seal at seeds 1–2"), which was false: there are
 seed, and the base sizes moved too. The reason was corrected from the logs. Found by the same
 reader and filed, not fixed here: `resident-entries-per-record-past-base` prints 0 on seeds whose
 run ends with no record past the base, and the max over seeds hides that.
+
+## HOST-39 · HOST-28's reopen pair, proved: the open of what genesis (or import) writes is the World it was given; and the base bound that omitted the stamp (2026-10-17, HOST-11; HOST-28's second named gap; proof lane a5a9c62bf7f200e53)
+
+**Defect found by the proof.** `Cadence.baseRecordMax` was `worldBytesMax + 2·(8 + tagBytes)`. The base
+record is `stamp32 ‖ World ‖ u64 ‖ tag32 ‖ u64 ‖ tag32`, so the bound left out the 32-byte shape stamp.
+`Base.file` (seal, genesis, import) admits any World of at most `worldBytesMax` bytes. A World within
+32 bytes of the cap was therefore WRITTEN, and every open (`openWith`, `Store.lean`'s
+`readBounded`) then refused it `baseTooLarge`: a Store that bricks itself at its own cap. The
+generic statement of `genesisImage_opens` is false without a room premise. That is how the proof
+found the defect.
+
+**Decision.**
+- `stampBytes` moves to Host/Bounds.lean, and `baseRecordMax := worldBytesMax + stampBytes +
+  2·(8 + tagBytes)`: the bound states the record it bounds.
+- The World cap (`worldTooLarge`) is unchanged. The open accepts exactly the largest base the writer
+  can write, and nothing larger. Rejected alternative: keep the bound and have `Base.file` refuse by
+  RECORD size. That makes the effective World cap `worldBytesMax − 32`, and then `worldBytesMax`
+  lies about what it caps. (Asked of ROOT as a pause item: it raises an open-side byte bound by 32.)
+- Theorems:
+  - Host/Proofs/Genesis.lean (new): `genesisImage_opens` (generic: under `LawfulOn P world`,
+    `P w₀`, the origin chain fitting, `origin w₀ = (mark w₀).2` and `baseRecordMax < 2^32`, the one
+    open over exactly the genesis image returns `w₀` itself, 0 records, torn 0, at the segment's
+    end). Lemmas `genesisImage_ok`, `Base.record_size`, `Base.read_file` (a base `Base.file` writes
+    reads back as exactly that base; the room comes from `Base.file`'s own check), `tailRead_self`,
+    `indexNamed_zero`, `openLog_empty`.
+  - Host/Proofs/Deployed.lean: `genesisImage_opens_deployed` (premises `World.CodecFits` and
+    `chain = genesisChain origin`). It is discharged on both real paths:
+    - `genesis_reopens`: no premise beyond `Receive.genesis` succeeding (`genesisWorld_codecFits`,
+      `genesis_chain_eq`).
+    - `import_reopens`: no premise beyond `Carry.importWorld` succeeding (`importWorld_codecFits`,
+      `read_carried_fits`, `importWorld_chain_eq`). It also concludes that the reopened World's
+      carried bytes ARE the file's, so `importWith`'s `carryMismatch reopen` compare is unreachable
+      whenever genesis writes the image. HOST-28's reopen pair is closed: the theorem is exact `=`,
+      since KERNEL-41 deleted World.Equiv.
+- `genesisImage` itself refuses only `worldTooLarge`, and both corollaries take its success as a
+  premise. That refusal comes before any write (`Store.genesis`).
+
+**Second defect found by the same proof, fixed upstream.** `import_reopens` first needed a premise
+`journalFits carried.height carried.journal`. Neither CODEC's carried codec nor KERNEL's `checkCarry`
+refused a carried journal outside its height's window; the World codec did. So `host import` of
+such a file genesis-wrote a Store whose open refused `baseUndecodable`. CODEC-7 added
+`kernel/carried-journal` to the carried codec (in the KERNEL-41 landing 5eb9b30) and folded
+`journalFits` into `Carried.CodecFits`, so the premise is gone.
+
+**Plant.** host-sim `plant-world-at-cap` (seeds 1–3): a cadence whose `worldBytesMax` is EXACTLY
+the genesis World's encoded size (asserted equal). The World is written through the sim's genesis
+path and reopened with the same cadence. It must open to the same World bytes, with 0 records and
+torn 0. It was RED with the old formula (`FAIL plant-world-at-cap … (baseTooLarge)`, 1 FAILED) and is
+GREEN with the fix. All verdicts green: host-sim ×3, host-file-sim ×3, hosting-sim ×3, rows,
+store-plants, cargo launcher broker and isolation.
+
+**Flag day.** None. No byte layout changed. A Store that holds a World below `worldBytesMax − 32`
+opens as before. One that holds a World within 32 bytes of the cap did not open before and does now.
+
+**Critique.**
+- The plant covers the genesis path at the cap, not a seal mid-run at the cap. The bound is one
+  formula shared by every writer (`Base.file`) and every reader (`openWith`, `readBounded`), and
+  `Base.read_file` is stated over `Base.file`, so the seal path is the same theorem. It is still not
+  run at the cap.
+- `genesisImage_opens` is stated over `segReader` (in-memory bytes), like every open theorem.
+  `Store.genesis` writes these exact bytes to files, and the open over files is `openWith` at IO.
+  That is code, not a theorem: the standing gap HOST-38 names too.
+- `hcap` (`baseRecordMax < 2^32`, the u32 frame length) is `decide` at Deployed. A Cadence with a
+  larger cap would make the theorem's premise false rather than the Store silently broken. The
+  premise is named, so that is visible.
+
+**Meta-critique.** Both defects were invisible to every plant and sim: they live at a boundary no
+run reaches (the size cap) or at an input no honest exporter writes (a mis-windowed carried
+journal). Both fell out of trying to state "what genesis writes, opens" with no premise. A premise
+the proof could not discharge was the signal both times. The tempting move was to leave
+`hroom`/`hj` at the theorem's head as "named premises". That would have been an honest label on
+a broken writer.

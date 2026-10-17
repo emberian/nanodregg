@@ -22,7 +22,9 @@ in-memory disk with toy parameters, admitting every Turn through `Kernel.World.a
    segment as it stood when the new base became durable opens to the new base's World;
    plant-tail-too-long: the genesis base with the whole segment is refused `tailTooLong`;
    plant-base-flip: a flipped byte in the base is `baseCorrupt`; plant-world-too-large: a
-   `worldBytesMax` the World outgrows stops the loop `sealFailed worldTooLarge`.
+   `worldBytesMax` the World outgrows stops the loop `sealFailed worldTooLarge`; plant-world-at-cap: a
+   World of exactly `worldBytesMax` bytes is written and opens to itself (HOST-39: the base bound
+   counts the stamp).
 
 Returns 0 iff every check holds; each failure prints `FAIL <name>`. `lake exe host-sim SEED`
 (`Host.Sim.Main`) is the exe; standing runs seeds 1 2 3.
@@ -766,6 +768,16 @@ def run (args : List String) : IO UInt32 := do
   let t ← runWith tiny seed frames none
   check "plant-world-too-large: the loop stops `sealFailed worldTooLarge`"
     (match t.exit with | .sealFailed f => f.name = "worldTooLarge" | _ => false) failures
+  -- plant-world-at-cap: a World of EXACTLY `worldBytesMax` bytes is the largest `Base.file` writes;
+  -- genesis writes it and the one open reads it back (`Cadence.baseRecordMax` counts the stamp)
+  let atCap := { cadence with worldBytesMax := world.size genesis }
+  let capOpen : Except Fault (Opening (World Nat)) := match genesisStore atCap with
+    | .ok (d, b, _) => reopenWith atCap b.index b.file d.synced
+    | .error f => .error f
+  check s!"plant-world-at-cap: a World of exactly worldBytesMax = {atCap.worldBytesMax} bytes is written by genesis and opens to itself ({faultName capOpen})"
+    ((world.bytes genesis).size == atCap.worldBytesMax && match capOpen with
+      | .ok o => world.bytes o.opened.world == world.bytes genesis && o.opened.records == 0 && o.opened.torn == 0
+      | .error _ => false) failures
   indexPlants seed frames r failures
   -- plant-fsync-fail, then plant-restart-at-every-cut
   let p ← runOnce seed frames (some 3)

@@ -109,9 +109,6 @@ def Base.shapeStamp {W R : Type} (world : Stream W) (record : Stream R) : Digest
   Hash.digest domShapes ((Tag.of "host/base" (Base.codec world)).bytes ++ (Tag.of "host/batch" record).bytes ++
     entryLayout.toUTF8)
 
-/-- The width of the stamp at the head of a base record (a digest). -/
-def stampBytes : Nat := 32
-
 /-- A tag as a digest (every tag is `Log.tagBytes` long). -/
 def tagDigest (s : Log.Sealer) (b : ByteArray) : Digest := ⟨s.tag b, s.tag_size b⟩
 
