@@ -63,9 +63,9 @@ theorem checkShape_state {p : Package} (h : p.checkShape = .ok ()) :
   have hr := (checkShape_ok h).1
   cases hs : p.state <;> simp_all [isRecordData, recordRow]
 
-/-- What `runMethod` decodes is at canonical types: every state field's type and every method's
-argument type is `wf`, so `decodeData` passes its canonical-type gate (`decodeData_of_wf`) and reads
-with the type's stream. -/
+/-- What `runMethod` decodes is at types with a data codec: every state field's type and every
+method's argument type is `wf` and carried by the wire (`state_fields_dataTy`, `methodArg_dataTy`),
+so `decodeData` passes its type gate (`decodeData_of_dataTy`) and reads with the type's stream. -/
 theorem state_fields_wf {p : Package} (h : p.checkShape = .ok ()) : Ty.rowWf (recordRow p.state) = true := by
   have hr := (checkShape_ok h).1
   cases hs : p.state <;> simp_all [isRecordData, recordRow, Ty.wf]
@@ -82,7 +82,58 @@ theorem methodArg_wf {p : Package} {ℓ : Label} {mty A : Ty} (h : p.checkShape 
   simp only [methodTy, Ty.wf, Bool.and_eq_true] at this
   exact this.2.1
 
-theorem decodeData_of_wf {T : Ty} (h : T.wf = true) (b : ByteArray) :
+theorem tyRowWire_iff : ∀ {r : List (Label × Ty)},
+    Wire.tyRowWire r = true ↔ ∀ e ∈ r, Wire.labelOk e.1 = true ∧ Wire.tyWire e.2 = true
+  | [] => by simp [Wire.tyRowWire]
+  | (_, t) :: r => by simp [Wire.tyRowWire, tyRowWire_iff (r := r), and_assoc]
+
+theorem tyRowWire_find {ℓ : Label} {t : Ty} {row : List (Label × Ty)} (hw : Wire.tyRowWire row = true)
+    (h : Row.find? ℓ row = some t) : Wire.tyWire t = true := by
+  induction row with
+  | nil => simp [Row.find?] at h
+  | cons e row ih =>
+    obtain ⟨k, u⟩ := e
+    simp only [Wire.tyRowWire, Bool.and_eq_true] at hw
+    simp only [Row.find?] at h
+    split at h
+    · cases h; exact hw.1.2
+    · exact ih hw.2 h
+
+/-- Every state field of a loaded package has a data codec. -/
+theorem state_fields_dataTy {p : Package} (h : p.checkShape = .ok ()) (hw : Wire.packageWire p = true) :
+    ∀ e ∈ recordRow p.state, Wire.dataTy e.2 = true := by
+  have hs := (checkShape_ok h).1
+  simp only [Wire.packageWire, Bool.and_eq_true] at hw
+  have hws := hw.1.1.1.1.2
+  intro e he
+  cases hst : p.state with
+  | record row =>
+    rw [hst] at hs hws he
+    simp only [isRecordData, Ty.wf, Bool.and_eq_true] at hs
+    simp only [Wire.tyWire, Bool.and_eq_true] at hws
+    simp only [recordRow] at he
+    simp only [Wire.dataTy, Bool.and_eq_true]
+    exact ⟨rowWf_iff.mp hs.1.2 e he, (tyRowWire_iff.mp hws.2 e he).2⟩
+  | _ => rw [hst] at he; simp [recordRow] at he
+
+/-- Every method argument type of a loaded package has a data codec. -/
+theorem methodArg_dataTy {p : Package} {ℓ : Label} {mty A : Ty} (h : p.checkShape = .ok ())
+    (hpw : Wire.packageWire p = true)
+    (hm : Row.find? ℓ (recordRow p.iface) = some mty) (hA : methodArg p.state mty = some A) :
+    Wire.dataTy A = true := by
+  simp only [Wire.packageWire, Bool.and_eq_true] at hpw
+  have hwi := hpw.1.1.1.2
+  obtain ⟨row, hrow, hf⟩ := recordRow_find hm
+  rw [hrow] at hwi
+  simp only [Wire.tyWire, Bool.and_eq_true] at hwi
+  have ht := tyRowWire_find hwi.2 hf
+  rw [methodArg_spec hA] at ht
+  simp only [methodTy, Wire.tyWire, Bool.and_eq_true] at ht
+  simp only [Wire.dataTy, Bool.and_eq_true]
+  exact ⟨methodArg_wf h hm hA, ht.2.1⟩
+
+/-- At a `dataTy` type the decoder is the type's stream: its type gate is passed. -/
+theorem decodeData_of_dataTy {T : Ty} (h : Wire.dataTy T = true) (b : ByteArray) :
     Wire.decodeData T b = ((Wire.dataStream T).decode b).map (Wire.toData T) := by
   simp [Wire.decodeData, h]
 
@@ -147,7 +198,7 @@ theorem law_never_stuck {D : Type} {bytesOf : D → ByteArray} {digestOf : ByteA
       (run L.lib Bounds.stackMax ticks 0
         (State.init (apply3 g ℓ) [(reqData bytesOf r).toVal, nd.toVal, od.toVal])) := by
   obtain ⟨hlib, _⟩ := load_libTy hload
-  obtain ⟨hshape, hfields⟩ := load_checked hload g p hp
+  obtain ⟨hshape, hfields, _⟩ := load_checked hload g p hp
   have hrec := checkShape_state hshape
   have ho := readState_conforms hold
   have hnw := readState_conforms hnew

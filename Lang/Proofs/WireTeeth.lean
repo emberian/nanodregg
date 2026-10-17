@@ -79,6 +79,17 @@ theorem bool_two_refused : isRejected "bool" (decodeData .bool ⟨#[2]⟩) = tru
 theorem refused_verdict_encodes :
     (encodeData verdictTy (.inj "refused" (.bytes ⟨#[1]⟩))).isSome = true := by decide +kernel
 
+/-- One tag byte names the arm (`Kernel.choice`): `refused` is arm 1, then the bytes' `u32` length and
+the byte. A unary or `u32` arm index turns this red. -/
+theorem refused_verdict_bytes :
+    encodeData verdictTy (.inj "refused" (.bytes ⟨#[7]⟩)) = some ⟨#[1, 1, 0, 0, 0, 7]⟩ := by decide +kernel
+
+/-- A sum of 257 arms has no data codec (one tag byte names at most 256). -/
+theorem wide_sum_refused :
+    isRejected "lang/data: type"
+      (decodeData (.sum ((List.range 257).map fun i => (toString (1000 + i), Ty.nat))) ⟨#[0]⟩) = true := by
+  decide +kernel
+
 /-- A label the sum does not have is not data of it. -/
 theorem foreign_arm_unencodable : encodeData verdictTy (.inj "maybe" (.record [])) = none := by
   decide +kernel

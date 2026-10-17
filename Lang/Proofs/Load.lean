@@ -11,6 +11,7 @@ import Lang.Proofs.Relocate
 import Lang.Proofs.RunTy
 import Lang.Proofs.Check
 import Lang.Proofs.Sound
+import Lang.Proofs.Wire
 
 namespace Nanodregg.Lang
 
@@ -18,12 +19,14 @@ open Nanodregg.Kernel.Receive
 
 /-- The closure invariant: ids, bodies and packages line up, every body has its package's interface
 type in the closure, and every package passed its shape and field checks (so its state is a record
-and its methods and laws are interface fields at their shapes). -/
+and its methods and laws are interface fields at their shapes), and every package is one the wire
+carries (it was decoded). -/
 def Inv (L : Loaded) : Prop :=
   L.ids.length = L.pkgs.length ∧ L.lib.length = L.pkgs.length ∧
   (∀ (i : Nat) (t : Term) (P : Package), L.lib[i]? = some t → L.pkgs[i]? = some P →
     HasType (Loaded.ifaces L) [] t P.iface) ∧
-  ∀ (i : Nat) (P : Package), L.pkgs[i]? = some P → P.checkShape = .ok () ∧ P.checkFields = .ok ()
+  ∀ (i : Nat) (P : Package), L.pkgs[i]? = some P →
+    P.checkShape = .ok () ∧ P.checkFields = .ok () ∧ Wire.packageWire P = true
 
 theorem Inv.empty : Inv ⟨[], [], []⟩ := ⟨rfl, rfl, by simp, by simp⟩
 
@@ -107,8 +110,26 @@ theorem getElem?_append_of_some {α : Type} {l m : List α} {k : Nat} {a : α}
     (h : l[k]? = some a) : (l ++ m)[k]? = some a := by
   rw [List.getElem?_append_left (List.getElem?_eq_some_iff.mp h).1]; exact h
 
+/-- A package read from a cell is one the wire carries. -/
+theorem readPackage_wire {D : Type} {look : Pinned D} {id : D} {p : Package}
+    (h : readPackage look id = .ok p) : Wire.packageWire p = true := by
+  unfold readPackage at h
+  simp only [bind, Except.bind] at h
+  split at h
+  · simp at h
+  · split at h
+    · simp at h
+    · split at h
+      · rename_i hd; cases h
+        obtain ⟨b, hb⟩ : ∃ b, Wire.encodePackage p = some b := ⟨_, Wire.decodePackage_eq_ok_iff.mp hd⟩
+        unfold Wire.encodePackage at hb
+        split at hb
+        · assumption
+        · simp at hb
+      · simp at h
+
 theorem admitPackage_inv {D : Type} {idb : ByteArray} {p : Package} {acc L : Loaded}
-    {gis : List Nat} {g : Nat} (hi : Inv acc)
+    {gis : List Nat} {g : Nat} (hi : Inv acc) (hpw : Wire.packageWire p = true)
     (h : admitPackage (D := D) idb p acc gis = .ok (L, g)) :
     Inv L ∧ g < L.pkgs.length ∧ L.pkgs = acc.pkgs ++ [p] := by
   obtain ⟨hids, hlib, hty, hck⟩ := hi
@@ -135,7 +156,7 @@ theorem admitPackage_inv {D : Type} {idb : ByteArray} {p : Package} {acc L : Loa
             | zero => rfl
             | succ k => rw [h'] at hP; simp at hP
           rw [e1] at hP; simp at hP; subst hP
-          exact checkWith_checked hc
+          exact ⟨(checkWith_checked hc).1, (checkWith_checked hc).2, hpw⟩
       intro i t P ht hP
       rw [hΔ]
       simp only at ht hP
@@ -174,12 +195,12 @@ theorem load_inv (fuel : Nat) (idb : ByteArray) (acc : Loaded) {L : Loaded} {g :
       · simp at h
       · split at h
         · simp at h
-        · rename_i p _
+        · rename_i p hrp
           split at h
           · simp at h
           · rename_i acc' gis hall
             obtain ⟨hi', _, ext, hext⟩ := loadAll_inv fuel p.imports acc hi hall
-            obtain ⟨hL, hg, hp⟩ := admitPackage_inv hi' h
+            obtain ⟨hL, hg, hp⟩ := admitPackage_inv hi' (readPackage_wire hrp) h
             exact ⟨hL, hg, ext ++ [p], by rw [hp, hext, List.append_assoc]⟩
 termination_by (fuel, 0)
 
@@ -217,7 +238,8 @@ end
 theorem load_checked {D : Type} {digestOf : ByteArray → Option D} {look : Pinned D}
     {fuel : Nat} {idb : ByteArray} {L : Loaded} {g : Nat}
     (h : load digestOf look fuel idb ⟨[], [], []⟩ = .ok (L, g)) :
-    ∀ (i : Nat) (P : Package), L.pkgs[i]? = some P → P.checkShape = .ok () ∧ P.checkFields = .ok () :=
+    ∀ (i : Nat) (P : Package), L.pkgs[i]? = some P →
+      P.checkShape = .ok () ∧ P.checkFields = .ok () ∧ Wire.packageWire P = true :=
   (load_inv digestOf look fuel idb _ Inv.empty h).1.2.2.2
 
 /-- Every closure a receiver loads is a well-typed library for its packages' interfaces. -/

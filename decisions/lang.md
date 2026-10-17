@@ -116,18 +116,17 @@ every `Package` field. Data on the tree too (self-describing): 9 bytes of node f
 load. **Why.** The tree is the one recursive codec (law 1); data needs no recursion over the input
 (the type is finite), so a combinator stream is the smaller and better-typed answer; an `Option`
 encoder names the representable values once (`*Wire`) instead of threading a subtype. **Critique.**
-The sum encoding is unary (arm `i` costs `i+1` tag bytes; at most 256 arms) where the old wire had a
-fixed `u32`; a 200-arm enum's last arm is 200 bytes. `packageOf` refuses with one name
+(Superseded 10-17, ROOT relaying CODEC-13: data sums are CODEC's `choice`, one tag byte for up to
+256 arms, so a data type needs `tyWire` as well as `wf` (`dataTy`); the unary nested-sum index this
+entry first shipped is gone: a second flag day for state bytes.) `packageOf` refuses with one name
 (`rejected 0 "lang/package"`): a resident does not learn WHICH node is wrong (their `encodePackage`
 is `none` first, equally nameless). `depthMax = 1024` now counts tree levels, and a record field is
 two (field node + type), so a type of nested records reaches the bound at ~512 records deep; the old
 1024 counted constructors. The tree's one bound `nodeMax = 65536` caps both a payload and a child
 list, so the READER accepts a 65536-byte label or 65536 children before `labelOf`/`rowMax` refuse
 them after the node is read (bounded by the input, but looser than the old length-prefix refusal).
-The framing is 9 bytes per node (`u8` tag, `u32` payload length, `u32` child count): measured by the
-second-agent review, Journey's `Owned` is 2529 bytes against ~1181 on the old wire (2.1×), so the
-largest package one 64 KiB cell holds roughly halves. The fix is CODEC's (varint lengths: ~3 bytes per
-node) and is asked of CODEC, not worked around here. **Meta-critique.** I chose
+The framing was 9 bytes per node (Owned 2529 bytes vs ~1181 on the old wire); CODEC-13 (3135d3d)
+moved the tree to varint framing: Owned is 1227 bytes. **Meta-critique.** I chose
 the combinator data codec because it made the proof nearly free, and only then argued its wire
 size; the unary sum is the price of using `Stream.sum` rather than adding an n-ary tagged sum to
 CODEC, which I did not ask for.

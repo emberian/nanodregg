@@ -4,17 +4,19 @@
 Data is written TYPE-DIRECTED and needs no recursive codec: the reader knows the type, and the type
 is finite, so `dataStream T` is a composition of CODEC's ordinary combinators by recursion on `T`.
 A natural is `u64`, a boolean `bool`, a byte string `bytesOf bytesMax`, a record the `product` of its
-fields in row order (no labels), a sum the nested `sum` of its arms (arm `i` is `i` bytes of 1 and a
-0, then the payload). A function type has no data. So the stream's `Shape` IS the type's structure,
+fields in row order (no labels), a sum CODEC's `choice` over its arms (one tag byte, the arm's
+index, then the payload). A function type has no data. So the stream's `Shape` IS the type's structure,
 and its canonicity is the combinators' (`Lang.Proofs.Data.dataStream_lawful`).
 
 `DataAt T` is the stream's value type; `toData` names it as machine `Data` (the labels come from
-`T`) and `ofData` reads machine `Data` back at `T`. Only a CANONICAL type (`Ty.wf`: ascending, hence
-distinct labels) has a data codec: in a row with a repeated label, two arms would name the same
-`Data`, so `decodeData`/`encodeData` refuse a non-canonical type.
+`T`) and `ofData` reads machine `Data` back at `T`. Only a CANONICAL type the wire can carry
+(`Ty.wf`: ascending, hence distinct labels; `tyWire`: at most 256 arms, so one tag byte) has a data
+codec: in a row with a repeated label two arms would name the same `Data`, so
+`decodeData`/`encodeData` refuse any other type.
 -/
-import Codec.Stream
+import Codec.Kernel
 import Lang.Data
+import Lang.Wire
 
 namespace Nanodregg.Lang.Wire
 
@@ -28,15 +30,17 @@ def DataAt : Ty → Type
   | .bytes => Bytes Bounds.bytesMax
   | .fn _ _ => Empty
   | .record r => RowAt r
-  | .sum r => ArmAt r
+  | .sum r => (i : Fin r.length) × ArmAt r i
 
 def RowAt : List (Label × Ty) → Type
   | [] => Unit
   | (_, t) :: r => DataAt t × RowAt r
 
-def ArmAt : List (Label × Ty) → Type
-  | [] => Empty
-  | (_, t) :: r => DataAt t ⊕ ArmAt r
+/-- The payload type of arm `i`. -/
+def ArmAt : (r : List (Label × Ty)) → Fin r.length → Type
+  | [], i => Fin.elim0 i
+  | (_, t) :: _, ⟨0, _⟩ => DataAt t
+  | _ :: r, ⟨i + 1, h⟩ => ArmAt r ⟨i, Nat.lt_of_succ_lt_succ h⟩
 end
 
 /-- The stream with no values: every input is refused. -/
@@ -49,15 +53,16 @@ def dataStream : (T : Ty) → Stream (DataAt T)
   | .bytes => Stream.bytesOf Bounds.bytesMax (by decide)
   | .fn _ _ => noData
   | .record r => rowStream r
-  | .sum r => armStream r
+  | .sum r => Kernel.choice r.length (armStream r)
 
 def rowStream : (r : List (Label × Ty)) → Stream (RowAt r)
   | [] => Stream.unit
   | (_, t) :: r => Stream.product (dataStream t) (rowStream r)
 
-def armStream : (r : List (Label × Ty)) → Stream (ArmAt r)
-  | [] => noData
-  | (_, t) :: r => Stream.sum (dataStream t) (armStream r)
+def armStream : (r : List (Label × Ty)) → (i : Fin r.length) → Stream (ArmAt r i)
+  | [], i => Fin.elim0 i
+  | (_, t) :: _, ⟨0, _⟩ => dataStream t
+  | _ :: r, ⟨i + 1, h⟩ => armStream r ⟨i, Nat.lt_of_succ_lt_succ h⟩
 end
 
 mutual
@@ -68,16 +73,16 @@ def toData : (T : Ty) → DataAt T → Data
   | .bytes, s => .bytes s.val
   | .fn _ _, e => nomatch e
   | .record r, x => .record (rowToData r x)
-  | .sum r, x => armToData r x
+  | .sum r, ⟨i, x⟩ => armToData r i x
 
 def rowToData : (r : List (Label × Ty)) → RowAt r → List (Label × Data)
   | [], () => []
   | (ℓ, t) :: r, (x, y) => (ℓ, toData t x) :: rowToData r y
 
-def armToData : (r : List (Label × Ty)) → ArmAt r → Data
-  | [], e => nomatch e
-  | (ℓ, t) :: _, .inl x => .inj ℓ (toData t x)
-  | _ :: r, .inr y => armToData r y
+def armToData : (r : List (Label × Ty)) → (i : Fin r.length) → ArmAt r i → Data
+  | [], i, _ => Fin.elim0 i
+  | (ℓ, t) :: _, ⟨0, _⟩, x => .inj ℓ (toData t x)
+  | _ :: r, ⟨i + 1, h⟩, x => armToData r ⟨i, Nat.lt_of_succ_lt_succ h⟩ x
 end
 
 mutual
@@ -100,18 +105,23 @@ def rowOfData : (r : List (Label × Ty)) → List (Label × Data) → Option (Ro
     else none
   | _, _ => none
 
-def armOfData : (r : List (Label × Ty)) → Label → Data → Option (ArmAt r)
+/-- The FIRST arm labelled `ℓ`, with `d` read at its type. -/
+def armOfData : (r : List (Label × Ty)) → Label → Data → Option ((i : Fin r.length) × ArmAt r i)
   | [], _, _ => none
-  | (k, t) :: r, ℓ, d => if ℓ = k then (ofData t d).map .inl else (armOfData r ℓ d).map .inr
+  | (k, t) :: r, ℓ, d =>
+    if ℓ = k then (ofData t d).map fun x => ⟨⟨0, Nat.succ_pos _⟩, x⟩
+    else (armOfData r ℓ d).map fun ⟨i, y⟩ => ⟨i.succ, y⟩
 end
 
-/-- The bytes of data `d` at canonical type `T`; `none` if `T` is not canonical or `d` is not a
-value of `T`. -/
-def encodeData (T : Ty) (d : Data) : Option ByteArray :=
-  if T.wf then (ofData T d).map (dataStream T).bytes else none
+/-- A canonical type the wire can carry: its data codec exists and is canonical. -/
+def dataTy (T : Ty) : Bool := T.wf && tyWire T
 
-/-- Exactly one value of canonical type `T`, nothing after it. -/
+/-- The bytes of data `d` at type `T`; `none` unless `dataTy T` and `d` is a value of `T`. -/
+def encodeData (T : Ty) (d : Data) : Option ByteArray :=
+  if dataTy T then (ofData T d).map (dataStream T).bytes else none
+
+/-- Exactly one value of type `T` (refused unless `dataTy T`), nothing after it. -/
 def decodeData (T : Ty) (b : ByteArray) : Except Refusal Data :=
-  if T.wf then ((dataStream T).decode b).map (toData T) else .error (.rejected 0 "lang/data: type")
+  if dataTy T then ((dataStream T).decode b).map (toData T) else .error (.rejected 0 "lang/data: type")
 
 end Nanodregg.Lang.Wire
