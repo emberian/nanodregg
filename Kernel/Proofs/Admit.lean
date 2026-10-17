@@ -10,25 +10,38 @@ namespace Nanodregg.Kernel
 
 variable {D : Type} [Ord D] [DecidableEq D]
 
-/-- Every check `admit` runs, as facts. -/
-structure Checked (E : Env D) (w : World D) (t : Turn D) (posts : List (D × Cell)) : Prop where
+/-- Every check `admit` runs, as facts; `raw` is what each touch leaves (`none`: unchanged). -/
+structure Checked (E : Env D) (w : World D) (t : Turn D) (posts : List (D × Entry)) : Prop where
   bounds : checkBounds t = .ok ()
   journal : checkJournal w t = .ok ()
   shape : checkShape t = .ok ()
   window : checkWindow w t = .ok ()
-  pins : checkPins E w t = .ok ()
+  touches : ∃ raw, mapEx (touchCheck E w) t.touches = .ok raw ∧ posts = raw.reduceOption
   nullifiers : checkNullifiers w t = .ok ()
   charge : checkCharge w t = .ok ()
   creates : checkCreates E w t = .ok ()
-  retires : forEx (checkRetire w) t.retires = .ok ()
-  legs : mapEx (postLeg w) t.legs = .ok posts
 
-theorem check_ok {E : Env D} {w : World D} {t : Turn D} {posts : List (D × Cell)}
+theorem check_ok {E : Env D} {w : World D} {t : Turn D} {posts : List (D × Entry)}
     (h : check E w t = .ok posts) : Checked E w t posts := by
   unfold check at h
   simp only [except_bind_ok] at h
-  obtain ⟨⟨⟩, h1, ⟨⟩, h2, ⟨⟩, h3, ⟨⟩, h4, ⟨⟩, h5, ⟨⟩, h6, ⟨⟩, h7, ⟨⟩, h8, ⟨⟩, h9, h10⟩ := h
-  exact ⟨h1, h2, h3, h4, h5, h6, h7, h8, h9, h10⟩
+  obtain ⟨⟨⟩, h1, ⟨⟩, h2, ⟨⟩, h3, ⟨⟩, h4, raw, h5, ⟨⟩, h6, ⟨⟩, h7, ⟨⟩, h8, h9⟩ := h
+  simp only [pure, Except.pure, Except.ok.injEq] at h9
+  exact ⟨h1, h2, h3, h4, ⟨raw, h5, h9.symm⟩, h6, h7, h8⟩
+
+/-- Every touch of a checked turn passed `touchCheck`. -/
+theorem Checked.touch {E : Env D} {w : World D} {t : Turn D} {posts : List (D × Entry)}
+    (hk : Checked E w t posts) : ∀ x ∈ t.touches, ∃ r, touchCheck E w x = .ok r := by
+  obtain ⟨raw, hm, _⟩ := hk.touches
+  exact mapEx_each hm
+
+/-- A touch that passes saw what the signer saw. -/
+theorem touchCheck_pin {E : Env D} {w : World D} {x : Touch D} {r : Option (D × Entry)}
+    (h : touchCheck E w x = .ok r) : pinOf E (w.live x.cell) = x.seen := by
+  unfold touchCheck at h
+  simp only [except_bind_ok] at h
+  obtain ⟨⟨⟩, hp, _⟩ := h
+  exact of_decide_eq_true (req_ok.mp hp)
 
 theorem admit_ok {E : Env D} {w w' : World D} {t : Turn D}
     (h : World.admit E w t = .ok w') :
@@ -63,59 +76,55 @@ theorem admit_charge {E : Env D} {w w' : World D} {t : Turn D}
   show w.allowance - t.charge + t.charge = w.allowance
   omega
 
-/-- **Guards from the intent.** Every cell the signer pinned is, in the pre-state, exactly what
+/-- **The weight bound.** An admitted turn costs at most `Bounds.weightMax`, its log record
+included: the static budget HOST sizes a turn record and a batch by (a batch of `n` admitted
+turns appends at most `n * Bounds.weightMax` record bytes, given CODEC's
+`size (encode t) ≤ t.logWeight`). -/
+theorem admit_weight {E : Env D} {w w' : World D} {t : Turn D}
+    (h : World.admit E w t = .ok w') :
+    t.charge = t.weight ∧ t.logWeight ≤ t.weight ∧ t.weight ≤ Bounds.weightMax := by
+  obtain ⟨_, hc, _⟩ := admit_ok h
+  have hb := hc.bounds
+  unfold checkBounds at hb
+  simp only [except_bind_ok] at hb
+  obtain ⟨⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, hw⟩ := hb
+  rw [req_ok, decide_eq_true_eq] at hw
+  exact ⟨(admit_charge h).1, Nat.le_add_right _ _, hw⟩
+
+/-- **Guards from the intent.** Every cell the turn touches is, in the pre-state, exactly what
 the signer saw. -/
 theorem admit_pins {E : Env D} {w w' : World D} {t : Turn D}
-    (h : World.admit E w t = .ok w') : ∀ p ∈ t.pins, pinOf E (w.live p.1) = p.2 := by
+    (h : World.admit E w t = .ok w') : ∀ x ∈ t.touches, pinOf E (w.live x.cell) = x.seen := by
   obtain ⟨_, hc, _⟩ := admit_ok h
-  have hp := forEx_ok.mp hc.pins
-  intro p hmem
-  have := hp p hmem
-  unfold pinCheck at this
-  rw [req_ok, decide_eq_true_eq] at this
-  exact this
+  intro x hx
+  obtain ⟨_, hr⟩ := hc.touch x hx
+  exact touchCheck_pin hr
 
 /-- **The staleness refusal.** A turn whose pin disagrees with the World is admitted by no
 World transition. -/
-theorem stale_refused {E : Env D} {w : World D} {t : Turn D} {p : D × D}
-    (hmem : p ∈ t.pins) (hstale : pinOf E (w.live p.1) ≠ p.2) :
+theorem stale_refused {E : Env D} {w : World D} {t : Turn D} {x : Touch D}
+    (hmem : x ∈ t.touches) (hstale : pinOf E (w.live x.cell) ≠ x.seen) :
     ∀ w', World.admit E w t ≠ .ok w' :=
-  fun _ h => hstale (admit_pins h p hmem)
+  fun _ h => hstale (admit_pins h x hmem)
 
-/-- If every check before the pins passes, a stale pin is refused BY NAME: `stale c` for a
-pinned cell `c` whose digest disagrees. -/
-theorem stale_named {E : Env D} {w : World D} {t : Turn D}
-    (hb : checkBounds t = .ok ()) (hj : checkJournal w t = .ok ())
+/-- A stale touch is refused `stale` before anything about its write or retirement is judged. -/
+theorem touchCheck_stale {E : Env D} {w : World D} {x : Touch D}
+    (hstale : pinOf E (w.live x.cell) ≠ x.seen) : touchCheck E w x = .error (.stale x.cell) := by
+  unfold touchCheck
+  simp [req, hstale, bind, Except.bind]
+
+/-- **Stale BY NAME.** If the checks before the touches pass and the first touch that fails is
+stale, the turn is refused `stale` naming that cell. -/
+theorem stale_named {E : Env D} {w : World D} {t : Turn D} {pre post : List (Touch D)}
+    {x : Touch D} (hb : checkBounds t = .ok ()) (hj : checkJournal w t = .ok ())
     (hs : checkShape t = .ok ()) (hw : checkWindow w t = .ok ())
-    (hstale : ∃ p ∈ t.pins, pinOf E (w.live p.1) ≠ p.2) :
-    ∃ p ∈ t.pins, pinOf E (w.live p.1) ≠ p.2 ∧ World.admit E w t = .error (.stale p.1) := by
-  suffices key : ∀ (l : List (D × D)), (∃ p ∈ l, pinOf E (w.live p.1) ≠ p.2) →
-      ∃ p ∈ l, pinOf E (w.live p.1) ≠ p.2 ∧
-        forEx (pinCheck E w) l = .error (.stale p.1) by
-    obtain ⟨p, hp, hne, hf⟩ := key t.pins hstale
-    refine ⟨p, hp, hne, ?_⟩
-    have hpins : checkPins E w t = .error (.stale p.1) := hf
-    unfold World.admit check
-    simp [hb, hj, hs, hw, hpins, bind, Except.bind]
-  intro l
-  induction l with
-  | nil => intro ⟨_, h, _⟩; simp at h
-  | cons q rest ih =>
-      intro hex
-      by_cases hq : pinOf E (w.live q.1) = q.2
-      · have hrest : ∃ p ∈ rest, pinOf E (w.live p.1) ≠ p.2 := by
-          obtain ⟨p, hp, hne⟩ := hex
-          simp only [List.mem_cons] at hp
-          rcases hp with rfl | hp
-          · exact absurd hq hne
-          · exact ⟨p, hp, hne⟩
-        obtain ⟨p, hp, hne, hf⟩ := ih hrest
-        refine ⟨p, List.mem_cons_of_mem _ hp, hne, ?_⟩
-        have hq' : pinCheck E w q = .ok () := by simp [pinCheck, req, hq]
-        simp [forEx, hq', hf]
-      · refine ⟨q, by simp, hq, ?_⟩
-        have hq' : pinCheck E w q = .error (.stale q.1) := by simp [pinCheck, req, hq]
-        simp [forEx, hq']
+    (ht : t.touches = pre ++ x :: post) (hpre : ∀ y ∈ pre, ∃ r, touchCheck E w y = .ok r)
+    (hstale : pinOf E (w.live x.cell) ≠ x.seen) :
+    World.admit E w t = .error (.stale x.cell) := by
+  have hm : mapEx (touchCheck E w) t.touches = .error (.stale x.cell) := by
+    rw [ht]; exact mapEx_error_at (touchCheck_stale hstale) post hpre
+  unfold World.admit check
+  simp [hb, hj, hs, hw, hm, bind, Except.bind]
 
 /-- A retry of an admitted transaction is answered `replayed` with its height, whatever else is
 true of the World now (only the static bounds are checked first). -/

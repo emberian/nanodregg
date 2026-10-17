@@ -204,13 +204,32 @@ def nextKeyDigest (X : Ctx D) (key : ByteArray) : D := X.env.hash domNextKey key
 def possessionMessage (X : Ctx D) (sponsor : D) (next : D) (key : ByteArray) : ByteArray :=
   tagPossession ++ X.env.bytes sponsor ++ X.env.bytes next ++ key
 
-/-- The Turn a call's effect becomes: the caller's window and pins, the call as the event,
-the exact charge (refused above the signed ceiling). -/
-def sealTurn (X : Ctx D) (c : Call D) (creates : List Cell) (legs : List (Leg D))
-    (retires : List D) : Except (Refusal D) (Turn D) :=
+/-- What `effect` does to `cell`: its act on its own cell, `keep` on every other. -/
+def actFor [DecidableEq D] (effect : Option (D × Act)) (cell : D) : Act :=
+  match effect with
+  | some (c, a) => if c = cell then a else .keep
+  | none => .keep
+
+/-- The caller's pins as the Turn's touches, in the caller's order, each with its act. -/
+def touchesOf [DecidableEq D] (pins : List (D × D)) (effect : Option (D × Act)) : List (Touch D) :=
+  pins.map fun p => { cell := p.1, seen := p.2, act := actFor effect p.1 }
+
+/-- The effect is on a pinned cell. -/
+def effectPinned [DecidableEq D] (pins : List (D × D)) : Option (D × Act) → Except (Refusal D) Unit
+  | some (e, _) => req (pins.any fun p => p.1 = e) (.unpinned e)
+  | none => .ok ()
+
+/-- The Turn a call's effect becomes: the caller's window, the caller's pins as touches carrying
+the effect (a receiver writes or retires at most one cell, always one it read, so always a
+pinned one: `unpinned` otherwise), the call as the event, the exact charge (refused above the
+signed ceiling). -/
+def sealTurn [DecidableEq D] (X : Ctx D) (c : Call D) (creates : List Cell)
+    (effect : Option (D × Act)) : Except (Refusal D) (Turn D) := do
+  let pins := c.unsigned.pins
+  effectPinned pins effect
   let t0 : Turn D :=
     { txId := txIdOf X c, notBefore := c.unsigned.notBefore, validUntil := c.unsigned.validUntil,
-      pins := c.unsigned.pins, creates, legs, retires, nullifiers := [], charge := 0,
+      touches := touchesOf pins effect, creates, nullifiers := [], charge := 0,
       event := X.callBytes c }
   let t := { t0 with charge := t0.weight }
   if t.charge ≤ c.unsigned.maxCharge then .ok t else .error (.overPrice t.charge)

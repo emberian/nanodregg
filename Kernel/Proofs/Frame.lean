@@ -1,7 +1,7 @@
 /-
 # Kernel.Proofs.Frame — what an admitted turn leaves alone, and what it can never undo
 
-Frame: a cell no leg, retirement or birth of the turn names is unchanged. ROM: a live ROM cell
+Frame: a cell the turn neither writes, retires nor bears is unchanged. ROM: a live ROM cell
 is live and identical after every admitted turn, hence forever. Nullifiers: an admitted turn
 spends each of its nullifiers exactly once — none was spent before, all are after — and the
 spent set only grows, so across a log no nullifier is spent twice.
@@ -14,105 +14,98 @@ variable {D : Type} [Ord D] [Std.TransOrd D] [Std.LawfulEqOrd D] [DecidableEq D]
 
 omit [DecidableEq D] in
 theorem insertAll_get_of_not_mem {c : D} :
-    ∀ {m : Std.TreeMap D Entry compare} {ps : List (D × Cell)},
+    ∀ {m : Std.TreeMap D Entry compare} {ps : List (D × Entry)},
       c ∉ ps.map Prod.fst → (insertAll m ps)[c]? = m[c]?
   | m, [], _ => rfl
   | m, p :: rest, h => by
       simp only [List.map_cons, List.mem_cons, not_or] at h
-      show (insertAll (m.insert p.1 (.live p.2)) rest)[c]? = m[c]?
+      show (insertAll (m.insert p.1 p.2) rest)[c]? = m[c]?
       rw [insertAll_get_of_not_mem h.2, Std.TreeMap.getElem?_insert]
       have : compare p.1 c ≠ .eq := fun he => h.1 (Std.LawfulEqCmp.eq_of_compare he).symm
       simp [this]
 
-omit [DecidableEq D] in
-theorem tombAll_get_of_not_mem {c : D} :
-    ∀ {m : Std.TreeMap D Entry compare} {cs : List D}, c ∉ cs → (tombAll m cs)[c]? = m[c]?
-  | m, [], _ => rfl
-  | m, x :: rest, h => by
-      simp only [List.mem_cons, not_or] at h
-      show (tombAll (m.insert x .tomb) rest)[c]? = m[c]?
-      rw [tombAll_get_of_not_mem h.2, Std.TreeMap.getElem?_insert]
-      have : compare x c ≠ .eq := fun he => h.1 (Std.LawfulEqCmp.eq_of_compare he).symm
-      simp [this]
+omit [Std.TransOrd D] [Std.LawfulEqOrd D] in
+/-- A touch that leaves something behind leaves it at its own cell, and is not a `keep`. -/
+theorem touchCheck_some {E : Env D} {w : World D} {x : Touch D} {p : D × Entry}
+    (h : touchCheck E w x = .ok (some p)) : p.1 = x.cell ∧ x.act ≠ .keep := by
+  unfold touchCheck at h
+  simp only [except_bind_ok] at h
+  obtain ⟨⟨⟩, _, h⟩ := h
+  cases ha : x.act with
+  | keep => rw [ha] at h; simp [pure, Except.pure] at h
+  | write ops =>
+      rw [ha] at h
+      cases hc : w.live x.cell with
+      | none => rw [hc] at h; simp at h
+      | some cell =>
+          rw [hc] at h
+          simp only [except_bind_ok, pure, Except.pure, Except.ok.injEq, Option.some.injEq] at h
+          obtain ⟨_, _, rfl⟩ := h
+          simp
+  | retire =>
+      rw [ha] at h
+      cases hc : w.live x.cell with
+      | none => rw [hc] at h; simp at h
+      | some cell =>
+          rw [hc] at h
+          simp only [except_bind_ok, pure, Except.pure, Except.ok.injEq, Option.some.injEq] at h
+          obtain ⟨_, _, rfl⟩ := h
+          simp
 
-omit [Std.TransOrd D] [Std.LawfulEqOrd D] [DecidableEq D] in
-theorem postLeg_cell {w : World D} {l : Leg D} {p : D × Cell} (h : postLeg w l = .ok p) :
-    p.1 = l.cell := by
-  unfold postLeg at h
-  split at h
-  · simp at h
-  · split at h
-    · simp at h
-    · simp only [except_bind_ok] at h
-      obtain ⟨⟨⟩, _, ⟨⟩, _, h⟩ := h
-      simp only [pure, Except.pure, Except.ok.injEq] at h
-      rw [← h]
-    · simp only [except_bind_ok] at h
-      obtain ⟨⟨⟩, _, h⟩ := h
-      simp only [pure, Except.pure, Except.ok.injEq] at h
-      rw [← h]
+omit [Std.TransOrd D] [Std.LawfulEqOrd D] in
+/-- What a checked turn changes is exactly at its non-`keep` touches. -/
+theorem posts_touched {E : Env D} {w : World D} {t : Turn D} {posts : List (D × Entry)}
+    (hk : Checked E w t posts) : ∀ p ∈ posts, ∃ x ∈ t.touches, p.1 = x.cell ∧ x.act ≠ .keep := by
+  obtain ⟨raw, hm, rfl⟩ := hk.touches
+  intro p hp
+  have hp : some p ∈ raw := by simpa [List.reduceOption, List.mem_filterMap] using hp
+  obtain ⟨x, hx, hr⟩ := mapEx_mem hm (some p) hp
+  exact ⟨x, hx, touchCheck_some hr⟩
 
 /-- **Frame.** A cell the turn neither writes, retires nor bears is unchanged. -/
 theorem admit_frame {E : Env D} {w w' : World D} {t : Turn D} {c : D}
-    (h : World.admit E w t = .ok w') (hl : c ∉ t.legs.map Leg.cell) (hr : c ∉ t.retires)
+    (h : World.admit E w t = .ok w') (hl : ∀ x ∈ t.touches, x.cell = c → x.act = .keep)
     (hc : c ∉ createdIds E t) : w'.cells[c]? = w.cells[c]? := by
   obtain ⟨posts, hk, rfl⟩ := admit_ok h
-  have hkeys : posts.map Prod.fst = t.legs.map Leg.cell :=
-    mapEx_map (fun _ _ hp => postLeg_cell hp) hk.legs
-  have hcp : c ∉ (createdPairs E t).map Prod.fst := by
+  have hcp : c ∉ (bornEntries E t).map Prod.fst := by
     intro hm
     apply hc
-    unfold createdPairs at hm
-    rw [List.map_fst_zip (by simp [createdIds])] at hm
+    unfold bornEntries createdPairs at hm
+    rw [List.map_map] at hm
+    have : (Prod.fst ∘ fun p : D × Cell => (p.1, Entry.live p.2)) = Prod.fst := rfl
+    rw [this, List.map_fst_zip (by simp [createdIds])] at hm
     exact hm
-  show (insertAll (tombAll (insertAll w.cells posts) t.retires) (createdPairs E t))[c]? = _
-  rw [insertAll_get_of_not_mem hcp, tombAll_get_of_not_mem hr,
-    insertAll_get_of_not_mem (by rw [hkeys]; exact hl)]
+  have hpc : c ∉ posts.map Prod.fst := by
+    intro hm
+    obtain ⟨p, hp, rfl⟩ := List.mem_map.mp hm
+    obtain ⟨x, hx, he, hne⟩ := posts_touched hk p hp
+    exact hne (hl x hx he.symm)
+  show (insertAll (insertAll w.cells posts) (bornEntries E t))[c]? = _
+  rw [insertAll_get_of_not_mem hcp, insertAll_get_of_not_mem hpc]
 
 omit [Std.TransOrd D] [Std.LawfulEqOrd D] in
-/-- A live ROM cell has no leg in an admitted turn (`postLeg` refuses `romWrite`). -/
-theorem rom_no_leg {E : Env D} {w : World D} {t : Turn D} {posts : List (D × Cell)}
+/-- A live ROM cell is only ever kept: a write refuses `romWrite`, a retirement `romRetire`. -/
+theorem rom_keep {E : Env D} {w : World D} {t : Turn D} {posts : List (D × Entry)}
     (hk : Checked E w t posts) {c : D} {cell : Cell} (hlive : w.live c = some cell)
-    (hrom : cell.discipline = .rom) : c ∉ t.legs.map Leg.cell := by
-  intro hm
-  obtain ⟨l, hl, rfl⟩ := List.mem_map.mp hm
-  -- every leg's `postLeg` succeeded
-  have : ∃ p, postLeg w l = .ok p := by
-    clear hm
-    have key : ∀ {ls : List (Leg D)} {ps : List (D × Cell)}, mapEx (postLeg w) ls = .ok ps →
-        ∀ x ∈ ls, ∃ p, postLeg w x = .ok p := by
-      intro ls
-      induction ls with
-      | nil => intro _ _ x hx; simp at hx
-      | cons a rest ih =>
-          intro ps hps x hx
-          unfold mapEx at hps
-          cases ha : postLeg w a with
-          | error e => simp [ha] at hps
-          | ok b =>
-              cases hr : mapEx (postLeg w) rest with
-              | error e => simp [ha, hr] at hps
-              | ok bs =>
-                  simp only [List.mem_cons] at hx
-                  rcases hx with rfl | hx
-                  · exact ⟨b, ha⟩
-                  · exact ih hr x hx
-    exact key hk.legs l hl
-  obtain ⟨p, hp⟩ := this
-  unfold postLeg at hp
-  rw [hlive] at hp
-  simp [hrom] at hp
-
-omit [Std.TransOrd D] [Std.LawfulEqOrd D] in
-/-- A live ROM cell is never retired by an admitted turn (`romRetire`). -/
-theorem rom_no_retire {E : Env D} {w : World D} {t : Turn D} {posts : List (D × Cell)}
-    (hk : Checked E w t posts) {c : D} {cell : Cell} (hlive : w.live c = some cell)
-    (hrom : cell.discipline = .rom) : c ∉ t.retires := by
-  intro hm
-  have := (forEx_ok.mp hk.retires) c hm
-  unfold checkRetire at this
-  rw [hlive] at this
-  simp [hrom, req] at this
+    (hrom : cell.discipline = .rom) : ∀ x ∈ t.touches, x.cell = c → x.act = .keep := by
+  intro x hx hxc
+  obtain ⟨r, hr⟩ := hk.touch x hx
+  unfold touchCheck at hr
+  rw [hxc, hlive] at hr
+  simp only [except_bind_ok] at hr
+  obtain ⟨⟨⟩, _, hr⟩ := hr
+  cases ha : x.act with
+  | keep => rfl
+  | write ops =>
+      rw [ha] at hr
+      simp only [except_bind_ok] at hr
+      obtain ⟨_, hp, _⟩ := hr
+      simp [postWrite, hrom] at hp
+  | retire =>
+      rw [ha] at hr
+      simp only [except_bind_ok] at hr
+      obtain ⟨⟨⟩, hp, _⟩ := hr
+      simp [req, hrom] at hp
 
 omit [Std.LawfulEqOrd D] [DecidableEq D] in
 theorem live_contains {w : World D} {c : D} {cell : Cell} (h : w.live c = some cell) :
@@ -125,14 +118,14 @@ theorem live_contains {w : World D} {c : D} {cell : Cell} (h : w.live c = some c
 
 omit [Std.LawfulEqOrd D] in
 /-- A live cell's id is never born again (`idTaken`). -/
-theorem live_not_created {E : Env D} {w : World D} {t : Turn D} {posts : List (D × Cell)}
+theorem live_not_created {E : Env D} {w : World D} {t : Turn D} {posts : List (D × Entry)}
     (hk : Checked E w t posts) {c : D} {cell : Cell} (hlive : w.live c = some cell) :
     c ∉ createdIds E t := by
   intro hm
   have hc := hk.creates
   unfold checkCreates at hc
   simp only [except_bind_ok] at hc
-  obtain ⟨⟨⟩, _, hf⟩ := hc
+  obtain ⟨⟨⟩, _, ⟨⟩, _, hf⟩ := hc
   have := (forEx_ok.mp hf) c hm
   simp [req, live_contains hlive] at this
 
@@ -141,8 +134,7 @@ theorem admit_rom {E : Env D} {w w' : World D} {t : Turn D} {c : D} {cell : Cell
     (h : World.admit E w t = .ok w') (hlive : w.live c = some cell) (hrom : cell.discipline = .rom) :
     w'.live c = some cell := by
   obtain ⟨posts, hk, _⟩ := admit_ok h
-  have hf := admit_frame h (rom_no_leg hk hlive hrom) (rom_no_retire hk hlive hrom)
-    (live_not_created hk hlive)
+  have hf := admit_frame h (rom_keep hk hlive hrom) (live_not_created hk hlive)
   unfold World.live at hlive ⊢
   rw [hf]; exact hlive
 

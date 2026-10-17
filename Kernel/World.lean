@@ -9,8 +9,9 @@ hash collision as an explicit disjunct, and the simulation can run toy parameter
 same `admit`. There is one deployed `Env` (CODEC's digest and hash).
 
 Order of the checks (each refuses by name, nothing is written before all pass):
-bounds → journal (an exact retry is `replayed` whatever else holds) → shape → window → pins
-(the one staleness refusal) → nullifiers → charge → created ids → retirements → legs.
+bounds → journal (an exact retry is `replayed` whatever else holds) → shape → window → touches
+(ONE lookup per touched cell: its pin, the one staleness refusal, then its write or retirement)
+→ nullifiers → charge → created ids.
 -/
 import Std.Data.TreeMap
 import Std.Data.TreeSet
@@ -42,12 +43,10 @@ inductive Reject (D : Type)
   /-- the transaction is already in the journal, admitted at `height` (an exact retry: the
   transaction id is the digest of the signed call, so the same id is the same call) -/
   | replayed (height : Nat)
-  | duplicateLeg (cell : D)
-  | duplicatePin (cell : D)
-  | duplicateRetire (cell : D)
+  /-- a cell is touched twice in one turn -/
+  | duplicateTouch (cell : D)
   | duplicateNullifier (nullifier : D)
   | duplicateKey (cell : D) (key : Nat)
-  | legRetired (cell : D)
   | nonCanonicalCell (index : Nat)
   | outsideWindow
   /-- the cell is not what the signer saw -/
@@ -56,6 +55,8 @@ inductive Reject (D : Type)
   | chargeMismatch (expected : Nat)
   | overAllowance
   | idTaken (cell : D)
+  /-- a born id is also touched: a born cell did not exist to be observed -/
+  | bornTouched (cell : D)
   | missingCell (cell : D)
   | romWrite (cell : D)
   | romRetire (cell : D)
@@ -144,22 +145,26 @@ def opValueSize : Op → Nat
   | .set _ v => v.size
   | .erase _ => 0
 
+def Touch.ops {D : Type} (x : Touch D) : List Op :=
+  match x.act with
+  | .write ops => ops
+  | _ => []
+
 /-- Every number a turn carries is within `Bounds`. -/
 def checkBounds (t : Turn D) : Except (Reject D) Unit := do
-  req (t.legs.length ≤ Bounds.legsMax) (.overBound .legs)
-  req (t.legs.all fun l => l.ops.length ≤ Bounds.opsPerLegMax) (.overBound .opsPerLeg)
-  req (t.pins.length ≤ Bounds.pinsMax) (.overBound .pins)
+  req (t.touches.length ≤ Bounds.touchesMax) (.overBound .touches)
+  req (t.touches.all fun x => x.ops.length ≤ Bounds.opsPerWriteMax) (.overBound .opsPerWrite)
   req (t.creates.length ≤ Bounds.createsMax) (.overBound .creates)
-  req (t.retires.length ≤ Bounds.retiresMax) (.overBound .retires)
   req (t.nullifiers.length ≤ Bounds.nullifiersMax) (.overBound .nullifiers)
   req (t.event.size ≤ Bounds.eventBytesMax) (.overBound .event)
   req (t.creates.all fun c => c.slots.length ≤ Bounds.slotsPerCellMax) (.overBound .slotsPerCell)
   req ((t.creates.all fun c => c.slots.all fun p => p.1 < Bounds.slotKeyLimit) &&
-       (t.legs.all fun l => l.ops.all fun o => o.key < Bounds.slotKeyLimit)) (.overBound .slotKey)
+       (t.touches.all fun x => x.ops.all fun o => o.key < Bounds.slotKeyLimit)) (.overBound .slotKey)
   req ((t.creates.all fun c => c.slots.all fun p => p.2.size ≤ Bounds.valueBytesMax) &&
-       (t.legs.all fun l => l.ops.all fun o => opValueSize o ≤ Bounds.valueBytesMax))
+       (t.touches.all fun x => x.ops.all fun o => opValueSize o ≤ Bounds.valueBytesMax))
     (.overBound .valueBytes)
   req (t.validUntil ≤ t.notBefore + Bounds.windowMax) (.overBound .window)
+  req (t.weight ≤ Bounds.weightMax) (.overBound .weight)
 
 variable [DecidableEq D]
 
@@ -174,26 +179,46 @@ def noDup {α : Type} [Ord α] (l : List α) (e : α → Reject D) : Except (Rej
   | none => .ok ()
   | some a => .error (e a)
 
-/-- One leg per cell, one pin per cell, one op per key, no leg on a retiring cell,
-born cells in canonical form. -/
+/-- One touch per cell, one op per key of a write, born cells in canonical form. -/
 def checkShape (t : Turn D) : Except (Reject D) Unit := do
-  noDup (t.legs.map Leg.cell) .duplicateLeg
-  noDup (t.pins.map Prod.fst) .duplicatePin
-  noDup t.retires .duplicateRetire
+  noDup (t.touches.map Touch.cell) .duplicateTouch
   noDup t.nullifiers .duplicateNullifier
-  forEx (fun l => noDup (opKeys l.ops) (.duplicateKey l.cell)) t.legs
-  forEx (fun l => req (!t.retires.contains l.cell) (.legRetired l.cell)) t.legs
+  forEx (fun x => noDup (opKeys x.ops) (.duplicateKey x.cell)) t.touches
   forEx (fun (c, i) => req (Slots.ascending c.slots) (.nonCanonicalCell i)) t.creates.zipIdx
 
 def checkWindow (w : World D) (t : Turn D) : Except (Reject D) Unit :=
   req (t.notBefore ≤ w.height + 1 && w.height + 1 ≤ t.validUntil) .outsideWindow
 
-/-- The one staleness refusal: every cell the signer observed is as observed. -/
-def pinCheck (E : Env D) (w : World D) (p : D × D) : Except (Reject D) Unit :=
-  req (pinOf E (w.live p.1) = p.2) (.stale p.1)
+/-- The cell a write leaves behind, or why it may not be written. -/
+def postWrite (c : D) (cell : Cell) (ops : List Op) : Except (Reject D) Cell :=
+  let post := { cell with slots := applyOps cell.slots ops }
+  match cell.discipline with
+  | .rom => .error (.romWrite c)
+  | .appendOnly => do
+      forEx (fun o => match o with
+        | .set k _ => req (cell.slots.get k).isNone (.appendOnly c k)
+        | .erase k => .error (.appendOnly c k)) ops
+      req (post.slots.length ≤ Bounds.slotsPerCellMax) (.overBound .slotsPerCell)
+      pure post
+  | .ram => do
+      req (post.slots.length ≤ Bounds.slotsPerCellMax) (.overBound .slotsPerCell)
+      pure post
 
-def checkPins (E : Env D) (w : World D) (t : Turn D) : Except (Reject D) Unit :=
-  forEx (pinCheck E w) t.pins
+/-- What a touch leaves at its cell (`none`: unchanged), or why not. The cell is looked up ONCE:
+the pin is checked against it (the one staleness refusal), then the act applies to it. -/
+def touchCheck (E : Env D) (w : World D) (x : Touch D) : Except (Reject D) (Option (D × Entry)) := do
+  let cur := w.live x.cell
+  req (pinOf E cur = x.seen) (.stale x.cell)
+  match x.act, cur with
+  | .keep, _ => pure none
+  | .write _, none => .error (.missingCell x.cell)
+  | .write ops, some cell => do
+      let post ← postWrite x.cell cell ops
+      pure (some (x.cell, .live post))
+  | .retire, none => .error (.missingCell x.cell)
+  | .retire, some cell => do
+      req (cell.discipline != .rom) (.romRetire x.cell)
+      pure (some (x.cell, .tomb))
 
 def checkNullifiers (w : World D) (t : Turn D) : Except (Reject D) Unit :=
   forEx (fun n => req (!w.spent.contains n) (.spent n)) t.nullifiers
@@ -203,60 +228,38 @@ def checkCharge (w : World D) (t : Turn D) : Except (Reject D) Unit := do
   req (t.charge = t.weight) (.chargeMismatch t.weight)
   req (t.charge ≤ w.allowance) .overAllowance
 
-/-- Born ids are fresh: not in the World (live or tombstoned) and not twice in the turn. -/
+/-- Born ids are fresh: not in the World (live or tombstoned), not twice in the turn, and not
+touched by it. -/
 def checkCreates (E : Env D) (w : World D) (t : Turn D) : Except (Reject D) Unit := do
   noDup (createdIds E t) .idTaken
+  noDup (t.touches.map Touch.cell ++ createdIds E t) .bornTouched
   forEx (fun c => req (!w.cells.contains c) (.idTaken c)) (createdIds E t)
 
-def checkRetire (w : World D) (c : D) : Except (Reject D) Unit :=
-  match w.live c with
-  | none => .error (.missingCell c)
-  | some cell => req (cell.discipline != .rom) (.romRetire c)
-
-/-- The cell a leg leaves behind, or why it may not be written. -/
-def postLeg (w : World D) (l : Leg D) : Except (Reject D) (D × Cell) :=
-  match w.live l.cell with
-  | none => .error (.missingCell l.cell)
-  | some cell =>
-      let post := { cell with slots := applyOps cell.slots l.ops }
-      match cell.discipline with
-      | .rom => .error (.romWrite l.cell)
-      | .appendOnly => do
-          forEx (fun o => match o with
-            | .set k _ => req (cell.slots.get k).isNone (.appendOnly l.cell k)
-            | .erase k => .error (.appendOnly l.cell k)) l.ops
-          req (post.slots.length ≤ Bounds.slotsPerCellMax) (.overBound .slotsPerCell)
-          pure (l.cell, post)
-      | .ram => do
-          req (post.slots.length ≤ Bounds.slotsPerCellMax) (.overBound .slotsPerCell)
-          pure (l.cell, post)
-
-/-- Every check, against the pre-state only; on success, the post-cells of the legs. -/
-def check (E : Env D) (w : World D) (t : Turn D) : Except (Reject D) (List (D × Cell)) := do
+/-- Every check, against the pre-state only; on success, what the touches leave behind. -/
+def check (E : Env D) (w : World D) (t : Turn D) : Except (Reject D) (List (D × Entry)) := do
   checkBounds t
   checkJournal w t
   checkShape t
   checkWindow w t
-  checkPins E w t
+  let posts ← mapEx (touchCheck E w) t.touches
   checkNullifiers w t
   checkCharge w t
   checkCreates E w t
-  forEx (checkRetire w) t.retires
-  mapEx (postLeg w) t.legs
+  pure posts.reduceOption
 
-def insertAll (m : Std.TreeMap D Entry compare) (ps : List (D × Cell)) :
+def insertAll (m : Std.TreeMap D Entry compare) (ps : List (D × Entry)) :
     Std.TreeMap D Entry compare :=
-  ps.foldl (fun m p => m.insert p.1 (.live p.2)) m
-
-def tombAll (m : Std.TreeMap D Entry compare) (cs : List D) : Std.TreeMap D Entry compare :=
-  cs.foldl (fun m c => m.insert c .tomb) m
+  ps.foldl (fun m p => m.insert p.1 p.2) m
 
 def spendAll (s : Std.TreeSet D compare) (ns : List D) : Std.TreeSet D compare :=
   ns.foldl (fun s n => s.insert n) s
 
+def bornEntries (E : Env D) (t : Turn D) : List (D × Entry) :=
+  (createdPairs E t).map fun p => (p.1, .live p.2)
+
 /-- The World after a checked turn. Total: everything that can fail failed in `check`. -/
-def commit (E : Env D) (w : World D) (t : Turn D) (posts : List (D × Cell)) : World D :=
-  { cells := insertAll (tombAll (insertAll w.cells posts) t.retires) (createdPairs E t)
+def commit (E : Env D) (w : World D) (t : Turn D) (posts : List (D × Entry)) : World D :=
+  { cells := insertAll (insertAll w.cells posts) (bornEntries E t)
     journal := w.journal.insert t.txId (w.height + 1, turnDigest E t)
     spent := spendAll w.spent t.nullifiers
     height := w.height + 1

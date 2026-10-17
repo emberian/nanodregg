@@ -59,11 +59,14 @@ def opBytes : Op → ByteArray
   | .set k v => nat 0 ++ nat k ++ blob v
   | .erase k => nat 1 ++ nat k
 
+def actBytes : Act → ByteArray
+  | .keep => nat 0 | .write ops => nat 1 ++ many opBytes ops | .retire => nat 2
+
+def touchBytes (x : Touch D) : ByteArray := u64le x.cell ++ u64le x.seen ++ actBytes x.act
+
 def turnBytes (t : Turn D) : ByteArray :=
   u64le t.txId ++ nat t.notBefore ++ nat t.validUntil ++
-  many (fun p => u64le p.1 ++ u64le p.2) t.pins ++ many cellBytes t.creates ++
-  many (fun l => u64le l.cell ++ many opBytes l.ops) t.legs ++ many u64le t.retires ++
-  many u64le t.nullifiers ++ nat t.charge ++ blob t.event
+  many touchBytes t.touches ++ many cellBytes t.creates ++ many u64le t.nullifiers ++ nat t.charge ++ blob t.event
 
 def env : Env D :=
   { hash := fun dom b => fnv (dom.toUTF8 ++ b), bytes := u64le, turnBytes, cellBytes }
@@ -314,19 +317,32 @@ def act (st : State) : State :=
       | none => st
       | some t =>
           let bad := { t with txId := t.txId + 1, charge := t.charge + 1 }
-          match World.admit env w bad with
-          | .error r =>
-              if nameOf r = "chargeMismatch" ∨ nameOf r = "stale" ∨ nameOf r = "idTaken" then
-                { st with steps := st.steps + 1, refusedAsExpected := st.refusedAsExpected + 1 }
-              else { st with failures := s!"probe: got {nameOf r}" :: st.failures }
-          | .ok _ => { st with failures := "probe: wrong charge admitted" :: st.failures }
+          let st := match World.admit env w bad with
+            | .error r =>
+                if nameOf r = "chargeMismatch" ∨ nameOf r = "stale" ∨ nameOf r = "idTaken" then
+                  { st with steps := st.steps + 1, refusedAsExpected := st.refusedAsExpected + 1 }
+                else { st with failures := s!"probe: got {nameOf r}" :: st.failures }
+            | .ok _ => { st with failures := "probe: wrong charge admitted" :: st.failures }
+          match t.touches with
+          | [] => st
+          | x :: _ =>
+              -- a cell touched twice is refused by shape, before anything is looked up
+              let twice := { t with txId := t.txId + 2, touches := t.touches ++ [x] }
+              match World.admit env w twice with
+              | .error (.duplicateTouch c) =>
+                  if c = x.cell then
+                    { st with steps := st.steps + 1, refusedAsExpected := st.refusedAsExpected + 1 }
+                  else { st with failures := "probe: duplicateTouch names another cell" :: st.failures }
+              | .error r => { st with failures := s!"probe twice: got {nameOf r}" :: st.failures }
+              | .ok _ => { st with failures := "probe: a cell touched twice admitted" :: st.failures }
 
 /-! ## Work per admitted turn (the waste ratchet's kernel rows)
 
 Counted from the structure of `World.admit` (DERIVED from the code, not instrumented): `check`
-does one map lookup per pin, born id, retirement and leg, one journal lookup and one spent lookup
-per nullifier; `commit` one insert per leg, retirement, birth and nullifier, and one journal insert.
-Nothing in either is proportional to the size of the World. -/
+does one World cell lookup per touch (`touchCheck` reads the cell once for its pin and its act) and
+one per born id, one journal lookup and one spent lookup per nullifier; `commit` one insert per
+written or retired touch, birth and nullifier, and one journal insert. Nothing in either is
+proportional to the size of the World. -/
 
 /-- Thousandths, as an integer: `WASTE` lines carry a decimal ratio. -/
 def ratio (num den : Nat) : Nat := if den = 0 then 0 else num * 1000 / den
@@ -335,19 +351,20 @@ def showRatio (milli : Nat) : String :=
   let frac := toString (milli % 1000)
   s!"{milli / 1000}.{"".pushn '0' (3 - frac.length)}{frac}"
 
-/-- (cell lookups ÷ cells named, pins checked ÷ distinct pins, map operations ÷ things named),
-in thousandths. -/
-def turnWork (t : Turn D) : Nat × Nat × Nat :=
+/-- (World cell lookups ÷ cells named, map operations ÷ things named), in thousandths. (Pins
+checked per pinned cell is no longer a ratio: a cell is touched once by shape, `duplicateTouch`.) -/
+def turnWork (t : Turn D) : Nat × Nat :=
   let ids := createdIds env t
-  let named := (t.pins.map Prod.fst ++ t.legs.map Leg.cell ++ t.retires ++ ids).eraseDups.length
-  let cellLookups := t.pins.length + ids.length + t.retires.length + t.legs.length
+  let cells := t.touches.map Touch.cell
+  let named := (cells ++ ids).eraseDups.length
+  let cellLookups := t.touches.length + ids.length
+  let changed := (t.touches.filter fun x => x.act != .keep).length
   let ops := cellLookups + 1 + t.nullifiers.length +
-    (t.legs.length + t.retires.length + ids.length + t.nullifiers.length + 1)
-  (ratio cellLookups named, ratio t.pins.length (t.pins.map Prod.fst).eraseDups.length,
-   ratio ops (named + t.nullifiers.length + 1))
+    (changed + ids.length + t.nullifiers.length + 1)
+  (ratio cellLookups named, ratio ops (named + t.nullifiers.length + 1))
 
-def maxWork (log : List (Turn D)) : Nat × Nat × Nat :=
-  log.foldl (fun (a, b, c) t => let (x, y, z) := turnWork t; (max a x, max b y, max c z)) (0, 0, 0)
+def maxWork (log : List (Turn D)) : Nat × Nat :=
+  log.foldl (fun (a, b) t => let (x, y) := turnWork t; (max a x, max b y)) (0, 0)
 
 /-- Same contents (TreeMap shapes may differ; contents may not). -/
 def same (a b : World D) : Bool :=
@@ -412,11 +429,11 @@ def main (args : List String) : IO UInt32 := do
   let mut admitted := 0
   let mut refused := 0
   let mut restarts := 0
-  let mut work : Nat × Nat × Nat := (0, 0, 0)
+  let mut work : Nat × Nat := (0, 0)
   for seed in seeds do
     let st := run seed 120
-    let (a, b, c) := maxWork st.log
-    work := (max work.1 a, max work.2.1 b, max work.2.2 c)
+    let (a, b) := maxWork st.log
+    work := (max work.1 a, max work.2 b)
     admitted := admitted + st.admitted
     refused := refused + st.refusedAsExpected
     restarts := restarts + st.restarts
@@ -427,8 +444,7 @@ def main (args : List String) : IO UInt32 := do
         IO.println s!"FAIL seed {seed}: {f}"
   IO.println s!"kernel-sim: seeds={seeds.length} admitted={admitted} refused-as-expected={refused} restarts={restarts} failing-seeds={bad}"
   IO.println s!"WASTE admit cells-touched-per-turn {showRatio work.1}"
-  IO.println s!"WASTE admit pins-checked-per-turn {showRatio work.2.1}"
-  IO.println s!"WASTE fold work-per-turn {showRatio work.2.2}"
+  IO.println s!"WASTE fold work-per-turn {showRatio work.2}"
   if bad = 0 then IO.println "ALL PASS"
   return if bad = 0 then 0 else 1
 

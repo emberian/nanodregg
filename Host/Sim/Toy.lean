@@ -41,8 +41,8 @@ def env : Env Nat where
   cellBytes c := le64 c.weight
 
 def mkTurn (txId notBefore validUntil : Nat) (nullifiers : List Nat) : Turn Nat :=
-  let t : Turn Nat := { txId, notBefore, validUntil, pins := [], creates := [], legs := [],
-                        retires := [], nullifiers, charge := 0, event := ByteArray.empty }
+  let t : Turn Nat := { txId, notBefore, validUntil, touches := [], creates := [], nullifiers,
+                        charge := 0, event := ByteArray.empty }
   { t with charge := t.weight }
 
 /-- A batch record: the count, then each turn. -/

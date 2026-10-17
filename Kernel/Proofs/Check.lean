@@ -37,6 +37,34 @@ theorem mapEx_map {α β γ ε : Type} {f : α → Except ε β} {g : β → γ}
               simp [ha, hr] at h; subst h
               simp [hf a b ha, mapEx_map hf hr]
 
+/-- When `mapEx` passes, every input passed. -/
+theorem mapEx_each {α β ε : Type} {f : α → Except ε β} :
+    ∀ {l : List α} {bs : List β}, mapEx f l = .ok bs → ∀ a ∈ l, ∃ b, f a = .ok b
+  | [], _, _ => by simp
+  | a :: rest, bs, h => by
+      unfold mapEx at h
+      cases ha : f a with
+      | error e => simp [ha] at h
+      | ok b =>
+          cases hr : mapEx f rest with
+          | error e => simp [ha, hr] at h
+          | ok bs' =>
+              intro x hx
+              simp only [List.mem_cons] at hx
+              rcases hx with rfl | hx
+              · exact ⟨b, ha⟩
+              · exact mapEx_each hr x hx
+
+/-- `mapEx` refuses with the refusal of the first input that fails. -/
+theorem mapEx_error_at {α β ε : Type} {f : α → Except ε β} {x : α} {e : ε} (hx : f x = .error e) :
+    ∀ {pre : List α} (post : List α), (∀ y ∈ pre, ∃ b, f y = .ok b) →
+      mapEx f (pre ++ x :: post) = .error e
+  | [], post, _ => by simp [mapEx, hx]
+  | y :: pre, post, h => by
+      obtain ⟨b, hb⟩ := h y (by simp)
+      have ih := mapEx_error_at hx (pre := pre) post (fun z hz => h z (by simp [hz]))
+      simp [mapEx, hb, ih]
+
 /-- Every element of `mapEx`'s output is some input's image. -/
 theorem mapEx_mem {α β ε : Type} {f : α → Except ε β} :
     ∀ {l : List α} {bs : List β}, mapEx f l = .ok bs → ∀ b ∈ bs, ∃ a ∈ l, f a = .ok b

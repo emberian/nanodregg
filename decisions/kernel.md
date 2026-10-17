@@ -138,3 +138,60 @@ Status: open.
 3. *Data-object extra laws decode at the law package's state type* (LANG-11): no conflict. The kernel
    treats state slots as bytes; the law that judges them owns their meaning.
 Status: open.
+
+## KERNEL-11 · A Turn names each cell once: `touches` replace pins, legs and retires (KERNEL-2, 2026-10-16)
+**Decision.** `Turn.touches : List (Touch D)`, `Touch := {cell, seen, act}`, `Act := keep | write ops |
+retire`. `World.admit` looks each touched cell up ONCE (`touchCheck`: the pin against it, the one
+staleness refusal, then the act on the same lookup). A turn writes or retires only a cell it observed,
+so every change it makes is a function of what the signer saw. A born id may not also be touched
+(`bornTouched`: a born cell did not exist to be observed). `sealTurn` takes the receiver's one
+optional effect and puts it on its pinned cell (`unpinned` otherwise, unreachable from the ten
+receivers, all of which read the cell they change). Deleted: `Leg`, `pins`/`legs`/`retires`,
+`duplicateLeg`/`duplicatePin`/`duplicateRetire`/`legRetired`, `legsMax`/`pinsMax`/`retiresMax`;
+added `duplicateTouch`, `bornTouched`, `touchesMax`, `opsPerWriteMax`. WASTE: admit cells-touched
+2.0 → 1.0, fold work-per-turn 2.5 → 2.0; the pins-checked row is DELETED (a cell is touched once by
+shape, so the ratio is 1 by construction: a gate that cannot go red).
+Theorems restated: `admit_pins`/`stale_refused` over touches; `stale_named` now names the stale cell
+when it is the FIRST touch that fails (`t.touches = pre ++ x :: post`, every `pre` touch passes);
+`admit_frame` premise "every touch at c is `keep`"; `rom_keep` (a live ROM cell is only kept);
+`receive_ok` "the touches are the caller's pins, in order, with what it saw".
+**Alternatives.** (a) Keep three lists and cache the pin lookups in a turn-local map for the legs:
+moves the second lookup into a smaller map and keeps two shapes of "a cell this turn names". (b) One
+pass that looks up all pins into a list, then legs over it: the same lookups, an intermediate list,
+and the old precedence (every stale pin before any write fault).
+**Critique.** Precedence changed: a turn whose first touch is a ROM write and whose second is stale is
+refused `romWrite`, not `stale`; before, staleness was reported first. Both names are true faults,
+but a client that retries only on `stale` now sees a different name for such a turn (no honest
+receiver builds one: a receiver changes one cell). Blind writes are gone: a write must pin the cell's
+current digest, so two writers of one hot cell conflict (they did already: every receiver pins what it
+changes). CODEC's Turn codec (not yet landed) must follow the new shape. **Meta-critique.** I was asked
+to make a number fall and found a shape change that makes it fall; the test is whether the shape is
+right without the number: "a turn names each cell once, with what it saw and what it does" is the
+smaller spec, deletes four refusals and one cross-check (`legRetired` is now unrepresentable), and
+makes "writes only what it observed" structural instead of a property of today's receivers.
+Status: open.
+
+## KERNEL-12 · A turn's charge is its storage; one aggregate bound, `weightMax` (KERNEL-2, 2026-10-16)
+**Decision.** `Turn.weight := logWeight + growth`: the bytes its log record holds (as before) PLUS the
+most it can add to the World (journal entry, each born cell with its id, each write's ops, each
+nullifier). The allowance is then a budget for the whole Store, log and World, which is what HOST must
+size (`World.weight` ≤ genesis budget is the next theorem, answering HOST-14's memory question as
+the `worldBytesMax` ask: the allowance IS that bound). `Bounds.weightMax := 4 * eventBytesMax` (256 KiB),
+checked in `checkBounds` (`overBound weight`). `admit_weight`: an admitted turn has `charge = weight`,
+`logWeight ≤ weight ≤ weightMax`. Plant: weightMax := 400 ⇒ kernel-sim seeds 1–3 red (`overBound`).
+**Why an aggregate.** The per-field bounds alone allow a ~8.6 GB turn (64 born cells × 1024 slots ×
+64 KiB, and as much again in writes): "a bound derived from Bounds" exists and is useless as a frame
+budget. HOST needs one number per turn record and per batch.
+**Alternatives.** (a) Derive the bound from the per-field ones (useless, above). (b) Shrink the per-field
+bounds until their product is small (then a 1000-slot cell or a 64 KiB value is unwritable, which rows
+need). (c) Charge only log bytes (K2), and bound the World separately: a second budget beside the
+allowance.
+**Critique.** 4 × event is a policy, not a derivation: an invoke whose method grows state well past
+its arguments, or a turn observing 512 cells (33 KiB of touches), can hit it while honest. A born cell
+is charged twice (its log record and its World copy); that is the real storage, but a package install
+costs ~2× its bytes. CODEC owes `size (encode t) ≤ t.logWeight` (or `=`) for HOST's record budget to
+be a theorem rather than an assumption. **Meta-critique.** Folding World growth into the charge is
+attractive because it turns HOST-14's ask into a theorem I can prove from the allowance; check that
+the allowance should be ONE budget at all (a member's storage vs the World's storage is the
+refill/credit question, KERNEL-13).
+Status: open.

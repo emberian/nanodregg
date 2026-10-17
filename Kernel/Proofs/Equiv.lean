@@ -29,8 +29,7 @@ theorem check_congr {E : Env D} {a b : World D} (h : a.Equiv b) (t : Turn D) :
   have hl : ∀ c, a.live c = b.live c := live_congr ⟨hc, hj, hs, hh, ‹_›, hal⟩
   have e1 : checkJournal a t = checkJournal b t := by unfold checkJournal; rw [hj.getElem?_eq]
   have e2 : checkWindow a t = checkWindow b t := by unfold checkWindow; rw [hh]
-  have e3 : checkPins E a t = checkPins E b t := by
-    unfold checkPins; congr 1; funext p; unfold pinCheck; rw [hl]
+  have e3 : touchCheck E a = touchCheck E b := by funext x; unfold touchCheck; rw [hl]
   have e4 : checkNullifiers a t = checkNullifiers b t := by
     unfold checkNullifiers; congr 1; funext n; rw [hs.contains_eq]
   have e5 : checkCharge a t = checkCharge b t := by unfold checkCharge; rw [hal]
@@ -39,21 +38,13 @@ theorem check_congr {E : Env D} {a b : World D} (h : a.Equiv b) (t : Turn D) :
         (fun c => req (!b.cells.contains c) (Reject.idTaken c)) := by
       funext c; rw [hc.contains_eq]
     unfold checkCreates; rw [this]
-  have e7 : checkRetire a = checkRetire b := by funext c; unfold checkRetire; rw [hl]
-  have e8 : postLeg a = postLeg b := by funext l; unfold postLeg; rw [hl]
-  unfold check; rw [e1, e2, e3, e4, e5, e6, e7, e8]
+  unfold check; rw [e1, e2, e3, e4, e5, e6]
 
 omit [Std.LawfulEqOrd D] [DecidableEq D] in
 theorem insertAll_congr {m₁ m₂ : Std.TreeMap D Entry compare} (h : m₁.Equiv m₂) :
-    ∀ ps : List (D × Cell), (insertAll m₁ ps).Equiv (insertAll m₂ ps)
+    ∀ ps : List (D × Entry), (insertAll m₁ ps).Equiv (insertAll m₂ ps)
   | [] => h
-  | p :: rest => insertAll_congr (h.insert p.1 (.live p.2)) rest
-
-omit [Std.LawfulEqOrd D] [DecidableEq D] in
-theorem tombAll_congr {m₁ m₂ : Std.TreeMap D Entry compare} (h : m₁.Equiv m₂) :
-    ∀ cs : List D, (tombAll m₁ cs).Equiv (tombAll m₂ cs)
-  | [] => h
-  | c :: rest => tombAll_congr (h.insert c .tomb) rest
+  | p :: rest => insertAll_congr (h.insert p.1 p.2) rest
 
 omit [Std.LawfulEqOrd D] [DecidableEq D] in
 theorem spendAll_congr {s₁ s₂ : Std.TreeSet D compare} (h : s₁.Equiv s₂) :
@@ -63,11 +54,11 @@ theorem spendAll_congr {s₁ s₂ : Std.TreeSet D compare} (h : s₁.Equiv s₂)
 
 omit [Std.LawfulEqOrd D] [DecidableEq D] in
 theorem commit_congr {E : Env D} {a b : World D} (h : a.Equiv b) (t : Turn D)
-    (posts : List (D × Cell)) : (commit E a t posts).Equiv (commit E b t posts) := by
+    (posts : List (D × Entry)) : (commit E a t posts).Equiv (commit E b t posts) := by
   obtain ⟨hc, hj, hs, hh, hch, hal⟩ := h
   refine ⟨?_, ?_, spendAll_congr hs _, by simp [commit, hh], by simp [commit, hch],
     by simp [commit, hal]⟩
-  · exact insertAll_congr (tombAll_congr (insertAll_congr hc _) _) _
+  · exact insertAll_congr (insertAll_congr hc _) _
   · show (a.journal.insert t.txId (a.height + 1, turnDigest E t)).Equiv
       (b.journal.insert t.txId (b.height + 1, turnDigest E t))
     rw [hh]; exact hj.insert _ _
