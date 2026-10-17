@@ -27,9 +27,9 @@
 | Lean lines (Emit) | 351 | — |
 | Lean lines (Host) | 2959 | — |
 | Lean lines (Kernel) | 4268 | — |
-| Lean lines (Protocol) | 2756 | — |
+| Lean lines (Protocol) | 2743 | — |
 | max dependents of one module | 103 | — |
 | native (extern/implemented_by) | 8 | 8 |
 | C lines | 0 | 146 |
 | Lean lines (Lang) | 5462 | — |
-| Lean lines (tooling: Sim, Rows, Journey, Census, Emit) | 3202 | — |
+| Lean lines (tooling: Sim, Rows, Journey, Census, Emit) | 3189 | — |
