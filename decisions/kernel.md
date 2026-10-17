@@ -434,3 +434,28 @@ root object grant is legitimate: its issuer must be the owner, checked by `owner
 write half. That is evidence the KERNEL-20 choice (keep grants append-only, ledger the count) was
 right, not only prettier.
 Status: built.
+
+## KERNEL-22 · Tooling is not deployed: SIZE.md's deployed row excludes it, and C9 keeps it out of deployed imports (KERNEL-4, 2026-10-16)
+**Decision.** ROOT's item (GATES retired, so a CROSS-LAYER commit). `tree.Module.is_tooling`: a
+module of a tooling lib (`Census`, `Emit`) or one with a tooling path component below its lib
+(`Sim`, `Rows`, `Journey`). "Lean lines (deployed)" counts definitions that are neither proofs nor
+tooling; a new informational row "Lean lines (tooling: Sim, Rows, Journey, Census, Emit)" counts
+the tooling. Closure C9: a deployed def-module importing a tooling module is red, so naming a
+directory `Sim` cannot launder deployed code out of the count (plant: `Kernel.World` importing
+`Kernel.Sim.Gen` ⇒ `C9 Kernel.World (deployed) imports tooling module Kernel.Sim.Gen`).
+**Why wider than asked.** The brief named `Sim`, Host/Sim and Protocol/Rows. `Lang/Journey` is the
+same thing (the `lang-journey` exe's scenario); `Census` (the axiom census command) and `Emit` (the
+Rust table generator) are build tooling no deployment runs. A row called "deployed" that counts any
+of them is false.
+**Alternatives.** Deployed = the import closure of the deployed exe (exact, and the right end state,
+but there is no `nanodregg-host` exe yet, so the closure is empty today); a per-lib exclusion list
+(misses Kernel/Sim inside the Kernel lib); a marker comment per file (a convention nothing checks).
+**Critique.** Path-component classification is a naming convention; C9 makes it sound in one
+direction only (deployed never imports tooling), not the other (a tooling module that the deployed
+exe should have been built from). When the Host exe exists, deployed should become its closure and
+this rule its cross-check. `Emit` produces deployed Rust; its Lean is still tooling, and the emitted
+Rust has its own row.
+**Meta-critique.** I own the biggest tooling module (Kernel/Sim/Gen, 561 lines) and the rule lowers
+my layer's deployed count; the test is that every module it moves is reached only from a test or
+build exe, which C9 now enforces.
+Status: built.

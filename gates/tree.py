@@ -21,6 +21,10 @@ DEF_KINDS = {"def", "abbrev", "structure", "inductive", "class", "instance", "op
              "infixl", "infixr", "prefix", "postfix", "initialize", "builtin_initialize",
              "declare_syntax_cat", "register_option"}
 THEOREM_KINDS = {"theorem", "lemma"}
+# Test and build tooling (Module.is_tooling): what the simulations, the conformance rows, the
+# journeys, the census and the Rust emitter are made of. SIZE.md counts it in its own row.
+TOOLING_LIBS = {"Census", "Emit"}
+TOOLING_COMPONENTS = {"Sim", "Rows", "Journey"}
 MODIFIERS = {"private", "protected", "noncomputable", "partial", "unsafe", "nonrec", "public",
              "meta", "scoped", "local"}
 
@@ -136,6 +140,14 @@ class Module:
     def is_proof(self) -> bool:
         """A proof-module has a path component named `Proofs` (e.g. `Kernel.Proofs.World`)."""
         return "Proofs" in self.name.split(".")[1:]
+
+    @property
+    def is_tooling(self) -> bool:
+        """Test or build tooling, never deployed: a module of a tooling lib (`Census`, `Emit`) or one
+        with a tooling path component below its lib (`Sim`, `Rows`, `Journey`: e.g.
+        `Kernel.Sim.Gen`, `Host.Sim.Run`, `Protocol.Rows.Loopback`, `Lang.Journey`). No deployed
+        module may import one (closure C9), so the classification cannot hide deployed code."""
+        return self.lib in TOOLING_LIBS or bool(set(self.name.split(".")[1:]) & TOOLING_COMPONENTS)
 
 
 @dataclass

@@ -6,7 +6,7 @@
 | metric | now | ceiling |
 |---|---|---|
 | Lean modules in the Host closure | 0 | 150 |
-| Lean lines (deployed) | 10482 | — |
+| Lean lines (deployed) | 7235 | — |
 | protocol operations | 6 | 6 |
 | call kinds (Receive.Body constructors) | 9 | 10 |
 | command verbs (the one command language) | 11 | 20 |
@@ -32,3 +32,4 @@
 | native (extern/implemented_by) | 8 | 8 |
 | C lines | 0 | 146 |
 | Lean lines (Lang) | 5464 | — |
+| Lean lines (tooling: Sim, Rows, Journey, Census, Emit) | 3247 | — |

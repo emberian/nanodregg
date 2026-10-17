@@ -89,7 +89,12 @@ def measure(t: tree.Tree) -> dict[str, int]:
     out["Lean proof-modules"] = sum(1 for m in mods if m.is_proof)
     for lib in sorted(set(m.lib for m in mods)):
         out[f"Lean lines ({lib})"] = sum(m.lines for m in mods if m.lib == lib)
-    out["Lean lines (deployed)"] = sum(m.lines for m in mods if not m.is_proof)
+    # Deployed = definitions that are not tooling; tooling (the sims, rows, journeys, census and
+    # emitter: tree.Module.is_tooling) is informational, and closure C9 keeps it out of deployed
+    # imports. Proof-modules are in neither.
+    out["Lean lines (deployed)"] = sum(m.lines for m in mods if not m.is_proof and not m.is_tooling)
+    out["Lean lines (tooling: Sim, Rows, Journey, Census, Emit)"] = sum(
+        m.lines for m in mods if not m.is_proof and m.is_tooling)
     deps = t.dependents()
     out["max dependents of one module"] = max((len(v) for v in deps.values()), default=0)
     out["theorems"] = sum(1 for m in mods for d in m.decls if d.kind in tree.THEOREM_KINDS)

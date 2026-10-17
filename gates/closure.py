@@ -17,6 +17,9 @@
      census sees; the census skips exe roots, so two exes' `main`s never meet);
   C8 a C source outside an extern_lib's <Lib>/c directory, or an extern_lib directory that is
      not <Lib>/c of a declared lib.
+  C9 a deployed def-module (neither a proof-module nor tooling, tree.Module.is_tooling)
+     importing a tooling module: the size ratchet's deployed count excludes tooling, so deployed
+     code may not depend on it.
 """
 import os
 import sys
@@ -50,6 +53,8 @@ def check(t: tree.Tree) -> list[str]:
                 target = t.modules[i]
                 if not m.is_proof and target.is_proof:
                     red.append(f"C4 {m.name} (def-module) imports proof-module {i}")
+                if not m.is_proof and not m.is_tooling and target.is_tooling:
+                    red.append(f"C9 {m.name} (deployed) imports tooling module {i}")
                 if target.lib == "Census" and m.lib != "Census":
                     red.append(f"C5 {m.name} imports {i}: Census is build tooling, never a dependency")
             elif root in ("Init", "Std"):
