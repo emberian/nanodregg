@@ -230,4 +230,11 @@ a refusal by name with a plant; (3) the MAC measured once CODEC's Keccak lands, 
 with it; (4) open reads one base + at most one cadence of log, as a theorem on the open path. Law 5
 amended by ROOT: O(store) work is forbidden on the request path; off-loop sealing amortised to
 O(appended bytes) with a named cadence Bound is allowed.
+**Condition (3), the MAC, re-read (2026-10-16).** CODEC measured `Codec.Hash.mac` (KMAC256, 17c0307) on this
+Mac, compiled, one core: 184 MB/s at 1 MiB, and 2.2 µs for a 200-byte message. That makes the base MAC
+≈ 1.6 ms at THE BAR (290 KB), ≈ 16 ms at 10^4 and ≈ 160 ms at 10^5 records, and with encode the
+whole seal is ≈ 1.8 ms / 18 ms / 200 ms. My estimate from minidregg (≈ 10 ms at THE BAR) was about 6×
+pessimistic. The MAC is about one fsync at THE BAR and stays inside the cadence budget at 10^5
+(≈ 200 ms of Task time per ≥ 7 MB appended). The decision stands. The number is CODEC's measurement,
+not mine. HOST-3 re-measures it against the real base file once the World codec lands.
 only the World codec it already listed).
