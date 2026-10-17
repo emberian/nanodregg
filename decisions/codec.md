@@ -147,3 +147,30 @@ a `host` step is caught by the Host, not by this codec.
 **Meta-critique.** I made the layout as simple as the client's existing reader. A typed layout
 (op ∈ Op) would let the codec refuse more, and I deferred it because nothing yet depends on it.
 Status: open.
+
+## CODEC-9 · The one recursive codec is a depth-bounded tree; LANG refines it (answers LANG-14) (2026-10-16)
+**Decision.** `Codec/Tree.lean`: `Tree = node (tag : UInt8) (payload : ByteArray) (children : List Tree)`,
+on the wire as `u8 tag ‖ u32le |payload| ‖ payload ‖ u32le |children| ‖ child*`.
+`Stream.tree max depth : Stream (Tree.Fitting max depth)` (`{t // t.fits max depth = true}`, a Bool test, so the def-module exports no Prop). A reader nests at most `depth` levels and
+refuses deeper input as `tooDeep` before reading it. Payloads and child lists of more than `max`
+are refused as `pastBound`. The decoder returns its `fits` proof as it reads, so there is no second
+pass. `tree_lawful` (Codec/Proofs/Tree.lean) is canonicity for every tree.
+A recursive type (LANG's `Term`, `Ty`, `Data`) becomes a codec as
+`Stream.refine "lang/term" (Stream.tree max depth) ofTree toTree`, where `toTree : Term → Tree.Fitting max depth`
+writes each constructor as a node: its tag, its scalar fields as a payload written with the ordinary
+codecs, and its subterms as children. Its Lawful proof is `refine_lawful tree_lawful …` plus LANG's two
+inverse lemmas (`ofTree (toTree x) = some x`, and `ofTree t = some x → toTree x = t`, by induction
+on terms). No stream reasoning is needed.
+**Alternatives.** A fixpoint combinator over `Stream → Stream` (approximations `step^n ⊥`, with
+canonicity relativized to depth). Every combinator theorem would need a depth-relative twin. Or
+LANG's own `Lang/Wire.lean` (LANG-14, a second codec shape).
+**Why.** The recursion and its proofs live in one place, the size-checking happens once, and every
+recursive type pays only an inverse proof.
+**Critique.** The tree shape is untyped: the tag-to-constructor map and the payload layout live in
+LANG's `toTree`, not in the `Shape`. So `Tag.of` sees only `refine "lang/term" (tree max depth)`, and a
+change to the term encoding moves the tag only if LANG changes the refine name. This is CODEC-5's
+weakness, in its largest instance. A per-node payload costs 4 length bytes even when empty.
+**Meta-critique.** I picked the generic s-expression because it was the smallest thing I could prove once.
+A typed fixpoint would carry more of the structure into the Shape. I have not measured whether the
+simpler proof is worth the opaque tag.
+Status: open (LANG to adopt; LANG/Wire.lean's readers become `ofTree`).

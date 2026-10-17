@@ -20,6 +20,8 @@ inductive Refusal where
   | wrongFrame (offset : Nat)
   /-- A refinement named `name` rejected the wire value decoded at `offset`. -/
   | rejected (offset : Nat) (name : String)
+  /-- A tree nested deeper than its declared depth `limit`. -/
+  | tooDeep (offset limit : Nat)
   deriving DecidableEq, Repr
 
 end Nanodregg.Codec

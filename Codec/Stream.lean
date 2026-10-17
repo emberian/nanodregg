@@ -38,6 +38,9 @@ inductive Shape where
   | framed (tag : Digest) (s : Shape)
   /-- One tag byte, then the shape that tag selects. -/
   | tagged (cases : List (UInt8 × Shape))
+  /-- `Codec.Tree`: nodes of a tag, a payload of at most `max` bytes, at most `max` children, nested at
+  most `depth` levels. -/
+  | tree (max depth : Nat)
   deriving Repr
 
 /-- A byte string of at most `max` bytes. -/

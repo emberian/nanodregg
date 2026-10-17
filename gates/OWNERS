@@ -8,6 +8,7 @@ Protocol/	PROTOCOL
 protocol/	PROTOCOL
 rows/	PROTOCOL
 client/	CLIENT
+client/src/generated.rs	CODEC
 sandbox/	CLIENT
 Lang/	LANG
 Emit/	CODEC
