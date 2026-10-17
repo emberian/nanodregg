@@ -241,3 +241,44 @@ scheduler beside lake's. **Critique.** A commit that itself makes a module's ela
 bomb) is killed every time and reads as load forever; the log names the module, and a second KILLED on a quiet
 box is the author's. **Meta-critique.** I declined the seat scheduler partly because it is big; the honest
 reason that survives is that it duplicates lake, and the 9-14 GB proof module is the defect to fix.
+
+## GATES-12 · The TCB table is gated: what the tree trusts without a proof has a row, pinned to what is actually used (2026-10-17)
+
+**Decision.** (ROOT ruling 10-18; HOSTING-5 created `gates/tcb.tsv` in 0eb0803.) `gates/tcb.py`, run by check.py as
+gate `tcb`, refuses by name: a malformed row, an unknown kind (trusted-unverified | verified | platform-fact) or
+owner (a layer in gates/OWNERS, or ROOT), two rows for one component; a crate of the root Cargo.lock on the
+crypto/TLS match list (`CRATES`/`PREFIXES` in tcb.py, data) with no row whose component is its name, or whose pin
+is not exactly its locked version set; a row for a listed crate no longer locked (stale); no `lean4` row, or its pin
+is not lean-toolchain's version; a native_decide allow row (an `…._native.native_decide.ax_…` axiom, or
+Lean.ofReduceBool/ofReduceNat/trustCompiler) whose theorem has no `native_decide:<theorem>` row pinned to the
+toolchain, and the converse stale row; a gates/native-allow.tsv module with no `extern:<module>` row, and the
+converse; a lake-manifest package with no row. This commit carries a row for every component that is matched today
+(42 rows beside HOSTING-5's two), with the text CODEC-6 and CLIENT-3 sent for theirs.
+**Alternatives.** (1) One `native_decide` row pointing at gates/axioms-allow.tsv. (2) Read the build graph (`cargo
+tree --target all`) instead of the lock. (3) Rows only for direct dependencies; transitive crates covered by their
+parent's row.
+**Why.** (1) A pointer row lets native_decides accrue with no TCB line ever being written: the gate would refuse
+nothing. One row per theorem, pinned to the toolchain, makes a toolchain bump re-read every compiler-trusted
+verdict. (2) The lock is a superset, deterministic and pure data: a locked crate is one feature away from built,
+and a source gate that runs cargo is a second build. The cost is rows that say "locked, outside every build
+graph … trusted for nothing today" (pkcs8, der, spki, const-oid, base64ct, rand_core, x509-parser, der-parser,
+asn1-rs*, oid-registry), measured with cargo tree at 0eb0803. (3) A bug in block-buffer or subtle breaks the
+signer as surely as one in sha2; a row per crate is what makes a new transitive crate visible in review.
+**Plants** (`logs/gates3-plants.sh`, candidate = main + the gate files + one mutation, judged by pre-push
+--no-build): control `PRE-PUSH GREEN`; `tcb: crate untrusted 0.9.0 is in Cargo.lock with no gates/tcb.tsv row`;
+a new locked crate `tcb: crate hmac 0.12.1 is in Cargo.lock with no gates/tcb.tsv row`; `tcb: crate ring: gates/tcb.tsv
+pin 0.17.13 but Cargo.lock has 0.17.14`; `tcb: stale gates/tcb.tsv row: crate sha3 is not in Cargo.lock`; `tcb:
+native_decide allow row for Nanodregg.Kernel.Proofs.planted with no gates/tcb.tsv row
+native_decide:Nanodregg.Kernel.Proofs.planted`; `tcb: lean4: gates/tcb.tsv pin v4.29.0 but lean-toolchain is v4.30.0`;
+`tcb: native-allow module Host.File (trusted C) with no gates/tcb.tsv row extern:Host.File`; `tcb: gates/tcb.tsv:5:
+ring: kind 'trusted' is not one of …` and `owner 'NOBODY' is not a layer in gates/OWNERS`.
+**Critique.** The match list is a name list: a crypto crate under a name it does not know (a new RustCrypto crate,
+a vendored fork, a `-sys` wrapper under another name) passes with no row, and the gate cannot tell. The gate checks
+that a row EXISTS and its pin matches; it cannot check that "trusted for" is true or complete: the rows for
+platform binaries (nd-bwrap, sandbox-exec, cc) carry sha256 pins nothing re-measures, and Lean's own Lean-side
+trusted code (CODEC's Sha512 and Hash rows, which CODEC-6 adds itself) is not detectable by any rule here, so those
+rows depend on the layer writing them. **Meta-critique.** I made the gate as strict as data allows (lock not
+build graph, every transitive crate) partly because strictness is easy to defend; the honest cost is ~15 rows that
+say "trusted for nothing", which is noise a reader must skip, and the unmatched-name hole is the one that matters.
+Reopen if a crypto crate lands that the list did not name: then the list is wrong, not the commit.
+**Status.** built (this commit).

@@ -10,6 +10,7 @@ import owners
 import refusals
 import runs
 import size
+import tcb
 import tree
 import waste
 
@@ -80,6 +81,7 @@ results = {
     "size": size.check(t, msg, tree.read(a.base_tree) if a.base_tree and has_lakefile(a.base_tree) else None),
     "paths": case_collisions(t.root) + conflict_markers(t.root),
     "runs": runs.check(t),
+    "tcb": tcb.check(t.root),
     "waste": waste.check(read(os.path.join(t.root, "gates", "waste.tsv")) or "", read(a.base_waste), msg),
 }
 if changed is not None:
