@@ -754,7 +754,7 @@ much as a closed hole.
 **Status.** landed (this commit); the cross-World envelope line in row wrongWorld follows
 PROTOCOL-6's rebuild of that row.
 
-## PROTOCOL-29 · a carry (OPS-P1) must keep the live journal, or the attempt store calls a committed call refused (2026-10-17, PROTOCOL-6; answers OPS-P1's question to PROTOCOL)
+## PROTOCOL-30 · a carry (OPS-P1) must keep the live journal, or the attempt store calls a committed call refused (2026-10-17, PROTOCOL-6; answers OPS-P1's question to PROTOCOL)
 **The question.** After a carry (re-genesis under a new origin, carried cells, no history), does a
 client need a refusal `worldChanged`, or is `wrongWorld` on the first call enough?
 **Finding.** The name is enough. The danger is in the attempt store. An attempt whose reply was lost,
