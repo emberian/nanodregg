@@ -13,7 +13,8 @@ is the kernel's or the receive layer's.
   admitted, `Host.Proofs.Serve.lookup_expired_final` over KERNEL's `absent_final`), else `absent`
   (it may still land: HOST-8).
 * `log` — PROTOCOL's read envelope (`Envelope.check`: a live member, its current key, the signature,
-  `validUntil`, a follow grant live to a root) against the World as the batch has advanced it, so
+  a follow grant live to a root, then `validUntil`; refused by `ReadRefusal.payload`, which for
+  `expired` states the World's height, PROTOCOL-19) against the World as the batch has advanced it, so
   a revocation earlier in the batch applies; then a page of the durable log from `start`, built
   after the batch's sync (`Host.Page`);
 * `read` — the same envelope, then a page of the newest base's World bytes from byte `start`
@@ -96,14 +97,14 @@ def handle (X : Ctx D) (w : World D) (f : Frame) : Answer (World D) (Turn D) :=
     | none => refuse (named Protocol.ReadRefusal.badEnvelope.name)
     | some e =>
       match Protocol.Envelope.check X w e with
-      | .error r => refuse (named r.name)
+      | .error r => .reply Protocol.Status.refused.code r.payload
       | .ok () => .defer (.read e.start)
   | some .log =>
     match Protocol.Envelope.ofBytes X f.payload with
     | none => refuse (named Protocol.ReadRefusal.badEnvelope.name)
     | some e =>
       match Protocol.Envelope.check X w e with
-      | .error r => refuse (named r.name)
+      | .error r => .reply Protocol.Status.refused.code r.payload
       | .ok () => .defer (.log e.start)
   | some .command => refuse (named (FrameRefusal.wrongSocket .command).name)
   | some .resume => refuse (named (FrameRefusal.wrongSocket .resume).name)

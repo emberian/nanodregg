@@ -4,9 +4,14 @@
 `log` (and `read`) carry an envelope: the member, its follow grant, the height to read from, a
 `validUntil` height, the member's current key and its signature over `Envelope.message`. The Host
 answers only when `Envelope.check` accepts (`Protocol.Proofs.Envelope.check_ok_iff`): the member is
-live and the key is its current one, the signature verifies, the World has not passed
-`validUntil`, and the follow grant's chain is live to a root (`Receive.mayFollow`, PROTOCOL-3).
-A replayed envelope re-reads at most what its signer may read, and only until `validUntil`.
+live and the key is its current one, the signature verifies, the follow grant's chain is live to a
+root (`Receive.mayFollow`, PROTOCOL-3), and the World has not passed `validUntil`. A replayed
+envelope re-reads at most what its signer may read, and only until `validUntil`.
+
+Expiry is checked LAST, and `expired` states the writer's height (PROTOCOL-19): a member more than
+a window behind the tip cannot know the height to sign for, so the Host tells it, and only it
+(`Envelope.check_expired_authenticated`: the height reaches only the current key of a live member
+whose follow grant is live). Follow re-signs once with `validUntil` = that height + window.
 -/
 import Kernel.Receive.Follow
 import Protocol.Frames
@@ -30,14 +35,29 @@ inductive ReadRefusal
   /-- not a live member, or not its current key -/
   | unknownKey
   | badSignature
-  | expired
+  /-- the World is past the envelope's `validUntil`; the writer's height is stated -/
+  | expired (height : Nat)
   | noFollowGrant
   deriving DecidableEq, Repr
 
 /-- The refusal's name on the wire (law 7; `ReadRefusal.name_injective`). -/
 def ReadRefusal.name : ReadRefusal → String
   | .badEnvelope => "badEnvelope" | .unknownKey => "unknownKey" | .badSignature => "badSignature"
-  | .expired => "expired" | .noFollowGrant => "noFollowGrant"
+  | .expired _ => "expired" | .noFollowGrant => "noFollowGrant"
+
+def expiredName : ByteArray := "expired".toUTF8
+
+/-- The refusal's payload in a `refused` reply: its name as UTF-8, except `expired`, which is
+`expiredRefusalLayout` (the name, then the writer's height). -/
+def ReadRefusal.payload : ReadRefusal → ByteArray
+  | .expired h => expiredRefusalFrame.bytes (⟨expiredName, by decide⟩, h.toUInt64, ())
+  | r => r.name.toUTF8
+
+/-- The writer's height a refused `log` or `read` payload states, if it is `expired`'s. -/
+def expiredHeight? (b : ByteArray) : Option Nat :=
+  match expiredRefusalFrame.decode b with
+  | .ok (n, h, ()) => if n.1 = expiredName then some h.toNat else none
+  | .error _ => none
 
 def domEnvelope : ByteArray := "nanodregg/protocol/read-envelope/v1".toUTF8
 
@@ -56,8 +76,8 @@ def currentKey (w : World D) (member : D) : Option ByteArray :=
 def Envelope.check (X : Ctx D) (w : World D) (e : Envelope D) : Except ReadRefusal Unit := do
   req (currentKey w e.member = some e.key) .unknownKey
   req (X.verify e.key (Envelope.message X e.member e.grant e.start e.validUntil) e.signature) .badSignature
-  req (w.height ≤ e.validUntil) .expired
   req (mayFollow X w e.member e.grant) .noFollowGrant
+  req (w.height ≤ e.validUntil) (.expired w.height)
 
 def Envelope.bytes (X : Ctx D) (e : Envelope D) : Option ByteArray := do
   let f := Text.fit Bounds.frameBytesMax

@@ -122,6 +122,9 @@ inductive Mutation
   | lieTip
   /-- the writer serves its newest base with one World byte flipped, stating the honest digest -/
   | forgeBase
+  /-- the writer refuses an expired envelope by the name alone, stating no height (PROTOCOL-12's
+  shape, before PROTOCOL-19) -/
+  | unstatedExpiry
   deriving DecidableEq, Repr
 
 /-- A row's plant: the mutation, and the line that must catch it with the outcome it then gets. -/
@@ -306,6 +309,22 @@ def paging : Row where
     { actor := "auditor", act := .cmd ["read", "@shared", "2=1", "3=9"], expect := .ok, fault := .cold }])
   plant := .caught .lieTip 11 (.refused "expect")
 
+/-- A follower that cold-starts more than two windows behind the tip (PROTOCOL-19): its first
+envelope, signed for its own height + window, is refused `expired` with the writer's height; follow
+re-signs ONCE for that height + window, and every later page's envelope covers the tip the
+previous page stated, so it reaches the tip. New in nanodregg (the defect was found by reasoning,
+PROTOCOL-19); every rows actor's window is 100, so 210 writes put the tip two windows past genesis. -/
+def coldCatchUp : Row where
+  name := "coldCatchUp"
+  replaces := []
+  ops := everyWrite
+  kinds := ["enroll", "install", "create", "grant", "write"]
+  drive := .members (welcome ++ join "sponsor" "auditor" ++ [
+    { actor := "newcomer", act := .cmd ["write", "@shared", "2", "1", "--via", "@g"], expect := .ok,
+      times := 210 },
+    { actor := "auditor", act := .cmd ["read", "@shared", "2=1"], expect := .ok, fault := .cold }])
+  plant := .caught .unstatedExpiry 10 (.refused "expired")
+
 /-- THIN (PROTOCOL-14, option A; minidregg's `journey.d/jthin-consent.sh`, which drove the
 deleted thin consent frames 230–232): a member that never folded the log adopts the writer's
 newest base, pinned by a full follower's word, then is an ordinary follower from the base on: it
@@ -449,7 +468,7 @@ def langJourney : Row where
   plant := .internal "a program whose judge admits everything: L4 set 101 must be admitted"
 
 def rows : List Row :=
-  [journey, reopen, laws, rotate, audit, paging, thin, wrongWorld, pay, well, bounty, grain, hermes, bar,
+  [journey, reopen, laws, rotate, audit, paging, coldCatchUp, thin, wrongWorld, pay, well, bounty, grain, hermes, bar,
    langJourney]
 
 end Nanodregg.Protocol

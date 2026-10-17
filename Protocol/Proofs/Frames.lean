@@ -33,6 +33,8 @@ theorem logReplyFrame_lawful : Stream.Lawful logReplyFrame := Layout.codec_lawfu
 
 theorem custodyRefusalFrame_lawful : Stream.Lawful custodyRefusalFrame := Layout.codec_lawful _ _ _
 
+theorem expiredRefusalFrame_lawful : Stream.Lawful expiredRefusalFrame := Layout.codec_lawful _ _ _
+
 theorem readReplyFrame_lawful : Stream.Lawful readReplyFrame := Layout.codec_lawful _ _ _
 
 end Nanodregg.Protocol

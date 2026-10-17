@@ -55,6 +55,7 @@ def sys : Option Mutation → Sys
   | some .advanceOnSend => { writer := { X := Sim.ctx }, follow := Sim.ctx, advanceOnSend := true }
   | some .lieTip => { writer := { X := Sim.ctx, lieTip := true }, follow := Sim.ctx }
   | some .forgeBase => { writer := { X := Sim.ctx, forgeBase := true }, follow := Sim.ctx }
+  | some .unstatedExpiry => { writer := { X := Sim.ctx, unstatedExpiry := true }, follow := Sim.ctx }
 
 /-! ## Actors -/
 

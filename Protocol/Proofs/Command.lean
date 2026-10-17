@@ -85,4 +85,26 @@ theorem step_submit_planned {X : Ctx D} {B : Thin.Base (World D)} {me : Self D}
                   exact ⟨rfl, rfl, _, _, _, _, ‹plan _ _ _ _ _ = _›, rfl⟩))
   done
 
+omit [Ord D] [DecidableEq D] in
+/-- The expiry retry is ONE per command: once a command has re-signed, a further `expired` ends it
+`expired` by name (PROTOCOL-19). -/
+theorem reSign_tried (me : Self D) (upTo height : Nat) :
+    reSign (D := D) me true upTo height = .error (.expired height) := by
+  simp [reSign]
+
+omit [Ord D] [DecidableEq D] in
+/-- A re-signed envelope covers the writer's stated height by exactly one window, and only when
+the refused envelope did not already cover it (a writer that contradicts itself gets no second
+signature). -/
+theorem reSign_ok {me : Self D} {tried : Bool} {upTo height upTo' : Nat}
+    (h : reSign (D := D) me tried upTo height = .ok upTo') :
+    tried = false ∧ upTo < height ∧ upTo' = height + me.window ∧ upTo' < 2 ^ 64 := by
+  unfold reSign at h
+  split at h
+  · rename_i hc
+    cases h
+    simp only [Bool.and_eq_true, Bool.not_eq_true', decide_eq_true_eq] at hc
+    exact ⟨hc.1.1, hc.1.2, rfl, hc.2⟩
+  · cases h
+
 end Nanodregg.Protocol.Command

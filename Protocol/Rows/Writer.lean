@@ -40,6 +40,9 @@ structure Params where
   /-- `read` pages serve the newest base with one World byte flipped, stating the honest digest (a
   plant: a forged base) -/
   forgeBase : Bool := false
+  /-- an `expired` refusal states the name alone, no height (a plant: the shape before
+  PROTOCOL-19, which leaves a follower more than a window behind unable to catch up) -/
+  unstatedExpiry : Bool := false
 
 /-- Small enough that a row of a few dozen turns seals bases; the deployed bounds on size. -/
 def cadence : Cadence :=
@@ -64,7 +67,10 @@ def machine (P : Params) : Machine (World D) (Turn D) (Reject D) Frame where
       match Envelope.ofBytes P.X f.payload with
       | some e => .defer (.log e.start)
       | none => Host.handle P.X w f
-    else Host.handle P.X w f
+    else match Host.handle P.X w f with
+      | .reply c p =>
+        if P.unstatedExpiry && (expiredHeight? p).isSome then .reply c "expired".toUTF8 else .reply c p
+      | a => a
   refuse w t r := Host.onReject P.X w t r
   ok := Status.ok.code
 

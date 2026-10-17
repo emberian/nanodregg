@@ -279,6 +279,14 @@ member, grant, from, validUntil); `validUntil` bounds a replay to a window of he
 def envelopeLayout : Codec.Layout :=
   [.bytes "member", .bytes "grant", .bytes "from", .bytes "validUntil", .bytes "key", .bytes "signature"]
 
+/-- The `refused` payload of `log` and `read` when the envelope's `validUntil` is below the writer's
+height (PROTOCOL-19): the name `expired` as bytes, then that height, so an authenticated member
+more than a window behind re-signs once with `validUntil` = height + window. Every other refusal of
+the Host is its name as UTF-8; this payload starts with the name's length (`u32` 7: first byte
+0x07, which no name begins with). The Host states it only to the current key of a live member whose
+follow grant is live (`Envelope.check` checks expiry last). -/
+def expiredRefusalLayout : Codec.Layout := [.bytes "refusal", .u64 "height"]
+
 /-- The `log` reply's payload: the signed calls (events) logged from the requested height, in log
 order, then the writer's World height and log chain after the last of them, then `tip`, the
 writer's World height when the page was built. A follower re-derives every Turn from the events

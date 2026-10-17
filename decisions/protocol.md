@@ -472,7 +472,38 @@ under 128). Proposed fix: check the signature and the follow grant BEFORE expiry
 `validUntil` = that height + window; a replayer of a captured envelope learns only a height.
 **Critique.** A refusal carrying a number is a new wire shape (names only, so far). **Meta-critique.**
 I found it by reasoning, not by a row; the row that would show it needs a log past 128 heights.
-**Status.** open.
+**Status.** envelope half BUILT (PROTOCOL-5, 2026-10-17), below.
+
+**Built (2026-10-17, PROTOCOL-5; the envelope half, the Host arm agreed with HOST-5).**
+`Envelope.check` = key, signature, follow grant, THEN expiry; `ReadRefusal.expired (height)` states
+the World's height, and `Envelope.check_expired_authenticated` says it reaches only the current key
+of a live member that signed the envelope and whose follow grant is live (a stranger, a forger, a
+revoked member learn nothing). Wire: `expiredRefusalLayout` = [.bytes "refusal" ("expired"),
+.u64 "height"] as the `refused` payload (`ReadRefusal.payload`; every other refusal stays its UTF-8
+name); `expiredHeight?` reads it back (`expiredHeight?_payload`, canonical: `expiredHeight?_eq_some`),
+and no name is mistaken for it (`expiredHeight?_of_head`: a payload whose first byte is not 7 states
+no height; `expiredHeight?_name` for ReadRefusal's own names; HOST-5's ask). Host/Serve renders
+`r.payload` for `log` and `read` (two arms, CROSS-LAYER). Follow: the first envelope covers its own
+height + window, every later page's envelope the TIP the previous page stated + window, and an
+`expired` is re-signed ONCE a command for the stated height + window (`Command.reSign`:
+`reSign_tried`, `reSign_ok`; a stated height the refused envelope already covered, or a second
+`expired`, ends the command `refused expired`). `adopt` does the same from the pin's height. Row
+`coldCatchUp`: 210 writes (window 100), a follower cold from genesis reads at the tip; plant
+`unstatedExpiry` (the writer states the name alone, the old shape) caught at line 10: `refused expired`.
+**Alternatives.** Drop expiry for authenticated readers (a captured envelope at the tip page then
+reads every new event until revocation); sign `validUntil` relative to `start` (the same question:
+the member does not know how far the tip is); a status `retryAt` (a second refusal vocabulary).
+**Critique of the built shape.** The stated height is the writer's word, unauthenticated: an active
+man in the middle on the member's path can inflate it and so obtain an envelope valid until a far
+height (replayable, for that member's reads only, until its grant is revoked or its key rotated;
+`mayFollow` and the key are checked BEFORE expiry, so revocation still ends it). A member cannot
+bound the jump without knowing the tip. No row drives a thin member whose pin is older than a
+window (the adopt arm is the same `reSign`, but unexercised). **Meta-critique.** "One retry" is
+the ruling's word; I chose per COMMAND, not per page, because tip-based envelopes make every later
+page fresh, so a per-page retry would only buy signatures for a writer that outruns a window inside
+one command. The plant tests the HEIGHT on the wire, not the check ORDER: a writer that checks
+expiry first would still state the height (and leak it to strangers) and the row stays green; the
+order is held by `check_expired_authenticated`, a theorem, not by a row.
 
 ## PROTOCOL-22 · every connection close is named: `Status.closed` + `CloseReason`; the idle rule waits for nothing in flight (2026-10-17, BUILD-TRANSPORT; ASSEMBLY-transport-consent D5, scout T2)
 **Decision.** The supervisor's mux (and `nd-attach`, the box end of a friend's ssh channel) ends a

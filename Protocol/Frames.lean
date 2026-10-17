@@ -44,6 +44,9 @@ def logReplyFrame : Stream (Layout.Ty Bounds.frameBytesMax logReplyLayout) :=
 def custodyRefusalFrame : Stream (Layout.Ty Bounds.frameBytesMax custodyRefusalLayout) :=
   Layout.codec Bounds.frameBytesMax (by decide) custodyRefusalLayout
 
+def expiredRefusalFrame : Stream (Layout.Ty Bounds.frameBytesMax expiredRefusalLayout) :=
+  Layout.codec Bounds.frameBytesMax (by decide) expiredRefusalLayout
+
 def readReplyFrame : Stream (Layout.Ty Bounds.frameBytesMax readReplyLayout) :=
   Layout.codec Bounds.frameBytesMax (by decide) readReplyLayout
 
