@@ -750,3 +750,125 @@ for `clean` would remove the template, but it is a bigger and differently-risky 
 alternative rather than deferring it as "the real fix", because a printer's output is also only checked by
 running it.
 Status: built.
+
+## CODEC-28 · A refinement's lawfulness theorem is its check; the census refuses a refinement without one (CODEC-5/16's gap; CODEC-6, 2026-10-17)
+**The question first: which refinements can change what they mean while their shape stays the same?**
+There are 26 refine sites in the tree, counted by the census itself, not by grep: Codec 22, Host 3, Lang 1.
+They fall into two classes.
+
+*Filtering* (`accept` refuses some inner values; the predicate is what the refinement adds):
+`bool` (u8 ∈ {0,1}) · `kernel/discipline` (u8 < 4) · `kernel/ascending` (keys strictly ascend under `Ord D`)
+· `kernel/leaf-fit` (every slot holds its kind's leaf, KERNEL's `Leaf.fits`) · `kernel/trie-order` (the listing
+is `Trie.Canon (trieSpec E)`'s own) · `path/badComponent` (`Path.fits`) · `lang/data: no value` (nothing).
+
+*Iso* (`accept` is total and `back` is its inverse; the refinement only names the wire's positions):
+`i64` · `kernel/entry` · `kernel/slot` · `kernel/leaf` · `kernel/op` · `kernel/cell` · `kernel/act` ·
+`kernel/touch` · `kernel/turn` · `kernel/right` · `kernel/acct-ref` · `kernel/body` · `kernel/unsigned/v2` ·
+`kernel/call` · `kernel/world/v3` · `kernel/carried/v1` · `host/entry` · `host/base` · `host/carried-head`.
+
+All 26 already had a canonicity theorem (`LawfulOn Q c` / `Lawful c`) except `host/base`, which HOST-9 landed
+at 40fe056 for this census. `kernel/world` and `kernel/carried` are canonical up to `Equiv`, through
+`world_decode_bytes` and `carried_decode_iff`. No refinement's `accept` disagrees with its stated predicate
+today, so there is no defect to fix forward.
+
+**Finding.** Option (a) of CODEC-5's handoff was already mostly built. `LawfulOn Q c` determines a decoder
+completely: `decode b = .ok v ↔ Q v ∧ b = bytes v` (`LawfulOn.decode_eq_ok_iff`). What was missing is the
+theorem that this pins `accept`, plus a check that no refinement goes without it.
+`Codec/Proofs/Refine.lean`, `refine_accept_iff`: if the inner codec is lawful on `P` and `refine name c accept
+back` is lawful on `R` (with `R y → P (back y)`), then for every inner value `x` with `P x`,
+`accept x = some y ↔ x = back y ∧ R y`. So changing what `accept` admits without changing `R` breaks the
+theorem; that is a proof break, not a broken promise. The teeth are the three ways an edit goes wrong:
+- `refine_not_lawful_of_refuses`: an `R`-value is refused.
+- `refine_not_lawful_of_admits`: a non-`R` value is admitted.
+- `refine_not_lawful_of_respells`: a second spelling is admitted.
+
+`Codec/Proofs/RefineTooth.lean` instantiates them, at `Kernel.Sim`'s parameters, on the mutation a careless
+edit would make. Each mutant keeps its name, so it keeps its shape and tag, and each is proved not lawful on
+the predicate its theorem states.
+- `bool_tooth`: nonzero reads as true.
+- `discipline_tooth`: ≥ 3 reads as value.
+- `ascending_tooth`: the check is dropped and a repeated key is admitted.
+- `leafFit_tooth`: the check is dropped and a nullifier holding an entry is admitted.
+- `trieOrder_tooth`: build kept, listing check dropped, so a swapped listing is a second spelling.
+- `slot_tooth`: the kinds are swapped in `accept` alone.
+
+**The gate.** `Census/Refines.lean` `#refine_census "gates/refines-allow.tsv" <libs>` runs from gates/census.py
+in the same environment as the axiom census, agreed with GATES-2. A refine site is a definition whose body, under
+its lambdas, is `Stream.refine "<literal>" …` or a `Stream.mk` whose shape is `Shape.refine "<literal>" …`.
+Each site needs a theorem whose conclusion, after its binders, is `Lawful (c …)` or `LawfulOn P (c …)`, with
+`c` as the head constant and `P` not syntactically `fun _ => False`. An allow row names the theorems that
+state the site's decode, and the census checks that each one exists and has `decode (c …)` in its type. A
+row that matches no site, or one for a site that has its own theorem, is red. Today:
+`REFINE-CENSUS ok: 26 refine sites, 24 with a lawfulness theorem, 2 by allow row`.
+Plants, run on a scratch module, each red by name:
+- `refine site …plantBool ("plant/bool") has no lawfulness theorem`;
+- a theorem about another codec (`plant_other : Lawful bool`) leaves plantBool red, and named in an allow row
+  for `i64` it is `states no decode of …i64`;
+- `allow row is stale: …bool has its own lawfulness theorem`.
+
+**What the content tag covers now, and what it still cannot see.** A tag is `H(label, shape)`, and a
+refinement contributes only its name to the shape. With every refinement carrying a lawfulness theorem, the
+tag plus the tree's theorems now cover:
+- the byte grammar (the shape);
+- every refinement's accepted set, as its theorem states it. Changing what `accept` admits means editing a
+  theorem statement in a Codec proof module, which is where the name sits.
+
+It still cannot see three things.
+1. **A relabelling.** If `accept` and `back` are changed together so their composite stays lawful on the same
+   predicate, the shape, the name, the tag and every theorem all stay the same. `slot_relabel_unseen` proves
+   that one exists: `slot` with cell and nullifier swapped in both functions is lawful on the same predicate,
+   has the same shape, and writes `.cell 0` as different bytes, so a stored cell slot would be read back as a
+   nullifier. The exposure is every iso refinement with two same-typed positions:
+   - slot: cell/nullifier;
+   - right: observe/mutate and invoke/enroll;
+   - act: keep/retire;
+   - turn and unsigned: notBefore/validUntil/charge, world/member;
+   - touch: cell/seen;
+   - world, carried, host/base, host/entry, carried-head: their Nat and digest fields;
+   - bool and discipline: their codes;
+   - i64: any bijection of 8 bytes.
+
+   Only a theorem that restates `back` could pin these, and that would be a twin of the definition.
+2. **A predicate that is relative to another layer's definitions.** `kernel/trie-order`'s `Q` is
+   `Trie.Canon (trieSpec E)`, `kernel/leaf-fit`'s is KERNEL's `Leaf.fits`, and `kernel/ascending`'s is `Ord D`.
+   A KERNEL edit to `trieSpec` (depth, bit order) changes what `kernel/trie-order` accepts, the Codec theorem
+   still proves, and the tag stays. Owed next, as CODEC-28's second step: a deployed theorem that
+   `kernel/trie-order` accepts exactly the listings strictly ascending by (kind, id bytes) with each slot
+   holding its kind's leaf, stated without `Trie`. A routing change then breaks a Codec theorem.
+3. **Hand versions inside names.** `kernel/world/v3`, `kernel/carried/v1` and `kernel/unsigned/v2` are option
+   (b) living on inside the content-addressed scheme. They are deleted in the World's next flag day (the
+   journal refusal agreed with KERNEL-10, 10-17), where the tag moves anyway. From then on, each refinement's
+   name is the name it refuses with.
+
+**Alternatives.**
+- (b) A version in each name, bumped by hand. That is a promise, and the three survivors above show it decays
+  into decoration.
+- (c) A gate that hashes the refine functions' elaborated terms (or source) into the tag. It does see a
+  relabelling. But it couples every tag to proof-irrelevant refactors (KERNEL-35's emptyHash change would have
+  rotated every trie tag), it reaches transitively into other layers' definitions, and its terms move with the
+  toolchain. Every false positive forces a re-genesis and kills the carry across a flag day that CODEC-22 keeps
+  on purpose.
+- (d) A semantic pin keyed by tag: for each codec, the decoded `repr` of bytes sampled deterministically from
+  its shape, with the gate refusing when the repr changes under an unchanged tag. This would see relabellings
+  that (a) cannot. But it is a pin table, which is what CODEC-5 deleted. It needs `Repr` for every kernel type.
+  It sees only what one sample distinguishes, and it moves on a field RENAME. Not built; put to ROOT as the one
+  open fork.
+
+**Why (a).** It turns the accepted-set half of the promise into a check, with no table, no hash, and no
+coupling to refactors. The theorems it rests on were already the codecs' canonicity proofs, so the new
+machinery is one lemma, its teeth, and a census.
+
+**Critique.** (a) detects a careless edit, not a deliberate one. Someone who changes `accept` and its predicate
+together, under the same name, gets green theorems and an unmoved tag. The census makes that edit land in a
+proof module, next to the name, but nothing forces the rename. A relabelling (1) passes everything. The
+census recognises refine sites syntactically: a codec built by a helper that wraps `refine` behind a
+non-literal name, the way `Stream.refine` itself does, is not a site. Today the only such helpers are the
+combinators, which are generic in the name. And a `LawfulOn P` with a vacuous but not literally-False `P` would
+pass the census; the second-agent statement read (law 6) is what catches that.
+**Meta-critique.** I came in expecting to write 26 new theorems and found 24 already standing. The pull was to
+write them anyway, because "a theorem per refine" was the brief. Restating what `LawfulOn` already says would
+have been 26 twins. The bias that remains is the one CODEC-22 named: I favour the mechanism I already have
+(content tags plus canonicity) and priced (d) as a pin table partly because CODEC-5 rejected pins. That
+rejection was about pins as IDENTITY, and (d) would be a pin as DETECTOR, so the fork is real and ROOT's.
+Status: built (census, refine_accept_iff, teeth); step 2 (trie-order stated in bytes) and the version-suffix
+deletion are in progress.
