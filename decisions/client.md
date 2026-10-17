@@ -537,3 +537,33 @@ cred. Mutations, each red: the count check, the link check, the socket check, th
 owner branch, the ancestor walk, the overlap, the scan, the Linux directory bind, CONNECT_FILTERED
 flipped, the shared-dir mode.
 **Status.** landed (this commit).
+
+## CLIENT-21 nd-supervise `--group GID`: a socket another uid of one group may connect to (2026-10-17, CLIENT-3; ROOT ruling on HOSTING-17 §7, OPS-3, HOST-10)
+
+**Decision.** By default nd-supervise binds its socket 0600, owner-only, as before. With `--group GID`
+(a NUMERIC gid: OPS-3 renders it from the install step's `getent group nd`, operator data, never an
+NSS lookup in Rust), the socket is bound 0660, and nd-supervise refuses at launch
+(`refusedAtLaunch`) unless the socket's directory passes `custody::check_shared_dir`: owned by the
+euid, mode exactly 02710, a trusted parent chain (CLIENT-19), and its group equal to GID. The refusals
+are named `sharedDirRefused: <Refused>` (wrong mode, owner, link, missing directory, untrusted
+chain) and `groupMismatch`. The checks do not depend on the argument (OPS-3), so a wrong ND_GID is
+refused, never served. The socket is created under umask 0177 and widened only after the checks;
+the umask is restored before the child starts, so the child inherits the operator's umask. The
+setgid directory gives the socket its group, so no separate check of the socket's gid is made (it
+would be unreachable, and an unreachable check cannot go red).
+Path (HOST-10): `/run/nd-follow/<label>/follow.sock`, with `/run/nd-follow` and every `<label>`
+02710 nd-hosted:nd, created by OPS-3's tmpfiles. nd-supervise never creates a directory; a missing
+one is `sharedDirRefused`. The driver is the existing `nd` running as nd. Principle (ROOT): the
+trusted side initiates to the less-trusted side, never the reverse.
+**Alternatives.** A group name (needs NSS, or a hand parse of /etc/group: a twin of libc); a mode
+argument (it would admit 0666); binding a shared directory the supervisor creates (it would then
+decide placement).
+**Critique.** The accepting case runs as one uid on hbox: the 0660 socket is reached by a peer in the
+group only in the deployment (nd, as a second uid). On one uid the plant checks the mode and group
+bits, not a cross-uid connect: DECLARED UNRUN.
+**Plants.** client/tests/supervise.rs `a_group_socket_binds_0660_only_in_a_shared_directory_of_that_group`:
+a 02710 directory binds 0660 with the directory's group; another group is `groupMismatch`; a 0710
+directory and a missing one are `sharedDirRefused`; the control (no `--group`) binds 0600.
+Mutations, each red: the directory check skipped, its group comparison ignored, the group mode
+0600, the default mode 0660.
+**Status.** landed (this commit).

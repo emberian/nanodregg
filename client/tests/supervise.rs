@@ -1,7 +1,7 @@
 //! The supervisor end to end: `nd-supervise` binds a socket, confines a child, and routes frames.
 //! The child here answers each request with whether IT could read the member's seed — the
 //! CLIENT-8 plant through the real binary: the answer must be "denied".
-#![allow(clippy::unwrap_used)] // a plant that cannot set up is a failed plant
+#![allow(clippy::unwrap_used, clippy::panic)] // a plant that cannot set up is a failed plant
 use std::os::unix::net::UnixStream;
 use std::process::Command;
 use std::time::Duration;
@@ -170,4 +170,102 @@ fn a_confined_child_killed_by_a_signal_is_child_signaled() {
         "{}",
         String::from_utf8_lossy(&out.stderr)
     );
+}
+
+/// `nd-supervise SOCK [--group G] --hide WS --exec /usr/bin/cat -- /usr/bin/cat`, waited on until it
+/// binds or exits; the exit status and stderr when it exits first.
+fn launch_group(
+    sock: &std::path::Path,
+    ws: &std::path::Path,
+    group: Option<u32>,
+) -> Result<common::Supervisor, (Option<i32>, String)> {
+    let mut c = Command::new(env!("CARGO_BIN_EXE_nd-supervise"));
+    c.arg(sock);
+    if let Some(g) = group {
+        c.arg("--group").arg(g.to_string());
+    }
+    c.arg("--hide")
+        .arg(ws)
+        .args(["--exec", "/usr/bin/cat", "--", "/usr/bin/cat"]);
+    let mut child = c
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        if let Some(st) = child.try_wait().unwrap() {
+            let mut e = String::new();
+            std::io::Read::read_to_string(&mut child.stderr.take().unwrap(), &mut e).unwrap();
+            return Err((st.code(), e));
+        }
+        if UnixStream::connect(sock).is_ok() {
+            let mut pid = sock.as_os_str().to_owned();
+            pid.push(".pid");
+            return Ok(common::Supervisor::hold(child, pid.into()));
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "neverBound: {}",
+            sock.display()
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// HOSTING-17 §7: with `--group G` the socket is 0660 group G, only in a shared (02710, ours,
+/// group G) directory; a non-setgid directory, another group, or a missing directory is refused at
+/// launch by name. Control: without `--group` the socket is 0600.
+#[test]
+fn a_group_socket_binds_0660_only_in_a_shared_directory_of_that_group() {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    let root = nanodregg_devtools::scratch(&format!("sup-grp-{}", std::process::id()));
+    let ws = root.join("ws");
+    nanodregg_devtools::mkdirs(&ws).unwrap();
+    let shared = root.join("f");
+    nanodregg_devtools::mkdirs(&shared).unwrap();
+    std::fs::set_permissions(&shared, std::fs::Permissions::from_mode(0o2710)).unwrap();
+    let g = std::fs::metadata(&shared).unwrap().gid();
+    let sock = shared.join("follow.sock");
+    let held = launch_group(&sock, &ws, Some(g))
+        .map_err(|e| format!("{e:?}"))
+        .unwrap();
+    let m = std::fs::symlink_metadata(&sock).unwrap();
+    assert_eq!((m.permissions().mode() & 0o7777, m.gid()), (0o660, g));
+    drop(held);
+    let refused = |dir: &std::path::Path, group: u32, name: &str| {
+        let (code, err) = launch_group(&dir.join("follow.sock"), &ws, Some(group))
+            .err()
+            .unwrap_or_else(|| panic!("plant: {} launched", dir.display()));
+        assert_eq!(
+            code,
+            Some(i32::from(
+                nanodregg_client::generated::supervisor_exit::REFUSED_AT_LAUNCH
+            ))
+        );
+        assert!(err.contains(name), "{name}: {err}");
+    };
+    refused(&shared, g + 1, "groupMismatch");
+    let plain = root.join("p");
+    nanodregg_devtools::mkdirs(&plain).unwrap();
+    std::fs::set_permissions(&plain, std::fs::Permissions::from_mode(0o710)).unwrap();
+    refused(&plain, g, "sharedDirRefused");
+    refused(&root.join("missing"), g, "sharedDirRefused");
+    // Control: the default is owner-only.
+    let own = root.join("o");
+    nanodregg_devtools::mkdirs(&own).unwrap();
+    let held = launch_group(&own.join("s.sock"), &ws, None)
+        .map_err(|e| format!("{e:?}"))
+        .unwrap();
+    assert_eq!(
+        std::fs::symlink_metadata(own.join("s.sock"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o7777,
+        0o600
+    );
+    drop(held);
+    let _ = std::fs::remove_dir_all(&root);
 }
