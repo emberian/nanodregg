@@ -20,7 +20,7 @@ def digestAt (X : Ctx D) (cell : Cell) (key : Nat) : Option D := cell.slots.get 
 carrying `observe`, every link up to a founder's genesis grant live too. The same `walk` as every
 other right, over the whole World (a follower's request pins nothing). -/
 def mayFollow (X : Ctx D) (w : World D) (member g : D) : Bool :=
-  match walk X (fun c => .ok (w.live c)) (worldId X) .observe grantDepthMax g member with
+  match walk X (fun c => .ok (w.live c)) (worldId X) .observe true grantDepthMax g member with
   | .ok _ => true
   | .error _ => false
 

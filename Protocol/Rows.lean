@@ -174,7 +174,12 @@ def lawPackage (l verdict : String) : String :=
     (body (record ({l} (fn (old (rec)) (new (rec)) (r {reqTy}) {verdict})))))"
 
 def permitAll : String := lawPackage "permit" s!"(inj {verdictTy} ok (record))"
-def denyAll : String := lawPackage "deny" s!"(inj {verdictTy} refused \"deny-all\")"
+/-- Admits a birth (so it can be adopted: LANG-19 judges a new law over the state it is adopted
+over as a birth, KERNEL-27) and refuses every other act: writes, invokes and its own replacement.
+A deny-all law cannot be adopted at all, so this is what "deny the newcomer and the repair" is. -/
+def sealedLaw : String :=
+  let no := s!"(inj {verdictTy} refused \"sealed\")"
+  lawPackage "sealed" s!"(case (. r occasion) (birth x (inj {verdictTy} ok (record))) (invoke x {no}) (relaw x {no}) (write x {no}))"
 def hermesLaw : String := lawPackage "hermes" s!"(inj {verdictTy} ok (record))"
 
 /-! ## The rows -/
@@ -236,14 +241,14 @@ def reopen : Row where
     ok "newcomer" ["write", "@shared", "2", "4", "--via", "@g"]])
   plant := .caught .forgetJournal 9 .absent
 
-/-- J7, J8: a law replaced keeps the grant; deny-all refuses the newcomer and the repair. -/
+/-- J7, J8: a law replaced keeps the grant; a sealed law refuses the newcomer and the repair. -/
 def laws : Row where
   name := "laws"
   replaces := ["journey/J7", "journey/J8", "journey/J13"]
   ops := everyWrite
   kinds := ["enroll", "install", "create", "grant", "write", "law"]
   drive := .members (welcome ++ [
-    okBind "sponsor" ["install", denyAll] "deny",
+    okBind "sponsor" ["install", sealedLaw] "deny",
     ok "newcomer" ["write", "@shared", "2", "7", "--via", "@g"],
     ok "sponsor" ["law", "@shared", "@deny"],
     no "newcomer" ["write", "@shared", "2", "8", "--via", "@g"] "lawDenied",

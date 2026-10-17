@@ -11,8 +11,8 @@ founders: A (the grain's owner) and B (another member, later the operator A gran
 * G3 a grain born `running` — refused `lawDenied` by `phase` (born-only-initial).
 * G4 a grain whose state names B as owner, created by A — refused `lawDenied` by `owner`.
 * G5 A starts it — admitted, `running`. G6 A starts it again — refused by `phase` (no double start).
-* G7 B, with no grant, stops it — refused by `owner`: KERNEL's `invoke` lets B act as itself, so
-  only the law stands between a stranger and another member's grain.
+* G7 B, with no grant, stops it — refused `noGrant` by KERNEL's `invoke` (KERNEL-25: owner-gated,
+  before any law runs).
 * G8 A stops it — `stopped`. G9 A grants B `invoke:0` (start only). G10 B starts it through the
   grant — admitted, `running`. G11 B stops it through the same grant — refused `grantRight`.
 * G12 A stops and removes it — `removed`. G13 A starts it — refused by `phase` (terminal).
@@ -24,7 +24,8 @@ founders: A (the grain's owner) and B (another member, later the operator A gran
 
 Plants (each must flip its line, or the run is RED):
 * P1 skip-judge: G3's grain born `running` is ADMITTED, G6's double start is ADMITTED;
-* P2 the package without its `owner` law: G7's stranger stop is ADMITTED.
+* P2 the package without its `owner` law: G7's stranger stop is STILL refused `noGrant` (the
+  kernel decides authority; the `owner` law no longer guards invoke and is HOSTING's to delete).
 
 The run is deterministic: a SEED argument (standing passes 1 2 3) changes nothing. It ends `ALL PASS`.
 -/
@@ -149,7 +150,8 @@ def journey (plant : Plant) (pkg : Package) : Run := Id.run do
   r := check r6 "G6 A starts again" (if plant = .skipJudge then .admitted else if plant = .none then .law "phase: no edge" else .law "phase") v6 none
   let (r7, v7, _) := ev r b .stop none
   if plant = .skipJudge then r := r7
-  else r := check r7 "G7 B (no grant) stops" (if plant = .noOwnerLaw then .admitted else .law "owner: not the owner") v7 none
+  -- KERNEL-25: the kernel refuses a stranger's invoke before any law runs, with or without `owner`
+  else r := check r7 "G7 B (no grant) stops" (.refusal "noGrant") v7 none
   if plant ≠ .none then return r
   let (r8, v8, _) := ev r a .stop none
   r := check r8 "G8 A stops" .admitted v8 (some .stopped)

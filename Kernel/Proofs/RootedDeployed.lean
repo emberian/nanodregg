@@ -31,7 +31,7 @@ theorem deployed_enroll_founder (program : Program Digest) (name : ByteArray) (a
     (h : enroll (ctx program) (pinned w c.unsigned.pins) c key next possession via = .ok t) :
     ∃ p r cell, GenesisRoot (ctx program) name r ∧ w.live r = some cell ∧
       slotDigest (ctx program) r cell grantIssuer = .ok p ∧
-      Chain (ctx program) (pinned w c.unsigned.pins) (worldId (ctx program)) (.enroll 0) via
+      Chain (ctx program) (pinned w c.unsigned.pins) (worldId (ctx program)) (.enroll 0) true via
         c.unsigned.member p := by
   obtain ⟨⟨p, hc⟩, _⟩ := enroll_authorized h
   have hlook : ∀ x v, pinned w c.unsigned.pins x = .ok v → v = w.live x := by

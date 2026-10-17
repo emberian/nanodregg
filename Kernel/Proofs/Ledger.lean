@@ -226,7 +226,7 @@ theorem transfer_authorized {X : Ctx D} {look : Pinned D} {c : Call D} {src dst 
     ∃ cell owner, readKind look src kindAccount = .ok cell ∧
       slotDigest X src cell slotOwner = .ok owner ∧
       (via = none ∧ c.unsigned.member = owner ∨
-        ∃ g, via = some g ∧ Chain X look src .mutate g c.unsigned.member owner) := by
+        ∃ g, via = some g ∧ Chain X look src .mutate true g c.unsigned.member owner) := by
   unfold transfer at h
   simp only [except_bind_ok] at h
   obtain ⟨⟨scell, sv⟩, hs, ⟨_, _⟩, _, principal, ha, _⟩ := h
@@ -250,7 +250,7 @@ theorem credit_authorized {X : Ctx D} {look : Pinned D} {c : Call D} {well acct 
     ∃ cell v owner, readKind look well kindAccount = .ok cell ∧ Value.ofCell cell = some v ∧
       v.denom = X.env.bytes well ∧ slotDigest X well cell slotOwner = .ok owner ∧
       (via = none ∧ c.unsigned.member = owner ∨
-        ∃ g, via = some g ∧ Chain X look well .mutate g c.unsigned.member owner) ∧
+        ∃ g, via = some g ∧ Chain X look well .mutate true g c.unsigned.member owner) ∧
       ∃ acell av, readKind look acct kindAccount = .ok acell ∧ Value.ofCell acell = some av ∧
         av.denom = v.denom := by
   unfold credit at h
@@ -327,7 +327,7 @@ theorem dispatch_value_born {X : Ctx D} {look : Pinned D} {c : Call D} {b : Body
       rw [sealTurn_creates h]; simp
   | law obj laws via =>
       simp only [dispatch, law, except_bind_ok] at h
-      obtain ⟨_, _, _, _, ⟨⟩, _, _, _, ⟨⟩, _, _, _, ⟨⟩, _, h⟩ := h
+      obtain ⟨_, _, _, _, ⟨⟩, _, _, _, ⟨⟩, _, _, _, ⟨⟩, _, ⟨⟩, _, h⟩ := h
       rw [sealTurn_creates h]; simp
   | invoke obj method args budget via =>
       simp only [dispatch, invoke, except_bind_ok] at h

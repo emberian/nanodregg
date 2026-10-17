@@ -352,7 +352,10 @@ def journey (mode : Mode) : Run := Id.run do
   let (r10c, v10c, _) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id, oobj, oid, tid]) (.law oobj [tid] none))
   r := { r10c with log := r.log, bad := r.bad }
   if mode = .eraseOccasion then
-    r := note r s!"PLANT erase-occasion: L10c the wrong replacement must now be admitted: {v10c}" (v10c == "admitted")
+    -- OnlyTo, told a write, now admits; the refusal is the incoming Tally judging the state it
+    -- would govern (LANG-19), which lacks Tally's fields
+    r := note r s!"PLANT erase-occasion: L10c OnlyTo must now pass the wrong replacement to the incoming laws: {v10c}"
+      (deniedWith v10c "state field approvals missing")
   else if mode != .skipJudge then
     r := note r s!"L10c A replaces OnlyTo by [Tally]: {v10c}" (deniedWith v10c "onlyTo: not the agreed laws")
   if mode != .eraseOccasion then

@@ -880,7 +880,7 @@ shape.
 **Meta-critique.** I left invoke open in KERNEL-6 because LANG's laws could check the principal. That is
 "a check exists somewhere" reasoning, and the default every package author inherits was OPEN. The kernel
 should decide authority once, and laws should narrow it.
-Status: ruled by ROOT, not yet built (one line plus a theorem; Mac builds are frozen, 10-17).
+Status: BUILT (KERNEL-5): invoke via ownerAuthority, theorem invoke_authorized; Sim arms invoke-owner:ok, invoke-no-grant:noGrant; plant principalOf in invoke ⇒ 56/64 seeds red.
 
 ## KERNEL-26 · Public objects: a grant whose grantee is the World means "any enrolled member" (KERNEL-4, 2026-10-17; ROOT ruled, not yet built)
 **Decision.** Under KERNEL-25 a non-owner invokes only through a grant chain. A public object (any hunter
@@ -897,7 +897,7 @@ object to everyone at once, and a carved child grant may narrow it (fewer method
 and a surprise for anyone who reads it as a snapshot.
 **Meta-critique.** Reusing `worldId` as a grantee is the economical move; the test is that `walk`'s
 grantee check gains exactly one disjunct and no other code learns about it.
-Status: ruled by ROOT; build after KERNEL-25.
+Status: BUILT (KERNEL-5): granteeHolds in walk (one disjunct), checkGrantee in grant, theorem granteeHolds_ok; Sim arms invoke-public:ok, invoke-public-method-1:grantRight; plant World disjunct off ⇒ red. A public grant is USED, never re-delegated: `walk` honours a World grantee only at the FIRST link (`pub`), and `checkParent` keeps requiring the parent grantee = the signer exactly, so the two agree on one shape (ROOT/review 10-17 named the disagreement; I chose the narrow side because the wide one let any member carve a public enrol pool into a private grant). Sim arm carve-public:noGrant. A public ENROL pool (a World-grantee grant carrying enroll n) is possible and is stated on enroll_authorized. Theorems added after review: invoke_stranger_noGrant (the refusal BY NAME), ownerAuthority_program_free (the laws only refine: the gate never reads the program).
 
 ## ROOT rulings on KERNEL-24..26 and LANG-19 (2026-10-17, recorded by KERNEL-4)
 - KERNEL-25: `noGrant` stands for a stranger's invoke (one condition, one name).
@@ -906,3 +906,12 @@ Status: ruled by ROOT; build after KERNEL-25.
   `relaw laws'`: a law that would deny its own current state cannot be installed; the install is
   governed by what it installs.
 - Order for KERNEL-5 (hbox): LEDGER D2 → LANG-3 Occasion → KERNEL-25 → KERNEL-24 → the World port.
+
+## KERNEL-27 · LANG-19 as built: `law` judges the NEW laws over the state as a BIRTH, not as `relaw laws'` (KERNEL-5, 2026-10-17; departs from ROOT's wording, reasoned below)
+**Decision.** `law` runs two judgements. First, the laws in force judge their replacement with `relaw laws'`, as before. Second, the incoming laws judge the unchanged state with occasion `.birth`. The second is the question "is this a state the object could begin under these laws?" A law that would deny its own current state cannot be installed.
+**Why not `relaw laws'` for the second judgement, as ruled.** With `relaw` for both, a law that refuses relaw refuses its own adoption, so it can never be installed. LANG's `Frozen` (L9/L10d) is exactly that law, and `relaw` is the occasion that law exists to refuse. Measured: lang-journey L10d went red ("frozen: laws are frozen") under `relaw`, and green under `.birth`. A birth is the existing act that means "the object starts under these laws with this state", and adopting a law over existing state is the same question. So no new constructor is needed, and LANG's occasion sum is unchanged.
+**Alternatives.** A fifth occasion `adopt`: it is honest, but every law in every package must handle a new arm (LANG's sum type, PROTOCOL's reqTy, HOSTING's texts), for a distinction no law has needed. `relaw laws'` (ROOT's wording): self-defeating for `Frozen`, as above.
+**Consequences.** A deny-all law can no longer be adopted by `law`. It already could not be born, because `create` judges the seed. PROTOCOL's `laws` row now uses a `sealed` law, which admits birth and refuses write, invoke and relaw. kernel-sim's stub gains `freeze`, which refuses write and invoke, and the arm `law-self:lawDenied` (deny-all denies its own adoption) is required. Plant: drop the second judge ⇒ law-self admitted, 54/64 seeds red.
+**Critique.** A law cannot tell its adoption over existing state apart from a fresh birth. A law that wants to forbid being added later ("only at birth") cannot say so. When such a law appears, `adopt` is the fix, and this decision is what it reverses.
+**Meta-critique.** I chose the existing constructor partly because it touches no other layer. That is a cost estimate, and this file forbids letting one decide. The deciding fact is semantic: birth and adoption ask the same question of the state, and `Frozen` proves `relaw` is the wrong answer.
+Status: built with KERNEL-25/26.

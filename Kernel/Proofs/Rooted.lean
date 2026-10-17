@@ -348,7 +348,7 @@ theorem dispatch_born {X : Ctx D} {look : Pinned D} {c : Call D} {b : Body D} {t
       rw [sealTurn_creates h]; simp
   | law obj laws via =>
       simp only [dispatch, law, except_bind_ok] at h
-      obtain ⟨_, _, _, _, ⟨⟩, _, _, _, ⟨⟩, _, _, _, ⟨⟩, _, h⟩ := h
+      obtain ⟨_, _, _, _, ⟨⟩, _, _, _, ⟨⟩, _, _, _, ⟨⟩, _, ⟨⟩, _, h⟩ := h
       rw [sealTurn_creates h]; simp
   | invoke obj method args budget via =>
       simp only [dispatch, invoke, except_bind_ok] at h
@@ -537,7 +537,6 @@ theorem slotDigest_ok {X : Ctx D} {id : D} {cell : Cell} {key : Nat} {d : D}
     | some b => rw [hb] at hd; exact ⟨b, rfl, hd⟩
   · simp at h
 
-omit [DecidableEq D] in
 /-- **A World right is a founder's.** Through a rooted World, a grant chain for a right on the World
 ends at a live root grant in `R` whose issuer is the chain's principal (with `genesis_rooted` and
 `audit_rooted`: a founder's genesis grant, issued by that founder).
@@ -545,9 +544,9 @@ Needs the digest decoder to be canonical (a slot read back as a digest IS that d
 theorem chain_rooted {X : Ctx D} {R : D → Prop} {w : World D} {look : Pinned D}
     (hw : WorldRooted X R w) (hlook : ∀ c v, look c = .ok v → v = w.live c)
     (hdig : ∀ b d, X.digestOf b = some d → b = X.env.bytes d) {right : Right} :
-    ∀ {g agent p : D}, Chain X look (worldId X) right g agent p →
+    ∀ {pub : Bool} {g agent p : D}, Chain X look (worldId X) right pub g agent p →
       ∃ r cell, R r ∧ w.live r = some cell ∧ slotDigest X r cell grantIssuer = .ok p
-  | _, _, _, .root (g := g) hc ht _ _ hi hp => by
+  | _, _, _, _, .root (g := g) hc ht _ _ hi hp => by
       obtain ⟨hlk, hk⟩ := readKind_ok hc
       obtain ⟨b, hb, hd⟩ := slotDigest_ok ht
       have hl := (hlook _ _ hlk).symm
@@ -556,6 +555,6 @@ theorem chain_rooted {X : Ctx D} {R : D → Prop} {w : World D} {look : Pinned D
       rcases h3 hb with hp' | hr
       · rw [hp] at hp'; simp at hp'
       · exact ⟨g, _, hr, hl, hi⟩
-  | _, _, _, .link _ _ _ _ _ _ _ rest => chain_rooted hw hlook hdig rest
+  | _, _, _, _, .link _ _ _ _ _ _ _ rest => chain_rooted hw hlook hdig rest
 
 end Nanodregg.Kernel.Receive

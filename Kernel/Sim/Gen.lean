@@ -27,14 +27,29 @@ def nat (n : Nat) : ByteArray := u64le n.toUInt64
 
 def denyAll : ByteArray := "deny-all".toUTF8
 
-/-- The two-law program stub both instances run (`deny-all` refuses, anything else admits;
-method 0 sets the first state slot). LANG's real program runs in `lang-journey`. -/
+/-- A law that admits a birth and its own adoption but refuses every write and invoke: what the
+occasion (ID-1) lets a law say, and what LANG-19 needs (deny-all can no longer be adopted). -/
+def freeze : ByteArray := "freeze".toUTF8
+
+/-- The package of the Sim's programmed objects (the stub's method 0). -/
+def methods : ByteArray := "methods".toUTF8
+
+/-- The acts `freeze` refuses. -/
+def frozenAct {D : Type} : Occasion D → Bool
+  | .write | .invoke _ => true
+  | .birth | .relaw _ => false
+
+/-- The law-program stub both instances run (`deny-all` refuses every act, `freeze` refuses writes
+and invokes, anything else admits; method 0 sets the first state slot). LANG's real program runs
+in `lang-journey`. -/
 def program : Program D :=
   { checkInstall := fun _ _ => .ok ()
-    judge := fun look _ laws _ _ _ =>
+    judge := fun look _ laws _ _ r =>
       forEx (fun l => match look l with
         | .ok (some cell) =>
-            if cell.slots.get 0 = some denyAll then .error (.lawDenied l "deny-all") else .ok ()
+            if cell.slots.get 0 = some denyAll then .error (.lawDenied l "deny-all")
+            else if cell.slots.get 0 = some freeze ∧ frozenAct r.occasion then .error (.lawDenied l "freeze")
+            else .ok ()
         | .ok none => .error (.missingCell l)
         | .error e => .error e) laws
     run := fun _ _ state method args _ _ =>
@@ -101,6 +116,12 @@ structure State (D : Type) [Ord D] where
   /-- revoked grants: (grant, object, grantee) -/
   revoked : List (D × D × D) := []
   denyPkg : Option D := none
+  freezePkg : Option D := none
+  methodsPkg : Option D := none
+  /-- programmed objects: (object, owner) -/
+  progs : List (D × D) := []
+  /-- public grants (KERNEL-26): (grant, object), each for `invoke 0`, grantee the World -/
+  publics : List (D × D) := []
   fresh : Nat := 0
   lastCall : Option (Call D) := none
   steps : Nat := 0
@@ -150,15 +171,18 @@ def submit (P : Params D) (st : State D) (c : Call D) (expect : Expect) (what : 
   match Receive.submit X st.host c with
   | .error (.refused r) =>
       if expect = .refused r.name then
-        ({ st with refusedAsExpected := st.refusedAsExpected + 1, seen := r.name :: st.seen }, none)
+        ({ st with refusedAsExpected := st.refusedAsExpected + 1,
+                   seen := s!"{what}:{r.name}" :: r.name :: st.seen }, none)
       else fail s!"refused {r.name}"
   | .error (.rejected r) =>
       if expect = .rejected r.name then
-        ({ st with refusedAsExpected := st.refusedAsExpected + 1, seen := r.name :: st.seen }, none)
+        ({ st with refusedAsExpected := st.refusedAsExpected + 1,
+                   seen := s!"{what}:{r.name}" :: r.name :: st.seen }, none)
       else fail s!"rejected {r.name}"
   | .ok (t, w') =>
       if expect = .ok then
-        ({ st with host := w', log := st.log ++ [t], admitted := st.admitted + 1 }, some t)
+        ({ st with host := w', log := st.log ++ [t], admitted := st.admitted + 1,
+                   seen := s!"{what}:ok" :: st.seen }, some t)
       else fail "admitted"
 
 def pick {α : Type} (st : State D) (l : List α) (d : α) : α × State D :=
@@ -397,7 +421,7 @@ def probeSeal (P : Params D) (st : State D) : State D :=
 
 /-- One generated action. -/
 def act (P : Params D) (st : State D) : State D :=
-  let (k, rng) := st.rng.below 21
+  let (k, rng) := st.rng.below 23
   let st := { st with rng }
   let w := st.host
   match k with
@@ -405,6 +429,54 @@ def act (P : Params D) (st : State D) : State D :=
   | 17 | 18 => ledgerAct P st 2
   | 19 => probeValue P st
   | 20 => ledgerAct P st 3
+  | 21 => -- birth a programmed object; half the time its owner makes method 0 public (KERNEL-26:
+          -- a grant whose grantee is the World)
+      match st.methodsPkg with
+      | none => st
+      | some pkg =>
+          let (m, st) := pick st st.members (founder0 P st)
+          let c := signed P st m m.key (S.pinsFor P.env w [m.id, pkg]) (.create (some pkg) [] [(stateBase, nat 0)])
+          let (st, t) := submit P st c .ok "create-programmed"
+          match t with
+          | none => st
+          | some t =>
+              let obj := (createdIds P.env t).headD P.zero
+              let st := { st with progs := st.progs ++ [(obj, m.id)] }
+              let (pub, st) := st.rng.below 2 |> fun (x, r) => (x == 0, { st with rng := r })
+              if !pub then st else
+              let c := signed P st m m.key (S.pinsFor P.env st.host [m.id, obj])
+                (.grant obj (worldId P.ctx) [.invoke 0] none)
+              let (st, t) := submit P st c .ok "grant-public"
+              match t with
+              | some t => { st with publics := st.publics ++ [((createdIds P.env t).headD P.zero, obj)] }
+              | none => st
+  | 22 => -- invoke (KERNEL-25): the owner is admitted; another member without a grant is refused
+          -- `noGrant`; any member through a public grant is admitted for method 0 and refused
+          -- `grantRight` for method 1 (the grant carries `invoke 0` only); a public grant is used,
+          -- never re-delegated: carving a child from it is `noGrant` (KERNEL-26)
+      match st.progs with
+      | [] => st
+      | o :: _ =>
+          let (prog, st) := pick st st.progs o
+          let (obj, owner) := prog
+          let (m, st) := pick st st.members (founder0 P st)
+          let (how, st) := st.rng.below 4 |> fun (x, r) => (x, { st with rng := r })
+          match how, st.publics.find? (fun p => p.2 = obj) with
+          | 0, _ | _, none =>
+              let c := signed P st m m.key (S.pinsFor P.env w [m.id, obj]) (.invoke obj 0 (nat st.steps) 1000 none)
+              if m.id = owner then (submit P st c .ok "invoke-owner").1
+              else (submit P st c (.refused "noGrant") "invoke-no-grant").1
+          | 3, some (gid, _) =>
+              let (ge, st) := pick st st.members (founder0 P st)
+              let c := signed P st m m.key (S.pinsFor P.env w [m.id, ge.id, obj, gid])
+                (.grant obj ge.id [.invoke 0] (some gid))
+              (submit P st c (.refused "noGrant") "carve-public").1
+          | how, some (gid, _) =>
+              let method := if how = 1 then 0 else 1
+              let c := signed P st m m.key (S.pinsFor P.env w [m.id, obj, gid])
+                (.invoke obj method (nat st.steps) 1000 (some gid))
+              if method = 0 then (submit P st c .ok "invoke-public").1
+              else (submit P st c (.refused "grantRight") "invoke-public-method-1").1
   | 0 | 13 => -- enrol a newcomer (KERNEL-16): through the sponsor's own World grant, admitted
          -- while its count lasts (`enrollSpent` after), `grantRight` through a grant without
          -- `enroll`; a sponsor without a grant tries someone else's (`noGrant`)
@@ -462,29 +534,35 @@ def act (P : Params D) (st : State D) : State D :=
               -- when the grantee is the granter, the carved grant replaces the spent one)
               setHold st ge.id ⟨gid :: hm.chain, n ≠ 3, units⟩
           | none => st
-  | 1 => -- birth a data object; a birth under deny-all is judged by it and refused
+  | 1 => -- birth a data object; a birth under deny-all is judged by it and refused, a birth under
+         -- freeze is a birth, which freeze admits
       let (m, st) := pick st st.members (founder0 P st)
       let (d, st) := st.rng.below 4 |> fun (x, r) => (x, { st with rng := r })
-      let laws := if d = 0 then st.denyPkg.toList else []
+      let laws := if d = 0 then st.denyPkg.toList else if d = 1 then st.freezePkg.toList else []
+      let denied := d = 0 ∧ !laws.isEmpty
       let c := signed P st m m.key (S.pinsFor P.env w (m.id :: laws)) (.create none laws [(stateBase, nat 0)])
-      let (st, t) := submit P st c (if laws.isEmpty then .ok else .refused "lawDenied") "create"
+      let (st, t) := submit P st c (if denied then .refused "lawDenied" else .ok)
+        (if d = 1 then "create-frozen" else "create")
       match t with
       | some t => { st with objects := st.objects ++ [((createdIds P.env t).headD P.zero, m.id)] }
       | none => st
-  | 3 => -- the owner puts an object under deny-all: judged by the laws in force (none: admitted;
-         -- deny-all already: the repair is refused too)
-      match st.objects, st.denyPkg with
-      | o :: _, some deny =>
+  | 3 => -- the owner replaces an object's laws: judged by the laws in force (deny-all refuses) AND by
+         -- the new laws over the unchanged state (LANG-19: deny-all denies its own adoption; freeze
+         -- admits it, and then refuses writes)
+      match st.objects, st.denyPkg, st.freezePkg with
+      | o :: _, some deny, some frz =>
           let (obj, st) := pick st st.objects o
+          let (d, st) := st.rng.below 2 |> fun (x, r) => (x, { st with rng := r })
+          let new := if d = 0 then deny else frz
           let owner := (st.members.find? fun m => m.id = obj.2).getD (founder0 P st)
           let laws := match w.live obj.1 with
             | some cell => (lawSlotsOf cell).filterMap fun (p : Nat × ByteArray) => P.ctx.digestOf p.2
             | none => []
-          let denied := laws.any fun l => l = deny
-          let c := signed P st owner owner.key (S.pinsFor P.env w (owner.id :: obj.1 :: deny :: laws))
-            (.law obj.1 [deny] none)
-          (submit P st c (if denied then .refused "lawDenied" else .ok) "law").1
-      | _, _ => st
+          let denied := laws.any (· = deny) ∨ new = deny
+          let c := signed P st owner owner.key (S.pinsFor P.env w (owner.id :: obj.1 :: new :: laws))
+            (.law obj.1 [new] none)
+          (submit P st c (if denied then .refused "lawDenied" else .ok) (if d = 0 then "law-self" else "law")).1
+      | _, _, _ => st
   | 2 => -- the owner writes; under deny-all it must be lawDenied
       match st.objects with
       | [] => st
@@ -494,7 +572,7 @@ def act (P : Params D) (st : State D) : State D :=
           let laws := match w.live obj.1 with
             | some cell => (lawSlotsOf cell).filterMap fun (p : Nat × ByteArray) => P.ctx.digestOf p.2
             | none => []
-          let denied := laws.any fun l => some l = st.denyPkg
+          let denied := laws.any fun l => some l = st.denyPkg ∨ some l = st.freezePkg
           let c := signed P st owner owner.key (S.pinsFor P.env w (owner.id :: obj.1 :: laws))
             (.write obj.1 [(0, nat st.steps)] none)
           (submit P st c (if denied then .refused "lawDenied" else .ok) "write").1
@@ -599,7 +677,7 @@ def act (P : Params D) (st : State D) : State D :=
               let laws := match w.live obj with
                 | some cell => (lawSlotsOf cell).filterMap fun (p : Nat × ByteArray) => P.ctx.digestOf p.2
                 | none => []
-              let denied := laws.any fun l => some l = st.denyPkg
+              let denied := laws.any fun l => some l = st.denyPkg ∨ some l = st.freezePkg
               let c := signed P st m m.key (S.pinsFor P.env w (m.id :: obj :: gid :: laws))
                 (.write obj [(1, nat st.steps)] (some gid))
               let expect := if useRevoked then .refused "missingCell"
@@ -714,6 +792,10 @@ def run (P : Params D) (seed : Nat) (steps : Nat) : State D :=
   let c := signed P st0 f f.key (S.pinsFor P.env g [f.id]) (.install denyAll)
   let (st, t) := submit P st0 c .ok "install"
   let st := { st with denyPkg := t.bind fun t => (createdIds P.env t).head? }
+  let (st, t) := submit P st (signed P st f f.key (S.pinsFor P.env st.host [f.id]) (.install freeze)) .ok "install"
+  let st := { st with freezePkg := t.bind fun t => (createdIds P.env t).head? }
+  let (st, t) := submit P st (signed P st f f.key (S.pinsFor P.env st.host [f.id]) (.install methods)) .ok "install"
+  let st := { st with methodsPkg := t.bind fun t => (createdIds P.env t).head? }
   let st := (List.range steps).foldl (fun st _ =>
     let st := scanValue P (act P st)
     -- restart: the Host reopens by folding its own log from genesis
@@ -760,6 +842,12 @@ def planted : List String :=
    "overflow", "sameAccount", "zeroAmount", "assetMismatch", "belowFloor", "spent",
    "notConserved", "floorNotConserved", "valueMalformed", "overBound", "notWell"]
 
+/-- The arms a run of 16 or more seeds must each reach with the named verdict (`what:verdict`): a
+refusal name met somewhere else does not test the receiver this arm exercises. -/
+def plantedArms : List String :=
+  ["invoke-owner:ok", "invoke-no-grant:noGrant", "invoke-public:ok", "invoke-public-method-1:grantRight", "carve-public:noGrant",
+   "law-self:lawDenied", "law:ok", "create-frozen:ok", "write:lawDenied", "write-no-grant:noGrant"]
+
 /-- `--seeds N` runs seeds `0 … N-1`; otherwise each argument is a seed. -/
 def parseSeeds : List String → List Nat
   | ["--seeds", n] => List.range (n.toNat?.getD 64)
@@ -790,7 +878,7 @@ def report (P : Params D) (seeds : List Nat) : IO UInt32 := do
         IO.println s!"FAIL seed {seed}: {f}"
   IO.println s!"kernel-sim: seeds={seeds.length} admitted={admitted} refused-as-expected={refused} restarts={restarts} failing-seeds={bad}"
   -- every planted refusal must have been met: a name the generator never reaches is not tested
-  let unmet := planted.filter fun n => !seen.contains n
+  let unmet := (planted ++ plantedArms).filter fun n => !seen.contains n
   if !unmet.isEmpty && seeds.length ≥ 16 then
     bad := bad + 1
     IO.println s!"FAIL planted refusals never met: {unmet}"

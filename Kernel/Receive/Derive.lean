@@ -80,7 +80,7 @@ def spendEnroll (g : D) (cell : Cell) (units : Nat) (short : Refusal D) :
 def enroll (X : Ctx D) (look : Pinned D) (c : Call D) (key : ByteArray) (next : D)
     (possession : ByteArray) (via : D) : Except (Refusal D) (Turn D) := do
   let u := c.unsigned
-  let _ ← walk X look (worldId X) (.enroll 0) grantDepthMax via u.member
+  let _ ← walk X look (worldId X) (.enroll 0) true grantDepthMax via u.member
   let g ← readKind look via kindGrant
   let spend ← spendEnroll via g 1 (.enrollSpent via)
   req (X.verify key (possessionMessage X u.member next key) possession) .badPossession
@@ -154,6 +154,9 @@ def law (X : Ctx D) (look : Pinned D) (c : Call D) (obj : D) (laws' : List D) (v
   checkLaws look laws'
   let laws ← lawsOf X obj cell
   X.program.judge look none laws (stateOf cell) (stateOf cell) (reqOf u principal (.relaw laws'))
+  -- LANG-19 (KERNEL-27): the new laws judge the state they are adopted over AS A BIRTH (is this a
+  -- state the object could begin under them?), so a law that would deny it cannot be installed
+  X.program.judge look none laws' (stateOf cell) (stateOf cell) (reqOf u principal .birth)
   sealTurn X c [] (writeOf obj (diffOps (lawSlotsOf cell) (lawSlots X laws'))) []
 
 def requireMethods (obj : D) : Option D → Except (Refusal D) D
@@ -166,7 +169,7 @@ def invoke (X : Ctx D) (look : Pinned D) (c : Call D) (obj : D) (method : Nat) (
   let cell ← readKind look obj kindObject
   let pkg ← packageOf X obj cell
   let p ← requireMethods obj pkg
-  let principal ← principalOf X look u obj (.invoke method) via
+  let principal ← ownerAuthority X look u obj cell (.invoke method) via
   let r : Req D := reqOf u principal (.invoke method)
   let old := stateOf cell
   let new ← X.program.run look p old method args r budget
@@ -209,10 +212,15 @@ def checkParent (X : Ctx D) (look : Pinned D) (u : Unsigned D) (target : D) (rig
       if rights.any isEnroll then spendEnroll p pc (enrollUnits rights) (.grantWidens p)
       else pure none
 
+/-- A grant names a live member, or the World itself: a public grant, held by every enrolled
+member (KERNEL-26, `granteeHolds`). -/
+def checkGrantee (X : Ctx D) (look : Pinned D) (grantee : D) : Except (Refusal D) Unit :=
+  if grantee = worldId X then pure () else (readKind look grantee kindMember).map fun _ => ()
+
 def grant (X : Ctx D) (look : Pinned D) (c : Call D) (target grantee : D) (rights : List Right)
     (parent : Option D) : Except (Refusal D) (Turn D) := do
   let u := c.unsigned
-  let _ ← readKind look grantee kindMember
+  checkGrantee X look grantee
   let carve ← checkParent X look u target rights parent
   let slots := slotsOf ([(grantTarget, X.env.bytes target), (grantGrantee, X.env.bytes grantee),
       (grantIssuer, X.env.bytes u.member)] ++
