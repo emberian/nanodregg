@@ -985,7 +985,8 @@ sentence closed by KERNEL-38: `fold_journal_filter` along the real fold, `fold_p
 window premise over a fold's provenance stays open, KERNEL-38 Critique).
 `submit_once`, `derived_once` and `admit_twice_window` carry the content that matters.
 `reach_journal_bounded` covers Worlds a fold reaches from genesis; a World decoded from a base
-is covered only through the fold that wrote it (no codec theorem carries `JournalOk`). HOST's
+is covered only through the fold that wrote it (no codec theorem carries `JournalOk`; closed by
+KERNEL-39 + CODEC 9dd1e8c: the decoder refuses `kernel/journal`, `Codec.Deployed.world_decode_journalOk`). HOST's
 `expired` truth is `fold_answers` + `receive_ok`, not yet chained in a Host theorem (offered to
 HOST-8). `World.weight` no longer counts the journal: total storage is weight plus at most 3W
 journal entries (~220 KB), bounded only by `journal_bounded`, with no single theorem summing the two.
