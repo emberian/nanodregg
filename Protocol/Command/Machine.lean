@@ -249,7 +249,12 @@ def body (X : Ctx D) (me : Self D) (w : World D) (s : Signed) : Cmd D → Except
       match Lang.argsOf (worldLook X.env w) p m a with
       | .ok args => .ok (.invoke o m args invokeBudget via)
       | .error r => .error (.receive r)
-  | .grant t g rs via => .ok (.grant (t.getD (worldId X)) (g.getD (worldId X)) rs via)
+  | .grant t g rs via =>
+      let target := match t with
+        | .world => worldId X
+        | .cell c => c
+        | .account r => r.resolve X
+      .ok (.grant target (g.getD (worldId X)) rs via)
   | .revoke g => .ok (.revoke g)
   | .rotate => .ok (.rotate s.key (nextKeyDigest X s.next))
   | .issue cap => .ok (.issue cap)

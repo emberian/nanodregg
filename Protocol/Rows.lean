@@ -540,18 +540,37 @@ def well : Row where
     ok "operator" ["transfer", "of:{@operator}:{@w}", "well:{@w}", "2"]]
   plant := .caught .accountByAsset 3 (.refused "idTaken")
 
-/-- The bounty on the seat kernel (LANG's `world/bounty/BountyEscrow`). -/
+/-- The bounty on LEDGER's escrow (`world/escrow/Escrow`, LEDGER-10 at 7c6c7e1): the poster (the
+arbiter) births an escrow over 30 of the sponsor's denomination for the hunter; the escrow's own
+account and the hunter's are opened top-level first (the pinned view forbids a birth in the
+deposit's tree); the poster grants the depositor `invoke:0`; the depositor lends its account to
+the object (a mutate grant over `of:SPONSOR:W`, LEDGER-6). A deposit through a grant that is not
+that lend is refused `grantTarget`; the real deposit moves 30 into the escrow; the arbiter's
+release pays the hunter; a second release is `lawDenied` (the escrow is settled). Plant: without
+the law, the kernel still refuses the second payout by its own name (an empty escrow account),
+so the plant changes the refusal, it does not admit it. -/
 def bounty : Row where
   name := "bounty"
   replaces := ["bounty", "seats", "activity", "objective", "call", "send"]
   ops := everyWrite
-  kinds := ["install", "invoke"]
-  drive := .members [
-    okBind "poster" ["install", "world/bounty/BountyEscrow"] "bounty",
-    ok "hunter" ["invoke", "@bounty", "0", "claim"],
-    no "rival" ["invoke", "@bounty", "0", "claim"] "lawDenied"]
-  plant := .caught .skipJudge 2 .ok
-  blockedOn := some "LEDGER: escrow accounts; LANG: the bounty package world/bounty/BountyEscrow"
+  kinds := ["enroll", "grant", "issue", "account", "transfer", "install", "create", "invoke"]
+  drive := .members (join "sponsor" "poster" ++ join "sponsor" "hunter" ++ [
+    okBind "sponsor" ["issue", "1000"] "w",
+    ok "sponsor" ["account", "@w"],
+    ok "sponsor" ["transfer", "well:{@w}", "of:{@sponsor}:{@w}", "100"],
+    okBind "poster" ["install", "<world/escrow/Escrow"] "escrow",
+    okBind "poster" ["create", "--pkg", "@escrow",
+      "(record (amount 30) (arbiter #{@poster}) (asset #{@w}) (beneficiary #{@hunter}) (depositor #{@sponsor}) (phase open))"]
+      "bounty",
+    ok "poster" ["account", "@w", "--owner", "@bounty"],
+    ok "poster" ["account", "@w", "--owner", "@hunter"],
+    okBind "poster" ["grant", "@bounty", "@sponsor", "invoke:0"] "gd",
+    okBind "sponsor" ["grant", "of:{@sponsor}:{@w}", "@bounty", "mutate"] "gm",
+    no "sponsor" ["invoke", "@bounty", "0", "(record (grant #{@gd}))", "--via", "@gd"] "grantTarget",
+    ok "sponsor" ["invoke", "@bounty", "0", "(record (grant #{@gm}))", "--via", "@gd"],
+    ok "poster" ["invoke", "@bounty", "2", "(record)"],
+    no "poster" ["invoke", "@bounty", "2", "(record)"] "lawDenied"])
+  plant := .caught .skipJudge 18 (.refused "belowFloor")
 
 /-- m6grain (HOSTING-5, 6095c5b): a grain is an object programmed by the SHIPPED lifecycle package
 (`world/grain/Lifecycle`, `Hosting.Text.package` of `Hosting.lifecycle?`, G0 byte for byte), born

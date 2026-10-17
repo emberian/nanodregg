@@ -843,3 +843,31 @@ is CODEC's emitted `attempt::next` over the same statuses, so it inherits the ru
 tell `forgotten` from any other uncertain answer. That is the same move as `expired` stating its
 height: an outcome a client acts on must be named on the wire and in the row.
 **Status.** BUILT (this commit). Rows 18 PASS, 1 PENDING (bounty), re-run after KERNEL-33's charge change.
+
+## PROTOCOL-34 · row bounty on LEDGER's escrow; `grant` takes a value account as its target (2026-10-17, PROTOCOL-6; LEDGER-10 at 7c6c7e1)
+**Decision.** `grant TARGET MEMBER RIGHTS`: TARGET may now be a value account by name (`well:ASSET`
+| `of:OWNER:ASSET`, `Command.GrantTarget.account`, resolved to `accountId` in `Machine.body`),
+beside an object id and `world`. LEDGER-6's deposit needs it: the depositor lends its account to
+the escrow object by a mutate grant over that account, and a member cannot compute `accountId`
+by hand. Row bounty on `<world/escrow/Escrow`, LEDGER-3's lines:
+- the sponsor (depositor) issues, opens and funds its account;
+- the poster (arbiter, the escrow's owner) installs, creates the escrow over 30 for the hunter, and
+  opens the escrow's and the hunter's accounts top-level (the pinned view forbids a birth in the
+  deposit's tree);
+- the poster grants the depositor `invoke:0`, and the depositor lends its account to the object;
+- a deposit through the wrong grant is `grantTarget`, the real deposit is ok, the arbiter's release
+  is ok, and a second release is `lawDenied` (escrow: settled).
+Plant `skipJudge`, caught at line 18: `refused belowFloor`.
+**What the plant shows (ROOT's ruling).** The tooth is the NAME. The law refuses the second payout
+by its own name (`lawDenied`, `escrow: settled`) before the kernel has to. Skip the law and the
+kernel still refuses it, but by a different name. Measured: `belowFloor`, because the escrow account
+is empty after the first payout and the floor is checked before nullifiers. If someone topped the
+account up, the payout's shared `once` key would refuse it `spent` (LEDGER-6: the floor bounds what
+leaves, not how often). So the kernel is the second and third line of defence the law stands in
+front of. The law's job is to refuse by its own name first, with a reason a person can read. No mode
+is added to deployed admission (PROTOCOL-32's ruling).
+**Critique.** The row does not cover refund, or a party other than the arbiter, because
+`ledger-sim`'s E1..E14 cover them over the same package (LEDGER-3). An account grant target is
+resolved by the client. A member who names the wrong owner gets a grant over an empty or foreign
+account, which the kernel's authority check refuses at use, not at grant.
+**Status.** BUILT (this commit). Rows: ALL PASS, 19 rows.

@@ -40,7 +40,8 @@ inductive Verb
   /-- `invoke OBJ METHOD ARGS [--via GRANT]`: run a method; ARGS is read at the method's argument
   type (LANG's reader, on follow's World) -/
   | invoke
-  /-- `grant TARGET MEMBER RIGHTS [--via PARENT]`: TARGET is an object or `world` (the World,
+  /-- `grant TARGET MEMBER RIGHTS [--via PARENT]`: TARGET is an object, a value account
+  (`well:ASSET` | `of:OWNER:ASSET`: a mutate grant over it lends its balance, LEDGER-6), or `world` (the World,
   KERNEL-20: `observe` on it is following the log, `enroll:N` is sponsoring N members); MEMBER is a
   member or `anyone` (a grant whose grantee is the World: every enrolled member, including members
   enrolled later, KERNEL-26: a public object); RIGHTS is
@@ -92,6 +93,13 @@ structure Join (D : Type) where
   possession : ByteArray
   deriving DecidableEq
 
+/-- What a grant is over: the World, an object (or any cell) by id, or a value account by its
+name (`well:ASSET` | `of:OWNER:ASSET`, resolved to its id when the call is planned). -/
+inductive GrantTarget (D : Type)
+  | world
+  | cell (id : D)
+  | account (r : AcctRef D)
+
 /-- A parsed command. -/
 inductive Cmd (D : Type)
   | init (sponsor : D)
@@ -103,8 +111,8 @@ inductive Cmd (D : Type)
   | law (obj : D) (laws : List D) (via : Option D)
   /-- `args` is TEXT, read at the method's argument type when the call is planned -/
   | invoke (obj : D) (method : Nat) (args : String) (via : Option D)
-  /-- `target = none` is the World; `grantee = none` is `anyone` (the World as grantee, KERNEL-26) -/
-  | grant (target : Option D) (grantee : Option D) (rights : List Right) (via : Option D)
+  /-- `grantee = none` is `anyone` (the World as grantee, KERNEL-26) -/
+  | grant (target : GrantTarget D) (grantee : Option D) (rights : List Right) (via : Option D)
   | revoke (grant : D)
   | read (obj : D) (expect : List (Nat × ByteArray))
   | rotate
@@ -156,7 +164,8 @@ def usage : Verb → String
   | .init => "init SPONSOR" | .enroll => "enroll TOKEN"
   | .install => "install TEXT" | .create => "create [--pkg PKG STATE] LAW..."
   | .write => "write OBJ KEY VALUE [--via GRANT]" | .law => "law OBJ LAW... [--via GRANT]"
-  | .invoke => "invoke OBJ METHOD ARGS [--via GRANT]" | .grant => "grant TARGET MEMBER|anyone RIGHTS [--via PARENT]"
+  | .invoke => "invoke OBJ METHOD ARGS [--via GRANT]"
+  | .grant => "grant TARGET|ACCOUNT|world MEMBER|anyone RIGHTS [--via PARENT]"
   | .revoke => "revoke GRANT" | .read => "read OBJ [KEY=VALUE...]" | .rotate => "rotate"
   | .adopt => "adopt HEIGHT DIGEST" | .issue => "issue CAP"
   | .account => "account ASSET [--owner OWNER]"
@@ -280,7 +289,9 @@ def parseVerb (v : Verb) (args : List String) : Except ParseRefusal (Cmd D) :=
   | .invoke, o :: m :: a :: via => do
       pure (.invoke (← digestArg digestOf o) (← numArg m) a (← viaArg digestOf .invoke via))
   | .grant, t :: m :: rs :: via => do
-      let target ← if t = "world" then pure none else some <$> digestArg digestOf t
+      let target ← if t = "world" then pure GrantTarget.world
+        else if t.startsWith "well:" || t.startsWith "of:" then GrantTarget.account <$> acctArg digestOf t
+        else GrantTarget.cell <$> digestArg digestOf t
       let grantee ← if m = "anyone" then pure none else some <$> digestArg digestOf m
       pure (.grant target grantee (← mapEx rightArg (rs.splitOn ","))
         (← viaArg digestOf .grant via))
