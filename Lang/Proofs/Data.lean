@@ -12,7 +12,7 @@ at, from ANY bytes. `toVal_typed`: conforming data becomes a machine value of it
 import Lang.Wire.Data
 import Lang.Proofs.RunTy
 import Codec.Proofs.Stream
-import Codec.Proofs.Kernel
+import Codec.Proofs.Stream
 
 namespace Nanodregg.Lang
 
@@ -65,8 +65,8 @@ theorem dataStream_lawful : (T : Ty) → tyWire T = true → Lawful (dataStream 
     exact rowStream_lawful r h.2
   | .sum r, h => by
     simp only [tyWire, Bool.and_eq_true, decide_eq_true_eq] at h
-    exact tagged_lawful _ (armStream_lawful r h.2) (Kernel.finOf?_finCode (by simpa [rowMax] using h.1))
-      Kernel.finCode_of
+    exact tagged_lawful _ (armStream_lawful r h.2) (Stream.finOf?_finCode (by simpa [rowMax] using h.1))
+      Stream.finCode_of
 
 theorem rowStream_lawful : (r : List (Label × Ty)) → tyRowWire r = true → Lawful (rowStream r)
   | [], _ => unit_lawful

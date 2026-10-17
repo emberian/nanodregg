@@ -730,4 +730,18 @@ theorem tagged_lawful {σ : Type} {F : σ → Type} (all : List σ) {code : σ �
           exact ⟨by simp [ByteArray.size_append, Nat.add_assoc], occursAt_append.mpr ⟨o1, o2⟩⟩
         · cases h
 
+theorem finOf?_finCode {n : Nat} (hn : n ≤ 256) (s : Fin n) : finOf? n (finCode s) = some s := by
+  have h : (UInt8.ofNat s.val).toNat = s.val := UInt8.toNat_ofNat_of_lt' (by have := s.isLt; simp only [UInt8.size]; omega)
+  simp [finOf?, finCode, h]
+
+theorem finCode_of {n : Nat} (t : UInt8) (s : Fin n) (h : finOf? n t = some s) : finCode s = t := by
+  unfold finOf? at h
+  split at h
+  · cases h; simp [finCode]
+  · cases h
+
+theorem choice_lawful (n : Nat) (hn : n ≤ 256) {F : Fin n → Type} {c : (s : Fin n) → Stream (F s)}
+    (hc : ∀ s, Lawful (c s)) : Lawful (choice n c) :=
+  tagged_lawful _ hc (finOf?_finCode hn) finCode_of
+
 end Nanodregg.Codec.Stream

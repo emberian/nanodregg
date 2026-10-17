@@ -79,7 +79,7 @@ theorem bool_two_refused : isRejected "bool" (decodeData .bool ⟨#[2]⟩) = tru
 theorem refused_verdict_encodes :
     (encodeData verdictTy (.inj "refused" (.bytes ⟨#[1]⟩))).isSome = true := by decide +kernel
 
-/-- One tag byte names the arm (`Kernel.choice`): `refused` is arm 1, then the bytes' `u32` length and
+/-- One tag byte names the arm (`Stream.choice`): `refused` is arm 1, then the bytes' `u32` length and
 the byte. A unary or `u32` arm index turns this red. -/
 theorem refused_verdict_bytes :
     encodeData verdictTy (.inj "refused" (.bytes ⟨#[7]⟩)) = some ⟨#[1, 1, 0, 0, 0, 7]⟩ := by decide +kernel

@@ -295,5 +295,13 @@ def tagged {σ : Type} {F : σ → Type} (all : List σ) (code : σ → UInt8) (
         | .ok (v, k) => .ok (⟨s, v⟩, k)
         | .error e => .error e
 
+def finCode {n : Nat} (s : Fin n) : UInt8 := UInt8.ofNat s.val
+
+def finOf? (n : Nat) (t : UInt8) : Option (Fin n) := if h : t.toNat < n then some ⟨t.toNat, h⟩ else none
+
+/-- One of `n` cases, tagged by its index (one byte, for `n ≤ 256`). -/
+def choice (n : Nat) {F : Fin n → Type} (c : (s : Fin n) → Stream (F s)) : Stream ((s : Fin n) × F s) :=
+  tagged (List.finRange n) finCode (finOf? n) c
+
 end Stream
 end Nanodregg.Codec

@@ -17,21 +17,6 @@ open Nanodregg.Kernel Nanodregg.Kernel.Receive Nanodregg.Codec.Stream
 
 variable {D : Type}
 
-theorem finOf?_finCode {n : Nat} (hn : n ≤ 256) (s : Fin n) : finOf? n (finCode s) = some s := by
-  have h : (UInt8.ofNat s.val).toNat = s.val := UInt8.toNat_ofNat_of_lt' (by have := s.isLt; simp only [UInt8.size]; omega)
-  simp [finOf?, finCode, h]
-
-theorem finCode_of {n : Nat} (t : UInt8) (s : Fin n) (h : finOf? n t = some s) : finCode s = t := by
-  unfold finOf? at h
-  split at h
-  · cases h; simp [finCode]
-  · cases h
-
-theorem choice_lawfulOn (n : Nat) (hn : n ≤ 256) {F : Fin n → Type} {c : (s : Fin n) → Stream (F s)}
-    {P : (s : Fin n) → F s → Prop} (hc : ∀ s, LawfulOn (P s) (c s)) :
-    LawfulOn (fun v => P v.1 v.2) (choice n c) :=
-  tagged_lawfulOn _ hc (finOf?_finCode hn) finCode_of
-
 theorem discipline_lawful : Lawful discipline :=
   refine_lawful u8_lawful "kernel/discipline" (fun d => by cases d <;> rfl) (fun x y h => by
     by_cases h0 : x = 0

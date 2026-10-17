@@ -14,7 +14,7 @@ and its canonicity is the combinators' (`Lang.Proofs.Data.dataStream_lawful`).
 codec: in a row with a repeated label two arms would name the same `Data`, so
 `decodeData`/`encodeData` refuse any other type.
 -/
-import Codec.Kernel
+import Codec.Stream
 import Lang.Data
 import Lang.Wire
 
@@ -53,7 +53,7 @@ def dataStream : (T : Ty) → Stream (DataAt T)
   | .bytes => Stream.bytesOf Bounds.bytesMax (by decide)
   | .fn _ _ => noData
   | .record r => rowStream r
-  | .sum r => Kernel.choice r.length (armStream r)
+  | .sum r => Stream.choice r.length (armStream r)
 
 def rowStream : (r : List (Label × Ty)) → Stream (RowAt r)
   | [] => Stream.unit

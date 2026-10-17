@@ -14,10 +14,16 @@ namespace Nanodregg.Emit.Rust
 
 open Nanodregg.Protocol
 
-/-- The constructor's own name, upper case: `Op.submit` ↦ `SUBMIT`. -/
+/-- The constructor's own name as a Rust constant: `Op.submit` ↦ `SUBMIT`, `Step.signNext` ↦ `SIGN_NEXT`. -/
 def constName {α : Type} [Repr α] (a : α) : String :=
-  let full := toString (repr a)
-  (full.splitOn ".").getLast!.toUpper
+  let name := ((toString (repr a)).splitOn ".").getLast!
+  String.ofList (name.toList.flatMap fun c => if c.isUpper then ['_', c] else [c.toUpper])
+
+/-- The constructor's own name as a Rust type name: `Step.signNext` ↦ `SignNext`. -/
+def ctorName {α : Type} [Repr α] (a : α) : String :=
+  match ((toString (repr a)).splitOn ".").getLast!.toList with
+  | c :: cs => String.ofList (c.toUpper :: cs)
+  | [] => ""
 
 /-- One `pub const NAME: u8 = n;` line per value. -/
 def byteConsts {α : Type} [Repr α] (values : List α) (code : α → UInt8) : List String :=
@@ -158,16 +164,16 @@ def structFor (name : String) (max : Nat) (l : Layout) (total : Option Nat := no
 def stepEnum (max : Nat) : String :=
   let variants := Step.all.map fun st =>
     let l := st.layout
-    String.intercalate "\n" ([s!"        {camel (constName st |>.toLower)} \{"] ++ fieldDecls "            " "" l ++
+    String.intercalate "\n" ([s!"        {ctorName st} \{"] ++ fieldDecls "            " "" l ++
       ["        },"])
   let readArms := Step.all.map fun st =>
     let l := st.layout
     String.intercalate "\n" ([s!"                {st.code} => \{"] ++
       l.map (fun f => "                    " ++ readField max f) ++
-      [s!"                    {structLit "                    " ("Step::" ++ camel (constName st |>.toLower)) l}", "                }"])
+      [s!"                    {structLit "                    " ("Step::" ++ ctorName st) l}", "                }"])
   let writeArms := Step.all.map fun st =>
     let l := st.layout
-    String.intercalate "\n" ([s!"                {structLit "                " ("Step::" ++ camel (constName st |>.toLower)) l} => \{",
+    String.intercalate "\n" ([s!"                {structLit "                " ("Step::" ++ ctorName st) l} => \{",
       s!"                    out.push({st.code});"] ++
       l.map (fun f => "                    " ++ writeField max f) ++ ["                }"])
   String.intercalate "\n" <|
@@ -296,13 +302,14 @@ def layoutModule : String := String.intercalate "\n\n" ([
   "/// The follow socket's payloads (Protocol.Table layouts; Lean codec: Protocol.Frames).\npub mod layout {",
   layoutPrelude] ++
   (let es := oneOfs (commandLayout :: resumeLayout :: Step.all.map Step.layout)
-   let ls := commandLayout :: resumeLayout :: signResultLayout :: Step.all.map Step.layout
+   let ls := commandLayout :: resumeLayout :: signResultLayout :: precommitResultLayout :: Step.all.map Step.layout
    let hasU64 := ls.flatten.any fun f => match f with | .u64 _ => true | _ => false
    (if es.isEmpty then [] else [oneOfReader]) ++ (if hasU64 then [u64Reader] else []) ++
      es.map fun p => oneOfEnum p.1 p.2) ++ [
   structFor "Command" Bounds.argvBytesMax commandLayout (some Bounds.argvBytesMax),
   structFor "Resume" Bounds.frameBytesMax resumeLayout,
   structFor "SignResult" Bounds.frameBytesMax signResultLayout,
+  structFor "PrecommitResult" Bounds.frameBytesMax precommitResultLayout,
   stepEnum Bounds.frameBytesMax ++ "\n}"])
 
 def header : String :=

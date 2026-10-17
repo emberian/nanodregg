@@ -186,7 +186,7 @@ pub fn run(
                 let signed = custody.sign(&message).map_err(RunError::Custody)?;
                 (k, Outcome::Signed(encoded(&signed)?))
             }
-            Step::Signnext { message, k } => {
+            Step::SignNext { message, k } => {
                 let (signed, r) = custody.sign_next(&message).map_err(RunError::Custody)?;
                 rotation = Some(r);
                 (k, Outcome::Signed(encoded(&signed)?))

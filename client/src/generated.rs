@@ -33,7 +33,7 @@ pub mod step {
     pub const HOST: u8 = 2;
     pub const SUBMIT: u8 = 3;
     pub const PRECOMMIT: u8 = 4;
-    pub const SIGNNEXT: u8 = 5;
+    pub const SIGN_NEXT: u8 = 5;
 }
 
 /// The follow socket's payloads (Protocol.Table layouts; Lean codec: Protocol.Frames).
@@ -274,6 +274,30 @@ pub mod layout {
     }
 
     #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct PrecommitResult {
+        pub next: Vec<u8>,
+        pub pending: Vec<u8>,
+    }
+
+    impl PrecommitResult {
+        pub fn decode(b: &[u8]) -> Result<Self, Refusal> {
+            let mut c = Cursor { b, i: 0 };
+            let next = c.bytes(262144)?;
+            let pending = c.bytes(262144)?;
+            c.end()?;
+            Ok(PrecommitResult { next, pending })
+        }
+
+        pub fn encode(&self) -> Result<Vec<u8>, Refusal> {
+            let mut out = Vec::new();
+            let PrecommitResult { next, pending } = self;
+            put_bytes(&mut out, next, 262144)?;
+            put_bytes(&mut out, pending, 262144)?;
+            Ok(out)
+        }
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
     pub enum Step {
         Done {
             exit: u8,
@@ -296,7 +320,7 @@ pub mod layout {
         Precommit {
             k: Vec<u8>,
         },
-        Signnext {
+        SignNext {
             message: Vec<u8>,
             k: Vec<u8>,
         },
@@ -340,7 +364,7 @@ pub mod layout {
                 5 => {
                     let message = c.bytes(262144)?;
                     let k = c.bytes(262144)?;
-                    Step::Signnext { message, k }
+                    Step::SignNext { message, k }
                 }
                 tag => return Err(Refusal::BadTag { offset: at, tag }),
             };
@@ -381,7 +405,7 @@ pub mod layout {
                     out.push(4);
                     put_bytes(&mut out, k, 262144)?;
                 }
-                Step::Signnext { message, k } => {
+                Step::SignNext { message, k } => {
                     out.push(5);
                     put_bytes(&mut out, message, 262144)?;
                     put_bytes(&mut out, k, 262144)?;

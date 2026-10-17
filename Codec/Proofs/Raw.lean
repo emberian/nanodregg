@@ -326,6 +326,11 @@ theorem option_lawfulOn {P : α → Prop} {c : Stream α} (hc : LawfulOn P c) : 
       · cases h
     · cases h
 
+theorem choice_lawfulOn (n : Nat) (hn : n ≤ 256) {F : Fin n → Type} {c : (s : Fin n) → Stream (F s)}
+    {P : (s : Fin n) → F s → Prop} (hc : ∀ s, LawfulOn (P s) (c s)) :
+    LawfulOn (fun v => P v.1 v.2) (choice n c) :=
+  tagged_lawfulOn _ hc (finOf?_finCode hn) finCode_of
+
 /-! ## Lists on a domain -/
 
 theorem foldl_putOn {P : α → Prop} {c : Stream α} (hc : LawfulOn P c) (l : List α) (buf : ByteArray) :

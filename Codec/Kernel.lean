@@ -26,16 +26,6 @@ open Nanodregg.Kernel Nanodregg.Kernel.Receive Nanodregg.Codec.Stream
 
 variable {D : Type}
 
-/-! ## Choice by a tag in `Fin n` -/
-
-def finCode {n : Nat} (s : Fin n) : UInt8 := UInt8.ofNat s.val
-
-def finOf? (n : Nat) (t : UInt8) : Option (Fin n) := if h : t.toNat < n then some ⟨t.toNat, h⟩ else none
-
-/-- One of `n` cases, tagged by its index. -/
-def choice (n : Nat) {F : Fin n → Type} (c : (s : Fin n) → Stream (F s)) : Stream ((s : Fin n) × F s) :=
-  tagged (List.finRange n) finCode (finOf? n) c
-
 /-! ## Bounds of the wire (KERNEL's bounds where they exist) -/
 
 /-- A list or byte string inside a signed call: the call is one event, so nothing in it exceeds

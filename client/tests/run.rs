@@ -232,7 +232,7 @@ fn sign_next_then_a_committed_submit_advances_custody_in_one_command() {
     let (next, pending) = custody.precommit().unwrap();
     let mut follow = ScriptedFollow {
         steps: VecDeque::from([
-            Step::Signnext {
+            Step::SignNext {
                 message: b"rotate".to_vec(),
                 k: b"k1".to_vec(),
             },
