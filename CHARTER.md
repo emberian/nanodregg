@@ -32,9 +32,12 @@ in `~/dev/redregg/work/`: `ARCHITECTURE-20261016.md`, `CYCLE-TIME-20261016.md`,
    HOST's LAW-4 critique, 10-16).
 5. **Performance is designed.** The resident Host is one deterministic loop per Store holding the
    World, the trie and the memo; admission is batched; the follower is the only replayer. "Checkpoint
-   = World" means the World is what a checkpoint DENOTES; its persistence is incremental (O(touched)
-   per batch: a re-encode of the whole World is O(store) and forbidden by law 4) — HOST and CODEC own
-   that representation (KERNEL's K1 critique, accepted 10-16). Measure
+   = World" means the World is what a checkpoint DENOTES. O(store) work is forbidden on the REQUEST
+   path; off-loop sealing of a whole-World base that amortises to O(appended bytes) is allowed, with
+   its cadence a named Bound, a `worldBytesMax` bound that refuses by name where the design must
+   change, and a WASTE line that keeps the amortisation visible (HOST-14, measured 10-16: the encode
+   is 25–35× cheaper than one fsync at THE BAR; it replaced K1's incremental deltas). HOST and CODEC
+   own that representation. Measure
    at range ends with `perf stat --no-scale`; the waste ratio of every operation is pinned and may
    only fall.
 6. **Named theorems, never `#guard`.** `theorem … := by decide/rfl`; the ONE tree-wide axiom census
