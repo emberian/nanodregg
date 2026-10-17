@@ -16,6 +16,9 @@ open Nanodregg.Codec
 
 def domSegment : String := "nanodregg/host/segment/v1"
 def domBase : String := "nanodregg/host/base/v1"
+/-- The UNKEYED digest a thin member pins (HOST-15): its own customization string, never the base
+MAC's (HOST-25: one string, one purpose). -/
+def domBaseDigest : String := "nanodregg/host/base-digest/v1"
 
 def macSealer (key : Digest) (domain : String) : Log.Sealer where
   tag b := (Hash.mac key domain b).bytes
@@ -25,7 +28,7 @@ def macSealer (key : Digest) (domain : String) : Log.Sealer where
 def Keys.ofKey (key : Digest) (shapes : Digest) : Keys where
   segment := macSealer key domSegment
   base := macSealer key domBase
-  worldDigest b := (Hash.digest domBase b).bytes
+  worldDigest b := (Hash.digest domBaseDigest b).bytes
   shapes := shapes
 
 end Nanodregg.Host

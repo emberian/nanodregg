@@ -662,6 +662,7 @@ each name today", the answer is the log, not a counter, and that is a choice nob
 operator.
 **Status.** landed (this commit).
 
+<<<<<<< ours
 ## HOST-25 · open binds the segment's ORIGIN frame to the base's World: `corrupt` at 0, `foreignOrigin` (2026-10-17, HOST-6; OPS's `corrupt history` finding, built after KERNEL-24)
 **The defect (OPS, on D4/D6).** `seg.log` starts with the origin frame, `Log.frame keys.segment
 segmentInitial (mark w₀).2` (HOST-18). No open reads it. `openWith` reads the base and
@@ -751,3 +752,17 @@ not change. It lands right after KERNEL-24, whose flag day re-geneses every Stor
 refuses the old ones `shapeMismatch` before this check is reached). After it, a Store whose origin
 frame does not match its base refuses to open, by name, where before it opened.
 **Status.** designed (this entry). It is built when KERNEL-5 reports KERNEL-24 on main.
+=======
+## HOST-25 · the pinned base digest has its own customization string (2026-10-17, BUILD-TRANSPORT; scout C1's finding)
+**Decision.** `Keys.worldDigest` (the unkeyed cSHAKE256 of a base's World bytes, which a thin member
+pins and `read` pages state, HOST-15) is `Hash.digest "nanodregg/host/base-digest/v1"`, no longer
+the base MAC's string `nanodregg/host/base/v1`.
+**Alternatives.** Keep the shared string: KMAC256 is cSHAKE256 with function name "KMAC", so the
+two outputs are already separated by the function name; nothing collides today.
+**Critique.** It is hygiene, not a hole: the old sharing was safe by KMAC's construction. Every pin
+taken before this commit no longer matches (a thin `adopt` with an old digest refuses
+`baseMismatch`); nothing deployed holds one.
+**Meta-critique.** I took it because the assembly listed it and it is two lines; "one string, one
+purpose" is an aesthetic I am applying, not a measured failure.
+**Status.** landed. Re-emit: every pin (out of band).
+>>>>>>> theirs

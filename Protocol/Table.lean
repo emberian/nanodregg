@@ -334,7 +334,7 @@ def logReplyLayout : Codec.Layout := [.list "events", .bytes "height", .bytes "c
 /-- The `read` reply's payload: one page of the World bytes of the writer's NEWEST base (HOST-14,
 HOST-15), for a thin member (PROTOCOL-14, option A). The request is the read envelope, its `start`
 read as a byte offset into those World bytes. `height` and `chain` are the base World's,
-`total` its World bytes' length, `digest` = `Hash.digest "nanodregg/host/base/v1"` of them, and
+`total` its World bytes' length, `digest` = `Hash.digest "nanodregg/host/base-digest/v1"` of them, and
 `bytes` = World bytes `[start, start + chunk)`. All numbers are u64le. A seal between two pages
 changes `height` and `digest`, and the member starts its download again. The member trusts none of
 it: it accepts the assembled bytes only if they hash to a base digest it pinned out of band

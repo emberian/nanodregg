@@ -2,7 +2,7 @@
 # Protocol.Thin — a member that starts from a pinned base, not from genesis (PROTOCOL-14, option A)
 
 A thin member holds a PIN: a height and the digest of the World bytes at that height
-(`Host.Keys.worldDigest`, deployed `Hash.digest "nanodregg/host/base/v1"`, unkeyed, HOST-15), which
+(`Host.Keys.worldDigest`, deployed `Hash.digest "nanodregg/host/base-digest/v1"`, unkeyed, HOST-15), which
 it trusts out of
 band: its own earlier fold, or a full follower's word (that channel is Ember's, unbuilt). It pages
 the writer's newest base with `read` (`readReplyLayout`) and `accept` decides each page. It trusts
