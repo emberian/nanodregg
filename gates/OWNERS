@@ -55,6 +55,8 @@ Kernel/Proofs/Value.lean	LEDGER
 Kernel/Receive/Ledger.lean	LEDGER
 Kernel/Proofs/Ledger.lean	LEDGER
 decisions/ledger.md	LEDGER
+Ledger/	LEDGER
+world/escrow/	LEDGER
 Ops/	OPS
 deploy/	OPS
 decisions/ops.md	OPS

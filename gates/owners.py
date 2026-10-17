@@ -9,9 +9,9 @@ A path no OWNERS row covers belongs to ROOT.
 import os
 import re
 
-# subject prefix -> the layers whose paths it may change. LEDGER is a KERNEL deliverable with the
-# prefix `kernel:` (CHARTER, 10-17), so `kernel:` owns LEDGER's paths as well as KERNEL's.
-SUBJECT = {"kernel": {"KERNEL", "LEDGER"}, "codec": {"CODEC"}, "emit": {"CODEC"}, "host": {"HOST"},
+# subject prefix -> the layers whose paths it may change. LEDGER has its own prefix `ledger:` (ROOT
+# 10-17, replacing the `kernel:`-owns-LEDGER mapping of 5be0d98).
+SUBJECT = {"kernel": {"KERNEL"}, "ledger": {"LEDGER"}, "codec": {"CODEC"}, "emit": {"CODEC"}, "host": {"HOST"},
            "protocol": {"PROTOCOL"}, "rows": {"PROTOCOL"}, "client": {"CLIENT"}, "sandbox": {"CLIENT"},
            "lang": {"LANG"}, "hosting": {"HOSTING"}, "ops": {"OPS"}, "perf": {"PERF"},
            "transport": {"TRANSPORT"}, "gates": {"GATES"}, "build": {"GATES"}, "charter": {"ROOT"},
