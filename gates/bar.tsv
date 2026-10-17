@@ -1,0 +1,6 @@
+# gates/bar.tsv — THE BAR (owner: PERF). `limit` rows are the ceilings scripts/bar.sh judges
+# against (CHARTER: 1000 records, write ≤ 5 s, cold reopen ≤ 60 s); `run` rows are the trend of
+# judged and unjudged runs (scripts/bar.sh --record), never a ratchet: wall time on one device.
+# kind	metric|date	value|sha	device	load (before / after)	write-p99-ms	reopen-ms	verdict
+limit	write-p99-ms	5000
+limit	reopen-ms	60000
