@@ -33,7 +33,8 @@ def newKey : IO Digest := do
 
 /-- Serve `frames` as the writer of `dir`; return what the loop holds and whether a second writer
 was refused. The writer (and its lock) is released when this returns. -/
-def serveDir (dir : System.FilePath) (keys : Keys) (c : Cadence) (seed : Nat) (frames : List Frame) :
+def serveDir (dir : System.FilePath) (keys : Keys) (c : Cadence) (seed : Nat) (frames : List Frame)
+    (roundFuel : Nat := 5) (viaChannel : Bool := false) :
     IO (Except String (Resident (World Nat) × Bool)) := do
   match ← (openWriter dir keys c world recorder.mark foldStep : IO (Except Fault _)) with
   | .error e => return .error s!"open: {e.name}"
@@ -42,14 +43,29 @@ def serveDir (dir : System.FilePath) (keys : Keys) (c : Cadence) (seed : Nat) (f
     let sp ← IO.mkRef (splits seed frames.length)
     let sent ← IO.mkRef #[]
     let o := wr.opening
-    let (exit, r) ← serve machine recorder keys.segment (fileCheckpoint dir keys c world) c
-      (fileStore wr.segment) (fun _ _ => pure (0, ByteArray.empty)) (scriptPort fr sp sent) ⟨16, 1 <<< 20⟩
-      (frames.length + 1) o.resident none
+    -- `viaChannel`: the frames go through the DEPLOYED port (`channelPort`: a closeable channel
+    -- and the one-frame `unread` slot), all queued, with batches cut by bytes so frames are put
+    -- back at round ends
+    let (port, limits) ← if viaChannel then do
+        let ch ← Std.CloseableChannel.Sync.new
+        for f in frames do discard <| (ch.send f).toBaseIO
+        discard <| (ch.close).toBaseIO
+        let p := channelPort ch (← IO.mkRef none) fun r => sent.modify (·.push r)
+        pure (p, (⟨16, 3 * (frames.head?.map (·.payload.size)).getD 1⟩ : Limits))
+      else pure (scriptPort fr sp sent, (⟨16, 1 <<< 20⟩ : Limits))
+    -- rounds of `roundFuel` batches, each ending in the real in-process reopen of the files (D4)
+    let (exit, r) ← restarts (serve machine recorder keys.segment (fileCheckpoint dir keys c world) c
+        (fileStore wr.segment) (fun _ _ => pure (0, ByteArray.empty)) port limits roundFuel)
+      (reopenAt dir keys c world recorder.mark foldStep) recorder.mark (frames.length + 1) o.resident
     let second ← (openWriter dir keys c world recorder.mark foldStep : IO (Except Fault _))
     let refused := match second with | .error .locked => true | _ => false
     wr.segment.sync  -- the writer's handle (and so its lock) is alive up to here
+    let replies := (← sent.get).size
     match exit with
-    | .eof => return .ok (r, refused)
+    | .eof =>
+      if replies ≠ frames.length then
+        return .error s!"{frames.length} requests, {replies} replies"
+      return .ok (r, refused)
     | e => return .error s!"serve ended {e.name}"
 
 def follow (dir : System.FilePath) (keys : Keys) (c : Cadence) : IO (Except Fault (Opening (World Nat))) :=
@@ -58,13 +74,13 @@ def follow (dir : System.FilePath) (keys : Keys) (c : Cadence) : IO (Except Faul
 def fileSize (p : System.FilePath) : IO Nat := do
   return (← (← File.open p .read).size).toNat
 
-def run (args : List String) : IO UInt32 := do
-  let seed := (args.head? >>= String.toNat?).getD 1
+def body (seed : Nat) (dirA dirB : System.FilePath) : IO UInt32 := do
   let failures ← IO.mkRef 0
   let frames := (scenario seed 200).map (·.1)
   let key ← newKey
   let keys := Keys.ofKey key
-  IO.FS.withTempDir fun dir => do
+  do
+    let dir := dirA
     let made ← (Host.genesis dir key keys cadence world recorder.mark Sim.genesis : IO (Except Fault Unit))
     check "genesis creates the Store" (match made with | .ok () => true | .error _ => false) failures
     let again ← (Host.genesis dir key keys cadence world recorder.mark Sim.genesis : IO (Except Fault Unit))
@@ -97,10 +113,10 @@ def run (args : List String) : IO UInt32 := do
       let other := Keys.ofKey (← newKey)
       check "plant-foreign-key: the Store under another key is refused `baseCorrupt`"
         (match ← follow dir other cadence with | .error f => f.name = "baseCorrupt" | _ => false) failures
-      match ← serveDir dir keys cadence seed (frames.drop 120) with
+      match ← serveDir dir keys cadence seed (frames.drop 120) (viaChannel := true) with
       | .error e => check s!"plant-crash-mid-seal: writer reopens and serves ({e})" false failures
       | .ok (r2, _) =>
-        check "plant-crash-mid-seal: writer truncated the tail, ignored the tmp, served on"
+        check "plant-crash-mid-seal: writer truncated the tail, ignored the tmp, served on, through the deployed channelPort in rounds of 5 with frames put back, one reply per request"
           (r.world.height < r2.world.height) failures
         let size ← fileSize (segmentPath dir)
         let reopened ← follow dir keys cadence
@@ -109,7 +125,8 @@ def run (args : List String) : IO UInt32 := do
            | .ok o => o.opened.torn = 0 && sameWorld o.opened.world r2.world && o.pos.offset == size
            | .error _ => false) failures
   -- plant-foreign-frame, on a Store that never seals (its tail is every frame)
-  IO.FS.withTempDir fun dir => do
+  do
+    let dir := dirB
     let still := { cadence with sealMinBytes := 1 <<< 20, recordBytesMax := 1 <<< 16 }
     let _ ← (Host.genesis dir key keys still world recorder.mark Sim.genesis : IO (Except Fault Unit))
     match ← serveDir dir keys still seed (frames.take 60) with
@@ -153,5 +170,18 @@ def run (args : List String) : IO UInt32 := do
   let n ← failures.get
   IO.println (if n = 0 then "ALL PASS" else s!"{n} FAILED")
   return (if n = 0 then 0 else 1)
+
+/-- `host-file-sim SEED [DIR]`: the Stores live under a fresh `DIR/run-<seed>-<random hex>/`
+(DIR defaults to `.lake/host-file-sim`), which this run creates, refuses to reuse, and removes
+when it ends (D9: no runtime temp-file primitive; they abort under a missing TMPDIR). -/
+def run (args : List String) : IO UInt32 := do
+  let seed := (args.head? >>= String.toNat?).getD 1
+  let root : System.FilePath := (args.drop 1).head?.getD ".lake/host-file-sim"
+  let runDir := root / s!"run-{seed}-{← IO.rand 0 (1 <<< 30)}"
+  if ← runDir.pathExists then
+    IO.eprintln s!"refused exists {runDir}"; return 2
+  IO.FS.createDirAll runDir
+  try body seed (runDir / "a") (runDir / "b")
+  finally IO.FS.removeDirAll runDir
 
 end Nanodregg.Host.Sim.File

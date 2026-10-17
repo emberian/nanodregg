@@ -33,6 +33,8 @@ inductive ExitClass where
 inductive Status where
   | eof
   | uncertain
+  /-- a round's end inside the process: `Host.restarts` consumes it and reopens in process (D4),
+  so `host` never exits with it; seen from outside it is a defect -/
   | fuel
   | sealIo
   /-- argv does not parse, or an argument's value is refused (founder keys, member, grant) -/
@@ -78,6 +80,18 @@ inductive Status where
   | pastEnd
   /-- the base file is shorter than its World: it changed under the read -/
   | shortBase
+  /-- a fuel restart's in-process reopen refused (D4) -/
+  | reopenFailed
+  /-- a fuel restart reopened a state other than the one the loop held: a defect in open or append -/
+  | reopenDiverged
+  /-- the restart budget is spent (unreachable before the reader's own lifetime) -/
+  | lifetime
+  /-- the request stream stopped inside a frame, with a bad length, a read error, or at the
+  reader's frame lifetime; nd-supervise exits with the child, so a restart re-pairs the pipe -/
+  | stream
+  /-- a `.dedicated` task did not get its own thread (the runtime ran it inline): the reader would
+  block the loop, and the resident would answer nothing -/
+  | noThreads
   deriving DecidableEq, Repr
 
 namespace Status
@@ -86,7 +100,7 @@ def all : List Status :=
   [eof, uncertain, fuel, sealIo, usage, entropy, recordTooLarge, worldTooLarge, indexTooLarge, io, ioServing,
    locked, .exists, badKey, shortRead, noBase, baseTooLarge, baseCorrupt, baseUndecodable,
    segmentShort, tailTooLong, foreignSegment, corrupt, record, tagWidth, behindAnchor, chainMismatch,
-   badIndex, pageTooLarge, pastEnd, shortBase]
+   badIndex, pageTooLarge, pastEnd, shortBase, reopenFailed, reopenDiverged, lifetime, stream, noThreads]
 
 def code : Status → Nat
   | eof => 0
@@ -120,14 +134,19 @@ def code : Status → Nat
   | pageTooLarge => 35
   | pastEnd => 36
   | shortBase => 37
+  | reopenFailed => 38
+  | reopenDiverged => 39
+  | lifetime => 40
+  | stream => 41
+  | noThreads => 42
 
 def cls : Status → ExitClass
   | eof => .done
-  | uncertain | fuel | sealIo | ioServing => .restart
+  | uncertain | fuel | sealIo | ioServing | lifetime | stream => .restart
   | usage | entropy | recordTooLarge | worldTooLarge | indexTooLarge | io
   | locked | .exists | badKey | shortRead | noBase | baseTooLarge | baseCorrupt | baseUndecodable
   | segmentShort | tailTooLong | foreignSegment | corrupt | record | tagWidth | behindAnchor | chainMismatch
-  | badIndex | pageTooLarge | pastEnd | shortBase => .fatal
+  | badIndex | pageTooLarge | pastEnd | shortBase | reopenFailed | reopenDiverged | noThreads => .fatal
 
 /-- The name printed beside the code (`refused NAME` / `exit NAME` on stderr). -/
 def name (s : Status) : String := ((toString (repr s)).splitOn ".").getLast!
@@ -175,5 +194,9 @@ def Exit.status : Exit → Status
   | .uncertain _ => .uncertain
   | .sealFailed f => f.status
   | .recordTooLarge _ => .recordTooLarge
+  | .reopenFailed _ => .reopenFailed
+  | .reopenDiverged => .reopenDiverged
+  | .lifetime => .lifetime
+  | .stream _ => .stream
 
 end Nanodregg.Host

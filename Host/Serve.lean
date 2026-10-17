@@ -39,6 +39,9 @@ inductive FrameRefusal where
   | undecodableCall
   | notServed (op : Protocol.Op)
   | wrongSocket (op : Protocol.Op)
+  /-- the resident stopped before this frame reached a batch: nothing of it was admitted, and
+  resending it to the restarted Host is safe -/
+  | stopped
   deriving Repr
 
 /-- The refusal's name on the wire. -/
@@ -47,6 +50,7 @@ def FrameRefusal.name : FrameRefusal → String
   | .undecodableCall => "undecodableCall"
   | .notServed _ => "notServed"
   | .wrongSocket _ => "wrongSocket"
+  | .stopped => "stopped"
 
 /-- A `refused` reply carrying a refusal's name. -/
 def named (name : String) : UInt8 × ByteArray :=

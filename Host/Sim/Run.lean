@@ -110,23 +110,54 @@ structure RunResult where
   replies : Array Reply
   disk : Disk
   bases : Bases
+  /-- in-process reopens at fuel restarts -/
+  reopens : Nat
+  /-- fuel returns at which the replies sent were not the frames taken from the port -/
+  unanswered : Nat
 
-/-- Serve `frames` from a disk, its bases, and the state they opened to. -/
+/-- The in-process reopen of a fuel restart over the in-memory image (what `Host.reopenAt` does over
+the files): the one open of the newest base and the synced segment; unsynced bytes are a divergence. -/
+def memReopen (c : Cadence) (disk : IO.Ref Disk) (bases : IO.Ref Bases) (reopens : IO.Ref Nat) :
+    IO (Except Exit (Resident (World Nat))) := do
+  reopens.modify (· + 1)
+  let d ← disk.get
+  if 0 < d.pending.size then return .error .reopenDiverged
+  match reopenWith c (← bases.get).file d.synced with
+  | .error f => return .error (.reopenFailed f.name)
+  | .ok o => return if o.opened.torn = 0 then .ok { world := o.opened.world, pos := o.pos, sealed := o.sealed, index := o.index } else .error .reopenDiverged
+
+/-- Serve `frames` from a disk, its bases, and the state they opened to, in rounds of `roundFuel`
+batches, each ending in an in-process reopen (`Host.restarts`, D4). -/
 def serveFrom (c : Cadence) (seed : Nat) (frames : List Frame) (failSyncAt : Option Nat) (d : Disk)
-    (b : Bases) (r : Resident (World Nat)) : IO RunResult := do
+    (b : Bases) (r : Resident (World Nat)) (roundFuel : Nat := frames.length + 1)
+    (limits : Limits := ⟨16, 1 <<< 20⟩) (dropUnread : Bool := false) : IO RunResult := do
   let disk ← IO.mkRef d
   let bases ← IO.mkRef b
   let fr ← IO.mkRef frames
   let sp ← IO.mkRef (splits seed frames.length)
   let sent ← IO.mkRef #[]
-  let (exit, r) ← serve machine recorder keys.segment (memCheckpoint disk bases keys c world) c
-    (memStore disk failSyncAt) (fun _ _ => pure (0, ByteArray.empty)) (scriptPort fr sp sent) ⟨16, 1 <<< 20⟩
-    (frames.length + 1) r none
-  return ⟨exit, r, ← sent.get, ← disk.get, ← bases.get⟩
+  let reopens ← IO.mkRef 0
+  let unanswered ← IO.mkRef 0
+  -- at every fuel return, before the reopen: every frame taken from the port has its reply
+  let reopen : IO (Except Exit (Resident (World Nat))) := do
+    let taken := frames.length - (← fr.get).length
+    if (← sent.get).size ≠ taken then
+      unanswered.modify (· + 1)
+      unless dropUnread do  -- the plant run expects it; its check reads the count
+          IO.println s!"FAIL requests = replies at fuel return {← reopens.get}: {taken} taken, {(← sent.get).size} answered"
+    memReopen c disk bases reopens
+  let (exit, r) ← restarts (serve machine recorder keys.segment (memCheckpoint disk bases keys c world) c
+      (memStore disk failSyncAt) (fun _ _ => pure (0, ByteArray.empty))
+      (if dropUnread then { scriptPort fr sp sent with unread := fun _ => pure () } else scriptPort fr sp sent)
+      limits roundFuel)
+    reopen recorder.mark (frames.length + 2) r
+  return ⟨exit, r, ← sent.get, ← disk.get, ← bases.get, ← reopens.get, ← unanswered.get⟩
 
-def runWith (c : Cadence) (seed : Nat) (frames : List Frame) (failSyncAt : Option Nat) : IO RunResult := do
+def runWith (c : Cadence) (seed : Nat) (frames : List Frame) (failSyncAt : Option Nat)
+    (roundFuel : Nat := frames.length + 1) (limits : Limits := ⟨16, 1 <<< 20⟩) (dropUnread := false) :
+    IO RunResult := do
   match genesisStore c with
-  | .ok (d, b, r) => serveFrom c seed frames failSyncAt d b r
+  | .ok (d, b, r) => serveFrom c seed frames failSyncAt d b r roundFuel limits dropUnread
   | .error f => throw (IO.userError s!"genesis: {f.name}")
 
 /-- Where the log after genesis's origin frame starts (every record the loop writes is after it). -/
@@ -278,6 +309,39 @@ def run (args : List String) : IO UInt32 := do
   let r2 ← runOnce (seed + 7919) frames none
   IO.println s!"second split: {r2.disk.syncs} batches"
   check "a different batch split reaches the same chain" (r2.resident.world.chain = w.chain) failures
+  -- D4: rounds of 3 batches, each ending in an in-process reopen from the image, and batches cut
+  -- by bytes so frames are put back into the port (at round ends too)
+  let tight : Limits := ⟨16, 3 * (frames.head?.map (·.payload.size)).getD 1⟩
+  let f3 ← runWith cadence seed frames none 3 tight
+  let ref ← runWith cadence seed frames none (frames.length + 1) tight
+  check s!"fuel restarts: {f3.reopens} in-process reopens, one reply per request, the same replies in the same order as without restarts, the same chain"
+    (2 ≤ f3.reopens && f3.replies.size = 200 && (match f3.exit with | .eof => true | _ => false) &&
+      sameWorld f3.resident.world w &&
+      (f3.replies.toList.zip ref.replies.toList).all fun (a, b) => a.conn == b.conn && a.status == b.status && a.payload == b.payload)
+    failures
+  check s!"requests = replies at every one of {f3.reopens} fuel returns" (f3.unanswered = 0) failures
+  let dropped ← runWith cadence seed frames none 3 tight (dropUnread := true)
+  check s!"plant-drop-unread: a port that drops a put-back frame loses replies ({dropped.replies.size} of 200), so the check above can see a dropped frame"
+    (dropped.replies.size < 200 && 0 < dropped.unanswered) failures
+  -- plant-reopen-diverged: a reopen that loses the last synced frame is refused, never served from
+  let fr ← IO.mkRef frames
+  let sp ← IO.mkRef (splits seed frames.length)
+  let sent ← IO.mkRef #[]
+  let (gd, gb, gr) ← match genesisStore cadence with
+    | .ok g => pure g
+    | .error f => throw (IO.userError s!"genesis: {f.name}")
+  let disk ← IO.mkRef gd
+  let bases ← IO.mkRef gb
+  let (dexit, _) ← restarts (serve machine recorder keys.segment (memCheckpoint disk bases keys cadence world)
+      cadence (memStore disk none) (fun _ _ => pure (0, ByteArray.empty)) (scriptPort fr sp sent)
+      ⟨16, 1 <<< 20⟩ 3)
+    (do
+      let d ← disk.get
+      match reopenWith cadence (← bases.get).file (d.synced.extract 0 (d.synced.size - 1)) with
+      | .error f => return .error (.reopenFailed f.name)
+      | .ok o => return .ok { world := o.opened.world, pos := o.pos, sealed := o.sealed, index := o.index }) recorder.mark 10 gr
+  check "plant-reopen-diverged: a reopen missing the last synced byte stops the resident `reopenDiverged`"
+    (match dexit with | .reopenDiverged => true | _ => false) failures
   -- plant-world-too-large
   let tiny := { cadence with worldBytesMax := 400 }
   let t ← runWith tiny seed frames none

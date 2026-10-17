@@ -13,6 +13,12 @@
 STORE is the only path any verb touches. Frames are `Host.Wire`'s (the supervisor's mux is the
 other end). The exit code is `Host.Status.code` of how the process ended (`Host.Exit`): one code
 per status, each of class done, restart or fatal, with its name on stderr.
+There is no fuel exit: a spent round reopens in process (`Host.restarts`, D4).
+
+`serve` and `follow` are never silent (D8): one `STATUS` line on stderr once the Store is open and
+the reader thread is proved live, one at exit; a reader that cannot get its own thread (the
+runtime runs a `.dedicated` task inline when it cannot read the CPU count: the macOS sandbox
+without `hw.ncpu`) is refused `noThreads` by name rather than answering nothing.
 -/
 import Host.Deployed
 import Host.Follow
@@ -24,9 +30,17 @@ namespace Nanodregg.Host.Cli
 
 open Nanodregg.Kernel Nanodregg.Codec Nanodregg.Host.Deployed
 
-/-- How many batches one `serve` process runs before it exits `fuel` and is restarted (law 4: the
-one unbounded loop is the supervisor's restart). -/
-def fuelBatches : Nat := 1 <<< 24
+/-- Batches per round: each round ends in an in-process reopen checked against the loop's state,
+so the open path runs routinely (D4). -/
+def fuelBatches : Nat := 1 <<< 12
+
+/-- Frames the reader reads in one process (`Stop.lifetime`): 2^48, centuries at any rate the
+loop can sustain. -/
+def lifetimeFrames : Nat := 1 <<< 48
+
+/-- Rounds in one process. A round that ends `fuel` consumed `fuelBatches` batches of at least one
+frame each, so the reader's lifetime ends first and `Exit.lifetime` is unreachable before it. -/
+def restartsMax : Nat := lifetimeFrames / fuelBatches + 1
 
 /-- Frames the reader task may queue ahead of the loop. -/
 def queueMax : Nat := 1024
@@ -75,12 +89,48 @@ refuses by name). -/
 def serving (act : IO UInt32) : IO UInt32 :=
   try act catch e => refuse .ioServing s!"ioServing {e}"
 
-/-- Read frames from stdin into a bounded channel in a dedicated task; the loop's port. -/
-def stdioPort : IO Port := do
+/-- Whether a `.dedicated` task gets a thread of its own. Without one the reader would run inline,
+read stdin to its end, and only then let the loop answer: a resident that answers nothing. -/
+def threadsLive : IO Bool := do
+  let me ← IO.getTID
+  match ← IO.wait (← IO.asTask IO.getTID .dedicated) with
+  | .ok tid => pure (tid ≠ me)
+  | .error _ => pure false
+
+/-- Read frames from stdin into a bounded channel in a dedicated task; the loop's port and the
+reader's task (why it stopped). -/
+def stdioPort : IO (Port × Task (Except IO.Error Stop)) := do
   let ch ← Std.CloseableChannel.Sync.new (some queueMax)
   let input ← IO.getStdin
-  let _ ← IO.asTask (pump input ch fuelBatches) .dedicated
-  return channelPort ch (← IO.getStdout)
+  let reader ← IO.asTask (pump input ch lifetimeFrames) .dedicated
+  let out ← IO.getStdout
+  return (channelPort ch (← IO.mkRef none) (sendTo out), reader)
+
+def status (verb : String) (fields : List (String × String)) : IO Unit :=
+  IO.eprintln s!"STATUS {verb} {" ".intercalate (fields.map fun (k, v) => s!"{k}={v}")}"
+
+def residentFields (r : Resident (World D)) : List (String × String) :=
+  [("height", toString r.world.height), ("chain", r.world.chain.toHex),
+   ("offset", toString r.pos.offset), ("base_offset", toString r.sealed.offset),
+   ("base_height", toString r.sealed.height)]
+
+/-- Run a resident on stdin/stdout: prove the reader thread live, state the opened Store, run the
+rounds, and at the end answer every frame still queued `refused stopped`, then state the exit. -/
+def runResident (verb : String) (r₀ : Resident (World D))
+    (rounds : Port → Resident (World D) → IO (Exit × Resident (World D))) : IO UInt32 := do
+  if !(← threadsLive) then return ← refuse .noThreads
+  let (port, reader) ← stdioPort
+  status verb (residentFields r₀)
+  let (exit, r) ← rounds port r₀
+  let exit ← match exit with
+    | .eof => match ← IO.wait reader with
+      | .ok .eof => pure Exit.eof
+      | .ok stop => pure (Exit.stream stop)
+      | .error _ => pure (Exit.stream .readFailed)
+    | e => pure e
+  let refused ← refuseQueued port (named FrameRefusal.stopped.name) (queueMax + 1)
+  status verb (("exit", exit.status.name) :: ("refused_queued", toString refused) :: residentFields r)
+  return exitCode exit
 
 def serveVerb (store : String) : IO UInt32 := do
   match ← (readKey store : IO (Except (StoreFault (Record.Fault (Reject D))) Digest)) with
@@ -90,13 +140,13 @@ def serveVerb (store : String) : IO UInt32 := do
     match ← openWriter store keys c world recorder.mark foldStep with
     | .error f => refuseStore f
     | .ok wr => serving do
-      let port ← stdioPort
-      let (exit, _) ← serve (machine X) recorder keys.segment (fileCheckpoint store keys c world) c
-        (fileStore wr.segment) (pager keys store (← File.open (segmentPath store) .read)) port limits
-        fuelBatches wr.opening.resident none
+      let pagerSeg ← File.open (segmentPath store) .read
+      let code ← runResident "serve" wr.opening.resident fun port =>
+        restarts (serve (machine X) recorder keys.segment (fileCheckpoint store keys c world) c
+            (fileStore wr.segment) (pager keys store pagerSeg) port limits fuelBatches)
+          (reopenAt store keys c world recorder.mark foldStep) recorder.mark restartsMax
       wr.segment.sync  -- the writer's handle, and so its lock, lives to here
-      if exitCode exit ≠ 0 then IO.eprintln s!"exit {exit.status.name}"
-      return exitCode exit
+      return code
 
 def followVerb (store memberHex grantHex : String) : IO UInt32 := do
   let some member := hexDigest memberHex | refuse .usage "member"
@@ -109,13 +159,13 @@ def followVerb (store memberHex grantHex : String) : IO UInt32 := do
     match ← openWriter store keys c world recorder.mark auditStep with
     | .error f => refuseStore f
     | .ok wr => serving do
-      IO.eprintln s!"follow: audited to height {wr.opening.opened.world.height}"
-      let port ← stdioPort
-      let (exit, _) ← Follow.loop keys ⟨member, grant, Follow.window⟩ (fileStore wr.segment)
-        (fileCheckpoint store keys c world) port fuelBatches none wr.opening.resident
+      let download ← IO.mkRef none
+      let code ← runResident "follow" wr.opening.resident fun port =>
+        restarts (Follow.loop keys ⟨member, grant, Follow.window⟩ (fileStore wr.segment)
+            (fileCheckpoint store keys c world) port download fuelBatches)
+          (reopenAt store keys c world recorder.mark auditStep) recorder.mark restartsMax
       wr.segment.sync  -- the follower's handle, and so its lock, lives to here
-      if exitCode exit ≠ 0 then IO.eprintln s!"exit {exit.status.name}"
-      return exitCode exit
+      return code
 
 def verb : List String → IO UInt32
   | ["genesis", store, name] => genesisVerb store name []

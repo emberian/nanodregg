@@ -387,3 +387,67 @@ comfort); that is also why I did not look for a stronger binding (e.g. the base 
 the whole frame before it). The plant came from the evaluator, so the hole it tests is the one
 someone already imagined; the divergent-own-copy case above is the one nobody has planted.
 **Status.** landed (this commit). Re-genesis: every Store; a pre-HOST-18 base refuses `foreignSegment`.
+
+## HOST-19 · the fuel restart reopens in process; the loop holds no frame between batches; the resident is never silent (2026-10-17, HOST-4; OPS D4 + D8's startup half)
+**The defect.** `| 0, r, _ => finish .fuel r` discarded the frame `drain` had carried, and `fuel` exited
+the PROCESS (code 4). Every frame queued in the reader's channel and every client connection through
+nd-supervise died with it, at a routine restart. The pump's own budget was `fuelBatches` FRAMES and it
+reported `eof` when spent, so after 2^24 frames the Host stopped reading and exited 0, silently. Under
+the macOS floor without `hw.ncpu` a `.dedicated` task ran inline, so the reader read stdin to its end
+before the loop answered anything, and the process exited 0 (PERF's repro).
+**Decision.** (1) The carry is deleted. `Port.unread` puts the frame that does not fit back into the port,
+so `serve` holds nothing between batches: its signature has no frame argument, and a round can end at
+any batch boundary. `drainM` is generic in the monad, and `Host.Proofs.Loop.drainM_conserves` states,
+over a list model of the port, `batch ++ port' = first :: port` with a non-empty batch of at most
+`max 1 batchMax` frames (OPS's law-6 read asked for the bound: without it a cut could take everything
+and still conserve). `Host.Follow.loop`'s base download in progress moved from a recursion argument
+into a reference the caller owns, for the same reason: it is volatile state that must outlive a round. (2)
+`Host.restarts` is the resident's one fuel-and-restart loop (law 4). On `fuel`, it reopens the Store in
+process through `reopenAt` (the one `openAt`, with a fresh read handle; the locked append handle stays
+the lock). It refuses `reopenDiverged` unless the reopened (height, chain), segment position, tag and
+index length equal what the loop held, and a torn tail at reopen is also `reopenDiverged`. Then it
+continues on the same port. `fuelBatches` drops 2^24 → 2^12, so every 4096 batches the open path is
+re-checked against the live state. That is a pair assertion that runs for real, not at the next crash.
+(3) The bounds are stated. The reader reads `lifetimeFrames` = 2^48 frames and stops `Stop.lifetime`.
+`restartsMax = lifetimeFrames / fuelBatches + 1`, because a round that ends `fuel` consumed ≥ fuelBatches
+frames, so `Exit.lifetime` cannot come first. The exhaustion case is a theorem, `Host.Proofs.Loop.restarts_spent : restarts round reopen mark 0 r =
+pure (.lifetime, r)`: a spent top loop runs no round and exits by name (`lifetime`, class restart, never
+silent). This nested bound IS the shape law 4 sanctions (ROOT, 10-17). (4) Never silent. `threadsLive` compares `IO.getTID` of
+the main thread with that of a `.dedicated` task and refuses `noThreads` by name (rc 2). Measured under
+PERF's floor profile: `refused noThreads`, rc 2, where HEAD hung. One `STATUS serve|follow height= chain=
+offset= base_offset= base_height=` line goes to stderr at open and one `STATUS … exit=NAME
+refused_queued=N …` at exit. A reader that stopped `truncated`/`badLength`/`readFailed`/`lifetime`
+ends `Exit.stream` by name, never `eof`. (5) At every exit, every frame still queued is answered
+`refused stopped` (FrameRefusal.stopped: not admitted, safe to resend) after the channel is closed.
+**Exit table** (OPS's D5, Host/Exit.lean): reopenFailed 38, reopenDiverged 39 and noThreads 42 are
+fatal; lifetime 40 and stream 41 restart (nd-supervise exits with the child, so a restart re-pairs
+the pipe). `Status.fuel` (4) stays a constructor because `Exit.fuel` is a round's end, but `host`
+never exits with it. `Exit.stream .eof` maps to `stream`, not `eof`, so `Exit.name_of_status` stays true.
+**Plants** (host-sim, seeds 1–3): `requests = replies at every fuel return` (a named FAIL line per
+round, which is OPS's F1 check); `fuel restarts` (rounds of 3 batches with batches cut by bytes, so
+frames go back into the port at round ends: ~30 in-process reopens, the same 200 replies in the same
+order as the run without restarts, the same chain); `plant-drop-unread` (a port that drops the put-back
+frame loses replies, e.g. 173 of 200, so the check can see a dropped frame); `plant-reopen-diverged`
+(a reopen missing the last synced byte stops the resident `reopenDiverged`). host-file-sim runs every
+serve in rounds of 5 batches through the real `reopenAt` over the files, and its second writer run
+goes through the DEPLOYED `channelPort` (closeable channel + the `unread` slot) with byte-cut batches,
+so the code the theorem's model stands for is the code under test, with one reply per request.
+**Alternatives.** (a) Keep the process exit and have nd-supervise respawn the child while holding the
+sockets. That puts a restart policy in Rust (law 2), and the frames in the dead child's pipe are still
+lost. (b) Keep the carry and pass it through `Exit.fuel (carry)`, as OPS's D4 sketch had it. That works,
+but the invariant is then a parameter every exit path must remember, and the uncertain/sealFailed
+exits dropped it too. With `unread`, holding nothing is a fact of the signature. (c) `repeat` for the
+top loop: `partial` in disguise, which the gate cannot see.
+**Critique.** An in-process reopen re-checks the open path, but it resets no process state, so leaks
+and fragmentation persist, and so does a bug in the reader task, which outlives every round. The reopen
+costs one base decode + tail fold per 4096 batches (~4 ms at THE BAR, ~5 s at worldBytesMax): at
+the top of the range that is a 5 s write stall every 4096 batches, and it must be measured before
+worldBytesMax is believed (ASSEMBLY-perf ID-7). Residue: at a process-ending exit, the one frame the
+reader has read but not yet queued is unanswered, because its send fails on the closed channel. Its
+connection's close is the only signal. `threadsLive` depends on `IO.getTID` naming OS threads. The
+theorem is over a list model of the port: that `channelPort` IS that model (one slot, popped before
+the channel) is code, not proof.
+**Meta-critique.** I deleted the carry because I like invariants that live in types, and the type
+fact is what I can prove. The restart reads as a self-check, and that may be making a 5 s stall at
+size look like a virtue.
+**Status.** landed (written by HOST-4, compiled, fixed and landed by HOST-5 on hbox).

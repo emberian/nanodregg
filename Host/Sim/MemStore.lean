@@ -98,6 +98,8 @@ def scriptPort (frames : IO.Ref (List Frame)) (split : IO.Ref (List Bool))
     match ← frames.get with
     | [] => pure none
     | f :: rest => frames.set rest; pure (some f)
+  unread f := frames.modify (f :: ·)
   send r := sent.modify (·.push r)
+  close := pure ()
 
 end Nanodregg.Host.Sim

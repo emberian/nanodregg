@@ -33,7 +33,18 @@ inductive Stop where
   | truncated
   /-- a frame body outside `5 ≤ len ≤ bodyMax` -/
   | badLength (len : Nat)
+  /-- the reader's frame budget (`Host.Cli.lifetimeFrames`) is spent -/
+  | lifetime
+  /-- reading the stream raised an IO error -/
+  | readFailed
   deriving DecidableEq, Repr
+
+def Stop.name : Stop → String
+  | .eof => "eof"
+  | .truncated => "truncated"
+  | .badLength _ => "badLength"
+  | .lifetime => "lifetime"
+  | .readFailed => "readFailed"
 
 /-- The frame a body holds: `u32 conn ‖ u8 op ‖ payload`. -/
 def decodeBody (body : ByteArray) : Except Stop Frame :=

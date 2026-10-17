@@ -14,8 +14,12 @@ the next batch. Replies leave only after the sync, so no reply reports a state a
 back. A failed append or sync is never retried (HOST-4: after a failed fsync the kernel may have
 dropped the dirty pages); the supervisor restarts the Host and `recover` decides what is on disk.
 
-The loop is the one unbounded loop (LAW 4 as amended): `fuel` batches, then `Exit.fuel`, and the
-supervisor restarts it, so reopen runs routinely.
+A round of `serve` runs `fuel` batches and returns `Exit.fuel`; `restarts` (the resident's one
+fuel-and-restart loop, LAW 4 as amended) then reopens the Store from disk IN PROCESS, asserts the
+reopened state is the state the loop held (`reopenDiverged` otherwise), and serves the next round
+on the same port. So reopen runs routinely and no connection notices (D4). The loop holds no frame
+between batches: a frame that does not fit a batch goes back into the port (`Port.unread`), so a
+round can end at any batch boundary without dropping one (`Host.Proofs.Loop.drainM_conserves`).
 
 The physical store is a record of two IO actions (`Store`), so the simulation and the crash plants
 drive this same loop over an in-memory disk (`Host.MemStore`), and `host serve` over the file.
@@ -43,7 +47,12 @@ structure Port where
   recv : IO (Option Frame)
   /-- a frame already queued, without blocking -/
   poll : IO (Option Frame)
+  /-- put a frame back at the front: the next `recv` or `poll` returns it. Called only right after
+  a `poll` returned it, so the port holds at most one frame put back. -/
+  unread : Frame → IO Unit
   send : Reply → IO Unit
+  /-- stop accepting frames; the ones already queued stay readable by `poll` -/
+  close : IO Unit
 
 structure Limits where
   batchMax : Nat
@@ -53,7 +62,7 @@ structure Limits where
 inductive Exit where
   /-- the request stream ended -/
   | eof
-  /-- the batch budget of this process is spent; restart -/
+  /-- the batch budget of this round is spent; `restarts` reopens and continues -/
   | fuel
   /-- an append or sync failed: the batch's replies were `uncertain`; restart and recover -/
   | uncertain (detail : String)
@@ -62,6 +71,14 @@ inductive Exit where
   /-- a batch record over `Cadence.recordBytesMax`: the batch was not appended and its replies
   were `uncertain` -/
   | recordTooLarge (bytes : Nat)
+  /-- a fuel restart's reopen refused (the refusal's name) -/
+  | reopenFailed (name : String)
+  /-- the reopened Store is not the state the loop held: a defect in the open or the append path -/
+  | reopenDiverged
+  /-- the resident's restart budget is spent (unreachable before the port's own lifetime bound) -/
+  | lifetime
+  /-- the request stream stopped other than at a frame boundary, or at the reader's lifetime -/
+  | stream (stop : Stop)
   deriving Repr
 
 def Exit.name : Exit → String
@@ -70,6 +87,10 @@ def Exit.name : Exit → String
   | .uncertain _ => "uncertain"
   | .sealFailed _ => "sealFailed"
   | .recordTooLarge _ => "recordTooLarge"
+  | .reopenFailed _ => "reopenFailed"
+  | .reopenDiverged => "reopenDiverged"
+  | .lifetime => "lifetime"
+  | .stream _ => "stream"
 
 /-- How the loop seals a base: `seal w offset tag` writes the base of `w`, which is the segment
 prefix `[0, offset)` chained to `tag`, durably, and returns its World's encoded size. With `async`
@@ -108,19 +129,27 @@ def withinTail (c : Cadence) (sealed : Sealed) (pos n : Nat) : Bool :=
   decide (pos + n - sealed.offset ≤ c.tailMax sealed.bytes)
 
 /-- Take the queued frames after `first`: at most `limits.batchMax` frames and, past the first,
-`limits.batchBytesMax` payload bytes. A frame that does not fit is carried into the next batch. -/
-def drain (port : Port) (limits : Limits) (first : Frame) : IO (Array Frame × Option Frame) :=
+`limits.batchBytesMax` payload bytes. A frame that does not fit is put back (`unread`), so the
+caller holds nothing but the batch. Generic in the monad so its conservation is a theorem over a
+list model of the port (`Host.Proofs.Loop.drainM_conserves`); the loop runs it in `IO`. -/
+def drainM {m : Type → Type} [Monad m] (poll : m (Option Frame)) (unread : Frame → m Unit)
+    (limits : Limits) (first : Frame) : m (Array Frame) :=
   go limits.batchMax #[first] first.payload.size
 where
-  go : Nat → Array Frame → Nat → IO (Array Frame × Option Frame)
-    | 0, acc, _ => pure (acc, none)
+  go : Nat → Array Frame → Nat → m (Array Frame)
+    | 0, acc, _ => pure acc
     | fuel + 1, acc, bytes => do
-      if limits.batchMax ≤ acc.size then return (acc, none)
-      match ← port.poll with
-      | none => return (acc, none)
+      if limits.batchMax ≤ acc.size then return acc
+      match ← poll with
+      | none => return acc
       | some f =>
-        if limits.batchBytesMax < bytes + f.payload.size then return (acc, some f)
+        if limits.batchBytesMax < bytes + f.payload.size then
+          unread f
+          return acc
         go fuel (acc.push f) (bytes + f.payload.size)
+
+def drain (port : Port) (limits : Limits) (first : Frame) : IO (Array Frame) :=
+  drainM port.poll port.unread limits first
 
 variable {W T R : Type}
 
@@ -224,22 +253,19 @@ def append (rec : Recorder W T) (s : Log.Sealer) (ck : Checkpoint W) (c : Cadenc
 builds a deferred reply (a `log` or `read` page: status, payload) from the durable state `r`. -/
 def serve (m : Machine W T R Frame) (rec : Recorder W T) (s : Log.Sealer) (ck : Checkpoint W)
     (c : Cadence) (store : Store) (pager : Resident W → Deferred → IO (UInt8 × ByteArray)) (port : Port)
-    (limits : Limits) : Nat → Resident W → Option Frame → IO (Exit × Resident W)
-  | 0, r, _ => finish .fuel r
-  | fuel + 1, r, carried => do
+    (limits : Limits) : Nat → Resident W → IO (Exit × Resident W)
+  | 0, r => finish .fuel r
+  | fuel + 1, r => do
     let r ← match ← reap r with
       | .ok r => pure r
       | .error f => return (.sealFailed f, { r with pending := none })
-    let first ← match carried with
-      | some f => pure (some f)
-      | none => port.recv
-    let some first := first | finish .eof r
-    let (batch, carry) ← drain port limits first
+    let some first ← port.recv | finish .eof r
+    let batch ← drain port limits first
     let (w', out) := m.admitBatch r.world (batch.toList.map fun f => ⟨f.conn, f⟩)
     if out.staged.isEmpty then
       let r := { r with world := w' }
       (← fillPages pager r out).forM port.send
-      serve m rec s ck c store pager port limits fuel r carry
+      serve m rec s ck c store pager port limits fuel r
     else
       match ← append rec s ck c store r w' (rec.encode w' out.staged) with
       | .error e =>
@@ -247,14 +273,54 @@ def serve (m : Machine W T R Frame) (rec : Recorder W T) (s : Log.Sealer) (ck : 
         finish e r
       | .ok r =>
         (← fillPages pager r out).forM port.send
-        serve m rec s ck c store pager port limits fuel r carry
+        serve m rec s ck c store pager port limits fuel r
+
+/-- What a reopened Store must agree with the loop on: the World's height and chain, the segment
+position and its tag, and the index length. The pair assertion of every fuel restart. -/
+def agrees (mark : W → Nat × ByteArray) (a b : Resident W) : Bool :=
+  mark a.world == mark b.world && a.pos.offset == b.pos.offset && a.pos.tag == b.pos.tag &&
+    a.index.size == b.index.size && b.pending.isNone
+
+/-- The resident's one fuel-and-restart loop (LAW 4 as amended): run a round; on `fuel`, reopen
+the Store from disk in process (`reopen` names its own refusal: `reopenFailed` for an open that
+refuses, `reopenDiverged` for bytes on disk the loop never synced) (the round's `finish` has settled any seal, and every appended byte
+was synced), refuse a reopen that disagrees with the state the loop held, and run the next round
+from the REOPENED state on the same port. Every other exit ends the resident. `rounds` is a static
+bound the port's lifetime reaches first (`Host.Cli.restartsMax`). -/
+def restarts (round : Resident W → IO (Exit × Resident W))
+    (reopen : IO (Except Exit (Resident W))) (mark : W → Nat × ByteArray) :
+    Nat → Resident W → IO (Exit × Resident W)
+  | 0, r => return (.lifetime, r)
+  | k + 1, r => do
+    let (exit, r) ← round r
+    match exit with
+    | .fuel =>
+      match ← reopen with
+      | .error e => return (e, r)
+      | .ok r' =>
+        if agrees mark r r' then restarts round reopen mark k r'
+        else return (.reopenDiverged, r)
+    | e => return (e, r)
+
+/-- At an exit that ends the resident: stop the port and answer every frame still queued
+`refused stopped`, so no accepted request goes unanswered. At most `bound` frames. -/
+def refuseQueued (port : Port) (stopped : UInt8 × ByteArray) (bound : Nat) : IO Nat := do
+  port.close
+  go bound 0
+where
+  go : Nat → Nat → IO Nat
+    | 0, n => pure n
+    | k + 1, n => do
+      match ← port.poll with
+      | none => pure n
+      | some f => port.send ⟨f.conn, stopped.1, stopped.2⟩; go k (n + 1)
 
 /-! ## The stdio port: a reader task frames stdin into a bounded channel -/
 
-/-- Frame `input` into `ch` until it stops; at most `fuel` frames. Closes the channel and returns
-why it stopped. -/
+/-- Frame `input` into `ch` until it stops; at most `fuel` frames (`Stop.lifetime`). Closes the
+channel and returns why it stopped. -/
 def pump (input : IO.FS.Stream) (ch : Std.CloseableChannel.Sync Frame) : Nat → IO Stop
-  | 0 => do discard <| (ch.close).toBaseIO; pure .eof
+  | 0 => do discard <| (ch.close).toBaseIO; pure .lifetime
   | fuel + 1 => do
     match ← readFrame input with
     | .ok f =>
@@ -268,10 +334,19 @@ def sendTo (output : IO.FS.Stream) (r : Reply) : IO Unit := do
   output.write (encodeReply r)
   output.flush
 
-/-- The port over a channel the reader task fills. -/
-def channelPort (ch : Std.CloseableChannel.Sync Frame) (output : IO.FS.Stream) : Port where
-  recv := ch.recv
-  poll := ch.tryRecv
-  send := sendTo output
+/-- The port over a channel, with a one-frame slot for `unread`; replies go to `send`. -/
+def channelPort (ch : Std.CloseableChannel.Sync Frame) (back : IO.Ref (Option Frame))
+    (send : Reply → IO Unit) : Port where
+  recv := do
+    match ← back.swap none with
+    | some f => pure (some f)
+    | none => ch.recv
+  poll := do
+    match ← back.swap none with
+    | some f => pure (some f)
+    | none => ch.tryRecv
+  unread f := back.set (some f)
+  send
+  close := discard <| (ch.close).toBaseIO
 
 end Nanodregg.Host

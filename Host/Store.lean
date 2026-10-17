@@ -90,6 +90,15 @@ def openAt (dir : System.FilePath) (keys : Keys) (c : Cadence) (world : Stream W
 def Opening.resident (o : Opening W) : Resident W :=
   { world := o.opened.world, pos := o.pos, sealed := o.sealed, index := o.index }
 
+/-- The reopen of a fuel restart (`Host.restarts`): the one open, through a fresh read handle (the
+writer's locked append handle stays the lock). A torn tail here is bytes the loop never synced, a
+divergence, never something to truncate. -/
+def reopenAt (dir : System.FilePath) (keys : Keys) (c : Cadence) (world : Stream W)
+    (mark : W → Nat × ByteArray) (step : W → ByteArray → Except F W) : IO (Except Exit (Resident W)) := do
+  match ← openAt dir keys c world mark step (← File.open (segmentPath dir) .read) with
+  | .error f => return .error (.reopenFailed f.name)
+  | .ok o => return if o.opened.torn = 0 then .ok o.resident else .error .reopenDiverged
+
 /-- An open writer: the locked append handle, and the loop's state. -/
 structure Writer (W : Type) where
   segment : File

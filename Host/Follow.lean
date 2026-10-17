@@ -73,24 +73,26 @@ def answer {D : Type} [Ord D] [DecidableEq D] (X : Receive.Ctx D) (B : Protocol.
   | some op => refused (.wrongSocket op)
 
 /-- The follower loop: one frame at a time, at most `fuel` frames. `dl` is the base download in
-progress, held in memory only (a restart starts it again). Absorbed Turns are appended through
+progress, held in memory only, in a reference the caller owns, so it survives a fuel restart's
+in-process reopen exactly as the port's queued frames do (a process restart starts it again). Absorbed Turns are appended through
 `Host.append` BEFORE the step is answered; an adopted base is sealed as follow's own newest base
 at its segment position (no record before it belongs to the adopted World's history, so the index
 restarts empty) BEFORE the step is answered. -/
-def loop (keys : Keys) (me : Command.Self D) (store : Store) (ck : Checkpoint (World D)) (port : Port) :
-    Nat → Option Protocol.Thin.Download → Resident (World D) → IO (Exit × Resident (World D))
-  | 0, _, r => finish .fuel r
-  | fuel + 1, dl, r => do
+def loop (keys : Keys) (me : Command.Self D) (store : Store) (ck : Checkpoint (World D)) (port : Port)
+    (dl : IO.Ref (Option Protocol.Thin.Download)) : Nat → Resident (World D) → IO (Exit × Resident (World D))
+  | 0, r => finish .fuel r
+  | fuel + 1, r => do
     let r ← match ← reap r with
       | .ok r => pure r
       | .error f => return (.sealFailed f, { r with pending := none })
     let some f ← port.recv | finish .eof r
     let (fs', p, status, payload) :=
-      answer X ⟨world, World.height, keys.worldDigest, c.worldBytesMax⟩ me ⟨r.world, dl⟩ f
+      answer X ⟨world, World.height, keys.worldDigest, c.worldBytesMax⟩ me ⟨r.world, ← dl.get⟩ f
+    dl.set fs'.download
     match p with
     | .turns [] =>
       port.send ⟨f.conn, status, payload⟩
-      loop keys me store ck port fuel fs'.download { r with world := fs'.world }
+      loop keys me store ck port dl fuel { r with world := fs'.world }
     | .turns ts =>
       match ← append recorder keys.segment ck c store r fs'.world (recorder.encode fs'.world ts.toArray) with
       | .error e =>
@@ -98,7 +100,7 @@ def loop (keys : Keys) (me : Command.Self D) (store : Store) (ck : Checkpoint (W
         finish e r
       | .ok r =>
         port.send ⟨f.conn, status, payload⟩
-        loop keys me store ck port fuel fs'.download r
+        loop keys me store ck port dl fuel r
     | .adopt w' =>
       let r ← match r.pending with
         | none => pure r
@@ -111,7 +113,7 @@ def loop (keys : Keys) (me : Command.Self D) (store : Store) (ck : Checkpoint (W
         return (.sealFailed e, { r with pending := none })
       | .ok sealed =>
         port.send ⟨f.conn, status, payload⟩
-        loop keys me store ck port fuel fs'.download
+        loop keys me store ck port dl fuel
           { r with world := w', sealed, index := #[], pending := none }
 
 end Nanodregg.Host.Follow

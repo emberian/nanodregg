@@ -52,7 +52,7 @@ event the rows log (the largest is a package install) and makes a cold follower 
 def pageBudget : Nat := 4096
 
 def limits : Limits := ⟨16, 1 <<< 20⟩
-/-- Batches one loop process serves before it exits `fuel` (the supervisor restarts it). -/
+/-- Batches one round of the loop serves before it ends `fuel` (`Host.restarts` reopens in process). -/
 def fuel : Nat := 1000000
 
 /-- `Host.handle`, except under the `openLog` plant: a `log` envelope that decodes is paged
@@ -126,16 +126,13 @@ structure Running where
 def start (P : Params) (m : Mem) (r : Resident (World D)) : IO Running := do
   let reqs ← Std.CloseableChannel.Sync.new
   let reps ← Std.CloseableChannel.Sync.new
-  let port : Port :=
-    { recv := reqs.recv
-      poll := reqs.tryRecv
-      send := fun r => do discard <| (reps.send r).toBaseIO }
+  let port := channelPort reqs (← IO.mkRef none) fun r => do discard <| (reps.send r).toBaseIO
   let task ← IO.asTask (prio := .dedicated) do
     try
       serve (machine P) ⟨fun w ts => Record.encode Sim.dc w ts,
           fun w => (w.height, P.X.env.bytes w.chain)⟩ Host.Sim.keys.segment
         (checkpoint m) cadence (Host.Sim.memStore m.disk none) (pager P.X P.lieTip P.forgeBase m)
-        port limits fuel r none
+        port limits fuel r
     finally
       discard <| (reps.close).toBaseIO
   pure ⟨reqs, reps, task⟩
