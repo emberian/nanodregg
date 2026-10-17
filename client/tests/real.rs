@@ -27,10 +27,10 @@ fn supervise(sock: &Path, ws: &Path, store: &Path, args: &[&str]) -> Supervisor 
 fn real_host_create_write_read_rotate_write_read() {
     let host = nanodregg_devtools::lean_bin("host");
     // A short root: a Unix socket path must fit SUN_LEN (104 bytes on macOS).
-    let root = std::env::temp_dir().join(format!("ndreal-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&root);
-    for d in ["ws", "holding", "stores"] {
-        std::fs::create_dir_all(root.join(d)).unwrap();
+    let root = nanodregg_devtools::scratch(&format!("ndreal-{}", std::process::id()));
+    // `ws` is made by `nd --init` (0700 whatever the umask); the rest by the test.
+    for d in ["holding", "stores"] {
+        nanodregg_devtools::mkdirs(&root.join(d)).unwrap();
     }
     let root = root.canonicalize().unwrap();
     let (ws, holding) = (root.join("ws"), root.join("holding"));
@@ -48,6 +48,12 @@ fn real_host_create_write_read_rotate_write_read() {
     };
     let text = |o: &Output| String::from_utf8_lossy(&o.stdout).into_owned();
     assert!(nd(&["--init"]).status.success());
+    assert_eq!(
+        std::os::unix::fs::PermissionsExt::mode(&std::fs::metadata(&ws).unwrap().permissions())
+            & 0o7777,
+        0o700,
+        "nd --init makes the workspace the member's alone"
+    );
     let keys = text(&nd(&["--keys"]));
     let (key, next) = (
         line(&keys, "key ").to_owned(),

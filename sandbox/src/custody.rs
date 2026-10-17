@@ -1,6 +1,7 @@
 //! The one read of a custody file, shared by every process that holds a key: the member client's
 //! seed and holding (CLIENT-13) and the operator's provider-key broker (HOSTING-12). A custody file
-//! is read without following a link and refused unless it is a regular file owned by the effective
+//! is read without following a link and refused unless every directory above it is the euid's or
+//! root's and writable by no one else, and it is a regular file owned by the effective
 //! user, mode exactly 0600, and of a length the caller allows. The bytes are zeroized on drop.
 //! `read_public` is the same read for a public file custody's integrity depends on (trust
 //! anchors): the same checks, but any mode without a group or other write bit.
@@ -11,7 +12,7 @@ use std::fs::{self, File};
 use std::io::{self, Read};
 use std::ops::RangeInclusive;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use rustix::fs::{Mode, OFlags};
 use zeroize::Zeroizing;
@@ -35,6 +36,9 @@ pub enum Refused {
     Mode(u32),
     /// Its length is outside the allowed range.
     Length(u64),
+    /// A directory on its canonical path (this one) is neither the euid's nor root's, or has a
+    /// group or other write bit: whoever can write it can swap the file (sshd's StrictModes).
+    Dir(PathBuf),
     /// The file system failed (`NotFound` included).
     Io(io::Error),
 }
@@ -48,7 +52,36 @@ fn owned(meta: &fs::Metadata, ok: impl Fn(u32) -> bool) -> Result<(), Refused> {
     }
 }
 
-/// Read `path` under the checks every custody read shares: not a link, a regular file, owned by
+/// Every directory from `dir` (canonical) up to `/` is owned by the euid or root and has no group
+/// or other write bit. A sticky world-writable directory (`/tmp`) is refused too, as sshd does.
+fn check_chain(dir: &Path) -> Result<(), Refused> {
+    let euid = rustix::process::geteuid().as_raw();
+    for d in dir.ancestors() {
+        let m = fs::metadata(d).map_err(Refused::Io)?;
+        if (m.uid() != euid && m.uid() != 0) || m.permissions().mode() & 0o022 != 0 {
+            return Err(Refused::Dir(d.to_path_buf()));
+        }
+    }
+    Ok(())
+}
+
+/// `path` with its parent canonicalized, once the parent chain passes `check_chain`: the file is
+/// then opened through directories that were checked, so a symlinked component swapped after the
+/// check cannot redirect the open.
+fn trusted(path: &Path) -> Result<PathBuf, Refused> {
+    let Some(name) = path.file_name() else {
+        return Err(Refused::NotRegular);
+    };
+    let parent = match path.parent() {
+        Some(p) if !p.as_os_str().is_empty() => p,
+        _ => Path::new("."),
+    };
+    let parent = parent.canonicalize().map_err(Refused::Io)?;
+    check_chain(&parent)?;
+    Ok(parent.join(name))
+}
+
+/// Read `path` under the checks every custody read shares: its parent chain (`check_chain`), not a link, a regular file, owned by
 /// the effective user, a mode `ok` accepts, a length `lens` holds. A FIFO is refused, never
 /// waited on (`O_NONBLOCK`); a file that grows while read is refused `Length`. The bytes are read
 /// into `bytes`, which the caller allocates (zeroizing for a secret).
@@ -58,8 +91,9 @@ fn read_checked<B: AsMut<Vec<u8>>>(
     ok: impl Fn(u32) -> bool,
     mut bytes: B,
 ) -> Result<B, Refused> {
+    let path = trusted(path)?;
     let fd = rustix::fs::open(
-        path,
+        &path,
         OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC,
         Mode::empty(),
     )
@@ -105,9 +139,11 @@ pub fn read_public(path: &Path, lens: RangeInclusive<usize>) -> Result<Vec<u8>, 
 /// The mode bits `read_public` refuses: group/other write, setuid, setgid, sticky.
 pub const PUBLIC_REFUSED: u32 = 0o7022;
 
-/// Refused unless `dir` is a directory (not a link), owned by the effective user, mode 0700.
+/// Refused unless `dir`'s parent chain passes, and it is a directory (not a link), owned by the
+/// effective user, mode 0700.
 pub fn check_private_dir(dir: &Path) -> Result<(), Refused> {
-    let meta = fs::symlink_metadata(dir).map_err(Refused::Io)?;
+    let dir = trusted(dir)?;
+    let meta = fs::symlink_metadata(&dir).map_err(Refused::Io)?;
     if meta.file_type().is_symlink() {
         return Err(Refused::Link);
     }

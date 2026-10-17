@@ -46,9 +46,8 @@ impl Host for ScriptedHost {
 }
 
 fn setup(name: &str) -> (std::path::PathBuf, Custody) {
-    let d = std::env::temp_dir().join(format!("nd-run-{}-{name}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&d);
-    std::fs::create_dir_all(d.join("attempts")).unwrap();
+    let d = nanodregg_devtools::scratch(&format!("nd-run-{}-{name}", std::process::id()));
+    nanodregg_devtools::mkdirs(&d.join("attempts")).unwrap();
     Custody::create_same_record(&d).unwrap();
     let c = Custody::open(&d, None).unwrap();
     (d, c)

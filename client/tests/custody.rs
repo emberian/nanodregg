@@ -12,11 +12,10 @@ use ed25519_dalek::{Signature, VerifyingKey};
 use nanodregg_client::custody::{Custody, CustodyError, Refused, Rotation};
 
 fn scratch(name: &str) -> (PathBuf, PathBuf) {
-    let d = std::env::temp_dir().join(format!("nd-custody-{}-{name}", std::process::id()));
-    let _ = fs::remove_dir_all(&d);
+    let d = nanodregg_devtools::scratch(&format!("nd-custody-{}-{name}", std::process::id()));
     let (ws, h) = (d.join("ws"), d.join("holding"));
-    fs::create_dir_all(&ws).unwrap();
-    fs::create_dir(&h).unwrap();
+    nanodregg_devtools::mkdirs(&ws).unwrap();
+    nanodregg_devtools::mkdirs(&h).unwrap();
     fs::set_permissions(&h, fs::Permissions::from_mode(0o700)).unwrap();
     (ws, h)
 }

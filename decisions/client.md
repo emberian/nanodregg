@@ -438,14 +438,51 @@ setuid/setgid/sticky bit (`PUBLIC_REFUSED = 0o7022`), so 0600, 0644 and 0444 pas
 (b) `read_private` for the anchors: a 0600 anchors file works, but forbidding 0644 on a public file
 is a rule with no threat behind it. (c) Accept a root-owned anchors file (a system CA bundle): that
 widens who may decide what keybroker trusts beyond the operator's euid; not asked, not done.
+**Ruled (ROOT, 2026-10-17): the refusal of a root-owned system bundle STAYS.** The anchors file is
+operator DATA, emitted by deploy and owned by the operator (HOSTING-15's design); reading the system
+bundle would widen trust to whatever the OS ships, which is what the emitted-vs-crate byte check
+exists to prevent. A root-owned anchors file is `Owner(0)` by design.
 **Critique.** What an anchors file protects is integrity: whoever can write it chooses whom
 keybroker trusts upstream. The rule refuses every writer but the owner; it does not refuse a
 directory another user can write (a rename over the file). Same as the private read, whose parent
 directory is also unchecked; checking the parent chain is a separate, wider decision.
+Superseded by CLIENT-19 (ROOT's ruling): both reads now check the parent chain.
 **Meta-critique.** I refactored the private read into the shared checker in the same commit; the
 ten mutations (seven old, re-run on the refactor, three new) are the evidence that it still refuses
 what it refused.
 **Plants.** sandbox/tests/custody.rs `a_public_file_is_refused_writable_by_others_and_by_the_shared_checks`.
 Mutations, each red: the public write-bit rule removed, the special bits dropped from
 `PUBLIC_REFUSED`, the private read given the public rule; and the seven of CLIENT-15, re-run.
+**Status.** landed (this commit).
+
+## CLIENT-19 the custody reads check the directory chain, sshd's StrictModes rule (2026-10-17, CLIENT-3; ROOT ruling on CLIENT-18's flag)
+
+**Decision.** `read_private`, `read_public` and `check_private_dir` first canonicalize the path's
+parent and refuse `Dir(path)`, naming the offending directory, unless every directory from it up to
+`/` is owned by the euid or by root and has no group or other write bit. A sticky world-writable
+directory (`/tmp`) is refused too, as sshd refuses it. The file is then opened through the canonical
+parent, so a symlinked component swapped after the check cannot redirect the open. `nd --init`
+makes the workspace 0700 whatever the umask. Tests make their scratch with
+`devtools::scratch(name)` (`$ND_SCRATCH`, else `$HOME/.cache/nd-t`, 0700) and `devtools::mkdirs`
+(0700), because `/tmp` and a umask-002 target dir would both be refused. keybroker names the new
+refusal `keyFileDir` / `anchorsDir` (HOSTING-5).
+**Why.** A directory another user can write, or another user owns, lets them rename a different
+operator-owned, correctly-moded file into place: not a leak but a confusion of WHICH key signs or
+which anchors are trusted, a custody defect. Greenfield: no holding or workspace has users.
+**Alternatives.** (a) Accept root-owned sticky directories (`/tmp`): the sticky bit stops others
+renaming OUR entry, but a stricter rule costs only the test scratch location, and sshd's is the rule
+operators already know. (b) Check the lexical path's directories: a symlinked component lives in a
+directory the canonical chain does not contain.
+**Critique.** This tightens what any process may read (CLIENT-13's custody records and HOSTING's
+key file included): on hbox, where umask 002 leaves the /tank tree group-writable, a key file under
+it is now refused `Dir`. That is the intended direction. The plant for a foreign-owned parent finds a
+real directory of another non-root user on the box and FAILS if there is none; it never skips.
+**Meta-critique.** The swap-after-check race on the canonical chain itself needs a writer of a
+checked directory, which the check refuses; I did not plant the canonical-open half (it is a race,
+not a deterministic mutation) and say so.
+**Plants.** sandbox/tests/custody.rs `a_parent_writable_by_others_or_owned_by_another_user_is_refused_dir`
+(0770, 0707 and 1777 parents; /tmp; a foreign user's directory; both reads and check_private_dir);
+client/tests/real.rs asserts `nd --init` made the workspace 0700. Mutations, each red: the chain
+check skipped, its owner condition removed, its write-bit condition removed, nd's workspace mode
+0777 (the umask leaves 0775, and custody then refuses it).
 **Status.** landed (this commit).

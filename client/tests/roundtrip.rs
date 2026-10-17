@@ -67,14 +67,13 @@ for conn, op, p in frames():
 
 #[test]
 fn stand_in_follow_and_host_challenge_sign_submit_lookup_done_through_the_binaries() {
-    let root = std::env::temp_dir().join(format!("nd-rt-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&root);
-    std::fs::create_dir_all(root.join("ws")).unwrap();
-    std::fs::create_dir_all(root.join("logs")).unwrap();
+    let root = nanodregg_devtools::scratch(&format!("nd-rt-{}", std::process::id()));
+    nanodregg_devtools::mkdirs(&root.join("ws")).unwrap();
+    nanodregg_devtools::mkdirs(&root.join("logs")).unwrap();
     let root = root.canonicalize().unwrap();
     let (ws, logs) = (root.join("ws"), root.join("logs"));
     let holding = root.join("holding");
-    std::fs::create_dir(&holding).unwrap();
+    nanodregg_devtools::mkdirs(&holding).unwrap();
     std::fs::set_permissions(
         &holding,
         std::os::unix::fs::PermissionsExt::from_mode(0o700),
@@ -167,10 +166,9 @@ fn results(log: &[u8]) -> Vec<(u8, Vec<u8>)> {
 
 #[test]
 fn stand_in_rotate_precommit_sign_next_submit_lookup_advances_custody_through_the_binaries() {
-    let root = std::env::temp_dir().join(format!("nd-rot-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&root);
+    let root = nanodregg_devtools::scratch(&format!("nd-rot-{}", std::process::id()));
     for d in ["ws", "logs", "holding"] {
-        std::fs::create_dir_all(root.join(d)).unwrap();
+        nanodregg_devtools::mkdirs(&root.join(d)).unwrap();
     }
     let root = root.canonicalize().unwrap();
     let (ws, logs, holding) = (root.join("ws"), root.join("logs"), root.join("holding"));

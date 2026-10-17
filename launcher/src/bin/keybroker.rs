@@ -87,6 +87,7 @@ fn key_file_name(e: &Refused) -> &'static str {
         Refused::Owner(_) => "keyFileOwner",
         Refused::Mode(_) => "keyFileMode",
         Refused::Length(_) => "keyFileLength",
+        Refused::Dir(_) => "keyFileDir",
         Refused::Io(_) => "keyFileIo",
     }
 }

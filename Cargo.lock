@@ -217,6 +217,7 @@ dependencies = [
 name = "nanodregg-sandbox"
 version = "0.0.0"
 dependencies = [
+ "nanodregg-devtools",
  "rustix",
  "zeroize",
 ]

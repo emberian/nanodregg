@@ -32,7 +32,10 @@ fn go() -> Result<u8, String> {
     let argv: Vec<OsString> = std::env::args_os().skip(1).collect();
     let holding = std::env::var_os("ND_HOLDING").map(PathBuf::from);
     if argv.len() == 1 && (argv[0] == "--init" || argv[0] == "--init-hosted") {
-        std::fs::create_dir_all(ws.join("attempts")).map_err(|e| e.to_string())?;
+        // The workspace is the member's alone: 0700 whatever the umask (custody's chain check).
+        std::os::unix::fs::DirBuilderExt::mode(std::fs::DirBuilder::new().recursive(true), 0o700)
+            .create(ws.join("attempts"))
+            .map_err(|e| e.to_string())?;
         let made = match holding {
             _ if argv[0] == "--init-hosted" => Custody::create_same_record(&ws),
             Some(h) => Custody::create_separate(&ws, &h),

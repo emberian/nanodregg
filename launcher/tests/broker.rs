@@ -42,15 +42,12 @@ const KEY: &[u8] = b"CANARY-sk-0123456789abcdef";
 const WINDOW_MS: u64 = 3000;
 
 fn dir(name: &str) -> PathBuf {
-    let d =
-        Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("kb-{}-{name}", std::process::id()));
-    let _ = fs::remove_dir_all(&d);
-    fs::create_dir_all(d.join("pids")).unwrap();
+    let d = nanodregg_devtools::scratch(&format!("kb-{}-{name}", std::process::id()));
+    nanodregg_devtools::mkdirs(&d.join("pids")).unwrap();
     // A Unix socket path is at most 107 bytes (sun_path), and a judge slot's target dir is deeper
     // than that: the sockets live in a short directory of this process's own.
-    let socks = std::env::temp_dir().join(format!("kb{}{name}", std::process::id()));
-    let _ = fs::remove_dir_all(&socks);
-    fs::create_dir_all(&socks).unwrap();
+    let socks = nanodregg_devtools::scratch(&format!("kb{}{name}", std::process::id()));
+    nanodregg_devtools::mkdirs(&socks).unwrap();
     std::os::unix::fs::symlink(&socks, d.join("socks")).unwrap();
     d.canonicalize().unwrap()
 }
@@ -162,10 +159,9 @@ impl World {
 
     fn genesis(name: &str) -> World {
         // A short root: a Unix socket path must fit sun_path.
-        let root = std::env::temp_dir().join(format!("kbw{}{name}", std::process::id()));
-        let _ = fs::remove_dir_all(&root);
+        let root = nanodregg_devtools::scratch(&format!("kbw{}{name}", std::process::id()));
         for d in ["ws", "holding", "stores"] {
-            fs::create_dir_all(root.join(d)).unwrap();
+            nanodregg_devtools::mkdirs(&root.join(d)).unwrap();
         }
         let root = root.canonicalize().unwrap();
         let (ws, holding) = (root.join("ws"), root.join("holding"));

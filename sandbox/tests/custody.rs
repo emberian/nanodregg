@@ -1,7 +1,7 @@
 //! The custody-read plants: one per refusal. Each refused file differs from an accepted one in
 //! exactly the property its refusal names, and the accepted one is read in every scratch, so no
 //! plant is vacuous.
-#![allow(clippy::unwrap_used)] // a plant that cannot set up is a failed plant
+#![allow(clippy::unwrap_used, clippy::expect_used)] // a plant that cannot set up is a failed plant
 use std::fs;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
@@ -19,9 +19,8 @@ impl Drop for Scratch {
 
 /// A scratch directory holding `ok`: 32 bytes, mode 0600, ours, read back exactly.
 fn scratch(name: &str) -> Scratch {
-    let d = std::env::temp_dir().join(format!("nd-custody-{}-{name}", std::process::id()));
-    let _ = fs::remove_dir_all(&d);
-    fs::create_dir_all(&d).unwrap();
+    let d = nanodregg_devtools::scratch(&format!("nd-custody-{}-{name}", std::process::id()));
+    nanodregg_devtools::mkdirs(&d).unwrap();
     put(&d.join("ok"), &[7u8; 32], PRIVATE);
     assert_eq!(*read_private(&d.join("ok"), 32..=32).unwrap(), [7u8; 32]);
     Scratch(d)
@@ -89,7 +88,7 @@ fn a_length_outside_the_range_is_refused_length() {
 #[test]
 fn a_directory_and_a_fifo_are_refused_not_regular() {
     let s = scratch("kind");
-    fs::create_dir(s.0.join("d")).unwrap();
+    nanodregg_devtools::mkdirs(&s.0.join("d")).unwrap();
     fs::set_permissions(s.0.join("d"), fs::Permissions::from_mode(PRIVATE)).unwrap();
     assert!(matches!(
         read_private(&s.0.join("d"), 0..=64),
@@ -122,7 +121,7 @@ fn a_directory_and_a_fifo_are_refused_not_regular() {
 fn a_holding_directory_is_refused_unless_ours_0700_and_not_a_link() {
     let s = scratch("dir");
     let h = s.0.join("h");
-    fs::create_dir(&h).unwrap();
+    nanodregg_devtools::mkdirs(&h).unwrap();
     fs::set_permissions(&h, fs::Permissions::from_mode(0o700)).unwrap();
     check_private_dir(&h).unwrap();
     std::os::unix::fs::symlink(&h, s.0.join("hl")).unwrap();
@@ -179,4 +178,61 @@ fn a_public_file_is_refused_writable_by_others_and_by_the_shared_checks() {
         read_private(&s.0.join("ok644"), 1..=64),
         Err(Refused::Mode(0o644))
     ));
+}
+
+/// A directory above a custody file that another can write, or that another user owns, lets them
+/// swap the file: refused `Dir`, naming that directory, for both reads (sshd's StrictModes). The
+/// file itself is accepted in an accepted directory (the scratch's `ok`), so the plant is not
+/// vacuous.
+#[test]
+fn a_parent_writable_by_others_or_owned_by_another_user_is_refused_dir() {
+    let s = scratch("dir-chain");
+    let g = s.0.join("g");
+    nanodregg_devtools::mkdirs(&g).unwrap();
+    put(&g.join("k"), &[7u8; 32], PRIVATE);
+    for m in [0o770, 0o707, 0o1777] {
+        fs::set_permissions(&g, fs::Permissions::from_mode(m)).unwrap();
+        assert!(
+            matches!(read_private(&g.join("k"), 32..=32), Err(Refused::Dir(d)) if d == g),
+            "parent mode {m:o}"
+        );
+        assert!(
+            matches!(read_public(&g.join("k"), 32..=32), Err(Refused::Dir(d)) if d == g),
+            "parent mode {m:o}"
+        );
+    }
+    fs::set_permissions(&g, fs::Permissions::from_mode(0o700)).unwrap();
+    assert!(read_private(&g.join("k"), 32..=32).is_ok());
+    // /tmp: root's, sticky, world-writable. Refused before any open (the file need not exist).
+    let tmp = Path::new("/tmp").canonicalize().unwrap();
+    assert!(
+        matches!(read_private(&tmp.join("nd-absent"), 1..=8), Err(Refused::Dir(d)) if d == tmp)
+    );
+    // A directory of another (non-root) user, found on this box; none found FAILS the plant.
+    let euid = fs::metadata(&s.0).unwrap().uid();
+    let theirs = [
+        "/var/lib",
+        "/var/spool",
+        "/var/cache",
+        "/home",
+        "/var/db",
+        "/private/var/db",
+    ]
+    .iter()
+    .filter_map(|r| fs::read_dir(r).ok())
+    .flatten()
+    .filter_map(|e| e.ok().map(|e| e.path()))
+    .find(|p| {
+        fs::symlink_metadata(p).is_ok_and(|m| {
+            m.is_dir() && m.uid() != 0 && m.uid() != euid && m.permissions().mode() & 0o022 == 0
+        })
+    })
+    .expect("plant: no directory of another non-root user on this box");
+    let theirs = theirs.canonicalize().unwrap();
+    assert!(
+        matches!(read_private(&theirs.join("k"), 1..=8), Err(Refused::Dir(d)) if d == theirs),
+        "{}",
+        theirs.display()
+    );
+    assert!(matches!(check_private_dir(&theirs.join("h")), Err(Refused::Dir(d)) if d == theirs));
 }

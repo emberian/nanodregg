@@ -6,6 +6,7 @@
 //!
 //! A dev-dependency only. Its `assert!`s are test failures, which is why it may panic.
 
+use std::os::unix::fs::DirBuilderExt;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -15,6 +16,39 @@ use std::time::{Duration, Instant};
 /// The repository root (this crate's parent directory).
 pub fn repo() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("..")
+}
+
+/// A fresh scratch directory `name` (mode 0700, canonical) under a base whose directory chain the
+/// custody reads accept (owned by the euid or root, writable by no one else; sshd's StrictModes):
+/// `$ND_SCRATCH`, else `$HOME/.cache/nd-t`. Not `/tmp` (sticky but world-writable) and not a
+/// target dir (umask 002 leaves it group-writable on hbox). Short, so a socket path inside fits
+/// sun_path. An old directory of the same name is removed first; the caller removes it after.
+pub fn scratch(name: &str) -> PathBuf {
+    let base = std::env::var_os("ND_SCRATCH").map_or_else(
+        || {
+            let home = std::env::var_os("HOME").unwrap_or_default();
+            assert!(
+                !home.is_empty(),
+                "plant: no HOME and no ND_SCRATCH for scratch"
+            );
+            PathBuf::from(home).join(".cache/nd-t")
+        },
+        PathBuf::from,
+    );
+    let d = base.join(name);
+    let _ = std::fs::remove_dir_all(&d);
+    let made = mkdirs(&d);
+    assert!(made.is_ok(), "plant: scratch {}: {made:?}", d.display());
+    canonical(&d)
+}
+
+/// `mkdir -p` with every created directory mode 0700 (whatever the umask), so a test's workspace
+/// passes the custody reads' directory-chain check.
+pub fn mkdirs(p: &Path) -> std::io::Result<()> {
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(p)
 }
 
 /// The lake-built Lean exe `name`: `$ND_LEAN_BIN/name` (gates/runs.py sets it to the judged tree's
