@@ -92,13 +92,36 @@ def ownerAuthority (X : Ctx D) (look : Pinned D) (u : Unsigned D) (obj : D) (cel
   req (principal = owner) (.noGrant obj)
   pure principal
 
-def enroll (X : Ctx D) (c : Call D) (key : ByteArray) (next : D) (possession : ByteArray) :
-    Except (Refusal D) (Turn D) := do
+/-- The ledger of a grant's enrolment right: its next index and the count left (its last
+entry). `grantRight` when the grant carries no enrolment right. -/
+def enrollLeft (g : D) (cell : Cell) : Except (Refusal D) (Nat × Nat) :=
+  let led := cell.slots.filter fun p => enrollBase ≤ p.1 && p.1 ≤ enrollBase + enrollMax
+  match led.getLast? with
+  | none => .error (.grantRight g)
+  | some (k, v) => match countOf v with
+    | some n => .ok (led.length, n)
+    | none => .error (.malformedCell g k)
+
+/-- Spend `units` of grant `g`'s enrolment count (refused `short` past what is left): the write
+appending the count left to its ledger, or no effect for nothing. -/
+def spendEnroll (g : D) (cell : Cell) (units : Nat) (short : Refusal D) :
+    Except (Refusal D) (Option (D × Act)) := do
+  let (i, left) ← enrollLeft g cell
+  req (units ≤ left) short
+  pure (if units = 0 then none else some (g, .write [.set (enrollBase + i) (countBytes (left - units))]))
+
+/-- Enrolment is a right (KERNEL-16): the sponsor acts through a World grant chain carrying
+`enroll`, rooted at a founder's genesis grant, and spends one of its own grant's count. -/
+def enroll (X : Ctx D) (look : Pinned D) (c : Call D) (key : ByteArray) (next : D)
+    (possession : ByteArray) (via : D) : Except (Refusal D) (Turn D) := do
   let u := c.unsigned
+  let _ ← walk X look (worldId X) (.enroll 0) grantDepthMax via u.member
+  let g ← readKind look via kindGrant
+  let spend ← spendEnroll via g 1 (.enrollSpent via)
   req (X.verify key (possessionMessage X u.member next key) possession) .badPossession
   let slots := slotsOf [(slotKey, key), (slotNext, X.env.bytes next),
     (slotSponsor, X.env.bytes u.member)]
-  sealTurn X c [{ kind := kindMember, discipline := .ram, slots }] none
+  sealTurn X c [{ kind := kindMember, discipline := .ram, slots }] spend
 
 /-- Signed by the new key; the new key's digest must be the one precommitted. -/
 def rotate (X : Ctx D) (look : Pinned D) (c : Call D) (key : ByteArray) (next : D) :
@@ -187,10 +210,30 @@ def invoke (X : Ctx D) (look : Pinned D) (c : Call D) (obj : D) (method : Nat) (
   X.program.judge look (some p) laws old new r
   sealTurn X c [] (writeOf obj (diffOps old new))
 
-/-- An attenuated grant narrows a parent the signer holds on the same target. -/
+/-- The enrolment count a list of rights grants (several `enroll` rights add up). -/
+def enrollUnits : List Right → Nat
+  | [] => 0
+  | .enroll n :: rest => n + enrollUnits rest
+  | _ :: rest => enrollUnits rest
+
+def isEnroll : Right → Bool
+  | .enroll _ => true
+  | _ => false
+
+/-- A grant's right slots: every right but `enroll` as a key, and one ledger entry with the sum
+of the `enroll` counts. -/
+def rightSlots (rights : List Right) : List (Nat × ByteArray) :=
+  (rights.filter (!isEnroll ·)).map (fun r => (rightKey r, ByteArray.empty)) ++
+    if rights.any isEnroll then [(enrollBase, countBytes (enrollUnits rights))] else []
+
+/-- An attenuated grant narrows a parent the signer holds on the same target; an enrolment count
+is carved out of the parent's (the parent's ledger is the effect). World rights and enrolment
+rights are never rooted here (`unrooted`): only genesis roots them. -/
 def checkParent (X : Ctx D) (look : Pinned D) (u : Unsigned D) (target : D) (rights : List Right) :
-    Option D → Except (Refusal D) Unit
-  | none => .ok ()
+    Option D → Except (Refusal D) (Option (D × Act))
+  | none => do
+      req (!(target = worldId X || rights.any isEnroll)) (.unrooted target)
+      pure none
   | some p => do
       let pc ← readKind look p kindGrant
       let pt ← slotDigest X p pc grantTarget
@@ -198,48 +241,29 @@ def checkParent (X : Ctx D) (look : Pinned D) (u : Unsigned D) (target : D) (rig
       let pg ← slotDigest X p pc grantGrantee
       req (pg = u.member) (.noGrant p)
       forEx (fun r => req (pc.slots.get (rightKey r)).isSome (.grantWidens p)) rights
+      if rights.any isEnroll then spendEnroll p pc (enrollUnits rights) (.grantWidens p)
+      else pure none
 
 def grant (X : Ctx D) (look : Pinned D) (c : Call D) (target grantee : D) (rights : List Right)
     (parent : Option D) : Except (Refusal D) (Turn D) := do
   let u := c.unsigned
   let _ ← readKind look grantee kindMember
-  checkParent X look u target rights parent
+  let carve ← checkParent X look u target rights parent
   let slots := slotsOf ([(grantTarget, X.env.bytes target), (grantGrantee, X.env.bytes grantee),
       (grantIssuer, X.env.bytes u.member)] ++
-    (parent.map fun p => (grantParent, X.env.bytes p)).toList ++
-    rights.map fun r => (rightKey r, ByteArray.empty))
-  sealTurn X c [{ kind := kindGrant, discipline := .appendOnly, slots }] none
+    (parent.map fun p => (grantParent, X.env.bytes p)).toList ++ rightSlots rights)
+  sealTurn X c [{ kind := kindGrant, discipline := .appendOnly, slots }] carve
 
-def follow (X : Ctx D) (look : Pinned D) (c : Call D) (grantee parent : D) :
-    Except (Refusal D) (Turn D) := do
-  let u := c.unsigned
-  let _ ← readKind look grantee kindMember
-  let pc ← readKind look parent kindFollow
-  let pg ← slotDigest X parent pc grantGrantee
-  req (pg = u.member) (.noGrant parent)
-  let slots := slotsOf [(grantGrantee, X.env.bytes grantee), (grantIssuer, X.env.bytes u.member),
-    (grantParent, X.env.bytes parent)]
-  sealTurn X c [{ kind := kindFollow, discipline := .appendOnly, slots }] none
-
-/-- A pinned live grant or follow grant. -/
-def readGrantLike (look : Pinned D) (g : D) : Except (Refusal D) Cell :=
-  match look g with
-  | .error e => .error e
-  | .ok none => .error (.missingCell g)
-  | .ok (some cell) =>
-      if cell.kind = kindGrant || cell.kind = kindFollow then .ok cell
-      else .error (.wrongKind g kindGrant)
-
-/-- The issuer retires a grant or follow grant; every chain through it dies with it. -/
+/-- The issuer retires a grant; every chain through it dies with it. -/
 def revoke (X : Ctx D) (look : Pinned D) (c : Call D) (g : D) : Except (Refusal D) (Turn D) := do
   let u := c.unsigned
-  let cell ← readGrantLike look g
+  let cell ← readKind look g kindGrant
   let issuer ← slotDigest X g cell grantIssuer
   req (issuer = u.member) (.notIssuer g)
   sealTurn X c [] (some (g, .retire))
 
 def dispatch (X : Ctx D) (look : Pinned D) (c : Call D) : Body D → Except (Refusal D) (Turn D)
-  | .enroll key next possession => enroll X c key next possession
+  | .enroll key next possession via => enroll X look c key next possession via
   | .rotate key next => rotate X look c key next
   | .install pkg => install X look c pkg
   | .create pkg laws state => create X look c pkg laws state
@@ -247,7 +271,6 @@ def dispatch (X : Ctx D) (look : Pinned D) (c : Call D) : Body D → Except (Ref
   | .law obj laws via => law X look c obj laws via
   | .invoke obj method args budget via => invoke X look c obj method args budget via
   | .grant target grantee rights parent => grant X look c target grantee rights parent
-  | .follow grantee parent => follow X look c grantee parent
   | .revoke g => revoke X look c g
 
 /-- A rotation is signed by the incoming key; every other call by the member's current key. -/

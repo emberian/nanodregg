@@ -101,13 +101,14 @@ def turn (dc : Stream D) : Stream (Turn D) :=
 /-! ## Calls -/
 
 def right : Stream Right :=
-  refine "kernel/right" (choice 3 (F := fun s => match s with | 2 => Nat | _ => Unit)
-      (fun s => match s with | 0 => unit | 1 => unit | 2 => nat64))
-    (fun | ⟨0, ()⟩ => some .observe | ⟨1, ()⟩ => some .mutate | ⟨2, m⟩ => some (.invoke m))
-    (fun | .observe => ⟨0, ()⟩ | .mutate => ⟨1, ()⟩ | .invoke m => ⟨2, m⟩)
+  refine "kernel/right" (choice 4 (F := fun s => match s with | 2 => Nat | 3 => Nat | _ => Unit)
+      (fun s => match s with | 0 => unit | 1 => unit | 2 => nat64 | 3 => nat64))
+    (fun | ⟨0, ()⟩ => some .observe | ⟨1, ()⟩ => some .mutate | ⟨2, m⟩ => some (.invoke m)
+         | ⟨3, n⟩ => some (.enroll n))
+    (fun | .observe => ⟨0, ()⟩ | .mutate => ⟨1, ()⟩ | .invoke m => ⟨2, m⟩ | .enroll n => ⟨3, n⟩)
 
-abbrev BodyF (D : Type) : Fin 10 → Type
-  | 0 => ByteArray × D × ByteArray
+abbrev BodyF (D : Type) : Fin 9 → Type
+  | 0 => ByteArray × D × ByteArray × D
   | 1 => ByteArray × D
   | 2 => ByteArray
   | 3 => Option D × List D × Slots
@@ -115,11 +116,10 @@ abbrev BodyF (D : Type) : Fin 10 → Type
   | 5 => D × List D × Option D
   | 6 => D × Nat × ByteArray × Nat × Option D
   | 7 => D × D × List Right × Option D
-  | 8 => D × D
-  | 9 => D
+  | 8 => D
 
-def bodyWire (dc : Stream D) : (s : Fin 10) → Stream (BodyF D s)
-  | 0 => product (rawBytes callMax) (product dc (rawBytes callMax))
+def bodyWire (dc : Stream D) : (s : Fin 9) → Stream (BodyF D s)
+  | 0 => product (rawBytes callMax) (product dc (product (rawBytes callMax) dc))
   | 1 => product (rawBytes callMax) dc
   | 2 => rawBytes callMax
   | 3 => product (option dc) (product (rawList callMax dc) slots)
@@ -128,13 +128,12 @@ def bodyWire (dc : Stream D) : (s : Fin 10) → Stream (BodyF D s)
   | 5 => product dc (product (rawList callMax dc) (option dc))
   | 6 => product dc (product nat64 (product (rawBytes callMax) (product nat64 (option dc))))
   | 7 => product dc (product dc (product (rawList callMax right) (option dc)))
-  | 8 => product dc dc
-  | 9 => dc
+  | 8 => dc
 
 def body (dc : Stream D) : Stream (Body D) :=
-  refine "kernel/body" (choice 10 (bodyWire dc))
+  refine "kernel/body" (choice 9 (bodyWire dc))
     (fun
-      | ⟨0, (k, n, p)⟩ => some (.enroll k n p)
+      | ⟨0, (k, n, p, v)⟩ => some (.enroll k n p v)
       | ⟨1, (k, n)⟩ => some (.rotate k n)
       | ⟨2, p⟩ => some (.install p)
       | ⟨3, (p, ls, s)⟩ => some (.create p ls s)
@@ -142,10 +141,9 @@ def body (dc : Stream D) : Stream (Body D) :=
       | ⟨5, (o, ls, v)⟩ => some (.law o ls v)
       | ⟨6, (o, m, a, b, v)⟩ => some (.invoke o m a b v)
       | ⟨7, (t, g, r, p)⟩ => some (.grant t g r p)
-      | ⟨8, (g, p)⟩ => some (.follow g p)
-      | ⟨9, g⟩ => some (.revoke g))
+      | ⟨8, g⟩ => some (.revoke g))
     (fun
-      | .enroll k n p => ⟨0, (k, n, p)⟩
+      | .enroll k n p v => ⟨0, (k, n, p, v)⟩
       | .rotate k n => ⟨1, (k, n)⟩
       | .install p => ⟨2, p⟩
       | .create p ls s => ⟨3, (p, ls, s)⟩
@@ -153,8 +151,7 @@ def body (dc : Stream D) : Stream (Body D) :=
       | .law o ls v => ⟨5, (o, ls, v)⟩
       | .invoke o m a b v => ⟨6, (o, m, a, b, v)⟩
       | .grant t g r p => ⟨7, (t, g, r, p)⟩
-      | .follow g p => ⟨8, (g, p)⟩
-      | .revoke g => ⟨9, g⟩)
+      | .revoke g => ⟨8, g⟩)
 
 def unsigned (dc : Stream D) : Stream (Unsigned D) :=
   refine "kernel/unsigned"

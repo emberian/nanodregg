@@ -26,7 +26,8 @@ open Nanodregg.Codec Nanodregg.Kernel Nanodregg.Kernel.Receive
 /-- What one `host follow` knows about the member it serves. -/
 structure Self (D : Type) where
   member : D
-  /-- the member's follow grant, which its envelopes name -/
+  /-- the member's World grant (observe; enroll, if it carries it), which its envelopes name and
+  its enrolments spend (KERNEL-16) -/
   grant : D
   /-- how many heights a signed call or envelope stays valid -/
   window : Nat
@@ -132,9 +133,9 @@ def invokeBudget : Nat := 100000
 /-- Headroom of the signed price over the charge derived before the signature exists. -/
 def chargeSlack : Nat := 4096
 
-def body (me : Self D) : Cmd D → Option (Body D)
-  | .enroll j => some (.enroll j.key j.next j.possession)
-  | .follow g => some (.follow g me.grant)
+def body (X : Ctx D) (me : Self D) : Cmd D → Option (Body D)
+  | .enroll j => some (.enroll j.key j.next j.possession me.grant)
+  | .follow g => some (.grant (worldId X) g [.observe] (some me.grant))
   | .install p => some (.install p)
   | .create ls => some (.create none ls [])
   | .write o k v via => some (.write o [(k, some v)] via)
@@ -288,7 +289,7 @@ def step (X : Ctx D) (me : Self D) (w : World D) (kb result : ByteArray) : World
                   match absorbPage X w evs height chain with
                   | .error r => same (refused (D := D) r)
                   | .ok w' =>
-                      match cmd, body me cmd, Signed.ofBytes signedB with
+                      match cmd, body X me cmd, Signed.ofBytes signedB with
                       | .read obj ex, _, _ => (w', render w' obj ex)
                       | _, some b, some s =>
                           match plan X me w' s.key b with
@@ -300,7 +301,7 @@ def step (X : Ctx D) (me : Self D) (w : World D) (kb result : ByteArray) : World
           | _ => same (refused (D := D) .badResult)
       -- the call's signature: re-plan, compare with what was signed, submit
       | _, 3, [startB, signedB, ub] =>
-          match body me cmd, Signed.ofBytes signedB, Signed.ofBytes result with
+          match body X me cmd, Signed.ofBytes signedB, Signed.ofBytes result with
           | some b, some s, some s2 =>
               if s2.key ≠ s.key then same (refused (D := D) .badResult) else
               match plan X me w s.key b with

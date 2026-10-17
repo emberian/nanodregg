@@ -28,13 +28,17 @@ inductive Right
   | mutate
   /-- run a method of a programmed object -/
   | invoke (method : Nat)
+  /-- enrol at most `count` members, directly or through grants carved from this one (meaningful
+  on the World target only: a World right is only ever attenuated from a founder's, KERNEL-16) -/
+  | enroll (count : Nat)
   deriving DecidableEq, Repr
 
 /-- What a call asks for, one constructor per operation kind. -/
 inductive Body (D : Type)
   /-- the signer sponsors a new member with `key`, precommitting the digest of its next key;
-  `possession` is the new key's signature over the enrolment -/
-  | enroll (key : ByteArray) (next : D) (possession : ByteArray)
+  `possession` is the new key's signature over the enrolment; `via` is the signer's World grant
+  carrying `Right.enroll`, whose count the enrolment spends -/
+  | enroll (key : ByteArray) (next : D) (possession : ByteArray) (via : D)
   /-- the signer's member moves to `key`, which must be the precommitted one, and precommits
   `next`; the call is signed by `key` -/
   | rotate (key : ByteArray) (next : D)
@@ -50,11 +54,10 @@ inductive Body (D : Type)
   /-- run `method` of a programmed object -/
   | invoke (obj : D) (method : Nat) (args : ByteArray) (budget : Nat) (via : Option D)
   /-- let member `grantee` exercise `rights` on `target` for the signer (or, through `parent`, for
-  that grant's principal, attenuated) -/
+  that grant's principal, attenuated). A grant on the World (`worldId`) is how a member may
+  follow (`observe`) and enrol (`enroll n`); it always has a parent -/
   | grant (target : D) (grantee : D) (rights : List Right) (parent : Option D)
-  /-- let member `grantee` follow the World (read the log), under the signer's follow grant -/
-  | follow (grantee : D) (parent : D)
-  /-- retire a grant or follow grant the signer issued -/
+  /-- retire a grant the signer issued -/
   | revoke (grant : D)
   deriving DecidableEq
 
@@ -104,8 +107,14 @@ inductive Refusal (D : Type)
   | noGrant (cell : D)
   | grantTarget (grant : D)
   | grantRight (grant : D)
-  /-- an attenuated grant may only narrow its parent -/
+  /-- an attenuated grant may only narrow its parent (rights, and an enrolment count within what
+  the parent has left) -/
   | grantWidens (parent : D)
+  /-- a grant on the World, or one carrying `enroll`, without a parent: World rights are only
+  ever attenuated from the founders' genesis grants -/
+  | unrooted (target : D)
+  /-- the grant's enrolment count is used up -/
+  | enrollSpent (grant : D)
   | notIssuer (grant : D)
   | grantTooDeep
   | overPrice (charge : Nat)
@@ -136,6 +145,8 @@ def Refusal.name {D : Type} : Refusal D → String
   | .grantTarget _ => "grantTarget"
   | .grantRight _ => "grantRight"
   | .grantWidens _ => "grantWidens"
+  | .unrooted _ => "unrooted"
+  | .enrollSpent _ => "enrollSpent"
   | .notIssuer _ => "notIssuer"
   | .grantTooDeep => "grantTooDeep"
   | .overPrice _ => "overPrice"
@@ -188,7 +199,6 @@ def kindPackage : Nat := 1
 def kindObject : Nat := 2
 def kindGrant : Nat := 3
 def kindMember : Nat := 4
-def kindFollow : Nat := 5
 
 /-- Object: 0 package id (absent: a data object), 1 owner, `2 ≤ k < stateBase` extra law ids,
 state at `stateBase + i`. -/
@@ -200,20 +210,29 @@ def stateBase : Nat := 16
 def slotKey : Nat := 0
 def slotNext : Nat := 1
 def slotSponsor : Nat := 2
-/-- Grant and follow grant: 0 target (grants only), 1 grantee, 2 issuer, 3 parent (absent at a
-root), and the rights at `rightKey`. -/
+/-- Grant: 0 target, 1 grantee, 2 issuer, 3 parent (absent at a root), the rights at `rightKey`.
+`enroll`'s slot is the first of its LEDGER, `enrollBase + i` for `i ≤ enrollMax`: slot `i` holds
+the count left after the grant's `i`-th spend (slot 0: as granted). The grant is append-only, so
+the ledger only grows and the count left only falls; every spend takes at least one, and a
+grant's count is at most `enrollMax`, so the ledger fits its range. The ranges are disjoint. -/
 def grantTarget : Nat := 0
 def grantGrantee : Nat := 1
 def grantIssuer : Nat := 2
 def grantParent : Nat := 3
+def enrollBase : Nat := 1024
+def invokeBase : Nat := 4096
 def rightKey : Right → Nat
   | .observe => 16
   | .mutate => 17
-  | .invoke m => 32 + m
+  | .enroll _ => enrollBase
+  | .invoke m => invokeBase + m
+/-- The most one grant may enrol (a founder's genesis grant has exactly this). -/
+def enrollMax : Nat := 256
 /-- The longest grant chain a call walks. -/
 def grantDepthMax : Nat := 8
 
 def domTx : String := "nanodregg/kernel/tx/v1"
+def domWorld : String := "nanodregg/kernel/world/v1"
 def domNextKey : String := "nanodregg/kernel/next-key/v1"
 def tagPossession : ByteArray := "nanodregg/kernel/possession/v1".toUTF8
 
@@ -227,6 +246,17 @@ def reqOf (u : Unsigned D) (principal : D) : Req D :=
 
 /-- The transaction id: the digest of the call's canonical bytes. -/
 def txIdOf (X : Ctx D) (c : Call D) : D := X.env.hash domTx (X.callBytes c)
+
+/-- The target of a grant on the World itself (follow, enrol): an id no cell is born at. -/
+def worldId (X : Ctx D) : D := X.env.hash domWorld ByteArray.empty
+
+/-- A count in a ledger slot: CODEC's eight little-endian bytes. -/
+def countBytes (n : Nat) : ByteArray := Nanodregg.Codec.Stream.u64.bytes (UInt64.ofNat n)
+
+def countOf (b : ByteArray) : Option Nat :=
+  match Nanodregg.Codec.Stream.u64.decode b with
+  | .ok n => some n.toNat
+  | .error _ => none
 
 /-- The digest a member precommits for its next key. -/
 def nextKeyDigest (X : Ctx D) (key : ByteArray) : D := X.env.hash domNextKey key

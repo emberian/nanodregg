@@ -74,13 +74,13 @@ def env : Env D :=
   { hash := fun dom b => fnv (dom.toUTF8 ++ b), bytes := u64le, turnBytes, cellBytes }
 
 def rightBytes : Right → ByteArray
-  | .observe => nat 0 | .mutate => nat 1 | .invoke m => nat 2 ++ nat m
+  | .observe => nat 0 | .mutate => nat 1 | .invoke m => nat 2 ++ nat m | .enroll n => nat 3 ++ nat n
 
 def optD : Option D → ByteArray
   | none => nat 0 | some d => nat 1 ++ u64le d
 
 def bodyBytes : Body D → ByteArray
-  | .enroll k n p => nat 0 ++ blob k ++ u64le n ++ blob p
+  | .enroll k n p v => nat 0 ++ blob k ++ u64le n ++ blob p ++ u64le v
   | .rotate k n => nat 1 ++ blob k ++ u64le n
   | .install p => nat 2 ++ blob p
   | .create p ls st => nat 3 ++ optD p ++ many u64le ls ++ many (fun q => nat q.1 ++ blob q.2) st
@@ -89,7 +89,6 @@ def bodyBytes : Body D → ByteArray
   | .law o ls v => nat 5 ++ u64le o ++ many u64le ls ++ optD v
   | .invoke o m a b v => nat 6 ++ u64le o ++ nat m ++ blob a ++ nat b ++ optD v
   | .grant t g rs p => nat 7 ++ u64le t ++ u64le g ++ many rightBytes rs ++ optD p
-  | .follow g p => nat 8 ++ u64le g ++ u64le p
   | .revoke g => nat 9 ++ u64le g
 
 def unsignedBytes (u : Unsigned D) : ByteArray :=
@@ -141,6 +140,14 @@ structure Member where
   key : ByteArray
   nextKey : ByteArray
 
+/-- The Sim's own model of a member's World grant (KERNEL-16), independent of the kernel's. -/
+structure Holding where
+  /-- the grant, then its parents up to a founder's root -/
+  chain : List D
+  /-- does it carry `enroll`, and how much is left -/
+  enrolls : Bool
+  left : Nat
+
 /-- What the generator expects a call to get. -/
 inductive Expect
   | ok
@@ -156,6 +163,8 @@ structure State where
   log : List (Turn D) := []
   members : List Member
   objects : List (D × D) := []
+  /-- member ↦ its World grant (a member without one has none) -/
+  holds : List (D × Holding) := []
   /-- live grants: (grant, object, grantee, issuer) -/
   grants : List (D × D × D × D) := []
   /-- revoked grants: (grant, object, grantee) -/
@@ -166,6 +175,8 @@ structure State where
   steps : Nat := 0
   admitted : Nat := 0
   refusedAsExpected : Nat := 0
+  /-- every refusal name met as expected (the run requires each planted name at least once) -/
+  seen : List String := []
   restarts : Nat := 0
   failures : List String := []
 
@@ -196,11 +207,13 @@ def submit (st : State) (c : Call D) (expect : Expect) (what : String) : State �
     ({ st with failures := s!"step {st.steps} {what}: expected {reprStr expect}, got {got}" :: st.failures }, none)
   match Receive.submit X st.host c with
   | .error (.refused r) =>
-      if expect = .refused (nameOf r) then ({ st with refusedAsExpected := st.refusedAsExpected + 1 }, none)
-      else fail s!"refused {nameOf r}"
+      if expect = .refused r.name then
+        ({ st with refusedAsExpected := st.refusedAsExpected + 1, seen := r.name :: st.seen }, none)
+      else fail s!"refused {r.name}"
   | .error (.rejected r) =>
-      if expect = .rejected (nameOf r) then ({ st with refusedAsExpected := st.refusedAsExpected + 1 }, none)
-      else fail s!"rejected {nameOf r}"
+      if expect = .rejected r.name then
+        ({ st with refusedAsExpected := st.refusedAsExpected + 1, seen := r.name :: st.seen }, none)
+      else fail s!"rejected {r.name}"
   | .ok (t, w') =>
       if expect = .ok then
         ({ st with host := w', log := st.log ++ [t], admitted := st.admitted + 1 }, some t)
@@ -212,25 +225,75 @@ def pick {α : Type} (st : State) (l : List α) (d : α) : α × State :=
 
 def founder0 (st : State) : Member := st.members.headD ⟨0, ByteArray.empty, ByteArray.empty⟩
 
+def holdOf (st : State) (m : D) : Holding :=
+  ((st.holds.find? fun p => p.1 = m).map Prod.snd).getD ⟨[], false, 0⟩
+
+def setHold (st : State) (m : D) (h : Holding) : State :=
+  { st with holds := (m, h) :: st.holds.filter fun p => p.1 ≠ m }
+
 /-- One generated action. -/
 def act (st : State) : State :=
-  let (k, rng) := st.rng.below 13
+  let (k, rng) := st.rng.below 15
   let st := { st with rng }
   let w := st.host
   match k with
-  | 0 => -- enroll a newcomer, sponsored by a random member
+  | 0 | 13 => -- enrol a newcomer (KERNEL-16): through the sponsor's own World grant, admitted
+         -- while its count lasts (`enrollSpent` after), `grantRight` through a grant without
+         -- `enroll`; a sponsor without a grant tries someone else's (`noGrant`)
       let (sp, st) := pick st st.members (founder0 st)
       let (key, st) := freshKey st "m"
       let (nk, st) := freshKey st "n"
       let X := ctx st.reg
       let possession := toySign key (possessionMessage X sp.id (nextKeyDigest X nk) key)
-      let c := signed st sp sp.key (S.pinsFor w [sp.id]) (.enroll key (nextKeyDigest X nk) possession)
-      let (st, t) := submit st c .ok "enroll"
-      match t with
-      | some t =>
-          let id := (createdIds env t).headD 0
-          { st with members := st.members ++ [⟨id, key, nk⟩] }
-      | none => st
+      let hs := holdOf st sp.id
+      let (chain, expect, st) : List D × Expect × State := match hs.chain with
+        | _ :: _ =>
+            (hs.chain, (if !hs.enrolls then .refused "grantRight"
+              else if hs.left = 0 then .refused "enrollSpent" else .ok), st)
+        | [] =>
+            let other := st.holds.filter fun p => p.1 ≠ sp.id
+            let (o, st) := pick st other (0, ⟨[], false, 0⟩)
+            (o.2.chain, .refused "noGrant", st)
+      match chain with
+      | [] => st
+      | via :: _ =>
+          let c := signed st sp sp.key (S.pinsFor w (sp.id :: chain))
+            (.enroll key (nextKeyDigest X nk) possession via)
+          let (st, t) := submit st c expect "enroll"
+          match t with
+          | some t =>
+              let id := (createdIds env t).headD 0
+              let st := setHold st sp.id { hs with left := hs.left - 1 }
+              { st with members := st.members ++ [{ id, key, nextKey := nk }] }
+          | none => st
+  | 12 => -- delegate: a member with a World grant gives another member World rights, carving an
+          -- enrolment count from its own (`grantWidens` past what is left); a parentless World
+          -- grant is `unrooted`
+      let (m, st) := pick st st.members (founder0 st)
+      let (ge, st) := pick st st.members (founder0 st)
+      let (n, st) := st.rng.below 4 |> fun (x, r) => (x, { st with rng := r })
+      let X := ctx st.reg
+      let hm := holdOf st m.id
+      match hm.chain with
+      | [] =>
+          let c := signed st m m.key (S.pinsFor w [m.id, ge.id]) (.grant (worldId X) ge.id [.observe] none)
+          (submit st c (.refused "unrooted") "world-root").1
+      | g :: _ =>
+          -- n = 3: observe only (the grantee may follow, not enrol)
+          let rights := if n = 3 then [.observe] else [.observe, .enroll n]
+          let units := if n = 3 then 0 else n
+          let expect : Expect := if !hm.enrolls && n ≠ 3 then .refused "grantWidens"
+            else if units ≤ hm.left then .ok else .refused "grantWidens"
+          let c := signed st m m.key (S.pinsFor w [m.id, ge.id, g]) (.grant (worldId X) ge.id rights (some g))
+          let (st, t) := submit st c expect "delegate"
+          match t with
+          | some t =>
+              let gid := (createdIds env t).headD 0
+              let st := setHold st m.id { hm with left := hm.left - units }
+              -- the grantee now acts through the new grant (its old one, if any, is forgotten;
+              -- when the grantee is the granter, the carved grant replaces the spent one)
+              setHold st ge.id ⟨gid :: hm.chain, n ≠ 3, units⟩
+          | none => st
   | 1 => -- birth a data object; a birth under deny-all is judged by it and refused
       let (m, st) := pick st st.members (founder0 st)
       let (d, st) := st.rng.below 4 |> fun (x, r) => (x, { st with rng := r })
@@ -468,7 +531,9 @@ def run (seed : Nat) (steps : Nat) : State :=
   let X := ctx {}
   let g := genesis X worldName 100000000 (fk.map fun (k, n) => (k, nextKeyDigest X n))
   let members := fk.zipIdx.map fun ((k, n), i) => (⟨founderId X worldName i, k, n⟩ : Member)
-  let st0 : State := { rng, reg := {}, host := g, members }
+  let holds := (List.range fk.length).map fun i =>
+    (founderId X worldName i, (⟨[founderGrantId X worldName i], true, enrollMax⟩ : Holding))
+  let st0 : State := { rng, reg := {}, host := g, members, holds }
   -- install the deny-all law package first
   let f := founder0 st0
   let c := signed st0 f f.key (S.pinsFor g [f.id]) (.install denyAll)
@@ -509,6 +574,11 @@ def run (seed : Nat) (steps : Nat) : State :=
       | .ok _, .ok _ => { st with failures := s!"forgery at {i}: audit accepted" :: st.failures }
       | .error _, _ => { st with failures := s!"forgery at {i}: fold refused it (not a forgery test)" :: st.failures }
 
+/-- The refusals the generator plants, each of which a run of 16 or more seeds must meet. -/
+def planted : List String :=
+  ["lawDenied", "noGrant", "unknownKey", "replayed", "stale", "notPrecommitted", "notIssuer",
+   "missingCell", "enrollSpent", "grantRight", "grantWidens", "unrooted"]
+
 /-- `--seeds N` runs seeds `0 … N-1`; otherwise each argument is a seed. -/
 def parseSeeds : List String → List Nat
   | ["--seeds", n] => List.range (n.toNat?.getD 64)
@@ -522,6 +592,7 @@ def main (args : List String) : IO UInt32 := do
   let mut refused := 0
   let mut restarts := 0
   let mut work : Nat × Nat := (0, 0)
+  let mut seen : List String := []
   for seed in seeds do
     let st := run seed 120
     let (a, b) := maxWork st.log
@@ -529,12 +600,18 @@ def main (args : List String) : IO UInt32 := do
     admitted := admitted + st.admitted
     refused := refused + st.refusedAsExpected
     restarts := restarts + st.restarts
+    seen := (st.seen ++ seen).eraseDups
     match st.failures.reverse with
     | [] => IO.println s!"PASS seed {seed}: admitted={st.admitted} refused-as-expected={st.refusedAsExpected} restarts={st.restarts}"
     | f :: _ =>
         bad := bad + 1
         IO.println s!"FAIL seed {seed}: {f}"
   IO.println s!"kernel-sim: seeds={seeds.length} admitted={admitted} refused-as-expected={refused} restarts={restarts} failing-seeds={bad}"
+  -- every planted refusal must have been met: a name the generator never reaches is not tested
+  let unmet := planted.filter fun n => !seen.contains n
+  if !unmet.isEmpty && seeds.length ≥ 16 then
+    bad := bad + 1
+    IO.println s!"FAIL planted refusals never met: {unmet}"
   IO.println s!"WASTE admit cells-touched-per-turn {showRatio work.1}"
   IO.println s!"WASTE fold work-per-turn {showRatio work.2}"
   if bad = 0 then IO.println "ALL PASS"

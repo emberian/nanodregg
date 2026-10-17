@@ -275,7 +275,7 @@ the fork ROOT should pick between: (a) rights-gated enrolment only, (b) plus per
 write on every turn (a hot cell per member, so a member's concurrent calls conflict `stale`).
 **Meta-critique.** Two friends and a Hermes resident do not need either. I may be designing for a
 public World that THE BAR does not include.
-Status: open (ROOT).
+Status: RULED (one mechanism) and BUILT as KERNEL-20.
 
 ## KERNEL-17 · The journal is not pruned (KERNEL-2, 2026-10-16)
 **Decision.** Every admitted txId stays in the journal (72 bytes, charged in `Turn.growth`).
@@ -357,3 +357,52 @@ churn, which costs log bytes that are never refunded, so it cannot be farmed.
 prettier. Independent test: the inequality version leaves an unexplained gap between the World's
 storage and its budget that grows with every overwrite; the equality has no such gap to explain.
 Status: built (ROOT may narrow it to retires only by deleting one term).
+
+## KERNEL-20 · Enrolment is a right; one grant kind; the World is a grant target (KERNEL-3, 2026-10-16)
+**Decision.** ROOT's KERNEL-16 ruling, built. (a) `Right.enroll (count)`: may enrol ≤ count members,
+directly or through grants carved from this one. (b) The World is a grant TARGET (`worldId X`, a
+hashed id no cell is born at). A World grant carries `observe` (follow the log) and/or `enroll n`.
+The separate follow-grant kind (kind 5), `Body.follow`, `followChain`, and `readGrantLike` are
+DELETED. `mayFollow` is `walk` for `observe` on the World over the whole World. Law 1: one grant
+shape, one chain walker. (c) `Body.enroll … (via : D)`: the sponsor's own World grant. `enroll`
+walks the chain for `enroll` to a root, then SPENDS one from `via`. (d) The count lives in the grant
+as an append-only LEDGER: slot `enrollBase + i` holds the count left after the i-th spend. The grant
+stays `appendOnly` (making it `ram` to allow a decrement would weaken a kernel check), so the count
+can only fall, and the kernel's discipline enforces that, not only the receivers. Each spend takes at
+least one, and a count is at most `enrollMax` (256), so the ledger fits its key range. (e) A grant
+carrying `enroll n` carves n from its parent: the parent's ledger write is the grant turn's one
+effect, and it is refused `grantWidens` past what the parent has left. (f) `unrooted`: no call issues a
+parentless grant on the World or one carrying `enroll`. The only roots are genesis's: each founder
+gets one World grant (observe, enroll 256, id `founderGrantId`). Key layout: rights 16/17, the enroll
+ledger 1024…1280, invoke m at 4096 + m, all disjoint by construction.
+Theorems (Kernel/Proofs/Authority): `enroll_authorized` (a derived enrolment has a `Chain` for
+`enroll` on the World from `via` to the signer, `via` had `left > 0`, and the Turn's effect appends
+`left − 1` to its ledger); `grant_rooted` (a derived World or enroll grant has a parent);
+`grant_carves` (its count is a successful `spendEnroll` of the parent's); `spendEnroll_ok`.
+New refusals `unrooted`, `enrollSpent` (name_injective holds by `cases`).
+Sim: the founders hold genesis grants; sponsors enrol through their own grant (`enrollSpent` once
+their count is drained, `grantRight` through an observe-only grant, `noGrant` through another
+member's); members delegate World grants with counts 0..2 or observe-only (`grantWidens` past the
+parent's count; a parentless World grant `unrooted`). The Sim keeps its OWN model of every count
+(`Holding`), not the kernel's ledger. kernel-sim now FAILS when a run of ≥ 16 seeds never meets one of
+the 12 planted refusal names. Plants: the count check off ⇒ 45/64 seeds red ("expected enrollSpent,
+got admitted") and `enrollSpent` never met; the walk off ⇒ 63/64 red ("expected noGrant, got
+admitted"); the unrooted check off ⇒ 59/64 red.
+**Alternatives.** A separate enrol-grant kind beside follow grants (a third grant shape); `ram`
+grants with a decremented counter (weakens the append-only check); counting at every chain link on
+each enrolment (up to 8 writes per turn, and `sealTurn`'s one effect becomes a list); a per-member
+budget cell (KERNEL-16's option (b): a second mechanism).
+**Critique.** A founder can enrol at most 256 members in total, including through delegation, so a
+World's membership is ≤ 256 × founders until a refill grant exists. Revoking a carved grant does not
+give its unspent count back to the parent (the credit is storage only). Reading the count left is
+O(ledger) per enrolment (≤ 257 slots). A grant carrying several `enroll` rights stores their sum. The
+claim that "every World chain ends at a founder" rests on two receiver theorems and on genesis.
+The World-level invariant ("every live World grant has a parent or is a genesis root"), an
+induction over `submit`, is NOT proved yet. Protocol: `follow MEMBER` is now `grant World MEMBER
+[observe] via me.grant`, and `enroll TOKEN` spends `me.grant`; PROTOCOL still has to parse an
+`enroll:N` right.
+**Meta-critique.** Deleting the follow kind was the move I wanted (law 1). Check that it is not
+ornament: before it, Protocol's enrol had no grant id to name, and the fix would have been a second
+id in `Self`. With it, a member's one World grant is its whole membership credential. The 256 is an
+estimate dressed as a bound; it is a constant, and a re-genesis changes it.
+Status: built.

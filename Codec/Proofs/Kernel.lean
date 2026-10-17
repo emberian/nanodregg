@@ -151,16 +151,19 @@ theorem turn_lawfulOn {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc) :
 
 def Right.Fits : Right → Prop
   | .invoke m => m < 2 ^ 64
+  | .enroll n => n < 2 ^ 64
   | _ => True
 
 theorem right_lawfulOn : LawfulOn Right.Fits right := by
   unfold right
-  refine (refine_lawfulOn (choice_lawfulOn 3 (by decide)
-      (P := fun s => match s with | 2 => fun (m : Nat) => m < 2 ^ 64 | _ => fun _ => True)
+  refine (refine_lawfulOn (choice_lawfulOn 4 (by decide)
+      (P := fun s => match s with
+        | 2 => fun (m : Nat) => m < 2 ^ 64 | 3 => fun (n : Nat) => n < 2 ^ 64 | _ => fun _ => True)
       (fun s => match s with
         | 0 => unit_lawful.on
         | 1 => unit_lawful.on
-        | 2 => nat64_lawfulOn)) "kernel/right" ?_ ?_).mono ?_ ?_
+        | 2 => nat64_lawfulOn
+        | 3 => nat64_lawfulOn)) "kernel/right" ?_ ?_).mono ?_ ?_
   · intro y _; cases y <;> rfl
   · intro x y h
     obtain ⟨s, v⟩ := x
@@ -168,6 +171,7 @@ theorem right_lawfulOn : LawfulOn Right.Fits right := by
     | 0, (), h => simp at h; subst h; rfl
     | 1, (), h => simp at h; subst h; rfl
     | 2, m, h => simp at h; subst h; rfl
+    | 3, n, h => simp at h; subst h; rfl
   · intro y h; cases y <;> simp_all [Right.Fits]
   · intro y h; cases y <;> simp_all [Right.Fits]
 
@@ -177,7 +181,7 @@ def ListFits {α : Type} (P : α → Prop) (l : List α) : Prop := l.length ≤ 
 def BytesFits (b : ByteArray) : Prop := b.size ≤ callMax
 
 def Body.Fits (PD : D → Prop) : Body D → Prop
-  | .enroll k n p => BytesFits k ∧ PD n ∧ BytesFits p
+  | .enroll k n p v => BytesFits k ∧ PD n ∧ BytesFits p ∧ PD v
   | .rotate k n => BytesFits k ∧ PD n
   | .install p => BytesFits p
   | .create p ls st => OptionFits PD p ∧ ListFits PD ls ∧ Slots.Fits st
@@ -186,11 +190,10 @@ def Body.Fits (PD : D → Prop) : Body D → Prop
   | .law o ls v => PD o ∧ ListFits PD ls ∧ OptionFits PD v
   | .invoke o m a b v => PD o ∧ m < 2 ^ 64 ∧ BytesFits a ∧ b < 2 ^ 64 ∧ OptionFits PD v
   | .grant t g r p => PD t ∧ PD g ∧ ListFits Right.Fits r ∧ OptionFits PD p
-  | .follow g p => PD g ∧ PD p
   | .revoke g => PD g
 
-abbrev BodyWireFits (PD : D → Prop) : (s : Fin 10) → BodyF D s → Prop
-  | 0 => fun v => BytesFits v.1 ∧ PD v.2.1 ∧ BytesFits v.2.2
+abbrev BodyWireFits (PD : D → Prop) : (s : Fin 9) → BodyF D s → Prop
+  | 0 => fun v => BytesFits v.1 ∧ PD v.2.1 ∧ BytesFits v.2.2.1 ∧ PD v.2.2.2
   | 1 => fun v => BytesFits v.1 ∧ PD v.2
   | 2 => fun v => BytesFits v
   | 3 => fun v => OptionFits PD v.1 ∧ ListFits PD v.2.1 ∧ Slots.Fits v.2.2
@@ -199,12 +202,12 @@ abbrev BodyWireFits (PD : D → Prop) : (s : Fin 10) → BodyF D s → Prop
   | 5 => fun v => PD v.1 ∧ ListFits PD v.2.1 ∧ OptionFits PD v.2.2
   | 6 => fun v => PD v.1 ∧ v.2.1 < 2 ^ 64 ∧ BytesFits v.2.2.1 ∧ v.2.2.2.1 < 2 ^ 64 ∧ OptionFits PD v.2.2.2.2
   | 7 => fun v => PD v.1 ∧ PD v.2.1 ∧ ListFits Right.Fits v.2.2.1 ∧ OptionFits PD v.2.2.2
-  | 8 => fun v => PD v.1 ∧ PD v.2
-  | 9 => fun v => PD v
+  | 8 => fun v => PD v
 
 theorem bodyWire_lawfulOn {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc) :
     ∀ s, LawfulOn (BodyWireFits PD s) (bodyWire dc s)
-  | 0 => product_lawfulOn (rawBytes_lawfulOn _ (by decide)) (product_lawfulOn hd (rawBytes_lawfulOn _ (by decide)))
+  | 0 => product_lawfulOn (rawBytes_lawfulOn _ (by decide))
+      (product_lawfulOn hd (product_lawfulOn (rawBytes_lawfulOn _ (by decide)) hd))
   | 1 => product_lawfulOn (rawBytes_lawfulOn _ (by decide)) hd
   | 2 => rawBytes_lawfulOn _ (by decide)
   | 3 => product_lawfulOn (option_lawfulOn hd) (product_lawfulOn (rawList_lawfulOn hd _ (by decide)) slots_lawfulOn)
@@ -215,18 +218,17 @@ theorem bodyWire_lawfulOn {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc
       (product_lawfulOn nat64_lawfulOn (option_lawfulOn hd))))
   | 7 => product_lawfulOn hd (product_lawfulOn hd (product_lawfulOn (rawList_lawfulOn right_lawfulOn _ (by decide))
       (option_lawfulOn hd)))
-  | 8 => product_lawfulOn hd hd
-  | 9 => hd
+  | 8 => hd
 
 theorem body_lawfulOn {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc) :
     LawfulOn (Body.Fits PD) (body dc) := by
   unfold body
-  refine (refine_lawfulOn (choice_lawfulOn 10 (by decide) (bodyWire_lawfulOn hd)) "kernel/body" ?_ ?_).mono ?_ ?_
+  refine (refine_lawfulOn (choice_lawfulOn 9 (by decide) (bodyWire_lawfulOn hd)) "kernel/body" ?_ ?_).mono ?_ ?_
   · intro y _; cases y <;> rfl
   · intro x y h
     obtain ⟨s, v⟩ := x
     match s, v, h with
-    | 0, (_, _, _), h => simp at h; subst h; rfl
+    | 0, (_, _, _, _), h => simp at h; subst h; rfl
     | 1, (_, _), h => simp at h; subst h; rfl
     | 2, _, h => simp at h; subst h; rfl
     | 3, (_, _, _), h => simp at h; subst h; rfl
@@ -234,8 +236,7 @@ theorem body_lawfulOn {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc) :
     | 5, (_, _, _), h => simp at h; subst h; rfl
     | 6, (_, _, _, _, _), h => simp at h; subst h; rfl
     | 7, (_, _, _, _), h => simp at h; subst h; rfl
-    | 8, (_, _), h => simp at h; subst h; rfl
-    | 9, _, h => simp at h; subst h; rfl
+    | 8, _, h => simp at h; subst h; rfl
   · intro y h; cases y <;> exact h
   · intro y h; cases y <;> exact h
 

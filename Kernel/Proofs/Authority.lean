@@ -8,6 +8,10 @@
   rooted at the owner (the row plant "receiver skips the grant check on write" breaks this).
 * Every call but `rotate` is signed by its member's CURRENT key; `rotate` only to the
   PRECOMMITTED key.
+* Enrolment is a right (KERNEL-16): a derived `enroll` comes through a World grant chain carrying
+  `enroll` and spends one of its own grant's count, appending the count left to its ledger; a grant
+  on the World or carrying `enroll` always has a parent (so every such chain ends at a founder's
+  genesis grant), and an enrolment count is carved out of what its parent has left.
 -/
 import Kernel.Proofs.Receive
 
@@ -135,5 +139,76 @@ theorem rotate_precommitted {X : Ctx D} {look : Pinned D} {c : Call D} {key : By
   obtain ⟨m, hm, ⟨⟩, hkey, committed, hc, ⟨⟩, heq, _⟩ := h
   rw [req_ok, decide_eq_true_eq] at hkey heq
   exact ⟨hkey, m, hm, heq ▸ hc⟩
+
+omit [Ord D] [DecidableEq D] in
+/-- A spend of an enrolment count: within what the grant's ledger says is left, appending the
+remainder at the ledger's next index (nothing for a spend of none). -/
+theorem spendEnroll_ok {g : D} {cell : Cell} {units : Nat} {short : Refusal D}
+    {ef : Option (D × Act)} (h : spendEnroll g cell units short = .ok ef) :
+    ∃ i left, enrollLeft g cell = .ok (i, left) ∧ units ≤ left ∧
+      ef = if units = 0 then none else some (g, .write [.set (enrollBase + i) (countBytes (left - units))]) := by
+  unfold spendEnroll at h
+  simp only [except_bind_ok] at h
+  obtain ⟨⟨i, left⟩, hl, ⟨⟩, hu, h⟩ := h
+  rw [req_ok, decide_eq_true_eq] at hu
+  simp only [pure, Except.pure, Except.ok.injEq] at h
+  exact ⟨i, left, hl, hu, h.symm⟩
+
+omit [Ord D] in
+/-- **Enrolment authority** (KERNEL-16, the twin of `write_authorized`). A derived enrolment comes
+from a sponsor holding a World grant chain that carries `enroll`, whose own grant had a count left,
+and the Turn spends one of it: its effect appends `left - 1` to that grant's ledger. -/
+theorem enroll_authorized {X : Ctx D} {look : Pinned D} {c : Call D} {key : ByteArray} {next : D}
+    {possession : ByteArray} {via : D} {t : Turn D}
+    (h : enroll X look c key next possession via = .ok t) :
+    (∃ p, Chain X look (worldId X) (.enroll 0) via c.unsigned.member p) ∧
+      ∃ cell i left, readKind look via kindGrant = .ok cell ∧ enrollLeft via cell = .ok (i, left) ∧
+        0 < left ∧ X.verify key (possessionMessage X c.unsigned.member next key) possession = true ∧
+        ∃ cr, sealTurn X c cr (some (via, .write [.set (enrollBase + i) (countBytes (left - 1))])) = .ok t := by
+  unfold enroll at h
+  simp only [except_bind_ok] at h
+  obtain ⟨p, hw, cell, hc, ef, hs, ⟨⟩, hv, h⟩ := h
+  obtain ⟨i, left, hl, hu, rfl⟩ := spendEnroll_ok hs
+  rw [req_ok] at hv
+  exact ⟨⟨p, walk_chain hw⟩, cell, i, left, hc, hl, hu, hv, _, by simpa using h⟩
+
+omit [Ord D] in
+/-- **World rights are rooted at genesis.** A derived grant on the World, or one carrying an
+enrolment right, has a parent: no call roots one, so every such chain ends at a root that genesis
+placed (a founder's). -/
+theorem grant_rooted {X : Ctx D} {look : Pinned D} {c : Call D} {target grantee : D}
+    {rights : List Right} {parent : Option D} {t : Turn D}
+    (h : grant X look c target grantee rights parent = .ok t)
+    (hw : target = worldId X ∨ rights.any isEnroll = true) : parent.isSome = true := by
+  cases parent with
+  | some _ => rfl
+  | none =>
+      unfold grant at h
+      simp only [except_bind_ok] at h
+      obtain ⟨_, _, ef, hp, _⟩ := h
+      simp only [checkParent, except_bind_ok] at hp
+      obtain ⟨⟨⟩, hr, _⟩ := hp
+      rw [req_ok] at hr
+      rcases hw with hw | hw <;> simp_all
+
+omit [Ord D] in
+/-- **Enrolment counts attenuate.** A derived grant carrying `enroll` carves its count out of its
+parent's: the parent is a grant the signer holds on the same target, it had at least that much
+left, and the Turn's effect is the parent's spend. -/
+theorem grant_carves {X : Ctx D} {look : Pinned D} {c : Call D} {target grantee p : D}
+    {rights : List Right} {t : Turn D}
+    (h : grant X look c target grantee rights (some p) = .ok t) (he : rights.any isEnroll = true) :
+    ∃ pc ef, readKind look p kindGrant = .ok pc ∧ slotDigest X p pc grantTarget = .ok target ∧
+      slotDigest X p pc grantGrantee = .ok c.unsigned.member ∧
+      spendEnroll p pc (enrollUnits rights) (.grantWidens p) = .ok ef ∧
+      ∃ cr, sealTurn X c cr ef = .ok t := by
+  unfold grant at h
+  simp only [except_bind_ok] at h
+  obtain ⟨_, _, ef, hp, h⟩ := h
+  simp only [checkParent, except_bind_ok, he, if_true] at hp
+  obtain ⟨pc, hpc, pt, hpt, ⟨⟩, hteq, pg, hpg, ⟨⟩, hgeq, ⟨⟩, _, hs⟩ := hp
+  rw [req_ok, decide_eq_true_eq] at hteq hgeq
+  subst hteq; subst hgeq
+  exact ⟨pc, ef, hpc, hpt, hpg, hs, _, h⟩
 
 end Nanodregg.Kernel.Receive

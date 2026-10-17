@@ -71,7 +71,7 @@ omit [Ord D] in
 theorem dispatch_sealed {X : Ctx D} {look : Pinned D} {c : Call D} {b : Body D} {t : Turn D}
     (h : dispatch X look c b = .ok t) : ∃ cr ef, sealTurn X c cr ef = .ok t := by
   cases b <;>
-    simp only [dispatch, enroll, rotate, install, create, write, law, invoke, grant, follow, revoke,
+    simp only [dispatch, enroll, rotate, install, create, write, law, invoke, grant, revoke,
       except_bind_ok] at h <;>
     (repeat' (first | (obtain ⟨_, _, h⟩ := h) | exact ⟨_, _, h⟩))
 
