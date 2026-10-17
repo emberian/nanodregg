@@ -24,19 +24,24 @@ def nextSeed : ByteArray := hex "4ccd089b28ff96da9db6c346ec114e0f5b8a319f35aba62
 def key : ByteArray := Ed25519.publicKey seed
 def next : ByteArray := Ed25519.publicKey nextSeed
 
-/-- `host genesis STORE NAME KEY NEXT`'s founder arguments. -/
-def genesisArgs : List String := [Protocol.Text.toHex key, Protocol.Text.toHex next]
+/-- The test World's genesis nonce (KERNEL-24): fixed, so the driver can rebuild the World `host
+genesis --nonce` writes; a real genesis draws it from the OS. -/
+def nonce : ByteArray := hex "6e616e6f64726567672f6f70732f74657374206e6f6e63652f76312e2e2e2e2e"
+
+/-- `host genesis STORE NAME --nonce N KEY NEXT`'s arguments after NAME. -/
+def genesisArgs : List String :=
+  ["--nonce", Protocol.Text.toHex nonce, Protocol.Text.toHex key, Protocol.Text.toHex next]
 
 /-- The genesis World `host genesis STORE name …genesisArgs` writes (the same `Receive.genesis`). -/
 def world (name : String) : World D :=
-  Receive.genesis X name.toUTF8 allowanceMax [(key, nextKeyDigest X next)]
+  Receive.genesis X name.toUTF8 nonce allowanceMax [(key, nextKeyDigest X next)]
 
 /-- The `i`-th call: founder 0 creates an empty data object, pinned on its own member cell as it
 is in `w` (distinct `i < windowMax / 2`, distinct `validUntil`, distinct txId). -/
 def create (name : String) (w : World D) (i : Nat) : Call D :=
-  let me := founderId X name.toUTF8 0
+  let me := founderId X (world name).origin 0
   let u : Unsigned D :=
-    { member := me, key, notBefore := 0, validUntil := Bounds.windowMax / 2 + i,
+    { world := w.origin, member := me, key, notBefore := 0, validUntil := Bounds.windowMax / 2 + i,
       pins := [(me, pinOf X.env (w.live me))], maxCharge := 1 <<< 40, body := .create none [] [] }
   { unsigned := u, signature := Ed25519.sign seed (X.unsignedBytes u) }
 

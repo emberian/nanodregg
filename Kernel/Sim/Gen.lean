@@ -155,7 +155,7 @@ def S.pinsFor (E : Env D) (w : World D) (ids : List D) : List (D × D) :=
 def signed (P : Params D) (st : State D) (m : Member D) (key : ByteArray) (pins : List (D × D)) (body : Body D) :
     Call D :=
   let u : Unsigned D :=
-    { member := m.id, key := P.pub key, notBefore := 0, validUntil := st.host.height + 1 + 100, pins,
+    { world := st.host.origin, member := m.id, key := P.pub key, notBefore := 0, validUntil := st.host.height + 1 + 100, pins,
       maxCharge := 1000000, body }
   { unsigned := u, signature := P.sign key (P.ctx.unsignedBytes u) }
 
@@ -745,7 +745,7 @@ def maxWork (E : Env D) (log : List (Turn D)) : Nat × Nat :=
 def same (a b : World D) : Bool :=
   a.cells.toList == b.cells.toList && a.journal.toList == b.journal.toList &&
   a.spent.toList == b.spent.toList && a.height == b.height && a.chain == b.chain &&
-  a.allowance == b.allowance
+  a.allowance == b.allowance && a.origin == b.origin
 
 /-- A World rebuilt from its own sorted contents, as a checkpoint decode would. -/
 def reopened (w : World D) : World D :=
@@ -755,6 +755,9 @@ def reopened (w : World D) : World D :=
   { w with cells, journal, spent }
 
 def worldName : ByteArray := "sim".toUTF8
+
+/-- HOST draws a genesis nonce from the OS; the Sim's is a function of the seed (KERNEL-24). -/
+def nonceOf (seed : Nat) : ByteArray := s!"sim-nonce-{seed}".toUTF8
 
 /-- The log up to its last write, that write's values replaced and its charge re-priced: a log
 `fold` accepts (later turns, which pinned the honest value, are cut) and no signed call derives. -/
@@ -782,10 +785,11 @@ def run (P : Params D) (seed : Nat) (steps : Nat) : State D :=
   let fk : List (ByteArray × ByteArray) :=
     [("f0".toUTF8, "f0-next".toUTF8), ("f1".toUTF8, "f1-next".toUTF8)]
   let X := P.ctx
-  let g := genesis X worldName 100000000 (fk.map fun (k, n) => (P.pub k, nextKeyDigest X (P.pub n)))
-  let members := fk.zipIdx.map fun ((k, n), i) => (⟨founderId X worldName i, k, n⟩ : Member D)
+  let founders := fk.map fun (k, n) => (P.pub k, nextKeyDigest X (P.pub n))
+  let g := genesis X worldName (nonceOf seed) 100000000 founders
+  let members := fk.zipIdx.map fun ((k, n), i) => (⟨founderId X g.origin i, k, n⟩ : Member D)
   let holds := (List.range fk.length).map fun i =>
-    (founderId X worldName i, (⟨[founderGrantId X worldName i], true, enrollMax⟩ : Holding D))
+    (founderId X g.origin i, (⟨[founderGrantId X g.origin i], true, enrollMax⟩ : Holding D))
   let st0 : State D := { rng, host := g, members, holds }
   -- install the deny-all law package first
   let f := founder0 P st0
@@ -818,6 +822,22 @@ def run (P : Params D) (seed : Nat) (steps : Nat) : State D :=
   let st := match audit P.ctx g st.log with
     | .ok w => if same w st.host then st else { st with failures := "audit differs" :: st.failures }
     | .error (i, f) => { st with failures := s!"audit refused at {i}: {vname f}" :: st.failures }
+  -- KERNEL-24: the same log's calls against a second genesis (same name and founders, another
+  -- nonce) are each refused `wrongWorld`; another nonce, or the founders swapped, is another chain
+  let g2 := genesis X worldName (nonceOf (seed + 1000000)) 100000000 founders
+  let st := st.log.foldl (fun st t =>
+    match X.decodeCall t.event with
+    | none => { st with failures := "replay elsewhere: a logged event does not decode" :: st.failures }
+    | some c =>
+        match Receive.submit X g2 c with
+        | .error (.refused .wrongWorld) =>
+            { st with refusedAsExpected := st.refusedAsExpected + 1, seen := "wrongWorld" :: st.seen }
+        | .error v => { st with failures := s!"replay elsewhere: got {vname v}" :: st.failures }
+        | .ok _ => { st with failures := "replay elsewhere: admitted on a second World" :: st.failures }) st
+  let swapped := genesis X worldName (nonceOf seed) 100000000 founders.reverse
+  let st := if swapped.chain = g.chain ∨ g2.chain = g.chain then
+      { st with failures := "genesis: swapped founders or another nonce gave the same chain" :: st.failures }
+    else st
   -- a forged log: the writer changes what the last write of the log wrote (its event, the signed
   -- call, still says otherwise) and re-prices it, so `fold` accepts it; `audit` must not
   match forge st.log with
@@ -837,7 +857,7 @@ receiver can produce and the probe meets straight at `sealTurn` (`probeSeal`), a
 `notConserved`, `floorNotConserved`, `valueMalformed` and `overBound` (nine denominations), which
 no receiver derives and `probeValue` meets straight at `World.admit` with forged turns. -/
 def planted : List String :=
-  ["lawDenied", "noGrant", "unknownKey", "replayed", "stale", "notPrecommitted", "notIssuer",
+  ["wrongWorld", "lawDenied", "noGrant", "unknownKey", "replayed", "stale", "notPrecommitted", "notIssuer",
    "missingCell", "enrollSpent", "grantRight", "grantWidens", "unrooted", "duplicateEffect",
    "overflow", "sameAccount", "zeroAmount", "assetMismatch", "belowFloor", "spent",
    "notConserved", "floorNotConserved", "valueMalformed", "overBound", "notWell"]

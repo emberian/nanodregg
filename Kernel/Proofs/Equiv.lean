@@ -16,7 +16,7 @@ variable {D : Type} [Ord D] [Std.TransOrd D] [Std.LawfulEqOrd D] [DecidableEq D]
 /-- Extensional equality of Worlds: same contents, whatever the trees' shapes. -/
 def World.Equiv (a b : World D) : Prop :=
   a.cells.Equiv b.cells ∧ a.journal.Equiv b.journal ∧ a.spent.Equiv b.spent ∧
-    a.height = b.height ∧ a.chain = b.chain ∧ a.allowance = b.allowance
+    a.height = b.height ∧ a.chain = b.chain ∧ a.allowance = b.allowance ∧ a.origin = b.origin
 
 omit [Std.LawfulEqOrd D] [DecidableEq D] in
 theorem live_congr {a b : World D} (h : a.Equiv b) (c : D) : a.live c = b.live c := by
@@ -25,8 +25,8 @@ theorem live_congr {a b : World D} (h : a.Equiv b) (c : D) : a.live c = b.live c
 omit [Std.LawfulEqOrd D] in
 theorem check_congr {E : Env D} {a b : World D} (h : a.Equiv b) (t : Turn D) :
     check E a t = check E b t := by
-  obtain ⟨hc, hj, hs, hh, _, hal⟩ := h
-  have hl : ∀ c, a.live c = b.live c := live_congr ⟨hc, hj, hs, hh, ‹_›, hal⟩
+  obtain ⟨hc, hj, hs, hh, _, hal, ho⟩ := h
+  have hl : ∀ c, a.live c = b.live c := live_congr ⟨hc, hj, hs, hh, ‹_›, hal, ho⟩
   have e1 : checkJournal a t = checkJournal b t := by unfold checkJournal; rw [hj.getElem?_eq]
   have e2 : checkWindow a t = checkWindow b t := by unfold checkWindow; rw [hh]
   have e3 : touchCheck E a = touchCheck E b := by funext x; unfold touchCheck; rw [hl]
@@ -55,9 +55,9 @@ theorem spendAll_congr {s₁ s₂ : Std.TreeSet D compare} (h : s₁.Equiv s₂)
 omit [Std.LawfulEqOrd D] [DecidableEq D] in
 theorem commit_congr {E : Env D} {a b : World D} (h : a.Equiv b) (t : Turn D)
     (posts : List (Post D)) : (commit E a t posts).Equiv (commit E b t posts) := by
-  obtain ⟨hc, hj, hs, hh, hch, hal⟩ := h
+  obtain ⟨hc, hj, hs, hh, hch, hal, ho⟩ := h
   refine ⟨?_, ?_, spendAll_congr hs _, by simp [commit, hh], by simp [commit, hch],
-    by simp [commit, hal]⟩
+    by simp [commit, hal], by simp [commit, ho]⟩
   · exact insertAll_congr (insertAll_congr hc _) _
   · show (a.journal.insert t.txId (a.height + 1, turnDigest E t)).Equiv
       (b.journal.insert t.txId (b.height + 1, turnDigest E t))

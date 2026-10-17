@@ -110,6 +110,9 @@ structure World (D : Type) [Ord D] where
   chain : D
   /-- the storage budget left, in bytes -/
   allowance : Nat
+  /-- the World's identity (KERNEL-24): the digest of everything its genesis was made from, set by
+  genesis and never written again; every call names it (`Unsigned.world`) -/
+  origin : D
 
 /-- The kernel's hash domains. -/
 def domGenesis : String := "nanodregg/kernel/genesis/v1"
@@ -156,9 +159,13 @@ def createdPairs (E : Env D) (t : Turn D) : List (D × Cell) :=
 
 namespace World
 
-def genesis (E : Env D) (name : ByteArray) (allowance : Nat) : World D :=
+/-- The chain a World with identity `origin` starts at (KERNEL-24): `H(domGenesis, origin)`. -/
+def genesisChain (E : Env D) (origin : D) : D := E.hash domGenesis (E.bytes origin)
+
+/-- An empty World with identity `origin`, its chain at `genesisChain`. -/
+def genesis (E : Env D) (origin : D) (allowance : Nat) : World D :=
   { cells := {}, journal := {}, spent := {}, height := 0,
-    chain := E.hash domGenesis name, allowance }
+    chain := genesisChain E origin, allowance, origin }
 
 /-- The live cell at an id, if any (a tombstone reads as absent). -/
 def live (w : World D) (c : D) : Option Cell :=
@@ -392,7 +399,8 @@ def commit (E : Env D) (w : World D) (t : Turn D) (posts : List (Post D)) : Worl
     spent := spendAll w.spent t.nullifiers
     height := w.height + 1
     chain := chainNext E w.chain t
-    allowance := w.allowance + credit posts - t.charge }
+    allowance := w.allowance + credit posts - t.charge
+    origin := w.origin }
 
 /-- THE transition. Fail-closed: a refusal returns no World. -/
 def World.admit (E : Env D) (w : World D) (t : Turn D) : Except (Reject D) (World D) :=

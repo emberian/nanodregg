@@ -408,7 +408,7 @@ variable [Std.TransOrd D] [Std.LawfulEqOrd D]
 theorem step_rooted {X : Ctx D} {R : D → Prop} {w w' : World D} {c : Call D} {t : Turn D}
     (hinj : ∀ a b : D, X.env.bytes a = X.env.bytes b → a = b) (hw : WorldRooted X R w)
     (hr : receive X w c = .ok t) (ha : World.admit X.env w t = .ok w') : WorldRooted X R w' :=
-  admit_rooted hw (dispatch_born hinj (receiveWith_dispatch hr)) ha
+  admit_rooted hw (dispatch_born hinj (receiveWith_dispatch (receive_ok_with hr).2)) ha
 
 /-- **The Host keeps the World rooted**: every committed submission. -/
 theorem submit_rooted {X : Ctx D} {R : D → Prop} {w w' : World D} {c : Call D} {t : Turn D}
@@ -450,7 +450,7 @@ end Steps
 /-! ## Genesis, and what rootedness buys -/
 
 /-- The founders' genesis grants. -/
-def GenesisRoot (X : Ctx D) (name : ByteArray) (id : D) : Prop := ∃ i, id = founderGrantId X name i
+def GenesisRoot (X : Ctx D) (origin : D) (id : D) : Prop := ∃ i, id = founderGrantId X origin i
 
 omit [Ord D] [DecidableEq D] in
 theorem founderRoot_target (X : Ctx D) (m : D) :
@@ -469,17 +469,19 @@ variable [Std.TransOrd D] [Std.LawfulEqOrd D]
 
 omit [DecidableEq D] in
 /-- **Genesis is rooted**, its roots the founders' grants. -/
-theorem genesis_rooted (X : Ctx D) (name : ByteArray) (allowance : Nat)
+theorem genesis_rooted (X : Ctx D) (name nonce : ByteArray) (allowance : Nat)
     (founders : List (ByteArray × D)) :
-    WorldRooted X (GenesisRoot X name) (genesis X name allowance founders) := by
+    WorldRooted X (GenesisRoot X (originOf X name nonce allowance founders))
+      (genesis X name nonce allowance founders) := by
+  let o := originOf X name nonce allowance founders
   let P : Std.TreeMap D Entry compare → Prop := fun m => ∀ id cell, m[id]? = some (.live cell) →
     cell.kind = kindGrant → cell.discipline = .appendOnly ∧ (cell.slots.get grantTarget).isSome = true ∧
       (cell.slots.get grantTarget = some (X.env.bytes (worldId X)) →
-        (cell.slots.get grantParent).isSome = true ∨ GenesisRoot X name id)
+        (cell.slots.get grantParent).isSome = true ∨ GenesisRoot X o id)
   have step : ∀ (l : List ((ByteArray × D) × Nat)) (m : Std.TreeMap D Entry compare), P m →
       P (l.foldl (fun (m : Std.TreeMap D Entry compare) (p : (ByteArray × D) × Nat) =>
-        (m.insert (founderId X name p.2) (.live (founderMember X p.1))).insert
-          (founderGrantId X name p.2) (.live (founderRoot X (founderId X name p.2)))) m) := by
+        (m.insert (founderId X o p.2) (.live (founderMember X p.1))).insert
+          (founderGrantId X o p.2) (.live (founderRoot X (founderId X o p.2)))) m) := by
     intro l
     induction l with
     | nil => intro m hm; exact hm

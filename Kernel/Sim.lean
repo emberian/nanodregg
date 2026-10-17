@@ -77,6 +77,7 @@ abbrev State := Gen.State D
 
 def nameOf {α : Type} [Repr α] (a : α) : String := Gen.nameOf a
 def worldName : ByteArray := Gen.worldName
+def nonceOf (seed : Nat) : ByteArray := Gen.nonceOf seed
 def same (a b : World D) : Bool := Gen.same a b
 def S.pinsFor (w : World D) (ids : List D) : List (D × D) := Gen.S.pinsFor env w ids
 def signed (st : State) (m : Member) (key : ByteArray) (pins : List (D × D)) (body : Body D) :

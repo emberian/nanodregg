@@ -83,12 +83,14 @@ fn real_host_create_write_read_rotate_write_read() {
 
     // Two Stores from the same genesis: the writer's, and the member's own for `host follow`.
     let (w, f) = (root.join("stores/W"), root.join("stores/F"));
-    let genesis = |s: &Path| {
-        let o = Command::new(&host)
-            .arg("genesis")
-            .arg(s)
-            .args(["nano", &key, &next])
-            .output();
+    // KERNEL-24: the member's Store reproduces the writer's genesis with the writer's nonce.
+    let genesis = |s: &Path, nonce: Option<&str>| {
+        let mut cmd = Command::new(&host);
+        cmd.arg("genesis").arg(s).arg("nano");
+        if let Some(n) = nonce {
+            cmd.args(["--nonce", n]);
+        }
+        let o = cmd.args([&key, &next]).output();
         let o = o.unwrap();
         assert!(
             o.status.success(),
@@ -97,8 +99,12 @@ fn real_host_create_write_read_rotate_write_read() {
         );
         text(&o)
     };
-    let g = genesis(&w);
-    assert_eq!(genesis(&f), g, "one genesis, two Stores");
+    let g = genesis(&w, None);
+    assert_eq!(
+        genesis(&f, Some(line(&g, "nonce "))),
+        g,
+        "one genesis, two Stores"
+    );
     let founder = line(&g, "founder 0 member ");
     let (member, grant) = founder.split_once(" grant ").unwrap();
     let _h = supervise(

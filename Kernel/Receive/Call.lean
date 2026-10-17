@@ -77,6 +77,8 @@ inductive Body (D : Type)
 
 /-- What the caller signs. `pins` is the caller's observation; `maxCharge` the price ceiling. -/
 structure Unsigned (D : Type) where
+  /-- the World this call is for: its genesis origin (KERNEL-24); checked first, `wrongWorld` -/
+  world : D
   member : D
   key : ByteArray
   notBefore : Nat
@@ -93,6 +95,8 @@ structure Call (D : Type) where
 
 /-- Every receive refusal, by name (law 7). Kernel refusals come later, from `World.admit`. -/
 inductive Refusal (D : Type)
+  /-- the call names another World (`Unsigned.world ≠ w.origin`, KERNEL-24) -/
+  | wrongWorld
   | badSignature
   /-- the member does not exist, or the key is not its current one -/
   | unknownKey (member : D)
@@ -153,6 +157,7 @@ inductive Refusal (D : Type)
 /-- The refusal's name on the wire (law 7): its constructor's, arguments dropped
 (`Refusal.name_injective`). -/
 def Refusal.name {D : Type} : Refusal D → String
+  | .wrongWorld => "wrongWorld"
   | .badSignature => "badSignature"
   | .unknownKey _ => "unknownKey"
   | .notPrecommitted _ => "notPrecommitted"

@@ -117,8 +117,9 @@ fargs = sum(([m["key"], m["next"]] for m in members), [])
 W = os.path.join(root, "W")
 g = run([host, "genesis", W, "bar"] + fargs)
 if g.returncode: raise SystemExit(f"BAR verdict RED setup: genesis: {g.stderr.strip()}")
+nonce = line(g.stdout, "nonce ")
 for i, m in enumerate(members):
-    gi = run([host, "genesis", m["F"], "bar"] + fargs)
+    gi = run([host, "genesis", m["F"], "bar", "--nonce", nonce] + fargs)
     if gi.stdout != g.stdout: raise SystemExit("BAR verdict RED setup: member genesis differs from the writer's")
     m["member"], m["grant"] = line(g.stdout, f"founder {i} member ").split(" grant ")
 hides = [m["ws"] for m in members]

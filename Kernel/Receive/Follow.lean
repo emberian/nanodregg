@@ -7,6 +7,7 @@ it. The founders' root grants (observe, enrol up to `enrollMax`) and member cell
 World; nothing else is trusted without a signature.
 -/
 import Kernel.Receive.Derive
+import Codec.Raw
 
 namespace Nanodregg.Kernel.Receive
 
@@ -24,14 +25,33 @@ def mayFollow (X : Ctx D) (w : World D) (member g : D) : Bool :=
   | .ok _ => true
   | .error _ => false
 
-def domFounder : String := "nanodregg/kernel/founder/v1"
-def domFounderGrant : String := "nanodregg/kernel/founder-grant/v1"
+def domFounder : String := "nanodregg/kernel/founder/v2"
+def domFounderGrant : String := "nanodregg/kernel/founder-grant/v2"
+def domOrigin : String := "nanodregg/kernel/origin/v1"
 
-def founderId (X : Ctx D) (name : ByteArray) (i : Nat) : D :=
-  X.env.hash domFounder (name ++ index32 i)
+/-- What a genesis is made from, as CODEC's raw combinators write it: the name, HOST's nonce, the
+allowance, and each founder's key and next-key digest bytes, in order. -/
+abbrev GenesisInput := ByteArray × ByteArray × Nat × List (ByteArray × ByteArray)
 
-def founderGrantId (X : Ctx D) (name : ByteArray) (i : Nat) : D :=
-  X.env.hash domFounderGrant (name ++ index32 i)
+open Nanodregg.Codec Nanodregg.Codec.Stream in
+def genesisInput : Stream GenesisInput :=
+  product (rawBytes Bounds.eventBytesMax) (product (rawBytes Bounds.eventBytesMax) (product nat64
+    (rawList Bounds.eventBytesMax (product (rawBytes Bounds.eventBytesMax) (rawBytes Bounds.eventBytesMax)))))
+
+def inputOf (X : Ctx D) (name nonce : ByteArray) (allowance : Nat) (founders : List (ByteArray × D)) :
+    GenesisInput :=
+  (name, nonce, allowance, founders.map fun f => (f.1, X.env.bytes f.2))
+
+/-- The World's identity (KERNEL-24): the digest of everything its genesis is made from. -/
+def originOf (X : Ctx D) (name nonce : ByteArray) (allowance : Nat) (founders : List (ByteArray × D)) : D :=
+  X.env.hash domOrigin (genesisInput.bytes (inputOf X name nonce allowance founders))
+
+/-- Founder ids are keyed by the World's ORIGIN, so two Worlds with one name share no member id. -/
+def founderId (X : Ctx D) (origin : D) (i : Nat) : D :=
+  X.env.hash domFounder (X.env.bytes origin ++ index32 i)
+
+def founderGrantId (X : Ctx D) (origin : D) (i : Nat) : D :=
+  X.env.hash domFounderGrant (X.env.bytes origin ++ index32 i)
 
 def founderMember (X : Ctx D) (f : ByteArray × D) : Cell :=
   { kind := kindMember, discipline := .ram, slots := slotsOf [(slotKey, f.1), (slotNext, X.env.bytes f.2)] }
@@ -44,13 +64,14 @@ def founderRoot (X : Ctx D) (member : D) : Cell :=
       (grantIssuer, X.env.bytes member)] ++ rightSlots [.observe, .enroll enrollMax]) }
 
 /-- The genesis World: founders `(key, digest of next key)` as members, each with a root World
-grant. -/
-def genesis (X : Ctx D) (name : ByteArray) (allowance : Nat) (founders : List (ByteArray × D)) :
+grant; its origin commits to the name, HOST's `nonce`, the allowance and the founders. -/
+def genesis (X : Ctx D) (name nonce : ByteArray) (allowance : Nat) (founders : List (ByteArray × D)) :
     World D :=
-  let w := World.genesis X.env name allowance
+  let o := originOf X name nonce allowance founders
+  let w := World.genesis X.env o allowance
   let place := fun (m : Std.TreeMap D Entry compare) (p : (ByteArray × D) × Nat) =>
-    (m.insert (founderId X name p.2) (.live (founderMember X p.1))).insert
-      (founderGrantId X name p.2) (.live (founderRoot X (founderId X name p.2)))
+    (m.insert (founderId X o p.2) (.live (founderMember X p.1))).insert
+      (founderGrantId X o p.2) (.live (founderRoot X (founderId X o p.2)))
   { w with cells := founders.zipIdx.foldl place w.cells }
 
 end Nanodregg.Kernel.Receive

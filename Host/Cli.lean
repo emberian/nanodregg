@@ -56,7 +56,7 @@ def refuse (status : Status) (name : String := status.name) : IO UInt32 := do
 def refuseStore {F : Type} (f : StoreFault F) : IO UInt32 := refuse f.status f.name
 
 def usage : String :=
-  "usage: host genesis STORE NAME [KEY_HEX NEXT_HEX]... | host serve STORE | host follow STORE MEMBER_HEX GRANT_HEX | host check STORE [--anchor HEIGHT:CHAIN_HEX]"
+  "usage: host genesis STORE NAME [--nonce HEX32] [KEY_HEX NEXT_HEX]... | host serve STORE | host follow STORE MEMBER_HEX GRANT_HEX | host check STORE [--anchor HEIGHT:CHAIN_HEX]"
 
 def hexDigest (s : String) : Option Digest := Protocol.Text.ofHex s >>= Digest.ofBytes?
 
@@ -70,16 +70,32 @@ def founders : List String → Option (List (ByteArray × Digest))
     return (key, Receive.nextKeyDigest X next) :: (← founders rest)
   | [_] => none
 
-def genesisVerb (store name : String) (fs : List String) : IO UInt32 := do
+/-- The genesis nonce (KERNEL-24): `--nonce HEX` (exactly 32 bytes, so a member's own Store can
+reproduce the writer's genesis from the invitation), else 32 bytes from the OS. -/
+def genesisNonce : Option String → IO (Except Status ByteArray)
+  | some h => pure (match Protocol.Text.ofHex h with
+      | some b => if b.size = 32 then .ok b else .error .usage
+      | none => .error .usage)
+  | none => do
+      let b ← try IO.getRandomBytes 32 catch _ => pure ByteArray.empty
+      pure (if b.size = 32 then .ok b else .error .entropy)
+
+def genesisVerb (store name : String) (nonceArg : Option String) (fs : List String) : IO UInt32 := do
   let some fs := founders fs | refuse .usage "founders"
+  if name.toUTF8.size > Kernel.Bounds.eventBytesMax then return ← refuse .usage "name"
+  let nonce ← match ← genesisNonce nonceArg with
+    | .ok b => pure b
+    | .error s => return ← refuse s "nonce"
   let some key := Digest.ofBytes? (← IO.getRandomBytes 32) | refuse .entropy
-  let w₀ := Receive.genesis X name.toUTF8 allowanceMax fs
+  let w₀ := Receive.genesis X name.toUTF8 nonce allowanceMax fs
   match ← (Host.genesis store key (Keys.ofKey key shapes) c world recorder.mark w₀ :
       IO (Except (StoreFault (Record.Fault (Reject D))) Unit)) with
   | .error f => refuseStore f
   | .ok () =>
+    IO.println s!"origin {w₀.origin.toHex}"
+    IO.println s!"nonce {Protocol.Text.toHex nonce}"
     for i in List.range fs.length do
-      IO.println s!"founder {i} member {(Receive.founderId X name.toUTF8 i).toHex} grant {(Receive.founderGrantId X name.toUTF8 i).toHex}"
+      IO.println s!"founder {i} member {(Receive.founderId X w₀.origin i).toHex} grant {(Receive.founderGrantId X w₀.origin i).toHex}"
     IO.println s!"chain {w₀.chain.toHex}"
     return 0
 
@@ -169,8 +185,8 @@ def followVerb (store memberHex grantHex : String) : IO UInt32 := do
       return code
 
 def verb : List String → IO UInt32
-  | ["genesis", store, name] => genesisVerb store name []
-  | "genesis" :: store :: name :: fs => genesisVerb store name fs
+  | "genesis" :: store :: name :: "--nonce" :: n :: fs => genesisVerb store name (some n) fs
+  | "genesis" :: store :: name :: fs => genesisVerb store name none fs
   | ["serve", store] => serveVerb store
   | ["follow", store, member, grant] => followVerb store member grant
   | ["check", store] => Check.run store none

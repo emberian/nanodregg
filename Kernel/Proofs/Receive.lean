@@ -15,9 +15,26 @@ omit [Ord D] [DecidableEq D] in
 theorem Refusal.name_injective (a b : Refusal D) (h : a.name = b.name) : a.ctorIdx = b.ctorIdx := by
   cases a <;> cases b <;> simp_all [Refusal.name] <;> rfl
 
-/-- **Consent determinism.** A derivation depends only on the cells the caller pinned: two
-Worlds that agree there derive the same Turn (or the same refusal) from the same call. -/
-theorem receive_congr {X : Ctx D} {w₁ w₂ : World D} {c : Call D}
+/-- **The World binding (KERNEL-24).** A call that names another World is refused `wrongWorld`,
+before its signature, its key or any pinned read is looked at. -/
+theorem receive_wrongWorld {X : Ctx D} {w : World D} {c : Call D} (h : c.unsigned.world ≠ w.origin) :
+    receive X w c = .error .wrongWorld := by
+  simp [receive, req, h, bind, Except.bind]
+
+/-- A derived call named this World, and is the derivation through its pins. -/
+theorem receive_ok_with {X : Ctx D} {w : World D} {c : Call D} {t : Turn D}
+    (h : receive X w c = .ok t) :
+    c.unsigned.world = w.origin ∧ receiveWith X (pinned w c.unsigned.pins) c = .ok t := by
+  unfold receive at h
+  simp only [except_bind_ok] at h
+  obtain ⟨⟨⟩, hw, h⟩ := h
+  rw [req_ok, decide_eq_true_eq] at hw
+  exact ⟨hw, h⟩
+
+/-- **Consent determinism.** A derivation depends only on the World's identity and the cells the
+caller pinned: two Worlds that agree there derive the same Turn (or the same refusal) from the
+same call. -/
+theorem receive_congr {X : Ctx D} {w₁ w₂ : World D} {c : Call D} (ho : w₁.origin = w₂.origin)
     (agree : ∀ p ∈ c.unsigned.pins, w₁.live p.1 = w₂.live p.1) :
     receive X w₁ c = receive X w₂ c := by
   have hv : pinned w₁ c.unsigned.pins = pinned w₂ c.unsigned.pins := by
@@ -29,7 +46,7 @@ theorem receive_congr {X : Ctx D} {w₁ w₂ : World D} {c : Call D}
       simp only [hx, if_true]
       rw [← hpx', agree p hp]
     · simp only [hx]; rfl
-  unfold receive; rw [hv]
+  unfold receive; rw [hv, ho]
 
 /-- A sealed Turn pays exactly its weight, within the signed ceiling, and carries the caller's
 pins as its touches, its window, its call and the receiver's nullifiers; every effect is on a
@@ -94,7 +111,7 @@ theorem receive_ok {X : Ctx D} {w : World D} {c : Call D} {t : Turn D}
       t.touches.map (fun x => (x.cell, x.seen)) = c.unsigned.pins ∧
       t.event = X.callBytes c ∧ t.txId = txIdOf X c ∧ t.notBefore = c.unsigned.notBefore ∧
       t.validUntil = c.unsigned.validUntil := by
-  obtain ⟨hv, cr, efs, ns, hs⟩ := receiveWith_sealed h
+  obtain ⟨hv, cr, efs, ns, hs⟩ := receiveWith_sealed (receive_ok_with h).2
   obtain ⟨h1, h2, h3, h4, h5, h6, h7, _⟩ := sealTurn_ok hs
   exact ⟨hv, h1, h2, by rw [h3]; exact touchesOf_pins _ _, h4, h5, h6, h7⟩
 

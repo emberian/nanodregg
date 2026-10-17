@@ -265,7 +265,10 @@ price the derived charge plus headroom, and only if follow's World admits the Tu
 def plan (X : Ctx D) (me : Self D) (w : World D) (key : ByteArray) (b : Body D) :
     Except (Refusal D) (Unsigned D) := do
   let u0 : Unsigned D :=
-    { member := me.member
+    -- KERNEL-24: the World this member follows; TRANSPORT replaces it with the invitation's
+    -- `Self.world` (never the Host's word) when the envelope half lands
+    { world := w.origin
+      member := me.member
       key := key
       notBefore := w.height
       validUntil := w.height + me.window

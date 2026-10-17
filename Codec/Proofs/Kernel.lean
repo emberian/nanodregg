@@ -246,17 +246,17 @@ theorem body_lawfulOn {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc) :
   · intro y h; cases y <;> exact h
 
 def Unsigned.Fits (PD : D → Prop) (u : Unsigned D) : Prop :=
-  PD u.member ∧ BytesFits u.key ∧ u.notBefore < 2 ^ 64 ∧ u.validUntil < 2 ^ 64 ∧
+  PD u.world ∧ PD u.member ∧ BytesFits u.key ∧ u.notBefore < 2 ^ 64 ∧ u.validUntil < 2 ^ 64 ∧
   ListFits (fun p => PD p.1 ∧ PD p.2) u.pins ∧ u.maxCharge < 2 ^ 64 ∧ Body.Fits PD u.body
 
 theorem unsigned_lawfulOn {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc) :
     LawfulOn (Unsigned.Fits PD) (unsigned dc) := by
   unfold unsigned
   refine (refine_lawfulOn
-    (product_lawfulOn hd (product_lawfulOn (rawBytes_lawfulOn _ (by decide)) (product_lawfulOn nat64_lawfulOn
+    (product_lawfulOn hd (product_lawfulOn hd (product_lawfulOn (rawBytes_lawfulOn _ (by decide)) (product_lawfulOn nat64_lawfulOn
       (product_lawfulOn nat64_lawfulOn (product_lawfulOn (rawList_lawfulOn (product_lawfulOn hd hd) _ (by decide))
-        (product_lawfulOn nat64_lawfulOn (body_lawfulOn hd)))))))
-    "kernel/unsigned" ?_ ?_).mono ?_ ?_
+        (product_lawfulOn nat64_lawfulOn (body_lawfulOn hd))))))))
+    "kernel/unsigned/v2" ?_ ?_).mono ?_ ?_
   · intro y _; rfl
   · intro x y h; simp at h; subst h; rfl
   · intro y h; exact h

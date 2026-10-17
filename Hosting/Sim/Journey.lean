@@ -110,8 +110,8 @@ def journey (plant : Plant) (pkg : Package) : Run := Id.run do
   let tag := match plant with | .none => "" | .skipJudge => "P1 skip-judge: "
   let fk : List (ByteArray × ByteArray) := [("f0".toUTF8, "f0-next".toUTF8), ("f1".toUTF8, "f1-next".toUTF8)]
   let X := Kernel.Sim.ctxWith prog
-  let g0 := genesis X Kernel.Sim.worldName 100000000 (fk.map fun (k, n) => (k, nextKeyDigest X n))
-  let members := fk.zipIdx.map fun ((k, n), i) => (⟨founderId X Kernel.Sim.worldName i, k, n⟩ : Kernel.Sim.Member)
+  let g0 := genesis X Kernel.Sim.worldName (Kernel.Sim.nonceOf 0) 100000000 (fk.map fun (k, n) => (k, nextKeyDigest X n))
+  let members := fk.zipIdx.map fun ((k, n), i) => (⟨founderId X g0.origin i, k, n⟩ : Kernel.Sim.Member)
   let mut r : Run := { st := { rng := ⟨1⟩, host := g0, members } }
   let a := members.headD ⟨0, .empty, .empty⟩
   let b := members.getD 1 ⟨0, .empty, .empty⟩

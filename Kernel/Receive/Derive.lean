@@ -269,8 +269,11 @@ def receiveWith (X : Ctx D) (look : Pinned D) (c : Call D) : Except (Refusal D) 
   keyRule look c.unsigned
   dispatch X look c c.unsigned.body
 
-/-- THE derivation: a signed call against a World, through the caller's pins only. -/
-def receive (X : Ctx D) (w : World D) (c : Call D) : Except (Refusal D) (Turn D) :=
+/-- THE derivation: a signed call against a World, through the caller's pins only. The FIRST
+check is the World the call names (KERNEL-24): a call for another World is `wrongWorld`, never
+`badSignature` or `unknownKey`, whatever else is wrong with it. -/
+def receive (X : Ctx D) (w : World D) (c : Call D) : Except (Refusal D) (Turn D) := do
+  req (c.unsigned.world = w.origin) .wrongWorld
   receiveWith X (pinned w c.unsigned.pins) c
 
 end Nanodregg.Kernel.Receive

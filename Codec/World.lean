@@ -3,7 +3,7 @@ import Codec.Kernel
 /-!
 # Codec.World — the canonical bytes of a whole World (the checkpoint, HOST-14's base)
 
-`cells ‖ journal ‖ spent ‖ height u64 ‖ chain ‖ allowance u64`. Each map is written as its entries in
+`cells ‖ journal ‖ spent ‖ height u64 ‖ chain ‖ allowance u64 ‖ origin`. Each map is written as its entries in
 ascending key order (`TreeMap.toList`) and read back only if strictly ascending, so the bytes are a
 function of the World's contents, not of its trees' shapes. A `TreeMap` rebuilt from its entries is
 extensionally equal to the original (`Kernel.World.Equiv`), not `=`. So the read-back law is stated up
@@ -44,22 +44,22 @@ def worldMax : Nat := 2 ^ 32 - 1
 
 /-- The World's contents, in canonical order. -/
 abbrev WorldWire (D : Type) :=
-  List (D × Entry) × List (D × (Nat × D)) × List D × Nat × D × Nat
+  List (D × Entry) × List (D × (Nat × D)) × List D × Nat × D × Nat × D
 
 def worldWire (dc : Stream D) : Stream (WorldWire D) :=
   product (ascendingList worldMax Prod.fst (product dc entry))
     (product (ascendingList worldMax Prod.fst (product dc (product nat64 dc)))
-      (product (ascendingList worldMax id dc) (product nat64 (product dc nat64))))
+      (product (ascendingList worldMax id dc) (product nat64 (product dc (product nat64 dc)))))
 
 def toWire (w : World D) : WorldWire D :=
-  (w.cells.toList, w.journal.toList, w.spent.toList, w.height, w.chain, w.allowance)
+  (w.cells.toList, w.journal.toList, w.spent.toList, w.height, w.chain, w.allowance, w.origin)
 
 def ofWire (x : WorldWire D) : World D :=
   ⟨Std.TreeMap.ofList x.1 compare, Std.TreeMap.ofList x.2.1 compare, Std.TreeSet.ofList x.2.2.1 compare,
-    x.2.2.2.1, x.2.2.2.2.1, x.2.2.2.2.2⟩
+    x.2.2.2.1, x.2.2.2.2.1, x.2.2.2.2.2.1, x.2.2.2.2.2.2⟩
 
 def world (dc : Stream D) : Stream (World D) where
-  shape := .refine "kernel/world" (worldWire dc).shape
+  shape := .refine "kernel/world/v2" (worldWire dc).shape
   size w := (worldWire dc).size (toWire w)
   put w buf := (worldWire dc).put (toWire w) buf
   get b i :=

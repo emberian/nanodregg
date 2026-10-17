@@ -830,7 +830,7 @@ before the key, the signature or any pinned read: `req (u.world = w.origin) .wro
 first, and a cross-World txId is not in this journal, so `wrongWorld` is what it answers.
 (e) ONE field and ONE refusal. TRANSPORT's read envelope compares `e.world = w.origin` against the same
 accessor. HOST adds no check of its own: an old base, which has no origin, refuses by the World codec's
-tag change (CODEC-2's `formatMismatch` stamp).
+tag change (HOST-20's `shapeMismatch` stamp, derived from the codec shapes).
 **Theorems.**
 - `receive_wrongWorld`: `c.unsigned.world ≠ w.origin → receive X w c = .error (.wrongWorld)`.
 - `admitted_elsewhere_refused`: a call `submit` admits on W₁ is refused `wrongWorld` by every W₂ with
@@ -854,8 +854,17 @@ is joining.
 **Meta-critique.** "Bind the call to its domain" is the textbook anti-replay answer, and here it is also
 the measured defect. The fork worth checking: should the origin be the genesis CHAIN? It should not.
 The chain advances, and a call must be bound to the World, not to a height. That is the window's job.
-Status: proposed (ROOT ruled the shape on 10-17). Build after LEDGER's D2 lands in Call/Derive, which
-touch the same files.
+Status: BUILT (KERNEL-5, 10-17). As built: the origin is H(domOrigin, CODEC raw bytes of (name, nonce,
+allowance u64, [(key, bytes next)])) with every length ≤ Bounds.eventBytesMax; `World.genesisChain`
+(HOST-6's ask) is the chain genesis starts at; founder ids are domain v2, keyed by bytes origin.
+Theorems (Kernel/Proofs/Origin): admit_origin, fold_origin, genesis_origin, genesis_chain, genesis_inj
+(equal origins ⇒ equal inputs ∨ HashColl domOrigin, given GenesisFits and an injective digest
+encoding), genesis_chain_inj, admitted_elsewhere_refused (refused `wrongWorld`, or `replayed` if the
+other journal holds the txId: never admitted); Proofs/Receive: receive_wrongWorld, receive_ok_with;
+receive_congr now also needs equal origins. `host genesis STORE NAME [--nonce HEX32] …` (HOST-5's
+spec): OS draw (refused `entropy`), `--nonce` for a member's own Store, `origin`/`nonce` lines,
+NAME past the bound refused `usage name`. Plants: World check skipped ⇒ the replay-elsewhere arm
+reads `unknownKey`, red; origin ignoring founders ⇒ swapped founders give the same chain, red.
 
 ## KERNEL-25 · `invoke` is authorized like write: the owner, or a chain for `invoke m` rooted at the owner (KERNEL-4, 2026-10-17; ROOT's ruling on HOSTING-4, not yet built)
 **Defect (HOSTING, measured in hosting-sim).** `Derive.invoke` computes the principal with

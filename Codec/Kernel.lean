@@ -161,11 +161,11 @@ def body (dc : Stream D) : Stream (Body D) :=
       | .credit w a n v => ⟨12, (w, a, n, v)⟩)
 
 def unsigned (dc : Stream D) : Stream (Unsigned D) :=
-  refine "kernel/unsigned"
-    (product dc (product (rawBytes callMax) (product nat64 (product nat64
-      (product (rawList callMax (product dc dc)) (product nat64 (body dc)))))))
-    (fun (m, k, nb, vu, ps, mc, b) => some ⟨m, k, nb, vu, ps, mc, b⟩)
-    (fun u => (u.member, u.key, u.notBefore, u.validUntil, u.pins, u.maxCharge, u.body))
+  refine "kernel/unsigned/v2"
+    (product dc (product dc (product (rawBytes callMax) (product nat64 (product nat64
+      (product (rawList callMax (product dc dc)) (product nat64 (body dc))))))))
+    (fun (wo, m, k, nb, vu, ps, mc, b) => some ⟨wo, m, k, nb, vu, ps, mc, b⟩)
+    (fun u => (u.world, u.member, u.key, u.notBefore, u.validUntil, u.pins, u.maxCharge, u.body))
 
 def call (dc : Stream D) : Stream (Call D) :=
   refine "kernel/call" (product (unsigned dc) (rawBytes callMax))

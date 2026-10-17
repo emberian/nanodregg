@@ -62,7 +62,7 @@ def machine : Machine (World Nat) (Turn Nat) (Reject Nat) Frame where
     | _ => (Protocol.Status.refused.code, r.name.toUTF8)
   ok := Protocol.Status.ok.code
 
-def genesis : World Nat := World.genesis env "sim".toUTF8 (2 ^ 40)
+def genesis : World Nat := World.genesis env (env.hash "nanodregg/host-sim/origin/v1" "sim".toUTF8) (2 ^ 40)
 
 inductive Kind | fresh | replay | sameTxId | doubleSpend
   deriving DecidableEq
@@ -468,9 +468,9 @@ def run (args : List String) : IO UInt32 := do
   -- Ctx (CODEC's call codec and decodeCall). At genesis (height 0) an un-journaled call whose window
   -- ends at 0 can never be admitted: `refused expired`; one ending at 1 may still land: `absent`.
   let kx := Kernel.Sim.ctx
-  let kw : World Kernel.Sim.D := World.genesis kx.env "lookup".toUTF8 (2 ^ 40)
+  let kw : World Kernel.Sim.D := World.genesis kx.env (kx.env.hash "nanodregg/host-sim/origin/v1" "lookup".toUTF8) (2 ^ 40)
   let callUntil (v : Nat) : Receive.Call Kernel.Sim.D :=
-    { unsigned := { member := 0, key := ByteArray.empty, notBefore := 0, validUntil := v, pins := [],
+    { unsigned := { world := kw.origin, member := 0, key := ByteArray.empty, notBefore := 0, validUntil := v, pins := [],
                     maxCharge := 0, body := .revoke 0 },
       signature := ByteArray.empty }
   let lookupAt (v : Nat) : String :=

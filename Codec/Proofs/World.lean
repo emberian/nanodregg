@@ -8,7 +8,7 @@ import Std.Data.TreeSet
 # The World codec: canonical, and read back up to extensional equality
 
 * `world_decode_bytes`: a World within the wire's bounds decodes from its bytes to a World
-  `Equiv` to it (same cells, journal, spent set, height, chain and allowance).
+  `Equiv` to it (same cells, journal, spent set, height, chain, allowance and origin).
 * `eq_bytes_of_world_decode`: whatever decodes IS the encoding of what it decoded to, so a base file
   has exactly one spelling.
 * `world_bytes_equiv`: `Equiv` Worlds have the same bytes, so a checkpoint's digest is a function
@@ -158,7 +158,7 @@ def WireFits (PD : D → Prop) (x : WorldWire D) : Prop :=
   ((x.1.length ≤ worldMax ∧ ∀ p ∈ x.1, PD p.1 ∧ Entry.Fits p.2) ∧ ascendingBy Prod.fst x.1 = true) ∧
   ((x.2.1.length ≤ worldMax ∧ ∀ p ∈ x.2.1, PD p.1 ∧ p.2.1 < 2 ^ 64 ∧ PD p.2.2) ∧ ascendingBy Prod.fst x.2.1 = true) ∧
   ((x.2.2.1.length ≤ worldMax ∧ ∀ d ∈ x.2.2.1, PD d) ∧ ascendingBy id x.2.2.1 = true) ∧
-  x.2.2.2.1 < 2 ^ 64 ∧ PD x.2.2.2.2.1 ∧ x.2.2.2.2.2 < 2 ^ 64
+  x.2.2.2.1 < 2 ^ 64 ∧ PD x.2.2.2.2.1 ∧ x.2.2.2.2.2.1 < 2 ^ 64 ∧ PD x.2.2.2.2.2.2
 
 theorem worldWire_lawfulOn {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc) :
     LawfulOn (WireFits PD) (worldWire dc) :=
@@ -166,7 +166,7 @@ theorem worldWire_lawfulOn {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD d
     (product_lawfulOn (ascendingList_lawfulOn (product_lawfulOn hd (product_lawfulOn nat64_lawfulOn hd)) _
       (by decide) _)
       (product_lawfulOn (ascendingList_lawfulOn hd _ (by decide) _)
-        (product_lawfulOn nat64_lawfulOn (product_lawfulOn hd nat64_lawfulOn))))).mono
+        (product_lawfulOn nat64_lawfulOn (product_lawfulOn hd (product_lawfulOn nat64_lawfulOn hd)))))).mono
     (fun _ h => h) (fun _ h => h)
 
 /-- A World within the wire's bounds: at most `worldMax` entries per map, every digest in the
@@ -175,7 +175,7 @@ def World.Fits (PD : D → Prop) (w : World D) : Prop :=
   (w.cells.toList.length ≤ worldMax ∧ ∀ p ∈ w.cells.toList, PD p.1 ∧ Entry.Fits p.2) ∧
   (w.journal.toList.length ≤ worldMax ∧ ∀ p ∈ w.journal.toList, PD p.1 ∧ p.2.1 < 2 ^ 64 ∧ PD p.2.2) ∧
   (w.spent.toList.length ≤ worldMax ∧ ∀ d ∈ w.spent.toList, PD d) ∧
-  w.height < 2 ^ 64 ∧ PD w.chain ∧ w.allowance < 2 ^ 64
+  w.height < 2 ^ 64 ∧ PD w.chain ∧ w.allowance < 2 ^ 64 ∧ PD w.origin
 
 theorem world_bytes (dc : Stream D) (w : World D) : (world dc).bytes w = (worldWire dc).bytes (toWire w) := rfl
 
@@ -200,10 +200,10 @@ theorem ofWire_toWire_equiv (w : World D) : (ofWire (toWire w)).Equiv w :=
   ⟨TreeMap.equiv_iff_toList_eq.mpr (toList_ofList_of_sorted _ TreeMap.ordered_keys_toList),
    TreeMap.equiv_iff_toList_eq.mpr (toList_ofList_of_sorted _ TreeMap.ordered_keys_toList),
    TreeSet.equiv_iff_toList_eq.mpr (toList_ofList_set_of_sorted _ TreeSet.ordered_toList),
-   rfl, rfl, rfl⟩
+   rfl, rfl, rfl, rfl⟩
 
 theorem toWire_ofWire {PD : D → Prop} {x : WorldWire D} (hx : WireFits PD x) : toWire (ofWire x) = x := by
-  obtain ⟨c, j, sp, h, ch, a⟩ := x
+  obtain ⟨c, j, sp, h, ch, a, o⟩ := x
   simp only [toWire, ofWire]
   rw [toList_ofList_of_sorted _ (ascendingBy_iff.mp hx.1.2), toList_ofList_of_sorted _ (ascendingBy_iff.mp hx.2.1.2),
     toList_ofList_set_of_sorted _ (ascendingBy_iff.mp hx.2.2.1.2)]
@@ -229,8 +229,8 @@ omit [LawfulEqOrd D] [DecidableEq D] in
 /-- Extensionally equal Worlds have the same bytes: a checkpoint is a function of the contents. -/
 theorem world_bytes_equiv (dc : Stream D) {w w' : World D} (h : w.Equiv w') :
     (world dc).bytes w = (world dc).bytes w' := by
-  obtain ⟨hc, hj, hs, hh, hch, ha⟩ := h
+  obtain ⟨hc, hj, hs, hh, hch, ha, ho⟩ := h
   rw [world_bytes, world_bytes]
-  simp only [toWire, hc.toList_eq, hj.toList_eq, hs.toList_eq, hh, hch, ha]
+  simp only [toWire, hc.toList_eq, hj.toList_eq, hs.toList_eq, hh, hch, ha, ho]
 
 end Nanodregg.Codec.Kernel

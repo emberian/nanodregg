@@ -469,7 +469,7 @@ theorem transfer_exact {X : Ctx D} {w w' : World D} {c : Call D} {t : Turn D} {s
       (w'.live src).bind Value.ofCell = some { sv with balance := sv.balance - amount } ∧
       (w'.live dst).bind Value.ofCell = some { dv with balance := dv.balance + amount } ∧
       ∀ k, k ≠ src → k ≠ dst → k ∉ createdIds X.env t → w'.cells[k]? = w.cells[k]? := by
-  have hd := receiveWith_dispatch hr
+  have hd := receiveWith_dispatch (receive_ok_with hr).2
   rw [hb] at hd
   simp only [dispatch, transfer, except_bind_ok] at hd
   obtain ⟨⟨scell, sv⟩, hs, ⟨dcell, dv⟩, hdd, _, _, ⟨⟩, hne, ⟨⟩, _, ⟨⟩, _, ⟨⟩, hfs, ⟨⟩, hfd, hseal⟩ := hd
@@ -501,7 +501,7 @@ theorem credit_exact {X : Ctx D} {w w' : World D} {c : Call D} {t : Turn D} {wel
       (w'.live well).bind Value.ofCell = some { wv with floor := wv.floor - amount } ∧
       (w'.live acct).bind Value.ofCell = some { av with floor := av.floor + amount } ∧
       ∀ k, k ≠ well → k ≠ acct → k ∉ createdIds X.env t → w'.cells[k]? = w.cells[k]? := by
-  have hd := receiveWith_dispatch hr
+  have hd := receiveWith_dispatch (receive_ok_with hr).2
   rw [hb] at hd
   simp only [dispatch, credit, except_bind_ok] at hd
   obtain ⟨⟨wcell, wv⟩, hs, ⟨acell, av⟩, hdd, _, _, ⟨⟩, hwell, ⟨⟩, hne, ⟨⟩, hpos, ⟨⟩, hden, ⟨⟩, hle,

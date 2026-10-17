@@ -35,5 +35,7 @@ def world : Stream (World D) := Codec.Kernel.world dc
 
 def worldName : ByteArray := "rows".toUTF8
 def allowance : Nat := 2 ^ 40
+/-- The rows' genesis nonce (KERNEL-24): fixed, a test parameter; a real genesis draws it. -/
+def nonce : ByteArray := "rows-nonce".toUTF8
 
 end Nanodregg.Protocol.Rows.Sim

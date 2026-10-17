@@ -151,7 +151,7 @@ def freshActor (name : String) : M Actor := do
   let st ← get
   let X := st.sys.writer.X
   let self : Self D := match founderIndex name with
-    | some i => { member := founderId X Sim.worldName i, grant := founderGrantId X Sim.worldName i,
+    | some i => { member := founderId X st.genesis.origin i, grant := founderGrantId X st.genesis.origin i,
                   window := 100 }
     | none => { member := X.env.hash "nanodregg/rows/stranger/v1" name.toUTF8,
                 grant := X.env.hash "nanodregg/rows/stranger-grant/v1" name.toUTF8, window := 100 }
@@ -589,7 +589,7 @@ structure Result where
 def run (m : Option Mutation) (lines : List Line) (times : Option Nat) : IO Result := do
   let s := sys m
   let fs := founders.map fun n => (keyOf n 0, nextKeyDigest s.writer.X (keyOf n 1))
-  let g := Receive.genesis s.writer.X Sim.worldName Sim.allowance fs
+  let g := Receive.genesis s.writer.X Sim.worldName Sim.nonce Sim.allowance fs
   let (mem, r₀) ← match ← Writer.genesisStore s.writer g with
     | .ok m => pure m
     | .error e => throw (IO.userError s!"genesis: {e}")
@@ -598,8 +598,8 @@ def run (m : Option Mutation) (lines : List Line) (times : Option Nat) : IO Resu
     runLine i l (if l.times > 1 then times.getD l.times else l.times)
   let hex (d : D) := Text.toHex (s.writer.X.env.bytes d)
   let binds := founders.zipIdx.flatMap fun (n, i) =>
-    [(n, hex (founderId s.writer.X Sim.worldName i)),
-     (n ++ ".grant", hex (founderGrantId s.writer.X Sim.worldName i))]
+    [(n, hex (founderId s.writer.X g.origin i)),
+     (n ++ ".grant", hex (founderGrantId s.writer.X g.origin i))]
   let (outcomes, st) ← go.run { sys := s, host, mem, genesis := g, binds }
   let _ ← st.host.stop
   pure ⟨{ outcomes, ops := st.ops, kinds := st.kinds }, st.log, st.times, st.reopenNs, st.invokes⟩
