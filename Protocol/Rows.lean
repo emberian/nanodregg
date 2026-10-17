@@ -653,8 +653,12 @@ def bounty : Row where
 `installed` (state entry, kind, phase; its owner is the cell's, KERNEL's: the package names none
 since 6577e82). Methods remove 0, start 1, stop 2, each taking the empty record. The owner starts it; a second start has no edge (the package's own phase law); a
 member who is not the owner cannot stop it (invoke is owner-gated, KERNEL-25: `noGrant`); the owner's grant of `invoke:1` (start)
-does not let the grantee stop it (`grantRight`). The sandbox half (the broker launching the grain,
-a second world's volume refused) is CLIENT's and HOSTING's, judged by their plants, not by rows. -/
+does not let the grantee stop it (`grantRight`). Its physical half is the standing cargo row
+`cargo:launcher:grain` (launcher/tests/grain.rs, `the_owner_stops_a_grain_and_a_start_only_grantee_cannot`,
+HOSTING-22, c2019b9). Under a real Store and the controller's Lean plan, the owner's start runs one
+process, the grantee's stop is refused `grantRight` and the process lives, and the owner's stop ends
+it (plants: a controller or a launcher that ignores stop is red at that step). The resident's half,
+reaching its broker socket and nothing else, is `cargo:launcher:resident` (113537f). -/
 def grain : Row where
   name := "grain"
   replaces := ["m6grain", "journey/M6"]
