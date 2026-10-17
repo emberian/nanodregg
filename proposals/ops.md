@@ -91,9 +91,19 @@ on the first call enough?
   carried codec stays stable; it is stamped, so a flag day that keeps the carried shape can carry
   state and one that changes it refuses the old file by name. ("Rarer" was an estimate posing as
   a rule; OPS withdraws it.) Export from a stopped writer only (RUNBOOK §6).
-- **CODEC-2:** pending.
+- **CODEC-2: AMENDED (CODEC-22).** The carried codec EMBEDS the cell, entry, slot and leaf codecs
+  (its bytes are the trie's listing), so a hand-kept version "changed only on a carry flag day"
+  can lie. The version is CONTENT-ADDRESSED: `Codec.Kernel.carried E dc : Stream (Carried D)` = the
+  World's `cells` trie-listing codec × nat64 allowance (and whatever else KERNEL-29's Carried holds),
+  refine "kernel/carried/v1"; the export file stamps `Tag.of "kernel/carried" carried`; import
+  compares the stamp FIRST, `shapeMismatch` by name before decoding. A World-codec change that
+  leaves the cell spelling alone keeps the tag and a carry crosses it; one that changes the cell
+  spelling moves it and that flag day is a plain re-genesis, refused loudly. Byte equality stays
+  the check (canonical codec). OPS accepts; it supersedes OPS's version policy.
 - OPS plant added: carry-roundtrip also asserts "a call committed at the old tip is `lookup`
   committed after import".
 
-**Status.** KERNEL, HOST accepted (amended), PROTOCOL amended; CODEC pending. Nothing is built
-before KERNEL-29.
+**Status.** AGREED by all four (KERNEL-29, HOST-28, PROTOCOL-29, CODEC-22, each amending). Build order: KERNEL-29
+(Carried, Receive.carry, theorems; after the World port) → CODEC-22 (`carried`, lawfulness,
+canonicity) → HOST-28 (`export`, `import --digest`, `carryMismatch` with its hostAction arm) → OPS
+(store-plants carry rows, RUNBOOK §6) and PROTOCOL's carry row.
