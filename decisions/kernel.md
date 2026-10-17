@@ -397,12 +397,40 @@ World's membership is ≤ 256 × founders until a refill grant exists. Revoking 
 give its unspent count back to the parent (the credit is storage only). Reading the count left is
 O(ledger) per enrolment (≤ 257 slots). A grant carrying several `enroll` rights stores their sum. The
 claim that "every World chain ends at a founder" rests on two receiver theorems and on genesis.
-The World-level invariant ("every live World grant has a parent or is a genesis root"), an
-induction over `submit`, is NOT proved yet. Protocol: `follow MEMBER` is now `grant World MEMBER
+The World-level invariant ("every live World grant has a parent or is a genesis root") is
+proved in KERNEL-21. Protocol: `follow MEMBER` is now `grant World MEMBER
 [observe] via me.grant`, and `enroll TOKEN` spends `me.grant`; PROTOCOL still has to parse an
 `enroll:N` right.
 **Meta-critique.** Deleting the follow kind was the move I wanted (law 1). Check that it is not
 ornament: before it, Protocol's enrol had no grant id to name, and the fix would have been a second
 id in `Self`. With it, a member's one World grant is its whole membership credential. The 256 is an
 estimate dressed as a bound; it is a constant, and a re-genesis changes it.
+Status: built.
+
+## KERNEL-21 · Every World grant is rooted at genesis, as a fold invariant (KERNEL-3, 2026-10-16)
+**Decision.** ROOT asked for the open half of KERNEL-20 to be proved. Kernel/Proofs/Rooted:
+`WorldRooted X R w` says every live grant cell is append-only and names a target, and a grant whose
+target is the World has a parent or is in `R`. The kernel half is `admit_rooted`. Whatever turn is
+admitted, given rooted births, the World stays rooted, because `postWrite_keeps` says an
+append-only cell never loses or changes a slot. So no receiver, honest or buggy, can strip a parent
+or retarget a grant. The receive half is `dispatch_born`: of every receiver, only `grant` bears a
+grant cell, and on the World only with a parent (`grant_rooted`). Then `step_rooted`,
+`submit_rooted`, `audit_rooted` (the follower's World), and `genesis_rooted` with
+`R = GenesisRoot` (the founders' grant ids). `chain_rooted`: through a rooted World, a chain for a
+World right ends at a live root grant in `R` whose issuer is the chain's principal. With their
+premises (digest bytes injective, decoder canonical) discharged by CODEC's
+`Codec.Proofs.Deployed`, Kernel/Proofs/RootedDeployed gives `deployed_audit_rooted` and
+`deployed_enroll_founder`: on an audited World, every enrolment acts for a founder, through that
+founder's own genesis grant. Plant: the `unrooted` check off ⇒ `grant_rooted` (and everything
+above it) no longer builds; kernel-sim 59/64 red (KERNEL-20).
+**Alternatives.** The Sim plant ROOT offered as the fallback (an audit refusing a forged log); it
+would test one forgery where the theorem covers every log.
+**Critique.** `WorldRooted` talks about raw slot bytes (`get grantTarget = some (bytes worldId)`).
+Its link to what `walk` reads goes through the two digest premises, so a generic `Ctx` with a
+non-canonical decoder gets no `chain_rooted`. The invariant says nothing about object grants (a
+root object grant is legitimate: its issuer must be the owner, checked by `ownerAuthority`).
+`audit_rooted` covers the audited log; a Host World is the same World by `submit_rooted`.
+**Meta-critique.** It was cheaper than I expected because the append-only discipline carried the
+write half. That is evidence the KERNEL-20 choice (keep grants append-only, ledger the count) was
+right, not only prettier.
 Status: built.

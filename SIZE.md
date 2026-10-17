@@ -18,17 +18,17 @@
 | Rust lines (generated) | 393 | — |
 | Rust files with an unregistered generated header | 0 | 0 |
 | partial defs (deployed) | 0 | 0 |
-| theorems | 582 | — |
+| theorems | 607 | — |
 | sorry | 0 | 0 |
-| Lean modules | 127 | — |
-| Lean proof-modules | 52 | — |
+| Lean modules | 129 | — |
+| Lean proof-modules | 54 | — |
 | Lean lines (Census) | 89 | — |
 | Lean lines (Codec) | 4131 | — |
 | Lean lines (Emit) | 344 | — |
 | Lean lines (Host) | 2420 | — |
-| Lean lines (Kernel) | 3659 | — |
+| Lean lines (Kernel) | 4247 | — |
 | Lean lines (Protocol) | 2703 | — |
-| max dependents of one module | 95 | — |
+| max dependents of one module | 97 | — |
 | native (extern/implemented_by) | 8 | 8 |
 | C lines | 0 | 146 |
 | Lean lines (Lang) | 5464 | — |
