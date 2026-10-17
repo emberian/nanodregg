@@ -232,7 +232,8 @@ def settled : List Op := everyWrite ++ [.lookup]
 
 /-- J0–J5: a clean start, an independent newcomer, a resource, a grant, a signed read and write; a
 stranger refused at the log for both; a write without the grant; a write planned on a World that
-moved before it landed. -/
+moved before it landed. Then a public object: the owner grants `anyone` (KERNEL-26), and a member
+enrolled after that grant writes through it (without it, `noGrant`). -/
 def journey : Row where
   name := "journey"
   replaces := ["journey/J0", "journey/J1", "journey/J2", "journey/J3", "journey/J4", "journey/J5",
@@ -247,7 +248,13 @@ def journey : Row where
     no "newcomer" ["write", "@shared", "2", "3"] "noGrant",
     { actor := "sponsor", act := .cmd ["write", "@shared", "2", "9"], expect := .refused "stale",
       fault := .race "newcomer" ["write", "@shared", "2", "8", "--via", "@g"] },
-    ok "newcomer" ["read", "@shared", "2=8"]])
+    ok "newcomer" ["read", "@shared", "2=8"]] ++
+    -- a public object (KERNEL-26): a grant to `anyone` lets a member enrolled AFTER it mutate
+    [okBind "sponsor" ["grant", "@shared", "anyone", "observe,mutate"] "public"] ++
+    join "sponsor" "visitor" ++
+    [no "visitor" ["write", "@shared", "4", "1"] "noGrant",
+     ok "visitor" ["write", "@shared", "4", "1", "--via", "@public"],
+     ok "newcomer" ["read", "@shared", "4=1"]])
   plant := .caught .openLog 8 .ok
 
 /-- J6: stop and reopen; the state and the journal survive; the attempt store's lookup of a

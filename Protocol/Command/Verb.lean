@@ -41,7 +41,9 @@ inductive Verb
   type (LANG's reader, on follow's World) -/
   | invoke
   /-- `grant TARGET MEMBER RIGHTS [--via PARENT]`: TARGET is an object or `world` (the World,
-  KERNEL-20: `observe` on it is following the log, `enroll:N` is sponsoring N members); RIGHTS is
+  KERNEL-20: `observe` on it is following the log, `enroll:N` is sponsoring N members); MEMBER is a
+  member or `anyone` (a grant whose grantee is the World: every enrolled member, including members
+  enrolled later, KERNEL-26: a public object); RIGHTS is
   `observe`, `mutate`, `invoke:N`, `enroll:N`, comma-separated; PARENT is the grant attenuated -/
   | grant
   /-- `revoke GRANT` -/
@@ -87,8 +89,8 @@ inductive Cmd (D : Type)
   | law (obj : D) (laws : List D) (via : Option D)
   /-- `args` is TEXT, read at the method's argument type when the call is planned -/
   | invoke (obj : D) (method : Nat) (args : String) (via : Option D)
-  /-- `target = none` is the World -/
-  | grant (target : Option D) (grantee : D) (rights : List Right) (via : Option D)
+  /-- `target = none` is the World; `grantee = none` is `anyone` (the World as grantee, KERNEL-26) -/
+  | grant (target : Option D) (grantee : Option D) (rights : List Right) (via : Option D)
   | revoke (grant : D)
   | read (obj : D) (expect : List (Nat × ByteArray))
   | rotate
@@ -130,7 +132,7 @@ def usage : Verb → String
   | .init => "init SPONSOR" | .enroll => "enroll TOKEN"
   | .install => "install TEXT" | .create => "create [--pkg PKG STATE] LAW..."
   | .write => "write OBJ KEY VALUE [--via GRANT]" | .law => "law OBJ LAW... [--via GRANT]"
-  | .invoke => "invoke OBJ METHOD ARGS [--via GRANT]" | .grant => "grant TARGET MEMBER RIGHTS [--via PARENT]"
+  | .invoke => "invoke OBJ METHOD ARGS [--via GRANT]" | .grant => "grant TARGET MEMBER|anyone RIGHTS [--via PARENT]"
   | .revoke => "revoke GRANT" | .read => "read OBJ [KEY=VALUE...]" | .rotate => "rotate"
   | .adopt => "adopt HEIGHT DIGEST"
 
@@ -224,7 +226,8 @@ def parseVerb (v : Verb) (args : List String) : Except ParseRefusal (Cmd D) :=
       pure (.invoke (← digestArg digestOf o) (← numArg m) a (← viaArg digestOf .invoke via))
   | .grant, t :: m :: rs :: via => do
       let target ← if t = "world" then pure none else some <$> digestArg digestOf t
-      pure (.grant target (← digestArg digestOf m) (← mapEx rightArg (rs.splitOn ","))
+      let grantee ← if m = "anyone" then pure none else some <$> digestArg digestOf m
+      pure (.grant target grantee (← mapEx rightArg (rs.splitOn ","))
         (← viaArg digestOf .grant via))
   | .revoke, [g] => .revoke <$> digestArg digestOf g
   | .read, o :: es => do pure (.read (← digestArg digestOf o) (← mapEx expectArg es))

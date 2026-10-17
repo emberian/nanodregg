@@ -612,3 +612,17 @@ actor is caught up (true in the bar row, one actor; not asserted). **Meta-critiq
 loader against regressions on ONE program; a second workload would make it a measure of the
 machine rather than of a fixture.
 **Status.** landed.
+
+## PROTOCOL-26 · `grant TARGET anyone RIGHTS`: a public object in the command language (KERNEL-26) (2026-10-17, PROTOCOL-5)
+**Decision.** The grantee word `anyone` is the World as grantee (`Cmd.grant`'s grantee `none` ↦
+`worldId X` in `body`, as the target word `world` already is): every enrolled member, members
+enrolled later included. Row `journey` gains the tooth: the owner grants `anyone` observe,mutate;
+a member enrolled AFTER the grant is refused `noGrant` without it and writes through it.
+**Alternatives.** `--public` as a flag (a second grammar for one grantee); the World's hex id typed
+by the member (a digest nobody can read as "everyone").
+**Critique.** `anyone` reads as "any key at all"; it is any ENROLLED member (strangers are still
+`unknownKey` at the log), which the verb's docstring says and the word does not. The row tests the
+positive path through `write`; the bounty row (invoke by a hunter) still waits on LEDGER's escrow.
+**Meta-critique.** I put the tooth in `journey` rather than a new row because no existing mutation
+reaches KERNEL's link walk; the row would have had a borrowed plant.
+**Status.** landed.

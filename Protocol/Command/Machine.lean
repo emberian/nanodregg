@@ -244,7 +244,7 @@ def body (X : Ctx D) (me : Self D) (w : World D) (s : Signed) : Cmd D → Except
       match Lang.argsOf (worldLook w) p m a with
       | .ok args => .ok (.invoke o m args invokeBudget via)
       | .error r => .error (.receive r)
-  | .grant t g rs via => .ok (.grant (t.getD (worldId X)) g rs via)
+  | .grant t g rs via => .ok (.grant (t.getD (worldId X)) (g.getD (worldId X)) rs via)
   | .revoke g => .ok (.revoke g)
   | .rotate => .ok (.rotate s.key (nextKeyDigest X s.next))
   | .init _ | .read _ _ | .adopt _ => .error .badState
