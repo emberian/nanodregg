@@ -22,7 +22,7 @@ Plants (each must flip its line, or the run is RED):
 * P1 skip-judge: G3's grain born `running` is ADMITTED, G6's double start is ADMITTED;
 * P2 the package without its `owner` law: G7's stranger stop is ADMITTED.
 
-The run is deterministic: a SEED argument (standing passes 1 2 3) changes nothing.
+The run is deterministic: a SEED argument (standing passes 1 2 3) changes nothing. It ends `ALL PASS`.
 -/
 import Kernel.Sim
 import Lang.Program
@@ -169,12 +169,21 @@ def runAll (args : List String) : IO UInt32 := do
     IO.FS.writeFile textPath t
     IO.println s!"wrote {textPath}"
     return 0
+  -- standing runs every `*-sim` as `EXE SEED`. This journey has no generator, so the seed selects
+  -- nothing; it is accepted (a natural, said so on the first line) and anything else is refused.
+  match args with
+  | [] => pure ()
+  | [seed] =>
+    match seed.toNat? with
+    | some n => IO.println s!"seed {n}: the hosting journey is deterministic; the seed selects nothing"
+    | none => IO.eprintln s!"usage: hosting-sim [SEED | --write-text] (got {seed})"; return 2
+  | _ => IO.eprintln "usage: hosting-sim [SEED | --write-text]"; return 2
   let (l0, ok0) ← textLine
   IO.println s!"{if ok0 then "ok  " else "FAIL"} {l0}"
   let runs := [journey .none, journey .skipJudge, journey .noOwnerLaw]
   for r in runs do for l in r.log do IO.println l
   let bad := runs.foldl (· + ·.bad) (if ok0 then 0 else 1)
-  IO.println s!"hosting-sim: {if bad = 0 then "GREEN" else s!"RED ({bad})"}"
+  IO.println (if bad = 0 then "ALL PASS" else s!"hosting-sim: RED ({bad})")
   return if bad = 0 then 0 else 1
 
 end Nanodregg.Hosting.Sim
