@@ -11,11 +11,12 @@ use std::io::{self, Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 
+use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
 use nanodregg_client::frame::{self, Frame, FrameError, Limits};
-use nanodregg_client::generated::{CloseReason, status};
+use nanodregg_client::generated::{self as g, CloseReason, status};
 use nanodregg_client::mux::{self, MuxEnd, MuxLimits};
 
 const L: Limits = Limits {
@@ -44,13 +45,39 @@ fn limits(connections_max: u32, idle_ms: u64) -> MuxLimits {
 /// A child that answers every request with status = op + 1 and the payload reversed (padded to
 /// `pad` bytes), after `delay`, until it has answered `n`; then it closes its stdout.
 fn child_with(n: usize, delay: Duration, pad: usize, max: u32) -> (io::PipeWriter, io::PipeReader) {
+    child_hearing(n, delay, pad, max, None)
+}
+
+/// `child_with`, and every hang-up it is sent (PROTOCOL-23) goes to `hangs` and is acknowledged
+/// `closed ‖ name` (the mux drops the ack: the connection is gone); hang-ups do not count in `n`.
+fn child_hearing(
+    n: usize,
+    delay: Duration,
+    pad: usize,
+    max: u32,
+    hangs: Option<mpsc::Sender<(u32, Vec<u8>)>>,
+) -> (io::PipeWriter, io::PipeReader) {
     let (mut req_r, req_w) = io::pipe().unwrap();
     let (rep_r, mut rep_w) = io::pipe().unwrap();
     thread::spawn(move || {
-        for _ in 0..n {
+        let mut answered = 0;
+        while answered < n {
             let Ok(body) = frame::read_body(&mut req_r, max + 4) else {
                 return;
             };
+            if body[4] == g::HANGUP {
+                let conn = u32::from_le_bytes([body[0], body[1], body[2], body[3]]);
+                if let Some(tx) = &hangs {
+                    let _ = tx.send((conn, body[5..].to_vec()));
+                }
+                let _ = frame::write_body(
+                    &mut rep_w,
+                    max + 4,
+                    &[&body[..4], &[status::CLOSED], &body[5..]],
+                );
+                continue;
+            }
+            answered += 1;
             thread::sleep(delay);
             let (conn, rest) = body.split_at(4);
             let mut payload = rest[1..].to_vec();
@@ -229,4 +256,32 @@ fn a_closed_from_the_child_ends_the_connection() {
     let mut a = UnixStream::connect(&path).unwrap();
     frame::write(&mut a, L, 5, b"x").unwrap();
     assert_closed(&mut a, L, CloseReason::Idle);
+}
+
+/// PROTOCOL-23: the child is told, by name, of every connection the mux ends: a client that leaves
+/// is `peerLeft`, an idle one `idle`, one that sends the child wire's own byte `frameRefused`.
+#[test]
+fn the_child_hears_every_end_by_name() {
+    let (listener, path) = socket("hang");
+    let (tx, rx) = mpsc::channel();
+    let (child_in, child_out) = child_hearing(8, Duration::ZERO, 0, L.frame_bytes_max, Some(tx));
+    thread::spawn(move || mux::serve(listener, child_in, child_out, limits(8, 300)));
+    let next =
+        |rx: &mpsc::Receiver<(u32, Vec<u8>)>| rx.recv_timeout(Duration::from_secs(3)).unwrap();
+    let mut a = UnixStream::connect(&path).unwrap();
+    a.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+    assert_eq!(ask(&mut a, L, 5, b"x").unwrap().op, 6);
+    drop(a);
+    assert_eq!(next(&rx), (0, b"peerLeft".to_vec()), "a client that leaves");
+    let mut b = UnixStream::connect(&path).unwrap();
+    assert_closed(&mut b, L, CloseReason::Idle);
+    assert_eq!(next(&rx), (1, b"idle".to_vec()), "an idle close");
+    let mut c = UnixStream::connect(&path).unwrap();
+    frame::write(&mut c, L, g::HANGUP, b"idle").unwrap();
+    assert_closed(&mut c, L, CloseReason::FrameRefused);
+    assert_eq!(
+        next(&rx),
+        (2, b"frameRefused".to_vec()),
+        "a client sending the hang-up byte"
+    );
 }

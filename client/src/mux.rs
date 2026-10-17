@@ -32,7 +32,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::frame::{self, FrameError, Limits};
-use crate::generated::{CloseReason, status};
+use crate::generated::{self as g, CloseReason, status};
 
 const CONN: usize = 4;
 
@@ -84,6 +84,9 @@ struct Conn {
     flight: Mutex<(VecDeque<Instant>, Instant)>,
     /// The writer thread, joined when the mux ends so queued replies reach the peer.
     writer: Mutex<Option<thread::JoinHandle<()>>>,
+    /// Why the mux ended this connection, owed to the child as a hang-up (PROTOCOL-23); unset
+    /// when the child itself closed it.
+    hang: Mutex<Option<CloseReason>>,
 }
 
 struct Shared<I> {
@@ -108,6 +111,9 @@ impl<I> Shared<I> {
     /// End connection `id` once: forget it, stop its reader, and hand its writer the named close
     /// (`None`: the peer is already gone, nothing to say).
     fn close(&self, id: u32, why: Option<CloseReason>) {
+        if let Some(c) = lock(&self.conns).open.get(&id) {
+            *lock(&c.hang) = Some(why.unwrap_or(CloseReason::PeerLeft));
+        }
         self.end(id, why.map(close_frame));
     }
 
@@ -206,6 +212,7 @@ fn accept<I: Write + Send + 'static>(
             slot: AtomicBool::new(false),
             flight: Mutex::new((VecDeque::new(), Instant::now())),
             writer: Mutex::new(None),
+            hang: Mutex::new(None),
         });
         let id = {
             let mut conns = lock(&shared.conns);
@@ -240,6 +247,18 @@ fn accept<I: Write + Send + 'static>(
         thread::spawn(move || {
             let why = forward(id, stream, &conn, &sh, limits);
             sh.close(id, why);
+            // The connection's reader is the one thread that writes its frames to the child, so
+            // the hang-up follows its last request.
+            if let Some(r) = lock(&conn.hang).take()
+                && let Some(child) = lock(&sh.child_in).as_mut()
+            {
+                let max = limits.frame.frame_bytes_max.saturating_add(CONN as u32);
+                let _ = frame::write_body(
+                    child,
+                    max,
+                    &[&id.to_le_bytes(), &[g::HANGUP], r.name().as_bytes()],
+                );
+            }
         });
     }
 }
@@ -341,6 +360,9 @@ fn forward<I: Write>(
                 return Some(CloseReason::FrameRefused);
             }
         };
+        if f.op == g::HANGUP {
+            return Some(CloseReason::FrameRefused); // the child wire's byte, never a client's
+        }
         {
             let mut flight = lock(&c.flight);
             flight.0.push_back(Instant::now());
