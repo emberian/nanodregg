@@ -22,9 +22,10 @@ use ed25519_dalek::{Signer as _, SigningKey};
 use zeroize::Zeroizing;
 
 use crate::fsx;
-pub use crate::fsx::Refused;
 use crate::generated::CustodyRefusal;
 use crate::generated::layout::SignResult;
+pub use nanodregg_sandbox::custody::Refused;
+use nanodregg_sandbox::custody::{check_private_dir, read_private};
 
 /// Seed length in bytes.
 pub const SEED_BYTES: usize = 32;
@@ -93,13 +94,13 @@ fn refused(path: &Path, r: Refused) -> CustodyError {
     CustodyError::File(path.to_path_buf(), r)
 }
 
-fn read(path: &Path, lens: &[usize]) -> Result<Zeroizing<Vec<u8>>, CustodyError> {
-    fsx::read_private(path, lens).map_err(|r| refused(path, r))
+fn read(path: &Path, len: usize) -> Result<Zeroizing<Vec<u8>>, CustodyError> {
+    read_private(path, len..=len).map_err(|r| refused(path, r))
 }
 
 /// `Ok(None)` when the file does not exist.
 fn read_optional(path: &Path, len: usize) -> Result<Option<Zeroizing<Vec<u8>>>, CustodyError> {
-    match fsx::read_private(path, &[len]) {
+    match read_private(path, len..=len) {
         Err(Refused::Io(e)) if e.kind() == io::ErrorKind::NotFound => Ok(None),
         r => r.map(Some).map_err(|r| refused(path, r)),
     }
@@ -156,7 +157,7 @@ pub struct Separate {
 impl Separate {
     fn holding(&self) -> Result<&Path, CustodyError> {
         let h = self.holding.as_deref().ok_or(CustodyError::HoldingAbsent)?;
-        match fsx::check_private_dir(h) {
+        match check_private_dir(h) {
             Err(Refused::Io(e)) if e.kind() == io::ErrorKind::NotFound => {
                 Err(CustodyError::HoldingAbsent)
             }
@@ -168,14 +169,14 @@ impl Separate {
 
 impl Keys for Separate {
     fn current(&self) -> Result<SigningKey, CustodyError> {
-        Ok(key(&read(&self.ws.join("seed"), &[SEED_BYTES])?))
+        Ok(key(&read(&self.ws.join("seed"), SEED_BYTES)?))
     }
     fn next_public(&self) -> Result<Public, CustodyError> {
-        let b = read(&self.ws.join("next.pub"), &[32])?;
+        let b = read(&self.ws.join("next.pub"), 32)?;
         Ok(key_bytes(&b))
     }
     fn next(&self) -> Result<SigningKey, CustodyError> {
-        let next = key(&read(&self.holding()?.join("next"), &[SEED_BYTES])?);
+        let next = key(&read(&self.holding()?.join("next"), SEED_BYTES)?);
         if public(&next) != self.next_public()? {
             return Err(CustodyError::Mismatch("holding next ≠ workspace next.pub"));
         }
@@ -199,7 +200,7 @@ impl Keys for Separate {
             fsx::replace(&self.ws, "next.pub", &r.pending)?;
         }
         let h = self.holding()?;
-        let held = key(&read(&h.join("next"), &[SEED_BYTES])?);
+        let held = key(&read(&h.join("next"), SEED_BYTES)?);
         if public(&held) == r.incoming {
             match self.pending()? {
                 Some(p) if public(&p) == r.pending => fsx::rename(h, "pending", "next")?,
@@ -231,7 +232,14 @@ pub struct SameRecord {
 
 impl SameRecord {
     fn record(&self) -> Result<Zeroizing<Vec<u8>>, CustodyError> {
-        read(&self.ws.join("keys"), &[2 * SEED_BYTES, 3 * SEED_BYTES])
+        // Two or three whole seeds: the range is the shared read's, whole seeds the record's shape.
+        let path = self.ws.join("keys");
+        let r =
+            read_private(&path, 2 * SEED_BYTES..=3 * SEED_BYTES).map_err(|e| refused(&path, e))?;
+        match r.len() % SEED_BYTES {
+            0 => Ok(r),
+            _ => Err(refused(&path, Refused::Length(r.len() as u64))),
+        }
     }
     fn seed(&self, i: usize) -> Result<Option<SigningKey>, CustodyError> {
         let r = self.record()?;
@@ -304,7 +312,7 @@ impl Custody {
     /// A new member: `ws/seed` and `ws/next.pub`, the next secret in `holding/next` (a directory,
     /// mode 0700, that must exist). Refuses if any of them exists.
     pub fn create_separate(ws: &Path, holding: &Path) -> Result<(), CustodyError> {
-        fsx::check_private_dir(holding).map_err(|r| refused(holding, r))?;
+        check_private_dir(holding).map_err(|r| refused(holding, r))?;
         let (current, next) = (fresh_seed()?, fresh_seed()?);
         fsx::create_once(holding, "next", next.as_ref()).map_err(exists)?;
         fsx::create_once(ws, "next.pub", &public(&key(next.as_ref()))).map_err(exists)?;

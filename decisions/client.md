@@ -316,3 +316,67 @@ Size: client/src rises 1715 → 1959 of its 2000 ceiling; `nd-attach` (~127 line
 old `route`; the mutation checks (six, each red) are the evidence, not a deployed measurement over
 sshd.
 **Status.** landed (this commit). `nd-attach` waits on the hang-up frame and the size ceiling.
+
+## CLIENT-15 one custody read for every key holder, in the sandbox crate (2026-10-17, CLIENT-3; asked by HOSTING-3)
+
+**Decision.** The custody read moves from `client/src/fsx.rs` (pub(crate)) to
+`nanodregg_sandbox::custody`, public: `read_private(path, RangeInclusive<usize>)` and
+`check_private_dir(dir)`, with `PRIVATE` (0600) and `PRIVATE_DIR` (0700). The client calls the moved
+one and its copy is deleted; HOSTING-12's keybroker calls the same function for the operator's
+provider-key file. A file is refused, each by its own name: `Link` (O_NOFOLLOW), `NotRegular` (a
+directory, device, socket or FIFO; the open is O_NONBLOCK so a FIFO is refused, never waited on),
+`Owner(uid)` (not the euid), `Mode(m)` (not exactly 0600), `Length(n)` (outside the caller's range,
+or grown while read), `Io(e)`. The bytes are `Zeroizing`. Owner is checked BEFORE mode. The client's
+SameRecord `keys` is read at `64..=96` and refused `Length` unless it is whole seeds: the range is
+the read's, the record's shape is custody's.
+**Alternatives.** (a) HOSTING copies the read into launcher/: a twin (law 1). (b) A third crate
+`custody`: one more manifest and lock for ~90 lines; the sandbox crate is already the one both
+launchers depend on, and "what a process may read" is its subject. (c) Keep a list of exact lengths:
+HOSTING's key file has no fixed length; a range serves both, and the client's exact sizes are
+`len..=len`.
+**Critique.** The checks are unchanged in strength: same O_NOFOLLOW, same exact mode, same owner,
+the length check now a range. Three things changed on purpose. (1) `NotRegular` split into `Link`
+and `NotRegular`, so a refusal names which. (2) Owner before mode: the order changes only the name,
+never accept vs refuse, and it makes the Owner refusal plantable without root (a 0600 file of
+another user cannot be opened by us at all; root's world-readable `/etc/passwd` can, and is now
+`Owner(0)`). (3) O_NONBLOCK: before it, a FIFO planted at a seed path hung the reader forever.
+The owner plant needs a non-root runner and asserts so. `nanodregg-sandbox` gains two pinned deps
+(rustix, zeroize, both already in client), so launcher/Cargo.lock and attach/Cargo.lock change.
+**Meta-critique.** I moved `check_private_dir` too, though HOSTING asked only for the file read,
+because it shares the owner/mode helper; leaving it would split one check across two crates.
+**Plants.** `sandbox/tests/custody.rs`, one per refusal (link, mode ×4, owner, length ×2, directory
+and FIFO, holding dir). Mutations, each red: NOFOLLOW removed, regular-file check removed, owner
+check removed, mode check removed (two plants red), length check removed, NONBLOCK removed (red by
+name `fifoWaited` at a 5 s liveness deadline, not a hang), the dir symlink check removed.
+**Status.** landed (this commit).
+
+## CLIENT-16 the phone's leaf Fits check: a theorem of Lean's leaf decoder, not a Rust refusal (2026-10-17, CLIENT-3; PROTOCOL-6's routed item, cv 01a149bf-8b34)
+
+**Asked.** The phone's leaf decoder must refuse a leaf whose cell is not `Codec.Kernel.Cell.Fits`
+before it trusts a read: the `hlf` premise of `Receive.deployed_head_read_sound` (KERNEL-31), with a
+named refusal and a plant that skips the check and goes red.
+**Found.** (1) No head-read path exists in any layer. The client has none; PROTOCOL-14 ruled option
+A (`read` serves base pages a thin member checks against a pinned World digest) and left option B,
+the per-cell inclusion read a phone would run, unbuilt as Ember's "phone" question. No `Trie.Proof`
+reaches any client today. (2) A leaf decoder that refuses is a decision, so by law 2 it is Lean's
+(`Codec.World.leaf`), never Rust's. (3) With Lean's decoder the premise is a theorem, not a check:
+`leaf_lawfulOn : LawfulOn Leaf.Fits leaf` says every leaf the codec reads satisfies `Leaf.Fits`, and
+`Leaf.Fits l → l.CellFit Cell.Fits` holds case by case (`entry (live c)` is `Cell.Fits c`; `tomb`
+and `spent` are `True` on both sides). A non-fitting cell cannot come out of the decoder (a kind
+read by `nat32` is below 2^32), so a runtime `Fits` test after decoding is dead code, and a plant
+that "skips the check" could never go red: a vacuous plant.
+**Decision.** No Rust leaf decoder and no Rust Fits check (the client keeps no protocol knowledge
+beyond CODEC's table). Routed instead: CODEC proves `leaf decode b = ok l → l.CellFit Cell.Fits`,
+and KERNEL states the phone's read over leaf BYTES (`deployed_head_read_sound` with the leaf
+obtained by the deployed leaf decoder), so no premise about the leaf is left. Its tooth is the
+build: a decoder that admits a non-fitting cell breaks the proof. When PROTOCOL builds option B,
+`follow` (Lean) decodes and verifies, the client moves the bytes, and the row's plant is a forged
+proof refused by name in Lean.
+**Critique.** This declines the brief's literal shape (a Rust refusal with a skip-plant). If a
+future phone is a non-Lean app, it must still show only what Lean decoded; that is a constraint on
+the phone's build, written here so it is findable. CODEC-4 emitted `generated::cell_fits` into client/src/generated.rs
+(c64bb52) on the brief's first reading; under this decision it has no Rust consumer, and an emitted
+predicate nobody calls is a check that cannot go red. Whether it stays is CODEC's and ROOT's call.
+**Meta-critique.** The pull was to build the asked refusal because it was asked; the codec's
+`LawfulOn` theorem is what decides that there is nothing to refuse at runtime.
+**Status.** routed to CODEC-4 and KERNEL-8 (and PROTOCOL-6, ROOT); nothing of client/ changes.

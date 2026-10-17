@@ -3,7 +3,7 @@ name = "nanodregg-sandbox"
 version = "0.0.0"
 edition = "2024"
 publish = false
-description = "Launch a child under one confinement shape. Plumbing only: what the child may see is a policy given to it, never chosen here."
+description = "Launch a child under one confinement shape, and read a custody file under the custody checks. Plumbing only: what the child may see is a policy given to it, never chosen here."
 
 # Standalone until GATES owns a root workspace.
 [workspace]
@@ -12,6 +12,8 @@ description = "Launch a child under one confinement shape. Plumbing only: what t
 path = "src/lib.rs"
 
 [dependencies]
+rustix = { version = "=1.1.2", default-features = false, features = ["std", "fs", "process"] }
+zeroize = { version = "=1.8.2", default-features = false, features = ["alloc"] }
 
 [lints.rust]
 unsafe_code = "forbid"

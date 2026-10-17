@@ -179,7 +179,7 @@ fn custody_files_are_refused_unless_private_regular_and_exact() {
     std::os::unix::fs::symlink(h.join("next"), ws.join("seed")).unwrap();
     assert!(matches!(
         Custody::open(&ws, None),
-        Err(CustodyError::File(_, Refused::NotRegular))
+        Err(CustodyError::File(_, Refused::Link))
     ));
     fs::remove_file(ws.join("seed")).unwrap();
     fs::write(ws.join("seed"), [0u8; 33]).unwrap();

@@ -18,6 +18,8 @@
 //! Paths are canonicalized first (macOS checks real paths: `/var` is `/private/var`). The child's
 //! environment is cleared on both platforms.
 
+pub mod custody;
+
 use std::ffi::OsStr;
 use std::io;
 use std::path::{Path, PathBuf};
