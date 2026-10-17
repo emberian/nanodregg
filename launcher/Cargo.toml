@@ -29,6 +29,10 @@ nanodregg-sandbox = { path = "../sandbox" }
 # The key bytes are zeroized on drop (the type custody::read_private returns).
 zeroize = { version = "=1.8.2", default-features = false, features = ["alloc"] }
 
+# The test harness (CLIENT's): lean_bin, the client's nd / nd-supervise, supervise_host.
+[dev-dependencies]
+nanodregg-devtools = { path = "../devtools" }
+
 [lints.rust]
 unsafe_code = "forbid"
 

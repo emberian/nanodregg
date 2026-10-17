@@ -10,10 +10,11 @@
 //! executable inside (`nanodregg_sandbox::EXEC_FILTERED` = false). The verdicts below say "denied"
 //! with the errno the OS gave, never a bare EPERM it did not give.
 //!
-//! Needs the built Lean exe: `ND_LEAN_BIN` (default `../.lake/build/bin`) must hold `hosting-drive`.
+//! Needs the built Lean exe `hosting-drive` (`nanodregg_devtools::lean_bin`; missing, it fails by name).
 #![cfg(target_os = "linux")]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // a plant that cannot set up is a failed plant
 
+use nanodregg_devtools::lean_bin;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -27,19 +28,6 @@ struct Tree {
     pkg: PathBuf,
     vol: PathBuf,
     pids: PathBuf,
-}
-
-fn lean_bin(name: &str) -> PathBuf {
-    let dir = std::env::var_os("ND_LEAN_BIN")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../.lake/build/bin"));
-    let p = dir.join(name);
-    assert!(
-        p.is_file(),
-        "{} is not built (lake build {name}); no silent skip",
-        p.display()
-    );
-    p.canonicalize().unwrap()
 }
 
 fn tree(name: &str) -> Tree {

@@ -1,6 +1,8 @@
-//! The broker's refusal-by-name run (HOSTING-12, stage 1): a resident stand-in asks keybroker over
-//! its own socket; every verdict is the Lean decider's (`hosting-broker`, with the allowance from
-//! its `--drive` argument), and no byte the resident receives holds the operator's key.
+//! The broker's refusal-by-name run (HOSTING-12, HOSTING-13): a resident stand-in asks keybroker
+//! over its own socket; every verdict is the Lean decider's (`hosting-broker`), which reads the
+//! allowances from a REAL Store and follows it live: `host genesis` from custody's keys, `host serve`
+//! under `nd-supervise`, and the operator's `nd install` / `create` / `invoke` of the `allowance`
+//! package (world/hosting/Allowance). No byte the resident receives holds the operator's key.
 //!
 //! - start window: a costing ask is `overSpend` (the life forfeits it); `modelNotAllowed`,
 //!   `tokensZero`, `requestTooLarge` (escaping 22 000 control bytes passes `bodyMax`) by name;
@@ -10,12 +12,15 @@
 //! - a model whose slot has no key: `keyMissing` (Lean's, from the slots keybroker passed);
 //!   two allowances for one resident and model: `allowanceAmbiguous`; a second connection while
 //!   one is open: `busy`;
-//! - identity is the socket: `r2`'s socket, with no allowance, is `noAllowance`;
+//! - identity is the socket: resident `02`'s socket, with no allowance, is `noAllowance`;
+//! - live: the operator `set`s the `m` allowance (a new budget: the ask after it is `overSpend`),
+//!   creates a second `m` allowance (`allowanceAmbiguous`) and revokes it, and revokes one of the
+//!   two `a` allowances (the ask on `a` is granted again);
 //! - a key file of mode 0644: keybroker ends `keyFileMode` and opens no socket.
 //!
 //! CONTROL: the canary key is present in what the fake upstream received (so its absence from
-//! the resident's bytes is not vacuous). Needs `ND_LEAN_BIN` (default `../.lake/build/bin`) to hold
-//! `hosting-broker`.
+//! the resident's bytes is not vacuous). The Lean exes (`hosting-broker`, `host`) and the client's
+//! `nd` / `nd-supervise` come from `nanodregg_devtools`; a missing one fails by name.
 #![cfg(target_os = "linux")]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // a plant that cannot set up is a failed plant
 
@@ -25,28 +30,16 @@ use std::net::TcpListener;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Command, Output, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use nanodregg_devtools::{Supervisor, lean_bin, nd, nd_supervise, repo, supervise_host};
 use nanodregg_launcher::broker_generated::wire::{Answer, Ask, BrokerRefusal};
 use nanodregg_launcher::broker_generated::{read_frame, write_frame};
 
 const KEY: &[u8] = b"CANARY-sk-0123456789abcdef";
 const WINDOW_MS: u64 = 3000;
-
-fn lean_bin(name: &str) -> PathBuf {
-    let dir = std::env::var_os("ND_LEAN_BIN")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../.lake/build/bin"));
-    let p = dir.join(name);
-    assert!(
-        p.is_file(),
-        "{} is not built (lake build {name}); no silent skip",
-        p.display()
-    );
-    p.canonicalize().unwrap()
-}
 
 fn dir(name: &str) -> PathBuf {
     let d =
@@ -117,6 +110,139 @@ fn upstream(echo: bool) -> (String, Arc<Mutex<Vec<Vec<u8>>>>) {
     (addr, seen)
 }
 
+/// A real Store and the operator's custody: `host genesis` from custody's own keys, `host serve`
+/// under `nd-supervise`; `run` is the operator's `nd`, which must succeed.
+struct World {
+    root: PathBuf,
+    store: PathBuf,
+    operator: String,
+    pkg: String,
+    ws: PathBuf,
+    holding: PathBuf,
+    _serve: Supervisor,
+    _follow: Supervisor,
+}
+
+fn text(o: &Output) -> String {
+    String::from_utf8_lossy(&o.stdout).into_owned()
+}
+
+fn line<'a>(out: &'a str, key: &str) -> &'a str {
+    out.lines()
+        .find_map(|l| l.strip_prefix(key).map(str::trim))
+        .unwrap_or_else(|| panic!("no `{key}` line in:\n{out}"))
+}
+
+impl World {
+    fn nd(&self, args: &[&str]) -> Output {
+        Command::new(nd())
+            .env("ND_WORKSPACE", &self.ws)
+            .env("ND_HOLDING", &self.holding)
+            .args(args)
+            .output()
+            .unwrap()
+    }
+    fn run(&self, args: &[&str]) -> String {
+        let o = self.nd(args);
+        assert!(
+            o.status.success(),
+            "nd {args:?}: {}{}",
+            text(&o),
+            String::from_utf8_lossy(&o.stderr)
+        );
+        text(&o)
+    }
+    /// `nd create` of an allowance for `resident` (hex) on `model`, slot `slot`; its object id.
+    fn allowance(&self, resident: &str, model: &str, slot: u32, cap: u64) -> String {
+        let state = format!(
+            "(record (cap {cap}) (keySlot {slot}) (maxTokens 100) (microPerKTok 1000) (model \"{model}\") (resident #{resident}) (revoked false) (windowMs {WINDOW_MS}))"
+        );
+        line(&self.run(&["create", "--pkg", &self.pkg, &state]), "id ").to_owned()
+    }
+
+    fn genesis(name: &str) -> World {
+        // A short root: a Unix socket path must fit sun_path.
+        let root = std::env::temp_dir().join(format!("kbw{}{name}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        for d in ["ws", "holding", "stores"] {
+            fs::create_dir_all(root.join(d)).unwrap();
+        }
+        let root = root.canonicalize().unwrap();
+        let (ws, holding) = (root.join("ws"), root.join("holding"));
+        let (store, fstore) = (root.join("stores/W"), root.join("stores/F"));
+        fs::set_permissions(&holding, fs::Permissions::from_mode(0o700)).unwrap();
+        let bare = |args: &[&str]| {
+            Command::new(nd())
+                .env("ND_WORKSPACE", &ws)
+                .env("ND_HOLDING", &holding)
+                .args(args)
+                .output()
+                .unwrap()
+        };
+        assert!(bare(&["--init"]).status.success(), "nd --init");
+        let keys = text(&bare(&["--keys"]));
+        // two Stores from one genesis: the writer's, and the operator's own for `host follow`
+        let genesis = |s: &Path, nonce: Option<&str>| {
+            let mut c = Command::new(lean_bin("host"));
+            c.arg("genesis").arg(s).arg("nano");
+            if let Some(n) = nonce {
+                c.args(["--nonce", n]);
+            }
+            let o = c
+                .args([line(&keys, "key "), line(&keys, "next ")])
+                .output()
+                .unwrap();
+            assert!(
+                o.status.success(),
+                "genesis: {}",
+                String::from_utf8_lossy(&o.stderr)
+            );
+            text(&o)
+        };
+        let g = genesis(&store, None);
+        assert_eq!(
+            genesis(&fstore, Some(line(&g, "nonce "))),
+            g,
+            "one genesis, two Stores"
+        );
+        let founder = line(&g, "founder 0 member ");
+        let (operator, grant) = founder.split_once(" grant ").unwrap();
+        let serve = supervise_host(
+            &nd_supervise(),
+            &ws.join("host.sock"),
+            &ws,
+            &store,
+            &["serve", store.to_str().unwrap()],
+        );
+        let follow = supervise_host(
+            &nd_supervise(),
+            &ws.join("follow.sock"),
+            &ws,
+            &fstore,
+            &["follow", fstore.to_str().unwrap(), operator, grant],
+        );
+        let mut w = World {
+            root,
+            store,
+            operator: operator.to_owned(),
+            pkg: String::new(),
+            ws,
+            holding,
+            _serve: serve,
+            _follow: follow,
+        };
+        let pkg_text = fs::read_to_string(repo().join("world/hosting/Allowance")).unwrap();
+        w.pkg = line(&w.run(&["install", &pkg_text]), "id ").to_owned();
+        w
+    }
+}
+
+impl Drop for World {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.root);
+    }
+}
+
 struct Broker {
     child: Child,
     socks: PathBuf,
@@ -130,29 +256,24 @@ impl Drop for Broker {
     }
 }
 
-/// keybroker for resident `r1`: allowances (window WINDOW_MS, cap 100000, maxTokens 100, priced 1000
-/// per 1000 tokens) on model `m` (slot 7), `n` (slot 9: no key) and `a` twice (ambiguous).
-fn start(d: &Path, keys: &Path, up: &str) -> Broker {
-    let specs: Vec<String> = [("m", 7), ("n", 9), ("a", 7), ("a", 7)]
-        .iter()
-        .map(|(m, k)| format!("r1={m}/{k}/1000/{WINDOW_MS}/100000/100"))
-        .collect();
+/// keybroker for residents `01` and `02` over the World `w`.
+fn start(d: &Path, keys: &Path, up: &str, w: &World) -> Broker {
     let child = Command::new(env!("CARGO_BIN_EXE_keybroker"))
         .arg(keys)
         .arg(fs::read_link(d.join("socks")).unwrap())
         .arg(d.join("pids"))
         .arg(up)
-        .arg("r1,r2")
+        .arg(&w.store)
+        .arg(&w.operator)
+        .arg("01,02")
         .arg(lean_bin("hosting-broker"))
-        .arg("--drive")
-        .args(&specs)
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
     let mut child = child;
     let socks = fs::read_link(d.join("socks")).unwrap();
     let deadline = Instant::now() + Duration::from_secs(20);
-    while !socks.join("r1.sock").exists() || !socks.join("r2.sock").exists() {
+    while !socks.join("01.sock").exists() || !socks.join("02.sock").exists() {
         let ended = child.try_wait().unwrap().is_some();
         if ended || Instant::now() > deadline {
             let _ = child.kill();
@@ -187,7 +308,7 @@ struct Resident {
 
 impl Resident {
     fn connect(b: &Broker) -> Resident {
-        Resident::connect_as(b, "r1")
+        Resident::connect_as(b, "01")
     }
     fn connect_as(b: &Broker, name: &str) -> Resident {
         let s = UnixStream::connect(b.socks.join(format!("{name}.sock"))).unwrap();
@@ -248,8 +369,14 @@ fn refusals_by_name_and_no_key_reaches_the_resident() {
     let d = dir("main");
     let keys = key_file(&d, 0o600);
     let (up, seen) = upstream(false);
+    // resident 01: model m (slot 7), n (slot 9: no key), and a twice (ambiguous)
+    let w = World::genesis("main");
+    let m = w.allowance("01", "m", 7, 100_000);
+    w.allowance("01", "n", 9, 100_000);
+    w.allowance("01", "a", 7, 100_000);
+    let a2 = w.allowance("01", "a", 7, 100_000);
     let t_before = early_in_window();
-    let b = start(&d, &keys, &up);
+    let b = start(&d, &keys, &up, &w);
     let mut r = Resident::connect(&b);
 
     // the start window is forfeit; the static refusals come before the meter
@@ -301,8 +428,8 @@ fn refusals_by_name_and_no_key_reaches_the_resident() {
     assert!(is_refused(&busy, BrokerRefusal::Busy));
 
     next_window(t_before);
-    // identity is the socket: r2 has a socket but no allowance, so it is refused whatever it asks
-    let mut other = Resident::connect_as(&b, "r2");
+    // identity is the socket: 02 has a socket but no allowance, so it is refused whatever it asks
+    let mut other = Resident::connect_as(&b, "02");
     assert!(is_refused(
         &other.ask(&ask(b"m", 10, b"hello")),
         BrokerRefusal::NoAllowance
@@ -320,9 +447,42 @@ fn refusals_by_name_and_no_key_reaches_the_resident() {
         BrokerRefusal::KeyMissing
     ));
 
+    // live: the operator raises m's cap; the broker follows the Store at the next ask, and a
+    // changed allowance is a new budget whose window is forfeit (HOSTING-13)
+    w.run(&[
+        "invoke",
+        &m,
+        "1",
+        &format!("(record (cap 200000) (keySlot 7) (maxTokens 100) (microPerKTok 1000) (windowMs {WINDOW_MS}))"),
+    ]);
+    assert!(
+        is_refused(&r.ask(&ask(b"m", 10, b"hello")), BrokerRefusal::OverSpend),
+        "a changed allowance kept its meter"
+    );
+    // a second allowance on m CREATED while keybroker runs: the broker sees the born id
+    let m2 = w.allowance("01", "m", 7, 5);
+    assert!(
+        is_refused(
+            &r.ask(&ask(b"m", 10, b"hello")),
+            BrokerRefusal::AllowanceAmbiguous
+        ),
+        "an allowance created live was not seen"
+    );
+    w.run(&["invoke", &m2, "0", "(record)"]);
+    // the operator revokes the second `a`: the first, unchanged since the start window, grants
+    w.run(&["invoke", &a2, "0", "(record)"]);
+    match r.ask(&ask(b"a", 10, b"hello")) {
+        Answer::Answer { status, .. } => assert_eq!(status, 200),
+        other => panic!("after the revoke, expected a grant on a, got {other:?}"),
+    }
+
     // CONTROL: the upstream got the key in Lean's header, and Lean's body
     let reqs = seen.lock().unwrap().clone();
-    assert_eq!(reqs.len(), 1, "exactly one upstream call (the grant)");
+    assert_eq!(
+        reqs.len(),
+        2,
+        "exactly two upstream calls (the grants on m and on a)"
+    );
     assert!(
         contains(&reqs[0], &[b"x-api-key: ".as_slice(), KEY].concat()),
         "control: key not sent upstream"
@@ -340,8 +500,10 @@ fn an_echoed_key_is_withheld() {
     let d = dir("echo");
     let keys = key_file(&d, 0o600);
     let (up, seen) = upstream(true);
+    let w = World::genesis("echo");
+    w.allowance("01", "m", 7, 100_000);
     let t_before = early_in_window();
-    let b = start(&d, &keys, &up);
+    let b = start(&d, &keys, &up, &w);
     let mut r = Resident::connect(&b);
     assert_eq!(
         now_ms() / WINDOW_MS,
@@ -373,10 +535,10 @@ fn an_exposed_key_file_stops_keybroker_by_name() {
         .arg(fs::read_link(d.join("socks")).unwrap())
         .arg(d.join("pids"))
         .arg("127.0.0.1:9")
-        .arg("r1")
+        .arg(d.join("no-store"))
+        .arg("00")
+        .arg("01")
         .arg(lean_bin("hosting-broker"))
-        .arg("--drive")
-        .arg("r1=m/7/1/1000/1/1")
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
@@ -394,6 +556,6 @@ fn an_exposed_key_file_stops_keybroker_by_name() {
     let out = kb.wait_with_output().unwrap();
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(err.contains("keybroker: keyFileMode"), "stderr: {err}");
-    assert!(!d.join("socks/r1.sock").exists(), "a socket was opened");
+    assert!(!d.join("socks/01.sock").exists(), "a socket was opened");
     let _ = fs::remove_dir_all(fs::read_link(d.join("socks")).unwrap());
 }

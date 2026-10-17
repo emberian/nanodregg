@@ -1,12 +1,13 @@
-//! `keybroker KEYS SOCKDIR PIDS UPSTREAM RESIDENTS DECIDER [ARG...]`
+//! `keybroker KEYS SOCKDIR PIDS UPSTREAM STORE OPERATOR RESIDENTS DECIDER`
 //!
 //! The provider-key broker's byte mover (HOSTING-12). It holds the operator's provider keys (the
 //! file KEYS, read once under the custody checks of `nanodregg_sandbox::custody`) and serves one Unix
 //! socket per resident, `SOCKDIR/<resident>.sock` for each name in the comma-separated RESIDENTS.
 //! Identity is the socket: keybroker puts a `decide` frame naming that socket's resident in front
-//! of each ask, unread, and hands both to DECIDER (the Lean `hosting-broker`, started confined with
-//! the operator clock `T0` and the comma-separated key slots the key file holds as its first two
-//! arguments, then ARG...; so Lean refuses `keyMissing` before it charges anything). A `grant` names a key slot and the
+//! of each ask, unread, and hands both to DECIDER (the Lean `hosting-broker`, started confined as
+//! `DECIDER T0 SLOTS STORE OPERATOR`: the operator clock, the comma-separated key slots the key file
+//! holds (so Lean refuses `keyMissing` before it charges anything), and the World it follows for
+//! the allowances OPERATOR owns, which it may read and nothing else). A `grant` names a key slot and the
 //! upstream request Lean printed; keybroker sends it to UPSTREAM (`host:port`, HTTP/1.0) with the
 //! slot's key in the header Lean named, and relays the status and body, unless the response holds
 //! the key (`keyEchoed`, withheld). It decides nothing: every verdict is the decider's, and every
@@ -55,7 +56,8 @@ impl End {
     fn describe(&self) -> String {
         match self {
             End::Usage => {
-                "usage: keybroker KEYS SOCKDIR PIDS UPSTREAM RESIDENTS DECIDER [ARG...]".into()
+                "usage: keybroker KEYS SOCKDIR PIDS UPSTREAM STORE OPERATOR RESIDENTS DECIDER"
+                    .into()
             }
             End::KeyFile(n) => (*n).into(),
             End::KeyFileFormat => "keyFileFormat".into(),
@@ -128,9 +130,10 @@ fn run() -> End {
         sockdir,
         pids,
         upstream,
+        store,
+        operator,
         residents,
         decider,
-        rest @ ..,
     ] = args.as_slice()
     else {
         return End::Usage;
@@ -156,9 +159,10 @@ fn run() -> End {
     let decider = PathBuf::from(decider);
     let pid_file = PathBuf::from(pids).join("decider.pid");
 
-    // The decider sees nothing but its own program; the key file is hidden as a second barrier.
+    // The decider sees its own program and reads the Store; the key file is hidden as a second barrier.
+    let store = PathBuf::from(store);
     let policy = Policy {
-        read: vec![],
+        read: vec![store.clone()],
         write: vec![],
         exec: vec![decider.clone()],
         hidden: vec![keys_path.clone()],
@@ -170,8 +174,12 @@ fn run() -> End {
             .collect::<Vec<_>>()
             .join(","),
     );
-    let mut dargs: Vec<&std::ffi::OsStr> = vec![t0.as_os_str(), slots.as_os_str()];
-    dargs.extend(rest.iter().map(OsString::as_os_str));
+    let dargs: Vec<&std::ffi::OsStr> = vec![
+        t0.as_os_str(),
+        slots.as_os_str(),
+        store.as_os_str(),
+        operator.as_os_str(),
+    ];
     let mut cmd = match command(&policy, decider.as_os_str(), &dargs) {
         Ok(c) => c,
         Err(e) => return End::DeciderRefused(format!("{e:?}")),

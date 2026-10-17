@@ -685,3 +685,60 @@ fault.
 Second pass: ACCEPT, with one residue: nothing tied `seed`'s slot order to LANG's state row, so
 swapping `model` and `resident` in both `seed` and `allowanceOf` survived. Now `seed_state`
 (`Lang.readState` over `fields` gives each label its own field; the swap plant is red).
+
+## HOSTING-14 The broker follows the World; `--drive` is deleted (HOSTING-4, 2026-10-18)
+
+**Decision.** HOSTING-12 stage 2, second half. `hosting-broker T0 SLOTS STORE OPERATOR` is now the
+only form; it has one input source (law 1). It opens STORE with HOST's tail (`Host.Tail`, deployed
+parameters, read only), reads every live cell once (`Loop.allIds`), and holds the allowances
+OPERATOR owns, by World id. Before each ask it catches the tail up, re-reads the ids the new
+Turns touched (`Allow.update`), and follows them (`Broker.follow` at the ask's time). Then it decides.
+- Exact by theorem, link by link. Round 0: `start_tracks`. In a canonical World (`World.Canon`,
+  kept by every admitted Turn, KERNEL's `fold_canon`), `update` over `Loop.allIds` holds exactly
+  the readable allowances, because every live id is in `allIds` (`allIds_complete`). Each catch-up:
+  `tail_absorb_fold`, the World a tail step reaches, is `World.fold` of exactly the Turns it reports
+  (`stepTurns_fold`, `runRooted_fold` and `absorbRecords_fold` over HOST's pure `Tail.absorb`).
+  Then `absorb_tracks`: `Allow.absorb`, the named step `refresh` calls, re-reads the batch's
+  `touchedIds` (born ids included), and leaves the held bindings exactly the World's. An untouched
+  id keeps its entry (HOSTING-10's `fold_frame`).
+- Staleness is bounded and fails closed. A catch-up takes at most `drainMax` reads, each
+  O(appended bytes). Past that the broker ends `behind` rather than decide on a World it knows is
+  stale. A Turn committed after the ask's catch-up is seen at the next ask. That is the
+  ordinary lag of any reader, and the decision is the one the World held when the ask arrived.
+- keybroker: `KEYS SOCKDIR PIDS UPSTREAM STORE OPERATOR RESIDENTS DECIDER`. The decider's sandbox
+  policy reads exactly STORE, execs only itself, and has the key file hidden.
+- The test is a REAL Store (PROTOCOL-6's advice; ROOT's devtools ruling). `host genesis` from
+  custody's keys, `host serve` and `host follow` under `nd-supervise`, and the operator's own
+  `nd install` / `create --pkg` / `invoke`. Every signature is custody's Ed25519 and every check is
+  Lean's. While keybroker runs, the operator changes an allowance (the next ask is `overSpend`: a new
+  budget) and revokes one of an ambiguous pair (the next ask is granted).
+
+**Alternatives.** (1) A background thread tailing the Store while asks wait: it adds a second
+loop and shared state for no gain. Catching up at the ask is O(appended) and gives the freshest
+World. (2) A Lean fixture exe writing Stores through the rows Writer: toy parameters, so not
+the deployed format, and a twin of the real path (PROTOCOL-6). Refused. (3) Re-reading every cell
+per ask: O(store) per ask. Refused, because `update_tracks` makes the incremental read exact.
+
+**CRITIQUE.** Two premises remain, and both are statements about code rather than gaps in the
+chain. (i) The World `Tail.open` returns is canonical. A base the codec decodes is refused out of
+trie order (`kernel/trie-order`, CODEC-19), but that refusal is not yet a theorem
+`decode → Canon`. (ii) `Tail.next` returns `Tail.absorb` of the bytes it read: an IO function
+whose body is that call. `catchUp` appends each read's Turns in order, and `fold_append` makes
+the concatenation one fold. The controller (HOSTING-10) rests on the same two premises, and with
+`allIds_complete` it now has its round-0 fact as a theorem too. The test's timing: the start-window ask is guarded by the existing
+"slow run" check, and the live steps (set, then an ask) need no window arithmetic, because a
+changed allowance forfeits whatever window the follow lands in.
+**META.** Doing the catch-up at the ask instead of in a background thread is my preference for
+fewer moving parts. The test that would prove me wrong is ask latency under a busy writer, and
+`drainMax` bounds it. It is a count, not a clock.
+**Plants (run).** `update` keeps a touched id's stale binding (`mem_update`, `update_start`,
+`update_tracks` red). `refresh` skips the follow: the smoke over a real Store (hbox
+logs/hosting4-smoke.py) goes RED (`after set: grant`, `second allowance: grant`), and so does the
+launcher test (its after-set assertion). `absorb` drops born ids (VACUITY-READER-H4's surviving
+mutation): `absorb_tracks` and the test's live create (`allowanceAmbiguous`) are both red.
+**Vacuity read (10-18, VACUITY-READER-H4).** (b) stale views, (c) the live test and canary, and
+(d) the decider's policy all held. Two holes were fixed. (1) Nothing tied `update_tracks` to the ids
+`refresh` passes, so dropping born ids survived and failed OPEN. Now there is the named
+`Allow.absorb` with `absorb_tracks`, and a live create in the test. (2) "Exact" rested on two
+unproved pure facts. Both are now theorems (`tail_absorb_fold`, `allIds_complete` / `start_tracks`),
+and what remains is the CRITIQUE's two premises about code.
