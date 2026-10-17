@@ -19,9 +19,9 @@ edit it, never pass it as a PATH). Ceilings live in `gates/ceilings.tsv`. A rise
 | Lean lines (Lang) | 14393 | — |
 | Lean lines (Ledger) | 1110 | — |
 | Lean lines (Ops) | 1215 | — |
-| Lean lines (Protocol) | 4690 | — |
+| Lean lines (Protocol) | 4698 | — |
 | Lean lines (deployed) | 14523 | — |
-| Lean lines (tooling: Sim, Rows, Journey, Census, Emit, Ops) | 8503 | — |
+| Lean lines (tooling: Sim, Rows, Journey, Census, Emit, Ops) | 8511 | — |
 | foundation modules | 7 | 8 |
 | max dependents of a non-foundation module | 156 | — |
 | theorems | 2445 | — |

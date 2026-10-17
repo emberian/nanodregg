@@ -516,7 +516,8 @@ import, never by history. A committed call; an import with a wrong digest is ref
 `carryMismatch` and the old writer still serves; the import with the file's digest makes the
 carried World the writer. There the last committed call is still answered `ok` by lookup (the
 journal is carried, PROTOCOL-30); a NEW call signed for the old origin is `wrongWorld`; a member
-re-invited to the new origin writes on the carried cells. -/
+re-invited to the new origin writes on the carried cells, and a founder acting for the first time
+after the carry does so under the id the lineage's first genesis minted. -/
 def carry : Row where
   name := "carry"
   replaces := ["ops/OPS-P1"]
@@ -532,7 +533,11 @@ def carry : Row where
     { actor := "sponsor", act := .forge ["write", "@shared", "3", "1"], expect := .refused "wrongWorld" },
     { actor := "newcomer", act := .rejoin, expect := .ok },
     ok "newcomer" ["write", "@shared", "2", "3", "--via", "@g"],
-    ok "newcomer" ["read", "@shared", "2=3"]])
+    ok "newcomer" ["read", "@shared", "2=3"],
+    -- a founder's FIRST act after the carry: its id is the lineage's (minted at the first
+    -- genesis), never recomputed from the carried origin (KERNEL-40, opacity)
+    { actor := "operator", act := .rejoin, expect := .ok },
+    ok "operator" ["create", "@permit"]])
   plant := .caught .importTrustsFile 7 .ok
 
 /-- JPAY (the payment half): a transfer spends a once-only key of its source (`--once`), and the

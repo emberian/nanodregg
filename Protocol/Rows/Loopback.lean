@@ -119,6 +119,9 @@ structure St where
   host : Writer.Running
   mem : Writer.Mem
   genesis : World D
+  /-- the origin of the lineage's FIRST genesis: founder ids are names minted there, and a carry
+  keeps them (KERNEL-40, opacity); never recompute them from a carried World's origin -/
+  lineage : D
   actors : List (String × Actor) := []
   binds : List (String × String) := []
   ops : List Op := []
@@ -196,7 +199,7 @@ def freshActor (name : String) : M Actor := do
   let st ← get
   let X := st.sys.writer.X
   let self : Self D := match founderIndex name with
-    | some i => { world := st.genesis.origin, member := founderId X st.genesis.origin i, grant := founderGrantId X st.genesis.origin i,
+    | some i => { world := st.genesis.origin, member := founderId X st.lineage i, grant := founderGrantId X st.lineage i,
                   window := 100 }
     | none => { world := st.genesis.origin, member := X.env.hash "nanodregg/rows/stranger/v1" name.toUTF8,
                 grant := X.env.hash "nanodregg/rows/stranger-grant/v1" name.toUTF8, window := 100 }
@@ -754,7 +757,7 @@ def run (m : Option Mutation) (lines : List Line) (times : Option Nat) : IO Resu
   let binds := founders.zipIdx.flatMap fun (n, i) =>
     [(n, hex (founderId s.writer.X g.origin i)),
      (n ++ ".grant", hex (founderGrantId s.writer.X g.origin i))]
-  let (outcomes, st) ← go.run { sys := s, host, mem, genesis := g, binds }
+  let (outcomes, st) ← go.run { sys := s, host, mem, genesis := g, lineage := g.origin, binds }
   let _ ← st.host.stop
   pure ⟨{ outcomes, ops := st.ops, kinds := st.kinds }, st.log, st.times, st.reopenNs, st.invokes⟩
 

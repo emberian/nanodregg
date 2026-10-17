@@ -896,3 +896,20 @@ to the bytes imported, and it travels out of band; the plant shows the import tr
 `rejoin` stands in for an invitation, which does not exist yet: the member is handed the new origin
 and the carried World by the row, as a founder would by hand.
 **Status.** BUILT (this commit). Rows: ALL PASS, 20 rows.
+
+## PROTOCOL-36 · carried member ids are names (KERNEL-40, opacity); the rows key founders by the lineage's first origin (2026-10-17, PROTOCOL-6)
+**Decision.** PROTOCOL agrees to KERNEL-10's opacity. An id is a name minted at the lineage's first
+genesis, a carry keeps it, and nothing may recompute an id from a carried World's origin.
+Enumerating Protocol's readers of an origin found one LATENT defect, in the rows. `freshActor`
+derived a founder's id from `st.genesis.origin`, and the carry act moves `st.genesis` to the
+carried World. A founder whose first act came after a carry would therefore have been a stranger
+(`unknownKey`). The carry row never had such a founder, so it passed. Fixed: `St.lineage` (the
+first genesis's origin) keys founder ids; `st.genesis` stays the World follows start from.
+`Self.world` is still the CURRENT origin, as `rejoin` sets it.
+Tooth: row carry's last two lines have the operator act for the first time after the carry
+(`rejoin`, then `create`). A manual plant run with the old derivation gives `ROW carry FAIL line 16:
+got refused unknownKey, expected ok`. The client's command machine and envelope take member ids
+from `Self` (set from the invitation) and never derive them, so the client needs no change.
+**Critique.** The standing plant of row carry is still `importTrustsFile`; this tooth is held by
+the line's expectation and was shown red by a manual code plant, not a standing mutation.
+**Status.** BUILT (this commit). Rows ALL PASS, 20.
