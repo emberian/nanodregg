@@ -142,7 +142,7 @@ def serveVerb (store : String) : IO UInt32 := do
     | .ok wr => serving do
       let pagerSeg ← File.open (segmentPath store) .read
       let code ← runResident "serve" wr.opening.resident fun port =>
-        restarts (serve (machine X) recorder keys.segment (fileCheckpoint store keys c world) c
+        restarts (serve (machine X) recorder keys.segment (fileCheckpoint store keys c world recorder.mark) c
             (fileStore wr.segment) (pager keys store pagerSeg) port limits fuelBatches)
           (reopenAt store keys c world recorder.mark foldStep) recorder.mark restartsMax
       wr.segment.sync  -- the writer's handle, and so its lock, lives to here
@@ -162,7 +162,7 @@ def followVerb (store memberHex grantHex : String) : IO UInt32 := do
       let download ← IO.mkRef none
       let code ← runResident "follow" wr.opening.resident fun port =>
         restarts (Follow.loop keys ⟨member, grant, Follow.window⟩ (fileStore wr.segment)
-            (fileCheckpoint store keys c world) port download fuelBatches)
+            (fileCheckpoint store keys c world recorder.mark) port download fuelBatches)
           (reopenAt store keys c world recorder.mark auditStep) recorder.mark restartsMax
       wr.segment.sync  -- the follower's handle, and so its lock, lives to here
       return code

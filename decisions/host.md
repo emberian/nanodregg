@@ -623,3 +623,19 @@ is whether a second reader of a Store's files should exist at all, given law 5's
 the only replayer". It folds with the writer's fold, from the writer's bytes, so it replays nothing
 the writer did not, but it IS a second process folding.
 **Status.** landed (this commit).
+
+## HOST-24 · D8 on the Host side: STATUS at open, seal and exit; no Tally (2026-10-17, HOST-5)
+**Decision.** `fileCheckpoint` writes one `STATUS seal height= offset= index= base_bytes= world_bytes=` line,
+or `refused=NAME`, per seal. Together with HOST-19's STATUS at open and exit, every durable change that is
+not a batch is named on stderr. D8's Tally decorator is not built: what it found (F1) is the
+`requests = replies` check at every fuel return (HOST-19), and a counter beside it would be a second account
+of one fact (law 1).
+**Alternatives.** A Tally in the loop with a STATUS dump at exit: it counts what the replies already say.
+A seal hook argument threaded through `serve`: the Checkpoint IS the seal's IO, so the line belongs there.
+**Critique.** The seal line has no in-process plant, because it is printed from the seal Task's thread
+and stderr capture is per-thread. OPS's live harness, which reads the real stderr, is the plant's home.
+Interleaving with the main thread's lines is possible in principle; each line is one `eprintln`.
+**Meta-critique.** I dropped the Tally partly on OPS's word. If an operator asks "how many refusals of
+each name today", the answer is the log, not a counter, and that is a choice nobody has tested on an
+operator.
+**Status.** landed (this commit).

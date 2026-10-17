@@ -62,18 +62,25 @@ def installBase (dir : System.FilePath) (bytes : ByteArray) : IO Unit := do
   IO.FS.rename (baseTmpPath dir) (basePath dir)
   syncDir dir.toString
 
-/-- The base sealer over a Store directory (`installBase`). -/
+/-- The base sealer over a Store directory (`installBase`). Never silent (D8): every seal writes
+one `STATUS seal` line to stderr, installed or refused by name. -/
 def fileCheckpoint (dir : System.FilePath) (keys : Keys) (c : Cadence) (world : Stream W)
-    (async : Bool := true) : Checkpoint W where
+    (mark : W → Nat × ByteArray) (async : Bool := true) : Checkpoint W where
   async
   write w offset tag index := do
+    let at_ := s!"height={(mark w).1} offset={offset} index={index.size}"
     match Base.file keys c world w offset tag index.toList with
-    | .error f => return .error f
+    | .error f =>
+      IO.eprintln s!"STATUS seal {at_} refused={f.name}"
+      return .error f
     | .ok bytes =>
       try
         installBase dir bytes
+        IO.eprintln s!"STATUS seal {at_} base_bytes={bytes.size} world_bytes={world.size w}"
         return .ok (world.size w, keys.worldDigest (worldBytesOf bytes (world.size w)))
-      catch e => return .error (.io (toString e))
+      catch e =>
+        IO.eprintln s!"STATUS seal {at_} refused=io"
+        return .error (.io (toString e))
 
 /-- The one open (writer and follower) over a Store directory: `openWith` reading the files. -/
 def openAt (dir : System.FilePath) (keys : Keys) (c : Cadence) (world : Stream W)

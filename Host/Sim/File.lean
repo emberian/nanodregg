@@ -54,7 +54,7 @@ def serveDir (dir : System.FilePath) (keys : Keys) (c : Cadence) (seed : Nat) (f
         pure (p, (⟨16, 3 * (frames.head?.map (·.payload.size)).getD 1⟩ : Limits))
       else pure (scriptPort fr sp sent, (⟨16, 1 <<< 20⟩ : Limits))
     -- rounds of `roundFuel` batches, each ending in the real in-process reopen of the files (D4)
-    let (exit, r) ← restarts (serve machine recorder keys.segment (fileCheckpoint dir keys c world) c
+    let (exit, r) ← restarts (serve machine recorder keys.segment (fileCheckpoint dir keys c world recorder.mark) c
         (fileStore wr.segment) (fun _ _ => pure (0, ByteArray.empty)) port limits roundFuel)
       (reopenAt dir keys c world recorder.mark foldStep) recorder.mark (frames.length + 1) o.resident
     let second ← (openWriter dir keys c world recorder.mark foldStep : IO (Except Fault _))
