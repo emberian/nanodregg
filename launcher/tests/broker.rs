@@ -50,8 +50,13 @@ fn dir(name: &str) -> PathBuf {
     let d =
         Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("kb-{}-{name}", std::process::id()));
     let _ = fs::remove_dir_all(&d);
-    fs::create_dir_all(d.join("socks")).unwrap();
     fs::create_dir_all(d.join("pids")).unwrap();
+    // A Unix socket path is at most 107 bytes (sun_path), and a judge slot's target dir is deeper
+    // than that: the sockets live in a short directory of this process's own.
+    let socks = std::env::temp_dir().join(format!("kb{}{name}", std::process::id()));
+    let _ = fs::remove_dir_all(&socks);
+    fs::create_dir_all(&socks).unwrap();
+    std::os::unix::fs::symlink(&socks, d.join("socks")).unwrap();
     d.canonicalize().unwrap()
 }
 
@@ -119,6 +124,7 @@ impl Drop for Broker {
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
+        let _ = fs::remove_dir_all(&self.socks);
     }
 }
 
@@ -128,7 +134,7 @@ fn start(d: &Path, keys: &Path, up: &str) -> Broker {
     let spec = format!("r1={WINDOW_MS}:100000:100:m/7/1000+n/9/1000");
     let child = Command::new(env!("CARGO_BIN_EXE_keybroker"))
         .arg(keys)
-        .arg(d.join("socks"))
+        .arg(fs::read_link(d.join("socks")).unwrap())
         .arg(d.join("pids"))
         .arg(up)
         .arg("r1,r2")
@@ -138,10 +144,19 @@ fn start(d: &Path, keys: &Path, up: &str) -> Broker {
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
-    let socks = d.join("socks");
+    let mut child = child;
+    let socks = fs::read_link(d.join("socks")).unwrap();
     let deadline = Instant::now() + Duration::from_secs(20);
-    while !socks.join("r1.sock").exists() {
-        assert!(Instant::now() < deadline, "keybroker opened no socket");
+    while !socks.join("r1.sock").exists() || !socks.join("r2.sock").exists() {
+        let ended = child.try_wait().unwrap().is_some();
+        if ended || Instant::now() > deadline {
+            let _ = child.kill();
+            let out = child.wait_with_output().unwrap();
+            panic!(
+                "keybroker opened no socket: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
         std::thread::sleep(Duration::from_millis(20));
     }
     Broker { child, socks }
@@ -341,7 +356,7 @@ fn an_exposed_key_file_stops_keybroker_by_name() {
     let keys = key_file(&d, 0o644);
     let out = Command::new(env!("CARGO_BIN_EXE_keybroker"))
         .arg(&keys)
-        .arg(d.join("socks"))
+        .arg(fs::read_link(d.join("socks")).unwrap())
         .arg(d.join("pids"))
         .arg("127.0.0.1:9")
         .arg("r1")
@@ -366,4 +381,5 @@ fn an_exposed_key_file_stops_keybroker_by_name() {
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(err.contains("keybroker: keyFileMode"), "stderr: {err}");
     assert!(!d.join("socks/r1.sock").exists(), "a socket was opened");
+    let _ = fs::remove_dir_all(fs::read_link(d.join("socks")).unwrap());
 }
