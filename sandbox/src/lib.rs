@@ -31,7 +31,8 @@ pub struct Policy {
     /// Directories or files the child may read and write (the Store).
     pub write: Vec<PathBuf>,
     /// Directories or files the child may execute besides its program (a runtime that re-execs
-    /// itself). The program itself is always readable and executable.
+    /// itself). The program must lie under (or be) a `read` or `exec` entry, after canonicalizing:
+    /// a symlinked program does not widen the policy to its target (`ProgramOutside`).
     pub exec: Vec<PathBuf>,
     /// Paths that must lie outside everything above (the member's workspace). Each must exist.
     pub hidden: Vec<PathBuf>,
@@ -50,6 +51,13 @@ pub enum ConfineError {
     PathMissing(PathBuf, io::Error),
     /// The program is not an absolute path (a search of `PATH` would choose it).
     ProgramNotAbsolute(PathBuf),
+    /// The program's canonical path is under no `read` or `exec` entry (a link pointing out).
+    ProgramOutside {
+        /// The program as given.
+        program: PathBuf,
+        /// Where it resolves.
+        canonical: PathBuf,
+    },
     /// An allowed path (or the floor) covers a hidden path or lies inside one (CLIENT-8).
     Exposed {
         /// The hidden path.
@@ -66,6 +74,12 @@ impl std::fmt::Display for ConfineError {
             Self::MechanismMissing(p) => write!(f, "confine: {p} is missing"),
             Self::UnnameablePath(p) => write!(f, "confine: cannot name {}", p.display()),
             Self::PathMissing(p, e) => write!(f, "confine: {}: {e}", p.display()),
+            Self::ProgramOutside { program, canonical } => write!(
+                f,
+                "confine: program {} resolves to {}, outside every read and exec path",
+                program.display(),
+                canonical.display()
+            ),
             Self::ProgramNotAbsolute(p) => {
                 write!(f, "confine: program {} is not absolute", p.display())
             }
@@ -151,6 +165,17 @@ fn resolve(policy: &Policy, program: &OsStr) -> Result<Resolved, ConfineError> {
         write: all(&policy.write)?,
         exec: all(&policy.exec)?,
     };
+    if !r
+        .read
+        .iter()
+        .chain(&r.exec)
+        .any(|a| r.program.starts_with(a))
+    {
+        return Err(ConfineError::ProgramOutside {
+            program: program.to_path_buf(),
+            canonical: r.program.clone(),
+        });
+    }
     let floor = FLOOR.iter().map(|(p, _)| PathBuf::from(p));
     let allowed: Vec<PathBuf> = [r.program.clone()]
         .into_iter()

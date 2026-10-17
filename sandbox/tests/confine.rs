@@ -65,6 +65,7 @@ fn confined_child_reads_what_is_allowed_and_nothing_else() {
     }
     let policy = Policy {
         read: vec![t.allowed.clone()],
+        exec: vec![CAT.into()],
         hidden: vec![t.ws.clone()],
         ..Policy::default()
     };
@@ -93,11 +94,13 @@ fn a_policy_that_reaches_the_workspace_is_refused() {
     let t = tree("exposed");
     let wider = Policy {
         read: vec![t.root.clone()],
+        exec: vec![CAT.into()],
         hidden: vec![t.ws.clone()],
         ..Policy::default()
     };
     let inside = Policy {
         write: vec![t.ws.clone()],
+        exec: vec![CAT.into()],
         hidden: vec![t.ws.clone()],
         ..Policy::default()
     };
@@ -113,15 +116,40 @@ fn a_policy_that_reaches_the_workspace_is_refused() {
 #[test]
 fn a_missing_path_or_a_relative_program_refuses_to_launch() {
     let missing = Policy {
+        exec: vec![CAT.into()],
         hidden: vec!["/nonexistent/nd-confine".into()],
         ..Policy::default()
     };
     assert!(matches!(
-        command(&missing, OsStr::new("/bin/true"), &[]),
+        command(&missing, OsStr::new(CAT), &[]),
         Err(ConfineError::PathMissing(..))
     ));
     assert!(matches!(
         command(&Policy::default(), OsStr::new("true"), &[]),
         Err(ConfineError::ProgramNotAbsolute(_))
     ));
+}
+
+#[test]
+fn a_symlinked_program_does_not_widen_the_policy_to_its_target() {
+    let t = tree("link");
+    // `allowed/prog` is a link to /bin/cat: the policy names allowed/, not /bin.
+    std::os::unix::fs::symlink(CAT, t.allowed.join("prog")).unwrap();
+    let policy = Policy {
+        read: vec![t.allowed.clone()],
+        hidden: vec![t.ws.clone()],
+        ..Policy::default()
+    };
+    let prog = t.allowed.join("prog");
+    assert!(matches!(
+        command(&policy, prog.as_os_str(), &[]),
+        Err(ConfineError::ProgramOutside { .. })
+    ));
+    // Named for what it is, it launches.
+    let named = Policy {
+        exec: vec![CAT.into()],
+        ..policy
+    };
+    assert!(command(&named, prog.as_os_str(), &[]).is_ok());
+    fs::remove_dir_all(&t.root).unwrap();
 }

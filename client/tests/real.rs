@@ -27,6 +27,8 @@ fn supervise(sock: &Path, ws: &Path, store: &Path, args: &[&str]) -> Supervisor 
         .arg(ws)
         .arg("--write")
         .arg(store)
+        .arg("--exec")
+        .arg(common::lean_host())
         .arg("--")
         .arg(common::lean_host())
         .args(args)

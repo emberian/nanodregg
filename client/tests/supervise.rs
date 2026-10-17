@@ -90,6 +90,8 @@ fn a_confined_lean_host_answers_within_the_deadline() {
     c.arg(&sock)
         .arg("--hide")
         .arg(ws.join("ws"))
+        .arg("--exec")
+        .arg(&host)
         .arg("--write")
         .arg(&store)
         .arg("--")
