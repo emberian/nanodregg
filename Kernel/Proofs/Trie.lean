@@ -599,4 +599,132 @@ theorem toList_insert_perm {t : T K V D} (h : Routed S 0 t) (k : K) (v : V) :
       by simp, ?_⟩
     intro x hx y hy he; subst he; simp at hy; subst hy; simp at hx
 
+/-! ## History independence: a reachable trie IS the trie `build` makes from its listing
+
+`Canon` is what every trie the operations reach satisfies: routed, well formed, and of canonical
+SHAPE (a leaf above `depth` holds one entry, a leaf holds at least one, a node sits above `depth` and
+holds at least two). `build_toList` is then KERNEL-23's history independence, exactly (=): the trie is
+a function of its listing, so two Worlds with the same contents have the same trie and the same root,
+whatever order the turns ran in, and a decoder may rebuild a trie from its entries without reading a
+single node hash (CODEC-19). -/
+
+/-- The canonical shape at depth `d`. -/
+def Shape : Nat → T K V D → Prop
+  | _, .empty => True
+  | d, .leaf _ kvs => kvs ≠ [] ∧ (d < S.depth → kvs.length = 1)
+  | d, .node _ l r => d < S.depth ∧ 2 ≤ l.toList.length + r.toList.length ∧ Shape (d + 1) l ∧ Shape (d + 1) r
+
+def Canon (d : Nat) (t : T K V D) : Prop := Routed S d t ∧ WF S t ∧ Shape S d t
+
+omit [DecidableEq K] [DecidableEq D] in
+/-- `build` on two or more entries with fuel left is a node over the two filters. -/
+theorem build_split (f d : Nat) : ∀ (kvs : List (K × V)), 2 ≤ kvs.length →
+    build S (f + 1) d kvs = mkNode S (build S f (d + 1) (kvs.filter fun p => !S.bit p.1 d))
+      (build S f (d + 1) (kvs.filter fun p => S.bit p.1 d))
+  | [], h => by simp at h
+  | [_], h => by simp at h
+  | _ :: _ :: _, _ => by simp only [build]
+
+omit [DecidableEq K] [DecidableEq D] in
+theorem shape_build : ∀ (f d : Nat) (kvs : List (K × V)), f = S.depth - d → Shape S d (build S f d kvs)
+  | _, _, [], _ => by simp [build, Shape]
+  | f, _, [x], _ => by cases f <;> simp [build, mkLeaf, Shape]
+  | 0, d, a :: b :: rest, h => by
+      simp only [build, mkLeaf, Shape]
+      exact ⟨by simp, fun hd => by omega⟩
+  | f + 1, d, a :: b :: rest, h => by
+      have hl := (toList_build S (f + 1) d (a :: b :: rest)).length_eq
+      simp only [build, mkNode, T.toList, List.length_append, List.length_cons] at hl
+      simp only [build, mkNode, Shape]
+      exact ⟨by omega, by omega, shape_build f (d + 1) _ (by omega), shape_build f (d + 1) _ (by omega)⟩
+
+omit [DecidableEq D] in
+/-- An insert never lists fewer entries. -/
+theorem length_insAt (k : K) (v : V) : ∀ (d : Nat) (t : T K V D),
+    t.toList.length ≤ (insAt S k v d t).toList.length
+  | _, .empty => by simp [T.toList]
+  | d, .leaf _ kvs => by
+      simp only [insAt]; split
+      · simp [mkLeaf, T.toList]
+      · rw [(toList_build S _ _ _).length_eq]; simp [T.toList]
+  | d, .node _ l r => by
+      simp only [insAt]
+      cases S.bit k d
+      · simp only [mkNode, T.toList, List.length_append]
+        have := length_insAt k v (d + 1) l; omega
+      · simp only [mkNode, T.toList, List.length_append]
+        have := length_insAt k v (d + 1) r; omega
+
+omit [DecidableEq D] in
+theorem shape_insAt (k : K) (v : V) : ∀ (d : Nat) (t : T K V D), Shape S d t → Shape S d (insAt S k v d t)
+  | _, .empty, _ => by simp [insAt, mkLeaf, Shape]
+  | d, .leaf _ kvs, h => by
+      simp only [insAt]; split
+      · simp only [mkLeaf, Shape, List.length_map, ne_eq, List.map_eq_nil_iff] at h ⊢; exact h
+      · exact shape_build S _ _ _ rfl
+  | d, .node _ l r, h => by
+      simp only [insAt]
+      cases S.bit k d
+      · have := length_insAt S k v (d + 1) l
+        have := h.2.1
+        exact ⟨h.1, by omega, shape_insAt k v (d + 1) l h.2.2.1, h.2.2.2⟩
+      · have := length_insAt S k v (d + 1) r
+        have := h.2.1
+        exact ⟨h.1, by omega, h.2.2.1, shape_insAt k v (d + 1) r h.2.2.2⟩
+
+omit [DecidableEq K] [DecidableEq D] in
+theorem canon_empty (d : Nat) : Canon S d (T.empty : T K V D) := ⟨trivial, trivial, trivial⟩
+
+omit [DecidableEq K] [DecidableEq D] in
+/-- What `build` makes from distinct keys, with the fuel that reaches `depth`, is canonical. -/
+theorem canon_build (d : Nat) (kvs : List (K × V)) (h : (kvs.map Prod.fst).Nodup) :
+    Canon S d (build S (S.depth - d) d kvs) :=
+  ⟨routed_build S _ d kvs h, wf_build S _ d kvs, shape_build S _ d kvs rfl⟩
+
+omit [DecidableEq D] in
+theorem canon_insert {t : T K V D} (k : K) (v : V) (h : Canon S 0 t) : Canon S 0 (t.insert S k v) :=
+  ⟨routed_insAt S k v 0 t h.1, wf_insAt S k v 0 t h.2.1, shape_insAt S k v 0 t h.2.2⟩
+
+omit [DecidableEq K] [DecidableEq D] in
+/-- **History independence**: a canonical trie is the one `build` makes from its own listing. -/
+theorem build_toList : ∀ (d : Nat) (t : T K V D), Canon S d t → build S (S.depth - d) d t.toList = t
+  | _, .empty, _ => by simp [T.toList, build]
+  | d, .leaf h kvs, ⟨_, hw, hs⟩ => by
+      simp only [T.toList]
+      simp only [WF] at hw
+      simp only [Shape] at hs
+      match kvs, hs, hw with
+      | [], ⟨hne, _⟩, _ => exact absurd rfl hne
+      | [x], _, hw => cases S.depth - d <;> simp [build, mkLeaf, hw]
+      | a :: b :: rest, ⟨_, hl⟩, hw =>
+          have hd : S.depth - d = 0 := by
+            by_cases hd : d < S.depth
+            · have := hl hd; simp at this
+            · omega
+          rw [hd]; simp [build, mkLeaf, hw]
+  | d, .node h l r, ⟨hr, hw, hs⟩ => by
+      obtain ⟨hd, hn, hsl, hsr⟩ := hs
+      obtain ⟨hlb, hrb, hrl, hrr⟩ := hr
+      obtain ⟨hh, hwl, hwr⟩ := hw
+      have hf : S.depth - d = (S.depth - (d + 1)) + 1 := by omega
+      have e1 : l.toList.filter (fun p => !S.bit p.1 d) = l.toList :=
+        List.filter_eq_self.mpr fun p hp => by simp [hlb p hp]
+      have e2 : r.toList.filter (fun p => !S.bit p.1 d) = [] :=
+        List.filter_eq_nil_iff.mpr fun p hp => by simp [hrb p hp]
+      have e3 : l.toList.filter (fun p => S.bit p.1 d) = [] :=
+        List.filter_eq_nil_iff.mpr fun p hp => by simp [hlb p hp]
+      have e4 : r.toList.filter (fun p => S.bit p.1 d) = r.toList :=
+        List.filter_eq_self.mpr fun p hp => by simp [hrb p hp]
+      simp only [T.toList]
+      rw [hf, build_split S _ _ _ (by simpa using hn), List.filter_append, List.filter_append, e1, e2, e3, e4,
+        List.append_nil, List.nil_append,
+        build_toList (d + 1) l ⟨hrl, hwl, hsl⟩, build_toList (d + 1) r ⟨hrr, hwr, hsr⟩]
+      simp only [mkNode, hh]
+
+omit [DecidableEq K] [DecidableEq D] in
+/-- Two canonical tries with the same listing are the same trie (so: the same root). -/
+theorem eq_of_toList_eq {t t' : T K V D} (h : Canon S 0 t) (h' : Canon S 0 t') (he : t.toList = t'.toList) :
+    t = t' := by
+  rw [← build_toList S 0 t h, ← build_toList S 0 t' h', he]
+
 end Nanodregg.Kernel.Trie
