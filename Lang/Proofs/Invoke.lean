@@ -13,6 +13,7 @@ left about the World is the request's own bounds (digests fit a slot, the window
 -/
 import Lang.Proofs.Load
 import Lang.Proofs.Data
+import Lang.Proofs.Canon
 
 namespace Nanodregg.Lang
 
@@ -61,16 +62,6 @@ theorem checkShape_state {p : Package} (h : p.checkShape = .ok ()) :
     p.state = .record (recordRow p.state) := by
   have hr := (checkShape_ok h).1
   cases hs : p.state <;> simp_all [isRecordData, recordRow]
-
-theorem rowWf_find {ℓ : Label} {t : Ty} :
-    ∀ {row : List (Label × Ty)}, Ty.rowWf row = true → Row.find? ℓ row = some t → t.wf = true
-  | [], _, h => by simp [Row.find?] at h
-  | (k, u) :: row, hw, h => by
-    simp only [Ty.rowWf, Bool.and_eq_true] at hw
-    simp only [Row.find?] at h
-    split at h
-    · cases h; exact hw.1
-    · exact rowWf_find hw.2 h
 
 /-- What `runMethod` decodes is at canonical types: every state field's type and every method's
 argument type is `wf`, so `decodeData` passes its canonical-type gate (`decodeData_of_wf`) and reads

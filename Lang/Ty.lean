@@ -3,8 +3,7 @@
 
 No subtyping, no type variables, no quantities: type equality is `=`. The checker requires
 canonical rows (strictly ascending labels) at every record literal and every annotation (`wf`);
-that every INFERRED type is canonical needs `merge` to keep rows ascending, which is not yet a
-theorem. Polymorphism and row-generic mixins are the authoring tool's job: it instantiates
+every INFERRED type is then canonical (`Lang.Proofs.Canon.infer_wf`, via `merge_ascending`). Polymorphism and row-generic mixins are the authoring tool's job: it instantiates
 every template before a term reaches the checker.
 -/
 import Lang.Row
