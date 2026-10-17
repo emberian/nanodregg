@@ -281,3 +281,25 @@ the big-endian `Nat` (forms a bignum per comparison).
 the TreeMap hot path. That has not been measured.
 **Meta-critique.** Reusing the library's lawful order was chosen because it made the proofs free.
 Status: open.
+
+## CODEC-13 · The tree's lengths and counts are canonical LEB128 varints (answers LANG-2's framing ask) (2026-10-16)
+**Decision.** `Codec/Varint.lean`: `varint : Stream Nat`, base-128 little-endian with a continuation bit,
+at most five bytes, values below 2^32. A decoder refuses an overlong spelling (a final 0 byte after a
+continuation: `rejected … "varint/overlong"`), a sixth byte, and values ≥ 2^32. `varint_lawfulOn`
+(Codec/Proofs/Varint.lean) gives one spelling per value. `Stream.tree`'s payload length and child count are
+varints, and the tag stays one byte.
+**Measured (the same package, LANG's `Journey.owned`, 217 nodes).** u32 framing: **2529 bytes**
+(9 bytes of framing per node). Varint framing: **1227 bytes** (−51%, ~3 bytes per node), against
+~1181 for LANG's former hand codec. The largest package one 64 KiB cell holds roughly doubles back.
+**Flag day.** Every tree's bytes change (all of LANG's package/term/type encodings). Nothing is
+persisted yet; LANG and HOST re-emit nothing; Lang builds unchanged against it.
+**Alternatives.** u16 lengths (3 bytes framing below 64 KiB but a hard 65535 cap). Or a per-node
+"small" flag byte. Varint is the standard, and it is canonical once overlong spellings are refused.
+**Critique.** Varints are where minidregg's non-canonical decoders lived. Here the canonicity is a
+theorem (overlong refused, shortest form only), but a varint reader is a loop with five arithmetic
+shapes where u32 had one. LANG's "a data sum's arm i costs i+1 bytes" is LANG's nested-sum encoding,
+not this framing: `Stream.tagged`/`choice` (one tag byte for n arms) is the fix on LANG's side.
+**Meta-critique.** I resisted varints in CODEC-4 for the frame layer and still do there. The tree is
+different because its nodes are tiny and numerous. I took the measurement as permission to make
+the exception.
+Status: open.

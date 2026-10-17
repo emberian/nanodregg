@@ -1,5 +1,5 @@
 import Codec.Tree
-import Codec.Proofs.Stream
+import Codec.Proofs.Varint
 
 /-! # The tree codec is lawful, hence canonical
 
@@ -28,8 +28,9 @@ theorem putD_eq (d : Nat) (t : Tree) (buf : ByteArray) : putD d t buf = buf ++ p
         simp only [List.foldl_cons]
         rw [ihl, ihl (putD d c ByteArray.empty), ih c out, ByteArray.append_assoc]
     simp only [putD]
-    rw [fold cs, fold cs (u32.put _ _), u32_lawful.put_eq, u32_lawful.put_eq, u32_lawful.put_eq,
-      u32_lawful.put_eq, push_eq_append, push_eq_append]
+    rw [fold cs, fold cs (putVarint _ _), putVarint_eq _ (putVarint _ _ ++ _), putVarint_eq _ (buf.push _),
+      putVarint_eq _ (putVarint _ (ByteArray.empty.push _) ++ _), putVarint_eq _ (ByteArray.empty.push _),
+      push_eq_append, push_eq_append]
     simp only [ByteArray.append_assoc, ByteArray.empty_append]
 
 theorem kidsBytes_nil (d : Nat) : kidsBytes d [] = ByteArray.empty := rfl
@@ -50,14 +51,10 @@ theorem kidsBytes_cons (d : Nat) (c : Tree) (l : List Tree) :
 
 theorem putD_node (d : Nat) (tag : UInt8) (p : ByteArray) (cs : List Tree) :
     putD (d + 1) (node tag p cs) ByteArray.empty =
-      u8.bytes tag ++ u32.bytes (UInt32.ofNat p.size) ++ p ++ u32.bytes (UInt32.ofNat cs.length) ++
-        kidsBytes d cs := by
+      u8.bytes tag ++ varint.bytes p.size ++ p ++ varint.bytes cs.length ++ kidsBytes d cs := by
   simp only [putD]
-  rw [foldl_putD, u32_lawful.put_eq, u32_lawful.put_eq, push_eq_append, ByteArray.empty_append]
+  rw [foldl_putD, putVarint_eq, putVarint_eq, push_eq_append, ByteArray.empty_append]
   rfl
-
-theorem ofNat_toNat_of_le {max n : Nat} (small : max < 2 ^ 32) (h : n ≤ max) : (UInt32.ofNat n).toNat = n :=
-  UInt32.toNat_ofNat_of_lt' (by simp only [UInt32.size]; omega)
 
 theorem sizeD_eq (d : Nat) (t : Tree) : sizeD d t = (putD d t ByteArray.empty).size := by
   induction d generalizing t with
@@ -70,7 +67,7 @@ theorem sizeD_eq (d : Nat) (t : Tree) : sizeD d t = (putD d t ByteArray.empty).s
       | nil => intro k; simp [kidsBytes_nil]
       | cons c l ihl => intro k; rw [List.foldl_cons, ihl, kidsBytes_cons, ByteArray.size_append, ih, Nat.add_assoc]
     rw [putD_node]
-    simp only [sizeD, fold, ByteArray.size_append, u8_size, u32_size]
+    simp only [sizeD, fold, ByteArray.size_append, u8_size, varintSize_eq]
 
 theorem getD_of_occurs (max limit : Nat) (small : max < 2 ^ 32) (b : ByteArray) (d : Nat) :
     ∀ (t : Tree) (h : t.fits max d = true) (i : Nat), OccursAt b i (putD d t ByteArray.empty) →
@@ -105,22 +102,20 @@ theorem getD_of_occurs (max limit : Nat) (small : max < 2 ^ 32) (b : ByteArray) 
     obtain ⟨h3, hC⟩ := occursAt_append.mp h4
     obtain ⟨h2, hP⟩ := occursAt_append.mp h3
     obtain ⟨hA, hB⟩ := occursAt_append.mp h2
-    simp only [ByteArray.size_append, u8_size, u32_size] at hK hC hP hB
+    simp only [ByteArray.size_append, u8_size] at hK hC hP hB
     have g1 := u8_lawful.get_of_occurs _ _ _ hA
-    have g2 := u32_lawful.get_of_occurs _ _ _ hB
-    have g3 := u32_lawful.get_of_occurs _ _ _ hC
-    simp only [u8_size, u32_size] at g1 g2 g3
-    have hn := ofNat_toNat_of_le small hp
-    have hm := ofNat_toNat_of_le small hcs
+    have g2 := varint_lawfulOn.get_of_occurs _ _ _ (by omega) hB
+    have g3 := varint_lawfulOn.get_of_occurs _ _ _ (by omega) hC
+    simp only [u8_size] at g1
     obtain ⟨a, ga, ha⟩ := kids cs hk #[] _ hK
-    have hpe : b.extract (i + 1 + 4) (i + 1 + 4 + p.size) = p := hP.2
-    have hpb : i + 1 + 4 + p.size ≤ b.size := hP.1
+    have hpe := hP.2
+    have hpb := hP.1
     have hal : a.size ≤ max := by
       have := congrArg List.length ha
       simp at this; omega
-    simp only [ByteArray.size_append, u8_size, u32_size, Nat.add_assoc] at g1 g2 g3 ga hpe hpb ⊢
+    simp only [ByteArray.size_append, u8_size, Nat.add_assoc] at g1 g2 g3 ga hpe hpb ⊢
     rw [getD]
-    simp only [g1, g2, hn, hp, hpb, ↓reduceDIte, g3, hm, hcs, ↓reduceIte, ga, hal, hpe, Nat.add_assoc]
+    simp only [g1, g2, hp, hpb, ↓reduceDIte, g3, hcs, ↓reduceIte, ga, hal, hpe, Nat.add_assoc]
     simp only [ha, List.map_nil, List.nil_append]
 
 theorem occurs_of_getD (max limit : Nat) (b : ByteArray) (d : Nat) :
@@ -175,31 +170,31 @@ theorem occurs_of_getD (max limit : Nat) (b : ByteArray) (d : Nat) :
                   · rename_i hl
                     cases h
                     obtain ⟨rfl, oA⟩ := u8_lawful.occurs_of_get h1
-                    obtain ⟨rfl, oB⟩ := u32_lawful.occurs_of_get h2
-                    obtain ⟨rfl, oC⟩ := u32_lawful.occurs_of_get h3
+                    obtain ⟨_, rfl, oB⟩ := varint_lawfulOn.occurs_of_get h2
+                    obtain ⟨_, rfl, oC⟩ := varint_lawfulOn.occurs_of_get h3
                     obtain ⟨ks, rfl, hks, rfl, oK⟩ := kids _ _ _ _ _ (by have := oC.1; omega) h4
-                    simp only [u8_size, u32_size] at oB oC oK hb ⊢
-                    have hsz : (b.extract (i + 1 + 4) (i + 1 + 4 + n.toNat)).size = n.toNat := by
+                    have sA : (u8.bytes tag).size = 1 := rfl
+                    simp only [sA] at oB oC oK hb ⊢
+                    have hsz : (b.extract (i + 1 + (varint.bytes n).size)
+                        (i + 1 + (varint.bytes n).size + n)).size = n := by
                       rw [ByteArray.size_extract]; omega
                     have hmap : (#[] ++ ks.toArray).toList.map Subtype.val = ks.map Subtype.val := by simp
                     simp only [hmap]
                     rw [putD_node]
-                    have hlen : (ks.map Subtype.val).length = m.toNat := by simp [hks]
-                    simp only [hsz, hlen, UInt32.ofNat_toNat]
-                    have sA : (u8.bytes tag).size = 1 := rfl
-                    have sB : (u32.bytes n).size = 4 := rfl
-                    have sC : (u32.bytes m).size = 4 := rfl
-                    refine ⟨by simp only [ByteArray.size_append, hsz, sA, sB, sC]; omega, ?_⟩
+                    have hlen : (ks.map Subtype.val).length = m := by simp [hks]
+                    simp only [hsz, hlen]
+                    refine ⟨by simp only [ByteArray.size_append, hsz, sA]; omega, ?_⟩
                     refine occursAt_append.mpr ⟨occursAt_append.mpr ⟨occursAt_append.mpr
                       ⟨occursAt_append.mpr ⟨oA, ?_⟩, ?_⟩, ?_⟩, ?_⟩
                     · rw [sA]; exact oB
-                    · rw [ByteArray.size_append, sA, sB, ← Nat.add_assoc]
+                    · rw [ByteArray.size_append, sA, ← Nat.add_assoc]
                       exact ⟨by rw [hsz]; exact hb, by rw [hsz]⟩
-                    · rw [ByteArray.size_append, ByteArray.size_append, sA, sB, hsz,
-                        show i + (1 + 4 + n.toNat) = i + 1 + 4 + n.toNat by omega]
+                    · rw [ByteArray.size_append, ByteArray.size_append, sA, hsz,
+                        show i + (1 + (varint.bytes n).size + n) = i + 1 + (varint.bytes n).size + n by omega]
                       exact oC
-                    · rw [ByteArray.size_append, ByteArray.size_append, ByteArray.size_append, sA, sB, hsz, sC,
-                        show i + (1 + 4 + n.toNat + 4) = i + 1 + 4 + n.toNat + 4 by omega]
+                    · rw [ByteArray.size_append, ByteArray.size_append, ByteArray.size_append, sA, hsz,
+                        show i + (1 + (varint.bytes n).size + n + (varint.bytes m).size) =
+                          i + 1 + (varint.bytes n).size + n + (varint.bytes m).size by omega]
                       exact oK
                   · cases h
                 · cases h

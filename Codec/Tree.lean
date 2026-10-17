@@ -1,4 +1,4 @@
-import Codec.Stream
+import Codec.Varint
 
 /-!
 # Tree — the one recursive codec
@@ -10,7 +10,8 @@ read. A type becomes a `Stream` with `Stream.viaTree`, a refinement of `tree`. I
 only that `toTree` and `ofTree` are inverse (`refine_lawful`); the byte-level canonicity is
 `tree_lawful`, proved here.
 
-Wire: `u8 tag ‖ u32le |payload| ‖ payload ‖ u32le |children| ‖ child*`.
+Wire: `u8 tag ‖ varint |payload| ‖ payload ‖ varint |children| ‖ child*` (CODEC-13: LEB128, shortest form,
+so a small node's framing is three bytes).
 -/
 
 namespace Nanodregg.Codec
@@ -33,14 +34,14 @@ abbrev Fitting (max d : Nat) := { t : Tree // t.fits max d = true }
 /-- The bytes `putD d t` appends, without writing them. -/
 def sizeD : Nat → Tree → Nat
   | 0, _ => 0
-  | d + 1, node _ p cs => cs.foldl (fun n c => n + sizeD d c) (1 + 4 + p.size + 4)
+  | d + 1, node _ p cs => cs.foldl (fun n c => n + sizeD d c) (1 + Stream.varintSize p.size + p.size + Stream.varintSize cs.length)
 
 /-- Write `t` with fuel `d` (enough when `fits max d t`). -/
 def putD : Nat → Tree → ByteArray → ByteArray
   | 0, _, buf => buf
   | d + 1, node tag p cs, buf =>
     cs.foldl (fun out c => putD d c out)
-      (Stream.u32.put (UInt32.ofNat cs.length) (Stream.u32.put (UInt32.ofNat p.size) (buf.push tag) ++ p))
+      (Stream.putVarint cs.length (Stream.putVarint p.size (buf.push tag) ++ p))
 
 /-- The bytes of a node's children, one after the other. -/
 def kidsBytes (d : Nat) (cs : List Tree) : ByteArray :=
@@ -54,19 +55,19 @@ def getD (max limit : Nat) (b : ByteArray) : (d : Nat) → Nat → Except Refusa
     match Stream.u8.get b i with
     | .error e => .error e
     | .ok (tag, j) =>
-      match Stream.u32.get b j with
+      match Stream.varint.get b j with
       | .error e => .error e
       | .ok (n, k) =>
-        if hn : n.toNat ≤ max then
-          if h : k + n.toNat ≤ b.size then
-            match Stream.u32.get b (k + n.toNat) with
+        if hn : n ≤ max then
+          if h : k + n ≤ b.size then
+            match Stream.varint.get b (k + n) with
             | .error e => .error e
             | .ok (m, l) =>
-              if m.toNat ≤ max then
-                match getKids max limit b d m.toNat l #[] with
+              if m ≤ max then
+                match getKids max limit b d m l #[] with
                 | .ok (cs, r) =>
                   if hl : cs.size ≤ max then
-                    .ok (⟨node tag (b.extract k (k + n.toNat)) (cs.toList.map Subtype.val), by
+                    .ok (⟨node tag (b.extract k (k + n)) (cs.toList.map Subtype.val), by
                       simp only [fits, Bool.and_eq_true, decide_eq_true_eq, List.all_eq_true]
                       refine ⟨⟨by simp [ByteArray.size_extract]; omega, by simpa using hl⟩, ?_⟩
                       intro c hc
@@ -74,9 +75,9 @@ def getD (max limit : Nat) (b : ByteArray) : (d : Nat) → Nat → Except Refusa
                       exact x.2⟩, r)
                   else .error (.pastBound l max cs.size)
                 | .error e => .error e
-              else .error (.pastBound (k + n.toNat) max m.toNat)
-          else .error (.truncated k n.toNat)
-        else .error (.pastBound j max n.toNat)
+              else .error (.pastBound (k + n) max m)
+          else .error (.truncated k n)
+        else .error (.pastBound j max n)
 termination_by d _ => (d, 0)
 
 /-- Read `n` sibling trees, each nested at most `d` levels. -/

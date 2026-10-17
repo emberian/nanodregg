@@ -26,6 +26,8 @@ inductive Shape where
   | u8
   | u32
   | u64
+  /-- LEB128, shortest form, below 2^32 (`Codec.Varint`). -/
+  | varint
   | digest
   | bytes (max : Nat)
   | option (s : Shape)
