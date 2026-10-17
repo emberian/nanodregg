@@ -91,8 +91,7 @@ abbrev Fault := StoreFault (Record.Fault (Reject Nat))
 
 /-- The one open over an in-memory image: `openWith` reading bytes. -/
 def reopenWith (c : Cadence) (base seg : ByteArray) : Except Fault (Opening (World Nat)) :=
-  Id.run (openWith keys c world recorder.mark foldStep base seg.size fun off len =>
-    pure (.ok (seg.extract off (off + len))))
+  Id.run (openWith keys c world recorder.mark foldStep base seg.size (segReader seg))
 
 def reopen (base seg : ByteArray) : Except Fault (Opening (World Nat)) := reopenWith cadence base seg
 
@@ -328,6 +327,23 @@ def run (args : List String) : IO UInt32 := do
     (match reopen g (flipByte firstSeg (firstSeg.size - 1)) with
      | .ok o => 0 < o.opened.torn ∧ o.opened.records + 1 = full
      | .error _ => false) failures
+  -- plant-foreign-segment (HOST-18): another Store's segment (the same records under another
+  -- key) under this Store's bases. Before HOST-18 it opened as a torn tail of up to frameMax
+  -- bytes and the writer truncated it (87c721e: records=0 torn=1750, truncated to 0).
+  let other : Log.Sealer := fnvSealer 7
+  let foreignOf (seg : ByteArray) : ByteArray :=
+    Log.encodeAll other segmentInitial (Log.recover keys.segment cadence.recordBytesMax segmentInitial seg).records
+  let foreignFirst := foreignOf firstSeg
+  let foreignAll := foreignOf r.disk.synced
+  -- the mutation happened: same length, different bytes at the genesis base's anchor
+  check "plant-foreign-segment fires: the foreign segment differs at the anchor, same length"
+    (foreignFirst.size = firstSeg.size && foreignAll.size = r.disk.synced.size &&
+      foreignFirst.extract 0 origin.offset != firstSeg.extract 0 origin.offset) failures
+  check "plant-foreign-segment: under the genesis base, refused `foreignSegment` (not torn)"
+    (faultName (reopen g foreignFirst) = "foreignSegment") failures
+  check "plant-foreign-segment: under the newest base (offset > 0), refused `foreignSegment`"
+    (0 < (match reopen r.bases.file r.disk.synced with | .ok o => o.sealed.offset | .error _ => 0) &&
+      faultName (reopen r.bases.file foreignAll) = "foreignSegment") failures
   let n ← failures.get
   IO.println (if n = 0 then "ALL PASS" else s!"{n} FAILED")
   return (if n = 0 then 0 else 1)

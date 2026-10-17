@@ -127,6 +127,29 @@ def run (args : List String) : IO UInt32 := do
         check "plant-foreign-frame: a frame under another key is refused `corrupt`"
           (match ← follow dir keys still with | .error f => f.name = "corrupt" | _ => false) failures
       | _ => check "plant-foreign-frame: at least three frames" false failures
+    -- plant-foreign-segment (HOST-18), two fresh Stores under this temp dir: another Store's
+    -- seg.log copied over this Store's; the writer must refuse it by name and truncate nothing
+    -- (before HOST-18 it opened as a torn tail and the writer truncated it to the base's offset)
+    let dir2 := dir / "theirs"
+    let dir := dir / "mine"
+    let _ ← (Host.genesis dir key keys still world recorder.mark Sim.genesis : IO (Except Fault Unit))
+    do
+      let key2 ← newKey
+      let keys2 := Keys.ofKey key2
+      let _ ← (Host.genesis dir2 key2 keys2 still world recorder.mark Sim.genesis : IO (Except Fault Unit))
+      match ← serveDir dir2 keys2 still seed (frames.take 30) with
+      | .error e => check s!"plant-foreign-segment: the other Store serves ({e})" false failures
+      | .ok _ =>
+        let mine ← IO.FS.readBinFile (segmentPath dir)
+        let theirs ← IO.FS.readBinFile (segmentPath dir2)
+        IO.FS.writeBinFile (segmentPath dir) theirs
+        let before ← fileSize (segmentPath dir)
+        check "plant-foreign-segment fires: the copied segment is another Store's (longer, other bytes)"
+          (mine.size < theirs.size && mine != theirs.extract 0 mine.size) failures
+        let opened ← (openWriter dir keys still world recorder.mark foldStep : IO (Except Fault _))
+        let after ← fileSize (segmentPath dir)
+        check "plant-foreign-segment: the writer refuses `foreignSegment` and the file is unchanged"
+          ((match opened with | .error f => f.name = "foreignSegment" | .ok _ => false) && before = after) failures
   let n ← failures.get
   IO.println (if n = 0 then "ALL PASS" else s!"{n} FAILED")
   return (if n = 0 then 0 else 1)

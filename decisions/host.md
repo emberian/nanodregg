@@ -344,3 +344,46 @@ written) would remove that, at the price of (a)'s second artifact.
 **Meta-critique.** I put it in the base because the base was already atomic and MAC'd, which is
 reusing what I just built. That is a convenience argument, not a design argument.
 **Status.** open.
+
+## HOST-18 · a segment is bound to its base by the tag already on disk: `foreignSegment` (2026-10-17, BUILD-TRANSPORT; ASSEMBLY-transport-consent, with HOST-4)
+**The defect.** Open read the segment only from the base's offset and judged what it found with
+`Log.recover`. A segment from ANOTHER Store under this Store's base therefore verified no frame,
+and `badTail` classified up to `frameMax` bytes of it as the one torn frame: the writer
+TRUNCATED it. Measured at 87c721e (plant-foreign-segment.lean): A's 1750-byte segment under B's
+genesis base opened `records=0 torn=1750` and the writer cut it to 0; under B's base at offset 5
+it was cut to 215. With deployed `recordBytesMax` = 32 MiB, any foreign tail up to 33,554,468
+bytes is silently destroyed.
+**Decision.** Every base sits after a frame of its own segment, so the 32 bytes before a base's
+offset are, on disk, the base's own `tag` (every frame ends with its tag, `Log.frame`; the base
+records the chain tag at its offset). `genesisImage` makes this true from height 0: seg.log starts
+with ONE origin frame, `Log.frame keys.segment segmentInitial (mark w₀).2` (the genesis chain:
+the Store's identity at height 0, so the frame binds the origin once KERNEL/HOST-4 commit the
+origin nonce into it), and the genesis base sits at its end. `openWith` reads
+`[offset - 32, size)` in its ONE read and refuses `.base .foreignSegment` unless the head is the
+base's tag (a base at offset < 32, the pre-HOST-18 shape, refuses the same way: old shapes do not
+load). Nothing is truncated on a refusal. Theorems (`Host.Proofs.Base`): `openWith_reads`
+(re-stated: exactly one range, `[offset - 32, size)`, tail ≤ `tailMax`), `openWith_anchored` (an
+open that succeeds read the base's tag right before its offset), `openWith_foreign` (the plant's
+statement over the real `openWith`). Plants: host-sim `plant-foreign-segment` (genesis base and
+newest base, offset > 0) and host-file-sim `plant-foreign-segment` (another Store's seg.log copied
+over; the writer refuses and the file size is unchanged); both go red with the check removed
+(seen: 2 FAILED / 1 FAILED). `Page.frameOf`'s offset-0 branch is deleted: no record is at 0.
+**Alternatives.** (a) A clear-text segment header naming the Store, read before the MAC (scout
+T1): once a base is sealed open never reads offset 0, so the header goes unread, and decoding
+unverified bytes into a refusal brushes law 7. (b) A durable out-of-band segment length: a second
+fsync per batch (HOST-12's critique). (c) A per-Store `segmentInitial`: foreign frames ALREADY
+fail to verify; the defect is the torn-vs-corrupt classification, which (c) does not change.
+**Critique.** It catches a FOREIGN file, not our own segment from a divergent copy (a backup
+restored past the base offset): its bytes match up to the offset, and bad bytes after it still read
+as torn when ≤ frameMax. HOST-12's undecidable last-frame window stays, and at 32 MiB it is wide;
+nobody has questioned the 32 MiB `recordBytesMax`, and the torn window is exactly that bound. The
+origin frame's RECORD is never re-verified on open (only its trailing tag is compared), so a flip
+inside the origin record goes unseen; it carries no data the open uses. Open now copies the tail
+once (`extract` after the single read) to keep `openLog`'s offsets relative; at THE BAR that is a
+memcpy of ≤ `tailMax`. Genesis is two durable steps (seg.log, then base); a crash between them
+leaves a directory that opens `noBase` and that genesis refuses `exists`: the operator removes it.
+**Meta-critique.** I like it because it is small and reuses a tag already on disk (law 1
+comfort); that is also why I did not look for a stronger binding (e.g. the base carrying a MAC of
+the whole frame before it). The plant came from the evaluator, so the hole it tests is the one
+someone already imagined; the divergent-own-copy case above is the one nobody has planted.
+**Status.** landed (this commit). Re-genesis: every Store; a pre-HOST-18 base refuses `foreignSegment`.

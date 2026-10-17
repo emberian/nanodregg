@@ -88,7 +88,8 @@ def walkTurns (E : Env D) (budget start : Nat) (chain₀ : D) (h₀ : Nat) (ts :
 /-- The frame of `e`, verified against the tag before it. -/
 def frameOf (s : Log.Sealer) (recordMax : Nat) (read : Nat → Nat → m ByteArray) (e : Entry) :
     m (Option ByteArray) := do
-  let prev ← if e.offset = 0 then pure segmentInitial else read (e.offset - Log.tagBytes) Log.tagBytes
+  -- every record sits after a frame of its own segment (genesis's origin frame: HOST-18)
+  let prev ← read (e.offset - Log.tagBytes) Log.tagBytes
   let head ← read e.offset 4
   match Log.lenAt head 0 with
   | none => return none

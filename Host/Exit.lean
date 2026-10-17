@@ -58,6 +58,9 @@ inductive Status where
   | baseUndecodable
   | segmentShort
   | tailTooLong
+  /-- the 32 segment bytes before the base offset are not the base tag: another Store segment,
+  or a pre-HOST-18 Store (HOST-18) -/
+  | foreignSegment
   | corrupt
   | record
   | tagWidth
@@ -82,8 +85,8 @@ namespace Status
 def all : List Status :=
   [eof, uncertain, fuel, sealIo, usage, entropy, recordTooLarge, worldTooLarge, indexTooLarge, io, ioServing,
    locked, .exists, badKey, shortRead, noBase, baseTooLarge, baseCorrupt, baseUndecodable,
-   segmentShort, tailTooLong, corrupt, record, tagWidth, behindAnchor, chainMismatch, badIndex,
-   pageTooLarge, pastEnd, shortBase]
+   segmentShort, tailTooLong, foreignSegment, corrupt, record, tagWidth, behindAnchor, chainMismatch,
+   badIndex, pageTooLarge, pastEnd, shortBase]
 
 def code : Status → Nat
   | eof => 0
@@ -107,6 +110,7 @@ def code : Status → Nat
   | baseUndecodable => 23
   | segmentShort => 24
   | tailTooLong => 25
+  | foreignSegment => 29
   | corrupt => 26
   | record => 27
   | tagWidth => 28
@@ -122,7 +126,7 @@ def cls : Status → ExitClass
   | uncertain | fuel | sealIo | ioServing => .restart
   | usage | entropy | recordTooLarge | worldTooLarge | indexTooLarge | io
   | locked | .exists | badKey | shortRead | noBase | baseTooLarge | baseCorrupt | baseUndecodable
-  | segmentShort | tailTooLong | corrupt | record | tagWidth | behindAnchor | chainMismatch
+  | segmentShort | tailTooLong | foreignSegment | corrupt | record | tagWidth | behindAnchor | chainMismatch
   | badIndex | pageTooLarge | pastEnd | shortBase => .fatal
 
 /-- The name printed beside the code (`refused NAME` / `exit NAME` on stderr). -/
@@ -145,6 +149,7 @@ def BaseFault.status : BaseFault → Status
   | .baseUndecodable _ => .baseUndecodable
   | .segmentShort _ _ => .segmentShort
   | .tailTooLong _ _ => .tailTooLong
+  | .foreignSegment => .foreignSegment
 
 def StoreFault.status {F : Type} : StoreFault F → Status
   | .locked => .locked

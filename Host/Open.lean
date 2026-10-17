@@ -116,7 +116,9 @@ def indexed (mark : W → Nat × ByteArray) (step : W → ByteArray → Except F
 
 /-- The one open, given the base file's bytes, the segment's size and a reader of the segment
 (`IO` over the file for `host`, `Id` over bytes in the simulation): verify and decode the base,
-bound the tail (`tailRead`), read exactly that tail, and `openLog` it from the base's World. -/
+bound the tail (`tailRead`), read exactly that tail AND the 32 bytes before it in one read,
+refuse `foreignSegment` unless those 32 bytes are the base's tag (every base sits after a frame
+of its own segment: `genesisImage`, HOST-18), and `openLog` the tail from the base's World. -/
 def openWith {m : Type → Type} [Monad m] (keys : Keys) (c : Cadence) (world : Codec.Stream W)
     (mark : W → Nat × ByteArray) (step : W → ByteArray → Except F W) (file : ByteArray) (size : Nat)
     (readTail : Nat → Nat → m (Except (StoreFault F) ByteArray)) : m (Except (StoreFault F) (Opening W)) := do
@@ -127,10 +129,13 @@ def openWith {m : Type → Type} [Monad m] (keys : Keys) (c : Cadence) (world : 
   match tailRead c baseBytes b.offset size with
   | .error e => return .error (.base e)
   | .ok len =>
-  match ← readTail b.offset len with
+  if b.offset < Log.tagBytes then return .error (.base .foreignSegment) else
+  match ← readTail (b.offset - Log.tagBytes) (Log.tagBytes + len) with
   | .error e => return .error e
-  | .ok tail =>
-  if tail.size ≠ len then return .error (.shortRead tail.size len) else
+  | .ok read =>
+  if read.size ≠ Log.tagBytes + len then return .error (.shortRead read.size (Log.tagBytes + len)) else
+  if read.extract 0 Log.tagBytes ≠ b.tag.bytes then return .error (.base .foreignSegment) else
+  let tail := read.extract Log.tagBytes read.size
   match openLog keys.segment c.recordBytesMax (indexed mark step) (b.world, b.index.toArray, b.offset)
       b.tag.bytes tail with
   | .error e => return .error (.log e)
@@ -141,5 +146,9 @@ def openWith {m : Type → Type} [Monad m] (keys : Keys) (c : Cadence) (world : 
       let opened : Opened W := ⟨o.world.1, o.records, o.validLen, o.lastTag, o.torn⟩
       let (h, chain) := mark b.world
       return .ok ⟨opened, ⟨b.offset, baseBytes, h, chain, digest⟩, ⟨b.offset + o.validLen, tag⟩, o.world.2.1⟩
+
+/-- The segment reader over bytes in memory (the simulation, every in-memory Store). -/
+def segReader {F : Type} (seg : ByteArray) : Nat → Nat → Id (Except (StoreFault F) ByteArray) :=
+  fun off len => pure (.ok (seg.extract off (off + len)))
 
 end Nanodregg.Host

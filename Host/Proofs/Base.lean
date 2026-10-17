@@ -7,8 +7,12 @@
 * `openWith_reads` — the one open (`openWith`, generic in its monad: `IO` over the file for the
   Store, `Id` over bytes for the simulation, and here a reader that records its calls and answers
   anything) reads a base file of at most one base frame and asks for EXACTLY one range of segment,
-  `[base offset, size)`, of at most `tailMax` bytes; the position it opens to is within that range
-  (a short read is refused inside `openWith`, so no reader can bypass the bound);
+  `[base offset - 32, size)`: the base's tag and a tail of at most `tailMax` bytes; the position it
+  opens to is within the tail (a short read is refused inside `openWith`, so no reader can bypass
+  the bound);
+* `openWith_anchored` / `openWith_foreign` (HOST-18) — an open that succeeds found the base's own
+  tag in the 32 bytes before the base's offset; a segment without it is refused `foreignSegment`
+  (never read as a torn tail, so the writer truncates nothing);
 * `within_after_seal` — once the newest durable base sits at the loop's position, every frame up to
   the record bound fits. NOT proved: that `Loop.makeRoom`'s inline seal leaves the base there (it
   is IO over `Checkpoint.write`); the loop's `else` branch after `makeRoom` is therefore a named
@@ -63,23 +67,23 @@ theorem tailRead_ok {c : Cadence} {baseBytes offset size n : Nat}
     · cases h; omega
 
 /-- The one open reads a base file of at most one base frame, and asks its reader for EXACTLY one
-range of segment, `[base offset, size)`, at most `tailMax` long; the position it opens to lies in
-that range. Stated over a reader that records every range it is asked for and answers with
-arbitrary bytes `answer off len`, of any length (a short read is `openWith`'s to refuse). -/
+range of segment, `[base offset - 32, size)`: the base's tag on disk and the tail after it, the
+tail at most `tailMax` long; the position it opens to lies in the tail. Stated over a reader that
+records every range it is asked for and answers with arbitrary bytes `answer off len`, of any
+length (a short read is `openWith`'s to refuse). -/
 theorem openWith_reads {W F : Type} (keys : Keys) (c : Cadence) (world : Codec.Stream W)
     (mark : W → Nat × ByteArray) (step : W → ByteArray → Except F W) (file : ByteArray) (size : Nat) (answer : Nat → Nat → ByteArray)
     {o : Opening W} {log : List (Nat × Nat)}
     (h : (openWith keys c world mark step file size (m := StateM (List (Nat × Nat))) fun off len =>
       modifyGet fun l => (.ok (answer off len), l ++ [(off, len)])).run [] = (.ok o, log)) :
-    file.size ≤ Log.frameMax c.baseRecordMax ∧
-    ∃ len, log = [(o.sealed.offset, len)] ∧ o.sealed.offset + len = size ∧
+    file.size ≤ Log.frameMax c.baseRecordMax ∧ Log.tagBytes ≤ o.sealed.offset ∧
+    ∃ len, log = [(o.sealed.offset - Log.tagBytes, Log.tagBytes + len)] ∧ o.sealed.offset + len = size ∧
       len ≤ c.tailMax o.sealed.bytes ∧
       o.sealed.offset ≤ o.pos.offset ∧ o.pos.offset ≤ o.sealed.offset + len := by
   simp only [openWith] at h
   split at h
   · simp only [StateT.run, StateT.pure, pure] at h; injection h with h1; cases h1
   · rename_i hfile
-    refine ⟨by omega, ?_⟩
     split at h
     · simp only [StateT.run, StateT.pure, pure] at h; injection h with h1; cases h1
     · rename_i b bb dg hb
@@ -87,29 +91,103 @@ theorem openWith_reads {W F : Type} (keys : Keys) (c : Cadence) (world : Codec.S
       · simp only [StateT.run, StateT.pure, pure] at h; injection h with h1; cases h1
       · rename_i len hlen
         obtain ⟨hs, hle⟩ := tailRead_ok hlen
-        simp only [bind, modifyGet, MonadStateOf.modifyGet, StateT.run, StateT.bind,
-          StateT.modifyGet, List.nil_append] at h
         split at h
-        · simp only [StateT.pure, pure] at h; injection h with h1; cases h1
-        · rename_i hsz
-          generalize hop : openLog keys.segment c.recordBytesMax (indexed mark step)
-            (b.world, b.index.toArray, b.offset) b.tag.bytes (answer b.offset len) = res at h
-          cases res with
-          | error e => simp only [StateT.pure, pure] at h; injection h with h1; cases h1
-          | ok op =>
-            simp only at h
-            cases htag : Codec.Digest.ofBytes? op.lastTag with
-            | none => rw [htag] at h; simp only [StateT.pure, pure] at h; injection h with h1; cases h1
-            | some tag =>
-              rw [htag] at h
-              simp only [StateT.pure, pure] at h
-              obtain ⟨rfl, rfl⟩ := h
-              have hv := openLog_validLen_le hop
-              have hsz' : (answer b.offset len).size = len := by simpa using hsz
-              refine ⟨len, rfl, hs, hle, Nat.le_add_right _ _, ?_⟩
-              show b.offset + op.validLen ≤ b.offset + len
-              omega
+        · simp only [StateT.run, StateT.pure, pure] at h; injection h with h1; cases h1
+        · rename_i hoff
+          simp only [bind, modifyGet, MonadStateOf.modifyGet, StateT.run, StateT.bind,
+            StateT.modifyGet, List.nil_append] at h
+          split at h
+          · simp only [StateT.pure, pure] at h; injection h with h1; cases h1
+          · rename_i hsz
+            split at h
+            · simp only [StateT.pure, pure] at h; injection h with h1; cases h1
+            · generalize hop : openLog keys.segment c.recordBytesMax (indexed mark step)
+                (b.world, b.index.toArray, b.offset) b.tag.bytes
+                ((answer (b.offset - Log.tagBytes) (Log.tagBytes + len)).extract Log.tagBytes
+                  (answer (b.offset - Log.tagBytes) (Log.tagBytes + len)).size) = res at h
+              cases res with
+              | error e => simp only [StateT.pure, pure] at h; injection h with h1; cases h1
+              | ok op =>
+                simp only at h
+                cases htag : Codec.Digest.ofBytes? op.lastTag with
+                | none => rw [htag] at h; simp only [StateT.pure, pure] at h; injection h with h1; cases h1
+                | some tag =>
+                  rw [htag] at h
+                  simp only [StateT.pure, pure] at h
+                  obtain ⟨rfl, rfl⟩ := h
+                  have hv := openLog_validLen_le hop
+                  have hsz' : (answer (b.offset - Log.tagBytes) (Log.tagBytes + len)).size = Log.tagBytes + len := by
+                    simpa using hsz
+                  refine ⟨by omega, show Log.tagBytes ≤ b.offset by omega, len, rfl, hs, hle,
+                    Nat.le_add_right _ _, ?_⟩
+                  show b.offset + op.validLen ≤ b.offset + len
+                  simp only [ByteArray.size_extract, hsz'] at hv
+                  omega
 
+/-- An open that SUCCEEDS found the base's own tag on disk right before the base's offset: whatever
+segment it was handed, the 32 bytes before the offset are the tag of the base it decoded (HOST-18). -/
+theorem openWith_anchored {W F : Type} (keys : Keys) (c : Cadence) (world : Codec.Stream W)
+    (mark : W → Nat × ByteArray) (step : W → ByteArray → Except F W) (file seg : ByteArray)
+    {o : Opening W}
+    (h : Id.run (openWith keys c world mark step file seg.size (segReader seg)) = .ok o) :
+    ∃ b bb d, Base.read keys c world file = .ok (b, bb, d) ∧ Log.tagBytes ≤ b.offset ∧
+      seg.extract (b.offset - Log.tagBytes) b.offset = b.tag.bytes := by
+  unfold openWith at h
+  split at h
+  · cases h
+  · rename_i hfile
+    split at h
+    · cases h
+    · rename_i b bb dg hb
+      split at h
+      · cases h
+      · rename_i len hlen
+        obtain ⟨hs, _⟩ := tailRead_ok hlen
+        split at h
+        · cases h
+        · rename_i hoff
+          refine ⟨b, bb, dg, hb, by omega, ?_⟩
+          simp only [segReader, pure_bind] at h
+          split at h
+          · cases h
+          · rename_i hhead
+            have e : (seg.extract (b.offset - Log.tagBytes) (b.offset - Log.tagBytes + (Log.tagBytes + len))).extract 0 Log.tagBytes
+                = seg.extract (b.offset - Log.tagBytes) b.offset := by
+              rw [ByteArray.extract_extract, Nat.add_zero,
+                show min (b.offset - Log.tagBytes + Log.tagBytes) (b.offset - Log.tagBytes + (Log.tagBytes + len))
+                  = b.offset by omega]
+            split at h
+            · cases h
+            · rename_i hh
+              rw [← e]; exact Classical.not_not.mp hh
+
+/-- The foreign-segment plant's theorem: when the base reads and its tail is within bounds, a
+segment whose 32 bytes before the base's offset are not the base's tag is refused
+`foreignSegment`, by the same `openWith` every Store runs (never read as a torn tail). -/
+theorem openWith_foreign {W F : Type} (keys : Keys) (c : Cadence) (world : Codec.Stream W)
+    (mark : W → Nat × ByteArray) (step : W → ByteArray → Except F W) (file seg : ByteArray)
+    {b : Base W} {bb : Nat} {d : ByteArray} {len : Nat}
+    (hfile : file.size ≤ Log.frameMax c.baseRecordMax)
+    (hb : Base.read keys c world file = .ok (b, bb, d))
+    (hlen : tailRead c bb b.offset seg.size = .ok len)
+    (hf : seg.extract (b.offset - Log.tagBytes) b.offset ≠ b.tag.bytes) :
+    Id.run (openWith keys c world mark step file seg.size (segReader seg)) = .error (.base .foreignSegment) := by
+  obtain ⟨hs, _⟩ := tailRead_ok hlen
+  unfold openWith
+  simp only [show ¬ Log.frameMax c.baseRecordMax < file.size by omega, if_false, hb, hlen]
+  by_cases hoff : b.offset < Log.tagBytes
+  · simp only [hoff, if_true]; rfl
+  · simp only [hoff, if_false, segReader, pure_bind]
+    have e : (seg.extract (b.offset - Log.tagBytes) (b.offset - Log.tagBytes + (Log.tagBytes + len))).extract 0 Log.tagBytes
+        = seg.extract (b.offset - Log.tagBytes) b.offset := by
+      rw [ByteArray.extract_extract, Nat.add_zero,
+        show min (b.offset - Log.tagBytes + Log.tagBytes) (b.offset - Log.tagBytes + (Log.tagBytes + len))
+          = b.offset by omega]
+    have hsz : (seg.extract (b.offset - Log.tagBytes) (b.offset - Log.tagBytes + (Log.tagBytes + len))).size
+        = Log.tagBytes + len := by
+      rw [ByteArray.size_extract]; omega
+    rw [if_neg (by rw [hsz]; exact fun h => h rfl), e, if_pos hf]
+    rfl
 theorem within_after_seal (c : Cadence) (sealed : Sealed) (n : Nat) (hn : n ≤ Log.frameMax c.recordBytesMax) :
     withinTail c sealed sealed.offset n = true := by
   unfold withinTail Cadence.tailMax

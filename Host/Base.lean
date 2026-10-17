@@ -137,6 +137,10 @@ inductive BaseFault where
   | segmentShort (size offset : Nat)
   /-- more segment bytes after the base than the loop ever writes -/
   | tailTooLong (bytes max : Nat)
+  /-- the 32 bytes before the base's offset are not the base's tag (or there are not 32): the
+  segment is not the one this base was sealed over (another Store's, or a pre-HOST-18 Store
+  whose base sat at offset 0). Never read as a torn tail, so nothing is truncated (HOST-18). -/
+  | foreignSegment
   deriving Repr
 
 def BaseFault.name : BaseFault → String
@@ -146,6 +150,7 @@ def BaseFault.name : BaseFault → String
   | .baseUndecodable _ => "baseUndecodable"
   | .segmentShort _ _ => "segmentShort"
   | .tailTooLong _ _ => "tailTooLong"
+  | .foreignSegment => "foreignSegment"
 
 /-- The base a base file holds, and its World's encoded size. -/
 def Base.read {W : Type} (keys : Keys) (c : Cadence) (world : Stream W) (file : ByteArray) :
@@ -177,11 +182,6 @@ structure Sealed where
   height : Nat
   chain : ByteArray
   digest : ByteArray
-
-/-- The genesis base as the loop counts it: offset 0, the World `w`, its mark and digest. -/
-def Sealed.genesis {W : Type} (keys : Keys) (world : Stream W) (mark : W → Nat × ByteArray) (w : W) :
-    Sealed :=
-  ⟨0, world.size w, (mark w).1, (mark w).2, keys.worldDigest (world.bytes w)⟩
 
 /-- Where the segment stands: every byte before `offset` is synced, and `tag` chains the next
 frame. -/
