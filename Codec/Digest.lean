@@ -39,17 +39,9 @@ these 256 bits; no natural number is formed. -/
 @[inline] def bit (d : Digest) (k : Fin 256) : Bool :=
   (d.byte ⟨k.val / 8, by omega⟩ >>> (7 - (k.val % 8)).toUInt8) &&& 1 == 1
 
-/-- Lexicographic comparison from byte `k` on. -/
-def compareFrom (a b : Digest) (k : Nat) : Ordering :=
-  if hk : k < 32 then
-    match compare (a.byte ⟨k, hk⟩) (b.byte ⟨k, hk⟩) with
-    | .eq => compareFrom a b (k + 1)
-    | o => o
-  else .eq
-termination_by 32 - k
-
-/-- Lexicographic order on the 32 bytes (= numeric order of the big-endian value). -/
-instance : Ord Digest := ⟨fun a b => compareFrom a b 0⟩
+/-- Lexicographic order on the 32 bytes (= numeric order of the big-endian value). Its laws
+(`Std.TransOrd`, `Std.LawfulEqOrd`, which the World's maps need) are `Codec.Proofs.Digest`. -/
+instance : Ord Digest := ⟨fun a b => compare a.bytes.data b.bytes.data⟩
 
 /-- Lowercase hex, 64 characters. -/
 def toHex (d : Digest) : String :=

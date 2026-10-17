@@ -267,3 +267,17 @@ bound, not a policy bound. HOST's `worldBytesMax` is the real one.
 **Meta-critique.** The sorted-list uniqueness lemma was proved here from Std's membership lemmas,
 so a Std upgrade that renames them breaks this module, not KERNEL's.
 Status: open.
+
+## CODEC-15 · One deployed Env/Ctx; the digest order is the byte arrays' (2026-10-16)
+**Decision.** `Codec/Deployed.lean`: `env : Env Digest` (hash = cSHAKE256 with the domain as customization,
+bytes = the 32 bytes, turn/cell bytes = `Codec.Kernel`), `ctx program : Ctx Digest` (+ unsigned/call bytes,
+`decodeCall`, `digestOf = Digest.ofBytes?`, `verify = Ed25519.verify`), and `world` (the checkpoint codec).
+`Ord Digest` is `compare` on the byte arrays (lexicographic), so `Std.TransOrd`/`LawfulEqOrd` are the
+array order's laws pulled back (Codec/Proofs/Digest.lean). The hand-written `compareFrom` is deleted.
+`Codec/Proofs/Deployed.lean` proves the premises KERNEL's theorems take for this instance.
+**Alternatives.** Keep a hand-written byte loop and prove its laws (more code, same order). Or order by
+the big-endian `Nat` (forms a bignum per comparison).
+**Critique.** `Array.compareLex` is generic code, possibly slower than a 32-byte unrolled compare on
+the TreeMap hot path. That has not been measured.
+**Meta-critique.** Reusing the library's lawful order was chosen because it made the proofs free.
+Status: open.
