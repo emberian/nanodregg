@@ -3,7 +3,9 @@
 
 The POSIX calls the Store needs behind an opaque handle, and SIGXFSZ ignored at startup; the descriptor closes when the handle is freed.
 Every failure is an `IO` error naming the call and errno, and nothing retries: the loop answers
-`uncertain` and stops (HOST-4). On Darwin `sync` is `F_FULLFSYNC` and fails rather than falling
+`uncertain` and stops (HOST-4). `sync` also fails (ENOENT) when the file has no name left (unlinked
+or renamed over under its handle, HOST-35): bytes durable only in a nameless inode are lost at the
+next open, so they are never acknowledged; the restart's open then refuses `missing FILE`. On Darwin `sync` is `F_FULLFSYNC` and fails rather than falling
 back to a weaker `fsync`.
 
 Linked into the `host` executable only; the interpreter (and so the simulation) never calls
@@ -21,7 +23,7 @@ instance : Nonempty File := FilePointed.property
 /-- How a file is opened. -/
 inductive OpenMode where
   | read
-  /-- append, created 0600 if absent -/
+  /-- append to an existing file; an absent one is an IO error, never created (HOST-35) -/
   | append
   /-- write, created 0600, refusing an existing file -/
   | createNew

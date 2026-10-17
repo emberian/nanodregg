@@ -78,8 +78,11 @@ inductive StoreFault (F : Type) where
   | locked
   /-- genesis on a directory that already holds a Store file -/
   | exists
-  /-- the key file is absent from an existing STORE directory (`bytes` = 0) or not exactly 32 bytes -/
+  /-- the key file is not exactly 32 bytes -/
   | badKey (bytes : Nat)
+  /-- `file` is absent from an existing STORE directory: refused before any handle opens, so no
+  open, append or truncate ever re-creates it (HOST-35) -/
+  | missing (file : StorePart)
   /-- a read returned fewer bytes than the size said: the file changed under us -/
   | shortRead (got want : Nat)
   | base (fault : BaseFault)
@@ -94,12 +97,19 @@ def StoreFault.name {F : Type} : StoreFault F → String
   | .locked => "locked"
   | .exists => "exists"
   | .badKey _ => "badKey"
+  | .missing _ => "missing"
   | .shortRead _ _ => "shortRead"
   | .base f => f.name
   | .log (.corrupt _) => "corrupt"
   | .log (.record _ _) => "record"
   | .seal f => f.name
   | .tagWidth => "tagWidth"
+
+/-- The refusal as stderr states it: the name, and for `missing` the file (one status, one name;
+the file is the operator's detail). -/
+def StoreFault.text {F : Type} : StoreFault F → String
+  | .missing f => "missing " ++ f.name
+  | f => f.name
 
 /-- What the one open reads: the base, and the World the segment after it folds to. -/
 structure Opening (W : Type) where

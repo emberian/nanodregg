@@ -63,7 +63,7 @@ def refuse (status : Status) (name : String := status.name) : IO UInt32 := do
   IO.eprintln s!"refused {name}"
   return status.code.toUInt32
 
-def refuseStore {F : Type} (f : StoreFault F) : IO UInt32 := refuse f.status f.name
+def refuseStore {F : Type} (f : StoreFault F) : IO UInt32 := refuse f.status f.text
 
 def usage : String :=
   "usage: host genesis STORE NAME [--nonce HEX32] [KEY_HEX NEXT_HEX]... | host serve STORE | host follow STORE MEMBER_HEX GRANT_HEX | host check STORE [--anchor HEIGHT:CHAIN_HEX] | host export STORE OUT | host import STORE NAME IN --digest HEX [--nonce HEX32]"

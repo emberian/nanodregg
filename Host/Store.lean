@@ -27,11 +27,22 @@ namespace Nanodregg.Host
 
 open Nanodregg.Codec (Digest Stream)
 
-def keyPath (dir : System.FilePath) : System.FilePath := dir / "key"
-def segmentPath (dir : System.FilePath) : System.FilePath := dir / "seg.log"
-def basePath (dir : System.FilePath) : System.FilePath := dir / "base.world"
-def indexPath (dir : System.FilePath) : System.FilePath := dir / "index.log"
+def StorePart.path (dir : System.FilePath) (f : StorePart) : System.FilePath := dir / f.name
+
+def keyPath (dir : System.FilePath) : System.FilePath := StorePart.key.path dir
+def segmentPath (dir : System.FilePath) : System.FilePath := StorePart.segment.path dir
+def basePath (dir : System.FilePath) : System.FilePath := StorePart.base.path dir
+def indexPath (dir : System.FilePath) : System.FilePath := StorePart.index.path dir
 def baseTmpPath (dir : System.FilePath) : System.FilePath := dir / "base.tmp"
+
+/-- The first of `files` absent from `dir`, or none. Every open runs it before its first handle
+(HOST-35), so a missing Store file is refused `missing` by name, never an IO exception from the
+open, and never re-created (the append mode does not create, `Host/c/file.c`). A file removed
+between this check and its open is the open's IO error: `io` from `host`, never unnamed. -/
+def missingOf {F : Type} (dir : System.FilePath) : List StorePart → IO (Option (StoreFault F))
+  | [] => pure none
+  | f :: fs => do
+    if ← (f.path dir).pathExists then missingOf dir fs else pure (some (.missing f))
 
 variable {W F : Type}
 
@@ -53,9 +64,10 @@ def writeNew (path : System.FilePath) (bytes : ByteArray) : IO Unit := do
 
 /-- The Store key. -/
 def readKey (dir : System.FilePath) : IO (Except (StoreFault F) Digest) := do
-  -- a STORE directory without its key file is refused by name (law 7), never an IO exception from
-  -- the open below; an absent STORE path stays `io` (the path is wrong, store-plants' missing-store)
-  if (← dir.pathExists) && !(← (keyPath dir).pathExists) then return .error (.badKey 0)
+  -- a STORE directory without its key file is refused `missing key` (law 7), never an IO exception
+  -- from the open below; an absent STORE path stays `io` (the path is wrong, store-plants' missing-store)
+  if ← dir.pathExists then
+    if let some f ← missingOf dir [.key] then return .error f
   match ← readBounded (keyPath dir) 32 .badKey with
   | .error e => return .error e
   | .ok b => match Digest.ofBytes? b with
@@ -87,6 +99,11 @@ def fileCheckpoint (dir : System.FilePath) (keys : Keys) (c : Cadence) (world : 
       IO.eprintln s!"STATUS seal {at_} refused={f.name}"
       return .error f
     | .ok (page, ipos', bytes) =>
+      -- a seal never re-creates a base.world removed under the writer (the rename would): it
+      -- refuses, and the restart's open refuses `missing base.world` (HOST-35)
+      if let some f ← (missingOf dir [.base] : IO (Option (StoreFault Unit))) then
+        IO.eprintln s!"STATUS seal {at_} refused=io"
+        return .error (.io f.text)
       try
         unless page.isEmpty do
           index.writeAll page
@@ -98,19 +115,24 @@ def fileCheckpoint (dir : System.FilePath) (keys : Keys) (c : Cadence) (world : 
         IO.eprintln s!"STATUS seal {at_} refused=io"
         return .error (.io (toString e))
 
-/-- The one open (writer and follower) over a Store directory: `openWith` reading the files. -/
+/-- The one open (writer and follower) over a Store directory: `seg.log`, `index.log` and
+`base.world` present (`missing` otherwise, before any handle opens), then `openWith` reading the
+files through a fresh read handle of the segment, returned with the opening. -/
 def openAt (dir : System.FilePath) (keys : Keys) (c : Cadence) (world : Stream W)
-    (mark : W → Nat × ByteArray) (origin : W → ByteArray) (step : W → ByteArray → Except F W) (segment : File) : IO (Except (StoreFault F) (Opening W)) := do
-  unless ← (basePath dir).pathExists do return .error (.base .noBase)
+    (mark : W → Nat × ByteArray) (origin : W → ByteArray) (step : W → ByteArray → Except F W) :
+    IO (Except (StoreFault F) (Opening W × File)) := do
+  if let some f ← missingOf dir [.segment, .index, .base] then return .error f
+  let segment ← File.open (segmentPath dir) .read
   match ← readBounded (basePath dir) (Log.frameMax c.baseRecordMax) (fun n => .base (.baseTooLarge n)) with
   | .error e => return .error e
   | .ok file =>
     let size := (← segment.size).toNat
     let index ← File.open (indexPath dir) .read
     let indexSize := (← index.size).toNat
-    openWith keys c world mark origin step file size indexSize
+    let o ← openWith keys c world mark origin step file size indexSize
       (fun off len => do return .ok (← index.readAt off.toUInt64 len.toUSize))
       fun off len => do return .ok (← segment.readAt off.toUInt64 len.toUSize)
+    return o.map (·, segment)
 
 /-- The loop's state as an open leaves it. -/
 def Opening.resident (o : Opening W) : Resident W :=
@@ -121,9 +143,9 @@ writer's locked append handle stays the lock). A torn tail here is bytes the loo
 divergence, never something to truncate. -/
 def reopenAt (dir : System.FilePath) (keys : Keys) (c : Cadence) (world : Stream W)
     (mark : W → Nat × ByteArray) (origin : W → ByteArray) (step : W → ByteArray → Except F W) : IO (Except Exit (Resident W)) := do
-  match ← openAt dir keys c world mark origin step (← File.open (segmentPath dir) .read) with
-  | .error f => return .error (.reopenFailed f.name)
-  | .ok o => return if o.opened.torn = 0 then .ok o.resident else .error .reopenDiverged
+  match ← openAt dir keys c world mark origin step with
+  | .error f => return .error (.reopenFailed f.text)
+  | .ok (o, _) => return if o.opened.torn = 0 then .ok o.resident else .error .reopenDiverged
 
 /-- An open writer: the locked append handle, the `index.log` append handle, and the loop's state. -/
 structure Writer (W : Type) where
@@ -133,14 +155,17 @@ structure Writer (W : Type) where
 
 /-- Open the Store as its one writer: lock, open, truncate the torn tail and any orphan index entries
 (bytes past the entries the base counts: never a byte of one it counts, `Opening.orphan`), sync. A
-stale `base.tmp` (a crash mid-seal) is never read; the next seal replaces it. -/
+stale `base.tmp` (a crash mid-seal) is never read; the next seal replaces it. Every Store file is
+checked present before the append handle opens (`missing`), and the append mode never creates one:
+the writer writes only into files genesis made (HOST-35). -/
 def openWriter (dir : System.FilePath) (keys : Keys) (c : Cadence) (world : Stream W)
     (mark : W → Nat × ByteArray) (origin : W → ByteArray) (step : W → ByteArray → Except F W) : IO (Except (StoreFault F) (Writer W)) := do
+  if let some f ← missingOf dir StorePart.all then return .error f
   let segment ← File.open (segmentPath dir) .append
   unless ← segment.tryLock do return .error .locked
-  match ← openAt dir keys c world mark origin step (← File.open (segmentPath dir) .read) with
+  match ← openAt dir keys c world mark origin step with
   | .error e => return .error e
-  | .ok o =>
+  | .ok (o, _) =>
     if 0 < o.opened.torn then
       segment.truncate o.pos.offset.toUInt64
       segment.sync
@@ -154,12 +179,12 @@ def openWriter (dir : System.FilePath) (keys : Keys) (c : Cadence) (world : Stre
 def openFollower (dir : System.FilePath) (keys : Keys) (c : Cadence) (world : Stream W)
     (mark : W → Nat × ByteArray) (origin : W → ByteArray) (step : W → ByteArray → Except F W) :
     IO (Except (StoreFault F) (Opening W)) := do
-  openAt dir keys c world mark origin step (← File.open (segmentPath dir) .read)
+  return (← openAt dir keys c world mark origin step).map Prod.fst
 
 /-- Create a Store holding `w₀` under `key`: the key, then `genesisImage`'s segment (its origin
 frame), its empty `index.log` and base, each durable before the next (`Store.layout`'s order). Refuses a directory that already holds any of
-them; a genesis that crashed part way leaves such a directory, which opens `noBase` and is
-removed by the operator. -/
+them; a genesis that crashed part way leaves such a directory, which opens `missing` (the first
+file it never wrote) and is removed by the operator. -/
 def genesis (dir : System.FilePath) (key : Digest) (keys : Keys) (c : Cadence) (world : Stream W)
     (mark : W → Nat × ByteArray) (w₀ : W) : IO (Except (StoreFault F) Unit) := do
   for p in [keyPath dir, segmentPath dir, indexPath dir, basePath dir, baseTmpPath dir] do

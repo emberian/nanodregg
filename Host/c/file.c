@@ -48,13 +48,13 @@ static lean_obj_res io_errno(const char *call, int err) {
 
 static int fd_of(b_lean_obj_arg f) { return ((nd_file *)lean_get_external_data(f))->fd; }
 
-/* mode 0: read only. mode 1: append, create 0600. mode 2: write, create exclusively 0600. */
+/* mode 0: read only. mode 1: append to an existing file, never created (HOST-35). mode 2: create 0600. */
 LEAN_EXPORT lean_obj_res nd_file_open(b_lean_obj_arg path, uint8_t mode, lean_obj_arg w) {
   (void)w;
   int flags;
   switch (mode) {
     case 0: flags = O_RDONLY; break;
-    case 1: flags = O_WRONLY | O_APPEND | O_CREAT; break;
+    case 1: flags = O_WRONLY | O_APPEND; break;
     case 2: flags = O_WRONLY | O_CREAT | O_EXCL; break;
     default: return io_errno("nd_file_open: mode", EINVAL);
   }
@@ -88,6 +88,9 @@ LEAN_EXPORT lean_obj_res nd_file_sync(b_lean_obj_arg f, lean_obj_arg w) {
 #else
   if (fdatasync(fd_of(f)) != 0) return io_errno("fdatasync", errno);
 #endif
+  struct stat st; /* HOST-35: bytes in a file unlinked under its handle are never acknowledged */
+  if (fstat(fd_of(f), &st) != 0) return io_errno("fstat", errno);
+  if (st.st_nlink == 0) return io_errno("sync: the file has no name (unlinked under its handle)", ENOENT);
   return lean_io_result_mk_ok(lean_box(0));
 }
 

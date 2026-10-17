@@ -19,12 +19,12 @@ code space holds both tables: `host` (Host.Status, below 64) and nd-supervise's 
 | 10 | recordTooLarge | fatal | stopped (RestartPreventExitStatus) | a defect or the HOST-14 design limit: report to HOST |
 | 11 | worldTooLarge | fatal | stopped (RestartPreventExitStatus) | a defect or the HOST-14 design limit: report to HOST |
 | 12 | indexTooLarge | fatal | stopped (RestartPreventExitStatus) | a defect or the HOST-14 design limit: report to HOST |
-| 13 | io | fatal | stopped (RestartPreventExitStatus) | a Store file is missing or unreadable: check the path and permissions (the call and errno are on stderr) |
+| 13 | io | fatal | stopped (RestartPreventExitStatus) | the STORE path or the IN file is absent, a Store file is unreadable (EACCES, EIO), or a file was removed between the open's check and its open: check the path and permissions (the call and errno are on stderr) |
 | 16 | locked | fatal | stopped (RestartPreventExitStatus) | another writer holds the Store: find its unit; never start a second |
 | 17 | exists | fatal | stopped (RestartPreventExitStatus) | genesis into an existing Store: choose another path |
-| 18 | badKey | fatal | stopped (RestartPreventExitStatus) | `STORE/key` is missing or not 32 bytes (a directory that holds no Store, or a lost key): restore it from the backup |
+| 18 | badKey | fatal | stopped (RestartPreventExitStatus) | `STORE/key` is not 32 bytes: restore it from the backup |
 | 19 | shortRead | fatal | stopped (RestartPreventExitStatus) | a file changed under the open: stop every writer, then `host check` |
-| 20 | noBase | fatal | stopped (RestartPreventExitStatus) | the Store is damaged or not a Store: restore (RUNBOOK §5) |
+| 20 | missing | fatal | stopped (RestartPreventExitStatus) | a Store file (key, seg.log, index.log or base.world; stderr names it) is absent from an existing STORE directory: never re-create it or genesis over it; restore the Store's files together from one backup (RUNBOOK §5); a directory left by a genesis that crashed part way is moved aside by hand, never deleted by a unit; if STORE names a directory that holds no Store at all, check the path |
 | 21 | baseTooLarge | fatal | stopped (RestartPreventExitStatus) | the Store is damaged or not a Store: restore (RUNBOOK §5) |
 | 22 | baseCorrupt | fatal | stopped (RestartPreventExitStatus) | the Store is damaged or not a Store: restore (RUNBOOK §5) |
 | 23 | baseUndecodable | fatal | stopped (RestartPreventExitStatus) | the Store is damaged or not a Store: restore (RUNBOOK §5) |

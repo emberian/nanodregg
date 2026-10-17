@@ -83,11 +83,11 @@ the base recovering clean (`historyClean`), and every index entry the base count
 its position and naming its record's offset (`indexClean`); a refusal is its status and name. -/
 def openClean (store : String) : IO (Except (Status × String) (Keys × Opening (World D))) := do
   match ← (readKey store : IO (Except (StoreFault (Record.Fault (Reject D))) Digest)) with
-  | .error f => return .error (f.status, f.name)
+  | .error f => return .error (f.status, f.text)
   | .ok key =>
     let keys := Keys.ofKey key shapes
     match ← openFollower store keys c world recorder.mark originChain foldStep with
-    | .error f => return .error (f.status, f.name)
+    | .error f => return .error (f.status, f.text)
     | .ok o =>
       let seg ← File.open (segmentPath store) .read
       let prefix_ ← seg.readAt 0 o.sealed.offset.toUSize

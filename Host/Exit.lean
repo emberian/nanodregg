@@ -46,7 +46,8 @@ inductive Status where
   | recordTooLarge
   | worldTooLarge
   | indexTooLarge
-  /-- an IO call failed before a Store opened (a Store file absent, EACCES, EIO; genesis; check);
+  /-- an IO call failed before a Store opened (an absent STORE path or IN file, EACCES, EIO, a file
+  removed between the `missing` check and its open; genesis; check);
   the call and errno on stderr. Before this status existed it was an uncaught exception,
   exit 1 with no name -/
   | io
@@ -56,7 +57,8 @@ inductive Status where
   | exists
   | badKey
   | shortRead
-  | noBase
+  /-- a Store file is absent from an existing STORE directory (stderr names it, HOST-35) -/
+  | missing
   | baseTooLarge
   | baseCorrupt
   | baseUndecodable
@@ -124,7 +126,7 @@ namespace Status
 
 def all : List Status :=
   [eof, uncertain, fuel, sealIo, usage, entropy, recordTooLarge, worldTooLarge, indexTooLarge, io, ioServing,
-   locked, .exists, badKey, shortRead, noBase, baseTooLarge, baseCorrupt, baseUndecodable,
+   locked, .exists, badKey, shortRead, missing, baseTooLarge, baseCorrupt, baseUndecodable,
    segmentShort, tailTooLong, foreignSegment, corrupt, record, tagWidth, behindAnchor, chainMismatch,
    badIndex, pageTooLarge, pastEnd, shortBase, reopenFailed, reopenDiverged, lifetime, stream, noThreads,
    shapeMismatch, foreignOrigin, indexShort, indexCorrupt, entryUnfit, indexMoved, carryMismatch]
@@ -145,7 +147,7 @@ def code : Status → Nat
   | .exists => 17
   | badKey => 18
   | shortRead => 19
-  | noBase => 20
+  | missing => 20
   | baseTooLarge => 21
   | baseCorrupt => 22
   | baseUndecodable => 23
@@ -178,7 +180,7 @@ def cls : Status → ExitClass
   | eof => .done
   | uncertain | fuel | sealIo | ioServing | lifetime | stream | indexMoved => .restart
   | usage | entropy | recordTooLarge | worldTooLarge | indexTooLarge | io
-  | locked | .exists | badKey | shortRead | noBase | baseTooLarge | baseCorrupt | baseUndecodable
+  | locked | .exists | badKey | shortRead | missing | baseTooLarge | baseCorrupt | baseUndecodable
   | segmentShort | tailTooLong | foreignSegment | corrupt | record | tagWidth | behindAnchor | chainMismatch
   | badIndex | pageTooLarge | pastEnd | shortBase | reopenFailed | reopenDiverged | noThreads
   | shapeMismatch | foreignOrigin | indexShort | indexCorrupt | entryUnfit | carryMismatch => .fatal
@@ -199,7 +201,6 @@ def SealFault.status : SealFault → Status
   | .io _ => .sealIo
 
 def BaseFault.status : BaseFault → Status
-  | .noBase => .noBase
   | .baseTooLarge _ => .baseTooLarge
   | .baseCorrupt => .baseCorrupt
   | .baseUndecodable _ => .baseUndecodable
@@ -215,6 +216,7 @@ def StoreFault.status {F : Type} : StoreFault F → Status
   | .locked => .locked
   | .exists => .exists
   | .badKey _ => .badKey
+  | .missing _ => .missing
   | .shortRead _ _ => .shortRead
   | .base f => f.status
   | .log (.corrupt _) => .corrupt

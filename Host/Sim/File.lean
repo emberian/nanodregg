@@ -14,6 +14,8 @@
 4. plant-foreign-key: the Store opened under another Store's key is refused `baseCorrupt`;
    plant-foreign-frame: a frame of the tail re-tagged under another key (the same record, the
    same length) is refused `corrupt` by the forward scan.
+5. plant-missing-FILE, per Store file (HOST-35): removed from a fresh Store, the open refuses
+   `missing FILE` by name and the writer never re-creates it.
 Prints `FAIL <check>` per failure and `ALL PASS` when none.
 -/
 import Host.Store
@@ -77,6 +79,61 @@ def follow (dir : System.FilePath) (keys : Keys) (c : Cadence) : IO (Except Faul
 
 def fileSize (p : System.FilePath) : IO Nat := do
   return (← (← File.open p .read).size).toNat
+
+/-- plant-missing-FILE (HOST-35): a fresh genesis Store (index count 0, where an absent index.log
+was never short of anything) with one file removed. The removal is asserted first; then
+`readKey` (for the key) or `openFollower`, and `openWriter`, refuse `missing FILE` by name, and the
+file is still absent afterwards (the append mode never re-creates it). -/
+def missingPlants (root : System.FilePath) (key : Digest) (keys : Keys) (failures : IO.Ref Nat) : IO Unit := do
+  for f in StorePart.all do
+    let dir := root / s!"missing-{f.name}"
+    let made ← (Host.genesis dir key keys cadence world recorder.mark Sim.genesis : IO (Except Fault Unit))
+    check s!"plant-missing-{f.name}: genesis made the Store" (match made with | .ok () => true | .error _ => false) failures
+    IO.FS.removeFile (f.path dir)
+    check s!"plant-missing-{f.name} fires: the file is absent before the open" (!(← (f.path dir).pathExists)) failures
+    let isMissing {α : Type} : Except Fault α → Bool
+      | .error (.missing g) => g == f
+      | _ => false
+    if f == .key then
+      let k ← (readKey dir : IO (Except Fault Digest))
+      check s!"plant-missing-{f.name}: readKey refuses `missing {f.name}`" (isMissing k) failures
+    else
+      let o ← follow dir keys cadence
+      check s!"plant-missing-{f.name}: the follower open refuses `missing {f.name}`" (isMissing o) failures
+    let w ← (openWriter dir keys cadence world recorder.mark originChain foldStep : IO (Except Fault _))
+    check s!"plant-missing-{f.name}: openWriter refuses `missing {f.name}` and never re-creates it"
+      (isMissing w && !(← (f.path dir).pathExists)) failures
+  -- the append mode itself never creates (no O_CREAT): the race past `missingOf` cannot re-create
+  -- a Store file either; this plant reaches the open directly, with no check in front of it
+  let p := root / "append-absent"
+  check "plant-append-never-creates fires: its directory exists, the file does not"
+    ((← root.isDir) && !(← p.pathExists)) failures
+  let opened ← try (do let _ ← File.open p .append; pure true) catch _ => pure false
+  check "plant-append-never-creates: append-opening an absent file fails and creates nothing"
+    (!opened && !(← p.pathExists)) failures
+  -- a sync of a file unlinked under its handle fails (its bytes are in a nameless inode): the
+  -- control syncs the same handle while linked
+  let q := root / "unlinked"
+  writeNew q (ByteArray.mk #[1])
+  let h ← File.open q .append
+  let linked ← try (do h.writeAll (ByteArray.mk #[2]); h.sync; pure true) catch _ => pure false
+  IO.FS.removeFile q
+  let unlinked ← try (do h.writeAll (ByteArray.mk #[3]); h.sync; pure true) catch _ => pure false
+  check "plant-sync-unlinked control: the handle syncs while its file is named" linked failures
+  check "plant-sync-unlinked: the same handle's sync fails once its file is unlinked" (!unlinked) failures
+  -- a seal over a Store whose base.world was removed under the writer refuses, and does not
+  -- re-create it by its rename
+  let d := root / "seal-no-base"
+  let _ ← (Host.genesis d key keys cadence world recorder.mark Sim.genesis : IO (Except Fault Unit))
+  match ← (openWriter d keys cadence world recorder.mark originChain foldStep : IO (Except Fault _)) with
+  | .error e => check s!"plant-seal-missing-base: the writer opens ({e.name})" false failures
+  | .ok wr =>
+    IO.FS.removeFile (basePath d)
+    let o := wr.opening
+    let r ← (fileCheckpoint d keys cadence world recorder.mark originChain wr.index).write
+      o.opened.world o.pos #[] o.sealed.index
+    check "plant-seal-missing-base: the seal refuses `io` and base.world stays absent"
+      ((match r with | .error (.io _) => true | _ => false) && !(← (basePath d).pathExists)) failures
 
 def body (seed : Nat) (dirA dirB : System.FilePath) : IO UInt32 := do
   let failures ← IO.mkRef 0
@@ -171,6 +228,7 @@ def body (seed : Nat) (dirA dirB : System.FilePath) : IO UInt32 := do
         let after ← fileSize (segmentPath dir)
         check "plant-foreign-segment: the writer refuses `foreignSegment` and the file is unchanged"
           ((match opened with | .error f => f.name = "foreignSegment" | .ok _ => false) && before = after) failures
+  missingPlants (dirB / "missing") key keys failures
   let n ← failures.get
   IO.println (if n = 0 then "ALL PASS" else s!"{n} FAILED")
   return (if n = 0 then 0 else 1)

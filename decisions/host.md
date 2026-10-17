@@ -1515,3 +1515,135 @@ re-renders, the restart/prevent lists gain 49, nothing re-geneses.
 - The plants use the toy Ctx. The verbs' IO (ordering, `exists`, `tooLarge`, the reopen) has only the
   live smoke and OPS-2's store-plants rows. There is no plant for a decode refusal or a kernel carry
   refusal.
+
+## HOST-35 · a Store file absent from an existing STORE directory is `missing FILE`, refused before any handle opens; no open or append creates a Store file, no sync acknowledges bytes in an unlinked one (2026-10-17, HOST-10; HOST-9's named gap, law 7 on the real path; OPS-3 agreed the sentence and the plants)
+
+**The defect (read off df425e4).**
+- A Store whose `index.log` or `seg.log` was deleted ended in an `IO.Error` from `File.open`. `host`
+  caught it as `io` 13 (Cli.main), and hosting-broker and hosting-controller as their own `io`. That
+  status is named, but the name says only "some IO call failed". The file is not named in the code,
+  only in the errno text.
+- Worse, `openWriter` opened `seg.log` with `O_WRONLY|O_APPEND|O_CREAT` before any check. A deleted
+  seg.log was silently RE-CREATED empty, and only then did the open refuse (`segmentShort`). The writer
+  wrote into a damaged Store before it knew the Store was damaged, which destroys the evidence.
+- Two names covered parts of the same class: `noBase` 20 (a missing base.world) and `badKey 0` (a missing
+  key, 4e95dc8).
+
+**Decision.**
+- One StoreFault `missing (file : StorePart)` with Status `missing`, code 20, fatal.
+  - `StorePart` is key | seg.log | index.log | base.world. It lives in Host/Base.lean beside
+    `Store.layout`, and `Store.backupOrder` is now spelled from it.
+  - It REPLACES `noBase` (BaseFault.noBase and Status.noBase deleted; the base case keeps code 20) and
+    the 0 case of `badKey`. `badKey` now means only "not 32 bytes".
+- Where it is checked:
+  - `readKey` checks the key when the directory exists. An ABSENT STORE directory stays `io` 13: a
+    wrong path is a different operator situation (store-plants' missing-store, unchanged).
+  - `openAt` checks seg.log, index.log and base.world before its first handle, and now opens the segment
+    read handle itself, returning it (Tail.open uses it).
+  - `openWriter` checks all four before the append handle.
+- Append mode no longer has `O_CREAT` (Host/c/file.c). No open or append creates a Store file: genesis's
+  `createNew` creates them, and a seal replaces base.world by rename. A file removed between the check
+  and the open cannot be re-created; that race ends in the open's ENOENT, which is `io`.
+- **A file removed while the writer runs** (the law-6 reader's REAL finding). The append handles,
+  the pager handles and the follower's handles are open descriptors, which an unlink does not affect.
+  So before this, a seg.log deleted mid-service kept receiving appends, syncs and ACKNOWLEDGED records
+  into a nameless inode, lost at the next open. Now `File.sync` fstats after the fsync and fails
+  (ENOENT) when `st_nlink = 0`, i.e. unlinked or renamed over. The batch's sync failing is `uncertain`
+  (HOST-4: the loop stops without acknowledging), and the restart's open refuses `missing seg.log`.
+  An index.log sync failing in a seal is `sealIo` → restart → `missing index.log`.
+- A seal checks that base.world is present before its rename; absent, it refuses `sealIo`, which
+  restarts into `missing base.world`. A seal never re-creates a base.world that was removed under the
+  writer.
+- The file names are spelled once: `keyPath`/`segmentPath`/`indexPath`/`basePath` and the
+  `Store.layout` rows are spelled from `StorePart.name`.
+- stderr reads `refused missing index.log`. `StoreFault.name` stays `missing`, one code and one name
+  (`status_iff_name` holds). `StoreFault.text` adds the file and is what `host` prints. hosting-broker and
+  hosting-controller print `missing` and still end `store` 76, the pass-through convention of
+  HOSTING-6 (unchanged code, broker test comment updated).
+
+**Why not `indexShort 0` (HOST-9's guess) or a per-file name.**
+- `indexShort` means "a copy cut short". An absent file is a different operator act: something deleted
+  it, so restore all the files from one backup.
+- At index count 0, `indexShort` cannot fire at all (0 ≥ 0). A deleted index.log in a fresh Store would
+  then open clean.
+- Per-file names (`indexMissing`, `segmentMissing`, …) are four statuses for one sentence. The file is a
+  detail of the refusal, not its class.
+
+**The sweep: every IO call in the deployed exes (host, hosting-broker, hosting-controller) that can throw
+on a missing or unreadable file, and the status it ends as.**
+
+| site | missing file | other IO failure (EACCES, EIO, race) |
+|---|---|---|
+| `readKey` (every verb, broker, controller) | `missing key` 20 / broker+controller `store` 76 | `io` 13 / their `io` |
+| `openAt` (`openFollower`, `check`, `export`, `Tail.open`) | `missing seg.log`/`index.log`/`base.world` 20 | `io` 13 / their `io` |
+| `openWriter` (`serve`, `follow`, `import`) | `missing FILE` 20, before the append handle; never created | `io` 13 |
+| `reopenAt` (fuel restart, inside `serving`) | `reopenFailed` 38 (stderr `reopenFailed missing`) | `ioServing` 6 (restart; the fresh open refuses `missing`) |
+| `serve` pager handles (seg/index, opened in `serving`) | at the open: `ioServing` 6 → restart → `missing` 20; removed after the open: the descriptor still reads the old inode, and the writer's next sync refuses (row below) | `ioServing` 6 |
+| `File.sync` of the writer's seg.log append handle (every batch) | removed mid-service: the sync fails (`st_nlink = 0`) → `uncertain` 3 (nothing acknowledged) → restart → `missing seg.log` 20 | `uncertain` 3 |
+| `pager` `.read` base per page | `ioServing` 6 → restart → `missing base.world` 20 | `ioServing` 6 (a page's IO error restarts the writer, not that page: an open edge) |
+| `fileCheckpoint` (seal) | index.log removed: its sync fails → `sealIo` 5 → restart → `missing index.log`; base.world removed: refused before the rename → `sealIo` 5 → `missing base.world` | `sealIo` 5 |
+| `Check.openClean` re-reads, `chainAt` | race only (just checked present) | `io` 13 |
+| `genesis` (`createDirAll`, `writeNew`) | n/a (creates) | `io` 13; a directory left behind opens `missing` |
+| `import` IN, `export` OUT | IN absent: `io` 13 (not a Store file) | `io` 13 |
+| `Tail.next` (broker, controller) | an open handle; an unlink does not affect it; the writer's next sync refuses, and the reader catches up to the last acknowledged record | their `io` |
+
+No site ends as the runtime's exit 1. `Cli.main` and both hosting mains catch everything, and
+`Status.code_reserved` keeps 1 unused.
+
+**Theorems (Host/Proofs/Names.lean):**
+- `StorePart.name_injective`;
+- `StorePart.mem_all`, `StorePart.mem_layout` (every part is a row of `Store.layout`), and
+  `StorePart.covers_layout` (every non-transient row is a part, so `openWriter`'s check over
+  `StorePart.all` checks every file an open reads);
+- `StoreFault.text_missing_injective`: two `missing` refusals that print the same text name the same
+  file;
+- `name_injective` and `status_iff_name`, re-proved over the new constructor set.
+
+The check itself is IO (`missingOf`), so it is planted, not proved.
+
+**Plants:**
+- host-file-sim `missingPlants`: for each of the four files, a fresh genesis Store at count 0 (the case
+  where an absent index.log was never "short") with the file removed. The removal is asserted first.
+  - `readKey` (for the key) or `openFollower` refuses `missing FILE`;
+  - `openWriter` refuses the same, and the file is still absent afterwards.
+  - `plant-append-never-creates`: `File.open .append` on an absent path in an existing directory
+    (both asserted), with no check in front of it, fails and creates nothing. This is the tooth for
+    the O_CREAT removal itself; the plants above stop at `missingOf` before the open is reached.
+  - `plant-sync-unlinked`: the same append handle syncs while its file is named (the control), and
+    its sync fails once the file is unlinked.
+  - `plant-seal-missing-base`: a writer opened over a fresh Store whose base.world is then removed:
+    the seal refuses `io` (`sealIo`), and base.world stays absent.
+- store-plants `missingPlants`, through the real `host` exe over copies of the sealed intact Store:
+  - `missing-key`, `missing-base`, `missing-index` and `missing-segment`: `host check` exits 20 and
+    stderr names the file;
+  - `missing-index-serve` and `missing-segment-serve`: `host serve` exits 20, names the file, and the
+    file is still absent after (seg.log is the file O_CREAT used to re-create).
+  - These rows are counted in the run's failure total, not in `plants.length`, like the other plant
+    groups.
+
+**Flag day.** Status `noBase` is deleted and code 20 is now `missing`. `badKey` no longer covers an
+absent key. deploy/units re-renders through emit-units: EXITS.md loses the noBase row and gains
+missing, and badKey's sentence changes. No Store re-geneses: no byte on disk changed. What refuses
+that did not refuse before: a writer over a Store missing seg.log, which used to re-create seg.log
+empty and then refuse `segmentShort`.
+
+**Critique.**
+- The check is `pathExists` before the open: a TOCTOU window. A file removed inside it ends `io`, not
+  `missing`. It is still named, and with O_CREAT gone it is never re-created.
+- `missing` cannot tell "deleted" from "never written by a genesis that crashed". The sentence covers
+  both: move the directory aside by hand.
+- A page's IO error (an unreadable base.world mid-service) restarts the whole writer (`ioServing`)
+  rather than refusing that one page. That is named in the table, not fixed here.
+- A file removed mid-service is seen at the next sync, not at once. A `log` page read between the
+  unlink and that sync reads the old inode: bytes that were durable and acknowledged, never a lie.
+- `StorePart.mem_layout` and `covers_layout` are facts about data. That `missingOf` really checks
+  those paths is planted (the four store-plants rows and the host-file-sim plants), not proved.
+
+**Meta-critique.** Folding `noBase` and `badKey 0` into `missing` removes two names the operator
+already had. The argument is the doctrine's "prefer one shape": all three were the same act (a Store
+file absent), and the operator's action is the same. Had they differed (if a missing key meant
+"never a Store" while a missing base meant "damaged"), one status would hide that difference. They do
+not: genesis writes the key first, so a missing key with the other files present is damage. A
+directory with nothing in it is a crashed genesis or a wrong path, and the sentence says to check
+the path. The test of this decision is
+store-plants: four files, one status, stderr naming each.

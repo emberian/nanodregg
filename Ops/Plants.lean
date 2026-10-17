@@ -457,6 +457,38 @@ def lineField (out k : String) : Option String :=
     | [a, v] => if a == k then some v else none
     | _ => none
 
+/-- Whether `text` contains `part`. -/
+def mentions (text part : String) : Bool := (text.splitOn part).length > 1
+
+/-- HOST-35, through the real exe: one Store file removed from a copy of the intact Store (the
+removal asserted first) is refused `missing` by code AND names the file on stderr, from `host
+check`; and `host serve` over a copy without index.log, or without seg.log (the file the writer
+used to re-create through O_CREAT), refuses the same and leaves it absent. -/
+def missingPlants (exe : String) (intact dir : System.FilePath) : IO Nat := do
+  let mut failed := 0
+  let want := Status.missing.code.toUInt32
+  for (label, f) in [("missing-key", "key"), ("missing-base", "base.world"),
+      ("missing-index", "index.log"), ("missing-segment", "seg.log")] do
+    let d := dir / label
+    backup intact d
+    IO.FS.removeFile (d / f)
+    let gone := !(← (d / f).pathExists)
+    let r ← host exe ["check", d.toString]
+    let ok := gone && r.code = want && mentions r.out s!"refused missing {f}"
+    IO.println s!"PLANT {label} {if ok then "PASS" else "FAIL"} removed={gone} exit={r.code} want=missing({want}) :: {r.out.replace "\n" " "}"
+    unless ok do failed := failed + 1
+  for (label, f) in [("missing-index-serve", "index.log"), ("missing-segment-serve", "seg.log")] do
+    let d := dir / label
+    backup intact d
+    IO.FS.removeFile (d / f)
+    let gone := !(← (d / f).pathExists)
+    let (code, _, err) ← hostRaw exe ["serve", d.toString] ByteArray.empty
+    let still := !(← (d / f).pathExists)
+    let ok := gone && code = want && mentions err s!"refused missing {f}" && still
+    IO.println s!"PLANT {label} {if ok then "PASS" else "FAIL"} removed={gone} exit={code} want=missing({want}) absent_after={still} :: {err.replace "\n" " "}"
+    unless ok do failed := failed + 1
+  return failed
+
 /-- OPS-P1 / HOST-28: law 1's state carry through the real exe, from the sealed live Store `L`
 (48 calls, real bases). Export reads only; import is refused by name before any Store file for
 a missing or wrong digest, a byte flipped in transit, another stamp; a good import keeps the
@@ -650,6 +682,7 @@ def run (exe : String) (dir : System.FilePath) : IO UInt32 := do
   failed := failed + (← middleEntryPlant exe dir)
   failed := failed + (← indexMovedPlant exe dir)
   failed := failed + (← carryPlants exe dir)
+  failed := failed + (← missingPlants exe intact dir)
   if failed = 0 then IO.println "ALL PASS"; return 0
   IO.println s!"FAIL {failed} of {plants.length}"; return 1
 

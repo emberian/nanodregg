@@ -309,29 +309,45 @@ structure StoreFile where
   kind : FileKind
   holds : String
 
+/-- A file every Store directory holds (a row of `Store.layout`, `base.tmp` aside). -/
+inductive StorePart where
+  | key
+  | segment
+  | index
+  | base
+  deriving DecidableEq, Repr
+
+/-- The file's name in the Store directory. -/
+def StorePart.name : StorePart → String
+  | .key => "key"
+  | .segment => "seg.log"
+  | .index => "index.log"
+  | .base => "base.world"
+
+/-- Every file a Store holds, in the order the open checks them. -/
+def StorePart.all : List StorePart := [.key, .segment, .index, .base]
+
 namespace Store
 
 /-- Every file of a Store directory, in the order genesis writes them. A seal appends its entries
 to `index.log` and syncs them before `base.tmp` is renamed over `base.world`; a batch is appended
 to `seg.log` and synced before it is answered. -/
 def layout : List StoreFile :=
-  [⟨"key", .once, "32 bytes, mode 0600: the integrity-at-rest key (HOST-16)"⟩,
-   ⟨"seg.log", .appendOnly, "the frames (Host.Log) from genesis's origin frame: one batch record per frame; its append handle is flock'd, the writer lock"⟩,
-   ⟨"index.log", .appendOnly, "fixed-width keyed entries, one per record before the newest base, each tagged with its position: what log pages binary-search (HOST-33)"⟩,
-   ⟨"base.world", .replaced, "the newest sealed base: the World, the seg.log position after it, and how many index.log entries it counts with the last one's tag"⟩,
+  [⟨StorePart.key.name, .once, "32 bytes, mode 0600: the integrity-at-rest key (HOST-16)"⟩,
+   ⟨StorePart.segment.name, .appendOnly, "the frames (Host.Log) from genesis's origin frame: one batch record per frame; its append handle is flock'd, the writer lock"⟩,
+   ⟨StorePart.index.name, .appendOnly, "fixed-width keyed entries, one per record before the newest base, each tagged with its position: what log pages binary-search (HOST-33)"⟩,
+   ⟨StorePart.base.name, .replaced, "the newest sealed base: the World, the seg.log position after it, and how many index.log entries it counts with the last one's tag"⟩,
    ⟨"base.tmp", .transient, "a base being installed; a crash may leave one, which no open reads"⟩]
 
 /-- The order a backup copies a LIVE Store's files in: the key, then the base, then the
 append-only files, so each append-only copy is at least as long as the prefix the copied base
 names (a longer one is a torn tail or orphan entries, which an open handles). -/
-def backupOrder : List String := ["key", "base.world", "index.log", "seg.log"]
+def backupOrder : List String := [StorePart.key, .base, .index, .segment].map (·.name)
 
 end Store
 
 /-- Why a Store's base does not open (law 7). -/
 inductive BaseFault where
-  /-- no `base.world`: the Store was never created by `host genesis` -/
-  | noBase
   /-- larger than one base frame can be -/
   | baseTooLarge (bytes : Nat)
   /-- the frame does not verify under this Store's key -/
@@ -362,7 +378,6 @@ inductive BaseFault where
   deriving Repr
 
 def BaseFault.name : BaseFault → String
-  | .noBase => "noBase"
   | .baseTooLarge _ => "baseTooLarge"
   | .baseCorrupt => "baseCorrupt"
   | .baseUndecodable _ => "baseUndecodable"

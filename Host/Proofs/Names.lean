@@ -36,8 +36,29 @@ theorem Page.Fault.name_injective (a b : Page.Fault) (h : a.name = b.name) : a.c
 
 theorem StoreFault.name_injective {F : Type} (a b : StoreFault F) (h : a.name = b.name) :
     a.ctorIdx = b.ctorIdx := by
-  rcases a with _ | _ | _ | _ | (_ | _ | _ | _ | _ | _) | (_ | _) | (_ | _ | _ | _ | _) | _ <;>
-  rcases b with _ | _ | _ | _ | (_ | _ | _ | _ | _ | _) | (_ | _) | (_ | _ | _ | _ | _) | _ <;>
+  rcases a with _ | _ | _ | _ | _ | (_ | _ | _ | _ | _ | _) | (_ | _) | (_ | _ | _ | _ | _) | _ <;>
+  rcases b with _ | _ | _ | _ | _ | (_ | _ | _ | _ | _ | _) | (_ | _) | (_ | _ | _ | _ | _) | _ <;>
   simp_all [StoreFault.name, BaseFault.name, SealFault.name] <;> rfl
+
+theorem StorePart.name_injective (a b : StorePart) (h : a.name = b.name) : a = b := by
+  cases a <;> cases b <;> first | rfl | (simp [StorePart.name] at h)
+
+theorem StorePart.mem_all (p : StorePart) : p ∈ StorePart.all := by
+  cases p <;> decide
+
+/-- Every part `missing` can name is a file of the Store layout. -/
+theorem StorePart.mem_layout (p : StorePart) : p.name ∈ Store.layout.map (·.name) := by
+  cases p <;> decide
+
+/-- **The parts are the layout**: every Store file but the transient `base.tmp` is a part, so a
+check over `StorePart.all` (what `openWriter` makes) checks every file an open reads. -/
+theorem StorePart.covers_layout : ∀ f ∈ Store.layout, f.kind ≠ .transient → f.name ∈ StorePart.all.map (·.name) := by
+  decide
+
+/-- A `missing` refusal's stderr text names its file: two refusals that print the same text are
+missing the same file (HOST-35; the status, `missing`, is one name for all four). -/
+theorem StoreFault.text_missing_injective {F : Type} (a b : StorePart)
+    (h : (StoreFault.missing a : StoreFault F).text = (StoreFault.missing b : StoreFault F).text) : a = b := by
+  cases a <;> cases b <;> first | rfl | (simp [StoreFault.text, StorePart.name] at h)
 
 end Nanodregg.Host

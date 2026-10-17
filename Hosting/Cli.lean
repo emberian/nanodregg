@@ -145,12 +145,12 @@ def run (store : System.FilePath) (label : ByteArray) : IO Exit := do
   let some pid := lifecycleId Host.Deployed.X.env | return .noPackage
   let pkgId := pid.bytes
   match ← (readKey store : IO (Except (StoreFault (Host.Record.Fault (Reject D))) Digest)) with
-  | .error f => return .store f.name
+  | .error f => return .store f.text
   | .ok key =>
     let keys := Keys.ofKey key Host.Deployed.shapes
     match ← Tail.open store keys Host.Deployed.c Host.Deployed.world Host.Deployed.recorder.mark
         Host.Deployed.originChain Host.Deployed.tailStep with
-    | .error f => return .store f.name
+    | .error f => return .store f.text
     | .ok (t, seg) =>
       let ch ← Std.CloseableChannel.Sync.new (some queueMax)
       let input ← IO.getStdin

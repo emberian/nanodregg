@@ -274,13 +274,14 @@ def hostAction : Status → String
   | .entryUnfit => "a defect: a seal met an index entry the entry layout cannot spell (HOST-31); keep the Store untouched, report to HOST"
   | .carryMismatch => "the carried file is not the one exported (digest), does not decode, or the imported Store reopened to other bytes (stderr names which): re-export from the STOPPED old Store and copy the printed digest exactly; remove a Store left by `carryMismatch reopen` and report it to HOST"
   | .indexMoved => "automatic; index.log changed size under the writer (another process wrote or truncated it): the restart's open truncates orphan entries or refuses indexShort; if it repeats, find the other writer"
-  | .io => "a Store file is missing or unreadable: check the path and permissions (the call and errno are on stderr)"
+  | .io => "the STORE path or the IN file is absent, a Store file is unreadable (EACCES, EIO), or a file was removed between the open's check and its open: check the path and permissions (the call and errno are on stderr)"
   | .ioServing => "automatic; an IO error after the open: check the disk"
   | .locked => "another writer holds the Store: find its unit; never start a second"
   | .exists => "genesis into an existing Store: choose another path"
-  | .badKey => "`STORE/key` is missing or not 32 bytes (a directory that holds no Store, or a lost key): restore it from the backup"
+  | .badKey => "`STORE/key` is not 32 bytes: restore it from the backup"
+  | .missing => "a Store file (key, seg.log, index.log or base.world; stderr names it) is absent from an existing STORE directory: never re-create it or genesis over it; restore the Store's files together from one backup (RUNBOOK §5); a directory left by a genesis that crashed part way is moved aside by hand, never deleted by a unit; if STORE names a directory that holds no Store at all, check the path"
   | .shortRead => "a file changed under the open: stop every writer, then `host check`"
-  | .noBase | .baseTooLarge | .baseCorrupt | .baseUndecodable | .segmentShort | .tailTooLong =>
+  | .baseTooLarge | .baseCorrupt | .baseUndecodable | .segmentShort | .tailTooLong =>
     "the Store is damaged or not a Store: restore (RUNBOOK §5)"
   | .foreignSegment => "`seg.log` is another Store's (or a pre-HOST-18 Store's): restore the three files together (RUNBOOK §5)"
   | .corrupt => "bad bytes with a verifying frame after them (at offset 0: the origin frame), or corrupt history before the base: restore (RUNBOOK §5)"

@@ -133,12 +133,12 @@ def parseSlots (s : String) : Option (List Nat) := (s.splitOn ",").mapM String.t
 def run (t0 : Nat) (keys : List Nat) (store : System.FilePath) (operator : ByteArray) : IO Exit := do
   let some pid := Allow.allowanceId Host.Deployed.X.env | return .noPackage
   match ← (readKey store : IO (Except (StoreFault (Host.Record.Fault (Kernel.Reject D))) Digest)) with
-  | .error f => return .store f.name
+  | .error f => return .store f.text
   | .ok key =>
     let sk := Keys.ofKey key Host.Deployed.shapes
     match ← Tail.open store sk Host.Deployed.c Host.Deployed.world Host.Deployed.recorder.mark
         Host.Deployed.originChain Host.Deployed.tailStep with
-    | .error f => return .store f.name
+    | .error f => return .store f.text
     | .ok (t, seg) =>
       let pkgId := pid.bytes
       let held := Allow.update Host.Deployed.X.env pkgId operator t.world [] (Loop.allIds t.world)
