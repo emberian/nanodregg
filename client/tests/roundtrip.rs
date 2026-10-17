@@ -126,7 +126,7 @@ fn stand_in_follow_and_host_challenge_sign_submit_lookup_done_through_the_binari
     let key = ed25519_dalek::SigningKey::from_bytes(&seed.try_into().unwrap());
     let next = std::fs::read(ws.join("next.pub")).unwrap();
     let n = u32::from_le_bytes(f[16..20].try_into().unwrap()) as usize;
-    let got = SignResult::decode(&f[20..20 + n]).unwrap();
+    let got = SignResult::decode(ok(&f[20..20 + n])).unwrap();
     assert_eq!(got.key, key.verifying_key().to_bytes(), "the current key");
     assert_eq!(got.next, next, "the precommitted next key");
     let sig = ed25519_dalek::Signature::from_slice(&got.signature).unwrap();
@@ -141,6 +141,16 @@ fn stand_in_follow_and_host_challenge_sign_submit_lookup_done_through_the_binari
     );
     drop((_f, _h));
     std::fs::remove_dir_all(&root).unwrap();
+}
+
+/// A custody result as follow receives it (PROTOCOL-21): `u8 status ‖ payload`, status ok.
+fn ok(result: &[u8]) -> &[u8] {
+    assert_eq!(
+        result.first(),
+        Some(&nanodregg_client::generated::status::OK),
+        "custody result status"
+    );
+    &result[1..]
 }
 
 /// One logged result: `u8 k ‖ u32le n ‖ result[n]`, in order.
@@ -192,9 +202,9 @@ fn stand_in_rotate_precommit_sign_next_submit_lookup_advances_custody_through_th
     assert_eq!(out.stdout, b"rotated\n");
     let r = results(&std::fs::read(&flog).unwrap());
     assert_eq!((r[0].0, r[1].0, r[2].0), (1, 2, 3));
-    let pre = PrecommitResult::decode(&r[0].1).unwrap();
+    let pre = PrecommitResult::decode(ok(&r[0].1)).unwrap();
     assert_eq!(pre.next, next0, "precommit names the precommitted next key");
-    let signed = SignResult::decode(&r[1].1).unwrap();
+    let signed = SignResult::decode(ok(&r[1].1)).unwrap();
     assert_eq!((&signed.key, &signed.next), (&next0, &pre.pending));
     let vk = ed25519_dalek::VerifyingKey::from_bytes(&next0.clone().try_into().unwrap()).unwrap();
     let sig = ed25519_dalek::Signature::from_slice(&signed.signature).unwrap();
