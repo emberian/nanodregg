@@ -89,6 +89,7 @@ code space holds both tables: `host` (Host.Status, below 64) and nd-supervise's 
 | 103 | pidFile | fatal | stopped (RestartPreventExitStatus) | the decider's PID file could not be written: check the runtime directory |
 | 102 | deciderSignaled | restart | restarted after 2 s; failed past 5 starts in 120 s | automatic; the decider was killed by a signal (OOM, an operator); a crash on every start stops at the start limit |
 | 104 | deciderLost | fatal | stopped (RestartPreventExitStatus) | keybroker could not read its decider's end: nothing says a restart is safe; read the journal, then start the unit |
+| 105 | sockDir | fatal | stopped (RestartPreventExitStatus) | the broker's socket directory fails its checks: /run/nd-broker must be nd:nd-hosted mode 02710 (tmpfiles), every directory above it owned by root, and each resident directory in it nd's, mode 02710 (HOSTING-17, RUNBOOK §2a) |
 
 ## hosting-broker (the decider, under keybroker)
 

@@ -24,6 +24,12 @@
 //!   instead of certificates: keybroker ends `keyFileMode`, `anchorsMode`, `anchorsMissing`,
 //!   `anchorsMalformed`, and opens no socket; the production bundle (deploy/tls/anchors.pem) is
 //!   accepted whole.
+//! - HOSTING-17: each resident's socket is SOCKDIR/<r>/broker.sock, 0660 with SOCKDIR's group (02710);
+//!   a SOCKDIR or resident directory of the wrong mode, a stray file beside the socket, or a regular
+//!   file at the socket path ends keybroker `sockDir` with no socket open; a broker serving another
+//!   uid (PEER), or whose SOCKDIR's group is not the peer's gid, answers `peerRefused`. A restarted
+//!   broker meets the last life's socket and binds again. A peer of the right gid and another uid
+//!   needs a second uid: unrun on one-uid boxes, and the PEER plant tests the same comparison.
 //!
 //! CONTROL: the canary key is present in what the fake upstream received over real TLS (so its
 //! absence from the resident's bytes is not vacuous, and the TLS refusals are not a broken client). The Lean exes (`hosting-broker`, `host`) and the client's
@@ -34,7 +40,7 @@
 use std::fs;
 use std::io::{Read, Write};
 use std::net::TcpListener;
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
@@ -77,12 +83,34 @@ fn dir(name: &str) -> Scratch {
     // A Unix socket path is at most 107 bytes (sun_path), and a judge slot's target dir is deeper
     // than that: the sockets live in a short directory of this process's own.
     let socks = nanodregg_devtools::scratch(&format!("kb{}{name}", std::process::id()));
-    nanodregg_devtools::mkdirs(&socks).unwrap();
+    sockdir(&socks);
     std::os::unix::fs::symlink(&socks, d.join("socks")).unwrap();
     Scratch {
         root: d.canonicalize().unwrap(),
         socks,
     }
+}
+
+/// SOCKDIR as HOSTING-17 requires it: this uid's, mode 02710 (made if absent).
+fn sockdir(p: &Path) {
+    nanodregg_devtools::mkdirs(p).unwrap();
+    fs::set_permissions(p, fs::Permissions::from_mode(0o2710)).unwrap();
+}
+
+/// This process's uid and primary gid (of a directory it made, under a parent with no setgid bit).
+fn me(d: &Path) -> (u32, u32) {
+    let m = fs::metadata(d).unwrap();
+    (m.uid(), m.gid())
+}
+
+/// A group of this process other than its primary one, if it has one (`/proc/self/status`).
+fn other_group(primary: u32) -> Option<u32> {
+    let st = fs::read_to_string("/proc/self/status").unwrap();
+    let line = st.lines().find(|l| l.starts_with("Groups:"))?;
+    line["Groups:".len()..]
+        .split_whitespace()
+        .filter_map(|g| g.parse().ok())
+        .find(|g| *g != primary)
 }
 
 /// Lean's host for every `claude-…` model (`Broker.anthropic.host`).
@@ -361,32 +389,106 @@ struct Broker {
 }
 
 impl Drop for Broker {
+    // The sockets stay (the scratch removes them).
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
-        let _ = fs::remove_dir_all(&self.socks);
     }
 }
 
-/// keybroker for residents `01` and `02` over the World `w`, trusting `anchors`.
+/// keybroker's argv as the emitted unit renders it (deploy/units/linux/nd-keybroker.service, from
+/// Ops/Units.lean), every rendered word replaced by this test's value for that word: the ORDER is
+/// the unit's, so a unit and a parser that disagree on it are red here (ROOT, 10-18; OPS-2's
+/// fd1d4b2 class). A word with no test value, or a test value no word asks for, is red too.
+fn rendered(values: &[(&str, &std::ffi::OsStr)]) -> Command {
+    let unit = fs::read_to_string(repo().join("deploy/units/linux/nd-keybroker.service")).unwrap();
+    let line = unit
+        .lines()
+        .find_map(|l| l.strip_prefix("ExecStart="))
+        .expect("the unit has an ExecStart");
+    let mut words = line.split(' ');
+    assert_eq!(
+        words.next(),
+        Some("/opt/nd/bin/keybroker"),
+        "the unit runs keybroker"
+    );
+    let mut c = Command::new(env!("CARGO_BIN_EXE_keybroker"));
+    let mut used = 0;
+    for w in words {
+        let (_, v) = values
+            .iter()
+            .find(|(k, _)| *k == w)
+            .unwrap_or_else(|| panic!("the unit's word {w} has no test value"));
+        c.arg(v);
+        used += 1;
+    }
+    assert_eq!(used, values.len(), "a test value the unit never asks for");
+    c
+}
+
+/// The test's values for the unit's words.
+#[allow(clippy::too_many_arguments)]
+fn argv(
+    keys: &Path,
+    anchors: &Path,
+    socks: &Path,
+    pids: &Path,
+    up: &str,
+    store: &Path,
+    operator: &str,
+    residents: &str,
+    peer: &str,
+) -> Command {
+    let decider = lean_bin("hosting-broker");
+    rendered(&[
+        ("/etc/nd/keybroker/provider.key", keys.as_os_str()),
+        ("/etc/nd/keybroker/anchors.pem", anchors.as_os_str()),
+        ("/run/nd-broker", socks.as_os_str()),
+        ("/run/nd-keybroker", pids.as_os_str()),
+        ("api.anthropic.com:443", std::ffi::OsStr::new(up)),
+        ("/srv/nd/store", store.as_os_str()),
+        ("${ND_OPERATOR}", std::ffi::OsStr::new(operator)),
+        ("${ND_RESIDENTS}", std::ffi::OsStr::new(residents)),
+        ("${ND_PEER}", std::ffi::OsStr::new(peer)),
+        ("/opt/nd/bin/hosting-broker", decider.as_os_str()),
+    ])
+}
+
+/// keybroker for residents `01` and `02` over the World `w`, trusting `anchors`, serving this uid.
 fn start(d: &Path, keys: &Path, anchors: &Path, up: &str, w: &World) -> Broker {
-    let child = Command::new(env!("CARGO_BIN_EXE_keybroker"))
-        .arg(keys)
-        .arg(anchors)
-        .arg(fs::read_link(d.join("socks")).unwrap())
-        .arg(d.join("pids"))
-        .arg(up)
-        .arg(&w.store)
-        .arg(&w.operator)
-        .arg("01,02")
-        .arg(lean_bin("hosting-broker"))
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
-    let mut child = child;
+    start_peer(d, keys, anchors, up, w, me(d).0)
+}
+
+/// `start`, serving the uid `peer`.
+fn start_peer(d: &Path, keys: &Path, anchors: &Path, up: &str, w: &World, peer: u32) -> Broker {
     let socks = fs::read_link(d.join("socks")).unwrap();
+    // the last life's sockets go first, so a socket seen below is this life's (keybroker's own
+    // unlink of a stale socket is a_bad_socket_directory_stops_keybroker_by_name's control)
+    for r in ["01", "02"] {
+        let _ = fs::remove_file(socks.join(r).join("broker.sock"));
+    }
+    let child = argv(
+        keys,
+        anchors,
+        &socks,
+        &d.join("pids"),
+        up,
+        &w.store,
+        &w.operator,
+        "01,02",
+        &peer.to_string(),
+    )
+    .stderr(Stdio::piped())
+    .spawn()
+    .unwrap();
+    let mut child = child;
     let deadline = Instant::now() + Duration::from_secs(20);
-    while !socks.join("01.sock").exists() || !socks.join("02.sock").exists() {
+    // bound and opened to the group (0660)
+    let bound = |r: &str| {
+        fs::symlink_metadata(socks.join(r).join("broker.sock"))
+            .is_ok_and(|m| m.permissions().mode() & 0o7777 == 0o660)
+    };
+    while !bound("01") || !bound("02") {
         let ended = child.try_wait().unwrap().is_some();
         if ended || Instant::now() > deadline {
             let _ = child.kill();
@@ -424,7 +526,7 @@ impl Resident {
         Resident::connect_as(b, "01")
     }
     fn connect_as(b: &Broker, name: &str) -> Resident {
-        let s = UnixStream::connect(b.socks.join(format!("{name}.sock"))).unwrap();
+        let s = UnixStream::connect(b.socks.join(name).join("broker.sock")).unwrap();
         s.set_read_timeout(Some(Duration::from_secs(30))).unwrap();
         Resident { s, got: Vec::new() }
     }
@@ -658,19 +760,20 @@ fn ends(d: &Path, keys: &Path, anchors: &Path) -> (String, Option<i32>) {
 
 /// keybroker over KEYS, ANCHORS and STORE: how it ends, within 20 s.
 fn ends_over(d: &Path, keys: &Path, anchors: &Path, store: &Path) -> (String, Option<i32>) {
-    let mut kb = Command::new(env!("CARGO_BIN_EXE_keybroker"))
-        .arg(keys)
-        .arg(anchors)
-        .arg(fs::read_link(d.join("socks")).unwrap())
-        .arg(d.join("pids"))
-        .arg("127.0.0.1:9")
-        .arg(store)
-        .arg("00")
-        .arg("01")
-        .arg(lean_bin("hosting-broker"))
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
+    let mut kb = argv(
+        keys,
+        anchors,
+        &fs::read_link(d.join("socks")).unwrap(),
+        &d.join("pids"),
+        "127.0.0.1:9",
+        store,
+        "00",
+        "01",
+        &me(d).0.to_string(),
+    )
+    .stderr(Stdio::piped())
+    .spawn()
+    .unwrap();
     // It must END: still running after the deadline means it accepted what it was given.
     let deadline = Instant::now() + Duration::from_secs(20);
     while kb.try_wait().unwrap().is_none() {
@@ -781,7 +884,7 @@ fn exposed_or_malformed_custody_files_stop_keybroker_by_name() {
         );
         assert_eq!(got, Some(i32::from(code)), "{want}: exit code");
         assert!(
-            !d.join("socks/01.sock").exists(),
+            !d.join("socks/01/broker.sock").exists(),
             "{want}: a socket was opened"
         );
     }
@@ -847,7 +950,7 @@ fn an_unverified_upstream_is_refused_by_name_and_gets_no_byte() {
             BrokerRefusal::TlsProtocol,
         ),
     ] {
-        nanodregg_devtools::mkdirs(&d.socks).unwrap();
+        sockdir(&d.socks);
         let (up, seen) = upstream(mode, cert);
         let t0 = now_ms();
         let b = start(&d, &keys, &anchors, &up, &w);
@@ -879,4 +982,135 @@ fn an_unverified_upstream_is_refused_by_name_and_gets_no_byte() {
         drop(r);
         drop(b);
     }
+}
+
+#[test]
+fn a_bad_socket_directory_stops_keybroker_by_name() {
+    let d = dir("sockdir");
+    let keys = key_file(&d, 0o600);
+    let anchors = Pki::new().anchors(&d, 0o644);
+    let k = nanodregg_launcher::broker_generated::keybroker_exit::SOCK_DIR;
+    let socks = d.socks.clone();
+    let r = socks.join("01");
+    let reset = || {
+        let _ = fs::remove_dir_all(&socks);
+        sockdir(&socks);
+    };
+    let cases: [(&str, &dyn Fn()); 5] = [
+        ("SOCKDIR 0700", &|| {
+            fs::set_permissions(&socks, fs::Permissions::from_mode(0o700)).unwrap()
+        }),
+        ("SOCKDIR 0730 (group-writable)", &|| {
+            fs::set_permissions(&socks, fs::Permissions::from_mode(0o2730)).unwrap()
+        }),
+        ("resident directory 0700", &|| {
+            fs::create_dir(&r).unwrap();
+            fs::set_permissions(&r, fs::Permissions::from_mode(0o700)).unwrap();
+        }),
+        ("a stray file beside the socket", &|| {
+            fs::create_dir(&r).unwrap();
+            fs::set_permissions(&r, fs::Permissions::from_mode(0o2710)).unwrap();
+            fs::write(r.join("stray"), b"x").unwrap();
+        }),
+        ("a regular file at the socket path", &|| {
+            fs::create_dir(&r).unwrap();
+            fs::set_permissions(&r, fs::Permissions::from_mode(0o2710)).unwrap();
+            fs::write(r.join("broker.sock"), b"x").unwrap();
+        }),
+    ];
+    for (what, plant) in cases {
+        reset();
+        plant();
+        let (err, got) = ends(&d, &keys, &anchors);
+        assert!(err.contains("keybroker: sockDir "), "{what}: stderr: {err}");
+        assert_eq!(got, Some(i32::from(k)), "{what}: exit code");
+        let s = r.join("broker.sock");
+        assert!(
+            !fs::symlink_metadata(&s).is_ok_and(|m| m.file_type().is_socket()),
+            "{what}: a socket was opened"
+        );
+    }
+    // CONTROL: the same SOCKDIR made right passes the socket checks: keybroker starts its decider
+    // (which ends `io`: the STORE holds no Store) and binds the socket
+    reset();
+    let empty = d.join("empty-store");
+    nanodregg_devtools::mkdirs(&empty).unwrap();
+    let (err, _) = ends_over(&d, &keys, &anchors, &empty);
+    assert!(!err.contains("sockDir"), "control: stderr: {err}");
+    let m = fs::symlink_metadata(r.join("broker.sock")).unwrap();
+    assert!(m.file_type().is_socket(), "control: no socket bound");
+    assert_eq!(
+        m.permissions().mode() & 0o7777,
+        0o660,
+        "control: socket mode"
+    );
+    assert_eq!(m.gid(), me(&socks).1, "control: socket group");
+    assert_eq!(
+        fs::symlink_metadata(&r).unwrap().permissions().mode() & 0o7777,
+        0o2710,
+        "control: resident directory mode"
+    );
+    // CONTROL: the next life meets the last life's socket, unlinks it and binds again
+    let (err, _) = ends_over(&d, &keys, &anchors, &empty);
+    assert!(
+        !err.contains("sockDir") && !err.contains("keybroker: socket "),
+        "restart: stderr: {err}"
+    );
+    let again = fs::symlink_metadata(r.join("broker.sock")).unwrap();
+    assert!(again.file_type().is_socket(), "restart: no socket bound");
+}
+
+#[test]
+fn a_peer_of_another_uid_or_group_is_refused_by_name() {
+    let d = dir("peer");
+    let keys = key_file(&d, 0o600);
+    let pki = Pki::new();
+    let anchors = pki.anchors(&d, 0o644);
+    let (up, seen) = upstream(Mode::Ok, pki.server(HOST, false));
+    let w = World::genesis("peer");
+    w.allowance("01", "claude-m", 7, 100_000);
+    let (uid, gid) = me(&d);
+    let first = |b: &Broker| {
+        let mut r = Resident::connect(b);
+        r.ask(&ask(b"claude-m", 10, b"hi"))
+    };
+    // CONTROL: this uid with SOCKDIR's group is served (a decision, not peerRefused)
+    let b = start(&d, &keys, &anchors, &up, &w);
+    let a = first(&b);
+    assert!(
+        !is_refused(&a, BrokerRefusal::PeerRefused),
+        "control: refused {a:?}"
+    );
+    drop(b);
+    // a broker serving another uid
+    let b = start_peer(&d, &keys, &anchors, &up, &w, uid.wrapping_add(1));
+    let mut r = Resident::connect(&b);
+    let f = read_frame(&mut r.s).unwrap();
+    assert!(
+        is_refused(&Answer::decode(&f).unwrap(), BrokerRefusal::PeerRefused),
+        "another uid: not peerRefused"
+    );
+    drop(r);
+    drop(b);
+    // SOCKDIR's group is not the peer's gid
+    match other_group(gid) {
+        Some(g) => {
+            let _ = fs::remove_dir_all(&d.socks);
+            sockdir(&d.socks);
+            std::os::unix::fs::chown(&d.socks, None, Some(g)).unwrap();
+            fs::set_permissions(&d.socks, fs::Permissions::from_mode(0o2710)).unwrap();
+            let b = start(&d, &keys, &anchors, &up, &w);
+            let mut r = Resident::connect(&b);
+            let f = read_frame(&mut r.s).unwrap();
+            assert!(
+                is_refused(&Answer::decode(&f).unwrap(), BrokerRefusal::PeerRefused),
+                "another group: not peerRefused"
+            );
+        }
+        None => eprintln!("unrun: this uid has no supplementary group for the group plant"),
+    }
+    assert!(
+        seen.lock().unwrap().is_empty(),
+        "a refused peer reached the upstream"
+    );
 }

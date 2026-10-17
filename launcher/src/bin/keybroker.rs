@@ -1,10 +1,15 @@
-//! `keybroker KEYS ANCHORS SOCKDIR PIDS UPSTREAM STORE OPERATOR RESIDENTS DECIDER`
+//! `keybroker KEYS ANCHORS SOCKDIR PIDS UPSTREAM STORE OPERATOR RESIDENTS PEER DECIDER`
 //!
 //! The provider-key broker's byte mover (HOSTING-12). It holds the operator's provider keys (the
 //! file KEYS, read once under the custody checks of `nanodregg_sandbox::custody`) and the TLS trust
 //! anchors (the PEM file ANCHORS, the operator's data: in production the installed copy of
 //! `deploy/tls/anchors.pem`, read once under `custody::read_public`), and serves one Unix
-//! socket per resident, `SOCKDIR/<resident>.sock` for each name in the comma-separated RESIDENTS.
+//! socket per resident, `SOCKDIR/<resident>/broker.sock` for each name in the comma-separated
+//! RESIDENTS (HOSTING-17). SOCKDIR is the operator's (nd:nd-hosted, mode 02710, every directory above
+//! it StrictModes-clean); keybroker makes each resident's directory in it (02710, SOCKDIR's group by
+//! the setgid bit), puts nothing there but the socket, and sets the socket 0660. Anything else at
+//! those paths ends it `sockDir` before any socket opens. On every accept the peer's credentials must
+//! be uid PEER (the hosted uid) and SOCKDIR's group, or the connection is answered `peerRefused`.
 //! Identity is the socket: keybroker puts a `decide` frame naming that socket's resident in front
 //! of each ask, unread, and hands both to DECIDER (the Lean `hosting-broker`, started confined as
 //! `DECIDER T0 SLOTS STORE OPERATOR`: the operator clock, the comma-separated key slots the key file
@@ -24,8 +29,9 @@ use std::ffi::OsString;
 use std::io::ErrorKind;
 use std::io::{Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
+use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{ChildStdin, ChildStdout, ExitCode, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -62,6 +68,8 @@ enum End {
     File(&'static str, u8),
     Tls(String),
     Socket(String),
+    /// the socket directory, a resident's directory or a socket path fails HOSTING-17's checks
+    SockDir(String),
     DeciderRefused(String),
     /// the decider's exit code, or `None` for a signal
     DeciderEnded(Option<i32>),
@@ -74,12 +82,13 @@ impl End {
     fn describe(&self) -> String {
         match self {
             End::Usage => {
-                "usage: keybroker KEYS ANCHORS SOCKDIR PIDS UPSTREAM STORE OPERATOR RESIDENTS DECIDER"
+                "usage: keybroker KEYS ANCHORS SOCKDIR PIDS UPSTREAM STORE OPERATOR RESIDENTS PEER DECIDER"
                     .into()
             }
             End::File(n, _) => (*n).into(),
             End::Tls(e) => format!("tlsConfig {e}"),
             End::Socket(e) => format!("socket {e}"),
+            End::SockDir(e) => format!("sockDir {e}"),
             End::DeciderRefused(e) => format!("deciderRefused {e}"),
             End::DeciderEnded(Some(c)) => format!("deciderEnded {c}"),
             End::DeciderEnded(None) => "deciderSignaled".into(),
@@ -97,6 +106,7 @@ fn main() -> ExitCode {
         End::File(_, code) => code,
         End::Tls(_) => keybroker_exit::TLS_CONFIG,
         End::Socket(_) => keybroker_exit::SOCKET,
+        End::SockDir(_) => keybroker_exit::SOCK_DIR,
         End::DeciderRefused(_) => keybroker_exit::DECIDER_REFUSED,
         End::Pid(_) => keybroker_exit::PID_FILE,
         // the decider's own code, passed through; a code past u8 is not an exit status
@@ -194,6 +204,10 @@ struct Shared {
     keys: Keys,
     upstream: String,
     tls: Arc<ClientConfig>,
+    /// the only uid served (`PEER`, the hosted uid)
+    peer: u32,
+    /// the only gid served: SOCKDIR's group
+    group: u32,
 }
 
 fn run() -> End {
@@ -207,6 +221,7 @@ fn run() -> End {
         store,
         operator,
         residents,
+        peer,
         decider,
     ] = args.as_slice()
     else {
@@ -241,6 +256,14 @@ fn run() -> End {
     if !residents.iter().all(|r| grain_name_ok(r.as_bytes())) {
         return End::Usage;
     }
+    let Some(peer) = peer.to_str().and_then(|p| p.parse::<u32>().ok()) else {
+        return End::Usage;
+    };
+    let sockdir = PathBuf::from(sockdir);
+    let (group, sockets) = match socket_paths(&sockdir, &residents) {
+        Ok(v) => v,
+        Err(why) => return End::SockDir(why),
+    };
     let decider = PathBuf::from(decider);
     let pid_file = PathBuf::from(pids).join("decider.pid");
 
@@ -290,17 +313,18 @@ fn run() -> End {
         keys,
         upstream,
         tls,
+        peer,
+        group,
     });
 
-    for r in residents {
-        let path = PathBuf::from(sockdir).join(format!("{r}.sock"));
-        let listener = match UnixListener::bind(&path) {
+    for (r, path) in residents.iter().zip(&sockets) {
+        let listener = match bind(path, group) {
             Ok(l) => l,
-            Err(e) => {
+            Err(end) => {
                 let _ = child.kill();
                 let _ = child.wait();
                 let _ = std::fs::remove_file(&pid_file);
-                return End::Socket(format!("{} {e}", path.display()));
+                return end;
             }
         };
         let sh = Arc::clone(&shared);
@@ -317,11 +341,84 @@ fn run() -> End {
     }
 }
 
+/// HOSTING-17's checks, before any socket opens. SOCKDIR passes `custody::check_shared_dir` (owned
+/// by the euid, mode exactly 02710, every directory above it StrictModes-clean), and so does each
+/// resident's directory in it, made here when absent, which must carry SOCKDIR's group. A resident's
+/// directory holds nothing but its socket (the sandbox binds the directory: anything else here would
+/// be in the resident's view), and a socket already there must be a socket of this uid, the last
+/// life's, which is unlinked to be bound again. Returns SOCKDIR's group and each socket's path.
+fn socket_paths(sockdir: &Path, residents: &[&str]) -> Result<(u32, Vec<PathBuf>), String> {
+    let at = |p: &Path, e: &dyn std::fmt::Debug| format!("{} {e:?}", p.display());
+    let group = custody::check_shared_dir(sockdir).map_err(|e| at(sockdir, &e))?;
+    let mut out = Vec::new();
+    for r in residents {
+        let d = sockdir.join(r);
+        match std::fs::symlink_metadata(&d) {
+            Err(e) if e.kind() == ErrorKind::NotFound => {
+                std::fs::create_dir(&d).map_err(|e| at(&d, &e))?;
+                std::fs::set_permissions(&d, std::fs::Permissions::from_mode(0o2710))
+                    .map_err(|e| at(&d, &e))?;
+            }
+            Err(e) => return Err(at(&d, &e)),
+            Ok(_) => {}
+        }
+        let g = custody::check_shared_dir(&d).map_err(|e| at(&d, &e))?;
+        if g != group {
+            return Err(format!("{} group {g}, not SOCKDIR's {group}", d.display()));
+        }
+        for entry in std::fs::read_dir(&d).map_err(|e| at(&d, &e))? {
+            let name = entry.map_err(|e| at(&d, &e))?.file_name();
+            if name != "broker.sock" {
+                return Err(format!("{} holds {name:?}", d.display()));
+            }
+        }
+        let sock = d.join("broker.sock");
+        let own = std::fs::symlink_metadata(&d).map_err(|e| at(&d, &e))?.uid();
+        match std::fs::symlink_metadata(&sock) {
+            Err(e) if e.kind() == ErrorKind::NotFound => {}
+            Ok(m) if m.file_type().is_socket() && m.uid() == own => {
+                std::fs::remove_file(&sock).map_err(|e| at(&sock, &e))?
+            }
+            Ok(_) => return Err(format!("{} is not this broker's socket", sock.display())),
+            Err(e) => return Err(at(&sock, &e)),
+        }
+        out.push(sock);
+    }
+    Ok((group, out))
+}
+
+/// Bind one resident's socket and open it to the hosted group: 0660, with SOCKDIR's group (from
+/// the setgid bit), or keybroker ends `sockDir` (the bit was lost).
+fn bind(path: &Path, group: u32) -> Result<UnixListener, End> {
+    let socket = |e: std::io::Error| End::Socket(format!("{} {e}", path.display()));
+    let l = UnixListener::bind(path).map_err(socket)?;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o660)).map_err(socket)?;
+    let m = std::fs::symlink_metadata(path).map_err(socket)?;
+    if m.gid() != group || m.permissions().mode() & 0o7777 != 0o660 {
+        return Err(End::SockDir(format!(
+            "{} group {} mode {:o}, not {group} 660",
+            path.display(),
+            m.gid(),
+            m.permissions().mode() & 0o7777
+        )));
+    }
+    Ok(l)
+}
+
 /// One resident's socket: one connection at a time; a second, while one is open, is told `busy`.
+/// A peer that is not uid PEER with SOCKDIR's group is told `peerRefused`, and nothing it sent is
+/// read.
 fn serve_socket(listener: UnixListener, resident: Vec<u8>, sh: Arc<Shared>) {
     let open = Arc::new(AtomicBool::new(false));
     for conn in listener.incoming().take(LIFETIME as usize) {
         let Ok(mut s) = conn else { continue };
+        match custody::peer_cred(&s) {
+            Ok((uid, gid)) if uid == sh.peer && gid == sh.group => {}
+            _ => {
+                let _ = answer(&mut s, &refused(BrokerRefusal::PeerRefused));
+                continue;
+            }
+        }
         if open.swap(true, Ordering::SeqCst) {
             let _ = answer(&mut s, &refused(BrokerRefusal::Busy));
             continue;

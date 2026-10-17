@@ -308,6 +308,7 @@ def keybrokerAction : KeybrokerExit → String
   | .anchorsMalformed => "the anchors file is not certificates only: reinstall deploy/tls/anchors.pem (the unit's ExecStartPre checks the installed copy)"
   | .tlsConfig => "rustls refused the client configuration: a build defect, report to HOSTING"
   | .socket => "a resident socket could not be bound (a stale socket, a missing directory): stop the unit, check the runtime directory, start it"
+  | .sockDir => "the broker's socket directory fails its checks: /run/nd-broker must be nd:nd-hosted mode 02710 (tmpfiles), every directory above it owned by root, and each resident directory in it nd's, mode 02710 (HOSTING-17, RUNBOOK §2a)"
   | .deciderRefused => "the sandbox refused the decider's policy or could not spawn it: check the mechanism (deploy/live/README.md) and the DECIDER path"
   | .pidFile => "the decider's PID file could not be written: check the runtime directory"
   | .deciderSignaled => "automatic; the decider was killed by a signal (OOM, an operator); a crash on every start stops at the start limit"
@@ -317,14 +318,17 @@ def keybrokerAction : KeybrokerExit → String
 def brokerPreventCodes : List Nat := DeciderExit.codesOf .fatal ++ KeybrokerExit.codesOf .fatal
 
 /-- The keybroker unit's operator data: paths through `checkPath`, the rest literal or from the
-unit's environment file (`ND_OPERATOR`, `ND_RESIDENTS`). -/
+unit's environment file (`ND_OPERATOR`, `ND_RESIDENTS`, `ND_PEER`: the `nd-hosted` uid, HOSTING-17). -/
 structure Broker where
   name : String
   bin : String
   /-- the directory holding the provider key, the anchors and the environment file (RUNBOOK §2a) -/
   etc : String
-  /-- systemd's `RuntimeDirectory=` name: `/run/NAME` holds the PID file, `/run/NAME/sock` the sockets -/
+  /-- systemd's `RuntimeDirectory=` name: `/run/NAME` holds the PID file -/
   runtime : String
+  /-- SOCKDIR (HOSTING-17): the operator's (tmpfiles, nd:nd-hosted 02710), outliving the unit, so a
+  restarted broker stays reachable to running residents -/
+  sockdir : String
   upstream : String
   store : String
   user : String
@@ -332,22 +336,22 @@ structure Broker where
 
 def keybroker : Broker :=
   { name := "nd-keybroker", bin := "/opt/nd/bin", etc := "/etc/nd/keybroker", runtime := "nd-keybroker",
-    upstream := "api.anthropic.com:443", store := "/srv/nd/store", user := "nd" }
+    sockdir := "/run/nd-broker", upstream := "api.anthropic.com:443", store := "/srv/nd/store", user := "nd" }
 
 /-- A host:port with nothing a unit file would re-quote. -/
 def plainAddr (a : String) : Bool :=
   !a.isEmpty && a.toList.all fun c => c.isAlphanum || c == '.' || c == '-' || c == ':'
 
 def Broker.check (b : Broker) : Except Refusal _root_.Unit := do
-  checkAll [b.bin, b.etc, b.store, "/run/" ++ b.runtime]
+  checkAll [b.bin, b.etc, b.store, "/run/" ++ b.runtime, b.sockdir]
   unless plainAddr b.upstream do throw (.badPath b.upstream)
   unless b.runtime.toList.all plainChar && !b.runtime.contains '/' do throw (.badPath b.runtime)
 
-/-- keybroker's argv, in its order: KEYS ANCHORS SOCKDIR PIDS UPSTREAM STORE OPERATOR RESIDENTS DECIDER. -/
+/-- keybroker's argv, in its order: KEYS ANCHORS SOCKDIR PIDS UPSTREAM STORE OPERATOR RESIDENTS PEER DECIDER. -/
 def Broker.exec (b : Broker) : List Arg :=
   [.lit (b.bin ++ "/keybroker"), .lit (b.etc ++ "/provider.key"), .lit (b.etc ++ "/anchors.pem"),
-   .lit ("/run/" ++ b.runtime ++ "/sock"), .lit ("/run/" ++ b.runtime), .lit b.upstream, .lit b.store,
-   .var "ND_OPERATOR", .var "ND_RESIDENTS", .lit (b.bin ++ "/hosting-broker")]
+   .lit b.sockdir, .lit ("/run/" ++ b.runtime), .lit b.upstream, .lit b.store,
+   .var "ND_OPERATOR", .var "ND_RESIDENTS", .var "ND_PEER", .lit (b.bin ++ "/hosting-broker")]
 
 def Broker.systemd (b : Broker) : Except Refusal String := do
   b.check
@@ -364,7 +368,7 @@ def Broker.systemd (b : Broker) : Except Refusal String := do
     "Type=simple",
     s!"User={b.user}",
     s!"EnvironmentFile={b.etc}/keybroker.env",
-    s!"RuntimeDirectory={b.runtime} {b.runtime}/sock",
+    s!"RuntimeDirectory={b.runtime}",
     "# the installed anchors must be the build's pinned roots, byte for byte, at every start (OPS-7)",
     s!"ExecStartPre={b.bin}/emit-anchors --check {b.etc}/anchors.pem",
     s!"ExecStart={spaced (b.exec.map Arg.systemd)}",

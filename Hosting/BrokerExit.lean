@@ -87,6 +87,9 @@ inductive KeybrokerExit where
   | tlsConfig
   /-- a resident socket could not be bound (a stale socket, a missing SOCKDIR) -/
   | socket
+  /-- SOCKDIR or a resident's directory in it fails HOSTING-17's checks (owner, mode 02710, group,
+  the StrictModes chain), or something other than the last life's socket sits at a socket path -/
+  | sockDir
   /-- the sandbox refused the decider's policy, or the decider could not be spawned -/
   | deciderRefused
   /-- the decider's PID file could not be written -/
@@ -103,7 +106,7 @@ def all : List KeybrokerExit :=
   [usage, keyFileLink, keyFileNotRegular, keyFileOwner, keyFileMode, keyFileLength, keyFileDir,
    keyFileIo, keyFileFormat, anchorsLink, anchorsNotRegular, anchorsOwner, anchorsMode, anchorsLength,
    anchorsDir, anchorsMissing, anchorsIo, anchorsMalformed, tlsConfig, socket, deciderRefused, pidFile,
-   deciderSignaled, deciderLost]
+   deciderSignaled, deciderLost, sockDir]
 
 def code : KeybrokerExit → Nat
   | usage => 80 | keyFileLink => 81 | keyFileNotRegular => 82 | keyFileOwner => 83 | keyFileMode => 84
@@ -111,7 +114,7 @@ def code : KeybrokerExit → Nat
   | anchorsLink => 89 | anchorsNotRegular => 90 | anchorsOwner => 91 | anchorsMode => 92
   | anchorsLength => 93 | anchorsDir => 94 | anchorsMissing => 95 | anchorsIo => 96
   | anchorsMalformed => 97 | tlsConfig => 98 | socket => 99 | deciderRefused => 100 | pidFile => 103
-  | deciderSignaled => 102 | deciderLost => 104
+  | deciderSignaled => 102 | deciderLost => 104 | sockDir => 105
 
 /-- Every own end but a signalled decider is fatal: each is a file, an argument or the build, and
 a restart reads the same one. -/

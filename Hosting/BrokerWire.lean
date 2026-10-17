@@ -39,7 +39,7 @@ private theorem frameMax_fits : frameMax < 2 ^ 32 := by decide
 end Bounds
 
 /-- Why the broker refuses an ask, by name (law 7). `Broker.decide` refuses every case but keybroker's
-(`keyEchoed`, `upstreamFailed`, `busy`, `tlsCertificate`, `tlsHostname`, `tlsProtocol`, mapped from its
+(`keyEchoed`, `upstreamFailed`, `busy`, `tlsCertificate`, `tlsHostname`, `tlsProtocol`, `peerRefused`, mapped from its
 transport outcomes by an exhaustive match);
 `keyMissing` is both: Lean refuses a slot keybroker has no key for, and keybroker re-checks it. -/
 inductive Refusal
@@ -85,6 +85,9 @@ inductive Refusal
   /-- keybroker: the TLS session failed for any other reason (version, alert, a close without
   `close_notify`); the upstream's own text is never relayed -/
   | tlsProtocol
+  /-- keybroker: the connecting process is not the hosted uid with SOCKDIR's group (`SO_PEERCRED`,
+  HOSTING-17): nothing it sent is read -/
+  | peerRefused
   deriving DecidableEq, Repr
 
 namespace Refusal
@@ -92,14 +95,14 @@ namespace Refusal
 def all : List Refusal :=
   [noAllowance, allowanceMalformed, clockRegressed, badAsk, modelNotAllowed, tokensZero, tokensOver,
    messagesMalformed, textNotUtf8, overSpend, requestTooLarge, keyMissing, keyEchoed, upstreamFailed, busy,
-   allowanceAmbiguous, noProvider, tlsCertificate, tlsHostname, tlsProtocol]
+   allowanceAmbiguous, noProvider, tlsCertificate, tlsHostname, tlsProtocol, peerRefused]
 
 def code : Refusal → UInt8
   | noAllowance => 0 | allowanceMalformed => 1 | clockRegressed => 2 | badAsk => 3
   | modelNotAllowed => 4 | tokensZero => 5 | tokensOver => 6 | messagesMalformed => 7
   | textNotUtf8 => 8 | overSpend => 9 | requestTooLarge => 10 | keyMissing => 11 | keyEchoed => 12
   | upstreamFailed => 13 | busy => 14 | allowanceAmbiguous => 15 | noProvider => 16
-  | tlsCertificate => 17 | tlsHostname => 18 | tlsProtocol => 19
+  | tlsCertificate => 17 | tlsHostname => 18 | tlsProtocol => 19 | peerRefused => 20
 
 def name : Refusal → String
   | noAllowance => "noAllowance" | allowanceMalformed => "allowanceMalformed"
@@ -110,6 +113,7 @@ def name : Refusal → String
   | keyEchoed => "keyEchoed" | upstreamFailed => "upstreamFailed" | busy => "busy"
   | allowanceAmbiguous => "allowanceAmbiguous" | noProvider => "noProvider"
   | tlsCertificate => "tlsCertificate" | tlsHostname => "tlsHostname" | tlsProtocol => "tlsProtocol"
+  | peerRefused => "peerRefused"
 
 def ofCode? (b : UInt8) : Option Refusal := all.find? (·.code == b)
 

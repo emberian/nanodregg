@@ -220,6 +220,7 @@ pub mod wire {
         TlsCertificate,
         TlsHostname,
         TlsProtocol,
+        PeerRefused,
     }
 
     impl BrokerRefusal {
@@ -245,6 +246,7 @@ pub mod wire {
                 BrokerRefusal::TlsCertificate => 17,
                 BrokerRefusal::TlsHostname => 18,
                 BrokerRefusal::TlsProtocol => 19,
+                BrokerRefusal::PeerRefused => 20,
             }
         }
 
@@ -270,6 +272,7 @@ pub mod wire {
                 17 => Some(BrokerRefusal::TlsCertificate),
                 18 => Some(BrokerRefusal::TlsHostname),
                 19 => Some(BrokerRefusal::TlsProtocol),
+                20 => Some(BrokerRefusal::PeerRefused),
                 _ => None,
             }
         }
@@ -297,6 +300,7 @@ pub mod wire {
                 BrokerRefusal::TlsCertificate => "tlsCertificate",
                 BrokerRefusal::TlsHostname => "tlsHostname",
                 BrokerRefusal::TlsProtocol => "tlsProtocol",
+                BrokerRefusal::PeerRefused => "peerRefused",
             }
         }
     }
@@ -541,6 +545,7 @@ pub mod keybroker_exit {
     pub const PID_FILE: u8 = 103;
     pub const DECIDER_SIGNALED: u8 = 102;
     pub const DECIDER_LOST: u8 = 104;
+    pub const SOCK_DIR: u8 = 105;
 }
 
 pub mod decider_exit {
