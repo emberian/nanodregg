@@ -610,6 +610,11 @@ pub mod launch_exit {
     pub const LIFETIME: u8 = 125;
     pub const CONTROLLER_SIGNALED: u8 = 126;
     pub const CONTROLLER_LOST: u8 = 127;
+    pub const CONTROLLER_MECHANISM: u8 = 67;
+    pub const LAYOUT_MISSING: u8 = 68;
+    pub const ALL: &[u8] = &[
+        116, 117, 118, 119, 120, 121, 122, 123, 124, 125, 126, 127, 67, 68,
+    ];
 }
 
 pub mod controller_exit {
@@ -624,4 +629,9 @@ pub mod controller_exit {
     pub const UNENCODABLE: u8 = 113;
     pub const LIFETIME: u8 = 114;
     pub const IO: u8 = 115;
+    pub const ALL: &[u8] = &[0, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115];
 }
+
+/// The directories under `worlds/<label>` every plan hides (`Hosting.layoutHidden`,
+/// `Proofs.plan_hidden_layout`): grain-launch refuses to start without them.
+pub const LAYOUT_HIDDEN: &[&str] = &["store", "members"];

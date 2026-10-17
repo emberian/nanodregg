@@ -66,6 +66,12 @@ def grainDir (l : ByteArray) (g : Grain) : Path := worldRoot l ++ [lit "grains",
 def pkgDir (l : ByteArray) (g : Grain) : Path := grainDir l g ++ [lit "pkg"]
 def volDir (l : ByteArray) (g : Grain) : Path := grainDir l g ++ [lit "vol"]
 
+/-- The directories of a World's layout that every plan hides, by name inside `worlds/<l>`
+(`Proofs.plan_hidden_layout`: exactly a plan's `hidden`). grain-launch reads them (emitted as
+`LAYOUT_HIDDEN`) and refuses to start, `layoutMissing`, when one is absent: the sandbox refuses a
+missing hidden path at every launch (HOSTING-24). -/
+def layoutHidden : List ByteArray := [lit "store", lit "members"]
+
 /-- A resident's broker socket's name in its own directory of the broker root (HOSTING-17 §2). -/
 def brokerSock : ByteArray := lit "broker.sock"
 

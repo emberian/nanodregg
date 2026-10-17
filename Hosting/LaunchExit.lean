@@ -2,8 +2,9 @@
 # Hosting.LaunchExit — how grain-launch and its controller end, as data (OPS-3's ask, HOSTING-19)
 
 The grain-launch unit sees one code space, as keybroker's does (HOSTING-16): grain-launch's own ends
-(`LaunchExit`, 116 and up) and its controller's (`ControllerExit`, 0 and 106 and up), which grain-launch
-passes through when `hosting-controller` exits. Each code has the Host's `ExitClass`, so `Ops.Units`
+(`LaunchExit`, 116 to 127, then 67 and 68: the space below 128 is nearly spent) and its controller's
+(`ControllerExit`, 0 and 106 and up), which grain-launch passes through when `hosting-controller` exits,
+but only a code `ControllerExit` names (`controller_exit::ALL`); any other is `controllerMechanism`. Each code has the Host's `ExitClass`, so `Ops.Units`
 renders the unit's `RestartPreventExitStatus` from `codesOf .fatal` of both tables. grain-launch reads
 its codes only from the emitted `generated::launch_exit`.
 
@@ -92,23 +93,30 @@ inductive LaunchExit where
   | controllerSignaled
   /-- `wait` on the controller failed: nothing says a restart is safe -/
   | controllerLost
+  /-- the controller's process ended below 128 with a code `ControllerExit` does not name: the
+  controller never ran its own end (bwrap's setup, a missing program or library), so a restart
+  meets the same mechanism (HOSTING-23) -/
+  | controllerMechanism
+  /-- a directory the World's layout hides (`Plan.layoutHidden` under `worlds/<label>`) is absent:
+  the sandbox would refuse every launch `pathMissing` (HOSTING-24) -/
+  | layoutMissing
   deriving DecidableEq, Repr
 
 namespace LaunchExit
 
 def all : List LaunchExit :=
   [usage, rootsOverlap, controllerRefused, frame, badAction, badGrain, duplicateLaunch, reportPipe,
-   pidFile, lifetime, controllerSignaled, controllerLost]
+   pidFile, lifetime, controllerSignaled, controllerLost, controllerMechanism, layoutMissing]
 
 def code : LaunchExit → Nat
   | usage => 116 | rootsOverlap => 117 | controllerRefused => 118 | frame => 119 | badAction => 120
   | badGrain => 121 | duplicateLaunch => 122 | reportPipe => 123 | pidFile => 124 | lifetime => 125
-  | controllerSignaled => 126 | controllerLost => 127
+  | controllerSignaled => 126 | controllerLost => 127 | controllerMechanism => 67 | layoutMissing => 68
 
 def cls : LaunchExit → ExitClass
   | reportPipe | lifetime | controllerSignaled => .restart
   | usage | rootsOverlap | controllerRefused | frame | badAction | badGrain | duplicateLaunch | pidFile
-  | controllerLost => .fatal
+  | controllerLost | controllerMechanism | layoutMissing => .fatal
 
 /-- The name printed on stderr (`grain-launch: NAME …`). -/
 def name (e : LaunchExit) : String := ((toString (repr e)).splitOn ".").getLast!

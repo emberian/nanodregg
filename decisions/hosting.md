@@ -1337,3 +1337,78 @@ logs/hosting7-gplants.out, each red at the stop step).** (g) the controller igno
 non-running branch returns no verdict): `hang: the stop`. (h) grain-launch ignores the kill frame: `hang:
 the stop`.
 **Flag day.** None: a new row, and the harness moved into the shared test module.
+
+## HOSTING-23 Only a code the table names is passed through; any other is the mechanism's (HOSTING-7, 2026-10-18, OPS-3's burst5 find)
+
+**Decision.** keybroker passes its decider's exit code through only when Lean's `DeciderExit` names it
+(`decider_exit::ALL`). Any other code means the decider never ran its own end: bwrap failed to set up
+the sandbox, or the program or a library is missing. Then keybroker ends with the new KeybrokerExit row
+`deciderMechanism` (79, fatal), with the raw code on stderr. grain-launch does the same for its controller:
+a status below 128 that `ControllerExit` does not name (`controller_exit::ALL`) ends the new LaunchExit
+row `controllerMechanism` (67, fatal), and a status of 128 or more is still `controllerSignaled`. The
+membership lists come from one mechanism, as CODEC-7 required: `Emit.Rust.byteModule` now emits `pub
+const ALL: &[u8]` for every byte table, in `all` order, so no table exists without its list. The
+client's, launcher's and broker's generated files re-emit. Every table keeps its named distinctness and
+range theorems (`codes_nodup`, `codes_reserved` in Proofs.BrokerExit and Proofs.LaunchExit), and
+`codes_disjoint` places 67, 68 and 79 apart from every Host, nd-supervise, decider, keybroker and
+controller code.
+**Why.** burst5 run 1: the unit lacked AF_NETLINK, so bwrap died at sandbox setup and exited 1. keybroker
+passed the 1 through, and 1 is in no table, so systemd treated it as restartable and looped to the start
+limit. A code the table does not name is not a verdict; passing it through let the mechanism's failure
+masquerade as an unclassified decider end.
+**Alternatives.** (1) Classify unknown codes as restart: a broken mechanism loops, which is the bug.
+(2) Hand-written per-table code lists: two shapes that drift (CODEC-7). (3) Map unknown codes to the
+existing `deciderRefused` / `controllerRefused`: those name a refusal at spawn, which keybroker saw itself.
+A mechanism death after spawn is a different fact, and the operator's sentence differs.
+**CRITIQUE.** A decider bug that exits with an unnamed code (an uncaught Lean panic: 1) now reads as the
+mechanism's. That is fatal either way, and stderr carries the raw code, but the sentence points the
+operator at the mechanism first. The LaunchExit codes now leave the 116-127 block (it is full) for 67 and
+68, because the space below 128 is nearly spent. Free codes below 128 are now 7, 14, 15, 31, 44, 53-63, 69.
+**META-CRITIQUE.** HOSTING-16/19 wrote "the decider's code is passed through" as if every code the
+decider's PROCESS ends with were the decider's. The process is bwrap's before it is Lean's. The table
+said what Lean can end with; the pass-through assumed what the OS can.
+**Tests and plants (run).** broker.rs `a_decider_that_never_ran_its_own_end_stops_keybroker_by_name`:
+DECIDER = /usr/bin/false under the real nd-bwrap path ends `deciderMechanism 1`, exit 79. isolation.rs:
+CONTROLLER = /usr/bin/false ends `controllerMechanism 1`, exit 67. The pass-through of named codes keeps
+its regression tests (`store` 76 through keybroker; 106/107/109 through grain-launch). Plants (hbox
+logs/hosting7-rplants.py, output logs/hosting7-mplants.out, each red): m1 keybroker passes every u8 through;
+m2 grain-launch passes every code through.
+**Vacuity read (10-18, VACUITY-READER-H4): one REAL hole, fixed.** keybroker's first cut read every unnamed
+code as the mechanism's, including 128 + n. Under bwrap a status of 128 or more IS a signal death, so an
+OOM-killed decider (bwrap exits 137) would have ended `deciderMechanism`, fatal: one OOM kill would stop
+the unit for good, reversing `deciderSignaled`'s documented restart class. Fixed: a status of 128 or
+more is `deciderSignaled` (102) in keybroker, and `controllerSignaled` (126) BY NAME in grain-launch, whose
+stderr used to say `controllerEnded 137` while it exited 126. Tests: a decider and a controller that each
+SIGKILL themselves under the real nd-bwrap path end `deciderSignaled` (102) and `controllerSignaled` (126).
+This also exercises the `< 128` guard that HOSTING-19's read left review-guarded. Plants: m4, keybroker
+without the ≥128 branch, ends `deciderMechanism 137`, red; m5, grain-launch without it, prints
+`controllerEnded 137`, red. ALL versus the consts, plan_hidden_layout, and the report-pipe path: ACCEPT.
+
+## HOSTING-24 grain-launch refuses a missing layout directory at start (HOSTING-7, 2026-10-18, ROOT/OPS-3)
+
+**Decision.** `Hosting.layoutHidden` names the directories under `worlds/<label>` that every plan hides
+(`store`, `members`). `Proofs.plan_hidden_layout` proves it is exactly a plan's `hidden`
+(`p.hidden = layoutHidden.map (worldRoot l ++ [·])`), so a change to the plan's hidden list cannot leave
+it behind. `Emit.Hosting` emits it as `LAYOUT_HIDDEN`, computed from the Lean list, never as literals in
+Emit. grain-launch, after the roots check and before starting the controller, requires each
+`ROOT/worlds/LABEL/<name>` to be a directory. Otherwise it ends with the new LaunchExit row
+`layoutMissing` (68, fatal), naming the path. Before this, a missing `members` refused every launch
+`pathMissing` at resolve, and the controller counted each refusal as an exit until `crashLoop` (the
+resident row's first run measured it).
+**CRITIQUE.** grain-launch checks existence, not mode or ownership. The sandbox needs only existence to
+hide a path, and custody of `members` (0700 nd-hosted, RUNBOOK §2b) is the operator's. A directory removed
+after start still gives `pathMissing` at the next launch, so the start check narrows the window and does
+not close it. `worlds` itself is still a literal in grain-launch (the controller's Store path), as before.
+**META-CRITIQUE.** The alternative of making the controller check it was refused because the controller
+is confined to its Store and must never see `members`, which holds seeds. The check sits with the one
+process that may stat the layout and read nothing in it.
+**Tests and plants (run).** isolation.rs
+`a_missing_layout_or_a_controller_that_never_ran_stops_grain_launch_by_name`: for each LAYOUT_HIDDEN name,
+removed, grain-launch ends `layoutMissing <path>` (68) and the controller never starts. CONTROL: the
+emitted list holds `store` and `members`. Plants (each red): m3 the start check removed (the isolation
+test); Lean, `layoutHidden` without `members` (plan_hidden_layout fails, `rfl`).
+**Flag day (both).** KeybrokerExit gains 79, LaunchExit gains 67 and 68 (fatal), and the two units'
+RestartPreventExitStatus and EXITS.md gain them (Ops.Units arms carried cross-layer with OPS-3's
+sentences). Every `byteModule` table gains `ALL` (client/src/generated.rs, launcher/src/generated.rs,
+launcher/src/broker_generated.rs re-emitted, unedited; CODEC-7 agreed the Emit/Rust.lean and
+Emit/Hosting.lean edits). generated.rs gains LAYOUT_HIDDEN. Nothing persisted changes.

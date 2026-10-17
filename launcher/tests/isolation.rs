@@ -476,3 +476,84 @@ fn a_placed_executable_is_never_busy_under_concurrent_spawns() {
         "{busy} of {ROUNDS} execs were ETXTBSY ({spawned} concurrent spawns)"
     );
 }
+
+/// HOSTING-24: a directory Lean's plans hide (`LAYOUT_HIDDEN` under `worlds/<label>`) that is absent
+/// would refuse every launch `pathMissing` and crash-loop each grain; grain-launch ends
+/// `layoutMissing` (fatal), naming the directory, before it starts the controller. HOSTING-23: a
+/// controller process that ends below 128 with a code Lean's `ControllerExit` does not name (here
+/// `/usr/bin/false`, exit 1, under the real nd-bwrap path) ends grain-launch `controllerMechanism`
+/// (fatal), never a pass-through of an unnamed code.
+#[test]
+fn a_missing_layout_or_a_controller_that_never_ran_stops_grain_launch_by_name() {
+    use nanodregg_launcher::generated::{LAYOUT_HIDDEN, controller_exit};
+    let run = |t: &Tree, controller: &Path| {
+        let out = Command::new(env!("CARGO_BIN_EXE_grain-launch"))
+            .arg(&t.root)
+            .arg(&t.broker)
+            .arg("w1")
+            .arg(&t.pids)
+            .arg(controller)
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        (
+            String::from_utf8_lossy(&out.stderr).into_owned(),
+            out.status.code(),
+        )
+    };
+    assert!(
+        LAYOUT_HIDDEN.contains(&"members") && LAYOUT_HIDDEN.contains(&"store"),
+        "control: the layout hides the Store and the member workspaces: {LAYOUT_HIDDEN:?}"
+    );
+    for name in LAYOUT_HIDDEN {
+        let t = tree(&format!("layout-{name}"));
+        let gone = t.root.join("worlds/w1").join(name);
+        fs::remove_dir_all(&gone).unwrap();
+        let (err, code) = run(&t, &lean_bin("hosting-controller"));
+        assert!(
+            err.contains(&format!("grain-launch: layoutMissing {}", gone.display())),
+            "{name}: stderr: {err}"
+        );
+        assert!(
+            !err.contains("hosting-controller"),
+            "{name}: the controller started: {err}"
+        );
+        assert_eq!(
+            code,
+            Some(i32::from(launch_exit::LAYOUT_MISSING)),
+            "{name}: exit code"
+        );
+    }
+    // a controller KILLED by a signal (bwrap exits 128 + n) is controllerSignaled, restartable
+    let t = tree("killed");
+    let src = t.root.join("killself.src");
+    fs::write(&src, b"#!/bin/sh\nkill -9 $$\n").unwrap();
+    fs::set_permissions(&src, fs::Permissions::from_mode(0o700)).unwrap();
+    let killer = t.root.join("killself");
+    place_exe(&src, &killer);
+    let (err, code) = run(&t, &killer);
+    assert!(
+        err.contains("grain-launch: controllerSignaled"),
+        "killed: stderr: {err}"
+    );
+    assert_eq!(
+        code,
+        Some(i32::from(launch_exit::CONTROLLER_SIGNALED)),
+        "killed: exit code"
+    );
+    let t = tree("mechanism");
+    assert!(
+        !controller_exit::ALL.contains(&1),
+        "control: 1 is not a ControllerExit code"
+    );
+    let (err, code) = run(&t, Path::new("/usr/bin/false"));
+    assert!(
+        err.contains("grain-launch: controllerMechanism 1"),
+        "stderr: {err}"
+    );
+    assert_eq!(
+        code,
+        Some(i32::from(launch_exit::CONTROLLER_MECHANISM)),
+        "exit code"
+    );
+}

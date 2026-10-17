@@ -40,7 +40,9 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use nanodregg_launcher::broker_generated::wire::{Answer, BrokerRefusal, Request, Verdict};
-use nanodregg_launcher::broker_generated::{FRAME_MAX, keybroker_exit, read_frame, write_frame};
+use nanodregg_launcher::broker_generated::{
+    FRAME_MAX, decider_exit, keybroker_exit, read_frame, write_frame,
+};
 use nanodregg_launcher::grain_name_ok;
 use nanodregg_sandbox::custody::{self, Refused};
 use nanodregg_sandbox::{Policy, command};
@@ -75,6 +77,9 @@ enum End {
     DeciderRefused(String),
     /// the decider's exit code, or `None` for a signal
     DeciderEnded(Option<i32>),
+    /// the decider's process ended with a code `DeciderExit` does not name (`decider_exit::ALL`):
+    /// the mechanism's, not the decider's (HOSTING-23)
+    DeciderMechanism(i32),
     /// `wait` on the decider failed
     DeciderLost(String),
     Pid(String),
@@ -94,6 +99,7 @@ impl End {
             End::DeciderRefused(e) => format!("deciderRefused {e}"),
             End::DeciderEnded(Some(c)) => format!("deciderEnded {c}"),
             End::DeciderEnded(None) => "deciderSignaled".into(),
+            End::DeciderMechanism(c) => format!("deciderMechanism {c}"),
             End::DeciderLost(e) => format!("deciderLost {e}"),
             End::Pid(e) => format!("pidFile {e}"),
         }
@@ -111,9 +117,11 @@ fn main() -> ExitCode {
         End::SockDir(_) => keybroker_exit::SOCK_DIR,
         End::DeciderRefused(_) => keybroker_exit::DECIDER_REFUSED,
         End::Pid(_) => keybroker_exit::PID_FILE,
-        // the decider's own code, passed through; a code past u8 is not an exit status
-        End::DeciderEnded(Some(c)) => u8::try_from(c).unwrap_or(keybroker_exit::DECIDER_SIGNALED),
+        // the decider's own code, passed through (`run` made every other code DeciderMechanism or
+        // a signal, so every code here is one of DeciderExit's and fits u8)
+        End::DeciderEnded(Some(c)) => u8::try_from(c).unwrap_or(keybroker_exit::DECIDER_MECHANISM),
         End::DeciderEnded(None) => keybroker_exit::DECIDER_SIGNALED,
+        End::DeciderMechanism(_) => keybroker_exit::DECIDER_MECHANISM,
         End::DeciderLost(_) => keybroker_exit::DECIDER_LOST,
     })
 }
@@ -340,9 +348,22 @@ fn run() -> End {
     let status = child.wait();
     let _ = std::fs::remove_file(&pid_file);
     match status {
-        Ok(s) => End::DeciderEnded(s.code()),
+        // only a code Lean's DeciderExit names is the decider's own end. Under bwrap a status of
+        // 128 or more IS a signal death (the OOM killer: restartable, deciderSignaled); any other
+        // unnamed code is the mechanism's (bwrap's setup, a missing program), which a restart meets
+        // again (VACUITY-READER-H4 on HOSTING-23: 137 must not read as the mechanism)
+        Ok(s) => match s.code() {
+            Some(c) if c >= 128 => End::DeciderEnded(None),
+            Some(c) if !named_decider_code(c) => End::DeciderMechanism(c),
+            c => End::DeciderEnded(c),
+        },
         Err(e) => End::DeciderLost(e.to_string()),
     }
+}
+
+/// Is `c` a code of Lean's `DeciderExit` (emitted as `decider_exit::ALL`)?
+fn named_decider_code(c: i32) -> bool {
+    u8::try_from(c).is_ok_and(|c| decider_exit::ALL.contains(&c))
 }
 
 /// HOSTING-17's checks, before any socket opens. SOCKDIR passes `custody::check_shared_dir` (owned

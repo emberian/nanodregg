@@ -90,6 +90,7 @@ code space holds both tables: `host` (Host.Status, below 64) and nd-supervise's 
 | 102 | deciderSignaled | restart | restarted after 2 s; failed past 5 starts in 120 s | automatic; the decider was killed by a signal (OOM, an operator); a crash on every start stops at the start limit |
 | 104 | deciderLost | fatal | stopped (RestartPreventExitStatus) | keybroker could not read its decider's end: nothing says a restart is safe; read the journal, then start the unit |
 | 105 | sockDir | fatal | stopped (RestartPreventExitStatus) | the broker's socket directory fails its checks: /run/nd-broker must be nd:nd-hosted mode 02710 (tmpfiles), every directory above it owned by root, and each resident directory in it nd's, mode 02710 (HOSTING-17, RUNBOOK §2a) |
+| 79 | deciderMechanism | fatal | stopped (RestartPreventExitStatus) | the decider's sandbox or program failed before the decider ran (stderr names the raw code: bwrap, a missing library, the unit's RestrictAddressFamilies — it needs AF_NETLINK): fix the mechanism (deploy/live/README.md), then start the unit |
 
 ## hosting-broker (the decider, under keybroker)
 
@@ -122,6 +123,8 @@ code space holds both tables: `host` (Host.Status, below 64) and nd-supervise's 
 | 125 | lifetime | restart | restarted after 2 s; failed past 5 starts in 120 s | automatic: grain-launch's lifetime ended, a fresh one continues |
 | 126 | controllerSignaled | restart | restarted after 2 s; failed past 5 starts in 120 s | automatic; the controller was killed by a signal (OOM, an operator); a crash on every start stops at the start limit |
 | 127 | controllerLost | fatal | stopped (RestartPreventExitStatus) | grain-launch could not wait on its controller: nothing says a restart is safe; read the journal, then start the unit |
+| 67 | controllerMechanism | fatal | stopped (RestartPreventExitStatus) | the controller's sandbox or program failed before the controller ran (stderr names the raw code): fix the mechanism, then start the unit |
+| 68 | layoutMissing | fatal | stopped (RestartPreventExitStatus) | a directory the World's layout requires is absent (stderr names it, e.g. /srv/nd-hosted/worlds/LABEL/members): make it as nd-hosted 0700 (RUNBOOK §2b), then start the unit |
 
 ## hosting-controller (under grain-launch)
 

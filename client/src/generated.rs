@@ -18,11 +18,13 @@ pub mod host_op {
     pub const LOOKUP: u8 = 2;
     pub const READ: u8 = 3;
     pub const LOG: u8 = 4;
+    pub const ALL: &[u8] = &[1, 2, 3, 4];
 }
 
 pub mod follow_op {
     pub const COMMAND: u8 = 5;
     pub const RESUME: u8 = 6;
+    pub const ALL: &[u8] = &[5, 6];
 }
 
 pub mod status {
@@ -31,6 +33,7 @@ pub mod status {
     pub const UNCERTAIN: u8 = 2;
     pub const ABSENT: u8 = 3;
     pub const CLOSED: u8 = 4;
+    pub const ALL: &[u8] = &[0, 1, 2, 3, 4];
 }
 
 /// Why a connection was closed (Protocol.CloseReason); the `closed` frame's payload is `name()`.
@@ -140,12 +143,14 @@ pub mod step {
     pub const SUBMIT: u8 = 3;
     pub const PRECOMMIT: u8 = 4;
     pub const SIGN_NEXT: u8 = 5;
+    pub const ALL: &[u8] = &[0, 1, 2, 3, 4, 5];
 }
 
 pub mod supervisor_exit {
     pub const REFUSED_AT_LAUNCH: u8 = 64;
     pub const CHILD_UNROUTABLE: u8 = 65;
     pub const CHILD_SIGNALED: u8 = 66;
+    pub const ALL: &[u8] = &[64, 65, 66];
 }
 
 pub mod command_exit {
@@ -155,6 +160,7 @@ pub mod command_exit {
     pub const ABSENT: u8 = 50;
     pub const BEHIND: u8 = 51;
     pub const CLIENT: u8 = 52;
+    pub const ALL: &[u8] = &[0, 1, 2, 50, 51, 52];
 }
 
 /// The read envelope's signing domain (Protocol.domEnvelope): an observer custody signs only

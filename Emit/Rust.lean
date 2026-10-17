@@ -29,14 +29,6 @@ def ctorName {α : Type} [Repr α] (a : α) : String :=
   | c :: cs => String.ofList (c.toUpper :: cs)
   | [] => ""
 
-/-- One `pub const NAME: u8 = n;` line per value. -/
-def byteConsts {α : Type} [Repr α] (values : List α) (code : α → UInt8) : List String :=
-  values.map fun v => s!"    pub const {constName v}: u8 = {code v};"
-
-/-- A `pub mod` of byte constants. -/
-def byteModule {α : Type} [Repr α] (name : String) (values : List α) (code : α → UInt8) : String :=
-  String.intercalate "\n" ([s!"pub mod {name} \{"] ++ byteConsts values code ++ ["}"])
-
 /-- Greedy packing of `items` into lines of at most `width` characters, each `indent ++ a, b, …,`:
 rustfmt's layout for an array of short literals. -/
 def packLines (indent : String) (width : Nat) (items : List String) : List String :=
@@ -47,6 +39,25 @@ def packLines (indent : String) (width : Nat) (items : List String) : List Strin
     else if (close (it :: cur)).length ≤ width then (lines, it :: cur)
     else (close cur :: lines, [it])) ([], [])
   (if cur.isEmpty then lines else close cur :: lines).reverse
+
+/-- One `pub const NAME: u8 = n;` line per value. -/
+def byteConsts {α : Type} [Repr α] (values : List α) (code : α → UInt8) : List String :=
+  values.map fun v => s!"    pub const {constName v}: u8 = {code v};"
+
+/-- `pub const ALL: &[u8]`, every value's code in `values` order, laid out as rustfmt lays it out
+inside a module: a table's membership list, so a reader can tell a code the table names from one it
+does not (HOSTING-23; CODEC-7: one mechanism, so no table exists without its list). -/
+def byteAll {α : Type} (values : List α) (code : α → UInt8) : List String :=
+  let items := values.map fun v => toString (code v)
+  let head := "    pub const ALL: &[u8] = &["
+  let one := head ++ ", ".intercalate items ++ "];"
+  -- rustfmt keeps an array on one line only within its `array_width` (60) and the line width
+  if ("[" ++ ", ".intercalate items ++ "]").length ≤ 60 && one.length ≤ 100 then [one]
+  else [head] ++ packLines "        " 100 items ++ ["    ];"]
+
+/-- A `pub mod` of byte constants, and their membership list `ALL`. -/
+def byteModule {α : Type} [Repr α] (name : String) (values : List α) (code : α → UInt8) : String :=
+  String.intercalate "\n" ([s!"pub mod {name} \{"] ++ byteConsts values code ++ byteAll values code ++ ["}"])
 
 /-- A `pub const NAME: &[&str]` holding `ws`, laid out as rustfmt lays it out. -/
 def rustStrsConst (name : String) (ws : List String) : String :=

@@ -47,7 +47,7 @@ use std::process::Stdio;
 use std::time::{Duration, Instant};
 
 use common::*;
-use nanodregg_devtools::repo;
+use nanodregg_devtools::{lean_bin, repo};
 use nanodregg_launcher::broker_generated::read_frame;
 use nanodregg_launcher::broker_generated::wire::{Answer, BrokerRefusal};
 use rcgen::KeyPair;
@@ -263,7 +263,19 @@ fn ends_serving(
     store: &Path,
     peer: u32,
 ) -> (String, Option<i32>) {
-    let mut kb = argv(
+    ends_with(d, keys, anchors, store, peer, &lean_bin("hosting-broker"))
+}
+
+/// `ends_serving`, with `decider` for DECIDER.
+fn ends_with(
+    d: &Path,
+    keys: &Path,
+    anchors: &Path,
+    store: &Path,
+    peer: u32,
+    decider: &Path,
+) -> (String, Option<i32>) {
+    let mut kb = argv_with(
         keys,
         anchors,
         &fs::read_link(d.join("socks")).unwrap(),
@@ -273,6 +285,7 @@ fn ends_serving(
         "00",
         "01",
         &peer.to_string(),
+        decider,
     )
     .stderr(Stdio::piped())
     .spawn()
@@ -628,5 +641,67 @@ fn a_peer_of_another_uid_or_group_is_refused_by_name() {
     assert!(
         seen.lock().unwrap().is_empty(),
         "a refused peer reached the upstream"
+    );
+}
+
+/// HOSTING-23 (burst5: a unit without AF_NETLINK made bwrap fail before the decider ran, and the
+/// unnamed exit 1 was restarted to the start limit): a decider process that ends with a code Lean's
+/// `DeciderExit` does not name ends keybroker `deciderMechanism` (fatal) with the raw code on
+/// stderr, never a pass-through. The "decider" is `/usr/bin/false`, run under the real nd-bwrap
+/// path, as the unit runs it. CONTROL: the real decider's own `store` end (an empty STORE) is passed
+/// through with its own code (exposed_or_malformed_custody_files_stop_keybroker_by_name).
+#[test]
+fn a_decider_that_never_ran_its_own_end_stops_keybroker_by_name() {
+    use nanodregg_launcher::broker_generated::{decider_exit, keybroker_exit};
+    let d = dir("mech");
+    let keys = key_file(&d, 0o600);
+    let anchors = Pki::new().anchors(&d, 0o644);
+    let empty = d.join("empty-store");
+    nanodregg_devtools::mkdirs(&empty).unwrap();
+    assert!(
+        !decider_exit::ALL.contains(&1),
+        "control: 1 is not a DeciderExit code"
+    );
+    let (err, got) = ends_with(
+        &d,
+        &keys,
+        &anchors,
+        &empty,
+        me(&d).0,
+        Path::new("/usr/bin/false"),
+    );
+    assert!(
+        err.contains("keybroker: deciderMechanism 1"),
+        "stderr: {err}"
+    );
+    assert_eq!(
+        got,
+        Some(i32::from(keybroker_exit::DECIDER_MECHANISM)),
+        "exit code"
+    );
+}
+
+/// The other half of HOSTING-23 (VACUITY-READER-H4): a decider KILLED by a signal makes bwrap exit
+/// 128 + n, and that is `deciderSignaled` (102, restart: the OOM killer), never the mechanism's
+/// fatal 79. The "decider" is a script that SIGKILLs itself, under the real nd-bwrap path.
+#[test]
+fn a_decider_killed_by_a_signal_is_restarted_not_stopped() {
+    use nanodregg_launcher::broker_generated::keybroker_exit;
+    let d = dir("sig");
+    let keys = key_file(&d, 0o600);
+    let anchors = Pki::new().anchors(&d, 0o644);
+    let empty = d.join("empty-store");
+    nanodregg_devtools::mkdirs(&empty).unwrap();
+    let src = d.join("killself.src");
+    fs::write(&src, b"#!/bin/sh\nkill -9 $$\n").unwrap();
+    fs::set_permissions(&src, fs::Permissions::from_mode(0o700)).unwrap();
+    let decider = d.join("killself");
+    place_exe(&src, &decider);
+    let (err, got) = ends_with(&d, &keys, &anchors, &empty, me(&d).0, &decider);
+    assert!(err.contains("keybroker: deciderSignaled"), "stderr: {err}");
+    assert_eq!(
+        got,
+        Some(i32::from(keybroker_exit::DECIDER_SIGNALED)),
+        "exit code"
     );
 }

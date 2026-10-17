@@ -4,6 +4,8 @@
 An exit status is a verdict (law 7), read by the service manager. keybroker's unit sees one code
 space: keybroker's own ends (`KeybrokerExit`, 80 and up) and its decider's (`DeciderExit`, 70 and
 up), which keybroker passes through when `hosting-broker` exits, as nd-supervise passes the Host's.
+Only a code `DeciderExit` names is passed through (`decider_exit::ALL`); any other is the mechanism's
+(`deciderMechanism`, fatal).
 Each code has the Host's `ExitClass`: `done` (0 only), `restart` (a fresh start recovers) or `fatal`
 (a restart would refuse again, or the refusal needs the operator). So `Ops.Units` is to render the unit's (OPS-2's next step)
 `RestartPreventExitStatus` from `codesOf .fatal` of both tables and holds no list of its own.
@@ -98,6 +100,10 @@ inductive KeybrokerExit where
   | deciderSignaled
   /-- keybroker could not read its decider's end (`wait` failed): nothing says a restart is safe -/
   | deciderLost
+  /-- the decider's process ended with a code `DeciderExit` does not name: the decider never ran
+  its own end (bwrap failed to set up the sandbox, the program or a library is missing), so a
+  restart meets the same mechanism (HOSTING-23; burst5's AF_NETLINK) -/
+  | deciderMechanism
   deriving DecidableEq, Repr
 
 namespace KeybrokerExit
@@ -106,7 +112,7 @@ def all : List KeybrokerExit :=
   [usage, keyFileLink, keyFileNotRegular, keyFileOwner, keyFileMode, keyFileLength, keyFileDir,
    keyFileIo, keyFileFormat, anchorsLink, anchorsNotRegular, anchorsOwner, anchorsMode, anchorsLength,
    anchorsDir, anchorsMissing, anchorsIo, anchorsMalformed, tlsConfig, socket, deciderRefused, pidFile,
-   deciderSignaled, deciderLost, sockDir]
+   deciderSignaled, deciderLost, sockDir, deciderMechanism]
 
 def code : KeybrokerExit → Nat
   | usage => 80 | keyFileLink => 81 | keyFileNotRegular => 82 | keyFileOwner => 83 | keyFileMode => 84
@@ -114,7 +120,7 @@ def code : KeybrokerExit → Nat
   | anchorsLink => 89 | anchorsNotRegular => 90 | anchorsOwner => 91 | anchorsMode => 92
   | anchorsLength => 93 | anchorsDir => 94 | anchorsMissing => 95 | anchorsIo => 96
   | anchorsMalformed => 97 | tlsConfig => 98 | socket => 99 | deciderRefused => 100 | pidFile => 103
-  | deciderSignaled => 102 | deciderLost => 104 | sockDir => 105
+  | deciderSignaled => 102 | deciderLost => 104 | sockDir => 105 | deciderMechanism => 79
 
 /-- Every own end but a signalled decider is fatal: each is a file, an argument or the build, and
 a restart reads the same one. -/

@@ -466,7 +466,34 @@ pub fn argv(
     residents: &str,
     peer: &str,
 ) -> Command {
-    let decider = lean_bin("hosting-broker");
+    argv_with(
+        keys,
+        anchors,
+        socks,
+        pids,
+        up,
+        store,
+        operator,
+        residents,
+        peer,
+        &lean_bin("hosting-broker"),
+    )
+}
+
+/// `argv`, with `decider` for the unit's DECIDER.
+#[allow(clippy::too_many_arguments)]
+pub fn argv_with(
+    keys: &Path,
+    anchors: &Path,
+    socks: &Path,
+    pids: &Path,
+    up: &str,
+    store: &Path,
+    operator: &str,
+    residents: &str,
+    peer: &str,
+    decider: &Path,
+) -> Command {
     rendered(&[
         ("/etc/nd/keybroker/provider.key", keys.as_os_str()),
         ("/etc/nd/keybroker/anchors.pem", anchors.as_os_str()),

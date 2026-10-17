@@ -360,6 +360,7 @@ def keybrokerAction : KeybrokerExit → String
   | .pidFile => "the decider's PID file could not be written: check the runtime directory"
   | .deciderSignaled => "automatic; the decider was killed by a signal (OOM, an operator); a crash on every start stops at the start limit"
   | .deciderLost => "keybroker could not read its decider's end: nothing says a restart is safe; read the journal, then start the unit"
+  | .deciderMechanism => "the decider's sandbox or program failed before the decider ran (stderr names the raw code: bwrap, a missing library, the unit's RestrictAddressFamilies — it needs AF_NETLINK): fix the mechanism (deploy/live/README.md), then start the unit"
 
 /-- The codes the keybroker unit must not restart: both broker tables' fatal classes. -/
 def brokerPreventCodes : List Nat := DeciderExit.codesOf .fatal ++ KeybrokerExit.codesOf .fatal
@@ -536,6 +537,8 @@ def launchAction : LaunchExit → String
   | .lifetime => "automatic: grain-launch's lifetime ended, a fresh one continues"
   | .controllerSignaled => "automatic; the controller was killed by a signal (OOM, an operator); a crash on every start stops at the start limit"
   | .controllerLost => "grain-launch could not wait on its controller: nothing says a restart is safe; read the journal, then start the unit"
+  | .controllerMechanism => "the controller's sandbox or program failed before the controller ran (stderr names the raw code): fix the mechanism, then start the unit"
+  | .layoutMissing => "a directory the World's layout requires is absent (stderr names it, e.g. /srv/nd-hosted/worlds/LABEL/members): make it as nd-hosted 0700 (RUNBOOK §2b), then start the unit"
 
 /-- The codes the grain-launch unit must not restart: both launch tables' fatal classes. -/
 def launchPreventCodes : List Nat := ControllerExit.codesOf .fatal ++ LaunchExit.codesOf .fatal

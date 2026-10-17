@@ -21,7 +21,9 @@ use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::time::{Duration, Instant};
 
 use nanodregg_launcher::generated::wire::{Action, LaunchFailure, Report};
-use nanodregg_launcher::generated::{FrameError, launch_exit, read_frame, write_frame};
+use nanodregg_launcher::generated::{
+    FrameError, LAYOUT_HIDDEN, controller_exit, launch_exit, read_frame, write_frame,
+};
 use nanodregg_launcher::{PlanPaths, failure_of, grain_name_ok, policy, roots_disjoint, under};
 use nanodregg_sandbox::{Policy, command};
 
@@ -41,6 +43,11 @@ enum End {
     ControllerEnded(Option<i32>),
     /// `wait` on the controller failed
     ControllerLost(String),
+    /// the controller's process ended below 128 with a code `ControllerExit` does not name
+    /// (`controller_exit::ALL`): the mechanism's, not the controller's (HOSTING-23)
+    ControllerMechanism(i32),
+    /// a directory the World's layout hides is absent (`LAYOUT_HIDDEN`, HOSTING-24)
+    LayoutMissing(PathBuf),
     Frame(String),
     BadAction(String),
     BadGrain,
@@ -59,6 +66,8 @@ impl End {
             End::ControllerEnded(Some(c)) => format!("controllerEnded {c}"),
             End::ControllerEnded(None) => "controllerSignaled".into(),
             End::ControllerLost(e) => format!("controllerLost {e}"),
+            End::ControllerMechanism(c) => format!("controllerMechanism {c}"),
+            End::LayoutMissing(p) => format!("layoutMissing {}", p.display()),
             End::Frame(e) => format!("frame {e}"),
             End::BadAction(e) => format!("badAction {e}"),
             End::BadGrain => "badGrain".into(),
@@ -78,12 +87,15 @@ fn main() -> ExitCode {
         End::Usage => k::USAGE,
         End::RootsOverlap => k::ROOTS_OVERLAP,
         End::ControllerRefused(_) => k::CONTROLLER_REFUSED,
-        // the controller's own code, passed through (Lean's `ControllerExit`); under bwrap a status
-        // of 128 or more is a signal death, never a code
+        // the controller's own code, passed through (Lean's `ControllerExit`: `ended` made any other
+        // code below 128 ControllerMechanism); under bwrap a status of 128 or more is a signal
+        // death, never a code
         End::ControllerEnded(Some(c)) => match u8::try_from(c) {
             Ok(c) if c < 128 => c,
             _ => k::CONTROLLER_SIGNALED,
         },
+        End::ControllerMechanism(_) => k::CONTROLLER_MECHANISM,
+        End::LayoutMissing(_) => k::LAYOUT_MISSING,
         End::ControllerEnded(None) => k::CONTROLLER_SIGNALED,
         End::ControllerLost(_) => k::CONTROLLER_LOST,
         End::Frame(_) => k::FRAME,
@@ -305,6 +317,18 @@ impl Launcher {
     }
 }
 
+/// How the controller's process ended: its own code if Lean's `ControllerExit` names it; a signal
+/// (`None`, or under bwrap a status of 128 or more: the OOM killer); otherwise the mechanism's.
+fn ended(code: Option<i32>) -> End {
+    match code {
+        Some(c) if c >= 128 => End::ControllerEnded(None),
+        Some(c) if c < 128 && !u8::try_from(c).is_ok_and(|c| controller_exit::ALL.contains(&c)) => {
+            End::ControllerMechanism(c)
+        }
+        c => End::ControllerEnded(c),
+    }
+}
+
 fn run() -> End {
     let args: Vec<OsString> = std::env::args_os().skip(1).collect();
     let [root, broker, label, pids, controller, rest @ ..] = args.as_slice() else {
@@ -318,6 +342,13 @@ fn run() -> End {
     };
     if !roots_disjoint(&root, &broker) {
         return End::RootsOverlap;
+    }
+    // every directory Lean's plans hide must exist, or every launch would be refused pathMissing
+    for name in LAYOUT_HIDDEN {
+        let d = root.join("worlds").join(label).join(name);
+        if !d.is_dir() {
+            return End::LayoutMissing(d);
+        }
     }
     let store = root.join("worlds").join(label).join("store");
     let ctl = Policy {
@@ -355,7 +386,7 @@ fn run() -> End {
     drop(l);
     match end {
         End::ControllerEnded(None) => match ctl_child.wait() {
-            Ok(s) => End::ControllerEnded(s.code()),
+            Ok(s) => ended(s.code()),
             Err(e) => End::ControllerLost(e.to_string()),
         },
         // A report the controller could not take: it is most likely gone, and then ITS end names
@@ -365,7 +396,7 @@ fn run() -> End {
         End::ReportPipe(why) => {
             for _ in 0..REPORT_PIPE_WAIT_TICKS {
                 match ctl_child.try_wait() {
-                    Ok(Some(s)) => return End::ControllerEnded(s.code()),
+                    Ok(Some(s)) => return ended(s.code()),
                     Ok(None) => std::thread::sleep(TICK),
                     Err(e) => return End::ControllerLost(e.to_string()),
                 }

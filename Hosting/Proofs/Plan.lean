@@ -88,6 +88,14 @@ theorem plan_roles {l : ByteArray} {g : Grain} {p : Plan} (h : plan l g = .ok p)
     by_cases he : clean g.entry = true <;>
     simp_all [bind, Except.bind, pure, Except.pure]
 
+/-- **The layout's hidden directories are exactly a plan's `hidden`** (HOSTING-24, CODEC-7's
+condition): `layoutHidden`, which grain-launch checks at start, is the list every plan hides, so a
+change of the plan's hidden list cannot leave the start check behind. -/
+theorem plan_hidden_layout {l : ByteArray} {g : Grain} {p : Plan} (h : plan l g = .ok p) :
+    p.hidden = layoutHidden.map fun n => worldRoot l ++ [n] := by
+  obtain ⟨-, -, -, rfl⟩ := plan_roles h
+  rfl
+
 /-- **A grain connects only to its own broker socket** (HOSTING-17): an app's plan names no socket,
 and a resident's names exactly `<its id>/broker.sock`, so identity-is-the-socket holds of the plan:
 no plan names another grain's socket (`plan_connect_disjoint`). -/

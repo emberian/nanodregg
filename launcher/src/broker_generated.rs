@@ -546,6 +546,11 @@ pub mod keybroker_exit {
     pub const DECIDER_SIGNALED: u8 = 102;
     pub const DECIDER_LOST: u8 = 104;
     pub const SOCK_DIR: u8 = 105;
+    pub const DECIDER_MECHANISM: u8 = 79;
+    pub const ALL: &[u8] = &[
+        80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100, 103,
+        102, 104, 105, 79,
+    ];
 }
 
 pub mod decider_exit {
@@ -559,4 +564,5 @@ pub mod decider_exit {
     pub const STORE: u8 = 76;
     pub const BEHIND: u8 = 77;
     pub const IO: u8 = 78;
+    pub const ALL: &[u8] = &[0, 70, 71, 72, 73, 74, 75, 76, 77, 78];
 }
