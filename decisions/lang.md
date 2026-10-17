@@ -1175,3 +1175,24 @@ they are named. (2) The method run's extraction (`runMeasured`) gets the same co
 same lemmas. That it was "nearly a corollary" for four predecessors and was never written is the cost of
 an open list item that looks done.
 **Status.** built (this commit). Nothing re-ids: one new proof module and a docstring.
+
+## LANG-43 `Std.stepTo` refuses an ambiguous edge: every declared edge is the one its method takes (2026-10-17; LANG-5/6 leftover "duplicate machine edges", vacuity note)
+**Decision.** `StdRefusal.ambiguousEdge`. `stepTo` refuses when two resolved edges leave one state by one
+method index. `Lang.Proofs.Std.stepTo_ok` and `stepTo_takes_every_edge`: for a method `stepTo`
+generates, every declared edge `(x, i, y)` of its index is the edge its target lookup finds from `x`
+(`find_edge_of_nodup`, stated over `stepTarget`, the lookup `stepLaw` uses). Teeth (StdTeeth): `stepTo_refuses_ambiguous_edge`, and `first_edge_shadows` (the
+plant: without the check the lookup takes the first edge and the second declared edge is never taken).
+**Why.** `machineLaw` admits a move along ANY declared edge, and `stepLaw` takes the FIRST. With two edges
+`(a, m, b)`, `(a, m, c)`, the law admits `a → c` by `m`, a move no generated method makes. The second
+edge was silently dead and the law was looser than the program. The check sits in `stepTo`, not
+`machine`: a hand-written method may choose between two declared edges, and the law should then admit
+both, so `machine` stays as it was.
+**Alternatives.** Refusing in `machine`: that would forbid legitimate nondeterministic machines whose
+methods are hand-written. Making `stepLaw` take the last edge, or all edges: it would still be
+deterministic and would hide the same dead edge.
+**Critique.** (1) A package that pairs `machine` with hand-written methods is still not checked for
+law/method agreement; only generated methods are. (2) An exact duplicate edge is refused under the same
+name, though it was harmless. (3) The theorem is lookup-level (`stepTarget es i x = y`, the lookup `stepLaw` uses, factored out by name per the vacuity read), not run-level. The run-level fact is owed as cv 01a14b36-6da2-7a12-a70c-8b9837b63661.
+**Meta-critique.** It is a refusal added to a generator, a strengthening, so it is not a pause item.
+Hosting's lifecycle machine (`Hosting/Package.lean`) is deterministic, so its package bytes are unchanged.
+**Status.** built (this commit). Nothing re-ids: valid inputs produce the same terms.

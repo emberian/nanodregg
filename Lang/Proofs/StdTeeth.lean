@@ -230,6 +230,16 @@ theorem machine_refuses_too_many_edges :
     refusedBy .tooManyEdges (machine MS "phase" phases "installed" ["start"]
       ((List.range (edgesMax + 1)).map fun _ => ("installed", "start", "running"))) = true := by
   decide +kernel
+/-- Two edges leaving `installed` by `start` are refused `ambiguousEdge` by `stepTo` (LANG-43), and
+`machine` alone still accepts them (a hand-written method may choose between them). -/
+theorem stepTo_refuses_ambiguous_edge :
+    refusedBy .ambiguousEdge (stepTo MS "phase" phases ["start", "stop"] "start"
+      [("installed", "start", "running"), ("installed", "start", "stopped")]) = true := by
+  decide +kernel
+/-- The plant: without the check, the target lookup takes the first edge, and the second declared
+edge (`installed → stopped`) is never taken. -/
+theorem first_edge_shadows :
+    stepTarget [("installed", 0, "running"), ("installed", 0, "stopped")] 0 "installed" = "running" := by decide
 theorem machine_refuses_too_many_states :
     refusedBy .tooManyStates (machine MS "phase" ((List.range (Wire.rowMax + 1)).map Nat.repr) "0" ["start"] []) = true := by
   decide +kernel

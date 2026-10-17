@@ -89,6 +89,9 @@ inductive StdRefusal
   /-- a method that makes more calls than its calls row has slots (`Kernel.Bounds.callsMax`) -/
   | tooManyCalls
   | unknownMethod (method : Label)
+  /-- two edges leave one state by one method: `stepTo` takes the first, so the law would admit a
+  move along the second that no generated method makes -/
+  | ambiguousEdge
   deriving DecidableEq, Repr
 
 def StdRefusal.name : StdRefusal → String
@@ -97,6 +100,7 @@ def StdRefusal.name : StdRefusal → String
   | .tooManyEdges => "tooManyEdges" | .tooManyStates => "tooManyStates" | .zeroWidth => "zeroWidth"
   | .duplicateState => "duplicateState" | .unknownState _ => "unknownState"
   | .unknownMethod _ => "unknownMethod" | .tooManyCalls => "tooManyCalls"
+  | .ambiguousEdge => "ambiguousEdge"
 
 def need (c : Bool) (e : StdRefusal) : Except StdRefusal Unit := if c then .ok () else .error e
 
@@ -308,11 +312,15 @@ def machineLaw (S : Ty) (f : Label) (states : List Label) (initial : Label)
       andT (.prim .eq a.payload (natT m))
         (andT (isState states (a.oldF f) x) (isState states (a.newF f) y))), "no edge")])
 
+/-- The state method `m` moves `x` to: the first edge `(x, m, y)`'s `y`, or `x` when there is none. -/
+def stepTarget (edges : List (Label × Nat × Label)) (m : Nat) (x : Label) : Label :=
+  ((edges.find? fun (a, k, _) => a = x && k = m).map (·.2.2)).getD x
+
 /-- The method that takes edge `(old.f, m, _)`: every field of `S` kept, `f` set to the first such
-edge's target, or kept (then `machine` refuses). `S` must be a record type. -/
+edge's target (`stepTarget`), or kept (then `machine` refuses). `S` must be a record type. -/
 def stepLaw (S : Ty) (f : Label) (states : List Label) (m : Nat) (edges : List (Label × Nat × Label)) : Term :=
   let row := match S with | .record r => r | _ => []
-  let target (x : Label) : Label := ((edges.find? fun (a, k, _) => a = x && k = m).map (·.2.2)).getD x
+  let target := stepTarget edges m
   let next : Term := .case (.get (.var 2) f)
     ((Row.sort (states.map fun x => (x, ()))).map fun (x, _) => (x, .inj (stateTy states) (target x) (.record [])))
   .lam S (.lam (.record []) (.lam reqTy (resultT (callsT [])
@@ -352,13 +360,18 @@ def machine (S : Ty) (f : Label) (states : List Label) (initial : Label) (method
   need (states.contains initial) (.unknownState initial)
   pure (machineLaw S f states initial (← resolveEdges states methods edges))
 
-/-- The method `m` (a label among `methods`) of a machine: takes its edge. -/
+/-- The method `m` (a label among `methods`) of a machine: takes its edge. At most one edge may
+leave a state by one method (`ambiguousEdge`), so the edge it takes is the edge the law names
+(`Lang.Proofs.Std.stepTo_takes_every_edge`). -/
 def stepTo (S : Ty) (f : Label) (states : List Label) (methods : List Label) (m : Label)
     (edges : List (Label × Label × Label)) : Except StdRefusal Term := do
   need (decide states.Nodup) .duplicateState
   need (states.length ≤ Wire.rowMax) .tooManyStates
   match methodIndex methods m with
-  | some i => pure (stepLaw S f states i (← resolveEdges states methods edges))
+  | some i =>
+    let es ← resolveEdges states methods edges
+    need (decide (es.map fun (x, k, _) => (x, k)).Nodup) .ambiguousEdge
+    pure (stepLaw S f states i es)
   | none => throw (.unknownMethod m)
 
 /-! ## Packages -/

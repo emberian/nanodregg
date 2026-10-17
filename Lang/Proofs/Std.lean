@@ -1039,6 +1039,54 @@ theorem machine_ok {S : Ty} {f : Label} {states : List Label} {initial : Label} 
       rw [if_neg (by simpa using h2)] at h; cases h
   · rw [if_neg (by simpa using h1)] at h; cases h
 
+/-- What `stepTo` accepting its parameters guarantees: the method is `stepLaw` at the method's index
+over the resolved edges, and no two of them leave one state by one method. -/
+theorem stepTo_ok {S : Ty} {f : Label} {states methods : List Label} {m : Label}
+    {edges : List (Label × Label × Label)} {t : Term} (h : stepTo S f states methods m edges = .ok t) :
+    ∃ i es, methodIndex methods m = some i ∧ resolveEdges states methods edges = .ok es ∧
+      (es.map fun (x, k, _) => (x, k)).Nodup ∧ t = stepLaw S f states i es := by
+  unfold stepTo need at h
+  simp only [bind, Except.bind, pure, Except.pure] at h
+  repeat' split at h
+  all_goals first | (simp at h; done) | skip
+  rename_i i hi _ es hes _ _ hnd
+  refine ⟨i, es, hi, hes, ?_, (Except.ok.inj h).symm⟩
+  split at hnd
+  · exact of_decide_eq_true ‹_›
+  · cases hnd
+
+/-- With no two edges leaving a state by one method, the edge `stepLaw` looks up from state `x` by
+method `k` is THE declared edge: every declared edge is the one taken. -/
+theorem find_edge_of_nodup : ∀ {es : List (Label × Nat × Label)} {x y : Label} {k : Nat},
+    (es.map fun (a, j, _) => (a, j)).Nodup → (x, k, y) ∈ es →
+    es.find? (fun (a, j, _) => a = x && j = k) = some (x, k, y)
+  | [], _, _, _, _, h => by simp at h
+  | (a, j, b) :: es, x, y, k, hnd, h => by
+    simp only [List.map_cons, List.nodup_cons, List.mem_map] at hnd
+    simp only [List.mem_cons] at h
+    rcases h with h | h
+    · simp only [Prod.mk.injEq] at h
+      obtain ⟨rfl, rfl, rfl⟩ := h
+      simp
+    · have hne : ¬ (a = x ∧ j = k) := by
+        rintro ⟨rfl, rfl⟩
+        exact hnd.1 ⟨(a, j, y), h, rfl⟩
+      rw [List.find?_cons_of_neg (by simpa using hne)]
+      exact find_edge_of_nodup hnd.2 h
+
+/-- **`stepTo` takes every edge it declares** (LANG-43): for a method `stepTo` generates, every
+resolved edge `(x, i, y)` of its own method index is where its target lookup (`stepTarget`, the one
+`stepLaw` uses) moves `x`. So
+the machine law (`machineLaw`, which admits a move along any declared edge) and the generated method
+agree, and the law admits no move that the generated methods cannot make. -/
+theorem stepTo_takes_every_edge {S : Ty} {f : Label} {states methods : List Label} {m : Label}
+    {edges : List (Label × Label × Label)} {t : Term} (h : stepTo S f states methods m edges = .ok t) :
+    ∃ i es, methodIndex methods m = some i ∧ resolveEdges states methods edges = .ok es ∧
+      t = stepLaw S f states i es ∧
+      ∀ x y, (x, i, y) ∈ es → stepTarget es i x = y := by
+  obtain ⟨i, es, hi, hes, hnd, rfl⟩ := stepTo_ok h
+  exact ⟨i, es, hi, hes, rfl, fun x y hm => by simp [stepTarget, find_edge_of_nodup hnd hm]⟩
+
 theorem windowed_ok {S T : Ty} {W limit : Nat} {g : Label} {t : Term}
     (h : windowed S T W limit g = .ok t) : t = windowedLaw S T W limit g ∧ 0 < W := by
   unfold windowed need at h
