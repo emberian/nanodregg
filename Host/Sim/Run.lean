@@ -101,6 +101,13 @@ def reopen (bytes : ByteArray) : Log.Recovered × Option (World Nat) :=
   let turns := r.records.mapM decodeRecord
   (r, turns.bind fun ts => (World.fold env genesis ts.flatten).toOption)
 
+/-- `a / b` to three decimals, as standing's waste gate reads it (`b = 0` prints the numerator). -/
+def ratio (a b : Nat) : String :=
+  if b = 0 then toString a else
+  let m := (a * 1000 + b / 2) / b
+  let frac := toString (m % 1000)
+  s!"{m / 1000}.{"".pushn '0' (3 - frac.length)}{frac}"
+
 def check (name : String) (ok : Bool) (failures : IO.Ref Nat) : IO Unit := do
   if ok then IO.println s!"PASS {name}" else
     IO.println s!"FAIL {name}"; failures.modify (· + 1)
@@ -126,6 +133,13 @@ def run (args : List String) : IO UInt32 := do
     (match folded with
      | some w => w.height = r.world.height ∧ w.chain = r.world.chain
      | none => false) failures
+  -- waste (law 5): work done ÷ work the operation must do
+  let admittedBytes := (match folded with
+    | some _ => (rec.records.mapM decodeRecord).getD [] |>.flatten.foldl (fun n t => n + (turnBytes t).size) 0
+    | none => 0)
+  IO.println s!"WASTE submit bytes-per-turn {ratio r.disk.synced.size admittedBytes}"
+  IO.println s!"WASTE submit fsyncs-per-batch {ratio r.disk.syncs rec.records.length}"
+  IO.println s!"WASTE open bytes-read-per-record {ratio r.disk.synced.size rec.validLen}"
   let r2 ← runOnce (seed + 7919) frames none
   IO.println s!"second split: {r2.disk.syncs} batches"
   check "a different batch split reaches the same chain" (r2.world.chain = r.world.chain) failures

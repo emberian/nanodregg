@@ -1,1 +1,4 @@
 # op	metric	ceiling	measured	source  (ceilings only fall; see gates/waste.py)
+submit	bytes-per-turn	1.448	1.448	host-sim seeds 1-3 (max seed 3): log bytes ÷ admitted turn bytes; the excess is one frame (u32 len + 32-byte tag) + an 8-byte count per batch
+submit	fsyncs-per-batch	1.000	1.000	host-sim seeds 1-3: syncs ÷ batch records recovered (group commit: one per batch, none for a batch that staged nothing)
+open	bytes-read-per-record	1.000	1.000	host-sim seeds 1-3: bytes recover read ÷ verified frame bytes (whole-image recover; moves when Host.Open reads base + deltas)
