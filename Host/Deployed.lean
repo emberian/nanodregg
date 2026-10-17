@@ -51,9 +51,11 @@ def tailStep : World D → ByteArray → Except (Record.Fault (Reject D)) (World
 /-- The loop's batch bounds: a record's Turns, and a megabyte of request payload. -/
 def limits : Limits := ⟨recordTurnsMax, 1 <<< 20⟩
 
-/-- A deferred reply from the Store's files: a `log` page from the segment, a `read` page from the
-newest base (opened per page: the base is replaced, never written in place). -/
-def pager (keys : Keys) (dir : System.FilePath) (seg : File) (r : Resident (World D)) :
+/-- A deferred reply from the Store's files: a `log` page from the segment, located through
+`index.log` (`idx`: every entry it reads is checked at its position, `Page.entryAt`) and the
+loop's entries since the base, and a `read` page from the newest base (opened per page: the base
+is replaced, never written in place). -/
+def pager (keys : Keys) (dir : System.FilePath) (seg idx : File) (r : Resident (World D)) :
     Deferred → IO (UInt8 × ByteArray)
   | .read start => do
     let base ← File.open (basePath dir) .read
@@ -62,8 +64,10 @@ def pager (keys : Keys) (dir : System.FilePath) (seg : File) (r : Resident (Worl
     | .ok b => return (Protocol.Status.ok.code, b)
   | .log start => do
   match ← Page.build X.env Codec.Deployed.digestCodec X.digestOf keys.segment c.recordBytesMax
-      Page.budget (fun off len => seg.readAt off.toUInt64 len.toUSize) r.index (recorder.mark r.world)
-      start with
+      Page.budget (fun off len => seg.readAt off.toUInt64 len.toUSize)
+      (Page.entryAt (keys.forStore (originChain r.world)) (fun off len => idx.readAt off.toUInt64 len.toUSize)
+        r.sealed.index.count r.index)
+      (r.sealed.index.count + r.index.size) r.pos.offset (recorder.mark r.world) start with
   | .error f => return named f.name
   | .ok a => match Page.bytes a r.world.height with
     | .ok b => return (Protocol.Status.ok.code, b)

@@ -34,6 +34,7 @@ import Host.Record
 import Kernel.Proofs.Origin
 import Kernel.Proofs.RootedFold
 import Codec.Proofs.Raw
+import Host.Proofs.Index
 
 namespace Nanodregg.Host
 
@@ -82,10 +83,11 @@ theorem tailRead_ok {c : Cadence} {baseBytes offset size n : Nat}
 /-- The one open reads a base file of at most one base frame, and asks its readers for EXACTLY
 three ranges, in order: of the segment `[base offset - 32, size)`, the base's tag on disk and the
 tail after it, the tail at most `tailMax` long; then `[0, originLen offset)`, the origin frame
-(HOST-25); then of `index.log` `[0, indexOffset)`, the prefix the base names, at most
-`worldBytesMax` and within the file (HOST-30). The position it opens to lies in the tail, and the
-orphan bytes it reports are exactly the file's bytes past the named prefix, so the writer's
-truncation to that prefix (`openWriter`) never drops a byte of a page the base names. Stated over
+(HOST-25); then of `index.log` the ONE entry the base names last (`lastAt`: `entryBytes` bytes,
+none at count 0), with the count at most `indexMax` and every counted entry within the file
+(HOST-33: open reads one entry, not the index). The position it opens to lies in the tail, and
+the orphan bytes it reports are exactly the file's bytes past the counted entries, so the writer's
+truncation (`openWriter`) never drops a byte of an entry the base counts. Stated over
 readers that record every range they are asked for (in one log) and answer with arbitrary bytes
 `answer off len` / `answerI off len`, of any length (a short read is `openWith`'s to refuse). -/
 theorem openWith_reads {W F : Type} (keys : Keys) (c : Cadence) (world : Codec.Stream W)
@@ -96,11 +98,12 @@ theorem openWith_reads {W F : Type} (keys : Keys) (c : Cadence) (world : Codec.S
       (fun off len => modifyGet fun l => (.ok (answer off len), l ++ [(off, len)]))).run [] = (.ok o, log)) :
     file.size ≤ Log.frameMax c.baseRecordMax ∧ Log.tagBytes ≤ o.sealed.offset ∧
     ∃ len, log = [(o.sealed.offset - Log.tagBytes, Log.tagBytes + len), (0, originLen o.sealed.offset),
-        (0, o.sealed.index.offset)] ∧
+        lastAt keys o.sealed.index.count] ∧
       o.sealed.offset + len = size ∧
       len ≤ c.tailMax o.sealed.bytes ∧
       o.sealed.offset ≤ o.pos.offset ∧ o.pos.offset ≤ o.sealed.offset + len ∧
-      o.sealed.index.offset ≤ c.worldBytesMax ∧ o.sealed.index.offset + o.orphan = indexSize := by
+      o.sealed.index.count ≤ indexMax ∧
+      o.sealed.index.count * entryBytes keys + o.orphan = indexSize := by
   simp only [openWith] at h
   split at h
   · simp only [StateT.run, StateT.pure, pure] at h; injection h with h1; cases h1
@@ -132,24 +135,26 @@ theorem openWith_reads {W F : Type} (keys : Keys) (c : Cadence) (world : Codec.S
               | none =>
               rw [hof] at h
               simp only at h
-              by_cases hw : c.worldBytesMax < b.indexOffset
+              by_cases hw : indexMax < b.indexCount
               · rw [if_pos hw] at h; simp only [StateT.pure, pure] at h; injection h with h1; cases h1
               rw [if_neg hw] at h
-              by_cases hi : indexSize < b.indexOffset
+              by_cases hi : indexSize < b.indexCount * entryBytes keys
               · rw [if_pos hi] at h; simp only [StateT.pure, pure] at h; injection h with h1; cases h1
               rw [if_neg hi] at h
               simp only [bind, StateT.bind, StateT.modifyGet] at h
-              by_cases hq2 : (answerI 0 b.indexOffset).size ≠ b.indexOffset
+              by_cases hq2 : (answerI (lastAt keys b.indexCount).1 (lastAt keys b.indexCount).2).size ≠
+                  (lastAt keys b.indexCount).2
               · rw [if_pos hq2] at h
                 simp only [StateT.pure, pure] at h; injection h with h1; cases h1
               rw [if_neg hq2] at h
-              cases hix : indexEntries keys.index c b.indexTag (answerI 0 b.indexOffset) with
-              | error e => rw [hix] at h; simp only [StateT.pure, pure] at h; injection h with h1; cases h1
-              | ok entries =>
+              cases hix : indexNamed (keys.forStore (origin b.world)) b.indexCount b.indexLast
+                  (answerI (lastAt keys b.indexCount).1 (lastAt keys b.indexCount).2) with
+              | some e => rw [hix] at h; simp only [StateT.pure, pure] at h; injection h with h1; cases h1
+              | none =>
               rw [hix] at h
               simp only at h
               generalize hop : openLog keys.segment c.recordBytesMax (indexed mark step)
-                (b.world, entries, b.offset) b.tag.bytes
+                (b.world, #[], b.offset) b.tag.bytes
                 ((answer (b.offset - Log.tagBytes) (Log.tagBytes + len)).extract Log.tagBytes
                   (answer (b.offset - Log.tagBytes) (Log.tagBytes + len)).size) = res at h
               cases res with
@@ -166,8 +171,8 @@ theorem openWith_reads {W F : Type} (keys : Keys) (c : Cadence) (world : Codec.S
                   have hsz' : (answer (b.offset - Log.tagBytes) (Log.tagBytes + len)).size = Log.tagBytes + len := by
                     simpa using hsz
                   refine ⟨by omega, show Log.tagBytes ≤ b.offset by omega, len, by simp, hs, hle,
-                    Nat.le_add_right _ _, ?_, show b.indexOffset ≤ c.worldBytesMax by omega,
-                    show b.indexOffset + (indexSize - b.indexOffset) = indexSize by omega⟩
+                    Nat.le_add_right _ _, ?_, show b.indexCount ≤ indexMax by omega,
+                    show b.indexCount * entryBytes keys + (indexSize - b.indexCount * entryBytes keys) = indexSize by omega⟩
                   show b.offset + op.validLen ≤ b.offset + len
                   simp only [ByteArray.size_extract, hsz'] at hv
                   omega
@@ -272,43 +277,7 @@ theorem read_shapeMismatch {W : Type} (keys : Keys) (c : Cadence) (world : Codec
     ne_eq, not_true_eq_false]
   rw [if_pos hs]
 
-/-! ## The index file (HOST-30) -/
-
-/-- The fold of page decodes over pages that each decode to themselves is their concatenation. -/
-theorem indexFold_pages (ps : List (List Entry)) (acc : Array Entry)
-    (hdec : ∀ p ∈ ps, Entry.page.decode (Entry.page.bytes p) = .ok p) :
-    (ps.map Entry.page.bytes).foldlM (fun acc r => match Entry.page.decode r with
-      | .ok es => .ok (acc ++ es.toArray)
-      | .error _ => (.error .indexCorrupt : Except BaseFault (Array Entry))) acc =
-      (Except.ok (acc ++ ps.flatten.toArray) : Except BaseFault (Array Entry)) := by
-  induction ps generalizing acc with
-  | nil => simp [pure, Except.pure]
-  | cons p ps ih =>
-    simp only [List.map_cons, List.foldlM_cons, List.mem_cons] at hdec ⊢
-    rw [hdec p (Or.inl rfl)]
-    simp only [bind, Except.bind]
-    rw [ih (acc ++ p.toArray) (fun q hq => hdec q (Or.inr hq))]
-    simp [Array.append_assoc]
-
-theorem Entry.fits_iff (e : Entry) :
-    e.fits = true ↔ e.height < 2 ^ 64 ∧ e.offset < 2 ^ 64 ∧ e.chain.size ≤ chainBytesMax := by
-  simp [Entry.fits, Bool.and_eq_true, decide_eq_true_eq, and_assoc]
-
-/-- `Entry.codec` reads back every entry it can spell (`Entry.fits`). -/
-theorem Entry.codec_lawfulOn : Codec.Stream.LawfulOn (fun e => e.fits = true) Entry.codec := by
-  have h := Codec.Stream.refine_lawfulOn
-    (Codec.Stream.product_lawfulOn Codec.Stream.nat64_lawfulOn
-      (Codec.Stream.product_lawfulOn Codec.Stream.nat64_lawfulOn
-        (Codec.Stream.rawBytes_lawfulOn chainBytesMax (by decide))))
-    "host/entry" (accept := fun (h, o, c) => some (⟨h, o, c⟩ : Entry))
-    (back := fun e => (e.height, e.offset, e.chain))
-    (fun _ _ => rfl) (fun x y hxy => by obtain ⟨a, b, c⟩ := x; cases hxy; rfl)
-  exact h.mono (fun e hv => (Entry.fits_iff e).mpr hv) (fun e hv => (Entry.fits_iff e).mp hv)
-
-/-- A page reads back every list of at most `indexMax` fit entries. -/
-theorem Entry.page_lawfulOn :
-    Codec.Stream.LawfulOn (fun l => l.length ≤ indexMax ∧ ∀ e ∈ l, e.fits = true) Entry.page :=
-  Codec.Stream.rawList_lawfulOn Entry.codec_lawfulOn indexMax (by decide)
+/-! ## The base codec -/
 
 /-- The base record's codec reads back every base whose World its World codec reads back (`P`)
 and whose two u64 fields are below 2^64; the two tags are digests, read back whole. Generic in
@@ -317,171 +286,16 @@ the deployed base gets no `LawfulOn` instance from this; what open relies on the
 `Base.read_decode` over `Codec.Deployed.world_decode_canon`. -/
 theorem Base.codec_lawfulOn {W : Type} {P : W → Prop} {world : Codec.Stream W}
     (hw : Codec.Stream.LawfulOn P world) :
-    Codec.Stream.LawfulOn (fun b : Base W => P b.world ∧ b.offset < 2 ^ 64 ∧ b.indexOffset < 2 ^ 64)
+    Codec.Stream.LawfulOn (fun b : Base W => P b.world ∧ b.offset < 2 ^ 64 ∧ b.indexCount < 2 ^ 64)
       (Base.codec world) := by
   have h := Codec.Stream.refine_lawfulOn
     (Codec.Stream.product_lawfulOn hw (Codec.Stream.product_lawfulOn Codec.Stream.nat64_lawfulOn
       (Codec.Stream.product_lawfulOn Codec.Stream.digest_lawful.on
         (Codec.Stream.product_lawfulOn Codec.Stream.nat64_lawfulOn Codec.Stream.digest_lawful.on))))
-    "host/base" (accept := fun (w, o, t, io, it) => some (⟨w, o, t, io, it⟩ : Base W))
-    (back := fun b => (b.world, b.offset, b.tag, b.indexOffset, b.indexTag))
+    "host/base/index-count" (accept := fun (w, o, t, io, it) => some (⟨w, o, t, io, it⟩ : Base W))
+    (back := fun b => (b.world, b.offset, b.tag, b.indexCount, b.indexLast))
     (fun _ _ => rfl) (fun x y hxy => by obtain ⟨a, b, c, d, e⟩ := x; cases hxy; rfl)
   exact h.mono (fun _ hv => ⟨hv.1, hv.2.1, hv.2.2.2.1⟩) (fun _ hv => ⟨hv.1, hv.2.1, trivial, hv.2.2, trivial⟩)
-
-/-- The pages of an `index.log` read back: an `encodeAll` of page encodings, each a list of at
-most `indexMax` fit entries (`Entry.fits`, what `Base.page` checks) whose frame fits, reads back
-under the tag its last page chains to as every entry of every page in order (the round trip is
-`Entry.page_lawfulOn`, not a premise). `indexEntries_pages` states it over the bytes successive
-seals write. -/
-theorem indexEntries_encodeAll (s : Sealer) (c : Cadence) (ps : List (List Entry)) (t : Codec.Digest)
-    (hfit : ∀ p ∈ ps, (Entry.page.bytes p).size ≤ c.worldBytesMax ∧ (Entry.page.bytes p).size < 2 ^ 32)
-    (hfits : ∀ p ∈ ps, p.length ≤ indexMax ∧ ∀ e ∈ p, e.fits = true)
-    (ht : t.bytes = lastTag s indexInitial (ps.map Entry.page.bytes)) :
-    indexEntries s c t (encodeAll s indexInitial (ps.map Entry.page.bytes)) = .ok ps.flatten.toArray := by
-  unfold indexEntries
-  rw [recover_encodeAll s indexInitial _ (by
-    intro r hr; obtain ⟨p, hp, rfl⟩ := List.mem_map.mp hr; exact hfit p hp)]
-  simp only [ne_eq, not_true_eq_false, false_or, ht, if_false]
-  have h := indexFold_pages ps #[] (fun p hp => Entry.page_lawfulOn.decode_bytes (hfits p hp))
-  rw [Array.empty_append] at h
-  exact h
-
-/-- What `Base.page` returns: nothing for no entries; otherwise the entries are fit and at most
-`indexMax`, the page's frame ends within `worldBytesMax`, and the page is the one frame of their
-encoding at `at_`, with the position after it. -/
-theorem page_ok {keys : Keys} {c : Cadence} {at_ : Position} {es : Array Entry} {page : ByteArray}
-    {at' : Position} (h : Base.page keys c at_ es = .ok (page, at')) :
-    (es.toList = [] ∧ page = ByteArray.empty ∧ at' = at_) ∨
-    (es.toList ≠ [] ∧ es.toList.length ≤ indexMax ∧ (∀ e ∈ es.toList, e.fits = true) ∧
-      at_.offset + Log.frameMax (Entry.page.bytes es.toList).size ≤ c.worldBytesMax ∧
-      page = frame keys.index at_.tag.bytes (Entry.page.bytes es.toList) ∧
-      at' = ⟨at_.offset + Log.frameMax (Entry.page.bytes es.toList).size,
-        tagDigest keys.index (at_.tag.bytes ++ Entry.page.bytes es.toList)⟩) := by
-  unfold Base.page at h
-  split at h
-  · rename_i he
-    cases h
-    exact Or.inl ⟨by simpa using he, rfl, rfl⟩
-  · rename_i he
-    split at h
-    · cases h
-    · rename_i hn
-      rw [List.findIdx?_eq_none_iff] at hn
-      dsimp only at h
-      split at h
-      · cases h
-      · rename_i hb
-        cases h
-        rw [Entry.page_lawfulOn.size_eq] at hb
-        refine Or.inr ⟨by simpa using he, by simp only [Array.length_toList]; simp at hb; omega, fun e he' => ?_, by simp at hb; omega,
-          rfl, rfl⟩
-        simpa using hn e he'
-
-/-- **The tooth of `page_ok`'s fit**: a page holding an entry outside the codec's domain is
-refused `entryUnfit` at the first such entry, before anything is encoded. -/
-theorem page_entryUnfit (keys : Keys) (c : Cadence) (at_ : Position) (es : Array Entry) (i : Nat)
-    (he : es.isEmpty = false) (hi : es.toList.findIdx? (fun e => !e.fits) = some i) :
-    Base.page keys c at_ es = .error (.entryUnfit i) := by
-  unfold Base.page
-  rw [if_neg (by simp [he]), hi]
-
-/-- The pages successive seals append are the frames of the non-empty seals' page encodings,
-chained from `at_`, each a list of at most `indexMax` fit entries whose frame fits
-`worldBytesMax`; together they hold every entry handed to the seals, in order. -/
-theorem pages_encodeAll (keys : Keys) (c : Cadence) :
-    ∀ (ess : List (Array Entry)) (at_ : Position) {bytes : ByteArray} {pos : Position},
-    Base.pages keys c at_ ess = .ok (bytes, pos) →
-    ∃ ps : List (List Entry), ps.flatten = (ess.map Array.toList).flatten ∧
-      (∀ p ∈ ps, (p.length ≤ indexMax ∧ ∀ e ∈ p, e.fits = true) ∧ (Entry.page.bytes p).size ≤ c.worldBytesMax) ∧
-      bytes = encodeAll keys.index at_.tag.bytes (ps.map Entry.page.bytes) ∧
-      pos.tag.bytes = lastTag keys.index at_.tag.bytes (ps.map Entry.page.bytes) ∧
-      pos.offset = at_.offset + bytes.size
-  | [], at_, bytes, pos, h => by
-    simp only [Base.pages, Except.ok.injEq, Prod.mk.injEq] at h
-    obtain ⟨rfl, rfl⟩ := h
-    exact ⟨[], rfl, by simp, rfl, rfl, by simp⟩
-  | es :: ess, at_, bytes, pos, h => by
-    simp only [Base.pages] at h
-    split at h
-    · cases h
-    · rename_i p at' hp
-      split at h
-      · cases h
-      · rename_i ps at'' hps
-        cases h
-        obtain ⟨qs, hflat, hfit, hb, ht, ho⟩ := pages_encodeAll keys c ess at' hps
-        rcases page_ok hp with ⟨he, rfl, rfl⟩ | ⟨hne, hlen, hfits, hw, rfl, rfl⟩
-        · refine ⟨qs, by simp [he, hflat], hfit, by simpa using hb, ht, by simpa using ho⟩
-        · refine ⟨es.toList :: qs, by simp [hflat], ?_, ?_, ht, ?_⟩
-          · intro q hq
-            rcases List.mem_cons.mp hq with rfl | hq
-            · exact ⟨⟨hlen, hfits⟩, by unfold Log.frameMax at hw; omega⟩
-            · exact hfit q hq
-          · rw [hb]; rfl
-          · rw [ho]
-            simp only [ByteArray.size_append, size_frame, Log.frameMax]
-            omega
-
-/-- **No page the seals wrote is lost (HOST-30, discharged in HOST-31).** The `index.log` a
-sequence of seals writes from an empty file (`Base.pages` from `indexStart`, one `Base.page` per
-seal) reads back, under the tag it ends at, as
-every entry handed to every seal, in order; and the position it ends at is the file's size. The
-codec round trip is not a premise: `Base.page` refuses an unfit entry (`entryUnfit`), so every
-page decodes to itself (`Entry.page_lawfulOn`). The one premise is that `worldBytesMax` is below
-a frame's u32 length field (`Deployed.indexEntries_pages` discharges it).
-That `Base.pages` is what the loop's seals append is two facts. Each seal appends its own page
-where it is framed (`seal_at_end`, with `indexMoved` refusing otherwise). Seal k+1 is framed at
-seal k's returned position: `spawnSeal` passes `sealed.index` and `settle` stores the returned one,
-with at most one seal pending. The second fact is read off Host/Loop.lean (IO), not proved. -/
-theorem indexEntries_pages (keys : Keys) (c : Cadence) (hc : c.worldBytesMax < 2 ^ 32)
-    (ess : List (Array Entry)) {bytes : ByteArray} {pos : Position}
-    (h : Base.pages keys c indexStart ess = .ok (bytes, pos)) :
-    indexEntries keys.index c pos.tag bytes = .ok (ess.map Array.toList).flatten.toArray ∧
-      pos.offset = bytes.size := by
-  obtain ⟨ps, hflat, hfit, hb, ht, ho⟩ := pages_encodeAll keys c ess indexStart h
-  refine ⟨?_, by simpa [indexStart] using ho⟩
-  rw [← hflat, hb]
-  exact indexEntries_encodeAll keys.index c ps pos.tag
-    (fun p hp => ⟨(hfit p hp).2, by have := (hfit p hp).2; omega⟩)
-    (fun p hp => (hfit p hp).1) ht
-
-/-- **A seal appends at the end of `index.log` (HOST-31).** A seal that succeeds was handed an
-`index.log` of exactly `ipos.offset` bytes (the prefix the newest base names), its page is
-`Base.page`'s at `ipos`, and the position the new base names is the file's size after the page
-is appended. So the file a checkpoint appends to stays `Base.pages` from `indexStart`, seal after
-seal, and `indexEntries_pages` reads it back. What is not stated: that `File.writeAll` appends
-exactly its bytes at the end (the FFI's contract, `Host/c/file.c`). -/
-theorem seal_at_end {W : Type} (keys : Keys) (c : Cadence) (world : Codec.Stream W) (w : W)
-    (seg ipos : Position) (entries : Array Entry) (indexSize : Nat)
-    {page file : ByteArray} {ipos' : Position}
-    (h : Base.seal keys c world w seg ipos entries indexSize = .ok (page, ipos', file)) :
-    indexSize = ipos.offset ∧ Base.page keys c ipos entries = .ok (page, ipos') ∧
-      ipos'.offset = indexSize + page.size := by
-  unfold Base.seal at h
-  split at h
-  · cases h
-  · rename_i hsz
-    split at h
-    · cases h
-    · split at h
-      · cases h
-      · rename_i page' ip hp
-        split at h
-        · cases h
-        · cases h
-          have hi : indexSize = ipos.offset := by simpa using hsz
-          refine ⟨hi, hp, ?_⟩
-          rcases page_ok hp with ⟨_, rfl, rfl⟩ | ⟨_, _, _, _, rfl, rfl⟩
-          · simp [hi]
-          · simp only [size_frame, hi]; unfold Log.frameMax; omega
-
-/-- **The tooth of `seal_at_end`**: an `index.log` of any other size than the newest base's
-prefix is refused `indexMoved`, before anything is encoded or written. -/
-theorem seal_indexMoved {W : Type} (keys : Keys) (c : Cadence) (world : Codec.Stream W) (w : W)
-    (seg ipos : Position) (entries : Array Entry) (indexSize : Nat) (hne : indexSize ≠ ipos.offset) :
-    Base.seal keys c world w seg ipos entries indexSize = .error (.indexMoved indexSize ipos.offset) := by
-  unfold Base.seal
-  rw [if_pos hne]
 
 /-- **The backup order (HOST-30).** Every append-only file of the layout is copied after
 `base.world` in `backupOrder` (an ORDER fact over the data; that a backup in this order then holds
@@ -549,6 +363,68 @@ theorem openWith_origin {W F : Type} (keys : Keys) (c : Cadence) (world : Codec.
                 · rename_i hnone
                   obtain ⟨r, hr, he⟩ := (originFault_none_iff _ _ _).mp hnone
                   exact ⟨b, bb, dg, r, hb, hr, he⟩
+
+/-- **An open that succeeds verified the entry the base names** (HOST-33 condition 2,
+`open_verifies_named`). Whatever `index.log` it was handed: the file holds every entry the opened
+base counts, and either the base counts none and names no last tag, or the bytes at the last
+counted entry read back as an entry AT THAT POSITION (its tag verified there, `Entry.read_sound`)
+whose tag is the `indexLast` the base names, both under the keys of THIS Store (`Keys.forStore`
+of the decoded base World's origin chain, which the origin frame states: HOST-25). That binds the
+base's count to an entry the writer of this Store sealed. It says nothing about the entries before it: a page checks each one it reads
+(`Host.Proofs.Page.build_located`), and `host check` checks all of them (`indexClean_none`). -/
+theorem openWith_verifies_named {W F : Type} (keys : Keys) (c : Cadence) (world : Codec.Stream W)
+    (mark : W → Nat × ByteArray) (origin : W → ByteArray) (step : W → ByteArray → Except F W)
+    (file idx seg : ByteArray) {o : Opening W}
+    (h : Id.run (openWith keys c world mark origin step file seg.size idx.size (segReader idx) (segReader seg)) = .ok o) :
+    ∃ b bb d, Base.read keys c world file = .ok (b, bb, d) ∧
+    o.sealed.index.count * entryBytes keys ≤ idx.size ∧
+      ((o.sealed.index.count = 0 ∧ o.sealed.index.last = Codec.Digest.zero) ∨
+        (0 < o.sealed.index.count ∧ ∃ e,
+          Entry.read (keys.forStore (origin b.world)) (o.sealed.index.count - 1)
+            (idx.extract ((o.sealed.index.count - 1) * entryBytes keys)
+              ((o.sealed.index.count - 1) * entryBytes keys + entryBytes keys)) = some e ∧
+          e.tag (keys.forStore (origin b.world)) (o.sealed.index.count - 1) = o.sealed.index.last)) := by
+  unfold openWith at h
+  split at h
+  · cases h
+  · split at h
+    · cases h
+    · rename_i b bb dg hb
+      split at h
+      · cases h
+      · split at h
+        · cases h
+        · simp only [segReader, pure_bind] at h
+          split at h
+          · cases h
+          · split at h
+            · cases h
+            · simp only [Nat.zero_add] at h
+              split at h
+              · cases h
+              · split at h
+                · cases h
+                · split at h
+                  · cases h
+                  · split at h
+                    · cases h
+                    · rename_i hshort
+                      split at h
+                      · cases h
+                      · split at h
+                        · cases h
+                        · rename_i hnamed
+                          split at h
+                          · cases h
+                          · split at h
+                            · cases h
+                            · cases h
+                              refine ⟨b, bb, dg, hb, by simpa using hshort, ?_⟩
+                              rcases indexNamed_none hnamed with ⟨h0, hl⟩ | ⟨hpos, e, he, ht⟩
+                              · exact Or.inl ⟨h0, hl⟩
+                              · refine Or.inr ⟨hpos, e, ?_, ht⟩
+                                rw [lastAt_read keys _ hpos] at he
+                                exact he
 
 /-- **HOST-25, the plants' statement over the real `openWith`.** When the base reads, its tail is
 within bounds and its tag sits before its offset, a segment whose origin frame fails the check is

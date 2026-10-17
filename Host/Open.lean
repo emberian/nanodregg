@@ -108,10 +108,11 @@ structure Opening (W : Type) where
   sealed : Sealed
   /-- where the valid segment ends (absolute), and its chain tag -/
   pos : Position
-  /-- the base's index (its `index.log` pages), then one entry per record of the tail -/
+  /-- one entry per record of the tail: the entries since the base (the base's own are on disk,
+  `sealed.index.count` of them; HOST-33) -/
   index : Array Entry
-  /-- `index.log` bytes past the prefix the base names: an orphan page of a seal whose base never
-  landed. The writer truncates them; a follower ignores them (HOST-30) -/
+  /-- `index.log` bytes past the entries the base counts: orphan entries of a seal whose base
+  never landed. The writer truncates them; a follower ignores them (HOST-30) -/
   orphan : Nat
 
 /-- Fold one record and index it: the World's mark before it, at the frame's offset. -/
@@ -149,11 +150,13 @@ bound the tail (`tailRead`), read exactly that tail AND the 32 bytes before it i
 refuse `foreignSegment` unless those 32 bytes are the base's tag (every base sits after a frame
 of its own segment: `genesisImage`, HOST-18), read the origin frame at 0 (at most `originMax`
 bytes) and refuse unless it verifies and states `origin b.world`, the genesis chain of the base
-World's own origin (`originFault`, HOST-25), read `index.log` up to the prefix the base names
-(`indexSize` is the file's size, `readIndex` its reader; at most `worldBytesMax`, `indexShort` if
-the file is shorter) and refuse `indexCorrupt` unless its pages verify to the base's index tag
-(`indexEntries`, HOST-30), and `openLog` the tail from the base's World, indexing it after the
-base's entries. A `corrupt` offset is absolute in the segment. -/
+World's own origin (`originFault`, HOST-25), refuse `indexShort` unless `index.log` (`indexSize`
+bytes, `readIndex` its reader) holds every entry the base counts and `indexCorrupt` past
+`indexMax`, read the ONE entry the base names last (`lastAt`) and refuse `indexCorrupt` unless it
+reads back at its position with the base's `indexLast` (`indexNamed`, HOST-33), and `openLog` the
+tail from the base's World, indexing it from an empty Array (the entries since the base). Open
+reads no other entry: a page checks the ones it reads, `host check` all of them. A `corrupt`
+offset is absolute in the segment. -/
 def openWith {m : Type → Type} [Monad m] (keys : Keys) (c : Cadence) (world : Codec.Stream W)
     (mark : W → Nat × ByteArray) (origin : W → ByteArray) (step : W → ByteArray → Except F W)
     (file : ByteArray) (size : Nat) (indexSize : Nat)
@@ -179,17 +182,18 @@ def openWith {m : Type → Type} [Monad m] (keys : Keys) (c : Cadence) (world : 
   match originFault keys.segment head (origin b.world) with
   | some f => return .error f
   | none =>
-  if c.worldBytesMax < b.indexOffset then return .error (.base .indexCorrupt) else
-  if indexSize < b.indexOffset then return .error (.base (.indexShort indexSize b.indexOffset)) else
-  match ← readIndex 0 b.indexOffset with
+  if indexMax < b.indexCount then return .error (.base .indexCorrupt) else
+  if indexSize < b.indexCount * entryBytes keys then
+    return .error (.base (.indexShort indexSize (b.indexCount * entryBytes keys))) else
+  match ← readIndex (lastAt keys b.indexCount).1 (lastAt keys b.indexCount).2 with
   | .error e => return .error e
   | .ok ib =>
-  if ib.size ≠ b.indexOffset then return .error (.shortRead ib.size b.indexOffset) else
-  match indexEntries keys.index c b.indexTag ib with
-  | .error e => return .error (.base e)
-  | .ok entries =>
+  if ib.size ≠ (lastAt keys b.indexCount).2 then return .error (.shortRead ib.size (lastAt keys b.indexCount).2) else
+  match indexNamed (keys.forStore (origin b.world)) b.indexCount b.indexLast ib with
+  | some e => return .error (.base e)
+  | none =>
   let tail := read.extract Log.tagBytes read.size
-  match openLog keys.segment c.recordBytesMax (indexed mark step) (b.world, entries, b.offset)
+  match openLog keys.segment c.recordBytesMax (indexed mark step) (b.world, #[], b.offset)
       b.tag.bytes tail with
   | .error e => return .error (.log (e.shift b.offset))
   | .ok o =>
@@ -198,8 +202,8 @@ def openWith {m : Type → Type} [Monad m] (keys : Keys) (c : Cadence) (world : 
     | some tag =>
       let opened : Opened W := ⟨o.world.1, o.records, o.validLen, o.lastTag, o.torn⟩
       let (h, chain) := mark b.world
-      return .ok ⟨opened, ⟨b.offset, baseBytes, h, chain, digest, ⟨b.indexOffset, b.indexTag⟩, entries.size⟩,
-        ⟨b.offset + o.validLen, tag⟩, o.world.2.1, indexSize - b.indexOffset⟩
+      return .ok ⟨opened, ⟨b.offset, baseBytes, h, chain, digest, ⟨b.indexCount, b.indexLast⟩⟩,
+        ⟨b.offset + o.validLen, tag⟩, o.world.2.1, indexSize - b.indexCount * entryBytes keys⟩
 
 /-- The segment reader over bytes in memory (the simulation, every in-memory Store). -/
 def segReader {F : Type} (seg : ByteArray) : Nat → Nat → Id (Except (StoreFault F) ByteArray) :=

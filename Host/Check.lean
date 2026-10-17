@@ -13,10 +13,14 @@ head, or the highest receipt height with its chain) the Store must reach the anc
 (`behindAnchor`) and hold the anchor's chain there (`chainMismatch`); the chain at a past height
 is read through the base's index exactly as a `log` page computes it (`Page.build`).
 
-The open reads only the base and the tail after it. A backup is also the history every follower
-pages from height 0, so `check` then reads the segment before the base and requires it to
-recover clean from `segmentInitial` to exactly the base's offset (`historyClean`): a damaged
-frame there is `corrupt`, which the open alone never sees. O(segment), off any request path.
+The open reads only the base, its last index entry and the tail after it. A backup is also the
+history every follower pages from height 0, so `check` then reads the segment before the base and
+requires it to recover clean from `segmentInitial` to exactly the base's offset (`historyClean`):
+a damaged frame there is `corrupt`, which the open alone never sees. Then it reads EVERY entry the
+base counts and requires each to read back at its position under the Store's key, to name the
+offset of its own record frame, with heights that never fall (`indexClean`, HOST-33 condition 1):
+a damaged entry there is `indexCorrupt`, which the open (one entry) does not see and a page sees
+only when it reads that entry. O(segment + index), off any request path.
 
 It trusts the base: it re-derives nothing (that is `host follow`'s audit). It is integrity, height
 and chain, not lawfulness.
@@ -61,8 +65,12 @@ def refuse (s : Status) (name : String := s.name) : IO UInt32 := do
 def chainAt (store : System.FilePath) (keys : Keys) (o : Opening (World D)) (h : Nat) :
     IO (Except Page.Fault ByteArray) := do
   let seg ← File.open (segmentPath store) .read
+  let idx ← File.open (indexPath store) .read
   let r ← Page.build X.env Codec.Deployed.digestCodec X.digestOf keys.segment c.recordBytesMax 0
-    (fun off len => seg.readAt off.toUInt64 len.toUSize) o.index (recorder.mark o.opened.world) h
+    (fun off len => seg.readAt off.toUInt64 len.toUSize)
+    (Page.entryAt (keys.forStore (originChain o.opened.world)) (fun off len => idx.readAt off.toUInt64 len.toUSize)
+      o.sealed.index.count o.index)
+    (o.sealed.index.count + o.index.size) o.pos.offset (recorder.mark o.opened.world) h
   return r.map (·.chain)
 
 /-- The segment before the base recovers clean, frame by frame, to exactly `offset`. -/
@@ -70,8 +78,9 @@ def historyClean (keys : Keys) (prefix_ : ByteArray) (offset : Nat) : Bool :=
   let rv := Log.recover keys.segment c.recordBytesMax segmentInitial prefix_
   rv.tail == .clean && rv.validLen == offset
 
-/-- The read-only open `check` and `export` share: the key, `openFollower`, and the segment before
-the base recovering clean (`historyClean`); a refusal is its status and name. -/
+/-- The read-only open `check` and `export` share: the key, `openFollower`, the segment before
+the base recovering clean (`historyClean`), and every index entry the base counts reading back at
+its position and naming its record's offset (`indexClean`); a refusal is its status and name. -/
 def openClean (store : String) : IO (Except (Status × String) (Keys × Opening (World D))) := do
   match ← (readKey store : IO (Except (StoreFault (Record.Fault (Reject D))) Digest)) with
   | .error f => return .error (f.status, f.name)
@@ -84,7 +93,12 @@ def openClean (store : String) : IO (Except (Status × String) (Keys × Opening 
       let prefix_ ← seg.readAt 0 o.sealed.offset.toUSize
       unless prefix_.size = o.sealed.offset do return .error (.shortRead, Status.shortRead.name)
       unless historyClean keys prefix_ o.sealed.offset do return .error (.corrupt, "corrupt history")
-      return .ok (keys, o)
+      let records := (Log.recover keys.segment c.recordBytesMax segmentInitial prefix_).records
+      let n := o.sealed.index.count
+      let ib ← (← File.open (indexPath store) .read).readAt 0 (n * entryBytes keys).toUSize
+      match indexClean (keys.forStore (originChain o.opened.world)) ib n (recordOffsets records) with
+      | some k => return .error (.indexCorrupt, s!"indexCorrupt entry {k}")
+      | none => return .ok (keys, o)
 
 def run (store : String) (anchor : Option Anchor) : IO UInt32 := do
   match ← openClean store with

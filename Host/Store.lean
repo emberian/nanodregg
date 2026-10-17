@@ -4,7 +4,8 @@
     STORE/key          32 bytes, 0600: the integrity-at-rest key (HOST-16); written once by genesis
     STORE/seg.log      the frames (Host.Log), append-only, from genesis's origin frame; its
                        append handle is flock'd
-    STORE/index.log    one MAC'd page per seal: the index entries since the base before it (HOST-30)
+    STORE/index.log    fixed-width MAC'd entries, one per record before the newest base, each
+                       tagged with its position (HOST-30, HOST-33)
     STORE/base.world   the newest sealed base (Host.Base); replaced atomically through base.tmp
 
 (The layout as data, with the backup copy order: `Host.Store.layout`, `Host.Store.backupOrder`.)
@@ -66,19 +67,19 @@ def installBase (dir : System.FilePath) (bytes : ByteArray) : IO Unit := do
   IO.FS.rename (baseTmpPath dir) (basePath dir)
   syncDir dir.toString
 
-/-- The base sealer over a Store directory, appending pages through `index` (the writer's
-`index.log` append handle). The handle's size is checked to be the prefix the newest base names
-(`indexMoved`, so the page lands where it is framed) and both encodings are checked before
-anything is written; then the page
-is appended and synced, and only then is the base naming it installed (`installBase`), so a crash
-leaves the old base with at most an orphan page after its prefix (HOST-30). Never silent (D8):
+/-- The base sealer over a Store directory, appending entries through `index` (the writer's
+`index.log` append handle). The handle's size is checked to be the end of the entries the newest
+base counts (`indexMoved`, so each entry lands at the position its tag names) and both encodings
+are checked before anything is written; then the entries are appended and synced, and only then
+is the base counting them installed (`installBase`), so a crash leaves the old base with at most
+orphan entries after its count (HOST-30, HOST-33). Never silent (D8):
 every seal writes one `STATUS seal` line to stderr, installed or refused by name. -/
 def fileCheckpoint (dir : System.FilePath) (keys : Keys) (c : Cadence) (world : Stream W)
-    (mark : W → Nat × ByteArray) (index : File) (async : Bool := true) : Checkpoint W where
+    (mark : W → Nat × ByteArray) (origin : W → ByteArray) (index : File) (async : Bool := true) : Checkpoint W where
   async
   write w seg entries ipos := do
-    let at_ := s!"height={(mark w).1} offset={seg.offset} entries={entries.size} index_offset={ipos.offset}"
-    match Base.seal keys c world w seg ipos entries (← index.size).toNat with
+    let at_ := s!"height={(mark w).1} offset={seg.offset} entries={entries.size} index_count={ipos.count}"
+    match Base.seal (keys.forStore (origin w)) c world w seg ipos entries (← index.size).toNat with
     | .error f =>
       IO.eprintln s!"STATUS seal {at_} refused={f.name}"
       return .error f
@@ -88,7 +89,7 @@ def fileCheckpoint (dir : System.FilePath) (keys : Keys) (c : Cadence) (world : 
           index.writeAll page
           index.sync
         installBase dir bytes
-        IO.eprintln s!"STATUS seal {at_} base_bytes={bytes.size} world_bytes={world.size w} page_bytes={page.size}"
+        IO.eprintln s!"STATUS seal {at_} base_bytes={bytes.size} world_bytes={world.size w} entry_bytes={page.size}"
         return .ok (world.size w, keys.worldDigest (worldBytesOf bytes (world.size w)), ipos')
       catch e =>
         IO.eprintln s!"STATUS seal {at_} refused=io"
@@ -127,8 +128,8 @@ structure Writer (W : Type) where
   index : File
   opening : Opening W
 
-/-- Open the Store as its one writer: lock, open, truncate the torn tail and any orphan index page
-(bytes past the prefix the base names: never a byte the base names, `Opening.orphan`), sync. A
+/-- Open the Store as its one writer: lock, open, truncate the torn tail and any orphan index entries
+(bytes past the entries the base counts: never a byte of one it counts, `Opening.orphan`), sync. A
 stale `base.tmp` (a crash mid-seal) is never read; the next seal replaces it. -/
 def openWriter (dir : System.FilePath) (keys : Keys) (c : Cadence) (world : Stream W)
     (mark : W → Nat × ByteArray) (origin : W → ByteArray) (step : W → ByteArray → Except F W) : IO (Except (StoreFault F) (Writer W)) := do
@@ -142,7 +143,7 @@ def openWriter (dir : System.FilePath) (keys : Keys) (c : Cadence) (world : Stre
       segment.sync
     let index ← File.open (indexPath dir) .append
     if 0 < o.orphan then
-      index.truncate o.sealed.index.offset.toUInt64
+      index.truncate (o.sealed.index.count * entryBytes keys).toUInt64
       index.sync
     return .ok ⟨segment, index, o⟩
 

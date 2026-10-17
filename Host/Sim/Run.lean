@@ -110,6 +110,32 @@ def faultName (r : Except Fault (Opening (World Nat))) : String :=
   | .error f => f.name
   | .ok _ => "opened"
 
+/-- Every entry `index` holds at its position, while each reads back (`Entry.read`). -/
+def entriesOf (k : Keys) (index : ByteArray) : List Entry :=
+  go (index.size / entryBytes k) 0 []
+where
+  go : Nat → Nat → List Entry → List Entry
+    | 0, _, acc => acc.reverse
+    | n + 1, i, acc =>
+      match Entry.read k i (index.extract (i * entryBytes k) (i * entryBytes k + entryBytes k)) with
+      | some e => go n (i + 1) (e :: acc)
+      | none => acc.reverse
+
+/-- A `log` page over an in-memory Store (`Page.build` with `Page.entryAt`, as `Host.Deployed.pager`
+does over the files), with the number of index entries it read (its getter counts each call). -/
+def memPage (index seg : ByteArray) (r : Resident (World Nat)) (budget start : Nat) :
+    Except Page.Fault Page.Acc × Nat :=
+  let get (i : Nat) : StateM Nat (Except Page.Fault Entry) := do
+    modify (· + 1)
+    Page.entryAt (keys.forStore (originChain r.world)) (fun off len => pure (index.extract off (off + len)))
+      r.sealed.index.count r.index i
+  (Page.build env dc digestOf keys.segment cadence.recordBytesMax budget
+    (fun off len => pure (seg.extract off (off + len))) get (r.sealed.index.count + r.index.size) r.pos.offset
+    (recorder.mark r.world) start).run 0
+
+/-- 1 + ⌈log₂ n⌉ for n ≥ 1: the most entries `Page.locate` reads over n. -/
+def probeBound (n : Nat) : Nat := 1 + (Nat.log2 (2 * n - 1))
+
 /-- The in-memory Store as genesis leaves it (`memGenesis`). -/
 def genesisStore (c : Cadence) : Except Fault (Disk × Bases × Resident (World Nat)) :=
   memGenesis keys c world recorder.mark originChain foldStep genesis
@@ -157,7 +183,7 @@ def serveFrom (c : Cadence) (seed : Nat) (frames : List Frame) (failSyncAt : Opt
       unless dropUnread do  -- the plant run expects it; its check reads the count
           IO.println s!"FAIL requests = replies at fuel return {← reopens.get}: {taken} taken, {(← sent.get).size} answered"
     memReopen c disk bases reopens
-  let (exit, r) ← restarts (serve machine recorder keys.segment (memCheckpoint disk bases keys c world) c
+  let (exit, r) ← restarts (serve machine recorder keys.segment (memCheckpoint disk bases keys c world originChain) c
       (memStore disk failSyncAt) (fun _ _ => pure (0, ByteArray.empty))
       (if dropUnread then { scriptPort fr sp sent with unread := fun _ => pure () } else scriptPort fr sp sent)
       limits roundFuel)
@@ -218,6 +244,107 @@ def indexTerm (seed n : Nat) : IO (Nat × Nat × Nat × Nat) := do
 /-- The Store lengths (fresh Turns) HOST-17's count is measured at. -/
 def indexLengths : List Nat := [100, 200, 400, 800]
 
+/-- HOST-33's two counts at one Store length (a run of `n` fresh Turns): the most index entries a
+one-event `log` page reads, over a page from EVERY height (against `probeBound` of the index
+size: O(log records), law 5), and the entries the loop holds against the records past its newest
+base, counted independently by `Log.recover` (RAM O(tail), not O(records)). Also: every page is
+served (none refused). -/
+def entryRows (seed n : Nat) (failures : IO.Ref Nat) : IO Unit := do
+  let frames : List Frame := (List.range n).map fun i =>
+    ⟨UInt32.ofNat i, Protocol.Op.submit.code, turnCodec.bytes (mkTurn (1000 + i) 0 1024 [5000 + i])⟩
+  let r ← runOnce seed frames none
+  let total := r.resident.sealed.index.count + r.resident.index.size
+  let mut most := 0
+  let mut served := true
+  for s in List.range r.resident.world.height do
+    let (p, probes) := memPage r.bases.index r.disk.synced r.resident 4 s
+    if probes > most then most := probes
+    match p with
+    | .ok a => served := served && a.height == s + 1
+    | .error _ => served := false
+  let records := (Log.recover keys.segment cadence.recordBytesMax segmentInitial r.disk.synced).records.length - 1
+  let past := records - r.resident.sealed.index.count
+  check s!"index pages at {n} turns: a one-event page from every one of {r.resident.world.height} heights is served, reading at most {most} of {total} entries ({probeBound total} bound)"
+    (served && 0 < most && most ≤ probeBound total && total = records) failures
+  IO.println s!"page index entries read per request at {n} turns: {most} (bound {probeBound total} over {total} entries)"
+  IO.println s!"WASTE page index-entries-read-per-log-bound-at-{n} {ratio most (probeBound total)}"
+  IO.println s!"loop at {n} turns: {r.resident.index.size} entries held, {past} records past the newest base ({r.resident.sealed.index.count} on disk)"
+  IO.println s!"WASTE loop resident-entries-per-record-past-base-at-{n} {ratio r.resident.index.size past}"
+
+/-- HOST-33's index plants, under the run's newest base (which counts a non-empty index). The ruled
+move (condition 5): a corrupt MIDDLE entry was refused at open; it is now refused at first read
+(`badIndex`, never served) or by `host check` (`indexClean`). -/
+def entryPlants (r : RunResult) (failures : IO.Ref Nat) : IO Unit := do
+  let reopen := reopenIn r.bases.index
+  let opened := reopen r.bases.file r.disk.synced
+  let count := match opened with | .ok o => o.sealed.index.count | .error _ => 0
+  let eb := entryBytes keys
+  let named := count * eb
+  let sk := keys.forStore (originChain genesis)
+  let honest := entriesOf sk r.bases.index
+  let records := (Log.recover keys.segment cadence.recordBytesMax segmentInitial r.disk.synced).records
+  let offsets := recordOffsets (records.take (count + 1))
+  check s!"index control: the newest base counts {count} entries, index.log holds exactly them, every one reads back and names its record's offset (`indexClean` none)"
+    (1 < count && r.bases.index.size = named && honest.length = count &&
+      indexClean sk r.bases.index count offsets == none) failures
+  check "plant-index-short: index.log one byte short of the entries the base counts is refused `indexShort`"
+    (faultName (reopenIn (r.bases.index.extract 0 (named - 1)) r.bases.file r.disk.synced) = "indexShort") failures
+  check "plant-index-last-flip: a flipped byte in the last entry (the one open reads) is refused `indexCorrupt`"
+    (faultName (reopenIn (flipByte r.bases.index (named - eb / 2)) r.bases.file r.disk.synced) = "indexCorrupt") failures
+  let otherKeys : Keys := { keys with index := fnvSealer 9 }
+  let retagged := Entry.run (otherKeys.forStore (originChain genesis)) 0 honest
+  check "plant-index-other-key: the same entries tagged under another key are refused `indexCorrupt`"
+    (retagged.size = named && retagged != r.bases.index &&
+      faultName (reopenIn retagged r.bases.file r.disk.synced) = "indexCorrupt") failures
+  -- plant-index-other-store (HOST-33's law-6 read): the same entries tagged for ANOTHER Store under
+  -- the SAME key file (HOST-25's shared-key case). Spliced whole, open refuses the last; spliced
+  -- into the middle, `host check` refuses it and no page is built from it
+  let otherWorld : World Nat := World.genesis env (env.hash "nanodregg/host-sim/origin/v1" "other".toUTF8) (2 ^ 40)
+  let os := keys.forStore (originChain otherWorld)
+  let foreign := Entry.run os 0 honest
+  let midK := count / 2
+  let spliced := r.bases.index.extract 0 (midK * eb) ++ foreign.extract (midK * eb) (midK * eb + eb) ++
+    r.bases.index.extract (midK * eb + eb) named
+  check "plant-index-other-store: entries tagged for another Store under the same key: whole, open refuses `indexCorrupt`; one in the middle, open opens and `host check` refuses it at its position"
+    (originChain otherWorld != originChain genesis && foreign.size = named && spliced != r.bases.index &&
+      faultName (reopenIn foreign r.bases.file r.disk.synced) = "indexCorrupt" &&
+      faultName (reopenIn spliced r.bases.file r.disk.synced) = "opened" &&
+      indexClean sk spliced count offsets == some midK) failures
+  let raw := r.bases.index.extract eb (2 * eb) ++ r.bases.index.extract 0 eb ++ r.bases.index.extract (2 * eb) named
+  let retagSwap := match honest with
+    | a :: b :: rest => Entry.run sk 0 (b :: a :: rest) | _ => r.bases.index
+  check "plant-index-swap: entries 0 and 1 swapped are refused by `host check` at entry 0: as bytes (each tag names its own position), and re-tagged at the new positions (each names another record's offset)"
+    (raw != r.bases.index && retagSwap != r.bases.index &&
+      indexClean sk raw count offsets == some 0 && indexClean sk retagSwap count offsets == some 0) failures
+  -- the ruled move: every entry the base counts flipped in turn (one at a time). Open still opens;
+  -- `host check` refuses that entry; and EVERY page from every height is either refused
+  -- `badIndex k` (it read the entry) or is byte for byte the honest page (it did not): no page is
+  -- ever built from it
+  let honestPage (s : Nat) := (memPage r.bases.index r.disk.synced r.resident 40 s).1
+  let mut opens := true
+  let mut checked := true
+  let mut neverServed := true
+  let mut refusedSome := 0
+  for k in List.range count do
+    let bad := flipByte r.bases.index (k * eb + 9)
+    unless k + 1 = count do
+      opens := opens && faultName (reopenIn bad r.bases.file r.disk.synced) == "opened"
+    checked := checked && indexClean sk bad count offsets == some k
+    for s in (List.range r.resident.world.height).filter (· % 5 = k % 5) do
+      match (memPage bad r.disk.synced r.resident 40 s).1, honestPage s with
+      | .error (.badIndex j), _ => neverServed := neverServed && j == k; refusedSome := refusedSome + 1
+      | .ok a, .ok b => neverServed := neverServed && a.events == b.events && a.height == b.height && a.chain == b.chain
+      | _, _ => neverServed := false
+  check s!"plant-index-middle-flip: each of the {count - 1} entries before the last, flipped, still opens (HOST-33 moved the check)" opens failures
+  check s!"plant-index-middle-flip: `host check`'s `indexClean` refuses each of the {count} flipped entries by position" checked failures
+  check s!"plant-index-middle-flip: no page is built from a flipped entry; {refusedSome} pages read one and were refused `badIndex` at its position, every other page is the honest page"
+    (neverServed && 0 < refusedSome) failures
+  check "the reopened Store holds the loop's entries since the base, and counts the loop's on disk"
+    (match opened with
+     | .ok o => o.sealed.index.count = r.resident.sealed.index.count && o.index.size = r.resident.index.size &&
+         (o.index.toList.zip r.resident.index.toList).all fun (x, y) => x.height == y.height && x.offset == y.offset && x.chain == y.chain
+     | .error _ => false) failures
+
 /-- The cadence HOST-14's at-size count runs under: the deployed RATIOS at toy scale. The seal
 floor is small against the World, so a Store of THE BAR's 1000 records seals in the base/4 regime
 the deployed Store reaches once its World passes 4 MiB (`Cadence.deployed`: sealMin 1 MiB). -/
@@ -233,9 +360,9 @@ structure SizeCount where
   genesisBase : Nat
   finalBase : Nat
   appended : Nat
-  /-- bytes the final reopen reads: the base file, the index prefix, the origin frame, the tail -/
+  /-- bytes the final reopen reads: the base file, the one index entry, the origin frame, the tail -/
   read : Nat
-  /-- what HOST-14 + HOST-30 allow it: the base file + the index prefix + the origin frame + `tailMax` -/
+  /-- what HOST-14 + HOST-33 allow it: the base file + one index entry + the origin frame + `tailMax` -/
   bound : Nat
   named : Nat
   /-- bytes the sealers hash: each frame's prev tag + record in seg.log, every page, every base -/
@@ -249,14 +376,17 @@ def sizeTerm (seed n : Nat) (mk : Nat → Turn Nat) : IO SizeCount := do
   let genesisBase := r.bases.history[0]!.1.size
   let hashedOf (s : Log.Sealer) (initial log : ByteArray) : Nat :=
     ((Log.recover s (1 <<< 30) initial log).records.map (·.size + Log.tagBytes)).foldl (· + ·) 0
-  let hashed := hashedOf keys.segment segmentInitial r.disk.synced + hashedOf keys.index indexInitial r.bases.index +
+  -- an entry's tag hashes the Store's origin chain, its u64 position and its body
+  let hashed := hashedOf keys.segment segmentInitial r.disk.synced +
+    r.bases.index.size / entryBytes keys * (keys.chainBytes + 8 + entryBytes keys - Log.tagBytes) +
     (r.bases.history.toList.drop 1).foldl (fun a (f, _) => a + (f.size - 4)) 0
   let c : SizeCount := ⟨n, r.bases.history.size - 1, r.bases.written - genesisBase, r.bases.index.size,
     genesisBase, r.bases.file.size, r.disk.synced.size, 0, 1, 0, hashed⟩
   match reopenWith sizeCadence r.bases.index r.bases.file r.disk.synced with
   | .error _ => return c
   | .ok o =>
-    let named := o.sealed.index.offset
+    -- the one entry open reads (HOST-33)
+    let named := (lastAt keys o.sealed.index.count).2
     let head := r.bases.file.size + named + originLen o.sealed.offset
     let read := head + (o.pos.offset - o.sealed.offset)
     let bound := head + sizeCadence.tailMax o.sealed.bytes
@@ -378,6 +508,8 @@ def carryPlants (failures : IO.Ref Nat) : IO Unit := do
 (`indexMoved`), and a page refuses an entry its codec cannot spell (`entryUnfit`). -/
 def indexPlants (seed : Nat) (frames : List Frame) (r : RunResult) (failures : IO.Ref Nat) : IO Unit := do
   backupPlants r failures
+  entryPlants r failures
+  for n in indexLengths do entryRows seed n failures
   sizeRows seed
   carryPlants failures
   -- plant-index-moved (HOST-31): index.log one byte longer than the prefix the base names
@@ -391,13 +523,15 @@ def indexPlants (seed : Nat) (frames : List Frame) (r : RunResult) (failures : I
     check "plant-index-moved: the restart's open of that Store opens to genesis with the stray byte as a 1-byte orphan (the writer truncates it)"
       (match reopenIn mv.bases.index mv.bases.file mv.disk.synced with
         | .ok o => o.orphan = 1 && o.opened.torn = 0 | .error _ => false) failures
-  -- plant-entry-unfit (HOST-31): a page holding a chain wider than chainBytesMax
-  let fitE : Entry := ⟨0, 0, ByteArray.mk (Array.replicate chainBytesMax 0)⟩
-  let wideE : Entry := ⟨0, 0, ByteArray.mk (Array.replicate (chainBytesMax + 1) 0)⟩
-  check "plant-entry-unfit: a page whose second entry has a chain of chainBytesMax + 1 bytes is refused `entryUnfit 1`"
-    (match Base.page keys cadence indexStart #[fitE, wideE] with | .error (.entryUnfit 1) => true | _ => false) failures
-  check "plant-entry-unfit control: the same page at chainBytesMax is written"
-    (match Base.page keys cadence indexStart #[fitE, fitE] with | .ok (p, _) => 0 < p.size | .error _ => false) failures
+  -- plant-entry-unfit (HOST-31, HOST-33): an entry whose chain is not the Store's width
+  let fitE : Entry := ⟨0, 0, ByteArray.mk (Array.replicate keys.chainBytes 0)⟩
+  let wideE : Entry := ⟨0, 0, ByteArray.mk (Array.replicate (keys.chainBytes + 1) 0)⟩
+  check "plant-entry-unfit: a seal handed a second entry whose chain is one byte wider than the Store's is refused `entryUnfit 1`"
+    (match Base.entries keys indexStart #[fitE, wideE] with | .error (.entryUnfit 1) => true | _ => false) failures
+  check "plant-entry-unfit control: the same entries at the Store's width are written, one entryBytes each"
+    (match Base.entries keys indexStart #[fitE, fitE] with | .ok (p, ix) => p.size = 2 * entryBytes keys && ix.count = 2 | .error _ => false) failures
+  check "plant-index-too-large: a seal past indexMax entries is refused `indexTooLarge`, before encoding"
+    (match Base.entries keys ⟨indexMax, Codec.Digest.zero⟩ #[fitE] with | .error (.indexTooLarge _) => true | _ => false) failures
 
 /-- KERNEL-33's lookup arm through the writer's `handle` (the plant-lookup-expired Ctx and call). -/
 def forgottenPlants (failures : IO.Ref Nat) : IO Unit := do
@@ -457,34 +591,19 @@ def run (args : List String) : IO UInt32 := do
     let seg := r.disk.synced.extract 0 durableAt
     match reopen older seg, reopen newer seg with
     | .ok _, .ok b =>
-      -- the index as it stood after the newer seal: the older base names a shorter prefix, and
-      -- the newer page is an ORPHAN to it (HOST-30), which the open leaves out and reports
+      -- the index as it stood after the newer seal: the older base counts fewer entries, and the
+      -- newer seal's entries are ORPHANS to it (HOST-30), which the open leaves out and reports
       let olderNamed := r.bases.indexAt[k]!
       let newerPage := r.bases.indexAt[k + 1]! - olderNamed
       let a := match reopenIn (r.bases.index.extract 0 r.bases.indexAt[k + 1]!) older seg with
         | .ok o => some o | .error _ => none
       unless (a.map fun o => sameWorld o.opened.world b.opened.world && o.pos.offset = b.pos.offset &&
-          o.orphan = newerPage && o.sealed.index.offset = olderNamed && o.index.size = b.index.size).getD false do
+          o.orphan = newerPage && o.sealed.index.count * entryBytes keys = olderNamed &&
+          o.sealed.index.count + o.index.size = b.sealed.index.count + b.index.size).getD false do
         renameOk := false; IO.println s!"  seal {k + 1}: the older base with the newer page as an orphan folds elsewhere"
     | a, b =>
       renameOk := false; IO.println s!"  seal {k + 1}: older {faultName a}, newer {faultName b}"
-  check s!"plant-crash-before-rename at each of {seals} seals: the older base + tail = the newer base, the newer page an orphan it leaves out (HOST-30)" renameOk failures
-  -- HOST-30's index plants, under the newest base (which names a non-empty prefix)
-  let named := match opened with | .ok o => o.sealed.index.offset | .error _ => 0
-  check "plant-index-short fires: the newest base names a non-empty index prefix" (0 < named) failures
-  check "plant-index-short: index.log one byte short of the prefix the base names is refused `indexShort`"
-    (faultName (reopenIn (r.bases.index.extract 0 (named - 1)) r.bases.file r.disk.synced) = "indexShort") failures
-  check "plant-index-flip: a flipped byte inside an index page is refused `indexCorrupt`, never a shorter index"
-    (faultName (reopenIn (flipByte r.bases.index (named / 2)) r.bases.file r.disk.synced) = "indexCorrupt") failures
-  check "plant-index-other-key: pages sealed under another key are refused `indexCorrupt`"
-    (faultName (reopenIn (Log.encodeAll (fnvSealer 9) indexInitial
-        (Log.recover keys.index cadence.worldBytesMax indexInitial r.bases.index).records) r.bases.file r.disk.synced)
-      = "indexCorrupt") failures
-  check "the reopened index is the loop's: every entry, in order (heights and offsets)"
-    (match opened with
-     | .ok o => o.index.size = r.resident.index.size &&
-         (o.index.toList.zip r.resident.index.toList).all fun (x, y) => x.height == y.height && x.offset == y.offset && x.chain == y.chain
-     | .error _ => false) failures
+  check s!"plant-crash-before-rename at each of {seals} seals: the older base + tail = the newer base, the newer entries orphans it leaves out (HOST-30)" renameOk failures
   check "plant-tail-too-long: the genesis base with the whole segment is refused `tailTooLong`"
     (faultName (reopen r.bases.history[0]!.1 r.disk.synced) = "tailTooLong") failures
   check "plant-base-flip: a flipped base byte is `baseCorrupt`"
@@ -522,10 +641,8 @@ def run (args : List String) : IO UInt32 := do
       | .ok w' => (w', acc.2.push (t, World.root env w'))
       | .error _ => acc) (genesis, #[])).2.toList
   let admittedBytes := turns.foldl (fun n t => n + (turnCodec.bytes t.1).size) 0
-  -- log pages (Host.Page) over the durable segment and the loop's index
-  let page (budget start : Nat) := Id.run (Page.build env dc digestOf keys.segment cadence.recordBytesMax
-    budget (fun off len => pure (r.disk.synced.extract off (off + len))) r.resident.index
-    (recorder.mark w) start)
+  -- log pages (Host.Page) over the durable segment, index.log and the loop's entries since the base
+  let page (budget start : Nat) := (memPage r.bases.index r.disk.synced r.resident budget start).1
   let mut start := 0
   let mut served := 0
   let mut pagesOk := true
@@ -557,21 +674,19 @@ def run (args : List String) : IO UInt32 := do
   check s!"log pages: {pageCount} pages of 10 events serve every event once, each page states the log's chain at its last height; a one-event page from every height"
     (pagesOk && served = w.height && lastOk) failures
   check "plant-page-flip: a flipped byte in a served frame is refused `corrupt`"
-    (match Id.run (Page.build env dc digestOf keys.segment cadence.recordBytesMax Page.budget
-        (fun off len => pure ((flipByte r.disk.synced (origin.offset + 6)).extract off (off + len))) r.resident.index
-        (recorder.mark w) 0) with
+    (match (memPage r.bases.index (flipByte r.disk.synced (origin.offset + 6)) r.resident Page.budget 0).1 with
      | .error f => f.name = "corrupt" | .ok _ => false) failures
   IO.println s!"WASTE submit bytes-per-turn {ratio (r.disk.synced.size - origin.offset) admittedBytes}"
   IO.println s!"WASTE submit fsyncs-per-batch {ratio r.disk.syncs records.length}"
   let tailBytes := match opened with | .ok o => o.pos.offset - o.sealed.offset | .error _ => 0
-  -- what open must read: the base record (World, offsets, tags), the index pages' records up to
-  -- the prefix the base names, and the tail; the excess is the base's frame and each page's
-  let pages := (Log.recover keys.index cadence.worldBytesMax indexInitial (r.bases.index.extract 0 named)).records.length
-  let needed := r.bases.file.size - 4 - Log.tagBytes + (named - pages * (4 + Log.tagBytes)) + tailBytes
+  -- what open must read: the base record (World, offsets, tags), the one index entry it names
+  -- (HOST-33), and the tail; the excess is the base's frame
+  let named := match opened with | .ok o => (lastAt keys o.sealed.index.count).2 | .error _ => 0
+  let needed := r.bases.file.size - 4 - Log.tagBytes + named + tailBytes
   IO.println s!"WASTE open bytes-read-per-record {ratio (r.bases.file.size + named + tailBytes) needed}"
   -- law 5 (HOST-30): a seal is handed the entries since the last base, never the loop's index
-  IO.println s!"index entries handed to seals: {r.bases.handed} for the {r.resident.sealed.indexCount} entries the newest base names"
-  IO.println s!"WASTE seal entries-handed-per-entry {ratio r.bases.handed r.resident.sealed.indexCount}"
+  IO.println s!"index entries handed to seals: {r.bases.handed} for the {r.resident.sealed.index.count} entries the newest base counts"
+  IO.println s!"WASTE seal entries-handed-per-entry {ratio r.bases.handed r.resident.sealed.index.count}"
   let genesisBytes := r.bases.history[0]!.1.size
   IO.println s!"WASTE seal bytes-per-appended-byte {ratio (r.bases.written - genesisBytes) r.disk.synced.size}"
   -- HOST-17/HOST-30: the index bytes a seal writes at several Store lengths (one page each)
@@ -635,7 +750,7 @@ def run (args : List String) : IO UInt32 := do
     | .error f => throw (IO.userError s!"genesis: {f.name}")
   let disk ← IO.mkRef gd
   let bases ← IO.mkRef gb
-  let (dexit, _) ← restarts (serve machine recorder keys.segment (memCheckpoint disk bases keys cadence world)
+  let (dexit, _) ← restarts (serve machine recorder keys.segment (memCheckpoint disk bases keys cadence world originChain)
       cadence (memStore disk none) (fun _ _ => pure (0, ByteArray.empty)) (scriptPort fr sp sent)
       ⟨16, 1 <<< 20⟩ 3)
     (do
@@ -761,7 +876,7 @@ def run (args : List String) : IO UInt32 := do
   let oldBase : Option ByteArray :=
     match Base.read keys cadence world r.bases.file with
     | .ok (b, _, _) =>
-      match Base.file oldKeys cadence world b.world ⟨b.offset, b.tag⟩ ⟨b.indexOffset, b.indexTag⟩ with
+      match Base.file oldKeys cadence world b.world ⟨b.offset, b.tag⟩ ⟨b.indexCount, b.indexLast⟩ with
       | .ok f => some f
       | .error _ => none
     | .error _ => none

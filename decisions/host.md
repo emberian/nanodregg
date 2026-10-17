@@ -1186,7 +1186,7 @@ on. Restricting to readers that return the file's bytes (`segReader`) is the hon
 and what a copy cannot model (concurrent truncation) is named above. No refusal is new, no shape
 changed, no re-genesis.
 
-## HOST-33 · HOST-14 at size, as counts: the seal bound holds once stated correctly; open reads O(history) of index.log, so open must stop reading it (2026-10-18, HOST-8; ROOT's framing of HOST-14's re-check: counts, no timing) — PROPOSED, needs ROOT's ruling (it moves a check)
+## HOST-33 · HOST-14 at size, as counts: the seal bound holds once stated correctly; open reads O(history) of index.log, so open must stop reading it (2026-10-18, HOST-8; ROOT's framing of HOST-14's re-check: counts, no timing) — RULED BUILD by ROOT (five conditions), BUILT by HOST-9
 **Context.** ROOT asked for HOST-14 re-checked at size as counts. The questions: do seal bytes stay
 within HOST-14's claimed bound now that HOST-30 removed the index term, and does reopen read at most one
 base plus the index pages plus the tail? host-sim `sizeRows` measures them under `sizeCadence`: the
@@ -1271,6 +1271,174 @@ histories do not. Both HOST-17's count and this one see the index grow only when
 outgrow it. If I had measured only `grow` (the existing scenario), I would have reported 0.33 as
 flat and stopped. The seal finding is a misstated claim, not a defect. I am pinning the corrected
 statement, not changing the cadence.
+
+**Ruling (ROOT, 2026-10-18).** BUILD, after HOST-28, with five conditions:
+1. `host check` still verifies EVERY entry;
+2. theorems: never-served, open_verifies_named, page reads O(log indexCount) entries as a pinned
+   WASTE row, the loop's resident entries bounded by the since-last-base count, HOST-32 restated
+   over fixed entries;
+3. plants: a corrupt middle entry (open ok, page `badIndex`, check refuses), a wrong index size
+   (open refuses by name), and the crash-before-rename orphan and wrong-order backups still red;
+4. the flag day stated, including whether `indexTooLarge` survives;
+5. the critique says exactly what moved.
+
+**Built (HOST-9).** The format:
+- `index.log` is fixed entries, entry k at byte `k · entryBytes`: `u64 height ‖ u64 offset ‖ chain ‖
+  tag32`. The tag is the index sealer over `origin chain ‖ u64 k ‖ height ‖ offset ‖ chain`, under
+  `Keys.forStore keys sid`. Here `sid` is the genesis chain of the World's origin, which the origin
+  frame states (HOST-25). `entryBytes` is 80 deployed (`Keys.chainBytes` = 32); in the toy it is 56.
+- Why the Store is in the tag: HOST-9's law-6 reader found that a tag over the position alone does
+  not bind an entry to its Store. HOST-30's chained pages did, because one chain of tags ran over
+  every page. Under a shared key file (HOST-25's case), another Store's entry spliced into the middle
+  would have passed both `entryAt` and `check`. Every user binds the Store: openWith with
+  `origin b.world`, the checkpoints with `origin w` (fileCheckpoint and memCheckpoint take `origin`),
+  and the pagers and check with `originChain` of the World.
+- `Entry.read keys k b` re-spells the entry it decodes and accepts it only if `Entry.bytes keys k`
+  of it is exactly `b`. So a read never returns an entry whose tag failed, or bytes that are not
+  that entry's one spelling.
+- The base names `IndexAt = (indexCount, indexLast)`. `indexLast` is the tag of entry
+  `indexCount − 1`, or `Digest.zero` at 0. It binds the count to the one entry open reads, so a
+  correctly-tagged entry from a rolled-back index cannot stand in for the last one.
+
+The open, a page, the loop and `host check`:
+- **Open** checks `indexCount ≤ indexMax` and `index.log ≥ count · entryBytes` (`indexShort`). It
+  reads ONE entry (`lastAt`) and requires it to read back at its position with the base's
+  `indexLast` (`indexNamed`, `indexCorrupt`). It folds the tail from an empty Array.
+- **A page**: `Page.locate` binary-searches entries through `Page.entryAt`, which reads a disk
+  entry and checks it at its position, else `badIndex k`. Past the disk entries it uses the loop's
+  own. It reads at most 1 + ⌈log₂ count⌉ entries. `Page.walk` then reads frames BY OFFSET from that
+  one entry, so the walk reads no further entry.
+- **The loop** holds only the entries since its newest base (`Resident.install` drops the counted
+  ones when a seal settles). `sealEntries` hands the Task a copy of them.
+- **`host check`** (`openClean`) reads every counted entry. It requires each to read back at its
+  position, name the offset of its own record frame in the recovered history, and keep heights
+  non-decreasing; the count must equal the history's records (`indexClean`). Otherwise
+  `indexCorrupt` (46), with `refused indexCorrupt entry K` (or `count N`).
+
+Theorems: Host/Proofs/Index (new), Host/Proofs/Page, Host/Proofs/Base, Host/Proofs/Backup.
+- **Never-served**: `build_never_served`, with `locate_got`, `entryAt_ok`, `build_located` and the
+  tooth `build_badIndex`. A served page after `start` is `walk` of the segment from ONE entry `e`
+  at position `k`, whose disk bytes are exactly `Entry.bytes keys k e` (`Entry.read_sound`). The
+  tooth: an unreadable entry 0 refuses the page `badIndex 0`.
+- **Open verifies the named entry**: `openWith_verifies_named`.
+- **Entries read back by position**: `run_read` / `entriesSeq_read`. Successive seals from genesis
+  read back by position, and the open check passes on them, with no premise. This replaces
+  `indexEntries_pages`. Also `Entry.read_bytes`, `Entry.read_other` (an entry cannot be moved), and
+  `entries_ok` with its teeth `entries_entryUnfit` / `entries_indexTooLarge`.
+- **The seal**: `seal_at_end` with its tooth `seal_indexMoved`.
+- **The check**: `indexClean_none`. Check reads every entry: the count equals the history's records,
+  the bytes are exactly that many entries, each reads back and names its frame's offset, and
+  heights never fall (`indexClean_go_rise`). Its teeth are `indexClean_unread` and
+  `indexClean_count`.
+- **The base binding**: `indexNamed_otherLast` (the tooth for a last entry that reads back but is
+  not the base's `indexLast`) and `indexNamed_unread`.
+- **Resident entries**: `openWith_tail_entries` (an open holds one entry per tail record).
+- **Deployed**: `Deployed.mark_chain_width` (the deployed chain is the entry's width, so
+  `entryUnfit`'s chain arm cannot fire there).
+- **HOST-32 restated**: `openWith_backup` and `openWith_seg_ok` are restated over the fixed
+  entries. The index part is simpler: `count · entryBytes ≤ I.size` and the last entry's bytes are a
+  prefix extract, unchanged by an append.
+- **`Base.codec_lawfulOn`** now covers `indexCount`.
+
+Plants (host-sim `entryPlants`; `entryRows` at 100/200/400/800):
+- a control: `indexClean` is clean on the run's own index;
+- index-short: one byte short refuses `indexShort`;
+- index-last-flip refuses `indexCorrupt`;
+- index-other-key: the same entries re-tagged under another key refuse `indexCorrupt`;
+- index-other-store: the same entries tagged for another Store under the SAME key. Spliced whole,
+  open refuses `indexCorrupt`. One spliced into the middle still opens, and `indexClean` refuses it
+  at its position;
+- index-swap: entries 0 and 1 swapped as bytes, and re-tagged at the new positions; `indexClean`
+  refuses both at 0;
+- **index-middle-flip**, the ruled move: every counted entry is flipped in turn, and the plant
+  checks three things:
+  - every one but the last still opens;
+  - `indexClean` refuses each at its own position;
+  - over a page from every fifth height, every page is either refused `badIndex` at the flipped
+    position or byte for byte the honest page. Hundreds of pages are refused per seed, and none is
+    built from the flipped entry;
+- entry-unfit: a chain one byte wider than the Store's, with a control at the Store's width;
+- index-too-large: a seal past `indexMax`;
+- index-moved, crash-before-rename (orphan entries of the exact size, the same count + tail as the
+  newer base), backup and backup-wrong-order: all still red by name.
+
+store-plants (OPS-2's byte-level rows) all pass. index-moved-restart-truncates truncates a 1-byte
+partial entry, because the writer truncates every byte past `count · entryBytes`. host-file-sim
+caught a real defect in the harness, now fixed: it ran the toy World (8-byte chains) under
+`Keys.ofKey`'s deployed width, and every seal refused `entryUnfit`. `Sim.File.fileKeys` gives the
+toy width.
+
+The counts (host-sim, max over seeds 1–3):
+
+| row | before | after |
+|---|---|---|
+| `open bytes-read-per-record` | 1.033 | 1.007 |
+| `open index-bytes-per-base-byte-steady-at-4000` | 0.569 | 0.001 |
+| `open index-bytes-per-base-byte-steady-at-8000` | 1.179 | 0.001 |
+| `open bytes-read-per-allowed-byte-grow-at-1000` | 0.792 | 0.752 |
+| `seal bytes-per-appended-byte` | 1.448 | 1.566 |
+| `seal bytes-per-appended-byte-grow-at-1000` (raw; the net row, 3.489, is unchanged) | 4.032 | 4.131 |
+| `seal hashed-bytes-per-appended-byte-grow-at-1000` | 5.012 | 5.046 (each entry's tag also hashes the origin chain) |
+| the four `seal index-bytes-per-appended-byte-at-n` | 0.181 / 0.147 / 0.131 / 0.161 | 0.323 / 0.261 / 0.236 / 0.308 (flat in history) |
+
+New rows:
+- `page index-entries-read-per-log-bound-at-{100,200,400,800}` = 1.000. This is the entries read ÷
+  (1 + ⌈log₂ entries⌉), so 6–7 / 7–8 / 9 / 10 entries read absolute. GATES-3 asked for the ratio,
+  not the count, because the count rises with honest growth;
+- `loop resident-entries-per-record-past-base-at-n` = 1.000.
+
+**Flag day.**
+- The base's last two fields change meaning: `u64 indexOffset ‖ indexTag32` becomes
+  `u64 indexCount ‖ indexLast32`.
+- `index.log` changes from frames of pages to fixed entries.
+- The shape stamp gains `entryLayout` by name, so the stamp flips: every existing Store refuses
+  `shapeMismatch` (43) and re-geneses.
+- No Status is added or removed. The `indexShort`, `indexCorrupt`, `indexMoved`, `entryUnfit` and
+  `badIndex` operator sentences change (OPS-2 agreed). `Store.layout`'s text changes. `emit-units
+  deploy/units` re-emits EXITS.md and STORE.md.
+- `Keys` gains `chainBytes`.
+- `Page.build` takes a getter, a count and the durable end in place of an Array. PROTOCOL-6 agreed
+  the Rows writer's adaptation.
+- `indexTooLarge` SURVIVES as a bound on `indexCount`: at most `indexMax` = 2³² − 1 entries, a
+  Store's lifetime in records. The search is then at most 33 entry reads, and the index file at
+  most 320 GiB deployed.
+
+**Critique.** A corrupt middle entry was refused at open; it is now refused at first read or by
+check.
+- Exactly that moved. Open verifies the last entry against the base's `indexLast`, so corruption of
+  the newest seal's entries still stops the open.
+- An entry before the last is checked only when a page reads it, `badIndex` on that one request
+  (proved never served), or by `host check`. A Store with a damaged entry nobody pages through
+  serves for as long as nobody runs `check`.
+- An offset or height lie inside a correctly-tagged entry cannot occur without the key, so the tag
+  is the whole defence. `check` also cross-checks offsets against the segment.
+- `indexTooLarge`'s bound rose from `worldBytesMax` of index bytes (about 3.3·10⁶ deployed
+  entries) to 2³² − 1 entries. The old bound existed because open read the whole index, and open no
+  longer does. A static bound remains (law 4), and the search depth is what it bounds now.
+- The index is 54% larger per record deployed (80 against 52 bytes), visible in the four seal
+  index rows, which rose from HOST-30's values and stay flat.
+- A page reads about 1 + log₂ n entries and verifies a MAC per probe: about 23 MACs at 5·10⁶
+  records. That is O(log), which law 5 allows.
+
+**Law-6 read (a spawned reader, before landing).** The reader rated nothing vacuous. It found one
+check dropped beyond the ruling: an entry was not bound to its Store. That is fixed above
+(`Keys.forStore`, plant index-other-store, `entryLayout` v2). It rated four statements WEAK.
+Fixed:
+- `indexClean_none` now states the heights and the count, which moved into the pure check;
+- `indexNamed` has its binding tooth.
+Open and named:
+- `build_badIndex` has a tooth only at entry 0. index-middle-flip covers every other position;
+- the resident bound is proved at open (`openWith_tail_entries`). `Resident.install`'s keeping of
+  "count + held = total" is measured by the WASTE row `loop resident-entries-per-record-past-base`,
+  not proved;
+- `mark_chain_width` discharges only the chain arm of `entryUnfit`. The u64 height and offset arm
+  is unreachable below 2⁶⁴ and is not discharged.
+
+**Meta-critique.** The never-served theorem is stated in `Id` over a pure reader. `Host.Deployed.pager`
+runs the same `build` in `IO` over the files, so the IO read is the unproved step, as for every
+open theorem here. `walk` reads frames by offset instead of by entry. That is not in ROOT's text,
+but it is what makes "page reads O(log) entries" true: walking by entry would read one entry per
+frame.
 
 ## HOST-34 · HOST-28 BUILT: `host export` / `host import --digest` (2026-10-18, HOST-8; after KERNEL-29 b8e0f82 and CODEC-22's carried codec 28b4a38)
 **What was built, as HOST-28 decided, with these exact shapes:**

@@ -5,8 +5,8 @@
 |---|---|---|
 | `key` | written once (genesis) | 32 bytes, mode 0600: the integrity-at-rest key (HOST-16) |
 | `seg.log` | append-only | the frames (Host.Log) from genesis's origin frame: one batch record per frame; its append handle is flock'd, the writer lock |
-| `index.log` | append-only | one keyed page per seal: the index entries of the records since the base before it (HOST-30) |
-| `base.world` | replaced whole, atomically | the newest sealed base: the World, the seg.log position after it and the index.log prefix it names |
+| `index.log` | append-only | fixed-width keyed entries, one per record before the newest base, each tagged with its position: what log pages binary-search (HOST-33) |
+| `base.world` | replaced whole, atomically | the newest sealed base: the World, the seg.log position after it, and how many index.log entries it counts with the last one's tag |
 | `base.tmp` | transient: never read by an open, never backed up | a base being installed; a crash may leave one, which no open reads |
 
 ## Backup order (a live Store may be copied while its writer runs)

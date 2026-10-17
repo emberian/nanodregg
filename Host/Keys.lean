@@ -1,7 +1,7 @@
 /-
 # Host.Keys — the deployed Store sealers: KMAC256 under the Store key (HOST-16)
 
-Segment frames, index pages and the base are tagged with `Codec.Hash.mac` under the one Store
+Segment frames, index entries and the base are tagged with `Codec.Hash.mac` under the one Store
 key, in three domains, so no frame of one file verifies as another file's. The key is an
 integrity-at-rest key: it catches corruption, splicing and frames copied from another Store; it
 does not stop anyone who can write STORE, and nothing derives authority, consent or a member's
@@ -32,5 +32,6 @@ def Keys.ofKey (key : Digest) (shapes : Digest) : Keys where
   index := macSealer key domIndex
   worldDigest b := (Hash.digest domBaseDigest b).bytes
   shapes := shapes
+  chainBytes := Digest.width
 
 end Nanodregg.Host

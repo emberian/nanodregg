@@ -20,7 +20,7 @@ base was copied, plus whatever the writer appended since (`I ++ x`, `S ++ y`).
   copies because they were in the files when the base was copied.
 
 NOT covered (named in decisions/host.md HOST-32): a writer that RESTARTS between two copies
-truncates a torn tail or an orphan page (`openWriter`), so its later copy is a valid-prefix cut of
+truncates a torn tail or orphan entries (`openWriter`), so its later copy is a valid-prefix cut of
 the file followed by new appends, not the file then plus appends. RUNBOOK §6 copies a stopped
 writer. The premise that the live Store opened at the instant the base was copied is the writer's
 invariant, tested by host-sim's crash plants, not proved.
@@ -276,6 +276,22 @@ theorem indexed_foldlM_fst (mark : W → Nat × ByteArray) (step : W → ByteArr
       simp only [bind, Except.bind]
       exact indexed_foldlM_fst mark step rs _ _ _ h
 
+theorem indexed_foldlM_size (mark : W → Nat × ByteArray) (step : W → ByteArray → Except F W) :
+    ∀ (rs : List ByteArray) (w : W) (idx : Array Entry) (off : Nat) {st : W × Array Entry × Nat},
+      rs.foldlM (indexed mark step) (w, idx, off) = .ok st → st.2.1.size = idx.size + rs.length
+  | [], w, idx, off, st, h => by
+    simp only [List.foldlM, pure, Except.pure, Except.ok.injEq] at h
+    subst h; simp
+  | r :: rs, w, idx, off, st, h => by
+    simp only [List.foldlM] at h
+    cases hs : step w r with
+    | error e => simp [indexed, hs, bind, Except.bind] at h
+    | ok w' =>
+      simp only [indexed, hs, bind, Except.bind, pure, Except.pure] at h
+      have := indexed_foldlM_size mark step rs _ _ _ h
+      simp only [Array.size_push, List.length_cons] at this ⊢
+      omega
+
 /-- An indexed open of a tail from offset `off₀` ends its fold at `off₀ + validLen`: the offset the
 next record's entry names is where the valid bytes end. -/
 theorem openLog_indexed_off (s : Sealer) (m : Nat) (mark : W → Nat × ByteArray)
@@ -309,21 +325,22 @@ theorem tail_read (S : ByteArray) {off len : Nat} (ht : tagBytes ≤ off) (hs : 
 theorem openWith_seg_ok (keys : Keys) (c : Cadence) (world : Codec.Stream W) (mark : W → Nat × ByteArray)
     (origin : W → ByteArray) (step : W → ByteArray → Except F W) (file I S : ByteArray) {o : Opening W}
     (h : Id.run (openWith keys c world mark origin step file S.size I.size (segReader I) (segReader S)) = .ok o) :
-    ∃ (b : Base W) (baseBytes : Nat) (digest : ByteArray) (len : Nat) (entries : Array Entry)
+    ∃ (b : Base W) (baseBytes : Nat) (digest : ByteArray) (len : Nat)
       (op : Opened (W × Array Entry × Nat)) (tag : Codec.Digest),
       Base.read keys c world file = .ok (b, baseBytes, digest) ∧
       tailRead c baseBytes b.offset S.size = .ok len ∧
       tagBytes ≤ b.offset ∧
       S.extract (b.offset - tagBytes) b.offset = b.tag.bytes ∧
       originFault (F := F) keys.segment (S.extract 0 (originLen b.offset)) (origin b.world) = none ∧
-      b.indexOffset ≤ c.worldBytesMax ∧ b.indexOffset ≤ I.size ∧
-      indexEntries keys.index c b.indexTag (I.extract 0 b.indexOffset) = .ok entries ∧
-      openLog keys.segment c.recordBytesMax (indexed mark step) (b.world, entries, b.offset) b.tag.bytes
+      b.indexCount ≤ indexMax ∧ b.indexCount * entryBytes keys ≤ I.size ∧
+      indexNamed (keys.forStore (origin b.world)) b.indexCount b.indexLast
+        (I.extract (lastAt keys b.indexCount).1 ((lastAt keys b.indexCount).1 + (lastAt keys b.indexCount).2)) = none ∧
+      openLog keys.segment c.recordBytesMax (indexed mark step) (b.world, #[], b.offset) b.tag.bytes
         (S.extract b.offset S.size) = .ok op ∧
       Codec.Digest.ofBytes? op.lastTag = some tag ∧
       o = ⟨⟨op.world.1, op.records, op.validLen, op.lastTag, op.torn⟩,
-        ⟨b.offset, baseBytes, (mark b.world).1, (mark b.world).2, digest, ⟨b.indexOffset, b.indexTag⟩,
-          entries.size⟩, ⟨b.offset + op.validLen, tag⟩, op.world.2.1, I.size - b.indexOffset⟩ := by
+        ⟨b.offset, baseBytes, (mark b.world).1, (mark b.world).2, digest, ⟨b.indexCount, b.indexLast⟩⟩,
+          ⟨b.offset + op.validLen, tag⟩, op.world.2.1, I.size - b.indexCount * entryBytes keys⟩ := by
   unfold openWith at h
   simp only [segReader, pure_bind, Nat.zero_add] at h
   split at h
@@ -355,10 +372,11 @@ theorem openWith_seg_ok (keys : Keys) (c : Cadence) (world : Codec.Stream W) (ma
   split at h
   · exact absurd h (by simp [Id.run, pure])
   rename_i hi
+  have hla := lastAt_within keys b.indexCount
   rw [if_neg (by simp; omega)] at h
   split at h
   · exact absurd h (by simp [Id.run, pure])
-  rename_i entries hix
+  rename_i hix
   rw [r3] at h
   split at h
   · exact absurd h (by simp [Id.run, pure])
@@ -367,7 +385,7 @@ theorem openWith_seg_ok (keys : Keys) (c : Cadence) (world : Codec.Stream W) (ma
   · exact absurd h (by simp [Id.run, pure])
   rename_i tag htg
   simp only [Id.run, pure, Except.ok.injEq] at h
-  exact ⟨b, baseBytes, digest, len, entries, op, tag, hb, hlen, by omega, by simpa using htag, hof,
+  exact ⟨b, baseBytes, digest, len, op, tag, hb, hlen, by omega, by simpa using htag, hof,
     by omega, by omega, hix, hop, htg, h.symm⟩
 
 /-- What `Base.read` decodes (HOSTING-4's ask): the base file's one frame verifies under the base
@@ -408,12 +426,27 @@ theorem openWith_world (keys : Keys) (c : Cadence) (world : Codec.Stream W) (mar
       o.opened.records = rs.length ∧ tagBytes ≤ b.offset ∧ o.sealed.offset = b.offset ∧
       (S.extract b.offset S.size).extract 0 (o.pos.offset - b.offset) =
         encodeAll keys.segment b.tag.bytes rs := by
-  obtain ⟨b, baseBytes, digest, _, entries, op, _, hb, _, _, _, _, _, _, _, hop, _, rfl⟩ :=
+  obtain ⟨b, baseBytes, digest, _, op, _, hb, _, _, _, _, _, _, _, hop, _, rfl⟩ :=
     openWith_seg_ok keys c world mark origin step file I S h
   obtain ⟨rs, he, hf, _, hn⟩ := open_sound keys.segment (indexed mark step) _ _ _ hop
   refine ⟨b, baseBytes, digest, rs, hb, indexed_foldlM_fst mark step rs _ _ _ hf, hn, by omega, rfl, ?_⟩
   rw [show b.offset + op.validLen - b.offset = op.validLen by omega]
   exact he
+
+/-- **The loop holds only the entries since the base** (HOST-33 condition 2: RAM O(tail), not
+O(records)). An open that succeeds holds exactly one entry per record of the tail after its base,
+and none of the base's own (those stay on disk, `sealed.index.count` of them); the loop's state
+starts from it (`Opening.resident`) and `Resident.install` drops the entries each new base counts. -/
+theorem openWith_tail_entries (keys : Keys) (c : Cadence) (world : Codec.Stream W) (mark : W → Nat × ByteArray)
+    (origin : W → ByteArray) (step : W → ByteArray → Except F W) (file I S : ByteArray) {o : Opening W}
+    (h : Id.run (openWith keys c world mark origin step file S.size I.size (segReader I) (segReader S)) = .ok o) :
+    o.index.size = o.opened.records := by
+  obtain ⟨b, baseBytes, digest, _, op, _, hb, _, _, _, _, _, _, _, hop, _, rfl⟩ :=
+    openWith_seg_ok keys c world mark origin step file I S h
+  obtain ⟨rs, _, hf, _, hn⟩ := open_sound keys.segment (indexed mark step) _ _ _ hop
+  have := indexed_foldlM_size mark step rs _ _ _ hf
+  simp only at this ⊢
+  rw [this, hn]; simp
 
 theorem lastTag_size (s : Sealer) : ∀ (prev : ByteArray) (rs : List ByteArray), prev.size = tagBytes →
     (lastTag s prev rs).size = tagBytes
@@ -451,7 +484,7 @@ theorem openWith_backup (keys : Keys) (c : Cadence) (world : Codec.Stream W) (ma
     (∃ j f, R = .error (.log (.record j f)) ∧ o.opened.records ≤ j) := by
   have hfile : ¬ frameMax c.baseRecordMax < file.size := by
     intro hf; unfold openWith at h; rw [if_pos hf] at h; exact absurd h (by simp [Id.run, pure])
-  obtain ⟨b, baseBytes, digest, len, entries, op, tag, hb, hlen, hoff, htag, hof, hw, hi, hix, hop, htg, rfl⟩ :=
+  obtain ⟨b, baseBytes, digest, len, op, tag, hb, hlen, hoff, htag, hof, hw, hi, hix, hop, htg, rfl⟩ :=
     openWith_seg_ok keys c world mark origin step file I S h
   obtain ⟨hs, _⟩ := tailRead_ok hlen
   subst hR
@@ -475,11 +508,12 @@ theorem openWith_backup (keys : Keys) (c : Cadence) (world : Codec.Stream W) (ma
     rw [if_neg (by omega), if_neg (by rw [q1]; simp), q2, extract_append_le (by omega),
       if_neg (by simpa using htag), if_neg (by simp [size_append]; omega), extract_append_le hol, hof]
     dsimp only
+    have hla := lastAt_within keys b.indexCount
     rw [if_neg (by omega), if_neg (by rw [size_append]; omega), if_neg (by simp [size_append]; omega),
-      extract_append_le hi, hix]
+      extract_append_le (by omega), hix]
     dsimp only
     rw [q3, extract_append_to_end S y (by omega)]
-    rcases openLog_append keys.segment c.recordBytesMax (indexed mark step) (b.world, entries, b.offset)
+    rcases openLog_append keys.segment c.recordBytesMax (indexed mark step) (b.world, #[], b.offset)
         b.tag.bytes _ y hop with ⟨o', more, ho', hfold, hrec, hvl⟩ | ⟨off, ho', hoffc⟩ | ⟨j, f, ho', hj⟩
     · rw [ho']
       obtain ⟨rs, _, _, hlt, _⟩ := open_sound keys.segment (indexed mark step) _ _ _ ho'
@@ -488,8 +522,8 @@ theorem openWith_backup (keys : Keys) (c : Cadence) (world : Codec.Stream W) (ma
       dsimp only
       rw [show Codec.Digest.ofBytes? o'.lastTag = some ⟨o'.lastTag, hsz⟩ by
         simp [Codec.Digest.ofBytes?, hsz]]
-      have e1 := openLog_indexed_off keys.segment c.recordBytesMax mark step b.world entries b.offset _ _ hop
-      have e2 := openLog_indexed_off keys.segment c.recordBytesMax mark step b.world entries b.offset _ _ ho'
+      have e1 := openLog_indexed_off keys.segment c.recordBytesMax mark step b.world #[] b.offset _ _ hop
+      have e2 := openLog_indexed_off keys.segment c.recordBytesMax mark step b.world #[] b.offset _ _ ho'
       refine Or.inl ⟨_, more, rfl, rfl, hrec, by simp only; omega, ?_⟩
       have hst : op.world = (op.world.1, op.world.2.1, b.offset + op.validLen) := by rw [← e1]
       have hst' : o'.world = (o'.world.1, o'.world.2.1, b.offset + o'.validLen) := by rw [← e2]

@@ -233,9 +233,10 @@ def serveVerb (store : String) : IO UInt32 := do
     | .error f => refuseStore f
     | .ok wr => serving do
       let pagerSeg ← File.open (segmentPath store) .read
+      let pagerIdx ← File.open (indexPath store) .read
       let code ← runResident "serve" wr.opening.resident fun port =>
-        restarts (serve (machine X) recorder keys.segment (fileCheckpoint store keys c world recorder.mark wr.index) c
-            (fileStore wr.segment) (pager keys store pagerSeg) port limits fuelBatches)
+        restarts (serve (machine X) recorder keys.segment (fileCheckpoint store keys c world recorder.mark originChain wr.index) c
+            (fileStore wr.segment) (pager keys store pagerSeg pagerIdx) port limits fuelBatches)
           (reopenAt store keys c world recorder.mark originChain foldStep) recorder.mark restartsMax
       wr.segment.sync  -- the writer's handle, and so its lock, lives to here
       return code
@@ -256,7 +257,7 @@ def followVerb (store memberHex grantHex : String) : IO UInt32 := do
       let code ← runResident "follow" wr.opening.resident fun port =>
         -- the World this member was invited to: its own Store's genesis origin, never the writer's word
         restarts (Follow.loop keys ⟨wr.opening.opened.world.origin, member, grant, Follow.window⟩ (fileStore wr.segment)
-            (fileCheckpoint store keys c world recorder.mark wr.index) port download fuelBatches)
+            (fileCheckpoint store keys c world recorder.mark originChain wr.index) port download fuelBatches)
           (reopenAt store keys c world recorder.mark originChain foldStep) recorder.mark restartsMax
       wr.segment.sync  -- the follower's handle, and so its lock, lives to here
       return code

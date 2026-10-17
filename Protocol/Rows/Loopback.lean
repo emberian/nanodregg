@@ -539,7 +539,7 @@ def restart (sealFirst : Bool) : M Expect := do
   | .error e => pure (.refused s!"writerFailed {e}")
   | .ok (.eof, r0) =>
       if sealFirst then
-        match ← (Writer.checkpoint st.mem).write r0.world r0.pos (Host.sealEntries r0.sealed r0.index) r0.sealed.index with
+        match ← (Writer.checkpoint st.sys.writer st.mem).write r0.world r0.pos (Host.sealEntries r0.index) r0.sealed.index with
         | .error f => return .refused f.name
         | .ok _ => pure ()
       let d ← st.mem.disk.get

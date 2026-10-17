@@ -108,12 +108,13 @@ structure Mem where
   disk : IO.Ref Host.Sim.Disk
   bases : IO.Ref Host.Sim.Bases
 
-/-- HOST's in-memory checkpoint. -/
-def checkpoint (m : Mem) : Checkpoint (World D) :=
+/-- HOST's in-memory checkpoint (its entries tagged for the Store of the World it seals, HOST-33). -/
+def checkpoint (P : Params) (m : Mem) : Checkpoint (World D) :=
   Host.Sim.memCheckpoint m.disk m.bases Host.Sim.keys cadence Sim.world
+    (fun w => P.X.env.bytes (World.genesisChain P.X.env w.origin))
 
-/-- HOST's pager (`Host.Page.build` + `Host.Page.bytes`) over the in-memory segment's synced bytes:
-what `Host.Deployed.pager` does over the segment file. -/
+/-- HOST's pager (`Host.Page.build` + `Host.Page.bytes`) over the in-memory segment's synced bytes
+and `index.log` (`Host.Page.entryAt`): what `Host.Deployed.pager` does over the files. -/
 def pager (X : Ctx D) (lieTip forgeBase : Bool) (m : Mem) (r : Resident (World D)) :
     Deferred → IO (UInt8 × ByteArray)
   | .read start => do
@@ -125,8 +126,12 @@ def pager (X : Ctx D) (lieTip forgeBase : Bool) (m : Mem) (r : Resident (World D
     | .error f => pure (Status.refused.code, f.name.toUTF8)
   | .log start => do
   let seg := (← m.disk.get).synced
+  let idx := (← m.bases.get).index
   match Id.run (Page.build X.env Sim.dc X.digestOf Host.Sim.keys.segment cadence.recordBytesMax
-      pageBudget (fun off len => pure (seg.extract off (off + len))) r.index
+      pageBudget (fun off len => pure (seg.extract off (off + len)))
+      (Page.entryAt (Host.Sim.keys.forStore (X.env.bytes (World.genesisChain X.env r.world.origin)))
+        (fun off len => pure (idx.extract off (off + len))) r.sealed.index.count r.index)
+      (r.sealed.index.count + r.index.size) r.pos.offset
       (r.world.height, X.env.bytes r.world.chain) start) with
   | .error f => pure (Status.refused.code, f.name.toUTF8)
   | .ok a => match Page.bytes a (if lieTip then a.height else r.world.height) with
@@ -169,7 +174,7 @@ def start (P : Params) (m : Mem) (r : Resident (World D)) : IO Running := do
     try
       serve (machine P) ⟨fun _ ts => Record.encode Sim.dc ts,
           fun w => (w.height, P.X.env.bytes w.chain)⟩ Host.Sim.keys.segment
-        (checkpoint m) cadence (Host.Sim.memStore m.disk none) (pager P.X P.lieTip P.forgeBase m)
+        (checkpoint P m) cadence (Host.Sim.memStore m.disk none) (pager P.X P.lieTip P.forgeBase m)
         port limits fuel r
     finally
       discard <| (reps.close).toBaseIO

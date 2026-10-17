@@ -37,7 +37,7 @@ code space holds both tables: `host` (Host.Status, below 64) and nd-supervise's 
 | 30 | foreignOrigin | fatal | stopped (RestartPreventExitStatus) | the segment's origin frame verifies under this Store's key but names another World (two Stores share a key file, one's seg.log spliced over the other's): restore seg.log from this Store's own backup; never restart it |
 | 32 | behindAnchor | fatal | stopped (RestartPreventExitStatus) | the copy is truncated or rolled back: use a newer copy |
 | 33 | chainMismatch | fatal | stopped (RestartPreventExitStatus) | the copy is another history: do not serve it |
-| 34 | badIndex | fatal | stopped (RestartPreventExitStatus) | a page fault: report to HOST |
+| 34 | badIndex | fatal | stopped (RestartPreventExitStatus) | an index.log entry a page read does not verify at its position (HOST-33): run `host check` on the stopped Store, restore index.log from this Store's own backup, and report to HOST |
 | 35 | pageTooLarge | fatal | stopped (RestartPreventExitStatus) | a page fault: report to HOST |
 | 36 | pastEnd | fatal | stopped (RestartPreventExitStatus) | a page fault: report to HOST |
 | 37 | shortBase | fatal | stopped (RestartPreventExitStatus) | the base changed under a read: run `host check`; if it repeats, report to HOST |
@@ -47,10 +47,10 @@ code space holds both tables: `host` (Host.Status, below 64) and nd-supervise's 
 | 41 | stream | restart | restarted after 2 s; failed past 5 starts in 120 s | automatic: the request pipe broke; the restart re-pairs it with nd-supervise |
 | 42 | noThreads | fatal | stopped (RestartPreventExitStatus) | the runtime ran a dedicated task inline: a build or platform defect, report to HOST |
 | 43 | shapeMismatch | fatal | stopped (RestartPreventExitStatus) | the base was written under other codec shapes: re-genesis from a checked export (RUNBOOK §6) |
-| 45 | indexShort | fatal | stopped (RestartPreventExitStatus) | index.log is shorter than the prefix the base names (a copy cut short, or the file truncated): restore index.log from this Store's own backup taken after its base.world; never restart it |
-| 46 | indexCorrupt | fatal | stopped (RestartPreventExitStatus) | index.log's pages up to the base's indexOffset do not verify under this Store's key or do not end at the tag the base names: restore index.log from this Store's own backup; never restart it |
-| 47 | entryUnfit | fatal | stopped (RestartPreventExitStatus) | a defect: a seal met an index entry its codec cannot spell (HOST-31); keep the Store untouched, report to HOST |
-| 48 | indexMoved | restart | restarted after 2 s; failed past 5 starts in 120 s | automatic; index.log changed size under the writer (another process wrote or truncated it): the restart's open truncates an orphan page or refuses indexShort; if it repeats, find the other writer |
+| 45 | indexShort | fatal | stopped (RestartPreventExitStatus) | index.log is shorter than the entries the base counts (a copy cut short, or the file truncated): restore index.log from this Store's own backup taken after its base.world; never restart it |
+| 46 | indexCorrupt | fatal | stopped (RestartPreventExitStatus) | an index.log entry the base counts does not verify under this Store's key at its position (from open: the last one; from `host check`: the entry named on stderr): restore index.log from this Store's own backup; never restart it |
+| 47 | entryUnfit | fatal | stopped (RestartPreventExitStatus) | a defect: a seal met an index entry the entry layout cannot spell (HOST-31); keep the Store untouched, report to HOST |
+| 48 | indexMoved | restart | restarted after 2 s; failed past 5 starts in 120 s | automatic; index.log changed size under the writer (another process wrote or truncated it): the restart's open truncates orphan entries or refuses indexShort; if it repeats, find the other writer |
 | 49 | carryMismatch | fatal | stopped (RestartPreventExitStatus) | the carried file is not the one exported (digest), does not decode, or the imported Store reopened to other bytes (stderr names which): re-export from the STOPPED old Store and copy the printed digest exactly; remove a Store left by `carryMismatch reopen` and report it to HOST |
 
 ## nd-supervise

@@ -4,8 +4,9 @@
 * `originChain_genesis` / `genesis_origin_passes` (HOST-25) — for every World `host genesis` makes
   (`Receive.genesisWorld`, what `Receive.genesis` returns: `genesis_ok`), the deployed `originChain` is the chain `recorder.mark` writes into the origin
   frame (KERNEL's `genesis_chain`), and the deployed genesis image passes the origin check;
-* `indexEntries_pages` (HOST-31) — the generic index round trip with its one premise
-  (`worldBytesMax < 2^32`) discharged at the deployed cadence;
+* `mark_chain_width` (HOST-33) — every chain the deployed loop puts in an index entry is the width
+  the deployed Store's entries hold (`Keys.ofKey`'s `chainBytes`), so `entryUnfit`'s chain arm
+  cannot fire at the deployed instance (the generic round trip, `entriesSeq_read`, has no premise);
 * `foldStep_originChain` (HOST-25) — a record the deployed reopen folds keeps `originChain`
   (`Record.step_origin`, from KERNEL's `fold_origin`), so every later base's World states the chain
   the origin frame holds.
@@ -39,14 +40,12 @@ theorem foldStep_originChain {w w' : World D} {r : ByteArray} (h : foldStep w r 
   unfold originChain
   rw [Record.step_origin h]
 
-/-- `indexEntries_pages` at the deployed cadence: every `index.log` the deployed seals write from
-genesis reads back as every entry handed to them, in order (HOST-31; `worldBytesMax` = 2^28 fits
-a frame's u32 length). -/
-theorem indexEntries_pages (keys : Keys) (ess : List (Array Entry)) {bytes : ByteArray} {pos : Position}
-    (h : Base.pages keys c indexStart ess = .ok (bytes, pos)) :
-    indexEntries keys.index c pos.tag bytes = .ok (ess.map Array.toList).flatten.toArray ∧
-      pos.offset = bytes.size :=
-  Host.indexEntries_pages keys c (by decide) ess h
+/-- **The deployed chain is the deployed entry's width** (HOST-33): the chain `recorder.mark`
+writes into every index entry is `chainBytes` long for every Store key, so no deployed seal is
+refused `entryUnfit` for its chain. -/
+theorem mark_chain_width (key : Codec.Digest) (w : World D) :
+    (recorder.mark w).2.size = (Keys.ofKey key shapes).chainBytes := by
+  simp only [recorder, Keys.ofKey, Codec.Digest.size_eq]
 
 /-- `Carry.world_carried` at the deployed codec (HOST-28): a file `host import` accepts hashes to
 the operator's digest, and the World it makes holds exactly the file's carried bytes at its anchor

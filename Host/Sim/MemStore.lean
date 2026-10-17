@@ -37,7 +37,7 @@ leaves on disk). -/
 structure Bases where
   file : ByteArray := ByteArray.empty
   history : Array (ByteArray × Nat) := #[]
-  /-- the Store's `index.log`: every page a seal appended (HOST-30) -/
+  /-- the Store's `index.log`: every entry a seal appended (HOST-30, HOST-33) -/
   index : ByteArray := ByteArray.empty
   /-- `index.log`'s size when each base of `history` became durable -/
   indexAt : Array Nat := #[]
@@ -49,10 +49,10 @@ structure Bases where
 /-- A checkpoint over memory: the deployed `Base.file`, then an atomic replace. Inline, so a seeded
 run seals at the same points every time. -/
 def memCheckpoint {W : Type} (disk : IO.Ref Disk) (bases : IO.Ref Bases) (keys : Keys) (c : Cadence)
-    (world : Codec.Stream W) : Checkpoint W where
+    (world : Codec.Stream W) (origin : W → ByteArray) : Checkpoint W where
   async := false
   write w seg entries ipos := do
-    match Base.seal keys c world w seg ipos entries (← bases.get).index.size with
+    match Base.seal (keys.forStore (origin w)) c world w seg ipos entries (← bases.get).index.size with
     | .error f => return .error f
     | .ok (page, ipos', file) =>
       let synced := (← disk.get).synced.size

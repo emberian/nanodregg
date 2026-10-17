@@ -26,6 +26,10 @@ open Nanodregg.Kernel Nanodregg.Host.Sim Nanodregg.Codec
 
 abbrev Fault := StoreFault (Record.Fault (Reject Nat))
 
+/-- The deployed KMAC sealers under `key`, with the toy World's chain width in an index entry (the
+toy digest is a u64, `keys.chainBytes`). -/
+def fileKeys (key : Digest) : Keys := { Keys.ofKey key shapes with chainBytes := keys.chainBytes }
+
 def newKey : IO Digest := do
   match Digest.ofBytes? (← IO.getRandomBytes 32) with
   | some k => pure k
@@ -54,7 +58,7 @@ def serveDir (dir : System.FilePath) (keys : Keys) (c : Cadence) (seed : Nat) (f
         pure (p, (⟨16, 3 * (frames.head?.map (·.payload.size)).getD 1⟩ : Limits))
       else pure (scriptPort fr sp sent, (⟨16, 1 <<< 20⟩ : Limits))
     -- rounds of `roundFuel` batches, each ending in the real in-process reopen of the files (D4)
-    let (exit, r) ← restarts (serve machine recorder keys.segment (fileCheckpoint dir keys c world recorder.mark wr.index) c
+    let (exit, r) ← restarts (serve machine recorder keys.segment (fileCheckpoint dir keys c world recorder.mark originChain wr.index) c
         (fileStore wr.segment) (fun _ _ => pure (0, ByteArray.empty)) port limits roundFuel)
       (reopenAt dir keys c world recorder.mark originChain foldStep) recorder.mark (frames.length + 1) o.resident
     let second ← (openWriter dir keys c world recorder.mark originChain foldStep : IO (Except Fault _))
@@ -78,7 +82,7 @@ def body (seed : Nat) (dirA dirB : System.FilePath) : IO UInt32 := do
   let failures ← IO.mkRef 0
   let frames := (scenario seed 200).map (·.1)
   let key ← newKey
-  let keys := Keys.ofKey key shapes
+  let keys := fileKeys key
   do
     let dir := dirA
     let made ← (Host.genesis dir key keys cadence world recorder.mark Sim.genesis : IO (Except Fault Unit))
@@ -110,7 +114,7 @@ def body (seed : Nat) (dirA dirB : System.FilePath) : IO UInt32 := do
           (o.opened.torn = half.size ∧ before = after ∧
             sameWorld o.opened.world r.world) failures
       -- plant-foreign-key
-      let other := Keys.ofKey (← newKey) shapes
+      let other := fileKeys (← newKey)
       check "plant-foreign-key: the Store under another key is refused `baseCorrupt`"
         (match ← follow dir other cadence with | .error f => f.name = "baseCorrupt" | _ => false) failures
       match ← serveDir dir keys cadence seed (frames.drop 120) (viaChannel := true) with
@@ -138,7 +142,7 @@ def body (seed : Nat) (dirA dirB : System.FilePath) : IO UInt32 := do
       | o0 :: r1 :: _ :: _ :: _ =>
         -- the first frame after genesis's origin frame, re-sealed under another key
         let cut := frameSize o0
-        let foreign := Log.frame (Keys.ofKey (← newKey) shapes).segment segmentInitial r1
+        let foreign := Log.frame (fileKeys (← newKey)).segment segmentInitial r1
         let spliced := seg.extract 0 cut ++ foreign ++ seg.extract (cut + foreign.size) seg.size
         IO.FS.writeBinFile (segmentPath dir) spliced
         check "plant-foreign-frame: a frame under another key is refused `corrupt`"
@@ -152,7 +156,7 @@ def body (seed : Nat) (dirA dirB : System.FilePath) : IO UInt32 := do
     let _ ← (Host.genesis dir key keys still world recorder.mark Sim.genesis : IO (Except Fault Unit))
     do
       let key2 ← newKey
-      let keys2 := Keys.ofKey key2 shapes
+      let keys2 := fileKeys key2
       let _ ← (Host.genesis dir2 key2 keys2 still world recorder.mark Sim.genesis : IO (Except Fault Unit))
       match ← serveDir dir2 keys2 still seed (frames.take 30) with
       | .error e => check s!"plant-foreign-segment: the other Store serves ({e})" false failures

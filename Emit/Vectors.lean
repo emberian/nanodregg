@@ -150,7 +150,7 @@ def printCarried (c : Carried Sim.D) : String :=
 
 def printBase (b : Host.Base (World Sim.D)) : String :=
   s!"\{world := {printWorld b.world}, offset := {b.offset}, tag := {text b.tag}, " ++
-    s!"indexOffset := {b.indexOffset}, indexTag := {text b.indexTag}}"
+    s!"indexCount := {b.indexCount}, indexLast := {text b.indexLast}}"
 
 /-- One line: tabs and newlines would break the table. -/
 def oneLine (s : String) : String := (s.replace "\n" " ").replace "\t" " "
@@ -225,8 +225,7 @@ def sites : List Site :=
     site "kernel/world" (Codec.Kernel.world Sim.env Sim.dc) (each 2 fun _ => Vectors.world) printWorld,
     site "kernel/carried" (Codec.Kernel.carried Sim.env Sim.dc) (each 2 fun _ => Vectors.carried) printCarried,
     site "path/badComponent" (Field.pathCodec pathMax (by decide)) pathVecs (fun p => text p.val),
-    site "host/entry" Host.Entry.codec (each 2 fun _ => do return ⟨← nat64, ← nat64, ← bytes 32⟩) text,
-    site "host/base" (Host.Base.codec (Codec.Kernel.world Sim.env Sim.dc))
+    site "host/base/index-count" (Host.Base.codec (Codec.Kernel.world Sim.env Sim.dc))
       (each 2 fun _ => do return ⟨← Vectors.world, ← nat64, ← digest, ← nat64, ← digest⟩) printBase,
     site "host/carried-head" (Host.Carry.head Sim.dc) (each 2 fun _ => do return ⟨← dig, ← nat64, ← dig⟩) text,
     ⟨"lang/data: no value", Tag.of "lang/data: no value" Lang.Wire.noData, pure [ByteArray.empty],

@@ -74,7 +74,8 @@ inductive Status where
   /-- `host check --anchor`: at the anchor's height the chain is not the anchor's (another
   history) -/
   | chainMismatch
-  /-- a `log` walk met an index entry whose chain is not a digest -/
+  /-- a `log` walk read an index entry that does not read back at its position under the Store's
+  key, or whose chain is not a digest (HOST-33: the entry is refused when read, never used) -/
   | badIndex
   /-- a page does not fit its reply's bounds -/
   | pageTooLarge
@@ -100,17 +101,18 @@ inductive Status where
   /-- the segment's origin frame verifies but states another World's genesis chain than the base
   World's origin (HOST-25): another Store's seg.log under a shared key file -/
   | foreignOrigin
-  /-- `index.log` is shorter than the prefix the base names (HOST-30) -/
+  /-- `index.log` is shorter than the entries the base counts (HOST-30, HOST-33) -/
   | indexShort
-  /-- `index.log`'s pages up to the base's prefix do not verify, end elsewhere, or do not decode
-  (HOST-30) -/
+  /-- the last entry the base counts does not read back at its position or is not the one the base
+  names (open, HOST-33); from `host check`, any entry the base counts does not read back, name its
+  record's offset, or keep heights ascending -/
   | indexCorrupt
-  /-- a seal's page held an index entry outside the entry codec's domain (a chain wider than
-  `chainBytesMax`, a height or offset past u64): a defect (HOST-31) -/
+  /-- a seal was handed an index entry outside the entry layout (a chain not the Store's width, a
+  height or offset past u64): a defect (HOST-31, HOST-33) -/
   | entryUnfit
-  /-- a seal found `index.log` at another size than the prefix the newest base names: another
-  process wrote or truncated it; the restart's open truncates an orphan or refuses `indexShort`
-  (HOST-31) -/
+  /-- a seal found `index.log` at another size than the end of the entries the newest base counts:
+  another process wrote or truncated it; the restart's open truncates orphans or refuses
+  `indexShort` (HOST-31) -/
   | indexMoved
   /-- `host import`: the carried file does not hash to the operator's digest, does not decode, its
   anchor is not its carried height, the kernel refused the carried state, or the imported Store
