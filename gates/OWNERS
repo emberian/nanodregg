@@ -12,6 +12,7 @@ client/	CLIENT
 attach/	CLIENT
 client/src/generated.rs	CODEC
 sandbox/	CLIENT
+devtools/	CLIENT
 Lang/	LANG
 Emit/	CODEC
 gates/	GATES
@@ -23,6 +24,8 @@ lake-manifest.json	GATES
 lakefile.lean	SHARED
 gates/runs.tsv	SHARED
 lakefile.toml	SHARED
+Cargo.toml	SHARED
+Cargo.lock	SHARED
 SIZE.md	SHARED
 CHARTER.md	ROOT
 DECISIONS.md	ROOT
