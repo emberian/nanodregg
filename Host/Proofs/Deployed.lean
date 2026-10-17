@@ -12,6 +12,8 @@
 -/
 import Host.Deployed
 import Host.Proofs.Base
+import Host.Proofs.Carry
+import Codec.Proofs.Deployed
 
 namespace Nanodregg.Host.Deployed
 
@@ -45,5 +47,26 @@ theorem indexEntries_pages (keys : Keys) (ess : List (Array Entry)) {bytes : Byt
     indexEntries keys.index c pos.tag bytes = .ok (ess.map Array.toList).flatten.toArray ∧
       pos.offset = bytes.size :=
   Host.indexEntries_pages keys c (by decide) ess h
+
+/-- `Carry.world_carried` at the deployed codec (HOST-28): a file `host import` accepts hashes to
+the operator's digest, and the World it makes holds exactly the file's carried bytes at its anchor
+height. The codec premise is CODEC's `digestCodec_lawful`. -/
+theorem import_carried {name nonce : ByteArray} {want : Codec.Digest} {f : ByteArray} {r : Carry.Read D}
+    {w₀ : World D} (h : Carry.importWorld X Codec.Deployed.digestCodec name nonce want f = .ok (w₀, r)) :
+    Carry.digestOf f = want ∧
+      (Codec.Kernel.carried X.env Codec.Deployed.digestCodec).bytes w₀.carried = f.extract r.carriedAt f.size ∧
+      w₀.height = r.head.height :=
+  have ⟨hr, hw⟩ := Carry.importWorld_ok h
+  Carry.world_carried Codec.Deployed.digestCodec_lawful.on hr hw
+
+/-- `Carry.exportFile_reads` at the deployed codec: what `host export` writes, `host import`
+reads back under the printed digest, to the exported World's carried bytes and height. -/
+theorem export_reads {w : World D} {f : ByteArray}
+    (h : Carry.exportFile X.env Codec.Deployed.digestCodec w = .ok f) :
+    ∃ r, Carry.read X.env Codec.Deployed.digestCodec (Carry.digestOf f) f = .ok r ∧
+      (Codec.Kernel.carried X.env Codec.Deployed.digestCodec).bytes r.carried =
+        (Codec.Kernel.carried X.env Codec.Deployed.digestCodec).bytes w.carried ∧
+      r.head = ⟨w.origin, w.height, w.chain⟩ :=
+  Carry.exportFile_reads h
 
 end Nanodregg.Host.Deployed

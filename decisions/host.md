@@ -1271,3 +1271,79 @@ histories do not. Both HOST-17's count and this one see the index grow only when
 outgrow it. If I had measured only `grow` (the existing scenario), I would have reported 0.33 as
 flat and stopped. The seal finding is a misstated claim, not a defect. I am pinning the corrected
 statement, not changing the cadence.
+
+## HOST-34 · HOST-28 BUILT: `host export` / `host import --digest` (2026-10-18, HOST-8; after KERNEL-29 b8e0f82 and CODEC-22's carried codec 28b4a38)
+**What was built, as HOST-28 decided, with these exact shapes:**
+- The file. Host/Carry.lean: `stamp32 ‖ head ‖ carried`. `head = from ‖ u64 height ‖ chain` is its own
+  codec `host/carried-head`. `carried` is CODEC's `Codec.Kernel.carried`. `stamp` is
+  `Hash.digest "nanodregg/host/carried/v1"` over the Tags of the head codec and the carried codec. It is
+  computed from the codecs and never written as a literal. `digestOf` has its own domain
+  (`nanodregg/host/carried-file/v1`). The file is not MAC'd.
+- `Carry.read`. It checks, in this order: the digest (`digest`), the stamp (`shapeMismatch`), the
+  decode of head and carried (`decode`), and that the anchor height is the carried height (`anchor`,
+  a check HOST-28 did not name: the head's height is redundant with the carried height, so it is
+  checked rather than trusted). Import then calls KERNEL's ONE carry (`Carry.world` =
+  `Receive.carry X name nonce from carried`). A name or nonce past its bound is `usage`; any other
+  `CarryRefusal` is `carryMismatch carry <name>`. Next comes the one genesis (`Host.genesis`), then
+  `openWriter`, whose World's carried bytes must be the file's (`carryMismatch reopen`, the only
+  refusal that leaves a directory behind).
+- `export` uses `check`'s read-only open (`Check.openClean`, factored out of `Check.run`: key,
+  `openFollower`, `historyClean`) and `Carry.exportFile`. That function re-reads its own file under its
+  own digest and refuses `carryMismatch export` unless the file gives back the World's carried bytes and
+  height. It writes OUT only, never over an existing file (`exists out`), and prints `carried`, `from`
+  and `anchor`.
+- One new Status, `carryMismatch` 49, fatal, with its OPS hostAction arm. stderr says
+  `refused carryMismatch digest|decode|anchor|reopen|export|tooLarge|carry <kernel name>`. A file
+  under another stamp is `shapeMismatch` (43).
+
+**Theorems** (Host/Proofs/Carry; Deployed instances in Host/Proofs/Deployed):
+- `read_ok`: an accepted file hashes to the digest, carries the stamp, and its carried bytes are
+  exactly its tail (CODEC's canonical decode);
+- `read_digest` and `read_stamp`, the teeth;
+- `world_carried` and `Deployed.import_carried`: the imported World holds exactly the file's carried
+  bytes at the anchor height (KERNEL's `carry_carried`), so the reopen compare is a pair assertion
+  on the base codec;
+- `exportFile_reads` and `Deployed.export_reads`: what export writes, import reads back;
+- `exportFile_ok`: completeness. Export refuses no World whose carried state fits the codec. Its
+  premises are `Carried.CodecFits` and the origin, chain and height fitting. They are NOT discharged at
+  Deployed for an opened World: that needs `World.CodecFits` of an opened World, which comes from
+  CODEC's decode plus the fold. This is a named gap. Soundness does not rest on it, because export
+  re-reads its file at runtime.
+
+Plants:
+- host-sim carryPlants (toy Ctx, the deployed functions):
+  - export→import keeps the carried bytes and the height under a new origin;
+  - two nonces give two Worlds;
+  - a flipped byte under the original digest gives `digest`;
+  - another stamp gives `shapeMismatch`;
+  - a lying head height gives `anchor`;
+  - control: the file reads back.
+- Live smoke on the real `host` binary (hbox logs/host8-carry-smoke, 11 KB):
+  - genesis → export → import → check prints the carried height;
+  - no digest gives `usage digest` (8);
+  - a wrong digest and a flipped byte give `carryMismatch digest` (49), with no Store directory left;
+  - export over an existing OUT gives `exists out` (17).
+- OPS-2's store-plants rows (drafted against this contract) are the live plants.
+
+**Critique.** Import writes the Store only after every pure check passed. That ordering is read off
+`importVerb`; no theorem states it, because it is IO. Export reads a live Store the way `check` does,
+so take it from a stopped writer (RUNBOOK §6). The carried state is KERNEL's choice (journal inside its
+window, PROTOCOL-30). **Flag day:** none. A new verb pair and one new Status: deploy/units
+re-renders, the restart/prevent lists gain 49, nothing re-geneses.
+**Law-6 read (a spawned reader).** Nothing is vacuous. Its WEAK findings, and what each now is:
+- `exportFile_reads` stated only the carried bytes and the height. Export now also checks the head's
+  origin and chain, and the theorem states `r.head = ⟨w.origin, w.height, w.chain⟩`. That covers the
+  lineage HOST-28 needs, not only the code's construction.
+- `openWith_world` did not tie its records to the segment. It now states that they re-encode to the
+  bytes after the base, from the base's tag.
+- The "one refusal that leaves a directory" docstring was wrong. Any refusal from genesis on (genesis,
+  openWriter, the reopen, an IO error mid-write) can leave a Store. Every refusal before genesis leaves
+  nothing, and that is read off `importVerb`, not proved.
+- The reopen compare is only HALF a pair assertion. `world_carried` gives the World's bytes. That
+  `genesisImage` followed by `openWriter` gives back that World up to Equiv is not proved (the base
+  codec round trip over `genesisImage`), and no plant reaches `carryMismatch reopen`.
+- `exportFile_ok` is not discharged at Deployed. It needs `World.CodecFits` of an opened World, and
+  KERNEL's journal bound is strict (`<`) where `CodecFits` allows `≤`. Named in its docstring.
+- The plants use the toy Ctx. The verbs' IO (ordering, `exists`, `tooLarge`, the reopen) has only the
+  live smoke and OPS-2's store-plants rows. There is no plant for a decode refusal or a kernel carry
+  refusal.

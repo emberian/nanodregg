@@ -112,6 +112,10 @@ inductive Status where
   process wrote or truncated it; the restart's open truncates an orphan or refuses `indexShort`
   (HOST-31) -/
   | indexMoved
+  /-- `host import`: the carried file does not hash to the operator's digest, does not decode, its
+  anchor is not its carried height, the kernel refused the carried state, or the imported Store
+  reopened to other carried bytes; `host export`: its own file did not read back (HOST-28) -/
+  | carryMismatch
   deriving DecidableEq, Repr
 
 namespace Status
@@ -121,7 +125,7 @@ def all : List Status :=
    locked, .exists, badKey, shortRead, noBase, baseTooLarge, baseCorrupt, baseUndecodable,
    segmentShort, tailTooLong, foreignSegment, corrupt, record, tagWidth, behindAnchor, chainMismatch,
    badIndex, pageTooLarge, pastEnd, shortBase, reopenFailed, reopenDiverged, lifetime, stream, noThreads,
-   shapeMismatch, foreignOrigin, indexShort, indexCorrupt, entryUnfit, indexMoved]
+   shapeMismatch, foreignOrigin, indexShort, indexCorrupt, entryUnfit, indexMoved, carryMismatch]
 
 def code : Status → Nat
   | eof => 0
@@ -166,6 +170,7 @@ def code : Status → Nat
   | indexCorrupt => 46
   | entryUnfit => 47
   | indexMoved => 48
+  | carryMismatch => 49
 
 def cls : Status → ExitClass
   | eof => .done
@@ -174,7 +179,7 @@ def cls : Status → ExitClass
   | locked | .exists | badKey | shortRead | noBase | baseTooLarge | baseCorrupt | baseUndecodable
   | segmentShort | tailTooLong | foreignSegment | corrupt | record | tagWidth | behindAnchor | chainMismatch
   | badIndex | pageTooLarge | pastEnd | shortBase | reopenFailed | reopenDiverged | noThreads
-  | shapeMismatch | foreignOrigin | indexShort | indexCorrupt | entryUnfit => .fatal
+  | shapeMismatch | foreignOrigin | indexShort | indexCorrupt | entryUnfit | carryMismatch => .fatal
 
 /-- The name printed beside the code (`refused NAME` / `exit NAME` on stderr). -/
 def name (s : Status) : String := ((toString (repr s)).splitOn ".").getLast!

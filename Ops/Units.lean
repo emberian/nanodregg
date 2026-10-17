@@ -224,6 +224,7 @@ def hostAction : Status → String
   | .recordTooLarge | .worldTooLarge | .indexTooLarge =>
     "a defect or the HOST-14 design limit: report to HOST"
   | .entryUnfit => "a defect: a seal met an index entry its codec cannot spell (HOST-31); keep the Store untouched, report to HOST"
+  | .carryMismatch => "the carried file is not the one exported (digest), does not decode, or the imported Store reopened to other bytes (stderr names which): re-export from the STOPPED old Store and copy the printed digest exactly; remove a Store left by `carryMismatch reopen` and report it to HOST"
   | .indexMoved => "automatic; index.log changed size under the writer (another process wrote or truncated it): the restart's open truncates an orphan page or refuses indexShort; if it repeats, find the other writer"
   | .io => "a Store file is missing or unreadable: check the path and permissions (the call and errno are on stderr)"
   | .ioServing => "automatic; an IO error after the open: check the disk"

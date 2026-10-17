@@ -70,18 +70,26 @@ def historyClean (keys : Keys) (prefix_ : ByteArray) (offset : Nat) : Bool :=
   let rv := Log.recover keys.segment c.recordBytesMax segmentInitial prefix_
   rv.tail == .clean && rv.validLen == offset
 
-def run (store : String) (anchor : Option Anchor) : IO UInt32 := do
+/-- The read-only open `check` and `export` share: the key, `openFollower`, and the segment before
+the base recovering clean (`historyClean`); a refusal is its status and name. -/
+def openClean (store : String) : IO (Except (Status × String) (Keys × Opening (World D))) := do
   match ← (readKey store : IO (Except (StoreFault (Record.Fault (Reject D))) Digest)) with
-  | .error f => refuse f.status f.name
+  | .error f => return .error (f.status, f.name)
   | .ok key =>
     let keys := Keys.ofKey key shapes
     match ← openFollower store keys c world recorder.mark originChain foldStep with
-    | .error f => refuse f.status f.name
+    | .error f => return .error (f.status, f.name)
     | .ok o =>
       let seg ← File.open (segmentPath store) .read
       let prefix_ ← seg.readAt 0 o.sealed.offset.toUSize
-      unless prefix_.size = o.sealed.offset do return ← refuse .shortRead
-      unless historyClean keys prefix_ o.sealed.offset do return ← refuse .corrupt "corrupt history"
+      unless prefix_.size = o.sealed.offset do return .error (.shortRead, Status.shortRead.name)
+      unless historyClean keys prefix_ o.sealed.offset do return .error (.corrupt, "corrupt history")
+      return .ok (keys, o)
+
+def run (store : String) (anchor : Option Anchor) : IO UInt32 := do
+  match ← openClean store with
+  | .error (s, n) => refuse s n
+  | .ok (keys, o) =>
       match anchor with
       | none => IO.println (statusLine o "none"); return 0
       | some a =>

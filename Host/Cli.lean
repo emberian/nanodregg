@@ -9,6 +9,15 @@
     host follow STORE MEMBER_HEX GRANT_HEX         the follower loop on stdin/stdout (Host.Follow)
     host check STORE [--anchor HEIGHT:CHAIN_HEX]   open read-only, print one STATUS line, refuse a
                                                    Store behind or off the anchor (Host.Check)
+    host export STORE OUT                          write the carried file of a STOPPED Store's World
+                                                   (Host.Carry), print `carried DIGEST`, `from
+                                                   ORIGIN`, `anchor H:C`; writes nothing in STORE
+    host import STORE NAME IN --digest HEX [--nonce HEX32]
+                                                   a new Store from a carried file: the digest is
+                                                   REQUIRED and checked, with the stamp and the
+                                                   decode, before any Store file exists; KERNEL's
+                                                   one carry, the one genesis, then a reopen whose
+                                                   carried bytes must be the file's (HOST-28)
 
 STORE is the only path any verb touches. Frames are `Host.Wire`'s (the supervisor's mux is the
 other end). The exit code is `Host.Status.code` of how the process ended (`Host.Exit`): one code
@@ -25,6 +34,7 @@ import Host.Follow
 import Host.Exit
 import Host.Check
 import Kernel.Receive.Follow
+import Host.Carry
 
 namespace Nanodregg.Host.Cli
 
@@ -56,7 +66,7 @@ def refuse (status : Status) (name : String := status.name) : IO UInt32 := do
 def refuseStore {F : Type} (f : StoreFault F) : IO UInt32 := refuse f.status f.name
 
 def usage : String :=
-  "usage: host genesis STORE NAME [--nonce HEX32] [KEY_HEX NEXT_HEX]... | host serve STORE | host follow STORE MEMBER_HEX GRANT_HEX | host check STORE [--anchor HEIGHT:CHAIN_HEX]"
+  "usage: host genesis STORE NAME [--nonce HEX32] [KEY_HEX NEXT_HEX]... | host serve STORE | host follow STORE MEMBER_HEX GRANT_HEX | host check STORE [--anchor HEIGHT:CHAIN_HEX] | host export STORE OUT | host import STORE NAME IN --digest HEX [--nonce HEX32]"
 
 def hexDigest (s : String) : Option Digest := Protocol.Text.ofHex s >>= Digest.ofBytes?
 
@@ -100,6 +110,70 @@ def genesisVerb (store name : String) (nonceArg : Option String) (fs : List Stri
       IO.println s!"founder {i} member {(Receive.founderId X w₀.origin i).toHex} grant {(Receive.founderGrantId X w₀.origin i).toHex}"
     IO.println s!"chain {w₀.chain.toHex}"
     return 0
+
+/-- `host export STORE OUT`: the read-only open `check` makes (`openClean`), the carried file of
+its World, checked to read back (`Carry.exportFile`), written to OUT only (never over an existing
+file), and its digest, origin and anchor on stdout. Take it from a STOPPED writer (RUNBOOK §6): it
+reads a consistent base and the tail that verifies, as `check` does. -/
+def exportVerb (store out : String) : IO UInt32 := do
+  match ← Check.openClean store with
+  | .error (s, n) => refuse s n
+  | .ok (_, o) =>
+    let w := o.opened.world
+    match Carry.exportFile X.env Codec.Deployed.digestCodec w with
+    | .error f => refuse .carryMismatch s!"carryMismatch {f.name}"
+    | .ok bytes =>
+      if ← (System.FilePath.mk out).pathExists then return ← refuse .exists "out"
+      writeNew out bytes
+      IO.println s!"carried {(Carry.digestOf bytes).toHex}"
+      IO.println s!"from {w.origin.toHex}"
+      IO.println s!"anchor {w.height}:{w.chain.toHex}"
+      return 0
+
+/-- The most bytes a carried file may have: its stamp and head, and a World's worth. -/
+def carriedMax : Nat := Carry.stampBytes + 128 + c.worldBytesMax
+
+/-- `host import STORE NAME IN --digest HEX [--nonce HEX32]`. Before any Store path is created:
+the digest parses (`usage digest`), IN is at most `carriedMax`, and `Carry.read` checks the digest,
+the stamp (`shapeMismatch`), the decode and the anchor; KERNEL's carry refuses by name (a name or
+nonce past its bound is `usage`, any other refusal `carryMismatch`). Then the one genesis writes
+the World, `openWriter` reopens it, and its carried bytes must be the file's (`carryMismatch
+reopen`). A refusal from here on (genesis, `openWriter`, the reopen compare, an IO error mid-write)
+can leave a Store directory behind; every refusal before it leaves nothing. The ordering is this
+function's, read off the code (IO), not a theorem. -/
+def importVerb (store name inPath digestHex : String) (nonceArg : Option String) : IO UInt32 := do
+  let some want := hexDigest digestHex | refuse .usage "digest"
+  let nonce ← match ← genesisNonce nonceArg with
+    | .ok b => pure b
+    | .error s => return ← refuse s "nonce"
+  let bytes ← match ← (readBounded inPath carriedMax (fun n => .base (.baseTooLarge n)) :
+      IO (Except (StoreFault (Record.Fault (Reject D))) ByteArray)) with
+    | .ok b => pure b
+    | .error (.base (.baseTooLarge _)) => return ← refuse .carryMismatch "carryMismatch tooLarge"
+    | .error f => return ← refuseStore f
+  let dc := Codec.Deployed.digestCodec
+  let (w₀, r) ← match Carry.importWorld X dc name.toUTF8 nonce want bytes with
+    | .ok p => pure p
+    | .error (s, n) => return ← refuse s n
+  let some key := Digest.ofBytes? (← IO.getRandomBytes 32) | refuse .entropy
+  let keys := Keys.ofKey key shapes
+  match ← (Host.genesis store key keys c world recorder.mark w₀ :
+      IO (Except (StoreFault (Record.Fault (Reject D))) Unit)) with
+  | .error f => refuseStore f
+  | .ok () =>
+    match ← openWriter store keys c world recorder.mark originChain foldStep with
+    | .error f => refuseStore f
+    | .ok wr =>
+      let back := wr.opening.opened.world
+      unless (Codec.Kernel.carried X.env dc).bytes back.carried = bytes.extract r.carriedAt bytes.size do
+        return ← refuse .carryMismatch "carryMismatch reopen"
+      wr.segment.sync  -- the writer's handle, and so its lock, lives to here
+      IO.println s!"origin {back.origin.toHex}"
+      IO.println s!"nonce {Protocol.Text.toHex nonce}"
+      IO.println s!"from {r.head.fromOrigin.toHex}"
+      IO.println s!"height {back.height}"
+      IO.println s!"chain {back.chain.toHex}"
+      return 0
 
 /-- After the Store opened, an IO error that escapes the loop is the disk or the pipe misbehaving
 mid-service, the same class as `uncertain`: `ioServing`, restart (a fresh open recovers or
@@ -196,6 +270,11 @@ def verb : List String → IO UInt32
   | ["check", store, "--anchor", a] => do
     let some a := Check.Anchor.parse a | refuse .usage "anchor"
     Check.run store (some a)
+  | ["export", store, out] => exportVerb store out
+  | ["import", store, name, inp, "--digest", d] => importVerb store name inp d none
+  | ["import", store, name, inp, "--digest", d, "--nonce", n] => importVerb store name inp d (some n)
+  | ["import", store, name, inp, "--nonce", n, "--digest", d] => importVerb store name inp d (some n)
+  | "import" :: _ => refuse .usage "digest"
   | _ => do IO.eprintln usage; return Status.usage.code.toUInt32
 
 /-- Every other IO error ends as `io` with its text, never as the runtime's uncaught-exception

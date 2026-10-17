@@ -51,6 +51,7 @@ code space holds both tables: `host` (Host.Status, below 64) and nd-supervise's 
 | 46 | indexCorrupt | fatal | stopped (RestartPreventExitStatus) | index.log's pages up to the base's indexOffset do not verify under this Store's key or do not end at the tag the base names: restore index.log from this Store's own backup; never restart it |
 | 47 | entryUnfit | fatal | stopped (RestartPreventExitStatus) | a defect: a seal met an index entry its codec cannot spell (HOST-31); keep the Store untouched, report to HOST |
 | 48 | indexMoved | restart | restarted after 2 s; failed past 5 starts in 120 s | automatic; index.log changed size under the writer (another process wrote or truncated it): the restart's open truncates an orphan page or refuses indexShort; if it repeats, find the other writer |
+| 49 | carryMismatch | fatal | stopped (RestartPreventExitStatus) | the carried file is not the one exported (digest), does not decode, or the imported Store reopened to other bytes (stderr names which): re-export from the STOPPED old Store and copy the printed digest exactly; remove a Store left by `carryMismatch reopen` and report it to HOST |
 
 ## nd-supervise
 

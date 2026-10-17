@@ -35,6 +35,7 @@ import Host.Page
 import Host.Serve
 import Host.Tail
 import Kernel.Sim
+import Host.Carry
 
 namespace Nanodregg.Host.Sim
 
@@ -333,11 +334,52 @@ def sizeRows (seed : Nat) : IO Unit := do
   show_ "steady" (← sizeTerm seed 8000 steadyTurn)
     ["open index-bytes-per-base-byte", "seal base-bytes-net-of-growth-per-appended-byte"]
 
+/-- HOST-28's plants, over the toy Ctx (`Kernel.Sim.ctx`, its u64 digest codec): the carried file
+of a World with a journal entry is exported and imported through the deployed pure functions
+(`Carry.exportFile`, `Carry.read`, `Carry.world`); a flipped byte under the original digest is
+refused `digest`; another stamp (digest recomputed) `shapeMismatch`; a head whose anchor height is
+not the carried height `anchor`; two imports under two nonces are two Worlds. -/
+def carryPlants (failures : IO.Ref Nat) : IO Unit := do
+  let kx := Kernel.Sim.ctx
+  let kdc := Kernel.Sim.dc
+  let kw₀ : World Kernel.Sim.D := World.genesis kx.env (kx.env.hash "nanodregg/host-sim/origin/v1" "carry".toUTF8) (2 ^ 40)
+  let kw : World Kernel.Sim.D := { kw₀ with height := 7, journal := kw₀.journal.insert 42 (5, 99) }
+  let cbytes (w : World Kernel.Sim.D) := (Codec.Kernel.carried kx.env kdc).bytes w.carried
+  match Carry.exportFile kx.env kdc kw with
+  | .error f => check s!"plant-carry: export of a World with a journal entry ({f.name})" false failures
+  | .ok f =>
+    let want := Carry.digestOf f
+    let imported (n : UInt8) := match Carry.importWorld kx kdc "carried".toUTF8 (ByteArray.mk (Array.replicate 32 n)) want f with
+      | .ok (w, _) => some w
+      | .error _ => none
+    match imported 1, imported 2 with
+    | some a, some b =>
+      check "plant-carry: export then import keeps the carried bytes and the height, under a new origin"
+        (cbytes a == cbytes kw && a.height == kw.height && a.origin != kw.origin && a.journal.contains 42) failures
+      check "plant-carry: two imports under two nonces are two Worlds" (a.origin != b.origin) failures
+    | _, _ => check "plant-carry: the exported file imports" false failures
+    let refusedAs (want' : Codec.Digest) (g : ByteArray) : String :=
+      match Carry.read kx.env kdc want' g with
+      | .ok _ => "read"
+      | .error e => e.name
+    let flipped := flipByte f (f.size - 1)
+    check "plant-carry-flip: a carried byte flipped in transit, under the original digest, is refused `digest`"
+      (flipped != f && refusedAs want flipped == "digest") failures
+    let otherStamp := flipByte f 0
+    check "plant-carry-stamp: another stamp (digest recomputed) is refused `shapeMismatch` before decoding"
+      (refusedAs (Carry.digestOf otherStamp) otherStamp == "shapeMismatch") failures
+    -- the head's height is the u64 after the 32-byte stamp and the 8-byte origin
+    let liar := flipByte f (Carry.stampBytes + 8)
+    check "plant-carry-anchor: a head whose anchor height is not the carried height is refused `anchor`"
+      (refusedAs (Carry.digestOf liar) liar == "anchor") failures
+    check "plant-carry: the file reads back under its digest (control)" (refusedAs want f == "read") failures
+
 /-- HOST-31's plants: a seal refuses an `index.log` that is not the size of the base's prefix
 (`indexMoved`), and a page refuses an entry its codec cannot spell (`entryUnfit`). -/
 def indexPlants (seed : Nat) (frames : List Frame) (r : RunResult) (failures : IO.Ref Nat) : IO Unit := do
   backupPlants r failures
   sizeRows seed
+  carryPlants failures
   -- plant-index-moved (HOST-31): index.log one byte longer than the prefix the base names
   match genesisStore cadence with
   | .error _ => check "plant-index-moved: genesis opens" false failures

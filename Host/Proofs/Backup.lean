@@ -261,6 +261,21 @@ theorem indexed_foldlM_off (mark : W → Nat × ByteArray) (step : W → ByteArr
       simp only [List.map_cons, List.sum_cons]
       omega
 
+theorem indexed_foldlM_fst (mark : W → Nat × ByteArray) (step : W → ByteArray → Except F W) :
+    ∀ (rs : List ByteArray) (w : W) (idx : Array Entry) (off : Nat) {st : W × Array Entry × Nat},
+      rs.foldlM (indexed mark step) (w, idx, off) = .ok st → rs.foldlM step w = .ok st.1
+  | [], w, idx, off, st, h => by
+    simp only [List.foldlM, pure, Except.pure, Except.ok.injEq] at h ⊢
+    subst h; rfl
+  | r :: rs, w, idx, off, st, h => by
+    simp only [List.foldlM] at h ⊢
+    cases hs : step w r with
+    | error e => simp [indexed, hs, bind, Except.bind] at h
+    | ok w' =>
+      simp only [indexed, hs, bind, Except.bind, pure, Except.pure] at h
+      simp only [bind, Except.bind]
+      exact indexed_foldlM_fst mark step rs _ _ _ h
+
 /-- An indexed open of a tail from offset `off₀` ends its fold at `off₀ + validLen`: the offset the
 next record's entry names is where the valid bytes end. -/
 theorem openLog_indexed_off (s : Sealer) (m : Nat) (mark : W → Nat × ByteArray)
@@ -354,6 +369,51 @@ theorem openWith_seg_ok (keys : Keys) (c : Cadence) (world : Codec.Stream W) (ma
   simp only [Id.run, pure, Except.ok.injEq] at h
   exact ⟨b, baseBytes, digest, len, entries, op, tag, hb, hlen, by omega, by simpa using htag, hof,
     by omega, by omega, hix, hop, htg, h.symm⟩
+
+/-- What `Base.read` decodes (HOSTING-4's ask): the base file's one frame verifies under the base
+sealer, its head is the running shape stamp, and the base is the base codec's decode of the rest. -/
+theorem Base.read_decode (keys : Keys) (c : Cadence) (world : Codec.Stream W) (file : ByteArray)
+    {b : Base W} {n : Nat} {d : ByteArray} (h : Base.read keys c world file = .ok (b, n, d)) :
+    ∃ r, frameAt keys.base c.baseRecordMax file 0 baseInitial = some r ∧
+      r.record.extract 0 stampBytes = keys.shapes.bytes ∧
+      (Base.codec world).decode (r.record.extract stampBytes r.record.size) = .ok b ∧
+      n = world.size b.world := by
+  unfold Base.read at h
+  split at h
+  · cases h
+  split at h
+  · cases h
+  rename_i r hr
+  split at h
+  · cases h
+  dsimp only at h
+  by_cases hs : r.record.extract 0 stampBytes = keys.shapes.bytes
+  · rw [if_neg (by simpa using hs)] at h
+    cases hb : (Base.codec world).decode (r.record.extract stampBytes r.record.size) with
+    | error e => rw [hb] at h; cases h
+    | ok b' =>
+      rw [hb] at h
+      cases h
+      exact ⟨r, hr, hs, hb, rfl⟩
+  · rw [if_pos hs] at h; cases h
+
+/-- **The World an open reaches** (the pure half of `Host.openAt`, HOSTING-4's ask): the base
+`Base.read` decodes from the base file, folded by `step` over records of the segment after it.
+`openAt` is this `openWith` over the files' readers. -/
+theorem openWith_world (keys : Keys) (c : Cadence) (world : Codec.Stream W) (mark : W → Nat × ByteArray)
+    (origin : W → ByteArray) (step : W → ByteArray → Except F W) (file I S : ByteArray) {o : Opening W}
+    (h : Id.run (openWith keys c world mark origin step file S.size I.size (segReader I) (segReader S)) = .ok o) :
+    ∃ (b : Base W) (baseBytes : Nat) (digest : ByteArray) (rs : List ByteArray),
+      Base.read keys c world file = .ok (b, baseBytes, digest) ∧ rs.foldlM step b.world = .ok o.opened.world ∧
+      o.opened.records = rs.length ∧ tagBytes ≤ b.offset ∧ o.sealed.offset = b.offset ∧
+      (S.extract b.offset S.size).extract 0 (o.pos.offset - b.offset) =
+        encodeAll keys.segment b.tag.bytes rs := by
+  obtain ⟨b, baseBytes, digest, _, entries, op, _, hb, _, _, _, _, _, _, _, hop, _, rfl⟩ :=
+    openWith_seg_ok keys c world mark origin step file I S h
+  obtain ⟨rs, he, hf, _, hn⟩ := open_sound keys.segment (indexed mark step) _ _ _ hop
+  refine ⟨b, baseBytes, digest, rs, hb, indexed_foldlM_fst mark step rs _ _ _ hf, hn, by omega, rfl, ?_⟩
+  rw [show b.offset + op.validLen - b.offset = op.validLen by omega]
+  exact he
 
 theorem lastTag_size (s : Sealer) : ∀ (prev : ByteArray) (rs : List ByteArray), prev.size = tagBytes →
     (lastTag s prev rs).size = tagBytes
