@@ -46,7 +46,7 @@ inductive Exit
   | badFrame
   /-- a `decide` header that does not decode -/
   | badRequest
-  /-- a verdict past `frameMax` (an assertion: `decide` bounds every field it prints) -/
+  /-- a verdict with no frame: unreachable (`Proofs.Broker.step_encodes`), kept as the assertion -/
   | unencodable
   | lifetime
   /-- the allowance package has no id (`Allow.allowanceId`): no allowance could be read -/

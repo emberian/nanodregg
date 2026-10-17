@@ -467,6 +467,62 @@ theorem body_shape {ask : Ask} {body : ByteArray} (h : requestBody ask = .ok bod
         ← List.map_map, hz]
     simp [lit_data, messages_data, str_spec, Json.bodySpec, hs, List.append_assoc]
 
+/-! ## Every verdict `step` returns has a frame (HOSTING-12's owed theorem) -/
+
+/-- A grant's charge fits its allowance's cap, and the cap is below `capMax`. -/
+theorem grant_cap {b : Broker} {now : Nat} {r : ByteArray} {ask : Ask} {b' : Broker} {g : Grant}
+    (h : Broker.decide b now r ask = .ok (b', g)) : g.charged < Bounds.capMax := by
+  unfold Broker.decide at h
+  simp only [bind, Except.bind, pure, Except.pure] at h
+  repeat' split at h
+  all_goals first | cases h | skip
+  rename_i _ _ _ e he hm _ _ _ _ _ _ _ hc
+  have hcap : e.allowance.cap < Bounds.capMax := by
+    simp only [Allowance.malformed, Bool.or_eq_true, beq_iff_eq, decide_eq_true_eq, not_or] at hm
+    omega
+  dsimp only
+  omega
+
+/-- The size the verdict codec writes for a refusal, and for a grant with body `bd`. -/
+private theorem refuse_size (w : Wire.VerdictTy) (hw : w.1 = ⟨1, by decide⟩) :
+    Wire.verdictCodec.size w = 2 := by
+  obtain ⟨⟨s, hs⟩, v⟩ := w
+  simp only [Fin.mk.injEq] at hw
+  subst hw
+  rfl
+
+/-- The verdict of every `step` encodes in one frame: a refusal is two bytes, and a grant's fields
+(Lean's body within `bodyMax`, the fixed request lines, a charge below `capMax`) fit `frameMax`. So
+`hosting-broker`'s `unencodable` end is unreachable: an assertion, never a path. -/
+theorem step_encodes (b : Broker) (r : ByteArray) (now : Nat) (askBytes : ByteArray) :
+    (Wire.encodeVerdict (Broker.step b r now askBytes).2).isSome = true := by
+  have refuse : ∀ why, (Wire.encodeVerdict (.refuse why)).isSome = true := fun why => by
+    simp only [Wire.encodeVerdict, Wire.verdictWire?, pure, bind, Option.bind]
+    rw [← verdictCodec_lawful.size_eq, refuse_size _ rfl]
+    simp [Bounds.frameMax]
+  unfold Broker.step
+  split
+  · exact refuse _
+  · split
+    · rename_i ask _ b'' g hd
+      have hc := grant_cap hd
+      obtain ⟨-, -, -, -, -, -, -, -, -, -, -, -, -, hbs, -⟩ := grant_allowed hd
+      have hc64 : g.charged < 2 ^ 64 := by unfold Bounds.capMax at hc; omega
+      have hb : g.body.size ≤ Bounds.frameMax := by unfold Bounds.bodyMax at hbs; omega
+      have ht : anthropic.target.size ≤ Bounds.frameMax := by decide
+      have hh : anthropic.headers.size ≤ Bounds.frameMax := by decide
+      have hk : anthropic.keyHeader.size ≤ Bounds.frameMax := by decide
+      have hsz : anthropic.target.size + anthropic.headers.size + anthropic.keyHeader.size ≤ 4096 - 29 := by
+        decide
+      simp only [Wire.encodeVerdict, Wire.verdictWire?, hc64, dite_true, Wire.bytes?, ht, hh, hk, hb,
+        bind, Option.bind, pure]
+      rw [← verdictCodec_lawful.size_eq]
+      show (if 1 + (4 + (8 + ((4 + anthropic.target.size) + ((4 + anthropic.headers.size) +
+          ((4 + anthropic.keyHeader.size) + ((4 + g.body.size) + 0)))))) ≤ Bounds.frameMax then _ else none).isSome = true
+      rw [if_pos (by unfold Bounds.bodyMax Bounds.frameMax at hbs; unfold Bounds.frameMax; omega)]
+      rfl
+    · exact refuse _
+
 /-! ## Teeth: closed instances that make the general theorems non-vacuous -/
 
 private def alw : Allowance := ⟨"m".toUTF8, 7, 1000, 60000, 1000, 100⟩

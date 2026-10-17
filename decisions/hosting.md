@@ -559,6 +559,9 @@ cost rounded down (`cost_worst`); price-0 accepted (`grant_allowed`, `refusal_te
 too large for the kernel, so the launcher test carries it. No theorem says a grant's verdict
 encodes: `hosting-broker` exits `unencodable` if it does not, after `decide` accepted. That fails
 safe, because the in-memory charge dies with the process and the restart forfeits the window.
+(Closed by HOSTING-4, 10-18: `Proofs.Broker.step_encodes`, which says every verdict `step` returns
+has a frame, with `grant_cap` (a charge is below `capMax`), so `unencodable` is unreachable. Plant: a
+`bodyMax` of `frameMax - 100` is red.)
 Second pass (same reader): ACCEPT. Its one loose end, that roles were not tied to the role bytes,
 is now part of `body_shape`.
 **Stage 1, the Rust half (HOSTING-3, later 10-17).**
