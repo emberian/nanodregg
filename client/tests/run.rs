@@ -111,7 +111,7 @@ fn round_trip_with_a_lost_submit_reply() {
     );
     assert_eq!(
         follow.seen[1].1,
-        Outcome::Signed(custody.sign(b"observation").unwrap().encode().unwrap())
+        Outcome::Custody(custody.sign(b"observation").unwrap().encode().unwrap())
     );
     assert_eq!(
         follow.seen[3],
@@ -262,7 +262,7 @@ fn sign_next_then_a_committed_submit_advances_custody_in_one_command() {
     )
     .unwrap();
     let bytes = match &follow.seen[0].1 {
-        Outcome::Signed(b) => b.clone(),
+        Outcome::Custody(b) => b.clone(),
         o => Vec::from(format!("{o:?}")),
     };
     let s = nanodregg_client::generated::layout::SignResult::decode(&bytes).unwrap();
@@ -273,6 +273,51 @@ fn sign_next_then_a_committed_submit_advances_custody_in_one_command() {
         "advanced on the committed settlement"
     );
     assert_eq!(custody.sign(b"").unwrap().next, pending.to_vec());
+    assert!(custody.armed().unwrap().is_none());
+    std::fs::remove_dir_all(&d).unwrap();
+}
+
+#[test]
+fn a_refused_rotation_submit_leaves_custody_on_its_current_key() {
+    let (d, custody) = setup("signnext-refused");
+    let before = custody.public_key().unwrap();
+    custody.precommit().unwrap();
+    let mut follow = ScriptedFollow {
+        steps: VecDeque::from([
+            Step::SignNext {
+                message: b"rotate".to_vec(),
+                k: b"k1".to_vec(),
+            },
+            Step::Submit {
+                call: b"ROTATE".to_vec(),
+                k: b"k2".to_vec(),
+            },
+            Step::Done {
+                exit: 0,
+                stdout: Vec::new(),
+                stderr: Vec::new(),
+            },
+        ]),
+        seen: Vec::new(),
+    };
+    let mut host = ScriptedHost {
+        replies: VecDeque::from([Ok((T.refused, b"notPrecommitted".to_vec()))]),
+        asked: Vec::new(),
+    };
+    run::run(
+        &[],
+        &mut follow,
+        &mut host,
+        &custody,
+        &d.join("attempts"),
+        T,
+    )
+    .unwrap();
+    assert_eq!(
+        custody.public_key().unwrap(),
+        before,
+        "a refused rotation never advances"
+    );
     assert!(custody.armed().unwrap().is_none());
     std::fs::remove_dir_all(&d).unwrap();
 }

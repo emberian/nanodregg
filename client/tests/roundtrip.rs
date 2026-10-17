@@ -10,7 +10,7 @@ use std::process::Command;
 
 mod common;
 use common::supervise;
-use nanodregg_client::generated::layout::SignResult;
+use nanodregg_client::generated::layout::{PrecommitResult, SignResult};
 
 const LIB: &str = r#"
 import struct, sys
@@ -38,6 +38,20 @@ for conn, op, p in frames():
     if k == b'\x01': reply(conn, 0, bytes([1]) + bs(b'observation') + bs(b'\x02'))
     elif k == b'\x02': reply(conn, 0, bytes([3]) + bs(b'CALL') + bs(b'\x03'))
     else: reply(conn, 0, bytes([0, 0]) + bs(b'settled ' + bytes([result[0] + 48]) + b' ' + result[1:] + b'\n') + bs(b''))
+"#;
+
+// rotate: precommit → signNext "rotate" → submit "ROT" → done; logs each result by its k.
+const ROTATE: &str = r#"
+log = open(sys.argv[1], 'ab')
+for conn, op, p in frames():
+    if op == 5:
+        reply(conn, 0, bytes([4]) + bs(b'\x01')); continue
+    n = struct.unpack('<I', p[:4])[0]; k = p[4:4+n]
+    m = struct.unpack('<I', p[4+n:8+n])[0]; result = p[8+n:8+n+m]; assert len(p) == 8+n+m
+    log.write(bytes([k[0]]) + bs(result)); log.flush()
+    if k == b'\x01': reply(conn, 0, bytes([5]) + bs(b'rotate') + bs(b'\x02'))
+    elif k == b'\x02': reply(conn, 0, bytes([3]) + bs(b'ROT') + bs(b'\x03'))
+    else: reply(conn, 0, bytes([0, 0]) + bs(b'rotated\n') + bs(b''))
 "#;
 
 // host: read → ok "challenge"; submit → uncertain; lookup → ok "receipt". Logs every request.
@@ -125,6 +139,76 @@ fn stand_in_follow_and_host_challenge_sign_submit_lookup_done_through_the_binari
         std::fs::read(ws.join("attempts/0/committed")).unwrap(),
         b"receipt"
     );
+    drop((_f, _h));
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+/// One logged result: `u8 k ‖ u32le n ‖ result[n]`, in order.
+fn results(log: &[u8]) -> Vec<(u8, Vec<u8>)> {
+    let (mut out, mut i) = (Vec::new(), 0);
+    while i < log.len() {
+        let n = u32::from_le_bytes(log[i + 1..i + 5].try_into().unwrap()) as usize;
+        out.push((log[i], log[i + 5..i + 5 + n].to_vec()));
+        i += 5 + n;
+    }
+    out
+}
+
+#[test]
+fn stand_in_rotate_precommit_sign_next_submit_lookup_advances_custody_through_the_binaries() {
+    let root = std::env::temp_dir().join(format!("nd-rot-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    for d in ["ws", "logs", "holding"] {
+        std::fs::create_dir_all(root.join(d)).unwrap();
+    }
+    let root = root.canonicalize().unwrap();
+    let (ws, logs, holding) = (root.join("ws"), root.join("logs"), root.join("holding"));
+    std::fs::set_permissions(
+        &holding,
+        std::os::unix::fs::PermissionsExt::from_mode(0o700),
+    )
+    .unwrap();
+    let nd = |args: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_nd"))
+            .env("ND_WORKSPACE", &ws)
+            .env("ND_HOLDING", &holding)
+            .args(args)
+            .output()
+            .unwrap()
+    };
+    assert!(nd(&["--init"]).status.success());
+    let next0 = std::fs::read(ws.join("next.pub")).unwrap();
+    let (flog, hlog) = (logs.join("follow.log"), logs.join("host.log"));
+    let (follow, host) = (format!("{LIB}{ROTATE}"), format!("{LIB}{HOST}"));
+    let _f = supervise(&ws.join("follow.sock"), &ws, &[&logs], &follow, &[&flog]);
+    let _h = supervise(&ws.join("host.sock"), &ws, &[&logs], &host, &[&hlog]);
+
+    let out = nd(&["rotate"]);
+    assert!(
+        out.status.success(),
+        "nd failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(out.stdout, b"rotated\n");
+    let r = results(&std::fs::read(&flog).unwrap());
+    assert_eq!((r[0].0, r[1].0, r[2].0), (1, 2, 3));
+    let pre = PrecommitResult::decode(&r[0].1).unwrap();
+    assert_eq!(pre.next, next0, "precommit names the precommitted next key");
+    let signed = SignResult::decode(&r[1].1).unwrap();
+    assert_eq!((&signed.key, &signed.next), (&next0, &pre.pending));
+    let vk = ed25519_dalek::VerifyingKey::from_bytes(&next0.clone().try_into().unwrap()).unwrap();
+    let sig = ed25519_dalek::Signature::from_slice(&signed.signature).unwrap();
+    vk.verify_strict(b"rotate", &sig).unwrap();
+    // The host answered the submit uncertain; nd looked the same bytes up, then custody advanced.
+    let seed = std::fs::read(ws.join("seed")).unwrap();
+    let current = ed25519_dalek::SigningKey::from_bytes(&seed.try_into().unwrap());
+    assert_eq!(
+        current.verifying_key().to_bytes().to_vec(),
+        next0,
+        "the next key is current"
+    );
+    assert_eq!(std::fs::read(ws.join("next.pub")).unwrap(), pre.pending);
+    assert!(!ws.join("rotation").exists() && !holding.join("pending").exists());
     drop((_f, _h));
     std::fs::remove_dir_all(&root).unwrap();
 }

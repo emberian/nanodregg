@@ -12,14 +12,13 @@ use std::path::{Path, PathBuf};
 
 use crate::attempt::{Attempt, AttemptError, Request, Settlement, State};
 use crate::custody::{Custody, CustodyError, Rotation};
-use crate::generated::layout::SignResult;
-use crate::generated::layout::Step;
+use crate::generated::layout::{PrecommitResult, Refusal, Step};
 
 /// What a performed step hands back to follow.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Outcome {
-    /// Custody's answer to a `sign` step: the encoded `SignResult` (key, next, signature).
-    Signed(Vec<u8>),
+    /// Custody's encoded answer: `SignResult` (sign, signNext) or `PrecommitResult` (precommit).
+    Custody(Vec<u8>),
     /// The Host's reply: status byte and payload, verbatim.
     Reply {
         /// Status byte.
@@ -34,7 +33,7 @@ impl Outcome {
     /// reply frame body as it arrived (`u8 status ‖ payload`, the shape [`crate::frame`] reads).
     pub fn result(&self) -> Vec<u8> {
         match self {
-            Self::Signed(s) => s.clone(),
+            Self::Custody(s) => s.clone(),
             Self::Reply { status, payload } => [&[*status][..], payload].concat(),
         }
     }
@@ -87,8 +86,6 @@ pub enum RunError {
     Attempt(AttemptError),
     /// Custody could not sign or settle a rotation.
     Custody(CustodyError),
-    /// A step custody cannot answer yet (its result layout is not emitted).
-    RotationStep(&'static str),
     /// The attempt is still uncertain; its directory is named so a later run resumes it.
     Uncertain(PathBuf),
 }
@@ -101,7 +98,6 @@ impl std::fmt::Display for RunError {
             Self::Host(e) => write!(f, "host: {e}"),
             Self::Attempt(e) => write!(f, "{e}"),
             Self::Custody(e) => write!(f, "{e}"),
-            Self::RotationStep(s) => write!(f, "custody does not perform {s} yet"),
             Self::Uncertain(p) => write!(
                 f,
                 "uncertain: the call in {} may or may not have committed",
@@ -184,15 +180,21 @@ pub fn run(
             } => return Ok((exit, stdout, stderr)),
             Step::Sign { message, k } => {
                 let signed = custody.sign(&message).map_err(RunError::Custody)?;
-                (k, Outcome::Signed(encoded(&signed)?))
+                (k, Outcome::Custody(encoded(signed.encode())?))
             }
             Step::SignNext { message, k } => {
                 let (signed, r) = custody.sign_next(&message).map_err(RunError::Custody)?;
                 rotation = Some(r);
-                (k, Outcome::Signed(encoded(&signed)?))
+                (k, Outcome::Custody(encoded(signed.encode())?))
             }
-            // Its result layout (precommitResultLayout) is not emitted yet; no hand-written codec.
-            Step::Precommit { .. } => return Err(RunError::RotationStep("precommit")),
+            Step::Precommit { k } => {
+                let (next, pending) = custody.precommit().map_err(RunError::Custody)?;
+                let result = PrecommitResult {
+                    next: next.to_vec(),
+                    pending: pending.to_vec(),
+                };
+                (k, Outcome::Custody(encoded(result.encode())?))
+            }
             Step::Host { op, payload, k } => {
                 let (status, payload) =
                     host.exchange(op.code(), &payload).map_err(RunError::Host)?;
@@ -233,13 +235,9 @@ pub fn run(
     Err(RunError::StepsExhausted)
 }
 
-/// The encoded `SignResult` (three bounded fields; a refusal would be a custody bug).
-fn encoded(s: &SignResult) -> Result<Vec<u8>, RunError> {
-    s.encode().map_err(|r| {
-        RunError::Custody(CustodyError::Io(io::Error::other(format!(
-            "signResult: {r:?}"
-        ))))
-    })
+/// A custody result's encoding (fixed-size keys and signatures: a refusal is a custody bug).
+fn encoded(r: Result<Vec<u8>, Refusal>) -> Result<Vec<u8>, RunError> {
+    r.map_err(|r| RunError::Custody(CustodyError::Io(io::Error::other(format!("{r:?}")))))
 }
 
 /// A new attempt `(n, attempts/<n>)`, n one past the largest present.
