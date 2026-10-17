@@ -303,3 +303,22 @@ not this framing: `Stream.tagged`/`choice` (one tag byte for n arms) is the fix 
 different because its nodes are tiny and numerous. I took the measurement as permission to make
 the exception.
 Status: open.
+
+## CODEC-16 · Tags are content-addressed, with a proof that shapes never share bytes (2026-10-16)
+**Decision.** `Codec/Tag.lean`: `Shape.put` writes a shape canonically. Each constructor is a byte, and every number
+and length is an unbounded LEB128 varint, so there is no width cap. `Tag.of label c =
+Hash.digest "nanodregg/codec/tag/v1" (Tag.message label c.shape)`. `Codec/Proofs/Tag.lean`:
+`Shape.put_prefix` (prefix-free: shape bytes followed by anything determine the shape and the rest),
+`Shape.put_injective`, `Tag.message_injective`, and `Tag.of_eq`: equal tags mean equal label and shape,
+or a cSHAKE256 collision on two distinct messages. Use: a Store stamps each record kind with the
+tag of the codec that wrote it, and an open under codecs with other tags refuses by name (CODEC-5).
+**Alternatives.** Hand-written `/vN` labels plus a census (minidregg's 637 tags and 635 fingerprint pins).
+Or a hash of the codec's source text, which moves on any reformat.
+**Critique.** The shape cannot see inside `refine`'s functions, so a semantic change behind an
+unchanged refine name keeps its tag. The kernel codecs name each refinement (`kernel/turn`,
+`kernel/op`, …). Nothing checks that a name changes when its function does. No HOST file stamps a
+tag yet; until one does, this is machinery without a consumer.
+**Meta-critique.** I proved prefix-freeness before anyone consumes tags because it was the honest
+precondition of "a tag collision is a hash collision". The consumer (HOST's Store header) is the
+part that makes it matter, and it is HOST-3's.
+Status: open (HOST to stamp `Tag.of` of `Deployed.world` and `batch` into base/segment headers).
