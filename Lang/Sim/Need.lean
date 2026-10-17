@@ -287,4 +287,13 @@ def wasteStep (lib : List Term) (s : State) : Step :=
     .next ⟨.eval (.bool true) [], .ite body body (v :: cenv) :: k, s.depth⟩
   | _, _ => step lib s
 
+/-- PLANT (`required_lt_ticks`' tooth): the deployed step, except that applying a literal function
+to a literal number enters the body at once. It skips the transitions of the function's and the
+argument's rule instances, keeps the meaning, and charges fewer ticks than the derivation has
+rule instances. -/
+def skipStep (lib : List Term) (s : State) : Step :=
+  match s.control with
+  | .eval (.app (.lam _ b) (.nat k)) env => .next ⟨.eval b (.nat k :: env), s.stack, s.depth⟩
+  | _ => step lib s
+
 end Nanodregg.Lang.Need

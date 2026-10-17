@@ -924,3 +924,39 @@ package with a method, to be chosen with ROOT.
 for the reader's own literal names, which is where a mistake would hide (a renamed record label
 with a stale message). (b) is open and labelled owed.
 **Status.** built (this commit). Nothing re-ids: proof modules only.
+
+## LANG-37 THE BAR's ratio is above 1 by theorem, and extraction's requirement is what extraction forces (2026-10-17; cv 01a14a87-33b2, the LANG-34 vacuity read)
+**Decision.** `Lang/Proofs/Derives.lean` (new) holds `Derives`/`DSel`/`DExt`, `derives_bigStep` and
+`bigStep_derives`, moved out of `Proofs/Need` so that `Proofs/Complete` can count against them
+without importing tooling. `Complete.Leads` now carries a transition count. `bigStep_leads` is
+replaced by `derives_leads` (a derivation of size `n` is followed by the machine in `m ≥ n`
+transitions; an error's count includes its faulting step), and `bigStep_run`/`bigStep_run_fault`
+are restated over it. There is ONE simulation proof, not a counted twin. `reach_value` says a run
+that returns follows every reach. `derives_lt_used`: if the run returns, `n < used ≤ fuel`. In
+`Proofs/Need`: `force_lt`, `unknot_le`, `forces_le` (extraction pays at least `Forces`' size and
+forces exactly the suspensions `Unknots`/`Forces` name), `extract_forces` (every completed
+extraction has a `Forces`, so `Forces` is extraction's meaning, not only a definition beside it),
+and `required_lt_ticks`: for an invoke `runMeasured` admits and `requiredOf` counts, `N < ticks`.
+Tooth: `Need.skipStep` (a plant stepper that enters a literal application's body at once) finishes
+`idApp` with value 1 in 3 ticks, below its derivation's 4 (`idApp_skip_below`). So the bound is a
+property of the deployed step, and a machine that skips rule instances breaks it.
+**Why.** LANG-34's ratio rested on "required counts the run" (`required_counts_the_run`) with no
+inequality: a counter that over-counted, and so made the machine look efficient, would not have
+contradicted anything. Now it would.
+The bound is STRICT: even a machine with no waste pays at least one tick more than the
+requirement (the final halt), so a ratio ceiling of exactly 1.0 must never be set.
+**Alternatives.** A separate counted copy of `bigStep_leads` next to the old one: a twin, refused.
+Counting the machine inside `Derives`: that would mix the reference relation with the machine.
+**Critique.** (1) `requiredOf` can still refuse `required: fuel` on an invoke the machine finished,
+because `need`'s completeness is unproved (cv 01a14aba-1281). The ratio row then reads
+UNMEASURED, not wrong, but the reachability half of the cv task is open. (2) The bound is strict
+and loose by a constant per application (app = 3 transitions, 1 rule). `ratio ≤ c` is not
+claimed: that is the waste row's measurement, not a theorem. (3) The plant is a stepper the
+theorems do not quantify over. It shows the statement would be false for another machine, not
+that the deployed machine is tight.
+**Meta-critique.** The Derives move changes no statement other than `Leads`' arity (`Leads` is used
+only in Complete). The bound came almost for free once the existing simulation carried counts,
+which says the simulation was the right shape. The unproved completeness is named and owed, not
+called a limit. Also owed (vacuity read): an EXTRACTION plant (a field forced twice) to show the
+waste row catches extraction waste, cv 01a14abb-aa73-7e40-8bb9-1a264910eb79; skipStep teeth the floor, not the row.
+**Status.** built (this commit). Nothing re-ids: proof and tooling modules only.
