@@ -38,6 +38,9 @@ structure Loaded where
   lib : List Term
   pkgs : List Package
 
+/-- The interfaces of a closure's packages, in `lib` order: the types `ref` gives them. -/
+abbrev Loaded.ifaces (L : Loaded) : List Ty := L.pkgs.map (·.iface)
+
 def faultText : Fault → String
   | .stuck => "stuck" | .overflow => "overflow" | .underflow => "underflow"
   | .divZero => "divZero" | .tooLarge => "tooLarge" | .ticks => "exhausted" | .stack => "stack"

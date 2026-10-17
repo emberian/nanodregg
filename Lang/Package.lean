@@ -80,17 +80,29 @@ def checkLaws (S : Ty) (row : List (Label × Ty)) : List Label → Except CheckE
       | none => .error (.noLaw ℓ)
       | some t => if t = lawTy S then checkLaws S row ls else .error (.badLaw ℓ)
 
-/-- The install check, given the interfaces of the imports in order. -/
-def Package.checkWith (ifaces : List Ty) (p : Package) : Except CheckError Unit := do
+/-- Everything about a package but its body: bounds, a data state, a canonical record interface. -/
+def Package.checkShape (p : Package) : Except CheckError Unit := do
   if p.imports.length > importsMax then throw .tooManyImports
   if p.methods.length > methodsMax then throw .tooManyMethods
   if p.laws.length > lawsMax then throw .tooManyLaws
   unless isRecordData p.state do throw .stateNotData
-  let .record row := p.iface | throw .ifaceNotRecord
   unless p.iface.wf do throw .ifaceNotRecord
-  unless check ifaces p.body p.iface do throw .illTyped
-  checkMethods p.state row p.methods
-  checkLaws p.state row p.laws
+
+/-- Its methods and laws are fields of its interface record at their shapes. -/
+def Package.checkFields (p : Package) : Except CheckError Unit :=
+  match p.iface with
+  | .record row => do
+      checkMethods p.state row p.methods
+      checkLaws p.state row p.laws
+  | _ => .error .ifaceNotRecord
+
+/-- The install check, given the interfaces of the imports in order: the shape, then the body
+checks at its interface (`check`), then the fields. -/
+def Package.checkWith (ifaces : List Ty) (p : Package) : Except CheckError Unit :=
+  match p.checkShape, check ifaces p.body p.iface with
+  | .error e, _ => .error e
+  | .ok (), false => .error .illTyped
+  | .ok (), true => p.checkFields
 
 /-! ## Relocation: a body's `ref i` becomes the closure's global index -/
 
