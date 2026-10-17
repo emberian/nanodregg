@@ -89,4 +89,10 @@ start, start limit, no socket), key-mode-0644-stops (keyFileMode, NRestarts=0), 
 StrictModes (the script sets umask 022 and ROOT 0755: hbox's umask 002 made a first preflight end
 `keyFileDir`). Preflight outside systemd on hbox (`~/.cache/nd-t`, the broker test's scratch):
 keybroker binds `broker/01/broker.sock` 0660, writes `pids/decider.pid`, and runs until stopped.
+The same script then runs the hosted pair, rendered as user-unit templates by `Ops.Units.liveHostedFollower`
+/ `liveLauncher` (instance `w`): hosted-follower-starts (the World's genesis reproduced into
+`hosted/worlds/w/store`, socket 0660 of the shared directory's group under `--group`),
+grain-launch-starts (active 10 s later, NRestarts 0: the confined controller tails the follow
+Store), controller-store-refusal-stops (instance `x` over an empty store directory: the
+controller's `store` passed through, the unit stopped). Codes come from EXITS.md by table and name.
 Run under systemd: PENDING (burst5, INTEGRATOR-6's window).

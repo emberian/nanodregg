@@ -197,7 +197,7 @@ theorem launchPrevent_split :
 /-- A launcher renders only if its controller reads the Store its follower writes, as the
 follower's own user (HOSTING-17: the controller never reads the writer's files). -/
 theorem Launcher.check_follower (l : Launcher) (h : l.check = .ok ()) :
-    l.store = l.follower.store ∧ l.follower.user = some l.user := by
+    l.store = l.follower.store ∧ l.follower.user = l.user := by
   cases hp : l.paired
   · have : l.check = .error (.badPath l.store) := by
       simp only [Launcher.check, hp]; rfl
