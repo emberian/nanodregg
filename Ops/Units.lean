@@ -233,6 +233,8 @@ def hostAction : Status → String
   | .foreignSegment => "`seg.log` is another Store's (or a pre-HOST-18 Store's): restore the three files together (RUNBOOK §5)"
   | .corrupt => "bad bytes with a verifying frame after them (at offset 0: the origin frame), or corrupt history before the base: restore (RUNBOOK §5)"
   | .record => "a record does not fold: a defect, report to HOST and KERNEL"
+  | .indexShort => "index.log is shorter than the prefix the base names (a copy cut short, or the file truncated): restore index.log from this Store's own backup taken after its base.world; never restart it"
+  | .indexCorrupt => "index.log's pages up to the base's indexOffset do not verify under this Store's key or do not end at the tag the base names: restore index.log from this Store's own backup; never restart it"
   | .tagWidth => "a broken sealer: a defect, report to HOST"
   | .behindAnchor => "the copy is truncated or rolled back: use a newer copy"
   | .chainMismatch => "the copy is another history: do not serve it"

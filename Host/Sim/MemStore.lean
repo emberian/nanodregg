@@ -37,21 +37,30 @@ leaves on disk). -/
 structure Bases where
   file : ByteArray := ByteArray.empty
   history : Array (ByteArray × Nat) := #[]
-  /-- bytes written by seals (the waste numerator) -/
+  /-- the Store's `index.log`: every page a seal appended (HOST-30) -/
+  index : ByteArray := ByteArray.empty
+  /-- `index.log`'s size when each base of `history` became durable -/
+  indexAt : Array Nat := #[]
+  /-- bytes written by seals, pages and bases (the waste numerator) -/
   written : Nat := 0
+  /-- index entries handed to seals (law 5: each entry is handed once, HOST-30) -/
+  handed : Nat := 0
 
 /-- A checkpoint over memory: the deployed `Base.file`, then an atomic replace. Inline, so a seeded
 run seals at the same points every time. -/
 def memCheckpoint {W : Type} (disk : IO.Ref Disk) (bases : IO.Ref Bases) (keys : Keys) (c : Cadence)
     (world : Codec.Stream W) : Checkpoint W where
   async := false
-  write w offset tag index := do
-    match Base.file keys c world w offset tag index.toList with
+  write w seg entries ipos := do
+    match Base.seal keys c world w seg ipos entries with
     | .error f => return .error f
-    | .ok file =>
+    | .ok (page, ipos', file) =>
       let synced := (← disk.get).synced.size
-      bases.modify fun b => { file, history := b.history.push (file, synced), written := b.written + file.size }
-      return .ok (world.size w, keys.worldDigest (worldBytesOf file (world.size w)))
+      bases.modify fun b =>
+        { file, history := b.history.push (file, synced), index := b.index ++ page,
+          indexAt := b.indexAt.push (b.index.size + page.size), written := b.written + page.size + file.size,
+          handed := b.handed + entries.size }
+      return .ok (world.size w, keys.worldDigest (worldBytesOf file (world.size w)), ipos')
 
 /-- An in-memory Store as genesis leaves it: `genesisImage`'s segment (synced) and base, and the
 loop's state as the one open (`openWith`, with the caller's own fold step) reads them back. The
@@ -62,11 +71,13 @@ def memGenesis {W F : Type} (keys : Keys) (c : Cadence) (world : Codec.Stream W)
   match genesisImage keys c world mark w₀ with
   | .error f => .error (.seal f)
   | .ok img =>
-    match Id.run (openWith keys c world mark origin step img.base img.segment.size fun off len =>
-        pure (.ok (img.segment.extract off (off + len)))) with
+    match Id.run (openWith keys c world mark origin step img.base img.segment.size img.index.size
+        (fun off len => pure (.ok (img.index.extract off (off + len))))
+        fun off len => pure (.ok (img.segment.extract off (off + len)))) with
     | .error f => .error f
     | .ok o =>
-      .ok ({ synced := img.segment }, { file := img.base, history := #[(img.base, img.segment.size)] },
+      let b : Bases := { file := img.base, history := #[(img.base, img.segment.size)], index := img.index, indexAt := #[img.index.size] }
+      .ok ({ synced := img.segment }, b,
         { world := o.opened.world, pos := o.pos, sealed := o.sealed, index := o.index })
 
 /-- A `read` page over the in-memory base (`Host.Page.basePage`, what `Host.Deployed.pager` does

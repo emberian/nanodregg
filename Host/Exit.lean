@@ -100,6 +100,11 @@ inductive Status where
   /-- the segment's origin frame verifies but states another World's genesis chain than the base
   World's origin (HOST-25): another Store's seg.log under a shared key file -/
   | foreignOrigin
+  /-- `index.log` is shorter than the prefix the base names (HOST-30) -/
+  | indexShort
+  /-- `index.log`'s pages up to the base's prefix do not verify, end elsewhere, or do not decode
+  (HOST-30) -/
+  | indexCorrupt
   deriving DecidableEq, Repr
 
 namespace Status
@@ -109,7 +114,7 @@ def all : List Status :=
    locked, .exists, badKey, shortRead, noBase, baseTooLarge, baseCorrupt, baseUndecodable,
    segmentShort, tailTooLong, foreignSegment, corrupt, record, tagWidth, behindAnchor, chainMismatch,
    badIndex, pageTooLarge, pastEnd, shortBase, reopenFailed, reopenDiverged, lifetime, stream, noThreads,
-   shapeMismatch, foreignOrigin]
+   shapeMismatch, foreignOrigin, indexShort, indexCorrupt]
 
 def code : Status → Nat
   | eof => 0
@@ -150,6 +155,8 @@ def code : Status → Nat
   | noThreads => 42
   | shapeMismatch => 43
   | foreignOrigin => 30
+  | indexShort => 45
+  | indexCorrupt => 46
 
 def cls : Status → ExitClass
   | eof => .done
@@ -158,7 +165,7 @@ def cls : Status → ExitClass
   | locked | .exists | badKey | shortRead | noBase | baseTooLarge | baseCorrupt | baseUndecodable
   | segmentShort | tailTooLong | foreignSegment | corrupt | record | tagWidth | behindAnchor | chainMismatch
   | badIndex | pageTooLarge | pastEnd | shortBase | reopenFailed | reopenDiverged | noThreads
-  | shapeMismatch | foreignOrigin => .fatal
+  | shapeMismatch | foreignOrigin | indexShort | indexCorrupt => .fatal
 
 /-- The name printed beside the code (`refused NAME` / `exit NAME` on stderr). -/
 def name (s : Status) : String := ((toString (repr s)).splitOn ".").getLast!
@@ -183,6 +190,8 @@ def BaseFault.status : BaseFault → Status
   | .foreignSegment => .foreignSegment
   | .shapeMismatch _ _ => .shapeMismatch
   | .foreignOrigin => .foreignOrigin
+  | .indexShort _ _ => .indexShort
+  | .indexCorrupt => .indexCorrupt
 
 def StoreFault.status {F : Type} : StoreFault F → Status
   | .locked => .locked

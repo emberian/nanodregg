@@ -82,7 +82,8 @@ progress, held in memory only, in a reference the caller owns, so it survives a 
 in-process reopen exactly as the port's queued frames do (a process restart starts it again). Absorbed Turns are appended through
 `Host.append` BEFORE the step is answered; an adopted base is sealed as follow's own newest base
 at its segment position (no record before it belongs to the adopted World's history, so the index
-restarts empty) BEFORE the step is answered. -/
+restarts empty: adopt runs only at genesis (PROTOCOL's `notAtGenesis`), where `index.log` is empty,
+so the base names the empty prefix and writes no page) BEFORE the step is answered. -/
 def loop (keys : Keys) (me : Command.Self D) (store : Store) (ck : Checkpoint (World D)) (port : Port)
     (dl : IO.Ref (Option Protocol.Thin.Download)) : Nat → Resident (World D) → IO (Exit × Resident (World D))
   | 0, r => finish .fuel r
@@ -112,7 +113,7 @@ def loop (keys : Keys) (me : Command.Self D) (store : Store) (ck : Checkpoint (W
         | some pd => match ← settle pd with
           | .ok sealed => pure { r with sealed, pending := none }
           | .error e => return (.sealFailed e, { r with pending := none })
-      match ← settle (← spawnSeal ck recorder.mark w' r.pos #[]) with
+      match ← settle (← spawnSeal ck recorder.mark w' r.pos { r.sealed with indexCount := 0 } #[]) with
       | .error e =>
         port.send ⟨f.conn, Status.uncertain.code, ByteArray.empty⟩
         return (.sealFailed e, { r with pending := none })

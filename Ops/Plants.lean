@@ -54,9 +54,9 @@ def host (exe : String) (args : List String) (stdin : ByteArray := ByteArray.emp
   let text := (String.fromUTF8? out).getD s!"<{out.size} bytes>"
   return ⟨code, (text ++ err).trimAsciiEnd.toString⟩
 
-def files : List String := ["key", "base.world", "seg.log"]
+def files : List String := Host.Store.backupOrder
 
-/-- The backup: the three files, in order. -/
+/-- The backup: the Store's files, in `Host.Store.backupOrder`. -/
 def backup (src dst : System.FilePath) : IO Unit := do
   IO.FS.createDirAll dst
   for f in files do IO.FS.writeBinFile (dst / f) (← IO.FS.readBinFile (src / f))
@@ -173,6 +173,8 @@ def live (exe : String) (dir : System.FilePath) : IO Nat := do
     sealed ← awaitStatus exe l fun st => field st "height" ≥ fed
     if let some st := sealed then
       if field st "base_height" ≤ field st0 "base_height" then sealed := none
+  -- the append-only files after the base, in `Host.Store.backupOrder` (HOST-30: index.log first)
+  IO.FS.writeBinFile (copy / "index.log") (← IO.FS.readBinFile (l / "index.log"))
   let segCopied ← IO.FS.readBinFile (l / "seg.log")
   IO.FS.writeBinFile (copy / "seg.log") segCopied
   let raced := sealed.isSome && (← IO.FS.readBinFile (l / "base.world")) != baseCopied

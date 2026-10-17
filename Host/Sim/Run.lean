@@ -97,10 +97,12 @@ def splits (seed n : Nat) : List Bool :=
 abbrev Fault := StoreFault (Record.Fault (Reject Nat))
 
 /-- The one open over an in-memory image: `openWith` reading bytes. -/
-def reopenWith (c : Cadence) (base seg : ByteArray) : Except Fault (Opening (World Nat)) :=
-  Id.run (openWith keys c world recorder.mark originChain foldStep base seg.size (segReader seg))
+def reopenWith (c : Cadence) (index base seg : ByteArray) : Except Fault (Opening (World Nat)) :=
+  Id.run (openWith keys c world recorder.mark originChain foldStep base seg.size index.size (segReader index)
+    (segReader seg))
 
-def reopen (base seg : ByteArray) : Except Fault (Opening (World Nat)) := reopenWith cadence base seg
+/-- The open of a base and segment under the `index.log` bytes `index`. -/
+def reopenIn (index base seg : ByteArray) : Except Fault (Opening (World Nat)) := reopenWith cadence index base seg
 
 def faultName (r : Except Fault (Opening (World Nat))) : String :=
   match r with
@@ -129,7 +131,8 @@ def memReopen (c : Cadence) (disk : IO.Ref Disk) (bases : IO.Ref Bases) (reopens
   reopens.modify (· + 1)
   let d ← disk.get
   if 0 < d.pending.size then return .error .reopenDiverged
-  match reopenWith c (← bases.get).file d.synced with
+  let b ← bases.get
+  match reopenWith c b.index b.file d.synced with
   | .error f => return .error (.reopenFailed f.name)
   | .ok o => return if o.opened.torn = 0 then .ok { world := o.opened.world, pos := o.pos, sealed := o.sealed, index := o.index } else .error .reopenDiverged
 
@@ -195,20 +198,20 @@ def check (name : String) (ok : Bool) (failures : IO.Ref Nat) : IO Unit := do
 def sameWorld (a b : World Nat) : Bool := a.height == b.height && a.chain == b.chain
 
 /-- HOST-17's count at one Store length: a run of `n` fresh Turns (seeded batch splits), and at
-its LAST seal the bytes of the index that base re-encodes, the segment bytes appended since the
-base before it, the base file's size, and how many seals the run made. The index is one entry
-per record ever written (`Base.codec`), so its term grows with the batches before the seal while
-the appended bytes are one cadence. -/
+its LAST seal the index bytes that seal wrote (its page in `index.log`, HOST-30), the segment
+bytes appended since the base before it, the base file's size, and how many seals the run made.
+Before HOST-30 the base re-encoded one entry per record ever written, so the term grew with the
+batches; a page holds only the entries since the last base. -/
 def indexTerm (seed n : Nat) : IO (Nat × Nat × Nat × Nat) := do
   let frames : List Frame := (List.range n).map fun i =>
     ⟨UInt32.ofNat i, Protocol.Op.submit.code, turnCodec.bytes (mkTurn (1000 + i) 0 1024 [5000 + i])⟩
   let r ← runOnce seed frames none
   let h := r.bases.history
   if h.size < 2 then return (0, 0, 0, h.size - 1)
+  let ix := r.bases.indexAt
   match Base.read keys cadence world h[h.size - 1]!.1, Base.read keys cadence world h[h.size - 2]!.1 with
   | .ok (b, _, _), .ok (a, _, _) =>
-    return ((Codec.Stream.rawList indexMax Entry.codec).size b.index, b.offset - a.offset,
-      h[h.size - 1]!.1.size, h.size - 1)
+    return (ix[h.size - 1]! - ix[h.size - 2]!, b.offset - a.offset, h[h.size - 1]!.1.size, h.size - 1)
   | _, _ => return (0, 0, 0, h.size - 1)
 
 /-- The Store lengths (fresh Turns) HOST-17's count is measured at. -/
@@ -221,6 +224,8 @@ def run (args : List String) : IO UInt32 := do
   let frames := sc.map (·.1)
   let r ← runOnce seed frames none
   let w := r.resident.world
+  -- every open of this run's bases reads its `index.log` (HOST-30)
+  let reopen := reopenIn r.bases.index
   let statusOf (k : Kind) := sc.zip r.replies.toList |>.filter (·.1.2 = k) |>.map (·.2.status)
   check "one reply per request" (r.replies.size = 200) failures
   check "loop ended at eof" (match r.exit with | .eof => true | _ => false) failures
@@ -248,12 +253,35 @@ def run (args : List String) : IO UInt32 := do
     let (newer, durableAt) := r.bases.history[k + 1]!
     let seg := r.disk.synced.extract 0 durableAt
     match reopen older seg, reopen newer seg with
-    | .ok a, .ok b =>
-      unless sameWorld a.opened.world b.opened.world && a.pos.offset = b.pos.offset do
-        renameOk := false; IO.println s!"  seal {k + 1}: the older base folds to a different World"
+    | .ok _, .ok b =>
+      -- the index as it stood after the newer seal: the older base names a shorter prefix, and
+      -- the newer page is an ORPHAN to it (HOST-30), which the open leaves out and reports
+      let olderNamed := r.bases.indexAt[k]!
+      let newerPage := r.bases.indexAt[k + 1]! - olderNamed
+      let a := match reopenIn (r.bases.index.extract 0 r.bases.indexAt[k + 1]!) older seg with
+        | .ok o => some o | .error _ => none
+      unless (a.map fun o => sameWorld o.opened.world b.opened.world && o.pos.offset = b.pos.offset &&
+          o.orphan = newerPage && o.sealed.index.offset = olderNamed && o.index.size = b.index.size).getD false do
+        renameOk := false; IO.println s!"  seal {k + 1}: the older base with the newer page as an orphan folds elsewhere"
     | a, b =>
       renameOk := false; IO.println s!"  seal {k + 1}: older {faultName a}, newer {faultName b}"
-  check s!"plant-crash-before-rename at each of {seals} seals: the older base + tail = the newer base" renameOk failures
+  check s!"plant-crash-before-rename at each of {seals} seals: the older base + tail = the newer base, the newer page an orphan it leaves out (HOST-30)" renameOk failures
+  -- HOST-30's index plants, under the newest base (which names a non-empty prefix)
+  let named := match opened with | .ok o => o.sealed.index.offset | .error _ => 0
+  check "plant-index-short fires: the newest base names a non-empty index prefix" (0 < named) failures
+  check "plant-index-short: index.log one byte short of the prefix the base names is refused `indexShort`"
+    (faultName (reopenIn (r.bases.index.extract 0 (named - 1)) r.bases.file r.disk.synced) = "indexShort") failures
+  check "plant-index-flip: a flipped byte inside an index page is refused `indexCorrupt`, never a shorter index"
+    (faultName (reopenIn (flipByte r.bases.index (named / 2)) r.bases.file r.disk.synced) = "indexCorrupt") failures
+  check "plant-index-other-key: pages sealed under another key are refused `indexCorrupt`"
+    (faultName (reopenIn (Log.encodeAll (fnvSealer 9) indexInitial
+        (Log.recover keys.index cadence.worldBytesMax indexInitial r.bases.index).records) r.bases.file r.disk.synced)
+      = "indexCorrupt") failures
+  check "the reopened index is the loop's: every entry, in order (heights and offsets)"
+    (match opened with
+     | .ok o => o.index.size = r.resident.index.size &&
+         (o.index.toList.zip r.resident.index.toList).all fun (x, y) => x.height == y.height && x.offset == y.offset && x.chain == y.chain
+     | .error _ => false) failures
   check "plant-tail-too-long: the genesis base with the whole segment is refused `tailTooLong`"
     (faultName (reopen r.bases.history[0]!.1 r.disk.synced) = "tailTooLong") failures
   check "plant-base-flip: a flipped base byte is `baseCorrupt`"
@@ -333,16 +361,20 @@ def run (args : List String) : IO UInt32 := do
   IO.println s!"WASTE submit bytes-per-turn {ratio (r.disk.synced.size - origin.offset) admittedBytes}"
   IO.println s!"WASTE submit fsyncs-per-batch {ratio r.disk.syncs records.length}"
   let tailBytes := match opened with | .ok o => o.pos.offset - o.sealed.offset | .error _ => 0
-  -- what open must read: the base record (World, offset, tag, index) and the tail; the excess is
-  -- the base's own frame
-  let needed := r.bases.file.size - 4 - Log.tagBytes + tailBytes
-  IO.println s!"WASTE open bytes-read-per-record {ratio (r.bases.file.size + tailBytes) needed}"
+  -- what open must read: the base record (World, offsets, tags), the index pages' records up to
+  -- the prefix the base names, and the tail; the excess is the base's frame and each page's
+  let pages := (Log.recover keys.index cadence.worldBytesMax indexInitial (r.bases.index.extract 0 named)).records.length
+  let needed := r.bases.file.size - 4 - Log.tagBytes + (named - pages * (4 + Log.tagBytes)) + tailBytes
+  IO.println s!"WASTE open bytes-read-per-record {ratio (r.bases.file.size + named + tailBytes) needed}"
+  -- law 5 (HOST-30): a seal is handed the entries since the last base, never the loop's index
+  IO.println s!"index entries handed to seals: {r.bases.handed} for the {r.resident.sealed.indexCount} entries the newest base names"
+  IO.println s!"WASTE seal entries-handed-per-entry {ratio r.bases.handed r.resident.sealed.indexCount}"
   let genesisBytes := r.bases.history[0]!.1.size
   IO.println s!"WASTE seal bytes-per-appended-byte {ratio (r.bases.written - genesisBytes) r.disk.synced.size}"
-  -- HOST-17: the index term of a seal at several Store lengths (the base re-encodes every entry)
+  -- HOST-17/HOST-30: the index bytes a seal writes at several Store lengths (one page each)
   for n in indexLengths do
     let (ib, appended, file, seals) ← indexTerm seed n
-    IO.println s!"index term at {n} turns: {seals} seals; the last base is {file} bytes, {ib} of them index, after {appended} appended bytes"
+    IO.println s!"index term at {n} turns: {seals} seals; the last base is {file} bytes, the last page {ib}, after {appended} appended bytes"
     IO.println s!"WASTE seal index-bytes-per-appended-byte-at-{n} {ratio ib appended}"
   -- plant-tail (HOSTING-7): a tail opened at genesis absorbs the writer's whole segment one frame
   -- bound at a time and reaches the writer's World, with every admitted Turn reported once in order.
@@ -405,7 +437,8 @@ def run (args : List String) : IO UInt32 := do
       ⟨16, 1 <<< 20⟩ 3)
     (do
       let d ← disk.get
-      match reopenWith cadence (← bases.get).file (d.synced.extract 0 (d.synced.size - 1)) with
+      let b ← bases.get
+      match reopenWith cadence b.index b.file (d.synced.extract 0 (d.synced.size - 1)) with
       | .error f => return .error (.reopenFailed f.name)
       | .ok o => return .ok { world := o.opened.world, pos := o.pos, sealed := o.sealed, index := o.index }) recorder.mark 10 gr
   check "plant-reopen-diverged: a reopen missing the last synced byte stops the resident `reopenDiverged`"
@@ -424,7 +457,7 @@ def run (args : List String) : IO UInt32 := do
   let lastBatch := p.replies.toList.drop (p.replies.size - uncertainN)
   check "plant-fsync-fail: the batch's replies are uncertain"
     (0 < uncertainN ∧ lastBatch.all (·.status = Protocol.Status.uncertain.code) ∧ pendingSize > 0) failures
-  let baseOpen := reopen p.bases.file p.disk.synced
+  let baseOpen := reopenIn p.bases.index p.bases.file p.disk.synced
   let baseRecords := match baseOpen with | .ok o => o.opened.records | .error _ => 0
   check "plant-fsync-fail: synced prefix opens" (match baseOpen with | .ok o => o.pos.offset = p.disk.synced.size | .error _ => false) failures
   -- every crash cut of the unsynced frame: open (truncating the torn tail, as the writer does),
@@ -432,7 +465,7 @@ def run (args : List String) : IO UInt32 := do
   let resend := frames.drop (p.replies.size - uncertainN)
   let mut cutsOk := true
   for cut in List.range (pendingSize + 1) do
-    match reopen p.bases.file (crashImage p.disk cut) with
+    match reopenIn p.bases.index p.bases.file (crashImage p.disk cut) with
     | .error e =>
       cutsOk := false; IO.println s!"  cut {cut}: open refused {e.name}"
     | .ok o =>
@@ -441,7 +474,7 @@ def run (args : List String) : IO UInt32 := do
       let img := (crashImage p.disk cut).extract 0 o.pos.offset
       let q ← serveFrom cadence seed resend none { synced := img } p.bases
         { world := o.opened.world, pos := o.pos, sealed := o.sealed, index := o.index }
-      let finalOk : Bool := match reopen q.bases.file q.disk.synced with
+      let finalOk : Bool := match reopenIn q.bases.index q.bases.file q.disk.synced with
         | .ok o' => o'.opened.torn = 0 && sameWorld o'.opened.world w && sameWorld q.resident.world w
         | .error _ => false
       unless decide (o.opened.torn = expectTorn ∧ o.opened.records = expectRecords) && finalOk do
@@ -524,7 +557,7 @@ def run (args : List String) : IO UInt32 := do
   let oldBase : Option ByteArray :=
     match Base.read keys cadence world r.bases.file with
     | .ok (b, _, _) =>
-      match Base.file oldKeys cadence world b.world b.offset b.tag b.index with
+      match Base.file oldKeys cadence world b.world ⟨b.offset, b.tag⟩ ⟨b.indexOffset, b.indexTag⟩ with
       | .ok f => some f
       | .error _ => none
     | .error _ => none
@@ -534,6 +567,7 @@ def run (args : List String) : IO UInt32 := do
     check "plant-old-shape fires: another stamp, and the writing binary opens it"
       (oldKeys.shapes.bytes != keys.shapes.bytes &&
         faultName (Id.run (openWith oldKeys cadence world recorder.mark originChain foldStep ob r.disk.synced.size
+          r.bases.index.size (segReader r.bases.index)
           (segReader r.disk.synced))) = "opened") failures
     check "plant-old-shape: the running binary refuses the old shape `shapeMismatch` (never decoded)"
       (faultName (reopen ob r.disk.synced) = "shapeMismatch") failures

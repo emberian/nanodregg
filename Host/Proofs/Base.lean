@@ -78,22 +78,28 @@ theorem tailRead_ok {c : Cadence} {baseBytes offset size n : Nat}
     · cases h
     · cases h; omega
 
-/-- The one open reads a base file of at most one base frame, and asks its reader for EXACTLY two
-ranges of segment, in order: `[base offset - 32, size)`, the base's tag on disk and the tail after
-it, the tail at most `tailMax` long; then `[0, originLen offset)`, the origin frame (HOST-25). The
-position it opens to lies in the tail. Stated over a reader that
-records every range it is asked for and answers with arbitrary bytes `answer off len`, of any
-length (a short read is `openWith`'s to refuse). -/
+/-- The one open reads a base file of at most one base frame, and asks its readers for EXACTLY
+three ranges, in order: of the segment `[base offset - 32, size)`, the base's tag on disk and the
+tail after it, the tail at most `tailMax` long; then `[0, originLen offset)`, the origin frame
+(HOST-25); then of `index.log` `[0, indexOffset)`, the prefix the base names, at most
+`worldBytesMax` and within the file (HOST-30). The position it opens to lies in the tail, and the
+orphan bytes it reports are exactly the file's bytes past the named prefix, so the writer's
+truncation to that prefix (`openWriter`) never drops a byte of a page the base names. Stated over
+readers that record every range they are asked for (in one log) and answer with arbitrary bytes
+`answer off len` / `answerI off len`, of any length (a short read is `openWith`'s to refuse). -/
 theorem openWith_reads {W F : Type} (keys : Keys) (c : Cadence) (world : Codec.Stream W)
-    (mark : W → Nat × ByteArray) (origin : W → ByteArray) (step : W → ByteArray → Except F W) (file : ByteArray) (size : Nat) (answer : Nat → Nat → ByteArray)
+    (mark : W → Nat × ByteArray) (origin : W → ByteArray) (step : W → ByteArray → Except F W) (file : ByteArray) (size indexSize : Nat) (answer answerI : Nat → Nat → ByteArray)
     {o : Opening W} {log : List (Nat × Nat)}
-    (h : (openWith keys c world mark origin step file size (m := StateM (List (Nat × Nat))) fun off len =>
-      modifyGet fun l => (.ok (answer off len), l ++ [(off, len)])).run [] = (.ok o, log)) :
+    (h : (openWith keys c world mark origin step file size indexSize (m := StateM (List (Nat × Nat)))
+      (fun off len => modifyGet fun l => (.ok (answerI off len), l ++ [(off, len)]))
+      (fun off len => modifyGet fun l => (.ok (answer off len), l ++ [(off, len)]))).run [] = (.ok o, log)) :
     file.size ≤ Log.frameMax c.baseRecordMax ∧ Log.tagBytes ≤ o.sealed.offset ∧
-    ∃ len, log = [(o.sealed.offset - Log.tagBytes, Log.tagBytes + len), (0, originLen o.sealed.offset)] ∧
+    ∃ len, log = [(o.sealed.offset - Log.tagBytes, Log.tagBytes + len), (0, originLen o.sealed.offset),
+        (0, o.sealed.index.offset)] ∧
       o.sealed.offset + len = size ∧
       len ≤ c.tailMax o.sealed.bytes ∧
-      o.sealed.offset ≤ o.pos.offset ∧ o.pos.offset ≤ o.sealed.offset + len := by
+      o.sealed.offset ≤ o.pos.offset ∧ o.pos.offset ≤ o.sealed.offset + len ∧
+      o.sealed.index.offset ≤ c.worldBytesMax ∧ o.sealed.index.offset + o.orphan = indexSize := by
   simp only [openWith] at h
   split at h
   · simp only [StateT.run, StateT.pure, pure] at h; injection h with h1; cases h1
@@ -125,8 +131,24 @@ theorem openWith_reads {W F : Type} (keys : Keys) (c : Cadence) (world : Codec.S
               | none =>
               rw [hof] at h
               simp only at h
+              by_cases hw : c.worldBytesMax < b.indexOffset
+              · rw [if_pos hw] at h; simp only [StateT.pure, pure] at h; injection h with h1; cases h1
+              rw [if_neg hw] at h
+              by_cases hi : indexSize < b.indexOffset
+              · rw [if_pos hi] at h; simp only [StateT.pure, pure] at h; injection h with h1; cases h1
+              rw [if_neg hi] at h
+              simp only [bind, StateT.bind, StateT.modifyGet] at h
+              by_cases hq2 : (answerI 0 b.indexOffset).size ≠ b.indexOffset
+              · rw [if_pos hq2] at h
+                simp only [StateT.pure, pure] at h; injection h with h1; cases h1
+              rw [if_neg hq2] at h
+              cases hix : indexEntries keys.index c b.indexTag (answerI 0 b.indexOffset) with
+              | error e => rw [hix] at h; simp only [StateT.pure, pure] at h; injection h with h1; cases h1
+              | ok entries =>
+              rw [hix] at h
+              simp only at h
               generalize hop : openLog keys.segment c.recordBytesMax (indexed mark step)
-                (b.world, b.index.toArray, b.offset) b.tag.bytes
+                (b.world, entries, b.offset) b.tag.bytes
                 ((answer (b.offset - Log.tagBytes) (Log.tagBytes + len)).extract Log.tagBytes
                   (answer (b.offset - Log.tagBytes) (Log.tagBytes + len)).size) = res at h
               cases res with
@@ -142,8 +164,9 @@ theorem openWith_reads {W F : Type} (keys : Keys) (c : Cadence) (world : Codec.S
                   have hv := openLog_validLen_le hop
                   have hsz' : (answer (b.offset - Log.tagBytes) (Log.tagBytes + len)).size = Log.tagBytes + len := by
                     simpa using hsz
-                  refine ⟨by omega, show Log.tagBytes ≤ b.offset by omega, len, rfl, hs, hle,
-                    Nat.le_add_right _ _, ?_⟩
+                  refine ⟨by omega, show Log.tagBytes ≤ b.offset by omega, len, by simp, hs, hle,
+                    Nat.le_add_right _ _, ?_, show b.indexOffset ≤ c.worldBytesMax by omega,
+                    show b.indexOffset + (indexSize - b.indexOffset) = indexSize by omega⟩
                   show b.offset + op.validLen ≤ b.offset + len
                   simp only [ByteArray.size_extract, hsz'] at hv
                   omega
@@ -151,9 +174,9 @@ theorem openWith_reads {W F : Type} (keys : Keys) (c : Cadence) (world : Codec.S
 /-- An open that SUCCEEDS found the base's own tag on disk right before the base's offset: whatever
 segment it was handed, the 32 bytes before the offset are the tag of the base it decoded (HOST-18). -/
 theorem openWith_anchored {W F : Type} (keys : Keys) (c : Cadence) (world : Codec.Stream W)
-    (mark : W → Nat × ByteArray) (origin : W → ByteArray) (step : W → ByteArray → Except F W) (file seg : ByteArray)
+    (mark : W → Nat × ByteArray) (origin : W → ByteArray) (step : W → ByteArray → Except F W) (file idx seg : ByteArray)
     {o : Opening W}
-    (h : Id.run (openWith keys c world mark origin step file seg.size (segReader seg)) = .ok o) :
+    (h : Id.run (openWith keys c world mark origin step file seg.size idx.size (segReader idx) (segReader seg)) = .ok o) :
     ∃ b bb d, Base.read keys c world file = .ok (b, bb, d) ∧ Log.tagBytes ≤ b.offset ∧
       seg.extract (b.offset - Log.tagBytes) b.offset = b.tag.bytes := by
   unfold openWith at h
@@ -189,13 +212,13 @@ theorem openWith_anchored {W F : Type} (keys : Keys) (c : Cadence) (world : Code
 segment whose 32 bytes before the base's offset are not the base's tag is refused
 `foreignSegment`, by the same `openWith` every Store runs (never read as a torn tail). -/
 theorem openWith_foreign {W F : Type} (keys : Keys) (c : Cadence) (world : Codec.Stream W)
-    (mark : W → Nat × ByteArray) (origin : W → ByteArray) (step : W → ByteArray → Except F W) (file seg : ByteArray)
+    (mark : W → Nat × ByteArray) (origin : W → ByteArray) (step : W → ByteArray → Except F W) (file idx seg : ByteArray)
     {b : Base W} {bb : Nat} {d : ByteArray} {len : Nat}
     (hfile : file.size ≤ Log.frameMax c.baseRecordMax)
     (hb : Base.read keys c world file = .ok (b, bb, d))
     (hlen : tailRead c bb b.offset seg.size = .ok len)
     (hf : seg.extract (b.offset - Log.tagBytes) b.offset ≠ b.tag.bytes) :
-    Id.run (openWith keys c world mark origin step file seg.size (segReader seg)) = .error (.base .foreignSegment) := by
+    Id.run (openWith keys c world mark origin step file seg.size idx.size (segReader idx) (segReader seg)) = .error (.base .foreignSegment) := by
   obtain ⟨hs, _⟩ := tailRead_ok hlen
   unfold openWith
   simp only [show ¬ Log.frameMax c.baseRecordMax < file.size by omega, if_false, hb, hlen]
@@ -248,6 +271,55 @@ theorem read_shapeMismatch {W : Type} (keys : Keys) (c : Cadence) (world : Codec
     ne_eq, not_true_eq_false]
   rw [if_pos hs]
 
+/-! ## The index file (HOST-30) -/
+
+/-- The fold of page decodes over pages that each decode to themselves is their concatenation. -/
+theorem indexFold_pages (ps : List (List Entry)) (acc : Array Entry)
+    (hdec : ∀ p ∈ ps, Entry.page.decode (Entry.page.bytes p) = .ok p) :
+    (ps.map Entry.page.bytes).foldlM (fun acc r => match Entry.page.decode r with
+      | .ok es => .ok (acc ++ es.toArray)
+      | .error _ => (.error .indexCorrupt : Except BaseFault (Array Entry))) acc =
+      (Except.ok (acc ++ ps.flatten.toArray) : Except BaseFault (Array Entry)) := by
+  induction ps generalizing acc with
+  | nil => simp [pure, Except.pure]
+  | cons p ps ih =>
+    simp only [List.map_cons, List.foldlM_cons, List.mem_cons] at hdec ⊢
+    rw [hdec p (Or.inl rfl)]
+    simp only [bind, Except.bind]
+    rw [ih (acc ++ p.toArray) (fun q hq => hdec q (Or.inr hq))]
+    simp [Array.append_assoc]
+
+/-- **No page the seals wrote is lost.** The `index.log` a sequence of seals writes (one page per
+seal, chained from `indexInitial`) reads back, under the tag its last page chains to, as every
+entry of every page in order: given that each page decodes to itself (the codec round trip, a
+premise here: owed is its discharge from `rawList_lawfulOn` over `Entry.codec`, which needs each
+chain ≤ `chainBytesMax`, a fit `Base.page` does not yet check) and fits a frame. Stated over
+`encodeAll`, not over the bytes successive `Base.seal`s append. -/
+theorem indexEntries_encodeAll (s : Sealer) (c : Cadence) (ps : List (List Entry)) (t : Codec.Digest)
+    (hfit : ∀ p ∈ ps, (Entry.page.bytes p).size ≤ c.worldBytesMax ∧ (Entry.page.bytes p).size < 2 ^ 32)
+    (hdec : ∀ p ∈ ps, Entry.page.decode (Entry.page.bytes p) = .ok p)
+    (ht : t.bytes = lastTag s indexInitial (ps.map Entry.page.bytes)) :
+    indexEntries s c t (encodeAll s indexInitial (ps.map Entry.page.bytes)) = .ok ps.flatten.toArray := by
+  unfold indexEntries
+  rw [recover_encodeAll s indexInitial _ (by
+    intro r hr; obtain ⟨p, hp, rfl⟩ := List.mem_map.mp hr; exact hfit p hp)]
+  simp only [ne_eq, not_true_eq_false, false_or, ht, if_false]
+  have h := indexFold_pages ps #[] hdec
+  rw [Array.empty_append] at h
+  exact h
+
+/-- **The backup order (HOST-30).** Every append-only file of the layout is copied after
+`base.world` in `backupOrder` (an ORDER fact over the data; that a backup in this order then holds
+each prefix the copied base names rests on those files being append-only and the page being synced
+before `installBase`, which `fileCheckpoint` does and no theorem states). -/
+theorem backupOrder_appendOnly_after_base :
+    ∀ f ∈ Store.layout, f.kind = .appendOnly →
+      f.name ∈ Store.backupOrder ∧ Store.backupOrder.idxOf "base.world" < Store.backupOrder.idxOf f.name := by
+  decide
+
+theorem backupOrder_covers : ∀ f ∈ Store.layout, f.kind ≠ .transient → f.name ∈ Store.backupOrder := by
+  decide
+
 theorem within_after_seal (c : Cadence) (sealed : Sealed) (n : Nat) (hn : n ≤ Log.frameMax c.recordBytesMax) :
     withinTail c sealed sealed.offset n = true := by
   unfold withinTail Cadence.tailMax
@@ -274,8 +346,8 @@ segment it was handed, the frame at 0 verifies from `segmentInitial` under the s
 its record is `origin b.world`, the genesis chain of the decoded base World's origin. -/
 theorem openWith_origin {W F : Type} (keys : Keys) (c : Cadence) (world : Codec.Stream W)
     (mark : W → Nat × ByteArray) (origin : W → ByteArray) (step : W → ByteArray → Except F W)
-    (file seg : ByteArray) {o : Opening W}
-    (h : Id.run (openWith keys c world mark origin step file seg.size (segReader seg)) = .ok o) :
+    (file idx seg : ByteArray) {o : Opening W}
+    (h : Id.run (openWith keys c world mark origin step file seg.size idx.size (segReader idx) (segReader seg)) = .ok o) :
     ∃ b bb d r, Base.read keys c world file = .ok (b, bb, d) ∧
       frameAt keys.segment chainBytesMax (seg.extract 0 (originLen b.offset)) 0 segmentInitial = some r ∧
       r.record = origin b.world := by
@@ -309,14 +381,14 @@ refused with `originFault`'s verdict: `corrupt 0` when the frame at 0 does not v
 `foreignOrigin` when it verifies but states another chain. -/
 theorem openWith_originFault {W F : Type} (keys : Keys) (c : Cadence) (world : Codec.Stream W)
     (mark : W → Nat × ByteArray) (origin : W → ByteArray) (step : W → ByteArray → Except F W)
-    (file seg : ByteArray) {b : Base W} {bb : Nat} {d : ByteArray} {len : Nat} {f : StoreFault F}
+    (file idx seg : ByteArray) {b : Base W} {bb : Nat} {d : ByteArray} {len : Nat} {f : StoreFault F}
     (hfile : file.size ≤ Log.frameMax c.baseRecordMax)
     (hb : Base.read keys c world file = .ok (b, bb, d))
     (hlen : tailRead c bb b.offset seg.size = .ok len)
     (hoff : Log.tagBytes ≤ b.offset)
     (hanchor : seg.extract (b.offset - Log.tagBytes) b.offset = b.tag.bytes)
     (hf : originFault keys.segment (seg.extract 0 (originLen b.offset)) (origin b.world) = some f) :
-    Id.run (openWith keys c world mark origin step file seg.size (segReader seg)) = .error f := by
+    Id.run (openWith keys c world mark origin step file seg.size idx.size (segReader idx) (segReader seg)) = .error f := by
   obtain ⟨hs, _⟩ := tailRead_ok hlen
   unfold openWith
   simp only [show ¬ Log.frameMax c.baseRecordMax < file.size by omega, if_false, hb, hlen,

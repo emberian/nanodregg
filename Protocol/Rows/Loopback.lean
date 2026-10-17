@@ -507,13 +507,13 @@ def restart (sealFirst : Bool) : M Expect := do
   | .error e => pure (.refused s!"writerFailed {e}")
   | .ok (.eof, r0) =>
       if sealFirst then
-        match ← (Writer.checkpoint st.mem).write r0.world r0.pos.offset r0.pos.tag r0.index with
+        match ← (Writer.checkpoint st.mem).write r0.world r0.pos (Host.sealEntries r0.sealed r0.index) r0.sealed.index with
         | .error f => return .refused f.name
         | .ok _ => pure ()
       let d ← st.mem.disk.get
-      let base := (← st.mem.bases.get).file
+      let bs ← st.mem.bases.get
       let t0 ← nowNs
-      match Writer.reopen st.sys.writer base d.synced with
+      match Writer.reopen st.sys.writer bs.index bs.file d.synced with
       | .error f => pure (.refused f)
       | .ok r =>
           let t1 ← nowNs
@@ -528,8 +528,8 @@ def restart (sealFirst : Bool) : M Expect := do
 def reopenFlipped (off : Nat) : M Expect := do
   let st ← get
   let d ← st.mem.disk.get
-  let base := (← st.mem.bases.get).file
-  match Writer.reopen st.sys.writer (Host.Sim.flipByte base off) d.synced with
+  let bs ← st.mem.bases.get
+  match Writer.reopen st.sys.writer bs.index (Host.Sim.flipByte bs.file off) d.synced with
   | .error f => pure (.refused f)
   | .ok _ => pure .ok
 

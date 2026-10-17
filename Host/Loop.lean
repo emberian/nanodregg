@@ -92,13 +92,17 @@ def Exit.name : Exit → String
   | .lifetime => "lifetime"
   | .stream _ => "stream"
 
-/-- How the loop seals a base: `seal w offset tag` writes the base of `w`, which is the segment
-prefix `[0, offset)` chained to `tag`, durably, and returns its World's encoded size. With `async`
+/-- How the loop seals a base: `write w seg entries index` appends ONE page holding `entries` (the
+index entries since the last base, never the whole index: HOST-30) to `index.log` at `index`,
+syncs it, then writes the base of `w`, which is the segment prefix `[0, seg.offset)` chained to
+`seg.tag`, naming the index prefix up to the page's end, durably; it returns the World's encoded
+size, the digest of its bytes and the index position after the page. With `async`
 (`host serve`) it runs in a dedicated Task over the immutable `w`, off the loop; without it (the
 simulation) it runs inline, so a seeded run seals at the same points every time. -/
 structure Checkpoint (W : Type) where
-  /-- returns the World's encoded size and the digest of its bytes (`Keys.worldDigest`) -/
-  write : W → Nat → Digest → Array Entry → IO (Except SealFault (Nat × ByteArray))
+  /-- returns the World's encoded size, the digest of its bytes (`Keys.worldDigest`) and the
+  `index.log` position the new base names -/
+  write : W → Position → Array Entry → Position → IO (Except SealFault (Nat × ByteArray × Position))
   async : Bool
 
 /-- How the loop writes a batch record and indexes it: the record of the staged entries (each Turn
@@ -108,12 +112,14 @@ structure Recorder (W T : Type) where
   encode : W → Array T → ByteArray
   mark : W → Nat × ByteArray
 
-/-- A seal in flight: the offset it seals at, the sealed World's height and chain, and its Task. -/
+/-- A seal in flight: the offset it seals at, the sealed World's height and chain, the index
+entries its base will name, and its Task. -/
 structure Pending where
   offset : Nat
   height : Nat
   chain : ByteArray
-  task : Task (Except IO.Error (Except SealFault (Nat × ByteArray)))
+  indexCount : Nat
+  task : Task (Except IO.Error (Except SealFault (Nat × ByteArray × Position)))
 
 /-- Everything the resident loop holds. -/
 structure Resident (W : Type) where
@@ -168,21 +174,28 @@ def commitBatch (c : Cadence) (sealed : Sealed) (store : Store) (s : Log.Sealer)
     return .ok ⟨pos.offset + frameSize record, tagDigest s (pos.tag.bytes ++ record)⟩
   catch e => return .error (toString e)
 
-/-- Start sealing `w` at `pos` in a dedicated Task. -/
+/-- The entries a seal writes: those after the newest base's, a fresh Array. The Task is handed
+this and never the loop's own index, so no `push` on the loop shares an array with a Task (a
+shared push copies the whole array: O(records) on the request path, law 5; HOST-30). -/
+def sealEntries (sealed : Sealed) (index : Array Entry) : Array Entry :=
+  index.extract sealed.indexCount index.size
+
+/-- Start sealing `w` at `pos` in a dedicated Task, after the newest base `sealed`. -/
 def spawnSeal (ck : Checkpoint W) (mark : W → Nat × ByteArray) (w : W) (pos : Position)
-    (index : Array Entry) : IO Pending := do
+    (sealed : Sealed) (index : Array Entry) : IO Pending := do
   let (h, chain) := mark w
+  let fresh := sealEntries sealed index
   if ck.async then
-    return ⟨pos.offset, h, chain, ← IO.asTask (ck.write w pos.offset pos.tag index) .dedicated⟩
+    return ⟨pos.offset, h, chain, index.size, ← IO.asTask (ck.write w pos fresh sealed.index) .dedicated⟩
   else
-    return ⟨pos.offset, h, chain, .pure (.ok (← ck.write w pos.offset pos.tag index))⟩
+    return ⟨pos.offset, h, chain, index.size, .pure (.ok (← ck.write w pos fresh sealed.index))⟩
 
 /-- Wait for a seal; the base it made is the newest durable one. -/
 def settle (p : Pending) : IO (Except SealFault Sealed) := do
   match ← IO.wait p.task with
   | .error e => return .error (.io (toString e))
   | .ok (.error f) => return .error f
-  | .ok (.ok (bytes, digest)) => return .ok ⟨p.offset, bytes, p.height, p.chain, digest⟩
+  | .ok (.ok (bytes, digest, index)) => return .ok ⟨p.offset, bytes, p.height, p.chain, digest, index, p.indexCount⟩
 
 /-- A finished seal is taken up without waiting. -/
 def reap (r : Resident W) : IO (Except SealFault (Resident W)) := do
@@ -207,7 +220,7 @@ def makeRoom (ck : Checkpoint W) (mark : W → Nat × ByteArray) (c : Cadence) (
       | .ok sealed => pure { r with sealed, pending := none }
       | .error f => return .error f
   if withinTail c r.sealed r.pos.offset n then return .ok r
-  match ← settle (← spawnSeal ck mark r.world r.pos r.index) with
+  match ← settle (← spawnSeal ck mark r.world r.pos r.sealed r.index) with
   | .ok sealed => return .ok { r with sealed, pending := none }
   | .error f => return .error f
 
@@ -251,7 +264,7 @@ def append (rec : Recorder W T) (s : Log.Sealer) (ck : Checkpoint W) (c : Cadenc
       let (h, chain) := rec.mark r.world
       let r := { r with world := w', pos, index := r.index.push ⟨h, r.pos.offset, chain⟩ }
       if shouldSeal c r.sealed r.pending.isSome pos.offset then
-        return .ok { r with pending := some (← spawnSeal ck rec.mark w' pos r.index) }
+        return .ok { r with pending := some (← spawnSeal ck rec.mark w' pos r.sealed r.index) }
       return .ok r
   else
     -- not proved unreachable (makeRoom's inline seal is IO): a named stop

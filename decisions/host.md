@@ -1023,4 +1023,30 @@ RAM, and this decision does not touch it.
 shape stamp changes, and every existing Store refuses `shapeMismatch` (43); re-genesis. Two new fatal
 Statuses, `indexShort` and `indexCorrupt`, each with its `Ops.Units.hostAction` arm and deploy/units
 re-rendered. Genesis writes an empty index.log.
-**Status.** PROPOSED (measurement landed with it); built after ROOT's ruling.
+**Status.** RULED BUILD by ROOT (2026-10-17, six conditions) and BUILT (HOST-7). What is in the tree:
+`Base` holds `(indexOffset, indexTag)` instead of entries. `Base.page` checks `indexTooLarge` in O(1).
+`Base.seal` is the one function both checkpoints call: World size first, then page, then base.
+`indexEntries` reads the index. `Host.sealEntries` hands a Task only the new entries.
+`openWith` reads a third range and reports `orphan`. `openWriter` truncates the orphan.
+`Host.Store.layout` / `backupOrder` are the layout as data (OPS-2 renders STORE.md from them).
+Statuses `indexShort` 45 and `indexCorrupt` 46 are fatal, with OPS-2's hostAction sentences.
+Theorems (Host/Proofs/Base):
+- `openWith_reads`: exactly three ranges, the index prefix ≤ worldBytesMax, `indexOffset + orphan = indexSize`. So the writer's truncation drops only bytes past the prefix the base names.
+- `indexEntries_encodeAll`: every page a sequence of seals wrote reads back in order (no page lost).
+- `backupOrder_appendOnly_after_base` and `backupOrder_covers`.
+Plants (host-sim):
+- crash-before-rename at every seal now opens the older base with the newer page as an orphan of the exact size, to the same World and the same index size;
+- plant-index-short;
+- plant-index-flip;
+- plant-index-other-key;
+- the reopened index equals the loop's, entry for entry.
+The counts after, max over seeds 1–3:
+- the four rows are FLAT at 0.181 / 0.147 / 0.131 / 0.161 (100 → 800 Turns; they were 0.540 → 1.251);
+- `seal bytes-per-appended-byte` 1.723 → 1.448;
+- new `seal entries-handed-per-entry` 1.000 (the law-5 row);
+- `open bytes-read-per-record` 1.006 → 1.033: one frame header per page, about 36 bytes per seal against a 2 KiB toy cadence and ~0.003% at a 1 MiB deployed one.
+Condition 1 (land the law-5 fix separately) could not be met. A Task handed only new entries has
+nowhere to write them while the base must hold the whole index, so the fix is the index file and
+lands with it. Owed: OPS-2's live-copy orderings (orphan with a stale base; index.log before
+base.world); a theorem over `Follow.loop` (HOST-21's open edge, unchanged); and the O(records)
+in-memory index (this decision's residue).
