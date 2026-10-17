@@ -114,6 +114,12 @@ def main() -> int:
     a = ap.parse_args()
     t = tree.read(a.root)
     rows = table(os.path.dirname(os.path.dirname(os.path.abspath(a.table)))) if a.table else table(t.root)
+    # Judging a PARENT with the candidate's table (pre-push): a run the parent's own table does not
+    # hold, row for row (same exe, same argument list, same pass line; for a cargo row, the parent
+    # has the test file too), was never a verdict of the parent. It is NOT RUN there, so the
+    # candidate's red is new. An absent verdict is never a red one (the fail-open class: cc4f6fe's
+    # new `cargo:launcher:broker` row, red in its own judge, landed as "PRE-EXISTING").
+    own = table(t.root) if a.table else rows
     changed = open(a.changed, encoding="utf-8").read().split() if a.changed else None
     want = selected(t, changed, rows)
     bindir = os.path.join(t.root, ".lake", "build", "bin")
@@ -123,6 +129,12 @@ def main() -> int:
     for exe in sorted(want & set(rows)):
         runs, passline = rows[exe]
         for k, args in enumerate(runs or []):
+            mine = own.get(exe)
+            if mine is None or mine[1] != passline or args not in (mine[0] or []) or (
+                    exe.startswith("cargo:") and not os.path.isfile(
+                        os.path.join(t.root, exe.split(":")[1], "tests", exe.split(":")[2] + ".rs"))):
+                print(f"  run {exe} {' '.join(args)}: NOT RUN(not in this tree's own table)")
+                continue
             fresh = os.path.join(scratch, f"{exe}-{k}")
             shutil.rmtree(fresh, ignore_errors=True)
             os.makedirs(scratch, exist_ok=True)

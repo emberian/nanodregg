@@ -270,6 +270,11 @@ def check(t: tree.Tree, message: str, base_tree: tree.Tree | None = None) -> lis
             red.append(f"'{k}' rose {base[k]} -> {v}: the commit message needs 'SIZE: {k}: <why>'")
     for k, (c, _) in ceil.items():
         if k not in measured:
+            # Unmeasured now but measured in the parent: this commit made a ceiling check nothing
+            # (an exe renamed or dropped). Absent is not within bounds.
+            if k in base and not says("SIZE-CEILING", k):
+                red.append(f"'{k}' (ceiling {c}) was measured in the parent ({base[k]}) and is not now: "
+                           f"its ceiling checks nothing; restore what it measures or 'SIZE-CEILING: {k}: <why>'")
             WARN.append(f"'{k}' has ceiling {c} but nothing measures it (add gates/metrics/<x>)")
     for k, (bc, _) in base_ceil.items():
         if k not in ceil and not says("SIZE-CEILING", k):
