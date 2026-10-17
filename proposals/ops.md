@@ -8,10 +8,9 @@ Real names below are read from main at e31b4ee; the new ones are the proposal.
 
 ### What is carried, and what is not
 `World D` (Kernel/World.lean) is `cells`, `journal`, `spent`, `height`, `chain`, `allowance`,
-`origin`. Carried: `cells` (every entry, live or retired, with its id), `spent` (a spent
-nullifier that is dropped is a double spend), `allowance` (the storage budget left). Not carried:
-`journal` (txIds of old calls: they name the old origin and are `wrongWorld` here anyway),
-`height`, `chain`, `origin` (the new World's own), and every signature (calls, receipts).
+`origin`. Carried (as first proposed; see Answers, which supersede it): `cells`, `spent`, `allowance`. Not
+carried: `chain`, `origin` (the new World's own), every signature; the first proposal also dropped
+`journal` and `height`, which PROTOCOL-6 showed wrong.
 
 ### KERNEL — one new genesis, no founders
     /-- The carried state: what an export holds and an import must reproduce byte for byte. -/
@@ -65,4 +64,26 @@ on the first call enough?
 - carry-mismatch: import a carried.bin with one cell byte flipped → refused `carryMismatch` (or the
   decode's own refusal; the plant asserts the flip happened first).
 - carry-not-history: an old call replayed into the import is not admitted (height stays 0).
-**Status.** proposed 2026-10-17; answers pending from KERNEL-6, CODEC-2, HOST-6, PROTOCOL-6.
+### Answers (2026-10-17)
+- **KERNEL-6: ACCEPTED WITH AMENDMENTS (KERNEL-29, built after the World port, KERNEL-23 part 2).**
+  After the port `cells` and `spent` are one authenticated trie, so `Carried D := { trie : Cells D,
+  allowance : Nat }`; spent IS state (a carried value cell whose nullifier was spent would be
+  spendable again: `wrongWorld` refuses old CALLS, not a fresh call reusing an old nullifier);
+  origin := H(carry kind, name ‖ nonce ‖ fromOrigin ‖ root(trie) ‖ u64 allowance), the trie root
+  being the carried digest (O(1), no second encoding), preferably one domain with a kind byte;
+  chain := genesisChain origin. Theorems carry_carried, carry_origin_ne_genesis (or a collision),
+  carry_canon.
+- **PROTOCOL-6: (A), to be PROTOCOL-29.** Dropping the journal makes a client LIE: a call committed
+  just before the export, its reply lost, settles against the new Store as lookup `absent` then
+  submit `wrongWorld`, so nd reports REFUSED for an effect live in the carried state. The carry
+  keeps every journal entry still inside its window (≤ windowMax heights), answered by `lookup`,
+  never replayed; then `wrongWorld` on a resubmit is a true final verdict (the old World ends at
+  the carry). No `worldChanged` name: members re-pin by `adopt` or re-invite, refused `wrongWorld`
+  first by TRANSPORT's envelope. OPS's consequence, sent to KERNEL-6: entries expire by height, so
+  the carry keeps the old HEIGHT (and the origin commits to the height and the journal's digest).
+- **HOST-6, CODEC-2:** pending.
+- OPS plant added: carry-roundtrip also asserts "a call committed at the old tip is `lookup`
+  committed after import".
+
+**Status.** KERNEL accepted (amended), PROTOCOL amended; HOST and CODEC pending. Nothing is built
+before KERNEL-29.
