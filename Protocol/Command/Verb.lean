@@ -55,17 +55,31 @@ inductive Verb
   /-- `adopt HEIGHT DIGEST`: start follow from the writer's base at HEIGHT, accepted only if its
   World bytes hash to DIGEST, a pin the member trusts out of band (thin consent, PROTOCOL-14) -/
   | adopt
+  /-- `issue CAP`: bear a new denomination; its WELL is a value account owned by the signer whose
+  id is the denomination, with floor `-CAP` (LEDGER-2) -/
+  | issue
+  /-- `account ASSET [--owner OWNER]`: open the empty account of denomination ASSET owned by OWNER
+  (default: the signer), at its keyed id (LEDGER-7) -/
+  | account
+  /-- `transfer SRC DST AMOUNT [--via GRANT] [--once HEX]`: move AMOUNT from SRC to DST; an
+  account is `well:ASSET` or `of:OWNER:ASSET`; `--once` spends a once-only key of SRC -/
+  | transfer
+  /-- `credit WELL ACCT AMOUNT [--via GRANT]`: extend a credit line of AMOUNT out of WELL's floor to
+  ACCT, with the issuer's authority (LEDGER-4) -/
+  | credit
   deriving DecidableEq, Repr
 
 namespace Verb
 
 def all : List Verb :=
-  [init, enroll, install, create, write, law, invoke, grant, revoke, read, rotate, adopt]
+  [init, enroll, install, create, write, law, invoke, grant, revoke, read, rotate, adopt, issue, account,
+   transfer, credit]
 
 def word : Verb → String
   | init => "init" | enroll => "enroll" | install => "install"
   | create => "create" | write => "write" | law => "law" | invoke => "invoke"
   | grant => "grant" | revoke => "revoke" | read => "read" | rotate => "rotate" | adopt => "adopt"
+  | issue => "issue" | account => "account" | transfer => "transfer" | credit => "credit"
 
 def ofWord? (s : String) : Option Verb := all.find? (·.word == s)
 
@@ -95,6 +109,11 @@ inductive Cmd (D : Type)
   | read (obj : D) (expect : List (Nat × ByteArray))
   | rotate
   | adopt (pin : Thin.Pin)
+  | issue (cap : Nat)
+  /-- `owner = none` is the signer -/
+  | account (asset : D) (owner : Option D)
+  | transfer (src dst : AcctRef D) (amount : Nat) (via : Option D) (once : Option ByteArray)
+  | credit (well : D) (acct : AcctRef D) (amount : Nat) (via : Option D)
 
 /-- Every way an argv is refused. -/
 inductive ParseRefusal
@@ -112,6 +131,10 @@ inductive ParseRefusal
   | badExpect (arg : String)
   /-- `install`'s text does not read as a package in bounds; LANG's reason -/
   | badPackage (why : String)
+  /-- an account is neither `well:ASSET` nor `of:OWNER:ASSET` -/
+  | badAccount (arg : String)
+  /-- a `--once` key is not hex, or is empty -/
+  | badOnce (arg : String)
   deriving DecidableEq, Repr
 
 /-- The refusal's name on the wire (law 7): the constructor, without its arguments. Distinct
@@ -120,13 +143,14 @@ def ParseRefusal.name : ParseRefusal → String
   | .argvPastBound _ => "argvPastBound" | .notUtf8 _ => "notUtf8" | .noVerb => "noVerb"
   | .unknownVerb _ => "unknownVerb" | .usage _ _ => "usage" | .badDigest _ => "badDigest"
   | .badNumber _ => "badNumber" | .badRight _ => "badRight" | .badToken _ => "badToken"
-  | .badExpect _ => "badExpect" | .badPackage _ => "badPackage"
+  | .badExpect _ => "badExpect" | .badPackage _ => "badPackage" | .badAccount _ => "badAccount"
+  | .badOnce _ => "badOnce"
 
 /-- The constructor's index, the thing a name must determine. -/
 def ParseRefusal.tag : ParseRefusal → Nat
   | .argvPastBound _ => 0 | .notUtf8 _ => 1 | .noVerb => 2 | .unknownVerb _ => 3 | .usage _ _ => 4
   | .badDigest _ => 5 | .badNumber _ => 6 | .badRight _ => 7 | .badToken _ => 8 | .badExpect _ => 9
-  | .badPackage _ => 10
+  | .badPackage _ => 10 | .badAccount _ => 11 | .badOnce _ => 12
 
 def usage : Verb → String
   | .init => "init SPONSOR" | .enroll => "enroll TOKEN"
@@ -134,7 +158,10 @@ def usage : Verb → String
   | .write => "write OBJ KEY VALUE [--via GRANT]" | .law => "law OBJ LAW... [--via GRANT]"
   | .invoke => "invoke OBJ METHOD ARGS [--via GRANT]" | .grant => "grant TARGET MEMBER|anyone RIGHTS [--via PARENT]"
   | .revoke => "revoke GRANT" | .read => "read OBJ [KEY=VALUE...]" | .rotate => "rotate"
-  | .adopt => "adopt HEIGHT DIGEST"
+  | .adopt => "adopt HEIGHT DIGEST" | .issue => "issue CAP"
+  | .account => "account ASSET [--owner OWNER]"
+  | .transfer => "transfer SRC DST AMOUNT [--via GRANT] [--once HEX]"
+  | .credit => "credit WELL ACCT AMOUNT [--via GRANT]"
 
 def argvSize (argv : List ByteArray) : Nat := 4 + (argv.map (4 + ·.size)).sum
 
@@ -199,6 +226,34 @@ def viaArg (v : Verb) : List String → Except ParseRefusal (Option D)
   | ["--via", g] => (digestArg digestOf g).map some
   | _ => .error (.usage v.word (usage v))
 
+/-- An account reference: `well:ASSET` (the well, whose id is its denomination) or
+`of:OWNER:ASSET` (OWNER's account of ASSET, resolved by the receiver to `accountId`). -/
+def acctArg (s : String) : Except ParseRefusal (AcctRef D) :=
+  match s.splitOn ":" with
+  | ["well", a] => match Text.ofHex a >>= digestOf with
+    | some a => .ok (.well a)
+    | none => .error (.badAccount s)
+  | ["of", o, a] => match Text.ofHex o >>= digestOf, Text.ofHex a >>= digestOf with
+    | some o, some a => .ok (.of o a)
+    | _, _ => .error (.badAccount s)
+  | _ => .error (.badAccount s)
+
+/-- Trailing `--FLAG VALUE` pairs, each flag at most once and only from `allowed`, in any order. -/
+def flagsArg (v : Verb) (allowed : List String) : List String → Except ParseRefusal (List (String × String))
+  | [] => .ok []
+  | f :: x :: rest =>
+      if allowed.contains f then do
+        let fs ← flagsArg v allowed rest
+        if fs.any (·.1 = f) then throw (.usage v.word (usage v)) else pure ((f, x) :: fs)
+      else .error (.usage v.word (usage v))
+  | [_] => .error (.usage v.word (usage v))
+
+/-- The value of `--via` among parsed flags, as a grant. -/
+def viaFlag (fs : List (String × String)) : Except ParseRefusal (Option D) :=
+  match fs.lookup "--via" with
+  | some g => (digestArg digestOf g).map some
+  | none => .ok none
+
 /-- Split a trailing `--via GRANT` off a variable-length tail. -/
 def splitVia (args : List String) : List String × List String :=
   match args.reverse with
@@ -237,6 +292,24 @@ def parseVerb (v : Verb) (args : List String) : Except ParseRefusal (Cmd D) :=
       match Text.ofHex d with
       | some digest => pure (.adopt ⟨height, digest⟩)
       | none => throw (.badDigest d)
+  | .issue, [c] => .issue <$> numArg c
+  | .account, a :: fl => do
+      let fs ← flagsArg .account ["--owner"] fl
+      let owner ← match fs.lookup "--owner" with
+        | some o => some <$> digestArg digestOf o
+        | none => pure none
+      pure (.account (← digestArg digestOf a) owner)
+  | .transfer, s :: d :: n :: fl => do
+      let fs ← flagsArg .transfer ["--via", "--once"] fl
+      let once ← match fs.lookup "--once" with
+        | some k => match Text.ofHex k with
+          | some b => if b.isEmpty then throw (.badOnce k) else pure (some b)
+          | none => throw (.badOnce k)
+        | none => pure none
+      pure (.transfer (← acctArg digestOf s) (← acctArg digestOf d) (← numArg n) (← viaFlag digestOf fs) once)
+  | .credit, w :: a :: n :: fl => do
+      let fs ← flagsArg .credit ["--via"] fl
+      pure (.credit (← digestArg digestOf w) (← acctArg digestOf a) (← numArg n) (← viaFlag digestOf fs))
   | _, _ => bad
 
 /-- THE parser: argv bytes to a command, or a refusal by name. -/

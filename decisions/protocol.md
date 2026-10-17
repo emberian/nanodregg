@@ -781,3 +781,38 @@ height and the journal entries admitted above height - windowMax (theorem carry_
 fresh chain and an origin over the carried contents. Consequence for PROTOCOL: height 0 no longer
 means genesis. adopt notAtGenesis and follow from a carried Store must be re-read against
 KERNEL-29 when it lands. A carry row is built then.
+
+## PROTOCOL-32 · the ledger verbs `issue`, `account`, `transfer`, `credit`; rows `well` and `pay` on the receivers; a hostile client is a row act (2026-10-17, PROTOCOL-6; LEDGER-2's D5 at c3c7aa3, LEDGER-6 (f), LEDGER-7)
+**Decision.** Four verbs (16 of 20): `issue CAP`, `account ASSET [--owner OWNER]` (default: the
+signer), `transfer SRC DST AMOUNT [--via GRANT] [--once HEX]`, `credit WELL ACCT AMOUNT [--via GRANT]`,
+with an account named `well:ASSET` or `of:OWNER:ASSET` (`AcctRef`, resolved by the receiver). Flags
+come after the positionals, in any order, each at most once (`usage` otherwise). Two new parse
+refusals: `badAccount` and `badOnce`. `Machine.body` maps each verb to its `Body` constructor one to
+one. The pins of the resolved account ids come from `derivePins` through `unpinned`, as LEDGER-2 said.
+`plan` is factored as `planUnchecked` (derive, pins, price) followed by follow's own `World.admit`
+(`planUnchecked_derives`; `plan_admits` keeps its statement).
+**Rows.** `well`: issue 100; an account opened for another owner; that owner's own `account` is
+`idTaken`; the issuer's own account; a mint of 10; a mint of 1000 `belowFloor`; a credit of 5; an
+owner's transfer; a non-owner's `noGrant`; a burn into the well. Plant `accountByAsset` (the keyed id
+ignores its owner, for the writer and every follower), caught at line 3: `refused idTaken`. `pay`:
+transfer `--once 6b31` ok; the same key again `spent` (follow's own admission); the same key from a
+HOSTILE client (act `forge`: parse, body, `planUnchecked`, signed, submitted, with no admission of
+its own) `spent` from the WRITER; another key ok. Plant `writerForgetsSpent` (the writer admits
+against its World with the spent set removed), caught at line 4: `ok`.
+**Why `forge`.** Every value refusal a client meets is first met by follow's OWN admission, before
+anything is signed. A writer-side plant is therefore invisible to an honest client, and LEDGER's
+proposed `skipJudge` plant does nothing at all: belowFloor and spent are kernel admission, not laws.
+The property that matters on the wire is that the writer refuses a client that does not check, and
+`forge` is that client, built from the deployed functions only.
+**Critique.** The floor (`belowFloor`), the authority (`noGrant`) and the credit line are held by
+name in the rows. No row plant removes the check, because the check is `World.admit`, shared by the
+writer and every client, and making it a parameter would put a mode into deployed admission. Those
+checks are held by KERNEL's sim plants (`belowFloor`, `noGrant` are in `Sim.planted`). `forge` plans
+on the actor's follow World as its last command left it, so a forged line straight after another
+actor's write would be refused as stale, not by the rule under test: put a forged line after the
+same actor's command. `escrow`/bounty is still pending on LEDGER's escrow package.
+**Meta-critique.** I came close to accepting the proposed `skipJudge` plant because it came with the
+row text. Running the row was what refuted it (a plant that does nothing would have read as "not
+caught" and turned the row red). The real question was where the refusal is decided, and the answer
+(the client first) dictated the hostile-client act.
+**Status.** BUILT (this commit). Rows 17 PASS, 1 PENDING (bounty).

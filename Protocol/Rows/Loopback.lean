@@ -45,6 +45,12 @@ structure Sys where
 def skipJudge (X : Ctx D) : Ctx D :=
   { X with program := { X.program with judge := fun _ _ _ _ _ _ => .ok () } }
 
+/-- The keyed account id with its owner dropped: `accountId`'s hash sees only the asset (the
+second half of `owner ‖ asset`, both digests of one width). -/
+def accountByAsset (X : Ctx D) : Ctx D :=
+  { X with env := { X.env with hash := fun dom b =>
+      if dom = domAccount then X.env.hash dom (b.extract (b.size / 2) b.size) else X.env.hash dom b } }
+
 def sys : Option Mutation → Sys
   | none => { writer := { X := Sim.ctx }, follow := Sim.ctx }
   | some .openLog => { writer := { X := Sim.ctx, gateLog := false }, follow := Sim.ctx }
@@ -60,6 +66,9 @@ def sys : Option Mutation → Sys
   | some .unstatedExpiry => { writer := { X := Sim.ctx, unstatedExpiry := true }, follow := Sim.ctx }
   | some .ignoreNotBefore => { writer := { X := Sim.ctx, ignoreNotBefore := true }, follow := Sim.ctx }
   | some .nonceRepeats => { writer := { X := Sim.ctx }, follow := Sim.ctx, nonceRepeats := true }
+  | some .accountByAsset =>
+      { writer := { X := accountByAsset Sim.ctx }, follow := accountByAsset Sim.ctx }
+  | some .writerForgetsSpent => { writer := { X := Sim.ctx, forgetSpent := true }, follow := Sim.ctx }
 
 /-! ## Actors -/
 
@@ -579,6 +588,29 @@ def runAct (l : Line) : M (Expect × String) := do
           match r with
           | some r => pure (statusOutcome (ByteArray.mk #[r.status] ++ r.payload), "")
           | none => pure (.refused "writerStopped", "")
+  | .forge argv => do
+      match ← subst argv with
+      | .error e => pure (.refused e, "")
+      | .ok av =>
+        let a ← actor l.actor
+        let X ← X
+        let w := a.follow.world
+        let key := a.key l.actor
+        match parse (D := D) X.digestOf (av.map String.toUTF8) with
+        | .error r => pure (.refused r.name, "")
+        | .ok cmd =>
+          match body X a.self w ⟨key, a.next l.actor, ByteArray.empty⟩ cmd >>= fun b =>
+              planUnchecked X a.self w key b with
+          | .error r => pure (.refused r.name, "")
+          | .ok (u, _) =>
+            let call := X.callBytes ⟨u, Sim.sign key (X.unsignedBytes u)⟩
+            sawCall l.actor call
+            match ← ask .submit call with
+            | none => pure (.refused "writerStopped", "")
+            | some res =>
+                if classify res = .committed then
+                  modify fun st => { st with committed := st.committed.push call }
+                pure (statusOutcome res, "")
   | .replayLog sameNonce => do
       -- a SECOND writer from a genesis of the same name, allowance and founders, and the writer's
       -- committed calls submitted to it byte-identical, in order (OPS's cross-World replay)

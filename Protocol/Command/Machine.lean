@@ -252,6 +252,10 @@ def body (X : Ctx D) (me : Self D) (w : World D) (s : Signed) : Cmd D → Except
   | .grant t g rs via => .ok (.grant (t.getD (worldId X)) (g.getD (worldId X)) rs via)
   | .revoke g => .ok (.revoke g)
   | .rotate => .ok (.rotate s.key (nextKeyDigest X s.next))
+  | .issue cap => .ok (.issue cap)
+  | .account a o => .ok (.account a (o.getD me.member))
+  | .transfer src dst n via once => .ok (.transfer src dst n via once)
+  | .credit wl acct n via => .ok (.credit wl acct n via)
   | .init _ | .read _ _ | .adopt _ => .error .badState
 
 /-- Derive with the signature not yet known, pinning each cell the derivation asks for. -/
@@ -265,10 +269,11 @@ def derivePins (X : Ctx D) (w : World D) : Nat → Unsigned D → Except (Refusa
       | .error r => .error (.receive r)
       | .ok t => .ok (u, t)
 
-/-- The call follow asks custody to sign: derived on follow's World with every pin it read, its
-price the derived charge plus headroom, and only if follow's World admits the Turn. -/
-def plan (X : Ctx D) (me : Self D) (w : World D) (key : ByteArray) (b : Body D) :
-    Except (Refusal D) (Unsigned D) := do
+/-- The call a member's body derives to on follow's World, with every pin it read and its price the
+derived charge plus headroom, and the Turn it derives: `plan` before follow's own admission. A
+client that skips that admission (a hostile one: the rows' `forge` act) signs exactly this. -/
+def planUnchecked (X : Ctx D) (me : Self D) (w : World D) (key : ByteArray) (b : Body D) :
+    Except (Refusal D) (Unsigned D × Turn D) := do
   let u0 : Unsigned D :=
     -- the invitation's World (KERNEL-24): follow's own `receive` below refuses `wrongWorld` if
     -- the World it follows is not that one, so it never signs a call for another World
@@ -286,7 +291,15 @@ def plan (X : Ctx D) (me : Self D) (w : World D) (key : ByteArray) (b : Body D) 
   let u := { u1 with maxCharge := t1.charge + chargeSlack }
   match deriveTurn X (pinned X.env w u.pins) ⟨u, ByteArray.empty⟩ with
   | .error r => .error (.receive r)
-  | .ok t => match World.admit X.env w t with
+  | .ok t => .ok (u, t)
+
+/-- The call follow asks custody to sign: `planUnchecked`, and only if follow's World admits the
+Turn it derives. -/
+def plan (X : Ctx D) (me : Self D) (w : World D) (key : ByteArray) (b : Body D) :
+    Except (Refusal D) (Unsigned D) :=
+  match planUnchecked X me w key b with
+  | .error r => .error r
+  | .ok (u, t) => match World.admit X.env w t with
     | .error r => .error (.reject r)
     | .ok _ => .ok u
 

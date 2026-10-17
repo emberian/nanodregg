@@ -46,6 +46,9 @@ structure Params where
   /-- `log` serves an envelope the gate refuses `notYet` (a plant: the read gate without the
   envelope's lower bound, PROTOCOL-27) -/
   ignoreNotBefore : Bool := false
+  /-- admit against the World with every spent nullifier forgotten (a plant: a writer that does
+  not keep its spent set) -/
+  forgetSpent : Bool := false
 
 /-- Small enough that a row of a few dozen turns seals bases; the deployed bounds on size. -/
 def cadence : Cadence :=
@@ -64,10 +67,17 @@ def limits : Limits := ⟨16, 1 <<< 20⟩
 /-- Batches one round of the loop serves before it ends `fuel` (`Host.restarts` reopens in process). -/
 def fuel : Nat := 1000000
 
+/-- The World with its spent nullifiers removed and its cells kept (the `writerForgetsSpent`
+plant's view; the trie is rebuilt from the kept listing). -/
+def unspend (E : Env D) (w : World D) : World D :=
+  { w with trie := (w.trie.toList.filter fun p => match p.1 with
+      | .cell _ => true
+      | .nullifier _ => false).foldl (fun m p => m.insert (trieSpec E) p.1 p.2) .empty }
+
 /-- `Host.handle`, except under the `openLog` plant: a `log` envelope that decodes is paged
 without `Envelope.check`. -/
 def machine (P : Params) : Machine (World D) (Turn D) (Reject D) Frame D where
-  admit := World.admit P.X.env
+  admit w t := World.admit P.X.env (if P.forgetSpent then unspend P.X.env w else w) t
   note := World.root P.X.env
   handle w f :=
     if !P.gateLog && f.op = Op.log.code then

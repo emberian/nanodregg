@@ -49,13 +49,12 @@ theorem derivePins_keeps {X : Ctx D} {w : World D} :
       · cases h
       · cases h; exact ⟨rfl, rfl, rfl⟩
 
-/-- `plan` offers `u` only if follow's World derives a Turn from it and admits that Turn. -/
-theorem plan_admits {X : Ctx D} {me : Self D} {w : World D} {key : ByteArray} {b : Body D}
-    {u : Unsigned D} (h : plan X me w key b = .ok u) :
+/-- `planUnchecked` derives `t` from `u` on follow's World, and `u` is the member's own call. -/
+theorem planUnchecked_derives {X : Ctx D} {me : Self D} {w : World D} {key : ByteArray} {b : Body D}
+    {u : Unsigned D} {t : Turn D} (h : planUnchecked X me w key b = .ok (u, t)) :
     u.member = me.member ∧ u.key = key ∧ u.body = b ∧
-    ∃ t w', deriveTurn X (pinned X.env w u.pins) ⟨u, ByteArray.empty⟩ = .ok t ∧
-      World.admit X.env w t = .ok w' := by
-  simp only [plan, bind, Except.bind] at h
+      deriveTurn X (pinned X.env w u.pins) ⟨u, ByteArray.empty⟩ = .ok t := by
+  simp only [planUnchecked, bind, Except.bind] at h
   split at h
   · cases h
   · rename_i p hp
@@ -64,12 +63,26 @@ theorem plan_admits {X : Ctx D} {me : Self D} {w : World D} {key : ByteArray} {b
     simp only at h
     split at h
     · cases h
-    · rename_i t ht
-      split at h
-      · cases h
-      · rename_i w' hw
-        cases h
-        exact ⟨hk.1, hk.2.1, hk.2.2, t, w', ht, hw⟩
+    · rename_i t' ht
+      cases h
+      exact ⟨hk.1, hk.2.1, hk.2.2, ht⟩
+
+/-- `plan` offers `u` only if follow's World derives a Turn from it and admits that Turn. -/
+theorem plan_admits {X : Ctx D} {me : Self D} {w : World D} {key : ByteArray} {b : Body D}
+    {u : Unsigned D} (h : plan X me w key b = .ok u) :
+    u.member = me.member ∧ u.key = key ∧ u.body = b ∧
+    ∃ t w', deriveTurn X (pinned X.env w u.pins) ⟨u, ByteArray.empty⟩ = .ok t ∧
+      World.admit X.env w t = .ok w' := by
+  unfold plan at h
+  split at h
+  · cases h
+  · rename_i u' t hp
+    split at h
+    · cases h
+    · rename_i w' hw
+      cases h
+      obtain ⟨h1, h2, h3, h4⟩ := planUnchecked_derives hp
+      exact ⟨h1, h2, h3, t, w', h4, hw⟩
 
 /-- Consent at the wire: the only call `step` hands the client to submit is a call over a `u`
 that `plan` produced on follow's own World (hence derived and admitted there, `plan_admits`). -/

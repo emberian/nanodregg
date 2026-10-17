@@ -18,12 +18,12 @@ edit it, never pass it as a PATH). Ceilings live in `gates/ceilings.tsv`. A rise
 | Lean lines (Kernel) | 9925 | — |
 | Lean lines (Lang) | 11152 | — |
 | Lean lines (Ops) | 954 | — |
-| Lean lines (Protocol) | 4299 | — |
-| Lean lines (deployed) | 12857 | — |
-| Lean lines (tooling: Sim, Rows, Journey, Census, Emit, Ops) | 6455 | — |
+| Lean lines (Protocol) | 4466 | — |
+| Lean lines (deployed) | 12943 | — |
+| Lean lines (tooling: Sim, Rows, Journey, Census, Emit, Ops) | 6523 | — |
 | foundation modules | 7 | 8 |
 | max dependents of a non-foundation module | 130 | — |
-| theorems | 1861 | — |
+| theorems | 1862 | — |
 | partial defs (deployed) | 0 | 0 |
 | sorry | 0 | 0 |
 | native (extern/implemented_by) | 9 | 9 |
@@ -37,7 +37,7 @@ edit it, never pass it as a PATH). Ceilings live in `gates/ceilings.tsv`. A rise
 | Rust files with an unregistered generated header | 0 | 0 |
 | protocol operations | 6 | 6 |
 | call kinds (Receive.Body constructors) | 13 | 13 |
-| command verbs (the one command language) | 12 | 20 |
+| command verbs (the one command language) | 16 | 20 |
 | refusal constructors | 59 | — |
 | protocol status codes | 5 | — |
 | protocol step codes | 6 | — |

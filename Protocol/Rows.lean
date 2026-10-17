@@ -62,6 +62,11 @@ inductive Act
   (`sameNonce`: a restore of the same World) or another one (OPS's cross-World replay). The outcome
   is the one every call got; calls that got different outcomes are `refused mixed:I:OUTCOME` -/
   | replayLog (sameNonce : Bool)
+  /-- a hostile client: the actor's command ARGV is parsed and planned on its follow World as its
+  last command left it (`Command.parse`, `body`, `planUnchecked`), signed and submitted WITHOUT
+  follow's own admission; what the writer answers is the outcome. Custody is not advanced (only
+  a rotation advances it, and a forged rotation is not a row's business) -/
+  | forge (argv : List String)
   /-- the actor signs a `log` read envelope for ITS World (from height 0, one window from 0) and
   sends it to a second writer made as `replayLog` makes one (PROTOCOL-29's cross-World read); the
   outcome is that writer's answer -/
@@ -147,6 +152,13 @@ inductive Mutation
   /-- a second genesis draws the first one's nonce (HOST's randomness repeats): the origin is only
   as unique as the nonce (KERNEL-24's critique) -/
   | nonceRepeats
+  /-- the keyed account id ignores its owner (the shape LEDGER-7 replaced): every owner's account
+  of one denomination is one id, for the writer and every follower -/
+  | accountByAsset
+  /-- the writer admits each Turn against its World with every spent nullifier forgotten, and
+  keeps the World that admission reaches (so it forgets them for good, and diverges from its
+  followers): a writer that does not keep its spent set -/
+  | writerForgetsSpent
   deriving DecidableEq, Repr
 
 /-- A row's plant: the mutation, and the line that must catch it with the outcome it then gets. -/
@@ -453,32 +465,46 @@ def wrongWorldRead : Row where
     { actor := "operator", act := .readElsewhere true, expect := .ok }])
   plant := .caught .nonceRepeats 6 .ok
 
-/-- JPAY1–4, JPAY6: observed payments become credit. Pay is an installed package (LANG's to
-write, `world/pay/Book`), invoked by members and by the watcher, not a receiver family. -/
+/-- JPAY (the payment half): a transfer spends a once-only key of its source (`--once`), and the
+same key again is `spent`, whether the client checks it (follow's own admission, line 3) or a
+hostile client skips that check and the WRITER refuses it (line 4). Another key pays again. -/
 def pay : Row where
   name := "pay"
   replaces := ["jpay/JPAY1", "jpay/JPAY2", "jpay/JPAY3", "jpay/JPAY4", "jpay/JPAY6"]
   ops := everyWrite
-  kinds := ["install", "invoke"]
+  kinds := ["issue", "account", "transfer"]
   drive := .members [
-    okBind "operator" ["install", "world/pay/Book"] "book",
-    ok "watcher" ["invoke", "@book", "0", "transfer-finalized"],
-    no "watcher" ["invoke", "@book", "0", "transfer-finalized"] "spent"]
-  plant := .caught .skipJudge 2 .ok
-  blockedOn := some "LEDGER: no receiver puts a nullifier in a Turn (sealTurn's nullifiers are []), so `spent` is unreachable; LANG: the pay package world/pay/Book"
+    okBind "sponsor" ["issue", "100"] "w",
+    ok "sponsor" ["account", "@w", "--owner", "@operator"],
+    ok "sponsor" ["transfer", "well:{@w}", "of:{@operator}:{@w}", "10", "--once", "6b31"],
+    no "sponsor" ["transfer", "well:{@w}", "of:{@operator}:{@w}", "10", "--once", "6b31"] "spent",
+    { actor := "sponsor", act := .forge ["transfer", "well:{@w}", "of:{@operator}:{@w}", "10", "--once", "6b31"],
+      expect := .refused "spent" },
+    ok "sponsor" ["transfer", "well:{@w}", "of:{@operator}:{@w}", "10", "--once", "6b32"]]
+  plant := .caught .writerForgetsSpent 4 .ok
 
-/-- K-WELL: the referee mints by grant and law; supply is conserved (LANG's `world/well/Well`). -/
+/-- K-WELL on the ledger receivers (LEDGER-6 (f), LEDGER-7): the issuer bears a denomination
+(`issue`, its well), opens accounts by owner (`account … --owner`; one per owner, `idTaken` after),
+mints out of the well within the cap and is refused past it (`belowFloor`), extends a credit line
+(`credit`); an owner moves its own balance, a non-owner is refused `noGrant`, and a transfer into
+the well burns. -/
 def well : Row where
   name := "well"
   replaces := ["journey/KW", "seats(well)"]
   ops := everyWrite
-  kinds := ["install", "invoke"]
+  kinds := ["issue", "account", "transfer", "credit"]
   drive := .members [
-    okBind "operator" ["install", "world/well/Well"] "well",
-    ok "referee" ["invoke", "@well", "0", "10"],
-    no "referee" ["invoke", "@well", "0", "1000000"] "lawDenied"]
-  plant := .caught .skipJudge 2 .ok
-  blockedOn := some "LEDGER: the well receivers (mint, burn, supply); LANG: the well package world/well/Well"
+    okBind "sponsor" ["issue", "100"] "w",
+    ok "sponsor" ["account", "@w", "--owner", "@operator"],
+    no "operator" ["account", "@w"] "idTaken",
+    ok "sponsor" ["account", "@w"],
+    ok "sponsor" ["transfer", "well:{@w}", "of:{@operator}:{@w}", "10"],
+    no "sponsor" ["transfer", "well:{@w}", "of:{@operator}:{@w}", "1000"] "belowFloor",
+    ok "sponsor" ["credit", "@w", "of:{@sponsor}:{@w}", "5"],
+    ok "operator" ["transfer", "of:{@operator}:{@w}", "of:{@sponsor}:{@w}", "3"],
+    no "sponsor" ["transfer", "of:{@operator}:{@w}", "of:{@sponsor}:{@w}", "1"] "noGrant",
+    ok "operator" ["transfer", "of:{@operator}:{@w}", "well:{@w}", "2"]]
+  plant := .caught .accountByAsset 3 (.refused "idTaken")
 
 /-- The bounty on the seat kernel (LANG's `world/bounty/BountyEscrow`). -/
 def bounty : Row where
