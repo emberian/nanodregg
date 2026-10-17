@@ -14,6 +14,17 @@ The mutation is asserted before the verdict is read (a damaged copy must differ 
 boundary, a single foreign last frame and a rollback to an older complete copy all open cleanly
 WITHOUT an anchor, and are refused by name WITH one.
 
+The live plants (`live`) run ONE long `host serve` fed calls whose state fills one slot, so the
+Store seals real bases (`sealMinBytes` = 1 MiB) while it runs, and interleave the backup with it
+deterministically: `key` and `base.world` are copied, the writer is fed until it seals a NEWER
+base (polled through `host check`, read-only, with a deadline), and only then is `seg.log` copied.
+That is the D7 race at its worst point: the copied base is no longer the Store's base, and the
+copy must still open to the height the writer had reached. The finished Store is then the sealed
+Store the first plants never had: a history flip before a real base, a segment cut below the base
+offset (`segmentShort`), and the WRONG copy order (`seg.log` before a seal, `base.world` after).
+Each live plant first asserts that its precondition happened (a seal during the copy, a base past
+the origin), or it FAILS instead of passing on a Store that never sealed.
+
     store-plants HOST_EXE DIR     DIR must not exist; one line per plant, then ALL PASS (exit 0)
 -/
 import Ops.Founder
@@ -78,6 +89,161 @@ def damage (dir : System.FilePath) (bytes : ByteArray) : IO Unit := do
   let old ← IO.FS.readBinFile (dir / "seg.log")
   if old == bytes then throw (IO.userError s!"mutation of {dir} is a no-op")
   IO.FS.writeBinFile (dir / "seg.log") bytes
+
+/-- The `i`-th sealed-plant call's one slot (the first state key, `Receive.stateBase`): `slotBytes` deterministic bytes. -/
+def slotBytes : Nat := 49152
+
+def bigState (i : Nat) : Slots :=
+  [(stateBase, ByteArray.mk ((Array.range slotBytes).map fun j => ((i + j) % 251).toUInt8))]
+
+/-- `host check DIR`'s STATUS fields, or none if it refused. -/
+def status (exe : String) (d : System.FilePath) : IO (Option (List (String × String))) := do
+  let r ← host exe ["check", d.toString]
+  if r.code ≠ 0 then return none
+  let some line := (r.out.splitOn "\n").find? (·.startsWith "STATUS ") | return none
+  return some ((line.splitOn " ").filterMap fun kv =>
+    match kv.splitOn "=" with | [k, v] => some (k, v) | _ => none)
+
+def field (st : List (String × String)) (k : String) : Nat :=
+  ((st.lookup k).bind String.toNat?).getD 0
+
+def pollMs : UInt32 := 100
+/-- The longest wait for the live writer to reach a height or a seal: 60 s in `pollMs` steps. -/
+def pollSteps : Nat := 600
+
+/-- Poll `host check` until `ok` holds of its STATUS fields; none at the deadline. A refusing
+check (the writer mid-seal) is polled again. -/
+def awaitStatus (exe : String) (d : System.FilePath) (ok : List (String × String) → Bool) :
+    IO (Option (List (String × String))) := do
+  for _ in [0:pollSteps] do
+    if let some st ← status exe d then
+      if ok st then return some st
+    IO.sleep pollMs
+  return none
+
+/-- The live and sealed plants; the number that failed. -/
+def live (exe : String) (dir : System.FilePath) : IO Nat := do
+  let l := dir / "L"
+  let g ← host exe (["genesis", l.toString, name] ++ Founder.genesisArgs)
+  unless g.code = 0 do IO.eprintln s!"genesis L: {g.out}"; return 1
+  let originSeg ← IO.FS.readBinFile (l / "seg.log")
+  -- the calls and their folds, in process; enough bytes for two seals
+  let n := 48
+  -- anchors[h] is the kernel's own `HEIGHT:CHAIN` after the first h calls
+  let w0 := Founder.world name
+  let (frames, anchors, _) ← (List.range n).foldlM (init := (#[], #[anchorArg w0], w0))
+    fun (cs, as, w) i => do
+      let c := Founder.create name w i (bigState i)
+      match submit X w c with
+      | .ok (_, w') => pure (cs.push (Founder.submitFrame c), as.push (anchorArg w'), w')
+      | .error v =>
+        let why := match v with | .refused r => r.name | .rejected r => r.name
+        throw (IO.userError s!"live call {i} does not admit in process: {why}")
+  let child ← IO.Process.spawn
+    { cmd := exe, args := #["serve", l.toString], stdin := .piped, stdout := .piped, stderr := .piped }
+  let (input, child) ← child.takeStdin
+  -- the live writer's pipes are drained for its whole run: dedicated threads, or they hold the
+  -- task pool and every later `host check`'s own reader task never runs
+  let out ← IO.asTask child.stdout.readBinToEnd (prio := .dedicated)
+  let err ← IO.asTask child.stderr.readToEnd (prio := .dedicated)
+  let feed (lo hi : Nat) : IO Unit := do
+    for i in [lo:hi] do input.write frames[i]!
+    input.flush
+  let mut failed := 0
+  let say (label : String) (ok : Bool) (detail : String) : IO Unit :=
+    IO.println s!"PLANT {label} {if ok then "PASS" else "FAIL"} :: {detail}"
+  -- 1. four calls, durable
+  feed 0 4
+  let some st0 ← awaitStatus exe l (field · "height" ≥ 4) | IO.eprintln "live writer never reached height 4"; return 1
+  let copy := dir / "livecopy"
+  IO.FS.createDirAll copy
+  IO.FS.writeBinFile (copy / "key") (← IO.FS.readBinFile (l / "key"))
+  let baseCopied ← IO.FS.readBinFile (l / "base.world")
+  IO.FS.writeBinFile (copy / "base.world") baseCopied
+  let wrongOrderSeg ← IO.FS.readBinFile (l / "seg.log")
+  -- 2. feed until the writer seals a newer base, then copy the segment
+  let mut sealed := none
+  let mut fed := 4
+  while sealed.isNone && fed < n do
+    feed fed (fed + 4)
+    fed := fed + 4
+    sealed ← awaitStatus exe l fun st => field st "height" ≥ fed
+    if let some st := sealed then
+      if field st "base_height" ≤ field st0 "base_height" then sealed := none
+  let segCopied ← IO.FS.readBinFile (l / "seg.log")
+  IO.FS.writeBinFile (copy / "seg.log") segCopied
+  let raced := sealed.isSome && (← IO.FS.readBinFile (l / "base.world")) != baseCopied
+  say "live-copy-raced-a-seal" raced
+    s!"base_height {field st0 "base_height"} at the base copy, {(sealed.map (field · "base_height")).getD 0} at the segment copy; the copied base is {if raced then "no longer" else "STILL"} the Store's"
+  unless raced do failed := failed + 1
+  -- 3. the rest, then the writer ends at eof
+  feed fed n
+  -- the stdin handle is dead after the last feed, so the writer sees eof; bounded wait
+  let waited ← IO.asTask child.wait (prio := .dedicated)
+  let mut steps := 0
+  while !(← IO.hasFinished waited) && steps < pollSteps do
+    IO.sleep pollMs
+    steps := steps + 1
+  unless ← IO.hasFinished waited do
+    child.kill
+    IO.eprintln "live serve did not end at eof within the deadline; killed (its own Child handle)"
+    return failed + 1
+  let code ← IO.ofExcept waited.get
+  let _ ← IO.ofExcept out.get
+  let errText ← IO.ofExcept err.get
+  unless code = 0 do IO.eprintln s!"live serve exit {code}: {errText}"; return failed + 1
+  let hCopy := (sealed.map (field · "height")).getD 0
+  let anchorAt (h : Nat) : List String := ["--anchor", anchors[h]!]
+  let check (d : System.FilePath) (extra : List String := []) : IO Run :=
+    host exe (["check", d.toString] ++ extra)
+  let plain (label : String) (want : Status) (r : IO Run) : IO Nat := do
+    return if ← judge ⟨label, want, r⟩ then 0 else 1
+  failed := failed + (← plain "live-copy-anchor-at-segment-copy" .eof (check copy (anchorAt hCopy)))
+  -- the sealed Store: it must have a base past the origin, or the rows below test nothing
+  let some stS ← status exe l | IO.eprintln "the finished live Store does not check"; return failed + 1
+  let off := field stS "base_offset"
+  let hasBase := field stS "base_height" > 0 && off > originSeg.size
+  say "sealed-store-has-a-real-base" hasBase s!"base_height={field stS "base_height"} base_offset={off} origin={originSeg.size} seg_bytes={field stS "seg_bytes"}"
+  unless hasBase do return failed + 1
+  failed := failed + (← plain "sealed-intact-anchor" .eof (check l (anchorAt n)))
+  let seg ← IO.FS.readBinFile (l / "seg.log")
+  let sealedCopy (label : String) (f : System.FilePath → IO Unit) : IO System.FilePath := do
+    let d := dir / label
+    backup l d
+    f d
+    return d
+  let short ← sealedCopy "sealed-short" fun d => damage d (seg.extract 0 (off - 1))
+  failed := failed + (← plain "sealed-segment-cut-below-base" .segmentShort (check short))
+  let at_ := originSeg.size + (off - originSeg.size) / 2
+  let flipped ← sealedCopy "sealed-flip" fun d => damage d (seg.set! at_ (seg.get! at_ ^^^ 1))
+  failed := failed + (← plain "sealed-flip-history-before-base" .corrupt (check flipped))
+  -- the wrong order: seg.log copied before a seal, base.world after it
+  let wrong ← sealedCopy "wrong-order" fun d => damage d wrongOrderSeg
+  failed := failed + (← plain "copy-segment-before-base-wrong-order" .segmentShort (check wrong))
+  return failed
+
+/-- OPS-2's replay, against the real exe after KERNEL-24: founder 0's first call, signed for the
+test World, is served to a second genesis under the same label and founders. Under another nonce
+it must not land (height stays 0; the writer answers `wrongWorld`); under the SAME nonce, the
+restore case by design, it lands (height 1). The control row keeps the first from passing on a
+writer that admits nothing. -/
+def replay (exe : String) (dir : System.FilePath) : IO Nat := do
+  let c := Founder.create name (Founder.world name) 0
+  let other := Founder.nonce.set! 0 (Founder.nonce.get! 0 ^^^ 1)
+  if other == Founder.nonce then IO.eprintln "the other nonce is the test nonce"; return 1
+  let otherArgs := ["--nonce", Protocol.Text.toHex other] ++ Founder.genesisArgs.drop 2
+  let mut failed := 0
+  for (label, args, want) in [("replay-other-nonce-not-admitted", otherArgs, 0),
+                              ("replay-same-nonce-admitted-control", Founder.genesisArgs, 1)] do
+    let d := dir / label
+    let g ← host exe (["genesis", d.toString, name] ++ args)
+    unless g.code = 0 do IO.eprintln s!"genesis {label}: {g.out}"; return failed + 1
+    let r ← host exe ["serve", d.toString] (Founder.submitFrame c)
+    let h := ((← status exe d).map (field · "height")).getD 1000
+    let ok := r.code = 0 && h = want
+    IO.println s!"PLANT {label} {if ok then "PASS" else "FAIL"} :: serve exit={r.code} height={h} want={want}"
+    unless ok do failed := failed + 1
+  return failed
 
 def run (exe : String) (dir : System.FilePath) : IO UInt32 := do
   if ← dir.pathExists then IO.eprintln s!"store-plants: {dir} exists"; return 2
@@ -158,6 +324,8 @@ def run (exe : String) (dir : System.FilePath) : IO UInt32 := do
   let ro := tornNow = (at_ 2 + at_ 3) / 2
   IO.println s!"PLANT check-writes-nothing {if ro then "PASS" else "FAIL"} torn seg.log {tornNow} bytes"
   unless ro do failed := failed + 1
+  failed := failed + (← live exe dir)
+  failed := failed + (← replay exe dir)
   if failed = 0 then IO.println "ALL PASS"; return 0
   IO.println s!"FAIL {failed} of {plants.length}"; return 1
 

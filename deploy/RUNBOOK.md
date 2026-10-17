@@ -6,24 +6,26 @@ Every command below is marked **RAN** (run by OPS against the real `host` exe, w
 `deploy/units/EXITS.md` (generated). Never run genesis with the RFC 8032 test founder (Ops.Founder) outside a
 plant directory: its secret is published, so anyone can write that World.
 
-## 1. Genesis — RAN (28de15e)
+## 1. Genesis — RAN (store-plants, at the KERNEL-24 flag day 9e91ede)
 
-    host genesis STORE LABEL KEY_HEX NEXT_HEX [KEY_HEX NEXT_HEX]...
+    host genesis STORE LABEL [--nonce HEX32] KEY_HEX NEXT_HEX [KEY_HEX NEXT_HEX]...
 
 Creates `STORE/key` (32 random bytes, 0600), `STORE/seg.log` (the origin frame) and
-`STORE/base.world`; prints `founder i member … grant …` and `chain …`. Refuses `exists` (17) if
-any Store file is there. KEY is the founder's Ed25519 public key; NEXT its precommitted next key.
-- **Cross-World replay (OPS-2), OPEN.** Today two genesis runs with the same LABEL and founders
-  make identical founder ids and chains, and every call signed for one admits in the other
-  (reproduced: `~/dev/redregg/work/ops/replay-20261016/`). The fix is DECIDED, not built:
-  KERNEL-24 (decisions/kernel.md, 9d2e5df) gives `World.genesis` a separate 32-byte nonce that
-  `host genesis` draws from the OS, an `origin` committing to name, nonce, allowance and every
-  founder's key and next-key digest, founder ids keyed by the origin, and a signed
-  `Unsigned.world` refused `wrongWorld` before anything else. Checked at 7797070: no `origin`,
-  no nonce, no `wrongWorld` refusal in Kernel/ or Host/ (the PROTOCOL row `wrongWorld` is
-  blockedOn KERNEL). Until it lands, NEVER reuse a LABEL for a re-genesis: use
-  `LABEL-<date>-<random>`. When it lands this note is deleted, not amended: a re-genesis under
-  the same label is then a different World, and the bound is the nonce, not the label.
+`STORE/base.world`; prints `origin …`, `nonce …`, `founder i member … grant …` and `chain …`.
+Refuses `exists` (17) if any Store file is there. KEY is the founder's Ed25519 public key; NEXT
+its precommitted next key. Omit `--nonce`: `host genesis` draws 32 bytes from the OS. Record the
+printed `origin` and `nonce` with the Store's backup.
+
+The World is its ORIGIN (KERNEL-24): a hash of the label, the nonce, the allowance and every
+founder's key and next-key digest. Founder ids are keyed by it and every call signs it; a call
+signed for another World is refused `wrongWorld` before its key or signature is read. So:
+- **A LABEL may be reused for a re-genesis**, with a fresh nonce (the default): the new World
+  shares no member id with the old, and no old call lands in it. Planted:
+  `replay-other-nonce-not-admitted` (OPS-2's replay: founder 0's call served to a second genesis
+  of the same label and founders under another nonce does not land).
+- **Same label, same nonce, same founders is the SAME World** by design: that is what a restore
+  rebuilds, and every call of the old one lands in it (`replay-same-nonce-admitted-control`).
+  Never pass an old `--nonce` to a genesis meant to be a new World.
 
 ## 2. Start — PENDING (OPS: deploy/live on burst5)
 
@@ -54,14 +56,20 @@ by name, truncating nothing.
 Read-only (no lock, writes nothing; works while the writer runs or is down). `torn>0` is the
 writer's unsynced last frame. `anchor=none` means: integrity and height only, NOT completeness.
 
-## 4. Backup — RAN (on a stopped Store; live copy PENDING plant)
+## 4. Backup — RAN (stopped and LIVE: store-plants)
 
-Copy, in this order: `STORE/key`, `STORE/base.world`, `STORE/seg.log`. Record an anchor at the
+Copy, in this order: `STORE/key`, `STORE/base.world`, `STORE/seg.log`. It is safe while the
+writer runs, across a seal: a seal renames a new `base.world` into place and the segment only
+grows, so a `seg.log` copied after `base.world` always holds the copied base's offset
+(`live-copy-raced-a-seal`, `live-copy-anchor-at-segment-copy`: base copied at base height 0,
+segment copied after a seal to height 12, the copy opens to the writer's height with its chain).
+The OTHER order is refused: `seg.log` copied before a seal and `base.world` after it is
+`segmentShort` (`copy-segment-before-base-wrong-order`). Record an anchor at the
 same time: `HEIGHT:CHAIN` from a member follower's head (its own `host check` on its follow
 Store) or the highest receipt a client holds. The key travels with the copy (HOST-16: it guards
 integrity, not secrecy; a copy without it is `baseCorrupt`).
 
-## 5. Restore — RAN (store-plants, 16 plants)
+## 5. Restore — RAN (store-plants; a sealed Store too: `sealed-*`)
 
 Copy the three files into an empty STORE, then:
 

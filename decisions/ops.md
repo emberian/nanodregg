@@ -84,7 +84,11 @@ draws the nonce (HOST-4). OPS: the RUNBOOK's re-genesis step names it as the HOS
 path (e.g. a grant chain whose ids are name-derived).
 **META-CRITIQUE.** A reproduction is evidence, not a fix; my urge to "just add the nonce" is the
 quick fix the kernel owner must not inherit.
-**Status.** routed (ROOT 10-16).
+**Status.** CLOSED by KERNEL-24 (9e91ede). Planted against the real exe (OPS-2, the plants commit
+after it): the same call served to a second genesis under another nonce does not land
+(`replay-other-nonce-not-admitted`), and under the same nonce it does
+(`replay-same-nonce-admitted-control`, the restore case). The RUNBOOK's never-reuse-a-LABEL rule
+is replaced by "a fresh nonce, never an old one".
 
 ## OPS-3 · backup = the three files in order; restore = `host check --anchor` (2026-10-16)
 
@@ -116,17 +120,24 @@ and height, never completeness, and its line says `anchor=none`.
 a flipped origin byte opened clean. `host check` now recovers that prefix (`historyClean`).
 **Alternatives.** O3's MANIFEST (a second authenticated inventory): forgeable under HOST-16 (the key
 is in STORE), and it still accepts a rollback. Discarded; the anchor is the only real check.
-**CRITIQUE.** (1) The copy is plain file reads in a fixed order; the live-copy race (copy during a
-running `host serve`, a seal renaming `base.world` mid-copy) is ARGUED safe (rename keeps the old
-inode; the segment is append-only, so a later segment copy is a superset of any base's offset) and
-NOT YET PLANTED: it needs a running writer, and the Mac is frozen for runs (ROOT 10-17). (2) No
-plant seals a base (1 MiB cadence), so `segmentShort` and the pre-base history check after a
-real seal are unexercised. (3) An anchor is only as good as its source; a lying follower is the
+**Planted since (OPS-2).** One live `host serve`, fed 48 calls holding a 48 KiB slot each (so it
+seals real 1 MiB bases while it runs), with the backup interleaved at its worst point: `key` and
+`base.world` copied, the writer fed until it seals a newer base (polled by `host check`, bounded),
+then `seg.log`. Rows: live-copy-raced-a-seal (asserts the copied base is no longer the Store's,
+or FAILS), live-copy-anchor-at-segment-copy (eof at the writer's height), sealed-store-has-a-real-base
+(asserts base past the origin, or the rows after it test nothing), sealed-intact-anchor (eof),
+sealed-segment-cut-below-base (segmentShort), sealed-flip-history-before-base (corrupt history,
+after a real seal), copy-segment-before-base-wrong-order (segmentShort: why the order is the rule).
+**CRITIQUE.** (1) The live interleave is deterministic in ORDER (copy, feed to a seal, copy) but
+not in where inside the copy of one file a rename lands; the argument (a rename keeps the open
+inode) covers that and no plant does. (2) The seal is async, so which height the writer seals at
+varies run to run (12 or 16 seen); the rows assert relations (a newer base, the writer's height),
+never a number. (3) An anchor is only as good as its source; a lying follower is the
 trust the operator chose.
 **META-CRITIQUE.** The table is the scout's (O3) restated for HEAD; I added rows where my own run
 surprised me. The rows I could not run are the ones most likely to be wrong.
-**Status.** open (plants landed with the `ops:` commit after 28de15e; live-copy and sealed-Store rows
-PENDING an execution node).
+**Status.** ACCEPTED: every row of the table and the live and sealed rows run in store-plants
+(standing's `plants=` stage).
 
 ## OPS-4 · the test founder signs with RFC 8032's published vectors (2026-10-16)
 

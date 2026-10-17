@@ -37,12 +37,13 @@ def world (name : String) : World D :=
   Receive.genesis X name.toUTF8 nonce allowanceMax [(key, nextKeyDigest X next)]
 
 /-- The `i`-th call: founder 0 creates an empty data object, pinned on its own member cell as it
-is in `w` (distinct `i < windowMax / 2`, distinct `validUntil`, distinct txId). -/
-def create (name : String) (w : World D) (i : Nat) : Call D :=
+is in `w` (distinct `i < windowMax / 2`, distinct `validUntil`, distinct txId), holding `state`
+(empty by default; the sealed-Store plants fill one slot to reach a seal in few calls). -/
+def create (name : String) (w : World D) (i : Nat) (state : Slots := []) : Call D :=
   let me := founderId X (world name).origin 0
   let u : Unsigned D :=
     { world := w.origin, member := me, key, notBefore := 0, validUntil := Bounds.windowMax / 2 + i,
-      pins := [(me, pinOf X.env (w.live me))], maxCharge := 1 <<< 40, body := .create none [] [] }
+      pins := [(me, pinOf X.env (w.live me))], maxCharge := 1 <<< 40, body := .create none [] state }
   { unsigned := u, signature := Ed25519.sign seed (X.unsignedBytes u) }
 
 /-- A `submit` frame toward `host serve`. -/
