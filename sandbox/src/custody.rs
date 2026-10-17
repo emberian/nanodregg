@@ -55,11 +55,22 @@ fn owned(meta: &fs::Metadata, ok: impl Fn(u32) -> bool) -> Result<(), Refused> {
 /// Every directory from `dir` (canonical) up to `/` is owned by the euid or root and has no group
 /// or other write bit. A sticky world-writable directory (`/tmp`) is refused too, as sshd does.
 fn check_chain(dir: &Path) -> Result<(), Refused> {
+    chain(dir, None).map_err(|e| match e {
+        Ok(d) => Refused::Dir(d),
+        Err(e) => Refused::Io(e),
+    })
+}
+
+/// The one directory-chain walk (sshd's StrictModes): every directory from `dir` (canonical) up to
+/// `/` is owned by root, the euid or `also` (a connect socket's owner, HOSTING-17), with no group or
+/// other write bit. `Err(Ok(d))` names the first directory that fails; `Err(Err(e))` is the IO.
+pub(crate) fn chain(dir: &Path, also: Option<u32>) -> Result<(), Result<PathBuf, io::Error>> {
     let euid = rustix::process::geteuid().as_raw();
     for d in dir.ancestors() {
-        let m = fs::metadata(d).map_err(Refused::Io)?;
-        if (m.uid() != euid && m.uid() != 0) || m.permissions().mode() & 0o022 != 0 {
-            return Err(Refused::Dir(d.to_path_buf()));
+        let m = fs::metadata(d).map_err(Err)?;
+        let owner = m.uid() == 0 || m.uid() == euid || Some(m.uid()) == also;
+        if !owner || m.permissions().mode() & 0o022 != 0 {
+            return Err(Ok(d.to_path_buf()));
         }
     }
     Ok(())
@@ -151,4 +162,42 @@ pub fn check_private_dir(dir: &Path) -> Result<(), Refused> {
         return Err(Refused::NotRegular);
     }
     owned(&meta, |m| m == PRIVATE_DIR)
+}
+
+/// The mode of a directory shared with one group (HOSTING-17's SOCKDIR and each per-resident
+/// directory under it): owner rwx, group search only, setgid so what is made inside keeps the group.
+pub const SHARED_DIR: u32 = 0o2710;
+
+/// Refused unless `dir`'s parent chain passes, and it is a directory (not a link), owned by the
+/// effective user, mode exactly [`SHARED_DIR`]. Returns its group, which the caller requires of
+/// every directory it makes inside (HOSTING-17).
+pub fn check_shared_dir(dir: &Path) -> Result<u32, Refused> {
+    let dir = trusted(dir)?;
+    let meta = fs::symlink_metadata(&dir).map_err(Refused::Io)?;
+    if meta.file_type().is_symlink() {
+        return Err(Refused::Link);
+    }
+    if !meta.file_type().is_dir() {
+        return Err(Refused::NotRegular);
+    }
+    owned(&meta, |m| m == SHARED_DIR)?;
+    Ok(meta.gid())
+}
+
+/// The connected peer's `(uid, gid)` as the kernel recorded them at connect (`SO_PEERCRED`), for a
+/// server that admits one uid and one group (keybroker, HOSTING-17). macOS (`getpeereid`) is not
+/// reached through rustix here: it is `Unsupported`, declared, never guessed.
+#[cfg(target_os = "linux")]
+pub fn peer_cred(s: &std::os::unix::net::UnixStream) -> io::Result<(u32, u32)> {
+    let c = rustix::net::sockopt::socket_peercred(s)?;
+    Ok((c.uid.as_raw(), c.gid.as_raw()))
+}
+
+/// See the Linux row.
+#[cfg(not(target_os = "linux"))]
+pub fn peer_cred(_: &std::os::unix::net::UnixStream) -> io::Result<(u32, u32)> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "peer_cred: no SO_PEERCRED on this platform",
+    ))
 }

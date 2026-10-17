@@ -21,14 +21,24 @@ fn members(root: &Path) -> Vec<String> {
     m
 }
 
-/// Every top-level directory holding a Cargo.toml.
+/// Every directory under the root holding a Cargo.toml (the root itself, build output, Lean's
+/// `.lake` and dot-directories excluded), as a path relative to the root.
 fn crates(root: &Path) -> Vec<String> {
-    let mut c: Vec<String> = fs::read_dir(root)
-        .unwrap()
-        .map(|e| e.unwrap().path())
-        .filter(|p| p.join("Cargo.toml").is_file())
-        .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
-        .collect();
+    let mut c = Vec::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        for e in fs::read_dir(&d).unwrap() {
+            let p = e.unwrap().path();
+            let name = p.file_name().unwrap().to_string_lossy().into_owned();
+            if !p.is_dir() || name.starts_with('.') || name == "target" {
+                continue;
+            }
+            if p.join("Cargo.toml").is_file() {
+                c.push(p.strip_prefix(root).unwrap().to_string_lossy().into_owned());
+            }
+            stack.push(p);
+        }
+    }
     c.sort();
     c
 }

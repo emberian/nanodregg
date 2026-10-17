@@ -251,6 +251,7 @@ fn run() -> End {
         write: vec![],
         exec: vec![decider.clone()],
         hidden: vec![keys_path.clone()],
+        connect: vec![],
     };
     let t0 = OsString::from(now_ms().to_string());
     let slots = OsString::from(

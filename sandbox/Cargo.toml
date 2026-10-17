@@ -10,7 +10,7 @@ description = "Launch a child under one confinement shape, and read a custody fi
 path = "src/lib.rs"
 
 [dependencies]
-rustix = { version = "=1.1.2", default-features = false, features = ["std", "fs", "process"] }
+rustix = { version = "=1.1.2", default-features = false, features = ["std", "fs", "process", "net"] }
 zeroize = { version = "=1.8.2", default-features = false, features = ["alloc"] }
 
 [dev-dependencies]

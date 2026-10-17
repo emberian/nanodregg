@@ -18,7 +18,10 @@
 //! Paths are canonicalized first (macOS checks real paths: `/var` is `/private/var`). The child's
 //! environment is cleared on both platforms.
 
+mod connect;
 pub mod custody;
+
+pub use connect::CONNECT_MAX;
 
 use std::ffi::OsStr;
 use std::io;
@@ -38,6 +41,10 @@ pub struct Policy {
     pub exec: Vec<PathBuf>,
     /// Paths that must lie outside everything above (the member's workspace). Each must exist.
     pub hidden: Vec<PathBuf>,
+    /// Unix sockets the child may connect to, at most [`CONNECT_MAX`] (HOSTING-17 §5). Each is
+    /// checked before launch; Linux exposes its parent directory (which must hold that socket and
+    /// nothing else: the socket's owner keeps it so), macOS allows connecting to that path alone.
+    pub connect: Vec<PathBuf>,
 }
 
 /// Why a child was not launched.
@@ -60,6 +67,44 @@ pub enum ConfineError {
         /// Where it resolves.
         canonical: PathBuf,
     },
+    /// More than [`CONNECT_MAX`] connect entries.
+    ConnectTooMany(usize),
+    /// A connect entry is a symbolic link.
+    ConnectLink(PathBuf),
+    /// A connect entry is not a unix socket.
+    ConnectNotSocket(PathBuf),
+    /// A connect socket is neither the euid's nor in the egid's group.
+    ConnectOwner {
+        /// The socket.
+        path: PathBuf,
+        /// Its owner.
+        uid: u32,
+        /// Its group.
+        gid: u32,
+    },
+    /// A connect socket's mode is not exactly 0600 (the euid's) or 0660 (another uid's, our group).
+    ConnectMode {
+        /// The socket.
+        path: PathBuf,
+        /// Its mode.
+        mode: u32,
+    },
+    /// A directory above a connect socket is not owned by root, the euid or the socket's owner, or
+    /// another can write it.
+    ConnectDir(PathBuf),
+    /// A connect directory lies under or contains a read, write or exec entry: on Linux the entry
+    /// would grant connect to every socket the directory ever holds (`CONNECT_FILTERED`).
+    ConnectOverlap {
+        /// The connect socket's directory.
+        connect: PathBuf,
+        /// The file grant it overlaps.
+        allowed: PathBuf,
+    },
+    /// A read, write or exec entry holds a unix socket at launch (this one): the grant would be a
+    /// connect grant on Linux.
+    SocketInGrant(PathBuf),
+    /// A directory under a read, write or exec entry cannot be listed, so a socket in it is unseen.
+    GrantUnlisted(PathBuf),
     /// An allowed path (or the floor) covers a hidden path or lies inside one (CLIENT-8).
     Exposed {
         /// The hidden path.
@@ -85,6 +130,32 @@ impl std::fmt::Display for ConfineError {
             Self::ProgramNotAbsolute(p) => {
                 write!(f, "confine: program {} is not absolute", p.display())
             }
+            Self::ConnectTooMany(n) => {
+                write!(f, "confine: {n} connect entries (at most {CONNECT_MAX})")
+            }
+            Self::ConnectLink(p) => write!(f, "confine: connect {} is a link", p.display()),
+            Self::ConnectNotSocket(p) => {
+                write!(f, "confine: connect {} is not a socket", p.display())
+            }
+            Self::ConnectOwner { path, uid, gid } => {
+                write!(f, "confine: connect {} is {uid}:{gid}", path.display())
+            }
+            Self::ConnectMode { path, mode } => {
+                write!(f, "confine: connect {} has mode {mode:o}", path.display())
+            }
+            Self::ConnectDir(p) => write!(
+                f,
+                "confine: connect: directory {} is not trusted",
+                p.display()
+            ),
+            Self::ConnectOverlap { connect, allowed } => write!(
+                f,
+                "confine: connect directory {} overlaps grant {}",
+                connect.display(),
+                allowed.display()
+            ),
+            Self::GrantUnlisted(p) => write!(f, "confine: cannot list grant {}", p.display()),
+            Self::SocketInGrant(p) => write!(f, "confine: a grant holds socket {}", p.display()),
             Self::Exposed { hidden, allowed } => write!(
                 f,
                 "confine: exposed: {} reaches hidden {}",
@@ -110,6 +181,21 @@ pub const EXEC_FILTERED: bool = false;
 /// No mechanism, no launch, so nothing runs at all.
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
 pub const EXEC_FILTERED: bool = true;
+
+/// A platform fact (charter law 2, CLIENT-20): whether the mechanism filters CONNECT to unix
+/// sockets. macOS `sandbox-exec` does (`(deny default)`; `network-outbound` is allowed only to the
+/// `connect` paths). Linux `bwrap` does not: a child connects to every path socket in a directory
+/// of its view (measured on hbox under nd-bwrap), so `connect` there bounds what is VISIBLE, and
+/// `ConnectOverlap` and `SocketInGrant` keep sockets out of file grants. Plant: tests/connect.rs
+/// `connect_is_filtered_exactly_where_the_platform_says`.
+#[cfg(target_os = "macos")]
+pub const CONNECT_FILTERED: bool = true;
+/// See the macOS row.
+#[cfg(target_os = "linux")]
+pub const CONNECT_FILTERED: bool = false;
+/// No mechanism, no launch.
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+pub const CONNECT_FILTERED: bool = true;
 
 /// A platform fact (charter law 2): how the mechanism reports a child killed by a signal. macOS
 /// `sandbox-exec` execs the program in its own place, so a signal death is seen as one (no exit
@@ -156,7 +242,7 @@ const FLOOR: [(&str, bool); 5] = [
     ("/etc/ld.so.cache", true),
 ];
 
-fn canonical(path: &Path) -> Result<PathBuf, ConfineError> {
+pub(crate) fn canonical(path: &Path) -> Result<PathBuf, ConfineError> {
     let real = path
         .canonicalize()
         .map_err(|e| ConfineError::PathMissing(path.to_path_buf(), e))?;
@@ -181,6 +267,8 @@ struct Resolved {
     read: Vec<PathBuf>,
     write: Vec<PathBuf>,
     exec: Vec<PathBuf>,
+    /// The connect sockets, canonical, and the directories that expose them.
+    connect: Vec<(PathBuf, PathBuf)>,
 }
 
 fn resolve(policy: &Policy, program: &OsStr) -> Result<Resolved, ConfineError> {
@@ -193,7 +281,15 @@ fn resolve(policy: &Policy, program: &OsStr) -> Result<Resolved, ConfineError> {
         read: all(&policy.read)?,
         write: all(&policy.write)?,
         exec: all(&policy.exec)?,
+        connect: Vec::new(),
     };
+    if policy.connect.len() > CONNECT_MAX {
+        return Err(ConfineError::ConnectTooMany(policy.connect.len()));
+    }
+    let mut r = r;
+    for p in &policy.connect {
+        r.connect.push(connect::entry(p)?);
+    }
     if !r
         .read
         .iter()
@@ -205,12 +301,35 @@ fn resolve(policy: &Policy, program: &OsStr) -> Result<Resolved, ConfineError> {
             canonical: r.program.clone(),
         });
     }
-    let floor = FLOOR.iter().map(|(p, _)| PathBuf::from(p));
+    let floor: Vec<PathBuf> = FLOOR.iter().map(|(p, _)| PathBuf::from(p)).collect();
+    let grants: Vec<&PathBuf> = [&r.program]
+        .into_iter()
+        .chain(&r.read)
+        .chain(&r.write)
+        .chain(&r.exec)
+        .collect();
+    for (_, dir) in &r.connect {
+        if let Some(a) = grants.iter().find(|a| overlap(a, dir)) {
+            return Err(ConfineError::ConnectOverlap {
+                connect: dir.clone(),
+                allowed: (*a).clone(),
+            });
+        }
+    }
+    // A grant under the floor adds nothing the floor does not already show, so it is not scanned.
+    for g in grants
+        .iter()
+        .filter(|g| !floor.iter().any(|f| g.starts_with(f)))
+    {
+        connect::socket_in(g)?;
+    }
+    let floor = floor.into_iter();
     let allowed: Vec<PathBuf> = [r.program.clone()]
         .into_iter()
         .chain(r.read.iter().cloned())
         .chain(r.write.iter().cloned())
         .chain(r.exec.iter().cloned())
+        .chain(r.connect.iter().map(|(_, d)| d.clone()))
         .chain(floor)
         .collect();
     for hidden in all(&policy.hidden)? {
@@ -283,6 +402,12 @@ fn platform(r: &Resolved) -> Result<Command, ConfineError> {
         let write: String = r.write.iter().map(|p| sub(p)).collect();
         profile += &format!("(allow file-write*{write})");
     }
+    for (s, _) in &r.connect {
+        profile += &format!(
+            "(allow network-outbound (remote unix-socket (path-literal \"{}\")))",
+            s.display()
+        );
+    }
     let mut c = Command::new(MECHANISM);
     c.arg("-p").arg(profile);
     Ok(c)
@@ -333,6 +458,10 @@ fn platform(r: &Resolved) -> Result<Command, ConfineError> {
     }
     for p in &r.write {
         c.arg("--bind").arg(p).arg(p);
+    }
+    // The socket's DIRECTORY, so a restarted server's new socket is the one seen (HOSTING-17 §4).
+    for (_, d) in &r.connect {
+        c.arg("--ro-bind").arg(d).arg(d);
     }
     Ok(c)
 }

@@ -24,3 +24,4 @@ ob	-	LANG's resident check, an interactive tool: lang-journey and the rows drive
 cargo:launcher:isolation	hosting-drive	exit 0
 cargo:launcher:path_vectors	emit-hosting	exit 0
 cargo:launcher:broker	hosting-broker,host	exit 0
+cargo:devtools:workspace	host	exit 0

@@ -7,7 +7,10 @@ use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use nanodregg_sandbox::custody::{PRIVATE, Refused, check_private_dir, read_private, read_public};
+use nanodregg_sandbox::custody::{
+    PRIVATE, Refused, SHARED_DIR, check_private_dir, check_shared_dir, peer_cred, read_private,
+    read_public,
+};
 
 struct Scratch(PathBuf);
 
@@ -235,4 +238,58 @@ fn a_parent_writable_by_others_or_owned_by_another_user_is_refused_dir() {
         theirs.display()
     );
     assert!(matches!(check_private_dir(&theirs.join("h")), Err(Refused::Dir(d)) if d == theirs));
+}
+
+/// HOSTING-17's SOCKDIR shape: ours, exactly 02710, under a passing chain; its group is returned.
+#[test]
+fn a_shared_dir_is_ours_at_exactly_2710_and_its_group_is_returned() {
+    let s = scratch("shared");
+    let d = s.0.join("sock");
+    nanodregg_devtools::mkdirs(&d).unwrap();
+    fs::set_permissions(&d, fs::Permissions::from_mode(SHARED_DIR)).unwrap();
+    assert_eq!(
+        check_shared_dir(&d).unwrap(),
+        fs::metadata(&d).unwrap().gid()
+    );
+    for m in [0o710, 0o2750, 0o2711, 0o700] {
+        fs::set_permissions(&d, fs::Permissions::from_mode(m)).unwrap();
+        assert!(
+            matches!(check_shared_dir(&d), Err(Refused::Mode(x)) if x == m),
+            "mode {m:o}"
+        );
+    }
+    fs::set_permissions(&d, fs::Permissions::from_mode(SHARED_DIR)).unwrap();
+    std::os::unix::fs::symlink(&d, s.0.join("l")).unwrap();
+    assert!(matches!(
+        check_shared_dir(&s.0.join("l")),
+        Err(Refused::Link)
+    ));
+    assert!(matches!(
+        check_shared_dir(&s.0.join("ok")),
+        Err(Refused::NotRegular)
+    ));
+    assert!(matches!(
+        check_shared_dir(Path::new("/etc")),
+        Err(Refused::Owner(0))
+    ));
+    fs::set_permissions(&s.0, fs::Permissions::from_mode(0o770)).unwrap();
+    assert!(matches!(check_shared_dir(&d), Err(Refused::Dir(x)) if x == s.0));
+    fs::set_permissions(&s.0, fs::Permissions::from_mode(0o700)).unwrap();
+}
+
+/// The kernel's record of a connected peer is our own uid and gid for a pair we made. Linux; the
+/// macOS `Unsupported` branch is DECLARED UNRUN since the hbox move.
+#[test]
+fn peer_cred_is_the_connecting_process_uid_and_gid() {
+    let s = scratch("peer");
+    let me = fs::metadata(&s.0).unwrap();
+    let (a, _b) = std::os::unix::net::UnixStream::pair().unwrap();
+    if cfg!(target_os = "linux") {
+        assert_eq!(peer_cred(&a).unwrap(), (me.uid(), me.gid()));
+    } else {
+        assert_eq!(
+            peer_cred(&a).unwrap_err().kind(),
+            std::io::ErrorKind::Unsupported
+        );
+    }
 }

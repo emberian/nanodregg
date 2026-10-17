@@ -42,6 +42,7 @@ pub fn policy(
         write: all(write),
         exec: all(exec),
         hidden: all(hidden),
+        connect: Vec::new(),
     }
 }
 
@@ -66,5 +67,14 @@ pub fn failure_of(e: &ConfineError) -> LaunchFailure {
         ConfineError::ProgramNotAbsolute(_) => LaunchFailure::ProgramNotAbsolute,
         ConfineError::ProgramOutside { .. } => LaunchFailure::ProgramOutside,
         ConfineError::Exposed { .. } => LaunchFailure::Exposed,
+        ConfineError::ConnectTooMany(_) => LaunchFailure::ConnectTooMany,
+        ConfineError::ConnectLink(_) => LaunchFailure::ConnectLink,
+        ConfineError::ConnectNotSocket(_) => LaunchFailure::ConnectNotSocket,
+        ConfineError::ConnectOwner { .. } => LaunchFailure::ConnectOwner,
+        ConfineError::ConnectMode { .. } => LaunchFailure::ConnectMode,
+        ConfineError::ConnectDir(_) => LaunchFailure::ConnectDir,
+        ConfineError::ConnectOverlap { .. } => LaunchFailure::ConnectOverlap,
+        ConfineError::SocketInGrant(_) => LaunchFailure::SocketInGrant,
+        ConfineError::GrantUnlisted(_) => LaunchFailure::GrantUnlisted,
     }
 }

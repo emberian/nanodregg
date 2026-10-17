@@ -486,3 +486,54 @@ client/tests/real.rs asserts `nd --init` made the workspace 0700. Mutations, eac
 check skipped, its owner condition removed, its write-bit condition removed, nd's workspace mode
 0777 (the umask leaves 0775, and custody then refuses it).
 **Status.** landed (this commit).
+
+## CLIENT-20 `Policy.connect`, and a file grant is a connect grant on Linux (2026-10-17, CLIENT-3; HOSTING-17 §5, ROOT rulings)
+
+**Finding (measured 2026-10-17 on hbox, nd-bwrap = bubblewrap 0.10.0).** Under nd-bwrap
+(`--unshare-all`, no network namespace shared) a confined child connects to a PATH unix socket whose
+directory is in its view, and gets ENOENT for one whose directory is not. So on Linux every `read`,
+`write` or `exec` directory is already a connect grant to every socket inside it, then or later. The
+probe was a scratch integration test, not landed: in a `devtools::scratch` root, a listener bound at
+`d/s.sock` and another at `o/s.sock`; a python child (`python3 -I -c` connecting to each argv path)
+launched by `sandbox::command` with `read = [d, /usr]`, `exec = [/usr]`, `hidden = [ws]` printed
+`d/s.sock CONNECTED` and `o/s.sock ERR FileNotFoundError`; with `read = [/usr]` both were
+FileNotFoundError. macOS `(deny default)` refuses unix connects not allowed (unrun since the hbox
+move). It is the shape of `EXEC_FILTERED`: bwrap filters by mount, not by operation.
+**Decision.** (1) `CONNECT_FILTERED` (Linux false, macOS true), a platform fact with its plant and
+a tcb row. (2) `Policy.connect: Vec<PathBuf>`, at most `CONNECT_MAX` = 2 (`ConnectTooMany`), each
+entry checked at resolve: `lstat` a socket (`ConnectLink`, `ConnectNotSocket`); EITHER owner = euid
+at exactly 0600 OR owner ≠ euid, group = egid at exactly 0660 (`ConnectOwner`, `ConnectMode`; the
+egid, never a supplementary group); every ancestor owned by root, the euid or the socket's owner,
+no group/other write (`ConnectDir`, the CLIENT-19 walk with one more admitted uid). Linux
+read-only binds the socket's PARENT directory (a restarted server's new socket is the one seen);
+macOS allows `network-outbound` to that `path-literal`. Connect directories count as allowed paths
+for `Exposed`. (3) `ConnectOverlap`: a connect directory under or containing any read/write/exec
+entry (or the program) is refused, so a socket directory is never also a file grant. (4)
+`SocketInGrant(path)`: each read/write/exec entry not under the platform floor is walked (links not
+followed) and a socket in it at launch is refused; a directory in it that cannot be listed is
+`GrantUnlisted` (a socket in it could be reached by name). Write roots are scanned too (HOSTING-6:
+a grain's own vol socket refuses that grain's next launch; the controller's crash-loop bound reports
+it). (5) For keybroker (HOSTING-17): `custody::check_shared_dir` (ours, exactly 02710, chain passes;
+returns its gid) and `custody::peer_cred` (`SO_PEERCRED`; macOS `Unsupported`, declared).
+**What it cannot see.** A socket bound under a read/write/exec root AFTER launch: (3) and (4) are
+launch-time. That is the tcb row's words, and HOSTING's placement keeps SOCKDIR (`/run/nd-broker`)
+on its own root, never under or around a grain root (grain-launch refuses a BROKER under or around
+ROOT by name, HOSTING-6). The floor (`/usr`, …) is not scanned: a socket there is in every child's
+view regardless of policy.
+**Alternatives.** Bind the socket inode (dead after a server restart, HOSTING-17 §4); a seccomp or
+Landlock connect filter (the real lift of `CONNECT_FILTERED`; Landlock scopes abstract sockets
+only today); documenting the overlap instead of refusing it (ROOT: refuse).
+**Critique.** `CONNECT_MAX` is the sandbox's own bound, not emitted from Lean: the plan's list is
+Lean's, and a longer one is refused by name at launch rather than mirrored. The scan walks every
+non-floor grant at each launch; its cost is the grant's entry count (a Store or a package dir).
+`ConnectOwner`'s ACCEPTING branch (another uid, group = egid, 0660) needs a second uid and is
+DECLARED UNRUN on hbox; its refusing branch is planted with a real foreign socket found on the box
+(hbox: root:docker /run/docker.sock), failing if none exists.
+**Plants.** sandbox/tests/connect.rs (7): reached vs sibling ENOENT; a third entry; mode 0666 and
+0660-of-ours, a regular file, a link, a group-writable ancestor; a foreign socket; overlap three
+ways; a socket in a read and a write grant; CONNECT_FILTERED (a socket bound under a read grant
+after launch is reached exactly when not filtered). sandbox/tests/custody.rs: shared dir, peer
+cred. Mutations, each red: the count check, the link check, the socket check, the mode check, the
+owner branch, the ancestor walk, the overlap, the scan, the Linux directory bind, CONNECT_FILTERED
+flipped, the shared-dir mode.
+**Status.** landed (this commit).
