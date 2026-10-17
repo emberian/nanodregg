@@ -2,3 +2,6 @@
 submit	bytes-per-turn	1.448	1.448	host-sim seeds 1-3 (max seed 3): log bytes ÷ admitted turn bytes; the excess is one frame (u32 len + 32-byte tag) + an 8-byte count per batch
 submit	fsyncs-per-batch	1.000	1.000	host-sim seeds 1-3: syncs ÷ batch records recovered (group commit: one per batch, none for a batch that staged nothing)
 open	bytes-read-per-record	1.000	1.000	host-sim seeds 1-3: bytes recover read ÷ verified frame bytes (whole-image recover; moves when Host.Open reads base + deltas)
+admit	cells-touched-per-turn	2.0	2.0	kernel-sim --seeds 64 (a pinned AND written cell is looked up twice: pinCheck then postLeg; fusing them is the next fall)
+admit	pins-checked-per-turn	1.0	1.0	kernel-sim --seeds 64 (each pin checked once)
+fold	work-per-turn	2.5	2.5	kernel-sim --seeds 64 (map ops per named thing: one lookup + one insert per cell, nullifier and the journal; none proportional to the World)

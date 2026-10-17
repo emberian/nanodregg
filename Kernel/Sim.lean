@@ -321,11 +321,46 @@ def act (st : State) : State :=
               else { st with failures := s!"probe: got {nameOf r}" :: st.failures }
           | .ok _ => { st with failures := "probe: wrong charge admitted" :: st.failures }
 
+/-! ## Work per admitted turn (the waste ratchet's kernel rows)
+
+Counted from the structure of `World.admit` (DERIVED from the code, not instrumented): `check`
+does one map lookup per pin, born id, retirement and leg, one journal lookup and one spent lookup
+per nullifier; `commit` one insert per leg, retirement, birth and nullifier, and one journal insert.
+Nothing in either is proportional to the size of the World. -/
+
+/-- Thousandths, as an integer: `WASTE` lines carry a decimal ratio. -/
+def ratio (num den : Nat) : Nat := if den = 0 then 0 else num * 1000 / den
+
+def showRatio (milli : Nat) : String :=
+  let frac := toString (milli % 1000)
+  s!"{milli / 1000}.{"".pushn '0' (3 - frac.length)}{frac}"
+
+/-- (cell lookups ÷ cells named, pins checked ÷ distinct pins, map operations ÷ things named),
+in thousandths. -/
+def turnWork (t : Turn D) : Nat × Nat × Nat :=
+  let ids := createdIds env t
+  let named := (t.pins.map Prod.fst ++ t.legs.map Leg.cell ++ t.retires ++ ids).eraseDups.length
+  let cellLookups := t.pins.length + ids.length + t.retires.length + t.legs.length
+  let ops := cellLookups + 1 + t.nullifiers.length +
+    (t.legs.length + t.retires.length + ids.length + t.nullifiers.length + 1)
+  (ratio cellLookups named, ratio t.pins.length (t.pins.map Prod.fst).eraseDups.length,
+   ratio ops (named + t.nullifiers.length + 1))
+
+def maxWork (log : List (Turn D)) : Nat × Nat × Nat :=
+  log.foldl (fun (a, b, c) t => let (x, y, z) := turnWork t; (max a x, max b y, max c z)) (0, 0, 0)
+
 /-- Same contents (TreeMap shapes may differ; contents may not). -/
 def same (a b : World D) : Bool :=
   a.cells.toList == b.cells.toList && a.journal.toList == b.journal.toList &&
   a.spent.toList == b.spent.toList && a.height == b.height && a.chain == b.chain &&
   a.allowance == b.allowance
+
+/-- A World rebuilt from its own sorted contents, as a checkpoint decode would. -/
+def reopened (w : World D) : World D :=
+  let cells : Std.TreeMap D Entry compare := Std.TreeMap.ofList w.cells.toList compare
+  let journal : Std.TreeMap D (Nat × D) compare := Std.TreeMap.ofList w.journal.toList compare
+  let spent : Std.TreeSet D compare := Std.TreeSet.ofList w.spent.toList compare
+  { w with cells, journal, spent }
 
 def worldName : ByteArray := "sim".toUTF8
 
@@ -352,6 +387,10 @@ def run (seed : Nat) (steps : Nat) : State :=
       | .ok w => if same w st.host then { st with host := w, restarts := st.restarts + 1 }
           else { st with failures := "restart: reopened World differs" :: st.failures }
       | .error (i, r) => { st with failures := s!"restart: fold refused at {i}: {nameOf r}" :: st.failures }
+    else if r = 1 then
+      -- a checkpoint reopen: every map rebuilt from its sorted contents (a different tree shape,
+      -- the same World: Kernel.Proofs.Equiv says admit cannot tell)
+      { st with host := reopened st.host, restarts := st.restarts + 1 }
     else st) st
   -- the follower and the auditor, from genesis
   let st := match World.fold env g st.log with
@@ -373,8 +412,11 @@ def main (args : List String) : IO UInt32 := do
   let mut admitted := 0
   let mut refused := 0
   let mut restarts := 0
+  let mut work : Nat × Nat × Nat := (0, 0, 0)
   for seed in seeds do
     let st := run seed 120
+    let (a, b, c) := maxWork st.log
+    work := (max work.1 a, max work.2.1 b, max work.2.2 c)
     admitted := admitted + st.admitted
     refused := refused + st.refusedAsExpected
     restarts := restarts + st.restarts
@@ -384,6 +426,9 @@ def main (args : List String) : IO UInt32 := do
         bad := bad + 1
         IO.println s!"FAIL seed {seed}: {f}"
   IO.println s!"kernel-sim: seeds={seeds.length} admitted={admitted} refused-as-expected={refused} restarts={restarts} failing-seeds={bad}"
+  IO.println s!"WASTE admit cells-touched-per-turn {showRatio work.1}"
+  IO.println s!"WASTE admit pins-checked-per-turn {showRatio work.2.1}"
+  IO.println s!"WASTE fold work-per-turn {showRatio work.2.2}"
   if bad = 0 then IO.println "ALL PASS"
   return if bad = 0 then 0 else 1
 

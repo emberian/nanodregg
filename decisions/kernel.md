@@ -106,3 +106,20 @@ Status: open.
   one (LANG's grant/powerbox kinds are in); `World` gains nothing before the checkpoint design (HOST/CODEC,
   incremental). The Sim switches to the deployed Env the day `Codec/Deployed.lean` lands.
 Status: open.
+
+## KERNEL-9 · Frame, ROM-forever, nullifiers-once, reopen determinism; the kernel's waste rows (2026-10-16)
+**Decision.** Theorems (Kernel/Proofs/Frame, Equiv): `admit_frame`; `admit_rom` / `fold_rom` (a live ROM
+cell is live and identical after every admitted log); `admit_nullifiers` / `fold_nullifiers` (no nullifier
+in two turns of an admitted log); `World.Equiv` (extensional equality: TreeMap shapes differ by history)
+with `check_congr`, `admit_congr_error`, `admit_congr_ok`, `fold_congr` — a World rebuilt from its sorted
+contents (a checkpoint decode) refuses the same turns by the same name and admits the same turns into an
+extensionally equal World. The Sim now exercises that reopen (maps rebuilt with `ofList`) beside the
+refold. Waste rows pinned from the first measurement: admit cells-touched-per-turn 2.0 (a pinned and
+written cell is looked up twice), pins-checked 1.0, fold work-per-turn 2.5 — counted from admit's
+structure, not instrumented.
+**Critique.** The waste rows are DERIVED from the code's shape, so a regression that adds a hidden
+O(store) step inside a lookup would not show; only `perf stat` at the BAR sees that. `fold_nullifiers`
+says nothing about nullifiers spent before genesis (genesis has none). **Meta-critique.** `World.Equiv`
+is the theorem minidregg lacked (live vs reopened divergence); I may be over-crediting it — the risk it
+guards is the checkpoint codec, and that is CODEC's Lawful proof, not this one.
+Status: open.
