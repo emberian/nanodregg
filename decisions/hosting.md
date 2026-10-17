@@ -174,6 +174,13 @@ four fields; the owner theorems accepted only principal `a` — now both strings
 link from these Data-level evaluations to the kernel's slot path was missing — `invoke_slots`.
 Plants (run): edges reversed in `edgeLabels` ⇒ `phase_invoke`, `method_writes`, `method_iff_step`
 red, and `invoke_slots` red. world/grain/Lifecycle re-emitted (9.0 KB).
+**Status (10-17, later): BUILT.** KERNEL-25 landed (be98647): a stranger's invoke is `noGrant`
+before any law. The `owner` law, the `owner` field and the P2 plant are DELETED; the stranger plant
+lives in kernel-sim (invoke-no-grant arm). State `{entry, kind, phase}` (slots 16, 17, 18); the only
+law is `phase`. hosting-sim G7 expects `noGrant`, also under skip-judge (authority is not a law). The
+controller's look-alike is now the lawless twin (same state and methods, no law). Plant re-run:
+edges reversed ⇒ 4 theorems red. Also landed with it: `Controller.touchedIds` (the ids HOST's tail
+c722b05 hands the controller per batch), checked by G15.
 
 ## HOSTING-6 The plan, as built (ASSEMBLY HOSTING-5) (2026-10-17)
 

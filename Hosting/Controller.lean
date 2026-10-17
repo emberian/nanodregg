@@ -107,6 +107,11 @@ def decideCell (label pkgId : ByteArray) (now : Nat) (live : List Live) (g : Byt
 
 variable {D : Type} [Ord D] [DecidableEq D]
 
+/-- The ids a batch of Turns may have changed: every touched cell and every born one (HOST's tail
+returns each record's Turns, `Host.Deployed.tailStep`). -/
+def touchedIds (E : Env D) (ts : List (Turn D)) : List D :=
+  ts.flatMap fun t => t.touches.map (·.cell) ++ createdIds E t
+
 /-- Every touched id (duplicates once), at most `grainsMax` per call: the caller pages the rest. -/
 def reconcile (bytesOf : D → ByteArray) (label pkgId : ByteArray) (now : Nat)
     (live : List Live) (w : World D) (ids : List D) : List Action :=

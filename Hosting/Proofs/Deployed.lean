@@ -8,8 +8,8 @@ and then its `judge` (every law of the package, under `lawTicks`). Toy digest (`
 UInt64), the deployed codecs.
 
 `invoke_slots`: for every phase and event, from a grain's slots, the method runs, its result is
-admitted exactly when `step p e` is some, its phase slot decodes to `target p e`, and its entry, kind
-and owner slots are the old ones. The compiler evaluates it (the slot codecs do not reduce in the
+admitted exactly when `step p e` is some, its phase slot decodes to `target p e`, and its entry and
+kind slots are the old ones. The compiler evaluates it (the slot codecs do not reduce in the
 kernel), recorded in gates/axioms-allow.tsv.
 -/
 import Hosting.Package
@@ -37,7 +37,7 @@ private def reqFor (e : Event) : Req D :=
   { agent := owner, principal := owner, notBefore := 0, validUntil := 0, occasion := .invoke e.index }
 
 private def slotsAt (k : Kind) (p : Phase) : Option Slots := do
-  let s ← seed k "app.bin".toUTF8 (Kernel.Sim.dc.bytes owner)
+  let s ← seed k "app.bin".toUTF8
   let b ← Wire.encodeData phaseTy (.inj p.label unitD)
   pure (s.set slotPhase b)
 
@@ -50,7 +50,7 @@ private def slotCase (k : Kind) (p : Phase) (e : Event) : Bool :=
     | .ok s' =>
       (prog.judge (look id c) (some id) [] s s' (reqFor e) matches .ok ()) == (step p e).isSome &&
       phaseOf s' == some (target p e) && entryOf s' == entryOf s && kindOf s' == kindOf s &&
-      s'.get slotOwnerField == s.get slotOwnerField
+      s'.length == s.length
   | _, _, _, _ => false
 
 theorem invoke_slots :

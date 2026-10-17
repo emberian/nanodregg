@@ -10,8 +10,7 @@ LANG's `Proofs.Std` proves `machineLaw`'s spec in general (`machine_birth`, `mac
 `machine_write_refused`, `machine_relaw_refused`); these pin THIS package: the edges Hosting passes,
 resolved to the method indices `Event.index` names, decide `step`.
 
-The `owner` law reads byte strings, which the kernel cannot range over: it is pinned on two distinct
-strings, and by `hosting-sim`'s run through KERNEL's receivers and the plant that deletes it.
+There is no owner law: authority is KERNEL's gate (KERNEL-25, `invoke_authorized`).
 -/
 import Hosting.Package
 import Hosting.Text
@@ -47,11 +46,9 @@ private def injIs (ℓ : String) : Outcome → Bool
   | .value (.inj m (.record [])) _ => m == ℓ
   | _ => false
 
-/-- A state value: kind `k`, entry `entry`, owner `owner`, phase `p`. -/
-private def stD (p : Phase) (owner : ByteArray := .empty) (k : Kind := .app)
-    (entry : ByteArray := .empty) : Data :=
-  .record [("entry", .bytes entry), ("kind", .inj k.label unitD), ("owner", .bytes owner),
-    ("phase", .inj p.label unitD)]
+/-- A state value: kind `k`, entry `entry`, phase `p`. -/
+private def stD (p : Phase) (k : Kind := .app) (entry : ByteArray := .empty) : Data :=
+  .record [("entry", .bytes entry), ("kind", .inj k.label unitD), ("phase", .inj p.label unitD)]
 
 private def bytesIs (b : ByteArray) : Outcome → Bool
   | .value (.bytes c) _ => c == b
@@ -76,13 +73,11 @@ private def lawOn (ℓ : Label) (rq new old : Data) : Outcome :=
 
 private def bE : ByteArray := "app.bin".toUTF8
 private def bA : ByteArray := "a".toUTF8
-private def bB : ByteArray := "b".toUTF8
 
-/-- Field `f` of the state method `e` writes from a state of kind `k`, phase `p`, entry `bE`,
-owner `bA`. -/
+/-- Field `f` of the state method `e` writes from a state of kind `k`, phase `p`, entry `bE`. -/
 private def methodField (e : Event) (k : Kind) (p : Phase) (f : Label) : Outcome :=
   eval [] fuel (.get (bodyAt e.label) f)
-    [(rqD (invokeD e.index) bA).toVal, unitD.toVal, (stD p bA k bE).toVal]
+    [(rqD (invokeD e.index) bA).toVal, unitD.toVal, (stD p k bE).toVal]
 
 /-- The method labels, in the package's order, are `Event.all`'s: method `n` is `Event.index`. -/
 theorem lifecycle_methods :
@@ -96,7 +91,7 @@ theorem method_at_index :
 theorem index_is_methodIndex :
     ∀ e ∈ Event.all, Std.methodIndex methodLabels e.label = some e.index := by decide
 
-theorem laws_in_force : (Grain.lifecycle?.toOption.map (·.laws)) = some ["owner", "phase"] := by
+theorem laws_in_force : (Grain.lifecycle?.toOption.map (·.laws)) = some ["phase"] := by
   decide +kernel
 
 /-- The package passes LANG's install check with no imports. -/
@@ -122,14 +117,13 @@ theorem phase_frozen :
        verdictIs false (lawOn "phase" (rqD relawD) (stD q) (stD p))) = true := by
   decide +kernel
 
-/-- Method `e`, as `runMethod` runs it, writes `phase := target p e` and keeps `kind`, `entry` and
-`owner`, for both kinds (so a method writing a constant is caught). -/
+/-- Method `e`, as `runMethod` runs it, writes `phase := target p e` and keeps `kind` and `entry`,
+for both kinds (so a method writing a constant is caught). -/
 theorem method_writes :
     ∀ k ∈ Kind.all, ∀ p ∈ Phase.all, ∀ e ∈ Event.all,
       (injIs (target p e).label (methodField e k p "phase") &&
        injIs k.label (methodField e k p "kind") &&
-       bytesIs bE (methodField e k p "entry") &&
-       bytesIs bA (methodField e k p "owner")) = true := by
+       bytesIs bE (methodField e k p "entry")) = true := by
   decide +kernel
 
 /-- Method and law together: the state method `e` writes from phase `p` is admitted by the `phase`
@@ -138,25 +132,6 @@ theorem method_iff_step :
     ∀ p ∈ Phase.all, ∀ e ∈ Event.all,
       verdictIs (step p e).isSome
         (lawOn "phase" (rqD (invokeD e.index)) (stD (target p e)) (stD p)) = true := by
-  decide +kernel
-
-/-! The interim `owner` law on two distinct byte strings, each in both roles. -/
-
-/-- Birth: admitted iff the state's owner is the principal (the creator). -/
-theorem owner_born :
-    (verdictIs true (lawOn "owner" (rqD birthD bA) (stD .installed bA) (stD .installed bA)) &&
-     verdictIs true (lawOn "owner" (rqD birthD bB) (stD .installed bB) (stD .installed bB)) &&
-     verdictIs false (lawOn "owner" (rqD birthD bB) (stD .installed bA) (stD .installed bA))) = true := by
-  decide +kernel
-
-/-- An invoke: the owner may act; another principal may not; the owner may not change. -/
-theorem owner_invoke :
-    ∀ e ∈ Event.all,
-      (verdictIs true (lawOn "owner" (rqD (invokeD e.index) bA) (stD .running bA) (stD .installed bA)) &&
-       verdictIs true (lawOn "owner" (rqD (invokeD e.index) bB) (stD .running bB) (stD .installed bB)) &&
-       verdictIs false (lawOn "owner" (rqD (invokeD e.index) bB) (stD .running bA) (stD .installed bA)) &&
-       verdictIs false (lawOn "owner" (rqD (invokeD e.index) bA) (stD .running bB) (stD .installed bA)))
-        = true := by
   decide +kernel
 
 /-- The text a member installs reads, by `Lang.Read`, to the package's own bytes. The kernel

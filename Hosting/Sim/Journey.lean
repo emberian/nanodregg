@@ -3,29 +3,29 @@
 
 `lake exe hosting-sim` drives the REAL receive path (`Receive.submit`: the receivers, then
 `World.admit`) with `Lang.program` as the kernel's `Program`, under the Sim's toy parameters. Two
-founders: A (the grain's owner) and B (another member, later the operator A grants `start` to).
+founders: A (the grain's owner, KERNEL's slot 1) and B (another member, later the operator A
+grants `start` to).
 
 * G0 `world/grain/Lifecycle` is the generated text (`Text.package lifecycle`), byte for byte.
 * G1 A installs the grain package — admitted.
 * G2 A creates a grain born `installed`, owned by A — admitted; its phase reads `installed`.
 * G3 a grain born `running` — refused `lawDenied` by `phase` (born-only-initial).
-* G4 a grain whose state names B as owner, created by A — refused `lawDenied` by `owner`.
 * G5 A starts it — admitted, `running`. G6 A starts it again — refused by `phase` (no double start).
 * G7 B, with no grant, stops it — refused `noGrant` by KERNEL's `invoke` (KERNEL-25: owner-gated,
-  before any law runs).
-* G8 A stops it — `stopped`. G9 A grants B `invoke:0` (start only). G10 B starts it through the
+  before any law runs; it holds under skip-judge too: authority is not a law).
+* G8 A stops it — `stopped`. G9 A grants B `invoke:1` (start only). G10 B starts it through the
   grant — admitted, `running`. G11 B stops it through the same grant — refused `grantRight`.
 * G12 A stops and removes it — `removed`. G13 A starts it — refused by `phase` (terminal).
 * G15 the controller (Store `w1`) over the running grain's id (listed twice: one action), no child: `launch` with the plan
   `worlds/w1/grains/<hex>/pkg/app`; with its child running: nothing. A look-alike (same state,
-  another package, started) is never launched.
+  another package, started) is never launched; the ids of the log's Turns (`touchedIds`, what HOST's
+  tail hands the controller) reconcile to exactly the grain's launch.
 * G16 the controller over the removed grain with its child still running: `kill`.
 * G14 the follower (`World.fold`) and the auditor reach the Host's World.
 
 Plants (each must flip its line, or the run is RED):
-* P1 skip-judge: G3's grain born `running` is ADMITTED, G6's double start is ADMITTED;
-* P2 the package without its `owner` law: G7's stranger stop is STILL refused `noGrant` (the
-  kernel decides authority; the `owner` law no longer guards invoke and is HOSTING's to delete).
+* P1 skip-judge: G3's grain born `running` is ADMITTED, G6's double start is ADMITTED.
+The stranger plant moved to KERNEL (kernel-sim's invoke-no-grant arm, KERNEL-25).
 
 The run is deterministic: a SEED argument (standing passes 1 2 3) changes nothing. It ends `ALL PASS`.
 -/
@@ -46,10 +46,10 @@ def textPath : System.FilePath := "world" / "grain" / "Lifecycle"
 def langProgram : Program D := Lang.program Kernel.Sim.dc.bytes Kernel.Sim.digestOf
 def skipJudge : Program D := { langProgram with judge := fun _ _ _ _ _ _ => .ok () }
 
-/-- The planted package: the lifecycle without its `owner` law. -/
 def lifecycle : Option Package := Grain.lifecycle?.toOption
 
-def noOwnerLaw : Option Package := lifecycle.map fun p => { p with laws := ["phase"] }
+/-- A look-alike: the same state and methods, no law, so other bytes and another package id. -/
+def lookAlike : Option Package := lifecycle.map fun p => { p with laws := [] }
 
 structure Run where
   st : Kernel.Sim.State
@@ -102,12 +102,12 @@ def Want.met (v : String) : Want → Bool
   | .refusal n => v == s!"refused {n}"
 
 /-- Which plant this run is. -/
-inductive Plant | none | skipJudge | noOwnerLaw
+inductive Plant | none | skipJudge
   deriving DecidableEq
 
 def journey (plant : Plant) (pkg : Package) : Run := Id.run do
   let prog := if plant = .skipJudge then skipJudge else langProgram
-  let tag := match plant with | .none => "" | .skipJudge => "P1 skip-judge: " | .noOwnerLaw => "P2 no owner law: "
+  let tag := match plant with | .none => "" | .skipJudge => "P1 skip-judge: "
   let fk : List (ByteArray × ByteArray) := [("f0".toUTF8, "f0-next".toUTF8), ("f1".toUTF8, "f1-next".toUTF8)]
   let X := Kernel.Sim.ctxWith prog
   let g0 := genesis X Kernel.Sim.worldName 100000000 (fk.map fun (k, n) => (k, nextKeyDigest X n))
@@ -118,8 +118,7 @@ def journey (plant : Plant) (pkg : Package) : Run := Id.run do
   let call := fun (r : Run) (m : Kernel.Sim.Member) (ids : List D) (body : Body D) =>
     Kernel.Sim.signed r.st m m.key (Kernel.Sim.S.pinsFor r.st.host ids) body
   let some pkgBytes := Wire.encodePackage pkg | return note r "G1 the package has no bytes" false
-  let some seedA := seed .app "app".toUTF8 (Kernel.Sim.dc.bytes a.id) | return note r "G2 no seed" false
-  let some seedB := seed .app "app".toUTF8 (Kernel.Sim.dc.bytes b.id) | return note r "G4 no seed" false
+  let some seedA := seed .app "app".toUTF8 | return note r "G2 no seed" false
   let some running := Wire.encodeData phaseTy (.inj "running" unitD) | return note r "G3 no bytes" false
   let some args := noArgs | return note r "G5 no argument bytes" false
   -- G1 install
@@ -133,12 +132,8 @@ def journey (plant : Plant) (pkg : Package) : Run := Id.run do
   let some gr := created t2 | return note r "G2 no grain id" false
   -- G3 born running
   let (r3, v3, _) := go prog r (call r a [a.id, p] (.create (some p) [] (seedA.set slotPhase running)))
-  let want3 : Want := if plant = .skipJudge then .admitted else if plant = .none then .law "phase: phase does not start at installed" else .law "phase"
+  let want3 : Want := if plant = .skipJudge then .admitted else .law "phase: phase does not start at installed"
   r := note r3 s!"{tag}G3 a grain born running: {v3}" (want3.met v3)
-  -- G4 owner in state is not the creator
-  let (r4, v4, _) := go prog r (call r a [a.id, p] (.create (some p) [] seedB))
-  if plant = .none then r := note r4 s!"G4 A creates a grain owned by B: {v4}" (Want.met v4 (.law "owner: not the creator"))
-  else r := r4
   -- the event steps on the grain
   let ev := fun (r : Run) (m : Kernel.Sim.Member) (e : Event) (via : Option D) =>
     go prog r (call r m ([m.id, gr, p] ++ via.toList) (.invoke gr e.index args 100000 via))
@@ -147,11 +142,9 @@ def journey (plant : Plant) (pkg : Package) : Run := Id.run do
   let (r5, v5, _) := ev r a .start none
   r := check r5 "G5 A starts" .admitted v5 (some .running)
   let (r6, v6, _) := ev r a .start none
-  r := check r6 "G6 A starts again" (if plant = .skipJudge then .admitted else if plant = .none then .law "phase: no edge" else .law "phase") v6 none
+  r := check r6 "G6 A starts again" (if plant = .skipJudge then .admitted else .law "phase: no edge") v6 none
   let (r7, v7, _) := ev r b .stop none
-  if plant = .skipJudge then r := r7
-  -- KERNEL-25: the kernel refuses a stranger's invoke before any law runs, with or without `owner`
-  else r := check r7 "G7 B (no grant) stops" (.refusal "noGrant") v7 none
+  r := check r7 "G7 B (no grant) stops" (.refusal "noGrant") v7 none
   if plant ≠ .none then return r
   let (r8, v8, _) := ev r a .stop none
   r := check r8 "G8 A stops" .admitted v8 (some .stopped)
@@ -173,9 +166,12 @@ def journey (plant : Plant) (pkg : Package) : Run := Id.run do
   let want := wantPlan label hx
   r := note r "G15 controller, no child: launch with the grain's plan"
     (ctl r [] gr hx == [{ grain := hx, verdict := .launch want }])
+  r := note r "G15 the ids of the log's Turns, reconciled, launch exactly the grain"
+    (Controller.reconcile Kernel.Sim.dc.bytes label pkgId 0 [] r.st.host
+      (Controller.touchedIds Kernel.Sim.env r.st.log) == [{ grain := hx, verdict := .launch want }])
   r := note r "G15 controller, child running: nothing"
     ((ctl r [upLive hx] gr hx).isEmpty)
-  let some lookBytes := noOwnerLaw.bind Wire.encodePackage | return note r "G15 no look-alike bytes" false
+  let some lookBytes := lookAlike.bind Wire.encodePackage | return note r "G15 no look-alike bytes" false
   let (rl, vl, tl) := go prog r (call r a [a.id] (.install lookBytes))
   let some lp := created tl | return note rl s!"G15 look-alike install: {vl}" false
   let (rl2, _, tl2) := go prog rl (call rl a [a.id, lp] (.create (some lp) [] seedA))
@@ -225,9 +221,9 @@ def runAll (args : List String) : IO UInt32 := do
   | _ => IO.eprintln "usage: hosting-sim [SEED | --write-text]"; return 2
   let (l0, ok0) ← textLine
   IO.println s!"{if ok0 then "ok  " else "FAIL"} {l0}"
-  let (some lc, some no) := (lifecycle, noOwnerLaw)
+  let some lc := lifecycle
     | IO.println "FAIL the grain package is not built (Std refused its inputs)"; return 1
-  let runs := [journey .none lc, journey .skipJudge lc, journey .noOwnerLaw no]
+  let runs := [journey .none lc, journey .skipJudge lc]
   for r in runs do for l in r.log do IO.println l
   let bad := runs.foldl (· + ·.bad) (if ok0 then 0 else 1)
   IO.println (if bad = 0 then "ALL PASS" else s!"hosting-sim: RED ({bad})")
