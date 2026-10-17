@@ -56,6 +56,7 @@ fi
 [ -n "$msg" ] || { msg=$(mktemp); : > "$msg"; }
 
 gate_slot || exit 2
+export CARGO_TARGET_DIR=$G/cargo-target   # one Rust target per slot: workspace, cargo runs rows, cargo generators
 materialize "$cand" "$G/tree" || exit 2
 materialize "$base" "$G/base" || exit 2
 # One log per judged tree, kept (the newest 20 per slot): a slot's next judge must not overwrite
@@ -166,7 +167,7 @@ fi
 # Generated files are checked on every commit: a Rust-only commit can make them stale too.
 if [ "$build" = 1 ] && [ -z "$killed" ]; then
   while read -r exe out; do
-    [ -n "$exe" ] && step "generated:$out" wrapped env -C "$G/tree" lake exe "$exe" --check "$out"
+    [ -n "$exe" ] && step "generated:$out" generated_check "$G/tree" "$exe" "$out"
   done < <(generated_checks "$G/tree")
 fi
 
@@ -174,7 +175,6 @@ fi
 # builds (all targets), clippy -D warnings, rustfmt, against the one root Cargo.lock (--locked: a
 # commit that needs a lock change must carry it).
 if [ "$(rust_changed "$base" "$cand")" = workspace ]; then
-  export CARGO_TARGET_DIR=$G/cargo-target
   step cargo-check wrapped cargo check --quiet --locked --workspace --all-targets --manifest-path "$G/tree/Cargo.toml"
   step clippy wrapped cargo clippy --quiet --locked --workspace --all-targets --manifest-path "$G/tree/Cargo.toml" -- -D warnings
   step fmt wrapped cargo fmt --all --check --manifest-path "$G/tree/Cargo.toml"

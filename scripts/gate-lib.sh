@@ -84,3 +84,16 @@ if any(p in ("Cargo.toml", "Cargo.lock") or any(p.startswith(m.rstrip("/") + "/"
 generated_checks() {
   [ -f "$1/gates/generated.tsv" ] && grep -v -e '^#' -e '^[[:space:]]*$' "$1/gates/generated.tsv" | tr '\t' ' '
 }
+
+# generated_check DIR EXE PATH: the generator's own `--check PATH` (exit 0 = the file is exactly
+# what it emits). EXE is a lean_exe (`lake exe EXE`), or `cargo:BIN`, a bin of the root Cargo
+# workspace (`cargo run --locked --bin BIN`: OPS-2's emit-anchors, whose output widens TLS trust if
+# hand-edited, so it is checked on every commit like the Lean generators). One function for
+# pre-push and standing, under the build wrapper (a shell function cannot be handed to swarm-build).
+generated_check() {
+  local dir=$1 exe=$2 out=$3
+  case $exe in
+    cargo:*) wrapped env -C "$dir" cargo run --quiet --locked --manifest-path "$dir/Cargo.toml" --bin "${exe#cargo:}" -- --check "$out" ;;
+    *) wrapped env -C "$dir" lake exe "$exe" --check "$out" ;;
+  esac
+}

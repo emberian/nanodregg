@@ -33,6 +33,7 @@ if ! base=$(git -C "$repo" rev-parse -q --verify "$sha^^{tree}"); then
 fi
 G=$common/nanodregg-standing
 lock nanodregg-standing || exit 2
+export CARGO_TARGET_DIR=$G/cargo-target
 materialize "$sha^{tree}" "$G/tree" || exit 2
 materialize "$base" "$G/base" || exit 2
 T=$G/tree
@@ -50,7 +51,7 @@ census=ABSENT; runs=ABSENT; : > "$G/waste.measured"
 if [ "$build" = ok ]; then
   census=$(run wrapped python3 "$T/gates/census.py" "$T")
   while read -r exe out; do
-    [ -n "$exe" ] && [ "$(run wrapped env -C "$T" lake exe "$exe" --check "$out")" = RED ] && census=RED
+    [ -n "$exe" ] && [ "$(run generated_check "$T" "$exe" "$out")" = RED ] && census=RED
   done < <(generated_checks "$T")
   # runs: every verdict exe as gates/runs.tsv says (sims, journeys, rows, plants), gates/runs.py.
   wrapped python3 "$T/gates/runs.py" "$T" --waste-out "$G/waste.measured" > "$G/runs.out" 2>> "$log"; rc=$?
