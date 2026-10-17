@@ -159,10 +159,28 @@ or any defect stops the unit; a signalled controller (126), a failed report pipe
 lifetime end restarts. Run through the real programs (`deploy/live/unit-argv.py`): over an empty
 store directory the controller ends `store` 109 and grain-launch exits 109.
 
-The DRIVER (PENDING: PROTOCOL-7's `sync` verb with its Lean exit table, CLIENT-3's
-`ND_FOLLOW_SOCK`/`ND_HOST_SOCK` and envelope-only custody): `nd sync` as nd on a timer, relaying the
-follower's log asks to `/run/nd/host.sock`; the follower's key is a custody record owned by nd under
-the §2a chain (`/etc/nd/follow/L/`). Until it lands the follower serves but never advances.
+The DRIVER, per World `L`, from `deploy/units/linux/nd-follow-drive@.service`: `nd sync` as nd
+(the trusted side initiates to both sockets; `Driver.check_trusted`), every 40 s
+(`Restart=always`, `RestartSec=40`; `sync_loop_under_start_limit`: an honest loop never trips the
+start limit), with
+
+    ND_WORKSPACE=/etc/nd/follow/L ND_FOLLOW_SOCK=/run/nd-follow/L.sock ND_HOST_SOCK=/run/nd/host.sock
+
+Its ends are EXITS.md's `nd sync` table (PROTOCOL-38's CommandExit): a refusal by name (1) stops
+it; `uncertain` (2), `behind` (51, still behind after the page bound: the next run continues) and
+`client` (52, nd could not run: a socket or the workspace, named on stderr) run again. The
+workspace is the follower's OBSERVE-ONLY custody (CLIENT-22, cfb789b), which signs read envelopes
+and nothing else (`refused envelopeOnly` for any other step):
+
+    sudo install -d -o nd -g nd -m 0700 /etc/nd/follow /etc/nd/follow/L
+    sudo -u nd env ND_WORKSPACE=/etc/nd/follow/L /opt/nd/bin/nd --init-observer
+
+(`/etc/nd` root 0755, §2a: the whole chain must pass StrictModes). Then the operator's member enrols
+the observer's key as a member and grants it `grant world MEMBER observe --via GRANT`; that member
+and grant are the follower's `ND_MEMBER`/`ND_GRANT`. Run through the real nd
+(`deploy/live/unit-argv.py`, hbox): over an observer workspace with no follower socket, `nd sync`
+exits 52 `nd: follow.sock: No such file or directory`: the rendered environment is the one nd reads,
+and a missing socket is named and retried. A run against a serving follower: PENDING (burst5).
 
 ## 3. Status — RAN
 
@@ -203,6 +221,14 @@ integrity, not secrecy; a copy without it is `baseCorrupt`).
 Copy the files (`deploy/units/STORE.md`) into an empty STORE, then:
 
     host check STORE --anchor HEIGHT:CHAIN
+
+A Store file reported `missing` (20, `refused missing FILE`, HOST-35) is never re-created by hand
+and never genesis'd over: restore ALL of the Store's files from one backup (§4 order) into an empty
+STORE. No open creates a Store file (only genesis does), so a missing `seg.log` or `index.log`
+cannot silently come back empty. Deleted while the writer runs: the next batch's sync fails, that
+batch ends `uncertain` (3, restarted; nothing is acknowledged) and the restart refuses `missing`
+(fatal, the unit stops). Planted by HOST in store-plants: `missing-key`, `-base`, `-index`,
+`-segment`, `missing-index-serve`, `missing-segment-serve`. An absent STORE directory is `io` (13).
 
 0 and `anchor=ok` = the copy reaches the anchor with the anchor's chain. Without an anchor, a copy
 cut at a frame boundary, a single foreign last frame and a rollback to an older complete copy ALL

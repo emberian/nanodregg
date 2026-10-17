@@ -397,3 +397,27 @@ must be the World's label exactly (systemd escapes `-` and `/` in instance names
 controller behaves when its follower Store is being written mid-seal; HOST-10 says Tail.open reads
 unlocked and writes nothing, which I took on their word.
 **Status.** landed; the burst5 run (with the keybroker's) PENDING.
+
+## OPS-13 · the follower's driver is an always-restarting `nd sync` per World, not a timer (OPS-3, 2026-10-18)
+
+**Decision.** `deploy/units/linux/nd-follow-drive@.service`: User=nd, `nd sync` with
+`ND_WORKSPACE=/etc/nd/follow/%i` (CLIENT-22's observer custody), `ND_FOLLOW_SOCK=/run/nd-follow/%i.sock`,
+`ND_HOST_SOCK=/run/nd/host.sock`; `Restart=always`, `RestartSec=40`,
+`RestartPreventExitStatus` = `CommandExit.codesOf .fatal` (refused, 1). `Driver.check` refuses a
+driver that is not the writer's user, is the follower's user, or talks to another host socket
+(`Driver.check_trusted`: ROOT's direction rule as a render refusal). `commandAction` exhaustive;
+EXITS.md gains the `nd sync` table. Theorems `mem_drivePrevent`, `drivePrevent_split`,
+`sync_loop_under_start_limit` (120 / 40 + 1 < 5).
+**Alternatives.** (1) A `.timer` firing a oneshot (what CLIENT-3 and I first said): a timer starts
+its service again after a fatal end, so a refusal by name would repeat every period forever; the
+restart loop stops on the fatal class, which is the property every other unit here has.
+(2) `Type=oneshot` + `Restart=on-failure`: a clean `sync` (0) would then end the loop.
+**CRITIQUE.** The cadence (40 s) is chosen, not derived: it bounds how stale the controller's World
+can be when the writer is quiet, and nothing measures what the controller needs. `client` (52) is
+restart-class, so a mis-installed workspace retries every 40 s by name instead of stopping;
+`absent` (50) is `done`, which under `Restart=always` also runs again (harmless: sync sends no call).
+Run only as a parser row (nd exits 52 on a missing socket); the observer's enrolment is an operator
+step no row runs here.
+**META-CRITIQUE.** I nearly rendered the timer everyone named, because two owners had said
+"timer"; the stop-on-fatal property, not the word, picked the shape.
+**Status.** landed; run PENDING burst5.

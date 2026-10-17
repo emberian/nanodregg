@@ -11,7 +11,7 @@ import Hosting.Proofs.LaunchExit
 namespace Nanodregg.Ops.Units
 
 open Nanodregg.Host
-open Nanodregg.Protocol (SupervisorExit)
+open Nanodregg.Protocol (SupervisorExit CommandExit)
 open Nanodregg.Hosting (DeciderExit KeybrokerExit ControllerExit LaunchExit)
 
 /-- What a rendered unit is: the node, its nd-supervise command line and `preventCodes`. -/
@@ -203,5 +203,28 @@ theorem Launcher.check_follower (l : Launcher) (h : l.check = .ok ()) :
       simp only [Launcher.check, hp]; rfl
     rw [this] at h; cases h
   · simpa [Launcher.paired, Bool.and_eq_true, beq_iff_eq] using hp
+
+/-- The driver stops on an `nd sync` end iff PROTOCOL's table calls it fatal; every other end
+runs again after the interval. -/
+theorem mem_drivePrevent (e : CommandExit) : e.code ∈ drivePreventCodes ↔ e.cls = .fatal := by
+  cases e <;> decide
+
+/-- The tooth: a refusal (1) stops the driver; `behind` (51) and `uncertain` (2) run again. -/
+theorem drivePrevent_split :
+    CommandExit.refused.code ∈ drivePreventCodes ∧ CommandExit.behind.code ∉ drivePreventCodes ∧
+    CommandExit.uncertain.code ∉ drivePreventCodes := by decide
+
+/-- An honest driver never trips its own start limit: at one run per `syncSeconds` (a run's own
+time only spaces starts further), any `startIntervalSeconds` window holds fewer than `startBurst`
+starts. False if the interval is shortened to 30 s or less at today's limit. -/
+theorem sync_loop_under_start_limit : startIntervalSeconds / syncSeconds + 1 < startBurst := by decide
+
+/-- A driver renders only as the trusted side: as the writer's user, not the follower's, toward
+the writer's own socket (ROOT's direction rule). -/
+theorem Driver.check_trusted (d : Driver) (h : d.check = .ok ()) : d.trusted = true := by
+  cases ht : d.trusted
+  · have : d.check = .error (.badPath d.hostSock) := by simp only [Driver.check, ht]; rfl
+    rw [this] at h; cases h
+  · rfl
 
 end Nanodregg.Ops.Units

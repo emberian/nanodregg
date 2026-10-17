@@ -138,3 +138,14 @@ code space holds both tables: `host` (Host.Status, below 64) and nd-supervise's 
 | 113 | unencodable | fatal | stopped (RestartPreventExitStatus) | unreachable by theorem (the controller's plans encode); seen, a defect: report to HOSTING |
 | 114 | lifetime | restart | restarted after 2 s; failed past 5 starts in 120 s | automatic: the controller's lifetime ended, a fresh one re-reads the World whole |
 | 115 | io | fatal | stopped (RestartPreventExitStatus) | an IO error escaped the controller (stderr names the call and error): check the follow Store's disk and permissions |
+
+## nd sync (the nd-follow-drive@ unit; Restart=always every RestartSec but the fatal class)
+
+| code | name | class | systemd | operator |
+|---|---|---|---|---|
+| 0 | ok | done | stays stopped (success) | nothing: the follower reached the writer's tip; the next run follows after the restart interval |
+| 1 | refused | fatal | stopped (RestartPreventExitStatus) | a refusal by name (stderr `refused NAME`): the follower's observe-only member or its grant is not live, or its envelope key is not the member's current key; re-enrol it (RUNBOOK §2b) and start the unit |
+| 2 | uncertain | restart | restarted after 2 s; failed past 5 starts in 120 s | automatic: the writer answered `uncertain`; the next run re-reads |
+| 50 | absent | done | stays stopped (success) | nothing: `sync` sends no call, so `absent` is a lookup's end; seen from sync, report to PROTOCOL |
+| 51 | behind | restart | restarted after 2 s; failed past 5 starts in 120 s | automatic: the catch-up read its page bound and is still behind; the next run continues from what was absorbed |
+| 52 | client | restart | restarted after 2 s; failed past 5 starts in 120 s | nd itself could not run (argv, a socket, the workspace; stderr names it): check /etc/nd/follow/LABEL and that both sockets exist; it is retried every interval |

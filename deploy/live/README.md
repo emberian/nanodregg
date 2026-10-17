@@ -62,8 +62,8 @@ Findings, routed:
 
 ## Rendered argv through the real programs (OPS-3, 2026-10-18)
 
-`unit-argv.py UNIT DIR WORD=VALUE...` runs a rendered unit's ExecStart with each rendered path,
-`%i` and `${VAR}` replaced by a scratch value (an unmapped one, or a value nothing asks for, fails
+`unit-argv.py UNIT DIR WORD=VALUE...` runs a rendered unit's ExecStart (with its `Environment=`) with
+each rendered path, `%i` and `${VAR}` replaced by a scratch value (an unmapped one, or a value nothing asks for, fails
 before anything runs). On hbox at 8be4026:
 - `nd-grain-launch@.service`: grain-launch parses ROOT BROKER LABEL PIDS CONTROLLER, starts the
   confined hosting-controller, which parses `STORE LABEL` and, over an empty store directory, ends
@@ -73,6 +73,8 @@ before anything runs). On hbox at 8be4026:
   `sharedDirRefused: Dir(...)`: the rendered `--group ${ND_GID}` sits where its grammar takes it and
   the shared-dir check refuses a chain another can write, by name. The positive run (a passing
   chain, the follower serving, an nd-group peer connecting) needs burst5's `/srv/scratch`: PENDING.
+- `nd-follow-drive@.service` (cfb789b): over a fresh `nd --init-observer` workspace and no
+  follower socket, `nd sync` exits 52 (`client`, `nd: follow.sock: No such file or directory`).
 
 ## The keybroker unit (OPS-3): `broker.sh SRC ROOT`
 
