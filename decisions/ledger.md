@@ -131,4 +131,31 @@ guard and still finds the second payout refused `spent`.
 by the kernel, `settled` by the package); with the shared key replaced by two keys AND the phase
 guard removed, the second payout is ADMITTED, so the sim goes red. (2) Unfunded deposit (no grant):
 the whole call is refused (`noGrant`), the phase stays `open`.
-Status: decided; (b) asked of LANG-4 and KERNEL-5 for D5's flag day; the package after `lang!`.
+Status: decided; (b) asked of LANG-4 and KERNEL-5 for D5's flag day; the package after `lang!`
+(b) amended by LEDGER-7: no `accountOf`; accounts are `AcctRef` in Body.
+
+## LEDGER-7 · Accounts are named by reference in `Body`: `AcctRef = well asset | of owner asset`; no LANG builtin (LEDGER-2, 2026-10-17; amends LEDGER-6 (b), LANG-4's counter-proposal, to be LANG-25)
+**Decision.** LEDGER-6 (b)'s `accountOf` builtin is withdrawn. LANG-4 refused it: the term machine is
+parametric in the digest, so the builtin would thread KERNEL's hash into Eval/BigStep and every meaning
+proof; `decide +kernel` teeth on `runLaw` die under a real hash (the reduction bomb); and accountId would
+be computed in two places. Accepted instead, with one narrowing: `transfer`'s `src`/`dst` and
+`credit`'s `acct` take `AcctRef D := | well (asset : D) | of (owner asset : D)`, resolved by the
+receiver: `.well a ↦ a` (the well's id IS the denomination; the cell must be a well, else `notWell`),
+`.of o a ↦ accountId X o a`. Theorems `resolve_well`, `resolve_of`. LANG-4 proposed `.id (a : D)` for the
+first arm; I take `.well` so every value cell has exactly ONE name in a Body (an ordinary account
+cannot be named by its raw id), law 1 at the reference. Minting is `transfer (.well w) (.of o w)`,
+burning the reverse. `credit (well) (.of o w)` keeps its well as a plain `D`. `Req.self` stays (LANG-4
+accepted): the escrow writes `.of self asset`, `.of depositor asset`, `.of beneficiary asset` and hashes
+nothing. LANG's `callTy` carries `acctRefTy = sum {of : rec {asset, owner : bytes}, well : bytes}`.
+Clients address accounts the same way at top level (one Body shape). The receiver pins the RESOLVED id;
+the client computes it to pin, as it computes born ids. Built in D5 (kernel half, KERNEL-5 reviews);
+LANG's half in `lang!`; PROTOCOL's verbs take `of:OWNER:ASSET` / `well:ASSET` (PROTOCOL-5's spelling).
+**Alternatives.** (1) The `accountOf` builtin (refused above). (2) LANG-4's `.id` arm: two names for
+one cell. (3) Owner-only fields: breaks minting (LEDGER-6).
+**Critique.** `.well` makes `transfer` read the source's kind to resolve it, one more refusal path
+(`notWell`) on a hot receiver. A client must hash to pin, so a pin mismatch from a wrong client-side
+`accountId` is `stale`/unpinned, not a named "wrong account": the name is the kernel's pin refusal.
+**Meta-critique.** The counter-proposal came from the layer that would otherwise carry the cost, so I
+checked it against the reason I rejected owner-addressing (minting) rather than against its author's
+cost: the sum keeps minting, and removes the only hash a package needed.
+Status: agreed with LANG-4; KERNEL-5 to review in D5's statements.
