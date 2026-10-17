@@ -68,6 +68,28 @@ fi
 grep -q '^Co-Authored-By:' "$msg" || printf '\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\n' >> "$msg"
 
 base=$(git -C "$repo" rev-parse refs/heads/main) || exit 2
+# Only a layer worktree, detached, commits. The primary checkout is the read-only reference
+# (scouts, evaluators, `lake env lean` against its .lake), never an editing surface.
+if [ "$repo" = "$(cd "$common/.." && pwd)" ]; then
+  echo "scripts/commit: REFUSED — $repo is the primary checkout, the read-only reference; commit from a layer worktree (scripts/worktree LAYER)"; exit 1
+fi
+if git symbolic-ref -q HEAD > /dev/null; then
+  echo "scripts/commit: REFUSED — this checkout is on branch $(git symbolic-ref --short HEAD); a layer worktree is detached at main: git checkout --detach main"; exit 1
+fi
+# The candidate is CURRENT main plus exactly PATH... as this worktree holds them. A path whose
+# version at this worktree's HEAD differs from main's was edited on top of an older copy, and
+# taking it would silently revert whatever main changed there since (051a8cc reverted KERNEL-4's
+# 9e60d7f hunk in Protocol/Rows/Sim.lean exactly so). Refused by name, per file. `git checkout
+# --detach main` carries an edit along when main did not change that file, and refuses when it did.
+prefix=$(git rev-parse --show-prefix)
+rel=(); for p in "${paths[@]}"; do r=$prefix${p#./}; rel+=("${r%/}"); done
+behind=$(git -C "$repo" diff --name-only HEAD "$base" -- "${rel[@]/#/:(top,literal)}") || exit 2
+if [ -n "$behind" ]; then
+  printf '%s\n' "$behind" | while read -r f; do
+    echo "scripts/commit: REFUSED — worktree behind main on $f: git checkout --detach main, re-apply your edit"
+  done
+  exit 1
+fi
 idx=$tmp/index
 export GIT_INDEX_FILE=$idx
 git -C "$repo" read-tree "$base" || exit 2
@@ -87,8 +109,7 @@ b=$(git -C "$repo" hash-object -w "$S/tree/SIZE.md") && git -C "$repo" update-in
 cand=$(git -C "$repo" write-tree)
 
 # Every changed path must be one you named.
-prefix=$(git rev-parse --show-prefix)
-prefixes=$(for p in "${paths[@]}"; do r=$prefix${p#./}; echo "${r%/}"; done)
+prefixes=$(printf '%s\n' "${rel[@]}")
 extra=$(git -C "$repo" diff --name-only "$base" "$cand" | while read -r f; do
   ok=0; [ "$f" = SIZE.md ] && ok=1
   while read -r p; do case $f in "$p"|"$p"/*) ok=1 ;; esac; done <<< "$prefixes"
@@ -98,7 +119,7 @@ if [ -n "$extra" ]; then echo "scripts/commit: REFUSED — the candidate changes
 if git -C "$repo" diff --quiet "$base" "$cand"; then echo "scripts/commit: nothing to commit"; exit 1; fi
 git -C "$repo" diff --stat "$base" "$cand"
 
-pp=(--index --message "$msg"); [ -n "$nobuild" ] && pp+=(--no-build)
+pp=(--index --base "$base" --message "$msg"); [ -n "$nobuild" ] && pp+=(--no-build)
 "$scripts/pre-push" "${pp[@]}" || { echo "scripts/commit: REFUSED by scripts/pre-push"; exit 1; }
 
 new=$(git -C "$repo" commit-tree "$cand" -p "$base" -F "$msg") || exit 2

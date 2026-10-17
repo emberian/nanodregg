@@ -1,8 +1,12 @@
 #!/usr/bin/env bash
 # scripts/pre-push — judge one candidate commit before it reaches main.
 #
-#   scripts/pre-push --index [--message FILE]   the tree `git commit` is about to record (the
-#                                               commit-msg hook runs this; --only commits work)
+#   scripts/pre-push --index [--base COMMIT] [--message FILE]
+#                                               the tree in the index, judged against COMMIT
+#                                               (default main). scripts/commit passes the main
+#                                               it built the candidate on: judged against a main
+#                                               that moved meanwhile, the candidate would appear
+#                                               to revert every intervening commit
 #   scripts/pre-push --rev REV                  an existing commit, judged against its parent
 #   --no-build                                  skip build + census; needs `NO-BUILD: <reason>`
 #
@@ -24,22 +28,23 @@
 set -uo pipefail
 . "$(dirname "$0")/gate-lib.sh"
 
-mode=index rev="" msg="" build=1
+mode=index rev="" msg="" build=1 basec=refs/heads/main
 while [ $# -gt 0 ]; do
   case $1 in
     --index) mode=index ;;
     --rev) mode=rev; rev=$2; shift ;;
+    --base) basec=$2; shift ;;
     --message) msg=$2; shift ;;
     --no-build) build=0 ;;
-    *) echo "usage: scripts/pre-push [--index | --rev REV] [--message FILE] [--no-build]" >&2; exit 2 ;;
+    *) echo "usage: scripts/pre-push [--index [--base COMMIT] | --rev REV] [--message FILE] [--no-build]" >&2; exit 2 ;;
   esac
   shift
 done
 
 if [ "$mode" = index ]; then
   cand=$(git -C "$repo" write-tree) || exit 2
-  # The parent is main, not this worktree's HEAD: every layer works in its own worktree.
-  base=$(git -C "$repo" rev-parse -q --verify 'refs/heads/main^{tree}' || echo "$empty_tree")
+  # The parent is the main the candidate was built on, never this worktree's HEAD.
+  base=$(git -C "$repo" rev-parse -q --verify "$basec^{tree}" || echo "$empty_tree")
 else
   cand=$(git -C "$repo" rev-parse "$rev^{tree}") || exit 2
   base=$(git -C "$repo" rev-parse -q --verify "$rev^^{tree}" || echo "$empty_tree")
