@@ -91,7 +91,9 @@ theorem eqAt_prints {N k : Nat} {x y : Term} (T : Ty) (hx : Prints N k x) (hy : 
     Prints (N + 1) k (eqAt T x y) := by
   unfold eqAt; split
   · exact prints_prim _ hx hy
-  · exact prints_prim _ hx hy
+  · split
+    · exact prints_prim _ hx hy
+    · exact prints_prim _ hx hy
 
 theorem bit_prints {N k : Nat} {t : Term} (i : Nat) (ht : Prints N k t) : Prints (N + 2) k (bit t i) :=
   prints_prim .mod (prints_prim .div ht ((prints_nat k _).mono ht.pos)) ((prints_nat k _).mono (by have := ht.pos; omega))
@@ -160,13 +162,13 @@ theorem lawOf_prints {M N : Nat} {S : Ty} {birth adopt relaw change : At → Ter
 theorem allowlistLaw_prints {M : Nat} {S : Ty} (ids : List ByteArray) (hS : TyPrints M S) :
     Prints (max (M + 2) (ids.length + 11)) 0 (allowlistLaw S ids) := by
   have hl : Prints (5 + ids.length) 4
-      (anyOf (ids.map fun i => .prim .beq ((⟨1⟩ : At).reqF "agent") (.bytes i))) := by
+      (anyOf (ids.map fun i => .prim .deq ((⟨1⟩ : At).reqF "agent") (.digest i))) := by
     have := anyOf_prints (N := 5) (k := 4)
-      (l := ids.map fun i => .prim .beq ((⟨1⟩ : At).reqF "agent") (.bytes i)) ?_ (by omega)
+      (l := ids.map fun i => .prim .deq ((⟨1⟩ : At).reqF "agent") (.digest i)) ?_ (by omega)
     · simpa [Nat.add_comm] using this
     · intro c hc
       obtain ⟨i, _, rfl⟩ := List.mem_map.1 hc
-      exact (prints_prim .beq (reqF_prints (by decide) (by decide)) ((prints_bytes 4 i).mono (by omega))).mono (by omega)
+      exact (prints_prim .deq (reqF_prints (by decide) (by decide)) (prints_digest 4 i)).mono (by omega)
   have hc := allOf1_prints (w := "not on the allowlist") hl (by omega)
   unfold allowlistLaw
   exact (lawOf_prints hS hc hc hc hc).mono (by omega)
@@ -209,10 +211,10 @@ theorem all3 {P : Term × String → Prop} {a b c : Term × String} (ha : P a) (
 
 theorem isMember_prints (members : List ByteArray) : Prints (3 + members.length) 4 (isMember members ⟨1⟩) := by
   unfold isMember
-  have := anyOf_prints (N := 3) (k := 4) (l := members.map fun m => .prim .beq ((⟨1⟩ : At).reqF "agent") (.bytes m))
+  have := anyOf_prints (N := 3) (k := 4) (l := members.map fun m => .prim .deq ((⟨1⟩ : At).reqF "agent") (.digest m))
     (fun c hc => by
       obtain ⟨m, _, rfl⟩ := List.mem_map.1 hc
-      exact prints_prim .beq (reqF_prints (by decide) (by decide)) ((prints_bytes 4 m).mono (by omega))) (by omega)
+      exact prints_prim .deq (reqF_prints (by decide) (by decide)) (prints_digest 4 m)) (by omega)
   simpa using this
 
 theorem approvalBy_prints (m : ByteArray) (i : Nat) : Prints 6 4 (approvalBy ⟨1⟩ m i) := by
@@ -220,7 +222,7 @@ theorem approvalBy_prints (m : ByteArray) (i : Nat) : Prints 6 4 (approvalBy ⟨
   have hold : Prints 2 4 ((⟨1⟩ : At).oldF "approvals") := oldF_prints (by decide) (by decide)
   have hnew : Prints 2 4 ((⟨1⟩ : At).newF "approvals") := newF_prints (by decide) (by decide)
   refine andT_prints ((prints_prim .eq (bit_prints i hold) ((prints_nat 4 0).mono (by omega))).mono (by omega)) ?_
-  refine andT_prints ?_ ((prints_prim .beq (reqF_prints (by decide) (by decide)) ((prints_bytes 4 m).mono (by omega))).mono (by omega))
+  refine andT_prints ?_ ((prints_prim .deq (reqF_prints (by decide) (by decide)) (prints_digest 4 m)).mono (by omega))
   exact (prints_prim .eq (hnew.mono (M := 3) (by omega))
     (prints_prim .add hold ((prints_nat 4 _).mono (by omega)))).mono (by omega)
 

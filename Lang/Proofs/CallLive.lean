@@ -4,7 +4,7 @@
 `Lang.Proofs.Call` proves the forward half: a callable Body in bounds has call data of `callTy`
 (`callData_conforms`). This is the converse, liveness. `bodyOf_live`: data conforming to `callTy`
 reads as a Body, or the refusal is `PATH: not a digest` for bytes the digest decoder refuses, held
-at exactly that label path of the data (`Live`, `BytesAt`, `Names`), the one thing a type cannot say. `callsOf_live`: the same for a calls
+at exactly that label path of the data (`Live`, `DigestAt`, `Names`), the one thing a type cannot say. `callsOf_live`: the same for a calls
 row conforming to `callsTy ks` over call slots, with the slot named (`DigestRefusal`).
 `extract_conforms`: a value typed at a type extracts to data conforming to it (forcing each
 suspension is a typed run, `force_typed`, `unknot_typed`). `callsOf_go_kinds`: the calls a
@@ -23,32 +23,33 @@ open Nanodregg.Kernel Nanodregg.Kernel.Receive
 
 variable {D : Type} {digestOf : ByteArray → Option D} {d0 : Data}
 
-/-- Byte string `b` sits in data `d` at label path `p`. Each record field on the way is named in
+/-- Digest leaf `b` sits in data `d` at label path `p` (a `bytes` leaf never does: since LANG-38
+only a field typed `digest` can be refused as not a digest). Each record field on the way is named in
 the path (`field`). A sum arm is either named (`arm`, as an account's `well` is) or passed over (`inj`,
 as an option's `some`, a call's kind, an account's `of`). -/
-inductive BytesAt (b : ByteArray) : List Label → Data → Prop
-  | here : BytesAt b [] (.bytes b)
-  | inj {p : List Label} {ℓ : Label} {d : Data} : BytesAt b p d → BytesAt b p (.inj ℓ d)
-  | arm {p : List Label} {ℓ : Label} {d : Data} : BytesAt b p d → BytesAt b (ℓ :: p) (.inj ℓ d)
+inductive DigestAt (b : ByteArray) : List Label → Data → Prop
+  | here : DigestAt b [] (.digest b)
+  | inj {p : List Label} {ℓ : Label} {d : Data} : DigestAt b p d → DigestAt b p (.inj ℓ d)
+  | arm {p : List Label} {ℓ : Label} {d : Data} : DigestAt b p d → DigestAt b (ℓ :: p) (.inj ℓ d)
   | field {p : List Label} {fs : List (Label × Data)} {ℓ : Label} {d : Data} :
-      (ℓ, d) ∈ fs → BytesAt b p d → BytesAt b (ℓ :: p) (.record fs)
+      (ℓ, d) ∈ fs → DigestAt b p d → DigestAt b (ℓ :: p) (.record fs)
 
 /-- `f` is how a refusal names label path `p`: its labels joined by `.` (`acct.owner`). -/
 inductive Names : List Label → String → Prop
   | one (ℓ : Label) : Names [ℓ] ℓ
   | cons (ℓ : Label) {p : List Label} {f : String} : Names p f → Names (ℓ :: p) (ℓ ++ "." ++ f)
 
-/-- Data `d` sits in `d0` at path `p`: every bytes leaf of `d` is a leaf of `d0`, `p` deeper. -/
-def Under (p : List Label) (d d0 : Data) : Prop := ∀ q b, BytesAt b q d → BytesAt b (p ++ q) d0
+/-- Data `d` sits in `d0` at path `p`: every digest leaf of `d` is a leaf of `d0`, `p` deeper. -/
+def Under (p : List Label) (d d0 : Data) : Prop := ∀ q b, DigestAt b q d → DigestAt b (p ++ q) d0
 
 /-- Reading `d0` gives `x`, which fails, if at all, only because bytes of `d0` are refused by
-`digestOf`, and the refusal names the path in `d0` that holds them. -/
+`digestOf`, and the refusal names the path in `d0` whose digest leaf holds them. -/
 def Live (digestOf : ByteArray → Option D) (d0 : Data) {α : Type} (x : Except String α) : Prop :=
   ∀ e, x = .error e → ∃ (p : List Label) (f : String) (b : ByteArray),
-    digestOf b = none ∧ BytesAt b p d0 ∧ Names p f ∧ e = s!"{f}: not a digest"
+    digestOf b = none ∧ DigestAt b p d0 ∧ Names p f ∧ e = s!"{f}: not a digest"
 
 theorem Live.lift {d0 d1 : Data} {α : Type} {x : Except String α} (hx : Live digestOf d0 x)
-    (hs : ∀ p b, BytesAt b p d0 → BytesAt b p d1) : Live digestOf d1 x := by
+    (hs : ∀ p b, DigestAt b p d0 → DigestAt b p d1) : Live digestOf d1 x := by
   intro e h
   obtain ⟨p, f, b, hn, hb, hf, rfl⟩ := hx e h
   exact ⟨p, f, b, hn, hs p b hb, hf, rfl⟩
@@ -91,6 +92,8 @@ theorem Live.map' {α β : Type} {x : Except String α} (g : α → β) (hx : Li
 
 theorem conf_bytes {d : Data} (h : Conforms d .bytes) : ∃ b, d = .bytes b := by cases h; exact ⟨_, rfl⟩
 
+theorem conf_digestD {d : Data} (h : Conforms d .digest) : ∃ b, d = .digest b := by cases h; exact ⟨_, rfl⟩
+
 theorem conf_nat {d : Data} (h : Conforms d .nat) : ∃ n, d = .nat n := by cases h; exact ⟨_, rfl⟩
 
 theorem conf_unit {d : Data} (h : Conforms d (.record [])) : d = .record [] := by
@@ -108,16 +111,16 @@ theorem conf_opt {d : Data} {T : Ty} (h : Conforms d (optTy T)) :
       · cases hf
 
 /-- A digest field named `f`, the name of its path `p` in `d0`, refuses only bytes at `p`. -/
-theorem digest_live {d d0 : Data} {p : List Label} (f : String) (hf : Names p f) (h : Conforms d .bytes)
+theorem digest_live {d d0 : Data} {p : List Label} (f : String) (hf : Names p f) (h : Conforms d .digest)
     (hu : Under p d d0) : Live digestOf d0 (digestAt digestOf f d) := by
-  obtain ⟨b, rfl⟩ := conf_bytes h
+  obtain ⟨b, rfl⟩ := conf_digestD h
   intro e he
   simp only [digestAt] at he
   split at he
   · cases he
   · rename_i hn; cases he; exact ⟨p, f, b, hn, by simpa using hu [] b .here, hf, rfl⟩
 
-theorem optDigest_live {d d0 : Data} {p : List Label} (f g : String) (hf : Names p f) (h : Conforms d (optTy .bytes))
+theorem optDigest_live {d d0 : Data} {p : List Label} (f g : String) (hf : Names p f) (h : Conforms d (optTy .digest))
     (hu : Under p d d0) : Live digestOf d0 (optOf (digestAt digestOf f) g d) := by
   rcases conf_opt h with rfl | ⟨d', rfl, hd⟩
   · simp only [optOf]; exact Live.pure _
@@ -290,6 +293,7 @@ theorem unknot_typed {m : Machine} (hlib : LibTy Δ m.lib) : ∀ {rounds fuel : 
   | _, _, .nat _, _, _, _, hv, _ => by cases hv
   | _, _, .bool _, _, _, _, hv, _ => by cases hv
   | _, _, .bytes _, _, _, _, hv, _ => by cases hv
+  | _, _, .digest _, _, _, _, hv, _ => by cases hv
   | _, _, .clo _ _, _, _, _, hv, _ => by cases hv
   | _, _, .inj _ _, _, _, _, hv, _ => by cases hv
 
@@ -302,6 +306,8 @@ theorem extract_conforms {m : Machine} (hlib : LibTy Δ m.lib) : ∀ (T : Ty) {f
     cases hv with | bool => simp only [Machine.extract] at h; cases h; exact .bool
   | .bytes, _, _, _, _, hv, h => by
     cases hv with | bytes hn => simp only [Machine.extract] at h; cases h; exact .bytes hn
+  | .digest, _, _, _, _, hv, h => by
+    cases hv with | digest hn => simp only [Machine.extract] at h; cases h; exact .digest hn
   | .fn _ _, _, v, _, _, _, h => by cases v <;> simp [Machine.extract] at h
   | .record row, _, _, _, _, hv, h => by
     simp only [Machine.extract] at h
@@ -428,7 +434,7 @@ def SlotRow (r : List (Label × Ty)) : Prop := ∀ p ∈ r, ∃ k, p.2 = optTy k
 /-- The refusal `callsOf` gives reading calls data `c` when slot `ℓ` holds, at path `p` in its
 call, bytes the digest decoder refuses: the slot and the path by name. -/
 def DigestRefusal (digestOf : ByteArray → Option D) (c : Data) (e : Refusal D) : Prop :=
-  ∃ (ℓ : Label) (p : List Label) (f : String) (b : ByteArray), digestOf b = none ∧ BytesAt b (ℓ :: p) c ∧
+  ∃ (ℓ : Label) (p : List Label) (f : String) (b : ByteArray), digestOf b = none ∧ DigestAt b (ℓ :: p) c ∧
     Names p f ∧ e = .program s!"calls: {ℓ} {s!"{f}: not a digest"}"
 
 theorem callsOf_go_live : ∀ {fs : List (Label × Data)} {r : List (Label × Ty)}, RowConforms fs r → SlotRow r →
@@ -557,7 +563,7 @@ theorem sublist_map_inv {α β : Type} {f : α → β} : ∀ {l : List β} {l2 :
 in order and one to one, a sublist of the resolved method's call slot types, each call of a kind
 its slot names. So a method makes at most as many calls as it declares slots, and never two from
 one slot (the run's result is typed by `invoke_never_stuck`, the calls row conforms by
-`extract_conforms`, and `callsOf_go_kinds` reads it). Exercised with calls by journey LC0–LC6. -/
+`extract_conforms`, and `callsOf_go_kinds` reads it). Exercised with calls by journey LC0–LC4 and LC6. -/
 theorem runMeasured_kinds {bytesOf : D → ByteArray}
     {look : Pinned D} {pkg : D} {state : Slots} {method : Nat} {args : ByteArray} {r : Req D}
     {budget : Nat} {s : Slots} {calls : List (Body D)} {t n : Nat}
@@ -573,7 +579,7 @@ theorem runMeasured_kinds {bytesOf : D → ByteArray}
   all_goals first | (simp at h; done) | skip
   simp only [Except.ok.injEq, Prod.mk.injEq] at h
   obtain ⟨-, rfl, -, -⟩ := h
-  rename_i hr0 _ Lg hl _ p hp _ x hres _ sd hst _ ad hargs _ v used hrun _ c ds left hx _ slots _ _ calls' hc
+  rename_i hr0 _ Lg hl _ p hp _ x hres _ sd hst _ ad hargs _ _ v used hrun _ c ds left hx _ slots _ _ calls' hc
   obtain ⟨L, g⟩ := Lg
   obtain ⟨ℓ, A, ks⟩ := x
   obtain ⟨mty, hm, hA⟩ := resolveMethod_spec hres

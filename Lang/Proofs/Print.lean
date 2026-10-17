@@ -67,6 +67,12 @@ theorem ty_tySx : ∀ (T : Ty) (d : Nat) {x y : SExp}, tySx T = some x → Same 
     cases d with
     | zero => simp [need, atom] at hn
     | succ d => simp [Read.ty]
+  | .digest, d, x, y, h, hs, hn, _ => by
+    simp only [tySx, Option.some.injEq] at h; subst h
+    obtain ⟨q, rfl⟩ := same_atom hs
+    cases d with
+    | zero => simp [need, atom] at hn
+    | succ d => simp [Read.ty]
   | .fn a b, d, x, y, h, hs, hn, hwf => by
     simp only [tySx, bind, Option.bind_eq_some_iff, pure, Option.some.injEq] at h
     obtain ⟨xa, ha, xb, hb, rfl⟩ := h
@@ -209,6 +215,12 @@ theorem dataAt_dataSx : ∀ (v : Data) (T : Ty) (d : Nat) {x y : SExp}, dataSx v
         simp_all [dataAt, scalarAt]
       · obtain ⟨q, rfl⟩ := same_atom hs
         simp [dataAt, scalarAt, hexBytes_hex, hle]
+  | .digest b, _, d, x, y, h, hs, hn, .digest hle, _ => by
+    simp only [dataSx, digestSx, Option.some.injEq] at h; subst h
+    obtain ⟨q, rfl⟩ := same_atom hs
+    cases d with
+    | zero => simp [need, atom] at hn
+    | succ d => simp [dataAt, scalarAt, hexBytes_hex, hle]
   | .record fs, _, d, x, y, h, hs, hn, .record hrow, hwf => by
     simp only [dataSx, bind, Option.bind_eq_some_iff, pure, Option.some.injEq] at h
     obtain ⟨xs, hxs, rfl⟩ := h
@@ -282,6 +294,7 @@ inductive Canon : Term → Prop
   | nat {n : Nat} : Canon (.nat n)
   | bool {b : Bool} : Canon (.bool b)
   | bytes {s : ByteArray} : Canon (.bytes s)
+  | digest {s : ByteArray} : Canon (.digest s)
   | prim {p : Prim} {a b : Term} : Canon a → Canon b → Canon (.prim p a b)
   | record {fs : List (Label × Term)} : Row.ascending fs = true → CanonRow fs → Canon (.record fs)
   | get {t : Term} {ℓ : Label} : Canon t → Canon (.get t ℓ)
@@ -342,7 +355,7 @@ theorem isReserved_name (m : Nat) : isReserved (name m) = false := by
   have hk : ∀ w ∈ keywords, name m ≠ w := by
     intro w hw
     simp only [keywords, List.mem_cons, List.not_mem_nil, or_false] at hw
-    rcases hw with rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl <;> exact name_ne (by simp)
+    rcases hw with rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl <;> exact name_ne (by simp)
   have hp : primOf (name m) = none := by
     unfold primOf; split <;> first | rfl | (rename_i h; exact absurd h (name_ne (by simp)))
   simp only [isReserved, isLiteral_name, hp, Option.isSome_none, Bool.or_false, Bool.false_or]
@@ -375,7 +388,7 @@ theorem term_unreserved_head {d : Nat} {sc : List String} {p q i : Nat} {w : Str
   have hk2 : w ∉ keywords := fun h => by simp [h] at hk
   have hp2 : primOf w = none := by cases h : primOf w <;> simp_all
   simp only [keywords, List.mem_cons, List.not_mem_nil, or_false, not_or] at hk2
-  obtain ⟨k1, k2, k3, k4, k5, k6, k7, k8, k9, k10, k11⟩ := hk2
+  obtain ⟨k1, k2, k3, k4, k5, k6, k7, k8, k9, k10, k11, k12⟩ := hk2
   simp only [isLiteral, Bool.or_eq_false_iff, decide_eq_false_iff_not, Option.isSome_eq_false_iff,
     Option.isNone_iff_eq_none] at hl
   obtain ⟨⟨⟨ht, hf⟩, hn⟩, hh⟩ := hl
@@ -390,7 +403,7 @@ theorem term_unreserved_head {d : Nat} {sc : List String} {p q i : Nat} {w : Str
   match args, hm with
   | [], _ => exact absurd rfl hne
   | [a], hm =>
-    simp [Read.term, hn, hh, hi, hm, k2, k4, k6, k7, k9, k11]; rfl
+    simp [Read.term, hn, hh, hi, hm, k2, k4, k6, k7, k9, k11, k12]; rfl
   | [a, b], hm =>
     obtain ⟨ta, ts, ha, hm1, h1⟩ := mapM_cons_ok hm
     obtain ⟨tb, ts2, hb, hm2, h2⟩ := mapM_cons_ok hm1
@@ -461,7 +474,8 @@ theorem term_hex (d : Nat) (sc : List String) (q : Nat) (b : ByteArray) :
 
 /-- A printed term in head position is never a keyword that a two-element form could start with. -/
 theorem head_not_kw {k : Nat} {f : Term} {F Y : SExp} (h : termSx k f = some F) (hs : Same F Y) :
-    ∀ q s, Y = .atom q s → s ≠ "fn" ∧ s ≠ "fix" ∧ s ≠ "record" ∧ s ≠ "extend" ∧ s ≠ "case" ∧ s ≠ "ref" := by
+    ∀ q s, Y = .atom q s → s ≠ "fn" ∧ s ≠ "fix" ∧ s ≠ "record" ∧ s ≠ "extend" ∧ s ≠ "case" ∧ s ≠ "ref" ∧
+      s ≠ "digest" := by
   intro q s hY
   subst hY
   cases f with
@@ -471,14 +485,15 @@ theorem head_not_kw {k : Nat} {f : Term} {F Y : SExp} (h : termSx k f = some F) 
     · simp only [Option.some.injEq] at h; subst h
       cases hs
       exact ⟨name_ne (by simp), name_ne (by simp), name_ne (by simp), name_ne (by simp), name_ne (by simp),
-        name_ne (by simp)⟩
+        name_ne (by simp), name_ne (by simp)⟩
     · cases h
   | nat n =>
     simp only [termSx, Option.some.injEq] at h; subst h
     cases hs
     exact ⟨repr_ne (c := 'f') (by simp) (by decide), repr_ne (c := 'f') (by simp) (by decide),
       repr_ne (c := 'r') (by simp) (by decide), repr_ne (c := 'e') (by simp) (by decide),
-      repr_ne (c := 'c') (by simp) (by decide), repr_ne (c := 'r') (by simp) (by decide)⟩
+      repr_ne (c := 'c') (by simp) (by decide), repr_ne (c := 'r') (by simp) (by decide),
+      repr_ne (c := 'd') (by simp) (by decide)⟩
   | bool b =>
     simp only [termSx, Option.some.injEq] at h; subst h
     cases hs
@@ -491,9 +506,10 @@ theorem head_not_kw {k : Nat} {f : Term} {F Y : SExp} (h : termSx k f = some F) 
       have hd (w : String) (c : Char) (hw : w.toList.head? = some c) (hc : c ≠ '#') : "#" ++ hex b ≠ w :=
         ne_of_head (by simp) hw (fun e => hc e.symm)
       exact ⟨hd _ 'f' (by simp) (by decide), hd _ 'f' (by simp) (by decide), hd _ 'r' (by simp) (by decide),
-        hd _ 'e' (by simp) (by decide), hd _ 'c' (by simp) (by decide), hd _ 'r' (by simp) (by decide)⟩
+        hd _ 'e' (by simp) (by decide), hd _ 'c' (by simp) (by decide), hd _ 'r' (by simp) (by decide),
+        hd _ 'd' (by simp) (by decide)⟩
   | lam _ _ | app _ _ | fix _ | prim _ _ _ | record _ | get _ _ | extend _ _ | inj _ _ _ | case _ _
-  | ite _ _ _ | ref _ =>
+  | ite _ _ _ | ref _ | digest _ =>
     simp only [termSx, bind, Option.bind_eq_some_iff, pure, Option.some.injEq] at h
     first
     | (obtain ⟨_, _, rfl⟩ := h; cases hs)
@@ -503,13 +519,14 @@ theorem head_not_kw {k : Nat} {f : Term} {F Y : SExp} (h : termSx k f = some F) 
     | (subst h; cases hs)
 
 theorem term_app {d : Nat} {sc : List String} {p : Nat} {Y1 Y2 : SExp} {f a : Term}
-    (hkw : ∀ q s, Y1 = .atom q s → s ≠ "fn" ∧ s ≠ "fix" ∧ s ≠ "record" ∧ s ≠ "extend" ∧ s ≠ "case" ∧ s ≠ "ref")
+    (hkw : ∀ q s, Y1 = .atom q s → s ≠ "fn" ∧ s ≠ "fix" ∧ s ≠ "record" ∧ s ≠ "extend" ∧ s ≠ "case" ∧ s ≠ "ref" ∧
+      s ≠ "digest")
     (h1 : Read.term d sc Y1 = .ok f) (h2 : Read.term d sc Y2 = .ok a) :
     Read.term (d + 1) sc (.list p [Y1, Y2]) = .ok (.app f a) := by
   cases Y1 with
   | atom q s =>
-    obtain ⟨k1, k2, k3, k4, k5, k6⟩ := hkw q s rfl
-    simp [Read.term, appAll, h1, h2, k1, k2, k3, k4, k5, k6]
+    obtain ⟨k1, k2, k3, k4, k5, k6, k7⟩ := hkw q s rfl
+    simp [Read.term, appAll, h1, h2, k1, k2, k3, k4, k5, k6, k7]
     rfl
   | str q s =>
     simp [Read.term, appAll, h1, h2]
@@ -554,6 +571,17 @@ theorem term_termSx : ∀ (t : Term) (k d : Nat) {x y : SExp}, termSx k t = some
         simp [Read.term]
       · obtain ⟨q, rfl⟩ := same_atom hs
         exact term_hex d _ q b
+  | .digest b, k, d, x, y, h, hs, hn, _ => by
+    simp only [termSx, digestSx, Option.some.injEq] at h; subst h
+    obtain ⟨q, ys, rfl, hl⟩ := same_list hs
+    obtain ⟨y0, ys, rfl, h0, hl⟩ := sameL_cons hl
+    obtain ⟨y1, ys, rfl, h1, hl⟩ := sameL_cons hl
+    cases sameL_nil hl
+    obtain ⟨r, rfl⟩ := same_atom h0
+    obtain ⟨r', rfl⟩ := same_atom h1
+    cases d with
+    | zero => simp [need, list] at hn
+    | succ d => simp [Read.term, hexBytes_hex]
   | .ref i, k, d, x, y, h, hs, hn, _ => by
     simp only [termSx, Option.some.injEq] at h; subst h
     obtain ⟨q, ys, rfl, hl⟩ := same_list hs
@@ -845,7 +873,7 @@ theorem kw_ok (s : String) (h : s.toList ≠ [] ∧ s.toList.all (fun c => !isDe
 
 mutual
 theorem tySx_ok : ∀ (T : Ty) {x : SExp}, tySx T = some x → Ok x
-  | .nat, _, h | .bool, _, h | .bytes, _, h => by
+  | .nat, _, h | .bool, _, h | .bytes, _, h | .digest, _, h => by
     simp only [tySx, Option.some.injEq] at h; subst h; exact kw_ok _
   | .fn a b, _, h => by
     simp only [tySx, bind, Option.bind_eq_some_iff, pure, Option.some.injEq] at h
@@ -874,6 +902,9 @@ theorem termSx_ok : ∀ (t : Term) (k : Nat) {x : SExp}, termSx k t = some x →
   | .nat n, _, _, h => by simp only [termSx, Option.some.injEq] at h; subst h; exact repr_ok n
   | .bool b, _, _, h => by simp only [termSx, Option.some.injEq] at h; subst h; cases b <;> exact kw_ok _
   | .bytes b, _, _, h => by simp only [termSx, Option.some.injEq] at h; subst h; exact bytesSx_ok b
+  | .digest b, _, _, h => by
+    simp only [termSx, digestSx, Option.some.injEq] at h; subst h
+    exact .list (.cons (kw_ok _) (.cons (hexAtom_ok b) .nil))
   | .ref i, _, _, h => by
     simp only [termSx, Option.some.injEq] at h; subst h
     exact .list (.cons (kw_ok _) (.cons (repr_ok i) .nil))
@@ -939,6 +970,7 @@ theorem dataSx_ok : ∀ (v : Data) {x : SExp}, dataSx v = some x → Ok x
   | .nat n, _, h => by simp only [dataSx, Option.some.injEq] at h; subst h; exact repr_ok n
   | .bool b, _, h => by simp only [dataSx, Option.some.injEq] at h; subst h; cases b <;> exact kw_ok _
   | .bytes b, _, h => by simp only [dataSx, Option.some.injEq] at h; subst h; exact bytesSx_ok b
+  | .digest b, _, h => by simp only [dataSx, digestSx, Option.some.injEq] at h; subst h; exact hexAtom_ok b
   | .record fs, _, h => by
     simp only [dataSx, bind, Option.bind_eq_some_iff, pure, Option.some.injEq] at h
     obtain ⟨xs, hxs, rfl⟩ := h
@@ -1135,6 +1167,7 @@ theorem hasType_canon {Δ : List Ty} (hΔ : ∀ A ∈ Δ, A.wf = true) :
   | _, _, _, _, .nat _ => .nat
   | _, _, _, _, .bool => .bool
   | _, _, _, _, .bytes _ => .bytes
+  | _, _, _, _, .digest _ => .digest
   | _, _, _, hΓ, .prim ha hb => .prim (hasType_canon hΔ hΓ ha) (hasType_canon hΔ hΓ hb)
   | _, _, _, hΓ, .record hasc hfs => .record hasc (fieldsTy_canon hΔ hΓ hfs)
   | _, _, _, hΓ, .get ht _ => .get (hasType_canon hΔ hΓ ht)

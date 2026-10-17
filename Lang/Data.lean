@@ -15,6 +15,7 @@ inductive Data
   | nat (value : Nat)
   | bool (value : Bool)
   | bytes (value : ByteArray)
+  | digest (value : ByteArray)
   | record (fields : List (Label × Data))
   | inj (label : Label) (payload : Data)
   deriving Inhabited
@@ -24,6 +25,7 @@ def Data.toVal : Data → Val
   | .nat n => .nat n
   | .bool b => .bool b
   | .bytes s => .bytes s
+  | .digest s => .digest s
   | .record fs => .record (Data.rowToVal fs)
   | .inj ℓ d => .inj ℓ d.toVal
 
@@ -58,6 +60,7 @@ def Machine.extract (m : Machine) : Ty → Nat → Val → Except Fault (Data ×
   | .nat, fuel, .nat n => .ok (.nat n, fuel)
   | .bool, fuel, .bool b => .ok (.bool b, fuel)
   | .bytes, fuel, .bytes s => .ok (.bytes s, fuel)
+  | .digest, fuel, .digest s => .ok (.digest s, fuel)
   | .record row, fuel, v =>
       match m.unknot fuel fuel v with
       | .ok (fs, fuel') =>
@@ -94,6 +97,19 @@ def Machine.extractRow (m : Machine) :
         | .error e => .error e
       else .error .stuck
   | _, _, _ => .error .stuck
+end
+
+mutual
+/-- The digests in data, in order: what a boundary asks the World's `digestOf` about (LANG-38). -/
+def Data.digests : Data → List ByteArray
+  | .digest s => [s]
+  | .nat _ | .bool _ | .bytes _ => []
+  | .record fs => Data.rowDigests fs
+  | .inj _ d => d.digests
+
+def Data.rowDigests : List (Label × Data) → List ByteArray
+  | [] => []
+  | (_, d) :: fs => d.digests ++ Data.rowDigests fs
 end
 
 /-- A field of record data (first match, as selection reads it). -/

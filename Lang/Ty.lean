@@ -14,6 +14,9 @@ inductive Ty
   | nat
   | bool
   | bytes
+  /-- An id the kernel names a cell or a member by (LANG-38): never made from bytes, compared only
+  by `deq`, and the only type a call's id field, a request's member or object, or an id literal has. -/
+  | digest
   | fn (dom cod : Ty)
   | record (row : List (Label × Ty))
   | sum (row : List (Label × Ty))
@@ -22,7 +25,7 @@ inductive Ty
 mutual
 /-- Structural equality; `DecidableEq Ty` is built on it (deriving does not reach nested rows). -/
 def Ty.beq : Ty → Ty → Bool
-  | .nat, .nat | .bool, .bool | .bytes, .bytes => true
+  | .nat, .nat | .bool, .bool | .bytes, .bytes | .digest, .digest => true
   | .fn a b, .fn c d => Ty.beq a c && Ty.beq b d
   | .record r, .record s => Ty.rowBeq r s
   | .sum r, .sum s => Ty.rowBeq r s
@@ -36,7 +39,7 @@ end
 
 mutual
 private theorem Ty.eq_of_beq : (a b : Ty) → Ty.beq a b = true → a = b
-  | .nat, .nat, _ | .bool, .bool, _ | .bytes, .bytes, _ => rfl
+  | .nat, .nat, _ | .bool, .bool, _ | .bytes, .bytes, _ | .digest, .digest, _ => rfl
   | .fn a b, .fn c d, h => by
       simp only [Ty.beq, Bool.and_eq_true] at h
       rw [Ty.eq_of_beq a c h.1, Ty.eq_of_beq b d h.2]
@@ -46,16 +49,13 @@ private theorem Ty.eq_of_beq : (a b : Ty) → Ty.beq a b = true → a = b
   | .sum r, .sum s, h => by
       simp only [Ty.beq] at h
       rw [Ty.rowEq_of_rowBeq r s h]
-  | .nat, .bool, h | .nat, .bytes, h | .nat, .fn _ _, h | .nat, .record _, h | .nat, .sum _, h
-  | .bool, .nat, h | .bool, .bytes, h | .bool, .fn _ _, h | .bool, .record _, h | .bool, .sum _, h
-  | .bytes, .nat, h | .bytes, .bool, h | .bytes, .fn _ _, h | .bytes, .record _, h
-  | .bytes, .sum _, h
-  | .fn _ _, .nat, h | .fn _ _, .bool, h | .fn _ _, .bytes, h | .fn _ _, .record _, h
-  | .fn _ _, .sum _, h
-  | .record _, .nat, h | .record _, .bool, h | .record _, .bytes, h | .record _, .fn _ _, h
-  | .record _, .sum _, h
-  | .sum _, .nat, h | .sum _, .bool, h | .sum _, .bytes, h | .sum _, .fn _ _, h
-  | .sum _, .record _, h => by simp [Ty.beq] at h
+  | .nat, .bool, h | .nat, .bytes, h | .nat, .digest, h | .nat, .fn _ _, h | .nat, .record _, h | .nat, .sum _, h
+  | .bool, .nat, h | .bool, .bytes, h | .bool, .digest, h | .bool, .fn _ _, h | .bool, .record _, h | .bool, .sum _, h
+  | .bytes, .nat, h | .bytes, .bool, h | .bytes, .digest, h | .bytes, .fn _ _, h | .bytes, .record _, h | .bytes, .sum _, h
+  | .digest, .nat, h | .digest, .bool, h | .digest, .bytes, h | .digest, .fn _ _, h | .digest, .record _, h | .digest, .sum _, h
+  | .fn _ _, .nat, h | .fn _ _, .bool, h | .fn _ _, .bytes, h | .fn _ _, .digest, h | .fn _ _, .record _, h | .fn _ _, .sum _, h
+  | .record _, .nat, h | .record _, .bool, h | .record _, .bytes, h | .record _, .digest, h | .record _, .fn _ _, h | .record _, .sum _, h
+  | .sum _, .nat, h | .sum _, .bool, h | .sum _, .bytes, h | .sum _, .digest, h | .sum _, .fn _ _, h | .sum _, .record _, h => by simp [Ty.beq] at h
 
 private theorem Ty.rowEq_of_rowBeq :
     (r s : List (Label × Ty)) → Ty.rowBeq r s = true → r = s
@@ -68,7 +68,7 @@ end
 
 mutual
 private theorem Ty.beq_self : (a : Ty) → Ty.beq a a = true
-  | .nat | .bool | .bytes => rfl
+  | .nat | .bool | .bytes | .digest => rfl
   | .fn a b => by simp only [Ty.beq, Ty.beq_self a, Ty.beq_self b, Bool.and_self]
   | .record r => by simp only [Ty.beq]; exact Ty.rowBeq_self r
   | .sum r => by simp only [Ty.beq]; exact Ty.rowBeq_self r
@@ -86,7 +86,7 @@ instance : DecidableEq Ty := fun a b =>
 mutual
 /-- Every row in the type is canonical. -/
 def Ty.wf : Ty → Bool
-  | .nat | .bool | .bytes => true
+  | .nat | .bool | .bytes | .digest => true
   | .fn a b => a.wf && b.wf
   | .record r => Row.ascending r && Ty.rowWf r
   | .sum r => Row.ascending r && Ty.rowWf r
@@ -99,7 +99,7 @@ end
 mutual
 /-- First-order data: what an object's state, a method's arguments and a result can be. -/
 def Ty.isData : Ty → Bool
-  | .nat | .bool | .bytes => true
+  | .nat | .bool | .bytes | .digest => true
   | .fn _ _ => false
   | .record r => Ty.rowData r
   | .sum r => Ty.rowData r

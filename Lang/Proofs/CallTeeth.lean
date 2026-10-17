@@ -9,7 +9,8 @@ slot carrying an invoke checks; a slot arm with the right label at the wrong typ
 sum, are refused `badMethod`; a transfer in an `invoke`-only slot is `illTyped`. Liveness
 (`Lang.Proofs.CallLive`): its premises are met by a real calls row (`invokeRow_conforms`), the
 non-digest refusal above is the one it allows (`not_digest_is_live`), and a refusal naming a field
-that holds no bytes (`method`) is not (`method_named_not_live`). A call read from an
+that holds no digest, a nat (`method`) or bytes (`args`), is not (`method_named_not_live`,
+`args_named_not_live`). A call read from an
 invoke-only slot is an invoke (`skip_none_kind`), and the Sim's digest codec meets
 `bodyOf_callData`'s premise (`sim_digest_roundtrip`, `bodyOf_callData_sim`).
 -/
@@ -27,7 +28,7 @@ private def obj8 : ByteArray := ⟨#[1, 2, 3, 4, 5, 6, 7, 8]⟩
 
 private def invokeD (obj : ByteArray) : Data :=
   .inj "invoke" (.record [("args", .bytes .empty), ("budget", .nat 10), ("method", .nat 0),
-    ("obj", .bytes obj), ("via", .inj "none" (.record []))])
+    ("obj", .digest obj), ("via", .inj "none" (.record []))])
 
 private def callsIs (e : Except (Refusal ByteArray) (List (Body ByteArray))) (bs : List (Body ByteArray)) : Bool :=
   match e with
@@ -99,7 +100,7 @@ private def goWith (slot : Term) : Term :=
 /-- An `invoke` call of call type `T`. -/
 private def anInvoke (T : Ty) : Term :=
   .inj T "invoke" (.record [("args", .bytes .empty), ("budget", .nat 1), ("method", .nat 0),
-    ("obj", .bytes .empty), ("via", .inj (optTy .bytes) "none" (.record []))])
+    ("obj", .digest .empty), ("via", .inj (optTy .digest) "none" (.record []))])
 
 /-- The control: an invoke-only slot carrying an invoke installs. -/
 theorem slot_invoke_checks : isOkC ((slotPkg [invokeOnly] (goWith (someCallT invokeOnly (anInvoke invokeOnly)))).checkWith []) = true := by
@@ -109,7 +110,7 @@ theorem slot_invoke_checks : isOkC ((slotPkg [invokeOnly] (goWith (someCallT inv
 method's type is refused `badMethod`. -/
 theorem slot_wrong_arm_type :
     let bad : Ty := .sum [("invoke", .record [("args", .bytes), ("budget", .bytes), ("method", .nat),
-      ("obj", .bytes), ("via", optTy .bytes)])]
+      ("obj", .digest), ("via", optTy .digest)])]
     isBadMethod ((slotPkg [bad] (goWith (noCallT bad))).checkWith []) = true := by
   decide +kernel
 
@@ -121,8 +122,8 @@ theorem slot_empty_sum :
 /-- An invoke-only slot carrying a transfer does not check: `illTyped`. -/
 theorem slot_kind_outside :
     let tr : Term := .inj invokeOnly "transfer" (.record [("amount", .nat 1),
-      ("dst", .inj acctRefTy "well" (.bytes .empty)), ("once", .inj (optTy .bytes) "none" (.record [])),
-      ("src", .inj acctRefTy "well" (.bytes .empty)), ("via", .inj (optTy .bytes) "none" (.record []))])
+      ("dst", .inj acctRefTy "well" (.digest .empty)), ("once", .inj (optTy .bytes) "none" (.record [])),
+      ("src", .inj acctRefTy "well" (.digest .empty)), ("via", .inj (optTy .digest) "none" (.record []))])
     isIllTyped ((slotPkg [invokeOnly] (goWith (someCallT invokeOnly tr))).checkWith []) = true := by
   decide +kernel
 
@@ -132,12 +133,12 @@ private def invokeSlot : Ty := callOf ["invoke"]
 
 theorem invokeSlot_ok : callSlotOk invokeSlot = true := by decide
 
-theorem invokeD_conforms (obj : ByteArray) (h : obj.size ≤ Bounds.bytesMax) : Conforms (invokeD obj) invokeSlot :=
+theorem invokeD_conforms (obj : ByteArray) (h : obj.size ≤ Bounds.digestBytesMax) : Conforms (invokeD obj) invokeSlot :=
   .inj rfl (.record (.cons (.bytes (by decide)) (.cons (.nat (by decide)) (.cons (.nat (by decide))
-    (.cons (.bytes h) (.cons (.inj (A := .record []) rfl (.record .nil)) .nil))))))
+    (.cons (.digest h) (.cons (.inj (A := .record []) rfl (.record .nil)) .nil))))))
 
 /-- A one-slot calls row holding an invoke conforms to `callsTy [invoke-only]`. -/
-theorem invokeRow_conforms (obj : ByteArray) (h : obj.size ≤ Bounds.bytesMax) :
+theorem invokeRow_conforms (obj : ByteArray) (h : obj.size ≤ Bounds.digestBytesMax) :
     Conforms (.record [("c0", .inj "some" (invokeD obj))]) (callsTy [invokeSlot]) :=
   .record (.cons (.inj (A := invokeSlot) rfl (invokeD_conforms obj h)) .nil)
 
@@ -162,7 +163,7 @@ theorem names_one {p : List Label} {f : String} (h : Names p f) (hf : '.' ∉ f.
 
 /-- The row's `method` field is a nat: no bytes sit at path `c0.method`. -/
 theorem no_bytes_at_method {b : ByteArray} {q : List Label}
-    (hb : BytesAt b q (.inj "some" (invokeD ⟨#[120, 121, 122]⟩))) (hq : q = ["method"]) : False := by
+    (hb : DigestAt b q (.inj "some" (invokeD ⟨#[120, 121, 122]⟩))) (hq : q = ["method"]) : False := by
   simp only [invokeD] at hb
   cases hb with
   | arm _ => simp at hq
@@ -194,6 +195,41 @@ theorem method_named_not_live :
     have hf : f = "method" := c0_named (g := "method") he.symm
     subst hf
     exact no_bytes_at_method hb (names_one hn (by decide))
+
+/-- The row's `args` field is bytes, never a digest: no digest leaf sits at path `c0.args`. -/
+theorem no_digest_at_args {b : ByteArray} {q : List Label}
+    (hb : DigestAt b q (.inj "some" (invokeD ⟨#[120, 121, 122]⟩))) (hq : q = ["args"]) : False := by
+  simp only [invokeD] at hb
+  cases hb with
+  | arm _ => simp at hq
+  | inj hb =>
+    cases hb with
+    | arm _ => simp at hq
+    | inj hb =>
+      cases hb with
+      | field hm hb =>
+        simp only [List.cons.injEq] at hq
+        obtain ⟨rfl, rfl⟩ := hq
+        simp at hm
+        subst hm
+        cases hb
+
+/-- **Only a digest field is refused as not a digest** (cv 01a14aab-adae, LANG-38). `dig8` refuses
+the row's empty `args` bytes as a digest, and before LANG-38 a refusal naming `args` was a
+`DigestRefusal` (every bytes leaf was a candidate id). `args` is typed `bytes` now, so a refusal
+naming it is not one `callsOf_live` allows. -/
+theorem args_named_not_live :
+    ¬ DigestRefusal dig8 (.record [("c0", .inj "some" (invokeD ⟨#[120, 121, 122]⟩))])
+      (.program "calls: c0 args: not a digest") := by
+  rintro ⟨ℓ, p, f, b, -, hb, hn, he⟩
+  cases hb with
+  | field hm hb =>
+    simp only [List.mem_singleton, Prod.mk.injEq] at hm
+    obtain ⟨rfl, rfl⟩ := hm
+    simp only [Refusal.program.injEq] at he
+    have hf : f = "args" := c0_named (g := "args") he.symm
+    subst hf
+    exact no_digest_at_args hb (names_one hn (by decide))
 
 /-- A call read from an invoke-only slot is an invoke, the row's one call. -/
 theorem skip_none_kind {bs : List (Body ByteArray)}

@@ -103,6 +103,7 @@ theorem derives_leads : ∀ {env : Env} {t : Term} {r : (Except Fault Val)} {n :
     ∀ (k : List Frame) (d : Nat), ∃ D m, n ≤ m ∧ Leads lib (d + D) ⟨.eval t env, k, d⟩ k d r m
   | _, _, _, _, .var he, k, d => ⟨0, _, Nat.le_refl _, .cons (by simp [step, he]) (Nat.le_refl _) (.ok .refl)⟩
   | _, _, _, _, .lam, k, d | _, _, _, _, .nat, k, d | _, _, _, _, .bool, k, d | _, _, _, _, .bytes, k, d
+  | _, _, _, _, .digest, k, d
   | _, _, _, _, .record, k, d => ⟨0, _, Nat.le_refl _, .cons rfl (Nat.le_refl _) (.ok .refl)⟩
   | _, _, _, _, .app (a := a) (env := env) (b := b) (cenv := cenv) hf ha hb, k, d => by
     obtain ⟨Df, mf, hf', lf⟩ := derives_leads hf (.appL a env :: k) (d + 1)

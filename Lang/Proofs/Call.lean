@@ -226,19 +226,19 @@ end
 section
 variable {bytesOf : D → ByteArray}
 
-theorem conf_digest (hb : ∀ x, (bytesOf x).size ≤ Bounds.bytesMax) (x : D) :
-    Conforms (digestData bytesOf x) .bytes := .bytes (hb x)
+theorem conf_digest (hb : ∀ x, (bytesOf x).size ≤ Bounds.digestBytesMax) (x : D) :
+    Conforms (digestData bytesOf x) .digest := .digest (hb x)
 
-theorem conf_optDigest (hb : ∀ x, (bytesOf x).size ≤ Bounds.bytesMax) :
-    ∀ v : Option D, Conforms (optData (digestData bytesOf) v) (optTy .bytes)
+theorem conf_optDigest (hb : ∀ x, (bytesOf x).size ≤ Bounds.digestBytesMax) :
+    ∀ v : Option D, Conforms (optData (digestData bytesOf) v) (optTy .digest)
   | none => .inj (A := .record []) rfl (.record .nil)
-  | some x => .inj (A := .bytes) rfl (conf_digest hb x)
+  | some x => .inj (A := .digest) rfl (conf_digest hb x)
 
-theorem conf_acct (hb : ∀ x, (bytesOf x).size ≤ Bounds.bytesMax) :
+theorem conf_acct (hb : ∀ x, (bytesOf x).size ≤ Bounds.digestBytesMax) :
     ∀ a : AcctRef D, Conforms (acctRefData bytesOf a) acctRefTy
-  | .of o a => .inj (A := .record [("asset", .bytes), ("owner", .bytes)]) rfl
+  | .of o a => .inj (A := .record [("asset", .digest), ("owner", .digest)]) rfl
       (.record (.cons (conf_digest hb a) (.cons (conf_digest hb o) .nil)))
-  | .well a => .inj (A := .bytes) rfl (conf_digest hb a)
+  | .well a => .inj (A := .digest) rfl (conf_digest hb a)
 
 theorem conf_right : ∀ r : Right, rightFits r = true → Conforms (rightData r) rightTy
   | .enroll n, h => .inj (A := .nat) rfl (.nat (by simpa [rightFits] using h))
@@ -263,7 +263,7 @@ theorem conf_rights : ∀ {ls : List Label} {rs : List Right} {fs : List (Label 
 
 /-- **In-bounds call data is a value of `callTy`**: so a method can return every callable Body
 whose literals are values of the language (`callFits`), given the digest codec's bound. -/
-theorem callData_conforms (hb : ∀ x, (bytesOf x).size ≤ Bounds.bytesMax) {b : Body D} {d : Data}
+theorem callData_conforms (hb : ∀ x, (bytesOf x).size ≤ Bounds.digestBytesMax) {b : Body D} {d : Data}
     (hf : callFits b = true) (h : callData bytesOf b = some d) : Conforms d callTy := by
   cases b with
   | account asset owner =>

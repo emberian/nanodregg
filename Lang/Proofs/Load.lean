@@ -32,7 +32,7 @@ theorem Inv.empty : Inv ⟨[], [], []⟩ := ⟨rfl, rfl, by simp, by simp⟩
 
 mutual
 theorem relocate_id : ∀ t : Term, t.relocate (fun i => i) = t
-  | .var _ | .nat _ | .bool _ | .bytes _ | .ref _ => rfl
+  | .var _ | .nat _ | .bool _ | .bytes _ | .digest _ | .ref _ => rfl
   | .lam _ b => by simp [Term.relocate, relocate_id b]
   | .app f a => by simp [Term.relocate, relocate_id f, relocate_id a]
   | .fix t => by simp [Term.relocate, relocate_id t]
@@ -128,9 +128,9 @@ theorem readPackage_wire {D : Type} {look : Pinned D} {id : D} {p : Package}
         · simp at hb
       · simp at h
 
-theorem admitPackage_inv {D : Type} {idb : ByteArray} {p : Package} {acc L : Loaded}
+theorem admitPackage_inv {D : Type} {digestOf : ByteArray → Option D} {idb : ByteArray} {p : Package} {acc L : Loaded}
     {gis : List Nat} {g : Nat} (hi : Inv acc) (hpw : Wire.packageWire p = true)
-    (h : admitPackage (D := D) idb p acc gis = .ok (L, g)) :
+    (h : admitPackage digestOf idb p acc gis = .ok (L, g)) :
     Inv L ∧ g < L.pkgs.length ∧ L.pkgs = acc.pkgs ++ [p] := by
   obtain ⟨hids, hlib, hty, hck⟩ := hi
   unfold admitPackage at h
@@ -140,6 +140,8 @@ theorem admitPackage_inv {D : Type} {idb : ByteArray} {p : Package} {acc L : Loa
     split at h
     · simp at h
     · rename_i hc
+      split at h
+      · simp at h
       simp only [Except.ok.injEq, Prod.mk.injEq] at h
       obtain ⟨rfl, rfl⟩ := h
       have hΔ : Loaded.ifaces ⟨acc.ids ++ [idb], acc.lib ++ [p.body.relocate fun i => gis.getD i 0],
@@ -363,7 +365,7 @@ theorem install_loads {D : Type} {digestOf : ByteArray → Option D} {look : Pin
       unfold load
       simp only [indexIn, idOf, hid, hp, closureDepthMax] at hl ⊢
       rw [hl]
-      simp only [admitPackage, hif, hc]
+      simp only [admitPackage, hif, hc, h]
     · simp only [hd]
     · simp [hinv.1]
 

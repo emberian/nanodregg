@@ -21,8 +21,8 @@ namespace Nanodregg.Lang
 
 open Nanodregg.Kernel Nanodregg.Kernel.Receive
 
-theorem readState_go_conforms {s : Slots} :
-    ∀ (row : List (Label × Ty)) (i : Nat) {d : Data}, readState.go s row i = .ok d →
+theorem readState_go_conforms {D : Type} {digestOf : ByteArray → Option D} {s : Slots} :
+    ∀ (row : List (Label × Ty)) (i : Nat) {d : Data}, readState.go digestOf s row i = .ok d →
       Conforms d (.record row)
   | [], _, d, h => by
     unfold readState.go at h; simp only [Except.ok.injEq] at h; subst h; exact .record .nil
@@ -33,21 +33,23 @@ theorem readState_go_conforms {s : Slots} :
     · rename_i b _
       split at h
       · rename_i d1 ds hd hr
-        cases h
-        have h2 := readState_go_conforms row (i + 1) hr
-        cases h2 with
-        | record hrow => exact .record (.cons (decodeData_conforms hd) hrow)
+        split at h
+        · cases h
+          have h2 := readState_go_conforms row (i + 1) hr
+          cases h2 with
+          | record hrow => exact .record (.cons (decodeData_conforms hd) hrow)
+        · simp at h
       all_goals simp at h
 
-theorem readState_conforms {row : List (Label × Ty)} {s : Slots} {d : Data}
-    (h : readState row s = .ok d) : Conforms d (.record row) :=
+theorem readState_conforms {D : Type} {digestOf : ByteArray → Option D} {row : List (Label × Ty)} {s : Slots}
+    {d : Data} (h : readState digestOf row s = .ok d) : Conforms d (.record row) :=
   readState_go_conforms row 0 h
 
 theorem reqOk_conforms {D : Type} {bytesOf : D → ByteArray} {r : Req D} (h : reqOk bytesOf r = true) :
     Conforms (reqData bytesOf r) reqTy := by
   simp only [reqOk, Bool.and_eq_true, decide_eq_true_eq] at h
   obtain ⟨⟨⟨⟨⟨ha, hp⟩, hs⟩, hnb⟩, hvu⟩, ho⟩ := h
-  refine .record (.cons (.bytes ha) (.cons (.nat hnb) (.cons ?_ (.cons (.bytes hp) (.cons (.bytes hs)
+  refine .record (.cons (.digest ha) (.cons (.nat hnb) (.cons ?_ (.cons (.digest hp) (.cons (.digest hs)
     (.cons (.nat hvu) .nil))))))
   cases hr : r.occasion with
   | birth => exact .inj rfl (.record .nil)
@@ -190,7 +192,7 @@ theorem invoke_never_stuck {D : Type} {bytesOf : D → ByteArray} {digestOf : By
     (hload : load digestOf look fuel idb ⟨[], [], []⟩ = .ok (L, g))
     (hp : L.pkgs[g]? = some p)
     (hm : Row.find? ℓ (recordRow p.iface) = some mty) (hA : methodSig p.state mty = some (A, ks))
-    (hstate : readState (recordRow p.state) state = .ok sd)
+    (hstate : readState digestOf (recordRow p.state) state = .ok sd)
     (hargs : Wire.decodeData A args = .ok ad)
     (hr : reqOk bytesOf r = true) :
     RunOK L.ifaces (resultTy p.state ks)
@@ -209,8 +211,8 @@ theorem law_never_stuck {D : Type} {bytesOf : D → ByteArray} {digestOf : ByteA
     {ℓ : Label} {old new : Slots} {od nd : Data} {r : Req D} {ticks : Nat}
     (hload : load digestOf look fuel idb ⟨[], [], []⟩ = .ok (L, g))
     (hp : L.pkgs[g]? = some p) (hl : ℓ ∈ p.laws)
-    (hold : readState (recordRow p.state) old = .ok od)
-    (hnew : readState (recordRow p.state) new = .ok nd)
+    (hold : readState digestOf (recordRow p.state) old = .ok od)
+    (hnew : readState digestOf (recordRow p.state) new = .ok nd)
     (hr : reqOk bytesOf r = true) :
     RunOK L.ifaces verdictTy
       (run L.lib Bounds.stackMax ticks 0
@@ -234,10 +236,10 @@ theorem law_never_stuck {D : Type} {bytesOf : D → ByteArray} {digestOf : ByteA
 /-- What `argsOf` produces decodes, at the argument type `resolveMethod` gives the package, to the
 data the text read to: so the run (`runMeasured`, which resolves the same method) decodes a
 planned call's arguments. -/
-theorem argsOf_decodes {D : Type} [DecidableEq D] {look : Pinned D} {pkg : D} {method : Nat}
-    {text : String} {b : ByteArray} (h : argsOf look pkg method text = .ok b) :
+theorem argsOf_decodes {D : Type} [DecidableEq D] {digestOf : ByteArray → Option D} {look : Pinned D}
+    {pkg : D} {method : Nat} {text : String} {b : ByteArray} (h : argsOf digestOf look pkg method text = .ok b) :
     ∃ p ℓ A ks d, readPackage look pkg = .ok p ∧ resolveMethod (D := D) p method = .ok (ℓ, A, ks) ∧
-      readAt (D := D) A text = .ok d ∧ Wire.decodeData A b = .ok d := by
+      readAt digestOf A text = .ok d ∧ Wire.decodeData A b = .ok d := by
   unfold argsOf at h
   simp only [bind, Except.bind] at h
   split at h
@@ -268,14 +270,17 @@ theorem lookup_append_of_lt {pre t : Slots} {k : Nat} (h : ∀ e ∈ pre, e.1 < 
 
 /-- The state slots `stateSlots` writes read back, through `readState`'s own loop, to the data they
 were written from. -/
-theorem readState_go_stateSlots : ∀ (row : List (Label × Ty)) (ds : List (Label × Data)) (i : Nat)
+theorem readState_go_stateSlots {D : Type} {digestOf : ByteArray → Option D} :
+    ∀ (row : List (Label × Ty)) (ds : List (Label × Data)) (i : Nat)
     (t pre : Slots), RowConforms ds row → stateSlots row ds i = some t →
-      (∀ e ∈ pre, e.1 < stateBase + i) → readState.go (pre ++ t) row i = .ok (.record ds)
-  | [], [], i, t, pre, _, ht, _ => by
+      (∀ e ∈ pre, e.1 < stateBase + i) → digestsOk digestOf (Data.rowDigests ds) = true →
+      readState.go digestOf (pre ++ t) row i = .ok (.record ds)
+  | [], [], i, t, pre, _, ht, _, _ => by
     simp only [stateSlots, Option.some.injEq] at ht
     subst ht
     simp [readState.go]
-  | (ℓ, T) :: r, (ℓ', d) :: ds, i, t, pre, hc, ht, hpre => by
+  | (ℓ, T) :: r, (ℓ', d) :: ds, i, t, pre, hc, ht, hpre, hdg => by
+    simp only [Data.rowDigests, digestsOk, List.all_append, Bool.and_eq_true] at hdg
     cases hc with
     | cons hd0 hr0 =>
     unfold stateSlots at ht
@@ -285,21 +290,22 @@ theorem readState_go_stateSlots : ∀ (row : List (Label × Ty)) (ds : List (Lab
       have hl : (pre ++ (stateBase + i, b) :: s).lookup (stateBase + i) = some b := by
         rw [lookup_append_of_lt hpre]; simp [List.lookup]
       have hd : Wire.decodeData T b = .ok d := Wire.decodeData_eq_ok_iff.mpr he
-      have hrest : readState.go (pre ++ (stateBase + i, b) :: s) r (i + 1) = .ok (.record ds) := by
+      have hrest : readState.go digestOf (pre ++ (stateBase + i, b) :: s) r (i + 1) = .ok (.record ds) := by
         have := readState_go_stateSlots r ds (i + 1) s (pre ++ [(stateBase + i, b)]) hr0 hs (by
           intro e he'
           simp only [List.mem_append, List.mem_singleton] at he'
           rcases he' with he' | rfl
           · have := hpre e he'; omega
-          · simp)
+          · simp) (by simpa [digestsOk] using hdg.2)
         simpa using this
+      have hd1 : digestsOk digestOf d.digests = true := by simpa [digestsOk] using hdg.1
       unfold readState.go
       simp only [Slots.get] at hl ⊢
       rw [hl]
-      simp only [hd, hrest]
+      simp only [hd, hrest, hd1, if_true]
     · cases ht
-  | [], _ :: _, _, _, _, hc, _, _ => by cases hc
-  | _ :: _, [], _, _, _, hc, _, _ => by cases hc
+  | [], _ :: _, _, _, _, hc, _, _, _ => by cases hc
+  | _ :: _, [], _, _, _, hc, _, _, _ => by cases hc
 
 theorem readData_record {T : Ty} {text : String} {ds : List (Label × Data)}
     (h : Read.readData T text = .ok (.record ds)) : ∃ row, T = .record row ∧ RowConforms ds row := by
@@ -313,10 +319,10 @@ theorem readData_record {T : Ty} {text : String} {ds : List (Label × Data)}
 
 /-- What `seedOf` produces reads back, at the package's state type, to the data the text read to:
 a seed object's state is the resident's text, and nothing else. -/
-theorem seedOf_reads {D : Type} [DecidableEq D] {look : Pinned D} {pkg : D} {text : String}
-    {s : Slots} (h : seedOf look pkg text = .ok s) :
-    ∃ p d, readPackage look pkg = .ok p ∧ readAt (D := D) p.state text = .ok d ∧
-      readState (recordRow p.state) s = .ok d := by
+theorem seedOf_reads {D : Type} [DecidableEq D] {digestOf : ByteArray → Option D} {look : Pinned D}
+    {pkg : D} {text : String} {s : Slots} (h : seedOf digestOf look pkg text = .ok s) :
+    ∃ p d, readPackage look pkg = .ok p ∧ readAt digestOf p.state text = .ok d ∧
+      readState digestOf (recordRow p.state) s = .ok d := by
   unfold seedOf at h
   simp only [bind, Except.bind] at h
   split at h
@@ -331,16 +337,20 @@ theorem seedOf_reads {D : Type} [DecidableEq D] {look : Pinned D} {pkg : D} {tex
         · rename_i t ht
           cases h
           refine ⟨p, .record ds, hp, hd, ?_⟩
-          have hr : Read.readData p.state text = .ok (.record ds) := by
+          have hr : Read.readData p.state text = .ok (.record ds) ∧
+              digestsOk digestOf (Data.rowDigests ds) = true := by
             unfold readAt at hd
             split at hd
             · rename_i d' h'
-              cases hd
-              exact h'
+              split at hd
+              · rename_i hok
+                cases hd
+                exact ⟨h', by simpa [Data.digests] using hok⟩
+              · cases hd
             · cases hd
-          obtain ⟨row, hrow, hc⟩ := readData_record hr
+          obtain ⟨row, hrow, hc⟩ := readData_record hr.1
           rw [hrow] at ht ⊢
-          simpa [readState, recordRow] using readState_go_stateSlots row ds 0 _ [] hc ht (by simp)
+          simpa [readState, recordRow] using readState_go_stateSlots row ds 0 _ [] hc ht (by simp) hr.2
         · cases h
       · cases h
 

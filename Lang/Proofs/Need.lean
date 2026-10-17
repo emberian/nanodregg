@@ -69,6 +69,7 @@ theorem derives_unique : ∀ {env : Env} {t : Term} {r r' : Except Fault Val} {n
     | fix ht' => cases (derives_unique ht ht').1
     | fixE ht' => obtain ⟨hr, rfl⟩ := derives_unique ht ht'; exact ⟨hr, rfl⟩
   | _, _, _, _, _, _, .nat, h' | _, _, _, _, _, _, .bool, h' | _, _, _, _, _, _, .bytes, h'
+  | _, _, _, _, _, _, .digest, h'
   | _, _, _, _, _, _, .record, h' => by cases h'; exact ⟨rfl, rfl⟩
   | _, _, _, _, _, _, .prim ha hb _, h' => by
     cases h' with
@@ -230,6 +231,8 @@ theorem need_derives_all : ∀ f : Nat,
         simp only [Need.need, Option.some.injEq, Prod.mk.injEq] at h; obtain ⟨rfl, rfl⟩ := h; exact .bool
       | bytes s =>
         simp only [Need.need, Option.some.injEq, Prod.mk.injEq] at h; obtain ⟨rfl, rfl⟩ := h; exact .bytes
+      | digest s =>
+        simp only [Need.need, Option.some.injEq, Prod.mk.injEq] at h; obtain ⟨rfl, rfl⟩ := h; exact .digest
       | prim p a b =>
         simp only [Need.need] at h
         repeat' split at h
@@ -336,6 +339,7 @@ inductive Forces (lib : List Term) : Ty → Val → Nat → Prop
   | nat {k} : Forces lib .nat (.nat k) 0
   | bool {b} : Forces lib .bool (.bool b) 0
   | bytes {s} : Forces lib .bytes (.bytes s) 0
+  | digest {s} : Forces lib .digest (.digest s) 0
   | record {row v fs n m} : Unknots lib v fs n → ForcesRow lib row fs m →
       Forces lib (.record row) v (n + m)
   | sum {row ℓ w A n} : Row.find? ℓ row = some A → Forces lib A w n →
@@ -364,6 +368,7 @@ theorem forces_unique : ∀ {T : Ty} {v : Val} {n n' : Nat},
   | _, _, _, _, .nat, h' => by cases h'; rfl
   | _, _, _, _, .bool, h' => by cases h'; rfl
   | _, _, _, _, .bytes, h' => by cases h'; rfl
+  | _, _, _, _, .digest, h' => by cases h'; rfl
   | _, _, _, _, .record hu hr, h' => by
     cases h' with
     | record hu' hr' =>
@@ -404,7 +409,7 @@ theorem needUnknot_unknots {fuel : Nat} : ∀ (rounds : Nat) {v : Val} {fs : Lis
       | (simp only [Option.some.injEq, Prod.mk.injEq] at h; obtain ⟨rfl, rfl⟩ := h
          exact .knot (needForce_derives ‹_›) (needUnknot_unknots r ‹_›))
       | cases h
-  | _, .nat _, _, _, h | _, .bool _, _, _, h | _, .bytes _, _, _, h | _, .clo _ _, _, _, h
+  | _, .nat _, _, _, h | _, .bool _, _, _, h | _, .bytes _, _, _, h | _, .digest _, _, _, h | _, .clo _ _, _, _, h
   | _, .inj _ _, _, _, h => by cases ‹Nat› <;> simp [Need.needUnknot] at h
 
 mutual
@@ -413,6 +418,7 @@ theorem needExtract_forces {fuel : Nat} : ∀ (T : Ty) {v : Val} {n : Nat},
   | .nat, .nat _, n, h => by simp only [Need.needExtract, Option.some.injEq] at h; subst h; exact .nat
   | .bool, .bool _, n, h => by simp only [Need.needExtract, Option.some.injEq] at h; subst h; exact .bool
   | .bytes, .bytes _, n, h => by simp only [Need.needExtract, Option.some.injEq] at h; subst h; exact .bytes
+  | .digest, .digest _, n, h => by simp only [Need.needExtract, Option.some.injEq] at h; subst h; exact .digest
   | .record row, v, n, h => by
     simp only [Need.needExtract] at h
     repeat' split at h
@@ -424,14 +430,16 @@ theorem needExtract_forces {fuel : Nat} : ∀ (T : Ty) {v : Val} {n : Nat},
     simp only [Need.needExtract] at h
     obtain ⟨A, hA, hf⟩ := needExtractArm_forces row h
     exact .sum hA hf
-  | .nat, .bool _, _, h | .nat, .bytes _, _, h | .nat, .clo _ _, _, h | .nat, .record _, _, h
-  | .nat, .knot _ _, _, h | .nat, .inj _ _, _, h
-  | .bool, .nat _, _, h | .bool, .bytes _, _, h | .bool, .clo _ _, _, h | .bool, .record _, _, h
-  | .bool, .knot _ _, _, h | .bool, .inj _ _, _, h
-  | .bytes, .nat _, _, h | .bytes, .bool _, _, h | .bytes, .clo _ _, _, h | .bytes, .record _, _, h
-  | .bytes, .knot _ _, _, h | .bytes, .inj _ _, _, h
-  | .sum _, .nat _, _, h | .sum _, .bool _, _, h | .sum _, .bytes _, _, h | .sum _, .clo _ _, _, h
-  | .sum _, .record _, _, h | .sum _, .knot _ _, _, h
+  | .nat, .bool _, _, h | .nat, .bytes _, _, h | .nat, .digest _, _, h | .nat, .clo _ _, _, h
+  | .nat, .record _, _, h | .nat, .knot _ _, _, h | .nat, .inj _ _, _, h
+  | .bool, .nat _, _, h | .bool, .bytes _, _, h | .bool, .digest _, _, h | .bool, .clo _ _, _, h
+  | .bool, .record _, _, h | .bool, .knot _ _, _, h | .bool, .inj _ _, _, h
+  | .bytes, .nat _, _, h | .bytes, .bool _, _, h | .bytes, .digest _, _, h | .bytes, .clo _ _, _, h
+  | .bytes, .record _, _, h | .bytes, .knot _ _, _, h | .bytes, .inj _ _, _, h
+  | .digest, .nat _, _, h | .digest, .bool _, _, h | .digest, .bytes _, _, h | .digest, .clo _ _, _, h
+  | .digest, .record _, _, h | .digest, .knot _ _, _, h | .digest, .inj _ _, _, h
+  | .sum _, .nat _, _, h | .sum _, .bool _, _, h | .sum _, .bytes _, _, h | .sum _, .digest _, _, h
+  | .sum _, .clo _ _, _, h | .sum _, .record _, _, h | .sum _, .knot _ _, _, h
   | .fn _ _, _, _, h => by simp [Need.needExtract] at h
 
 theorem needExtractArm_forces {fuel : Nat} : ∀ (row : List (Label × Ty)) {ℓ : Label} {w : Val} {n : Nat},
@@ -517,7 +525,8 @@ theorem extractArm_find {fuel : Nat} {w : Val} : ∀ {row : List (Label × Ty)} 
 mutual
 theorem forces_le : ∀ {T : Ty} {v : Val} {n : Nat}, Forces lib T v n →
     ∀ {fuel left : Nat} {d : Data}, (Machine.mk lib).extract T fuel v = .ok (d, left) → n + left ≤ fuel
-  | _, _, _, .nat, _, _, _, h | _, _, _, .bool, _, _, _, h | _, _, _, .bytes, _, _, _, h => by
+  | _, _, _, .nat, _, _, _, h | _, _, _, .bool, _, _, _, h | _, _, _, .bytes, _, _, _, h
+  | _, _, _, .digest, _, _, _, h => by
     simp only [Machine.extract, Except.ok.injEq, Prod.mk.injEq] at h; omega
   | _, _, _, .record hu hr, fuel, left, d, h => by
     have ihr := @forcesRow_le _ _ _ hr
@@ -595,7 +604,8 @@ theorem unknot_unknots : ∀ (rounds : Nat) {fuel fuel' : Nat} {v : Val} {fs : L
       obtain ⟨m, hu⟩ := unknot_unknots r h
       exact ⟨n + m, .knot hd hu⟩
     · cases h
-  | _, _, _, .nat _, _, h | _, _, _, .bool _, _, h | _, _, _, .bytes _, _, h | _, _, _, .clo _ _, _, h
+  | _, _, _, .nat _, _, h | _, _, _, .bool _, _, h | _, _, _, .bytes _, _, h | _, _, _, .digest _, _, h
+  | _, _, _, .clo _ _, _, h
   | _, _, _, .inj _ _, _, h => by cases ‹Nat› <;> simp [Machine.unknot] at h
 
 mutual
@@ -606,6 +616,7 @@ theorem extract_forces : ∀ (T : Ty) {fuel left : Nat} {v : Val} {d : Data},
   | .nat, _, _, .nat _, _, _ => ⟨0, .nat⟩
   | .bool, _, _, .bool _, _, _ => ⟨0, .bool⟩
   | .bytes, _, _, .bytes _, _, _ => ⟨0, .bytes⟩
+  | .digest, _, _, .digest _, _, _ => ⟨0, .digest⟩
   | .record row, fuel, left, v, d, h => by
     simp only [Machine.extract] at h
     split at h
@@ -624,13 +635,15 @@ theorem extract_forces : ∀ (T : Ty) {fuel left : Nat} {v : Val} {d : Data},
       obtain ⟨A, hA, n, hf⟩ := extractArm_forces row hx
       exact ⟨n, .sum hA hf⟩
     · cases h
-  | .nat, _, _, .bool _, _, h | .nat, _, _, .bytes _, _, h | .nat, _, _, .clo _ _, _, h
+  | .nat, _, _, .bool _, _, h | .nat, _, _, .bytes _, _, h | .nat, _, _, .digest _, _, h | .nat, _, _, .clo _ _, _, h
   | .nat, _, _, .record _, _, h | .nat, _, _, .knot _ _, _, h | .nat, _, _, .inj _ _, _, h
-  | .bool, _, _, .nat _, _, h | .bool, _, _, .bytes _, _, h | .bool, _, _, .clo _ _, _, h
+  | .bool, _, _, .nat _, _, h | .bool, _, _, .bytes _, _, h | .bool, _, _, .digest _, _, h | .bool, _, _, .clo _ _, _, h
   | .bool, _, _, .record _, _, h | .bool, _, _, .knot _ _, _, h | .bool, _, _, .inj _ _, _, h
-  | .bytes, _, _, .nat _, _, h | .bytes, _, _, .bool _, _, h | .bytes, _, _, .clo _ _, _, h
+  | .bytes, _, _, .nat _, _, h | .bytes, _, _, .bool _, _, h | .bytes, _, _, .digest _, _, h | .bytes, _, _, .clo _ _, _, h
   | .bytes, _, _, .record _, _, h | .bytes, _, _, .knot _ _, _, h | .bytes, _, _, .inj _ _, _, h
-  | .sum _, _, _, .nat _, _, h | .sum _, _, _, .bool _, _, h | .sum _, _, _, .bytes _, _, h
+  | .digest, _, _, .nat _, _, h | .digest, _, _, .bool _, _, h | .digest, _, _, .bytes _, _, h | .digest, _, _, .clo _ _, _, h
+  | .digest, _, _, .record _, _, h | .digest, _, _, .knot _ _, _, h | .digest, _, _, .inj _ _, _, h
+  | .sum _, _, _, .nat _, _, h | .sum _, _, _, .bool _, _, h | .sum _, _, _, .bytes _, _, h | .sum _, _, _, .digest _, _, h
   | .sum _, _, _, .clo _ _, _, h | .sum _, _, _, .record _, _, h | .sum _, _, _, .knot _ _, _, h
   | .fn _ _, _, _, _, _, h => by simp [Machine.extract] at h
 

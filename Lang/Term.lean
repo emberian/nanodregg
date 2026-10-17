@@ -1,12 +1,12 @@
 /-
 # Lang.Term — the core term language (DECISIONS LANG-1)
 
-Fifteen constructors. De Bruijn variables; `lam` and `inj` carry their types so checking is a
+Sixteen constructors. De Bruijn variables; `lam` and `inj` carry their types so checking is a
 function with no inference of annotations. `fix t` ties the record knot: `t : R → R` for a record
 type `R`, and the knot is the final self of open recursion (`mix l u` is the lambda
 `λself. λsuper. u self (l self super)`, which the authoring tool writes; it is not a constructor).
 `ref i` is the `i`-th package of the closure being run (`Lang.Package`), so a package's identity
-commits to its imports by digest while the term holds no digest.
+commits to its imports by digest while the term holds no import's digest.
 -/
 import Lang.Ty
 
@@ -17,18 +17,21 @@ inductive Prim
   | add | sub | mul | div | mod
   | eq | lt | le
   | beq | cat
+  /-- digest equality: the one primitive that consumes ids (LANG-38) -/
+  | deq
   deriving DecidableEq, Repr
 
 /-- The operand and result types of a primitive. -/
 def Prim.left : Prim → Ty
   | .beq | .cat => .bytes
+  | .deq => .digest
   | _ => .nat
 
 def Prim.right : Prim → Ty := Prim.left
 
 def Prim.result : Prim → Ty
   | .add | .sub | .mul | .div | .mod => .nat
-  | .eq | .lt | .le | .beq => .bool
+  | .eq | .lt | .le | .beq | .deq => .bool
   | .cat => .bytes
 
 inductive Term
@@ -39,6 +42,9 @@ inductive Term
   | nat (value : Nat)
   | bool (value : Bool)
   | bytes (value : ByteArray)
+  /-- An id literal (a member an allowlist names): checked a digest of the World at install and at
+  every load (`Lang.digestLits`), never made from bytes at run time. -/
+  | digest (value : ByteArray)
   | prim (p : Prim) (left right : Term)
   /-- A record of SUSPENDED fields: each is evaluated when selected, never before. -/
   | record (fields : List (Label × Term))

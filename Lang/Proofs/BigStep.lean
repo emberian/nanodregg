@@ -43,6 +43,7 @@ inductive BigStep (lib : List Term) : Env → Term → (Except Fault Val) → Pr
   | nat {env n} : BigStep lib env (.nat n) (.ok (.nat n))
   | bool {env b} : BigStep lib env (.bool b) (.ok (.bool b))
   | bytes {env s} : BigStep lib env (.bytes s) (.ok (.bytes s))
+  | digest {env s} : BigStep lib env (.digest s) (.ok (.digest s))
   | prim {env p a b x y} : BigStep lib env a (.ok x) → BigStep lib env b (.ok y) →
       primEval p x y ≠ .error .stuck → BigStep lib env (.prim p a b) (primEval p x y)
   | primL {env p a b e} : BigStep lib env a (.error e) → BigStep lib env (.prim p a b) (.error e)
@@ -116,7 +117,7 @@ theorem bigStep_deterministic {lib : List Term} :
     cases h' with
     | fix ht' => cases bigStep_deterministic ht ht'
     | fixE ht' => exact bigStep_deterministic ht ht'
-  | _, _, _, _, .nat, h' | _, _, _, _, .bool, h' | _, _, _, _, .bytes, h'
+  | _, _, _, _, .nat, h' | _, _, _, _, .bool, h' | _, _, _, _, .bytes, h' | _, _, _, _, .digest, h'
   | _, _, _, _, .record, h' => by cases h'; rfl
   | _, _, _, _, .prim ha hb _, h' => by
     cases h' with

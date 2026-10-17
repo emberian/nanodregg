@@ -2,7 +2,8 @@
 # Lang.Resident — what a resident checks before it installs: `ob FORM`
 
 One s-expression form in, one line out, no admission and no World. Every answer comes from the
-functions admission itself runs: `Read` (the one reader), `Package.checkWith` (the install check),
+functions admission itself runs: `Read` (the one reader), `Package.checkWith` and the id-literal
+check (the install check, at the deployed digest),
 `Wire.encodePackage` (the bytes `install` carries), KERNEL's `romIdOf` under CODEC's deployed `Env`
 (the id the package cell will have), the one evaluator under a tick budget, and `runLaw` (the one
 law runner the receiver calls). Refusals are printed by NAME, with the offset or label they are
@@ -56,6 +57,8 @@ def checkPackage (p : Package) : Except Answer (ByteArray × String) := do
   match p.checkWith [] with
   | .error e => throw (no e.wire)
   | .ok () =>
+    -- install's id-literal check (`Program.checkLits`) at the deployed digest (LANG-38)
+    unless p.body.digestLits.all (fun b => (Codec.Digest.ofBytes? b).isSome) do throw (no "notDigest")
     match Wire.encodePackage p with
     | none => throw (no "packageWire (past the package bounds)")
     | some b =>

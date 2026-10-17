@@ -3,7 +3,8 @@
 
 Data is written TYPE-DIRECTED and needs no recursive codec: the reader knows the type, and the type
 is finite, so `dataStream T` is a composition of CODEC's ordinary combinators by recursion on `T`.
-A natural is `u64`, a boolean `bool`, a byte string `bytesOf bytesMax`, a record the `product` of its
+A natural is `u64`, a boolean `bool`, a byte string `bytesOf bytesMax`, a digest `bytesOf digestBytesMax` (a digest's
+validity is the World's `digestOf`, asked where data enters a run: `Lang.Program`, LANG-38), a record the `product` of its
 fields in row order (no labels), a sum CODEC's `choice` over its arms (one tag byte, the arm's
 index, then the payload). A function type has no data. So the stream's `Shape` IS the type's structure,
 and its canonicity is the combinators' (`Lang.Proofs.Data.dataStream_lawful`).
@@ -28,6 +29,7 @@ def DataAt : Ty → Type
   | .nat => UInt64
   | .bool => Bool
   | .bytes => Bytes Bounds.bytesMax
+  | .digest => Bytes Bounds.digestBytesMax
   | .fn _ _ => Empty
   | .record r => RowAt r
   | .sum r => (i : Fin r.length) × ArmAt r i
@@ -51,6 +53,7 @@ def dataStream : (T : Ty) → Stream (DataAt T)
   | .nat => Stream.u64
   | .bool => Stream.bool
   | .bytes => Stream.bytesOf Bounds.bytesMax (by decide)
+  | .digest => Stream.bytesOf Bounds.digestBytesMax (by decide)
   | .fn _ _ => noData
   | .record r => rowStream r
   | .sum r => Stream.choice r.length (armStream r)
@@ -71,6 +74,7 @@ def toData : (T : Ty) → DataAt T → Data
   | .nat, n => .nat n.toNat
   | .bool, b => .bool b
   | .bytes, s => .bytes s.val
+  | .digest, s => .digest s.val
   | .fn _ _, e => nomatch e
   | .record r, x => .record (rowToData r x)
   | .sum r, ⟨i, x⟩ => armToData r i x
@@ -91,6 +95,7 @@ def ofData : (T : Ty) → Data → Option (DataAt T)
   | .nat, .nat n => if h : n < 2 ^ 64 then some (UInt64.ofNatLT n h) else none
   | .bool, .bool b => some b
   | .bytes, .bytes s => if h : s.size ≤ Bounds.bytesMax then some ⟨s, h⟩ else none
+  | .digest, .digest s => if h : s.size ≤ Bounds.digestBytesMax then some ⟨s, h⟩ else none
   | .record r, .record fs => rowOfData r fs
   | .sum r, .inj ℓ d => armOfData r ℓ d
   | _, _ => none

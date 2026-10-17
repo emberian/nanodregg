@@ -62,8 +62,8 @@ private def writeD : Data := .inj "write" unitD
 private def relawD : Data := .inj "relaw" (.bytes .empty)
 
 private def rqD (occasion : Data) (principal : ByteArray := .empty) : Data :=
-  .record [("agent", .bytes .empty), ("notBefore", .nat 0), ("occasion", occasion),
-    ("principal", .bytes principal), ("self", .bytes .empty), ("validUntil", .nat 0)]
+  .record [("agent", .digest .empty), ("notBefore", .nat 0), ("occasion", occasion),
+    ("principal", .digest principal), ("self", .digest .empty), ("validUntil", .nat 0)]
 
 /-- Field `ℓ` of the package body applied to the three bound values. -/
 private def bodyAt (ℓ : Label) : Term :=

@@ -242,14 +242,14 @@ def body (X : Ctx D) (me : Self D) (w : World D) (s : Signed) : Cmd D → Except
   | .enroll j => .ok (.enroll j.key j.next j.possession me.grant)
   | .install p => .ok (.install p)
   | .create none ls => .ok (.create none ls [])
-  | .create (some (p, t)) ls => match Lang.seedOf (worldLook X.env w) p t with
+  | .create (some (p, t)) ls => match Lang.seedOf X.digestOf (worldLook X.env w) p t with
     | .ok seed => .ok (.create (some p) ls seed)
     | .error r => .error (.receive r)
   | .write o k v via => .ok (.write o [(k, some v)] via)
   | .law o ls via => .ok (.law o ls via)
   | .invoke o m a via => do
       let p ← invokedPackage X w o
-      match Lang.argsOf (worldLook X.env w) p m a with
+      match Lang.argsOf X.digestOf (worldLook X.env w) p m a with
       | .ok args => .ok (.invoke o m args invokeBudget via)
       | .error r => .error (.receive r)
   | .grant t g rs via =>

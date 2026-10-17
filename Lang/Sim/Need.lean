@@ -69,6 +69,7 @@ def need (lib : List Term) : Nat → Env → Term → Option (Except Fault Val �
     | .nat n => some (.ok (.nat n), 1)
     | .bool b => some (.ok (.bool b), 1)
     | .bytes s => some (.ok (.bytes s), 1)
+    | .digest s => some (.ok (.digest s), 1)
     | .prim p a b =>
       match need lib f env a with
       | some (.error e, n) => some (.error e, n + 1)
@@ -192,6 +193,7 @@ def needExtract (lib : List Term) (fuel : Nat) : Ty → Val → Option Nat
   | .nat, .nat _ => some 0
   | .bool, .bool _ => some 0
   | .bytes, .bytes _ => some 0
+  | .digest, .digest _ => some 0
   | .record row, v =>
     match needUnknot lib fuel fuel v with
     | some (fs, n) =>
@@ -249,9 +251,9 @@ def setupOf (look : Pinned D) (pkg : D) (state : Slots) (method : Nat) (args : B
   let some p := L.pkgs[g]? | throw (.program "closure")
   let (ℓ, A, ks) ← resolveMethod p method
   let row := recordRow p.state
-  let s ← match readState row state with | .ok d => pure d | .error e => throw (.program e)
+  let s ← match readState digestOf row state with | .ok d => pure d | .error e => throw (.program e)
   let a ← match Wire.decodeData A args with
-    | .ok d => pure d
+    | .ok d => if digestsOk digestOf d.digests then pure d else throw (.program "arguments: not a digest")
     | .error e => throw (.program s!"arguments: {decodeText e}")
   pure (L.lib, apply3 g ℓ, [(reqData bytesOf r).toVal, a.toVal, s.toVal], resultTy p.state ks)
 

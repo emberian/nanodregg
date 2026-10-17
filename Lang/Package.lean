@@ -35,8 +35,8 @@ object judged or run on (`self`: a method names its own accounts by it, LANG-25)
 signed window (the Turn lands at a height in `[notBefore, validUntil]`, KERNEL-10), and the act
 being judged. -/
 def reqTy : Ty :=
-  .record [("agent", .bytes), ("notBefore", .nat), ("occasion", occasionTy), ("principal", .bytes),
-    ("self", .bytes), ("validUntil", .nat)]
+  .record [("agent", .digest), ("notBefore", .nat), ("occasion", occasionTy), ("principal", .digest),
+    ("self", .digest), ("validUntil", .nat)]
 
 /-- A law's verdict: `ok`, or `refused` with the author's reason. -/
 def verdictTy : Ty := .sum [("ok", .record []), ("refused", .bytes)]
@@ -49,7 +49,7 @@ The core has no lists, so a method returns its calls in a row of option SLOTS `c
 `k ≤ Kernel.Bounds.callsMax`. Each slot's type names the kinds of call it may carry: options over
 a sub-sum of `callTy`, every arm at exactly its `callTy` type. `callTy` has one arm per kind an
 object may exercise (KERNEL's `Body.callable`: account, credit, grant, invoke, transfer), its fields
-the `Body` constructor's: a digest is `bytes`, an `Option` is `optTy`, an `AcctRef` is
+the `Body` constructor's: a digest is `digest`, an `Option` is `optTy`, an `AcctRef` is
 `acctRefTy`, a grant's rights the fixed-arity `rightsTy`. So a method's type says how many calls
 it may make and of which kinds, and costs bytes only for those: a method that makes none has
 `calls : rec {}`. `Lang.Call` reads the kernel's `Body` back out of such data. -/
@@ -59,7 +59,7 @@ def optTy (T : Ty) : Ty := .sum [("none", .record []), ("some", T)]
 
 /-- How a call names a value account (KERNEL's `AcctRef`): a well by its denomination, any other
 account by its owner and denomination. -/
-def acctRefTy : Ty := .sum [("of", .record [("asset", .bytes), ("owner", .bytes)]), ("well", .bytes)]
+def acctRefTy : Ty := .sum [("of", .record [("asset", .digest), ("owner", .digest)]), ("well", .digest)]
 
 /-- A right a granted call carries (KERNEL's `Right`). -/
 def rightTy : Ty := .sum [("enroll", .nat), ("invoke", .nat), ("mutate", .record []), ("observe", .record [])]
@@ -77,14 +77,14 @@ def rightsTy : Ty := .record (rightLabels.map fun l => (l, optTy rightTy))
 
 /-- The arms of `callTy`, one per callable kind, in canonical order. -/
 def callArms : List (Label × Ty) :=
-  [("account", .record [("asset", .bytes), ("owner", .bytes)]),
-    ("credit", .record [("acct", acctRefTy), ("amount", .nat), ("via", optTy .bytes), ("well", .bytes)]),
-    ("grant", .record [("grantee", .bytes), ("parent", optTy .bytes), ("rights", rightsTy),
-      ("target", .bytes)]),
-    ("invoke", .record [("args", .bytes), ("budget", .nat), ("method", .nat), ("obj", .bytes),
-      ("via", optTy .bytes)]),
+  [("account", .record [("asset", .digest), ("owner", .digest)]),
+    ("credit", .record [("acct", acctRefTy), ("amount", .nat), ("via", optTy .digest), ("well", .digest)]),
+    ("grant", .record [("grantee", .digest), ("parent", optTy .digest), ("rights", rightsTy),
+      ("target", .digest)]),
+    ("invoke", .record [("args", .bytes), ("budget", .nat), ("method", .nat), ("obj", .digest),
+      ("via", optTy .digest)]),
     ("transfer", .record [("amount", .nat), ("dst", acctRefTy), ("once", optTy .bytes),
-      ("src", acctRefTy), ("via", optTy .bytes)])]
+      ("src", acctRefTy), ("via", optTy .digest)])]
 
 /-- Any call an object may make. -/
 def callTy : Ty := .sum callArms
@@ -233,6 +233,7 @@ def Term.relocate (f : Nat → Nat) : Term → Term
   | .nat n => .nat n
   | .bool b => .bool b
   | .bytes s => .bytes s
+  | .digest s => .digest s
   | .prim p a b => .prim p (a.relocate f) (b.relocate f)
   | .record fs => .record (Term.relocateRow f fs)
   | .get t ℓ => .get (t.relocate f) ℓ
@@ -247,13 +248,31 @@ def Term.relocateRow (f : Nat → Nat) : List (Label × Term) → List (Label ×
   | (ℓ, t) :: fs => (ℓ, t.relocate f) :: Term.relocateRow f fs
 end
 
+/-! ## Id literals: what install asks the World's `digestOf` about (LANG-38) -/
+
+mutual
+/-- The digest literals of a term, in order. -/
+def Term.digestLits : Term → List ByteArray
+  | .digest s => [s]
+  | .var _ | .nat _ | .bool _ | .bytes _ | .ref _ => []
+  | .lam _ b | .fix b | .get b _ | .inj _ _ b => b.digestLits
+  | .app f a | .prim _ f a => f.digestLits ++ a.digestLits
+  | .record fs => Term.rowDigestLits fs
+  | .extend t fs | .case t fs => t.digestLits ++ Term.rowDigestLits fs
+  | .ite c a b => c.digestLits ++ a.digestLits ++ b.digestLits
+
+def Term.rowDigestLits : List (Label × Term) → List ByteArray
+  | [] => []
+  | (_, t) :: fs => t.digestLits ++ Term.rowDigestLits fs
+end
+
 /-! ## Wire: a package is one `Codec.Tree` -/
 
 namespace Wire
 open Nanodregg.Codec
 
 /-- The digest bytes an import id may have (the deployed digest is 32; the Sim's is 8). -/
-def importBytesMax : Nat := 32
+def importBytesMax : Nat := Bounds.digestBytesMax
 
 def labelLeaf (ℓ : Label) : Tree := .node 1 ℓ.toUTF8 []
 

@@ -18,6 +18,7 @@ inductive ValTy (Δ : List Ty) : Val → Ty → Prop
   | nat {n : Nat} : n < Bounds.natLimit → ValTy Δ (.nat n) .nat
   | bool {b : Bool} : ValTy Δ (.bool b) .bool
   | bytes {s : ByteArray} : s.size ≤ Bounds.bytesMax → ValTy Δ (.bytes s) .bytes
+  | digest {s : ByteArray} : s.size ≤ Bounds.digestBytesMax → ValTy Δ (.digest s) .digest
   | clo {b env Γ A B} : EnvTy Δ env Γ → HasType Δ (A :: Γ) b B → ValTy Δ (.clo b env) (.fn A B)
   | knot {b env Γ r} : EnvTy Δ env Γ → HasType Δ (.record r :: Γ) b (.record r) →
       ValTy Δ (.knot b env) (.record r)

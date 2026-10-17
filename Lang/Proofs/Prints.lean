@@ -51,6 +51,10 @@ theorem prints_bytes (k : Nat) (s : ByteArray) : Prints 1 k (.bytes s) := by
     · split <;> simp [need, width, atom]
     · simp [need, width, atom]
 
+theorem prints_digest (k : Nat) (s : ByteArray) : Prints 2 k (.digest s) :=
+  ⟨list [atom "digest", digestSx s], by simp [termSx], by simp [need, needs, list, atom, digestSx],
+    by simp [width, widths, list, atom, digestSx, listMax_eq]⟩
+
 theorem prints_get {N k : Nat} {t : Term} {ℓ : Label} (ht : Prints N k t) (hl : labelOk ℓ = true) :
     Prints (N + 1) k (.get t ℓ) := by
   obtain ⟨x, hx, hn, hw⟩ := ht
@@ -165,8 +169,8 @@ theorem prints_extend {N k : Nat} {t : Term} {fs : List (Label × Term)} (ht : P
   · simp only [need, needs, list, atom]; omega
   · simp only [width, widths, list, atom, List.length_cons, hl] at hwt hws ⊢; omega
 
-theorem typrints_atom (T : Ty) (h : T = .nat ∨ T = .bool ∨ T = .bytes) : TyPrints 1 T := by
-  rcases h with rfl | rfl | rfl <;>
+theorem typrints_atom (T : Ty) (h : T = .nat ∨ T = .bool ∨ T = .bytes ∨ T = .digest) : TyPrints 1 T := by
+  rcases h with rfl | rfl | rfl | rfl <;>
   exact ⟨_, rfl, by simp [need, atom], by simp [width, atom]⟩
 
 theorem typrints_fn {N : Nat} {a b : Ty} (ha : TyPrints N a) (hb : TyPrints N b) : TyPrints (N + 1) (.fn a b) := by

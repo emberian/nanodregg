@@ -960,3 +960,86 @@ which says the simulation was the right shape. The unproved completeness is name
 called a limit. Also owed (vacuity read): an EXTRACTION plant (a field forced twice) to show the
 waste row catches extraction waste, cv 01a14abb-aa73-7e40-8bb9-1a264910eb79; skipStep teeth the floor, not the row.
 **Status.** built (this commit). Nothing re-ids: proof and tooling modules only.
+
+## LANG-38 Ids are a type: `digest` (2026-10-17; cv 01a14aab-adae, ROOT ruling (ii); the digest `lang!` day)
+**Decision.** `Ty.digest` is a type with one equality primitive, `deq : digest → digest → bool`, and one
+literal form, `Term.digest s` (text `(digest #hex)`, at most `Bounds.digestBytesMax` = 32 bytes, checker
+`digestRange` past it). The value is `Val.digest` and the data is `Data.digest`. In text, data at type
+`digest` reads and prints as `#hex`. The wire adds tags and moves none: Ty tag 7, Term tag 16, prim code 10.
+Data at `digest` is `bytesOf digestBytesMax`. The ids a program sees or names are all `digest`: `reqTy`'s
+`agent`, `principal` and `self`, and every id field of `callTy` (`obj`, `target`, `grantee`, `parent`,
+every `via`, `well`, and an `of` account's `owner` and `asset`). `invoke`'s `args`, `transfer`'s `once`
+and the occasion's `relaw`/`adopt` payload stay `bytes`. `Std`'s member tests (`ownerSigns`,
+`allowlist`, `quorum`'s `isMember`/`approvalBy`) compare `agent` by `deq` against digest literals, and
+`eqAt` gives `deq` at a digest field. No primitive makes a digest from bytes, and none turns one into bytes.
+A digest is checked against the World where it enters a run:
+- install, and every load's re-check, refuses a body with a digest literal that `digestOf` rejects
+  (`program "notDigest"`, `Program.checkLits`);
+- `readState` refuses a state digest leaf it rejects (`state field ℓ: not a digest`);
+- the argument decode refuses one in the arguments (`arguments: not a digest`);
+- the resident readers (`readAt`, so `seedOf`/`argsOf`) refuse one in seed or argument text
+  (`notDigest`).
+`callsOf`'s `not a digest` now ranges over digest leaves only (`CallLive.DigestRefusal`, tooth
+`args_named_not_live`).
+**What the type refuses that bytes did not.** (1) A call whose id field is built from bytes: a bytes
+literal, a `cat`, an argument's bytes or a reason string in `obj`/`target`/`grantee`/`well`/... was
+admitted at install and refused only at run time (`calls: cI obj: not a digest`), and only if the bytes
+happened not to decode. A bytes value that DID decode named a cell the author never held as an id. That
+package is now `illTyped argument/payload @path` at install, by name. (2) An id compared with bytes: a
+law `beq`ing `agent` with a payout key or with a concatenation, or `cat`ing two ids into a "member", is
+ill-typed. (3) A literal member id that is not a digest of the World (an allowlist naming bytes no member
+can sign as) is refused `notDigest` at install, where before the law silently admitted no one.
+(4) An id in state or in arguments that is not a digest is refused where the data enters the run, not
+copied forward into a later call.
+**Why.** ROOT ruling (ii) on cv 01a14aab-adae: a not-a-digest refusal should name a DIGEST field, and the
+only way to make that true by construction is to make "is an id" a type. Fork (i), one `digestPaths`
+list consulted by the reader, would have kept ids as bytes everywhere else (laws, Std, the machine).
+**Alternatives.** (a) The digest arm as the kernel's own digest codec `dc : Stream D` (CODEC-7's
+suggestion): a wrong-width digest would then be refused by the codec as well. Refused for now, and the
+real reason is this: Lang's wire is not parameterized by `dc`. `decodePackage`, `decodeData` and the
+data streams are D-free, so this change threads D through every package decode and every proof over
+them. It is not refused because the Sim's digest is 8 bytes; `dc` would carry that. The check it would
+add is subsumed: `digestOf` at every boundary refuses every non-digest, a wrong width included, so the
+codec would hold a second check of a fact already checked, not a missing one. Named as an option, not
+owed. (b) A fixed 32-byte Lang digest: every toy digest would become a non-digest, so the Sim width
+would have to move. (c) A `digest → bytes` primitive (LEDGER-3's escrow used `req.self` as its once
+key): refused, because an id that can become bytes can be `cat`ed and compared as bytes, which is the
+leak this closes. The escrow now carries a creator-set `nonce : bytes` (LEDGER-11). (d) The relaw
+payload as a row of digest option slots: the core has no lists, and the kernel bounds a law list only by
+`lawsMax` = 16. A fixed-arity row of 16 options is possible but makes every law's relaw arm bigger. The
+payload is a list of ids compared as one value (quorum's `proposedLaws` `beq`s two whole lists), never
+consumed as an id, so it stays bytes and no primitive consumes an id from it.
+**Flag day.** Every package with a method or a law re-ids, because `reqTy` changed and every method's and
+law's type mentions it. Re-emitted in this commit: `world/grain/Lifecycle`, `world/hosting/Allowance`,
+`world/escrow/Escrow` (`ledger-sim --write-text`, LEDGER-3), the journey's packages, and THE BAR's
+counter's packages (PROTOCOL-7 re-runs rows). Every store re-geneses. That is the SECOND re-genesis
+today, after CODEC-6's World journal flag day (9dd1e8c, KERNEL-39/CODEC-28). The two days could not be
+merged: the World journal day landed before this one could start (it waited on LANG-37, cv 01a14a87-33b2,
+by ROOT's order), so there was no shared window left. What refuses to load: a package cell from before
+this day decodes, but its interface no longer checks against `reqTy` (`badMethod`/`badLaw`); a state slot
+written as bytes under a type that is now `digest` decodes at the new type only if its bytes are a digest.
+Nothing reinterprets: the old packages are refused, not read.
+**Critique.** (1) A digest is a digest of SOME World, not of this one's cells: `deq` and the boundary
+checks say "well-formed id", not "names a live cell". That is the kernel's question, asked when the call
+enters (`unknown`/`noGrant`). (2) `callsOf`'s `not a digest` is now unreachable whenever the inputs
+passed the boundary checks, because a run can only copy digests, never make them. That is not proved: a
+provenance theorem over the machine (every digest a run returns is one of its literals or one of its
+inputs) would make it a theorem rather than a check that never fires. (3) The occasion payload is still
+bytes (alternative (d)). (4) No journey row now reaches `callsOf`'s `not a digest`, because the boundary checks
+catch every non-digest first. The second line of defence is undetected until a plant reaches it. That plant is a
+split of `runMeasured`'s digestOf into boundary and calls uses, owed as cv 01a14af1-2132 (vacuity read a773ed76, LOW),
+alongside (2)'s provenance theorem, owed as cv 01a14acf-a188. (5) `ob check` (Lang.Resident) runs the id-literal
+check at the deployed digest `Codec.Digest.ofBytes?`, so a resident sees `notDigest` before install does.
+Its answer is the deployed World's, not a Sim's. (6) The plant `bytesIds` rewrites every bytes literal, so it
+flips LD1 only because that fixture holds one bytes literal, the callee. That is pinned in its docstring.
+**Meta-critique.** The type was easy; the boundary was the work. The tempting cut was to stop at the
+type (install refuses bytes in id positions) and leave state, arguments and seeds unchecked, so that a
+non-digest in state would still surface late, at `callsOf`. That would have moved the refusal without
+removing it. The four boundary checks are what make (2) above true at all. Whether (a) should land is a
+real fork, and it is recorded as one, not as a debt.
+**Statements changed** (none weaker; vacuity read a773ed76 OK, four LOWs, handled above): Std's
+member/owner/quorum specs and Receiver's now conclude `.digest m`; `Call.callData_conforms`' digest premise is
+`≤ digestBytesMax`; CallLive's `BytesAt` is `DigestAt`, with a `.digest` leaf; Invoke's readState lemmas and
+`invoke_never_stuck`/`law_never_stuck` take `digestOf`; `readState_go_stateSlots` gains a `digestsOk` premise,
+discharged at its one consumer (`seedOf_reads`) by `readAt`'s own check. New teeth: `args_named_not_live`, `no_digest_at_args`.
+**Status.** built (this commit). Re-ids every package with a method or law; re-genesis.

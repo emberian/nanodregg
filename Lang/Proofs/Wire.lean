@@ -101,7 +101,7 @@ theorem primOfBytes_some {p : ByteArray} {op : Prim} (h : primOfBytes p = some o
 
 mutual
 theorem tyOf_tyTree : (T : Ty) → tyWire T = true → tyOf (tyTree T) = some T
-  | .nat, _ | .bool, _ | .bytes, _ => by simp [tyTree, tyOf]
+  | .nat, _ | .bool, _ | .bytes, _ | .digest, _ => by simp [tyTree, tyOf]
   | .fn a c, h => by
     simp only [tyWire, Bool.and_eq_true] at h
     simp [tyTree, tyOf, tyOf_tyTree a h.1, tyOf_tyTree c h.2]
@@ -216,6 +216,7 @@ theorem termOf_termTree : (t : Term) → termWire t = true → termOf (termTree 
     simp [termTree, termOf, u64Of_bytes h]
   | .bool v, _ => by simp [termTree, termOf, boolOf_bytes]
   | .bytes s, _ => by simp [termTree, termOf]
+  | .digest s, _ => by simp [termTree, termOf]
   | .lam a b, h => by
     simp only [termWire, Bool.and_eq_true] at h
     simp [termTree, termOf, tyOf_tyTree a h.1, termOf_termTree b h.2]
@@ -321,6 +322,7 @@ theorem termOf_inv (n : Nat) :
         simp only [Option.map_eq_some_iff] at h
         obtain ⟨v, hv, rfl⟩ := h
         simp [termTree, termWire, boolOf_some hv]
+      · cases h; simp [termTree, termWire]
       · cases h; simp [termTree, termWire]
       · rename_i q a b
         split at h

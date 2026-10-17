@@ -6,9 +6,9 @@ Not admission: a resident (or its client) reads text into a `Package`, checks it
 (resolved to de Bruijn indices here) and three conveniences: application of many arguments
 `(f a b)`, `(let x T e body)` = `((lam x T body) e)`, and `(fn (x T) (y U) body)` = nested `lam`.
 
-    type  ::= nat | bool | bytes | (-> T U) | (rec (l T)…) | (sum (l T)…)
+    type  ::= nat | bool | bytes | digest | (-> T U) | (rec (l T)…) | (sum (l T)…)
     term  ::= x | 123 | true | false | "text" | #hex | (lam x T e) | (fn (x T)… e) | (let x T e e)
-            | (fix e) | (OP e e) with OP ∈ + - * / % == < <= beq cat
+            | (digest #hex) | (fix e) | (OP e e) with OP ∈ + - * / % == < <= beq cat deq
             | (record (l e)…) | (. e l) | (extend e (l e)…) | (inj T l e)
             | (case e (l x e)…) | (if e e e) | (ref i) | (e e…)
     package ::= (package (imports "hex"…) (state T) (iface T) (methods l…) (laws l…) (body e))
@@ -66,6 +66,8 @@ inductive ReadRefusal
   | unbound (pos : Nat) (name : String)
   /-- `(ref i)` with `i` not a numeral -/
   | badRef (pos : Nat)
+  /-- `(digest #hex)` with something other than `#hex` -/
+  | badDigest (pos : Nat)
   | emptyApplication (pos : Nat)
   /-- `fn` takes `(name type)…` and a body -/
   | badBinder (pos : Nat)
@@ -87,13 +89,13 @@ def ReadRefusal.name : ReadRefusal → String
   | .tooDeep _ => "tooDeep" | .tooLong _ => "tooLong" | .unexpectedEnd _ => "unexpectedEnd" | .stray _ => "stray"
   | .unterminatedString _ => "unterminatedString" | .unclosed _ => "unclosed"
   | .trailing _ => "trailing" | .notAType _ => "notAType" | .badEntry _ => "badEntry"
-  | .unbound _ _ => "unbound" | .badRef _ => "badRef" | .emptyApplication _ => "emptyApplication"
+  | .unbound _ _ => "unbound" | .badRef _ => "badRef" | .badDigest _ => "badDigest" | .emptyApplication _ => "emptyApplication"
   | .badBinder _ => "badBinder" | .reservedBinder _ _ => "reservedBinder" | .badImport _ => "badImport" | .badLabel _ => "badLabel"
   | .notPackage _ => "notPackage" | .notOfType _ => "notOfType"
 
 def ReadRefusal.pos : ReadRefusal → Nat
   | .tooDeep p | .tooLong p | .unexpectedEnd p | .stray p | .unterminatedString p | .unclosed p | .trailing p
-  | .notAType p | .badEntry p | .unbound p _ | .badRef p | .emptyApplication p | .badBinder p
+  | .notAType p | .badEntry p | .unbound p _ | .badRef p | .badDigest p | .emptyApplication p | .badBinder p
   | .reservedBinder p _
   | .badImport p | .badLabel p | .notPackage p | .notOfType p => p
 
@@ -169,6 +171,7 @@ def parse (text : String) : P SExp :=
 def primOf : String → Option Prim
   | "+" => some .add | "-" => some .sub | "*" => some .mul | "/" => some .div | "%" => some .mod
   | "==" => some .eq | "<" => some .lt | "<=" => some .le | "beq" => some .beq | "cat" => some .cat
+  | "deq" => some .deq
   | _ => none
 
 /-- The entries `(label x)…` of a row, each `x` read by `f`. -/
@@ -182,6 +185,7 @@ def ty : Nat → SExp → P Ty
   | _ + 1, .atom _ "nat" => .ok .nat
   | _ + 1, .atom _ "bool" => .ok .bool
   | _ + 1, .atom _ "bytes" => .ok .bytes
+  | _ + 1, .atom _ "digest" => .ok .digest
   | d + 1, .list _ [.atom _ "->", a, b] => do pure (.fn (← ty d a) (← ty d b))
   | d + 1, .list _ (.atom _ "rec" :: fs) => do pure (.record (Row.sort (← entries (fun t => ty d t) fs)))
   | d + 1, .list _ (.atom _ "sum" :: fs) => do pure (.sum (Row.sort (← entries (fun t => ty d t) fs)))
@@ -206,7 +210,8 @@ def hexBytes? (a : String) : Option ByteArray :=
 def isLiteral (a : String) : Bool := a = "true" || a = "false" || a.toNat?.isSome || (hexBytes? a).isSome
 
 /-- The head words of the forms `term` reads (besides the primitives, `primOf`). -/
-def keywords : List String := ["lam", "fn", "let", "fix", ".", "record", "extend", "inj", "case", "if", "ref"]
+def keywords : List String :=
+  ["lam", "fn", "let", "fix", ".", "record", "extend", "inj", "case", "if", "ref", "digest"]
 
 /-- A name `term` reads as something other than a variable: a literal, a head word, a primitive. -/
 def isReserved (a : String) : Bool := isLiteral a || keywords.contains a || (primOf a).isSome
@@ -268,6 +273,10 @@ def term : Nat → List String → SExp → P Term
     pure (.case (← term d sc e) (Row.sort (← arms (fun x b => term d (x :: sc) b) as)))
   | d + 1, sc, .list _ [.atom _ "if", c, a, b] => do
     pure (.ite (← term d sc c) (← term d sc a) (← term d sc b))
+  | _ + 1, _, .list p [.atom _ "digest", .atom _ h] =>
+    match hexBytes? h with
+    | some b => .ok (.digest b)
+    | none => .error (.badDigest p)
   | _ + 1, _, .list p [.atom _ "ref", .atom _ i] =>
     match i.toNat? with
     | some n => .ok (.ref n)
@@ -305,7 +314,8 @@ What a resident writes for an object's seed state or a method's arguments: `123`
 UTF-8, such as a member's id; what `ob` prints such bytes as), `(record (l v)…)` (fields in any order, exactly the type's), and for a sum `(l v)` or a
 bare `l` for an arm whose payload is the empty record. The type directs the reading, so a literal
 needs no annotation, and only a value of the type is accepted (`Lang.Proofs.Read.dataAt_conforms`):
-a natural below `Bounds.natLimit`, a byte string of at most `Bounds.bytesMax`. -/
+a natural below `Bounds.natLimit`, a byte string of at most `Bounds.bytesMax`, a digest (`#hex` at
+type `digest`) of at most `Bounds.digestBytesMax`. -/
 
 /-- A scalar literal at a scalar type. -/
 def scalarAt : Ty → SExp → P Data
@@ -321,6 +331,10 @@ def scalarAt : Ty → SExp → P Data
   | .bytes, .atom p a =>
     match hexBytes? a with
     | some b => if b.size ≤ Bounds.bytesMax then .ok (.bytes b) else .error (.notOfType p)
+    | none => .error (.notOfType p)
+  | .digest, .atom p a =>
+    match hexBytes? a with
+    | some b => if b.size ≤ Bounds.digestBytesMax then .ok (.digest b) else .error (.notOfType p)
     | none => .error (.notOfType p)
   | _, x => .error (.notOfType x.pos)
 

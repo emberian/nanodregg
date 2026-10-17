@@ -16,9 +16,10 @@ refused (`none`), so one value has one tree and one tree has one value (`Lang.Pr
 Tags (a type's and a term's tag spaces are read at different positions, so they may overlap):
 
     type  nat 0 · bool 1 · bytes 2 · fn 3 [a c] · record 4 [field*] · sum 5 [field*] · field 6 ℓ [T]
+          digest 7
     term  var 0 i · lam 1 [T b] · app 2 [f a] · fix 3 [t] · nat 4 n · bool 5 v · bytes 6 s
           prim 7 code [a b] · record 8 [field*] · get 9 ℓ [t] · extend 10 [t field*] · inj 11 ℓ [T t]
-          case 12 [t field*] · ite 13 [c t e] · ref 14 i · field 15 ℓ [t]
+          case 12 [t field*] · ite 13 [c t e] · ref 14 i · field 15 ℓ [t] · digest 16 s
 -/
 import Codec.Tree
 import Lang.Term
@@ -70,11 +71,12 @@ def u64Bytes (n : Nat) : ByteArray := Stream.u64.bytes (UInt64.ofNat n)
 
 def primCode : Prim → UInt8
   | .add => 0 | .sub => 1 | .mul => 2 | .div => 3 | .mod => 4
-  | .eq => 5 | .lt => 6 | .le => 7 | .beq => 8 | .cat => 9
+  | .eq => 5 | .lt => 6 | .le => 7 | .beq => 8 | .cat => 9 | .deq => 10
 
 def primOf : UInt8 → Option Prim
   | 0 => some .add | 1 => some .sub | 2 => some .mul | 3 => some .div | 4 => some .mod
   | 5 => some .eq | 6 => some .lt | 7 => some .le | 8 => some .beq | 9 => some .cat
+  | 10 => some .deq
   | _ => none
 
 def primOfBytes (p : ByteArray) : Option Prim :=
@@ -89,6 +91,7 @@ def tyTree : Ty → Tree
   | .nat => .node 0 .empty []
   | .bool => .node 1 .empty []
   | .bytes => .node 2 .empty []
+  | .digest => .node 7 .empty []
   | .fn a c => .node 3 .empty [tyTree a, tyTree c]
   | .record r => .node 4 .empty (tyRowTree r)
   | .sum r => .node 5 .empty (tyRowTree r)
@@ -104,6 +107,7 @@ def tyOf : Tree → Option Ty
   | .node 0 p [] => if p = .empty then some .nat else none
   | .node 1 p [] => if p = .empty then some .bool else none
   | .node 2 p [] => if p = .empty then some .bytes else none
+  | .node 7 p [] => if p = .empty then some .digest else none
   | .node 3 p [a, c] =>
     if p = .empty then
       match tyOf a, tyOf c with
@@ -128,7 +132,7 @@ end
 mutual
 /-- The type has a tree that reads back to it: labels and rows in bounds. -/
 def tyWire : Ty → Bool
-  | .nat | .bool | .bytes => true
+  | .nat | .bool | .bytes | .digest => true
   | .fn a c => tyWire a && tyWire c
   | .record r => decide (r.length ≤ rowMax) && tyRowWire r
   | .sum r => decide (r.length ≤ rowMax) && tyRowWire r
@@ -149,6 +153,7 @@ def termTree : Term → Tree
   | .nat n => .node 4 (u64Bytes n) []
   | .bool v => .node 5 (Stream.bool.bytes v) []
   | .bytes s => .node 6 s []
+  | .digest s => .node 16 s []
   | .prim op a b => .node 7 (Stream.u8.bytes (primCode op)) [termTree a, termTree b]
   | .record fs => .node 8 .empty (fieldsTree fs)
   | .get t ℓ => .node 9 ℓ.toUTF8 [termTree t]
@@ -183,6 +188,7 @@ def termOf : Tree → Option Term
   | .node 4 p [] => (u64Of p).map .nat
   | .node 5 p [] => (boolOf p).map .bool
   | .node 6 p [] => some (.bytes p)
+  | .node 16 p [] => some (.digest p)
   | .node 7 p [a, b] =>
     match primOfBytes p, termOf a, termOf b with
     | some op, some a, some b => some (.prim op a b)
@@ -235,7 +241,7 @@ def termWire : Term → Bool
   | .app f a => termWire f && termWire a
   | .fix t => termWire t
   | .nat n => decide (n < 2 ^ 64)
-  | .bool _ | .bytes _ => true
+  | .bool _ | .bytes _ | .digest _ => true
   | .prim _ a b => termWire a && termWire b
   | .record fs => decide (fs.length ≤ rowMax) && fieldsWire fs
   | .get t ℓ => labelOk ℓ && termWire t

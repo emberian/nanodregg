@@ -636,7 +636,7 @@ def bounty : Row where
     ok "sponsor" ["transfer", "well:{@w}", "of:{@sponsor}:{@w}", "100"],
     okBind "poster" ["install", "<world/escrow/Escrow"] "escrow",
     okBind "poster" ["create", "--pkg", "@escrow",
-      "(record (amount 30) (arbiter #{@poster}) (asset #{@w}) (beneficiary #{@hunter}) (depositor #{@sponsor}) (phase open))"]
+      "(record (amount 30) (arbiter #{@poster}) (asset #{@w}) (beneficiary #{@hunter}) (depositor #{@sponsor}) (nonce \"bounty-1\") (phase open))"]
       "bounty",
     ok "poster" ["account", "@w", "--owner", "@bounty"],
     ok "poster" ["account", "@w", "--owner", "@hunter"],

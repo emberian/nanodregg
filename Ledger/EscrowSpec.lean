@@ -27,14 +27,15 @@ def isPayout (rq : Data) : Bool := invoked rq == some refund || invoked rq == so
 def payouts (steps : List (Data × Data)) : Nat := (steps.filter fun s => isPayout s.1).length
 
 /-- An escrow state with arbitrary terms, in phase `p`. -/
-def stateOf (amount : Nat) (arbiter asset beneficiary depositor : ByteArray) (p : Label) : Data :=
-  .record [("amount", .nat amount), ("arbiter", .bytes arbiter), ("asset", .bytes asset),
-    ("beneficiary", .bytes beneficiary), ("depositor", .bytes depositor), ("phase", .inj p (.record []))]
+def stateOf (amount : Nat) (arbiter asset beneficiary depositor nonce : ByteArray) (p : Label) : Data :=
+  .record [("amount", .nat amount), ("arbiter", .digest arbiter), ("asset", .digest asset),
+    ("beneficiary", .digest beneficiary), ("depositor", .digest depositor), ("nonce", .bytes nonce),
+    ("phase", .inj p (.record []))]
 
 /-- A request signed by `agent` on object `self` for occasion `occ`. -/
 def reqWith (agent self : ByteArray) (occ : Data) : Data :=
-  .record [("agent", .bytes agent), ("notBefore", .nat 0), ("occasion", occ),
-    ("principal", .bytes agent), ("self", .bytes self), ("validUntil", .nat 0)]
+  .record [("agent", .digest agent), ("notBefore", .nat 0), ("occasion", occ),
+    ("principal", .digest agent), ("self", .digest self), ("validUntil", .nat 0)]
 
 def reqOf (agent self : ByteArray) (m : Nat) : Data := reqWith agent self (.inj "invoke" (.nat m))
 
@@ -76,12 +77,12 @@ def callOfMethod (ℓ : Label) (state arg rq : Data) : List (Option Val) :=
 
 /-- The state method `ℓ` writes, field by field, over the reference evaluator, in `stateTy`'s order. -/
 def stateOfMethod (ℓ : Label) (state arg rq : Data) : List (Option Val) :=
-  ["amount", "arbiter", "asset", "beneficiary", "depositor", "phase"].map fun f =>
+  ["amount", "arbiter", "asset", "beneficiary", "depositor", "nonce", "phase"].map fun f =>
     valueOf (eval [] 1000 (.get (.get (methodAt ℓ) "state") f) [rq.toVal, arg.toVal, state.toVal])
 
 /-- A call spends the payout key out of the escrow's own account `of self asset`. -/
 def spendsB (self asset : ByteArray) : List (Option Val) → Bool
-  | some (.bytes s) :: some (.bytes a) :: _ :: _ :: _ :: _ :: some (.bytes k) :: _ =>
+  | some (.digest s) :: some (.digest a) :: _ :: _ :: _ :: _ :: some (.bytes k) :: _ =>
       decide (s = self) && decide (a = asset) && decide (k = payoutKey)
   | _ => false
 
@@ -94,19 +95,19 @@ structure Act where
   phase : Label
 
 /-- A method's argument as the receiver decodes it at the method's argument type. -/
-def argFor (m : Nat) (g : ByteArray) : Data := if m = deposit then .record [("grant", .bytes g)] else .record []
+def argFor (m : Nat) (g : ByteArray) : Data := if m = deposit then .record [("grant", .digest g)] else .record []
 
 section
-variable (amount : Nat) (arb asset ben dep self : ByteArray)
+variable (amount : Nat) (arb asset ben dep nk self : ByteArray)
 
 def stepsOf (acts : List Act) : List (Data × Data) :=
-  acts.map fun a => (reqWith a.agent self a.occ, stateOf amount arb asset ben dep a.phase)
+  acts.map fun a => (reqWith a.agent self a.occ, stateOf amount arb asset ben dep nk a.phase)
 
 /-- The call act `a` makes from phase `p`: method `escrow.methods[m]` for an invoke of `m` (how
 KERNEL's invoke resolves it), none otherwise. -/
 def callAt (p : Label) (a : Act) : List (Option Val) :=
   match invoked (reqWith a.agent self a.occ) with
-  | some m => callOfMethod ((escrow.methods[m]?).getD "") (stateOf amount arb asset ben dep p) (argFor m a.grant)
+  | some m => callOfMethod ((escrow.methods[m]?).getD "") (stateOf amount arb asset ben dep nk p) (argFor m a.grant)
       (reqWith a.agent self a.occ)
   | none => []
 
@@ -114,7 +115,7 @@ def callAt (p : Label) (a : Act) : List (Option Val) :=
 escrow's own account. -/
 def spendCount : Label → List Act → Nat
   | _, [] => 0
-  | p, a :: as => (if spendsB self asset (callAt amount arb asset ben dep self p a) then 1 else 0) +
+  | p, a :: as => (if spendsB self asset (callAt amount arb asset ben dep nk self p a) then 1 else 0) +
       spendCount a.phase as
 end
 

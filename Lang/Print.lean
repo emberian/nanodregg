@@ -94,6 +94,9 @@ def bytesSx (b : ByteArray) : SExp :=
 
 def bytesText (b : ByteArray) : String := text (bytesSx b)
 
+/-- A digest as `#hex`, always (what `Read.scalarAt` reads at type `digest`). -/
+def digestSx (b : ByteArray) : SExp := atom ("#" ++ hex b)
+
 /-! ## Types -/
 
 mutual
@@ -101,6 +104,7 @@ def tySx : Ty → Option SExp
   | .nat => some (atom "nat")
   | .bool => some (atom "bool")
   | .bytes => some (atom "bytes")
+  | .digest => some (atom "digest")
   | .fn a b => do pure (list [atom "->", ← tySx a, ← tySx b])
   | .record r => do pure (list (atom "rec" :: (← rowSx r)))
   | .sum r => do pure (list (atom "sum" :: (← rowSx r)))
@@ -119,7 +123,7 @@ def tyText (T : Ty) (h : (ty T).isSome = true := by decide) : String := (ty T).g
 
 def primWord : Prim → String
   | .add => "+" | .sub => "-" | .mul => "*" | .div => "/" | .mod => "%"
-  | .eq => "==" | .lt => "<" | .le => "<=" | .beq => "beq" | .cat => "cat"
+  | .eq => "==" | .lt => "<" | .le => "<=" | .beq => "beq" | .cat => "cat" | .deq => "deq"
 
 /-- The name of the variable bound at depth `d`. -/
 def name (d : Nat) : String := "x" ++ Nat.repr d
@@ -134,6 +138,7 @@ def termSx (d : Nat) : Term → Option SExp
   | .nat n => some (atom (Nat.repr n))
   | .bool b => some (atom (if b then "true" else "false"))
   | .bytes s => some (bytesSx s)
+  | .digest s => some (list [atom "digest", digestSx s])
   | .prim p a b => do pure (list [atom (primWord p), ← termSx d a, ← termSx d b])
   | .record fs => do pure (list (atom "record" :: (← fieldsSx d fs)))
   | .get t ℓ => do pure (list [atom ".", ← termSx d t, ← label ℓ])
@@ -170,6 +175,7 @@ def dataSx : Data → Option SExp
   | .nat n => some (atom (Nat.repr n))
   | .bool b => some (atom (if b then "true" else "false"))
   | .bytes s => some (bytesSx s)
+  | .digest s => some (digestSx s)
   | .record fs => do pure (list (atom "record" :: (← dataFieldsSx fs)))
   | .inj ℓ v => do pure (list [← label ℓ, ← dataSx v])
 

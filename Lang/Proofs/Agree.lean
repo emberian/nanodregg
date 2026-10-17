@@ -102,6 +102,9 @@ theorem agrees (N : Nat) :
       | bytes v =>
         obtain ⟨n1, rfl, h1⟩ := h.inv_next rfl
         exact .inr ⟨_, n1, by omega, .bytes, h1⟩
+      | digest v =>
+        obtain ⟨n1, rfl, h1⟩ := h.inv_next rfl
+        exact .inr ⟨_, n1, by omega, .digest, h1⟩
       | record fs =>
         obtain ⟨n1, rfl, h1⟩ := h.inv_next rfl
         exact .inr ⟨_, n1, by omega, .record, h1⟩

@@ -26,8 +26,8 @@ private def b (s : String) : ByteArray := s.toUTF8
 
 /-- A request from `agent` acting with `principal`'s authority, in window `[lo, hi]`, on `occ`. -/
 private def req (agent principal : String) (occ : Data) (lo hi : Nat := 0) : Data :=
-  .record [("agent", .bytes (b agent)), ("notBefore", .nat lo), ("occasion", occ),
-    ("principal", .bytes (b principal)), ("validUntil", .nat hi)]
+  .record [("agent", .digest (b agent)), ("notBefore", .nat lo), ("occasion", occ),
+    ("principal", .digest (b principal)), ("validUntil", .nat hi)]
 
 private def write : Data := .inj "write" (.record [])
 private def birth : Data := .inj "birth" (.record [])

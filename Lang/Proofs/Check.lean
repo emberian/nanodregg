@@ -53,6 +53,11 @@ theorem inferE_sound : ∀ {Γ : List Ty} {t : Term} {T : Ty}, inferE Δ Γ t = 
       split at h
       · rename_i hn; cases h; exact .bytes hn
       · simp [typeErr] at h
+  | _, .digest _, _, h => by
+      simp only [inferE] at h
+      split at h
+      · rename_i hn; cases h; exact .digest hn
+      · simp [typeErr] at h
   | Γ, .prim p a b, T, h => by
       simp only [inferE] at h
       split at h
@@ -101,6 +106,7 @@ theorem inferE_sound : ∀ {Γ : List Ty} {t : Term} {T : Ty}, inferE Δ Γ t = 
         all_goals simp [typeErr] at h
       · simp [typeErr] at h
   | _, .inj .nat _ _, _, h | _, .inj .bool _ _, _, h | _, .inj .bytes _ _, _, h
+  | _, .inj .digest _ _, _, h
   | _, .inj (.fn _ _) _ _, _, h | _, .inj (.record _) _ _, _, h => by simp [inferE, typeErr] at h
   | Γ, .case t arms, T, h => by
       simp only [inferE] at h
@@ -170,6 +176,7 @@ theorem inferE_complete : ∀ {Γ : List Ty} {t : Term} {T : Ty}, HasType Δ Γ 
   | _, _, _, .nat hn => by simp [inferE, hn]
   | _, _, _, .bool => by simp [inferE]
   | _, _, _, .bytes hn => by simp [inferE, hn]
+  | _, _, _, .digest hn => by simp [inferE, hn]
   | _, _, _, .prim ha hb => by simp [inferE, inferE_complete ha, inferE_complete hb]
   | _, _, _, .record hasc hf => by simp [inferE, hasc, inferFields_complete hf]
   | _, _, _, .get ht hf => by simp [inferE, inferE_complete ht, hf]

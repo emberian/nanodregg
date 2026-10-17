@@ -18,6 +18,7 @@ inductive HasType (Δ : List Ty) : List Ty → Term → Ty → Prop
   | nat {Γ n} : n < Bounds.natLimit → HasType Δ Γ (.nat n) .nat
   | bool {Γ b} : HasType Δ Γ (.bool b) .bool
   | bytes {Γ s} : s.size ≤ Bounds.bytesMax → HasType Δ Γ (.bytes s) .bytes
+  | digest {Γ s} : s.size ≤ Bounds.digestBytesMax → HasType Δ Γ (.digest s) .digest
   | prim {Γ p a b} : HasType Δ Γ a p.left → HasType Δ Γ b p.right →
       HasType Δ Γ (.prim p a b) p.result
   | record {Γ fs r} : Row.ascending fs = true → FieldsTy Δ Γ fs r →

@@ -50,8 +50,8 @@ variable {D : Type} (bytesOf : D → ByteArray) (digestOf : ByteArray → Option
 theorem judgeOne_ok {look : Pinned D} {law : D} {old new : Kernel.Slots} {r : Req D}
     (h : judgeOne bytesOf digestOf look law old new r = .ok ()) :
     ∃ L g p o n, load digestOf look closureDepthMax (bytesOf law) ⟨[], [], []⟩ = .ok (L, g) ∧
-      L.pkgs[g]? = some p ∧ readState (recordRow p.state) old = .ok o ∧
-      readState (recordRow p.state) new = .ok n ∧
+      L.pkgs[g]? = some p ∧ readState digestOf (recordRow p.state) old = .ok o ∧
+      readState digestOf (recordRow p.state) new = .ok n ∧
       ∀ ℓ ∈ p.laws, runLaw L.lib (.get (.ref g) ℓ) o n (reqData bytesOf r) = .ok (.ok ()) := by
   unfold judgeOne at h
   simp only [bind, Except.bind, pure, Except.pure] at h
@@ -89,9 +89,11 @@ theorem load_leaf {look : Pinned D} {law : D} {p : Package} {fuel : Nat} {L : Lo
   simp only [admitPackage, ifacesAt] at h
   split at h
   · cases h
-  · simp only [Except.ok.injEq, Prod.mk.injEq] at h
-    obtain ⟨rfl, rfl⟩ := h
-    exact ⟨rfl, rfl, rfl⟩
+  · split at h
+    · cases h
+    · simp only [Except.ok.injEq, Prod.mk.injEq] at h
+      obtain ⟨rfl, rfl⟩ := h
+      exact ⟨rfl, rfl, rfl⟩
 
 /-- **What the receiver loads is what the cell holds**: a closure loaded for `law` has, at the index
 `load` returns, exactly the package `readPackage` reads from `law`'s cell (imports or not), with its
@@ -112,11 +114,13 @@ theorem load_top {look : Pinned D} {law : D} {p : Package} {fuel : Nat} {L : Loa
     · cases h
     · split at h
       · cases h
-      · simp only [Except.ok.injEq, Prod.mk.injEq] at h
-        obtain ⟨rfl, rfl⟩ := h
-        refine ⟨?_, fun i => gis.getD i 0, ?_⟩
-        · simp [hids]
-        · simp [← hlib, hids]
+      · split at h
+        · cases h
+        · simp only [Except.ok.injEq, Prod.mk.injEq] at h
+          obtain ⟨rfl, rfl⟩ := h
+          refine ⟨?_, fun i => gis.getD i 0, ?_⟩
+          · simp [hids]
+          · simp [← hlib, hids]
 
 end
 
@@ -126,7 +130,7 @@ mutual
 /-- `t` mentions no closure package: relocation cannot change it. -/
 def NoRef : Term → Prop
   | .ref _ => False
-  | .var _ | .nat _ | .bool _ | .bytes _ => True
+  | .var _ | .nat _ | .bool _ | .bytes _ | .digest _ => True
   | .lam _ b => NoRef b
   | .app f a => NoRef f ∧ NoRef a
   | .fix t => NoRef t
@@ -145,7 +149,7 @@ end
 
 mutual
 theorem relocate_noRef (f : Nat → Nat) : ∀ t : Term, NoRef t → t.relocate f = t
-  | .var _, _ | .nat _, _ | .bool _, _ | .bytes _, _ => rfl
+  | .var _, _ | .nat _, _ | .bool _, _ | .bytes _, _ | .digest _, _ => rfl
   | .ref _, h => h.elim
   | .lam _ b, h => by simp [Term.relocate, relocate_noRef f b h]
   | .app g a, h => by simp [Term.relocate, relocate_noRef f g h.1, relocate_noRef f a h.2]
@@ -232,7 +236,9 @@ theorem anyOf_ : ∀ {cs : List Term}, (∀ c ∈ cs, NoRef c) → NoRef (anyOf 
 theorem andT_ {a b : Term} (ha : NoRef a) (hb : NoRef b) : NoRef (andT a b) := ⟨ha, hb, trivial⟩
 theorem notT_ {a : Term} (ha : NoRef a) : NoRef (notT a) := ⟨ha, trivial, trivial⟩
 theorem eqAt_ {T : Ty} {a b : Term} (ha : NoRef a) (hb : NoRef b) : NoRef (eqAt T a b) := by
-  unfold eqAt; split <;> exact ⟨ha, hb⟩
+  unfold eqAt; split
+  · exact ⟨ha, hb⟩
+  · split <;> exact ⟨ha, hb⟩
 theorem bit_ {t : Term} {i : Nat} (ht : NoRef t) : NoRef (bit t i) := ⟨⟨ht, trivial⟩, trivial⟩
 
 theorem popcount_ {t : Term} {cnt : Nat} (ht : NoRef t) : NoRef (popcount t cnt) := by
@@ -262,13 +268,13 @@ end NoRefStd
 
 open Std NoRefStd in
 theorem noRef_ownerSigns (S : Ty) : NoRef (ownerSigns S) := by
-  have : NoRef (allOf [(.prim .beq ((⟨1⟩ : At).reqF "agent") ((⟨1⟩ : At).reqF "principal"),
+  have : NoRef (allOf [(.prim .deq ((⟨1⟩ : At).reqF "agent") ((⟨1⟩ : At).reqF "principal"),
       "not signed by the owner")]) := allOf_ (by simp)
   exact lawOf_ this this this this
 
 open Std NoRefStd in
 theorem noRef_allowlist (S : Ty) (ids : List ByteArray) : NoRef (allowlistLaw S ids) := by
-  have : NoRef (allOf [(anyOf (ids.map fun i => .prim .beq ((⟨1⟩ : At).reqF "agent") (.bytes i)),
+  have : NoRef (allOf [(anyOf (ids.map fun i => .prim .deq ((⟨1⟩ : At).reqF "agent") (.digest i)),
       "not on the allowlist")]) := allOf_ (by
         simp only [List.mem_singleton, forall_eq]
         exact anyOf_ (by simp))
@@ -373,7 +379,7 @@ theorem judgeOne_pkgOf_admits {S : Ty} {laws : List (Label × Term)} {methods : 
     (hp : readPackage look law = .ok (Std.pkgOf S laws methods))
     (hnd : (laws.map (·.1) ++ methods.map (·.1)).Nodup)
     (h : judgeOne bytesOf digestOf look law old new r = .ok ()) :
-    ∃ o n, readState (recordRow S) old = .ok o ∧ readState (recordRow S) new = .ok n ∧
+    ∃ o n, readState digestOf (recordRow S) old = .ok o ∧ readState digestOf (recordRow S) new = .ok n ∧
       ∀ x ∈ laws, NoRef x.2 → IsLaw x.2 → ∃ lib, Std.Admits lib x.2 (reqData bytesOf r) n o := by
   obtain ⟨L, g, p, o, n, hload, hpg, ho, hn, hall⟩ := judgeOne_ok bytesOf digestOf h
   obtain ⟨rfl, hpk, hlib⟩ := load_leaf bytesOf digestOf (fuel := 7) hid hp rfl hload
@@ -407,7 +413,7 @@ theorem judgeOne_pkgOf_admits {S : Ty} {laws : List (Label × Term)} {methods : 
     rw [relocate_noRef _ _ hfree]
 
 theorem reqData_agent (r : Req D) :
-    (reqData bytesOf r).field "agent" = some (.bytes (bytesOf r.agent)) := by
+    (reqData bytesOf r).field "agent" = some (.digest (bytesOf r.agent)) := by
   simp [reqData, Data.field, Row.find?]
 
 theorem reqData_occasion (r : Req D) :
@@ -428,8 +434,8 @@ theorem judgeOne_quorum_change {S T : Ty} {ms : List ByteArray} {k : Nat} {g ℓ
     (hocc : r.occasion = .write ∨ ∃ m, r.occasion = .invoke m)
     (h : judgeOne bytesOf digestOf look law old new r = .ok ()) :
     ms.Nodup ∧ 1 ≤ k ∧ k ≤ ms.length ∧
-    ∃ o n, readState (recordRow S) old = .ok o ∧ readState (recordRow S) new = .ok n ∧
-      (∃ m ∈ ms, (reqData bytesOf r).field "agent" = some (.bytes m)) ∧
+    ∃ o n, readState digestOf (recordRow S) old = .ok o ∧ readState digestOf (recordRow S) new = .ok n ∧
+      (∃ m ∈ ms, (reqData bytesOf r).field "agent" = some (.digest m)) ∧
       (∃ b, n.field "approvals" = some (.nat b) ∧ b < Std.pow2 ms.length) ∧
       ∃ ng og, n.field g = some ng ∧ o.field g = some og ∧
         ((ng ≠ og ∧ (∃ a, o.field "approvals" = some (.nat a) ∧ k ≤ Std.popcountNat a ms.length) ∧
@@ -437,7 +443,7 @@ theorem judgeOne_quorum_change {S T : Ty} {ms : List ByteArray} {k : Nat} {g ℓ
          (ng = og ∧ ∃ np op, n.field "proposal" = some np ∧ o.field "proposal" = some op ∧
             ((np ≠ op ∧ n.field "approvals" = some (.nat 0)) ∨
              (np = op ∧ ∃ a, n.field "approvals" = some (.nat a) ∧ o.field "approvals" = some (.nat a)) ∨
-             (np = op ∧ ∃ i m a, ms[i]? = some m ∧ (reqData bytesOf r).field "agent" = some (.bytes m) ∧
+             (np = op ∧ ∃ i m a, ms[i]? = some m ∧ (reqData bytesOf r).field "agent" = some (.digest m) ∧
                 o.field "approvals" = some (.nat a) ∧ a / Std.pow2 i % 2 = 0 ∧
                 n.field "approvals" = some (.nat (a + Std.pow2 i)))))) := by
   obtain ⟨rfl, hms, hk1, hk2, _⟩ := Std.quorum_ok hqc
@@ -461,8 +467,8 @@ theorem judgeOne_quorum_relaw {S T : Ty} {ms : List ByteArray} {k : Nat} {g ℓq
     {t : Term} (hqc : Std.quorum S T ms k g = .ok t) (hq : (ℓq, t) ∈ laws)
     (hocc : r.occasion = .relaw ls)
     (h : judgeOne bytesOf digestOf look law old new r = .ok ()) :
-    ms.Nodup ∧ 1 ≤ k ∧ k ≤ ms.length ∧ ∃ o, readState (recordRow S) old = .ok o ∧
-      (∃ m ∈ ms, (reqData bytesOf r).field "agent" = some (.bytes m)) ∧
+    ms.Nodup ∧ 1 ≤ k ∧ k ≤ ms.length ∧ ∃ o, readState digestOf (recordRow S) old = .ok o ∧
+      (∃ m ∈ ms, (reqData bytesOf r).field "agent" = some (.digest m)) ∧
       (∃ a, o.field "approvals" = some (.nat a) ∧ k ≤ Std.popcountNat a ms.length) ∧
       o.field "proposal" = some (.inj "laws" (.bytes (ls.foldl (fun acc l => acc ++ bytesOf l) .empty))) := by
   obtain ⟨rfl, hms, hk1, hk2, _⟩ := Std.quorum_ok hqc
@@ -486,7 +492,7 @@ theorem judgeOne_machine_invoke {S : Ty} {f ℓm : Label} {states : List Label} 
     (hq : (ℓm, Std.machineLaw S f states initial edges) ∈ laws)
     (hocc : r.occasion = .invoke m)
     (h : judgeOne bytesOf digestOf look law old new r = .ok ()) :
-    ∃ o n, readState (recordRow S) old = .ok o ∧ readState (recordRow S) new = .ok n ∧
+    ∃ o n, readState digestOf (recordRow S) old = .ok o ∧ readState digestOf (recordRow S) new = .ok n ∧
       ∃ a b, (a, m, b) ∈ edges ∧ (∃ y, o.field f = some (.inj a y)) ∧ ∃ y, n.field f = some (.inj b y) := by
   obtain ⟨o, n, ho, hn, hall⟩ := judgeOne_pkgOf_admits bytesOf digestOf hid hp hnd h
   obtain ⟨lib, ha⟩ := hall _ hq (noRef_machineLaw S f states initial edges) isLaw_lawOf5

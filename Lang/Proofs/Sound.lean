@@ -66,6 +66,11 @@ theorem ValTy.bytes_inv {v : Val} (h : ValTy Δ v .bytes) :
   cases h with
   | bytes hs => exact ⟨_, rfl, hs⟩
 
+theorem ValTy.digest_inv {v : Val} (h : ValTy Δ v .digest) :
+    ∃ s, v = .digest s ∧ s.size ≤ Bounds.digestBytesMax := by
+  cases h with
+  | digest hs => exact ⟨_, rfl, hs⟩
+
 theorem ValTy.bool_inv {v : Val} (h : ValTy Δ v .bool) : ∃ b, v = .bool b := by
   cases h; exact ⟨_, rfl⟩
 
@@ -97,6 +102,9 @@ theorem primEval_sound {p : Prim} {a b : Val} (ha : ValTy Δ a p.left) (hb : Val
   cases p with
   | beq =>
     obtain ⟨x, rfl, _⟩ := ValTy.bytes_inv ha; obtain ⟨y, rfl, _⟩ := ValTy.bytes_inv hb
+    exact .bool
+  | deq =>
+    obtain ⟨x, rfl, _⟩ := ValTy.digest_inv ha; obtain ⟨y, rfl, _⟩ := ValTy.digest_inv hb
     exact .bool
   | cat =>
     obtain ⟨x, rfl, _⟩ := ValTy.bytes_inv ha; obtain ⟨y, rfl, _⟩ := ValTy.bytes_inv hb
@@ -146,6 +154,7 @@ theorem step_sound {lib : List Term} {s : State} {T : Ty} (hlib : LibTy Δ lib)
     | nat hn => exact .next (.ret (.nat hn) hk)
     | bool => exact .next (.ret .bool hk)
     | bytes hn => exact .next (.ret (.bytes hn) hk)
+    | digest hn => exact .next (.ret (.digest hn) hk)
     | prim ha hb => exact .next (.eval he ha (.primL he hb hk))
     | record _ hf => exact .next (.ret (.record (ThunksTy.of_rel (suspend_ty he hf))) hk)
     | get ht hf => exact .next (.eval he ht (.get hf hk))

@@ -58,7 +58,10 @@ theorem tyWire_prints : ∀ (T : Ty) {m D : Nat}, Wire.tyWire T = true → (Wire
     exact (typrints_atom _ (.inr (.inl rfl))).mono (by omega)
   | .bytes, _, _, _, hf => by
     obtain ⟨D', rfl, -⟩ := fits_node hf
-    exact (typrints_atom _ (.inr (.inr rfl))).mono (by omega)
+    exact (typrints_atom _ (.inr (.inr (.inl rfl)))).mono (by omega)
+  | .digest, _, _, _, hf => by
+    obtain ⟨D', rfl, -⟩ := fits_node hf
+    exact (typrints_atom _ (.inr (.inr (.inr rfl)))).mono (by omega)
   | .fn a c, _, _, hw, hf => by
     simp only [Wire.tyWire, Bool.and_eq_true] at hw
     obtain ⟨D', rfl, hc⟩ := fits_node hf
@@ -112,6 +115,9 @@ theorem hasType_prints {Δ : List Ty} : ∀ {Γ : List Ty} {t : Term} {T : Ty} {
   | _, _, _, _, _, .bytes _, _, hf => by
     obtain ⟨D', rfl, -⟩ := fits_node hf
     exact (prints_bytes _ _).mono (by omega)
+  | _, _, _, _, _, .digest _, _, hf => by
+    obtain ⟨D', rfl, -⟩ := fits_node hf
+    exact (prints_digest _ _).mono (by omega)
   | _, _, _, _, _, .prim ha hb, hw, hf => by
     simp only [Wire.termWire, Bool.and_eq_true] at hw
     obtain ⟨D', rfl, hc⟩ := fits_node hf

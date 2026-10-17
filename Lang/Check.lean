@@ -10,7 +10,7 @@ O(size of `t` × size of the types it compares). `Lang.Proofs.Check` proves it e
 relation `HasType` (sound and complete), so a term's type is unique.
 
 Bounds are typing facts: a literal natural must be below `Bounds.natLimit` and a literal byte
-string at most `Bounds.bytesMax`, so every value a checked program starts from is in bounds.
+string at most `Bounds.bytesMax` and a literal digest at most `Bounds.digestBytesMax`, so every value a checked program starts from is in bounds.
 A `case` must have at least one arm (its result type comes from the arms).
 -/
 import Lang.Bounds
@@ -32,6 +32,8 @@ inductive TypeError
   | notSelfMap (got : Ty)
   | natRange (value : Nat)
   | bytesRange (size : Nat)
+  /-- an id literal longer than `Bounds.digestBytesMax` -/
+  | digestRange (size : Nat)
   | operands (p : Prim) (left right : Ty)
   /-- a record literal's or an extension's labels are not strictly ascending -/
   | notCanonical
@@ -53,7 +55,7 @@ inductive TypeError
 def TypeError.name : TypeError → String
   | .unbound _ => "unbound" | .noPackage _ => "noPackage" | .badType _ => "badType"
   | .notFunction _ => "notFunction" | .argument _ _ => "argument" | .notSelfMap _ => "notSelfMap"
-  | .natRange _ => "natRange" | .bytesRange _ => "bytesRange" | .operands _ _ _ => "operands"
+  | .natRange _ => "natRange" | .bytesRange _ => "bytesRange" | .digestRange _ => "digestRange" | .operands _ _ _ => "operands"
   | .notCanonical => "notCanonical" | .notRecord _ => "notRecord" | .noField _ => "noField"
   | .notSum _ => "notSum" | .noArm _ => "noArm" | .payload _ _ => "payload" | .arms => "arms"
   | .armType _ _ => "armType" | .condition _ => "condition" | .branches _ _ => "branches"
@@ -102,6 +104,7 @@ def inferE (Δ Γ : List Ty) : Term → Except TypeErr Ty
   | .nat n => if n < Bounds.natLimit then .ok .nat else typeErr (.natRange n)
   | .bool _ => .ok .bool
   | .bytes s => if s.size ≤ Bounds.bytesMax then .ok .bytes else typeErr (.bytesRange s.size)
+  | .digest s => if s.size ≤ Bounds.digestBytesMax then .ok .digest else typeErr (.digestRange s.size)
   | .prim p a b =>
       match inferE Δ Γ a, inferE Δ Γ b with
       | .ok A, .ok B => if A = p.left ∧ B = p.right then .ok p.result else typeErr (.operands p A B)

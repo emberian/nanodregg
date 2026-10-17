@@ -21,6 +21,7 @@ inductive Conforms : Data → Ty → Prop
   | nat {n : Nat} : n < Bounds.natLimit → Conforms (.nat n) .nat
   | bool {b : Bool} : Conforms (.bool b) .bool
   | bytes {s : ByteArray} : s.size ≤ Bounds.bytesMax → Conforms (.bytes s) .bytes
+  | digest {s : ByteArray} : s.size ≤ Bounds.digestBytesMax → Conforms (.digest s) .digest
   | record {ds r} : RowConforms ds r → Conforms (.record ds) (.record r)
   | inj {r ℓ A d} : Row.find? ℓ r = some A → Conforms d A → Conforms (.inj ℓ d) (.sum r)
 
@@ -36,6 +37,7 @@ theorem toVal_typed : ∀ {d : Data} {T : Ty}, Conforms d T → ValTy Δ d.toVal
   | _, _, .nat h => .nat h
   | _, _, .bool => .bool
   | _, _, .bytes h => .bytes h
+  | _, _, .digest h => .digest h
   | _, _, .record h => .record (rowToVal_typed h)
   | _, _, .inj hf h => .inj hf (toVal_typed h)
 
@@ -59,6 +61,7 @@ theorem dataStream_lawful : (T : Ty) → tyWire T = true → Lawful (dataStream 
   | .nat, _ => u64_lawful
   | .bool, _ => bool_lawful
   | .bytes, _ => bytesOf_lawful _ (by decide)
+  | .digest, _ => bytesOf_lawful _ (by decide)
   | .fn _ _, _ => noData_lawful
   | .record r, h => by
     simp only [tyWire, Bool.and_eq_true] at h
@@ -117,18 +120,23 @@ theorem toData_ofData : (T : Ty) → ∀ {d : Data} {x : DataAt T}, ofData T d =
     split at h
     · cases h; rfl
     · simp at h
+  | .digest, .digest s, x, h => by
+    simp only [ofData] at h
+    split at h
+    · cases h; rfl
+    · simp at h
   | .record r, .record fs, x, h => by
     simp only [ofData] at h
     simp only [toData, rowToData_rowOfData r h]
   | .sum r, .inj ℓ d, ⟨i, y⟩, h => by
     simp only [ofData] at h
     exact armToData_armOfData r h
-  | .nat, .bool _, _, h | .nat, .bytes _, _, h | .nat, .record _, _, h | .nat, .inj _ _, _, h
-  | .bool, .nat _, _, h | .bool, .bytes _, _, h | .bool, .record _, _, h | .bool, .inj _ _, _, h
-  | .bytes, .nat _, _, h | .bytes, .bool _, _, h | .bytes, .record _, _, h | .bytes, .inj _ _, _, h
-  | .record _, .nat _, _, h | .record _, .bool _, _, h | .record _, .bytes _, _, h
-  | .record _, .inj _ _, _, h
-  | .sum _, .nat _, _, h | .sum _, .bool _, _, h | .sum _, .bytes _, _, h | .sum _, .record _, _, h
+  | .nat, .bool _, _, h | .nat, .bytes _, _, h | .nat, .digest _, _, h | .nat, .record _, _, h | .nat, .inj _ _, _, h
+  | .bool, .nat _, _, h | .bool, .bytes _, _, h | .bool, .digest _, _, h | .bool, .record _, _, h | .bool, .inj _ _, _, h
+  | .bytes, .nat _, _, h | .bytes, .bool _, _, h | .bytes, .digest _, _, h | .bytes, .record _, _, h | .bytes, .inj _ _, _, h
+  | .digest, .nat _, _, h | .digest, .bool _, _, h | .digest, .bytes _, _, h | .digest, .record _, _, h | .digest, .inj _ _, _, h
+  | .record _, .nat _, _, h | .record _, .bool _, _, h | .record _, .bytes _, _, h | .record _, .digest _, _, h | .record _, .inj _ _, _, h
+  | .sum _, .nat _, _, h | .sum _, .bool _, _, h | .sum _, .bytes _, _, h | .sum _, .digest _, _, h | .sum _, .record _, _, h
   | .fn _ _, _, _, h => by simp [ofData] at h
 
 theorem rowToData_rowOfData : (r : List (Label × Ty)) → ∀ {fs : List (Label × Data)} {x : RowAt r},
@@ -182,6 +190,9 @@ theorem ofData_toData : (T : Ty) → T.wf = true → ∀ (x : DataAt T), ofData 
   | .bool, _, x => rfl
   | .bytes, _, x => by
     show (if h : x.val.size ≤ Bounds.bytesMax then some ⟨x.val, h⟩ else none) = some x
+    rw [dif_pos x.2]; rfl
+  | .digest, _, x => by
+    show (if h : x.val.size ≤ Bounds.digestBytesMax then some ⟨x.val, h⟩ else none) = some x
     rw [dif_pos x.2]; rfl
   | .fn _ _, _, x => nomatch x
   | .record r, h, x => by
@@ -254,6 +265,7 @@ theorem toData_conforms : (T : Ty) → T.wf = true → ∀ (x : Wire.DataAt T), 
   | .nat, _, x => .nat (UInt64.toNat_lt x)
   | .bool, _, _ => .bool
   | .bytes, _, x => .bytes x.2
+  | .digest, _, x => .digest x.2
   | .fn _ _, _, x => nomatch x
   | .record r, h, x => by
     simp only [Ty.wf, Bool.and_eq_true] at h

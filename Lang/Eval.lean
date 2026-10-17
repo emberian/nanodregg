@@ -25,6 +25,7 @@ inductive Val
   | nat (value : Nat)
   | bool (value : Bool)
   | bytes (value : ByteArray)
+  | digest (value : ByteArray)
   | clo (body : Term) (env : List Val)
   | record (fields : List (Label × (Term × List Val)))
   /-- The fixed point of `lam _ body` closed over `env`: selecting from it runs `body` with the
@@ -100,6 +101,7 @@ def primEval : Prim → Val → Val → Except Fault Val
   | .lt, .nat a, .nat b => .ok (.bool (decide (a < b)))
   | .le, .nat a, .nat b => .ok (.bool (decide (a ≤ b)))
   | .beq, .bytes a, .bytes b => .ok (.bool (decide (a = b)))
+  | .deq, .digest a, .digest b => .ok (.bool (decide (a = b)))
   | .cat, .bytes a, .bytes b =>
       if a.size + b.size ≤ Bounds.bytesMax then .ok (.bytes (a ++ b)) else .error .tooLarge
   | _, _, _ => .error .stuck
@@ -127,6 +129,7 @@ def step (lib : List Term) (s : State) : Step :=
     | .nat n => .next { s with control := .ret (.nat n) }
     | .bool b => .next { s with control := .ret (.bool b) }
     | .bytes b => .next { s with control := .ret (.bytes b) }
+    | .digest b => .next { s with control := .ret (.digest b) }
     | .prim p a b => push s (.eval a env) (.primL p b env)
     | .record fs => .next { s with control := .ret (.record (suspend env fs)) }
     | .get t ℓ => push s (.eval t env) (.get ℓ)

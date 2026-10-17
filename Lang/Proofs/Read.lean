@@ -39,6 +39,11 @@ theorem scalarAt_conforms : ∀ (T : Ty) (x : SExp) {v : Data}, scalarAt T x = .
       · cases h; exact .bytes (by assumption)
       · cases h
     · cases h
+  · split at h
+    · split at h
+      · cases h; exact .digest (by assumption)
+      · cases h
+    · cases h
   · cases h
 
 mutual

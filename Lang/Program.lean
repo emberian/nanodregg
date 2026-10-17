@@ -68,6 +68,14 @@ def idOf (b : ByteArray) : Except (Refusal D) D :=
   | some d => .ok d
   | none => .error (.program "import is not a digest")
 
+/-- Every digest in `ds` is a digest of the World (LANG-38: an id enters a run only as one). -/
+def digestsOk (ds : List ByteArray) : Bool := ds.all fun b => (digestOf b).isSome
+
+/-- Install's and every load's id-literal check: the checked package, or `notDigest` when a
+digest literal of its body is not a digest of the World (LANG-38). -/
+def checkLits (p : Package) : Except (Refusal D) Unit :=
+  if digestsOk digestOf p.body.digestLits then .ok () else .error (.program "notDigest")
+
 def indexIn (b : ByteArray) : List ByteArray → Option Nat
   | [] => none
   | x :: xs => if x = b then some 0 else (indexIn b xs).map (· + 1)
@@ -90,6 +98,9 @@ def admitPackage (idb : ByteArray) (p : Package) (acc : Loaded) (gis : List Nat)
     match p.checkWith ifs with
     | .error e => .error (.program e.wire)
     | .ok () =>
+      match checkLits digestOf p with
+      | .error e => .error e
+      | .ok () =>
       .ok ({ ids := acc.ids ++ [idb], lib := acc.lib ++ [p.body.relocate fun i => gis.getD i 0],
              pkgs := acc.pkgs ++ [p] }, acc.ids.length)
 
@@ -111,7 +122,7 @@ def load (look : Pinned D) (fuel : Nat) (idb : ByteArray) (acc : Loaded) :
         | .ok p =>
           match loadAll look fuel p.imports acc with
           | .error e => .error e
-          | .ok (acc', gis) => admitPackage idb p acc' gis
+          | .ok (acc', gis) => admitPackage digestOf idb p acc' gis
 termination_by (fuel, 0)
 
 def loadAll (look : Pinned D) (fuel : Nat) (ds : List ByteArray) (acc : Loaded) :
@@ -137,7 +148,7 @@ def checkInstall (look : Pinned D) (b : ByteArray) : Except (Refusal D) Unit := 
   let (L, gis) ← loadAll digestOf look (closureDepthMax - 1) p.imports ⟨[], [], []⟩
   let some ifaces := ifacesAt L.pkgs gis | throw (.program "closure")
   match p.checkWith ifaces with
-  | .ok () => pure ()
+  | .ok () => checkLits digestOf p
   | .error e => throw (.program e.wire)
 
 /-- The state slots of a record row: field `i` at `stateBase + i`; `none` if a field has no bytes at
@@ -160,7 +171,9 @@ where
       | none => .error s!"state field {ℓ} missing"
       | some b =>
         match Wire.decodeData t b, go row (i + 1) with
-        | .ok d, .ok (.record ds) => .ok (.record ((ℓ, d) :: ds))
+        | .ok d, .ok (.record ds) =>
+          if digestsOk digestOf d.digests then .ok (.record ((ℓ, d) :: ds))
+          else .error s!"state field {ℓ}: not a digest"
         | .error e, _ => .error s!"state field {ℓ}: {decodeText e}"
         | _, .error e => .error e
         | _, _ => .error "state"
@@ -186,15 +199,16 @@ a natural, its occasion fits `occasionTy`. KERNEL bounds the window only at admi
 (`checkBounds`, after the receivers ran), so the language asserts it where the request enters a
 run (law 4). -/
 def reqOk (r : Req D) : Bool :=
-  decide ((bytesOf r.agent).size ≤ Bounds.bytesMax) && decide ((bytesOf r.principal).size ≤ Bounds.bytesMax) &&
-    decide ((bytesOf r.self).size ≤ Bounds.bytesMax) &&
+  decide ((bytesOf r.agent).size ≤ Bounds.digestBytesMax) &&
+    decide ((bytesOf r.principal).size ≤ Bounds.digestBytesMax) &&
+    decide ((bytesOf r.self).size ≤ Bounds.digestBytesMax) &&
     decide (r.notBefore < Bounds.natLimit) && decide (r.validUntil < Bounds.natLimit) &&
     occasionOk bytesOf r.occasion
 
 def reqData (r : Req D) : Data :=
-  .record [("agent", .bytes (bytesOf r.agent)), ("notBefore", .nat r.notBefore),
+  .record [("agent", .digest (bytesOf r.agent)), ("notBefore", .nat r.notBefore),
     ("occasion", occasionData bytesOf r.occasion),
-    ("principal", .bytes (bytesOf r.principal)), ("self", .bytes (bytesOf r.self)),
+    ("principal", .digest (bytesOf r.principal)), ("self", .digest (bytesOf r.self)),
     ("validUntil", .nat r.validUntil)]
 
 /-- Apply field `ℓ` of closure body `g` to values bound as `var 2, var 1, var 0`. -/
@@ -218,8 +232,8 @@ def judgeOne (look : Pinned D) (law : D) (old new : Slots) (r : Req D) :
   let some p := L.pkgs[g]? | throw (.program "closure")
   let row := recordRow p.state
   let deny (why : String) : Refusal D := .lawDenied law why
-  let o ← match readState row old with | .ok d => pure d | .error e => throw (deny e)
-  let n ← match readState row new with | .ok d => pure d | .error e => throw (deny e)
+  let o ← match readState digestOf row old with | .ok d => pure d | .error e => throw (deny e)
+  let n ← match readState digestOf row new with | .ok d => pure d | .error e => throw (deny e)
   for ℓ in p.laws do
     match runLaw L.lib (.get (.ref g) ℓ) o n (reqData bytesOf r) with
     | .ok (.ok ()) => pure ()
@@ -251,9 +265,9 @@ def runMeasured (look : Pinned D) (pkg : D) (state : Slots) (method : Nat) (args
   let some p := L.pkgs[g]? | throw (.program "closure")
   let (ℓ, A, ks) ← resolveMethod p method
   let row := recordRow p.state
-  let s ← match readState row state with | .ok d => pure d | .error e => throw (.program e)
+  let s ← match readState digestOf row state with | .ok d => pure d | .error e => throw (.program e)
   let a ← match Wire.decodeData A args with
-    | .ok d => pure d
+    | .ok d => if digestsOk digestOf d.digests then pure d else throw (.program "arguments: not a digest")
     | .error e => throw (.program s!"arguments: {decodeText e}")
   let env := [(reqData bytesOf r).toVal, a.toVal, s.toVal]
   match run L.lib Bounds.stackMax budget 0 (State.init (apply3 g ℓ) env) with
@@ -280,13 +294,13 @@ reasons: the first token is the name). -/
 
 def readAt (T : Ty) (text : String) : Except (Refusal D) Data :=
   match Read.readData T text with
-  | .ok d => .ok d
+  | .ok d => if digestsOk digestOf d.digests then .ok d else .error (.program "notDigest")
   | .error e => .error (.program e.text)
 
 /-- A seed state read at package `pkg`'s state type, as the object's state slots. -/
 def seedOf (look : Pinned D) (pkg : D) (text : String) : Except (Refusal D) Slots := do
   let p ← readPackage look pkg
-  match ← readAt p.state text with
+  match ← readAt digestOf p.state text with
   | .record ds =>
     match stateSlots (recordRow p.state) ds 0 with
     | some s => pure s
@@ -297,7 +311,7 @@ def seedOf (look : Pinned D) (pkg : D) (text : String) : Except (Refusal D) Slot
 def argsOf (look : Pinned D) (pkg : D) (method : Nat) (text : String) : Except (Refusal D) ByteArray := do
   let p ← readPackage look pkg
   let (_, A, _) ← resolveMethod p method
-  match Wire.encodeData A (← readAt A text) with
+  match Wire.encodeData A (← readAt digestOf A text) with
   | some b => pure b
   | none => throw (.program "arguments: no bytes at the argument type")
 

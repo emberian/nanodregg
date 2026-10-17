@@ -4,7 +4,7 @@
 `lake exe lang-journey` drives the REAL receive path (`Receive.submit` = `receive` then
 `World.admit`) with `Lang.program` as the kernel's `Program`, under the Sim's toy parameters
 (UInt64 digest, FNV hash, toy signatures: memory "toy parameters in the real pipeline"). The
-package `Owned` keeps `{owner : bytes, total : nat}`; its method `set n` writes `total := n`; its
+package `Owned` keeps `{owner : digest, total : nat}`; its method `set n` writes `total := n`; its
 laws are `bounded` (`new.total ≤ 100`, else "over 100") and `ownerOnly` (the SIGNING member must be
 the owner and the owner never changes). Rows:
 
@@ -40,6 +40,11 @@ the owner and the owner never changes). Rows:
   born under it (L11b), and adding it to an existing object is refused (L11c) by the incoming law
   itself, which a birth-conflated occasion could not say. L11d: a relaw that KEEPS BirthOnly and adds
   Frozen is admitted, since only ADDED laws judge adopt (KERNEL-27).
+* LD (LANG-38, a digest is a type) LD1: a Relay whose call names its callee by a bytes literal is
+  refused `illTyped payload` at install; LD2: an allowlist naming a 3-byte id (not a Sim digest) is
+  refused `notDigest` at install; LD3: a Relay seeded with `next = some #78797a` is refused at its
+  birth, `state field next: not a digest`; LD4: an invoke whose argument `via` is not a digest is
+  refused `arguments: not a digest`.
 * L7 the follower (`World.fold` from genesis) and the auditor reach the Host's World.
 * PLANT skip-judge: the same rows against a program whose `judge` admits everything: L4 must be
   ADMITTED there (the row flips), proving the refusal in L4 came from the law, not from elsewhere.
@@ -49,6 +54,11 @@ the owner and the owner never changes). Rows:
 * PLANT raw-install: the install check before LANG-35, each import's interface read raw from its
   cell and its closure never loaded: LI2 must be ADMITTED there, so its refusal came from the loader.
   That mode stops after LI2: the plant runs the rows before LI and LI2, not the rows after.
+* PLANT bytes-ids: the install check reads every bytes literal as an id (ids were bytes before
+  LANG-38): LD1 must be ADMITTED there, so its refusal came from the type. PLANT skip-lits: the install
+  check without its id-literal check: LD2 must be ADMITTED. PLANT total-digest: run and judge with a
+  `digestOf` that accepts any bytes: LD3 and LD4b must be ADMITTED, so their refusals came from the
+  boundary's digest check. Each of the three runs only the call rows up to its own.
 * PLANT erase-payload: the occasion's payload is lost (a relaw names no laws, every invoke is
   method 0): L8e must be admitted and L10d refused, so the payload reaches the law.
 -/
@@ -63,7 +73,7 @@ namespace Nanodregg.Lang.Journey
 open Nanodregg.Kernel Nanodregg.Kernel.Receive
 abbrev D := Sim.D
 
-def S : Ty := .record [("owner", .bytes), ("total", .nat)]
+def S : Ty := .record [("owner", .digest), ("total", .nat)]
 
 def ok : Term := .inj verdictTy "ok" (.record [])
 def refused (why : String) : Term := .inj verdictTy "refused" (.bytes why.toUTF8)
@@ -75,8 +85,8 @@ def bounded : Term :=
   law3 (.ite (.prim .le (.get (.var 1) "total") (.nat 100)) ok (refused "over 100"))
 
 def ownerOnly : Term :=
-  law3 (.ite (.prim .beq (.get (.var 0) "agent") (.get (.var 1) "owner"))
-    (.ite (.prim .beq (.get (.var 2) "owner") (.get (.var 1) "owner")) ok (refused "owner changed"))
+  law3 (.ite (.prim .deq (.get (.var 0) "agent") (.get (.var 1) "owner"))
+    (.ite (.prim .deq (.get (.var 2) "owner") (.get (.var 1) "owner")) ok (refused "owner changed"))
     (refused "not the owner"))
 
 /-- `set state n req = {owner = state.owner, total = n}` -/
@@ -105,31 +115,31 @@ def noCalls : String := Print.noCallsText
 /-- `Owned`, as a resident writes it (Lang.Read): must read to exactly the package above. -/
 def ownedText : String := s!"
 (package (imports)
-  (state (rec (owner bytes) (total nat)))
-  (iface (rec (set (-> (rec (owner bytes) (total nat))
+  (state (rec (owner digest) (total nat)))
+  (iface (rec (set (-> (rec (owner digest) (total nat))
                     (-> nat (-> {rq} {ownedRes}))))
-              (bounded (-> (rec (owner bytes) (total nat)) (-> (rec (owner bytes) (total nat))
+              (bounded (-> (rec (owner digest) (total nat)) (-> (rec (owner digest) (total nat))
                 (-> {rq}
                     (sum (ok (rec)) (refused bytes))))))
-              (ownerOnly (-> (rec (owner bytes) (total nat)) (-> (rec (owner bytes) (total nat))
+              (ownerOnly (-> (rec (owner digest) (total nat)) (-> (rec (owner digest) (total nat))
                 (-> {rq}
                     (sum (ok (rec)) (refused bytes))))))))
   (methods set)
   (laws bounded ownerOnly)
   (body
     (record
-      (set (fn (s (rec (owner bytes) (total nat))) (n nat)
+      (set (fn (s (rec (owner digest) (total nat))) (n nat)
                (r {rq})
              (record (calls {noCalls}) (state (record (owner (. s owner)) (total n))))))
-      (bounded (fn (old (rec (owner bytes) (total nat))) (new (rec (owner bytes) (total nat)))
+      (bounded (fn (old (rec (owner digest) (total nat))) (new (rec (owner digest) (total nat)))
                    (r {rq})
                  (if (<= (. new total) 100)
                      (inj (sum (ok (rec)) (refused bytes)) ok (record))
                      (inj (sum (ok (rec)) (refused bytes)) refused \"over 100\"))))
-      (ownerOnly (fn (old (rec (owner bytes) (total nat))) (new (rec (owner bytes) (total nat)))
+      (ownerOnly (fn (old (rec (owner digest) (total nat))) (new (rec (owner digest) (total nat)))
                      (r {rq})
-                   (if (beq (. r agent) (. new owner))
-                       (if (beq (. old owner) (. new owner))
+                   (if (deq (. r agent) (. new owner))
+                       (if (deq (. old owner) (. new owner))
                            (inj (sum (ok (rec)) (refused bytes)) ok (record))
                            (inj (sum (ok (rec)) (refused bytes)) refused \"owner changed\"))
                        (inj (sum (ok (rec)) (refused bytes)) refused \"not the owner\")))))))
@@ -188,31 +198,48 @@ def onlyTo (to : ByteArray) : Package :=
 /-! ### Calls (LANG-23, KERNEL-28): a method's calls are derived as the object, at most
 `callDepthMax` deep
 
-`Relay` keeps `{hits : nat, me : bytes, next : bytes}`. Its method `go {rest, via}` counts the hit,
-records `req.self` as `me`, and, when `next` is not empty, invokes `next`'s method 0 through grant
+`Relay` keeps `{hits : nat, me : digest, next : opt digest}`. Its method `go {rest, via}` counts the
+hit, records `req.self` as `me`, and, when `next` is `some n`, invokes `n`'s method 0 through grant
 `via` (a grant naming THIS object) with `rest` as the arguments: bytes it holds, forwarded whole
 (LANG-23 (iii)), so the journey nests each level's encoded arguments inside the previous one. -/
 
-def R : Ty := .record [("hits", .nat), ("me", .bytes), ("next", .bytes)]
-def RA : Ty := .record [("rest", .bytes), ("via", .bytes)]
+def R : Ty := .record [("hits", .nat), ("me", .digest), ("next", optTy .digest)]
+def RA : Ty := .record [("rest", .bytes), ("via", .digest)]
 
 /-- `go`'s one call slot: an invoke, nothing else. -/
 def K : Ty := callOf ["invoke"]
 
-/-- `invoke next 0 rest 1000 (some via)`, under the method's binders (state var 2, args var 1). -/
-def relayCall : Term :=
-  .inj K "invoke" (.record [("args", .get (.var 1) "rest"), ("budget", .nat 1000),
-    ("method", .nat 0), ("obj", .get (.var 2) "next"), ("via", .inj (optTy .bytes) "some" (.get (.var 1) "via"))])
+/-- `invoke obj 0 rest 1000 (some via)`, inside `next`'s `some` arm (the next object var 0, req var 1,
+args var 2, state var 3). -/
+def relayCallTo (obj : Term) : Term :=
+  .inj K "invoke" (.record [("args", .get (.var 2) "rest"), ("budget", .nat 1000),
+    ("method", .nat 0), ("obj", obj), ("via", .inj (optTy .digest) "some" (.get (.var 2) "via"))])
 
-def relayGo : Term :=
+def relayCall : Term := relayCallTo (.var 0)
+
+def relayGoWith (call : Term) : Term :=
   .lam R (.lam RA (.lam reqTy (resultT
-    (.ite (.prim .beq (.get (.var 2) "next") (.bytes .empty)) (callsT [noCallT K]) (callsT [someCallT K relayCall]))
+    (.case (.get (.var 2) "next") [("none", callsT [noCallT K]), ("some", callsT [someCallT K call])])
     (.record [("hits", .prim .add (.get (.var 2) "hits") (.nat 1)), ("me", .get (.var 0) "self"),
       ("next", .get (.var 2) "next")]))))
 
-def relay : Package :=
+def relayGo : Term := relayGoWith relayCall
+
+def relayWith (go : Term) : Package :=
   { imports := [], state := R, iface := .record [("go", methodTy R RA [K])],
-    body := .record [("go", relayGo)], methods := ["go"], laws := [] }
+    body := .record [("go", go)], methods := ["go"], laws := [] }
+
+def relay : Package := relayWith relayGo
+
+/-- LD1 (LANG-38): Relay naming its callee by a BYTES literal (eight bytes, a well-formed toy digest
+as bytes): the call's `obj` is typed `digest`, so this is ill-typed at install. -/
+def relayBytesId : Package := relayWith (relayGoWith (relayCallTo (.bytes ⟨#[1, 0, 0, 0, 0, 0, 0, 0]⟩)))
+
+/-- LD2 (LANG-38): an allowlist naming a member by a digest literal of three bytes, which the Sim's
+eight-byte digest codec refuses: install refuses it `notDigest`. -/
+def badListed : Package :=
+  { imports := [], state := .record [], iface := .record [("al", lawTy (.record []))],
+    body := .record [("al", Std.allowlistLaw (.record []) [⟨#[120, 121, 122]⟩])], methods := [], laws := ["al"] }
 
 /-- One call slot more than `callsMax`. -/
 def nineLabels : List Label := slotLabels "c" (Kernel.Bounds.callsMax + 1)
@@ -266,13 +293,69 @@ def rawInstall : Program D :=
       | .ok () => pure ()
       | .error e => throw (.program e.wire) }
 
+mutual
+/-- Every bytes literal of a term as an id literal: the plant `bytesIds` (ids as bytes, before LANG-38).
+It rewrites EVERY bytes literal, so it flips LD1 for the right reason only because `relayBytesId`'s
+one bytes literal is the callee id: a fixture with a reason string would turn ill-typed under it. -/
+def bytesAsDigest : Term → Term
+  | .bytes s => .digest s
+  | .lam A b => .lam A (bytesAsDigest b)
+  | .app f a => .app (bytesAsDigest f) (bytesAsDigest a)
+  | .fix t => .fix (bytesAsDigest t)
+  | .prim p a b => .prim p (bytesAsDigest a) (bytesAsDigest b)
+  | .record fs => .record (bytesAsDigestRow fs)
+  | .get t ℓ => .get (bytesAsDigest t) ℓ
+  | .extend t fs => .extend (bytesAsDigest t) (bytesAsDigestRow fs)
+  | .inj T ℓ t => .inj T ℓ (bytesAsDigest t)
+  | .case t fs => .case (bytesAsDigest t) (bytesAsDigestRow fs)
+  | .ite c a b => .ite (bytesAsDigest c) (bytesAsDigest a) (bytesAsDigest b)
+  | t => t
+
+def bytesAsDigestRow : List (Label × Term) → List (Label × Term)
+  | [] => []
+  | (ℓ, t) :: fs => (ℓ, bytesAsDigest t) :: bytesAsDigestRow fs
+end
+
+/-- Plant 6: the install check reads a bytes literal where an id is expected (ids were bytes before
+LANG-38): it checks the package with every bytes literal made an id literal. -/
+def bytesIds : Program D :=
+  { langProgram with checkInstall := fun look b => do
+      let p ← match Wire.decodePackage b with
+        | .ok p => pure p
+        | .error e => throw (.program (decodeText e))
+      match Wire.encodePackage { p with body := bytesAsDigest p.body } with
+      | some b' => langProgram.checkInstall look b'
+      | none => throw (.program "plant: no bytes") }
+
+/-- Plant 7: the install check without its id-literal check (`checkLits`, LANG-38). -/
+def skipLits : Program D :=
+  { langProgram with checkInstall := fun look b => do
+      let p ← match Wire.decodePackage b with
+        | .ok p => pure p
+        | .error e => throw (.program (decodeText e))
+      let (L, gis) ← loadAll Sim.digestOf look (closureDepthMax - 1) p.imports ⟨[], [], []⟩
+      let some ifaces := ifacesAt L.pkgs gis | throw (.program "closure")
+      match p.checkWith ifaces with
+      | .ok () => pure ()
+      | .error e => throw (.program e.wire) }
+
+/-- A digest decoder that accepts every byte string (a non-digest reads as the digest 0). -/
+def totalDigestOf (b : ByteArray) : Option D := some ((Sim.digestOf b).getD 0)
+
+/-- Plant 8: run and judge ask a `digestOf` that accepts any bytes, so the boundary's digest check
+(`readState`, the arguments, LANG-38) never refuses; install is the deployed one. -/
+def totalDigest : Program D :=
+  let t := Lang.program Sim.dc.bytes totalDigestOf
+  { langProgram with run := t.run, judge := t.judge }
+
 /-- A package with nothing in it but its imports (LI). -/
 def importer (imports : List ByteArray) : Package :=
   { imports, state := .record [], iface := .record [], body := .record [], methods := [], laws := [] }
 
 /-- Which program the journey runs under. -/
 inductive Mode
-  | honest | skipJudge | eraseOccasion | erasePayload | dropCalls | rawInstall
+  | honest | skipJudge | eraseOccasion | erasePayload | dropCalls | rawInstall | bytesIds | skipLits
+  | totalDigest
   deriving DecidableEq
 
 def Mode.program : Mode → Program D
@@ -282,6 +365,9 @@ def Mode.program : Mode → Program D
   | .erasePayload => Journey.erasePayload
   | .dropCalls => Journey.dropCalls
   | .rawInstall => Journey.rawInstall
+  | .bytesIds => Journey.bytesIds
+  | .skipLits => Journey.skipLits
+  | .totalDigest => Journey.totalDigest
 
 /-- A refusal by a law, with `why` in its reason. -/
 def deniedWith (v why : String) : Bool := v.startsWith "refused lawDenied" && (v.splitOn why).length > 1
@@ -322,19 +408,26 @@ def hitsOf (E : Kernel.Env D) (w : World D) (obj : D) : Option Nat :=
   | _ => none
 
 def meOf (E : Kernel.Env D) (w : World D) (obj : D) : Option ByteArray :=
-  match (slotOf E w obj 1).map (Wire.decodeData .bytes) with
-  | some (.ok (.bytes b)) => some b
+  match (slotOf E w obj 1).map (Wire.decodeData .digest) with
+  | some (.ok (.digest b)) => some b
   | _ => none
 
 /-- `go`'s arguments: `rest` forwarded whole, `via` the grant the call goes through. -/
 def relayArgs (rest via : ByteArray) : Option ByteArray :=
-  Wire.encodeData RA (.record [("rest", .bytes rest), ("via", .bytes via)])
+  Wire.encodeData RA (.record [("rest", .bytes rest), ("via", .digest via)])
 
 /-- The arguments of a chain entered at the first of `grants` (grant `i` names object `i` on
-object `i+1`): each level's arguments nest the next level's, and the last object gets empty ones. -/
-def chainArgs : List ByteArray → Option ByteArray
-  | [] => relayArgs .empty .empty
-  | g :: gs => do relayArgs (← chainArgs gs) g
+object `i+1`): each level's arguments nest the next level's; the last object, which makes no call,
+gets empty `rest` and `via = z` (an id: an argument typed `digest` must be one, LANG-38). -/
+def chainArgs (z : ByteArray) : List ByteArray → Option ByteArray
+  | [] => relayArgs .empty z
+  | g :: gs => do relayArgs (← chainArgs z gs) g
+
+/-- A Relay's `next` slot. -/
+def nextSlot (next : Option ByteArray) : Option ByteArray :=
+  Wire.encodeData (optTy .digest) (match next with
+    | some n => .inj "some" (.digest n)
+    | none => .inj "none" (.record []))
 
 /-- The install-closure rows (LI, LANG-35): `Top` imports `Mid` imports `Owned` (`pkg`). -/
 def installRows (mode : Mode) (r0 : Run) (a : Sim.Member) (pkg : D) : Run := Id.run do
@@ -363,13 +456,48 @@ def callRows (mode : Mode) (r0 : Run) (a : Sim.Member) : Run := Id.run do
   r := note rc0 s!"LC0 install Relay: {vc0}" (vc0 == "admitted")
   let some rid := tc0.bind fun t => (createdIds t).head? | return note r "LC no Relay id" false
   let some h0 := nat64 0 | return note r "LC no bytes for 0" false
-  let some emptyB := Wire.encodeData .bytes (.bytes .empty) | return note r "LC no empty bytes" false
+  let aB := Sim.dc.bytes a.id
+  let some meB := Wire.encodeData .digest (.digest aB) | return note r "LC no me bytes" false
+  let some noneB := nextSlot none | return note r "LC no next bytes" false
+  -- LD (LANG-38) a digest is a type: what bytes could not refuse, by name
+  if mode = .bytesIds || mode = .honest then
+    let some b1 := Wire.encodePackage relayBytesId | return note r "LD1 no bytes" false
+    let (_, vd1, _) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id]) (.install b1))
+    if mode = .bytesIds then
+      return note r s!"PLANT bytes-ids: LD1 a call naming its callee by bytes must now install: {vd1}" (vd1 == "admitted")
+    r := note r s!"LD1 install a Relay whose call names its callee by a bytes literal: {vd1}"
+      (vd1.startsWith "refused program" && (vd1.splitOn "illTyped payload").length > 1)
+  if mode = .skipLits || mode = .honest then
+    let some b2 := Wire.encodePackage badListed | return note r "LD2 no bytes" false
+    let (_, vd2, _) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id]) (.install b2))
+    if mode = .skipLits then
+      return note r s!"PLANT skip-lits: LD2 an allowlist of a non-digest id must now install: {vd2}" (vd2 == "admitted")
+    r := note r s!"LD2 install an allowlist naming a 3-byte id: {vd2}"
+      (vd2.startsWith "refused program" && (vd2.splitOn "notDigest").length > 1)
+  let some badNext := nextSlot (some "xyz".toUTF8) | return note r "LD3 no bytes" false
+  let (rd3, vd3, _) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id, rid])
+    (.create (some rid) [] [(stateBase, h0), (stateBase + 1, meB), (stateBase + 2, badNext)]))
+  if mode = .totalDigest then
+    r := note rd3 s!"PLANT total-digest: LD3 a seed whose next is not a digest must now be admitted: {vd3}" (vd3 == "admitted")
+  else if mode != .skipJudge then
+    r := note r s!"LD3 A creates a Relay whose next is not a digest: {vd3}"
+      (vd3.startsWith "refused lawDenied" && (vd3.splitOn "state field next: not a digest").length > 1)
+  let (rd4, vd4, td4) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id, rid])
+    (.create (some rid) [] [(stateBase, h0), (stateBase + 1, meB), (stateBase + 2, noneB)]))
+  r := note rd4 s!"LD4a A creates a last Relay: {vd4}" (vd4 == "admitted")
+  let some lastO := td4.bind fun t => (createdIds t).head? | return note r "LD4 no object id" false
+  let some badArgs := relayArgs .empty "xyz".toUTF8 | return note r "LD4 no arguments" false
+  let (rd4b, vd4b, _) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id, rid, lastO])
+    (.invoke lastO 0 badArgs 10000 none))
+  if mode = .totalDigest then
+    return note rd4b s!"PLANT total-digest: LD4b arguments whose via is not a digest must now be admitted: {vd4b}" (vd4b == "admitted")
+  r := note rd4b s!"LD4b A invokes it with a via that is not a digest: {vd4b}"
+    (vd4b.startsWith "refused program" && (vd4b.splitOn "arguments: not a digest").length > 1)
   let mut objs : List D := []
   for _ in [0:6] do
-    let next := match objs.head? with | some o => Sim.dc.bytes o | none => .empty
-    let some nextB := Wire.encodeData .bytes (.bytes next) | return note r "LC no next bytes" false
+    let some nextB := nextSlot (objs.head?.map Sim.dc.bytes) | return note r "LC no next bytes" false
     let (rk, vk, tk) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id, rid])
-      (.create (some rid) [] [(stateBase, h0), (stateBase + 1, emptyB), (stateBase + 2, nextB)]))
+      (.create (some rid) [] [(stateBase, h0), (stateBase + 1, meB), (stateBase + 2, nextB)]))
     r := note rk s!"LC1 A creates Relay o{5 - objs.length}: {vk}" (vk == "admitted")
     let some o := tk.bind fun t => (createdIds t).head? | return note r "LC no object id" false
     objs := o :: objs
@@ -385,7 +513,7 @@ def callRows (mode : Mode) (r0 : Run) (a : Sim.Member) : Run := Id.run do
   let o1 := objs.getD 1 0
   let o5 := objs.getD 5 0
   -- LC3 entered at o1: o2 … o5 at depths 1 … 4 = callDepthMax, admitted; every object ran once
-  let some args1 := chainArgs gBytes.tail | return note r "LC3 no arguments" false
+  let some args1 := chainArgs aB gBytes.tail | return note r "LC3 no arguments" false
   let (rc3, vc3, _) := go prog r (Sim.signed r.st a a.key pinsAll (.invoke o1 0 args1 10000 none))
   r := { rc3 with log := r.log, bad := r.bad }
   let hit5 := hitsOf Sim.env r.st.host o5
@@ -396,7 +524,7 @@ def callRows (mode : Mode) (r0 : Run) (a : Sim.Member) : Run := Id.run do
       (vc3 == "admitted" && hit5 == some 1 && hitsOf Sim.env r.st.host o1 == some 1 &&
         meOf Sim.env r.st.host o5 == some (Sim.dc.bytes o5))
   -- LC4 entered at o0: o5 would be at depth 5, past callDepthMax
-  let some args0 := chainArgs gBytes | return note r "LC4 no arguments" false
+  let some args0 := chainArgs aB gBytes | return note r "LC4 no arguments" false
   let pins4 := Sim.S.pinsFor r.st.host ([a.id, rid] ++ objs ++ grants)
   let (rc4, vc4, _) := go prog r (Sim.signed r.st a a.key pins4 (.invoke o0 0 args0 10000 none))
   r := { rc4 with log := r.log, bad := r.bad }
@@ -404,15 +532,6 @@ def callRows (mode : Mode) (r0 : Run) (a : Sim.Member) : Run := Id.run do
     r := note r s!"PLANT drop-calls: LC4 five deep must now be admitted: {vc4}" (vc4 == "admitted")
   else
     r := note r s!"LC4 A invokes o0, calls 5 deep: {vc4}" (vc4.startsWith "refused callTooDeep")
-  -- LC5 a call naming a cell by bytes that are not a digest is refused by name
-  let some xyz := Wire.encodeData .bytes (.bytes "xyz".toUTF8) | return note r "LC5 no bytes" false
-  let (rc5, vc5, tc5) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id, rid])
-    (.create (some rid) [] [(stateBase, h0), (stateBase + 1, emptyB), (stateBase + 2, xyz)]))
-  r := note rc5 s!"LC5a A creates a Relay whose next is not a digest: {vc5}" (vc5 == "admitted")
-  let some bad := tc5.bind fun t => (createdIds t).head? | return note r "LC5 no object id" false
-  let some argsB := relayArgs .empty .empty | return note r "LC5 no arguments" false
-  let (rc5b, vc5b, _) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id, rid, bad]) (.invoke bad 0 argsB 10000 none))
-  r := note rc5b s!"LC5b A invokes it: {vc5b}" (vc5b.startsWith "refused program" && (vc5b.splitOn "calls: c0 obj: not a digest").length > 1)
   -- LC6 a method with more call slots than callsMax is not a method: install refuses it by name
   let some nineBytes := Wire.encodePackage nineCalls | return note r "LC6 NineCalls has no bytes" false
   let (rc6, vc6, _) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id]) (.install nineBytes))
@@ -433,6 +552,8 @@ def journey (mode : Mode) : Run := Id.run do
   let mut r : Run := { st := { rng := ⟨1⟩, host := g, members } }
   let a := members.headD ⟨0, .empty, .empty⟩
   let b := members.getD 1 ⟨0, .empty, .empty⟩
+  if mode = .bytesIds || mode = .skipLits || mode = .totalDigest then
+    return callRows mode r a
   -- L0 the resident's text reads to exactly the package
   let some ownedBytes := Wire.encodePackage owned | return note r "L0 Owned has no bytes" false
   let some illBytes := Wire.encodePackage illTyped | return note r "L0 illTyped has no bytes" false
@@ -514,21 +635,24 @@ def journey (mode : Mode) : Run := Id.run do
     (Wire.encodePackage { owned with methods := ["s et"] }).isNone
   -- L0b a seed state read at the package's state type (Read.readData): fields in any order; a
   -- missing field, a wrong-typed value, an unknown sum arm refused `notOfType`
-  let seedOk := match Read.readData S "(record (total 5) (owner \"a\"))" with
-    | .ok (.record [("owner", .bytes o), ("total", .nat 5)]) => o == "a".toUTF8
+  let seedOk := match Read.readData S "(record (total 5) (owner #61))" with
+    | .ok (.record [("owner", .digest o), ("total", .nat 5)]) => o == "a".toUTF8
     | _ => false
   r := note r "L0b read a seed at Owned's state type" seedOk
   -- the owner as a member's id: bytes that need not be UTF-8, written `#HEX`
-  let ownerHex := Print.bytesText (Sim.dc.bytes a.id)
+  let ownerHex := (Print.data (.digest (Sim.dc.bytes a.id))).getD ""
   let hexOk := match Read.readData S s!"(record (owner {ownerHex}) (total 0))" with
-    | .ok (.record [("owner", .bytes o), ("total", .nat 0)]) => o == Sim.dc.bytes a.id
+    | .ok (.record [("owner", .digest o), ("total", .nat 0)]) => o == Sim.dc.bytes a.id
     | _ => false
   r := note r "L0b read a seed whose owner is a member id, as ob prints it (#HEX)" hexOk
   for (txt, why) in [("(record (total 5))", "missing field"), ("(record (owner 1) (total 5))", "wrong type"),
-                     ("(record (owner \"a\") (total 18446744073709551616))", "past natLimit"),
+                     ("(record (owner #61) (total 18446744073709551616))", "past natLimit"),
+                     ("(record (owner \"a\") (total 5))", "string at a digest"),
+                     ("(record (owner #000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20) (total 5))",
+                      "digest past digestBytesMax"),
                      ("(record (owner #6) (total 5))", "odd count of hex digits"),
                      ("(record (owner #6A) (total 5))", "uppercase hex digit"),
-                     ("(record (owner \"a\") (total #05))", "hex at a nat")] do
+                     ("(record (owner #61) (total #05))", "hex at a nat")] do
     let refused := match Read.readData S txt with
       | .error (.notOfType _) => true
       | _ => false
@@ -544,7 +668,7 @@ def journey (mode : Mode) : Run := Id.run do
   r := note r6 s!"L6 install ill-typed: {v6}" (v6.startsWith "refused program")
   r := installRows mode r a pkg
   -- L2 create
-  let some ownerBytes := Wire.encodeData .bytes (.bytes (Sim.dc.bytes a.id)) | return note r "L2 no owner bytes" false
+  let some ownerBytes := Wire.encodeData .digest (.digest (Sim.dc.bytes a.id)) | return note r "L2 no owner bytes" false
   let some n0 := nat64 0 | return note r "L2 no bytes for 0" false
   let some n50 := nat64 50 | return note r "L3 no bytes for 50" false
   let some n101 := nat64 101 | return note r "L4 no bytes for 101" false
@@ -676,7 +800,8 @@ def journey (mode : Mode) : Run := Id.run do
   return r
 
 def runAll : IO UInt32 := do
-  let runs := [Mode.honest, .skipJudge, .eraseOccasion, .erasePayload, .dropCalls, .rawInstall].map journey
+  let runs := [Mode.honest, .skipJudge, .eraseOccasion, .erasePayload, .dropCalls, .rawInstall, .bytesIds,
+    .skipLits, .totalDigest].map journey
   for r in runs do for l in r.log do IO.println l
   let bad := (runs.map (·.bad)).foldl (· + ·) 0
   IO.println s!"lang-journey: {if bad = 0 then "GREEN" else s!"RED ({bad})"}"

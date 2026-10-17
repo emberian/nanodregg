@@ -3,7 +3,7 @@
 
 A method returns `rec {calls : callsTy, state : S}` (`Lang.resultTy`). `callsOf` reads the calls
 half of the extracted data into the kernel's `List (Body D)`: the slots in label order, `none`
-skipped; a bytes field that names a cell must decode as a digest, or the run is refused by name,
+skipped; a `digest` field must be a digest of the World, or the run is refused by name,
 `program "calls: cI FIELD: not a digest"`. Every Body it returns is of a kind an object may
 exercise (`Lang.Proofs.Call.callsOf_callable`), so KERNEL's `notCallable` is unreachable from
 `Lang.program`; KERNEL still asserts it where calls enter (law 4).
@@ -51,7 +51,7 @@ def rightData : Right → Data
 section
 variable (bytesOf : D → ByteArray)
 
-def digestData (d : D) : Data := .bytes (bytesOf d)
+def digestData (d : D) : Data := .digest (bytesOf d)
 
 def acctRefData : AcctRef D → Data
   | .of owner asset => .inj "of" (.record [("asset", digestData bytesOf asset), ("owner", digestData bytesOf owner)])
@@ -111,11 +111,11 @@ def bytesAt (f : String) : Data → Except String ByteArray
   | _ => .error s!"{f}: not bytes"
 
 def digestAt (f : String) : Data → Except String D
-  | .bytes b =>
+  | .digest b =>
     match digestOf b with
     | some d => .ok d
     | none => .error s!"{f}: not a digest"
-  | _ => .error s!"{f}: not bytes"
+  | _ => .error s!"{f}: not a digest value"
 
 def optOf {α : Type} (g : Data → Except String α) (f : String) : Data → Except String (Option α)
   | .inj "none" (.record []) => .ok none

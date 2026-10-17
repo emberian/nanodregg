@@ -31,6 +31,9 @@ theorem bigStep_bool_inv {b : Bool} {r : Except Fault Val} (h : BigStep lib env 
 theorem bigStep_bytes_inv {s : ByteArray} {r : Except Fault Val} (h : BigStep lib env (.bytes s) r) :
     r = .ok (.bytes s) := by cases h; rfl
 
+theorem bigStep_digest_inv {s : ByteArray} {r : Except Fault Val} (h : BigStep lib env (.digest s) r) :
+    r = .ok (.digest s) := by cases h; rfl
+
 /-- A conditional with a value: the condition was a boolean and the taken branch has the value. -/
 theorem bigStep_ite_ok {c a b : Term} {v : Val} (h : BigStep lib env (.ite c a b) (.ok v)) :
     (BigStep lib env c (.ok (.bool true)) ∧ BigStep lib env a (.ok v)) ∨
@@ -94,7 +97,7 @@ theorem bigStep_getVar {i : Nat} {d : Data} {ℓ : Label} {v : Val} (hi : env[i]
         obtain ⟨u, hu, hu'⟩ := bigStep_var_inv hb
         simp at hu; subst hu; cases hu'
         exact ⟨x, hx, rfl⟩
-    | nat _ | bool _ | bytes _ | inj _ _ => cases hs
+    | nat _ | bool _ | bytes _ | digest _ | inj _ _ => cases hs
 
 theorem Data.toVal_nat {x : Data} {n : Nat} (h : x.toVal = .nat n) : x = .nat n := by
   cases x <;> simp [Data.toVal] at h <;> simp [h]
@@ -103,6 +106,9 @@ theorem Data.toVal_bool {x : Data} {b : Bool} (h : x.toVal = .bool b) : x = .boo
   cases x <;> simp [Data.toVal] at h <;> simp [h]
 
 theorem Data.toVal_bytes {x : Data} {s : ByteArray} (h : x.toVal = .bytes s) : x = .bytes s := by
+  cases x <;> simp [Data.toVal] at h <;> simp [h]
+
+theorem Data.toVal_digest {x : Data} {s : ByteArray} (h : x.toVal = .digest s) : x = .digest s := by
   cases x <;> simp [Data.toVal] at h <;> simp [h]
 
 theorem Data.toVal_inj {x : Data} {ℓ : Label} {w : Val} (h : x.toVal = .inj ℓ w) :

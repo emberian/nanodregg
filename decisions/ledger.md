@@ -569,3 +569,33 @@ let a relaw reopen a settled escrow.
 **Re-emits.** None on chain or schema: a new package and text. A LANG re-id day re-emits
 `world/escrow/Escrow` by `ledger-sim --write-text`.
 Status: BUILT (this commit). The bounty row (PROTOCOL's) is re-cut by PROTOCOL-6 on this text.
+
+## LEDGER-11 · On LANG's digest day the escrow's ids are `digest`, and the deposit's once key is a creator-set `nonce` (LEDGER-3, 2026-10-18; with LANG-11's lang! day, cv 01a14aab-adae (ii))
+**Decision.** LANG gives ids their own type `digest` (`Ty.digest`, `Prim.deq`; reqTy's agent, principal,
+self and callTy's id fields are digest; no prim converts between digest and bytes). The escrow
+follows: arbiter, asset, beneficiary, depositor and deposit's `grant` are `digest`; `agentIs` is
+`deq`; `via` is an optional digest. One consequence is a design change: LEDGER-6 (c)'s deposit once
+key was `self`, so that a second deposit through the same grant is `spent` by the KERNEL even under
+a package bug. `transfer.once` stays bytes (an opaque key) and `self` is now a digest with no bytes in
+the core, so the key cannot be `self`. The state gains `nonce : bytes`, set by the creator at
+birth and carried by every method, and the deposit spends `once := some nonce`.
+**Why this and not the others.** (1) `once := none`: the kernel's second line against a second
+deposit is gone, and only the law (`notOpen`) remains. That WEAKENS a check, a pause item, so no.
+(2) A LANG prim digest → bytes: LANG-11's surface rules it out by design (ids are not byte
+strings in the core). (3) `once` typed digest: callers' keys are byte strings (the pay row's
+`--once 6b31`). (4) A constant key such as "deposit": its nullifier is namespaced by the source, so
+a depositor could fund only ONE escrow per account, ever. With `nonce` the kernel guard is exactly
+as strong as before for the property it served: two deposits through one escrow spend one key,
+whatever the nonce. Uniqueness across escrows matters only for liveness. Two escrows a creator
+gives the same nonce, funded from the same account, refuse the second deposit `spent`. That
+fails closed.
+**Critique.** A creator-chosen field is a convention a careless creator can break, though only
+against itself, and only by liveness. The nonce costs one state field and one more ledger-sim
+term.
+**Meta-critique.** I looked first for a way to keep `self` and found none that does not reopen
+LANG's ruling. The test of the replacement is the plant that already ran: skip-judge E9, where the
+second deposit is the kernel's `spent`. It still holds with the nonce, which is the property
+LEDGER-6 (c) bought.
+**Re-emits.** world/escrow/Escrow (new state type, new id). The bounty row's seed gains
+`(nonce …)` and its ids are digests (PROTOCOL-7's lines). Nothing on chain: a re-genesis is LANG's
+day anyway.

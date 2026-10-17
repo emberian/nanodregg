@@ -100,6 +100,10 @@ theorem primEval_beq_bool {x y : Val} {b : Bool} (h : primEval .beq x y = .ok (.
     ∃ s t, x = .bytes s ∧ y = .bytes t ∧ decide (s = t) = b := by
   cases x <;> cases y <;> simp [primEval] at h ⊢; exact h
 
+theorem primEval_deq_bool {x y : Val} {b : Bool} (h : primEval .deq x y = .ok (.bool b)) :
+    ∃ s t, x = .digest s ∧ y = .digest t ∧ decide (s = t) = b := by
+  cases x <;> cases y <;> simp [primEval] at h ⊢; exact h
+
 /-- The value of a selected field, as data: `get (var i) f` with `d` bound at `i`. -/
 theorem getVar_nat {i : Nat} {d : Data} {f : Label} {m : Nat} (hi : env[i]? = some d.toVal)
     (h : BigStep lib env (.get (.var i) f) (.ok (.nat m))) : d.field f = some (.nat m) := by
@@ -110,6 +114,11 @@ theorem getVar_bytes {i : Nat} {d : Data} {f : Label} {s : ByteArray} (hi : env[
     (h : BigStep lib env (.get (.var i) f) (.ok (.bytes s))) : d.field f = some (.bytes s) := by
   obtain ⟨x, hx, hv⟩ := bigStep_getVar hi h
   rw [Data.toVal_bytes hv.symm] at hx; exact hx
+
+theorem getVar_digest {i : Nat} {d : Data} {f : Label} {s : ByteArray} (hi : env[i]? = some d.toVal)
+    (h : BigStep lib env (.get (.var i) f) (.ok (.digest s))) : d.field f = some (.digest s) := by
+  obtain ⟨x, hx, hv⟩ := bigStep_getVar hi h
+  rw [Data.toVal_digest hv.symm] at hx; exact hx
 
 /-! ## The law skeleton -/
 
@@ -203,13 +212,14 @@ theorem bounded_spec {S : Ty} {f : Label} {max : Nat} {rq n o occ : Data}
 
 /-! ## Scalars: equality of data through equality of values -/
 
-/-- A natural or a byte string. -/
-def Scalar (v : Val) : Prop := (∃ m, v = .nat m) ∨ (∃ s, v = .bytes s)
+/-- A natural, a byte string or a digest. -/
+def Scalar (v : Val) : Prop := (∃ m, v = .nat m) ∨ (∃ s, v = .bytes s) ∨ (∃ s, v = .digest s)
 
 theorem toVal_scalar_inj {x y : Data} (hs : Scalar x.toVal) (h : x.toVal = y.toVal) : x = y := by
-  rcases hs with ⟨m, hm⟩ | ⟨s, hs⟩
+  rcases hs with ⟨m, hm⟩ | ⟨s, hs⟩ | ⟨s, hs⟩
   · rw [Data.toVal_nat hm, Data.toVal_nat (h.symm.trans hm)]
   · rw [Data.toVal_bytes hs, Data.toVal_bytes (h.symm.trans hs)]
+  · rw [Data.toVal_digest hs, Data.toVal_digest (h.symm.trans hs)]
 
 /-- `eqAt T a b` means a boolean that compares two scalars. -/
 theorem eqAt_bool {T : Ty} {a b : Term} {bo : Bool} (h : BigStep lib env (eqAt T a b) (.ok (.bool bo))) :
@@ -218,9 +228,14 @@ theorem eqAt_bool {T : Ty} {a b : Term} {bo : Bool} (h : BigStep lib env (eqAt T
   split at h
   · obtain ⟨x, y, ha, hb, hp⟩ := bigStep_prim_ok h
     obtain ⟨s, t, rfl, rfl, hd⟩ := primEval_beq_bool hp
-    refine ⟨_, _, ha, hb, .inr ⟨s, rfl⟩, ?_⟩
+    refine ⟨_, _, ha, hb, .inr (.inl ⟨s, rfl⟩), ?_⟩
     rw [← hd]; simp
-  · obtain ⟨x, y, ha, hb, hp⟩ := bigStep_prim_ok h
+  · split at h
+    · obtain ⟨x, y, ha, hb, hp⟩ := bigStep_prim_ok h
+      obtain ⟨s, t, rfl, rfl, hd⟩ := primEval_deq_bool hp
+      refine ⟨_, _, ha, hb, .inr (.inr ⟨s, rfl⟩), ?_⟩
+      rw [← hd]; simp
+    obtain ⟨x, y, ha, hb, hp⟩ := bigStep_prim_ok h
     obtain ⟨m, n, rfl, rfl, hd⟩ := primEval_eq_bool hp
     refine ⟨_, _, ha, hb, .inl ⟨m, rfl⟩, ?_⟩
     rw [← hd]; simp
@@ -257,6 +272,26 @@ theorem beq_fields {i j : Nat} {d e : Data} {f g : Label} (hi : env[i]? = some d
   simp at hd; subst hd
   exact ⟨s, getVar_bytes hi ha, getVar_bytes hj hb⟩
 
+/-- A `deq` of a selected field with an id literal: the field is exactly that digest. -/
+theorem deq_field_lit {i : Nat} {d : Data} {f : Label} {m : ByteArray} (hi : env[i]? = some d.toVal)
+    (h : BigStep lib env (.prim .deq (.get (.var i) f) (.digest m)) (.ok (.bool true))) :
+    d.field f = some (.digest m) := by
+  obtain ⟨x, y, ha, hb, hp⟩ := bigStep_prim_ok h
+  obtain ⟨s, t, rfl, rfl, hd⟩ := primEval_deq_bool hp
+  cases bigStep_digest_inv hb
+  simp at hd; subst hd
+  exact getVar_digest hi ha
+
+/-- A `deq` of two selected fields: both are the same digest. -/
+theorem deq_fields {i j : Nat} {d e : Data} {f g : Label} (hi : env[i]? = some d.toVal)
+    (hj : env[j]? = some e.toVal)
+    (h : BigStep lib env (.prim .deq (.get (.var i) f) (.get (.var j) g)) (.ok (.bool true))) :
+    ∃ s, d.field f = some (.digest s) ∧ e.field g = some (.digest s) := by
+  obtain ⟨x, y, ha, hb, hp⟩ := bigStep_prim_ok h
+  obtain ⟨s, t, rfl, rfl, hd⟩ := primEval_deq_bool hp
+  simp at hd; subst hd
+  exact ⟨s, getVar_digest hi ha, getVar_digest hj hb⟩
+
 /-- `eq` of a selected natural field with a literal. -/
 theorem eq_field_lit {i : Nat} {d : Data} {f : Label} {k : Nat} (hi : env[i]? = some d.toVal)
     (h : BigStep lib env (.prim .eq (.get (.var i) f) (natT k)) (.ok (.bool true))) :
@@ -282,31 +317,31 @@ theorem find_const {α : Type} {ℓ : Label} {t b : α} :
 a grant; with KERNEL-25's owner gate, the principal is the owner). -/
 theorem ownerSigns_spec {S : Ty} {rq n o x : Data} {ℓ : Label}
     (h : Admits lib (ownerSigns S) rq n o) (ho : rq.field "occasion" = some (.inj ℓ x)) :
-    ∃ s, rq.field "agent" = some (.bytes s) ∧ rq.field "principal" = some (.bytes s) := by
+    ∃ s, rq.field "agent" = some (.digest s) ∧ rq.field "principal" = some (.digest s) := by
   obtain ⟨cenv, w, hb⟩ := h
   simp only [ownerSigns, lawOf, lawBody] at hb
   obtain ⟨body, hf, hbody⟩ := lawCase_arm rfl ho hb
-  have hc := find_const (t := allOf [(.prim .beq ((⟨1⟩ : At).reqF "agent") ((⟨1⟩ : At).reqF "principal"),
+  have hc := find_const (t := allOf [(.prim .deq ((⟨1⟩ : At).reqF "agent") ((⟨1⟩ : At).reqF "principal"),
       "not signed by the owner")]) (by simp) hf
   subst hc
-  exact beq_fields (d := rq) (e := rq) rfl rfl (allOf_ok hbody _ (List.mem_singleton_self _))
+  exact deq_fields (d := rq) (e := rq) rfl rfl (allOf_ok hbody _ (List.mem_singleton_self _))
 
 theorem isListed {ids : List ByteArray} {a : At} {rq : Data} (hr : env[a.depth]? = some rq.toVal)
-    (h : BigStep lib env (anyOf (ids.map fun i => .prim .beq (a.reqF "agent") (.bytes i))) (.ok (.bool true))) :
-    ∃ m ∈ ids, rq.field "agent" = some (.bytes m) := by
+    (h : BigStep lib env (anyOf (ids.map fun i => .prim .deq (a.reqF "agent") (.digest i))) (.ok (.bool true))) :
+    ∃ m ∈ ids, rq.field "agent" = some (.digest m) := by
   obtain ⟨c, hc, hct⟩ := anyOf_true h
   obtain ⟨m, hm, rfl⟩ := List.mem_map.1 hc
-  exact ⟨m, hm, beq_field_lit hr hct⟩
+  exact ⟨m, hm, deq_field_lit hr hct⟩
 
 /-- `allowlistLaw`: every admitted act, of every occasion, is signed by a listed member. -/
 theorem allowlist_spec {ids : List ByteArray} {S : Ty} {rq n o x : Data} {ℓ : Label}
     (h : Admits lib (allowlistLaw S ids) rq n o)
     (ho : rq.field "occasion" = some (.inj ℓ x)) :
-    ∃ m ∈ ids, rq.field "agent" = some (.bytes m) := by
+    ∃ m ∈ ids, rq.field "agent" = some (.digest m) := by
   obtain ⟨cenv, w, hb⟩ := h
   simp only [allowlistLaw, lawOf, lawBody] at hb
   obtain ⟨body, hf, hbody⟩ := lawCase_arm rfl ho hb
-  have hc := find_const (t := allOf [(anyOf (ids.map fun i => .prim .beq ((⟨1⟩ : At).reqF "agent") (.bytes i)),
+  have hc := find_const (t := allOf [(anyOf (ids.map fun i => .prim .deq ((⟨1⟩ : At).reqF "agent") (.digest i)),
       "not on the allowlist")]) (by simp) hf
   subst hc
   exact isListed (a := ⟨1⟩) rfl (allOf_ok hbody _ (List.mem_singleton_self _))
@@ -449,11 +484,11 @@ theorem proposedLaws_true {x rq n o : Data} {E : Env}
 approvals add exactly that bit. -/
 theorem approvalBy_true {m : ByteArray} {i : Nat} {x rq n o : Data} {E : Env}
     (h : BigStep lib (x.toVal :: LawEnv rq n o E) (approvalBy ⟨1⟩ m i) (.ok (.bool true))) :
-    rq.field "agent" = some (.bytes m) ∧ ∃ a, o.field "approvals" = some (.nat a) ∧
+    rq.field "agent" = some (.digest m) ∧ ∃ a, o.field "approvals" = some (.nat a) ∧
       a / pow2 i % 2 = 0 ∧ n.field "approvals" = some (.nat (a + pow2 i)) := by
   obtain ⟨h1, h23⟩ := andT_true h
   obtain ⟨h2, h3⟩ := andT_true h23
-  refine ⟨beq_field_lit (d := rq) (i := 1) rfl h3, ?_⟩
+  refine ⟨deq_field_lit (d := rq) (i := 1) rfl h3, ?_⟩
   obtain ⟨u, v, hu, hv, hp⟩ := bigStep_prim_ok h1
   obtain ⟨b, z, rfl, rfl, hd⟩ := primEval_eq_bool hp
   cases bigStep_nat_inv hv
@@ -503,7 +538,7 @@ theorem quorate_true {k cnt : Nat} {x rq n o : Data} {E : Env} (hc : 0 < cnt)
 
 theorem member_true {ms : List ByteArray} {x rq n o : Data} {E : Env}
     (h : BigStep lib (x.toVal :: LawEnv rq n o E) (isMember ms ⟨1⟩) (.ok (.bool true))) :
-    ∃ m ∈ ms, rq.field "agent" = some (.bytes m) :=
+    ∃ m ∈ ms, rq.field "agent" = some (.digest m) :=
   isListed (a := ⟨1⟩) rfl h
 
 /-- **Quorum at birth**: an admitted birth starts with no approvals. -/
@@ -523,7 +558,7 @@ theorem quorum_relaw_needs_k {S T : Ty} {ms : List ByteArray} {k : Nat} {g : Lab
    
     (h : Admits lib (quorumLaw S T ms k g) rq n o)
     (ho : rq.field "occasion" = some (.inj "relaw" x)) :
-    (∃ m ∈ ms, rq.field "agent" = some (.bytes m)) ∧
+    (∃ m ∈ ms, rq.field "agent" = some (.digest m)) ∧
     (∃ a, o.field "approvals" = some (.nat a) ∧ k ≤ popcountNat a ms.length) ∧
     ∃ s, o.field "proposal" = some (.inj "laws" (.bytes s)) ∧ x = .bytes s := by
   obtain ⟨cenv, w, hb⟩ := h
@@ -559,7 +594,7 @@ theorem quorum_change {S T : Ty} {ms : List ByteArray} {k : Nat} {g : Label} {rq
     {ℓ : Label}
     (h : Admits lib (quorumLaw S T ms k g) rq n o)
     (ho : rq.field "occasion" = some (.inj ℓ x)) (hl : ℓ = "write" ∨ ℓ = "invoke") :
-    (∃ m ∈ ms, rq.field "agent" = some (.bytes m)) ∧
+    (∃ m ∈ ms, rq.field "agent" = some (.digest m)) ∧
     (∃ b, n.field "approvals" = some (.nat b) ∧ b < pow2 ms.length) ∧
     ∃ ng og, n.field g = some ng ∧ o.field g = some og ∧
       ((ng ≠ og ∧ (∃ a, o.field "approvals" = some (.nat a) ∧ k ≤ popcountNat a ms.length) ∧
@@ -567,7 +602,7 @@ theorem quorum_change {S T : Ty} {ms : List ByteArray} {k : Nat} {g : Label} {rq
        (ng = og ∧ ∃ np op, n.field "proposal" = some np ∧ o.field "proposal" = some op ∧
           ((np ≠ op ∧ n.field "approvals" = some (.nat 0)) ∨
            (np = op ∧ ∃ a, n.field "approvals" = some (.nat a) ∧ o.field "approvals" = some (.nat a)) ∨
-           (np = op ∧ ∃ i m a, ms[i]? = some m ∧ rq.field "agent" = some (.bytes m) ∧
+           (np = op ∧ ∃ i m a, ms[i]? = some m ∧ rq.field "agent" = some (.digest m) ∧
               o.field "approvals" = some (.nat a) ∧ a / pow2 i % 2 = 0 ∧
               n.field "approvals" = some (.nat (a + pow2 i)))))) := by
   obtain ⟨cenv, w, hb⟩ := h

@@ -132,7 +132,7 @@ against a copy of the owner in state, a twin) and no "anyone" law (strangers nev
 /-- The signer is the principal, so no delegate acts through a grant. With KERNEL-25 that is
 "only the owner's own key"; before it, an invoke without a grant has principal = signer = anyone. -/
 def ownerSigns (S : Ty) : Term :=
-  let c (a : At) := allOf [(.prim .beq (a.reqF "agent") (a.reqF "principal"), "not signed by the owner")]
+  let c (a : At) := allOf [(.prim .deq (a.reqF "agent") (a.reqF "principal"), "not signed by the owner")]
   lawOf S c c c c
 
 /-- Only the listed members (`agent`, the signer) may create, change or re-law the object.
@@ -140,7 +140,7 @@ def ownerSigns (S : Ty) : Term :=
 `idsMax` ids. The membership test is a chain one level deep per id, so the cap keeps the law's text
 within the reader's depth (`Lang.Proofs.StdFits`). -/
 def allowlistLaw (S : Ty) (ids : List ByteArray) : Term :=
-  let listed (a : At) := anyOf (ids.map fun i => .prim .beq (a.reqF "agent") (.bytes i))
+  let listed (a : At) := anyOf (ids.map fun i => .prim .deq (a.reqF "agent") (.digest i))
   let c (a : At) := allOf [(listed a, "not on the allowlist")]
   lawOf S c c c c
 
@@ -189,9 +189,10 @@ def pow2 : Nat → Nat
   | 0 => 1
   | k + 1 => 2 * pow2 k
 
-/-- Equality at the guarded field's type (`nat` or `bytes`; any other type is refused by install,
+/-- Equality at the guarded field's type (`nat`, `bytes` or `digest`; any other type is refused by install,
 because `eq` is typed at `nat`). -/
-def eqAt (T : Ty) (x y : Term) : Term := if T = .bytes then .prim .beq x y else .prim .eq x y
+def eqAt (T : Ty) (x y : Term) : Term :=
+  if T = .bytes then .prim .beq x y else if T = .digest then .prim .deq x y else .prim .eq x y
 
 /-- Bit `i` of a mask, as `0` or `1`. -/
 def bit (t : Term) (i : Nat) : Term := .prim .mod (.prim .div t (natT (pow2 i))) (natT 2)
@@ -206,7 +207,7 @@ def popcountNat (a cnt : Nat) : Nat :=
 
 /-- The signer is a member. -/
 def isMember (members : List ByteArray) (a : At) : Term :=
-  anyOf (members.map fun m => .prim .beq (a.reqF "agent") (.bytes m))
+  anyOf (members.map fun m => .prim .deq (a.reqF "agent") (.digest m))
 
 /-- `p` and `q` (proposals of `proposalTy T`, as clauses) are the same proposal. Inside the inner
 arm `var 0` is `q`'s payload and `var 1` is `p`'s. -/
@@ -227,7 +228,7 @@ def proposedLaws (a : At) : Term :=
 def approvalBy (a : At) (m : ByteArray) (i : Nat) : Term :=
   andT (.prim .eq (bit (a.oldF "approvals") i) (natT 0))
     (andT (.prim .eq (a.newF "approvals") (.prim .add (a.oldF "approvals") (natT (pow2 i))))
-      (.prim .beq (a.reqF "agent") (.bytes m)))
+      (.prim .deq (a.reqF "agent") (.digest m)))
 
 def quorumLaw (S T : Ty) (members : List ByteArray) (k : Nat) (guarded : Label) : Term :=
   let cnt := members.length

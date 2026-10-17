@@ -28,6 +28,7 @@ inductive Derives (lib : List Term) : Env → Term → Except Fault Val → Nat 
   | nat {env k} : Derives lib env (.nat k) (.ok (.nat k)) 1
   | bool {env b} : Derives lib env (.bool b) (.ok (.bool b)) 1
   | bytes {env s} : Derives lib env (.bytes s) (.ok (.bytes s)) 1
+  | digest {env s} : Derives lib env (.digest s) (.ok (.digest s)) 1
   | prim {env p a b x y n m} : Derives lib env a (.ok x) n → Derives lib env b (.ok y) m →
       primEval p x y ≠ .error .stuck → Derives lib env (.prim p a b) (primEval p x y) (n + m + 1)
   | primL {env p a b e n} : Derives lib env a (.error e) n →
@@ -95,6 +96,7 @@ theorem derives_bigStep : ∀ {env : Env} {t : Term} {r : Except Fault Val} {n :
   | _, _, _, _, .nat => .nat
   | _, _, _, _, .bool => .bool
   | _, _, _, _, .bytes => .bytes
+  | _, _, _, _, .digest => .digest
   | _, _, _, _, .prim a b h => .prim (derives_bigStep a) (derives_bigStep b) h
   | _, _, _, _, .primL a => .primL (derives_bigStep a)
   | _, _, _, _, .primR a b => .primR (derives_bigStep a) (derives_bigStep b)
@@ -141,6 +143,7 @@ theorem bigStep_derives : ∀ {env : Env} {t : Term} {r : Except Fault Val},
   | _, _, _, .nat => ⟨_, .nat⟩
   | _, _, _, .bool => ⟨_, .bool⟩
   | _, _, _, .bytes => ⟨_, .bytes⟩
+  | _, _, _, .digest => ⟨_, .digest⟩
   | _, _, _, .prim a b h =>
     let ⟨_, a⟩ := bigStep_derives a; let ⟨_, b⟩ := bigStep_derives b; ⟨_, .prim a b h⟩
   | _, _, _, .primL a => let ⟨_, a⟩ := bigStep_derives a; ⟨_, .primL a⟩

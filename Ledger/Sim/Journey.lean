@@ -26,7 +26,7 @@ denomination), B (the beneficiary), Z (a stranger).
 
 Plants (each must flip its lines, or the run is RED):
 * skip-judge (the judge admits everything): E3b admitted; E9 is the kernel's `spent` (the deposit's
-  once key `self`); E10 admitted (Z pays B: the parties are the law's); E13 and E14 are refused
+  once key, the creator's `nonce`); E10 admitted (Z pays B: the parties are the law's); E13 and E14 are refused
   `spent` (the ONE payout nullifier: the kernel's second line holds without the law).
 * two-keys + skip-judge (refund spends `"refund"`, not `"payout"`, AND no law): E14 is ADMITTED,
   the escrow pays twice (B by release, P by refund): the shared key is what the second line needs.
@@ -60,7 +60,7 @@ def twoKeys : Package :=
   Std.pkgOf stateTy [("escrow", law)] (methods.map fun (ℓ, A, ks, t) =>
     if ℓ = "refund" then
       (ℓ, A, ks, .lam stateTy (.lam unit (.lam reqTy (resultT
-        (callsT [someCallT T (transferT (ofT (rq "self")) (ofT (st "depositor")) noneB (someB (.bytes "refund".toUTF8)))])
+        (callsT [someCallT T (transferT (ofT (rq "self")) (ofT (st "depositor")) noneD (someB (.bytes "refund".toUTF8)))])
         (.record (keep "refunded"))))))
     else (ℓ, A, ks, t))
 
@@ -156,10 +156,10 @@ def journey (mode : Mode) : Run := Id.run do
   r := note r2 s!"E2 A installs the escrow package: {v2}" (v2 == "admitted")
   let some pkg := t2.bind fun t => (createdIds t).head? | return note r "E2 no package id" false
   -- E3 create
-  let terms : Terms := ⟨30, bytesOf a.id, bytesOf w, bytesOf b.id, bytesOf p.id⟩
+  let terms : Terms := ⟨30, bytesOf a.id, bytesOf w, bytesOf b.id, bytesOf p.id, "escrow-1".toUTF8⟩
   let some seedOpen := seed terms | return note r "E3 no seed" false
   let some heldB := Wire.encodeData phaseTy (.inj "held" unitD) | return note r "E3 no phase bytes" false
-  let seedHeld := seedOpen.set (stateBase + 5) heldB
+  let seedHeld := seedOpen.set (stateBase + 6) heldB
   let (r3b, v3b, _) := call r a [pkg] (.create (some pkg) [] seedHeld)
   let (r3, v3, t3) := call r3b a [pkg] (.create (some pkg) [] seedOpen)
   let some e := t3.bind fun t => (createdIds t).head? | return note r3 s!"E3 create: {v3}" false

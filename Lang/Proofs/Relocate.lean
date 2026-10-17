@@ -33,6 +33,7 @@ theorem relocate_typed (hf : ∀ i A, Δ[i]? = some A → Δ'[f i]? = some A) :
   | _, _, _, .nat h => .nat h
   | _, _, _, .bool => .bool
   | _, _, _, .bytes h => .bytes h
+  | _, _, _, .digest h => .digest h
   | _, _, _, .prim h1 h2 => .prim (relocate_typed hf h1) (relocate_typed hf h2)
   | _, _, _, .record (fs := fs) ha h => by
       simp only [Term.relocate]

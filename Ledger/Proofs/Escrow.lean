@@ -15,7 +15,7 @@ the package field produces exactly `Admits` (`Std.runLaw_ref_admits`).
   payout (an invoke of method 1 or 2).
 * `escrow_calls_payout`: the call each method makes, for every value of every term (amount,
   parties, asset, the object itself, the grant, the signer, the phase): 1 and 2 transfer `amount`
-  out of `of self asset` spending `"payout"`; 0 transfers into it, spending `self` as its key.
+  out of `of self asset` spending `"payout"`; 0 transfers into it, spending the creator's `nonce` as its key.
   `escrow_slots`: each method's signature has exactly one call slot, a transfer.
 * `escrow_method_state`: every method carries the terms unchanged and sets its target phase.
 * `escrow_one_payout`, the package's statement: along any chain of law-admitted ACTS on an escrow
@@ -72,7 +72,7 @@ def PhaseIs (d : Data) (p : Label) : Prop := ∃ y, d.field "phase" = some (.inj
 
 /-- The request's signer is party `f` of state `o`. -/
 def Signs (rq o : Data) (f : Label) : Prop :=
-  ∃ s, rq.field "agent" = some (.bytes s) ∧ o.field f = some (.bytes s)
+  ∃ s, rq.field "agent" = some (.digest s) ∧ o.field f = some (.digest s)
 
 def Settled (d : Data) : Prop := PhaseIs d "released" ∨ PhaseIs d "refunded"
 
@@ -114,7 +114,7 @@ private theorem clause_ok {x rq n o : Data} {E : Env} {src dst : Label} {why : S
   refine ⟨Std.isState_true (d := o) (i := 3) rfl h1, Std.isState_true (d := n) (i := 2) rfl h3, ?_⟩
   obtain ⟨c, hc, hct⟩ := Std.anyOf_true h2
   obtain ⟨f, hf, rfl⟩ := List.mem_map.1 hc
-  exact ⟨f, hf, Std.beq_fields (d := rq) (e := o) (i := 1) (j := 3) rfl rfl hct⟩
+  exact ⟨f, hf, Std.deq_fields (d := rq) (e := o) (i := 1) (j := 3) rfl rfl hct⟩
 
 /-! ## The law -/
 
@@ -247,17 +247,17 @@ theorem escrow_law_payout_once {o : Data} {steps : List (Data × Data)} (h : Cha
 
 /-- **The calls**: for every amount, party, asset, object id, grant, signer and phase, `deposit`
 moves `amount` from the depositor's account into the escrow's own through the grant, spending
-`self`; `refund` and `release` move `amount` out of the escrow's own account to the depositor and
+the creator's `nonce`; `refund` and `release` move `amount` out of the escrow's own account to the depositor and
 to the beneficiary, through no grant (`nat 0`), spending `"payout"`. -/
-theorem escrow_calls_payout (amount : Nat) (arb asset ben dep self g agent : ByteArray) (p : Label) :
-    callOfMethod "deposit" (stateOf amount arb asset ben dep p) (.record [("grant", .bytes g)]) (reqOf agent self deposit) =
-      [some (.bytes dep), some (.bytes asset), some (.bytes self), some (.bytes asset), some (.nat amount),
-        some (.bytes g), some (.bytes self)] ∧
-    callOfMethod "refund" (stateOf amount arb asset ben dep p) (.record []) (reqOf agent self refund) =
-      [some (.bytes self), some (.bytes asset), some (.bytes dep), some (.bytes asset), some (.nat amount),
+theorem escrow_calls_payout (amount : Nat) (arb asset ben dep nk self g agent : ByteArray) (p : Label) :
+    callOfMethod "deposit" (stateOf amount arb asset ben dep nk p) (.record [("grant", .digest g)]) (reqOf agent self deposit) =
+      [some (.digest dep), some (.digest asset), some (.digest self), some (.digest asset), some (.nat amount),
+        some (.digest g), some (.bytes nk)] ∧
+    callOfMethod "refund" (stateOf amount arb asset ben dep nk p) (.record []) (reqOf agent self refund) =
+      [some (.digest self), some (.digest asset), some (.digest dep), some (.digest asset), some (.nat amount),
         some (.nat 0), some (.bytes payoutKey)] ∧
-    callOfMethod "release" (stateOf amount arb asset ben dep p) (.record []) (reqOf agent self release) =
-      [some (.bytes self), some (.bytes asset), some (.bytes ben), some (.bytes asset), some (.nat amount),
+    callOfMethod "release" (stateOf amount arb asset ben dep nk p) (.record []) (reqOf agent self release) =
+      [some (.digest self), some (.digest asset), some (.digest ben), some (.digest asset), some (.nat amount),
         some (.nat 0), some (.bytes payoutKey)] := by
   refine ⟨?_, ?_, ?_⟩ <;> rfl
 
@@ -265,26 +265,27 @@ theorem escrow_calls_payout (amount : Nat) (arb asset ben dep self g agent : Byt
 writes the old amount, parties and asset back unchanged and sets the phase to its target
 (`deposit` held, `refund` refunded, `release` released). So the amount a payout moves is the
 amount the deposit moved, and the parties the law checks are the parties the creator set. -/
-theorem escrow_method_state (amount : Nat) (arb asset ben dep self g agent : ByteArray) (p : Label) :
+theorem escrow_method_state (amount : Nat) (arb asset ben dep nk self g agent : ByteArray) (p : Label) :
     let keepAt (q : Label) : List (Option Val) :=
-      [some (.nat amount), some (.bytes arb), some (.bytes asset), some (.bytes ben), some (.bytes dep),
+      [some (.nat amount), some (.digest arb), some (.digest asset), some (.digest ben), some (.digest dep),
+        some (.bytes nk),
         some (.inj q (.record []))]
-    stateOfMethod "deposit" (stateOf amount arb asset ben dep p) (.record [("grant", .bytes g)])
+    stateOfMethod "deposit" (stateOf amount arb asset ben dep nk p) (.record [("grant", .digest g)])
         (reqOf agent self deposit) = keepAt "held" ∧
-      stateOfMethod "refund" (stateOf amount arb asset ben dep p) (.record []) (reqOf agent self refund) =
+      stateOfMethod "refund" (stateOf amount arb asset ben dep nk p) (.record []) (reqOf agent self refund) =
         keepAt "refunded" ∧
-      stateOfMethod "release" (stateOf amount arb asset ben dep p) (.record []) (reqOf agent self release) =
+      stateOfMethod "release" (stateOf amount arb asset ben dep nk p) (.record []) (reqOf agent self release) =
         keepAt "released" := by
   refine ⟨?_, ?_, ?_⟩ <;> rfl
 
 /-! ## One payout, as the calls the chain's acts make -/
 
 /-- An admitted act whose call spends the payout key is a payout. -/
-theorem spends_is_payout {amount : Nat} {arb asset ben dep self : ByteArray} {p : Label} {a : Act}
+theorem spends_is_payout {amount : Nat} {arb asset ben dep nk self : ByteArray} {p : Label} {a : Act}
     (hne : dep ≠ self)
-    (ha : Admits lib law (reqWith a.agent self a.occ) (stateOf amount arb asset ben dep a.phase)
-      (stateOf amount arb asset ben dep p))
-    (hs : spendsB self asset (callAt amount arb asset ben dep self p a) = true) :
+    (ha : Admits lib law (reqWith a.agent self a.occ) (stateOf amount arb asset ben dep nk a.phase)
+      (stateOf amount arb asset ben dep nk p))
+    (hs : spendsB self asset (callAt amount arb asset ben dep nk self p a) = true) :
     isPayout (reqWith a.agent self a.occ) = true := by
   cases hinv : invoked (reqWith a.agent self a.occ) with
   | none => simp [callAt, hinv, spendsB] at hs
@@ -295,26 +296,26 @@ theorem spends_is_payout {amount : Nat} {arb asset ben dep self : ByteArray} {p 
     rcases escrow_invoke ha ho with ⟨hx, _⟩ | ⟨hx, _⟩ | ⟨hx, _⟩ <;> injection hx with hx <;> subst hx
     · obtain ⟨agent, occ, g, q⟩ := a
       simp only at hocc hinv hs; subst hocc
-      have h0 := (escrow_calls_payout amount arb asset ben dep self g agent p).1
+      have h0 := (escrow_calls_payout amount arb asset ben dep nk self g agent p).1
       simp only [callAt, hinv] at hs
-      change spendsB self asset (callOfMethod "deposit" (stateOf amount arb asset ben dep p)
-        (.record [("grant", .bytes g)]) (reqOf agent self deposit)) = true at hs
+      change spendsB self asset (callOfMethod "deposit" (stateOf amount arb asset ben dep nk p)
+        (.record [("grant", .digest g)]) (reqOf agent self deposit)) = true at hs
       rw [h0] at hs
       simp [spendsB, hne] at hs
     · simp [isPayout, hinv, refund, release]
     · simp [isPayout, hinv, refund, release]
 
-theorem spendCount_le {amount : Nat} {arb asset ben dep self : ByteArray} (hne : dep ≠ self) :
+theorem spendCount_le {amount : Nat} {arb asset ben dep nk self : ByteArray} (hne : dep ≠ self) :
     ∀ {p : Label} {acts : List Act},
-      Chain lib (stateOf amount arb asset ben dep p) (stepsOf amount arb asset ben dep self acts) →
-      spendCount amount arb asset ben dep self p acts ≤ payouts (stepsOf amount arb asset ben dep self acts)
+      Chain lib (stateOf amount arb asset ben dep nk p) (stepsOf amount arb asset ben dep nk self acts) →
+      spendCount amount arb asset ben dep nk self p acts ≤ payouts (stepsOf amount arb asset ben dep nk self acts)
   | _, [], _ => by simp [spendCount, payouts, stepsOf]
   | p, a :: as, h => by
     cases h with
     | cons ha hr =>
       have ih := spendCount_le hne hr
       simp only [spendCount, payouts, stepsOf, List.map_cons, List.filter_cons] at ih ⊢
-      by_cases hs : spendsB self asset (callAt amount arb asset ben dep self p a) = true
+      by_cases hs : spendsB self asset (callAt amount arb asset ben dep nk self p a) = true
       · rw [if_pos hs, if_pos (spends_is_payout hne ha hs)]
         simp only [List.length_cons]; omega
       · rw [if_neg hs]
@@ -326,10 +327,10 @@ call that spends the payout key out of the escrow's own account `of self asset`,
 the terms, the object, the signers, the grants and the phases (a depositor that IS the object is
 excluded: KERNEL refuses that deposit `sameAccount`). Each act's call is the one method
 `escrow.methods[m]` makes, as KERNEL's invoke resolves the index. -/
-theorem escrow_one_payout {amount : Nat} {arb asset ben dep self : ByteArray} {p : Label} {acts : List Act}
+theorem escrow_one_payout {amount : Nat} {arb asset ben dep nk self : ByteArray} {p : Label} {acts : List Act}
     (hne : dep ≠ self)
-    (h : Chain lib (stateOf amount arb asset ben dep p) (stepsOf amount arb asset ben dep self acts)) :
-    spendCount amount arb asset ben dep self p acts ≤ 1 :=
+    (h : Chain lib (stateOf amount arb asset ben dep nk p) (stepsOf amount arb asset ben dep nk self acts)) :
+    spendCount amount arb asset ben dep nk self p acts ≤ 1 :=
   Nat.le_trans (spendCount_le hne h) (escrow_law_payout_once h)
 
 /-- **No payout before the deposit**: along a chain of law-admitted acts from an `open` escrow,
@@ -420,15 +421,15 @@ private def Role.bytes : Role → ByteArray
   | .depositor => "d".toUTF8 | .arbiter => "a".toUTF8 | .beneficiary => "b".toUTF8
   | .stranger => "s".toUTF8
 
-private def termsD (p : Label) : Data := stateOf 5 "a".toUTF8 "x".toUTF8 "b".toUTF8 "d".toUTF8 p
+private def termsD (p : Label) : Data := stateOf 5 "a".toUTF8 "x".toUTF8 "b".toUTF8 "d".toUTF8 "n".toUTF8 p
 
 private def occD : Option Nat → Label → Data
   | some m, _ => .inj "invoke" (.nat m)
   | none, ℓ => if ℓ = "relaw" ∨ ℓ = "adopt" then .inj ℓ (.bytes .empty) else .inj ℓ (.record [])
 
 private def rqD (who : Role) (occ : Data) : Data :=
-  .record [("agent", .bytes who.bytes), ("notBefore", .nat 0), ("occasion", occ),
-    ("principal", .bytes .empty), ("self", .bytes "e".toUTF8), ("validUntil", .nat 0)]
+  .record [("agent", .digest who.bytes), ("notBefore", .nat 0), ("occasion", occ),
+    ("principal", .digest "o".toUTF8), ("self", .digest "e".toUTF8), ("validUntil", .nat 0)]
 
 /-- The verdict is `ok` (`s = "ok"`) or a refusal whose reason is exactly `s`. -/
 private def verdictIs (s : String) : Except Fault (Except ByteArray Unit) → Bool

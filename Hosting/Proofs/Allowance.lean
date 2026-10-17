@@ -48,8 +48,8 @@ private def argD : Data :=
     ("windowMs", .nat 25)]
 
 private def rqD : Data :=
-  .record [("agent", .bytes .empty), ("notBefore", .nat 0), ("occasion", .inj "invoke" (.nat 0)),
-    ("principal", .bytes .empty), ("self", .bytes .empty), ("validUntil", .nat 0)]
+  .record [("agent", .digest .empty), ("notBefore", .nat 0), ("occasion", .inj "invoke" (.nat 0)),
+    ("principal", .digest .empty), ("self", .digest .empty), ("validUntil", .nat 0)]
 
 private def resultOf (m : Label) : Term :=
   .app (.app (.app (.get allowance.body m) (.var 2)) (.var 1)) (.var 0)
@@ -167,13 +167,14 @@ theorem seed_reads {D : Type} (X : Receive.Ctx D) (owner p : D) {r : ByteArray} 
 /-- The seed is the state LANG reads: `Lang.readState` over the package's own state row gives, at
 each label, exactly that field of the allowance (so `seed`'s slot order is the state type's, and no
 two fields can be swapped between what LANG and the broker read). -/
-theorem seed_state {r : ByteArray} {a : Broker.Allowance} {s : Kernel.Slots} (h : seed r a = some s) :
-    Lang.readState fields s = .ok (.record [("cap", .nat a.cap), ("keySlot", .nat a.keySlot),
+theorem seed_state {D : Type} (digestOf : ByteArray → Option D) {r : ByteArray} {a : Broker.Allowance}
+    {s : Kernel.Slots} (h : seed r a = some s) :
+    Lang.readState digestOf fields s = .ok (.record [("cap", .nat a.cap), ("keySlot", .nat a.keySlot),
       ("maxTokens", .nat a.maxTokens), ("microPerKTok", .nat a.microPerKTok), ("model", .bytes a.model),
       ("resident", .bytes r), ("revoked", .bool false), ("windowMs", .nat a.windowMs)]) := by
   simp only [seed, bind, Option.bind_eq_some_iff, pure, Option.some.injEq] at h
   obtain ⟨e0, h0, e1, h1, e2, h2, e3, h3, e4, h4, e5, h5, e6, h6, e7, h7, rfl⟩ := h
-  simp [Lang.readState, Lang.readState.go, fields, slotAt, Receive.stateBase, Kernel.Slots.get, List.lookup,
+  simp [Lang.readState, Lang.readState.go, Lang.digestsOk, Data.digests, fields, slotAt, Receive.stateBase, Kernel.Slots.get, List.lookup,
     Wire.decodeData_eq_ok_iff.mpr h0, Wire.decodeData_eq_ok_iff.mpr h1, Wire.decodeData_eq_ok_iff.mpr h2,
     Wire.decodeData_eq_ok_iff.mpr h3, Wire.decodeData_eq_ok_iff.mpr h4, Wire.decodeData_eq_ok_iff.mpr h5,
     Wire.decodeData_eq_ok_iff.mpr h6, Wire.decodeData_eq_ok_iff.mpr h7]
