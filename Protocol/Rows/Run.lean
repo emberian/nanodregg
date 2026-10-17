@@ -107,15 +107,25 @@ def barLines (r : Row) (res : Loopback.Result) : IO (Option String) := do
   for ns in res.reopenNs do
     IO.println s!"BAR reopen-ms {ms ns}"
   IO.println s!"BAR load {← load}"
-  -- the deterministic measures (pinned in gates/waste.tsv): per invoke, the machine ticks its run
-  -- used and the packages it loaded and re-checked
-  let n := res.invokes.size
-  IO.println s!"WASTE invoke ticks-per-call {ratio (res.invokes.foldl (· + ·.1) 0) n}"
-  IO.println s!"WASTE invoke packages-checked-per-call {ratio (res.invokes.foldl (· + ·.2) 0) n}"
-  let invokeLines := (r.lines.filter fun l => match l.act with
-    | .cmd ("invoke" :: _) => true
-    | _ => false).length
-  return if n = 0 && invokeLines > 0 then some "bar: no invoke was measured" else none
+  -- the deterministic measures (pinned in gates/waste.tsv): over the invokes, the machine ticks
+  -- per step the program requires (the size of its reference derivation, LANG's `requiredOf`) and
+  -- the packages loaded and re-checked per call. Sums over sums, never a mean of ratios.
+  if let some e := res.invokes.toList.findSome? fun | .error e => some e | .ok _ => none then
+    return some s!"bar: an invoke's required count failed: {e}"
+  let ms := res.invokes.toList.filterMap fun | .ok m => some m | .error _ => none
+  let n := ms.length
+  let ticks := ms.foldl (· + ·.ticks) 0
+  let required := ms.foldl (· + ·.required) 0
+  let planted := ms.foldl (· + ·.planted) 0
+  if n = 0 then return some "bar: no invoke was measured"
+  if required = 0 then return some "bar: the invokes required no steps (a ratio over nothing)"
+  IO.println s!"WASTE invoke ticks-per-required-step {ratio ticks required}"
+  IO.println s!"WASTE invoke packages-checked-per-call {ratio (ms.foldl (· + ·.pkgs) 0) n}"
+  -- the ratio's tooth: two needless transitions per application must raise it
+  IO.println s!"PLANT waste-app ticks-per-required-step {ratio planted required}"
+  if planted * 1000 / required ≤ ticks * 1000 / required then
+    return some s!"bar: plant waste-app BLIND: {ratio planted required} is not above {ratio ticks required}"
+  return none
 
 def drive (r : Row) (times : Option Nat) : IO Ran :=
   if let some why := r.blockedOn then pure (.pending s!"blocked on {why}") else

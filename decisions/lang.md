@@ -773,3 +773,68 @@ kinds; so at most one call per slot). The refused bytes are bytes OF the data (`
 byte string (the reviewer's MEDIUM on the first draft). `sim_digest_roundtrip` discharges `bodyOf_callData`'s premise at the Sim.
 **Status.** built (this commit). Re-ids every package with a method or a law (`reqTy` changed):
 `world/grain/Lifecycle` re-emitted, and THE BAR's counter re-ids.
+
+## LANG-34 THE BAR's tick row is a ratio: machine ticks per step the program requires, the required count being the size of the reference derivation (2026-10-18; cv 01a14a39-c22e, GATES-2's critique of LANG-33, with PROTOCOL-6 and GATES-2)
+**Decision.** `gates/waste.tsv`'s `invoke ticks-per-call` (an absolute 34) is deleted. Its
+replacement is `invoke ticks-per-required-step` = Σ machine ticks / Σ required steps over THE
+BAR's invokes. It measures 34 / 22 = 1.5454… (printed 1.545), and the ceiling is rounded UP to
+1.546 (GATES-3). The numerator is unchanged:
+`runMeasured`'s ticks, i.e. the method run plus extraction. The denominator is
+`Lang.Need.requiredOf` (tooling, `Lang/Sim/Need.lean`). It counts the size of the method run's
+`BigStep` derivation and those of the suspensions extraction forces. `need` is a fuel-bounded
+evaluator with one clause per `BigStep`/`Sel`/`Ext` rule, each adding 1 for its own instance.
+It never calls `step`, `run` or anything the machine's count is defined by.
+Theorems (`Lang/Proofs/Need.lean`): `Derives` is `BigStep` carrying its size, one constructor
+per rule. `derives_bigStep` and `bigStep_derives` show the size erases to exactly `BigStep`.
+`derives_unique` shows the meaning and the size are functions of the term. `need_derives` shows
+the count is THE size, not a bound. `needExtract_forces` gives extraction's count as the sizes of what extraction must
+force (`Forces`, a definition), and `forces_unique` shows that sum is one number (the vacuity
+reader's MEDIUM: without it only the run half was exact). `runMeasured_setup` and
+`requiredOf_spec` give `required_counts_the_run`: for an invoke `runMeasured` admits, the two
+sides are one run's. The setup is this invoke's (`setupOf` of its inputs, PROTOCOL-6's
+amendment), `ticks = budget - left` over that run and its extraction, and the count is the
+derivation of the very value the deployed machine computed plus `Forces` at that type. Scale: a
+`get` counts two rule instances (`get` and `Sel`), so the ratio reads per rule, not per term node. Rows (`Protocol/Rows/Run.lean`, cross-layer, PROTOCOL-6
+agreed): sums over sums. The bar is broken by name if no invoke was measured, if Σ required = 0,
+or if any invoke's count failed (`requiredOf` refuses `required: fuel` / `required: extraction`,
+never a zero). The plant `waste-app` (`Lang.Need.wasteStep`: entering a closure first returns
+`true` through an `ite` frame, two needless transitions per application, same meaning;
+`runBy_step` shows the loop it runs in is the deployed `run`) must measure strictly above the
+honest ratio. It measures 1.818, and a BLIND plant breaks the bar by name. Teeth: `need_idApp`
+(`(λx.x) 1` requires 4), `idApp_not_three`, `idApp_ticks` (the machine takes 7),
+`idApp_plant_ticks` (the plant 9).
+**Why.** An absolute count rises with every honest semantic change (30 → 34 at LANG-33), so real
+waste hides among honest raises. A ratio over the reference derivation moves with the semantics
+in both terms and rises only when the machine does more work per rule instance. The denominator
+must be independent of the machine. GATES-2's condition: it must be exact, since an over-count
+hides waste and `count := ticks` passes any `count ≤ ticks` bound. So the theorem pins equality
+with the derivation's size, not a bound against the machine.
+**Alternatives.** (1) Weighted rule instances (3 per app, …) chosen so the ratio is 1: that is
+the machine's count read back, constant by construction. (2) A sized twin of `BigStep` alone:
+`Derives` IS that, which is why it ships with the erasure theorems in both directions; replacing
+`BigStep` by `Derives` everywhere (Agree, Complete) was not done. (3) A lower bound
+`required ≤ ticks` (ratio ≥ 1): true by the CEK shape, not proved, and not needed for the gate's
+direction.
+**Critique.** `Forces` defines what extraction must force. No theorem ties it to the meaning of
+extraction (for `v` extracted at `T` to `d`, `Forces T v m` holds and its forced meanings are
+`d`'s), so extraction's share of the denominator is tied to `BigStep` but not to `extract`'s
+result. In THE BAR that share is the `calls` and `state` fields. Not proved either:
+`required ≤ ticks` (ratio ≥ 1), and its corollary that `requiredOf` never refuses on an invoke
+the machine finished (a derivation's size bounds its depth, which bounds `need`'s fuel). Until
+then a refusal breaks the bar by name; it is never skipped. Both are owed (cv task). The plant wastes only in the method run (extraction runs on the
+deployed `force`): the planted ticks are runMeasured's ticks − the honest run + the wasteful run.
+`need`'s fuel is the call's tick budget. A derivation deeper than the budget would refuse the
+measurement by name; it cannot read as cheap. `runBy` is a second copy of `run`'s eight-line
+loop, kept honest by `runBy_step`. The reader proposed deleting it by defining the deployed `run`
+as `runBy (step lib)`. I kept the copy: the plant must run a different stepper somewhere, the
+equality is a theorem rather than an agreement, and the generic deployed loop would re-open
+about 25 proof sites for a tooling plant. The plant is checked in rows against the honest ratio, not
+in `gates/waste.py` against the ceiling. Since the ceiling is pinned at the measured value they
+coincide today. A waste.py-level plant is GATES' to add if wanted.
+**Meta-critique.** The design note I inherited proposed `need_bigStep` (soundness) plus a count
+"of a derivation". A sound evaluator that counts 2 per node also satisfies that. GATES-2's reply
+caught it before any code: the exactness has to be a statement over the derivation, and the
+uniqueness of the size is what makes "the" derivation's size mean anything. The independent
+check is the teeth (4 for `(λx.x) 1`, refuted 3) and the plant's measured rise.
+**Status.** built (this commit). Nothing re-ids: no deployed definition changed. `gates/waste.tsv`
+loses one row and gains one (`WASTE: invoke:` in the commit).

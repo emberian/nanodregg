@@ -18,6 +18,7 @@ The founders `sponsor` and `operator` are the genesis World (`Receive.genesis`);
 a stranger (an id nobody enrolled) until a line binds its member id and its World grant.
 -/
 import Protocol.Rows.Writer
+import Lang.Sim.Need
 import Protocol.Rows.Judge
 import Protocol.Command.Wire
 import Host.Follow
@@ -104,6 +105,15 @@ structure Timed where
   line : Nat
   ns : List Nat
 
+/-- One measured invoke (THE BAR's WASTE lines): the machine ticks of the method run and its
+extraction, the steps it requires (the reference derivations' sizes), the ticks under the plant
+`wasteStep`, and the packages its closure loaded and re-checked. -/
+structure Invoked where
+  ticks : Nat
+  required : Nat
+  planted : Nat
+  pkgs : Nat
+
 structure St where
   sys : Sys
   host : Writer.Running
@@ -117,9 +127,9 @@ structure St where
   log : Array String := #[]
   times : Array Timed := #[]
   reopenNs : List Nat := []
-  /-- each invoke a client froze: the machine ticks its run used and the packages it loaded and
-  re-checked (`Lang.runMeasured` on the inputs `Kernel.Receive.invokeRun` derives) -/
-  invokes : Array (Nat × Nat) := #[]
+  /-- each invoke a client froze whose run the receiver admits: what it cost (`Invoked`), or why
+  its required count failed (THE BAR is then broken by that name, never short one sample) -/
+  invokes : Array (Except String Invoked) := #[]
   /-- every call the attempt store settled as committed, in order: the writer's log, as its clients
   sent it -/
   committed : Array ByteArray := #[]
@@ -143,15 +153,29 @@ def kindName : Body D → String
 /-- What an invoke's run costs, measured on the World the call was planned on (the actor's
 follow, caught up to the writer's tip): the receiver's own inputs (`invokeRun` over the call's
 pins), then LANG's `runMeasured`, whose first component IS the deployed `Program.run`. A call
-whose run refuses costs nothing here (it is not admitted). -/
-def measureInvoke (X : Ctx D) (w : World D) (c : Call D) : Option (Nat × Nat) :=
+whose run refuses costs nothing here (it is not admitted: `none`). For an admitted one, the
+required steps (`Lang.Need.requiredOf`, the size of the run's reference derivation and of the
+suspensions extraction forces, `Lang.Proofs.Need.required_counts_the_run`), and the ticks under
+the plant: the method run on `Lang.Need.wasteStep` in place of the deployed step, which costs
+two needless transitions per application. A count that fails is an error by name. -/
+def measureInvoke (X : Ctx D) (w : World D) (c : Call D) : Option (Except String Invoked) :=
   match c.unsigned.body with
   | .invoke obj method args budget via =>
     let look := pinned X.env w c.unsigned.pins
     match invokeRun X look c c.unsigned.member obj method via with
     | .ok (cell, p, r) =>
       match Lang.runMeasured X.env.bytes X.digestOf look p (stateOf cell) method args r budget with
-      | .ok (_, _, ticks, pkgs) => some (ticks, pkgs)
+      | .ok (_, _, ticks, pkgs) =>
+        let text : Receive.Refusal D → String := fun | .program s => s | e => e.name
+        let count := do
+          let required ← Lang.Need.requiredOf X.env.bytes X.digestOf look p (stateOf cell) method
+            args r budget
+          let honest ← Lang.Need.runTicksBy X.env.bytes X.digestOf Lang.step look p (stateOf cell)
+            method args r budget
+          let wasted ← Lang.Need.runTicksBy X.env.bytes X.digestOf Lang.Need.wasteStep look p
+            (stateOf cell) method args r budget
+          pure ({ ticks, required, planted := ticks - honest + wasted, pkgs } : Invoked)
+        some (count.mapError text)
       | .error _ => none
     | .error _ => none
   | _ => none
@@ -711,7 +735,7 @@ structure Result where
   log : Array String
   times : Array Timed
   reopenNs : List Nat
-  invokes : Array (Nat × Nat)
+  invokes : Array (Except String Invoked)
 
 /-- Run a member row against a fresh deployment under `m`; `times` scales every repeated line. -/
 def run (m : Option Mutation) (lines : List Line) (times : Option Nat) : IO Result := do
