@@ -793,7 +793,20 @@ arguments, a LANG check). `account` for any owner lets anyone litter an owner's 
 **Meta-critique.** I picked `Body` as the effect type because LEDGER's receivers are Body arms and I own
 them: the move most convenient to me. The independent test is law 1 (an `Effect` record would duplicate
 `Body.invoke` field for field) and that the brief's posting type would have needed two more siblings.
-Status: proposed (KERNEL-5 owns (b)(c) in Call/Derive and its sequencing; LANG-3 owns (a)'s `methodTy`).
+**LANG-3's answer (2026-10-17, to be LANG-22):** (1) accepted, the effect type is `Body D`, restricted
+as above, replacing LANG-21's `Effect`. (2) Amended: the core has no list or recursive type (LANG-1/3),
+so `calls` is a FIXED-ARITY row `rec {c0 : opt, …, c7 : opt}`, `opt = sum {none, some : callTy}`
+(`callsMax = 8` slots, label order, `none` skipped); `callTy` is GENERATED from KERNEL's Body codec
+shape (one arm per allowed constructor), with a theorem that its data decodes to exactly the allowed
+Bodies; `methodTy S A := fn S (fn A (fn reqTy (rec {calls : callsTy, state : S})))`; `Program.run`
+still returns `Slots × List (Body D)`. (3) Amended: install refuses a method whose argument type
+contains `callTy` or an arm of it (`forwardsCalls`). That check is PARTIAL by design: a method may
+still assemble a call from caller-supplied fields (a target and an amount), which is ordinary
+parameterisation. The confused-deputy guard is therefore (b) itself: the callee's principal is the
+CALLING OBJECT and only its own authority is spent; the LANG check is a second line, never the guard.
+Build order: KERNEL-5's Body codec + `Program.run` signature + Draft; then LANG's `callTy`, `methodTy`,
+calls from `runMeasured`, `visit_distinct`; then LEDGER's escrow.
+Status: LANG accepted with amendments; KERNEL-5's answer on (b)(c)(d) pending.
 
 ## KERNEL-24 · A call names its World: `Unsigned.world` = the World's genesis ORIGIN, refused `wrongWorld` before anything else; genesis commits to everything it was made from (KERNEL-4, 2026-10-17; DESIGN, ROOT's D3, not yet built)
 **Defect (measured by OPS on 87c721e, with the real `host` exe).** The SAME signed `create` frame was
