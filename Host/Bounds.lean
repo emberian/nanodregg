@@ -11,10 +11,20 @@ loop. Open reads that one base and the segment after it, and that tail is at mos
 cadences (one being sealed in flight, one since) and one frame. The loop cannot append past it
 (`Host.Loop.commitBatch` takes the bound as a proof argument), and open refuses a longer tail by
 name (`Host.Base.tailRead`).
+
+HOST-22: the tail is bounded in TURNS too. Every Turn of the tail is re-folded at open, and a
+follower's fold re-derives each one, signature verify included (`Receive.audit`), so bytes alone let
+a tail of small Turns cost ~90k verifies (~36 s) at `worldBytesMax`. The loop also seals when
+`sealTurns` Turns have been admitted since the newest durable base. The tail then holds at most
+`tailTurnsMax` = two turn cadences and a record's Turns (`Host.Loop.withinTail`). Open refuses more
+by name (`tailTooManyTurns`), and `Host.Proofs.Base.openWith_turns` bounds the Turns an open folds.
 -/
 import Host.Log
 
 namespace Nanodregg.Host
+
+/-- The most Turns one batch record holds: the loop's batch bound (CODEC's batch codec is bounded by it). -/
+def recordTurnsMax : Nat := 64
 
 structure Cadence where
   /-- the fewest segment bytes between two seals -/
@@ -23,6 +33,8 @@ structure Cadence where
   worldBytesMax : Nat
   /-- the largest batch record a frame may hold -/
   recordBytesMax : Nat
+  /-- the most Turns admitted after the newest durable base before the loop seals again (HOST-22) -/
+  sealTurns : Nat
 
 namespace Cadence
 
@@ -36,6 +48,11 @@ while the seal runs, and the frame that crossed. -/
 def tailMax (c : Cadence) (baseBytes : Nat) : Nat :=
   2 * c.cadence baseBytes + Log.frameMax c.recordBytesMax
 
+/-- The most Turns after the newest durable base: one turn cadence being sealed, one more while
+the seal runs, and the record that crossed (HOST-22). An open folds (and a follower re-verifies)
+at most this many. -/
+def tailTurnsMax (c : Cadence) : Nat := 2 * c.sealTurns + recordTurnsMax
+
 /-- A base record: the World's bytes, the segment offset (u64) and tag (32) it starts from, and
 its index (each bounded by `worldBytesMax`, `Base.file`). -/
 def baseRecordMax (c : Cadence) : Nat := 2 * c.worldBytesMax + 8 + Log.tagBytes
@@ -43,11 +60,14 @@ def baseRecordMax (c : Cadence) : Nat := 2 * c.worldBytesMax + 8 + Log.tagBytes
 /-- `host serve`'s numbers. The base: THE BAR's World is ~290 KB (HOST-14), so 256 MiB is ~900 BAR
 stores; at CODEC's measured KMAC (184 MB/s) its seal is ~1.5 s of Task time and its decode at open
 is the dominant term of a cold reopen (measured in decisions/host.md HOST-14). A record: 64 turns
-of at most `Kernel.Bounds.weightMax` weight each, with room for the encoding's length fields. -/
+of at most `Kernel.Bounds.weightMax` weight each, with room for the encoding's length fields. A
+turn cadence of 2^13: a follower's cold open re-verifies at most 2·2^13 + 64 = 16448 signatures
+(~6.6 s at CODEC's ~0.4 ms Ed25519 verify), against ~90k under the byte bound alone (HOST-22). -/
 def deployed : Cadence where
   sealMinBytes := 1 <<< 20
   worldBytesMax := 1 <<< 28
   recordBytesMax := 1 <<< 25
+  sealTurns := 1 <<< 13
 
 end Cadence
 

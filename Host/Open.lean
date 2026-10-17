@@ -145,6 +145,8 @@ def openWith {m : Type → Type} [Monad m] (keys : Keys) (c : Cadence) (world : 
     | some tag =>
       let opened : Opened W := ⟨o.world.1, o.records, o.validLen, o.lastTag, o.torn⟩
       let (h, chain) := mark b.world
+      let turns := (mark o.world.1).1 - h
+      if c.tailTurnsMax < turns then return .error (.base (.tailTooManyTurns turns c.tailTurnsMax)) else
       return .ok ⟨opened, ⟨b.offset, baseBytes, h, chain, digest⟩, ⟨b.offset + o.validLen, tag⟩, o.world.2.1⟩
 
 /-- The segment reader over bytes in memory (the simulation, every in-memory Store). -/

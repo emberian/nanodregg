@@ -538,3 +538,47 @@ on lookup as final (not retry-safe-unknown). It relays bytes, so the decision is
 an IO fact (`.turns []` is never appended) that no theorem states. If someone makes follow append
 an empty record (a heartbeat, say), the two facts come apart silently.
 **Status.** landed (this commit).
+
+## HOST-22 · the unsealed tail is bounded in TURNS: a turn cadence beside the byte cadence; open refuses `tailTooManyTurns` (2026-10-17, HOST-5; PERF's verifies-per-open)
+**The defect.** HOST-14 bounds the tail after the newest base in BYTES (`tailMax` = two cadences
+and a frame). An open folds every Turn of that tail, and a follower's fold re-derives each one,
+which includes one Ed25519 verify (`Receive.audit`). At `worldBytesMax` a tail of small Turns is
+~90k births, about 36 s of verifies by PERF's arithmetic: the first term of THE BAR's cold reopen
+that is not far inside its limit, and one the code decides, so it can be bounded rather than timed.
+**Decision.** `Cadence.sealTurns` (deployed 2^13) is a second seal trigger. `shouldSeal` fires at
+the byte cadence OR when `sealTurns` Turns have been admitted since the newest durable base
+(`height - sealed.height`, from the recorder's mark). `withinTail` (the proof argument
+`commitBatch` takes) also requires `height' - sealed.height ≤ tailTurnsMax = 2·sealTurns +
+recordTurnsMax`, and `makeRoom` waits for, or forces, a seal exactly as it does for bytes. `openWith`
+refuses `BaseFault.tailTooManyTurns turns max` (exit 44, fatal) when the tail it folded exceeds
+the bound. Deployed: at most 16448 verifies per follower open (~6.6 s at ~0.4 ms), against ~90k.
+Theorems (`Host.Proofs.Base`): `openWith_turns` (an open that succeeds reached at most
+`tailTurnsMax` above its base's height, whatever segment it was handed) and `within_after_seal`
+(re-stated: right after a seal at the loop's position, any frame within the record bound adding
+at most a record's Turns fits, in bytes and in Turns). Plants (host-sim seeds 1–3):
+`plant-tail-too-many-turns` (a Store written with neither cadence firing, reopened under a turn
+cadence its tail exceeds: refused by name; red when open's check is replaced by `false`, and red
+when the loop's turn conjunct and trigger are deleted, both seen) and `open verifies` (a run where
+the turn cadence is the only trigger: 15–16 bases, every reopen at most `tailTurnsMax`). WASTE
+row: `open verifies-per-turn-cadence` (the most Turns any reopen folded ÷ `sealTurns`, measured
+where the turn cadence binds), pinned at 0.875. The fuel reopen runs after `finish` settles the
+seal, so it sees at most one cadence. A crash mid-seal can see two plus a record; the theorem
+covers that case.
+**Alternatives.** (a) Do not re-audit the follower's own segment at reopen (fold it with
+`World.fold`, since every Turn was audited before it was appended). Its base is trusted on its MAC
+alone, so re-auditing the tail defends against an adversary who could forge the base anyway. That
+is a real argument that the re-audit is the wrong check, but dropping it WEAKENS a check (the
+pause list). It goes to ROOT, not into this commit. (b) Scale the turn cadence with the base
+(`baseBytes / k`). At 256 MiB that is 2^13 for k = 2^15 anyway, and at small Worlds the floor
+binds, so a constant is the same bound with one fewer moving part. (c) Count Turns at open BEFORE
+folding (a pre-check like `tailRead`): it needs the records decoded, which is the fold.
+**Critique.** The turn cadence trades verifies at open for seal bytes. At `worldBytesMax` a
+256 MiB base every 8192 small Turns (~3 MB appended) is ~85 sealed bytes per appended byte, far
+above HOST-14's ≤ 4 + floor. The byte ratio no longer bounds the seal's write amplification at the
+top of the range, and nothing pins it there: the toy WASTE row only sees toy scale. Open's check
+runs AFTER the fold, so a hostile Store costs up to the byte bound in verifies before it is
+refused. The bound is a guarantee about Stores this loop wrote, and a named refusal for others.
+**Meta-critique.** I bounded the cost PERF named and kept the check that produces it, because
+removing a check needs a ruling. That is the right order, and also the comfortable one: alternative (a)
+may make this whole decision unnecessary, and I have priced it in prose, not measured it.
+**Status.** landed (this commit). Alternative (a) is raised with ROOT.

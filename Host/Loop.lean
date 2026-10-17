@@ -123,10 +123,11 @@ structure Resident (W : Type) where
   index : Array Entry
   pending : Option Pending := none
 
-/-- A frame of `n` bytes appended at `pos` keeps the tail after the newest durable base within
-`tailMax` (HOST-14 condition 4). `commitBatch` cannot be called without a proof of it. -/
-def withinTail (c : Cadence) (sealed : Sealed) (pos n : Nat) : Bool :=
-  decide (pos + n - sealed.offset ≤ c.tailMax sealed.bytes)
+/-- A frame of `n` bytes appended at `pos`, taking the World to height `height`, keeps the tail
+after the newest durable base within `tailMax` bytes (HOST-14 condition 4) and `tailTurnsMax` Turns
+(HOST-22). `commitBatch` cannot be called without a proof of it. -/
+def withinTail (c : Cadence) (sealed : Sealed) (pos n height : Nat) : Bool :=
+  decide (pos + n - sealed.offset ≤ c.tailMax sealed.bytes) && decide (height - sealed.height ≤ c.tailTurnsMax)
 
 /-- Take the queued frames after `first`: at most `limits.batchMax` frames and, past the first,
 `limits.batchBytesMax` payload bytes. A frame that does not fit is put back (`unread`), so the
@@ -159,7 +160,7 @@ def uncertainAll (replies : Array Reply) : Array Reply :=
 
 /-- Append one batch record as one Log frame and make it durable. Only within the tail bound. -/
 def commitBatch (c : Cadence) (sealed : Sealed) (store : Store) (s : Log.Sealer) (pos : Position)
-    (record : ByteArray) (_within : withinTail c sealed pos.offset (frameSize record) = true) :
+    (record : ByteArray) (height : Nat) (_within : withinTail c sealed pos.offset (frameSize record) height = true) :
     IO (Except String Position) := do
   try
     store.append (Log.frame s pos.tag.bytes record)
@@ -197,15 +198,15 @@ def reap (r : Resident W) : IO (Except SealFault (Resident W)) := do
 /-- Make room for a frame of `n` bytes: wait for the seal in flight, and if the tail is still too
 long, seal the World as it stands and wait for that. After the second step the newest base is at
 `pos`, so any frame up to `Log.frameMax c.recordBytesMax` fits (`Host.Proofs.Base.within_after_seal`). -/
-def makeRoom (ck : Checkpoint W) (mark : W → Nat × ByteArray) (c : Cadence) (r : Resident W) (n : Nat) :
+def makeRoom (ck : Checkpoint W) (mark : W → Nat × ByteArray) (c : Cadence) (r : Resident W) (n height : Nat) :
     IO (Except SealFault (Resident W)) := do
-  if withinTail c r.sealed r.pos.offset n then return .ok r
+  if withinTail c r.sealed r.pos.offset n height then return .ok r
   let r ← match r.pending with
     | none => pure r
     | some p => match ← settle p with
       | .ok sealed => pure { r with sealed, pending := none }
       | .error f => return .error f
-  if withinTail c r.sealed r.pos.offset n then return .ok r
+  if withinTail c r.sealed r.pos.offset n height then return .ok r
   match ← settle (← spawnSeal ck mark r.world r.pos r.index) with
   | .ok sealed => return .ok { r with sealed, pending := none }
   | .error f => return .error f
@@ -233,16 +234,17 @@ past what was synced, and the caller answers its requests `uncertain`. -/
 def append (rec : Recorder W T) (s : Log.Sealer) (ck : Checkpoint W) (c : Cadence) (store : Store)
     (r : Resident W) (w' : W) (record : ByteArray) : IO (Except Exit (Resident W)) := do
   if c.recordBytesMax < record.size then return .error (.recordTooLarge record.size)
-  let r ← match ← makeRoom ck rec.mark c r (frameSize record) with
+  let height := (rec.mark w').1
+  let r ← match ← makeRoom ck rec.mark c r (frameSize record) height with
     | .ok r => pure r
     | .error f => return .error (.sealFailed f)
-  if within : withinTail c r.sealed r.pos.offset (frameSize record) = true then
-    match ← commitBatch c r.sealed store s r.pos record within with
+  if within : withinTail c r.sealed r.pos.offset (frameSize record) height = true then
+    match ← commitBatch c r.sealed store s r.pos record height within with
     | .error detail => return .error (.uncertain detail)
     | .ok pos =>
       let (h, chain) := rec.mark r.world
       let r := { r with world := w', pos, index := r.index.push ⟨h, r.pos.offset, chain⟩ }
-      if shouldSeal c r.sealed r.pending.isSome pos.offset then
+      if shouldSeal c r.sealed r.pending.isSome pos.offset height then
         return .ok { r with pending := some (← spawnSeal ck rec.mark w' pos r.index) }
       return .ok r
   else

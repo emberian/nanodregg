@@ -49,11 +49,13 @@ def fnvSealer (domain : UInt8) : Log.Sealer where
 
 /-- Toy numbers: a seal every 2 KiB at least, so a 200-turn scenario seals several times, and a
 record bound (4 KiB; a 16-turn batch record is ~1.3 KiB) small enough that `tailMax` is shorter
-than the scenario's segment, so plant-tail-too-long can go red. -/
+than the scenario's segment, so plant-tail-too-long can go red. The turn cadence (32) is reached
+before the byte cadence by batches of small Turns, so both seal triggers run (HOST-22). -/
 def cadence : Cadence where
   sealMinBytes := 2048
   worldBytesMax := 1 <<< 20
   recordBytesMax := 4096
+  sealTurns := 32
 
 def world : Codec.Stream (World Nat) := Codec.Kernel.world dc
 

@@ -170,6 +170,9 @@ inductive BaseFault where
   /-- the base was written under other shapes (`stored`, the stamp on disk) than the running
   binary's (`running`): an old (or a newer) shape refuses, never decoded (D2, HOST-20) -/
   | shapeMismatch (stored running : Array UInt8)
+  /-- the tail folded more Turns after the base than the loop ever writes (`Cadence.tailTurnsMax`,
+  HOST-22): not a Store this Host's loop wrote -/
+  | tailTooManyTurns (turns max : Nat)
   deriving Repr
 
 def BaseFault.name : BaseFault → String
@@ -181,6 +184,7 @@ def BaseFault.name : BaseFault → String
   | .tailTooLong _ _ => "tailTooLong"
   | .foreignSegment => "foreignSegment"
   | .shapeMismatch _ _ => "shapeMismatch"
+  | .tailTooManyTurns _ _ => "tailTooManyTurns"
 
 /-- The base a base file holds, and its World's encoded size. -/
 def Base.read {W : Type} (keys : Keys) (c : Cadence) (world : Stream W) (file : ByteArray) :
@@ -224,8 +228,9 @@ structure Position where
 /-- The bytes of the frame holding `record`. -/
 def frameSize (record : ByteArray) : Nat := 4 + record.size + Log.tagBytes
 
-/-- After a commit that reached `pos`: start a seal in the background? -/
-def shouldSeal (c : Cadence) (sealed : Sealed) (pending : Bool) (pos : Nat) : Bool :=
-  !pending && decide (c.cadence sealed.bytes ≤ pos - sealed.offset)
+/-- After a commit that reached `pos` at World height `height`: start a seal in the background?
+At the byte cadence (HOST-14) or the turn cadence (HOST-22), whichever comes first. -/
+def shouldSeal (c : Cadence) (sealed : Sealed) (pending : Bool) (pos height : Nat) : Bool :=
+  !pending && (decide (c.cadence sealed.bytes ≤ pos - sealed.offset) || decide (c.sealTurns ≤ height - sealed.height))
 
 end Nanodregg.Host

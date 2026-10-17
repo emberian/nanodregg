@@ -43,7 +43,7 @@ def auditStep : World D → ByteArray → Except (Record.Fault (Verdict D)) (Wor
   Record.step Codec.Deployed.digestCodec (audit X)
 
 /-- The loop's batch bounds: a record's Turns, and a megabyte of request payload. -/
-def limits : Limits := ⟨Record.turnsMax, 1 <<< 20⟩
+def limits : Limits := ⟨recordTurnsMax, 1 <<< 20⟩
 
 /-- A deferred reply from the Store's files: a `log` page from the segment, a `read` page from the
 newest base (opened per page: the base is replaced, never written in place). -/

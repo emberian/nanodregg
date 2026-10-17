@@ -10,15 +10,13 @@ stated chain against the one its own fold reached (a pair assertion, law 4). So 
 Turns and chain disagree is refused by name, and the chain is never taken on the writer's word.
 -/
 import Codec.World
+import Host.Bounds
 
 namespace Nanodregg.Host.Record
 
 open Nanodregg.Kernel Nanodregg.Codec
 
 variable {D : Type} [Ord D] [DecidableEq D]
-
-/-- The most Turns one record holds: the loop's batch bound. -/
-def turnsMax : Nat := 64
 
 /-- Why a record does not fold (law 7). -/
 inductive Fault (F : Type) where
@@ -33,7 +31,7 @@ def Fault.name {F : Type} : Fault F → String
   | .turn _ _ => "turn"
   | .chainMismatch => "chainMismatch"
 
-def codec (dc : Stream D) : Stream (List (Turn D) × D) := Nanodregg.Codec.Kernel.batch turnsMax dc
+def codec (dc : Stream D) : Stream (List (Turn D) × D) := Nanodregg.Codec.Kernel.batch recordTurnsMax dc
 
 /-- The record of `staged`, admitted to reach `after`. -/
 def encode (dc : Stream D) (after : World D) (staged : Array (Turn D)) : ByteArray :=
