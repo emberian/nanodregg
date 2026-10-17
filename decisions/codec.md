@@ -593,7 +593,14 @@ only as good as `add` — but `add` is pinned to the Edwards law by `add_affine`
 because that needs (2) and the group order of `B`, a computation of `[L]B` through the ladder in the kernel
 that sits on the CODEC-20 memory boundary; it is the next codec obligation, recorded here so `verify_iff` is
 not read as signature correctness.
-Status: parts 1–3 built. Open: `[L] B = 0` and decode ∘ encode (signature correctness).
+**Part 3b (CODEC-4): the order of B.** `Codec/Proofs/Ed25519/Order.lean`: `B_order : Point.Same ([L] B) 0`.
+The deployed ladder over `L`'s 253 bits is run in four `decide +kernel` chunks through literal intermediate
+points (`mul2_of_chunks`, the CODEC-20 shape: 1.6 GB, 55 s for the module), and `mul2_spec` turns that into
+`[L] B`. Tooth `B_not_small`: `[8] B ≠ 0`, so the order is not the cofactor's. This closes critique (1) above
+for `B` (`L` prime is RFC 8032's statement; its primality is not proved here). The intermediate literals were
+printed by evaluating the deployed ladder (hbox logs/codec4-order.lean) and are checked, not trusted.
+Status: parts 1–3 built. Open: decode ∘ encode (signature correctness: `verify (publicKey s) m (sign s m)`
+for every seed), and `L` prime.
 
 ## CODEC-24 · The broker frames are a second generated file, `emit-broker` (HOSTING-3's ask; CODEC-3, 2026-10-17)
 **Decision.** `Emit/Broker.lean` prints `launcher/src/broker_generated.rs` by `Rust.taggedFile` from
