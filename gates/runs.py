@@ -9,6 +9,12 @@ gates/runs.tsv rows, `exe<TAB>runs<TAB>pass`:
   pass  the last line a passing run prints.
 Every lean_exe has exactly one row (check.py's `runs` gate), so a new exe is classified when it lands.
 
+A row `cargo:CRATE:TEST` is a Rust integration test that drives built Lean exes (HOSTING's
+physical isolation tooth, launcher/tests/isolation.rs): `runs` names those exes (comma-separated),
+`pass` is `exit 0`. It runs `cargo test --manifest-path CRATE/Cargo.toml --test TEST` with
+ND_LEAN_BIN = the tree's built bin directory, after the build; it is selected when CRATE/ changed or
+any exe it drives is selected.
+
 A run is ok on exit 0 with its pass line last; INCOMPLETE on exit 3 (a row with no driver yet:
 pending is a real outcome, law 7); RED otherwise, naming the first `FAIL`/`ROW … FAIL`/`PLANT …
 FAIL` line or the exit code and last line; TIMEOUT after 600 s. `WASTE <op> <metric> <ratio>` lines
@@ -47,6 +53,11 @@ def table(root: str) -> dict[str, tuple[list[list[str]] | None, str]]:
             raise ValueError(f"{RUNS}:{n}: need exe<TAB>runs<TAB>pass: {line.rstrip()!r}")
         if f[0] in out:
             raise ValueError(f"{RUNS}:{n}: second row for {f[0]}")
+        if f[0].startswith("cargo:"):
+            if len(f[0].split(":")) != 3 or f[2] != "exit 0":
+                raise ValueError(f"{RUNS}:{n}: a cargo row is cargo:CRATE:TEST<TAB>EXE,…<TAB>exit 0: {line.rstrip()!r}")
+            out[f[0]] = ([[x.strip() for x in f[1].split(",") if x.strip()]], f[2])
+            continue
         runs = None if f[1].strip() == "-" else [[] if r.strip() == "(none)" else r.split() for r in f[1].split(" ; ")]
         out[f[0]] = (runs, f[2])
     return out
@@ -59,15 +70,25 @@ def check(t: tree.Tree) -> list[str]:
     except ValueError as e:
         return [str(e)]
     exes = set(t.exes)
-    return ([f"lean_exe {e} has no row in {RUNS} (a verdict run, or `-` with why it is not one)" for e in sorted(exes - set(rows))]
-            + [f"{RUNS} row {e} names no lean_exe" for e in sorted(set(rows) - exes)])
+    cargo = {k for k in rows if k.startswith("cargo:")}
+    red = ([f"lean_exe {e} has no row in {RUNS} (a verdict run, or `-` with why it is not one)" for e in sorted(exes - set(rows))]
+           + [f"{RUNS} row {e} names no lean_exe" for e in sorted(set(rows) - exes - cargo)])
+    for k in sorted(cargo):
+        _, crate, test = k.split(":")
+        if not os.path.isfile(os.path.join(t.root, crate, "tests", test + ".rs")):
+            red.append(f"{RUNS} row {k}: no {crate}/tests/{test}.rs")
+        red += [f"{RUNS} row {k}: drives {e}, which is no lean_exe" for e in rows[k][0][0] if e not in exes]
+    return red
 
 
-def selected(t: tree.Tree, changed: list[str] | None) -> set[str]:
+def selected(t: tree.Tree, changed: list[str] | None, rows: dict) -> set[str]:
+    cargo = {k: rows[k][0][0] for k in rows if k.startswith("cargo:")}
     if changed is None or any(p in ("lakefile.lean", "lean-toolchain", RUNS) or p.endswith((".c", ".h")) for p in changed):
-        return set(t.exes)
+        return set(t.exes) | set(cargo)
     mods = {p[:-5].replace("/", ".") for p in changed if p.endswith(".lean")}
-    return {e for e, r in t.exes.items() if t.closure([r]) & mods}
+    out = {e for e, r in t.exes.items() if t.closure([r]) & mods}
+    return out | {k for k, drives in cargo.items()
+                  if set(drives) & out or any(p.startswith(k.split(":")[1] + "/") for p in changed)}
 
 
 def verdict(out: str, rc: int, want: str) -> str:
@@ -94,7 +115,7 @@ def main() -> int:
     t = tree.read(a.root)
     rows = table(os.path.dirname(os.path.dirname(os.path.abspath(a.table)))) if a.table else table(t.root)
     changed = open(a.changed, encoding="utf-8").read().split() if a.changed else None
-    want = selected(t, changed)
+    want = selected(t, changed, rows)
     bindir = os.path.join(t.root, ".lake", "build", "bin")
     scratch = os.path.join(t.root, ".lake", "runs")
     waste = []
@@ -105,14 +126,31 @@ def main() -> int:
             fresh = os.path.join(scratch, f"{exe}-{k}")
             shutil.rmtree(fresh, ignore_errors=True)
             os.makedirs(scratch, exist_ok=True)
-            argv = [os.path.join(bindir, exe)] + [x.replace("{host}", os.path.join(bindir, "host")).replace("{fresh}", fresh) for x in args]
-            if not os.path.isfile(argv[0]):
-                print(f"  run {exe} {' '.join(args)}: ABSENT(no binary)")
+            env = None
+            if exe.startswith("cargo:"):
+                _, crate, test = exe.split(":")
+                argv = ["cargo", "test", "--quiet", "--manifest-path", os.path.join(t.root, crate, "Cargo.toml"), "--test", test]
+                env = dict(os.environ, ND_LEAN_BIN=bindir,
+                           CARGO_TARGET_DIR=os.environ.get("CARGO_TARGET_DIR", os.path.join(t.root, ".lake", "cargo-target")))
+                missing = [e for e in args if not os.path.isfile(os.path.join(bindir, e))]
+                args = []
+            else:
+                argv = [os.path.join(bindir, exe)] + [x.replace("{host}", os.path.join(bindir, "host")).replace("{fresh}", fresh) for x in args]
+                missing = [] if os.path.isfile(argv[0]) else [exe]
+            if missing:
+                print(f"  run {exe} {' '.join(args)}: ABSENT(no binary: {', '.join(missing)})")
                 continue
             try:
-                r = subprocess.run(argv, cwd=t.root, capture_output=True, text=True, timeout=DEADLINE)
+                r = subprocess.run(argv, cwd=t.root, capture_output=True, text=True, timeout=DEADLINE, env=env)
                 # The verdict reads stdout, where the pass line is printed; the log keeps both.
-                out, v = r.stdout + r.stderr, verdict(r.stdout or r.stderr, r.returncode, passline)
+                if exe.startswith("cargo:"):
+                    out = r.stdout + r.stderr
+                    failed = re.findall(r"(?m)^---- (\S+) stdout ----", out)
+                    v = verdict("exit 0" if r.returncode == 0 else out, r.returncode, passline)
+                    if failed and v.startswith("RED"):
+                        v = f"RED(FAIL {', '.join(failed)})"
+                else:
+                    out, v = r.stdout + r.stderr, verdict(r.stdout or r.stderr, r.returncode, passline)
             except subprocess.TimeoutExpired:
                 out, v = "", f"TIMEOUT({DEADLINE} s)"
             shutil.rmtree(fresh, ignore_errors=True)

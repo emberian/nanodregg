@@ -1,5 +1,6 @@
 # exe	runs	pass — gates/runs.py: every lean_exe has one row. runs are argument lists separated by ` ; `
 # ({host} = the built host exe, {fresh} = a fresh directory); `-` = not a verdict exe (pass says why).
+# cargo:CRATE:TEST rows: a Rust integration test driving the named Lean exes (gates/runs.py).
 # Measured 10-17 on hbox (standing tree, swarm-build): the whole set is ~17 s.
 kernel-sim	--seeds 64	ALL PASS
 host-sim	1 ; 2 ; 3	ALL PASS
@@ -16,3 +17,4 @@ emit-units	-	a generator; gates/generated.tsv checks its output
 emit-hosting	-	a generator; gates/generated.tsv checks its output
 live-calls	-	a generator of deploy/live/ inputs; deploy/live/harness.sh drives it against running units
 ob	-	LANG's resident check, an interactive tool: lang-journey and the rows drive the same code
+cargo:launcher:isolation	hosting-drive	exit 0
