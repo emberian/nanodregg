@@ -26,6 +26,7 @@
 import Kernel.Proofs.Fold
 import Kernel.Proofs.Receive
 import Kernel.Receive.Follow
+import Kernel.Sim.Shadow
 
 namespace Nanodregg.Kernel
 
@@ -244,15 +245,13 @@ theorem admit_twice_window {E : Env D} {w₀ w₁ w₂ w₃ : World D} {t t' : T
   omega
 
 omit [Std.LawfulEqOrd D] in
-/-- **Pruning changes no verdict.** For a turn whose window ends by its transaction id's entry
+/-- **Pruning changes no check.** For a turn whose window ends by its transaction id's entry
 height plus `windowMax` (a retry of the call that entry records: same call, same window), the
-World with its journal pruned at any `H ≤ w.height` refuses it by the same name as the World
-before pruning. -/
-theorem admit_prune_verdict {E : Env D} {w : World D} {t : Turn D} {H : Nat} (hH : H ≤ w.height)
-    (hv : ∀ e, w.journal[t.txId]? = some e → t.validUntil ≤ e.1 + Bounds.windowMax) (r : Reject D) :
-    World.admit E { w with journal := pruneJournal H w.journal } t = .error r ↔
-      World.admit E w t = .error r := by
-  have hc : check E { w with journal := pruneJournal H w.journal } t = check E w t := by
+World with its journal pruned at any `H ≤ w.height` checks it exactly as the World before
+pruning: the same refusal, or the same posts. -/
+theorem check_prune {E : Env D} {w : World D} {t : Turn D} {H : Nat} (hH : H ≤ w.height)
+    (hv : ∀ e, w.journal[t.txId]? = some e → t.validUntil ≤ e.1 + Bounds.windowMax) :
+    check E { w with journal := pruneJournal H w.journal } t = check E w t := by
     by_cases hwin : checkWindow w t = .ok ()
     · have hg' : (pruneJournal H w.journal)[t.txId]? = w.journal[t.txId]? := by
         rw [pruneJournal_get]
@@ -282,9 +281,146 @@ theorem admit_prune_verdict {E : Env D} {w : World D} {t : Turn D} {H : Nat} (hH
           | error e =>
               have : checkWindow { w with journal := pruneJournal H w.journal } t = .error e := hw'
               simp [bind, Except.bind, this]
+
+omit [Std.LawfulEqOrd D] in
+/-- **Pruning changes no verdict** (`check_prune`, at the admission). -/
+theorem admit_prune_verdict {E : Env D} {w : World D} {t : Turn D} {H : Nat} (hH : H ≤ w.height)
+    (hv : ∀ e, w.journal[t.txId]? = some e → t.validUntil ≤ e.1 + Bounds.windowMax) (r : Reject D) :
+    World.admit E { w with journal := pruneJournal H w.journal } t = .error r ↔
+      World.admit E w t = .error r := by
   unfold World.admit
-  rw [hc]
+  rw [check_prune hH hv]
   cases check E w t <;> simp
+
+/-! ## The real fold is the never-pruning fold, filtered at the last prune (KERNEL-38)
+
+`admit_prune_verdict` compares ONE prune against the unpruned journal. The deployed fold
+inserts and prunes at every turn. `fold_journal_filter` says what that interleaving leaves: the
+never-pruning journal (`shadowJournal`) filtered to the entries `kept` at the last prune height
+(`lastPrune`), and `fold_prune_check` turns that into the statement about a real history: the
+World a fold reaches checks every windowed retry exactly as the same World with the journal that
+was never pruned. -/
+
+/-- `j` is `J` filtered to the entries kept at `H`, read at every transaction id. -/
+def JournalFiltered (H : Nat) (j J : Std.TreeMap D (Nat × D) compare) : Prop :=
+  ∀ k : D, j[k]? = J[k]?.filter (kept H)
+
+omit [Ord D] [Std.TransOrd D] [Std.LawfulEqOrd D] [DecidableEq D] in
+theorem lastPrune_le (h : Nat) : lastPrune h ≤ h := Nat.sub_le _ _
+
+omit [Ord D] [Std.TransOrd D] [Std.LawfulEqOrd D] [DecidableEq D] in
+theorem lastPrune_mod (h : Nat) : lastPrune h % Bounds.windowMax = 0 := by
+  unfold lastPrune; rw [windowMax_eq]; omega
+
+omit [Ord D] [Std.TransOrd D] [Std.LawfulEqOrd D] [DecidableEq D] in
+theorem lastPrune_succ (h : Nat) :
+    lastPrune (h + 1) = if (h + 1) % Bounds.windowMax = 0 then h + 1 else lastPrune h := by
+  unfold lastPrune; rw [windowMax_eq]; split <;> omega
+
+omit [Ord D] [Std.TransOrd D] [Std.LawfulEqOrd D] [DecidableEq D] in
+theorem kept_anti {H H' : Nat} {e : Nat × D} (hH : H ≤ H') (h : kept H' e = true) : kept H e = true := by
+  simp only [kept, decide_eq_true_eq] at *; omega
+
+omit [Ord D] [Std.TransOrd D] [Std.LawfulEqOrd D] [DecidableEq D] in
+theorem filter_kept_anti {H H' : Nat} (hH : H ≤ H') (o : Option (Nat × D)) :
+    (o.filter (kept H)).filter (kept H') = o.filter (kept H') := by
+  cases o with
+  | none => rfl
+  | some e =>
+      by_cases h' : kept H' e = true
+      · simp [Option.filter, kept_anti hH h', h']
+      · by_cases h : kept H e = true <;> simp [Option.filter, h, h']
+
+omit [Std.TransOrd D] [Std.LawfulEqOrd D] [DecidableEq D] in
+/-- Every World that holds `JournalOk` is its own journal filtered at its last prune height. -/
+theorem journalFiltered_self {w : World D} (hw : w.JournalOk) :
+    JournalFiltered (lastPrune w.height) w.journal w.journal := by
+  unfold JournalFiltered
+  intro k
+  cases hg : w.journal[k]? with
+  | none => rfl
+  | some e =>
+      have := (hw.1 k e hg).2
+      simp only [Option.filter, kept, lastPrune, decide_eq_true_eq]
+      rw [windowMax_eq] at *
+      split
+      · rfl
+      · omega
+
+omit [Std.LawfulEqOrd D] in
+/-- One commit: the pruned insert is the never-pruned insert filtered at the new last prune. -/
+theorem commit_filtered {E : Env D} {w : World D} {t : Turn D} {posts : List (Post D)}
+    {J : Std.TreeMap D (Nat × D) compare} (hj : JournalFiltered (lastPrune w.height) w.journal J) :
+    JournalFiltered (lastPrune (w.height + 1)) (commit E w t posts).journal
+      (J.insert t.txId (w.height + 1, turnDigest E t)) := by
+  unfold JournalFiltered at *
+  intro k
+  change (pruneJournal (w.height + 1) (w.journal.insert t.txId (w.height + 1, turnDigest E t)))[k]? = _
+  rw [pruneJournal_get, Std.TreeMap.getElem?_insert, Std.TreeMap.getElem?_insert, lastPrune_succ]
+  by_cases hz : (w.height + 1) % Bounds.windowMax = 0
+  · rw [if_pos hz, if_pos hz]
+    by_cases hc : compare t.txId k = .eq
+    · rw [if_pos hc, if_pos hc]
+    · rw [if_neg hc, if_neg hc, hj k, filter_kept_anti (Nat.le_succ_of_le (lastPrune_le _))]
+  · rw [if_neg hz, if_neg hz]
+    by_cases hc : compare t.txId k = .eq
+    · rw [if_pos hc, if_pos hc]
+      have := lastPrune_le w.height
+      simp only [Option.filter, kept, decide_eq_true_eq]
+      split
+      · rfl
+      · omega
+    · rw [if_neg hc, if_neg hc, hj k]
+
+omit [Std.LawfulEqOrd D] in
+/-- **The real fold's journal is the never-pruning journal, filtered at the last prune height.**
+From any World whose journal is `J` filtered at its last prune (`journalFiltered_self`: every
+`JournalOk` World, with `J` its own journal), the World a fold reaches, which inserted and pruned
+at every turn, holds exactly the entries of `shadowJournal` that are `kept` at its own
+`lastPrune` height. All the prunes of a history are one prune at the last multiple of
+`windowMax`, of the journal that never forgot. -/
+theorem fold_journal_filter {E : Env D} {l : List (Turn D)} :
+    ∀ {w w' : World D} {J : Std.TreeMap D (Nat × D) compare},
+      JournalFiltered (lastPrune w.height) w.journal J → World.fold E w l = .ok w' →
+      JournalFiltered (lastPrune w'.height) w'.journal (shadowJournal E w.height J l) := by
+  induction l with
+  | nil => intro w w' J hj h; simp [World.fold] at h; subst h; exact hj
+  | cons t rest ih =>
+      intro w w' J hj h
+      obtain ⟨w₁, h₁, h₂⟩ := fold_cons_ok.mp h
+      obtain ⟨posts, _, rfl⟩ := admit_ok h₁
+      exact ih (commit_filtered hj) h₂
+
+omit [Std.TransOrd D] [Std.LawfulEqOrd D] in
+/-- `check` reads the journal only at the turn's transaction id. -/
+theorem check_journal_congr {E : Env D} {w : World D} {t : Turn D} {j : Std.TreeMap D (Nat × D) compare}
+    (hj : j[t.txId]? = w.journal[t.txId]?) : check E { w with journal := j } t = check E w t := by
+  have h : checkJournal { w with journal := j } t = checkJournal w t := by
+    unfold checkJournal
+    rw [show ({ w with journal := j } : World D).journal = j from rfl, hj]
+  unfold check
+  rw [h]
+  rfl
+
+omit [Std.LawfulEqOrd D] in
+/-- **Pruning changed no check in a real history.** The World `w'` a fold reaches checks a
+turn exactly as the same World with the journal that was never pruned, whenever the turn's
+window ends by its transaction id's never-pruned entry height plus `windowMax` (a retry of the
+call that entry records). This is `check_prune` at `lastPrune w'.height`, transported to the real
+journal by `fold_journal_filter`. -/
+theorem fold_prune_check {E : Env D} {w w' : World D} {l : List (Turn D)}
+    {J : Std.TreeMap D (Nat × D) compare} {t : Turn D}
+    (hj : JournalFiltered (lastPrune w.height) w.journal J) (h : World.fold E w l = .ok w')
+    (hv : ∀ e, (shadowJournal E w.height J l)[t.txId]? = some e →
+      t.validUntil ≤ e.1 + Bounds.windowMax) :
+    check E w' t = check E { w' with journal := shadowJournal E w.height J l } t := by
+  have hp : (pruneJournal (lastPrune w'.height) (shadowJournal E w.height J l))[t.txId]? =
+      w'.journal[t.txId]? := by
+    have hf := fold_journal_filter hj h
+    unfold JournalFiltered at hf
+    rw [pruneJournal_get, if_pos (lastPrune_mod _), hf t.txId]
+  rw [← check_journal_congr hp]
+  exact check_prune (w := { w' with journal := shadowJournal E w.height J l }) (lastPrune_le _) hv
 
 end Nanodregg.Kernel
 
@@ -353,4 +489,17 @@ theorem reach_journal_bounded {X : Ctx D} {name nonce : ByteArray} {allowance : 
     w.journal.size < 3 * Bounds.windowMax :=
   journal_bounded (fold_journalOk (genesisWorld_journalOk X name nonce allowance founders) h)
 
-end Nanodregg.Kernel.Receive
+omit [Std.LawfulEqOrd D] in
+/-- **From genesis, pruning changed no check** (`fold_prune_check`, every premise but the
+window discharged): a World a genesis reaches checks each windowed retry exactly as the same
+World carrying the latest entry its log wrote under each transaction id, none pruned. -/
+theorem reach_prune_check {X : Ctx D} {name nonce : ByteArray} {allowance : Nat}
+    {founders : List (ByteArray × D)} {w : World D} {l : List (Turn D)} {t : Turn D}
+    (h : World.fold X.env (genesisWorld X name nonce allowance founders) l = .ok w)
+    (hv : ∀ e, (shadowJournal X.env (genesisWorld X name nonce allowance founders).height
+        (genesisWorld X name nonce allowance founders).journal l)[t.txId]? = some e →
+      t.validUntil ≤ e.1 + Bounds.windowMax) :
+    check X.env w t = check X.env { w with journal := (shadowJournal X.env
+      (genesisWorld X name nonce allowance founders).height
+      (genesisWorld X name nonce allowance founders).journal l) } t :=
+  fold_prune_check (journalFiltered_self (genesisWorld_journalOk X name nonce allowance founders)) h hv

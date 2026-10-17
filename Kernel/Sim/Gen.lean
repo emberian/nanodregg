@@ -10,6 +10,7 @@ the parameters differ.
 import Kernel.Receive.Audit
 import Kernel.Receive.Submit
 import Kernel.Receive.Follow
+import Kernel.Sim.Shadow
 
 namespace Nanodregg.Kernel.Sim.Gen
 
@@ -1155,20 +1156,22 @@ def probeJournal (P : Params D) (st : State D) (seed : Nat) : State D :=
   if seed ≠ 0 then st else
   let W := Bounds.windowMax
   let n := 3 * W + 2
-  let step := fun (acc : Except String (World D × Nat × Nat)) (i : Nat) =>
+  let step := fun (acc : Except String (World D × Nat × Nat × List (Turn D))) (i : Nat) =>
     match acc with
     | .error e => .error e
-    | .ok (w, mx, scanned) =>
+    | .ok (w, mx, scanned, log) =>
       let H := w.height + 1
       let scan := if H % W = 0 then w.journal.size + 1 else 0
-      match World.admit P.env w (journalTurn P i H H) with
+      let t := journalTurn P i H H
+      match World.admit P.env w t with
       | .ok w' =>
-          if w'.journal.size < 3 * W then .ok (w', max mx w'.journal.size, scanned + scan)
+          if w'.journal.size < 3 * W then .ok (w', max mx w'.journal.size, scanned + scan, t :: log)
           else .error s!"journal holds {w'.journal.size} entries at height {w'.height}"
       | .error r => .error s!"journal turn {i} refused {r.name}"
-  match (List.range n).foldl step (.ok (World.genesis P.env P.zero 100000000, 0, 0)) with
+  let g := World.genesis P.env P.zero 100000000
+  match (List.range n).foldl step (.ok (g, 0, 0, [])) with
   | .error e => failWith st s!"probe journal: {e}"
-  | .ok (w, mx, scanned) =>
+  | .ok (w, mx, scanned, log) =>
       let st := { st with journalMax := mx, journalScanned := scanned, journalTurns := n }
       let tx := fun i => P.env.hash "nanodregg/sim/journal-tx" (toString i).toUTF8
       let missing := (List.range n).filter fun i =>
@@ -1181,7 +1184,20 @@ def probeJournal (P : Params D) (st : State D) (seed : Nat) : State D :=
         let st := journalExpect P st w (journalTurn P 0 1 1) "journal-expired" "outsideWindow"
         let st := journalExpect P st w (journalTurn P k (k + 1) (k + 1)) "journal-window-first" "outsideWindow"
         let st := journalExpect P st w (journalTurn P k H H) "journal-kept" "replayed"
-        journalExpect P st w (journalTurn P 0 H H) "journal-reuse" "ok"
+        let st := journalExpect P st w (journalTurn P 0 H H) "journal-reuse" "ok"
+        -- KERNEL-38: the real journal is the never-pruned one filtered at the last prune
+        -- (`fold_journal_filter`), and the never-pruned World checks every windowed retry as the
+        -- real one does (`fold_prune_check`); the fresh-window reuse is outside that premise and is
+        -- the one place the two answer differently
+        let J := shadowJournal P.env g.height g.journal log.reverse
+        let wS := { w with journal := J }
+        if w.journal.toList != (J.filter fun _ e => kept (lastPrune w.height) e).toList then
+          failWith st s!"probe journal shadow: the journal at height {w.height} is not the never-pruned one filtered at {lastPrune w.height}"
+        else
+          let st := { st with refusedAsExpected := st.refusedAsExpected + 1,
+                              seen := "journal-shadow:filtered" :: "filtered" :: st.seen }
+          let st := journalExpect P st wS (journalTurn P k H H) "journal-shadow-kept" "replayed"
+          journalExpect P st wS (journalTurn P 0 H H) "journal-shadow-reuse" "replayed"
 
 /-- One verdict of the carry probe, by name: `submit` on the carried World. -/
 def carryExpect (P : Params D) (st : State D) (w : World D) (c : Call D) (what want : String) : State D :=
@@ -1354,7 +1370,8 @@ def plantedArms : List String :=
    "object-pays:ok", "object-pays-twice:spent", "reenter:revisited", "call-not-callable:notCallable",
    "too-many-calls:tooManyCalls", "over-ticks:overTicks", "grant-to-object:ok", "call-chain:ok",
    "call-too-deep:callTooDeep", "journal-expired:outsideWindow", "journal-window-first:outsideWindow",
-   "journal-kept:replayed", "journal-reuse:ok", "carry-name:nameTooLong", "carry-old-call:replayed",
+   "journal-kept:replayed", "journal-reuse:ok", "journal-shadow:filtered",
+   "journal-shadow-kept:replayed", "journal-shadow-reuse:replayed", "carry-name:nameTooLong", "carry-old-call:replayed",
    "carry-old-world:wrongWorld", "carry-new:ok", "hash-count:empty-per-insert"]
 
 /-- `--seeds N` runs seeds `0 … N-1`; otherwise each argument is a seed. -/

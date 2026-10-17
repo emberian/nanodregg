@@ -980,7 +980,9 @@ than the old `ok receipt`: a client that waits more than ~2W heights must resolv
 the log (PROTOCOL-6 owns the row). `admit_prune_verdict`'s window premise is discharged by
 call-derivation but not proved over a fold's provenance, and it compares ONE prune against the
 unpruned World. The deployed World was pruned at every multiple of W; that all past prunes
-equal one prune at the latest multiple (`kept` is monotone in H) is not yet a lemma.
+equal one prune at the latest multiple (`kept` is monotone in H) is not yet a lemma (that
+sentence closed by KERNEL-38: `fold_journal_filter` along the real fold, `fold_prune_check`; the
+window premise over a fold's provenance stays open, KERNEL-38 Critique).
 `submit_once`, `derived_once` and `admit_twice_window` carry the content that matters.
 `reach_journal_bounded` covers Worlds a fold reaches from genesis; a World decoded from a base
 is covered only through the fold that wrote it (no codec theorem carries `JournalOk`). HOST's
@@ -1214,3 +1216,74 @@ They are LEDGER's files, so I asked LEDGER-3 to convert them.
 bundled) and leaving every caller to pick, and that drift is exactly what this structure exists to
 end. The deployed instance is the only consumer.
 **Flag day.** None. Nothing refuses, nothing re-geneses, nothing re-emits.
+
+## KERNEL-38 · All the prunes of a history are one prune of the journal that never forgot: `fold_journal_filter`, and pruning changed no check in a real fold (KERNEL-10, 2026-10-18; KERNEL-33's Critique, KERNEL-9's handoff item 1)
+**Defect.** KERNEL-33's `admit_prune_verdict` compares ONE prune of a World's journal against that
+same journal unpruned. A real fold inserts and prunes at every turn, so that theorem never
+described a World any history reaches. KERNEL-9's first attempt, a list of prunes of one fixed
+journal, collapses to one prune (`kept` is antitone in H) and still never matches a real fold, so
+it was rejected unlanded (hbox logs/kernel9-k38-rejected.patch).
+**Decision.** (1) A specification, `Kernel.Sim.Shadow` (tooling: no deployed path computes it):
+`shadowJournal E h J l` is the journal the log `l` leaves from `J` at height `h` if nothing is
+ever removed, each turn's entry inserted at its height exactly as `commit` inserts it. `lastPrune h`
+is the last multiple of `windowMax` at or below `h`. The shadow is a journal along the REAL fold,
+not a second fold. A second fold reading its own unpruned journal would refuse a recycled txId
+`replayed` (the `journal-reuse` arm), so it would not follow the log, and any theorem about it would
+need the conclusion as a premise. (2) `fold_journal_filter`: from any World whose journal is `J`
+filtered at its last prune (`journalFiltered_self`: every `JournalOk` World with `J` its own
+journal, so every genesis and every World a fold reaches), the World a fold reaches holds, at every
+txId, exactly the shadow's entry filtered by `kept (lastPrune w'.height)`. Proof: one commit step
+(`commit_filtered`), at a multiple of W by `filter_kept_anti` (filtering at H then at H' ≥ H is
+filtering at H'), and between multiples `lastPrune` does not move and the new entry is kept. (3)
+`check_prune` (the check-level core of `admit_prune_verdict`, which is now its corollary) and
+`check_journal_congr` (`check` reads the journal only at the turn's txId). Together they give
+`fold_prune_check`: the World a fold reaches checks a turn EXACTLY as the same World with the
+never-pruned journal (the same refusal or the same posts), for every turn whose window ends by its
+txId's never-pruned entry height + W. `Receive.reach_prune_check` states it from genesis with every
+premise but that window discharged.
+**Teeth.** kernel-sim seed 0's journal probe now folds its 3W+2 turns into the shadow with the
+spec's own definitions. Arms: `journal-shadow:filtered` (the real journal's listing equals the
+shadow's filtered at `lastPrune`), `journal-shadow-kept:replayed` (a windowed retry whose entry the
+shadow holds: the World carrying the never-pruned journal gives the real verdict), and
+`journal-shadow-reuse:replayed`: the
+fresh-window reuse, outside the window premise, is `ok` on the real World and `replayed` on the
+shadow, so the premise does work. All are in `plantedArms`. Mutations, each run on seed 0 and then
+restored: (a) pruning at EVERY height (`if True`): the existing KERNEL-33 probes stay green (the
+journal is still bounded, and every id below `journalForgets` is still answered), and only
+`journal-shadow:filtered` refuses ("the journal at height 3074 is not the never-pruned one filtered at
+3072"). This is the mutation KERNEL-33's teeth were blind to. The proofs refuse as well (Admit's
+`pruneJournal_get` stops compiling). (b) A prune that drops live entries (`kept (H + W)`): the
+proofs refuse, and the sim fails at `fold_answers`' probe. kernel-sim --seeds 64 ALL PASS, and no
+WASTE row moves (8.915 / 3.211 / 2.999 / 1.998).
+**Alternatives.** (a) A second fold `World.foldNoPrune` that admits with its own journal. That
+diverges at the first recycled txId, so a theorem relating it to the real fold must assume that no
+turn ever hits a pruned entry, which is the content in question. (b) KERNEL-9's composition of
+prunes of one journal: rejected (see Defect). (c) Proving `fold_prune_check` with the window premise
+discharged on every `Honest` log. The shadow's entry for a txId is its LATEST admission. On a
+receive-derived log that admission is the same call as the retry unless two different calls share
+a digest (`submit_once`/`derived_once` exclude the same call twice), so the discharge needs a
+digest-collision disjunct over the call codec. That is a further theorem, not a weaker form of this
+one, and it is named below (cv task 01a14a8a-7364).
+**Critique.** The window premise `hv` is stated on the SHADOW journal, not discharged. It holds
+for every retry of the call that wrote the latest entry under that txId. A log that recycled a txId
+under a fresh window (bare admit only; `journal-reuse`) is exactly where it fails, and the arm shows
+the two Worlds then disagree, so the premise cannot be dropped. Discharging it for `Honest` logs is
+alternative (c). `shadowJournal` sits in a tooling module because a proof-module may not export a
+non-Prop def (closure C3) and the sim, a def-module, may not import a proof-module (C4). One
+definition serves the proof and the probe, at the cost of `Kernel.Proofs.Journal` importing a
+`Sim` module (allowed: C9 constrains deployed def-modules only). The equality is pointwise
+(`JournalFiltered`, at every txId), not `=` of TreeMaps, because two maps built by different
+insert/erase orders need not be structurally equal. `check` reads the journal pointwise, so nothing
+consumes more.
+Second-agent vacuity read (before landing): every statement OK, `hv` does not contain the
+conclusion, `fold_journal_filter` is over the real interleaved fold; three docstring overclaims
+fixed (the shadow decides nothing; it is the same World carrying the never-pruned journal, not a
+World a never-pruning node reaches; a recycled id keeps only its latest entry); two arms whose
+window fails on both sides (expired, window-first on the shadow) dropped as distinguishing nothing.
+**Meta-critique.** The pull was to call KERNEL-33's critique "closed" by the first statement with
+"fold" in its name. KERNEL-9's rule (a theorem that never matches a real run is not landed) is what
+forced the shadow to be a journal along the real fold rather than a fold of its own. The other pull
+was to discharge `hv` by putting it in a convenient premise of the corollary. It stays a visible
+premise with its refuting arm instead.
+**Flag day.** None. No definition on the deployed path changed. Nothing re-geneses, re-emits or
+refuses to load. `admit_prune_verdict`'s statement is unchanged; it is now proved from `check_prune`.
