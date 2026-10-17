@@ -45,6 +45,10 @@ package nanodregg where
 @[default_target] lean_exe «hosting-sim» where
   root := `Hosting.Sim.Main
 
+-- HOSTING's controller: follows one Store (Host.Tail), writes Hosting.Wire actions to grain-launch.
+@[default_target] lean_exe «hosting-controller» where
+  root := `Hosting.Main
+
 -- The Rust copy of the protocol table (client/src/generated.rs). Imports Protocol; nothing imports it.
 @[default_target] lean_lib Emit where
   globs := #[.submodules `Emit]

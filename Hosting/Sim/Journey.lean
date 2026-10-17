@@ -20,6 +20,10 @@ grants `start` to).
   `worlds/w1/grains/<hex>/pkg/app`; with its child running: nothing. A look-alike (same state,
   another package, started) is never launched; the ids of the log's Turns (`touchedIds`, what HOST's
   tail hands the controller) reconcile to exactly the grain's launch.
+* G17 the controller's ROUND (`Loop.step`, what `hosting-controller` runs): round 0 over every live
+  id launches exactly the grain; touched again before any report: nothing (the launch marks it
+  running); `started`: nothing; `exited` while it still desires `running`: relaunched; four
+  `failed` reports more (five exits in the window): refused `crashLoop`, never launched.
 * G16 the controller over the removed grain with its child still running: `kill`.
 * G14 the follower (`World.fold`) and the auditor reach the Host's World.
 
@@ -34,6 +38,7 @@ import Lang.Program
 import Hosting.Package
 import Lang.Print
 import Hosting.Controller
+import Hosting.Loop
 
 namespace Nanodregg.Hosting.Sim
 
@@ -170,6 +175,29 @@ def journey (plant : Plant) (pkg : Package) : Run := Id.run do
       (Controller.touchedIds r.st.log) == [{ grain := hx, verdict := .launch want }])
   r := note r "G15 controller, child running: nothing"
     ((ctl r [upLive hx] gr hx).isEmpty)
+  -- G17 the controller's round
+  let round := fun (st : Loop.State D) (ids : List D) (rs : List Report) =>
+    Loop.step Kernel.Sim.dc.bytes label pkgId r.st.host st ids rs
+  let launchA : List Action := [{ grain := hx, verdict := .launch want }]
+  let (s0, a0) := round Loop.State.empty (Loop.allIds r.st.host) []
+  r := note r s!"G17 round 0 over every live id ({(Loop.allIds r.st.host).length}): launch exactly the grain" (a0 == launchA)
+  let (s1, a1) := round s0 [gr] []
+  r := note r "G17 touched again before its report: nothing (the launch marks it running)" a1.isEmpty
+  let (s2, a2) := round s1 [] [.started hx 10]
+  r := note r "G17 started: nothing" a2.isEmpty
+  let (s3, a3) := round s2 [] [.exited hx 0 20]
+  r := note r "G17 exited while it desires running: relaunched" (a3 == launchA)
+  let (s4, a4) := round s3 [] [.failed hx .programOutside 30]
+  let (s5, a5) := round s4 [] [.failed hx .programOutside 40]
+  let (s6, a6) := round s5 [] [.failed hx .programOutside 50]
+  let (_, a7) := round s6 [] [.failed hx .programOutside 60]
+  let (sx, ax) := round Loop.State.empty [] [.started (lit "stranger") 1]
+  let (_, ay) := round Loop.State.empty [gr] [.started hx 1]
+  r := note r "G17 a report for a grain this process never launched is ignored (a stranger's `started` neither stops the grain's launch nor stays in memory)"
+    (ax.isEmpty && sx.live.isEmpty && sx.launched.isEmpty && ay == launchA)
+  r := note r "G17 failed launches are exits: relaunched three times, then refused crashLoop"
+    (a4 == launchA && a5 == launchA && a6 == launchA &&
+      a7 == [{ grain := hx, verdict := .refuse .crashLoop }])
   let some lookBytes := lookAlike.bind Wire.encodePackage | return note r "G15 no look-alike bytes" false
   let (rl, vl, tl) := go prog r (call r a [a.id] (.install lookBytes))
   let some lp := created tl | return note rl s!"G15 look-alike install: {vl}" false

@@ -5,6 +5,7 @@ kernel-sim	--seeds 64	ALL PASS
 host-sim	1 ; 2 ; 3	ALL PASS
 host-file-sim	1 ; 2 ; 3	ALL PASS
 hosting-sim	1 ; 2 ; 3	ALL PASS
+hosting-controller	-	the deployed controller; hosting-sim G17 runs its Loop.step, the launcher isolation test runs the exe
 lang-journey	(none)	lang-journey: GREEN
 rows	(none)	ALL PASS
 store-plants	{host} {fresh}	ALL PASS

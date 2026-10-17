@@ -332,3 +332,53 @@ APFS's relation on ASCII names is a platform fact, not a theorem.
 **META.** The charset is the one I would pick for a hostname, by familiarity; it is narrower than
 needed, which is the safe direction.
 Status: built.
+
+## HOSTING-10 The controller exe: a pure round over HOST's tail (HOSTING-2, 2026-10-17)
+
+**Decision.** `hosting-controller STORE LABEL` (`Hosting/Cli.lean`, root `Hosting/Main.lean`) opens
+the Store with `Host.Tail.open` (no lock, never writes), decides every live cell id once
+(`Loop.allIds`, O(store) at start only), then per round: `Tail.next` (O(appended bytes)), drain the
+reports a dedicated reader task queued (≤ `queueMax`), run `Loop.step` on `touchedIds` of the
+round's Turns and those reports, write the actions as frames, flush; an idle round sleeps
+`Host.tailPollMs`. Rounds and report frames are bounded by `lifetime` (2^48); every end is an `Exit`
+by name (`launcherGone` = 0 is the normal end: the launcher left first).
+`Hosting/Loop.lean`'s `step` is pure, so hosting-sim G17 runs the same function the exe runs. Memory
+(`State`): the reports (`Live`), the grains this process launched with their ids (so an exit report
+returns its id to `reconcile`: a crashed child of a grain still desiring `running` is relaunched or
+refused `crashLoop`), and the launcher's clock. A report for a grain this process never launched is
+ignored. After a round the memory is pruned to grains with a running child or a qualifying cell.
+A failed launch (`LaunchFailure`) counts as an exit.
+**Laws the launcher keeps** (stated in `Loop`'s header; the launcher's tests check them): one child
+per grain; reports in order on one FIFO pipe (so no generation numbers); the controller's pipe
+closing kills every child before the launcher exits (so a restarted controller, starting from empty
+memory, meets no orphan).
+**Theorems** (`Hosting.Proofs.Loop`): `step_decides` (every id of the round with a verdict gets
+exactly that action), `step_launch_sound` (a launch is `launch_sound`'s situation on the World's own
+cell at an id of the round), `step_kill_complete` (a running child whose cell at an id of the round
+is gone, not a lifecycle object, undecodable or not desiring `running` is killed: all of
+`kill_sound`'s cases), `step_launch_complete`, `step_launch_marks` (a launched grain counts as running
+after the round and stays in memory), `remember_has`, `returning_complete`, `absorb_stranger`,
+`step_kept`, `step_one_per_grain` (+ `_deployed` on digests), `exited_not_running`,
+`failed_not_running`, and the paging lemmas.
+**Vacuity read (10-17, second agent).** Found: kill completeness covered only gone/not-a-grain
+(generalised to all four cases, over `roundIds`); a spurious `started` for a grain never launched
+would hold a disqualified child up undecided (reports of strangers now ignored, `absorb_stranger`);
+unbounded memory (`prune`, `step_kept`); no proof the exit report returns the id (`remember_has`,
+`returning_complete`); no one-action-per-grain over the whole round (`step_one_per_grain`); the
+restart/orphan and ordering assumptions were unstated (now the launcher's laws above). Accepted: the
+batch-level frame property (a cell whose state changes is in `touchedIds`) is KERNEL's
+`admit_frame` per Turn and is not lifted to a batch here — owed, asked of KERNEL; `now` is advisory
+(one far-future report disables the window); a `crashLoop` grain is retried only when a Turn touches
+it.
+**Plants** (run): `afterOne` not marking a launch ⇒ `step_launch_marks` red and G17 "touched again:
+nothing" red; a failed launch not counted as an exit ⇒ `failed_not_running` red and G17's crashLoop
+line red; reports of strangers absorbed ⇒ `absorb_stranger` red and G17's stranger line red.
+**Alternatives.** A second replayer (the controller folding the log itself): law 5 forbids it; the
+tail is the open. One Lean process that also launches (no Rust): the sandbox crate is Rust (CLIENT),
+and the controller would hold the children it decides about.
+**CRITIQUE.** The IO loop is not proved to call `step` faithfully; it is read, smoke-run (empty
+Store: round 0, then `launcherGone`), and exercised end to end only by the launcher's isolation test.
+A partial batch is written when `encodeAction` fails mid-round (the run then ends by name).
+**META.** I shaped the memory after the Kubernetes controller (observed vs desired), again by
+familiarity; the reader's holes were all in the observed half, which is where that shape is weakest.
+Status: built.

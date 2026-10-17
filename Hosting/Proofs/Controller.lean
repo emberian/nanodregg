@@ -138,7 +138,7 @@ theorem reconcile_names {bytesOf : D → ByteArray} {label pkgId : ByteArray} {n
     subst hd
     exact ⟨rfl, rfl⟩
 
-private theorem filterMap_sublist_map {α β : Type} (l : List α) (f : α → Option β) (g : α → β)
+theorem filterMap_sublist_map {α β : Type} (l : List α) (f : α → Option β) (g : α → β)
     (h : ∀ a b, f a = some b → b = g a) : List.Sublist (l.filterMap f) (l.map g) := by
   induction l with
   | nil => simp
