@@ -661,3 +661,30 @@ theorem. The equality is for the record, not for what the World grows (`Turn.gro
 **Meta-critique.** I stated the generic theorem over `size`, not `bytes.size`, so it holds for every turn with no
 fit premise. The deployed corollary carries the bytes meaning.
 Status: built.
+
+## CODEC-27 · The emitted `path_clean` is checked against Lean's decoder on every commit (CODEC-21's critique; CODEC-4, 2026-10-17)
+**Decision.** `emit-hosting` prints `wire::PATH_VECTORS`: 19 paths (the empty path; leading, trailing and doubled
+separators; `.`/`..` alone and inside; `...`, `.a`, `a.`, a backslash; components of `componentMax` and
+`componentMax + 1` bytes; NUL inside), each with the verdict `(Path.split v).all Path.clean` that the
+emitter computes. `path_clean` becomes `pub`, `launcher/tests/path_vectors.rs` asserts `path_clean(v) == ok` on
+every row, and `gates/runs.tsv` row `cargo:launcher:path_vectors` runs it in every judge.
+`Codec.Path.fits_split : fits max (split b) = ((split b).all clean && decide (b.size ≤ max))` states the decoder's
+whole condition in the Rust shape (the `bytes(max)` bound, then the components). Mutation measured: `<=` →
+`<` against `COMPONENT_MAX` fails the test on the 64-byte row.
+**Alternatives.** A Lean theorem about the Rust text (Lean does not read Rust). Generating the Rust control
+flow from Lean's `clean` definition (a printer from Lean terms to Rust: a much larger emitter whose output
+would still be checked only by reading it). Vectors in a `#[cfg(test)]` module of generated.rs (no judge runs a
+crate's unit tests; a test nobody runs cannot go red).
+**Why.** CODEC-21 left the Rust rule tied to Lean by inspection only. Now any drift on the edge cases the
+vectors name goes red in the judge.
+**Critique.** Vectors are finitely many inputs. A Rust rule that agrees on all 19 and differs elsewhere passes, so
+this is a differential test, not a proof. The rows are chosen to hit each conjunct of `clean` and each split
+case, but that coverage is a claim I made by reading, not a theorem. Found on the way: the compiled emitter
+misprints the Lean literal `"a\x00b"` as bytes `a, 0x0b`, because Lean 4.30's C backend emits it inside a C
+string, where `\x` escapes are greedy (checked in the emitted C). The NUL row is therefore built from bytes. No
+Lean source in this repo has `\xHH` followed by a hex digit (grep).
+**Meta-critique.** I took the vector route because it puts the check in the judge today. A Lean-to-Rust printer
+for `clean` would remove the template, but it is a bigger and differently-risky emitter. I recorded it as the
+alternative rather than deferring it as "the real fix", because a printer's output is also only checked by
+running it.
+Status: built.

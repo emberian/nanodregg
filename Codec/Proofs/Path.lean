@@ -176,6 +176,12 @@ theorem split_join {p : List ByteArray} (hp : ∀ c ∈ p, clean c = true) : spl
         obtain ⟨c'', hc'', rfl⟩ := List.mem_map.mp hc'
         exact ((clean_free (hp c'' hc'')).2 x hx).1)
 
+/-- The path decoder's whole condition (`Layout.pathCodec`): every component of the split is clean, and the
+bytes fit. This is the shape of the emitted Rust `path_clean` (plus the `bytes(max)` bound before it). -/
+theorem fits_split (max : Nat) (b : ByteArray) :
+    fits max (split b) = ((split b).all clean && decide (b.size ≤ max)) := by
+  simp only [fits, join_split]
+
 /-- The tooth: a component holding a `/` does not survive (so `split_join`'s premise is needed). -/
 theorem split_join_needs_clean : split (join ["a/b".toUTF8]) ≠ ["a/b".toUTF8] := by decide
 

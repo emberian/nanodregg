@@ -334,18 +334,46 @@ def layoutPrelude (rejected : Bool := false) (lists : Bool := true) : String := 
   "        v.iter().try_for_each(|x| put_bytes(out, x, max))",
   "    }"] else []))
 
+/-- A Rust byte-string literal of `w`: printable ASCII as itself, `"` and `\\` escaped, any other byte `\\xNN`. -/
+def rustBytes (w : ByteArray) : String :=
+  let hex (n : Nat) : Char := if n < 10 then Char.ofNat (48 + n) else Char.ofNat (87 + n)
+  "b\"" ++ String.ofList (w.toList.flatMap fun b =>
+    let n := b.toNat
+    if n == 34 || n == 92 then ['\\', Char.ofNat n]
+    else if 32 ≤ n && n < 127 then [Char.ofNat n]
+    else ['\\', 'x', hex (n / 16), hex (n % 16)]) ++ "\""
+
+/-- The paths `PATH_VECTORS` carries: every clause of `Path.clean` and of the split (empty path, leading,
+trailing and doubled separators, `.`/`..` alone and inside, the length edge, NUL, a backslash). -/
+def pathVectors : List ByteArray :=
+  (["", "a", "a/b", "/a", "a/", "a//b", ".", "..", "a/./b", "a/../b", "...", ".a", "a.", "a\\b",
+    String.ofList (List.replicate Path.componentMax 'x'),
+    String.ofList (List.replicate (Path.componentMax + 1) 'x'),
+    String.ofList (List.replicate Path.componentMax 'x') ++ "/b"]).map String.toUTF8 ++
+  -- NUL inside a component, as bytes: the compiled emitter misprints a `\x00` string literal followed
+  -- by a hex digit (Lean's C string escape runs on), so the vector is built from its bytes
+  [ByteArray.mk #[97, 0, 98]]
+
+/-- One row: the path and the verdict of Lean's path decoder on its components
+(`(Path.split v).all Path.clean`; `Codec.Proofs.Path.fits_split` is the decoder's whole condition). -/
+def pathVectorRow (v : ByteArray) : String :=
+  let one := s!"({rustBytes v}, {(Path.split v).all Path.clean})"
+  -- rustfmt's layout: a tuple wider than `fn_call_width` (60) is one element per line
+  if one.length ≤ 60 then s!"        {one},"
+  else s!"        (\n            {rustBytes v},\n            {(Path.split v).all Path.clean},\n        ),"
+
 /-- The cursor's and writer's path fields (`Codec.Path`), emitted only when some layout has one: the
 same rule as `Path.clean` printed from its constants, the same refusal name at the same offset. -/
 def pathSupport : String :=
-  let lit (w : ByteArray) : String := "b\"" ++ String.ofList (w.toList.map fun b => Char.ofNat b.toNat) ++ "\""
-  String.intercalate "\n" [
+  let lit := rustBytes
+  String.intercalate "\n" ([
   s!"    const SEP: u8 = {Path.sep};",
   s!"    const NUL: u8 = {Path.nul};",
   s!"    const COMPONENT_MAX: usize = {Path.componentMax};",
   s!"    const RESERVED: [&[u8]; 2] = [{lit Path.dot}, {lit Path.dotdot}];",
   "",
   "    /// Codec.Path: the empty path, or components separated by SEP, each clean.",
-  "    fn path_clean(v: &[u8]) -> bool {",
+  "    pub fn path_clean(v: &[u8]) -> bool {",
   "        v.is_empty()",
   "            || v.split(|b| *b == SEP).all(|c| {",
   "                !c.is_empty()",
@@ -402,7 +430,11 @@ def pathSupport : String :=
   "        }",
   "        out.extend_from_slice(&(v.len() as u32).to_le_bytes());",
   "        v.iter().try_for_each(|x| put_path(out, x, max))",
-  "    }"]
+  "    }",
+  "",
+  "    /// Paths with the verdict Lean's decoder gives them (`Path.split`, then `Path.clean` on each",
+  "    /// component), evaluated by the emitter; `tests/path_vectors.rs` checks `path_clean` against them.",
+  "    pub const PATH_VECTORS: &[(&[u8], bool)] = &["] ++ pathVectors.map pathVectorRow ++ ["    ];"])
 
 /-- The pipe framing for a tagged file (`u32le len ‖ payload`, `1 ≤ len ≤ FRAME_MAX`), with the end of
 the stream at a boundary (`End`) told apart from one inside a frame (`Torn`); emitted only by

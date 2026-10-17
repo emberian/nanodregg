@@ -185,7 +185,7 @@ pub mod wire {
     const RESERVED: [&[u8]; 2] = [b".", b".."];
 
     /// Codec.Path: the empty path, or components separated by SEP, each clean.
-    fn path_clean(v: &[u8]) -> bool {
+    pub fn path_clean(v: &[u8]) -> bool {
         v.is_empty()
             || v.split(|b| *b == SEP).all(|c| {
                 !c.is_empty()
@@ -243,6 +243,38 @@ pub mod wire {
         out.extend_from_slice(&(v.len() as u32).to_le_bytes());
         v.iter().try_for_each(|x| put_path(out, x, max))
     }
+
+    /// Paths with the verdict Lean's decoder gives them (`Path.split`, then `Path.clean` on each
+    /// component), evaluated by the emitter; `tests/path_vectors.rs` checks `path_clean` against them.
+    pub const PATH_VECTORS: &[(&[u8], bool)] = &[
+        (b"", true),
+        (b"a", true),
+        (b"a/b", true),
+        (b"/a", false),
+        (b"a/", false),
+        (b"a//b", false),
+        (b".", false),
+        (b"..", false),
+        (b"a/./b", false),
+        (b"a/../b", false),
+        (b"...", true),
+        (b".a", true),
+        (b"a.", true),
+        (b"a\\b", true),
+        (
+            b"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            true,
+        ),
+        (
+            b"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            false,
+        ),
+        (
+            b"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx/b",
+            true,
+        ),
+        (b"a\x00b", false),
+    ];
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub enum GrainRefusal {
