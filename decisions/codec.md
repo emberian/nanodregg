@@ -202,3 +202,28 @@ fields, so an over-total argv is read (bounded by the frame) before it is refuse
 **Meta-critique.** I added `size` because two asks needed it at once. A single user would have
 justified a local helper instead of a field on the one structure.
 Status: open.
+
+## CODEC-11 · Ed25519 verification in pure Lean (RFC 8032, cofactored), measured; no C (2026-10-16)
+**Decision.** `Codec/Ed25519.lean`: `Ed25519.verify (pk msg sig : ByteArray) : Bool`, RFC 8032 §5.1.7 with the
+cofactored check `[8]([S]B − [k]A) = [8]R`. It refuses `S ≥ L`, a point encoding with `y ≥ p`, and a point that
+does not decompress (x² has no root, or x = 0 with the sign bit set). Field elements are ten unboxed
+`UInt64` limbs (radix 2^25.5). The 100-term product is generated, folded by 2^255 ≡ 19, and every
+intermediate stays below 2^63 for limbs below 2^27. `[S]B − [k]A` is one Shamir pass of 253
+doublings. `Codec/Sha512.lean` is FIPS 180-4. Proofs: RFC 8032 TEST 1 and TEST 2 verify, a tampered TEST 2
+does not, and SHA-512("abc"), all by `decide +kernel`. The kernel runs the whole verification
+(~1 min per vector).
+**Measured (this Mac, compiled, one core).** A first version on `Nat` (GMP) ran 7.0 ms/verify, so 1000
+verifies took 7 s: over THE BAR's 5 s write budget. The limb version runs **381 µs/verify: 1000 verifies
+in 0.38 s**. HACL*/EverCrypt (ROOT's fallback) is therefore not needed.
+**Alternatives.** HACL*'s verified Ed25519 as an extern_lib (~50 µs). libsodium (unverified C: excluded).
+Or Nat arithmetic with windowing (still ~3 ms).
+**Critique.** The limb arithmetic has no proof of correctness against the field. Its evidence is the
+RFC vectors and agreement with a Nat reference during development. A carry bug that only some
+operands trigger (limb overflow past 2^64) would not show on three vectors. The bound argument
+(limbs < 2^27 ⇒ products < 2^63) was checked by exhaustive-bound arithmetic in a script, not in Lean.
+HACL* would bring a machine-checked proof of exactly this code path. The verifier is not constant
+time, which does not matter for verification (no secrets).
+**Meta-critique.** "Pure Lean" was the default the charter wrote. I met the speed bar and stopped, and
+I did not price proving `Fe.mul` correct, which is the obligation that would make this better than the
+fallback rather than merely Lean.
+Status: open (owed: `Fe.mul`/`carry` correctness theorems against `Nat` mod p).
