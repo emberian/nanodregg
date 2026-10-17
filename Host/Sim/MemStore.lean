@@ -29,6 +29,28 @@ def memStore (disk : IO.Ref Disk) (failSyncAt : Option Nat) : Store where
 def crashImage (d : Disk) (cut : Nat) : ByteArray :=
   d.synced ++ d.pending.extract 0 cut
 
+/-- The base "file" of an in-memory Store, and every base it ever held: each with the synced
+segment size at the moment it became durable (what a crash just before the NEXT base's rename
+leaves on disk). -/
+structure Bases where
+  file : ByteArray := ByteArray.empty
+  history : Array (ByteArray × Nat) := #[]
+  /-- bytes written by seals (the waste numerator) -/
+  written : Nat := 0
+
+/-- A checkpoint over memory: the deployed `Base.file`, then an atomic replace. Inline, so a seeded
+run seals at the same points every time. -/
+def memCheckpoint {W : Type} (disk : IO.Ref Disk) (bases : IO.Ref Bases) (keys : Keys) (c : Cadence)
+    (world : Codec.Stream W) : Checkpoint W where
+  async := false
+  write w offset tag := do
+    match Base.file keys c world w offset tag with
+    | .error f => return .error f
+    | .ok file =>
+      let synced := (← disk.get).synced.size
+      bases.modify fun b => { file, history := b.history.push (file, synced), written := b.written + file.size }
+      return .ok (world.size w)
+
 /-- Flip one byte (xor 0x01) at `i`; out of range leaves the bytes unchanged. -/
 def flipByte (b : ByteArray) (i : Nat) : ByteArray :=
   if h : i < b.size then b.set i (b[i] ^^^ 1) h else b

@@ -237,4 +237,90 @@ whole seal is ≈ 1.8 ms / 18 ms / 200 ms. My estimate from minidregg (≈ 10 ms
 pessimistic. The MAC is about one fsync at THE BAR and stays inside the cadence budget at 10^5
 (≈ 200 ms of Task time per ≥ 7 MB appended). The decision stands. The number is CODEC's measurement,
 not mine. HOST-3 re-measures it against the real base file once the World codec lands.
-only the World codec it already listed).
+**Landed (HOST-3, 2026-10-16), with the number on the real base.** The four conditions as code:
+(1) `Host.Cadence` (Host/Bounds.lean): `cadence b = max sealMinBytes (b / 4)`, deployed
+`sealMinBytes` 1 MiB; pinned WASTE row `seal bytes-per-appended-byte` (host-sim, toy cadence 2 KiB).
+(2) `worldBytesMax` 256 MiB: the seal refuses `SealFault.worldTooLarge` by name before encoding
+(`Base.file`), the loop stops `sealFailed worldTooLarge` (plant-world-too-large), and open refuses a
+base file past one base frame `baseTooLarge` before reading it. The genesis allowance is half of it
+(`Host.allowanceMax`), by KERNEL-18. (3) the MAC, measured: below. (4) AMENDED, and here is why: open
+reads one base and at most `tailMax b = 2 · cadence b + frameMax`, which is two cadences, not one.
+A seal runs in a Task while the loop keeps appending, so when it lands the tail behind the newest
+durable base is up to one cadence (the one being sealed) plus whatever arrived meanwhile. Keeping
+the tail to ONE cadence would mean blocking the loop on every seal. Instead the loop blocks only when
+a frame would cross `tailMax`: it waits for the seal in flight, then seals inline if it must
+(`Loop.makeRoom`). `commitBatch` takes `WithinTail` as a proof argument, so no append can happen
+without the bound. Theorems (`Host.Proofs.Base`): `openWith_reads` (the one open asks for exactly
+`[base offset, segment size)`, at most `tailMax`, and opens to a position inside it), `tailRead_ok`,
+`within_after_seal` (after an inline seal any frame fits, so `makeRoom` always makes room).
+A base that does not verify is refused `baseCorrupt` and never falls back to an older base or a
+whole-log fold. Bases are replaced atomically (tmp → sync → rename → sync dir), so a bad base is
+corruption, not a crash.
+**The base measured** (Apple M2 Max, compiled, one core, best of 3–10; `~/dev/redregg/work/host-bench/Base.lean`:
+`Codec.Deployed.world`, `Host.Base.file` under `Keys.ofKey`, `Base.read`):
+
+| records | base | encode | KMAC256 | seal (Base.file) | open (MAC + decode) |
+|---|---|---|---|---|---|
+| 1 000 (THE BAR) | 290 KB | 0.78 ms | 0.91 ms | 1.6 ms | 4.1 ms |
+| 10 000 | 2.9 MB | 5.2 ms | 9.0 ms | 18 ms | 51 ms |
+| 100 000 | 29 MB | 122 ms | 129 ms | 570 ms | 2.6 s |
+| 300 000 | 87 MB | 1.5 s | 1.1 s | 3.7 s | 7.0 s (RSS 1.66 GB) |
+
+The MAC runs at ~320 MB/s on the base, better than CODEC's 184 MB/s at 1 MiB. At THE BAR a seal is
+about half of one fsync, and a cold open of the base is 4 ms. The decision stands. **What this table
+says against it.** Encode is superlinear: ×12 from 29 to 87 MB, against ×3 bytes, probably buffer
+re-copying in `put`; reported to CODEC. Open is decode-bound (`ofList` rebuilds of the trees, CODEC-14's critique),
+about 80 ns per byte at 87 MB. Linear from there, a 256 MiB base opens in roughly 20–25 s and seals
+in more than 10 s of Task time. So `worldBytesMax` fits THE BAR's 60 s cold reopen only if the
+tail fold stays small. And a follower's fold re-verifies a signature per Turn (381 µs). At the top
+of the range the deployed cadence is then 64 MiB of log, ~2·10^5 turns, which is ~80 s of audit.
+`host follow` therefore cannot meet 60 s at `worldBytesMax`; at THE BAR (1 MiB cadence floor, about 3·10^3
+turns, ~1 s) it can. The bound that must change first is the cadence ceiling for a
+follower, not the base.
+
+## HOST-15 · thin consent: a member that does not fold the whole log (2026-10-16; Ember ruled IN "if we can get away with it"; with PROTOCOL-14)
+**Decision (option A, one code path).** A thin member holds ONE base it trusts and folds only the
+log after it, with the same absorb `host follow` runs (every event re-derived, PROTOCOL-4). What it
+trusts is the World part of a base: exactly `Codec.Deployed.world`'s bytes at height h. Their digest,
+`Hash.digest "nanodregg/host/base/v1"` of those bytes, is a function of the World's contents
+(`world_bytes_equiv`), so any full follower can compute it and countersign it. The Store MAC is NOT
+part of what a thin member checks: it is the writer's at-rest key (HOST-16). `host serve` answers `read`
+(PROTOCOL's read envelope, `Envelope.check`: live member, current key, signature, `validUntil`,
+`mayFollow`) with pages of the newest base: `(height, total, digest, bytes[start, start + chunk))`,
+with the envelope's `start` read as a byte offset. Each page is one pread, O(chunk). A new seal
+between pages changes the stated height and digest, and the member restarts its download. After the base, the member pages
+`log` from h like any follower, and asserts height and chain at each page.
+**What it trusts.** That the base digest it pins came from a fold it trusts: its own earlier full
+fold, or a full follower's countersignature over (h, digest, chain). **What it cannot detect.** Any
+history before h: a writer that withheld or rewrote a valid prefix and got a base digest
+countersigned. It also cannot detect a countersigner that lies, which is the trust it chose. A
+forged cell in the served base is caught (`baseMismatch`, PROTOCOL's plant), because the digest is
+over the exact canonical bytes.
+**Alternatives.** (B) a Merkle trie over cells with a root per Turn and per-cell inclusion paths.
+That is a second state commitment and a second verification path (law 1), and it needs a root in
+every Turn that nothing has today.
+**Critique.** A thin member downloads the whole base (290 KB at THE BAR, 256 MiB at the top) to read
+one cell. For THE BAR that is nothing; past ~10^5 records an inclusion proof is far cheaper, and (B)
+becomes the right design. **Meta-critique.** (A) won because the base already exists and I built
+it; "one code path" is a law I can cite for the option I prefer anyway.
+**Status.** open (PROTOCOL-14 owns the page layout and the `baseMismatch` row; HOST serves it).
+
+## HOST-16 · the Store key is an integrity-at-rest key (2026-10-16; ROOT ruled the custody)
+**Decision (ruled by ROOT).** `host genesis` writes `STORE/key`: 32 bytes from the OS random source
+(`IO.getRandomBytes`), 0600, created exclusively. `serve` and `follow` read it once at open, refusing
+`badKey` unless it is exactly 32 bytes. Segment frames and the base are KMAC256 under it in two domains
+(`Host.Keys`: `nanodregg/host/segment/v1`, `nanodregg/host/base/v1`).
+**Threat model, exactly.** It protects against corruption, against splicing and reordering frames,
+and against frames or bases copied from another Store (plant-foreign-key: a Store under another key
+is `baseCorrupt`; plant-foreign-frame: a frame re-tagged under another key is `corrupt`). It does NOT
+protect against anyone who can write STORE, because the key is in STORE.
+**Law.** Nothing ever derives authority, consent or a member's identity from this key, or from a
+tag it made. Authority comes from signatures checked by `Ctx.verify`; consent comes from a
+follower's own fold.
+**Alternative refused.** A key held by custody (the nd seed) and handed to the child at spawn: that
+puts a secret in a log-parsing process (CLIENT-1).
+**Critique.** A key that only checks integrity could be a plain hash, but keying it is what makes a
+frame from another Store refuse. A key that sits beside the data it protects is easy to mistake
+for a security boundary, which is why the law above exists. **Meta-critique.** I proposed the
+cheapest custody. It is right only because the key protects nothing an attacker wants.
+**Status.** ruled by ROOT 2026-10-16.

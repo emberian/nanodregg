@@ -70,20 +70,23 @@ at low load and buys nothing at high load (HP-DESIGN §0.2 proposed one; HOST-3 
 ## 4. The Store on disk (flat segments; no SQLite)
 
 ```
-STORE/ckpt-<h>.world        World at height h, one MAC; written tmp → fsync → rename → fsync dir
-STORE/seg-<h>.log           batch frames for heights > h, append-only
+STORE/key          32 random bytes, 0600: the integrity-at-rest key (HOST-16)
+STORE/seg.log      every batch frame since genesis, append-only, flock'd on its append handle
+STORE/base.world   the newest base: one frame of `world ‖ u64 offset ‖ tag32` (Host.Base)
+STORE/base.tmp     a seal in progress; never read
 ```
 
-Batch frame: `u32 bodyLen ‖ body ‖ tag32`, `body = u64 firstHeight ‖ u16 count ‖ (u32 len ‖ turnBytes)*
-‖ chain32`; `tag = MAC(key, prevTag ‖ body)` (the chain of tags binds order; the World's own chain
-binds Turns). Ingress bytes travel inside the turn record (KERNEL decides what a Turn carries).
+Batch frame: `u32 len ‖ record ‖ tag32`, `record = CODEC's batch (Turns, chain after)`
+(`Host.Record`), `tag = KMAC(key, "segment", prevTag ‖ record)`. Open folds each record and
+asserts the stated chain (`chainMismatch`).
 
 - **Append protocol:** encode the frame in memory; assert `decode (encode b) = b` on those bytes
   (the pair of `Log.decode_encode`); `writeAll`; `fsync`. A failed write or fsync makes every
   reply of the batch `uncertain` and the process exits: after a failed fsync the kernel may have
   dropped dirty pages, so retrying it is a lie (PostgreSQL fsyncgate, 2018).
-- **Open/recover:** the newest checkpoint whose MAC verifies (absent/torn checkpoints are skipped,
-  never trusted), then every segment from it, frame by frame. The first frame that is incomplete
+- **Open/recover:** the one base (a base that fails its MAC is `baseCorrupt`: bases are replaced
+  atomically, so a bad one is corruption, not a crash), then the segment from its offset, at most
+  `tailMax` bytes (`tailTooLong` past it), frame by frame. The first frame that is incomplete
   or fails its tag ends the log. Because a batch is fsynced before the next is written, only the
   LAST frame can be torn: the bad bytes are truncated as a torn tail only if they are ≤ `frameMax`
   AND no frame verifies anywhere after them (each frame is preceded on disk by the tag it chains
@@ -95,14 +98,15 @@ binds Turns). Ingress bytes travel inside the turn record (KERNEL decides what a
   `fsync_dir`, `read_at`, `size`, `truncate`, `flock`, `rename`): Lean's `IO.FS.Handle` is a
   `FILE*` with no `fsync`, no positioned read and no truncate-to-length.
 
-## 5. Checkpoint = World
+## 5. Checkpoint = World (HOST-14, as landed)
 
-Seal when the bytes appended since the last seal reach `max(sealMinBytes, worldBytes / 4)` (a
-function of the log, so every process computes the same heights). Sealing starts the next segment
-at the sealed height *immediately*; a Task encodes and writes the checkpoint in the background.
-If the process dies before the checkpoint lands, open uses the previous checkpoint and both
-segments: correctness never waits on the Task. Segments are never deleted (the follower may
-start from genesis); retention is an operator decision outside the loop.
+After a commit, the loop starts a seal when the bytes since the newest durable base reach
+`cadence = max(sealMinBytes, baseBytes / 4)`: a dedicated Task encodes the immutable World,
+MACs it and replaces `base.world`. The loop keeps serving. A frame that would make the tail
+exceed `tailMax = 2 · cadence + frameMax` waits for the seal in flight, or seals inline
+(`Loop.makeRoom`), so open always reads one base and at most `tailMax` of log
+(`Host.Proofs.Base.openWith_reads`). The segment is one file and is never deleted (a follower may
+read from genesis); the base is replaced, not accumulated.
 
 ## 6. Dispatch
 

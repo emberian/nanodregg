@@ -23,7 +23,7 @@ records written), `open_torn` (a segment whose last frame was cut opens to the f
 before it, `torn` = the cut), and `open_sound` (for ANY bytes, the World opened is the fold of
 records that are literally the bytes before `validLen`).
 -/
-import Host.Log
+import Host.Base
 
 namespace Nanodregg.Host
 
@@ -66,5 +66,64 @@ def openLog (s : Log.Sealer) (recordMax : Nat) (step : W → ByteArray → Excep
     match foldRecords step w₀ 0 rv.records with
     | .ok w => .ok ⟨w, rv.records.length, rv.validLen, rv.lastTag, tornOf tail⟩
     | .error e => .error e
+
+/-- Why a Store does not open (law 7). -/
+inductive StoreFault (F : Type) where
+  /-- another writer holds the segment's lock -/
+  | locked
+  /-- genesis on a directory that already holds a Store file -/
+  | exists
+  /-- the key file is not exactly 32 bytes -/
+  | badKey (bytes : Nat)
+  /-- a read returned fewer bytes than the size said: the file changed under us -/
+  | shortRead (got want : Nat)
+  | base (fault : BaseFault)
+  | log (fault : OpenFault F)
+  /-- genesis could not seal its base -/
+  | seal (fault : SealFault)
+  /-- the opened chain tag is not 32 bytes (a broken `Sealer`) -/
+  | tagWidth
+  deriving Repr
+
+def StoreFault.name {F : Type} : StoreFault F → String
+  | .locked => "locked"
+  | .exists => "exists"
+  | .badKey _ => "badKey"
+  | .shortRead _ _ => "shortRead"
+  | .base f => f.name
+  | .log (.corrupt _) => "corrupt"
+  | .log (.record _ _) => "record"
+  | .seal f => f.name
+  | .tagWidth => "tagWidth"
+
+/-- What the one open reads: the base, and the World the segment after it folds to. -/
+structure Opening (W : Type) where
+  opened : Opened W
+  /-- the base's offset, and its World's encoded size -/
+  sealed : Sealed
+  /-- where the valid segment ends (absolute), and its chain tag -/
+  pos : Position
+
+/-- The one open, given the base file's bytes, the segment's size and a reader of the segment
+(`IO` over the file for `host`, `Id` over bytes in the simulation): verify and decode the base,
+bound the tail (`tailRead`), read exactly that tail, and `openLog` it from the base's World. -/
+def openWith {m : Type → Type} [Monad m] (keys : Keys) (c : Cadence) (world : Codec.Stream W)
+    (step : W → ByteArray → Except F W) (file : ByteArray) (size : Nat)
+    (readTail : Nat → Nat → m (Except (StoreFault F) ByteArray)) : m (Except (StoreFault F) (Opening W)) := do
+  match Base.read keys c world file with
+  | .error e => return .error (.base e)
+  | .ok (b, baseBytes) =>
+  match tailRead c baseBytes b.offset size with
+  | .error e => return .error (.base e)
+  | .ok len =>
+  match ← readTail b.offset len with
+  | .error e => return .error e
+  | .ok tail =>
+  match openLog keys.segment c.recordBytesMax step b.world b.tag.bytes tail with
+  | .error e => return .error (.log e)
+  | .ok o =>
+    match Codec.Digest.ofBytes? o.lastTag with
+    | none => return .error .tagWidth
+    | some tag => return .ok ⟨o, ⟨b.offset, baseBytes⟩, ⟨b.offset + o.validLen, tag⟩⟩
 
 end Nanodregg.Host
