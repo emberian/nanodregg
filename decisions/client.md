@@ -69,3 +69,98 @@ length-prefixed); wire.rs is deleted and `run.rs` uses the generated `Step` itse
 was a second copy of the same shape). The client still checks the encoded `command` against
 `ARGV_BYTES_MAX`, because the emitted `list` bounds each item and the count, not the total
 (`Bounds.argvBytesMax` is stated as the total; asked of CODEC to make the Lean codec carry it).
+
+## CLIENT-11 the member signature: pure Ed25519 or hybrid Ed25519 + ML-DSA-65, and Lean verifies it (2026-10-16, NOT IMPLEMENTED: waits for KERNEL)
+**What is already fixed.** KERNEL's `Receive.Call` carries one opaque `signature : ByteArray` under one
+`key : ByteArray`, and `Ctx.verify : key → message → signature → Bool` is the ONLY check
+(`Derive.lean`: `badSignature`, `badPossession`). So the scheme is a property of the deployed `Ctx`, not
+of the call shape. Custody's side is one function, `sign(message) -> bytes`, over the exact bytes a
+`sign` step names; Rust never verifies, never decides acceptance, never chooses what is signed.
+**Decision (proposed, for KERNEL).** Hybrid, as one opaque pair inside the existing fields:
+`key = ed25519_pk (32) ‖ mldsa65_pk (1952)`, `signature = σ_ed (64) ‖ σ_ml (3309)`, both over the SAME
+message under one domain (`Env.hash` customization, CODEC-7), and `verify` = BOTH halves verify, each
+length exact, refused by name per half (`badSignature` split into `badEd25519` / `badMlDsa` so a row
+can tell which leg failed). Custody derives both keys from the one 32-byte seed by a named KDF
+(cSHAKE256 domain per scheme; ML-DSA keygen takes a 32-byte ξ), so there is still exactly one secret.
+The precommitted next-key digest (KERNEL-6) commits to the whole pair.
+**Who verifies.** Lean, in `Ctx.verify`, at the Host's `receive` and at every follower's `rederive`
+(PROTOCOL-4). HOST-2 reports (10-16) that no layer owns an Ed25519 `verify` in Lean today, so a real
+`host serve` cannot run yet even for pure Ed25519; this blocks CLIENT's real round trip (B) as well.
+Options for the verifier, in order of preference: (i) an FFI to a verified C implementation (HACL*
+Ed25519 and the libcrux/HACL* ML-DSA, the EverCrypt line) declared in Lean with the call's premise
+asserted where it enters (law 4), census-listed; (ii) Ed25519 restated in Lean over GMP-backed `Nat`
+(feasible, slow: a scalar mult per verify; ML-DSA in pure Lean is a larger port). Rust verification
+(ed25519-dalek beside the Lean path) is refused: it is a Rust decision and a twin.
+**Alternatives.** (a) Pure Ed25519 (today's custody, CLIENT-5). (b) Hybrid as two fields in the Call
+(`sigEd`, `sigMl`), visible to KERNEL. (c) ML-DSA only.
+**Why hybrid.** The log is permanent and followers re-verify it forever; a signature scheme broken later
+(a quantum adversary against Ed25519) lets anyone forge history a NEW follower would fold. Ed25519 is kept
+because ML-DSA is young (implementation bugs, side channels); the AND means a forger must break both.
+**Critique of hybrid.** 3,373 bytes per signature and 1,984 per key against 64/32: at THE BAR (1000
+records) that is ~3.4 MB of signatures, per `log` page ~70 signatures fit in one 256 KiB frame, and
+every follower fold verifies both halves (HOST-11 already names verify as the cold follow's dominant
+cost; ML-DSA-65 verify is, from published benchmarks I have not re-measured, of the order of Ed25519's, so
+the cost is mostly bytes and I/O, not CPU). The PQ threat to a two-friends deployment is hypothetical today; the cost is
+paid now. And the AND is only as good as its weakest IMPLEMENTATION: an FFI verifier that returns true
+on a malformed σ_ml (or a Lean glue that ignores one half) gives Ed25519-only security while every
+document says hybrid. That is exactly minidregg's state: its SDK signed under
+`MINI/SDK/HYBRID/ML-DSA-65/v1`, the verifier's comment said Lean's `CredentialSignatureIO.combineHalves`
+decided the conjunction, that function did not exist, and `verify-mldsa` had no caller: the ML-DSA half
+was verified NOWHERE on the Lean path (DELETE-RUST-20261016 S2; cv 01a14700). So hybrid ships only with
+two plants: a call whose σ_ed is valid and σ_ml is flipped must be refused `badMlDsa`, and vice versa,
+both as rows against the real `host serve`, both mutation-checked.
+**Critique of pure Ed25519.** One scheme, 64 bytes, a verifier small enough to restate in Lean and prove
+against RFC 8032 vectors; but rotating to PQ later is a re-genesis (free here) AND a re-signing of every
+member key, and the history signed before the rotation stays Ed25519-only forever, which is the attack
+the hybrid exists for.
+**Meta-critique.** I lean hybrid because minidregg did it and because "post-quantum" is the fashionable
+answer; the honest decider is whether anyone ever follows a log signed today after a CRQC exists. The
+option ordering (FFI to HACL* first) is chosen to avoid porting ML-DSA to Lean, the hard part; that
+puts unverified-by-us C (but machine-verified upstream) in the TCB.
+**Status.** open: KERNEL decides which signature a Turn carries (pure or hybrid, and the refusal names);
+ROOT assigns who owns the Lean verifier. CLIENT implements custody's half the day it is named.
+
+## CLIENT-12 friends over ssh: the remote host.sock (2026-10-16, DESIGN ONLY: waits for PROTOCOL's row)
+**The need (THE BAR).** Two friends and a hosted Hermes on one Store. Each friend runs `nd` and their
+OWN `host follow` (consent is their own fold, HOST-7) on their own machine; the one writer `host serve`
+runs on the operator's box. A friend's nd must reach the remote host.sock, and the friend's follow must
+get the log (`log` op, gated in Lean by a follow grant, HOST-11).
+**Option A: OpenSSH StreamLocal forwarding (CLIENT-4 as written).** `ssh -N -o StreamLocalBindUnlink=yes
+-L ws/host.sock:/srv/nd/host.sock friend@box`. Zero code. Each friend is a unix account on the box; the
+socket must be connectable by them (0660 + a group: nd-supervise binds 0600 today, so this flips a mode).
+**Option B: a forced-command bridge over one ssh channel.** The friend's machine runs `nd-supervise
+ws/host.sock --hide ws --read ~/.ssh … -- /usr/bin/ssh -T box` (the SAME mux: many local connections,
+conn-tagged frames over one child's stdio); on the box, the operator's `authorized_keys` has one line per
+friend key: `restrict,command="nd-attach /srv/nd/host.sock"`, and `nd-attach` is the mux's inverse
+(conn-tagged frames on stdin ⇄ one host.sock connection per conn; bounded by CONNECTIONS_MAX; exits on
+EOF). No per-friend unix account, no group mode, no forwarding enabled in sshd (`restrict` turns it off),
+revocation is deleting one line.
+**Option C: a TCP listener** on the box with its own authentication (Noise/TLS + member keys). Refused:
+new Rust crypto, a public port, and a second authenticated channel beside ssh; the Host already
+authenticates every request by signature in Lean, so transport auth is only DoS control.
+**Recommendation: B.** Because: sshd cannot restrict which socket a key may forward to (no `permitopen`
+for streamlocal), so A makes every friend able to reach EVERY socket their uid can connect to on the box,
+and gives each friend a shell account to harden (`Match User`, `ForceCommand`, `PermitTTY no`); B gives
+them exactly one bridged socket and no account. B reuses the frame wire byte for byte (law 1: the
+conn-tagged child frame is already the supervisor's one shape), and the remote end is the same
+supervisor protocol read the other way.
+**Critique of B.** It is new code on the box's attack surface (~100 lines, `nd-attach`, parsing frame
+HEADERS from an authenticated but untrusted friend) where A is zero code; a bug there is reachable by any
+friend key. One ssh connection carries every conn, so one slow friend conn head-of-line blocks that
+friend's others (not other friends'). The friend's ssh client runs under nd-supervise's sandbox and
+needs `~/.ssh` and the network, so the sandbox policy grows a `network` allowance it has refused so far
+(or the ssh child runs unconfined: it holds no member seed, but it is a second process shape).
+**Critique of A.** Correct by delegation and free, but its authorization is the filesystem (group mode on
+a socket) and the friend count is unix accounts; that is the "ssh access IS the grant" shape HOST-11 (c)
+rejected, moved one layer down. For the operator's own Hermes (same box) A is trivially right: a local
+socket, no ssh.
+**What PROTOCOL must define first (the row).** Which side pulls the log for a remote friend's follow
+(follow asks nd for `host(log, from)` steps through host.sock — then the bridge carries it — or a
+separate replication process), the row that a revoked follow grant stops `log` over the bridge, the row
+that an unknown ssh key is refused by sshd (sshe2e), and the CONNECTIONS_MAX / idle-deadline numbers for
+remote conns (PROTOCOL-8 names an idle deadline as CLIENT's). Asked of PROTOCOL (a45ff664477fefd42).
+**Meta-critique.** I recommend B partly because it is the shape I can test on one laptop (two ssh-less
+pipes stand in for sshd); A's real check is sshd configuration, which no test here can run. minidregg had
+a forced-command `mini socket-proxy` (CLIENT-4's rejected alternative), so B is also familiarity; the
+difference I claim is that B carries the existing conn-tagged frame, not a new proxy protocol.
+**Status.** open, design only.
