@@ -1214,6 +1214,55 @@ def probeJournal (P : Params D) (st : State D) (seed : Nat) : State D :=
           let st := journalExpect P st wS (journalTurn P k H H) "journal-shadow-kept" "replayed"
           journalExpect P st wS (journalTurn P 0 H H) "journal-shadow-reuse" "replayed"
 
+/-! ### `retainAt`, the canonical erase (KERNEL-41) -/
+
+/-- PLANT (`retainAt`'s tooth): `retainAll` with `join` replaced by `mkNode`, so a node left with one
+key or none does not collapse. Same contents, a non-canonical trie: `probeRetain` must find its
+root differs from `build`'s on some seed (arm `retain-plant:refuted`). -/
+def plantRetainAll {K V D' : Type} (S : Trie.Spec K V D') (q : K → V → Bool) :
+    Trie.T K V D' → Trie.T K V D' × Bool
+  | .empty => (.empty, false)
+  | .leaf h kvs =>
+      if kvs.all (fun p => q p.1 p.2) then (.leaf h kvs, false)
+      else
+        let kept := kvs.filter fun p => q p.1 p.2
+        if kept.isEmpty then (.empty, true) else (Trie.mkLeaf S kept, true)
+  | .node h l r =>
+      let a := plantRetainAll S q l
+      let b := plantRetainAll S q r
+      if a.2 || b.2 then (Trie.mkNode S a.1 b.1, true) else (.node h l r, false)
+
+/-- The plant's `retainAt` at path `[true]`. -/
+def plantRetainRight {K V D' : Type} (S : Trie.Spec K V D') (q : K → V → Bool) :
+    Trie.T K V D' → Trie.T K V D'
+  | .node _ l r => Trie.mkNode S l (plantRetainAll S q r).1
+  | t => (plantRetainAll S q t).1
+
+/-- The retain probe, every seed: a trie of up to 4 cells (tombstones) and 1–6 spent nullifiers;
+`retainAt [true]` drops the nullifiers whose index meets the seed's stride and keeps every cell.
+The result must be `build` of the filtered listing (`retainAt_eq_build`: same root, same listing,
+no dropped key readable), and on some seed the non-collapsing plant must reach another root. -/
+def probeRetain (P : Params D) (st : State D) (seed : Nat) : State D :=
+  let E := P.env
+  let S := trieSpec E
+  let key := fun (tag : String) (i : Nat) => E.hash "nanodregg/sim/retain" s!"{tag}/{seed}/{i}".toUTF8
+  let t0 : Cells D := (List.range (seed % 5)).foldl (fun t i => t.insert S (.cell (key "c" i)) (.entry .tomb)) .empty
+  let nn := seed % 6 + 1
+  let t := (List.range nn).foldl (fun t i => t.insert S (.nullifier (key "n" i)) .spent) t0
+  let drop := fun (i : Nat) => (i + seed / 6) % 3 = 0 || (seed % 4 = 0 && i + 1 < nn)
+  let dropped := ((List.range nn).filter drop).map fun i => Slot.nullifier (key "n" i)
+  let q := fun (s : Slot D) (_ : Leaf) => !dropped.contains s
+  let r := Trie.retainAt S q [true] t
+  let b := Trie.build S S.depth 0 (t.toList.filter fun p => q p.1 p.2)
+  let pl := plantRetainRight S q t
+  if r.hashOf S != b.hashOf S || r.toList != b.toList then
+    failWith st s!"probe retain: retainAt at seed {seed} is not build of the filtered listing"
+  else if dropped.any fun s => (r.get S s).isSome then
+    failWith st s!"probe retain: a dropped key is still readable at seed {seed}"
+  else
+    let st := meet st "retain:canonical"
+    if pl.hashOf S != b.hashOf S then meet st "retain-plant:refuted" else st
+
 /-- One verdict of the carry probe, by name: `submit` on the carried World. -/
 def carryExpect (P : Params D) (st : State D) (w : World D) (c : Call D) (what want : String) : State D :=
   let got := match Receive.submit P.ctx w c with
@@ -1283,7 +1332,7 @@ def run (P : Params D) (seed : Nat) (steps : Nat) : State D :=
   let holds := (List.range fk.length).map fun i =>
     (founderId X g.origin i, (⟨[founderGrantId X g.origin i], true, enrollMax⟩ : Holding D))
   let st0 : State D := { rng, host := g, members, holds }
-  let st0 := probeJournal P (probeGenesis P st0 founders) seed
+  let st0 := probeRetain P (probeJournal P (probeGenesis P st0 founders) seed) seed
   -- install the deny-all law package first
   let f := founder0 P st0
   let c := signed P st0 f f.key (S.pinsFor P.env g [f.id]) (.install denyAll)
@@ -1387,7 +1436,8 @@ def plantedArms : List String :=
    "call-too-deep:callTooDeep", "journal-expired:outsideWindow", "journal-window-first:outsideWindow",
    "journal-kept:replayed", "journal-reuse:ok", "journal-shadow:filtered", "journal-fits:misfit",
    "journal-shadow-kept:replayed", "journal-shadow-reuse:replayed", "carry-name:nameTooLong", "carry-old-call:replayed",
-   "carry-old-world:wrongWorld", "carry-new:ok", "hash-count:empty-per-insert"]
+   "carry-old-world:wrongWorld", "carry-new:ok", "hash-count:empty-per-insert", "retain:canonical",
+   "retain-plant:refuted"]
 
 /-- `--seeds N` runs seeds `0 … N-1`; otherwise each argument is a seed. -/
 def parseSeeds : List String → List Nat

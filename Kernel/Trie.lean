@@ -157,6 +157,52 @@ def T.toList : T K V D → List (K × V)
 def insertAll (t : T K V D) (kvs : List (K × V)) : T K V D :=
   kvs.foldl (fun t p => t.insert S p.1 p.2) t
 
+/-! ## Retain: the canonical erase (KERNEL-41)
+
+`retainAt path q` keeps, in the subtree at `path`, the entries `q` keeps. What it returns is the
+canonical trie of what is left (`Kernel.Proofs.TrieRetain.retainAt_eq_build`), without listing
+and rebuilding it: a subtree that drops nothing is returned as it is (no hash), a leaf is re-hashed
+only when it keeps some of several entries, and a node whose children keep at most one key between
+them collapses (`join`). -/
+
+/-- Two children joined canonically: a node, unless they hold one key between them (that key's
+leaf, its cached hash reused, since a leaf's hash does not depend on its depth) or none (`empty`);
+`e` as in `T.hashOf`. -/
+def join (l r : T K V D) (e : EmptyDigest D := Thunk.mk fun _ => emptyHash S) : T K V D :=
+  match l, r with
+  | .empty, .empty => .empty
+  | .empty, .leaf h [x] => .leaf h [x]
+  | .leaf h [x], .empty => .leaf h [x]
+  | l, r => mkNode S l r e
+
+/-- The entries of `t` that `q` keeps, and whether any was dropped; `e` as in `T.hashOf`. -/
+def retainAll (q : K → V → Bool) (t : T K V D) (e : EmptyDigest D := Thunk.mk fun _ => emptyHash S) :
+    T K V D × Bool :=
+  match t with
+  | .empty => (.empty, false)
+  | .leaf h kvs =>
+      if kvs.all (fun p => q p.1 p.2) then (.leaf h kvs, false)
+      else
+        let kept := kvs.filter fun p => q p.1 p.2
+        if kept.isEmpty then (.empty, true) else (mkLeaf S kept, true)
+  | .node h l r =>
+      let a := retainAll q l e
+      let b := retainAll q r e
+      if a.2 || b.2 then (join S a.1 b.1 e, true) else (.node h l r, false)
+
+/-- `retainAll q` on the subtree at `path` (bit `i` of the path chooses the side at depth `i`), the
+nodes above it re-joined; a path that ends early at a leaf filters that leaf. Entries off the path
+are kept, so a caller's `q` must keep them (the kernel's keeps every slot that is not a journal
+entry); `e` as in `T.hashOf`. -/
+def retainAt (q : K → V → Bool) (path : List Bool) (t : T K V D)
+    (e : EmptyDigest D := Thunk.mk fun _ => emptyHash S) : T K V D :=
+  match path, t with
+  | [], t => (retainAll S q t e).1
+  | _ :: _, .empty => .empty
+  | _ :: _, .leaf h kvs => (retainAll S q (.leaf h kvs) e).1
+  | b :: p, .node _ l r =>
+      if b then join S l (retainAt q p r e) e else join S (retainAt q p l e) r e
+
 variable [DecidableEq D]
 
 /-- Does `p` show `k` ↦ a value with digest `dig` under `root`? Bounded: a path longer than

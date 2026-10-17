@@ -1409,3 +1409,159 @@ Ids belonging to their lineage is the same property one level up, and it is the 
 state carried by bytes. The enumeration was what decided it. It found one reader, and that reader
 was a defect in a consumer, not a reason to re-key.
 **Flag day.** None. No definition changed. Nothing re-geneses, re-emits or refuses to load.
+
+## KERNEL-41 · The journal is the trie's third slot kind: one authenticated map, canonical by construction, pruned by a canonical `retain` (KERNEL-11, 2026-10-17; cv 01a14ac8-1db6, GATES-3's law-6 read via CODEC-30; DESIGN, not yet built)
+**Defect.** The World and the carried state hold the journal as a `Std.TreeMap`, whose internal
+balancing depends on insertion history. So `decode ∘ bytes` is the identity only up to
+`World.Equiv`/`CarriedEquiv` (CODEC-14/22), and two `gates/refines-allow.tsv` rows excuse it. A
+World also holds two map structures, one authenticated (the trie) and one not. KERNEL-23's own
+alternatives list rejects "a TreeMap plus a separate index" as two structures (law 1), and its
+Critique ("the journal is NOT authenticated: a phone cannot verify this txId landed") has stood
+since KERNEL-30 as a noted gap, with nothing scheduled to close it.
+**Decision.**
+(1) `Slot D := cell id | nullifier n | tx id`, `Leaf := entry e | spent | journal (height : Nat) (turn : D)`,
+and `Leaf.fits` gains `tx`/`journal`. The routing is a prefix code over the kind: cell `0·id`,
+nullifier `10·id`, tx `11·id` (`slotBit`), so cell paths keep today's length and the journal is the
+subtree at path `[true, true]`. `Bounds.trieDepth` goes from 257 to 258. `slotBytes`' kind byte
+gains 2. `leafBytes (.journal h d) = 3 ‖ u64 h ‖ bytes d`. The order the trie lists is
+cell < nullifier < tx, then id bytes. That is CODEC-29's `SlotBefore` with a three-valued kind.
+(2) The `World.journal` and `Carried.journal` fields are DELETED. The trie carries the journal, so
+a carry moves it with no field of its own. The reader is `World.journalAt E w k : Option (Nat × D)`
+(the `tx` slot's leaf), and `World.journalList w` is the listing of the `[true, true]` subtree,
+O(journal) and never O(store). `checkJournal` reads `journalAt`. `journalFits`, `JournalOk`,
+`kept`, `journalForgets` and the check order are unchanged in meaning.
+(3) `commit` writes `(.tx txId) ↦ .journal (h+1) (turnDigest)` into the trie after the turn's
+cells and nullifiers, then prunes. The root that `chainNext` commits is computed after both steps.
+`pruneJournal H` is `if H % W = 0 then retainAt [true, true] (keptLeaf H) else id`. That makes one
+prune per W heights, as before.
+(4) Kernel/Trie.lean gains ONE generic operation, `retainAt path q`. It walks `path`, and in the
+subtree it reaches it keeps the entries satisfying `q`. Under the path, a subtree with nothing
+dropped is returned as it is, with no hash. The nodes ON the path are always re-joined, which costs
+about 2 hashes per prune at `[true, true]` and is counted in the prune row. A node whose children
+now hold at most one key between them collapses through `join`: to empty, or to the remaining
+single leaf, reusing that leaf's cached hash, since a leaf's hash does not depend on its depth.
+The only leaf re-hashed is a full-depth leaf that keeps some of its several entries. So the result
+is the canonical trie of the filtered contents. Theorems (Proofs/Trie, before the port): `get_retainAt` (get is
+the filtered get for keys under the path, unchanged elsewhere), `canon_retainAt` (Canon is
+preserved), and `retainAt_eq_build` (the result equals `build` of the filtered listing, so
+history-independence carries over through `eq_of_toList_eq`). Tooth: a kernel-sim arm comparing
+`retainAt` against `build` of the filtered listing on generated tries, plus a planted `join`
+without collapse, which must fail `canon_retainAt` and the arm. This is the canonical erase that
+CODEC-7's note asks for.
+(5) `World.Equiv` and `Kernel/Proofs/Equiv.lean` are DELETED. Equivalence up to the journal's tree
+shape is now `=`: the `trie` component already was, and the journal has no other shape left. Every
+`*_congr` consumer takes `=`.
+(6) Every journal theorem keeps its name and its content, restated over `journalAt E` and
+`journalList` in place of `journal[k]?` and `journal.size`: journal_bounded, reach_journal_bounded,
+admit_retains, fold_retains, fold_answers, admit_spacing, admit_twice_window, check_prune,
+admit_prune_verdict, fold_journal_filter, fold_prune_check, journalOk_of_fits / journalFits_of_ok,
+submit_once, derived_once, submit_forgotten, admit_journal, carry_journalOk, carry_journal_fits,
+carry_fold_journal_bounded. The sim
+arms stay red under the same names. New: `journalAt_frame`. Cell, nullifier, weight and value
+readers are blind to `tx` slots: `Leaf.weight (.journal) = 0` and `Leaf.sumOf` adds nothing, so
+`World.weight`, the value sums and `cellIds` are unchanged by a journal write or prune. That is
+stated as a theorem, so it is not a convention.
+**What the phone's head proof now covers.** `chainNext` commits the root after the turn, and that
+root now commits the journal. A phone that trusts one head can verify `txId ↦ (h, turnDigest)` with
+one inclusion proof of about log₂(3W) + 2 siblings, where today it needs up to 2W chain links.
+While `journalForgets` is false it can also verify NON-admission with an exclusion proof. Today
+"not admitted" is the Host's word, and a Host that lies "not admitted" makes a member sign the same
+intent again under a new txId. No consumer verifies either proof yet: cv task 01a14ade-0f69
+(PROTOCOL/CLIENT) filed with this decision. Cell proofs are unchanged in length. Nullifier proofs gain one sibling.
+**WASTE (predicted; the instrument is KERNEL-36's counted hashes; re-pinned with the reason on
+landing).**
+- `hashes-per-touched-cell` 8.915: unchanged. The cell share brackets `commitTrie` without the
+  nullifiers, and cell paths are unchanged.
+- `hashes-per-nullifier` 3.211 → ~4.2: +1 prefix node per nullifier path. This RAISES a ceiling,
+  and ceilings only fall, so it needs a ROOT ruling. It is the price of a three-kind prefix code at
+  the least-used kind.
+- NEW `admit hashes-per-journal-entry`, counted over the journal probe (3W+2 one-turn heights):
+  about 17 for the insert (2 prefix nodes, ~log₂ 2.5W ≈ 11.3 path nodes, a split, the leaf and its
+  value digest) plus about 3 amortized for the prune (the nodes above dropped leaves, once per W
+  heights). Total ≈ 20.
+- `journal-entries-per-window` 2.999 and `journal-scanned-per-turn` 1.998: unchanged (the same
+  pass, over the subtree's listing).
+- `fold work-per-turn` 2.0: unchanged.
+The prune is a bounded burst of about 3000 hashes on one request every W heights. It is O(W), a
+static bound, never O(store), and the follower pays the same.
+**Alternatives.**
+(b) A sorted-list journal: canonical by construction, but the lookup is a linear scan of up to 3W
+entries on every admission. `journal-scanned-per-turn` would go from 1.998 to about 2000, which is
+O(W) per request. The height-ordered variant prunes in O(dropped) but has the same lookup. Refused.
+(c) Keep the TreeMap and add a canonical-listing theorem: `=` stays unprovable, the allow rows
+stay, and the defect remains. Refused.
+(d) `Std.ExtTreeMap`, the quotient TreeMap whose `=` is content equality (`ext_toList`). It makes
+both rows plain `=` with no wire change and no hashing, so it is the cheapest. It still leaves two
+maps in the World (KERNEL-23 rejected that shape) and leaves KERNEL-23's authentication gap open.
+It would be the right answer only if the journal should stay unauthenticated, and no argument says
+it should; cheapness is not an argument. Refused.
+(e) Journal entries under nullifier slots by a domain-separated key: no routing change, but the
+prune can find expired entries only by scanning the spent set, which grows forever. That is
+O(store), against law 5. Refused.
+(f) Erase each expired key: about W erases × ~14 path hashes per prune (~14 per turn, amortized).
+`retainAt` re-hashes only the union of those paths, and no leaf (~3 per turn). Refused for
+`retainAt`.
+(g) Rebuild the subtree from its filtered listing (`build`): re-hashes every kept leaf and its
+value digest (~7 per turn). `retainAt` is proved equal to it, and is cheaper.
+**Critique.** What the port DELETES, findable here: `World.journal`, `Carried.journal`, `World.Equiv`, `Kernel/Proofs/Equiv.lean` (and CODEC's `kernel/journal` list site and both refines-allow rows). `trieDepth` 257 → 258 and the routing change alter EVERY root, so every chain and every Store changes. The phone claim, exactly: inclusion (`txId ↦ (height, turnDigest)`) always; exclusion is a proof of NON-admission only while `journalForgets` is false (past it absence says nothing, as today). ROOT ruling (2026-10-17): (a) approved; the nullifier ceiling may rise with the reason "a three-kind prefix code, paid at the least-used kind; buys plain = canonicity, one structure (law 1), and the phone's inclusion/exclusion of txIds"; the prune burst gets its own pinned row (hashes per prune); the prefix-code theorem (`slots_separate` over three kinds + `slot_prefix`, with a tooth) lands in the port commit, since the three-kind Slot exists only from the flag day (a step-1 copy would be a twin). Per-turn trie hashing rises by about 20 (roughly double for a two-cell turn), and the
+follower pays it too. At about 1 µs per cSHAKE256 that is far below one fsync, but it is a real
+constant, and the counted rows will show it. One ratchet ceiling rises (the nullifier row). The
+proof surface grows: `retainAt`/`join` Canon proofs, a `tx`-blind lemma for every cell reader, and
+a port of Journal.lean (612 lines) from TreeMap lemmas to trie lemmas. Every journal theorem now
+takes `E`, because a lookup routes through `E.bytes`, which is the same as every cell reader. The
+authentication benefit is LATENT until a client verifies a journal proof (gating defaults to
+silence). Canonicity and law 1 carry the decision without it, but if no consumer appears the cv
+task is the record. A turn's root now moves with journal churn, so two Worlds with the same cells
+and different journals have different roots. That is correct, since they answer `replayed`
+differently, but every root-equality test that ignored the journal now sees it.
+**Meta-critique.** KERNEL-10's lead was (a), and I may be anchoring on it. I found (d) on my own,
+and it pulled hard precisely because it is cheap and needs no flag day. That is the substitution
+the charter names (a cost estimate becomes the constraint), so I priced it last and argued it on
+law 1 and KERNEL-23. The textbook bias is real too: "everything in one authenticated state tree" is
+Ethereum's receipts trie. The independent test is the standing KERNEL-23 critique, which a design
+that leaves it open would have to re-justify. The prefix code favouring cells is a guess at the
+kind frequencies. The counted rows check it, and if nullifiers outnumber touched cells in real
+use, it is the wrong prefix.
+**Flag day (one cross-layer landing).** Slot routing, the leaf bytes and `trieDepth` change, so
+every root and every chain changes. The World and Carried shapes lose their journal, so the
+`kernel/world` and carried tags move. Every Store re-geneses, and an old base refuses
+`shapeMismatch`. CODEC (CODEC-7) re-proves `bitLt_trieSpec_iff` over the three-valued kind, adds
+the `tx`/`journal` arms to `kernel/slot` and `kernel/leaf-fit` with lawfulness theorems and
+vectors, deletes the `kernel/journal` list site (the decoder runs `journalFits` on
+`journalList`), proves plain lawfulness in place of BOTH refines-allow rows and deletes them, and
+re-pins the vectors. HOST (HOST-10) flips the base stamp, re-verifies the reopen theorems, moves
+Serve's lookups to `journalAt`, and moves the carry export off the journal list. PROTOCOL
+(PROTOCOL-7) moves its rows' journal reads (Loopback's carried-journal compare, Writer's
+`forgetJournal` plant). Kernel's half is built first and staged as a patch on hbox, and the other
+halves build on it. Because every importer must build, it lands as ONE commit.
+**Step 1 as built (KERNEL-11).** Kernel/Trie.lean adds `join`, `retainAll` and `retainAt`, with no
+consumer yet. Kernel/Proofs/TrieRetain.lean proves:
+- `toList_join`, `retainAll_unchanged`, `toList_retainAll`;
+- `canon_join` (two canonical children routed by bit `d` join canonically, including the collapse to
+  one leaf or to `empty`) and `canon_retainAll`;
+- `toList_retainAt` (the listing filtered in order, given that `q` drops only keys `Under` the path);
+- `canon_retainAt`;
+- `retainAt_eq_build` (= `build S S.depth 0` of the filtered listing);
+- `get_retainAt` (`get` is the old `get` filtered by `q`).
+
+The premise "`q` drops only keys under the path" is satisfiable. The kernel's `q` keeps every
+non-`tx` slot, so it holds by `slot_prefix` (port commit). It is not provable for an arbitrary
+`q`: a `q` that drops an off-path key gets no theorem. That is exactly the case the operation does
+not handle.
+
+Teeth:
+- kernel-sim `probeRetain` runs every seed. It builds a trie of 0–4 tombstoned cells and 1–6 spent
+  nullifiers, then runs `retainAt [true]` dropping a seed-dependent set (on some seeds, all but
+  one). The arm `retain:canonical` requires the same root and the same listing as `build` of the
+  filtered listing, and no dropped key readable. The arm `retain-plant:refuted` requires the
+  non-collapsing plant `plantRetainAll` to reach another root on some seed.
+- Mutation: `join` with no collapse arms. `Kernel.Proofs.TrieRetain` fails with 5 errors, and
+  kernel-sim seeds 1–4 FAIL "retainAt … is not build of the filtered listing".
+
+kernel-sim --seeds 64 ALL PASS. No WASTE row moves (nothing calls `retainAt` on the request path
+yet). Flag day: none (new definitions, no consumer).
+Second-agent vacuity read of step 1 (a2d21fe78ee402a3b): LAND. No statement is vacuous or collapsed.
+The premise is the exact one, and `retainAt_eq_build` is a corollary but not a collapse: it is
+false under the no-collapse mutation. The two cost sentences in (4) were corrected as the reader
+asked. The sim covers path `[true]`, and the port journal probe's real prune at `[true, true]`
+becomes the runtime tooth.
