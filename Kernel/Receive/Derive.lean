@@ -5,7 +5,8 @@
 authority (ownership, or a grant chain that reaches the owner), the laws, the price. Its result
 is exactly the `Turn` the Host hands to `World.admit`.
 -/
-import Kernel.Receive.Call
+import Kernel.Receive.Authority
+import Kernel.Receive.Ledger
 
 namespace Nanodregg.Kernel.Receive
 
@@ -22,9 +23,6 @@ def checkKey (look : Pinned D) (u : Unsigned D) : Except (Refusal D) Unit :=
   | .error (.unpinned c) => .error (.unpinned c)
   | .error _ => .error (.unknownKey u.member)
   | .ok m => req (m.slots.get slotKey = some u.key) (.unknownKey u.member)
-
-/-- Build slots in canonical order whatever order the pairs come in. -/
-def slotsOf (ps : List (Nat × ByteArray)) : Slots := ps.foldl (fun s p => s.set p.1 p.2) []
 
 /-- The slot operations that turn `old` into `new`. -/
 def diffOps (old new : Slots) : List Op :=
@@ -58,39 +56,6 @@ def checkState (state : Slots) : Except (Refusal D) Unit :=
 def checkLaws (look : Pinned D) (laws : List D) : Except (Refusal D) Unit := do
   req (laws.length ≤ stateBase - lawBase) .tooManyLaws
   forEx (fun l => (readKind look l kindPackage).map fun _ => ()) laws
-
-/-- The principal a grant chain exercises for `agent`, walking at most `fuel` links: each link
-pinned, live, aimed at `obj`, held by the next agent, carrying `right`. -/
-def walk (X : Ctx D) (look : Pinned D) (obj : D) (right : Right) :
-    Nat → D → D → Except (Refusal D) D
-  | 0, _, _ => .error .grantTooDeep
-  | fuel + 1, g, agent => do
-      let cell ← readKind look g kindGrant
-      let target ← slotDigest X g cell grantTarget
-      req (target = obj) (.grantTarget g)
-      let grantee ← slotDigest X g cell grantGrantee
-      req (grantee = agent) (.noGrant g)
-      req (cell.slots.get (rightKey right)).isSome (.grantRight g)
-      let issuer ← slotDigest X g cell grantIssuer
-      match cell.slots.get grantParent with
-      | none => .ok issuer
-      | some pb => match X.digestOf pb with
-        | none => .error (.malformedCell g grantParent)
-        | some parent => walk X look obj right fuel parent issuer
-
-/-- Whose authority a call exercises on `obj`: the signer's, or the root issuer of its grant. -/
-def principalOf (X : Ctx D) (look : Pinned D) (u : Unsigned D) (obj : D) (right : Right) :
-    Option D → Except (Refusal D) D
-  | none => .ok u.member
-  | some g => walk X look obj right grantDepthMax g u.member
-
-/-- Ownership authority (observe, mutate): the principal must be the object's owner. -/
-def ownerAuthority (X : Ctx D) (look : Pinned D) (u : Unsigned D) (obj : D) (cell : Cell)
-    (right : Right) (via : Option D) : Except (Refusal D) D := do
-  let owner ← slotDigest X obj cell slotOwner
-  let principal ← principalOf X look u obj right via
-  req (principal = owner) (.noGrant obj)
-  pure principal
 
 /-- The ledger of a grant's enrolment right: its next index and the count left (its last
 entry). `grantRight` when the grant carries no enrolment right. -/
@@ -272,6 +237,9 @@ def dispatch (X : Ctx D) (look : Pinned D) (c : Call D) : Body D → Except (Ref
   | .invoke obj method args budget via => invoke X look c obj method args budget via
   | .grant target grantee rights parent => grant X look c target grantee rights parent
   | .revoke g => revoke X look c g
+  | .issue cap => issue X c cap
+  | .account asset => account X c asset
+  | .transfer src dst amount via once => transfer X look c src dst amount via once
 
 /-- A rotation is signed by the incoming key; every other call by the member's current key. -/
 def keyRule (look : Pinned D) (u : Unsigned D) : Except (Refusal D) Unit :=

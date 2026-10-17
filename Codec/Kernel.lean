@@ -36,8 +36,9 @@ def callMax : Nat := Bounds.eventBytesMax
 
 def discipline : Stream Discipline :=
   refine "kernel/discipline" u8
-    (fun t => if t = 0 then some .rom else if t = 1 then some .appendOnly else if t = 2 then some .ram else none)
-    (fun | .rom => 0 | .appendOnly => 1 | .ram => 2)
+    (fun t => if t = 0 then some .rom else if t = 1 then some .appendOnly else if t = 2 then some .ram
+      else if t = 3 then some .value else none)
+    (fun | .rom => 0 | .appendOnly => 1 | .ram => 2 | .value => 3)
 
 abbrev OpF : Fin 2 → Type
   | 0 => Nat × ByteArray
@@ -97,7 +98,7 @@ def right : Stream Right :=
          | ⟨3, n⟩ => some (.enroll n))
     (fun | .observe => ⟨0, ()⟩ | .mutate => ⟨1, ()⟩ | .invoke m => ⟨2, m⟩ | .enroll n => ⟨3, n⟩)
 
-abbrev BodyF (D : Type) : Fin 9 → Type
+abbrev BodyF (D : Type) : Fin 12 → Type
   | 0 => ByteArray × D × ByteArray × D
   | 1 => ByteArray × D
   | 2 => ByteArray
@@ -107,8 +108,11 @@ abbrev BodyF (D : Type) : Fin 9 → Type
   | 6 => D × Nat × ByteArray × Nat × Option D
   | 7 => D × D × List Right × Option D
   | 8 => D
+  | 9 => Nat
+  | 10 => D
+  | 11 => D × D × Nat × Option D × Option ByteArray
 
-def bodyWire (dc : Stream D) : (s : Fin 9) → Stream (BodyF D s)
+def bodyWire (dc : Stream D) : (s : Fin 12) → Stream (BodyF D s)
   | 0 => product (rawBytes callMax) (product dc (product (rawBytes callMax) dc))
   | 1 => product (rawBytes callMax) dc
   | 2 => rawBytes callMax
@@ -119,9 +123,12 @@ def bodyWire (dc : Stream D) : (s : Fin 9) → Stream (BodyF D s)
   | 6 => product dc (product nat64 (product (rawBytes callMax) (product nat64 (option dc))))
   | 7 => product dc (product dc (product (rawList callMax right) (option dc)))
   | 8 => dc
+  | 9 => nat64
+  | 10 => dc
+  | 11 => product dc (product dc (product nat64 (product (option dc) (option (rawBytes callMax)))))
 
 def body (dc : Stream D) : Stream (Body D) :=
-  refine "kernel/body" (choice 9 (bodyWire dc))
+  refine "kernel/body" (choice 12 (bodyWire dc))
     (fun
       | ⟨0, (k, n, p, v)⟩ => some (.enroll k n p v)
       | ⟨1, (k, n)⟩ => some (.rotate k n)
@@ -131,7 +138,10 @@ def body (dc : Stream D) : Stream (Body D) :=
       | ⟨5, (o, ls, v)⟩ => some (.law o ls v)
       | ⟨6, (o, m, a, b, v)⟩ => some (.invoke o m a b v)
       | ⟨7, (t, g, r, p)⟩ => some (.grant t g r p)
-      | ⟨8, g⟩ => some (.revoke g))
+      | ⟨8, g⟩ => some (.revoke g)
+      | ⟨9, cap⟩ => some (.issue cap)
+      | ⟨10, a⟩ => some (.account a)
+      | ⟨11, (s, d, n, v, o)⟩ => some (.transfer s d n v o))
     (fun
       | .enroll k n p v => ⟨0, (k, n, p, v)⟩
       | .rotate k n => ⟨1, (k, n)⟩
@@ -141,7 +151,10 @@ def body (dc : Stream D) : Stream (Body D) :=
       | .law o ls v => ⟨5, (o, ls, v)⟩
       | .invoke o m a b v => ⟨6, (o, m, a, b, v)⟩
       | .grant t g r p => ⟨7, (t, g, r, p)⟩
-      | .revoke g => ⟨8, g⟩)
+      | .revoke g => ⟨8, g⟩
+      | .issue cap => ⟨9, cap⟩
+      | .account a => ⟨10, a⟩
+      | .transfer s d n v o => ⟨11, (s, d, n, v, o)⟩)
 
 def unsigned (dc : Stream D) : Stream (Unsigned D) :=
   refine "kernel/unsigned"

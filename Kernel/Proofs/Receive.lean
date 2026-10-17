@@ -70,7 +70,7 @@ theorem dispatch_sealed {X : Ctx D} {look : Pinned D} {c : Call D} {b : Body D} 
     (h : dispatch X look c b = .ok t) : ∃ cr efs ns, sealTurn X c cr efs ns = .ok t := by
   cases b <;>
     simp only [dispatch, enroll, rotate, install, create, write, law, invoke, grant, revoke,
-      except_bind_ok] at h <;>
+      issue, account, transfer, except_bind_ok] at h <;>
     (repeat' (first | (obtain ⟨_, _, h⟩ := h) | exact ⟨_, _, _, h⟩))
 
 theorem receiveWith_sealed {X : Ctx D} {look : Pinned D} {c : Call D} {t : Turn D}

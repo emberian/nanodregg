@@ -110,6 +110,12 @@ structure State (D : Type) [Ord D] where
   seen : List String := []
   restarts : Nat := 0
   failures : List String := []
+  /-- the Sim's OWN model of value (LEDGER-2/3), independent of the kernel's: issued wells and
+  their caps, accounts (id, owner, well), each account's balance, the once keys spent -/
+  wells : List (D × Nat) := []
+  accounts : List (D × D × D) := []
+  balances : List (D × Int) := []
+  onces : List (D × ByteArray) := []
 
 def nameOf {α : Type} [Repr α] (a : α) : String :=
   match (reprStr a).splitOn " " with
@@ -165,6 +171,171 @@ def holdOf (st : State D) (m : D) : Holding D :=
 def setHold (st : State D) (m : D) (h : Holding D) : State D :=
   { st with holds := (m, h) :: st.holds.filter fun p => p.1 ≠ m }
 
+/-! ## The ledger arms (LEDGER-2/3) -/
+
+def balOf (st : State D) (a : D) : Int := ((st.balances.find? fun p => p.1 = a).map Prod.snd).getD 0
+
+def setBal (st : State D) (a : D) (b : Int) : State D :=
+  { st with balances := (a, b) :: st.balances.filter fun p => p.1 ≠ a }
+
+def capOf (st : State D) (well : D) : Nat := ((st.wells.find? fun p => p.1 = well).map Prod.snd).getD 0
+
+/-- An account's floor in the model: a well's is its cap, every other account's 0. -/
+def floorOfAcct (st : State D) (a : D) : Nat := capOf st a
+
+def memberOf (P : Params D) (st : State D) (id : D) : Member D :=
+  (st.members.find? fun m => m.id = id).getD (founder0 P st)
+
+/-- Record a refusal met straight at `World.admit` (a forged turn no receiver derives). -/
+def metAtAdmit (st : State D) (what want : String) : Except (Reject D) (World D) → State D
+  | .error r =>
+      if r.name = want then
+        { st with steps := st.steps + 1, refusedAsExpected := st.refusedAsExpected + 1, seen := want :: st.seen }
+      else { st with failures := s!"probe {what}: expected {want}, got {r.name}" :: st.failures }
+  | .ok _ => { st with failures := s!"probe {what}: forged turn admitted (expected {want})" :: st.failures }
+
+/-- A forged turn: the given touches and births, re-priced, in the Host's window. -/
+def forgedTurn (P : Params D) (w : World D) (tag : String) (touches : List (Touch D)) (creates : List Cell) : Turn D :=
+  let txId := P.env.hash "nanodregg/sim/forge" (tag.toUTF8 ++ P.env.bytes w.chain)
+  let t0 : Turn D := ⟨txId, 0, w.height + 1, touches, creates, [], 0, ByteArray.empty⟩
+  { t0 with charge := t0.weight }
+
+/-- The value probes: forged turns no receiver derives, each refused by the kernel by name. -/
+def probeValue (P : Params D) (st : State D) : State D :=
+  let w := st.host
+  match st.accounts with
+  | [] => st
+  | a0 :: _ =>
+      let (acct, st) := pick st st.accounts a0
+      match w.live acct.1 with
+      | none => st
+      | some cell =>
+          let seen := pinOf P.env (some cell)
+          let one (tag : String) (ops : List Op) := forgedTurn P w tag [⟨acct.1, seen, .write ops⟩] []
+          let b := balOf st acct.1
+          -- a credit with no debit: value from nothing
+          let st := metAtAdmit st "credit-only" "notConserved"
+            (World.admit P.env w (one "credit" [.set Value.balanceKey (Value.balanceBytes (b + 1))]))
+          -- a floor raised outside the denomination's birth
+          let st := metAtAdmit st "floor" "floorNotConserved"
+            (World.admit P.env w (one "floor" [.set Value.floorKey (Value.floorBytes (floorOfAcct st acct.1 + 1))]))
+          -- a balance that does not decode
+          let st := metAtAdmit st "malformed" "valueMalformed"
+            (World.admit P.env w (one "malformed" [.set Value.balanceKey ⟨#[1, 2, 3]⟩]))
+          -- nine denominations in one turn
+          let born := (List.range 9).map fun i =>
+            ({ kind := kindAccount, discipline := .value,
+               slots := slotsOf [(Value.denomKey, nat i), (Value.balanceKey, Value.balanceBytes 0),
+                 (Value.floorKey, Value.floorBytes 0)] } : Cell)
+          metAtAdmit st "denoms" "overBound" (World.admit P.env w (forgedTurn P w "denoms" [] born))
+
+/-- After every step: the World's value agrees with the model, every denomination sums to 0, its
+floor sum is its cap, and every account is within its floor. A whole-World scan (Sim only). -/
+def scanValue (P : Params D) (st : State D) : State D :=
+  let w := st.host
+  let bad := st.wells.filterMap fun (well, cap) =>
+    let d := P.env.bytes well
+    if w.valueSum d ≠ 0 then some s!"value sum {w.valueSum d} ≠ 0"
+    else if w.floorSum d ≠ cap then some s!"floor sum {w.floorSum d} ≠ cap {cap}"
+    else if w.outstanding d > cap then some s!"outstanding {w.outstanding d} > cap {cap}"
+    else none
+  let drift := st.accounts.filterMap fun (a, _, _) =>
+    match (w.live a).bind Value.ofCell with
+    | none => some "an account is gone or malformed"
+    | some v =>
+        if v.balance ≠ balOf st a then some s!"balance {v.balance} ≠ model {balOf st a}"
+        else if !v.withinFloor then some "an account is below its floor"
+        else none
+  match bad ++ drift with
+  | [] => st
+  | f :: _ => { st with failures := s!"value scan: {f}" :: st.failures }
+
+/-- One ledger action: issue (and an over-cap issue), open, transfer (honest, overdrawn,
+by a stranger, to itself, of nothing, across denominations, with a once key fresh or spent). -/
+def ledgerAct (P : Params D) (st : State D) (k : Nat) : State D :=
+  let w := st.host
+  match k with
+  | 0 => -- issue a denomination; past the cap bound, `overflow`
+      let (m, st) := pick st st.members (founder0 P st)
+      let (r, st) := st.rng.below 8 |> fun (x, rr) => (x, { st with rng := rr })
+      if r = 0 then
+        let c := signed P st m m.key (S.pinsFor P.env w [m.id]) (.issue (capMax + 1))
+        (submit P st c (.refused "overflow") "issue-over").1
+      else
+        let cap := 50 + 100 * r
+        let c := signed P st m m.key (S.pinsFor P.env w [m.id]) (.issue cap)
+        let (st, t) := submit P st c .ok "issue"
+        match t with
+        | some t =>
+            let well := (createdIds P.env t).headD P.zero
+            { st with wells := st.wells ++ [(well, cap)], accounts := st.accounts ++ [(well, m.id, well)] }
+        | none => st
+  | 1 => -- open an account of a denomination
+      match st.wells with
+      | [] => st
+      | w0 :: _ =>
+          let (well, st) := pick st st.wells w0
+          let (m, st) := pick st st.members (founder0 P st)
+          let c := signed P st m m.key (S.pinsFor P.env w [m.id]) (.account well.1)
+          let (st, t) := submit P st c .ok "account"
+          match t with
+          | some t => { st with accounts := st.accounts ++ [((createdIds P.env t).headD P.zero, m.id, well.1)] }
+          | none => st
+  | _ => -- a transfer
+      match st.accounts with
+      | [] => st
+      | a0 :: _ =>
+          let (kind, st) := st.rng.below 8 |> fun (x, rr) => (x, { st with rng := rr })
+          -- kind 7 replays a once key already spent: from a source that spent one
+          let spentFrom := st.accounts.filter fun a => st.onces.any fun p => p.1 = a.1
+          let (src, st) := if kind = 7 && !spentFrom.isEmpty then pick st spentFrom a0
+            else pick st st.accounts a0
+          let same := st.accounts.filter fun a => a.2.2 = src.2.2 ∧ a.1 ≠ src.1
+          let other := st.accounts.filter fun a => a.2.2 ≠ src.2.2
+          let owner := memberOf P st src.2.1
+          let avail : Int := balOf st src.1 + floorOfAcct st src.1
+          let (amt, st) := st.rng.below (avail.toNat + 4) |> fun (x, rr) => (x + 1, { st with rng := rr })
+          match kind, same, other with
+          | 0, _, _ => -- to itself
+              let c := signed P st owner owner.key (S.pinsFor P.env w [owner.id, src.1]) (.transfer src.1 src.1 1 none none)
+              (submit P st c (.refused "sameAccount") "transfer-self").1
+          | 1, d :: _, _ => -- nothing
+              let c := signed P st owner owner.key (S.pinsFor P.env w [owner.id, src.1, d.1]) (.transfer src.1 d.1 0 none none)
+              (submit P st c (.refused "zeroAmount") "transfer-zero").1
+          | 2, _, d :: _ => -- across denominations
+              let c := signed P st owner owner.key (S.pinsFor P.env w [owner.id, src.1, d.1]) (.transfer src.1 d.1 1 none none)
+              (submit P st c (.refused "assetMismatch") "transfer-mismatch").1
+          | 3, d :: _, _ => -- a member who does not own the source, without a grant
+              match st.members.find? fun m => m.id ≠ src.2.1 with
+              | none => st
+              | some thief =>
+                  let c := signed P st thief thief.key (S.pinsFor P.env w [thief.id, src.1, d.1]) (.transfer src.1 d.1 1 none none)
+                  (submit P st c (.refused "noGrant") "transfer-stranger").1
+          | _, d0 :: _, _ => -- the owner moves value: within the floor admitted, past it `belowFloor`;
+                             -- a once key already spent from this source is `spent`
+              let (d, st) := pick st same d0
+              let used := st.onces.filter fun p => p.1 = src.1
+              let (once, reused, st) : Option ByteArray × Bool × State D :=
+                if kind = 7 then match used with
+                  | u :: _ => (some u.2, true, st)
+                  | [] => let (key, st) := freshKey st "once"; (some key, false, st)
+                else if kind = 6 then let (key, st) := freshKey st "once"; (some key, false, st)
+                else (none, false, st)
+              let expect : Expect := if (amt : Int) > avail then .rejected "belowFloor"
+                else if reused then .rejected "spent" else .ok
+              let c := signed P st owner owner.key (S.pinsFor P.env w [owner.id, src.1, d.1])
+                (.transfer src.1 d.1 amt none once)
+              let (st, t) := submit P st c expect "transfer"
+              match t with
+              | some _ =>
+                  let st := setBal st src.1 (balOf st src.1 - amt)
+                  let st := setBal st d.1 (balOf st d.1 + amt)
+                  match once with
+                  | some key => { st with onces := (src.1, key) :: st.onces }
+                  | none => st
+              | none => st
+          | _, _, _ => st
+
 /-- A refusal no receiver produces, met straight at the seal (the `planted` table says so): the
 last call's first pin given two effects. -/
 def probeSeal (P : Params D) (st : State D) : State D :=
@@ -185,10 +356,13 @@ def probeSeal (P : Params D) (st : State D) : State D :=
 
 /-- One generated action. -/
 def act (P : Params D) (st : State D) : State D :=
-  let (k, rng) := st.rng.below 15
+  let (k, rng) := st.rng.below 20
   let st := { st with rng }
   let w := st.host
   match k with
+  | 15 | 16 => ledgerAct P st (k - 15)
+  | 17 | 18 => ledgerAct P st 2
+  | 19 => probeValue P st
   | 0 | 13 => -- enrol a newcomer (KERNEL-16): through the sponsor's own World grant, admitted
          -- while its count lasts (`enrollSpent` after), `grantRight` through a grant without
          -- `enroll`; a sponsor without a grant tries someone else's (`noGrant`)
@@ -397,7 +571,10 @@ def act (P : Params D) (st : State D) : State D :=
           let bad := { t with txId := P.env.hash "nanodregg/sim/probe" (P.env.bytes t.txId), charge := t.charge + 1 }
           let st := match World.admit P.env w bad with
             | .error r =>
-                if r.name = "chargeMismatch" ∨ r.name = "stale" ∨ r.name = "idTaken" then
+                -- (a re-identified copy of an `issue` bears its well under a NEW id, while the
+                -- well still names the OLD denomination: a second issuance, `floorNotConserved`)
+                if r.name = "chargeMismatch" ∨ r.name = "stale" ∨ r.name = "idTaken" ∨
+                    r.name = "floorNotConserved" then
                   { st with steps := st.steps + 1, refusedAsExpected := st.refusedAsExpected + 1 }
                 else { st with failures := s!"probe: got {r.name}" :: st.failures }
             | .ok _ => { st with failures := "probe: wrong charge admitted" :: st.failures }
@@ -462,13 +639,16 @@ def worldName : ByteArray := "sim".toUTF8
 /-- The log up to its last write, that write's values replaced and its charge re-priced: a log
 `fold` accepts (later turns, which pinned the honest value, are cut) and no signed call derives. -/
 def forge (log : List (Turn D)) : Option (Nat × List (Turn D)) :=
+  -- a value cell's kernel keys are not forged here: the kernel itself refuses a forged balance
+  -- (`valueMalformed`, `notConserved`), so such a log is not one `fold` accepts
+  let valueKey (k : Nat) : Bool := k == Value.denomKey || k == Value.balanceKey || k == Value.floorKey
   let forged (x : Touch D) : Touch D := match x.act with
     | .write ops => { x with act := .write (ops.map fun o => match o with
-        | .set k _ => .set k "forged".toUTF8
+        | .set k v => if valueKey k then .set k v else .set k "forged".toUTF8
         | o => o) }
     | _ => x
   let isWrite (t : Turn D) := t.touches.any fun x => match x.act with
-    | .write ops => ops.any fun o => match o with | .set _ _ => true | _ => false
+    | .write ops => ops.any fun o => match o with | .set k _ => !valueKey k | _ => false
     | _ => false
   match (log.zipIdx.filter fun (t, _) => isWrite t).getLast? with
   | none => none
@@ -493,7 +673,7 @@ def run (P : Params D) (seed : Nat) (steps : Nat) : State D :=
   let (st, t) := submit P st0 c .ok "install"
   let st := { st with denyPkg := t.bind fun t => (createdIds P.env t).head? }
   let st := (List.range steps).foldl (fun st _ =>
-    let st := act P st
+    let st := scanValue P (act P st)
     -- restart: the Host reopens by folding its own log from genesis
     let (r, rng) := st.rng.below 16
     let st := { st with rng }
@@ -529,10 +709,14 @@ def run (P : Params D) (seed : Nat) (steps : Nat) : State D :=
 
 /-- The refusals the generator plants, each of which a run of 16 or more seeds must meet. Every
 name is reached through a signed call on the Host path, except `duplicateEffect`, which no
-receiver can produce and the probe meets straight at `sealTurn` (`probeSeal`). -/
+receiver can produce and the probe meets straight at `sealTurn` (`probeSeal`), and
+`notConserved`, `floorNotConserved`, `valueMalformed` and `overBound` (nine denominations), which
+no receiver derives and `probeValue` meets straight at `World.admit` with forged turns. -/
 def planted : List String :=
   ["lawDenied", "noGrant", "unknownKey", "replayed", "stale", "notPrecommitted", "notIssuer",
-   "missingCell", "enrollSpent", "grantRight", "grantWidens", "unrooted", "duplicateEffect"]
+   "missingCell", "enrollSpent", "grantRight", "grantWidens", "unrooted", "duplicateEffect",
+   "overflow", "sameAccount", "zeroAmount", "assetMismatch", "belowFloor", "spent",
+   "notConserved", "floorNotConserved", "valueMalformed", "overBound"]
 
 /-- `--seeds N` runs seeds `0 … N-1`; otherwise each argument is a seed. -/
 def parseSeeds : List String → List Nat

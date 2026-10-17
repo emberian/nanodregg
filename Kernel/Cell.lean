@@ -6,8 +6,10 @@ the same contents are the same value (`=` is extensional) and a cell's encoding 
 of its contents. A cell is bounded (`Bounds.slotsPerCellMax`), so a list is the right
 structure: every operation on a touched cell is O(its size), which is bounded.
 
-What the bytes mean (a balance, a law, a package) is not the kernel's business: the receive
-layer decodes slots. The kernel enforces only the cell's `Discipline`.
+What the bytes mean (a law, a package, an owner) is not the kernel's business: the receive layer
+decodes slots. The kernel enforces the cell's `Discipline`, and for the one discipline that is a
+conserved quantity, `value`, it reads three slots (`Kernel.Value`): a value cell's balance and
+floor are summed per denomination and conserved by `World.admit` itself (LEDGER-2).
 -/
 import Kernel.Bounds
 
@@ -21,6 +23,10 @@ inductive Discipline
   | appendOnly
   /-- any slot may be set or erased -/
   | ram
+  /-- a conserved quantity: RAM slots, three of which the kernel reads (`Kernel.Value`): the
+  denomination, the balance, the floor. Every admitted turn keeps each denomination's balance sum,
+  and its floor sum outside the turn that bears it, and every live value cell within its floor -/
+  | value
   deriving DecidableEq, Repr
 
 /-- One slot operation of a leg. -/

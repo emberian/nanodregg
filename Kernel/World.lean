@@ -10,13 +10,15 @@ same `admit`. There is one deployed `Env` (CODEC's digest and hash).
 
 Order of the checks (each refuses by name, nothing is written before all pass):
 bounds → journal (an exact retry is `replayed` whatever else holds) → shape → window → touches
-(ONE lookup per touched cell: its pin, the one staleness refusal, then its write or retirement)
-→ nullifiers → charge → created ids.
+(ONE lookup per touched cell: its pin, the one staleness refusal, then its write or retirement,
+and a written value cell's decoding and floor) → value (born value cells, then every
+denomination's balance and floor sums: LEDGER-2) → nullifiers → charge → created ids.
 -/
 import Std.Data.TreeMap
 import Std.Data.TreeSet
 import Kernel.Check
 import Kernel.Turn
+import Kernel.Value
 import Codec.Stream
 
 namespace Nanodregg.Kernel
@@ -61,6 +63,14 @@ inductive Reject (D : Type)
   | romWrite (cell : D)
   | romRetire (cell : D)
   | appendOnly (cell : D) (key : Nat)
+  /-- a value cell the turn leaves behind does not decode (`Value.ofCell`) -/
+  | valueMalformed (cell : D)
+  /-- a value cell the turn leaves behind is below minus its floor -/
+  | belowFloor (cell : D)
+  /-- the turn changes a denomination's balance sum -/
+  | notConserved (denom : ByteArray)
+  /-- the turn changes a denomination's floor sum, and does not bear the denomination -/
+  | floorNotConserved (denom : ByteArray)
   deriving DecidableEq, Repr
 
 /-- The refusal's name on the wire (law 7): its constructor's, arguments dropped
@@ -83,6 +93,10 @@ def Reject.name {D : Type} : Reject D → String
   | .romWrite _ => "romWrite"
   | .romRetire _ => "romRetire"
   | .appendOnly _ _ => "appendOnly"
+  | .valueMalformed _ => "valueMalformed"
+  | .belowFloor _ => "belowFloor"
+  | .notConserved _ => "notConserved"
+  | .floorNotConserved _ => "floorNotConserved"
 
 variable {D : Type} [Ord D]
 
@@ -169,6 +183,30 @@ def weight (w : World D) : Nat :=
 
 end World
 
+/-- The cell an entry holds (a tombstone holds none). -/
+def Entry.cell? : Entry → Option Cell
+  | .live c => some c
+  | .tomb => none
+
+/-- A sum over a cell map, of what each entry contributes. -/
+def cellsSum (f : Entry → Int) (m : Std.TreeMap D Entry compare) : Int :=
+  (m.toList.map fun p => f p.2).sum
+
+/-- What an entry contributes to denomination `d`'s sum of `g`: its value cell's, if any. -/
+def entrySum (g : Flow → Int) (d : ByteArray) (e : Entry) : Int := sumBy g d (flowsOf none e.cell?)
+
+namespace World
+
+/-- Specification measures (O(store), never computed on the request path): the sum over every
+live value cell of denomination `d` of its balance, of its floor, and of its positive balance
+(what is outstanding). `Kernel.Proofs.Value` proves what `World.admit` does to them. -/
+def sumOf (g : Flow → Int) (w : World D) (d : ByteArray) : Int := cellsSum (entrySum g d) w.cells
+def valueSum (w : World D) (d : ByteArray) : Int := w.sumOf Flow.balance d
+def floorSum (w : World D) (d : ByteArray) : Int := w.sumOf Flow.floor d
+def outstanding (w : World D) (d : ByteArray) : Int := w.sumOf (fun f => max f.balance 0) d
+
+end World
+
 def applyOp (s : Slots) : Op → Slots
   | .set k v => s.set k v
   | .erase k => s.erase k
@@ -228,7 +266,17 @@ def checkShape (t : Turn D) : Except (Reject D) Unit := do
 def checkWindow (w : World D) (t : Turn D) : Except (Reject D) Unit :=
   req (t.notBefore ≤ w.height + 1 && w.height + 1 ≤ t.validUntil) .outsideWindow
 
-/-- The cell a write leaves behind, or why it may not be written. -/
+/-- A value cell a turn leaves behind decodes and is within its floor; any other cell passes. -/
+def checkValueCell (c : D) (cell : Cell) : Except (Reject D) Unit :=
+  if cell.discipline = .value then
+    match Value.ofCell cell with
+    | none => .error (.valueMalformed c)
+    | some v => req v.withinFloor (.belowFloor c)
+  else .ok ()
+
+/-- The cell a write leaves behind, or why it may not be written: a ROM cell never, an
+append-only cell only at new keys, a value cell only into a cell that decodes and is within its
+floor (LEDGER-2). -/
 def postWrite (c : D) (cell : Cell) (ops : List Op) : Except (Reject D) Cell :=
   let post := { cell with slots := applyOps cell.slots ops }
   match cell.discipline with
@@ -242,19 +290,25 @@ def postWrite (c : D) (cell : Cell) (ops : List Op) : Except (Reject D) Cell :=
   | .ram => do
       req (post.slots.length ≤ Bounds.slotsPerCellMax) (.overBound .slotsPerCell)
       pure post
+  | .value => do
+      req (post.slots.length ≤ Bounds.slotsPerCellMax) (.overBound .slotsPerCell)
+      checkValueCell c post
+      pure post
 
-/-- What a touch leaves at its cell, and the World storage it charged for but does not hold:
-a retired cell's whole weight, a write's ops minus what the cell actually grew (KERNEL-15). -/
+/-- What a touch leaves at its cell, the World storage it charged for but does not hold (a
+retired cell's whole weight, a write's ops minus what the cell actually grew: KERNEL-15), and
+what it moves of its denomination's value (`flowsOf` the cell before and after: LEDGER-2). -/
 structure Post (D : Type) where
   cell : D
   entry : Entry
   freed : Nat
+  flows : List Flow
 
 def Post.pair {D : Type} (p : Post D) : D × Entry := (p.cell, p.entry)
 
 /-- What a touch leaves at its cell (`none`: unchanged), or why not. The cell is looked up ONCE:
 the pin is checked against it (the one staleness refusal), then the act applies to it, and what it
-frees is computed from the same lookup. -/
+frees and the value it moves are computed from the same lookup. -/
 def touchCheck (E : Env D) (w : World D) (x : Touch D) : Except (Reject D) (Option (Post D)) := do
   let cur := w.live x.cell
   req (pinOf E cur = x.seen) (.stale x.cell)
@@ -263,11 +317,12 @@ def touchCheck (E : Env D) (w : World D) (x : Touch D) : Except (Reject D) (Opti
   | .write _, none => .error (.missingCell x.cell)
   | .write ops, some cell => do
       let post ← postWrite x.cell cell ops
-      pure (some ⟨x.cell, .live post, cell.weight + (ops.map Op.weight).sum - post.weight⟩)
+      pure (some ⟨x.cell, .live post, cell.weight + (ops.map Op.weight).sum - post.weight,
+        flowsOf (some cell) (some post)⟩)
   | .retire, none => .error (.missingCell x.cell)
   | .retire, some cell => do
       req (cell.discipline != .rom) (.romRetire x.cell)
-      pure (some ⟨x.cell, .tomb, cell.weight⟩)
+      pure (some ⟨x.cell, .tomb, cell.weight, flowsOf (some cell) none⟩)
 
 def checkNullifiers (w : World D) (t : Turn D) : Except (Reject D) Unit :=
   forEx (fun n => req (!w.spent.contains n) (.spent n)) t.nullifiers
@@ -288,6 +343,25 @@ def checkCreates (E : Env D) (w : World D) (t : Turn D) : Except (Reject D) Unit
   noDup (t.touches.map Touch.cell ++ createdIds E t) .bornTouched
   forEx (fun c => req (!w.cells.contains c) (.idTaken c)) (createdIds E t)
 
+/-- Every flow a turn moves: its touches', then its born cells'. -/
+def valueFlows (E : Env D) (t : Turn D) (posts : List (Post D)) : List Flow :=
+  posts.flatMap Post.flows ++ (createdPairs E t).flatMap fun p => flowsOf none (some p.2)
+
+/-- Value is conserved (LEDGER-2): every value cell the turn bears decodes and is within its
+floor, and over the touches' and births' flows, at most `Bounds.denomsMax` denominations move,
+each one's balance sum is unchanged, and so is its floor sum unless the turn bears it (the
+denomination is the bytes of an id born here: its birth is the only turn that sets its floor). -/
+def checkValue (E : Env D) (t : Turn D) (posts : List (Post D)) : Except (Reject D) Unit := do
+  forEx (fun p => checkValueCell p.1 p.2) (createdPairs E t)
+  match accumulate (valueFlows E t posts) with
+  | none => .error (.overBound .denoms)
+  | some acc =>
+      let bornDenoms := (createdIds E t).map E.bytes
+      forEx (fun a => do
+        req (decide (a.balance = 0)) (.notConserved a.denom)
+        req (decide (a.floor = 0) || bornDenoms.any fun b => decide (b = a.denom))
+          (.floorNotConserved a.denom)) acc
+
 /-- Every check, against the pre-state only; on success, what the touches leave behind. -/
 def check (E : Env D) (w : World D) (t : Turn D) : Except (Reject D) (List (Post D)) := do
   checkBounds t
@@ -295,6 +369,7 @@ def check (E : Env D) (w : World D) (t : Turn D) : Except (Reject D) (List (Post
   checkShape t
   checkWindow w t
   let posts := (← mapEx (touchCheck E w) t.touches).reduceOption
+  checkValue E t posts
   checkNullifiers w t
   checkCharge w t (credit posts)
   checkCreates E w t

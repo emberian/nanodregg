@@ -64,6 +64,8 @@ theorem postWrite_weight {c : D} {cell post : Cell} {ops : List Op}
       obtain ⟨_, _, _, _, h⟩ := h; exact h.symm
     · simp only [except_bind_ok, pure, Except.pure, Except.ok.injEq] at h
       obtain ⟨_, _, h⟩ := h; exact h.symm
+    · simp only [except_bind_ok, pure, Except.pure, Except.ok.injEq] at h
+      obtain ⟨_, _, _, _, h⟩ := h; exact h.symm
   subst key
   have := slots_weight_applyOps ops cell.slots
   simp only [Cell.weight]; omega

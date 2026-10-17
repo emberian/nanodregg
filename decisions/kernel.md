@@ -605,10 +605,12 @@ Status: built.
 **Decision.** (ROOT accepted attacks A and C of LEDGER-0 over the brief's D1.)
 (a) `Discipline.value`: a cell whose slots are RAM, three of which the kernel reads
 (`Value.denomKey 8`, `balanceKey 9`, `floorKey 10`: the denomination's bytes, CODEC `i64`, CODEC
-`u64`). `Value.ofCell` decodes them; a live value cell that does not decode is refused
-`valueMalformed`, one whose balance is below minus its floor `belowFloor`. Both are judged in
-`touchCheck` on the post-cell from its one lookup, so cells-touched stays 1.0; a touch's `Post`
-carries its value FLOWS (the pre-cell's balance and floor negated, the post-cell's added).
+`u64`; a denomination is at most `Bounds.denomBytesMax` = 64 bytes, so comparing two is O(1)).
+`Value.ofCell` decodes them; a value cell a write leaves behind that does not decode is refused
+`valueMalformed`, one whose balance is below minus its floor `belowFloor`. Both are judged by
+`postWrite`'s `.value` branch (the discipline's own rule, beside append-only's), on the post-cell
+of `touchCheck`'s one lookup, so cells-touched stays 1.0; a touch's `Post` carries its value FLOWS
+(the pre-cell's balance and floor negated, the post-cell's added).
 (b) `checkValue` (after the touches, before the nullifiers) adds the born value cells' flows and
 accumulates per denomination into an association list, refused `overBound denoms` past
 `Bounds.denomsMax = 8` distinct denominations in one turn (O(touches), not a sort). Every
@@ -643,14 +645,38 @@ per-receiver proofs can cover. Conserving the floors too is the move I find pret
 reason to check it: it is what makes pug's three rules (debit to minus the floor; capped well;
 outstanding ≤ Σ floors) one kernel invariant instead of three receiver promises, and it deletes
 the need for a separate setFloor authority (LEDGER-3).
-Status: in progress.
+Built: the theorems above, all of `World.admit`, plus `admit_not_born` + `fold_floors_held`
+(once the well's id is held, no log moves its floor sum: the cap is fixed forever) and the genesis
+lemmas `cellsSum_noValue`, `floorOk_noValue`. Sim: an independent model of every balance, a
+whole-World scan after every step (each issued denomination sums to 0, its floor sum is its cap,
+outstanding ≤ cap, every account within its floor and equal to the model), forged-turn probes
+meeting `notConserved`, `floorNotConserved`, `valueMalformed`, `overBound` (nine denominations).
+A finding the Sim made: the old charge probe re-identifies the last turn; when that is an `issue`,
+the copy bears its well under a new id that still names the OLD denomination, a second issuance,
+and the kernel refuses it `floorNotConserved` before `chargeMismatch`. Plants (observed red,
+reverted): the balance check dropped ⇒ `checkValue_ok` no longer builds, kernel-sim 63/64 red
+"probe credit-only: forged turn admitted (expected notConserved)"; `withinFloor` constant true ⇒
+`entry_outstanding`/`outstanding_le_floors` no longer build, 44/64 red "expected belowFloor, got
+admitted".
+Second-agent statement review (law 6): no vacuous statement or identity carrier. It found that
+"the cap is fixed forever" was not yet a theorem and genesis was never discharged (both closed
+above), and named two scope facts, stated here: conservation is not OWNERSHIP (a forged log
+moving A's balance to B is conserved and folds; authority is the receivers', and the audit's
+re-derivation is what refuses the forgery); and after birth any writer may move floor between
+cells of one denomination with the sum unchanged (no receiver does: `transfer` writes only the
+balance key; the credit-line receiver will, under the issuer's authority).
+Status: built.
 
 ## LEDGER-3 · Three ledger receivers; the well's own id is the denomination (BUILD-LEDGER, 2026-10-16)
-**Decision.** (ROOT accepted attack B.) `Body.issue (cap)`: bears ONE cell, the WELL: kind
-`kindAccount 6`, `.value`, owner the signer, denomination the bytes of its own id
+**Decision.** (ROOT accepted attack B.) The receivers live in Kernel/Receive/Ledger.lean, below
+Derive (which dispatches them); the authority rule they share with `write` (`walk`,
+`principalOf`, `ownerAuthority`, and `slotsOf`) moved out of Derive into Kernel/Receive/Authority.lean
+so both can import it. `Body.issue (cap)`: bears ONE cell, the WELL: kind
+`kindAccount 6` (5 stays unused since KERNEL-20), `.value`, owner the signer, denomination the bytes of its own id
 (`cellIdOf txId 0`: tx-derived, so no cycle), balance 0, floor `cap` (`overflow` past 2^63, where
-`-cap` stops being an i64). `Body.open (asset)`: bears an account (owner the signer, the asset's
-denomination, balance 0, floor 0) WITHOUT reading the well, so opening never pins the hot cell.
+`-cap` stops being an i64). `Body.account (asset)` (not `open`: a Lean keyword): bears an account (owner the signer, the
+asset's denomination, balance 0, floor 0) WITHOUT reading the well, so opening never pins the hot
+cell.
 `Body.transfer (src dst amount via once)`: both pinned live accounts (`wrongKind` / `malformedCell`
 otherwise), `ownerAuthority … .mutate via` on `src` (grants work unchanged), `sameAccount`,
 `zeroAmount`, `assetMismatch dst`, `overflow` when a post balance leaves i64; two effects (each
@@ -670,7 +696,15 @@ only an honest signer: it is an idempotency key, not an observation proof. The w
 every mint and burn pins it, so concurrent minters conflict `stale`.
 **Meta-critique.** Deleting the asset cell is the law-1 move I wanted; the test is that nothing
 reads it: `open` does not, `transfer` reads only accounts, and the cap is the kernel's floor sum.
-Status: in progress.
+Built: `transfer_authorized`, `transfer_once`, `dispatch_value_born`, `transfer_exact`
+(Kernel/Proofs/Ledger.lean; `admit_written`, a written touch read forward, beside it). Sim arms:
+issue (and `overflow` past the cap bound), account, transfer honest / overdrawn (`belowFloor`) /
+by a stranger (`noGrant`) / to itself / of nothing / across denominations / with a once key fresh
+or already spent (`spent`). Plants (observed red, reverted): `issue` bears its well with floor
+`capMax` instead of `cap` ⇒ `dispatch_value_born` no longer builds, 64/64 red "value scan: floor
+sum 9223372036854775808 ≠ cap 650"; the once nullifier dropped ⇒ `transfer_once` no longer
+builds, 9/64 red "expected spent, got admitted".
+Status: built. Next: a credit line (a floor transfer out of the well, issuer authority), its own entry.
 
 ## KERNEL-24 · A call names its World: `Unsigned.world` = the World's genesis ORIGIN, refused `wrongWorld` before anything else; genesis commits to everything it was made from (KERNEL-4, 2026-10-17; DESIGN, ROOT's D3, not yet built)
 **Defect (measured by OPS on 87c721e, with the real `host` exe).** The SAME signed `create` frame was

@@ -25,7 +25,9 @@ theorem discipline_lawful : Lawful discipline :=
       · simp [h1] at h; subst h; simp [h1]
       · by_cases h2 : x = 2
         · simp [h2] at h; subst h; simp [h2]
-        · simp [h0, h1, h2] at h)
+        · by_cases h3 : x = 3
+          · simp [h3] at h; subst h; simp [h3]
+          · simp [h0, h1, h2, h3] at h)
 
 /-! ## Ops, slots, cells -/
 
@@ -176,8 +178,11 @@ def Body.Fits (PD : D → Prop) : Body D → Prop
   | .invoke o m a b v => PD o ∧ m < 2 ^ 64 ∧ BytesFits a ∧ b < 2 ^ 64 ∧ OptionFits PD v
   | .grant t g r p => PD t ∧ PD g ∧ ListFits Right.Fits r ∧ OptionFits PD p
   | .revoke g => PD g
+  | .issue cap => cap < 2 ^ 64
+  | .account a => PD a
+  | .transfer s d n v o => PD s ∧ PD d ∧ n < 2 ^ 64 ∧ OptionFits PD v ∧ OptionFits BytesFits o
 
-abbrev BodyWireFits (PD : D → Prop) : (s : Fin 9) → BodyF D s → Prop
+abbrev BodyWireFits (PD : D → Prop) : (s : Fin 12) → BodyF D s → Prop
   | 0 => fun v => BytesFits v.1 ∧ PD v.2.1 ∧ BytesFits v.2.2.1 ∧ PD v.2.2.2
   | 1 => fun v => BytesFits v.1 ∧ PD v.2
   | 2 => fun v => BytesFits v
@@ -188,6 +193,10 @@ abbrev BodyWireFits (PD : D → Prop) : (s : Fin 9) → BodyF D s → Prop
   | 6 => fun v => PD v.1 ∧ v.2.1 < 2 ^ 64 ∧ BytesFits v.2.2.1 ∧ v.2.2.2.1 < 2 ^ 64 ∧ OptionFits PD v.2.2.2.2
   | 7 => fun v => PD v.1 ∧ PD v.2.1 ∧ ListFits Right.Fits v.2.2.1 ∧ OptionFits PD v.2.2.2
   | 8 => fun v => PD v
+  | 9 => fun v => v < 2 ^ 64
+  | 10 => fun v => PD v
+  | 11 => fun v => PD v.1 ∧ PD v.2.1 ∧ v.2.2.1 < 2 ^ 64 ∧ OptionFits PD v.2.2.2.1 ∧
+      OptionFits BytesFits v.2.2.2.2
 
 theorem bodyWire_lawfulOn {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc) :
     ∀ s, LawfulOn (BodyWireFits PD s) (bodyWire dc s)
@@ -204,11 +213,15 @@ theorem bodyWire_lawfulOn {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc
   | 7 => product_lawfulOn hd (product_lawfulOn hd (product_lawfulOn (rawList_lawfulOn right_lawfulOn _ (by decide))
       (option_lawfulOn hd)))
   | 8 => hd
+  | 9 => nat64_lawfulOn
+  | 10 => hd
+  | 11 => product_lawfulOn hd (product_lawfulOn hd (product_lawfulOn nat64_lawfulOn
+      (product_lawfulOn (option_lawfulOn hd) (option_lawfulOn (rawBytes_lawfulOn _ (by decide))))))
 
 theorem body_lawfulOn {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc) :
     LawfulOn (Body.Fits PD) (body dc) := by
   unfold body
-  refine (refine_lawfulOn (choice_lawfulOn 9 (by decide) (bodyWire_lawfulOn hd)) "kernel/body" ?_ ?_).mono ?_ ?_
+  refine (refine_lawfulOn (choice_lawfulOn 12 (by decide) (bodyWire_lawfulOn hd)) "kernel/body" ?_ ?_).mono ?_ ?_
   · intro y _; cases y <;> rfl
   · intro x y h
     obtain ⟨s, v⟩ := x
@@ -222,6 +235,9 @@ theorem body_lawfulOn {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc) :
     | 6, (_, _, _, _, _), h => simp at h; subst h; rfl
     | 7, (_, _, _, _), h => simp at h; subst h; rfl
     | 8, _, h => simp at h; subst h; rfl
+    | 9, _, h => simp at h; subst h; rfl
+    | 10, _, h => simp at h; subst h; rfl
+    | 11, (_, _, _, _, _), h => simp at h; subst h; rfl
   · intro y h; cases y <;> exact h
   · intro y h; cases y <;> exact h
 

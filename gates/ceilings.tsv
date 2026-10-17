@@ -2,7 +2,7 @@
 # A raised or removed row needs `SIZE-CEILING: <metric>: <why>` in the commit message.
 Lean modules in the Host closure	150	law 8 target: the Host closure under 150 modules
 protocol operations	6	PROTOCOL's table (target <= 40); a new op raises this with a reason
-call kinds (Receive.Body constructors)	10	KERNEL's receivers: one derivation per operation kind
+call kinds (Receive.Body constructors)	12	KERNEL's receivers: one derivation per operation kind; LEDGER-3 adds issue, account, transfer (value is three authority rules)
 command verbs (the one command language)	20	PROTOCOL's one command language
 Rust lines (client/src)	2000	CLIENT-1, ROOT 10-16: hand-written Rust only (emitted files excluded)
 Rust files with an unregistered generated header	0	a hand-written file wearing the emit-rust header (ROOT 10-16)

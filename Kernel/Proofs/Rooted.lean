@@ -122,6 +122,11 @@ theorem postWrite_keeps {c : D} {cell post : Cell} {ops : List Op}
     obtain ⟨⟨⟩, _, rfl⟩ := h
     refine ⟨rfl, rfl, fun ha => ?_⟩
     rw [hd] at ha; cases ha
+  · rename_i hd
+    simp only [except_bind_ok, pure, Except.pure, Except.ok.injEq] at h
+    obtain ⟨⟨⟩, _, ⟨⟩, _, rfl⟩ := h
+    refine ⟨rfl, rfl, fun ha => ?_⟩
+    rw [hd] at ha; cases ha
 
 section Admit
 variable [Std.TransOrd D] [Std.LawfulEqOrd D]
@@ -370,6 +375,19 @@ theorem dispatch_born {X : Ctx D} {look : Pinned D} {c : Call D} {b : Body D} {t
   | revoke g =>
       simp only [dispatch, revoke, except_bind_ok] at h
       obtain ⟨_, _, _, _, ⟨⟩, _, h⟩ := h
+      rw [sealTurn_creates h]; simp
+  | issue cap =>
+      simp only [dispatch, issue, except_bind_ok] at h
+      obtain ⟨⟨⟩, _, h⟩ := h
+      rw [sealTurn_creates h]
+      exact kind_ne _ _ rfl (by simp [accountCell, kindAccount, kindGrant])
+  | account asset =>
+      simp only [dispatch, account] at h
+      rw [sealTurn_creates h]
+      exact kind_ne _ _ rfl (by simp [accountCell, kindAccount, kindGrant])
+  | transfer src dst amount via once =>
+      simp only [dispatch, transfer, except_bind_ok] at h
+      obtain ⟨_, _, _, _, _, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, h⟩ := h
       rw [sealTurn_creates h]; simp
 
 theorem receiveWith_dispatch {X : Ctx D} {look : Pinned D} {c : Call D} {t : Turn D}

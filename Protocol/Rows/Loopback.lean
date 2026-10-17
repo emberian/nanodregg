@@ -113,6 +113,7 @@ def kindName : Body D → String
   | .enroll .. => "enroll" | .rotate .. => "rotate" | .install .. => "install"
   | .create .. => "create" | .write .. => "write" | .law .. => "law" | .invoke .. => "invoke"
   | .grant .. => "grant" | .revoke .. => "revoke"
+  | .issue .. => "issue" | .account .. => "account" | .transfer .. => "transfer"
 
 def sawCall (call : ByteArray) : M Unit := do
   let k := match Sim.ctx.decodeCall call with

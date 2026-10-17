@@ -10,7 +10,7 @@ namespace Nanodregg.Kernel
 /-- The name of each bound, carried by `Reject.overBound` on the wire. -/
 inductive Bound
   | touches | opsPerWrite | creates | nullifiers
-  | event | slotsPerCell | slotKey | valueBytes | window | weight | counter
+  | event | slotsPerCell | slotKey | valueBytes | window | weight | counter | denoms
   deriving DecidableEq, Repr
 
 namespace Bounds
@@ -37,6 +37,12 @@ alone allow a turn of ~8.6 GB (64 born cells of 1024 slots of 64 KiB, and as muc
 writes); this is the aggregate bound HOST budgets a frame and a batch by. Four events' worth: a
 turn's effect restates its call (the event) about once, and observes up to `touchesMax` cells. -/
 def weightMax : Nat := 4 * eventBytesMax
+/-- Distinct denominations whose value one turn moves (LEDGER-2): a swap needs two, a fee in a
+third asset three. The per-denomination sum is then an association list of at most this many
+entries, O(touches) to build. -/
+def denomsMax : Nat := 8
+/-- A denomination's bytes (a digest's: the id of the cell that bore it). -/
+def denomBytesMax : Nat := 64
 
 end Bounds
 end Nanodregg.Kernel

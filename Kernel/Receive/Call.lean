@@ -59,6 +59,16 @@ inductive Body (D : Type)
   | grant (target : D) (grantee : D) (rights : List Right) (parent : Option D)
   /-- retire a grant the signer issued -/
   | revoke (grant : D)
+  /-- bear a new denomination: its WELL, a value account owned by the signer whose id is the
+  denomination and whose floor is `cap`, the most that can ever be outstanding of it (LEDGER-3) -/
+  | issue (cap : Nat)
+  /-- bear an empty account of `asset`'s denomination (the well's id), owned by the signer -/
+  | account (asset : D)
+  /-- move `amount` from `src` to `dst` (same denomination), with the authority of `src`'s owner
+  (directly, or through `via`'s grant chain for `mutate`); `once` spends the nullifier
+  `onceNullifier src key`, so a call carrying the same key for the same source lands once.
+  Minting is a transfer out of a well, burning one into it -/
+  | transfer (src dst : D) (amount : Nat) (via : Option D) (once : Option ByteArray)
   deriving DecidableEq
 
 /-- What the caller signs. `pins` is the caller's observation; `maxCharge` the price ceiling. -/
@@ -124,6 +134,14 @@ inductive Refusal (D : Type)
   | eventMismatch
   /-- a receiver gave one cell two effects (no receiver does: a probe meets it) -/
   | duplicateEffect (cell : D)
+  /-- a transfer from an account to itself -/
+  | sameAccount
+  /-- a transfer of nothing -/
+  | zeroAmount
+  /-- a transfer between accounts of different denominations (names the destination) -/
+  | assetMismatch (cell : D)
+  /-- a post balance an `i64` cannot hold, or an issuance cap past `2^63` -/
+  | overflow (cell : D)
   deriving DecidableEq, Repr
 
 /-- The refusal's name on the wire (law 7): its constructor's, arguments dropped
@@ -155,6 +173,10 @@ def Refusal.name {D : Type} : Refusal D → String
   | .undecodableEvent => "undecodableEvent"
   | .eventMismatch => "eventMismatch"
   | .duplicateEffect _ => "duplicateEffect"
+  | .sameAccount => "sameAccount"
+  | .zeroAmount => "zeroAmount"
+  | .assetMismatch _ => "assetMismatch"
+  | .overflow _ => "overflow"
 
 /-- A receiver's only access to state: live cells at pinned ids. -/
 abbrev Pinned (D : Type) := D → Except (Refusal D) (Option Cell)
