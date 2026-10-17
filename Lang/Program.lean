@@ -157,7 +157,8 @@ where
         | _, _ => .error "state"
 
 def reqData (r : Req D) : Data :=
-  .record [("agent", .bytes (bytesOf r.agent)), ("principal", .bytes (bytesOf r.principal))]
+  .record [("agent", .bytes (bytesOf r.agent)), ("notBefore", .nat r.notBefore),
+    ("principal", .bytes (bytesOf r.principal)), ("validUntil", .nat r.validUntil)]
 
 /-- Apply field `ℓ` of closure body `g` to values bound as `var 2, var 1, var 0`. -/
 def apply3 (g : Nat) (ℓ : Label) : Term :=

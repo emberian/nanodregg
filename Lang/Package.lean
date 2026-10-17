@@ -23,8 +23,10 @@ structure Package where
   laws : List Label
   deriving Inhabited
 
-/-- What a law and a method see of the call: the signing member and whose authority it uses. -/
-def reqTy : Ty := .record [("agent", .bytes), ("principal", .bytes)]
+/-- What a law and a method see of the call: the signing member, whose authority it uses, and the
+call's signed window (the Turn lands at a height in `[notBefore, validUntil]`, KERNEL-10). -/
+def reqTy : Ty :=
+  .record [("agent", .bytes), ("notBefore", .nat), ("principal", .bytes), ("validUntil", .nat)]
 
 /-- A law's verdict: `ok`, or `refused` with the author's reason. -/
 def verdictTy : Ty := .sum [("ok", .record []), ("refused", .bytes)]

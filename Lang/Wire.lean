@@ -289,7 +289,7 @@ def getData (b : ByteArray) : Ty → Nat → Read Data
   | .sum r, i =>
     match getU32 b i with
     | .error e => .error e
-    | .ok (n, j) => getArm b r n j
+    | .ok (n, j) => getArm b r r n j
   | .fn _ _, i => .error (.rejected i "function in data")
 
 def getDataRow (b : ByteArray) : List (Label × Ty) → Nat → Read (List (Label × Data))
@@ -299,10 +299,14 @@ def getDataRow (b : ByteArray) : List (Label × Ty) → Nat → Read (List (Labe
     | .error e => .error e
     | .ok (d, j) => (getDataRow b r j).map fun (fs, k) => ((ℓ, d) :: fs, k)
 
-def getArm (b : ByteArray) : List (Label × Ty) → Nat → Nat → Read Data
+/-- The arm at index `n` of `full`'s suffix; refused unless it is the FIRST arm with its label
+(`rejected … "arm"`), so the label names the arm the machine's `case` will take. -/
+def getArm (b : ByteArray) (full : List (Label × Ty)) : List (Label × Ty) → Nat → Nat → Read Data
   | [], n, i => .error (.badTag i (UInt8.ofNat n))
-  | (ℓ, t) :: _, 0, i => (getData b t i).map fun (d, j) => (.inj ℓ d, j)
-  | _ :: r, n + 1, i => getArm b r n i
+  | (ℓ, t) :: _, 0, i =>
+    if Row.find? ℓ full = some t then (getData b t i).map fun (d, j) => (.inj ℓ d, j)
+    else .error (.rejected i "arm")
+  | _ :: r, n + 1, i => getArm b full r n i
 end
 
 /-- Exactly one value, nothing after it. -/
