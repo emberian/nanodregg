@@ -248,3 +248,22 @@ KERNEL changes a bound without CODEC, `checkBounds_fits` stops building, which i
 **Meta-critique.** I took KERNEL's no-subtypes choice as given rather than arguing harder for
 types. The truncation hazard above is the price, and a typed Turn would not have it.
 Status: open.
+
+## CODEC-14 · The World codec: canonical bytes, read back up to `Equiv` (HOST-14's base) (2026-10-16)
+**Decision.** `Codec/World.lean`: `world dc : Stream (World D)` = `cells ‖ journal ‖ spent ‖ height ‖ chain ‖
+allowance`, each map as its entries in ascending key order (`toList`), each read back only if
+strictly ascending (`ascendingList`, refused `rejected … "kernel/ascending"` otherwise), and rebuilt by
+`ofList`. `Codec/Proofs/World.lean`: `world_decode_bytes` (a fitting World decodes from its bytes to an
+`Equiv` World), `eq_bytes_of_world_decode` (exact canonicity: decoded ⇒ the bytes are the encoding),
+`world_bytes_equiv` (`Equiv` Worlds have equal bytes, so a base's digest is a function of contents).
+`(world dc).size w` is the encoded length from the entries without encoding (HOST's `worldBytesMax`).
+`batch max dc` is the segment's batch record, `(turns ≤ max) × chain`, with `batch_lawfulOn`.
+**Alternatives.** A `Lawful` (=) law, which is impossible: `TreeMap =` depends on insertion order, and a
+reopened World is never `=` the live one (KERNEL's `World.Equiv`). Or encode the trees' shapes, which
+would make two equal Worlds byte-distinct: anti-canonical.
+**Critique.** The decoder rebuilds three TreeMaps by `ofList` (O(n log n)). A bulk-load from sorted
+input would be O(n), and HOST measures it at reopen. `worldMax = 2^32 − 1` entries per map is a wire
+bound, not a policy bound. HOST's `worldBytesMax` is the real one.
+**Meta-critique.** The sorted-list uniqueness lemma was proved here from Std's membership lemmas,
+so a Std upgrade that renames them breaks this module, not KERNEL's.
+Status: open.

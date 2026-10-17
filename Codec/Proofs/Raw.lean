@@ -204,6 +204,31 @@ theorem refine_lawfulOn {P : α → Prop} {c : Stream α} (hc : LawfulOn P c) (n
         exact hc.occurs_of_get hx
       · cases h
 
+/-- `refine` whose acceptance carries a further property `Q` of the value (e.g. sortedness). -/
+theorem refine_lawfulOn_where {P : α → Prop} {Q : β → Prop} {c : Stream α} (hc : LawfulOn P c) (name : String)
+    {accept : α → Option β} {back : β → α}
+    (accept_back : ∀ y, P (back y) → Q y → accept (back y) = some y)
+    (back_accept : ∀ x y, accept x = some y → back y = x)
+    (accept_q : ∀ x y, accept x = some y → Q y) :
+    LawfulOn (fun y => P (back y) ∧ Q y) (refine name c accept back) where
+  put_eq v buf := by simp only [refine]; exact hc.put_eq _ _
+  size_eq v := hc.size_eq (back v)
+  get_of_occurs v b i hv h := by
+    rw [refine_bytes] at h ⊢
+    simp [refine, hc.get_of_occurs _ _ _ hv.1 h, accept_back _ hv.1 hv.2]
+  occurs_of_get {b i v j} h := by
+    simp only [refine] at h
+    split at h
+    · cases h
+    · rename_i x k hx
+      split at h
+      · rename_i y hy
+        cases h
+        rw [refine_bytes, back_accept _ _ hy]
+        obtain ⟨px, r⟩ := hc.occurs_of_get hx
+        exact ⟨⟨px, accept_q _ _ hy⟩, r⟩
+      · cases h
+
 theorem tagged_lawfulOn {σ : Type} {F : σ → Type} (all : List σ) {code : σ → UInt8}
     {ofCode? : UInt8 → Option σ} {c : (s : σ) → Stream (F s)} {P : (s : σ) → F s → Prop}
     (hc : ∀ s, LawfulOn (P s) (c s))
