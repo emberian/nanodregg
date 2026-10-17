@@ -44,7 +44,8 @@ proposals/client.md	CLIENT
 proposals/lang.md	LANG
 proposals/gates.md	GATES
 Hosting/	HOSTING
-hosting/	HOSTING
+launcher/	HOSTING
+launcher/src/generated.rs	CODEC
 world/	HOSTING
 decisions/hosting.md	HOSTING
 proposals/hosting.md	HOSTING

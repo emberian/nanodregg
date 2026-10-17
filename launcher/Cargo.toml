@@ -1,0 +1,32 @@
+[package]
+name = "nanodregg-launcher"
+version = "0.0.0"
+edition = "2024"
+publish = false
+description = "grain-launch: starts and stops grains exactly as the Lean controller's frames say, each through nanodregg_sandbox::command. Decides nothing."
+
+# Standalone until GATES owns a root workspace.
+[workspace]
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "grain-launch"
+path = "src/bin/grain-launch.rs"
+
+# The isolation test's grain: tries each of its targets and writes what happened into its volume.
+[[bin]]
+name = "probe"
+path = "src/bin/probe.rs"
+
+[dependencies]
+nanodregg-sandbox = { path = "../sandbox" }
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"

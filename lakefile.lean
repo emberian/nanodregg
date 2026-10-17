@@ -49,6 +49,10 @@ package nanodregg where
 @[default_target] lean_exe «hosting-controller» where
   root := `Hosting.Main
 
+-- One Lean-planned launch for launcher/tests/isolation.rs (a stand-in controller without a Store).
+@[default_target] lean_exe «hosting-drive» where
+  root := `Hosting.DriveMain
+
 -- The Rust copy of the protocol table (client/src/generated.rs). Imports Protocol; nothing imports it.
 @[default_target] lean_lib Emit where
   globs := #[.submodules `Emit]

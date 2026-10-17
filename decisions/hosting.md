@@ -382,3 +382,47 @@ A partial batch is written when `encodeAction` fails mid-round (the run then end
 **META.** I shaped the memory after the Kubernetes controller (observed vs desired), again by
 familiarity; the reader's holes were all in the observed half, which is where that shape is weakest.
 Status: built.
+
+## HOSTING-11 grain-launch and the physical isolation test (HOSTING-2, 2026-10-17)
+
+**Decision.** The crate is `launcher/` (ROOT ruling: `hosting/` is one path with `Hosting/` on a
+case-insensitive disk; CODEC-2's emit-hosting writes `launcher/src/generated.rs`). Bin `grain-launch
+ROOT LABEL PIDS CONTROLLER [ARG...]`: starts CONTROLLER through `nanodregg_sandbox::command`
+(read `ROOT/worlds/LABEL/store`, exec the controller itself, nothing else), reads action frames from
+its stdout on a thread, and per action: launch = one `sandbox::command` over the frame's plan joined
+onto ROOT (the plan's `write` directories are created first; nothing added, dropped or reordered),
+a PID file `PIDS/<grain>.pid` per child, `started`; a `ConfineError` or a spawn error is a `failed`
+report by name (exhaustive `failure_of`); kill = the child's own handle; every 50 ms tick reaps
+children and reports `exited` (raw wait status), removing the PID file. The laws `Hosting.Loop`
+relies on hold by construction: a second launch for a grain with a live child ends the run
+(`duplicateLaunch`); reports go out in order on one pipe; when the controller's pipe closes every
+child is killed and reaped before exit. A grain name outside `[a-z0-9-]{1,64}` ends the run
+(`badGrain`: the premise `plan`'s `labelOk` guarantees, asserted where the bytes enter, since PID
+files are named by it). Bin `probe`: the test's grain.
+`hosting-drive [--plant-read-worlds] LABEL IDHEX ENTRY` (Lean, `Hosting/Drive.lean`): a stand-in
+controller with no Store that runs the deployed `plan` and `encodeAction` for one grain, so the test's
+plan is Lean's, never built in Rust.
+**The test** (`launcher/tests/isolation.rs`, Linux, `cargo test --test isolation`, run on hbox
+10-17): CONTROL first — the probe unconfined reads and writes all five targets (`ok` each, the
+neighbour write included); CONFINED through grain-launch + hosting-drive + nd-bwrap:
+`vol-write ok`, `neighbour-write denied ENOENT`, `neighbour-read denied ENOENT`, `pkg-write denied
+EROFS`, `store-read denied ENOENT`; no PID file outlives its child. Plants (each a test): a plan with
+`worlds/` in `read` ⇒ `report failed exposed`, the probe never runs; a symlinked `pkg/probe`
+pointing outside ⇒ `report failed programOutside`.
+**Mutations** (run): `policy()` swapping read and write ⇒ all three tests red; `policy()` dropping
+`hidden` ⇒ the worlds/ plant red (the main test stays green: deny-default alone hides the
+neighbour, `hidden` is the second barrier).
+**Platform fact (CLIENT-9, EXEC_FILTERED = false on Linux).** bwrap mounts, it does not filter exec:
+what the grain cannot see is ABSENT (ENOENT, not EPERM), its package is read-only (EROFS), and
+everything under the read-only /usr floor is visible and executable inside. `exec` bounds
+visibility, not what runs. The test names the errno the OS gave.
+**Alternatives.** The real controller over a real Store holding a grain (needs genesis, install,
+create, invoke through a member client: the row harness's job, PROTOCOL's grain row); a Rust-built
+plan (forbidden: law 2).
+**CRITIQUE.** The test does not run in pre-push or standing (cargo test is not in the gate): it is
+evidence at 10-17, not a standing tooth until GATES runs it (asked). `hosting-drive` is a second
+caller of `plan` beside the controller: it shares the definitions, not the round. Kill is SIGKILL to
+bwrap (`--die-with-parent` takes the grain); there is no graceful stop.
+**META.** I read the brief's "EPERM" literally at first; the OS says ENOENT under a mount namespace,
+and asserting EPERM would have been a test of my expectation, not of the sandbox.
+Status: built.
