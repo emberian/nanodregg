@@ -1,0 +1,186 @@
+import Codec.Raw
+import Kernel.World
+import Kernel.Receive.Call
+
+/-!
+# Codec.Kernel — the canonical bytes of KERNEL's values
+
+One codec per kernel type, built from the one Stream family. Each is generic in the digest's own
+codec `dc : Stream D` (the deployed 32-byte digest, or a simulation's toy digest). Kernel types carry
+plain `Nat`, `List` and `ByteArray` with bounds checked in `World.admit`. So each codec is lawful on
+the values within those bounds (`Codec.Proofs.Kernel`): every admitted Turn has exactly one spelling,
+and every decoded value is within bounds.
+
+Layouts (all integers little-endian, every count a u32, every byte string `u32 len ‖ bytes`):
+* `Op`: tag 0 ‖ key u32 ‖ value, or tag 1 ‖ key u32.
+* `Cell`: kind u32 ‖ discipline u8 ‖ slots (count ‖ (key u32 ‖ value)*).
+* `Act`: tag 0 (keep), tag 1 ‖ ops, or tag 2 (retire). `Touch`: cell ‖ seen ‖ act.
+* `Turn`: txId ‖ notBefore u64 ‖ validUntil u64 ‖ touches ‖ creates ‖ nullifiers ‖ charge u64 ‖ event.
+* `Call`: unsigned ‖ signature. `Unsigned`: member ‖ key ‖ notBefore ‖ validUntil ‖ pins ‖ maxCharge ‖
+  body. `Body`: a tag (its constructor's index) ‖ its fields.
+-/
+
+namespace Nanodregg.Codec.Kernel
+
+open Nanodregg.Kernel Nanodregg.Kernel.Receive Nanodregg.Codec.Stream
+
+variable {D : Type}
+
+/-! ## Choice by a tag in `Fin n` -/
+
+def finCode {n : Nat} (s : Fin n) : UInt8 := UInt8.ofNat s.val
+
+def finOf? (n : Nat) (t : UInt8) : Option (Fin n) := if h : t.toNat < n then some ⟨t.toNat, h⟩ else none
+
+/-- One of `n` cases, tagged by its index. -/
+def choice (n : Nat) {F : Fin n → Type} (c : (s : Fin n) → Stream (F s)) : Stream ((s : Fin n) × F s) :=
+  tagged (List.finRange n) finCode (finOf? n) c
+
+/-! ## Bounds of the wire (KERNEL's bounds where they exist) -/
+
+/-- A list or byte string inside a signed call: the call is one event, so nothing in it exceeds
+`Bounds.eventBytesMax`. -/
+def callMax : Nat := Bounds.eventBytesMax
+
+/-! ## Cells -/
+
+def discipline : Stream Discipline :=
+  refine "kernel/discipline" u8
+    (fun t => if t = 0 then some .rom else if t = 1 then some .appendOnly else if t = 2 then some .ram else none)
+    (fun | .rom => 0 | .appendOnly => 1 | .ram => 2)
+
+abbrev OpF : Fin 2 → Type
+  | 0 => Nat × ByteArray
+  | 1 => Nat
+
+def opWire : (s : Fin 2) → Stream (OpF s)
+  | 0 => product nat32 (rawBytes Bounds.valueBytesMax)
+  | 1 => nat32
+
+def op : Stream Op :=
+  refine "kernel/op" (choice 2 opWire)
+    (fun | ⟨0, (k, v)⟩ => some (.set k v) | ⟨1, k⟩ => some (.erase k))
+    (fun | .set k v => ⟨0, (k, v)⟩ | .erase k => ⟨1, k⟩)
+
+def slots : Stream Slots :=
+  rawList Bounds.slotsPerCellMax (product nat32 (rawBytes Bounds.valueBytesMax))
+
+def cell : Stream Cell :=
+  refine "kernel/cell" (product nat32 (product discipline slots))
+    (fun (k, d, s) => some ⟨k, d, s⟩) (fun c => (c.kind, c.discipline, c.slots))
+
+/-! ## Turns -/
+
+abbrev ActF : Fin 3 → Type
+  | 0 => Unit
+  | 1 => List Op
+  | 2 => Unit
+
+def actWire : (s : Fin 3) → Stream (ActF s)
+  | 0 => unit
+  | 1 => rawList Bounds.opsPerWriteMax op
+  | 2 => unit
+
+def act : Stream Act :=
+  refine "kernel/act" (choice 3 actWire)
+    (fun | ⟨0, ()⟩ => some .keep | ⟨1, ops⟩ => some (.write ops) | ⟨2, ()⟩ => some .retire)
+    (fun | .keep => ⟨0, ()⟩ | .write ops => ⟨1, ops⟩ | .retire => ⟨2, ()⟩)
+
+def touch (dc : Stream D) : Stream (Touch D) :=
+  refine "kernel/touch" (product dc (product dc act))
+    (fun (c, s, a) => some ⟨c, s, a⟩) (fun x => (x.cell, x.seen, x.act))
+
+def turn (dc : Stream D) : Stream (Turn D) :=
+  refine "kernel/turn"
+    (product dc (product nat64 (product nat64 (product (rawList Bounds.touchesMax (touch dc))
+      (product (rawList Bounds.createsMax cell) (product (rawList Bounds.nullifiersMax dc)
+        (product nat64 (rawBytes Bounds.eventBytesMax))))))))
+    (fun (tx, nb, vu, ts, cs, ns, ch, ev) => some ⟨tx, nb, vu, ts, cs, ns, ch, ev⟩)
+    (fun t => (t.txId, t.notBefore, t.validUntil, t.touches, t.creates, t.nullifiers, t.charge, t.event))
+
+/-! ## Calls -/
+
+def right : Stream Right :=
+  refine "kernel/right" (choice 3 (F := fun s => match s with | 2 => Nat | _ => Unit)
+      (fun s => match s with | 0 => unit | 1 => unit | 2 => nat64))
+    (fun | ⟨0, ()⟩ => some .observe | ⟨1, ()⟩ => some .mutate | ⟨2, m⟩ => some (.invoke m))
+    (fun | .observe => ⟨0, ()⟩ | .mutate => ⟨1, ()⟩ | .invoke m => ⟨2, m⟩)
+
+abbrev BodyF (D : Type) : Fin 10 → Type
+  | 0 => ByteArray × D × ByteArray
+  | 1 => ByteArray × D
+  | 2 => ByteArray
+  | 3 => Option D × List D × Slots
+  | 4 => D × List (Nat × Option ByteArray) × Option D
+  | 5 => D × List D × Option D
+  | 6 => D × Nat × ByteArray × Nat × Option D
+  | 7 => D × D × List Right × Option D
+  | 8 => D × D
+  | 9 => D
+
+def bodyWire (dc : Stream D) : (s : Fin 10) → Stream (BodyF D s)
+  | 0 => product (rawBytes callMax) (product dc (rawBytes callMax))
+  | 1 => product (rawBytes callMax) dc
+  | 2 => rawBytes callMax
+  | 3 => product (option dc) (product (rawList callMax dc) slots)
+  | 4 => product dc (product (rawList callMax (product nat32 (option (rawBytes Bounds.valueBytesMax))))
+      (option dc))
+  | 5 => product dc (product (rawList callMax dc) (option dc))
+  | 6 => product dc (product nat64 (product (rawBytes callMax) (product nat64 (option dc))))
+  | 7 => product dc (product dc (product (rawList callMax right) (option dc)))
+  | 8 => product dc dc
+  | 9 => dc
+
+def body (dc : Stream D) : Stream (Body D) :=
+  refine "kernel/body" (choice 10 (bodyWire dc))
+    (fun
+      | ⟨0, (k, n, p)⟩ => some (.enroll k n p)
+      | ⟨1, (k, n)⟩ => some (.rotate k n)
+      | ⟨2, p⟩ => some (.install p)
+      | ⟨3, (p, ls, s)⟩ => some (.create p ls s)
+      | ⟨4, (o, es, v)⟩ => some (.write o es v)
+      | ⟨5, (o, ls, v)⟩ => some (.law o ls v)
+      | ⟨6, (o, m, a, b, v)⟩ => some (.invoke o m a b v)
+      | ⟨7, (t, g, r, p)⟩ => some (.grant t g r p)
+      | ⟨8, (g, p)⟩ => some (.follow g p)
+      | ⟨9, g⟩ => some (.revoke g))
+    (fun
+      | .enroll k n p => ⟨0, (k, n, p)⟩
+      | .rotate k n => ⟨1, (k, n)⟩
+      | .install p => ⟨2, p⟩
+      | .create p ls s => ⟨3, (p, ls, s)⟩
+      | .write o es v => ⟨4, (o, es, v)⟩
+      | .law o ls v => ⟨5, (o, ls, v)⟩
+      | .invoke o m a b v => ⟨6, (o, m, a, b, v)⟩
+      | .grant t g r p => ⟨7, (t, g, r, p)⟩
+      | .follow g p => ⟨8, (g, p)⟩
+      | .revoke g => ⟨9, g⟩)
+
+def unsigned (dc : Stream D) : Stream (Unsigned D) :=
+  refine "kernel/unsigned"
+    (product dc (product (rawBytes callMax) (product nat64 (product nat64
+      (product (rawList callMax (product dc dc)) (product nat64 (body dc)))))))
+    (fun (m, k, nb, vu, ps, mc, b) => some ⟨m, k, nb, vu, ps, mc, b⟩)
+    (fun u => (u.member, u.key, u.notBefore, u.validUntil, u.pins, u.maxCharge, u.body))
+
+def call (dc : Stream D) : Stream (Call D) :=
+  refine "kernel/call" (product (unsigned dc) (rawBytes callMax))
+    (fun (u, s) => some ⟨u, s⟩) (fun c => (c.unsigned, c.signature))
+
+/-! ## What KERNEL's `Env` and `Ctx` take -/
+
+def cellBytes (c : Cell) : ByteArray := cell.bytes c
+def turnBytes (dc : Stream D) (t : Turn D) : ByteArray := (turn dc).bytes t
+def unsignedBytes (dc : Stream D) (u : Unsigned D) : ByteArray := (unsigned dc).bytes u
+def callBytes (dc : Stream D) (c : Call D) : ByteArray := (call dc).bytes c
+
+/-- A logged event read back as the call it is, refused by name otherwise. -/
+def readCall (dc : Stream D) (b : ByteArray) : Except Refusal (Call D) := (call dc).decode b
+
+/-- `readCall` as `Ctx.decodeCall` takes it. -/
+def decodeCall (dc : Stream D) (b : ByteArray) : Option (Call D) :=
+  match readCall dc b with
+  | .ok c => some c
+  | .error _ => none
+
+end Nanodregg.Codec.Kernel

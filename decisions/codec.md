@@ -227,3 +227,24 @@ time, which does not matter for verification (no secrets).
 I did not price proving `Fe.mul` correct, which is the obligation that would make this better than the
 fallback rather than merely Lean.
 Status: open (owed: `Fe.mul`/`carry` correctness theorems against `Nat` mod p).
+
+## CODEC-12 · KERNEL's values are encoded by codecs lawful ON their bounds (2026-10-16)
+**Decision.** KERNEL keeps plain `Nat`/`List`/`ByteArray` and checks bounds in `World.admit`
+(`checkBounds`, KERNEL-14: counters < 2^64, kinds < 2^32). So `Codec/Kernel.lean` codecs are total
+writers over the raw types (`nat64`, `nat32`, `rawBytes max`, `rawList max c`, Codec/Raw.lean), proved
+`LawfulOn Fits` (Codec/Proofs/Raw.lean, Codec/Proofs/Kernel.lean): a value within its bounds reads back
+from its bytes, and every value read is within its bounds and was spelled exactly one way.
+`checkBounds_fits` makes every admitted Turn fit, so `turnBytes_injective` holds for admitted turns, and
+`decodeCall_callBytes` / `eq_callBytes_of_decodeCall` give the Ctx its inverse and its canonicity.
+Bounds on the wire are KERNEL's own (touchesMax, opsPerWriteMax, createsMax, …). Inside a call, every
+list and byte string is bounded by `eventBytesMax` (a call is one event).
+**Alternatives.** Bounded types in KERNEL (CODEC-3's preference). KERNEL-2 declined: its window
+arithmetic stays in `Nat`, and the premise is checked where it enters. Or `Lawful` over subtypes with
+`pmap`-heavy back maps, which costs the same proofs for every kernel value.
+**Critique.** `put` of an out-of-bounds value silently truncates (a u32 count of a longer list). The
+type does not stop anyone encoding an unchecked Turn, so a digest of an unchecked turn can collide
+with another's. Every use is safe only after `checkBounds`. `Fits` restates KERNEL's bounds; if
+KERNEL changes a bound without CODEC, `checkBounds_fits` stops building, which is loud, not silent.
+**Meta-critique.** I took KERNEL's no-subtypes choice as given rather than arguing harder for
+types. The truncation hazard above is the price, and a typed Turn would not have it.
+Status: open.
