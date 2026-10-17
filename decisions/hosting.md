@@ -1299,3 +1299,41 @@ helper waits for the mode that admits exactly PEER), across the broker test and 
 **Flag day.** keybroker's socket is 0600 when PEER is its own uid. grain-launch prints its connect paths.
 The probe gains `ask` and `wait` and appends as it goes. New row `cargo:launcher:resident`. Nothing
 persisted changes, and the deployed units are unchanged.
+
+## HOSTING-22 The grain row's physical half (HOSTING-7, 2026-10-18, PROTOCOL-7's need)
+
+**Decision.** `launcher/tests/grain.rs` is row `cargo:launcher:grain` (`hosting-controller,host`). It restates
+m6grain's sandbox half, and the Lean `grain` row's docstring names it (PROTOCOL-7 adds the reference).
+It runs on the resident row's harness: a real Store, the operator's follower Store which the controller
+tails, and grain-launch from its emitted unit argv over the real `hosting-controller`. The operator
+installs Lifecycle and creates an APP grain. The grantee is a real second member: `nd --init` in its own
+workspace, `nd init <operator>` (its join token), the operator's `enroll` and `grant world … observe`,
+then its own follower Store, made by `host genesis` with the World's nonce, which must print what the
+first genesis printed, and followed by `host follow` as that member. The operator grants it `invoke:1`
+on the grain.
+Steps:
+- start: the owner's `invoke 1` and `sync`. The grain is launched once. Inside, it writes its volume and
+  is denied its Store's key, which exists on the host, so the plan is in force.
+- grantee stop: `invoke 2 --via <invoke:1>` from the grantee's nd is refused `grantRight` by name.
+  After the operator's `sync` the follower Store equals the writer's (the controller has nothing
+  unseen), the grain's pid (from its PID file) is alive, and no exit was reported.
+- owner stop: `invoke 2` and `sync`. grain-launch reports `exited 9`, the controller's kill. The pid is
+  gone, no PID file survives, and there was exactly one `started`.
+- `common/mod.rs` gains the resident row's own helpers (moved, unchanged) and `World::follower`, a member's
+  own follower Store.
+**CRITIQUE.** The grantee's refusal is the World's (KERNEL-25's owner gate through the grant's rights). It
+produces no Turn, so "the process lives" here shows that a refused call reaches nothing physical, and the
+row cannot see a controller that would kill on a refused call, because there is nothing for it to see.
+The alive check is after a sync, not after a quiet interval. That is deliberate (no wall-clock verdict),
+and it is sound because the controller acts only on Turns and reports. `exited 9` is the raw wait status
+of a SIGKILL'd bwrap child, the launcher's kill. A grain that exits on its own with status 9 would read
+the same, but the probe here only waits. The grantee's join flow runs `nd init` through the OPERATOR's
+follow socket (init only signs its possession and prints its token, so it reads no World). After its
+enrolment, every grantee command reads through its own follower.
+**META-CRITIQUE.** This row passed on its first run, which is a reason to distrust it, not to trust it. The
+plants below are what make it evidence. Both red at the stop step, the step the need names.
+**Plants (run, hbox logs/hosting7-rplants.py with PLANT_TESTS=--test grain, output
+logs/hosting7-gplants.out, each red at the stop step).** (g) the controller ignores stop (`decideCell`'s
+non-running branch returns no verdict): `hang: the stop`. (h) grain-launch ignores the kill frame: `hang:
+the stop`.
+**Flag day.** None: a new row, and the harness moved into the shared test module.

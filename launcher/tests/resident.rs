@@ -42,164 +42,18 @@
 mod common;
 
 use std::fs;
-use std::io::Read;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixListener;
-use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::path::Path;
+use std::process::{Command, Stdio};
 
 use common::*;
-use nanodregg_devtools::{Supervisor, lean_bin, repo};
+use nanodregg_devtools::lean_bin;
 
 /// The second resident keybroker serves (a socket that exists on the host, for no grain here).
 const OTHER: &str = "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2";
 /// The Store label of the World the grain lives in.
 const LABEL: &str = "w";
-
-/// A short scratch directory (`<prefix><pid in base 36>`): a socket path is at most 107 bytes and a
-/// resident's directory name is 64 hex digits, so SOCKDIR must stay within 30 bytes. Removed on drop.
-struct Short(PathBuf);
-
-impl Short {
-    fn new(prefix: &str) -> Short {
-        let mut n = std::process::id();
-        let mut tag = String::new();
-        while n > 0 {
-            tag.insert(0, char::from_digit(n % 36, 36).unwrap());
-            n /= 36;
-        }
-        let p = nanodregg_devtools::scratch(&format!("{prefix}{tag}"));
-        assert!(
-            p.as_os_str().len() + 1 + 64 + "/broker.sock".len() <= 107,
-            "plant: {} is too long for a socket path",
-            p.display()
-        );
-        Short(p)
-    }
-}
-
-impl Drop for Short {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.0);
-    }
-}
-
-/// A scratch tree removed on drop (also when an assertion fails).
-struct Gone(PathBuf);
-
-impl Drop for Gone {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.0);
-    }
-}
-
-/// Wait (bounded: a liveness deadline, a miss renders `hang`, never a verdict) until `ok()`.
-fn until(what: &str, secs: u64, mut ok: impl FnMut() -> bool, log: &dyn Fn() -> String) {
-    let deadline = Instant::now() + Duration::from_secs(secs);
-    while !ok() {
-        assert!(
-            Instant::now() < deadline,
-            "hang: {what} not within {secs} s:\n{}",
-            log()
-        );
-        std::thread::sleep(Duration::from_millis(50));
-    }
-}
-
-/// grain-launch's argv as its emitted unit renders it, each rendered word replaced by this test's
-/// value (a word with no value, or a value no word asks for, is red: the unit and the launcher's
-/// parser cannot drift, as broker.rs does for keybroker).
-fn grain_launch_rendered(values: &[(&str, &std::ffi::OsStr)]) -> Command {
-    let unit =
-        fs::read_to_string(repo().join("deploy/units/linux/nd-grain-launch@.service")).unwrap();
-    let line = unit
-        .lines()
-        .find_map(|l| l.strip_prefix("ExecStart="))
-        .expect("the unit has an ExecStart");
-    let mut words = line.split(' ');
-    assert_eq!(
-        words.next(),
-        Some("/opt/nd/bin/grain-launch"),
-        "the unit runs grain-launch"
-    );
-    let mut c = Command::new(env!("CARGO_BIN_EXE_grain-launch"));
-    let mut used = std::collections::BTreeSet::new();
-    for w in words {
-        let (k, v) = values
-            .iter()
-            .find(|(k, _)| *k == w)
-            .unwrap_or_else(|| panic!("the unit's word {w} has no test value"));
-        c.arg(v);
-        used.insert(*k);
-    }
-    assert_eq!(
-        used.len(),
-        values.len(),
-        "a test value the unit never asks for"
-    );
-    c
-}
-
-/// A child whose stderr is collected as it arrives (grain-launch's: its launch and report lines).
-struct Logged {
-    /// stopped by its handle (the pid in its PID file) when dropped
-    _held: Supervisor,
-    err: Arc<Mutex<String>>,
-}
-
-impl Logged {
-    fn spawn(mut c: Command, pid_file: PathBuf) -> Logged {
-        let mut child: Child = c
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::piped())
-            .spawn()
-            .unwrap();
-        let mut stderr = child.stderr.take().unwrap();
-        let err = Arc::new(Mutex::new(String::new()));
-        let e2 = Arc::clone(&err);
-        std::thread::spawn(move || {
-            let mut buf = [0u8; 4096];
-            loop {
-                match stderr.read(&mut buf) {
-                    Ok(0) | Err(_) => return,
-                    Ok(n) => e2
-                        .lock()
-                        .unwrap()
-                        .push_str(&String::from_utf8_lossy(&buf[..n])),
-                }
-            }
-        });
-        Logged {
-            _held: Supervisor::hold(child, pid_file),
-            err,
-        }
-    }
-    fn log(&self) -> String {
-        self.err.lock().unwrap().clone()
-    }
-}
-
-/// The probe's verdicts so far (`vol/probe.out`, appended as it goes).
-fn verdicts(vol: &Path) -> Vec<(String, String)> {
-    fs::read_to_string(vol.join("probe.out"))
-        .unwrap_or_default()
-        .lines()
-        .filter_map(|l| {
-            l.split_once(' ')
-                .map(|(a, b)| (a.to_string(), b.to_string()))
-        })
-        .collect()
-}
-
-fn verdict(vol: &Path, name: &str) -> Option<String> {
-    verdicts(vol)
-        .into_iter()
-        .find(|(n, _)| n == name)
-        .map(|(_, v)| v)
-}
 
 #[test]
 fn a_resident_is_granted_through_its_own_socket_and_reaches_nothing_else() {

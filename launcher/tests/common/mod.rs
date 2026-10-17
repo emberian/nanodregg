@@ -225,6 +225,12 @@ pub struct World {
     /// the operator's follower Store (`host follow`), the one a controller tails
     pub fstore: PathBuf,
     pub operator: String,
+    /// the founder's grant on the World (`genesis`'s `grant`), the parent of the operator's grants
+    pub grant: String,
+    /// `host genesis`'s arguments after STORE (`nano --nonce N KEY NEXT`) and what it printed, so a
+    /// later Store of the same World can be made (`follower`)
+    pub genesis_args: Vec<String>,
+    pub genesis_out: String,
     pub pkg: String,
     pub ws: PathBuf,
     pub holding: PathBuf,
@@ -267,6 +273,33 @@ impl World {
             "(record (cap {cap}) (keySlot {slot}) (maxTokens 100) (microPerKTok 1000) (model \"{model}\") (resident #{resident}) (revoked false) (windowMs {WINDOW_MS}))"
         );
         line(&self.run(&["create", "--pkg", &self.pkg, &state]), "id ").to_owned()
+    }
+
+    /// A member's own follower: a Store of this World at `store` (made by `host genesis` with the
+    /// World's nonce: it must print what the first genesis printed), followed by `host follow` as
+    /// `member` through `grant` under `nd-supervise`, its socket `sock`, `hide` hidden.
+    pub fn follower(
+        &self,
+        store: &Path,
+        sock: &Path,
+        hide: &Path,
+        member: &str,
+        grant: &str,
+    ) -> Supervisor {
+        let o = Command::new(lean_bin("host"))
+            .arg("genesis")
+            .arg(store)
+            .args(&self.genesis_args)
+            .output()
+            .unwrap();
+        assert_eq!(text(&o), self.genesis_out, "one genesis, another Store");
+        supervise_host(
+            &nd_supervise(),
+            sock,
+            hide,
+            store,
+            &["follow", store.to_str().unwrap(), member, grant],
+        )
     }
 
     /// `nd install` of the package text at `rel` in the repository; its id.
@@ -328,6 +361,16 @@ impl World {
         );
         let founder = line(&g, "founder 0 member ");
         let (operator, grant) = founder.split_once(" grant ").unwrap();
+        let genesis_args: Vec<String> = [
+            "nano",
+            "--nonce",
+            line(&g, "nonce "),
+            line(&keys, "key "),
+            line(&keys, "next "),
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
         let serve = supervise_host(
             &nd_supervise(),
             &ws.join("host.sock"),
@@ -347,6 +390,9 @@ impl World {
             store,
             fstore,
             operator: operator.to_owned(),
+            grant: grant.to_owned(),
+            genesis_args,
+            genesis_out: g.clone(),
             pkg: String::new(),
             ws,
             holding,
@@ -588,4 +634,147 @@ pub fn place_exe(src: &Path, dst: &Path) {
         src.display(),
         dst.display()
     );
+}
+
+/// A short scratch directory (`<prefix><pid in base 36>`): a socket path is at most 107 bytes and a
+/// resident's directory name is 64 hex digits, so SOCKDIR must stay within 30 bytes. Removed on drop.
+pub struct Short(pub PathBuf);
+
+impl Short {
+    pub fn new(prefix: &str) -> Short {
+        let mut n = std::process::id();
+        let mut tag = String::new();
+        while n > 0 {
+            tag.insert(0, char::from_digit(n % 36, 36).unwrap());
+            n /= 36;
+        }
+        let p = nanodregg_devtools::scratch(&format!("{prefix}{tag}"));
+        assert!(
+            p.as_os_str().len() + 1 + 64 + "/broker.sock".len() <= 107,
+            "plant: {} is too long for a socket path",
+            p.display()
+        );
+        Short(p)
+    }
+}
+
+impl Drop for Short {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
+/// A scratch tree removed on drop (also when an assertion fails).
+pub struct Gone(pub PathBuf);
+
+impl Drop for Gone {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
+/// Wait (bounded: a liveness deadline, a miss renders `hang`, never a verdict) until `ok()`.
+pub fn until(what: &str, secs: u64, mut ok: impl FnMut() -> bool, log: &dyn Fn() -> String) {
+    let deadline = Instant::now() + Duration::from_secs(secs);
+    while !ok() {
+        assert!(
+            Instant::now() < deadline,
+            "hang: {what} not within {secs} s:\n{}",
+            log()
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// grain-launch's argv as its emitted unit renders it, each rendered word replaced by this test's
+/// value (a word with no value, or a value no word asks for, is red: the unit and the launcher's
+/// parser cannot drift, as broker.rs does for keybroker).
+pub fn grain_launch_rendered(values: &[(&str, &std::ffi::OsStr)]) -> Command {
+    let unit =
+        fs::read_to_string(repo().join("deploy/units/linux/nd-grain-launch@.service")).unwrap();
+    let line = unit
+        .lines()
+        .find_map(|l| l.strip_prefix("ExecStart="))
+        .expect("the unit has an ExecStart");
+    let mut words = line.split(' ');
+    assert_eq!(
+        words.next(),
+        Some("/opt/nd/bin/grain-launch"),
+        "the unit runs grain-launch"
+    );
+    let mut c = Command::new(env!("CARGO_BIN_EXE_grain-launch"));
+    let mut used = std::collections::BTreeSet::new();
+    for w in words {
+        let (k, v) = values
+            .iter()
+            .find(|(k, _)| *k == w)
+            .unwrap_or_else(|| panic!("the unit's word {w} has no test value"));
+        c.arg(v);
+        used.insert(*k);
+    }
+    assert_eq!(
+        used.len(),
+        values.len(),
+        "a test value the unit never asks for"
+    );
+    c
+}
+
+/// A child whose stderr is collected as it arrives (grain-launch's: its launch and report lines).
+pub struct Logged {
+    /// stopped by its handle (the pid in its PID file) when dropped
+    _held: Supervisor,
+    err: Arc<Mutex<String>>,
+}
+
+impl Logged {
+    pub fn spawn(mut c: Command, pid_file: PathBuf) -> Logged {
+        let mut child: Child = c
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut stderr = child.stderr.take().unwrap();
+        let err = Arc::new(Mutex::new(String::new()));
+        let e2 = Arc::clone(&err);
+        std::thread::spawn(move || {
+            let mut buf = [0u8; 4096];
+            loop {
+                match stderr.read(&mut buf) {
+                    Ok(0) | Err(_) => return,
+                    Ok(n) => e2
+                        .lock()
+                        .unwrap()
+                        .push_str(&String::from_utf8_lossy(&buf[..n])),
+                }
+            }
+        });
+        Logged {
+            _held: Supervisor::hold(child, pid_file),
+            err,
+        }
+    }
+    pub fn log(&self) -> String {
+        self.err.lock().unwrap().clone()
+    }
+}
+
+/// The probe's verdicts so far (`vol/probe.out`, appended as it goes).
+pub fn verdicts(vol: &Path) -> Vec<(String, String)> {
+    fs::read_to_string(vol.join("probe.out"))
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|l| {
+            l.split_once(' ')
+                .map(|(a, b)| (a.to_string(), b.to_string()))
+        })
+        .collect()
+}
+
+pub fn verdict(vol: &Path, name: &str) -> Option<String> {
+    verdicts(vol)
+        .into_iter()
+        .find(|(n, _)| n == name)
+        .map(|(_, v)| v)
 }
