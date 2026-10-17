@@ -53,6 +53,10 @@ package nanodregg where
 @[default_target] lean_exe «hosting-drive» where
   root := `Hosting.DriveMain
 
+-- HOSTING's provider-key broker decider: keybroker's child, every ask decided by Hosting.Broker.
+@[default_target] lean_exe «hosting-broker» where
+  root := `Hosting.BrokerMain
+
 -- The Rust copy of the protocol table (client/src/generated.rs). Imports Protocol; nothing imports it.
 @[default_target] lean_lib Emit where
   globs := #[.submodules `Emit]

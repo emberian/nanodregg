@@ -435,3 +435,120 @@ bwrap (`--die-with-parent` takes the grain); there is no graceful stop.
 **META.** I read the brief's "EPERM" literally at first; the OS says ENOENT under a mount namespace,
 and asserting EPERM would have been a test of my expectation, not of the sandbox.
 Status: built.
+
+## HOSTING-12 The provider-key broker: Lean writes the request, the window forfeits on restart (HOSTING-3, 2026-10-17)
+
+**Ruling it builds under.** KEY-CUSTODY (Ember, 10-17): the OPERATOR holds provider keys. The resident
+calls a provider only through the broker, and no key reaches the resident. HOSTING-0's "should the
+layer exist" is answered: option A keeps the broker, so HOSTING stays a layer.
+
+**Decision.** Three parts, each holding one thing.
+- `keybroker`, the second bin of `launcher/` (Rust). It holds the operator's provider-key file and
+  serves one Unix socket per resident. **Identity is the socket an ask arrived on**: keybroker puts
+  the resident's member id in front of the ask's bytes, so a resident can name neither itself nor
+  another resident. At start it checks the key file's custody: a regular file, not a symlink, owned
+  by the euid, with no group or other bits. Each failure ends the run by name (`keyFileLink`,
+  `keyFileOwner`, `keyFileExposed`, `keyFileMalformed`). It does not decode the ask. It sends Lean's
+  request bytes upstream with the key slot's header, and withholds any response that contains the
+  key (`keyEchoed`). It moves bytes and decides nothing. One call at a time per socket: a second
+  concurrent ask gets `busy`.
+- `hosting-broker`, a Lean exe and keybroker's child (as the controller is grain-launch's). It decodes
+  the resident's ask with the one Lean codec (`Hosting.BrokerWire`) and makes every decision in a pure
+  `Broker.decide`. **Lean writes the upstream request**: the JSON body is printed by Lean from the
+  ask's structured fields (model, maxTokens, system, messages as roles plus texts), together with the
+  request target, the extra headers and the NAME of the key header. So the resident cannot smuggle a
+  second `max_tokens` or `model` into a body that Lean read one way and the provider reads another.
+  Nothing parses provider JSON, and no Rust number enters the meter. It holds no key and no member
+  seed.
+- The **allowance** is the policy for one resident: `{windowMs, cap, maxTokens, models : {name,
+  keySlot, microPerKTok}}`. Its source is the World (stage 2: a `world/hosting/Allowance` object the
+  operator owns per resident, read through `Host.Tail` as the controller reads grains, refused
+  `allowanceAmbiguous` when two exist).
+
+**The charge is the worst case, and it is final.** A grant charges `cost model (askBytes + maxTokens)`
+to the window: the input is bounded by the bytes Lean printed, the output by the `max_tokens` Lean
+printed. Nothing is settled or refunded, so the meter has no tickets, no usage report, no overrun
+and no `frozen`. Over-charging is the safe direction.
+**The window forfeits on restart.** Spend lives in broker memory. A broker life starting at operator
+clock time `t0` opens each resident's meter at window `t0 / windowSecs` with `spent = cap`, so the
+first window of a life grants nothing that costs. Theorems are in `Hosting.Proofs.Broker`:
+- `inv_start` / `inv_decide`: every meter keeps `spent ≤ cap`.
+- `fresh_start` / `fresh_decide`: the forfeit invariant holds after any run of grants.
+- `start_window_free`: an ask in a life's start window is granted only at cost 0.
+- `cost_worst`: a charge is never below the exact price.
+- `grant_allowed`: a grant is for an allowed, nonzero-priced model of the resident's own allowance,
+  with that model's key slot, within both token bounds, and its body is `requestBody`'s.
+- `body_shape` + `unstr_str`: the body is `bodySpec` exactly, so every string field reads back as
+  the ask's value, closed by its own quote, and message `i` carries text `i` with
+  `roleName` of role byte `i` (`body_tooth` pins 0 = `user`).
+- `verdictOf_wire` and codec lawfulness for the frames.
+- Teeth, all `decide +kernel`: `body_tooth` (a smuggled `","max_tokens":99999` stays inside
+  `content`), `system_tooth`, `forfeit_tooth`, `accumulate_tooth`, `refusal_teeth`, `badAsk_tooth`.
+
+So for a FIXED allowance and a non-decreasing clock, over sequential lives, only the life that
+first sees a window grants in it at a cost, and the total charged in a window is at most `cap`. A
+crash loop starves a resident and never overspends. **The premise "fixed allowance" is real**
+(VACUITY-READER-H3B's counterexample): life 1 with `windowMs = 60000` spends `cap` at t = 60000;
+life 2 with `windowMs = 1` forfeits only its own 1 ms window and spends `cap` again inside life 1's
+minute. A changed `windowMs` (or `cap`) is a new budget, and that is the operator's act. Stage 2
+reads the allowance from the World, where a change is a Turn the operator signs.
+
+**Refusals by name** (`Broker.Refusal`, one table, on the resident's wire): `noAllowance`,
+`allowanceMalformed` (a zero window, a cap past `capMax`, or a model priced 0, which would be
+unbounded free calls on the operator's key), `clockRegressed`, `badAsk` (the ask does not decode),
+`modelNotAllowed`, `tokensZero`, `tokensOver`, `messagesMalformed`, `textNotUtf8`, `overSpend`,
+`requestTooLarge` (the printed body past `bodyMax`: escaping can grow a text up to 6×); and,
+reported by keybroker, `keyMissing`, `keyEchoed`, `upstreamFailed`, `busy`, through an exhaustive Rust match, as
+`LaunchFailure` is.
+
+**Alternatives.** (1) ASSEMBLY HOSTING-7's lease Turn per resident per window. Someone has to hold a
+member seed to sign it, and the broker parses provider bytes, which the charter forbids. That means a
+third process, plus a journal entry per resident per window forever (KERNEL-17). The forfeit gives
+the same safety bound with no write. (2) The resident draws its own lease with the window tied to
+block height. Heights are not time, and the resident's own Turns advance them. Refused. (3) A
+local meter journal: a second Store format (law 1). Refused. (4) Reserve-then-settle on the
+provider's usage (H2). That needs a provider-JSON reader in the key-holding path, and Rust's word
+for the number. It is only worth having as a refund, and it comes back only if worst-case charging
+measurably starves real use. (5) Forward the resident's own JSON body. Then Lean decides on fields
+the provider may read differently (duplicate keys, a second model). Refused.
+
+**Staging.** Stage 1 is the Lean core (`Hosting/Broker.lean`, `Hosting/BrokerWire.lean`, their
+proofs, the JSON printer), then `emit` of the broker frames (CODEC), then keybroker with key custody
+and a launcher test. The test is a resident stand-in on its socket that gets each refusal by name,
+and a canary key that appears in no byte the resident receives. A 0644 key file stops keybroker by
+name. In that test the allowance comes from a Lean driver mode (the `hosting-drive` pattern), never
+from Rust. Stage 2 is the allowance package plus the World follower. Stage 3 is the resident plan
+(CLIENT `Policy.connect`, `nd --stdio`). Until stage 2 nothing deploys the broker; the test is its
+only caller.
+
+**CRITIQUE.** The window is the operator's clock. A clock set back across a restart re-opens a
+forfeited window: the operator's own money under option A, and a premise, not a theorem. "Input
+tokens ≤ input bytes" is a fact about the provider's tokenizer, true of byte-level BPE on text and
+recorded as a platform fact, not proved. A text-only ask (system plus role/text messages) cannot
+express tool use or images: Hermes will need more fields, and each one is a printer case with its
+own bound. Upstream is plain HTTP/1.1 to an operator-configured address. A real provider speaks TLS,
+so either the operator runs a local terminator or keybroker takes a TLS dependency into the
+key-holding process. That is decided at stage 2, not by default. A restart forfeits up to a window
+of budget (availability).
+**META.** I picked worst-case-final because it deletes settle, tickets, overrun and freeze: the
+smaller design, and I like small. The test is whether real asks starve under it, which is measurable
+at stage 3. Forfeit-on-restart is mine, and I am inclined to call it equivalent to the lease. The
+theorems above are the check: if they need a premise beyond a monotone clock, the lease was right.
+**Vacuity read (10-17, VACUITY-READER-H3B).** No statement was vacuous, but three holes.
+(1) No structural theorem about the body: a system printed raw passed every theorem. Now covered by
+`body_shape` (plant `raw-system` is red). (2) Nothing tied `cost` to the worst case: rounding down
+passed. Now `cost_worst` (plant `cost-round-down` is red). (3) The cross-life claim needs a fixed
+allowance; that premise is now stated above. Also added: a model priced 0 is refused,
+`grant_allowed` uses `md.name = ask.model`, and teeth for accumulation, `badAsk` and system.
+**Plants** (run 10-17, each red at named theorems): start meter at 0 (`fresh_start`,
+`forfeit_tooth`); the `overSpend` check deleted (`inv_decide`, `decide_ok`, `accumulate_tooth`);
+`"` unescaped (`unstr_str`, `body_tooth`); key slot 0 (`grant_allowed`); system raw (`body_shape`);
+cost rounded down (`cost_worst`); price-0 accepted (`grant_allowed`, `refusal_teeth`).
+**Owed.** `requestTooLarge` has no closed instance: it needs about 22 KB of control bytes, which is
+too large for the kernel, so the launcher test carries it. No theorem says a grant's verdict
+encodes: `hosting-broker` exits `unencodable` if it does not, after `decide` accepted. That fails
+safe, because the in-memory charge dies with the process and the restart forfeits the window.
+Second pass (same reader): ACCEPT. Its one loose end, that roles were not tied to the role bytes,
+is now part of `body_shape`.
+Status: stage 1 Lean half built (Broker, BrokerWire, `hosting-broker --drive`); keybroker next
+(CODEC: the emitted broker frames; CLIENT: the custody read shared from one place).
