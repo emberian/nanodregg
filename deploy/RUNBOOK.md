@@ -117,6 +117,41 @@ rendered by emit-units as `deploy/units/linux/nd-keybroker.service` (system unit
 - keybroker's and the decider's ends are `deploy/units/EXITS.md`'s two broker tables (HOSTING-16):
   every custody refusal stops the unit, a signalled or lagging decider restarts.
 
+### 2b. The hosted follower (HOSTING-17 §7, ROOT's ruling) — RENDERED, PENDING a run (OPS: burst5)
+
+The controller never reads the writer's files: it tails its OWN follow Store, written by `host follow`
+running as `nd-hosted`, one per hosted World, from the template
+`deploy/units/linux/nd-hosted-follow@.service` (instance = the World's label `L`):
+
+    nd-supervise /run/nd-follow/L.sock --write /srv/nd-hosted/worlds/L/store --exec /opt/nd/bin/host --group ${ND_GID} --hide /etc/nd --hide /home -- /opt/nd/bin/host follow /srv/nd-hosted/worlds/L/store ${ND_MEMBER} ${ND_GRANT}
+
+The direction rule: the TRUSTED side initiates. `host.sock` stays nd-only (0600); the follower's
+socket is shared with group `nd` (0660, `--group`, CLIENT-21) in `/run/nd-follow`, from
+`deploy/units/linux/tmpfiles/nd-follow.conf` (generated; `d /run/nd-follow 2710 nd-hosted nd -`:
+the setgid bit gives the socket group nd without nd-hosted joining it). nd-supervise refuses at
+launch (64) a socket directory not owned by the unit's user, not mode exactly 02710, under a parent
+another can write (`sharedDirRefused: Dir(PATH)`), or of another group (`groupMismatch`). Planted
+with the rendered argv (each rendered word replaced by a scratch path, `deploy/live`): under hbox's
+group-writable `/tank` it is refused `sharedDirRefused: Dir(...)`, as it must be.
+
+Install, per World `L` (after §2a's users):
+
+    sudo install -m 0644 deploy/units/linux/tmpfiles/nd-follow.conf /etc/tmpfiles.d/nd-follow.conf
+    sudo systemd-tmpfiles --create /etc/tmpfiles.d/nd-follow.conf
+    sudo install -d -o nd-hosted -g nd-hosted -m 0700 /srv/nd-hosted /srv/nd-hosted/worlds /srv/nd-hosted/worlds/L
+    sudo -u nd-hosted /opt/nd/bin/host genesis /srv/nd-hosted/worlds/L/store L --nonce NONCE KEY_HEX NEXT_HEX...
+
+(the writer's genesis REPRODUCED, as for a member, §2; its printed `chain` must equal the writer's),
+and `/etc/nd/hosted/L.env` (root-owned 0644) with `ND_MEMBER`/`ND_GRANT` of the follower's own
+OBSERVE-ONLY member (the operator's member enrols it, then `grant world MEMBER observe --via GRANT`:
+PENDING, PROTOCOL-7) and `ND_GID=$(getent group nd | cut -d: -f3)`. `grain-launch` reads
+`ROOT/worlds/L/store` with ROOT `/srv/nd-hosted`, so the follower writes exactly there.
+
+The DRIVER (PENDING: PROTOCOL-7's `sync` verb with its Lean exit table, CLIENT-3's
+`ND_FOLLOW_SOCK`/`ND_HOST_SOCK` and envelope-only custody): `nd sync` as nd on a timer, relaying the
+follower's log asks to `/run/nd/host.sock`; the follower's key is a custody record owned by nd under
+the §2a chain (`/etc/nd/follow/L/`). Until it lands the follower serves but never advances.
+
 ## 3. Status — RAN
 
     host check STORE

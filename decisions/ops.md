@@ -335,3 +335,36 @@ question "can it be wrong?", which I should have asked first. I lean toward rend
 (two new ones) where the RUNBOOK sufficed; the test is whether an operator ever types a mode by hand.
 **Status.** landed with this decision; follower and grain-launch units PENDING (CLIENT-3 `--group`,
 HOST-10 path shape, HOSTING-6 grain-launch exit table).
+
+## OPS-11 · the hosted follower is a template unit per World, its socket flat in /run/nd-follow (OPS-3, 2026-10-18)
+
+**Decision.** `deploy/units/linux/nd-hosted-follow@.service` (instance = the World's label):
+User=nd-hosted, `nd-supervise /run/nd-follow/%i.sock … --group ${ND_GID} …` (CLIENT-21, 77fde4e),
+writing `/srv/nd-hosted/worlds/%i/store` (the path grain-launch's controller reads), environment
+`/etc/nd/hosted/%i.env` (ND_MEMBER/ND_GRANT of an observe-only member, ND_GID), hiding `/etc/nd`
+and `/home`; `deploy/units/linux/tmpfiles/nd-follow.conf` `d /run/nd-follow 2710 nd-hosted nd -`.
+Node gains `template` (`%i` allowed in its paths; a plain unit's paths still refuse `%`, so an
+instance cannot leak into a non-template unit) and `group` (`--group ${ND_GID}` inside
+nd-supervise's options: `ofNode_group`). Path agreed with HOST-10 and CLIENT-3: FLAT, one socket per
+World in one directory, not a directory per World: nothing binds the follower socket into a
+sandbox (HOSTING-17 §4's reason for per-resident directories), and a per-World directory would
+need one tmpfiles line per World, operator data no generated file can hold. The rendered argv is
+run through the real nd-supervise by `deploy/live/follow-argv.py`: on hbox `/tank` it is refused
+`sharedDirRefused: Dir(...)` (64), the grammar accepted.
+**Alternatives.** (1) A unit per World rendered with the label baked in: generated files would hold
+operator data. (2) `Group=nd` on the follower: the process would run with nd's gid and reach nd's
+group-readable files; ROOT's rule is that nd-hosted joins no nd group. (3) The socket in a
+RuntimeDirectory: owned by User= with its primary group, not nd, and removed at stop.
+**CRITIQUE.** The follower is rendered but cannot advance until PROTOCOL-7's `sync` and CLIENT-3's
+custody mode land: a unit that serves and never moves. It is landed now so the driver unit renders
+against a real follower, and the RUNBOOK says so. All Worlds' follower sockets share one directory
+and one group: any process of uid nd can reach every World's follower, which the trust direction
+allows (nd is the trusted side) but which no check narrows. `%i` is systemd's ESCAPED instance; a
+label with characters systemd escapes would name another path. Labels are plain today
+(Controller's badLabel); that coupling is unproven. The positive run (a passing chain, nd connecting)
+is PENDING on burst5.
+**META-CRITIQUE.** I took the per-World-name shape to HOST and CLIENT with an argument from
+operator data ("no generated file can hold it") that is a convenience of my renderer; the stronger
+argument is that nothing needs the directory. Both were stated; the first could have carried a
+worse design.
+**Status.** landed; the driver (`nd sync` timer) PENDING PROTOCOL-7 + CLIENT-3; grain-launch PENDING HOSTING-19.

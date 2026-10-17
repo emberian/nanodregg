@@ -59,3 +59,14 @@ Findings, routed:
 - **An append past RLIMIT_FSIZE kills `host` instead of answering `uncertain`** (HOST): SIGXFSZ is
   not ignored. The Store stays sound (a torn tail, opened clean). HOST-6 told. Exit 3 restarted is
   therefore NOT yet shown on any box; this row is its plant.
+
+## The hosted follower's argv (OPS-3, 2026-10-18)
+
+`follow-argv.py UNIT DIR ND_SUPERVISE HOST` runs the rendered `nd-hosted-follow@.service`
+ExecStart, every rendered path and `${VAR}` replaced by a scratch value, through the real
+nd-supervise (77fde4e). On hbox, DIR under `/tank` (umask-002, group-writable): exit 64,
+`sharedDirRefused: Dir("/tank/dregg-build/nanodregg/logs/ops3-fol1")`, so the rendered
+`--group ${ND_GID}` sits where nd-supervise's grammar takes it (before `--`) and the shared-dir
+check refuses a chain another can write, by name. The positive run (a passing chain, the
+follower serving, an nd-group peer connecting) needs a box whose `/srv/scratch` chain passes:
+burst5, PENDING.
