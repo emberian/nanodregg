@@ -15,8 +15,9 @@ theorem mismatch_none_iff : ∀ (i : Nat) (gs es : List Expect), mismatch i gs e
       · subst h; simp [mismatch, mismatch_none_iff (i + 1) gs es]
       · simp [mismatch, h]
 
-theorem sameOps_iff (a b : List Op) : sameOps a b = true ↔ ∀ op, op ∈ a ↔ op ∈ b := by
-  simp only [sameOps, Bool.and_eq_true, List.all_eq_true, List.contains_iff_mem]
+theorem sameSet_iff {α : Type} [BEq α] [LawfulBEq α] (a b : List α) :
+    sameSet a b = true ↔ ∀ x, x ∈ a ↔ x ∈ b := by
+  simp only [sameSet, Bool.and_eq_true, List.all_eq_true, List.contains_iff_mem]
   constructor
   · rintro ⟨h1, h2⟩ op; exact ⟨h1 op, h2 op⟩
   · intro h; exact ⟨fun op m => (h op).1 m, fun op m => (h op).2 m⟩
@@ -26,11 +27,12 @@ theorem judge_exe_pass_iff {r : Row} {o : Observed} {n : String} {args : List St
   unfold judge; rw [h]
   by_cases he : o.exit = 0 <;> by_cases hl : o.last = last <;> simp [he, hl]
 
-/-- A member row passes iff every line got its declared outcome and the operations observed on the
-wire are exactly the declared ones. -/
+/-- A member row passes iff every line got its declared outcome, the operations observed on the
+wire are exactly the declared ones, and so are the kinds of the calls the clients froze. -/
 theorem judge_members_pass_iff {r : Row} {o : Observed} {ls : List Line}
     (h : r.drive = .members ls) :
-    judge r o = .pass ↔ o.outcomes = ls.map Line.expect ∧ ∀ op, op ∈ o.ops ↔ op ∈ r.ops := by
+    judge r o = .pass ↔ o.outcomes = ls.map Line.expect ∧ (∀ op, op ∈ o.ops ↔ op ∈ r.ops) ∧
+      ∀ k, k ∈ o.kinds ↔ k ∈ r.kinds := by
   unfold judge; rw [h]
   cases hm : mismatch 0 o.outcomes (ls.map Line.expect) with
   | some why =>
@@ -40,9 +42,15 @@ theorem judge_members_pass_iff {r : Row} {o : Observed} {ls : List Line}
   | none =>
       have he := (mismatch_none_iff 0 _ _).mp hm
       simp only [hm]
-      by_cases hs : sameOps o.ops r.ops = true
-      · simp [hs, he, (sameOps_iff _ _).mp hs]
-      · have : ¬ ∀ op, op ∈ o.ops ↔ op ∈ r.ops := fun hh => hs ((sameOps_iff _ _).mpr hh)
+      by_cases hs : sameSet o.ops r.ops = true
+      · by_cases hk : sameSet o.kinds r.kinds = true
+        · simp [hs, hk, he, (sameSet_iff _ _).mp hs, (sameSet_iff _ _).mp hk]
+        · have : ¬ ∀ k, k ∈ o.kinds ↔ k ∈ r.kinds := fun hh => hk ((sameSet_iff _ _).mpr hh)
+          simp [hs, hk, he, this]
+      · have : ¬ ∀ op, op ∈ o.ops ↔ op ∈ r.ops := fun hh => hs ((sameSet_iff _ _).mpr hh)
         simp [hs, he, this]
+
+/-- Every row's plant targets a line it has, with an outcome other than the declared one. -/
+theorem plants_differ : rows.all Row.plantDiffers = true := by decide
 
 end Nanodregg.Protocol

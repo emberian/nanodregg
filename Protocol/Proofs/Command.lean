@@ -70,18 +70,18 @@ theorem plan_admits {X : Ctx D} {me : Self D} {w : World D} {key : ByteArray} {b
 
 /-- Consent at the wire: the only call `step` hands the client to submit is a call over a `u`
 that `plan` produced on follow's own World (hence derived and admitted there, `plan_admits`). -/
-theorem step_submit_planned {X : Ctx D} {me : Self D} {w w' : World D}
-    {kb result call k : ByteArray} (h : step X me w kb result = (w', .submit call k)) :
-    w' = w ∧ ∃ key b u sig, plan X me w key b = .ok u ∧ call = X.callBytes ⟨u, sig⟩ := by
+theorem step_submit_planned {X : Ctx D} {me : Self D} {w w' : World D} {ts : List (Turn D)}
+    {kb result call k : ByteArray} (h : step X me w kb result = (w', ts, .submit call k)) :
+    w' = w ∧ ts = [] ∧ ∃ key b u sig, plan X me w key b = .ok u ∧ call = X.callBytes ⟨u, sig⟩ := by
   unfold step next at h
   repeat' split at h
   all_goals (try simp only [refused, printed, Prod.mk.injEq, reduceCtorEq, and_false] at h)
   all_goals (repeat' split at h)
   all_goals (try simp only [Prod.mk.injEq, reduceCtorEq, and_false] at h)
-  all_goals (try (exfalso; obtain ⟨_, h⟩ := h; unfold render at h; repeat' split at h
+  all_goals (try (exfalso; obtain ⟨_, _, h⟩ := h; unfold render at h; repeat' split at h
                   all_goals simp [refused, printed] at h))
-  all_goals (try (obtain ⟨h1, h2⟩ := h; injection h2 with h3 h4; subst h1 h3
-                  exact ⟨rfl, _, _, _, _, ‹plan _ _ _ _ _ = _›, rfl⟩))
+  all_goals (try (obtain ⟨h1, h0, h2⟩ := h; injection h2 with h3 h4; subst h1 h0 h3
+                  exact ⟨rfl, rfl, _, _, _, _, ‹plan _ _ _ _ _ = _›, rfl⟩))
   done
 
 end Nanodregg.Protocol.Command

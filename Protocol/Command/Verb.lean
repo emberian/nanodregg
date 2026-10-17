@@ -26,8 +26,6 @@ inductive Verb
   | init
   /-- `enroll TOKEN`: sponsor a new member -/
   | enroll
-  /-- `follow MEMBER`: let MEMBER follow the World, under the signer's follow grant -/
-  | follow
   /-- `install TEXT`: install the package TEXT reads to (LANG's text form) -/
   | install
   /-- `create LAW…`: birth a data object owned by the signer, judged by the laws -/
@@ -38,22 +36,27 @@ inductive Verb
   | law
   /-- `invoke OBJ METHOD ARGS [--via GRANT]`: run a method -/
   | invoke
-  /-- `grant TARGET MEMBER RIGHTS`: RIGHTS is `observe`, `mutate`, `invoke:N`, comma-separated -/
+  /-- `grant TARGET MEMBER RIGHTS [--via PARENT]`: TARGET is an object or `world` (the World,
+  KERNEL-20: `observe` on it is following the log, `enroll:N` is sponsoring N members); RIGHTS is
+  `observe`, `mutate`, `invoke:N`, `enroll:N`, comma-separated; PARENT is the grant attenuated -/
   | grant
   /-- `revoke GRANT` -/
   | revoke
   /-- `read OBJ [KEY=VALUE…]`: print the object's state slots; each `KEY=VALUE` must hold -/
   | read
+  /-- `rotate`: move the member to custody's precommitted NEXT key, precommitting the one after -/
+  | rotate
   deriving DecidableEq, Repr
 
 namespace Verb
 
-def all : List Verb := [init, enroll, follow, install, create, write, law, invoke, grant, revoke, read]
+def all : List Verb :=
+  [init, enroll, install, create, write, law, invoke, grant, revoke, read, rotate]
 
 def word : Verb → String
-  | init => "init" | enroll => "enroll" | follow => "follow" | install => "install"
+  | init => "init" | enroll => "enroll" | install => "install"
   | create => "create" | write => "write" | law => "law" | invoke => "invoke"
-  | grant => "grant" | revoke => "revoke" | read => "read"
+  | grant => "grant" | revoke => "revoke" | read => "read" | rotate => "rotate"
 
 def ofWord? (s : String) : Option Verb := all.find? (·.word == s)
 
@@ -70,15 +73,16 @@ structure Join (D : Type) where
 inductive Cmd (D : Type)
   | init (sponsor : D)
   | enroll (join : Join D)
-  | follow (grantee : D)
   | install (pkg : ByteArray)
   | create (laws : List D)
   | write (obj : D) (key : Nat) (value : ByteArray) (via : Option D)
   | law (obj : D) (laws : List D) (via : Option D)
   | invoke (obj : D) (method : Nat) (args : ByteArray) (via : Option D)
-  | grant (target grantee : D) (rights : List Right)
+  /-- `target = none` is the World -/
+  | grant (target : Option D) (grantee : D) (rights : List Right) (via : Option D)
   | revoke (grant : D)
   | read (obj : D) (expect : List (Nat × ByteArray))
+  | rotate
 
 /-- Every way an argv is refused. -/
 inductive ParseRefusal
@@ -113,11 +117,11 @@ def ParseRefusal.tag : ParseRefusal → Nat
   | .badPackage _ => 10
 
 def usage : Verb → String
-  | .init => "init SPONSOR" | .enroll => "enroll TOKEN" | .follow => "follow MEMBER"
+  | .init => "init SPONSOR" | .enroll => "enroll TOKEN"
   | .install => "install TEXT" | .create => "create LAW..."
   | .write => "write OBJ KEY VALUE [--via GRANT]" | .law => "law OBJ LAW... [--via GRANT]"
-  | .invoke => "invoke OBJ METHOD ARGS [--via GRANT]" | .grant => "grant TARGET MEMBER RIGHTS"
-  | .revoke => "revoke GRANT" | .read => "read OBJ [KEY=VALUE...]"
+  | .invoke => "invoke OBJ METHOD ARGS [--via GRANT]" | .grant => "grant TARGET MEMBER RIGHTS [--via PARENT]"
+  | .revoke => "revoke GRANT" | .read => "read OBJ [KEY=VALUE...]" | .rotate => "rotate"
 
 def argvSize (argv : List ByteArray) : Nat := 4 + (argv.map (4 + ·.size)).sum
 
@@ -157,7 +161,9 @@ def rightArg (s : String) : Except ParseRefusal Right :=
   else if s = "mutate" then .ok .mutate
   else match (s.dropPrefix? "invoke:").bind (·.toString.toNat?) with
     | some m => .ok (.invoke m)
-    | none => .error (.badRight s)
+    | none => match (s.dropPrefix? "enroll:").bind (·.toString.toNat?) with
+      | some n => .ok (.enroll n)
+      | none => .error (.badRight s)
 
 def expectArg (s : String) : Except ParseRefusal (Nat × ByteArray) :=
   match s.splitOn "=" with
@@ -194,7 +200,6 @@ def parseVerb (v : Verb) (args : List String) : Except ParseRefusal (Cmd D) :=
       match Text.ofHex t >>= Join.ofBytes digestOf with
       | some j => .ok (.enroll j)
       | none => .error (.badToken t)
-  | .follow, [m] => .follow <$> digestArg digestOf m
   | .install, [t] => (.install ·) <$> packageArg t
   | .create, ls => .create <$> mapEx (digestArg digestOf) ls
   | .write, o :: k :: val :: via => do
@@ -204,11 +209,13 @@ def parseVerb (v : Verb) (args : List String) : Except ParseRefusal (Cmd D) :=
       do pure (.law (← digestArg digestOf o) (← mapEx (digestArg digestOf) ls) (← viaArg digestOf .law via))
   | .invoke, o :: m :: a :: via => do
       pure (.invoke (← digestArg digestOf o) (← numArg m) a.toUTF8 (← viaArg digestOf .invoke via))
-  | .grant, [t, m, rs] => do
-      pure (.grant (← digestArg digestOf t) (← digestArg digestOf m)
-        (← mapEx rightArg (rs.splitOn ",")))
+  | .grant, t :: m :: rs :: via => do
+      let target ← if t = "world" then pure none else some <$> digestArg digestOf t
+      pure (.grant target (← digestArg digestOf m) (← mapEx rightArg (rs.splitOn ","))
+        (← viaArg digestOf .grant via))
   | .revoke, [g] => .revoke <$> digestArg digestOf g
   | .read, o :: es => do pure (.read (← digestArg digestOf o) (← mapEx expectArg es))
+  | .rotate, [] => .ok .rotate
   | _, _ => bad
 
 /-- THE parser: argv bytes to a command, or a refusal by name. -/

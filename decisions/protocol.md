@@ -271,3 +271,90 @@ different heights render alike on the wire, which is a choice (names, not values
 judge relies on. **Meta-critique.** Reserving an op instead of deleting it keeps a dead entry
 alive for a ruling that may take weeks; the reservation is honest only while the ruling is open.
 **Status.** ruled by ROOT 2026-10-16.
+
+## PROTOCOL-14 · thin consent: what a member that cannot fold the whole log verifies (2026-10-16, DRAFT with HOST-3; Ember ruled thin IN "if we can get away with it")
+**What exists to verify against (read, not assumed).** The World commits to its log by `chain` (one
+digest per height, `chainNext`); it commits to its CELLS by nothing: there is no state root. CODEC-14's
+`world dc` gives a canonical byte string for a whole World, so a whole World has a digest; a single
+cell has no inclusion proof against anything.
+**Option A — ONE code path: `host follow` folding from a verified BASE instead of genesis.** `read`
+serves a base: the World codec bytes at a height `h` with the writer's chain at `h` (paged; HOST-14's
+base IS this). The thin member accepts the base only if `H(world bytes)` equals a base digest it
+already trusts — one it folded itself earlier, or one a FULL follower it trusts countersigned out of
+band (a friend's `host follow`). From there it runs the same `absorb` (re-derive every event, PROTOCOL-4)
+over the suffix, and the same `absorbPage` chain assertion. Verifies: every transition after the base
+(full consent from `h` on), the chain from `h`. Trusts: the base's transitions (whoever attested the
+digest). Cannot detect: a withheld-but-valid suffix (the writer serves height `h' < tip`: consistent,
+just stale — a thin member that never talks to another follower cannot tell), and anything before the
+base. Cost: O(World) bytes once per base, O(suffix) per sync; no new verifier, no proof format.
+Plant: a base whose bytes do not hash to the trusted digest is refused `baseMismatch`; a forged CELL in
+the served base is exactly that (the "forged inclusion" of ROOT's ask).
+**Option B — a SECOND code path: per-cell inclusion against a state root.** KERNEL keeps an
+authenticated map over cells (a Merkle trie, O(log n) per touched cell, law 4 holds), the Turn or the
+chain commits its root, CODEC defines a path format, and the thin member verifies `(cell, path, root,
+chain)` without folding. Verifies: that the cell is in the state the chain names. Trusts: every
+transition (it re-derives nothing: a forged write by the writer is invisible) — genuinely "thin".
+Cannot detect: forged transitions, withheld suffixes. Cost: a root update on every admitted Turn on
+THE BAR path, a second verifier (law 1's "one admission path" is not broken, but "one consent path"
+is), a proof format CODEC must make canonical.
+**Proposed.** A for v0: it is the same function a full follower runs, from a later start, so it costs
+the code that exists plus a base op; `read` comes off the reserved list as "serve the base at a height"
+(envelope-gated, PROTOCOL-3) and row `thin` ships with the `baseMismatch` plant. B is a declared absence
+until a row needs O(log n) single-cell reads (a phone that cannot hold the World).
+**Critique.** A does not fit a phone if the World is large: "thin" in A is thin in TIME (no fold of the
+prefix) not in SPACE (the whole World is held). If Ember's phone means "cannot hold the World", A
+does not answer it and B is required. The trusted base digest is a new trust input with no channel:
+who countersigns, and how a member learns it, is a custody/identity question (pause list item 1).
+**Meta-critique.** I prefer A because it keeps one consent path, which is the law I can cite; B is the
+design the word "thin" usually means, and I may be redefining the requirement to fit the code.
+**Status.** draft; HOST-3 asked (base serving, paging, base digest); Ember/ROOT to say whether "thin"
+means time (A) or space (B).
+
+## PROTOCOL-15 · the member rows run in process against HOST's loop; plants are mutations of the parameters, judged by line and outcome (2026-10-16)
+**Decision.** `Protocol/Rows/Loopback.lean` runs every member row against a fresh writer
+(`Protocol/Rows/Writer.lean`: `Host.serve` itself, on a dedicated thread, over the in-memory segment
+and base, reopened by `Host.openWith`) and per actor an in-process client: follow's machine on the
+actor's own World, custody (toy keys by generation; precommit/signNext; advance only on its own
+settlement of the armed attempt), the attempt store (a lost reply is settled by `lookup` of the same
+bytes, never re-signed). Every step crosses the wire codecs (`commandFrame`, `Reply.bytes`/`ofBytes`,
+`resumeFrame`) and the call codec is CODEC's (`Codec.Kernel`, `Stream.u64` digest). The driver
+records every op it sends and the receiver kind of every call it freezes; the judge requires both
+to equal the row's declared ones (`judge_members_pass_iff`, now with kinds). A passing row is run
+again under its plant (`Mutation`: openLog, skipJudge, followVerifyAll, forgetJournal, resendFresh,
+zeroDeadline, advanceOnSend), and must be caught: the lines before the plant's line keep their
+outcomes and that line gets the planted outcome (`caught`; `plants_differ` says that outcome is
+never the declared one). A row whose system piece does not exist is PENDING by name (`blockedOn`,
+with its owner), never PASS, never a red that hides the others.
+**Alternatives.** (a) Wait for HOST-3's exe and CLIENT's nd and run rows over sockets only.
+(b) Plants as patched source trees (minidregg's scripts/plants). (c) Rows blocked on missing
+packages as FAIL.
+**Why.** (a) leaves the whole spec unexecuted for another day, and the socket run adds transport,
+not decisions: every decision is in the Lean this driver runs. (b) costs a build per plant; a
+mutation of the parameters (Ctx, the writer's gate, custody's rule) is the same pipeline with one
+part swapped, and the plant check is a pure function. (c) makes standing RED for absences, and
+red-as-steady-state hides the next real red.
+**Critique.** The driver IS a second client: its custody and attempt store restate CLIENT's rules
+in Lean (a twin of Rust policy; law 2 says those rules belong in Lean anyway, so the honest end is
+CLIENT driving a Lean attempt-store decision, not two). The `log` arm is not HOST's yet (Writer
+documents it and deletes it when HOST-3 lands). Plants mutate what the driver can reach: a receiver
+mutation (KERNEL's dispatch) is out of reach, so "the receiver skips the grant check" is not a
+plant here; kernel-sim owns that class. Timings are in-process: no socket, no ssh, no fsync.
+**Meta-critique.** Everything went green on the first full run but four plant targets: I wrote the
+rows and the driver in one pass, so they can share a misconception (they did twice: a plant line
+index off by one, and custody arming the wrong attempt); the kinds check found two rows declaring
+less than they drove.
+**Status.** open.
+
+## PROTOCOL-16 · KERNEL-20: the verb `follow` is DELETED; `grant world MEMBER observe --via G` says it (2026-10-16)
+**Decision.** With one grant kind and the World a grant target, "let MEMBER follow" is `grant` of
+`observe` on the World, attenuated from the signer's World grant. The command language says exactly
+that: `grant TARGET MEMBER RIGHTS [--via PARENT]`, TARGET an object or `world`; `enroll:N` is a right;
+`enroll TOKEN` spends the signer's World grant (`me.grant`). Verbs 12 → 11 (rotate added).
+**Alternatives.** Keep `follow MEMBER` as sugar for the same Body.
+**Why.** Sugar adds no code path but a second spelling of one call; a row or a member reading
+`follow` then has to know it is a grant, and `grant` could not otherwise name the World or a parent
+at all (its parent was hard-wired `none`, so attenuation was unreachable from the language).
+**Critique.** `--via @me.grant` is boilerplate on every follow grant; members must know their own
+World grant's id (they do: it was bound when they were granted). **Meta-critique.** Deleting a verb
+lowers a SIZE count, which I am rewarded for; the test is whether any row reads worse, and none does.
+**Status.** open.
