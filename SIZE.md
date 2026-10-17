@@ -6,7 +6,7 @@
 | metric | now | ceiling |
 |---|---|---|
 | Lean modules in the Host closure | 0 | 150 |
-| Lean lines (deployed) | 6038 | — |
+| Lean lines (deployed) | 6286 | — |
 | protocol operations | 6 | 6 |
 | call kinds (Receive.Body constructors) | 10 | 10 |
 | command verbs (the one command language) | 0 | 20 |
@@ -16,17 +16,17 @@
 | Rust lines | 2742 | — |
 | Rust lines (client/src) | 1541 | 2000 |
 | partial defs (deployed) | 0 | 0 |
-| theorems | 280 | — |
+| theorems | 284 | — |
 | sorry | 0 | 0 |
-| Lean modules | 83 | — |
-| Lean proof-modules | 30 | — |
+| Lean modules | 85 | — |
+| Lean proof-modules | 31 | — |
 | Lean lines (Census) | 89 | — |
-| Lean lines (Codec) | 1392 | — |
+| Lean lines (Codec) | 1681 | — |
 | Lean lines (Emit) | 279 | — |
 | Lean lines (Host) | 1677 | — |
 | Lean lines (Kernel) | 2641 | — |
 | Lean lines (Protocol) | 796 | — |
-| max dependents of one module | 59 | — |
+| max dependents of one module | 61 | — |
 | native (extern/implemented_by) | 8 | 8 |
 | C lines | 0 | 146 |
 | Lean lines (Lang) | 3302 | — |

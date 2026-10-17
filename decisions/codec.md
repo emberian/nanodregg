@@ -111,7 +111,16 @@ replacement, HP-7). If the hot path hashes every leg, this is the floor of THE B
 right choice if speed dominates and nobody needs SP 800-185 compatibility. Nobody does.
 **Meta-critique.** Familiarity with minidregg's cSHAKE. The deciding measurement (permutations per
 write × instr/permutation against the 5 s bar) is not taken yet.
-Status: open. Measure before the Host's hot path depends on it.
+**Measured (2026-10-16, Codec/Hash.lean, Apple M-series laptop, compiled `lake` exe, one core).** A first
+version with a `Vector UInt64 25` state ran at 0.6 MB/s (every lane boxed, ~200 µs per permutation).
+The landed version keeps 25 unboxed `UInt64` fields in a structure, with one round unrolled (generated from
+the FIPS 202 ρ/π tables): **184 MB/s on a 1 MiB message (5.7 ms/MiB), 2.2 µs for a 200-byte digest**
+(≈ 0.7 µs per permutation). At THE BAR (1000 records of ~4 KB) that is ~4 MB, about 22 ms of hashing,
+against the 5 s budget. The base MAC of a 0.7 MB World is ~4 ms, about one fsync. The NIST
+vectors (SHA3-256 "" and "abc", cSHAKE256 Sample #4, KMAC256 Sample #4) are theorems closed by
+`decide +kernel` (7.6 s for all four), with no native_decide.
+Status: open. The speed critique is answered for THE BAR. BLAKE3 stays the alternative if a profile
+ever shows hashing on top.
 
 ## CODEC-7 · Ask of KERNEL: domains are a hash argument, not a byte prefix (2026-10-16)
 **Decision (proposed).** `Env.hash : (domain : String) → ByteArray → D`, deployed as cSHAKE256's
