@@ -16,6 +16,7 @@ host	-	the deployed binary; the sims, rows and plants drive it
 emit-rust	-	a generator; gates/generated.tsv checks its output
 emit-units	-	a generator; gates/generated.tsv checks its output
 emit-hosting	-	a generator; gates/generated.tsv checks its output
+emit-broker	-	a generator; gates/generated.tsv checks its output
 live-calls	-	a generator of deploy/live/ inputs; deploy/live/harness.sh drives it against running units
 ob	-	LANG's resident check, an interactive tool: lang-journey and the rows drive the same code
 cargo:launcher:isolation	hosting-drive	exit 0

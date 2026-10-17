@@ -68,6 +68,10 @@ package nanodregg where
 @[default_target] lean_exe «emit-hosting» where
   root := `Emit.HostingMain
 
+-- The Rust copy of the broker frames (launcher/src/broker_generated.rs). Imports Hosting.BrokerWire.
+@[default_target] lean_exe «emit-broker» where
+  root := `Emit.BrokerMain
+
 -- KERNEL's seeded simulation: `kernel-sim SEED…` (or `--seeds N`), ends `ALL PASS` (standing.sh).
 @[default_target] lean_exe «kernel-sim» where
   root := `Kernel.Sim.Main

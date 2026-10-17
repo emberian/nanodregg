@@ -192,8 +192,13 @@ def structFor (name : String) (max : Nat) (l : Layout) (total : Option Nat := no
 fields; an unknown tag is `BadTag` at its offset. `name` is the enum, `cases` (variant, code, layout). -/
 def taggedEnum (name : String) (max : Nat) (cases : List (String × UInt8 × Layout)) : String :=
   let var := String.ofList (name.toList.map Char.toLower)
+  -- rustfmt's layout: when every struct variant's `{ fields }` body fits `struct_variant_width` (35),
+  -- each is one line; if any does not, all are vertical
+  let body (l : Layout) := "{ " ++ String.intercalate ", " (l.map fun f => s!"{snake f.name}: {rustType camel f}") ++ " }"
+  let short := cases.all fun (_, _, l) => !l.isEmpty && (body l).length ≤ 35
   let variants := cases.map fun (v, _, l) =>
-    String.intercalate "\n" ([s!"        {camel v} \{"] ++ fieldDecls "            " "" l ++ ["        },"])
+    if short then s!"        {camel v} {body l},"
+    else String.intercalate "\n" ([s!"        {camel v} \{"] ++ fieldDecls "            " "" l ++ ["        },"])
   let readArms := cases.map fun (v, code, l) =>
     String.intercalate "\n" ([s!"                {code} => \{"] ++
       l.map (fun f => "                    " ++ readField max f) ++

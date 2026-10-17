@@ -2,3 +2,4 @@
 emit-rust	client/src/generated.rs
 emit-units	deploy/units
 emit-hosting	launcher/src/generated.rs
+emit-broker	launcher/src/broker_generated.rs

@@ -560,3 +560,24 @@ the law on projective classes (and that `PQ = P.add Q` is what `verify` passes),
 check is then the RFC's cofactored equation. The primality proof trusts `decide +kernel` (the kernel's
 GMP-accelerated `Nat` arithmetic), as every literal check here does.
 Status: parts 1–2 built; part 3 (`mul2` = `[a]P + [b]Q` via associativity; `verify` = the RFC equation) open.
+
+## CODEC-24 · The broker frames are a second generated file, `emit-broker` (HOSTING-3's ask; CODEC-3, 2026-10-17)
+**Decision.** `Emit/Broker.lean` prints `launcher/src/broker_generated.rs` by `Rust.taggedFile` from
+`Hosting.Broker.Wire.{askCases, requestCases, verdictCases, answerCases}` as `wire::{Ask, Request, Verdict,
+Answer}`, with `FRAME_MAX = Broker.Bounds.frameMax` (131072, the frame and every field bound) and the
+15-case refusal table as `wire::BrokerRefusal` (with `name()`). Its own exe `emit-broker` (only `main`)
+and its own `gates/generated.tsv` row. `taggedEnum` now prints struct variants the way rustfmt does:
+when every variant's `{ fields }` body fits rustfmt's `struct_variant_width` (35), each is one line;
+otherwise all are vertical. The two existing generated files are byte-identical.
+**Alternatives.** One file with two bounds (taggedFile takes one `max`: the field readers would need a bound
+per family). `emit-hosting` writing both files, chosen by the path argument (an output that depends on its
+file name). Running rustfmt over the output in the gate (a second tool in the generated check).
+**Why.** One file per bound keeps `taggedFile` unchanged. The generated check compares bytes, so the file
+must already be rustfmt's shape.
+**Critique.** The rustfmt rule is copied, not derived: it was measured against rustfmt 1.10 on these files
+(the all-or-nothing variant rule and width 35), and a rustfmt version that changes it shows up as a fmt red
+in the crate, not in the generated gate. Both files define `wire` and `FRAME_MAX`. They are separate Rust
+modules, so this is not a collision, but a reader has to check which `FRAME_MAX` is in scope.
+**Meta-critique.** I matched rustfmt's output rather than making the emitter's layout independent of rustfmt,
+because the crate's fmt check is HOSTING's gate and a generated file has to pass it.
+Status: built.
