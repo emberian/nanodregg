@@ -1,3 +1,4 @@
 # exe<TAB>path — a generated file must equal what its Lean generator emits (`lake exe EXE --check PATH`)
 emit-rust	client/src/generated.rs
 emit-units	deploy/units
+emit-hosting	launcher/src/generated.rs

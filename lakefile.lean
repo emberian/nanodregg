@@ -52,6 +52,10 @@ package nanodregg where
 @[default_target] lean_exe «emit-rust» where
   root := `Emit.Main
 
+-- The Rust copy of HOSTING frames (launcher/src/generated.rs). Imports Hosting.Wire; nothing imports it.
+@[default_target] lean_exe «emit-hosting» where
+  root := `Emit.HostingMain
+
 -- KERNEL's seeded simulation: `kernel-sim SEED…` (or `--seeds N`), ends `ALL PASS` (standing.sh).
 @[default_target] lean_exe «kernel-sim» where
   root := `Kernel.Sim.Main
