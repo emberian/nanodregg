@@ -35,9 +35,11 @@ in `~/dev/redregg/work/`: `ARCHITECTURE-20261016.md`, `CYCLE-TIME-20261016.md`,
    placed where the premise enters, each paired with the theorem that relies on it (KERNEL's K1
    restatement, accepted 10-16: inside a total Lean definition an "invariant assertion" only
    re-checks the compiler); no `partial def` in deployed code; no unbounded recursion; no
-   allocation per byte; O(touched) work per request, never O(store). The ONE unbounded loop is the
-   resident's top-level fuel-and-restart loop; everything under it is bounded (ROOT ruling on
-   HOST's LAW-4 critique, 10-16). A resource whose LIFETIME is the guarantee (a lock, a lease, a
+   allocation per byte; O(touched) work per request, never O(store). The resident's top-level
+   fuel-and-restart loop is TOTAL: bounded by a LIFETIME constant (fuelBatches × restartsMax, larger
+   than the reader's 2^48-frame lifetime) that no physical run can exhaust, with the theorem that
+   exhausting it exits by name, never silently; no `partial` anywhere (HOST-19, blessed 10-17;
+   supersedes the 10-16 "one unbounded loop" wording). A resource whose LIFETIME is the guarantee (a lock, a lease, a
    PID-file descriptor) must be the handle actually in use, never a held-but-unused value: compiled
    Lean frees a value at its last use, which dropped the writer lock mid-serve until the lock became
    the append fd itself (HOST 7e23642; the plant was a second writer).
