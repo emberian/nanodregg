@@ -36,7 +36,7 @@ def rust_lines(root: str) -> int:
 # rows): metric -> [(module prefix, inductive name)]; a missing module counts 0.
 CONSTRUCTORS = {
     "protocol operations": [("Protocol.Table", "Op")],
-    "call kinds (Receive.Call constructors)": [("Kernel.Receive", "Call")],
+    "call kinds (Receive.Body constructors)": [("Kernel.Receive", "Body")],
     "command verbs (the one command language)": [("Protocol.Command", "Verb")],
     "refusal constructors": [("Kernel.World", "Reject"), ("Kernel.Receive", "Refusal")],
 }

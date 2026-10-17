@@ -258,9 +258,10 @@ def bar : Row where
 
 /-! ## Lean-internal rows
 
-Rows whose driver is an executable of this tree: the real receivers and `World.admit` in one process
-under the Sim's toy parameters, with no socket. They reach kinds and refusals but no operation, so
-`ops` is empty; each executable runs its own plant and goes red by name if the plant stays green. -/
+A row whose driver is an executable of this tree: the real receivers and `World.admit` in one process
+under the Sim's toy parameters, with no socket. It reaches kinds and refusals but no operation, so
+`ops` is empty; the executable runs its own plant and goes red by name if the plant stays green.
+The `*-sim` executables are NOT rows: standing's sim stage is their one judge (ROOT, PROTOCOL-10). -/
 
 /-- LANG's first law end to end (L1–L7): install → create → invoke; laws refuse by name. -/
 def langJourney : Row where
@@ -272,28 +273,8 @@ def langJourney : Row where
   plant := "a program whose judge admits everything (skip-judge)"
   plantRed := "L4 set 101 admitted under the planted judge, so the refusal came from the law"
 
-/-- KERNEL's seeded simulation, seed 1: honest and adversarial calls, restarts, follower and auditor. -/
-def kernelSim : Row where
-  name := "kernel-sim"
-  replaces := ["sim/kernel"]
-  ops := []
-  kinds := ["enroll", "rotate", "create", "write", "law", "grant"]
-  drive := .exe "kernel-sim" ["1"] "ALL PASS"
-  plant := "the pin check disabled"
-  plantRed := "FAIL stale … got admitted"
-
-/-- HOST's loop over the in-memory disk, seed 1, with its crash plants. -/
-def hostSim : Row where
-  name := "host-sim"
-  replaces := ["sim/host", "crash/torn-tail"]
-  ops := []
-  kinds := []
-  drive := .exe "host-sim" ["1"] "ALL PASS"
-  plant := "a failing fsync; a flipped byte in a frame body, a length header, the last frame"
-  plantRed := "FAIL plant-fsync-fail… / plant-flip-…: the loop stops uncertain, the segment is corrupt or torn"
-
 def rows : List Row :=
   [journey, reopen, laws, rotate, audit, pay, well, bounty, grain, hermes, bar,
-   langJourney, kernelSim, hostSim]
+   langJourney]
 
 end Nanodregg.Protocol

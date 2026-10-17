@@ -206,3 +206,7 @@ they are rows only because ROOT ruled so, and the cost is 2 s. **Meta-critique.*
 part that is green today (exe rows) first and left eleven member rows PENDING behind a driver I have
 not written; PENDING is honest only while the member driver is the very next commit.
 **Status.** open.
+**Ruled by ROOT 2026-10-16:** judge theorems accepted; the pushback WINS: kernel-sim and host-sim are
+not rows (standing's sim stage is their one judge); the "call kinds" metric counts `Receive.Body`
+(10) with ceiling 10. PROTOCOL-9 findings 1 (oneOf, CODEC told) and 2 (argv total in Command.parse)
+endorsed.
