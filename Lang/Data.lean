@@ -96,4 +96,10 @@ def Machine.extractRow (m : Machine) :
   | _, _, _ => .error .stuck
 end
 
+/-- A field of record data (first match, as selection reads it). -/
+def Data.field (d : Data) (ℓ : Label) : Option Data :=
+  match d with
+  | .record fs => Row.find? ℓ fs
+  | _ => none
+
 end Nanodregg.Lang

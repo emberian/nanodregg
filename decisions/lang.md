@@ -195,3 +195,110 @@ which only a constructor establishes) that this loses. Nobody has asked an autho
 Re-genesis. Re-emitted:
 `Journey.ownedText` (now printed from `reqTy` by `Read.showTy`, never restated), PROTOCOL's
 `Protocol/Rows.lean` `reqTy` string (cross-layer; PROTOCOL asked to print it from `Lang.reqTy`).
+
+## LANG-20 The law library: generated core terms, each with a meaning theorem over `BigStep` (2026-10-16; ID-2, ID-3)
+**Decision.** `Lang/Std.lean` holds Lean GENERATORS that emit closed terms of type `lawTy S`;
+nothing in it runs at admission. Every law is `lawOf S birth relaw change` (`λ old new req. case
+req.occasion` with an arm for every act, LANG-19): there is no default arm, so each law states
+what it does at a birth and at a relaw (`lawOf4` gives writes and invokes separate clauses).
+Clauses are written against `At` (how many binders sit below the law's three arguments), so a
+clause may open a `case` of its own and still name `old`, `new`, `req`. AUTHORITY IS THE KERNEL'S
+once KERNEL-25 lands (ruled 10-17, NOT YET BUILT: invoke owner-gated like write, so every admitted
+act's `principal` is the object's owner or a chain rooted at it, and a stranger never reaches a
+law; today a write or relaw already is, an invoke is not); a law only NARROWS it. Laws: `ownerSigns` (the signer is the principal: no delegate acts through a grant);
+`allowlist` (the signer is listed, every occasion); `bounded` (a natural
+field ≤ max in every state, the seed included); `quorum S T members k guarded` with state
+`{approvals : nat (a mask over the members), proposal : sum {laws : bytes, set : T}}` where a
+change is exactly one of commit (the guarded field becomes the proposed value, ≥ k approvals,
+approvals reset), propose (proposal changes, approvals reset), approve (the signer adds its own
+unset bit) or a no-op, a birth has no approvals, and a relaw needs ≥ k approvals of exactly the
+incoming laws; `windowed S T W limit guarded` (the signed window lies in one epoch `notBefore / W`,
+the state's `epoch` is it, `count` rises by one per change of `guarded` up to `limit`, a later
+epoch restarts it; no clock holder, the probe's H3); `machine S f states initial edges` (a
+finite-state field moved only by methods along named edges `(from, method label, to)`; writes and
+relaws refused) with its method `stepTo` (for HOSTING's grain lifecycle). `pkgOf S laws methods`.
+ID-3's required `Authority` (with `anyone` and `ownerActs`) is DELETED: under KERNEL-25 `ownerActs`
+re-checks the kernel's gate against a copy of the owner in state (a twin), and `anyone` is false
+(the kernel refuses strangers; a public object will be the owner issuing a World-grantee grant,
+KERNEL-4's proposal, unruled). The one law runner is `Lang.Law.runLaw` (the
+receiver's `judgeOne` and every test call it). `Lang/Proofs/Std.lean` proves, over `BigStep` and
+compositionally from inversion lemmas of the combinators (`guard_ok`, `allOf_ok`, `anyOf_true`,
+`lawCase_arm`, `sameProposal_bool`, `popcount_field`), never by evaluating a generated term:
+`bounded_spec`, `ownerSigns_spec`, `allowlist_spec`, `machine_birth`, `machine_invoke`,
+`machine_write_refused`, `machine_relaw_refused`,
+`quorum_birth_empty`, `quorum_relaw_needs_k`, `quorum_change` (the four-way classification) and its
+corollary `quorum_change_needs_k`, `windowed_lands_in_epoch`, `windowed_counts`. Each is stated
+over `Admits lib t rq n o` (the law's body means `ok` with the request, new and old states bound),
+which `runLaw_admits` (a closed term, as a test runs it) and `runLaw_ref_admits` (a package field,
+as the receiver runs it) produce from an admitting `runLaw`. The generators that take parameters
+are CHECKED (`quorum`, `windowed`, `machine`, `stepTo` return `Except StdRefusal Term`): duplicate
+members (one member, two votes), a threshold outside `1 ≤ k ≤ members`, more than 63 members, an
+epoch of width 0, duplicate or unknown states, an unknown method label are refused by name; the
+theorems are about the unchecked terms (`quorumLaw`, …), and `quorum_ok`/`windowed_ok` say what
+acceptance guarantees. The check protects an author who uses the checked generator: the
+unchecked `*Law` terms are public (the theorems are about them), and install cannot tell a
+generated term from a hand-written one, so `pkgOf S [("q", quorumLaw S T [a, a, b] 2 g)] []`
+installs. Machine edges name methods by LABEL and are resolved to indices in
+`pkgOf`'s sorted order (`methodIndex`), so an edge cannot silently name the wrong method. Teeth
+(`Proofs/StdTeeth`, kernel-evaluated instances of `runLaw` on the CHECKED generators' output, and
+the checked generators' refusals): each law admits a legitimate act (the premises are satisfiable) and each clause refuses the act with
+that one thing wrong, by its reason.
+**Alternatives.** (a) Parameters in STATE: one installed `std/quorum` reused by every object.
+(b) Laws as text a resident copies. (c) The combinators as test helpers outside `Lang/`. (d) A
+`proposal` of the guarded type only (the assembly's sketch). **Why.** (a) does not compose: LANG-11
+lays state out positionally, so two separately installed law packages on one data object read slot
+`stateBase + i` at their own types (quorum's 16 is `approvals`, windowed's is `count`); author-time
+composition into one package has no such conflict. (b) has no parameters (the core is monomorphic).
+(c) leaves residents nothing to use and the theorems nothing to be about. Against (d): approvals
+bound only to a value of the guarded field still authorise the law's own replacement, which is the
+same unbound-approval bug moved to the law slots (LANG-19's argument for a relaw payload).
+**Critique.** `ownerSigns` means "only the owner's own key" ONLY with KERNEL-25 built; on a
+kernel where invoke is open, `agent = principal` admits any member invoking without a grant. Every
+object type is its own install (2–3 KB of ROM each), and changing a member
+set is a new package and a new object. The spec theorems are per-STEP: "k distinct members
+approved the committed value" is their induction over a history (with `quorum_ok`'s distinct
+members), which no theorem here states (and the history is KERNEL's); likewise "at most `limit`
+changes per epoch" for `windowed`. Any member may propose, which resets every approval: one member
+can stall a quorum forever (liveness, not safety). The chain from the receiver to these theorems
+is not closed: `judgeOne` admitting ⇒ `runLaw` admitting each law, `L.lib[g]` = the relocated
+body, relocation of a ref-free term is the identity, and a `pkgOf` body's field is the generator's
+term are each still to prove; until then "the receiver's run means this" is a hypothesis. A hand-written law that ignores the occasion keeps H1/H2; only
+`lawOf` makes the clauses unavoidable, and install cannot tell a stdlib term from a hand-written
+one. The relaw payload is the ids' bytes, so `quorum` binds to an exact replacement but cannot say
+"any list containing me". `quorum` supports ≤ 63 members (a mask bit is a natural below 2^64). `windowed`'s epoch is the signer's window, which the signer picks: a
+signer can choose a LATER epoch than the current one only by signing a window the World has not
+reached, which admission refuses (`outsideWindow`), so it cannot pre-spend future epochs; but the
+law trusts `World.admit`'s window check, a fact about KERNEL it does not state. `eqAt T` compares at
+`nat` unless `T = bytes`; any other guarded type fails install as ill-typed.
+**Meta-critique.** I chose per-instance generation partly because it let me skip bytes primitives
+(ID-4), which is the "phase ordering that avoids a hard part" smell; the composition argument is
+derived, not run. The proof shape (inversion over `BigStep`, with data-level views of the
+environment) was the one I could make go quickly; it shares `Val`/`primEval` with the machine
+(LANG-18's named gap), so a bug in `primEval` would be inherited by every spec.
+
+## LANG-21 Cross-object calls: effects as data, restated over touches; built with LEDGER's first method-triggered receiver (2026-10-17; ID-9, closes the LANG-13 fork as a design)
+**Decision.** LANG-13's fork is decided for (a)'s atomicity without (a)'s `perform`: a method
+returns its new state AND a list of calls as DATA, `methodTy S A := fn S (fn A (fn reqTy (rec
+{calls : <effect list>, state : S})))`; KERNEL's `run` returns `Slots × List (Effect D)` with
+`Effect := {target, method, args, budget, via}`; the invoke receiver visits the call tree depth
+first, running each object ONCE on its pre-Turn state (so nothing reads an intermediate state),
+refusing re-entry by name (`reentry obj`), bounded by `callDepthMax = 4`, `callsMax = 8` and a
+consensus `treeTicksMax`; every visited object's laws judge its own `old → new` with occasion
+`invoke m`; `sealTurn` takes the visited objects' effects (it already takes a list since
+KERNEL's `duplicateEffect` change), and `visit_distinct` (each object once) makes
+`duplicateEffect` unreachable. A callee's `Req.principal` is the CALLING OBJECT (object-as-grantee:
+a grant may name an object), `agent` stays the signer. `Body.invokeAll` (a client-composed batch
+of independent invokes) is REJECTED: one signer's batch carries no authority its single invokes
+lack (each is gated by the kernel on its own, KERNEL-25), and no object's law sees the others, so a bounty's `approve` cannot
+check that the funds moved; with effects as data, `approve` itself emits the transfer, so the
+package guarantees approve ⇒ transfer. **Build trigger:** LEDGER's first receiver that a method
+must trigger (pay/well/bounty, PROTOCOL-15); a `calls` field nothing consumes would be a no-op
+shape. Tracked as a `cv task`. **Alternatives.** (a) synchronous `perform call` with continuation
+typing; (b) messages as later turns; (c) `invokeAll`. **Why.** (b) has no atomic multi-object
+update; (a) brings back `perform` and continuation typing for no expressiveness effects-as-data
+lacks (no answer flows back in either v1 shape). **Critique.** Confused deputy: a callee's laws see
+the calling object, not the signer's authority, so `Req` may need `origin`; no answer flows back
+to the caller; no law spans the objects changed together; the client must pin the whole tree.
+**Meta-critique.** "Build it with LEDGER" is a phase ordering (R7): if LEDGER decides value moves
+only by client-signed ledger calls, this is never built and LANG-13 stays open. The guard is this
+entry, written with a decided shape, and LEDGER's design answering it by name.
