@@ -10,7 +10,8 @@ evaluation of scouts O1–O5, `~/dev/redregg/work/nanodregg-scout/`).
 (the emitted units, `deploy/RUNBOOK.md`, `deploy/live/` harness scripts) and this file. NOT `ops/`:
 on the Mac reader (case-insensitive APFS) `ops/` and `Ops/` are ONE directory, so a lowercase
 `ops/` tree silently lands inside the Lean library (it did, in my Mac worktree: `ops/RUNBOOK.md`
-became `Ops/RUNBOOK.md`). gates/OWNERS' `ops/` row is to be replaced by `deploy/` (GATES). Every number it
+became `Ops/RUNBOOK.md`). gates/OWNERS' `ops/` row was replaced by `deploy/` and the `paths` gate
+refuses case-colliding paths (GATES-2, aa4c0ab). Every number it
 renders is read from another layer's Lean value (HOST's `Status.codesOf`, CLIENT's nd-supervise
 grammar), never copied. Closure rule C10 (GATES, 5be0d98): nothing outside `Ops/` imports `Ops`.
 **Alternatives.** (a) No OPS layer: units in `client/`, plants in `Host/Sim/`, the runbook in
@@ -151,3 +152,42 @@ be localised, the in-process rows (`rows --times`) and a Bench number are the to
 **META-CRITIQUE.** Dropping a deliverable is cheap to argue; check that nothing in the RUNBOOK
 needed the Ops driver (it does not: the RUNBOOK cites PERF's script).
 **Status.** CONFIRMED by ROOT 10-17 (Ops/Bar.lean deleted from the plan).
+
+## OPS-6 · one prevent list from both exit tables, a start limit, and a generated operator table (OPS-2, 2026-10-17)
+
+**Decision.** (a) `Ops.Units.preventCodes := Status.codesOf .fatal ++ SupervisorExit.codesOf .fatal`
+(CLIENT-2's Protocol.Exit, 5122e62): nd-supervise passes the child's code through, so a unit reads
+one code space and must stop on both tables' fatal exits. `ofNode_prevent` (a Host status is
+prevented iff fatal) and `ofNode_prevent_supervisor` (a supervisor exit is prevented iff fatal)
+hold over the joined list; the Host half needs `code_disjoint_host` (no supervisor code is a Host
+code). Tooth: `preventCodes_supervisor_split` (66 restarted, 64 prevented) is false if the
+supervisor half is dropped. (b) Every unit gets `StartLimitIntervalSec=120`, `StartLimitBurst=5`.
+(c) `deploy/units/EXITS.md` is RENDERED by `emit-units` (code, name, class, what the unit does,
+what the operator does) from both tables and two exhaustive matches, `hostAction` and
+`supervisorAction`; the RUNBOOK's hand table (§7) is deleted.
+**Breaking.** Both `.service` files re-render: `RestartPreventExitStatus` gains 38 39 42 43
+(HOST's statuses since b2b901d) and 64 65; `[Unit]` gains the start limit. `gates/generated.tsv`
+now checks `deploy/units` (unit files and EXITS.md), so a hand edit or a table change without a
+re-render is red.
+**Alternatives.** (1) Keep the RUNBOOK's hand table: it was already wrong at b2b901d+10 commits
+(no 29, 38–44, 64–66; fuel listed as removed while the constructor stays). (2) Operator text as
+HOST docstrings, read by a meta program: one source, but `emit-units` would read docstrings from
+the environment (compile-time reflection in a renderer) and HOST's prose would become operator
+instructions nobody owns. (3) No start limit, relying on systemd's default: 5 starts in 10 s
+never trips at `RestartSec=2`, so a deterministic crash in a restart class (66 on every start)
+loops forever, the "silent restart" the exit table exists to prevent.
+**Why.** The prevent list must be a function of the tables or it drifts (the old 2/70/1 did). The
+operator table is the same data plus one sentence per code; a generated copy cannot drift and an
+exhaustive match cannot forget a code.
+**CRITIQUE.** The exhaustive match couples HOST to OPS: a HOST commit adding a Status does not
+build `Ops.Units` until it adds a `hostAction` arm, i.e. a cross-layer edit or an OPS commit
+first. That is the point (every exit has an operator action) but it is friction on HOST's path,
+and an arm written by HOST in a hurry ("report to HOST") is a placeholder in clothes. The start
+limit's numbers (5 in 120 s) are taste: they bound a crash loop to ~10 s of restarts per 2 min
+window, and a slow-burn restart class (an `uncertain` once a minute) never trips it, which is
+correct for a transient and wrong for a slow deterministic fault. Restart-class exits are
+transient BY ASSUMPTION in both tables; the limit is the only check of that assumption.
+**META-CRITIQUE.** (c) grew from "update §7" into a generator, the move a renderer-owner likes;
+the test is whether anything else would have caught the stale table: nothing did for ten commits.
+I did not argue (b) with HOST/CLIENT, whose classes it reinterprets as "transient up to 5 in 120 s".
+**Status.** landed with this commit; HOST-5 and CLIENT told of the coupling.

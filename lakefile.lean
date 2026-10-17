@@ -93,7 +93,7 @@ extern_lib «ndhost» pkg := do
 @[default_target] lean_lib Ops where
   globs := #[.submodules `Ops]
 
--- The service-manager units, rendered from Host.Status: `emit-units [--check] ops/units`.
+-- The service-manager units and EXITS.md, rendered from Host.Status and Protocol.SupervisorExit: `emit-units [--check] deploy/units`.
 @[default_target] lean_exe «emit-units» where
   root := `Ops.Main
 
