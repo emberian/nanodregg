@@ -164,6 +164,8 @@ def live (exe : String) (dir : System.FilePath) : IO Nat := do
   let baseCopied ← IO.FS.readBinFile (l / "base.world")
   IO.FS.writeBinFile (copy / "base.world") baseCopied
   let wrongOrderSeg ← IO.FS.readBinFile (l / "seg.log")
+  -- read after the base copy: the copied base names an index prefix no longer than this
+  let indexAtBase ← IO.FS.readBinFile (l / "index.log")
   -- 2. feed until the writer seals a newer base, then copy the segment
   let mut sealed := none
   let mut fed := 4
@@ -174,7 +176,8 @@ def live (exe : String) (dir : System.FilePath) : IO Nat := do
     if let some st := sealed then
       if field st "base_height" ≤ field st0 "base_height" then sealed := none
   -- the append-only files after the base, in `Host.Store.backupOrder` (HOST-30: index.log first)
-  IO.FS.writeBinFile (copy / "index.log") (← IO.FS.readBinFile (l / "index.log"))
+  let indexCopied ← IO.FS.readBinFile (l / "index.log")
+  IO.FS.writeBinFile (copy / "index.log") indexCopied
   let segCopied ← IO.FS.readBinFile (l / "seg.log")
   IO.FS.writeBinFile (copy / "seg.log") segCopied
   let raced := sealed.isSome && (← IO.FS.readBinFile (l / "base.world")) != baseCopied
@@ -204,6 +207,21 @@ def live (exe : String) (dir : System.FilePath) : IO Nat := do
   let plain (label : String) (want : Status) (r : IO Run) : IO Nat := do
     return if ← judge ⟨label, want, r⟩ then 0 else 1
   failed := failed + (← plain "live-copy-anchor-at-segment-copy" .eof (check copy (anchorAt hCopy)))
+  -- (a) the live copy holds a stale base and an index.log copied after a newer seal: the pages past
+  -- the base's prefix are an orphan, which a reader ignores and the writer's open truncates
+  let orphan := indexCopied.size > indexAtBase.size
+  say "orphan-index-page-present" orphan
+    s!"index.log {indexAtBase.size} bytes at the base copy, {indexCopied.size} copied after the seal"
+  unless orphan do failed := failed + 1
+  let ow := dir / "orphan-writer"
+  backup copy ow
+  let r ← host exe ["serve", ow.toString]
+  let after := (← IO.FS.readBinFile (ow / "index.log")).size
+  let truncated := r.code = 0 && after ≤ indexAtBase.size
+  say "orphan-index-page-writer-truncates" truncated
+    s!"serve exit={r.code}; index.log {indexCopied.size} -> {after} bytes (the base names at most {indexAtBase.size})"
+  unless truncated do failed := failed + 1
+  failed := failed + (← plain "orphan-index-page-writer-reopens-at-height" .eof (check ow (anchorAt hCopy)))
   -- the sealed Store: it must have a base past the origin, or the rows below test nothing
   let some stS ← status exe l | IO.eprintln "the finished live Store does not check"; return failed + 1
   let off := field stS "base_offset"
@@ -224,6 +242,16 @@ def live (exe : String) (dir : System.FilePath) : IO Nat := do
   failed := failed + (← plain "sealed-flip-history-before-base" .corrupt (check flipped))
   -- the wrong order: seg.log copied before a seal, base.world after it
   let wrong ← sealedCopy "wrong-order" fun d => damage d wrongOrderSeg
+  -- (b) index.log copied BEFORE base.world, across seals: the newer base names pages the copy lacks.
+  -- It must refuse `indexShort` by name or open to the writer's height; never open short.
+  let finalIndex ← IO.FS.readBinFile (l / "index.log")
+  let wrongIdx ← sealedCopy "wrong-order-index" fun d => IO.FS.writeBinFile (d / "index.log") indexAtBase
+  let older := indexAtBase.size < finalIndex.size
+  let ri ← check wrongIdx (anchorAt n)
+  let okIdx := older && (ri.code = Status.indexShort.code.toUInt32 || ri.code = 0)
+  say "copy-index-before-base-wrong-order" okIdx
+    s!"index.log {indexAtBase.size} of {finalIndex.size} bytes; exit={ri.code} ({if ri.code = 0 then "opened at the anchor" else if ri.code = Status.indexShort.code.toUInt32 then "refused indexShort" else "NEITHER"}) :: {ri.out.replace "\n" " "}"
+  unless okIdx do failed := failed + 1
   failed := failed + (← plain "copy-segment-before-base-wrong-order" .segmentShort (check wrong))
   return failed
 

@@ -10,8 +10,7 @@ plant directory: its secret is published, so anyone can write that World.
 
     host genesis STORE LABEL [--nonce HEX32] KEY_HEX NEXT_HEX [KEY_HEX NEXT_HEX]...
 
-Creates `STORE/key` (32 random bytes, 0600), `STORE/seg.log` (the origin frame) and
-`STORE/base.world`; prints `origin …`, `nonce …`, `founder i member … grant …` and `chain …`.
+Creates the Store's files (`deploy/units/STORE.md`, generated from `Host.Store.layout`); prints `origin …`, `nonce …`, `founder i member … grant …` and `chain …`.
 Refuses `exists` (17) if any Store file is there. KEY is the founder's Ed25519 public key; NEXT
 its precommitted next key. Omit `--nonce`: `host genesis` draws 32 bytes from the OS. Record the
 printed `origin` and `nonce` with the Store's backup.
@@ -68,20 +67,23 @@ writer's unsynced last frame. `anchor=none` means: integrity and height only, NO
 
 ## 4. Backup — RAN (stopped and LIVE: store-plants)
 
-Copy, in this order: `STORE/key`, `STORE/base.world`, `STORE/seg.log`. It is safe while the
-writer runs, across a seal: a seal renames a new `base.world` into place and the segment only
-grows, so a `seg.log` copied after `base.world` always holds the copied base's offset
-(`live-copy-raced-a-seal`, `live-copy-anchor-at-segment-copy`: base copied at base height 0,
-segment copied after a seal to height 12, the copy opens to the writer's height with its chain).
-The OTHER order is refused: `seg.log` copied before a seal and `base.world` after it is
-`segmentShort` (`copy-segment-before-base-wrong-order`). Record an anchor at the
+Copy the files in the order `deploy/units/STORE.md` lists (generated from
+`Host.Store.backupOrder`; the base before every append-only file), each whole. It is safe while
+the writer runs, across a seal: a seal installs a new `base.world` atomically and the append-only
+files only grow, so each one copied after `base.world` holds the prefix the copied base names.
+Planted in store-plants: `live-copy-raced-a-seal` / `live-copy-anchor-at-segment-copy` (the right
+order across a seal opens at the writer's height); `orphan-index-page-*` (an index page past the
+stale base's prefix: a reader ignores it, the writer's open truncates it and reopens at the same
+height). The OTHER orders are refused by name: `seg.log` copied before a seal is `segmentShort`
+(`copy-segment-before-base-wrong-order`), `index.log` copied before a seal is `indexShort`
+(`copy-index-before-base-wrong-order`); neither opens short. Record an anchor at the
 same time: `HEIGHT:CHAIN` from a member follower's head (its own `host check` on its follow
 Store) or the highest receipt a client holds. The key travels with the copy (HOST-16: it guards
 integrity, not secrecy; a copy without it is `baseCorrupt`).
 
 ## 5. Restore — RAN (store-plants; a sealed Store too: `sealed-*`)
 
-Copy the three files into an empty STORE, then:
+Copy the files (`deploy/units/STORE.md`) into an empty STORE, then:
 
     host check STORE --anchor HEIGHT:CHAIN
 
