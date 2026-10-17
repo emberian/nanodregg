@@ -403,4 +403,200 @@ theorem prove_excludes {t : T K V D} {k : K} (hw : WF S t) (hs : Shallow S 0 t)
   | none => rfl
   | some kds => simp only [ht] at hp; simp [← hp]
 
+/-! ## Routing: every key sits where its bits send it, once -/
+
+/-- Each node's left keys have bit `d` clear and its right keys have it set; a leaf's keys are
+distinct. -/
+def Routed : Nat → T K V D → Prop
+  | _, .empty => True
+  | _, .leaf _ kvs => (kvs.map Prod.fst).Nodup
+  | d, .node _ l r => (∀ p ∈ l.toList, S.bit p.1 d = false) ∧ (∀ p ∈ r.toList, S.bit p.1 d = true) ∧
+      Routed (d + 1) l ∧ Routed (d + 1) r
+
+omit [DecidableEq K] [DecidableEq D] in
+theorem toList_build : ∀ (f d : Nat) (kvs : List (K × V)), (build S f d kvs).toList.Perm kvs
+  | _, _, [] => by simp [build, T.toList]
+  | f, _, [x] => by cases f <;> simp [build, mkLeaf, T.toList]
+  | 0, _, a :: b :: rest => by simp [build, mkLeaf, T.toList]
+  | f + 1, d, a :: b :: rest => by
+      simp only [build, mkNode, T.toList]
+      refine ((toList_build f (d + 1) _).append (toList_build f (d + 1) _)).trans ?_
+      have := List.filter_append_perm (fun p : K × V => !S.bit p.1 d) (a :: b :: rest)
+      simpa [Bool.not_not] using this
+
+omit [DecidableEq K] [DecidableEq D] in
+theorem routed_build : ∀ (f d : Nat) (kvs : List (K × V)), (kvs.map Prod.fst).Nodup →
+    Routed S d (build S f d kvs)
+  | _, _, [], _ => by simp [build, Routed]
+  | f, _, [x], _ => by cases f <;> simp [build, mkLeaf, Routed]
+  | 0, _, a :: b :: rest, h => by simpa [build, mkLeaf, Routed] using h
+  | f + 1, d, a :: b :: rest, h => by
+      simp only [build, mkNode, Routed]
+      refine ⟨fun p hp => ?_, fun p hp => ?_, routed_build f (d + 1) _ ?_, routed_build f (d + 1) _ ?_⟩
+      · have := (toList_build S f (d + 1) _).mem_iff.mp hp; simp at this; simpa using this.2
+      · have := (toList_build S f (d + 1) _).mem_iff.mp hp; simp at this; exact this.2
+      · exact (h.sublist (List.Sublist.map _ List.filter_sublist))
+      · exact (h.sublist (List.Sublist.map _ List.filter_sublist))
+
+omit [DecidableEq D] in
+/-- What a routed trie lists is what it holds. -/
+theorem mem_toList : ∀ (d : Nat) (t : T K V D), Routed S d t →
+    ∀ (k : K) (v : V), (k, v) ∈ t.toList ↔ getAt S k d t = some v
+  | _, .empty, _, k, v => by simp [T.toList, getAt]
+  | _, .leaf _ kvs, h, k, v => by
+      simp only [T.toList, getAt, Routed] at h ⊢
+      induction kvs with
+      | nil => simp [find_nil]
+      | cons p rest ih =>
+          simp only [List.map_cons, List.nodup_cons] at h
+          rw [find_cons, List.mem_cons]
+          by_cases hp : p.1 = k
+          · subst hp
+            have hn : ∀ x, (p.1, x) ∉ rest := fun x hx => h.1 (List.mem_map.mpr ⟨_, hx, rfl⟩)
+            rw [if_pos rfl]
+            constructor
+            · rintro (he | hm)
+              · rw [← he]
+              · exact absurd hm (hn v)
+            · intro he; left; obtain ⟨a, b⟩ := p; simp only [Option.some.injEq] at he; rw [he]
+          · rw [if_neg hp, ← ih h.2]
+            constructor
+            · rintro (he | hm)
+              · exact absurd (by rw [← he]) hp
+              · exact hm
+            · exact .inr
+  | d, .node _ l r, h, k, v => by
+      simp only [T.toList, getAt, List.mem_append]
+      cases hb : S.bit k d
+      · rw [← mem_toList (d + 1) l h.2.2.1 k v]
+        constructor
+        · rintro (hm | hm)
+          · exact hm
+          · have := h.2.1 _ hm; simp [hb] at this
+        · exact .inl
+      · rw [← mem_toList (d + 1) r h.2.2.2 k v]
+        constructor
+        · rintro (hm | hm)
+          · have := h.1 _ hm; simp [hb] at this
+          · exact hm
+        · exact .inr
+
+omit [DecidableEq D] in
+theorem keys_insAt (k : K) (v : V) : ∀ (d : Nat) (t : T K V D) (p : K × V),
+    p ∈ (insAt S k v d t).toList → p ∈ t.toList ∨ p = (k, v)
+  | _, .empty, p, h => by simp [insAt, mkLeaf, T.toList] at h; exact .inr h
+  | d, .leaf _ kvs, p, h => by
+      simp only [insAt] at h
+      split at h
+      · simp only [mkLeaf, T.toList, List.mem_map] at h
+        obtain ⟨q, hq, he⟩ := h
+        by_cases hk : q.1 = k
+        · simp [hk] at he; exact .inr he.symm
+        · simp [hk] at he; subst he; exact .inl hq
+      · have := (toList_build S _ _ _).mem_iff.mp h
+        simp only [List.mem_append, List.mem_singleton] at this
+        exact this
+  | d, .node _ l r, p, h => by
+      simp only [insAt] at h
+      cases hb : S.bit k d
+      · simp only [hb, mkNode, T.toList, List.mem_append] at h ⊢
+        rcases h with h | h
+        · rcases keys_insAt k v (d + 1) l p h with h | h
+          · exact .inl (.inl h)
+          · exact .inr h
+        · exact .inl (.inr h)
+      · simp only [hb, mkNode, T.toList, List.mem_append] at h ⊢
+        rcases h with h | h
+        · exact .inl (.inl h)
+        · rcases keys_insAt k v (d + 1) r p h with h | h
+          · exact .inl (.inr h)
+          · exact .inr h
+
+omit [DecidableEq D] in
+theorem map_fst_replace {k : K} {v : V} :
+    ∀ (l : List (K × V)), (l.map fun p => if p.1 = k then (k, v) else p).map Prod.fst = l.map Prod.fst
+  | [] => rfl
+  | p :: rest => by
+      simp only [List.map_cons, map_fst_replace rest]
+      by_cases h : p.1 = k <;> simp [h]
+
+omit [DecidableEq D] in
+theorem routed_insAt (k : K) (v : V) : ∀ (d : Nat) (t : T K V D), Routed S d t →
+    Routed S d (insAt S k v d t)
+  | _, .empty, _ => by simp [insAt, mkLeaf, Routed]
+  | d, .leaf _ kvs, h => by
+      simp only [insAt]
+      split
+      · simp only [mkLeaf, Routed] at h ⊢; rw [map_fst_replace]; exact h
+      · rename_i hany
+        apply routed_build
+        simp only [Routed] at h
+        rw [List.map_append, List.nodup_append]
+        refine ⟨h, by simp, ?_⟩
+        intro a ha b hb; simp at hb; subst hb
+        intro he; subst he
+        obtain ⟨q, hq, rfl⟩ := List.mem_map.mp ha
+        exact hany (List.any_eq_true.mpr ⟨q, hq, by simp⟩)
+  | d, .node _ l r, h => by
+      simp only [insAt]
+      cases hb : S.bit k d
+      · refine ⟨fun p hp => ?_, h.2.1, routed_insAt k v (d + 1) l h.2.2.1, h.2.2.2⟩
+        rcases keys_insAt S k v (d + 1) l p hp with hp | hp
+        · exact h.1 p hp
+        · subst hp; exact hb
+      · refine ⟨h.1, fun p hp => ?_, h.2.2.1, routed_insAt k v (d + 1) r h.2.2.2⟩
+        rcases keys_insAt S k v (d + 1) r p hp with hp | hp
+        · exact h.2.1 p hp
+        · subst hp; exact hb
+
+omit [DecidableEq D] in
+theorem routed_insert {t : T K V D} (k : K) (v : V) (h : Routed S 0 t) : Routed S 0 (t.insert S k v) :=
+  routed_insAt S k v 0 t h
+
+omit [DecidableEq K] [DecidableEq D] in
+/-- A routed trie's listing has each key once. -/
+theorem toList_nodup : ∀ (d : Nat) (t : T K V D), Routed S d t → (t.toList.map Prod.fst).Nodup
+  | _, .empty, _ => by simp [T.toList]
+  | _, .leaf _ _, h => h
+  | d, .node _ l r, h => by
+      simp only [T.toList, List.map_append, List.nodup_append]
+      refine ⟨toList_nodup (d + 1) l h.2.2.1, toList_nodup (d + 1) r h.2.2.2, ?_⟩
+      intro a ha b hb he; subst he
+      obtain ⟨p, hp, rfl⟩ := List.mem_map.mp ha
+      obtain ⟨q, hq, hq'⟩ := List.mem_map.mp hb
+      have h1 := h.1 p hp; have h2 := h.2.1 q hq; rw [hq'] at h2; simp [h1] at h2
+
+omit [DecidableEq K] [DecidableEq D] in
+theorem nodup_of_map_fst {α β : Type} {l : List (α × β)} (h : (l.map Prod.fst).Nodup) : l.Nodup :=
+  List.Pairwise.of_map Prod.fst (fun _ _ hne he => hne (congrArg Prod.fst he)) h
+
+omit [DecidableEq K] [DecidableEq D] in
+theorem perm_of_nodup_mem {α : Type} {l₁ l₂ : List α} (h₁ : l₁.Nodup) (h₂ : l₂.Nodup)
+    (h : ∀ a, a ∈ l₁ ↔ a ∈ l₂) : l₁.Perm l₂ := by
+  classical
+  rw [List.perm_iff_count]
+  intro a
+  have c₁ := List.nodup_iff_count.mp h₁ a
+  have c₂ := List.nodup_iff_count.mp h₂ a
+  have p := (List.count_pos_iff (a := a) (l := l₁)).trans ((h a).trans (List.count_pos_iff (a := a) (l := l₂)).symm)
+  omega
+
+omit [DecidableEq D] in
+/-- **What an insert lists**: every other entry, and the new one. -/
+theorem toList_insert_perm {t : T K V D} (h : Routed S 0 t) (k : K) (v : V) :
+    (t.insert S k v).toList.Perm ((t.toList.filter fun p => p.1 ≠ k) ++ [(k, v)]) := by
+  have hr := routed_insert S k v h
+  apply perm_of_nodup_mem (nodup_of_map_fst (toList_nodup S 0 _ hr)) ?_
+  · rintro ⟨a, b⟩
+    rw [mem_toList S 0 _ hr]
+    simp only [List.mem_append, List.mem_filter, List.mem_singleton, decide_eq_true_eq]
+    have := getAt_insAt S k a v 0 t
+    unfold T.insert; rw [this]
+    by_cases ha : a = k
+    · subst ha; simp [eq_comm]
+    · simp [ha, mem_toList S 0 t h]
+  · refine List.nodup_append.mpr ⟨(nodup_of_map_fst (toList_nodup S 0 t h)).sublist List.filter_sublist,
+      by simp, ?_⟩
+    intro x hx y hy he; subst he; simp at hy; subst hy; simp at hx
+
 end Nanodregg.Kernel.Trie

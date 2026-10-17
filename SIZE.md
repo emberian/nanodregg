@@ -18,7 +18,7 @@
 | Rust lines (generated) | 417 | — |
 | Rust files with an unregistered generated header | 0 | 0 |
 | partial defs (deployed) | 0 | 0 |
-| theorems | 656 | — |
+| theorems | 667 | — |
 | sorry | 0 | 0 |
 | Lean modules | 141 | — |
 | Lean proof-modules | 59 | — |
@@ -26,7 +26,7 @@
 | Lean lines (Codec) | 4219 | — |
 | Lean lines (Emit) | 351 | — |
 | Lean lines (Host) | 3110 | — |
-| Lean lines (Kernel) | 4837 | — |
+| Lean lines (Kernel) | 5033 | — |
 | Lean lines (Protocol) | 2747 | — |
 | max dependents of one module | 105 | — |
 | native (extern/implemented_by) | 8 | 8 |
