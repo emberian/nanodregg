@@ -223,5 +223,11 @@ next seal waits for the previous Task, and open folds a longer tail. That is cor
 number that vindicates it. The measurement was chosen at THE BAR's scale because the BAR is the spec,
 but that choice also happens to be the one that favours (a). The honest residue: (a) is simpler at
 every scale and cheaper at the spec's scale; deltas win only past ~10⁵ records, a scale no row exercises.
-**Status.** open (ROOT to rule; if accepted, HOST-10 is withdrawn and CODEC need not build a delta codec,
+**Status.** ACCEPTED by ROOT 2026-10-16; HOST-10 withdrawn. Conditions, each to land as code: (1) the
+cadence (`sealMinBytes`, the 1/4 ratio) in Bounds, with the amortisation as a theorem or a pinned WASTE
+row `seal bytes-per-appended-byte`; (2) `worldBytesMax`, the size at which this design must change, as
+a refusal by name with a plant; (3) the MAC measured once CODEC's Keccak lands, and HOST-14 re-read
+with it; (4) open reads one base + at most one cadence of log, as a theorem on the open path. Law 5
+amended by ROOT: O(store) work is forbidden on the request path; off-loop sealing amortised to
+O(appended bytes) with a named cadence Bound is allowed.
 only the World codec it already listed).

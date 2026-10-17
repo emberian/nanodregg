@@ -23,6 +23,7 @@ Returns 0 iff every check holds; each failure prints `FAIL <name>`. `lake exe ho
 import Host.Sim.MemStore
 import Host.Sim.Toy
 import Kernel.World
+import Host.Open
 
 namespace Nanodregg.Host.Sim
 
@@ -84,22 +85,38 @@ structure RunResult where
   replies : Array Reply
   disk : Disk
 
-def runOnce (seed : Nat) (frames : List Frame) (failSyncAt : Option Nat) : IO RunResult := do
-  let disk ← IO.mkRef ({} : Disk)
+/-- Serve `frames` from a disk and the World/tag the disk opened to. -/
+def serveFrom (seed : Nat) (frames : List Frame) (failSyncAt : Option Nat) (d : Disk) (w : World Nat)
+    (tag : ByteArray) : IO RunResult := do
+  let disk ← IO.mkRef d
   let fr ← IO.mkRef frames
   let sp ← IO.mkRef (splits seed frames.length)
   let sent ← IO.mkRef #[]
   let (exit, w) ← serve machine ⟨record⟩ sealer (memStore disk failSyncAt) (scriptPort fr sp sent)
-    ⟨16, 1 <<< 20⟩ (frames.length + 1) genesis ByteArray.empty none
+    ⟨16, 1 <<< 20⟩ (frames.length + 1) w tag none
   return ⟨exit, w, ← sent.get, ← disk.get⟩
 
 def initialTag : ByteArray := ByteArray.empty
 
-/-- Recover a disk image and fold it from genesis. -/
-def reopen (bytes : ByteArray) : Log.Recovered × Option (World Nat) :=
-  let r := Log.recover sealer bodyMax initialTag bytes
-  let turns := r.records.mapM decodeRecord
-  (r, turns.bind fun ts => (World.fold env genesis ts.flatten).toOption)
+def runOnce (seed : Nat) (frames : List Frame) (failSyncAt : Option Nat) : IO RunResult :=
+  serveFrom seed frames failSyncAt {} genesis initialTag
+
+/-- One batch record folded into the World: what open does per record. -/
+def foldStep (w : World Nat) (r : ByteArray) : Except String (World Nat) :=
+  match decodeRecord r with
+  | none => .error "undecodable"
+  | some ts => match World.fold env w ts with
+    | .ok w' => .ok w'
+    | .error (i, rj) => .error s!"turn {i}: {repr rj}"
+
+/-- Open a disk image from genesis: the deployed `openLog`. -/
+def reopen (bytes : ByteArray) : Except (OpenFault String) (Opened (World Nat)) :=
+  openLog sealer bodyMax foldStep genesis initialTag bytes
+
+def isCorrupt (r : Except (OpenFault String) (Opened (World Nat))) (off : Nat) : Bool :=
+  match r with
+  | .error (.corrupt o) => o = off
+  | _ => false
 
 /-- `a / b` to three decimals, as standing's waste gate reads it (`b = 0` prints the numerator). -/
 def ratio (a b : Nat) : String :=
@@ -127,54 +144,62 @@ def run (args : List String) : IO UInt32 := do
   check "double spends refused" ((statusOf .doubleSpend).all (· = Protocol.Status.refused.code)) failures
   check "height = fresh turns" (r.world.height = (statusOf .fresh).length) failures
   IO.println s!"admitted {r.world.height} turns in {r.disk.syncs} batches, {r.disk.synced.size} bytes"
-  let (rec, folded) := reopen r.disk.synced
-  check "recover clean" (rec.tail = .clean ∧ rec.validLen = r.disk.synced.size) failures
-  check "follower fold = loop World"
-    (match folded with
-     | some w => w.height = r.world.height ∧ w.chain = r.world.chain
-     | none => false) failures
+  let opened := reopen r.disk.synced
+  check "open clean: the whole image, no torn tail"
+    (match opened with | .ok o => o.torn = 0 ∧ o.validLen = r.disk.synced.size | .error _ => false) failures
+  check "open = loop World (height, chain)"
+    (match opened with | .ok o => o.world.height = r.world.height ∧ o.world.chain = r.world.chain | .error _ => false)
+    failures
   -- waste (law 5): work done ÷ work the operation must do
-  let admittedBytes := (match folded with
-    | some _ => (rec.records.mapM decodeRecord).getD [] |>.flatten.foldl (fun n t => n + (turnBytes t).size) 0
-    | none => 0)
+  let records := (Log.recover sealer bodyMax initialTag r.disk.synced).records
+  let admittedBytes := ((records.mapM decodeRecord).getD []).flatten.foldl (fun n t => n + (turnBytes t).size) 0
   IO.println s!"WASTE submit bytes-per-turn {ratio r.disk.synced.size admittedBytes}"
-  IO.println s!"WASTE submit fsyncs-per-batch {ratio r.disk.syncs rec.records.length}"
-  IO.println s!"WASTE open bytes-read-per-record {ratio r.disk.synced.size rec.validLen}"
+  IO.println s!"WASTE submit fsyncs-per-batch {ratio r.disk.syncs records.length}"
+  IO.println s!"WASTE open bytes-read-per-record {ratio r.disk.synced.size (match opened with | .ok o => o.validLen | .error _ => 0)}"
   let r2 ← runOnce (seed + 7919) frames none
   IO.println s!"second split: {r2.disk.syncs} batches"
   check "a different batch split reaches the same chain" (r2.world.chain = r.world.chain) failures
-  -- plant-fsync-fail
+  -- plant-fsync-fail, then plant-restart-at-every-cut
   let p ← runOnce seed frames (some 3)
   let pendingSize := p.disk.pending.size
   check "plant-fsync-fail: loop stops uncertain"
     (match p.exit with | .uncertain _ => true | _ => false) failures
-  let lastBatch := p.replies.toList.drop (p.replies.size - 1)
+  let uncertainN := (p.replies.toList.filter (·.status = Protocol.Status.uncertain.code)).length
+  let lastBatch := p.replies.toList.drop (p.replies.size - uncertainN)
   check "plant-fsync-fail: the batch's replies are uncertain"
-    (lastBatch.all (·.status = Protocol.Status.uncertain.code) ∧ pendingSize > 0) failures
-  let (base, baseW) := reopen p.disk.synced
+    (0 < uncertainN ∧ lastBatch.all (·.status = Protocol.Status.uncertain.code) ∧ pendingSize > 0) failures
+  let baseRecords := match reopen p.disk.synced with | .ok o => o.records | .error _ => 0
+  check "plant-fsync-fail: synced prefix opens" (baseRecords = 3) failures
+  -- every crash cut of the unsynced frame: open (truncating the torn tail, as the writer does),
+  -- resend the uncertain batch and the rest, and reach the no-crash chain.
+  let resend := frames.drop (p.replies.size - uncertainN)
   let mut cutsOk := true
   for cut in List.range (pendingSize + 1) do
-    let (rc, w) := reopen (crashImage p.disk cut)
-    let expectTail := if cut = 0 then Log.Tail.clean
-      else if cut = pendingSize then Log.Tail.clean else Log.Tail.torn cut
-    let expectCount := if cut = pendingSize then base.records.length + 1 else base.records.length
-    unless rc.tail = expectTail ∧ rc.records.length = expectCount ∧ w.isSome do
-      cutsOk := false
-      IO.println s!"  cut {cut}: tail {repr rc.tail} records {rc.records.length}"
-  check s!"plant-fsync-fail: every crash cut 0..{pendingSize} recovers the synced prefix" cutsOk failures
-  check "plant-fsync-fail: synced prefix folds" (baseW.isSome ∧ base.records.length = 3) failures
+    match reopen (crashImage p.disk cut) with
+    | .error e =>
+      cutsOk := false; IO.println s!"  cut {cut}: open refused {repr e}"
+    | .ok o =>
+      let expectTorn := if cut = pendingSize then 0 else cut
+      let expectRecords := if cut = pendingSize then baseRecords + 1 else baseRecords
+      let img := (crashImage p.disk cut).extract 0 o.validLen
+      let q ← serveFrom seed resend none { synced := img } o.world o.lastTag
+      let reopened := reopen q.disk.synced
+      let finalOk : Bool := match reopened with
+        | .ok o' => decide (o'.torn = 0 ∧ o'.world.chain = r.world.chain ∧ q.world.chain = r.world.chain)
+        | .error _ => false
+      unless decide (o.torn = expectTorn ∧ o.records = expectRecords) && finalOk do
+        cutsOk := false
+        IO.println s!"  cut {cut}: torn {o.torn} records {o.records} final {finalOk}"
+  check s!"plant-restart-at-every-cut 0..{pendingSize}: open, truncate, resend, reach the no-crash chain" cutsOk failures
   -- plant-flip-byte
-  let flipped := flipByte r.disk.synced 6
-  let (fr, _) := reopen flipped
-  check "plant-flip-byte: corrupt" (fr.tail = .corrupt 0 ∧ fr.records = []) failures
-  let (fh, _) := reopen (flipByte r.disk.synced 0)
+  check "plant-flip-byte: corrupt" (isCorrupt (reopen (flipByte r.disk.synced 6)) 0) failures
   check "plant-flip-header: corrupt (the frames after it are found by the forward scan)"
-    (fh.tail = .corrupt 0) failures
-  let lastAt := r.disk.synced.size - 1
-  let (fl, _) := reopen (flipByte r.disk.synced lastAt)
+    (isCorrupt (reopen (flipByte r.disk.synced 0)) 0) failures
+  let fullRecords := match opened with | .ok o => o.records | .error _ => 0
   check "plant-flip-last-frame: torn (the stated undecidable case: one frame lost, loudly)"
-    (match fl.tail with | .torn _ => fl.records.length + 1 = (reopen r.disk.synced).1.records.length | _ => false)
-    failures
+    (match reopen (flipByte r.disk.synced (r.disk.synced.size - 1)) with
+     | .ok o => 0 < o.torn ∧ o.records + 1 = fullRecords
+     | .error _ => false) failures
   let n ← failures.get
   IO.println (if n = 0 then "ALL PASS" else s!"{n} FAILED")
   return (if n = 0 then 0 else 1)
