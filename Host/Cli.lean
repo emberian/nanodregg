@@ -200,6 +200,9 @@ def verb : List String → IO UInt32
 exit 1: it happened before a Store opened (a missing or unreadable Store file, genesis, check),
 so a restart would meet it again. -/
 def main (args : List String) : IO UInt32 :=
-  try verb args catch e => refuse .io s!"io {e}"
+  try
+    ignoreFileSizeSignal
+    verb args
+  catch e => refuse .io s!"io {e}"
 
 end Nanodregg.Host.Cli

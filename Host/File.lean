@@ -1,7 +1,7 @@
 /-
 # Host.File — the Store's physical IO (`Host/c/file.c`)
 
-Nine POSIX calls behind an opaque handle; the descriptor closes when the handle is freed.
+The POSIX calls the Store needs behind an opaque handle, and SIGXFSZ ignored at startup; the descriptor closes when the handle is freed.
 Every failure is an `IO` error naming the call and errno, and nothing retries: the loop answers
 `uncertain` and stops (HOST-4). On Darwin `sync` is `F_FULLFSYNC` and fails rather than falling
 back to a weaker `fsync`.
@@ -39,6 +39,9 @@ def OpenMode.code : OpenMode → UInt8
 @[extern "nd_file_truncate"] opaque File.truncate (f : @& File) (len : UInt64) : IO Unit
 @[extern "nd_file_try_lock"] opaque File.tryLock (f : @& File) : IO Bool
 @[extern "nd_dir_sync"] opaque syncDir (path : @& String) : IO Unit
+/-- Ignore SIGXFSZ, so a write past `RLIMIT_FSIZE` fails with `EFBIG` (an IO error the append's
+`uncertain` path answers) instead of killing the process by signal, unnamed (HOST-27). -/
+@[extern "nd_ignore_sigxfsz"] opaque ignoreFileSizeSignal : IO Unit
 
 def File.open (path : System.FilePath) (mode : OpenMode) : IO File :=
   File.openRaw path.toString mode.code

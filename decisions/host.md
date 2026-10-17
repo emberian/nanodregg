@@ -780,3 +780,39 @@ taken before this commit no longer matches (a thin `adopt` with an old digest re
 **Meta-critique.** I took it because the assembly listed it and it is two lines; "one string, one
 purpose" is an aesthetic I am applying, not a measured failure.
 **Status.** landed. Re-emit: every pin (out of band).
+
+## HOST-27 · `host` ignores SIGXFSZ, so a write past the file-size limit is `uncertain`, never a signal death (2026-10-17, HOST-6; OPS-2's live finding)
+**The defect (OPS-2, measured on hbox and burst5-a with the real `host` under nd-supervise).** If an
+append passes `RLIMIT_FSIZE` (`ulimit -f`, systemd `LimitFSIZE=`), the kernel sends SIGXFSZ. Its
+default action killed `host serve`: signal 25, exit 153 through bwrap, with no name and no reply (the
+client saw a closed socket). The exit table puts a failed append in class restart (`uncertain`, 3). The
+Store stayed sound (a torn tail that the next open truncates), so only the exit was wrong. But a
+process that dies unnamed breaks law 7 and the never-silent rule of HOST-19.
+**Decision.** `Host.ignoreFileSizeSignal` (`nd_ignore_sigxfsz` in Host/c/file.c) sets SIGXFSZ to
+`SIG_IGN` (`signal`), as the first act of `host`'s `main`, before any verb runs. With it ignored,
+`write` returns `EFBIG`. `nd_file_write_all` returns that as an IO error naming the call and errno, and
+the loop's append path answers the batch `uncertain` and exits `uncertain` (3, restart). If
+`signal` itself fails, that is the existing `io` refusal (exit 13): the program refuses to start
+rather than run with the default disposition. A write that crosses the limit can be SHORT first
+(it writes up to the limit); `nd_file_write_all` already loops on short writes, so the next call
+is the one that fails EFBIG, and the batch is `uncertain` either way (GATES-2's ask, read in the C;
+the live plant sets the limit just past the Store's current size, so it crosses mid-frame).
+**Plant.** OPS-2's `deploy/live` LimitFSIZE unit (e31b4ee) recorded `153`. After this commit it must
+record `exit 3`, then a restart. It runs on a systemd user manager, not in-process. An in-repo plant
+would need a `setrlimit` FFI used only by a test, a second copy of the platform's behaviour, and that
+is what the live harness already exercises for real.
+**Alternatives.** (a) Block SIGXFSZ around each write only: same effect, more FFI calls per batch, and a
+window outside writes where nothing is written anyway. (b) Check the file size against the limit
+before writing: a second, racy copy of the kernel's own check. (c) Treat the death as a restart in the
+unit (`RestartForceExitStatus=153`): it names a signal death as a verdict, and it relies on bwrap's
+128+N encoding.
+**Critique.** A process-wide disposition is inherited across `exec`. `host` execs nothing, but a
+future child would start with SIGXFSZ ignored. A partial write before EFBIG leaves a torn tail of up to
+one frame. That is exactly HOST-12's torn case, and the writer's reopen truncates it. Under a
+persistent limit, every restart fails the same way: a restart loop that systemd's start limit stops,
+loudly, with `uncertain` in the journal each time.
+**Meta-critique.** I took OPS-2's proposed fix as given. It is the textbook answer, which is also the
+reason to doubt it. The case I did not test myself is a limit hit inside the seal's `base.tmp` write
+(a Task thread). The disposition is process-wide, so the same EFBIG reaches the seal's own IO error
+(`sealIo`, restart). By reading, that holds, but nothing has measured it.
+**Status.** landed (this commit).

@@ -2,7 +2,8 @@
  * Host/c/file.c — the Store's physical IO: one file descriptor per segment.
  *
  * Lean's IO.FS.Handle is a FILE* with no fsync, no positioned read and no truncate-to-length;
- * this file is the nine POSIX calls the Store needs and nothing else. It moves bytes and
+ * this file is the POSIX calls the Store needs and the one signal disposition its writes need,
+ * and nothing else. It moves bytes and
  * decides nothing (law 2): every error is returned to Lean as an IO error naming the call and
  * errno; nothing is retried here (a failed fsync is never retried: HOST-4).
  *
@@ -16,6 +17,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <signal.h>
 #include <sys/file.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -126,6 +128,14 @@ LEAN_EXPORT lean_obj_res nd_file_try_lock(b_lean_obj_arg f, lean_obj_arg w) {
   if (r == 0) return lean_io_result_mk_ok(lean_box(1));
   if (errno == EWOULDBLOCK) return lean_io_result_mk_ok(lean_box(0));
   return io_errno("flock", errno);
+}
+
+/* HOST-27: ignored, a write past RLIMIT_FSIZE fails EFBIG (short writes continue in write_all
+   until it does): an IO error the loop answers `uncertain`, never a death by signal. */
+LEAN_EXPORT lean_obj_res nd_ignore_sigxfsz(lean_obj_arg w) {
+  (void)w;
+  if (signal(SIGXFSZ, SIG_IGN) == SIG_ERR) return io_errno("signal(SIGXFSZ)", errno);
+  return lean_io_result_mk_ok(lean_box(0));
 }
 
 /* Make a directory entry (a create or a rename inside `path`) durable. */
