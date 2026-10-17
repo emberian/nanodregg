@@ -40,21 +40,17 @@ def program : Program D :=
     run := fun _ _ state method args _ _ =>
       if method = 0 then .ok (state.set stateBase args) else .error (.program "no such method") }
 
-/-- The calls a run made, by `Params.regKey` of their bytes (the toy decoder looks them up). -/
-structure Registry (D : Type) where
-  calls : List (D × Call D) := []
-
-/-- What an instance supplies: its `Ctx` (from the registry: the toy decoder reads it), how a
-secret becomes a public key and signs, the key the registry files a call under, a default
-digest, and a name for the report. -/
+/-- What an instance supplies: its `Ctx` (whose `env` the generator hashes and encodes with), how
+a secret becomes a public key and signs, a default digest, and a name for the report. -/
 structure Params (D : Type) where
   name : String
-  env : Env D
-  ctx : Registry D → Ctx D
+  ctx : Ctx D
   pub : ByteArray → ByteArray
   sign : ByteArray → ByteArray → ByteArray
-  regKey : ByteArray → D
   zero : D
+
+/-- The instance's `Env`: its `Ctx`'s, so the two cannot disagree. -/
+abbrev Params.env {D : Type} (P : Params D) : Env D := P.ctx.env
 
 /-! ## The generator -/
 
@@ -93,7 +89,6 @@ inductive Expect
 
 structure State (D : Type) [Ord D] where
   rng : Rng
-  reg : Registry D
   /-- the Host's World and its admitted log -/
   host : World D
   log : List (Turn D) := []
@@ -133,16 +128,15 @@ def signed (P : Params D) (st : State D) (m : Member D) (key : ByteArray) (pins 
   let u : Unsigned D :=
     { member := m.id, key := P.pub key, notBefore := 0, validUntil := st.host.height + 1 + 100, pins,
       maxCharge := 1000000, body }
-  { unsigned := u, signature := P.sign key ((P.ctx {}).unsignedBytes u) }
+  { unsigned := u, signature := P.sign key (P.ctx.unsignedBytes u) }
 
 def freshKey (st : State D) (tag : String) : ByteArray × State D :=
   ((s!"key-{tag}-{st.fresh}").toUTF8, { st with fresh := st.fresh + 1 })
 
 /-- Submit a call on the Host path and judge the verdict. -/
 def submit (P : Params D) (st : State D) (c : Call D) (expect : Expect) (what : String) : State D × Option (Turn D) :=
-  let X := P.ctx st.reg
-  let reg := { calls := (P.regKey (X.callBytes c), c) :: st.reg.calls }
-  let st := { st with reg, steps := st.steps + 1, lastCall := some c }
+  let X := P.ctx
+  let st := { st with steps := st.steps + 1, lastCall := some c }
   let fail := fun (got : String) =>
     ({ st with failures := s!"step {st.steps} {what}: expected {reprStr expect}, got {got}" :: st.failures }, none)
   match Receive.submit X st.host c with
@@ -183,7 +177,7 @@ def act (P : Params D) (st : State D) : State D :=
       let (sp, st) := pick st st.members (founder0 P st)
       let (key, st) := freshKey st "m"
       let (nk, st) := freshKey st "n"
-      let X := P.ctx st.reg
+      let X := P.ctx
       let possession := P.sign key (possessionMessage X sp.id (nextKeyDigest X (P.pub nk)) (P.pub key))
       let hs := holdOf st sp.id
       let (chain, expect, st) : List D × Expect × State D := match hs.chain with
@@ -212,7 +206,7 @@ def act (P : Params D) (st : State D) : State D :=
       let (m, st) := pick st st.members (founder0 P st)
       let (ge, st) := pick st st.members (founder0 P st)
       let (n, st) := st.rng.below 4 |> fun (x, r) => (x, { st with rng := r })
-      let X := P.ctx st.reg
+      let X := P.ctx
       let hm := holdOf st m.id
       match hm.chain with
       | [] =>
@@ -250,7 +244,7 @@ def act (P : Params D) (st : State D) : State D :=
           let (obj, st) := pick st st.objects o
           let owner := (st.members.find? fun m => m.id = obj.2).getD (founder0 P st)
           let laws := match w.live obj.1 with
-            | some cell => (lawSlotsOf cell).filterMap fun (p : Nat × ByteArray) => (P.ctx st.reg).digestOf p.2
+            | some cell => (lawSlotsOf cell).filterMap fun (p : Nat × ByteArray) => P.ctx.digestOf p.2
             | none => []
           let denied := laws.any fun l => l = deny
           let c := signed P st owner owner.key (S.pinsFor P.env w (owner.id :: obj.1 :: deny :: laws))
@@ -264,7 +258,7 @@ def act (P : Params D) (st : State D) : State D :=
           let (obj, st) := pick st st.objects o
           let owner := (st.members.find? fun m => m.id = obj.2).getD (founder0 P st)
           let laws := match w.live obj.1 with
-            | some cell => (lawSlotsOf cell).filterMap fun (p : Nat × ByteArray) => (P.ctx st.reg).digestOf p.2
+            | some cell => (lawSlotsOf cell).filterMap fun (p : Nat × ByteArray) => P.ctx.digestOf p.2
             | none => []
           let denied := laws.any fun l => some l = st.denyPkg
           let c := signed P st owner owner.key (S.pinsFor P.env w (owner.id :: obj.1 :: laws))
@@ -289,7 +283,7 @@ def act (P : Params D) (st : State D) : State D :=
       match st.lastCall with
       | none => st
       | some c =>
-          match w.journal[txIdOf (P.ctx st.reg) c]? with
+          match w.journal[txIdOf P.ctx c]? with
           | some (h, _) => (submit P st c (.rejected "replayed") s!"replay@{h}").1
           | none => st
   | 7 => -- a stale pin: the owner claims the object is absent
@@ -301,13 +295,13 @@ def act (P : Params D) (st : State D) : State D :=
           let pins := (S.pinsFor P.env w [owner.id]) ++ [(obj.1, pinOf P.env none)]
           let c := signed P st owner owner.key pins (.write obj.1 [(0, nat 7)] none)
           let laws := match w.live obj.1 with
-            | some cell => (lawSlotsOf cell).filterMap fun (p : Nat × ByteArray) => (P.ctx st.reg).digestOf p.2
+            | some cell => (lawSlotsOf cell).filterMap fun (p : Nat × ByteArray) => P.ctx.digestOf p.2
             | none => []
           if laws.isEmpty then (submit P st c (.rejected "stale") "stale").1 else st
   | 8 => -- rotation: a thief's key is refused; the member's precommitted key is admitted
       let (m, st) := pick st st.members (founder0 P st)
       let (thief, st) := freshKey st "thief"
-      let X := P.ctx st.reg
+      let X := P.ctx
       let bad := signed P st m thief (S.pinsFor P.env w [m.id]) (.rotate (P.pub thief) (nextKeyDigest X (P.pub thief)))
       let (st, _) := submit P st bad (.refused "notPrecommitted") "thief-rotate"
       let (nk, st) := freshKey st "n"
@@ -369,7 +363,7 @@ def act (P : Params D) (st : State D) : State D :=
           | none => st
           | some m =>
               let laws := match w.live obj with
-                | some cell => (lawSlotsOf cell).filterMap fun (p : Nat × ByteArray) => (P.ctx st.reg).digestOf p.2
+                | some cell => (lawSlotsOf cell).filterMap fun (p : Nat × ByteArray) => P.ctx.digestOf p.2
                 | none => []
               let denied := laws.any fun l => some l = st.denyPkg
               let c := signed P st m m.key (S.pinsFor P.env w (m.id :: obj :: gid :: laws))
@@ -468,12 +462,12 @@ def run (P : Params D) (seed : Nat) (steps : Nat) : State D :=
   let rng : Rng := ⟨seed.toUInt64 * 0x2545F4914F6CDD1D + 1⟩
   let fk : List (ByteArray × ByteArray) :=
     [("f0".toUTF8, "f0-next".toUTF8), ("f1".toUTF8, "f1-next".toUTF8)]
-  let X := P.ctx {}
+  let X := P.ctx
   let g := genesis X worldName 100000000 (fk.map fun (k, n) => (P.pub k, nextKeyDigest X (P.pub n)))
   let members := fk.zipIdx.map fun ((k, n), i) => (⟨founderId X worldName i, k, n⟩ : Member D)
   let holds := (List.range fk.length).map fun i =>
     (founderId X worldName i, (⟨[founderGrantId X worldName i], true, enrollMax⟩ : Holding D))
-  let st0 : State D := { rng, reg := {}, host := g, members, holds }
+  let st0 : State D := { rng, host := g, members, holds }
   -- install the deny-all law package first
   let f := founder0 P st0
   let c := signed P st0 f f.key (S.pinsFor P.env g [f.id]) (.install denyAll)
@@ -498,7 +492,7 @@ def run (P : Params D) (seed : Nat) (steps : Nat) : State D :=
   let st := match World.fold P.env g st.log with
     | .ok w => if same w st.host then st else { st with failures := "follower differs" :: st.failures }
     | .error (i, r) => { st with failures := s!"follower refused at {i}: {r.name}" :: st.failures }
-  let st := match audit (P.ctx st.reg) g st.log with
+  let st := match audit P.ctx g st.log with
     | .ok w => if same w st.host then st else { st with failures := "audit differs" :: st.failures }
     | .error (i, f) => { st with failures := s!"audit refused at {i}: {vname f}" :: st.failures }
   -- a forged log: the writer changes what the last write of the log wrote (its event, the signed
@@ -506,7 +500,7 @@ def run (P : Params D) (seed : Nat) (steps : Nat) : State D :=
   match forge st.log with
   | none => st
   | some (i, bad) =>
-      match World.fold P.env g bad, audit (P.ctx st.reg) g bad with
+      match World.fold P.env g bad, audit P.ctx g bad with
       | .ok _, .error (j, .refused .eventMismatch) =>
           if i = j then { st with refusedAsExpected := st.refusedAsExpected + 1 }
           else { st with failures := s!"forgery at {i} named at {j}" :: st.failures }

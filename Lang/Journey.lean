@@ -99,10 +99,9 @@ def ownedText : String := "
 /-- A u64 argument or slot (`none` past `2^64`). -/
 def nat64 (n : Nat) : Option ByteArray := Wire.encodeData .nat (.nat n)
 
-def ctxWith (prog : Program D) (reg : Sim.Registry) : Ctx D :=
-  { Sim.ctx reg with program := prog }
+def ctxWith (prog : Program D) : Ctx D := Sim.ctxWith prog
 
-def langProgram : Program D := Lang.program Sim.u64le Sim.ofLe
+def langProgram : Program D := Lang.program Sim.dc.bytes Sim.digestOf
 
 /-- The plant: a program whose judge admits every write. -/
 def skipJudge : Program D := { langProgram with judge := fun _ _ _ _ _ _ => .ok () }
@@ -117,9 +116,8 @@ def note (r : Run) (line : String) (good : Bool) : Run :=
 
 /-- Submit on the Host path with program `prog`; the verdict's name. -/
 def go (prog : Program D) (r : Run) (c : Call D) : Run × String × Option (Turn D) :=
-  let X := ctxWith prog r.st.reg
-  let reg := { calls := (Sim.fnv (X.callBytes c), c) :: r.st.reg.calls }
-  let st := { r.st with reg }
+  let X := ctxWith prog
+  let st := r.st
   match Receive.submit X st.host c with
   | .error (.refused e) => ({ r with st }, s!"refused {Sim.nameOf e} {reprStr e}", none)
   | .error (.rejected e) => ({ r with st }, s!"rejected {Sim.nameOf e}", none)
@@ -137,10 +135,10 @@ def totalOf (w : World D) (obj : D) : Option Nat :=
 def journey (prog : Program D) (plant : Bool) : Run := Id.run do
   let fk : List (ByteArray × ByteArray) :=
     [("f0".toUTF8, "f0-next".toUTF8), ("f1".toUTF8, "f1-next".toUTF8)]
-  let X := ctxWith prog {}
+  let X := ctxWith prog
   let g := genesis X Sim.worldName 100000000 (fk.map fun (k, n) => (k, nextKeyDigest X n))
   let members := fk.zipIdx.map fun ((k, n), i) => (⟨founderId X Sim.worldName i, k, n⟩ : Sim.Member)
-  let mut r : Run := { st := { rng := ⟨1⟩, reg := {}, host := g, members } }
+  let mut r : Run := { st := { rng := ⟨1⟩, host := g, members } }
   let a := members.headD ⟨0, .empty, .empty⟩
   let b := members.getD 1 ⟨0, .empty, .empty⟩
   -- L0 the resident's text reads to exactly the package
@@ -161,7 +159,7 @@ def journey (prog : Program D) (plant : Bool) : Run := Id.run do
   let (r6, v6, _) := go prog r c6
   r := note r6 s!"L6 install ill-typed: {v6}" (v6.startsWith "refused program")
   -- L2 create
-  let some ownerBytes := Wire.encodeData .bytes (.bytes (Sim.u64le a.id)) | return note r "L2 no owner bytes" false
+  let some ownerBytes := Wire.encodeData .bytes (.bytes (Sim.dc.bytes a.id)) | return note r "L2 no owner bytes" false
   let some n0 := nat64 0 | return note r "L2 no bytes for 0" false
   let some n50 := nat64 50 | return note r "L3 no bytes for 50" false
   let some n101 := nat64 101 | return note r "L4 no bytes for 101" false
@@ -197,7 +195,7 @@ def journey (prog : Program D) (plant : Bool) : Run := Id.run do
   match World.fold Sim.env g r.st.log with
   | .ok w => r := note r s!"L7 follower reaches the Host's World ({r.st.log.length} turns)" (Sim.same w r.st.host)
   | .error (i, e) => r := note r s!"L7 follower refused at {i}: {Sim.nameOf e}" false
-  match audit (ctxWith prog r.st.reg) g r.st.log with
+  match audit (ctxWith prog) g r.st.log with
   | .ok w => r := note r "L7 auditor reaches the Host's World" (Sim.same w r.st.host)
   | .error (i, e) => r := note r s!"L7 auditor refused at {i}: {reprStr e}" false
   return r

@@ -26,10 +26,10 @@
 | Lean lines (Codec) | 4133 | — |
 | Lean lines (Emit) | 351 | — |
 | Lean lines (Host) | 2958 | — |
-| Lean lines (Kernel) | 4312 | — |
-| Lean lines (Protocol) | 2708 | — |
+| Lean lines (Kernel) | 4268 | — |
+| Lean lines (Protocol) | 2695 | — |
 | max dependents of one module | 103 | — |
 | native (extern/implemented_by) | 8 | 8 |
 | C lines | 0 | 146 |
-| Lean lines (Lang) | 5464 | — |
-| Lean lines (tooling: Sim, Rows, Journey, Census, Emit) | 3247 | — |
+| Lean lines (Lang) | 5462 | — |
+| Lean lines (tooling: Sim, Rows, Journey, Census, Emit) | 3188 | — |
