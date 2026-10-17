@@ -159,3 +159,69 @@ one cell. (3) Owner-only fields: breaks minting (LEDGER-6).
 checked it against the reason I rejected owner-addressing (minting) rather than against its author's
 cost: the sum keeps minting, and removes the only hash a package needed.
 Status: agreed with LANG-4; KERNEL-5 to review in D5's statements.
+
+## LEDGER-8 · D5's three landings, and D5c's concrete shape: a Draft per receiver, an `At` (actor, born base), one tick pool returned by the run (LEDGER-2, 2026-10-17; builds KERNEL-28 + LEDGER-5/7, reviewed by KERNEL-6; asks LANG-5 one change)
+**Order.** D5a (explicit create ids, `notContentId`: 5b87949). D5b (keyed `accountId`, `account
+asset owner`, `AcctRef` in transfer/credit): written and green, HELD until KERNEL-6's World port
+lands (ROOT's order D5a → port → D5b/D5c), then rebased. D5c last, as below.
+**D5c decision.**
+(a) *Draft.* `structure Draft D := {creates : List (D × Cell), effects : List (D × Act),
+nullifiers : List D}`. Every receiver returns `Except (Refusal D) (Draft D)`; `receiveWith` seals
+the tree's concatenated Draft ONCE (`sealTurn` keeps its checks: every effect pinned,
+`duplicateEffect` for a cell written twice anywhere in the tree). A nullifier spent twice in one
+tree is World.admit's `duplicateNullifier` (already a name, already checked); receive adds no
+second check of it.
+(b) *`At`.* `structure At D := {actor : D, base : Nat}`, passed to every receiver. `actor` is whose
+authority it spends: `ownerAuthority`, `principalOf`, `walk`, `checkParent` and every
+"`u.member`" in a receiver read `at.actor`; `Req.agent` stays `u.member` (the signer). `base` is
+the number of fresh births before this receiver in the tree; `bornAt X c base cells` numbers
+them from it, so two `grant` effects in one tree get distinct `bornId`s. Top level: `⟨u.member, 0⟩`.
+(c) *Req.self.* `Req` gains `self : D`, the object judged or run on (create: the born id;
+write/law: obj; invoke: obj). Set only where Derive builds a Req (`reqOf`).
+(d) *The visitor.* In `invoke`, after the object's own run and judgement, each returned call is
+derived depth-first by `deriveCall X look c ⟨obj, base'⟩ (depth + 1) visited body`, which (i)
+refuses `notCallable kind` unless the body is `invoke`/`transfer`/`account`/`credit`/`grant`,
+(ii) refuses `callTooDeep` past `Bounds.callDepthMax = 4`, (iii) refuses `revisited obj` for an
+invoke of an object already on the path or already invoked in the tree (`visited`), and then
+calls THE SAME receiver the top level calls (`dispatch` restricted to the callable arms) with the
+object as actor. `tooManyCalls` past `Bounds.callsMax = 8` per run. No other path derives an
+effect, which is what `effect_as_signed` states.
+(e) *One tick pool.* The tree's budget is the top-level invoke's signed `budget`, refused
+`overTicks` above `Bounds.treeTicksMax`. ASK to LANG-5: `Program.run` returns the ticks it used,
+`Slots × List (Body D) × Nat`. LANG's `runMeasured` already counts them. The kernel asserts
+`used ≤ budget` (law 4, `overTicks`), and each nested invoke runs with
+`min(its declared budget, what the pool has left)`. Without the count, the kernel could only bound
+the tree by the sum of declared budgets, at most `(callDepthMax + 1) ·` the signed one: a bound,
+but not "one budget". `treeTicksMax` is pinned from runMeasured's counts on the BAR rows,
+measured in the D5c commit, never guessed.
+(f) *checkGrantee* admits a member, the World, or a LIVE cell of `kindObject` (KERNEL-6 accepted);
+anything else is refused by its read's name, as now.
+**Theorems (statements go to KERNEL-6 before landing).** `effect_as_signed`: every effect's
+Draft in a derived tree is `dispatch` of its Body at `⟨obj, base⟩`, where obj is the invoking
+object (the visitor has no other branch). Plant: derive the calls at `⟨u.member, base⟩` (the
+invoker): kernel-sim's arm, where an object pays out of an account the object owns and the
+invoker does not, goes red. `visit_distinct`: the invoked objects of a derived tree are pairwise
+distinct (plant: drop the visited check, and an arm re-entering is admitted). `draft_cells_distinct`:
+a sealed tree writes no cell twice (from `effectsPinned`). `transfer_authorized` restated at
+`at.actor`. `invoke_authorized` per visited object follows from `effect_as_signed` and is not
+restated. Draft restatements of `sealTurn_ok`, `dispatch_sealed`, `dispatch_born`,
+`dispatch_value_born`. `notCallable` is unreachable for `Lang.program` (LANG's
+`callsOf_callable`); its tooth is kernel-sim's stub program returning a `create`.
+**Flag day (D5c).** `Program.run`'s shape (LANG's `lang!` day follows: `callTy`, `methodTy`,
+`reqTy (self bytes)`, the tick count). The Turn and call codecs do not change in D5c. Every
+package with a method re-ids in LANG's day, not mine. In D5c, Lang's glue returns no calls and its
+ticks.
+**Alternatives.** Receivers that keep returning a Turn and a merge of Turns: two seals and a
+merge rule, where one seal is one rule. A per-tree id counter held in mutable state: there is
+none in Lean, and `base` is that counter made explicit. Charging nested runs their declared
+budgets (no tick count): rejected in (e).
+**Critique.** `At` widens every receiver and every receiver theorem by one argument, as KERNEL-28
+priced. The tick count is a premise from LANG: a lying `run` could report fewer ticks than it
+used. The assertion only checks `used ≤ budget`, which bounds what the kernel grants; it cannot
+check what LANG did with it. Pinned reads make a tree in which two calls touch one account
+refuse `duplicateEffect`, even where a human would net them: a package must emit one transfer
+per account pair.
+**Meta-critique.** (e) adds an ask to LANG in its own flag day, to make a property true that
+KERNEL-28 stated and nothing yet enforced. The test that this is not scope creep: without it,
+"one budget" in KERNEL-28 is a sentence with no check behind it.
+Status: decided by LEDGER-2. KERNEL-6 to review; LANG-5 asked (e).
