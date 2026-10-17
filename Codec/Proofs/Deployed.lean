@@ -41,7 +41,7 @@ theorem eq_callBytes_of_decodeCall (program : Program Digest) {b : ByteArray} {c
   Nanodregg.Codec.Kernel.eq_callBytes_of_decodeCall digestCodec_lawful.on h
 
 theorem world_decode_bytes {w : World Digest} (hw : Nanodregg.Codec.Kernel.World.CodecFits env (fun _ => True) w) :
-    ∃ w', world.decode (world.bytes w) = .ok w' ∧ w'.Equiv w :=
+    world.decode (world.bytes w) = .ok w :=
   Nanodregg.Codec.Kernel.world_decode_bytes digestCodec_lawful.on hw
 
 theorem eq_bytes_of_world_decode {b : ByteArray} {w : World Digest} (h : world.decode b = .ok w) :
@@ -72,8 +72,18 @@ theorem world_get_canon {b : ByteArray} {i j : Nat} {w : World Digest} (h : worl
     w.Canon env ∧ ∀ p ∈ w.trie.toList, Leaf.fits p.1 p.2 = true :=
   Nanodregg.Codec.Kernel.world_get_canon digestCodec_lawful.on h
 
-/-- **Every deployed decoded base carries `World.JournalOk`** (KERNEL-39): no premise. -/
-theorem world_decode_journalOk {b : ByteArray} {w : World Digest} (h : world.decode b = .ok w) : w.JournalOk :=
+/-- **Canonicity, exactly**: a fitting World decodes from `b` iff `b` is its bytes. -/
+theorem world_decode_iff {b : ByteArray} {w : World Digest}
+    (hw : Nanodregg.Codec.Kernel.World.CodecFits env (fun _ => True) w) : world.decode b = .ok w ↔ b = world.bytes w :=
+  Nanodregg.Codec.Kernel.world_decode_iff digestCodec_lawful.on hw
+
+/-- **Every deployed decoded base carries `World.JournalOk`** (KERNEL-39, KERNEL-41): no premise. -/
+theorem world_decode_journalOk {b : ByteArray} {w : World Digest} (h : world.decode b = .ok w) : w.JournalOk env :=
   Nanodregg.Codec.Kernel.world_decode_journalOk digestCodec_lawful.on h
+
+/-- **A World the deployed codec reads at any offset carries `World.JournalOk`** (HOST's base record). -/
+theorem world_get_journalOk {b : ByteArray} {i j : Nat} {w : World Digest} (h : world.get b i = .ok (w, j)) :
+    w.JournalOk env :=
+  Nanodregg.Codec.Kernel.world_get_journalOk digestCodec_lawful.on h
 
 end Nanodregg.Codec.Deployed

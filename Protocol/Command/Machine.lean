@@ -136,8 +136,8 @@ structure Follow (D : Type) [Ord D] where
 /-- What a step asks follow to make durable before it answers: the Turns it absorbed (re-derived,
 in log order; `[]` for most steps), or a base it adopted, which follow seals as its own newest base. -/
 inductive Persist (D : Type) [Ord D]
-  /-- the Turns follow admitted, each with the root of follow's World after it (HOST-29) -/
-  | turns (ts : List (Turn D × D))
+  /-- the Turns follow admitted, each with the two roots (cells', journal's) of follow's World after it (HOST-29) -/
+  | turns (ts : List (Turn D × (D × D)))
   | adopt (w : World D)
 
 /-! ## The continuation -/
@@ -317,14 +317,14 @@ def plan (X : Ctx D) (me : Self D) (w : World D) (key : ByteArray) (b : Body D) 
 (`Receive.submit` = receive, then admit). A writer that logged an event which does not derive is
 caught here, at that height (PROTOCOL-4). Also returns the Turns it derived, in log order, so
 `host follow` persists exactly what it re-derived (HOST-3) rather than re-running this loop. -/
-def absorb (X : Ctx D) : World D → Array (Turn D × D) → List ByteArray →
-    Except (Refusal D) (World D × Array (Turn D × D))
+def absorb (X : Ctx D) : World D → Array (Turn D × (D × D)) → List ByteArray →
+    Except (Refusal D) (World D × Array (Turn D × (D × D)))
   | w, ts, [] => .ok (w, ts)
   | w, ts, e :: es =>
       match X.decodeCall e with
       | none => .error (.eventMismatch (w.height + 1))
       | some c => match submit X w c with
-        | .ok (t, w') => absorb X w' (ts.push (t, World.root X.env w')) es
+        | .ok (t, w') => absorb X w' (ts.push (t, World.roots X.env w')) es
         | .error _ => .error (.eventMismatch (w.height + 1))
 
 
@@ -340,7 +340,7 @@ def logPage (b : ByteArray) : Option (List ByteArray × Nat × ByteArray × Nat)
 
 /-- Absorb a page and require follow's fold to reach the writer's stated height and chain. -/
 def absorbPage (X : Ctx D) (w : World D) (evs : List ByteArray) (height : Nat) (chain : ByteArray) :
-    Except (Refusal D) (World D × List (Turn D × D)) := do
+    Except (Refusal D) (World D × List (Turn D × (D × D))) := do
   let (w', ts) ← absorb X w #[] evs
   if w'.height = height ∧ X.env.bytes w'.chain = chain then pure (w', ts.toList)
   else throw (.chainMismatch height)
@@ -424,7 +424,7 @@ def step (X : Ctx D) (B : Thin.Base (World D)) (me : Self D) (f : Follow D) (kb 
     Follow D × Persist D × Reply :=
   let w := f.world
   let same (r : Reply) : Follow D × Persist D × Reply := (f, .turns [], r)
-  let moved (w' : World D) (ts : List (Turn D × D)) (r : Reply) : Follow D × Persist D × Reply :=
+  let moved (w' : World D) (ts : List (Turn D × (D × D))) (r : Reply) : Follow D × Persist D × Reply :=
     ({ f with world := w' }, .turns ts, r)
   match State.ofBytes kb, parse X.digestOf ((State.ofBytes kb).map (·.argv) |>.getD []) with
   | none, _ => same (refused (D := D) .badState)

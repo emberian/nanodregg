@@ -46,9 +46,9 @@ def lcg (s : Nat) : Nat := (s * 6364136223846793005 + 1442695040888963407) % 2 ^
 
 def receipt (h d : Nat) : ByteArray := le64 h ++ le64 d
 
-def machine : Machine (World Nat) (Turn Nat) (Reject Nat) Frame Nat where
+def machine : Machine (World Nat) (Turn Nat) (Reject Nat) Frame (Nat × Nat) where
   admit := World.admit env
-  note := World.root env
+  note := World.roots env
   handle _ f :=
     match hangUpAnswer f with
     | some (st, p) => .reply st p
@@ -58,7 +58,7 @@ def machine : Machine (World Nat) (Turn Nat) (Reject Nat) Frame Nat where
     | .error _ => .reply Protocol.Status.refused.code "undecodable".toUTF8
   refuse w t r :=
     match r with
-    | .replayed h => match w.journal[t.txId]? with
+    | .replayed h => match w.journalAt env t.txId with
       | some (_, d) => (Protocol.Status.ok.code, receipt h d)
       | none => (Protocol.Status.refused.code, r.name.toUTF8)
     | _ => (Protocol.Status.refused.code, r.name.toUTF8)
@@ -473,7 +473,7 @@ def carryPlants (failures : IO.Ref Nat) : IO Unit := do
   let kx := Kernel.Sim.ctx
   let kdc := Kernel.Sim.dc
   let kw₀ : World Kernel.Sim.D := World.genesis kx.env (kx.env.hash "nanodregg/host-sim/origin/v1" "carry".toUTF8) (2 ^ 40)
-  let kw : World Kernel.Sim.D := { kw₀ with height := 7, journal := kw₀.journal.insert 42 (5, 99) }
+  let kw : World Kernel.Sim.D := { kw₀ with height := 7, journal := kw₀.journal.insert (journalSpec kx.env) 42 (5, 99) }
   let cbytes (w : World Kernel.Sim.D) := (Codec.Kernel.carried kx.env kdc).bytes w.carried
   match Carry.exportFile kx.env kdc kw with
   | .error f => check s!"plant-carry: export of a World with a journal entry ({f.name})" false failures
@@ -485,7 +485,7 @@ def carryPlants (failures : IO.Ref Nat) : IO Unit := do
     match imported 1, imported 2 with
     | some a, some b =>
       check "plant-carry: export then import keeps the carried bytes and the height, under a new origin"
-        (cbytes a == cbytes kw && a.height == kw.height && a.origin != kw.origin && a.journal.contains 42) failures
+        (cbytes a == cbytes kw && a.height == kw.height && a.origin != kw.origin && (a.journalAt kx.env 42).isSome) failures
       check "plant-carry: two imports under two nonces are two Worlds" (a.origin != b.origin) failures
     | _, _ => check "plant-carry: the exported file imports" false failures
     let refusedAs (want' : Codec.Digest) (g : ByteArray) : String :=
@@ -634,11 +634,11 @@ def run (args : List String) : IO UInt32 := do
     (r.disk.synced.extract origin.offset r.disk.synced.size)).records
   let stated := records.foldl (fun acc rec => match (Record.codec dc).decode rec with
     | .ok ps => acc ++ ps | .error _ => acc) []
-  -- the (Turn, root) pairs recomputed by admitting the logged Turns from genesis: the page checks
+  -- the (Turn, roots) pairs recomputed by admitting the logged Turns from genesis: the page checks
   -- below compare against THESE, never against the roots the records state
-  let turns : List (Turn Nat × Nat) := ((stated.map Prod.fst).foldl
-    (fun (acc : World Nat × Array (Turn Nat × Nat)) t => match World.admit env acc.1 t with
-      | .ok w' => (w', acc.2.push (t, World.root env w'))
+  let turns : List (Turn Nat × (Nat × Nat)) := ((stated.map Prod.fst).foldl
+    (fun (acc : World Nat × Array (Turn Nat × (Nat × Nat))) t => match World.admit env acc.1 t with
+      | .ok w' => (w', acc.2.push (t, World.roots env w'))
       | .error _ => acc) (genesis, #[])).2.toList
   let admittedBytes := turns.foldl (fun n t => n + (turnCodec.bytes t.1).size) 0
   -- log pages (Host.Page) over the durable segment, index.log and the loop's entries since the base
@@ -808,25 +808,29 @@ def run (args : List String) : IO UInt32 := do
   check "plant-flip-header: corrupt (the frames after it are found by the forward scan)"
     (isCorrupt (reopen g (flipByte firstSeg origin.offset)) origin.offset) failures
   -- plant-flip-root (HOST-29, KERNEL-7's tooth for `Rooted`): the first record re-encoded with
-  -- the root stated beside its first Turn changed, and the segment re-sealed after the origin
-  -- frame (so every tag verifies): the writer's reopen admits the Turn and refuses the stated root.
-  let rootFlipped : Option ByteArray :=
+  -- one of the roots stated beside its first Turn changed, and the segment re-sealed after the origin
+  -- frame (so every tag verifies): the writer's reopen admits the Turn and refuses the stated pair.
+  -- Each of the two roots a pair states (KERNEL-41: the cells' root, then the journal's) is flipped
+  -- alone, so a reopen that compared only one of them goes red by the other's name.
+  let rootFlipped (flip : Nat × Nat → Nat × Nat) : Option ByteArray :=
     let rv := Log.recover keys.segment cadence.recordBytesMax segmentInitial firstSeg
     match rv.records with
     | o :: r0 :: rest => match (Record.codec dc).decode r0 with
-      | .ok ((t, root) :: ps) =>
-        some (Log.encodeAll keys.segment segmentInitial (o :: Record.encode dc (((t, root + 1) :: ps).toArray) :: rest))
+      | .ok ((t, roots) :: ps) =>
+        some (Log.encodeAll keys.segment segmentInitial (o :: Record.encode dc (((t, flip roots) :: ps).toArray) :: rest))
       | _ => none
     | _ => none
-  match rootFlipped with
-  | none => check "plant-flip-root: the first record decodes into (Turn, root) pairs" false failures
-  | some seg =>
-    check "plant-flip-root fires: the re-sealed segment differs from the written one, same length"
-      (seg.size = firstSeg.size && seg != firstSeg) failures
-    check "plant-flip-root: one stated root flipped is refused `rootMismatch` at record 0, Turn 0"
-      (match reopen g seg with
-       | .error (.log (.record 0 (.rootMismatch 0))) => true
-       | _ => false) failures
+  for (which, flip) in [("cells", fun (r : Nat × Nat) => (r.1 + 1, r.2)),
+                        ("journal", fun (r : Nat × Nat) => (r.1, r.2 + 1))] do
+    match rootFlipped flip with
+    | none => check s!"plant-flip-root-{which}: the first record decodes into (Turn, roots) pairs" false failures
+    | some seg =>
+      check s!"plant-flip-root-{which} fires: the re-sealed segment differs from the written one, same length"
+        (seg.size = firstSeg.size && seg != firstSeg) failures
+      check s!"plant-flip-root-{which}: the stated {which} root flipped is refused `rootMismatch` at record 0, Turn 0"
+        (match reopen g seg with
+         | .error (.log (.record 0 (.rootMismatch 0))) => true
+         | _ => false) failures
   check "plant-flip-last-frame: torn (the stated undecidable case: one frame lost, loudly)"
     (match reopen g (flipByte firstSeg (firstSeg.size - 1)) with
      | .ok o => 0 < o.opened.torn ∧ o.opened.records + 1 = full

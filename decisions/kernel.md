@@ -1633,6 +1633,76 @@ root) was the more expensive one in theorems.
 - HOST (HOST-10): stamp, reopen theorems, Serve's reads through `journalAt`.
 - PROTOCOL (PROTOCOL-7): rows' journal reads.
 
+### KERNEL-41 PORTED (KERNEL-12, 2026-10-17): what (a′) became in code, and what it cost in premises
+**Built.**
+- `Journal D := Trie.T D (Nat × D) D` and `journalSpec E` (bit `byteBit (E.bytes k)`, depth
+  `Bounds.journalDepth` = 256, nodes `E.hash domTrie`, leaves
+  `journalDigest E e = E.hash domJournal (nat64 e.1 ‖ bytes e.2)`).
+- `World.journalAt`, `World.journalRoot`, `World.roots E w := (root, journalRoot)`.
+- `headLink E prev td root' jroot'`, with `chainNext E prev t (roots' : D × D)` over it; `chainOf`
+  and `RootedFold` run over `(Turn, (root, jroot))`.
+- `pruneJournal E H j` is `Trie.retainAt … [] j` at multiples of W. `commitJournal` inserts, then
+  prunes, with ONE lazy empty digest for both (KERNEL-35's rule, per trie).
+- `World.Equiv` and `Kernel/Proofs/Equiv.lean` are DELETED. `carry_inj` concludes listing equality,
+  and `carry_inj_canon` concludes `=` under both journals' Canon.
+**Premise spread, enumerated (the price ruled in (5)).**
+- (a′) said Routed. The port takes `World.JournalCanon E w` (Trie.Canon at the root), because
+  `get_retainAt` and `canon_retainAt` are stated at Canon. `JournalOk E w` = JournalCanon ∧
+  heights ∧ distinct.
+- These gain `hc : w.JournalCanon E` at the generic level: admit_retains, fold_retains,
+  fold_answers, admit_spacing, admit_twice_window, submit_once, derived_once, check_prune,
+  admit_prune_verdict, commit_filtered, fold_journal_filter, fold_prune_check, absent_final (moved
+  from Fold to Journal; HOST's lookup_expired_final inherits it), commit_journal_mem, and
+  admit_journaled (split from admit_journal; admit_new stays premise-free).
+- journalOk_of_fits gains the canonicity premise, which CODEC's decoder supplies by `build`.
+- `JournalOk` takes `E`.
+- NO cell reader gained anything: the spread stops at the journal, as (a′) intended.
+- Premise-free corollaries: reach_journalOk, reach_journal_bounded, reach_submit_once,
+  reach_derived_once, reach_admit_spacing, reach_prune_check (from genesisWorld and a fold), and
+  RootedDeployed's deployed_reach_journalOk.
+- New premise on the phone's journal soundness: `0 < n`. At n = 0 the leaf bodies of `[]` and
+  `[x]` are both empty, so `journalBody_inj` is false there. The cells' slot kind byte hides this
+  for cells. Deployed n = 32: discharged by `decide`.
+**The phone's head read** (`Kernel.Proofs.JournalHead`, deployed forms in RootedDeployed):
+- `head_roots`: a head record names both roots, or a collision;
+- `head_journal_read`: inclusion, whose one premise left is the claimed height < 2^64 (a u64 on the
+  wire; every reached World's heights are, by `admit_height_lt`);
+- `head_journal_absent`: exclusion, sound about the journal;
+- `head_absent_admitted`: an admitted turn, below `notBefore + 2·windowMax`, has no exclusion proof
+  against any later head but by a collision. That is "exclusion while journalForgets is false",
+  stated exactly.
+- `journal_prove_verifies` / `journal_prove_absent`: completeness.
+**Teeth.**
+- Every journal arm keeps its name.
+- `journal-shadow:filtered` now also compares the reached journal's ROOT with `build` of the
+  filtered never-pruned listing. Its reference is `build`, not `retainAt`, so the arm is
+  independent of the code it checks.
+- Mutation, prune never fires: seed 0 is red with "journal holds 3072 entries"; 8 journal arms are
+  unmet.
+- Mutation, retainAll without collapse (`mkNode` for `join`): journal-shadow:filtered is red by its
+  root at height 3074, and retain:canonical is red on every seed.
+- Both mutations were reverted. Logs: hbox logs/kernel12-mut1.log, kernel12-mut2.log.
+**WASTE (kernel-sim --seeds 64, COUNTED).**
+- `hashes-per-touched-cell` 8.969 and `hashes-per-nullifier` 3.336 are UNCHANGED, because the
+  journal write is bracketed apart (`<J`) and subtracted from the nullifier share.
+- NEW `admit hashes-per-journal-entry` 13.672, counted in the journal probe at the window's steady
+  state (up to 3·W entries; `<K`).
+- NEW `admit hashes-per-prune` 539.333 (`<R`; 3 prunes over 3·W+2 heights), ≈ 0.53 per turn
+  amortized.
+- Together ≈ 14.2 per turn against (a′)'s ≈ 15.
+**Critique.**
+- The journal row is measured on seed 0's one-turn-per-height probe, not on the generated runs: their
+  journals hold ≲ 120 entries and read 8.0, which is the draw, not the steady state.
+- The two tries share `domTrie` for nodes. A journal root and a cells root are told apart by their
+  position in the link, not by the hash domain. Every soundness theorem is per root, so nothing
+  rests on more, but a domain per trie would cost nothing.
+- `World` keeps `[Ord D]`: `checkShape`'s `firstDup` still uses it. The structure no longer needs
+  it, and dropping it touches every layer's `variable` lines: left for a quieter day, not done.
+**Meta-critique.** The (a′) text said "Routed". I built against what the trie's theorems state
+(Canon), not what the design prose said. That is one more conjunct, and it was invisible from the
+ruling. A design that names a premise should name it at the granularity the lemmas it cites
+actually take.
+
 ## KERNEL-42 · Every message a member key signs begins with its own domain: a call's signature is over `callMessage = domCall ‖ unsignedBytes` (PROTOCOL-7 for KERNEL-11, 2026-10-17; CODEC-6's finding, ROOT ruling)
 **Decision.** `Receive.domCall` ("nanodregg/kernel/call-signature") and `Ctx.callMessage X u := domCall ++ X.unsignedBytes u`.
 - `checkSignature` (Derive) verifies `callMessage`.

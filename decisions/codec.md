@@ -1004,3 +1004,89 @@ census makes this automatic: a row that excuses a site with a plain lawfulness t
 weaker statement because it is the one we have. The test is whether any consumer needs `=` on a decoded World. Today
 none does: every kernel theorem over a decoded base takes `World.Equiv` congruences (`live_congr`, `root_congr`), or
 reads the trie, which is `=`.
+
+## CODEC-31 · The journal is a trie on the wire too; decode ∘ bytes = id for the World and the carried state; both allow rows deleted (KERNEL-41 (a′) with KERNEL-12; CODEC-7, 2026-10-17)
+**Decision.**
+- **One listing refinement for both tries.**
+  - `listingAccept S` (Codec/World.lean) builds the trie from the listing and keeps it iff it lists that listing back with no
+    key twice in a leaf.
+  - `cells = refine "kernel/trie-order" (fitList dc) (listingAccept (trieSpec E)) toList`, whose shape and tag are
+    unchanged.
+  - `journalTrie = refine "kernel/journal-order" (rawList journalMax (dc × nat64 × dc)) (listingAccept (journalSpec E)) toList`.
+  - One accept function serves two literal sites, so the refine census still sees each site. A wrapper def would have
+    hidden both from `siteName?`.
+  - `trieListing_lawfulOn` (generic) has `cells_lawfulOn` and `journalTrie_lawfulOn` as instances.
+  - `trieListing_get_ok`, `_refused` and `_ordered` (generic, over `Separates`) have the cells and journal restatements
+    as instances.
+- **The journal's order is the id bytes.**
+  - `bitLt_journalSpec_iff (hE)` shows `BitLt (journalSpec E) 0 k k' ↔ compare (E.bytes k).data (E.bytes k').data = .lt`.
+  - The `journalTrie_get_*` lemmas follow from it, over `JournalBefore`.
+  - Deployed: `journalOrder_iff` (accepted iff strictly ascending by `Digest` compare) and `journalOrder_refuses`
+    (`rejected i "kernel/journal-order"`).
+- **The kernel's `kernel/ascending` is deleted**, together with `ascendingList`, `ascendingBy`, `ascendingList_lawfulOn`, the
+  sorted-TreeMap lemmas and `ascending_tooth`.
+  - It checked ascent by `compare` on D, which agrees with the trie's byte order at the deployed Digest but not
+    generically.
+  - At Sim (u64, little-endian bytes) the two orders differ, so one of the two checks would have refused valid journals
+    or been vacuous.
+- **`kernel/journal` stays.** It is `journalFits` over the journal trie's own `toList`. Canonicity does not imply the
+  window facts.
+- **World and carried.**
+  - `world = refine "kernel/world" (journalWire E dc) (some ∘ ofWire) toWire` and `carried` likewise.
+  - `ofWire` and `carriedOfWire` are now pure tuple maps with no `E`, which replaces KERNEL-12's scaffold.
+  - `world_lawfulOn : LawfulOn (World.CodecFits E PD) (world E dc)` and `carried_lawfulOn` are plain lawfulness theorems.
+    `World.CodecFits` gains `JournalTrieFits`: the journal trie is canonical and its listing is within bounds.
+  - `world_decode_bytes` and `carried_decode_bytes` are `= .ok w` exactly. `world_decode_iff` and `carried_decode_iff`
+    are `decode b = .ok w ↔ b = bytes w`.
+  - `world_bytes_equiv`, `carried_bytes_equiv`, `CarriedEquiv` and `ofWire_toWire_equiv` are deleted, since `World.Equiv`
+    is deleted by KERNEL.
+  - Both gates/refines-allow.tsv rows are deleted. The census now counts 27 sites, all 27 with a lawfulness theorem and
+    0 allowed.
+- **JournalOk from the codec.**
+  - `world_decode_journalOk` and `world_get_journalOk` (generic and deployed; the latter is HOST-11's ask, at any
+    offset) give `w.JournalOk E` from KERNEL's `journalOk_of_fits` (Canon from the rebuild, `journalFits` from the
+    refusal).
+  - `carried_decode_journalCanon`.
+  - `carried_fits` drops its `journal.size < journalMax` premise, because `JournalTrieFits` carries the bound.
+- **`kernel/carried-journal` (HOST-11 found this one).** Before this, nothing on the carry path refused a carried journal
+  outside the window of the carried height: the carried codec had no `kernel/journal`, and KERNEL's `checkCarry` has
+  none either. So a file with a future entry passed `importWorld`, genesis-wrote a Store, and its reopen then refused
+  `baseUndecodable`.
+  - `carried` is now refined by `carriedJournalWire = refine "kernel/carried-journal" carriedWire (journalFits height
+    journal.toList)`, so the World's check now runs on the carry path too.
+  - `Carried.CodecFits` gains the `journalFits` conjunct. `carried_fits` takes it from `World.CodecFits`.
+  - `carried_decode_journalFits` and `carried_decode_wire_refused` are added.
+  - Teeth: `carried_refuses_future_entry` (`rejected 0 "kernel/carried-journal"`) and `carried_reads_windowed_journal`.
+  - The name differs from the World's `kernel/journal` because the vectors table keys on the refinement name.
+- **`batch`** is `List (Turn × (D × D))`, carrying both roots after each turn (scaffold kept). `batch_lawfulOn` follows it.
+- **Teeth.**
+  - Deployed: `journal_refuses_ids_descending` and `journal_reads_ids_ascending`.
+  - Sim: `carried_reads_ordered_journal`, plus `carried_refuses_swapped_journal` and `carried_refuses_repeated_txId`
+    (both `kernel/journal-order`).
+  - `journalOrder_tooth`: a check-less `kernel/journal-order` respells.
+  - The journal-window teeth are restated over the trie (`world_refuses_future_entry`, `_shared_height`,
+    `world_reads_windowed_journal`).
+- **maxrss:** about 0.78 GB per module; TrieOrderDeployed is 1.08 GB.
+
+**Flag day.**
+- Shapes that changed: the World wire's journal part (`kernel/ascending` became `kernel/journal-order`), so the
+  `kernel/journal`, `kernel/world`, `kernel/carried` and `host/base/index-count` tags move. The cells' `kernel/trie-order`
+  tag does not move.
+- Re-emitted: gates/codec-vectors.tsv re-pins exactly those four sites, adds `kernel/journal-order` and drops
+  `kernel/ascending` adds `kernel/carried-journal` (71 vectors, 27 sites). The generated Rust files are unchanged (checked).
+- Re-genesis: every Store (KERNEL-41's roots and chain move anyway).
+- Refuses to load: an old base refuses `shapeMismatch` by stamp, and an old carried export refuses by its stamp.
+
+**Critique.**
+- (1) `listingAccept` is shared and the sites are literal. A third trie would add a third site by the same one-liner,
+  which the census sees. The census still cannot see a site built through a wrapper def, so whoever writes one blinds
+  it. That is GATES' to close if it matters: the census could follow defs whose body is `refine <bound name> …`.
+- (2) The journal-order teeth that need the order relation are stated at the deployed digest. Sim teeth go through
+  `decide +kernel` on two-entry tries, which is small.
+- (3) `JournalTrieFits` puts the height bound (< 2^64) in the codec's domain. Reached Worlds need KERNEL's
+  `admit_height_lt` and `journal_height_le` to place a folded World in it, so HOST's export completeness still waits on
+  that composition (Host/Proofs/Carry's named gap).
+
+**Meta-critique.** I was tempted to keep `kernel/ascending` beside the trie check "for the deployed reading", which
+would have been two checks that agree only at one parameter: exactly the twin the charter forbids. The order theorem
+gives the deployed reading without a second check.

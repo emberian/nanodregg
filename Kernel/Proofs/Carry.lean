@@ -10,7 +10,8 @@ re-genesis, never by a migration). It is checked like genesis (`carry_ok`: refus
 * `carry_origin_ne_genesis`: a carry's origin is never a genesis's origin, or the origin hash has
   a collision (the two inputs are tagged apart, `originInput`);
 * `carry_inj`: a carry's origin commits to its name, nonce, the exported World's origin, the
-  trie's root, the allowance, the height and the journal (up to `Equiv`), or a collision;
+  trie's root, the allowance, the height and the journal's listing, or a collision (with both
+  journals canonical, the journal itself: `carry_inj_canon`);
 * `carry_canon`, `carry_cellsFit`, `carry_journalOk`: the new World keeps every invariant the
   read and journal theorems rest on (true by construction: the fields are copied);
   `carry_journal_fits`, `carry_fold_journal_bounded`: a reached World always fits a carry, and
@@ -32,7 +33,7 @@ variable {D : Type} [Ord D]
 /-- A carry input within the raw codec's bounds. `carry` refuses by name outside it. -/
 def CarryFits (X : Ctx D) (name nonce : ByteArray) (fromOrigin : D) (c : Carried D) : Prop :=
   name.size ≤ Bounds.eventBytesMax ∧ nonce.size ≤ Bounds.eventBytesMax ∧ c.allowance < 2 ^ 64 ∧
-    c.height < 2 ^ 64 ∧ c.journal.size ≤ Bounds.journalMax ∧
+    c.height < 2 ^ 64 ∧ c.journal.toList.length ≤ Bounds.journalMax ∧
     (X.env.bytes fromOrigin).size ≤ Bounds.eventBytesMax ∧
     (X.env.bytes (c.trie.hashOf (trieSpec X.env))).size ≤ Bounds.eventBytesMax ∧
     ∀ p ∈ c.journal.toList, (X.env.bytes p.1).size ≤ Bounds.eventBytesMax ∧ p.2.1 < 2 ^ 64 ∧
@@ -110,23 +111,23 @@ theorem carry_fits_input {X : Ctx D} {name nonce : ByteArray} {fromOrigin : D} {
             (x.2.1 < 2 ^ 64 ∧ x.2.2.size ≤ Bounds.eventBytesMax))))))) := by
   obtain ⟨h1, h2, h3, h4, h5, h6, h7, h8⟩ := h
   refine ⟨h1, h2, h6, h7, h3, h4, ?_, ?_⟩
-  · simp only [carryInputOf, List.length_map, Std.TreeMap.length_toList]; exact h5
+  · simp only [carryInputOf, List.length_map]; exact h5
   · intro x hx
     simp only [carryInputOf, List.mem_map] at hx
     obtain ⟨p, hp, rfl⟩ := hx
     exact h8 p hp
 
 /-- **A carry commits to everything it was made from**: two carries with one origin had the same
-name, nonce, exported origin, trie root, allowance, height and journal (up to `Equiv`), or the
-origin hash has a collision. -/
-theorem carry_inj [Std.TransOrd D] [Std.LawfulEqOrd D] {X : Ctx D}
+name, nonce, exported origin, trie root, allowance, height and journal listing, or the origin hash
+has a collision. -/
+theorem carry_inj {X : Ctx D}
     {n : Nat} (hE : X.env.Lawful n)
     {name nonce name' nonce' : ByteArray} {f f' : D} {c c' : Carried D}
     (hf : CarryFits X name nonce f c) (hf' : CarryFits X name' nonce' f' c')
     (h : carryOriginOf X name nonce f c = carryOriginOf X name' nonce' f' c') :
     (name = name' ∧ nonce = nonce' ∧ f = f' ∧
       c.trie.hashOf (trieSpec X.env) = c'.trie.hashOf (trieSpec X.env) ∧ c.allowance = c'.allowance ∧
-      c.height = c'.height ∧ c.journal.Equiv c'.journal) ∨ HashColl X.env domOrigin := by
+      c.height = c'.height ∧ c.journal.toList = c'.journal.toList) ∨ HashColl X.env domOrigin := by
   by_cases hbytes : originInput.bytes (.inr (carryInputOf X name nonce f c)) =
       originInput.bytes (.inr (carryInputOf X name' nonce' f' c'))
   · left
@@ -141,9 +142,23 @@ theorem carry_inj [Std.TransOrd D] [Std.LawfulEqOrd D] {X : Ctx D}
       intro a b hab
       simp only [Prod.mk.injEq] at hab
       exact Prod.ext (hE.bytes_eq hab.1) (Prod.ext hab.2.1 (hE.bytes_eq hab.2.2))
-    exact Std.TreeMap.equiv_iff_toList_eq.mpr (map_inj hinj hl)
+    exact map_inj hinj hl
   · right
     exact ⟨_, _, hbytes, h⟩
+
+/-- **With canonical journals, a carry's origin commits to the journal itself** (`carry_inj` and
+`Trie.eq_of_toList_eq`: a canonical trie is a function of its listing). -/
+theorem carry_inj_canon [DecidableEq D] {X : Ctx D} {n : Nat} (hE : X.env.Lawful n)
+    {name nonce name' nonce' : ByteArray} {f f' : D} {c c' : Carried D}
+    (hj : Trie.Canon (journalSpec X.env) 0 c.journal) (hj' : Trie.Canon (journalSpec X.env) 0 c'.journal)
+    (hf : CarryFits X name nonce f c) (hf' : CarryFits X name' nonce' f' c')
+    (h : carryOriginOf X name nonce f c = carryOriginOf X name' nonce' f' c') :
+    (name = name' ∧ nonce = nonce' ∧ f = f' ∧
+      c.trie.hashOf (trieSpec X.env) = c'.trie.hashOf (trieSpec X.env) ∧ c.allowance = c'.allowance ∧
+      c.height = c'.height ∧ c.journal = c'.journal) ∨ HashColl X.env domOrigin := by
+  rcases carry_inj hE hf hf' h with ⟨h1, h2, h3, h4, h5, h6, h7⟩ | hc
+  · exact .inl ⟨h1, h2, h3, h4, h5, h6, Trie.eq_of_toList_eq (journalSpec X.env) hj hj' h7⟩
+  · exact .inr hc
 
 /-- A carried World is canonical when the exported one was: the trie is the same. -/
 theorem carry_canon {X : Ctx D} {name nonce : ByteArray} {w w' : World D} (hc : w.Canon X.env)
@@ -158,31 +173,31 @@ theorem carry_cellsFit [DecidableEq D] {X : Ctx D} {F : Cell → Prop} {name non
   exact hc
 
 /-- A carried World's journal is bounded when the exported one's was (same entries, same height). -/
-theorem carry_journalOk [Std.TransOrd D] [Std.LawfulEqOrd D] {X : Ctx D} {name nonce : ByteArray}
-    {w w' : World D} (hj : w.JournalOk) (h : carry X name nonce w.origin w.carried = .ok w') :
-    w'.JournalOk := by
+theorem carry_journalOk [DecidableEq D] {X : Ctx D} {name nonce : ByteArray}
+    {w w' : World D} (hj : w.JournalOk X.env) (h : carry X name nonce w.origin w.carried = .ok w') :
+    w'.JournalOk X.env := by
   obtain ⟨_, rfl⟩ := carry_ok.mp h
   exact hj
 
 /-- **A reached World's journal always fits a carry**: `journalTooLong` never fires on a World
 whose journal is `JournalOk` (every World a genesis or a carry reaches). -/
-theorem carry_journal_fits [Std.TransOrd D] [Std.LawfulEqOrd D] {w : World D} (hj : w.JournalOk) :
-    w.carried.journal.size ≤ Bounds.journalMax :=
+theorem carry_journal_fits [DecidableEq D] {E : Env D} {w : World D} (hj : w.JournalOk E) :
+    w.carried.journal.toList.length ≤ Bounds.journalMax :=
   Nat.le_of_lt (journal_bounded hj)
 
 /-- **Carry, then fold: still bounded.** Every World folded from a carry of a `JournalOk` World
 holds fewer than `3 * windowMax` journal entries, so a second carry passes `journalTooLong` too. -/
-theorem carry_fold_journal_bounded [Std.TransOrd D] [Std.LawfulEqOrd D] [DecidableEq D] {X : Ctx D}
-    {name nonce : ByteArray} {w w' w'' : World D} {l : List (Turn D)} (hj : w.JournalOk)
+theorem carry_fold_journal_bounded [DecidableEq D] {X : Ctx D}
+    {name nonce : ByteArray} {w w' w'' : World D} {l : List (Turn D)} (hj : w.JournalOk X.env)
     (h : carry X name nonce w.origin w.carried = .ok w') (hf : World.fold X.env w' l = .ok w'') :
-    w''.journal.size < 3 * Bounds.windowMax :=
+    w''.journal.toList.length < 3 * Bounds.windowMax :=
   journal_bounded (fold_journalOk (carry_journalOk hj h) hf)
 
 /-- **Answered, never re-run** (PROTOCOL-29). A call the exported World journaled is `replayed` at
 its original height by the carried World: a call committed just before the export, its reply
 lost, settles as committed. -/
 theorem carry_replayed [DecidableEq D] {X : Ctx D} {name nonce : ByteArray} {w w' : World D} {c : Call D} {hh : Nat} {d : D}
-    (h : carry X name nonce w.origin w.carried = .ok w') (hj : w.journal[txIdOf X c]? = some (hh, d)) :
+    (h : carry X name nonce w.origin w.carried = .ok w') (hj : w.journalAt X.env (txIdOf X c) = some (hh, d)) :
     submit X w' c = .error (.rejected (.replayed hh)) := by
   obtain ⟨_, rfl⟩ := carry_ok.mp h
   exact submit_replayed hj

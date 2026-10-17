@@ -209,7 +209,7 @@ theorem admitted_elsewhere_refused {X : Ctx D} {w₁ w₁' w₂ : World D} {c : 
   obtain ⟨_, hr, _⟩ := submit_ok h
   have hw : c.unsigned.world ≠ w₂.origin := by
     rw [(receive_ok_with hr).1]; exact fun e => hne e.symm
-  cases hj : w₂.journal[txIdOf X c]? with
+  cases hj : w₂.journalAt X.env (txIdOf X c) with
   | some p => exact .inr ⟨p.1, submit_replayed hj⟩
   | none =>
       left

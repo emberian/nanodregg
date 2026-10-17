@@ -104,7 +104,7 @@ def handle (X : Ctx D) (w : World D) (f : Frame) : Answer (World D) (Turn D) :=
     match X.decodeCall f.payload with
     | none => refuse (named FrameRefusal.undecodableCall.name)
     | some c =>
-      match w.journal[txIdOf X c]? with
+      match w.journalAt X.env (txIdOf X c) with
       | some (h, d) => .reply Protocol.Status.ok.code (receipt X h d)
       | none =>
         if journalForgets w.height c.unsigned.notBefore then refuse forgotten else
@@ -115,7 +115,7 @@ def handle (X : Ctx D) (w : World D) (f : Frame) : Answer (World D) (Turn D) :=
     match X.decodeCall f.payload with
     | none => refuse (named FrameRefusal.undecodableCall.name)
     | some c =>
-      match w.journal[txIdOf X c]? with
+      match w.journalAt X.env (txIdOf X c) with
       | some (h, d) => .reply Protocol.Status.ok.code (receipt X h d)
       | none =>
         if journalForgets w.height c.unsigned.notBefore then refuse forgotten
@@ -143,15 +143,15 @@ same batch was staged: answer with its receipt, as for any journaled call. -/
 def onReject (X : Ctx D) (w : World D) (t : Turn D) (r : Reject D) : UInt8 × ByteArray :=
   match r with
   | .replayed _ =>
-    match w.journal[t.txId]? with
+    match w.journalAt X.env t.txId with
     | some (h, d) => (Protocol.Status.ok.code, receipt X h d)
     | none => named r.name
   | _ => named r.name
 
 /-- The writer's machine. -/
-def machine (X : Ctx D) : Machine (World D) (Turn D) (Reject D) Frame D where
+def machine (X : Ctx D) : Machine (World D) (Turn D) (Reject D) Frame (D × D) where
   admit := World.admit X.env
-  note := World.root X.env
+  note := World.roots X.env
   handle := handle X
   refuse := onReject X
   ok := Protocol.Status.ok.code

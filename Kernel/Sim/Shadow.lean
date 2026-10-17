@@ -23,9 +23,8 @@ latest entry). It decides nothing: it is the real fold's journal only for a log 
 admitted (the theorems take `World.fold … = .ok`). It is a journal, not a second fold: a fold that
 read its own unpruned journal would refuse a recycled transaction id `replayed`, so it would not
 follow the log at all. -/
-def shadowJournal (E : Env D) : Nat → Std.TreeMap D (Nat × D) compare → List (Turn D) →
-    Std.TreeMap D (Nat × D) compare
+def shadowJournal [DecidableEq D] (E : Env D) : Nat → Journal D → List (Turn D) → Journal D
   | _, J, [] => J
-  | h, J, t :: l => shadowJournal E (h + 1) (J.insert t.txId (h + 1, turnDigest E t)) l
+  | h, J, t :: l => shadowJournal E (h + 1) (J.insert (journalSpec E) t.txId (h + 1, turnDigest E t)) l
 
 end Nanodregg.Kernel

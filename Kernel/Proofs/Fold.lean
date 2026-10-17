@@ -20,39 +20,40 @@ def Collision (hash : String → ByteArray → D) : Prop :=
   ∃ dom a b, a ≠ b ∧ hash dom a = hash dom b
 
 theorem chainOf_concat {E : Env D} :
-    ∀ {c : D} {l : List (Turn D × D)} {t : Turn D} {r : D},
+    ∀ {c : D} {l : List (Turn D × (D × D))} {t : Turn D} {r : D × D},
       chainOf E c (l ++ [(t, r)]) = chainNext E (chainOf E c l) t r
   | c, [], t, r => rfl
   | c, (x, rx) :: rest, t, r => by
       show chainOf E (chainNext E c x rx) (rest ++ [(t, r)]) = _
       rw [chainOf_concat]; rfl
 
-/-- One chain step between bounded turns determines its predecessor, its turn and the root after
+/-- One chain step between bounded turns determines its predecessor, its turn and both roots after
 it, or exhibits a collision. -/
 theorem chainNext_inj [Ord D] {E : Env D} {n : Nat} (hE : E.Lawful n)
-    {c₁ c₂ r₁ r₂ : D} {t₁ t₂ : Turn D} (hb₁ : checkBounds t₁ = .ok ()) (hb₂ : checkBounds t₂ = .ok ())
+    {c₁ c₂ : D} {r₁ r₂ : D × D} {t₁ t₂ : Turn D} (hb₁ : checkBounds t₁ = .ok ()) (hb₂ : checkBounds t₂ = .ok ())
     (h : chainNext E c₁ t₁ r₁ = chainNext E c₂ t₂ r₂) :
     (c₁ = c₂ ∧ t₁ = t₂ ∧ r₁ = r₂) ∨ Collision E.hash := by
   obtain ⟨hsz, _, hb, ht, _⟩ := hE
-  unfold chainNext at h
-  by_cases hin : E.bytes c₁ ++ E.bytes (turnDigest E t₁) ++ E.bytes r₁ =
-      E.bytes c₂ ++ E.bytes (turnDigest E t₂) ++ E.bytes r₂
-  · obtain ⟨hct, hr⟩ := bytes_append_inj hin (by simp [hsz])
+  unfold chainNext headLink at h
+  by_cases hin : E.bytes c₁ ++ E.bytes (turnDigest E t₁) ++ E.bytes r₁.1 ++ E.bytes r₁.2 =
+      E.bytes c₂ ++ E.bytes (turnDigest E t₂) ++ E.bytes r₂.1 ++ E.bytes r₂.2
+  · obtain ⟨hctr, hj⟩ := bytes_append_inj hin (by simp [hsz])
+    obtain ⟨hct, hr⟩ := bytes_append_inj hctr (by simp [hsz])
     obtain ⟨hc, hd⟩ := bytes_append_inj hct (by simp [hsz])
     have hc' := hb hc
     have hd' := hb hd
     unfold turnDigest at hd'
     by_cases hti : E.turnBytes t₁ = E.turnBytes t₂
-    · exact Or.inl ⟨hc', ht hb₁ hb₂ hti, hb hr⟩
+    · exact Or.inl ⟨hc', ht hb₁ hb₂ hti, Prod.ext (hb hr) (hb hj)⟩
     · exact Or.inr ⟨_, _, _, hti, hd'⟩
   · exact Or.inr ⟨_, _, _, hin, h⟩
 
 /-- **Follower soundness.** Two logs of one length that reach one chain from one start are one
-log with one root after every turn, or the hash collides, provided every turn of both logs is
+log with one pair of roots after every turn, or the hash collides, provided every turn of both logs is
 bounded (an admitted turn always is: `fold_bounded`). With `fold_chain` and `fold_height`: a
 follower holding a trusted `(height, chain)` holds the only log that produces it. -/
 theorem chain_binds [Ord D] {E : Env D} {n : Nat} (hE : E.Lawful n) {c : D} :
-    ∀ (k : Nat) (l₁ l₂ : List (Turn D × D)), l₁.length = k → l₂.length = k →
+    ∀ (k : Nat) (l₁ l₂ : List (Turn D × (D × D))), l₁.length = k → l₂.length = k →
       (∀ p ∈ l₁, checkBounds p.1 = .ok ()) → (∀ p ∈ l₂, checkBounds p.1 = .ok ()) →
       chainOf E c l₁ = chainOf E c l₂ → l₁ = l₂ ∨ Collision E.hash
   | 0, l₁, l₂, h₁, h₂, _, _, _ => by
@@ -112,16 +113,16 @@ theorem fold_height {E : Env D} :
       obtain ⟨w₁, h₁, h₂⟩ := fold_cons_ok.mp h
       rw [fold_height h₂, admit_height h₁]; simp; omega
 
-/-- The chain a fold stamps: the log's turns, each with the root its admission left. -/
+/-- The chain a fold stamps: the log's turns, each with the two roots its admission left. -/
 theorem fold_chain {E : Env D} :
     ∀ {w w' : World D} {l : List (Turn D)}, World.fold E w l = .ok w' →
-      ∃ rs : List D, rs.length = l.length ∧ w'.chain = chainOf E w.chain (l.zip rs) ∧
-        (l ≠ [] → rs.getLast? = some (w'.root E))
+      ∃ rs : List (D × D), rs.length = l.length ∧ w'.chain = chainOf E w.chain (l.zip rs) ∧
+        (l ≠ [] → rs.getLast? = some (w'.roots E))
   | w, w', [], h => by simp [World.fold] at h; subst h; exact ⟨[], rfl, rfl, fun h => absurd rfl h⟩
   | w, w', t :: rest, h => by
       obtain ⟨w₁, h₁, h₂⟩ := fold_cons_ok.mp h
       obtain ⟨rs, hl, hc, hr⟩ := fold_chain h₂
-      refine ⟨w₁.root E :: rs, by simp [hl], ?_, fun _ => ?_⟩
+      refine ⟨w₁.roots E :: rs, by simp [hl], ?_, fun _ => ?_⟩
       · rw [hc, admit_chain h₁]; rfl
       · cases rest with
         | nil =>
@@ -217,29 +218,5 @@ theorem admit_window {E : Env D} {w w' : World D} {t : Turn D}
   unfold checkWindow at hw
   rw [req_ok] at hw
   simpa using hw
-
-/-- **`absent` becomes final by expiry (HOST-8).** If the journal of `w` lacks `k` and some later
-World of an admitted log has it, a turn of that log carries `k` and a window still open after
-`w`: its `validUntil` exceeds `w.height`. So once `w.height ≥ v`, a transaction whose signed window
-ends at `v` and is absent stays absent, unless another call with a LATER window has the same
-transaction id — two different signed calls with one digest (`txIdOf`), a collision. -/
-theorem absent_final [Std.TransOrd D] [Std.LawfulEqOrd D] {E : Env D} {k : D} :
-    ∀ {w w' : World D} {l : List (Turn D)}, World.fold E w l = .ok w' →
-      w.journal[k]? = none → w'.journal[k]? ≠ none →
-        ∃ t ∈ l, t.txId = k ∧ w.height < t.validUntil
-  | w, w', [], h, ha, hj => by simp [World.fold] at h; subst h; exact absurd ha hj
-  | w, w', t :: rest, h, ha, hj => by
-      obtain ⟨w₁, h₁, h₂⟩ := fold_cons_ok.mp h
-      have hwin := (admit_window h₁).2
-      by_cases hk : t.txId = k
-      · exact ⟨t, by simp, hk, by omega⟩
-      · have ha₁ : w₁.journal[k]? = none := by
-          obtain ⟨_, _, rfl⟩ := admit_ok h₁
-          show (pruneJournal _ (w.journal.insert t.txId _))[k]? = none
-          rw [pruneJournal_get, Std.TreeMap.getElem?_insert]
-          have : compare t.txId k ≠ .eq := fun he => hk (Std.LawfulEqCmp.eq_of_compare he)
-          simp [this, ha]
-        obtain ⟨u, hu, huk, hlt⟩ := absent_final h₂ ha₁ hj
-        exact ⟨u, by simp [hu], huk, by rw [admit_height h₁] at hlt; omega⟩
 
 end Nanodregg.Kernel

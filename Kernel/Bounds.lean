@@ -51,6 +51,8 @@ def denomBytesMax : Nat := 64
 /-- The World trie's depth (KERNEL-23): one kind bit, then 256 id bits (a 32-byte digest). A proof
 carries at most this many siblings, and a leaf holds two keys only past it. -/
 def trieDepth : Nat := 257
+/-- The journal trie's depth (KERNEL-41): the 256 bits of a transaction id (a 32-byte digest). -/
+def journalDepth : Nat := 256
 /-- The calls one method run may return (LEDGER-5, LANG-23: LANG's `callsTy` has this arity). -/
 def callsMax : Nat := 8
 /-- How deep a tree of calls may nest below the signed call (an object's call is depth 1). -/

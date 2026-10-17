@@ -5,7 +5,7 @@
   rooted run (what the Host's batch machine does per admitted Turn);
 * `RootedFold.fold` — a rooted fold IS a fold of its Turns: the roots are stated by the definition,
   and stripping them leaves `World.fold`;
-* `RootedFold.chain` — the chain a rooted fold reaches is `chainOf` over its (Turn, root) pairs: the
+* `RootedFold.chain` — the chain a rooted fold reaches is `chainOf` over its (Turn, roots) pairs: the
   stated roots are exactly what a reader needs to advance the chain without admitting.
 -/
 import Kernel.Proofs.Admit
@@ -23,10 +23,10 @@ def Rooted {W T R N : Type} (admit : W → T → Except R W) (note : W → N) : 
   | w, [], w' => w' = w
   | w, (t, n) :: rest, w' => ∃ w₁, admit w t = .ok w₁ ∧ n = note w₁ ∧ Rooted admit note w₁ rest w'
 
-/-- `Rooted` over the kernel's transition and root: Turns admitted in order, each with the root of
-the World after it. -/
-abbrev World.RootedFold (E : Env D) : World D → List (Turn D × D) → World D → Prop :=
-  Rooted (World.admit E) (World.root E)
+/-- `Rooted` over the kernel's transition and roots: Turns admitted in order, each with the two roots
+(cells', journal's: `World.roots`) of the World after it. -/
+abbrev World.RootedFold (E : Env D) : World D → List (Turn D × (D × D)) → World D → Prop :=
+  Rooted (World.admit E) (World.roots E)
 
 end
 
@@ -42,14 +42,14 @@ theorem Rooted.snoc {W T R N : Type} {admit : W → T → Except R W} {note : W 
 
 variable {D : Type} [Ord D] [DecidableEq D]
 
-theorem RootedFold.fold {E : Env D} : ∀ {w w' : World D} {l : List (Turn D × D)},
+theorem RootedFold.fold {E : Env D} : ∀ {w w' : World D} {l : List (Turn D × (D × D))},
     World.RootedFold E w l w' → World.fold E w (l.map Prod.fst) = .ok w'
   | w, w', [], h => by simp only [World.RootedFold, Rooted] at h; subst h; rfl
   | w, w', (t, r) :: rest, h => by
       obtain ⟨w₁, ha, -, hr⟩ := h
       simp only [List.map_cons, World.fold, ha, RootedFold.fold hr]
 
-theorem RootedFold.chain {E : Env D} : ∀ {w w' : World D} {l : List (Turn D × D)},
+theorem RootedFold.chain {E : Env D} : ∀ {w w' : World D} {l : List (Turn D × (D × D))},
     World.RootedFold E w l w' → w'.chain = chainOf E w.chain l
   | w, w', [], h => by simp only [World.RootedFold, Rooted] at h; subst h; rfl
   | w, w', (t, r) :: rest, h => by

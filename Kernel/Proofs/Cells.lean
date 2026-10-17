@@ -9,7 +9,9 @@ KERNEL-23 part 2, at the World:
 * `slot_inclusion_sound` / `slot_exclusion_sound`: a proof that verifies against a World's root
   tells the truth about the slot, or `Collision E.hash`. `prove_verifies` / `prove_excludes'`: the
   World proves every slot it holds, and every slot it does not.
-* `head_read_sound`: the phone's theorem. Take a head record `(prev, turnDigest, root')` that hashes
+* `journal_separate`, `journalBody_inj`: the journal trie's parameters meet the same premises (its
+  phone theorems: `Kernel.Proofs.JournalHead`).
+* `head_read_sound`: the phone's theorem. Take a head record `(prev, turnDigest, root', jroot')` that hashes
   to the chain of a World an admitted turn reached, and a proof that verifies against `root'`. Then
   that World holds the slot, or the hash collides.
 Premises: `hE : E.Lawful n` (`Kernel.Proofs.Lawful`: one digest size `n ≤ 32`, injective digest
@@ -168,6 +170,56 @@ theorem leafBody_inj : ∀ x y : List (Slot D × D),
       have := leafBody_inj xs ys ht
       rw [Prod.ext (slotBytes_inj hE hk') (hE.bytes_inj hd), this]
 
+include hE in
+omit [DecidableEq D] in
+/-- **The journal's bits tell any two transaction ids apart within its depth** (KERNEL-41). -/
+theorem journal_separate : Trie.Separates (journalSpec E) := by
+  have hn := hE.n_le
+  intro k k' hne
+  have hbne : E.bytes k ≠ E.bytes k' := fun he => hne (hE.bytes_inj he)
+  have : ∃ i, i < 8 * n ∧ byteBit (E.bytes k) i ≠ byteBit (E.bytes k') i := by
+    apply Classical.byContradiction; intro hno
+    apply hbne; apply byteBit_ext (by rw [hE.size, hE.size])
+    intro i hi
+    exact Classical.byContradiction fun hneq => hno ⟨i, by rw [hE.size] at hi; exact hi, hneq⟩
+  obtain ⟨i, hi, hbit⟩ := this
+  exact ⟨i, by show i < Bounds.journalDepth; unfold Bounds.journalDepth; omega, hbit⟩
+
+omit [DecidableEq D] in
+theorem journalBody_size (kds : List (D × D)) (hE : E.Lawful n) :
+    (Trie.leafBody (journalSpec E) kds).size = (2 * n) * kds.length := by
+  induction kds with
+  | nil => rfl
+  | cons p rest ih =>
+      show (E.bytes p.1 ++ E.bytes p.2 ++ Trie.leafBody (journalSpec E) rest).size = _
+      simp only [ByteArray.size_append, ih, hE.size, List.length_cons]
+      rw [Nat.mul_add, Nat.mul_one]; omega
+
+include hE in
+omit [DecidableEq D] in
+/-- A journal leaf's body determines its entries, at a digest of at least one byte (`hn`: with no
+bytes there is nothing to tell an empty leaf from a full one; the deployed digest has 32). -/
+theorem journalBody_inj (hn : 0 < n) : ∀ x y : List (D × D),
+    Trie.leafBody (journalSpec E) x = Trie.leafBody (journalSpec E) y → x = y
+  | [], [], _ => rfl
+  | [], q :: ys, h => by
+      have := congrArg ByteArray.size h
+      rw [journalBody_size _ hE, journalBody_size _ hE] at this
+      simp only [List.length_nil, List.length_cons, Nat.mul_zero, Nat.mul_add, Nat.mul_one] at this
+      have : 0 < 2 * n * ys.length + 2 * n := by omega
+      omega
+  | p :: xs, [], h => by
+      have := congrArg ByteArray.size h
+      rw [journalBody_size _ hE, journalBody_size _ hE] at this
+      simp only [List.length_nil, List.length_cons, Nat.mul_zero, Nat.mul_add, Nat.mul_one] at this
+      omega
+  | p :: xs, q :: ys, h => by
+      change E.bytes p.1 ++ E.bytes p.2 ++ Trie.leafBody (journalSpec E) xs =
+        E.bytes q.1 ++ E.bytes q.2 ++ Trie.leafBody (journalSpec E) ys at h
+      obtain ⟨hh, ht⟩ := bytes_append_inj h (by simp only [ByteArray.size_append, hE.size])
+      obtain ⟨hk, hd⟩ := bytes_append_inj hh (by rw [hE.size, hE.size])
+      rw [Prod.ext (hE.bytes_inj hk) (hE.bytes_inj hd), journalBody_inj hn xs ys ht]
+
 end Params
 
 /-! ## Inclusion and exclusion at the World -/
@@ -285,25 +337,42 @@ theorem trie_ext {a b : World D} (ha : a.Canon E) (hb' : b.Canon E)
     (he : ∀ s, a.trie.get (trieSpec E) s = b.trie.get (trieSpec E) s) : a.trie = b.trie :=
   Trie.eq_of_get_eq (trieSpec E) (slots_separate hE) ha hb' he
 
+omit [DecidableEq D] in
+/-- A head record that hashes to a chain link names that link's two roots, or the hash collides. -/
+theorem headLink_roots {c prev td root' jroot' : D} {u : Turn D} {rs : D × D}
+    (hhead : headLink E prev td root' jroot' = chainNext E c u rs) :
+    (root' = rs.1 ∧ jroot' = rs.2) ∨ Collision E.hash := by
+  unfold chainNext headLink at hhead
+  by_cases hin : E.bytes prev ++ E.bytes td ++ E.bytes root' ++ E.bytes jroot' =
+      E.bytes c ++ E.bytes (turnDigest E u) ++ E.bytes rs.1 ++ E.bytes rs.2
+  · obtain ⟨hl, hj⟩ := bytes_append_inj hin (by simp [hE.size])
+    obtain ⟨_, hr⟩ := bytes_append_inj hl (by simp [hE.size])
+    exact .inl ⟨hE.bytes_inj hr, hE.bytes_inj hj⟩
+  · exact .inr ⟨domChain, _, _, hin, hhead⟩
+
+/-- A head record that hashes to an admitted World's chain names that World's two roots (its cells'
+and its journal's), or the hash collides. -/
+theorem head_roots {w w' : World D} {t : Turn D} (h : World.admit E w t = .ok w') {prev td root' jroot' : D}
+    (hhead : headLink E prev td root' jroot' = w'.chain) :
+    (root' = w'.root E ∧ jroot' = w'.journalRoot E) ∨ Collision E.hash := by
+  rw [admit_chain h] at hhead
+  exact headLink_roots hE hhead
+
 /-- A head record that hashes to an admitted World's chain names that World's root, or the hash
 collides. -/
-theorem head_root {w w' : World D} {t : Turn D} (h : World.admit E w t = .ok w') {prev td root' : D}
-    (hhead : E.hash domChain (E.bytes prev ++ E.bytes td ++ E.bytes root') = w'.chain) :
+theorem head_root {w w' : World D} {t : Turn D} (h : World.admit E w t = .ok w') {prev td root' jroot' : D}
+    (hhead : headLink E prev td root' jroot' = w'.chain) :
     root' = w'.root E ∨ Collision E.hash := by
-  rw [admit_chain h] at hhead
-  unfold chainNext at hhead
-  by_cases hin : E.bytes prev ++ E.bytes td ++ E.bytes root' =
-      E.bytes w.chain ++ E.bytes (turnDigest E t) ++ E.bytes (w'.root E)
-  · obtain ⟨_, hr⟩ := bytes_append_inj hin (by simp [hE.size])
-    exact .inl (hE.bytes_inj hr)
-  · exact .inr ⟨domChain, _, _, hin, hhead⟩
+  rcases head_roots hE h hhead with ⟨hr, _⟩ | col
+  · exact .inl hr
+  · exact .inr col
 
 /-- **The phone's read.** A head record that hashes to the chain an admitted turn reached, and a
 proof that verifies against the record's root, show a slot of that World, or a collision. -/
 theorem head_read_sound {w w' : World D} {t : Turn D}
     (hc : w.Canon E) (h : World.admit E w t = .ok w') (hwf : w'.CellsFit Codec.Kernel.Cell.Fits E)
-    {prev td root' : D}
-    (hhead : E.hash domChain (E.bytes prev ++ E.bytes td ++ E.bytes root') = w'.chain)
+    {prev td root' jroot' : D}
+    (hhead : headLink E prev td root' jroot' = w'.chain)
     {s : Slot D} {l : Leaf} (hlf : l.CellFit Codec.Kernel.Cell.Fits)
     {p : Trie.Proof (Slot D) D}
     (hv : Trie.verifyInclusion (trieSpec E) root' s (leafDigest E l) p = true) :
@@ -314,8 +383,8 @@ theorem head_read_sound {w w' : World D} {t : Turn D}
 
 /-- **The phone's read of an absence** (an unspent nullifier, an unused id) against a head. -/
 theorem head_absent_sound {w w' : World D} {t : Turn D} (hc : w.Canon E)
-    (h : World.admit E w t = .ok w') {prev td root' : D}
-    (hhead : E.hash domChain (E.bytes prev ++ E.bytes td ++ E.bytes root') = w'.chain)
+    (h : World.admit E w t = .ok w') {prev td root' jroot' : D}
+    (hhead : headLink E prev td root' jroot' = w'.chain)
     {s : Slot D} {p : Trie.Proof (Slot D) D}
     (hv : Trie.verifyExclusion (trieSpec E) root' s p = true) :
     w'.trie.get (trieSpec E) s = none ∨ Collision E.hash := by

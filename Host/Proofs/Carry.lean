@@ -149,20 +149,20 @@ theorem exportFile_ok [Std.TransOrd D] [Std.LawfulEqOrd D] {E : Env D} {PD : D �
     rw [hf, ← ByteArray.append_assoc]
     exact ByteArray.extract_append_eq_right (by simp [ByteArray.size_append, hst])
       (by simp [ByteArray.size_append, hst])
-  obtain ⟨c', hdec, heq⟩ := (carried_decode_iff hd hfit).mpr hC.symm
+  have hdec := (carried_decode_iff hd hfit).mpr hC.symm
   have hst' : (file E dc w).extract 0 stampBytes = (stamp E dc).bytes := by
     rw [hf, hS, ← hst]; exact ByteArray.extract_append_eq_left rfl
   have hread : read E dc (digestOf (file E dc w)) (file E dc w) =
-      .ok ⟨⟨w.origin, w.height, w.chain⟩, c', stampBytes + H.size⟩ := by
+      .ok ⟨⟨w.origin, w.height, w.chain⟩, w.carried, stampBytes + H.size⟩ := by
     unfold read
     rw [if_neg (by simp), if_neg (by simp [hst']), hget]
     dsimp only
     rw [htail, hdec]
     dsimp only
-    rw [if_neg (by simp [heq.2.2.1]; rfl)]
+    rw [if_neg (by simp [World.carried])]
   unfold exportFile exportCheck
   rw [hread]
   dsimp only
-  rw [if_pos ⟨carried_bytes_equiv E dc heq, rfl, rfl, rfl⟩]
+  rw [if_pos ⟨rfl, rfl, rfl, rfl⟩]
 
 end Nanodregg.Host.Carry

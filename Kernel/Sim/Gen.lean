@@ -180,6 +180,11 @@ structure State (D : Type) [Ord D] where
   journalMax : Nat := 0
   journalScanned : Nat := 0
   journalTurns : Nat := 0
+  /-- KERNEL-41: the journal probe's inserts (`<K`, one per probe turn) and prunes (`<R`), whose
+  hashes it bracketed; `countTurn`'s `<J` brackets each run turn's journal write only to take it out
+  of the nullifier share -/
+  probeInserts : Nat := 0
+  prunes : Nat := 0
 
 def nameOf {α : Type} [Repr α] (a : α) : String :=
   match (reprStr a).splitOn " " with
@@ -229,8 +234,9 @@ def plantCommitPerInsert (E : Env D) (w : World D) (t : Turn D) (posts : List (P
   t.nullifiers.foldl (fun m n => m.insert S (.nullifier n) .spent) m
 
 /-- The counted calls for one admitted turn `w → w'`: the whole admission (`<A`), its trie write
-without the nullifiers (`<C`, the cell share), and the plant (`<P`). Each result must be what the
-uncounted call gives, or the counter changed the computation. -/
+without the nullifiers (`<C`, the cell share), its journal write (`<J`, KERNEL-41: the journal trie's
+nodes hash in the one trie domain, so its share is bracketed apart), and the plant (`<P`). Each
+result must be what the uncounted call gives, or the counter changed the computation. -/
 def countTurn (E : Env D) (st : State D) (w w' : World D) (t : Turn D) : State D :=
   let cE := countingEnv E
   let S := trieSpec E
@@ -240,6 +246,7 @@ def countTurn (E : Env D) (st : State D) (w w' : World D) (t : Turn D) : State D
       let t0 := { t with nullifiers := [] }
       let a := dbgTrace "<A" fun _ => World.admit cE w t
       let c := dbgTrace "<C" fun _ => commitTrie cE w t0 posts
+      let j := dbgTrace "<J" fun _ => commitJournal cE w t
       let p := dbgTrace "<P" fun _ => plantCommitPerInsert cE w t posts
       let st := match a with
         | .ok w'' => if w''.root E == w'.root E then st
@@ -247,18 +254,33 @@ def countTurn (E : Env D) (st : State D) (w w' : World D) (t : Turn D) : State D
         | .error _ => failWith st "hash count: the counted admission refused an admitted turn"
       let st := if c.hashOf S == (commitTrie E w t0 posts).hashOf S then st
         else failWith st "hash count: the counted cell write reached another root"
+      let st := if j.hashOf (journalSpec E) == w'.journalRoot E then st
+        else failWith st "hash count: the counted journal write reached another journal root"
       if p.hashOf S == w'.root E then st
       else failWith st "hash count: the per-insert plant reached another root"
 
-/-- `report`'s side: the marks of one captured run, summed per bracket tag (`A`, `C`, `P`). -/
-def countMarks (out : String) : Nat × Nat × Nat :=
-  (out.splitOn "<").foldl (fun (a, c, p) seg =>
+/-- The marks of one captured run, summed per bracket tag. -/
+structure Marks where
+  admit : Nat := 0
+  cells : Nat := 0
+  plant : Nat := 0
+  journal : Nat := 0
+  probeInsert : Nat := 0
+  prune : Nat := 0
+
+/-- `report`'s side: the marks of one captured run, summed per bracket tag (`A`, `C`, `P`, `J`,
+`K`, `R`). -/
+def countMarks (out : String) : Marks :=
+  (out.splitOn "<").foldl (fun m seg =>
     let n := (seg.toList.filter (· == '#')).length
     match seg.toList.head? with
-    | some 'A' => (a + n, c, p)
-    | some 'C' => (a, c + n, p)
-    | some 'P' => (a, c, p + n)
-    | _ => (a, c, p)) (0, 0, 0)
+    | some 'A' => { m with admit := m.admit + n }
+    | some 'C' => { m with cells := m.cells + n }
+    | some 'P' => { m with plant := m.plant + n }
+    | some 'J' => { m with journal := m.journal + n }
+    | some 'K' => { m with probeInsert := m.probeInsert + n }
+    | some 'R' => { m with prune := m.prune + n }
+    | _ => m) {}
 
 /-- The slots a turn changed, in `commitTrie`'s order: its non-`keep` touches, its born cells,
 its nullifiers. -/
@@ -351,6 +373,35 @@ def checkRoot (P : Params D) (st : State D) (w w' : World D) (t : Turn D) : Stat
         then failWith st "root: a tombstone was proved live"
         else meet st "proof-tomb-live:refused"
     | _, _ => st) st
+  -- KERNEL-41: the phone's journal reads against the head (`Kernel.Proofs.JournalHead`). The head
+  -- link is recomputed from its four parts; the turn's own entry is proved against the journal root
+  -- (`journal_prove_verifies`, `admit_journaled`); a fresh id is proved absent
+  -- (`journal_prove_absent`); and four forgeries must fail: the entry at another height
+  -- (`journal_inclusion_sound`), the admitted id claimed absent (`head_absent_admitted`), the
+  -- pre-turn exclusion proof against the new root, and the journal proof against the CELLS root
+  let JS := journalSpec E
+  let jroot := w'.journalRoot E
+  let st := if headLink E w.chain (turnDigest E t) root jroot == w'.chain then st
+    else failWith st "journal head: the head link over the two roots is not the admitted chain"
+  let entry : Nat × D := (w.height + 1, turnDigest E t)
+  let jp := w'.journal.prove JS t.txId
+  let st := if Trie.verifyInclusion JS jroot t.txId (journalDigest E entry) jp then st
+    else failWith st "journal head: the turn's own entry does not verify against the journal root"
+  let fresh := cellIdOf E t.txId 1001
+  let st := if Trie.verifyExclusion JS jroot fresh (w'.journal.prove JS fresh) then st
+    else failWith st "journal head: a fresh id's exclusion proof does not verify"
+  let st := if Trie.verifyInclusion JS jroot t.txId (journalDigest E (entry.1 + 1, entry.2)) jp then
+      failWith st "journal head: the entry verified at another height"
+    else meet st "journal-proof-height:refused"
+  let st := if Trie.verifyExclusion JS jroot t.txId jp || Trie.verifyExclusion JS jroot t.txId ⟨none, jp.sibs⟩ then
+      failWith st "journal head: an admitted id was proved absent"
+    else meet st "journal-proof-admitted:refused"
+  let st := if Trie.verifyExclusion JS jroot t.txId (w.journal.prove JS t.txId) then
+      failWith st "journal head: the pre-turn exclusion proof verified against the new journal root"
+    else meet st "journal-proof-stale:refused"
+  let st := if Trie.verifyInclusion JS root t.txId (journalDigest E entry) jp then
+      failWith st "journal head: a journal proof verified against the cells root"
+    else meet st "journal-proof-cells-root:refused"
   -- a spent nullifier claimed unspent
   t.nullifiers.foldl (fun st nf =>
     let p := w'.trie.prove S (.nullifier nf)
@@ -926,7 +977,7 @@ def act (P : Params D) (st : State D) : State D :=
       match st.lastCall with
       | none => st
       | some c =>
-          match w.journal[txIdOf P.ctx c]? with
+          match w.journalAt P.env (txIdOf P.ctx c) with
           | some (h, _) => (submit P st c (.rejected "replayed") s!"replay@{h}").1
           | none => st
   | 7 => -- a stale pin: the owner claims the object is absent
@@ -1072,16 +1123,18 @@ def turnWork (t : Turn D) : Nat × Nat :=
 def maxWork (log : List (Turn D)) : Nat × Nat :=
   log.foldl (fun (a, b) t => let (x, y) := turnWork t; (max a x, max b y)) (0, 0)
 
-/-- Same contents and the same ROOT (the journal's TreeMap shape may differ; nothing else may). -/
+/-- Same contents and the same ROOTS (both tries are canonical, so the same listing is the same
+trie: KERNEL-41). -/
 def same (E : Env D) (a b : World D) : Bool :=
   a.trie.toList == b.trie.toList && a.root E == b.root E && a.journal.toList == b.journal.toList &&
+  a.journalRoot E == b.journalRoot E &&
   a.height == b.height && a.chain == b.chain && a.allowance == b.allowance && a.origin == b.origin
 
-/-- A World rebuilt from its own listing, as a checkpoint decode does (CODEC-19): the trie by
-`Trie.build` (KERNEL-23: it is the same trie, `build_toList`), the journal from its sorted list. -/
+/-- A World rebuilt from its own listings, as a checkpoint decode does (CODEC-19): both tries by
+`Trie.build` (KERNEL-23, KERNEL-41: the same tries, `build_toList`). -/
 def reopened (E : Env D) (w : World D) : World D :=
   let trie := Trie.build (trieSpec E) (trieSpec E).depth 0 w.trie.toList
-  let journal : Std.TreeMap D (Nat × D) compare := Std.TreeMap.ofList w.journal.toList compare
+  let journal := Trie.build (journalSpec E) (journalSpec E).depth 0 w.journal.toList
   { w with trie, journal }
 
 def worldName : ByteArray := "sim".toUTF8
@@ -1161,23 +1214,35 @@ def probeJournal (P : Params D) (st : State D) (seed : Nat) : State D :=
     | .error e => .error e
     | .ok (w, mx, scanned, log) =>
       let H := w.height + 1
-      let scan := if H % W = 0 then w.journal.size + 1 else 0
+      let scan := if H % W = 0 then w.journal.toList.length + 1 else 0
       let t := journalTurn P i H H
       match World.admit P.env w t with
       | .ok w' =>
-          if w'.journal.size < 3 * W then .ok (w', max mx w'.journal.size, scanned + scan, t :: log)
-          else .error s!"journal holds {w'.journal.size} entries at height {w'.height}"
+          -- KERNEL-41: the journal write's hashes, counted at the window's steady state (up to
+          -- `3 * windowMax` entries): the insert (`<K`) and, at a multiple of `windowMax`, the
+          -- prune (`<R`), each under the counting Env; together they must reach the admitted
+          -- World's journal root
+          let cE := countingEnv P.env
+          let ins := dbgTrace "<K" fun _ =>
+            w.journal.insert (journalSpec cE) t.txId (H, turnDigest P.env t)
+          let after := if H % W = 0 then dbgTrace "<R" fun _ => pruneJournal cE H ins else ins
+          if after.hashOf (journalSpec P.env) != w'.journalRoot P.env then
+            .error s!"the counted journal write at height {H} reached another journal root"
+          else if w'.journal.toList.length < 3 * W then
+            .ok (w', max mx w'.journal.toList.length, scanned + scan, t :: log)
+          else .error s!"journal holds {w'.journal.toList.length} entries at height {w'.height}"
       | .error r => .error s!"journal turn {i} refused {r.name}"
   let g := World.genesis P.env P.zero 100000000
   match (List.range n).foldl step (.ok (g, 0, 0, [])) with
   | .error e => failWith st s!"probe journal: {e}"
   | .ok (w, mx, scanned, log) =>
-      let st := { st with journalMax := mx, journalScanned := scanned, journalTurns := n }
+      let st := { st with journalMax := mx, journalScanned := scanned, journalTurns := n,
+                          probeInserts := n, prunes := n / W }
       let tx := fun i => P.env.hash "nanodregg/sim/journal-tx" (toString i).toUTF8
       let missing := (List.range n).filter fun i =>
-        !journalForgets w.height (i + 1) && (w.journal[tx i]?).isNone
+        !journalForgets w.height (i + 1) && (w.journalAt P.env (tx i)).isNone
       if !missing.isEmpty then failWith st s!"probe journal: ids {missing.take 4} unanswered below journalForgets"
-      else if (w.journal[tx 0]?).isSome then failWith st "probe journal: turn 0's entry was never pruned"
+      else if (w.journalAt P.env (tx 0)).isSome then failWith st "probe journal: turn 0's entry was never pruned"
       else
         let H := w.height + 1
         let k := 2 * W + 5
@@ -1191,7 +1256,11 @@ def probeJournal (P : Params D) (st : State D) (seed : Nat) : State D :=
         -- the one place the two answer differently
         let J := shadowJournal P.env g.height g.journal log.reverse
         let wS := { w with journal := J }
-        if w.journal.toList != (J.filter fun _ e => kept (lastPrune w.height) e).toList then
+        -- the reference is `build` of the filtered never-pruned listing, not `retainAt`: so a prune
+        -- that keeps the right entries in a non-canonical trie (no collapse) is red here by its root
+        let kept' := J.toList.filter fun p => kept (lastPrune w.height) p.2
+        let ref := Trie.build (journalSpec P.env) (journalSpec P.env).depth 0 kept'
+        if w.journal.toList != kept' || w.journalRoot P.env != ref.hashOf (journalSpec P.env) then
           failWith st s!"probe journal shadow: the journal at height {w.height} is not the never-pruned one filtered at {lastPrune w.height}"
         else
           let st := { st with refusedAsExpected := st.refusedAsExpected + 1,
@@ -1305,7 +1374,8 @@ def probeCarry (P : Params D) (st : State D) : State D :=
   | .error r => failWith st s!"probe carry: refused {r.name}"
   | .ok w' =>
     if !(w'.root P.env == w.root P.env && w'.allowance == w.allowance && w'.height == w.height &&
-        w'.journal.toList == w.journal.toList) then failWith st "probe carry: the carried World differs"
+        w'.journal.toList == w.journal.toList && w'.journalRoot P.env == w.journalRoot P.env) then
+      failWith st "probe carry: the carried World differs"
     else if w'.origin == w.origin then failWith st "probe carry: the carried World kept the old origin"
     else
       let st := match st.log.getLast? with
@@ -1313,7 +1383,7 @@ def probeCarry (P : Params D) (st : State D) : State D :=
         | some t => match X.decodeCall t.event with
           | none => failWith st "probe carry: the last logged event does not decode"
           | some c =>
-              let want := (w.journal[t.txId]?).map Prod.fst
+              let want := (w.journalAt P.env t.txId).map Prod.fst
               match Receive.submit X w' c, want with
               | .error (.rejected (.replayed h)), some h' =>
                   if h = h' then
@@ -1364,8 +1434,8 @@ def run (P : Params D) (seed : Nat) (steps : Nat) : State D :=
           else { st with failures := "restart: reopened World differs" :: st.failures }
       | .error (i, r) => { st with failures := s!"restart: fold refused at {i}: {r.name}" :: st.failures }
     else if r = 1 then
-      -- a checkpoint reopen: every map rebuilt from its sorted contents (a different tree shape,
-      -- the same World: Kernel.Proofs.Equiv says admit cannot tell)
+      -- a checkpoint reopen: both tries rebuilt from their listings (the same tries:
+      -- `Trie.build_toList`, so the same World, `=`)
       let w := reopened P.env st.host
       if same P.env w st.host then { st with host := w, restarts := st.restarts + 1 }
       else { st with failures := "checkpoint: the rebuilt trie differs (root or listing)" :: st.failures }
@@ -1447,7 +1517,9 @@ def plantedArms : List String :=
    "too-many-calls:tooManyCalls", "over-ticks:overTicks", "grant-to-object:ok", "call-chain:ok",
    "call-too-deep:callTooDeep", "journal-expired:outsideWindow", "journal-window-first:outsideWindow",
    "journal-kept:replayed", "journal-reuse:ok", "journal-shadow:filtered", "journal-fits:misfit",
-   "journal-shadow-kept:replayed", "journal-shadow-reuse:replayed", "carry-name:nameTooLong", "carry-old-call:replayed",
+   "journal-shadow-kept:replayed", "journal-shadow-reuse:replayed",
+   "journal-proof-height:refused", "journal-proof-admitted:refused", "journal-proof-stale:refused",
+   "journal-proof-cells-root:refused", "carry-name:nameTooLong", "carry-old-call:replayed",
    "carry-old-world:wrongWorld", "carry-new:ok", "sig-bare:badSignature", "hash-count:empty-per-insert", "retain:canonical",
    "retain-plant:refuted"]
 
@@ -1469,15 +1541,19 @@ def report (P : Params D) (seeds : List Nat) : IO UInt32 := do
   let mut hashes : Nat × Nat × Nat × Nat := (0, 0, 0, 0)
   let mut weighed := 0
   let mut journal : Nat × Nat × Nat := (0, 0, 0)
+  -- KERNEL-41: (journal-insert marks, inserts, prune marks, prunes)
+  let mut jhashes : Nat × Nat × Nat × Nat := (0, 0, 0, 0)
   for seed in seeds do
     -- the run's trie hashes are counted off its stderr (`countingEnv`); nothing else writes there
     let buf ← IO.mkRef ({} : IO.FS.Stream.Buffer)
     let old ← IO.setStderr (IO.FS.Stream.ofBuffer buf)
     let st ← IO.lazyPure fun _ => run P seed 120
     let _ ← IO.setStderr old
-    let (ha, hc, hp) := countMarks (String.fromUTF8! (← buf.get).data)
-    -- the plant must cost more whenever the run met an empty sibling, or the counter is blind
-    let st := if hp > ha then { st with seen := "hash-count:empty-per-insert" :: st.seen } else st
+    let m := countMarks (String.fromUTF8! (← buf.get).data)
+    -- the plant must cost more whenever the run met an empty sibling, or the counter is blind;
+    -- the plant writes no journal, so it is compared with the admission's share without it
+    let st := if m.plant > m.admit - m.journal then
+        { st with seen := "hash-count:empty-per-insert" :: st.seen } else st
     let (a, b) := maxWork st.log
     work := (max work.1 a, max work.2 b)
     admitted := admitted + st.admitted
@@ -1485,8 +1561,11 @@ def report (P : Params D) (seeds : List Nat) : IO UInt32 := do
     journal := (max journal.1 st.journalMax, journal.2.1 + st.journalScanned, journal.2.2 + st.journalTurns)
     refused := refused + st.refusedAsExpected
     restarts := restarts + st.restarts
-    hashes := (hashes.1 + hc, hashes.2.1 + st.cellSlots, hashes.2.2.1 + (ha - hc),
+    -- the nullifier share is the admission's less its cell write and its journal write
+    hashes := (hashes.1 + m.cells, hashes.2.1 + st.cellSlots, hashes.2.2.1 + (m.admit - m.cells - m.journal),
       hashes.2.2.2 + st.nullSlots)
+    jhashes := (jhashes.1 + m.probeInsert, jhashes.2.1 + st.probeInserts, jhashes.2.2.1 + m.prune,
+      jhashes.2.2.2 + st.prunes)
     seen := (st.seen ++ seen).eraseDups
     match st.failures.reverse with
     | [] => IO.println s!"PASS seed {seed}: admitted={st.admitted} refused-as-expected={st.refusedAsExpected} restarts={st.restarts}"
@@ -1507,6 +1586,8 @@ def report (P : Params D) (seeds : List Nat) : IO UInt32 := do
   IO.println s!"WASTE fold work-per-turn {showRatio work.2}"
   IO.println s!"WASTE admit hashes-per-touched-cell {showRatio (ratio hashes.1 hashes.2.1)}"
   IO.println s!"WASTE admit hashes-per-nullifier {showRatio (ratio hashes.2.2.1 hashes.2.2.2)}"
+  IO.println s!"WASTE admit hashes-per-journal-entry {showRatio (ratio jhashes.1 jhashes.2.1)}"
+  IO.println s!"WASTE admit hashes-per-prune {showRatio (ratio jhashes.2.2.1 jhashes.2.2.2)}"
   IO.println s!"WASTE admit journal-entries-per-window {showRatio (ratio journal.1 Bounds.windowMax)}"
   IO.println s!"WASTE admit journal-scanned-per-turn {showRatio (ratio journal.2.1 journal.2.2)}"
   if bad = 0 then IO.println "ALL PASS"

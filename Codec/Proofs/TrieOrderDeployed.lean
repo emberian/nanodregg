@@ -17,6 +17,8 @@ Teeth, over two cell ids that differ in byte 0 (`lo` = 0x01…, `hi` = 0x80…):
 * `lsbRouting_refuted`: a routing that reads each id byte low bit first is not the byte order (the
   order theorem is false for it), and its check admits the listing `hi, lo` that the deployed codec
   refuses: the mutation would have changed which bytes decode.
+* The journal (KERNEL-41): `journalOrder_iff` / `journalOrder_refuses`, and the teeth
+  `journal_refuses_ids_descending` / `journal_reads_ids_ascending`.
 -/
 
 namespace Nanodregg.Codec.Deployed
@@ -132,5 +134,65 @@ theorem lsbRouting_refuted :
     · exact ⟨1, Nat.zero_le _, by decide, by decide⟩
     · exact absurd rfl hne
   · exact List.pairwise_pair.mpr hhl
+
+/-! ## The journal (KERNEL-41) -/
+
+/-- At the deployed digest, `JournalBefore` is `Digest`'s own order on the transaction ids. -/
+theorem journalBefore_iff (p q : Digest × (Nat × Digest)) : JournalBefore env p q ↔ compare p.1 q.1 = .lt :=
+  Iff.rfl
+
+/-- **The deployed journal listing is accepted exactly when strictly ascending by transaction id.** -/
+theorem journalOrder_iff {b : ByteArray} {i j : Nat} {l : List (Digest × (Nat × Digest))}
+    (h : (rawList Bounds.journalMax (product digestCodec (product nat64 digestCodec))).get b i = .ok (l, j)) :
+    (journalTrie env digestCodec).get b i = .ok (Trie.build (journalSpec env) (journalSpec env).depth 0 l, j) ↔
+      l.Pairwise (fun p q => compare p.1 q.1 = .lt) := by
+  constructor
+  · intro hc
+    by_cases ho : l.Pairwise (JournalBefore env)
+    · exact ho
+    · rw [journalTrie_get_refused Receive.deployed_lawful h ho] at hc; cases hc
+  · exact journalTrie_get_ok Receive.deployed_lawful h
+
+/-- **Any other deployed journal listing is refused `kernel/journal-order` by name.** -/
+theorem journalOrder_refuses {b : ByteArray} {i j : Nat} {l : List (Digest × (Nat × Digest))}
+    (h : (rawList Bounds.journalMax (product digestCodec (product nat64 digestCodec))).get b i = .ok (l, j))
+    (ho : ¬ l.Pairwise (fun p q => compare p.1 q.1 = .lt)) :
+    (journalTrie env digestCodec).get b i = .error (.rejected i "kernel/journal-order") :=
+  journalTrie_get_refused Receive.deployed_lawful h ho
+
+private theorem journalList_get (l : List (Digest × (Nat × Digest)))
+    (hf : l.length ≤ Bounds.journalMax ∧ ∀ p ∈ l, True ∧ p.2.1 < 2 ^ 64 ∧ True) :
+    (rawList Bounds.journalMax (product digestCodec (product nat64 digestCodec))).get
+        ((rawList Bounds.journalMax (product digestCodec (product nat64 digestCodec))).bytes l) 0 =
+      .ok (l, ((rawList Bounds.journalMax (product digestCodec (product nat64 digestCodec))).bytes l).size) := by
+  simpa using (rawList_lawfulOn (product_lawfulOn digest_lawful.on (product_lawfulOn nat64_lawfulOn digest_lawful.on))
+    Bounds.journalMax (by decide)).get_of_occurs l _ 0 hf (occursAt_self _)
+
+/-- **Tooth.** Two journal entries listed with their transaction ids in descending byte order are refused
+`kernel/journal-order` by name. -/
+theorem journal_refuses_ids_descending :
+    (journalTrie env digestCodec).decode
+        ((rawList Bounds.journalMax (product digestCodec (product nat64 digestCodec))).bytes
+          [(hi, (1, lo)), (lo, (2, lo))]) =
+      .error (.rejected 0 "kernel/journal-order") := by
+  have hg := journalList_get [(hi, (1, lo)), (lo, (2, lo))] ⟨by decide, by decide⟩
+  have ho : ¬ [(hi, (1, lo)), (lo, (2, lo))].Pairwise
+      (fun p q : Digest × (Nat × Digest) => compare p.1 q.1 = .lt) := by
+    intro hp
+    have : compare hi lo = .lt := (List.pairwise_cons.mp hp).1 _ (List.mem_singleton_self _)
+    rw [hi_lo] at this; cases this
+  unfold Stream.decode
+  rw [journalOrder_refuses hg ho]
+
+/-- The same two entries in ascending id order are read back. -/
+theorem journal_reads_ids_ascending :
+    (journalTrie env digestCodec).decode
+        ((rawList Bounds.journalMax (product digestCodec (product nat64 digestCodec))).bytes
+          [(lo, (2, lo)), (hi, (1, lo))]) =
+      .ok (Trie.build (journalSpec env) (journalSpec env).depth 0 [(lo, (2, lo)), (hi, (1, lo))]) := by
+  have hg := journalList_get [(lo, (2, lo)), (hi, (1, lo))] ⟨by decide, by decide⟩
+  unfold Stream.decode
+  rw [(journalOrder_iff hg).mpr (List.pairwise_pair.mpr lo_hi)]
+  simp
 
 end Nanodregg.Codec.Deployed

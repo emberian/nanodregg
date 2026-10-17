@@ -11,8 +11,8 @@ The loop appends `staged` as one batch record, fsyncs, and only then sends `repl
 
 Generic in the World `W`, Turn `T`, refusal `R` and note `N`, so the simulation runs the same
 function the Host runs; the Host instantiates `admit` with `Kernel.World.admit E` and `note` with
-`Kernel.World.root E`. Each staged Turn is paired with the note of the World right after it (HOST-29:
-a batch record states each Turn's root, so a page reader advances the chain without admitting).
+`Kernel.World.roots E` (the cells' and the journal's roots). Each staged Turn is paired with the note of the World right after it (HOST-29:
+a batch record states each Turn's roots, so a page reader advances the chain without admitting).
 
 Theorems (`Host.Proofs.Batch`): `admitBatch_append` (batch boundaries do not change the state or
 the log), `staged_rooted` (the staged pairs are a `Kernel.Rooted` run from the starting World to

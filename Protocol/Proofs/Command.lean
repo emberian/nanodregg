@@ -132,7 +132,7 @@ re-derived from the writer's logged event and admitted by follow's OWN `World.ad
 append. The follow-time tooth is the rows' `audit` row (plant `followVerifyAll`, line 13). -/
 
 theorem absorb_admits {X : Ctx D} :
-    ∀ (evs : List ByteArray) {w w' : World D} {acc ts : Array (Turn D × D)},
+    ∀ (evs : List ByteArray) {w w' : World D} {acc ts : Array (Turn D × (D × D))},
       absorb X w acc evs = .ok (w', ts) →
         ∃ l, ts.toList = acc.toList ++ l ∧ World.RootedFold X.env w l w'
   | [], w, w', acc, ts, h => by
@@ -148,11 +148,11 @@ theorem absorb_admits {X : Ctx D} :
       · rename_i t w₁ hs
         obtain ⟨l, hl, hf⟩ := absorb_admits es h
         obtain ⟨_, _, ha⟩ := submit_ok hs
-        exact ⟨(t, World.root X.env w₁) :: l, by simp [hl], ⟨w₁, ha, rfl, hf⟩⟩
+        exact ⟨(t, World.roots X.env w₁) :: l, by simp [hl], ⟨w₁, ha, rfl, hf⟩⟩
       · cases h
 
 theorem absorbPage_admits {X : Ctx D} {w w' : World D} {evs : List ByteArray} {height : Nat}
-    {chain : ByteArray} {ts : List (Turn D × D)} (h : absorbPage X w evs height chain = .ok (w', ts)) :
+    {chain : ByteArray} {ts : List (Turn D × (D × D))} (h : absorbPage X w evs height chain = .ok (w', ts)) :
     World.RootedFold X.env w ts w' := by
   unfold absorbPage at h
   simp only [bind, Except.bind] at h
@@ -167,10 +167,10 @@ theorem absorbPage_admits {X : Ctx D} {w w' : World D} {evs : List ByteArray} {h
     · cases h
 
 /-- **What follow persists, its own fold admitted, each root its own.** Every pair follow persists
-is a Turn its own `World.admit` accepted, in order from its World, beside the root of the World
+is a Turn its own `World.admit` accepted, in order from its World, beside the roots (cells', journal's) of the World
 that admission reached (HOST-29), ending at follow's next World. -/
 theorem step_persists_admitted {X : Ctx D} {B : Thin.Base (World D)} {me : Self D}
-    {f f' : Follow D} {ts : List (Turn D × D)} {kb result : ByteArray} {r : Reply}
+    {f f' : Follow D} {ts : List (Turn D × (D × D))} {kb result : ByteArray} {r : Reply}
     (h : step X B me f kb result = (f', .turns ts, r)) :
     World.RootedFold X.env f.world ts f'.world := by
   unfold step next at h
@@ -185,7 +185,7 @@ theorem step_persists_admitted {X : Ctx D} {B : Thin.Base (World D)} {me : Self 
 
 /-- HOST-22's consumer: what follow persists folds, with `World.fold`, to follow's next World. -/
 theorem step_persists_folds {X : Ctx D} {B : Thin.Base (World D)} {me : Self D}
-    {f f' : Follow D} {ts : List (Turn D × D)} {kb result : ByteArray} {r : Reply}
+    {f f' : Follow D} {ts : List (Turn D × (D × D))} {kb result : ByteArray} {r : Reply}
     (h : step X B me f kb result = (f', .turns ts, r)) :
     World.fold X.env f.world (ts.map Prod.fst) = .ok f'.world :=
   RootedFold.fold (step_persists_admitted h)

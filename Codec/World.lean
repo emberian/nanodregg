@@ -3,15 +3,17 @@ import Codec.Kernel
 /-!
 # Codec.World — the canonical bytes of a whole World (the checkpoint, HOST-14's base)
 
-`trie ‖ journal ‖ height u64 ‖ chain ‖ allowance u64 ‖ origin` (KERNEL-23: cells and spent nullifiers
-are one authenticated trie). The trie is written as its listing (`Trie.T.toList`, left to right by
-key bits) and read back by `Trie.build` over that listing: every node hash is recomputed, none is ever
-read from the wire (CODEC-19). A listing is refused by name unless every slot holds the leaf of its
-kind (`kernel/leaf-fit`) and the listing is exactly the canonical trie's own (`kernel/trie-order`:
-the rebuilt trie lists the same entries in the same order, and no leaf holds a key twice). So the
-trie part reads back EXACTLY (`build_toList`), and the bytes are a function of the contents. The
-journal is still a `TreeMap` written in ascending key order (at most `Bounds.journalMax` entries), read
-back up to `Equiv`, and refused by name unless it is the window's (`kernel/journal`: KERNEL-39's
+`trie ‖ journal ‖ height u64 ‖ chain ‖ allowance u64 ‖ origin`. Both of the World's maps are tries
+(KERNEL-23 cells and spent nullifiers; KERNEL-41 the journal, under `journalSpec`), and each is written
+as its listing (`Trie.T.toList`, left to right by key bits) and read back by `Trie.build` over that
+listing (`listingAccept`): every node hash is recomputed, none is ever read from the wire (CODEC-19), and
+a listing is refused by name unless it is exactly the rebuilt trie's own (no key twice in a leaf).
+The cells' listing is refused `kernel/leaf-fit` unless every slot holds the leaf of its kind, and
+`kernel/trie-order` unless it is the canonical trie's; the journal's is refused
+`kernel/journal-order` unless it is the canonical journal trie's (at the deployed digest: strictly
+ascending by transaction id, `Codec.Deployed.journalOrder_iff`). So both maps read back EXACTLY
+(`build_toList`), decode ∘ bytes is the identity (`world_lawfulOn`), and the bytes are a function of
+the contents. The World is refused `kernel/journal` unless its journal is the window's (KERNEL-39's
 `journalFits`, every entry at or below the height and inside the window, one entry per height), so a
 decoded base carries `World.JournalOk` (`world_decode_journalOk`).
 `world.size w` is the encoded length, computed from the entries without encoding (HOST's
@@ -23,15 +25,6 @@ namespace Nanodregg.Codec.Kernel
 open Nanodregg.Kernel Nanodregg.Codec.Stream
 
 variable {D : Type} [Ord D]
-
-/-- Keys strictly ascending (each adjacent pair). -/
-def ascendingBy {β : Type} (f : β → D) : List β → Bool
-  | a :: b :: rest => compare (f a) (f b) == .lt && ascendingBy f (b :: rest)
-  | _ => true
-
-/-- A list of at most `max` values whose keys strictly ascend; any other order is refused. -/
-def ascendingList {β : Type} (max : Nat) (f : β → D) (c : Stream β) : Stream (List β) :=
-  refine "kernel/ascending" (rawList max c) (fun l => if ascendingBy f l then some l else none) id
 
 abbrev EntryF : Fin 2 → Type
   | 0 => Cell
@@ -80,73 +73,76 @@ def fitList [DecidableEq D] (dc : Stream D) : Stream (List (Slot D × Leaf)) :=
   refine "kernel/leaf-fit" (rawList worldMax (product (slot dc) leaf))
     (fun l => if l.all (fun p => Leaf.fits p.1 p.2) then some l else none) id
 
-/-- The trie, as its listing; read back by `build`, refused unless the listing is the rebuilt
-trie's own. -/
+/-- What a trie-listing refinement accepts: the trie `build` makes of the listing, if that trie lists
+exactly the listing back (the same entries in the same order) and no leaf holds a key twice. The cells'
+`kernel/trie-order` and the journal's `kernel/journal-order` are both `refine name c (listingAccept S)
+Trie.T.toList`: one accept function, two named sites. -/
+def listingAccept {K V : Type} [DecidableEq K] [DecidableEq V] (S : Trie.Spec K V D) (l : List (K × V)) :
+    Option (Trie.T K V D) :=
+  let t := Trie.build S S.depth 0 l
+  if t.toList == l && leavesNodup t then some t else none
+
+/-- The cells' trie, as its listing (`kernel/trie-order`). -/
 def cells [DecidableEq D] (E : Env D) (dc : Stream D) : Stream (Cells D) :=
-  refine "kernel/trie-order" (fitList dc)
-    (fun l =>
-      let t := Trie.build (trieSpec E) (trieSpec E).depth 0 l
-      if t.toList == l && leavesNodup t then some t else none)
-    Trie.T.toList
+  refine "kernel/trie-order" (fitList dc) (listingAccept (trieSpec E)) Trie.T.toList
+
+/-- The journal's trie (KERNEL-41), as its listing of (transaction id, height, turn digest), at most
+`Bounds.journalMax` entries (`kernel/journal-order`). -/
+def journalTrie [DecidableEq D] (E : Env D) (dc : Stream D) : Stream (Journal D) :=
+  refine "kernel/journal-order" (rawList Bounds.journalMax (product dc (product nat64 dc)))
+    (listingAccept (journalSpec E)) Trie.T.toList
 
 /-- The World's contents, in canonical order. -/
-abbrev WorldWire (D : Type) := Cells D × List (D × (Nat × D)) × Nat × D × Nat × D
+abbrev WorldWire (D : Type) := Cells D × Journal D × Nat × D × Nat × D
 
 def worldWire [DecidableEq D] (E : Env D) (dc : Stream D) : Stream (WorldWire D) :=
-  product (cells E dc)
-    (product (ascendingList Bounds.journalMax Prod.fst (product dc (product nat64 dc)))
-      (product nat64 (product dc (product nat64 dc))))
+  product (cells E dc) (product (journalTrie E dc) (product nat64 (product dc (product nat64 dc))))
 
 /-- The World's contents, refused by name unless the journal is the window's (KERNEL-39). -/
 def journalWire [DecidableEq D] (E : Env D) (dc : Stream D) : Stream (WorldWire D) :=
-  refine "kernel/journal" (worldWire E dc) (fun x => if journalFits x.2.2.1 x.2.1 then some x else none) id
+  refine "kernel/journal" (worldWire E dc) (fun x => if journalFits x.2.2.1 x.2.1.toList then some x else none) id
 
 def toWire (w : World D) : WorldWire D :=
-  (w.trie, w.journal.toList, w.height, w.chain, w.allowance, w.origin)
+  (w.trie, w.journal, w.height, w.chain, w.allowance, w.origin)
 
-def ofWire (x : WorldWire D) : World D :=
-  ⟨x.1, Std.TreeMap.ofList x.2.1 compare, x.2.2.1, x.2.2.2.1, x.2.2.2.2.1, x.2.2.2.2.2⟩
+def ofWire (x : WorldWire D) : World D := ⟨x.1, x.2.1, x.2.2.1, x.2.2.2.1, x.2.2.2.2.1, x.2.2.2.2.2⟩
 
-def world [DecidableEq D] (E : Env D) (dc : Stream D) : Stream (World D) where
-  shape := .refine "kernel/world" (journalWire E dc).shape
-  size w := (journalWire E dc).size (toWire w)
-  put w buf := (journalWire E dc).put (toWire w) buf
-  get b i :=
-    match (journalWire E dc).get b i with
-    | .ok (x, j) => .ok (ofWire x, j)
-    | .error e => .error e
+/-- The checkpoint: the World's parts, in canonical order, refused `kernel/journal` unless its journal
+is the window's. -/
+def world [DecidableEq D] (E : Env D) (dc : Stream D) : Stream (World D) :=
+  refine "kernel/world" (journalWire E dc) (fun x => some (ofWire x)) toWire
 
-/-- A log segment's batch record: at most `max` turns, each with the trie root after it (HOST-29:
-`chainNext` commits each root, so the record's end chain is derivable and not written). -/
-def batch (max : Nat) (dc : Stream D) : Stream (List (Turn D × D)) :=
-  rawList max (product (turn dc) dc)
+/-- A log segment's batch record: at most `max` turns, each with the two roots after it, the cells' and
+the journal's (HOST-29, KERNEL-41: `chainNext` commits both, so the record's end chain is derivable and
+not written). -/
+def batch (max : Nat) (dc : Stream D) : Stream (List (Turn D × (D × D))) :=
+  rawList max (product (turn dc) (product dc dc))
 
 /-! ## The carried state (CODEC-22, KERNEL-29)
 
-`trie ‖ allowance u64 ‖ height u64 ‖ journal`: the trie as the World codec's listing (its `kernel/leaf-fit` and
-`kernel/trie-order` refusals), the journal strictly ascending by transaction id and at most
-`Bounds.journalMax` entries (every reached World holds fewer: `Kernel.reach_journal_bounded`). An export
-stamps the shape's tag; the import compares it before decoding. -/
+`trie ‖ allowance u64 ‖ height u64 ‖ journal`: both tries as their listings (the cells' `kernel/leaf-fit`
+and `kernel/trie-order` refusals, the journal's `kernel/journal-order`), refused `kernel/carried-journal`
+unless the journal is the window's at the carried height. An export stamps the shape's
+tag; the import compares it before decoding. -/
 
 /-- The carried state's contents, in canonical order. -/
-abbrev CarriedWire (D : Type) := Cells D × Nat × Nat × List (D × (Nat × D))
+abbrev CarriedWire (D : Type) := Cells D × Nat × Nat × Journal D
 
 def carriedWire [DecidableEq D] (E : Env D) (dc : Stream D) : Stream (CarriedWire D) :=
-  product (cells E dc) (product nat64 (product nat64
-    (ascendingList Bounds.journalMax Prod.fst (product dc (product nat64 dc)))))
+  product (cells E dc) (product nat64 (product nat64 (journalTrie E dc)))
 
-def carriedToWire (c : Carried D) : CarriedWire D := (c.trie, c.allowance, c.height, c.journal.toList)
+def carriedToWire (c : Carried D) : CarriedWire D := (c.trie, c.allowance, c.height, c.journal)
 
-def carriedOfWire (x : CarriedWire D) : Carried D :=
-  ⟨x.1, x.2.1, x.2.2.1, Std.TreeMap.ofList x.2.2.2 compare⟩
+def carriedOfWire (x : CarriedWire D) : Carried D := ⟨x.1, x.2.1, x.2.2.1, x.2.2.2⟩
 
-def carried [DecidableEq D] (E : Env D) (dc : Stream D) : Stream (Carried D) where
-  shape := .refine "kernel/carried" (carriedWire E dc).shape
-  size c := (carriedWire E dc).size (carriedToWire c)
-  put c buf := (carriedWire E dc).put (carriedToWire c) buf
-  get b i :=
-    match (carriedWire E dc).get b i with
-    | .ok (x, j) => .ok (carriedOfWire x, j)
-    | .error e => .error e
+/-- The carried state's contents, refused by name unless the journal is the window's at the carried
+height (KERNEL-39's `journalFits`, as the World's `kernel/journal`; HOST-11's find): a carried file with
+a future or stale entry never reaches `importWorld`. -/
+def carriedJournalWire [DecidableEq D] (E : Env D) (dc : Stream D) : Stream (CarriedWire D) :=
+  refine "kernel/carried-journal" (carriedWire E dc)
+    (fun x => if journalFits x.2.2.1 x.2.2.2.toList then some x else none) id
+
+def carried [DecidableEq D] (E : Env D) (dc : Stream D) : Stream (Carried D) :=
+  refine "kernel/carried" (carriedJournalWire E dc) (fun x => some (carriedOfWire x)) carriedToWire
 
 end Nanodregg.Codec.Kernel

@@ -5,6 +5,7 @@ Every theorem here is about `World.admit` itself (the receive path), not about a
 -/
 import Kernel.World
 import Kernel.Proofs.Check
+import Kernel.Proofs.TrieRetain
 
 namespace Nanodregg.Kernel
 
@@ -18,7 +19,7 @@ theorem Reject.name_injective (a b : Reject D) (h : a.name = b.name) : a.ctorIdx
 /-- Every check `admit` runs, as facts; `raw` is what each touch leaves (`none`: unchanged). -/
 structure Checked (E : Env D) (w : World D) (t : Turn D) (posts : List (Post D)) : Prop where
   bounds : checkBounds t = .ok ()
-  journal : checkJournal w t = .ok ()
+  journal : checkJournal E w t = .ok ()
   shape : checkShape t = .ok ()
   window : checkWindow w t = .ok ()
   touches : ∃ raw, mapEx (touchCheck E w) t.touches = .ok raw ∧ posts = raw.reduceOption
@@ -66,7 +67,7 @@ theorem admit_height {E : Env D} {w w' : World D} {t : Turn D}
 
 /-- The chain commits to the root AFTER the turn (KERNEL-23 (d)). -/
 theorem admit_chain {E : Env D} {w w' : World D} {t : Turn D}
-    (h : World.admit E w t = .ok w') : w'.chain = chainNext E w.chain t (w'.root E) := by
+    (h : World.admit E w t = .ok w') : w'.chain = chainNext E w.chain t (w'.roots E) := by
   obtain ⟨_, _, rfl⟩ := admit_ok h; rfl
 
 /-- **Charge exactness.** An admitted turn paid exactly its weight, could afford it with what
@@ -126,7 +127,7 @@ theorem touchCheck_stale {E : Env D} {w : World D} {x : Touch D}
 /-- **Stale BY NAME.** If the checks before the touches pass and the first touch that fails is
 stale, the turn is refused `stale` naming that cell. -/
 theorem stale_named {E : Env D} {w : World D} {t : Turn D} {pre post : List (Touch D)}
-    {x : Touch D} (hb : checkBounds t = .ok ()) (hj : checkJournal w t = .ok ())
+    {x : Touch D} (hb : checkBounds t = .ok ()) (hj : checkJournal E w t = .ok ())
     (hs : checkShape t = .ok ()) (hw : checkWindow w t = .ok ())
     (ht : t.touches = pre ++ x :: post) (hpre : ∀ y ∈ pre, ∃ r, touchCheck E w y = .ok r)
     (hstale : pinOf E (w.live E x.cell) ≠ x.seen) :
@@ -142,35 +143,92 @@ checked first: an expired retry is `outsideWindow` whether or not its entry was 
 KERNEL-33). -/
 theorem replay_named {E : Env D} {w : World D} {t : Turn D} {h : Nat} {d : D}
     (hb : checkBounds t = .ok ()) (hw : checkWindow w t = .ok ())
-    (hj : w.journal[t.txId]? = some (h, d)) :
+    (hj : w.journalAt E t.txId = some (h, d)) :
     World.admit E w t = .error (.replayed h) := by
-  have : checkJournal w t = .error (.replayed h) := by simp [checkJournal, hj]
+  have : checkJournal E w t = .error (.replayed h) := by simp [checkJournal, hj]
   unfold World.admit check
   simp [hb, hw, this, bind, Except.bind]
 
-omit [DecidableEq D] in
+/-- The World's journal trie is canonical (`Trie.Canon` at the root, KERNEL-41): what a lookup
+after a prune rests on. Genesis gives it, every insert and prune keeps it (`admit_journalCanon`). -/
+def World.JournalCanon (E : Env D) (w : World D) : Prop := Trie.Canon (journalSpec E) 0 w.journal
+
+/-- The journal after a commit IS the default-form insert then prune (the shared empty-digest thunk
+reduced). -/
+theorem commit_journal {E : Env D} {w : World D} {t : Turn D} {posts : List (Post D)} :
+    (commit E w t posts).journal =
+      pruneJournal E (w.height + 1) (w.journal.insert (journalSpec E) t.txId (w.height + 1, turnDigest E t)) := rfl
+
+omit [Ord D] in
 /-- A lookup in the pruned journal: at a multiple of `windowMax`, the entry if it is `kept`;
-otherwise the entry. -/
-theorem pruneJournal_get [Std.TransOrd D] {H : Nat} {j : Std.TreeMap D (Nat × D) compare} {k : D} :
-    (pruneJournal H j)[k]? = if H % Bounds.windowMax = 0 then j[k]?.filter (kept H) else j[k]? := by
+otherwise the entry. Exact on a canonical trie (`Trie.get_retainAt` at the root). -/
+theorem pruneJournal_get {E : Env D} {H : Nat} {j : Journal D} (hj : Trie.Canon (journalSpec E) 0 j)
+    (k : D) :
+    (pruneJournal E H j).get (journalSpec E) k =
+      if H % Bounds.windowMax = 0 then (j.get (journalSpec E) k).filter (kept H) else j.get (journalSpec E) k := by
   unfold pruneJournal
   split
-  · simp only [Std.TreeMap.getElem?_filter]
-    cases j[k]? <;> simp [Option.pfilter, Option.filter]
+  · exact Trie.get_retainAt (journalSpec E) _ [] hj (fun _ _ _ => trivial) k
   · rfl
 
-/-- An admitted transaction was new, and is journalled at the new height with its digest. -/
-theorem admit_journal [Std.TransOrd D] {E : Env D} {w w' : World D} {t : Turn D}
-    (h : World.admit E w t = .ok w') :
-    w.journal[t.txId]? = none ∧ w'.journal[t.txId]? = some (w.height + 1, turnDigest E t) := by
+omit [Ord D] [DecidableEq D] in
+/-- A prune keeps the journal trie canonical (`Trie.canon_retainAt` at the root). -/
+theorem pruneJournal_canon {E : Env D} {H : Nat} {j : Journal D} (hj : Trie.Canon (journalSpec E) 0 j) :
+    Trie.Canon (journalSpec E) 0 (pruneJournal E H j) := by
+  unfold pruneJournal
+  split
+  · exact Trie.canon_retainAt (journalSpec E) _ [] 0 j hj (fun _ _ _ => trivial)
+  · exact hj
+
+/-- **Every admission keeps the journal trie canonical.** -/
+theorem admit_journalCanon {E : Env D} {w w' : World D} {t : Turn D} (hc : w.JournalCanon E)
+    (h : World.admit E w t = .ok w') : w'.JournalCanon E := by
+  obtain ⟨_, _, rfl⟩ := admit_ok h
+  unfold World.JournalCanon
+  rw [commit_journal]
+  exact pruneJournal_canon (Trie.canon_insert _ _ _ hc)
+
+omit [DecidableEq D] in
+theorem genesis_journalCanon (E : Env D) (o : D) (a : Nat) : (World.genesis E o a).JournalCanon E :=
+  Trie.canon_empty _ 0
+
+/-- An admitted transaction was new. -/
+theorem admit_new {E : Env D} {w w' : World D} {t : Turn D} (h : World.admit E w t = .ok w') :
+    w.journalAt E t.txId = none := by
   obtain ⟨_, hc, rfl⟩ := admit_ok h
-  refine ⟨?_, by simp [commit, pruneJournal_get, kept, Bounds.windowMax]⟩
   have hj := hc.journal
   unfold checkJournal at hj
-  cases hjt : w.journal[t.txId]? with
+  cases hjt : w.journalAt E t.txId with
   | none => rfl
   | some e =>
       obtain ⟨hh, d⟩ := e
       simp [hjt] at hj
+
+/-- The committed journal read at any id, on a canonical journal: the turn's own entry at its id
+(pruning never drops it: it was admitted at this height), else the old entry, filtered if this
+height prunes. -/
+theorem commit_journalAt {E : Env D} {w : World D} {t : Turn D} {posts : List (Post D)}
+    (hc : w.JournalCanon E) (k : D) :
+    (commit E w t posts).journalAt E k =
+      if k = t.txId then some (w.height + 1, turnDigest E t)
+      else if (w.height + 1) % Bounds.windowMax = 0 then (w.journalAt E k).filter (kept (w.height + 1))
+      else w.journalAt E k := by
+  unfold World.journalAt
+  rw [commit_journal, pruneJournal_get (Trie.canon_insert _ _ _ hc), Trie.get_insert]
+  by_cases hk : k = t.txId
+  · subst hk
+    simp only [if_true]
+    split
+    · simp [Option.filter, kept, Bounds.windowMax]
+    · rfl
+  · simp only [hk, if_false]
+
+/-- **An admitted transaction is journalled** at the new height with its digest (on a canonical
+journal: every reached World's, `JournalOk`). -/
+theorem admit_journaled {E : Env D} {w w' : World D} {t : Turn D} (hc : w.JournalCanon E)
+    (h : World.admit E w t = .ok w') :
+    w'.journalAt E t.txId = some (w.height + 1, turnDigest E t) := by
+  obtain ⟨posts, _, rfl⟩ := admit_ok h
+  rw [commit_journalAt hc]; simp
 
 end Nanodregg.Kernel

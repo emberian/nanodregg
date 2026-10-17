@@ -26,8 +26,8 @@ parameters (`D = UInt64`, `dc = u64`, `Sim.env`).
   change re-pins exactly that site's vectors; the commit says what re-geneses.
 
 The printer is `print`: `ok ` and the value's `Repr` (field and constructor names, so a swap of two
-equal-typed positions changes the text), or `refused ` and the refusal. A trie is printed as its
-listing and a journal as its list, so a change of hash or of map balancing is not a change of meaning.
+equal-typed positions changes the text), or `refused ` and the refusal. A trie (the cells and, since
+KERNEL-41, the journal) is printed as its listing, so a change of hash is not a change of meaning.
 -/
 
 namespace Nanodregg.Emit.Vectors
@@ -114,7 +114,8 @@ def trie : G (Cells Sim.D) := do
     else return (.nullifier (← dig), Leaf.spent))
   return Trie.build (trieSpec Sim.env) (trieSpec Sim.env).depth 0 ks
 
-/-- A journal ascending by transaction id, each entry one height at or just below `h`. -/
+/-- A journal listing of distinct transaction ids, each entry one height at or just below `h` (any order:
+`build` is order-blind on distinct keys, `Trie.build_perm`). -/
 def journal (h : Nat) : G (List (Sim.D × (Nat × Sim.D))) := do
   let n := (← below 2) + 2
   let mut drawn : List Sim.D := []
@@ -125,13 +126,17 @@ def journal (h : Nat) : G (List (Sim.D × (Nat × Sim.D))) := do
     out := out ++ [(i, (h - k, ← dig))]
   return out
 
+/-- The canonical journal trie of a listing (KERNEL-41). -/
+def journalOf (l : List (Sim.D × (Nat × Sim.D))) : Journal Sim.D :=
+  Trie.build (journalSpec Sim.env) (journalSpec Sim.env).depth 0 l
+
 def world : G (World Sim.D) := do
   let h := (← below 1000) + 3
-  return ⟨← trie, Std.TreeMap.ofList (← journal h) compare, h, ← dig, ← nat64, ← dig⟩
+  return ⟨← trie, journalOf (← journal h), h, ← dig, ← nat64, ← dig⟩
 
 def carried : G (Carried Sim.D) := do
   let h := (← below 1000) + 3
-  return ⟨← trie, ← nat64, h, Std.TreeMap.ofList (← journal h) compare⟩
+  return ⟨← trie, ← nat64, h, journalOf (← journal h)⟩
 
 /-! ## The one printer -/
 
@@ -147,6 +152,8 @@ def printWire (x : WorldWire Sim.D) : String := printWorld (ofWire x)
 def printCarried (c : Carried Sim.D) : String :=
   s!"\{trie := {text c.trie.toList}, allowance := {c.allowance}, height := {c.height}, " ++
     s!"journal := {text c.journal.toList}}"
+
+def printCarriedWire (x : CarriedWire Sim.D) : String := printCarried (carriedOfWire x)
 
 def printBase (b : Host.Base (World Sim.D)) : String :=
   s!"\{world := {printWorld b.world}, offset := {b.offset}, tag := {text b.tag}, " ++
@@ -217,12 +224,14 @@ def sites : List Site :=
       text,
     site "kernel/leaf" Codec.Kernel.leaf (each 3 fun k => match k with
       | 0 => do return .entry (.live (← Vectors.cell)) | 1 => pure (.entry .tomb) | _ => pure .spent) text,
-    site "kernel/ascending" (ascendingList worldMax Prod.fst (Stream.product Sim.dc (Stream.product Stream.nat64 Sim.dc)))
-      (each 2 fun _ => do journal ((← below 1000) + 3)) text,
     site "kernel/leaf-fit" (fitList Sim.dc) (each 2 fun _ => (·.toList) <$> trie) text,
     site "kernel/trie-order" (cells Sim.env Sim.dc) (each 2 fun _ => trie) (fun t => text t.toList),
+    site "kernel/journal-order" (journalTrie Sim.env Sim.dc)
+      (each 2 fun _ => do return journalOf (← journal ((← below 1000) + 3))) (fun t => text t.toList),
     site "kernel/journal" (journalWire Sim.env Sim.dc) (each 2 fun _ => toWire <$> Vectors.world) printWire,
     site "kernel/world" (Codec.Kernel.world Sim.env Sim.dc) (each 2 fun _ => Vectors.world) printWorld,
+    site "kernel/carried-journal" (carriedJournalWire Sim.env Sim.dc)
+      (each 2 fun _ => carriedToWire <$> Vectors.carried) printCarriedWire,
     site "kernel/carried" (Codec.Kernel.carried Sim.env Sim.dc) (each 2 fun _ => Vectors.carried) printCarried,
     site "path/badComponent" (Field.pathCodec pathMax (by decide)) pathVecs (fun p => text p.val),
     site "host/base/index-count" (Host.Base.codec (Codec.Kernel.world Sim.env Sim.dc))

@@ -36,14 +36,6 @@ theorem discipline_tooth :
   refine_not_lawful_of_respells u8_lawful.on (fun _ _ => trivial) (x := 4) trivial (y := .value)
     (by decide) (by decide)
 
-/-- `kernel/ascending` without its check admits a repeated key, which `ascendingList_lawfulOn`'s
-predicate excludes. -/
-theorem ascending_tooth :
-    ¬ LawfulOn (fun l : List Sim.D => (l.length ≤ 2 ∧ ∀ x ∈ l, True) ∧ ascendingBy id l = true)
-      (refine "kernel/ascending" (rawList 2 Sim.dc) (fun l => some l) id) :=
-  refine_not_lawful_of_admits (rawList_lawfulOn u64_lawful.on 2 (by decide)) (fun _ h => h.1)
-    (x := [0, 0]) ⟨by decide, fun _ _ => trivial⟩ rfl (by decide)
-
 /-- `kernel/leaf-fit` without its check admits a nullifier slot holding a cell entry. -/
 theorem leafFit_tooth :
     ¬ LawfulOn (fun l => TrieListFits (fun _ : Sim.D => True) l ∧ ∀ p ∈ l, Leaf.fits p.1 p.2 = true)
@@ -63,6 +55,18 @@ theorem trieOrder_tooth :
   refine_not_lawful_of_respells (fitList_lawfulOn u64_lawful.on) (fun _ h => h.1)
     (x := [(.nullifier 0, .spent), (.cell 0, .entry .tomb)])
     ⟨⟨by decide, by simp [Entry.Fits, Leaf.Fits]⟩, by decide⟩ rfl (by decide +kernel)
+
+/-- `kernel/journal-order` keeping the rebuild but dropping the listing check admits two journal
+entries in the wrong order: a second spelling of the same journal trie (KERNEL-41). -/
+theorem journalOrder_tooth :
+    ¬ LawfulOn (JournalTrieFits Sim.env (fun _ => True))
+      (refine "kernel/journal-order" (rawList Bounds.journalMax (product Sim.dc (product nat64 Sim.dc)))
+        (fun l => some (Trie.build (journalSpec Sim.env) (journalSpec Sim.env).depth 0 l)) Trie.T.toList) :=
+  refine_not_lawful_of_respells
+    (rawList_lawfulOn (product_lawfulOn u64_lawful.on (product_lawfulOn nat64_lawfulOn u64_lawful.on))
+      Bounds.journalMax (by decide))
+    (fun _ h => h.1)
+    (x := [(2, (5, 6)), (1, (2, 3))]) ⟨by decide, by decide⟩ rfl (by decide +kernel)
 
 /-! ## An iso refinement: what is refuted, and what is not -/
 

@@ -1,118 +1,31 @@
 import Codec.World
 import Codec.Proofs.Kernel
-import Kernel.Proofs.Equiv
 import Kernel.Proofs.Cells
 import Kernel.Proofs.Trie
 import Kernel.Proofs.Journal
-import Std.Data.TreeMap
 
 /-!
-# The World codec (v3): canonical, the trie read back exactly, the journal up to `Equiv`
+# The World codec: canonical, both tries read back exactly, decode ∘ bytes the identity
 
-* `cells_lawfulOn`: the trie's listing is lawful on canonical tries whose every slot holds the leaf
-  of its kind; whatever decodes is such a trie (`Trie.Canon`), rebuilt by `build` from its listing.
-* `world_decode_bytes`: a fitting World decodes from its bytes to a World `Equiv` to it — the SAME
-  trie (`=`), an `Equiv` journal, the same counters and origin.
-* `eq_bytes_of_world_decode`: whatever decodes IS the encoding of what it decoded to.
-* `world_decode_canon` / `world_decode_slotted` / `world_decode_cellsFit`: a decoded World satisfies the
-  kernel's invariants (`World.Canon`, `World.Slotted`, `World.CellsFit Cell.Fits`), so every kernel
-  theorem that takes them applies to a reopened base.
-* `world_bytes_equiv`: `Equiv` Worlds have the same bytes.
+* `trieListing_lawfulOn`: a trie written as its listing and read back by `build` is lawful on the
+  canonical tries whose listing the inner codec admits; whatever decodes is such a trie
+  (`Trie.Canon`), rebuilt from its listing. `cells_lawfulOn` (the cells, `kernel/trie-order`) and
+  `journalTrie_lawfulOn` (the journal, `kernel/journal-order`, KERNEL-41) are its two instances.
+* `world_lawfulOn`: the World codec is lawful on `World.CodecFits`, so `decode b = .ok w ↔ b = bytes w`
+  EXACTLY (`world_decode_iff`): with the journal a trie, no part of a World has a shape beyond its
+  contents (the `World.Equiv` of CODEC-14 is gone with KERNEL-41).
+* `world_decode_canon` / `world_decode_slotted` / `world_decode_cellsFit` / `world_decode_journalOk`
+  (and `world_get_canon` / `world_get_journalOk` at any offset): a decoded World satisfies the kernel's
+  invariants, so every kernel theorem that takes them applies to a reopened base.
 -/
 
 namespace Nanodregg.Codec.Kernel
 
-open Nanodregg.Kernel Nanodregg.Codec.Stream Std
-
-/-! ## Sorted lists and maps -/
-
-section Sorted
-variable {α β : Type} [Ord α] [TransOrd α] [LawfulEqOrd α]
-
-theorem eq_of_sorted_of_mem_iff {f : β → α} :
-    ∀ {l₁ l₂ : List β}, l₁.Pairwise (fun a b => compare (f a) (f b) = .lt) →
-      l₂.Pairwise (fun a b => compare (f a) (f b) = .lt) → (∀ x, x ∈ l₁ ↔ x ∈ l₂) → l₁ = l₂
-  | [], [], _, _, _ => rfl
-  | [], b :: _, _, _, h => by simpa using (h b).mpr (List.mem_cons_self ..)
-  | a :: _, [], _, _, h => by simpa using (h a).mp (List.mem_cons_self ..)
-  | a :: l₁, b :: l₂, h₁, h₂, h => by
-    rw [List.pairwise_cons] at h₁ h₂
-    have lt_irrefl : ∀ x : β, compare (f x) (f x) ≠ .lt := fun x => by simp [compare_self]
-    have hab : a = b := by
-      have am := (h a).mp (List.mem_cons_self ..)
-      have bm := (h b).mpr (List.mem_cons_self ..)
-      rcases List.mem_cons.mp am with e | am
-      · exact e
-      rcases List.mem_cons.mp bm with e | bm
-      · exact e.symm
-      have x := h₂.1 a am
-      have y := h₁.1 b bm
-      exact absurd (OrientedCmp.gt_iff_lt.mpr y) (by rw [x]; decide)
-    subst hab
-    congr 1
-    apply eq_of_sorted_of_mem_iff h₁.2 h₂.2
-    intro x
-    constructor
-    · intro hx
-      have := (h x).mp (List.mem_cons_of_mem _ hx)
-      rcases List.mem_cons.mp this with e | e
-      · subst e; exact absurd (h₁.1 x hx) (lt_irrefl x)
-      · exact e
-    · intro hx
-      have := (h x).mpr (List.mem_cons_of_mem _ hx)
-      rcases List.mem_cons.mp this with e | e
-      · subst e; exact absurd (h₂.1 x hx) (lt_irrefl x)
-      · exact e
-
-theorem toList_ofList_of_sorted [DecidableEq α] (l : List (α × β))
-    (h : l.Pairwise (fun a b => compare a.1 b.1 = .lt)) : (TreeMap.ofList l compare).toList = l := by
-  have distinct : l.Pairwise (fun a b => ¬ compare a.1 b.1 = .eq) :=
-    h.imp (fun hab => by rw [hab]; decide)
-  apply eq_of_sorted_of_mem_iff (f := Prod.fst) TreeMap.ordered_keys_toList h
-  intro ⟨k, v⟩
-  rw [TreeMap.mem_toList_iff_getElem?_eq_some]
-  constructor
-  · intro hv
-    by_cases hk : (l.map Prod.fst).contains k = true
-    · obtain ⟨⟨k', v'⟩, hm, hk'⟩ : ∃ p ∈ l, p.1 = k := by simpa using hk
-      simp only at hk'; subst hk'
-      rw [TreeMap.getElem?_ofList_of_mem (k := k') compare_self distinct hm] at hv
-      cases hv; exact hm
-    · rw [TreeMap.getElem?_ofList_of_contains_eq_false (by simpa using hk)] at hv
-      cases hv
-  · intro hm
-    exact TreeMap.getElem?_ofList_of_mem compare_self distinct hm
-
-omit [LawfulEqOrd α] in
-theorem ascendingBy_iff {f : β → α} :
-    ∀ {l : List β}, ascendingBy f l = true ↔ l.Pairwise (fun a b => compare (f a) (f b) = .lt)
-  | [] => by simp [ascendingBy]
-  | [a] => by simp [ascendingBy]
-  | a :: b :: rest => by
-    rw [ascendingBy, Bool.and_eq_true, ascendingBy_iff, beq_iff_eq]
-    constructor
-    · rintro ⟨hab, hr⟩
-      refine List.pairwise_cons.mpr ⟨fun x hx => ?_, hr⟩
-      rcases List.mem_cons.mp hx with rfl | hx
-      · exact hab
-      · exact TransCmp.lt_trans hab (List.pairwise_cons.mp hr |>.1 x hx)
-    · intro h
-      exact ⟨List.pairwise_cons.mp h |>.1 b (List.mem_cons_self ..), List.pairwise_cons.mp h |>.2⟩
-
-end Sorted
+open Nanodregg.Kernel Nanodregg.Codec.Stream
 
 /-! ## The wire's parts -/
 
 variable {D : Type} [Ord D]
-
-theorem ascendingList_lawfulOn {β : Type} {P : β → Prop} {c : Stream β} (hc : LawfulOn P c) (max : Nat)
-    (fits : max < 2 ^ 32) (f : β → D) :
-    LawfulOn (fun l => (l.length ≤ max ∧ ∀ x ∈ l, P x) ∧ ascendingBy f l = true) (ascendingList max f c) := by
-  unfold ascendingList
-  refine refine_lawfulOn_where (rawList_lawfulOn hc max fits) "kernel/ascending" ?_ ?_ ?_
-  · intro y _ hq; simp [hq]
-  · intro x y h; split at h <;> simp_all
-  · intro x y h; split at h <;> simp_all
 
 def Entry.Fits : Entry → Prop
   | .live c => Cell.Fits c
@@ -144,8 +57,8 @@ theorem entry_lawfulOn : LawfulOn Entry.Fits entry := by
 
 omit [Ord D] in
 theorem batch_lawfulOn {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc) (max : Nat) (fits : max < 2 ^ 32) :
-    LawfulOn (fun v => v.length ≤ max ∧ ∀ p ∈ v, Turn.Fits PD p.1 ∧ PD p.2) (batch max dc) :=
-  rawList_lawfulOn (product_lawfulOn (turn_lawfulOn hd) hd) max fits
+    LawfulOn (fun v => v.length ≤ max ∧ ∀ p ∈ v, Turn.Fits PD p.1 ∧ PD p.2.1 ∧ PD p.2.2) (batch max dc) :=
+  rawList_lawfulOn (product_lawfulOn (turn_lawfulOn hd) (product_lawfulOn hd hd)) max fits
 
 /-! ## The trie's listing -/
 
@@ -267,6 +180,35 @@ theorem fitList_lawfulOn {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc)
     · rename_i ha; cases h; exact List.all_eq_true.mp ha
     · cases h
 
+section Listing
+variable {K V : Type} [DecidableEq K] [DecidableEq V]
+
+omit [Ord D] [DecidableEq D] in
+/-- **A trie read back from its listing is canonical, and exactly the trie written.** If the inner
+codec is lawful on `P`, the listing codec is lawful on the canonical tries whose listing is in `P`. -/
+theorem trieListing_lawfulOn (S : Trie.Spec K V D) {P : List (K × V) → Prop} {c : Stream (List (K × V))}
+    (hc : LawfulOn P c) (name : String) :
+    LawfulOn (fun t => P t.toList ∧ Trie.Canon S 0 t) (refine name c (listingAccept S) Trie.T.toList) := by
+  refine (refine_lawfulOn_where hc name (Q := fun t : Trie.T K V D => Trie.Canon S 0 t) ?_ ?_ ?_).mono
+    (fun _ h => h) (fun _ h => h)
+  · intro y _ hq
+    have hb : Trie.build S S.depth 0 y.toList = y := by simpa using Trie.build_toList S 0 y hq
+    simp only [listingAccept, hb, beq_self_eq_true, leavesNodup_of_routed S 0 y hq.1, Bool.and_self, if_true]
+  · intro x y h
+    simp only [listingAccept] at h
+    split at h
+    · rename_i hc; cases h; simp only [Bool.and_eq_true, beq_iff_eq] at hc; exact hc.1
+    · cases h
+  · intro x y h
+    simp only [listingAccept] at h
+    split at h
+    · rename_i hc; cases h
+      simp only [Bool.and_eq_true] at hc
+      simpa using Trie.canon_build S 0 x (nodup_of_leavesNodup_build S _ 0 x hc.2)
+    · cases h
+
+end Listing
+
 /-- The trie codec's domain: a canonical trie whose listing fits and whose slots hold the leaves of
 their kinds. -/
 def CellsFits (E : Env D) (PD : D → Prop) (t : Cells D) : Prop :=
@@ -274,146 +216,123 @@ def CellsFits (E : Env D) (PD : D → Prop) (t : Cells D) : Prop :=
 
 omit [Ord D] in
 theorem cells_lawfulOn (E : Env D) {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc) :
-    LawfulOn (CellsFits E PD) (cells E dc) := by
-  unfold cells
-  refine (refine_lawfulOn_where (fitList_lawfulOn hd) "kernel/trie-order"
-    (Q := fun t : Cells D => Trie.Canon (trieSpec E) 0 t) ?_ ?_ ?_).mono (fun _ h => h) (fun _ h => h)
-  · intro y _ hq
-    have hb : Trie.build (trieSpec E) (trieSpec E).depth 0 y.toList = y := by
-      simpa using Trie.build_toList (trieSpec E) 0 y hq
-    simp only [hb, beq_self_eq_true, leavesNodup_of_routed (trieSpec E) 0 y hq.1, Bool.and_self, if_true]
-  · intro x y h
-    simp only at h
-    split at h
-    · rename_i hc; cases h; simp only [Bool.and_eq_true, beq_iff_eq] at hc; exact hc.1
-    · cases h
-  · intro x y h
-    simp only at h
-    split at h
-    · rename_i hc; cases h
-      simp only [Bool.and_eq_true] at hc
-      simpa using Trie.canon_build (trieSpec E) 0 x
-        (nodup_of_leavesNodup_build (trieSpec E) _ 0 x hc.2)
-    · cases h
+    LawfulOn (CellsFits E PD) (cells E dc) :=
+  trieListing_lawfulOn (trieSpec E) (fitList_lawfulOn hd) "kernel/trie-order"
+
+/-- The journal listing's domain: within `Bounds.journalMax`, every digest in the digest codec's domain,
+every height below 2^64. -/
+def JournalListFits (PD : D → Prop) (l : List (D × (Nat × D))) : Prop :=
+  l.length ≤ Bounds.journalMax ∧ ∀ p ∈ l, PD p.1 ∧ p.2.1 < 2 ^ 64 ∧ PD p.2.2
+
+/-- The journal codec's domain: a canonical journal trie whose listing fits (KERNEL-41). -/
+def JournalTrieFits (E : Env D) (PD : D → Prop) (j : Journal D) : Prop :=
+  JournalListFits PD j.toList ∧ Trie.Canon (journalSpec E) 0 j
+
+omit [Ord D] in
+theorem journalTrie_lawfulOn (E : Env D) {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc) :
+    LawfulOn (JournalTrieFits E PD) (journalTrie E dc) :=
+  trieListing_lawfulOn (journalSpec E)
+    ((rawList_lawfulOn (product_lawfulOn hd (product_lawfulOn nat64_lawfulOn hd)) _ (by decide)).mono
+      (fun _ h => h) (fun _ h => h)) "kernel/journal-order"
 
 /-! ## The World -/
 
 /-- The wire's domain, as the product of its parts. -/
 def WireFits (E : Env D) (PD : D → Prop) (x : WorldWire D) : Prop :=
-  CellsFits E PD x.1 ∧
-  ((x.2.1.length ≤ Bounds.journalMax ∧ ∀ p ∈ x.2.1, PD p.1 ∧ p.2.1 < 2 ^ 64 ∧ PD p.2.2) ∧ ascendingBy Prod.fst x.2.1 = true) ∧
+  CellsFits E PD x.1 ∧ JournalTrieFits E PD x.2.1 ∧
   x.2.2.1 < 2 ^ 64 ∧ PD x.2.2.2.1 ∧ x.2.2.2.2.1 < 2 ^ 64 ∧ PD x.2.2.2.2.2
 
+omit [Ord D] in
 theorem worldWire_lawfulOn (E : Env D) {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc) :
     LawfulOn (WireFits E PD) (worldWire E dc) :=
   (product_lawfulOn (cells_lawfulOn E hd)
-    (product_lawfulOn (ascendingList_lawfulOn (product_lawfulOn hd (product_lawfulOn nat64_lawfulOn hd)) _
-      (by decide) _)
+    (product_lawfulOn (journalTrie_lawfulOn E hd)
       (product_lawfulOn nat64_lawfulOn (product_lawfulOn hd (product_lawfulOn nat64_lawfulOn hd))))).mono
     (fun _ h => h) (fun _ h => h)
 
 /-- The refined wire's domain: the wire's, and a journal that is the window's. -/
 def JournalWireFits (E : Env D) (PD : D → Prop) (x : WorldWire D) : Prop :=
-  WireFits E PD x ∧ journalFits x.2.2.1 x.2.1 = true
+  WireFits E PD x ∧ journalFits x.2.2.1 x.2.1.toList = true
 
+omit [Ord D] in
 /-- **`kernel/journal` is lawful on exactly the journals `journalFits` admits.** -/
 theorem journalWire_lawfulOn (E : Env D) {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc) :
     LawfulOn (JournalWireFits E PD) (journalWire E dc) := by
   unfold journalWire
   refine (refine_lawfulOn_where (worldWire_lawfulOn E hd) "kernel/journal"
-    (Q := fun x : WorldWire D => journalFits x.2.2.1 x.2.1 = true) ?_ ?_ ?_).mono (fun _ h => h) (fun _ h => h)
+    (Q := fun x : WorldWire D => journalFits x.2.2.1 x.2.1.toList = true) ?_ ?_ ?_).mono
+    (fun _ h => h) (fun _ h => h)
   · intro y _ hq; simp [hq]
   · intro x y h; split at h <;> simp_all
   · intro x y h; split at h
     · rename_i hq; cases h; exact hq
     · cases h
 
-/-- A World within the wire's bounds and the kernel's invariants: a canonical trie whose slots hold
-the leaves of their kinds, at most `Bounds.journalMax` journal entries, every digest in the digest
-codec's domain, every counter below 2^64, and a journal that is the window's (`journalFits`; every
-reached World's, by KERNEL's `journalFits_of_ok`). -/
+/-- A World within the wire's bounds and the kernel's invariants: a canonical cells trie whose slots
+hold the leaves of their kinds, a canonical journal trie of at most `Bounds.journalMax` entries,
+every digest in the digest codec's domain, every counter below 2^64, and a journal that is the
+window's (`journalFits`; every reached World's, by KERNEL's `journalFits_of_ok`). -/
 def World.CodecFits (E : Env D) (PD : D → Prop) (w : World D) : Prop :=
-  CellsFits E PD w.trie ∧
-  (w.journal.toList.length ≤ Bounds.journalMax ∧ ∀ p ∈ w.journal.toList, PD p.1 ∧ p.2.1 < 2 ^ 64 ∧ PD p.2.2) ∧
+  CellsFits E PD w.trie ∧ JournalTrieFits E PD w.journal ∧
   w.height < 2 ^ 64 ∧ PD w.chain ∧ w.allowance < 2 ^ 64 ∧ PD w.origin ∧
   journalFits w.height w.journal.toList = true
 
+/-- **The World codec is lawful on `World.CodecFits`**: decode ∘ bytes is the identity, and whatever
+decodes is exactly its bytes. -/
+theorem world_lawfulOn (E : Env D) {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc) :
+    LawfulOn (World.CodecFits E PD) (world E dc) := by
+  unfold world
+  refine (refine_lawfulOn (journalWire_lawfulOn E hd) "kernel/world" ?_ ?_).mono ?_ ?_
+  · intro y _; rfl
+  · intro x y h; cases h; rfl
+  · intro w h; exact ⟨h.1.1, h.1.2.1, h.1.2.2.1, h.1.2.2.2.1, h.1.2.2.2.2.1, h.1.2.2.2.2.2, h.2⟩
+  · intro w h; exact ⟨⟨h.1, h.2.1, h.2.2.1, h.2.2.2.1, h.2.2.2.2.1, h.2.2.2.2.2.1⟩, h.2.2.2.2.2.2⟩
+
 theorem world_bytes (E : Env D) (dc : Stream D) (w : World D) :
-    (world E dc).bytes w = (worldWire E dc).bytes (toWire w) := rfl
+    (world E dc).bytes w = (journalWire E dc).bytes (toWire w) := rfl
 
-theorem world_decode (E : Env D) (dc : Stream D) (b : ByteArray) :
-    (world E dc).decode b = match (journalWire E dc).decode b with
-      | .ok x => .ok (ofWire x)
-      | .error e => .error e := by
-  unfold decode
-  simp only [world]
-  split <;> rename_i h <;> split at h <;> simp_all <;> split <;> simp_all
-
-variable [TransOrd D] [LawfulEqOrd D]
-
-omit [LawfulEqOrd D] [DecidableEq D] in
-theorem toWire_fits {E : Env D} {PD : D → Prop} {w : World D} (hw : World.CodecFits E PD w) :
-    JournalWireFits E PD (toWire w) :=
-  ⟨⟨hw.1, ⟨hw.2.1, ascendingBy_iff.mpr TreeMap.ordered_keys_toList⟩, hw.2.2.1, hw.2.2.2.1, hw.2.2.2.2.1,
-    hw.2.2.2.2.2.1⟩, hw.2.2.2.2.2.2⟩
-
-theorem ofWire_toWire_equiv (w : World D) : (ofWire (toWire w)).Equiv w :=
-  ⟨rfl, TreeMap.equiv_iff_toList_eq.mpr (toList_ofList_of_sorted _ TreeMap.ordered_keys_toList),
-   rfl, rfl, rfl, rfl⟩
-
-theorem toWire_ofWire {E : Env D} {PD : D → Prop} {x : WorldWire D} (hx : WireFits E PD x) :
-    toWire (ofWire x) = x := by
-  obtain ⟨c, j, h, ch, a, o⟩ := x
-  simp only [toWire, ofWire]
-  rw [toList_ofList_of_sorted _ (ascendingBy_iff.mp hx.2.1.2)]
-
-/-- A fitting World reads back from its bytes: the same trie, an `Equiv` journal. -/
+/-- A fitting World reads back from its bytes, exactly. -/
 theorem world_decode_bytes {E : Env D} {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc) {w : World D}
-    (hw : World.CodecFits E PD w) : ∃ w', (world E dc).decode ((world E dc).bytes w) = .ok w' ∧ w'.Equiv w := by
-  refine ⟨ofWire (toWire w), ?_, ofWire_toWire_equiv w⟩
-  rw [world_decode, world_bytes,
-    show (worldWire E dc).bytes (toWire w) = (journalWire E dc).bytes (toWire w) from rfl,
-    (journalWire_lawfulOn E hd).decode_bytes (toWire_fits hw)]
+    (hw : World.CodecFits E PD w) : (world E dc).decode ((world E dc).bytes w) = .ok w :=
+  (world_lawfulOn E hd).decode_bytes hw
 
 /-- Canonicity: whatever decodes to `w` is exactly `w`'s bytes. -/
 theorem eq_bytes_of_world_decode {E : Env D} {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc)
-    {b : ByteArray} {w : World D} (h : (world E dc).decode b = .ok w) : b = (world E dc).bytes w := by
-  rw [world_decode] at h
-  split at h
-  · rename_i x hx
-    cases h
-    obtain ⟨⟨hf, _⟩, rfl⟩ := (journalWire_lawfulOn E hd).eq_bytes_of_decode hx
-    rw [world_bytes, toWire_ofWire hf]; rfl
-  · cases h
+    {b : ByteArray} {w : World D} (h : (world E dc).decode b = .ok w) : b = (world E dc).bytes w :=
+  ((world_lawfulOn E hd).eq_bytes_of_decode h).2
 
-omit [TransOrd D] [LawfulEqOrd D] in
-/-- A decoded World satisfies the kernel's invariant, and every slot holds the leaf of its kind. -/
-theorem world_decode_canon {E : Env D} {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc)
-    {b : ByteArray} {w : World D} (h : (world E dc).decode b = .ok w) :
-    w.Canon E ∧ ∀ p ∈ w.trie.toList, Leaf.fits p.1 p.2 = true := by
-  rw [world_decode] at h
-  split at h
-  · rename_i x hx
-    cases h
-    obtain ⟨⟨hf, _⟩, _⟩ := (journalWire_lawfulOn E hd).eq_bytes_of_decode hx
-    exact ⟨hf.1.2, hf.1.1.2⟩
-  · cases h
+/-- **Canonicity, exactly**: for a fitting `w`, `b` decodes to `w` iff `b` is `w`'s bytes. -/
+theorem world_decode_iff {E : Env D} {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc)
+    {b : ByteArray} {w : World D} (hw : World.CodecFits E PD w) :
+    (world E dc).decode b = .ok w ↔ b = (world E dc).bytes w :=
+  ⟨eq_bytes_of_world_decode hd, fun h => h ▸ world_decode_bytes hd hw⟩
 
-omit [TransOrd D] [LawfulEqOrd D] in
-/-- What a World read returns at any offset — the World as a COMPONENT of a larger record (HOST's base) —
-satisfies the kernel's trie invariant, and every slot holds the leaf of its kind. -/
+/-- What a World read returns at any offset (the World as a COMPONENT of a larger record, HOST's base)
+is in the codec's domain. -/
+theorem world_get_fits {E : Env D} {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc)
+    {b : ByteArray} {i j : Nat} {w : World D} (h : (world E dc).get b i = .ok (w, j)) :
+    World.CodecFits E PD w :=
+  ((world_lawfulOn E hd).occurs_of_get h).1
+
+theorem world_decode_fits {E : Env D} {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc)
+    {b : ByteArray} {w : World D} (h : (world E dc).decode b = .ok w) : World.CodecFits E PD w :=
+  ((world_lawfulOn E hd).eq_bytes_of_decode h).1
+
+/-- A World read at any offset satisfies the kernel's trie invariant, and every slot holds the leaf of
+its kind. -/
 theorem world_get_canon {E : Env D} {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc)
     {b : ByteArray} {i j : Nat} {w : World D} (h : (world E dc).get b i = .ok (w, j)) :
-    w.Canon E ∧ ∀ p ∈ w.trie.toList, Leaf.fits p.1 p.2 = true := by
-  simp only [world] at h
-  split at h
-  · rename_i x j' hx
-    cases h
-    obtain ⟨⟨hf, _⟩, _⟩ := (journalWire_lawfulOn E hd).occurs_of_get hx
-    exact ⟨hf.1.2, hf.1.1.2⟩
-  · cases h
+    w.Canon E ∧ ∀ p ∈ w.trie.toList, Leaf.fits p.1 p.2 = true :=
+  let hf := world_get_fits hd h
+  ⟨hf.1.2, hf.1.1.2⟩
 
-omit [TransOrd D] [LawfulEqOrd D] in
+/-- A decoded World satisfies the kernel's trie invariant, and every slot holds the leaf of its kind. -/
+theorem world_decode_canon {E : Env D} {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc)
+    {b : ByteArray} {w : World D} (h : (world E dc).decode b = .ok w) :
+    w.Canon E ∧ ∀ p ∈ w.trie.toList, Leaf.fits p.1 p.2 = true :=
+  let hf := world_decode_fits hd h
+  ⟨hf.1.2, hf.1.1.2⟩
+
 /-- A decoded World has every slot holding the leaf of its kind (the kernel's `World.Slotted`). -/
 theorem world_decode_slotted {E : Env D} {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc)
     {b : ByteArray} {w : World D} (h : (world E dc).decode b = .ok w) : w.Slotted E := by
@@ -421,63 +340,47 @@ theorem world_decode_slotted {E : Env D} {PD : D → Prop} {dc : Stream D} (hd :
   intro s l hg
   exact hf (s, l) ((Trie.mem_toList (trieSpec E) 0 w.trie hc.1 s l).mpr hg)
 
-omit [TransOrd D] [LawfulEqOrd D] in
 /-- Every live cell of a decoded World is in the cell codec's domain (`Cell.Fits`): a reopened base
 carries the kernel's `World.CellsFit` from the codec, so only admission has to keep it (KERNEL-31). -/
 theorem world_decode_cellsFit {E : Env D} {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc)
     {b : ByteArray} {w : World D} (h : (world E dc).decode b = .ok w) : w.CellsFit Cell.Fits E := by
-  rw [world_decode] at h
-  split at h
-  · rename_i x hx
-    cases h
-    obtain ⟨⟨hf, _⟩, _⟩ := (journalWire_lawfulOn E hd).eq_bytes_of_decode hx
-    intro s l hg
-    have hm := (Trie.mem_toList (trieSpec E) 0 x.1 hf.1.2.1 s l).mpr hg
-    have hl := (hf.1.1.1.2 (s, l) hm).2
-    cases l with
-    | entry e =>
-      cases e with
-      | live c => exact hl
-      | tomb => trivial
-    | spent => trivial
-  · cases h
+  have hf := world_decode_fits hd h
+  intro s l hg
+  have hm := (Trie.mem_toList (trieSpec E) 0 w.trie hf.1.2.1 s l).mpr hg
+  have hl := (hf.1.1.1.2 (s, l) hm).2
+  cases l with
+  | entry e =>
+    cases e with
+    | live c => exact hl
+    | tomb => trivial
+  | spent => trivial
 
-omit [LawfulEqOrd D] in
-/-- Extensionally equal Worlds have the same bytes: a checkpoint is a function of the contents. -/
-theorem world_bytes_equiv (E : Env D) (dc : Stream D) {w w' : World D} (h : w.Equiv w') :
-    (world E dc).bytes w = (world E dc).bytes w' := by
-  obtain ⟨ht, hj, hh, hch, ha, ho⟩ := h
-  rw [world_bytes, world_bytes]
-  simp only [toWire, ht, hj.toList_eq, hh, hch, ha, ho]
+/-- **A World read at any offset carries `World.JournalOk`** (KERNEL-39, KERNEL-41): its journal trie is
+canonical (the decoder rebuilt it by `build`) and the decoder refused `kernel/journal` unless
+`journalFits` holds of that trie's own listing. -/
+theorem world_get_journalOk {E : Env D} {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc)
+    {b : ByteArray} {i j : Nat} {w : World D} (h : (world E dc).get b i = .ok (w, j)) : w.JournalOk E :=
+  let hf := world_get_fits hd h
+  journalOk_of_fits hf.2.1.2 hf.2.2.2.2.2.2
 
-/-- **A decoded World carries `World.JournalOk`** (KERNEL-39): the decoder refuses `kernel/journal` unless
-`journalFits` holds of the wire's journal listing, and that listing IS the decoded map's own `toList`
-(it ascends strictly, so `ofList` keeps every entry in order: `toList_ofList_of_sorted`). So every
-kernel theorem that takes `JournalOk` applies to a reopened base. -/
+/-- **A decoded World carries `World.JournalOk`.** -/
 theorem world_decode_journalOk {E : Env D} {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc)
-    {b : ByteArray} {w : World D} (h : (world E dc).decode b = .ok w) : w.JournalOk := by
-  rw [world_decode] at h
-  split at h
-  · rename_i x hx
-    cases h
-    obtain ⟨⟨hf, hj⟩, _⟩ := (journalWire_lawfulOn E hd).eq_bytes_of_decode hx
-    have hl : (ofWire x).journal.toList = x.2.1 := toList_ofList_of_sorted _ (ascendingBy_iff.mp hf.2.1.2)
-    exact journalOk_of_fits (by rw [hl]; exact hj)
-  · cases h
+    {b : ByteArray} {w : World D} (h : (world E dc).decode b = .ok w) : w.JournalOk E :=
+  let hf := world_decode_fits hd h
+  journalOk_of_fits hf.2.1.2 hf.2.2.2.2.2.2
 
-omit [TransOrd D] [LawfulEqOrd D] in
 /-- A wire value in the wire's domain whose journal is the window's decodes to its World. -/
 theorem world_decode_wire_ok {E : Env D} {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc)
-    {x : WorldWire D} (hx : WireFits E PD x) (hj : journalFits x.2.2.1 x.2.1 = true) :
+    {x : WorldWire D} (hx : WireFits E PD x) (hj : journalFits x.2.2.1 x.2.1.toList = true) :
     (world E dc).decode ((worldWire E dc).bytes x) = .ok (ofWire x) := by
-  rw [world_decode, show (worldWire E dc).bytes x = (journalWire E dc).bytes x from rfl,
-    (journalWire_lawfulOn E hd).decode_bytes ⟨hx, hj⟩]
+  have hb : (worldWire E dc).bytes x = (world E dc).bytes (ofWire x) := rfl
+  rw [hb]
+  exact world_decode_bytes hd ⟨hx.1, hx.2.1, hx.2.2.1, hx.2.2.2.1, hx.2.2.2.2.1, hx.2.2.2.2.2, hj⟩
 
-omit [TransOrd D] [LawfulEqOrd D] in
 /-- **The refusal**: the same wire value with a journal that is not the window's is refused
 `kernel/journal` by name, at offset 0. -/
 theorem world_decode_wire_refused {E : Env D} {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc)
-    {x : WorldWire D} (hx : WireFits E PD x) (hj : journalFits x.2.2.1 x.2.1 = false) :
+    {x : WorldWire D} (hx : WireFits E PD x) (hj : journalFits x.2.2.1 x.2.1.toList = false) :
     (world E dc).decode ((worldWire E dc).bytes x) = .error (.rejected 0 "kernel/journal") := by
   have hg := (worldWire_lawfulOn E hd).get_of_occurs x ((worldWire E dc).bytes x) 0 hx (occursAt_self _)
   simp only [world, decode, journalWire, refine, hg, hj]

@@ -107,7 +107,7 @@ structure Checkpoint (W : Type) where
   async : Bool
 
 /-- How the loop writes a batch record and indexes it: the record of the staged entries (each Turn
-with the root after it, HOST-29) given the World after them, and the height and chain
+with the two roots after it, cells' and journal's, HOST-29) given the World after them, and the height and chain
 (`Env.bytes`) of a World. -/
 structure Recorder (W T : Type) where
   encode : W → Array T → ByteArray

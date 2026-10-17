@@ -1771,3 +1771,81 @@ open is impossible: a backup does not record when it straddled a restart, and a 
 file is byte-identical to a file a writer appended to without a restart. So the theorem is the
 answer. The plant's control is what keeps "at least the live records" from being true of every
 copy.
+
+## HOST-38 · KERNEL-41 (a′), HOST's half: a record states BOTH roots after each Turn; the journal's invariant holds at every World the writer holds (2026-10-17, HOST-11; with KERNEL-12, CODEC-7, PROTOCOL-7 in ONE kernel! landing)
+
+**What changed under HOST.** KERNEL-41 (a′) makes the journal a second trie with its own root, and
+`chainNext` commits `(prev, turnDigest, cellsRoot′, journalRoot′)`. HOST-29's record stated the
+one root after each Turn so a page could advance the chain without admitting. With two roots in the
+link, one root per Turn no longer determines the next head.
+
+**Decision.**
+- A record is CODEC's `batch`: `List (Turn × (D × D))`, each Turn with `World.roots` after it (the
+  cells' root, then the journal's). The writer's note is `World.roots`. `Record.runRooted` compares the
+  PAIR, so a stated journal root that is not the admission's is `rootMismatch i` by name, exactly as
+  a stated cells root is. `Page.walkTurnsAt` advances `chainNext E c t roots`. The follower's
+  absorb (Protocol/Command/Machine.lean) and the rows' writer carry the same pairs: HOST carries those
+  sites, as KERNEL-12 ruled (PROTOCOL-7 told).
+- Serve's `submit`/`lookup`/`onReject` read the journal through `World.journalAt` (the trie's `get`).
+- `lookup_expired_never_committed` and `lookup_expired_final` take `JournalCanon` of the World they
+  start from: KERNEL's `fold_answers` / `absent_final` read after a prune, and `Trie.get_retainAt` is
+  exact only on a canonical trie. It is discharged at Deployed, not left open:
+  - `Host.Record.foldlM_journalOk` (Host/Proofs/Base.lean): the writer's reopen step keeps
+    `JournalOk` (each record that opens is admitted Turns, `fold_journalOk`);
+  - `Host.Deployed.openWith_journalOk` (Host/Proofs/Deployed.lean): the World the deployed open
+    returns is `JournalOk`, from `Codec.Deployed.world_get_journalOk` (CODEC-7, on HOST's ask) at the
+    base record's offset and the lemma above;
+  - `Host.admitBatch_journalOk` (Host/Proofs/Serve.lean): a batch of the writer's machine keeps it
+    (`staged_rooted`, `RootedFold.fold`, `fold_journalOk`).
+  So every World the loop answers a lookup from is `JournalOk`, hence `JournalCanon` (`.1`).
+- The reopen theorems (openWith family, the three-range open, the follower's reopen, HOST-32/37's
+  backups) are generic in the World and the step: they re-verify unchanged. Nothing in them mentions
+  the journal.
+
+**Flag day.**
+- Shape: the batch record's codec tag moves (a second digest per Turn), and CODEC-31 moves the World
+  (`kernel/journal-order`), `kernel/world`, `kernel/carried` and `host/base/index-count` tags. So
+  `Base.shapeStamp` flips: every existing Store refuses `shapeMismatch` 43 at open and at `host check`
+  (checked by hand: a HOST-10 store-plants Store, `refused shapeMismatch`, rc 43; a fresh one opens).
+- Re-genesis: every Store. Re-export: every carried file (its stamp moves with `kernel/carried`).
+- Bytes: +1 digest per logged Turn (8 bytes in the toy, 32 deployed). WASTE rows re-pinned with the
+  reason (gates/waste.tsv): `submit bytes-per-turn` 1.492 → 1.635; `seal bytes-per-appended-byte`
+  1.566 → 1.689 and `index-bytes…at-200` 0.261 → 0.284 rise because the same Turns cross the toy
+  seal cadence at other points (seeds 1–2 seal once more over the same 143 / 130 Turns);
+  `base-bytes-net-of-growth…grow-at-1000` 3.489 → 3.520 because the same 1000 Turns append 8000
+  more bytes and CODEC-31's World codec moves the base sizes (seed 1's final base 31196 → 32386 B),
+  so the base/4 seal points move (35/38/39 seals at seeds 1–3, was 32/35/36); the other seven
+  moved rows fell.
+
+**Plants.** host-sim `plant-flip-root-cells` and `plant-flip-root-journal` (seeds 1–3): the first
+record re-encoded with ONE of the two stated roots changed and re-sealed; each is refused
+`rootMismatch 0` at record 0. A reopen that compared only the cells' root goes red by the journal
+arm's name. All verdicts green on the assembled tree: host-sim ×3, host-file-sim ×3, hosting-sim ×3,
+rows 21/21, store-plants, cargo launcher broker and isolation.
+
+**Critique.**
+- 32 deployed bytes per Turn for a root the reader could recompute only by admitting. The
+  alternative, a record stating the journal root once at its end, makes a page that ends inside a
+  record unable to state the exact chain after its last event, which is HOST-29's whole point. A
+  head link that committed the journal root only at multiples of W would change KERNEL's chain, not
+  HOST's: KERNEL ruled the 4-input link.
+- `openWith_journalOk` is stated for the WRITER's step (`foldStep`). The tail's step
+  (`tailStep`, HOSTING) is the same `Record.stepTurns` and `Hosting.Proofs.Open.open_world_canon`
+  covers its cells Canon; the tail's journal is not consulted by a lookup, so no theorem is owed
+  there today. Likewise the follower's `.adopt w′` (Host/Follow.lean) installs a World decoded from
+  the writer's base with no `JournalOk` theorem of its own: the follower serves no `lookup`
+  (`journalAt` is read only in Host/Serve.lean), so nothing rests on it; a follower that answered
+  lookups would owe it (the deployed decode gives it: `Codec.Deployed.world_get_journalOk`).
+- The loop's World between batches is `JournalOk` by composing three theorems; the composition is
+  read off `Loop.serve` (the resident World is only ever the open's World or `admitBatch`'s), not
+  proved over IO. Same standing as `staged_rooted`'s use.
+
+**Meta-critique.** The danger in a port like this is the premise that quietly moves from "true of every
+World" to "true of a canonical one" and is left at the theorem's head for a reader to discharge.
+Each premise this port added is discharged at Deployed above; none is left at the theorem's head.
+The WASTE rises are a cadence artifact over identical Turns, not more work per Turn: same turns,
+same batches, +8 bytes per Turn, the seal points moved. The reader caught my first wording of the
+grow-at-1000 reason ("one more seal at seeds 1–2"), which was false: there are three more seals per
+seed, and the base sizes moved too. The reason was corrected from the logs. Found by the same
+reader and filed, not fixed here: `resident-entries-per-record-past-base` prints 0 on seeds whose
+run ends with no record past the base, and the max over seeds hides that.

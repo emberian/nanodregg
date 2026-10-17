@@ -28,8 +28,8 @@ entry's tag covers its position, so an entry cannot be moved, reordered or splic
 index; a `log` page reads O(log indexCount) of them, each checked by its tag on that read
 (`Host.Page.entryAt`), and `host check` checks every one (`indexClean`). The base holds no entries:
 a seal writes only the entries since the last base (HOST-17's count). The World part is exactly
-CODEC's World codec, so its digest is a function of the World's contents
-(`Codec.Proofs.World.world_bytes_equiv`): a full follower can countersign it, and a thin member can
+CODEC's World codec, whose decode is exact (`Codec.Kernel.world_decode_iff`: `decode b = .ok w ↔
+b = bytes w`), so its digest is a function of the World: a full follower can countersign it, and a thin member can
 trust it (HOST-15).
 
 A base is replaced atomically (`base.tmp` → sync → rename → sync dir), so a crash leaves either the

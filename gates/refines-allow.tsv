@@ -1,4 +1,2 @@
 # decl	theorem[,theorem]	reason — gates/census.py, Census/Refines.lean (CODEC-28): a refine site canonical only up to an
 # equivalence, with the theorems that state its decode. A row that excuses nothing is an error.
-Nanodregg.Codec.Kernel.world	Nanodregg.Codec.Kernel.world_decode_bytes,Nanodregg.Codec.Kernel.eq_bytes_of_world_decode	the journal is a TreeMap: decode ∘ bytes is the identity up to World.Equiv (CODEC-14), and whatever decodes is exactly its bytes
-Nanodregg.Codec.Kernel.carried	Nanodregg.Codec.Kernel.carried_decode_iff,Nanodregg.Codec.Kernel.eq_bytes_of_carried_decode	the journal is a TreeMap: canonical up to CarriedEquiv (CODEC-22)

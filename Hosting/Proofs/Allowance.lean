@@ -286,8 +286,8 @@ theorem start_tracks {E : Env D} {pkgId op : ByteArray} {w : World D} (hw : w.Ca
 
 /-! ### The tail's World is the fold of the Turns it reports -/
 
-theorem runRooted_fold {E : Env D} {root : World D → D} :
-    ∀ {i : Nat} {w w' : World D} {ps : List (Turn D × D)},
+theorem runRooted_fold {E : Env D} {root : World D → D × D} :
+    ∀ {i : Nat} {w w' : World D} {ps : List (Turn D × (D × D))},
       Nanodregg.Host.Record.runRooted (World.admit E) root i w ps = .ok w' → World.fold E w (ps.map (·.1)) = .ok w'
   | _, w, w', [], h => by simp [Nanodregg.Host.Record.runRooted] at h; subst h; simp [World.fold]
   | i, w, w', (t, r) :: rest, h => by
@@ -299,8 +299,8 @@ theorem runRooted_fold {E : Env D} {root : World D → D} :
       · exact fold_cons_ok.mpr ⟨w₁, h₁, runRooted_fold h⟩
       · cases h
 
-theorem stepTurns_fold {E : Env D} {dc : Codec.Stream D} {root : World D → D} {w w' : World D}
-    {r : ByteArray} {ps : List (Turn D × D)}
+theorem stepTurns_fold {E : Env D} {dc : Codec.Stream D} {root : World D → D × D} {w w' : World D}
+    {r : ByteArray} {ps : List (Turn D × (D × D))}
     (h : Nanodregg.Host.Record.stepTurns dc (World.admit E) root w r = .ok (w', ps)) :
     World.fold E w (ps.map (·.1)) = .ok w' := by
   unfold Nanodregg.Host.Record.stepTurns at h
@@ -314,9 +314,9 @@ theorem stepTurns_fold {E : Env D} {dc : Codec.Stream D} {root : World D → D} 
       exact runRooted_fold hr
 
 theorem absorbRecords_fold {E : Env D} {F' : Type}
-    {step : World D → ByteArray → Except F' (World D × List (Turn D × D))}
+    {step : World D → ByteArray → Except F' (World D × List (Turn D × (D × D)))}
     (hs : ∀ w r w' ps, step w r = .ok (w', ps) → World.fold E w (ps.map (·.1)) = .ok w') :
-    ∀ {w w' : World D} {os os' : Array (List (Turn D × D))} {i : Nat} {rs : List ByteArray},
+    ∀ {w w' : World D} {os os' : Array (List (Turn D × (D × D)))} {i : Nat} {rs : List ByteArray},
       Nanodregg.Host.absorbRecords step w os i rs = .ok (w', os') →
       ∃ new, os'.toList = os.toList ++ new ∧ World.fold E w (new.flatten.map (·.1)) = .ok w'
   | w, w', os, os', i, [], h => by
@@ -334,9 +334,9 @@ theorem absorbRecords_fold {E : Env D} {F' : Type}
 
 /-- One `Tail.next` step's pure half: the World the tail reaches is `World.fold` of exactly the
 Turns it reports (`outs.toList.flatten.map Prod.fst`, what `hosting-broker`'s catch-up collects). -/
-theorem tail_absorb_fold {E : Env D} {dc : Codec.Stream D} {root : World D → D} {s : Nanodregg.Host.Log.Sealer}
+theorem tail_absorb_fold {E : Env D} {dc : Codec.Stream D} {root : World D → D × D} {s : Nanodregg.Host.Log.Sealer}
     {rm : Nat} {t t' : Nanodregg.Host.Tail (World D)} {log : ByteArray} {capped : Bool}
-    {outs : Array (List (Turn D × D))}
+    {outs : Array (List (Turn D × (D × D)))}
     (h : Nanodregg.Host.Tail.absorb s rm (Nanodregg.Host.Record.stepTurns dc (World.admit E) root) t log capped = .ok (t', outs)) :
     World.fold E t.world (outs.toList.flatten.map Prod.fst) = .ok t'.world := by
   unfold Nanodregg.Host.Tail.absorb at h

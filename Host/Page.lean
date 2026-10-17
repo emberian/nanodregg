@@ -11,9 +11,9 @@ reading each probed entry through `entryAt`, which checks a disk entry by its ta
 no page is built from it (HOST-33; `Host.Proofs.Page.build_located`). From the located record,
 frames are read in order by offset (`walk`), each verified under the segment sealer against the
 tag before it: a frame that does not verify is refused `corrupt` by name, never served. Each record
-is decoded, and the chain is advanced Turn by Turn from the entry's chain with the root the record
-states beside each Turn (`chainNext E c t root`, HOST-29; the writer's reopen checked every stated
-root against its own admission), so a page may end inside a record and still state the exact chain
+is decoded, and the chain is advanced Turn by Turn from the entry's chain with the roots the record
+states beside each Turn (`chainNext E c t roots`, HOST-29, KERNEL-41; the writer's reopen checked every stated
+pair against its own admission), so a page may end inside a record and still state the exact chain
 after its last event, without admitting anything. Work: at most 1 + ⌈log₂ count⌉ entry reads to
 locate, then O(page bytes). The page holds durable records only: the loop builds it after the
 batch's sync.
@@ -68,9 +68,9 @@ structure Acc where
 
 variable {m : Type → Type} [Monad m]
 
-/-- One record's (Turn, root) pairs: skip those at or below `start`, serve the rest while they fit;
+/-- One record's (Turn, roots) pairs: skip those at or below `start`, serve the rest while they fit;
 with the chain and height after the last Turn walked. -/
-def walkTurnsAt (E : Env D) (budget start : Nat) (chain₀ : D) (h₀ : Nat) (ts : List (Turn D × D)) (acc : Acc) :
+def walkTurnsAt (E : Env D) (budget start : Nat) (chain₀ : D) (h₀ : Nat) (ts : List (Turn D × (D × D))) (acc : Acc) :
     Acc × D × Nat :=
   ts.foldl (fun (st : Acc × D × Nat) (t, root) =>
     let (a, c, h) := st
@@ -82,8 +82,8 @@ def walkTurnsAt (E : Env D) (budget start : Nat) (chain₀ : D) (h₀ : Nat) (ts
     else ({ a with events := a.events.push t.event, bytes := a.bytes + 4 + t.event.size,
                    height := h', chain := E.bytes c' }, c', h')) (acc, chain₀, h₀)
 
-/-- One record's (Turn, root) pairs walked (`walkTurnsAt`): what the page holds after it. -/
-def walkTurns (E : Env D) (budget start : Nat) (chain₀ : D) (h₀ : Nat) (ts : List (Turn D × D)) (acc : Acc) : Acc :=
+/-- One record's (Turn, roots) pairs walked (`walkTurnsAt`): what the page holds after it. -/
+def walkTurns (E : Env D) (budget start : Nat) (chain₀ : D) (h₀ : Nat) (ts : List (Turn D × (D × D))) (acc : Acc) : Acc :=
   (walkTurnsAt E budget start chain₀ h₀ ts acc).1
 
 /-- Index entry `k`: the first `disk` from `index.log` (`readIndex off len`), each read back AT ITS

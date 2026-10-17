@@ -9,11 +9,18 @@
   cannot fire at the deployed instance (the generic round trip, `entriesSeq_read`, has no premise);
 * `foldStep_originChain` (HOST-25) — a record the deployed reopen folds keeps `originChain`
   (`Record.step_origin`, from KERNEL's `fold_origin`), so every later base's World states the chain
-  the origin frame holds.
+  the origin frame holds;
+* `openWith_journalOk` (KERNEL-41) — the World the deployed writer's open returns has a `JournalOk`
+  journal (a canonical trie, every entry in its window, heights distinct): its base's World because
+  the deployed World codec read it (`Codec.Deployed.world_get_journalOk`), every record after it by
+  `Record.foldlM_journalOk`; with `Host.admitBatch_journalOk`, every World the loop holds is, and the
+  `JournalCanon` premise of `Host.lookup_expired_final` / `lookup_expired_never_committed` is
+  discharged there.
 -/
 import Host.Deployed
 import Host.Proofs.Base
 import Host.Proofs.Carry
+import Host.Proofs.Backup
 import Codec.Proofs.Deployed
 
 namespace Nanodregg.Host.Deployed
@@ -67,5 +74,28 @@ theorem export_reads {w : World D} {f : ByteArray}
         (Codec.Kernel.carried X.env Codec.Deployed.digestCodec).bytes w.carried ∧
       r.head = ⟨w.origin, w.height, w.chain⟩ :=
   Carry.exportFile_reads h
+
+
+/-- **The World the deployed writer opens to is `JournalOk`** (KERNEL-41), whatever base file and
+segment bytes the open reads. -/
+theorem openWith_journalOk {keys : Keys} {file I S : ByteArray} {o : Opening (World D)}
+    (h : Id.run (openWith keys c world recorder.mark originChain foldStep file S.size I.size
+      (segReader I) (segReader S)) = .ok o) :
+    o.opened.world.JournalOk X.env := by
+  obtain ⟨b, _n, _d, rs, hb, hf, -⟩ := openWith_world keys c world recorder.mark originChain foldStep file I S h
+  obtain ⟨r, _, _, hd, _⟩ := Base.read_decode keys c world file hb
+  simp only [Codec.Stream.decode] at hd
+  split at hd
+  · rename_i v j hget
+    split at hd
+    · cases hd
+      obtain ⟨x, hx, hacc⟩ := Codec.Stream.refine_get_inner hget
+      obtain ⟨_j, hw⟩ := Codec.Stream.product_get_fst hx
+      obtain ⟨xw, xo, xt, xio, xit⟩ := x
+      simp only [Option.some.injEq] at hacc
+      subst hacc
+      exact Record.foldlM_journalOk (Codec.Deployed.world_get_journalOk hw) hf
+    · cases hd
+  · cases hd
 
 end Nanodregg.Host.Deployed

@@ -21,7 +21,7 @@ inductive Verdict (D : Type)
 variable {D : Type} [Ord D] [DecidableEq D]
 
 def submit (X : Ctx D) (w : World D) (c : Call D) : Except (Verdict D) (Turn D × World D) :=
-  match w.journal[txIdOf X c]? with
+  match w.journalAt X.env (txIdOf X c) with
   | some (h, _) => .error (.rejected (.replayed h))
   | none =>
       match receive X w c with

@@ -1,13 +1,13 @@
 /-
 # Host.Record — a batch record: what one segment frame holds
 
-    record = CODEC's `batch batchMax dc`: the batch's Turns, each with the World's ROOT after it
+    record = CODEC's `batch batchMax dc`: the batch's Turns, each with the World's TWO ROOTS after it
 
-The writer encodes each Turn it staged with the root its World reached right after it (HOST-29:
-`chainNext` commits the root, so a `log` page advances the chain from these pairs without
+The writer encodes each Turn it staged with the roots its World reached right after it, the cells'
+then the journal's (`World.roots`; HOST-29, KERNEL-41: `chainNext` commits both, so a `log` page advances the chain from these pairs without
 admitting anything). Open decodes the record and runs it with `runRooted`: each Turn is admitted
 with the transition it trusts (the writer's and the follower's reopen: `World.admit`), and the
-root it states is compared with the root of the World admission reached (a pair assertion, law 4).
+roots it states are compared with the roots of the World admission reached (a pair assertion, law 4).
 So a record whose Turns and roots disagree is refused `rootMismatch` by name at its index, and no
 root is ever taken on the writer's word. The chain after a record is then `chainOf` over its pairs
 (`Kernel.RootedFold.chain`), so the record does not state it a second time.
@@ -26,7 +26,7 @@ inductive Fault (F : Type) where
   | undecodable (r : Codec.Refusal)
   /-- the `index`-th Turn of the record is refused by the open's transition -/
   | turn (index : Nat) (f : F)
-  /-- the `index`-th Turn admits, but the root the record states beside it is not the root the
+  /-- the `index`-th Turn admits, but a root the record states beside it (cells' or journal's) is not the one the
   World reached (HOST-29) -/
   | rootMismatch (index : Nat)
 
@@ -35,16 +35,16 @@ def Fault.name {F : Type} : Fault F → String
   | .turn _ _ => "turn"
   | .rootMismatch _ => "rootMismatch"
 
-def codec (dc : Stream D) : Stream (List (Turn D × D)) := Nanodregg.Codec.Kernel.batch recordTurnsMax dc
+def codec (dc : Stream D) : Stream (List (Turn D × (D × D))) := Nanodregg.Codec.Kernel.batch recordTurnsMax dc
 
-/-- The record of `staged`: each admitted Turn with the root after it (`Machine.note`). -/
-def encode (dc : Stream D) (staged : Array (Turn D × D)) : ByteArray :=
+/-- The record of `staged`: each admitted Turn with the roots after it (`Machine.note`). -/
+def encode (dc : Stream D) (staged : Array (Turn D × (D × D))) : ByteArray :=
   (codec dc).bytes staged.toList
 
-/-- Run a record's pairs from `w`: admit each Turn, and require the root stated beside it to be
-`root` of the World admission reached. `i` is the index of the first pair. -/
-def runRooted {F : Type} (admit : World D → Turn D → Except F (World D)) (root : World D → D) :
-    Nat → World D → List (Turn D × D) → Except (Fault F) (World D)
+/-- Run a record's pairs from `w`: admit each Turn, and require the roots stated beside it to be
+`root` (the deployed `World.roots`) of the World admission reached. `i` is the index of the first pair. -/
+def runRooted {F : Type} (admit : World D → Turn D → Except F (World D)) (root : World D → D × D) :
+    Nat → World D → List (Turn D × (D × D)) → Except (Fault F) (World D)
   | _, w, [] => .ok w
   | i, w, (t, r) :: rest =>
     match admit w t with
@@ -54,7 +54,7 @@ def runRooted {F : Type} (admit : World D → Turn D → Except F (World D)) (ro
 /-- Decode one record, run it (`runRooted`), and return its pairs beside the World (what a tail
 reports per batch, `Host.Tail`). -/
 def stepTurns {F : Type} (dc : Stream D) (admit : World D → Turn D → Except F (World D))
-    (root : World D → D) (w : World D) (r : ByteArray) : Except (Fault F) (World D × List (Turn D × D)) :=
+    (root : World D → D × D) (w : World D) (r : ByteArray) : Except (Fault F) (World D × List (Turn D × (D × D))) :=
   match (codec dc).decode r with
   | .error e => .error (.undecodable e)
   | .ok ps =>
@@ -63,7 +63,7 @@ def stepTurns {F : Type} (dc : Stream D) (admit : World D → Turn D → Except 
     | .ok w' => .ok (w', ps)
 
 /-- One record run from `w`: `stepTurns`'s World. -/
-def step {F : Type} (dc : Stream D) (admit : World D → Turn D → Except F (World D)) (root : World D → D)
+def step {F : Type} (dc : Stream D) (admit : World D → Turn D → Except F (World D)) (root : World D → D × D)
     (w : World D) (r : ByteArray) : Except (Fault F) (World D) :=
   (stepTurns dc admit root w r).map Prod.fst
 

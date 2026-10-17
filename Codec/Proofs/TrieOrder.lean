@@ -9,9 +9,9 @@ leaf holds a key twice. `build_listing_iff` says what that is without mentioning
 depth `d`, `l` is pairwise `BitLt S d` on its keys, i.e. at the first bit in `[d, depth)` where two
 listed keys differ, the earlier key's bit is clear. The premise is `Trie.SepAt S d l` (distinct keys
 differ somewhere below `depth`), which `Trie.Separates S` gives at depth 0.
-`cells_get_ordered` / `cells_get_refused` / `cells_get_ok`: the World codec's trie part, read through
-`fitList`, is accepted exactly on such listings and refused `kernel/trie-order` by name on every
-other. `Codec.Proofs.SlotOrder` turns `BitLt (trieSpec E) 0` into the order of the bytes.
+`trieListing_get_ok` / `_refused` / `_ordered`: a trie-listing codec (the cells' `kernel/trie-order`,
+the journal's `kernel/journal-order`) accepts exactly such listings and refuses every other by its
+name; `cells_get_*` are the cells' instances. `Codec.Proofs.SlotOrder` turns `BitLt (trieSpec E) 0` into the order of the bytes.
 -/
 
 namespace Nanodregg.Codec.Kernel
@@ -169,53 +169,78 @@ theorem build_listing_iff : ∀ (f d : Nat) (l : List (K × V)), f = S.depth - d
 
 end Build
 
+section Listing
+variable {K V D' : Type} [DecidableEq K] [DecidableEq V]
+
+/-- The listing check a trie-listing codec runs, read as the bit order from the root. -/
+theorem listing_check_iff (S : Trie.Spec K V D') (hsep : Trie.Separates S) (l : List (K × V)) :
+    ((Trie.build S S.depth 0 l).toList == l && leavesNodup (Trie.build S S.depth 0 l)) = true ↔
+      l.Pairwise (fun p q => BitLt S 0 p.1 q.1) := by
+  rw [Bool.and_eq_true, beq_iff_eq]
+  exact build_listing_iff S _ 0 l rfl
+    (fun p _ q _ hne => (hsep p.1 q.1 hne).elim fun i h => ⟨i, Nat.zero_le i, h⟩)
+
+/-- A listing in bit order is accepted: the codec reads the trie `build` makes of it. -/
+theorem trieListing_get_ok (S : Trie.Spec K V D') (hsep : Trie.Separates S) {name : String}
+    {c : Stream (List (K × V))} {b : ByteArray} {i j : Nat} {l : List (K × V)}
+    (h : c.get b i = .ok (l, j)) (ho : l.Pairwise (fun p q => BitLt S 0 p.1 q.1)) :
+    (refine name c (listingAccept S) Trie.T.toList).get b i = .ok (Trie.build S S.depth 0 l, j) := by
+  have hc := (listing_check_iff S hsep l).mpr ho
+  simp only [listingAccept, refine, h]
+  rw [if_pos hc]
+
+/-- **Every other listing is refused by the codec's name.** -/
+theorem trieListing_get_refused (S : Trie.Spec K V D') (hsep : Trie.Separates S) {name : String}
+    {c : Stream (List (K × V))} {b : ByteArray} {i j : Nat} {l : List (K × V)}
+    (h : c.get b i = .ok (l, j)) (ho : ¬ l.Pairwise (fun p q => BitLt S 0 p.1 q.1)) :
+    (refine name c (listingAccept S) Trie.T.toList).get b i = .error (.rejected i name) := by
+  have hc : ¬ (((Trie.build S S.depth 0 l).toList == l && leavesNodup (Trie.build S S.depth 0 l)) = true) :=
+    fun hc => ho ((listing_check_iff S hsep l).mp hc)
+  simp only [listingAccept, refine, h]
+  rw [if_neg hc]
+
+/-- What a trie-listing codec accepts was a listing in bit order, and is the trie `build` makes of it. -/
+theorem trieListing_get_ordered (S : Trie.Spec K V D') (hsep : Trie.Separates S) {name : String}
+    {c : Stream (List (K × V))} {b : ByteArray} {i j : Nat} {t : Trie.T K V D'}
+    (h : (refine name c (listingAccept S) Trie.T.toList).get b i = .ok (t, j)) :
+    ∃ l, c.get b i = .ok (l, j) ∧ l.Pairwise (fun p q => BitLt S 0 p.1 q.1) ∧
+      t = Trie.build S S.depth 0 l := by
+  cases hg : c.get b i with
+  | error e => simp [refine, hg] at h
+  | ok r =>
+    obtain ⟨l, j'⟩ := r
+    by_cases ho : l.Pairwise (fun p q => BitLt S 0 p.1 q.1)
+    · rw [trieListing_get_ok S hsep hg ho] at h
+      simp only [Except.ok.injEq, Prod.mk.injEq] at h
+      obtain ⟨rfl, rfl⟩ := h
+      exact ⟨l, rfl, ho, rfl⟩
+    · rw [trieListing_get_refused S hsep hg ho] at h; cases h
+
+end Listing
+
 section Cells
 variable {D : Type} [DecidableEq D]
 
-/-- The listing check `kernel/trie-order` runs, read as the bit order from the root. -/
-theorem trieOrder_check_iff (E : Env D) (hsep : Trie.Separates (trieSpec E)) (l : List (Slot D × Leaf)) :
-    ((Trie.build (trieSpec E) (trieSpec E).depth 0 l).toList == l &&
-        leavesNodup (Trie.build (trieSpec E) (trieSpec E).depth 0 l)) = true ↔
-      l.Pairwise (fun p q => BitLt (trieSpec E) 0 p.1 q.1) := by
-  rw [Bool.and_eq_true, beq_iff_eq]
-  exact build_listing_iff (trieSpec E) _ 0 l rfl
-    (fun p _ q _ hne => (hsep p.1 q.1 hne).elim fun i h => ⟨i, Nat.zero_le i, h⟩)
-
-/-- A listing in bit order is accepted: the trie part reads as the trie `build` makes of it. -/
+/-- A cells listing in bit order is accepted: the trie part reads as the trie `build` makes of it. -/
 theorem cells_get_ok (E : Env D) (hsep : Trie.Separates (trieSpec E)) {dc : Stream D} {b : ByteArray}
     {i j : Nat} {l : List (Slot D × Leaf)} (h : (fitList dc).get b i = .ok (l, j))
     (ho : l.Pairwise (fun p q => BitLt (trieSpec E) 0 p.1 q.1)) :
-    (cells E dc).get b i = .ok (Trie.build (trieSpec E) (trieSpec E).depth 0 l, j) := by
-  have hc := (trieOrder_check_iff E hsep l).mpr ho
-  simp only [cells, refine, h]
-  rw [if_pos hc]
+    (cells E dc).get b i = .ok (Trie.build (trieSpec E) (trieSpec E).depth 0 l, j) :=
+  trieListing_get_ok _ hsep h ho
 
-/-- **Every other listing is refused `kernel/trie-order`, by name.** -/
+/-- **Every other cells listing is refused `kernel/trie-order`, by name.** -/
 theorem cells_get_refused (E : Env D) (hsep : Trie.Separates (trieSpec E)) {dc : Stream D}
     {b : ByteArray} {i j : Nat} {l : List (Slot D × Leaf)} (h : (fitList dc).get b i = .ok (l, j))
     (ho : ¬ l.Pairwise (fun p q => BitLt (trieSpec E) 0 p.1 q.1)) :
-    (cells E dc).get b i = .error (.rejected i "kernel/trie-order") := by
-  have hc : ¬ (((Trie.build (trieSpec E) (trieSpec E).depth 0 l).toList == l &&
-      leavesNodup (Trie.build (trieSpec E) (trieSpec E).depth 0 l)) = true) :=
-    fun hc => ho ((trieOrder_check_iff E hsep l).mp hc)
-  simp only [cells, refine, h]
-  rw [if_neg hc]
+    (cells E dc).get b i = .error (.rejected i "kernel/trie-order") :=
+  trieListing_get_refused _ hsep h ho
 
 /-- What the trie part accepts was a listing in bit order, and is the trie `build` makes of it. -/
 theorem cells_get_ordered (E : Env D) (hsep : Trie.Separates (trieSpec E)) {dc : Stream D}
     {b : ByteArray} {i j : Nat} {t : Cells D} (h : (cells E dc).get b i = .ok (t, j)) :
     ∃ l, (fitList dc).get b i = .ok (l, j) ∧ l.Pairwise (fun p q => BitLt (trieSpec E) 0 p.1 q.1) ∧
-      t = Trie.build (trieSpec E) (trieSpec E).depth 0 l := by
-  cases hg : (fitList dc).get b i with
-  | error e => simp [cells, refine, hg] at h
-  | ok r =>
-    obtain ⟨l, j'⟩ := r
-    by_cases ho : l.Pairwise (fun p q => BitLt (trieSpec E) 0 p.1 q.1)
-    · rw [cells_get_ok E hsep hg ho] at h
-      simp only [Except.ok.injEq, Prod.mk.injEq] at h
-      obtain ⟨rfl, rfl⟩ := h
-      exact ⟨l, rfl, ho, rfl⟩
-    · rw [cells_get_refused E hsep hg ho] at h; cases h
+      t = Trie.build (trieSpec E) (trieSpec E).depth 0 l :=
+  trieListing_get_ordered _ hsep h
 
 end Cells
 

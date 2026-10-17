@@ -79,9 +79,9 @@ def unspend (E : Env D) (w : World D) : World D :=
 
 /-- `Host.handle`, except under the `openLog` plant: a `log` envelope that decodes is paged
 without `Envelope.check`. -/
-def machine (P : Params) : Machine (World D) (Turn D) (Reject D) Frame D where
+def machine (P : Params) : Machine (World D) (Turn D) (Reject D) Frame (D × D) where
   admit w t := World.admit P.X.env (if P.forgetSpent then unspend P.X.env w else w) t
-  note := World.root P.X.env
+  note := World.roots P.X.env
   handle w f :=
     if !P.gateLog && f.op = Op.log.code then
       match Envelope.ofBytes P.X f.payload with
@@ -143,7 +143,7 @@ the loop's state the one open gives over it. -/
 def genesisStore (P : Params) (g : World D) : IO (Except String (Mem × Resident (World D))) := do
   match Host.Sim.memGenesis Host.Sim.keys cadence Sim.world (fun w => (w.height, P.X.env.bytes w.chain))
       (fun w => P.X.env.bytes (World.genesisChain P.X.env w.origin))
-      (Record.step Sim.dc (World.admit P.X.env) (World.root P.X.env)) g with
+      (Record.step Sim.dc (World.admit P.X.env) (World.roots P.X.env)) g with
   | .error f => return .error f.name
   | .ok (d, b, r) => return .ok (⟨← IO.mkRef d, ← IO.mkRef b⟩, r)
 
@@ -151,12 +151,12 @@ def genesisStore (P : Params) (g : World D) : IO (Except String (Mem × Resident
 def reopen (P : Params) (index base seg : ByteArray) : Except String (Resident (World D)) :=
   match Id.run (openWith Host.Sim.keys cadence Sim.world (fun w => (w.height, P.X.env.bytes w.chain))
       (fun w => P.X.env.bytes (World.genesisChain P.X.env w.origin))
-      (Record.step Sim.dc (World.admit P.X.env) (World.root P.X.env))
+      (Record.step Sim.dc (World.admit P.X.env) (World.roots P.X.env))
       base seg.size index.size (fun off len => pure (.ok (index.extract off (off + len))))
       fun off len => pure (.ok (seg.extract off (off + len)))) with
   | .error f => .error f.name
   | .ok o =>
-      let w := if P.forgetJournal then { o.opened.world with journal := {} } else o.opened.world
+      let w := if P.forgetJournal then { o.opened.world with journal := .empty } else o.opened.world
       .ok { world := w, pos := o.pos, sealed := o.sealed,
             index := o.index }
 

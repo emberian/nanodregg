@@ -184,7 +184,7 @@ def restartPlant (root : System.FilePath) (key : Digest) (keys : Keys) (seed : N
   let segBefore ← fileSize (segmentPath dir)
   let idxBefore ← fileSize (indexPath dir)
   let extra := Log.frame keys.segment cur.pos.tag.bytes
-    (recorder.encode cur.opened.world #[(mkTurn 77777 0 1024 [77777], 0)])
+    (recorder.encode cur.opened.world #[(mkTurn 77777 0 1024 [77777], (0, 0))])
   let half := extra.extract 0 (extra.size / 2)
   let orphan := ByteArray.mk (Array.replicate (entryBytes keys / 2) 0xAB)
   let f ← File.open (segmentPath dir) .append
@@ -282,7 +282,7 @@ def body (seed : Nat) (dirA dirB : System.FilePath) : IO UInt32 := do
       let baseBytes ← IO.FS.readBinFile (basePath dir)
       IO.FS.writeBinFile (baseTmpPath dir) (baseBytes.extract 0 (baseBytes.size / 2))
       let extra := Log.frame keys.segment r.pos.tag.bytes
-        (recorder.encode r.world #[(mkTurn 77777 0 1024 [77777], 0)])
+        (recorder.encode r.world #[(mkTurn 77777 0 1024 [77777], (0, 0))])
       let half := extra.extract 0 (extra.size / 2)
       let f ← File.open (segmentPath dir) .append
       f.writeAll half

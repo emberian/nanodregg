@@ -137,7 +137,7 @@ theorem receiveWith_key {X : Ctx D} {look : Pinned D} {c : Call D} {t : Turn D}
 yet in the journal. -/
 theorem submit_ok {X : Ctx D} {w w' : World D} {c : Call D} {t : Turn D}
     (h : submit X w c = .ok (t, w')) :
-    w.journal[txIdOf X c]? = none ∧ receive X w c = .ok t ∧ World.admit X.env w t = .ok w' := by
+    w.journalAt X.env (txIdOf X c) = none ∧ receive X w c = .ok t ∧ World.admit X.env w t = .ok w' := by
   unfold submit at h
   split at h
   · simp at h
@@ -155,7 +155,7 @@ theorem submit_ok {X : Ctx D} {w w' : World D} {c : Call D} {t : Turn D}
 /-- **A retry is never re-judged.** A call already in the journal is `replayed` at its height,
 whatever the World and the call's own derivation would say now. -/
 theorem submit_replayed {X : Ctx D} {w : World D} {c : Call D} {h : Nat} {d : D}
-    (hj : w.journal[txIdOf X c]? = some (h, d)) :
+    (hj : w.journalAt X.env (txIdOf X c) = some (h, d)) :
     submit X w c = .error (.rejected (.replayed h)) := by
   unfold submit; rw [hj]
 

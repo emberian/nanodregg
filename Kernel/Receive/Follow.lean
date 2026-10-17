@@ -45,7 +45,7 @@ def inputOf (X : Ctx D) (name nonce : ByteArray) (allowance : Nat) (founders : L
 
 /-- What a carry is made from (KERNEL-29), as CODEC's raw combinators write it: the name, HOST's
 nonce, the exported World's origin bytes, the carried trie's root bytes, the allowance, the
-height, and the journal listing (each entry's id bytes, height, turn-digest bytes, ascending). -/
+height, and the journal listing (each entry's id bytes, height, turn-digest bytes, in trie order). -/
 abbrev CarryInput := ByteArray × ByteArray × ByteArray × ByteArray × Nat × Nat × List (ByteArray × Nat × ByteArray)
 
 open Nanodregg.Codec Nanodregg.Codec.Stream in
@@ -190,7 +190,7 @@ def checkCarry (X : Ctx D) (name nonce : ByteArray) (fromOrigin : D) (c : Carrie
   req (nonce.size ≤ Bounds.eventBytesMax) .nonceTooLong
   req (c.allowance < Bounds.counterLimit) .allowanceTooLarge
   req (c.height < Bounds.counterLimit) .heightTooLarge
-  req (c.journal.size ≤ Bounds.journalMax) .journalTooLong
+  req (c.journal.toList.length ≤ Bounds.journalMax) .journalTooLong
   req ((X.env.bytes fromOrigin).size ≤ Bounds.eventBytesMax &&
       (X.env.bytes (c.trie.hashOf (trieSpec X.env))).size ≤ Bounds.eventBytesMax &&
       c.journal.toList.all fun p => (X.env.bytes p.1).size ≤ Bounds.eventBytesMax &&

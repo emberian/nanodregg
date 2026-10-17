@@ -29,7 +29,7 @@ def world : Stream (World D) := Codec.Deployed.world
 /-- The deployed shape stamp (D2): the tags of the deployed base and batch record codecs. -/
 def shapes : Digest := Base.shapeStamp world (Record.codec Codec.Deployed.digestCodec)
 
-def recorder : Recorder (World D) (Turn D × D) where
+def recorder : Recorder (World D) (Turn D × (D × D)) where
   encode _ staged := Record.encode Codec.Deployed.digestCodec staged
   mark w := (w.height, w.chain.bytes)
 
@@ -37,15 +37,15 @@ def recorder : Recorder (World D) (Turn D × D) where
 chain: what the origin frame of its Store holds, checked at every open (HOST-25). -/
 def originChain (w : World D) : ByteArray := (World.genesisChain X.env w.origin).bytes
 
-/-- The writer's reopen: its own records, each Turn admitted and its stated root checked
+/-- The writer's reopen: its own records, each Turn admitted and its two stated roots checked
 (`Record.runRooted`, HOST-29). -/
 def foldStep : World D → ByteArray → Except (Record.Fault (Reject D)) (World D) :=
-  Record.step Codec.Deployed.digestCodec (World.admit X.env) (World.root X.env)
+  Record.step Codec.Deployed.digestCodec (World.admit X.env) (World.roots X.env)
 
 /-- A tail's step (`Host.Tail`, HOSTING-7): the writer's reopen step, with each record's
-(Turn, root) pairs. -/
-def tailStep : World D → ByteArray → Except (Record.Fault (Reject D)) (World D × List (Turn D × D)) :=
-  Record.stepTurns Codec.Deployed.digestCodec (World.admit X.env) (World.root X.env)
+(Turn, roots) pairs. -/
+def tailStep : World D → ByteArray → Except (Record.Fault (Reject D)) (World D × List (Turn D × (D × D))) :=
+  Record.stepTurns Codec.Deployed.digestCodec (World.admit X.env) (World.roots X.env)
 
 
 /-- The loop's batch bounds: a record's Turns, and a megabyte of request payload. -/

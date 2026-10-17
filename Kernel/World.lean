@@ -15,12 +15,11 @@ KERNEL-33) → journal (an exact retry inside its window is `replayed`) → shap
 and a written value cell's decoding and floor) → value (born value cells, then every
 denomination's balance and floor sums: LEDGER-2) → nullifiers → charge → created ids.
 -/
-import Std.Data.TreeMap
 import Kernel.Check
 import Kernel.Turn
 import Kernel.Value
 import Kernel.Trie
-import Codec.Stream
+import Codec.Raw
 
 namespace Nanodregg.Kernel
 
@@ -121,11 +120,16 @@ inductive Leaf
 /-- The World's cells and spent nullifiers: one persistent binary Merkle trie (Kernel.Trie). -/
 abbrev Cells (D : Type) := Trie.T (Slot D) Leaf D
 
+/-- The World's journal (KERNEL-41): transaction id ↦ (height, turn digest), the SECOND instance of
+the one trie type (`journalSpec`), routed by the id's bytes, under its own root. -/
+abbrev Journal (D : Type) := Trie.T D (Nat × D) D
+
 structure World (D : Type) [Ord D] where
   /-- every cell entry (live or tombstone) and every spent nullifier, under one root -/
   trie : Cells D
-  /-- transaction id ↦ (height, turn digest): the replay index (not authenticated: KERNEL-23) -/
-  journal : Std.TreeMap D (Nat × D) compare
+  /-- transaction id ↦ (height, turn digest): the replay index, a trie with its own root, which the
+  chain commits beside the cells' root (KERNEL-41) -/
+  journal : Journal D
   height : Nat
   /-- the log chain: `genesisChain origin` at the World's start (a genesis at height 0, or a carry
   at the carried height, KERNEL-29), then one link per admitted turn -/
@@ -147,7 +151,7 @@ structure Carried (D : Type) [Ord D] where
   trie : Cells D
   allowance : Nat
   height : Nat
-  journal : Std.TreeMap D (Nat × D) compare
+  journal : Journal D
 
 /-- The kernel's hash domains. -/
 def domGenesis : String := "nanodregg/kernel/genesis/v1"
@@ -162,6 +166,9 @@ def domTrie : String := "nanodregg/kernel/trie/v1"
 /-- A trie leaf's value digest: ONE domain, a kind byte first, so two different leaves have one
 digest only by a collision in that domain (`Collision`), never across domains. -/
 def domLeaf : String := "nanodregg/kernel/trie-leaf/v1"
+/-- A journal leaf's value digest (`journalDigest`, KERNEL-41): its own domain, so a journal entry's
+digest is never a cell leaf's but by a collision. -/
+def domJournal : String := "nanodregg/kernel/journal-leaf/v1"
 
 /-- An index as CODEC's four little-endian bytes (indexes are below `Bounds.createsMax`). -/
 def index32 (n : Nat) : ByteArray := Nanodregg.Codec.Stream.u32.bytes (UInt32.ofNat n)
@@ -173,11 +180,17 @@ def pinOf (E : Env D) : Option Cell → D
 
 def turnDigest (E : Env D) (t : Turn D) : D := E.hash domTurn (E.turnBytes t)
 
-/-- The next chain head commits to the previous one, the turn, and the ROOT AFTER the turn
-(KERNEL-23 (d)): a phone that trusts one head checks `(prev, turnDigest, root')` against it and
-then verifies cells against `root'`. -/
-def chainNext (E : Env D) (prev : D) (t : Turn D) (root' : D) : D :=
-  E.hash domChain (E.bytes prev ++ E.bytes (turnDigest E t) ++ E.bytes root')
+/-- The head link over its four parts: the previous head, a turn digest, and the two roots after the
+turn (the cells' and the journal's). -/
+def headLink (E : Env D) (prev td root' jroot' : D) : D :=
+  E.hash domChain (E.bytes prev ++ E.bytes td ++ E.bytes root' ++ E.bytes jroot')
+
+/-- The next chain head commits to the previous one, the turn, and BOTH ROOTS AFTER the turn
+(KERNEL-23 (d), KERNEL-41): `roots'` is (the cells' root, the journal's root). A phone that trusts
+one head checks `(prev, turnDigest, root', jroot')` against it, then verifies cells against `root'`
+and transaction ids against `jroot'`. -/
+def chainNext (E : Env D) (prev : D) (t : Turn D) (roots' : D × D) : D :=
+  headLink E prev (turnDigest E t) roots'.1 roots'.2
 
 /-! ## The trie's parameters: how a slot routes and what a leaf commits -/
 
@@ -221,6 +234,22 @@ def trieSpec (E : Env D) : Trie.Spec (Slot D) Leaf D where
   kbytes := slotBytes E
   vdigest := leafDigest E
 
+/-- What a journal leaf commits to of an entry: its height as CODEC's eight little-endian bytes,
+then the turn digest's bytes (injective on heights below 2^64, which every reached World's are). -/
+def journalDigest (E : Env D) (e : Nat × D) : D :=
+  E.hash domJournal (Nanodregg.Codec.Stream.nat64.bytes e.1 ++ E.bytes e.2)
+
+/-- The journal trie (KERNEL-41): routed by the transaction id's bytes, most significant bit first,
+depth `Bounds.journalDepth` (256 id bits, a 32-byte digest); nodes hashed in the one trie domain;
+leaves digested by `journalDigest`. -/
+def journalSpec (E : Env D) : Trie.Spec D (Nat × D) D where
+  bit k := byteBit (E.bytes k)
+  depth := Bounds.journalDepth
+  hash := E.hash domTrie
+  dbytes := E.bytes
+  kbytes := E.bytes
+  vdigest := journalDigest E
+
 /-- A slot holds the leaf of its kind. -/
 def Leaf.fits {D : Type} : Slot D → Leaf → Bool
   | .cell _, .entry _ => true
@@ -252,11 +281,17 @@ def genesisChain (E : Env D) (origin : D) : D := E.hash domGenesis (E.bytes orig
 
 /-- An empty World with identity `origin`, its chain at `genesisChain`. -/
 def genesis (E : Env D) (origin : D) (allowance : Nat) : World D :=
-  { trie := .empty, journal := {}, height := 0,
+  { trie := .empty, journal := .empty, height := 0,
     chain := genesisChain E origin, allowance, origin }
 
 /-- The root of the World's map: its trie's cached digest, O(1). -/
 def root (E : Env D) (w : World D) : D := w.trie.hashOf (trieSpec E)
+
+/-- The root of the World's journal, O(1). -/
+def journalRoot (E : Env D) (w : World D) : D := w.journal.hashOf (journalSpec E)
+
+/-- The two roots a head link commits (`chainNext`): the cells', then the journal's. -/
+def roots (E : Env D) (w : World D) : D × D := (w.root E, w.journalRoot E)
 
 /-- What a carry takes from this World (KERNEL-29). -/
 def carried (w : World D) : Carried D := ⟨w.trie, w.allowance, w.height, w.journal⟩
@@ -278,6 +313,9 @@ def live (E : Env D) (w : World D) (c : D) : Option Cell :=
 
 /-- Is the id taken (a live cell or a tombstone)? -/
 def taken (E : Env D) (w : World D) (c : D) : Bool := (w.entry E c).isSome
+
+/-- The journal entry at a transaction id, if any: its height and turn digest. -/
+def journalAt (E : Env D) (w : World D) (k : D) : Option (Nat × D) := w.journal.get (journalSpec E) k
 
 /-- Has the nullifier been spent? -/
 def isSpent (E : Env D) (w : World D) (n : D) : Bool :=
@@ -384,8 +422,8 @@ def checkBounds (t : Turn D) : Except (Reject D) Unit := do
 variable [DecidableEq D]
 
 /-- A transaction id is admitted at most once; a retry names the height it landed at. -/
-def checkJournal (w : World D) (t : Turn D) : Except (Reject D) Unit :=
-  match w.journal[t.txId]? with
+def checkJournal (E : Env D) (w : World D) (t : Turn D) : Except (Reject D) Unit :=
+  match w.journalAt E t.txId with
   | none => .ok ()
   | some (h, _) => .error (.replayed h)
 
@@ -506,7 +544,7 @@ def checkValue (E : Env D) (t : Turn D) (posts : List (Post D)) : Except (Reject
 def check (E : Env D) (w : World D) (t : Turn D) : Except (Reject D) (List (Post D)) := do
   checkBounds t
   checkWindow w t
-  checkJournal w t
+  checkJournal E w t
   checkShape t
   let posts := (← mapEx (touchCheck E w) t.touches).reduceOption
   checkValue E t posts
@@ -546,11 +584,13 @@ heights have passed since it was admitted (KERNEL-33). A call admitted at `h` ha
 def kept (H : Nat) (e : Nat × D) : Bool := decide (H < e.1 + 2 * Bounds.windowMax)
 
 /-- The journal at height `H`: at every multiple of `Bounds.windowMax`, the entries no longer
-`kept` are dropped; between multiples it is unchanged. One pass over at most
-`3 * Bounds.windowMax` entries once per `windowMax` heights (amortized: at most three entries
-scanned per turn), and one structure (no second index by height). -/
-def pruneJournal (H : Nat) (j : Std.TreeMap D (Nat × D) compare) : Std.TreeMap D (Nat × D) compare :=
-  if H % Bounds.windowMax = 0 then j.filter fun _ e => kept H e else j
+`kept` are dropped (`Trie.retainAt` at the root: the canonical erase, a subtree that drops nothing
+is kept with its hash, a node left with one key collapses to its leaf); between multiples it is
+unchanged. One pass over at most `3 * Bounds.windowMax` entries once per `windowMax` heights, and one
+structure (no second index by height). `e` as in `Trie.T.hashOf`. -/
+def pruneJournal (E : Env D) (H : Nat) (j : Journal D)
+    (e : Trie.EmptyDigest D := Thunk.mk fun _ => Trie.emptyHash (journalSpec E)) : Journal D :=
+  if H % Bounds.windowMax = 0 then Trie.retainAt (journalSpec E) (fun _ x => kept H x) [] j e else j
 
 /-- Whether a World at height `H` can no longer answer for a call with window start `notBefore`:
 its entry, if it was admitted, may have been pruned. Below this height an absent transaction id
@@ -575,13 +615,21 @@ def journalFits (height : Nat) (l : List (D × (Nat × D))) : Bool :=
       height < p.2.1 + 2 * Bounds.windowMax + height % Bounds.windowMax)) &&
     ascendingNat ((l.map fun p => p.2.1).mergeSort)
 
+/-- The journal after a checked turn: the turn's entry inserted at the new height, then pruned if
+that height is a multiple of `Bounds.windowMax`. One lazy copy of the empty subtree's digest serves
+the insert and the prune (KERNEL-35's rule); with the `let` reduced this is the default form. -/
+def commitJournal (E : Env D) (w : World D) (t : Turn D) : Journal D :=
+  let e : Trie.EmptyDigest D := Thunk.mk fun _ => Trie.emptyHash (journalSpec E)
+  pruneJournal E (w.height + 1) (w.journal.insert (journalSpec E) t.txId (w.height + 1, turnDigest E t) e) e
+
 /-- The World after a checked turn. Total: everything that can fail failed in `check`. -/
 def commit (E : Env D) (w : World D) (t : Turn D) (posts : List (Post D)) : World D :=
   let trie := commitTrie E w t posts
+  let journal := commitJournal E w t
   { trie
-    journal := pruneJournal (w.height + 1) (w.journal.insert t.txId (w.height + 1, turnDigest E t))
+    journal
     height := w.height + 1
-    chain := chainNext E w.chain t (trie.hashOf (trieSpec E))
+    chain := chainNext E w.chain t (trie.hashOf (trieSpec E), journal.hashOf (journalSpec E))
     allowance := w.allowance + credit posts - t.charge
     origin := w.origin }
 
@@ -602,9 +650,9 @@ def World.fold (E : Env D) (w : World D) : List (Turn D) → Except (Nat × Reje
           | .error (i, r) => .error (i + 1, r)
       | .error r => .error (0, r)
 
-/-- The chain a log reaches from `c`, each turn paired with the root after it, without admitting
-it: what `World.fold` stamps (`fold_chain`). -/
-def chainOf (E : Env D) (c : D) : List (Turn D × D) → D
+/-- The chain a log reaches from `c`, each turn paired with the two roots after it (`World.roots`),
+without admitting it: what `World.fold` stamps (`fold_chain`). -/
+def chainOf (E : Env D) (c : D) : List (Turn D × (D × D)) → D
   | [] => c
   | (t, r) :: rest => chainOf E (chainNext E c t r) rest
 
