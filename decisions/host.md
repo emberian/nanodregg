@@ -581,7 +581,29 @@ refused. The bound is a guarantee about Stores this loop wrote, and a named refu
 **Meta-critique.** I bounded the cost PERF named and kept the check that produces it, because
 removing a check needs a ruling. That is the right order, and also the comfortable one: alternative (a)
 may make this whole decision unnecessary, and I have priced it in prose, not measured it.
-**Status.** landed (this commit). Alternative (a) is raised with ROOT.
+**Status.** landed (5582991); SUPERSEDED by the amendment below. Alternative (a) is raised with ROOT.
+**Amendment: ROOT ruled alternative (a) on 2026-10-17 (a pause item: it removes a check).** A
+follower reopens its own Store EXACTLY as the writer does: the one `openWriter`/`openWith`, folding with
+`World.fold` (`Deployed.foldStep`), with no signature verified at reopen. `Deployed.auditStep` is DELETED,
+not switched off. The turn cadence goes with it: `sealTurns`, `tailTurnsMax`, `tailTooManyTurns` (exit 44),
+`openWith_turns`, `plant-tail-too-many-turns` and the WASTE row `open verifies-per-turn-cadence` are all
+deleted. Once no open verifies, the byte bound bounds open work (O(touched) map operations per Turn,
+KERNEL's `fold work-per-turn`), and no theorem needed the turn bound for anything else. Exit code 44 is
+retired. `recordTurnsMax` stays in Bounds, where it moved in 5582991.
+**Why it is sound.** Base and tail rest under one MAC and key. Anyone who can forge a tail record can
+forge the base, which the reopen already trusts on the MAC alone, so the reopen re-audit distinguished
+nothing. A follower-only reopen would also be a second shape of open (law 1). The premise that makes
+the fold sound is that follow appends only Turns its own `World.admit` accepted, at follow time, before
+the append. That is `Protocol.Command.step_persists_admitted` (with `absorb_admits` / `absorbPage_admits`),
+which PROTOCOL-5 lands. The reopen theorems are then the writer's own, over the one open
+(`open_sound`, `open_encodeAll`, `open_torn`, `openWith_reads`/`anchored`/`foreign`, `read_stamped`), and
+host-file-sim's in-process reopen plants cover the shared path. Torn tails and MAC failures keep their
+names (`torn`, `corrupt`, `baseCorrupt`).
+**What this does NOT change.** Follow-time verification is untouched. A follower still re-derives every
+Turn from the writer's logged signed request (`Command.absorb` → `Receive.submit`) and refuses the log by
+name: `eventMismatch` for a flipped served event, `chainMismatch` for an omitted one. The tooth is the rows'
+`audit` row, whose plant `Mutation.followVerifyAll` (a follower that accepts any signature) is caught at
+line 13. That plant still runs and still goes red with the follow-time check removed.
 
 ## HOST-23 · a follower tail over the one open: `Host.Tail` (2026-10-17, HOST-5; HOSTING-7's ask)
 **The ask.** The hosting controller, a per-Store exe run by the operator, needs the World at open

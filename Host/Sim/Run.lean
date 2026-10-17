@@ -120,22 +120,17 @@ structure RunResult where
   reopens : Nat
   /-- fuel returns at which the replies sent were not the frames taken from the port -/
   unanswered : Nat
-  /-- the most Turns any in-process reopen folded after its base: what a follower's open would
-  re-verify (HOST-22) -/
-  maxTailTurns : Nat
 
 /-- The in-process reopen of a fuel restart over the in-memory image (what `Host.reopenAt` does over
 the files): the one open of the newest base and the synced segment; unsynced bytes are a divergence. -/
-def memReopen (c : Cadence) (disk : IO.Ref Disk) (bases : IO.Ref Bases) (reopens : IO.Ref Nat)
-    (maxTail : IO.Ref Nat) : IO (Except Exit (Resident (World Nat))) := do
+def memReopen (c : Cadence) (disk : IO.Ref Disk) (bases : IO.Ref Bases) (reopens : IO.Ref Nat) :
+    IO (Except Exit (Resident (World Nat))) := do
   reopens.modify (· + 1)
   let d ← disk.get
   if 0 < d.pending.size then return .error .reopenDiverged
   match reopenWith c (← bases.get).file d.synced with
   | .error f => return .error (.reopenFailed f.name)
-  | .ok o =>
-    maxTail.modify (max (o.opened.world.height - o.sealed.height))
-    return if o.opened.torn = 0 then .ok { world := o.opened.world, pos := o.pos, sealed := o.sealed, index := o.index } else .error .reopenDiverged
+  | .ok o => return if o.opened.torn = 0 then .ok { world := o.opened.world, pos := o.pos, sealed := o.sealed, index := o.index } else .error .reopenDiverged
 
 /-- Serve `frames` from a disk, its bases, and the state they opened to, in rounds of `roundFuel`
 batches, each ending in an in-process reopen (`Host.restarts`, D4). -/
@@ -149,7 +144,6 @@ def serveFrom (c : Cadence) (seed : Nat) (frames : List Frame) (failSyncAt : Opt
   let sent ← IO.mkRef #[]
   let reopens ← IO.mkRef 0
   let unanswered ← IO.mkRef 0
-  let maxTail ← IO.mkRef 0
   -- at every fuel return, before the reopen: every frame taken from the port has its reply
   let reopen : IO (Except Exit (Resident (World Nat))) := do
     let taken := frames.length - (← fr.get).length
@@ -157,13 +151,13 @@ def serveFrom (c : Cadence) (seed : Nat) (frames : List Frame) (failSyncAt : Opt
       unanswered.modify (· + 1)
       unless dropUnread do  -- the plant run expects it; its check reads the count
           IO.println s!"FAIL requests = replies at fuel return {← reopens.get}: {taken} taken, {(← sent.get).size} answered"
-    memReopen c disk bases reopens maxTail
+    memReopen c disk bases reopens
   let (exit, r) ← restarts (serve machine recorder keys.segment (memCheckpoint disk bases keys c world) c
       (memStore disk failSyncAt) (fun _ _ => pure (0, ByteArray.empty))
       (if dropUnread then { scriptPort fr sp sent with unread := fun _ => pure () } else scriptPort fr sp sent)
       limits roundFuel)
     reopen recorder.mark (frames.length + 2) r
-  return ⟨exit, r, ← sent.get, ← disk.get, ← bases.get, ← reopens.get, ← unanswered.get, ← maxTail.get⟩
+  return ⟨exit, r, ← sent.get, ← disk.get, ← bases.get, ← reopens.get, ← unanswered.get⟩
 
 def runWith (c : Cadence) (seed : Nat) (frames : List Frame) (failSyncAt : Option Nat)
     (roundFuel : Nat := frames.length + 1) (limits : Limits := ⟨16, 1 <<< 20⟩) (dropUnread := false) :
@@ -318,27 +312,6 @@ def run (args : List String) : IO UInt32 := do
   IO.println s!"WASTE open bytes-read-per-record {ratio (r.bases.file.size + tailBytes) needed}"
   let genesisBytes := r.bases.history[0]!.1.size
   IO.println s!"WASTE seal bytes-per-appended-byte {ratio (r.bases.written - genesisBytes) r.disk.synced.size}"
-  -- HOST-22: the Turns an open folds after its base, the most over every reopen of the fuel-restart
-  -- run (a follower re-verifies one signature per Turn). Bounded by `tailTurnsMax` (openWith_turns).
-  -- Measured where the turn cadence is the one that binds (no byte seal): the most Turns any
-  -- reopen folded, per turn cadence. At most 2 + recordTurnsMax / sealTurns by construction.
-  let turnsy : Cadence := { cadence with sealMinBytes := 1 <<< 20, sealTurns := 8 }
-  let rounds ← runWith turnsy seed frames none (roundFuel := 3) (limits := ⟨16, 600⟩)
-  IO.println s!"WASTE open verifies-per-turn-cadence {ratio rounds.maxTailTurns turnsy.sealTurns}"
-  check s!"open verifies: the turn cadence seals ({rounds.bases.history.size} bases) and every one of {rounds.reopens} reopens folded at most tailTurnsMax = {turnsy.tailTurnsMax} Turns (max {rounds.maxTailTurns})"
-    (0 < rounds.reopens && 2 < rounds.bases.history.size && rounds.maxTailTurns ≤ turnsy.tailTurnsMax) failures
-  -- plant-tail-too-many-turns (HOST-22): a Store written with no turn cadence (and no byte seal),
-  -- so its whole log is one tail, reopened under a turn cadence its tail exceeds.
-  let loose : Cadence := { cadence with sealMinBytes := 1 <<< 20, sealTurns := 1 <<< 20 }
-  let tight : Cadence := { loose with sealTurns := 4 }
-  let lr ← runWith loose seed frames none
-  let looseTail := match reopenWith loose lr.bases.file lr.disk.synced with
-    | .ok o => o.opened.world.height - o.sealed.height
-    | .error _ => 0
-  check s!"plant-tail-too-many-turns fires: the loose Store opens under its own cadence with {looseTail} tail Turns > {tight.tailTurnsMax}"
-    (tight.tailTurnsMax < looseTail) failures
-  check "plant-tail-too-many-turns: under the tight cadence the same Store is refused `tailTooManyTurns`"
-    (faultName (reopenWith tight lr.bases.file lr.disk.synced) = "tailTooManyTurns") failures
   -- plant-tail (HOSTING-7): a tail opened at genesis absorbs the writer's whole segment one frame
   -- bound at a time and reaches the writer's World, with every admitted Turn reported once in order.
   -- Its mutation: a byte flipped inside an early frame must be refused `corrupt`, not skipped.

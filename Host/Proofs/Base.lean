@@ -116,9 +116,6 @@ theorem openWith_reads {W F : Type} (keys : Keys) (c : Cadence) (world : Codec.S
                 | none => rw [htag] at h; simp only [StateT.pure, pure] at h; injection h with h1; cases h1
                 | some tag =>
                   rw [htag] at h
-                  simp only at h
-                  split at h
-                  · simp only [StateT.pure, pure] at h; injection h with h1; cases h1
                   simp only [StateT.pure, pure] at h
                   obtain ⟨rfl, rfl⟩ := h
                   have hv := openLog_validLen_le hop
@@ -166,42 +163,6 @@ theorem openWith_anchored {W F : Type} (keys : Keys) (c : Cadence) (world : Code
             · cases h
             · rename_i hh
               rw [← e]; exact Classical.not_not.mp hh
-
-/-- **HOST-22: an open folds at most `tailTurnsMax` Turns after its base** (and so a follower's
-open re-verifies at most that many signatures): the World an open that succeeds reaches is at most
-`tailTurnsMax` above the base's height, whatever segment it was handed. -/
-theorem openWith_turns {W F : Type} (keys : Keys) (c : Cadence) (world : Codec.Stream W)
-    (mark : W → Nat × ByteArray) (step : W → ByteArray → Except F W) (file seg : ByteArray)
-    {o : Opening W}
-    (h : Id.run (openWith keys c world mark step file seg.size (segReader seg)) = .ok o) :
-    (mark o.opened.world).1 - o.sealed.height ≤ c.tailTurnsMax := by
-  unfold openWith at h
-  simp only [segReader, pure_bind] at h
-  split at h
-  · cases h
-  · split at h
-    · cases h
-    · rename_i b bb dg hb
-      split at h
-      · cases h
-      · split at h
-        · cases h
-        · split at h
-          · cases h
-          · split at h
-            · cases h
-            · split at h
-              · cases h
-              · rename_i op hop
-                split at h
-                · cases h
-                · rename_i tag htag
-                  split at h
-                  · cases h
-                  · rename_i hle
-                    cases h
-                    dsimp only
-                    omega
 
 /-- The foreign-segment plant's theorem: when the base reads and its tail is within bounds, a
 segment whose 32 bytes before the base's offset are not the base's tag is refused
@@ -266,13 +227,10 @@ theorem read_shapeMismatch {W : Type} (keys : Keys) (c : Cadence) (world : Codec
     ne_eq, not_true_eq_false]
   rw [if_pos hs]
 
-/-- Once the newest durable base sits at the loop's position and height, every frame up to the
-record bound that adds at most a record's Turns fits, in bytes and in Turns. -/
-theorem within_after_seal (c : Cadence) (sealed : Sealed) (n height : Nat)
-    (hn : n ≤ Log.frameMax c.recordBytesMax) (ht : height ≤ sealed.height + recordTurnsMax) :
-    withinTail c sealed sealed.offset n height = true := by
-  unfold withinTail Cadence.tailMax Cadence.tailTurnsMax
-  simp only [Bool.and_eq_true, decide_eq_true_eq]
+theorem within_after_seal (c : Cadence) (sealed : Sealed) (n : Nat) (hn : n ≤ Log.frameMax c.recordBytesMax) :
+    withinTail c sealed sealed.offset n = true := by
+  unfold withinTail Cadence.tailMax
+  simp only [decide_eq_true_eq]
   omega
 
 end Nanodregg.Host

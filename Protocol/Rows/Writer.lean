@@ -47,7 +47,7 @@ structure Params where
 /-- Small enough that a row of a few dozen turns seals bases; the deployed bounds on size. -/
 def cadence : Cadence :=
   { sealMinBytes := 8192, worldBytesMax := Cadence.deployed.worldBytesMax,
-    recordBytesMax := Cadence.deployed.recordBytesMax, sealTurns := Cadence.deployed.sealTurns }
+    recordBytesMax := Cadence.deployed.recordBytesMax }
 
 /-- The page budget the rows' writer pages with: HOST's `Page.budget` is a frame, which no row's
 log reaches, so a row would never see a page end before the tip. It must hold every single event

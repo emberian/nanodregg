@@ -127,7 +127,7 @@ def body (seed : Nat) (dirA dirB : System.FilePath) : IO UInt32 := do
   -- plant-foreign-frame, on a Store that never seals (its tail is every frame)
   do
     let dir := dirB
-    let still := { cadence with sealMinBytes := 1 <<< 20, recordBytesMax := 1 <<< 16, sealTurns := 1 <<< 20 }
+    let still := { cadence with sealMinBytes := 1 <<< 20, recordBytesMax := 1 <<< 16 }
     let _ ← (Host.genesis dir key keys still world recorder.mark Sim.genesis : IO (Except Fault Unit))
     match ← serveDir dir keys still seed (frames.take 60) with
     | .error e => check s!"plant-foreign-frame: serve ({e})" false failures

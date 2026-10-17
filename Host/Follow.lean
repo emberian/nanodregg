@@ -1,5 +1,5 @@
 /-
-# Host.Follow — `host follow`: the member's own Store, folded with the audit, driven by steps
+# Host.Follow — `host follow`: the member's own Store, audited at follow time, driven by steps
 
     loop, one frame at a time (conn, op, payload) from the supervisor:
       command(argv)      → Command.start on follow's World                     → a step
@@ -8,11 +8,13 @@
       Turns absorbed     → appended to follow's own segment as one batch record, durably, BEFORE
                            the step is answered (`Host.append`, the writer's own append path)
 
-Follow decides nothing the kernel does not: `Command.step` derives, `Receive.audit` re-derives on
-reopen. Its Store is the same format as the writer's (key, segment of batch records, sealed base)
-and is opened by the same `openWriter`, with `Deployed.auditStep` as the fold. So a follower that
-has audited once reopens from its own newest base plus at most `tailMax` of its own log, not from
-genesis (ROOT ruling 10-16). A logged event that does not re-derive is refused by the step
+Follow decides nothing the kernel does not: `Command.step` re-derives every logged event and
+admits it (`Receive.submit`) BEFORE anything is appended, so follow's Store holds only Turns its own
+`World.admit` accepted (`Protocol.Command.step_persists_admitted`). Its Store is the same format as
+the writer's (key, segment of batch records, sealed base) and is reopened EXACTLY as the writer's
+is: the one `openWriter`, folding with `World.fold` (`Deployed.foldStep`), no signature verified at
+reopen (HOST-22, ROOT ruling 2026-10-17: the base and the tail rest under one MAC and key, so a
+reopen re-audit distinguishes nothing the MAC does not). A logged event that does not re-derive is refused by the step
 (`eventMismatch`), and a page whose stated chain is not follow's fold by `chainMismatch`. Both are
 PROTOCOL's names, carried in the step's `done`.
 

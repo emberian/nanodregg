@@ -95,8 +95,6 @@ inductive Status where
   /-- the base was written under other codec shapes than this binary's (D2, HOST-20): an old
   shape refuses to load; re-genesis from a checked export carries the state (law 1) -/
   | shapeMismatch
-  /-- the tail after the base holds more Turns than the loop ever writes (HOST-22) -/
-  | tailTooManyTurns
   deriving DecidableEq, Repr
 
 namespace Status
@@ -106,7 +104,7 @@ def all : List Status :=
    locked, .exists, badKey, shortRead, noBase, baseTooLarge, baseCorrupt, baseUndecodable,
    segmentShort, tailTooLong, foreignSegment, corrupt, record, tagWidth, behindAnchor, chainMismatch,
    badIndex, pageTooLarge, pastEnd, shortBase, reopenFailed, reopenDiverged, lifetime, stream, noThreads,
-   shapeMismatch, tailTooManyTurns]
+   shapeMismatch]
 
 def code : Status → Nat
   | eof => 0
@@ -146,7 +144,6 @@ def code : Status → Nat
   | stream => 41
   | noThreads => 42
   | shapeMismatch => 43
-  | tailTooManyTurns => 44
 
 def cls : Status → ExitClass
   | eof => .done
@@ -155,7 +152,7 @@ def cls : Status → ExitClass
   | locked | .exists | badKey | shortRead | noBase | baseTooLarge | baseCorrupt | baseUndecodable
   | segmentShort | tailTooLong | foreignSegment | corrupt | record | tagWidth | behindAnchor | chainMismatch
   | badIndex | pageTooLarge | pastEnd | shortBase | reopenFailed | reopenDiverged | noThreads
-  | shapeMismatch | tailTooManyTurns => .fatal
+  | shapeMismatch => .fatal
 
 /-- The name printed beside the code (`refused NAME` / `exit NAME` on stderr). -/
 def name (s : Status) : String := ((toString (repr s)).splitOn ".").getLast!
@@ -179,7 +176,6 @@ def BaseFault.status : BaseFault → Status
   | .tailTooLong _ _ => .tailTooLong
   | .foreignSegment => .foreignSegment
   | .shapeMismatch _ _ => .shapeMismatch
-  | .tailTooManyTurns _ _ => .tailTooManyTurns
 
 def StoreFault.status {F : Type} : StoreFault F → Status
   | .locked => .locked
