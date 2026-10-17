@@ -173,8 +173,10 @@ def envelopeLayout : Codec.Layout :=
   [.bytes "member", .bytes "grant", .bytes "from", .bytes "validUntil", .bytes "key", .bytes "signature"]
 
 /-- The `log` reply's payload: the signed calls (events) logged from the requested height, in log
-order. A follower re-derives every Turn from them (PROTOCOL-4), so it needs nothing else. -/
-def logReplyLayout : Codec.Layout := [.list "events"]
+order, then the writer's World height and log chain after the last of them. A follower re-derives
+every Turn from the events (PROTOCOL-4) and asserts that its own fold reached the same height and
+chain (a pair assertion, law 4): an omitted, truncated or reordered event is caught at the page. -/
+def logReplyLayout : Codec.Layout := [.list "events", .bytes "height", .bytes "chain"]
 
 /-! The bounds the client and the supervisor enforce before allocating. -/
 namespace Bounds

@@ -141,7 +141,10 @@ def rotate : Row where
   plantRed := "thief rotation admitted (expected notPrecommitted)"
 
 /-- JAUDIT: a follower re-derives the Store from genesis — every Turn from its event, by the same
-receivers — and a flipped byte of a non-head frame in a copy is refused naming its height. -/
+receivers. A flipped byte in a copy of a segment FILE is refused `corrupt` by the Store's open
+(`Host.OpenFault.corrupt`, an offset: the frame's tag fails, so it has no trustworthy height); a
+flipped byte in a SERVED event is refused `eventMismatch` at its height by the re-derivation; an
+event the writer omits is refused `chainMismatch` at the page (the writer's stated chain). -/
 def audit : Row where
   name := "audit"
   replaces := ["journey/JAUDIT", "jstoreaudit"]
@@ -149,7 +152,9 @@ def audit : Row where
   kinds := []
   drive := .members [
     ok "auditor" ["audit", "--from", "genesis"],
-    no "auditor" ["audit", "--from", "genesis", "--copy-flip", "1"] "frameMac"]
+    no "auditor" ["audit", "--from", "genesis", "--segment-flip", "1"] "corrupt",
+    no "auditor" ["audit", "--from", "genesis", "--event-flip", "1"] "eventMismatch",
+    no "auditor" ["audit", "--from", "genesis", "--drop-event", "1"] "chainMismatch"]
   plant := "follow folds Turns without re-running the receiver on each Turn's event"
   plantRed := "a planted Turn whose event does not derive it is accepted (expected eventMismatch)"
 

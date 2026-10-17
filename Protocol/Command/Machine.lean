@@ -49,6 +49,8 @@ inductive Refusal (D : Type)
   /-- read: a `KEY=VALUE` that does not hold -/
   | expect (key : Nat)
   | missingCell (cell : D)
+  /-- the writer's stated height and chain after a log page are not what follow's fold reached -/
+  | chainMismatch (height : Nat)
   /-- the derivation asked for more cells than `Kernel.Bounds.touchesMax` -/
   | tooManyPins
 
@@ -79,6 +81,7 @@ def Refusal.name : Refusal D → String
   | .expect _ => "expect"
   | .missingCell _ => "missingCell"
   | .tooManyPins => "tooManyPins"
+  | .chainMismatch _ => "chainMismatch"
 
 def refused (r : Refusal D) : Reply := .done 1 ByteArray.empty s!"refused {r.name}\n".toUTF8
 def printed (out : String) : Reply := .done 0 out.toUTF8 ByteArray.empty
@@ -188,10 +191,17 @@ def absorb (X : Ctx D) : World D → List ByteArray → Except (Refusal D) (Worl
 def hostReply (b : ByteArray) : Option (Status × ByteArray) :=
   if h : 0 < b.size then (Status.ofCode? b[0]).map (·, b.extract 1 b.size) else none
 
-def logEvents (b : ByteArray) : Option (List ByteArray) :=
+/-- A log page: the events, and the writer's height and chain after the last of them. -/
+def logPage (b : ByteArray) : Option (List ByteArray × Nat × ByteArray) :=
   match logReplyFrame.decode b with
-  | .ok (l, ()) => some (Text.unlist l)
+  | .ok (l, h, c, ()) => (Text.ofU64 h.1).map fun n => (Text.unlist l, n, c.1)
   | .error _ => none
+
+/-- Absorb a page and require follow's fold to reach the writer's stated height and chain. -/
+def absorbPage (X : Ctx D) (w : World D) (evs : List ByteArray) (height : Nat) (chain : ByteArray) :
+    Except (Refusal D) (World D) := do
+  let w' ← absorb X w evs
+  if w'.height = height ∧ X.env.bytes w'.chain = chain then pure w' else throw (.chainMismatch height)
 
 def hostName (p : ByteArray) : String := (String.fromUTF8? p).getD "unnamed"
 
@@ -271,10 +281,10 @@ def step (X : Ctx D) (me : Self D) (w : World D) (kb result : ByteArray) : World
       | _, 2, [startB, signedB] =>
           match hostReply result with
           | some (.ok, p) =>
-              match logEvents p with
+              match logPage p with
               | none => same (refused (D := D) .badResult)
-              | some evs =>
-                  match absorb X w evs with
+              | some (evs, height, chain) =>
+                  match absorbPage X w evs height chain with
                   | .error r => same (refused (D := D) r)
                   | .ok w' =>
                       match cmd, body me cmd, Signed.ofBytes signedB with
