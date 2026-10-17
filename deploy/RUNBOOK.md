@@ -89,9 +89,10 @@ Copy the three files into an empty STORE, then:
 cut at a frame boundary, a single foreign last frame and a rollback to an older complete copy ALL
 open cleanly at a lower height; that is why the anchor is not optional.
 
-## 6. Re-genesis (flag day) — PENDING (OPS-1 export/import: HOST/KERNEL)
+## 6. Re-genesis (flag day) — PENDING (OPS-1 export/import: KERNEL-29, CODEC's carried codec, HOST-28)
 
-1. Stop the writer unit and every member's follow unit (by unit name).
+1. Stop the writer unit and every member's follow unit (by unit name). An export is taken from a
+   STOPPED writer only (HOST-28): the carried state is the writer's last durable World.
 2. The operator moves the old Store aside BY HAND (`mv STORE STORE.old-<date>`); nothing deletes it.
 3. `host genesis STORE NEW-LABEL …` (a new label: §1).
 4. State carry (law 1, OPS-1) is export = the old Store's fold, import = genesis whose World is

@@ -42,6 +42,13 @@ follower exited 13 (`io`: a follow Store is a reproduced genesis, not a director
 the writer's genesis with its nonce and follower-unit-starts PASSES (confined `STATUS follow
 height=0`, the writer's genesis chain).
 
+## Run 4 — burst5-a, 2026-10-17 (main 645116a: host with HOST-27's SIGXFSZ ignore) — ALL PASS
+
+append-failure-is-uncertain-restarted PASSES: `LimitFSIZE` = the fresh segment + 4096 bytes, so the
+first 49 KiB submit's frame crosses it mid-frame; the write fails EFBIG, the client's reply is
+status 2 (`uncertain`), the unit exits `status=3` and is restarted, and the restarted writer opens
+at height 0 (the torn tail dropped). Every other row PASS as in run 3.
+
 Findings, routed:
 - **No signal death is named on Linux** (CLIENT): nd-supervise's direct child is bwrap, which turns
   the host's signal death into a normal exit 128+N (137 for SIGKILL, 153 for SIGXFSZ), so

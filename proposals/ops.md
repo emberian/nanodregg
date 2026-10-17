@@ -81,9 +81,19 @@ on the first call enough?
   the carry). No `worldChanged` name: members re-pin by `adopt` or re-invite, refused `wrongWorld`
   first by TRANSPORT's envelope. OPS's consequence, sent to KERNEL-6: entries expire by height, so
   the carry keeps the old HEIGHT (and the origin commits to the height and the journal's digest).
-- **HOST-6, CODEC-2:** pending.
+- **HOST-6: ACCEPTED WITH AMENDMENTS (HOST-28, 645116a).** (a) ONE file: stamp32 ‖ from ‖ height ‖
+  chain ‖ CODEC carried bytes, the stamp being `Tag.of` the carried codec (D2). (b) `export` prints
+  `carried <digest>` and `import` REQUIRES `--digest HEX` (links the bytes to the old Store, which
+  reopen-equality alone cannot): missing is `usage digest`, wrong is `carryMismatch`. (c) import
+  writes through the one `Host.genesis` path (HOST-25 unchanged). (d) `carryMismatch` is one fatal
+  Status with its reason on stderr (digest / reopen / decode); a file under another stamp is
+  `shapeMismatch`. **The fork, decided by HOST against OPS's first proposal:** no promise that the
+  carried codec stays stable; it is stamped, so a flag day that keeps the carried shape can carry
+  state and one that changes it refuses the old file by name. ("Rarer" was an estimate posing as
+  a rule; OPS withdraws it.) Export from a stopped writer only (RUNBOOK §6).
+- **CODEC-2:** pending.
 - OPS plant added: carry-roundtrip also asserts "a call committed at the old tip is `lookup`
   committed after import".
 
-**Status.** KERNEL accepted (amended), PROTOCOL amended; HOST and CODEC pending. Nothing is built
+**Status.** KERNEL, HOST accepted (amended), PROTOCOL amended; CODEC pending. Nothing is built
 before KERNEL-29.
