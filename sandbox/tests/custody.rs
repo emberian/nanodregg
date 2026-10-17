@@ -7,7 +7,7 @@ use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use nanodregg_sandbox::custody::{PRIVATE, Refused, check_private_dir, read_private};
+use nanodregg_sandbox::custody::{PRIVATE, Refused, check_private_dir, read_private, read_public};
 
 struct Scratch(PathBuf);
 
@@ -136,4 +136,47 @@ fn a_holding_directory_is_refused_unless_ours_0700_and_not_a_link() {
     ));
     fs::set_permissions(&h, fs::Permissions::from_mode(0o755)).unwrap();
     assert!(matches!(check_private_dir(&h), Err(Refused::Mode(0o755))));
+}
+
+/// The public read (trust anchors): an owner-only, a world-readable and a read-only file pass; a
+/// group- or world-writable one, or one with a setuid/setgid/sticky bit, is `Mode`; and the
+/// shared checks (link, kind, owner, length) are the private read's.
+#[test]
+fn a_public_file_is_refused_writable_by_others_and_by_the_shared_checks() {
+    let s = scratch("public");
+    for m in [0o600, 0o644, 0o444] {
+        let f = s.0.join(format!("ok{m:o}"));
+        put(&f, b"ANCHOR", m);
+        assert_eq!(read_public(&f, 1..=64).unwrap(), b"ANCHOR", "mode {m:o}");
+    }
+    for m in [0o664, 0o646, 0o4644, 0o2644, 0o1644] {
+        let f = s.0.join(format!("m{m:o}"));
+        put(&f, b"ANCHOR", m);
+        assert!(
+            matches!(read_public(&f, 1..=64), Err(Refused::Mode(x)) if x == m),
+            "mode {m:o}"
+        );
+    }
+    std::os::unix::fs::symlink(s.0.join("ok644"), s.0.join("l")).unwrap();
+    assert!(matches!(
+        read_public(&s.0.join("l"), 1..=64),
+        Err(Refused::Link)
+    ));
+    assert!(matches!(
+        read_public(&s.0, 0..=1 << 20),
+        Err(Refused::NotRegular)
+    ));
+    assert!(matches!(
+        read_public(Path::new("/etc/passwd"), 1..=1 << 20),
+        Err(Refused::Owner(0))
+    ));
+    assert!(matches!(
+        read_public(&s.0.join("ok644"), 7..=64),
+        Err(Refused::Length(6))
+    ));
+    // The private read still refuses what the public one accepts.
+    assert!(matches!(
+        read_private(&s.0.join("ok644"), 1..=64),
+        Err(Refused::Mode(0o644))
+    ));
 }

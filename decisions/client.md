@@ -425,3 +425,27 @@ attach's `[dependencies]` (`devtoolsDeployed`), lean_bin's existence check remov
 kept. "The workspace builds every member" is GATES-2's workspace judgement (cargo check/clippy
 --workspace), landing after this.
 **Status.** landed (this commit).
+
+## CLIENT-18 the public read: a file custody's integrity depends on, but whose bytes are not secret (2026-10-17, CLIENT-3; HOSTING-4's ask for HOSTING-15)
+
+**Decision.** `nanodregg_sandbox::custody::read_public(path, RangeInclusive<usize>) -> Vec<u8>`
+reads keybroker's TLS trust anchors (PEM, public). It shares every check with `read_private`
+through one private `read_checked` (not a link, a regular file, owned by the euid, length in range,
+O_NONBLOCK) and differs only in the mode rule: no group or other WRITE bit and no
+setuid/setgid/sticky bit (`PUBLIC_REFUSED = 0o7022`), so 0600, 0644 and 0444 pass and 0664, 0646 are
+`Mode`. The bytes are not zeroized. `Refused` is unchanged.
+**Alternatives.** (a) keybroker checks the anchors itself: a twin of the open-and-check sequence.
+(b) `read_private` for the anchors: a 0600 anchors file works, but forbidding 0644 on a public file
+is a rule with no threat behind it. (c) Accept a root-owned anchors file (a system CA bundle): that
+widens who may decide what keybroker trusts beyond the operator's euid; not asked, not done.
+**Critique.** What an anchors file protects is integrity: whoever can write it chooses whom
+keybroker trusts upstream. The rule refuses every writer but the owner; it does not refuse a
+directory another user can write (a rename over the file). Same as the private read, whose parent
+directory is also unchecked; checking the parent chain is a separate, wider decision.
+**Meta-critique.** I refactored the private read into the shared checker in the same commit; the
+ten mutations (seven old, re-run on the refactor, three new) are the evidence that it still refuses
+what it refused.
+**Plants.** sandbox/tests/custody.rs `a_public_file_is_refused_writable_by_others_and_by_the_shared_checks`.
+Mutations, each red: the public write-bit rule removed, the special bits dropped from
+`PUBLIC_REFUSED`, the private read given the public rule; and the seven of CLIENT-15, re-run.
+**Status.** landed (this commit).

@@ -2,6 +2,8 @@
 //! seed and holding (CLIENT-13) and the operator's provider-key broker (HOSTING-12). A custody file
 //! is read without following a link and refused unless it is a regular file owned by the effective
 //! user, mode exactly 0600, and of a length the caller allows. The bytes are zeroized on drop.
+//! `read_public` is the same read for a public file custody's integrity depends on (trust
+//! anchors): the same checks, but any mode without a group or other write bit.
 //! Each refusal is a name (`Refused`); the caller renders it, nothing here decides what the bytes
 //! mean.
 
@@ -37,22 +39,25 @@ pub enum Refused {
     Io(io::Error),
 }
 
-/// Owned by the effective user, then exactly `mode`.
-fn private(meta: &fs::Metadata, mode: u32) -> Result<(), Refused> {
+/// Owned by the effective user, then a mode `ok` accepts.
+fn owned(meta: &fs::Metadata, ok: impl Fn(u32) -> bool) -> Result<(), Refused> {
     match (meta.uid(), meta.permissions().mode() & 0o7777) {
         (u, _) if u != rustix::process::geteuid().as_raw() => Err(Refused::Owner(u)),
-        (_, m) if m != mode => Err(Refused::Mode(m)),
+        (_, m) if !ok(m) => Err(Refused::Mode(m)),
         _ => Ok(()),
     }
 }
 
-/// Read the custody file `path`: refused unless it is not a link, a regular file, owned by the
-/// effective user, mode 0600, and `lens` holds its length. A FIFO is refused, never waited on
-/// (`O_NONBLOCK`); a file that grows while read is refused `Length`.
-pub fn read_private(
+/// Read `path` under the checks every custody read shares: not a link, a regular file, owned by
+/// the effective user, a mode `ok` accepts, a length `lens` holds. A FIFO is refused, never
+/// waited on (`O_NONBLOCK`); a file that grows while read is refused `Length`. The bytes are read
+/// into `bytes`, which the caller allocates (zeroizing for a secret).
+fn read_checked<B: AsMut<Vec<u8>>>(
     path: &Path,
     lens: RangeInclusive<usize>,
-) -> Result<Zeroizing<Vec<u8>>, Refused> {
+    ok: impl Fn(u32) -> bool,
+    mut bytes: B,
+) -> Result<B, Refused> {
     let fd = rustix::fs::open(
         path,
         OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC,
@@ -67,18 +72,38 @@ pub fn read_private(
     if !meta.file_type().is_file() {
         return Err(Refused::NotRegular);
     }
-    private(&meta, PRIVATE)?;
+    owned(&meta, ok)?;
     let len = meta.len();
     if !usize::try_from(len).is_ok_and(|n| lens.contains(&n)) {
         return Err(Refused::Length(len));
     }
-    let mut bytes = Zeroizing::new(vec![0u8; len as usize]);
-    file.read_exact(&mut bytes).map_err(Refused::Io)?;
+    let v = bytes.as_mut();
+    v.resize(len as usize, 0);
+    file.read_exact(v).map_err(Refused::Io)?;
     if file.read(&mut [0u8; 1]).map_err(Refused::Io)? != 0 {
         return Err(Refused::Length(len + 1));
     }
     Ok(bytes)
 }
+
+/// Read the custody file `path` (a secret): the shared checks, mode exactly 0600, zeroized.
+pub fn read_private(
+    path: &Path,
+    lens: RangeInclusive<usize>,
+) -> Result<Zeroizing<Vec<u8>>, Refused> {
+    read_checked(path, lens, |m| m == PRIVATE, Zeroizing::new(Vec::new()))
+}
+
+/// Read a PUBLIC file whose integrity custody depends on (keybroker's TLS trust anchors,
+/// HOSTING-15): the shared checks, and a mode with no group or other WRITE bit and no
+/// setuid/setgid/sticky bit (`0644`, `0444` and `0600` pass; `0664`, `0646` do not). Its bytes
+/// are not secret, so they are not zeroized.
+pub fn read_public(path: &Path, lens: RangeInclusive<usize>) -> Result<Vec<u8>, Refused> {
+    read_checked(path, lens, |m| m & PUBLIC_REFUSED == 0, Vec::new())
+}
+
+/// The mode bits `read_public` refuses: group/other write, setuid, setgid, sticky.
+pub const PUBLIC_REFUSED: u32 = 0o7022;
 
 /// Refused unless `dir` is a directory (not a link), owned by the effective user, mode 0700.
 pub fn check_private_dir(dir: &Path) -> Result<(), Refused> {
@@ -89,5 +114,5 @@ pub fn check_private_dir(dir: &Path) -> Result<(), Refused> {
     if !meta.file_type().is_dir() {
         return Err(Refused::NotRegular);
     }
-    private(&meta, PRIVATE_DIR)
+    owned(&meta, |m| m == PRIVATE_DIR)
 }
