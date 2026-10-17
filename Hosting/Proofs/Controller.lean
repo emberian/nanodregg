@@ -119,7 +119,7 @@ private theorem filterMap_sublist_map {α β : Type} (l : List α) (f : α → O
 is lowercase hex, so distinct id bytes give distinct directories). -/
 theorem reconcile_one_per_id {bytesOf : D → ByteArray} {label pkgId : ByteArray} {now : Nat}
     {live : List Live} {w : World D} {ids : List D}
-    (hnd : ((ids.eraseDups.take grainsMax).map fun i => dirOf (bytesOf i)).Nodup) :
+    (hnd : ((ids.eraseDups.take Bounds.grainsMax).map fun i => dirOf (bytesOf i)).Nodup) :
     ((reconcile bytesOf label pkgId now live w ids).map (·.grain)).Nodup := by
   unfold reconcile
   rw [List.map_filterMap]
@@ -131,7 +131,7 @@ theorem reconcile_one_per_id {bytesOf : D → ByteArray} {label pkgId : ByteArra
 
 theorem reconcile_bounded (bytesOf : D → ByteArray) (label pkgId : ByteArray) (now : Nat)
     (live : List Live) (w : World D) (ids : List D) :
-    (reconcile bytesOf label pkgId now live w ids).length ≤ grainsMax := by
+    (reconcile bytesOf label pkgId now live w ids).length ≤ Bounds.grainsMax := by
   unfold reconcile
   exact Nat.le_trans (List.length_filterMap_le _ _) (List.length_take_le _ _)
 

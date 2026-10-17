@@ -247,3 +247,57 @@ restart of the controller forgets exits and relaunches every desired grain at on
 that no observed fact enters the World, which holds by construction (nothing here writes a Turn).
 Status: decisions built; the exe (tail + frames to `grain-launch`) waits on HOST's tail API and
 CODEC's Action layout.
+
+## HOSTING-8 The controller ↔ launcher frames (`Hosting/Wire.lean`) (HOSTING-2, 2026-10-17)
+
+**Decision.** The boundary types move into one def module that imports only `Codec.Layout`:
+`Plan`, `Refusal` (codes 0–5), `LaunchFailure` (codes 0–7), `Verdict`, `Action`, `Report`, and two
+`Codec.Tagged` families on CODEC-21's field kinds — actions `launch 1` (grain, program : path,
+read/write/exec/hidden : paths), `kill 2` (grain), `refuse 3` (grain, why : oneOf Refusal); reports
+`started 1` (grain, atMs), `exited 2` (grain, status = the raw wait status, atMs), `failed 3` (grain,
+why : oneOf LaunchFailure, atMs). One bound, `Bounds.frameMax = 4096`, is both the frame payload
+bound (pipe framing `u32le len ‖ payload`) and every field's; `Bounds.grainsMax` moved here.
+`Hosting.clean`/`componentMax` are DELETED: `plan` and its theorems use `Codec.Path.clean` (law 1).
+`Plan.connect` is DELETED: it was always empty and `sandbox::Policy` has no such field (a resident
+plan brings it back with CLIENT's `Policy.connect`, the row that needs it).
+Conversions `actionWire? : Action → Option ActionTy` / `actionOf` (and the report pair) go through
+`Tagged.Ty`, so the bytes are `Tagged.codec`'s, never hand-built. `encodeAction` returns `none`
+when a value is past a bound; the controller treats that as an assertion (the premise is that a
+planned action fits: to be proved with the controller, `plan_wire`).
+**Theorems** (`Hosting.Proofs.Wire`): `actionCodec_lawful`, `reportCodec_lawful` (codes distinct),
+`actionOf_wire`, `reportOf_wire`, `decode_encodeAction` (the bytes handed to the launcher decode to
+the action), `decodeReport_bytes`, `reportWire_some`; per table `mem_all`, `ofCode?_code`,
+`code_injective`, `name_injective`; `launch_fields` (the field NAMED `program`/`read`/`write`/
+`exec`/`hidden` — the names the Rust reads by — carries that plan field); teeth `kill_encodes`,
+`refuse_reads_back`, and `Proofs.Plan.planned_launch_encodes` (a real `plan` output encodes into one
+frame, `decide +kernel`). `Proofs.Plan.plan_roles` (was the private `plan_ok`) states each path in
+its role: the containment theorems speak only of `allowed`, the union, and stay green if `plan`
+reads `vol` and writes `pkg`.
+**Vacuity read (10-17, second agent).** Four holes: (1) a CONSISTENT swap of two same-typed slots in
+`actionWire?` and `actionOf` kept `actionOf_wire` green while the Rust, reading by name, would get
+the write list as `read` — fixed by `launch_fields`; (2) no launch was shown to encode (the round
+trip could be vacuous for launches) — tooth `planned_launch_encodes`, the general `plan_wire` owed
+with the controller; (3) `plan`'s read/write roles were unpinned — `plan_roles`; (4) `name` is not
+tied to the constructor (a swapped pair of names stays injective) — accepted: the launcher maps by
+the emitted variant and its code, `name` is only the printed text.
+**Plants** (run 10-17): `actionOf` reading `write` into `read` ⇒ `actionOf_wire` red; `kill` given
+code 1 ⇒ `actionCodes_nodup` red; `r`/`w` swapped in BOTH `actionWire?` and `actionOf` ⇒
+`launch_fields` red, `actionOf_wire` green (the hole, now covered); `plan` with `read := [vol]`,
+`write := [pkg]` ⇒ `plan_roles` red, every `allowed` theorem green.
+**Why a `failed` report.** A launch the sandbox refuses (`ProgramOutside`, `Exposed`, …) must reach
+the controller by name, and must count toward the crash-loop bound like an exit, or a grain whose
+package was replaced by a symlink is relaunched every round. `LaunchFailure` names
+`ConfineError`'s cases; the launcher maps them by an exhaustive match, so a new sandbox case fails
+to compile there until it is named here.
+**Alternatives.** Make `Action` itself the `Tagged.Ty` (every decision proof would then carry
+subtype proofs of bounds). Carry bounds in `Plan`'s types (`PathTy`) so `actionWire?` is total:
+right in principle, and the next step if `plan_wire` turns out awkward. A free-text failure reason
+(not a name).
+**CRITIQUE.** `launch_fields` ties Lean's positions to the layout's names; that the Rust reads the
+same names is the emitter's, checked by `--check` and by the launcher's physical isolation test
+with a Lean-made plan (`vol` writable, `pkg` not), not by a theorem. `LaunchFailure` copies
+CLIENT's error list by hand; the exhaustive match keeps it from going stale, not from being wrong.
+**META.** I matched the names my predecessor promised CODEC-2, then renamed `Event` to `Report` (a
+clash with the lifecycle's `Event`): CODEC-2 is told. One bound for everything is the Layout
+family's shape, accepted because it is the codec's, not because it is tight.
+Status: built.

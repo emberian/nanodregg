@@ -37,19 +37,6 @@ structure Live where
   /-- exit times, in the launcher's milliseconds -/
   exits : List Nat
 
-/-- What to do with one grain's child. -/
-inductive Verdict
-  | launch (plan : Plan)
-  | kill
-  | refuse (why : Refusal)
-  deriving DecidableEq
-
-/-- What the controller tells the launcher: a verdict for the grain named by its directory. -/
-structure Action where
-  grain : ByteArray
-  verdict : Verdict
-  deriving DecidableEq
-
 /-- The ROM cell `install` creates for package bytes `b` (`Receive.install`). -/
 def packageCell (b : ByteArray) : Cell :=
   { kind := Receive.kindPackage, discipline := .rom, slots := [(0, b)] }
@@ -112,10 +99,10 @@ returns each record's Turns, `Host.Deployed.tailStep`). -/
 def touchedIds (ts : List (Turn D)) : List D :=
   ts.flatMap fun t => t.touches.map (·.cell) ++ createdIds t
 
-/-- Every touched id (duplicates once), at most `grainsMax` per call: the caller pages the rest. -/
+/-- Every touched id (duplicates once), at most `Bounds.grainsMax` per call: the caller pages the rest. -/
 def reconcile (bytesOf : D → ByteArray) (label pkgId : ByteArray) (now : Nat)
     (live : List Live) (w : World D) (ids : List D) : List Action :=
-  (ids.eraseDups.take grainsMax).filterMap fun i =>
+  (ids.eraseDups.take Bounds.grainsMax).filterMap fun i =>
     let g := dirOf (bytesOf i)
     (decideCell label pkgId now live g (w.live i)).map fun v => { grain := g, verdict := v }
 

@@ -76,7 +76,6 @@ def wantPlan (label hx : ByteArray) : Plan where
   read := [[lit "worlds", label, lit "grains", hx, lit "pkg"]]
   write := [[lit "worlds", label, lit "grains", hx, lit "vol"]]
   exec := []
-  connect := []
   hidden := [[lit "worlds", label, lit "store"], [lit "worlds", label, lit "members"]]
 
 /-- The launcher's report of a grain whose child is running. -/

@@ -11,14 +11,16 @@ import Hosting.Plan
 namespace Nanodregg.Hosting.Proofs
 
 open Nanodregg.Hosting
+open Nanodregg.Codec.Path (clean)
 
-theorem Refusal.name_injective (a b : Refusal) (h : a.name = b.name) : a = b := by
-  cases a <;> cases b <;> simp_all [Refusal.name]
-
-private theorem plan_ok {l : ByteArray} {g : Grain} {p : Plan} (h : plan l g = .ok p) :
+/-- Each path of a plan in its ROLE: the program is `pkg/<entry>`, only `pkg` is read, only `vol` is
+written, nothing else is executable, and the Store and member workspaces are hidden. (The other
+theorems speak of `allowed`, the union; this one says which list each path is in, so a plan that
+wrote `pkg` and read `vol` is refused here.) -/
+theorem plan_roles {l : ByteArray} {g : Grain} {p : Plan} (h : plan l g = .ok p) :
     clean l = true ∧ clean g.idHex = true ∧ clean g.entry = true ∧ g.kind = .app ∧
       p = { program := pkgDir l g ++ [g.entry], read := [pkgDir l g], write := [volDir l g],
-            exec := [], connect := [], hidden := [storeDir l, membersDir l] } := by
+            exec := [], hidden := [storeDir l, membersDir l] } := by
   unfold plan at h
   by_cases hl : clean l = true <;> by_cases hi : clean g.idHex = true <;>
     by_cases he : clean g.entry = true <;>
@@ -26,11 +28,11 @@ private theorem plan_ok {l : ByteArray} {g : Grain} {p : Plan} (h : plan l g = .
     cases hk : g.kind <;> simp_all
 
 theorem plan_app_only {l : ByteArray} {g : Grain} {p : Plan} (h : plan l g = .ok p) :
-    g.kind = .app := (plan_ok h).2.2.2.1
+    g.kind = .app := (plan_roles h).2.2.2.1
 
 theorem plan_paths {l : ByteArray} {g : Grain} {p : Plan} (h : plan l g = .ok p) :
     ∀ x ∈ p.allowed, grainDir l g <+: x := by
-  obtain ⟨-, -, -, -, rfl⟩ := plan_ok h
+  obtain ⟨-, -, -, -, rfl⟩ := plan_roles h
   intro x hx
   simp only [Plan.allowed, List.cons_append, List.nil_append, List.append_nil, List.mem_cons,
     List.not_mem_nil, or_false] at hx
@@ -57,7 +59,7 @@ theorem plan_not_exposed {l : ByteArray} {g : Grain} {p : Plan} (h : plan l g = 
     ∀ hd ∈ p.hidden, ∀ x ∈ p.allowed, ¬ hd <+: x ∧ ¬ x <+: hd := by
   intro hd hh x hx
   obtain ⟨y, rfl⟩ := plan_paths h x hx
-  obtain ⟨-, -, -, -, rfl⟩ := plan_ok h
+  obtain ⟨-, -, -, -, rfl⟩ := plan_roles h
   have hx' : grainDir l g ++ y = worldRoot l ++ lit "grains" :: (g.idHex :: y) := by
     simp [grainDir]
   simp only [List.mem_cons, List.not_mem_nil, or_false] at hh
@@ -70,7 +72,7 @@ theorem plan_not_exposed {l : ByteArray} {g : Grain} {p : Plan} (h : plan l g = 
 theorem plan_no_store_no_workspace {l : ByteArray} {g : Grain} {p : Plan} (h : plan l g = .ok p) :
     ∀ x ∈ p.allowed, ¬ storeDir l <+: x ∧ ¬ membersDir l <+: x := by
   have hh : storeDir l ∈ p.hidden ∧ membersDir l ∈ p.hidden := by
-    obtain ⟨-, -, -, -, rfl⟩ := plan_ok h
+    obtain ⟨-, -, -, -, rfl⟩ := plan_roles h
     simp
   intro x hx
   exact ⟨(plan_not_exposed h _ hh.1 x hx).1, (plan_not_exposed h _ hh.2 x hx).1⟩
@@ -85,7 +87,7 @@ about directories (no `..`, no `/`, no empty component), up to symlinks, which t
 deny-default and the launcher's program check answer. -/
 theorem plan_components_clean {l : ByteArray} {g : Grain} {p : Plan} (h : plan l g = .ok p) :
     ∀ x ∈ p.allowed ++ p.hidden, ∀ c ∈ x, clean c = true := by
-  obtain ⟨hl, hi, he, -, rfl⟩ := plan_ok h
+  obtain ⟨hl, hi, he, -, rfl⟩ := plan_roles h
   obtain ⟨h1, h2, h3, h4, h5, h6⟩ := lits_clean
   intro x hx c hc
   simp only [Plan.allowed, List.cons_append, List.nil_append, List.append_nil, List.mem_cons,
@@ -107,5 +109,13 @@ theorem plan_refuses_id (l : ByteArray) (g : Grain) (hl : clean l = true) (h : c
 theorem plan_refuses_entry (l : ByteArray) (g : Grain) (hl : clean l = true) (hi : clean g.idHex = true)
     (h : clean g.entry = false) : plan l g = .error .entryUnclean := by
   simp [plan, hl, hi, h, bind, Except.bind, pure, Except.pure]
+
+/-- Tooth for `Proofs.Wire.decode_encodeAction` on a launch: a real plan (a 64-byte directory
+name, the label `w1`, the entry `app`) encodes into one frame. -/
+theorem planned_launch_encodes :
+    (match plan (lit "w1") { idHex := ⟨Array.replicate 64 97⟩, kind := .app, entry := lit "app" } with
+     | .ok p => (Wire.encodeAction { grain := ⟨Array.replicate 64 97⟩, verdict := .launch p }).isSome
+     | .error _ => false) = true := by
+  decide +kernel
 
 end Nanodregg.Hosting.Proofs
