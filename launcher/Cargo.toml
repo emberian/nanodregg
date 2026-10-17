@@ -20,8 +20,16 @@ path = "src/bin/grain-launch.rs"
 name = "probe"
 path = "src/bin/probe.rs"
 
+# The provider-key broker's byte mover: the operator's key file, one socket per resident, the
+# upstream call; every verdict is the Lean decider's (hosting-broker).
+[[bin]]
+name = "keybroker"
+path = "src/bin/keybroker.rs"
+
 [dependencies]
 nanodregg-sandbox = { path = "../sandbox" }
+# The key bytes are zeroized on drop (the type custody::read_private returns).
+zeroize = { version = "=1.8.2", default-features = false, features = ["alloc"] }
 
 [lints.rust]
 unsafe_code = "forbid"

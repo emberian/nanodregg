@@ -20,3 +20,4 @@ emit-broker	-	a generator; gates/generated.tsv checks its output
 live-calls	-	a generator of deploy/live/ inputs; deploy/live/harness.sh drives it against running units
 ob	-	LANG's resident check, an interactive tool: lang-journey and the rows drive the same code
 cargo:launcher:isolation	hosting-drive	exit 0
+cargo:launcher:broker	hosting-broker	exit 0

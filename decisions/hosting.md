@@ -559,5 +559,30 @@ encodes: `hosting-broker` exits `unencodable` if it does not, after `decide` acc
 safe, because the in-memory charge dies with the process and the restart forfeits the window.
 Second pass (same reader): ACCEPT. Its one loose end, that roles were not tied to the role bytes,
 is now part of `body_shape`.
-Status: stage 1 Lean half built (Broker, BrokerWire, `hosting-broker --drive`); keybroker next
-(CODEC: the emitted broker frames; CLIENT: the custody read shared from one place).
+**Stage 1, the Rust half (HOSTING-3, later 10-17).**
+`keybroker KEYS SOCKDIR PIDS UPSTREAM RESIDENTS DECIDER [ARG...]` is launcher/'s third bin. It reads
+KEYS once through `nanodregg_sandbox::custody::read_private` (CLIENT-15, 9334a97: the one custody
+read). The file is `SLOT KEY` lines; an empty file, a duplicate slot or a key holding a
+non-graphic byte is `keyFileFormat`. It binds `SOCKDIR/<r>.sock` for each resident and starts the
+decider through `sandbox::command` with exec = itself only and the key file hidden, passing `T0`
+(its clock) first: `hosting-broker T0 --drive SPEC...`. The decider's PID file is
+`PIDS/decider.pid`. The frames are `broker_generated.rs` (CODEC-24, 2d05802).
+`launcher/tests/broker.rs` is a standing row, `cargo:launcher:broker`. Its three tests:
+1. Main test. The start-window ask is `overSpend`. Then `modelNotAllowed`, `tokensZero`,
+   `tokensOver`, `requestTooLarge` (22 000 control bytes: the closed instance the kernel could not
+   reach), `badAsk`, and `busy` on a second connection. In the next window a grant reaches the fake
+   upstream and the resident gets its 200 and body; a slot with no key is `keyMissing`. CONTROL: the
+   upstream got `x-api-key: <canary>` and Lean's exact body, and no byte the resident received
+   holds the canary.
+   `r2`'s socket, with no allowance, gives `noAllowance` (identity is the socket).
+2. An upstream that echoes the key gives `keyEchoed`, and the canary is withheld.
+3. A 0644 key file ends keybroker as `keyFileMode`, with no socket opened.
+A slow run under load fails by name ("slow run (load) … re-run"), never as a wrong verdict.
+**Plants (Rust, run):** the echo check deleted turns the echo test red; a plain `fs::read` for the
+key file turns the mode test red; every socket naming one resident turns the main test red (`r2`, which has no
+allowance, would be served as `r1`). A keybroker that accepts the file and runs on is caught by a
+20 s deadline, never a hang.
+**CRITIQUE.** A key slot without a key is noticed only after the decider has charged the ask:
+`keyMissing` costs the worst case. That is safe, but it wastes budget. The fix is to give the
+decider the set of slots that have keys at start. The upstream is plain HTTP/1.0 (see above).
+Status: stage 1 built. Stage 2 (allowances from the World) and stage 3 (the resident plan) are next.

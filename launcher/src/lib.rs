@@ -11,6 +11,10 @@
 #[allow(missing_docs)]
 pub mod generated;
 
+/// The provider-key broker's frames (`Hosting/BrokerWire.lean`, `lake exe emit-broker`).
+#[allow(missing_docs)]
+pub mod broker_generated;
+
 use std::ffi::OsStr;
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};

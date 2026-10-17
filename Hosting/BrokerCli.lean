@@ -1,9 +1,9 @@
 /-
 # Hosting.BrokerCli — `hosting-broker`: keybroker's decider (HOSTING-12)
 
-    hosting-broker --drive T0 RESIDENT=WINDOWMS:CAP:MAXTOKENS:MODEL/SLOT/PRICE[+MODEL/SLOT/PRICE…] …
+    hosting-broker T0 --drive RESIDENT=WINDOWMS:CAP:MAXTOKENS:MODEL/SLOT/PRICE[+MODEL/SLOT/PRICE…] …
 
-keybroker starts it with `T0`, the operator clock (ms) at the start of this broker life, which
+keybroker starts it with `T0` first, the operator clock (ms) at the start of this broker life, which
 `Broker.start` forfeits. Then, per ask, it reads a `decide` frame (resident, atMs) and the
 resident's ask frame from stdin, runs `Broker.step`, and writes one verdict frame to stdout.
 Every frame is `u32le len ‖ payload`, `1 ≤ len ≤ Broker.Bounds.frameMax`. Every way it ends is an
@@ -86,7 +86,7 @@ def parseResident (s : String) : Option (ByteArray × Allowance) :=
   | _ => none
 
 def run : List String → IO Exit
-  | "--drive" :: t0 :: specs => do
+  | t0 :: "--drive" :: specs => do
     let some t0 := t0.toNat? | return .usage
     let some rs := specs.mapM parseResident | return .usage
     serve (← IO.getStdin) (← IO.getStdout) lifetime (Broker.start t0 rs)
