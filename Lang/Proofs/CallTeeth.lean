@@ -8,7 +8,8 @@ digest (`bodyOf_callData_bytes`), so the round trip is not vacuous. At install: 
 slot carrying an invoke checks; a slot arm with the right label at the wrong type, and an empty
 sum, are refused `badMethod`; a transfer in an `invoke`-only slot is `illTyped`. Liveness
 (`Lang.Proofs.CallLive`): its premises are met by a real calls row (`invokeRow_conforms`), the
-non-digest refusal above is the one it allows (`not_digest_is_live`), a call read from an
+non-digest refusal above is the one it allows (`not_digest_is_live`), and a refusal naming a field
+that holds no bytes (`method`) is not (`method_named_not_live`). A call read from an
 invoke-only slot is an invoke (`skip_none_kind`), and the Sim's digest codec meets
 `bodyOf_callData`'s premise (`sim_digest_roundtrip`, `bodyOf_callData_sim`).
 -/
@@ -145,6 +146,54 @@ theorem not_digest_is_live :
     ∀ e, callsOf dig8 (.record [("c0", .inj "some" (invokeD ⟨#[120, 121, 122]⟩))]) = .error e →
       DigestRefusal dig8 (.record [("c0", .inj "some" (invokeD ⟨#[120, 121, 122]⟩))]) e :=
   callsOf_live (by simp [invokeSlot_ok]) (invokeRow_conforms _ (by decide))
+
+/-- The refusal's text fixes the name it gives: `calls: c0 F: not a digest` names `F`. -/
+theorem c0_named {f g : String} (h : s!"calls: c0 {f}: not a digest" = s!"calls: c0 {g}: not a digest") : f = g := by
+  have h1 := congrArg String.toList h
+  have h2 : f.toList ++ ": not a digest".toList = g.toList ++ ": not a digest".toList := by
+    simpa [toString] using h1
+  exact String.toList_inj.mp (List.append_cancel_right h2)
+
+/-- A name with no `.` names a path of one label: itself. -/
+theorem names_one {p : List Label} {f : String} (h : Names p f) (hf : '.' ∉ f.toList) : p = [f] := by
+  cases h with
+  | one => rfl
+  | cons ℓ h' => exact (hf (by simp)).elim
+
+/-- The row's `method` field is a nat: no bytes sit at path `c0.method`. -/
+theorem no_bytes_at_method {b : ByteArray} {q : List Label}
+    (hb : BytesAt b q (.inj "some" (invokeD ⟨#[120, 121, 122]⟩))) (hq : q = ["method"]) : False := by
+  simp only [invokeD] at hb
+  cases hb with
+  | arm _ => simp at hq
+  | inj hb =>
+    cases hb with
+    | arm _ => simp at hq
+    | inj hb =>
+      cases hb with
+      | field hm hb =>
+        simp only [List.cons.injEq] at hq
+        obtain ⟨rfl, rfl⟩ := hq
+        simp at hm
+        subst hm
+        cases hb
+
+/-- **A refusal names the field that holds the refused bytes** (cv 01a14a69-5909). The row holds
+bytes that `dig8` refuses (`obj` is 3 bytes, `args` is empty), yet a refusal that names the slot's
+`method` field, a nat, is not one `callsOf_live` allows. Under the old `BytesIn`, any bytes leaf
+witnessed any name, and this was a `DigestRefusal`. -/
+theorem method_named_not_live :
+    ¬ DigestRefusal dig8 (.record [("c0", .inj "some" (invokeD ⟨#[120, 121, 122]⟩))])
+      (.program "calls: c0 method: not a digest") := by
+  rintro ⟨ℓ, p, f, b, -, hb, hn, he⟩
+  cases hb with
+  | field hm hb =>
+    simp only [List.mem_singleton, Prod.mk.injEq] at hm
+    obtain ⟨rfl, rfl⟩ := hm
+    simp only [Refusal.program.injEq] at he
+    have hf : f = "method" := c0_named (g := "method") he.symm
+    subst hf
+    exact no_bytes_at_method hb (names_one hn (by decide))
 
 /-- A call read from an invoke-only slot is an invoke, the row's one call. -/
 theorem skip_none_kind {bs : List (Body ByteArray)}

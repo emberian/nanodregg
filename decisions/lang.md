@@ -890,3 +890,37 @@ cell passed the install check of its day; one would need a package cell written 
 measures exactly what LANG-35 changed. The theorem is a direct unfolding (install's `loadAll` IS the
 load's `loadAll` one fuel down), which is the point of LANG-35, not a weakness of the statement.
 **Status.** built (this commit). Nothing re-ids: no package bytes changed.
+
+## LANG-36 A not-a-digest refusal is tied to the path it names (2026-10-17; cv 01a14a69-5909, the c253 vacuity re-read, LOW)
+**Decision.** `Lang/Proofs/CallLive.lean` replaces `BytesIn b d` ("b is some bytes leaf of d") with
+`BytesAt b p d` ("b sits in d at label path p"). Every record field on the path is named in `p`; a
+sum arm is either passed over (`inj`: an option's `some`, a call's kind, an account's `of`) or named
+(`arm`: an account's `well`). It adds `Names p f` (f is p's labels joined by `.`) and `Under p d d0`
+(d sits at p in d0). `Live d0 x` now says a refusal `F: not a digest` has a path `p` with
+`Names p F` and refused bytes at `p` in `d0`. `DigestRefusal c e` says slot `ℓ`, path `p` in its
+call, bytes at `ℓ :: p` in `c`, and the refusal `calls: ℓ F: not a digest` with `Names p F`. The
+proofs of `digest_live`, `optDigest_live` and `acctRef_live` now carry the path, so each literal
+name in `bodyOf` and `acctRefOf` (`"obj"`, `s!"{f}.owner"`, ...) is checked against the record
+label that holds the bytes. A typo in a refusal name breaks the proof.
+Tooth: `CallTeeth.method_named_not_live`. On the LC5 row (obj is 3 bytes, args is empty, so `dig8`
+refuses both), `calls: c0 method: not a digest` is not a `DigestRefusal`, because `method` holds a
+nat. Under `BytesIn` it was one, witnessed by any bytes leaf.
+**Alternatives.** (1) Name the arm on every `inj`, which would make paths unique. That changes the
+deployed refusal texts: the call kind would join the name (`c0 invoke.obj`), and LC5b and every
+client that matches the text would change. That is not wanted for a proof's convenience. (2) A
+computed path set per datum: a `def` returning lists, which a proof module may not export.
+**Critique.** Two looseness points remain. (a) `inj` and `arm` both apply at any arm, so a datum
+has more than one path to the same leaf (`c0 obj` and `c0 invoke.obj`). Live allows either name,
+and only the deployed one occurs. (b) A path is a bytes leaf the decoder refuses, not a field the
+reader reads as a digest. On the LC5 row, `calls: c0 args: not a digest` is still a
+`DigestRefusal`, though `bodyOf` reads `args` with `bytesAt` and never refuses it. That is owed
+work, not a limit of the model (vacuity reader; my first draft called it a model limit, which was
+the cost-estimate-to-constraint move). It is a real fork, cv 01a14aab-adae. (i), the default: one
+`digestPaths` source in `Lang/Call.lean` that `bodyOf`/`acctRefOf` consult to choose `digestAt` or
+`bytesAt`, with `DigestRefusal` requiring the path to be in it; no flag day. (ii) a `digest` type in
+`Ty`, so that laws, methods and extraction can tell an id from bytes; a lang! day that re-ids every
+package with a method, to be chosen with ROOT.
+**Meta-critique.** The task asked that the bytes be tied to the named field. The proofs now do that
+for the reader's own literal names, which is where a mistake would hide (a renamed record label
+with a stale message). (b) is open and labelled owed.
+**Status.** built (this commit). Nothing re-ids: proof modules only.

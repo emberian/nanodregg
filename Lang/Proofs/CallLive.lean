@@ -3,8 +3,8 @@
 
 `Lang.Proofs.Call` proves the forward half: a callable Body in bounds has call data of `callTy`
 (`callData_conforms`). This is the converse, liveness. `bodyOf_live`: data conforming to `callTy`
-reads as a Body, or the refusal is `FIELD: not a digest` for bytes OF that data the digest decoder
-refuses (`Live`, `BytesIn`), the one thing a type cannot say. `callsOf_live`: the same for a calls
+reads as a Body, or the refusal is `PATH: not a digest` for bytes the digest decoder refuses, held
+at exactly that label path of the data (`Live`, `BytesAt`, `Names`), the one thing a type cannot say. `callsOf_live`: the same for a calls
 row conforming to `callsTy ks` over call slots, with the slot named (`DigestRefusal`).
 `extract_conforms`: a value typed at a type extracts to data conforming to it (forcing each
 suspension is a typed run, `force_typed`, `unknot_typed`). `callsOf_go_kinds`: the calls a
@@ -23,27 +23,48 @@ open Nanodregg.Kernel Nanodregg.Kernel.Receive
 
 variable {D : Type} {digestOf : ByteArray → Option D} {d0 : Data}
 
-/-- Byte string `b` occurs in data `d` (a bytes leaf of it). -/
-inductive BytesIn (b : ByteArray) : Data → Prop
-  | here : BytesIn b (.bytes b)
-  | inj {ℓ : Label} {d : Data} : BytesIn b d → BytesIn b (.inj ℓ d)
-  | field {fs : List (Label × Data)} {ℓ : Label} {d : Data} : (ℓ, d) ∈ fs → BytesIn b d → BytesIn b (.record fs)
+/-- Byte string `b` sits in data `d` at label path `p`. Each record field on the way is named in
+the path (`field`). A sum arm is either named (`arm`, as an account's `well` is) or passed over (`inj`,
+as an option's `some`, a call's kind, an account's `of`). -/
+inductive BytesAt (b : ByteArray) : List Label → Data → Prop
+  | here : BytesAt b [] (.bytes b)
+  | inj {p : List Label} {ℓ : Label} {d : Data} : BytesAt b p d → BytesAt b p (.inj ℓ d)
+  | arm {p : List Label} {ℓ : Label} {d : Data} : BytesAt b p d → BytesAt b (ℓ :: p) (.inj ℓ d)
+  | field {p : List Label} {fs : List (Label × Data)} {ℓ : Label} {d : Data} :
+      (ℓ, d) ∈ fs → BytesAt b p d → BytesAt b (ℓ :: p) (.record fs)
 
-/-- Reading `d0` gives `x`, which fails, if at all, only because bytes OF `d0` are refused by
-`digestOf`, and the refusal names their field. -/
+/-- `f` is how a refusal names label path `p`: its labels joined by `.` (`acct.owner`). -/
+inductive Names : List Label → String → Prop
+  | one (ℓ : Label) : Names [ℓ] ℓ
+  | cons (ℓ : Label) {p : List Label} {f : String} : Names p f → Names (ℓ :: p) (ℓ ++ "." ++ f)
+
+/-- Data `d` sits in `d0` at path `p`: every bytes leaf of `d` is a leaf of `d0`, `p` deeper. -/
+def Under (p : List Label) (d d0 : Data) : Prop := ∀ q b, BytesAt b q d → BytesAt b (p ++ q) d0
+
+/-- Reading `d0` gives `x`, which fails, if at all, only because bytes of `d0` are refused by
+`digestOf`, and the refusal names the path in `d0` that holds them. -/
 def Live (digestOf : ByteArray → Option D) (d0 : Data) {α : Type} (x : Except String α) : Prop :=
-  ∀ e, x = .error e → ∃ (f : String) (b : ByteArray), digestOf b = none ∧ BytesIn b d0 ∧ e = s!"{f}: not a digest"
+  ∀ e, x = .error e → ∃ (p : List Label) (f : String) (b : ByteArray),
+    digestOf b = none ∧ BytesAt b p d0 ∧ Names p f ∧ e = s!"{f}: not a digest"
 
 theorem Live.lift {d0 d1 : Data} {α : Type} {x : Except String α} (hx : Live digestOf d0 x)
-    (hs : ∀ b, BytesIn b d0 → BytesIn b d1) : Live digestOf d1 x := by
+    (hs : ∀ p b, BytesAt b p d0 → BytesAt b p d1) : Live digestOf d1 x := by
   intro e h
-  obtain ⟨f, b, hn, hb, rfl⟩ := hx e h
-  exact ⟨f, b, hn, hs b hb, rfl⟩
+  obtain ⟨p, f, b, hn, hb, hf, rfl⟩ := hx e h
+  exact ⟨p, f, b, hn, hs p b hb, hf, rfl⟩
 
-theorem arm_sub {ℓ : Label} {fs : List (Label × Data)} {d : Data} (h : d ∈ fs.map Prod.snd) :
-    ∀ b, BytesIn b d → BytesIn b (.inj ℓ (.record fs)) := fun _ hb => by
-  obtain ⟨⟨ℓ', d'⟩, hm, rfl⟩ := List.mem_map.1 h
-  exact .inj (.field hm hb)
+theorem under_field {ℓ : Label} {d : Data} {fs : List (Label × Data)} {k : Label} (hm : (ℓ, d) ∈ fs) :
+    Under [ℓ] d (.inj k (.record fs)) := fun _ _ hb => .inj (.field hm hb)
+
+theorem Under.some {p : List Label} {d d0 : Data} (h : Under p (.inj "some" d) d0) : Under p d d0 :=
+  fun q b hb => h q b (.inj hb)
+
+theorem Under.of {p : List Label} {ℓ : Label} {d d0 : Data} (h : Under p (.inj ℓ d) d0) :
+    Under (p ++ [ℓ]) d d0 := fun q b hb => by simpa using h (ℓ :: q) b (.arm hb)
+
+theorem Under.under {p : List Label} {ℓ ℓ' : Label} {fs : List (Label × Data)} {d d0 : Data}
+    (h : Under p (.inj ℓ (.record fs)) d0) (hm : (ℓ', d) ∈ fs) : Under (p ++ [ℓ']) d d0 :=
+  fun q b hb => by simpa using h (ℓ' :: q) b (.inj (.field hm hb))
 
 theorem Live.pure {α : Type} (a : α) : Live digestOf d0 (Except.ok a : Except String α) := by
   intro e h; cases h
@@ -68,13 +89,6 @@ theorem Live.map' {α β : Type} {x : Except String α} (g : α → β) (hx : Li
   | error e' => rw [hx'] at h; simp only [Except.map] at h; cases h; exact hx _ hx'
   | ok a => rw [hx'] at h; simp [Except.map] at h
 
-theorem digestAt_live (f : String) (b : ByteArray) : Live digestOf (.bytes b) (digestAt digestOf f (.bytes b)) := by
-  intro e h
-  simp only [digestAt] at h
-  split at h
-  · cases h
-  · rename_i hn; cases h; exact ⟨f, b, hn, .here, rfl⟩
-
 theorem conf_bytes {d : Data} (h : Conforms d .bytes) : ∃ b, d = .bytes b := by cases h; exact ⟨_, rfl⟩
 
 theorem conf_nat {d : Data} (h : Conforms d .nat) : ∃ n, d = .nat n := by cases h; exact ⟨_, rfl⟩
@@ -93,14 +107,21 @@ theorem conf_opt {d : Data} {T : Ty} (h : Conforms d (optTy T)) :
       · cases hf; subst_vars; exact .inr ⟨_, rfl, hd⟩
       · cases hf
 
-theorem digest_live {d : Data} (f : String) (h : Conforms d .bytes) : Live digestOf d (digestAt digestOf f d) := by
-  obtain ⟨b, rfl⟩ := conf_bytes h; exact digestAt_live f b
+/-- A digest field named `f`, the name of its path `p` in `d0`, refuses only bytes at `p`. -/
+theorem digest_live {d d0 : Data} {p : List Label} (f : String) (hf : Names p f) (h : Conforms d .bytes)
+    (hu : Under p d d0) : Live digestOf d0 (digestAt digestOf f d) := by
+  obtain ⟨b, rfl⟩ := conf_bytes h
+  intro e he
+  simp only [digestAt] at he
+  split at he
+  · cases he
+  · rename_i hn; cases he; exact ⟨p, f, b, hn, by simpa using hu [] b .here, hf, rfl⟩
 
-theorem optDigest_live {d : Data} (f g : String) (h : Conforms d (optTy .bytes)) :
-    Live digestOf d (optOf (digestAt digestOf f) g d) := by
+theorem optDigest_live {d d0 : Data} {p : List Label} (f g : String) (hf : Names p f) (h : Conforms d (optTy .bytes))
+    (hu : Under p d d0) : Live digestOf d0 (optOf (digestAt digestOf f) g d) := by
   rcases conf_opt h with rfl | ⟨d', rfl, hd⟩
   · simp only [optOf]; exact Live.pure _
-  · simp only [optOf]; exact (Live.map' _ (digest_live f hd)).lift fun _ hb => .inj hb
+  · simp only [optOf]; exact Live.map' _ (digest_live f hf hd hu.some)
 
 theorem optBytes_live {d : Data} (f g : String) (h : Conforms d (optTy .bytes)) :
     Live digestOf d0 (optOf (bytesAt f) g d) := by
@@ -114,7 +135,13 @@ theorem natOf_live {d : Data} (f : String) (h : Conforms d .nat) : Live digestOf
 theorem bytesAt_live {d : Data} (f : String) (h : Conforms d .bytes) : Live digestOf d0 (bytesAt f d) := by
   obtain ⟨b, rfl⟩ := conf_bytes h; exact Live.pure _
 
-theorem acctRef_live {d : Data} (f : String) (h : Conforms d acctRefTy) : Live digestOf d (acctRefOf digestOf f d) := by
+theorem names_dot {f g s : String} (hs : s = f ++ "." ++ g) : Names ([f] ++ [g]) s :=
+  hs ▸ .cons f (.one g)
+
+/-- An account named `f` (at path `[f]` in `d0`) refuses only bytes at `f.owner`, `f.asset` or
+`f.well`, named so. -/
+theorem acctRef_live {d d0 : Data} (f : String) (h : Conforms d acctRefTy) (hu : Under [f] d d0) :
+    Live digestOf d0 (acctRefOf digestOf f d) := by
   cases h with
   | inj hf hd =>
     simp only [Row.find?] at hf
@@ -128,11 +155,11 @@ theorem acctRef_live {d : Data} (f : String) (h : Conforms d acctRefTy) : Live d
           | cons ho hr =>
             cases hr
             simp only [acctRefOf]
-            exact Live.bind ((digest_live _ ho).lift (arm_sub (by simp))) fun _ =>
-              Live.bind ((digest_live _ ha).lift (arm_sub (by simp))) fun _ => Live.pure _
+            exact Live.bind (digest_live _ (names_dot (g := "owner") (by simp only [toString, String.append_assoc]; rfl)) ho (hu.under (by simp))) fun _ =>
+              Live.bind (digest_live _ (names_dot (g := "asset") (by simp only [toString, String.append_assoc]; rfl)) ha (hu.under (by simp))) fun _ => Live.pure _
     · split at hf
       · cases hf; subst_vars
-        simp only [acctRefOf]; exact (Live.map' _ (digest_live _ hd)).lift fun _ hb => .inj hb
+        simp only [acctRefOf]; exact Live.map' _ (digest_live _ (names_dot (g := "well") (by simp only [toString, String.append_assoc]; rfl)) hd hu.of)
       · cases hf
 
 theorem right_ok {d : Data} (h : Conforms d rightTy) : ∃ r, rightOf d = .ok r := by
@@ -176,15 +203,15 @@ theorem bodyOf_live {d : Data} (h : Conforms d callTy) : Live digestOf d (bodyOf
       cases hd with | record hr => cases hr with | cons h1 hr => cases hr with | cons h2 hr =>
       cases hr
       simp only [bodyOf]
-      exact Live.bind ((digest_live _ h1).lift (arm_sub (by simp))) fun _ => Live.bind ((digest_live _ h2).lift (arm_sub (by simp))) fun _ => Live.pure _
+      exact Live.bind (digest_live _ (.one _) h1 (under_field (by simp))) fun _ => Live.bind (digest_live _ (.one _) h2 (under_field (by simp))) fun _ => Live.pure _
     split at hf
     · cases hf; subst_vars
       cases hd with | record hr => cases hr with | cons h1 hr => cases hr with | cons h2 hr =>
       cases hr with | cons h3 hr => cases hr with | cons h4 hr =>
       cases hr
       simp only [bodyOf]
-      exact Live.bind ((digest_live _ h4).lift (arm_sub (by simp))) fun _ => Live.bind ((acctRef_live _ h1).lift (arm_sub (by simp))) fun _ =>
-        Live.bind (natOf_live _ h2) fun _ => Live.bind ((optDigest_live _ _ h3).lift (arm_sub (by simp))) fun _ => Live.pure _
+      exact Live.bind (digest_live _ (.one _) h4 (under_field (by simp))) fun _ => Live.bind (acctRef_live _ h1 (under_field (by simp))) fun _ =>
+        Live.bind (natOf_live _ h2) fun _ => Live.bind (optDigest_live _ _ (.one _) h3 (under_field (by simp))) fun _ => Live.pure _
     split at hf
     · cases hf; subst_vars
       cases hd with | record hr => cases hr with | cons h1 hr => cases hr with | cons h2 hr =>
@@ -195,25 +222,25 @@ theorem bodyOf_live {d : Data} (h : Conforms d callTy) : Live digestOf d (bodyOf
         have hlen := rowConforms_length hrs
         simp only [List.length_map, rightLabels, slotLabels, List.length_range] at hlen
         simp only [bodyOf, hlen, rightsMax, Nat.le_refl, if_true]
-        exact Live.bind ((digest_live _ h4).lift (arm_sub (by simp))) fun _ => Live.bind ((digest_live _ h1).lift (arm_sub (by simp))) fun _ =>
-          Live.bind (rights_live hrs) fun _ => Live.bind ((optDigest_live _ _ h2).lift (arm_sub (by simp))) fun _ => Live.pure _
+        exact Live.bind (digest_live _ (.one _) h4 (under_field (by simp))) fun _ => Live.bind (digest_live _ (.one _) h1 (under_field (by simp))) fun _ =>
+          Live.bind (rights_live hrs) fun _ => Live.bind (optDigest_live _ _ (.one _) h2 (under_field (by simp))) fun _ => Live.pure _
     split at hf
     · cases hf; subst_vars
       cases hd with | record hr => cases hr with | cons h1 hr => cases hr with | cons h2 hr =>
       cases hr with | cons h3 hr => cases hr with | cons h4 hr => cases hr with | cons h5 hr =>
       cases hr
       simp only [bodyOf]
-      exact Live.bind ((digest_live _ h4).lift (arm_sub (by simp))) fun _ => Live.bind (natOf_live _ h3) fun _ =>
+      exact Live.bind (digest_live _ (.one _) h4 (under_field (by simp))) fun _ => Live.bind (natOf_live _ h3) fun _ =>
         Live.bind (bytesAt_live _ h1) fun _ => Live.bind (natOf_live _ h2) fun _ =>
-        Live.bind ((optDigest_live _ _ h5).lift (arm_sub (by simp))) fun _ => Live.pure _
+        Live.bind (optDigest_live _ _ (.one _) h5 (under_field (by simp))) fun _ => Live.pure _
     split at hf
     · cases hf; subst_vars
       cases hd with | record hr => cases hr with | cons h1 hr => cases hr with | cons h2 hr =>
       cases hr with | cons h3 hr => cases hr with | cons h4 hr => cases hr with | cons h5 hr =>
       cases hr
       simp only [bodyOf]
-      exact Live.bind ((acctRef_live _ h4).lift (arm_sub (by simp))) fun _ => Live.bind ((acctRef_live _ h2).lift (arm_sub (by simp))) fun _ =>
-        Live.bind (natOf_live _ h1) fun _ => Live.bind ((optDigest_live _ _ h5).lift (arm_sub (by simp))) fun _ =>
+      exact Live.bind (acctRef_live _ h4 (under_field (by simp))) fun _ => Live.bind (acctRef_live _ h2 (under_field (by simp))) fun _ =>
+        Live.bind (natOf_live _ h1) fun _ => Live.bind (optDigest_live _ _ (.one _) h5 (under_field (by simp))) fun _ =>
         Live.bind (optBytes_live _ _ h3) fun _ => Live.pure _
     cases hf
 
@@ -224,7 +251,7 @@ theorem bodyOf_ok_of_total (htot : ∀ b, (digestOf b).isSome = true) {d : Data}
   cases hb : bodyOf digestOf d with
   | ok b => exact ⟨b, rfl⟩
   | error e =>
-    obtain ⟨_, b, hn, -, -⟩ := bodyOf_live h e hb
+    obtain ⟨_, _, b, hn, -, -, -⟩ := bodyOf_live h e hb
     have := htot b
     rw [hn] at this; cases this
 
@@ -398,11 +425,11 @@ def KindOf (b : Body D) (t : Ty) : Prop := ∃ arms, t = optTy (.sum arms) ∧ b
 /-- A calls row's slots: each an option over a call slot type. -/
 def SlotRow (r : List (Label × Ty)) : Prop := ∀ p ∈ r, ∃ k, p.2 = optTy k ∧ callSlotOk k = true
 
-/-- The refusal `callsOf` gives reading calls data `c` when a slot holds bytes OF `c` that are not
-a digest: the slot and the field by name. -/
+/-- The refusal `callsOf` gives reading calls data `c` when slot `ℓ` holds, at path `p` in its
+call, bytes the digest decoder refuses: the slot and the path by name. -/
 def DigestRefusal (digestOf : ByteArray → Option D) (c : Data) (e : Refusal D) : Prop :=
-  ∃ (ℓ f : String) (b : ByteArray), digestOf b = none ∧ BytesIn b c ∧
-    e = .program s!"calls: {ℓ} {s!"{f}: not a digest"}"
+  ∃ (ℓ : Label) (p : List Label) (f : String) (b : ByteArray), digestOf b = none ∧ BytesAt b (ℓ :: p) c ∧
+    Names p f ∧ e = .program s!"calls: {ℓ} {s!"{f}: not a digest"}"
 
 theorem callsOf_go_live : ∀ {fs : List (Label × Data)} {r : List (Label × Ty)}, RowConforms fs r → SlotRow r →
     ∀ e, callsOf.go digestOf fs = .error e → DigestRefusal digestOf (.record fs) e
@@ -412,9 +439,9 @@ theorem callsOf_go_live : ∀ {fs : List (Label × Data)} {r : List (Label × Ty
     have hs' : SlotRow _ := fun p hp => hs p (List.mem_cons_of_mem _ hp)
     have tail : ∀ e, callsOf.go digestOf ds = .error e → DigestRefusal digestOf (.record ((ℓ, d) :: ds)) e := by
       intro e he
-      obtain ⟨ℓ', f, b, hn, hb, rfl⟩ := callsOf_go_live hr hs' e he
+      obtain ⟨ℓ', p, f, b, hn, hb, hf, rfl⟩ := callsOf_go_live hr hs' e he
       cases hb with
-      | field hm hb' => exact ⟨ℓ', f, b, hn, .field (List.mem_cons_of_mem _ hm) hb', rfl⟩
+      | field hm hb' => exact ⟨ℓ', p, f, b, hn, .field (List.mem_cons_of_mem _ hm) hb', hf, rfl⟩
     simp only at hk; subst hk
     rcases conf_opt ho with rfl | ⟨d', rfl, hd⟩
     · simp only [callsOf.go] at h; exact tail e h
@@ -426,8 +453,8 @@ theorem callsOf_go_live : ∀ {fs : List (Label × Data)} {r : List (Label × Ty
         | ok bs => rw [hg] at h; cases h
       · rename_i m hm
         cases h
-        obtain ⟨f, b, hn, hb, rfl⟩ := bodyOf_live (slot_conforms hok hd).1 m hm
-        exact ⟨ℓ, f, b, hn, .field (List.mem_cons_self ..) (.inj hb), rfl⟩
+        obtain ⟨p, f, b, hn, hb, hf, rfl⟩ := bodyOf_live (slot_conforms hok hd).1 m hm
+        exact ⟨ℓ, p, f, b, hn, .field (List.mem_cons_self ..) (.inj hb), hf, rfl⟩
 
 /-- **The calls a conforming row reads are its filled slots, in order, each of its own slot's
 kinds**: a sublist of the row's slot types, matched one to one. So no slot yields two calls, and a
