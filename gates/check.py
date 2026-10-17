@@ -36,6 +36,29 @@ def read(p):
 changed = open(a.changed, encoding="utf-8").read().split() if a.changed else None
 
 
+MARKER = re.compile(r"^(<{7}|>{7})(?: |$)")
+
+
+def conflict_markers(root: str) -> list[str]:
+    """A merge-conflict marker line (`<<<<<<< ours`, `>>>>>>> theirs`) in any file of the judged
+    tree: an unresolved merge that a lane's own `git apply --3way` or `checkout -m` left in a file it
+    then committed whole (4c327a7, 10-17, two decisions appended to decisions/host.md). The `=======`
+    middle line is not matched: it is also a Markdown heading underline."""
+    red = []
+    for d, dirs, files in os.walk(root):
+        dirs[:] = [x for x in dirs if x not in tree.SKIP_DIRS]
+        for f in files:
+            path = os.path.join(d, f)
+            try:
+                with open(path, encoding="utf-8") as fh:
+                    for n, line in enumerate(fh, 1):
+                        if MARKER.match(line):
+                            red.append(f"{os.path.relpath(path, root)}:{n}: conflict marker {line.rstrip()[:40]!r}")
+            except (UnicodeDecodeError, OSError):
+                continue  # not text
+    return red
+
+
 def case_collisions(root: str) -> list[str]:
     """Two paths (files or directories) that differ only in case are ONE path on a case-insensitive
     disk (the Mac reader's APFS): `ops/RUNBOOK.md` silently became `Ops/RUNBOOK.md` inside the
@@ -55,7 +78,7 @@ results = {
     "closure": closure.check(t),
     "refusals": refusals.check(t),
     "size": size.check(t, msg, tree.read(a.base_tree) if a.base_tree and has_lakefile(a.base_tree) else None),
-    "paths": case_collisions(t.root),
+    "paths": case_collisions(t.root) + conflict_markers(t.root),
     "runs": runs.check(t),
     "waste": waste.check(read(os.path.join(t.root, "gates", "waste.tsv")) or "", read(a.base_waste), msg),
 }
