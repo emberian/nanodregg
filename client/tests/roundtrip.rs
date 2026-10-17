@@ -1,5 +1,7 @@
-//! The round trip through the real binaries: `nd` ⇄ `nd-supervise` ⇄ a scripted follow, and
-//! `nd` ⇄ `nd-supervise` ⇄ a scripted host. Follow asks: host(read "challenge?") → sign
+//! STAND-IN: the round trip through the real client binaries, `nd` ⇄ `nd-supervise` ⇄ a scripted
+//! follow and a scripted host (python, speaking the CODEC-8 layouts of `Protocol.Frames`). It is a
+//! mirror of the layouts, not of HOST's machine: it is replaced by the run against `host serve` /
+//! `host follow` once HOST commits those executables (CLIENT-LOG, next 1). Follow asks: host(read "challenge?") → sign
 //! "observation" → submit "CALL" → done. The host answers the submit `uncertain`, so nd must look
 //! the SAME bytes up, and the lookup answers committed. Both children are confined away from the
 //! workspace (they cannot read the seed); follow verifies nothing here — it is a script.
@@ -36,11 +38,12 @@ const FOLLOW: &str = r#"
 log = open(sys.argv[1], 'ab')
 for conn, op, p in frames():
     if op == 5:
-        reply(conn, 0, bytes([2, 3]) + bs(b'challenge?') + b'\x01'); continue
-    n = struct.unpack('<I', p[:4])[0]; k = p[4:4+n]; result = p[4+n:]
+        reply(conn, 0, bytes([2, 3]) + bs(b'challenge?') + bs(b'\x01')); continue
+    n = struct.unpack('<I', p[:4])[0]; k = p[4:4+n]
+    m = struct.unpack('<I', p[4+n:8+n])[0]; result = p[8+n:8+n+m]; assert len(p) == 8+n+m
     log.write(bytes([k[0]]) + bs(result)); log.flush()
-    if k == b'\x01': reply(conn, 0, bytes([1]) + bs(b'observation') + b'\x02')
-    elif k == b'\x02': reply(conn, 0, bytes([3]) + bs(b'CALL') + b'\x03')
+    if k == b'\x01': reply(conn, 0, bytes([1]) + bs(b'observation') + bs(b'\x02'))
+    elif k == b'\x02': reply(conn, 0, bytes([3]) + bs(b'CALL') + bs(b'\x03'))
     else: reply(conn, 0, bytes([0, 0]) + bs(b'settled ' + bytes([result[0] + 48]) + b' ' + result[1:] + b'\n') + bs(b''))
 "#;
 
@@ -82,7 +85,7 @@ fn supervise(sock: &Path, hide: &Path, script: &str, log: &Path) -> Supervisor {
 }
 
 #[test]
-fn challenge_sign_submit_lookup_done_through_the_binaries() {
+fn stand_in_follow_and_host_challenge_sign_submit_lookup_done_through_the_binaries() {
     let root = std::env::temp_dir().join(format!("nd-rt-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     let ws = root.join("ws");

@@ -5,16 +5,20 @@ use std::os::unix::net::UnixStream;
 use std::path::Path;
 
 use crate::frame::{self, FrameError};
-use crate::generated as g;
-use crate::run::{Follow, Host, Outcome, Step};
+use crate::generated::{self as g, layout};
+use crate::run::{Follow, Host, Outcome};
 use crate::table::LIMITS;
-use crate::wire;
+use layout::Step;
 
 fn io_err(e: FrameError) -> io::Error {
     match e {
         FrameError::Io(e) => e,
         e => io::Error::new(io::ErrorKind::InvalidData, e.to_string()),
     }
+}
+
+fn malformed(what: &str, r: layout::Refusal) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidData, format!("{what}: {r:?}"))
 }
 
 fn exchange(s: &mut UnixStream, op: u8, payload: &[u8]) -> io::Result<(u8, Vec<u8>)> {
@@ -37,25 +41,40 @@ impl FollowSocket {
     fn ask(&mut self, op: u8, payload: &[u8]) -> io::Result<Step> {
         let (status, reply) = exchange(&mut self.0, op, payload)?;
         if status != g::status::OK {
-            // Follow refused the command itself; its payload is follow's own rendering.
-            return Ok(Step::Done {
-                exit: 1,
-                stdout: Vec::new(),
-                stderr: reply,
-            });
+            // Follow answers every command, its own refusals included, with a `done` step; any
+            // other status is follow refusing the frame itself, and is not rendered as a verdict.
+            return Err(io::Error::other(format!(
+                "status {status}: {}",
+                String::from_utf8_lossy(&reply)
+            )));
         }
-        wire::step(&reply).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))
+        Step::decode(&reply).map_err(|r| malformed("step", r))
     }
 }
 
 impl Follow for FollowSocket {
     fn command(&mut self, argv: &[Vec<u8>]) -> io::Result<Step> {
-        let payload = wire::argv(argv)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e.to_string()))?;
+        let payload = layout::Command {
+            argv: argv.to_vec(),
+        }
+        .encode()
+        .map_err(|r| malformed("argv", r))?;
+        if payload.len() as u64 > u64::from(g::ARGV_BYTES_MAX) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("argv: pastBound argvBytesMax ({} bytes)", payload.len()),
+            ));
+        }
         self.ask(g::follow_op::COMMAND, &payload)
     }
     fn resume(&mut self, k: &[u8], outcome: &Outcome) -> io::Result<Step> {
-        self.ask(g::follow_op::RESUME, &wire::resume(k, outcome))
+        let payload = layout::Resume {
+            k: k.to_vec(),
+            result: outcome.result(),
+        }
+        .encode()
+        .map_err(|r| malformed("resume", r))?;
+        self.ask(g::follow_op::RESUME, &payload)
     }
 }
 

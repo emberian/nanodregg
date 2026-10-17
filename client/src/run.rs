@@ -2,8 +2,9 @@
 //!
 //! The order of steps, what is signed and what is printed are follow's. This loop only performs a
 //! step and hands its result back with the continuation, under two bounds from the table: steps
-//! per command and sends per frozen call. Decoding a step from bytes is the generated codec's job;
-//! this module sees [`Step`] values.
+//! per command and sends per frozen call. A step is the generated codec's value
+//! ([`crate::generated::layout::Step`], byte for byte `Protocol.Frames`); this module never
+//! sees step bytes.
 
 use std::fs;
 use std::io;
@@ -11,43 +12,7 @@ use std::path::{Path, PathBuf};
 
 use crate::attempt::{Attempt, AttemptError, Request, Settlement, State};
 use crate::custody::Custody;
-
-/// A step follow asks for. `k` is follow's continuation, never inspected here.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Step {
-    /// Print and exit.
-    Done {
-        /// Process exit status.
-        exit: u8,
-        /// Bytes for stdout.
-        stdout: Vec<u8>,
-        /// Bytes for stderr.
-        stderr: Vec<u8>,
-    },
-    /// Sign exactly `message`.
-    Sign {
-        /// The bytes to sign.
-        message: Vec<u8>,
-        /// Continuation.
-        k: Vec<u8>,
-    },
-    /// Send one frame to host.sock.
-    Host {
-        /// Operation byte.
-        op: u8,
-        /// Payload.
-        payload: Vec<u8>,
-        /// Continuation.
-        k: Vec<u8>,
-    },
-    /// Freeze `call` as an attempt and settle it.
-    Submit {
-        /// The signed call bytes.
-        call: Vec<u8>,
-        /// Continuation.
-        k: Vec<u8>,
-    },
-}
+use crate::generated::layout::Step;
 
 /// What a performed step hands back to follow.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -61,6 +26,17 @@ pub enum Outcome {
         /// Payload.
         payload: Vec<u8>,
     },
+}
+
+impl Outcome {
+    /// The `result` field of `resume` (`Protocol.resumeLayout`): the signature, or the Host's
+    /// reply frame body as it arrived (`u8 status ‖ payload`, the shape [`crate::frame`] reads).
+    pub fn result(&self) -> Vec<u8> {
+        match self {
+            Self::Signature(s) => s.clone(),
+            Self::Reply { status, payload } => [&[*status][..], payload].concat(),
+        }
+    }
 }
 
 /// The follow socket, as the generated codec presents it.
@@ -115,13 +91,13 @@ pub enum RunError {
 impl std::fmt::Display for RunError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::StepsExhausted => write!(f, "nd: stepsPerCommandMax reached"),
-            Self::Follow(e) => write!(f, "nd: follow: {e}"),
-            Self::Host(e) => write!(f, "nd: host: {e}"),
-            Self::Attempt(e) => write!(f, "nd: {e}"),
+            Self::StepsExhausted => write!(f, "stepsPerCommandMax reached"),
+            Self::Follow(e) => write!(f, "follow: {e}"),
+            Self::Host(e) => write!(f, "host: {e}"),
+            Self::Attempt(e) => write!(f, "{e}"),
             Self::Uncertain(p) => write!(
                 f,
-                "nd: uncertain: the call in {} may or may not have committed",
+                "uncertain: the call in {} may or may not have committed",
                 p.display()
             ),
         }

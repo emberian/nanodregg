@@ -39,18 +39,12 @@ theorem clientTable_ops_in_table : … ∈ table.map Op.code      -- each op the
 
 - Socket frame (client ⇄ supervisor): `u32le len ‖ u8 op-or-status ‖ payload`, `1 ≤ len ≤ FRAME_BYTES_MAX`.
   (The supervisor adds/strips `u32 conn` toward the Lean child, per proposals/host.md.)
-- `command` payload = argv: `u32le count ‖ (u32le len ‖ bytes)*`, total ≤ `ARGV_BYTES_MAX`.
-- Step replies from follow (status OK, payload = `u8 step ‖ …`):
-  - `done   ‖ u8 exit ‖ u32le n ‖ stdout[n] ‖ u32le m ‖ stderr[m]`
-  - `sign   ‖ u32le n ‖ header[n] ‖ k…`       (k = the rest: an opaque continuation)
-  - `host   ‖ u8 op ‖ u32le n ‖ payload[n] ‖ k…`
-  - `submit ‖ u32le n ‖ call[n] ‖ k…`
-- `resume` payload = `u32le n ‖ k[n] ‖ result…` where result is the signature (sign), the Host's
-  reply frame `u8 status ‖ payload` (host, submit). The client never inspects `k` or `result`.
+- `command`, `resume` and the four steps: ANSWERED by CODEC at f81e093 (CODEC-8). The layouts are Lean
+  data (`Protocol.Table`: `Step.layout`, `commandLayout`, `resumeLayout`; codecs in `Protocol.Frames`,
+  proved Lawful) and the client uses the emitted `generated::layout::{Command, Resume, Step}`. Every
+  field is `u32le n ‖ bytes`, `k` and `result` included. `result` is the signature (sign) or the Host's
+  reply frame body `u8 status ‖ payload` (host, submit). The client never inspects `k` or `result`.
 - `lookup` payload = the frozen call bytes, exactly as submitted.
-
-The four `u32le n ‖ bytes` shapes are ONE primitive (`Codec.bytes`); the Rust side reads it with one
-function. If CODEC prefers the generator to emit the step decoder as Rust, the client takes it.
 
 ## 3. Asked of HOST (answering proposals/host.md)
 

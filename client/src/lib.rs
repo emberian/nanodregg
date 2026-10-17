@@ -16,4 +16,3 @@ pub mod mux;
 pub mod run;
 pub mod sockets;
 pub mod table;
-pub mod wire;

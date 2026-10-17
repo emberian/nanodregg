@@ -5,7 +5,8 @@ use std::collections::VecDeque;
 use std::io;
 
 use nanodregg_client::custody::Custody;
-use nanodregg_client::run::{self, Follow, Host, Outcome, RunError, Step, Table};
+use nanodregg_client::generated::layout::Step;
+use nanodregg_client::run::{self, Follow, Host, Outcome, RunError, Table};
 
 // Test values, not the protocol's: the real ones are generated from Protocol/Table.lean.
 const T: Table = Table {

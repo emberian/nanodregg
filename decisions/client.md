@@ -38,4 +38,9 @@ already covers (it covers none yet).
 Lean-owned shape, with a promised expiry. If the Lean layout differs, the round-trip test still passes
 against its own scripted follow (a mirror) — the integration with BUILD-HOST's follow is the real check.
 **Meta-critique.** ROOT asked for running binaries before my handoff, and that deadline chose this.
-**Status.** open, expires with the emitted reader.
+**Status.** superseded (CLIENT-2, 2026-10-16). CODEC landed the layouts as Lean data with an emitted
+reader at f81e093 (`generated::layout::{Command, Resume, Step}`, CODEC-8: `k` and `result` are
+length-prefixed); wire.rs is deleted and `run.rs` uses the generated `Step` itself (its own `Step` enum
+was a second copy of the same shape). The client still checks the encoded `command` against
+`ARGV_BYTES_MAX`, because the emitted `list` bounds each item and the count, not the total
+(`Bounds.argvBytesMax` is stated as the total; asked of CODEC to make the Lean codec carry it).
