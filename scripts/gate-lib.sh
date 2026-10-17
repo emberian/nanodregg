@@ -1,4 +1,4 @@
-# Shared by scripts/pre-push, scripts/standing.sh and scripts/size-sync. Source it; do not run it.
+# Shared by scripts/commit, scripts/pre-push and scripts/standing.sh. Source it; do not run it.
 #
 # A gate never builds the shared working tree: six agents edit it at once and it is always
 # greener or redder than any commit. It materializes the exact tree being judged into a private

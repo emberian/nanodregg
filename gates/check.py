@@ -1,4 +1,4 @@
-"""gates/check.py TREE [--base-size F] [--base-waste F] [--message F] [--changed F]
+"""gates/check.py TREE [--base-waste F] [--message F] [--changed F]
 [--base-tree DIR] — every source gate, one line each, exit 1 if any is red. The build and the census are scripts/pre-push's."""
 import argparse
 import os
@@ -14,7 +14,6 @@ import waste
 
 ap = argparse.ArgumentParser()
 ap.add_argument("root")
-ap.add_argument("--base-size")
 ap.add_argument("--base-waste")
 ap.add_argument("--base-tree", help="the parent tree: size rises are measured against it, and a\n                closure/refusal red the parent already had is reported as PRE-EXISTING, not red")
 ap.add_argument("--message")
@@ -37,8 +36,7 @@ changed = open(a.changed, encoding="utf-8").read().split() if a.changed else Non
 results = {
     "closure": closure.check(t),
     "refusals": refusals.check(t),
-    "size": size.check(t, read(os.path.join(t.root, "SIZE.md")) or "", read(a.base_size), msg,
-                    tree.read(a.base_tree) if a.base_tree and has_lakefile(a.base_tree) else None),
+    "size": size.check(t, msg, tree.read(a.base_tree) if a.base_tree and has_lakefile(a.base_tree) else None),
     "waste": waste.check(read(os.path.join(t.root, "gates", "waste.tsv")) or "", read(a.base_waste), msg),
 }
 if changed is not None:

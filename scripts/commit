@@ -8,8 +8,8 @@
 #  1. reads the CURRENT main into a private GIT_INDEX_FILE (never the shared index);
 #  2. adds exactly PATH... from the working tree (a directory means every file under it;
 #     a deleted file is recorded as deleted);
-#  3. regenerates SIZE.md's `now` column for that candidate. Pass SIZE.md as a PATH only to change
-#     a ceiling or add a row: its ceilings are taken, its `now` column is recomputed anyway;
+#  3. writes SIZE.md, a purely generated view, for that candidate (gates/size.py --write). SIZE.md
+#     is refused as a PATH: ceilings are edited in gates/ceilings.tsv;
 #  4. refuses if the candidate differs from main anywhere outside PATH... and SIZE.md;
 #  5. runs scripts/pre-push on the candidate: ownership (the subject prefix `kernel:` … names the
 #     layer, gates/OWNERS; --cross-layer records `CROSS-LAYER: REASON`), the source gates, the
@@ -84,6 +84,11 @@ fi
 # --detach main` carries an edit along when main did not change that file, and refuses when it did.
 prefix=$(git rev-parse --show-prefix)
 rel=(); for p in "${paths[@]}"; do r=$prefix${p#./}; rel+=("${r%/}"); done
+for r in "${rel[@]}"; do
+  if [ "$r" = SIZE.md ]; then
+    echo "scripts/commit: REFUSED — SIZE.md is generated for every commit; edit ceilings in gates/ceilings.tsv"; exit 1
+  fi
+done
 behind=$(git -C "$repo" diff --name-only HEAD "$base" -- "${rel[@]/#/:(top,literal)}") || exit 2
 if [ -n "$behind" ]; then
   printf '%s\n' "$behind" | while read -r f; do
@@ -101,12 +106,12 @@ present=() gone=()
 for p in "${paths[@]}"; do if [ -e "$p" ]; then present+=("$p"); else gone+=("$p"); fi; done
 if [ ${#gone[@]} -gt 0 ]; then git rm -r -q --cached --ignore-unmatch -- "${gone[@]}" || exit 2; fi
 if [ ${#present[@]} -gt 0 ]; then git add -A -- "${present[@]}" || exit 2; fi
-# SIZE.md for exactly this candidate (rows main has that size.py does not compute are kept).
-S=$common/nanodregg-commit-size
-mkdir -p "$S"
-materialize "$(git -C "$repo" write-tree)" "$S/tree" || exit 2
-python3 "$S/tree/gates/size.py" "$S/tree" --write > /dev/null || exit 2
-b=$(git -C "$repo" hash-object -w "$S/tree/SIZE.md") && git -C "$repo" update-index --add --cacheinfo "100644,$b,SIZE.md"
+# SIZE.md: the generated view of exactly this candidate, measured in a directory of this
+# process's own (two commits judged at once must never measure each other's tree).
+S=$tmp/size
+materialize "$(git -C "$repo" write-tree)" "$S" || exit 2
+python3 "$S/gates/size.py" "$S" --write > /dev/null || { echo "scripts/commit: gates/size.py --write failed"; exit 2; }
+b=$(git -C "$repo" hash-object -w "$S/SIZE.md") && git -C "$repo" update-index --add --cacheinfo "100644,$b,SIZE.md"
 cand=$(git -C "$repo" write-tree)
 
 # Every changed path must be one you named.

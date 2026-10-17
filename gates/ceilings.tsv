@@ -1,0 +1,13 @@
+# metric	ceiling	why — hand-edited (GATES); gates/size.py renders SIZE.md from these and the measurement.
+# A raised or removed row needs `SIZE-CEILING: <metric>: <why>` in the commit message.
+Lean modules in the Host closure	150	law 8 target: the Host closure under 150 modules
+protocol operations	6	PROTOCOL's table (target <= 40); a new op raises this with a reason
+call kinds (Receive.Body constructors)	10	KERNEL's receivers: one derivation per operation kind
+command verbs (the one command language)	20	PROTOCOL's one command language
+Rust lines (client/src)	2000	CLIENT-1, ROOT 10-16: hand-written Rust only (emitted files excluded)
+Rust files with an unregistered generated header	0	a hand-written file wearing the emit-rust header (ROOT 10-16)
+partial defs (deployed)	0	law 4: no partial def in deployed code
+sorry	0	law 6: no sorry ever lands
+native (extern/implemented_by)	8	Host.File's externs (gates/native-allow.tsv), ROOT ruling 10-16
+C lines	146	Host/c/file.c, the Store's physical IO (ROOT ruling 10-16)
+foundation modules	8	ROOT 10-17: the foundation list is itself a ratchet

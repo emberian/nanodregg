@@ -1,14 +1,19 @@
-"""gates/size.py TREE [--base SIZE.md-of-parent] [--message FILE] [--write]
+"""gates/size.py TREE [--write] — the size ratchet (law 12).
 
-The size ratchet (law 12). Measures the tree, then:
-  - SIZE.md's `now` column must equal the measurement (`--write` rewrites it);
-  - a measured value above its ceiling is red;
-  - a value above the parent commit's `now` needs a line `SIZE: <metric>: <why>` in the commit
-    message; a raised ceiling needs `SIZE-CEILING: <metric>: <why>`.
-Metrics this script cannot measure come from executables in gates/metrics/, each printing
-`<metric>\t<integer>` lines; a SIZE.md row nobody measures shows `unmeasured`, which is red
-and a row with a ceiling that nothing measures is printed as `WARN unmeasured`, which
-scripts/standing.sh turns into an INCOMPLETE verdict (a ceiling over nothing checks nothing).
+Two files, two roles:
+  gates/ceilings.tsv  hand-edited, `metric<TAB>ceiling<TAB>why`: the bounds, and the only input;
+  SIZE.md             generated (`--write`; scripts/commit writes it for every candidate and
+                      refuses it as a PATH): every measured metric, its value, its ceiling.
+Red on:
+  - SIZE.md differing from the view generated for the tree;
+  - a measured value above its ceiling;
+  - a value above the PARENT TREE's measurement without `SIZE: <metric>: <why>` in the message;
+  - a ceiling raised, or a ceiling row removed, against the parent's gates/ceilings.tsv without
+    `SIZE-CEILING: <metric>: <why>`;
+  - a malformed ceilings.tsv row.
+A ceiling on a metric nothing measures prints `WARN unmeasured`, which scripts/standing.sh turns
+into an INCOMPLETE verdict (a ceiling over nothing checks nothing). Metrics this script cannot
+measure come from executables in gates/metrics/, each printing `<metric>\t<integer>` lines.
 """
 import argparse
 import os
@@ -40,6 +45,17 @@ def registered(root: str) -> set[str]:
     return {os.path.normpath(r[1].strip()) for r in rows if len(r) > 1}
 
 
+def source_files(root: str, exts: tuple[str, ...]):
+    """(path relative to root, line count) for each file below root ending in one of exts. Only
+    directories BELOW root are skipped by name: a gate tree itself lives under `.git/`."""
+    for d, dirs, files in os.walk(root):
+        dirs[:] = [x for x in dirs if x not in tree.SKIP_DIRS]
+        for f in files:
+            if f.endswith(exts):
+                with open(os.path.join(d, f), encoding="utf-8", errors="replace") as fh:
+                    yield os.path.relpath(os.path.join(d, f), root), sum(1 for _ in fh)
+
+
 def rust_files(root: str, sub: str = ""):
     """(path relative to root, line count, has the generated header) for each .rs under root/sub."""
     for d, dirs, files in os.walk(os.path.join(root, sub)):
@@ -64,7 +80,19 @@ CONSTRUCTORS = {
     "call kinds (Receive.Body constructors)": [("Kernel.Receive", "Body")],
     "command verbs (the one command language)": [("Protocol.Command", "Verb")],
     "refusal constructors": [("Kernel.World", "Reject"), ("Kernel.Receive", "Refusal")],
+    "protocol status codes": [("Protocol.Table", "Status")],
+    "protocol step codes": [("Protocol.Table", "Step")],
 }
+
+
+def list_len(t: tree.Tree, module: str, name: str) -> int | None:
+    """Elements of `def NAME : List … := [a, b, …]` in MODULE (the conformance rows are
+    `Protocol.Rows.rows`); None when the module or the definition is absent."""
+    m = t.modules.get(module)
+    hit = m and re.search(r"(?m)^def[ \t]+" + re.escape(name) + r"[ \t]*:[^=]*:=\s*\[([^\]]*)\]", m.code)
+    if not hit:
+        return None
+    return len([x for x in hit.group(1).split(",") if x.strip()])
 
 
 def constructors(t: tree.Tree, prefix: str, name: str) -> int:
@@ -99,16 +127,16 @@ def measure(t: tree.Tree) -> dict[str, int]:
     out["Lean lines (tooling: Sim, Rows, Journey, Census, Emit)"] = sum(
         m.lines for m in mods if not m.is_proof and m.is_tooling)
     deps = t.dependents()
-    out["max dependents of one module"] = max((len(v) for v in deps.values()), default=0)
+    found = foundations(t)
+    out["foundation modules"] = len(found)
+    out["max dependents of a non-foundation module"] = max(
+        (len(v) for m, v in deps.items() if m not in found), default=0)
     out["theorems"] = sum(1 for m in mods for d in m.decls if d.kind in tree.THEOREM_KINDS)
     out["partial defs (deployed)"] = sum(1 for m in mods for d in m.decls if d.partial)
     out["sorry"] = sum(len(re.findall(r"\bsorry\b", m.code)) for m in mods)
     out["native (extern/implemented_by)"] = sum(
         len(re.findall(r"@\[[^\]]*\b(?:implemented_by|extern)\b", m.code)) for m in mods)
-    out["C lines"] = sum(
-        sum(1 for _ in open(os.path.join(d, f), encoding="utf-8", errors="replace"))
-        for d, dirs, files in os.walk(t.root) if not (set(d.split(os.sep)) & tree.SKIP_DIRS)
-        for f in files if f.endswith((".c", ".h")))
+    out["C lines"] = sum(n for _, n in source_files(t.root, (".c", ".h")))
     out["Rust lines"] = rust_lines(t.root)
     gen = registered(t.root)
     rs = list(rust_files(t.root))
@@ -119,6 +147,9 @@ def measure(t: tree.Tree) -> dict[str, int]:
         1 for p, _, h in rs if h and p not in gen)
     for metric, sources in CONSTRUCTORS.items():
         out[metric] = sum(constructors(t, p, n) for p, n in sources)
+    rows = list_len(t, "Protocol.Rows", "rows")
+    if rows is not None:
+        out["conformance rows"] = rows
     mdir = os.path.join(t.root, "gates", "metrics")
     if os.path.isdir(mdir):
         for f in sorted(os.listdir(mdir)):
@@ -133,110 +164,122 @@ def measure(t: tree.Tree) -> dict[str, int]:
     return out
 
 
-ROW = re.compile(r"^\|\s*([^|]+?)\s*\|\s*([^|]*?)\s*\|\s*([^|]*?)\s*\|\s*$")
+CEILINGS = os.path.join("gates", "ceilings.tsv")
+FOUNDATIONS = os.path.join("gates", "foundations.tsv")
 
 
-def parse_raw(text: str) -> dict[str, tuple[str, str]]:
-    rows = {}
-    for line in text.splitlines():
-        m = ROW.match(line)
-        if m and m.group(1) != "metric" and not set(m.group(1)) <= set("-: "):
-            rows[m.group(1)] = (m.group(2), m.group(3))
-    return rows
-
-
-def parse(text: str):
-    """SIZE.md rows: metric -> (now, ceiling); an int, or None when the cell is not a plain number
-    (a ceiling cell may carry a note after its number: `6 (ROOT ruling)`)."""
-    rows = {}
-    for line in text.splitlines():
-        m = ROW.match(line)
-        if not m or m.group(1) in ("metric",) or set(m.group(1)) <= set("-: "):
+def foundations(t: tree.Tree) -> set[str]:
+    """gates/foundations.tsv, `module<TAB>why`: the modules that exist to be imported (the digest,
+    the stream codec, the World …). Their dependents are not counted by the hub metric, which
+    would otherwise measure only how big the tree is (ROOT 10-17). The list is itself a ratchet:
+    `foundation modules` has a ceiling, and a row added raises it, which needs a SIZE line. A row
+    naming no module of the tree, or a malformed row, raises ValueError (red)."""
+    p = os.path.join(t.root, FOUNDATIONS)
+    out: set[str] = set()
+    if not os.path.isfile(p):
+        return out
+    for n, line in enumerate(open(p, encoding="utf-8"), 1):
+        if not line.strip() or line.startswith("#"):
             continue
-        def num(s):
-            return int(s.replace(",", "")) if re.fullmatch(r"[\d,]+", s) else None
+        f = line.rstrip("\n").split("\t")
+        if len(f) != 2 or not f[1].strip():
+            raise ValueError(f"{FOUNDATIONS}:{n}: need module<TAB>why: {line.rstrip()!r}")
+        if f[0] not in t.modules:
+            raise ValueError(f"{FOUNDATIONS}:{n}: {f[0]} is not a module of the tree")
+        if f[0] in out:
+            raise ValueError(f"{FOUNDATIONS}:{n}: second row for {f[0]}")
+        out.add(f[0])
+    return out
 
-        def lead(s):
-            g = re.match(r"([\d,]+)(\s|$)", s)
-            return int(g.group(1).replace(",", "")) if g else None
-        rows[m.group(1)] = (num(m.group(2)), lead(m.group(3)))
+
+def ceilings(root: str) -> dict[str, tuple[int, str]]:
+    """gates/ceilings.tsv: metric -> (ceiling, why). Absent file: no ceilings. A malformed row
+    raises ValueError (red)."""
+    p = os.path.join(root, CEILINGS)
+    rows: dict[str, tuple[int, str]] = {}
+    if not os.path.isfile(p):
+        return rows
+    for n, line in enumerate(open(p, encoding="utf-8"), 1):
+        if not line.strip() or line.startswith("#"):
+            continue
+        f = line.rstrip("\n").split("\t")
+        if len(f) != 3 or not re.fullmatch(r"\d+", f[1]) or not f[0].strip() or not f[2].strip():
+            raise ValueError(f"{CEILINGS}:{n}: need metric<TAB>ceiling (an integer)<TAB>why: {line.rstrip()!r}")
+        if f[0] in rows:
+            raise ValueError(f"{CEILINGS}:{n}: second row for '{f[0]}'")
+        rows[f[0]] = (int(f[1]), f[2])
     return rows
-
-
-def render(head: str, measured: dict[str, int], raw: dict) -> str:
-    """Rewrite `now` for every measured metric; a row this script does not measure is kept
-    exactly as written (now and ceiling), never dropped or blanked."""
-    keys = list(raw) + [k for k in measured if k not in raw]
-    lines = [head.rstrip("\n"), "", "| metric | now | ceiling |", "|---|---|---|"]
-    for k in keys:
-        now_raw, ceil_raw = raw.get(k, ("", "—"))
-        now = str(measured[k]) if k in measured else now_raw
-        lines.append(f"| {k} | {now} | {ceil_raw or '—'} |")
-    return "\n".join(lines) + "\n"
 
 
 HEAD = ("# SIZE — the ratchet (law 12)\n\n"
-        "`now` is written by `python3 gates/size.py . --write` and checked by every commit. A rise needs\n"
-        "`SIZE: <metric>: <why>` in the commit message; a raised ceiling needs `SIZE-CEILING: <metric>: <why>`.")
+        "GENERATED by `python3 gates/size.py TREE --write` (scripts/commit writes it for every commit; never\n"
+        "edit it, never pass it as a PATH). Ceilings live in `gates/ceilings.tsv`. A rise needs\n"
+        "`SIZE: <metric>: <why>` in the commit message; a raised or removed ceiling needs\n"
+        "`SIZE-CEILING: <metric>: <why>`.\n")
+
+
+def render(measured: dict[str, int], ceil: dict[str, tuple[int, str]]) -> str:
+    """The SIZE.md view: every measured metric in measurement order, then every ceiling nothing
+    measured (shown `unmeasured`)."""
+    lines = [HEAD, "| metric | now | ceiling |", "|---|---|---|"]
+    for k, v in measured.items():
+        lines.append(f"| {k} | {v} | {ceil[k][0] if k in ceil else '—'} |")
+    for k, (c, _) in ceil.items():
+        if k not in measured:
+            lines.append(f"| {k} | unmeasured | {c} |")
+    return "\n".join(lines) + "\n"
 
 
 WARN: list[str] = []
 
 
-def check(t, size_text, base_text, message, base_tree=None) -> list[str]:
-    """A rise is judged against the PARENT TREE's measurement when given (the parent's SIZE.md
-    may itself be stale), else against the parent's SIZE.md `now`."""
-    measured = measure(t)
-    rows = parse(size_text)
-    base = parse(base_text) if base_text is not None else {}
-    if base_tree is not None:
-        bm = measure(base_tree)
-        base = {k: (bm.get(k), base.get(k, (None, None))[1]) for k in set(base) | set(bm)}
+def check(t: tree.Tree, message: str, base_tree: tree.Tree | None = None) -> list[str]:
+    """Judge TREE against its parent tree (rises by measurement, ceilings by the parent's
+    ceilings.tsv). A parent with no ceilings.tsv (the commit that introduced it) has no ceilings
+    to compare: that commit was judged by the parent's own gates, which compare SIZE.md's."""
+    try:
+        ceil = ceilings(t.root)
+        base_ceil = ceilings(base_tree.root) if base_tree is not None else {}
+        measured = measure(t)
+        base = measure(base_tree) if base_tree is not None else {}
+    except ValueError as e:
+        return [str(e)]
     red = []
+    path = os.path.join(t.root, "SIZE.md")
+    if not os.path.isfile(path) or open(path, encoding="utf-8").read() != render(measured, ceil):
+        red.append("SIZE.md is not the generated view of this tree (scripts/commit writes it; ceilings "
+                   "are edited in gates/ceilings.tsv)")
+
+    def says(tag: str, k: str) -> bool:
+        return re.search(r"(?m)^" + tag + r":\s*" + re.escape(k) + r"\s*:\s*\S", message) is not None
+
     for k, v in measured.items():
-        if k not in rows:
-            red.append(f"SIZE.md has no row for measured metric '{k}' (= {v}); run gates/size.py --write")
-        elif rows[k][0] != v:
-            red.append(f"SIZE.md stale: '{k}' says {rows[k][0]}, tree measures {v}; run gates/size.py --write")
-    for k, (now, ceil) in rows.items():
-        v = measured.get(k)
-        if v is None:
-            if ceil is not None and k not in measured:
-                WARN.append(f"'{k}' has ceiling {ceil} but nothing measures it (add gates/metrics/<x>)")
-            continue
-        if ceil is not None and v > ceil:
-            red.append(f"'{k}' = {v} exceeds its ceiling {ceil}")
-        b_now, b_ceil = base.get(k, (None, None))
-        if b_now is not None and v > b_now and not re.search(r"(?m)^SIZE:\s*" + re.escape(k) + r"\s*:\s*\S", message):
-            red.append(f"'{k}' rose {b_now} -> {v}: the commit message needs 'SIZE: {k}: <why>'")
-        if b_ceil is not None and (ceil is None or ceil > b_ceil) and not re.search(
-                r"(?m)^SIZE-CEILING:\s*" + re.escape(k) + r"\s*:\s*\S", message):
-            red.append(f"'{k}' ceiling raised {b_ceil} -> {ceil}: needs 'SIZE-CEILING: {k}: <why>'")
-    for k in base:
-        if k not in rows and k in parse(base_text or ""):
-            red.append(f"SIZE.md dropped row '{k}'; rows are never removed silently "
-                       f"(a removed metric needs 'SIZE-CEILING: {k}: <why>')"
-                       if not re.search(r"(?m)^SIZE-CEILING:\s*" + re.escape(k) + r"\s*:", message) else "")
-    return [r for r in red if r]
+        if k in ceil and v > ceil[k][0]:
+            red.append(f"'{k}' = {v} exceeds its ceiling {ceil[k][0]}")
+        if k in base and v > base[k] and not says("SIZE", k):
+            red.append(f"'{k}' rose {base[k]} -> {v}: the commit message needs 'SIZE: {k}: <why>'")
+    for k, (c, _) in ceil.items():
+        if k not in measured:
+            WARN.append(f"'{k}' has ceiling {c} but nothing measures it (add gates/metrics/<x>)")
+    for k, (bc, _) in base_ceil.items():
+        if k not in ceil and not says("SIZE-CEILING", k):
+            red.append(f"ceiling '{k}' ({bc}) removed from {CEILINGS}: needs 'SIZE-CEILING: {k}: <why>'")
+        elif k in ceil and ceil[k][0] > bc and not says("SIZE-CEILING", k):
+            red.append(f"'{k}' ceiling raised {bc} -> {ceil[k][0]}: needs 'SIZE-CEILING: {k}: <why>'")
+    return red
 
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("root", nargs="?", default=".")
-    ap.add_argument("--base", help="SIZE.md of the parent commit")
-    ap.add_argument("--message", help="commit message file")
-    ap.add_argument("--write", action="store_true")
+    ap.add_argument("--write", action="store_true", help="write SIZE.md for the tree")
     a = ap.parse_args()
     t = tree.read(a.root)
-    path = os.path.join(t.root, "SIZE.md")
-    text = open(path, encoding="utf-8").read() if os.path.exists(path) else ""
     if a.write:
-        open(path, "w", encoding="utf-8").write(render(HEAD, measure(t), parse_raw(text)))
+        open(os.path.join(t.root, "SIZE.md"), "w", encoding="utf-8").write(render(measure(t), ceilings(t.root)))
         print("size: SIZE.md written")
         sys.exit(0)
-    base = open(a.base, encoding="utf-8").read() if a.base else None
-    msg = open(a.message, encoding="utf-8").read() if a.message else ""
-    red = check(t, text, base, msg)
+    red = check(t, "")
     for r in red:
         print(r)
     for w in WARN:

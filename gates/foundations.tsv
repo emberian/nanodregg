@@ -1,0 +1,10 @@
+# module	why — modules that exist to be imported; the hub metric (`max dependents of a non-foundation
+# module`) does not count them. `foundation modules` has a ceiling in gates/ceilings.tsv; a row added
+# raises the count and so needs `SIZE: foundation modules: <why>` (ROOT 10-17). GATES-owned.
+Codec.Digest	the one digest type (law 1): every layer names 32 fixed bytes
+Codec.Stream	the one codec family (law 1): every wire shape is a StreamCodec
+Codec.Refusal	every decoder refusal by name (law 7): each layer embeds it in its own refusal
+Kernel.Bounds	the one static bound table (law 4): every check reads it, Rust gets it generated
+Kernel.Cell	the Cell every layer reads and writes
+Kernel.World	the one World (law 1)
+Protocol.Table	the one operation table (law 1): host, client and rows dispatch over it
