@@ -333,6 +333,15 @@ pub mod wire {
         ProgramOutside,
         Exposed,
         SpawnFailed,
+        ConnectTooMany,
+        ConnectLink,
+        ConnectNotSocket,
+        ConnectOwner,
+        ConnectMode,
+        ConnectDir,
+        ConnectOverlap,
+        SocketInGrant,
+        GrantUnlisted,
     }
 
     impl LaunchFailure {
@@ -346,6 +355,15 @@ pub mod wire {
                 LaunchFailure::ProgramOutside => 5,
                 LaunchFailure::Exposed => 6,
                 LaunchFailure::SpawnFailed => 7,
+                LaunchFailure::ConnectTooMany => 8,
+                LaunchFailure::ConnectLink => 9,
+                LaunchFailure::ConnectNotSocket => 10,
+                LaunchFailure::ConnectOwner => 11,
+                LaunchFailure::ConnectMode => 12,
+                LaunchFailure::ConnectDir => 13,
+                LaunchFailure::ConnectOverlap => 14,
+                LaunchFailure::SocketInGrant => 15,
+                LaunchFailure::GrantUnlisted => 16,
             }
         }
 
@@ -359,6 +377,15 @@ pub mod wire {
                 5 => Some(LaunchFailure::ProgramOutside),
                 6 => Some(LaunchFailure::Exposed),
                 7 => Some(LaunchFailure::SpawnFailed),
+                8 => Some(LaunchFailure::ConnectTooMany),
+                9 => Some(LaunchFailure::ConnectLink),
+                10 => Some(LaunchFailure::ConnectNotSocket),
+                11 => Some(LaunchFailure::ConnectOwner),
+                12 => Some(LaunchFailure::ConnectMode),
+                13 => Some(LaunchFailure::ConnectDir),
+                14 => Some(LaunchFailure::ConnectOverlap),
+                15 => Some(LaunchFailure::SocketInGrant),
+                16 => Some(LaunchFailure::GrantUnlisted),
                 _ => None,
             }
         }
@@ -374,6 +401,15 @@ pub mod wire {
                 LaunchFailure::ProgramOutside => "programOutside",
                 LaunchFailure::Exposed => "exposed",
                 LaunchFailure::SpawnFailed => "spawnFailed",
+                LaunchFailure::ConnectTooMany => "connectTooMany",
+                LaunchFailure::ConnectLink => "connectLink",
+                LaunchFailure::ConnectNotSocket => "connectNotSocket",
+                LaunchFailure::ConnectOwner => "connectOwner",
+                LaunchFailure::ConnectMode => "connectMode",
+                LaunchFailure::ConnectDir => "connectDir",
+                LaunchFailure::ConnectOverlap => "connectOverlap",
+                LaunchFailure::SocketInGrant => "socketInGrant",
+                LaunchFailure::GrantUnlisted => "grantUnlisted",
             }
         }
     }
