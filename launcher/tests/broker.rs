@@ -905,11 +905,12 @@ fn exposed_or_malformed_custody_files_stop_keybroker_by_name() {
         "production anchors: exit code"
     );
     // the decider's own end is passed through: over a STORE that exists but holds no Store (no key
-    // file to open), the decider ends `io` (DeciderExit, fatal), and so does keybroker, with that code
+    // file), the decider ends `store` (HOST's `badKey 0`, named, never an IO exception; DeciderExit,
+    // fatal), and so does keybroker, with that code
     let empty = d.join("empty-store");
     nanodregg_devtools::mkdirs(&empty).unwrap();
     let (err, got) = ends_over(&d, &keys, &anchors, &empty);
-    let store = nanodregg_launcher::broker_generated::decider_exit::IO;
+    let store = nanodregg_launcher::broker_generated::decider_exit::STORE;
     assert!(
         err.contains(&format!("keybroker: deciderEnded {store}\n")),
         "pass-through: stderr: {err}"

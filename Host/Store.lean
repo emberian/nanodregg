@@ -53,6 +53,9 @@ def writeNew (path : System.FilePath) (bytes : ByteArray) : IO Unit := do
 
 /-- The Store key. -/
 def readKey (dir : System.FilePath) : IO (Except (StoreFault F) Digest) := do
+  -- a STORE directory without its key file is refused by name (law 7), never an IO exception from
+  -- the open below; an absent STORE path stays `io` (the path is wrong, store-plants' missing-store)
+  if (← dir.pathExists) && !(← (keyPath dir).pathExists) then return .error (.badKey 0)
   match ← readBounded (keyPath dir) 32 .badKey with
   | .error e => return .error e
   | .ok b => match Digest.ofBytes? b with

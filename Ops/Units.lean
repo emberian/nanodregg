@@ -232,7 +232,7 @@ def hostAction : Status → String
   | .ioServing => "automatic; an IO error after the open: check the disk"
   | .locked => "another writer holds the Store: find its unit; never start a second"
   | .exists => "genesis into an existing Store: choose another path"
-  | .badKey => "`STORE/key` is not 32 bytes: restore it from the backup"
+  | .badKey => "`STORE/key` is missing or not 32 bytes (a directory that holds no Store, or a lost key): restore it from the backup"
   | .shortRead => "a file changed under the open: stop every writer, then `host check`"
   | .noBase | .baseTooLarge | .baseCorrupt | .baseUndecodable | .segmentShort | .tailTooLong =>
     "the Store is damaged or not a Store: restore (RUNBOOK §5)"

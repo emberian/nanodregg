@@ -78,7 +78,7 @@ inductive StoreFault (F : Type) where
   | locked
   /-- genesis on a directory that already holds a Store file -/
   | exists
-  /-- the key file is not exactly 32 bytes -/
+  /-- the key file is absent from an existing STORE directory (`bytes` = 0) or not exactly 32 bytes -/
   | badKey (bytes : Nat)
   /-- a read returned fewer bytes than the size said: the file changed under us -/
   | shortRead (got want : Nat)

@@ -22,7 +22,7 @@ code space holds both tables: `host` (Host.Status, below 64) and nd-supervise's 
 | 13 | io | fatal | stopped (RestartPreventExitStatus) | a Store file is missing or unreadable: check the path and permissions (the call and errno are on stderr) |
 | 16 | locked | fatal | stopped (RestartPreventExitStatus) | another writer holds the Store: find its unit; never start a second |
 | 17 | exists | fatal | stopped (RestartPreventExitStatus) | genesis into an existing Store: choose another path |
-| 18 | badKey | fatal | stopped (RestartPreventExitStatus) | `STORE/key` is not 32 bytes: restore it from the backup |
+| 18 | badKey | fatal | stopped (RestartPreventExitStatus) | `STORE/key` is missing or not 32 bytes (a directory that holds no Store, or a lost key): restore it from the backup |
 | 19 | shortRead | fatal | stopped (RestartPreventExitStatus) | a file changed under the open: stop every writer, then `host check` |
 | 20 | noBase | fatal | stopped (RestartPreventExitStatus) | the Store is damaged or not a Store: restore (RUNBOOK §5) |
 | 21 | baseTooLarge | fatal | stopped (RestartPreventExitStatus) | the Store is damaged or not a Store: restore (RUNBOOK §5) |
