@@ -194,6 +194,26 @@ def check (name : String) (ok : Bool) (failures : IO.Ref Nat) : IO Unit := do
 
 def sameWorld (a b : World Nat) : Bool := a.height == b.height && a.chain == b.chain
 
+/-- HOST-17's count at one Store length: a run of `n` fresh Turns (seeded batch splits), and at
+its LAST seal the bytes of the index that base re-encodes, the segment bytes appended since the
+base before it, the base file's size, and how many seals the run made. The index is one entry
+per record ever written (`Base.codec`), so its term grows with the batches before the seal while
+the appended bytes are one cadence. -/
+def indexTerm (seed n : Nat) : IO (Nat × Nat × Nat × Nat) := do
+  let frames : List Frame := (List.range n).map fun i =>
+    ⟨UInt32.ofNat i, Protocol.Op.submit.code, turnCodec.bytes (mkTurn (1000 + i) 0 1024 [5000 + i])⟩
+  let r ← runOnce seed frames none
+  let h := r.bases.history
+  if h.size < 2 then return (0, 0, 0, h.size - 1)
+  match Base.read keys cadence world h[h.size - 1]!.1, Base.read keys cadence world h[h.size - 2]!.1 with
+  | .ok (b, _, _), .ok (a, _, _) =>
+    return ((Codec.Stream.rawList indexMax Entry.codec).size b.index, b.offset - a.offset,
+      h[h.size - 1]!.1.size, h.size - 1)
+  | _, _ => return (0, 0, 0, h.size - 1)
+
+/-- The Store lengths (fresh Turns) HOST-17's count is measured at. -/
+def indexLengths : List Nat := [100, 200, 400, 800]
+
 def run (args : List String) : IO UInt32 := do
   let seed := (args.head? >>= String.toNat?).getD 1
   let failures ← IO.mkRef 0
@@ -319,6 +339,11 @@ def run (args : List String) : IO UInt32 := do
   IO.println s!"WASTE open bytes-read-per-record {ratio (r.bases.file.size + tailBytes) needed}"
   let genesisBytes := r.bases.history[0]!.1.size
   IO.println s!"WASTE seal bytes-per-appended-byte {ratio (r.bases.written - genesisBytes) r.disk.synced.size}"
+  -- HOST-17: the index term of a seal at several Store lengths (the base re-encodes every entry)
+  for n in indexLengths do
+    let (ib, appended, file, seals) ← indexTerm seed n
+    IO.println s!"index term at {n} turns: {seals} seals; the last base is {file} bytes, {ib} of them index, after {appended} appended bytes"
+    IO.println s!"WASTE seal index-bytes-per-appended-byte-at-{n} {ratio ib appended}"
   -- plant-tail (HOSTING-7): a tail opened at genesis absorbs the writer's whole segment one frame
   -- bound at a time and reaches the writer's World, with every admitted Turn reported once in order.
   -- Its mutation: a byte flipped inside an early frame must be refused `corrupt`, not skipped.

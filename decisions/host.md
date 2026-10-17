@@ -343,7 +343,7 @@ tiny batches pays it on every seal. An index that is itself a persistent structu
 written) would remove that, at the price of (a)'s second artifact.
 **Meta-critique.** I put it in the base because the base was already atomic and MAC'd, which is
 reusing what I just built. That is a convenience argument, not a design argument.
-**Status.** open.
+**Status.** open; measured as a count and answered by HOST-30 (2026-10-17).
 
 ## HOST-18 · a segment is bound to its base by the tag already on disk: `foreignSegment` (2026-10-17, BUILD-TRANSPORT; ASSEMBLY-transport-consent, with HOST-4)
 **The defect.** Open read the segment only from the base's offset and judged what it found with
@@ -942,3 +942,85 @@ flips), so every Store re-geneses (the port re-geneses them anyway) and an old S
 **Status.** built against main 4777611 + kernel7-r4 + CODEC-2's codec2-trie-r3. host-sim and
 host-file-sim 1–3, hosting-sim 1–3, kernel-sim 64 seeds, store-plants, lang-journey: ALL PASS;
 rows INCOMPLETE 3 pending, no FAIL. Lands in KERNEL-7's flag-day commit.
+
+## HOST-30 · the index is its own append-only file, one page per seal: a seal writes only the entries since the last base (2026-10-17, HOST-7; HOST-17's count defect, ROOT's framing)
+**The count.** A seal re-encodes the WHOLE index: `Base.codec` holds `rawList indexMax Entry.codec`, one
+`Entry` (u64 height, u64 offset, u32-length chain: 52 bytes deployed, 28 in the toy) per record ever
+written. host-sim measures, at the LAST seal of a run of n fresh Turns (seeded splits, toy cadence
+2 KiB), the index bytes that base holds ÷ the segment bytes appended since the base before it
+(`WASTE seal index-bytes-per-appended-byte-at-n`, seeds 1–3):
+
+| n Turns | seals | index ÷ appended (min–max over seeds) |
+|---|---|---|
+| 100 | 3 | 0.320 – 0.540 |
+| 200 | 7 | 0.796 – 0.943 |
+| 400 | 13 | 1.205 – 1.329 |
+| 800 | 19 | 1.228 – 1.251 |
+
+**Why it grows, and why it stops growing.** The appended side is one cadence, `max(sealMin, world/4)`;
+the index side is every batch so far. While `world/4 < sealMin` the denominator is fixed and the term
+grows linearly in seals (rows 100 → 400). Past that the denominator is the World, and the World also
+grows with history, because every Turn adds a journal entry and the journal is never pruned (its
+life is bounded by the genesis allowance, KERNEL-18). So the term levels off at 4 · (index bytes per
+log byte) ÷ (World bytes per log byte): about 1.25 in the toy. Deployed, with one-Turn batches, it is
+at most 4 · 52 / 72 ≈ 2.9, where 72 is a journal entry's weight (`journalWeight`), and nullifiers and
+cells only lower it. A deployed World reaches `world/4 > sealMin` at 4 MiB, about 14 BAR Worlds, so
+every Store THE BAR describes is in the growing regime. Three consequences follow. HOST-14's
+"at most 4 + the floor" is false by this term. The base is O(history), not O(World). And the level-off
+is an accident of KERNEL's journal: if the journal is ever pruned, the term grows without bound. Read
+off the runtime and not measured: `spawnSeal` hands the Task the loop's own `Array Entry`, so while the
+Task holds it (up to its `toList`), every `r.index.push` on the loop copies the whole array, since
+`lean_array_push` copies a shared array. That is O(records) work on the request path (law 5).
+**Why not under store-plants' live writer.** It writes 48 records of 48 KiB, which is 48 entries
+(2.5 KB) against a 1 MiB cadence, a term of 0.002. The defect scales with the BATCH COUNT, which
+host-sim drives with the deployed loop and seal policy. HOST-14-at-size (counts under the live writer)
+is a separate row.
+**Decision (proposed; ROOT to rule, it changes the base).** STORE gains `index.log`, an append-only file of
+Log frames under a third sealer domain (`nanodregg/host/index/v1`), chained from 32 zero bytes like
+seg.log. A seal first appends ONE frame, whose record is the entries written since the previous base
+(`rawList`), and syncs it. Then it writes the base, which no longer holds entries: it names
+`(indexOffset, indexTag)`, the index.log prefix that is its World's index, the same way
+`(offset, tag)` name the segment prefix. Open reads the base and refuses `indexShort` unless
+index.log is at least `indexOffset` long. It then recovers `[0, indexOffset)`, and every frame must
+verify and the chain must end at `indexTag` exactly at `indexOffset`; otherwise it refuses
+`indexCorrupt`. The entries are the pages in order, and the tail's entries are rebuilt by the fold as
+today. Bytes past `indexOffset` are an ORPHAN page, left by a seal that crashed between the page's
+sync and the base's rename. The writer truncates them, as it truncates a torn segment tail; a
+follower ignores them. The seal checks `indexOffset + page frame ≤ worldBytesMax`, else
+`indexTooLarge`. That is the same lifetime bound the whole index has today, now checked in O(1). The
+Task is handed only the new entries (`extract` before the spawn), so the loop's Array is never shared.
+**Crash story** (each case a plant): a crash before the page's sync leaves a torn index tail past the
+old base's `indexOffset`, which is truncated. A crash after the sync and before the rename leaves an
+orphan page, which is truncated; the next seal writes those entries again, because its page starts
+at the base's count. A crash after the rename leaves the new base and its page, which are
+consistent. The base still names the segment by `(offset, tag)` and the origin frame (HOST-25), so
+nothing about the segment's story changes.
+**The count after.** Each seal writes one page of `e · (batches since the last base)` bytes plus one
+frame header, so the index term is `e ÷ (bytes per batch frame)`, whatever the length. The four rows
+should come out level, and they are re-pinned at the built value. The whole-seal row
+`seal bytes-per-appended-byte` falls by the index share.
+**Alternatives.** (a) Count the index into the cadence, `max(sealMin, (world + index)/4)`. That gives
+back "≤ 4" with no new file. But `tailMax` would then grow with HISTORY, so every open folds a longer
+tail, the base stays O(history), and the shared-Array copy stays. (b) Index pages as segment frames:
+the batch record becomes a sum, and every segment reader (open, follow, tail, page, check) has to skip
+them. Finding the pages takes a walk back through the chain, O(seals) preads. (c) A sparse index (one
+entry per base) plus a forward scan: a page then costs O(cadence), which breaks law 4's O(page). (d)
+Leave it: the term is bounded only by the accident above.
+**Critique.** It adds a third file and a second crash story. That story is a copy of the segment's, but
+it is new code with new plants. Open now reads four ranges (base, index prefix, origin, tail). The
+resident still holds every entry in memory, so its RAM is O(records). Open still reads the whole
+index; that read moved from one file to another and did not shrink. A lost index.log makes a Store
+whose World is intact refuse to open (`indexShort`), even though the index is derived data that a
+segment scan could rebuild. That rebuild (an operator verb, O(segment)) is not built. The backup
+procedure changes: RUNBOOK and store-plants copy `index.log` after `base.world`, like seg.log (OPS-2).
+**Meta-critique.** ROOT framed this as growth with batches. The measurement shows growth and then a
+level-off, and I am still choosing the larger design. The reason is that the level-off belongs to
+KERNEL's journal, not to anything the Host guarantees, and that a base whose size carries history
+contradicts HOST-14's own claim. (a) is the cheaper fix, and its cost (a history-length tail) is the
+one HOST-14 was built to avoid. The residue I cannot argue away: the in-memory index is O(records) of
+RAM, and this decision does not touch it.
+**Flag day.** The base shape changes: the entry list goes and `u64 indexOffset ‖ indexTag` comes. So the
+shape stamp changes, and every existing Store refuses `shapeMismatch` (43); re-genesis. Two new fatal
+Statuses, `indexShort` and `indexCorrupt`, each with its `Ops.Units.hostAction` arm and deploy/units
+re-rendered. Genesis writes an empty index.log.
+**Status.** PROPOSED (measurement landed with it); built after ROOT's ruling.
