@@ -307,8 +307,13 @@ does not answer it and B is required. The trusted base digest is a new trust inp
 who countersigns, and how a member learns it, is a custody/identity question (pause list item 1).
 **Meta-critique.** I prefer A because it keeps one consent path, which is the law I can cite; B is the
 design the word "thin" usually means, and I may be redefining the requirement to fit the code.
-**Status.** draft; HOST-3 asked (base serving, paging, base digest); Ember/ROOT to say whether "thin"
-means time (A) or space (B).
+**Status.** ruled by ROOT 2026-10-16: build A for v0 (HOST-3 agreed: `read` serves the World part
+of HOST-14's base, `Codec.Deployed.world` bytes, digest `Hash.digest "nanodregg/host/base/v1"`, paged
+`(height, total, digest, bytes[start, start+chunk))` with the envelope's `start` read as a byte
+offset; HOST-15 holds the layout and PROTOCOL proposes it in Protocol.Table). B (thin in SPACE: the
+phone that cannot hold the World) and the trusted-digest channel (who countersigns a base digest) go
+to Ember as the "phone" question; B stays unbuilt. Row `thin` ships with `read` unreserved and the
+`baseMismatch` plant.
 
 ## PROTOCOL-15 · the member rows run in process against HOST's loop; plants are mutations of the parameters, judged by line and outcome (2026-10-16)
 **Decision.** `Protocol/Rows/Loopback.lean` runs every member row against a fresh writer
@@ -358,3 +363,18 @@ at all (its parent was hard-wired `none`, so attenuation was unreachable from th
 World grant's id (they do: it was bound when they were granted). **Meta-critique.** Deleting a verb
 lowers a SIZE count, which I am rewarded for; the test is whether any row reads worse, and none does.
 **Status.** open.
+
+**PROTOCOL-15 ruling (ROOT 2026-10-16).** PENDING-by-name (`blockedOn`) ACCEPTED: never PASS, never
+RED; standing stays INCOMPLETE while any row is blocked. pay/well/bounty: packages are LANG's, the
+receivers they need (nullifiers/spent, accounts, wells) are a new LEDGER layer; blocked on both.
+WASTE: print `invoke ticks-per-call` (CEK ticks, exact by run_exact/run_minimal) and
+`invoke packages-checked-per-call` (LANG-16's closure size); pin both once the bar row has an invoke.
+
+## PROTOCOL-17 · the attempt-store decision is a Lean function nd calls (2026-10-16, ROOT: open)
+**Decision.** After a submit's reply (or its absence), "resubmit the same bytes vs lookup vs done"
+is a decision (law 2), so it is a Lean function (`Protocol.Attempt.next : State → Settlement →
+Action`, with the theorem that it never asks for a second signature for one frozen call), which
+CLIENT's nd calls through the generated table or follow, and which the loopback calls too, instead
+of restating CLIENT-3's Rust rule. **Critique.** It moves a step across the follow socket per
+settlement, or needs a Lean runtime in nd. **Meta-critique.** I found this because my loopback had
+to restate it; a twin I wrote is the evidence. **Status.** open; CLIENT-3 implements when spawned.

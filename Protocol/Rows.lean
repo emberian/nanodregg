@@ -288,7 +288,7 @@ def pay : Row where
     ok "watcher" ["invoke", "@book", "0", "transfer-finalized"],
     no "watcher" ["invoke", "@book", "0", "transfer-finalized"] "spent"]
   plant := .caught .skipJudge 2 .ok
-  blockedOn := some "KERNEL: no receiver puts a nullifier in a Turn (sealTurn's nullifiers are []), so `spent` is unreachable; LANG: the pay package world/pay/Book"
+  blockedOn := some "LEDGER: no receiver puts a nullifier in a Turn (sealTurn's nullifiers are []), so `spent` is unreachable; LANG: the pay package world/pay/Book"
 
 /-- K-WELL: the referee mints by grant and law; supply is conserved (LANG's `world/well/Well`). -/
 def well : Row where
@@ -301,7 +301,7 @@ def well : Row where
     ok "referee" ["invoke", "@well", "0", "10"],
     no "referee" ["invoke", "@well", "0", "1000000"] "lawDenied"]
   plant := .caught .skipJudge 2 .ok
-  blockedOn := some "LANG: the well package world/well/Well (mint by grant and law, supply conserved)"
+  blockedOn := some "LEDGER: the well receivers (mint, burn, supply); LANG: the well package world/well/Well"
 
 /-- The bounty on the seat kernel (LANG's `world/bounty/BountyEscrow`). -/
 def bounty : Row where
@@ -314,7 +314,7 @@ def bounty : Row where
     ok "hunter" ["invoke", "@bounty", "0", "claim"],
     no "rival" ["invoke", "@bounty", "0", "claim"] "lawDenied"]
   plant := .caught .skipJudge 2 .ok
-  blockedOn := some "LANG: the bounty package world/bounty/BountyEscrow"
+  blockedOn := some "LEDGER: escrow accounts; LANG: the bounty package world/bounty/BountyEscrow"
 
 /-- m6grain: an SPK app started by the user-mode broker under the one sandbox shape; a second
 world's volume is refused. The broker verbs are CLIENT's sandbox, not this language. -/
