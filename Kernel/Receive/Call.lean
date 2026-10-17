@@ -33,6 +33,14 @@ inductive Right
   | enroll (count : Nat)
   deriving DecidableEq, Repr
 
+/-- How a call names a value account (LEDGER-7): a WELL by its denomination (its id IS the
+denomination), any other account by its owner and denomination, resolved to the keyed
+`accountId` by the receiver. Every value cell has exactly one name. -/
+inductive AcctRef (D : Type)
+  | well (asset : D)
+  | of (owner asset : D)
+  deriving DecidableEq, Repr
+
 /-- What a call asks for, one constructor per operation kind. -/
 inductive Body (D : Type)
   /-- the signer sponsors a new member with `key`, precommitting the digest of its next key;
@@ -62,17 +70,18 @@ inductive Body (D : Type)
   /-- bear a new denomination: its WELL, a value account owned by the signer whose id is the
   denomination and whose floor is `cap`, the most that can ever be outstanding of it (LEDGER-3) -/
   | issue (cap : Nat)
-  /-- bear an empty account of `asset`'s denomination (the well's id), owned by the signer -/
-  | account (asset : D)
+  /-- bear the empty account of `asset`'s denomination (the well's id) owned by `owner`, at its
+  keyed id `accountId owner asset`: anyone may open anyone's, once (`idTaken` after) -/
+  | account (asset owner : D)
   /-- move `amount` from `src` to `dst` (same denomination), with the authority of `src`'s owner
   (directly, or through `via`'s grant chain for `mutate`); `once` spends the nullifier
   `onceNullifier src key`, so a call carrying the same key for the same source lands once.
   Minting is a transfer out of a well, burning one into it -/
-  | transfer (src dst : D) (amount : Nat) (via : Option D) (once : Option ByteArray)
+  | transfer (src dst : AcctRef D) (amount : Nat) (via : Option D) (once : Option ByteArray)
   /-- a credit line: move `amount` of the well's floor to `acct` (same denomination), with the
   authority of the well's owner, the issuer (directly, or through `via` for `mutate`). The
   denomination's floor sum is unchanged, so its cap still bounds what is outstanding (LEDGER-4) -/
-  | credit (well acct : D) (amount : Nat) (via : Option D)
+  | credit (well : D) (acct : AcctRef D) (amount : Nat) (via : Option D)
   deriving DecidableEq
 
 /-- What the caller signs. `pins` is the caller's observation; `maxCharge` the price ceiling. -/
@@ -347,18 +356,18 @@ index), paired with the cells. -/
 def bornAt (X : Ctx D) (c : Call D) (creates : List Cell) : List (D × Cell) :=
   creates.zipIdx.map fun p => (bornId X.env (txIdOf X c) p, p.1)
 
-/-- The Turn a call's effects become: the caller's window, the caller's pins as touches carrying
+/-- The Turn a call's effects become: its births at the ids the receiver computed, the caller's window, the caller's pins as touches carrying
 the effects (a receiver writes or retires only cells it read, so only pinned ones: `unpinned`
 otherwise; at most one effect per cell: `duplicateEffect`), the receiver's nullifiers, the call as
 the event, the exact charge (refused above the signed ceiling). -/
-def sealTurn [DecidableEq D] (X : Ctx D) (c : Call D) (creates : List Cell)
+def sealTurn [DecidableEq D] (X : Ctx D) (c : Call D) (creates : List (D × Cell))
     (effects : List (D × Act)) (nullifiers : List D) : Except (Refusal D) (Turn D) := do
   let pins := c.unsigned.pins
   effectsPinned pins effects
   let t0 : Turn D :=
     { txId := txIdOf X c, notBefore := c.unsigned.notBefore, validUntil := c.unsigned.validUntil,
       touches := touchesOf pins effects,
-      creates := bornAt X c creates,
+      creates,
       nullifiers, charge := 0,
       event := X.callBytes c }
   let t := { t0 with charge := t0.weight }

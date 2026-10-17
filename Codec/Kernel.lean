@@ -98,6 +98,20 @@ def right : Stream Right :=
          | ⟨3, n⟩ => some (.enroll n))
     (fun | .observe => ⟨0, ()⟩ | .mutate => ⟨1, ()⟩ | .invoke m => ⟨2, m⟩ | .enroll n => ⟨3, n⟩)
 
+abbrev AcctRefF (D : Type) : Fin 2 → Type
+  | 0 => D
+  | 1 => D × D
+
+def acctRefWire (dc : Stream D) : (s : Fin 2) → Stream (AcctRefF D s)
+  | 0 => dc
+  | 1 => product dc dc
+
+/-- An account reference (LEDGER-7): tag 0 a well by its denomination, tag 1 owner ‖ asset. -/
+def acctRef (dc : Stream D) : Stream (AcctRef D) :=
+  refine "kernel/acct-ref" (choice 2 (acctRefWire dc))
+    (fun | ⟨0, a⟩ => some (.well a) | ⟨1, (o, a)⟩ => some (.of o a))
+    (fun | .well a => ⟨0, a⟩ | .of o a => ⟨1, (o, a)⟩)
+
 abbrev BodyF (D : Type) : Fin 13 → Type
   | 0 => ByteArray × D × ByteArray × D
   | 1 => ByteArray × D
@@ -109,9 +123,9 @@ abbrev BodyF (D : Type) : Fin 13 → Type
   | 7 => D × D × List Right × Option D
   | 8 => D
   | 9 => Nat
-  | 10 => D
-  | 11 => D × D × Nat × Option D × Option ByteArray
-  | 12 => D × D × Nat × Option D
+  | 10 => D × D
+  | 11 => AcctRef D × AcctRef D × Nat × Option D × Option ByteArray
+  | 12 => D × AcctRef D × Nat × Option D
 
 def bodyWire (dc : Stream D) : (s : Fin 13) → Stream (BodyF D s)
   | 0 => product (rawBytes callMax) (product dc (product (rawBytes callMax) dc))
@@ -125,9 +139,9 @@ def bodyWire (dc : Stream D) : (s : Fin 13) → Stream (BodyF D s)
   | 7 => product dc (product dc (product (rawList callMax right) (option dc)))
   | 8 => dc
   | 9 => nat64
-  | 10 => dc
-  | 11 => product dc (product dc (product nat64 (product (option dc) (option (rawBytes callMax)))))
-  | 12 => product dc (product dc (product nat64 (option dc)))
+  | 10 => product dc dc
+  | 11 => product (acctRef dc) (product (acctRef dc) (product nat64 (product (option dc) (option (rawBytes callMax)))))
+  | 12 => product dc (product (acctRef dc) (product nat64 (option dc)))
 
 def body (dc : Stream D) : Stream (Body D) :=
   refine "kernel/body" (choice 13 (bodyWire dc))
@@ -142,7 +156,7 @@ def body (dc : Stream D) : Stream (Body D) :=
       | ⟨7, (t, g, r, p)⟩ => some (.grant t g r p)
       | ⟨8, g⟩ => some (.revoke g)
       | ⟨9, cap⟩ => some (.issue cap)
-      | ⟨10, a⟩ => some (.account a)
+      | ⟨10, (a, o)⟩ => some (.account a o)
       | ⟨11, (s, d, n, v, o)⟩ => some (.transfer s d n v o)
       | ⟨12, (w, a, n, v)⟩ => some (.credit w a n v))
     (fun
@@ -156,7 +170,7 @@ def body (dc : Stream D) : Stream (Body D) :=
       | .grant t g r p => ⟨7, (t, g, r, p)⟩
       | .revoke g => ⟨8, g⟩
       | .issue cap => ⟨9, cap⟩
-      | .account a => ⟨10, a⟩
+      | .account a o => ⟨10, (a, o)⟩
       | .transfer s d n v o => ⟨11, (s, d, n, v, o)⟩
       | .credit w a n v => ⟨12, (w, a, n, v)⟩)
 

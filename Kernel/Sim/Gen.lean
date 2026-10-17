@@ -414,6 +414,10 @@ def scanValue (P : Params D) (st : State D) : State D :=
   | [] => st
   | f :: _ => { st with failures := s!"value scan: {f}" :: st.failures }
 
+/-- How the model's account `(id, owner, well)` is named in a call (LEDGER-7): a well by its
+denomination, any other by its owner and denomination. -/
+def refOf (a : D × D × D) : AcctRef D := if a.1 = a.2.2 then .well a.1 else .of a.2.1 a.2.2
+
 /-- One ledger action: issue (and an over-cap issue), open, transfer (honest, overdrawn,
 by a stranger, to itself, of nothing, across denominations, with a once key fresh or spent). -/
 def ledgerAct (P : Params D) (st : State D) (k : Nat) : State D :=
@@ -434,16 +438,23 @@ def ledgerAct (P : Params D) (st : State D) (k : Nat) : State D :=
             let well := (createdIds t).headD P.zero
             setFloorM { st with wells := st.wells ++ [(well, cap)], accounts := st.accounts ++ [(well, m.id, well)] } well cap
         | none => st
-  | 1 => -- open an account of a denomination
+  | 1 => -- open an account of a denomination, for the opener or for another member: at its keyed
+         -- id; a pair already open is `idTaken` (one account per owner and denomination)
       match st.wells with
       | [] => st
       | w0 :: _ =>
           let (well, st) := pick st st.wells w0
           let (m, st) := pick st st.members (founder0 P st)
-          let c := signed P st m m.key (S.pinsFor P.env w [m.id]) (.account well.1)
-          let (st, t) := submit P st c .ok "account"
+          let (o, st) := pick st st.members m
+          let id := accountId P.ctx o.id well.1
+          let taken := st.accounts.any fun a => a.1 = id
+          let what := if taken then "account-twice" else if o.id = m.id then "account" else "account-for-other"
+          let c := signed P st m m.key (S.pinsFor P.env w [m.id]) (.account well.1 o.id)
+          let (st, t) := submit P st c (if taken then .rejected "idTaken" else .ok) what
           match t with
-          | some t => { st with accounts := st.accounts ++ [((createdIds t).headD P.zero, m.id, well.1)] }
+          | some t =>
+              if (createdIds t).headD P.zero = id then { st with accounts := st.accounts ++ [(id, o.id, well.1)] }
+              else { st with failures := "account: born at an id that is not accountId owner asset" :: st.failures }
           | none => st
   | 3 => -- a credit line (LEDGER-4): the issuer moves floor out of its well into an account;
          -- past the well's floor `overflow`, past its unissued headroom `belowFloor`; a non-issuer
@@ -465,17 +476,17 @@ def ledgerAct (P : Params D) (st : State D) (k : Nat) : State D :=
                 match st.members.find? fun m => m.id ≠ issuer.id with
                 | none => st
                 | some thief =>
-                    let c := signed P st thief thief.key (S.pinsFor P.env w [thief.id, well.1, acct.1]) (.credit well.1 acct.1 1 none)
+                    let c := signed P st thief thief.key (S.pinsFor P.env w [thief.id, well.1, acct.1]) (.credit well.1 (refOf acct) 1 none)
                     (submit P st c (.refused "noGrant") "credit-stranger").1
               else if r = 1 then
                 let owner := memberOf P st acct.2.1
-                let c := signed P st owner owner.key (S.pinsFor P.env w [owner.id, acct.1, well.1]) (.credit acct.1 well.1 1 none)
+                let c := signed P st owner owner.key (S.pinsFor P.env w [owner.id, acct.1, well.1]) (.credit acct.1 (.well well.1) 1 none)
                 (submit P st c (.refused "notWell") "credit-not-well").1
               else
                 let (amt, st) := st.rng.below (wf + 4) |> fun (x, rr) => (x + 1, { st with rng := rr })
                 let expect : Expect := if amt > wf then .refused "overflow"
                   else if (amt : Int) > head then .rejected "belowFloor" else .ok
-                let c := signed P st issuer issuer.key (S.pinsFor P.env w [issuer.id, well.1, acct.1]) (.credit well.1 acct.1 amt none)
+                let c := signed P st issuer issuer.key (S.pinsFor P.env w [issuer.id, well.1, acct.1]) (.credit well.1 (refOf acct) amt none)
                 let (st, t) := submit P st c expect "credit"
                 match t with
                 | some _ => setFloorM (setFloorM st well.1 (wf - amt)) acct.1 (floorOfAcct st acct.1 + amt)
@@ -496,20 +507,24 @@ def ledgerAct (P : Params D) (st : State D) (k : Nat) : State D :=
           let (amt, st) := st.rng.below (avail.toNat + 4) |> fun (x, rr) => (x + 1, { st with rng := rr })
           match kind, same, other with
           | 0, _, _ => -- to itself
-              let c := signed P st owner owner.key (S.pinsFor P.env w [owner.id, src.1]) (.transfer src.1 src.1 1 none none)
+              let c := signed P st owner owner.key (S.pinsFor P.env w [owner.id, src.1]) (.transfer (refOf src) (refOf src) 1 none none)
               (submit P st c (.refused "sameAccount") "transfer-self").1
           | 1, d :: _, _ => -- nothing
-              let c := signed P st owner owner.key (S.pinsFor P.env w [owner.id, src.1, d.1]) (.transfer src.1 d.1 0 none none)
+              let c := signed P st owner owner.key (S.pinsFor P.env w [owner.id, src.1, d.1]) (.transfer (refOf src) (refOf d) 0 none none)
               (submit P st c (.refused "zeroAmount") "transfer-zero").1
           | 2, _, d :: _ => -- across denominations
-              let c := signed P st owner owner.key (S.pinsFor P.env w [owner.id, src.1, d.1]) (.transfer src.1 d.1 1 none none)
+              let c := signed P st owner owner.key (S.pinsFor P.env w [owner.id, src.1, d.1]) (.transfer (refOf src) (refOf d) 1 none none)
               (submit P st c (.refused "assetMismatch") "transfer-mismatch").1
           | 3, d :: _, _ => -- a member who does not own the source, without a grant
               match st.members.find? fun m => m.id ≠ src.2.1 with
               | none => st
               | some thief =>
-                  let c := signed P st thief thief.key (S.pinsFor P.env w [thief.id, src.1, d.1]) (.transfer src.1 d.1 1 none none)
+                  let c := signed P st thief thief.key (S.pinsFor P.env w [thief.id, src.1, d.1]) (.transfer (refOf src) (refOf d) 1 none none)
                   (submit P st c (.refused "noGrant") "transfer-stranger").1
+          | 4, d :: _, _ => -- a `.well` reference to an account that is not a well: `notWell`
+              if src.1 = src.2.2 then st else
+              let c := signed P st owner owner.key (S.pinsFor P.env w [owner.id, src.1, d.1]) (.transfer (.well src.1) (refOf d) 1 none none)
+              (submit P st c (.refused "notWell") "transfer-ref-not-well").1
           | _, d0 :: _, _ => -- the owner moves value: within the floor admitted, past it `belowFloor`;
                              -- a once key already spent from this source is `spent`
               let (d, st) := pick st same d0
@@ -523,7 +538,7 @@ def ledgerAct (P : Params D) (st : State D) (k : Nat) : State D :=
               let expect : Expect := if (amt : Int) > avail then .rejected "belowFloor"
                 else if reused then .rejected "spent" else .ok
               let c := signed P st owner owner.key (S.pinsFor P.env w [owner.id, src.1, d.1])
-                (.transfer src.1 d.1 amt none once)
+                (.transfer (refOf src) (refOf d) amt none once)
               let (st, t) := submit P st c expect "transfer"
               match t with
               | some _ =>
@@ -1014,7 +1029,8 @@ def plantedArms : List String :=
    "law-self:lawDenied", "law:ok", "create-frozen:ok", "write:lawDenied", "write-no-grant:noGrant",
    "rom-id:notContentId",
    "proof-sibling:refused", "proof-leaf:refused", "proof-tomb-live:refused", "proof-spent-unspent:refused",
-   "proof-stale:refused", "proof-overlong:refused", "proof-spent-empty:refused"]
+   "proof-stale:refused", "proof-overlong:refused", "proof-spent-empty:refused",
+   "account-twice:idTaken", "account-for-other:ok", "transfer-ref-not-well:notWell"]
 
 /-- `--seeds N` runs seeds `0 … N-1`; otherwise each argument is a seed. -/
 def parseSeeds : List String → List Nat

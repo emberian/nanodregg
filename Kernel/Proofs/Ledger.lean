@@ -8,6 +8,7 @@ nonzero floor only from `issue`, equal to its signed cap, on the denomination it
 an admitted transfer does to the two accounts and nothing else (`transfer_exact`).
 -/
 import Kernel.Proofs.Value
+import Kernel.Proofs.Origin
 import Codec.Proofs.Stream
 
 namespace Nanodregg.Kernel
@@ -216,19 +217,68 @@ theorem readAccount_ok {look : Pinned D} {c : D} {cell : Cell} {v : Value}
     exact ⟨hk, hv⟩
   · simp at h
 
+omit [Ord D] [DecidableEq D] in
+/-- A reference reads the account at the id it resolves to; a `.well` reference only a well. -/
+theorem readRef_ok {X : Ctx D} {look : Pinned D} {r : AcctRef D} {id : D} {cell : Cell} {v : Value}
+    (h : readRef X look r = .ok (id, cell, v)) :
+    id = r.resolve X ∧ readAccount look id = .ok (cell, v) ∧
+      ∀ a, r = .well a → v.denom = X.env.bytes a := by
+  unfold readRef at h
+  simp only [except_bind_ok] at h
+  obtain ⟨⟨cell', v'⟩, hr, h⟩ := h
+  cases r with
+  | well a =>
+      simp only [except_bind_ok] at h
+      obtain ⟨⟨⟩, hw, h⟩ := h
+      simp only [pure, Except.pure, Except.ok.injEq, Prod.mk.injEq] at h
+      obtain ⟨rfl, rfl, rfl⟩ := h
+      rw [req_ok, decide_eq_true_eq] at hw
+      exact ⟨rfl, hr, fun a' ha => by cases ha; exact hw⟩
+  | of o a =>
+      simp only [pure, Except.pure, bind, Except.bind, Except.ok.injEq, Prod.mk.injEq] at h
+      obtain ⟨rfl, rfl, rfl⟩ := h
+      exact ⟨rfl, hr, fun a' ha => by cases ha⟩
+
+omit [Ord D] [DecidableEq D] in
+/-- **One account per (owner, denomination)** (KERNEL-28 (d)): two pairs with one account id are
+the same pair, or the account hash has a collision. With digest bytes of one size (the deployed
+32), the hash's input splits back into the owner and the denomination. -/
+theorem account_keyed {X : Ctx D} (hb : ∀ a b : D, X.env.bytes a = X.env.bytes b → a = b)
+    (hl : ∀ a b : D, (X.env.bytes a).size = (X.env.bytes b).size) {a s b t : D}
+    (h : accountId X a s = accountId X b t) : (a, s) = (b, t) ∨ HashColl X.env domAccount := by
+  by_cases he : X.env.bytes a ++ X.env.bytes s = X.env.bytes b ++ X.env.bytes t
+  · left
+    obtain ⟨h1, h2⟩ := (ByteArray.append_eq_append_iff_of_size_eq_left (hl a b)).mp he
+    rw [hb _ _ h1, hb _ _ h2]
+  · right
+    exact ⟨_, _, he, h⟩
+
+/-- **An account is born at its keyed id**, owned by the named owner, of the named denomination,
+balance and floor 0; it bears nothing else and writes nothing. -/
+theorem account_creates {X : Ctx D} {c : Call D} {asset owner : D} {t : Turn D}
+    (h : account X c asset owner = .ok t) :
+    t.creates = [(accountId X owner asset, accountCell X owner (X.env.bytes asset) 0)] ∧
+      t.touches.all (fun x => x.act = .keep) ∧ t.nullifiers = [] := by
+  unfold account at h
+  obtain ⟨_, _, ht, _, _, _, _, hc, hn, _⟩ := sealTurn_ok h
+  refine ⟨hc, ?_, hn⟩
+  rw [ht]
+  simp [touchesOf, actFor]
+
 /-- **Transfer authority** (the twin of `write_authorized`). A derived transfer moves value out of
 an account only for its owner: the signer, or an agent holding a grant chain for `mutate` on the
-source whose root issuer is the owner. -/
-theorem transfer_authorized {X : Ctx D} {look : Pinned D} {c : Call D} {src dst : D} {amount : Nat}
-    {via : Option D} {once : Option ByteArray} {t : Turn D}
-    (h : transfer X look c src dst amount via once = .ok t) :
-    ∃ cell owner, readKind look src kindAccount = .ok cell ∧
-      slotDigest X src cell slotOwner = .ok owner ∧
+source whose root issuer is the owner. The source is the account the reference resolves to. -/
+theorem transfer_authorized {X : Ctx D} {look : Pinned D} {c : Call D} {srcR dstR : AcctRef D}
+    {amount : Nat} {via : Option D} {once : Option ByteArray} {t : Turn D}
+    (h : transfer X look c srcR dstR amount via once = .ok t) :
+    ∃ cell owner, readKind look (srcR.resolve X) kindAccount = .ok cell ∧
+      slotDigest X (srcR.resolve X) cell slotOwner = .ok owner ∧
       (via = none ∧ c.unsigned.member = owner ∨
-        ∃ g, via = some g ∧ Chain X look src .mutate true g c.unsigned.member owner) := by
+        ∃ g, via = some g ∧ Chain X look (srcR.resolve X) .mutate true g c.unsigned.member owner) := by
   unfold transfer at h
   simp only [except_bind_ok] at h
-  obtain ⟨⟨scell, sv⟩, hs, ⟨_, _⟩, _, principal, ha, _⟩ := h
+  obtain ⟨⟨src, scell, sv⟩, hs, ⟨_, _, _⟩, _, principal, ha, _⟩ := h
+  obtain ⟨rfl, hs, _⟩ := readRef_ok hs
   obtain ⟨hk, _⟩ := readAccount_ok hs
   unfold ownerAuthority at ha
   simp only [except_bind_ok] at ha
@@ -244,18 +294,19 @@ theorem transfer_authorized {X : Ctx D} {look : Pinned D} {c : Call D} {src dst 
 denomination is its own id), only with the authority of the well's owner slot (the signer, or a
 grant chain for `mutate` rooted at that owner; `issue` sets it to the issuer and no receiver
 writes an account's owner slot), and only into a live account of the same denomination. -/
-theorem credit_authorized {X : Ctx D} {look : Pinned D} {c : Call D} {well acct : D} {amount : Nat}
-    {via : Option D} {t : Turn D} (h : credit X look c well acct amount via = .ok t) :
+theorem credit_authorized {X : Ctx D} {look : Pinned D} {c : Call D} {well : D} {acctR : AcctRef D}
+    {amount : Nat} {via : Option D} {t : Turn D} (h : credit X look c well acctR amount via = .ok t) :
     ∃ cell v owner, readKind look well kindAccount = .ok cell ∧ Value.ofCell cell = some v ∧
       v.denom = X.env.bytes well ∧ slotDigest X well cell slotOwner = .ok owner ∧
       (via = none ∧ c.unsigned.member = owner ∨
         ∃ g, via = some g ∧ Chain X look well .mutate true g c.unsigned.member owner) ∧
-      ∃ acell av, readKind look acct kindAccount = .ok acell ∧ Value.ofCell acell = some av ∧
+      ∃ acell av, readKind look (acctR.resolve X) kindAccount = .ok acell ∧ Value.ofCell acell = some av ∧
         av.denom = v.denom := by
   unfold credit at h
   simp only [except_bind_ok] at h
-  obtain ⟨⟨wcell, wv⟩, hs, ⟨acell, av⟩, hda, principal, ha, ⟨⟩, hwell, ⟨⟩, _, ⟨⟩, _, ⟨⟩, hden, _⟩ := h
+  obtain ⟨⟨wcell, wv⟩, hs, ⟨acct, acell, av⟩, hda, principal, ha, ⟨⟩, hwell, ⟨⟩, _, ⟨⟩, _, ⟨⟩, hden, _⟩ := h
   rw [req_ok, decide_eq_true_eq] at hwell hden
+  obtain ⟨rfl, hda, _⟩ := readRef_ok hda
   obtain ⟨hk, hv⟩ := readAccount_ok hs
   obtain ⟨hka, hva⟩ := readAccount_ok hda
   unfold ownerAuthority at ha
@@ -272,13 +323,14 @@ theorem credit_authorized {X : Ctx D} {look : Pinned D} {c : Call D} {well acct 
 once key (if it has one) in its source's namespace, so (`admit_nullifiers`) a transfer with the
 same key from the same source lands at most once in the life of the World. Without a key, replay
 protection is the transaction id's journal alone. -/
-theorem transfer_once {X : Ctx D} {look : Pinned D} {c : Call D} {src dst : D} {amount : Nat}
-    {via : Option D} {once : Option ByteArray} {t : Turn D}
-    (h : transfer X look c src dst amount via once = .ok t) :
-    t.nullifiers = (once.map (onceNullifier X src)).toList := by
+theorem transfer_once {X : Ctx D} {look : Pinned D} {c : Call D} {srcR dstR : AcctRef D}
+    {amount : Nat} {via : Option D} {once : Option ByteArray} {t : Turn D}
+    (h : transfer X look c srcR dstR amount via once = .ok t) :
+    t.nullifiers = (once.map (onceNullifier X (srcR.resolve X))).toList := by
   unfold transfer at h
   simp only [except_bind_ok] at h
-  obtain ⟨_, _, _, _, _, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, h⟩ := h
+  obtain ⟨⟨src, _, _⟩, hs, _, _, _, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, h⟩ := h
+  obtain ⟨rfl, _, _⟩ := readRef_ok hs
   exact (sealTurn_ok h).2.2.2.2.2.2.2.2.1
 
 /-! ## Births -/
@@ -304,7 +356,7 @@ theorem dispatch_value_born {X : Ctx D} {look : Pinned D} {c : Call D} {b : Body
   | enroll key next possession via =>
       simp only [dispatch, enroll, except_bind_ok] at h
       obtain ⟨_, _, _, _, _, _, ⟨⟩, _, h⟩ := h
-      rw [sealTurn_creates h]
+      rw [sealTurn_born h]
       exact fun x hx v hv => (notv _ _ rfl (by simp) x hx v hv).elim
   | rotate key next =>
       simp only [dispatch, rotate, except_bind_ok] at h
@@ -313,12 +365,12 @@ theorem dispatch_value_born {X : Ctx D} {look : Pinned D} {c : Call D} {b : Body
   | install pkg =>
       simp only [dispatch, install, except_bind_ok] at h
       obtain ⟨⟨⟩, _, h⟩ := h
-      rw [sealTurn_creates h]
+      rw [sealTurn_born h]
       exact fun x hx v hv => (notv _ _ rfl (by simp) x hx v hv).elim
   | create pkg laws state =>
       simp only [dispatch, create, except_bind_ok] at h
       obtain ⟨⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, h⟩ := h
-      rw [sealTurn_creates h]
+      rw [sealTurn_born h]
       exact fun x hx v hv => (notv _ _ rfl (by simp [objectCell]) x hx v hv).elim
   | write obj edits via =>
       simp only [dispatch, write, except_bind_ok] at h
@@ -335,7 +387,7 @@ theorem dispatch_value_born {X : Ctx D} {look : Pinned D} {c : Call D} {b : Body
   | grant target grantee rights parent =>
       simp only [dispatch, grant, except_bind_ok] at h
       obtain ⟨_, _, _, _, h⟩ := h
-      rw [sealTurn_creates h]
+      rw [sealTurn_born h]
       exact fun x hx v hv => (notv _ _ rfl (by simp) x hx v hv).elim
   | revoke g =>
       simp only [dispatch, revoke, except_bind_ok] at h
@@ -346,18 +398,18 @@ theorem dispatch_value_born {X : Ctx D} {look : Pinned D} {c : Call D} {b : Body
       obtain ⟨⟨⟩, hcap, h⟩ := h
       rw [req_ok, decide_eq_true_eq] at hcap
       have htx := (sealTurn_ok h).2.2.2.2.1
-      rw [sealTurn_creates h]
+      rw [sealTurn_born h]
       intro x hx v hv
       simp only [List.mem_singleton] at hx
       subst hx
       obtain ⟨hd, hb, hf⟩ := accountCell_value hv
       refine ⟨hb, .inr ⟨cap, rfl, ?_, by rw [hd, htx]⟩⟩
       rw [hf]; exact Nat.mod_eq_of_lt (by unfold capMax at hcap; omega)
-  | account asset =>
+  | account asset owner =>
       simp only [dispatch, account] at h
       rw [sealTurn_creates h]
       intro x hx v hv
-      simp only [List.mem_singleton] at hx
+      simp only [List.map_cons, List.map_nil, List.mem_singleton] at hx
       subst hx
       obtain ⟨_, hb, hf⟩ := accountCell_value hv
       exact ⟨hb, .inl (by rw [hf])⟩
@@ -461,18 +513,21 @@ theorem sealed_two_writes {X : Ctx D} {w w' : World D} {c : Call D} {t : Turn D}
 /-- **An admitted transfer moves exactly `amount`**, and nothing else: the source's balance falls
 by it, the destination's rises by it, both keep their denomination and floor, and every other
 cell is untouched (L1's `transfer_conserves`, on touches). -/
-theorem transfer_exact {X : Ctx D} {w w' : World D} {c : Call D} {t : Turn D} {src dst : D}
+theorem transfer_exact {X : Ctx D} {w w' : World D} {c : Call D} {t : Turn D} {srcR dstR : AcctRef D}
     {amount : Nat} {via : Option D} {once : Option ByteArray}
-    (hb : c.unsigned.body = .transfer src dst amount via once)
+    (hb : c.unsigned.body = .transfer srcR dstR amount via once)
     (hr : receive X w c = .ok t) (ha : World.admit X.env w t = .ok w') :
-    ∃ sv dv, (w.live X.env src).bind Value.ofCell = some sv ∧ (w.live X.env dst).bind Value.ofCell = some dv ∧
-      (w'.live X.env src).bind Value.ofCell = some { sv with balance := sv.balance - amount } ∧
-      (w'.live X.env dst).bind Value.ofCell = some { dv with balance := dv.balance + amount } ∧
-      ∀ k, k ≠ src → k ≠ dst → k ∉ createdIds t → w'.entry X.env k = w.entry X.env k := by
+    ∃ sv dv, (w.live X.env (srcR.resolve X)).bind Value.ofCell = some sv ∧
+      (w.live X.env (dstR.resolve X)).bind Value.ofCell = some dv ∧
+      (w'.live X.env (srcR.resolve X)).bind Value.ofCell = some { sv with balance := sv.balance - amount } ∧
+      (w'.live X.env (dstR.resolve X)).bind Value.ofCell = some { dv with balance := dv.balance + amount } ∧
+      ∀ k, k ≠ srcR.resolve X → k ≠ dstR.resolve X → k ∉ createdIds t → w'.entry X.env k = w.entry X.env k := by
   have hd := receiveWith_dispatch (receive_ok_with hr).2
   rw [hb] at hd
   simp only [dispatch, transfer, except_bind_ok] at hd
-  obtain ⟨⟨scell, sv⟩, hs, ⟨dcell, dv⟩, hdd, _, _, ⟨⟩, hne, ⟨⟩, _, ⟨⟩, _, ⟨⟩, hfs, ⟨⟩, hfd, hseal⟩ := hd
+  obtain ⟨⟨src, scell, sv⟩, hs, ⟨dst, dcell, dv⟩, hdd, _, _, ⟨⟩, hne, ⟨⟩, _, ⟨⟩, _, ⟨⟩, hfs, ⟨⟩, hfd, hseal⟩ := hd
+  obtain ⟨rfl, hs, _⟩ := readRef_ok hs
+  obtain ⟨rfl, hdd, _⟩ := readRef_ok hdd
   rw [req_ok, decide_eq_true_eq] at hne
   rw [req_ok] at hfs hfd
   simp only at hfs hfd hseal
@@ -492,20 +547,22 @@ theorem transfer_exact {X : Ctx D} {w w' : World D} {c : Call D} {t : Turn D} {s
 denominations unchanged, every other cell untouched (the `createdIds` exclusion is empty: a
 credit bears nothing). That no credit line raises what may be outstanding is a separate, kernel
 result: `fold_floors_held` and `outstanding_le_cap`. -/
-theorem credit_exact {X : Ctx D} {w w' : World D} {c : Call D} {t : Turn D} {well acct : D}
-    {amount : Nat} {via : Option D}
-    (hb : c.unsigned.body = .credit well acct amount via)
+theorem credit_exact {X : Ctx D} {w w' : World D} {c : Call D} {t : Turn D} {well : D}
+    {acctR : AcctRef D} {amount : Nat} {via : Option D}
+    (hb : c.unsigned.body = .credit well acctR amount via)
     (hr : receive X w c = .ok t) (ha : World.admit X.env w t = .ok w') :
-    ∃ wv av, (w.live X.env well).bind Value.ofCell = some wv ∧ (w.live X.env acct).bind Value.ofCell = some av ∧
+    ∃ wv av, (w.live X.env well).bind Value.ofCell = some wv ∧
+      (w.live X.env (acctR.resolve X)).bind Value.ofCell = some av ∧
       wv.denom = X.env.bytes well ∧ av.denom = wv.denom ∧ 0 < amount ∧ amount ≤ wv.floor ∧
       (w'.live X.env well).bind Value.ofCell = some { wv with floor := wv.floor - amount } ∧
-      (w'.live X.env acct).bind Value.ofCell = some { av with floor := av.floor + amount } ∧
-      ∀ k, k ≠ well → k ≠ acct → k ∉ createdIds t → w'.entry X.env k = w.entry X.env k := by
+      (w'.live X.env (acctR.resolve X)).bind Value.ofCell = some { av with floor := av.floor + amount } ∧
+      ∀ k, k ≠ well → k ≠ acctR.resolve X → k ∉ createdIds t → w'.entry X.env k = w.entry X.env k := by
   have hd := receiveWith_dispatch (receive_ok_with hr).2
   rw [hb] at hd
   simp only [dispatch, credit, except_bind_ok] at hd
-  obtain ⟨⟨wcell, wv⟩, hs, ⟨acell, av⟩, hdd, _, _, ⟨⟩, hwell, ⟨⟩, hne, ⟨⟩, hpos, ⟨⟩, hden, ⟨⟩, hle,
+  obtain ⟨⟨wcell, wv⟩, hs, ⟨acct, acell, av⟩, hdd, _, _, ⟨⟩, hwell, ⟨⟩, hne, ⟨⟩, hpos, ⟨⟩, hden, ⟨⟩, hle,
     ⟨⟩, hcap, hseal⟩ := hd
+  obtain ⟨rfl, hdd, _⟩ := readRef_ok hdd
   rw [req_ok, decide_eq_true_eq] at hwell hne hpos hden hle hcap
   simp only at hwell hden hle hcap hseal
   obtain ⟨hks, hvs⟩ := readAccount_ok hs

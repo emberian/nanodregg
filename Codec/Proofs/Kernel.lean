@@ -167,6 +167,32 @@ def ListFits {α : Type} (P : α → Prop) (l : List α) : Prop := l.length ≤ 
 
 def BytesFits (b : ByteArray) : Prop := b.size ≤ callMax
 
+def AcctRef.Fits (PD : D → Prop) : AcctRef D → Prop
+  | .well a => PD a
+  | .of o a => PD o ∧ PD a
+
+abbrev AcctRefWireFits (PD : D → Prop) : (s : Fin 2) → AcctRefF D s → Prop
+  | 0 => fun v => PD v
+  | 1 => fun v => PD v.1 ∧ PD v.2
+
+theorem acctRefWire_lawfulOn {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc) :
+    ∀ s, LawfulOn (AcctRefWireFits PD s) (acctRefWire dc s)
+  | 0 => hd
+  | 1 => product_lawfulOn hd hd
+
+theorem acctRef_lawfulOn {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc) :
+    LawfulOn (AcctRef.Fits PD) (acctRef dc) := by
+  unfold acctRef
+  refine (refine_lawfulOn (choice_lawfulOn 2 (by decide) (acctRefWire_lawfulOn hd)) "kernel/acct-ref" ?_ ?_).mono ?_ ?_
+  · intro y _; cases y <;> rfl
+  · intro x y h
+    obtain ⟨s, v⟩ := x
+    match s, v, h with
+    | 0, _, h => simp at h; subst h; rfl
+    | 1, (_, _), h => simp at h; subst h; rfl
+  · intro y h; cases y <;> exact h
+  · intro y h; cases y <;> exact h
+
 def Body.Fits (PD : D → Prop) : Body D → Prop
   | .enroll k n p v => BytesFits k ∧ PD n ∧ BytesFits p ∧ PD v
   | .rotate k n => BytesFits k ∧ PD n
@@ -179,9 +205,10 @@ def Body.Fits (PD : D → Prop) : Body D → Prop
   | .grant t g r p => PD t ∧ PD g ∧ ListFits Right.Fits r ∧ OptionFits PD p
   | .revoke g => PD g
   | .issue cap => cap < 2 ^ 64
-  | .account a => PD a
-  | .transfer s d n v o => PD s ∧ PD d ∧ n < 2 ^ 64 ∧ OptionFits PD v ∧ OptionFits BytesFits o
-  | .credit w a n v => PD w ∧ PD a ∧ n < 2 ^ 64 ∧ OptionFits PD v
+  | .account a o => PD a ∧ PD o
+  | .transfer s d n v o => AcctRef.Fits PD s ∧ AcctRef.Fits PD d ∧ n < 2 ^ 64 ∧ OptionFits PD v ∧
+      OptionFits BytesFits o
+  | .credit w a n v => PD w ∧ AcctRef.Fits PD a ∧ n < 2 ^ 64 ∧ OptionFits PD v
 
 abbrev BodyWireFits (PD : D → Prop) : (s : Fin 13) → BodyF D s → Prop
   | 0 => fun v => BytesFits v.1 ∧ PD v.2.1 ∧ BytesFits v.2.2.1 ∧ PD v.2.2.2
@@ -195,10 +222,10 @@ abbrev BodyWireFits (PD : D → Prop) : (s : Fin 13) → BodyF D s → Prop
   | 7 => fun v => PD v.1 ∧ PD v.2.1 ∧ ListFits Right.Fits v.2.2.1 ∧ OptionFits PD v.2.2.2
   | 8 => fun v => PD v
   | 9 => fun v => v < 2 ^ 64
-  | 10 => fun v => PD v
-  | 11 => fun v => PD v.1 ∧ PD v.2.1 ∧ v.2.2.1 < 2 ^ 64 ∧ OptionFits PD v.2.2.2.1 ∧
+  | 10 => fun v => PD v.1 ∧ PD v.2
+  | 11 => fun v => AcctRef.Fits PD v.1 ∧ AcctRef.Fits PD v.2.1 ∧ v.2.2.1 < 2 ^ 64 ∧ OptionFits PD v.2.2.2.1 ∧
       OptionFits BytesFits v.2.2.2.2
-  | 12 => fun v => PD v.1 ∧ PD v.2.1 ∧ v.2.2.1 < 2 ^ 64 ∧ OptionFits PD v.2.2.2
+  | 12 => fun v => PD v.1 ∧ AcctRef.Fits PD v.2.1 ∧ v.2.2.1 < 2 ^ 64 ∧ OptionFits PD v.2.2.2
 
 theorem bodyWire_lawfulOn {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc) :
     ∀ s, LawfulOn (BodyWireFits PD s) (bodyWire dc s)
@@ -216,10 +243,10 @@ theorem bodyWire_lawfulOn {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc
       (option_lawfulOn hd)))
   | 8 => hd
   | 9 => nat64_lawfulOn
-  | 10 => hd
-  | 11 => product_lawfulOn hd (product_lawfulOn hd (product_lawfulOn nat64_lawfulOn
+  | 10 => product_lawfulOn hd hd
+  | 11 => product_lawfulOn (acctRef_lawfulOn hd) (product_lawfulOn (acctRef_lawfulOn hd) (product_lawfulOn nat64_lawfulOn
       (product_lawfulOn (option_lawfulOn hd) (option_lawfulOn (rawBytes_lawfulOn _ (by decide))))))
-  | 12 => product_lawfulOn hd (product_lawfulOn hd (product_lawfulOn nat64_lawfulOn (option_lawfulOn hd)))
+  | 12 => product_lawfulOn hd (product_lawfulOn (acctRef_lawfulOn hd) (product_lawfulOn nat64_lawfulOn (option_lawfulOn hd)))
 
 theorem body_lawfulOn {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc) :
     LawfulOn (Body.Fits PD) (body dc) := by
@@ -239,7 +266,7 @@ theorem body_lawfulOn {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc) :
     | 7, (_, _, _, _), h => simp at h; subst h; rfl
     | 8, _, h => simp at h; subst h; rfl
     | 9, _, h => simp at h; subst h; rfl
-    | 10, _, h => simp at h; subst h; rfl
+    | 10, (_, _), h => simp at h; subst h; rfl
     | 11, (_, _, _, _, _), h => simp at h; subst h; rfl
     | 12, (_, _, _, _), h => simp at h; subst h; rfl
   · intro y h; cases y <;> exact h

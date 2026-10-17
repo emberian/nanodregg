@@ -86,7 +86,7 @@ def enroll (X : Ctx D) (look : Pinned D) (c : Call D) (key : ByteArray) (next : 
   req (X.verify key (possessionMessage X u.member next key) possession) .badPossession
   let slots := slotsOf [(slotKey, key), (slotNext, X.env.bytes next),
     (slotSponsor, X.env.bytes u.member)]
-  sealTurn X c [{ kind := kindMember, discipline := .ram, slots }] spend.toList []
+  sealTurn X c (bornAt X c [{ kind := kindMember, discipline := .ram, slots }]) spend.toList []
 
 /-- Signed by the new key; the new key's digest must be the one precommitted. -/
 def rotate (X : Ctx D) (look : Pinned D) (c : Call D) (key : ByteArray) (next : D) :
@@ -103,7 +103,7 @@ def rotate (X : Ctx D) (look : Pinned D) (c : Call D) (key : ByteArray) (next : 
 def install (X : Ctx D) (look : Pinned D) (c : Call D) (pkg : ByteArray) :
     Except (Refusal D) (Turn D) := do
   X.program.checkInstall look pkg
-  sealTurn X c [{ kind := kindPackage, discipline := .rom, slots := [(0, pkg)] }] [] []
+  sealTurn X c (bornAt X c [{ kind := kindPackage, discipline := .rom, slots := [(0, pkg)] }]) [] []
 
 def objectCell (X : Ctx D) (owner : D) (pkg : Option D) (laws : List D) (state : Slots) : Cell :=
   { kind := kindObject, discipline := .ram,
@@ -122,7 +122,7 @@ def create (X : Ctx D) (look : Pinned D) (c : Call D) (pkg : Option D) (laws : L
   checkLaws look laws
   checkState state
   X.program.judge look pkg laws state state (reqOf u u.member .birth)
-  sealTurn X c [objectCell X u.member pkg laws state] [] []
+  sealTurn X c (bornAt X c [objectCell X u.member pkg laws state]) [] []
 
 def applyEdits (s : Slots) (edits : List (Nat × Option ByteArray)) : Slots :=
   edits.foldl (fun s e => match e.2 with
@@ -234,7 +234,7 @@ def grant (X : Ctx D) (look : Pinned D) (c : Call D) (target grantee : D) (right
   let slots := slotsOf ([(grantTarget, X.env.bytes target), (grantGrantee, X.env.bytes grantee),
       (grantIssuer, X.env.bytes u.member)] ++
     (parent.map fun p => (grantParent, X.env.bytes p)).toList ++ rightSlots rights)
-  sealTurn X c [{ kind := kindGrant, discipline := .appendOnly, slots }] carve.toList []
+  sealTurn X c (bornAt X c [{ kind := kindGrant, discipline := .appendOnly, slots }]) carve.toList []
 
 /-- The issuer retires a grant; every chain through it dies with it. -/
 def revoke (X : Ctx D) (look : Pinned D) (c : Call D) (g : D) : Except (Refusal D) (Turn D) := do
@@ -255,7 +255,7 @@ def dispatch (X : Ctx D) (look : Pinned D) (c : Call D) : Body D → Except (Ref
   | .grant target grantee rights parent => grant X look c target grantee rights parent
   | .revoke g => revoke X look c g
   | .issue cap => issue X c cap
-  | .account asset => account X c asset
+  | .account asset owner => account X c asset owner
   | .transfer src dst amount via once => transfer X look c src dst amount via once
   | .credit well acct amount via => credit X look c well acct amount via
 

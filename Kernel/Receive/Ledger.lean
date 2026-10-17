@@ -24,6 +24,19 @@ variable {D : Type} [Ord D] [DecidableEq D]
 /-- An account: a value cell (`Kernel.Value`'s keys) with its owner at `slotOwner`. -/
 def kindAccount : Nat := 6
 
+/-- The domain of a keyed account id. -/
+def domAccount : String := "nanodregg/kernel/account/v1"
+
+/-- The id of `owner`'s account of denomination `asset` (KERNEL-28 (d)): keyed, so there is one
+per pair, and anyone (an object too) can name it without reading a cell. -/
+def accountId (X : Ctx D) (owner asset : D) : D :=
+  X.env.hash domAccount (X.env.bytes owner ++ X.env.bytes asset)
+
+/-- The id an account reference names. -/
+def AcctRef.resolve (X : Ctx D) : AcctRef D → D
+  | .well a => a
+  | .of o a => accountId X o a
+
 /-- The domain of a transfer's once-only nullifier. -/
 def domOnce : String := "nanodregg/kernel/once/v1"
 
@@ -45,6 +58,16 @@ def readAccount (look : Pinned D) (c : D) : Except (Refusal D) (Cell × Value) :
   | some v => pure (cell, v)
   | none => .error (.malformedCell c Value.balanceKey)
 
+/-- The pinned live account a reference names, with its id; a `.well` reference must name a well
+(its denomination is its own id's bytes), `notWell` otherwise. -/
+def readRef (X : Ctx D) (look : Pinned D) (r : AcctRef D) : Except (Refusal D) (D × Cell × Value) := do
+  let id := r.resolve X
+  let (cell, v) ← readAccount look id
+  match r with
+  | .well a => req (decide (v.denom = X.env.bytes a)) (.notWell a)
+  | .of _ _ => pure ()
+  pure (id, cell, v)
+
 /-- The largest cap: a well at minus its cap is still an `i64`. -/
 def capMax : Nat := 2 ^ 63
 
@@ -52,24 +75,26 @@ def capMax : Nat := 2 ^ 63
 def issue (X : Ctx D) (c : Call D) (cap : Nat) : Except (Refusal D) (Turn D) := do
   let well := cellIdOf X.env (txIdOf X c) 0
   req (decide (cap ≤ capMax)) (.overflow well)
-  sealTurn X c [accountCell X c.unsigned.member (X.env.bytes well) cap] [] []
+  sealTurn X c (bornAt X c [accountCell X c.unsigned.member (X.env.bytes well) cap]) [] []
 
-/-- `account asset`: an empty account of the asset's denomination. It does not read the well, so
-opening an account never pins the hot cell. -/
-def account (X : Ctx D) (c : Call D) (asset : D) : Except (Refusal D) (Turn D) :=
-  sealTurn X c [accountCell X c.unsigned.member (X.env.bytes asset) 0] [] []
+/-- `account asset owner`: the empty account of the asset's denomination owned by `owner`, at its
+keyed id. Anyone may open anyone's (it is empty, floor 0, and only its owner can debit it); a
+second open of the pair is `World.admit`'s `idTaken`. It does not read the well, so opening an
+account never pins the hot cell. -/
+def account (X : Ctx D) (c : Call D) (asset owner : D) : Except (Refusal D) (Turn D) :=
+  sealTurn X c [(accountId X owner asset, accountCell X owner (X.env.bytes asset) 0)] [] []
 
 /-- The write setting an account's balance. -/
 def setBalance (b : Int) : Act := .write [.set Value.balanceKey (Value.balanceBytes b)]
 
-/-- `transfer src dst amount via once`: both accounts pinned, live and of one denomination; the
-signer has `src`'s owner's authority; both post balances are `i64`s. Two effects, and the once
-key's nullifier. -/
-def transfer (X : Ctx D) (look : Pinned D) (c : Call D) (src dst : D) (amount : Nat)
+/-- `transfer src dst amount via once`: both referenced accounts pinned, live and of one
+denomination; the signer has `src`'s owner's authority; both post balances are `i64`s. Two
+effects, and the once key's nullifier. -/
+def transfer (X : Ctx D) (look : Pinned D) (c : Call D) (srcR dstR : AcctRef D) (amount : Nat)
     (via : Option D) (once : Option ByteArray) : Except (Refusal D) (Turn D) := do
   let u := c.unsigned
-  let (scell, sv) ← readAccount look src
-  let (_, dv) ← readAccount look dst
+  let (src, scell, sv) ← readRef X look srcR
+  let (dst, _, dv) ← readRef X look dstR
   let _ ← ownerAuthority X look u src scell .mutate via
   req (decide (src ≠ dst)) .sameAccount
   req (decide (0 < amount)) .zeroAmount
@@ -88,11 +113,11 @@ Extending credit IS issuing (minidregg FLOORS-LOG: setFloor's verb was mintAsset
 issuer's: the well's owner. The kernel conserves the denomination's floor sum, so a credit line
 can only be carved from the well's unissued headroom: past it the well goes below its own floor,
 `belowFloor`. Past the well's whole floor (a Nat cannot go negative), `overflow`. -/
-def credit (X : Ctx D) (look : Pinned D) (c : Call D) (well acct : D) (amount : Nat)
+def credit (X : Ctx D) (look : Pinned D) (c : Call D) (well : D) (acctR : AcctRef D) (amount : Nat)
     (via : Option D) : Except (Refusal D) (Turn D) := do
   let u := c.unsigned
   let (wcell, wv) ← readAccount look well
-  let (_, av) ← readAccount look acct
+  let (acct, _, av) ← readRef X look acctR
   let _ ← ownerAuthority X look u well wcell .mutate via
   req (decide (wv.denom = X.env.bytes well)) (.notWell well)
   req (decide (well ≠ acct)) .sameAccount

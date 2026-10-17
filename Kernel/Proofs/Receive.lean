@@ -51,12 +51,12 @@ theorem receive_congr {X : Ctx D} {w₁ w₂ : World D} {c : Call D} (ho : w₁.
 /-- A sealed Turn pays exactly its weight, within the signed ceiling, and carries the caller's
 pins as its touches, its window, its call and the receiver's nullifiers; every effect is on a
 pinned cell. -/
-theorem sealTurn_ok {X : Ctx D} {c : Call D} {cr : List Cell} {efs : List (D × Act)}
+theorem sealTurn_ok {X : Ctx D} {c : Call D} {cr : List (D × Cell)} {efs : List (D × Act)}
     {ns : List D} {t : Turn D} (h : sealTurn X c cr efs ns = .ok t) :
     t.charge = t.weight ∧ t.charge ≤ c.unsigned.maxCharge ∧
       t.touches = touchesOf c.unsigned.pins efs ∧
       t.event = X.callBytes c ∧ t.txId = txIdOf X c ∧ t.notBefore = c.unsigned.notBefore ∧
-      t.validUntil = c.unsigned.validUntil ∧ t.creates = bornAt X c cr ∧ t.nullifiers = ns ∧
+      t.validUntil = c.unsigned.validUntil ∧ t.creates = cr ∧ t.nullifiers = ns ∧
       (∀ e ∈ efs, ∃ p ∈ c.unsigned.pins, p.1 = e.1) := by
   unfold sealTurn at h
   simp only [except_bind_ok] at h

@@ -340,9 +340,14 @@ theorem grantCell_slots (X : Ctx D) (target grantee member : D) (parent : Option
     rw [slotsOf_get, List.filter_append, List.filter_append, hr _ (by decide)]
     cases parent <;> simp [grantTarget, grantGrantee, grantIssuer, grantParent]
 
-theorem sealTurn_creates {X : Ctx D} {c : Call D} {cr : List Cell} {efs : List (D × Act)}
-    {ns : List D} {t : Turn D} (h : sealTurn X c cr efs ns = .ok t) : t.born = cr := by
-  rw [Turn.born, (sealTurn_ok h).2.2.2.2.2.2.2.1]; exact bornAt_cells
+theorem sealTurn_creates {X : Ctx D} {c : Call D} {cr : List (D × Cell)} {efs : List (D × Act)}
+    {ns : List D} {t : Turn D} (h : sealTurn X c cr efs ns = .ok t) : t.born = cr.map Prod.snd := by
+  rw [Turn.born, (sealTurn_ok h).2.2.2.2.2.2.2.1]
+
+/-- A seal of fresh births bears exactly those cells. -/
+theorem sealTurn_born {X : Ctx D} {c : Call D} {cr : List Cell} {efs : List (D × Act)}
+    {ns : List D} {t : Turn D} (h : sealTurn X c (bornAt X c cr) efs ns = .ok t) : t.born = cr := by
+  rw [sealTurn_creates h, bornAt_cells]
 
 /-- **No receiver bears an unrooted grant.** Only `grant` bears a grant cell, append-only, and on
 the World only with a parent (`grant_rooted`). Needs the digest's bytes to be injective (a target
@@ -357,7 +362,7 @@ theorem dispatch_born {X : Ctx D} {look : Pinned D} {c : Call D} {b : Body D} {t
   | enroll key next possession via =>
       simp only [dispatch, enroll, except_bind_ok] at h
       obtain ⟨_, _, _, _, _, _, ⟨⟩, _, h⟩ := h
-      rw [sealTurn_creates h]
+      rw [sealTurn_born h]
       exact kind_ne _ _ rfl (by simp [kindMember, kindGrant])
   | rotate key next =>
       simp only [dispatch, rotate, except_bind_ok] at h
@@ -366,12 +371,12 @@ theorem dispatch_born {X : Ctx D} {look : Pinned D} {c : Call D} {b : Body D} {t
   | install pkg =>
       simp only [dispatch, install, except_bind_ok] at h
       obtain ⟨⟨⟩, _, h⟩ := h
-      rw [sealTurn_creates h]
+      rw [sealTurn_born h]
       exact kind_ne _ _ rfl (by simp [kindPackage, kindGrant])
   | create pkg laws state =>
       simp only [dispatch, create, except_bind_ok] at h
       obtain ⟨⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, h⟩ := h
-      rw [sealTurn_creates h]
+      rw [sealTurn_born h]
       exact kind_ne _ _ rfl (by simp [objectCell, kindObject, kindGrant])
   | write obj edits via =>
       simp only [dispatch, write, except_bind_ok] at h
@@ -393,7 +398,7 @@ theorem dispatch_born {X : Ctx D} {look : Pinned D} {c : Call D} {b : Body D} {t
       unfold grant at h
       simp only [except_bind_ok] at h
       obtain ⟨_, _, _, _, h⟩ := h
-      rw [sealTurn_creates h]
+      rw [sealTurn_born h]
       intro x hx _
       simp only [List.mem_singleton] at hx
       subst hx
@@ -410,9 +415,9 @@ theorem dispatch_born {X : Ctx D} {look : Pinned D} {c : Call D} {b : Body D} {t
   | issue cap =>
       simp only [dispatch, issue, except_bind_ok] at h
       obtain ⟨⟨⟩, _, h⟩ := h
-      rw [sealTurn_creates h]
+      rw [sealTurn_born h]
       exact kind_ne _ _ rfl (by simp [accountCell, kindAccount, kindGrant])
-  | account asset =>
+  | account asset owner =>
       simp only [dispatch, account] at h
       rw [sealTurn_creates h]
       exact kind_ne _ _ rfl (by simp [accountCell, kindAccount, kindGrant])
