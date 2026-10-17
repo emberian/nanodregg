@@ -367,7 +367,7 @@ whose labels are distinct, then the old and new states read at `S`, and EVERY la
 that mentions no closure package and has a law's shape `Admits` that transition, with the request
 as the receiver built it. Each `Std` spec theorem (`quorum_change`, `machine_invoke`, …) then applies
 to the deployed run, not only to a test's closed term. -/
-theorem judgeOne_pkgOf_admits {S : Ty} {laws : List (Label × Term)} {methods : List (Label × Ty × Term)}
+theorem judgeOne_pkgOf_admits {S : Ty} {laws : List (Label × Term)} {methods : List (Label × Ty × List Ty × Term)}
     {look : Pinned D} {law : D} {old new : Kernel.Slots} {r : Req D}
     (hid : digestOf (bytesOf law) = some law)
     (hp : readPackage look law = .ok (Std.pkgOf S laws methods))
@@ -390,11 +390,11 @@ theorem judgeOne_pkgOf_admits {S : Ty} {laws : List (Label × Term)} {methods : 
     simp only [Std.pkgOf, List.mem_map]
     exact ⟨_, hsl, rfl⟩
   have hrun := hall ℓ hmem
-  let xs := Row.sort laws ++ (Row.sort methods).map (fun (l, _, t) => (l, t))
+  let xs := Row.sort laws ++ (Row.sort methods).map (fun (l, _, _, t) => (l, t))
   have hxs : (xs.map (·.1)).Perm (laws.map (·.1) ++ methods.map (·.1)) := by
     simp only [xs, List.map_append, List.map_map]
     refine List.Perm.append ((Row.sort_perm laws).map _) ?_
-    have := (Row.sort_perm methods).map (fun (y : Label × Ty × Term) => y.1)
+    have := (Row.sort_perm methods).map (fun (y : Label × Ty × List Ty × Term) => y.1)
     simpa [Function.comp_def] using this
   have hfind : Row.find? ℓ (Row.sort xs) = some (.lam A (.lam B (.lam C b))) :=
     find_of_mem_nodup (((Row.sort_perm xs).map _).trans hxs |>.nodup_iff.2 hnd)
@@ -419,7 +419,7 @@ object of a `pkgOf` package carrying the CHECKED `quorum`'s law (so the members 
 `1 ≤ k ≤ members`, `Std.quorum_ok`) is by a member and is one of commit / propose /
 approve / no-op (`Std.quorum_change`), on the states the receiver read. -/
 theorem judgeOne_quorum_change {S T : Ty} {ms : List ByteArray} {k : Nat} {g ℓq : Label}
-    {laws : List (Label × Term)} {methods : List (Label × Ty × Term)}
+    {laws : List (Label × Term)} {methods : List (Label × Ty × List Ty × Term)}
     {look : Pinned D} {law : D} {old new : Kernel.Slots} {r : Req D}
     (hid : digestOf (bytesOf law) = some law)
     (hp : readPackage look law = .ok (Std.pkgOf S laws methods))
@@ -453,7 +453,7 @@ theorem judgeOne_quorum_change {S T : Ty} {ms : List ByteArray} {k : Nat} {g ℓ
 `quorumLaw` needs a member and `k` approvals in the old state of a proposal of EXACTLY the incoming
 ids' bytes (`Std.quorum_relaw_needs_k`). -/
 theorem judgeOne_quorum_relaw {S T : Ty} {ms : List ByteArray} {k : Nat} {g ℓq : Label}
-    {laws : List (Label × Term)} {methods : List (Label × Ty × Term)}
+    {laws : List (Label × Term)} {methods : List (Label × Ty × List Ty × Term)}
     {look : Pinned D} {law : D} {old new : Kernel.Slots} {r : Req D} {ls : List D}
     (hid : digestOf (bytesOf law) = some law)
     (hp : readPackage look law = .ok (Std.pkgOf S laws methods))
@@ -478,7 +478,7 @@ theorem judgeOne_quorum_relaw {S T : Ty} {ms : List ByteArray} {k : Nat} {g ℓq
 of method `m` the receiver admits moved the machine field along an edge `(a, m, b)`. -/
 theorem judgeOne_machine_invoke {S : Ty} {f ℓm : Label} {states : List Label} {initial : Label}
     {edges : List (Label × Nat × Label)}
-    {laws : List (Label × Term)} {methods : List (Label × Ty × Term)}
+    {laws : List (Label × Term)} {methods : List (Label × Ty × List Ty × Term)}
     {look : Pinned D} {law : D} {old new : Kernel.Slots} {r : Req D} {m : Nat}
     (hid : digestOf (bytesOf law) = some law)
     (hp : readPackage look law = .ok (Std.pkgOf S laws methods))
@@ -516,7 +516,7 @@ theorem methodIndex_go : ∀ {ls : List Label} {m : Label} {j i : Nat}, Std.meth
 resolve a method label to index `i` (`methodIndex`), and `pkgOf`'s method list, which the kernel's
 `invoke` indexes, has that label at `i`. So `judgeOne_machine_invoke`'s index is the edge's method
 by name. -/
-theorem methodIndex_pkgOf {S : Ty} {laws : List (Label × Term)} {methods : List (Label × Ty × Term)}
+theorem methodIndex_pkgOf {S : Ty} {laws : List (Label × Term)} {methods : List (Label × Ty × List Ty × Term)}
     {m : Label} {i : Nat} (h : Std.methodIndex (methods.map (·.1)) m = some i) :
     (Std.pkgOf S laws methods).methods[i]? = some m := by
   unfold Std.methodIndex at h
@@ -524,7 +524,7 @@ theorem methodIndex_pkgOf {S : Ty} {laws : List (Label × Term)} {methods : List
   simp only [Nat.sub_zero] at hget
   have hl : (Row.sort (((methods.map (·.1)).map fun x => (x, ())))).map (·.1) =
       (Row.sort methods).map (·.1) := by
-    have := Row.sort_map (fun (z : Label × Ty × Term) => (z.1, ())) (fun _ => rfl) methods
+    have := Row.sort_map (fun (z : Label × Ty × List Ty × Term) => (z.1, ())) (fun _ => rfl) methods
     rw [List.map_map]
     simp only [Function.comp_def] at this ⊢
     rw [← this, List.map_map]

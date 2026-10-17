@@ -47,7 +47,8 @@ private def slotCase (k : Kind) (p : Phase) (e : Event) : Bool :=
   | some c, some id, some s, some args =>
     match prog.run (look id c) id s e.index args (reqFor e) 100000 with
     | .error _ => false
-    | .ok (s', _, _) =>
+    | .ok (s', calls, _) =>
+      calls.isEmpty &&
       (prog.judge (look id c) (some id) [] s s' (reqFor e) matches .ok ()) == (step p e).isSome &&
       phaseOf s' == some (target p e) && entryOf s' == entryOf s && kindOf s' == kindOf s &&
       s'.length == s.length

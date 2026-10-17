@@ -86,6 +86,8 @@ inductive StdRefusal
   | zeroWidth
   | duplicateState
   | unknownState (state : Label)
+  /-- a method that makes more calls than its calls row has slots (`Kernel.Bounds.callsMax`) -/
+  | tooManyCalls
   | unknownMethod (method : Label)
   deriving DecidableEq, Repr
 
@@ -94,7 +96,7 @@ def StdRefusal.name : StdRefusal → String
   | .tooManyMembers => "tooManyMembers" | .tooManyIds => "tooManyIds"
   | .tooManyEdges => "tooManyEdges" | .tooManyStates => "tooManyStates" | .zeroWidth => "zeroWidth"
   | .duplicateState => "duplicateState" | .unknownState _ => "unknownState"
-  | .unknownMethod _ => "unknownMethod"
+  | .unknownMethod _ => "unknownMethod" | .tooManyCalls => "tooManyCalls"
 
 def need (c : Bool) (e : StdRefusal) : Except StdRefusal Unit := if c then .ok () else .error e
 
@@ -312,8 +314,8 @@ def stepLaw (S : Ty) (f : Label) (states : List Label) (m : Nat) (edges : List (
   let target (x : Label) : Label := ((edges.find? fun (a, k, _) => a = x && k = m).map (·.2.2)).getD x
   let next : Term := .case (.get (.var 2) f)
     ((Row.sort (states.map fun x => (x, ()))).map fun (x, _) => (x, .inj (stateTy states) (target x) (.record [])))
-  .lam S (.lam (.record []) (.lam reqTy
-    (.record (row.map fun (ℓ, _) => (ℓ, if ℓ = f then next else .get (.var 2) ℓ)))))
+  .lam S (.lam (.record []) (.lam reqTy (resultT (callsT [])
+    (.record (row.map fun (ℓ, _) => (ℓ, if ℓ = f then next else .get (.var 2) ℓ))))))
 
 /-- A method's index in a package: its place among the package's method labels in `pkgOf`'s
 (sorted) order. -/
@@ -361,19 +363,29 @@ def stepTo (S : Ty) (f : Label) (states : List Label) (methods : List Label) (m 
 /-! ## Packages -/
 
 
-/-- A package over state `S`: its laws and its methods `(label, argument type, term)`, rows sorted
-into canonical order. Authority is the kernel's (KERNEL-25); the laws only narrow it. -/
-def pkgOf (S : Ty) (laws : List (Label × Term)) (methods : List (Label × Ty × Term)) : Package :=
+/-- A package over state `S`: its laws and its methods `(label, argument type, call slot types,
+term)`, rows sorted into canonical order. Authority is the kernel's (KERNEL-25); the laws only
+narrow it. -/
+def pkgOf (S : Ty) (laws : List (Label × Term)) (methods : List (Label × Ty × List Ty × Term)) : Package :=
   let laws := Row.sort laws
   let ms := Row.sort methods
   { imports := [], state := S,
-    iface := .record (Row.sort (laws.map (fun (l, _) => (l, lawTy S)) ++ ms.map (fun (l, A, _) => (l, methodTy S A)))),
-    body := .record (Row.sort (laws ++ ms.map (fun (l, _, t) => (l, t)))),
+    iface := .record (Row.sort (laws.map (fun (l, _) => (l, lawTy S)) ++
+      ms.map (fun (l, A, ks, _) => (l, methodTy S A ks)))),
+    body := .record (Row.sort (laws ++ ms.map (fun (l, _, _, t) => (l, t)))),
     methods := ms.map (·.1), laws := laws.map (·.1) }
 
-/-- A method: `λ state arg req. {fields}` with the state at `var 2`, the argument at `var 1`. -/
+/-- A method that makes no calls: `λ state arg req. {calls = {}, state = {fields}}` with the
+state at `var 2`, the argument at `var 1`, the request at `var 0`; its type is `methodTy S A`. -/
 def methodOf (S A : Ty) (fields : List (Label × Term)) : Term :=
-  .lam S (.lam A (.lam reqTy (.record (Row.sort fields))))
+  .lam S (.lam A (.lam reqTy (resultT (callsT []) (.record (Row.sort fields)))))
+
+/-- A method with call slots `slots` (each a `noCallT T` or `someCallT T t`, under the method's
+three binders, in slot order) as the object; its type is `methodTy S A ks` for the slots' call
+types `ks`. More than `Kernel.Bounds.callsMax` slots is refused. -/
+def methodWith (S A : Ty) (slots : List Term) (fields : List (Label × Term)) : Except StdRefusal Term := do
+  need (slots.length ≤ Kernel.Bounds.callsMax) .tooManyCalls
+  pure (.lam S (.lam A (.lam reqTy (resultT (callsT slots) (.record (Row.sort fields))))))
 
 /-- The body under a law's three binders (a stdlib law is always `λ old new req. body`). -/
 def lawBody : Term → Term

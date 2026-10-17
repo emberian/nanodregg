@@ -206,7 +206,7 @@ private def okBind (actor : String) (argv : List String) (b : String) : Line :=
 
 /-- The request and verdict types as a resident pastes them: printed from LANG's own types, never
 restated. -/
-def reqTy : String := Lang.Print.tyText Lang.reqTy
+def reqTy : String := Lang.Print.tyText Lang.reqTy (by decide +kernel)
 def verdictTy : String := Lang.Print.tyText Lang.verdictTy
 
 /-- A law package over a data object, with one law `l` whose body is `verdict`. -/
@@ -228,12 +228,14 @@ def hermesLaw : String := lawPackage "hermes" s!"(inj {verdictTy} ok (record))"
 law `bounded` (total at most 10^6), so every invoke runs a method AND a law. -/
 def counter : String :=
   let S := "(rec (total nat))"
+  let res := Lang.Print.tyText (Lang.resultTy (.record [("total", .nat)])) (by decide +kernel)
   s!"(package (imports) (state {S})
-    (iface (rec (add (-> {S} (-> nat (-> {reqTy} {S}))))
+    (iface (rec (add (-> {S} (-> nat (-> {reqTy} {res}))))
                 (bounded (-> {S} (-> {S} (-> {reqTy} {verdictTy}))))))
     (methods add) (laws bounded)
     (body (record
-      (add (fn (s {S}) (n nat) (r {reqTy}) (record (total (+ (. s total) n)))))
+      (add (fn (s {S}) (n nat) (r {reqTy})
+        (record (calls {Lang.Print.noCallsText}) (state (record (total (+ (. s total) n)))))))
       (bounded (fn (old {S}) (new {S}) (r {reqTy})
         (if (<= (. new total) 1000000)
             (inj {verdictTy} ok (record))

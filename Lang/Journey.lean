@@ -70,8 +70,7 @@ def ownerOnly : Term :=
     (refused "not the owner"))
 
 /-- `set state n req = {owner = state.owner, total = n}` -/
-def setM : Term :=
-  .lam S (.lam .nat (.lam reqTy (.record [("owner", .get (.var 2) "owner"), ("total", .var 1)])))
+def setM : Term := Std.methodOf S .nat [("owner", .get (.var 2) "owner"), ("total", .var 1)]
 
 def iface : Ty :=
   .record [("bounded", lawTy S), ("ownerOnly", lawTy S), ("set", methodTy S .nat)]
@@ -87,15 +86,18 @@ def illTyped : Package :=
       ("set", .lam S (.lam .nat (.lam reqTy (.var 1))))] }
 
 /-- The request type as the resident pastes it (printed from `reqTy`, so it is never restated). -/
-def rq : String := Print.tyText reqTy
+def rq : String := Print.tyText reqTy (by decide +kernel)
+
+/-- `Owned`'s method result type and its empty calls row, printed from `resultTy` and `callsT`. -/
+def ownedRes : String := Print.tyText (resultTy S) (by decide +kernel)
+def noCalls : String := Print.noCallsText
 
 /-- `Owned`, as a resident writes it (Lang.Read): must read to exactly the package above. -/
 def ownedText : String := s!"
 (package (imports)
   (state (rec (owner bytes) (total nat)))
   (iface (rec (set (-> (rec (owner bytes) (total nat))
-                    (-> nat (-> {rq}
-                                (rec (owner bytes) (total nat))))))
+                    (-> nat (-> {rq} {ownedRes}))))
               (bounded (-> (rec (owner bytes) (total nat)) (-> (rec (owner bytes) (total nat))
                 (-> {rq}
                     (sum (ok (rec)) (refused bytes))))))
@@ -108,7 +110,7 @@ def ownedText : String := s!"
     (record
       (set (fn (s (rec (owner bytes) (total nat))) (n nat)
                (r {rq})
-             (record (owner (. s owner)) (total n))))
+             (record (calls {noCalls}) (state (record (owner (. s owner)) (total n))))))
       (bounded (fn (old (rec (owner bytes) (total nat))) (new (rec (owner bytes) (total nat)))
                    (r {rq})
                  (if (<= (. new total) 100)
@@ -142,8 +144,7 @@ def tallyFresh : Term :=
      ("relaw", ok), ("write", ok)])))
 
 /-- `set state n req = {approvals = state.approvals, total = n}`, as both methods `a` and `b`. -/
-def tallySet : Term :=
-  .lam T (.lam .nat (.lam reqTy (.record [("approvals", .get (.var 2) "approvals"), ("total", .var 1)])))
+def tallySet : Term := Std.methodOf T .nat [("approvals", .get (.var 2) "approvals"), ("total", .var 1)]
 
 def tally : Package :=
   { imports := [], state := T,
@@ -174,6 +175,48 @@ def onlyTo (to : ByteArray) : Package :=
   { imports := [], state := .record [], iface := .record [("onlyTo", lawTy (.record []))],
     body := .record [("onlyTo", law)], methods := [], laws := ["onlyTo"] }
 
+/-! ### Calls (LANG-23, KERNEL-28): a method's calls are derived as the object, at most
+`callDepthMax` deep
+
+`Relay` keeps `{hits : nat, me : bytes, next : bytes}`. Its method `go {rest, via}` counts the hit,
+records `req.self` as `me`, and, when `next` is not empty, invokes `next`'s method 0 through grant
+`via` (a grant naming THIS object) with `rest` as the arguments: bytes it holds, forwarded whole
+(LANG-23 (iii)), so the journey nests each level's encoded arguments inside the previous one. -/
+
+def R : Ty := .record [("hits", .nat), ("me", .bytes), ("next", .bytes)]
+def RA : Ty := .record [("rest", .bytes), ("via", .bytes)]
+
+/-- `go`'s one call slot: an invoke, nothing else. -/
+def K : Ty := callOf ["invoke"]
+
+/-- `invoke next 0 rest 1000 (some via)`, under the method's binders (state var 2, args var 1). -/
+def relayCall : Term :=
+  .inj K "invoke" (.record [("args", .get (.var 1) "rest"), ("budget", .nat 1000),
+    ("method", .nat 0), ("obj", .get (.var 2) "next"), ("via", .inj (optTy .bytes) "some" (.get (.var 1) "via"))])
+
+def relayGo : Term :=
+  .lam R (.lam RA (.lam reqTy (resultT
+    (.ite (.prim .beq (.get (.var 2) "next") (.bytes .empty)) (callsT [noCallT K]) (callsT [someCallT K relayCall]))
+    (.record [("hits", .prim .add (.get (.var 2) "hits") (.nat 1)), ("me", .get (.var 0) "self"),
+      ("next", .get (.var 2) "next")]))))
+
+def relay : Package :=
+  { imports := [], state := R, iface := .record [("go", methodTy R RA [K])],
+    body := .record [("go", relayGo)], methods := ["go"], laws := [] }
+
+/-- One call slot more than `callsMax`. -/
+def nineLabels : List Label := slotLabels "c" (Kernel.Bounds.callsMax + 1)
+
+def nineGo : Term :=
+  .lam R (.lam RA (.lam reqTy (resultT (callsT (nineLabels.map fun _ => noCallT K)) (.var 2))))
+
+def nineTy : Ty := methodTy R RA (nineLabels.map fun _ => K)
+
+/-- A method whose calls row has one slot more than `callsMax`: its type is not a method's. -/
+def nineCalls : Package :=
+  { imports := [], state := R, iface := .record [("go", nineTy)],
+    body := .record [("go", nineGo)], methods := ["go"], laws := [] }
+
 /-- A u64 argument or slot (`none` past `2^64`). -/
 def nat64 (n : Nat) : Option ByteArray := Wire.encodeData .nat (.nat n)
 
@@ -195,9 +238,13 @@ def erasePayload : Program D :=
         | .relaw _ => .relaw [] | .adopt _ => .adopt [] | .invoke _ => .invoke 0 | o => o
       langProgram.judge look p ls o n { r with occasion } }
 
+/-- Plant 4: the calls a method makes never reach the kernel (the glue before this day). -/
+def dropCalls : Program D :=
+  { langProgram with run := fun look p s m a r b => (langProgram.run look p s m a r b).map fun x => (x.1, [], x.2.2) }
+
 /-- Which program the journey runs under. -/
 inductive Mode
-  | honest | skipJudge | eraseOccasion | erasePayload
+  | honest | skipJudge | eraseOccasion | erasePayload | dropCalls
   deriving DecidableEq
 
 def Mode.program : Mode → Program D
@@ -205,6 +252,7 @@ def Mode.program : Mode → Program D
   | .skipJudge => Journey.skipJudge
   | .eraseOccasion => Journey.eraseOccasion
   | .erasePayload => Journey.erasePayload
+  | .dropCalls => Journey.dropCalls
 
 /-- A refusal by a law, with `why` in its reason. -/
 def deniedWith (v why : String) : Bool := v.startsWith "refused lawDenied" && (v.splitOn why).length > 1
@@ -234,6 +282,97 @@ def totalOf (E : Kernel.Env D) (w : World D) (obj : D) : Option Nat :=
       | _ => none
     | none => none
   | none => none
+
+/-- A Relay object's state slot `i` (0 hits, 1 me, 2 next). -/
+def slotOf (E : Kernel.Env D) (w : World D) (obj : D) (i : Nat) : Option ByteArray :=
+  (w.live E obj).bind fun cell => cell.slots.get (stateBase + i)
+
+def hitsOf (E : Kernel.Env D) (w : World D) (obj : D) : Option Nat :=
+  match (slotOf E w obj 0).map (Wire.decodeData .nat) with
+  | some (.ok (.nat n)) => some n
+  | _ => none
+
+def meOf (E : Kernel.Env D) (w : World D) (obj : D) : Option ByteArray :=
+  match (slotOf E w obj 1).map (Wire.decodeData .bytes) with
+  | some (.ok (.bytes b)) => some b
+  | _ => none
+
+/-- `go`'s arguments: `rest` forwarded whole, `via` the grant the call goes through. -/
+def relayArgs (rest via : ByteArray) : Option ByteArray :=
+  Wire.encodeData RA (.record [("rest", .bytes rest), ("via", .bytes via)])
+
+/-- The arguments of a chain entered at the first of `grants` (grant `i` names object `i` on
+object `i+1`): each level's arguments nest the next level's, and the last object gets empty ones. -/
+def chainArgs : List ByteArray → Option ByteArray
+  | [] => relayArgs .empty .empty
+  | g :: gs => do relayArgs (← chainArgs gs) g
+
+/-- The call rows (LC): Relay chains through the real receivers. -/
+def callRows (mode : Mode) (r0 : Run) (a : Sim.Member) : Run := Id.run do
+  let prog := mode.program
+  let mut r := r0
+  -- LC calls: a chain of six Relay objects o0 … o5, o5 last (empty `next`); grant k lets o_k invoke o_{k+1}
+  let some relayBytes := Wire.encodePackage relay | return note r "LC Relay has no bytes" false
+  let (rc0, vc0, tc0) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id]) (.install relayBytes))
+  r := note rc0 s!"LC0 install Relay: {vc0}" (vc0 == "admitted")
+  let some rid := tc0.bind fun t => (createdIds t).head? | return note r "LC no Relay id" false
+  let some h0 := nat64 0 | return note r "LC no bytes for 0" false
+  let some emptyB := Wire.encodeData .bytes (.bytes .empty) | return note r "LC no empty bytes" false
+  let mut objs : List D := []
+  for _ in [0:6] do
+    let next := match objs.head? with | some o => Sim.dc.bytes o | none => .empty
+    let some nextB := Wire.encodeData .bytes (.bytes next) | return note r "LC no next bytes" false
+    let (rk, vk, tk) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id, rid])
+      (.create (some rid) [] [(stateBase, h0), (stateBase + 1, emptyB), (stateBase + 2, nextB)]))
+    r := note rk s!"LC1 A creates Relay o{5 - objs.length}: {vk}" (vk == "admitted")
+    let some o := tk.bind fun t => (createdIds t).head? | return note r "LC no object id" false
+    objs := o :: objs
+  let mut grants : List D := []
+  for (x, y) in objs.zip objs.tail do
+    let (rk, vk, tk) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id, x, y]) (.grant y x [.invoke 0] none))
+    r := note rk s!"LC2 A grants o_k invoke 0 on o_k+1: {vk}" (vk == "admitted")
+    let some gk := tk.bind fun t => (createdIds t).head? | return note r "LC no grant id" false
+    grants := grants ++ [gk]
+  let gBytes := grants.map Sim.dc.bytes
+  let pinsAll := Sim.S.pinsFor r.st.host ([a.id, rid] ++ objs ++ grants)
+  let o0 := objs.headD 0
+  let o1 := objs.getD 1 0
+  let o5 := objs.getD 5 0
+  -- LC3 entered at o1: o2 … o5 at depths 1 … 4 = callDepthMax, admitted; every object ran once
+  let some args1 := chainArgs gBytes.tail | return note r "LC3 no arguments" false
+  let (rc3, vc3, _) := go prog r (Sim.signed r.st a a.key pinsAll (.invoke o1 0 args1 10000 none))
+  r := { rc3 with log := r.log, bad := r.bad }
+  let hit5 := hitsOf Sim.env r.st.host o5
+  if mode = .dropCalls then
+    r := note r s!"PLANT drop-calls: LC3 the chain's end must now be untouched: {vc3}, o5 hits {hit5}" (vc3 == "admitted" && hit5 == some 0)
+  else
+    r := note r s!"LC3 A invokes o1, calls 4 deep: {vc3}; o5 hits {hit5}, o5 sees itself as self {meOf Sim.env r.st.host o5 == some (Sim.dc.bytes o5)}"
+      (vc3 == "admitted" && hit5 == some 1 && hitsOf Sim.env r.st.host o1 == some 1 &&
+        meOf Sim.env r.st.host o5 == some (Sim.dc.bytes o5))
+  -- LC4 entered at o0: o5 would be at depth 5, past callDepthMax
+  let some args0 := chainArgs gBytes | return note r "LC4 no arguments" false
+  let pins4 := Sim.S.pinsFor r.st.host ([a.id, rid] ++ objs ++ grants)
+  let (rc4, vc4, _) := go prog r (Sim.signed r.st a a.key pins4 (.invoke o0 0 args0 10000 none))
+  r := { rc4 with log := r.log, bad := r.bad }
+  if mode = .dropCalls then
+    r := note r s!"PLANT drop-calls: LC4 five deep must now be admitted: {vc4}" (vc4 == "admitted")
+  else
+    r := note r s!"LC4 A invokes o0, calls 5 deep: {vc4}" (vc4.startsWith "refused callTooDeep")
+  -- LC5 a call naming a cell by bytes that are not a digest is refused by name
+  let some xyz := Wire.encodeData .bytes (.bytes "xyz".toUTF8) | return note r "LC5 no bytes" false
+  let (rc5, vc5, tc5) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id, rid])
+    (.create (some rid) [] [(stateBase, h0), (stateBase + 1, emptyB), (stateBase + 2, xyz)]))
+  r := note rc5 s!"LC5a A creates a Relay whose next is not a digest: {vc5}" (vc5 == "admitted")
+  let some bad := tc5.bind fun t => (createdIds t).head? | return note r "LC5 no object id" false
+  let some argsB := relayArgs .empty .empty | return note r "LC5 no arguments" false
+  let (rc5b, vc5b, _) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id, rid, bad]) (.invoke bad 0 argsB 10000 none))
+  r := note rc5b s!"LC5b A invokes it: {vc5b}" (vc5b.startsWith "refused program" && (vc5b.splitOn "calls: c0 obj: not a digest").length > 1)
+  -- LC6 a method with more call slots than callsMax is not a method: install refuses it by name
+  let some nineBytes := Wire.encodePackage nineCalls | return note r "LC6 NineCalls has no bytes" false
+  let (rc6, vc6, _) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id]) (.install nineBytes))
+  r := note rc6 s!"LC6 install a method with {Kernel.Bounds.callsMax + 1} call slots: {vc6}"
+    (vc6.startsWith "refused program" && (vc6.splitOn "badMethod go").length > 1)
+  return r
 
 def journey (mode : Mode) : Run := Id.run do
   let prog := mode.program
@@ -460,6 +599,7 @@ def journey (mode : Mode) : Run := Id.run do
   r := { r11d with log := r.log, bad := r.bad }
   if mode = .honest then
     r := note r s!"L11d A keeps BirthOnly and adds Frozen: {v11d}" (v11d == "admitted")
+  r := callRows mode r a
   -- L7 follower and auditor
   match World.fold Sim.env g r.st.log with
   | .ok w => r := note r s!"L7 follower reaches the Host's World ({r.st.log.length} turns)" (Sim.same w r.st.host)
@@ -470,7 +610,7 @@ def journey (mode : Mode) : Run := Id.run do
   return r
 
 def runAll : IO UInt32 := do
-  let runs := [Mode.honest, .skipJudge, .eraseOccasion, .erasePayload].map journey
+  let runs := [Mode.honest, .skipJudge, .eraseOccasion, .erasePayload, .dropCalls].map journey
   for r in runs do for l in r.log do IO.println l
   let bad := (runs.map (·.bad)).foldl (· + ·) 0
   IO.println s!"lang-journey: {if bad = 0 then "GREEN" else s!"RED ({bad})"}"

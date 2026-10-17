@@ -147,7 +147,7 @@ def measureInvoke (X : Ctx D) (w : World D) (c : Call D) : Option (Nat × Nat) :
     match invokeRun X look c c.unsigned.member obj method via with
     | .ok (cell, p, r) =>
       match Lang.runMeasured X.env.bytes X.digestOf look p (stateOf cell) method args r budget with
-      | .ok (_, ticks, pkgs) => some (ticks, pkgs)
+      | .ok (_, _, ticks, pkgs) => some (ticks, pkgs)
       | .error _ => none
     | .error _ => none
   | _ => none

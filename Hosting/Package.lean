@@ -56,7 +56,7 @@ it is built). -/
 def lifecycle? : Except Std.StdRefusal Package := do
   let phase ← Std.machine stateTy "phase" phaseLabels initial.label methodLabels edgeLabels
   let ms ← Event.all.mapM fun e => do
-    pure (e.label, unit, ← Std.stepTo stateTy "phase" phaseLabels methodLabels e.label edgeLabels)
+    pure (e.label, unit, [], ← Std.stepTo stateTy "phase" phaseLabels methodLabels e.label edgeLabels)
   pure (Std.pkgOf stateTy [("phase", phase)] ms)
 
 /-! ## Slots: what `create` seeds and what the controller reads -/

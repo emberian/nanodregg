@@ -156,6 +156,14 @@ end
 /-- A closed term. -/
 def term (t : Term) : Option String := (termSx 0 t).bind fits
 
+/-- A term that is a constant of the program: that it has a text is decided where it is written. -/
+def termText (t : Term) (h : (term t).isSome = true := by decide) : String := (term t).get h
+
+/-! ## A method's calls, as a resident pastes them (printed, never restated) -/
+
+/-- The calls row of a method that makes no calls. -/
+def noCallsText : String := termText (callsT [])
+
 /-! ## Data (what `Read.dataAt` reads back at the value's type) -/
 
 mutual

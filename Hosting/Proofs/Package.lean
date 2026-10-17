@@ -63,7 +63,7 @@ private def relawD : Data := .inj "relaw" (.bytes .empty)
 
 private def rqD (occasion : Data) (principal : ByteArray := .empty) : Data :=
   .record [("agent", .bytes .empty), ("notBefore", .nat 0), ("occasion", occasion),
-    ("principal", .bytes principal), ("validUntil", .nat 0)]
+    ("principal", .bytes principal), ("self", .bytes .empty), ("validUntil", .nat 0)]
 
 /-- Field `ℓ` of the package body applied to the three bound values. -/
 private def bodyAt (ℓ : Label) : Term :=
@@ -75,10 +75,25 @@ private def lawOn (ℓ : Label) (rq new old : Data) : Outcome :=
 private def bE : ByteArray := "app.bin".toUTF8
 private def bA : ByteArray := "a".toUTF8
 
-/-- Field `f` of the state method `e` writes from a state of kind `k`, phase `p`, entry `bE`. -/
-private def methodField (e : Event) (k : Kind) (p : Phase) (f : Label) : Outcome :=
-  eval [] fuel (.get (bodyAt e.label) f)
+/-- Field `f` of the result half `half` (`state` or `calls`) of method `e`, run from a state of
+kind `k`, phase `p`, entry `bE`. -/
+private def resultField (half : Label) (e : Event) (k : Kind) (p : Phase) (f : Label) : Outcome :=
+  eval [] fuel (.get (.get (bodyAt e.label) half) f)
     [(rqD (invokeD e.index) bA).toVal, unitD.toVal, (stD p k bE).toVal]
+
+/-- Field `f` of the state method `e` writes. -/
+private def methodField (e : Event) (k : Kind) (p : Phase) (f : Label) : Outcome :=
+  resultField "state" e k p f
+
+/-- The calls row of method `e`, run from a state of kind `k`, phase `p`, entry `bE`. -/
+private def resultCalls (e : Event) (k : Kind) (p : Phase) : Outcome :=
+  eval [] fuel (.get (bodyAt e.label) "calls")
+    [(rqD (invokeD e.index) bA).toVal, unitD.toVal, (stD p k bE).toVal]
+
+/-- The calls row is the empty record. -/
+private def emptyIs : Outcome → Bool
+  | .value (.record []) _ => true
+  | _ => false
 
 /-- The method labels, in the package's order, are `Event.all`'s: method `n` is `Event.index`. -/
 theorem lifecycle_methods :
@@ -125,6 +140,19 @@ theorem method_writes :
       (injIs (target p e).label (methodField e k p "phase") &&
        injIs k.label (methodField e k p "kind") &&
        bytesIs bE (methodField e k p "entry")) = true := by
+  decide +kernel
+
+/-- Every lifecycle method makes no calls, by its type: its signature has no call slots (a
+lifecycle step moves the phase and nothing else), and `lifecycle_checks` holds its body to it. -/
+theorem method_no_calls :
+    (Grain.lifecycle?.toOption.map fun p => Event.all.all fun e =>
+      decide (((match p.iface with | .record r => Row.find? e.label r | _ => none).bind
+        (methodSig p.state)) = some (unit, []))) = some true := by
+  decide +kernel
+
+/-- And every method's calls row evaluates to the empty record, for every kind, phase and event. -/
+theorem method_calls_empty :
+    ∀ k ∈ Kind.all, ∀ p ∈ Phase.all, ∀ e ∈ Event.all, emptyIs (resultCalls e k p) = true := by
   decide +kernel
 
 /-- Method and law together: the state method `e` writes from phase `p` is admitted by the `phase`

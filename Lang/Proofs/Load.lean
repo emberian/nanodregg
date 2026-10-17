@@ -254,42 +254,86 @@ theorem load_libTy {D : Type} {digestOf : ByteArray → Option D} {look : Pinned
   have hi : i < L.lib.length := by rw [hlib]; exact (List.getElem?_eq_some_iff.mp hP).1
   exact ⟨L.lib[i], List.getElem?_eq_getElem hi, hty i _ P (List.getElem?_eq_getElem hi) hP⟩
 
-theorem methodArg_spec {S t A : Ty} (h : methodArg S t = some A) : t = methodTy S A := by
-  unfold methodArg at h
+theorem callSlotOf_spec {t T : Ty} (h : callSlotOf t = some T) : t = optTy T := by
+  unfold callSlotOf at h
   split at h
-  · rename_i S' A' R S''
-    split at h
-    · rename_i hc
+  · split at h
+    · cases h; rfl
+    · cases h
+  · cases h
+
+theorem mapM_callSlotOf : ∀ {row : List (Label × Ty)} {ks : List Ty},
+    row.mapM (fun e => callSlotOf e.2) = some ks → row.map Prod.snd = ks.map optTy
+  | [], ks, h => by simp at h; subst h; rfl
+  | (l, t) :: row, ks, h => by
+    simp only [List.mapM_cons, bind, Option.bind_eq_some_iff, pure, Option.some.injEq] at h
+    obtain ⟨T, hT, ks', hks', rfl⟩ := h
+    simp [callSlotOf_spec hT, mapM_callSlotOf hks']
+
+theorem zip_map_fst_snd {α β : Type} : ∀ (l : List (α × β)), (l.map Prod.fst).zip (l.map Prod.snd) = l
+  | [] => rfl
+  | (a, b) :: l => by simp [zip_map_fst_snd l]
+
+/-- A calls row is the row of its call types, and has at most `callsMax` slots. -/
+theorem callSlotsOf_spec {row : List (Label × Ty)} {ks : List Ty} (h : callSlotsOf row = some ks) :
+    row = (slotLabels "c" ks.length).zip (ks.map optTy) ∧ ks.length ≤ Kernel.Bounds.callsMax := by
+  unfold callSlotsOf at h
+  split at h
+  · rename_i hc
+    have hs := mapM_callSlotOf h
+    have hlen : row.length = ks.length := by
+      have := congrArg List.length hs; simpa using this
+    refine ⟨?_, hlen ▸ hc.1⟩
+    rw [← hlen, ← hc.2, ← hs]
+    exact (zip_map_fst_snd row).symm
+  · cases h
+
+theorem methodSig_spec {S t A : Ty} {ks : List Ty} (h : methodSig S t = some (A, ks)) :
+    t = methodTy S A ks ∧ ks.length ≤ Kernel.Bounds.callsMax := by
+  unfold methodSig at h
+  split at h
+  · split at h
+    · rename_i row S'' hc
       obtain ⟨rfl, rfl, rfl, _⟩ := hc
-      cases h; rfl
-    · simp at h
-  · simp at h
+      simp only [Option.map_eq_some_iff, Prod.mk.injEq] at h
+      obtain ⟨ks', hks, rfl, rfl⟩ := h
+      obtain ⟨hrow, hlen⟩ := callSlotsOf_spec hks
+      subst hrow
+      exact ⟨rfl, hlen⟩
+    · cases h
+  · cases h
+
+theorem methodArg_spec {S t A : Ty} (h : methodArg S t = some A) : ∃ ks, t = methodTy S A ks := by
+  unfold methodArg at h
+  simp only [Option.map_eq_some_iff] at h
+  obtain ⟨⟨A', ks⟩, hs, rfl⟩ := h
+  exact ⟨ks, (methodSig_spec hs).1⟩
 
 theorem recordRow_find {T : Ty} {ℓ : Label} {t : Ty} (h : Row.find? ℓ (recordRow T) = some t) :
     ∃ row, T = .record row ∧ Row.find? ℓ row = some t := by
   cases T <;> simp_all [recordRow, Row.find?]
 
 /-- A method of a loaded package, applied to a state, arguments and a request of the right types,
-runs in the loaded closure without ever reaching `stuck`: it ends with a new state of the package's
-state type, or a named budget/arithmetic fault. (That the values decoded from the cells HAVE those
+runs in the loaded closure without ever reaching `stuck`: it ends with a result of the package's
+`resultTy` (the calls it makes and the new state), or a named budget/arithmetic fault. (That the values decoded from the cells HAVE those
 types is `decodeData_conforms`/`readState_conforms`; `Lang.Proofs.Invoke` composes them.) -/
 theorem method_run_sound {D : Type} {digestOf : ByteArray → Option D} {look : Pinned D}
     {fuel : Nat} {idb : ByteArray} {L : Loaded} {g : Nat} {p : Package} {ℓ : Label} {mty A : Ty}
-    {sv av rv : Val} {ticks : Nat}
+    {ks : List Ty} {sv av rv : Val} {ticks : Nat}
     (hload : load digestOf look fuel idb ⟨[], [], []⟩ = .ok (L, g))
     (hp : L.pkgs[g]? = some p)
-    (hm : Row.find? ℓ (recordRow p.iface) = some mty) (hA : methodArg p.state mty = some A)
+    (hm : Row.find? ℓ (recordRow p.iface) = some mty) (hA : methodSig p.state mty = some (A, ks))
     (hs : ValTy (Loaded.ifaces L) sv p.state) (ha : ValTy (Loaded.ifaces L) av A)
     (hr : ValTy (Loaded.ifaces L) rv reqTy) :
-    RunOK (Loaded.ifaces L) p.state
+    RunOK (Loaded.ifaces L) (resultTy p.state ks)
       (run L.lib Bounds.stackMax ticks 0 (State.init (apply3 g ℓ) [rv, av, sv])) := by
   obtain ⟨hlib, _⟩ := load_libTy hload
   obtain ⟨row, hrow, hfind⟩ := recordRow_find hm
-  have hmt := methodArg_spec hA
+  have hmt := (methodSig_spec hA).1
   subst hmt
   have href : HasType (Loaded.ifaces L) [reqTy, A, p.state] (.ref g) (.record row) :=
     .ref (by rw [← hrow]; simp [Loaded.ifaces, hp])
-  have ht : HasType (Loaded.ifaces L) [reqTy, A, p.state] (apply3 g ℓ) p.state :=
+  have ht : HasType (Loaded.ifaces L) [reqTy, A, p.state] (apply3 g ℓ) (resultTy p.state ks) :=
     .app (.app (.app (.get href hfind) (.var rfl)) (.var rfl)) (.var rfl)
   exact run_sound hlib _ _ _ (.eval (.cons hr (.cons ha (.cons hs .nil))) ht .nil)
 

@@ -390,7 +390,7 @@ constructors. `callData` is exhaustive, so a new Right breaks the build, which i
 example, which the check refuses. I accepted `Body` as the effect type partly because LANG-3 had
 already agreed, so I am not the right judge of whether a narrower posting type would have been
 safer for value.
-**Status.** agreed with LEDGER (sent 2026-10-17); KERNEL-5's signature pending; not built.
+**Status.** agreed with LEDGER (sent 2026-10-17); built in the post-D5 `lang!` day with LANG-33's amendment: the fixed eight-slot row is replaced by declared slots.
 
 ## LANG-24 The fifth occasion: `adopt laws'` — every Std law states what it does when it is ADDED over existing state (2026-10-17; with KERNEL-5's KERNEL-27, ROOT ruled `.adopt`)
 **Decision.** `occasionTy` gains `adopt : bytes`: the incoming laws' ids, encoded as `relaw`'s
@@ -460,7 +460,7 @@ DATA (to show or compare it) still cannot compute it. `of` with an attacker-chos
 account the object does not own; the transfer is then refused by authority, as for any `id`.
 **Meta-critique.** Refusing the builtin keeps hashing out of my layer, which is convenient for me. The
 independent tests are the teeth (b) and law 1 (c), not my convenience.
-**Status.** agreed (LEDGER-7, 7229d95); built in D5 (kernel) and the post-D5 `lang!` day (callTy, reqTy).
+**Status.** agreed (LEDGER-7, 7229d95); built in D5 (kernel, c3c7aa3) and the post-D5 `lang!` day (`acctRefTy` in `callArms`, `(self bytes)` in `reqTy`, bounded by `reqOk`; journey LC3 checks `req.self` is the invoked object).
 
 ## LANG-26 The receiver's verdict on a stdlib package is its laws' meaning (2026-10-17; closes LANG-20's chain)
 **Decision.** `Lang/Proofs/Receiver.lean` proves `judgeOne_pkgOf_admits`. If the receiver's judge admits
@@ -658,3 +658,55 @@ reads as a variable, so it is reachable and fine.
 narrower, not refused". That is the honest-label move. The class is one fault, so the refusal is
 one refusal.
 **Status.** built.
+
+## LANG-33 A method declares its call slots: k ≤ callsMax, each a sub-sum of `callTy` (2026-10-18; the post-D5 `lang!` day, amends LANG-23's fixed arity)
+**Decision.** A method's type is `methodTy S A ks = fn S (fn A (fn reqTy (rec {calls : callsTy ks,
+state : S})))`. `callsTy ks` has slots `c0 … c(k-1)`, slot `i` being `optTy ks[i]`. `methodSig`
+(the install check's method shape) requires `k ≤ Kernel.Bounds.callsMax`, the labels in order,
+and every `ks[i]` a sum of some of `callArms`, each arm at exactly its `callArms` type
+(`callSlotOk`). `callOf kinds` builds one. A method that makes no calls has `calls : rec {}`
+(`Std.methodOf`, `Std.stepTo`); `Std.methodWith` takes slot terms (`noCallT T`, `someCallT T t`)
+and refuses more than `callsMax` (`tooManyCalls`). `Std.pkgOf`'s methods become
+`(label, argument type, call slot types, term)`. `resolveMethod` returns the slots, and
+`runMeasured` extracts at the method's own `resultTy p.state ks`, then `callsOf` gives KERNEL its
+`List (Body D)`. Theorems (`Lang/Proofs/Call.lean`): `run_calls` (the deployed run's calls are at
+most `callsMax` and all callable, so KERNEL's `tooManyCalls` and `notCallable` never fire on a
+Lang method; KERNEL keeps both as its own assertions, law 4), `bodyOf_callData` /
+`callData_bodyOf` (the round trip against `Body`), `callData_not_callable`; `methodSig_spec`
+(`Proofs/Load`); `method_run_sound` and `invoke_never_stuck` restated at `resultTy p.state ks`.
+Journey rows LC0–LC6: a six-object `Relay` chain whose method invokes the next object through a
+grant naming it, forwarding pre-encoded arguments (LANG-23 (iii)). Depth 4 is admitted, every
+object runs once, and `req.self` is the callee. Depth 5 is refused `callTooDeep`. A call naming its
+object by non-digest bytes is refused `program "calls: c0 obj: not a digest"`. A method with nine
+slots is refused `badMethod go` at install. Plant `drop-calls` (the run's calls never reach the
+kernel): LC3's chain end is untouched, and LC4 is admitted.
+**Why the amendment.** With LANG-23's fixed eight slots of `optTy callTy`, every method's type
+carried eight copies of `callTy` and every body's eight `none` annotations eight more:
+`world/grain/Lifecycle` went from 7215 to 57953 bytes, and the rows' `grain` row went red at its
+create (`refused badResult`; I did not trace which bound the larger package hit, and the row is
+green at the declared-slot size). LANG-23's critique called the
+eight `none` slots "author-time cost only; no bytes on the wire". That was false: they are in the
+package bytes, hence its id and every install. With declared slots the Lifecycle is 7505 bytes
+(+290: `rec {calls : rec {}, state : S}` and `self` in `reqTy`). The type also states the
+method's capability: a lifecycle method's type says it makes no calls (Hosting's
+`method_no_calls`), and the escrow's says it may make only transfers.
+**Alternatives.** (1) Keep the fixed row and share `none` by a `λ`: it halves the body, but the
+type still carries `callsMax × callTy` per method. (2) A list or recursive type in the core: see
+LANG-23. (3) One shared calls-type package imported by reference: the closure must load it for
+every method, and the type is still expanded at the checker.
+**Critique.** Call data is not canonical: option rows (calls and a grant's rights) skip `none`
+wherever it sits, so `callData_bodyOf` is stated up to re-encoding. A slot type is checked
+structurally against `callArms` (width subtyping at one boundary only, the method shape), not by
+the core typing, so `callSlotOk` is a second place that knows `callTy`'s arms: `callArms` is the
+one list both read. The extraction now forces the result record, +4 ticks per invoke: 2 to force
+the `calls` field and 2 to force the `state` field (each forced suspension is an init step and a
+value step; an empty calls row and the unknot of a record value cost 0). THE BAR's
+`ticks-per-call` was re-pinned 30 → 34 with GATES-2's agreement. GATES-2's critique, owed by LANG:
+`ticks-per-call` is an absolute count, so every honest semantic change raises its ceiling and hides
+real waste among the honest raises. The row should be a ratio, the machine's ticks over what the
+program requires (e.g. the BigStep derivation's size), pinned near 1.
+**Meta-critique.** I built the fixed row exactly as LANG-23 said, saw the journey green, and found
+the cost only when a row in another layer went red. The size of a type had never been measured.
+The independent check is the Lifecycle's byte count in the commit, and G0's byte gate on it.
+**Status.** built (this commit). Re-ids every package with a method or a law (`reqTy` changed):
+`world/grain/Lifecycle` re-emitted, and THE BAR's counter re-ids.

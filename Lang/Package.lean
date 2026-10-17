@@ -31,19 +31,106 @@ def occasionTy : Ty :=
   .sum [("adopt", .bytes), ("birth", .record []), ("invoke", .nat), ("relaw", .bytes), ("write", .record [])]
 
 /-- What a law and a method see of the call: the signing member, whose authority it uses, the
-call's signed window (the Turn lands at a height in `[notBefore, validUntil]`, KERNEL-10), and the
-act being judged. -/
+object judged or run on (`self`: a method names its own accounts by it, LANG-25), the call's
+signed window (the Turn lands at a height in `[notBefore, validUntil]`, KERNEL-10), and the act
+being judged. -/
 def reqTy : Ty :=
   .record [("agent", .bytes), ("notBefore", .nat), ("occasion", occasionTy), ("principal", .bytes),
-    ("validUntil", .nat)]
+    ("self", .bytes), ("validUntil", .nat)]
 
 /-- A law's verdict: `ok`, or `refused` with the author's reason. -/
 def verdictTy : Ty := .sum [("ok", .record []), ("refused", .bytes)]
 
 def lawTy (S : Ty) : Ty := .fn S (.fn S (.fn reqTy verdictTy))
 
-/-- A method's type for argument type `A`. -/
-def methodTy (S A : Ty) : Ty := .fn S (.fn A (.fn reqTy S))
+/-! ## Calls: what a method asks the kernel to do as the object (LANG-23, LANG-33)
+
+The core has no lists, so a method returns its calls in a row of option SLOTS `c0 … c(k-1)`,
+`k ≤ Kernel.Bounds.callsMax`. Each slot's type names the kinds of call it may carry: options over
+a sub-sum of `callTy`, every arm at exactly its `callTy` type. `callTy` has one arm per kind an
+object may exercise (KERNEL's `Body.callable`: account, credit, grant, invoke, transfer), its fields
+the `Body` constructor's: a digest is `bytes`, an `Option` is `optTy`, an `AcctRef` is
+`acctRefTy`, a grant's rights the fixed-arity `rightsTy`. So a method's type says how many calls
+it may make and of which kinds, and costs bytes only for those: a method that makes none has
+`calls : rec {}`. `Lang.Call` reads the kernel's `Body` back out of such data. -/
+
+/-- An optional `T`. -/
+def optTy (T : Ty) : Ty := .sum [("none", .record []), ("some", T)]
+
+/-- How a call names a value account (KERNEL's `AcctRef`): a well by its denomination, any other
+account by its owner and denomination. -/
+def acctRefTy : Ty := .sum [("of", .record [("asset", .bytes), ("owner", .bytes)]), ("well", .bytes)]
+
+/-- A right a granted call carries (KERNEL's `Right`). -/
+def rightTy : Ty := .sum [("enroll", .nat), ("invoke", .nat), ("mutate", .record []), ("observe", .record [])]
+
+/-- The rights one granted call may carry: KERNEL's `Right` has four constructors, and a grant
+naming one twice says nothing more. -/
+def rightsMax : Nat := 4
+
+/-- The slot labels `r0 …` of `rightsTy` and `c0 …` of a calls row, in slot order. -/
+def slotLabels (c : String) (n : Nat) : List Label := (List.range n).map fun i => c ++ toString i
+
+def rightLabels : List Label := slotLabels "r" rightsMax
+
+def rightsTy : Ty := .record (rightLabels.map fun l => (l, optTy rightTy))
+
+/-- The arms of `callTy`, one per callable kind, in canonical order. -/
+def callArms : List (Label × Ty) :=
+  [("account", .record [("asset", .bytes), ("owner", .bytes)]),
+    ("credit", .record [("acct", acctRefTy), ("amount", .nat), ("via", optTy .bytes), ("well", .bytes)]),
+    ("grant", .record [("grantee", .bytes), ("parent", optTy .bytes), ("rights", rightsTy),
+      ("target", .bytes)]),
+    ("invoke", .record [("args", .bytes), ("budget", .nat), ("method", .nat), ("obj", .bytes),
+      ("via", optTy .bytes)]),
+    ("transfer", .record [("amount", .nat), ("dst", acctRefTy), ("once", optTy .bytes),
+      ("src", acctRefTy), ("via", optTy .bytes)])]
+
+/-- Any call an object may make. -/
+def callTy : Ty := .sum callArms
+
+/-- A call of one of `kinds` (labels of `callArms`), in canonical order: a slot's call type. -/
+def callOf (kinds : List Label) : Ty := .sum (callArms.filter fun a => kinds.contains a.1)
+
+/-- The calls row over slot call types `ks`: slot `ci` is `optTy (ks[i])`. -/
+def callsTy (ks : List Ty) : Ty := .record ((slotLabels "c" ks.length).zip (ks.map optTy))
+
+/-- What a method returns over state `S` with call slots `ks`: the calls it makes as the object,
+and the new state. -/
+def resultTy (S : Ty) (ks : List Ty := []) : Ty := .record [("calls", callsTy ks), ("state", S)]
+
+/-- A method's type for argument type `A` and call slots `ks` (none: it makes no calls). -/
+def methodTy (S A : Ty) (ks : List Ty := []) : Ty := .fn S (.fn A (.fn reqTy (resultTy S ks)))
+
+/-- A slot's call type: a sum of at least one of `callArms`, each at its own type (an empty sum
+would be a slot that can never hold a call). -/
+def callSlotOk : Ty → Bool
+  | .sum arms => !arms.isEmpty && arms.all fun a => decide (Row.find? a.1 callArms = some a.2)
+  | _ => false
+
+/-- A slot type's call type: the slot is an option over a call type. -/
+def callSlotOf : Ty → Option Ty
+  | .sum [("none", .record []), ("some", T)] => if callSlotOk T then some T else none
+  | _ => none
+
+/-- The call types of a calls row: at most `callsMax` slots, labelled `c0 …` in order, each an
+option over a call type. -/
+def callSlotsOf (row : List (Label × Ty)) : Option (List Ty) :=
+  if row.length ≤ Kernel.Bounds.callsMax ∧ row.map (·.1) = slotLabels "c" row.length then
+    row.mapM fun e => callSlotOf e.2
+  else none
+
+/-- The empty call slot of call type `T`. -/
+def noCallT (T : Ty) : Term := .inj (optTy T) "none" (.record [])
+
+/-- A call `t` in a slot of call type `T`. -/
+def someCallT (T : Ty) (t : Term) : Term := .inj (optTy T) "some" t
+
+/-- The calls row holding slot terms `slots` (each a `noCallT` or `someCallT`) in order. -/
+def callsT (slots : List Term) : Term := .record ((slotLabels "c" slots.length).zip slots)
+
+/-- What a method returns: `{calls, state}`. -/
+def resultT (calls state : Term) : Term := .record [("calls", calls), ("state", state)]
 
 def importsMax : Nat := 16
 def methodsMax : Nat := 64
@@ -88,11 +175,14 @@ def isRecordData : Ty → Bool
   | t@(.record _) => t.wf && t.isData
   | _ => false
 
-/-- The argument type of a method field, if it has a method's shape over state `S`. -/
-def methodArg (S : Ty) : Ty → Option Ty
-  | .fn S' (.fn A (.fn R S'')) =>
-      if S' = S ∧ R = reqTy ∧ S'' = S ∧ A.isData then some A else none
+/-- The argument type and call slots of a method field, if it has a method's shape over state `S`. -/
+def methodSig (S : Ty) : Ty → Option (Ty × List Ty)
+  | .fn S' (.fn A (.fn R (.record [("calls", .record row), ("state", S'')]))) =>
+      if S' = S ∧ R = reqTy ∧ S'' = S ∧ A.isData then (callSlotsOf row).map (A, ·) else none
   | _ => none
+
+/-- The argument type of a method field. -/
+def methodArg (S : Ty) (t : Ty) : Option Ty := (methodSig S t).map (·.1)
 
 def checkMethods (S : Ty) (row : List (Label × Ty)) : List Label → Except CheckError Unit
   | [] => .ok ()

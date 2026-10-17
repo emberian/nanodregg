@@ -46,8 +46,9 @@ theorem readState_conforms {row : List (Label × Ty)} {s : Slots} {d : Data}
 theorem reqOk_conforms {D : Type} {bytesOf : D → ByteArray} {r : Req D} (h : reqOk bytesOf r = true) :
     Conforms (reqData bytesOf r) reqTy := by
   simp only [reqOk, Bool.and_eq_true, decide_eq_true_eq] at h
-  obtain ⟨⟨⟨⟨ha, hp⟩, hnb⟩, hvu⟩, ho⟩ := h
-  refine .record (.cons (.bytes ha) (.cons (.nat hnb) (.cons ?_ (.cons (.bytes hp) (.cons (.nat hvu) .nil)))))
+  obtain ⟨⟨⟨⟨⟨ha, hp⟩, hs⟩, hnb⟩, hvu⟩, ho⟩ := h
+  refine .record (.cons (.bytes ha) (.cons (.nat hnb) (.cons ?_ (.cons (.bytes hp) (.cons (.bytes hs)
+    (.cons (.nat hvu) .nil))))))
   cases hr : r.occasion with
   | birth => exact .inj rfl (.record .nil)
   | write => exact .inj rfl (.record .nil)
@@ -92,7 +93,8 @@ theorem methodArg_wf {p : Package} {ℓ : Label} {mty A : Ty} (h : p.checkShape 
   rw [hrow] at hw
   simp only [Ty.wf, Bool.and_eq_true] at hw
   have := rowWf_find hw.2 hf
-  rw [methodArg_spec hA] at this
+  obtain ⟨ks, hks⟩ := methodArg_spec hA
+  rw [hks] at this
   simp only [methodTy, Ty.wf, Bool.and_eq_true] at this
   exact this.2.1
 
@@ -141,7 +143,8 @@ theorem methodArg_dataTy {p : Package} {ℓ : Label} {mty A : Ty} (h : p.checkSh
   rw [hrow] at hwi
   simp only [Wire.tyWire, Bool.and_eq_true] at hwi
   have ht := tyRowWire_find hwi.2 hf
-  rw [methodArg_spec hA] at ht
+  obtain ⟨ks, hks⟩ := methodArg_spec hA
+  rw [hks] at ht
   simp only [methodTy, Wire.tyWire, Bool.and_eq_true] at ht
   simp only [Wire.dataTy, Bool.and_eq_true]
   exact ⟨methodArg_wf h hm hA, ht.2.1⟩
@@ -178,18 +181,19 @@ theorem checkFields_law {p : Package} (h : p.checkFields = .ok ()) {ℓ : Label}
     · rw [hrow]; exact checkLaws_find h ℓ hl
   · simp at h
 
-/-- The run inside `Program.run`, on what it decoded, never reaches `stuck`. -/
+/-- The run inside `Program.run`, on what it decoded, never reaches `stuck`: it ends with a value
+of the method's result type (its calls and its new state) or a named non-`stuck` fault. -/
 theorem invoke_never_stuck {D : Type} {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D}
     {look : Pinned D} {fuel : Nat} {idb : ByteArray} {L : Loaded} {g : Nat} {p : Package}
-    {ℓ : Label} {mty A : Ty} {state : Slots} {args : ByteArray} {sd ad : Data} {r : Req D}
+    {ℓ : Label} {mty A : Ty} {ks : List Ty} {state : Slots} {args : ByteArray} {sd ad : Data} {r : Req D}
     {ticks : Nat}
     (hload : load digestOf look fuel idb ⟨[], [], []⟩ = .ok (L, g))
     (hp : L.pkgs[g]? = some p)
-    (hm : Row.find? ℓ (recordRow p.iface) = some mty) (hA : methodArg p.state mty = some A)
+    (hm : Row.find? ℓ (recordRow p.iface) = some mty) (hA : methodSig p.state mty = some (A, ks))
     (hstate : readState (recordRow p.state) state = .ok sd)
     (hargs : Wire.decodeData A args = .ok ad)
     (hr : reqOk bytesOf r = true) :
-    RunOK L.ifaces p.state
+    RunOK L.ifaces (resultTy p.state ks)
       (run L.lib Bounds.stackMax ticks 0
         (State.init (apply3 g ℓ) [(reqData bytesOf r).toVal, ad.toVal, sd.toVal])) := by
   have hs := readState_conforms hstate
@@ -232,7 +236,7 @@ data the text read to: so the run (`runMeasured`, which resolves the same method
 planned call's arguments. -/
 theorem argsOf_decodes {D : Type} [DecidableEq D] {look : Pinned D} {pkg : D} {method : Nat}
     {text : String} {b : ByteArray} (h : argsOf look pkg method text = .ok b) :
-    ∃ p ℓ A d, readPackage look pkg = .ok p ∧ resolveMethod (D := D) p method = .ok (ℓ, A) ∧
+    ∃ p ℓ A ks d, readPackage look pkg = .ok p ∧ resolveMethod (D := D) p method = .ok (ℓ, A, ks) ∧
       readAt (D := D) A text = .ok d ∧ Wire.decodeData A b = .ok d := by
   unfold argsOf at h
   simp only [bind, Except.bind] at h
@@ -242,14 +246,14 @@ theorem argsOf_decodes {D : Type} [DecidableEq D] {look : Pinned D} {pkg : D} {m
     split at h
     · cases h
     · rename_i la hr
-      obtain ⟨ℓ, A⟩ := la
+      obtain ⟨ℓ, A, ks⟩ := la
       split at h
       · cases h
       · rename_i d hd
         split at h
         · rename_i b' he
           cases h
-          exact ⟨p, ℓ, A, d, hp, hr, hd, Wire.decodeData_eq_ok_iff.mpr he⟩
+          exact ⟨p, ℓ, A, ks, d, hp, hr, hd, Wire.decodeData_eq_ok_iff.mpr he⟩
         · cases h
 
 theorem lookup_append_of_lt {pre t : Slots} {k : Nat} (h : ∀ e ∈ pre, e.1 < k) :

@@ -10,7 +10,8 @@ closure must be pinned, or the receiver refuses `unpinned`.
 * `run` loads the closure (each package once, depth ≤ `closureDepthMax`, bodies relocated to the
   closure's indices), decodes the state at the package's state type and the arguments at the
   method's argument type, runs `method state args req` under the call's tick budget and extracts
-  the new state under what is left of it.
+  its result (`resultTy` at the method's call slots: the calls, then the new state) under what is left of it; the calls are
+  KERNEL `Body`s by `Lang.callsOf`.
 * `judge` runs every law in force — the package's own, then each extra law package's — on
   `old → new`, each under `lawTicks`, each reading the slots at ITS state type (LANG-11). `refused r`
   is `lawDenied law (label ++ ": " ++ r)`; running out of ticks is `lawDenied law (label ++ ": exhausted")`.
@@ -19,6 +20,7 @@ import Kernel.Receive.Call
 import Lang.Law
 import Lang.Wire.Data
 import Lang.Read
+import Lang.Call
 
 namespace Nanodregg.Lang
 
@@ -177,19 +179,21 @@ def occasionOk : Occasion D → Bool
   | .relaw ls | .adopt ls => decide ((ls.foldl (fun acc l => acc ++ bytesOf l) .empty).size ≤ Bounds.bytesMax)
   | .invoke m => decide (m < Bounds.natLimit)
 
-/-- The request fits the language's data: its member digests fit a byte value, its window fits
+/-- The request fits the language's data: its member and object digests fit a byte value, its window fits
 a natural, its occasion fits `occasionTy`. KERNEL bounds the window only at admission
 (`checkBounds`, after the receivers ran), so the language asserts it where the request enters a
 run (law 4). -/
 def reqOk (r : Req D) : Bool :=
   decide ((bytesOf r.agent).size ≤ Bounds.bytesMax) && decide ((bytesOf r.principal).size ≤ Bounds.bytesMax) &&
+    decide ((bytesOf r.self).size ≤ Bounds.bytesMax) &&
     decide (r.notBefore < Bounds.natLimit) && decide (r.validUntil < Bounds.natLimit) &&
     occasionOk bytesOf r.occasion
 
 def reqData (r : Req D) : Data :=
   .record [("agent", .bytes (bytesOf r.agent)), ("notBefore", .nat r.notBefore),
     ("occasion", occasionData bytesOf r.occasion),
-    ("principal", .bytes (bytesOf r.principal)), ("validUntil", .nat r.validUntil)]
+    ("principal", .bytes (bytesOf r.principal)), ("self", .bytes (bytesOf r.self)),
+    ("validUntil", .nat r.validUntil)]
 
 /-- Apply field `ℓ` of closure body `g` to values bound as `var 2, var 1, var 0`. -/
 def apply3 (g : Nat) (ℓ : Label) : Term :=
@@ -225,24 +229,25 @@ def judge (look : Pinned D) (pkg : Option D) (laws : List D) (old new : Slots) (
   if let some p := pkg then judgeOne bytesOf digestOf look p old new r
   for l in laws do judgeOne bytesOf digestOf look l old new r
 
-/-- Method `method` of package `p`: its label and its argument type (the one resolution: the run
-and the resident readers below all ask here). -/
-def resolveMethod (p : Package) (method : Nat) : Except (Refusal D) (Label × Ty) := do
+/-- Method `method` of package `p`: its label, its argument type and its call slots (the one
+resolution: the run and the resident readers below all ask here). -/
+def resolveMethod (p : Package) (method : Nat) : Except (Refusal D) (Label × Ty × List Ty) := do
   let some ℓ := p.methods[method]? | throw (.program s!"no method {method}")
   let some mty := Row.find? ℓ (recordRow p.iface) | throw (.program s!"no method {ℓ}")
-  let some A := methodArg p.state mty | throw (.program s!"method {ℓ}")
-  pure (ℓ, A)
+  let some (A, ks) := methodSig p.state mty | throw (.program s!"method {ℓ}")
+  pure (ℓ, A, ks)
 
-/-- Run method `method` of package `pkg` on `state`: the new state slots, with what the run cost
-(WASTE rows, PROTOCOL-4): the machine steps the method and its extraction used, and the packages
-of the closure loaded and re-checked (LANG-16). `runMethod` is its first component, so a measured
-number is the deployed run's. -/
+/-- Run method `method` of package `pkg` on `state`: the new state slots and the calls the method
+makes as the object (`callsOf`, in slot order), with what the run cost (WASTE rows, PROTOCOL-4):
+the machine steps the method and its extraction used, and the packages of the closure loaded and
+re-checked (LANG-16). `runMethod` and `program`'s `run` are its components, so a measured number
+is the deployed run's. -/
 def runMeasured (look : Pinned D) (pkg : D) (state : Slots) (method : Nat) (args : ByteArray)
-    (r : Req D) (budget : Nat) : Except (Refusal D) (Slots × Nat × Nat) := do
+    (r : Req D) (budget : Nat) : Except (Refusal D) (Slots × List (Body D) × Nat × Nat) := do
   unless reqOk bytesOf r do throw (.program "request out of bounds")
   let (L, g) ← load digestOf look closureDepthMax (bytesOf pkg) ⟨[], [], []⟩
   let some p := L.pkgs[g]? | throw (.program "closure")
-  let (ℓ, A) ← resolveMethod p method
+  let (ℓ, A, ks) ← resolveMethod p method
   let row := recordRow p.state
   let s ← match readState row state with | .ok d => pure d | .error e => throw (.program e)
   let a ← match Wire.decodeData A args with
@@ -252,17 +257,19 @@ def runMeasured (look : Pinned D) (pkg : D) (state : Slots) (method : Nat) (args
   match run L.lib Bounds.stackMax budget 0 (State.init (apply3 g ℓ) env) with
   | .fault f _ => throw (.program s!"{ℓ}: {faultText f}")
   | .value v used =>
-    match (Machine.mk L.lib).extract p.state (budget - used) v with
-    | .ok (.record ds, left) =>
+    match (Machine.mk L.lib).extract (resultTy p.state ks) (budget - used) v with
+    | .ok (.record [("calls", c), ("state", .record ds)], left) =>
       match stateSlots row ds 0 with
-      | some slots => pure (slots, budget - left, L.pkgs.length)
+      | some slots => do
+        let calls ← callsOf digestOf c
+        pure (slots, calls, budget - left, L.pkgs.length)
       | none => throw (.program s!"{ℓ}: state bytes")
     | .ok _ => throw (.program s!"{ℓ}: state")
     | .error f => throw (.program s!"{ℓ}: {faultText f}")
 
 def runMethod (look : Pinned D) (pkg : D) (state : Slots) (method : Nat) (args : ByteArray)
-    (r : Req D) (budget : Nat) : Except (Refusal D) Slots :=
-  (runMeasured bytesOf digestOf look pkg state method args r budget).map (·.1)
+    (r : Req D) (budget : Nat) : Except (Refusal D) (Slots × List (Body D)) :=
+  (runMeasured bytesOf digestOf look pkg state method args r budget).map fun x => (x.1, x.2.1)
 
 /-! ## The resident readers: TEXT at a package's types (what `nd create --pkg` and `nd invoke` sign)
 
@@ -287,7 +294,7 @@ def seedOf (look : Pinned D) (pkg : D) (text : String) : Except (Refusal D) Slot
 /-- Method `method`'s arguments read at its argument type, as the bytes the run decodes. -/
 def argsOf (look : Pinned D) (pkg : D) (method : Nat) (text : String) : Except (Refusal D) ByteArray := do
   let p ← readPackage look pkg
-  let (_, A) ← resolveMethod p method
+  let (_, A, _) ← resolveMethod p method
   match Wire.encodeData A (← readAt A text) with
   | some b => pure b
   | none => throw (.program "arguments: no bytes at the argument type")
@@ -298,8 +305,8 @@ end
 def program (bytesOf : D → ByteArray) (digestOf : ByteArray → Option D) : Program D where
   checkInstall := checkInstall digestOf
   judge := judge bytesOf digestOf
-  -- D5c (LEDGER-8 (e)): the slots, no calls until LANG's `lang!` day, and runMeasured's own tick count
+  -- the slots, the calls the method makes as the object, and the ticks it used (LEDGER-8 (e))
   run := fun look pkg state method args r budget =>
-    (runMeasured bytesOf digestOf look pkg state method args r budget).map fun x => (x.1, [], x.2.1)
+    (runMeasured bytesOf digestOf look pkg state method args r budget).map fun x => (x.1, x.2.1, x.2.2.1)
 
 end Nanodregg.Lang
