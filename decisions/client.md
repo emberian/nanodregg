@@ -384,3 +384,7 @@ through Lean's leaf decoder and NEVER through a Rust parse of the leaf.
 **Status.** ACCEPTED by ROOT 2026-10-17. Routed: CODEC-4 proves the decode-to-CellFit lemma, KERNEL-8
 states `deployed_head_read_sound_bytes` over leaf bytes, PROTOCOL-6 closes cv 01a149bf-8b34 against
 the theorem; the uncalled emitted `cell_fits` is deleted (CODEC). Nothing of client/ changes.
+**Closed (KERNEL-34, 5652aba).** `Receive.deployed_head_read_sound_bytes` (a reached World) and
+`deployed_head_read_sound_decoded_bytes` (a reopened base) take the served leaf bytes `b` and
+`Codec.Kernel.leaf.decode b = .ok lf`, with no premise about the leaf (`leaf_decode_cellFit`). The
+phone shows only what that decoder returns: those two theorems are what its read cites.
