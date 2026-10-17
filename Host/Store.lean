@@ -58,8 +58,8 @@ the directory. A crash leaves the old base or the new one. -/
 def fileCheckpoint (dir : System.FilePath) (keys : Keys) (c : Cadence) (world : Stream W)
     (async : Bool := true) : Checkpoint W where
   async
-  write w offset tag := do
-    match Base.file keys c world w offset tag with
+  write w offset tag index := do
+    match Base.file keys c world w offset tag index.toList with
     | .error f => return .error f
     | .ok bytes =>
       try
@@ -72,14 +72,18 @@ def fileCheckpoint (dir : System.FilePath) (keys : Keys) (c : Cadence) (world : 
 
 /-- The one open (writer and follower) over a Store directory: `openWith` reading the files. -/
 def openAt (dir : System.FilePath) (keys : Keys) (c : Cadence) (world : Stream W)
-    (step : W → ByteArray → Except F W) (segment : File) : IO (Except (StoreFault F) (Opening W)) := do
+    (mark : W → Nat × ByteArray) (step : W → ByteArray → Except F W) (segment : File) : IO (Except (StoreFault F) (Opening W)) := do
   unless ← (basePath dir).pathExists do return .error (.base .noBase)
   match ← readBounded (basePath dir) (Log.frameMax c.baseRecordMax) (fun n => .base (.baseTooLarge n)) with
   | .error e => return .error e
   | .ok file =>
     let size := (← segment.size).toNat
-    openWith keys c world step file size fun off len => do
+    openWith keys c world mark step file size fun off len => do
       return .ok (← segment.readAt off.toUInt64 len.toUSize)
+
+/-- The loop's state as an open leaves it. -/
+def Opening.resident (o : Opening W) : Resident W :=
+  { world := o.opened.world, pos := o.pos, sealed := o.sealed, index := o.index }
 
 /-- An open writer: the locked append handle, and the loop's state. -/
 structure Writer (W : Type) where
@@ -89,10 +93,10 @@ structure Writer (W : Type) where
 /-- Open the Store as its one writer: lock, open, truncate the torn tail, sync. A stale
 `base.tmp` (a crash mid-seal) is never read; the next seal replaces it. -/
 def openWriter (dir : System.FilePath) (keys : Keys) (c : Cadence) (world : Stream W)
-    (step : W → ByteArray → Except F W) : IO (Except (StoreFault F) (Writer W)) := do
+    (mark : W → Nat × ByteArray) (step : W → ByteArray → Except F W) : IO (Except (StoreFault F) (Writer W)) := do
   let segment ← File.open (segmentPath dir) .append
   unless ← segment.tryLock do return .error .locked
-  match ← openAt dir keys c world step (← File.open (segmentPath dir) .read) with
+  match ← openAt dir keys c world mark step (← File.open (segmentPath dir) .read) with
   | .error e => return .error e
   | .ok o =>
     if 0 < o.opened.torn then
@@ -102,8 +106,9 @@ def openWriter (dir : System.FilePath) (keys : Keys) (c : Cadence) (world : Stre
 
 /-- Open the Store as a follower of its directory: the same open, no lock, nothing written. -/
 def openFollower (dir : System.FilePath) (keys : Keys) (c : Cadence) (world : Stream W)
-    (step : W → ByteArray → Except F W) : IO (Except (StoreFault F) (Opening W)) := do
-  openAt dir keys c world step (← File.open (segmentPath dir) .read)
+    (mark : W → Nat × ByteArray) (step : W → ByteArray → Except F W) :
+    IO (Except (StoreFault F) (Opening W)) := do
+  openAt dir keys c world mark step (← File.open (segmentPath dir) .read)
 
 /-- Create a Store holding `w₀` under `key`: the key, an empty segment, and the base at offset 0.
 Refuses a directory that already holds any of them. -/
@@ -115,7 +120,7 @@ def genesis (dir : System.FilePath) (key : Digest) (keys : Keys) (c : Cadence) (
   writeNew (keyPath dir) key.bytes
   writeNew (segmentPath dir) ByteArray.empty
   syncDir dir.toString
-  match ← (fileCheckpoint dir keys c world).write w₀ 0 ⟨segmentInitial, Digest.zero.size_eq⟩ with
+  match ← (fileCheckpoint dir keys c world).write w₀ 0 ⟨segmentInitial, Digest.zero.size_eq⟩ #[] with
   | .error f => return .error (.seal f)
   | .ok _ => return .ok ()
 

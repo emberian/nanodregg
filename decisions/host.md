@@ -268,15 +268,13 @@ corruption, not a crash.
 
 The MAC runs at ~320 MB/s on the base, better than CODEC's 184 MB/s at 1 MiB. At THE BAR a seal is
 about half of one fsync, and a cold open of the base is 4 ms. The decision stands. **What this table
-says against it.** Encode is superlinear: ×12 from 29 to 87 MB, against ×3 bytes, probably buffer
-re-copying in `put`; reported to CODEC. Open is decode-bound (`ofList` rebuilds of the trees, CODEC-14's critique),
-about 80 ns per byte at 87 MB. Linear from there, a 256 MiB base opens in roughly 20–25 s and seals
-in more than 10 s of Task time. So `worldBytesMax` fits THE BAR's 60 s cold reopen only if the
-tail fold stays small. And a follower's fold re-verifies a signature per Turn (381 µs). At the top
-of the range the deployed cadence is then 64 MiB of log, ~2·10^5 turns, which is ~80 s of audit.
-`host follow` therefore cannot meet 60 s at `worldBytesMax`; at THE BAR (1 MiB cadence floor, about 3·10^3
-turns, ~1 s) it can. The bound that must change first is the cadence ceiling for a
-follower, not the base.
+says against it.** RETRACTED (CODEC-14 addendum): I reported encode as superlinear (×12 from 29 to 87 MB).
+CODEC re-ran it, one process per size, and it is linear: 0.40 ms / 102 ms / 263 ms. My 3·10^5 row was
+first-touch of a fresh 128 MB buffer plus cache variance in one long-running process. The term that
+matters is decode, ~20 ns/B (`ofList` rebuilds): 1.57 s at 87 MB, so about 5 s for a 256 MiB base. That
+is inside THE BAR's 60 s cold reopen for the WRITER (base + tail; ROOT: that is the bar). A
+follower's first audit is O(history) by definition; after it, the follower reopens from its own
+sealed base like the writer (ROOT's ruling), so no follower cadence ceiling is needed.
 
 ## HOST-15 · thin consent: a member that does not fold the whole log (2026-10-16; Ember ruled IN "if we can get away with it"; with PROTOCOL-14)
 **Decision (option A, one code path).** A thin member holds ONE base it trusts and folds only the
@@ -324,3 +322,25 @@ frame from another Store refuse. A key that sits beside the data it protects is 
 for a security boundary, which is why the law above exists. **Meta-critique.** I proposed the
 cheapest custody. It is right only because the key protects nothing an attacker wants.
 **Status.** ruled by ROOT 2026-10-16.
+
+## HOST-17 · `log` pages from an index the base carries (2026-10-16, HOST-3)
+**Decision.** Serving `log` from any height must not read the segment from offset 0 (law 4: O(page),
+never O(store)). The index is one `Entry` per record: (height before, frame offset, chain before).
+The loop appends an entry per commit, the base carries every entry before its offset, and open
+rebuilds the tail's entries during its own fold (`Open.indexed`). A page is located by binary search,
+read frame by frame with each frame's MAC verified (`corrupt` by name, never served), and the
+chain is advanced Turn by Turn from the entry's chain. So a page may end inside a record and still
+state the exact chain after its last event (PROTOCOL's pair assertion). The page is built after
+the batch's sync, so it holds durable records only. `log` is gated by `Envelope.check` against the
+in-batch World, so a revocation earlier in the batch applies.
+**Alternatives.** (a) A sidecar index file appended per batch: a second durable artifact with its own
+crash story. (b) Heights in the frame header and a scan: O(store) per cold page. (c) Re-derive the
+index at open by scanning every frame header: O(records) preads at open, breaking HOST-14 (4).
+**Critique.** The index is re-encoded whole in every base: the WASTE row `seal bytes-per-appended-byte`
+rose 1.287 → 1.715 at toy scale. At THE BAR it is ~52 bytes per batch beside ~290 bytes per record of
+World, so ≤ 1.2× the base. It grows with batches, not with the World, and a long-lived Store with
+tiny batches pays it on every seal. An index that is itself a persistent structure (only new entries
+written) would remove that, at the price of (a)'s second artifact.
+**Meta-critique.** I put it in the base because the base was already atomic and MAC'd, which is
+reusing what I just built. That is a convenience argument, not a design argument.
+**Status.** open.

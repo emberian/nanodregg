@@ -103,12 +103,22 @@ structure Opening (W : Type) where
   sealed : Sealed
   /-- where the valid segment ends (absolute), and its chain tag -/
   pos : Position
+  /-- the base's index, then one entry per record of the tail -/
+  index : Array Entry
+
+/-- Fold one record and index it: the World's mark before it, at the frame's offset. -/
+def indexed (mark : W → Nat × ByteArray) (step : W → ByteArray → Except F W) :
+    W × Array Entry × Nat → ByteArray → Except F (W × Array Entry × Nat)
+  | (w, idx, off), r => do
+    let w' ← step w r
+    let (h, chain) := mark w
+    pure (w', idx.push ⟨h, off, chain⟩, off + frameSize r)
 
 /-- The one open, given the base file's bytes, the segment's size and a reader of the segment
 (`IO` over the file for `host`, `Id` over bytes in the simulation): verify and decode the base,
 bound the tail (`tailRead`), read exactly that tail, and `openLog` it from the base's World. -/
 def openWith {m : Type → Type} [Monad m] (keys : Keys) (c : Cadence) (world : Codec.Stream W)
-    (step : W → ByteArray → Except F W) (file : ByteArray) (size : Nat)
+    (mark : W → Nat × ByteArray) (step : W → ByteArray → Except F W) (file : ByteArray) (size : Nat)
     (readTail : Nat → Nat → m (Except (StoreFault F) ByteArray)) : m (Except (StoreFault F) (Opening W)) := do
   if Log.frameMax c.baseRecordMax < file.size then return .error (.base (.baseTooLarge file.size)) else
   match Base.read keys c world file with
@@ -121,11 +131,14 @@ def openWith {m : Type → Type} [Monad m] (keys : Keys) (c : Cadence) (world : 
   | .error e => return .error e
   | .ok tail =>
   if tail.size ≠ len then return .error (.shortRead tail.size len) else
-  match openLog keys.segment c.recordBytesMax step b.world b.tag.bytes tail with
+  match openLog keys.segment c.recordBytesMax (indexed mark step) (b.world, b.index.toArray, b.offset)
+      b.tag.bytes tail with
   | .error e => return .error (.log e)
   | .ok o =>
     match Codec.Digest.ofBytes? o.lastTag with
     | none => return .error .tagWidth
-    | some tag => return .ok ⟨o, ⟨b.offset, baseBytes⟩, ⟨b.offset + o.validLen, tag⟩⟩
+    | some tag =>
+      let opened : Opened W := ⟨o.world.1, o.records, o.validLen, o.lastTag, o.torn⟩
+      return .ok ⟨opened, ⟨b.offset, baseBytes⟩, ⟨b.offset + o.validLen, tag⟩, o.world.2.1⟩
 
 end Nanodregg.Host

@@ -26,16 +26,37 @@ namespace Nanodregg.Host
 
 open Nanodregg.Codec
 
-/-- What a base holds. -/
+/-- One record of the segment, as `log` finds it: the World's height and chain BEFORE the record
+(`chain` in `Env.bytes`), and the frame's offset. -/
+structure Entry where
+  height : Nat
+  offset : Nat
+  chain : ByteArray
+
+/-- The widest chain an entry carries (the deployed digest is 32 bytes). -/
+def chainBytesMax : Nat := 64
+
+def Entry.codec : Stream Entry :=
+  Stream.refine "host/entry" (Stream.product Stream.nat64 (Stream.product Stream.nat64 (Stream.rawBytes chainBytesMax)))
+    (fun (h, o, c) => some ⟨h, o, c⟩) (fun e => (e.height, e.offset, e.chain))
+
+/-- What a base holds: the World, where the segment after it starts, and the index of every
+record before it (so `log` can page from any height without reading the segment from 0). -/
 structure Base (W : Type) where
   world : W
   offset : Nat
   tag : Digest
+  index : List Entry
+
+/-- The most index entries a base carries. -/
+def indexMax : Nat := 2 ^ 32 - 1
 
 /-- The base record's codec, over the World's. -/
 def Base.codec {W : Type} (world : Stream W) : Stream (Base W) :=
-  Stream.refine "host/base" (Stream.product world (Stream.product Stream.nat64 Stream.digest))
-    (fun (w, o, t) => some ⟨w, o, t⟩) (fun b => (b.world, b.offset, b.tag))
+  Stream.refine "host/base"
+    (Stream.product world (Stream.product Stream.nat64 (Stream.product Stream.digest
+      (Stream.rawList indexMax Entry.codec))))
+    (fun (w, o, t, i) => some ⟨w, o, t, i⟩) (fun b => (b.world, b.offset, b.tag, b.index))
 
 /-- A tag as a digest (every tag is `Log.tagBytes` long). -/
 def tagDigest (s : Log.Sealer) (b : ByteArray) : Digest := ⟨s.tag b, s.tag_size b⟩
@@ -55,19 +76,25 @@ structure Keys where
 inductive SealFault where
   /-- the World encodes to more than `worldBytesMax`: the size at which HOST-14 must change -/
   | worldTooLarge (bytes : Nat)
+  /-- the index encodes to more than `worldBytesMax` (each record admits a Turn, which adds more
+  than an entry's bytes to the World, so this is past the World's own bound) -/
+  | indexTooLarge (bytes : Nat)
   | io (detail : String)
   deriving Repr
 
 def SealFault.name : SealFault → String
   | .worldTooLarge _ => "worldTooLarge"
+  | .indexTooLarge _ => "indexTooLarge"
   | .io _ => "io"
 
 /-- The base file's bytes for `w` at `offset`/`tag`, or why not. The size is checked before
 anything is encoded. -/
 def Base.file {W : Type} (keys : Keys) (c : Cadence) (world : Stream W) (w : W) (offset : Nat)
-    (tag : Digest) : Except SealFault ByteArray :=
+    (tag : Digest) (index : List Entry) : Except SealFault ByteArray :=
+  let ib := (Stream.rawList indexMax Entry.codec).size index
   if c.worldBytesMax < world.size w then .error (.worldTooLarge (world.size w)) else
-  .ok (Log.frame keys.base baseInitial ((Base.codec world).bytes ⟨w, offset, tag⟩))
+  if c.worldBytesMax < ib then .error (.indexTooLarge ib) else
+  .ok (Log.frame keys.base baseInitial ((Base.codec world).bytes ⟨w, offset, tag, index⟩))
 
 /-- Why a Store's base does not open (law 7). -/
 inductive BaseFault where
@@ -102,7 +129,7 @@ def Base.read {W : Type} (keys : Keys) (c : Cadence) (world : Stream W) (file : 
     if r.next ≠ file.size then .error .baseCorrupt else
     match (Base.codec world).decode r.record with
     | .error e => .error (.baseUndecodable e)
-    | .ok b => .ok (b, r.record.size - 8 - Log.tagBytes)
+    | .ok b => .ok (b, world.size b.world)
 
 /-- How many segment bytes open reads after a base at `offset` whose World is `baseBytes` long,
 in a segment of `size` bytes. -/
@@ -124,6 +151,9 @@ frame. -/
 structure Position where
   offset : Nat
   tag : Digest
+
+/-- The bytes of the frame holding `record`. -/
+def frameSize (record : ByteArray) : Nat := 4 + record.size + Log.tagBytes
 
 /-- What the loop does before appending a frame of `n` bytes at segment offset `pos`. -/
 inductive Gate where

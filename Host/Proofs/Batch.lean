@@ -28,6 +28,7 @@ theorem Machine.step_foldlM (m : Machine W T R Q) (w₀ : W) (acc : W × Out T) 
   simp only
   split
   · exact h
+  · exact h
   · rename_i t receipt _
     split
     · rename_i w' hw
@@ -57,6 +58,7 @@ theorem Machine.step_replies (m : Machine W T R Q) (acc : W × Out T) (q : Reque
   unfold Machine.step
   simp only
   split
+  · simp
   · simp
   · split
     · simp

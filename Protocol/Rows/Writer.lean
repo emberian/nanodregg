@@ -84,6 +84,7 @@ def machine (P : Params) : Machine HostState (Turn D) (Reject D) Frame where
     match Host.handle P.X hs.world f with
     | .reply s p => .reply s p
     | .admit t r => .admit t fun hs' => r hs'.world
+    | .page start => .page start
   refuse hs t r := Host.onReject P.X hs.world t r
   ok := Status.ok.code
 
@@ -95,16 +96,16 @@ structure Mem where
 /-- HOST's in-memory checkpoint, sealing the World part of the loop's state. -/
 def checkpoint (m : Mem) : Checkpoint HostState :=
   let ck := Host.Sim.memCheckpoint m.disk m.bases Host.Sim.keys cadence Sim.world
-  { async := ck.async, write := fun hs offset tag => ck.write hs.world offset tag }
+  { async := ck.async, write := fun hs offset tag index => ck.write hs.world offset tag index }
 
 /-- A Store as genesis leaves it: the genesis base at offset 0, an empty segment. -/
 def genesisStore (g : World D) : IO (Except String Mem) := do
-  match Base.file Host.Sim.keys cadence Sim.world g 0 Codec.Digest.zero with
+  match Base.file Host.Sim.keys cadence Sim.world g 0 Codec.Digest.zero [] with
   | .error f => return .error f.name
   | .ok file => return .ok ⟨← IO.mkRef {}, ← IO.mkRef { file, history := #[(file, 0)] }⟩
 
 def genesisResident (g : World D) : Resident HostState :=
-  { world := ⟨g, #[]⟩, pos := ⟨0, Codec.Digest.zero⟩, sealed := ⟨0, Sim.world.size g⟩ }
+  { world := ⟨g, #[]⟩, pos := ⟨0, Codec.Digest.zero⟩, sealed := ⟨0, Sim.world.size g⟩, index := #[] }
 
 /-- Every event a whole segment logged, in order: the stand-in log arm's source (see above). -/
 def eventsOf (seg : ByteArray) : Array ByteArray :=
@@ -115,12 +116,14 @@ def eventsOf (seg : ByteArray) : Array ByteArray :=
 
 /-- The one open over the in-memory Store: HOST's `openWith`, the writer's fold. -/
 def reopen (P : Params) (base seg : ByteArray) : Except String (Resident HostState) :=
-  match Id.run (openWith Host.Sim.keys cadence Sim.world (Record.step Sim.dc (World.fold P.X.env))
+  match Id.run (openWith Host.Sim.keys cadence Sim.world (fun w => (w.height, P.X.env.bytes w.chain))
+      (Record.step Sim.dc (World.fold P.X.env))
       base seg.size fun off len => pure (.ok (seg.extract off (off + len)))) with
   | .error f => .error f.name
   | .ok o =>
       let w := if P.forgetJournal then { o.opened.world with journal := {} } else o.opened.world
-      .ok { world := ⟨w, eventsOf (seg.extract 0 o.pos.offset)⟩, pos := o.pos, sealed := o.sealed }
+      .ok { world := ⟨w, eventsOf (seg.extract 0 o.pos.offset)⟩, pos := o.pos, sealed := o.sealed,
+            index := o.index }
 
 /-- A loop running on its own thread. -/
 structure Running where
@@ -137,8 +140,10 @@ def start (P : Params) (m : Mem) (r : Resident HostState) : IO Running := do
       send := fun r => do discard <| (reps.send r).toBaseIO }
   let task ← IO.asTask (prio := .dedicated) do
     try
-      serve (machine P) (fun hs ts => Record.encode Sim.dc hs.world ts) Host.Sim.keys.segment
-        (checkpoint m) cadence (Host.Sim.memStore m.disk none) port limits fuel r none
+      serve (machine P) ⟨fun hs ts => Record.encode Sim.dc hs.world ts,
+          fun hs => (hs.world.height, P.X.env.bytes hs.world.chain)⟩ Host.Sim.keys.segment
+        (checkpoint m) cadence (Host.Sim.memStore m.disk none) (fun _ _ => pure (Status.ok.code, ByteArray.empty))
+        port limits fuel r none
     finally
       discard <| (reps.close).toBaseIO
   pure ⟨reqs, reps, task⟩

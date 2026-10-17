@@ -73,6 +73,10 @@ extern_lib «ndhost» pkg := do
 @[default_target] lean_exe «host-sim» where
   root := `Host.Sim.Main
 
+-- The deployed Host: `host genesis|serve|follow STORE …` (Host.Cli); the client runs the binary.
+@[default_target] lean_exe «host» where
+  root := `Host.Main
+
 -- The loop over a real Store directory (Host.Store + Host/c/file.c): lock, torn-file truncation.
 @[default_target] lean_exe «host-file-sim» where
   root := `Host.Sim.FileMain

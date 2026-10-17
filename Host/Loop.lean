@@ -76,8 +76,14 @@ prefix `[0, offset)` chained to `tag`, durably, and returns its World's encoded 
 (`host serve`) it runs in a dedicated Task over the immutable `w`, off the loop; without it (the
 simulation) it runs inline, so a seeded run seals at the same points every time. -/
 structure Checkpoint (W : Type) where
-  write : W → Nat → Digest → IO (Except SealFault Nat)
+  write : W → Nat → Digest → Array Entry → IO (Except SealFault Nat)
   async : Bool
+
+/-- How the loop writes a batch record and indexes it: the record of the staged Turns given the
+World after them, and the height and chain (`Env.bytes`) of a World. -/
+structure Recorder (W T : Type) where
+  encode : W → Array T → ByteArray
+  mark : W → Nat × ByteArray
 
 /-- A seal in flight: the offset it seals at, and its Task. -/
 structure Pending where
@@ -89,15 +95,14 @@ structure Resident (W : Type) where
   world : W
   pos : Position
   sealed : Sealed
+  /-- one entry per record in the segment, in order -/
+  index : Array Entry
   pending : Option Pending := none
 
 /-- A frame of `n` bytes appended at `pos` keeps the tail after the newest durable base within
 `tailMax` (HOST-14 condition 4). `commitBatch` cannot be called without a proof of it. -/
 def withinTail (c : Cadence) (sealed : Sealed) (pos n : Nat) : Bool :=
   decide (pos + n - sealed.offset ≤ c.tailMax sealed.bytes)
-
-/-- The bytes of the frame holding `record`. -/
-def frameSize (record : ByteArray) : Nat := 4 + record.size + Log.tagBytes
 
 /-- Take the queued frames after `first`: at most `limits.batchMax` frames and, past the first,
 `limits.batchBytesMax` payload bytes. A frame that does not fit is carried into the next batch. -/
@@ -131,11 +136,11 @@ def commitBatch (c : Cadence) (sealed : Sealed) (store : Store) (s : Log.Sealer)
   catch e => return .error (toString e)
 
 /-- Start sealing `w` at `pos` in a dedicated Task. -/
-def spawnSeal (ck : Checkpoint W) (w : W) (pos : Position) : IO Pending := do
+def spawnSeal (ck : Checkpoint W) (w : W) (pos : Position) (index : Array Entry) : IO Pending := do
   if ck.async then
-    return ⟨pos.offset, ← IO.asTask (ck.write w pos.offset pos.tag) .dedicated⟩
+    return ⟨pos.offset, ← IO.asTask (ck.write w pos.offset pos.tag index) .dedicated⟩
   else
-    return ⟨pos.offset, .pure (.ok (← ck.write w pos.offset pos.tag))⟩
+    return ⟨pos.offset, .pure (.ok (← ck.write w pos.offset pos.tag index))⟩
 
 /-- Wait for a seal; the base it made is the newest durable one. -/
 def settle (p : Pending) : IO (Except SealFault Sealed) := do
@@ -167,7 +172,7 @@ def makeRoom (ck : Checkpoint W) (c : Cadence) (r : Resident W) (n : Nat) :
       | .ok sealed => pure { r with sealed, pending := none }
       | .error f => return .error f
   if withinTail c r.sealed r.pos.offset n then return .ok r
-  match ← settle (← spawnSeal ck r.world r.pos) with
+  match ← settle (← spawnSeal ck r.world r.pos r.index) with
   | .ok sealed => return .ok { r with sealed, pending := none }
   | .error f => return .error f
 
@@ -180,10 +185,18 @@ def finish (exit : Exit) (r : Resident W) : IO (Exit × Resident W) := do
     | .ok sealed => return (exit, { r with sealed, pending := none })
     | .error f => return (.sealFailed f, { r with pending := none })
 
-/-- The loop. `encode after staged` is the batch record (`Host.Record.encode`). -/
-def serve (m : Machine W T R Frame) (encode : W → Array T → ByteArray) (s : Log.Sealer)
-    (ck : Checkpoint W) (c : Cadence) (store : Store) (port : Port) (limits : Limits) :
-    Nat → Resident W → Option Frame → IO (Exit × Resident W)
+/-- Fill the replies that wait for a log page, from the durable state. -/
+def fillPages (pager : Resident W → Nat → IO (UInt8 × ByteArray)) (r : Resident W) (out : Out T) :
+    IO (Array Reply) :=
+  out.pages.foldlM (init := out.replies) fun rs (i, start) => do
+    let (status, payload) ← pager r start
+    return rs.modify i fun rep => { rep with status, payload }
+
+/-- The loop. `rec.encode after staged` is the batch record (`Host.Record.encode`); `pager r start`
+builds a `log` page (status, payload) from the durable state `r`. -/
+def serve (m : Machine W T R Frame) (rec : Recorder W T) (s : Log.Sealer) (ck : Checkpoint W)
+    (c : Cadence) (store : Store) (pager : Resident W → Nat → IO (UInt8 × ByteArray)) (port : Port)
+    (limits : Limits) : Nat → Resident W → Option Frame → IO (Exit × Resident W)
   | 0, r, _ => finish .fuel r
   | fuel + 1, r, carried => do
     let r ← match ← reap r with
@@ -196,10 +209,11 @@ def serve (m : Machine W T R Frame) (encode : W → Array T → ByteArray) (s : 
     let (batch, carry) ← drain port limits first
     let (w', out) := m.admitBatch r.world (batch.toList.map fun f => ⟨f.conn, f⟩)
     if out.staged.isEmpty then
-      out.replies.forM port.send
-      serve m encode s ck c store port limits fuel { r with world := w' } carry
+      let r := { r with world := w' }
+      (← fillPages pager r out).forM port.send
+      serve m rec s ck c store pager port limits fuel r carry
     else
-      let record := encode w' out.staged
+      let record := rec.encode w' out.staged
       if c.recordBytesMax < record.size then
         (uncertainAll out.replies).forM port.send
         finish (.recordTooLarge record.size) r
@@ -215,14 +229,15 @@ def serve (m : Machine W T R Frame) (encode : W → Array T → ByteArray) (s : 
           (uncertainAll out.replies).forM port.send
           finish (.uncertain detail) r
         | .ok pos =>
-          out.replies.forM port.send
-          let r := { r with world := w', pos }
+          let (h, chain) := rec.mark r.world
+          let r := { r with world := w', pos, index := r.index.push ⟨h, r.pos.offset, chain⟩ }
+          (← fillPages pager r out).forM port.send
           let r ← if shouldSeal c r.sealed r.pending.isSome pos.offset then
-              pure { r with pending := some (← spawnSeal ck w' pos) }
+              pure { r with pending := some (← spawnSeal ck w' pos r.index) }
             else pure r
-          serve m encode s ck c store port limits fuel r carry
+          serve m rec s ck c store pager port limits fuel r carry
       else
-        -- unreachable: makeRoom's last step leaves the newest base at `pos` and the record fits
+        -- not proved unreachable (makeRoom's inline seal is IO): a named stop
         (uncertainAll out.replies).forM port.send
         finish (.recordTooLarge record.size) r
 

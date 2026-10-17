@@ -35,17 +35,17 @@ def newKey : IO Digest := do
 was refused. The writer (and its lock) is released when this returns. -/
 def serveDir (dir : System.FilePath) (keys : Keys) (c : Cadence) (seed : Nat) (frames : List Frame) :
     IO (Except String (Resident (World Nat) × Bool)) := do
-  match ← (openWriter dir keys c world foldStep : IO (Except Fault _)) with
+  match ← (openWriter dir keys c world recorder.mark foldStep : IO (Except Fault _)) with
   | .error e => return .error s!"open: {e.name}"
   | .ok wr =>
     let fr ← IO.mkRef frames
     let sp ← IO.mkRef (splits seed frames.length)
     let sent ← IO.mkRef #[]
     let o := wr.opening
-    let (exit, r) ← serve machine (Record.encode dc) keys.segment (fileCheckpoint dir keys c world) c
-      (fileStore wr.segment) (scriptPort fr sp sent) ⟨16, 1 <<< 20⟩ (frames.length + 1)
-      { world := o.opened.world, pos := o.pos, sealed := o.sealed } none
-    let second ← (openWriter dir keys c world foldStep : IO (Except Fault _))
+    let (exit, r) ← serve machine recorder keys.segment (fileCheckpoint dir keys c world) c
+      (fileStore wr.segment) (fun _ _ => pure (0, ByteArray.empty)) (scriptPort fr sp sent) ⟨16, 1 <<< 20⟩
+      (frames.length + 1) o.resident none
+    let second ← (openWriter dir keys c world recorder.mark foldStep : IO (Except Fault _))
     let refused := match second with | .error .locked => true | _ => false
     wr.segment.sync  -- the writer's handle (and so its lock) is alive up to here
     match exit with
@@ -53,7 +53,7 @@ def serveDir (dir : System.FilePath) (keys : Keys) (c : Cadence) (seed : Nat) (f
     | e => return .error s!"serve ended {e.name}"
 
 def follow (dir : System.FilePath) (keys : Keys) (c : Cadence) : IO (Except Fault (Opening (World Nat))) :=
-  openFollower dir keys c world foldStep
+  openFollower dir keys c world recorder.mark foldStep
 
 def fileSize (p : System.FilePath) : IO Nat := do
   return (← (← File.open p .read).size).toNat
@@ -80,7 +80,7 @@ def run (args : List String) : IO UInt32 := do
       let baseBytes ← IO.FS.readBinFile (basePath dir)
       IO.FS.writeBinFile (baseTmpPath dir) (baseBytes.extract 0 (baseBytes.size / 2))
       let extra := Log.frame keys.segment r.pos.tag.bytes
-        (Record.encode dc r.world #[mkTurn 77777 0 1024 [77777]])
+        (recorder.encode r.world #[mkTurn 77777 0 1024 [77777]])
       let half := extra.extract 0 (extra.size / 2)
       let f ← File.open (segmentPath dir) .append
       f.writeAll half

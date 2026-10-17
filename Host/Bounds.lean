@@ -36,8 +36,9 @@ while the seal runs, and the frame that crossed. -/
 def tailMax (c : Cadence) (baseBytes : Nat) : Nat :=
   2 * c.cadence baseBytes + Log.frameMax c.recordBytesMax
 
-/-- A base record: the World's bytes, then the segment offset (u64) and tag (32) it starts from. -/
-def baseRecordMax (c : Cadence) : Nat := c.worldBytesMax + 8 + Log.tagBytes
+/-- A base record: the World's bytes, the segment offset (u64) and tag (32) it starts from, and
+its index (each bounded by `worldBytesMax`, `Base.file`). -/
+def baseRecordMax (c : Cadence) : Nat := 2 * c.worldBytesMax + 8 + Log.tagBytes
 
 /-- `host serve`'s numbers. The base: THE BAR's World is ~290 KB (HOST-14), so 256 MiB is ~900 BAR
 stores; at CODEC's measured KMAC (184 MB/s) its seal is ~1.5 s of Task time and its decode at open

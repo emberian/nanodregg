@@ -9,7 +9,11 @@ is the kernel's or the receive layer's.
   and the loop admits it with `World.admit`. This is `Receive.submit` cut at the point where the loop
   batches (`Host.Proofs.Serve.admitBatch_submit`).
 * `lookup` — the same call bytes: `ok` with the receipt if journaled, `absent` otherwise (HOST-8).
-* `read`, `log` — refused `notServed` by name until the signed read envelope exists (HOST-11);
+* `log` — PROTOCOL's read envelope (`Envelope.check`: a live member, its current key, the signature,
+  `validUntil`, a follow grant live to a root) against the World as the batch has advanced it, so
+  a revocation earlier in the batch applies; then a page of the durable log from `start`, built
+  after the batch's sync (`Host.Page`);
+* `read` — refused `notServed` until PROTOCOL-14's base page layout lands (HOST-15);
   `command`, `resume` belong to `follow.sock` and are refused `wrongSocket`.
 
 A receipt is `u64 height ‖ turn digest`. A refusal's payload is its NAME as UTF-8, from its owner's
@@ -20,6 +24,7 @@ import Host.Batch
 import Host.Wire
 import Kernel.Receive.Submit
 import Protocol.Table
+import Protocol.Envelope
 
 namespace Nanodregg.Host
 
@@ -72,7 +77,13 @@ def handle (X : Ctx D) (w : World D) (f : Frame) : Answer (World D) (Turn D) :=
       | some (h, d) => .reply Protocol.Status.ok.code (receipt X h d)
       | none => .reply Protocol.Status.absent.code ByteArray.empty
   | some .read => refuse (named (FrameRefusal.notServed .read).name)
-  | some .log => refuse (named (FrameRefusal.notServed .log).name)
+  | some .log =>
+    match Protocol.Envelope.ofBytes X f.payload with
+    | none => refuse (named Protocol.ReadRefusal.badEnvelope.name)
+    | some e =>
+      match Protocol.Envelope.check X w e with
+      | .error r => refuse (named r.name)
+      | .ok () => .page e.start
   | some .command => refuse (named (FrameRefusal.wrongSocket .command).name)
   | some .resume => refuse (named (FrameRefusal.wrongSocket .resume).name)
 

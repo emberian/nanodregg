@@ -67,9 +67,9 @@ range of segment, `[base offset, size)`, at most `tailMax` long; the position it
 that range. Stated over a reader that records every range it is asked for and answers with
 arbitrary bytes `answer off len`, of any length (a short read is `openWith`'s to refuse). -/
 theorem openWith_reads {W F : Type} (keys : Keys) (c : Cadence) (world : Codec.Stream W)
-    (step : W → ByteArray → Except F W) (file : ByteArray) (size : Nat) (answer : Nat → Nat → ByteArray)
+    (mark : W → Nat × ByteArray) (step : W → ByteArray → Except F W) (file : ByteArray) (size : Nat) (answer : Nat → Nat → ByteArray)
     {o : Opening W} {log : List (Nat × Nat)}
-    (h : (openWith keys c world step file size (m := StateM (List (Nat × Nat))) fun off len =>
+    (h : (openWith keys c world mark step file size (m := StateM (List (Nat × Nat))) fun off len =>
       modifyGet fun l => (.ok (answer off len), l ++ [(off, len)])).run [] = (.ok o, log)) :
     file.size ≤ Log.frameMax c.baseRecordMax ∧
     ∃ len, log = [(o.sealed.offset, len)] ∧ o.sealed.offset + len = size ∧
@@ -92,8 +92,8 @@ theorem openWith_reads {W F : Type} (keys : Keys) (c : Cadence) (world : Codec.S
         split at h
         · simp only [StateT.pure, pure] at h; injection h with h1; cases h1
         · rename_i hsz
-          generalize hop : openLog keys.segment c.recordBytesMax step b.world b.tag.bytes
-            (answer b.offset len) = res at h
+          generalize hop : openLog keys.segment c.recordBytesMax (indexed mark step)
+            (b.world, b.index.toArray, b.offset) b.tag.bytes (answer b.offset len) = res at h
           cases res with
           | error e => simp only [StateT.pure, pure] at h; injection h with h1; cases h1
           | ok op =>

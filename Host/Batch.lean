@@ -31,6 +31,9 @@ inductive Answer (W T : Type) where
   | reply (status : UInt8) (payload : ByteArray)
   /-- admit this Turn; on success the reply is built from the World after it -/
   | admit (turn : T) (receipt : W → ByteArray)
+  /-- answered `ok` with a page of the durable log after `start`, built after the batch's sync
+  (so it holds only durable records, the batch's own included) -/
+  | page (start : Nat)
 
 /-- One request of a batch. -/
 structure Request (Q : Type) where
@@ -41,6 +44,8 @@ structure Request (Q : Type) where
 structure Out (T : Type) where
   staged : Array T := #[]
   replies : Array Reply := #[]
+  /-- the replies still to be filled with a log page: (reply index, start height) -/
+  pages : Array (Nat × Nat) := #[]
 
 /-- The loop's parameters: the one transition, the request handler, and how a refusal is
 answered (a status byte and payload; `replayed` answers with the original receipt). -/
@@ -57,10 +62,13 @@ def Machine.step (m : Machine W T R Q) (acc : W × Out T) (q : Request Q) : W ×
   let (w, out) := acc
   match m.handle w q.body with
   | .reply status payload => (w, { out with replies := out.replies.push ⟨q.conn, status, payload⟩ })
+  | .page start =>
+    (w, { out with replies := out.replies.push ⟨q.conn, m.ok, ByteArray.empty⟩,
+                   pages := out.pages.push (out.replies.size, start) })
   | .admit t receipt =>
     match m.admit w t with
-    | .ok w' => (w', { staged := out.staged.push t,
-                       replies := out.replies.push ⟨q.conn, m.ok, receipt w'⟩ })
+    | .ok w' => (w', { out with staged := out.staged.push t,
+                                replies := out.replies.push ⟨q.conn, m.ok, receipt w'⟩ })
     | .error r =>
       let (status, payload) := m.refuse w t r
       (w, { out with replies := out.replies.push ⟨q.conn, status, payload⟩ })

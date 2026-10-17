@@ -31,6 +31,7 @@ import Host.Sim.MemStore
 import Host.Sim.Toy
 import Kernel.World
 import Host.Open
+import Host.Page
 
 namespace Nanodregg.Host.Sim
 
@@ -90,7 +91,8 @@ abbrev Fault := StoreFault (Record.Fault (Reject Nat))
 
 /-- The one open over an in-memory image: `openWith` reading bytes. -/
 def reopenWith (c : Cadence) (base seg : ByteArray) : Except Fault (Opening (World Nat)) :=
-  Id.run (openWith keys c world foldStep base seg.size fun off len => pure (.ok (seg.extract off (off + len))))
+  Id.run (openWith keys c world recorder.mark foldStep base seg.size fun off len =>
+    pure (.ok (seg.extract off (off + len))))
 
 def reopen (base seg : ByteArray) : Except Fault (Opening (World Nat)) := reopenWith cadence base seg
 
@@ -101,12 +103,12 @@ def faultName (r : Except Fault (Opening (World Nat))) : String :=
 
 /-- A Store as genesis leaves it: the genesis base at offset 0 and an empty segment. -/
 def genesisBases (c : Cadence) : Bases :=
-  match Base.file keys c world genesis 0 Codec.Digest.zero with
+  match Base.file keys c world genesis 0 Codec.Digest.zero [] with
   | .ok file => { file, history := #[(file, 0)] }
   | .error _ => {}
 
 def genesisResident : Resident (World Nat) :=
-  { world := genesis, pos := ⟨0, Codec.Digest.zero⟩, sealed := ⟨0, world.size genesis⟩ }
+  { world := genesis, pos := ⟨0, Codec.Digest.zero⟩, sealed := ⟨0, world.size genesis⟩, index := #[] }
 
 structure RunResult where
   exit : Exit
@@ -123,8 +125,9 @@ def serveFrom (c : Cadence) (seed : Nat) (frames : List Frame) (failSyncAt : Opt
   let fr ← IO.mkRef frames
   let sp ← IO.mkRef (splits seed frames.length)
   let sent ← IO.mkRef #[]
-  let (exit, r) ← serve machine (Record.encode dc) keys.segment (memCheckpoint disk bases keys c world) c
-    (memStore disk failSyncAt) (scriptPort fr sp sent) ⟨16, 1 <<< 20⟩ (frames.length + 1) r none
+  let (exit, r) ← serve machine recorder keys.segment (memCheckpoint disk bases keys c world) c
+    (memStore disk failSyncAt) (fun _ _ => pure (0, ByteArray.empty)) (scriptPort fr sp sent) ⟨16, 1 <<< 20⟩
+    (frames.length + 1) r none
   return ⟨exit, r, ← sent.get, ← disk.get, ← bases.get⟩
 
 def runWith (c : Cadence) (seed : Nat) (frames : List Frame) (failSyncAt : Option Nat) : IO RunResult :=
@@ -200,10 +203,51 @@ def run (args : List String) : IO UInt32 := do
   let turns := records.foldl (fun acc rec => match (Record.codec dc).decode rec with
     | .ok (ts, _) => acc ++ ts | .error _ => acc) []
   let admittedBytes := turns.foldl (fun n t => n + (turnCodec.bytes t).size) 0
+  -- log pages (Host.Page) over the durable segment and the loop's index
+  let page (budget start : Nat) := Id.run (Page.build env dc digestOf keys.segment cadence.recordBytesMax
+    budget (fun off len => pure (r.disk.synced.extract off (off + len))) r.resident.index
+    (recorder.mark w) start)
+  let mut start := 0
+  let mut served := 0
+  let mut pagesOk := true
+  let mut pageCount := 0
+  for _ in List.range (w.height + 1) do
+    if w.height ≤ start then break
+    match page 40 start with
+    | .error f => pagesOk := false; IO.println s!"  page from {start}: {f.name}"; break
+    | .ok a =>
+      if a.height ≤ start then pagesOk := false; break
+      -- the stated chain is the chain of the log's first `a.height` Turns
+      unless a.chain = env.bytes (chainOf env genesis.chain (turns.take a.height)) do
+        pagesOk := false; IO.println s!"  page from {start} states a wrong chain at {a.height}"
+      -- a page ending anywhere states the chain the rest of the log continues from
+      match page Page.budget start with
+      | .ok whole => unless whole.height = w.height ∧ whole.chain = env.bytes w.chain do pagesOk := false
+      | .error _ => pagesOk := false
+      served := served + a.events.size; start := a.height; pageCount := pageCount + 1
+  -- a one-event page from EVERY height, mid-record ones included
+  for s in List.range w.height do
+    match page 4 s with
+    | .ok a =>
+      unless a.height = s + 1 ∧ a.chain = env.bytes (chainOf env genesis.chain (turns.take (s + 1))) do
+        pagesOk := false; IO.println s!"  one-event page from {s}: height {a.height}"
+    | .error f => pagesOk := false; IO.println s!"  one-event page from {s}: {f.name}"
+  let lastOk := match page 40 start with
+    | .ok a => a.events.size = 0 ∧ a.height = w.height ∧ a.chain = env.bytes w.chain
+    | .error _ => false
+  check s!"log pages: {pageCount} pages of 10 events serve every event once, each page states the log's chain at its last height; a one-event page from every height"
+    (pagesOk && served = w.height && lastOk) failures
+  check "plant-page-flip: a flipped byte in a served frame is refused `corrupt`"
+    (match Id.run (Page.build env dc digestOf keys.segment cadence.recordBytesMax Page.budget
+        (fun off len => pure ((flipByte r.disk.synced 6).extract off (off + len))) r.resident.index
+        (recorder.mark w) 0) with
+     | .error f => f.name = "corrupt" | .ok _ => false) failures
   IO.println s!"WASTE submit bytes-per-turn {ratio r.disk.synced.size admittedBytes}"
   IO.println s!"WASTE submit fsyncs-per-batch {ratio r.disk.syncs records.length}"
   let tailBytes := match opened with | .ok o => o.pos.offset - o.sealed.offset | .error _ => 0
-  let needed := match opened with | .ok o => o.sealed.bytes + 8 + Log.tagBytes + tailBytes | .error _ => 0
+  -- what open must read: the base record (World, offset, tag, index) and the tail; the excess is
+  -- the base's own frame
+  let needed := r.bases.file.size - 4 - Log.tagBytes + tailBytes
   IO.println s!"WASTE open bytes-read-per-record {ratio (r.bases.file.size + tailBytes) needed}"
   let genesisBytes := r.bases.history[0]!.1.size
   IO.println s!"WASTE seal bytes-per-appended-byte {ratio (r.bases.written - genesisBytes) r.disk.synced.size}"
@@ -240,7 +284,7 @@ def run (args : List String) : IO UInt32 := do
       let expectRecords := if cut = pendingSize then baseRecords + 1 else baseRecords
       let img := (crashImage p.disk cut).extract 0 o.pos.offset
       let q ← serveFrom cadence seed resend none { synced := img } p.bases
-        { world := o.opened.world, pos := o.pos, sealed := o.sealed }
+        { world := o.opened.world, pos := o.pos, sealed := o.sealed, index := o.index }
       let finalOk : Bool := match reopen q.bases.file q.disk.synced with
         | .ok o' => o'.opened.torn = 0 && sameWorld o'.opened.world w && sameWorld q.resident.world w
         | .error _ => false

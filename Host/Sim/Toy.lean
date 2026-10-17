@@ -10,6 +10,7 @@ import Kernel.World
 import Host.Base
 import Host.Record
 import Codec.Kernel
+import Host.Loop
 
 namespace Nanodregg.Host.Sim
 
@@ -56,6 +57,17 @@ def cadence : Cadence where
   recordBytesMax := 4096
 
 def world : Codec.Stream (World Nat) := Codec.Kernel.world dc
+
+/-- The toy digest's inverse of `env.bytes`. -/
+def digestOf (b : ByteArray) : Option Nat :=
+  match dc.decode b with
+  | .ok d => some d
+  | .error _ => none
+
+/-- How the loop records and indexes a batch. -/
+def recorder : Recorder (World Nat) (Turn Nat) where
+  encode := Record.encode dc
+  mark w := (w.height, env.bytes w.chain)
 
 /-- One batch record folded into the World: what open does per record (the writer's fold). -/
 def foldStep : World Nat → ByteArray → Except (Record.Fault (Reject Nat)) (World Nat) :=

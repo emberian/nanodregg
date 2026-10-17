@@ -43,8 +43,8 @@ run seals at the same points every time. -/
 def memCheckpoint {W : Type} (disk : IO.Ref Disk) (bases : IO.Ref Bases) (keys : Keys) (c : Cadence)
     (world : Codec.Stream W) : Checkpoint W where
   async := false
-  write w offset tag := do
-    match Base.file keys c world w offset tag with
+  write w offset tag index := do
+    match Base.file keys c world w offset tag index.toList with
     | .error f => return .error f
     | .ok file =>
       let synced := (← disk.get).synced.size
