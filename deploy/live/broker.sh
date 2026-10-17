@@ -41,7 +41,7 @@ SINCE=$(date '+%Y-%m-%d %H:%M:%S')
 jr() { journalctl --user -u "${1:-$UNIT}" --since "$SINCE" -o cat --no-pager 2>/dev/null; }
 exits() { jr | grep -o 'Main process exited, code=[a-z]*, status=[0-9A-Z]*' | tail -n 1; }
 fresh() { systemctl --user stop "$UNIT" 2>/dev/null; systemctl --user reset-failed "$UNIT" 2>/dev/null; return 0; }
-for nt in deciderSignaled:keybroker keyFileMode:keybroker sockDir:keybroker store:hosting-controller; do
+for nt in deciderSignaled:keybroker keyFileMode:keybroker sockDir:keybroker store:hosting-controller layoutMissing:grain-launch; do
   [ -n "$(code "${nt%%:*}" "${nt#*:}")" ] || { echo "no code for $nt in EXITS.md"; exit 2; }; done
 [ -x /usr/local/libexec/nd-bwrap ] || { echo "no mechanism at /usr/local/libexec/nd-bwrap (README.md)"; exit 2; }
 
@@ -161,7 +161,7 @@ systemctl --user stop "$G"
 
 # N. a controller Store refusal stops the launcher by name: instance x over an empty store directory
 X=nd-ops-live-grain@x
-mkdir -p "$R/hosted/worlds/x/store" "$R/pids/x" && chmod 0700 "$R/hosted/worlds/x"
+mkdir -p "$R/hosted/worlds/x/store" "$R/hosted/worlds/x/members" "$R/pids/x" && chmod 0700 "$R/hosted/worlds/x"
 systemctl --user start "$X"
 xs() { local s; s=$(prop ActiveState "$X"); [ "$s" = failed ] || [ "$s" = inactive ]; }
 wait_for 30 xs
@@ -169,6 +169,18 @@ st=$(prop ExecMainStatus "$X") nr=$(prop NRestarts "$X")
 if xs && [ "$st" = "$(code store hosting-controller)" ] && [ "$nr" = 0 ]; then
   row controller-store-refusal-stops PASS "ExecMainStatus=$st (controller store, passed through) NRestarts=0"
 else row controller-store-refusal-stops FAIL "status=$st (want $(code store hosting-controller)) NRestarts=$nr $(prop ActiveState "$X")"; fi
+
+# O. a layout directory missing (worlds/w/members): grain-launch refuses layoutMissing at start, by
+# name, before the controller runs; never restarted
+systemctl --user stop "$X" 2>/dev/null; systemctl --user reset-failed "$G" 2>/dev/null
+rmdir "$R/hosted/worlds/w/members"
+systemctl --user start "$G"
+gs() { local s; s=$(prop ActiveState "$G"); [ "$s" = failed ] || [ "$s" = inactive ]; }
+wait_for 30 gs
+st=$(prop ExecMainStatus "$G") nr=$(prop NRestarts "$G")
+if gs && [ "$st" = "$(code layoutMissing grain-launch)" ] && [ "$nr" = 0 ]; then
+  row layout-missing-stops PASS "ExecMainStatus=$st (layoutMissing) NRestarts=0 :: $(jr "$G" | grep -m1 -i layoutMissing | cut -c1-120)"
+else row layout-missing-stops FAIL "status=$st (want $(code layoutMissing grain-launch)) NRestarts=$nr $(prop ActiveState "$G")"; fi
 
 for u in "$F" "$G" "$X" nd-ops-live-hfollow@x; do systemctl --user stop "$u" 2>/dev/null; systemctl --user reset-failed "$u" 2>/dev/null; done
 if [ $fail = 0 ]; then echo "ALL PASS"; exit 0; fi
