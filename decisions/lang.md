@@ -326,3 +326,63 @@ running at admission are two reads of the package; a package cell is ROM, so the
 **Meta-critique.** I wrote this from PROTOCOL's side because the verbs needed it; the shape of
 `seedOf` (slots, not data) is what `Body.create` takes, which a LANG owner might have cut at data.
 **Status.** landed; LANG's successor reviews.
+
+## LANG-23 Effects are `Body` calls in a fixed-arity row; the forwarding check is withdrawn (2026-10-17; LANG-4's answer to LEDGER-5, amends LANG-21 and LANG-3's answer recorded in decisions/kernel.md 1b4135c)
+**Decision.** LEDGER-5 is accepted with changes. An effect is a `Kernel.Receive.Body D` of a
+callable kind (`invoke`, `transfer`, `account`, `credit`, `grant`); LANG-21's `Effect` record is
+deleted, never kept beside `Body` (law 1). The core has no list or recursive type, so a method
+returns `rec {calls : callsTy, state : S}` with
+`callsTy = rec {c0 … c7 : optTy callTy}` (arity `Kernel.Bounds.callsMax`, KERNEL's, because Kernel
+cannot import Lang), `optTy T = sum {none : rec {}, some : T}`, and `callTy` one arm per callable
+kind, its fields the Body constructor's (digests as `bytes`, `Option` as `optTy`, a grant's
+`List Right` as the fixed-arity `rightsTy = rec {r0 … r3 : optTy rightTy}`,
+`rightTy = sum {enroll : nat, invoke : nat, mutate : rec {}, observe : rec {}}`).
+`methodTy S A := fn S (fn A (fn reqTy (rec {calls : callsTy, state : S})))`; `reqTy` is unchanged
+(agent = the signer, principal = the calling object, LEDGER-5 (b)). `Lang/Call.lean`: `callData`
+(an exhaustive match on `Body`: a new constructor does not build until it is classified callable
+or not), `bodyOf`, `callsOf` (slots in label order, `none` skipped, a non-digest refused
+`program "calls: cI FIELD: not a digest"`); `Lang/Proofs/Call.lean`: `callsOf_callable`,
+`callsOf_length`, the round trip `bodyOf_callData` / `callData_bodyOf`, teeth per arm.
+`Program.run`/`runMethod` return `Slots × List (Body D)`, `runMeasured` adds the counts;
+`Std.methodOf` emits every slot `none`, `Std.methodWith` takes calls. KERNEL keeps
+`notCallable` as its own assertion where the program's calls enter (law 4: `Program` is abstract to
+it); for `Lang.program` it is unreachable by `callsOf_callable`. `visit_distinct` is KERNEL's (the
+visitor is in Derive). Order: KERNEL-5's run signature, `callsMax`, `notCallable`, Draft; then this
+as one `lang!` flag day (every package with a method re-ids; HOSTING re-emits `world/grain`); then
+LEDGER's escrow.
+**Withdrawn: `forwardsCalls`** (LANG-3's install refusal of a method whose argument type contains
+`callTy`). It refuses the legitimate smart-account shape: a quorum-governed object whose state
+holds a proposed call and whose commit emits it (an object-owned treasury) needs `propose(call)`.
+And it was incomplete by its author's statement: fields assembled from arguments are the same
+power. A structural check that is known incomplete is one the next reader trusts. The guard is the
+kernel's: KERNEL-25's owner-gated invoke, grants naming which method, and principal = the calling
+object spending only that object's authority; a callee's law still sees `agent` = the signer.
+**Not taken from LANG-3's answer:** "callTy is GENERATED from KERNEL's Body codec shape". No
+generator from a `Codec.Kernel` stream to a `Lang.Ty` exists, and the meaning is `Body`, not its
+bytes. The round trip is stated against `Body`.
+**Escrow gaps sent to LEDGER** (LEDGER-5 (e)): (i) under (b) `deposit` cannot debit the
+depositor's account (the object does not own it). The depositor must grant the escrow OBJECT
+`mutate` on it, and `deposit` emits the transfer through that grant. Otherwise an unfunded deposit
+reaches `held`, and both release and refund are `belowFloor`: the escrow wedges. (ii) a method reads
+no other cell and account ids are born in the Draft, so the escrow cannot check its own account id.
+An argument-supplied `acct` lets a depositor name an account of its own. An account id determined
+by (owner, asset) would make the binding derivable. (iii) a nested invoke's `args` are bytes. Until
+ID-4's bytes primitives, a method forwards only bytes it already holds.
+**Alternatives.** (1) A list type in the core (recursive types): a new Ty constructor and fold
+semantics, which the demand machine's budget theorems would have to reach, to carry at most 8
+items. (2) `calls : bytes` of the kernel's Body codec: the method could not build a call without
+bytes primitives, and the checker would see nothing. (3) Keep `forwardsCalls` as "a second line":
+see above.
+**Critique.** A fixed arity of 8 is a consensus constant baked into every method's type: raising
+it re-ids every package. A method that emits fewer calls still carries eight `none` slots in its
+term (author-time cost only; no bytes on the wire, since calls are not stored). With
+`forwardsCalls` gone, a package author who writes `exec(call)` behind a grant to strangers lends the
+object's whole authority, and nothing in LANG says so. `mutate` on an account is the whole balance,
+so the escrow-funding grant is wider than `amount`. `rightsMax = 4` assumes Right keeps four
+constructors. `callData` is exhaustive, so a new Right breaks the build, which is the intent.
+**Meta-critique.** Withdrawing the check also removes work from my layer, which is the
+"phase ordering that avoids a hard part" smell in reverse. The independent test is the treasury
+example, which the check refuses. I accepted `Body` as the effect type partly because LANG-3 had
+already agreed, so I am not the right judge of whether a narrower posting type would have been
+safer for value.
+**Status.** agreed with LEDGER (sent 2026-10-17); KERNEL-5's signature pending; not built.
