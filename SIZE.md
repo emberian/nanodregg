@@ -6,7 +6,7 @@
 | metric | now | ceiling |
 |---|---|---|
 | Lean modules in the Host closure | 0 | 150 |
-| Lean lines (deployed) | 8025 | — |
+| Lean lines (deployed) | 8034 | — |
 | protocol operations | 6 | 6 |
 | call kinds (Receive.Body constructors) | 10 | 10 |
 | command verbs (the one command language) | 11 | 20 |
@@ -29,4 +29,4 @@
 | max dependents of one module | 78 | — |
 | native (extern/implemented_by) | 8 | 8 |
 | C lines | 0 | 146 |
-| Lean lines (Lang) | 4525 | — |
+| Lean lines (Lang) | 4532 | — |

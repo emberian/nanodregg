@@ -162,6 +162,13 @@ where
         | _, .error e => .error e
         | _, _ => .error "state"
 
+/-- The request fits the language's data: its member digests fit a byte value and its window fits
+a natural. KERNEL bounds the window only at admission (`checkBounds`, after the receivers ran), so
+the language asserts it where the request enters a run (law 4). -/
+def reqOk (r : Req D) : Bool :=
+  decide ((bytesOf r.agent).size ≤ Bounds.bytesMax) && decide ((bytesOf r.principal).size ≤ Bounds.bytesMax) &&
+    decide (r.notBefore < Bounds.natLimit) && decide (r.validUntil < Bounds.natLimit)
+
 def reqData (r : Req D) : Data :=
   .record [("agent", .bytes (bytesOf r.agent)), ("notBefore", .nat r.notBefore),
     ("principal", .bytes (bytesOf r.principal)), ("validUntil", .nat r.validUntil)]
@@ -181,6 +188,7 @@ def reasonText (r : ByteArray) : String :=
 /-- Every law of the package at closure index `g` (whose id is `law`) on `old → new`. -/
 def judgeOne (look : Pinned D) (law : D) (old new : Slots) (r : Req D) :
     Except (Refusal D) Unit := do
+  unless reqOk bytesOf r do throw (.program "request out of bounds")
   let (L, g) ← load digestOf look closureDepthMax (bytesOf law) ⟨[], [], []⟩
   let some p := L.pkgs[g]? | throw (.program "closure")
   let row := recordRow p.state
@@ -205,6 +213,7 @@ def judge (look : Pinned D) (pkg : Option D) (laws : List D) (old new : Slots) (
 
 def runMethod (look : Pinned D) (pkg : D) (state : Slots) (method : Nat) (args : ByteArray)
     (r : Req D) (budget : Nat) : Except (Refusal D) Slots := do
+  unless reqOk bytesOf r do throw (.program "request out of bounds")
   let (L, g) ← load digestOf look closureDepthMax (bytesOf pkg) ⟨[], [], []⟩
   let some p := L.pkgs[g]? | throw (.program "closure")
   let some ℓ := p.methods[method]? | throw (.program s!"no method {method}")

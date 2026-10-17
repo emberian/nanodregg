@@ -9,7 +9,8 @@ value of the package's state type or a named non-`stuck` fault, at every tick bu
 `law_never_stuck` is its twin for `Program.judge`: every law a loaded package declares, run on the
 old and new states read from the slots, ends with a verdict or a named non-`stuck` fault. Neither
 takes a premise about the package beyond its having loaded (load re-checks it); the only premise
-left about the World is the request's own bounds (digests fit a slot, the window fits u64).
+left about the request is `reqOk`, the very bound `Program.run`/`judge` assert before running
+(KERNEL's `checkBounds` bounds the window only at admission, after the receivers ran).
 -/
 import Lang.Proofs.Load
 import Lang.Proofs.Data
@@ -41,11 +42,10 @@ theorem readState_conforms {row : List (Label × Ty)} {s : Slots} {d : Data}
     (h : readState row s = .ok d) : Conforms d (.record row) :=
   readState_go_conforms row 0 h
 
-theorem reqData_conforms {D : Type} (bytesOf : D → ByteArray) (r : Req D)
-    (ha : (bytesOf r.agent).size ≤ Bounds.bytesMax) (hp : (bytesOf r.principal).size ≤ Bounds.bytesMax)
-    (hn : r.notBefore < Bounds.natLimit) (hv : r.validUntil < Bounds.natLimit) :
-    Conforms (reqData bytesOf r) reqTy :=
-  .record (.cons (.bytes ha) (.cons (.nat hn) (.cons (.bytes hp) (.cons (.nat hv) .nil))))
+theorem reqOk_conforms {D : Type} {bytesOf : D → ByteArray} {r : Req D} (h : reqOk bytesOf r = true) :
+    Conforms (reqData bytesOf r) reqTy := by
+  simp only [reqOk, Bool.and_eq_true, decide_eq_true_eq] at h
+  exact .record (.cons (.bytes h.1.1.1) (.cons (.nat h.1.2) (.cons (.bytes h.1.1.2) (.cons (.nat h.2) .nil))))
 
 theorem checkShape_ok {p : Package} (h : p.checkShape = .ok ()) :
     isRecordData p.state = true ∧ p.iface.wf = true := by
@@ -123,15 +123,14 @@ theorem invoke_never_stuck {D : Type} {bytesOf : D → ByteArray} {digestOf : By
     (hm : Row.find? ℓ (recordRow p.iface) = some mty) (hA : methodArg p.state mty = some A)
     (hstate : readState (recordRow p.state) state = .ok sd)
     (hargs : Wire.decodeData A args = .ok ad)
-    (ha : (bytesOf r.agent).size ≤ Bounds.bytesMax) (hpr : (bytesOf r.principal).size ≤ Bounds.bytesMax)
-    (hn : r.notBefore < Bounds.natLimit) (hv : r.validUntil < Bounds.natLimit) :
+    (hr : reqOk bytesOf r = true) :
     RunOK L.ifaces p.state
       (run L.lib Bounds.stackMax ticks 0
         (State.init (apply3 g ℓ) [(reqData bytesOf r).toVal, ad.toVal, sd.toVal])) := by
   have hs := readState_conforms hstate
   rw [← checkShape_state ((load_checked hload g p hp).1)] at hs
   exact method_run_sound hload hp hm hA (toVal_typed hs) (toVal_typed (decodeData_conforms hargs))
-    (toVal_typed (reqData_conforms bytesOf r ha hpr hn hv))
+    (toVal_typed (reqOk_conforms hr))
 
 /-- The twin for laws: every law of a loaded package, run in `Program.judge` on the old and new states
 it decoded from the slots and the request, never reaches `stuck`: it ends with a value of
@@ -143,8 +142,7 @@ theorem law_never_stuck {D : Type} {bytesOf : D → ByteArray} {digestOf : ByteA
     (hp : L.pkgs[g]? = some p) (hl : ℓ ∈ p.laws)
     (hold : readState (recordRow p.state) old = .ok od)
     (hnew : readState (recordRow p.state) new = .ok nd)
-    (ha : (bytesOf r.agent).size ≤ Bounds.bytesMax) (hpr : (bytesOf r.principal).size ≤ Bounds.bytesMax)
-    (hn : r.notBefore < Bounds.natLimit) (hv : r.validUntil < Bounds.natLimit) :
+    (hr : reqOk bytesOf r = true) :
     RunOK L.ifaces verdictTy
       (run L.lib Bounds.stackMax ticks 0
         (State.init (apply3 g ℓ) [(reqData bytesOf r).toVal, nd.toVal, od.toVal])) := by
@@ -159,7 +157,7 @@ theorem law_never_stuck {D : Type} {bytesOf : D → ByteArray} {digestOf : ByteA
     .ref (by rw [← hrow]; simp [Loaded.ifaces, hp])
   have ht : HasType (Loaded.ifaces L) [reqTy, p.state, p.state] (apply3 g ℓ) verdictTy :=
     .app (.app (.app (.get href hfind) (.var rfl)) (.var rfl)) (.var rfl)
-  exact run_sound hlib _ _ _ (.eval (.cons (toVal_typed (reqData_conforms bytesOf r ha hpr hn hv))
+  exact run_sound hlib _ _ _ (.eval (.cons (toVal_typed (reqOk_conforms hr))
     (.cons (toVal_typed hnw) (.cons (toVal_typed ho) .nil))) ht .nil)
 
 end Nanodregg.Lang
