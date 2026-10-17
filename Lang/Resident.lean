@@ -95,17 +95,17 @@ def answer : SExp → Answer
   | .list _ [.atom _ "type", tx] =>
     match term depthMax [] tx with
     | .error e => readRefused e
-    | .ok t => match infer [] [] t with
-      | some T => ok (showTy T)
-      | none => no "illTyped"
+    | .ok t => match inferE [] [] t with
+      | .ok T => ok (showTy T)
+      | .error e => no s!"illTyped {e.text}"
   | .list _ [.atom _ "eval", .atom p n, tx] =>
     match n.toNat?, term depthMax [] tx with
     | none, _ => readRefused (.notOfType p)
     | _, .error e => readRefused e
     | some ticks, .ok t =>
-      match infer [] [] t with
-      | none => no "illTyped"
-      | some T =>
+      match inferE [] [] t with
+      | .error e => no s!"illTyped {e.text}"
+      | .ok T =>
         match eval [] ticks t with
         | .fault f used => no s!"fault {faultName f} after {used} of {ticks}"
         | .value v used =>

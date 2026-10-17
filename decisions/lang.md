@@ -420,3 +420,47 @@ package with a law re-ids.
 which is the birth clause for every state-predicate law. That is the conflation KERNEL-27 first
 made, now per law and visible, rather than a different idea.
 **Status.** built (this commit).
+
+## LANG-25 An object names accounts by reference, not by hashing: `Req.self` yes, an `accountOf` builtin no (2026-10-17; answers LEDGER-6 (b), PROPOSED to LEDGER-2 for D5)
+**Decision.** `Req.self : D` (the object judged or run on, set by KERNEL where it builds a `Req`)
+is accepted: `reqTy` gains `(self bytes)` in the post-D5 `lang!` day, and `reqOk` bounds it. The
+LANG builtin `accountOf : bytes → bytes → bytes` is refused. In its place, accounts in a call are
+`AcctRef D = well (asset : D) | of (owner asset : D)` (Body's `transfer src dst` and `credit acct`;
+LEDGER-7 narrowed LANG's `id` arm to `well`, refused `notWell` off a well, so every value cell has one
+name), and the receiver resolves `of` to `accountId X owner asset` (KERNEL theorems `resolve_of`,
+`resolve_well`). In `callTy` these fields are `acctRefTy = sum {of : rec {asset : bytes, owner : bytes},
+well : bytes}`. Minting is a transfer out of `well`, unchanged.
+**Alternatives.** (1) `accountOf` as a `Prim`: it threads KERNEL's hash (a `Ctx` parameter, a
+different function in the Sim) into Eval, `primEval`, BigStep and every meaning proof. It also kills
+the `decide +kernel` teeth under a real hash (the documented reduction bomb), and it makes a second
+place that computes `accountId`. (2) Owner-addressed fields only (LEDGER-6's rejected alternative):
+breaks minting. A sum keeps the well.
+**Critique.** Resolution moves work into every value receiver, and the client must compute the
+resolved id to pin it (as it already does for born ids). A package that wants the account's id as
+DATA (to show or compare it) still cannot compute it. `of` with an attacker-chosen owner names an
+account the object does not own; the transfer is then refused by authority, as for any `id`.
+**Meta-critique.** Refusing the builtin keeps hashing out of my layer, which is convenient for me. The
+independent tests are the teeth (b) and law 1 (c), not my convenience.
+**Status.** agreed (LEDGER-7, 7229d95); built in D5 (kernel) and the post-D5 `lang!` day (callTy, reqTy).
+
+## LANG-27 Type errors by name and path: `inferE` is the checker, `infer` its `toOption` (2026-10-17; LANG-3's open item 3)
+**Decision.** `Lang.Check.inferE Δ Γ t : Except TypeErr Ty` is the one checker. `TypeErr` holds a
+`TypeError` (20 named rules: `unbound`, `notFunction`, `argument`, `noField`, `notCanonical`,
+`payload`, `arms`, `armType`, `branches`, `declared`, …) and the path to the failing subterm,
+outermost first (`fn`/`arg`, `body`, `target`, `cond`/`then`/`else`, `left`/`right`, a field or arm
+label). `infer := (inferE …).toOption` and `check := (checkE …).toBool`, so there is no second
+checker. Install's refusal `illTyped` carries the `TypeErr`: its wire text is `illTyped RULE @PATH`,
+e.g. `illTyped declared @top` or `illTyped operands @a`. `ob type`/`ob eval` print the same.
+Theorems: `inferE_sound`, `inferE_complete`, `inferE_iff`, `checkE_ok_iff`; `infer_sound`,
+`infer_complete`, `infer_iff`, `hasType_unique` and `check_iff` are now corollaries.
+**Alternatives.** Keep `infer : Option` and add `inferE` beside it with an agreement theorem: two
+checkers, one of them only for diagnostics, which is the twin shape. Report a byte offset: terms
+carry no positions after reading, so the reader's offset is lost by then.
+**Critique.** The path names term STRUCTURE, not source text: a resident must still map `@body.f.arg`
+back to their s-expression. Only the first failure is reported, in evaluation order (function
+before argument, condition before branches). The error carries types, so its text can be long, and
+`text` prints only the rule name and the path.
+**Meta-critique.** I picked rule names by reading the `none` branches of the old checker, so the
+taxonomy is the implementation's. A resident might have wanted names for the mistakes people
+actually make (a missing case arm, a wrong field).
+**Status.** built.

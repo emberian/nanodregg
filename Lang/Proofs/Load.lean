@@ -85,7 +85,7 @@ theorem checkWith_typed {ifs : List Ty} {p : Package} (h : p.checkWith ifs = .ok
   split at h
   · simp at h
   · simp at h
-  · rename_i hc; exact check_iff.mp hc
+  · rename_i hc; exact checkE_ok_iff.mp hc
 
 theorem checkWith_checked {ifs : List Ty} {p : Package} (h : p.checkWith ifs = .ok ()) :
     p.checkShape = .ok () ∧ p.checkFields = .ok () := by

@@ -15,7 +15,7 @@ private def isOk : Except CheckError Unit → Bool
   | .error _ => false
 
 private def isIllTyped : Except CheckError Unit → Bool
-  | .error .illTyped => true
+  | .error (.illTyped _) => true
   | _ => false
 
 theorem owned_checks : isOk (Journey.owned.checkWith []) = true := by decide +kernel

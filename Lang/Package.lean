@@ -53,7 +53,8 @@ def lawsMax : Nat := 16
 inductive CheckError
   | tooManyImports | tooManyMethods | tooManyLaws
   | stateNotData | ifaceNotRecord
-  | illTyped
+  /-- the body does not check at the interface: which rule, where (`TypeErr`) -/
+  | illTyped (why : TypeErr)
   | noMethod (label : Label)
   | badMethod (label : Label)
   | noLaw (label : Label)
@@ -64,20 +65,22 @@ inductive CheckError
 def CheckError.name : CheckError → String
   | .tooManyImports => "tooManyImports" | .tooManyMethods => "tooManyMethods"
   | .tooManyLaws => "tooManyLaws" | .stateNotData => "stateNotData"
-  | .ifaceNotRecord => "ifaceNotRecord" | .illTyped => "illTyped"
+  | .ifaceNotRecord => "ifaceNotRecord" | .illTyped _ => "illTyped"
   | .noMethod _ => "noMethod" | .badMethod _ => "badMethod"
   | .noLaw _ => "noLaw" | .badLaw _ => "badLaw"
 
-/-- What goes on the wire inside `Refusal.program`: the name, then the label it is about. -/
+/-- What goes on the wire inside `Refusal.program`: the name, then the label it is about (for
+`illTyped`, the failed rule and its path: `illTyped noField @body.f`). -/
 def CheckError.wire : CheckError → String
   | e@(.noMethod ℓ) | e@(.badMethod ℓ) | e@(.noLaw ℓ) | e@(.badLaw ℓ) => s!"{e.name} {ℓ}"
+  | e@(.illTyped why) => s!"{e.name} {why.text}"
   | e => e.name
 
 /-- For a human reading a resident's check. -/
 def CheckError.text : CheckError → String
   | .tooManyImports => "imports" | .tooManyMethods => "methods" | .tooManyLaws => "laws"
   | .stateNotData => "state type" | .ifaceNotRecord => "interface type"
-  | .illTyped => "body does not check at its interface"
+  | .illTyped why => s!"body does not check at its interface: {why.text}"
   | .noMethod ℓ => s!"no method {ℓ}" | .badMethod ℓ => s!"method {ℓ} has the wrong type"
   | .noLaw ℓ => s!"no law {ℓ}" | .badLaw ℓ => s!"law {ℓ} has the wrong type"
 
@@ -122,12 +125,12 @@ def Package.checkFields (p : Package) : Except CheckError Unit :=
   | _ => .error .ifaceNotRecord
 
 /-- The install check, given the interfaces of the imports in order: the shape, then the body
-checks at its interface (`check`), then the fields. -/
+checks at its interface (`checkE`, which names the failed rule), then the fields. -/
 def Package.checkWith (ifaces : List Ty) (p : Package) : Except CheckError Unit :=
-  match p.checkShape, check ifaces p.body p.iface with
+  match p.checkShape, checkE ifaces p.body p.iface with
   | .error e, _ => .error e
-  | .ok (), false => .error .illTyped
-  | .ok (), true => p.checkFields
+  | .ok (), .error why => .error (.illTyped why)
+  | .ok (), .ok () => p.checkFields
 
 /-! ## Relocation: a body's `ref i` becomes the closure's global index -/
 
