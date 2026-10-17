@@ -387,12 +387,16 @@ theorem runMeasured_calls {bytesOf : D → ByteArray} {digestOf : ByteArray → 
       callsOf digestOf c = .ok calls := by
   unfold runMeasured at h
   simp only [bind, Except.bind, pure, Except.pure] at h
+  split at h
+  · cases h
+  rename_i S hS
+  obtain ⟨L, g, p, ℓ, A, ks, sd, ad, -, hl, hp, hres, -, -, -, rfl⟩ := runSetup_spec hS
+  simp only at h
   repeat' split at h
   all_goals first | (simp at h; done) | skip
   simp only [Except.ok.injEq, Prod.mk.injEq] at h
   obtain ⟨-, rfl, -, -⟩ := h
-  exact ⟨_, _, _, _, _, _, _, _, _, _, by assumption, by assumption, by assumption, by assumption,
-    by assumption⟩
+  exact ⟨L, g, p, (ℓ, A, ks), _, _, _, _, _, _, hl, hp, hres, by assumption, by assumption⟩
 
 /-- **A method makes at most its declared calls**: the calls of a run are no more than the call
 slots of the method resolved in the package the run loaded. -/

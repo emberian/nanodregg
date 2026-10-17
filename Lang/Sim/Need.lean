@@ -11,8 +11,8 @@ premises. It never reads the machine: no `step`, no `run`, no tick.
 carrying its size, `derives_bigStep`/`bigStep_derives`, the size unique by
 `derives_size_unique`).
 
-`requiredOf` has `runMeasured`'s inputs and front half: it loads, resolves, reads and decodes
-with the same deployed functions. In place of the machine it counts the method's derivation and
+`requiredOf` has `runMeasured`'s inputs and starts from its own front half, the deployed
+`Lang.runSetup` (it loads, resolves, reads and decodes). In place of the machine it counts the method's derivation and
 extraction's forced suspensions (`needExtract`, shaped like `Machine.extract`). A count past its
 fuel is a named refusal (`required: fuel`), never a zero.
 
@@ -245,29 +245,14 @@ variable {D : Type} [DecidableEq D]
 section
 variable (bytesOf : D → ByteArray) (digestOf : ByteArray → Option D)
 
-/-- `runMeasured`'s front half, with the same deployed functions: the closure's bodies, the term
-the method run evaluates, its environment, and the type extraction reads the result at. -/
-def setupOf (look : Pinned D) (pkg : D) (state : Slots) (method : Nat) (args : ByteArray)
-    (r : Req D) : Except (Refusal D) (List Term × Term × Env × Ty) := do
-  unless reqOk bytesOf r do throw (.program "request out of bounds")
-  let (L, g) ← load digestOf look closureDepthMax (bytesOf pkg) ⟨[], [], []⟩
-  let some p := L.pkgs[g]? | throw (.program "closure")
-  let (ℓ, A, ks) ← resolveMethod p method
-  let row := recordRow p.state
-  let s ← match readState digestOf row state with | .ok d => pure d | .error e => throw (.program e)
-  let a ← match Wire.decodeData A args with
-    | .ok d => if digestsOk digestOf d.digests then pure d else throw (.program "arguments: not a digest")
-    | .error e => throw (.program s!"arguments: {decodeText e}")
-  pure (L.lib, apply3 g ℓ, [(reqData bytesOf r).toVal, a.toVal, s.toVal], resultTy p.state ks)
-
 /-- The steps an invoke requires: the size of the method run's derivation plus those of the
 suspensions extraction forces, with `budget` as the fuel of each count. -/
 def requiredOf (look : Pinned D) (pkg : D) (state : Slots) (method : Nat) (args : ByteArray)
     (r : Req D) (budget : Nat) : Except (Refusal D) Nat := do
-  let (lib, t, env, T) ← setupOf bytesOf digestOf look pkg state method args r
-  match need lib budget env t with
+  let S ← runSetup bytesOf digestOf look pkg state method args r
+  match need S.lib budget S.env S.term with
   | some (.ok v, n) =>
-    match needExtract lib budget T v with
+    match needExtract S.lib budget S.ty v with
     | some m => pure (n + m)
     | none => throw (.program "required: extraction")
   | some (.error _, _) => throw (.program "required: a fault is not a run")
@@ -277,8 +262,8 @@ def requiredOf (look : Pinned D) (pkg : D) (state : Slots) (method : Nat) (args 
 run, `Lang.Proofs.Need.runBy_step`). -/
 def runTicksBy (stp : List Term → State → Step) (look : Pinned D) (pkg : D) (state : Slots)
     (method : Nat) (args : ByteArray) (r : Req D) (budget : Nat) : Except (Refusal D) Nat := do
-  let (lib, t, env, _) ← setupOf bytesOf digestOf look pkg state method args r
-  match runBy (stp lib) Bounds.stackMax budget 0 (State.init t env) with
+  let S ← runSetup bytesOf digestOf look pkg state method args r
+  match runBy (stp S.lib) Bounds.stackMax budget 0 (State.init S.term S.env) with
   | .value _ used => pure used
   | .fault f _ => throw (.program s!"run: {faultText f}")
 
@@ -289,15 +274,15 @@ returns the ticks of the run with one extraction (what `runMeasured` charges, re
 deployed functions) and with two. No knob: admission never calls it. -/
 def extractTicksTwice (look : Pinned D) (pkg : D) (state : Slots) (method : Nat) (args : ByteArray)
     (r : Req D) (budget : Nat) : Except (Refusal D) (Nat × Nat) := do
-  let (lib, t, env, T) ← setupOf bytesOf digestOf look pkg state method args r
-  match run lib Bounds.stackMax budget 0 (State.init t env) with
+  let S ← runSetup bytesOf digestOf look pkg state method args r
+  match run S.lib Bounds.stackMax budget 0 (State.init S.term S.env) with
   | .fault f _ => throw (.program s!"run: {faultText f}")
   | .value v used =>
-    let m : Machine := ⟨lib⟩
-    match m.extract T (budget - used) v with
+    let m : Machine := ⟨S.lib⟩
+    match m.extract S.ty (budget - used) v with
     | .error f => throw (.program s!"extract: {faultText f}")
     | .ok (_, left) =>
-      match m.extract T left v with
+      match m.extract S.ty left v with
       | .error f => throw (.program s!"extract again: {faultText f}")
       | .ok (_, left') => pure (budget - left, budget - left')
 end
@@ -319,5 +304,14 @@ def skipStep (lib : List Term) (s : State) : Step :=
   match s.control with
   | .eval (.app (.lam _ b) (.nat k)) env => .next ⟨.eval b (.nat k :: env), s.stack, s.depth⟩
   | _ => step lib s
+
+/-- PLANT (digest provenance's tooth, LANG-41): the deployed step, except that `cat` returns its
+bytes as a DIGEST: a primitive that makes an id from bytes, which the language has none of
+(LANG-38). Under it a term with no id literal, in an empty environment, returns a digest, which
+`Lang.Proofs.Provenance.run_lits` rules out for the deployed step. -/
+def forgeStep (lib : List Term) (s : State) : Step :=
+  match s.control, s.stack with
+  | .ret (.bytes b), .primR .cat (.bytes a) :: k => .next ⟨.ret (.digest (a ++ b)), k, s.depth - 1⟩
+  | _, _ => step lib s
 
 end Nanodregg.Lang.Need

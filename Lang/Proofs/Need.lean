@@ -709,46 +709,41 @@ variable {D : Type} {bytesOf : D → ByteArray} {digestOf : ByteArray → Option
 theorem requiredOf_spec {look : Pinned D} {pkg : D} {state : Slots} {method : Nat} {args : ByteArray}
     {r : Req D} {budget N : Nat}
     (h : Need.requiredOf bytesOf digestOf look pkg state method args r budget = .ok N) :
-    ∃ (lib : List Term) (t : Term) (env : Env) (T : Ty) (v : Val) (n m : Nat),
-      Need.setupOf bytesOf digestOf look pkg state method args r = .ok (lib, t, env, T) ∧
-      Derives lib env t (.ok v) n ∧ Forces lib T v m ∧ N = n + m := by
+    ∃ (S : RunSetup) (v : Val) (n m : Nat),
+      runSetup bytesOf digestOf look pkg state method args r = .ok S ∧
+      Derives S.lib S.env S.term (.ok v) n ∧ Forces S.lib S.ty v m ∧ N = n + m := by
   unfold Need.requiredOf at h
   simp only [bind, Except.bind, pure, Except.pure] at h
   split at h
   · cases h
-  · rename_i x hs
-    obtain ⟨lib, t, env, T⟩ := x
-    simp only at h
+  · rename_i S hs
     split at h
     · split at h
       · simp only [Except.ok.injEq] at h; subst h
-        exact ⟨lib, t, env, T, _, _, _, hs, need_derives ‹_›, needExtract_forces T ‹_›, rfl⟩
+        exact ⟨S, _, _, _, hs, need_derives ‹_›, needExtract_forces _ ‹_›, rfl⟩
       · cases h
     · cases h
     · cases h
 
-/-- `runMeasured`'s front half is `setupOf`, and its tick count is the run of that term in that
+/-- `runMeasured`'s front half is `runSetup`, and its tick count is the run of that term in that
 environment plus the extraction at that type. -/
 theorem runMeasured_setup {look : Pinned D} {pkg : D} {state : Slots} {method : Nat} {args : ByteArray}
     {r : Req D} {budget : Nat} {s : Slots} {calls : List (Body D)} {ticks k : Nat}
     (h : runMeasured bytesOf digestOf look pkg state method args r budget = .ok (s, calls, ticks, k)) :
-    ∃ (lib : List Term) (t : Term) (env : Env) (T : Ty) (v : Val) (used : Nat) (d : Data) (left : Nat),
-      Need.setupOf bytesOf digestOf look pkg state method args r = .ok (lib, t, env, T) ∧
-      run lib Bounds.stackMax budget 0 (State.init t env) = .value v used ∧
-      (Machine.mk lib).extract T (budget - used) v = .ok (d, left) ∧ ticks = budget - left := by
+    ∃ (S : RunSetup) (v : Val) (used : Nat) (d : Data) (left : Nat),
+      runSetup bytesOf digestOf look pkg state method args r = .ok S ∧
+      run S.lib Bounds.stackMax budget 0 (State.init S.term S.env) = .value v used ∧
+      (Machine.mk S.lib).extract S.ty (budget - used) v = .ok (d, left) ∧ ticks = budget - left := by
   unfold runMeasured at h
-  unfold Need.setupOf
-  simp only [bind, Except.bind, pure, Except.pure] at h ⊢
+  simp only [bind, Except.bind, pure, Except.pure] at h
   repeat' split at h
   all_goals first | (simp at h; done) | skip
-  all_goals
-    simp only [Except.ok.injEq, Prod.mk.injEq] at h
-    obtain ⟨-, -, rfl, -⟩ := h
-    refine ⟨_, _, _, _, _, _, _, _, ?_, ‹_›, ‹_›, rfl⟩
-    simp_all
+  simp only [Except.ok.injEq, Prod.mk.injEq] at h
+  obtain ⟨-, -, rfl, -⟩ := h
+  exact ⟨_, _, _, _, _, ‹_›, ‹_›, ‹_›, rfl⟩
 
 /-- **The denominator counts the deployed run**: for an invoke `runMeasured` admits, the ratio's two
-sides are one run's. The setup is THIS invoke's (`setupOf` of its inputs). The numerator `ticks`
+sides are one run's. The setup is THIS invoke's (`runSetup` of its inputs). The numerator `ticks`
 is that term's machine run in that environment plus the extraction at that type, under what the
 run left. The denominator `requiredOf` is the size of the derivation of the very value the
 machine computed (`derives_unique`), plus the size of what extraction must force at that type
@@ -757,19 +752,19 @@ theorem required_counts_the_run {look : Pinned D} {pkg : D} {state : Slots} {met
     {args : ByteArray} {r : Req D} {budget N : Nat} {s : Slots} {calls : List (Body D)} {ticks k : Nat}
     (hm : runMeasured bytesOf digestOf look pkg state method args r budget = .ok (s, calls, ticks, k))
     (hq : Need.requiredOf bytesOf digestOf look pkg state method args r budget = .ok N) :
-    ∃ (lib : List Term) (t : Term) (env : Env) (T : Ty) (v : Val) (used : Nat) (d : Data) (left n m : Nat),
-      Need.setupOf bytesOf digestOf look pkg state method args r = .ok (lib, t, env, T) ∧
-      run lib Bounds.stackMax budget 0 (State.init t env) = .value v used ∧
-      (Machine.mk lib).extract T (budget - used) v = .ok (d, left) ∧ ticks = budget - left ∧
-      Derives lib env t (.ok v) n ∧ Forces lib T v m ∧ N = n + m := by
-  obtain ⟨lib, t, env, T, v, n, m, hs, hd, hf, rfl⟩ := requiredOf_spec hq
-  obtain ⟨lib', t', env', T', v', used, d, left, hs', hr, he, hticks⟩ := runMeasured_setup hm
+    ∃ (S : RunSetup) (v : Val) (used : Nat) (d : Data) (left n m : Nat),
+      runSetup bytesOf digestOf look pkg state method args r = .ok S ∧
+      run S.lib Bounds.stackMax budget 0 (State.init S.term S.env) = .value v used ∧
+      (Machine.mk S.lib).extract S.ty (budget - used) v = .ok (d, left) ∧ ticks = budget - left ∧
+      Derives S.lib S.env S.term (.ok v) n ∧ Forces S.lib S.ty v m ∧ N = n + m := by
+  obtain ⟨S, v, n, m, hs, hd, hf, rfl⟩ := requiredOf_spec hq
+  obtain ⟨S', v', used, d, left, hs', hr, he, hticks⟩ := runMeasured_setup hm
   rw [hs] at hs'
-  simp only [Except.ok.injEq, Prod.mk.injEq] at hs'
-  obtain ⟨rfl, rfl, rfl, rfl⟩ := hs'
+  simp only [Except.ok.injEq] at hs'
+  subst hs'
   have := bigStep_deterministic (derives_bigStep hd) (run_bigStep hr)
   simp only [Except.ok.injEq] at this; subst this
-  exact ⟨lib, t, env, T, v, used, d, left, n, m, hs, hr, he, hticks, hd, hf, rfl⟩
+  exact ⟨S, v, used, d, left, n, m, hs, hr, he, hticks, hd, hf, rfl⟩
 
 /-- **The ratio is above 1** (cv 01a14a87-33b2): for an invoke `runMeasured` admits, the ticks it
 charged exceed what `requiredOf` counts. The method's run pays more ticks than its meaning's
@@ -781,8 +776,7 @@ theorem required_lt_ticks {look : Pinned D} {pkg : D} {state : Slots} {method : 
     (hm : runMeasured bytesOf digestOf look pkg state method args r budget = .ok (s, calls, ticks, k))
     (hq : Need.requiredOf bytesOf digestOf look pkg state method args r budget = .ok N) :
     N < ticks := by
-  obtain ⟨lib, t, env, T, v, used, d, left, n, m, -, hr, he, rfl, hd, hf, rfl⟩ :=
-    required_counts_the_run hm hq
+  obtain ⟨S, v, used, d, left, n, m, -, hr, he, rfl, hd, hf, rfl⟩ := required_counts_the_run hm hq
   obtain ⟨h1, h2⟩ := derives_lt_used hd hr
   have h3 := forces_le hf he
   omega

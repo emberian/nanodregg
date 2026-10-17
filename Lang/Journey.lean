@@ -45,6 +45,9 @@ the owner and the owner never changes). Rows:
   refused `notDigest` at install; LD3: a Relay seeded with `next = some #78797a` is refused at its
   birth, `state field next: not a digest`; LD4: an invoke whose argument `via` is not a digest is
   refused `arguments: not a digest`.
+* LD5 (LANG-41, a run's ids came from where ids enter) `Caller`, holding and taking nothing, calls the
+  signing member as an object: the kernel refuses it `wrongKind` (a member is not an object), so
+  `callsOf` read the call.
 * L7 the follower (`World.fold` from genesis) and the auditor reach the Host's World.
 * PLANT skip-judge: the same rows against a program whose `judge` admits everything: L4 must be
   ADMITTED there (the row flips), proving the refusal in L4 came from the law, not from elsewhere.
@@ -59,6 +62,10 @@ the owner and the owner never changes). Rows:
   check without its id-literal check: LD2 must be ADMITTED. PLANT total-digest: run and judge with a
   `digestOf` that accepts any bytes: LD3 and LD4b must be ADMITTED, so their refusals came from the
   boundary's digest check. Each of the three runs only the call rows up to its own.
+* PLANT unlawful-codec: the method run under a World whose digest codec refuses the founder's own
+  id (`Lang.Proofs.Provenance`'s `hdig` false there): LD5c must be refused by `callsOf`, by name,
+  `calls: c0 obj: not a digest`. A request's ids are the one source no boundary check reads, so this
+  is the only way to reach that refusal, and the premise of `runMeasured_past_extraction` is not decoration.
 * PLANT erase-payload: the occasion's payload is lost (a relaw names no laws, every invoke is
   method 0): L8e must be admitted and L10d refused, so the payload reaches the law.
 -/
@@ -241,6 +248,21 @@ def badListed : Package :=
   { imports := [], state := .record [], iface := .record [("al", lawTy (.record []))],
     body := .record [("al", Std.allowlistLaw (.record []) [⟨#[120, 121, 122]⟩])], methods := [], laws := ["al"] }
 
+/-- LD5 (LANG-41): `Caller` holds nothing and takes nothing; its method `go` makes one call, an
+invoke of the SIGNING member (`req.agent`) as an object, through no grant. So the run's only id is
+the request's own. -/
+def CA : Ty := .record []
+
+def callerGo : Term :=
+  .lam CA (.lam CA (.lam reqTy (resultT
+    (callsT [someCallT K (.inj K "invoke" (.record [("args", .bytes .empty), ("budget", .nat 1000),
+      ("method", .nat 0), ("obj", .get (.var 0) "agent"), ("via", .inj (optTy .digest) "none" (.record []))]))])
+    (.var 2))))
+
+def caller : Package :=
+  { imports := [], state := CA, iface := .record [("go", methodTy CA CA [K])],
+    body := .record [("go", callerGo)], methods := ["go"], laws := [] }
+
 /-- One call slot more than `callsMax`. -/
 def nineLabels : List Label := slotLabels "c" (Kernel.Bounds.callsMax + 1)
 
@@ -348,6 +370,16 @@ def totalDigest : Program D :=
   let t := Lang.program Sim.dc.bytes totalDigestOf
   { langProgram with run := t.run, judge := t.judge }
 
+/-- A digest decoder that refuses exactly member `x`'s own id: a World whose codec does not read
+that id back (`Lang.Proofs.Provenance`'s `hdig` false at `x`). -/
+def refusing (x : D) (b : ByteArray) : Option D := if b = Sim.dc.bytes x then none else Sim.digestOf b
+
+/-- Plant 9: the method run under a World whose codec refuses member `x`'s id. A request's ids are
+the one source no boundary check reads (they are the World's own), so a call naming `x` is the
+first place the refusal can land: `callsOf`. Install and judge are the deployed ones. -/
+def unlawfulCodec (x : D) : Program D :=
+  { langProgram with run := (Lang.program Sim.dc.bytes (refusing x)).run }
+
 /-- A package with nothing in it but its imports (LI). -/
 def importer (imports : List ByteArray) : Package :=
   { imports, state := .record [], iface := .record [], body := .record [], methods := [], laws := [] }
@@ -355,7 +387,7 @@ def importer (imports : List ByteArray) : Package :=
 /-- Which program the journey runs under. -/
 inductive Mode
   | honest | skipJudge | eraseOccasion | erasePayload | dropCalls | rawInstall | bytesIds | skipLits
-  | totalDigest
+  | totalDigest | unlawfulCodec
   deriving DecidableEq
 
 def Mode.program : Mode → Program D
@@ -368,6 +400,8 @@ def Mode.program : Mode → Program D
   | .bytesIds => Journey.bytesIds
   | .skipLits => Journey.skipLits
   | .totalDigest => Journey.totalDigest
+  -- its plant refuses the founder's own id, which `callRows` knows: it builds `unlawfulCodec a.id`
+  | .unlawfulCodec => langProgram
 
 /-- A refusal by a law, with `why` in its reason. -/
 def deniedWith (v why : String) : Bool := v.startsWith "refused lawDenied" && (v.splitOn why).length > 1
@@ -448,7 +482,7 @@ def installRows (mode : Mode) (r0 : Run) (a : Sim.Member) (pkg : D) : Run := Id.
 
 /-- The call rows (LC): Relay chains through the real receivers. -/
 def callRows (mode : Mode) (r0 : Run) (a : Sim.Member) : Run := Id.run do
-  let prog := mode.program
+  let prog := if mode = .unlawfulCodec then unlawfulCodec a.id else mode.program
   let mut r := r0
   -- LC calls: a chain of six Relay objects o0 … o5, o5 last (empty `next`); grant k lets o_k invoke o_{k+1}
   let some relayBytes := Wire.encodePackage relay | return note r "LC Relay has no bytes" false
@@ -459,6 +493,23 @@ def callRows (mode : Mode) (r0 : Run) (a : Sim.Member) : Run := Id.run do
   let aB := Sim.dc.bytes a.id
   let some meB := Wire.encodeData .digest (.digest aB) | return note r "LC no me bytes" false
   let some noneB := nextSlot none | return note r "LC no next bytes" false
+  -- LD5 (LANG-41) a run's ids came from where ids enter: a call naming the signer is read by callsOf
+  if mode = .unlawfulCodec || mode = .honest then
+    let some cb := Wire.encodePackage caller | return note r "LD5 Caller has no bytes" false
+    let (rd5, vd5, td5) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id]) (.install cb))
+    r := note rd5 s!"LD5a install Caller: {vd5}" (vd5 == "admitted")
+    let some cid := td5.bind fun t => (createdIds t).head? | return note r "LD5 no Caller id" false
+    let (rd5b, vd5b, td5b) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id, cid])
+      (.create (some cid) [] []))
+    r := note rd5b s!"LD5b A creates a Caller: {vd5b}" (vd5b == "admitted")
+    let some co := td5b.bind fun t => (createdIds t).head? | return note r "LD5 no object id" false
+    let some noArgs := Wire.encodeData CA (.record []) | return note r "LD5 no arguments" false
+    let (rd5c, vd5c, _) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id, cid, co])
+      (.invoke co 0 noArgs 10000 none))
+    if mode = .unlawfulCodec then
+      return note rd5c s!"PLANT unlawful-codec: LD5c a call naming the signer must now be refused by callsOf: {vd5c}"
+        (vd5c.startsWith "refused program" && (vd5c.splitOn "calls: c0 obj: not a digest").length > 1)
+    r := note rd5c s!"LD5c A invokes it, calling A as an object: {vd5c}" (vd5c.startsWith "refused wrongKind")
   -- LD (LANG-38) a digest is a type: what bytes could not refuse, by name
   if mode = .bytesIds || mode = .honest then
     let some b1 := Wire.encodePackage relayBytesId | return note r "LD1 no bytes" false
@@ -552,7 +603,7 @@ def journey (mode : Mode) : Run := Id.run do
   let mut r : Run := { st := { rng := ⟨1⟩, host := g, members } }
   let a := members.headD ⟨0, .empty, .empty⟩
   let b := members.getD 1 ⟨0, .empty, .empty⟩
-  if mode = .bytesIds || mode = .skipLits || mode = .totalDigest then
+  if mode = .bytesIds || mode = .skipLits || mode = .totalDigest || mode = .unlawfulCodec then
     return callRows mode r a
   -- L0 the resident's text reads to exactly the package
   let some ownedBytes := Wire.encodePackage owned | return note r "L0 Owned has no bytes" false
@@ -801,7 +852,7 @@ def journey (mode : Mode) : Run := Id.run do
 
 def runAll : IO UInt32 := do
   let runs := [Mode.honest, .skipJudge, .eraseOccasion, .erasePayload, .dropCalls, .rawInstall, .bytesIds,
-    .skipLits, .totalDigest].map journey
+    .skipLits, .totalDigest, .unlawfulCodec].map journey
   for r in runs do for l in r.log do IO.println l
   let bad := (runs.map (·.bad)).foldl (· + ·) 0
   IO.println s!"lang-journey: {if bad = 0 then "GREEN" else s!"RED ({bad})"}"

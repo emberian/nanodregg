@@ -339,6 +339,29 @@ theorem method_run_sound {D : Type} {digestOf : ByteArray → Option D} {look : 
     .app (.app (.app (.get href hfind) (.var rfl)) (.var rfl)) (.var rfl)
   exact run_sound hlib _ _ _ (.eval (.cons hr (.cons ha (.cons hs .nil))) ht .nil)
 
+/-- **What a run starts from** (LANG-41): `runSetup` admits exactly when the request is in bounds,
+the closure loads, the method resolves, the state reads at its row and the arguments decode at their
+type with every digest accepted; the setup is then those values. -/
+theorem runSetup_spec {D : Type} {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D}
+    {look : Pinned D} {pkg : D} {state : Kernel.Slots} {method : Nat} {args : ByteArray} {r : Req D} {S : RunSetup}
+    (h : runSetup bytesOf digestOf look pkg state method args r = .ok S) :
+    ∃ (L : Loaded) (g : Nat) (p : Package) (ℓ : Label) (A : Ty) (ks : List Ty) (sd ad : Data),
+      reqOk bytesOf r = true ∧
+      load digestOf look closureDepthMax (bytesOf pkg) ⟨[], [], []⟩ = .ok (L, g) ∧ L.pkgs[g]? = some p ∧
+      resolveMethod (D := D) p method = .ok (ℓ, A, ks) ∧
+      readState digestOf (recordRow p.state) state = .ok sd ∧
+      Wire.decodeData A args = .ok ad ∧ digestsOk digestOf ad.digests = true ∧
+      S = { lib := L.lib, pkgs := L.pkgs.length, label := ℓ, row := recordRow p.state,
+            ty := resultTy p.state ks, state := sd, args := ad, term := apply3 g ℓ,
+            env := [(reqData bytesOf r).toVal, ad.toVal, sd.toVal] } := by
+  unfold runSetup at h
+  simp only [bind, Except.bind, pure, Except.pure] at h
+  repeat' split at h
+  all_goals first | (simp at h; done) | skip
+  simp only [Except.ok.injEq] at h
+  subst h
+  exact ⟨_, _, _, _, _, _, _, _, ‹_›, ‹_›, ‹_›, ‹_›, ‹_›, ‹_›, ‹_›, rfl⟩
+
 /-- **An installed package loads** (LANG-35): if the install check admits bytes `b` and the cell
 named by `idb` holds `b` as a package, a run's `load` of `idb` succeeds under the same pinned view,
 and the package at the index it returns is `b`'s. The install check and the loader agree: no package

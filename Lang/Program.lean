@@ -253,13 +253,28 @@ def resolveMethod (p : Package) (method : Nat) : Except (Refusal D) (Label × Ty
   let some (A, ks) := methodSig p.state mty | throw (.program s!"method {ℓ}")
   pure (ℓ, A, ks)
 
-/-- Run method `method` of package `pkg` on `state`: the new state slots and the calls the method
-makes as the object (`callsOf`, in slot order), with what the run cost (WASTE rows, PROTOCOL-4):
-the machine steps the method and its extraction used, and the packages of the closure loaded and
-re-checked (LANG-16). `runMethod` and `program`'s `run` are its components, so a measured number
-is the deployed run's. -/
-def runMeasured (look : Pinned D) (pkg : D) (state : Slots) (method : Nat) (args : ByteArray)
-    (r : Req D) (budget : Nat) : Except (Refusal D) (Slots × List (Body D) × Nat × Nat) := do
+/-- What a method run starts from once every boundary check has passed (LANG-41): the closure's
+bodies and size, the method's label, the state's record row, the type the result is extracted at,
+the state and the arguments as data, and the term the machine evaluates in its environment
+(`[req, args, state]`). Every id that enters a run enters here: a request's members and object
+from the World (`reqData`), the state and the arguments each checked by `digestOf`, and the
+closure's id literals checked at load (`checkLits`). -/
+structure RunSetup where
+  lib : List Term
+  pkgs : Nat
+  label : Label
+  row : List (Label × Ty)
+  ty : Ty
+  state : Data
+  args : Data
+  term : Term
+  env : Env
+
+/-- The front half of every method run: the request's bounds, the closure loaded and re-checked
+(LANG-16), the method resolved, the state read at its row and the arguments decoded at their type,
+each refused by name. `runMeasured` runs from it; the WASTE counter (`Lang.Need`) counts from it. -/
+def runSetup (look : Pinned D) (pkg : D) (state : Slots) (method : Nat) (args : ByteArray) (r : Req D) :
+    Except (Refusal D) RunSetup := do
   unless reqOk bytesOf r do throw (.program "request out of bounds")
   let (L, g) ← load digestOf look closureDepthMax (bytesOf pkg) ⟨[], [], []⟩
   let some p := L.pkgs[g]? | throw (.program "closure")
@@ -269,19 +284,29 @@ def runMeasured (look : Pinned D) (pkg : D) (state : Slots) (method : Nat) (args
   let a ← match Wire.decodeData A args with
     | .ok d => if digestsOk digestOf d.digests then pure d else throw (.program "arguments: not a digest")
     | .error e => throw (.program s!"arguments: {decodeText e}")
-  let env := [(reqData bytesOf r).toVal, a.toVal, s.toVal]
-  match run L.lib Bounds.stackMax budget 0 (State.init (apply3 g ℓ) env) with
-  | .fault f _ => throw (.program s!"{ℓ}: {faultText f}")
+  pure { lib := L.lib, pkgs := L.pkgs.length, label := ℓ, row, ty := resultTy p.state ks, state := s,
+         args := a, term := apply3 g ℓ, env := [(reqData bytesOf r).toVal, a.toVal, s.toVal] }
+
+/-- Run method `method` of package `pkg` on `state`: the new state slots and the calls the method
+makes as the object (`callsOf`, in slot order), with what the run cost (WASTE rows, PROTOCOL-4):
+the machine steps the method and its extraction used, and the packages of the closure loaded and
+re-checked (LANG-16). `runMethod` and `program`'s `run` are its components, so a measured number
+is the deployed run's. -/
+def runMeasured (look : Pinned D) (pkg : D) (state : Slots) (method : Nat) (args : ByteArray)
+    (r : Req D) (budget : Nat) : Except (Refusal D) (Slots × List (Body D) × Nat × Nat) := do
+  let S ← runSetup bytesOf digestOf look pkg state method args r
+  match run S.lib Bounds.stackMax budget 0 (State.init S.term S.env) with
+  | .fault f _ => throw (.program s!"{S.label}: {faultText f}")
   | .value v used =>
-    match (Machine.mk L.lib).extract (resultTy p.state ks) (budget - used) v with
+    match (Machine.mk S.lib).extract S.ty (budget - used) v with
     | .ok (.record [("calls", c), ("state", .record ds)], left) =>
-      match stateSlots row ds 0 with
+      match stateSlots S.row ds 0 with
       | some slots => do
         let calls ← callsOf digestOf c
-        pure (slots, calls, budget - left, L.pkgs.length)
-      | none => throw (.program s!"{ℓ}: state bytes")
-    | .ok _ => throw (.program s!"{ℓ}: state")
-    | .error f => throw (.program s!"{ℓ}: {faultText f}")
+        pure (slots, calls, budget - left, S.pkgs)
+      | none => throw (.program s!"{S.label}: state bytes")
+    | .ok _ => throw (.program s!"{S.label}: state")
+    | .error f => throw (.program s!"{S.label}: {faultText f}")
 
 def runMethod (look : Pinned D) (pkg : D) (state : Slots) (method : Nat) (args : ByteArray)
     (r : Req D) (budget : Nat) : Except (Refusal D) (Slots × List (Body D)) :=

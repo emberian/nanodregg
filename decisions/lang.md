@@ -1097,3 +1097,59 @@ already suffices by the theorem.
 `need_derives_all`. That was cheap once `Derives` carried sizes, which is LANG-37's shape paying off a
 second time.
 **Status.** built (this commit). Nothing re-ids: one new proof module.
+
+## LANG-41 Every id a run holds came from where ids enter; `callsOf`'s `not a digest` is unreachable from checked Lang output (2026-10-17; cv 01a14acf-a188, cv 01a14af1-2132, LANG-38's critique (2) and vacuity LOW (5))
+**Decision.** (1) `runMeasured`'s front half is ONE deployed function, `Lang.runSetup` (Lang/Program.lean,
+returning a `RunSetup`: closure bodies and size, method label, state row, result type, state and
+arguments as data, term, environment). It runs the same checks in the same order as before. `runMeasured`
+runs from it, and `Lang.Need`'s copy (`setupOf`) is deleted, so the WASTE counter and the deployed run
+share one front half instead of two that agree today. `Lang.Proofs.Load.runSetup_spec` states what it admits.
+(2) `Lang/Proofs/Provenance.lean`. `ValLits P v`: every digest a value holds, and every id literal and
+value of each closure, suspension and knot inside it, satisfies `P`. One step keeps it (`step_lits`,
+for any `P`, since no primitive makes a digest), and so do `run_lits`, `force_lits` and `extract_lits`.
+At the deployed run, `runSetup_sources` (THE PROVENANCE THEOREM): every digest of the extracted result
+is the request's `agent`, `principal` or `self`, a digest of the arguments, a digest of the state the
+World held, or an id literal of the loaded closure (`RunSource`). These are three origins: the World (state
+and the request's ids), the request's fields (arguments) and literals the World accepted. `runSetup_accepted`:
+each source was accepted where it entered (the arguments and state by `runSetup`'s `digestOf` checks, the
+literals by `checkLits` at every load, which `load_lits` carries through relocation), and the request's
+ids are accepted under the World law `hdig : ∀ x, (digestOf (bytesOf x)).isSome`.
+`runMeasured_past_extraction`: under `hdig`, once the method ran and its result extracted, the result is a
+calls row and a state record, `callsOf` reads the calls, and the deployed run refuses only for state with
+no bytes. So `calls: cI FIELD: not a digest` is unreachable from checked Lang output.
+(3) Teeth. `catTerm_bytes`/`catTerm_forged`: `Need.forgeStep` is the deployed step with a `cat` that
+returns a digest, and it makes an id from a literal-free term in an empty environment, which
+`run_lits` forbids for the deployed step. Journey LD5: `Caller` (no state, no arguments) calls the
+signing member as an object, and the honest run is refused `wrongKind` by the kernel, so `callsOf`
+read the call. PLANT unlawful-codec: the same run under a World whose `digestOf` refuses the founder's
+own id (`hdig` false at one point) is refused by `callsOf`, `calls: c0 obj: not a digest`.
+**Why.** LANG-38 claimed that no primitive makes a digest and that the boundary checks catch every
+non-digest first. That was prose. Now it is a theorem with the sources named. cv 2132 asked for a plant
+reaching the refusal with "boundary off, callsOf honest". A split `digestOf` (boundary vs callsOf) would
+be a knob in deployed admission (PROTOCOL-32's rule), so it is not built. The theorem shows the only
+input that reaches `callsOf` unchecked is the request's ids, so the plant breaks exactly that input's
+premise, through `Lang.program`'s existing `digestOf` parameter. No new switch anywhere.
+ROOT's default (ii), a Kernel.Sim arm handing the receiver a hand-built `Body` with a non-digest where an
+id belongs, is unrepresentable. `Body D`'s ids are the World's `D` (a `UInt64` in the Sim, CODEC's `Digest`
+deployed), so no Body holds a non-digest, and the refusal lives on `Data`, in Lang. No Kernel/Sim change
+was made and none was needed from KERNEL-12.
+**Alternatives.** (a) A fourth run-time check (`reqOk` asks `digestOf` about agent/principal/self). That
+would remove `hdig`, and then `callsOf`'s refusal would be dead under every World, with no plant possible.
+It costs three decodes per run to re-verify the World's own codec law, which the Sim proves
+(`sim_digest_roundtrip`) and CODEC's digest codec states. Not taken, but it is the move if a World's
+codec ever stops being lawful by theorem. (b) Proving provenance only for `P := accepted`. Rejected: the
+sources theorem is strictly more informative, and acceptance is its corollary.
+**Critique.** (1) `hdig` is a premise on the World, not a check. A World whose `bytesOf` and `digestOf`
+disagree gets a refusal at `callsOf` (by name, the plant), not at the request. It is discharged for
+the Sim (`sim_hdig`, `runMeasured_past_extraction_sim`). It is NOT yet a law of the kernel's `Ctx`
+(vacuity read a773ed76, LOW): `Ctx.digestOf` carries no round-trip law, so every other World discharges
+it by hand. The owed item is a KERNEL field `∀ x, X.digestOf (X.env.bytes x) = some x` on the lawful
+context (cv task filed, asked of KERNEL). (2) Provenance is stated for
+method runs. Laws (`judgeOne`) return verdicts with no ids, so nothing consumes their digests, and the same
+`run_lits` covers them if that changes. (3) `RunSource` does not say WHICH literal or field: provenance up
+to membership, not up to position.
+**Meta-critique.** The refactor (1) was the price of a clean statement. The old twin `setupOf` made every
+deployed-run theorem restate the front half, and deleting it shortened four proofs. The machine
+invariant took one pass with no new machinery (`ValLits` is an ordinary inductive), which says LANG-38's
+"no primitive makes a digest" was cheap to make true and was only ever unstated.
+**Status.** built (this commit). Nothing re-ids: no package, wire or Store shape changed.

@@ -159,9 +159,9 @@ theorem requiredOf_total {look : Pinned D} {pkg : D} {state : Slots} {method : N
     {args : ByteArray} {r : Req D} {budget : Nat} {s : Slots} {calls : List (Body D)} {ticks k : Nat}
     (hm : runMeasured bytesOf digestOf look pkg state method args r budget = .ok (s, calls, ticks, k)) :
     ∃ N, Need.requiredOf bytesOf digestOf look pkg state method args r budget = .ok N ∧ N < ticks := by
-  obtain ⟨lib, t, env, T, v, used, d, left, hs, hr, he, rfl⟩ := runMeasured_setup hm
+  obtain ⟨S, v, used, d, left, hs, hr, he, rfl⟩ := runMeasured_setup hm
   obtain ⟨n, hd⟩ := bigStep_derives (run_bigStep hr)
-  obtain ⟨m, hf⟩ := extract_forces T he
+  obtain ⟨m, hf⟩ := extract_forces S.ty he
   obtain ⟨h1, h2⟩ := derives_lt_used hd hr
   have h3 := forces_le hf he
   have hq : Need.requiredOf bytesOf digestOf look pkg state method args r budget = .ok (n + m) := by

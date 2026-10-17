@@ -575,15 +575,18 @@ theorem runMeasured_kinds {bytesOf : D → ByteArray}
         Matched (fun b k => ∃ arms, k = .sum arms ∧ b.kindName ∈ arms.map Prod.fst) calls ks' := by
   unfold runMeasured at h
   simp only [bind, Except.bind, pure, Except.pure] at h
+  split at h
+  · cases h
+  rename_i S hS
+  obtain ⟨L, g, p, ℓ, A, ks, sd, ad, hr0, hl, hp, hres, hst, hargs, -, rfl⟩ := runSetup_spec hS
+  simp only at h
   repeat' split at h
   all_goals first | (simp at h; done) | skip
   simp only [Except.ok.injEq, Prod.mk.injEq] at h
   obtain ⟨-, rfl, -, -⟩ := h
-  rename_i hr0 _ Lg hl _ p hp _ x hres _ sd hst _ ad hargs _ _ v used hrun _ c ds left hx _ slots _ _ calls' hc
-  obtain ⟨L, g⟩ := Lg
-  obtain ⟨ℓ, A, ks⟩ := x
+  rename_i v used hrun _ c ds left hx _ slots _ _ calls' hc
   obtain ⟨mty, hm, hA⟩ := resolveMethod_spec hres
-  have hok := invoke_never_stuck (ticks := budget) hl hp hm hA hst hargs (by simpa using hr0)
+  have hok := invoke_never_stuck (ticks := budget) hl hp hm hA hst hargs hr0
   rw [hrun] at hok
   have hcf := extract_conforms (load_libTy hl).1 (resultTy p.state ks) hok hx
   have hks := methodSig_slots hA
