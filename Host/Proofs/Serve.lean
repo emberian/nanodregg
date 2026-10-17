@@ -107,6 +107,35 @@ theorem handle_lookup_forgotten (X : Ctx D) (w : World D) (f : Frame) (c : Call 
     handle X w f = .reply Protocol.Status.uncertain.code "forgotten".toUTF8 := by
   simp only [handle, hop, hc, hj, hfg, if_true, forgotten]
 
+/-- **`expired` means never committed (KERNEL-33).** A lookup that answers `refused expired`
+answers it of a call no Turn derived from it was ever admitted on the way to this World: had
+`receive` derived `t` from the call at some earlier World `w₀`, `t` been admitted there and any
+admitted log led on to `w`, the journal at `w` would still hold `t`'s id, since below
+`journalForgets` nothing admitted is pruned (`Kernel.fold_answers`), and the lookup would have
+answered `ok` with its receipt. Stated from the ANSWER, not from the arm's guards. -/
+theorem lookup_expired_never_committed [Std.TransOrd D] [Std.LawfulEqOrd D] (X : Ctx D)
+    {w₀ w₁ w : World D} {f : Frame} {c : Call D} {t : Turn D} {l : List (Turn D)}
+    (hop : Protocol.Op.ofCode? f.op = some .lookup) (hc : X.decodeCall f.payload = some c)
+    (hans : handle X w f = .reply Protocol.Status.refused.code "expired".toUTF8)
+    (hr : receive X w₀ c = .ok t) (ha : World.admit X.env w₀ t = .ok w₁)
+    (hf : World.fold X.env w₁ l = .ok w) : False := by
+  obtain ⟨_, _, _, _, _, htx, hnb, _⟩ := receive_ok hr
+  simp only [handle, hop, hc] at hans
+  cases hj : w.journal[txIdOf X c]? with
+  | some p =>
+    obtain ⟨h, d⟩ := p
+    rw [hj] at hans
+    simp only [Answer.reply.injEq] at hans
+    exact absurd hans.1 (by decide)
+  | none =>
+    cases hfg : journalForgets w.height c.unsigned.notBefore
+    · have hk := fold_answers ha hf (by rw [hnb]; exact hfg)
+      rw [htx, hj] at hk
+      cases hk
+    · rw [hj] at hans
+      simp only [hfg, if_true, forgotten, Answer.reply.injEq] at hans
+      exact absurd hans.1 (by decide)
+
 /-- **`expired` is final.** Over any admitted log from the World a lookup answered `expired` at,
 the call's transaction id is journaled only by a Turn whose window ends after the call's own:
 never by the call itself. -/

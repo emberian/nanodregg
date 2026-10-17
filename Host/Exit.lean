@@ -105,6 +105,13 @@ inductive Status where
   /-- `index.log`'s pages up to the base's prefix do not verify, end elsewhere, or do not decode
   (HOST-30) -/
   | indexCorrupt
+  /-- a seal's page held an index entry outside the entry codec's domain (a chain wider than
+  `chainBytesMax`, a height or offset past u64): a defect (HOST-31) -/
+  | entryUnfit
+  /-- a seal found `index.log` at another size than the prefix the newest base names: another
+  process wrote or truncated it; the restart's open truncates an orphan or refuses `indexShort`
+  (HOST-31) -/
+  | indexMoved
   deriving DecidableEq, Repr
 
 namespace Status
@@ -114,7 +121,7 @@ def all : List Status :=
    locked, .exists, badKey, shortRead, noBase, baseTooLarge, baseCorrupt, baseUndecodable,
    segmentShort, tailTooLong, foreignSegment, corrupt, record, tagWidth, behindAnchor, chainMismatch,
    badIndex, pageTooLarge, pastEnd, shortBase, reopenFailed, reopenDiverged, lifetime, stream, noThreads,
-   shapeMismatch, foreignOrigin, indexShort, indexCorrupt]
+   shapeMismatch, foreignOrigin, indexShort, indexCorrupt, entryUnfit, indexMoved]
 
 def code : Status → Nat
   | eof => 0
@@ -157,15 +164,17 @@ def code : Status → Nat
   | foreignOrigin => 30
   | indexShort => 45
   | indexCorrupt => 46
+  | entryUnfit => 47
+  | indexMoved => 48
 
 def cls : Status → ExitClass
   | eof => .done
-  | uncertain | fuel | sealIo | ioServing | lifetime | stream => .restart
+  | uncertain | fuel | sealIo | ioServing | lifetime | stream | indexMoved => .restart
   | usage | entropy | recordTooLarge | worldTooLarge | indexTooLarge | io
   | locked | .exists | badKey | shortRead | noBase | baseTooLarge | baseCorrupt | baseUndecodable
   | segmentShort | tailTooLong | foreignSegment | corrupt | record | tagWidth | behindAnchor | chainMismatch
   | badIndex | pageTooLarge | pastEnd | shortBase | reopenFailed | reopenDiverged | noThreads
-  | shapeMismatch | foreignOrigin | indexShort | indexCorrupt => .fatal
+  | shapeMismatch | foreignOrigin | indexShort | indexCorrupt | entryUnfit => .fatal
 
 /-- The name printed beside the code (`refused NAME` / `exit NAME` on stderr). -/
 def name (s : Status) : String := ((toString (repr s)).splitOn ".").getLast!
@@ -178,6 +187,8 @@ end Status
 def SealFault.status : SealFault → Status
   | .worldTooLarge _ => .worldTooLarge
   | .indexTooLarge _ => .indexTooLarge
+  | .entryUnfit _ => .entryUnfit
+  | .indexMoved _ _ => .indexMoved
   | .io _ => .sealIo
 
 def BaseFault.status : BaseFault → Status

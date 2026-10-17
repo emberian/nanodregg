@@ -57,6 +57,13 @@ def Entry.codec : Stream Entry :=
   Stream.refine "host/entry" (Stream.product Stream.nat64 (Stream.product Stream.nat64 (Stream.rawBytes chainBytesMax)))
     (fun (h, o, c) => some ⟨h, o, c⟩) (fun e => (e.height, e.offset, e.chain))
 
+/-- An entry `Entry.codec` spells and reads back exactly: a u64 height and offset, and a chain of
+at most `chainBytesMax` bytes (`Host.Proofs.Base.Entry.codec_lawfulOn`). `Base.page` refuses a
+page holding any other (`entryUnfit`), so every page on disk decodes to the entries it was
+written from. -/
+def Entry.fits (e : Entry) : Bool :=
+  decide (e.height < 2 ^ 64) && decide (e.offset < 2 ^ 64) && decide (e.chain.size ≤ chainBytesMax)
+
 /-- What a base holds: the World, where the segment after it starts, and where the index of
 every record before it ends in `index.log` (so `log` can page from any height without reading
 the segment from 0). -/
@@ -135,12 +142,21 @@ inductive SealFault where
   /-- `index.log` would grow past `worldBytesMax` with this seal's page: the same lifetime bound
   the whole index had inside the base before HOST-30, now checked in O(1) -/
   | indexTooLarge (bytes : Nat)
+  /-- the `index`-th entry of a page is outside `Entry.codec`'s domain (`Entry.fits`): its page
+  would not read back as written. Unreachable at the deployed chain (32 bytes); a defect -/
+  | entryUnfit (index : Nat)
+  /-- `index.log` is `size` bytes, not the `offset` where the newest base's prefix ends: a page
+  appended now would land elsewhere than the base about to name it. Another process wrote or
+  truncated the file; a restart's open truncates an orphan or refuses `indexShort` -/
+  | indexMoved (size offset : Nat)
   | io (detail : String)
   deriving Repr
 
 def SealFault.name : SealFault → String
   | .worldTooLarge _ => "worldTooLarge"
   | .indexTooLarge _ => "indexTooLarge"
+  | .entryUnfit _ => "entryUnfit"
+  | .indexMoved _ _ => "indexMoved"
   | .io _ => "io"
 
 /-- The base file's bytes for `w` at the segment position `seg`, naming the `index.log` prefix
@@ -152,22 +168,43 @@ def Base.file {W : Type} (keys : Keys) (c : Cadence) (world : Stream W) (w : W) 
     (keys.shapes.bytes ++ (Base.codec world).bytes ⟨w, seg.offset, seg.tag, index.offset, index.tag⟩))
 
 /-- The page a seal appends to `index.log` at `at_` for the entries since the last base, and the
-position after it; no entries, no page. Refuses `indexTooLarge` before encoding when the file
-would pass `worldBytesMax`. -/
+position after it; no entries, no page. Refuses, before encoding, an entry outside the codec's
+domain (`entryUnfit`, `Entry.fits`) and a page past `indexMax` entries or one after which the file would pass
+`worldBytesMax` (`indexTooLarge`), so a page it returns reads back as exactly these entries
+(`Host.Proofs.Base.indexEntries_pages`). -/
 def Base.page (keys : Keys) (c : Cadence) (at_ : Position) (entries : Array Entry) :
     Except SealFault (ByteArray × Position) :=
   if entries.isEmpty then .ok (ByteArray.empty, at_) else
+  match entries.toList.findIdx? (fun e => !e.fits) with
+  | some i => .error (.entryUnfit i)
+  | none =>
   let n := at_.offset + Log.frameMax (Entry.page.size entries.toList)
-  if c.worldBytesMax < n then .error (.indexTooLarge n) else
+  if c.worldBytesMax < n ∨ indexMax < entries.size then .error (.indexTooLarge n) else
   let r := Entry.page.bytes entries.toList
   .ok (Log.frame keys.index at_.tag.bytes r,
     ⟨at_.offset + Log.frameMax r.size, tagDigest keys.index (at_.tag.bytes ++ r)⟩)
 
-/-- What one seal writes, checked before anything is written: the World's size first, then the
-page for `entries` at `ipos`, then the base naming the index prefix up to that page's end. Both
+/-- The `index.log` bytes successive seals append from `at_`, one `Base.page` per seal, and the
+position after them: what `Host.Proofs.Base.indexEntries_pages` reads back. -/
+def Base.pages (keys : Keys) (c : Cadence) : Position → List (Array Entry) →
+    Except SealFault (ByteArray × Position)
+  | at_, [] => .ok (ByteArray.empty, at_)
+  | at_, es :: ess =>
+    match Base.page keys c at_ es with
+    | .error f => .error f
+    | .ok (p, at') =>
+      match Base.pages keys c at' ess with
+      | .error f => .error f
+      | .ok (ps, at'') => .ok (p ++ ps, at'')
+
+/-- What one seal writes, checked before anything is written: that `index.log` (`indexSize` bytes
+now) ends exactly where the newest base's prefix `ipos` ends, so the page appended at the file's
+end is the page framed at `ipos` (`indexMoved` otherwise); the World's size; then the page for
+`entries` at `ipos`, then the base naming the index prefix up to that page's end. Both
 checkpoints (files, memory) seal through this one function. -/
 def Base.seal {W : Type} (keys : Keys) (c : Cadence) (world : Stream W) (w : W) (seg ipos : Position)
-    (entries : Array Entry) : Except SealFault (ByteArray × Position × ByteArray) :=
+    (entries : Array Entry) (indexSize : Nat) : Except SealFault (ByteArray × Position × ByteArray) :=
+  if indexSize ≠ ipos.offset then .error (.indexMoved indexSize ipos.offset) else
   if c.worldBytesMax < world.size w then .error (.worldTooLarge (world.size w)) else
   match Base.page keys c ipos entries with
   | .error f => .error f

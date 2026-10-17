@@ -223,6 +223,8 @@ def hostAction : Status → String
   | .entropy => "the OS random source failed: do not genesis on this box"
   | .recordTooLarge | .worldTooLarge | .indexTooLarge =>
     "a defect or the HOST-14 design limit: report to HOST"
+  | .entryUnfit => "a defect: a seal met an index entry its codec cannot spell (HOST-31); keep the Store untouched, report to HOST"
+  | .indexMoved => "automatic; index.log changed size under the writer (another process wrote or truncated it): the restart's open truncates an orphan page or refuses indexShort; if it repeats, find the other writer"
   | .io => "a Store file is missing or unreadable: check the path and permissions (the call and errno are on stderr)"
   | .ioServing => "automatic; an IO error after the open: check the disk"
   | .locked => "another writer holds the Store: find its unit; never start a second"

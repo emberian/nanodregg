@@ -1050,3 +1050,80 @@ nowhere to write them while the base must hold the whole index, so the fix is th
 lands with it. Owed: OPS-2's live-copy orderings (orphan with a stale base; index.log before
 base.world); a theorem over `Follow.loop` (HOST-21's open edge, unchanged); and the O(records)
 in-memory index (this decision's residue).
+
+## HOST-31 · a page reads back as written, and a seal appends where its page is framed: `entryUnfit`, `indexMoved` (2026-10-18, HOST-8; HOST-30's law-6 read, items (a) and (b))
+**Context.** HOST-30's law-6 read rated two statements WEAK. (a) `indexEntries_encodeAll` took the page
+codec round trip as a premise. Its discharge needs every entry inside `Entry.codec`'s domain: a u64
+height and offset, and a chain of at most `chainBytesMax` (64) bytes. `Base.page` checked none of this.
+The deployed chain is 32 bytes, so the gap is latent. A wider chain would have written a page that does
+not read back, and the next open would refuse `indexCorrupt` about a page the writer had just written.
+(b) `fileCheckpoint` appends the page at the file's end but frames it (the length, the tag chain, the
+offset the base names) at `ipos`, the newest base's prefix. Nothing tied the two together. They agree
+only while nothing else has written to index.log, and no theorem says so (an IO fact).
+**Decision.** Two checks, each named, both in the one pure `Base.seal`/`Base.page` that both
+checkpoints call:
+- `Base.page` refuses an entry outside `Entry.fits` with `entryUnfit i` (the first such entry), and a
+  page of more than `indexMax` entries with `indexTooLarge`. The checks run before encoding and are
+  O(entries), which the encode costs anyway.
+- `Base.seal` takes the index file's size (`File.size` on the append handle, an fstat; `Bases.index.size`
+  in memory). It refuses `indexMoved size offset` unless the size equals `ipos.offset`. This check is
+  first, before anything is encoded or written.
+
+Two new Statuses, each with its OPS hostAction arm (pre-agreed coupling) and deploy/units re-rendered:
+- `entryUnfit` 47, fatal: a defect.
+- `indexMoved` 48, restart: the restart's `openWriter` truncates an orphan, or refuses `indexShort` when
+  the file was cut, so a restart either heals or stops by name, and never loops.
+
+Theorems (Host/Proofs/Base):
+- `Entry.codec_lawfulOn` and `Entry.page_lawfulOn`;
+- `page_ok` and its tooth `page_entryUnfit`;
+- `pages_encodeAll`;
+- `indexEntries_pages`: the bytes successive seals append from an empty index.log (`Base.pages`)
+  read back as every entry handed to them, in order, and the position they end at is the file's size.
+  It has no codec premise. Its one premise, `worldBytesMax < 2^32`, is discharged at Deployed
+  (`Deployed.indexEntries_pages`);
+- `seal_at_end`: a seal that succeeds was handed exactly `ipos.offset` bytes, wrote `Base.page`'s page,
+  and names the size after the append. Its tooth is `seal_indexMoved`.
+
+`indexEntries_encodeAll` now takes `Entry.fits` and discharges the round trip itself.
+Plants (host-sim):
+- plant-index-moved: one byte appended to index.log stops the first seal `sealFailed indexMoved`, and
+  no base is installed;
+- plant-entry-unfit: a 65-byte chain is refused `entryUnfit 1`, with a 64-byte control that is written.
+
+**Critique.** `seal_at_end` and `indexEntries_pages` together say the index file is `Base.pages` from
+genesis. That holds only if `File.writeAll` appends exactly its bytes at the end, which is the FFI's
+contract (Host/c/file.c) and is not proved. What is proved: no seal frames its page anywhere but the
+current end. Mapping `indexMoved` to restart trusts the reopen to judge, and a third process that keeps
+writing index.log would make the writer restart repeatedly. `lifetime` bounds that, and the sentence
+says to find the other writer. The fit check in `Base.page` cannot fire at the deployed digest, so its
+only plant is a direct call. No loop plant exists, because no World in the tree has a 65-byte chain.
+**Meta-critique.** I discharged (b) by refusing, not by proving. Proving it would need a model of the
+file, which the Host does not have. The check costs one fstat per seal, and it turns a silent
+misframing, which would show up only at the NEXT open as `indexCorrupt` against a base the writer had
+already installed, into a stop at the seal that caused it. Is restart the right class? `indexShort`
+and `indexCorrupt` are fatal because they come from an open, where no writer is left to blame.
+`indexMoved` happens while the writer is live, and its own reopen can tell an orphan from a cut. No
+re-genesis: no shape changed (the base and entry codecs are untouched, the stamp is the same). The
+unit files' restart and prevent lists gain 48 and 47.
+**Law-6 read (a spawned reader, before landing).** Nothing vacuous. One statement is WEAK against its
+docstring. `indexEntries_pages` had said "exactly the bytes `fileCheckpoint` appends", and that is only
+half proved. Each seal frames its own page where it appends it (`seal_at_end`). That seal k+1 is framed
+at seal k's returned position is read off Loop.lean (`spawnSeal` passes `sealed.index`, `settle` stores
+the returned one), not proved. The docstring now says so. The reader also found that a restart heals
+after `indexMoved` was unplanted, so a check was added: the plant's Store reopens to genesis with the
+stray byte as a 1-byte orphan. Residue named by the reader:
+- an in-place overwrite that keeps the size passes `indexMoved`, and only the next open's
+  `indexCorrupt` catches it;
+- `fileCheckpoint`'s fstat has no plant, only `memCheckpoint`'s size does;
+- the `indexMax` count check is unreachable at deployed sizes, and its payload is the byte count.
+
+**KERNEL-33's Host arm (KERNEL-8, 17e2d3f): law-6 read by HOST-8.** `handle_lookup_forgotten` and
+`handle_lookup_expired` (now with `journalForgets = false`) are OK. `step_submit` is unchanged in
+statement. One gap: Serve.lean's prose said `expired` means "never committed (`Kernel.fold_answers`)",
+but no Host theorem said it. It is now `lookup_expired_never_committed`. It is stated from the ANSWER
+(`handle … = refused expired`), not from the arm's guards: if a Turn that `receive` derived from the
+call had been admitted at any earlier World, and any admitted log led on to this one, that is False.
+There was no Host plant for the forgotten arm, only kernel-sim and PROTOCOL's row. plant-lookup-forgotten
+covers it in host-sim: the same dead call at height 2·windowMax − 1 answers `refused expired`, and at
+2·windowMax it answers `uncertain forgotten`.

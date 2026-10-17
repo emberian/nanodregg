@@ -38,16 +38,16 @@ end Status
 /-- The exit status determines the refusal's printed name: one code, one name. -/
 theorem StoreFault.status_iff_name {F : Type} (a b : StoreFault F) :
     a.status = b.status ↔ a.name = b.name := by
-  rcases a with _ | _ | _ | _ | (_ | _ | _ | _ | _ | _ | _ | _ | _ | _ | _) | (_ | _) | (_ | _ | _) | _ <;>
-  rcases b with _ | _ | _ | _ | (_ | _ | _ | _ | _ | _ | _ | _ | _ | _ | _) | (_ | _) | (_ | _ | _) | _ <;>
+  rcases a with _ | _ | _ | _ | (_ | _ | _ | _ | _ | _ | _ | _ | _ | _ | _) | (_ | _) | (_ | _ | _ | _ | _) | _ <;>
+  rcases b with _ | _ | _ | _ | (_ | _ | _ | _ | _ | _ | _ | _ | _ | _ | _) | (_ | _) | (_ | _ | _ | _ | _) | _ <;>
   simp [StoreFault.status, StoreFault.name, BaseFault.status, BaseFault.name, SealFault.status,
     SealFault.name]
 
 /-- The status refines the `Exit`'s own name: equal statuses, equal names, so the stderr line
 (`exit NAME`, from the status) and `Exit.name` cannot disagree about which exit it was. -/
 theorem Exit.name_of_status (a b : Exit) (h : a.status = b.status) : a.name = b.name := by
-  rcases a with _ | _ | _ | (_ | _ | _) | _ | _ | _ | _ | _ <;>
-  rcases b with _ | _ | _ | (_ | _ | _) | _ | _ | _ | _ | _ <;>
+  rcases a with _ | _ | _ | (_ | _ | _ | _ | _) | _ | _ | _ | _ | _ <;>
+  rcases b with _ | _ | _ | (_ | _ | _ | _ | _) | _ | _ | _ | _ | _ <;>
   simp_all [Exit.status, SealFault.status, Exit.name]
 
 end Nanodregg.Host

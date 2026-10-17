@@ -36,8 +36,8 @@ theorem Page.Fault.name_injective (a b : Page.Fault) (h : a.name = b.name) : a.c
 
 theorem StoreFault.name_injective {F : Type} (a b : StoreFault F) (h : a.name = b.name) :
     a.ctorIdx = b.ctorIdx := by
-  rcases a with _ | _ | _ | _ | (_ | _ | _ | _ | _ | _) | (_ | _) | (_ | _ | _) | _ <;>
-  rcases b with _ | _ | _ | _ | (_ | _ | _ | _ | _ | _) | (_ | _) | (_ | _ | _) | _ <;>
+  rcases a with _ | _ | _ | _ | (_ | _ | _ | _ | _ | _) | (_ | _) | (_ | _ | _ | _ | _) | _ <;>
+  rcases b with _ | _ | _ | _ | (_ | _ | _ | _ | _ | _) | (_ | _) | (_ | _ | _ | _ | _) | _ <;>
   simp_all [StoreFault.name, BaseFault.name, SealFault.name] <;> rfl
 
 end Nanodregg.Host

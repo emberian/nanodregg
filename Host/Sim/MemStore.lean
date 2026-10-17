@@ -52,7 +52,7 @@ def memCheckpoint {W : Type} (disk : IO.Ref Disk) (bases : IO.Ref Bases) (keys :
     (world : Codec.Stream W) : Checkpoint W where
   async := false
   write w seg entries ipos := do
-    match Base.seal keys c world w seg ipos entries with
+    match Base.seal keys c world w seg ipos entries (← bases.get).index.size with
     | .error f => return .error f
     | .ok (page, ipos', file) =>
       let synced := (← disk.get).synced.size

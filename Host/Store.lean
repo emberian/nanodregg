@@ -67,7 +67,9 @@ def installBase (dir : System.FilePath) (bytes : ByteArray) : IO Unit := do
   syncDir dir.toString
 
 /-- The base sealer over a Store directory, appending pages through `index` (the writer's
-`index.log` append handle). Both encodings are checked before anything is written; then the page
+`index.log` append handle). The handle's size is checked to be the prefix the newest base names
+(`indexMoved`, so the page lands where it is framed) and both encodings are checked before
+anything is written; then the page
 is appended and synced, and only then is the base naming it installed (`installBase`), so a crash
 leaves the old base with at most an orphan page after its prefix (HOST-30). Never silent (D8):
 every seal writes one `STATUS seal` line to stderr, installed or refused by name. -/
@@ -76,7 +78,7 @@ def fileCheckpoint (dir : System.FilePath) (keys : Keys) (c : Cadence) (world : 
   async
   write w seg entries ipos := do
     let at_ := s!"height={(mark w).1} offset={seg.offset} entries={entries.size} index_offset={ipos.offset}"
-    match Base.seal keys c world w seg ipos entries with
+    match Base.seal keys c world w seg ipos entries (← index.size).toNat with
     | .error f =>
       IO.eprintln s!"STATUS seal {at_} refused={f.name}"
       return .error f

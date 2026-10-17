@@ -217,6 +217,49 @@ def indexTerm (seed n : Nat) : IO (Nat × Nat × Nat × Nat) := do
 /-- The Store lengths (fresh Turns) HOST-17's count is measured at. -/
 def indexLengths : List Nat := [100, 200, 400, 800]
 
+/-- HOST-31's plants: a seal refuses an `index.log` that is not the size of the base's prefix
+(`indexMoved`), and a page refuses an entry its codec cannot spell (`entryUnfit`). -/
+def indexPlants (seed : Nat) (frames : List Frame) (failures : IO.Ref Nat) : IO Unit := do
+  -- plant-index-moved (HOST-31): index.log one byte longer than the prefix the base names
+  match genesisStore cadence with
+  | .error _ => check "plant-index-moved: genesis opens" false failures
+  | .ok (gd, gb, gres) =>
+    let mv ← serveFrom cadence seed frames none gd { gb with index := gb.index.push 0 } gres
+    let stopped := match mv.exit with | .sealFailed f => f.name = "indexMoved" | _ => false
+    check "plant-index-moved: an index.log a byte past the base's prefix stops the first seal `sealFailed indexMoved`, and no base is installed"
+      (stopped && mv.bases.history.size = 1) failures
+    check "plant-index-moved: the restart's open of that Store opens to genesis with the stray byte as a 1-byte orphan (the writer truncates it)"
+      (match reopenIn mv.bases.index mv.bases.file mv.disk.synced with
+        | .ok o => o.orphan = 1 && o.opened.torn = 0 | .error _ => false) failures
+  -- plant-entry-unfit (HOST-31): a page holding a chain wider than chainBytesMax
+  let fitE : Entry := ⟨0, 0, ByteArray.mk (Array.replicate chainBytesMax 0)⟩
+  let wideE : Entry := ⟨0, 0, ByteArray.mk (Array.replicate (chainBytesMax + 1) 0)⟩
+  check "plant-entry-unfit: a page whose second entry has a chain of chainBytesMax + 1 bytes is refused `entryUnfit 1`"
+    (match Base.page keys cadence indexStart #[fitE, wideE] with | .error (.entryUnfit 1) => true | _ => false) failures
+  check "plant-entry-unfit control: the same page at chainBytesMax is written"
+    (match Base.page keys cadence indexStart #[fitE, fitE] with | .ok (p, _) => 0 < p.size | .error _ => false) failures
+
+/-- KERNEL-33's lookup arm through the writer's `handle` (the plant-lookup-expired Ctx and call). -/
+def forgottenPlants (failures : IO.Ref Nat) : IO Unit := do
+  let kx := Kernel.Sim.ctx
+  let kw : World Kernel.Sim.D := World.genesis kx.env (kx.env.hash "nanodregg/host-sim/origin/v1" "lookup".toUTF8) (2 ^ 40)
+  let callUntil (v : Nat) : Receive.Call Kernel.Sim.D :=
+    { unsigned := { world := kw.origin, member := 0, key := ByteArray.empty, notBefore := 0, validUntil := v, pins := [],
+                    maxCharge := 0, body := .revoke 0 },
+      signature := ByteArray.empty }
+  -- plant-lookup-forgotten (KERNEL-33): the same dead call at the World heights either side of
+  -- `journalForgets` (notBefore 0 + 2 * windowMax): `expired` just below, `uncertain forgotten` at it
+  let lookupHigh (h : Nat) : String :=
+    match handle kx { kw with height := h } ⟨0, Protocol.Op.lookup.code, kx.callBytes (callUntil 0)⟩ with
+    | .reply s p =>
+      if s == Protocol.Status.uncertain.code then "uncertain " ++ (String.fromUTF8? p).getD "?"
+      else if s == Protocol.Status.refused.code then (String.fromUTF8? p).getD "?" else "other"
+    | _ => "other"
+  check "plant-lookup-forgotten: below journalForgets a dead call is still `refused expired`"
+    (lookupHigh (2 * Kernel.Bounds.windowMax - 1) == "expired") failures
+  check "plant-lookup-forgotten: at journalForgets it is `uncertain forgotten`, never `refused`"
+    (lookupHigh (2 * Kernel.Bounds.windowMax) == "uncertain forgotten") failures
+
 def run (args : List String) : IO UInt32 := do
   let seed := (args.head? >>= String.toNat?).getD 1
   let failures ← IO.mkRef 0
@@ -448,6 +491,7 @@ def run (args : List String) : IO UInt32 := do
   let t ← runWith tiny seed frames none
   check "plant-world-too-large: the loop stops `sealFailed worldTooLarge`"
     (match t.exit with | .sealFailed f => f.name = "worldTooLarge" | _ => false) failures
+  indexPlants seed frames failures
   -- plant-fsync-fail, then plant-restart-at-every-cut
   let p ← runOnce seed frames (some 3)
   let pendingSize := p.disk.pending.size
@@ -592,6 +636,7 @@ def run (args : List String) : IO UInt32 := do
     (lookupAt 0 == "expired") failures
   check "plant-lookup-expired: a call that may still land answers `absent`"
     (lookupAt 1 == "absent") failures
+  forgottenPlants failures
   -- plant-hangup (PROTOCOL-23): a hang-up after every 7th request, for connections that are not
   -- the requests' own; each is acknowledged exactly once by name, and every other reply is the
   -- reply of the run without them

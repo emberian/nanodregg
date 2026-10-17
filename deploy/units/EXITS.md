@@ -49,6 +49,8 @@ code space holds both tables: `host` (Host.Status, below 64) and nd-supervise's 
 | 43 | shapeMismatch | fatal | stopped (RestartPreventExitStatus) | the base was written under other codec shapes: re-genesis from a checked export (RUNBOOK §6) |
 | 45 | indexShort | fatal | stopped (RestartPreventExitStatus) | index.log is shorter than the prefix the base names (a copy cut short, or the file truncated): restore index.log from this Store's own backup taken after its base.world; never restart it |
 | 46 | indexCorrupt | fatal | stopped (RestartPreventExitStatus) | index.log's pages up to the base's indexOffset do not verify under this Store's key or do not end at the tag the base names: restore index.log from this Store's own backup; never restart it |
+| 47 | entryUnfit | fatal | stopped (RestartPreventExitStatus) | a defect: a seal met an index entry its codec cannot spell (HOST-31); keep the Store untouched, report to HOST |
+| 48 | indexMoved | restart | restarted after 2 s; failed past 5 starts in 120 s | automatic; index.log changed size under the writer (another process wrote or truncated it): the restart's open truncates an orphan page or refuses indexShort; if it repeats, find the other writer |
 
 ## nd-supervise
 
