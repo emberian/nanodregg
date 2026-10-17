@@ -11,7 +11,8 @@ Every lean_exe has exactly one row (check.py's `runs` gate), so a new exe is cla
 
 A row `cargo:CRATE:TEST` is a Rust integration test that drives built Lean exes (HOSTING's
 physical isolation tooth, launcher/tests/isolation.rs): `runs` names those exes (comma-separated),
-`pass` is `exit 0`. It runs `cargo test --manifest-path CRATE/Cargo.toml --test TEST` with
+`pass` is `exit 0`. It runs `cargo test --locked --manifest-path Cargo.toml -p PACKAGE --test TEST`
+(PACKAGE = CRATE/Cargo.toml's name; the root workspace) with
 ND_LEAN_BIN = the tree's built bin directory, after the build; it is selected when CRATE/ changed or
 any exe it drives is selected.
 
@@ -32,6 +33,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tomllib
 
 import tree
 
@@ -141,7 +143,12 @@ def main() -> int:
             env = None
             if exe.startswith("cargo:"):
                 _, crate, test = exe.split(":")
-                argv = ["cargo", "test", "--quiet", "--manifest-path", os.path.join(t.root, crate, "Cargo.toml"), "--test", test]
+                # One workspace (ROOT 10-17): the member is named by its [package] name under the
+                # root manifest, so every test shares the root lock and target dir.
+                with open(os.path.join(t.root, crate, "Cargo.toml"), "rb") as fh:
+                    package = tomllib.load(fh)["package"]["name"]
+                argv = ["cargo", "test", "--quiet", "--locked", "--manifest-path", os.path.join(t.root, "Cargo.toml"),
+                        "-p", package, "--test", test]
                 env = dict(os.environ, ND_LEAN_BIN=bindir,
                            CARGO_TARGET_DIR=os.environ.get("CARGO_TARGET_DIR", os.path.join(t.root, ".lake", "cargo-target")))
                 missing = [e for e in args if not os.path.isfile(os.path.join(bindir, e))]

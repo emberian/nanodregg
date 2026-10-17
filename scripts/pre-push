@@ -25,8 +25,8 @@
 #      closure holds a changed module, the measured waste ratios against their ceilings,
 #      and every gates/generated.tsv file equal to what its
 #      Lean generator emits (`lake exe emit-rust --check client/src/generated.rs`);
-#   4. `cargo check --all-targets` + `cargo clippy -D warnings` + `cargo fmt --check` for each
-#      changed crate.
+#   4. the Rust workspace whole (root Cargo.toml) when a member or the root manifest/lock changed:
+#      `cargo check --locked --workspace --all-targets`, clippy -D warnings, `cargo fmt --all --check`.
 # Prints one verdict line. Exit 0 = may land; 1 = RED; 76 = KILLED(load), not judged.
 set -uo pipefail
 . "$(dirname "$0")/gate-lib.sh"
@@ -170,12 +170,15 @@ if [ "$build" = 1 ] && [ -z "$killed" ]; then
   done < <(generated_checks "$G/tree")
 fi
 
-for crate in $(rust_changed "$base" "$cand"); do
+# The Rust workspace, judged whole when any member or the root manifest/lock changed: every member
+# builds (all targets), clippy -D warnings, rustfmt, against the one root Cargo.lock (--locked: a
+# commit that needs a lock change must carry it).
+if [ "$(rust_changed "$base" "$cand")" = workspace ]; then
   export CARGO_TARGET_DIR=$G/cargo-target
-  step "cargo-check:$crate" wrapped cargo check --quiet --all-targets --manifest-path "$G/tree/$crate/Cargo.toml"
-  step "clippy:$crate" wrapped cargo clippy --quiet --all-targets --manifest-path "$G/tree/$crate/Cargo.toml" -- -D warnings
-  step "fmt:$crate" wrapped cargo fmt --check --manifest-path "$G/tree/$crate/Cargo.toml"
-done
+  step cargo-check wrapped cargo check --quiet --locked --workspace --all-targets --manifest-path "$G/tree/Cargo.toml"
+  step clippy wrapped cargo clippy --quiet --locked --workspace --all-targets --manifest-path "$G/tree/Cargo.toml" -- -D warnings
+  step fmt wrapped cargo fmt --all --check --manifest-path "$G/tree/Cargo.toml"
+fi
 
 short=${cand:0:12}
 if [ -n "$fail" ]; then

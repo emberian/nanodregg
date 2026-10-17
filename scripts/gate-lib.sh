@@ -63,11 +63,21 @@ lean_targets() { python3 "$1/gates/tree.py" targets "$1"; }
 # lean_exes DIR: every lean_exe name (each links the extern_libs, so building them builds the C).
 lean_exes() { python3 "$1/gates/tree.py" exes "$1"; }
 
-# rust_changed BASE CAND: the Cargo manifests whose crate changed.
+# rust_changed BASE CAND: prints `workspace` when the Rust workspace must be judged: the root
+# Cargo.toml or Cargo.lock changed, or a path under one of its members did (ROOT 10-17: one
+# workspace, one lock, one target dir). Members are read from CAND's root Cargo.toml.
 rust_changed() {
-  git -C "$repo" diff --name-only "$1" "$2" | awk -F/ 'NF>1 {print $1}' | sort -u | while read -r d; do
-    [ -f "$repo/$d/Cargo.toml" ] && echo "$d"
-  done
+  git -C "$repo" diff --name-only "$1" "$2" | python3 -c '
+import sys, subprocess, tomllib
+cand = sys.argv[1]
+try:
+    text = subprocess.run(["git", "-C", sys.argv[2], "show", cand + ":Cargo.toml"], capture_output=True, check=True).stdout
+    members = tomllib.loads(text.decode())["workspace"]["members"]
+except Exception:
+    members = []
+paths = sys.stdin.read().split()
+if any(p in ("Cargo.toml", "Cargo.lock") or any(p.startswith(m.rstrip("/") + "/") for m in members) for p in paths):
+    print("workspace")' "$2" "$repo"
 }
 
 # generated_checks DIR: one "exe path" line per gates/generated.tsv row.
