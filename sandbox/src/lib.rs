@@ -11,8 +11,9 @@
 //!
 //! - macOS: `sandbox-exec` with `(deny default)` and allow rules for exactly the policy's paths.
 //!   No network, no IPC, no fork, no exec but the policy's, no sysctl but `hw.ncpu`.
-//! - Linux: `bwrap` with every namespace unshared and nothing mounted but the policy's paths, the
-//!   floor, `/dev` and `/proc`. NEVER RUN: only `cargo check --target x86_64-unknown-linux-gnu`.
+//! - Linux: `bwrap` with every namespace unshared (the user namespace for certain, nested ones
+//!   disabled) and nothing mounted but the policy's paths, the floor and `/dev`. First run on hbox
+//!   (Ubuntu 24.10) 2026-10-17.
 //!
 //! Paths are canonicalized first (macOS checks real paths: `/var` is `/private/var`). The child's
 //! environment is cleared on both platforms.
@@ -81,7 +82,12 @@ impl std::fmt::Display for ConfineError {
 impl std::error::Error for ConfineError {}
 
 #[cfg(target_os = "linux")]
-const MECHANISM: &str = "/usr/bin/bwrap";
+/// Not `/usr/bin/bwrap`: Ubuntu 24.04+ (`kernel.apparmor_restrict_unprivileged_userns = 1`) gives an
+/// unprivileged user namespace no capabilities, so the distro bwrap fails `setting up uid map:
+/// Permission denied`. The mechanism is a root-owned copy of the distro ELF at this path with its
+/// own AppArmor profile granting `userns` to this path alone (`sandbox/apparmor/nd-bwrap`, installed
+/// by the operator); the global sysctl is untouched. Missing: `MechanismMissing`, never a fallback.
+const MECHANISM: &str = "/usr/local/libexec/nd-bwrap";
 #[cfg(target_os = "macos")]
 const MECHANISM: &str = "/usr/bin/sandbox-exec";
 
@@ -99,10 +105,11 @@ const FLOOR: [(&str, bool); 4] = [
 
 /// The same floor on Linux, as read-only binds (`true`: bound only if present).
 #[cfg(target_os = "linux")]
-const FLOOR: [(&str, bool); 4] = [
+const FLOOR: [(&str, bool); 5] = [
     ("/usr", false),
     ("/lib", true),
     ("/lib64", true),
+    ("/bin", true),
     ("/etc/ld.so.cache", true),
 ];
 
@@ -234,25 +241,38 @@ fn platform(r: &Resolved) -> Result<Command, ConfineError> {
         "--die-with-parent",
         "--new-session",
         "--unshare-all",
+        // `--unshare-all` only TRIES the user namespace; `--disable-userns` needs it for certain.
+        "--unshare-user",
         "--disable-userns",
         "--cap-drop",
         "ALL",
         "--clearenv",
+        // A Lean child needs /dev (measured: without it `host follow` closes at its first frame).
+        // It needs no /proc: the runtime sizes its pool by sched_getaffinity, the Linux twin of
+        // macOS hw.ncpu, which bwrap does not filter (measured: the real round trip and the 3 s
+        // plant are green without /proc), so /proc is not mounted.
         "--dev",
         "/dev",
-        "--proc",
-        "/proc",
     ]);
+    // A merged-/usr system has `/lib -> usr/lib` (and /lib64, /bin): the link is recreated, never
+    // bound (binding it would bind its target a second time under another name).
     for (p, optional) in FLOOR {
-        c.args([
-            if optional {
-                "--ro-bind-try"
-            } else {
-                "--ro-bind"
-            },
-            p,
-            p,
-        ]);
+        match std::fs::read_link(p) {
+            Ok(target) => {
+                c.arg("--symlink").arg(target).arg(p);
+            }
+            Err(_) => {
+                c.args([
+                    if optional {
+                        "--ro-bind-try"
+                    } else {
+                        "--ro-bind"
+                    },
+                    p,
+                    p,
+                ]);
+            }
+        }
     }
     for p in [&r.program].into_iter().chain(&r.read).chain(&r.exec) {
         c.arg("--ro-bind").arg(p).arg(p);

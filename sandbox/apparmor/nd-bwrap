@@ -1,0 +1,14 @@
+# AppArmor profile for nanodregg's sandbox mechanism (CLIENT-9; sandbox/src/lib.rs MECHANISM).
+# Install as root, once per Linux host whose kernel restricts unprivileged user namespaces
+# (kernel.apparmor_restrict_unprivileged_userns = 1, Ubuntu 24.04+):
+#   install -o root -g <operator-group> -m 0750 /usr/bin/bwrap /usr/local/libexec/nd-bwrap
+#   sha256sum /usr/bin/bwrap /usr/local/libexec/nd-bwrap     # must match
+#   install -o root -g root -m 0644 sandbox/apparmor/nd-bwrap /etc/apparmor.d/nd-bwrap
+#   apparmor_parser -r /etc/apparmor.d/nd-bwrap
+# It grants `userns` to that one path only; /usr/bin/bwrap and the global sysctl are unchanged.
+abi <abi/4.0>,
+include <tunables/global>
+
+profile nd-bwrap /usr/local/libexec/nd-bwrap flags=(unconfined) {
+  userns,
+}

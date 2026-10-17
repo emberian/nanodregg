@@ -57,7 +57,25 @@ then exits 0, which every rc-only check passes. The bisect above used `host-sim`
 stdin on a task, so it missed this: a floor measured with a binary that does not exercise the
 runtime's concurrency is not a floor for the residents. Plant: a confined `host serve` must answer
 within 3 s (tests/supervise.rs).
-**Status.** landed (macOS run; Linux check-only).
+**Linux, first run (hbox, Ubuntu 24.10, bubblewrap 0.10.0, 2026-10-17).** Three findings, all fixed:
+(1) `--disable-userns` requires `--unshare-user` (`--unshare-all` only tries it): every launch failed.
+(2) Merged /usr (`/lib -> usr/lib`, /lib64, /bin): the floor recreates each link with `--symlink`
+instead of binding it. (3) `kernel.apparmor_restrict_unprivileged_userns = 1` gives the distro
+`/usr/bin/bwrap` no capabilities in its user namespace (`setting up uid map: Permission denied`), so
+the mechanism is `/usr/local/libexec/nd-bwrap`, a root-owned copy of the distro ELF with its own
+AppArmor profile granting `userns` to that path alone (`sandbox/apparmor/nd-bwrap`, with its install
+lines); the global sysctl stays as Ember set it. Measured with the identical ELF minidregg's profile
+already covers (`/usr/local/libexec/mini-grain-bwrap`, same sha256 as /usr/bin/bwrap): confine 3/3,
+roundtrip, supervise (with the 3 s Lean plant) and the real round trip green under bwrap. The macOS
+`hw.ncpu` lesson has no Linux twin to allow: the runtime uses sched_getaffinity, which bwrap does not
+filter, and the round trip is green with no /proc, so /proc is no longer mounted. /dev is needed
+(without it `host follow` closes at its first frame). Plants: re-adding `--ro-bind / /` turns confine
+red (`isolation: child read the seed`).
+*Critique.* nd-bwrap needs root to install, per host; until it is installed every Linux launch is
+refused `MechanismMissing` (the right failure, but a dead node). The macOS branch is now the
+check-only one in the gates (scripts/commit runs on Linux). A distro bwrap update does not update the
+copy: the install lines check the sha256, and whoever upgrades the distro must re-copy it.
+**Status.** landed (macOS run 10-16; Linux run 10-17; nd-bwrap install pending for Ember).
 
 ## CLIENT-10 the step layout read by hand until it is emitted — a twin with an expiry (2026-10-16)
 **Decision.** `client/src/wire.rs` reads and writes the step layouts of proposals/client.md §2
