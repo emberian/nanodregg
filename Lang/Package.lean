@@ -37,7 +37,6 @@ def reqTy : Ty :=
   .record [("agent", .bytes), ("notBefore", .nat), ("occasion", occasionTy), ("principal", .bytes),
     ("validUntil", .nat)]
 
-
 /-- A law's verdict: `ok`, or `refused` with the author's reason. -/
 def verdictTy : Ty := .sum [("ok", .record []), ("refused", .bytes)]
 
@@ -61,6 +60,20 @@ inductive CheckError
   | badLaw (label : Label)
   deriving DecidableEq, Repr
 
+/-- The refusal's name (law 7): its constructor's. -/
+def CheckError.name : CheckError → String
+  | .tooManyImports => "tooManyImports" | .tooManyMethods => "tooManyMethods"
+  | .tooManyLaws => "tooManyLaws" | .stateNotData => "stateNotData"
+  | .ifaceNotRecord => "ifaceNotRecord" | .illTyped => "illTyped"
+  | .noMethod _ => "noMethod" | .badMethod _ => "badMethod"
+  | .noLaw _ => "noLaw" | .badLaw _ => "badLaw"
+
+/-- What goes on the wire inside `Refusal.program`: the name, then the label it is about. -/
+def CheckError.wire : CheckError → String
+  | e@(.noMethod ℓ) | e@(.badMethod ℓ) | e@(.noLaw ℓ) | e@(.badLaw ℓ) => s!"{e.name} {ℓ}"
+  | e => e.name
+
+/-- For a human reading a resident's check. -/
 def CheckError.text : CheckError → String
   | .tooManyImports => "imports" | .tooManyMethods => "methods" | .tooManyLaws => "laws"
   | .stateNotData => "state type" | .ifaceNotRecord => "interface type"

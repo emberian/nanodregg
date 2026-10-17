@@ -16,7 +16,7 @@ closure must be pinned, or the receiver refuses `unpinned`.
   is `lawDenied law (label ++ ": " ++ r)`; running out of ticks is `lawDenied law (label ++ ": exhausted")`.
 -/
 import Kernel.Receive.Call
-import Lang.Package
+import Lang.Law
 import Lang.Wire.Data
 
 namespace Nanodregg.Lang
@@ -26,8 +26,6 @@ open Nanodregg.Kernel.Receive
 
 /-- How deep a closure's import graph may be. -/
 def closureDepthMax : Nat := 8
-/-- The tick budget of one law. A consensus constant: the invoker cannot buy more of it. -/
-def lawTicks : Nat := 100000
 /-- The longest reason a law may give, in bytes. -/
 def reasonMax : Nat := 256
 
@@ -86,7 +84,7 @@ def admitPackage (idb : ByteArray) (p : Package) (acc : Loaded) (gis : List Nat)
   | none => .error (.program "closure")
   | some ifs =>
     match p.checkWith ifs with
-    | .error e => .error (.program e.text)
+    | .error e => .error (.program e.wire)
     | .ok () =>
       .ok ({ ids := acc.ids ++ [idb], lib := acc.lib ++ [p.body.relocate fun i => gis.getD i 0],
              pkgs := acc.pkgs ++ [p] }, acc.ids.length)
@@ -135,7 +133,7 @@ def checkInstall (look : Pinned D) (b : ByteArray) : Except (Refusal D) Unit := 
     pure (← readPackage look id).iface
   match p.checkWith ifaces with
   | .ok () => pure ()
-  | .error e => throw (.program e.text)
+  | .error e => throw (.program e.wire)
 
 /-- The state slots of a record row: field `i` at `stateBase + i`; `none` if a field has no bytes at
 its type (extraction at the state type makes that unreachable; it is refused by name, not written). -/
@@ -203,7 +201,8 @@ def reasonText (r : ByteArray) : String :=
   let r := r.extract 0 reasonMax
   (String.fromUTF8? r).getD s!"{r.size} bytes"
 
-/-- Every law of the package at closure index `g` (whose id is `law`) on `old → new`. -/
+/-- Every law of the package at closure index `g` (whose id is `law`) on `old → new`, each run by
+the one law runner `runLaw` on the package's field. -/
 def judgeOne (look : Pinned D) (law : D) (old new : Slots) (r : Req D) :
     Except (Refusal D) Unit := do
   unless reqOk bytesOf r do throw (.program "request out of bounds")
@@ -214,23 +213,22 @@ def judgeOne (look : Pinned D) (law : D) (old new : Slots) (r : Req D) :
   let o ← match readState row old with | .ok d => pure d | .error e => throw (deny e)
   let n ← match readState row new with | .ok d => pure d | .error e => throw (deny e)
   for ℓ in p.laws do
-    let env := [(reqData bytesOf r).toVal, n.toVal, o.toVal]
-    match run L.lib Bounds.stackMax lawTicks 0 (State.init (apply3 g ℓ) env) with
-    | .fault f _ => throw (deny s!"{ℓ}: {faultText f}")
-    | .value v used =>
-      match (Machine.mk L.lib).extract verdictTy (lawTicks - used) v with
-      | .ok (.inj "ok" _, _) => pure ()
-      | .ok (.inj "refused" (.bytes why), _) => throw (deny s!"{ℓ}: {reasonText why}")
-      | .ok _ => throw (deny s!"{ℓ}: verdict")
-      | .error f => throw (deny s!"{ℓ}: {faultText f}")
+    match runLaw L.lib (.get (.ref g) ℓ) o n (reqData bytesOf r) with
+    | .ok (.ok ()) => pure ()
+    | .ok (.error why) => throw (deny s!"{ℓ}: {reasonText why}")
+    | .error f => throw (deny s!"{ℓ}: {faultText f}")
 
 def judge (look : Pinned D) (pkg : Option D) (laws : List D) (old new : Slots) (r : Req D) :
     Except (Refusal D) Unit := do
   if let some p := pkg then judgeOne bytesOf digestOf look p old new r
   for l in laws do judgeOne bytesOf digestOf look l old new r
 
-def runMethod (look : Pinned D) (pkg : D) (state : Slots) (method : Nat) (args : ByteArray)
-    (r : Req D) (budget : Nat) : Except (Refusal D) Slots := do
+/-- Run method `method` of package `pkg` on `state`: the new state slots, with what the run cost
+(WASTE rows, PROTOCOL-4): the machine steps the method and its extraction used, and the packages
+of the closure loaded and re-checked (LANG-16). `runMethod` is its first component, so a measured
+number is the deployed run's. -/
+def runMeasured (look : Pinned D) (pkg : D) (state : Slots) (method : Nat) (args : ByteArray)
+    (r : Req D) (budget : Nat) : Except (Refusal D) (Slots × Nat × Nat) := do
   unless reqOk bytesOf r do throw (.program "request out of bounds")
   let (L, g) ← load digestOf look closureDepthMax (bytesOf pkg) ⟨[], [], []⟩
   let some p := L.pkgs[g]? | throw (.program "closure")
@@ -247,12 +245,16 @@ def runMethod (look : Pinned D) (pkg : D) (state : Slots) (method : Nat) (args :
   | .fault f _ => throw (.program s!"{ℓ}: {faultText f}")
   | .value v used =>
     match (Machine.mk L.lib).extract p.state (budget - used) v with
-    | .ok (.record ds, _) =>
+    | .ok (.record ds, left) =>
       match stateSlots row ds 0 with
-      | some slots => pure slots
+      | some slots => pure (slots, budget - left, L.pkgs.length)
       | none => throw (.program s!"{ℓ}: state bytes")
     | .ok _ => throw (.program s!"{ℓ}: state")
     | .error f => throw (.program s!"{ℓ}: {faultText f}")
+
+def runMethod (look : Pinned D) (pkg : D) (state : Slots) (method : Nat) (args : ByteArray)
+    (r : Req D) (budget : Nat) : Except (Refusal D) Slots :=
+  (runMeasured bytesOf digestOf look pkg state method args r budget).map (·.1)
 
 end
 
