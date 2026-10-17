@@ -728,7 +728,19 @@ trie order (`kernel/trie-order`, CODEC-19), but that refusal is not yet a theore
 `decode → Canon`. (ii) `Tail.next` returns `Tail.absorb` of the bytes it read: an IO function
 whose body is that call. `catchUp` appends each read's Turns in order, and `fold_append` makes
 the concatenation one fold. The controller (HOSTING-10) rests on the same two premises, and with
-`allIds_complete` it now has its round-0 fact as a theorem too. The test's timing: the start-window ask is guarded by the existing
+`allIds_complete` it now has its round-0 fact as a theorem too.
+(Premise (i) DISCHARGED 10-18, HOSTING-5, cv 01a14a5f-c476: `Hosting.Proofs.Open.open_world_canon`. Any
+World the pure open `Host.openWith` returns, over the deployed codec and the tail World step (the step
+`Tail.open` passes), is `World.Canon` under the deployed environment. The chain is HOST's
+`openWith_world` and `Base.read_decode` (6b89d6f), CODEC's `refine_get_inner`, `product_get_fst` and
+`Deployed.world_get_canon` (7db0597), `stepTurns_fold`, and KERNEL's `fold_canon`. What remains is
+code, not a theorem: `Tail.open` = `openAt` = this `openWith` over the files' IO readers. There is no
+closed tooth, because an instance needs a KMAC-sealed base the kernel cannot evaluate. The premise is
+the open every broker and controller run performs, and the launcher broker test opens real Stores.
+A compiled closed witness that the premise is satisfiable is cv 01a14a8a-ffa6. Vacuity read
+VACUITY-READER-H4: ACCEPT. The premise is the step `Tail.open` passes (definitionally), `mark`/`origin`
+being universally quantified only strengthens the statement, and the env is the one `update`,
+`absorb` and `start_tracks` run at.) The test's timing: the start-window ask is guarded by the existing
 "slow run" check, and the live steps (set, then an ask) need no window arithmetic, because a
 changed allowance forfeits whatever window the follow lands in.
 **META.** Doing the catch-up at the ask instead of in a background thread is my preference for
