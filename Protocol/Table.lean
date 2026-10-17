@@ -104,21 +104,62 @@ inductive Status
   | uncertain
   /-- `lookup` only: the call is not in the log; resending the same bytes is safe -/
   | absent
+  /-- the supervisor (or `nd-attach`) closed this connection; the payload is the `CloseReason`'s
+  name, and nothing follows on the connection. Not a verdict on any request: a request in flight
+  is unsettled (for a frozen call, uncertain: its attempt goes on by lookup) -/
+  | closed
   deriving DecidableEq, Repr
 
 namespace Status
 
-def all : List Status := [ok, refused, uncertain, absent]
+def all : List Status := [ok, refused, uncertain, absent, closed]
 
 def code : Status → UInt8
   | ok => 0
   | refused => 1
   | uncertain => 2
   | absent => 3
+  | closed => 4
 
 def ofCode? (b : UInt8) : Option Status := all.find? (·.code == b)
 
 end Status
+
+/-- Why a connection was closed (law 7: every close is named to the peer, `Status.closed ‖ name`).
+The supervisor's mux decides WHEN, against the `Bounds` below; this is the whole vocabulary. -/
+inductive CloseReason
+  /-- silent at a frame boundary with no request in flight for `idleMsMax` -/
+  | idle
+  /-- a started frame was not complete within `frameMsMax` -/
+  | frameStalled
+  /-- a frame past `frameBytesMax`, or an empty one -/
+  | frameRefused
+  /-- a reply arrived while the previous one was still unread: the peer is not reading -/
+  | replyBacklog
+  /-- writing a reply to the peer failed or took longer than `replyWriteMsMax` -/
+  | replyWriteFailed
+  /-- a request had no reply for `replyMsMax` (a backstop: the Host owes one reply per request) -/
+  | replyTimeout
+  /-- `connectionsMax` (or, at `nd-attach`, `peerConnectionsMax`) connections are open -/
+  | full
+  /-- `nd-attach`: a frame for a connection that already ended -/
+  | ended
+  /-- `nd-attach`: the Store's socket does not accept a connection -/
+  | unreachable
+  deriving DecidableEq, Repr
+
+namespace CloseReason
+
+def all : List CloseReason :=
+  [idle, frameStalled, frameRefused, replyBacklog, replyWriteFailed, replyTimeout, full, ended, unreachable]
+
+/-- The name on the wire (`CloseReason.name_injective`). -/
+def name : CloseReason → String
+  | idle => "idle" | frameStalled => "frameStalled" | frameRefused => "frameRefused"
+  | replyBacklog => "replyBacklog" | replyWriteFailed => "replyWriteFailed"
+  | replyTimeout => "replyTimeout" | full => "full" | ended => "ended" | unreachable => "unreachable"
+
+end CloseReason
 
 /-- The tag of a step the follow machine asks the client to perform (CLIENT-2). -/
 inductive Step
@@ -277,12 +318,24 @@ def pagesPerCommandMax : Nat := 28
 /-- Connections one `nd-supervise` holds open at once (either socket). It bounds the supervisor's
 memory: each connection buffers at most one frame per direction, so the whole mux holds at most
 `2 * connectionsMax * frameBytesMax` bytes (32 MiB). A deployment's members are friends, not the
-public: past the bound the supervisor stops accepting, and the client sees a refused connect. -/
+public: past the bound the supervisor answers `closed full` and closes. -/
 def connectionsMax : Nat := 64
-/-- A remote (ssh-bridged) connection idle this long, with no frame in either direction, is closed
-by the supervisor (PROTOCOL-11). Five minutes: longer than any command's step round trip, and a
-slow-loris peer holds one of `connectionsMax` slots for at most this long. -/
+/-- A connection silent AT A FRAME BOUNDARY with NO request in flight this long is closed `idle`
+by the supervisor (PROTOCOL-11, corrected by scout T2: the old rule, "no frame in either
+direction", closed a client that was waiting on a slow reply). Five minutes: longer than any
+command's step round trip; an idle peer holds one of `connectionsMax` slots at most this long. -/
 def idleMsMax : Nat := 300000
+/-- A frame that has started must be complete within this, or the connection is closed
+`frameStalled` (a slow-loris peer cannot hold a slot by trickling one frame). 30 s: a
+`frameBytesMax` frame at 10 KB/s. -/
+def frameMsMax : Nat := 30000
+/-- One reply write to a peer must complete within this, or the connection is closed
+`replyWriteFailed` (a peer that stops reading cannot hold the supervisor's writer). -/
+def replyWriteMsMax : Nat := 30000
+/-- Connections one `nd-attach` process (one friend's ssh session) holds open to the Store's
+socket at once; the next is answered `closed full`. Across sessions only sshd bounds a friend
+(MaxSessions): the per-friend cap is a declared absence (CLIENT-12). -/
+def peerConnectionsMax : Nat := 8
 /-- How long a client waits for the reply to ONE request (one frame to `host.sock` or
 `follow.sock`) before it stops waiting. Past it the client reports `timeout` by name; a request
 that carried a frozen call is then UNCERTAIN (its attempt goes on by lookup: `Attempt.Seen.lost`),

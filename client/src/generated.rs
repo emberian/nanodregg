@@ -7,6 +7,11 @@ pub const ARGV_BYTES_MAX: u32 = 65536;
 pub const STEPS_PER_COMMAND_MAX: u32 = 64;
 pub const SENDS_MAX: u32 = 8;
 pub const CONNECTIONS_MAX: u32 = 64;
+pub const PEER_CONNECTIONS_MAX: u32 = 8;
+pub const IDLE_MS_MAX: u32 = 300000;
+pub const FRAME_MS_MAX: u32 = 30000;
+pub const REPLY_MS_MAX: u32 = 120000;
+pub const REPLY_WRITE_MS_MAX: u32 = 30000;
 
 pub mod host_op {
     pub const SUBMIT: u8 = 1;
@@ -25,6 +30,37 @@ pub mod status {
     pub const REFUSED: u8 = 1;
     pub const UNCERTAIN: u8 = 2;
     pub const ABSENT: u8 = 3;
+    pub const CLOSED: u8 = 4;
+}
+
+/// Why a connection was closed (Protocol.CloseReason); the `closed` frame's payload is `name()`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CloseReason {
+    Idle,
+    FrameStalled,
+    FrameRefused,
+    ReplyBacklog,
+    ReplyWriteFailed,
+    ReplyTimeout,
+    Full,
+    Ended,
+    Unreachable,
+}
+
+impl CloseReason {
+    pub fn name(self) -> &'static str {
+        match self {
+            CloseReason::Idle => "idle",
+            CloseReason::FrameStalled => "frameStalled",
+            CloseReason::FrameRefused => "frameRefused",
+            CloseReason::ReplyBacklog => "replyBacklog",
+            CloseReason::ReplyWriteFailed => "replyWriteFailed",
+            CloseReason::ReplyTimeout => "replyTimeout",
+            CloseReason::Full => "full",
+            CloseReason::Ended => "ended",
+            CloseReason::Unreachable => "unreachable",
+        }
+    }
 }
 
 pub mod step {

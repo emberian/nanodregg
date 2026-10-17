@@ -38,6 +38,21 @@ theorem write_on_host (op : Op) (h : op.effect = .write) : op.socket = .host := 
 
 end Op
 
+namespace CloseReason
+
+theorem name_injective (a b : CloseReason) (h : a.name = b.name) : a = b := by
+  cases a <;> cases b <;> first | rfl | (simp [name] at h)
+
+theorem mem_all (r : CloseReason) : r ∈ all := by cases r <;> decide
+
+end CloseReason
+
+/-- A friend's ssh session can never take every supervisor slot by itself. -/
+theorem Bounds.peer_below_connections : Bounds.peerConnectionsMax < Bounds.connectionsMax := by decide
+
+/-- A started frame and a reply write are each bounded well inside the idle window. -/
+theorem Bounds.frame_within_idle : Bounds.frameMsMax < Bounds.idleMsMax ∧ Bounds.replyWriteMsMax < Bounds.idleMsMax := by decide
+
 namespace Status
 
 theorem ofCode?_code (s : Status) : ofCode? s.code = some s := by cases s <;> decide

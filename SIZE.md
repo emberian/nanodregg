@@ -12,30 +12,30 @@ edit it, never pass it as a PATH). Ceilings live in `gates/ceilings.tsv`. A rise
 | Lean proof-modules | 67 | — |
 | Lean lines (Census) | 89 | — |
 | Lean lines (Codec) | 4231 | — |
-| Lean lines (Emit) | 351 | — |
+| Lean lines (Emit) | 367 | — |
 | Lean lines (Host) | 4066 | — |
 | Lean lines (Hosting) | 717 | — |
 | Lean lines (Kernel) | 5102 | — |
 | Lean lines (Lang) | 5663 | — |
 | Lean lines (Ops) | 495 | — |
-| Lean lines (Protocol) | 3410 | — |
-| Lean lines (deployed) | 8983 | — |
-| Lean lines (tooling: Sim, Rows, Journey, Census, Emit, Ops) | 4361 | — |
+| Lean lines (Protocol) | 3482 | — |
+| Lean lines (deployed) | 9037 | — |
+| Lean lines (tooling: Sim, Rows, Journey, Census, Emit, Ops) | 4380 | — |
 | foundation modules | 7 | 8 |
 | max dependents of a non-foundation module | 84 | — |
-| theorems | 738 | — |
+| theorems | 742 | — |
 | partial defs (deployed) | 0 | 0 |
 | sorry | 0 | 0 |
 | native (extern/implemented_by) | 8 | 8 |
 | C lines | 146 | 146 |
-| Rust lines | 3973 | — |
+| Rust lines | 4009 | — |
 | Rust lines (client/src) | 1715 | 2000 |
-| Rust lines (generated) | 417 | — |
+| Rust lines (generated) | 453 | — |
 | Rust files with an unregistered generated header | 0 | 0 |
 | protocol operations | 6 | 6 |
 | call kinds (Receive.Body constructors) | 9 | 10 |
 | command verbs (the one command language) | 12 | 20 |
 | refusal constructors | 43 | — |
-| protocol status codes | 4 | — |
+| protocol status codes | 5 | — |
 | protocol step codes | 6 | — |
 | conformance rows | 15 | — |

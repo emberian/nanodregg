@@ -473,3 +473,37 @@ under 128). Proposed fix: check the signature and the follow grant BEFORE expiry
 **Critique.** A refusal carrying a number is a new wire shape (names only, so far). **Meta-critique.**
 I found it by reasoning, not by a row; the row that would show it needs a log past 128 heights.
 **Status.** open.
+
+## PROTOCOL-22 · every connection close is named: `Status.closed` + `CloseReason`; the idle rule waits for nothing in flight (2026-10-17, BUILD-TRANSPORT; ASSEMBLY-transport-consent D5, scout T2)
+**Decision.** The supervisor's mux (and `nd-attach`, the box end of a friend's ssh channel) ends a
+connection only for a reason in `CloseReason` (idle, frameStalled, frameRefused, replyBacklog,
+replyWriteFailed, replyTimeout, full, ended, unreachable), and tells the peer with one last frame
+`Status.closed (4) ‖ name` before shutting the stream. `idleMsMax` is redefined: silent AT A FRAME
+BOUNDARY with NO request in flight (the old "no frame in either direction" closed a client waiting
+on a slow reply: T2 measured it). New bounds: `frameMsMax` 30 s (a started frame), `replyWriteMsMax`
+30 s (one write to the peer), `peerConnectionsMax` 8 (one `nd-attach` process = one ssh session),
+and `replyMsMax` (PROTOCOL-20) doubles as the mux's backstop for a request with no reply
+(`replyTimeout`), because the in-flight counter relies on a Loop-level "one reply per request, with
+its conn, including `uncertain`" that is owed (HOST), not proved (`Machine.replies_size` covers
+the batch only). All of it is emitted (`emit-rust`: the bounds, `status::CLOSED`, `CloseReason` with
+`name()`), never hand-copied. A `closed` is never a verdict on a request: the attempt store reads
+it as a lost reply (`Attempt.Seen.lost` ⇒ lookup), follow's settlement refuses it `badResult`
+(a client settles a closed connection by lookup before it resumes follow), and the rows render it
+`uncertain`. Theorems: `CloseReason.name_injective`, `CloseReason.mem_all`,
+`Bounds.peer_below_connections`, `Bounds.frame_within_idle`.
+**Alternatives.** (a) Close silently and log the reason on stderr (law 7 fails for the peer).
+(b) Keep `idleMsMax` as "no bytes either way": refuted by T2's slow-reply test. (c) A close code
+per reason instead of a name payload: the payload convention for refusals is the NAME (PROTOCOL-2),
+and one status byte with a named payload keeps `Status` small.
+**Critique.** The mux now ORIGINATES a frame and decides WHEN to close: the vocabulary and the
+numbers are Lean's, the timing judgement is Rust's, a stretch of law 2 that exists only because the
+Lean child cannot see time. The close frame is best effort and can race a reply the child already
+sent; the client's answer is lookup. `replyBacklog` closes a pipelining client (nd is sequential;
+nothing enforces it). None of the three new deadlines has been measured over a real sshd on a slow
+link; a healthy friend on a bad WAN may hit `replyWriteFailed`. `peerConnectionsMax` is per ssh
+session: a friend with several sessions has several caps (only sshd's MaxSessions binds across).
+**Meta-critique.** I accepted T2's fix because the head-of-line block is readable in `route`, not
+because of a measurement on a deployed box; the numbers (30 s, 8) are round guesses I priced from
+`frameBytesMax` and the friend count, and the vocabulary has two `nd-attach`-only names (`ended`,
+`unreachable`) that I added while writing it rather than from a row that needs them.
+**Status.** landed (vocabulary); the mux and `nd-attach` land under `client:`.

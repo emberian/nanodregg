@@ -449,7 +449,8 @@ def step (X : Ctx D) (B : Thin.Base (World D)) (me : Self D) (f : Follow D) (kb 
           | some (.refused, p) => same (refused (D := D) (.host (hostName p)))
           | some (.absent, _) => same (.done 3 ByteArray.empty "absent\n".toUTF8)
           | some (.uncertain, _) => same (.done 2 ByteArray.empty "uncertain\n".toUTF8)
-          | none => same (refused (D := D) .badResult)
+          -- a settlement is never `closed`: the client settles a closed connection by lookup
+          | some (.closed, _) | none => same (refused (D := D) .badResult)
       -- adopt: the envelope for the page at `off`, signed; ask for the base page
       | .adopt pin, 6, [offB, pagesB] =>
           match Signed.ofBytes result, Text.ofU64 offB with

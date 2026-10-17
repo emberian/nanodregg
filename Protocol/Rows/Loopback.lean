@@ -265,7 +265,8 @@ def classify (res : ByteArray) : Attempt.Seen :=
   | some (.refused, _) => .refused
   | some (.uncertain, _) => .unknown
   | some (.absent, _) => .absent
-  | none => .lost
+  -- the connection ended with the request unanswered: as if the reply were lost
+  | some (.closed, _) | none => .lost
 
 /-- Requests one attempt may make in one run: every send, and at most one lookup after each
 (`Proofs.Attempt.next_after_lookup`), and one more for the decision that ends it. -/
@@ -323,6 +324,8 @@ def statusOutcome (reply : ByteArray) : Expect :=
   | some (.absent, _) => .absent
   | some (.uncertain, _) => .uncertain
   | some (.refused, p) => .refused (Command.hostName p)
+  -- a closed connection is not a verdict on the call
+  | some (.closed, _) => .uncertain
   | none => .refused "badReply"
 
 mutual
