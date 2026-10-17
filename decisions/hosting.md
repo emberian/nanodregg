@@ -483,7 +483,9 @@ clock time `t0` opens each resident's meter at window `t0 / windowSecs` with `sp
 first window of a life grants nothing that costs. Theorems are in `Hosting.Proofs.Broker`:
 - `inv_start` / `inv_decide`: every meter keeps `spent ≤ cap`.
 - `fresh_start` / `fresh_decide`: the forfeit invariant holds after any run of grants.
-- `start_window_free`: an ask in a life's start window is granted only at cost 0.
+- `start_window_free`: an ask in a life's start window is granted only at cost 0. (HOSTING-13 restates
+  these per entry: `inv_*` → `capped_*`, `fresh_start` → `start_capped_fresh`, and this one →
+  `start_window_refused`, no grant at all.)
 - `cost_worst`: a charge is never below the exact price.
 - `grant_allowed`: a grant is for an allowed, nonzero-priced model of the resident's own allowance,
   with that model's key slot, within both token bounds, and its body is `requestBody`'s.
@@ -586,3 +588,100 @@ allowance, would be served as `r1`). A keybroker that accepts the file and runs 
 `keyMissing` costs the worst case. That is safe, but it wastes budget. The fix is to give the
 decider the set of slots that have keys at start. The upstream is plain HTTP/1.0 (see above).
 Status: stage 1 built. Stage 2 (allowances from the World) and stage 3 (the resident plan) are next.
+
+## HOSTING-13 Allowances in the World: one allowance is one meter (HOSTING-4, 2026-10-18)
+
+**Decision.** HOSTING-12 stage 2, first half. The allowance leaves `--drive` for the World and its
+shape changes.
+- **One allowance = one meter**: `{resident, model, keySlot, microPerKTok, windowMs, cap,
+  maxTokens}`. A resident with two models has two allowances; its total spend per window is the sum
+  of their caps. The stage-1 shape (one allowance with a `models` list) is deleted. LANG has no list
+  type: a list in the World would be either opaque bytes behind a second decoder, or a fixed-arity
+  record of optional models. A scalar meter needs neither.
+- **The package `allowance`** (`Hosting/Allowance.lean`, text `world/hosting/Allowance`, A0 byte gate
+  in hosting-sim). State: one KERNEL slot per field, in the order cap, keySlot, maxTokens,
+  microPerKTok, model, resident, revoked, windowMs. No law. KERNEL refuses `write` on a
+  programmed object (`hasMethods`) and owner-gates `invoke` (KERNEL-25), so the two methods are the
+  only change path. `revoke` sets `revoked`; `set` replaces the five numbers and keeps model,
+  resident and revoked. So revocation is permanent (`methods_write`), and a different
+  (resident, model) is a different object. `resident` is the resident grain's World id. The broker
+  names it `Controller.dirOf id`, which is the name of its keybroker socket, so the grain's id, the
+  controller's directory and the broker's identity are one name.
+- **Read only the operator's.** `Allow.allowanceOf pkgId OPERATOR cell` is `some` only for an object of
+  this package, owned by OPERATOR, unrevoked, with every field decoding (`allowanceOf_sound`), and the object KERNEL creates from `seed r a` reads back as
+  exactly `(dirOf r, a)` for every `a` LANG can carry (`seed_reads`, through `objectCell`). Anyone
+  may create an object of the package, and those are never read (A3; plant `owner-ignored` red).
+- **Ambiguity is refused, not resolved.** Two allowances in the broker for the same resident and
+  model are `allowanceAmbiguous` (new `Broker.Refusal`, code 15; broker_generated.rs re-emitted). No
+  ask on that model is ever granted (`ambiguous_refused`). KERNEL never retires an object, so the
+  operator ends an ambiguity with `revoke` (A7, A8).
+- **(c) A changed allowance is a new budget.** `Broker.follow b now rs`: an entry with the same
+  resident and the same allowance, field for field, keeps its meter. Every other entry, new or
+  changed in ANY field (windowMs included), is opened at `max now last` with `spent = cap`
+  (`follow_kept_or_opened`, `follow_keeps`, `follow_allowances`: the entries are exactly the World's,
+  in order). `Broker.start` is a follow from nothing. The forfeit invariant is now per entry
+  (`Proofs.Broker.Fresh`, with `Entry.since` the time this life first held the allowance), and it survives
+  follows and grants (`fresh_follow`, `fresh_decide`). `start_window_refused`: no ask is granted in
+  the window of `since`, since every grant costs something (`charged_pos`). So a raised cap waits
+  for the next window, and a lowered one binds at once (`capped_follow`). A follow moves the clock
+  to `max now last` and never touches the key slots (`follow_last_keys`). H3B's counterexample (60000 → 1 ms) is still possible, but now it
+  is a signed Turn by the operator, which is the operator's act, and it forfeits the 1 ms window of
+  the change.
+- **(d) keyMissing before any charge.** keybroker passes the slots its key file holds as the decider's
+  second argument (`hosting-broker T0 SLOTS …`). `Broker.keys` holds them, and `decide` refuses
+  `keyMissing` after `allowanceMalformed` and before the token checks and the meter
+  (`grant_allowed`: a grant's slot ∈ `b.keys`). keybroker's own lookup stays as the second barrier.
+  This closes HOSTING-12's Rust-half critique.
+- `allowanceMalformed` now also refuses a key slot ≥ 2^32 (a LANG nat is below 2^64, and the wire is u32).
+
+**Alternatives.** (1) Keep a `models` list encoded as bytes in one field: a second decoder behind
+LANG's, and a state the World cannot type. Refused. (2) A fixed record of k optional models:
+arbitrary k, and per-model meters would still need splitting. Refused. (3) A combined per-resident
+cap across models: worth having only if a resident needs to trade budget between models. Then the
+cap lives in a second object, and that is two reads for one decision. Not now. (4) Resolve
+ambiguity by taking the newest or the smallest cap: the broker would be guessing an operator's
+intent. Refused. (5) A law re-checking well-formedness at write time: a twin of `decide`'s one
+check. Refused. (6) A changed cap keeps the meter's spend: a lowered cap would then sit above
+`spent` (fine), but a raised one would grant at once. That is cheaper for the operator's users and
+loses the uniform rule "every new budget forfeits its first window". Refused for uniformity. If
+operators find it starves a raise, that is measurable.
+
+**CRITIQUE.** Each follow re-matches entries by full allowance equality: O(entries²) per follow.
+Bounded by the operator's own allowance count, so it is small, but it is not O(change). The
+ambiguity refusal is only as good as the broker's view: an allowance in a Turn the broker has not
+yet tailed is invisible until the next ask's follow. The broker never grants on an allowance that
+is not in its view, so this fails closed. A malformed or undecodable operator object reads as
+nothing (`noAllowance` or `modelNotAllowed`). Today LANG types every seed and every method result
+(A2, A6), so this cannot happen, but it is a silence if LANG ever stops. The resident's sockets are
+still keybroker's RESIDENTS argument: the operator names sockets out of band, and an allowance for a
+resident with no socket is unreachable, which is harmless. Deriving sockets from the World is stage
+3's question. `--drive` still exists: the next landing (stage 2b: `hosting-broker T0 SLOTS STORE
+OPERATOR` over Host.Tail) deletes it.
+**META.** I chose one-meter-per-model largely because LANG lacks lists, and that is an accident of
+the language rather than of the problem. The test: if Hermes needs a cross-model cap, (3) comes back
+as a second object, not as a list. I forfeit on every change because a uniform rule is easier to
+prove than "forfeit only if the window shrank". The theorem `start_window_refused` with `since` is the
+check that the uniform rule says what I claim.
+**Plants (run 10-18, each red).** `follow` keeps the meter of a changed allowance (`follow_tooth`,
+`follow_allowances`, `follow_keeps`); ambiguity takes the first (`grant_allowed`, `decide_ok`,
+`refusal_teeth`); the keyMissing check deleted (`grant_allowed`, `refusal_teeth`,
+`keyMissing_tooth`); entries opened at spent 0 (`fresh_follow`, `start_capped_fresh`,
+`forfeit_tooth`, `follow_tooth`); the owner check made `|| true` (`allowanceOf_sound`, `seed_teeth`);
+`revoke` a no-op (`methods_write`); revoked objects read (`allowanceOf_sound`, `seed_teeth`). Rust:
+keybroker passes a slot it holds no key for, and the test's start-window `keyMissing` assertion
+turns red (it reads `overSpend`).
+**Vacuity read (10-18, VACUITY-READER-H4).** It found four holes, all now fixed.
+(1) No Lean tooth put `keyMissing` before the meter: moving the check after `overSpend` survived.
+There is now a start-window `keyMissing` tooth in `refusal_teeth`, and the moved check is red.
+(2) Nothing pinned `follow`'s keys: a follow that adds every allowance's slot to `keys` survived.
+Now covered by `follow_last_keys` (that plant is red). (3) `start_window_free` concluded
+`charged = 0`, which no grant can satisfy, so it was a refusal theorem dressed as a cost theorem. It
+is now `start_window_refused` (no grant), with `charged_pos`. (4) The seed read-back was checked on
+one instance only, so `maxTokens := max … 100` survived. Now it is the general `seed_reads` (that
+plant is red). Also, A9 now checks `revoked = true` and not only "not read". The reader confirmed
+that `follow` is pinned by `follow_allowances` and `follow_kept_or_opened`, that `allowanceOf_sound`
+cannot be met by a forged owner (`checkState` refuses keys below 16), and that the teeth fail on a
+fault.
+Second pass: ACCEPT, with one residue: nothing tied `seed`'s slot order to LANG's state row, so
+swapping `model` and `resident` in both `seed` and `allowanceOf` survived. Now `seed_state`
+(`Lang.readState` over `fields` gives each label its own field; the swap plant is red).

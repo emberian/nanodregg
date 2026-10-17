@@ -8,32 +8,32 @@ edit it, never pass it as a PATH). Ceilings live in `gates/ceilings.tsv`. A rise
 | metric | now | ceiling |
 |---|---|---|
 | Lean modules in the Host closure | 69 | 150 |
-| Lean modules | 239 | — |
-| Lean proof-modules | 112 | — |
+| Lean modules | 243 | — |
+| Lean proof-modules | 113 | — |
 | Lean lines (Census) | 89 | — |
 | Lean lines (Codec) | 7748 | — |
 | Lean lines (Emit) | 721 | — |
 | Lean lines (Host) | 5685 | — |
-| Lean lines (Hosting) | 3704 | — |
+| Lean lines (Hosting) | 4339 | — |
 | Lean lines (Kernel) | 10787 | — |
 | Lean lines (Lang) | 12210 | — |
 | Lean lines (Ops) | 1078 | — |
 | Lean lines (Protocol) | 4508 | — |
-| Lean lines (deployed) | 13594 | — |
-| Lean lines (tooling: Sim, Rows, Journey, Census, Emit, Ops) | 7076 | — |
+| Lean lines (deployed) | 13755 | — |
+| Lean lines (tooling: Sim, Rows, Journey, Census, Emit, Ops) | 7219 | — |
 | foundation modules | 7 | 8 |
-| max dependents of a non-foundation module | 135 | — |
-| theorems | 2087 | — |
+| max dependents of a non-foundation module | 139 | — |
+| theorems | 2111 | — |
 | partial defs (deployed) | 0 | 0 |
 | sorry | 0 | 0 |
 | native (extern/implemented_by) | 9 | 9 |
 | C lines | 156 | 156 |
-| Rust lines | 7928 | — |
+| Rust lines | 7953 | — |
 | Rust lines (nd) | 69 | 100 |
 | Rust lines (nd-supervise) | 125 | 160 |
 | Rust lines (client library) | 1794 | 2000 |
 | Rust lines (attach/src) | 148 | 300 |
-| Rust lines (generated) | 1673 | — |
+| Rust lines (generated) | 1677 | — |
 | Rust files with an unregistered generated header | 0 | 0 |
 | protocol operations | 6 | 6 |
 | call kinds (Receive.Body constructors) | 13 | 13 |

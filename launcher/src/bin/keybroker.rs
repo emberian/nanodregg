@@ -5,7 +5,8 @@
 //! socket per resident, `SOCKDIR/<resident>.sock` for each name in the comma-separated RESIDENTS.
 //! Identity is the socket: keybroker puts a `decide` frame naming that socket's resident in front
 //! of each ask, unread, and hands both to DECIDER (the Lean `hosting-broker`, started confined with
-//! the operator clock `T0` as its first argument, then ARG...). A `grant` names a key slot and the
+//! the operator clock `T0` and the comma-separated key slots the key file holds as its first two
+//! arguments, then ARG...; so Lean refuses `keyMissing` before it charges anything). A `grant` names a key slot and the
 //! upstream request Lean printed; keybroker sends it to UPSTREAM (`host:port`, HTTP/1.0) with the
 //! slot's key in the header Lean named, and relays the status and body, unless the response holds
 //! the key (`keyEchoed`, withheld). It decides nothing: every verdict is the decider's, and every
@@ -163,7 +164,13 @@ fn run() -> End {
         hidden: vec![keys_path.clone()],
     };
     let t0 = OsString::from(now_ms().to_string());
-    let mut dargs: Vec<&std::ffi::OsStr> = vec![t0.as_os_str()];
+    let slots = OsString::from(
+        keys.keys()
+            .map(u32::to_string)
+            .collect::<Vec<_>>()
+            .join(","),
+    );
+    let mut dargs: Vec<&std::ffi::OsStr> = vec![t0.as_os_str(), slots.as_os_str()];
     dargs.extend(rest.iter().map(OsString::as_os_str));
     let mut cmd = match command(&policy, decider.as_os_str(), &dargs) {
         Ok(c) => c,

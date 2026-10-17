@@ -215,6 +215,7 @@ pub mod wire {
         KeyEchoed,
         UpstreamFailed,
         Busy,
+        AllowanceAmbiguous,
     }
 
     impl BrokerRefusal {
@@ -235,6 +236,7 @@ pub mod wire {
                 BrokerRefusal::KeyEchoed => 12,
                 BrokerRefusal::UpstreamFailed => 13,
                 BrokerRefusal::Busy => 14,
+                BrokerRefusal::AllowanceAmbiguous => 15,
             }
         }
 
@@ -255,6 +257,7 @@ pub mod wire {
                 12 => Some(BrokerRefusal::KeyEchoed),
                 13 => Some(BrokerRefusal::UpstreamFailed),
                 14 => Some(BrokerRefusal::Busy),
+                15 => Some(BrokerRefusal::AllowanceAmbiguous),
                 _ => None,
             }
         }
@@ -277,6 +280,7 @@ pub mod wire {
                 BrokerRefusal::KeyEchoed => "keyEchoed",
                 BrokerRefusal::UpstreamFailed => "upstreamFailed",
                 BrokerRefusal::Busy => "busy",
+                BrokerRefusal::AllowanceAmbiguous => "allowanceAmbiguous",
             }
         }
     }

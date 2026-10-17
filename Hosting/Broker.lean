@@ -7,8 +7,11 @@ refunded): the input is bounded by the body's bytes, the output by the `max_toke
 so the provider cannot bill past it, given that a token is at least one byte (a platform fact of
 the provider's tokenizer, decisions/hosting.md HOSTING-12).
 
-The meter is broker memory. A broker life opens every meter at its start window with `spent = cap`
-(`Broker.start`), so a restart never refunds a window: `Proofs.Broker.start_window_free`.
+The meter is broker memory, one per allowance. An allowance is ONE meter: one resident, one model,
+its key slot, its price, its window and its cap (HOSTING-13). The broker learns the World's
+allowances by `Broker.follow`: an allowance it already held, unchanged, keeps its meter; any other
+(new, or changed in any field) is opened at the follow's time with `spent = cap`, so a restart or
+an operator's change never refunds a window: `Proofs.Broker.start_window_free`.
 -/
 import Hosting.BrokerWire
 
@@ -30,20 +33,17 @@ def capMax : Nat := 2 ^ 63
 
 end Bounds
 
-/-- A model a resident may call, the operator key slot that pays for it, and its price. -/
-structure Model where
-  name : ByteArray
-  keySlot : UInt32
+/-- What the operator allows one resident on one model, per window of `windowMs` operator
+milliseconds: the key slot that pays, the price, the cap and the most tokens one ask may request.
+A resident with several models has several allowances; its total spend is the sum of their caps. -/
+structure Allowance where
+  model : ByteArray
+  keySlot : Nat
   /-- micro-units of money per 1000 tokens, input and output alike -/
   microPerKTok : Nat
-  deriving DecidableEq
-
-/-- What the operator allows one resident, per window of `windowMs` operator milliseconds. -/
-structure Allowance where
   windowMs : Nat
   cap : Nat
   maxTokens : Nat
-  models : List Model
   deriving DecidableEq
 
 /-- One resident's spend in its current window. -/
@@ -55,25 +55,44 @@ structure Meter where
 structure Entry where
   resident : ByteArray
   allowance : Allowance
+  /-- the operator time this broker life first held this allowance -/
+  since : Nat
   meter : Meter
 
-/-- The broker: the latest operator time it accepted, and one entry per resident. -/
+/-- The broker: the latest operator time it accepted, the key slots keybroker holds a key for, and
+one entry per allowance of the World. -/
 structure Broker where
   last : Nat
+  keys : List Nat
   entries : List Entry
 
 def windowOf (a : Allowance) (now : Nat) : Nat := now / a.windowMs
 
-/-- A broker life starting at operator time `t0`: every resident's start window counts as spent. -/
-def Broker.start (t0 : Nat) (rs : List (ByteArray × Allowance)) : Broker :=
-  { last := t0, entries := rs.map fun (r, a) => ⟨r, a, ⟨windowOf a t0, a.cap⟩⟩ }
+/-- An allowance first held at `t`: its window at `t` counts as spent. -/
+def Entry.opened (t : Nat) (r : ByteArray) (a : Allowance) : Entry := ⟨r, a, t, ⟨windowOf a t, a.cap⟩⟩
+
+/-- The broker once the World's allowances are `rs` (resident, allowance), at operator time `now`.
+An entry for the same resident and the same allowance, field for field, keeps its meter; every
+other is opened at `max now last`, spent to its cap. So a changed allowance is a new budget whose
+first window grants nothing that costs (decisions/hosting.md HOSTING-13). -/
+def Broker.follow (b : Broker) (now : Nat) (rs : List (ByteArray × Allowance)) : Broker :=
+  let t := max now b.last
+  { last := t, keys := b.keys,
+    entries := rs.map fun (r, a) =>
+      match b.entries.find? (fun e => e.resident == r && e.allowance == a) with
+      | some e => e
+      | none => Entry.opened t r a }
+
+/-- A broker life starting at operator time `t0` with `keys` in hand: every start window is spent. -/
+def Broker.start (t0 : Nat) (keys : List Nat) (rs : List (ByteArray × Allowance)) : Broker :=
+  Broker.follow ⟨t0, keys, []⟩ t0 rs
 
 /-- A later window starts empty; an earlier or equal one keeps the meter. -/
 def Meter.roll (m : Meter) (w : Nat) : Meter := if m.window < w then ⟨w, 0⟩ else m
 
 /-- The worst-case charge of `tokens` tokens, rounded up (`Proofs.Broker.cost_worst`). A model
 priced 0 is refused `allowanceMalformed`: a free call on the operator's key is unbounded spend. -/
-def cost (md : Model) (tokens : Nat) : Nat := (tokens * md.microPerKTok + 999) / 1000
+def cost (a : Allowance) (tokens : Nat) : Nat := (tokens * a.microPerKTok + 999) / 1000
 
 /-! ## The upstream request, printed -/
 
@@ -148,24 +167,35 @@ structure Grant where
   body : ByteArray
   deriving DecidableEq
 
+/-- Whether entry `x` is the meter of resident `r` on `model`. -/
+def Entry.is (r model : ByteArray) (x : Entry) : Bool := x.resident == r && x.allowance.model == model
+
+/-- An allowance that cannot be applied: a zero window, a cap past `capMax`, a price of 0 (a free
+call on the operator's key is unbounded spend), or a key slot past the wire's u32. -/
+def Allowance.malformed (a : Allowance) : Bool :=
+  a.windowMs == 0 || decide (Bounds.capMax ≤ a.cap) || a.microPerKTok == 0 || decide (2 ^ 32 ≤ a.keySlot)
+
 /-- THE decision for one ask from resident `r` at operator time `now`. -/
 def decide (b : Broker) (now : Nat) (r : ByteArray) (ask : Ask) : Except Refusal (Broker × Grant) := do
   if now < b.last then throw .clockRegressed
-  let some e := b.entries.find? (·.resident == r) | throw .noAllowance
+  unless b.entries.any (·.resident == r) do throw .noAllowance
+  let e ← match b.entries.filter (Entry.is r ask.model) with
+    | [] => throw .modelNotAllowed
+    | [e] => pure e
+    | _ => throw .allowanceAmbiguous
   let a := e.allowance
-  if a.windowMs = 0 ∨ Bounds.capMax ≤ a.cap then throw .allowanceMalformed
-  let some md := a.models.find? (·.name == ask.model) | throw .modelNotAllowed
-  if md.microPerKTok = 0 then throw .allowanceMalformed
+  if a.malformed then throw .allowanceMalformed
+  unless b.keys.contains a.keySlot do throw .keyMissing
   if ask.maxTokens = 0 then throw .tokensZero
   if min a.maxTokens Bounds.tokensCeiling < ask.maxTokens then throw .tokensOver
   let body ← requestBody ask
   if Bounds.bodyMax < body.size then throw .requestTooLarge
   let m := e.meter.roll (windowOf a now)
-  let c := cost md (body.size + ask.maxTokens)
+  let c := cost a (body.size + ask.maxTokens)
   if a.cap < m.spent + c then throw .overSpend
   let e' := { e with meter := ⟨m.window, m.spent + c⟩ }
-  pure ({ last := now, entries := b.entries.map fun x => if x.resident == r then e' else x },
-        ⟨md.keySlot, c, body⟩)
+  pure ({ b with last := now, entries := b.entries.map fun x => if Entry.is r ask.model x then e' else x },
+        ⟨a.keySlot.toUInt32, c, body⟩)
 
 /-- One `decide` frame and the ask frame after it, as `hosting-broker` runs them: the next broker
 and the verdict to write. A refusal leaves the broker unchanged. -/

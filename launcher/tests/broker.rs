@@ -7,7 +7,9 @@
 //! - next window: a grant reaches the fake upstream with the key in Lean's key header and Lean's
 //!   body, and the resident gets the upstream's status and body;
 //! - an upstream that echoes the key: `keyEchoed`, the answer withheld;
-//! - a model whose slot has no key: `keyMissing`; a second connection while one is open: `busy`;
+//! - a model whose slot has no key: `keyMissing` (Lean's, from the slots keybroker passed);
+//!   two allowances for one resident and model: `allowanceAmbiguous`; a second connection while
+//!   one is open: `busy`;
 //! - identity is the socket: `r2`'s socket, with no allowance, is `noAllowance`;
 //! - a key file of mode 0644: keybroker ends `keyFileMode` and opens no socket.
 //!
@@ -128,10 +130,13 @@ impl Drop for Broker {
     }
 }
 
-/// keybroker for resident `r1`: allowance window WINDOW_MS, cap 100000, maxTokens 100, models `m`
-/// (slot 7, priced 1000 per 1000 tokens) and `n` (slot 9: no key).
+/// keybroker for resident `r1`: allowances (window WINDOW_MS, cap 100000, maxTokens 100, priced 1000
+/// per 1000 tokens) on model `m` (slot 7), `n` (slot 9: no key) and `a` twice (ambiguous).
 fn start(d: &Path, keys: &Path, up: &str) -> Broker {
-    let spec = format!("r1={WINDOW_MS}:100000:100:m/7/1000+n/9/1000");
+    let specs: Vec<String> = [("m", 7), ("n", 9), ("a", 7), ("a", 7)]
+        .iter()
+        .map(|(m, k)| format!("r1={m}/{k}/1000/{WINDOW_MS}/100000/100"))
+        .collect();
     let child = Command::new(env!("CARGO_BIN_EXE_keybroker"))
         .arg(keys)
         .arg(fs::read_link(d.join("socks")).unwrap())
@@ -140,7 +145,7 @@ fn start(d: &Path, keys: &Path, up: &str) -> Broker {
         .arg("r1,r2")
         .arg(lean_bin("hosting-broker"))
         .arg("--drive")
-        .arg(spec)
+        .args(&specs)
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
@@ -262,6 +267,11 @@ fn refusals_by_name_and_no_key_reaches_the_resident() {
         &r.ask(&ask(b"zz", 10, b"hi")),
         BrokerRefusal::ModelNotAllowed
     ));
+    // a slot keybroker holds no key for is Lean's refusal, before the meter: not overSpend here
+    assert!(is_refused(
+        &r.ask(&ask(b"n", 10, b"hi")),
+        BrokerRefusal::KeyMissing
+    ));
     assert!(is_refused(
         &r.ask(&ask(b"m", 0, b"hi")),
         BrokerRefusal::TokensZero
@@ -275,6 +285,10 @@ fn refusals_by_name_and_no_key_reaches_the_resident() {
         BrokerRefusal::RequestTooLarge
     ));
     assert!(is_refused(&r.ask(b"\x07junk"), BrokerRefusal::BadAsk));
+    assert!(is_refused(
+        &r.ask(&ask(b"a", 10, b"hi")),
+        BrokerRefusal::AllowanceAmbiguous
+    ));
 
     // a second connection while this one is open
     let mut r2 = Resident::connect(&b);
@@ -362,7 +376,7 @@ fn an_exposed_key_file_stops_keybroker_by_name() {
         .arg("r1")
         .arg(lean_bin("hosting-broker"))
         .arg("--drive")
-        .arg("r1=1000:1:1:m/7/1")
+        .arg("r1=m/7/1/1000/1/1")
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();

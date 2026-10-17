@@ -35,18 +35,19 @@ private theorem frameMax_fits : frameMax < 2 ^ 32 := by decide
 
 end Bounds
 
-/-- Why the broker refuses an ask, by name (law 7). The first eleven are `Broker.decide`'s; the last four
-are keybroker's (it maps its transport outcomes onto them by an exhaustive match). -/
+/-- Why the broker refuses an ask, by name (law 7). `Broker.decide` refuses every case but the last
+three of keybroker (`keyEchoed`, `upstreamFailed`, `busy`, mapped from its transport outcomes by an exhaustive match);
+`keyMissing` is both: Lean refuses a slot keybroker has no key for, and keybroker re-checks it. -/
 inductive Refusal
   /-- no allowance names this resident -/
   | noAllowance
-  /-- the allowance cannot be applied: a zero-length window, a cap past `capMax`, a model priced 0 -/
+  /-- the allowance cannot be applied: a zero-length window, a cap past `capMax`, a price of 0, a key slot past u32 -/
   | allowanceMalformed
   /-- the operator's clock went backwards -/
   | clockRegressed
   /-- the ask does not decode -/
   | badAsk
-  /-- the allowance does not name the asked model -/
+  /-- no allowance of this resident names the asked model -/
   | modelNotAllowed
   /-- an ask for no tokens -/
   | tokensZero
@@ -60,7 +61,7 @@ inductive Refusal
   | overSpend
   /-- the upstream request Lean prints does not fit one verdict frame -/
   | requestTooLarge
-  /-- keybroker: the key file has no key for the granted slot -/
+  /-- the key file has no key for the allowance's slot (Lean refuses it before any charge) -/
   | keyMissing
   /-- keybroker: the upstream answer contained the key; the answer is withheld -/
   | keyEchoed
@@ -68,19 +69,23 @@ inductive Refusal
   | upstreamFailed
   /-- keybroker: this resident already has an ask in flight -/
   | busy
+  /-- two allowances the operator holds name this resident and model: which meter is meant is not
+  the broker's to guess (the operator revokes one) -/
+  | allowanceAmbiguous
   deriving DecidableEq, Repr
 
 namespace Refusal
 
 def all : List Refusal :=
   [noAllowance, allowanceMalformed, clockRegressed, badAsk, modelNotAllowed, tokensZero, tokensOver,
-   messagesMalformed, textNotUtf8, overSpend, requestTooLarge, keyMissing, keyEchoed, upstreamFailed, busy]
+   messagesMalformed, textNotUtf8, overSpend, requestTooLarge, keyMissing, keyEchoed, upstreamFailed, busy,
+   allowanceAmbiguous]
 
 def code : Refusal → UInt8
   | noAllowance => 0 | allowanceMalformed => 1 | clockRegressed => 2 | badAsk => 3
   | modelNotAllowed => 4 | tokensZero => 5 | tokensOver => 6 | messagesMalformed => 7
   | textNotUtf8 => 8 | overSpend => 9 | requestTooLarge => 10 | keyMissing => 11 | keyEchoed => 12
-  | upstreamFailed => 13 | busy => 14
+  | upstreamFailed => 13 | busy => 14 | allowanceAmbiguous => 15
 
 def name : Refusal → String
   | noAllowance => "noAllowance" | allowanceMalformed => "allowanceMalformed"
@@ -89,6 +94,7 @@ def name : Refusal → String
   | textNotUtf8 => "textNotUtf8" | overSpend => "overSpend" | requestTooLarge => "requestTooLarge"
   | keyMissing => "keyMissing"
   | keyEchoed => "keyEchoed" | upstreamFailed => "upstreamFailed" | busy => "busy"
+  | allowanceAmbiguous => "allowanceAmbiguous"
 
 def ofCode? (b : UInt8) : Option Refusal := all.find? (·.code == b)
 
