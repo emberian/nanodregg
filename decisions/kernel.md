@@ -728,8 +728,8 @@ account's floor and the scan checks it. Plants (observed red, reverted): the acc
 credit dropped ⇒ `credit_exact` no longer builds, kernel-sim 39/64 red "credit: expected ok, got
 rejected floorNotConserved" (the KERNEL refuses the buggy receiver); the `notWell` check dropped ⇒
 `dispatch_born` no longer builds, 21/64 red "expected notWell, got refused overflow".
-A second agent read the statements (law 6): none vacuous; on its findings  now
-states  the well floor (the Nat  does not truncate) and  names
+A second agent read the statements (law 6): none vacuous; on its findings `credit_exact` now
+states `0 < amount ≤` the well floor (the Nat `-` does not truncate) and `credit_authorized` names
 the destination account and its denomination.
 **Alternatives.** (a) A `setFloor acct f` that sets a floor directly (minidregg's; with conserved
 floors it cannot balance, so it would need a kernel exception). (b) Floor transfers between ANY two
