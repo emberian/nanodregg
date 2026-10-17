@@ -1565,3 +1565,70 @@ The premise is the exact one, and `retainAt_eq_build` is a corollary but not a c
 false under the no-collapse mutation. The two cost sentences in (4) were corrected as the reader
 asked. The sim covers path `[true]`, and the port journal probe's real prune at `[true, true]`
 becomes the runtime tooth.
+
+### KERNEL-41 AMENDED (KERNEL-11, 2026-10-17; ROOT ruled (a′) the same day): the journal is a second instance of the one trie type, and the head commits both roots
+**Finding that overturned (a).** A canonical prune collapses nodes. In ONE shared trie it collapses
+across kinds: when the journal side is pruned to a single leaf and the cell side is empty, that
+leaf moves up to the root. From then on a cell lookup is correct only if the trie is Routed.
+- I checked the bound is tight: in an unrouted trie, a misrouted key really is found after the
+  collapse, so no canonical collapse avoids the premise.
+- Today `get_insert` has no premise, so no cell reader after an admission has one (admit_frame,
+  admit_rom, admit_nullifiers, admit_live, the Value/Weight/Ledger sums, Rooted: about 150
+  theorems).
+- Under (a), every one of them would gain `hw : w.Canon E`. That is discharged at Deployed, but it
+  is a premise spread across the whole kernel that the journal has no right to cause.
+So (a) is REJECTED for the premise spread.
+**Decision (a′), replacing (1)–(3) of KERNEL-41.**
+(1) `World.journal : Trie.T D (Nat × D) D`, and `Carried.journal` the same.
+- The spec `journalSpec E`: bit = `byteBit (E.bytes k)`; depth 256; node hash `E.hash domTrie`;
+  value digest `E.hash domJournal (nat64 h ‖ bytes d)`, where `domJournal` is a new leaf domain.
+- The reader is `World.journalAt E w k := w.journal.get (journalSpec E) k`.
+- `commit` inserts `(txId ↦ (h+1, turnDigest))`, then `pruneJournal H` = `retainAll (keptLeaf H)`
+  at multiples of W (step 1's `retainAt` with path `[]`, whose `Under` premise is `True`).
+(2) The root commitment is ONE link over both roots:
+`chainNext E prev t cellsRoot′ journalRoot′ = H(domChain, prev ‖ turnDigest ‖ cellsRoot′ ‖ journalRoot′)`.
+- A phone that trusts a head checks cells against `cellsRoot′`, as today; cell proofs are
+  unchanged in bytes.
+- It checks journal entries against `journalRoot′`. Inclusion (`txId ↦ (height, turnDigest)`)
+  always; exclusion is a proof of NON-admission only while `journalForgets` is false
+  (cv 01a14ade-0f69).
+(3) Unchanged from KERNEL-41:
+- canonicity is `=`, via `build_toList` on the journal trie, so both refines-allow rows become
+  lawfulness theorems;
+- `World.Equiv` and `Kernel/Proofs/Equiv.lean` are DELETED;
+- every journal theorem keeps its name and content;
+- WASTE: NEW `admit hashes-per-journal-entry` ≈ 15 (no prefix nodes) and a pinned prune row (hashes
+  per prune, ≈ 3 per turn amortized). Both are pinned on landing.
+(4) What does NOT change, against (a):
+- no Slot/Leaf constructor, no routing change, `trieDepth` stays 257;
+- the cell trie's root is unchanged in bytes, and `bitLt_trieSpec_iff` is untouched;
+- `hashes-per-touched-cell` and `hashes-per-nullifier` are unchanged; the requested ceiling rise is
+  WITHDRAWN.
+(5) The premise moves to where it belongs. JournalOk absorbs `Trie.Routed (journalSpec E) 0 w.journal`.
+- Genesis gives it (the trie is empty); insert (`routed_insert`) and `canon_retainAt` preserve it,
+  each as a theorem.
+- The journal theorems that read after a prune take JournalOk, as most already do.
+- `submit_once`, `derived_once` and `admit_spacing` gain `hw₀` at the generic level; their
+  deployed / reached corollaries stay premise-free (reach_*: genesis plus the fold).
+**Law 1.** These are two instances of one type for two different things: the World's state, and a
+pruned replay index. Nothing ties their contents together, and no invariant keeps one equal to the
+other. That is not the "TreeMap plus a separate Merkle index kept equal by an invariant" that
+KERNEL-23 rejected. It is one map type and one root commitment, the link.
+**Critique.** The link hashes four digests instead of three, one more 32-byte block per turn
+inside one cSHAKE call. A journal entry is no longer a slot of the World map, so a phone reading a
+cell and a txId takes two proofs against two roots of one link. Carried keeps a journal field (now
+a trie), so carry still moves two maps.
+**Meta-critique.** I priced hashes, not premises. The design pass counted hash calls per turn, row
+by row, and never asked what the prune's collapse does to the correctness of every OTHER reader of
+the shared structure. That cost does not appear in any WASTE row. It shows up only when you try to
+state `admit_frame` over the new commit. The cheaper-looking shape on paper ((a): one trie, one
+root) was the more expensive one in theorems.
+**Flag day (one cross-layer kernel! landing, after PROTOCOL-7's KERNEL-42 domain day).**
+- The link changes (four inputs), so every chain changes.
+- The World and Carried shapes change (the journal becomes a trie, rebuilt canonically from an
+  ascending listing), so both tags move.
+- Every Store re-geneses, and an old base refuses `shapeMismatch`.
+- CODEC (CODEC-7): the journal's wire stays a strictly ascending listing, rebuilt by `build`. It
+  proves plain lawfulness for World and Carried, deletes both allow rows, and re-pins the vectors.
+- HOST (HOST-10): stamp, reopen theorems, Serve's reads through `journalAt`.
+- PROTOCOL (PROTOCOL-7): rows' journal reads.
