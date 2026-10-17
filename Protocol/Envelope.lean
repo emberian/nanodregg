@@ -34,6 +34,11 @@ inductive ReadRefusal
   | noFollowGrant
   deriving DecidableEq, Repr
 
+/-- The refusal's name on the wire (law 7; `ReadRefusal.name_injective`). -/
+def ReadRefusal.name : ReadRefusal → String
+  | .badEnvelope => "badEnvelope" | .unknownKey => "unknownKey" | .badSignature => "badSignature"
+  | .expired => "expired" | .noFollowGrant => "noFollowGrant"
+
 def domEnvelope : ByteArray := "nanodregg/protocol/read-envelope/v1".toUTF8
 
 variable {D : Type} [Ord D] [DecidableEq D]

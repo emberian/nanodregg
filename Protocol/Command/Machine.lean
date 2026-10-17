@@ -68,9 +68,12 @@ def ctorName (s : String) : String :=
 
 variable {D : Type} [Ord D] [DecidableEq D] [Repr D]
 
-/-- The refusal's name on the wire (law 7): the kernel's and receive layer's constructor names. -/
+/-- The refusal's name on the wire (law 7). PROTOCOL's own constructors and `ParseRefusal` are
+named here; `Receive.Refusal` and `Reject` are KERNEL's to name (ROOT ruling 2026-10-16: each owner
+provides a total `name` with `name_injective`). Until KERNEL's land, those two go through
+`ctorName` of the derived Repr, which is NOT a wire name: replace both arms with KERNEL's `name`. -/
 def Refusal.name : Refusal D → String
-  | .parse r => ctorName (toString (repr r))
+  | .parse r => r.name
   | .receive r => ctorName (toString (repr r))
   | .reject r => ctorName (toString (repr r))
   | .host n => n

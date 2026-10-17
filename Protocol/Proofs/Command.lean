@@ -23,6 +23,9 @@ theorem Verb.words_distinct : (Verb.all.map Verb.word).Nodup := by decide
 /-- The SIZE ceiling, as a fact about the type. -/
 theorem Verb.at_most_twenty : Verb.all.length ≤ 20 := by decide
 
+theorem ParseRefusal.name_injective (a b : ParseRefusal) (h : a.name = b.name) : a.tag = b.tag := by
+  cases a <;> cases b <;> simp_all [ParseRefusal.name, ParseRefusal.tag]
+
 theorem parse_past_bound {D : Type} (digestOf : ByteArray → Option D) (argv : List ByteArray)
     (h : argvSize argv > Bounds.argvBytesMax) :
     parse digestOf argv = .error (.argvPastBound (argvSize argv)) := by

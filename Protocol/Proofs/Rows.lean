@@ -9,10 +9,14 @@ import Protocol.Proofs.Table
 
 namespace Nanodregg.Protocol
 
-theorem every_op_has_a_row (op : Op) : ∃ r ∈ rows, op ∈ r.ops := by
-  have h : rows.any (fun r => r.ops.contains op) = true := by cases op <;> decide
+/-- Every operation that is not reserved is driven by some row. -/
+theorem every_op_has_a_row (op : Op) (h : op.reserved = false) : ∃ r ∈ rows, op ∈ r.ops := by
+  have h : rows.any (fun r => r.ops.contains op) = true := by cases op <;> first | decide | cases h
   obtain ⟨r, hr, hc⟩ := List.any_eq_true.mp h
   exact ⟨r, hr, List.elem_iff.mp hc⟩
+
+/-- No row claims a reserved operation. -/
+theorem no_row_claims_reserved : ∀ r ∈ rows, ∀ op ∈ r.ops, op.reserved = false := by decide
 
 theorem row_names_distinct : (rows.map Row.name).Nodup := by decide
 

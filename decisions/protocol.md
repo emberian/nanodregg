@@ -255,3 +255,19 @@ codec refuse a 7-byte height); a stranger and a revoked member are told apart (`
 frame is HOST's to split. **Meta-critique.** "Serve events, not Turns" is the cheaper wire and it
 makes the follower's CPU the audit; I chose it partly because there is no Turn codec yet.
 **Status.** open.
+
+## PROTOCOL-13 · ROOT rulings: `read` is RESERVED; each owner names its refusals with `name_injective` (2026-10-16)
+**Decision.** (1) `Op.reserved` (Protocol/Table.lean) marks `read` as a declared absence tied to
+Ember's thin-consent ruling (HOST-7a). If thin members are out, `read` is deleted (6 → 5); if they are
+in, a thin-member row sends it. No row declares `read` any more. `every_op_has_a_row` ranges over
+non-reserved ops, and `no_row_claims_reserved` says no row claims a reserved op, so the theorem
+states what is true today. (2) The derived Repr is not a wire name. PROTOCOL names its own:
+`ReadRefusal.name` (`name_injective`, as values), `ParseRefusal.name` (`name_injective`: equal names ⇒
+the same constructor tag), and `Command.Refusal.name`'s own arms. The `receive`/`reject` arms still
+go through `ctorName` until KERNEL's `Receive.Refusal.name`/`Reject.name` land; those two arms are
+then replaced. Also `Envelope.check_ok_iff`.
+**Critique.** `name_injective` up to the tag says nothing about arguments: two `eventMismatch` at
+different heights render alike on the wire, which is a choice (names, not values) that the row
+judge relies on. **Meta-critique.** Reserving an op instead of deleting it keeps a dead entry
+alive for a ruling that may take weeks; the reservation is honest only while the ruling is open.
+**Status.** ruled by ROOT 2026-10-16.

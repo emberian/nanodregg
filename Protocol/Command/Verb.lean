@@ -94,6 +94,19 @@ inductive ParseRefusal
   | badExpect (arg : String)
   deriving DecidableEq, Repr
 
+/-- The refusal's name on the wire (law 7): the constructor, without its arguments. Distinct
+constructors have distinct names (`ParseRefusal.name_injective`). -/
+def ParseRefusal.name : ParseRefusal → String
+  | .argvPastBound _ => "argvPastBound" | .notUtf8 _ => "notUtf8" | .noVerb => "noVerb"
+  | .unknownVerb _ => "unknownVerb" | .usage _ _ => "usage" | .badDigest _ => "badDigest"
+  | .badNumber _ => "badNumber" | .badRight _ => "badRight" | .badToken _ => "badToken"
+  | .badExpect _ => "badExpect"
+
+/-- The constructor's index, the thing a name must determine. -/
+def ParseRefusal.tag : ParseRefusal → Nat
+  | .argvPastBound _ => 0 | .notUtf8 _ => 1 | .noVerb => 2 | .unknownVerb _ => 3 | .usage _ _ => 4
+  | .badDigest _ => 5 | .badNumber _ => 6 | .badRight _ => 7 | .badToken _ => 8 | .badExpect _ => 9
+
 def usage : Verb → String
   | .init => "init SPONSOR" | .enroll => "enroll TOKEN" | .follow => "follow MEMBER"
   | .install => "install TEXT" | .create => "create LAW..."

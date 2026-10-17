@@ -77,7 +77,7 @@ def journey : Row where
   name := "journey"
   replaces := ["journey/J0", "journey/J1", "journey/J2", "journey/J3", "journey/J4", "journey/J5",
     "welcomecontinuity"]
-  ops := everyWrite ++ [.read]
+  ops := everyWrite
   kinds := ["enroll", "create", "grant", "write"]
   drive := .members [
     ok "sponsor" ["init"],
@@ -98,7 +98,7 @@ def journey : Row where
 def reopen : Row where
   name := "reopen"
   replaces := ["journey/J6", "hostupgrade/REOPEN"]
-  ops := everyWrite ++ [.read]
+  ops := everyWrite
   kinds := ["write"]
   drive := .members [
     ok "newcomer" ["write", "shared", "2", "3"],
@@ -220,7 +220,7 @@ package's law; the broker verbs are physical. -/
 def grain : Row where
   name := "grain"
   replaces := ["m6grain", "journey/M6"]
-  ops := everyWrite ++ [.read]
+  ops := everyWrite
   kinds := ["install", "invoke"]
   drive := .members [
     ok "operator" ["install", "world/grain/Lifecycle.obend"],
@@ -237,7 +237,7 @@ is killed mid-attempt, restarts, and the attempt settles by lookup. -/
 def hermes : Row where
   name := "hermes"
   replaces := ["hermes", "journey/M5", "journey/J14"]
-  ops := everyWrite ++ [.read]
+  ops := everyWrite
   kinds := ["write"]
   drive := .members [
     ok "sponsor" ["grant", "shared", "@hermes", "observe,mutate"],
@@ -252,7 +252,7 @@ landing, 1000 nightly). -/
 def bar : Row where
   name := "bar"
   replaces := ["births", "perf", "growth", "journey/G"]
-  ops := everyWrite ++ [.read]
+  ops := everyWrite
   kinds := ["create", "write"]
   drive := .members [
     ok "sponsor" ["create", "obj-$i", "--repeat", "N"],

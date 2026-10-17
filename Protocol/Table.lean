@@ -88,6 +88,14 @@ def name : Op → String
   | submit => "submit" | lookup => "lookup" | read => "read" | log => "log"
   | command => "command" | resume => "resume"
 
+/-- A RESERVED operation is in the table but no row may claim it: a declared absence. `read` is
+reserved while Ember's thin-consent ruling is open (HOST-7a): under PROTOCOL-3 every member follows
+and reads through its own follow, so nothing sends `read`. If thin members are out, `read` is
+deleted (6 → 5); if they are in, a thin-member row sends it and it stops being reserved. -/
+def reserved : Op → Bool
+  | read => true
+  | submit | lookup | log | command | resume => false
+
 /-- Decode a request byte; anything else is refused before a payload is read. -/
 def ofCode? (b : UInt8) : Option Op := all.find? (·.code == b)
 
