@@ -165,6 +165,24 @@ def holdOf (st : State D) (m : D) : Holding D :=
 def setHold (st : State D) (m : D) (h : Holding D) : State D :=
   { st with holds := (m, h) :: st.holds.filter fun p => p.1 ≠ m }
 
+/-- A refusal no receiver produces, met straight at the seal (the `planted` table says so): the
+last call's first pin given two effects. -/
+def probeSeal (P : Params D) (st : State D) : State D :=
+  match st.lastCall with
+  | none => st
+  | some c =>
+      match c.unsigned.pins with
+      | [] => st
+      | p :: _ =>
+          match sealTurn P.ctx c [] [(p.1, .keep), (p.1, .keep)] [] with
+          | .error (.duplicateEffect x) =>
+              if x = p.1 then
+                { st with steps := st.steps + 1, refusedAsExpected := st.refusedAsExpected + 1,
+                          seen := "duplicateEffect" :: st.seen }
+              else { st with failures := "probe: duplicateEffect names another cell" :: st.failures }
+          | .error r => { st with failures := s!"probe seal: got {r.name}" :: st.failures }
+          | .ok _ => { st with failures := "probe: two effects on one cell sealed" :: st.failures }
+
 /-- One generated action. -/
 def act (P : Params D) (st : State D) : State D :=
   let (k, rng) := st.rng.below 15
@@ -372,6 +390,7 @@ def act (P : Params D) (st : State D) : State D :=
                 else if denied then .refused "lawDenied" else .ok
               (submit P st c expect "write-via-grant").1
   | _ => -- a probe straight at admit: an admitted-shape turn with the wrong charge
+      let st := probeSeal P st
       match st.log.getLast? with
       | none => st
       | some t =>
@@ -508,10 +527,12 @@ def run (P : Params D) (seed : Nat) (steps : Nat) : State D :=
       | .ok _, .ok _ => { st with failures := s!"forgery at {i}: audit accepted" :: st.failures }
       | .error _, _ => { st with failures := s!"forgery at {i}: fold refused it (not a forgery test)" :: st.failures }
 
-/-- The refusals the generator plants, each of which a run of 16 or more seeds must meet. -/
+/-- The refusals the generator plants, each of which a run of 16 or more seeds must meet. Every
+name is reached through a signed call on the Host path, except `duplicateEffect`, which no
+receiver can produce and the probe meets straight at `sealTurn` (`probeSeal`). -/
 def planted : List String :=
   ["lawDenied", "noGrant", "unknownKey", "replayed", "stale", "notPrecommitted", "notIssuer",
-   "missingCell", "enrollSpent", "grantRight", "grantWidens", "unrooted"]
+   "missingCell", "enrollSpent", "grantRight", "grantWidens", "unrooted", "duplicateEffect"]
 
 /-- `--seeds N` runs seeds `0 … N-1`; otherwise each argument is a seed. -/
 def parseSeeds : List String → List Nat

@@ -65,7 +65,6 @@ theorem walk_chain {X : Ctx D} {look : Pinned D} {obj : D} {right : Right} :
         · rename_i parent hd
           exact .link hc ht hg hr hi hp hd (walk_chain h)
 
-omit [Ord D] in
 /-- **Write authority.** A derived `write` comes from the object's owner, or from an agent holding a
 grant chain for `mutate` whose root issuer is the owner. -/
 theorem write_authorized {X : Ctx D} {look : Pinned D} {c : Call D} {obj : D}
@@ -88,7 +87,6 @@ theorem write_authorized {X : Ctx D} {look : Pinned D} {c : Call D} {obj : D}
   | none => left; simp [principalOf] at hp; exact ⟨rfl, hp⟩
   | some g => right; exact ⟨g, rfl, walk_chain hp⟩
 
-omit [Ord D] in
 /-- **Law authority.** Replacing a data object's laws needs the same owner authority. -/
 theorem law_authorized {X : Ctx D} {look : Pinned D} {c : Call D} {obj : D} {laws : List D}
     {via : Option D} {t : Turn D} (h : law X look c obj laws via = .ok t) :
@@ -109,7 +107,6 @@ theorem law_authorized {X : Ctx D} {look : Pinned D} {c : Call D} {obj : D} {law
   | none => left; simp [principalOf] at hp; exact ⟨rfl, hp⟩
   | some g => right; exact ⟨g, rfl, walk_chain hp⟩
 
-omit [Ord D] in
 /-- **Current key.** Every derived call that is not a rotation is signed by a key its member cell
 holds as current. -/
 theorem key_current {X : Ctx D} {look : Pinned D} {c : Call D} {t : Turn D}
@@ -127,7 +124,6 @@ theorem key_current {X : Ctx D} {look : Pinned D} {c : Call D} {t : Turn D}
     · rename_i m hm
       exact ⟨m, hm, by simpa [req_ok] using hk⟩
 
-omit [Ord D] in
 /-- **Pre-rotation.** A derived rotation moves the member to a key whose digest it had
 precommitted, and is signed by that key. -/
 theorem rotate_precommitted {X : Ctx D} {look : Pinned D} {c : Call D} {key : ByteArray} {next : D}
@@ -154,7 +150,6 @@ theorem spendEnroll_ok {g : D} {cell : Cell} {units : Nat} {short : Refusal D}
   simp only [pure, Except.pure, Except.ok.injEq] at h
   exact ⟨i, left, hl, hu, h.symm⟩
 
-omit [Ord D] in
 /-- **Enrolment authority** (KERNEL-16, the twin of `write_authorized`). A derived enrolment comes
 from a sponsor holding a World grant chain that carries `enroll`, whose own grant had a count left,
 and the Turn spends one of it: its effect appends `left - 1` to that grant's ledger. -/
@@ -164,7 +159,7 @@ theorem enroll_authorized {X : Ctx D} {look : Pinned D} {c : Call D} {key : Byte
     (∃ p, Chain X look (worldId X) (.enroll 0) via c.unsigned.member p) ∧
       ∃ cell i left, readKind look via kindGrant = .ok cell ∧ enrollLeft via cell = .ok (i, left) ∧
         0 < left ∧ X.verify key (possessionMessage X c.unsigned.member next key) possession = true ∧
-        ∃ cr, sealTurn X c cr (some (via, .write [.set (enrollBase + i) (countBytes (left - 1))])) = .ok t := by
+        ∃ cr, sealTurn X c cr [(via, .write [.set (enrollBase + i) (countBytes (left - 1))])] [] = .ok t := by
   unfold enroll at h
   simp only [except_bind_ok] at h
   obtain ⟨p, hw, cell, hc, ef, hs, ⟨⟩, hv, h⟩ := h
@@ -172,7 +167,6 @@ theorem enroll_authorized {X : Ctx D} {look : Pinned D} {c : Call D} {key : Byte
   rw [req_ok] at hv
   exact ⟨⟨p, walk_chain hw⟩, cell, i, left, hc, hl, hu, hv, _, by simpa using h⟩
 
-omit [Ord D] in
 /-- **World rights are rooted at genesis.** A derived grant on the World, or one carrying an
 enrolment right, has a parent: no call roots one, so every such chain ends at a root that genesis
 placed (a founder's). -/
@@ -191,7 +185,6 @@ theorem grant_rooted {X : Ctx D} {look : Pinned D} {c : Call D} {target grantee 
       rw [req_ok] at hr
       rcases hw with hw | hw <;> simp_all
 
-omit [Ord D] in
 /-- **Enrolment counts attenuate.** A derived grant carrying `enroll` carves its count out of its
 parent's: the parent is a grant the signer holds on the same target, it had at least that much
 left, and the Turn's effect is the parent's spend. -/
@@ -201,7 +194,7 @@ theorem grant_carves {X : Ctx D} {look : Pinned D} {c : Call D} {target grantee 
     ∃ pc ef, readKind look p kindGrant = .ok pc ∧ slotDigest X p pc grantTarget = .ok target ∧
       slotDigest X p pc grantGrantee = .ok c.unsigned.member ∧
       spendEnroll p pc (enrollUnits rights) (.grantWidens p) = .ok ef ∧
-      ∃ cr, sealTurn X c cr ef = .ok t := by
+      ∃ cr, sealTurn X c cr ef.toList [] = .ok t := by
   unfold grant at h
   simp only [except_bind_ok] at h
   obtain ⟨_, _, ef, hp, h⟩ := h

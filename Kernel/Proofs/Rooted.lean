@@ -304,11 +304,10 @@ theorem grantCell_slots (X : Ctx D) (target grantee member : D) (parent : Option
     rw [slotsOf_get, List.filter_append, List.filter_append, hr _ (by decide)]
     cases parent <;> simp [grantTarget, grantGrantee, grantIssuer, grantParent]
 
-omit [Ord D] in
-theorem sealTurn_creates {X : Ctx D} {c : Call D} {cr : List Cell} {ef : Option (D × Act)} {t : Turn D}
-    (h : sealTurn X c cr ef = .ok t) : t.creates = cr := (sealTurn_ok h).2.2.2.2.2.2.2.1
+theorem sealTurn_creates {X : Ctx D} {c : Call D} {cr : List Cell} {efs : List (D × Act)}
+    {ns : List D} {t : Turn D} (h : sealTurn X c cr efs ns = .ok t) : t.creates = cr :=
+  (sealTurn_ok h).2.2.2.2.2.2.2.1
 
-omit [Ord D] in
 /-- **No receiver bears an unrooted grant.** Only `grant` bears a grant cell, append-only, and on
 the World only with a parent (`grant_rooted`). Needs the digest's bytes to be injective (a target
 read back as the World's bytes IS the World). -/
@@ -373,7 +372,6 @@ theorem dispatch_born {X : Ctx D} {look : Pinned D} {c : Call D} {b : Body D} {t
       obtain ⟨_, _, _, _, ⟨⟩, _, h⟩ := h
       rw [sealTurn_creates h]; simp
 
-omit [Ord D] in
 theorem receiveWith_dispatch {X : Ctx D} {look : Pinned D} {c : Call D} {t : Turn D}
     (h : receiveWith X look c = .ok t) : dispatch X look c c.unsigned.body = .ok t := by
   unfold receiveWith at h

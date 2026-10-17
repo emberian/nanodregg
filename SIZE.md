@@ -6,13 +6,13 @@
 | metric | now | ceiling |
 |---|---|---|
 | Lean modules in the Host closure | 59 | 150 |
-| Lean lines (deployed) | 7648 | — |
+| Lean lines (deployed) | 7655 | — |
 | protocol operations | 6 | 6 |
 | call kinds (Receive.Body constructors) | 9 | 10 |
 | command verbs (the one command language) | 11 | 20 |
 | protocol status / step codes | 4 / 4 | — |
 | conformance rows | 12 (Protocol/Rows.lean: 11 member rows + lang-journey; every op reached: every_op_has_a_row) | — |
-| refusal constructors | 42 | — (ratchet: may only fall without a row that needs the new one) |
+| refusal constructors | 43 | — (ratchet: may only fall without a row that needs the new one) |
 | Rust lines | 3942 | — |
 | Rust lines (client/src) | 1714 | 2000 |
 | Rust lines (generated) | 417 | — |
@@ -26,10 +26,10 @@
 | Lean lines (Codec) | 4219 | — |
 | Lean lines (Emit) | 351 | — |
 | Lean lines (Host) | 3110 | — |
-| Lean lines (Kernel) | 5033 | — |
+| Lean lines (Kernel) | 5048 | — |
 | Lean lines (Protocol) | 2747 | — |
 | max dependents of one module | 105 | — |
 | native (extern/implemented_by) | 8 | 8 |
 | C lines | 0 | 146 |
 | Lean lines (Lang) | 5462 | — |
-| Lean lines (tooling: Sim, Rows, Journey, Census, Emit) | 3225 | — |
+| Lean lines (tooling: Sim, Rows, Journey, Census, Emit) | 3246 | — |

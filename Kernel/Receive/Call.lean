@@ -122,6 +122,8 @@ inductive Refusal (D : Type)
   | undecodableEvent
   /-- a logged Turn is not what its own event derives on the World before it -/
   | eventMismatch
+  /-- a receiver gave one cell two effects (no receiver does: a probe meets it) -/
+  | duplicateEffect (cell : D)
   deriving DecidableEq, Repr
 
 /-- The refusal's name on the wire (law 7): its constructor's, arguments dropped
@@ -152,6 +154,7 @@ def Refusal.name {D : Type} : Refusal D → String
   | .overPrice _ => "overPrice"
   | .undecodableEvent => "undecodableEvent"
   | .eventMismatch => "eventMismatch"
+  | .duplicateEffect _ => "duplicateEffect"
 
 /-- A receiver's only access to state: live cells at pinned ids. -/
 abbrev Pinned (D : Type) := D → Except (Refusal D) (Option Cell)
@@ -265,32 +268,36 @@ def nextKeyDigest (X : Ctx D) (key : ByteArray) : D := X.env.hash domNextKey key
 def possessionMessage (X : Ctx D) (sponsor : D) (next : D) (key : ByteArray) : ByteArray :=
   tagPossession ++ X.env.bytes sponsor ++ X.env.bytes next ++ key
 
-/-- What `effect` does to `cell`: its act on its own cell, `keep` on every other. -/
-def actFor [DecidableEq D] (effect : Option (D × Act)) (cell : D) : Act :=
-  match effect with
-  | some (c, a) => if c = cell then a else .keep
+/-- What `effects` do to `cell`: the act of the effect on it, `keep` when there is none
+(`effectsPinned` has made the effect cells distinct, so "the first" is "the only"). -/
+def actFor [DecidableEq D] (effects : List (D × Act)) (cell : D) : Act :=
+  match effects.find? (fun e => e.1 = cell) with
+  | some (_, a) => a
   | none => .keep
 
 /-- The caller's pins as the Turn's touches, in the caller's order, each with its act. -/
-def touchesOf [DecidableEq D] (pins : List (D × D)) (effect : Option (D × Act)) : List (Touch D) :=
-  pins.map fun p => { cell := p.1, seen := p.2, act := actFor effect p.1 }
+def touchesOf [DecidableEq D] (pins : List (D × D)) (effects : List (D × Act)) : List (Touch D) :=
+  pins.map fun p => { cell := p.1, seen := p.2, act := actFor effects p.1 }
 
-/-- The effect is on a pinned cell. -/
-def effectPinned [DecidableEq D] (pins : List (D × D)) : Option (D × Act) → Except (Refusal D) Unit
-  | some (e, _) => req (pins.any fun p => p.1 = e) (.unpinned e)
+/-- Every effect is on a pinned cell, and on a cell no other effect names. -/
+def effectsPinned [Ord D] [DecidableEq D] (pins : List (D × D)) (effects : List (D × Act)) :
+    Except (Refusal D) Unit := do
+  forEx (fun e => req (pins.any fun p => p.1 = e.1) (.unpinned e.1)) effects
+  match firstDup (effects.map Prod.fst) with
   | none => .ok ()
+  | some c => .error (.duplicateEffect c)
 
-/-- The Turn a call's effect becomes: the caller's window, the caller's pins as touches carrying
-the effect (a receiver writes or retires at most one cell, always one it read, so always a
-pinned one: `unpinned` otherwise), the call as the event, the exact charge (refused above the
-signed ceiling). -/
+/-- The Turn a call's effects become: the caller's window, the caller's pins as touches carrying
+the effects (a receiver writes or retires only cells it read, so only pinned ones: `unpinned`
+otherwise; at most one effect per cell: `duplicateEffect`), the receiver's nullifiers, the call as
+the event, the exact charge (refused above the signed ceiling). -/
 def sealTurn [DecidableEq D] (X : Ctx D) (c : Call D) (creates : List Cell)
-    (effect : Option (D × Act)) : Except (Refusal D) (Turn D) := do
+    (effects : List (D × Act)) (nullifiers : List D) : Except (Refusal D) (Turn D) := do
   let pins := c.unsigned.pins
-  effectPinned pins effect
+  effectsPinned pins effects
   let t0 : Turn D :=
     { txId := txIdOf X c, notBefore := c.unsigned.notBefore, validUntil := c.unsigned.validUntil,
-      touches := touchesOf pins effect, creates, nullifiers := [], charge := 0,
+      touches := touchesOf pins effects, creates, nullifiers, charge := 0,
       event := X.callBytes c }
   let t := { t0 with charge := t0.weight }
   if t.charge ≤ c.unsigned.maxCharge then .ok t else .error (.overPrice t.charge)

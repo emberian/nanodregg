@@ -31,16 +31,16 @@ theorem receive_congr {X : Ctx D} {w₁ w₂ : World D} {c : Call D}
     · simp only [hx]; rfl
   unfold receive; rw [hv]
 
-omit [Ord D] in
 /-- A sealed Turn pays exactly its weight, within the signed ceiling, and carries the caller's
-pins as its touches, its window and its call; its one effect is on a pinned cell. -/
-theorem sealTurn_ok {X : Ctx D} {c : Call D} {cr : List Cell} {ef : Option (D × Act)}
-    {t : Turn D} (h : sealTurn X c cr ef = .ok t) :
+pins as its touches, its window, its call and the receiver's nullifiers; every effect is on a
+pinned cell. -/
+theorem sealTurn_ok {X : Ctx D} {c : Call D} {cr : List Cell} {efs : List (D × Act)}
+    {ns : List D} {t : Turn D} (h : sealTurn X c cr efs ns = .ok t) :
     t.charge = t.weight ∧ t.charge ≤ c.unsigned.maxCharge ∧
-      t.touches = touchesOf c.unsigned.pins ef ∧
+      t.touches = touchesOf c.unsigned.pins efs ∧
       t.event = X.callBytes c ∧ t.txId = txIdOf X c ∧ t.notBefore = c.unsigned.notBefore ∧
-      t.validUntil = c.unsigned.validUntil ∧ t.creates = cr ∧ t.nullifiers = [] ∧
-      (∀ e ∈ ef, ∃ p ∈ c.unsigned.pins, p.1 = e.1) := by
+      t.validUntil = c.unsigned.validUntil ∧ t.creates = cr ∧ t.nullifiers = ns ∧
+      (∀ e ∈ efs, ∃ p ∈ c.unsigned.pins, p.1 = e.1) := by
   unfold sealTurn at h
   simp only [except_bind_ok] at h
   obtain ⟨⟨⟩, hp, h⟩ := h
@@ -49,37 +49,34 @@ theorem sealTurn_ok {X : Ctx D} {c : Call D} {cr : List Cell} {ef : Option (D ×
     subst h
     refine ⟨rfl, by assumption, rfl, rfl, rfl, rfl, rfl, rfl, rfl, ?_⟩
     intro e he
-    cases ef with
-    | none => simp at he
-    | some e' =>
-        simp only [Option.mem_def, Option.some.injEq] at he
-        subst he
-        simp only [effectPinned, req_ok] at hp
-        obtain ⟨p, hp, hpe⟩ := List.any_eq_true.mp hp
-        exact ⟨p, hp, of_decide_eq_true hpe⟩
+    unfold effectsPinned at hp
+    simp only [except_bind_ok] at hp
+    obtain ⟨⟨⟩, hall, _⟩ := hp
+    have := (forEx_ok.mp hall) e he
+    rw [req_ok] at this
+    obtain ⟨p, hp, hpe⟩ := List.any_eq_true.mp this
+    exact ⟨p, hp, of_decide_eq_true hpe⟩
   · simp at h
 
 omit [Ord D] in
-theorem touchesOf_pins (pins : List (D × D)) (ef : Option (D × Act)) :
-    (touchesOf pins ef).map (fun x => (x.cell, x.seen)) = pins := by
+theorem touchesOf_pins (pins : List (D × D)) (efs : List (D × Act)) :
+    (touchesOf pins efs).map (fun x => (x.cell, x.seen)) = pins := by
   induction pins with
   | nil => rfl
   | cons p rest ih => simp only [touchesOf, List.map_cons] at ih ⊢; rw [ih]
 
-omit [Ord D] in
 /-- Every derivation of a kind ends in a seal of the call. -/
 theorem dispatch_sealed {X : Ctx D} {look : Pinned D} {c : Call D} {b : Body D} {t : Turn D}
-    (h : dispatch X look c b = .ok t) : ∃ cr ef, sealTurn X c cr ef = .ok t := by
+    (h : dispatch X look c b = .ok t) : ∃ cr efs ns, sealTurn X c cr efs ns = .ok t := by
   cases b <;>
     simp only [dispatch, enroll, rotate, install, create, write, law, invoke, grant, revoke,
       except_bind_ok] at h <;>
-    (repeat' (first | (obtain ⟨_, _, h⟩ := h) | exact ⟨_, _, h⟩))
+    (repeat' (first | (obtain ⟨_, _, h⟩ := h) | exact ⟨_, _, _, h⟩))
 
-omit [Ord D] in
 theorem receiveWith_sealed {X : Ctx D} {look : Pinned D} {c : Call D} {t : Turn D}
     (h : receiveWith X look c = .ok t) :
     X.verify c.unsigned.key (X.unsignedBytes c.unsigned) c.signature = true ∧
-      ∃ cr ef, sealTurn X c cr ef = .ok t := by
+      ∃ cr efs ns, sealTurn X c cr efs ns = .ok t := by
   unfold receiveWith at h
   simp only [except_bind_ok] at h
   obtain ⟨⟨⟩, hs, ⟨⟩, _, h⟩ := h
@@ -97,11 +94,10 @@ theorem receive_ok {X : Ctx D} {w : World D} {c : Call D} {t : Turn D}
       t.touches.map (fun x => (x.cell, x.seen)) = c.unsigned.pins ∧
       t.event = X.callBytes c ∧ t.txId = txIdOf X c ∧ t.notBefore = c.unsigned.notBefore ∧
       t.validUntil = c.unsigned.validUntil := by
-  obtain ⟨hv, cr, ef, hs⟩ := receiveWith_sealed h
+  obtain ⟨hv, cr, efs, ns, hs⟩ := receiveWith_sealed h
   obtain ⟨h1, h2, h3, h4, h5, h6, h7, _⟩ := sealTurn_ok hs
   exact ⟨hv, h1, h2, by rw [h3]; exact touchesOf_pins _ _, h4, h5, h6, h7⟩
 
-omit [Ord D] in
 /-- Every call but a rotation is signed by its member's current key. -/
 theorem receiveWith_key {X : Ctx D} {look : Pinned D} {c : Call D} {t : Turn D}
     (h : receiveWith X look c = .ok t) : keyRule look c.unsigned = .ok () := by

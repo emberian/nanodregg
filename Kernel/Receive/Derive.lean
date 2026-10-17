@@ -32,8 +32,8 @@ def diffOps (old new : Slots) : List Op :=
   (old.filter fun p => (new.get p.1).isNone).map (fun p => .erase p.1)
 
 /-- A write of `ops` to `cell`, or no effect when there are none. -/
-def writeOf (cell : D) (ops : List Op) : Option (D × Act) :=
-  if ops.isEmpty then none else some (cell, .write ops)
+def writeOf (cell : D) (ops : List Op) : List (D × Act) :=
+  if ops.isEmpty then [] else [(cell, .write ops)]
 
 def stateOf (cell : Cell) : Slots := cell.slots.filter fun p => stateBase ≤ p.1
 
@@ -121,7 +121,7 @@ def enroll (X : Ctx D) (look : Pinned D) (c : Call D) (key : ByteArray) (next : 
   req (X.verify key (possessionMessage X u.member next key) possession) .badPossession
   let slots := slotsOf [(slotKey, key), (slotNext, X.env.bytes next),
     (slotSponsor, X.env.bytes u.member)]
-  sealTurn X c [{ kind := kindMember, discipline := .ram, slots }] spend
+  sealTurn X c [{ kind := kindMember, discipline := .ram, slots }] spend.toList []
 
 /-- Signed by the new key; the new key's digest must be the one precommitted. -/
 def rotate (X : Ctx D) (look : Pinned D) (c : Call D) (key : ByteArray) (next : D) :
@@ -132,13 +132,13 @@ def rotate (X : Ctx D) (look : Pinned D) (c : Call D) (key : ByteArray) (next : 
   let committed ← slotDigest X u.member m slotNext
   req (committed = nextKeyDigest X key) (.notPrecommitted u.member)
   let ops := [Op.set slotKey key, Op.set slotNext (X.env.bytes next)]
-  sealTurn X c [] (some (u.member, .write ops))
+  sealTurn X c [] [(u.member, .write ops)] []
 
 /-- `install pkg`: a ROM package cell, its id its content digest (KERNEL-3). -/
 def install (X : Ctx D) (look : Pinned D) (c : Call D) (pkg : ByteArray) :
     Except (Refusal D) (Turn D) := do
   X.program.checkInstall look pkg
-  sealTurn X c [{ kind := kindPackage, discipline := .rom, slots := [(0, pkg)] }] none
+  sealTurn X c [{ kind := kindPackage, discipline := .rom, slots := [(0, pkg)] }] [] []
 
 def objectCell (X : Ctx D) (owner : D) (pkg : Option D) (laws : List D) (state : Slots) : Cell :=
   { kind := kindObject, discipline := .ram,
@@ -157,7 +157,7 @@ def create (X : Ctx D) (look : Pinned D) (c : Call D) (pkg : Option D) (laws : L
   checkLaws look laws
   checkState state
   X.program.judge look pkg laws state state (reqOf u u.member)
-  sealTurn X c [objectCell X u.member pkg laws state] none
+  sealTurn X c [objectCell X u.member pkg laws state] [] []
 
 def applyEdits (s : Slots) (edits : List (Nat × Option ByteArray)) : Slots :=
   edits.foldl (fun s e => match e.2 with
@@ -176,7 +176,7 @@ def write (X : Ctx D) (look : Pinned D) (c : Call D) (obj : D)
   let new := applyEdits old edits
   let laws ← lawsOf X obj cell
   X.program.judge look none laws old new (reqOf u principal)
-  sealTurn X c [] (writeOf obj (diffOps old new))
+  sealTurn X c [] (writeOf obj (diffOps old new)) []
 
 /-- Replace a data object's extra laws; the laws in force judge the change. -/
 def law (X : Ctx D) (look : Pinned D) (c : Call D) (obj : D) (laws' : List D) (via : Option D) :
@@ -189,7 +189,7 @@ def law (X : Ctx D) (look : Pinned D) (c : Call D) (obj : D) (laws' : List D) (v
   checkLaws look laws'
   let laws ← lawsOf X obj cell
   X.program.judge look none laws (stateOf cell) (stateOf cell) (reqOf u principal)
-  sealTurn X c [] (writeOf obj (diffOps (lawSlotsOf cell) (lawSlots X laws')))
+  sealTurn X c [] (writeOf obj (diffOps (lawSlotsOf cell) (lawSlots X laws'))) []
 
 def requireMethods (obj : D) : Option D → Except (Refusal D) D
   | none => .error (.noMethods obj)
@@ -208,7 +208,7 @@ def invoke (X : Ctx D) (look : Pinned D) (c : Call D) (obj : D) (method : Nat) (
   checkState new
   let laws ← lawsOf X obj cell
   X.program.judge look (some p) laws old new r
-  sealTurn X c [] (writeOf obj (diffOps old new))
+  sealTurn X c [] (writeOf obj (diffOps old new)) []
 
 /-- The enrolment count a list of rights grants (several `enroll` rights add up). -/
 def enrollUnits : List Right → Nat
@@ -252,7 +252,7 @@ def grant (X : Ctx D) (look : Pinned D) (c : Call D) (target grantee : D) (right
   let slots := slotsOf ([(grantTarget, X.env.bytes target), (grantGrantee, X.env.bytes grantee),
       (grantIssuer, X.env.bytes u.member)] ++
     (parent.map fun p => (grantParent, X.env.bytes p)).toList ++ rightSlots rights)
-  sealTurn X c [{ kind := kindGrant, discipline := .appendOnly, slots }] carve
+  sealTurn X c [{ kind := kindGrant, discipline := .appendOnly, slots }] carve.toList []
 
 /-- The issuer retires a grant; every chain through it dies with it. -/
 def revoke (X : Ctx D) (look : Pinned D) (c : Call D) (g : D) : Except (Refusal D) (Turn D) := do
@@ -260,7 +260,7 @@ def revoke (X : Ctx D) (look : Pinned D) (c : Call D) (g : D) : Except (Refusal 
   let cell ← readKind look g kindGrant
   let issuer ← slotDigest X g cell grantIssuer
   req (issuer = u.member) (.notIssuer g)
-  sealTurn X c [] (some (g, .retire))
+  sealTurn X c [] [(g, .retire)] []
 
 def dispatch (X : Ctx D) (look : Pinned D) (c : Call D) : Body D → Except (Refusal D) (Turn D)
   | .enroll key next possession via => enroll X look c key next possession via

@@ -573,3 +573,101 @@ Status: proposed (ROOT to rule on (e) and the nullifier question before the flag
   so it refolds, but a stored base's chain no longer matches, so Stores re-genesis.
 - The Turn codec is unchanged. PROTOCOL gains a head record (height, prev, turnDigest, root) and
   the `read` reply gains a `Proof`.
+
+## LEDGER-1 · `sealTurn` takes a list of effects and the receiver's nullifiers (BUILD-LEDGER, 2026-10-16)
+**Decision.** The brief's D2. `sealTurn X c creates (effects : List (D × Act)) (nullifiers : List D)`.
+`actFor` takes the effect on the cell (`find?`), `keep` otherwise; `effectsPinned` refuses an
+effect on an unpinned cell (`unpinned`, as before) and two effects on one cell (new Refusal
+`duplicateEffect`). Every existing receiver passes `[]` or `[e]` (`writeOf` and `spendEnroll`'s
+option as `.toList`) and `[]` nullifiers. Restated: `sealTurn_ok` (now also `t.nullifiers = ns`),
+`touchesOf_pins`, `dispatch_sealed`, `receiveWith_sealed`, `sealTurn_creates`, `enroll_authorized`,
+`grant_carves`. `sealTurn` now needs `Ord D` (`firstDup`), so eleven receiver theorems lost their
+`omit [Ord D]`. CONTROL: `kernel-sim --seeds 64` admitted=2554 restarts=929 unchanged, every
+Turn byte-identical (refused-as-expected 5474 → 5979 only from the new probe). Plant: the
+duplicate check off ⇒ 63/64 seeds red ("probe: two effects on one cell sealed").
+**Alternatives.** A transfer as two turns (not atomic: a debit without its credit is observable).
+A transfer-specific seal (two seals, law 1). Effects as `D → Act` (duplicates unrepresentable, but
+an effect on an unpinned cell is then silently dropped: a buggy receiver loses a write without a
+name). Building the touches from the effects so a duplicate becomes the kernel's `duplicateTouch`
+(one name for one fact, but the touches would no longer be the caller's pins in the caller's
+order, which `receive_ok` states and `stale_named`'s precedence relies on).
+**Critique.** KERNEL-11's "a receiver changes one cell" was structural; it is now a property of
+each receiver again. `duplicateEffect` names a state no honest receiver produces, so the Sim meets
+it with a direct `sealTurn` probe (`probeSeal`), not through a signed call: a test of the seal,
+not of any receiver. The door KERNEL-20 closed (a list effect for per-link enrolment carving) is
+open again.
+**Meta-critique.** Shaped by transfer, which is the deliverable I was handed. The independent test:
+PROTOCOL's `pay` row was already blocked on "no receiver puts a nullifier in a Turn", and LANG-13's
+option (a) needs the same list, before any ledger existed.
+Status: built.
+
+## LEDGER-2 · Value is a kernel discipline: balance AND floor conserved per denomination (BUILD-LEDGER, 2026-10-16)
+**Decision.** (ROOT accepted attacks A and C of LEDGER-0 over the brief's D1.)
+(a) `Discipline.value`: a cell whose slots are RAM, three of which the kernel reads
+(`Value.denomKey 8`, `balanceKey 9`, `floorKey 10`: the denomination's bytes, CODEC `i64`, CODEC
+`u64`). `Value.ofCell` decodes them; a live value cell that does not decode is refused
+`valueMalformed`, one whose balance is below minus its floor `belowFloor`. Both are judged in
+`touchCheck` on the post-cell from its one lookup, so cells-touched stays 1.0; a touch's `Post`
+carries its value FLOWS (the pre-cell's balance and floor negated, the post-cell's added).
+(b) `checkValue` (after the touches, before the nullifiers) adds the born value cells' flows and
+accumulates per denomination into an association list, refused `overBound denoms` past
+`Bounds.denomsMax = 8` distinct denominations in one turn (O(touches), not a sort). Every
+denomination's balance flow must be 0 (`notConserved d`), and its floor flow 0
+(`floorNotConserved d`) unless `d` is the bytes of an id this turn bears: the denomination's birth
+is the only turn that sets its total floor.
+(c) No mint and no burn: a relabelled denomination, an account closed into another
+(retire A(10) + credit B 10), a born cell with a balance: all are the same arithmetic.
+Theorems (Kernel/Proofs/Value.lean): `admit_value` (∀ d, `w'.valueSum d = w.valueSum d`, an
+EQUALITY in KERNEL-19's style, for ANY admitted turn), `fold_value`, `admit_floors` (the floor
+sum of every denomination the turn does not bear is unchanged), `admit_floorOk` (every live value
+cell stays within its floor), `outstanding_le_floors` (Σ positive balances ≤ Σ floors on a World
+whose value sum is 0), and the cap: before its birth turn a denomination's floor sum is 0
+(given digest bytes injective), so its total floor is fixed at birth forever and outstanding ≤ it.
+**Alternatives.** Receiver-only conservation plus the audit (`rederive` compares a receiver with
+itself, so a buggy receiver passes). A LANG `conserve` law (per-package, optional). Balance only,
+with the cap as a receiver theorem (`dispatch_value_born` alone: a LANG posting or a buggy receiver
+births a floored cell). A sort-and-group check (O(t log t) and a sortedness proof) or an O(t²) one.
+The headroom encoding (store `balance + floor` as u64: `belowFloor` unrepresentable, but the
+solvency rule moves into every receiver's arithmetic, and a floor change rewrites two slots).
+**Critique.** The kernel TCB learns money: a signed number, a floor, a denomination, four Reject
+names, one Bound, a consensus-critical sum. Kernel/Cell.lean's header ("what the bytes mean (a
+balance …) is not the kernel's business") is amended, not ignored. Two conserved quantities now
+have two mechanisms (the storage allowance a World field, value a discipline). The value check
+reads three slots of every touched value cell: O(cell), bounded. Eight denominations per turn is a
+policy, not a derivation (a DvP swap needs 2; a fee in a third asset 3). Floors conserved means a
+credit line can only be carved from the well's unissued headroom; an issuer who wants to raise a
+cap must issue a new denomination. Every follower sees every balance (no privacy: declared absent).
+**Meta-critique.** Two scouts named the idea and nobody priced it; I may like it for novelty. The
+independent test is the buggy-receiver argument plus LANG postings multiplying writers past what
+per-receiver proofs can cover. Conserving the floors too is the move I find prettiest, which is a
+reason to check it: it is what makes pug's three rules (debit to minus the floor; capped well;
+outstanding ≤ Σ floors) one kernel invariant instead of three receiver promises, and it deletes
+the need for a separate setFloor authority (LEDGER-3).
+Status: in progress.
+
+## LEDGER-3 · Three ledger receivers; the well's own id is the denomination (BUILD-LEDGER, 2026-10-16)
+**Decision.** (ROOT accepted attack B.) `Body.issue (cap)`: bears ONE cell, the WELL: kind
+`kindAccount 6`, `.value`, owner the signer, denomination the bytes of its own id
+(`cellIdOf txId 0`: tx-derived, so no cycle), balance 0, floor `cap` (`overflow` past 2^63, where
+`-cap` stops being an i64). `Body.open (asset)`: bears an account (owner the signer, the asset's
+denomination, balance 0, floor 0) WITHOUT reading the well, so opening never pins the hot cell.
+`Body.transfer (src dst amount via once)`: both pinned live accounts (`wrongKind` / `malformedCell`
+otherwise), `ownerAuthority … .mutate via` on `src` (grants work unchanged), `sameAccount`,
+`zeroAmount`, `assetMismatch dst`, `overflow` when a post balance leaves i64; two effects (each
+balance slot set), and `once.map (onceNullifier X src)`: `H(domOnce, bytes src ‖ key)`, so a
+signer can only spend its own source's namespace. Minting is a transfer out of the well, burning
+one into it. There is NO receiver solvency check: `belowFloor` is the one name. A credit line
+(the second deliverable) is a floor transfer out of the well, judged by the kernel's floor sum.
+The asset ROM cell of the brief (`kindAsset`) does not exist: it held the issuer, the well id and
+the cap, all of which the well holds.
+**Alternatives.** The brief's asset ROM + well (two cells per issue, a content id naming a tx id).
+Open-on-first-credit (one receiver, two shapes). Opening through the well (pins the hot cell:
+every open conflicts with every mint). One `Body.ledger` sub-tag (PROTOCOL-1 rejected sub-tags).
+**Critique.** Call kinds 9 → 12 against a ceiling of 10 (SIZE-CEILING with this argument). Refusal
+constructors +4. An account can be opened for a denomination nobody has issued (junk, paid for by
+its storage charge, and inert: floor 0, nothing can reach it). A caller-chosen `once` key binds
+only an honest signer: it is an idempotency key, not an observation proof. The well is a hot cell:
+every mint and burn pins it, so concurrent minters conflict `stale`.
+**Meta-critique.** Deleting the asset cell is the law-1 move I wanted; the test is that nothing
+reads it: `open` does not, `transfer` reads only accounts, and the cap is the kernel's floor sum.
+Status: in progress.
