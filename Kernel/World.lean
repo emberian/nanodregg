@@ -9,7 +9,8 @@ hash collision as an explicit disjunct, and the simulation can run toy parameter
 same `admit`. There is one deployed `Env` (CODEC's digest and hash).
 
 Order of the checks (each refuses by name, nothing is written before all pass):
-bounds → journal (an exact retry is `replayed` whatever else holds) → shape → window → touches
+bounds → window (an expired retry is `outsideWindow`, whether or not its entry was pruned:
+KERNEL-33) → journal (an exact retry inside its window is `replayed`) → shape → touches
 (ONE lookup per touched cell: its pin, the one staleness refusal, then its write or retirement,
 and a written value cell's decoding and floor) → value (born value cells, then every
 denomination's balance and floor sums: LEDGER-2) → nullifiers → charge → created ids.
@@ -289,10 +290,12 @@ def _root_.Nanodregg.Kernel.cellsWeight (m : Cells D) : Nat :=
   (m.toList.map fun p => p.2.weight).sum
 
 /-- The storage a World holds, by the same per-field costs as `Turn.weight`: each cell entry with
-its id, each spent nullifier, each journal entry. A specification measure (O(store)), never
-computed on the request path; `Kernel.Proofs.Weight` bounds it by the budget spent. -/
+its id and each spent nullifier. The journal is not in it: it is pruned to the window
+(`pruneJournal`, KERNEL-33), so it is a bounded overhead (`journal_bounded`: fewer than
+`3 * Bounds.windowMax` entries), not storage a turn buys. A specification measure (O(store)),
+never computed on the request path; `Kernel.Proofs.Weight` bounds it by the budget spent. -/
 def weight (w : World D) : Nat :=
-  cellsWeight w.trie + journalWeight * w.journal.size
+  cellsWeight w.trie
 
 end World
 
@@ -485,9 +488,9 @@ def checkValue (E : Env D) (t : Turn D) (posts : List (Post D)) : Except (Reject
 /-- Every check, against the pre-state only; on success, what the touches leave behind. -/
 def check (E : Env D) (w : World D) (t : Turn D) : Except (Reject D) (List (Post D)) := do
   checkBounds t
+  checkWindow w t
   checkJournal w t
   checkShape t
-  checkWindow w t
   let posts := (← mapEx (touchCheck E w) t.touches).reduceOption
   checkValue E t posts
   checkNullifiers E w t
@@ -511,11 +514,30 @@ def commitTrie (E : Env D) (w : World D) (t : Turn D) (posts : List (Post D)) : 
   spendAll E (insertAll E (insertAll E w.trie (posts.map Post.pair)) (bornEntries t)) t.nullifiers
 
 
+/-- A journal entry `(h, d)` is still kept at height `H`: fewer than `2 * Bounds.windowMax`
+heights have passed since it was admitted (KERNEL-33). A call admitted at `h` has
+`notBefore ≤ h`, so its entry answers every lookup at a height below `notBefore + 2 * windowMax`
+(`journalForgets`): at least `windowMax` heights after its window ends. -/
+def kept (H : Nat) (e : Nat × D) : Bool := decide (H < e.1 + 2 * Bounds.windowMax)
+
+/-- The journal at height `H`: at every multiple of `Bounds.windowMax`, the entries no longer
+`kept` are dropped; between multiples it is unchanged. One pass over at most
+`3 * Bounds.windowMax` entries once per `windowMax` heights (amortized: at most three entries
+scanned per turn), and one structure (no second index by height). -/
+def pruneJournal (H : Nat) (j : Std.TreeMap D (Nat × D) compare) : Std.TreeMap D (Nat × D) compare :=
+  if H % Bounds.windowMax = 0 then j.filter fun _ e => kept H e else j
+
+/-- Whether a World at height `H` can no longer answer for a call with window start `notBefore`:
+its entry, if it was admitted, may have been pruned. Below this height an absent transaction id
+was never admitted (`Kernel.Proofs.Journal.fold_retains`); at and past it, absence says nothing
+(HOST answers `forgotten`, uncertain, never `expired`). -/
+def journalForgets (H notBefore : Nat) : Bool := decide (notBefore + 2 * Bounds.windowMax ≤ H)
+
 /-- The World after a checked turn. Total: everything that can fail failed in `check`. -/
 def commit (E : Env D) (w : World D) (t : Turn D) (posts : List (Post D)) : World D :=
   let trie := commitTrie E w t posts
   { trie
-    journal := w.journal.insert t.txId (w.height + 1, turnDigest E t)
+    journal := pruneJournal (w.height + 1) (w.journal.insert t.txId (w.height + 1, turnDigest E t))
     height := w.height + 1
     chain := chainNext E w.chain t (trie.hashOf (trieSpec E))
     allowance := w.allowance + credit posts - t.charge

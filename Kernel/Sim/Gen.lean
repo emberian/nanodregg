@@ -176,6 +176,11 @@ structure State (D : Type) [Ord D] where
   treeDone : Bool := false
   /-- admitted turns whose record bytes were compared with `Turn.logWeight` (at a 32-byte digest) -/
   weighed : Nat := 0
+  /-- KERNEL-33's journal probe: the most entries any probe World held, the entries its prunes
+  scanned, and the turns it admitted -/
+  journalMax : Nat := 0
+  journalScanned : Nat := 0
+  journalTurns : Nat := 0
 
 def nameOf {α : Type} [Repr α] (a : α) : String :=
   match (reprStr a).splitOn " " with
@@ -1081,6 +1086,64 @@ def probeGenesis (P : Params D) (st : State D) (founders : List (ByteArray × D)
   | .error r => failWith st s!"probe genesis: expected founderKeyTooLong, got {r.name}"
   | .ok _ => failWith st "probe genesis: a founder key past eventBytesMax was admitted"
 
+/-- An empty turn of the journal probe: transaction id `i`'s digest, window `[nb, vu]`, priced. -/
+def journalTurn (P : Params D) (i nb vu : Nat) : Turn D :=
+  let t0 : Turn D :=
+    { txId := P.env.hash "nanodregg/sim/journal-tx" (toString i).toUTF8, notBefore := nb, validUntil := vu,
+      touches := [], creates := [], nullifiers := [], charge := 0, event := ByteArray.empty }
+  { t0 with charge := t0.weight }
+
+/-- One verdict of the journal probe, by name. -/
+def journalExpect (P : Params D) (st : State D) (w : World D) (t : Turn D) (what want : String) : State D :=
+  let got := match World.admit P.env w t with
+    | .ok _ => "ok"
+    | .error r => r.name
+  if got = want then
+    { st with refusedAsExpected := st.refusedAsExpected + 1, seen := s!"{what}:{want}" :: want :: st.seen }
+  else failWith st s!"probe journal {what}: expected {want}, got {got}"
+
+/-- The journal probe (KERNEL-33), on seed 0: `3 * windowMax + 2` empty turns from an empty World,
+turn `i` at height `i + 1` inside window `[i + 1, i + 1]`. Every World holds fewer than
+`3 * windowMax` entries (`journal_bounded`), and every turn whose `notBefore + 2 * windowMax` is
+above the height is still journaled (`fold_answers`). At the end: turn 0's entry is pruned; its
+own window is refused `outsideWindow` (`journal-expired`), a kept entry's own window is refused
+`outsideWindow` too, though its entry is there (`journal-window-first`: the window is checked
+first, so pruning changes no verdict), a fresh window on a kept id is `replayed`
+(`journal-kept`), and a fresh window on the pruned id is admitted (`journal-reuse`: at bare
+`admit` two admissions of one id are only spaced, `admit_spacing`; `submit_once` is what makes a
+call once). -/
+def probeJournal (P : Params D) (st : State D) (seed : Nat) : State D :=
+  if seed ≠ 0 then st else
+  let W := Bounds.windowMax
+  let n := 3 * W + 2
+  let step := fun (acc : Except String (World D × Nat × Nat)) (i : Nat) =>
+    match acc with
+    | .error e => .error e
+    | .ok (w, mx, scanned) =>
+      let H := w.height + 1
+      let scan := if H % W = 0 then w.journal.size + 1 else 0
+      match World.admit P.env w (journalTurn P i H H) with
+      | .ok w' =>
+          if w'.journal.size < 3 * W then .ok (w', max mx w'.journal.size, scanned + scan)
+          else .error s!"journal holds {w'.journal.size} entries at height {w'.height}"
+      | .error r => .error s!"journal turn {i} refused {r.name}"
+  match (List.range n).foldl step (.ok (World.genesis P.env P.zero 100000000, 0, 0)) with
+  | .error e => failWith st s!"probe journal: {e}"
+  | .ok (w, mx, scanned) =>
+      let st := { st with journalMax := mx, journalScanned := scanned, journalTurns := n }
+      let tx := fun i => P.env.hash "nanodregg/sim/journal-tx" (toString i).toUTF8
+      let missing := (List.range n).filter fun i =>
+        !journalForgets w.height (i + 1) && (w.journal[tx i]?).isNone
+      if !missing.isEmpty then failWith st s!"probe journal: ids {missing.take 4} unanswered below journalForgets"
+      else if (w.journal[tx 0]?).isSome then failWith st "probe journal: turn 0's entry was never pruned"
+      else
+        let H := w.height + 1
+        let k := 2 * W + 5
+        let st := journalExpect P st w (journalTurn P 0 1 1) "journal-expired" "outsideWindow"
+        let st := journalExpect P st w (journalTurn P k (k + 1) (k + 1)) "journal-window-first" "outsideWindow"
+        let st := journalExpect P st w (journalTurn P k H H) "journal-kept" "replayed"
+        journalExpect P st w (journalTurn P 0 H H) "journal-reuse" "ok"
+
 def run (P : Params D) (seed : Nat) (steps : Nat) : State D :=
   let rng : Rng := ⟨seed.toUInt64 * 0x2545F4914F6CDD1D + 1⟩
   let fk : List (ByteArray × ByteArray) :=
@@ -1095,7 +1158,7 @@ def run (P : Params D) (seed : Nat) (steps : Nat) : State D :=
   let holds := (List.range fk.length).map fun i =>
     (founderId X g.origin i, (⟨[founderGrantId X g.origin i], true, enrollMax⟩ : Holding D))
   let st0 : State D := { rng, host := g, members, holds }
-  let st0 := probeGenesis P st0 founders
+  let st0 := probeJournal P (probeGenesis P st0 founders) seed
   -- install the deny-all law package first
   let f := founder0 P st0
   let c := signed P st0 f f.key (S.pinsFor P.env g [f.id]) (.install denyAll)
@@ -1195,7 +1258,8 @@ def plantedArms : List String :=
    "account-twice:idTaken", "account-for-other:ok", "transfer-ref-not-well:notWell",
    "object-pays:ok", "object-pays-twice:spent", "reenter:revisited", "call-not-callable:notCallable",
    "too-many-calls:tooManyCalls", "over-ticks:overTicks", "grant-to-object:ok", "call-chain:ok",
-   "call-too-deep:callTooDeep"]
+   "call-too-deep:callTooDeep", "journal-expired:outsideWindow", "journal-window-first:outsideWindow",
+   "journal-kept:replayed", "journal-reuse:ok"]
 
 /-- `--seeds N` runs seeds `0 … N-1`; otherwise each argument is a seed. -/
 def parseSeeds : List String → List Nat
@@ -1214,12 +1278,14 @@ def report (P : Params D) (seeds : List Nat) : IO UInt32 := do
   let mut seen : List String := []
   let mut hashes : Nat × Nat × Nat × Nat := (0, 0, 0, 0)
   let mut weighed := 0
+  let mut journal : Nat × Nat × Nat := (0, 0, 0)
   for seed in seeds do
     let st := run P seed 120
     let (a, b) := maxWork st.log
     work := (max work.1 a, max work.2 b)
     admitted := admitted + st.admitted
     weighed := weighed + st.weighed
+    journal := (max journal.1 st.journalMax, journal.2.1 + st.journalScanned, journal.2.2 + st.journalTurns)
     refused := refused + st.refusedAsExpected
     restarts := restarts + st.restarts
     hashes := (hashes.1 + st.cellHashes, hashes.2.1 + st.cellSlots, hashes.2.2.1 + st.nullHashes,
@@ -1244,6 +1310,8 @@ def report (P : Params D) (seeds : List Nat) : IO UInt32 := do
   IO.println s!"WASTE fold work-per-turn {showRatio work.2}"
   IO.println s!"WASTE admit hashes-per-touched-cell {showRatio (ratio hashes.1 hashes.2.1)}"
   IO.println s!"WASTE admit hashes-per-nullifier {showRatio (ratio hashes.2.2.1 hashes.2.2.2)}"
+  IO.println s!"WASTE admit journal-entries-per-window {showRatio (ratio journal.1 Bounds.windowMax)}"
+  IO.println s!"WASTE admit journal-scanned-per-turn {showRatio (ratio journal.2.1 journal.2.2)}"
   if bad = 0 then IO.println "ALL PASS"
   return if bad = 0 then 0 else 1
 

@@ -19,6 +19,7 @@ collision.
 -/
 import Host.Serve
 import Kernel.Proofs.Fold
+import Kernel.Proofs.Journal
 
 namespace Nanodregg.Host
 
@@ -32,11 +33,21 @@ theorem step_submit (X : Ctx D) (w : World D) (out : Out (Turn D × D)) (q : Req
         (match submit X w c with | .ok (_, w') => w' | .error _ => w) ∧
       ((machine X).step (w, out) q).2.staged =
         (match submit X w c with | .ok (t, w') => out.staged.push (t, World.root X.env w') | .error _ => out.staged) := by
+  cases hfg : journalForgets w.height c.unsigned.notBefore
+  case true =>
+    cases hj : w.journal[txIdOf X c]? with
+    | some p => simp [Machine.step, machine, handle, hop, hc, submit, hj]
+    | none =>
+      have hs := submit_forgotten (X := X) hfg
+      cases hsub : submit X w c with
+      | ok r => exact absurd hsub (hs r)
+      | error v => simp [Machine.step, machine, handle, hop, hc, hj, hfg]
+  case false =>
   simp only [Machine.step, machine, handle, hop, hc, submit]
   cases hj : w.journal[txIdOf X c]? with
   | some p => simp
   | none =>
-    simp only
+    simp only [hfg, Bool.false_eq_true, if_false]
     cases hr : receive X w c with
     | error r => simp
     | ok t =>
@@ -82,9 +93,19 @@ theorem hangup_reply_is_ack (r : Protocol.CloseReason) :
 
 theorem handle_lookup_expired (X : Ctx D) (w : World D) (f : Frame) (c : Call D)
     (hop : Protocol.Op.ofCode? f.op = some .lookup) (hc : X.decodeCall f.payload = some c)
-    (hj : w.journal[txIdOf X c]? = none) (hv : c.unsigned.validUntil ≤ w.height) :
+    (hj : w.journal[txIdOf X c]? = none) (hnf : journalForgets w.height c.unsigned.notBefore = false)
+    (hv : c.unsigned.validUntil ≤ w.height) :
     handle X w f = .reply Protocol.Status.refused.code "expired".toUTF8 := by
-  simp only [handle, hop, hc, hj, hv, if_true, named, FrameRefusal.name]
+  simp only [handle, hop, hc, hj, hnf, hv, if_true, named, FrameRefusal.name]
+  rfl
+
+/-- Past `journalForgets` an un-journaled call's lookup is `uncertain forgotten` (KERNEL-33): its
+entry may have been pruned, so neither `expired` nor `absent` would be true. -/
+theorem handle_lookup_forgotten (X : Ctx D) (w : World D) (f : Frame) (c : Call D)
+    (hop : Protocol.Op.ofCode? f.op = some .lookup) (hc : X.decodeCall f.payload = some c)
+    (hj : w.journal[txIdOf X c]? = none) (hfg : journalForgets w.height c.unsigned.notBefore = true) :
+    handle X w f = .reply Protocol.Status.uncertain.code "forgotten".toUTF8 := by
+  simp only [handle, hop, hc, hj, hfg, if_true, forgotten]
 
 /-- **`expired` is final.** Over any admitted log from the World a lookup answered `expired` at,
 the call's transaction id is journaled only by a Turn whose window ends after the call's own:

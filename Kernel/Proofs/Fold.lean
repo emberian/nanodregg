@@ -245,8 +245,8 @@ theorem absent_final [Std.TransOrd D] [Std.LawfulEqOrd D] {E : Env D} {k : D} :
       · exact ⟨t, by simp, hk, by omega⟩
       · have ha₁ : w₁.journal[k]? = none := by
           obtain ⟨_, _, rfl⟩ := admit_ok h₁
-          show (w.journal.insert t.txId _)[k]? = none
-          rw [Std.TreeMap.getElem?_insert]
+          show (pruneJournal _ (w.journal.insert t.txId _))[k]? = none
+          rw [pruneJournal_get, Std.TreeMap.getElem?_insert]
           have : compare t.txId k ≠ .eq := fun he => hk (Std.LawfulEqCmp.eq_of_compare he)
           simp [this, ha]
         obtain ⟨u, hu, huk, hlt⟩ := absent_final h₂ ha₁ hj

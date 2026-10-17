@@ -34,7 +34,7 @@ theorem check_ok {E : Env D} {w : World D} {t : Turn D} {posts : List (Post D)}
   obtain ⟨⟨⟩, h1, ⟨⟩, h2, ⟨⟩, h3, ⟨⟩, h4, raw, h5, ⟨⟩, hv, ⟨⟩, h6, ⟨⟩, h7, ⟨⟩, h8, h9⟩ := h
   simp only [pure, Except.pure, Except.ok.injEq] at h9
   subst h9
-  exact ⟨h1, h2, h3, h4, ⟨raw, h5, rfl⟩, hv, h6, h7, h8⟩
+  exact ⟨h1, h3, h4, h2, ⟨raw, h5, rfl⟩, hv, h6, h7, h8⟩
 
 /-- Every touch of a checked turn passed `touchCheck`. -/
 theorem Checked.touch {E : Env D} {w : World D} {t : Turn D} {posts : List (Post D)}
@@ -87,9 +87,9 @@ theorem admit_charge {E : Env D} {w w' : World D} {t : Turn D}
 
 /-- **The weight bound.** An admitted turn costs at most `Bounds.weightMax`, its log record
 included: the static budget HOST sizes a turn record and a batch by. A batch of `n` admitted
-turns appends at most `n * Bounds.weightMax` record bytes once CODEC's equality
-`(Codec.Kernel.turn dc).size t = t.logWeight` (at the 32-byte digest) is composed with it; that
-equality is CODEC's theorem (owed by CODEC-4 on this weight table), not proved here. -/
+turns appends at most `n * Bounds.weightMax` record bytes, by CODEC's equality
+`Codec.Deployed.turnBytes_size : (env.turnBytes t).size = t.logWeight` (generic:
+`Codec.Kernel.turn_size_logWeight` at any 32-byte digest codec). -/
 theorem admit_weight {E : Env D} {w w' : World D} {t : Turn D}
     (h : World.admit E w t = .ok w') :
     t.charge = t.weight ∧ t.logWeight ≤ t.weight ∧ t.weight ≤ Bounds.weightMax := by
@@ -136,21 +136,35 @@ theorem stale_named {E : Env D} {w : World D} {t : Turn D} {pre post : List (Tou
   unfold World.admit check
   simp [hb, hj, hs, hw, hm, bind, Except.bind]
 
-/-- A retry of an admitted transaction is answered `replayed` with its height, whatever else is
-true of the World now (only the static bounds are checked first). -/
+/-- A retry of an admitted transaction inside its window is answered `replayed` with its
+height, whatever else is true of the World now (only the static bounds and the window are
+checked first: an expired retry is `outsideWindow` whether or not its entry was pruned,
+KERNEL-33). -/
 theorem replay_named {E : Env D} {w : World D} {t : Turn D} {h : Nat} {d : D}
-    (hb : checkBounds t = .ok ()) (hj : w.journal[t.txId]? = some (h, d)) :
+    (hb : checkBounds t = .ok ()) (hw : checkWindow w t = .ok ())
+    (hj : w.journal[t.txId]? = some (h, d)) :
     World.admit E w t = .error (.replayed h) := by
   have : checkJournal w t = .error (.replayed h) := by simp [checkJournal, hj]
   unfold World.admit check
-  simp [hb, this, bind, Except.bind]
+  simp [hb, hw, this, bind, Except.bind]
+
+omit [DecidableEq D] in
+/-- A lookup in the pruned journal: at a multiple of `windowMax`, the entry if it is `kept`;
+otherwise the entry. -/
+theorem pruneJournal_get [Std.TransOrd D] {H : Nat} {j : Std.TreeMap D (Nat × D) compare} {k : D} :
+    (pruneJournal H j)[k]? = if H % Bounds.windowMax = 0 then j[k]?.filter (kept H) else j[k]? := by
+  unfold pruneJournal
+  split
+  · simp only [Std.TreeMap.getElem?_filter]
+    cases j[k]? <;> simp [Option.pfilter, Option.filter]
+  · rfl
 
 /-- An admitted transaction was new, and is journalled at the new height with its digest. -/
 theorem admit_journal [Std.TransOrd D] {E : Env D} {w w' : World D} {t : Turn D}
     (h : World.admit E w t = .ok w') :
     w.journal[t.txId]? = none ∧ w'.journal[t.txId]? = some (w.height + 1, turnDigest E t) := by
   obtain ⟨_, hc, rfl⟩ := admit_ok h
-  refine ⟨?_, by simp [commit]⟩
+  refine ⟨?_, by simp [commit, pruneJournal_get, kept, Bounds.windowMax]⟩
   have hj := hc.journal
   unfold checkJournal at hj
   cases hjt : w.journal[t.txId]? with

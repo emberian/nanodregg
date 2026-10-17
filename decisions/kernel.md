@@ -924,3 +924,81 @@ turn, so every Store re-geneses. A World's storage weight rises by 1 per live ce
 layout changes, nothing re-emits, and no VK or descriptor exists. kernel-sim --seeds 64 ALL PASS
 admitted=3883 refused-as-expected=25113 restarts=975, and the WASTE rows (9.838 / 3.634) equal LEDGER-2's
 D5c measurement. On 7c43273-era main the counts were unchanged by this change (3050 / 20992 / 954).
+
+## KERNEL-33 · The journal is pruned to the window: bounded, every answer it gives true, and a call admitted at most once (KERNEL-8, 2026-10-17; ROOT-approved, from HOST-7's HOST-17 measurement)
+**Defect.** `commit` inserted one journal entry per Turn and nothing removed one. So the World, its
+seal cadence and its base were O(history): 72 deployed bytes per Turn, forever, which breaks law 4.
+**Decision.** (1) At every multiple of `Bounds.windowMax` (W), `commit` filters the journal to the
+`kept` entries, those with `H < h + 2W` (`pruneJournal`). This is one structure, with no second
+by-height index that would have to agree with it. (2) `check` runs the window before the journal.
+An expired retry is then `outsideWindow` whether or not its entry survives, so pruning changes no
+verdict. (3) The journal leaves `World.weight` and `Turn.growth`. It is a bounded overhead of
+every World (< 3W entries), not storage a Turn buys, so weight conservation stays an equality.
+(4) `journalForgets H nb := nb + 2W ≤ H` names the height past which absence says nothing. HOST
+answers there `uncertain forgotten` (on lookup, and on submit of an un-journaled call), never
+`refused expired` and never `absent`.
+**Theorems** (Kernel/Proofs/Journal.lean; every premise is discharged on the deployed path except
+`admit_prune_verdict`'s window premise, see Critique):
+`journal_bounded` (JournalOk ⇒ size < 3W) and `reach_journal_bounded` (every World a genesis
+reaches, with no premise); `admit_retains`, `fold_retains`, and `fold_answers` (an admitted turn is
+journaled at every later height where `journalForgets` is false, which is what keeps HOST's
+`expired` true); `admit_spacing` (at bare `World.admit`, two admissions of one txId are more than
+2W apart); `admit_twice_window` (never twice under one window); `submit_once` (through
+`Receive.submit` a CALL is admitted at most once ever, with no premise and no collision disjunct,
+since one call has one digest and one window); `submit_forgotten` (past `journalForgets` the
+kernel refuses by window); `admit_prune_verdict` (pruning at any `H ≤ height` changes no refusal of
+a turn whose window ends by its entry height + W, i.e. every call-derived retry). Host:
+`handle_lookup_forgotten`; `handle_lookup_expired` now takes `journalForgets = false`;
+`step_submit` still states the step is `Receive.submit`'s.
+**Bare admit vs Receive (ROOT's ruling).** Bare `World.admit` cannot know that a txId is a call's
+digest, so its honest statement is the spacing `admit_spacing`, and the sim arm `journal-reuse:ok`
+admits a pruned txId under a fresh window. Every deployed path reaches `admit` through `receive`:
+the writer through `Receive.submit` (`submit_ok`; HOST's `step_submit`), the follower through the
+audit (`audit_ok`, `Honest`: every logged turn is `receive` of its own event). Two turns derived
+from one call carry its digest and its window (`receive_ok`), so `admit_twice_window` refuses the
+second on both paths: `submit_once` states it for the writer, `derived_once` for any log whose
+turns are `receive` of their calls (the follower's `Honest` log).
+**Teeth.** kernel-sim seed 0 `probeJournal` runs 3W+2 one-turn-per-height admissions. Every World
+stays < 3W, and every id not past `journalForgets` is still journaled. The arms are
+`journal-expired:outsideWindow`, `journal-window-first:outsideWindow` (entry present, window
+first), `journal-kept:replayed` and `journal-reuse:ok`. Mutations, each run on seed 0: checking
+the journal before the window fails `journal-window-first` (got `replayed`); a no-op prune fails
+with "journal holds 3072 entries at height 3072". WASTE rows: `admit journal-entries-per-window`
+2.999 (the static bound is 3) and `admit journal-scanned-per-turn` 1.998 (amortized prune burst).
+**Alternatives.** (a) Prune every turn by a scan: O(W) per turn, which is waste. (b) A by-height
+index beside the journal: O(log) per turn, but two shapes kept in agreement by an invariant. (c)
+Keep `H < h + W`, the least a retry needs. Then a lookup just after a call's window ends could
+already find its entry pruned, and `expired` would lie at once. 2W gives at least W heights of
+truthful `expired` after every window. (d) Keep the journal-first order and prune. Then an expired
+retry's verdict (`replayed` or `outsideWindow`) depends on prune timing, which is a verdict that
+history decides.
+**Critique.** The bound is 3W, not W, which is the price of the amortized prune plus the 2W grace.
+At W = 1024 that is ~3072 × ~72 bytes, about 220 KB per World: constant, but not small for a
+phone-sized World. Pruning is a bounded burst on the request path (up to 3W map operations every
+W heights), and it is measured as an amortized row, not hidden. `forgotten` is a weaker answer
+than the old `ok receipt`: a client that waits more than ~2W heights must resolve its call from
+the log (PROTOCOL-6 owns the row). `admit_prune_verdict`'s window premise is discharged by
+call-derivation but not proved over a fold's provenance, and it compares ONE prune against the
+unpruned World. The deployed World was pruned at every multiple of W; that all past prunes
+equal one prune at the latest multiple (`kept` is monotone in H) is not yet a lemma.
+`submit_once`, `derived_once` and `admit_twice_window` carry the content that matters.
+`reach_journal_bounded` covers Worlds a fold reaches from genesis; a World decoded from a base
+is covered only through the fold that wrote it (no codec theorem carries `JournalOk`). HOST's
+`expired` truth is `fold_answers` + `receive_ok`, not yet chained in a Host theorem (offered to
+HOST-8). `World.weight` no longer counts the journal: total storage is weight plus at most 3W
+journal entries (~220 KB), bounded only by `journal_bounded`, with no single theorem summing the two.
+Second-agent vacuity read done before landing (no vacuity; these gaps are its findings).
+**Meta-critique.** The pull was to state "pruning changes no verdict" for every Turn. That is
+false at bare admit (a recycled txId under a fresh window), and writing the spacing theorem plus
+the reuse arm says so instead of hiding it behind a premise. ROOT's wording was "up to a hash
+collision", but per call no collision is needed, so the theorem is stronger than asked. It covers
+only the same call: two different calls with one digest are still a collision, outside every
+statement here.
+**Flag day.** (1) Every charge falls by `journalWeight` (72), since growth no longer counts the
+journal entry. Every Store re-geneses, and an old log refuses at its first turn with
+`chargeMismatch`. (2) The check order changed, so an expired exact retry is `outsideWindow`, no
+longer `replayed`. (3) World codec: unchanged in layout. A reopened base's journal is whatever was
+written, pruned or not. A base sealed before this change holds an unpruned journal and refuses
+anyway with the charge flag day. (4) Host wire: a lookup or submit of an un-journaled call past
+`notBefore + 2W` now answers `uncertain`/`forgotten` (HOST-7's arm, built here under
+--cross-layer at its invitation). Nothing re-emits.

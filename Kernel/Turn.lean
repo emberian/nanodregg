@@ -85,15 +85,12 @@ def Turn.logWeight {D : Type} (t : Turn D) : Nat :=
     + counterWeight
     + headerWeight + t.event.size
 
-/-- A journal entry: transaction id, height, turn digest. -/
-def journalWeight : Nat := 2 * digestWeight + counterWeight
-
-/-- The most a turn can add to the World (`Kernel.Proofs.Weight.admit_world_weight`): its
-journal entry, each born cell with its id, each write's ops, each spent nullifier. A retirement
-and an overwrite only shrink or keep a cell. -/
+/-- The most a turn can add to the World (`Kernel.Proofs.Weight.admit_world_weight`): each born
+cell with its id, each write's ops, each spent nullifier. A retirement and an overwrite only
+shrink or keep a cell. Its journal entry is not growth: the journal is pruned to the window
+(KERNEL-33), a bounded overhead of every World. -/
 def Turn.growth {D : Type} (t : Turn D) : Nat :=
-  journalWeight
-    + (t.creates.map fun p => digestWeight + p.2.weight).sum
+  (t.creates.map fun p => digestWeight + p.2.weight).sum
     + (t.touches.map fun x => x.act.opsWeight).sum
     + digestWeight * t.nullifiers.length
 

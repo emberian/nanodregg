@@ -8,10 +8,15 @@ is the kernel's or the receive layer's.
   the original receipt and derives nothing (KERNEL-7); otherwise `Receive.receive` derives the Turn
   and the loop admits it with `World.admit`. This is `Receive.submit` cut at the point where the loop
   batches (`Host.Proofs.Serve.admitBatch_submit`).
-* `lookup` — the same call bytes: `ok` with the receipt if journaled; otherwise `refused expired`
-  when the call's signed window ended at or before this World's height (final: it can never be
-  admitted, `Host.Proofs.Serve.lookup_expired_final` over KERNEL's `absent_final`), else `absent`
-  (it may still land: HOST-8).
+* `lookup` — the same call bytes: `ok` with the receipt if journaled; otherwise, once the journal
+  may have pruned the call's entry (`Kernel.journalForgets`: `notBefore + 2 * windowMax ≤ height`,
+  KERNEL-33), `uncertain` with payload `forgotten` (no longer answerable: the outcome is in the
+  log, never `refused`, never `absent`); otherwise `refused expired` when the call's signed window
+  ended at or before this World's height (never committed, `Kernel.fold_answers`, and final: it can
+  never be admitted, `Host.Proofs.Serve.lookup_expired_final` over KERNEL's `absent_final`), else
+  `absent` (it may still land: HOST-8). A `submit` of an un-journaled call past `journalForgets`
+  answers the same `uncertain forgotten`: the kernel would refuse it by its window
+  (`Receive.submit_forgotten`), which for a call committed long ago would be a false `refused`.
 * `log` — PROTOCOL's read envelope (`Envelope.check`: a live member, its current key, the signature,
   a follow grant live to a root, then `validUntil`; refused by `ReadRefusal.payload`, which for
   `expired` states the World's height, PROTOCOL-19) against the World as the batch has advanced it, so
@@ -68,6 +73,11 @@ def FrameRefusal.name : FrameRefusal → String
 def named (name : String) : UInt8 × ByteArray :=
   (Protocol.Status.refused.code, name.toUTF8)
 
+/-- The answer for an un-journaled call past `Kernel.journalForgets` (KERNEL-33): `uncertain`, so
+the client resolves it from the log and never resubmits or concludes `refused`. -/
+def forgotten : UInt8 × ByteArray :=
+  (Protocol.Status.uncertain.code, "forgotten".toUTF8)
+
 def receipt (X : Ctx D) (height : Nat) (d : D) : ByteArray :=
   Codec.Stream.u64.bytes (UInt64.ofNat height) ++ X.env.bytes d
 
@@ -97,6 +107,7 @@ def handle (X : Ctx D) (w : World D) (f : Frame) : Answer (World D) (Turn D) :=
       match w.journal[txIdOf X c]? with
       | some (h, d) => .reply Protocol.Status.ok.code (receipt X h d)
       | none =>
+        if journalForgets w.height c.unsigned.notBefore then refuse forgotten else
         match receive X w c with
         | .error r => refuse (named r.name)
         | .ok t => .admit t fun w' => receipt X w'.height (turnDigest X.env t)
@@ -107,7 +118,8 @@ def handle (X : Ctx D) (w : World D) (f : Frame) : Answer (World D) (Turn D) :=
       match w.journal[txIdOf X c]? with
       | some (h, d) => .reply Protocol.Status.ok.code (receipt X h d)
       | none =>
-        if c.unsigned.validUntil ≤ w.height then refuse (named FrameRefusal.expired.name)
+        if journalForgets w.height c.unsigned.notBefore then refuse forgotten
+        else if c.unsigned.validUntil ≤ w.height then refuse (named FrameRefusal.expired.name)
         else .reply Protocol.Status.absent.code ByteArray.empty
   | some .read =>
     match Protocol.Envelope.ofBytes X f.payload with

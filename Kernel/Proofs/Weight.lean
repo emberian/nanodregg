@@ -363,15 +363,7 @@ theorem admit_world_weight {E : Env D} {w w' : World D} {t : Turn D} {posts : Li
   have hr₁ := (insertAll_canon (posts.map Post.pair) hc).1
   have hb := born_weight t.creates (insertAll E w.trie (posts.map Post.pair)) hr₁
     (by rw [hids]; exact nb) hfr
-  -- the journal entry is new, and so is every nullifier
-  have hj : (w.journal.insert t.txId (w.height + 1, turnDigest E t)).size = w.journal.size + 1 := by
-    have hjr := hk.journal
-    unfold checkJournal at hjr
-    have hnone : w.journal[t.txId]? = none := by
-      cases hh : w.journal[t.txId]? with
-      | none => rfl
-      | some v => rw [hh] at hjr; simp at hjr
-    rw [Std.TreeMap.size_insert, Std.TreeMap.contains_eq_isSome_getElem?, hnone]; simp
+  -- every nullifier is new
   have hr₂ := (insertAll_canon (bornEntries t) (insertAll_canon (posts.map Post.pair) hc)).1
   have hs := spendAll_weight (E := E)
     (insertAll E (insertAll E w.trie (posts.map Post.pair)) (bornEntries t)) t.nullifiers hr₂ nn
@@ -391,7 +383,7 @@ theorem admit_world_weight {E : Env D} {w w' : World D} {t : Turn D} {posts : Li
     unfold bornEntries; rw [hb]; omega
   rw [show commitTrie E w t posts =
     spendAll E (insertAll E (insertAll E w.trie (posts.map Post.pair)) (bornEntries t)) t.nullifiers
-    from rfl, hs, hj, Nat.mul_add, Nat.mul_one]
+    from rfl, hs]
   omega
 
 /-- **Storage is conserved.** An admitted turn's World storage, plus its log record, plus the

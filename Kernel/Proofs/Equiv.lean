@@ -44,6 +44,17 @@ theorem check_congr {E : Env D} {a b : World D} (h : a.Equiv b) (t : Turn D) :
     unfold checkCreates World.taken World.entry; rw [hc]
   unfold check; rw [e1, e2, e3, e4, e5, e6]
 
+omit [Std.TransOrd D] [Std.LawfulEqOrd D] [DecidableEq D] in
+/-- Pruning keeps extensional equality of journals. -/
+theorem pruneJournal_equiv {H : Nat} {a b : Std.TreeMap D (Nat × D) compare} (h : a.Equiv b) :
+    (pruneJournal H a).Equiv (pruneJournal H b) := by
+  unfold pruneJournal
+  split
+  · exact Std.TreeMap.Equiv.of_toList_perm (by
+      rw [Std.TreeMap.toList_filter, Std.TreeMap.toList_filter]
+      exact (Std.TreeMap.equiv_iff_toList_perm.mp h).filter _)
+  · exact h
+
 omit [Std.LawfulEqOrd D] in
 theorem commit_congr {E : Env D} {a b : World D} (h : a.Equiv b) (t : Turn D)
     (posts : List (Post D)) : (commit E a t posts).Equiv (commit E b t posts) := by
@@ -51,9 +62,9 @@ theorem commit_congr {E : Env D} {a b : World D} (h : a.Equiv b) (t : Turn D)
   have ht : commitTrie E a t posts = commitTrie E b t posts := by unfold commitTrie; rw [hc]
   refine ⟨ht, ?_, by simp [commit, hh], by simp [commit, hch, ht], by simp [commit, hal],
     by simp [commit, ho]⟩
-  show (a.journal.insert t.txId (a.height + 1, turnDigest E t)).Equiv
-    (b.journal.insert t.txId (b.height + 1, turnDigest E t))
-  rw [hh]; exact hj.insert _ _
+  show (pruneJournal (a.height + 1) (a.journal.insert t.txId (a.height + 1, turnDigest E t))).Equiv
+    (pruneJournal (b.height + 1) (b.journal.insert t.txId (b.height + 1, turnDigest E t)))
+  rw [hh]; exact pruneJournal_equiv (hj.insert _ _)
 
 omit [Std.LawfulEqOrd D] in
 /-- **Reopen determinism, refusals.** Extensionally equal Worlds refuse a turn by the same name. -/
