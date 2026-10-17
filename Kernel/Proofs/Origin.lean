@@ -129,6 +129,34 @@ theorem map_inj {α β : Type} {f : α → β} (hf : Function.Injective f) :
       simp only [List.map_cons, List.cons.injEq] at h
       rw [hf h.1, map_inj hf h.2]
 
+theorem ba_append_cancel (a x y : ByteArray) (h : a ++ x = a ++ y) : x = y := by
+  have hd : a.data ++ x.data = a.data ++ y.data := by
+    have := congrArg ByteArray.data h
+    simpa [ByteArray.data_append] using this
+  exact ByteArray.ext (Array.append_right_inj _ |>.mp hd)
+
+theorem sum_bytes_inl_on {α β : Type} {P : α → Prop} {a : Stream α} {c : Stream β} (ha : LawfulOn P a) (v : α) :
+    (sum a c).bytes (.inl v) = u8.bytes 0 ++ a.bytes v := by
+  simp only [Stream.bytes, sum]
+  rw [ha.put_eq]; rfl
+
+theorem sum_bytes_inr_on {α β : Type} {Q : β → Prop} {a : Stream α} {c : Stream β} (hc : LawfulOn Q c) (v : β) :
+    (sum a c).bytes (.inr v) = u8.bytes 1 ++ c.bytes v := by
+  simp only [Stream.bytes, sum]
+  rw [hc.put_eq]; rfl
+
+/-- A sum's two cases never share bytes: the first byte is the case. -/
+theorem sum_inl_ne_inr {α β : Type} {P : α → Prop} {Q : β → Prop} {a : Stream α} {c : Stream β}
+    (ha : LawfulOn P a) (hc : LawfulOn Q c) (v : α) (w : β) :
+    (sum a c).bytes (.inl v) ≠ (sum a c).bytes (.inr w) := by
+  rw [sum_bytes_inl_on ha, sum_bytes_inr_on hc]
+  intro h
+  have := congrArg (fun b : ByteArray => b.data[0]?) h
+  simp only [ByteArray.data_append] at this
+  rw [Array.getElem?_append_left (by simp [u8, Stream.bytes]),
+    Array.getElem?_append_left (by simp [u8, Stream.bytes])] at this
+  simp [u8, Stream.bytes] at this
+
 omit [Ord D] [DecidableEq D] in
 /-- **Genesis commits to everything it was made from.** Two geneses with equal origins had equal
 names, nonces, allowances and founders (keys and next-key digests, in order), or the origin hash
@@ -140,10 +168,13 @@ theorem genesis_inj {X : Ctx D} (hb : ∀ a b : D, X.env.bytes a = X.env.bytes b
     (h : originOf X name nonce allowance founders = originOf X name' nonce' allowance' founders') :
     (name = name' ∧ nonce = nonce' ∧ allowance = allowance' ∧ founders = founders') ∨
       HashColl X.env domOrigin := by
-  by_cases hbytes : genesisInput.bytes (inputOf X name nonce allowance founders) =
-      genesisInput.bytes (inputOf X name' nonce' allowance' founders')
+  by_cases hbytes : originInput.bytes (.inl (inputOf X name nonce allowance founders)) =
+      originInput.bytes (.inl (inputOf X name' nonce' allowance' founders'))
   · left
-    have he := genesisInput_lawfulOn.bytes_injective (inputOf_fits hf) (inputOf_fits hf') hbytes
+    unfold originInput at hbytes
+    rw [sum_bytes_inl_on genesisInput_lawfulOn, sum_bytes_inl_on genesisInput_lawfulOn] at hbytes
+    have he := genesisInput_lawfulOn.bytes_injective (inputOf_fits hf) (inputOf_fits hf')
+      (ba_append_cancel _ _ _ hbytes)
     simp only [inputOf, Prod.mk.injEq] at he
     obtain ⟨rfl, rfl, rfl, hl⟩ := he
     refine ⟨rfl, rfl, rfl, ?_⟩

@@ -28,7 +28,7 @@ def mayFollow (X : Ctx D) (w : World D) (member g : D) : Bool :=
 
 def domFounder : String := "nanodregg/kernel/founder/v2"
 def domFounderGrant : String := "nanodregg/kernel/founder-grant/v2"
-def domOrigin : String := "nanodregg/kernel/origin/v1"
+def domOrigin : String := "nanodregg/kernel/origin/v2"
 
 /-- What a genesis is made from, as CODEC's raw combinators write it: the name, HOST's nonce, the
 allowance, and each founder's key and next-key digest bytes, in order. -/
@@ -43,9 +43,27 @@ def inputOf (X : Ctx D) (name nonce : ByteArray) (allowance : Nat) (founders : L
     GenesisInput :=
   (name, nonce, allowance, founders.map fun f => (f.1, X.env.bytes f.2))
 
+/-- What a carry is made from (KERNEL-29), as CODEC's raw combinators write it: the name, HOST's
+nonce, the exported World's origin bytes, the carried trie's root bytes, the allowance, the
+height, and the journal listing (each entry's id bytes, height, turn-digest bytes, ascending). -/
+abbrev CarryInput := ByteArray × ByteArray × ByteArray × ByteArray × Nat × Nat × List (ByteArray × Nat × ByteArray)
+
+open Nanodregg.Codec Nanodregg.Codec.Stream in
+def carryInput : Stream CarryInput :=
+  product (rawBytes Bounds.eventBytesMax) (product (rawBytes Bounds.eventBytesMax)
+    (product (rawBytes Bounds.eventBytesMax) (product (rawBytes Bounds.eventBytesMax) (product nat64
+      (product nat64 (rawList Bounds.journalMax
+        (product (rawBytes Bounds.eventBytesMax) (product nat64 (rawBytes Bounds.eventBytesMax)))))))))
+
+open Nanodregg.Codec Nanodregg.Codec.Stream in
+/-- A World's identity input: a genesis's or a carry's, under one domain, the case tagged by one
+byte, so a carry's origin is never a genesis's without a collision of the origin hash
+(`carry_origin_ne_genesis`). -/
+def originInput : Stream (GenesisInput ⊕ CarryInput) := sum genesisInput carryInput
+
 /-- The World's identity (KERNEL-24): the digest of everything its genesis is made from. -/
 def originOf (X : Ctx D) (name nonce : ByteArray) (allowance : Nat) (founders : List (ByteArray × D)) : D :=
-  X.env.hash domOrigin (genesisInput.bytes (inputOf X name nonce allowance founders))
+  X.env.hash domOrigin (originInput.bytes (.inl (inputOf X name nonce allowance founders)))
 
 /-- Founder ids are keyed by the World's ORIGIN, so two Worlds with one name share no member id. -/
 def founderId (X : Ctx D) (origin : D) (i : Nat) : D :=
@@ -126,5 +144,63 @@ def genesis (X : Ctx D) (name nonce : ByteArray) (allowance : Nat) (founders : L
     Except GenesisRefusal (World D) := do
   checkGenesis X name nonce allowance founders
   pure (genesisWorld X name nonce allowance founders)
+
+/-! ## Carry (KERNEL-29): a new World from a carried state -/
+
+def carryInputOf (X : Ctx D) (name nonce : ByteArray) (fromOrigin : D) (c : Carried D) : CarryInput :=
+  (name, nonce, X.env.bytes fromOrigin, X.env.bytes (c.trie.hashOf (trieSpec X.env)), c.allowance, c.height,
+    c.journal.toList.map fun p => (X.env.bytes p.1, p.2.1, X.env.bytes p.2.2))
+
+/-- A carried World's identity: everything the carry is made from, the trie by its root. -/
+def carryOriginOf (X : Ctx D) (name nonce : ByteArray) (fromOrigin : D) (c : Carried D) : D :=
+  X.env.hash domOrigin (originInput.bytes (.inr (carryInputOf X name nonce fromOrigin c)))
+
+/-- The World a carry builds, UNCHECKED: the carried state under a new origin, its chain at
+`genesisChain` of that origin. No founders: the members are the carried member cells, and their
+keys sign the new World's calls (`Unsigned.world` = the new origin). -/
+def carryWorld (X : Ctx D) (name nonce : ByteArray) (fromOrigin : D) (c : Carried D) : World D :=
+  let o := carryOriginOf X name nonce fromOrigin c
+  { trie := c.trie, journal := c.journal, height := c.height, chain := World.genesisChain X.env o,
+    allowance := c.allowance, origin := o }
+
+/-- Why a carry is refused (law 7): one constructor per clause of `CarryFits`, in its order. Past
+these bounds `carryInput`'s raw codec truncates, so two different carries would share an origin. -/
+inductive CarryRefusal
+  | nameTooLong
+  | nonceTooLong
+  | allowanceTooLarge
+  | heightTooLarge
+  | journalTooLong
+  /-- a digest's bytes (the exported origin, the root, a journal entry's) are longer than
+  `Bounds.eventBytesMax`, or an entry's height is past the counter limit -/
+  | entryTooLarge
+  deriving DecidableEq, Repr
+
+def CarryRefusal.name : CarryRefusal → String
+  | .nameTooLong => "nameTooLong"
+  | .nonceTooLong => "nonceTooLong"
+  | .allowanceTooLarge => "allowanceTooLarge"
+  | .heightTooLarge => "heightTooLarge"
+  | .journalTooLong => "journalTooLong"
+  | .entryTooLarge => "entryTooLarge"
+
+/-- The carry input is within the raw codec's bounds (`checkCarry_ok`). -/
+def checkCarry (X : Ctx D) (name nonce : ByteArray) (fromOrigin : D) (c : Carried D) : Except CarryRefusal Unit := do
+  req (name.size ≤ Bounds.eventBytesMax) .nameTooLong
+  req (nonce.size ≤ Bounds.eventBytesMax) .nonceTooLong
+  req (c.allowance < Bounds.counterLimit) .allowanceTooLarge
+  req (c.height < Bounds.counterLimit) .heightTooLarge
+  req (c.journal.size ≤ Bounds.journalMax) .journalTooLong
+  req ((X.env.bytes fromOrigin).size ≤ Bounds.eventBytesMax &&
+      (X.env.bytes (c.trie.hashOf (trieSpec X.env))).size ≤ Bounds.eventBytesMax &&
+      c.journal.toList.all fun p => (X.env.bytes p.1).size ≤ Bounds.eventBytesMax &&
+        p.2.1 < Bounds.counterLimit && (X.env.bytes p.2.2).size ≤ Bounds.eventBytesMax) .entryTooLarge
+
+/-- THE carry: refused by name outside `CarryFits`, else `carryWorld` (`carry_ok`). `fromOrigin`
+is the exported World's origin (its lineage, committed in the new origin). -/
+def carry (X : Ctx D) (name nonce : ByteArray) (fromOrigin : D) (c : Carried D) :
+    Except CarryRefusal (World D) := do
+  checkCarry X name nonce fromOrigin c
+  pure (carryWorld X name nonce fromOrigin c)
 
 end Nanodregg.Kernel.Receive

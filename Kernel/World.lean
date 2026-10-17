@@ -127,13 +127,27 @@ structure World (D : Type) [Ord D] where
   /-- transaction id ↦ (height, turn digest): the replay index (not authenticated: KERNEL-23) -/
   journal : Std.TreeMap D (Nat × D) compare
   height : Nat
-  /-- the log chain after `height` turns -/
+  /-- the log chain: `genesisChain origin` at the World's start (a genesis at height 0, or a carry
+  at the carried height, KERNEL-29), then one link per admitted turn -/
   chain : D
   /-- the storage budget left, in bytes -/
   allowance : Nat
   /-- the World's identity (KERNEL-24): the digest of everything its genesis was made from, set by
   genesis and never written again; every call names it (`Unsigned.world`) -/
   origin : D
+
+/-- What a carry (KERNEL-29, law 1: state crosses a flag day by re-genesis) moves from one World
+into a new one, and what the new World's origin commits to: the trie (every cell and every spent
+nullifier: a spent nullifier is state, or a carried value cell could be spent again), the budget
+left, the height and the journal. The journal is bounded by the window (KERNEL-33) and carried
+whole, so a call committed just before the carry is answered `replayed` after it, never re-run;
+the height is carried because journal entries expire by it. Not carried: the chain and the origin
+(the new World's own). -/
+structure Carried (D : Type) [Ord D] where
+  trie : Cells D
+  allowance : Nat
+  height : Nat
+  journal : Std.TreeMap D (Nat × D) compare
 
 /-- The kernel's hash domains. -/
 def domGenesis : String := "nanodregg/kernel/genesis/v1"
@@ -243,6 +257,9 @@ def genesis (E : Env D) (origin : D) (allowance : Nat) : World D :=
 
 /-- The root of the World's map: its trie's cached digest, O(1). -/
 def root (E : Env D) (w : World D) : D := w.trie.hashOf (trieSpec E)
+
+/-- What a carry takes from this World (KERNEL-29). -/
+def carried (w : World D) : Carried D := ⟨w.trie, w.allowance, w.height, w.journal⟩
 
 section
 variable [DecidableEq D]

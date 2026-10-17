@@ -1144,6 +1144,61 @@ def probeJournal (P : Params D) (st : State D) (seed : Nat) : State D :=
         let st := journalExpect P st w (journalTurn P k H H) "journal-kept" "replayed"
         journalExpect P st w (journalTurn P 0 H H) "journal-reuse" "ok"
 
+/-- One verdict of the carry probe, by name: `submit` on the carried World. -/
+def carryExpect (P : Params D) (st : State D) (w : World D) (c : Call D) (what want : String) : State D :=
+  let got := match Receive.submit P.ctx w c with
+    | .ok _ => "ok"
+    | .error v => match v with
+      | .refused r => r.name
+      | .rejected r => r.name
+  if got = want then
+    { st with refusedAsExpected := st.refusedAsExpected + 1, seen := s!"{what}:{want}" :: want :: st.seen }
+  else failWith st s!"probe carry {what}: expected {want}, got {got}"
+
+/-- The carry probe (KERNEL-29), at the end of every seed: the Host's World is carried under a new
+nonce. The carried World holds the same trie, allowance, height and journal (`carry_carried`)
+under a new origin; the last logged call is answered `replayed` at its height (`carry_replayed`:
+answered, never re-run); a fresh call signed for the OLD World is `wrongWorld`; the same call
+signed for the NEW World is admitted (`carry-new`); and a carry whose name is past the raw
+codec's bound is refused `nameTooLong` (`carry_ok`). -/
+def probeCarry (P : Params D) (st : State D) : State D :=
+  let X := P.ctx
+  let w := st.host
+  let long : ByteArray := ⟨Array.replicate (Bounds.eventBytesMax + 1) 7⟩
+  let st := match carry X long (nonceOf 7) w.origin w.carried with
+    | .error .nameTooLong =>
+        { st with refusedAsExpected := st.refusedAsExpected + 1,
+                  seen := "carry-name:nameTooLong" :: "nameTooLong" :: st.seen }
+    | .error r => failWith st s!"probe carry name: expected nameTooLong, got {r.name}"
+    | .ok _ => failWith st "probe carry name: a name past eventBytesMax was carried"
+  match carry X worldName (nonceOf 7) w.origin w.carried with
+  | .error r => failWith st s!"probe carry: refused {r.name}"
+  | .ok w' =>
+    if !(w'.root P.env == w.root P.env && w'.allowance == w.allowance && w'.height == w.height &&
+        w'.journal.toList == w.journal.toList) then failWith st "probe carry: the carried World differs"
+    else if w'.origin == w.origin then failWith st "probe carry: the carried World kept the old origin"
+    else
+      let st := match st.log.getLast? with
+        | none => st
+        | some t => match X.decodeCall t.event with
+          | none => failWith st "probe carry: the last logged event does not decode"
+          | some c =>
+              let want := (w.journal[t.txId]?).map Prod.fst
+              match Receive.submit X w' c, want with
+              | .error (.rejected (.replayed h)), some h' =>
+                  if h = h' then
+                    { st with refusedAsExpected := st.refusedAsExpected + 1,
+                              seen := "carry-old-call:replayed" :: "replayed" :: st.seen }
+                  else failWith st s!"probe carry old-call: replayed at {h}, journaled at {h'}"
+              | _, none => failWith st "probe carry old-call: the last logged turn is not journaled"
+              | .error v, _ => failWith st s!"probe carry old-call: expected replayed, got {vname v}"
+              | .ok _, _ => failWith st "probe carry old-call: a carried call was admitted again"
+      let f := founder0 P st
+      let old := signed P st f f.key (S.pinsFor P.env w [f.id]) (.create none [] [])
+      let st := carryExpect P st w' old "carry-old-world" "wrongWorld"
+      let fresh := signed P { st with host := w' } f f.key (S.pinsFor P.env w' [f.id]) (.create none [] [])
+      carryExpect P st w' fresh "carry-new" "ok"
+
 def run (P : Params D) (seed : Nat) (steps : Nat) : State D :=
   let rng : Rng := ⟨seed.toUInt64 * 0x2545F4914F6CDD1D + 1⟩
   let fk : List (ByteArray × ByteArray) :=
@@ -1202,6 +1257,7 @@ def run (P : Params D) (seed : Nat) (steps : Nat) : State D :=
   let st := match audit P.ctx g st.log with
     | .ok w => if same P.env w st.host then st else { st with failures := "audit differs" :: st.failures }
     | .error (i, f) => { st with failures := s!"audit refused at {i}: {vname f}" :: st.failures }
+  let st := probeCarry P st
   -- KERNEL-24: the same log's calls against a second genesis (same name and founders, another
   -- nonce) are each refused `wrongWorld`; another nonce, or the founders swapped, is another chain
   match genesis X worldName (nonceOf (seed + 1000000)) 100000000 founders with
@@ -1259,7 +1315,8 @@ def plantedArms : List String :=
    "object-pays:ok", "object-pays-twice:spent", "reenter:revisited", "call-not-callable:notCallable",
    "too-many-calls:tooManyCalls", "over-ticks:overTicks", "grant-to-object:ok", "call-chain:ok",
    "call-too-deep:callTooDeep", "journal-expired:outsideWindow", "journal-window-first:outsideWindow",
-   "journal-kept:replayed", "journal-reuse:ok"]
+   "journal-kept:replayed", "journal-reuse:ok", "carry-name:nameTooLong", "carry-old-call:replayed",
+   "carry-old-world:wrongWorld", "carry-new:ok"]
 
 /-- `--seeds N` runs seeds `0 … N-1`; otherwise each argument is a seed. -/
 def parseSeeds : List String → List Nat

@@ -1002,3 +1002,69 @@ written, pruned or not. A base sealed before this change holds an unpruned journ
 anyway with the charge flag day. (4) Host wire: a lookup or submit of an un-journaled call past
 `notBefore + 2W` now answers `uncertain`/`forgotten` (HOST-7's arm, built here under
 --cross-layer at its invitation). Nothing re-emits.
+
+## KERNEL-29 as built · carry state by re-genesis: `Carried`, `Receive.carry`, one tagged origin (KERNEL-8, 2026-10-17; OPS-P1 as agreed by OPS-2, PROTOCOL-6, HOST-6, CODEC-2/3; after KERNEL-33)
+**Decision.** `Carried D := {trie, allowance, height, journal}` (Kernel/World.lean) and
+`World.carried w`. The trie is every cell and every spent nullifier, so spent is state: a carried
+value cell whose nullifier was spent cannot be spent again. The journal is carried WHOLE. It is
+bounded by KERNEL-33 (< 3·windowMax, `Bounds.journalMax`), so nothing needs filtering, and
+PROTOCOL-29's rule holds: a call committed just before the export is answered `replayed` after it,
+never re-run. The height carries because journal entries expire by it.
+`Receive.carry X name nonce fromOrigin c` refuses by name outside `CarryFits` (`CarryRefusal`:
+nameTooLong, nonceTooLong, allowanceTooLarge, heightTooLarge, journalTooLong, entryTooLarge, one
+constructor per clause, as for genesis, KERNEL-31). Otherwise it returns `carryWorld`: the carried
+state, origin `carryOriginOf`, chain `genesisChain origin`. There are no founders. The members are
+the carried member cells, and their keys sign the new World's calls.
+**One origin domain, tagged.** `domOrigin` is now v2, and `originOf` (genesis) and
+`carryOriginOf` both hash `originInput = Stream.sum genesisInput carryInput`. That is one domain,
+with the case in the first byte (KERNEL-6's "one domain with a kind byte"). `carryInput` is name ‖
+nonce ‖ fromOrigin bytes ‖ root(trie) bytes ‖ u64 allowance ‖ u64 height ‖ the journal listing
+(id bytes ‖ u64 height ‖ digest bytes, ascending, at most journalMax). The trie enters by its
+root, O(1), with no second encoding.
+**Theorems** (Kernel/Proofs/Carry.lean): `checkCarry_ok`, `carry_ok`; `carry_carried` (the new
+World carries exactly `c`) and `carry_of_carried` (export then carry: same trie, allowance, height
+and journal; only chain and origin are new); `carry_origin_ne_genesis` (equal origins ⇒ `HashColl`
+under domOrigin, whose preimages differ in their first byte by `sum_inl_ne_inr`); `carry_inj`
+(equal carry origins ⇒ equal name, nonce, exported origin, trie ROOT, allowance, height and journal
+up to `Equiv`, or a collision); `carry_canon`, `carry_cellsFit`, `carry_journalOk` (the read and
+journal invariants survive the carry); `carry_journal_fits` and `carry_fold_journal_bounded` (a
+reached World always fits a carry's `journalTooLong`, and so does every World folded from a carry,
+so a second carry passes: a vacuity reader's finding, closed here); `carry_replayed` (an exported journaled call is
+`replayed` at its height on the carried World). Origin.lean: `genesis_inj` reproved through the
+tag (`ba_append_cancel`, `sum_bytes_inl_on`), with the same statement.
+**Teeth.** kernel-sim, every seed: `probeCarry` carries the Host's World under a new nonce. It
+requires the same root, allowance, height and journal listing and a different origin. Arms:
+`carry-old-call:replayed` (the last logged call), `carry-old-world:wrongWorld` (a fresh call
+signed for the old World), `carry-new:ok` (the same call signed for the new World is admitted),
+and `carry-name:nameTooLong`. The old-call arm checks the replayed HEIGHT against the exported
+journal's. Mutation: a carry that drops the journal fails every seed ("the
+carried World differs").
+**Alternatives.** (a) Two domains, domCarry and domOrigin. Then "never a genesis origin" needs a
+domain-separation assumption about the hash, while one domain with a tag reduces it to an
+ordinary collision. (b) Hash the trie listing into the origin, which is an O(state) second
+encoding of what the root already commits to. (c) Filter the journal to the window at carry
+time. That was the shape before KERNEL-33. A filtered TreeMap equals nothing structurally, and an
+unbounded listing would have needed its own bound.
+**Critique.** `carry_inj` binds the trie through its ROOT. Two different tries with one root are
+a collision of the trie hash, which is outside this theorem. `carry_canon`, `carry_cellsFit` and
+`carry_journalOk` are true by construction (the carried World holds the same trie, journal and
+height), so they state that nothing was lost, not a new fact. Carried member and grant ids keep
+their old, old-origin-keyed values, which is acceptable only while ids are opaque (OPS-1 CRITIQUE).
+The kernel does not check that `fromOrigin` is the origin of the World whose state `c` is. HOST's
+import binds the bytes to the old Store by `--digest` (HOST-28). The WASTE counts moved
+(hashes-per-touched-cell 9.838 → 9.715, hashes-per-nullifier 3.634 → 3.451), because the origin
+v2 changes every founder id and so the trie paths. The ceilings stay where they are: the counts
+are below them, and the move is caused by the ids, not by the code.
+The `chain` field now says what it is after a carry (`genesisChain origin` at the carried height,
+then one link per turn): a carried Store's audit starts from `carryWorld`, not from genesis
+(HOST-28). Second-agent vacuity read done: no vacuity; its two gaps are closed above.
+**Meta-critique.** The agreed text said `Carried = {trie, allowance}`, with the height and the
+in-window journal added by PROTOCOL-6's and OPS-2's answers. I put all four into the one
+structure, so that byte equality of `Carried` is the whole import check (CODEC-22), with no side
+file field filled in by interpretation. The pull was to keep genesis's origin input untouched and
+add a separate carry domain. I did not, because a fact that holds only under an unstated hash
+assumption is the kind of premise this repo names and then forgets.
+**Flag day.** domOrigin v2: every genesis origin changes, so every founder id, every chain and
+every World changes, and every Store re-geneses (also due under KERNEL-33's charges). Nothing
+re-emits. A call signed for an old origin is `wrongWorld`. CODEC-22's carried codec (CODEC-5) and
+HOST-28's export and import (HOST-8) build on this.
