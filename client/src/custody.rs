@@ -22,8 +22,8 @@ use ed25519_dalek::{Signer as _, SigningKey};
 use zeroize::Zeroizing;
 
 use crate::fsx;
-use crate::generated::CustodyRefusal;
 use crate::generated::layout::SignResult;
+use crate::generated::{CustodyRefusal, ENVELOPE_DOMAIN};
 pub use nanodregg_sandbox::custody::Refused;
 use nanodregg_sandbox::custody::{check_private_dir, read_private};
 
@@ -40,8 +40,11 @@ pub enum CustodyError {
     File(PathBuf, Refused),
     /// A key file already exists where a new one was asked for.
     Exists,
-    /// The workspace has both custody shapes (`seed` and `keys`), or neither.
+    /// The workspace holds more than one custody shape (`seed`, `keys`, `observer`), or none.
     Shape,
+    /// An observer (envelope-only) custody was asked to sign what is not a read envelope, or to
+    /// precommit or rotate (CLIENT-22).
+    EnvelopeOnly,
     /// The separate holding is not named (`ND_HOLDING`) or not present.
     HoldingAbsent,
     /// `signNext` without a precommitted pending key.
@@ -78,6 +81,7 @@ impl CustodyError {
             Self::RotationInFlight => CustodyRefusal::RotationInFlight,
             Self::Mismatch(_) => CustodyRefusal::Mismatch,
             Self::Io(_) => CustodyRefusal::Io,
+            Self::EnvelopeOnly => CustodyRefusal::EnvelopeOnly,
         }
     }
 }
@@ -228,12 +232,14 @@ fn key_bytes(b: &[u8]) -> Public {
 /// A hosted resident's keys: one record `ws/keys = current ‖ next [‖ pending]`.
 pub struct SameRecord {
     ws: PathBuf,
+    /// `keys` (a hosted resident) or `observer` (an envelope-only follower, CLIENT-22).
+    name: &'static str,
 }
 
 impl SameRecord {
     fn record(&self) -> Result<Zeroizing<Vec<u8>>, CustodyError> {
         // Two or three whole seeds: the range is the shared read's, whole seeds the record's shape.
-        let path = self.ws.join("keys");
+        let path = self.ws.join(self.name);
         let r =
             read_private(&path, 2 * SEED_BYTES..=3 * SEED_BYTES).map_err(|e| refused(&path, e))?;
         match r.len() % SEED_BYTES {
@@ -247,7 +253,7 @@ impl SameRecord {
     }
     fn write(&self, keys: &[&SigningKey]) -> Result<(), CustodyError> {
         let bytes = Zeroizing::new(keys.iter().flat_map(|k| *k.as_bytes()).collect::<Vec<_>>());
-        Ok(fsx::replace(&self.ws, "keys", &bytes)?)
+        Ok(fsx::replace(&self.ws, self.name, &bytes)?)
     }
 }
 
@@ -299,6 +305,16 @@ pub struct Rotation {
     pub pending: Public,
 }
 
+/// The observer's record: `current ‖ next`, opened envelope-only (CLIENT-22).
+const OBSERVER: &str = "observer";
+
+/// Create `ws/name = current ‖ next` from fresh OS randomness; `Exists` if it is there.
+fn record(ws: &Path, name: &str) -> Result<(), CustodyError> {
+    let (current, next) = (fresh_seed()?, fresh_seed()?);
+    let bytes = Zeroizing::new([current.as_ref(), next.as_ref()].concat());
+    fsx::create_once(ws, name, &bytes).map_err(exists)
+}
+
 /// The armed rotation's record in the workspace: `u64le attempt ‖ incoming ‖ pending`.
 const ROTATION: &str = "rotation";
 
@@ -306,6 +322,8 @@ const ROTATION: &str = "rotation";
 pub struct Custody {
     ws: PathBuf,
     keys: Box<dyn Keys>,
+    /// An observer: it signs read envelopes only (CLIENT-22).
+    envelope_only: bool,
 }
 
 impl Custody {
@@ -321,27 +339,40 @@ impl Custody {
 
     /// A new hosted resident: `ws/keys = current ‖ next`.
     pub fn create_same_record(ws: &Path) -> Result<(), CustodyError> {
-        let (current, next) = (fresh_seed()?, fresh_seed()?);
-        let bytes = Zeroizing::new([current.as_ref(), next.as_ref()].concat());
-        fsx::create_once(ws, "keys", &bytes).map_err(exists)
+        record(ws, "keys")
+    }
+
+    /// A new observer (an observe-only member's follower driver, HOSTING-17 §7): `ws/observer =
+    /// current ‖ next`, which custody opens envelope-only.
+    pub fn create_observer(ws: &Path) -> Result<(), CustodyError> {
+        record(ws, OBSERVER)
     }
 
     /// Open the workspace's custody: `Separate` if `ws/seed` exists (the holding is needed only
     /// to rotate), `SameRecord` if `ws/keys` does; both or neither is `Shape`.
     pub fn open(ws: &Path, holding: Option<PathBuf>) -> Result<Self, CustodyError> {
-        let keys: Box<dyn Keys> = match (ws.join("seed").exists(), ws.join("keys").exists()) {
-            (true, false) => Box::new(Separate {
-                ws: ws.to_path_buf(),
-                holding,
-            }),
-            (false, true) => Box::new(SameRecord {
-                ws: ws.to_path_buf(),
-            }),
+        let present = |n: &str| ws.join(n).exists();
+        let shape = (present("seed"), present("keys"), present(OBSERVER));
+        let record = |name| SameRecord {
+            ws: ws.to_path_buf(),
+            name,
+        };
+        let (keys, envelope_only): (Box<dyn Keys>, bool) = match shape {
+            (true, false, false) => (
+                Box::new(Separate {
+                    ws: ws.to_path_buf(),
+                    holding,
+                }),
+                false,
+            ),
+            (false, true, false) => (Box::new(record("keys")), false),
+            (false, false, true) => (Box::new(record(OBSERVER)), true),
             _ => return Err(CustodyError::Shape),
         };
         let c = Self {
             ws: ws.to_path_buf(),
             keys,
+            envelope_only,
         };
         c.keys.current()?;
         c.keys.next_public()?;
@@ -361,6 +392,10 @@ impl Custody {
     /// A `sign` step's result: the current key, the next key, the current key's signature over
     /// exactly `message`.
     pub fn sign(&self, message: &[u8]) -> Result<SignResult, CustodyError> {
+        // The observer's fence: only a read envelope's message, by the emitted domain (CLIENT-22).
+        if self.envelope_only && !message.starts_with(ENVELOPE_DOMAIN) {
+            return Err(CustodyError::EnvelopeOnly);
+        }
         let k = self.keys.current()?;
         Ok(SignResult {
             key: public(&k).to_vec(),
@@ -373,6 +408,9 @@ impl Custody {
     /// one already exists, which is returned instead (idempotent: a retried command never mints a
     /// second one, so no frozen rotate call names a key custody lost).
     pub fn precommit(&self) -> Result<(Public, Public), CustodyError> {
+        if self.envelope_only {
+            return Err(CustodyError::EnvelopeOnly);
+        }
         let next = self.keys.next_public()?;
         if let Some(p) = self.keys.pending()? {
             return Ok((next, public(&p)));
@@ -385,6 +423,9 @@ impl Custody {
     /// A `signNext` step's result: the next key signs exactly `message`, and the result names the
     /// pending key as its next. Refused while a rotation is armed or with nothing precommitted.
     pub fn sign_next(&self, message: &[u8]) -> Result<(SignResult, Rotation), CustodyError> {
+        if self.envelope_only {
+            return Err(CustodyError::EnvelopeOnly);
+        }
         if self.armed()?.is_some() {
             return Err(CustodyError::RotationInFlight);
         }

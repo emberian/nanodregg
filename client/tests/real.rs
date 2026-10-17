@@ -138,6 +138,11 @@ fn real_host_create_write_read_rotate_write_read() {
     };
     let nowhere = root.join("nowhere.sock");
     let o = over(&nowhere, &ws.join("host.sock"));
+    assert_eq!(
+        o.status.code(),
+        Some(i32::from(nanodregg_client::generated::command_exit::CLIENT)),
+        "nd's own failure is CommandExit.client, never follow's uncertain"
+    );
     assert!(!o.status.success() && String::from_utf8_lossy(&o.stderr).contains("follow.sock"));
     let o = over(&ws.join("follow.sock"), &nowhere);
     assert!(!o.status.success() && String::from_utf8_lossy(&o.stderr).contains("host.sock"));

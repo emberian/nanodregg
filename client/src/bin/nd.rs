@@ -3,7 +3,8 @@
 //! follow returns and prints what follow says to print. The local verbs are custody, not protocol
 //! (CLIENT-13): `nd --init` creates a member's keys, the next secret in `$ND_HOLDING` (a 0700
 //! directory on removable media or under another account); `nd --init-hosted` creates a hosted
-//! resident's one-record keys; `nd --keys` prints custody's public keys (`key HEX`, `next HEX`)
+//! resident's one-record keys; `nd --init-observer` an observe-only follower driver's record,
+//! which signs read envelopes only (CLIENT-22); `nd --keys` prints custody's public keys (`key HEX`, `next HEX`)
 //! for the operator's `host genesis`. `$ND_HOLDING` is read again only to rotate.
 //! `$ND_FOLLOW_SOCK` / `$ND_HOST_SOCK` name the two sockets when they are not the workspace's
 //! (HOSTING-17 §7: nd, as nd, drives the nd-hosted follower through its socket in /run/nd-follow).
@@ -24,7 +25,8 @@ fn main() -> ExitCode {
         Ok(code) => ExitCode::from(code),
         Err(e) => {
             eprintln!("nd: {e}");
-            ExitCode::from(2)
+            // nd's own failure is its own class, never follow's `uncertain` (PROTOCOL-7).
+            ExitCode::from(nanodregg_client::generated::command_exit::CLIENT)
         }
     }
 }
@@ -33,10 +35,13 @@ fn go() -> Result<u8, String> {
     let ws = PathBuf::from(std::env::var_os("ND_WORKSPACE").ok_or("ND_WORKSPACE is not set")?);
     let argv: Vec<OsString> = std::env::args_os().skip(1).collect();
     let holding = std::env::var_os("ND_HOLDING").map(PathBuf::from);
-    if argv.len() == 1 && (argv[0] == "--init" || argv[0] == "--init-hosted") {
+    if argv.len() == 1
+        && (argv[0] == "--init" || argv[0] == "--init-hosted" || argv[0] == "--init-observer")
+    {
         nd_dir(&ws.join("attempts"))?;
         let made = match holding {
             _ if argv[0] == "--init-hosted" => Custody::create_same_record(&ws),
+            _ if argv[0] == "--init-observer" => Custody::create_observer(&ws),
             Some(h) => Custody::create_separate(&ws, &h),
             None => return Err("nd --init: ND_HOLDING is not set (CLIENT-13)".into()),
         };

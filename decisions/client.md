@@ -567,3 +567,37 @@ directory and a missing one are `sharedDirRefused`; the control (no `--group`) b
 Mutations, each red: the directory check skipped, its group comparison ignored, the group mode
 0600, the default mode 0660.
 **Status.** landed (this commit).
+
+## CLIENT-22 the observer record: custody that signs read envelopes only (2026-10-17, CLIENT-3; ROOT ruling, HOSTING-17 §7, PROTOCOL-7)
+
+**Decision.** The nd-hosted follower is its own OBSERVE-ONLY member (the operator's member grants
+`world MEMBER observe`, KERNEL-20). Its key is a custody record `ws/observer = current ‖ next`
+(the SameRecord layout under another name), made by `nd --init-observer`, owned by nd, read
+under the custody checks and the StrictModes chain (CLIENT-19). `Custody::open` refuses `Shape`
+unless exactly one of `seed`, `keys`, `observer` is present, so the mode is a property of the
+RECORD, never an environment switch that a missing variable could widen. An observer custody signs
+only a message that starts with `generated::ENVELOPE_DOMAIN` (emitted from `Protocol.domEnvelope`,
+never a Rust literal); any other message, and every `precommit` and `signNext`, is refused
+`envelopeOnly` (`CustodyRefusal::EnvelopeOnly`, PROTOCOL-38), which follow receives as a refused
+custody result. nd's own failure now exits `command_exit::CLIENT` (52), never 2, which is follow's
+`uncertain` (PROTOCOL-7's find): a timer can tell "nd could not run" from "the append is uncertain".
+**The fence today.** The fence is prefix-only and not yet backed by a theorem: it holds up to
+cSHAKE preimage resistance, because a call's signed message (`unsignedBytes`, world digest first)
+carries no domain today and could begin with the envelope domain's bytes (CODEC-6, PROTOCOL-7). The
+authority in the meantime is the kernel's observe-only grant (the key cannot write regardless), so
+the gap is in the second fence, not the first. PROTOCOL-7's call-domain flag day (every call and
+rotation message `domCall ‖ unsignedBytes`; `Protocol.envelope_call_disjoint : domEnvelope ++ r ≠
+X.callMessage u`) closes it; then the real-round-trip plant (an observer's `nd write` refused
+`envelopeOnly`, its `nd sync` served) goes in and this entry cites the theorem as proved.
+**Alternatives.** A keyless driver (built, measured, dropped: every catch-up log page needs a signed
+read envelope, PROTOCOL-27/29); `ND_CUSTODY=envelope` (an env switch widens when dropped); a length
+check (a call can be 155 bytes too; with the theorem it would be a second fence that cannot go red).
+**Critique.** Observer rotation is refused in v0 (cv task 01a14adf-8582); the record holds `next`,
+so the rotation step comes later with no shape change.
+**Plants.** client/tests/custody.rs `an_observer_signs_read_envelopes_only` (an envelope-prefixed
+message signed and verifying; a call's bytes, the domain minus its first byte and the empty message
+refused; precommit and signNext refused; the record unchanged; an observer beside keys is Shape; a
+0640 record is refused by the custody checks); client/tests/real.rs: nd's own failure exits
+CLIENT. Mutations, each red: the prefix check, the precommit guard, the signNext guard, the record's
+mode flag, the exit back to 2.
+**Status.** landed (this commit); the theorem-backed plant follows the flag day.

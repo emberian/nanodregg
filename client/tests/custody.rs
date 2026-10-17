@@ -196,3 +196,49 @@ fn custody_files_are_refused_unless_private_regular_and_exact() {
     ));
     done(&ws);
 }
+
+/// CLIENT-22: an observer record signs read envelopes only. A message that starts with the
+/// emitted envelope domain is signed by the record's current key; any other message (a call's)
+/// and every rotation step are refused `EnvelopeOnly`, and nothing in the record changes. The fence
+/// is prefix-only until PROTOCOL-7's `envelope_call_disjoint` (call messages domain-separated).
+#[test]
+fn an_observer_signs_read_envelopes_only() {
+    use nanodregg_client::generated::ENVELOPE_DOMAIN;
+    let (ws, _) = scratch("observer");
+    Custody::create_observer(&ws).unwrap();
+    let before = fs::read(ws.join("observer")).unwrap();
+    assert_eq!(before.len(), 64);
+    let c = Custody::open(&ws, None).unwrap();
+    let envelope = [ENVELOPE_DOMAIN, b"window"].concat();
+    let s = c.sign(&envelope).unwrap();
+    assert_eq!(s.key, c.public_key().unwrap().to_vec());
+    assert!(verifies(&s.key, &envelope, &s.signature));
+    for call in [&b"a call's unsigned bytes"[..], &ENVELOPE_DOMAIN[1..], b""] {
+        assert!(matches!(c.sign(call), Err(CustodyError::EnvelopeOnly)));
+    }
+    assert!(matches!(c.precommit(), Err(CustodyError::EnvelopeOnly)));
+    assert!(matches!(
+        c.sign_next(&envelope),
+        Err(CustodyError::EnvelopeOnly)
+    ));
+    assert_eq!(
+        fs::read(ws.join("observer")).unwrap(),
+        before,
+        "the record never changed"
+    );
+    assert_eq!(
+        CustodyError::EnvelopeOnly.refusal(),
+        nanodregg_client::generated::CustodyRefusal::EnvelopeOnly
+    );
+    // One shape only: an observer beside a member's or a resident's keys is refused.
+    fs::write(ws.join("keys"), [0u8; 64]).unwrap();
+    assert!(matches!(Custody::open(&ws, None), Err(CustodyError::Shape)));
+    fs::remove_file(ws.join("keys")).unwrap();
+    // The record is read under the custody checks like every other.
+    fs::set_permissions(ws.join("observer"), fs::Permissions::from_mode(0o640)).unwrap();
+    assert!(matches!(
+        Custody::open(&ws, None),
+        Err(CustodyError::File(_, Refused::Mode(0o640)))
+    ));
+    done(&ws);
+}
