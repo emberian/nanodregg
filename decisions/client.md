@@ -169,3 +169,67 @@ follow-grant id, fromHeight, validUntil, signature) becomes layout data in Proto
 refuses `noFollowGrant`; an unknown ssh key is a refused connect (no frame, no protocol name);
 `Protocol.Bounds.idleMsMax` will be generated for remote conns; CONNECTIONS_MAX stays 64.
 **Status.** B chosen; build waits for PROTOCOL's rows and `idleMsMax` in generated.rs (sha to come).
+
+## CLIENT-13 the precommitted next key: where custody holds it, and the rotation step (2026-10-16, FOR EMBER: key custody)
+**Why this exists.** PROTOCOL's 5f7d90f makes a `sign` result `signResultLayout = (key, next, signature)`:
+custody's current public key, its precommitted NEXT public key, and the current key's signature over
+exactly the message (follow needs `next` for `init`/`enroll`, whose `next : D` is the next key's
+digest). KERNEL-6's `rotate key next` is signed by the INCOMING key, which must hash to the member's
+precommitted digest (`notPrecommitted`), and precommits the digest of the key after it. Row `rotate`
+(JROT/JROTL): "a stolen daily key cannot rotate". So custody must hold a second secret, and the
+question is where and how it is born. Until this is ruled, nd's `sign` answers a bare signature and
+follow refuses it `badResult`: nd cannot sign anything.
+**Withdrawn: a deterministic ratchet** (`next = H(domain, seed)`, one secret file). This was my first
+lean, sent to PROTOCOL and ROOT; ROOT's critique is correct and I withdraw it. Whoever steals the
+current seed derives the next key too, so a thief rotates first and the precommitment recovers from
+nothing: row `rotate`'s premise becomes false while the row's plant (a thief with an ARBITRARY next key
+is refused) still passes, because the plant's thief does not know the ratchet. The "no second secret
+file" convenience is exactly what must be traded away. The next key is FRESH randomness from the OS
+generated at precommit time, never derivable from the current seed.
+**The question for Ember: where the next key lives.** Fresh randomness is necessary, not sufficient:
+the next key protects against a compromise only if that compromise does not reach it too.
+- **Option 1: the same custody record.** One file `keys` (0600, O_NOFOLLOW, owner, exact length, the
+  current checks): `current ‖ next` (64 B), `current ‖ next ‖ pending` (96 B) during a rotation.
+  Every transition is write-tmp + fsync + rename + fsync(dir): one atomic replace, so there is never a
+  crash state where `current` and `next` disagree with each other.
+  *Critique.* A thief who reads the file (a backup, a stolen laptop disk, a process that can read the
+  member's home) has both keys, so pre-rotation recovers only from a leak of the CURRENT key alone: a
+  signing side channel, a key pasted somewhere, a compromised signing helper. It is the convenient shape
+  and it protects much less than the row's name says. Precommitment then mostly buys "rotate without a
+  sponsor", not "recover from theft".
+- **Option 2: a separate holding.** `seed` (current) in the workspace; `next` somewhere a compromise of
+  the workspace does not reach: a file on removable media or another machine, a different uid's key
+  broker (minidregg's `mini-keys`, SO_PEERCRED), or a hardware token. nd reads only the next PUBLIC key
+  day to day (stored beside the seed, not secret); the next SECRET is brought to custody only for a
+  rotation.
+  *Critique.* Real compromise recovery, at a real cost: a rotation needs the member to fetch the
+  offline secret (friction, and a member who loses it can never rotate again: recovery then goes
+  through a sponsor's `enroll` of a new member, which loses identity continuity). Two places to back
+  up. For a hosted Hermes there is no "offline": its next key would sit with the operator, which is
+  Option 1 by another name. A broker uid is more Rust (KEY-CUSTODY's open question).
+- Either way: the new next key is generated and written durably BEFORE the rotate call is frozen (the
+  call commits its digest; losing it after that is a member locked out of rotation), and `current`
+  advances only after the rotate call SETTLES committed, never on send.
+**Rotation step shape (proposed to PROTOCOL).** Two new step tags and no new Rust decision:
+1. `precommit` (no fields) → result `(next_pk, pending_pk)`. Custody returns the pending key if one
+   exists, else generates one from OS randomness, writes it durably (Option 1: the 96 B replace;
+   Option 2: beside the next secret), then answers. Idempotent: a retried command never mints a second
+   pending key, so a frozen rotate call never names a key custody lost.
+2. `signNext ‖ bytes message` → `signResultLayout` with `key = next_pk`, `next = pending_pk`, signed by
+   the NEXT key (follow builds the rotate call with `key = next_pk`, `next = H(pending_pk)`). It refuses
+   (by name, as a `done`) when no pending key exists. It arms the rotation: the following `submit`
+   step's attempt is recorded as the rotation attempt.
+3. The `submit` step as today. Custody advances on ITS OWN settlement (CLIENT-3), not on a follow
+   command: committed → atomically `current := next`, `next := pending`; definitively refused → drop
+   the pending key (a fresh one is minted next time); uncertain → stay armed, lookup only, resumed by
+   `retry` (row JROTL's `--drop-reply` then `retry --expect-committed`). Advancing on a follow verb
+   instead would let a follow bug move custody to a key the chain has not accepted.
+Ordinary `sign` keeps meaning "the current key" and returns `(current_pk, next_pk, σ)`.
+**Alternatives.** The ratchet (withdrawn above); one step `rotate ‖ message-template` where custody
+fills in the next key's digest (custody would then build call bytes: a Rust decision, refused); advance
+by a follow step (above).
+**Meta-critique.** My first answer optimised for "one secret file" because the current custody code has
+one, which is a phase ordering chosen to avoid a hard part. Option 2 is harder to build and to use; I have
+not priced how often a two-friends deployment rotates, and that number decides whether Option 2's
+friction is paid once a year or every week.
+**Status.** open, for Ember (KEY-CUSTODY). CODEC emits `SignResult` (ROOT). Nothing implemented.
