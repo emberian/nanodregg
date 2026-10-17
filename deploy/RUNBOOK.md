@@ -132,7 +132,7 @@ the setgid bit gives the socket group nd without nd-hosted joining it). nd-super
 launch (64) a socket directory not owned by the unit's user, not mode exactly 02710, under a parent
 another can write (`sharedDirRefused: Dir(PATH)`), or of another group (`groupMismatch`). Planted
 with the rendered argv (each rendered word replaced by a scratch path, `deploy/live`): under hbox's
-group-writable `/tank` it is refused `sharedDirRefused: Dir(...)`, as it must be.
+group-writable `/tank` it is refused `sharedDirRefused: Dir(...)`, as it must be (`deploy/live/unit-argv.py`).
 
 Install, per World `L` (after §2a's users):
 
@@ -146,6 +146,18 @@ and `/etc/nd/hosted/L.env` (root-owned 0644) with `ND_MEMBER`/`ND_GRANT` of the 
 OBSERVE-ONLY member (the operator's member enrols it, then `grant world MEMBER observe --via GRANT`:
 PENDING, PROTOCOL-7) and `ND_GID=$(getent group nd | cut -d: -f3)`. `grain-launch` reads
 `ROOT/worlds/L/store` with ROOT `/srv/nd-hosted`, so the follower writes exactly there.
+
+The LAUNCHER, per World `L`, from `deploy/units/linux/nd-grain-launch@.service` (as nd-hosted;
+after the follower, `Wants=`/`After=`; PID files in its RuntimeDirectory `/run/nd-grain-launch/L`):
+
+    grain-launch /srv/nd-hosted /run/nd-broker L /run/nd-grain-launch/L /opt/nd/bin/hosting-controller /srv/nd-hosted/worlds/L/store L
+
+The controller reads only the follow Store (`Launcher.check_follower`: the render refuses a launcher
+whose Store is not its follower's, or whose user is not the follower's). Its exits and the
+controller's (passed through) are EXITS.md's last two tables (HOSTING-19): a Store refusal (109)
+or any defect stops the unit; a signalled controller (126), a failed report pipe (123) or a
+lifetime end restarts. Run through the real programs (`deploy/live/unit-argv.py`): over an empty
+store directory the controller ends `store` 109 and grain-launch exits 109.
 
 The DRIVER (PENDING: PROTOCOL-7's `sync` verb with its Lean exit table, CLIENT-3's
 `ND_FOLLOW_SOCK`/`ND_HOST_SOCK` and envelope-only custody): `nd sync` as nd on a timer, relaying the

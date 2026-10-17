@@ -60,13 +60,16 @@ Findings, routed:
   not ignored. The Store stays sound (a torn tail, opened clean). HOST-6 told. Exit 3 restarted is
   therefore NOT yet shown on any box; this row is its plant.
 
-## The hosted follower's argv (OPS-3, 2026-10-18)
+## Rendered argv through the real programs (OPS-3, 2026-10-18)
 
-`follow-argv.py UNIT DIR ND_SUPERVISE HOST` runs the rendered `nd-hosted-follow@.service`
-ExecStart, every rendered path and `${VAR}` replaced by a scratch value, through the real
-nd-supervise (77fde4e). On hbox, DIR under `/tank` (umask-002, group-writable): exit 64,
-`sharedDirRefused: Dir("/tank/dregg-build/nanodregg/logs/ops3-fol1")`, so the rendered
-`--group ${ND_GID}` sits where nd-supervise's grammar takes it (before `--`) and the shared-dir
-check refuses a chain another can write, by name. The positive run (a passing chain, the
-follower serving, an nd-group peer connecting) needs a box whose `/srv/scratch` chain passes:
-burst5, PENDING.
+`unit-argv.py UNIT DIR WORD=VALUE...` runs a rendered unit's ExecStart with each rendered path,
+`%i` and `${VAR}` replaced by a scratch value (an unmapped one, or a value nothing asks for, fails
+before anything runs). On hbox at 8be4026:
+- `nd-grain-launch@.service`: grain-launch parses ROOT BROKER LABEL PIDS CONTROLLER, starts the
+  confined hosting-controller, which parses `STORE LABEL` and, over an empty store directory, ends
+  `store` (109, `hosting-controller: store badKey`); grain-launch passes 109 through
+  (`controllerEnded 109`): a fatal class, so the unit stops.
+- `nd-hosted-follow@.service`: under hbox's group-writable `/tank`, nd-supervise exits 64
+  `sharedDirRefused: Dir(...)`: the rendered `--group ${ND_GID}` sits where its grammar takes it and
+  the shared-dir check refuses a chain another can write, by name. The positive run (a passing
+  chain, the follower serving, an nd-group peer connecting) needs burst5's `/srv/scratch`: PENDING.

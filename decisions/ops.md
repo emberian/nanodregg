@@ -368,3 +368,32 @@ operator data ("no generated file can hold it") that is a convenience of my rend
 argument is that nothing needs the directory. Both were stated; the first could have carried a
 worse design.
 **Status.** landed; the driver (`nd sync` timer) PENDING PROTOCOL-7 + CLIENT-3; grain-launch PENDING HOSTING-19.
+
+## OPS-12 · the grain launcher is a template unit per World, rendered from HOSTING-19's two exit tables (OPS-3, 2026-10-18)
+
+**Decision.** `deploy/units/linux/nd-grain-launch@.service`: User=nd-hosted, RuntimeDirectory
+`nd-grain-launch/%i` (the grains' PID files), `grain-launch /srv/nd-hosted /run/nd-broker %i
+/run/nd-grain-launch/%i /opt/nd/bin/hosting-controller /srv/nd-hosted/worlds/%i/store %i`,
+`Wants=`/`After=` its World's follower, `After=` keybroker, `RestartPreventExitStatus` =
+`ControllerExit.codesOf .fatal ++ LaunchExit.codesOf .fatal` (8be4026). Exhaustive operator
+sentences `controllerAction`/`launchAction`; EXITS.md gains both tables. `Launcher.check` refuses
+a launcher whose controller Store is not its follower's or whose user is not the follower's
+(`Launcher.check_follower`). Theorems: `mem_launchPrevent_controller`/`_launch` (prevented iff
+fatal), `launchPrevent_panic_and_done`, `launchPrevent_split` (the tooth). The rendered argv runs
+through the real grain-launch and the confined controller (`deploy/live/unit-argv.py`, which
+replaces OPS-11's follower-only script): over an empty store directory, controller `store` 109
+passed through, grain-launch exits 109.
+**Alternatives.** (1) grain-launch under nd-supervise: it confines its own children (each a
+`sandbox::command`), and the controller must spawn grains; a second confinement layer would have
+to allow exactly what grain-launch does. (2) `RestrictAddressFamilies=AF_UNIX`: bwrap's
+`--unshare-net` configures loopback over netlink, untested under that restriction, so not rendered
+until a box runs it. (3) `Requires=` on the follower: a follower restart would then stop every
+grain; `Wants=` keeps them apart (the controller tails a Store, it does not talk to the follower).
+**CRITIQUE.** The unit has run on no systemd box; the argv row is a parser row, not a start. A
+controller over a follower that never advances (the driver is PENDING) sees an empty World and
+launches nothing: green and idle. `%i` is used as grain-launch's LABEL verbatim: the instance name
+must be the World's label exactly (systemd escapes `-` and `/` in instance names).
+**META-CRITIQUE.** I chose `Wants=` over `Requires=` from a restart argument without measuring how a
+controller behaves when its follower Store is being written mid-seal; HOST-10 says Tail.open reads
+unlocked and writes nothing, which I took on their word.
+**Status.** landed; the burst5 run (with the keybroker's) PENDING.

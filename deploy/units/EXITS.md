@@ -105,3 +105,36 @@ code space holds both tables: `host` (Host.Status, below 64) and nd-supervise's 
 | 76 | store | fatal | stopped (RestartPreventExitStatus) | the Store the decider follows refused to open: run `host check STORE`; restore if it refuses (RUNBOOK §5) |
 | 77 | behind | restart | restarted after 2 s; failed past 5 starts in 120 s | automatic: the decider fell behind the writer's tail; a fresh open reads the World whole |
 | 78 | io | fatal | stopped (RestartPreventExitStatus) | an IO error escaped the decider (the call and error are on stderr): check the Store's disk and permissions |
+
+## grain-launch (the nd-grain-launch@ unit; its controller's codes below are passed through)
+
+| code | name | class | systemd | operator |
+|---|---|---|---|---|
+| 116 | usage | fatal | stopped (RestartPreventExitStatus) | the unit's argv is wrong or a root does not exist: fix the unit; make /srv/nd-hosted (RUNBOOK §2b) |
+| 117 | rootsOverlap | fatal | stopped (RestartPreventExitStatus) | the broker root and the hosting root nest (HOSTING-17 §8): /run/nd-broker and /srv/nd-hosted must be disjoint trees |
+| 118 | controllerRefused | fatal | stopped (RestartPreventExitStatus) | the sandbox refused the controller's policy or could not spawn it: check the mechanism (deploy/live/README.md) and the controller path |
+| 119 | frame | fatal | stopped (RestartPreventExitStatus) | a defect in the controller's actions: keep the World's state, report to HOSTING |
+| 120 | badAction | fatal | stopped (RestartPreventExitStatus) | a defect in the controller's actions: keep the World's state, report to HOSTING |
+| 121 | badGrain | fatal | stopped (RestartPreventExitStatus) | a defect in the controller's actions: keep the World's state, report to HOSTING |
+| 122 | duplicateLaunch | fatal | stopped (RestartPreventExitStatus) | a defect in the controller's actions: keep the World's state, report to HOSTING |
+| 123 | reportPipe | restart | restarted after 2 s; failed past 5 starts in 120 s | automatic: the controller's pipe failed, a fresh launcher and controller start over (every grain was killed and reaped) |
+| 124 | pidFile | fatal | stopped (RestartPreventExitStatus) | a grain's PID file could not be written: check /run/nd-grain-launch (the unit's RuntimeDirectory) and its disk |
+| 125 | lifetime | restart | restarted after 2 s; failed past 5 starts in 120 s | automatic: grain-launch's lifetime ended, a fresh one continues |
+| 126 | controllerSignaled | restart | restarted after 2 s; failed past 5 starts in 120 s | automatic; the controller was killed by a signal (OOM, an operator); a crash on every start stops at the start limit |
+| 127 | controllerLost | fatal | stopped (RestartPreventExitStatus) | grain-launch could not wait on its controller: nothing says a restart is safe; read the journal, then start the unit |
+
+## hosting-controller (under grain-launch)
+
+| code | name | class | systemd | operator |
+|---|---|---|---|---|
+| 0 | launcherGone | done | stays stopped (success) | nothing: grain-launch closed the controller's pipe (its own end is in grain-launch's line) |
+| 106 | usage | fatal | stopped (RestartPreventExitStatus) | the unit's argv for the controller is wrong: fix the grain-launch unit |
+| 107 | badLabel | fatal | stopped (RestartPreventExitStatus) | the World's label is refused for every grain (the unit's instance name): rename the instance to the World's label |
+| 108 | noPackage | fatal | stopped (RestartPreventExitStatus) | the lifecycle package has no id: a build defect, report to HOSTING |
+| 109 | store | fatal | stopped (RestartPreventExitStatus) | the follow Store the controller tails refused to open: run `host check /srv/nd-hosted/worlds/LABEL/store` as nd-hosted; restore or re-follow it (RUNBOOK §2b, §5) |
+| 110 | torn | fatal | stopped (RestartPreventExitStatus) | a defect in grain-launch's report framing: report to HOSTING |
+| 111 | badLength | fatal | stopped (RestartPreventExitStatus) | a defect in grain-launch's report framing: report to HOSTING |
+| 112 | badReport | fatal | stopped (RestartPreventExitStatus) | a defect in grain-launch's report framing: report to HOSTING |
+| 113 | unencodable | fatal | stopped (RestartPreventExitStatus) | unreachable by theorem (the controller's plans encode); seen, a defect: report to HOSTING |
+| 114 | lifetime | restart | restarted after 2 s; failed past 5 starts in 120 s | automatic: the controller's lifetime ended, a fresh one re-reads the World whole |
+| 115 | io | fatal | stopped (RestartPreventExitStatus) | an IO error escaped the controller (stderr names the call and error): check the follow Store's disk and permissions |

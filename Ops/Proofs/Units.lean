@@ -6,12 +6,13 @@ import Ops.Units
 import Host.Proofs.Exit
 import Protocol.Proofs.Exit
 import Hosting.Proofs.BrokerExit
+import Hosting.Proofs.LaunchExit
 
 namespace Nanodregg.Ops.Units
 
 open Nanodregg.Host
 open Nanodregg.Protocol (SupervisorExit)
-open Nanodregg.Hosting (DeciderExit KeybrokerExit)
+open Nanodregg.Hosting (DeciderExit KeybrokerExit ControllerExit LaunchExit)
 
 /-- What a rendered unit is: the node, its nd-supervise command line and `preventCodes`. -/
 theorem ofNode_ok (n : Node) (u : Service) (h : Service.ofNode n = .ok u) :
@@ -172,5 +173,35 @@ theorem ofNode_group (n : Node) (u : Service) (h : Service.ofNode n = .ok u) :
   constructor
   · intro hg; simp [Node.exec, hg]
   · intro hg; simp [Node.exec, hg]
+
+/-- The grain-launch unit stops on a controller end iff HOSTING's table calls it fatal. -/
+theorem mem_launchPrevent_controller (e : ControllerExit) :
+    e.code ∈ launchPreventCodes ↔ e.cls = .fatal := by
+  cases e <;> decide
+
+/-- ... and on grain-launch's own end iff fatal. -/
+theorem mem_launchPrevent_launch (e : LaunchExit) : e.code ∈ launchPreventCodes ↔ e.cls = .fatal := by
+  cases e <;> decide
+
+/-- A Rust panic (101) and a clean controller end (0) are never prevented. -/
+theorem launchPrevent_panic_and_done : 101 ∉ launchPreventCodes ∧ 0 ∉ launchPreventCodes := by decide
+
+/-- The tooth: a Store refusal of the controller (109) and a defect action (120) stop the unit; a
+signalled controller (126) and a failed report pipe (123) restart. False if either half is dropped
+or a class flips. -/
+theorem launchPrevent_split :
+    ControllerExit.store.code ∈ launchPreventCodes ∧ LaunchExit.badAction.code ∈ launchPreventCodes ∧
+    LaunchExit.controllerSignaled.code ∉ launchPreventCodes ∧ LaunchExit.reportPipe.code ∉ launchPreventCodes := by
+  decide
+
+/-- A launcher renders only if its controller reads the Store its follower writes, as the
+follower's own user (HOSTING-17: the controller never reads the writer's files). -/
+theorem Launcher.check_follower (l : Launcher) (h : l.check = .ok ()) :
+    l.store = l.follower.store ∧ l.follower.user = some l.user := by
+  cases hp : l.paired
+  · have : l.check = .error (.badPath l.store) := by
+      simp only [Launcher.check, hp]; rfl
+    rw [this] at h; cases h
+  · simpa [Launcher.paired, Bool.and_eq_true, beq_iff_eq] using hp
 
 end Nanodregg.Ops.Units
