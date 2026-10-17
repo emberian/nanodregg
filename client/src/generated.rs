@@ -63,6 +63,61 @@ impl CloseReason {
     }
 }
 
+/// Why custody refused a step (Protocol.CustodyRefusal).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CustodyRefusal {
+    FileRefused,
+    Exists,
+    Shape,
+    HoldingAbsent,
+    NoPending,
+    RotationInFlight,
+    Mismatch,
+    Io,
+}
+
+impl CustodyRefusal {
+    pub fn code(self) -> u8 {
+        match self {
+            CustodyRefusal::FileRefused => 0,
+            CustodyRefusal::Exists => 1,
+            CustodyRefusal::Shape => 2,
+            CustodyRefusal::HoldingAbsent => 3,
+            CustodyRefusal::NoPending => 4,
+            CustodyRefusal::RotationInFlight => 5,
+            CustodyRefusal::Mismatch => 6,
+            CustodyRefusal::Io => 7,
+        }
+    }
+
+    pub fn from_code(b: u8) -> Option<Self> {
+        match b {
+            0 => Some(CustodyRefusal::FileRefused),
+            1 => Some(CustodyRefusal::Exists),
+            2 => Some(CustodyRefusal::Shape),
+            3 => Some(CustodyRefusal::HoldingAbsent),
+            4 => Some(CustodyRefusal::NoPending),
+            5 => Some(CustodyRefusal::RotationInFlight),
+            6 => Some(CustodyRefusal::Mismatch),
+            7 => Some(CustodyRefusal::Io),
+            _ => None,
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            CustodyRefusal::FileRefused => "fileRefused",
+            CustodyRefusal::Exists => "exists",
+            CustodyRefusal::Shape => "shape",
+            CustodyRefusal::HoldingAbsent => "holdingAbsent",
+            CustodyRefusal::NoPending => "noPending",
+            CustodyRefusal::RotationInFlight => "rotationInFlight",
+            CustodyRefusal::Mismatch => "mismatch",
+            CustodyRefusal::Io => "io",
+        }
+    }
+}
+
 pub mod step {
     pub const DONE: u8 = 0;
     pub const SIGN: u8 = 1;
@@ -334,6 +389,27 @@ pub mod layout {
     }
 
     #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct CustodyRefused {
+        pub refusal: super::CustodyRefusal,
+    }
+
+    impl CustodyRefused {
+        pub fn decode(b: &[u8]) -> Result<Self, Refusal> {
+            let mut c = Cursor { b, i: 0 };
+            let refusal = c.one_of(super::CustodyRefusal::from_code)?;
+            c.end()?;
+            Ok(CustodyRefused { refusal })
+        }
+
+        pub fn encode(&self) -> Result<Vec<u8>, Refusal> {
+            let mut out = Vec::new();
+            let CustodyRefused { refusal } = self;
+            out.push(refusal.code());
+            Ok(out)
+        }
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
     pub enum Step {
         Done {
             exit: u8,
@@ -448,6 +524,77 @@ pub mod layout {
                 }
             }
             Ok(out)
+        }
+    }
+}
+
+/// What the attempt store does next with a frozen call (Protocol.Attempt.next, as its table).
+pub mod attempt {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum Request {
+        Submit,
+        Lookup,
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum Seen {
+        Committed,
+        Refused,
+        Unknown,
+        Absent,
+        Lost,
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum Action {
+        Submit,
+        Lookup,
+        Committed,
+        Refused,
+        Absent,
+        BadReply,
+        Uncertain,
+    }
+
+    impl Action {
+        pub fn name(self) -> &'static str {
+            match self {
+                Action::Submit => "submit",
+                Action::Lookup => "lookup",
+                Action::Committed => "committed",
+                Action::Refused => "refused",
+                Action::Absent => "absent",
+                Action::BadReply => "badReply",
+                Action::Uncertain => "uncertain",
+            }
+        }
+    }
+
+    /// `sends_left` is `sends < SENDS_MAX`; `last` is the last request and what its reply said.
+    pub fn next(sends_left: bool, last: Option<(Request, Seen)>) -> Action {
+        match (sends_left, last) {
+            (false, None) => Action::Submit,
+            (false, Some((Request::Submit, Seen::Committed))) => Action::Committed,
+            (false, Some((Request::Submit, Seen::Refused))) => Action::Refused,
+            (false, Some((Request::Submit, Seen::Unknown))) => Action::Lookup,
+            (false, Some((Request::Submit, Seen::Absent))) => Action::BadReply,
+            (false, Some((Request::Submit, Seen::Lost))) => Action::Lookup,
+            (false, Some((Request::Lookup, Seen::Committed))) => Action::Committed,
+            (false, Some((Request::Lookup, Seen::Refused))) => Action::Refused,
+            (false, Some((Request::Lookup, Seen::Unknown))) => Action::Uncertain,
+            (false, Some((Request::Lookup, Seen::Absent))) => Action::Absent,
+            (false, Some((Request::Lookup, Seen::Lost))) => Action::Uncertain,
+            (true, None) => Action::Submit,
+            (true, Some((Request::Submit, Seen::Committed))) => Action::Committed,
+            (true, Some((Request::Submit, Seen::Refused))) => Action::Refused,
+            (true, Some((Request::Submit, Seen::Unknown))) => Action::Lookup,
+            (true, Some((Request::Submit, Seen::Absent))) => Action::BadReply,
+            (true, Some((Request::Submit, Seen::Lost))) => Action::Lookup,
+            (true, Some((Request::Lookup, Seen::Committed))) => Action::Committed,
+            (true, Some((Request::Lookup, Seen::Refused))) => Action::Refused,
+            (true, Some((Request::Lookup, Seen::Unknown))) => Action::Uncertain,
+            (true, Some((Request::Lookup, Seen::Absent))) => Action::Submit,
+            (true, Some((Request::Lookup, Seen::Lost))) => Action::Uncertain,
         }
     }
 }

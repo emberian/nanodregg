@@ -1,4 +1,5 @@
 import Protocol.Table
+import Protocol.Attempt
 import Codec.Layout
 
 /-!
@@ -65,19 +66,24 @@ def camel (s : String) : String :=
   | c :: cs => String.ofList (c.toUpper :: cs)
   | [] => s
 
-def rustType : Field → String
+/-- The Rust type of a `oneOf` field: by default the enum the layout module emits for it
+(`camel name`); a layout whose cases are a Lean enum emitted elsewhere names that enum instead. -/
+abbrev OneOfType := String → String
+
+def rustType (ty : OneOfType := camel) : Field → String
   | .byte _ => "u8"
   | .u64 _ => "u64"
   | .bytes _ => "Vec<u8>"
   | .list _ => "Vec<Vec<u8>>"
-  | .oneOf n _ => camel n
+  | .oneOf n _ => ty n
 
-def readField (max : Nat) : Field → String
+def readField (max : Nat) (f : Field) (ty : OneOfType := camel) : String :=
+  match f with
   | .byte n => s!"let {n} = c.byte()?;"
   | .u64 n => s!"let {n} = c.u64()?;"
   | .bytes n => s!"let {n} = c.bytes({max})?;"
   | .list n => s!"let {n} = c.list({max})?;"
-  | .oneOf n _ => s!"let {n} = c.one_of({camel n}::from_code)?;"
+  | .oneOf n _ => s!"let {n} = c.one_of({ty n}::from_code)?;"
 
 def writeField (max : Nat) : Field → String
   | .byte n => s!"out.push(*{n});"
@@ -94,8 +100,8 @@ def structLit (indent name : String) (l : Layout) : String :=
   if (fieldNames l).length ≤ 18 then s!"{name} \{ {fieldNames l} }"
   else String.intercalate "\n" ([s!"{name} \{"] ++ l.map (fun f => s!"{indent}    {f.name},") ++ [s!"{indent}}"])
 
-def fieldDecls (indent vis : String) (l : Layout) : List String :=
-  l.map fun f => s!"{indent}{vis}{f.name}: {rustType f},"
+def fieldDecls (indent vis : String) (l : Layout) (ty : OneOfType := camel) : List String :=
+  l.map fun f => s!"{indent}{vis}{f.name}: {rustType ty f},"
 
 /-- A Rust enum for a `oneOf` field: its cases, their codes, and the inverse. -/
 def oneOfEnum (name : String) (cases : List (String × UInt8)) : String :=
@@ -141,7 +147,7 @@ def oneOfs (ls : List Layout) : List (String × List (String × UInt8)) :=
     | _ => acc) []
 
 /-- A struct for one untagged layout. -/
-def structFor (name : String) (max : Nat) (l : Layout) (total : Option Nat := none) : String :=
+def structFor (name : String) (max : Nat) (l : Layout) (total : Option Nat := none) (ty : OneOfType := camel) : String :=
   let totalRead := match total with
     | some t => [s!"            if c.i > {t} \{", s!"                return Err(Refusal::PastBound \{",
         "                    offset: 0,", s!"                    limit: {t},", "                    got: c.i,",
@@ -153,11 +159,11 @@ def structFor (name : String) (max : Nat) (l : Layout) (total : Option Nat := no
         "                });", "            }"]
     | none => []
   String.intercalate "\n" <|
-    [s!"    #[derive(Debug, Clone, PartialEq, Eq)]", s!"    pub struct {name} \{"] ++ fieldDecls "        " "pub " l ++
+    [s!"    #[derive(Debug, Clone, PartialEq, Eq)]", s!"    pub struct {name} \{"] ++ fieldDecls "        " "pub " l ty ++
     ["    }", "", s!"    impl {name} \{",
      "        pub fn decode(b: &[u8]) -> Result<Self, Refusal> {",
      "            let mut c = Cursor { b, i: 0 };"] ++
-    l.map (fun f => "            " ++ readField max f) ++ totalRead ++
+    l.map (fun f => "            " ++ readField max f ty) ++ totalRead ++
     ["            c.end()?;", s!"            Ok({structLit "            " name l})", "        }", "",
      "        pub fn encode(&self) -> Result<Vec<u8>, Refusal> {",
      "            let mut out = Vec::new();",
@@ -315,7 +321,58 @@ def layoutModule : String := String.intercalate "\n\n" ([
   structFor "Resume" Bounds.frameBytesMax resumeLayout,
   structFor "SignResult" Bounds.frameBytesMax signResultLayout,
   structFor "PrecommitResult" Bounds.frameBytesMax precommitResultLayout,
+  structFor "CustodyRefused" Bounds.frameBytesMax custodyRefusalLayout (ty := fun _ => "super::CustodyRefusal"),
   stepEnum Bounds.frameBytesMax ++ "\n}"])
+
+/-- `CustodyRefusal` as a Rust enum: the code on the wire (`layout::CustodyRefused`'s one byte), the
+inverse, and the Lean name the follow renders. Its cases are `CustodyRefusal.all`, the same list
+`custodyRefusalLayout`'s cases are read from, so the enum and the layout cannot disagree. -/
+def custodyRefusalEnum : String :=
+  String.intercalate "\n" (
+    ["/// Why custody refused a step (Protocol.CustodyRefusal).",
+     "#[derive(Debug, Clone, Copy, PartialEq, Eq)]", "pub enum CustodyRefusal {"] ++
+    CustodyRefusal.all.map (fun r => s!"    {ctorName r},") ++
+    ["}", "", "impl CustodyRefusal {", "    pub fn code(self) -> u8 {", "        match self {"] ++
+    CustodyRefusal.all.map (fun r => s!"            CustodyRefusal::{ctorName r} => {r.code},") ++
+    ["        }", "    }", "", "    pub fn from_code(b: u8) -> Option<Self> {", "        match b {"] ++
+    CustodyRefusal.all.map (fun r => s!"            {r.code} => Some(CustodyRefusal::{ctorName r}),") ++
+    ["            _ => None,", "        }", "    }", "", "    pub fn name(self) -> &'static str {", "        match self {"] ++
+    CustodyRefusal.all.map (fun r => s!"            CustodyRefusal::{ctorName r} => \"{r.name}\",") ++
+    ["        }", "    }", "}"])
+
+/-! ## The attempt store's decision (Protocol.Attempt)
+
+`attempt::next` is `Attempt.table` printed as one Rust `match`, one arm per row: the client consults
+it and keeps no second copy of the rule. The 22 rows are every input (`Attempt.inputs`), so the
+`match` is exhaustive and `cargo check` refuses it if a row were missing. -/
+
+open Attempt in
+def attemptRow (row : (Bool × Option (Request × Seen)) × Action) : String :=
+  let last := match row.1.2 with
+    | none => "None"
+    | some (r, s) => s!"Some((Request::{ctorName r}, Seen::{ctorName s}))"
+  s!"            ({row.1.1}, {last}) => Action::{ctorName row.2},"
+
+open Attempt in
+def attemptModule : String :=
+  let enum (name : String) (cases : List String) : List String :=
+    ["    #[derive(Debug, Clone, Copy, PartialEq, Eq)]", s!"    pub enum {name} \{"] ++
+      cases.map (fun c => s!"        {c},") ++ ["    }"]
+  let actions : List Action := [.submit, .lookup, .committed, .refused, .absent, .badReply, .uncertain]
+  String.intercalate "\n" (
+    ["/// What the attempt store does next with a frozen call (Protocol.Attempt.next, as its table).",
+     "pub mod attempt {"] ++
+    enum "Request" (Request.all.map ctorName) ++ [""] ++
+    enum "Seen" (Seen.all.map ctorName) ++ [""] ++
+    enum "Action" (actions.map ctorName) ++
+    ["", "    impl Action {", "        pub fn name(self) -> &'static str {", "            match self {"] ++
+    actions.map (fun a => s!"                Action::{ctorName a} => \"{a.name}\",") ++
+    ["            }", "        }", "    }", "",
+     "    /// `sends_left` is `sends < SENDS_MAX`; `last` is the last request and what its reply said.",
+     "    pub fn next(sends_left: bool, last: Option<(Request, Seen)>) -> Action {",
+     "        match (sends_left, last) {"] ++
+    table.map attemptRow ++
+    ["        }", "    }", "}"])
 
 /-- `CloseReason` as a Rust enum whose `name()` is the Lean constructor's wire name. -/
 def closeReasonEnum : String :=
@@ -343,8 +400,10 @@ def file : Except String String := do
      byteModule "follow_op" (opsOn .follow) Op.code,
      byteModule "status" Status.all Status.code,
      closeReasonEnum,
+     custodyRefusalEnum,
      byteModule "step" Step.all Step.code,
-     layoutModule] ++ "\n"
+     layoutModule,
+     attemptModule] ++ "\n"
 
 /-- `emit-rust PATH` writes the file; `emit-rust --check PATH` exits 1 if PATH differs. -/
 def run (args : List String) : IO UInt32 := do
