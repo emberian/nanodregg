@@ -146,20 +146,55 @@ inductive CloseReason
   | ended
   /-- `nd-attach`: the Store's socket does not accept a connection -/
   | unreachable
+  /-- the client ended its stream at a frame boundary; named to the CHILD in its hang-up (there is
+  no peer left to tell) -/
+  | peerLeft
   deriving DecidableEq, Repr
 
 namespace CloseReason
 
 def all : List CloseReason :=
-  [idle, frameStalled, frameRefused, replyBacklog, replyWriteFailed, replyTimeout, full, ended, unreachable]
+  [idle, frameStalled, frameRefused, replyBacklog, replyWriteFailed, replyTimeout, full, ended, unreachable,
+   peerLeft]
 
 /-- The name on the wire (`CloseReason.name_injective`). -/
 def name : CloseReason → String
   | idle => "idle" | frameStalled => "frameStalled" | frameRefused => "frameRefused"
   | replyBacklog => "replyBacklog" | replyWriteFailed => "replyWriteFailed"
   | replyTimeout => "replyTimeout" | full => "full" | ended => "ended" | unreachable => "unreachable"
+  | peerLeft => "peerLeft"
+
+/-- The reason a hang-up's payload names (its name in UTF-8), if any. -/
+def ofBytes? (b : ByteArray) : Option CloseReason := all.find? (·.name.toUTF8 == b)
 
 end CloseReason
+
+/-! ## The child wire's hang-up (PROTOCOL-23)
+
+Toward the child (`host serve`, `nd-attach`) a frame is `u32 conn ‖ byte ‖ payload`. The byte is a
+request's `Op.code`, or `hangupCode`: connection `conn` has ended, and the payload is the ended
+connection's `CloseReason` name. A hang-up is not an `Op` (it has no receiver in the op table, so
+`every_op_has_a_row` stays about operations); `hangup_not_op` keeps the two apart. The child
+acknowledges it by name with `ack`: `Status.closed ‖ the same name` (`ackReason?_ack`). -/
+
+/-- What the byte after a child-wire frame's connection id says. -/
+inductive ChildKind
+  | request
+  | hangup
+  deriving DecidableEq, Repr
+
+def hangupCode : UInt8 := 255
+
+/-- `none`: a byte that is neither an op nor `hangupCode`, refused by the Host as `unknownOp`. -/
+def childKindOf? (b : UInt8) : Option ChildKind :=
+  if b = hangupCode then some .hangup
+  else if Op.all.any (·.code == b) then some .request else none
+
+/-- The child's acknowledgement of a hang-up for `r`, as a reply's `status ‖ payload`. -/
+def ack (r : CloseReason) : ByteArray := ByteArray.mk #[Status.closed.code] ++ r.name.toUTF8
+
+/-- The reason a `closed` reply names, if it names one. -/
+def ackReason? (b : ByteArray) : Option CloseReason := CloseReason.all.find? (ack · == b)
 
 /-- The tag of a step the follow machine asks the client to perform (CLIENT-2). -/
 inductive Step

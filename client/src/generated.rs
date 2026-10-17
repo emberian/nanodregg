@@ -45,6 +45,7 @@ pub enum CloseReason {
     Full,
     Ended,
     Unreachable,
+    PeerLeft,
 }
 
 impl CloseReason {
@@ -59,9 +60,13 @@ impl CloseReason {
             CloseReason::Full => "full",
             CloseReason::Ended => "ended",
             CloseReason::Unreachable => "unreachable",
+            CloseReason::PeerLeft => "peerLeft",
         }
     }
 }
+
+/// The child wire's hang-up byte (Protocol.hangupCode): connection ended, payload = its CloseReason name.
+pub const HANGUP: u8 = 255;
 
 /// Why custody refused a step (Protocol.CustodyRefusal).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

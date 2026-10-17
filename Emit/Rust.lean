@@ -401,6 +401,7 @@ def file : Except String String := do
      byteModule "follow_op" (opsOn .follow) Op.code,
      byteModule "status" Status.all Status.code,
      closeReasonEnum,
+     s!"/// The child wire's hang-up byte (Protocol.hangupCode): connection ended, payload = its CloseReason name.\npub const HANGUP: u8 = {hangupCode};",
      custodyRefusalEnum,
      byteModule "step" Step.all Step.code,
      byteModule "supervisor_exit" SupervisorExit.all (fun s => s.code.toUInt8),

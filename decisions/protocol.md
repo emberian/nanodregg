@@ -538,3 +538,28 @@ because of a measurement on a deployed box; the numbers (30 s, 8) are round gues
 `frameBytesMax` and the friend count, and the vocabulary has two `nd-attach`-only names (`ended`,
 `unreachable`) that I added while writing it rather than from a row that needs them.
 **Status.** landed (vocabulary); the mux and `nd-attach` land under `client:`.
+
+## PROTOCOL-23 · the child wire's hang-up: the supervisor tells its child a connection ended, and the child acknowledges it by name (2026-10-17, BUILD-TRANSPORT; shape by PROTOCOL-5, ROOT's ruling)
+**Decision.** Toward a supervisor's child, a frame's byte after the connection id is an `Op.code`
+(a request) or `hangupCode` = 255 (connection `conn` ended; payload = its `CloseReason` name, the
+same name-as-payload convention as PROTOCOL-22's `closed`). `ChildKind` / `childKindOf?` decode it;
+a hang-up is NOT an `Op` (it has no receiver in the op table, so `every_op_has_a_row` and receiver
+uniqueness stay non-vacuous). The child answers it `Status.closed ‖ the same name` (`ack`;
+`ackReason?_ack`). New reason `peerLeft`: the client ended its stream (an end with no name was a
+law-7 defect). The supervisor sends a hang-up for every connection it ends (except one the child
+itself closed); `nd-attach` releases the upstream connection and its per-session slot on it.
+Theorems: `hangup_not_op`, `childKindOf?_hangup`, `childKindOf?_op`, `ackReason?_ack`,
+`CloseReason.ofBytes?_name` (which rests on `CloseReason.name_injective`, PROTOCOL-22).
+No conformance row: the rows do not model the mux; the plants live in host-sim (plant-hangup)
+and the mux / attach tests.
+**Alternatives.** (a) A reserved `Op` whose receiver is "the wire" (refused: a vacuous receiver,
+the kind PROTOCOL-2 removed) plus a `.child` socket (a second shape for one entry). (b) A 4-byte
+body (`conn`, no byte) the Host ignores (refused by ROOT: a frame nobody acknowledges by name).
+(c) No signal: `nd-attach` leaks a slot per ended connection until the box's idle close.
+**Critique (PROTOCOL-5's).** The child learns of the close one frame late; a child that never acks
+is bounded by the mux only because the mux has already closed the connection. The ack goes to a
+connection that no longer exists, so the supervisor drops it: its value is the theorem and the
+plant (the child's dispatch is total over the wire bytes), not a message anyone reads.
+**Meta-critique (PROTOCOL-5's).** The hang-up/op split could be read as taste; the reason is that
+receiver uniqueness has to stay a non-vacuous theorem.
+**Status.** landed.

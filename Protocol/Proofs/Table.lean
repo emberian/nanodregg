@@ -45,7 +45,19 @@ theorem name_injective (a b : CloseReason) (h : a.name = b.name) : a = b := by
 
 theorem mem_all (r : CloseReason) : r ∈ all := by cases r <;> decide
 
+theorem ofBytes?_name (r : CloseReason) : ofBytes? r.name.toUTF8 = some r := by cases r <;> decide
+
 end CloseReason
+
+/-- A hang-up byte is never a request's op byte, so the child's decode cannot confuse them. -/
+theorem hangup_not_op (op : Op) : op.code ≠ hangupCode := by cases op <;> decide
+
+theorem childKindOf?_hangup : childKindOf? hangupCode = some .hangup := by decide
+
+theorem childKindOf?_op (op : Op) : childKindOf? op.code = some .request := by cases op <;> decide
+
+/-- The acknowledgement names exactly the hang-up's reason. -/
+theorem ackReason?_ack (r : CloseReason) : ackReason? (ack r) = some r := by cases r <;> decide
 
 /-- A friend's ssh session can never take every supervisor slot by itself. -/
 theorem Bounds.peer_below_connections : Bounds.peerConnectionsMax < Bounds.connectionsMax := by decide
