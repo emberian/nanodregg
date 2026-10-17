@@ -32,7 +32,9 @@ def parse(text: str) -> dict:
     return rows
 
 
-def measured_check(text: str, measured: str) -> tuple[list[str], list[str]]:
+def measured_check(text: str, measured: str, partial: bool = False) -> tuple[list[str], list[str]]:
+    """partial (pre-push, which runs only the exes a commit can affect): a pinned row nothing
+    measured is not red; a measured row above its ceiling still is."""
     rows = parse(text)
     seen = {}
     for line in measured.splitlines():
@@ -42,6 +44,8 @@ def measured_check(text: str, measured: str) -> tuple[list[str], list[str]]:
     red, unpinned = [], []
     for key, (ceil, _, src) in rows.items():
         if key not in seen:
+            if partial:
+                continue
             red.append(f"waste {key[0]} {key[1]}: pinned (ceiling {ceil}) but nothing measured it this run")
         elif seen[key] > ceil:
             red.append(f"waste {key[0]} {key[1]}: measured {seen[key]} > ceiling {ceil}")
@@ -77,13 +81,14 @@ if __name__ == "__main__":
     ap.add_argument("--base")
     ap.add_argument("--message")
     ap.add_argument("--measured")
+    ap.add_argument("--partial", action="store_true", help="with --measured: unmeasured pinned rows are not red")
     a = ap.parse_args()
     path = os.path.join(a.root, "gates", "waste.tsv")
     text = open(path, encoding="utf-8").read() if os.path.exists(path) else ""
     base = open(a.base, encoding="utf-8").read() if a.base and os.path.exists(a.base) else ""
     msg = open(a.message, encoding="utf-8").read() if a.message else ""
     if a.measured:
-        red, unpinned = measured_check(text, open(a.measured, encoding="utf-8").read())
+        red, unpinned = measured_check(text, open(a.measured, encoding="utf-8").read(), a.partial)
         for r in red:
             print(r)
         for u in unpinned:

@@ -2,25 +2,17 @@
 # scripts/standing.sh [--here] [REV] — the standing verdict of one commit (default HEAD), on a
 # laptop. Refused unless this checkout is at main (--here: judge with this checkout's scripts).
 #
-#   tip -> gates -> full build -> census + generated files -> sim -> rows -> one line:
-#   STANDING <sha> gates=… build=… census=… sim=… rows=… plants=… waste=… unmeasured=N => GREEN|RED|INCOMPLETE
+#   tip -> gates -> full build -> census + generated files -> runs -> waste -> one line:
+#   STANDING <sha> gates=… build=… census=… runs=… waste=… unmeasured=N => GREEN|RED|INCOMPLETE
 #
-# GREEN needs every stage to have RUN and passed. A stage that does not exist yet (no `sim`
-# lean_exe, no rows/run) is ABSENT, and any ABSENT stage or unmeasured ceiling makes the verdict
-# INCOMPLETE, never GREEN: a gate that cannot run is not a pass. The line is also appended to
-# <git-common-dir>/nanodregg-standing/verdicts.log.
-#   sim:  every lean_exe named `*-sim` (host-sim, kernel-sim, …), run as `lake exe X SEED` for
-#         SEED in ${SIM_SEEDS:-1 2 3} (kernel-sim: once, `--seeds 64`, so its planted-refusal
-#         coverage gate runs): each must exit 0 with a last line `ALL PASS`, else RED
-#         naming the first `FAIL <check>`. No `*-sim` exe => sim=ABSENT => INCOMPLETE.
-#   rows: `rows/run` in the judged tree (PROTOCOL's runner, Protocol.Rows.Run): one line per row
-#         `ROW <name> PASS|FAIL <why>|PENDING <why>`; exit 0 (`ALL PASS`) = ok, exit 3 (no FAIL,
-#         some PENDING: a row with no driver yet) = INCOMPLETE(n pending), anything else = RED
-#         naming the first failing row
-#   plants: OPS's `store-plants` exe (backup/restore against the real `host`) into a fresh
-#          directory of the standing tree; exit 0 + `ALL PASS` = ok, else RED naming the first
-#          `PLANT <name> FAIL`; no store-plants exe => ABSENT
-#   waste: the `WASTE <op> <metric> <ratio>` lines the sims and the rows print, against gates/waste.tsv
+# GREEN only when every stage's value is exactly `ok` and no ceiling is unmeasured; any RED stage
+# makes the line RED; anything else (ABSENT, INCOMPLETE, KILLED(load)) is INCOMPLETE: a gate that
+# cannot run is not a pass. The line is also appended to <git-common-dir>/nanodregg-standing/verdicts.log.
+#   runs:  gates/runs.py over every lean_exe gates/runs.tsv classifies as a verdict (sims, journeys,
+#          rows, plants), with the arguments the table gives (kernel-sim --seeds 64: its
+#          planted-refusal coverage gate judges only >= 16 seeds). ok / INCOMPLETE(first pending
+#          run: a row with no driver) / KILLED(load)(first killed run) / RED(first red run).
+#   waste: the `WASTE <op> <metric> <ratio>` lines the runs print, against gates/waste.tsv
 #          (gates/waste.py --measured): a pinned row above its ceiling or unmeasured is RED;
 #          no measurement and no row at all is ABSENT (INCOMPLETE)
 set -uo pipefail
@@ -54,53 +46,22 @@ gates=$(run python3 "$T/gates/check.py" "$T" --changed "$G/changed" --base-tree 
 unmeasured=$(grep -c '^WARN ' "$log" || true)
 # shellcheck disable=SC2046
 build=$(run wrapped env -C "$T" LEAN_NUM_THREADS="${LEAN_NUM_THREADS:-4}" lake build $(lean_targets "$T"))
-census=ABSENT; sim=ABSENT; rows=ABSENT; plants=ABSENT
+census=ABSENT; runs=ABSENT; : > "$G/waste.measured"
 if [ "$build" = ok ]; then
   census=$(run wrapped python3 "$T/gates/census.py" "$T")
   while read -r exe out; do
     [ -n "$exe" ] && [ "$(run wrapped env -C "$T" lake exe "$exe" --check "$out")" = RED ] && census=RED
   done < <(generated_checks "$T")
-: > "$G/waste.measured"
-  sims=$(for e in $(lean_exes "$T"); do case $e in *-sim) echo "$e" ;; esac; done)
-  if [ -n "$sims" ]; then
-    sim=ok
-    for exe in $sims; do
-      # kernel-sim runs once over 64 seeds: its planted-refusal coverage gate (every planted
-      # name met at least once) only judges a run of >= 16 seeds (KERNEL-20, ROOT 10-16).
-      case $exe in kernel-sim) runs=("--seeds 64") ;; *) runs=(${SIM_SEEDS:-1 2 3}) ;; esac
-      for seed in "${runs[@]}"; do
-        out=$(wrapped env -C "$T" lake exe "$exe" $seed 2>&1); rc=$?
-        printf '%s\n' "$out" >> "$log"
-        printf '%s\n' "$out" | grep '^WASTE ' >> "$G/waste.measured"
-        if [ $rc -ne 0 ] || [ "$(printf '%s\n' "$out" | tail -1)" != "ALL PASS" ]; then
-          # The first red names the verdict; the other sims still run, so their WASTE lines are
-          # measured (one sim's red used to make every pinned waste row "unmeasured", a second,
-          # false red).
-          [ "$sim" = ok ] && sim="RED($exe $seed: $(printf '%s\n' "$out" | grep -m1 '^FAIL ' || echo "exit $rc, last line: $(printf '%s\n' "$out" | tail -1)"))"
-          break
-        fi
-      done
-    done
-  fi
-  if [ -x "$T/rows/run" ]; then
-    wrapped env -C "$T" ./rows/run > "$G/rows.out" 2>&1; rc=$?
-    cat "$G/rows.out" >> "$log"
-    grep '^WASTE ' "$G/rows.out" >> "$G/waste.measured"
-    case $rc in
-      0) rows=ok ;;
-      3) rows="INCOMPLETE($(grep -c '^ROW [^ ]* PENDING' "$G/rows.out") pending)" ;;
-      *) rows="RED($(grep -m1 '^ROW [^ ]* FAIL' "$G/rows.out" | cut -c5- || echo "exit $rc"))" ;;
-    esac
-  fi
-  # plants: OPS's backup/restore plants against the real `host` (store-plants HOST_EXE DIR; DIR
-  # must not exist, everything it writes is under it). Pass = exit 0 and last line `ALL PASS`.
-  if python3 "$T/gates/tree.py" has-exe "$T" store-plants; then
-    P=$G/plants-run; rm -rf "$P"
-    out=$(wrapped "$T/.lake/build/bin/store-plants" "$T/.lake/build/bin/host" "$P" 2>&1); rc=$?
-    printf '%s\n' "$out" >> "$log"; rm -rf "$P"
-    if [ $rc -eq 0 ] && [ "$(printf '%s\n' "$out" | tail -1)" = "ALL PASS" ]; then plants=ok
-    else plants="RED($(printf '%s\n' "$out" | grep -m1 -E '^PLANT [^ ]+ FAIL' || echo "exit $rc"))"; fi
-  fi
+  # runs: every verdict exe as gates/runs.tsv says (sims, journeys, rows, plants), gates/runs.py.
+  wrapped python3 "$T/gates/runs.py" "$T" --waste-out "$G/waste.measured" > "$G/runs.out" 2>> "$log"; rc=$?
+  cat "$G/runs.out" >> "$log"
+  first() { grep -m1 -E "^  run .*: $1" "$G/runs.out" | sed 's/^  run //'; }
+  case $rc in
+    0) runs=ok ;;
+    3) runs="INCOMPLETE($(first INCOMPLETE))" ;;
+    76) runs="KILLED(load)($(first KILLED))" ;;
+    *) runs="RED($(first 'RED|TIMEOUT' || echo "runs.py exit $rc"))" ;;
+  esac
 fi
 waste=$(grep -c -v -e '^#' -e '^[[:space:]]*$' "$T/gates/waste.tsv" 2>/dev/null || echo 0)
 wastev=ABSENT
@@ -112,7 +73,7 @@ unpinned=$(grep -c '^unpinned' "$log" || true)
 # RED makes the line RED; anything else (ABSENT, INCOMPLETE, or a value that is not a verdict) is
 # INCOMPLETE.
 verdict=GREEN
-for v in "$gates" "$build" "$census" "$sim" "$rows" "$plants" "$wastev"; do
+for v in "$gates" "$build" "$census" "$runs" "$wastev"; do
   case $v in
     ok) ;;
     RED*) verdict=RED; break ;;
@@ -120,7 +81,7 @@ for v in "$gates" "$build" "$census" "$sim" "$rows" "$plants" "$wastev"; do
   esac
 done
 [ $verdict = GREEN ] && [ "$unmeasured" -gt 0 ] && verdict=INCOMPLETE
-line="STANDING ${sha:0:12} gates=$gates build=$build census=$census sim=$sim rows=$rows plants=$plants waste=$wastev(pinned $waste, unpinned $unpinned) unmeasured=$unmeasured => $verdict"
+line="STANDING ${sha:0:12} gates=$gates build=$build census=$census runs=$runs waste=$wastev(pinned $waste, unpinned $unpinned) unmeasured=$unmeasured => $verdict"
 echo "$line" | tee -a "$G/verdicts.log"
 echo "log: $log"
 [ "$verdict" = RED ] && exit 1

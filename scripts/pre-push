@@ -21,7 +21,9 @@
 #   2. `lake build` of every target (lake's traces decide what rebuilds), under the clone's build
 #      wrapper (git config nanodregg.buildwrap; hbox: swarm-build), in one of N judge slots
 #      (gate-lib.sh gate_slot);
-#   3. the axiom census over every module, and every gates/generated.tsv file equal to what its
+#   3. the axiom census over every module, the verdict runs (gates/runs.py) of every exe whose import
+#      closure holds a changed module, the measured waste ratios against their ceilings,
+#      and every gates/generated.tsv file equal to what its
 #      Lean generator emits (`lake exe emit-rust --check client/src/generated.rs`);
 #   4. `cargo check --all-targets` + `cargo clippy -D warnings` + `cargo fmt --check` for each
 #      changed crate.
@@ -80,6 +82,51 @@ step() {
 }
 
 git -C "$repo" diff --name-only "$base" "$cand" > "$G/changed"
+
+# runs_reds TREE OUT: run TREE's selected verdict exes with the CANDIDATE's runner and table
+# ($G/judge, a copy), and print the red keys (`run EXE ARGS`, `waste OP METRIC`) judged against the
+# candidate's waste ceilings, so the parent is judged by exactly the candidate's runs and bars (a run
+# whose binary the parent lacks is ABSENT there, so its red is new). Returns runs.py's exit.
+runs_reds() {
+  local t=$1 out=$2 rc
+  : > "$out.waste"
+  wrapped python3 "$G/judge/gates/runs.py" "$t" --table "$G/judge/gates/runs.tsv" --changed "$G/changed" --waste-out "$out.waste" > "$out" 2>> "$log"; rc=$?
+  python3 "$G/judge/gates/waste.py" "$G/judge" --measured "$out.waste" --partial > "$out.wred" 2>&1
+  { sed -n 's/^  run \(.*\): \(RED\|TIMEOUT\).*/run \1/p' "$out"
+    sed -n 's/^waste \([^ ]*\) \([^:]*\): measured.*/waste \1 \2/p' "$out.wred"; } > "$out.keys"
+  return $rc
+}
+
+# judge_runs: the candidate's runs and waste; a red the PARENT has too is PRE-EXISTING and does not
+# block (GATES-8: a commit is refused for the reds it introduces). The parent is judged only when the
+# candidate has a red: the slot's tree is re-materialized at the parent, the selected exes rebuilt
+# (lake's traces: the delta only) and run, and the slot is re-materialized at the candidate.
+judge_runs() {
+  rm -rf "$G/judge"; mkdir -p "$G/judge/gates"
+  cp "$G/tree/gates/"{runs.py,runs.tsv,tree.py,waste.py} "$G/judge/gates/" || return 1
+  cp "$G/tree/gates/waste.tsv" "$G/judge/gates/" 2>/dev/null || : > "$G/judge/gates/waste.tsv"
+  runs_reds "$G/tree" "$G/runs.cand"; local rc=$?
+  cat "$G/runs.cand" "$G/runs.cand.wred" >> "$log"
+  grep '^  run ' "$G/runs.cand" | grep -v ': ok$' || true
+  grep '^waste .*measured' "$G/runs.cand.wred" || true
+  if [ $rc -eq 76 ]; then echo "  runs: KILLED(load) — re-run"; killed="$killed runs"; return; fi
+  if [ ! -s "$G/runs.cand.keys" ]; then
+    echo "  runs: ok$( [ $rc -eq 3 ] && echo ', with pending rows') ($(tail -1 "$G/runs.cand" | sed 's/^runs: [A-Za-z]* //'))"; return
+  fi
+  local new
+  if materialize "$base" "$G/tree" &&
+     wrapped env -C "$G/tree" LEAN_NUM_THREADS="${LEAN_NUM_THREADS:-4}" lake build $(lean_exes "$G/tree") >> "$log" 2>&1; then
+    runs_reds "$G/tree" "$G/runs.base"; cat "$G/runs.base" >> "$log"
+    new=$(grep -vxF -f "$G/runs.base.keys" "$G/runs.cand.keys" || true)
+    grep -xF -f "$G/runs.base.keys" "$G/runs.cand.keys" | sed 's/^/  runs: PRE-EXISTING /' || true
+    materialize "$cand" "$G/tree" || exit 2   # the steps after this one judge the candidate
+  else
+    materialize "$cand" "$G/tree" || exit 2
+    new=$(cat "$G/runs.cand.keys"); echo "  runs: (the parent could not be judged; every red counts)"
+  fi
+  if [ -n "$new" ]; then printf '%s\n' "$new" | sed 's/^/  runs: NEW RED /'; echo "  runs: RED"; fail="$fail runs"
+  else echo "  runs: ok (every red is PRE-EXISTING)"; fi
+}
 args=(--owners-from "$G/base" --base-tree "$G/base" --base-waste "$G/base/gates/waste.tsv" --message "$msg" --changed "$G/changed")
 step gates python3 "$G/tree/gates/check.py" "$G/tree" "${args[@]}"
 if [ -f "$G/base/gates/check.py" ]; then
@@ -106,6 +153,14 @@ else
   step build wrapped env -C "$G/tree" LEAN_NUM_THREADS="${LEAN_NUM_THREADS:-4}" lake build $(lean_targets "$G/tree")
   if [ -n "$killed" ]; then echo "  census: SKIPPED (the build was killed)"
   else step census wrapped python3 "$G/tree/gates/census.py" "$G/tree"; fi
+  # The verdict runs of every exe whose import closure holds a changed module (gates/runs.py,
+  # gates/runs.tsv): a sim is a verdict a build cannot give (ROOT/HOSTING 10-17). Pending rows
+  # (exit 3) do not block; a killed run is KILLED(load). A measured waste ratio above its ceiling
+  # is red here already (unmeasured pinned rows are standing's: --partial).
+  case " $fail $killed " in
+    *" build "*) echo "  runs: SKIPPED (the build did not pass)" ;;
+    *) judge_runs ;;
+  esac
 fi
 
 # Generated files are checked on every commit: a Rust-only commit can make them stale too.

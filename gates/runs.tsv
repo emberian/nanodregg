@@ -1,0 +1,14 @@
+# exe	runs	pass — gates/runs.py: every lean_exe has one row. runs are argument lists separated by ` ; `
+# ({host} = the built host exe, {fresh} = a fresh directory); `-` = not a verdict exe (pass says why).
+# Measured 10-17 on hbox (standing tree, swarm-build): the whole set is ~17 s.
+kernel-sim	--seeds 64	ALL PASS
+host-sim	1 ; 2 ; 3	ALL PASS
+host-file-sim	1 ; 2 ; 3	ALL PASS
+hosting-sim	1 ; 2 ; 3	ALL PASS
+lang-journey	(none)	lang-journey: GREEN
+rows	(none)	ALL PASS
+store-plants	{host} {fresh}	ALL PASS
+host	-	the deployed binary; the sims, rows and plants drive it
+emit-rust	-	a generator; gates/generated.tsv checks its output
+emit-units	-	a generator; gates/generated.tsv checks its output
+ob	-	LANG's resident check, an interactive tool: lang-journey and the rows drive the same code
