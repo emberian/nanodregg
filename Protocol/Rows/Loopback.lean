@@ -423,12 +423,13 @@ def drive (name : String) (call : ByteArray) (fault : Fault) :
 
 def outcomeOf (exit : UInt8) (err : ByteArray) : Expect :=
   let e := (String.fromUTF8? err).getD ""
-  match exit.toNat with
-  | 0 => .ok
-  | 1 => .refused (((e.trimAscii.toString.dropPrefix? "refused ").map (·.toString)).getD e)
-  | 2 => .uncertain
-  | 3 => .absent
-  | n => .refused s!"exit{n}"
+  match CommandExit.ofCode? exit.toNat with
+  | some .ok => .ok
+  | some .refused => .refused (((e.trimAscii.toString.dropPrefix? "refused ").map (·.toString)).getD e)
+  | some .uncertain => .uncertain
+  | some .absent => .absent
+  | some .behind => .behind
+  | some .client | none => .refused s!"exit{exit.toNat}"
 
 def statusOutcome (reply : ByteArray) : Expect :=
   match Command.hostReply reply with

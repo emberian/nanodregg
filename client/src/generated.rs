@@ -79,6 +79,7 @@ pub enum CustodyRefusal {
     RotationInFlight,
     Mismatch,
     Io,
+    EnvelopeOnly,
 }
 
 impl CustodyRefusal {
@@ -92,6 +93,7 @@ impl CustodyRefusal {
             CustodyRefusal::RotationInFlight => 5,
             CustodyRefusal::Mismatch => 6,
             CustodyRefusal::Io => 7,
+            CustodyRefusal::EnvelopeOnly => 8,
         }
     }
 
@@ -105,6 +107,7 @@ impl CustodyRefusal {
             5 => Some(CustodyRefusal::RotationInFlight),
             6 => Some(CustodyRefusal::Mismatch),
             7 => Some(CustodyRefusal::Io),
+            8 => Some(CustodyRefusal::EnvelopeOnly),
             _ => None,
         }
     }
@@ -119,6 +122,7 @@ impl CustodyRefusal {
             CustodyRefusal::RotationInFlight => "rotationInFlight",
             CustodyRefusal::Mismatch => "mismatch",
             CustodyRefusal::Io => "io",
+            CustodyRefusal::EnvelopeOnly => "envelopeOnly",
         }
     }
 }
@@ -137,6 +141,22 @@ pub mod supervisor_exit {
     pub const CHILD_UNROUTABLE: u8 = 65;
     pub const CHILD_SIGNALED: u8 = 66;
 }
+
+pub mod command_exit {
+    pub const OK: u8 = 0;
+    pub const REFUSED: u8 = 1;
+    pub const UNCERTAIN: u8 = 2;
+    pub const ABSENT: u8 = 50;
+    pub const BEHIND: u8 = 51;
+    pub const CLIENT: u8 = 52;
+}
+
+/// The read envelope's signing domain (Protocol.domEnvelope): an observer custody signs only
+/// messages that begin with it (HOSTING-17 §7, CLIENT-22).
+pub const ENVELOPE_DOMAIN: &[u8] = &[
+    110, 97, 110, 111, 100, 114, 101, 103, 103, 47, 112, 114, 111, 116, 111, 99, 111, 108, 47, 114,
+    101, 97, 100, 45, 101, 110, 118, 101, 108, 111, 112, 101, 47, 118, 51,
+];
 
 /// The follow socket's payloads (Protocol.Table layouts; Lean codec: Protocol.Frames).
 pub mod layout {

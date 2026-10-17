@@ -37,11 +37,13 @@ inductive Expect
   non-verdict by name, never a judgement of speed (Ember: no wall-clock verdict until the end, on a
   quiet box; THE BAR's ≤ 5 s is PERF's final spec, `scripts/bar.sh`, not a row criterion) -/
   | hang
+  /-- the command's catch-up ended still behind the writer's tip (`CommandExit.behind`): run again -/
+  | behind
   deriving DecidableEq, Repr
 
 def Expect.text : Expect → String
   | .ok => "ok" | .refused n => s!"refused {n}" | .absent => "absent" | .uncertain => "uncertain"
-  | .unsettled n => s!"uncertain {n}" | .hang => "hang"
+  | .unsettled n => s!"uncertain {n}" | .hang => "hang" | .behind => "behind"
 
 /-- What a line does. A member command goes through the one command language; the others are the
 operator's and the attempt store's acts, which are not member commands. -/
@@ -399,7 +401,8 @@ def paging : Row where
 envelope, signed for its own height + window, is refused `expired` with the writer's height; follow
 re-signs ONCE for that height + window, and every later page's envelope covers the tip the
 previous page stated, so it reaches the tip. New in nanodregg (the defect was found by reasoning,
-PROTOCOL-19); every rows actor's window is 100, so 210 writes put the tip two windows past genesis. -/
+PROTOCOL-19); every rows actor's window is 100, so 210 writes put the tip two windows past genesis.
+`sync` (PROTOCOL-38) is the catch-up alone: its cold run re-signs the same way, then the read. -/
 def coldCatchUp : Row where
   name := "coldCatchUp"
   replaces := []
@@ -408,6 +411,7 @@ def coldCatchUp : Row where
   drive := .members (welcome ++ join "sponsor" "auditor" ++ [
     { actor := "newcomer", act := .cmd ["write", "@shared", "2", "1", "--via", "@g"], expect := .ok,
       times := 210 },
+    { actor := "auditor", act := .cmd ["sync"], expect := .ok, fault := .cold },
     { actor := "auditor", act := .cmd ["read", "@shared", "2=1"], expect := .ok, fault := .cold }])
   plant := .caught .unstatedExpiry 10 (.refused "expired")
 

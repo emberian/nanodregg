@@ -92,7 +92,7 @@ theorem step_submit_planned {X : Ctx D} {B : Thin.Base (World D)} {me : Self D}
     f' = f ∧ p = .turns [] ∧ ∃ key b u sig, plan X me f.world key b = .ok u ∧ call = X.callBytes ⟨u, sig⟩ := by
   unfold step next at h
   repeat' split at h
-  all_goals (try simp only [refused, printed, Prod.mk.injEq, reduceCtorEq, and_false] at h)
+  all_goals (try simp only [refused, printed, behind, Prod.mk.injEq, reduceCtorEq, and_false] at h)
   all_goals (repeat' split at h)
   all_goals (try simp only [Prod.mk.injEq, reduceCtorEq, and_false] at h)
   all_goals (try (exfalso; obtain ⟨_, _, h⟩ := h; unfold render at h; repeat' split at h
@@ -175,7 +175,7 @@ theorem step_persists_admitted {X : Ctx D} {B : Thin.Base (World D)} {me : Self 
     World.RootedFold X.env f.world ts f'.world := by
   unfold step next at h
   repeat' split at h
-  all_goals (try simp only [refused, printed, Prod.mk.injEq, Persist.turns.injEq] at h)
+  all_goals (try simp only [refused, printed, behind, Prod.mk.injEq, Persist.turns.injEq] at h)
   all_goals (repeat' split at h)
   all_goals (try simp only [Prod.mk.injEq, Persist.turns.injEq, reduceCtorEq, false_and,
     and_false] at h)

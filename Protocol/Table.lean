@@ -282,21 +282,25 @@ inductive CustodyRefusal
   | mismatch
   /-- the file system failed -/
   | io
+  /-- an observer custody (a follower's observe-only key, HOSTING-17 §7) signs only read envelope
+  messages: a sign of anything else, a precommit or a signNext is refused -/
+  | envelopeOnly
   deriving DecidableEq, Repr
 
 namespace CustodyRefusal
 
 def all : List CustodyRefusal :=
-  [fileRefused, .exists, shape, holdingAbsent, noPending, rotationInFlight, mismatch, io]
+  [fileRefused, .exists, shape, holdingAbsent, noPending, rotationInFlight, mismatch, io, envelopeOnly]
 
 def code : CustodyRefusal → UInt8
   | fileRefused => 0 | .exists => 1 | shape => 2 | holdingAbsent => 3 | noPending => 4
-  | rotationInFlight => 5 | mismatch => 6 | io => 7
+  | rotationInFlight => 5 | mismatch => 6 | io => 7 | envelopeOnly => 8
 
 def name : CustodyRefusal → String
   | fileRefused => "fileRefused" | .exists => "exists" | shape => "shape"
   | holdingAbsent => "holdingAbsent" | noPending => "noPending"
   | rotationInFlight => "rotationInFlight" | mismatch => "mismatch" | io => "io"
+  | envelopeOnly => "envelopeOnly"
 
 def ofCode? (b : UInt8) : Option CustodyRefusal := all.find? (·.code == b)
 

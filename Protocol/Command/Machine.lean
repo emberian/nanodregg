@@ -33,6 +33,7 @@ only if follow's own World admits the Turn it derives (consent: `Protocol.Proofs
 import Kernel.Receive.Submit
 import Protocol.Command.Verb
 import Protocol.Envelope
+import Protocol.Command.Exit
 import Lang.Program
 
 namespace Nanodregg.Protocol.Command
@@ -74,9 +75,6 @@ inductive Refusal (D : Type)
   | chainMismatch (height : Nat)
   /-- the derivation asked for more cells than `Kernel.Bounds.touchesMax` -/
   | tooManyPins
-  /-- the catch-up read `Bounds.pagesPerCommandMax` pages and follow is still at `height`, the
-  writer at `tip`: what was absorbed is kept, and the member runs the command again -/
-  | behind (height tip : Nat)
   /-- a base download refused, by `Protocol.Thin`'s name -/
   | thin (r : Thin.Refusal)
   /-- custody refused the step, by its name (`CustodyRefusal`) -/
@@ -114,13 +112,18 @@ def Refusal.name : Refusal D → String
   | .missingCell _ => "missingCell"
   | .tooManyPins => "tooManyPins"
   | .chainMismatch _ => "chainMismatch"
-  | .behind _ _ => "behind"
   | .thin r => r.name
   | .custody r => r.name
   | .expired _ => "expired"
 
-def refused (r : Refusal D) : Reply := .done 1 ByteArray.empty s!"refused {r.name}\n".toUTF8
-def printed (out : String) : Reply := .done 0 out.toUTF8 ByteArray.empty
+def refused (r : Refusal D) : Reply :=
+  .done CommandExit.refused.code.toUInt8 ByteArray.empty s!"refused {r.name}\n".toUTF8
+def printed (out : String) : Reply := .done CommandExit.ok.code.toUInt8 out.toUTF8 ByteArray.empty
+/-- The catch-up read `Bounds.pagesPerCommandMax` pages and follow is still at `height`, the
+writer at `tip`: what was absorbed is kept, and the member runs the command again. Not a refusal:
+its own end (`CommandExit.behind`, restart class), so a timer runs it again (PROTOCOL-38). -/
+def behind (height tip : Nat) : Reply :=
+  .done CommandExit.behind.code.toUInt8 ByteArray.empty s!"behind {height} {tip}\n".toUTF8
 
 /-! ## Follow's state -/
 
@@ -261,7 +264,7 @@ def body (X : Ctx D) (me : Self D) (w : World D) (s : Signed) : Cmd D → Except
   | .account a o => .ok (.account a (o.getD me.member))
   | .transfer src dst n via once => .ok (.transfer src dst n via once)
   | .credit wl acct n via => .ok (.credit wl acct n via)
-  | .init _ | .read _ _ | .adopt _ => .error .badState
+  | .init _ | .read _ _ | .adopt _ | .sync => .error .badState
 
 /-- Derive with the signature not yet known, pinning each cell the derivation asks for. -/
 def derivePins (X : Ctx D) (w : World D) : Nat → Unsigned D → Except (Refusal D) (Unsigned D × Turn D)
@@ -474,7 +477,7 @@ def step (X : Ctx D) (B : Thin.Base (World D)) (me : Self D) (f : Follow D) (kb 
                   | .ok (w', ts) =>
                       if height < tip then
                         if Bounds.pagesPerCommandMax ≤ pages + 1 then
-                          moved w' ts (refused (D := D) (.behind height tip))
+                          moved w' ts (behind height tip)
                         -- the next envelope covers the tip the writer stated, so a follower
                         -- behind by more than a window is not refused on every page
                         else moved w' ts (again 1 [Text.u64 height, Text.u64 (pages + 1),
@@ -483,6 +486,7 @@ def step (X : Ctx D) (B : Thin.Base (World D)) (me : Self D) (f : Follow D) (kb 
                       else
                       match cmd, Signed.ofBytes signedB with
                       | .read obj ex, _ => moved w' ts (render X.env w' obj ex)
+                      | .sync, _ => moved w' ts (printed s!"height {w'.height}\nchain {hex X w'.chain}\n")
                       | .rotate, some _ => moved w' ts (again 5 [startB, signedB] fun k => .precommit k)
                       | _, some s => match body X me w' s cmd with
                         | .error r => moved w' ts (refused (D := D) r)
@@ -535,10 +539,10 @@ def step (X : Ctx D) (B : Thin.Base (World D)) (me : Self D) (f : Follow D) (kb 
       -- the settlement
       | _, 4, [_, _, _, out] =>
           match hostReply result with
-          | some (.ok, _) => same (.done 0 out ByteArray.empty)
+          | some (.ok, _) => same (.done CommandExit.ok.code.toUInt8 out ByteArray.empty)
           | some (.refused, p) => same (refused (D := D) (.host (hostName p)))
-          | some (.absent, _) => same (.done 3 ByteArray.empty "absent\n".toUTF8)
-          | some (.uncertain, _) => same (.done 2 ByteArray.empty "uncertain\n".toUTF8)
+          | some (.absent, _) => same (.done CommandExit.absent.code.toUInt8 ByteArray.empty "absent\n".toUTF8)
+          | some (.uncertain, _) => same (.done CommandExit.uncertain.code.toUInt8 ByteArray.empty "uncertain\n".toUTF8)
           -- a settlement is never `closed`: the client settles a closed connection by lookup
           | some (.closed, _) | none => same (refused (D := D) .badResult)
       -- adopt: the envelope for the page at `off`, signed; ask for the base page

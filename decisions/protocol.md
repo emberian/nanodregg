@@ -942,3 +942,28 @@ established here.
 writes do to the writer. Familiarity with a sibling row's numbers is how a row tests a different case
 than its docstring names. The `baseMoved` red caught it only because the expectation was by name.
 **Status.** BUILT (this commit). Rows ALL PASS, 21.
+
+## PROTOCOL-38 · `sync`, the catch-up verb; `CommandExit`, nd's exit table, with `behind` as its own restart-class end; `CustodyRefusal.envelopeOnly` (2026-10-17, PROTOCOL-7; HOSTING-17 §7, CLIENT-3's ask, ROOT ruling)
+**Decision.**
+- `sync` (no arguments) runs the catch-up every command runs (log pages under signed envelopes, re-signing once on `expired`, at most `pagesPerCommandMax` pages) and prints `height H` / `chain HEX` at the tip. It is the verb a timer drives for the nd-hosted follower.
+- **No unsigned path.** CLIENT-3 first asked for a verb with "no custody step". That is refused, because every log page is served only against a member-signed read envelope (PROTOCOL-27/29). Its key is the follower's own observe-only member key, held by nd in an envelope-only custody (ROOT ruling). The custody refusal is `CustodyRefusal.envelopeOnly`, code 8, and CLIENT builds the mode.
+- **`CommandExit`** (`Protocol/Command/Exit.lean`, the codes; `Protocol/Exit.lean`, the classes) is now the one table of how `nd COMMAND` ends. The machine's `done` codes come from it, the rows read outcomes through `ofCode?`, and it is emitted as `command_exit`.
+  - Codes: ok 0 (done); refused 1 (fatal); uncertain 2 (restart); absent 50 (done; was 3); behind 51 (restart, new); client 52 (restart: nd's own failure, which today exits 2, the same code as uncertain; CLIENT switches).
+  - Theorems: `code_injective`, `ofCode_code`, `code_disjoint_host` (every code but ok), `code_disjoint_supervisor`, `restart_fatal_disjoint`.
+- **`behind` is no longer a refusal.** `Refusal.behind` is deleted. Still being behind after the page bound is the command's own end, `behind H T` with code 51, so a timer runs it again and never reads it as a verdict.
+- **Emitted for the observer custody:** `ENVELOPE_DOMAIN`, a byte list printed from `Protocol.domEnvelope`.
+- **Rows:** coldCatchUp gains a cold `sync` before its read. Plant `unstatedExpiry` is now caught at that line (10), so the catch-up alone is what re-signs.
+
+**Alternatives.**
+(1) A `read` with an optional OBJ. Rejected: it gives one verb two meanings.
+(2) Keep `behind` as `refused behind`, exit 1. Rejected: the class would be fatal, and the timer would stop on what is load, not a defect.
+(3) Codes 0–4 aligned with the wire `Status`. Rejected: absent 3 and behind 4 are Host codes (`uncertain`, `fuel`), and ROOT asked for disjoint tables. Nothing in Rust reads nd's exit 3; the client's settlement reads the wire Status, not nd's exit.
+
+**Critique.**
+- No row reaches `behind`. It needs `pagesPerCommandMax` (28) pages of `pageBudget` (16 KiB) still short of the tip, a log of ~450 KiB. Its code is definitional (`Machine.behind`), and its classification is a theorem, but no run shows it. A row with a smaller page budget would reach it, so this is undone work, not a property of the model.
+- The prefix fence `ENVELOPE_DOMAIN` is sound only once call messages carry their own domain. Today a call's signed bytes start with the World digest, so the fence holds only up to cSHAKE preimage resistance (CODEC-6). The domain-separation flag day, `callMessage`, comes next (ROOT approved; with KERNEL-11), before CLIENT's real-round-trip plant.
+
+- That `sync` signs only envelope messages is traced through `Machine.step`, not proved: phase 2 matches `.sync` before any call is planned, and `body` maps `.sync` to `badState` as a second guard. `envelopeOnly` is a name with no enforcer until CLIENT lands the observer custody mode. That mode is the enforced fence.
+**Meta-critique.** The first reflex was to give the driver what it asked for ("no custody step"), because the request came with a ruling attached. The envelope gate is what decided it. A verb shaped by its caller's convenience is how an unsigned read would have shipped.
+
+**Status.** BUILT (this commit). Rows ALL PASS, 21.

@@ -56,6 +56,9 @@ inductive Verb
   /-- `adopt HEIGHT DIGEST`: start follow from the writer's base at HEIGHT, accepted only if its
   World bytes hash to DIGEST, a pin the member trusts out of band (thin consent, PROTOCOL-14) -/
   | adopt
+  /-- `sync`: catch up to the writer's tip and print the height and chain reached (a follower driven
+  by a timer, HOSTING-17 §7; it signs envelopes only) -/
+  | sync
   /-- `issue CAP`: bear a new denomination; its WELL is a value account owned by the signer whose
   id is the denomination, with floor `-CAP` (LEDGER-2) -/
   | issue
@@ -73,14 +76,14 @@ inductive Verb
 namespace Verb
 
 def all : List Verb :=
-  [init, enroll, install, create, write, law, invoke, grant, revoke, read, rotate, adopt, issue, account,
+  [init, enroll, install, create, write, law, invoke, grant, revoke, read, rotate, adopt, sync, issue, account,
    transfer, credit]
 
 def word : Verb → String
   | init => "init" | enroll => "enroll" | install => "install"
   | create => "create" | write => "write" | law => "law" | invoke => "invoke"
   | grant => "grant" | revoke => "revoke" | read => "read" | rotate => "rotate" | adopt => "adopt"
-  | issue => "issue" | account => "account" | transfer => "transfer" | credit => "credit"
+  | sync => "sync" | issue => "issue" | account => "account" | transfer => "transfer" | credit => "credit"
 
 def ofWord? (s : String) : Option Verb := all.find? (·.word == s)
 
@@ -117,6 +120,7 @@ inductive Cmd (D : Type)
   | read (obj : D) (expect : List (Nat × ByteArray))
   | rotate
   | adopt (pin : Thin.Pin)
+  | sync
   | issue (cap : Nat)
   /-- `owner = none` is the signer -/
   | account (asset : D) (owner : Option D)
@@ -167,7 +171,7 @@ def usage : Verb → String
   | .invoke => "invoke OBJ METHOD ARGS [--via GRANT]"
   | .grant => "grant TARGET|ACCOUNT|world MEMBER|anyone RIGHTS [--via PARENT]"
   | .revoke => "revoke GRANT" | .read => "read OBJ [KEY=VALUE...]" | .rotate => "rotate"
-  | .adopt => "adopt HEIGHT DIGEST" | .issue => "issue CAP"
+  | .adopt => "adopt HEIGHT DIGEST" | .sync => "sync" | .issue => "issue CAP"
   | .account => "account ASSET [--owner OWNER]"
   | .transfer => "transfer SRC DST AMOUNT [--via GRANT] [--once HEX]"
   | .credit => "credit WELL ACCT AMOUNT [--via GRANT]"
@@ -298,6 +302,7 @@ def parseVerb (v : Verb) (args : List String) : Except ParseRefusal (Cmd D) :=
   | .revoke, [g] => .revoke <$> digestArg digestOf g
   | .read, o :: es => do pure (.read (← digestArg digestOf o) (← mapEx expectArg es))
   | .rotate, [] => .ok .rotate
+  | .sync, [] => .ok .sync
   | .adopt, [h, d] => do
       let height ← numArg h
       match Text.ofHex d with

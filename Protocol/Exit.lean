@@ -10,6 +10,7 @@ It is its own module (not `Protocol.Table`): `Host.Loop` imports `Protocol.Table
 imports `Host.Exit` for `ExitClass`; nothing in Host imports it. Theorems: `Protocol.Proofs.Exit`.
 -/
 import Host.Exit
+import Protocol.Command.Exit
 
 namespace Nanodregg.Protocol
 
@@ -43,5 +44,18 @@ def cls : SupervisorExit → Host.ExitClass
 def codesOf (k : Host.ExitClass) : List Nat := (all.filter (·.cls == k)).map code
 
 end SupervisorExit
+
+-- The restart class of each command end (Protocol.Command.Exit holds the codes).
+namespace CommandExit
+
+def cls : CommandExit → Host.ExitClass
+  | ok | absent => .done
+  | uncertain | behind | client => .restart
+  | refused => .fatal
+
+/-- The codes of one class, in table order. -/
+def codesOf (k : Host.ExitClass) : List Nat := (all.filter (·.cls == k)).map code
+
+end CommandExit
 
 end Nanodregg.Protocol

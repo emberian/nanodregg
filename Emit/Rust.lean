@@ -1,6 +1,7 @@
 import Protocol.Table
 import Protocol.Attempt
 import Protocol.Exit
+import Protocol.Envelope
 import Codec.Layout
 
 /-!
@@ -34,6 +35,24 @@ def byteConsts {α : Type} [Repr α] (values : List α) (code : α → UInt8) : 
 /-- A `pub mod` of byte constants. -/
 def byteModule {α : Type} [Repr α] (name : String) (values : List α) (code : α → UInt8) : String :=
   String.intercalate "\n" ([s!"pub mod {name} \{"] ++ byteConsts values code ++ ["}"])
+
+/-- Greedy packing of `items` into lines of at most `width` characters, each `indent ++ a, b, …,`:
+rustfmt's layout for an array of short literals. -/
+def packLines (indent : String) (width : Nat) (items : List String) : List String :=
+  let close (cur : List String) := indent ++ ", ".intercalate cur.reverse ++ ","
+  let (lines, cur) := items.foldl (fun (acc : List String × List String) it =>
+    let (lines, cur) := acc
+    if cur.isEmpty then (lines, [it])
+    else if (close (it :: cur)).length ≤ width then (lines, it :: cur)
+    else (close cur :: lines, [it])) ([], [])
+  (if cur.isEmpty then lines else close cur :: lines).reverse
+
+/-- A `pub const NAME: &[u8]` holding `b` as a byte list, laid out as rustfmt lays it out. -/
+def rustByteConst (name : String) (b : ByteArray) : String :=
+  let head := s!"pub const {name}: &[u8] = &["
+  let one := head ++ ", ".intercalate (b.toList.map toString) ++ "];"
+  if one.length ≤ 100 then one
+  else String.intercalate "\n" ([head] ++ packLines "    " 100 (b.toList.map toString) ++ ["];"])
 
 /-- The bounds the client enforces, with their Rust names. -/
 def bounds : List (String × Nat) :=
@@ -636,6 +655,10 @@ def file : Except String String := do
      custodyRefusalEnum,
      byteModule "step" Step.all Step.code,
      byteModule "supervisor_exit" SupervisorExit.all (fun s => s.code.toUInt8),
+     byteModule "command_exit" CommandExit.all (fun c => c.code.toUInt8),
+     "/// The read envelope's signing domain (Protocol.domEnvelope): an observer custody signs only\n" ++
+       "/// messages that begin with it (HOSTING-17 §7, CLIENT-22).\n" ++
+       rustByteConst "ENVELOPE_DOMAIN" domEnvelope,
      layoutModule,
      attemptModule] ++ "\n"
 
