@@ -90,6 +90,39 @@ theorem drainM_conserves (limits : Limits) (first : Frame) (q : List Frame) :
   simp only [drainM]
   exact ⟨by simpa using this.1, by simpa using this.2.1, this.2.2 (by simp; exact Nat.le_max_left 1 _)⟩
 
+/-- The payload bytes of a batch. -/
+private def payloadBytes (fs : Array Frame) : Nat := (fs.toList.map (·.payload.size)).sum
+
+/-- The cut's byte invariant: it never takes a frame that would carry the batch's payload past the
+bound, so a batch that started within `M` (any bound at least `batchBytesMax`) ends within it. -/
+theorem drainM_go_bytes (limits : Limits) (M : Nat) (hM : limits.batchBytesMax ≤ M) (fuel : Nat)
+    (acc : Array Frame) (bytes : Nat) (q : List Frame)
+    (hacc : payloadBytes acc = bytes) (hb : bytes ≤ M) :
+    payloadBytes ((drainM.go listPoll listUnread limits fuel acc bytes).run q).1 ≤ M := by
+  induction fuel generalizing acc bytes q with
+  | zero => change payloadBytes acc ≤ M; omega
+  | succ n ih =>
+    by_cases hm : limits.batchMax ≤ acc.size
+    · rw [go_full limits n acc bytes q hm]; change payloadBytes acc ≤ M; omega
+    · cases q with
+      | nil => rw [go_empty limits n acc bytes hm]; change payloadBytes acc ≤ M; omega
+      | cons f q =>
+        by_cases hbo : limits.batchBytesMax < bytes + f.payload.size
+        · rw [go_over limits n acc bytes f q hm hbo]; change payloadBytes acc ≤ M; omega
+        · rw [go_take limits n acc bytes f q hm hbo]
+          refine ih (acc.push f) (bytes + f.payload.size) q ?_ (by omega)
+          simp [payloadBytes, ← hacc]
+
+/-- **A batch's payload stays within `batchBytesMax`**, or is its first frame alone (the first frame
+is always taken, so a single frame larger than the bound is a batch of one): the frames after the
+first never carry it past the bound (OPS's law-6 read of D4). -/
+theorem drainM_bytes (limits : Limits) (first : Frame) (q : List Frame) :
+    payloadBytes ((drainM listPoll listUnread limits first).run q).1 ≤
+      max first.payload.size limits.batchBytesMax := by
+  simp only [drainM]
+  exact drainM_go_bytes limits _ (Nat.le_max_right _ _) _ _ _ q (by simp [payloadBytes])
+    (Nat.le_max_left _ _)
+
 /-- **The top loop is total and its exhaustion exits by name** (LAW 4 as amended, HOST-19): with
 its round budget spent, `restarts` runs no round and ends `Exit.lifetime` (class restart, never
 silent), holding the state it was given. -/
