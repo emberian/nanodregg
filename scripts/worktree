@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# scripts/worktree LAYER — make ~/dev/nanodregg-wt/LAYER, a git worktree of nanodregg at the
+# scripts/worktree LAYER — make <nanodregg.worktrees, default ~/dev/nanodregg-wt>/LAYER, a git worktree of nanodregg at the
 # current main (detached HEAD: main is a shared ref that only scripts/commit moves). Each layer
 # edits only in its own worktree; the primary checkout is nobody's editing surface (ROOT
 # 2026-10-16). It installs nothing else: hooks are per repository (core.hooksPath =
@@ -10,7 +10,8 @@ layers="kernel codec host protocol client lang gates root hosting ledger transpo
 [ $# -eq 1 ] && case " $layers " in *" $1 "*) ;; *) false ;; esac || {
   echo "usage: scripts/worktree LAYER   (LAYER: $layers)" >&2; exit 2; }
 primary=$(cd "$(git rev-parse --git-common-dir)/.." && pwd)
-dest=$HOME/dev/nanodregg-wt/$1
+# Where worktrees live is the clone's own setting (hbox: /tank/dregg-build/nanodregg/wt).
+dest=$(git config nanodregg.worktrees || echo "$HOME/dev/nanodregg-wt")/$1
 [ -e "$dest" ] && { echo "scripts/worktree: $dest exists" >&2; exit 1; }
 mkdir -p "$(dirname "$dest")"
 git -C "$primary" worktree add --detach "$dest" refs/heads/main

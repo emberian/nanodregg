@@ -18,8 +18,9 @@
 #      them; both must pass, so a commit cannot weaken a gate and pass by its own weakened gate
 #      (a message line `GATE-CHANGE: <why>` lets a deliberate gate change pass the parent's
 #      gates; it is printed in the verdict);
-#   2. `lake build` of the changed modules and every module that imports them (everything when
-#      lakefile.lean or lean-toolchain changed; every exe whenever anything builds or C changed);
+#   2. `lake build` of every target (lake's traces decide what rebuilds), under the clone's build
+#      wrapper (git config nanodregg.buildwrap; hbox: swarm-build), in one of N judge slots
+#      (gate-lib.sh gate_slot);
 #   3. the axiom census over every module, and every gates/generated.tsv file equal to what its
 #      Lean generator emits (`lake exe emit-rust --check client/src/generated.rs`);
 #   4. `cargo check --all-targets` + `cargo clippy -D warnings` + `cargo fmt --check` for each
@@ -52,8 +53,7 @@ else
 fi
 [ -n "$msg" ] || { msg=$(mktemp); : > "$msg"; }
 
-G=$common/nanodregg-gate
-lock nanodregg-gate || exit 2
+gate_slot || exit 2
 materialize "$cand" "$G/tree" || exit 2
 materialize "$base" "$G/base" || exit 2
 log=$G/last.log
@@ -81,37 +81,38 @@ if [ -f "$G/base/gates/check.py" ]; then
   fi
 fi
 
-mods=$(affected "$G/tree" "$base" "$cand")
-if [ "$mods" = ALL ]; then mods=$(lean_targets "$G/tree"); fi
+# Every target, every time: lake's traces rebuild exactly what this tree changed (and anything a
+# refused candidate left stale in this slot), so a hand-computed "affected" list could only ever
+# build less. The census runs on every commit: a commit that changes only gates/axioms-allow.tsv
+# must be censused too (it was not, and a stale allow row passed GREEN).
 if [ "$build" = 0 ]; then
   if grep -qE '^NO-BUILD:[[:space:]]*[^[:space:]]' "$msg"; then echo "  build: SKIPPED (NO-BUILD in message)"; note="$note (build skipped)"
   else echo "  build: --no-build needs a 'NO-BUILD: <reason>' message line"; fail="$fail no-build"; fi
-elif [ -n "$mods" ]; then
-  # shellcheck disable=SC2086
-  step build env -C "$G/tree" LEAN_NUM_THREADS="${LEAN_NUM_THREADS:-4}" lake build $mods
-  step census python3 "$G/tree/gates/census.py" "$G/tree"
 else
-  echo "  build: nothing to build"
+  # shellcheck disable=SC2046
+  step build wrapped env -C "$G/tree" LEAN_NUM_THREADS="${LEAN_NUM_THREADS:-4}" lake build $(lean_targets "$G/tree")
+  step census wrapped python3 "$G/tree/gates/census.py" "$G/tree"
 fi
 
 # Generated files are checked on every commit: a Rust-only commit can make them stale too.
 if [ "$build" = 1 ]; then
   while read -r exe out; do
-    [ -n "$exe" ] && step "generated:$out" env -C "$G/tree" lake exe "$exe" --check "$out"
+    [ -n "$exe" ] && step "generated:$out" wrapped env -C "$G/tree" lake exe "$exe" --check "$out"
   done < <(generated_checks "$G/tree")
 fi
 
 for crate in $(rust_changed "$base" "$cand"); do
   export CARGO_TARGET_DIR=$G/cargo-target
-  step "cargo-check:$crate" cargo check --quiet --all-targets --manifest-path "$G/tree/$crate/Cargo.toml"
-  step "clippy:$crate" cargo clippy --quiet --all-targets --manifest-path "$G/tree/$crate/Cargo.toml" -- -D warnings
-  step "fmt:$crate" cargo fmt --check --manifest-path "$G/tree/$crate/Cargo.toml"
+  step "cargo-check:$crate" wrapped cargo check --quiet --all-targets --manifest-path "$G/tree/$crate/Cargo.toml"
+  step "clippy:$crate" wrapped cargo clippy --quiet --all-targets --manifest-path "$G/tree/$crate/Cargo.toml" -- -D warnings
+  step "fmt:$crate" wrapped cargo fmt --check --manifest-path "$G/tree/$crate/Cargo.toml"
 done
 
 short=${cand:0:12}
 if [ -n "$fail" ]; then
   echo "PRE-PUSH RED tree $short:$fail — log: $log"
-  grep -E '^  (closure|refusals|size|waste|owners): |AXIOM-CENSUS red|^[^ ]+ \([^)]*\) uses |error:|^Diff in|^warning:' "$log" | head -40
+  # every gate's named reds (check.py prints `  <gate>: <red>`), once each, without PRE-EXISTING
+  grep -E '^  [a-z-]+: |AXIOM-CENSUS red|^[^ ]+ \([^)]*\) uses |error:|^Diff in|^warning:' "$log" | grep -v ': PRE-EXISTING ' | awk '!seen[$0]++' | head -40
   exit 1
 fi
 echo "PRE-PUSH GREEN tree $short$note"

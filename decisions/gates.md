@@ -162,3 +162,68 @@ The ratio is only as good as HOST's counter. **Meta-critique.** I chose the meas
 perf box; wall time on the laptop is the measure THE BAR actually uses (write ≤ 5 s, reopen ≤ 60 s) and this
 does not see it.
 **Status.** open.
+
+## GATES-9 · A commit is CURRENT main + its paths, and a path is taken only from a worktree whose base for it IS main's (2026-10-17)
+
+**Decision.** `scripts/commit` refuses, per file and by name, every given path whose version at the worktree's
+HEAD differs from current main's (`worktree behind main on <path>: git checkout --detach main, re-apply your
+edit`); it refuses the primary checkout (the read-only reference) and any branch checkout; and it hands
+pre-push the exact main the candidate was built on (`--base`), so the judged diff is the landed diff.
+**Alternatives.** (a) Rebase: three-way merge the worktree's edit (HEAD → worktree) onto main and commit the
+merge. (b) Per-hunk ownership. (c) Leave it to review (GATES-8's critique named the hole and left it).
+**Why.** The class is a write without a read of the current version. The worktree HEAD is exactly the version
+the author read; if it is main's, every byte the candidate removes was removed by the author's edit of the
+current file. (a) would land a merge nobody read or built in their own tree (a clean textual merge is not a
+correct one); a refusal costs one `checkout --detach main`, which carries the edit when main did not touch the
+file and refuses when it did. The base race (pre-push re-reading a moved main) was the more likely cause of
+ROOT's "touches decisions/client.md": judged against the moved main, the candidate looked like a revert of
+every intervening commit (plant in 9db4020).
+**Critique.** The check reads the worktree's HEAD, not what the author's editor read: a full-file write from a
+buffer read BEFORE `checkout --detach main` (an agent's Write of remembered content) reverts with HEAD = main,
+and nothing here can see it. The reflog (`HEAD@{1}`) would show the previous base, but not which version the
+writer actually read. **Meta-critique.** I picked the check git can answer in one command; the remaining hole
+is the same class one level up (the editor's read), and I am calling it review's because I cannot measure it.
+**Status.** built (9db4020).
+
+## GATES-10 · No separate gate for "a commit reverts another layer's CROSS-LAYER hunk in its own file" (2026-10-17)
+
+**Decision.** The ownership gate does not grow a revert detector. GATES-9 closes the class it would catch.
+**The question.** KERNEL-4's 9e60d7f changed PROTOCOL's Protocol/Rows/Sim.lean under CROSS-LAYER; PROTOCOL-4's
+051a8cc, a protocol commit of its own file, reverted that hunk. Should owners refuse a commit whose diff of its
+own file undoes a hunk a CROSS-LAYER commit landed?
+**Why not.** Every way that revert happens silently is a stale base: the author's copy predates the hunk.
+GATES-9 refuses exactly that (plant: a worktree at f654009 = 9e60d7f^ editing Protocol/Rows/Sim.lean →
+`REFUSED — worktree behind main on Protocol/Rows/Sim.lean`). With the base equal to main, the author's
+editor showed them the hunk and they removed it: that is a deliberate edit of their own file, which law 9
+allows (`git revert` is always allowed) and which a reviewer judges. A detector would have to blame every
+removed line back to its commit and read that commit's message: a heuristic with false positives on every
+legitimate rewrite of a file another layer once touched (the owner is MEANT to own the file), for a case
+GATES-9 has already made deliberate. **Critique.** The GATES-9 critique's hole (a stale editor buffer
+written whole over a current file) is exactly the case a blame-based detector WOULD catch and GATES-9 does
+not. If one more silent revert happens with HEAD = main, this decision is wrong and the detector is the
+answer. **Meta-critique.** "Closed by the other fix" is the conclusion that saves me building a hard gate;
+it rests on the claim that an agent's tooling re-reads the file it edits, which is true of Edit and false of
+Write.
+**Status.** decided; reopen on the first revert with a current base.
+
+## GATES-11 · One landing clone (hbox), N judge slots under flock, every target built and censused every commit (2026-10-17)
+
+**Decision.** (MIGRATE-HBOX's four asks, ROOT/Ember's load ruling.) `scripts/commit` lands only in a clone whose
+own config says `nanodregg.landing=true` (hbox); every other clone is a reader that follows origin with
+`scripts/mac-pull`. Judges take one of N slots (`nanodregg.gateslots`, default 4 on the landing clone, else 1),
+each `$common/nanodregg-gate-<k>` with its own tree and .lake, held by an flock(1) fd for the life of the
+judging process; standing takes one flock. Every lake/cargo/census run goes through `nanodregg.buildwrap`
+(hbox: `swarm-build`, the memory-capped cgroup). pre-push builds EVERY target every commit and always runs the
+census; the hand-computed `affected` list is deleted. Worktrees live at `nanodregg.worktrees`.
+**Alternatives.** Hostname detection for landing and wrapping; one gate tree; keep `affected`; mkdir+PID locks.
+**Why.** A config key is explicit, survives a renamed box, and no pull can carry it to a reader. One gate tree
+made box-wide concurrency 1 with 12 lanes landing; CAS already makes two candidates on one base safe. flock
+locks die with their holder, so the stale-PID takeover code goes. `affected` could only ever build LESS than
+lake's traces would, and it let a commit that changed only gates/axioms-allow.tsv skip the census (plant: a
+stale allow row judged `build: nothing to build` → `PRE-PUSH GREEN`).
+**Critique.** N slots are N cold .lake trees (a few hundred MB each) and N first builds; four concurrent full
+`lake build`s under one 96G cgroup can still thrash it. Building every target makes every commit pay lake's
+no-op traversal and a census (MIGRATE-HBOX measures it). A Mac without flock can no longer run standing at
+all. **Meta-critique.** I accepted a lane's design whole because it was well argued and the load emergency
+made speed feel like the constraint; the slot count is a guess, not a measurement.
+**Status.** written 10-17; lands as the first hbox commit.

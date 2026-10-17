@@ -15,21 +15,46 @@ materialize() {
   GIT_INDEX_FILE="$2.index" git -C "$repo" --work-tree="$2" read-tree --reset -u "$1"
 }
 
-# lock NAME: one judge at a time per NAME. The lock is a directory holding the owner's PID; a
-# lock whose PID is dead is taken over, a live one is waited for (deadline 30 min).
+# The build wrapper is the clone's setting (hbox: `swarm-build`, the cgroup with the enforced memory
+# cap; ~/.claude/CLAUDE.md on hbox builds). Every lake/cargo/census invocation runs under it, so a
+# lane cannot forget it. Empty elsewhere.
+read -r -a wrap <<< "$(git -C "$repo" config nanodregg.buildwrap || true)"
+wrapped() { "${wrap[@]}" "$@"; }
+
+# flock_or_refuse: the locks are flock(1) file locks (util-linux): held by an fd of the judging
+# process, released when it exits however it exits, so there is no stale-lock logic. A box
+# without flock cannot judge (the Mac is a reader since 10-17).
+flock_or_refuse() {
+  command -v flock > /dev/null || { echo "gate: flock(1) not found; this box cannot judge (main lives on hbox)" >&2; return 1; }
+}
+
+# lock NAME: one judge at a time per NAME on fd 8 (deadline 30 min).
 lock() {
-  local d="$common/$1.lock" waited=0
-  while ! mkdir "$d" 2>/dev/null; do
-    local pid; pid=$(cat "$d/pid" 2>/dev/null || true)
-    if [ -n "$pid" ] && ! kill -0 "$pid" 2>/dev/null; then
-      echo "gate: taking over stale lock $d (pid $pid is gone)" >&2
-      rm -rf "$d"; continue
-    fi
-    if [ "$waited" -ge 1800 ]; then echo "gate: lock $d held by pid $pid for 30 min; refusing" >&2; return 1; fi
-    sleep 5; waited=$((waited + 5))
+  flock_or_refuse || return 1
+  exec 8> "$common/$1.flock"
+  flock -w 1800 8 || { echo "gate: lock $1 held for 30 min; refusing" >&2; return 1; }
+}
+
+# gate_slot: take one of N judge slots, N = nanodregg.gateslots (default 4 on the landing clone, 1
+# elsewhere); each slot is a directory with its own tree, base, .lake and cargo target. Sets G to
+# the slot directory; fd 9 holds the slot until this process exits (call it in the judging shell
+# itself, never in `$(…)`: a subshell's lock dies with the subshell). The first free slot is taken
+# at once; when all are busy, this process waits on one (pid mod N) for at most 30 min.
+gate_slot() {
+  flock_or_refuse || return 1
+  local n k
+  n=$(git -C "$repo" config nanodregg.gateslots || true)
+  if [ -z "$n" ]; then
+    if [ "$(git -C "$repo" config --bool nanodregg.landing || true)" = true ]; then n=4; else n=1; fi
+  fi
+  for k in $(seq 1 "$n"); do
+    exec 9> "$common/nanodregg-gate-$k.flock"
+    if flock -n 9; then G=$common/nanodregg-gate-$k; return 0; fi
   done
-  echo $$ > "$d/pid"
-  trap 'rm -rf "'"$d"'"' EXIT
+  k=$(( $$ % n + 1 ))
+  exec 9> "$common/nanodregg-gate-$k.flock"
+  flock -w 1800 9 || { echo "gate: every judge slot busy for 30 min; refusing" >&2; return 1; }
+  G=$common/nanodregg-gate-$k
 }
 
 # lean_targets DIR: every lean_lib and lean_exe name in DIR's lakefile.lean.
@@ -37,26 +62,6 @@ lean_targets() { python3 "$1/gates/tree.py" targets "$1"; }
 
 # lean_exes DIR: every lean_exe name (each links the extern_libs, so building them builds the C).
 lean_exes() { python3 "$1/gates/tree.py" exes "$1"; }
-
-# affected DIR BASE CAND: modules changed between two trees plus everything that imports them;
-# prints ALL when the build itself changed (lakefile, toolchain) or DIR has never built. Every
-# exe is appended whenever anything is built or a C source changed: exes link the C shim.
-affected() {
-  local dir=$1 base=$2 cand=$3 changed
-  changed=$(git -C "$repo" diff --name-only "$base" "$cand")
-  if [ ! -d "$dir/.lake/build" ] || printf '%s\n' "$changed" | grep -qxE 'lakefile.lean|lakefile.toml|lean-toolchain'; then
-    echo ALL; return
-  fi
-  printf '%s\n' "$changed" | python3 -c '
-import sys; sys.path.insert(0, sys.argv[1] + "/gates"); import tree
-t = tree.read(sys.argv[1]); deps = t.dependents()
-want = set()
-for p in sys.stdin.read().split():
-    if p.endswith(".lean"):
-        m = p[:-5].replace("/", ".")
-        if m in t.modules: want |= {m} | deps[m]
-print(" ".join(sorted(want)))' "$dir" | { read -r mods; if [ -n "$mods" ] || printf '%s\n' "$changed" | grep -qE '\.(c|h)$'; then echo "$mods $(lean_exes "$dir")"; fi; }
-}
 
 # rust_changed BASE CAND: the Cargo manifests whose crate changed.
 rust_changed() {

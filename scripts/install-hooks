@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# One time per clone: route git hooks to scripts/hooks so every commit runs scripts/pre-push.
+# One time per clone: route git hooks to scripts/hooks, whose commit-msg hook refuses a plain
+# `git commit` (commits go through scripts/commit, which runs no hooks).
 set -eu
 git -C "$(git rev-parse --show-toplevel)" config core.hooksPath scripts/hooks
 echo "core.hooksPath = scripts/hooks"

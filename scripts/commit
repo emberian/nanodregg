@@ -69,6 +69,11 @@ fi
 grep -q '^Co-Authored-By:' "$msg" || printf '\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\n' >> "$msg"
 
 base=$(git -C "$repo" rev-parse refs/heads/main) || exit 2
+# Main lives in ONE clone (hbox, 10-17); every other clone is a reader that follows origin
+# (scripts/mac-pull). The landing clone says so in its own config, which no pull can carry.
+if [ "$(git -C "$repo" config --bool nanodregg.landing || true)" != true ]; then
+  echo "scripts/commit: REFUSED — this clone is a reader; main lives on hbox: ssh hbox, cd /tank/dregg-build/nanodregg/wt/<layer>"; exit 1
+fi
 # Only a layer worktree, detached, commits. The primary checkout is the read-only reference
 # (scouts, evaluators, `lake env lean` against its .lake), never an editing surface.
 if [ "$repo" = "$(cd "$common/.." && pwd)" ]; then
@@ -145,9 +150,10 @@ if ! { (cd "$repo" && git reset -q "$new" -- SIZE.md $(git diff --name-only "$ba
 fi
 # The primary checkout is the read-only reference every scout and evaluator reads: it follows
 # main, but only when clean (nobody edits it; a dirty file there is someone's to look at, and is
-# never overwritten). ROOT 10-16, after it sat 87 commits behind for a day.
+# never overwritten; an untracked file is not an edit, and checkout refuses to clobber one).
+# ROOT 10-16, after it sat 87 commits behind for a day.
 primary=$(cd "$common/.." && pwd)
-dirty=$(git -C "$primary" status --porcelain 2>&1)
+dirty=$(git -C "$primary" status --porcelain --untracked-files=no 2>&1)
 if [ -n "$dirty" ]; then
   echo "scripts/commit: WARNING the primary checkout $primary is dirty, left at $(git -C "$primary" rev-parse --short HEAD):"
   printf '%s\n' "$dirty" | head -20 | sed 's/^/  /'

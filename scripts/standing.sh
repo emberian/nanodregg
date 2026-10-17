@@ -50,12 +50,12 @@ git -C "$repo" diff --name-only "$base" "$sha^{tree}" > "$G/changed"
 gates=$(run python3 "$T/gates/check.py" "$T" --changed "$G/changed" --base-tree "$G/base" --base-waste "$G/base/gates/waste.tsv" --message "$G/msg")
 unmeasured=$(grep -c '^WARN ' "$log" || true)
 # shellcheck disable=SC2046
-build=$(run env -C "$T" LEAN_NUM_THREADS="${LEAN_NUM_THREADS:-4}" lake build $(lean_targets "$T"))
+build=$(run wrapped env -C "$T" LEAN_NUM_THREADS="${LEAN_NUM_THREADS:-4}" lake build $(lean_targets "$T"))
 census=ABSENT; sim=ABSENT; rows=ABSENT
 if [ "$build" = ok ]; then
-  census=$(run python3 "$T/gates/census.py" "$T")
+  census=$(run wrapped python3 "$T/gates/census.py" "$T")
   while read -r exe out; do
-    [ -n "$exe" ] && [ "$(run env -C "$T" lake exe "$exe" --check "$out")" = RED ] && census=RED
+    [ -n "$exe" ] && [ "$(run wrapped env -C "$T" lake exe "$exe" --check "$out")" = RED ] && census=RED
   done < <(generated_checks "$T")
 : > "$G/waste.measured"
   sims=$(for e in $(lean_exes "$T"); do case $e in *-sim) echo "$e" ;; esac; done)
@@ -66,7 +66,7 @@ if [ "$build" = ok ]; then
       # name met at least once) only judges a run of >= 16 seeds (KERNEL-20, ROOT 10-16).
       case $exe in kernel-sim) runs=("--seeds 64") ;; *) runs=(${SIM_SEEDS:-1 2 3}) ;; esac
       for seed in "${runs[@]}"; do
-        out=$(env -C "$T" lake exe "$exe" $seed 2>&1); rc=$?
+        out=$(wrapped env -C "$T" lake exe "$exe" $seed 2>&1); rc=$?
         printf '%s\n' "$out" >> "$log"
         printf '%s\n' "$out" | grep '^WASTE ' >> "$G/waste.measured"
         if [ $rc -ne 0 ] || [ "$(printf '%s\n' "$out" | tail -1)" != "ALL PASS" ]; then
@@ -77,7 +77,7 @@ if [ "$build" = ok ]; then
     done
   fi
   if [ -x "$T/rows/run" ]; then
-    env -C "$T" ./rows/run > "$G/rows.out" 2>&1; rc=$?
+    wrapped env -C "$T" ./rows/run > "$G/rows.out" 2>&1; rc=$?
     cat "$G/rows.out" >> "$log"
     grep '^WASTE ' "$G/rows.out" >> "$G/waste.measured"
     case $rc in
