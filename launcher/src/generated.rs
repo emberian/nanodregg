@@ -283,7 +283,6 @@ pub mod wire {
         IdUnclean,
         MalformedGrain,
         CrashLoop,
-        ResidentUnsupported,
     }
 
     impl GrainRefusal {
@@ -294,7 +293,6 @@ pub mod wire {
                 GrainRefusal::IdUnclean => 2,
                 GrainRefusal::MalformedGrain => 3,
                 GrainRefusal::CrashLoop => 4,
-                GrainRefusal::ResidentUnsupported => 5,
             }
         }
 
@@ -305,7 +303,6 @@ pub mod wire {
                 2 => Some(GrainRefusal::IdUnclean),
                 3 => Some(GrainRefusal::MalformedGrain),
                 4 => Some(GrainRefusal::CrashLoop),
-                5 => Some(GrainRefusal::ResidentUnsupported),
                 _ => None,
             }
         }
@@ -318,7 +315,6 @@ pub mod wire {
                 GrainRefusal::IdUnclean => "idUnclean",
                 GrainRefusal::MalformedGrain => "malformedGrain",
                 GrainRefusal::CrashLoop => "crashLoop",
-                GrainRefusal::ResidentUnsupported => "residentUnsupported",
             }
         }
     }
@@ -422,6 +418,7 @@ pub mod wire {
             read: Vec<Vec<u8>>,
             write: Vec<Vec<u8>>,
             exec: Vec<Vec<u8>>,
+            connect: Vec<Vec<u8>>,
             hidden: Vec<Vec<u8>>,
         },
         Kill {
@@ -444,6 +441,7 @@ pub mod wire {
                     let read = c.paths(4096)?;
                     let write = c.paths(4096)?;
                     let exec = c.paths(4096)?;
+                    let connect = c.paths(4096)?;
                     let hidden = c.paths(4096)?;
                     Action::Launch {
                         grain,
@@ -451,6 +449,7 @@ pub mod wire {
                         read,
                         write,
                         exec,
+                        connect,
                         hidden,
                     }
                 }
@@ -481,6 +480,7 @@ pub mod wire {
                     read,
                     write,
                     exec,
+                    connect,
                     hidden,
                 } => {
                     out.push(1);
@@ -489,6 +489,7 @@ pub mod wire {
                     put_paths(&mut out, read, 4096)?;
                     put_paths(&mut out, write, 4096)?;
                     put_paths(&mut out, exec, 4096)?;
+                    put_paths(&mut out, connect, 4096)?;
                     put_paths(&mut out, hidden, 4096)?;
                 }
                 Action::Kill { grain } => {

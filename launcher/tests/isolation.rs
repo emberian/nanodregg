@@ -16,6 +16,7 @@
 
 use nanodregg_devtools::lean_bin;
 use std::fs;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
@@ -25,6 +26,8 @@ const B: &str = "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b
 
 struct Tree {
     root: PathBuf,
+    /// the broker root, a sibling of `root` (HOSTING-17 §8)
+    broker: PathBuf,
     pkg: PathBuf,
     vol: PathBuf,
     pids: PathBuf,
@@ -36,6 +39,10 @@ fn tree(name: &str) -> Tree {
     let _ = fs::remove_dir_all(&root);
     fs::create_dir_all(&root).unwrap();
     let root = root.canonicalize().unwrap();
+    let broker =
+        Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("isob-{}-{name}", std::process::id()));
+    let _ = fs::remove_dir_all(&broker);
+    fs::create_dir_all(&broker).unwrap();
     let w1 = root.join("worlds/w1");
     let w2 = root.join("worlds/w2");
     let g = w1.join("grains").join(A);
@@ -44,6 +51,7 @@ fn tree(name: &str) -> Tree {
         vol: g.join("vol"),
         pids: root.join("pids"),
         root: root.clone(),
+        broker,
     };
     for d in [
         w1.join("store"),
@@ -94,11 +102,23 @@ fn verdict(v: &[(String, String)], name: &str) -> String {
 
 /// `grain-launch` over one `hosting-drive` launch; its stderr (the drive's report lines included).
 fn launch(t: &Tree, plant: bool) -> String {
+    launch_as(t, plant, false)
+}
+
+/// `launch`, of a resident grain when `resident`.
+fn launch_as(t: &Tree, plant: bool, resident: bool) -> String {
     let drive = lean_bin("hosting-drive");
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_grain-launch"));
-    cmd.arg(&t.root).arg("w1").arg(&t.pids).arg(&drive);
+    cmd.arg(&t.root)
+        .arg(&t.broker)
+        .arg("w1")
+        .arg(&t.pids)
+        .arg(&drive);
     if plant {
         cmd.arg("--plant-read-worlds");
+    }
+    if resident {
+        cmd.arg("--resident");
     }
     cmd.args(["w1", A, "probe"])
         .stdin(Stdio::null())
@@ -204,4 +224,123 @@ fn plant_a_symlinked_program_is_refused_program_outside() {
         "a program linked outside its package launched:\n{log}"
     );
     assert!(verdicts(&t).is_empty(), "the linked program ran");
+}
+
+/// HOSTING-17 §8: a broker root inside the hosting root (or around it) would put every socket in it
+/// under a grain grant; grain-launch ends `rootsOverlap` before it starts the controller.
+#[test]
+fn a_broker_root_overlapping_the_hosting_root_is_refused() {
+    let t = tree("overlap");
+    let inside = t.root.join("worlds/w1/grains").join(A).join("vol");
+    fs::create_dir_all(&inside).unwrap();
+    for broker in [inside.as_path(), t.root.parent().unwrap()] {
+        let out = Command::new(env!("CARGO_BIN_EXE_grain-launch"))
+            .arg(&t.root)
+            .arg(broker)
+            .arg("w1")
+            .arg(&t.pids)
+            .arg(lean_bin("hosting-drive"))
+            .args(["w1", A, "probe"])
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            err.contains("grain-launch: rootsOverlap"),
+            "{}: stderr: {err}",
+            broker.display()
+        );
+        assert!(!err.contains("report"), "a launch happened: {err}");
+    }
+}
+
+/// HOSTING-17 hole 1 (VACUITY-READER-H4): identity is the socket, so a resident must reach its OWN
+/// broker socket and nothing else in the broker root. The broker root holds two residents' listening
+/// sockets (BROKER/<A>/broker.sock, BROKER/<B>/broker.sock, one uid here: 0600 in 0700 directories,
+/// CLIENT-20's one-uid rule) and a file. Lean plans the resident (`hosting-drive --resident`): its
+/// connect entry is `<A>/broker.sock`, joined onto BROKER by grain-launch.
+#[test]
+fn a_resident_reaches_its_own_broker_socket_and_nothing_else() {
+    use std::os::unix::net::UnixListener;
+    let mut t = tree("resident");
+    // A socket path is at most 107 bytes (sun_path) and a resident's directory name is 64 hex
+    // digits, so this test's broker root is a short scratch directory of its own (the pid in base
+    // 36), not under the target dir; it is removed at the end.
+    let mut n = std::process::id();
+    let mut tag = String::new();
+    while n > 0 {
+        tag.insert(0, char::from_digit(n % 36, 36).unwrap());
+        n /= 36;
+    }
+    t.broker = nanodregg_devtools::scratch(&format!("i{tag}"));
+    let _ = fs::remove_dir_all(&t.broker);
+    nanodregg_devtools::mkdirs(&t.broker).unwrap();
+    let mut held = Vec::new();
+    for g in [A, B] {
+        let d = t.broker.join(g);
+        fs::create_dir_all(&d).unwrap();
+        fs::set_permissions(&d, fs::Permissions::from_mode(0o700)).unwrap();
+        let s = d.join("broker.sock");
+        held.push(UnixListener::bind(&s).unwrap());
+        fs::set_permissions(&s, fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    fs::write(t.broker.join("secret"), b"BROKER-ROOT").unwrap();
+    let own = t.broker.join(A).join("broker.sock");
+    let other = t.broker.join(B).join("broker.sock");
+    let text = format!(
+        "own-connect connect {}\nother-connect connect {}\nown-list list {}\nbroker-read read {}\nbroker-list list {}\n",
+        own.display(),
+        other.display(),
+        t.broker.join(A).display(),
+        t.broker.join("secret").display(),
+        t.broker.display()
+    );
+    fs::write(t.pkg.join("probe.targets"), text).unwrap();
+    // CONTROL first: unconfined, the same probe reaches both sockets and the broker root.
+    fs::create_dir_all(&t.vol).unwrap();
+    let st = Command::new(t.pkg.join("probe"))
+        .env_clear()
+        .status()
+        .unwrap();
+    assert!(st.success(), "control probe failed");
+    let v = verdicts(&t);
+    for n in ["own-connect", "other-connect", "broker-read"] {
+        assert_eq!(
+            verdict(&v, n),
+            "ok",
+            "control {n}: the denial below would be vacuous"
+        );
+    }
+    fs::remove_file(t.vol.join("probe.out")).unwrap();
+    // CONFINED, through grain-launch + the Lean plan + nd-bwrap
+    let err = launch_as(&t, false, true);
+    assert!(err.contains("report started"), "not launched: {err}");
+    let v = verdicts(&t);
+    assert_eq!(verdict(&v, "own-connect"), "ok", "own socket: {err}");
+    assert_eq!(verdict(&v, "own-list"), "ok broker.sock", "own directory");
+    assert!(
+        verdict(&v, "other-connect").starts_with("denied"),
+        "another resident's socket: {}",
+        verdict(&v, "other-connect")
+    );
+    assert!(
+        verdict(&v, "broker-read").starts_with("denied"),
+        "a file in the broker root: {}",
+        verdict(&v, "broker-read")
+    );
+    // bwrap makes the bound directory's parents as empty mount scaffolding, so the broker root may
+    // list inside, but only as the resident's own directory: never another resident's, never its file
+    let bl = verdict(&v, "broker-list");
+    assert!(
+        bl.starts_with("denied") || bl == format!("ok {A}"),
+        "the broker root shows more than this resident's own directory: {bl}"
+    );
+    eprintln!(
+        "resident: other-connect {}, broker-read {}, broker-list {}",
+        verdict(&v, "other-connect"),
+        verdict(&v, "broker-read"),
+        verdict(&v, "broker-list")
+    );
+    drop(held);
+    let _ = fs::remove_dir_all(&t.broker);
 }

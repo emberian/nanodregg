@@ -3,8 +3,8 @@
 
 `plan_paths`: every path a plan allows lies under `worlds/<l>/grains/<id>`. `plan_not_exposed`: no
 allowed path is a prefix of a hidden one or lies inside one (the launcher's `Exposed` check is the
-same property on canonical OS paths, a second barrier). `plan_app_only`: only an app is planned
-until the resident's two-process shape exists (HOSTING-6).
+same property on canonical OS paths, a second barrier). `plan_connect_own`: a grain may connect only
+to its own broker socket, and only a resident to any (HOSTING-17).
 -/
 import Hosting.Plan
 
@@ -80,21 +80,43 @@ written, nothing else is executable, and the Store and member workspaces are hid
 theorems speak of `allowed`, the union; this one says which list each path is in, so a plan that
 wrote `pkg` and read `vol` is refused here.) -/
 theorem plan_roles {l : ByteArray} {g : Grain} {p : Plan} (h : plan l g = .ok p) :
-    labelOk l = true ∧ labelOk g.idHex = true ∧ clean g.entry = true ∧ g.kind = .app ∧
+    labelOk l = true ∧ labelOk g.idHex = true ∧ clean g.entry = true ∧
       p = { program := pkgDir l g ++ [g.entry], read := [pkgDir l g], write := [volDir l g],
-            exec := [], hidden := [storeDir l, membersDir l] } := by
+            exec := [], connect := connectOf g, hidden := [storeDir l, membersDir l] } := by
   unfold plan at h
   by_cases hl : labelOk l = true <;> by_cases hi : labelOk g.idHex = true <;>
     by_cases he : clean g.entry = true <;>
-    simp_all [bind, Except.bind, pure, Except.pure] <;>
-    cases hk : g.kind <;> simp_all
+    simp_all [bind, Except.bind, pure, Except.pure]
 
-theorem plan_app_only {l : ByteArray} {g : Grain} {p : Plan} (h : plan l g = .ok p) :
-    g.kind = .app := (plan_roles h).2.2.2.1
+/-- **A grain connects only to its own broker socket** (HOSTING-17): an app's plan names no socket,
+and a resident's names exactly `<its id>/broker.sock`, so identity-is-the-socket holds of the plan:
+no plan names another grain's socket (`plan_connect_disjoint`). -/
+theorem plan_connect_own {l : ByteArray} {g : Grain} {p : Plan} (h : plan l g = .ok p) :
+    p.connect = (match g.kind with | .app => [] | .resident => [[g.idHex, brokerSock]]) := by
+  obtain ⟨-, -, -, rfl⟩ := plan_roles h
+  rfl
+
+theorem plan_connect_disjoint {l l' : ByteArray} {g g' : Grain} {p p' : Plan} (h : plan l g = .ok p)
+    (h' : plan l' g' = .ok p') (hne : g.idHex ≠ g'.idHex) : ∀ x ∈ p.connect, x ∉ p'.connect := by
+  intro x hx hx'
+  rw [plan_connect_own h] at hx
+  rw [plan_connect_own h'] at hx'
+  cases hk : g.kind <;> cases hk' : g'.kind <;> simp_all
+
+private theorem brokerSock_clean : clean brokerSock = true := by decide
+
+/-- Every component of a connect entry is clean: one directory below the broker root, one name in
+it (so the launcher's join stays inside the broker root). -/
+theorem plan_connect_clean {l : ByteArray} {g : Grain} {p : Plan} (h : plan l g = .ok p) :
+    ∀ x ∈ p.connect, x.length = 2 ∧ ∀ c ∈ x, clean c = true := by
+  have hi := labelOk_clean (plan_roles h).2.1
+  rw [plan_connect_own h]
+  intro x hx
+  cases hk : g.kind <;> simp_all [brokerSock_clean]
 
 theorem plan_paths {l : ByteArray} {g : Grain} {p : Plan} (h : plan l g = .ok p) :
     ∀ x ∈ p.allowed, grainDir l g <+: x := by
-  obtain ⟨-, -, -, -, rfl⟩ := plan_roles h
+  obtain ⟨-, -, -, rfl⟩ := plan_roles h
   intro x hx
   simp only [Plan.allowed, List.cons_append, List.nil_append, List.append_nil, List.mem_cons,
     List.not_mem_nil, or_false] at hx
@@ -121,7 +143,7 @@ theorem plan_not_exposed {l : ByteArray} {g : Grain} {p : Plan} (h : plan l g = 
     ∀ hd ∈ p.hidden, ∀ x ∈ p.allowed, ¬ hd <+: x ∧ ¬ x <+: hd := by
   intro hd hh x hx
   obtain ⟨y, rfl⟩ := plan_paths h x hx
-  obtain ⟨-, -, -, -, rfl⟩ := plan_roles h
+  obtain ⟨-, -, -, rfl⟩ := plan_roles h
   have hx' : grainDir l g ++ y = worldRoot l ++ lit "grains" :: (g.idHex :: y) := by
     simp [grainDir]
   simp only [List.mem_cons, List.not_mem_nil, or_false] at hh
@@ -134,7 +156,7 @@ theorem plan_not_exposed {l : ByteArray} {g : Grain} {p : Plan} (h : plan l g = 
 theorem plan_no_store_no_workspace {l : ByteArray} {g : Grain} {p : Plan} (h : plan l g = .ok p) :
     ∀ x ∈ p.allowed, ¬ storeDir l <+: x ∧ ¬ membersDir l <+: x := by
   have hh : storeDir l ∈ p.hidden ∧ membersDir l ∈ p.hidden := by
-    obtain ⟨-, -, -, -, rfl⟩ := plan_roles h
+    obtain ⟨-, -, -, rfl⟩ := plan_roles h
     simp
   intro x hx
   exact ⟨(plan_not_exposed h _ hh.1 x hx).1, (plan_not_exposed h _ hh.2 x hx).1⟩
@@ -149,7 +171,7 @@ about directories (no `..`, no `/`, no empty component), up to symlinks, which t
 deny-default and the launcher's program check answer. -/
 theorem plan_components_clean {l : ByteArray} {g : Grain} {p : Plan} (h : plan l g = .ok p) :
     ∀ x ∈ p.allowed ++ p.hidden, ∀ c ∈ x, clean c = true := by
-  obtain ⟨hl, hi, he, -, rfl⟩ := plan_roles h
+  obtain ⟨hl, hi, he, rfl⟩ := plan_roles h
   have hl := labelOk_clean hl
   have hi := labelOk_clean hi
   obtain ⟨h1, h2, h3, h4, h5, h6⟩ := lits_clean
@@ -179,6 +201,15 @@ name, the label `w1`, the entry `app`) encodes into one frame. -/
 theorem planned_launch_encodes :
     (match plan (lit "w1") { idHex := ⟨Array.replicate 64 97⟩, kind := .app, entry := lit "app" } with
      | .ok p => (Wire.encodeAction { grain := ⟨Array.replicate 64 97⟩, verdict := .launch p }).isSome
+     | .error _ => false) = true := by
+  decide +kernel
+
+/-- Tooth: a resident's plan (a 64-byte directory name) encodes, and its connect entry is its own
+socket and nothing else. -/
+theorem planned_resident_encodes :
+    (match plan (lit "w1") { idHex := ⟨Array.replicate 64 97⟩, kind := .resident, entry := lit "app" } with
+     | .ok p => (Wire.encodeAction { grain := ⟨Array.replicate 64 97⟩, verdict := .launch p }).isSome &&
+         p.connect == [[⟨Array.replicate 64 97⟩, lit "broker.sock"]]
      | .error _ => false) = true := by
   decide +kernel
 

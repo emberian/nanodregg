@@ -1,7 +1,9 @@
 //! The isolation test's grain (`launcher/tests/isolation.rs`). Run as `<grain>/pkg/probe`, with no
 //! arguments and an empty environment (the sandbox clears both), it reads `probe.targets` beside
-//! itself — lines `NAME read|write PATH` — tries each, and writes one line per target,
-//! `NAME ok` or `NAME denied <errno name>`, to `<grain>/vol/probe.out`. It finds itself by argv[0]
+//! itself — lines `NAME read|write|connect|list PATH` — tries each, and writes one line per target,
+//! `NAME ok` (a `list` prints `ok` and the sorted names, comma-separated) or `NAME denied <errno
+//! name>`, to `<grain>/vol/probe.out`. `connect` opens a unix socket (a resident's broker socket,
+//! HOSTING-17). It finds itself by argv[0]
 //! (no /proc under bwrap). Exit 3 when it cannot write its own volume.
 
 use std::io::{ErrorKind, Read};
@@ -15,6 +17,18 @@ fn attempt(op: &str, path: &str) -> String {
             f.read_to_end(&mut b).map(|_| ())
         }),
         "write" => std::fs::write(path, b"probe"),
+        "connect" => std::os::unix::net::UnixStream::connect(path).map(|_| ()),
+        "list" => match std::fs::read_dir(path) {
+            Ok(rd) => {
+                let mut names: Vec<String> = rd
+                    .filter_map(|e| e.ok())
+                    .map(|e| e.file_name().to_string_lossy().into_owned())
+                    .collect();
+                names.sort();
+                return format!("ok {}", names.join(","));
+            }
+            Err(e) => Err(e),
+        },
         _ => return "bad-op".into(),
     };
     match r {
@@ -24,6 +38,7 @@ fn attempt(op: &str, path: &str) -> String {
                 ErrorKind::PermissionDenied => "EACCES/EPERM".to_string(),
                 ErrorKind::NotFound => "ENOENT".to_string(),
                 ErrorKind::ReadOnlyFilesystem => "EROFS".to_string(),
+                ErrorKind::ConnectionRefused => "ECONNREFUSED".to_string(),
                 k => format!("{k:?}"),
             };
             format!("denied {name}")

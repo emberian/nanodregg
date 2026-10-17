@@ -27,23 +27,37 @@ pub fn under(root: &Path, rel: &[u8]) -> PathBuf {
     root.join(OsStr::from_bytes(rel))
 }
 
-/// The `sandbox::Policy` of a launch frame, every path joined onto `root`. Nothing is added,
-/// dropped or reordered: the plan is Lean's.
-pub fn policy(
-    root: &Path,
-    read: &[Vec<u8>],
-    write: &[Vec<u8>],
-    exec: &[Vec<u8>],
-    hidden: &[Vec<u8>],
-) -> Policy {
-    let all = |ps: &[Vec<u8>]| ps.iter().map(|p| under(root, p)).collect();
+/// The paths of one launch frame, as Lean planned them (relative, joined, clean).
+pub struct PlanPaths<'a> {
+    /// read, under the hosting root
+    pub read: &'a [Vec<u8>],
+    /// read and write, under the hosting root
+    pub write: &'a [Vec<u8>],
+    /// executable, under the hosting root
+    pub exec: &'a [Vec<u8>],
+    /// sockets, under the BROKER root (HOSTING-17 §6)
+    pub connect: &'a [Vec<u8>],
+    /// hidden, under the hosting root
+    pub hidden: &'a [Vec<u8>],
+}
+
+/// The `sandbox::Policy` of a launch frame: every path joined onto `root`, except `connect`, joined
+/// onto `broker`. Nothing is added, dropped or reordered: the plan is Lean's.
+pub fn policy(root: &Path, broker: &Path, p: &PlanPaths<'_>) -> Policy {
+    let all = |base: &Path, ps: &[Vec<u8>]| ps.iter().map(|q| under(base, q)).collect();
     Policy {
-        read: all(read),
-        write: all(write),
-        exec: all(exec),
-        hidden: all(hidden),
-        connect: Vec::new(),
+        read: all(root, p.read),
+        write: all(root, p.write),
+        exec: all(root, p.exec),
+        hidden: all(root, p.hidden),
+        connect: all(broker, p.connect),
     }
+}
+
+/// HOSTING-17 §8: the broker root and the hosting root are disjoint trees (on Linux every directory
+/// a grain may see is a connect grant to the sockets in it), compared after canonicalizing.
+pub fn roots_disjoint(root: &Path, broker: &Path) -> bool {
+    !(root.starts_with(broker) || broker.starts_with(root))
 }
 
 /// A grain name is a single directory-name component of lowercase ASCII letters, digits and `-`

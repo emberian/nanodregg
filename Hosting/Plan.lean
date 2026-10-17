@@ -14,6 +14,10 @@ Layout under the root, for the Store labelled `l`:
     worlds/l/grains/<id>/pkg  the grain's package files    read (its program is pkg/<entry>)
     worlds/l/grains/<id>/vol  the grain's volume           read + write
 
+and under the operator's broker root (SOCKDIR, HOSTING-17), for a resident only:
+
+    <id>/broker.sock          its broker socket            connect (nothing else)
+
 There is no volume REQUEST (ASSEMBLY HOSTING-5): the volume is a function of (store, grain), so no
 input names another world's or grain's path. That a grain cannot reach `worlds/<other>` is the
 sandbox's deny-default, tested physically by the launcher's plant (HOSTING-5), not proved here.
@@ -62,17 +66,25 @@ def grainDir (l : ByteArray) (g : Grain) : Path := worldRoot l ++ [lit "grains",
 def pkgDir (l : ByteArray) (g : Grain) : Path := grainDir l g ++ [lit "pkg"]
 def volDir (l : ByteArray) (g : Grain) : Path := grainDir l g ++ [lit "vol"]
 
-/-- The plan of an app grain: run `pkg/<entry>`, read its package, read and write its volume; the
-Store and the member workspaces are hidden (the launcher's `Exposed` check is the second barrier). -/
+/-- A resident's broker socket's name in its own directory of the broker root (HOSTING-17 §2). -/
+def brokerSock : ByteArray := lit "broker.sock"
+
+/-- The sockets a grain may connect to, relative to the broker root: a resident its own broker
+socket `<id>/broker.sock` (the directory keybroker names by the same `dirOf`), an app none. -/
+def connectOf (g : Grain) : List Path :=
+  match g.kind with
+  | .app => []
+  | .resident => [[g.idHex, brokerSock]]
+
+/-- The plan of a grain: run `pkg/<entry>`, read its package, read and write its volume, and (a
+resident) connect to its own broker socket; the Store and the member workspaces are hidden (the
+launcher's `Exposed` check is the second barrier). -/
 def plan (l : ByteArray) (g : Grain) : Except Refusal Plan := do
   unless labelOk l do throw .labelUnclean
   unless labelOk g.idHex do throw .idUnclean
   unless Codec.Path.clean g.entry do throw .entryUnclean
-  match g.kind with
-  | .resident => throw .residentUnsupported
-  | .app =>
-    pure { program := pkgDir l g ++ [g.entry], read := [pkgDir l g], write := [volDir l g],
-           exec := [], hidden := [storeDir l, membersDir l] }
+  pure { program := pkgDir l g ++ [g.entry], read := [pkgDir l g], write := [volDir l g],
+         exec := [], connect := connectOf g, hidden := [storeDir l, membersDir l] }
 
 /-- Every path a plan ALLOWS. -/
 def Plan.allowed (p : Plan) : List Path := p.program :: p.read ++ p.write ++ p.exec

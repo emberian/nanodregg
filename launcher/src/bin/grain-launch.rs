@@ -1,9 +1,11 @@
-//! `grain-launch ROOT LABEL PIDS CONTROLLER [ARG...]`
+//! `grain-launch ROOT BROKER LABEL PIDS CONTROLLER [ARG...]`
 //!
 //! Starts CONTROLLER (the Lean `hosting-controller`, or the test's `hosting-drive`) confined, with
 //! read access to `ROOT/worlds/LABEL/store` only, and two pipes: it reads action frames from the
 //! controller's stdout and writes report frames to its stdin. Each launch is one
-//! `nanodregg_sandbox::command` over the frame's plan joined onto ROOT; each child gets a PID file
+//! `nanodregg_sandbox::command` over the frame's plan joined onto ROOT (its `connect` sockets onto
+//! BROKER, the broker's socket root, HOSTING-17; ROOT and BROKER must be disjoint trees, or the
+//! launcher ends `rootsOverlap` before it starts anything); each child gets a PID file
 //! `PIDS/<grain>.pid`, removed when the child is reaped. A kill stops the child by its own handle
 //! (the PID in that file). When the controller's pipe closes, every child is killed and reaped,
 //! then the launcher exits with a name on stderr. It decides nothing: a frame it cannot decode, or
@@ -20,7 +22,7 @@ use std::time::{Duration, Instant};
 
 use nanodregg_launcher::generated::wire::{Action, LaunchFailure, Report};
 use nanodregg_launcher::generated::{FrameError, read_frame, write_frame};
-use nanodregg_launcher::{failure_of, grain_name_ok, policy, under};
+use nanodregg_launcher::{PlanPaths, failure_of, grain_name_ok, policy, roots_disjoint, under};
 use nanodregg_sandbox::{Policy, command};
 
 /// How often children are polled for exit while no action arrives.
@@ -31,6 +33,7 @@ const LIFETIME_TICKS: u64 = 1 << 48;
 /// How the launcher ended (stderr names; exit code 0 only when the controller ended cleanly).
 enum End {
     Usage,
+    RootsOverlap,
     ControllerRefused(String),
     ControllerEnded(Option<i32>),
     Frame(String),
@@ -45,7 +48,8 @@ enum End {
 impl End {
     fn describe(&self) -> String {
         match self {
-            End::Usage => "usage: grain-launch ROOT LABEL PIDS CONTROLLER [ARG...]".into(),
+            End::Usage => "usage: grain-launch ROOT BROKER LABEL PIDS CONTROLLER [ARG...]".into(),
+            End::RootsOverlap => "rootsOverlap".into(),
             End::ControllerRefused(e) => format!("controllerRefused {e}"),
             End::ControllerEnded(c) => format!("controllerEnded {c:?}"),
             End::Frame(e) => format!("frame {e}"),
@@ -99,6 +103,7 @@ struct Grain {
 
 struct Launcher {
     root: PathBuf,
+    broker: PathBuf,
     pids: PathBuf,
     start: Instant,
     to_controller: ChildStdin,
@@ -217,9 +222,17 @@ impl Launcher {
                 read,
                 write,
                 exec,
+                connect,
                 hidden,
             } => {
-                let p = policy(&self.root, &read, &write, &exec, &hidden);
+                let paths = PlanPaths {
+                    read: &read,
+                    write: &write,
+                    exec: &exec,
+                    connect: &connect,
+                    hidden: &hidden,
+                };
+                let p = policy(&self.root, &self.broker, &paths);
                 self.launch(grain, &program, &p)
             }
             Action::Kill { grain } => {
@@ -262,12 +275,17 @@ impl Launcher {
 
 fn run() -> End {
     let args: Vec<OsString> = std::env::args_os().skip(1).collect();
-    let [root, label, pids, controller, rest @ ..] = args.as_slice() else {
+    let [root, broker, label, pids, controller, rest @ ..] = args.as_slice() else {
         return End::Usage;
     };
-    let root = PathBuf::from(root);
-    if !root.is_absolute() {
+    let (Ok(root), Ok(broker)) = (
+        PathBuf::from(root).canonicalize(),
+        PathBuf::from(broker).canonicalize(),
+    ) else {
         return End::Usage;
+    };
+    if !roots_disjoint(&root, &broker) {
+        return End::RootsOverlap;
     }
     let store = root.join("worlds").join(label).join("store");
     let ctl = Policy {
@@ -294,6 +312,7 @@ fn run() -> End {
     std::thread::spawn(move || reader(from_controller, tx));
     let mut l = Launcher {
         root,
+        broker,
         pids: PathBuf::from(pids),
         start: Instant::now(),
         to_controller,

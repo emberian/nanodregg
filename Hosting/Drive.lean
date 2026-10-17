@@ -1,9 +1,10 @@
 /-
 # Hosting.Drive — `hosting-drive`: one Lean-planned launch, for the launcher's isolation test
 
-    hosting-drive [--plant-read-worlds] LABEL IDHEX ENTRY
+    hosting-drive [--plant-read-worlds] [--resident] LABEL IDHEX ENTRY
 
-A stand-in for `hosting-controller` that needs no Store: it plans ONE app grain with the deployed
+A stand-in for `hosting-controller` that needs no Store: it plans ONE grain (an app, or with
+`--resident` a resident, whose plan connects to its own broker socket, HOSTING-17) with the deployed
 `plan` (label, directory name, entry), writes that launch with the deployed `Wire.encodeAction`, then
 reads the launcher's reports and prints each on stderr (`report started`, `report exited STATUS`,
 `report failed NAME`), ending at the grain's first `exited` or `failed`. The plan is Lean's, never
@@ -60,8 +61,8 @@ def readReports (input : IO.FS.Stream) (grain : ByteArray) : Nat → IO Exit
       IO.eprintln s!"report failed {why.name}"
       return if g == grain then .done else .badReport "otherGrain"
 
-def run (plantReadWorlds : Bool) (label idHex entry : ByteArray) : IO Exit := do
-  match plan label { idHex, kind := .app, entry } with
+def run (plantReadWorlds : Bool) (kind : Grain.Kind) (label idHex entry : ByteArray) : IO Exit := do
+  match plan label { idHex, kind, entry } with
   | .error r => return .refused r
   | .ok p =>
     let p := if plantReadWorlds then { p with read := [lit "worlds"] :: p.read } else p
@@ -75,8 +76,11 @@ def main (args : List String) : IO UInt32 := do
   let (plant, rest) := match args with
     | "--plant-read-worlds" :: rest => (true, rest)
     | rest => (false, rest)
+  let (kind, rest) := match rest with
+    | "--resident" :: rest => (Grain.Kind.resident, rest)
+    | rest => (Grain.Kind.app, rest)
   let e ← match rest with
-    | [label, idHex, entry] => run plant label.toUTF8 idHex.toUTF8 entry.toUTF8
+    | [label, idHex, entry] => run plant kind label.toUTF8 idHex.toUTF8 entry.toUTF8
     | _ => pure .usage
   IO.eprintln s!"hosting-drive: {e.name}"
   return e.code

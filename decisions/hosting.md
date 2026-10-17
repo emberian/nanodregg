@@ -1104,3 +1104,21 @@ puts it to Ember to ratify as a custody change.
 `sockDir`, Broker.Refusal gains `peerRefused` (broker_generated.rs re-emitted), the launch frame gains
 `connect` (generated.rs re-emitted), grain-launch gains BROKER, the keybroker unit is re-rendered. Nothing
 persisted changes.
+**Built (HOSTING-6, 10-18).** keybroker's half: 45b1394. The resident plan: `Plan.connect` (relative to BROKER),
+`connectOf` (an app none, a resident `[[<id>, "broker.sock"]]`), `residentUnsupported` DELETED (a resident is now
+planned), the launch frame's `connect` field, `grain-launch ROOT BROKER LABEL PIDS CONTROLLER` (connect joined onto
+BROKER; `rootsOverlap` when the trees nest). Theorems `Proofs.Plan.plan_connect_own`, `plan_connect_disjoint`
+(premise `idHex ≠ idHex'`, which `dirOf_injective` discharges for two World ids), `plan_connect_clean`, the tooth
+`planned_resident_encodes`; `launch_fields` names `connect`. Physical: `launcher/tests/isolation.rs`
+`a_resident_reaches_its_own_broker_socket_and_nothing_else` (VACUITY-READER-H4's hole 1: the connect grant is the
+ONLY identity barrier between residents, since all share the hosted uid and group). Lean plans a resident through
+`hosting-drive --resident`. Over a broker root that holds two residents' listening sockets and a file, the resident
+connects to its own socket. Another resident's socket and the root's file are ENOENT. Its own directory lists exactly
+`broker.sock`, and the broker root lists only its own directory, which is bwrap's mount scaffolding. CONTROL:
+unconfined, the probe reaches both sockets and the file. Plants (run, each red): `policy` granting the whole broker
+root (the reader's surviving mutation; the sandbox refuses a directory as a connect entry); connect joined onto ROOT;
+a resident planned with no connect entry. A socket path must fit sun_path (107 bytes), and a resident's directory is 64
+hex digits, so SOCKDIR must be at most 30 bytes long. `/run/nd-broker` is 14; the test uses a short scratch root.
+**Residue (reader, hole 2).** keybroker binds the names the operator typed in RESIDENTS, and the plan names the
+directory `dirOf` of the grain's id. They agree by convention only. cv 01a14ad0-ae99 (HOSTING-18) derives keybroker's
+sockets from the World (the operator's unrevoked allowances' residents) and deletes RESIDENTS.

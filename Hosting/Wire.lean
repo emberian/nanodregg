@@ -6,7 +6,7 @@ REPORTS. Both are `Codec.Tagged` frames over the one Layout family, so the Rust 
 printed from these lists (`emit-hosting`) and the launcher holds no copy of a code, a bound or the
 path rule (law 2). On the pipe each frame is `u32le len ‖ payload`, `1 ≤ len ≤ Bounds.frameMax`.
 
-    actions  launch 1   grain, program : path, read write exec hidden : paths
+    actions  launch 1   grain, program : path, read write exec connect hidden : paths
              kill   2   grain
              refuse 3   grain, grainRefusal : Refusal
     reports  started 1  grain, atMs
@@ -14,7 +14,8 @@ path rule (law 2). On the pipe each frame is `u32le len ‖ payload`, `1 ≤ len
              failed  3  grain, launchFailure : LaunchFailure, atMs
 
 `grain` is the grain's directory name (`Controller.dirOf`): the key a later kill and every report
-name the child by. Paths are relative to the operator's hosting root; the launcher joins the root
+name the child by. Paths are relative to the operator's hosting root, except `connect`, whose paths
+are relative to the operator's broker root (SOCKDIR, HOSTING-17); the launcher joins those two roots
 and nothing else. This module imports no decision (not `Hosting.Plan`, not `Hosting.Controller`),
 so the emitter's closure is the Codec family and these lists.
 -/
@@ -40,12 +41,15 @@ end Bounds
 /-- A path below the hosting root, as components (`Codec.Path`: clean, joined by `/` on the wire). -/
 abbrev Path := List ByteArray
 
-/-- The `sandbox::Policy` a grain is launched under, field for field, plus its program. -/
+/-- The `sandbox::Policy` a grain is launched under, field for field, plus its program. `connect`
+names unix sockets the grain may connect to (CLIENT's `Policy.connect`), relative to the broker
+root, not the hosting root (HOSTING-17 §6, §8). -/
 structure Plan where
   program : Path
   read : List Path
   write : List Path
   exec : List Path
+  connect : List Path
   hidden : List Path
   deriving DecidableEq
 
@@ -61,23 +65,19 @@ inductive Refusal
   | malformedGrain
   /-- the grain exited `Controller.restartsMax` times within the restart window -/
   | crashLoop
-  /-- a resident's plan needs `Policy.connect` (CLIENT) and the broker (HOSTING-6, HOSTING-7) -/
-  | residentUnsupported
   deriving DecidableEq, Repr
 
 namespace Refusal
 
 def all : List Refusal :=
-  [labelUnclean, entryUnclean, idUnclean, malformedGrain, crashLoop, residentUnsupported]
+  [labelUnclean, entryUnclean, idUnclean, malformedGrain, crashLoop]
 
 def code : Refusal → UInt8
   | labelUnclean => 0 | entryUnclean => 1 | idUnclean => 2 | malformedGrain => 3 | crashLoop => 4
-  | residentUnsupported => 5
 
 def name : Refusal → String
   | labelUnclean => "labelUnclean" | entryUnclean => "entryUnclean" | idUnclean => "idUnclean"
   | malformedGrain => "malformedGrain" | crashLoop => "crashLoop"
-  | residentUnsupported => "residentUnsupported"
 
 def ofCode? (b : UInt8) : Option Refusal := all.find? (·.code == b)
 
@@ -168,7 +168,7 @@ namespace Wire
 
 def actionCases : Tagged :=
   [("launch", 1, [.bytes "grain", .path "program", .paths "read", .paths "write", .paths "exec",
-     .paths "hidden"]),
+     .paths "connect", .paths "hidden"]),
    ("kill", 2, [.bytes "grain"]),
    ("refuse", 3, [.bytes "grain", .oneOf "grainRefusal" (Refusal.all.map fun r => (r.name, r.code))])]
 
@@ -228,15 +228,16 @@ def actionWire? (a : Action) : Option ActionTy := do
     let r ← paths? p.read
     let w ← paths? p.write
     let x ← paths? p.exec
+    let c ← paths? p.connect
     let h ← paths? p.hidden
-    pure ⟨⟨0, by decide⟩, (g, prog, r, w, x, h, ())⟩
+    pure ⟨⟨0, by decide⟩, (g, prog, r, w, x, c, h, ())⟩
   | .kill => pure ⟨⟨1, by decide⟩, (g, ())⟩
   | .refuse why => pure ⟨⟨2, by decide⟩, (g, ⟨why.code, contains_of_mem _ _ _ why (by cases why <;> decide)⟩, ())⟩
 
 def actionOf : ActionTy → Action
-  | ⟨⟨0, _⟩, (g, prog, r, w, x, h, ())⟩ =>
+  | ⟨⟨0, _⟩, (g, prog, r, w, x, c, h, ())⟩ =>
     { grain := g.val, verdict := .launch { program := prog.val, read := unpaths r, write := unpaths w,
-                                           exec := unpaths x, hidden := unpaths h } }
+                                           exec := unpaths x, connect := unpaths c, hidden := unpaths h } }
   | ⟨⟨1, _⟩, (g, ())⟩ => { grain := g.val, verdict := .kill }
   | ⟨⟨2, _⟩, (g, why, ())⟩ =>
     { grain := g.val, verdict := .refuse ((Refusal.ofCode? why.val).get (refusal_of_contains _ why.property)) }
