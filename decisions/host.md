@@ -110,7 +110,7 @@ already met on average. I may now be over-engineering to comply, building LSM ma
 at THE BAR's 1000 records fits a whole-World encode in milliseconds. The honest test: measure the encode
 of a BAR-sized World. If it is under one fsync, (a) is the simpler correct design, and K1 should be
 re-argued with that number.
-**Status.** open.
+**Status.** open; HOST-14 (the measurement this meta-critique asked for) proposes withdrawing it.
 
 ## HOST-11 · how the loop gates `log` and `read` on a follow grant, O(touched) (2026-10-16, answering PROTOCOL-3)
 **Decision.** A `log` or `read` request carries a signed envelope: `(key, op, fromHeight or view, validUntil,
@@ -176,3 +176,52 @@ makes the gate weaker.
 **Critique.** Private lemmas cannot be reused across modules, so two instances may prove the same fact
 twice. **Meta-critique.** None worth recording: this is a gate's cost, written down so nobody re-litigates it.
 **Status.** ruled by ROOT 2026-10-16 (accepted as cost).
+
+## HOST-14 · K1 re-argued with the number: a whole-World base in a Task, no deltas (2026-10-16, HOST-2; ROOT to rule)
+**The measurement** (Apple M2 Max, compiled Lean v4.30.0, `~/dev/redregg/work/host-bench/K1.lean` +
+`fsync.py`; best of 20 encodes / 30 appends). A BAR World: 1000 data objects (owner digest + one
+128-byte state slot) and 1000 journal entries, encoded whole with the `Codec.Stream` combinators into
+one buffer:
+
+| records | base bytes | whole-World encode | one append + `F_FULLFSYNC` |
+|---|---|---|---|
+| 1 000 (THE BAR) | 290 KB | **0.18 ms** | best 3.9 ms, median 6.4 ms (100 B); 4.3 / 7.1 ms (290 KB) |
+| 10 000 | 2.9 MB | 2.1 ms | — |
+| 100 000 | 29 MB | 40 ms | — |
+
+At THE BAR the whole-World encode is about 25 to 35 times cheaper than the one fsync every batch
+already pays. Not measured: the MAC over the base, because CODEC's Keccak is not on main. ESTIMATE, not
+a measurement: 290 KB is about 2 100 Keccak-f permutations, which at minidregg's measured ~17 k
+instructions per permutation (HP-7) is ~10 ms at BAR, ~1 s at 100×. The MAC, not the encode, is the
+dominant term, and it is a cost a delta design pays too, per delta byte.
+**Decision (proposed).** Withdraw HOST-10's deltas and keep DESIGN §5 (a): the loop seals when the
+bytes appended since the last base reach `max(sealMinBytes, baseBytes / 4)`. It hands the immutable
+World value to a Task, which encodes it with CODEC's World codec, MACs it, and writes
+`base-<h>.world` (tmp → fsync → rename → fsync dir). Open takes the newest base that verifies, then
+folds the batches after it with `World.admit`, and nothing else. There is one way to advance a World
+(law 1), no `Delta` type, no `Delta.apply` theorem, and no write amplification.
+**Why this meets laws 4 and 5 as they are meant.** No REQUEST does O(store) work. The loop's own cost per
+seal is one pointer handoff. The Task's cost is O(store) once per Ω(store) appended bytes, which
+amortises to ≤ 4 encoded bytes per appended byte. The one cost that K1's critique ("two Worlds alive
+during the encode") named is smaller than it said: the World is a persistent `TreeMap`, so while the
+Task holds the sealed value the loop's inserts copy only O(log n) path nodes per touched key. The memory
+held beside the live World is O(touched since the seal) plus the transient encode buffer (290 KB at
+BAR). Open costs O(base) to decode plus a fold over ≤ baseBytes/4 of Turns.
+**Alternatives.** HOST-10 (base plus deltas, as ruled under K1): open is bounded by base, deltas and
+≤ `deltaEveryBytes`, but it needs a `Delta` type, a second World-advance path tied to admit by a
+theorem nobody has written, ≤ 2× write amplification on hot cells, and a follower pair-assertion to
+catch a buggy delta. Or no base at all: open folds the whole log. That fails the 60 s cold reopen only
+at a scale far beyond THE BAR, but it fails without bound.
+**Critique.** The numbers are THE BAR's. Linear growth means 10⁶ records is a 290 MB transient
+buffer and a multi-second MAC per seal: still amortised, still off the loop, but a memory spike that
+deltas would not have. My encoder is a stand-in for CODEC's (the same combinators; CODEC's will add
+framing and tags, which costs a few percent). The MAC number is an estimate from another system's
+Keccak. If CODEC's Lean Keccak is much slower than 17 k instructions per permutation, the Task can
+fall behind its cadence at large stores. The design then has to say what happens, and it does: the
+next seal waits for the previous Task, and open folds a longer tail. That is correct but slower.
+**Meta-critique.** This is the design I proposed first and was overruled on, so I went looking for the
+number that vindicates it. The measurement was chosen at THE BAR's scale because the BAR is the spec,
+but that choice also happens to be the one that favours (a). The honest residue: (a) is simpler at
+every scale and cheaper at the spec's scale; deltas win only past ~10⁵ records, a scale no row exercises.
+**Status.** open (ROOT to rule; if accepted, HOST-10 is withdrawn and CODEC need not build a delta codec,
+only the World codec it already listed).
