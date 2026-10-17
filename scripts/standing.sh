@@ -3,7 +3,7 @@
 # laptop. Refused unless this checkout is at main (--here: judge with this checkout's scripts).
 #
 #   tip -> gates -> full build -> census + generated files -> sim -> rows -> one line:
-#   STANDING <sha> gates=… build=… census=… sim=… rows=… waste=… unmeasured=N => GREEN|RED|INCOMPLETE
+#   STANDING <sha> gates=… build=… census=… sim=… rows=… plants=… waste=… unmeasured=N => GREEN|RED|INCOMPLETE
 #
 # GREEN needs every stage to have RUN and passed. A stage that does not exist yet (no `sim`
 # lean_exe, no rows/run) is ABSENT, and any ABSENT stage or unmeasured ceiling makes the verdict
@@ -17,6 +17,9 @@
 #         `ROW <name> PASS|FAIL <why>|PENDING <why>`; exit 0 (`ALL PASS`) = ok, exit 3 (no FAIL,
 #         some PENDING: a row with no driver yet) = INCOMPLETE(n pending), anything else = RED
 #         naming the first failing row
+#   plants: OPS's `store-plants` exe (backup/restore against the real `host`) into a fresh
+#          directory of the standing tree; exit 0 + `ALL PASS` = ok, else RED naming the first
+#          `PLANT <name> FAIL`; no store-plants exe => ABSENT
 #   waste: the `WASTE <op> <metric> <ratio>` lines the sims and the rows print, against gates/waste.tsv
 #          (gates/waste.py --measured): a pinned row above its ceiling or unmeasured is RED;
 #          no measurement and no row at all is ABSENT (INCOMPLETE)
@@ -51,7 +54,7 @@ gates=$(run python3 "$T/gates/check.py" "$T" --changed "$G/changed" --base-tree 
 unmeasured=$(grep -c '^WARN ' "$log" || true)
 # shellcheck disable=SC2046
 build=$(run wrapped env -C "$T" LEAN_NUM_THREADS="${LEAN_NUM_THREADS:-4}" lake build $(lean_targets "$T"))
-census=ABSENT; sim=ABSENT; rows=ABSENT
+census=ABSENT; sim=ABSENT; rows=ABSENT; plants=ABSENT
 if [ "$build" = ok ]; then
   census=$(run wrapped python3 "$T/gates/census.py" "$T")
   while read -r exe out; do
@@ -70,8 +73,11 @@ if [ "$build" = ok ]; then
         printf '%s\n' "$out" >> "$log"
         printf '%s\n' "$out" | grep '^WASTE ' >> "$G/waste.measured"
         if [ $rc -ne 0 ] || [ "$(printf '%s\n' "$out" | tail -1)" != "ALL PASS" ]; then
-          sim="RED($exe $seed: $(printf '%s\n' "$out" | grep -m1 '^FAIL ' || echo "exit $rc"))"
-          break 2
+          # The first red names the verdict; the other sims still run, so their WASTE lines are
+          # measured (one sim's red used to make every pinned waste row "unmeasured", a second,
+          # false red).
+          [ "$sim" = ok ] && sim="RED($exe $seed: $(printf '%s\n' "$out" | grep -m1 '^FAIL ' || echo "exit $rc, last line: $(printf '%s\n' "$out" | tail -1)"))"
+          break
         fi
       done
     done
@@ -86,6 +92,15 @@ if [ "$build" = ok ]; then
       *) rows="RED($(grep -m1 '^ROW [^ ]* FAIL' "$G/rows.out" | cut -c5- || echo "exit $rc"))" ;;
     esac
   fi
+  # plants: OPS's backup/restore plants against the real `host` (store-plants HOST_EXE DIR; DIR
+  # must not exist, everything it writes is under it). Pass = exit 0 and last line `ALL PASS`.
+  if python3 "$T/gates/tree.py" has-exe "$T" store-plants; then
+    P=$G/plants-run; rm -rf "$P"
+    out=$(wrapped "$T/.lake/build/bin/store-plants" "$T/.lake/build/bin/host" "$P" 2>&1); rc=$?
+    printf '%s\n' "$out" >> "$log"; rm -rf "$P"
+    if [ $rc -eq 0 ] && [ "$(printf '%s\n' "$out" | tail -1)" = "ALL PASS" ]; then plants=ok
+    else plants="RED($(printf '%s\n' "$out" | grep -m1 -E '^PLANT [^ ]+ FAIL' || echo "exit $rc"))"; fi
+  fi
 fi
 waste=$(grep -c -v -e '^#' -e '^[[:space:]]*$' "$T/gates/waste.tsv" 2>/dev/null || echo 0)
 wastev=ABSENT
@@ -97,7 +112,7 @@ unpinned=$(grep -c '^unpinned' "$log" || true)
 # RED makes the line RED; anything else (ABSENT, INCOMPLETE, or a value that is not a verdict) is
 # INCOMPLETE.
 verdict=GREEN
-for v in "$gates" "$build" "$census" "$sim" "$rows" "$wastev"; do
+for v in "$gates" "$build" "$census" "$sim" "$rows" "$plants" "$wastev"; do
   case $v in
     ok) ;;
     RED*) verdict=RED; break ;;
@@ -105,7 +120,7 @@ for v in "$gates" "$build" "$census" "$sim" "$rows" "$wastev"; do
   esac
 done
 [ $verdict = GREEN ] && [ "$unmeasured" -gt 0 ] && verdict=INCOMPLETE
-line="STANDING ${sha:0:12} gates=$gates build=$build census=$census sim=$sim rows=$rows waste=$wastev(pinned $waste, unpinned $unpinned) unmeasured=$unmeasured => $verdict"
+line="STANDING ${sha:0:12} gates=$gates build=$build census=$census sim=$sim rows=$rows plants=$plants waste=$wastev(pinned $waste, unpinned $unpinned) unmeasured=$unmeasured => $verdict"
 echo "$line" | tee -a "$G/verdicts.log"
 echo "log: $log"
 [ "$verdict" = RED ] && exit 1
