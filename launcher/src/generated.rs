@@ -596,3 +596,32 @@ pub mod wire {
         }
     }
 }
+
+pub mod launch_exit {
+    pub const USAGE: u8 = 116;
+    pub const ROOTS_OVERLAP: u8 = 117;
+    pub const CONTROLLER_REFUSED: u8 = 118;
+    pub const FRAME: u8 = 119;
+    pub const BAD_ACTION: u8 = 120;
+    pub const BAD_GRAIN: u8 = 121;
+    pub const DUPLICATE_LAUNCH: u8 = 122;
+    pub const REPORT_PIPE: u8 = 123;
+    pub const PID_FILE: u8 = 124;
+    pub const LIFETIME: u8 = 125;
+    pub const CONTROLLER_SIGNALED: u8 = 126;
+    pub const CONTROLLER_LOST: u8 = 127;
+}
+
+pub mod controller_exit {
+    pub const LAUNCHER_GONE: u8 = 0;
+    pub const USAGE: u8 = 106;
+    pub const BAD_LABEL: u8 = 107;
+    pub const NO_PACKAGE: u8 = 108;
+    pub const STORE: u8 = 109;
+    pub const TORN: u8 = 110;
+    pub const BAD_LENGTH: u8 = 111;
+    pub const BAD_REPORT: u8 = 112;
+    pub const UNENCODABLE: u8 = 113;
+    pub const LIFETIME: u8 = 114;
+    pub const IO: u8 = 115;
+}

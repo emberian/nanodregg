@@ -18,6 +18,7 @@ import Hosting.Loop
 import Host.Deployed
 import Host.Tail
 import Host.Wire
+import Hosting.LaunchExit
 
 namespace Nanodregg.Hosting.Cli
 
@@ -61,11 +62,14 @@ def Exit.name : Exit → String
   | .badLength => "badLength" | .badReport n => s!"badReport {n}" | .unencodable => "unencodable"
   | .lifetime => "lifetime" | .io m => s!"io {m}"
 
-/-- 0 only when the launcher left first (the normal end); 2 for usage; 1 otherwise. -/
-def Exit.code : Exit → UInt32
-  | .launcherGone => 0
-  | .usage => 2
-  | _ => 1
+/-- The end's row in Lean's exit table (`Hosting.ControllerExit`, HOSTING-19). -/
+def Exit.kind : Exit → ControllerExit
+  | .usage => .usage | .badLabel => .badLabel | .noPackage => .noPackage | .store _ => .store
+  | .launcherGone => .launcherGone | .torn => .torn | .badLength => .badLength
+  | .badReport _ => .badReport | .unencodable => .unencodable | .lifetime => .lifetime | .io _ => .io
+
+/-- The exit status: the table's code for the end's kind (0 only when the launcher left first). -/
+def Exit.code (e : Exit) : UInt32 := e.kind.code.toUInt32
 
 def finish (e : Exit) : IO UInt32 := do
   IO.eprintln s!"hosting-controller: {e.name}"

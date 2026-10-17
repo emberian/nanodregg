@@ -1040,6 +1040,16 @@ is to BE nd. That is the widest arrangement there is, so the answer starts by na
    `Group=nd-hosted`, its argv gains BROKER; and an `nd-hosted` follower unit (`host follow` into the
    hosted user's own Store) that the controller tails. RUNBOOK §2a gains the `nd-hosted` user and the
    tmpfiles line.
+   **The hosted follower, as ROOT ruled (10-18, option B).** `host.sock` stays 0600 nd only. The hosted
+   follower (`host follow`, as `nd-hosted`, into its own Store under an `nd-hosted` 0700 chain, the Store the
+   controller tails) binds its socket under a setgid `/run/nd-follow/<id>/` (02710 nd-hosted:nd, the
+   SOCKDIR idiom with the uids swapped), and nd-supervise sets it 0660 (CLIENT-3 adds the option). The
+   existing client `nd`, running as `nd`, drives that follower and relays its log asks to `host.sock`, so
+   there is no new component. **The principle: the trusted side initiates to the less-trusted side,
+   never the reverse.** keybroker (nd) serves sockets the hosted group connects to, and that is the one
+   direction where the less-trusted side initiates. There it is the asking itself (the resident must be
+   able to ask), and it is bounded by the peer check, one socket per resident, and Lean's verdict. OPS-3
+   renders `nd-follow-drive` per hosted follower.
 
 8. **SOCKDIR is outside every grain's grant, by construction** (ROOT's condition, 10-18, from CLIENT-20's
    measurement: on Linux a directory a grain may read, write or exec is already a connect grant to every
@@ -1122,3 +1132,59 @@ hex digits, so SOCKDIR must be at most 30 bytes long. `/run/nd-broker` is 14; th
 **Residue (reader, hole 2).** keybroker binds the names the operator typed in RESIDENTS, and the plan names the
 directory `dirOf` of the grain's id. They agree by convention only. cv 01a14ad0-ae99 (HOSTING-18) derives keybroker's
 sockets from the World (the operator's unrevoked allowances' residents) and deletes RESIDENTS.
+
+## HOSTING-19 grain-launch's and its controller's exits are a Lean table (HOSTING-6, 2026-10-18, OPS-3's ask)
+
+**Decision.** `Hosting/LaunchExit.lean` holds two tables with the Host's `ExitClass`, the HOSTING-16 shape.
+`ControllerExit` covers every way `hosting-controller` ends (`Cli.Exit.kind`; codes 0 and 106-115):
+0 = `launcherGone`, the normal end; `lifetime` restarts; `usage`, `badLabel`, `noPackage`, `store`, `io` and
+the four launcher-defect ends (`torn`, `badLength`, `badReport`, `unencodable`) are fatal. `LaunchExit`
+covers every way grain-launch ends on its own account (116-127): `reportPipe`, `lifetime` and
+`controllerSignaled` restart. `usage`, `rootsOverlap`, `controllerRefused`, the controller-defect ends
+(`frame`, `badAction`, `badGrain`, `duplicateLaunch`), `pidFile` and `controllerLost` (a failed `wait`:
+nothing says a restart is safe) are fatal. grain-launch passes a controller's code through, as keybroker
+passes its decider's, so the unit sees one code space. A controller status of 128 or more is
+`controllerSignaled`: under bwrap that IS a signal death (the sandbox's platform fact), so every code in both
+tables is below 128. The codes are emitted into `launcher/src/generated.rs` as `launch_exit` and
+`controller_exit`; grain-launch and its test read only those. Before this, grain-launch exited 1 for every
+end but usage (2), and the controller 0/2/1.
+- Theorems (`Hosting.Proofs.LaunchExit`), over the `.all` lists: `codes_nodup` (across both tables);
+  `codes_disjoint` (no Host Status, nd-supervise, decider or keybroker code; 0 only for `launcherGone`);
+  `codes_reserved` (never 1, 2 or 101, below 128, 0 iff `done`); `restart_fatal_disjoint`;
+  `launch_restart_iff`; `controller_restart_iff`.
+- Test (`launcher/tests/isolation.rs`, row `cargo:launcher:isolation`, which now names `hosting-controller`).
+  The real controller, confined under grain-launch, ends `usage` with no arguments and `badLabel` with
+  label `W1`. grain-launch exits each one's code and prints `controllerEnded <code>`. grain-launch's own
+  `usage`, and `rootsOverlap` (the HOSTING-17 test), exit their table codes.
+**Alternatives.** (1) Fold the controller's ends into grain-launch's codes: the controller's name is lost to
+the unit. Refused, as in HOSTING-16. (2) Classes in Rust: law 2. (3) Codes 128 and up: they collide with
+bwrap's signal statuses. Refused.
+**CRITIQUE.** `store` and `io` being fatal means a transient Store read error while tailing stops hosting
+for every grain until the operator acts. The decider has the same split and the same reason (HOSTING-16):
+the controller cannot yet tell an open refusal from a follow refusal. `reportPipe` restarts, but if the
+controller ends at the same moment its own code may be the one that names the end; grain-launch reports
+whichever it saw first. The restart of a crash-looping controller is bounded only by the unit's start
+limit. Only two controller codes are exercised physically, so a pass-through hard-coded to one of them
+would fail the other (planted below), but one hard-coded to the identity on a subset would not.
+**Vacuity read (10-18, VACUITY-READER-H4).** The tables and theorems held. Two holes. (1) A controller that
+ended while a report was due could surface as `reportPipe` (123, a restart): that path killed the controller and
+dropped its status, so a fatal `store` (109) could loop the unit. Fixed: a failed report now waits for the
+controller up to `REPORT_PIPE_WAIT_TICKS` (40 × 50 ms), passes its status through if it has ended (or
+`controllerLost` if `wait` fails), and is `reportPipe` only if the controller is still alive after the
+bound. The test adds `hosting-drive --exit-after-launch`, which ends with 109 right after a launch, and
+grain-launch must exit 109. That test is a regression check of the pass-through, NOT a plant of the fix.
+The race it closes (a report written between the controller closing its stdin and the reader queuing
+EOF) is narrow, and with the wait removed the same test stayed green three runs out of three, because the
+EOF path won. The fix is review-guarded. (2) The `c < 128` guard (a bwrap'd signal death to
+`controllerSignaled`) is unexercised: no test kills a confined controller, which has no PID file of its
+own. Both residues are stated here.
+**CODEC-7's condition**: `toUInt8` wraps silently, so the emitted byte is the Lean code only below 256.
+`codes_reserved` (every code below 128) and `codes_nodup` are those theorems.
+**META.** This is HOSTING-16's shape, chosen because OPS-3 asked for it by reference: familiarity, with the
+check that `Ops.Units` renders the prevent list from `codesOf` with no list of its own.
+**Plants (run, hbox logs/hosting6-lep.py, each red).** `lifetime` made fatal (`controller_restart_iff`); a
+code of 64 (`codes_disjoint`); a code of 128 (`codes_reserved`); the pass-through fixed to 106 (the test's
+`badLabel` exit code).
+**Flag day.** grain-launch's and hosting-controller's exit codes change (1/2 become the table), and
+`generated.rs` gains `launch_exit` and `controller_exit`. Nothing persisted changes, and no unit renders
+grain-launch yet (OPS-3 renders it from these tables).

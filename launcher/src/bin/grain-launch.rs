@@ -21,12 +21,14 @@ use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::time::{Duration, Instant};
 
 use nanodregg_launcher::generated::wire::{Action, LaunchFailure, Report};
-use nanodregg_launcher::generated::{FrameError, read_frame, write_frame};
+use nanodregg_launcher::generated::{FrameError, launch_exit, read_frame, write_frame};
 use nanodregg_launcher::{PlanPaths, failure_of, grain_name_ok, policy, roots_disjoint, under};
 use nanodregg_sandbox::{Policy, command};
 
 /// How often children are polled for exit while no action arrives.
 const TICK: Duration = Duration::from_millis(50);
+/// Ticks a failed report waits for the controller's own end (2 s at `TICK`).
+const REPORT_PIPE_WAIT_TICKS: u32 = 40;
 /// Ticks in one process: centuries at `TICK`.
 const LIFETIME_TICKS: u64 = 1 << 48;
 
@@ -35,7 +37,10 @@ enum End {
     Usage,
     RootsOverlap,
     ControllerRefused(String),
+    /// the controller's exit code, or `None` for a signal
     ControllerEnded(Option<i32>),
+    /// `wait` on the controller failed
+    ControllerLost(String),
     Frame(String),
     BadAction(String),
     BadGrain,
@@ -51,7 +56,9 @@ impl End {
             End::Usage => "usage: grain-launch ROOT BROKER LABEL PIDS CONTROLLER [ARG...]".into(),
             End::RootsOverlap => "rootsOverlap".into(),
             End::ControllerRefused(e) => format!("controllerRefused {e}"),
-            End::ControllerEnded(c) => format!("controllerEnded {c:?}"),
+            End::ControllerEnded(Some(c)) => format!("controllerEnded {c}"),
+            End::ControllerEnded(None) => "controllerSignaled".into(),
+            End::ControllerLost(e) => format!("controllerLost {e}"),
             End::Frame(e) => format!("frame {e}"),
             End::BadAction(e) => format!("badAction {e}"),
             End::BadGrain => "badGrain".into(),
@@ -66,11 +73,27 @@ impl End {
 fn main() -> ExitCode {
     let end = run();
     eprintln!("grain-launch: {}", end.describe());
-    match end {
-        End::ControllerEnded(Some(0)) => ExitCode::SUCCESS,
-        End::Usage => ExitCode::from(2),
-        _ => ExitCode::from(1),
-    }
+    use launch_exit as k;
+    ExitCode::from(match end {
+        End::Usage => k::USAGE,
+        End::RootsOverlap => k::ROOTS_OVERLAP,
+        End::ControllerRefused(_) => k::CONTROLLER_REFUSED,
+        // the controller's own code, passed through (Lean's `ControllerExit`); under bwrap a status
+        // of 128 or more is a signal death, never a code
+        End::ControllerEnded(Some(c)) => match u8::try_from(c) {
+            Ok(c) if c < 128 => c,
+            _ => k::CONTROLLER_SIGNALED,
+        },
+        End::ControllerEnded(None) => k::CONTROLLER_SIGNALED,
+        End::ControllerLost(_) => k::CONTROLLER_LOST,
+        End::Frame(_) => k::FRAME,
+        End::BadAction(_) => k::BAD_ACTION,
+        End::BadGrain => k::BAD_GRAIN,
+        End::DuplicateLaunch => k::DUPLICATE_LAUNCH,
+        End::ReportPipe(_) => k::REPORT_PIPE,
+        End::Pid(_) => k::PID_FILE,
+        End::Lifetime => k::LIFETIME,
+    })
 }
 
 enum Msg {
@@ -322,8 +345,25 @@ fn run() -> End {
     l.stop_all();
     drop(l);
     match end {
-        End::ControllerEnded(None) => {
-            End::ControllerEnded(ctl_child.wait().ok().and_then(|s| s.code()))
+        End::ControllerEnded(None) => match ctl_child.wait() {
+            Ok(s) => End::ControllerEnded(s.code()),
+            Err(e) => End::ControllerLost(e.to_string()),
+        },
+        // A report the controller could not take: it is most likely gone, and then ITS end names
+        // the run (a fatal Store refusal must not surface as a restartable reportPipe,
+        // VACUITY-READER-H4). Wait for it a bounded while; only a controller still alive after the
+        // bound makes this reportPipe.
+        End::ReportPipe(why) => {
+            for _ in 0..REPORT_PIPE_WAIT_TICKS {
+                match ctl_child.try_wait() {
+                    Ok(Some(s)) => return End::ControllerEnded(s.code()),
+                    Ok(None) => std::thread::sleep(TICK),
+                    Err(e) => return End::ControllerLost(e.to_string()),
+                }
+            }
+            let _ = ctl_child.kill();
+            let _ = ctl_child.wait();
+            End::ReportPipe(why)
         }
         other => {
             let _ = ctl_child.kill();

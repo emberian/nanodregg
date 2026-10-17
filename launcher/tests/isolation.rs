@@ -15,6 +15,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // a plant that cannot set up is a failed plant
 
 use nanodregg_devtools::lean_bin;
+use nanodregg_launcher::generated::{controller_exit, launch_exit};
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -251,7 +252,89 @@ fn a_broker_root_overlapping_the_hosting_root_is_refused() {
             broker.display()
         );
         assert!(!err.contains("report"), "a launch happened: {err}");
+        assert_eq!(
+            out.status.code(),
+            Some(i32::from(launch_exit::ROOTS_OVERLAP)),
+            "rootsOverlap exit code"
+        );
     }
+}
+
+/// HOSTING-19: grain-launch's exit is Lean's table, and a controller's end is passed through with
+/// its own code (the real `hosting-controller`, confined): with no arguments it ends `usage`, with an
+/// uppercase label `badLabel`, and grain-launch exits each one's code. A grain-launch of its own
+/// with no arguments ends with its own `usage`.
+#[test]
+fn grain_launch_exits_by_lean_table_and_passes_the_controller_through() {
+    let t = tree("exits");
+    let store = t.root.join("worlds/w1/store");
+    let cases: [(&[&std::ffi::OsStr], u8, &str); 2] = [
+        (&[], controller_exit::USAGE, "usage"),
+        (
+            &[store.as_os_str(), "W1".as_ref()],
+            controller_exit::BAD_LABEL,
+            "badLabel",
+        ),
+    ];
+    for (args, code, name) in cases {
+        let out = Command::new(env!("CARGO_BIN_EXE_grain-launch"))
+            .arg(&t.root)
+            .arg(&t.broker)
+            .arg("w1")
+            .arg(&t.pids)
+            .arg(lean_bin("hosting-controller"))
+            .args(args)
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            err.contains(&format!("hosting-controller: {name}")),
+            "{name}: stderr: {err}"
+        );
+        assert!(
+            err.contains(&format!("grain-launch: controllerEnded {code}")),
+            "{name}: stderr: {err}"
+        );
+        assert_eq!(
+            out.status.code(),
+            Some(i32::from(code)),
+            "{name}: exit code"
+        );
+    }
+    let out = Command::new(env!("CARGO_BIN_EXE_grain-launch"))
+        .output()
+        .unwrap();
+    assert_eq!(
+        out.status.code(),
+        Some(i32::from(launch_exit::USAGE)),
+        "grain-launch usage"
+    );
+    // A controller that ends (a Store refusal's code) right after a launch: the launcher's report
+    // of the child then meets a gone reader, and the run's exit is still the controller's code,
+    // never a restartable reportPipe (VACUITY-READER-H4 on HOSTING-19).
+    let t = tree("gone");
+    fs::create_dir_all(&t.vol).unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_grain-launch"))
+        .arg(&t.root)
+        .arg(&t.broker)
+        .arg("w1")
+        .arg(&t.pids)
+        .arg(lean_bin("hosting-drive"))
+        .args(["--exit-after-launch", "w1", A, "probe"])
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("hosting-drive: abandoned"),
+        "gone: stderr: {err}"
+    );
+    assert_eq!(
+        out.status.code(),
+        Some(i32::from(controller_exit::STORE)),
+        "gone: the controller's end was not passed through: {err}"
+    );
 }
 
 /// HOSTING-17 hole 1 (VACUITY-READER-H4): identity is the socket, so a resident must reach its OWN
