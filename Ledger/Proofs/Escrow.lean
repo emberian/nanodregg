@@ -39,7 +39,10 @@ Not proved here, and why (the gaps at Deployed, each named):
 * the calls are read on the reference evaluator at 1000 ticks as `Val`s; the receiver extracts them
   at the method's budget (`extract (resultTy …)`, then `Lang.callsOf` into `Body D`, LANG's
   `runMeasured_calls`/`callData_bodyOf`) and resolves `of self asset` to `accountId X e asset` (needs
-  `digestOf (bytesOf e) = e`); no fuel-monotonicity lemma exists to carry 1000 ticks to the budget;
+  `digestOf (bytesOf e) = e`). The pieces exist and are not yet composed here: LANG's `run_stable`
+  (Lang/Proofs/Run.lean: a final run at 1000 ticks is the run at every larger budget) and
+  Lang/Proofs/CallLive.lean (`extract_conforms`, `runMeasured_calls_le`, `callsOf_live`); what is
+  missing is relating these field projections to the extraction of the whole result;
 * the toy-digest run of the slots (`Lang.program`'s run then judge on codec bytes, as HOSTING's
   `invoke_slots` does by native_decide) is exercised end to end by `ledger-sim`, not proved;
 * the verdict NAMES are an instance (parties distinct, amount 5); the admitted/refused facts are

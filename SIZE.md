@@ -17,7 +17,7 @@ edit it, never pass it as a PATH). Ceilings live in `gates/ceilings.tsv`. A rise
 | Lean lines (Hosting) | 4639 | — |
 | Lean lines (Kernel) | 10863 | — |
 | Lean lines (Lang) | 13341 | — |
-| Lean lines (Ledger) | 1107 | — |
+| Lean lines (Ledger) | 1110 | — |
 | Lean lines (Ops) | 1078 | — |
 | Lean lines (Protocol) | 4543 | — |
 | Lean lines (deployed) | 14245 | — |

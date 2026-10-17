@@ -540,7 +540,11 @@ M4 deposit pays from the escrow itself on the payout key (escrow_calls_payout, e
 + judge on the codec bytes, HOSTING's `invoke_slots` shape); ledger-sim exercises that path. (2)
 The calls are read as `Val`s at 1000 ticks; the receiver's `extract`/`callsOf` into `Body D` at the
 method budget, and `of self asset` → `accountId X e asset`, are LANG's/KERNEL's theorems, not composed
-here (no fuel-monotonicity lemma exists). (3) A programmed object changes only by its methods is
+here. CORRECTION (LEDGER-3, after 7c6c7e1): this said "no fuel-monotonicity lemma exists"; that was
+wrong. LANG's `run_stable` (Lang/Proofs/Run.lean) carries a final run to every larger budget, and
+LANG-8's Lang/Proofs/CallLive.lean (c4e435a) takes a run's calls through `extract` into `callsOf`.
+The gap is the composition: relating the field projections these theorems evaluate to the
+extraction of the whole method result. (3) A programmed object changes only by its methods is
 KERNEL's `hasMethods`; the chain theorems do not need it.
 **Review.** Second-agent vacuity read (a fresh reviewer, 10-18) found no vacuous statement, and two
 WEAK ones that this commit fixed before landing: the first `escrow_one_payout` was a conjunction
