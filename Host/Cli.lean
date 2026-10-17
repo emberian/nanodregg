@@ -133,47 +133,70 @@ def exportVerb (store out : String) : IO UInt32 := do
 /-- The most bytes a carried file may have: its stamp and head, and a World's worth. -/
 def carriedMax : Nat := Carry.stampBytes + 128 + c.worldBytesMax
 
-/-- `host import STORE NAME IN --digest HEX [--nonce HEX32]`. Before any Store path is created:
-the digest parses (`usage digest`), IN is at most `carriedMax`, and `Carry.read` checks the digest,
-the stamp (`shapeMismatch`), the decode and the anchor; KERNEL's carry refuses by name (a name or
-nonce past its bound is `usage`, any other refusal `carryMismatch`). Then the one genesis writes
-the World, `openWriter` reopens it, and its carried bytes must be the file's (`carryMismatch
-reopen`). A refusal from here on (genesis, `openWriter`, the reopen compare, an IO error mid-write)
-can leave a Store directory behind; every refusal before it leaves nothing. The ordering is this
-function's, read off the code (IO), not a theorem. -/
-def importVerb (store name inPath digestHex : String) (nonceArg : Option String) : IO UInt32 := do
-  let some want := hexDigest digestHex | refuse .usage "digest"
-  let nonce ← match ← genesisNonce nonceArg with
+/-- What `host import` reaches outside itself, in the order it reaches it. Two effects write:
+`genesis` creates the Store's paths, and `reopen` (`openWriter`) locks, truncates and syncs what
+`genesis` wrote; `import_genesis_iff` states `genesis` comes first and only after every check. The
+others read (IN, the OS random source) or print. `reopen` gives back the reopened World and the act
+that releases the writer's handle (its lock lives until then). -/
+structure ImportFx (m : Type → Type) where
+  nonce : m (Except Status ByteArray)
+  readIn : m (Except (StoreFault (Record.Fault (Reject D))) ByteArray)
+  key : m (Option Digest)
+  genesis : Digest → World D → m (Except (StoreFault (Record.Fault (Reject D))) Unit)
+  reopen : Digest → m (Except (StoreFault (Record.Fault (Reject D))) (World D × m Unit))
+  refuse : Status → String → m UInt32
+  report : List String → m Unit
+
+/-- `host import`'s decision over its effects. The digest parses (`usage digest`), the nonce, IN is
+at most `carriedMax`, and `Carry.importWorld` checks the digest, the stamp (`shapeMismatch`), the
+decode, the anchor and KERNEL's carry (a name or nonce past its bound is `usage`, any other refusal
+`carryMismatch`), and the key is 32 bytes; only then `genesis` writes the World, and the reopen's
+carried bytes must be the file's (`carryMismatch reopen`). The deployed verb is
+this function at `IO` (`importVerb`); `Host.Proofs.Cli.import_genesis_iff` states, over the same
+function, that `genesis` runs exactly when every check before it passed. -/
+def importWith {m : Type → Type} [Monad m] (fx : ImportFx m) (name digestHex : String) : m UInt32 := do
+  let some want := hexDigest digestHex | fx.refuse .usage "digest"
+  let nonce ← match ← fx.nonce with
     | .ok b => pure b
-    | .error s => return ← refuse s "nonce"
-  let bytes ← match ← (readBounded inPath carriedMax (fun n => .base (.baseTooLarge n)) :
-      IO (Except (StoreFault (Record.Fault (Reject D))) ByteArray)) with
+    | .error s => return ← fx.refuse s "nonce"
+  let bytes ← match ← fx.readIn with
     | .ok b => pure b
-    | .error (.base (.baseTooLarge _)) => return ← refuse .carryMismatch "carryMismatch tooLarge"
-    | .error f => return ← refuseStore f
+    | .error (.base (.baseTooLarge _)) => return ← fx.refuse .carryMismatch "carryMismatch tooLarge"
+    | .error f => return ← fx.refuse f.status f.text
   let dc := Codec.Deployed.digestCodec
   let (w₀, r) ← match Carry.importWorld X dc name.toUTF8 nonce want bytes with
     | .ok p => pure p
-    | .error (s, n) => return ← refuse s n
-  let some key := Digest.ofBytes? (← IO.getRandomBytes 32) | refuse .entropy
-  let keys := Keys.ofKey key shapes
-  match ← (Host.genesis store key keys c world recorder.mark w₀ :
-      IO (Except (StoreFault (Record.Fault (Reject D))) Unit)) with
-  | .error f => refuseStore f
+    | .error (s, n) => return ← fx.refuse s n
+  let some key ← fx.key | fx.refuse .entropy Status.entropy.name
+  match ← fx.genesis key w₀ with
+  | .error f => fx.refuse f.status f.text
   | .ok () =>
-    match ← openWriter store keys c world recorder.mark originChain foldStep with
-    | .error f => refuseStore f
-    | .ok wr =>
-      let back := wr.opening.opened.world
+    match ← fx.reopen key with
+    | .error f => fx.refuse f.status f.text
+    | .ok (back, release) =>
       unless (Codec.Kernel.carried X.env dc).bytes back.carried = bytes.extract r.carriedAt bytes.size do
-        return ← refuse .carryMismatch "carryMismatch reopen"
-      wr.segment.sync  -- the writer's handle, and so its lock, lives to here
-      IO.println s!"origin {back.origin.toHex}"
-      IO.println s!"nonce {Protocol.Text.toHex nonce}"
-      IO.println s!"from {r.head.fromOrigin.toHex}"
-      IO.println s!"height {back.height}"
-      IO.println s!"chain {back.chain.toHex}"
+        return ← fx.refuse .carryMismatch "carryMismatch reopen"
+      release
+      fx.report [s!"origin {back.origin.toHex}", s!"nonce {Protocol.Text.toHex nonce}",
+        s!"from {r.head.fromOrigin.toHex}", s!"height {back.height}", s!"chain {back.chain.toHex}"]
       return 0
+
+/-- `host import STORE NAME IN --digest HEX [--nonce HEX32]`: `importWith` over the files.
+`genesis` is `Host.genesis` into STORE (the one writer of a Store path); every refusal before it
+leaves nothing (`import_genesis_iff`); a refusal from it on (genesis itself, `openWriter`, the
+reopen compare, an IO error mid-write) can leave a Store directory behind. -/
+def importVerb (store name inPath digestHex : String) (nonceArg : Option String) : IO UInt32 :=
+  importWith (name := name) (digestHex := digestHex)
+    { nonce := genesisNonce nonceArg
+      readIn := readBounded inPath carriedMax (fun n => .base (.baseTooLarge n))
+      key := return Digest.ofBytes? (← IO.getRandomBytes 32)
+      genesis := fun key w₀ => Host.genesis store key (Keys.ofKey key shapes) c world recorder.mark w₀
+      reopen := fun key => do
+        match ← openWriter store (Keys.ofKey key shapes) c world recorder.mark originChain foldStep with
+        | .error f => return .error f
+        | .ok wr => return .ok (wr.opening.opened.world, wr.segment.sync)
+      refuse := fun s n => refuse s n
+      report := fun ls => ls.forM IO.println }
 
 /-- After the Store opened, an IO error that escapes the loop is the disk or the pipe misbehaving
 mid-service, the same class as `uncertain`: `ioServing`, restart (a fresh open recovers or

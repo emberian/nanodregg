@@ -1647,3 +1647,59 @@ not: genesis writes the key first, so a missing key with the other files present
 directory with nothing in it is a crashed genesis or a wrong path, and the sentence says to check
 the path. The test of this decision is
 store-plants: four files, one status, stderr naming each.
+
+## HOST-36 · `host import` writes no Store path before every check passed: a theorem over the one decision function (2026-10-17, HOST-10; HOST-28's first named gap)
+
+**The gap (HOST-34's law-6 read).** Import refuses before it writes. That was read off `importVerb`'s
+IO and stated by no theorem.
+
+**Decision.**
+- `importVerb` is now `importWith` at `IO`. `importWith` is `host import`'s decision, generic in the
+  monad, over a record of its effects, `ImportFx`: nonce, readIn, key, genesis, reopen, refuse and
+  report.
+- Two effects write: `genesis` (`Host.genesis`) creates the Store's paths, and `reopen`
+  (`openWriter`) locks, truncates and syncs them. The others read IN or the OS random source, or print.
+- The theorem runs the SAME function at `Except (Option (Digest × World D))`. Each effect answers a
+  given result; `genesis` throws `some (key, World)` and `reopen` throws `none`. So the run ends
+  `.error (some (k, w))` exactly when genesis was the FIRST writing effect reached, with `k` and `w`.
+
+**Theorem (Host/Proofs/Cli.lean).** `import_genesis_iff`: genesis is the first writing effect,
+reached with `k` and `w` ⇔
+- the digest parsed;
+- the nonce effect answered a nonce;
+- the IN effect answered bytes;
+- `Carry.importWorld` accepted them under that digest, making `w` (the stamp, the decode, the
+  anchor and KERNEL's carry);
+- the key effect answered `k`.
+
+The bound on IN (`readBounded … carriedMax`) and the 32-byte key (`Digest.ofBytes?`) are the IO
+instance's, not the theorem's.
+
+The → half is the refuse-before-write claim. The ← half is its tooth: a passing import reaches
+genesis before `reopen`, with the drawn key. So the statement is false of a function that never
+writes, that writes first through `reopen`, or that writes before a check. Moving `fx.genesis` above
+`Carry.importWorld` would need a World it does not yet have (a dummy), and the → half then fails
+for it. Moving `fx.reopen` before `genesis` makes a passing run end `.error none`, so the ← half fails.
+
+**Plants.** No new plant. OPS-2's 13 store-plants carry rows (6bfd534) already run the real exe, and
+assert that every refusal before genesis leaves no Store file; they exercise this exact code at IO
+and stay green.
+
+**Critique.**
+- The theorem is about the decision function. That the IO instance's effects are what their names
+  say is code, not a theorem: `ImportFx.genesis` is `Host.genesis`, `readIn` is `readBounded`
+  (read-only), and `key` is `IO.getRandomBytes`.
+- An IO exception from an effect aborts the run. Before genesis that writes nothing, which the
+  plants show.
+- The two other HOST-28 gaps are sequenced after KERNEL-41 (a′), which deletes `World.Equiv`, moves
+  the journal into the trie and flips the stamps. Proving them now over the old journal would be
+  done twice:
+  - the reopen pair (`genesisImage` → `openWriter` gives back the imported World): after KERNEL-41
+    the World codec should read back exactly (`=`), not up to Equiv;
+  - `exportFile_ok` for an opened World, which needs `World.CodecFits` of a decoded-and-folded World,
+    whose journal clause changes in the flag day.
+
+**Meta-critique.** "Generic in the monad, proved at Except" is a known pattern. Its weak point is
+that an effect record can hide an extra write inside an effect that is not `genesis`. That is why the
+record's docstring names genesis as the only Store writer, and why the IO instance sits beside it in
+the same file, where a reader can check the claim in one screen.
