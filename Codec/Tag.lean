@@ -8,8 +8,10 @@ A codec's tag is the digest of a label and the codec's `Shape`: `Tag.of label c 
 Hash.digest "nanodregg/codec/tag/v1" (label ‖ shape bytes)`. Change a codec's structure and its
 tag changes with it. Nobody edits a version literal, no census lists the tags, and no fingerprint is
 pinned. A Store stamped with the tags of the codecs that wrote it refuses to open under codecs
-with other tags: an old shape refuses, it is never reinterpreted. The one hand-maintained part is a
-`refine`'s name (CODEC-5): the shape cannot see inside a function.
+with other tags: an old shape refuses, it is never reinterpreted. A `refine`'s name is the one part
+the shape takes on trust: the shape cannot see inside a function. Its accepted set is pinned by its
+lawfulness theorem (the refine census) and its meaning by the codec vectors, which go red when a
+meaning changes under an unchanged tag (CODEC-28).
 -/
 
 namespace Nanodregg.Codec

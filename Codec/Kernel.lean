@@ -175,7 +175,7 @@ def body (dc : Stream D) : Stream (Body D) :=
       | .credit w a n v => ⟨12, (w, a, n, v)⟩)
 
 def unsigned (dc : Stream D) : Stream (Unsigned D) :=
-  refine "kernel/unsigned/v2"
+  refine "kernel/unsigned"
     (product dc (product dc (product (rawBytes callMax) (product nat64 (product nat64
       (product (rawList callMax (product dc dc)) (product nat64 (body dc))))))))
     (fun (wo, m, k, nb, vu, ps, mc, b) => some ⟨wo, m, k, nb, vu, ps, mc, b⟩)

@@ -2,7 +2,7 @@
 
 Writes .lake/gates/CensusRun.lean importing every module outside Census except the lean_exe roots (they hold only `main`,
 closure C7, and two `main`s cannot share one environment), then runs
-`#axiom_census "gates/axioms-allow.tsv" <every lib but Census>` and `#refine_census "gates/refines-allow.tsv" …`
+`#axiom_census "gates/axioms-allow.tsv" <every lib but Census>` and `#refine_census "gates/refines-allow.tsv" "gates/codec-vectors.tsv" …`
 (CODEC-28: every refinement carries its lawfulness theorem) under `lake env lean`.
 Every module must already be built (scripts/pre-push builds first).
 """
@@ -26,7 +26,7 @@ def main(root: str) -> int:
     with open(run, "w", encoding="utf-8") as f:
         f.write("import Census.Axioms\nimport Census.Refines\n" + "".join(f"import {m}\n" for m in mods))
         f.write(f'#axiom_census "gates/axioms-allow.tsv" {" ".join(libs)}\n')
-        f.write(f'#refine_census "gates/refines-allow.tsv" {" ".join(libs)}\n')
+        f.write(f'#refine_census "gates/refines-allow.tsv" "gates/codec-vectors.tsv" {" ".join(libs)}\n')
     r = subprocess.run(["lake", "env", "lean", run], cwd=t.root, capture_output=True, text=True)
     out = (r.stdout + r.stderr).strip()
     print(out)

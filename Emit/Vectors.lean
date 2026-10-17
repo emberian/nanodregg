@@ -142,6 +142,8 @@ def printWorld (w : World Sim.D) : String :=
   s!"\{trie := {text w.trie.toList}, journal := {text w.journal.toList}, height := {w.height}, " ++
     s!"chain := {w.chain}, allowance := {w.allowance}, origin := {w.origin}}"
 
+def printWire (x : WorldWire Sim.D) : String := printWorld (ofWire x)
+
 def printCarried (c : Carried Sim.D) : String :=
   s!"\{trie := {text c.trie.toList}, allowance := {c.allowance}, height := {c.height}, " ++
     s!"journal := {text c.journal.toList}}"
@@ -219,6 +221,7 @@ def sites : List Site :=
       (each 2 fun _ => do journal ((← below 1000) + 3)) text,
     site "kernel/leaf-fit" (fitList Sim.dc) (each 2 fun _ => (·.toList) <$> trie) text,
     site "kernel/trie-order" (cells Sim.env Sim.dc) (each 2 fun _ => trie) (fun t => text t.toList),
+    site "kernel/journal" (journalWire Sim.env Sim.dc) (each 2 fun _ => toWire <$> Vectors.world) printWire,
     site "kernel/world" (Codec.Kernel.world Sim.env Sim.dc) (each 2 fun _ => Vectors.world) printWorld,
     site "kernel/carried" (Codec.Kernel.carried Sim.env Sim.dc) (each 2 fun _ => Vectors.carried) printCarried,
     site "path/badComponent" (Field.pathCodec pathMax (by decide)) pathVecs (fun p => text p.val),

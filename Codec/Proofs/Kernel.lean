@@ -284,7 +284,7 @@ theorem unsigned_lawfulOn {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc
     (product_lawfulOn hd (product_lawfulOn hd (product_lawfulOn (rawBytes_lawfulOn _ (by decide)) (product_lawfulOn nat64_lawfulOn
       (product_lawfulOn nat64_lawfulOn (product_lawfulOn (rawList_lawfulOn (product_lawfulOn hd hd) _ (by decide))
         (product_lawfulOn nat64_lawfulOn (body_lawfulOn hd))))))))
-    "kernel/unsigned/v2" ?_ ?_).mono ?_ ?_
+    "kernel/unsigned" ?_ ?_).mono ?_ ?_
   · intro y _; rfl
   · intro x y h; simp at h; subst h; rfl
   · intro y h; exact h

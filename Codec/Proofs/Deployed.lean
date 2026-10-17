@@ -72,4 +72,8 @@ theorem world_get_canon {b : ByteArray} {i j : Nat} {w : World Digest} (h : worl
     w.Canon env ∧ ∀ p ∈ w.trie.toList, Leaf.fits p.1 p.2 = true :=
   Nanodregg.Codec.Kernel.world_get_canon digestCodec_lawful.on h
 
+/-- **Every deployed decoded base carries `World.JournalOk`** (KERNEL-39): no premise. -/
+theorem world_decode_journalOk {b : ByteArray} {w : World Digest} (h : world.decode b = .ok w) : w.JournalOk :=
+  Nanodregg.Codec.Kernel.world_decode_journalOk digestCodec_lawful.on h
+
 end Nanodregg.Codec.Deployed

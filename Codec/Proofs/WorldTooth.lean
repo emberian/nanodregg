@@ -57,4 +57,47 @@ theorem carried_refuses_repeated_txId :
      | .error (.rejected _ "kernel/ascending") => true
      | _ => false) = true := by decide +kernel
 
+/-! ## The journal's teeth (KERNEL-39, CODEC-28)
+
+`journalFits` sorts the heights with `List.mergeSort` (well-founded recursion, which the kernel does not
+reduce), so these are stated through `world_decode_wire_ok` / `world_decode_wire_refused` and the
+journal check is discharged by `simp` (the windowed one) or by KERNEL's own refutations
+(`journalFits_future`, `journalFits_twice`). -/
+
+private theorem empty_wireFits (l : List (Sim.D × (Nat × Sim.D))) (hl : l.length ≤ Bounds.journalMax)
+    (ha : ascendingBy Prod.fst l = true) (hp : ∀ p ∈ l, p.2.1 < 2 ^ 64) :
+    WireFits Sim.env (fun _ => True) (.empty, l, 7, 0, 0, 0) :=
+  ⟨⟨⟨⟨by simp [Trie.T.toList, worldMax], by simp [Trie.T.toList]⟩, by simp [Trie.T.toList]⟩,
+    Trie.canon_empty _ 0⟩, ⟨⟨hl, fun p hp' => ⟨trivial, hp p hp', trivial⟩⟩, ha⟩, show 7 < 2 ^ 64 by decide, trivial, show 0 < 2 ^ 64 by decide,
+    trivial⟩
+
+/-- A journal inside the window decodes: entries at heights 6 and 7 of a World at height 7. -/
+theorem world_reads_windowed_journal :
+    (world Sim.env Sim.dc).decode ((worldWire Sim.env Sim.dc).bytes (.empty, [(1, (6, 3)), (2, (7, 4))], 7, 0, 0, 0)) =
+      .ok (ofWire (.empty, [(1, (6, 3)), (2, (7, 4))], 7, 0, 0, 0)) :=
+  world_decode_wire_ok u64_lawful.on (empty_wireFits _ (by decide) (by decide) (by decide))
+    (by simp [journalFits, List.mergeSort, ascendingNat, Bounds.windowMax])
+
+/-- The plant: an entry above the World's height (never pruned, `replayed` forever) is refused
+`kernel/journal` by name. -/
+theorem world_refuses_future_entry :
+    (world Sim.env Sim.dc).decode ((worldWire Sim.env Sim.dc).bytes (.empty, [(1, (8, 3))], 7, 0, 0, 0)) =
+      .error (.rejected 0 "kernel/journal") :=
+  world_decode_wire_refused u64_lawful.on (empty_wireFits _ (by decide) (by decide) (by decide))
+    (journalFits_future 7 1 3)
+
+/-- Two entries at one height (two admissions in one turn) are refused `kernel/journal`. -/
+theorem world_refuses_shared_height :
+    (world Sim.env Sim.dc).decode ((worldWire Sim.env Sim.dc).bytes (.empty, [(1, (7, 3)), (2, (7, 4))], 7, 0, 0, 0)) =
+      .error (.rejected 0 "kernel/journal") :=
+  world_decode_wire_refused u64_lawful.on (empty_wireFits _ (by decide) (by decide) (by decide))
+    (journalFits_twice 7 1 2 3 4)
+
+/-- A journal count past `Bounds.journalMax` is refused `pastBound` before one entry is read. -/
+theorem world_refuses_oversized_journal :
+    (match (world Sim.env Sim.dc).decode
+        ((cells Sim.env Sim.dc).bytes .empty ++ Stream.u32.bytes (UInt32.ofNat (Bounds.journalMax + 1))) with
+     | .error (.pastBound _ _ _) => true
+     | _ => false) = true := by decide +kernel
+
 end Nanodregg.Codec.Kernel

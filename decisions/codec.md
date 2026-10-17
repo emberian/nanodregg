@@ -905,3 +905,29 @@ Plants, run in wt/codec and reverted:
   the candidate's table with its parent's: rows keyed by (site, tag) are immutable. GATES-3 is asked.
 - Only Sim's instantiation is pinned. A relabelling that only the deployed digest codec could show does not exist,
   because the sites are generic in `dc`.
+- The decoded column is only as strong a witness as the printer (GATES-3): `Repr` could print two values alike. For
+  the kernel types it is derived (constructor and field names, every field), and a `ByteArray` prints as hex.
+  The one weakening is the World: its trie is printed as its listing, which is exactly the trie codec's content.
+**Flag day: the World journal (KERNEL-39, agreed with KERNEL-10 at 129bb73; CODEC-6, 10-17).**
+- The World's wire is refined by a named predicate: `journalWire E dc = refine "kernel/journal" (worldWire E dc)
+  (journalFits height journal)`, and `world`'s shape is `.refine "kernel/world" (journalWire E dc).shape`.
+- The journal list is bounded by `Bounds.journalMax`, not `worldMax`, so an oversized journal is refused `pastBound`
+  before one entry is read.
+- `World.CodecFits` gains `journalFits w.height w.journal.toList = true`, which KERNEL's `journalFits_of_ok`
+  discharges for every `JournalOk` World. Its journal bound is now `journalMax`.
+- `world_decode_journalOk` (generic, and deployed with no premise) shows a decoded base is `World.JournalOk`. The list
+  checked at decode IS the decoded map's own `toList` (`toList_ofList_of_sorted`, from the strict ascent the same
+  decoder checked), which is KERNEL-10's vacuity condition.
+- Teeth (WorldTooth): `world_refuses_future_entry` and `world_refuses_shared_height` (both `rejected 0 "kernel/journal"`,
+  through KERNEL's `journalFits_future` / `_twice`), `world_reads_windowed_journal`, and
+  `world_refuses_oversized_journal` (`pastBound`). `journalFits` sorts with `List.mergeSort`, which the kernel does
+  not reduce, so these teeth go through `world_decode_wire_ok` / `_refused` rather than `decide`.
+- The hand versions are deleted: `kernel/world/v3` → `kernel/world`, `kernel/carried/v1` → `kernel/carried`,
+  `kernel/unsigned/v2` → `kernel/unsigned`. From now on every refinement's name is the name it refuses with.
+- The refine census also requires every site to have codec vectors.
+
+What re-emits: gates/codec-vectors.tsv re-pins exactly kernel/unsigned, kernel/call, kernel/world, kernel/carried and
+host/base, and adds kernel/journal (71 vectors, 27 sites). What re-geneses: every Store, because its base stamp
+(`Base.shapeStamp`, over the World codec's tag) moved. What refuses to load: an old base refuses `shapeMismatch` by
+stamp before decoding. An old carried export file refuses by its stamp (the carried tag moved with the rename),
+and so does a base whose journal is outside the window (`kernel/journal`).

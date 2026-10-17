@@ -8,7 +8,9 @@
 roots, i.e. a definition whose body, under its lambdas, is `Codec.Stream.refine "<literal>" …` or a
 `Codec.Stream.mk` whose shape is `Shape.refine "<literal>" …` (a hand-built refinement, like the World
 codec). Each site needs a theorem whose conclusion, after its binders, is `Lawful (c …)` or
-`LawfulOn P (c …)` with `c` as the head constant and `P` not the constant `False`.
+`LawfulOn P (c …)` with `c` as the head constant and `P` not the constant `False`, and its name must be
+a site of the codec vectors (`gates/codec-vectors.tsv`, whose first column names the refinement), so a
+new refinement is pinned by meaning as well as by accepted set.
 
 A site that is canonical only up to an equivalence (the World and carried codecs, whose journal is
 a `TreeMap`) gets an allow row instead: `<decl>\t<theorem>[,<theorem>…]\t<reason>`. Every theorem a row
@@ -93,11 +95,17 @@ def parseRows (text : String) : Except String (List Row) :=
 def moduleOf (env : Environment) (c : Name) : Option Name :=
   env.getModuleIdxFor? c |>.bind fun idx => env.header.moduleNames[idx.toNat]?
 
-syntax (name := refineCensus) "#refine_census " str ident+ : command
+/-- The refinement names the codec vectors cover: the table's first column. -/
+def vectorSites (text : String) : List String :=
+  text.splitOn "\n" |>.filterMap fun line =>
+    if line.isEmpty || line.startsWith "#" then none else (line.splitOn "\t").head?
+
+syntax (name := refineCensus) "#refine_census " str str ident+ : command
 
 @[command_elab refineCensus]
 def elabRefineCensus : CommandElab
-  | `(#refine_census $path:str $roots:ident*) => do
+  | `(#refine_census $path:str $vectors:str $roots:ident*) => do
+    let covered := vectorSites (← IO.FS.readFile vectors.getString)
     let roots := roots.toList.map (·.getId)
     let rows ← match parseRows (← IO.FS.readFile path.getString) with
       | .ok r => pure r
@@ -121,6 +129,8 @@ def elabRefineCensus : CommandElab
     let mut bad : Array String := #[]
     let mut allowed := 0
     for (c, s) in sites do
+      unless covered.contains s do
+        bad := bad.push s!"refine site {c} (\"{s}\") has no codec vectors: add it to Emit.Vectors.sites and run `lake exe codec-vectors --write gates/codec-vectors.tsv`"
       if proved.contains c then continue
       match rows.find? (·.decl == c) with
       | some _ => allowed := allowed + 1

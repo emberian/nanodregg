@@ -34,8 +34,10 @@ inductive Shape where
   | product (a b : Shape)
   | sum (a b : Shape)
   | array (max : Nat) (s : Shape)
-  /-- A refinement: same bytes as `s`, fewer accepted values. `name` must change
-  whenever the accepted set changes; the shape cannot see inside a function. -/
+  /-- A refinement: same bytes as `s`, fewer accepted values. The shape cannot see inside its
+  functions: what pins them is the refinement's lawfulness theorem (`Census.Refines`) and its codec
+  vectors (`gates/codec-vectors.tsv`), and a change of meaning under the same bytes changes `name`
+  (CODEC-28). -/
   | refine (name : String) (s : Shape)
   | framed (tag : Digest) (s : Shape)
   /-- One tag byte, then the shape that tag selects. -/

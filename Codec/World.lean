@@ -1,7 +1,7 @@
 import Codec.Kernel
 
 /-!
-# Codec.World — the canonical bytes of a whole World (the checkpoint, HOST-14's base), v3
+# Codec.World — the canonical bytes of a whole World (the checkpoint, HOST-14's base)
 
 `trie ‖ journal ‖ height u64 ‖ chain ‖ allowance u64 ‖ origin` (KERNEL-23: cells and spent nullifiers
 are one authenticated trie). The trie is written as its listing (`Trie.T.toList`, left to right by
@@ -10,7 +10,10 @@ read from the wire (CODEC-19). A listing is refused by name unless every slot ho
 kind (`kernel/leaf-fit`) and the listing is exactly the canonical trie's own (`kernel/trie-order`:
 the rebuilt trie lists the same entries in the same order, and no leaf holds a key twice). So the
 trie part reads back EXACTLY (`build_toList`), and the bytes are a function of the contents. The
-journal is still a `TreeMap` written in ascending key order, read back up to `Equiv`.
+journal is still a `TreeMap` written in ascending key order (at most `Bounds.journalMax` entries), read
+back up to `Equiv`, and refused by name unless it is the window's (`kernel/journal`: KERNEL-39's
+`journalFits`, every entry at or below the height and inside the window, one entry per height), so a
+decoded base carries `World.JournalOk` (`world_decode_journalOk`).
 `world.size w` is the encoded length, computed from the entries without encoding (HOST's
 `worldBytesMax`).
 -/
@@ -91,8 +94,12 @@ abbrev WorldWire (D : Type) := Cells D × List (D × (Nat × D)) × Nat × D × 
 
 def worldWire [DecidableEq D] (E : Env D) (dc : Stream D) : Stream (WorldWire D) :=
   product (cells E dc)
-    (product (ascendingList worldMax Prod.fst (product dc (product nat64 dc)))
+    (product (ascendingList Bounds.journalMax Prod.fst (product dc (product nat64 dc)))
       (product nat64 (product dc (product nat64 dc))))
+
+/-- The World's contents, refused by name unless the journal is the window's (KERNEL-39). -/
+def journalWire [DecidableEq D] (E : Env D) (dc : Stream D) : Stream (WorldWire D) :=
+  refine "kernel/journal" (worldWire E dc) (fun x => if journalFits x.2.2.1 x.2.1 then some x else none) id
 
 def toWire (w : World D) : WorldWire D :=
   (w.trie, w.journal.toList, w.height, w.chain, w.allowance, w.origin)
@@ -101,11 +108,11 @@ def ofWire (x : WorldWire D) : World D :=
   ⟨x.1, Std.TreeMap.ofList x.2.1 compare, x.2.2.1, x.2.2.2.1, x.2.2.2.2.1, x.2.2.2.2.2⟩
 
 def world [DecidableEq D] (E : Env D) (dc : Stream D) : Stream (World D) where
-  shape := .refine "kernel/world/v3" (worldWire E dc).shape
-  size w := (worldWire E dc).size (toWire w)
-  put w buf := (worldWire E dc).put (toWire w) buf
+  shape := .refine "kernel/world" (journalWire E dc).shape
+  size w := (journalWire E dc).size (toWire w)
+  put w buf := (journalWire E dc).put (toWire w) buf
   get b i :=
-    match (worldWire E dc).get b i with
+    match (journalWire E dc).get b i with
     | .ok (x, j) => .ok (ofWire x, j)
     | .error e => .error e
 
@@ -134,7 +141,7 @@ def carriedOfWire (x : CarriedWire D) : Carried D :=
   ⟨x.1, x.2.1, x.2.2.1, Std.TreeMap.ofList x.2.2.2 compare⟩
 
 def carried [DecidableEq D] (E : Env D) (dc : Stream D) : Stream (Carried D) where
-  shape := .refine "kernel/carried/v1" (carriedWire E dc).shape
+  shape := .refine "kernel/carried" (carriedWire E dc).shape
   size c := (carriedWire E dc).size (carriedToWire c)
   put c buf := (carriedWire E dc).put (carriedToWire c) buf
   get b i :=
