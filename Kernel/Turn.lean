@@ -53,26 +53,37 @@ structure Turn (D : Type) where
 /-- The cells a turn bears, without their ids. -/
 def Turn.born {D : Type} (t : Turn D) : List Cell := t.creates.map Prod.snd
 
-/-- Fixed per-field costs, in bytes, for a digest and a counter. -/
+/-- Fixed per-field costs, in bytes: a digest (the deployed 32-byte digest), a counter (u64), and
+the u32 header of a list or byte string. These are the codec's sizes (`Codec.Kernel`), so a turn's
+log weight is its record's byte count. -/
 def digestWeight : Nat := 32
 def counterWeight : Nat := 8
+def headerWeight : Nat := 4
 
 def Act.opsWeight : Act → Nat
   | .write ops => (ops.map Op.weight).sum
   | _ => 0
 
-/-- A touch in the log: id, seen digest, a tag, and the ops of a write. -/
-def Touch.weight {D : Type} (x : Touch D) : Nat := 2 * digestWeight + 1 + x.act.opsWeight
+/-- An act in the log (`Codec.Kernel.act`): a one-byte tag, and a write's op list (its header and
+its ops). The header is log bytes only: it is not World growth. -/
+def Act.logWeight : Act → Nat
+  | .write ops => 1 + headerWeight + (ops.map Op.weight).sum
+  | _ => 1
 
-/-- What a turn's log record costs: fixed fields, touches, born cells with their ids, nullifiers,
-the charge and the event. -/
+/-- A touch in the log: id, seen digest and the act. -/
+def Touch.weight {D : Type} (x : Touch D) : Nat := 2 * digestWeight + x.act.logWeight
+
+/-- What a turn's log record costs, field by field in the codec's order (`Codec.Kernel.turn`):
+txId, the window, the touches, the born cells with their ids, the nullifiers (each list with its
+header), the charge and the event (with its length). At the deployed digest this is the record's
+byte count: CODEC proves `(Codec.Kernel.turn dc).size t = t.logWeight`. -/
 def Turn.logWeight {D : Type} (t : Turn D) : Nat :=
   digestWeight + 2 * counterWeight
-    + (t.touches.map Touch.weight).sum
-    + (t.creates.map fun p => digestWeight + p.2.weight).sum
-    + digestWeight * t.nullifiers.length
+    + headerWeight + (t.touches.map Touch.weight).sum
+    + headerWeight + (t.creates.map fun p => digestWeight + p.2.weight).sum
+    + headerWeight + digestWeight * t.nullifiers.length
     + counterWeight
-    + t.event.size
+    + headerWeight + t.event.size
 
 /-- A journal entry: transaction id, height, turn digest. -/
 def journalWeight : Nat := 2 * digestWeight + counterWeight

@@ -86,9 +86,10 @@ theorem admit_charge {E : Env D} {w w' : World D} {t : Turn D}
   omega
 
 /-- **The weight bound.** An admitted turn costs at most `Bounds.weightMax`, its log record
-included: the static budget HOST sizes a turn record and a batch by (a batch of `n` admitted
-turns appends at most `n * Bounds.weightMax` record bytes, given CODEC's
-`size (encode t) ≤ t.logWeight`). -/
+included: the static budget HOST sizes a turn record and a batch by. A batch of `n` admitted
+turns appends at most `n * Bounds.weightMax` record bytes once CODEC's equality
+`(Codec.Kernel.turn dc).size t = t.logWeight` (at the 32-byte digest) is composed with it; that
+equality is CODEC's theorem (owed by CODEC-4 on this weight table), not proved here. -/
 theorem admit_weight {E : Env D} {w w' : World D} {t : Turn D}
     (h : World.admit E w t = .ok w') :
     t.charge = t.weight ∧ t.logWeight ≤ t.weight ∧ t.weight ≤ Bounds.weightMax := by

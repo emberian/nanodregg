@@ -882,3 +882,45 @@ Lang/Journey, Hosting/Sim/Journey). `Ops.Founder.create` loses its `name` argume
 founder's id is read from `w.origin`. `host genesis NAME` with a name past `Bounds.eventBytesMax`
 now prints `refused nameTooLong`, not `refused name`. Nothing persisted changes: no codec, no
 chain head, and no Store needs a re-genesis.
+
+## KERNEL-32 · A turn's weights are the codec's byte counts: `Turn.logWeight` is the record's size, `Cell.weight` a cell's bytes (KERNEL-8, 2026-10-17)
+**Decision.** The per-field costs follow `Codec.Kernel` at the deployed 32-byte digest.
+`Cell.weight = 9 + Slots.weight`: kind u32, discipline u8, and the slot count u32. It was 8, which
+missed the count. `Op.weight`: `set` is `9 + v.size` and `erase` is `5`, because the tag byte was
+missing. `Act.logWeight` is new: a 1-byte tag, plus for a write the ops list header (4) and its
+ops. `Touch.weight = 2·digestWeight + act.logWeight`. `Turn.logWeight` gains one `headerWeight`
+(4) for each of the touches, creates and nullifiers lists and for the event's length, so +16.
+`Turn.growth` keeps `opsWeight` without the list header, because the header is log bytes, not
+World growth. Admit.lean's docblock no longer claims `size ≤ logWeight` as if it were proved. It
+names the equality as CODEC's theorem, owed by CODEC-4 on this sha.
+**Tooth.** `Gen.checkLogWeight`: under every instance whose digest is `digestWeight` bytes (the
+deployed sim, the default), each admitted turn's `(env.turnBytes t).size` must equal
+`t.logWeight`, or the seed fails naming both numbers. The report prints
+`record bytes = Turn.logWeight on N of M admitted turns` and fails unless N = M at the deployed
+width. kernel-sim --seeds 64 (on D5c, c3c7aa3) reports 3883 of 3883. Mutation: with `headerWeight := 3` the check
+fails every turn of seeds 0 and 1 (0 of 117; first `the record is 467 bytes, Turn.logWeight says 463`).
+**Alternatives.** (a) Keep the hand-picked costs and have CODEC prove `≤`. That leaves a charge
+that is not the price of the bytes, and an inequality is satisfiable by any over-estimate, so it
+is not a check. (b) Compute the charge as `(E.turnBytes t).size` inside `World.admit`. That would
+encode every turn on the request path a second time, and `Env` would then decide prices, which
+is a codec dependency in the kernel's arithmetic. The static table plus CODEC's equality keeps
+admit pure arithmetic and makes the equality checkable once.
+**Critique.** `digestWeight = 32` is a constant, so at the toy 8-byte digest logWeight is not the
+record size, and the sim skips the comparison there (`weighed` makes the skip visible: 0 of M).
+The equality is not yet a theorem: the sim compares every admitted turn of 64 seeds, which is
+evidence, not proof, until CODEC-4 lands `(turn dc).size t = t.logWeight`. The World's storage
+weight now counts a cell as its codec bytes. Leaf and journal weights (`digestWeight + …`,
+`journalWeight`) are NOT claimed equal to the World codec's trie bytes, and nothing here says
+they are.
+**Meta-critique.** The pull was to fold the +4 write header into `Op.weight` or into growth so as
+to touch fewer definitions. Either would have made growth over-charge a write by 4 forever, or
+made `Op.weight` stop being an op's bytes. A new `Act.logWeight` is one more name, but each name
+now equals one codec value. I did not check the World codec's leaf layout against `Leaf.weight`.
+That is the next place a hand cost and a byte count can disagree, and the Critique says so
+rather than implying coverage.
+**Flag day.** Every turn's charge changes (`Turn.weight` rises by 16 + 1 per born cell + 1 per op
++ 4 per write + 1 per born cell in growth). An old log replays with `chargeMismatch` at its first
+turn, so every Store re-geneses. A World's storage weight rises by 1 per live cell. No codec
+layout changes, nothing re-emits, and no VK or descriptor exists. kernel-sim --seeds 64 ALL PASS
+admitted=3883 refused-as-expected=25113 restarts=975, and the WASTE rows (9.838 / 3.634) equal LEDGER-2's
+D5c measurement. On 7c43273-era main the counts were unchanged by this change (3050 / 20992 / 954).

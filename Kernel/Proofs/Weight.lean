@@ -46,7 +46,7 @@ theorem slots_weight_applyOps :
       have ih := slots_weight_applyOps rest (applyOp s o)
       have step : Slots.weight (applyOp s o) ≤ Slots.weight s + o.weight := by
         cases o with
-        | set k v => exact slots_weight_set k v s
+        | set k v => have := slots_weight_set k v s; simp only [applyOp, Op.weight]; omega
         | erase k => have := slots_weight_erase k s; simp only [applyOp, Op.weight]; omega
       simp only [applyOps, List.foldl_cons, List.map_cons, List.sum_cons] at ih ⊢
       omega

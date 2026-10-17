@@ -74,12 +74,14 @@ def weight (s : Slots) : Nat := (s.map fun p => 8 + p.2.size).sum
 
 end Slots
 
-/-- The weight of a whole cell: kind, discipline and the slots. -/
-def Cell.weight (c : Cell) : Nat := 8 + Slots.weight c.slots
+/-- The weight of a whole cell: its codec bytes (`Codec.Kernel.cell`): kind (u32), discipline (u8),
+the slot count (u32) and the slots. So the World's storage weight of a cell is its bytes on disk. -/
+def Cell.weight (c : Cell) : Nat := 9 + Slots.weight c.slots
 
-/-- The weight of one operation as written into the log. -/
+/-- The weight of one operation: its codec bytes (`Codec.Kernel.op`): a one-byte tag and the key
+(u32), and a set's value with its length (u32). -/
 def Op.weight : Op → Nat
-  | .set _ v => 8 + v.size
-  | .erase _ => 4
+  | .set _ v => 9 + v.size
+  | .erase _ => 5
 
 end Nanodregg.Kernel

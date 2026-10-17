@@ -174,6 +174,8 @@ structure State (D : Type) [Ord D] where
   nullSlots : Nat := 0
   /-- the call-tree arms (D5c) ran in this seed -/
   treeDone : Bool := false
+  /-- admitted turns whose record bytes were compared with `Turn.logWeight` (at a 32-byte digest) -/
+  weighed : Nat := 0
 
 def nameOf {α : Type} [Repr α] (a : α) : String :=
   match (reprStr a).splitOn " " with
@@ -221,6 +223,16 @@ def meet (st : State D) (arm : String) : State D :=
   { st with refusedAsExpected := st.refusedAsExpected + 1, seen := arm :: st.seen }
 
 def failWith (st : State D) (f : String) : State D := { st with failures := f :: st.failures }
+
+/-- At a 32-byte digest (`digestWeight`, the deployed one), an admitted turn's record is exactly
+`Turn.logWeight` bytes of the instance's turn codec: the charge prices the bytes the log holds.
+A toy digest of another width skips the comparison (and `weighed` says how many were compared). -/
+def checkLogWeight (P : Params D) (st : State D) (t : Turn D) : State D :=
+  if (P.env.bytes P.zero).size = digestWeight then
+    let n := (P.env.turnBytes t).size
+    if n = t.logWeight then { st with weighed := st.weighed + 1 }
+    else failWith st s!"log weight: the record is {n} bytes, Turn.logWeight says {t.logWeight}"
+  else st
 
 /-- After an admitted turn `w → w'`: replay its inserts from `w`'s trie with `w'`'s leaves (the
 replay must reach `w'`'s root, or a touched path was left unrehashed), count their hashes, prove
@@ -324,7 +336,7 @@ def submit (P : Params D) (st : State D) (c : Call D) (expect : Expect) (what : 
       else fail s!"rejected {r.name}"
   | .ok (t, w') =>
       if expect = .ok then
-        let st := checkRoot P st st.host w' t
+        let st := checkLogWeight P (checkRoot P st st.host w' t) t
         ({ st with host := w', log := st.log ++ [t], admitted := st.admitted + 1,
                    seen := s!"{what}:ok" :: st.seen }, some t)
       else fail "admitted"
@@ -1201,11 +1213,13 @@ def report (P : Params D) (seeds : List Nat) : IO UInt32 := do
   let mut work : Nat × Nat := (0, 0)
   let mut seen : List String := []
   let mut hashes : Nat × Nat × Nat × Nat := (0, 0, 0, 0)
+  let mut weighed := 0
   for seed in seeds do
     let st := run P seed 120
     let (a, b) := maxWork st.log
     work := (max work.1 a, max work.2 b)
     admitted := admitted + st.admitted
+    weighed := weighed + st.weighed
     refused := refused + st.refusedAsExpected
     restarts := restarts + st.restarts
     hashes := (hashes.1 + st.cellHashes, hashes.2.1 + st.cellSlots, hashes.2.2.1 + st.nullHashes,
@@ -1217,6 +1231,10 @@ def report (P : Params D) (seeds : List Nat) : IO UInt32 := do
         bad := bad + 1
         IO.println s!"FAIL seed {seed}: {f}"
   IO.println s!"kernel-sim: seeds={seeds.length} admitted={admitted} refused-as-expected={refused} restarts={restarts} failing-seeds={bad}"
+  IO.println s!"kernel-sim: record bytes = Turn.logWeight on {weighed} of {admitted} admitted turns"
+  if (P.env.bytes P.zero).size = digestWeight && weighed != admitted then
+    bad := bad + 1
+    IO.println s!"FAIL log weight compared on {weighed} of {admitted} admitted turns"
   -- every planted refusal must have been met: a name the generator never reaches is not tested
   let unmet := (planted ++ plantedArms).filter fun n => !seen.contains n
   if !unmet.isEmpty && seeds.length ≥ 16 then
