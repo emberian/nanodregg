@@ -115,6 +115,8 @@ structure State (D : Type) [Ord D] where
   wells : List (D × Nat) := []
   accounts : List (D × D × D) := []
   balances : List (D × Int) := []
+  /-- each account's floor in the model: a well's starts at its cap, credit lines move it -/
+  floors : List (D × Nat) := []
   onces : List (D × ByteArray) := []
 
 def nameOf {α : Type} [Repr α] (a : α) : String :=
@@ -180,8 +182,11 @@ def setBal (st : State D) (a : D) (b : Int) : State D :=
 
 def capOf (st : State D) (well : D) : Nat := ((st.wells.find? fun p => p.1 = well).map Prod.snd).getD 0
 
-/-- An account's floor in the model: a well's is its cap, every other account's 0. -/
-def floorOfAcct (st : State D) (a : D) : Nat := capOf st a
+/-- An account's floor in the model (0 until a credit line or an issue sets it). -/
+def floorOfAcct (st : State D) (a : D) : Nat := ((st.floors.find? fun p => p.1 = a).map Prod.snd).getD 0
+
+def setFloorM (st : State D) (a : D) (f : Nat) : State D :=
+  { st with floors := (a, f) :: st.floors.filter fun p => p.1 ≠ a }
 
 def memberOf (P : Params D) (st : State D) (id : D) : Member D :=
   (st.members.find? fun m => m.id = id).getD (founder0 P st)
@@ -244,6 +249,7 @@ def scanValue (P : Params D) (st : State D) : State D :=
     | none => some "an account is gone or malformed"
     | some v =>
         if v.balance ≠ balOf st a then some s!"balance {v.balance} ≠ model {balOf st a}"
+        else if v.floor ≠ floorOfAcct st a then some s!"floor {v.floor} ≠ model {floorOfAcct st a}"
         else if !v.withinFloor then some "an account is below its floor"
         else none
   match bad ++ drift with
@@ -268,7 +274,7 @@ def ledgerAct (P : Params D) (st : State D) (k : Nat) : State D :=
         match t with
         | some t =>
             let well := (createdIds P.env t).headD P.zero
-            { st with wells := st.wells ++ [(well, cap)], accounts := st.accounts ++ [(well, m.id, well)] }
+            setFloorM { st with wells := st.wells ++ [(well, cap)], accounts := st.accounts ++ [(well, m.id, well)] } well cap
         | none => st
   | 1 => -- open an account of a denomination
       match st.wells with
@@ -281,6 +287,41 @@ def ledgerAct (P : Params D) (st : State D) (k : Nat) : State D :=
           match t with
           | some t => { st with accounts := st.accounts ++ [((createdIds P.env t).headD P.zero, m.id, well.1)] }
           | none => st
+  | 3 => -- a credit line (LEDGER-4): the issuer moves floor out of its well into an account;
+         -- past the well's floor `overflow`, past its unissued headroom `belowFloor`; a non-issuer
+         -- `noGrant`; out of an account that is not a well `notWell`
+      match st.wells with
+      | [] => st
+      | w0 :: _ =>
+          let (well, st) := pick st st.wells w0
+          let issuer := memberOf P st (((st.accounts.find? fun a => a.1 = well.1).map fun a => a.2.1).getD (founder0 P st).id)
+          let holders := st.accounts.filter fun a => a.2.2 = well.1 ∧ a.1 ≠ well.1
+          match holders with
+          | [] => st
+          | h0 :: _ =>
+              let (acct, st) := pick st holders h0
+              let (r, st) := st.rng.below 6 |> fun (x, rr) => (x, { st with rng := rr })
+              let wf := floorOfAcct st well.1
+              let head : Int := wf + balOf st well.1
+              if r = 0 then
+                match st.members.find? fun m => m.id ≠ issuer.id with
+                | none => st
+                | some thief =>
+                    let c := signed P st thief thief.key (S.pinsFor P.env w [thief.id, well.1, acct.1]) (.credit well.1 acct.1 1 none)
+                    (submit P st c (.refused "noGrant") "credit-stranger").1
+              else if r = 1 then
+                let owner := memberOf P st acct.2.1
+                let c := signed P st owner owner.key (S.pinsFor P.env w [owner.id, acct.1, well.1]) (.credit acct.1 well.1 1 none)
+                (submit P st c (.refused "notWell") "credit-not-well").1
+              else
+                let (amt, st) := st.rng.below (wf + 4) |> fun (x, rr) => (x + 1, { st with rng := rr })
+                let expect : Expect := if amt > wf then .refused "overflow"
+                  else if (amt : Int) > head then .rejected "belowFloor" else .ok
+                let c := signed P st issuer issuer.key (S.pinsFor P.env w [issuer.id, well.1, acct.1]) (.credit well.1 acct.1 amt none)
+                let (st, t) := submit P st c expect "credit"
+                match t with
+                | some _ => setFloorM (setFloorM st well.1 (wf - amt)) acct.1 (floorOfAcct st acct.1 + amt)
+                | none => st
   | _ => -- a transfer
       match st.accounts with
       | [] => st
@@ -356,13 +397,14 @@ def probeSeal (P : Params D) (st : State D) : State D :=
 
 /-- One generated action. -/
 def act (P : Params D) (st : State D) : State D :=
-  let (k, rng) := st.rng.below 20
+  let (k, rng) := st.rng.below 21
   let st := { st with rng }
   let w := st.host
   match k with
   | 15 | 16 => ledgerAct P st (k - 15)
   | 17 | 18 => ledgerAct P st 2
   | 19 => probeValue P st
+  | 20 => ledgerAct P st 3
   | 0 | 13 => -- enrol a newcomer (KERNEL-16): through the sponsor's own World grant, admitted
          -- while its count lasts (`enrollSpent` after), `grantRight` through a grant without
          -- `enroll`; a sponsor without a grant tries someone else's (`noGrant`)
@@ -716,7 +758,7 @@ def planted : List String :=
   ["lawDenied", "noGrant", "unknownKey", "replayed", "stale", "notPrecommitted", "notIssuer",
    "missingCell", "enrollSpent", "grantRight", "grantWidens", "unrooted", "duplicateEffect",
    "overflow", "sameAccount", "zeroAmount", "assetMismatch", "belowFloor", "spent",
-   "notConserved", "floorNotConserved", "valueMalformed", "overBound"]
+   "notConserved", "floorNotConserved", "valueMalformed", "overBound", "notWell"]
 
 /-- `--seeds N` runs seeds `0 … N-1`; otherwise each argument is a seed. -/
 def parseSeeds : List String → List Nat

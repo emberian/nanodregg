@@ -389,6 +389,10 @@ theorem dispatch_born {X : Ctx D} {look : Pinned D} {c : Call D} {b : Body D} {t
       simp only [dispatch, transfer, except_bind_ok] at h
       obtain ⟨_, _, _, _, _, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, h⟩ := h
       rw [sealTurn_creates h]; simp
+  | credit well acct amount via =>
+      simp only [dispatch, credit, except_bind_ok] at h
+      obtain ⟨_, _, _, _, _, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, h⟩ := h
+      rw [sealTurn_creates h]; simp
 
 theorem receiveWith_dispatch {X : Ctx D} {look : Pinned D} {c : Call D} {t : Turn D}
     (h : receiveWith X look c = .ok t) : dispatch X look c c.unsigned.body = .ok t := by

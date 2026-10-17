@@ -69,6 +69,10 @@ inductive Body (D : Type)
   `onceNullifier src key`, so a call carrying the same key for the same source lands once.
   Minting is a transfer out of a well, burning one into it -/
   | transfer (src dst : D) (amount : Nat) (via : Option D) (once : Option ByteArray)
+  /-- a credit line: move `amount` of the well's floor to `acct` (same denomination), with the
+  authority of the well's owner, the issuer (directly, or through `via` for `mutate`). The
+  denomination's floor sum is unchanged, so its cap still bounds what is outstanding (LEDGER-4) -/
+  | credit (well acct : D) (amount : Nat) (via : Option D)
   deriving DecidableEq
 
 /-- What the caller signs. `pins` is the caller's observation; `maxCharge` the price ceiling. -/
@@ -142,6 +146,8 @@ inductive Refusal (D : Type)
   | assetMismatch (cell : D)
   /-- a post balance an `i64` cannot hold, or an issuance cap past `2^63` -/
   | overflow (cell : D)
+  /-- a credit line out of an account that is not a well (its denomination is not its own id) -/
+  | notWell (cell : D)
   deriving DecidableEq, Repr
 
 /-- The refusal's name on the wire (law 7): its constructor's, arguments dropped
@@ -177,6 +183,7 @@ def Refusal.name {D : Type} : Refusal D → String
   | .zeroAmount => "zeroAmount"
   | .assetMismatch _ => "assetMismatch"
   | .overflow _ => "overflow"
+  | .notWell _ => "notWell"
 
 /-- A receiver's only access to state: live cells at pinned ids. -/
 abbrev Pinned (D : Type) := D → Except (Refusal D) (Option Cell)

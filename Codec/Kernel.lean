@@ -98,7 +98,7 @@ def right : Stream Right :=
          | ⟨3, n⟩ => some (.enroll n))
     (fun | .observe => ⟨0, ()⟩ | .mutate => ⟨1, ()⟩ | .invoke m => ⟨2, m⟩ | .enroll n => ⟨3, n⟩)
 
-abbrev BodyF (D : Type) : Fin 12 → Type
+abbrev BodyF (D : Type) : Fin 13 → Type
   | 0 => ByteArray × D × ByteArray × D
   | 1 => ByteArray × D
   | 2 => ByteArray
@@ -111,8 +111,9 @@ abbrev BodyF (D : Type) : Fin 12 → Type
   | 9 => Nat
   | 10 => D
   | 11 => D × D × Nat × Option D × Option ByteArray
+  | 12 => D × D × Nat × Option D
 
-def bodyWire (dc : Stream D) : (s : Fin 12) → Stream (BodyF D s)
+def bodyWire (dc : Stream D) : (s : Fin 13) → Stream (BodyF D s)
   | 0 => product (rawBytes callMax) (product dc (product (rawBytes callMax) dc))
   | 1 => product (rawBytes callMax) dc
   | 2 => rawBytes callMax
@@ -126,9 +127,10 @@ def bodyWire (dc : Stream D) : (s : Fin 12) → Stream (BodyF D s)
   | 9 => nat64
   | 10 => dc
   | 11 => product dc (product dc (product nat64 (product (option dc) (option (rawBytes callMax)))))
+  | 12 => product dc (product dc (product nat64 (option dc)))
 
 def body (dc : Stream D) : Stream (Body D) :=
-  refine "kernel/body" (choice 12 (bodyWire dc))
+  refine "kernel/body" (choice 13 (bodyWire dc))
     (fun
       | ⟨0, (k, n, p, v)⟩ => some (.enroll k n p v)
       | ⟨1, (k, n)⟩ => some (.rotate k n)
@@ -141,7 +143,8 @@ def body (dc : Stream D) : Stream (Body D) :=
       | ⟨8, g⟩ => some (.revoke g)
       | ⟨9, cap⟩ => some (.issue cap)
       | ⟨10, a⟩ => some (.account a)
-      | ⟨11, (s, d, n, v, o)⟩ => some (.transfer s d n v o))
+      | ⟨11, (s, d, n, v, o)⟩ => some (.transfer s d n v o)
+      | ⟨12, (w, a, n, v)⟩ => some (.credit w a n v))
     (fun
       | .enroll k n p v => ⟨0, (k, n, p, v)⟩
       | .rotate k n => ⟨1, (k, n)⟩
@@ -154,7 +157,8 @@ def body (dc : Stream D) : Stream (Body D) :=
       | .revoke g => ⟨8, g⟩
       | .issue cap => ⟨9, cap⟩
       | .account a => ⟨10, a⟩
-      | .transfer s d n v o => ⟨11, (s, d, n, v, o)⟩)
+      | .transfer s d n v o => ⟨11, (s, d, n, v, o)⟩
+      | .credit w a n v => ⟨12, (w, a, n, v)⟩)
 
 def unsigned (dc : Stream D) : Stream (Unsigned D) :=
   refine "kernel/unsigned"

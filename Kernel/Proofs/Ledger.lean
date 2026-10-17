@@ -161,6 +161,27 @@ theorem floorOf_bytes (f : Nat) : Value.floorOf (Value.floorBytes f) = some (f %
   rw [decode_bytes u64_lawful]
   simp
 
+theorem floorOf_lt {b : ByteArray} {f : Nat} (h : Value.floorOf b = some f) : f < 2 ^ 64 := by
+  unfold Value.floorOf at h
+  split at h
+  · simp only [Option.some.injEq] at h; subst h; exact UInt64.toNat_lt _
+  · simp at h
+
+/-- A decoded floor is a `u64`'s. -/
+theorem ofCell_floor_lt {cell : Cell} {v : Value} (h : Value.ofCell cell = some v) : v.floor < 2 ^ 64 := by
+  unfold Value.ofCell at h
+  split at h
+  · split at h
+    · rename_i dd bb ff _ _ hf
+      split at h
+      · simp only [Option.some.injEq] at h; subst h
+        cases hk : cell.slots.get Value.floorKey with
+        | none => rw [hk] at hf; simp at hf
+        | some b => rw [hk] at hf; exact floorOf_lt hf
+      · simp at h
+    · simp at h
+  · simp at h
+
 omit [Ord D] [DecidableEq D] in
 /-- The account a ledger receiver bears holds denomination `d`, balance 0 and floor `f`
 (modulo `2^64`, which `issue`'s cap bound makes exact). -/
@@ -216,6 +237,34 @@ theorem transfer_authorized {X : Ctx D} {look : Pinned D} {c : Call D} {src dst 
   rw [req_ok, decide_eq_true_eq] at hpo
   subst hpo
   refine ⟨scell, p, hk, ho, ?_⟩
+  cases via with
+  | none => left; simp [principalOf] at hp; exact ⟨rfl, hp⟩
+  | some g => right; exact ⟨g, rfl, walk_chain hp⟩
+
+/-- **Credit authority.** A derived credit line moves floor only out of a WELL (an account whose
+denomination is its own id), only with the authority of the well's owner slot (the signer, or a
+grant chain for `mutate` rooted at that owner; `issue` sets it to the issuer and no receiver
+writes an account's owner slot), and only into a live account of the same denomination. -/
+theorem credit_authorized {X : Ctx D} {look : Pinned D} {c : Call D} {well acct : D} {amount : Nat}
+    {via : Option D} {t : Turn D} (h : credit X look c well acct amount via = .ok t) :
+    ∃ cell v owner, readKind look well kindAccount = .ok cell ∧ Value.ofCell cell = some v ∧
+      v.denom = X.env.bytes well ∧ slotDigest X well cell slotOwner = .ok owner ∧
+      (via = none ∧ c.unsigned.member = owner ∨
+        ∃ g, via = some g ∧ Chain X look well .mutate g c.unsigned.member owner) ∧
+      ∃ acell av, readKind look acct kindAccount = .ok acell ∧ Value.ofCell acell = some av ∧
+        av.denom = v.denom := by
+  unfold credit at h
+  simp only [except_bind_ok] at h
+  obtain ⟨⟨wcell, wv⟩, hs, ⟨acell, av⟩, hda, principal, ha, ⟨⟩, hwell, ⟨⟩, _, ⟨⟩, _, ⟨⟩, hden, _⟩ := h
+  rw [req_ok, decide_eq_true_eq] at hwell hden
+  obtain ⟨hk, hv⟩ := readAccount_ok hs
+  obtain ⟨hka, hva⟩ := readAccount_ok hda
+  unfold ownerAuthority at ha
+  simp only [except_bind_ok] at ha
+  obtain ⟨owner, ho, p, hp, ⟨⟩, hpo, _⟩ := ha
+  rw [req_ok, decide_eq_true_eq] at hpo
+  subst hpo
+  refine ⟨wcell, wv, p, hk, hv, hwell, ho, ?_, acell, av, hka, hva, hden⟩
   cases via with
   | none => left; simp [principalOf] at hp; exact ⟨rfl, hp⟩
   | some g => right; exact ⟨g, rfl, walk_chain hp⟩
@@ -317,6 +366,10 @@ theorem dispatch_value_born {X : Ctx D} {look : Pinned D} {c : Call D} {b : Body
       simp only [dispatch, transfer, except_bind_ok] at h
       obtain ⟨_, _, _, _, _, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, h⟩ := h
       rw [sealTurn_creates h]; simp
+  | credit well acct amount via =>
+      simp only [dispatch, credit, except_bind_ok] at h
+      obtain ⟨_, _, _, _, _, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, h⟩ := h
+      rw [sealTurn_creates h]; simp
 
 /-! ## What an admitted transfer does -/
 
@@ -339,6 +392,25 @@ theorem ofCell_setBalance {cell : Cell} {v : Value} {b : Int} (hv : Value.ofCell
     · simp at hv
   · simp at hv
 
+/-- Setting a value cell's floor slot to a `u64` leaves its denomination and balance. -/
+theorem ofCell_setFloor {cell : Cell} {v : Value} {f : Nat} (hv : Value.ofCell cell = some v)
+    (hf : f < 2 ^ 64) :
+    Value.ofCell { cell with slots := applyOps cell.slots [.set Value.floorKey (Value.floorBytes f)] } =
+      some { v with floor := f } := by
+  have hd := ofCell_value hv
+  unfold Value.ofCell at hv ⊢
+  simp only [applyOps, List.foldl, applyOp, hd, if_true] at hv ⊢
+  rw [slots_get_set_ne _ (by decide : Value.denomKey ≠ Value.floorKey),
+    slots_get_set_ne _ (by decide : Value.balanceKey ≠ Value.floorKey), slots_get_set_eq]
+  simp only [Option.bind_some, floorOf_bytes, Nat.mod_eq_of_lt hf]
+  split at hv
+  · rename_i dd bb ff h1 h2 h3
+    rw [h1, h2]
+    split at hv
+    · simp only [Option.some.injEq] at hv; subst hv; simp_all
+    · simp at hv
+  · simp at hv
+
 theorem pinned_live {w : World D} {pins : List (D × D)} {c : D} {cell : Cell}
     (h : pinned w pins c = .ok (some cell)) : w.live c = some cell := by
   unfold pinned at h; split at h
@@ -347,6 +419,44 @@ theorem pinned_live {w : World D} {pins : List (D × D)} {c : D} {cell : Cell}
 
 section Exact
 variable [Std.TransOrd D] [Std.LawfulEqOrd D]
+
+/-- **Two sealed writes, forward.** An admitted turn sealed with writes on two distinct cells
+leaves at each what `postWrite` makes of the cell observed there, and every other cell (not born)
+as it was. -/
+theorem sealed_two_writes {X : Ctx D} {w w' : World D} {c : Call D} {t : Turn D} {a b : D}
+    {opsA opsB : List Op} {ns : List D}
+    (hseal : sealTurn X c [] [(a, .write opsA), (b, .write opsB)] ns = .ok t) (hab : a ≠ b)
+    (ha : World.admit X.env w t = .ok w') :
+    (∃ ca pa, w.live a = some ca ∧ postWrite a ca opsA = .ok pa ∧ w'.live a = some pa) ∧
+      (∃ cb pb, w.live b = some cb ∧ postWrite b cb opsB = .ok pb ∧ w'.live b = some pb) ∧
+      ∀ k, k ≠ a → k ≠ b → k ∉ createdIds X.env t → w'.cells[k]? = w.cells[k]? := by
+  obtain ⟨_, _, htouch, _, _, _, _, _, _, hpin⟩ := sealTurn_ok hseal
+  let efs : List (D × Act) := [(a, .write opsA), (b, .write opsB)]
+  have hact : ∀ k, actFor efs k = if k = a then .write opsA else if k = b then .write opsB else .keep := by
+    intro k
+    unfold actFor
+    by_cases h1 : a = k
+    · subst h1; simp [efs]
+    · by_cases h2 : b = k
+      · subst h2; simp [efs, h1, Ne.symm h1]
+      · simp [efs, h1, h2, Ne.symm h1, Ne.symm h2]
+  have written : ∀ k ops, (k, Act.write ops) ∈ efs → actFor efs k = .write ops →
+      ∃ cell post, w.live k = some cell ∧ postWrite k cell ops = .ok post ∧ w'.live k = some post := by
+    intro k ops hm hk
+    obtain ⟨p, hp, hpk⟩ := hpin _ hm
+    have hx : ({ cell := p.1, seen := p.2, act := actFor efs p.1 } : Touch D) ∈ t.touches := by
+      rw [htouch]; exact List.mem_map_of_mem hp
+    simp only at hpk
+    rw [hpk] at hx
+    exact admit_written ha hx (by simp only; rw [hk])
+  refine ⟨written a opsA (by simp [efs]) (by rw [hact]; simp),
+    written b opsB (by simp [efs]) (by rw [hact]; simp [Ne.symm hab]), ?_⟩
+  intro k h1 h2 hc
+  refine admit_frame ha (fun x hx hxk => ?_) hc
+  rw [htouch] at hx
+  obtain ⟨p, _, rfl⟩ := List.mem_map.mp hx
+  simp only at hxk ⊢
+  rw [hact, if_neg (hxk ▸ h1), if_neg (hxk ▸ h2)]
 
 /-- **An admitted transfer moves exactly `amount`**, and nothing else: the source's balance falls
 by it, the destination's rises by it, both keep their denomination and floor, and every other
@@ -370,41 +480,46 @@ theorem transfer_exact {X : Ctx D} {w w' : World D} {c : Call D} {t : Turn D} {s
   obtain ⟨hkd, hvd⟩ := readAccount_ok hdd
   have hls := pinned_live (readKind_ok hks).1
   have hld := pinned_live (readKind_ok hkd).1
-  obtain ⟨_, _, htouch, _, _, _, _, _, _, hpin⟩ := sealTurn_ok hseal
-  let efs : List (D × Act) := [(src, setBalance (sv.balance - amount)), (dst, setBalance (dv.balance + amount))]
-  have hact : ∀ k, actFor efs k = if k = src then setBalance (sv.balance - amount)
-      else if k = dst then setBalance (dv.balance + amount) else .keep := by
-    intro k
-    unfold actFor
-    by_cases h1 : src = k
-    · subst h1; simp [efs]
-    · by_cases h2 : dst = k
-      · subst h2; simp [efs, h1, Ne.symm h1]
-      · simp [efs, h1, h2, Ne.symm h1, Ne.symm h2]
-  -- the touch at a pinned effect cell writes its balance
-  have written : ∀ k b, (k, setBalance b) ∈ efs → actFor efs k = setBalance b →
-      ∃ cell post, w.live k = some cell ∧
-        postWrite k cell [.set Value.balanceKey (Value.balanceBytes b)] = .ok post ∧ w'.live k = some post := by
-    intro k b hm hk
-    obtain ⟨p, hp, hpk⟩ := hpin _ hm
-    have hx : ({ cell := p.1, seen := p.2, act := actFor efs p.1 } : Touch D) ∈ t.touches := by
-      rw [htouch]; exact List.mem_map_of_mem hp
-    simp only at hpk
-    rw [hpk] at hx
-    exact admit_written ha hx (by simp only; rw [hk]; rfl)
-  obtain ⟨c1, p1, hc1, hw1, hl1⟩ := written src (sv.balance - amount) (by simp [efs]) (by rw [hact]; simp)
-  obtain ⟨c2, p2, hc2, hw2, hl2⟩ := written dst (dv.balance + amount) (by simp [efs]) (by rw [hact]; simp [Ne.symm hne])
+  obtain ⟨⟨c1, p1, hc1, hw1, hl1⟩, ⟨c2, p2, hc2, hw2, hl2⟩, hframe⟩ := sealed_two_writes hseal hne ha
   rw [hls] at hc1; cases hc1
   rw [hld] at hc2; cases hc2
-  refine ⟨sv, dv, by rw [hls]; exact hvs, by rw [hld]; exact hvd, ?_, ?_, ?_⟩
+  refine ⟨sv, dv, by rw [hls]; exact hvs, by rw [hld]; exact hvd, ?_, ?_, hframe⟩
   · rw [hl1, postWrite_eq hw1]; exact ofCell_setBalance hvs hfs
   · rw [hl2, postWrite_eq hw2]; exact ofCell_setBalance hvd hfd
-  · intro k h1 h2 hc
-    refine admit_frame ha (fun x hx hxk => ?_) hc
-    rw [htouch] at hx
-    obtain ⟨p, _, rfl⟩ := List.mem_map.mp hx
-    simp only at hxk ⊢
-    rw [hact, if_neg (hxk ▸ h1), if_neg (hxk ▸ h2)]
+
+/-- **An admitted credit line moves exactly `amount` of floor** out of the well into the account
+(`0 < amount ≤` the well's floor, so the well's `-` does not truncate): balances and
+denominations unchanged, every other cell untouched (the `createdIds` exclusion is empty: a
+credit bears nothing). That no credit line raises what may be outstanding is a separate, kernel
+result: `fold_floors_held` and `outstanding_le_cap`. -/
+theorem credit_exact {X : Ctx D} {w w' : World D} {c : Call D} {t : Turn D} {well acct : D}
+    {amount : Nat} {via : Option D}
+    (hb : c.unsigned.body = .credit well acct amount via)
+    (hr : receive X w c = .ok t) (ha : World.admit X.env w t = .ok w') :
+    ∃ wv av, (w.live well).bind Value.ofCell = some wv ∧ (w.live acct).bind Value.ofCell = some av ∧
+      wv.denom = X.env.bytes well ∧ av.denom = wv.denom ∧ 0 < amount ∧ amount ≤ wv.floor ∧
+      (w'.live well).bind Value.ofCell = some { wv with floor := wv.floor - amount } ∧
+      (w'.live acct).bind Value.ofCell = some { av with floor := av.floor + amount } ∧
+      ∀ k, k ≠ well → k ≠ acct → k ∉ createdIds X.env t → w'.cells[k]? = w.cells[k]? := by
+  have hd := receiveWith_dispatch hr
+  rw [hb] at hd
+  simp only [dispatch, credit, except_bind_ok] at hd
+  obtain ⟨⟨wcell, wv⟩, hs, ⟨acell, av⟩, hdd, _, _, ⟨⟩, hwell, ⟨⟩, hne, ⟨⟩, hpos, ⟨⟩, hden, ⟨⟩, hle,
+    ⟨⟩, hcap, hseal⟩ := hd
+  rw [req_ok, decide_eq_true_eq] at hwell hne hpos hden hle hcap
+  simp only at hwell hden hle hcap hseal
+  obtain ⟨hks, hvs⟩ := readAccount_ok hs
+  obtain ⟨hkd, hvd⟩ := readAccount_ok hdd
+  have hls := pinned_live (readKind_ok hks).1
+  have hld := pinned_live (readKind_ok hkd).1
+  obtain ⟨⟨c1, p1, hc1, hw1, hl1⟩, ⟨c2, p2, hc2, hw2, hl2⟩, hframe⟩ := sealed_two_writes hseal hne ha
+  rw [hls] at hc1; cases hc1
+  rw [hld] at hc2; cases hc2
+  refine ⟨wv, av, by rw [hls]; exact hvs, by rw [hld]; exact hvd, hwell, hden, hpos, hle, ?_, ?_, hframe⟩
+  · rw [hl1, postWrite_eq hw1]
+    exact ofCell_setFloor hvs (by have := ofCell_floor_lt hvs; omega)
+  · rw [hl2, postWrite_eq hw2]
+    exact ofCell_setFloor hvd (by unfold capMax at hcap; omega)
 
 end Exact
 

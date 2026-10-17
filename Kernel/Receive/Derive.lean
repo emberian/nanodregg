@@ -240,6 +240,7 @@ def dispatch (X : Ctx D) (look : Pinned D) (c : Call D) : Body D → Except (Ref
   | .issue cap => issue X c cap
   | .account asset => account X c asset
   | .transfer src dst amount via once => transfer X look c src dst amount via once
+  | .credit well acct amount via => credit X look c well acct amount via
 
 /-- A rotation is signed by the incoming key; every other call by the member's current key. -/
 def keyRule (look : Pinned D) (u : Unsigned D) : Except (Refusal D) Unit :=

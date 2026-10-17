@@ -706,6 +706,47 @@ sum 9223372036854775808 ≠ cap 650"; the once nullifier dropped ⇒ `transfer_o
 builds, 9/64 red "expected spent, got admitted".
 Status: built. Next: a credit line (a floor transfer out of the well, issuer authority), its own entry.
 
+## LEDGER-4 · A credit line is a floor transfer out of the well, under the issuer's authority (BUILD-LEDGER, 2026-10-17)
+**Decision.** pug's floors issue asked that an account may go down to minus a floor its issuer
+extends. `Body.credit (well acct : D) (amount : Nat) (via : Option D)`: both pinned live accounts;
+`ownerAuthority … well … .mutate via` (the issuer, or a grantee of `mutate` on the well through a
+chain rooted at the issuer); the source must be a WELL, an account whose denomination is its own
+id (`notWell` otherwise, new Refusal); `sameAccount`, `zeroAmount`, `assetMismatch acct`;
+`overflow well` past the well's whole floor (a Nat floor cannot go negative), `overflow acct` past
+`capMax`. Two effects: the well's floor falls by `amount`, the account's rises by it. The kernel
+judges the rest: the denomination's floor sum is unchanged (LEDGER-2), and a credit line past the
+well's UNISSUED headroom (floor + balance) leaves the well below its own floor, `belowFloor`. So a
+credit line cannot raise what may be outstanding: `outstanding_le_cap` + `fold_floors_held` already
+say so, for every turn, which is why this entry needs no cap theorem of its own.
+Theorems (Kernel/Proofs/Ledger.lean): `credit_authorized` (source is a well, signer has its
+owner's authority), `credit_exact` (exactly `amount` of floor moves well → account, balances and
+denominations unchanged, every other cell untouched), both through a new `sealed_two_writes` that
+`transfer_exact` now shares (`ofCell_setFloor`, `ofCell_floor_lt` beside it). Sim: the issuer
+credits a holder (admitted within the headroom, `belowFloor` past it, `overflow` past the well's
+floor), a non-issuer is `noGrant`, a credit out of a non-well `notWell`; the model tracks every
+account's floor and the scan checks it. Plants (observed red, reverted): the account half of the
+credit dropped ⇒ `credit_exact` no longer builds, kernel-sim 39/64 red "credit: expected ok, got
+rejected floorNotConserved" (the KERNEL refuses the buggy receiver); the `notWell` check dropped ⇒
+`dispatch_born` no longer builds, 21/64 red "expected notWell, got refused overflow".
+A second agent read the statements (law 6): none vacuous; on its findings  now
+states  the well floor (the Nat  does not truncate) and  names
+the destination account and its denomination.
+**Alternatives.** (a) A `setFloor acct f` that sets a floor directly (minidregg's; with conserved
+floors it cannot balance, so it would need a kernel exception). (b) Floor transfers between ANY two
+accounts of a denomination, under the source's owner (holders could re-lend credit; the issuer
+loses control of who is extended credit). (c) Credit as a negative balance on the well with no
+per-account floor (then an overdraft has no per-holder limit).
+**Critique.** One direction only: there is no receiver to reclaim unused credit. Reclaiming it is
+a power over a holder's account (shrinking what they may borrow), so whose authority it is (the
+holder's, the issuer's, both) is a taste fork, left to Ember; until then a credit line is
+irrevocable, and an issuer who over-extends can only wait for holders to repay. Call kinds 12 → 13
+against the ceiling 12 raised last commit (raised again here, with this argument). The well stays
+the hot cell: every credit pins it like every mint.
+**Meta-critique.** The receiver is small because LEDGER-2 already did the work; that is the test of
+LEDGER-2's choice to conserve floors (without it, this entry would need its own cap proof and a
+kernel exception), but it is also the choice I already liked, so I am not the right judge of it.
+Status: built.
+
 ## KERNEL-24 · A call names its World: `Unsigned.world` = the World's genesis ORIGIN, refused `wrongWorld` before anything else; genesis commits to everything it was made from (KERNEL-4, 2026-10-17; DESIGN, ROOT's D3, not yet built)
 **Defect (measured by OPS on 87c721e, with the real `host` exe).** The SAME signed `create` frame was
 admitted by two Stores both named "w": nothing in `Unsigned` binds a call to a World. And CLIENT-2's

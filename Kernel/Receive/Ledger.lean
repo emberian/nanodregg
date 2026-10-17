@@ -80,4 +80,26 @@ def transfer (X : Ctx D) (look : Pinned D) (c : Call D) (src dst : D) (amount : 
   req (Value.fits db) (.overflow dst)
   sealTurn X c [] [(src, setBalance sb), (dst, setBalance db)] (once.map (onceNullifier X src)).toList
 
+/-- The write setting an account's floor. -/
+def setFloor (f : Nat) : Act := .write [.set Value.floorKey (Value.floorBytes f)]
+
+/-- `credit well acct amount via` (LEDGER-4): a credit line is a floor transfer out of the well.
+Extending credit IS issuing (minidregg FLOORS-LOG: setFloor's verb was mintAsset), so it is the
+issuer's: the well's owner. The kernel conserves the denomination's floor sum, so a credit line
+can only be carved from the well's unissued headroom: past it the well goes below its own floor,
+`belowFloor`. Past the well's whole floor (a Nat cannot go negative), `overflow`. -/
+def credit (X : Ctx D) (look : Pinned D) (c : Call D) (well acct : D) (amount : Nat)
+    (via : Option D) : Except (Refusal D) (Turn D) := do
+  let u := c.unsigned
+  let (wcell, wv) ← readAccount look well
+  let (_, av) ← readAccount look acct
+  let _ ← ownerAuthority X look u well wcell .mutate via
+  req (decide (wv.denom = X.env.bytes well)) (.notWell well)
+  req (decide (well ≠ acct)) .sameAccount
+  req (decide (0 < amount)) .zeroAmount
+  req (decide (av.denom = wv.denom)) (.assetMismatch acct)
+  req (decide (amount ≤ wv.floor)) (.overflow well)
+  req (decide (av.floor + amount ≤ capMax)) (.overflow acct)
+  sealTurn X c [] [(well, setFloor (wv.floor - amount)), (acct, setFloor (av.floor + amount))] []
+
 end Nanodregg.Kernel.Receive
