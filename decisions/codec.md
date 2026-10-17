@@ -559,7 +559,41 @@ arithmetic (20 GB, deep recursion); reduce the projection first (`unfold; dsimp 
 the law on projective classes (and that `PQ = P.add Q` is what `verify` passes), and `verify`'s final
 check is then the RFC's cofactored equation. The primality proof trusts `decide +kernel` (the kernel's
 GMP-accelerated `Nat` arithmetic), as every literal check here does.
-Status: parts 1–2 built; part 3 (`mul2` = `[a]P + [b]Q` via associativity; `verify` = the RFC equation) open.
+**Part 3 (CODEC-4, 2026-10-17): the group, the ladder, the RFC equation.** `Codec/Proofs/Group.lean`:
+`Point.Affine P x y` (proper, `X = x Z`, `Y = y Z`): every proper point names exactly one affine point
+(`affine_exists`, `affine_unique`), on the affine curve (`affine_curve`), and `add`/`double` name the affine
+Edwards sum (`add_affine`, `double_affine`; denominators units by `affine_dens` from completeness).
+`Point.Same P Q` (both proper, `P.eq Q = true` — the deployed check) is an equivalence, a congruence for
+`add`, and on it `add` is commutative, associative (`same_add_assoc`), has identity `Point.zero`, inverse
+`neg` (`same_neg_add`), and `double P` is `P.add P`. Associativity is ONE ring identity with the
+denominators cleared (`assoc_polyR`: 48 monomials of degree 18 after expansion; sympy reduces it to 0 by the
+three curve equations with cofactors of 16/64/40 terms) which `grind` closes from the curve equations alone in
+~1 s, so no certificate is stored; `assoc_affR` cancels the (unit) denominators. CODEC-3's failed attempt
+kept 13 inverse variables as hypotheses; clearing them first is what makes it small.
+`Codec/Proofs/Ladder.lean`: `[m] P := Nat.repeat (·.add P) m Point.zero` (no new definition: the spec is
+the deployed `add`), `rep_add`, `rep_distrib`, `rep_congr`, `same_interchange`, `same_d3` (three doublings
+are `[8]`); `ladder_spec` (the ladder from the identity is `[a mod 2^n] P + [b mod 2^n] Q`), `mul2_spec` (for
+`a, b < 2^n` it is `[a] P + [b] Q`, given `PQ` projectively `P.add Q`); `rfc_iff` and `verify_iff`:
+`verify pk msg sig = true` ↔ `pk` 32 bytes, `sig` 64, `S < L`, both points decode, and
+`[8][S]B = [8]R + [8][k]A` (as `Point.Same`), `k = leNat (SHA-512(sig[0,32) ‖ pk ‖ msg)) 0 64 % L` — RFC 8032
+§5.1.7's cofactored group equation. Teeth: `assoc_needs_curve` (off the curve the cleared identity is false,
+`decide +kernel`, no axioms) and `mul2_needs_bound` (with `n = 0` the ladder returns the identity, which is
+not `[1] B`, since `B`'s `x ≠ 0`). Axioms: propext, Classical.choice, Quot.sound. Cost: Group ~7 s / 1.1 GB,
+Ladder ~1 s / 0.8 GB (leaves). Lesson: a goal `Nat.repeat (·.add P) (m+1) z = (… m …).add P` left to defeq
+(`show`, `exact`, structural recursion over two different points) makes the unifier unfold `Point.add`
+(heartbeat timeout); unfold `Nat.repeat` by its equations (`simp only [Nat.repeat]`) and use `induction`.
+**Critique of part 3.** (1) The group is the curve's points up to projective equality; nothing here says `B`
+has order `L`, so `[S]B` for `S ≥ L` and the reduction `k mod L` are the RFC's choices, not theorems about the
+subgroup. (2) `verify_iff` states the equation over the DECODED points; that `decodePoint` is RFC 8032 §5.1.3
+(the right square root, sign rule, the `y ≥ p` refusal) is proved only as far as Curve.lean goes (the point
+is on the curve), not as an inverse of `encodePoint`. (3) The spec `[m] P` is `m` deployed additions, so it is
+only as good as `add` — but `add` is pinned to the Edwards law by `add_affine`, so this is the law, not a twin.
+(4) SHA-512 is trusted as computed by `Sha512.hash` (vectors only).
+**Meta-critique.** I stopped at the RFC's equation and not at "accepts exactly the signatures `sign` makes",
+because that needs (2) and the group order of `B`, a computation of `[L]B` through the ladder in the kernel
+that sits on the CODEC-20 memory boundary; it is the next codec obligation, recorded here so `verify_iff` is
+not read as signature correctness.
+Status: parts 1–3 built. Open: `[L] B = 0` and decode ∘ encode (signature correctness).
 
 ## CODEC-24 · The broker frames are a second generated file, `emit-broker` (HOSTING-3's ask; CODEC-3, 2026-10-17)
 **Decision.** `Emit/Broker.lean` prints `launcher/src/broker_generated.rs` by `Rust.taggedFile` from
