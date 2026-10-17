@@ -149,20 +149,23 @@ inductive CloseReason
   /-- the client ended its stream at a frame boundary; named to the CHILD in its hang-up (there is
   no peer left to tell) -/
   | peerLeft
+  /-- the connecting peer's credentials (uid, gid) are not the ones the supervisor was started
+  for (`nd-supervise --peer`, HOSTING-20): closed before any frame is read -/
+  | peerRefused
   deriving DecidableEq, Repr
 
 namespace CloseReason
 
 def all : List CloseReason :=
   [idle, frameStalled, frameRefused, replyBacklog, replyWriteFailed, replyTimeout, full, ended, unreachable,
-   peerLeft]
+   peerLeft, peerRefused]
 
 /-- The name on the wire (`CloseReason.name_injective`). -/
 def name : CloseReason → String
   | idle => "idle" | frameStalled => "frameStalled" | frameRefused => "frameRefused"
   | replyBacklog => "replyBacklog" | replyWriteFailed => "replyWriteFailed"
   | replyTimeout => "replyTimeout" | full => "full" | ended => "ended" | unreachable => "unreachable"
-  | peerLeft => "peerLeft"
+  | peerLeft => "peerLeft" | peerRefused => "peerRefused"
 
 /-- The reason a hang-up's payload names (its name in UTF-8), if any. -/
 def ofBytes? (b : ByteArray) : Option CloseReason := all.find? (·.name.toUTF8 == b)
@@ -285,22 +288,25 @@ inductive CustodyRefusal
   /-- an observer custody (a follower's observe-only key, HOSTING-17 §7) signs only read envelope
   messages: a sign of anything else, a precommit or a signNext is refused -/
   | envelopeOnly
+  /-- custody opened by `nd --stdio` (a hosted resident) refuses `precommit` and `signNext`: a
+  resident does not rotate its key (PROTOCOL-40) -/
+  | noRotation
   deriving DecidableEq, Repr
 
 namespace CustodyRefusal
 
 def all : List CustodyRefusal :=
-  [fileRefused, .exists, shape, holdingAbsent, noPending, rotationInFlight, mismatch, io, envelopeOnly]
+  [fileRefused, .exists, shape, holdingAbsent, noPending, rotationInFlight, mismatch, io, envelopeOnly, noRotation]
 
 def code : CustodyRefusal → UInt8
   | fileRefused => 0 | .exists => 1 | shape => 2 | holdingAbsent => 3 | noPending => 4
-  | rotationInFlight => 5 | mismatch => 6 | io => 7 | envelopeOnly => 8
+  | rotationInFlight => 5 | mismatch => 6 | io => 7 | envelopeOnly => 8 | noRotation => 9
 
 def name : CustodyRefusal → String
   | fileRefused => "fileRefused" | .exists => "exists" | shape => "shape"
   | holdingAbsent => "holdingAbsent" | noPending => "noPending"
   | rotationInFlight => "rotationInFlight" | mismatch => "mismatch" | io => "io"
-  | envelopeOnly => "envelopeOnly"
+  | envelopeOnly => "envelopeOnly" | noRotation => "noRotation"
 
 def ofCode? (b : UInt8) : Option CustodyRefusal := all.find? (·.code == b)
 

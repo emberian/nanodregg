@@ -2,6 +2,7 @@ import Protocol.Table
 import Protocol.Attempt
 import Protocol.Exit
 import Protocol.Envelope
+import Protocol.Command.Stdio
 import Codec.Layout
 
 /-!
@@ -46,6 +47,26 @@ def packLines (indent : String) (width : Nat) (items : List String) : List Strin
     else if (close (it :: cur)).length ≤ width then (lines, it :: cur)
     else (close cur :: lines, [it])) ([], [])
   (if cur.isEmpty then lines else close cur :: lines).reverse
+
+/-- A `pub const NAME: &[&str]` holding `ws`, laid out as rustfmt lays it out. -/
+def rustStrsConst (name : String) (ws : List String) : String :=
+  let head := s!"pub const {name}: &[&str] = &["
+  let items := ws.map fun w => "\"" ++ w ++ "\""
+  let one := head ++ ", ".intercalate items ++ "];"
+  if one.length ≤ 100 then one
+  else String.intercalate "\n" ([head] ++ packLines "    " 100 items ++ ["];"])
+
+/-- `StdioRefusal` as a Rust enum: its code and its Lean name. -/
+def stdioRefusalEnum : String :=
+  String.intercalate "\n" (
+    ["/// Why `nd --stdio` refuses a request before follow sees it (Protocol.StdioRefusal).",
+     "#[derive(Debug, Clone, Copy, PartialEq, Eq)]", "pub enum StdioRefusal {"] ++
+    StdioRefusal.all.map (fun r => s!"    {ctorName r},") ++
+    ["}", "", "impl StdioRefusal {", "    pub fn code(self) -> u8 {", "        match self {"] ++
+    StdioRefusal.all.map (fun r => s!"            StdioRefusal::{ctorName r} => {r.code},") ++
+    ["        }", "    }", "", "    pub fn name(self) -> &'static str {", "        match self {"] ++
+    StdioRefusal.all.map (fun r => s!"            StdioRefusal::{ctorName r} => \"{r.name}\",") ++
+    ["        }", "    }", "}"])
 
 /-- A `pub const NAME: &[u8]` holding `b` as a byte list, laid out as rustfmt lays it out. -/
 def rustByteConst (name : String) (b : ByteArray) : String :=
@@ -573,6 +594,7 @@ def layoutModule : String := String.intercalate "\n\n" ([
   structFor "SignResult" Bounds.frameBytesMax signResultLayout,
   structFor "PrecommitResult" Bounds.frameBytesMax precommitResultLayout,
   structFor "CustodyRefused" Bounds.frameBytesMax custodyRefusalLayout (ty := fun _ => "super::CustodyRefusal"),
+  structFor "CommandReply" Bounds.frameBytesMax commandReplyLayout,
   stepEnum Bounds.frameBytesMax ++ "\n}"])
 
 /-- `CustodyRefusal` as a Rust enum: the code on the wire (`layout::CustodyRefused`'s one byte), the
@@ -659,6 +681,9 @@ def file : Except String String := do
      "/// The read envelope's signing domain (Protocol.domEnvelope): an observer custody signs only\n" ++
        "/// messages that begin with it (HOSTING-17 §7, CLIENT-22).\n" ++
        rustByteConst "ENVELOPE_DOMAIN" domEnvelope,
+     "/// The verbs a hosted resident may run through `nd --stdio` (Protocol.Command.stdioVerbs).\n" ++
+       rustStrsConst "STDIO_VERBS" Command.stdioWords,
+     stdioRefusalEnum,
      layoutModule,
      attemptModule] ++ "\n"
 

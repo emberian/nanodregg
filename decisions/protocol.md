@@ -987,3 +987,25 @@ than its docstring names. The `baseMoved` red caught it only because the expecta
 **Critique.** `whoami` is a constant that init signs, so its signature is the same bytes for every key holder, and anyone who sees one can replay it. It is used only to learn the key at init, never as authority, but no theorem says so.
 
 **Status.** BUILT (this commit). Rows ALL PASS 21; kernel-sim ALL PASS 64 seeds, arm sig-bare met; WASTE unchanged.
+
+## PROTOCOL-40 · the `nd --stdio` surface: a resident runs every World verb but init, rotate and adopt, refused `notOnSurface` otherwise; replies are the `done` step; `peerRefused`; custody `noRotation` (2026-10-17, PROTOCOL-7; HOSTING-20, CLIENT-3's ask, ROOT approval)
+**Decision.**
+- `Command.stdioVerbs` = the verbs whose `Verb.onStdio` arm is true: every verb but `init`, `rotate` and `adopt`. It is emitted as `STDIO_VERBS`, from `Verb.word`. nd checks a request's first word against it before follow sees anything, so an excluded verb, a flag and an empty argv are all refused by one name, `StdioRefusal.notOnSurface`. A request that does not decode as `commandLayout` is refused `undecodable`.
+- A reply is `commandReplyLayout`, which is `Step.layout .done` itself: a `CommandExit` code, stdout, stderr, each under `frameBytesMax`. A refusal is a reply too: exit `refused`, stderr `refused NAME`.
+- `CloseReason.peerRefused`: nd-supervise `--peer` closes a connection whose credentials are not the configured ones, before reading a frame.
+- `CustodyRefusal.noRotation` (code 9): custody opened by `nd --stdio` refuses `precommit` and `signNext`. This is a second fence behind the surface, because rotation is the operator's.
+- Theorems:
+  - `mem_stdioVerbs` and `word_mem_stdioWords`: on the surface iff not one of the three;
+  - `init_/rotate_/adopt_not_on_surface`;
+  - `StdioRefusal.name_injective` and `code_injective`, its codes UInt8 by type.
+- `sync` is on the surface. It only signs envelopes, and a resident catching its own follower up harms nothing.
+
+**Alternatives.**
+- A new reply status set for stdio. Rejected: the command's own end, the done step, already says everything, and a second shape would drift.
+- A filtered `Verb.all` ("every verb but three"). That was the first draft, and it was rejected: a NEW verb would land on the resident's surface by default, the widening ROOT asked to make impossible. `Verb.onStdio` is a total match with no wildcard, so a new verb does not compile until its author decides its arm.
+
+**Critique.** `noRotation` and `envelopeOnly` are separate custody modes, and nothing here proves a custody is in exactly one. That is CLIENT-22's record shape. The surface is checked on the first word only; any later argument a verb takes is follow's to parse and refuse by name.
+
+**Meta-critique.** The filtered list was the shortest code, and it took writing the critique to see that it defaults open. Then the critique proposed fixing it "in the next commit", which is the containment-first sequencing CLAUDE.md names. It is fixed in this one.
+
+**Status.** BUILT (this commit): the surface, its theorems (incl. `mem_stdioWords_iff`, for any string nd receives) and the emitted names. `noRotation` and `peerRefused` are names only here; CLIENT's custody and nd-supervise enforce them, with their plants. A developer can still write `true` for a new verb; the total match makes that a decision, never a default. Rows ALL PASS 21.

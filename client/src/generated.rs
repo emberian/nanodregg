@@ -46,6 +46,7 @@ pub enum CloseReason {
     Ended,
     Unreachable,
     PeerLeft,
+    PeerRefused,
 }
 
 impl CloseReason {
@@ -61,6 +62,7 @@ impl CloseReason {
             CloseReason::Ended => "ended",
             CloseReason::Unreachable => "unreachable",
             CloseReason::PeerLeft => "peerLeft",
+            CloseReason::PeerRefused => "peerRefused",
         }
     }
 }
@@ -80,6 +82,7 @@ pub enum CustodyRefusal {
     Mismatch,
     Io,
     EnvelopeOnly,
+    NoRotation,
 }
 
 impl CustodyRefusal {
@@ -94,6 +97,7 @@ impl CustodyRefusal {
             CustodyRefusal::Mismatch => 6,
             CustodyRefusal::Io => 7,
             CustodyRefusal::EnvelopeOnly => 8,
+            CustodyRefusal::NoRotation => 9,
         }
     }
 
@@ -108,6 +112,7 @@ impl CustodyRefusal {
             6 => Some(CustodyRefusal::Mismatch),
             7 => Some(CustodyRefusal::Io),
             8 => Some(CustodyRefusal::EnvelopeOnly),
+            9 => Some(CustodyRefusal::NoRotation),
             _ => None,
         }
     }
@@ -123,6 +128,7 @@ impl CustodyRefusal {
             CustodyRefusal::Mismatch => "mismatch",
             CustodyRefusal::Io => "io",
             CustodyRefusal::EnvelopeOnly => "envelopeOnly",
+            CustodyRefusal::NoRotation => "noRotation",
         }
     }
 }
@@ -157,6 +163,35 @@ pub const ENVELOPE_DOMAIN: &[u8] = &[
     110, 97, 110, 111, 100, 114, 101, 103, 103, 47, 112, 114, 111, 116, 111, 99, 111, 108, 47, 114,
     101, 97, 100, 45, 101, 110, 118, 101, 108, 111, 112, 101, 47, 118, 51,
 ];
+
+/// The verbs a hosted resident may run through `nd --stdio` (Protocol.Command.stdioVerbs).
+pub const STDIO_VERBS: &[&str] = &[
+    "enroll", "install", "create", "write", "law", "invoke", "grant", "revoke", "read", "sync",
+    "issue", "account", "transfer", "credit",
+];
+
+/// Why `nd --stdio` refuses a request before follow sees it (Protocol.StdioRefusal).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StdioRefusal {
+    NotOnSurface,
+    Undecodable,
+}
+
+impl StdioRefusal {
+    pub fn code(self) -> u8 {
+        match self {
+            StdioRefusal::NotOnSurface => 0,
+            StdioRefusal::Undecodable => 1,
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            StdioRefusal::NotOnSurface => "notOnSurface",
+            StdioRefusal::Undecodable => "undecodable",
+        }
+    }
+}
 
 /// The follow socket's payloads (Protocol.Table layouts; Lean codec: Protocol.Frames).
 pub mod layout {
@@ -445,6 +480,41 @@ pub mod layout {
             let mut out = Vec::new();
             let CustodyRefused { refusal } = self;
             out.push(refusal.code());
+            Ok(out)
+        }
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct CommandReply {
+        pub exit: u8,
+        pub stdout: Vec<u8>,
+        pub stderr: Vec<u8>,
+    }
+
+    impl CommandReply {
+        pub fn decode(b: &[u8]) -> Result<Self, Refusal> {
+            let mut c = Cursor { b, i: 0 };
+            let exit = c.byte()?;
+            let stdout = c.bytes(262144)?;
+            let stderr = c.bytes(262144)?;
+            c.end()?;
+            Ok(CommandReply {
+                exit,
+                stdout,
+                stderr,
+            })
+        }
+
+        pub fn encode(&self) -> Result<Vec<u8>, Refusal> {
+            let mut out = Vec::new();
+            let CommandReply {
+                exit,
+                stdout,
+                stderr,
+            } = self;
+            out.push(*exit);
+            put_bytes(&mut out, stdout, 262144)?;
+            put_bytes(&mut out, stderr, 262144)?;
             Ok(out)
         }
     }
