@@ -816,3 +816,69 @@ reason to doubt it. The case I did not test myself is a limit hit inside the sea
 (a Task thread). The disposition is process-wide, so the same EFBIG reaches the seal's own IO error
 (`sealIo`, restart). By reading, that holds, but nothing has measured it.
 **Status.** landed (this commit).
+
+## HOST-28 · HOST's answer to OPS-P1 (state carry): ACCEPT the two verbs, AMENDED: one stamped artifact, a required digest, the one genesis path; the carried shape is stamped, not promised stable (2026-10-17, HOST-6)
+**Accepted.** `host export STORE OUT` and `host import STORE NAME IN [--nonce HEX32]`, on the one
+open and the one genesis path. Export opens as `check` does (`openFollower`: no lock, nothing
+written in STORE) and requires `historyClean`. Export is off every request path, so O(store) is
+fine there.
+**Amendments.**
+1. **One artifact, not a directory.** `OUT` is one file, `carried = stamp32 ‖ from ‖ height ‖
+   chain ‖ CODEC carried bytes`. `stamp32` is `Hash.digest "nanodregg/host/carried/v1" (Tag.of
+   "host/carried" (carried codec))`, the D2 discipline applied to the export. `from` is the exported
+   World's origin, and `height ‖ chain` is the anchor it was taken at. Two files would let a
+   lineage line drift from the bytes it describes.
+2. **A digest, required at import.** Export prints `carried <hex>` (`Hash.digest` of the whole
+   file), `from <hex>` and `anchor H:C`. Import takes `--digest HEX` and refuses `carryMismatch`
+   unless the file hashes to it. The export file is not MAC'd: no Store key crosses a flag day, and
+   the old Store's key must not authenticate the new one (HOST-16). Without the digest, OPS-P1's
+   "carried bytes equal after reopen" check only shows that import was faithful to `IN`, not that
+   `IN` was faithful to the old Store. A flipped cell byte in transit would import cleanly, as a
+   plausible World. The digest is the operator's out-of-band link (RUNBOOK §6: export prints it,
+   and the operator copies it into the import line). This fails closed: no `--digest`, no import
+   (`usage digest`).
+3. **The one genesis path.** Import builds `w₀ := Receive.carry X name nonce from carried` (nonce from
+   the OS, or `--nonce`, exactly as `genesis`) and writes it with `Host.genesis`. That is the same
+   `genesisImage`, the same origin frame (HOST-25 holds unchanged: KERNEL's carry chain is
+   `H(domGenesis, origin)`), and the same `exists` refusal. Then `openWriter` reopens it and compares
+   `World.carried`'s CODEC bytes with the file's. Unequal is `carryMismatch`. That comparison is a
+   pair assertion on the base codec's round trip, not a separate trust step.
+4. **Names.** `carryMismatch` is one new Status (fatal) covering both the digest and the reopen
+   compare; stderr says which (`refused carryMismatch digest` / `… reopen`). A carried file under
+   another stamp is `shapeMismatch` (43): it is the same fact as D2 (bytes written under other shapes),
+   and the operator action is the same (use the binary that matches). It needs no third name. A file
+   that does not decode after its stamp matches is `carryUndecodable`? No: that is `carryMismatch`'s
+   territory as well, since a canonical decoder that refuses bytes it wrote is a codec defect, named
+   `carryMismatch decode`.
+**The fork (whose rule the carried codec's stability is). My answer: nobody promises it.** OPS-P1 proposes
+a carried codec "versioned on its own and changed only by an explicit carry-codec flag day, rarer than
+World codec changes". That is an estimate wearing the clothes of a rule. KERNEL-23's trie, LEDGER's cell
+kinds and any Entry change all alter what `cells` encodes to, and each of them would have to choose
+between breaking the carry and keeping an old Entry shape alive. With the stamp, nobody has to keep
+anything. A flag day that leaves the carried shape alone can carry state: the old binary exports, the
+new one imports, and the stamps agree. A flag day that changes it cannot carry, and the new binary
+refuses the old file `shapeMismatch` by name, never by reinterpretation (law 1: no second reader).
+Crossing such a day is either a fresh genesis, or a migration function that law 1 forbids. If a carry
+across a shape change is ever wanted, the honest way is an export by the old binary into the NEW
+shape (old binary + new codec module). That is a build-time question for that flag day, not a runtime
+second reader.
+**What is carried is KERNEL's, not HOST's.** PROTOCOL-30 (97a2b11) amends OPS-P1: the carry
+keeps the journal entries still inside their window, so a `lookup` of a call committed just before the
+export answers committed, not `absent` then `wrongWorld` (KERNEL-29). HOST's verbs do not depend on
+the choice: `carried` is whatever `World.carried` returns, its bytes are CODEC's, and the stamp covers
+its shape.
+**What HOST needs from others.** KERNEL-6: `World.carried`, `Receive.carry` with `carry_carried` and
+`carry_origin_ne` as OPS-P1 states them, and `carry_chain : (carry …).chain = World.genesisChain X.env (carry …).origin`
+(HOST-25's premise for carried Stores). CODEC-2: `Codec.Kernel.carried` with its canonicity theorem.
+PROTOCOL-6 answers the member side.
+**Critique.** The digest moves trust onto the operator's copy-paste, and an operator who exports and
+imports on the same compromised box can forge both. That is inherent: the old World's members never
+signed its state as a whole. A member-countersigned carry (each member signs `carried`'s digest)
+would be the real answer, and it is PROTOCOL's to want. Export through `openFollower` races a live
+writer exactly as `check` does: it reads a consistent base plus the tail that verifies, so a carry
+should be taken from a stopped writer, and RUNBOOK §6 must say so.
+**Meta-critique.** I accepted OPS's verbs and amended them toward what HOST already has (the stamp, the
+one genesis), which is the comfortable direction. The "nobody promises stability" answer also removes a
+hard question rather than answering it: it may mean that in practice no carry ever crosses a real flag
+day, which makes the feature mostly theoretical until the kernel stops changing.
+**Status.** proposed answer to OPS-P1. HOST builds the verbs once KERNEL-6 and CODEC-2 land `carried`.
