@@ -13,7 +13,7 @@ leads to the terminal `removed`; the kernel never retires a programmed object by
 (KERNEL-17: nothing is pruned), so a removed grain is a cell the controller treats as absent.
 
 One METHOD per event (index = `Event.index`, the `n` of KERNEL's `Right.invoke n`): an owner can
-grant an operator `invoke:0` (start) and nothing else.
+grant an operator `invoke:1` (start) and nothing else.
 -/
 
 namespace Nanodregg.Hosting
@@ -33,24 +33,25 @@ def label : Phase → String
 end Phase
 
 namespace Event
-/-- In method order: `start` is method 0, `stop` 1, `remove` 2. -/
-def all : List Event := [.start, .stop, .remove]
+/-- In method order (the package's methods sorted by label, `Std.pkgOf`): `remove` is method 0,
+`start` 1, `stop` 2. -/
+def all : List Event := [.remove, .start, .stop]
 
 def label : Event → String
   | .start => "start" | .stop => "stop" | .remove => "remove"
 
 /-- The method index KERNEL's `Body.invoke` and `Right.invoke` name. -/
 def index : Event → Nat
-  | .start => 0 | .stop => 1 | .remove => 2
+  | .remove => 0 | .start => 1 | .stop => 2
 end Event
 
 /-- THE lifecycle: (from, event, to). Nothing else is an edge. -/
 def edges : List (Phase × Event × Phase) :=
-  [(.installed, .start, .running),
-   (.installed, .remove, .removed),
+  [(.installed, .remove, .removed),
+   (.installed, .start, .running),
    (.running, .stop, .stopped),
-   (.stopped, .start, .running),
-   (.stopped, .remove, .removed)]
+   (.stopped, .remove, .removed),
+   (.stopped, .start, .running)]
 
 /-- The phase event `e` leads to from `p`, if `(p, e, _)` is an edge. -/
 def step (p : Phase) (e : Event) : Option Phase :=

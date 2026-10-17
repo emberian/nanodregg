@@ -155,8 +155,25 @@ charter forbids).
 built version (HOSTING-3) may land first and be rewritten within a day. ID-3's "exactly one
 Authority" has no constructor meaning "KERNEL's gate only" (asked of LANG-3). **META.** Deleting my own
 `last` and `owner` laws feels like progress because it is fewer lines; the test is that the plants
-survive the move: P1 stays mine, P2 becomes KERNEL's invoke_authorized plant. Status: waiting on
-LANG ID-1 + `machine`, KERNEL-25.
+survive the move: P1 stays mine, P2 becomes KERNEL's invoke_authorized plant.
+**Status (10-17): half built.** LANG landed ID-1 (fdb65c6) and Std `machine`/`stepTo`/`pkgOf`
+(2ebb99d): the package is now `Grain.lifecycle? : Except StdRefusal Package` (no default: a refused
+build is a FAIL by name in the sim, `lifecycle_built` proves it builds), state
+`{entry, kind, owner, phase}`, `last` deleted, methods sorted (remove 0, start 1, stop 2;
+`index_is_methodIndex`), law `phase` = `Std.machine` (reasons "phase does not start at installed",
+"no edge", "a machine changes only by its methods"). The `owner` law STAYS, rebuilt on `Std.lawOf`
+with occasions, until KERNEL-25 lands; then it and the `owner` field go. Theorems moved to the
+occasion-aware body: `phase_birth`, `phase_invoke`, `phase_frozen`, `method_writes`,
+`method_iff_step`, `owner_born`, `owner_invoke`, `lifecycle_methods`, `laws_in_force`,
+`lifecycle_checks`, `lifecycle_text_reads`, `method_at_index`; and `Proofs.Deployed.invoke_slots`
+(native_decide, allow row): on the DEPLOYED path — `Lang.program`'s `run` from slots, then its
+`judge` — for both kinds × every phase × event, admitted iff `step` is some, phase slot = `target`,
+entry/kind/owner slots unchanged. Vacuity read (10-17): `method_writes` tested only `kind = app` and
+empty entry/owner (a constant-writing method passed) — now both kinds, a real entry and owner, all
+four fields; the owner theorems accepted only principal `a` — now both strings in both roles; the
+link from these Data-level evaluations to the kernel's slot path was missing — `invoke_slots`.
+Plants (run): edges reversed in `edgeLabels` ⇒ `phase_invoke`, `method_writes`, `method_iff_step`
+red, and `invoke_slots` red. world/grain/Lifecycle re-emitted (9.0 KB).
 
 ## HOSTING-6 The plan, as built (ASSEMBLY HOSTING-5) (2026-10-17)
 

@@ -1,3 +1,5 @@
 # decl	axiom	reason
 Nanodregg.Hosting.Proofs.lifecycle_text_reads	Nanodregg.Hosting.Proofs.lifecycle_text_reads._native.native_decide.ax_1_1	the shipped grain text reads to the package bytes; the kernel did not finish the printer alone in 200 s (11 KB of String appends, measured 10-17, decisions/hosting.md HOSTING-0)
 Nanodregg.Hosting.Proofs.lifecycle_text_reads._native.native_decide.ax_1_1	Nanodregg.Hosting.Proofs.lifecycle_text_reads._native.native_decide.ax_1_1	the auxiliary axiom native_decide declares for lifecycle_text_reads (the census visits it as a declaration of Hosting.Proofs.Package)
+Nanodregg.Hosting.Proofs.invoke_slots	Nanodregg.Hosting.Proofs.invoke_slots._native.native_decide.ax_1_1	the grain package on the deployed path (Lang.program run then judge on slots, both kinds x every phase x event); the slot codecs do not reduce in the kernel (decisions/hosting.md HOSTING-5)
+Nanodregg.Hosting.Proofs.invoke_slots._native.native_decide.ax_1_1	Nanodregg.Hosting.Proofs.invoke_slots._native.native_decide.ax_1_1	the auxiliary axiom native_decide declares for invoke_slots

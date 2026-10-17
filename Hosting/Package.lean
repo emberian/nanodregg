@@ -1,28 +1,25 @@
 /-
-# Hosting.Package — the grain package, generated from `edges`
+# Hosting.Package — the grain package, built from `edges` with LANG's Std generators
 
-The lifecycle as a LANG package (decisions/hosting.md HOSTING-3). State
-`{entry : bytes, kind : Kind, last : Last, owner : bytes, phase : Phase}`; `Kind`, `Last` and `Phase`
-are sums of empty records, so a decoded state can only hold one of their values: the type, not a
-code range, is what makes the theorems over `Phase.all` exhaustive. `entry` (the package-relative
+The lifecycle as a LANG package (decisions/hosting.md HOSTING-3, HOSTING-5). State
+`{entry : bytes, kind : Kind, owner : bytes, phase : Phase}`; `Kind` and `Phase` are sums of empty
+records, so a decoded state holds one of their values by its TYPE. `entry` (the package-relative
 program the controller launches) and `kind` (`app | resident`, HOSTING-2) are set at birth and
 carried unchanged by every method; `Hosting.Plan` refuses an entry that is not a clean component.
 
-* methods `start`, `stop`, `remove` (indices `Event.index`): each records itself in `last` and
-  moves `phase` to `target phase e`, which is the phase unchanged when `(phase, e)` is no edge;
-* law `phase`: `checkTerm old.phase new.last new.phase` is `ok` exactly when `admits` (an edge,
-  or the born pair `installed → installed` when `last = born`);
-* law `owner`: at birth (`last = born`) the state's owner is the creator (`create` judges with
-  `principal` = the signer = KERNEL's owner, slot 1); after it, the owner never changes and the
-  call's PRINCIPAL is the owner. KERNEL's `invoke` derives `principal` through the grant chain but
-  never compares it to the owner (`Receive.invoke`), so without this law any member could stop any
-  grain; with it, a member acting through the owner's `invoke:n` grant may run method `n` only.
-
-A law sees state slots, never KERNEL's owner slot, so the owner is a state field the `owner` law
-pins to the creator at birth and keeps constant after.
+* law `phase` = `Std.machine` over `edges`: at birth the phase is `installed`; an invoke of method
+  `m` moves `old.phase → new.phase` only along an edge `(old, m, new)`; writes and law changes are
+  refused (a programmed object changes only by its methods);
+* methods `remove`, `start`, `stop` = `Std.stepTo`: each sets `phase` to its edge's target from the
+  current phase, or leaves it (and the law refuses). Their indices are `pkgOf`'s sorted order:
+  `Event.index`, pinned to `Std.methodIndex` by `Proofs.Package.index_is_methodIndex`;
+* law `owner` (INTERIM, until KERNEL-25 makes `invoke` owner-gated in the kernel): at birth the
+  state's owner is the creator (principal); after it the principal is the owner and the owner never
+  changes. Without it, today, any member can stop any grain (HOSTING-4). It is deleted, with the
+  `owner` field, the day KERNEL-25 lands (HOSTING-5).
 -/
 import Hosting.Lifecycle
-import Lang.Package
+import Lang.Std
 import Lang.Wire.Data
 import Kernel.Receive.Call
 
@@ -33,16 +30,9 @@ open Nanodregg.Hosting
 
 def unit : Ty := .record []
 
-def phaseTy : Ty := .sum (Phase.all.map fun p => (p.label, unit))
+def phaseLabels : List Label := Phase.all.map Phase.label
 
-/-- What `last` holds: `none` is `born`. In ascending label order (a sum's arms follow it). -/
-def lastAll : List (Option Event) := [none, some .remove, some .start, some .stop]
-
-def lastLabel : Option Event → String
-  | none => "born"
-  | some e => e.label
-
-def lastTy : Ty := .sum (lastAll.map fun o => (lastLabel o, unit))
+def phaseTy : Ty := Std.stateTy phaseLabels
 
 inductive Kind | app | resident
   deriving DecidableEq, Repr
@@ -55,93 +45,48 @@ def Kind.label : Kind → String
 def kindTy : Ty := .sum (Kind.all.map fun k => (k.label, unit))
 
 def stateTy : Ty :=
-  .record [("entry", .bytes), ("kind", kindTy), ("last", lastTy), ("owner", .bytes), ("phase", phaseTy)]
+  .record [("entry", .bytes), ("kind", kindTy), ("owner", .bytes), ("phase", phaseTy)]
 
-def phaseV (p : Phase) : Term := .inj phaseTy p.label (.record [])
-def lastV (o : Option Event) : Term := .inj lastTy (lastLabel o) (.record [])
-def okT : Term := .inj verdictTy "ok" (.record [])
-def refusedT (why : String) : Term := .inj verdictTy "refused" (.bytes why.toUTF8)
+def methodLabels : List Label := Event.all.map Event.label
 
-/-- The verdict for `old.phase = p`, `new.last = o`, `new.phase` at `var 2` (under the two case
-binders of `checkTerm`). -/
-def leaf (p : Phase) (o : Option Event) : Term :=
-  if Phase.all.any (admits p o) then
-    .case (.var 2) (Phase.all.map fun q =>
-      (q.label, if admits p o q then okT
-        else refusedT s!"{p.label} {lastLabel o} {q.label} is not an edge"))
-  else refusedT s!"no {lastLabel o} from {p.label}"
+/-- The edge list as Std takes it: (from, method label, to). -/
+def edgeLabels : List (Label × Label × Label) := edges.map fun (p, e, q) => (p.label, e.label, q.label)
 
-/-- `λ a e b. verdict`, closed: `ok` exactly when `admits a e b`. -/
-def checkTerm : Term :=
-  .lam phaseTy (.lam lastTy (.lam phaseTy
-    (.case (.var 2) (Phase.all.map fun p =>
-      (p.label, .case (.var 2) (lastAll.map fun o => (lastLabel o, leaf p o)))))))
-
-/-- `λ p. target p e`, closed. -/
-def targetTerm (e : Event) : Term :=
-  .lam phaseTy (.case (.var 0) (Phase.all.map fun p => (p.label, phaseV (target p e))))
-
-def app3 (f a b c : Term) : Term := .app (.app (.app f a) b) c
-
-/-- Method `e`: `λ s _ r. {s with last = e, phase = target s.phase e}`. -/
-def methodTerm (e : Event) : Term :=
-  .lam stateTy (.lam unit (.lam reqTy (.record
-    [("entry", .get (.var 2) "entry"), ("kind", .get (.var 2) "kind"),
-     ("last", lastV (some e)), ("owner", .get (.var 2) "owner"),
-     ("phase", .app (targetTerm e) (.get (.var 2) "phase"))])))
-
-/-- Law `phase`: `λ old new r. checkTerm old.phase new.last new.phase`. -/
-def phaseLaw : Term :=
-  .lam stateTy (.lam stateTy (.lam reqTy
-    (app3 checkTerm (.get (.var 2) "phase") (.get (.var 1) "last") (.get (.var 1) "phase"))))
-
-/-- Law `owner`. Under the case binder: var 1 = r, var 2 = new, var 3 = old. -/
+/-- Law `owner` (interim, HOSTING-5): see the module doc. -/
 def ownerLaw : Term :=
-  let born : Term :=
-    .ite (.prim .beq (.get (.var 2) "owner") (.get (.var 1) "principal")) okT
-      (refusedT "not the creator")
-  let live : Term :=
-    .ite (.prim .beq (.get (.var 3) "owner") (.get (.var 2) "owner"))
-      (.ite (.prim .beq (.get (.var 1) "principal") (.get (.var 3) "owner")) okT
-        (refusedT "not the owner"))
-      (refusedT "changed")
-  .lam stateTy (.lam stateTy (.lam reqTy
-    (.case (.get (.var 1) "last") (lastAll.map fun o =>
-      (lastLabel o, match o with | none => born | some _ => live)))))
+  let isOwner (a : Std.At) := Term.prim .beq (a.reqF "principal") (a.oldF "owner")
+  let kept (a : Std.At) := Term.prim .beq (a.newF "owner") (a.oldF "owner")
+  Std.lawOf stateTy
+    (fun a => Std.allOf [(.prim .beq (a.newF "owner") (a.reqF "principal"), "not the creator")])
+    (fun a => Std.allOf [(isOwner a, "not the owner")])
+    (fun a => Std.allOf [(isOwner a, "not the owner"), (kept a, "changed")])
 
-/-- The laws, in the order the judge runs them. -/
-def laws : List Label := ["phase", "owner"]
-
-def iface : Ty :=
-  .record [("owner", lawTy stateTy), ("phase", lawTy stateTy), ("remove", methodTy stateTy unit),
-    ("start", methodTy stateTy unit), ("stop", methodTy stateTy unit)]
-
-def lifecycle : Package :=
-  { imports := [], state := stateTy, iface,
-    body := .record [("owner", ownerLaw), ("phase", phaseLaw), ("remove", methodTerm .remove),
-      ("start", methodTerm .start), ("stop", methodTerm .stop)],
-    methods := Event.all.map Event.label, laws }
+/-- The package, or LANG's refusal of the generator's inputs (`Proofs.Package.lifecycle_built`:
+it is built). -/
+def lifecycle? : Except Std.StdRefusal Package := do
+  let phase ← Std.machine stateTy "phase" phaseLabels initial.label methodLabels edgeLabels
+  let ms ← Event.all.mapM fun e => do
+    pure (e.label, unit, ← Std.stepTo stateTy "phase" phaseLabels methodLabels e.label edgeLabels)
+  pure (Std.pkgOf stateTy [("owner", ownerLaw), ("phase", phase)] ms)
 
 /-! ## Slots: what `create` seeds and what the controller reads -/
 
 /-- The state's fields at KERNEL's state slots, in `stateTy`'s order. -/
 def slotEntry : Nat := Kernel.Receive.stateBase
 def slotKind : Nat := Kernel.Receive.stateBase + 1
-def slotLast : Nat := Kernel.Receive.stateBase + 2
-def slotOwnerField : Nat := Kernel.Receive.stateBase + 3
-def slotPhase : Nat := Kernel.Receive.stateBase + 4
+def slotOwnerField : Nat := Kernel.Receive.stateBase + 2
+def slotPhase : Nat := Kernel.Receive.stateBase + 3
 
 def unitD : Data := .record []
 
-/-- The seed of a grain of `kind` running `entry`, owned by `owner`: born, installed. `none` when a
-byte string is past LANG's bound (its encoder refuses it). -/
+/-- The seed of a grain of `kind` running `entry`, owned by `owner`, installed. `none` when a byte
+string is past LANG's bound (its encoder refuses it). -/
 def seed (kind : Kind) (entry owner : ByteArray) : Option Kernel.Slots := do
   let en ← Wire.encodeData .bytes (.bytes entry)
   let k ← Wire.encodeData kindTy (.inj kind.label unitD)
-  let l ← Wire.encodeData lastTy (.inj "born" unitD)
   let o ← Wire.encodeData .bytes (.bytes owner)
   let p ← Wire.encodeData phaseTy (.inj initial.label unitD)
-  pure [(slotEntry, en), (slotKind, k), (slotLast, l), (slotOwnerField, o), (slotPhase, p)]
+  pure [(slotEntry, en), (slotKind, k), (slotOwnerField, o), (slotPhase, p)]
 
 /-- A method's argument: the empty record's bytes. -/
 def noArgs : Option ByteArray := Wire.encodeData unit unitD

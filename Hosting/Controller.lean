@@ -56,7 +56,7 @@ def packageCell (b : ByteArray) : Cell :=
 
 /-- The lifecycle package's id under `E`: what a grain's package slot must hold. -/
 def lifecycleId {D : Type} (E : Env D) : Option D :=
-  (Lang.Wire.encodePackage Grain.lifecycle).map fun b => romIdOf E (packageCell b)
+  (Grain.lifecycle?.toOption.bind Lang.Wire.encodePackage).map fun b => romIdOf E (packageCell b)
 
 def isGrain (pkgId : ByteArray) (c : Cell) : Bool :=
   c.kind == Receive.kindObject && c.slots.get Receive.slotPackage == some pkgId

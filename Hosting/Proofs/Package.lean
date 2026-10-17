@@ -1,15 +1,17 @@
 /-
 # Hosting.Proofs.Package — the generated package computes the lifecycle
 
-Each theorem is the kernel evaluating LANG's machine (`Lang.eval`) on a field of the package BODY,
-applied the way `Lang.Program` applies it (`apply3`, the values `Data.toVal` makes of decoded state),
-over every phase and every `last` tag. Because `phase` and `last` are sums of empty records, a
-decoded state holds one of exactly these values, so the case split is exhaustive by the type.
+Each evaluation theorem is the kernel running LANG's machine (`Lang.eval`) on a field of the package
+BODY, applied as `Lang.Program` applies it (`apply3` over the `Data.toVal` values of decoded state
+and of the request), over every phase, event and act. `phase` is a sum of empty records, so a
+decoded state holds one of exactly these values: the case split is exhaustive by the type.
+
+LANG's `Proofs.Std` proves `machineLaw`'s spec in general (`machine_birth`, `machine_invoke`,
+`machine_write_refused`, `machine_relaw_refused`); these pin THIS package: the edges Hosting passes,
+resolved to the method indices `Event.index` names, decide `step`.
 
 The `owner` law reads byte strings, which the kernel cannot range over: it is pinned on two distinct
-strings here, and by `hosting-sim`'s run through KERNEL's receivers and the plant that deletes it.
-(The vacuity read of 10-17 moved these from the closed `checkTerm`/`targetTerm` to the body: a
-`phaseLaw` with `old` and `new` swapped type-checks and passed every closed-term theorem.)
+strings, and by `hosting-sim`'s run through KERNEL's receivers and the plant that deletes it.
 -/
 import Hosting.Package
 import Hosting.Text
@@ -23,11 +25,19 @@ open Nanodregg.Lang
 open Nanodregg.Hosting
 open Nanodregg.Hosting.Grain
 
-/-- The fuel every evaluation below is given; each needs far less. -/
-private def fuel : Nat := 400
+/-- LANG's generators accept the package's inputs. -/
+theorem lifecycle_built : (Grain.lifecycle? matches .ok _) = true := by decide +kernel
 
-/-- The outcome is the verdict `ok` (`true`) or `refused` with a reason (`false`), and nothing else:
-a fault or a value of another shape is neither. -/
+/-- The package's body (the theorems below are about the built package: `lifecycle_built`). -/
+private def body : Term :=
+  match Grain.lifecycle? with
+  | .ok p => p.body
+  | .error _ => .nat 0
+
+/-- The fuel every evaluation below is given; each needs far less. -/
+private def fuel : Nat := 1000
+
+/-- The outcome is the verdict `ok` (`true`) or `refused` with a reason (`false`), and nothing else. -/
 private def verdictIs (b : Bool) : Outcome → Bool
   | .value (.inj "ok" (.record [])) _ => b
   | .value (.inj "refused" (.bytes _)) _ => !b
@@ -37,105 +47,126 @@ private def injIs (ℓ : String) : Outcome → Bool
   | .value (.inj m (.record [])) _ => m == ℓ
   | _ => false
 
-theorem lastAll_complete (o : Option Event) : o ∈ lastAll := by
-  rcases o with _ | e
-  · decide
-  · cases e <;> decide
+/-- A state value: kind `k`, entry `entry`, owner `owner`, phase `p`. -/
+private def stD (p : Phase) (owner : ByteArray := .empty) (k : Kind := .app)
+    (entry : ByteArray := .empty) : Data :=
+  .record [("entry", .bytes entry), ("kind", .inj k.label unitD), ("owner", .bytes owner),
+    ("phase", .inj p.label unitD)]
 
-/-! The runtime's own shape: `Lang.Program.judgeOne`/`runMethod` apply a field of the package BODY to
-`[req, new, old]` (or `[req, args, state]`) as `Data.toVal` values (`apply3`). So do these. -/
+private def bytesIs (b : ByteArray) : Outcome → Bool
+  | .value (.bytes c) _ => c == b
+  | _ => false
 
-/-- A state value: entry, kind and owner fixed (the phase law and the methods' phase and `last`
-never read them), tag `o`, phase `p`. -/
-private def stD (o : Option Event) (p : Phase) (owner : ByteArray := .empty) : Data :=
-  .record [("entry", .bytes .empty), ("kind", .inj Kind.app.label unitD),
-    ("last", .inj (lastLabel o) unitD), ("owner", .bytes owner), ("phase", .inj p.label unitD)]
+/-- The four acts a law is told about (LANG ID-1). -/
+private def birthD : Data := .inj "birth" unitD
+private def invokeD (m : Nat) : Data := .inj "invoke" (.nat m)
+private def writeD : Data := .inj "write" unitD
+private def relawD : Data := .inj "relaw" (.bytes .empty)
 
-private def rqD (principal : ByteArray := .empty) : Data :=
-  .record [("agent", .bytes .empty), ("notBefore", .nat 0), ("principal", .bytes principal),
-    ("validUntil", .nat 0)]
+private def rqD (occasion : Data) (principal : ByteArray := .empty) : Data :=
+  .record [("agent", .bytes .empty), ("notBefore", .nat 0), ("occasion", occasion),
+    ("principal", .bytes principal), ("validUntil", .nat 0)]
 
 /-- Field `ℓ` of the package body applied to the three bound values. -/
 private def bodyAt (ℓ : Label) : Term :=
-  .app (.app (.app (.get lifecycle.body ℓ) (.var 2)) (.var 1)) (.var 0)
+  .app (.app (.app (.get body ℓ) (.var 2)) (.var 1)) (.var 0)
 
-/-- The `phase` law, as the judge runs it, decides `admits` on `old.phase`, `new.last`, `new.phase`,
-whatever `old.last` is, and never faults. -/
-theorem phase_law_decides :
-    ∀ p ∈ Phase.all, ∀ o' ∈ lastAll, ∀ o ∈ lastAll, ∀ q ∈ Phase.all,
-      verdictIs (admits p o q)
-        (eval [] fuel (bodyAt "phase") [(rqD).toVal, (stD o q).toVal, (stD o' p).toVal]) = true := by
+private def lawOn (ℓ : Label) (rq new old : Data) : Outcome :=
+  eval [] fuel (bodyAt ℓ) [rq.toVal, new.toVal, old.toVal]
+
+private def bE : ByteArray := "app.bin".toUTF8
+private def bA : ByteArray := "a".toUTF8
+private def bB : ByteArray := "b".toUTF8
+
+/-- Field `f` of the state method `e` writes from a state of kind `k`, phase `p`, entry `bE`,
+owner `bA`. -/
+private def methodField (e : Event) (k : Kind) (p : Phase) (f : Label) : Outcome :=
+  eval [] fuel (.get (bodyAt e.label) f)
+    [(rqD (invokeD e.index) bA).toVal, unitD.toVal, (stD p bA k bE).toVal]
+
+/-- The method labels, in the package's order, are `Event.all`'s: method `n` is `Event.index`. -/
+theorem lifecycle_methods :
+    (Grain.lifecycle?.toOption.map (·.methods)) = some (Event.all.map Event.label) := by decide +kernel
+
+/-- KERNEL's `invoke obj m` runs `p.methods[m]?`: method `Event.index e` is `e`. -/
+theorem method_at_index :
+    ∀ e ∈ Event.all, (Grain.lifecycle?.toOption.map (·.methods[e.index]?)) = some (some e.label) := by
   decide +kernel
 
-theorem phase_law_iff (p : Phase) (o' o : Option Event) (q : Phase) :
-    verdictIs (admits p o q)
-      (eval [] fuel (bodyAt "phase") [(rqD).toVal, (stD o q).toVal, (stD o' p).toVal]) = true :=
-  phase_law_decides p (Phase.mem_all p) o' (lastAll_complete o') o (lastAll_complete o) q
-    (Phase.mem_all q)
+theorem index_is_methodIndex :
+    ∀ e ∈ Event.all, Std.methodIndex methodLabels e.label = some e.index := by decide
 
-/-- Method `e`, as `runMethod` runs it, writes `phase := target p e` and `last := e`. -/
+theorem laws_in_force : (Grain.lifecycle?.toOption.map (·.laws)) = some ["owner", "phase"] := by
+  decide +kernel
+
+/-- The package passes LANG's install check with no imports. -/
+theorem lifecycle_checks :
+    (Grain.lifecycle?.toOption.map fun p => p.checkWith [] matches .ok ()) = some true := by
+  decide +kernel
+
+/-- Birth: the `phase` law admits exactly a seed in the initial phase. -/
+theorem phase_birth :
+    ∀ q ∈ Phase.all, verdictIs (q == initial) (lawOn "phase" (rqD birthD) (stD q) (stD q)) = true := by
+  decide +kernel
+
+/-- An invoke of method `e`: the `phase` law admits `p → q` exactly when `step p e = some q`. -/
+theorem phase_invoke :
+    ∀ p ∈ Phase.all, ∀ e ∈ Event.all, ∀ q ∈ Phase.all,
+      verdictIs (step p e == some q) (lawOn "phase" (rqD (invokeD e.index)) (stD q) (stD p)) = true := by
+  decide +kernel
+
+/-- A write or a law change is refused, whatever the phases. -/
+theorem phase_frozen :
+    ∀ p ∈ Phase.all, ∀ q ∈ Phase.all,
+      (verdictIs false (lawOn "phase" (rqD writeD) (stD q) (stD p)) &&
+       verdictIs false (lawOn "phase" (rqD relawD) (stD q) (stD p))) = true := by
+  decide +kernel
+
+/-- Method `e`, as `runMethod` runs it, writes `phase := target p e` and keeps `kind`, `entry` and
+`owner`, for both kinds (so a method writing a constant is caught). -/
 theorem method_writes :
-    ∀ p ∈ Phase.all, ∀ o ∈ lastAll, ∀ e ∈ Event.all,
-      (injIs (target p e).label
-          (eval [] fuel (.get (bodyAt e.label) "phase") [(rqD).toVal, unitD.toVal, (stD o p).toVal]) &&
-       injIs (lastLabel (some e))
-          (eval [] fuel (.get (bodyAt e.label) "last") [(rqD).toVal, unitD.toVal, (stD o p).toVal]) &&
-       injIs Kind.app.label
-          (eval [] fuel (.get (bodyAt e.label) "kind") [(rqD).toVal, unitD.toVal, (stD o p).toVal]))
-        = true := by
+    ∀ k ∈ Kind.all, ∀ p ∈ Phase.all, ∀ e ∈ Event.all,
+      (injIs (target p e).label (methodField e k p "phase") &&
+       injIs k.label (methodField e k p "kind") &&
+       bytesIs bE (methodField e k p "entry") &&
+       bytesIs bA (methodField e k p "owner")) = true := by
   decide +kernel
 
 /-- Method and law together: the state method `e` writes from phase `p` is admitted by the `phase`
 law exactly when `(p, e)` is an edge. -/
 theorem method_iff_step :
-    ∀ p ∈ Phase.all, ∀ o ∈ lastAll, ∀ e ∈ Event.all,
+    ∀ p ∈ Phase.all, ∀ e ∈ Event.all,
       verdictIs (step p e).isSome
-        (eval [] fuel (bodyAt "phase")
-          [(rqD).toVal, (stD (some e) (target p e)).toVal, (stD o p).toVal]) = true := by
+        (lawOn "phase" (rqD (invokeD e.index)) (stD (target p e)) (stD p)) = true := by
   decide +kernel
 
-/-! The `owner` law on concrete byte strings `a ≠ b` (the kernel cannot range over all of them; the
-sim's P2 plant deletes the law and must see a stranger admitted). -/
+/-! The interim `owner` law on two distinct byte strings, each in both roles. -/
 
-private def bA : ByteArray := "a".toUTF8
-private def bB : ByteArray := "b".toUTF8
-
-private def ownerVerdict (o : Option Event) (oldOwner newOwner principal : ByteArray) : Outcome :=
-  eval [] fuel (bodyAt "owner")
-    [(rqD principal).toVal, (stD o .running newOwner).toVal, (stD o .running oldOwner).toVal]
-
-/-- Born: admitted iff the state's owner is the principal (the creator). -/
+/-- Birth: admitted iff the state's owner is the principal (the creator). -/
 theorem owner_born :
-    (verdictIs true (ownerVerdict none bA bA bA) && verdictIs false (ownerVerdict none bA bA bB))
-      = true := by
+    (verdictIs true (lawOn "owner" (rqD birthD bA) (stD .installed bA) (stD .installed bA)) &&
+     verdictIs true (lawOn "owner" (rqD birthD bB) (stD .installed bB) (stD .installed bB)) &&
+     verdictIs false (lawOn "owner" (rqD birthD bB) (stD .installed bA) (stD .installed bA))) = true := by
   decide +kernel
 
-/-- After birth, for every event tag: the owner may act; another principal may not; the owner may
-not change. -/
-theorem owner_live :
+/-- An invoke: the owner may act; another principal may not; the owner may not change. -/
+theorem owner_invoke :
     ∀ e ∈ Event.all,
-      (verdictIs true (ownerVerdict (some e) bA bA bA) &&
-       verdictIs false (ownerVerdict (some e) bA bA bB) &&
-       verdictIs false (ownerVerdict (some e) bA bB bA)) = true := by
+      (verdictIs true (lawOn "owner" (rqD (invokeD e.index) bA) (stD .running bA) (stD .installed bA)) &&
+       verdictIs true (lawOn "owner" (rqD (invokeD e.index) bB) (stD .running bB) (stD .installed bB)) &&
+       verdictIs false (lawOn "owner" (rqD (invokeD e.index) bB) (stD .running bA) (stD .installed bA)) &&
+       verdictIs false (lawOn "owner" (rqD (invokeD e.index) bA) (stD .running bB) (stD .installed bA)))
+        = true := by
   decide +kernel
-
-/-- Both laws are in force (the judge runs exactly `lifecycle.laws`). -/
-theorem laws_in_force : lifecycle.laws = ["phase", "owner"] := rfl
-
-/-- The package passes LANG's install check with no imports. -/
-theorem lifecycle_checks : (lifecycle.checkWith [] matches .ok ()) = true := by decide +kernel
-
-/-- Method `n` is the event of index `n`. -/
-theorem lifecycle_method_index (e : Event) : lifecycle.methods[e.index]? = some e.label := by
-  cases e <;> rfl
 
 /-- The text a member installs reads, by `Lang.Read`, to the package's own bytes. The kernel
-cannot reach it: evaluating the printer alone (11 KB of `String` appends) did not finish in 200 s
-(measured 10-17), so this is the compiler's evaluation, recorded in gates/axioms-allow.tsv. -/
+cannot reach it: evaluating the printer alone (about 10 KB of `String` appends) did not finish in
+200 s (measured 10-17), so this is the compiler's evaluation, recorded in gates/axioms-allow.tsv. -/
 theorem lifecycle_text_reads :
-    ((Text.package lifecycle).bind fun t =>
-      (Read.readPackage t).toOption.bind Wire.encodePackage) = Wire.encodePackage lifecycle ∧
-    (Wire.encodePackage lifecycle).isSome := by
+    ((Grain.lifecycle?.toOption.bind Text.package).bind fun t =>
+      (Read.readPackage t).toOption.bind Wire.encodePackage) =
+        Grain.lifecycle?.toOption.bind Wire.encodePackage ∧
+    (Grain.lifecycle?.toOption.bind Wire.encodePackage).isSome := by
   native_decide
 
 end Nanodregg.Hosting.Proofs
