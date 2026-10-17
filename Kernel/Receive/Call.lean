@@ -119,6 +119,10 @@ exercises (the agent, or the root issuer of the grant chain). Laws judge by thes
 structure Req (D : Type) where
   agent : D
   principal : D
+  /-- the call's signed window: the Turn lands at a height in `[notBefore, validUntil]`
+  (`World.admit` enforces it), so a law can say "not before h" without reading the World -/
+  notBefore : Nat
+  validUntil : Nat
   deriving DecidableEq
 
 /-- What KERNEL's receivers need from LANG. Every function reads state only through the pinned
@@ -186,6 +190,9 @@ variable {D : Type} [Ord D]
 
 def pinned [DecidableEq D] (w : World D) (pins : List (D × D)) : Pinned D := fun c =>
   if pins.any (fun p => p.1 = c) then .ok (w.live c) else .error (.unpinned c)
+
+def reqOf (u : Unsigned D) (principal : D) : Req D :=
+  { agent := u.member, principal, notBefore := u.notBefore, validUntil := u.validUntil }
 
 /-- The transaction id: the digest of the call's canonical bytes. -/
 def txIdOf (X : Ctx D) (c : Call D) : D := X.env.hash domTx (X.callBytes c)

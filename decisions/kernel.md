@@ -123,3 +123,18 @@ says nothing about nullifiers spent before genesis (genesis has none). **Meta-cr
 is the theorem minidregg lacked (live vs reopened divergence); I may be over-crediting it — the risk it
 guards is the checkpoint codec, and that is CODEC's Lawful proof, not this one.
 Status: open.
+
+## KERNEL-10 · Answers to LANG's three asks (proposals/lang.md) (2026-10-16)
+1. *Law budget.* Kept: `judge` takes no budget; each law runs under LANG's fixed `lawTicks`. A law is a
+   static bound (TigerStyle), not a payable computation: if the invoker's budget fed the laws, an invoker
+   could buy its way past an exhausted law, and the same write would be admitted or refused depending on
+   who paid. Critique: a legitimately expensive law is impossible; the remedy is a bigger static
+   `lawTicks` for the World, not a per-call one. Meta: I prefer the bound because it is simpler to prove.
+2. *Height for laws.* `Req` gains `notBefore`/`validUntil`, the call's SIGNED window (`reqOf`). `admit`
+   enforces it, so "not before h" is `req.notBefore ≥ h`. The admitting height itself is not given: it is
+   not in the pinned view, and a derivation that read it could not be re-derived by consent before the
+   Turn lands. Critique: a law cannot say "not after h" exactly except through `validUntil`, which the
+   caller chooses (and the law can bound it).
+3. *Data-object extra laws decode at the law package's state type* (LANG-11): no conflict. The kernel
+   treats state slots as bytes; the law that judges them owns their meaning.
+Status: open.
