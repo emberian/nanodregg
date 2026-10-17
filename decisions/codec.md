@@ -424,3 +424,30 @@ carry would make every literal wrong, and the proofs would go red (loud, never s
 **Meta-critique.** I chased the memory number GATES asked for. The deeper fix is the CURVE proofs (CODEC-18's
 owed group law), after which a vector proves only the RFC's specific outputs, not the ladder's arithmetic.
 Status: open.
+
+## CODEC-21 · Sandbox paths, u32 fields and tagged frames in the one Layout family (HOSTING's ask; CODEC-2, 2026-10-17)
+**Decision.** (1) `Codec/Path.lean`: `clean` (nonempty, ≤ `componentMax` = 64, not `.`/`..` (`reserved`), none
+of the `forbidden` bytes 47/0), `join` (components joined by `/`), `split`, `fits max p`. All index the bytes
+directly (no `List UInt8`, law 3) and are structural, so they reduce in the kernel: `decide` over literal paths
+works, which HOSTING's proofs need. `Codec/Proofs/Path.lean`: `join_split` (every byte string is the join of
+its split), `split_join` (clean components survive), `clean_free`, and the tooth `split_join_needs_clean`.
+(2) `Field.u32`, `Field.path` (value: `{p : List ByteArray // Path.fits max p}`, wire: the joined bytes as a
+`bytesOf`, refused `rejected … "path/badComponent"`), `Field.paths`; `pathCodec_lawful`, so every layout with
+them stays lawful and canonical. (3) `Codec.Tagged := List (String × UInt8 × Layout)` with `Tagged.codec`,
+`Tagged.codec_lawful` under the premise that codes are distinct, and the tooth that without it the first
+case wins. (4) Emit: the Step enum is now one instance of `taggedEnum`; `taggedFile` prints a whole
+generated file (bounds, cursor, the path rule from `Path`'s constants, one enum per tagged family). Rust
+identifiers are snake_case. client/src/generated.rs is byte-identical.
+**Alternatives.** A nested list of components on the wire (Rust would join, deciding the spelling). A path as
+a raw string checked only in Rust (a second copy of the rule). HOSTING writing its own frame codec (a twin
+of the layout family).
+**Why.** The joined form is what the sandbox consumes, so Rust passes bytes through. The rule is defined
+once in Lean, and the Rust copy is printed from Lean's constants.
+**Critique.** The Rust `path_clean` is printed from constants, but its CONTROL FLOW (split, all, the four
+tests) is hand-written in the emitter: a change to `clean`'s logic that keeps the constants would not move
+it. There is no differential theorem between the two. `split` is O(n) extracts and allocates per component,
+and is used only by the decoder.
+**Meta-critique.** I matched the names HOSTING's handoff already expected, which steered the value type to a
+component list (and so required `split` and its proofs) rather than the joined bytes, the simpler type.
+The wiring of `--hosting` waits on HOSTING-2's `Hosting/Wire.lean`.
+Status: open.

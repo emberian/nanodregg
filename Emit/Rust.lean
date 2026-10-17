@@ -71,38 +71,51 @@ def camel (s : String) : String :=
 (`camel name`); a layout whose cases are a Lean enum emitted elsewhere names that enum instead. -/
 abbrev OneOfType := String → String
 
+/-- A Lean field name as a Rust identifier: `atMs` ↦ `at_ms` (rustc's `non_snake_case`). -/
+def snake (s : String) : String :=
+  String.ofList (s.toList.flatMap fun c => if c.isUpper then ['_', c.toLower] else [c])
+
 def rustType (ty : OneOfType := camel) : Field → String
   | .byte _ => "u8"
   | .u64 _ => "u64"
   | .bytes _ => "Vec<u8>"
   | .list _ => "Vec<Vec<u8>>"
   | .oneOf n _ => ty n
+  | .u32 _ => "u32"
+  | .path _ => "Vec<u8>"
+  | .paths _ => "Vec<Vec<u8>>"
 
 def readField (max : Nat) (f : Field) (ty : OneOfType := camel) : String :=
   match f with
-  | .byte n => s!"let {n} = c.byte()?;"
-  | .u64 n => s!"let {n} = c.u64()?;"
-  | .bytes n => s!"let {n} = c.bytes({max})?;"
-  | .list n => s!"let {n} = c.list({max})?;"
-  | .oneOf n _ => s!"let {n} = c.one_of({ty n}::from_code)?;"
+  | .byte n => s!"let {snake n} = c.byte()?;"
+  | .u64 n => s!"let {snake n} = c.u64()?;"
+  | .bytes n => s!"let {snake n} = c.bytes({max})?;"
+  | .list n => s!"let {snake n} = c.list({max})?;"
+  | .oneOf n _ => s!"let {snake n} = c.one_of({ty n}::from_code)?;"
+  | .u32 n => s!"let {snake n} = c.u32()? as u32;"
+  | .path n => s!"let {snake n} = c.path({max})?;"
+  | .paths n => s!"let {snake n} = c.paths({max})?;"
 
 def writeField (max : Nat) : Field → String
-  | .byte n => s!"out.push(*{n});"
-  | .u64 n => s!"out.extend_from_slice(&{n}.to_le_bytes());"
-  | .bytes n => s!"put_bytes(&mut out, {n}, {max})?;"
-  | .list n => s!"put_list(&mut out, {n}, {max})?;"
-  | .oneOf n _ => s!"out.push({n}.code());"
+  | .byte n => s!"out.push(*{snake n});"
+  | .u64 n => s!"out.extend_from_slice(&{snake n}.to_le_bytes());"
+  | .bytes n => s!"put_bytes(&mut out, {snake n}, {max})?;"
+  | .list n => s!"put_list(&mut out, {snake n}, {max})?;"
+  | .oneOf n _ => s!"out.push({snake n}.code());"
+  | .u32 n => s!"out.extend_from_slice(&{snake n}.to_le_bytes());"
+  | .path n => s!"put_path(&mut out, {snake n}, {max})?;"
+  | .paths n => s!"put_paths(&mut out, {snake n}, {max})?;"
 
-def fieldNames (l : Layout) : String := String.intercalate ", " (l.map Field.name)
+def fieldNames (l : Layout) : String := String.intercalate ", " (l.map fun f => snake f.name)
 
 /-- `Name { a, b }`, or one field per line when the fields are wider than rustfmt's
 `struct_lit_width` (18), so the emitted file is already `cargo fmt` clean. -/
 def structLit (indent name : String) (l : Layout) : String :=
   if (fieldNames l).length ≤ 18 then s!"{name} \{ {fieldNames l} }"
-  else String.intercalate "\n" ([s!"{name} \{"] ++ l.map (fun f => s!"{indent}    {f.name},") ++ [s!"{indent}}"])
+  else String.intercalate "\n" ([s!"{name} \{"] ++ l.map (fun f => s!"{indent}    {snake f.name},") ++ [s!"{indent}}"])
 
 def fieldDecls (indent vis : String) (l : Layout) (ty : OneOfType := camel) : List String :=
-  l.map fun f => s!"{indent}{vis}{f.name}: {rustType ty f},"
+  l.map fun f => s!"{indent}{vis}{snake f.name}: {rustType ty f},"
 
 /-- A Rust enum for a `oneOf` field: its cases, their codes, and the inverse. -/
 def oneOfEnum (name : String) (cases : List (String × UInt8)) : String :=
@@ -172,37 +185,39 @@ def structFor (name : String) (max : Nat) (l : Layout) (total : Option Nat := no
     l.map (fun f => "            " ++ writeField max f) ++ totalWrite ++
     ["            Ok(out)", "        }", "    }"]
 
-/-- An enum for the tagged step frame. -/
-def stepEnum (max : Nat) : String :=
-  let variants := Step.all.map fun st =>
-    let l := st.layout
-    String.intercalate "\n" ([s!"        {ctorName st} \{"] ++ fieldDecls "            " "" l ++
-      ["        },"])
-  let readArms := Step.all.map fun st =>
-    let l := st.layout
-    String.intercalate "\n" ([s!"                {st.code} => \{"] ++
+/-- A Rust enum for a tagged frame (`Codec.Tagged`): one variant per case, the tag byte, then the case's
+fields; an unknown tag is `BadTag` at its offset. `name` is the enum, `cases` (variant, code, layout). -/
+def taggedEnum (name : String) (max : Nat) (cases : List (String × UInt8 × Layout)) : String :=
+  let var := String.ofList (name.toList.map Char.toLower)
+  let variants := cases.map fun (v, _, l) =>
+    String.intercalate "\n" ([s!"        {camel v} \{"] ++ fieldDecls "            " "" l ++ ["        },"])
+  let readArms := cases.map fun (v, code, l) =>
+    String.intercalate "\n" ([s!"                {code} => \{"] ++
       l.map (fun f => "                    " ++ readField max f) ++
-      [s!"                    {structLit "                    " ("Step::" ++ ctorName st) l}", "                }"])
-  let writeArms := Step.all.map fun st =>
-    let l := st.layout
-    String.intercalate "\n" ([s!"                {structLit "                " ("Step::" ++ ctorName st) l} => \{",
-      s!"                    out.push({st.code});"] ++
+      [s!"                    {structLit "                    " (name ++ "::" ++ camel v) l}", "                }"])
+  let writeArms := cases.map fun (v, code, l) =>
+    String.intercalate "\n" ([s!"                {structLit "                " (name ++ "::" ++ camel v) l} => \{",
+      s!"                    out.push({code});"] ++
       l.map (fun f => "                    " ++ writeField max f) ++ ["                }"])
   String.intercalate "\n" <|
-    ["    #[derive(Debug, Clone, PartialEq, Eq)]", "    pub enum Step {"] ++ variants ++ ["    }", "",
-     "    impl Step {",
+    ["    #[derive(Debug, Clone, PartialEq, Eq)]", s!"    pub enum {name} \{"] ++ variants ++ ["    }", "",
+     s!"    impl {name} \{",
      "        pub fn decode(b: &[u8]) -> Result<Self, Refusal> {",
      "            let mut c = Cursor { b, i: 0 };",
      "            let at = c.i;",
-     "            let step = match c.byte()? {"] ++ readArms ++
+     s!"            let {var} = match c.byte()? \{"] ++ readArms ++
     ["                tag => return Err(Refusal::BadTag { offset: at, tag }),",
-     "            };", "            c.end()?;", "            Ok(step)", "        }", "",
+     "            };", "            c.end()?;", s!"            Ok({var})", "        }", "",
      "        pub fn encode(&self) -> Result<Vec<u8>, Refusal> {",
      "            let mut out = Vec::new();", "            match self {"] ++ writeArms ++
     ["            }", "            Ok(out)", "        }", "    }"]
 
+/-- The tagged step frame. -/
+def stepEnum (max : Nat) : String :=
+  taggedEnum "Step" max (Step.all.map fun st => (ctorName st, st.code, st.layout))
+
 /-- The cursor and writers every layout shares: `Codec.Stream`'s u8, u32le, bytesOf and array. -/
-def layoutPrelude : String := String.intercalate "\n" [
+def layoutPrelude (rejected : Bool := false) (lists : Bool := true) : String := String.intercalate "\n" ([
   "    /// Why a payload was refused: `Codec.Refusal`, with the same offsets.",
   "    #[derive(Debug, Clone, PartialEq, Eq)]",
   "    pub enum Refusal {",
@@ -221,7 +236,9 @@ def layoutPrelude : String := String.intercalate "\n" [
   "        BadTag {",
   "            offset: usize,",
   "            tag: u8,",
-  "        },",
+  "        },"] ++
+  (if rejected then ["        Rejected {", "            offset: usize,", "            name: &'static str,", "        },"]
+   else []) ++ [
   "    }",
   "",
   "    struct Cursor<'a> {",
@@ -262,7 +279,7 @@ def layoutPrelude : String := String.intercalate "\n" [
   "            })?;",
   "            self.i += n;",
   "            Ok(v.to_vec())",
-  "        }",
+  "        }"] ++ (if lists then [
   "        fn list(&mut self, max: usize) -> Result<Vec<Vec<u8>>, Refusal> {",
   "            let at = self.i;",
   "            let n = self.u32()?;",
@@ -274,7 +291,7 @@ def layoutPrelude : String := String.intercalate "\n" [
   "                });",
   "            }",
   "            (0..n).map(|_| self.bytes(max)).collect()",
-  "        }",
+  "        }"] else []) ++ [
   "        fn end(&self) -> Result<(), Refusal> {",
   "            if self.i == self.b.len() {",
   "                Ok(())",
@@ -295,7 +312,7 @@ def layoutPrelude : String := String.intercalate "\n" [
   "        out.extend_from_slice(&(v.len() as u32).to_le_bytes());",
   "        out.extend_from_slice(v);",
   "        Ok(())",
-  "    }",
+  "    }"] ++ (if lists then [
   "",
   "    fn put_list(out: &mut Vec<u8>, v: &[Vec<u8>], max: usize) -> Result<(), Refusal> {",
   "        if v.len() > max {",
@@ -307,7 +324,100 @@ def layoutPrelude : String := String.intercalate "\n" [
   "        }",
   "        out.extend_from_slice(&(v.len() as u32).to_le_bytes());",
   "        v.iter().try_for_each(|x| put_bytes(out, x, max))",
+  "    }"] else []))
+
+/-- The cursor's and writer's path fields (`Codec.Path`), emitted only when some layout has one: the
+same rule as `Path.clean` printed from its constants, the same refusal name at the same offset. -/
+def pathSupport : String :=
+  let lit (w : ByteArray) : String := "b\"" ++ String.ofList (w.toList.map fun b => Char.ofNat b.toNat) ++ "\""
+  String.intercalate "\n" [
+  s!"    const SEP: u8 = {Path.sep};",
+  s!"    const NUL: u8 = {Path.nul};",
+  s!"    const COMPONENT_MAX: usize = {Path.componentMax};",
+  s!"    const RESERVED: [&[u8]; 2] = [{lit Path.dot}, {lit Path.dotdot}];",
+  "",
+  "    /// Codec.Path: the empty path, or components separated by SEP, each clean.",
+  "    fn path_clean(v: &[u8]) -> bool {",
+  "        v.is_empty()",
+  "            || v.split(|b| *b == SEP).all(|c| {",
+  "                !c.is_empty()",
+  "                    && c.len() <= COMPONENT_MAX",
+  "                    && !RESERVED.contains(&c)",
+  "                    && !c.iter().any(|b| *b == SEP || *b == NUL)",
+  "            })",
+  "    }",
+  "",
+  "    impl Cursor<'_> {",
+  "        fn path(&mut self, max: usize) -> Result<Vec<u8>, Refusal> {",
+  "            let at = self.i;",
+  "            let v = self.bytes(max)?;",
+  "            if path_clean(&v) {",
+  "                Ok(v)",
+  "            } else {",
+  "                Err(Refusal::Rejected {",
+  "                    offset: at,",
+  "                    name: \"path/badComponent\",",
+  "                })",
+  "            }",
+  "        }",
+  "        fn paths(&mut self, max: usize) -> Result<Vec<Vec<u8>>, Refusal> {",
+  "            let at = self.i;",
+  "            let n = self.u32()?;",
+  "            if n > max {",
+  "                return Err(Refusal::PastBound {",
+  "                    offset: at,",
+  "                    limit: max,",
+  "                    got: n,",
+  "                });",
+  "            }",
+  "            (0..n).map(|_| self.path(max)).collect()",
+  "        }",
+  "    }",
+  "",
+  "    fn put_path(out: &mut Vec<u8>, v: &[u8], max: usize) -> Result<(), Refusal> {",
+  "        if !path_clean(v) {",
+  "            return Err(Refusal::Rejected {",
+  "                offset: out.len(),",
+  "                name: \"path/badComponent\",",
+  "            });",
+  "        }",
+  "        put_bytes(out, v, max)",
+  "    }",
+  "",
+  "    fn put_paths(out: &mut Vec<u8>, v: &[Vec<u8>], max: usize) -> Result<(), Refusal> {",
+  "        if v.len() > max {",
+  "            return Err(Refusal::PastBound {",
+  "                offset: out.len(),",
+  "                limit: max,",
+  "                got: v.len(),",
+  "            });",
+  "        }",
+  "        out.extend_from_slice(&(v.len() as u32).to_le_bytes());",
+  "        v.iter().try_for_each(|x| put_path(out, x, max))",
   "    }"]
+
+/-- A generated file for two tagged frame families (one per direction), their bounds, and the
+shared cursor: HOSTING's controller ↔ launcher boundary. `title` names the Lean source. -/
+def taggedFile (title : String) (bounds : List (String × Nat)) (max : Nat)
+    (families : List (String × Tagged)) : Except String String := do
+  let consts ← bounds.mapM u32Const
+  let ls := families.flatMap fun (_, cs) => cs.map (·.2.2)
+  let has (p : Field → Bool) := ls.flatten.any p
+  let hasPath := has fun | .path _ | .paths _ => true | _ => false
+  let hasU64 := has fun | .u64 _ => true | _ => false
+  let hasList := has fun | .list _ => true | _ => false
+  let es := oneOfs ls
+  pure <| String.intercalate "\n\n" ([
+    s!"// GENERATED by emit-rust from {title} — do not edit",
+    String.intercalate "\n" consts,
+    "/// The frames (Lean codec: Codec.Tagged over the same layouts).\npub mod wire {",
+    layoutPrelude hasPath hasList] ++
+    (if es.isEmpty then [] else [oneOfReader]) ++ (if hasU64 then [u64Reader] else []) ++
+    (if hasPath then [pathSupport] else []) ++
+    es.map (fun p => oneOfEnum p.1 p.2) ++
+    (match (families.map fun (n, cs) => taggedEnum n max cs).reverse with
+     | [] => ["}"]
+     | e :: rest => rest.reverse ++ [e ++ "\n}"])) ++ "\n"
 
 /-- The follow socket's payloads. -/
 def layoutModule : String := String.intercalate "\n\n" ([
