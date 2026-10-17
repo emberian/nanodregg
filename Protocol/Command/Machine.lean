@@ -197,6 +197,10 @@ def custodyResult (b : ByteArray) : Except (Refusal D) ByteArray :=
       | .error _ => .error .badResult
   | _ => .error .badResult
 
+/-- A step's result as the phase reads it: custody's unwrapped at a custody phase, the Host's as is. -/
+def stepResult (isInit : Bool) (phase : UInt8) (result : ByteArray) : Except (Refusal D) ByteArray :=
+  if custodyPhase isInit phase then custodyResult result else .ok result
+
 /-- Custody's answer to `precommit`: its next and pending public keys. -/
 def precommitOf (b : ByteArray) : Option (ByteArray × ByteArray) :=
   match precommitResultFrame.decode b with
@@ -389,7 +393,7 @@ def step (X : Ctx D) (B : Thin.Base (World D)) (me : Self D) (f : Follow D) (kb 
       -- the phases that asked custody (sign, signNext, precommit) get `status ‖ payload` from it:
       -- a refusal ends the command by custody's name, an ok hands on its payload
       let isInit := match cmd with | .init _ => true | _ => false
-      match (if custodyPhase isInit st.phase then custodyResult (D := D) result else .ok result) with
+      match stepResult (D := D) isInit st.phase result with
       | .error r => same (refused (D := D) r)
       | .ok result =>
       match cmd, st.phase, st.acc with

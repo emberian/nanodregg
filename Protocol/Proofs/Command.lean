@@ -8,6 +8,8 @@ So a member is never asked to submit a call its own fold refuses.
 -/
 import Protocol.Command.Machine
 import Protocol.Proofs.Table
+import Kernel.Proofs.Receive
+import Kernel.Proofs.Fold
 
 namespace Nanodregg.Protocol.Command
 
@@ -106,5 +108,64 @@ theorem reSign_ok {me : Self D} {tried : Bool} {upTo height upTo' : Nat}
     simp only [Bool.and_eq_true, Bool.not_eq_true', decide_eq_true_eq] at hc
     exact ⟨hc.1.1, hc.1.2, rfl, hc.2⟩
   · cases h
+
+/-! ## What follow persists, its own fold admitted (HOST-22; `absorb_admits` and
+`absorbPage_admits` proved by HOST-5)
+
+The premise that lets a follower reopen its own Store exactly as the writer does (`World.fold`,
+no signature verified at reopen; ROOT's ruling on HOST-22): every Turn `host follow` appends was
+re-derived from the writer's logged event and admitted by follow's OWN `World.admit` before the
+append. The follow-time tooth is the rows' `audit` row (plant `followVerifyAll`, line 13). -/
+
+theorem absorb_admits {X : Ctx D} :
+    ∀ (evs : List ByteArray) {w w' : World D} {acc ts : Array (Turn D)},
+      absorb X w acc evs = .ok (w', ts) →
+        ∃ l, ts.toList = acc.toList ++ l ∧ World.fold X.env w l = .ok w'
+  | [], w, w', acc, ts, h => by
+    simp only [absorb, Except.ok.injEq, Prod.mk.injEq] at h
+    obtain ⟨rfl, rfl⟩ := h
+    exact ⟨[], by simp, by simp [World.fold]⟩
+  | e :: es, w, w', acc, ts, h => by
+    unfold absorb at h
+    split at h
+    · cases h
+    · rename_i c _
+      split at h
+      · rename_i t w₁ hs
+        obtain ⟨l, hl, hf⟩ := absorb_admits es h
+        obtain ⟨_, _, ha⟩ := submit_ok hs
+        refine ⟨t :: l, by simp [hl], ?_⟩
+        exact fold_cons_ok.mpr ⟨w₁, ha, hf⟩
+      · cases h
+
+theorem absorbPage_admits {X : Ctx D} {w w' : World D} {evs : List ByteArray} {height : Nat}
+    {chain : ByteArray} {ts : List (Turn D)} (h : absorbPage X w evs height chain = .ok (w', ts)) :
+    World.fold X.env w ts = .ok w' := by
+  unfold absorbPage at h
+  simp only [bind, Except.bind] at h
+  split at h
+  · cases h
+  · rename_i p hp
+    obtain ⟨l, hl, hf⟩ := absorb_admits evs hp
+    split at h
+    · simp only [pure, Except.pure, Except.ok.injEq, Prod.mk.injEq] at h
+      obtain ⟨rfl, rfl⟩ := h
+      simpa [hl] using hf
+    · cases h
+
+/-- **What follow persists, its own fold admitted.** -/
+theorem step_persists_admitted {X : Ctx D} {B : Thin.Base (World D)} {me : Self D}
+    {f f' : Follow D} {ts : List (Turn D)} {kb result : ByteArray} {r : Reply}
+    (h : step X B me f kb result = (f', .turns ts, r)) :
+    World.fold X.env f.world ts = .ok f'.world := by
+  unfold step next at h
+  repeat' split at h
+  all_goals (try simp only [refused, printed, Prod.mk.injEq, Persist.turns.injEq] at h)
+  all_goals (repeat' split at h)
+  all_goals (try simp only [Prod.mk.injEq, Persist.turns.injEq, reduceCtorEq, false_and,
+    and_false] at h)
+  all_goals first
+    | (obtain ⟨rfl, rfl, -⟩ := h; dsimp only; exact absorbPage_admits (by assumption))
+    | (obtain ⟨rfl, rfl, -⟩ := h; simp [World.fold]; done)
 
 end Nanodregg.Protocol.Command
