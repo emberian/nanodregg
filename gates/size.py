@@ -18,7 +18,9 @@ import sys
 
 import tree
 
-HOST_EXE = "nanodregg-host"
+# The deployed Host exe (lakefile `lean_exe «host»`, HOST-17). When it is absent the closure row is
+# not measured (WARN unmeasured: a ceiling over nothing checks nothing), never measured as 0.
+HOST_EXE = "host"
 
 
 # A file Emit/Rust.lean wrote starts with its stable marker (CODEC 23a1445), and is registered in
@@ -84,7 +86,8 @@ def measure(t: tree.Tree) -> dict[str, int]:
     mods = t.modules.values()
     out = {}
     host = t.exes.get(HOST_EXE)
-    out["Lean modules in the Host closure"] = len(t.closure([host])) if host else 0
+    if host:
+        out["Lean modules in the Host closure"] = len(t.closure([host]))
     out["Lean modules"] = len(t.modules)
     out["Lean proof-modules"] = sum(1 for m in mods if m.is_proof)
     for lib in sorted(set(m.lib for m in mods)):

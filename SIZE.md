@@ -5,7 +5,7 @@
 
 | metric | now | ceiling |
 |---|---|---|
-| Lean modules in the Host closure | 0 | 150 |
+| Lean modules in the Host closure | 54 | 150 |
 | Lean lines (deployed) | 7235 | — |
 | protocol operations | 6 | 6 |
 | call kinds (Receive.Body constructors) | 9 | 10 |
