@@ -345,3 +345,82 @@ the Host, which is a custody question (pause list). It is not constant time. Its
 of kernel reduction in one leaf proof module.
 **Meta-critique.** I built it because the Sim needed real signatures and a twin in Kernel would be worse.
 Status: open (custody ruling stays CLIENT's).
+
+## CODEC-18 · The field arithmetic is proved, not sampled (CODEC-11's owed theorems; CODEC-2, 2026-10-17)
+**Decision.** `Codec/Proofs/Field.lean`. `Fe.Carried` (limbs 0, 1, 2, 4, 6, 8 below 2^26; 3, 5, 7, 9 below
+2^25) is the invariant every operation returns. For carried inputs: `mul_toNat`
+(`(f.mul g).toNat = f.toNat * g.toNat % p`), `add_toNat`, `sub_toNat` (`(f + p − g) % p`), `sq_toNat`,
+`ofNat_spec` (`x < 2^255 ⇒ toNat = x % p`, carried), `carry_toNat`/`carry_carried` (any limbs below
+2^63), `eq_iff`; and each result is carried again. Then `Point.add/double/neg/mul2_carried`,
+`pow_carried`, `B_carried`, `decodePoint_carried`: every element `verify` computes satisfies the premise,
+so the theorems cover the whole computation, not chosen inputs. The schoolbook identity
+`mul_identity` (product of the two limb sums = the folded sum + p · the folded-away part) is a ring
+identity GENERATED from `Fe.mul`'s own source text (the generator asserts every coefficient against the
+limb positions: 1 or 2 below the fold, 19 or 38 above) and closed by `grind`. The no-overflow facts
+(each row below 267 · 2^52 < 2^61) are `omega` over the products as atoms, one row at a time.
+Tooth: `mul_needs_carried` — limbs of 2^40 wrap 2^64 and the product is wrong, by `decide +kernel`, so
+the premise is not decoration.
+**Alternatives.** HACL*'s verified field (an extern C TCB). Keep the vectors-only evidence. Prove it
+on a `Nat`-limb model and argue the `UInt64` code agrees (a twin).
+**Why.** The theorems are about the deployed `UInt64` definitions, with no new definition in the def
+module (adding a `Fe.raw` there would rebuild the 13-minute kernel-checked sign proofs for nothing).
+**Critique.** This proves the FIELD, not the CURVE: that `Point.add` is the Edwards addition law, that
+`mul2` computes `[a]P + [b]Q`, and that decompression is the RFC's square root are still evidenced by
+the RFC vectors only. A wrong formula with correct field arithmetic passes every theorem here. The
+group-law proof is the next obligation if Ed25519 verification is ever claimed as verified rather than
+"verified arithmetic, tested formulas".
+**Meta-critique.** I proved the part the brief named (Fe.mul/carry) and stopped at the boundary where
+the proof stops being mechanical. The curve law is exactly the "hard part" a phase ordering avoids;
+it is recorded here so it is not mistaken for done.
+Status: open (owed: Edwards addition law and `mul2` correctness against a Nat-coordinate spec). NOT YET LANDED:
+the arithmetic part checks; the `*_carried` section for points is being reworked onto `Point.ladder` (CODEC-20).
+
+## CODEC-19 · The trie World codec: entries in trie order, rebuilt by `build`, refused unless canonical (CODEC-2, 2026-10-17; design, waits on KERNEL-23 part 2)
+**Decision.** When `World.cells` (cells + nullifiers, KERNEL-23) is a `Trie.T`, the World codec writes
+the trie's `toList` (left-to-right by key bits) and the decoder rebuilds with `build S S.depth 0 l`
+(each node hashed once, O(n) hashes; no node hash is ever read from the wire), then refuses
+`rejected … "kernel/trie-order"` unless `(build l).toList.map fst = l.map fst` and each leaf's keys are
+distinct. Canonicity is then exact by construction (`bytes t = encode t.toList = encode l = b`); no
+order on keys has to be proved consistent with the bit routing. Read-back is EXACT (=, not
+`Equiv`) given KERNEL's history-independence lemma `build S S.depth 0 t.toList = t` for every reachable
+trie; asked of KERNEL-4.
+**Alternatives.** (a) Rebuild by insertion (`insertAll`): n·depth hashes, seconds at HOST's 3e5-entry
+Worlds. (b) Check strict ascent under a byte comparator: needs a proof that the comparator matches
+`Spec.bit`, a second statement of the order. (c) Encode the tree with its hashes: a second shape of the
+same contents, and a decoder that trusts hashes.
+**Why.** The check is generic in `Spec`, costs one key comparison per entry, and leaves no order to keep
+in agreement with the routing.
+**Critique.** `build` filters each level, O(n · depth) list work (depth ≈ log n for a sparse key set,
+but up to `S.depth` for adversarially chosen keys sharing long prefixes: the base is written by the
+Host itself, so its keys are hashes, but a malicious base would cost 256 filter passes per entry
+before refusal). The equality check runs after the build, so a non-canonical base is fully built
+before it is refused (bounded by the base's size bound).
+**Meta-critique.** I picked the check that is cheapest to PROVE; its runtime cost is a second key
+pass I have not measured against the decode itself.
+Status: open (built at the KERNEL-23 flag day).
+
+## CODEC-20 · The RFC 8032 checks are staged, so no proof module peaks above ~3 GB (CODEC-2, 2026-10-17; GATES-2's ask via ROOT)
+**Decision.** `Point.mul2` is now `Point.ladder … Point.zero`, where `ladder P Q PQ R a b n` runs the Shamir ladder
+from a given point `R`, and `Point.step` is one bit (a pure refactor: the same doublings and additions in the
+same order). `Fe` and `Point` derive `DecidableEq`. `Codec/Proofs/Ed25519Stage.lean`: `ladder_add` (n + k bits =
+the top n, then the low k, from that result), `mul2_of_chunks` (61 or 64 bits, then three chunks of 64),
+`verify_eq` (what `verify` is once sizes, S and both decompressions are known), and `publicKey_eq` / `sign_eq`
+(what they are once `expand` is known, proved symbolically). One module per vector,
+`Codec/Proofs/Ed25519/{Test1, Test2, Tampered}.lean`: every theorem keeps its statement (test1, test2,
+test2_tampered, publicKey_test1/2, sign_test1/2, verify_sign_test2), proved through literal intermediate points.
+Each literal is checked, not trusted: a private `decide +kernel` lands the real definition exactly on it (one
+chunk per declaration). The literals were printed by a scratch `#eval` that is not in the tree.
+**Measured (hbox, `/usr/bin/time -v lake env lean`, maxrss / wall).** Before: Codec/Proofs/Ed25519.lean 9.15 GB /
+5:22 (TEST 1 alone 8.55 GB / 1:46); Ed25519Sign ~11–14 GB (GATES-2's slot kills; not re-measured). After:
+Test1 2.56 GB / 2:33, Test2 2.83 GB / 2:21, Tampered 2.36 GB / 0:55. A first staging that unfolded `sign` by
+`simp only [sign, he]` on the CONCRETE seed timed out in the kernel at 16.4 GB: the unfolding has to be proved
+once, symbolically (`sign_eq`), and then rewritten.
+**Alternatives.** (a) Split modules only: measured useless (one declaration is the peak). (b) `native_decide`:
+trusts the compiler for what the kernel can check (law 6 says only where the compiler must be trusted). (c) Drop
+the sign vectors: they are the only check that `sign` is RFC 8032.
+**Critique.** The literal points are ~1600 numerals of proof text that move whenever the ladder's order or the
+limb representation changes; regenerating needs the scratch printer, which is not in the tree. A change to `Fe`'s
+carry would make every literal wrong, and the proofs would go red (loud, never silently wrong).
+**Meta-critique.** I chased the memory number GATES asked for. The deeper fix is the CURVE proofs (CODEC-18's
+owed group law), after which a vector proves only the RFC's specific outputs, not the ladder's arithmetic.
+Status: open.

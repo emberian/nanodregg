@@ -8,7 +8,7 @@ schoolbook arithmetic, folded by `2^255 ≡ 19`, and no intermediate exceeds 2^6
 extended twisted-Edwards coordinates (RFC 8032 §5.1.4). Verification computes `[S]B - [k]A` in one
 double-and-add pass (Shamir's trick) and checks `[8]([S]B - [k]A) = [8]R`. It refuses a
 non-canonical `S` (≥ L), a point encoding with `y ≥ p`, and a point that does not decompress. Every
-loop is structural on a bit count. RFC 8032 vectors: `Codec.Proofs.Ed25519`.
+loop is structural on a bit count. RFC 8032 vectors: `Codec.Proofs.Ed25519.{Test1, Test2, Tampered}`.
 -/
 
 namespace Nanodregg.Codec.Ed25519
@@ -29,6 +29,7 @@ structure Fe where
   l7 : UInt64
   l8 : UInt64
   l9 : UInt64
+  deriving DecidableEq
 
 /-- Propagate carries: every limb back below its width, the top carry folded in by `2^255 ≡ 19`. -/
 @[inline] def Fe.carry (h0 h1 h2 h3 h4 h5 h6 h7 h8 h9 : UInt64) : Fe :=
@@ -124,6 +125,7 @@ structure Point where
   Y : Fe
   Z : Fe
   T : Fe
+  deriving DecidableEq
 
 def Point.zero : Point := ⟨Fe.zero, Fe.one, Fe.one, Fe.zero⟩
 
@@ -156,16 +158,22 @@ def Point.neg (P : Point) : Point := ⟨Fe.zero.sub P.X, P.Y, P.Z, Fe.zero.sub P
 /-- Projective equality. -/
 def Point.eq (P Q : Point) : Bool := (P.X.mul Q.Z).eq (Q.X.mul P.Z) && (P.Y.mul Q.Z).eq (Q.Y.mul P.Z)
 
+/-- One Shamir step: double `R`, then add `P`, `Q` or `P + Q` by the low bits of `a` and `b`. -/
+def Point.step (P Q PQ R : Point) (a b : Nat) : Point :=
+  let R := R.double
+  match a &&& 1 == 1, b &&& 1 == 1 with
+  | true, true => R.add PQ
+  | true, false => R.add P
+  | false, true => R.add Q
+  | false, false => R
+
+/-- From `R`, one `step` per bit of `a, b < 2 ^ n`, from bit `n - 1` down. -/
+def Point.ladder (P Q PQ R : Point) (a b : Nat) : (n : Nat) → Point
+  | 0 => R
+  | n + 1 => Point.step P Q PQ (Point.ladder P Q PQ R (a >>> 1) (b >>> 1) n) a b
+
 /-- `[a] P + [b] Q` for `a, b < 2 ^ n`, one doubling per bit (Shamir), with `PQ = P + Q`. -/
-def Point.mul2 (P Q PQ : Point) (a b : Nat) : (n : Nat) → Point
-  | 0 => Point.zero
-  | n + 1 =>
-    let R := (Point.mul2 P Q PQ (a >>> 1) (b >>> 1) n).double
-    match a &&& 1 == 1, b &&& 1 == 1 with
-    | true, true => R.add PQ
-    | true, false => R.add P
-    | false, true => R.add Q
-    | false, false => R
+def Point.mul2 (P Q PQ : Point) (a b n : Nat) : Point := Point.ladder P Q PQ Point.zero a b n
 
 /-- The base point B (RFC 8032 §5.1). -/
 def B : Point :=
