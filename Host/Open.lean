@@ -18,6 +18,11 @@ advances a World on open (HOST-14: there are no deltas).
 
 The follower and the reopening writer run this same function: one open, one fold.
 
+Before the tail is folded, the one open (`openWith`) reads the origin frame at offset 0 (at most
+`originMax` bytes) and requires it to verify and to state the genesis chain of the base World's
+origin (`originFault`, HOST-25): `corrupt 0` or `foreignOrigin` otherwise. Its theorems are in
+`Host.Proofs.Base`. Every `corrupt` offset the open reports is absolute in the segment.
+
 Theorems (`Host.Proofs.Open`): `open_encodeAll` (a clean segment opens to the fold of exactly the
 records written), `open_torn` (a segment whose last frame was cut opens to the fold of the frames
 before it, `torn` = the cut), and `open_sound` (for ANY bytes, the World opened is the fold of
@@ -114,13 +119,38 @@ def indexed (mark : W → Nat × ByteArray) (step : W → ByteArray → Except F
     let (h, chain) := mark w
     pure (w', idx.push ⟨h, off, chain⟩, off + frameSize r)
 
+/-- The most bytes of the origin frame open reads: one frame of a chain (`chainBytesMax`). -/
+def originMax : Nat := Log.frameMax chainBytesMax
+
+/-- The origin range open reads for a base at `offset`: `[0, min originMax offset)` (the origin
+frame ends at or before the first base's offset, HOST-18). -/
+def originLen (offset : Nat) : Nat := min originMax offset
+
+/-- The origin check (HOST-25), over the bytes `head` read at offset 0 of the segment: the frame
+there must verify from `segmentInitial` under the segment sealer (else bad bytes at 0 with the
+base's frames after them, `corrupt 0`, HOST-12's own fact), and its record must be `expected`,
+the genesis chain of the base World's origin (else `foreignOrigin`). -/
+def originFault (s : Log.Sealer) (head expected : ByteArray) : Option (StoreFault F) :=
+  match Log.frameAt s chainBytesMax head 0 segmentInitial with
+  | none => some (.log (.corrupt 0))
+  | some r => if r.record = expected then none else some (.base .foreignOrigin)
+
+/-- A log fault with its offset made absolute: `openLog` reads the tail from `base`. -/
+def OpenFault.shift (base : Nat) : OpenFault F → OpenFault F
+  | .corrupt off => .corrupt (base + off)
+  | .record i f => .record i f
+
 /-- The one open, given the base file's bytes, the segment's size and a reader of the segment
 (`IO` over the file for `host`, `Id` over bytes in the simulation): verify and decode the base,
 bound the tail (`tailRead`), read exactly that tail AND the 32 bytes before it in one read,
 refuse `foreignSegment` unless those 32 bytes are the base's tag (every base sits after a frame
-of its own segment: `genesisImage`, HOST-18), and `openLog` the tail from the base's World. -/
+of its own segment: `genesisImage`, HOST-18), read the origin frame at 0 (at most `originMax`
+bytes) and refuse unless it verifies and states `origin b.world`, the genesis chain of the base
+World's own origin (`originFault`, HOST-25), and `openLog` the tail from the base's World. A
+`corrupt` offset is absolute in the segment. -/
 def openWith {m : Type → Type} [Monad m] (keys : Keys) (c : Cadence) (world : Codec.Stream W)
-    (mark : W → Nat × ByteArray) (step : W → ByteArray → Except F W) (file : ByteArray) (size : Nat)
+    (mark : W → Nat × ByteArray) (origin : W → ByteArray) (step : W → ByteArray → Except F W)
+    (file : ByteArray) (size : Nat)
     (readTail : Nat → Nat → m (Except (StoreFault F) ByteArray)) : m (Except (StoreFault F) (Opening W)) := do
   if Log.frameMax c.baseRecordMax < file.size then return .error (.base (.baseTooLarge file.size)) else
   match Base.read keys c world file with
@@ -135,10 +165,17 @@ def openWith {m : Type → Type} [Monad m] (keys : Keys) (c : Cadence) (world : 
   | .ok read =>
   if read.size ≠ Log.tagBytes + len then return .error (.shortRead read.size (Log.tagBytes + len)) else
   if read.extract 0 Log.tagBytes ≠ b.tag.bytes then return .error (.base .foreignSegment) else
+  match ← readTail 0 (originLen b.offset) with
+  | .error e => return .error e
+  | .ok head =>
+  if head.size ≠ originLen b.offset then return .error (.shortRead head.size (originLen b.offset)) else
+  match originFault keys.segment head (origin b.world) with
+  | some f => return .error f
+  | none =>
   let tail := read.extract Log.tagBytes read.size
   match openLog keys.segment c.recordBytesMax (indexed mark step) (b.world, b.index.toArray, b.offset)
       b.tag.bytes tail with
-  | .error e => return .error (.log e)
+  | .error e => return .error (.log (e.shift b.offset))
   | .ok o =>
     match Codec.Digest.ofBytes? o.lastTag with
     | none => return .error .tagWidth

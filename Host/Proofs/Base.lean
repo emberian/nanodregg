@@ -6,10 +6,16 @@
   `tailMax` long;
 * `openWith_reads` — the one open (`openWith`, generic in its monad: `IO` over the file for the
   Store, `Id` over bytes for the simulation, and here a reader that records its calls and answers
-  anything) reads a base file of at most one base frame and asks for EXACTLY one range of segment,
-  `[base offset - 32, size)`: the base's tag and a tail of at most `tailMax` bytes; the position it
+  anything) reads a base file of at most one base frame and asks for EXACTLY two ranges of segment,
+  `[base offset - 32, size)` (the base's tag and a tail of at most `tailMax` bytes) and
+  `[0, originLen offset)` (the origin frame, at most `originMax` bytes, HOST-25); the position it
   opens to is within the tail (a short read is refused inside `openWith`, so no reader can bypass
   the bound);
+* `openWith_origin` / `openWith_originFault` (HOST-25) — an open that succeeds read a frame at 0
+  that verifies from `segmentInitial` and states `origin b.world`; a segment whose origin frame
+  fails is refused `corrupt 0` (`originFault_corrupt`) or `foreignOrigin` (`originFault_foreign`);
+  `genesisImage_origin` and `Record.step_origin` say the check refuses no Store this Host writes
+  (at genesis, and past it: a record keeps the World's origin, KERNEL's `fold_origin`);
 * `openWith_anchored` / `openWith_foreign` (HOST-18) — an open that succeeds found the base's own
   tag in the 32 bytes before the base's offset; a segment without it is refused `foreignSegment`
   (never read as a torn tail, so the writer truncates nothing);
@@ -24,6 +30,8 @@
 import Host.Open
 import Host.Loop
 import Host.Proofs.Log
+import Host.Record
+import Kernel.Proofs.Origin
 
 namespace Nanodregg.Host
 
@@ -69,18 +77,20 @@ theorem tailRead_ok {c : Cadence} {baseBytes offset size n : Nat}
     · cases h
     · cases h; omega
 
-/-- The one open reads a base file of at most one base frame, and asks its reader for EXACTLY one
-range of segment, `[base offset - 32, size)`: the base's tag on disk and the tail after it, the
-tail at most `tailMax` long; the position it opens to lies in the tail. Stated over a reader that
+/-- The one open reads a base file of at most one base frame, and asks its reader for EXACTLY two
+ranges of segment, in order: `[base offset - 32, size)`, the base's tag on disk and the tail after
+it, the tail at most `tailMax` long; then `[0, originLen offset)`, the origin frame (HOST-25). The
+position it opens to lies in the tail. Stated over a reader that
 records every range it is asked for and answers with arbitrary bytes `answer off len`, of any
 length (a short read is `openWith`'s to refuse). -/
 theorem openWith_reads {W F : Type} (keys : Keys) (c : Cadence) (world : Codec.Stream W)
-    (mark : W → Nat × ByteArray) (step : W → ByteArray → Except F W) (file : ByteArray) (size : Nat) (answer : Nat → Nat → ByteArray)
+    (mark : W → Nat × ByteArray) (origin : W → ByteArray) (step : W → ByteArray → Except F W) (file : ByteArray) (size : Nat) (answer : Nat → Nat → ByteArray)
     {o : Opening W} {log : List (Nat × Nat)}
-    (h : (openWith keys c world mark step file size (m := StateM (List (Nat × Nat))) fun off len =>
+    (h : (openWith keys c world mark origin step file size (m := StateM (List (Nat × Nat))) fun off len =>
       modifyGet fun l => (.ok (answer off len), l ++ [(off, len)])).run [] = (.ok o, log)) :
     file.size ≤ Log.frameMax c.baseRecordMax ∧ Log.tagBytes ≤ o.sealed.offset ∧
-    ∃ len, log = [(o.sealed.offset - Log.tagBytes, Log.tagBytes + len)] ∧ o.sealed.offset + len = size ∧
+    ∃ len, log = [(o.sealed.offset - Log.tagBytes, Log.tagBytes + len), (0, originLen o.sealed.offset)] ∧
+      o.sealed.offset + len = size ∧
       len ≤ c.tailMax o.sealed.bytes ∧
       o.sealed.offset ≤ o.pos.offset ∧ o.pos.offset ≤ o.sealed.offset + len := by
   simp only [openWith] at h
@@ -104,7 +114,17 @@ theorem openWith_reads {W F : Type} (keys : Keys) (c : Cadence) (world : Codec.S
           · rename_i hsz
             split at h
             · simp only [StateT.pure, pure] at h; injection h with h1; cases h1
-            · generalize hop : openLog keys.segment c.recordBytesMax (indexed mark step)
+            · simp only [bind, StateT.bind, StateT.modifyGet, List.singleton_append] at h
+              by_cases hq : (answer 0 (originLen b.offset)).size ≠ originLen b.offset
+              · rw [if_pos hq] at h
+                simp only [StateT.pure, pure] at h; injection h with h1; cases h1
+              rw [if_neg hq] at h
+              cases hof : originFault (F := F) keys.segment (answer 0 (originLen b.offset)) (origin b.world) with
+              | some e => rw [hof] at h; simp only [StateT.pure, pure] at h; injection h with h1; cases h1
+              | none =>
+              rw [hof] at h
+              simp only at h
+              generalize hop : openLog keys.segment c.recordBytesMax (indexed mark step)
                 (b.world, b.index.toArray, b.offset) b.tag.bytes
                 ((answer (b.offset - Log.tagBytes) (Log.tagBytes + len)).extract Log.tagBytes
                   (answer (b.offset - Log.tagBytes) (Log.tagBytes + len)).size) = res at h
@@ -130,9 +150,9 @@ theorem openWith_reads {W F : Type} (keys : Keys) (c : Cadence) (world : Codec.S
 /-- An open that SUCCEEDS found the base's own tag on disk right before the base's offset: whatever
 segment it was handed, the 32 bytes before the offset are the tag of the base it decoded (HOST-18). -/
 theorem openWith_anchored {W F : Type} (keys : Keys) (c : Cadence) (world : Codec.Stream W)
-    (mark : W → Nat × ByteArray) (step : W → ByteArray → Except F W) (file seg : ByteArray)
+    (mark : W → Nat × ByteArray) (origin : W → ByteArray) (step : W → ByteArray → Except F W) (file seg : ByteArray)
     {o : Opening W}
-    (h : Id.run (openWith keys c world mark step file seg.size (segReader seg)) = .ok o) :
+    (h : Id.run (openWith keys c world mark origin step file seg.size (segReader seg)) = .ok o) :
     ∃ b bb d, Base.read keys c world file = .ok (b, bb, d) ∧ Log.tagBytes ≤ b.offset ∧
       seg.extract (b.offset - Log.tagBytes) b.offset = b.tag.bytes := by
   unfold openWith at h
@@ -168,13 +188,13 @@ theorem openWith_anchored {W F : Type} (keys : Keys) (c : Cadence) (world : Code
 segment whose 32 bytes before the base's offset are not the base's tag is refused
 `foreignSegment`, by the same `openWith` every Store runs (never read as a torn tail). -/
 theorem openWith_foreign {W F : Type} (keys : Keys) (c : Cadence) (world : Codec.Stream W)
-    (mark : W → Nat × ByteArray) (step : W → ByteArray → Except F W) (file seg : ByteArray)
+    (mark : W → Nat × ByteArray) (origin : W → ByteArray) (step : W → ByteArray → Except F W) (file seg : ByteArray)
     {b : Base W} {bb : Nat} {d : ByteArray} {len : Nat}
     (hfile : file.size ≤ Log.frameMax c.baseRecordMax)
     (hb : Base.read keys c world file = .ok (b, bb, d))
     (hlen : tailRead c bb b.offset seg.size = .ok len)
     (hf : seg.extract (b.offset - Log.tagBytes) b.offset ≠ b.tag.bytes) :
-    Id.run (openWith keys c world mark step file seg.size (segReader seg)) = .error (.base .foreignSegment) := by
+    Id.run (openWith keys c world mark origin step file seg.size (segReader seg)) = .error (.base .foreignSegment) := by
   obtain ⟨hs, _⟩ := tailRead_ok hlen
   unfold openWith
   simp only [show ¬ Log.frameMax c.baseRecordMax < file.size by omega, if_false, hb, hlen]
@@ -232,5 +252,142 @@ theorem within_after_seal (c : Cadence) (sealed : Sealed) (n : Nat) (hn : n ≤ 
   unfold withinTail Cadence.tailMax
   simp only [decide_eq_true_eq]
   omega
+
+/-! ## The origin frame (HOST-25) -/
+
+/-- `originFault` passes exactly when the frame at 0 verifies from `segmentInitial` and states
+`expected`. -/
+theorem originFault_none_iff {F : Type} (s : Sealer) (head expected : ByteArray) :
+    originFault (F := F) s head expected = none ↔
+      ∃ r, frameAt s chainBytesMax head 0 segmentInitial = some r ∧ r.record = expected := by
+  unfold originFault
+  split
+  · rename_i hr; simp [hr]
+  · rename_i r hr
+    by_cases he : r.record = expected
+    · simp [he, hr]
+    · simp [he, hr]
+
+/-- **HOST-25: an open that SUCCEEDS read the base World's own origin at offset 0.** Whatever
+segment it was handed, the frame at 0 verifies from `segmentInitial` under the segment sealer and
+its record is `origin b.world`, the genesis chain of the decoded base World's origin. -/
+theorem openWith_origin {W F : Type} (keys : Keys) (c : Cadence) (world : Codec.Stream W)
+    (mark : W → Nat × ByteArray) (origin : W → ByteArray) (step : W → ByteArray → Except F W)
+    (file seg : ByteArray) {o : Opening W}
+    (h : Id.run (openWith keys c world mark origin step file seg.size (segReader seg)) = .ok o) :
+    ∃ b bb d r, Base.read keys c world file = .ok (b, bb, d) ∧
+      frameAt keys.segment chainBytesMax (seg.extract 0 (originLen b.offset)) 0 segmentInitial = some r ∧
+      r.record = origin b.world := by
+  unfold openWith at h
+  split at h
+  · cases h
+  · split at h
+    · cases h
+    · rename_i b bb dg hb
+      split at h
+      · cases h
+      · split at h
+        · cases h
+        · simp only [segReader, pure_bind] at h
+          split at h
+          · cases h
+          · split at h
+            · cases h
+            · simp only [Nat.zero_add] at h
+              split at h
+              · cases h
+              · split at h
+                · cases h
+                · rename_i hnone
+                  obtain ⟨r, hr, he⟩ := (originFault_none_iff _ _ _).mp hnone
+                  exact ⟨b, bb, dg, r, hb, hr, he⟩
+
+/-- **HOST-25, the plants' statement over the real `openWith`.** When the base reads, its tail is
+within bounds and its tag sits before its offset, a segment whose origin frame fails the check is
+refused with `originFault`'s verdict: `corrupt 0` when the frame at 0 does not verify,
+`foreignOrigin` when it verifies but states another chain. -/
+theorem openWith_originFault {W F : Type} (keys : Keys) (c : Cadence) (world : Codec.Stream W)
+    (mark : W → Nat × ByteArray) (origin : W → ByteArray) (step : W → ByteArray → Except F W)
+    (file seg : ByteArray) {b : Base W} {bb : Nat} {d : ByteArray} {len : Nat} {f : StoreFault F}
+    (hfile : file.size ≤ Log.frameMax c.baseRecordMax)
+    (hb : Base.read keys c world file = .ok (b, bb, d))
+    (hlen : tailRead c bb b.offset seg.size = .ok len)
+    (hoff : Log.tagBytes ≤ b.offset)
+    (hanchor : seg.extract (b.offset - Log.tagBytes) b.offset = b.tag.bytes)
+    (hf : originFault keys.segment (seg.extract 0 (originLen b.offset)) (origin b.world) = some f) :
+    Id.run (openWith keys c world mark origin step file seg.size (segReader seg)) = .error f := by
+  obtain ⟨hs, _⟩ := tailRead_ok hlen
+  unfold openWith
+  simp only [show ¬ Log.frameMax c.baseRecordMax < file.size by omega, if_false, hb, hlen,
+    show ¬ b.offset < Log.tagBytes by omega, segReader, pure_bind, Nat.zero_add]
+  have e : (seg.extract (b.offset - Log.tagBytes) (b.offset - Log.tagBytes + (Log.tagBytes + len))).extract 0 Log.tagBytes
+      = seg.extract (b.offset - Log.tagBytes) b.offset := by
+    rw [ByteArray.extract_extract, Nat.add_zero,
+      show min (b.offset - Log.tagBytes + Log.tagBytes) (b.offset - Log.tagBytes + (Log.tagBytes + len))
+        = b.offset by omega]
+  have hsz : (seg.extract (b.offset - Log.tagBytes) (b.offset - Log.tagBytes + (Log.tagBytes + len))).size
+      = Log.tagBytes + len := by
+    rw [ByteArray.size_extract]; omega
+  have hsz0 : (seg.extract 0 (originLen b.offset)).size = originLen b.offset := by
+    rw [ByteArray.size_extract]; unfold originLen; omega
+  rw [if_neg (by rw [hsz]; exact fun h => h rfl), e, if_neg (by rw [hanchor]; exact fun h => h rfl),
+    if_neg (by rw [hsz0]; exact fun h => h rfl), hf]
+  rfl
+
+/-- `corrupt 0` is the verdict on an origin frame that does not verify. -/
+theorem originFault_corrupt {F : Type} (s : Sealer) (head expected : ByteArray)
+    (h : frameAt s chainBytesMax head 0 segmentInitial = none) :
+    originFault (F := F) s head expected = some (.log (.corrupt 0)) := by
+  unfold originFault; rw [h]
+
+/-- `foreignOrigin` is the verdict on an origin frame that verifies and states another chain. -/
+theorem originFault_foreign {F : Type} (s : Sealer) (head expected : ByteArray) (r : Read)
+    (h : frameAt s chainBytesMax head 0 segmentInitial = some r) (he : r.record ≠ expected) :
+    originFault (F := F) s head expected = some (.base .foreignOrigin) := by
+  unfold originFault; rw [h]; simp [he]
+
+/-- **HOST-25, completeness at genesis.** The segment genesis writes passes the origin check of
+the open that reads its genesis base (at offset `segment.size`), given that `origin` is the
+chain `mark` writes at genesis (KERNEL's `World.genesisChain` equation, `genesis_chain`) and that
+the chain fits `chainBytesMax`. -/
+theorem genesisImage_origin {W F : Type} (keys : Keys) (c : Cadence) (world : Codec.Stream W)
+    (mark : W → Nat × ByteArray) (origin : W → ByteArray) (w₀ : W) {img : Image}
+    (h : genesisImage keys c world mark w₀ = .ok img)
+    (hsize : (mark w₀).2.size ≤ chainBytesMax) (ho : origin w₀ = (mark w₀).2) :
+    originFault (F := F) keys.segment (img.segment.extract 0 (originLen img.segment.size)) (origin w₀) = none := by
+  unfold genesisImage at h
+  dsimp only at h
+  split at h
+  · cases h
+  · cases h
+    have hfs := size_frame keys.segment segmentInitial (mark w₀).2
+    have hlen : originLen (frame keys.segment segmentInitial (mark w₀).2).size
+        = (frame keys.segment segmentInitial (mark w₀).2).size := by
+      unfold originLen originMax Log.frameMax; rw [hfs]; omega
+    have hx : (frame keys.segment segmentInitial (mark w₀).2).extract 0
+        (frame keys.segment segmentInitial (mark w₀).2).size = frame keys.segment segmentInitial (mark w₀).2 := by
+      simp
+    have hr := frameAt_frame keys.segment (recordMax := chainBytesMax) ByteArray.empty segmentInitial
+      (mark w₀).2 ByteArray.empty hsize (by unfold chainBytesMax at hsize; omega)
+    simp only [ByteArray.empty_append, ByteArray.append_empty, ByteArray.size_empty] at hr
+    rw [hlen, hx, originFault_none_iff]
+    exact ⟨_, hr, ho.symm⟩
+
+/-- **HOST-25, completeness past genesis.** A record the writer's fold accepts keeps the World's
+origin (KERNEL's `fold_origin`), so every later base's World states the same origin as the
+genesis World whose chain the origin frame holds. -/
+theorem Record.step_origin {D : Type} [Ord D] [DecidableEq D] {dc : Codec.Stream D}
+    {E : Kernel.Env D} {w w' : Kernel.World D} {r : ByteArray}
+    (h : Record.step dc (Kernel.World.fold E) w r = .ok w') : w'.origin = w.origin := by
+  unfold Record.step Record.stepTurns at h
+  split at h
+  · cases h
+  · split at h
+    · cases h
+    · rename_i w₁ hf
+      split at h
+      · simp only [Except.map, Except.ok.injEq] at h
+        subst h; exact Kernel.Receive.fold_origin hf
+      · cases h
 
 end Nanodregg.Host

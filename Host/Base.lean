@@ -21,7 +21,8 @@ A base is replaced atomically (`base.tmp` → sync → rename → sync dir), so 
 old base or the new one, never a torn one. A base that does not verify is therefore not a crash:
 it is refused `baseCorrupt` by name, and open does not fall back to folding the whole log.
 
-Open reads the base (at most `Log.frameMax c.baseRecordMax` bytes) and the segment from `offset`,
+Open reads the base (at most `Log.frameMax c.baseRecordMax` bytes), the origin frame at 0 (at most
+`originMax` bytes, checked against the base World's origin, HOST-25) and the segment from `offset`,
 and `tailRead` refuses a tail longer than `c.tailMax` by name (`tailTooLong`), so open reads one
 base and at most two cadences and a frame of log (`Host.Proofs.Base.tailRead_le`). The loop never
 writes a longer tail (`Host.Loop.Tail`).
@@ -170,6 +171,10 @@ inductive BaseFault where
   /-- the base was written under other shapes (`stored`, the stamp on disk) than the running
   binary's (`running`): an old (or a newer) shape refuses, never decoded (D2, HOST-20) -/
   | shapeMismatch (stored running : Array UInt8)
+  /-- the segment's origin frame verifies under this Store's key but states another World's
+  genesis chain than the base World's origin (two Stores sharing a key file, one's seg.log
+  spliced over the other's; HOST-25) -/
+  | foreignOrigin
   deriving Repr
 
 def BaseFault.name : BaseFault → String
@@ -181,6 +186,7 @@ def BaseFault.name : BaseFault → String
   | .tailTooLong _ _ => "tailTooLong"
   | .foreignSegment => "foreignSegment"
   | .shapeMismatch _ _ => "shapeMismatch"
+  | .foreignOrigin => "foreignOrigin"
 
 /-- The base a base file holds, and its World's encoded size. -/
 def Base.read {W : Type} (keys : Keys) (c : Cadence) (world : Stream W) (file : ByteArray) :

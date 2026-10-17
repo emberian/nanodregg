@@ -84,13 +84,13 @@ def fileCheckpoint (dir : System.FilePath) (keys : Keys) (c : Cadence) (world : 
 
 /-- The one open (writer and follower) over a Store directory: `openWith` reading the files. -/
 def openAt (dir : System.FilePath) (keys : Keys) (c : Cadence) (world : Stream W)
-    (mark : W → Nat × ByteArray) (step : W → ByteArray → Except F W) (segment : File) : IO (Except (StoreFault F) (Opening W)) := do
+    (mark : W → Nat × ByteArray) (origin : W → ByteArray) (step : W → ByteArray → Except F W) (segment : File) : IO (Except (StoreFault F) (Opening W)) := do
   unless ← (basePath dir).pathExists do return .error (.base .noBase)
   match ← readBounded (basePath dir) (Log.frameMax c.baseRecordMax) (fun n => .base (.baseTooLarge n)) with
   | .error e => return .error e
   | .ok file =>
     let size := (← segment.size).toNat
-    openWith keys c world mark step file size fun off len => do
+    openWith keys c world mark origin step file size fun off len => do
       return .ok (← segment.readAt off.toUInt64 len.toUSize)
 
 /-- The loop's state as an open leaves it. -/
@@ -101,8 +101,8 @@ def Opening.resident (o : Opening W) : Resident W :=
 writer's locked append handle stays the lock). A torn tail here is bytes the loop never synced, a
 divergence, never something to truncate. -/
 def reopenAt (dir : System.FilePath) (keys : Keys) (c : Cadence) (world : Stream W)
-    (mark : W → Nat × ByteArray) (step : W → ByteArray → Except F W) : IO (Except Exit (Resident W)) := do
-  match ← openAt dir keys c world mark step (← File.open (segmentPath dir) .read) with
+    (mark : W → Nat × ByteArray) (origin : W → ByteArray) (step : W → ByteArray → Except F W) : IO (Except Exit (Resident W)) := do
+  match ← openAt dir keys c world mark origin step (← File.open (segmentPath dir) .read) with
   | .error f => return .error (.reopenFailed f.name)
   | .ok o => return if o.opened.torn = 0 then .ok o.resident else .error .reopenDiverged
 
@@ -114,10 +114,10 @@ structure Writer (W : Type) where
 /-- Open the Store as its one writer: lock, open, truncate the torn tail, sync. A stale
 `base.tmp` (a crash mid-seal) is never read; the next seal replaces it. -/
 def openWriter (dir : System.FilePath) (keys : Keys) (c : Cadence) (world : Stream W)
-    (mark : W → Nat × ByteArray) (step : W → ByteArray → Except F W) : IO (Except (StoreFault F) (Writer W)) := do
+    (mark : W → Nat × ByteArray) (origin : W → ByteArray) (step : W → ByteArray → Except F W) : IO (Except (StoreFault F) (Writer W)) := do
   let segment ← File.open (segmentPath dir) .append
   unless ← segment.tryLock do return .error .locked
-  match ← openAt dir keys c world mark step (← File.open (segmentPath dir) .read) with
+  match ← openAt dir keys c world mark origin step (← File.open (segmentPath dir) .read) with
   | .error e => return .error e
   | .ok o =>
     if 0 < o.opened.torn then
@@ -127,9 +127,9 @@ def openWriter (dir : System.FilePath) (keys : Keys) (c : Cadence) (world : Stre
 
 /-- Open the Store as a follower of its directory: the same open, no lock, nothing written. -/
 def openFollower (dir : System.FilePath) (keys : Keys) (c : Cadence) (world : Stream W)
-    (mark : W → Nat × ByteArray) (step : W → ByteArray → Except F W) :
+    (mark : W → Nat × ByteArray) (origin : W → ByteArray) (step : W → ByteArray → Except F W) :
     IO (Except (StoreFault F) (Opening W)) := do
-  openAt dir keys c world mark step (← File.open (segmentPath dir) .read)
+  openAt dir keys c world mark origin step (← File.open (segmentPath dir) .read)
 
 /-- Create a Store holding `w₀` under `key`: the key, then `genesisImage`'s segment (its origin
 frame) and base, each durable before the next. Refuses a directory that already holds any of

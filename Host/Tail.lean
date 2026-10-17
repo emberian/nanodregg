@@ -61,10 +61,10 @@ def Tail.absorb (s : Log.Sealer) (recordMax : Nat) (step : W → ByteArray → E
 /-- Open `dir` to follow it: the one open over a fresh read handle (no lock, no truncation), with
 the tail step's World. Returns the tail and the handle its `next` reads through. -/
 def Tail.open (dir : System.FilePath) (keys : Keys) (c : Cadence) (world : Codec.Stream W)
-    (mark : W → Nat × ByteArray) (step : W → ByteArray → Except F (W × O)) :
+    (mark : W → Nat × ByteArray) (origin : W → ByteArray) (step : W → ByteArray → Except F (W × O)) :
     IO (Except (StoreFault F) (Tail W × File)) := do
   let seg ← File.open (segmentPath dir) .read
-  match ← openAt dir keys c world mark (fun w r => (step w r).map Prod.fst) seg with
+  match ← openAt dir keys c world mark origin (fun w r => (step w r).map Prod.fst) seg with
   | .error e => return .error e
   | .ok o => return .ok (⟨o.opened.world, o.pos⟩, seg)
 

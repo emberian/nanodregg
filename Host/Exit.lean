@@ -14,7 +14,9 @@ code, and each code has one `ExitClass`:
   writer may race a restart is the operator's decision, not an auto-restart's.
 
 Unit files (`Ops.Units`) render their restart/prevent lists from `Status.codesOf`; they hold no
-list of their own. Codes stay below 64 and never use 1 or 2 (nd-supervise's own exits, CLIENT's).
+list of their own. Codes stay below 64, below nd-supervise's own exits (64–66, `Protocol.Exit`), and
+never use 1 (the runtime's exit for an uncaught exception, which must never read as a named status)
+or 2 (the conventional exit for a shell's or a parser's misuse, kept free for the same reason).
 Theorems: `Host.Proofs.Exit`.
 -/
 import Host.Loop
@@ -95,6 +97,9 @@ inductive Status where
   /-- the base was written under other codec shapes than this binary's (D2, HOST-20): an old
   shape refuses to load; re-genesis from a checked export carries the state (law 1) -/
   | shapeMismatch
+  /-- the segment's origin frame verifies but states another World's genesis chain than the base
+  World's origin (HOST-25): another Store's seg.log under a shared key file -/
+  | foreignOrigin
   deriving DecidableEq, Repr
 
 namespace Status
@@ -104,7 +109,7 @@ def all : List Status :=
    locked, .exists, badKey, shortRead, noBase, baseTooLarge, baseCorrupt, baseUndecodable,
    segmentShort, tailTooLong, foreignSegment, corrupt, record, tagWidth, behindAnchor, chainMismatch,
    badIndex, pageTooLarge, pastEnd, shortBase, reopenFailed, reopenDiverged, lifetime, stream, noThreads,
-   shapeMismatch]
+   shapeMismatch, foreignOrigin]
 
 def code : Status → Nat
   | eof => 0
@@ -144,6 +149,7 @@ def code : Status → Nat
   | stream => 41
   | noThreads => 42
   | shapeMismatch => 43
+  | foreignOrigin => 30
 
 def cls : Status → ExitClass
   | eof => .done
@@ -152,7 +158,7 @@ def cls : Status → ExitClass
   | locked | .exists | badKey | shortRead | noBase | baseTooLarge | baseCorrupt | baseUndecodable
   | segmentShort | tailTooLong | foreignSegment | corrupt | record | tagWidth | behindAnchor | chainMismatch
   | badIndex | pageTooLarge | pastEnd | shortBase | reopenFailed | reopenDiverged | noThreads
-  | shapeMismatch => .fatal
+  | shapeMismatch | foreignOrigin => .fatal
 
 /-- The name printed beside the code (`refused NAME` / `exit NAME` on stderr). -/
 def name (s : Status) : String := ((toString (repr s)).splitOn ".").getLast!
@@ -176,6 +182,7 @@ def BaseFault.status : BaseFault → Status
   | .tailTooLong _ _ => .tailTooLong
   | .foreignSegment => .foreignSegment
   | .shapeMismatch _ _ => .shapeMismatch
+  | .foreignOrigin => .foreignOrigin
 
 def StoreFault.status {F : Type} : StoreFault F → Status
   | .locked => .locked

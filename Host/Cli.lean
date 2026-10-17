@@ -153,14 +153,14 @@ def serveVerb (store : String) : IO UInt32 := do
   | .error f => refuseStore f
   | .ok key =>
     let keys := Keys.ofKey key shapes
-    match ← openWriter store keys c world recorder.mark foldStep with
+    match ← openWriter store keys c world recorder.mark originChain foldStep with
     | .error f => refuseStore f
     | .ok wr => serving do
       let pagerSeg ← File.open (segmentPath store) .read
       let code ← runResident "serve" wr.opening.resident fun port =>
         restarts (serve (machine X) recorder keys.segment (fileCheckpoint store keys c world recorder.mark) c
             (fileStore wr.segment) (pager keys store pagerSeg) port limits fuelBatches)
-          (reopenAt store keys c world recorder.mark foldStep) recorder.mark restartsMax
+          (reopenAt store keys c world recorder.mark originChain foldStep) recorder.mark restartsMax
       wr.segment.sync  -- the writer's handle, and so its lock, lives to here
       return code
 
@@ -173,14 +173,14 @@ def followVerb (store memberHex grantHex : String) : IO UInt32 := do
     let keys := Keys.ofKey key shapes
     -- follow's own Store, reopened as the writer's is (HOST-22): every Turn in it was admitted by
     -- follow's own fold before it was appended
-    match ← openWriter store keys c world recorder.mark foldStep with
+    match ← openWriter store keys c world recorder.mark originChain foldStep with
     | .error f => refuseStore f
     | .ok wr => serving do
       let download ← IO.mkRef none
       let code ← runResident "follow" wr.opening.resident fun port =>
         restarts (Follow.loop keys ⟨member, grant, Follow.window⟩ (fileStore wr.segment)
             (fileCheckpoint store keys c world recorder.mark) port download fuelBatches)
-          (reopenAt store keys c world recorder.mark foldStep) recorder.mark restartsMax
+          (reopenAt store keys c world recorder.mark originChain foldStep) recorder.mark restartsMax
       wr.segment.sync  -- the follower's handle, and so its lock, lives to here
       return code
 

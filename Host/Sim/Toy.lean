@@ -73,6 +73,10 @@ def recorder : Recorder (World Nat) (Turn Nat) where
   encode := Record.encode dc
   mark w := (w.height, env.bytes w.chain)
 
+/-- The genesis chain of a World's origin, as `mark` writes a chain: what the origin frame of
+its Store holds (HOST-25). -/
+def originChain (w : World Nat) : ByteArray := env.bytes (World.genesisChain env w.origin)
+
 /-- One batch record folded into the World: what open does per record (the writer's fold). -/
 def tailStep : World Nat → ByteArray → Except (Record.Fault (Reject Nat)) (World Nat × List (Turn Nat)) :=
   Record.stepTurns dc (World.fold env)

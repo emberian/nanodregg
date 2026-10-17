@@ -750,7 +750,23 @@ mirrors elsewhere, so the build waits for the real signatures.
 not change. It lands right after KERNEL-24, whose flag day re-geneses every Store (the D2 stamp
 refuses the old ones `shapeMismatch` before this check is reached). After it, a Store whose origin
 frame does not match its base refuses to open, by name, where before it opened.
-**Status.** designed (this entry). It is built when KERNEL-5 reports KERNEL-24 on main.
+**Status.** designed (51515fa); landed after KERNEL-24 (9e91ede) as specified, with these facts
+from the build. KERNEL-24 names the function `World.genesisChain E origin = H(domGenesis, bytes
+origin)`, and `Deployed.originChain w = (World.genesisChain X.env w.origin).bytes` is `mark`'s
+projection of it, so `genesisImage_origin`'s premise holds by `rfl` (KERNEL's `genesis_chain`). The
+completeness theorem past genesis is `Record.step_origin` (from `fold_origin`); it is stated per
+record, and the open's fold is a fold of records. In host-sim (seeds 1–3), the origin flip is at
+offset 5, inside the RECORD: a flip at `originSize/2` lands in the toy frame's tag, which under
+the genesis base is HOST-18's anchor and is refused `foreignSegment` first. Under the genesis base,
+`plant-foreign-origin` is also `foreignSegment`, for the same reason, and a check pins that order.
+Mutations (seed 1): the record compare replaced by `true` gives 1 FAILED (foreign-origin under the
+newest base), and `originFault` answering `none` gives 3 FAILED (both flips and foreign-origin). The
+existing flip plants' `isCorrupt` offsets moved from 0 to `origin.offset` (now absolute). The design's
+`openWith_originCorrupt` / `openWith_foreignOrigin` landed as ONE theorem over `openWith`,
+`openWith_originFault` (any verdict of `originFault`), with `originFault_corrupt` /
+`originFault_foreign` naming the two verdicts. The completeness half is discharged at the deployed
+instance in `Host.Proofs.Deployed` (the law-6 reader found it stated only generically):
+`originChain_genesis`, `genesis_origin_passes`, and `foldStep_originChain`.
 
 ## HOST-26 · the pinned base digest has its own customization string (2026-10-17, BUILD-TRANSPORT; scout C1's finding)
 **Decision.** `Keys.worldDigest` (the unkeyed cSHAKE256 of a base's World bytes, which a thin member

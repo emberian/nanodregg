@@ -120,6 +120,7 @@ def pager (X : Ctx D) (lieTip forgeBase : Bool) (m : Mem) (r : Resident (World D
 the loop's state the one open gives over it. -/
 def genesisStore (P : Params) (g : World D) : IO (Except String (Mem × Resident (World D))) := do
   match Host.Sim.memGenesis Host.Sim.keys cadence Sim.world (fun w => (w.height, P.X.env.bytes w.chain))
+      (fun w => P.X.env.bytes (World.genesisChain P.X.env w.origin))
       (Record.step Sim.dc (World.fold P.X.env)) g with
   | .error f => return .error f.name
   | .ok (d, b, r) => return .ok (⟨← IO.mkRef d, ← IO.mkRef b⟩, r)
@@ -127,6 +128,7 @@ def genesisStore (P : Params) (g : World D) : IO (Except String (Mem × Resident
 /-- The one open over the in-memory Store: HOST's `openWith`, the writer's fold. -/
 def reopen (P : Params) (base seg : ByteArray) : Except String (Resident (World D)) :=
   match Id.run (openWith Host.Sim.keys cadence Sim.world (fun w => (w.height, P.X.env.bytes w.chain))
+      (fun w => P.X.env.bytes (World.genesisChain P.X.env w.origin))
       (Record.step Sim.dc (World.fold P.X.env))
       base seg.size fun off len => pure (.ok (seg.extract off (off + len)))) with
   | .error f => .error f.name

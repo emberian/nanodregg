@@ -36,7 +36,7 @@ was refused. The writer (and its lock) is released when this returns. -/
 def serveDir (dir : System.FilePath) (keys : Keys) (c : Cadence) (seed : Nat) (frames : List Frame)
     (roundFuel : Nat := 5) (viaChannel : Bool := false) :
     IO (Except String (Resident (World Nat) × Bool)) := do
-  match ← (openWriter dir keys c world recorder.mark foldStep : IO (Except Fault _)) with
+  match ← (openWriter dir keys c world recorder.mark originChain foldStep : IO (Except Fault _)) with
   | .error e => return .error s!"open: {e.name}"
   | .ok wr =>
     let fr ← IO.mkRef frames
@@ -56,8 +56,8 @@ def serveDir (dir : System.FilePath) (keys : Keys) (c : Cadence) (seed : Nat) (f
     -- rounds of `roundFuel` batches, each ending in the real in-process reopen of the files (D4)
     let (exit, r) ← restarts (serve machine recorder keys.segment (fileCheckpoint dir keys c world recorder.mark) c
         (fileStore wr.segment) (fun _ _ => pure (0, ByteArray.empty)) port limits roundFuel)
-      (reopenAt dir keys c world recorder.mark foldStep) recorder.mark (frames.length + 1) o.resident
-    let second ← (openWriter dir keys c world recorder.mark foldStep : IO (Except Fault _))
+      (reopenAt dir keys c world recorder.mark originChain foldStep) recorder.mark (frames.length + 1) o.resident
+    let second ← (openWriter dir keys c world recorder.mark originChain foldStep : IO (Except Fault _))
     let refused := match second with | .error .locked => true | _ => false
     wr.segment.sync  -- the writer's handle (and so its lock) is alive up to here
     let replies := (← sent.get).size
@@ -69,7 +69,7 @@ def serveDir (dir : System.FilePath) (keys : Keys) (c : Cadence) (seed : Nat) (f
     | e => return .error s!"serve ended {e.name}"
 
 def follow (dir : System.FilePath) (keys : Keys) (c : Cadence) : IO (Except Fault (Opening (World Nat))) :=
-  openFollower dir keys c world recorder.mark foldStep
+  openFollower dir keys c world recorder.mark originChain foldStep
 
 def fileSize (p : System.FilePath) : IO Nat := do
   return (← (← File.open p .read).size).toNat
@@ -163,7 +163,7 @@ def body (seed : Nat) (dirA dirB : System.FilePath) : IO UInt32 := do
         let before ← fileSize (segmentPath dir)
         check "plant-foreign-segment fires: the copied segment is another Store's (longer, other bytes)"
           (mine.size < theirs.size && mine != theirs.extract 0 mine.size) failures
-        let opened ← (openWriter dir keys still world recorder.mark foldStep : IO (Except Fault _))
+        let opened ← (openWriter dir keys still world recorder.mark originChain foldStep : IO (Except Fault _))
         let after ← fileSize (segmentPath dir)
         check "plant-foreign-segment: the writer refuses `foreignSegment` and the file is unchanged"
           ((match opened with | .error f => f.name = "foreignSegment" | .ok _ => false) && before = after) failures

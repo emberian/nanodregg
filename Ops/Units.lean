@@ -231,7 +231,7 @@ def hostAction : Status → String
   | .noBase | .baseTooLarge | .baseCorrupt | .baseUndecodable | .segmentShort | .tailTooLong =>
     "the Store is damaged or not a Store: restore (RUNBOOK §5)"
   | .foreignSegment => "`seg.log` is another Store's (or a pre-HOST-18 Store's): restore the three files together (RUNBOOK §5)"
-  | .corrupt => "bad bytes with a verifying frame after them, or corrupt history before the base: restore (RUNBOOK §5)"
+  | .corrupt => "bad bytes with a verifying frame after them (at offset 0: the origin frame), or corrupt history before the base: restore (RUNBOOK §5)"
   | .record => "a record does not fold: a defect, report to HOST and KERNEL"
   | .tagWidth => "a broken sealer: a defect, report to HOST"
   | .behindAnchor => "the copy is truncated or rolled back: use a newer copy"
@@ -244,6 +244,7 @@ def hostAction : Status → String
   | .stream => "automatic: the request pipe broke; the restart re-pairs it with nd-supervise"
   | .noThreads => "the runtime ran a dedicated task inline: a build or platform defect, report to HOST"
   | .shapeMismatch => "the base was written under other codec shapes: re-genesis from a checked export (RUNBOOK §6)"
+  | .foreignOrigin => "the segment's origin frame verifies under this Store's key but names another World (two Stores share a key file, one's seg.log spliced over the other's): restore seg.log from this Store's own backup; never restart it"
 
 def supervisorName : SupervisorExit → String
   | .refusedAtLaunch => "refusedAtLaunch"

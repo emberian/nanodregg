@@ -29,7 +29,7 @@ theorem restart_fatal_disjoint : ∀ c ∈ codesOf .restart, c ∉ codesOf .fata
 theorem mem_codesOf_iff (s : Status) (k : ExitClass) : s.code ∈ codesOf k ↔ s.cls = k := by
   cases s <;> cases k <;> decide
 
-/-- Codes stay clear of nd-supervise's own 1 and 2 and below 64. -/
+/-- Codes stay clear of 1 (an uncaught exception) and 2 (misuse), and below nd-supervise's 64–66. -/
 theorem code_reserved (s : Status) : s.code ≠ 1 ∧ s.code ≠ 2 ∧ s.code < 64 := by
   cases s <;> decide
 
@@ -38,8 +38,8 @@ end Status
 /-- The exit status determines the refusal's printed name: one code, one name. -/
 theorem StoreFault.status_iff_name {F : Type} (a b : StoreFault F) :
     a.status = b.status ↔ a.name = b.name := by
-  rcases a with _ | _ | _ | _ | (_ | _ | _ | _ | _ | _ | _ | _) | (_ | _) | (_ | _ | _) | _ <;>
-  rcases b with _ | _ | _ | _ | (_ | _ | _ | _ | _ | _ | _ | _) | (_ | _) | (_ | _ | _) | _ <;>
+  rcases a with _ | _ | _ | _ | (_ | _ | _ | _ | _ | _ | _ | _ | _) | (_ | _) | (_ | _ | _) | _ <;>
+  rcases b with _ | _ | _ | _ | (_ | _ | _ | _ | _ | _ | _ | _ | _) | (_ | _) | (_ | _ | _) | _ <;>
   simp [StoreFault.status, StoreFault.name, BaseFault.status, BaseFault.name, SealFault.status,
     SealFault.name]
 

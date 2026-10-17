@@ -57,12 +57,12 @@ def memCheckpoint {W : Type} (disk : IO.Ref Disk) (bases : IO.Ref Bases) (keys :
 loop's state as the one open (`openWith`, with the caller's own fold step) reads them back. The
 start state is therefore never built by hand. -/
 def memGenesis {W F : Type} (keys : Keys) (c : Cadence) (world : Codec.Stream W)
-    (mark : W → Nat × ByteArray) (step : W → ByteArray → Except F W) (w₀ : W) :
+    (mark : W → Nat × ByteArray) (origin : W → ByteArray) (step : W → ByteArray → Except F W) (w₀ : W) :
     Except (StoreFault F) (Disk × Bases × Resident W) :=
   match genesisImage keys c world mark w₀ with
   | .error f => .error (.seal f)
   | .ok img =>
-    match Id.run (openWith keys c world mark step img.base img.segment.size fun off len =>
+    match Id.run (openWith keys c world mark origin step img.base img.segment.size fun off len =>
         pure (.ok (img.segment.extract off (off + len)))) with
     | .error f => .error f
     | .ok o =>

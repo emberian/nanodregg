@@ -30,10 +30,11 @@ code space holds both tables: `host` (Host.Status, below 64) and nd-supervise's 
 | 23 | baseUndecodable | fatal | stopped (RestartPreventExitStatus) | the Store is damaged or not a Store: restore (RUNBOOK §5) |
 | 24 | segmentShort | fatal | stopped (RestartPreventExitStatus) | the Store is damaged or not a Store: restore (RUNBOOK §5) |
 | 25 | tailTooLong | fatal | stopped (RestartPreventExitStatus) | the Store is damaged or not a Store: restore (RUNBOOK §5) |
-| 26 | corrupt | fatal | stopped (RestartPreventExitStatus) | bad bytes with a verifying frame after them, or corrupt history before the base: restore (RUNBOOK §5) |
+| 26 | corrupt | fatal | stopped (RestartPreventExitStatus) | bad bytes with a verifying frame after them (at offset 0: the origin frame), or corrupt history before the base: restore (RUNBOOK §5) |
 | 27 | record | fatal | stopped (RestartPreventExitStatus) | a record does not fold: a defect, report to HOST and KERNEL |
 | 28 | tagWidth | fatal | stopped (RestartPreventExitStatus) | a broken sealer: a defect, report to HOST |
 | 29 | foreignSegment | fatal | stopped (RestartPreventExitStatus) | `seg.log` is another Store's (or a pre-HOST-18 Store's): restore the three files together (RUNBOOK §5) |
+| 30 | foreignOrigin | fatal | stopped (RestartPreventExitStatus) | the segment's origin frame verifies under this Store's key but names another World (two Stores share a key file, one's seg.log spliced over the other's): restore seg.log from this Store's own backup; never restart it |
 | 32 | behindAnchor | fatal | stopped (RestartPreventExitStatus) | the copy is truncated or rolled back: use a newer copy |
 | 33 | chainMismatch | fatal | stopped (RestartPreventExitStatus) | the copy is another history: do not serve it |
 | 34 | badIndex | fatal | stopped (RestartPreventExitStatus) | a page fault: report to HOST |

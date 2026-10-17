@@ -75,7 +75,7 @@ def run (store : String) (anchor : Option Anchor) : IO UInt32 := do
   | .error f => refuse f.status f.name
   | .ok key =>
     let keys := Keys.ofKey key shapes
-    match ← openFollower store keys c world recorder.mark foldStep with
+    match ← openFollower store keys c world recorder.mark originChain foldStep with
     | .error f => refuse f.status f.name
     | .ok o =>
       let seg ← File.open (segmentPath store) .read

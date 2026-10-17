@@ -97,7 +97,7 @@ abbrev Fault := StoreFault (Record.Fault (Reject Nat))
 
 /-- The one open over an in-memory image: `openWith` reading bytes. -/
 def reopenWith (c : Cadence) (base seg : ByteArray) : Except Fault (Opening (World Nat)) :=
-  Id.run (openWith keys c world recorder.mark foldStep base seg.size (segReader seg))
+  Id.run (openWith keys c world recorder.mark originChain foldStep base seg.size (segReader seg))
 
 def reopen (base seg : ByteArray) : Except Fault (Opening (World Nat)) := reopenWith cadence base seg
 
@@ -108,7 +108,7 @@ def faultName (r : Except Fault (Opening (World Nat))) : String :=
 
 /-- The in-memory Store as genesis leaves it (`memGenesis`). -/
 def genesisStore (c : Cadence) : Except Fault (Disk × Bases × Resident (World Nat)) :=
-  memGenesis keys c world recorder.mark foldStep genesis
+  memGenesis keys c world recorder.mark originChain foldStep genesis
 
 structure RunResult where
   exit : Exit
@@ -420,9 +420,9 @@ def run (args : List String) : IO UInt32 := do
   let (g, _) := r.bases.history[0]!
   let firstSeg := r.disk.synced.extract 0 r.bases.history[1]!.2
   let full := match reopen g firstSeg with | .ok o => o.opened.records | .error _ => 0
-  check "plant-flip-byte: corrupt" (1 < full && isCorrupt (reopen g (flipByte firstSeg (origin.offset + 6))) 0) failures
+  check "plant-flip-byte: corrupt" (1 < full && isCorrupt (reopen g (flipByte firstSeg (origin.offset + 6))) origin.offset) failures
   check "plant-flip-header: corrupt (the frames after it are found by the forward scan)"
-    (isCorrupt (reopen g (flipByte firstSeg origin.offset)) 0) failures
+    (isCorrupt (reopen g (flipByte firstSeg origin.offset)) origin.offset) failures
   check "plant-flip-last-frame: torn (the stated undecidable case: one frame lost, loudly)"
     (match reopen g (flipByte firstSeg (firstSeg.size - 1)) with
      | .ok o => 0 < o.opened.torn ∧ o.opened.records + 1 = full
@@ -444,6 +444,27 @@ def run (args : List String) : IO UInt32 := do
   check "plant-foreign-segment: under the newest base (offset > 0), refused `foreignSegment`"
     (0 < (match reopen r.bases.file r.disk.synced with | .ok o => o.sealed.offset | .error _ => 0) &&
       faultName (reopen r.bases.file foreignAll) = "foreignSegment") failures
+  -- plant-origin-flip (HOST-25, OPS's `corrupt history`): a byte flipped inside the origin frame's
+  -- RECORD (offset 5: past the length field, before the tag, so the anchor HOST-18 compares is
+  -- untouched). Before HOST-25 no open read [0, origin.offset) and both opened clean.
+  let newestOffset := match reopen r.bases.file r.disk.synced with | .ok o => o.sealed.offset | .error _ => 0
+  check "plant-origin-flip: under the newest base (past the first record), refused `corrupt` at 0"
+    (origin.offset < newestOffset && isCorrupt (reopen r.bases.file (flipByte r.disk.synced 5)) 0) failures
+  check "plant-origin-flip: under the genesis base, refused `corrupt` at 0"
+    (isCorrupt (reopen g (flipByte firstSeg 5)) 0) failures
+  -- plant-foreign-origin (HOST-25): another World's origin frame (another origin, the SAME key)
+  -- spliced over this Store's. Under the newest base it verifies and states another genesis chain:
+  -- `foreignOrigin`. Under the genesis base its tag is the anchor, so HOST-18 names it first.
+  let otherWorld : World Nat := World.genesis env (env.hash "nanodregg/host-sim/origin/v1" "other".toUTF8) (2 ^ 40)
+  let otherFrame := Log.frame keys.segment segmentInitial (recorder.mark otherWorld).2
+  let splice (seg : ByteArray) : ByteArray := otherFrame ++ seg.extract origin.offset seg.size
+  check "plant-foreign-origin fires: another origin, a frame of the same size, other bytes"
+    (otherWorld.origin != genesis.origin && otherFrame.size = origin.offset &&
+      otherFrame != r.disk.synced.extract 0 origin.offset) failures
+  check "plant-foreign-origin: under the newest base, refused `foreignOrigin`"
+    (faultName (reopen r.bases.file (splice r.disk.synced)) = "foreignOrigin") failures
+  check "plant-foreign-origin: under the genesis base, refused `foreignSegment` (the anchor first)"
+    (faultName (reopen g (splice firstSeg)) = "foreignSegment") failures
   -- plant-old-shape (D2, HOST-20): the newest base re-sealed, byte for byte the same base, by a
   -- binary whose batch record admits one more Turn (another batch shape, so another stamp). The
   -- running binary must refuse it `shapeMismatch` by name; the binary that wrote it opens it.
@@ -460,7 +481,7 @@ def run (args : List String) : IO UInt32 := do
   | some ob =>
     check "plant-old-shape fires: another stamp, and the writing binary opens it"
       (oldKeys.shapes.bytes != keys.shapes.bytes &&
-        faultName (Id.run (openWith oldKeys cadence world recorder.mark foldStep ob r.disk.synced.size
+        faultName (Id.run (openWith oldKeys cadence world recorder.mark originChain foldStep ob r.disk.synced.size
           (segReader r.disk.synced))) = "opened") failures
     check "plant-old-shape: the running binary refuses the old shape `shapeMismatch` (never decoded)"
       (faultName (reopen ob r.disk.synced) = "shapeMismatch") failures

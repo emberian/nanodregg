@@ -33,6 +33,10 @@ def recorder : Recorder (World D) (Turn D) where
   encode := Record.encode Codec.Deployed.digestCodec
   mark w := (w.height, w.chain.bytes)
 
+/-- The genesis chain of a World's origin (KERNEL's `World.genesisChain`), as `mark` writes a
+chain: what the origin frame of its Store holds, checked at every open (HOST-25). -/
+def originChain (w : World D) : ByteArray := (World.genesisChain X.env w.origin).bytes
+
 /-- The writer's reopen: its own records, folded. -/
 def foldStep : World D → ByteArray → Except (Record.Fault (Reject D)) (World D) :=
   Record.step Codec.Deployed.digestCodec (World.fold X.env)
