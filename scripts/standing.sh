@@ -11,7 +11,10 @@
 #   sim:  every lean_exe named `*-sim` (host-sim, kernel-sim, …), run as `lake exe X SEED` for
 #         SEED in ${SIM_SEEDS:-1 2 3}: each must exit 0 with a last line `ALL PASS`, else RED
 #         naming the first `FAIL <check>`. No `*-sim` exe => sim=ABSENT => INCOMPLETE.
-#   rows: `rows/run` in the judged tree, exit 0 = every required row passed
+#   rows: `rows/run` in the judged tree (PROTOCOL's runner, Protocol.Rows.Run): one line per row
+#         `ROW <name> PASS|FAIL <why>|PENDING <why>`; exit 0 (`ALL PASS`) = ok, exit 3 (no FAIL,
+#         some PENDING: a row with no driver yet) = INCOMPLETE(n pending), anything else = RED
+#         naming the first failing row
 #   waste: the `WASTE <op> <metric> <ratio>` lines the sims print, against gates/waste.tsv
 #          (gates/waste.py --measured): a pinned row above its ceiling or unmeasured is RED;
 #          no measurement and no row at all is ABSENT (INCOMPLETE)
@@ -57,7 +60,15 @@ if [ "$build" = ok ]; then
       done
     done
   fi
-  if [ -x "$T/rows/run" ]; then rows=$(run env -C "$T" ./rows/run); fi
+  if [ -x "$T/rows/run" ]; then
+    env -C "$T" ./rows/run > "$G/rows.out" 2>&1; rc=$?
+    cat "$G/rows.out" >> "$log"
+    case $rc in
+      0) rows=ok ;;
+      3) rows="INCOMPLETE($(grep -c '^ROW [^ ]* PENDING' "$G/rows.out") pending)" ;;
+      *) rows="RED($(grep -m1 '^ROW [^ ]* FAIL' "$G/rows.out" | cut -c5- || echo "exit $rc"))" ;;
+    esac
+  fi
 fi
 waste=$(grep -c -v -e '^#' -e '^[[:space:]]*$' "$T/gates/waste.tsv" 2>/dev/null || echo 0)
 wastev=ABSENT
@@ -68,7 +79,7 @@ unpinned=$(grep -c '^unpinned' "$log" || true)
 all="$gates $build $census $sim $rows $wastev"
 case $all in
   *RED*) verdict=RED ;;
-  *ABSENT*) verdict=INCOMPLETE ;;
+  *ABSENT*|*INCOMPLETE*) verdict=INCOMPLETE ;;
   *) [ "$unmeasured" -gt 0 ] && verdict=INCOMPLETE || verdict=GREEN ;;
 esac
 line="STANDING ${sha:0:12} gates=$gates build=$build census=$census sim=$sim rows=$rows waste=$wastev(pinned $waste, unpinned $unpinned) unmeasured=$unmeasured => $verdict"

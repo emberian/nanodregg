@@ -53,6 +53,10 @@ package nanodregg where
 @[default_target] lean_exe «lang-journey» where
   root := `Lang.Journey.Main
 
+-- PROTOCOL's conformance rows: `rows [NAME…]` (rows/run, standing's rows stage), ends `ALL PASS`.
+@[default_target] lean_exe «rows» where
+  root := `Protocol.Rows.Main
+
 -- Host/c/*.c: the Store's physical IO (Host.File's externs). Sorted, so the archive is reproducible.
 extern_lib «ndhost» pkg := do
   let dir := pkg.dir / "Host" / "c"

@@ -30,31 +30,40 @@ inductive Expect
   | absent
   deriving DecidableEq, Repr
 
-/-- One command of a row: who runs it, the argv, the outcome it must get. -/
-structure Command where
+/-- One line of a row: who runs it, the argv of `nd`, the outcome it must get. -/
+structure Line where
   actor : String
   argv : List String
   expect : Expect
   deriving Repr
 
-/-- A row: one fresh deployment, its commands in order, what they reach, and its plant. -/
+/-- How a row is driven. -/
+inductive Drive
+  /-- a Lean executable of this tree that drives the real receive path in-process (toy
+  parameters, the real pipeline); it passes when it exits 0 and its last line is `last` -/
+  | exe (name : String) (args : List String) (last : String)
+  /-- members' commands, each through the one command language -/
+  | members (lines : List Line)
+  deriving Repr
+
+/-- A row: one fresh deployment, how it is driven, what it reaches, and its plant. -/
 structure Row where
   name : String
   /-- the minidregg rows this row replaces -/
   replaces : List String
-  /-- the operations the row's commands drive -/
+  /-- the operations the row's commands drive (an `exe` row drives none: it has no wire) -/
   ops : List Op
-  /-- the receiver kinds (`Kernel.Receive.Call` constructors) the row reaches -/
+  /-- the receiver kinds (`Kernel.Receive.Body` constructors) the row reaches -/
   kinds : List String
-  commands : List Command
+  drive : Drive
   /-- the mutation that must turn the row red -/
   plant : String
   /-- the refusal or verdict by which it goes red -/
   plantRed : String
   deriving Repr
 
-private def ok (actor : String) (argv : List String) : Command := ⟨actor, argv, .ok⟩
-private def no (actor : String) (argv : List String) (name : String) : Command :=
+private def ok (actor : String) (argv : List String) : Line := ⟨actor, argv, .ok⟩
+private def no (actor : String) (argv : List String) (name : String) : Line :=
   ⟨actor, argv, .refused name⟩
 
 /-- Every command reads through the member's own follow, which catches up from the writer's log
@@ -69,8 +78,8 @@ def journey : Row where
   replaces := ["journey/J0", "journey/J1", "journey/J2", "journey/J3", "journey/J4", "journey/J5",
     "welcomecontinuity"]
   ops := everyWrite ++ [.read]
-  kinds := ["enroll", "birth", "delegate", "write"]
-  commands := [
+  kinds := ["enroll", "create", "grant", "write"]
+  drive := .members [
     ok "sponsor" ["init"],
     ok "newcomer" ["init"],
     ok "sponsor" ["enroll", "@newcomer"],
@@ -91,7 +100,7 @@ def reopen : Row where
   replaces := ["journey/J6", "hostupgrade/REOPEN"]
   ops := everyWrite ++ [.read]
   kinds := ["write"]
-  commands := [
+  drive := .members [
     ok "newcomer" ["write", "shared", "2", "3"],
     ok "operator" ["host", "restart"],
     ok "newcomer" ["read", "shared", "--expect", "2=3"],
@@ -105,7 +114,7 @@ def laws : Row where
   replaces := ["journey/J7", "journey/J8", "journey/J13"]
   ops := everyWrite
   kinds := ["install", "write"]
-  commands := [
+  drive := .members [
     ok "sponsor" ["law", "shared", "not(any[])"],
     ok "newcomer" ["write", "shared", "2", "7"],
     ok "sponsor" ["law", "shared", "deny-all"],
@@ -120,7 +129,7 @@ def rotate : Row where
   replaces := ["journey/JROT", "journey/JROTL"]
   ops := everyWrite
   kinds := ["rotate", "write"]
-  commands := [
+  drive := .members [
     no "thief" ["rotate", "--as", "@newcomer", "--next", "@thief-next"] "notPrecommitted",
     ok "newcomer" ["rotate"],
     no "newcomer" ["write", "shared", "2", "4", "--key", "old"] "unknownKey",
@@ -138,7 +147,7 @@ def audit : Row where
   replaces := ["journey/JAUDIT", "jstoreaudit"]
   ops := everyCommand
   kinds := []
-  commands := [
+  drive := .members [
     ok "auditor" ["audit", "--from", "genesis"],
     no "auditor" ["audit", "--from", "genesis", "--copy-flip", "1"] "frameMac"]
   plant := "follow folds Turns without re-running the receiver on each Turn's event"
@@ -152,7 +161,7 @@ def pay : Row where
   replaces := ["jpay/JPAY1", "jpay/JPAY2", "jpay/JPAY3", "jpay/JPAY4", "jpay/JPAY6"]
   ops := everyWrite
   kinds := ["install", "invoke"]
-  commands := [
+  drive := .members [
     ok "operator" ["install", "world/pay/Book.obend"],
     ok "watcher" ["invoke", "book", "observe", "--fixture", "transfer-finalized"],
     no "watcher" ["invoke", "book", "observe", "--fixture", "transfer-failed"] "lawDenied",
@@ -170,7 +179,7 @@ def well : Row where
   replaces := ["journey/KW", "seats(well)"]
   ops := everyWrite
   kinds := ["install", "invoke"]
-  commands := [
+  drive := .members [
     ok "operator" ["install", "world/well/Well.obend"],
     ok "referee" ["invoke", "well", "mint", "@newcomer", "10"],
     no "newcomer" ["invoke", "well", "mint", "@newcomer", "10"] "noGrant",
@@ -188,7 +197,7 @@ def bounty : Row where
   replaces := ["bounty", "seats", "activity", "objective", "call", "send"]
   ops := everyWrite
   kinds := ["install", "invoke"]
-  commands := [
+  drive := .members [
     ok "poster" ["install", "world/bounty/BountyEscrow.obend"],
     ok "poster" ["invoke", "bounty", "post", "--reward", "50"],
     ok "hunter" ["invoke", "bounty", "claim"],
@@ -208,7 +217,7 @@ def grain : Row where
   replaces := ["m6grain", "journey/M6"]
   ops := everyWrite ++ [.read]
   kinds := ["install", "invoke"]
-  commands := [
+  drive := .members [
     ok "operator" ["install", "world/grain/Lifecycle.obend"],
     ok "owner" ["invoke", "grain", "begin", "--spk", "test.spk"],
     ok "owner" ["grain", "start"],
@@ -225,7 +234,7 @@ def hermes : Row where
   replaces := ["hermes", "journey/M5", "journey/J14"]
   ops := everyWrite ++ [.read]
   kinds := ["write"]
-  commands := [
+  drive := .members [
     ok "sponsor" ["grant", "shared", "@hermes", "observe,mutate"],
     ok "hermes" ["write", "shared", "2", "5", "--kill-after-send"],
     ok "hermes" ["retry", "--last", "--expect-committed"],
@@ -239,14 +248,52 @@ def bar : Row where
   name := "bar"
   replaces := ["births", "perf", "growth", "journey/G"]
   ops := everyWrite ++ [.read]
-  kinds := ["birth", "write"]
-  commands := [
+  kinds := ["create", "write"]
+  drive := .members [
     ok "sponsor" ["create", "obj-$i", "--repeat", "N"],
     ok "operator" ["host", "restart", "--cold"],
     ok "sponsor" ["read", "obj-0", "--within-ms", "60000"]]
   plant := "reopen folds the whole log instead of checkpoint + suffix"
   plantRed := "cold reopen past 60 s at N=1000"
 
-def rows : List Row := [journey, reopen, laws, rotate, audit, pay, well, bounty, grain, hermes, bar]
+/-! ## Lean-internal rows
+
+Rows whose driver is an executable of this tree: the real receivers and `World.admit` in one process
+under the Sim's toy parameters, with no socket. They reach kinds and refusals but no operation, so
+`ops` is empty; each executable runs its own plant and goes red by name if the plant stays green. -/
+
+/-- LANG's first law end to end (L1–L7): install → create → invoke; laws refuse by name. -/
+def langJourney : Row where
+  name := "lang-journey"
+  replaces := ["journey/J7(law)", "objectivebend/install-invoke"]
+  ops := []
+  kinds := ["install", "create", "invoke", "grant"]
+  drive := .exe "lang-journey" [] "lang-journey: GREEN"
+  plant := "a program whose judge admits everything (skip-judge)"
+  plantRed := "L4 set 101 admitted under the planted judge, so the refusal came from the law"
+
+/-- KERNEL's seeded simulation, seed 1: honest and adversarial calls, restarts, follower and auditor. -/
+def kernelSim : Row where
+  name := "kernel-sim"
+  replaces := ["sim/kernel"]
+  ops := []
+  kinds := ["enroll", "rotate", "create", "write", "law", "grant"]
+  drive := .exe "kernel-sim" ["1"] "ALL PASS"
+  plant := "the pin check disabled"
+  plantRed := "FAIL stale … got admitted"
+
+/-- HOST's loop over the in-memory disk, seed 1, with its crash plants. -/
+def hostSim : Row where
+  name := "host-sim"
+  replaces := ["sim/host", "crash/torn-tail"]
+  ops := []
+  kinds := []
+  drive := .exe "host-sim" ["1"] "ALL PASS"
+  plant := "a failing fsync; a flipped byte in a frame body, a length header, the last frame"
+  plantRed := "FAIL plant-fsync-fail… / plant-flip-…: the loop stops uncertain, the segment is corrupt or torn"
+
+def rows : List Row :=
+  [journey, reopen, laws, rotate, audit, pay, well, bounty, grain, hermes, bar,
+   langJourney, kernelSim, hostSim]
 
 end Nanodregg.Protocol

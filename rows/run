@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# rows/run [NAME...] — every conformance row of Protocol/Rows.lean (scripts/standing.sh's rows stage).
+# One line per row, `ROW <name> PASS|FAIL <why>|PENDING <why>`, then `ALL PASS` (exit 0),
+# `FAIL <n> of <m>` (exit 1) or `INCOMPLETE <n> pending` (exit 3). The runner is Lean
+# (Protocol.Rows.Run); this file only finds the tree.
+set -eu
+cd "$(dirname "$0")/.."
+exec lake exe rows "$@"
