@@ -55,3 +55,76 @@ fn nothing_hidden_is_refused() {
     assert!(!out.status.success());
     assert!(String::from_utf8_lossy(&out.stderr).contains("nothing hidden"));
 }
+
+/// The lake-built `host` this tree deploys (`ND_HOST_EXE` overrides). Missing is a failed plant,
+/// never a skip: a confinement plant that ran no Lean child proves nothing about one.
+/// The confinement plant runs a LEAN child (ASSEMBLY-perf ID-1). The real `host serve`, under
+/// the real `nd-supervise`, must answer a frame within 3 s. Measured 2026-10-16 on 87c721e: under
+/// the macOS FLOOR it answered nothing and still exited 0 at EOF, so every rc-only check passed;
+/// the Lean runtime's thread count came from sysctl `hw.ncpu`, which `(deny default)` refuses.
+/// Silence is the failure this names; any reply (a refusal included) passes.
+#[test]
+fn a_confined_lean_host_answers_within_the_deadline() {
+    let host = common::lean_host();
+    let ws = std::env::temp_dir().join(format!("nd-sup-lean-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&ws);
+    std::fs::create_dir_all(ws.join("ws")).unwrap();
+    let ws = ws.canonicalize().unwrap();
+    let store = ws.join("store");
+    let g = Command::new(&host)
+        .arg("genesis")
+        .arg(&store)
+        .arg("plant")
+        .output()
+        .unwrap();
+    assert!(g.status.success(), "plant: genesis failed: {g:?}");
+    let sock = std::env::temp_dir().join(format!("nd-sup-lean-{}.sock", std::process::id()));
+    let mut c = Command::new(env!("CARGO_BIN_EXE_nd-supervise"));
+    c.arg(&sock)
+        .arg("--hide")
+        .arg(ws.join("ws"))
+        .arg("--write")
+        .arg(&store)
+        .arg("--")
+        .arg(&host)
+        .arg("serve")
+        .arg(&store);
+    let _sup = common::Supervisor(
+        c.stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    let mut conn = loop {
+        if let Ok(s) = UnixStream::connect(&sock) {
+            break s;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "supervisor never bound {}",
+            sock.display()
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    conn.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+    let t = std::time::Instant::now();
+    frame::write(
+        &mut conn,
+        table::LIMITS,
+        nanodregg_client::generated::host_op::READ,
+        b"",
+    )
+    .unwrap();
+    let reply = frame::read(&mut conn, table::LIMITS);
+    let ms = t.elapsed().as_secs_f64() * 1e3;
+    let _ = std::fs::remove_file(&sock);
+    let _ = std::fs::remove_dir_all(&ws);
+    assert!(
+        reply.is_ok(),
+        "SILENT HANG: confined Lean host gave no reply within 3 s ({:?})",
+        reply.err()
+    );
+    eprintln!("confined lean host replied in {ms:.1} ms");
+}

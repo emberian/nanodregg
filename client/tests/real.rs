@@ -4,23 +4,15 @@
 //! the rotated key → read. Every accept and refuse here is Lean's (Ed25519 verify, the receivers,
 //! follow's audit and rendering); the client only signs and moves bytes.
 //!
-//! It needs the Lean binary: `ND_HOST_EXE=/abs/path/.lake/build/bin/host` (build: `lake build host`).
-//! Unset, the test FAILS by name; it never skips.
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // a plant that cannot set up is a failed plant
-use std::path::{Path, PathBuf};
+//! It needs the Lean binary (`common::lean_host`: `$ND_HOST_EXE`, else this tree's
+//! `.lake/build/bin/host`); missing, the test FAILS by name, it never skips.
+#![allow(clippy::unwrap_used, clippy::panic)] // a plant that cannot set up is a failed plant
+use std::path::Path;
 use std::process::{Child, Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
 mod common;
 use common::Supervisor;
-
-fn host_exe() -> PathBuf {
-    let p = std::env::var_os("ND_HOST_EXE")
-        .expect("ND_HOST_EXE is not set: the real round trip needs `lake build host`");
-    let p = PathBuf::from(p).canonicalize().unwrap();
-    assert!(p.is_file(), "ND_HOST_EXE is not a file");
-    p
-}
 
 fn line<'a>(out: &'a str, key: &str) -> &'a str {
     out.lines()
@@ -36,7 +28,7 @@ fn supervise(sock: &Path, ws: &Path, store: &Path, args: &[&str]) -> Supervisor 
         .arg("--write")
         .arg(store)
         .arg("--")
-        .arg(host_exe())
+        .arg(common::lean_host())
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -58,7 +50,7 @@ fn supervise(sock: &Path, ws: &Path, store: &Path, args: &[&str]) -> Supervisor 
 
 #[test]
 fn real_host_create_write_read_rotate_write_read() {
-    let host = host_exe();
+    let host = common::lean_host();
     // A short root: a Unix socket path must fit SUN_LEN (104 bytes on macOS).
     let root = std::env::temp_dir().join(format!("ndreal-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);

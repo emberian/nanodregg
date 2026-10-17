@@ -71,3 +71,18 @@ pub fn supervise(
     }
     s
 }
+
+/// The lake-built Lean `host`: `$ND_HOST_EXE`, else this tree's `.lake/build/bin/host`. Missing,
+/// the calling plant FAILS by name (`lake build host`); it never skips.
+pub fn lean_host() -> PathBuf {
+    let p = std::env::var_os("ND_HOST_EXE").map_or_else(
+        || Path::new(env!("CARGO_MANIFEST_DIR")).join("../.lake/build/bin/host"),
+        PathBuf::from,
+    );
+    assert!(
+        p.is_file(),
+        "plant: no lake-built host at {} (run `lake build host`)",
+        p.display()
+    );
+    p.canonicalize().unwrap()
+}
