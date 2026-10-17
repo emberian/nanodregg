@@ -661,3 +661,93 @@ Interleaving with the main thread's lines is possible in principle; each line is
 each name today", the answer is the log, not a counter, and that is a choice nobody has tested on an
 operator.
 **Status.** landed (this commit).
+
+## HOST-25 · open binds the segment's ORIGIN frame to the base's World: `corrupt` at 0, `foreignOrigin` (2026-10-17, HOST-6; OPS's `corrupt history` finding, built after KERNEL-24)
+**The defect (OPS, on D4/D6).** `seg.log` starts with the origin frame, `Log.frame keys.segment
+segmentInitial (mark w₀).2` (HOST-18). No open reads it. `openWith` reads the base and
+`[offset - 32, size)`, so a flipped byte inside the origin record opens clean, and so does an origin
+frame from another World under the same key. Only `host check`'s `historyClean`, which is O(segment)
+and off every serving path, refuses it as `corrupt history`. But the origin frame is what a
+follower's page from height 0 chains from, and it is the one place where a Store's file says which
+World it belongs to. HOST-18's critique already named the hole ("the origin frame's RECORD is never
+re-verified on open").
+**What KERNEL-24 gives.** `World.origin : D` is set by genesis and never written again
+(`admit_origin`, `fold_origin`). The genesis chain is `H(domGenesis, bytes origin)`. So once it lands,
+the origin frame's record (the genesis chain) is a function of the base World's own `origin`, at
+every height, and not only at genesis.
+**Decision.** `openWith` takes one more argument, `originChain : W → ByteArray`: the genesis chain
+of `w`'s origin. The deployed value is KERNEL's own definition (`Env.bytes` of the genesis-chain
+function KERNEL-24 names; HOST restates no hash). After the base reads, `tailRead` passes and the
+foreignSegment check passes (that order keeps HOST-18's names for a foreign file), open makes ONE
+more bounded read, `[0, min (Log.frameMax chainBytesMax) b.offset)`, and requires:
+- `Log.frameAt keys.segment chainBytesMax origin 0 segmentInitial = some r`. Otherwise it refuses
+  `.log (.corrupt 0)`, which is HOST-12's own fact: bad bytes at offset 0 with verifying frames after
+  them. The name is `corrupt`, the same name OPS's `check` prints, and no new Status is added for it;
+- `r.record = originChain b.world`. Otherwise it refuses `.base .foreignOrigin`, a new BaseFault and
+  Status `foreignOrigin`, code 30, fatal. This is a frame that verifies under this Store's key but
+  states another World's genesis: two Stores that share a key file, with one's origin frame spliced
+  over the other's.
+
+`openLog`'s `corrupt off` becomes ABSOLUTE (`b.offset + off`) in the same commit, as `Host.Tail`'s
+already is. Today the open's offset is relative to the base, so `corrupt 0` would be ambiguous
+between the origin frame and the first record after the genesis base. The host-sim plants that
+match `isCorrupt … 0` move to `origin.offset`.
+**Cost.** One pread of ≤ 100 bytes and one KMAC256 per open: O(1), independent of the Store. Every
+open pays it (writer, follower, fuel reopen, `Tail.open`, `check`), so the check is not a mode. It is
+the one open.
+**Theorems (`Host.Proofs.Base`).**
+- `openWith_reads`, re-stated: exactly two ranges, `[0, min (frameMax chainBytesMax) offset)` and
+  `[offset - 32, size)`, with the tail ≤ `tailMax`.
+- `openWith_origin`: an open that succeeds read, at offset 0, a frame that verifies from
+  `segmentInitial` whose record is `originChain b.world`.
+- `openWith_originCorrupt` and `openWith_foreignOrigin`: the plants' statements over the real
+  `openWith` (given a base that reads, a tail in bounds and an anchored tag: a non-verifying origin
+  refuses `corrupt 0`, and a verifying one with another record refuses `foreignOrigin`).
+- Completeness, so that the check cannot refuse the Stores this Host writes: `genesisImage_origin`
+  (the image genesis writes passes the check, given `originChain w₀ = (mark w₀).2`, which is
+  KERNEL's genesis-chain equation), and, over the deployed World, `originChain` is invariant under
+  `foldStep` (from KERNEL's `fold_origin`). Then every later base's World states the same origin
+  as the frame at 0.
+**Plants.** In host-sim, seeds 1–3, over a Store that has a sealed base past the first record:
+`plant-origin-flip` flips the byte at `originSize/2` and expects `corrupt` at 0. Without the check
+it opens clean: that is OPS's finding, and the red run will be shown. `plant-foreign-origin`
+overwrites `[0, originSize)` with another genesis's origin frame under the SAME key (same founders and
+name, another nonce) and expects `foreignOrigin`. With the record compare replaced by `true` it
+opens clean, and that red run will be shown too. OPS's store-plant `flip-byte-origin-frame-before-base`
+keeps its expected `corrupt`, but it now comes from the open, not from `historyClean`. OPS-2 is
+asked to add the same flip through `serve` (the open path of the real exe), plus a
+`foreign-origin` row. `Ops.Units.hostAction` gains the `foreignOrigin` arm, cross-layer, as OPS-2
+agreed in advance.
+**What it does NOT do.** It binds frame 0 to the base. It does not bind the frames BETWEEN the origin
+and the base's offset: those are chained by their tags, and only `historyClean` (`check`) and paging
+(frame by frame) verify them. A flip there still opens clean and is refused when a page or a check
+reaches it. Making open O(1) in that range is the point, and a whole-prefix check at open is
+O(segment) on the request path's restart (law 5). This is also not a second copy of KERNEL-24's
+`wrongWorld` (law 1): that check binds a CALL to a World, and this one binds a Store's FILES to
+each other.
+**Alternatives.** (a) Leave it to `check` (status quo): a damaged origin frame then serves pages from
+0 until someone runs a backup check. (b) Put the origin in the base and delete the origin frame: the
+frame exists so that every base sits after a frame (HOST-18's anchor), and the base already
+carries the World's origin, so a second field would be a second copy. (c) Compare only the
+origin frame's TAG, not its record: the tag comes from the record, but a tag that verifies says
+nothing about which World it names, which is the second refusal's whole point. (d) Store the origin
+frame's expected tag in the base: it says the same thing as the record compare, one step removed
+from the kernel's definition.
+**Critique.** The second refusal needs two Stores sharing a key. Store keys are drawn per genesis, so
+`foreignOrigin` is an operator's copy error, not an attack: anyone who holds the key can forge both
+the base and the frame (HOST-16). The flip refusal is the one that will actually fire, and the
+damage it catches is 68 bytes out of a whole file. The completeness theorems depend on KERNEL
+keeping `origin` constant under every Turn kind. A future "re-root" Turn would turn every Store
+written after it into a fatal `foreignOrigin`, which is loud, but a fatal open is a harsh way to
+learn it. The absolute-offset change alters printed offsets, and nothing persisted holds them.
+**Meta-critique.** OPS found this and named it `corrupt history`, and I chose to reuse `corrupt`
+for the flip half. That is law-1 comfort: one name for one fact. But it also means an operator
+cannot tell from the exit code whether the damage is in the origin or in the tail. The offset on
+stderr is the only thing that tells them apart. I also designed this before KERNEL-24 exists, against
+its decision text (`fold_origin`, the genesis chain formula), not its code. Exactly that move built
+mirrors elsewhere, so the build waits for the real signatures.
+**Flag day.** None of its own. Genesis already writes this frame (`genesisImage`), and the bytes do
+not change. It lands right after KERNEL-24, whose flag day re-geneses every Store (the D2 stamp
+refuses the old ones `shapeMismatch` before this check is reached). After it, a Store whose origin
+frame does not match its base refuses to open, by name, where before it opened.
+**Status.** designed (this entry). It is built when KERNEL-5 reports KERNEL-24 on main.
