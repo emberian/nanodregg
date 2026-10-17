@@ -226,4 +226,18 @@ stale allow row judged `build: nothing to build` → `PRE-PUSH GREEN`).
 no-op traversal and a census (MIGRATE-HBOX measures it). A Mac without flock can no longer run standing at
 all. **Meta-critique.** I accepted a lane's design whole because it was well argued and the load emergency
 made speed feel like the constraint; the slot count is a guess, not a measurement.
-**Status.** written 10-17; lands as the first hbox commit.
+**Status.** built: 194cefb (the first hbox commit) and d5871cb. 194cefb's message lost three quoted plant
+lines to shell substitution while it was being filled on hbox (history is not rewritten); they are, verbatim:
+the reader plant `scripts/commit: REFUSED — this clone is a reader; main lives on hbox: ssh hbox, cd
+/tank/dregg-build/nanodregg/wt/<layer>`; the LAKE-DROP summary line `targets: lakefile dropped target
+host-file-sim; needs 'LAKE-DROP: host-file-sim: <why>'`; and, from the first cold slot build, `build: RED` /
+`census: RED` with `error: Lean exited with code 143` (earlyoom, Codec.Proofs.Ed25519 at 9 GB), which became
+d5871cb's KILLED(load). The stale-allow-row plant, re-run warm: `allow row matches nothing:
+Nanodregg.Kernel.noSuchDecl Lean.ofReduceBool`.
+**Amendment (d5871cb, ROOT 10-17).** A step killed by signal 15/9 with no real Lean error is `KILLED(load)`:
+pre-push exits 76, scripts/commit writes nothing (`NOT JUDGED … re-run`). Memory-weighted per-module seats
+(minidregg 5e29e086) were considered and not built: lake schedules modules, so weighting them means a second
+scheduler beside lake's. **Critique.** A commit that itself makes a module's elaboration explode (a reduction
+bomb) is killed every time and reads as load forever; the log names the module, and a second KILLED on a quiet
+box is the author's. **Meta-critique.** I declined the seat scheduler partly because it is big; the honest
+reason that survives is that it duplicates lake, and the 9-14 GB proof module is the defect to fix.
