@@ -23,7 +23,7 @@ def applyAt (t : Term) : Term := .app (.app (.app t (.var 2)) (.var 1)) (.var 0)
 or the verdict: `ok`, or `refused` with the author's reason bytes. A value of another shape is
 `stuck`. For a loaded package's law the machine run inside is the one `law_never_stuck`
 (Lang.Proofs.Invoke) is about (`applyAt (.get (.ref g) ℓ)` is `apply3 g ℓ`), so it never ends
-`stuck`; that the EXTRACTION never does either is not yet a theorem. -/
+`stuck`, and neither does the extraction: `Lang.Proofs.LawRun.runLaw_never_stuck`. -/
 def runLaw (lib : List Term) (t : Term) (o n r : Data) : Except Fault (Except ByteArray Unit) :=
   match run lib Bounds.stackMax lawTicks 0 (State.init (applyAt t) [r.toVal, n.toVal, o.toVal]) with
   | .fault f _ => .error f

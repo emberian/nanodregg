@@ -1153,3 +1153,25 @@ deployed-run theorem restate the front half, and deleting it shortened four proo
 invariant took one pass with no new machinery (`ValLits` is an ordinary inductive), which says LANG-38's
 "no primitive makes a digest" was cheap to make true and was only ever unstated.
 **Status.** built (this commit). Nothing re-ids: no package, wire or Store shape changed.
+
+## LANG-42 The one law runner is never stuck on a loaded package's law: extraction makes progress (2026-10-17; LANG-5/6 leftover "runLaw extraction never stuck")
+**Decision.** `Lang/Proofs/LawRun.lean` (new). `extract_progress` (mutual with `extractArm_progress` and
+`extractRow_progress`, via `force_progress` and `unknot_progress`): extracting a value typed at a data
+type fails, if at all, by a named fault of a forced suspension, never `stuck`. `verdict_shape`: data
+conforming to `verdictTy` is `ok {}` or `refused bytes`. `runLaw_never_stuck`: on a loaded package's law,
+on states read at its row and a request in bounds, `runLaw` never returns `.error .stuck`. Its third arm
+("a value of another shape") is unreachable, and so is a `stuck` extraction. Law.lean's docstring, which
+said "not yet a theorem", now cites it. Teeth: `extract_fn_stuck` (a function type is not data) and
+`runLaw_nat_stuck` (a closed law returning a number IS stuck, so the closure typing is what the theorem uses).
+**Why.** `law_never_stuck` covered only the machine run inside `runLaw`. A receiver that denies a law
+`ℓ: stuck` would mean a checked law reached a type error. It is now provably impossible, so that
+denial text is reserved for a broken checker.
+**Alternatives.** Folding progress into `extract_conforms` as a sum type: one statement, but every
+caller of `extract_conforms` would have to destructure it. Kept separate.
+**Critique.** (1) Faults remain possible (ticks under `lawTicks`, stack, arithmetic); this says only that
+they are named. (2) The method run's extraction (`runMeasured`) gets the same corollary for free from
+`extract_progress`. It is not stated, because `runMeasured` already reports any extraction fault by name.
+**Meta-critique.** The proof is the error-side mirror of `extract_conforms`, the same recursion with the
+same lemmas. That it was "nearly a corollary" for four predecessors and was never written is the cost of
+an open list item that looks done.
+**Status.** built (this commit). Nothing re-ids: one new proof module and a docstring.
