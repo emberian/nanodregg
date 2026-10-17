@@ -192,6 +192,29 @@ def fillPages (pager : Resident W → Nat → IO (UInt8 × ByteArray)) (r : Resi
     let (status, payload) ← pager r start
     return rs.modify i fun rep => { rep with status, payload }
 
+/-- Append one record that takes the World to `w'`, durably, within the tail bound, and index it;
+start a seal if the cadence is reached. The writer's loop and the follower's (`Host.Follow`) both
+append through this, so both keep the same Store invariants. On a refusal nothing was appended
+past what was synced, and the caller answers its requests `uncertain`. -/
+def append (rec : Recorder W T) (s : Log.Sealer) (ck : Checkpoint W) (c : Cadence) (store : Store)
+    (r : Resident W) (w' : W) (record : ByteArray) : IO (Except Exit (Resident W)) := do
+  if c.recordBytesMax < record.size then return .error (.recordTooLarge record.size)
+  let r ← match ← makeRoom ck c r (frameSize record) with
+    | .ok r => pure r
+    | .error f => return .error (.sealFailed f)
+  if within : withinTail c r.sealed r.pos.offset (frameSize record) = true then
+    match ← commitBatch c r.sealed store s r.pos record within with
+    | .error detail => return .error (.uncertain detail)
+    | .ok pos =>
+      let (h, chain) := rec.mark r.world
+      let r := { r with world := w', pos, index := r.index.push ⟨h, r.pos.offset, chain⟩ }
+      if shouldSeal c r.sealed r.pending.isSome pos.offset then
+        return .ok { r with pending := some (← spawnSeal ck w' pos r.index) }
+      return .ok r
+  else
+    -- not proved unreachable (makeRoom's inline seal is IO): a named stop
+    return .error (.recordTooLarge record.size)
+
 /-- The loop. `rec.encode after staged` is the batch record (`Host.Record.encode`); `pager r start`
 builds a `log` page (status, payload) from the durable state `r`. -/
 def serve (m : Machine W T R Frame) (rec : Recorder W T) (s : Log.Sealer) (ck : Checkpoint W)
@@ -213,33 +236,13 @@ def serve (m : Machine W T R Frame) (rec : Recorder W T) (s : Log.Sealer) (ck : 
       (← fillPages pager r out).forM port.send
       serve m rec s ck c store pager port limits fuel r carry
     else
-      let record := rec.encode w' out.staged
-      if c.recordBytesMax < record.size then
+      match ← append rec s ck c store r w' (rec.encode w' out.staged) with
+      | .error e =>
         (uncertainAll out.replies).forM port.send
-        finish (.recordTooLarge record.size) r
-      else
-      let r ← match ← makeRoom ck c r (frameSize record) with
-        | .ok r => pure r
-        | .error f =>
-          (uncertainAll out.replies).forM port.send
-          return (.sealFailed f, { r with pending := none })
-      if within : withinTail c r.sealed r.pos.offset (frameSize record) = true then
-        match ← commitBatch c r.sealed store s r.pos record within with
-        | .error detail =>
-          (uncertainAll out.replies).forM port.send
-          finish (.uncertain detail) r
-        | .ok pos =>
-          let (h, chain) := rec.mark r.world
-          let r := { r with world := w', pos, index := r.index.push ⟨h, r.pos.offset, chain⟩ }
-          (← fillPages pager r out).forM port.send
-          let r ← if shouldSeal c r.sealed r.pending.isSome pos.offset then
-              pure { r with pending := some (← spawnSeal ck w' pos r.index) }
-            else pure r
-          serve m rec s ck c store pager port limits fuel r carry
-      else
-        -- not proved unreachable (makeRoom's inline seal is IO): a named stop
-        (uncertainAll out.replies).forM port.send
-        finish (.recordTooLarge record.size) r
+        finish e r
+      | .ok r =>
+        (← fillPages pager r out).forM port.send
+        serve m rec s ck c store pager port limits fuel r carry
 
 /-! ## The stdio port: a reader task frames stdin into a bounded channel -/
 

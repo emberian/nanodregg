@@ -12,6 +12,7 @@ apart without parsing text: 0 eof · 2 usage or refused (its name on stderr) · 
 4 fuel (restart) · 5 sealFailed · 6 recordTooLarge.
 -/
 import Host.Deployed
+import Host.Follow
 import Kernel.Receive.Follow
 
 namespace Nanodregg.Host.Cli
@@ -87,10 +88,30 @@ def serveVerb (store : String) : IO UInt32 := do
       if exitCode exit ≠ 0 then IO.eprintln s!"exit {exit.name}"
       return exitCode exit
 
+def followVerb (store memberHex grantHex : String) : IO UInt32 := do
+  let some member := hexDigest memberHex | refuse "member"
+  let some grant := hexDigest grantHex | refuse "grant"
+  match ← (readKey store : IO (Except (StoreFault (Record.Fault (Receive.Verdict D))) Digest)) with
+  | .error f => refuse f.name
+  | .ok key =>
+    let keys := Keys.ofKey key
+    -- follow's own Store, reopened by the audit: every Turn of its tail re-derived
+    match ← openWriter store keys c world recorder.mark auditStep with
+    | .error f => refuse f.name
+    | .ok wr =>
+      IO.eprintln s!"follow: audited to height {wr.opening.opened.world.height}"
+      let port ← stdioPort
+      let (exit, _) ← Follow.loop keys ⟨member, grant, Follow.window⟩ (fileStore wr.segment)
+        (fileCheckpoint store keys c world) port fuelBatches wr.opening.resident
+      wr.segment.sync  -- the follower's handle, and so its lock, lives to here
+      if exitCode exit ≠ 0 then IO.eprintln s!"exit {exit.name}"
+      return exitCode exit
+
 def main : List String → IO UInt32
   | ["genesis", store, name] => genesisVerb store name []
   | "genesis" :: store :: name :: fs => genesisVerb store name fs
   | ["serve", store] => serveVerb store
+  | ["follow", store, member, grant] => followVerb store member grant
   | _ => do IO.eprintln usage; return 2
 
 end Nanodregg.Host.Cli
