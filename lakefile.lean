@@ -72,3 +72,7 @@ extern_lib «ndhost» pkg := do
 -- The Host's loop end to end over the in-memory disk, with the crash plants (standing: seeds 1 2 3).
 @[default_target] lean_exe «host-sim» where
   root := `Host.Sim.Main
+
+-- The loop over a real Store directory (Host.Store + Host/c/file.c): lock, torn-file truncation.
+@[default_target] lean_exe «host-file-sim» where
+  root := `Host.Sim.FileMain

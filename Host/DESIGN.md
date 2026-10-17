@@ -20,7 +20,8 @@ request, a store-helper process per call, six executables. None of it survives.
 ```
 
 - **One Lean process per Store, one writer.** `host serve STORE` takes an exclusive `flock` on
-  `STORE/LOCK`; a second writer refuses by name (`storeLocked`).
+  the segment's append handle (the lock IS the handle that appends); a second writer refuses by name
+  (`StoreFault.locked`).
 - **The supervisor owns the socket**, accepts connections, and writes each request as one frame
   `(conn : UInt32, op : UInt8, payload)` onto the Host's stdin; it routes each reply frame back by
   `conn`. It decides nothing: it does not parse payloads, and a reply it cannot route is dropped
@@ -69,7 +70,6 @@ at low load and buys nothing at high load (HP-DESIGN §0.2 proposed one; HOST-3 
 ## 4. The Store on disk (flat segments; no SQLite)
 
 ```
-STORE/LOCK                  flock'd by the writer
 STORE/ckpt-<h>.world        World at height h, one MAC; written tmp → fsync → rename → fsync dir
 STORE/seg-<h>.log           batch frames for heights > h, append-only
 ```
