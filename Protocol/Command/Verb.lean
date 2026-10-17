@@ -15,6 +15,7 @@ import Kernel.Receive.Call
 import Protocol.Table
 import Protocol.Command.Text
 import Lang.Read
+import Protocol.Thin
 
 namespace Nanodregg.Protocol.Command
 
@@ -46,17 +47,20 @@ inductive Verb
   | read
   /-- `rotate`: move the member to custody's precommitted NEXT key, precommitting the one after -/
   | rotate
+  /-- `adopt HEIGHT DIGEST`: start follow from the writer's base at HEIGHT, accepted only if its
+  World bytes hash to DIGEST, a pin the member trusts out of band (thin consent, PROTOCOL-14) -/
+  | adopt
   deriving DecidableEq, Repr
 
 namespace Verb
 
 def all : List Verb :=
-  [init, enroll, install, create, write, law, invoke, grant, revoke, read, rotate]
+  [init, enroll, install, create, write, law, invoke, grant, revoke, read, rotate, adopt]
 
 def word : Verb → String
   | init => "init" | enroll => "enroll" | install => "install"
   | create => "create" | write => "write" | law => "law" | invoke => "invoke"
-  | grant => "grant" | revoke => "revoke" | read => "read" | rotate => "rotate"
+  | grant => "grant" | revoke => "revoke" | read => "read" | rotate => "rotate" | adopt => "adopt"
 
 def ofWord? (s : String) : Option Verb := all.find? (·.word == s)
 
@@ -83,6 +87,7 @@ inductive Cmd (D : Type)
   | revoke (grant : D)
   | read (obj : D) (expect : List (Nat × ByteArray))
   | rotate
+  | adopt (pin : Thin.Pin)
 
 /-- Every way an argv is refused. -/
 inductive ParseRefusal
@@ -122,6 +127,7 @@ def usage : Verb → String
   | .write => "write OBJ KEY VALUE [--via GRANT]" | .law => "law OBJ LAW... [--via GRANT]"
   | .invoke => "invoke OBJ METHOD ARGS [--via GRANT]" | .grant => "grant TARGET MEMBER RIGHTS [--via PARENT]"
   | .revoke => "revoke GRANT" | .read => "read OBJ [KEY=VALUE...]" | .rotate => "rotate"
+  | .adopt => "adopt HEIGHT DIGEST"
 
 def argvSize (argv : List ByteArray) : Nat := 4 + (argv.map (4 + ·.size)).sum
 
@@ -216,6 +222,11 @@ def parseVerb (v : Verb) (args : List String) : Except ParseRefusal (Cmd D) :=
   | .revoke, [g] => .revoke <$> digestArg digestOf g
   | .read, o :: es => do pure (.read (← digestArg digestOf o) (← mapEx expectArg es))
   | .rotate, [] => .ok .rotate
+  | .adopt, [h, d] => do
+      let height ← numArg h
+      match Text.ofHex d with
+      | some digest => pure (.adopt ⟨height, digest⟩)
+      | none => throw (.badDigest d)
   | _, _ => bad
 
 /-- THE parser: argv bytes to a command, or a refusal by name. -/

@@ -11,9 +11,10 @@ and the four client bounds.
 What is NOT an operation, and where it went (minidregg's 186 opcodes, `DELETE-PROTOCOL-20261016.md`):
 every family-specific plan/assemble/submit/lookup quadruple is one `submit`/`lookup` whose payload is
 a signed call of some KIND (KERNEL's `Receive`; LANG's `install`/`invoke` are kinds, not ops); every
-view is a `read` kind; challenge, prepare, assemble, author, inspect and signatures are steps of the
-follow machine (Lean), not wire operations; describe/profile are a `read` kind; certify is the Host's
-own seal; consent frames are `host follow` (HOST-7).
+view is answered by the member's own follow (its World, caught up from `log`); `read` serves only
+the newest base's World bytes, to a thin member (PROTOCOL-14 A); challenge, prepare, assemble,
+author, inspect and signatures are steps of the follow machine (Lean), not wire operations; certify
+is the Host's own seal; consent frames are `host follow` (HOST-7).
 
 Each operation names the one function that answers it (`receiver`). The names are data until the
 receiving layers commit those declarations; a gate then resolves each name in the environment.
@@ -40,7 +41,7 @@ inductive Op
   | submit
   /-- the same signed call bytes: committed (receipt), absent, or never-admissible -/
   | lookup
-  /-- a view of the writer's World, by kind; an authorized view carries a signature -/
+  /-- a page of the writer's newest base, for a thin member (PROTOCOL-14 A, `readReplyLayout`) -/
   | read
   /-- the log's frames from a height: what a follower folds -/
   | log
@@ -74,8 +75,8 @@ def effect : Op → Effect
 def receiver : Op → String
   | submit => "Nanodregg.Kernel.Receive.receive"
   | lookup => "Nanodregg.Kernel.World.lookup"
-  | read => "Nanodregg.Kernel.Receive.view"
-  | log => "Nanodregg.Host.Log.framesFrom"
+  | read => "Nanodregg.Host.Page.basePage"
+  | log => "Nanodregg.Host.Page.build"
   | command => "Nanodregg.Protocol.Command.start"
   | resume => "Nanodregg.Protocol.Command.step"
 
@@ -87,14 +88,6 @@ def relayable : List Op := [lookup, read, log]
 def name : Op → String
   | submit => "submit" | lookup => "lookup" | read => "read" | log => "log"
   | command => "command" | resume => "resume"
-
-/-- A RESERVED operation is in the table but no row may claim it: a declared absence. `read` is
-reserved while Ember's thin-consent ruling is open (HOST-7a): under PROTOCOL-3 every member follows
-and reads through its own follow, so nothing sends `read`. If thin members are out, `read` is
-deleted (6 → 5); if they are in, a thin-member row sends it and it stops being reserved. -/
-def reserved : Op → Bool
-  | read => true
-  | submit | lookup | log | command | resume => false
 
 /-- Decode a request byte; anything else is refused before a payload is read. -/
 def ofCode? (b : UInt8) : Option Op := all.find? (·.code == b)

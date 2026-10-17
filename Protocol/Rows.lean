@@ -45,6 +45,12 @@ inductive Act
   | retry
   /-- open a copy of the Store whose BASE file has the byte at `offset` flipped -/
   | reopenFlipped (offset : Nat)
+  /-- the operator seals a base of the writer's World as it stands, then restarts the loop from it
+  (the writer's newest base is then at its tip) -/
+  | seal
+  /-- the actor, a full follower, states the pin of its own World out of band (the channel is
+  Ember's, unbuilt): binds `NAME` to the digest of its World bytes and `NAME.h` to its height -/
+  | attest (name : String)
   deriving Repr
 
 /-- A fault the transport or the client injects into one command. -/
@@ -111,6 +117,8 @@ inductive Mutation
   | advanceOnSend
   /-- the writer states every log page's own end as its tip, hiding the log after it -/
   | lieTip
+  /-- the writer serves its newest base with one World byte flipped, stating the honest digest -/
+  | forgeBase
   deriving DecidableEq, Repr
 
 /-- A row's plant: the mutation, and the line that must catch it with the outcome it then gets. -/
@@ -295,6 +303,32 @@ def paging : Row where
     { actor := "auditor", act := .cmd ["read", "@shared", "2=1", "3=9"], expect := .ok, fault := .cold }])
   plant := .caught .lieTip 11 (.refused "expect")
 
+/-- THIN (PROTOCOL-14, option A; minidregg's `journey.d/jthin-consent.sh`, which drove the
+deleted thin consent frames 230–232): a member that never folded the log adopts the writer's
+newest base, pinned by a full follower's word, then is an ordinary follower from the base on: it
+re-derives the suffix and signs a write planned on it. The full follower (`operator`) catches up,
+the writer seals at its tip, and the operator states the pin of its own World (`attest`, out of
+band). A newer seal moves the base off the pin: a member (`late`) holding the old pin is refused
+`baseMoved`. -/
+def thin : Row where
+  name := "thin"
+  replaces := ["journey.d/jthin-consent"]
+  ops := everyWrite ++ [.read]
+  kinds := ["enroll", "install", "create", "grant", "write"]
+  drive := .members (welcome ++ join "sponsor" "thin" ++ join "sponsor" "late" ++ [
+    okBind "sponsor" ["grant", "@shared", "@thin", "observe,mutate"] "gt",
+    ok "newcomer" ["write", "@shared", "2", "1", "--via", "@g"],
+    ok "operator" ["read", "@shared", "2=1"],
+    { actor := "operator", act := .seal, expect := .ok },
+    { actor := "operator", act := .attest "pin", expect := .ok },
+    ok "thin" ["adopt", "@pin.h", "@pin"],
+    ok "newcomer" ["write", "@shared", "2", "2", "--via", "@g"],
+    ok "thin" ["write", "@shared", "3", "7", "--via", "@gt"],
+    ok "thin" ["read", "@shared", "2=2", "3=7"],
+    { actor := "operator", act := .seal, expect := .ok },
+    no "late" ["adopt", "@pin.h", "@pin"] "baseMoved"])
+  plant := .caught .forgeBase 17 (.refused "baseMismatch")
+
 /-- JPAY1–4, JPAY6: observed payments become credit. Pay is an installed package (LANG's to
 write, `world/pay/Book`), invoked by members and by the watcher, not a receiver family. -/
 def pay : Row where
@@ -398,7 +432,7 @@ def langJourney : Row where
   plant := .internal "a program whose judge admits everything: L4 set 101 must be admitted"
 
 def rows : List Row :=
-  [journey, reopen, laws, rotate, audit, paging, pay, well, bounty, grain, hermes, bar,
+  [journey, reopen, laws, rotate, audit, paging, thin, pay, well, bounty, grain, hermes, bar,
    langJourney]
 
 end Nanodregg.Protocol

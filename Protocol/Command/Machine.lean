@@ -15,6 +15,12 @@ and a `read` stops after the catch-up; `init` needs no World (sign twice, print 
 (precommitting the digest of its PENDING key) and has it signed by `signNext`; custody advances on
 its own settlement of the submit (CLIENT-13).
 
+`adopt HEIGHT DIGEST` (thin consent, PROTOCOL-14 A) pages the writer's newest base with `read`, one
+signed envelope per page, `Protocol.Thin.accept` deciding each page; the download so far lives in
+follow's state (`Follow.download`, memory only), and an adopted base replaces follow's World and is
+handed back as `Persist.adopt` for follow to seal as its own newest base. From there every command
+catches up from the base's height like any other.
+
 `k` holds only the argv, the phase and the results so far; every plan is RE-DERIVED from follow's
 World at each step and the bytes it signs are compared with the ones custody signed (`planMoved`),
 so `k` cannot steer what is signed (HOST-9's `resume_rederives`). A plan is offered for signature
@@ -62,6 +68,8 @@ inductive Refusal (D : Type)
   /-- the catch-up read `Bounds.pagesPerCommandMax` pages and follow is still at `height`, the
   writer at `tip`: what was absorbed is kept, and the member runs the command again -/
   | behind (height tip : Nat)
+  /-- a base download refused, by `Protocol.Thin`'s name -/
+  | thin (r : Thin.Refusal)
 
 /-- A step answered to the client. -/
 inductive Reply
@@ -93,9 +101,24 @@ def Refusal.name : Refusal D → String
   | .tooManyPins => "tooManyPins"
   | .chainMismatch _ => "chainMismatch"
   | .behind _ _ => "behind"
+  | .thin r => r.name
 
 def refused (r : Refusal D) : Reply := .done 1 ByteArray.empty s!"refused {r.name}\n".toUTF8
 def printed (out : String) : Reply := .done 0 out.toUTF8 ByteArray.empty
+
+/-! ## Follow's state -/
+
+/-- What `host follow` holds between frames: its World, and a base download in progress (thin
+consent: in memory only, never persisted, so a restarted follow starts the download again). -/
+structure Follow (D : Type) [Ord D] where
+  world : World D
+  download : Option Thin.Download := none
+
+/-- What a step asks follow to make durable before it answers: the Turns it absorbed (re-derived,
+in log order; `[]` for most steps), or a base it adopted, which follow seals as its own newest base. -/
+inductive Persist (D : Type) [Ord D]
+  | turns (ts : List (Turn D))
+  | adopt (w : World D)
 
 /-! ## The continuation -/
 
@@ -164,7 +187,7 @@ def body (X : Ctx D) (me : Self D) (s : Signed) : Cmd D → Option (Body D)
   | .grant t g rs via => some (.grant (t.getD (worldId X)) g rs via)
   | .revoke g => some (.revoke g)
   | .rotate => some (.rotate s.key (nextKeyDigest X s.next))
-  | .init _ | .read _ _ => none
+  | .init _ | .read _ _ | .adopt _ => none
 
 /-- Derive with the signature not yet known, pinning each cell the derivation asks for. -/
 def derivePins (X : Ctx D) (w : World D) : Nat → Unsigned D → Except (Refusal D) (Unsigned D × Turn D)
@@ -261,20 +284,34 @@ def receipt (X : Ctx D) (t : Turn D) : String :=
 
 /-! ## The machine -/
 
-def start (X : Ctx D) (me : Self D) (w : World D) (argv : List ByteArray) : Reply :=
+/-- The envelope a thin member signs for the base page at byte `offset` of the base pinned at
+`pin.height`. -/
+def adoptEnvelope (X : Ctx D) (me : Self D) (pin : Thin.Pin) (offset : Nat) : ByteArray :=
+  Envelope.message X me.member me.grant offset (pin.height + me.window)
+
+def start (X : Ctx D) (me : Self D) (f : Follow D) (argv : List ByteArray) : Reply :=
+  let w := f.world
   match parse X.digestOf argv with
   | .error r => refused (D := D) (.parse r)
   | .ok (.init _) => next (D := D) ⟨argv, 1, []⟩ fun k => .sign whoami k
+  | .ok (.adopt pin) =>
+      if pin.height ≤ w.height then refused (D := D) (.thin (.notBehind w.height)) else
+      let off := Thin.offset pin f.download
+      next (D := D) ⟨argv, 6, [Text.u64 off, Text.u64 0]⟩ fun k => .sign (adoptEnvelope X me pin off) k
   | .ok _ =>
       next (D := D) ⟨argv, 1, [Text.u64 w.height, Text.u64 0]⟩ fun k =>
         .sign (Envelope.message X me.member me.grant w.height (w.height + me.window)) k
 
-/-- One step: the continuation, the result of the step it asked for, and follow's World. It
-answers follow's World after the step, the Turns it absorbed on the way (a log page's, re-derived;
-`[]` for every other step), and the next reply. -/
-def step (X : Ctx D) (me : Self D) (w : World D) (kb result : ByteArray) :
-    World D × List (Turn D) × Reply :=
-  let same (r : Reply) : World D × List (Turn D) × Reply := (w, [], r)
+/-- One step: the continuation, the result of the step it asked for, and follow's state. It
+answers follow's state after the step, what to persist (a log page's Turns, re-derived; a base it
+adopted; `[]` for every other step), and the next reply. `B` is how an adopted base is read
+(its World codec and the digest a pin names). -/
+def step (X : Ctx D) (B : Thin.Base (World D)) (me : Self D) (f : Follow D) (kb result : ByteArray) :
+    Follow D × Persist D × Reply :=
+  let w := f.world
+  let same (r : Reply) : Follow D × Persist D × Reply := (f, .turns [], r)
+  let moved (w' : World D) (ts : List (Turn D)) (r : Reply) : Follow D × Persist D × Reply :=
+    ({ f with world := w' }, .turns ts, r)
   match State.ofBytes kb, parse X.digestOf ((State.ofBytes kb).map (·.argv) |>.getD []) with
   | none, _ => same (refused (D := D) .badState)
   | some _, .error r => same (refused (D := D) (.parse r))
@@ -327,21 +364,21 @@ def step (X : Ctx D) (me : Self D) (w : World D) (kb result : ByteArray) :
                   | .ok (w', ts) =>
                       if height < tip then
                         if Bounds.pagesPerCommandMax ≤ pages + 1 then
-                          (w', ts, refused (D := D) (.behind height tip))
-                        else (w', ts, again 1 [Text.u64 height, Text.u64 (pages + 1)] fun k =>
+                          moved w' ts (refused (D := D) (.behind height tip))
+                        else moved w' ts (again 1 [Text.u64 height, Text.u64 (pages + 1)] fun k =>
                           .sign (Envelope.message X me.member me.grant height (height + me.window)) k)
                       else
                       match cmd, Signed.ofBytes signedB with
-                      | .read obj ex, _ => (w', ts, render w' obj ex)
-                      | .rotate, some _ => (w', ts, again 5 [startB, signedB] fun k => .precommit k)
+                      | .read obj ex, _ => moved w' ts (render w' obj ex)
+                      | .rotate, some _ => moved w' ts (again 5 [startB, signedB] fun k => .precommit k)
                       | _, some s => match body X me s cmd with
-                        | none => (w', ts, refused (D := D) .badState)
+                        | none => moved w' ts (refused (D := D) .badState)
                         | some b =>
                           match plan X me w' s.key b with
-                          | .error r => (w', ts, refused (D := D) r)
-                          | .ok u => (w', ts, again 3 [startB, signedB, X.unsignedBytes u] fun k =>
+                          | .error r => moved w' ts (refused (D := D) r)
+                          | .ok u => moved w' ts (again 3 [startB, signedB, X.unsignedBytes u] fun k =>
                               .sign (X.unsignedBytes u) k)
-                      | _, none => (w', ts, refused (D := D) .badState)
+                      | _, none => moved w' ts (refused (D := D) .badState)
           | some (.refused, p) => same (refused (D := D) (.host (hostName p)))
           | _ => same (refused (D := D) .badResult)
       -- the call's signature: re-plan, compare with what was signed, submit
@@ -382,6 +419,40 @@ def step (X : Ctx D) (me : Self D) (w : World D) (kb result : ByteArray) :
           | some (.absent, _) => same (.done 3 ByteArray.empty "absent\n".toUTF8)
           | some (.uncertain, _) => same (.done 2 ByteArray.empty "uncertain\n".toUTF8)
           | none => same (refused (D := D) .badResult)
+      -- adopt: the envelope for the page at `off`, signed; ask for the base page
+      | .adopt pin, 6, [offB, pagesB] =>
+          match Signed.ofBytes result, Text.ofU64 offB with
+          | some s, some off =>
+              let e : Envelope D :=
+                { member := me.member, grant := me.grant, start := off,
+                  validUntil := pin.height + me.window, key := s.key, signature := s.signature }
+              match Envelope.bytes X e with
+              | some p => same (again 7 [offB, pagesB] fun k => .host .read p k)
+              | none => same (refused (D := D) .badState)
+          | _, _ => same (refused (D := D) .badResult)
+      -- adopt: one base page, decided by `Thin.accept`; the next page, or the World adopted
+      | .adopt pin, 7, [offB, pagesB] =>
+          let drop (r : Thin.Refusal) : Follow D × Persist D × Reply :=
+            ({ f with download := none }, .turns [], refused (D := D) (.thin r))
+          match hostReply result, Text.ofU64 offB, Text.ofU64 pagesB with
+          | some (.ok, p), some off, some pages =>
+              match Thin.Page.ofBytes p with
+              | none => drop .badPage
+              | some page =>
+                  if off ≠ Thin.offset pin f.download then drop .pageMismatch else
+                  match Thin.accept B pin f.download page with
+                  | .error r => drop r
+                  | .ok (.done w') =>
+                      ({ world := w', download := none }, .adopt w',
+                        printed s!"adopted {pin.height} {Text.toHex pin.digest}\n")
+                  | .ok (.more d) =>
+                      let f' := { f with download := some d }
+                      if Bounds.pagesPerCommandMax ≤ pages + 1 then
+                        (f', .turns [], refused (D := D) (.thin (.incomplete d.got.size d.total)))
+                      else (f', .turns [], again 6 [Text.u64 d.got.size, Text.u64 (pages + 1)] fun k =>
+                        .sign (adoptEnvelope X me pin d.got.size) k)
+          | some (.refused, p), _, _ => same (refused (D := D) (.host (hostName p)))
+          | _, _, _ => same (refused (D := D) .badResult)
       | _, _, _ => same (refused (D := D) .badState)
 
 end Nanodregg.Protocol.Command

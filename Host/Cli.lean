@@ -104,7 +104,7 @@ def followVerb (store memberHex grantHex : String) : IO UInt32 := do
       IO.eprintln s!"follow: audited to height {wr.opening.opened.world.height}"
       let port ← stdioPort
       let (exit, _) ← Follow.loop keys ⟨member, grant, Follow.window⟩ (fileStore wr.segment)
-        (fileCheckpoint store keys c world) port fuelBatches wr.opening.resident
+        (fileCheckpoint store keys c world) port fuelBatches none wr.opening.resident
       wr.segment.sync  -- the follower's handle, and so its lock, lives to here
       if exitCode exit ≠ 0 then IO.eprintln s!"exit {exit.name}"
       return exitCode exit

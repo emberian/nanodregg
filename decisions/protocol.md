@@ -378,3 +378,48 @@ CLIENT's nd calls through the generated table or follow, and which the loopback 
 of restating CLIENT-3's Rust rule. **Critique.** It moves a step across the follow socket per
 settlement, or needs a Lean runtime in nd. **Meta-critique.** I found this because my loopback had
 to restate it; a twin I wrote is the evidence. **Status.** open; CLIENT-3 implements when spawned.
+
+## PROTOCOL-18 · thin consent BUILT (option A): `adopt HEIGHT DIGEST`, `Protocol.Thin.accept`, follow's state holds the download (2026-10-16)
+**Decision.** `read` is unreserved (and `Op.reserved` deleted: a function that is always false is a
+no-op kept for compatibility). A thin member runs `nd adopt HEIGHT DIGEST`: follow pages the
+writer's newest base with `read` (one signed envelope per page, `start` = byte offset,
+`validUntil` = HEIGHT + window), and `Protocol.Thin.accept` decides each page: the stated height
+must be the pin's (`baseMoved`), the stated digest the pin's (`baseMismatch`), each page must
+continue the download (`pageMismatch`), and the assembled bytes must hash to the pin BEFORE they
+are decoded, then decode to a World at the pin's height (`baseMismatch`/`baseUndecodable`).
+`accept_done`: an adopted World's canonical bytes hash to the pin, at the pin's height, whatever the
+pages stated. The partial download cannot live in `k` (bounded by a frame) so it lives in follow's
+state: the machine's state is `Follow D = { world, download }` and a step returns `Persist D`
+(`turns ts` | `adopt w`), so `host follow` appends Turns or seals its own base from the adopted
+World before it answers (Host/Follow.lean, with HOST-3). The digest is the writer's
+`Keys.worldDigest` (a `Thin.Base` parameter: deployed cSHAKE256 "nanodregg/host/base/v1", the Sim's
+a toy). Row `thin`: the full follower catches up, the operator seals at the tip, the follower
+attests its own World's pin (`Act.attest`: the out-of-band channel, Ember's, as a row act), the thin
+member adopts, re-derives the suffix, writes, reads; a member with the pin after a newer seal is
+`baseMoved`. Plant `forgeBase` (one World byte flipped, honest digest stated) caught at the adopt
+line: `baseMismatch`. The rows now drive `Host.Follow.answer` itself (one code path).
+**Alternatives.** The download in `k` (impossible past one frame); the download in the client
+(Rust would decide when the bytes are complete: law 2); adopt as a `host follow` start flag (follow
+cannot reach custody to sign envelopes except through steps).
+**Critique.** Thin in TIME only (PROTOCOL-14): the whole World is held. A pin is stale after the
+next seal, so a thin member must get a fresh pin per cadence, from a channel that does not exist.
+A download costs one custody signature per page: `pagesPerCommandMax` 28 pages ≈ 7 MiB per
+command, so a large base takes several `adopt` runs (`incomplete`, kept in memory). The download is
+lost on a follow restart. **Meta-critique.** The attest act makes the row green by giving the thin
+member a pin from a process the row controls; the trust question (who countersigns) is untouched.
+**Status.** open.
+
+## PROTOCOL-19 · log paging; a defect found: `expired` makes a cold catch-up impossible (2026-10-16)
+**Decision.** `logReplyLayout` carries `tip`; follow pages from each page's height until it reaches
+it, at most `pagesPerCommandMax` (28) pages a command, else `behind` (absorbed kept; run again);
+an empty page short of the tip is `badResult`. Row `paging`, plant `lieTip`.
+**Defect (open, to fix next).** `Envelope.check` refuses `expired` when the WRITER's height is past
+the envelope's `validUntil`, and follow can only sign `validUntil` = (its own height) + window. A
+member more than a window behind the tip (a cold follower; a thin member whose pin is older than a
+window) is refused on its first page and never learns the tip. The rows never see it (heights stay
+under 128). Proposed fix: check the signature and the follow grant BEFORE expiry, and let the
+`expired` refusal carry the writer's height, so an authenticated member re-signs once with
+`validUntil` = that height + window; a replayer of a captured envelope learns only a height.
+**Critique.** A refusal carrying a number is a new wire shape (names only, so far). **Meta-critique.**
+I found it by reasoning, not by a row; the row that would show it needs a log past 128 heights.
+**Status.** open.

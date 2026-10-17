@@ -37,6 +37,9 @@ structure Params where
   forgetJournal : Bool := false
   /-- every page states its own end as the tip (a plant: the writer hides the rest of its log) -/
   lieTip : Bool := false
+  /-- `read` pages serve the newest base with one World byte flipped, stating the honest digest (a
+  plant: a forged base) -/
+  forgeBase : Bool := false
 
 /-- Small enough that a row of a few dozen turns seals bases; the deployed bounds on size. -/
 def cadence : Cadence :=
@@ -76,9 +79,15 @@ def checkpoint (m : Mem) : Checkpoint (World D) :=
 
 /-- HOST's pager (`Host.Page.build` + `Host.Page.bytes`) over the in-memory segment's synced bytes:
 what `Host.Deployed.pager` does over the segment file. -/
-def pager (X : Ctx D) (lieTip : Bool) (m : Mem) (r : Resident (World D)) :
+def pager (X : Ctx D) (lieTip forgeBase : Bool) (m : Mem) (r : Resident (World D)) :
     Deferred → IO (UInt8 × ByteArray)
-  | .read start => Host.Sim.memBasePage Page.budget m.bases r start
+  | .read start => do
+    if !forgeBase then Host.Sim.memBasePage Page.budget m.bases r start else
+    -- the World bytes follow the base frame's 4-byte length; flip one in the middle
+    let file := Host.Sim.flipByte (← m.bases.get).file (4 + r.sealed.bytes / 2)
+    match Id.run (Page.basePage Page.budget (fun off len => pure (file.extract off (off + len))) r.sealed start) with
+    | .ok b => pure (Status.ok.code, b)
+    | .error f => pure (Status.refused.code, f.name.toUTF8)
   | .log start => do
   let seg := (← m.disk.get).synced
   match Id.run (Page.build X.env Sim.dc X.digestOf Host.Sim.keys.segment cadence.recordBytesMax
@@ -127,7 +136,7 @@ def start (P : Params) (m : Mem) (r : Resident (World D)) : IO Running := do
     try
       serve (machine P) ⟨fun w ts => Record.encode Sim.dc w ts,
           fun w => (w.height, P.X.env.bytes w.chain)⟩ Host.Sim.keys.segment
-        (checkpoint m) cadence (Host.Sim.memStore m.disk none) (pager P.X P.lieTip m)
+        (checkpoint m) cadence (Host.Sim.memStore m.disk none) (pager P.X P.lieTip P.forgeBase m)
         port limits fuel r none
     finally
       discard <| (reps.close).toBaseIO

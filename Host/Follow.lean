@@ -46,49 +46,72 @@ def Refusal.name : Refusal → String
 /-- How many heights a call or envelope follow plans stays valid. -/
 def window : Nat := 128
 
-/-- One frame's answer: follow's World after it, the Turns it absorbed, the reply. Generic in the
-`Ctx`, so PROTOCOL's rows drive this very function on their toy digest. -/
-def answer {D : Type} [Ord D] [DecidableEq D] (X : Receive.Ctx D) (me : Command.Self D) (w : World D)
-    (f : Frame) : World D × List (Turn D) × UInt8 × ByteArray :=
-  let refused (r : Refusal) := (w, [], named r.name)
-  let stepOut (w' : World D) (ts : List (Turn D)) (r : Command.Reply) :=
+/-- One frame's answer: follow's state after it (its World and any base download in progress),
+what to make durable before replying (`Command.Persist`), the reply. Generic in the `Ctx` and the
+way a base is read (`Protocol.Thin.Base`), so PROTOCOL's rows drive this very function on their
+toy digest. -/
+def answer {D : Type} [Ord D] [DecidableEq D] (X : Receive.Ctx D) (B : Protocol.Thin.Base (World D))
+    (me : Command.Self D) (fs : Command.Follow D) (f : Frame) :
+    Command.Follow D × Command.Persist D × UInt8 × ByteArray :=
+  let refused (r : Refusal) := (fs, .turns [], named r.name)
+  let stepOut (fs' : Command.Follow D) (p : Command.Persist D) (r : Command.Reply) :=
     match r.bytes with
-    | some b => (w', ts, Status.ok.code, b)
-    | none => (w', ts, named Refusal.stepTooLarge.name)
+    | some b => (fs', p, Status.ok.code, b)
+    | none => (fs', p, named Refusal.stepTooLarge.name)
   match Protocol.Op.ofCode? f.op with
   | none => refused (.unknownOp f.op)
   | some .command =>
     match commandFrame.decode f.payload with
     | .error _ => refused .undecodableCommand
-    | .ok v => stepOut w [] (Command.start X me w (Text.unlist v.1.1))
+    | .ok v => stepOut fs (.turns []) (Command.start X me fs (Text.unlist v.1.1))
   | some .resume =>
     match resumeFrame.decode f.payload with
     | .error _ => refused .undecodableResume
     | .ok (k, result, ()) =>
-      let (w', ts, r) := Command.step X me w k.1 result.1
-      stepOut w' ts r
+      let (fs', p, r) := Command.step X B me fs k.1 result.1
+      stepOut fs' p r
   | some op => refused (.wrongSocket op)
 
-/-- The follower loop: one frame at a time, at most `fuel` frames. -/
+/-- The follower loop: one frame at a time, at most `fuel` frames. `dl` is the base download in
+progress, held in memory only (a restart starts it again). Absorbed Turns are appended through
+`Host.append` BEFORE the step is answered; an adopted base is sealed as follow's own newest base
+at its segment position (no record before it belongs to the adopted World's history, so the index
+restarts empty) BEFORE the step is answered. -/
 def loop (keys : Keys) (me : Command.Self D) (store : Store) (ck : Checkpoint (World D)) (port : Port) :
-    Nat → Resident (World D) → IO (Exit × Resident (World D))
-  | 0, r => finish .fuel r
-  | fuel + 1, r => do
+    Nat → Option Protocol.Thin.Download → Resident (World D) → IO (Exit × Resident (World D))
+  | 0, _, r => finish .fuel r
+  | fuel + 1, dl, r => do
     let r ← match ← reap r with
       | .ok r => pure r
       | .error f => return (.sealFailed f, { r with pending := none })
     let some f ← port.recv | finish .eof r
-    let (w', ts, status, payload) := answer X me r.world f
-    if ts.isEmpty then
+    let (fs', p, status, payload) :=
+      answer X ⟨world, World.height, keys.worldDigest, c.worldBytesMax⟩ me ⟨r.world, dl⟩ f
+    match p with
+    | .turns [] =>
       port.send ⟨f.conn, status, payload⟩
-      loop keys me store ck port fuel { r with world := w' }
-    else
-      match ← append recorder keys.segment ck c store r w' (recorder.encode w' ts.toArray) with
+      loop keys me store ck port fuel fs'.download { r with world := fs'.world }
+    | .turns ts =>
+      match ← append recorder keys.segment ck c store r fs'.world (recorder.encode fs'.world ts.toArray) with
       | .error e =>
         port.send ⟨f.conn, Status.uncertain.code, ByteArray.empty⟩
         finish e r
       | .ok r =>
         port.send ⟨f.conn, status, payload⟩
-        loop keys me store ck port fuel r
+        loop keys me store ck port fuel fs'.download r
+    | .adopt w' =>
+      let r ← match r.pending with
+        | none => pure r
+        | some pd => match ← settle pd with
+          | .ok sealed => pure { r with sealed, pending := none }
+          | .error e => return (.sealFailed e, { r with pending := none })
+      match ← settle (← spawnSeal ck recorder.mark w' r.pos #[]) with
+      | .error e =>
+        port.send ⟨f.conn, Status.uncertain.code, ByteArray.empty⟩
+        return (.sealFailed e, { r with pending := none })
+      | .ok sealed =>
+        port.send ⟨f.conn, status, payload⟩
+        loop keys me store ck port fuel fs'.download
+          { r with world := w', sealed, index := #[], pending := none }
 
 end Nanodregg.Host.Follow

@@ -20,6 +20,7 @@ a stranger (an id nobody enrolled) until a line binds its member id and its Worl
 import Protocol.Rows.Writer
 import Protocol.Rows.Judge
 import Protocol.Command.Wire
+import Host.Follow
 
 namespace Nanodregg.Protocol.Rows.Loopback
 
@@ -52,6 +53,7 @@ def sys : Option Mutation → Sys
   | some .zeroDeadline => { writer := { X := Sim.ctx }, follow := Sim.ctx, zeroDeadline := true }
   | some .advanceOnSend => { writer := { X := Sim.ctx }, follow := Sim.ctx, advanceOnSend := true }
   | some .lieTip => { writer := { X := Sim.ctx, lieTip := true }, follow := Sim.ctx }
+  | some .forgeBase => { writer := { X := Sim.ctx, forgeBase := true }, follow := Sim.ctx }
 
 /-! ## Actors -/
 
@@ -62,7 +64,8 @@ def keyOf (name : String) (gen : Nat) : ByteArray := s!"key:{name}:{gen}".toUTF8
 
 structure Actor where
   self : Self D
-  world : World D
+  /-- the actor's `host follow`: its World and any base download in progress -/
+  follow : Command.Follow D
   /-- custody: current key generation `gen`; next is `gen + 1`, pending `gen + 2` -/
   gen : Nat := 0
   /-- the attempt store: the last call this actor froze -/
@@ -126,7 +129,7 @@ def freshActor (name : String) : M Actor := do
                   window := 100 }
     | none => { member := X.env.hash "nanodregg/rows/stranger/v1" name.toUTF8,
                 grant := X.env.hash "nanodregg/rows/stranger-grant/v1" name.toUTF8, window := 100 }
-  pure { self, world := st.genesis }
+  pure { self, follow := { world := st.genesis } }
 
 def actor (name : String) : M Actor := do
   match (← get).actors.lookup name with
@@ -208,6 +211,24 @@ def ask (op : Op) (payload : ByteArray) : M (Option ByteArray) := do
   | some r => pure (some (ByteArray.mk #[r.status] ++ r.payload))
   | none => pure none
 
+/-- How the rows' followers read a base: the Sim's World codec and the writer's own `worldDigest`. -/
+def base : Thin.Base (World D) :=
+  ⟨Sim.world, World.height, Host.Sim.keys.worldDigest, Writer.cadence.worldBytesMax⟩
+
+/-- Send one frame to the actor's `host follow` (`Host.Follow.answer`, the deployed per-frame
+decision, on the actor's follow state); the step's bytes, or the name follow refused it by. What
+follow would persist is not modelled here: the actor's state is in memory. -/
+def followAsk (name : String) (self : Self D) (op : Op) (payload : ByteArray) :
+    M (Except String ByteArray) := do
+  sawOp op
+  let a ← actor name
+  let st ← get
+  set { st with conn := st.conn + 1 }
+  let (fs', _, status, p) :=
+    Host.Follow.answer (← X) base self a.follow ⟨UInt32.ofNat st.conn, op.code, payload⟩
+  setActor name { a with follow := fs' }
+  pure (if status = Status.ok.code then .ok p else .error (Command.hostName p))
+
 /-! ## Transport faults on a log page -/
 
 def flipLast (b : ByteArray) : ByteArray :=
@@ -259,23 +280,20 @@ def command (name : String) (argv : List String) (fault : Fault) : Nat → M (Ex
   | depth + 1 => do
       let a ← actor name
       let gw := (← get).genesis
-      let a := if coldFault fault then { a with world := gw } else a
+      let a := if coldFault fault then { a with follow := { world := gw } } else a
       setActor name a
       let self ← match fault with
         | .stolenKey v => pure (← actor v).self
         | _ => pure a.self
-      sawOp .command
       let some argvF := (Text.fitList Bounds.argvBytesMax (argv.map String.toUTF8)).bind fun v =>
           if h : (Codec.Layout.codec Bounds.argvBytesMax (by decide) commandLayout).size (v, ()) ≤
               Bounds.argvBytesMax then some (⟨(v, ()), h⟩ : { v : Codec.Layout.Ty Bounds.argvBytesMax commandLayout //
                 (Codec.Layout.codec Bounds.argvBytesMax (by decide) commandLayout).size v ≤ Bounds.argvBytesMax })
             else none
         | pure (.refused "argvPastBound", "")
-      let argv' ← match commandFrame.decode (commandFrame.bytes argvF) with
-        | .ok v => pure (Text.unlist v.1.1)
-        | .error _ => return (.refused "badCommandFrame", "")
-      let r := Command.start (← X) self a.world argv'
-      steps name argv fault depth r Bounds.stepsPerCommandMax
+      match ← followAsk name self .command (commandFrame.bytes argvF) with
+      | .error n => pure (.refused n, "")
+      | .ok b => steps name argv fault depth b Bounds.stepsPerCommandMax
 termination_by d => (d, 0)
 
 /-- Feed a step's result back to follow, through the resume frame. -/
@@ -283,27 +301,22 @@ def resume (name : String) (argv : List String) (fault : Fault) (depth : Nat) (k
     Nat → M (Expect × String)
   | 0 => pure (.refused "tooManySteps", "")
   | fuel + 1 => do
-      sawOp .resume
       let some kf := Text.fit Bounds.frameBytesMax k | return (.refused "badState", "")
       let some rf := Text.fit Bounds.frameBytesMax result | return (.refused "badResult", "")
-      match resumeFrame.decode (resumeFrame.bytes (kf, rf, ())) with
-      | .error _ => pure (.refused "badResumeFrame", "")
-      | .ok (k', r', ()) =>
-          let a ← actor name
-          let self ← match fault with
-            | .stolenKey v => pure (← actor v).self
-            | _ => pure a.self
-          let (w', _, reply) := Command.step (← X) self a.world k'.1 r'.1
-          setActor name { a with world := w' }
-          steps name argv fault depth reply fuel
+      let a ← actor name
+      let self ← match fault with
+        | .stolenKey v => pure (← actor v).self
+        | _ => pure a.self
+      match ← followAsk name self .resume (resumeFrame.bytes (kf, rf, ())) with
+      | .error n => pure (.refused n, "")
+      | .ok b => steps name argv fault depth b fuel
 termination_by fuel => (depth, fuel + 1)
 
 /-- Perform one step the follow machine asked for. -/
-def steps (name : String) (argv : List String) (fault : Fault) (depth : Nat) (r : Command.Reply) :
+def steps (name : String) (argv : List String) (fault : Fault) (depth : Nat) (b : ByteArray) :
     Nat → M (Expect × String)
   | 0 => pure (.refused "tooManySteps", "")
   | fuel + 1 => do
-      let some b := r.bytes | return (.refused "noFrame", "")
       match Reply.ofBytes b with
       | none => pure (.refused "badFrame", "")
       | some (.done exit out err) => pure (outcomeOf exit err, (String.fromUTF8? out).getD "")
@@ -359,11 +372,15 @@ def nowNs : IO Nat := IO.monoNanosNow
 
 /-- Stop the loop, open the Store cold (its base and the tail after it), start the loop on what it
 opened to. The reopen's wall time is THE BAR's `reopen-ms`. -/
-def restart : M Expect := do
+def restart (sealFirst : Bool) : M Expect := do
   let st ← get
   match ← st.host.stop with
   | .error e => pure (.refused s!"writerFailed {e}")
-  | .ok (.eof, _) =>
+  | .ok (.eof, r0) =>
+      if sealFirst then
+        match ← (Writer.checkpoint st.mem).write r0.world r0.pos.offset r0.pos.tag r0.index with
+        | .error f => return .refused f.name
+        | .ok _ => pure ()
       let d ← st.mem.disk.get
       let base := (← st.mem.bases.get).file
       let t0 ← nowNs
@@ -373,7 +390,8 @@ def restart : M Expect := do
           let t1 ← nowNs
           st.mem.disk.set { synced := d.synced.extract 0 r.pos.offset }
           let h ← Writer.start st.sys.writer st.mem r
-          modify fun st => { st with host := h, reopenNs := st.reopenNs ++ [t1 - t0] }
+          let ns := if sealFirst then [] else [t1 - t0]
+          modify fun st => { st with host := h, reopenNs := st.reopenNs ++ ns }
           pure .ok
   | .ok (exit, _) => pure (.refused s!"writer{exit.name}")
 
@@ -403,7 +421,13 @@ def runAct (l : Line) : M (Expect × String) := do
       match ← subst argv with
       | .error e => pure (.refused e, "")
       | .ok av => command l.actor av l.fault 4
-  | .restart => pure (← restart, "")
+  | .restart => pure (← restart false, "")
+  | .seal => pure (← restart true, "")
+  | .attest pin => do
+      let w := (← actor l.actor).follow.world
+      bind pin (Text.toHex (base.digest (Sim.world.bytes w)))
+      bind s!"{pin}.h" (toString w.height)
+      pure (.ok, "")
   | .retry => pure (← retry l.actor, "")
   | .reopenFlipped off => pure (← reopenFlipped off, "")
 
