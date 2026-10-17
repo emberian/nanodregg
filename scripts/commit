@@ -17,7 +17,8 @@
 #     (--no-build records `NO-BUILD: REASON` and skips build + census);
 #  6. commit-tree on main + compare-and-swap `update-ref refs/heads/main NEW BASE`: if main moved
 #     while you were being judged, nothing is written and steps 1-6 re-run (COMMIT_RETRIES, 5);
-#  7. leaves this checkout on the new main (a layer worktree: `checkout --detach NEW`).
+#  7. leaves this worktree on the new main (`checkout --detach NEW`), moves the primary checkout
+#     (the read-only reference) to it when that is clean, and pushes main to origin.
 # Works from any worktree of the repo (scripts/worktree LAYER makes one).
 set -uo pipefail
 . "$(dirname "$0")/gate-lib.sh"
@@ -128,17 +129,34 @@ if ! git -C "$repo" update-ref refs/heads/main "$new" "$base"; then
 fi
 unset GIT_INDEX_FILE
 echo "scripts/commit: main = $(git -C "$repo" log --oneline -1 "$new")"
-# Leave this checkout on the new main. In a layer worktree (detached HEAD) that is a checkout of
-# the new commit (after pointing the landed paths' index entries at it, since the working files
-# already hold that content), which carries other uncommitted edits along and refuses if one
-# conflicts. In the
-# primary checkout (on branch main, whose ref just moved) the files are already right and only
-# the index entries of the landed paths are reset.
-if [ "$(git -C "$repo" symbolic-ref -q HEAD)" = refs/heads/main ]; then
-  (cd "$repo" && git reset -q "$new" -- SIZE.md $(git diff --name-only "$base" "$new") 2>/dev/null)
-elif ! { (cd "$repo" && git reset -q "$new" -- SIZE.md $(git diff --name-only "$base" "$new") 2>/dev/null)
-         git -C "$repo" checkout -q "$new" -- SIZE.md   # generated: the landed copy replaces the local one
-         git -C "$repo" checkout -q --detach "$new"; }; then
+# Leave this worktree on the new main: point the landed paths' index entries at it (the working
+# files already hold that content), take the landed (generated) SIZE.md, and check out the new
+# commit, which carries other uncommitted edits along and refuses if one conflicts.
+if ! { (cd "$repo" && git reset -q "$new" -- SIZE.md $(git diff --name-only "$base" "$new") 2>/dev/null)
+       git -C "$repo" checkout -q "$new" -- SIZE.md
+       git -C "$repo" checkout -q --detach "$new"; }; then
   echo "scripts/commit: landed, but this worktree could not move to $new (an uncommitted edit"
   echo "  conflicts with main); resolve it, then: git checkout --detach main"
+fi
+# The primary checkout is the read-only reference every scout and evaluator reads: it follows
+# main, but only when clean (nobody edits it; a dirty file there is someone's to look at, and is
+# never overwritten). ROOT 10-16, after it sat 87 commits behind for a day.
+primary=$(cd "$common/.." && pwd)
+dirty=$(git -C "$primary" status --porcelain 2>&1)
+if [ -n "$dirty" ]; then
+  echo "scripts/commit: WARNING the primary checkout $primary is dirty, left at $(git -C "$primary" rev-parse --short HEAD):"
+  printf '%s\n' "$dirty" | head -20 | sed 's/^/  /'
+elif git -C "$primary" symbolic-ref -q HEAD > /dev/null; then
+  echo "scripts/commit: WARNING the primary checkout $primary is on a branch; the reference is detached: git -C $primary checkout --detach main"
+elif ! git -C "$primary" checkout -q --detach "$new"; then
+  echo "scripts/commit: WARNING the primary checkout $primary could not move to $new"
+fi
+# origin (github.com/emberian/nanodregg) follows main. A failed push leaves the landing standing
+# (the next landing pushes it too); a rejected one usually means a later landing pushed first.
+if git -C "$repo" remote get-url origin > /dev/null 2>&1; then
+  if GIT_SSH_COMMAND="ssh -o BatchMode=yes -o ConnectTimeout=20" git -C "$repo" push -q origin "$new:refs/heads/main" 2>"$tmp/push"; then
+    echo "scripts/commit: pushed $(git -C "$repo" rev-parse --short "$new") to origin"
+  else
+    echo "scripts/commit: WARNING push to origin failed (landed on main all the same):"; sed 's/^/  /' "$tmp/push"
+  fi
 fi

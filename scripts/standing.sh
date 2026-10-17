@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# scripts/standing.sh [REV] — the standing verdict of one commit (default HEAD), on a laptop.
+# scripts/standing.sh [--here] [REV] — the standing verdict of one commit (default HEAD), on a
+# laptop. Refused unless this checkout is at main (--here: judge with this checkout's scripts).
 #
 #   tip -> gates -> full build -> census + generated files -> sim -> rows -> one line:
 #   STANDING <sha> gates=… build=… census=… sim=… rows=… waste=… unmeasured=N => GREEN|RED|INCOMPLETE
@@ -16,14 +17,25 @@
 #         `ROW <name> PASS|FAIL <why>|PENDING <why>`; exit 0 (`ALL PASS`) = ok, exit 3 (no FAIL,
 #         some PENDING: a row with no driver yet) = INCOMPLETE(n pending), anything else = RED
 #         naming the first failing row
-#   waste: the `WASTE <op> <metric> <ratio>` lines the sims print, against gates/waste.tsv
+#   waste: the `WASTE <op> <metric> <ratio>` lines the sims and the rows print, against gates/waste.tsv
 #          (gates/waste.py --measured): a pinned row above its ceiling or unmeasured is RED;
 #          no measurement and no row at all is ABSENT (INCOMPLETE)
 set -uo pipefail
 . "$(dirname "$0")/gate-lib.sh"
+here=0
+[ "${1:-}" = --here ] && { here=1; shift; }
 rev=${1:-HEAD}
+# These scripts and gates are the checkout's own: a checkout behind main judges with old gates.
+# Run from a checkout at main, or say --here to judge with this checkout's scripts on purpose.
+if [ $here = 0 ] && [ "$(git -C "$repo" rev-parse HEAD)" != "$(git -C "$repo" rev-parse refs/heads/main)" ]; then
+  echo "standing: REFUSED — this checkout is at $(git -C "$repo" rev-parse --short HEAD), main is $(git -C "$repo" rev-parse --short refs/heads/main): git checkout --detach main, or pass --here" >&2
+  exit 2
+fi
 sha=$(git -C "$repo" rev-parse "$rev") || exit 2
-base=$(git -C "$repo" rev-parse -q --verify "$sha^^{tree}" || echo "$empty_tree")
+# A parentless commit has nothing to be judged against (the ratchets compare with the parent).
+if ! base=$(git -C "$repo" rev-parse -q --verify "$sha^^{tree}"); then
+  echo "STANDING ${sha:0:12} => REFUSED(noParent)"; exit 1
+fi
 G=$common/nanodregg-standing
 lock nanodregg-standing || exit 2
 materialize "$sha^{tree}" "$G/tree" || exit 2
@@ -67,6 +79,7 @@ if [ "$build" = ok ]; then
   if [ -x "$T/rows/run" ]; then
     env -C "$T" ./rows/run > "$G/rows.out" 2>&1; rc=$?
     cat "$G/rows.out" >> "$log"
+    grep '^WASTE ' "$G/rows.out" >> "$G/waste.measured"
     case $rc in
       0) rows=ok ;;
       3) rows="INCOMPLETE($(grep -c '^ROW [^ ]* PENDING' "$G/rows.out") pending)" ;;
@@ -80,12 +93,18 @@ if [ -s "$G/waste.measured" ] || [ "$waste" -gt 0 ]; then
   wastev=$(run python3 "$T/gates/waste.py" "$T" --measured "$G/waste.measured")
 fi
 unpinned=$(grep -c '^unpinned' "$log" || true)
-all="$gates $build $census $sim $rows $wastev"
-case $all in
-  *RED*) verdict=RED ;;
-  *ABSENT*|*INCOMPLETE*) verdict=INCOMPLETE ;;
-  *) [ "$unmeasured" -gt 0 ] && verdict=INCOMPLETE || verdict=GREEN ;;
-esac
+# GREEN only when every stage is the verdict `ok` and no ceiling is unmeasured; any stage that is
+# RED makes the line RED; anything else (ABSENT, INCOMPLETE, or a value that is not a verdict) is
+# INCOMPLETE.
+verdict=GREEN
+for v in "$gates" "$build" "$census" "$sim" "$rows" "$wastev"; do
+  case $v in
+    ok) ;;
+    RED*) verdict=RED; break ;;
+    *) verdict=INCOMPLETE ;;
+  esac
+done
+[ $verdict = GREEN ] && [ "$unmeasured" -gt 0 ] && verdict=INCOMPLETE
 line="STANDING ${sha:0:12} gates=$gates build=$build census=$census sim=$sim rows=$rows waste=$wastev(pinned $waste, unpinned $unpinned) unmeasured=$unmeasured => $verdict"
 echo "$line" | tee -a "$G/verdicts.log"
 echo "log: $log"
