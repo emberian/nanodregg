@@ -4,7 +4,8 @@
 //! (CLIENT-13): `nd --init` creates a member's keys, the next secret in `$ND_HOLDING` (a 0700
 //! directory on removable media or under another account); `nd --init-hosted` creates a hosted
 //! resident's one-record keys; `nd --init-observer` an observe-only follower driver's record,
-//! which signs read envelopes only (CLIENT-22); `nd --keys` prints custody's public keys (`key HEX`, `next HEX`)
+//! which signs read envelopes only (CLIENT-22): a joined `--init-hosted` record sealed by
+//! `nd --seal-observer` (a one-way rename); `nd --keys` prints custody's public keys (`key HEX`, `next HEX`)
 //! for the operator's `host genesis`. `$ND_HOLDING` is read again only to rotate.
 //! `$ND_FOLLOW_SOCK` / `$ND_HOST_SOCK` name the two sockets when they are not the workspace's
 //! (HOSTING-17 §7: nd, as nd, drives the nd-hosted follower through its socket in /run/nd-follow).
@@ -46,6 +47,10 @@ fn go() -> Result<u8, String> {
             None => return Err("nd --init: ND_HOLDING is not set (CLIENT-13)".into()),
         };
         made.map_err(|e| e.to_string())?;
+        return Ok(0);
+    }
+    if argv.len() == 1 && argv[0] == "--seal-observer" {
+        Custody::seal_observer(&ws).map_err(|e| e.to_string())?;
         return Ok(0);
     }
     let custody = Custody::open(&ws, holding).map_err(|e| e.to_string())?;

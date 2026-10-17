@@ -148,6 +148,86 @@ fn real_host_create_write_read_rotate_write_read() {
     assert!(!o.status.success() && String::from_utf8_lossy(&o.stderr).contains("host.sock"));
     let o = over(&ws.join("follow.sock"), &ws.join("host.sock"));
     assert_eq!(text(&o), "1=hello\n2=after\n");
+
+    // CLIENT-22, ROOT's ruling (A): an observer joins like any member (a one-record custody signs
+    // its join token), is granted `observe` on the World, then is sealed (`nd --seal-observer`).
+    // Sealed, its follower syncs and reads (envelope signatures only), and a write is refused
+    // `envelopeOnly` by custody: no call is signed, nothing commits.
+    let obs = root.join("obs");
+    nanodregg_devtools::mkdirs(&obs).unwrap();
+    let as_obs = |follow: &Path, args: &[&str]| -> Output {
+        Command::new(env!("CARGO_BIN_EXE_nd"))
+            .env("ND_WORKSPACE", &obs)
+            .env("ND_FOLLOW_SOCK", follow)
+            .env("ND_HOST_SOCK", ws.join("host.sock"))
+            .args(args)
+            .output()
+            .unwrap()
+    };
+    assert!(
+        as_obs(&obs.join("follow.sock"), &["--init-hosted"])
+            .status
+            .success()
+    );
+    let join = text(&as_obs(&ws.join("follow.sock"), &["init", member]));
+    let token = line(&join, "join ").to_owned();
+    let newcomer = line(&ok(&["enroll", &token]), "id ").to_owned();
+    let observe = ok(&["grant", "world", &newcomer, "observe", "--via", grant]);
+    let observe = line(&observe, "id ").to_owned();
+    let o_store = root.join("stores/O");
+    genesis(&o_store, Some(line(&g, "nonce ")));
+    let o_args = ["follow", o_store.to_str().unwrap(), &newcomer, &observe];
+    let _o = supervise(&obs.join("follow.sock"), &obs, &o_store, &o_args);
+    let sealed = as_obs(&obs.join("follow.sock"), &["--seal-observer"]);
+    assert!(
+        sealed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&sealed.stderr)
+    );
+    assert!(obs.join("observer").exists() && !obs.join("keys").exists());
+    let sync = as_obs(&obs.join("follow.sock"), &["sync"]);
+    assert!(
+        sync.status.success() && text(&sync).starts_with("height "),
+        "observer sync: {}{}",
+        text(&sync),
+        String::from_utf8_lossy(&sync.stderr)
+    );
+    let read = as_obs(&obs.join("follow.sock"), &["read", &obj]);
+    assert_eq!(
+        text(&read),
+        "1=hello\n2=after\n",
+        "{}",
+        String::from_utf8_lossy(&read.stderr)
+    );
+    // The first fence is the kernel's: observe-only, the write is refused `noGrant` in Lean
+    // before custody is asked. The second is custody's: with a grant that WOULD admit the write
+    // (the owner grants mutate on the object), the sealed record still refuses to sign it.
+    let write = as_obs(&obs.join("follow.sock"), &["write", &obj, "3", "observer"]);
+    assert_eq!(String::from_utf8_lossy(&write.stderr), "refused noGrant\n");
+    let mutate = ok(&["grant", &obj, &newcomer, "observe,mutate"]);
+    let mutate = line(&mutate, "id ").to_owned();
+    let synced = as_obs(&obs.join("follow.sock"), &["sync"]);
+    assert!(
+        synced.status.success(),
+        "{}",
+        String::from_utf8_lossy(&synced.stderr)
+    );
+    let write = as_obs(
+        &obs.join("follow.sock"),
+        &["write", &obj, "3", "observer", "--via", &mutate],
+    );
+    assert!(
+        !write.status.success() && String::from_utf8_lossy(&write.stderr).contains("envelopeOnly"),
+        "observer write: {:?} {}",
+        write.status.code(),
+        String::from_utf8_lossy(&write.stderr)
+    );
+    assert_eq!(
+        ok(&["read", &obj]),
+        "1=hello\n2=after\n",
+        "the refused write left nothing"
+    );
+    drop(_o);
     drop((_h, _f));
     std::fs::remove_dir_all(&root).unwrap();
 }

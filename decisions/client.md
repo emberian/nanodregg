@@ -581,14 +581,17 @@ never a Rust literal); any other message, and every `precommit` and `signNext`, 
 `envelopeOnly` (`CustodyRefusal::EnvelopeOnly`, PROTOCOL-38), which follow receives as a refused
 custody result. nd's own failure now exits `command_exit::CLIENT` (52), never 2, which is follow's
 `uncertain` (PROTOCOL-7's find): a timer can tell "nd could not run" from "the append is uncertain".
-**The fence today.** The fence is prefix-only and not yet backed by a theorem: it holds up to
-cSHAKE preimage resistance, because a call's signed message (`unsignedBytes`, world digest first)
-carries no domain today and could begin with the envelope domain's bytes (CODEC-6, PROTOCOL-7). The
-authority in the meantime is the kernel's observe-only grant (the key cannot write regardless), so
-the gap is in the second fence, not the first. PROTOCOL-7's call-domain flag day (every call and
-rotation message `domCall ‖ unsignedBytes`; `Protocol.envelope_call_disjoint : domEnvelope ++ r ≠
-X.callMessage u`) closes it; then the real-round-trip plant (an observer's `nd write` refused
-`envelopeOnly`, its `nd sync` served) goes in and this entry cites the theorem as proved.
+**The fence (proved since 1ed7867).** Every message a member key signs begins with its own
+domain (KERNEL-42 / PROTOCOL-39): a call's is `callMessage = domCall ‖ unsignedBytes`. So the prefix
+fence is exact, with no hash premise: `Nanodregg.Protocol.call_not_envelope : domEnvelope ++ r ≠
+X.callMessage u`, `possession_not_envelope` and `whoami_not_envelope` (Protocol/Proofs/Domains.lean)
+say an observer never signs a call, a possession proof or the whoami probe. Before 1ed7867 the fence
+was prefix-only, holding up to cSHAKE preimage resistance (a call's message carried no domain,
+CODEC-6), while the kernel's observe-only grant was the authority (the key cannot write regardless):
+the gap was in the second fence, never the first. Both fences are planted through the real Host
+(client/tests/real.rs): observe-only, a write is refused `noGrant` by Lean before custody is asked;
+granted `mutate` on the object, the sealed record still refuses to sign it, `envelopeOnly`, and
+nothing commits.
 **Alternatives.** A keyless driver (built, measured, dropped: every catch-up log page needs a signed
 read envelope, PROTOCOL-27/29); `ND_CUSTODY=envelope` (an env switch widens when dropped); a length
 check (a call can be 155 bytes too; with the theorem it would be a second fence that cannot go red).
@@ -601,3 +604,30 @@ refused; precommit and signNext refused; the record unchanged; an observer besid
 CLIENT. Mutations, each red: the prefix check, the precommit guard, the signNext guard, the record's
 mode flag, the exit back to 2.
 **Status.** landed (this commit); the theorem-backed plant follows the flag day.
+
+## CLIENT-23 an observer joins like any member, then is sealed by one rename (2026-10-17, CLIENT-3; ROOT ruling (A))
+
+**Problem.** An observer cannot enroll itself: `nd init SPONSOR` signs `whoami` and a possession
+proof, and envelope-only custody refuses both (correctly: they are other domains).
+**Decision (ROOT, A).** The observer starts as a full one-record custody (`nd --init-hosted`,
+`ws/keys`), joins like any member (`nd init SPONSOR`; the operator `enroll`s it and grants
+`world MEMBER observe`), and is then sealed: `nd --seal-observer` RENAMES `ws/keys` to
+`ws/observer` (renameat NOREPLACE, then the directory synced), once, durably, irreversibly. The
+seal is a rename, not a copy: no second key material ever exists (the plant checks the inode). The
+record's `next` is kept, so a later observer rotation (cv 01a14adf-8582) needs no shape change.
+Refused by name: `exists` when an observer is already there (a second seal), `rotationInFlight`
+while a rotation is armed or a pending key is minted, `shape` for any custody that is not one
+`keys` record (a member's separate custody). OPS-3's RUNBOOK §2b enrolment gains the seal as its
+last line.
+**Alternatives.** (B) the observer also signs whoami and possession: the fence wider for the
+record's whole life, for a one-time need (ROOT: no).
+**Critique.** Between `init` and the seal the record is a full custody; the window is the operator's
+enrolment, on the operator's box, before the follower runs.
+**Plants.** client/tests/custody.rs `a_joined_record_is_sealed_as_an_observer_by_one_rename`
+(control: unsealed it signs a call; sealed: same inode and bytes, keys kept, a call refused, an
+envelope signed; a second seal `Exists`; armed `RotationInFlight`; pending minted
+`RotationInFlight`; separate custody `Shape`); client/tests/real.rs: the whole path through the real
+Host (init, enroll, grant observe, its own `host follow`, seal, `sync` and `read` served, the two
+fences above). Mutations, each red: the prefix check (real), the armed check, the pending check,
+the exists pre-check, the shape check.
+**Status.** landed (this commit).

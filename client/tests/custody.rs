@@ -242,3 +242,81 @@ fn an_observer_signs_read_envelopes_only() {
     ));
     done(&ws);
 }
+
+/// ROOT's ruling (A): a joined one-record custody signs anything (the control: it enrolls like any
+/// member), then `seal_observer` RENAMES its record (same inode, same bytes, `next` kept) and from
+/// then on it signs read envelopes only. A second seal is `Exists`; a seal with a rotation armed is
+/// `RotationInFlight`; a member's separate custody cannot be sealed (`Shape`).
+#[test]
+fn a_joined_record_is_sealed_as_an_observer_by_one_rename() {
+    use nanodregg_client::generated::ENVELOPE_DOMAIN;
+    use std::os::unix::fs::MetadataExt;
+    let (ws, h) = scratch("seal");
+    Custody::create_same_record(&ws).unwrap();
+    let c = Custody::open(&ws, None).unwrap();
+    assert!(
+        c.sign(b"a call").is_ok(),
+        "control: unsealed, it signs a call"
+    );
+    let (key, next) = (c.public_key().unwrap(), c.next_public_key().unwrap());
+    let (bytes, ino) = (
+        fs::read(ws.join("keys")).unwrap(),
+        fs::metadata(ws.join("keys")).unwrap().ino(),
+    );
+    Custody::seal_observer(&ws).unwrap();
+    assert!(!ws.join("keys").exists());
+    assert_eq!(
+        fs::metadata(ws.join("observer")).unwrap().ino(),
+        ino,
+        "a rename, not a copy"
+    );
+    assert_eq!(fs::read(ws.join("observer")).unwrap(), bytes);
+    let o = Custody::open(&ws, None).unwrap();
+    assert_eq!(
+        (o.public_key().unwrap(), o.next_public_key().unwrap()),
+        (key, next)
+    );
+    assert!(matches!(o.sign(b"a call"), Err(CustodyError::EnvelopeOnly)));
+    assert!(o.sign(&[ENVELOPE_DOMAIN, b"w"].concat()).is_ok());
+    assert!(matches!(
+        Custody::seal_observer(&ws),
+        Err(CustodyError::Exists)
+    ));
+    done(&ws);
+    // A seal with a rotation armed is refused by name.
+    let (ws, _) = scratch("seal-armed");
+    Custody::create_same_record(&ws).unwrap();
+    let c = Custody::open(&ws, None).unwrap();
+    c.arm(
+        1,
+        &Rotation {
+            incoming: [1; 32],
+            pending: [2; 32],
+        },
+    )
+    .unwrap();
+    assert!(matches!(
+        Custody::seal_observer(&ws),
+        Err(CustodyError::RotationInFlight)
+    ));
+    assert!(ws.join("keys").exists() && !ws.join("observer").exists());
+    done(&ws);
+    // A pending key minted (precommit before its rotate) is a rotation in progress too.
+    let (ws, _) = scratch("seal-pending");
+    Custody::create_same_record(&ws).unwrap();
+    Custody::open(&ws, None).unwrap().precommit().unwrap();
+    assert!(matches!(
+        Custody::seal_observer(&ws),
+        Err(CustodyError::RotationInFlight)
+    ));
+    done(&ws);
+    // A member's separate custody is not a one-record custody.
+    let (ws, h2) = scratch("seal-separate");
+    Custody::create_separate(&ws, &h2).unwrap();
+    assert!(matches!(
+        Custody::seal_observer(&ws),
+        Err(CustodyError::Shape)
+    ));
+    done(&ws);
+    let _ = h;
+}

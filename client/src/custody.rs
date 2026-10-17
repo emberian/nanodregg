@@ -348,6 +348,35 @@ impl Custody {
         record(ws, OBSERVER)
     }
 
+    /// Seal a joined one-record custody as an observer (ROOT's ruling (A), CLIENT-22): `ws/keys`
+    /// is RENAMED to `ws/observer`, once, durably, never copied (no second key material ever
+    /// exists), keeping `next`. Refused `Shape` unless `keys` alone is present, `Exists` if an
+    /// observer already is, `RotationInFlight` while a rotation is armed or a pending key minted.
+    pub fn seal_observer(ws: &Path) -> Result<(), CustodyError> {
+        if ws.join(OBSERVER).exists() {
+            return Err(CustodyError::Exists);
+        }
+        let c = Self::open(ws, None)?;
+        if c.envelope_only || !ws.join("keys").exists() {
+            return Err(CustodyError::Shape);
+        }
+        if c.armed()?.is_some() || c.keys.pending()?.is_some() {
+            return Err(CustodyError::RotationInFlight);
+        }
+        rustix::fs::renameat_with(
+            rustix::fs::CWD,
+            ws.join("keys"),
+            rustix::fs::CWD,
+            ws.join(OBSERVER),
+            rustix::fs::RenameFlags::NOREPLACE,
+        )
+        .map_err(|e| match e {
+            rustix::io::Errno::EXIST => CustodyError::Exists,
+            e => CustodyError::Io(e.into()),
+        })?;
+        Ok(fsx::sync_dir(ws)?)
+    }
+
     /// Open the workspace's custody: `Separate` if `ws/seed` exists (the holding is needed only
     /// to rotate), `SameRecord` if `ws/keys` does; both or neither is `Shape`.
     pub fn open(ws: &Path, holding: Option<PathBuf>) -> Result<Self, CustodyError> {
