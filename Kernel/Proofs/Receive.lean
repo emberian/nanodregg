@@ -24,7 +24,7 @@ theorem receive_wrongWorld {X : Ctx D} {w : World D} {c : Call D} (h : c.unsigne
 /-- A derived call named this World, and is the derivation through its pins. -/
 theorem receive_ok_with {X : Ctx D} {w : World D} {c : Call D} {t : Turn D}
     (h : receive X w c = .ok t) :
-    c.unsigned.world = w.origin ∧ receiveWith X (pinned w c.unsigned.pins) c = .ok t := by
+    c.unsigned.world = w.origin ∧ receiveWith X (pinned X.env w c.unsigned.pins) c = .ok t := by
   unfold receive at h
   simp only [except_bind_ok] at h
   obtain ⟨⟨⟩, hw, h⟩ := h
@@ -35,9 +35,9 @@ theorem receive_ok_with {X : Ctx D} {w : World D} {c : Call D} {t : Turn D}
 caller pinned: two Worlds that agree there derive the same Turn (or the same refusal) from the
 same call. -/
 theorem receive_congr {X : Ctx D} {w₁ w₂ : World D} {c : Call D} (ho : w₁.origin = w₂.origin)
-    (agree : ∀ p ∈ c.unsigned.pins, w₁.live p.1 = w₂.live p.1) :
+    (agree : ∀ p ∈ c.unsigned.pins, w₁.live X.env p.1 = w₂.live X.env p.1) :
     receive X w₁ c = receive X w₂ c := by
-  have hv : pinned w₁ c.unsigned.pins = pinned w₂ c.unsigned.pins := by
+  have hv : pinned X.env w₁ c.unsigned.pins = pinned X.env w₂ c.unsigned.pins := by
     funext x
     unfold pinned
     by_cases hx : c.unsigned.pins.any (fun p => p.1 = x) = true

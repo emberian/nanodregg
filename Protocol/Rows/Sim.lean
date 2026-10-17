@@ -31,7 +31,7 @@ def sign (key msg : ByteArray) : ByteArray := Kernel.Sim.toySign key msg
 def ctx : Ctx D := Kernel.Sim.ctxWith (Lang.program dc.bytes digestOf)
 
 /-- The World's codec (a base's World part, CODEC-14). -/
-def world : Stream (World D) := Codec.Kernel.world dc
+def world : Stream (World D) := Codec.Kernel.world ctx.env dc
 
 def worldName : ByteArray := "rows".toUTF8
 def allowance : Nat := 2 ^ 40

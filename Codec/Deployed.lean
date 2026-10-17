@@ -36,6 +36,6 @@ def ctx (program : Program Digest) : Ctx Digest where
   program := program
 
 /-- The checkpoint's codec. -/
-def world : Stream (World Digest) := Nanodregg.Codec.Kernel.world digestCodec
+def world : Stream (World Digest) := Nanodregg.Codec.Kernel.world env digestCodec
 
 end Nanodregg.Codec.Deployed

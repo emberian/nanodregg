@@ -133,7 +133,8 @@ structure Follow (D : Type) [Ord D] where
 /-- What a step asks follow to make durable before it answers: the Turns it absorbed (re-derived,
 in log order; `[]` for most steps), or a base it adopted, which follow seals as its own newest base. -/
 inductive Persist (D : Type) [Ord D]
-  | turns (ts : List (Turn D))
+  /-- the Turns follow admitted, each with the root of follow's World after it (HOST-29) -/
+  | turns (ts : List (Turn D × D))
   | adopt (w : World D)
 
 /-! ## The continuation -/
@@ -220,12 +221,12 @@ def chargeSlack : Nat := 4096
 
 /-- Follow's own World as a pinned view: every cell it holds (planning reads the World it has
 folded; the call's pins are discovered afterwards by `derivePins`). -/
-def worldLook (w : World D) : Pinned D := fun c => .ok (w.live c)
+def worldLook (E : Env D) (w : World D) : Pinned D := fun c => .ok (w.live E c)
 
 /-- The package an invoke runs: the object's, if it is a live programmed object (KERNEL's
 `packageOf`, `requireMethods`: the receiver's own refusals). -/
 def invokedPackage (X : Ctx D) (w : World D) (obj : D) : Except (Refusal D) D :=
-  match w.live obj with
+  match w.live X.env obj with
   | none => .error (.missingCell obj)
   | some cell => match packageOf X obj cell >>= requireMethods obj with
     | .ok p => .ok p
@@ -238,14 +239,14 @@ def body (X : Ctx D) (me : Self D) (w : World D) (s : Signed) : Cmd D → Except
   | .enroll j => .ok (.enroll j.key j.next j.possession me.grant)
   | .install p => .ok (.install p)
   | .create none ls => .ok (.create none ls [])
-  | .create (some (p, t)) ls => match Lang.seedOf (worldLook w) p t with
+  | .create (some (p, t)) ls => match Lang.seedOf (worldLook X.env w) p t with
     | .ok seed => .ok (.create (some p) ls seed)
     | .error r => .error (.receive r)
   | .write o k v via => .ok (.write o [(k, some v)] via)
   | .law o ls via => .ok (.law o ls via)
   | .invoke o m a via => do
       let p ← invokedPackage X w o
-      match Lang.argsOf (worldLook w) p m a with
+      match Lang.argsOf (worldLook X.env w) p m a with
       | .ok args => .ok (.invoke o m args invokeBudget via)
       | .error r => .error (.receive r)
   | .grant t g rs via => .ok (.grant (t.getD (worldId X)) (g.getD (worldId X)) rs via)
@@ -257,10 +258,10 @@ def body (X : Ctx D) (me : Self D) (w : World D) (s : Signed) : Cmd D → Except
 def derivePins (X : Ctx D) (w : World D) : Nat → Unsigned D → Except (Refusal D) (Unsigned D × Turn D)
   | 0, _ => .error .tooManyPins
   | fuel + 1, u =>
-      let look := pinned w u.pins
+      let look := pinned X.env w u.pins
       match (do keyRule look u; dispatch X look ⟨u, ByteArray.empty⟩ u.body) with
       | .error (.unpinned c) =>
-          derivePins X w fuel { u with pins := u.pins ++ [(c, pinOf X.env (w.live c))] }
+          derivePins X w fuel { u with pins := u.pins ++ [(c, pinOf X.env (w.live X.env c))] }
       | .error r => .error (.receive r)
       | .ok t => .ok (u, t)
 
@@ -283,7 +284,7 @@ def plan (X : Ctx D) (me : Self D) (w : World D) (key : ByteArray) (b : Body D) 
       body := b }
   let (u1, t1) ← derivePins X w Kernel.Bounds.touchesMax u0
   let u := { u1 with maxCharge := t1.charge + chargeSlack }
-  match dispatch X (pinned w u.pins) ⟨u, ByteArray.empty⟩ u.body with
+  match dispatch X (pinned X.env w u.pins) ⟨u, ByteArray.empty⟩ u.body with
   | .error r => .error (.receive r)
   | .ok t => match World.admit X.env w t with
     | .error r => .error (.reject r)
@@ -295,14 +296,14 @@ def plan (X : Ctx D) (me : Self D) (w : World D) (key : ByteArray) (b : Body D) 
 (`Receive.submit` = receive, then admit). A writer that logged an event which does not derive is
 caught here, at that height (PROTOCOL-4). Also returns the Turns it derived, in log order, so
 `host follow` persists exactly what it re-derived (HOST-3) rather than re-running this loop. -/
-def absorb (X : Ctx D) : World D → Array (Turn D) → List ByteArray →
-    Except (Refusal D) (World D × Array (Turn D))
+def absorb (X : Ctx D) : World D → Array (Turn D × D) → List ByteArray →
+    Except (Refusal D) (World D × Array (Turn D × D))
   | w, ts, [] => .ok (w, ts)
   | w, ts, e :: es =>
       match X.decodeCall e with
       | none => .error (.eventMismatch (w.height + 1))
       | some c => match submit X w c with
-        | .ok (t, w') => absorb X w' (ts.push t) es
+        | .ok (t, w') => absorb X w' (ts.push (t, World.root X.env w')) es
         | .error _ => .error (.eventMismatch (w.height + 1))
 
 
@@ -318,7 +319,7 @@ def logPage (b : ByteArray) : Option (List ByteArray × Nat × ByteArray × Nat)
 
 /-- Absorb a page and require follow's fold to reach the writer's stated height and chain. -/
 def absorbPage (X : Ctx D) (w : World D) (evs : List ByteArray) (height : Nat) (chain : ByteArray) :
-    Except (Refusal D) (World D × List (Turn D)) := do
+    Except (Refusal D) (World D × List (Turn D × D)) := do
   let (w', ts) ← absorb X w #[] evs
   if w'.height = height ∧ X.env.bytes w'.chain = chain then pure (w', ts.toList)
   else throw (.chainMismatch height)
@@ -333,8 +334,8 @@ def hex (X : Ctx D) (d : D) : String := Text.toHex (X.env.bytes d)
 
 /-- `read`: the object's state slots, one `KEY=VALUE` line each (keys relative to `stateBase`),
 after every expectation holds. -/
-def render (w : World D) (obj : D) (expect : List (Nat × ByteArray)) : Reply :=
-  match w.live obj with
+def render (E : Env D) (w : World D) (obj : D) (expect : List (Nat × ByteArray)) : Reply :=
+  match w.live E obj with
   | none => refused (D := D) (.missingCell obj)
   | some cell =>
       match expect.find? fun (k, v) => cell.slots.get (stateBase + k) != some v with
@@ -402,7 +403,7 @@ def step (X : Ctx D) (B : Thin.Base (World D)) (me : Self D) (f : Follow D) (kb 
     Follow D × Persist D × Reply :=
   let w := f.world
   let same (r : Reply) : Follow D × Persist D × Reply := (f, .turns [], r)
-  let moved (w' : World D) (ts : List (Turn D)) (r : Reply) : Follow D × Persist D × Reply :=
+  let moved (w' : World D) (ts : List (Turn D × D)) (r : Reply) : Follow D × Persist D × Reply :=
     ({ f with world := w' }, .turns ts, r)
   match State.ofBytes kb, parse X.digestOf ((State.ofBytes kb).map (·.argv) |>.getD []) with
   | none, _ => same (refused (D := D) .badState)
@@ -463,7 +464,7 @@ def step (X : Ctx D) (B : Thin.Base (World D)) (me : Self D) (f : Follow D) (kb 
                           .sign (envelopeMessage X me height (tip + me.window)) k)
                       else
                       match cmd, Signed.ofBytes signedB with
-                      | .read obj ex, _ => moved w' ts (render w' obj ex)
+                      | .read obj ex, _ => moved w' ts (render X.env w' obj ex)
                       | .rotate, some _ => moved w' ts (again 5 [startB, signedB] fun k => .precommit k)
                       | _, some s => match body X me w' s cmd with
                         | .error r => moved w' ts (refused (D := D) r)

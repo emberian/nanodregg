@@ -21,7 +21,7 @@ def digestAt (X : Ctx D) (cell : Cell) (key : Nat) : Option D := cell.slots.get 
 carrying `observe`, every link up to a founder's genesis grant live too. The same `walk` as every
 other right, over the whole World (a follower's request pins nothing). -/
 def mayFollow (X : Ctx D) (w : World D) (member g : D) : Bool :=
-  match walk X (fun c => .ok (w.live c)) (worldId X) .observe true grantDepthMax g member with
+  match walk X (fun c => .ok (w.live X.env c)) (worldId X) .observe true grantDepthMax g member with
   | .ok _ => true
   | .error _ => false
 
@@ -63,15 +63,18 @@ def founderRoot (X : Ctx D) (member : D) : Cell :=
     slots := slotsOf ([(grantTarget, X.env.bytes (worldId X)), (grantGrantee, X.env.bytes member),
       (grantIssuer, X.env.bytes member)] ++ rightSlots [.observe, .enroll enrollMax]) }
 
+/-- Each founder's member cell, then its root World grant. -/
+def founderEntries (X : Ctx D) (o : D) (founders : List (ByteArray × D)) : List (D × Entry) :=
+  founders.zipIdx.flatMap fun p =>
+    [(founderId X o p.2, .live (founderMember X p.1)),
+     (founderGrantId X o p.2, .live (founderRoot X (founderId X o p.2)))]
+
 /-- The genesis World: founders `(key, digest of next key)` as members, each with a root World
 grant; its origin commits to the name, HOST's `nonce`, the allowance and the founders. -/
 def genesis (X : Ctx D) (name nonce : ByteArray) (allowance : Nat) (founders : List (ByteArray × D)) :
     World D :=
   let o := originOf X name nonce allowance founders
   let w := World.genesis X.env o allowance
-  let place := fun (m : Std.TreeMap D Entry compare) (p : (ByteArray × D) × Nat) =>
-    (m.insert (founderId X o p.2) (.live (founderMember X p.1))).insert
-      (founderGrantId X o p.2) (.live (founderRoot X (founderId X o p.2)))
-  { w with cells := founders.zipIdx.foldl place w.cells }
+  { w with trie := insertAll X.env w.trie (founderEntries X o founders) }
 
 end Nanodregg.Kernel.Receive

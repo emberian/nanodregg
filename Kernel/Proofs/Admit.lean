@@ -23,7 +23,7 @@ structure Checked (E : Env D) (w : World D) (t : Turn D) (posts : List (Post D))
   window : checkWindow w t = .ok ()
   touches : ∃ raw, mapEx (touchCheck E w) t.touches = .ok raw ∧ posts = raw.reduceOption
   value : checkValue E t posts = .ok ()
-  nullifiers : checkNullifiers w t = .ok ()
+  nullifiers : checkNullifiers E w t = .ok ()
   charge : checkCharge w t (credit posts) = .ok ()
   creates : checkCreates E w t = .ok ()
 
@@ -44,7 +44,7 @@ theorem Checked.touch {E : Env D} {w : World D} {t : Turn D} {posts : List (Post
 
 /-- A touch that passes saw what the signer saw. -/
 theorem touchCheck_pin {E : Env D} {w : World D} {x : Touch D} {r : Option (Post D)}
-    (h : touchCheck E w x = .ok r) : pinOf E (w.live x.cell) = x.seen := by
+    (h : touchCheck E w x = .ok r) : pinOf E (w.live E x.cell) = x.seen := by
   unfold touchCheck at h
   simp only [except_bind_ok] at h
   obtain ⟨⟨⟩, hp, _⟩ := h
@@ -64,8 +64,9 @@ theorem admit_height {E : Env D} {w w' : World D} {t : Turn D}
     (h : World.admit E w t = .ok w') : w'.height = w.height + 1 := by
   obtain ⟨_, _, rfl⟩ := admit_ok h; rfl
 
+/-- The chain commits to the root AFTER the turn (KERNEL-23 (d)). -/
 theorem admit_chain {E : Env D} {w w' : World D} {t : Turn D}
-    (h : World.admit E w t = .ok w') : w'.chain = chainNext E w.chain t := by
+    (h : World.admit E w t = .ok w') : w'.chain = chainNext E w.chain t (w'.root E) := by
   obtain ⟨_, _, rfl⟩ := admit_ok h; rfl
 
 /-- **Charge exactness.** An admitted turn paid exactly its weight, could afford it with what
@@ -102,7 +103,7 @@ theorem admit_weight {E : Env D} {w w' : World D} {t : Turn D}
 /-- **Guards from the intent.** Every cell the turn touches is, in the pre-state, exactly what
 the signer saw. -/
 theorem admit_pins {E : Env D} {w w' : World D} {t : Turn D}
-    (h : World.admit E w t = .ok w') : ∀ x ∈ t.touches, pinOf E (w.live x.cell) = x.seen := by
+    (h : World.admit E w t = .ok w') : ∀ x ∈ t.touches, pinOf E (w.live E x.cell) = x.seen := by
   obtain ⟨_, hc, _⟩ := admit_ok h
   intro x hx
   obtain ⟨_, hr⟩ := hc.touch x hx
@@ -111,13 +112,13 @@ theorem admit_pins {E : Env D} {w w' : World D} {t : Turn D}
 /-- **The staleness refusal.** A turn whose pin disagrees with the World is admitted by no
 World transition. -/
 theorem stale_refused {E : Env D} {w : World D} {t : Turn D} {x : Touch D}
-    (hmem : x ∈ t.touches) (hstale : pinOf E (w.live x.cell) ≠ x.seen) :
+    (hmem : x ∈ t.touches) (hstale : pinOf E (w.live E x.cell) ≠ x.seen) :
     ∀ w', World.admit E w t ≠ .ok w' :=
   fun _ h => hstale (admit_pins h x hmem)
 
 /-- A stale touch is refused `stale` before anything about its write or retirement is judged. -/
 theorem touchCheck_stale {E : Env D} {w : World D} {x : Touch D}
-    (hstale : pinOf E (w.live x.cell) ≠ x.seen) : touchCheck E w x = .error (.stale x.cell) := by
+    (hstale : pinOf E (w.live E x.cell) ≠ x.seen) : touchCheck E w x = .error (.stale x.cell) := by
   unfold touchCheck
   simp [req, hstale, bind, Except.bind]
 
@@ -127,7 +128,7 @@ theorem stale_named {E : Env D} {w : World D} {t : Turn D} {pre post : List (Tou
     {x : Touch D} (hb : checkBounds t = .ok ()) (hj : checkJournal w t = .ok ())
     (hs : checkShape t = .ok ()) (hw : checkWindow w t = .ok ())
     (ht : t.touches = pre ++ x :: post) (hpre : ∀ y ∈ pre, ∃ r, touchCheck E w y = .ok r)
-    (hstale : pinOf E (w.live x.cell) ≠ x.seen) :
+    (hstale : pinOf E (w.live E x.cell) ≠ x.seen) :
     World.admit E w t = .error (.stale x.cell) := by
   have hm : mapEx (touchCheck E w) t.touches = .error (.stale x.cell) := by
     rw [ht]; exact mapEx_error_at (touchCheck_stale hstale) post hpre

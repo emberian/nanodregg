@@ -40,12 +40,20 @@ theorem eq_callBytes_of_decodeCall (program : Program Digest) {b : ByteArray} {c
     (h : (ctx program).decodeCall b = some c) : Call.Fits (fun _ => True) c ∧ b = (ctx program).callBytes c :=
   Nanodregg.Codec.Kernel.eq_callBytes_of_decodeCall digestCodec_lawful.on h
 
-theorem world_decode_bytes {w : World Digest} (hw : World.Fits (fun _ => True) w) :
+theorem world_decode_bytes {w : World Digest} (hw : Nanodregg.Codec.Kernel.World.CodecFits env (fun _ => True) w) :
     ∃ w', world.decode (world.bytes w) = .ok w' ∧ w'.Equiv w :=
   Nanodregg.Codec.Kernel.world_decode_bytes digestCodec_lawful.on hw
 
 theorem eq_bytes_of_world_decode {b : ByteArray} {w : World Digest} (h : world.decode b = .ok w) :
     b = world.bytes w :=
   Nanodregg.Codec.Kernel.eq_bytes_of_world_decode digestCodec_lawful.on h
+
+/-- A reopened base satisfies the kernel's trie invariant, so every kernel theorem applies to it. -/
+theorem world_decode_canon {b : ByteArray} {w : World Digest} (h : world.decode b = .ok w) :
+    w.Canon env ∧ ∀ p ∈ w.trie.toList, Leaf.fits p.1 p.2 = true :=
+  Nanodregg.Codec.Kernel.world_decode_canon digestCodec_lawful.on h
+
+theorem world_decode_slotted {b : ByteArray} {w : World Digest} (h : world.decode b = .ok w) : w.Slotted env :=
+  Nanodregg.Codec.Kernel.world_decode_slotted digestCodec_lawful.on h
 
 end Nanodregg.Codec.Deployed

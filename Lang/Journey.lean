@@ -221,8 +221,8 @@ def go (prog : Program D) (r : Run) (c : Call D) : Run × String × Option (Turn
   | .error (.rejected e) => ({ r with st }, s!"rejected {Sim.nameOf e}", none)
   | .ok (t, w') => ({ r with st := { st with host := w', log := st.log ++ [t] } }, "admitted", some t)
 
-def totalOf (w : World D) (obj : D) : Option Nat :=
-  match w.live obj with
+def totalOf (E : Kernel.Env D) (w : World D) (obj : D) : Option Nat :=
+  match w.live E obj with
   | some cell => match cell.slots.get (stateBase + 1) with
     | some b => match Wire.decodeData .nat b with
       | .ok (.nat n) => some n
@@ -310,15 +310,15 @@ def journey (mode : Mode) : Run := Id.run do
   -- L3 set 50
   let c3 := Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id, obj, pkg]) (.invoke obj 0 n50 10000 none)
   let (r3, v3, _) := go prog r c3
-  r := note r3 s!"L3 A set 50: {v3}, total = {totalOf r3.st.host obj}" (v3 == "admitted" && totalOf r3.st.host obj == some 50)
+  r := note r3 s!"L3 A set 50: {v3}, total = {totalOf Sim.env r3.st.host obj}" (v3 == "admitted" && totalOf Sim.env r3.st.host obj == some 50)
   -- L4 set 101
   let c4 := Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id, obj, pkg]) (.invoke obj 0 n101 10000 none)
   let (r4, v4, _) := go prog r c4
   if mode = .skipJudge then
     r := note r4 s!"PLANT skip-judge: L4 A set 101 must now be admitted: {v4}" (v4 == "admitted")
   else
-    r := note r4 s!"L4 A set 101: {v4}, total = {totalOf r4.st.host obj}"
-      (v4.startsWith "refused lawDenied" && (v4.splitOn "bounded: over 100").length > 1 && totalOf r4.st.host obj == some 50)
+    r := note r4 s!"L4 A set 101: {v4}, total = {totalOf Sim.env r4.st.host obj}"
+      (v4.startsWith "refused lawDenied" && (v4.splitOn "bounded: over 100").length > 1 && totalOf Sim.env r4.st.host obj == some 50)
   -- L5 B through a grant
   let cg := Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id, b.id, obj]) (.grant obj b.id [.invoke 0] none)
   let (rg, vg, tg) := go prog r cg

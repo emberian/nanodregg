@@ -139,6 +139,12 @@ structure State (D : Type) [Ord D] where
   /-- each account's floor in the model: a well's starts at its cap, credit lines move it -/
   floors : List (D × Nat) := []
   onces : List (D × ByteArray) := []
+  /-- KERNEL-23 (h): node hashes the admitted turns' inserts cost, and the slots they changed,
+  cells and nullifiers apart -/
+  cellHashes : Nat := 0
+  cellSlots : Nat := 0
+  nullHashes : Nat := 0
+  nullSlots : Nat := 0
 
 def nameOf {α : Type} [Repr α] (a : α) : String :=
   match (reprStr a).splitOn " " with
@@ -150,7 +156,7 @@ def vname : Verdict D → String
   | .rejected r => s!"rejected {r.name}"
 
 def S.pinsFor (E : Env D) (w : World D) (ids : List D) : List (D × D) :=
-  ids.eraseDups.map fun c => (c, pinOf E (w.live c))
+  ids.eraseDups.map fun c => (c, pinOf E (w.live E c))
 
 def signed (P : Params D) (st : State D) (m : Member D) (key : ByteArray) (pins : List (D × D)) (body : Body D) :
     Call D :=
@@ -161,6 +167,114 @@ def signed (P : Params D) (st : State D) (m : Member D) (key : ByteArray) (pins 
 
 def freshKey (st : State D) (tag : String) : ByteArray × State D :=
   ((s!"key-{tag}-{st.fresh}").toUTF8, { st with fresh := st.fresh + 1 })
+
+/-! ## The World's root (KERNEL-23): every admitted turn's slots proved, verified, and forged -/
+
+/-- The hashes one insert costs, read off the tries before and after it: one per node on the
+slot's new path, one per EMPTY sibling on it (`Trie.emptyHash` is recomputed, not cached), one for
+its leaf, and one for the leaf a split moves down. A count, never a clock. -/
+def insertHashes (E : Env D) (pre post : Cells D) (s : Slot D) : Nat :=
+  let S := trieSpec E
+  let p := post.prove S s
+  let empties := (p.sibs.filter fun h => h == Trie.emptyHash S).length
+  let split := match (pre.prove S s).term with
+    | some kds => if kds.any (fun q => q.1 == s) then 0 else 1
+    | none => 0
+  p.sibs.length + empties + 1 + split
+
+/-- The slots a turn changed, in `commitTrie`'s order: its non-`keep` touches, its born cells,
+its nullifiers. -/
+def changedSlots (t : Turn D) : List (Slot D) :=
+  (t.touches.filter fun x => x.act != .keep).map (fun x => .cell x.cell) ++
+    (createdIds t).map .cell ++ t.nullifiers.map .nullifier
+
+def meet (st : State D) (arm : String) : State D :=
+  { st with refusedAsExpected := st.refusedAsExpected + 1, seen := arm :: st.seen }
+
+def failWith (st : State D) (f : String) : State D := { st with failures := f :: st.failures }
+
+/-- After an admitted turn `w → w'`: replay its inserts from `w`'s trie with `w'`'s leaves (the
+replay must reach `w'`'s root, or a touched path was left unrehashed), count their hashes, prove
+and verify every changed slot and one untouched one against `w'`'s root, each nullifier as absent
+against `w`'s, and forge four proofs, each of which must fail to verify. -/
+def checkRoot (P : Params D) (st : State D) (w w' : World D) (t : Turn D) : State D :=
+  let E := P.env
+  let S := trieSpec E
+  let slots := changedSlots t
+  let (tr, st) := slots.foldl (fun (tr, st) s =>
+    match w'.trie.get S s with
+    | none => (tr, failWith st "root: a changed slot is absent after the turn")
+    | some l =>
+        let tr' := tr.insert S s l
+        let h := insertHashes E tr tr' s
+        let st := match s with
+          | .cell _ => { st with cellHashes := st.cellHashes + h, cellSlots := st.cellSlots + 1 }
+          | .nullifier _ => { st with nullHashes := st.nullHashes + h, nullSlots := st.nullSlots + 1 }
+        (tr', st)) (w.trie, st)
+  let st := if tr.hashOf S == w'.root E then st
+    else failWith st "root: replaying the turn's inserts does not reach the admitted root"
+  let root := w'.root E
+  let verifyAt := fun (st : State D) (s : Slot D) =>
+    match w'.trie.get S s with
+    | none => if Trie.verifyExclusion S root s (w'.trie.prove S s) then st
+        else failWith st "root: an absent slot's exclusion proof does not verify"
+    | some l => if Trie.verifyInclusion S root s (leafDigest E l) (w'.trie.prove S s) then st
+        else failWith st "root: a slot's inclusion proof does not verify"
+  let untouched : Slot D := .cell (cellIdOf E t.txId 1000)
+  let st := (slots ++ [untouched] ++ (st.members.head?.map fun m => Slot.cell m.id).toList).foldl verifyAt st
+  let st := t.nullifiers.foldl (fun st nf =>
+    if Trie.verifyExclusion S (w.root E) (.nullifier nf) (w.trie.prove S (.nullifier nf)) then st
+    else failWith st "root: a nullifier was not provably unspent before its turn") st
+  -- the forgeries: each must fail to verify, by name
+  let forged : Trie.Proof (Slot D) D → Trie.Proof (Slot D) D := fun p =>
+    match p.sibs with
+    | [] => p
+    | s :: rest => ⟨p.term, (if s == E.hash domTrie "forged".toUTF8 then E.hash domTrie "forged2".toUTF8
+        else E.hash domTrie "forged".toUTF8) :: rest⟩
+  let st := match slots.head? with
+    | none => st
+    | some s =>
+        match w'.trie.get S s with
+        | none => st
+        | some l =>
+            let p := w'.trie.prove S s
+            let st := if p.sibs.isEmpty then st
+              else if Trie.verifyInclusion S root s (leafDigest E l) (forged p) then
+                failWith st "root: a proof with a flipped sibling verified"
+              else meet st "proof-sibling:refused"
+            let other : Leaf := match l with
+              | .entry (.live _) => .entry .tomb
+              | _ => .entry (.live ⟨0, .ram, []⟩)
+            let st := if Trie.verifyInclusion S root s (leafDigest E other) p then
+              failWith st "root: a proof verified a leaf the World does not hold"
+            else meet st "proof-leaf:refused"
+            -- the pre-turn proof of the same slot, against the post-turn root (a stale proof)
+            let st := if Trie.verifyInclusion S root s (leafDigest E l) (w.trie.prove S s) then
+              failWith st "root: a stale (pre-turn) proof verified against the new root"
+            else meet st "proof-stale:refused"
+            -- a proof longer than the trie's depth is refused before anything is hashed
+            let long : Trie.Proof (Slot D) D := ⟨p.term, p.sibs ++ List.replicate (S.depth + 1) root⟩
+            if Trie.verifyInclusion S root s (leafDigest E l) long then
+              failWith st "root: a proof longer than the depth verified"
+            else meet st "proof-overlong:refused"
+  -- a retired cell claimed live: its old cell against the tombstone's path
+  let st := t.touches.foldl (fun st x =>
+    match x.act, w.live E x.cell with
+    | .retire, some old =>
+        if Trie.verifyInclusion S root (.cell x.cell) (leafDigest E (.entry (.live old))) (w'.trie.prove S (.cell x.cell))
+        then failWith st "root: a tombstone was proved live"
+        else meet st "proof-tomb-live:refused"
+    | _, _ => st) st
+  -- a spent nullifier claimed unspent
+  t.nullifiers.foldl (fun st nf =>
+    let p := w'.trie.prove S (.nullifier nf)
+    let st := if Trie.verifyExclusion S root (.nullifier nf) p then
+      failWith st "root: a spent nullifier was proved unspent"
+    else meet st "proof-spent-unspent:refused"
+    -- the same path claiming an EMPTY end: only `climb = root` can refuse it
+    if Trie.verifyExclusion S root (.nullifier nf) ⟨none, p.sibs⟩ then
+      failWith st "root: a spent nullifier's path with an empty end verified"
+    else meet st "proof-spent-empty:refused") st
 
 /-- Submit a call on the Host path and judge the verdict. -/
 def submit (P : Params D) (st : State D) (c : Call D) (expect : Expect) (what : String) : State D × Option (Turn D) :=
@@ -181,6 +295,7 @@ def submit (P : Params D) (st : State D) (c : Call D) (expect : Expect) (what : 
       else fail s!"rejected {r.name}"
   | .ok (t, w') =>
       if expect = .ok then
+        let st := checkRoot P st st.host w' t
         ({ st with host := w', log := st.log ++ [t], admitted := st.admitted + 1,
                    seen := s!"{what}:ok" :: st.seen }, some t)
       else fail "admitted"
@@ -237,7 +352,7 @@ def probeValue (P : Params D) (st : State D) : State D :=
   | [] => st
   | a0 :: _ =>
       let (acct, st) := pick st st.accounts a0
-      match w.live acct.1 with
+      match w.live P.env acct.1 with
       | none => st
       | some cell =>
           let seen := pinOf P.env (some cell)
@@ -288,7 +403,7 @@ def scanValue (P : Params D) (st : State D) : State D :=
     else if w.outstanding d > cap then some s!"outstanding {w.outstanding d} > cap {cap}"
     else none
   let drift := st.accounts.filterMap fun (a, _, _) =>
-    match (w.live a).bind Value.ofCell with
+    match (w.live P.env a).bind Value.ofCell with
     | none => some "an account is gone or malformed"
     | some v =>
         if v.balance ≠ balOf st a then some s!"balance {v.balance} ≠ model {balOf st a}"
@@ -574,7 +689,7 @@ def act (P : Params D) (st : State D) : State D :=
           let (d, st) := st.rng.below 2 |> fun (x, r) => (x, { st with rng := r })
           let new := if d = 0 then deny else frz
           let owner := (st.members.find? fun m => m.id = obj.2).getD (founder0 P st)
-          let laws := match w.live obj.1 with
+          let laws := match w.live P.env obj.1 with
             | some cell => (lawSlotsOf cell).filterMap fun (p : Nat × ByteArray) => P.ctx.digestOf p.2
             | none => []
           let denied := laws.any (· = deny) ∨ new = deny
@@ -588,7 +703,7 @@ def act (P : Params D) (st : State D) : State D :=
       | o :: _ =>
           let (obj, st) := pick st st.objects o
           let owner := (st.members.find? fun m => m.id = obj.2).getD (founder0 P st)
-          let laws := match w.live obj.1 with
+          let laws := match w.live P.env obj.1 with
             | some cell => (lawSlotsOf cell).filterMap fun (p : Nat × ByteArray) => P.ctx.digestOf p.2
             | none => []
           let denied := laws.any fun l => some l = st.denyPkg ∨ some l = st.freezePkg
@@ -625,7 +740,7 @@ def act (P : Params D) (st : State D) : State D :=
           let owner := (st.members.find? fun m => m.id = obj.2).getD (founder0 P st)
           let pins := (S.pinsFor P.env w [owner.id]) ++ [(obj.1, pinOf P.env none)]
           let c := signed P st owner owner.key pins (.write obj.1 [(0, nat 7)] none)
-          let laws := match w.live obj.1 with
+          let laws := match w.live P.env obj.1 with
             | some cell => (lawSlotsOf cell).filterMap fun (p : Nat × ByteArray) => P.ctx.digestOf p.2
             | none => []
           if laws.isEmpty then (submit P st c (.rejected "stale") "stale").1 else st
@@ -671,7 +786,7 @@ def act (P : Params D) (st : State D) : State D :=
                 (.refused "notIssuer") "revoke-not-issuer").1
             | none => st
           let w := st.host
-          let back := ((w.live gid).map Cell.weight).getD 0
+          let back := ((w.live P.env gid).map Cell.weight).getD 0
           let (st, t) := submit P st (signed P st issuer issuer.key (S.pinsFor P.env w [issuer.id, gid]) (.revoke gid))
             .ok "revoke"
           match t with
@@ -693,7 +808,7 @@ def act (P : Params D) (st : State D) : State D :=
           match st.members.find? fun m => m.id = ge with
           | none => st
           | some m =>
-              let laws := match w.live obj with
+              let laws := match w.live P.env obj with
                 | some cell => (lawSlotsOf cell).filterMap fun (p : Nat × ByteArray) => P.ctx.digestOf p.2
                 | none => []
               let denied := laws.any fun l => some l = st.denyPkg ∨ some l = st.freezePkg
@@ -760,18 +875,17 @@ def turnWork (t : Turn D) : Nat × Nat :=
 def maxWork (log : List (Turn D)) : Nat × Nat :=
   log.foldl (fun (a, b) t => let (x, y) := turnWork t; (max a x, max b y)) (0, 0)
 
-/-- Same contents (TreeMap shapes may differ; contents may not). -/
-def same (a b : World D) : Bool :=
-  a.cells.toList == b.cells.toList && a.journal.toList == b.journal.toList &&
-  a.spent.toList == b.spent.toList && a.height == b.height && a.chain == b.chain &&
-  a.allowance == b.allowance && a.origin == b.origin
+/-- Same contents and the same ROOT (the journal's TreeMap shape may differ; nothing else may). -/
+def same (E : Env D) (a b : World D) : Bool :=
+  a.trie.toList == b.trie.toList && a.root E == b.root E && a.journal.toList == b.journal.toList &&
+  a.height == b.height && a.chain == b.chain && a.allowance == b.allowance && a.origin == b.origin
 
-/-- A World rebuilt from its own sorted contents, as a checkpoint decode would. -/
-def reopened (w : World D) : World D :=
-  let cells : Std.TreeMap D Entry compare := Std.TreeMap.ofList w.cells.toList compare
+/-- A World rebuilt from its own listing, as a checkpoint decode does (CODEC-19): the trie by
+`Trie.build` (KERNEL-23: it is the same trie, `build_toList`), the journal from its sorted list. -/
+def reopened (E : Env D) (w : World D) : World D :=
+  let trie := Trie.build (trieSpec E) (trieSpec E).depth 0 w.trie.toList
   let journal : Std.TreeMap D (Nat × D) compare := Std.TreeMap.ofList w.journal.toList compare
-  let spent : Std.TreeSet D compare := Std.TreeSet.ofList w.spent.toList compare
-  { w with cells, journal, spent }
+  { w with trie, journal }
 
 def worldName : ByteArray := "sim".toUTF8
 
@@ -826,20 +940,32 @@ def run (P : Params D) (seed : Nat) (steps : Nat) : State D :=
     let st := { st with rng }
     if r = 0 then
       match World.fold P.env g st.log with
-      | .ok w => if same w st.host then { st with host := w, restarts := st.restarts + 1 }
+      | .ok w => if same P.env w st.host then { st with host := w, restarts := st.restarts + 1 }
           else { st with failures := "restart: reopened World differs" :: st.failures }
       | .error (i, r) => { st with failures := s!"restart: fold refused at {i}: {r.name}" :: st.failures }
     else if r = 1 then
       -- a checkpoint reopen: every map rebuilt from its sorted contents (a different tree shape,
       -- the same World: Kernel.Proofs.Equiv says admit cannot tell)
-      { st with host := reopened st.host, restarts := st.restarts + 1 }
+      let w := reopened P.env st.host
+      if same P.env w st.host then { st with host := w, restarts := st.restarts + 1 }
+      else { st with failures := "checkpoint: the rebuilt trie differs (root or listing)" :: st.failures }
     else st) st
   -- the follower and the auditor, from genesis
   let st := match World.fold P.env g st.log with
-    | .ok w => if same w st.host then st else { st with failures := "follower differs" :: st.failures }
+    | .ok w =>
+        if !same P.env w st.host then { st with failures := "follower differs" :: st.failures }
+        else
+          -- the Host's proofs verify against the follower's root (KERNEL-23 (g))
+          let S := trieSpec P.env
+          let ok := match st.log.getLast? with
+            | none => true
+            | some t => (changedSlots t).all fun s => match st.host.trie.get S s with
+                | some l => Trie.verifyInclusion S (w.root P.env) s (leafDigest P.env l) (st.host.trie.prove S s)
+                | none => false
+          if ok then st else { st with failures := "follower: a Host proof does not verify at the follower's root" :: st.failures }
     | .error (i, r) => { st with failures := s!"follower refused at {i}: {r.name}" :: st.failures }
   let st := match audit P.ctx g st.log with
-    | .ok w => if same w st.host then st else { st with failures := "audit differs" :: st.failures }
+    | .ok w => if same P.env w st.host then st else { st with failures := "audit differs" :: st.failures }
     | .error (i, f) => { st with failures := s!"audit refused at {i}: {vname f}" :: st.failures }
   -- KERNEL-24: the same log's calls against a second genesis (same name and founders, another
   -- nonce) are each refused `wrongWorld`; another nonce, or the founders swapped, is another chain
@@ -886,7 +1012,9 @@ refusal name met somewhere else does not test the receiver this arm exercises. -
 def plantedArms : List String :=
   ["invoke-owner:ok", "invoke-no-grant:noGrant", "invoke-public:ok", "invoke-public-method-1:grantRight", "carve-public:noGrant",
    "law-self:lawDenied", "law:ok", "create-frozen:ok", "write:lawDenied", "write-no-grant:noGrant",
-   "rom-id:notContentId"]
+   "rom-id:notContentId",
+   "proof-sibling:refused", "proof-leaf:refused", "proof-tomb-live:refused", "proof-spent-unspent:refused",
+   "proof-stale:refused", "proof-overlong:refused", "proof-spent-empty:refused"]
 
 /-- `--seeds N` runs seeds `0 … N-1`; otherwise each argument is a seed. -/
 def parseSeeds : List String → List Nat
@@ -903,6 +1031,7 @@ def report (P : Params D) (seeds : List Nat) : IO UInt32 := do
   let mut restarts := 0
   let mut work : Nat × Nat := (0, 0)
   let mut seen : List String := []
+  let mut hashes : Nat × Nat × Nat × Nat := (0, 0, 0, 0)
   for seed in seeds do
     let st := run P seed 120
     let (a, b) := maxWork st.log
@@ -910,6 +1039,8 @@ def report (P : Params D) (seeds : List Nat) : IO UInt32 := do
     admitted := admitted + st.admitted
     refused := refused + st.refusedAsExpected
     restarts := restarts + st.restarts
+    hashes := (hashes.1 + st.cellHashes, hashes.2.1 + st.cellSlots, hashes.2.2.1 + st.nullHashes,
+      hashes.2.2.2 + st.nullSlots)
     seen := (st.seen ++ seen).eraseDups
     match st.failures.reverse with
     | [] => IO.println s!"PASS seed {seed}: admitted={st.admitted} refused-as-expected={st.refusedAsExpected} restarts={st.restarts}"
@@ -924,6 +1055,8 @@ def report (P : Params D) (seeds : List Nat) : IO UInt32 := do
     IO.println s!"FAIL planted refusals never met: {unmet}"
   IO.println s!"WASTE admit cells-touched-per-turn {showRatio work.1}"
   IO.println s!"WASTE fold work-per-turn {showRatio work.2}"
+  IO.println s!"WASTE admit hashes-per-touched-cell {showRatio (ratio hashes.1 hashes.2.1)}"
+  IO.println s!"WASTE admit hashes-per-nullifier {showRatio (ratio hashes.2.2.1 hashes.2.2.2)}"
   if bad = 0 then IO.println "ALL PASS"
   return if bad = 0 then 0 else 1
 

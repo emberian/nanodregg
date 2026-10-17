@@ -42,11 +42,9 @@ theorem fold_origin {E : Env D} : ∀ {w w' : World D} {l : List (Turn D)}, Worl
         · cases h
       · cases h
 
-omit [DecidableEq D] in
 theorem genesis_origin (X : Ctx D) (name nonce : ByteArray) (allowance : Nat) (founders : List (ByteArray × D)) :
     (genesis X name nonce allowance founders).origin = originOf X name nonce allowance founders := rfl
 
-omit [DecidableEq D] in
 theorem genesis_chain (X : Ctx D) (name nonce : ByteArray) (allowance : Nat) (founders : List (ByteArray × D)) :
     (genesis X name nonce allowance founders).chain =
       World.genesisChain X.env (genesis X name nonce allowance founders).origin := rfl

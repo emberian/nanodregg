@@ -86,15 +86,15 @@ def Envelope.message (X : Ctx D) (world member grant : D) (start notBefore valid
     Text.u64 validUntil
 
 /-- The member's current key, if `member` is a live member. -/
-def currentKey (w : World D) (member : D) : Option ByteArray :=
-  match w.live member with
+def currentKey (E : Env D) (w : World D) (member : D) : Option ByteArray :=
+  match w.live E member with
   | some m => if m.kind = kindMember then m.slots.get slotKey else none
   | none => none
 
 def Envelope.check (X : Ctx D) (w : World D) (e : Envelope D) : Except ReadRefusal Unit := do
   req (e.world = w.origin) .wrongWorld
   req (e.validUntil ≤ e.notBefore + Kernel.Bounds.windowMax) .wideWindow
-  req (currentKey w e.member = some e.key) .unknownKey
+  req (currentKey X.env w e.member = some e.key) .unknownKey
   req (X.verify e.key (Envelope.message X e.world e.member e.grant e.start e.notBefore e.validUntil) e.signature) .badSignature
   req (mayFollow X w e.member e.grant) .noFollowGrant
   req (e.notBefore ≤ w.height) .notYet

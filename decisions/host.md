@@ -882,3 +882,63 @@ one genesis), which is the comfortable direction. The "nobody promises stability
 hard question rather than answering it: it may mean that in practice no carry ever crosses a real flag
 day, which makes the feature mostly theoretical until the kernel stops changing.
 **Status.** proposed answer to OPS-P1. HOST builds the verbs once KERNEL-6 and CODEC-2 land `carried`.
+
+## HOST-29 · a batch record states each Turn's ROOT: `List (Turn × root)`, no end chain; open checks every root by admission (2026-10-17, HOST-6; KERNEL-23's World port, with KERNEL-6/7, CODEC-2/3, PROTOCOL-6)
+**The defect the port creates.** KERNEL-23 makes `chainNext E prev t root'` commit the World's root
+after each Turn (the phone's per-head `(prev, turnDigest, root')`). `Host.Page.walkTurns` advanced
+the chain from a record's Turns alone, so it could no longer state the chain after an event without
+admitting, and a page reader has the index entry's chain but not the World at that height.
+**Decision (KERNEL-6's option (a), amended).**
+- A batch record is CODEC's `batch max dc : Stream (List (Turn D × D))`: each Turn with `World.root`
+  after it. The record's separate end chain is DELETED: it is `chainOf E w.chain pairs`
+  (`Kernel.RootedFold.chain`), so stating it too would be a second copy of one fact (law 1).
+- The loop gets the roots for free. `Host.Machine` gains `note : W → N` (deployed: `World.root E`,
+  O(1), the trie's cached digest), and `Machine.step` stages `(t, note w')` at admission.
+  `Recorder.encode` writes the staged pairs.
+- Follow persists pairs from PROTOCOL's `absorb`, which pushes `(t, World.root X.env w')` (agreed
+  with PROTOCOL-6).
+- Open runs each record with `Record.runRooted`: it admits each Turn with `World.admit` and requires
+  the stated root to be `World.root` of the World reached. Otherwise it refuses
+  `Record.Fault.rootMismatch i`, which replaces `chainMismatch` (there is no stated chain left to
+  mismatch). So every root on disk is checked against the reopening writer's own admission, and the
+  page walk trusts only roots that this check (or the writer that staged them) produced.
+- The page walk advances `chainNext E c t root` from the stated pairs: O(page bytes), no admission.
+**Theorems.** Kernel (KERNEL-7 agreed): `Kernel.Rooted admit note w l w'` (generic: every step accepted,
+every note the one reached), `World.RootedFold E := Rooted (World.admit E) (World.root E)`, and in
+`Kernel.Proofs.RootedFold` `Rooted.snoc`, `RootedFold.fold` (a rooted fold IS a fold of its Turns)
+and `RootedFold.chain` (its chain is `chainOf` over its pairs). Host: `Machine.staged_rooted`
+(replaces `staged_foldlM`: the staged pairs are a rooted run from the batch's World to the World
+kept), `Record.runRooted_ok` / `Record.step_rooted` (a record that opens is a rooted run of the pairs
+it decodes to), `Record.step_origin` re-proved through them. Protocol (statements reviewed by
+PROTOCOL-6, at its condition that the roots be stated, not dropped): `absorb_admits`,
+`absorbPage_admits` and `step_persists_admitted` now conclude `RootedFold`, and
+`step_persists_folds` is the plain-fold corollary HOST-22's reopen argument cites.
+**Plant.** In host-sim, seeds 1–3, `plant-flip-root` re-encodes the first record with the root beside
+its first Turn changed, re-seals the segment after the origin frame so every tag verifies, and
+expects open to refuse `record 0 (rootMismatch 0)`. With the compare replaced by `true`, it is the
+one FAILED (seen). The page checks compare against roots recomputed by admitting the logged Turns
+from genesis, never against the roots the records state.
+**WASTE.** `submit bytes-per-turn` rises 1.419 → 1.492 (toy digest: 8 root bytes per Turn; deployed:
+32 per ~290-byte Turn, ≈ +11 %), less one chain per record. That is the price of a page that does
+not admit. Re-pinned with its reason.
+**Alternatives.** (b) A page reader re-admits: it has no World at the entry's height, so this would
+need a World per index entry, O(store). (c) Check only record-boundary chains: that breaks pages that
+end mid-record (PROTOCOL's pair assertion) and the phone's per-head root. Keeping the stated end
+chain beside the roots: one fact twice. Checking stated roots only through the end chain (one hash
+compare): that would rest on chain injectivity, a collision assumption, where the per-Turn compare
+is exact and costs one O(1) root read per Turn.
+**Critique.** Records grow by a digest per Turn forever, and a Store of tiny Turns pays the most. A
+root is also a fact about the WHOLE World, so a stated root is unverifiable by any reader that does
+not hold the World: pages pass roots on the writer's word (MAC'd at rest, checked by the writer's
+own reopen, re-derived by every follower). A phone trusting a head trusts it for exactly this
+reason. The `note` parameter generalises Machine for one use.
+**Meta-critique.** I took KERNEL-6's lean (a) and improved it by deletion, which is my favourite
+move, so I should be suspicious that the deletion (the end chain) is right. It is right because
+`RootedFold.chain` proves it derivable. I did not measure the deployed byte cost at THE BAR, only
+priced it.
+**Flag day.** It is part of KERNEL-23's kernel! commit. The batch codec changes (the D2 stamp
+flips), so every Store re-geneses (the port re-geneses them anyway) and an old Store refuses
+`shapeMismatch`.
+**Status.** built against main 4777611 + kernel7-r4 + CODEC-2's codec2-trie-r3. host-sim and
+host-file-sim 1–3, hosting-sim 1–3, kernel-sim 64 seeds, store-plants, lang-journey: ALL PASS;
+rows INCOMPLETE 3 pending, no FAIL. Lands in KERNEL-7's flag-day commit.

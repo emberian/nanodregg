@@ -43,6 +43,9 @@ entries, O(touches) to build. -/
 def denomsMax : Nat := 8
 /-- A denomination's bytes (a digest's: the id of the cell that bore it). -/
 def denomBytesMax : Nat := 64
+/-- The World trie's depth (KERNEL-23): one kind bit, then 256 id bits (a 32-byte digest). A proof
+carries at most this many siblings, and a leaf holds two keys only past it. -/
+def trieDepth : Nat := 257
 
 end Bounds
 end Nanodregg.Kernel

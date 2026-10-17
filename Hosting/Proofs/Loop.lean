@@ -81,11 +81,11 @@ theorem eraseDups_of_nodup : ∀ {l : List D}, l.Nodup → l.eraseDups = l
 
 /-- Over a page (no duplicates, at most `grainsMax` ids), `reconcile` decides every id of the
 page: the paging and deduplication inside it drop nothing. -/
-theorem reconcile_page {bytesOf : D → ByteArray} {label pkgId : ByteArray} {now : Nat}
+theorem reconcile_page {E : Env D} {bytesOf : D → ByteArray} {label pkgId : ByteArray} {now : Nat}
     {live : List Live} {w : World D} {p : List D} (hnd : p.Nodup) (hlen : p.length ≤ Bounds.grainsMax)
     {i : D} (hi : i ∈ p) {v : Verdict}
-    (hv : decideCell label pkgId now live (dirOf (bytesOf i)) (w.live i) = some v) :
-    { grain := dirOf (bytesOf i), verdict := v } ∈ reconcile bytesOf label pkgId now live w p := by
+    (hv : decideCell label pkgId now live (dirOf (bytesOf i)) (w.live E i) = some v) :
+    { grain := dirOf (bytesOf i), verdict := v } ∈ reconcile E bytesOf label pkgId now live w p := by
   unfold reconcile
   rw [eraseDups_of_nodup hnd, List.take_of_length_le hlen]
   exact List.mem_filterMap.mpr ⟨i, hi, by simp [hv]⟩
@@ -97,12 +97,12 @@ theorem roundIds_nodup (st : State D) (touched : List D) (rs : List Report) :
     (roundIds st touched rs).Nodup := eraseDups_nodup_le' _ _ (Nat.le_refl _)
 
 /-- Every id of the round whose decision is a verdict gets exactly that action. -/
-theorem step_decides {bytesOf : D → ByteArray} {label pkgId : ByteArray} {w : World D}
+theorem step_decides {E : Env D} {bytesOf : D → ByteArray} {label pkgId : ByteArray} {w : World D}
     {st : State D} {touched : List D} {rs : List Report} {i : D} (hi : i ∈ roundIds st touched rs)
     {v : Verdict}
     (hv : decideCell label pkgId (rs.foldl (fun n r => max n r.atMs) st.now) (st.absorb rs)
-      (dirOf (bytesOf i)) (w.live i) = some v) :
-    { grain := dirOf (bytesOf i), verdict := v } ∈ (Loop.step bytesOf label pkgId w st touched rs).2 := by
+      (dirOf (bytesOf i)) (w.live E i) = some v) :
+    { grain := dirOf (bytesOf i), verdict := v } ∈ (Loop.step E bytesOf label pkgId w st touched rs).2 := by
   simp only [Loop.step]
   have hall := pages_flatten (n := Bounds.grainsMax) (by decide) _ (roundIds st touched rs) (Nat.le_refl _)
   have : i ∈ (pages Bounds.grainsMax (roundIds st touched rs).length (roundIds st touched rs)).flatten := by
@@ -114,11 +114,11 @@ theorem step_decides {bytesOf : D → ByteArray} {label pkgId : ByteArray} {w : 
 
 /-- Every launch a round emits is for one of its ids, names that id's directory, and is decided on
 the World's own cell as `launch_sound` requires. -/
-theorem step_launch_sound {bytesOf : D → ByteArray} {label pkgId : ByteArray} {w : World D}
+theorem step_launch_sound {E : Env D} {bytesOf : D → ByteArray} {label pkgId : ByteArray} {w : World D}
     {st : State D} {touched : List D} {rs : List Report} {a : Action} {p : Plan}
-    (ha : a ∈ (Loop.step bytesOf label pkgId w st touched rs).2) (hl : a.verdict = .launch p) :
+    (ha : a ∈ (Loop.step E bytesOf label pkgId w st touched rs).2) (hl : a.verdict = .launch p) :
     ∃ i ∈ roundIds st touched rs, a.grain = dirOf (bytesOf i) ∧
-      ∃ c gr, w.live i = some c ∧ isGrain pkgId c = true ∧ grainOf a.grain c = some (gr, .running) ∧
+      ∃ c gr, w.live E i = some c ∧ isGrain pkgId c = true ∧ grainOf a.grain c = some (gr, .running) ∧
         runningIn (st.absorb rs) a.grain = false ∧ plan label gr = .ok p := by
   simp only [Loop.step] at ha
   obtain ⟨pg, hpg, hapg⟩ := List.mem_flatMap.mp ha
@@ -131,13 +131,13 @@ theorem step_launch_sound {bytesOf : D → ByteArray} {label pkgId : ByteArray} 
 
 /-- A running child whose cell at an id of the round no longer qualifies — gone, not a lifecycle
 object, undecodable, or not desiring `running` — is killed (`kill_sound`'s cases, all of them). -/
-theorem step_kill_complete {bytesOf : D → ByteArray} {label pkgId : ByteArray} {w : World D}
+theorem step_kill_complete {E : Env D} {bytesOf : D → ByteArray} {label pkgId : ByteArray} {w : World D}
     {st : State D} {touched : List D} {rs : List Report} {i : D} (hi : i ∈ roundIds st touched rs)
     (hu : runningIn (st.absorb rs) (dirOf (bytesOf i)) = true)
-    (hc : w.live i = none ∨ ∃ c, w.live i = some c ∧
+    (hc : w.live E i = none ∨ ∃ c, w.live E i = some c ∧
       (isGrain pkgId c = false ∨ grainOf (dirOf (bytesOf i)) c = none ∨
         ∃ gr ph, grainOf (dirOf (bytesOf i)) c = some (gr, ph) ∧ ph ≠ .running)) :
-    { grain := dirOf (bytesOf i), verdict := .kill } ∈ (Loop.step bytesOf label pkgId w st touched rs).2 := by
+    { grain := dirOf (bytesOf i), verdict := .kill } ∈ (Loop.step E bytesOf label pkgId w st touched rs).2 := by
   apply step_decides hi
   rcases hc with h | ⟨c, h, hg | hd | ⟨gr, ph, hgr, hph⟩⟩
   · simp [decideCell, h, hu]
@@ -158,15 +158,15 @@ theorem touched_mem_roundIds {st : State D} {touched : List D} {rs : List Report
 
 /-- A touched lifecycle grain that desires `running`, has no child, is not crash-looping and has a
 plan is launched with it. -/
-theorem step_launch_complete {bytesOf : D → ByteArray} {label pkgId : ByteArray} {w : World D}
+theorem step_launch_complete {E : Env D} {bytesOf : D → ByteArray} {label pkgId : ByteArray} {w : World D}
     {st : State D} {touched : List D} {rs : List Report} {i : D} (hi : i ∈ touched) {c : Cell}
-    {gr : Grain} {p : Plan} (hcell : w.live i = some c) (hg : isGrain pkgId c = true)
+    {gr : Grain} {p : Plan} (hcell : w.live E i = some c) (hg : isGrain pkgId c = true)
     (hgr : grainOf (dirOf (bytesOf i)) c = some (gr, .running))
     (hu : runningIn (st.absorb rs) (dirOf (bytesOf i)) = false)
     (hcl : crashLooping (rs.foldl (fun n r => max n r.atMs) st.now) (st.absorb rs)
       (dirOf (bytesOf i)) = false) (hp : plan label gr = .ok p) :
     { grain := dirOf (bytesOf i), verdict := .launch p } ∈
-      (Loop.step bytesOf label pkgId w st touched rs).2 := by
+      (Loop.step E bytesOf label pkgId w st touched rs).2 := by
   apply step_decides (touched_mem_roundIds hi)
   rw [hcell]; exact launch_complete hg hgr hu hcl hp
 
@@ -282,10 +282,10 @@ theorem remember_has {bytesOf : D → ByteArray} {ids : List D} :
 
 /-- After a round, every grain it launched counts as running (and is kept in the memory): the next
 round does not launch it again before the launcher reports. -/
-theorem step_launch_marks {bytesOf : D → ByteArray} {label pkgId : ByteArray} {w : World D}
+theorem step_launch_marks {E : Env D} {bytesOf : D → ByteArray} {label pkgId : ByteArray} {w : World D}
     {st : State D} {touched : List D} {rs : List Report} {a : Action} {p : Plan}
-    (ha : a ∈ (Loop.step bytesOf label pkgId w st touched rs).2) (hl : a.verdict = .launch p) :
-    runningIn (Loop.step bytesOf label pkgId w st touched rs).1.live a.grain = true := by
+    (ha : a ∈ (Loop.step E bytesOf label pkgId w st touched rs).2) (hl : a.verdict = .launch p) :
+    runningIn (Loop.step E bytesOf label pkgId w st touched rs).1.live a.grain = true := by
   obtain ⟨i, hi, hgi, -⟩ := step_launch_sound ha hl
   simp only [Loop.step] at ha ⊢
   generalize hacts : List.flatMap _ _ = acts at ha ⊢
@@ -406,11 +406,11 @@ theorem returning_complete {st : State D} {touched : List D} {rs : List Report} 
 /-- The memory a round keeps is bounded by the World and the running children: every grain it
 remembers has a running child or a cell that still qualifies, and every report it keeps is of a
 remembered grain. -/
-theorem step_kept {bytesOf : D → ByteArray} {label pkgId : ByteArray} {w : World D}
+theorem step_kept {E : Env D} {bytesOf : D → ByteArray} {label pkgId : ByteArray} {w : World D}
     {st : State D} {touched : List D} {rs : List Report} :
-    let r := Loop.step bytesOf label pkgId w st touched rs
+    let r := Loop.step E bytesOf label pkgId w st touched rs
     (∀ x ∈ r.1.launched, runningIn (r.2.foldl afterOne (st.absorb rs)) x.1 = true ∨
-      qualifies pkgId w x.2 = true) ∧
+      qualifies E pkgId w x.2 = true) ∧
     (∀ l ∈ r.1.live, ∃ x ∈ r.1.launched, x.1 = l.grain) := by
   simp only [Loop.step, prune]
   refine ⟨fun x hx => ?_, fun l hl => ?_⟩
@@ -431,14 +431,14 @@ private theorem flatMap_sublist {α β γ : Type} {ps : List (List α)} {R : Lis
 
 /-- One action per grain per round, whenever distinct ids have distinct bytes (on the deployed
 digests: always, `digest_bytes_injective`). -/
-theorem step_one_per_grain {bytesOf : D → ByteArray} (hb : Function.Injective bytesOf)
+theorem step_one_per_grain {E : Env D} {bytesOf : D → ByteArray} (hb : Function.Injective bytesOf)
     {label pkgId : ByteArray} {w : World D} {st : State D} {touched : List D} {rs : List Report} :
-    ((Loop.step bytesOf label pkgId w st touched rs).2.map (·.grain)).Nodup := by
+    ((Loop.step E bytesOf label pkgId w st touched rs).2.map (·.grain)).Nodup := by
   simp only [Loop.step]
   have hnd := roundIds_nodup st touched rs
   have hsub := flatMap_sublist (g := fun i => dirOf (bytesOf i))
     (ps := pages Bounds.grainsMax (roundIds st touched rs).length (roundIds st touched rs))
-    (R := reconcile bytesOf label pkgId (rs.foldl (fun n r => max n r.atMs) st.now) (st.absorb rs) w)
+    (R := reconcile E bytesOf label pkgId (rs.foldl (fun n r => max n r.atMs) st.now) (st.absorb rs) w)
     (f := (·.grain)) (fun p hp => by
       have hpn := hnd.sublist (pages_sublist _ _ p hp)
       unfold reconcile
@@ -446,16 +446,16 @@ theorem step_one_per_grain {bytesOf : D → ByteArray} (hb : Function.Injective 
       refine filterMap_sublist_map _ _ _ ?_
       intro i b hb'
       rcases hv : decideCell label pkgId (rs.foldl (fun n r => max n r.atMs) st.now) (st.absorb rs)
-        (dirOf (bytesOf i)) (w.live i) with _ | v <;> simp [hv] at hb'
+        (dirOf (bytesOf i)) (w.live E i) with _ | v <;> simp [hv] at hb'
       exact hb'.symm)
   rw [pages_flatten (by decide) _ _ (Nat.le_refl _)] at hsub
   exact (List.Pairwise.map (fun i => dirOf (bytesOf i))
     (fun _ _ hne heq => hne (hb (dirOf_injective heq))) hnd).sublist hsub
 
 /-- On the deployed ids (32-byte digests), one action per grain per round. -/
-theorem step_one_per_grain_deployed {label pkgId : ByteArray} {w : World Codec.Digest}
+theorem step_one_per_grain_deployed {E : Env Codec.Digest} {label pkgId : ByteArray} {w : World Codec.Digest}
     {st : State Codec.Digest} {touched : List Codec.Digest} {rs : List Report} :
-    ((Loop.step Codec.Digest.bytes label pkgId w st touched rs).2.map (·.grain)).Nodup :=
+    ((Loop.step E Codec.Digest.bytes label pkgId w st touched rs).2.map (·.grain)).Nodup :=
   step_one_per_grain digest_bytes_injective
 
 end Nanodregg.Hosting.Proofs

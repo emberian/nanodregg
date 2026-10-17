@@ -55,7 +55,7 @@ def cadence : Cadence where
   worldBytesMax := 1 <<< 20
   recordBytesMax := 4096
 
-def world : Codec.Stream (World Nat) := Codec.Kernel.world dc
+def world : Codec.Stream (World Nat) := Codec.Kernel.world env dc
 
 /-- The toy Store's shape stamp: the deployed `Base.shapeStamp` over the toy codecs. -/
 def shapes : Codec.Digest := Base.shapeStamp world (Record.codec dc)
@@ -69,8 +69,8 @@ def digestOf (b : ByteArray) : Option Nat :=
   | .error _ => none
 
 /-- How the loop records and indexes a batch. -/
-def recorder : Recorder (World Nat) (Turn Nat) where
-  encode := Record.encode dc
+def recorder : Recorder (World Nat) (Turn Nat × Nat) where
+  encode _ staged := Record.encode dc staged
   mark w := (w.height, env.bytes w.chain)
 
 /-- The genesis chain of a World's origin, as `mark` writes a chain: what the origin frame of
@@ -78,10 +78,10 @@ its Store holds (HOST-25). -/
 def originChain (w : World Nat) : ByteArray := env.bytes (World.genesisChain env w.origin)
 
 /-- One batch record folded into the World: what open does per record (the writer's fold). -/
-def tailStep : World Nat → ByteArray → Except (Record.Fault (Reject Nat)) (World Nat × List (Turn Nat)) :=
-  Record.stepTurns dc (World.fold env)
+def tailStep : World Nat → ByteArray → Except (Record.Fault (Reject Nat)) (World Nat × List (Turn Nat × Nat)) :=
+  Record.stepTurns dc (World.admit env) (World.root env)
 
 def foldStep : World Nat → ByteArray → Except (Record.Fault (Reject Nat)) (World Nat) :=
-  Record.step dc (World.fold env)
+  Record.step dc (World.admit env) (World.root env)
 
 end Nanodregg.Host.Sim

@@ -296,8 +296,8 @@ def tagPossession : ByteArray := "nanodregg/kernel/possession/v1".toUTF8
 
 variable {D : Type} [Ord D]
 
-def pinned [DecidableEq D] (w : World D) (pins : List (D × D)) : Pinned D := fun c =>
-  if pins.any (fun p => p.1 = c) then .ok (w.live c) else .error (.unpinned c)
+def pinned [DecidableEq D] (E : Env D) (w : World D) (pins : List (D × D)) : Pinned D := fun c =>
+  if pins.any (fun p => p.1 = c) then .ok (w.live E c) else .error (.unpinned c)
 
 def reqOf (u : Unsigned D) (principal : D) (occasion : Occasion D) : Req D :=
   { agent := u.member, principal, notBefore := u.notBefore, validUntil := u.validUntil, occasion }

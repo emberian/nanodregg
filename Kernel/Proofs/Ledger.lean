@@ -61,16 +61,16 @@ theorem posts_sublist {E : Env D} {w : World D} :
                   simp only [List.reduceOption, List.filterMap_cons, id, List.map_cons, hp] at ih ⊢
                   exact ih.cons_cons _
 
-omit [DecidableEq D] in
-theorem insertAll_get_of_mem {k : D} {e : Entry} :
-    ∀ {m : Std.TreeMap D Entry compare} {ps : List (D × Entry)}, (ps.map Prod.fst).Nodup →
-      (k, e) ∈ ps → (insertAll m ps)[k]? = some e
+omit [Ord D] [Std.TransOrd D] [Std.LawfulEqOrd D] in
+theorem insertAll_get_of_mem {E : Env D} {k : D} {e : Entry} :
+    ∀ {m : Cells D} {ps : List (D × Entry)}, (ps.map Prod.fst).Nodup →
+      (k, e) ∈ ps → (insertAll E m ps).get (trieSpec E) (.cell k) = some (.entry e)
   | m, [], _, h => by simp at h
   | m, p :: rest, hn, h => by
       simp only [List.map_cons, List.nodup_cons] at hn
-      show (insertAll (m.insert p.1 p.2) rest)[k]? = some e
+      show (insertAll E (m.insert (trieSpec E) (.cell p.1) (.entry p.2)) rest).get _ _ = _
       rcases List.mem_cons.mp h with rfl | h'
-      · rw [insertAll_get_of_not_mem hn.1, Std.TreeMap.getElem?_insert_self]
+      · rw [insertAll_get_of_not_mem hn.1, Trie.get_insert_self]
       · exact insertAll_get_of_mem hn.2 h'
 
 omit [Ord D] [Std.TransOrd D] [Std.LawfulEqOrd D] [DecidableEq D] in
@@ -90,8 +90,8 @@ theorem postWrite_eq {c : D} {cell post : Cell} {ops : List Op} (h : postWrite c
 there exactly what `postWrite` makes of the cell it observed. -/
 theorem admit_written {E : Env D} {w w' : World D} {t : Turn D} {x : Touch D} {ops : List Op}
     (h : World.admit E w t = .ok w') (hx : x ∈ t.touches) (ha : x.act = .write ops) :
-    ∃ cell post, w.live x.cell = some cell ∧ postWrite x.cell cell ops = .ok post ∧
-      w'.live x.cell = some post := by
+    ∃ cell post, w.live E x.cell = some cell ∧ postWrite x.cell cell ops = .ok post ∧
+      w'.live E x.cell = some post := by
   obtain ⟨posts, hk, rfl⟩ := admit_ok h
   obtain ⟨raw, hm, hposts⟩ := hk.touches
   obtain ⟨r, hr⟩ := mapEx_each hm x hx
@@ -99,7 +99,7 @@ theorem admit_written {E : Env D} {w w' : World D} {t : Turn D} {x : Touch D} {o
   unfold touchCheck at hr'
   simp only [except_bind_ok, ha] at hr'
   obtain ⟨⟨⟩, _, hr'⟩ := hr'
-  cases hc : w.live x.cell with
+  cases hc : w.live E x.cell with
   | none => rw [hc] at hr'; simp at hr'
   | some cell =>
       rw [hc] at hr'
@@ -131,10 +131,9 @@ theorem admit_written {E : Env D} {w w' : World D} {t : Turn D} {x : Touch D} {o
         have : (Prod.fst ∘ fun p : D × Cell => (p.1, Entry.live p.2)) = Prod.fst := rfl
         rw [this] at hm'
         exact (List.nodup_append.mp (noDup_nodup hnbt)).2.2 _ (List.mem_map_of_mem hx) _ hm' rfl
-      unfold World.live
-      show (match (insertAll (insertAll w.cells (posts.map Post.pair)) (bornEntries t))[x.cell]? with
-        | some (.live cell) => some cell | _ => none) = some post
-      rw [insertAll_get_of_not_mem hnb,
+      apply get_live
+      rw [show (commit E w t posts).trie = commitTrie E w t posts from rfl, commitTrie_cell,
+        insertAll_get_of_not_mem hnb,
         insertAll_get_of_mem hnodup (List.mem_map_of_mem (f := Post.pair) hpost)]
 
 end Written
@@ -411,8 +410,8 @@ theorem ofCell_setFloor {cell : Cell} {v : Value} {f : Nat} (hv : Value.ofCell c
     · simp at hv
   · simp at hv
 
-theorem pinned_live {w : World D} {pins : List (D × D)} {c : D} {cell : Cell}
-    (h : pinned w pins c = .ok (some cell)) : w.live c = some cell := by
+theorem pinned_live {E : Env D} {w : World D} {pins : List (D × D)} {c : D} {cell : Cell}
+    (h : pinned E w pins c = .ok (some cell)) : w.live E c = some cell := by
   unfold pinned at h; split at h
   · simpa using h
   · simp at h
@@ -427,9 +426,9 @@ theorem sealed_two_writes {X : Ctx D} {w w' : World D} {c : Call D} {t : Turn D}
     {opsA opsB : List Op} {ns : List D}
     (hseal : sealTurn X c [] [(a, .write opsA), (b, .write opsB)] ns = .ok t) (hab : a ≠ b)
     (ha : World.admit X.env w t = .ok w') :
-    (∃ ca pa, w.live a = some ca ∧ postWrite a ca opsA = .ok pa ∧ w'.live a = some pa) ∧
-      (∃ cb pb, w.live b = some cb ∧ postWrite b cb opsB = .ok pb ∧ w'.live b = some pb) ∧
-      ∀ k, k ≠ a → k ≠ b → k ∉ createdIds t → w'.cells[k]? = w.cells[k]? := by
+    (∃ ca pa, w.live X.env a = some ca ∧ postWrite a ca opsA = .ok pa ∧ w'.live X.env a = some pa) ∧
+      (∃ cb pb, w.live X.env b = some cb ∧ postWrite b cb opsB = .ok pb ∧ w'.live X.env b = some pb) ∧
+      ∀ k, k ≠ a → k ≠ b → k ∉ createdIds t → w'.entry X.env k = w.entry X.env k := by
   obtain ⟨_, _, htouch, _, _, _, _, _, _, hpin⟩ := sealTurn_ok hseal
   let efs : List (D × Act) := [(a, .write opsA), (b, .write opsB)]
   have hact : ∀ k, actFor efs k = if k = a then .write opsA else if k = b then .write opsB else .keep := by
@@ -441,7 +440,8 @@ theorem sealed_two_writes {X : Ctx D} {w w' : World D} {c : Call D} {t : Turn D}
       · subst h2; simp [efs, h1, Ne.symm h1]
       · simp [efs, h1, h2, Ne.symm h1, Ne.symm h2]
   have written : ∀ k ops, (k, Act.write ops) ∈ efs → actFor efs k = .write ops →
-      ∃ cell post, w.live k = some cell ∧ postWrite k cell ops = .ok post ∧ w'.live k = some post := by
+      ∃ cell post, w.live X.env k = some cell ∧ postWrite k cell ops = .ok post ∧
+        w'.live X.env k = some post := by
     intro k ops hm hk
     obtain ⟨p, hp, hpk⟩ := hpin _ hm
     have hx : ({ cell := p.1, seen := p.2, act := actFor efs p.1 } : Touch D) ∈ t.touches := by
@@ -465,10 +465,10 @@ theorem transfer_exact {X : Ctx D} {w w' : World D} {c : Call D} {t : Turn D} {s
     {amount : Nat} {via : Option D} {once : Option ByteArray}
     (hb : c.unsigned.body = .transfer src dst amount via once)
     (hr : receive X w c = .ok t) (ha : World.admit X.env w t = .ok w') :
-    ∃ sv dv, (w.live src).bind Value.ofCell = some sv ∧ (w.live dst).bind Value.ofCell = some dv ∧
-      (w'.live src).bind Value.ofCell = some { sv with balance := sv.balance - amount } ∧
-      (w'.live dst).bind Value.ofCell = some { dv with balance := dv.balance + amount } ∧
-      ∀ k, k ≠ src → k ≠ dst → k ∉ createdIds t → w'.cells[k]? = w.cells[k]? := by
+    ∃ sv dv, (w.live X.env src).bind Value.ofCell = some sv ∧ (w.live X.env dst).bind Value.ofCell = some dv ∧
+      (w'.live X.env src).bind Value.ofCell = some { sv with balance := sv.balance - amount } ∧
+      (w'.live X.env dst).bind Value.ofCell = some { dv with balance := dv.balance + amount } ∧
+      ∀ k, k ≠ src → k ≠ dst → k ∉ createdIds t → w'.entry X.env k = w.entry X.env k := by
   have hd := receiveWith_dispatch (receive_ok_with hr).2
   rw [hb] at hd
   simp only [dispatch, transfer, except_bind_ok] at hd
@@ -496,11 +496,11 @@ theorem credit_exact {X : Ctx D} {w w' : World D} {c : Call D} {t : Turn D} {wel
     {amount : Nat} {via : Option D}
     (hb : c.unsigned.body = .credit well acct amount via)
     (hr : receive X w c = .ok t) (ha : World.admit X.env w t = .ok w') :
-    ∃ wv av, (w.live well).bind Value.ofCell = some wv ∧ (w.live acct).bind Value.ofCell = some av ∧
+    ∃ wv av, (w.live X.env well).bind Value.ofCell = some wv ∧ (w.live X.env acct).bind Value.ofCell = some av ∧
       wv.denom = X.env.bytes well ∧ av.denom = wv.denom ∧ 0 < amount ∧ amount ≤ wv.floor ∧
-      (w'.live well).bind Value.ofCell = some { wv with floor := wv.floor - amount } ∧
-      (w'.live acct).bind Value.ofCell = some { av with floor := av.floor + amount } ∧
-      ∀ k, k ≠ well → k ≠ acct → k ∉ createdIds t → w'.cells[k]? = w.cells[k]? := by
+      (w'.live X.env well).bind Value.ofCell = some { wv with floor := wv.floor - amount } ∧
+      (w'.live X.env acct).bind Value.ofCell = some { av with floor := av.floor + amount } ∧
+      ∀ k, k ≠ well → k ≠ acct → k ∉ createdIds t → w'.entry X.env k = w.entry X.env k := by
   have hd := receiveWith_dispatch (receive_ok_with hr).2
   rw [hb] at hd
   simp only [dispatch, credit, except_bind_ok] at hd

@@ -101,10 +101,10 @@ def touchedIds (ts : List (Turn D)) : List D :=
   ts.flatMap fun t => t.touches.map (·.cell) ++ createdIds t
 
 /-- Every touched id (duplicates once), at most `Bounds.grainsMax` per call: the caller pages the rest. -/
-def reconcile (bytesOf : D → ByteArray) (label pkgId : ByteArray) (now : Nat)
+def reconcile (E : Env D) (bytesOf : D → ByteArray) (label pkgId : ByteArray) (now : Nat)
     (live : List Live) (w : World D) (ids : List D) : List Action :=
   (ids.eraseDups.take Bounds.grainsMax).filterMap fun i =>
     let g := dirOf (bytesOf i)
-    (decideCell label pkgId now live g (w.live i)).map fun v => { grain := g, verdict := v }
+    (decideCell label pkgId now live g (w.live E i)).map fun v => { grain := g, verdict := v }
 
 end Nanodregg.Hosting.Controller

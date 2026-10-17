@@ -73,7 +73,7 @@ def go (prog : Program D) (r : Run) (c : Call D) : Run × String × Option (Turn
   | .error (.rejected e) => (r, s!"rejected {Kernel.Sim.nameOf e}", none)
   | .ok (t, w') => ({ r with st := { r.st with host := w', log := r.st.log ++ [t] } }, "admitted", some t)
 
-def phaseAt (w : World D) (g : D) : Option Phase := (w.live g).bind fun c => phaseOf c.slots
+def phaseAt (w : World D) (g : D) : Option Phase := (w.live Kernel.Sim.env g).bind fun c => phaseOf c.slots
 
 /-- The plan G15 expects, spelled out path by path (not through `Plan`'s own helpers). -/
 def wantPlan (label hx : ByteArray) : Plan where
@@ -166,18 +166,18 @@ def journey (plant : Plant) (pkg : Package) : Run := Id.run do
   let pkgId := Kernel.Sim.dc.bytes pid
   let hx := (Lang.Print.hex (Kernel.Sim.dc.bytes gr)).toUTF8
   let ctl := fun (r : Run) (live : List Controller.Live) (g : D) (_ : ByteArray) =>
-    Controller.reconcile Kernel.Sim.dc.bytes label pkgId 0 live r.st.host [g, g]
+    Controller.reconcile Kernel.Sim.env Kernel.Sim.dc.bytes label pkgId 0 live r.st.host [g, g]
   let want := wantPlan label hx
   r := note r "G15 controller, no child: launch with the grain's plan"
     (ctl r [] gr hx == [{ grain := hx, verdict := .launch want }])
   r := note r "G15 the ids of the log's Turns, reconciled, launch exactly the grain"
-    (Controller.reconcile Kernel.Sim.dc.bytes label pkgId 0 [] r.st.host
+    (Controller.reconcile Kernel.Sim.env Kernel.Sim.dc.bytes label pkgId 0 [] r.st.host
       (Controller.touchedIds r.st.log) == [{ grain := hx, verdict := .launch want }])
   r := note r "G15 controller, child running: nothing"
     ((ctl r [upLive hx] gr hx).isEmpty)
   -- G17 the controller's round
   let round := fun (st : Loop.State D) (ids : List D) (rs : List Report) =>
-    Loop.step Kernel.Sim.dc.bytes label pkgId r.st.host st ids rs
+    Loop.step Kernel.Sim.env Kernel.Sim.dc.bytes label pkgId r.st.host st ids rs
   let launchA : List Action := [{ grain := hx, verdict := .launch want }]
   let (s0, a0) := round Loop.State.empty (Loop.allIds r.st.host) []
   r := note r s!"G17 round 0 over every live id ({(Loop.allIds r.st.host).length}): launch exactly the grain" (a0 == launchA)

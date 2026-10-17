@@ -15,10 +15,10 @@ and a written value cell's decoding and floor) → value (born value cells, then
 denomination's balance and floor sums: LEDGER-2) → nullifiers → charge → created ids.
 -/
 import Std.Data.TreeMap
-import Std.Data.TreeSet
 import Kernel.Check
 import Kernel.Turn
 import Kernel.Value
+import Kernel.Trie
 import Codec.Stream
 
 namespace Nanodregg.Kernel
@@ -104,11 +104,27 @@ def Reject.name {D : Type} : Reject D → String
 
 variable {D : Type} [Ord D]
 
+/-- A key of the World's one authenticated map (KERNEL-23): a cell id, or a spent nullifier. -/
+inductive Slot (D : Type)
+  | cell (id : D)
+  | nullifier (n : D)
+  deriving DecidableEq
+
+/-- What the map holds at a slot: a cell's entry (at a `cell` slot), or `spent` (at a `nullifier`
+slot). A decoder refuses any other pairing (`Leaf.fits`); `commit` only ever writes these two. -/
+inductive Leaf
+  | entry (e : Entry)
+  | spent
+  deriving DecidableEq
+
+/-- The World's cells and spent nullifiers: one persistent binary Merkle trie (Kernel.Trie). -/
+abbrev Cells (D : Type) := Trie.T (Slot D) Leaf D
+
 structure World (D : Type) [Ord D] where
-  cells : Std.TreeMap D Entry compare
-  /-- transaction id ↦ (height, turn digest): the replay index -/
+  /-- every cell entry (live or tombstone) and every spent nullifier, under one root -/
+  trie : Cells D
+  /-- transaction id ↦ (height, turn digest): the replay index (not authenticated: KERNEL-23) -/
   journal : Std.TreeMap D (Nat × D) compare
-  spent : Std.TreeSet D compare
   height : Nat
   /-- the log chain after `height` turns -/
   chain : D
@@ -126,6 +142,11 @@ def domTurn : String := "nanodregg/kernel/turn/v1"
 def domChain : String := "nanodregg/kernel/chain/v1"
 def domCellId : String := "nanodregg/kernel/cell-id/v1"
 def domRomId : String := "nanodregg/kernel/rom-id/v1"
+/-- The trie's node hash (`Trie.Spec.hash`: the shape tag byte, then the shape's bytes). -/
+def domTrie : String := "nanodregg/kernel/trie/v1"
+/-- A trie leaf's value digest: ONE domain, a kind byte first, so two different leaves have one
+digest only by a collision in that domain (`Collision`), never across domains. -/
+def domLeaf : String := "nanodregg/kernel/trie-leaf/v1"
 
 /-- An index as CODEC's four little-endian bytes (indexes are below `Bounds.createsMax`). -/
 def index32 (n : Nat) : ByteArray := Nanodregg.Codec.Stream.u32.bytes (UInt32.ofNat n)
@@ -137,8 +158,59 @@ def pinOf (E : Env D) : Option Cell → D
 
 def turnDigest (E : Env D) (t : Turn D) : D := E.hash domTurn (E.turnBytes t)
 
-def chainNext (E : Env D) (prev : D) (t : Turn D) : D :=
-  E.hash domChain (E.bytes prev ++ E.bytes (turnDigest E t))
+/-- The next chain head commits to the previous one, the turn, and the ROOT AFTER the turn
+(KERNEL-23 (d)): a phone that trusts one head checks `(prev, turnDigest, root')` against it and
+then verifies cells against `root'`. -/
+def chainNext (E : Env D) (prev : D) (t : Turn D) (root' : D) : D :=
+  E.hash domChain (E.bytes prev ++ E.bytes (turnDigest E t) ++ E.bytes root')
+
+/-! ## The trie's parameters: how a slot routes and what a leaf commits -/
+
+/-- Bit `i` of a byte string, most significant bit of byte 0 first; `false` past its end. -/
+def byteBit (b : ByteArray) (i : Nat) : Bool :=
+  if h : i / 8 < b.size then (b[i / 8]'h).toNat.testBit (7 - i % 8) else false
+
+def Slot.isNullifier {D : Type} : Slot D → Bool
+  | .cell _ => false
+  | .nullifier _ => true
+
+def Slot.id {D : Type} : Slot D → D
+  | .cell c => c
+  | .nullifier n => n
+
+/-- Bit 0 is the slot's kind (cells left, nullifiers right); bit `i + 1` is bit `i` of the id. -/
+def slotBit (E : Env D) (s : Slot D) : Nat → Bool
+  | 0 => s.isNullifier
+  | i + 1 => byteBit (E.bytes s.id) i
+
+/-- A slot's bytes in a leaf: its kind byte, then the id's bytes. -/
+def slotBytes (E : Env D) (s : Slot D) : ByteArray :=
+  ⟨#[if s.isNullifier then 1 else 0]⟩ ++ E.bytes s.id
+
+/-- The bytes a leaf's value digest is taken over: a kind byte (live 0, tombstone 1, spent 2), then
+a live cell's canonical bytes. -/
+def leafBytes (E : Env D) : Leaf → ByteArray
+  | .entry (.live c) => ⟨#[0]⟩ ++ E.cellBytes c
+  | .entry .tomb => ⟨#[1]⟩
+  | .spent => ⟨#[2]⟩
+
+/-- What a leaf commits to of its value. -/
+def leafDigest (E : Env D) (l : Leaf) : D := E.hash domLeaf (leafBytes E l)
+
+/-- The deployed trie: depth `Bounds.trieDepth` (a kind bit and 256 id bits). -/
+def trieSpec (E : Env D) : Trie.Spec (Slot D) Leaf D where
+  bit := slotBit E
+  depth := Bounds.trieDepth
+  hash := E.hash domTrie
+  dbytes := E.bytes
+  kbytes := slotBytes E
+  vdigest := leafDigest E
+
+/-- A slot holds the leaf of its kind. -/
+def Leaf.fits {D : Type} : Slot D → Leaf → Bool
+  | .cell _, .entry _ => true
+  | .nullifier _, .spent => true
+  | _, _ => false
 
 /-- The id of the `i`-th cell a transaction creates. -/
 def cellIdOf (E : Env D) (txId : D) (i : Nat) : D :=
@@ -165,29 +237,62 @@ def genesisChain (E : Env D) (origin : D) : D := E.hash domGenesis (E.bytes orig
 
 /-- An empty World with identity `origin`, its chain at `genesisChain`. -/
 def genesis (E : Env D) (origin : D) (allowance : Nat) : World D :=
-  { cells := {}, journal := {}, spent := {}, height := 0,
+  { trie := .empty, journal := {}, height := 0,
     chain := genesisChain E origin, allowance, origin }
 
+/-- The root of the World's map: its trie's cached digest, O(1). -/
+def root (E : Env D) (w : World D) : D := w.trie.hashOf (trieSpec E)
+
+section
+variable [DecidableEq D]
+
+/-- The entry at a cell id, if any. -/
+def entry (E : Env D) (w : World D) (c : D) : Option Entry :=
+  match w.trie.get (trieSpec E) (.cell c) with
+  | some (.entry e) => some e
+  | _ => none
+
 /-- The live cell at an id, if any (a tombstone reads as absent). -/
-def live (w : World D) (c : D) : Option Cell :=
-  match w.cells[c]? with
+def live (E : Env D) (w : World D) (c : D) : Option Cell :=
+  match w.entry E c with
   | some (.live cell) => some cell
   | _ => none
+
+/-- Is the id taken (a live cell or a tombstone)? -/
+def taken (E : Env D) (w : World D) (c : D) : Bool := (w.entry E c).isSome
+
+/-- Has the nullifier been spent? -/
+def isSpent (E : Env D) (w : World D) (n : D) : Bool :=
+  (w.trie.get (trieSpec E) (.nullifier n)).isSome
+
+/-- Every cell id the map holds (live or tombstone), in trie order: what `cells.keys` was before
+KERNEL-23. Spent nullifiers are not cell ids and are left out. -/
+def cellIds (w : World D) : List D :=
+  w.trie.toList.filterMap fun p => match p.1 with
+    | .cell c => some c
+    | .nullifier _ => none
+
+end
 
 /-- What an entry costs in the World: a live cell its weight, a tombstone nothing beyond its id. -/
 def _root_.Nanodregg.Kernel.Entry.weight : Entry → Nat
   | .live c => c.weight
   | .tomb => 0
 
-/-- The weight of a cell map: each entry with its id. -/
-def _root_.Nanodregg.Kernel.cellsWeight (m : Std.TreeMap D Entry compare) : Nat :=
-  (m.toList.map fun p => digestWeight + p.2.weight).sum
+/-- What a leaf costs: its slot's id, and a cell entry's weight. -/
+def _root_.Nanodregg.Kernel.Leaf.weight : Leaf → Nat
+  | .entry e => digestWeight + e.weight
+  | .spent => digestWeight
+
+/-- The weight of the map: each leaf with its id. -/
+def _root_.Nanodregg.Kernel.cellsWeight (m : Cells D) : Nat :=
+  (m.toList.map fun p => p.2.weight).sum
 
 /-- The storage a World holds, by the same per-field costs as `Turn.weight`: each cell entry with
-its id, each journal entry, each spent nullifier. A specification measure (O(store)), never
+its id, each spent nullifier, each journal entry. A specification measure (O(store)), never
 computed on the request path; `Kernel.Proofs.Weight` bounds it by the budget spent. -/
 def weight (w : World D) : Nat :=
-  cellsWeight w.cells + journalWeight * w.journal.size + digestWeight * w.spent.size
+  cellsWeight w.trie + journalWeight * w.journal.size
 
 end World
 
@@ -196,9 +301,14 @@ def Entry.cell? : Entry → Option Cell
   | .live c => some c
   | .tomb => none
 
-/-- A sum over a cell map, of what each entry contributes. -/
-def cellsSum (f : Entry → Int) (m : Std.TreeMap D Entry compare) : Int :=
-  (m.toList.map fun p => f p.2).sum
+/-- What a leaf contributes to a sum over cell entries (a spent nullifier: nothing). -/
+def Leaf.sumOf (f : Entry → Int) : Leaf → Int
+  | .entry e => f e
+  | .spent => 0
+
+/-- A sum over the map's cell entries, of what each contributes. -/
+def cellsSum (f : Entry → Int) (m : Cells D) : Int :=
+  (m.toList.map fun p => p.2.sumOf f).sum
 
 /-- What an entry contributes to denomination `d`'s sum of `g`: its value cell's, if any. -/
 def entrySum (g : Flow → Int) (d : ByteArray) (e : Entry) : Int := sumBy g d (flowsOf none e.cell?)
@@ -208,7 +318,7 @@ namespace World
 /-- Specification measures (O(store), never computed on the request path): the sum over every
 live value cell of denomination `d` of its balance, of its floor, and of its positive balance
 (what is outstanding). `Kernel.Proofs.Value` proves what `World.admit` does to them. -/
-def sumOf (g : Flow → Int) (w : World D) (d : ByteArray) : Int := cellsSum (entrySum g d) w.cells
+def sumOf (g : Flow → Int) (w : World D) (d : ByteArray) : Int := cellsSum (entrySum g d) w.trie
 def valueSum (w : World D) (d : ByteArray) : Int := w.sumOf Flow.balance d
 def floorSum (w : World D) (d : ByteArray) : Int := w.sumOf Flow.floor d
 def outstanding (w : World D) (d : ByteArray) : Int := w.sumOf (fun f => max f.balance 0) d
@@ -318,7 +428,7 @@ def Post.pair {D : Type} (p : Post D) : D × Entry := (p.cell, p.entry)
 the pin is checked against it (the one staleness refusal), then the act applies to it, and what it
 frees and the value it moves are computed from the same lookup. -/
 def touchCheck (E : Env D) (w : World D) (x : Touch D) : Except (Reject D) (Option (Post D)) := do
-  let cur := w.live x.cell
+  let cur := w.live E x.cell
   req (pinOf E cur = x.seen) (.stale x.cell)
   match x.act, cur with
   | .keep, _ => pure none
@@ -332,8 +442,8 @@ def touchCheck (E : Env D) (w : World D) (x : Touch D) : Except (Reject D) (Opti
       req (cell.discipline != .rom) (.romRetire x.cell)
       pure (some ⟨x.cell, .tomb, cell.weight, flowsOf (some cell) none⟩)
 
-def checkNullifiers (w : World D) (t : Turn D) : Except (Reject D) Unit :=
-  forEx (fun n => req (!w.spent.contains n) (.spent n)) t.nullifiers
+def checkNullifiers (E : Env D) (w : World D) (t : Turn D) : Except (Reject D) Unit :=
+  forEx (fun n => req (!w.isSpent E n) (.spent n)) t.nullifiers
 
 /-- The storage a turn's touches give back to the budget. -/
 def credit (posts : List (Post D)) : Nat := (posts.map Post.freed).sum
@@ -351,7 +461,7 @@ def checkCreates (E : Env D) (w : World D) (t : Turn D) : Except (Reject D) Unit
     t.creates
   noDup (createdIds t) .idTaken
   noDup (t.touches.map Touch.cell ++ createdIds t) .bornTouched
-  forEx (fun c => req (!w.cells.contains c) (.idTaken c)) (createdIds t)
+  forEx (fun c => req (!w.taken E c) (.idTaken c)) (createdIds t)
 
 /-- Every flow a turn moves: its touches', then its born cells'. -/
 def valueFlows (t : Turn D) (posts : List (Post D)) : List Flow :=
@@ -380,28 +490,34 @@ def check (E : Env D) (w : World D) (t : Turn D) : Except (Reject D) (List (Post
   checkWindow w t
   let posts := (← mapEx (touchCheck E w) t.touches).reduceOption
   checkValue E t posts
-  checkNullifiers w t
+  checkNullifiers E w t
   checkCharge w t (credit posts)
   checkCreates E w t
   pure posts
 
-def insertAll (m : Std.TreeMap D Entry compare) (ps : List (D × Entry)) :
-    Std.TreeMap D Entry compare :=
-  ps.foldl (fun m p => m.insert p.1 p.2) m
-
-def spendAll (s : Std.TreeSet D compare) (ns : List D) : Std.TreeSet D compare :=
-  ns.foldl (fun s n => s.insert n) s
-
 def bornEntries (t : Turn D) : List (D × Entry) :=
   t.creates.map fun p => (p.1, .live p.2)
 
+/-- Write cell entries into the map, one path each. -/
+def insertAll (E : Env D) (m : Cells D) (ps : List (D × Entry)) : Cells D :=
+  ps.foldl (fun m p => m.insert (trieSpec E) (.cell p.1) (.entry p.2)) m
+
+/-- Mark nullifiers spent, one path each. -/
+def spendAll (E : Env D) (m : Cells D) (ns : List D) : Cells D :=
+  ns.foldl (fun m n => m.insert (trieSpec E) (.nullifier n) .spent) m
+
+/-- The map after a checked turn: its touches' entries, its born cells, its nullifiers. -/
+def commitTrie (E : Env D) (w : World D) (t : Turn D) (posts : List (Post D)) : Cells D :=
+  spendAll E (insertAll E (insertAll E w.trie (posts.map Post.pair)) (bornEntries t)) t.nullifiers
+
+
 /-- The World after a checked turn. Total: everything that can fail failed in `check`. -/
 def commit (E : Env D) (w : World D) (t : Turn D) (posts : List (Post D)) : World D :=
-  { cells := insertAll (insertAll w.cells (posts.map Post.pair)) (bornEntries t)
+  let trie := commitTrie E w t posts
+  { trie
     journal := w.journal.insert t.txId (w.height + 1, turnDigest E t)
-    spent := spendAll w.spent t.nullifiers
     height := w.height + 1
-    chain := chainNext E w.chain t
+    chain := chainNext E w.chain t (trie.hashOf (trieSpec E))
     allowance := w.allowance + credit posts - t.charge
     origin := w.origin }
 
@@ -422,9 +538,10 @@ def World.fold (E : Env D) (w : World D) : List (Turn D) → Except (Nat × Reje
           | .error (i, r) => .error (i + 1, r)
       | .error r => .error (0, r)
 
-/-- The chain a log reaches from `c`, without admitting it: what `World.fold` stamps. -/
-def chainOf (E : Env D) (c : D) : List (Turn D) → D
+/-- The chain a log reaches from `c`, each turn paired with the root after it, without admitting
+it: what `World.fold` stamps (`fold_chain`). -/
+def chainOf (E : Env D) (c : D) : List (Turn D × D) → D
   | [] => c
-  | t :: rest => chainOf E (chainNext E c t) rest
+  | (t, r) :: rest => chainOf E (chainNext E c t r) rest
 
 end Nanodregg.Kernel

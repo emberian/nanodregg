@@ -66,8 +66,9 @@ def fuel : Nat := 1000000
 
 /-- `Host.handle`, except under the `openLog` plant: a `log` envelope that decodes is paged
 without `Envelope.check`. -/
-def machine (P : Params) : Machine (World D) (Turn D) (Reject D) Frame where
+def machine (P : Params) : Machine (World D) (Turn D) (Reject D) Frame D where
   admit := World.admit P.X.env
+  note := World.root P.X.env
   handle w f :=
     if !P.gateLog && f.op = Op.log.code then
       match Envelope.ofBytes P.X f.payload with
@@ -121,7 +122,7 @@ the loop's state the one open gives over it. -/
 def genesisStore (P : Params) (g : World D) : IO (Except String (Mem × Resident (World D))) := do
   match Host.Sim.memGenesis Host.Sim.keys cadence Sim.world (fun w => (w.height, P.X.env.bytes w.chain))
       (fun w => P.X.env.bytes (World.genesisChain P.X.env w.origin))
-      (Record.step Sim.dc (World.fold P.X.env)) g with
+      (Record.step Sim.dc (World.admit P.X.env) (World.root P.X.env)) g with
   | .error f => return .error f.name
   | .ok (d, b, r) => return .ok (⟨← IO.mkRef d, ← IO.mkRef b⟩, r)
 
@@ -129,7 +130,7 @@ def genesisStore (P : Params) (g : World D) : IO (Except String (Mem × Resident
 def reopen (P : Params) (base seg : ByteArray) : Except String (Resident (World D)) :=
   match Id.run (openWith Host.Sim.keys cadence Sim.world (fun w => (w.height, P.X.env.bytes w.chain))
       (fun w => P.X.env.bytes (World.genesisChain P.X.env w.origin))
-      (Record.step Sim.dc (World.fold P.X.env))
+      (Record.step Sim.dc (World.admit P.X.env) (World.root P.X.env))
       base seg.size fun off len => pure (.ok (seg.extract off (off + len)))) with
   | .error f => .error f.name
   | .ok o =>
@@ -149,7 +150,7 @@ def start (P : Params) (m : Mem) (r : Resident (World D)) : IO Running := do
   let port := channelPort reqs (← IO.mkRef none) fun r => do discard <| (reps.send r).toBaseIO
   let task ← IO.asTask (prio := .dedicated) do
     try
-      serve (machine P) ⟨fun w ts => Record.encode Sim.dc w ts,
+      serve (machine P) ⟨fun _ ts => Record.encode Sim.dc ts,
           fun w => (w.height, P.X.env.bytes w.chain)⟩ Host.Sim.keys.segment
         (checkpoint m) cadence (Host.Sim.memStore m.disk none) (pager P.X P.lieTip P.forgeBase m)
         port limits fuel r

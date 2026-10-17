@@ -8,8 +8,10 @@ The index (`Host.Base.Entry`, one per record, carried by the base and rebuilt fo
 open) locates the record holding height `start + 1` by binary search. From there, frames are read
 in order. Each is verified under the segment sealer against the tag before it: a frame that does
 not verify is refused `corrupt` by name, never served. Each record is decoded, and the chain
-is advanced Turn by Turn from the entry's chain, so a page may end inside a record and still
-state the exact chain after its last event. Work: O(log records) to locate, then O(page bytes).
+is advanced Turn by Turn from the entry's chain with the root the record states beside each Turn
+(`chainNext E c t root`, HOST-29; the writer's reopen checked every stated root against its own
+admission), so a page may end inside a record and still state the exact chain after its last
+event, without admitting anything. Work: O(log records) to locate, then O(page bytes).
 The page holds durable records only: the loop builds it after the batch's sync.
 
 `build` is generic in the reader's monad: `IO` over the segment file for `host serve`, `Id` over
@@ -73,12 +75,12 @@ structure Acc where
 
 variable {m : Type → Type} [Monad m]
 
-/-- One record's Turns: skip those at or below `start`, serve the rest while they fit. -/
-def walkTurns (E : Env D) (budget start : Nat) (chain₀ : D) (h₀ : Nat) (ts : List (Turn D)) (acc : Acc) : Acc :=
-  (ts.foldl (fun (st : Acc × D × Nat) t =>
+/-- One record's (Turn, root) pairs: skip those at or below `start`, serve the rest while they fit. -/
+def walkTurns (E : Env D) (budget start : Nat) (chain₀ : D) (h₀ : Nat) (ts : List (Turn D × D)) (acc : Acc) : Acc :=
+  (ts.foldl (fun (st : Acc × D × Nat) (t, root) =>
     let (a, c, h) := st
     if a.full then st else
-    let c' := chainNext E c t
+    let c' := chainNext E c t root
     let h' := h + 1
     if h' ≤ start then ({ a with height := h', chain := E.bytes c' }, c', h')
     else if budget < a.bytes + 4 + t.event.size then ({ a with full := true }, c, h)
@@ -119,7 +121,7 @@ where
           match (Record.codec dc).decode r, digestOf e.chain with
           | .error _, _ => return .error (.corrupt e.offset)
           | _, none => return .error (.badIndex e.offset)
-          | .ok (ts, _), some c =>
+          | .ok ts, some c =>
             let a := acc.getD { height := e.height, chain := e.chain }
             go fuel (i + 1) (some (walkTurns E budget start c e.height ts a))
 

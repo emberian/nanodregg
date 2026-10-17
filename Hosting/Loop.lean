@@ -116,8 +116,8 @@ def State.absorb (st : State D) (rs : List Report) : List Live :=
 
 /-- Does the World's cell at `i` still qualify for a child: a lifecycle object that decodes and
 desires `running`? -/
-def qualifies (pkgId : ByteArray) (w : World D) (i : D) : Bool :=
-  match w.live i with
+def qualifies (E : Env D) (pkgId : ByteArray) (w : World D) (i : D) : Bool :=
+  match w.live E i with
   | none => false
   | some c => isGrain pkgId c && match grainOf ByteArray.empty c with
     | some (_, .running) => true
@@ -126,25 +126,25 @@ def qualifies (pkgId : ByteArray) (w : World D) (i : D) : Bool :=
 /-- What the memory keeps after a round: a launched grain while its child runs or its cell still
 qualifies; its report while the grain is kept. So the memory is bounded by the running children
 and the qualifying grains of the World (`Proofs.Loop.step_kept`), never by history. -/
-def prune (pkgId : ByteArray) (w : World D) (live : List Live) (launched : List (ByteArray × D)) :
+def prune (E : Env D) (pkgId : ByteArray) (w : World D) (live : List Live) (launched : List (ByteArray × D)) :
     List Live × List (ByteArray × D) :=
-  let kept := launched.filter fun (g, i) => runningIn live g || qualifies pkgId w i
+  let kept := launched.filter fun (g, i) => runningIn live g || qualifies E pkgId w i
   (live.filter fun l => kept.any (·.1 == l.grain), kept)
 
 /-- One round: fold the reports in, decide every id once, fold the actions in. -/
-def step (bytesOf : D → ByteArray) (label pkgId : ByteArray) (w : World D) (st : State D)
+def step (E : Env D) (bytesOf : D → ByteArray) (label pkgId : ByteArray) (w : World D) (st : State D)
     (touched : List D) (rs : List Report) : State D × List Action :=
   let live := st.absorb rs
   let now := rs.foldl (fun n r => max n r.atMs) st.now
   let ids := roundIds st touched rs
   let acts := (pages Bounds.grainsMax ids.length ids).flatMap
-    (reconcile bytesOf label pkgId now live w)
+    (reconcile E bytesOf label pkgId now live w)
   let (live', launched') :=
-    prune pkgId w (acts.foldl afterOne live) (remember bytesOf ids st.launched acts)
+    prune E pkgId w (acts.foldl afterOne live) (remember bytesOf ids st.launched acts)
   ({ live := live', launched := launched', now }, acts)
 
-/-- Every live cell id, for the first round (O(store) once, at start: law 5's request path is the
+/-- Every cell slot id, live or tomb (a tomb decides as `none`), for the first round (O(store) once, at start: law 5's request path is the
 per-round one). -/
-def allIds (w : World D) : List D := w.cells.keys
+def allIds (w : World D) : List D := w.cellIds
 
 end Nanodregg.Hosting.Loop

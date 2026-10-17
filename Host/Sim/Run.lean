@@ -45,8 +45,9 @@ def lcg (s : Nat) : Nat := (s * 6364136223846793005 + 1442695040888963407) % 2 ^
 
 def receipt (h d : Nat) : ByteArray := le64 h ++ le64 d
 
-def machine : Machine (World Nat) (Turn Nat) (Reject Nat) Frame where
+def machine : Machine (World Nat) (Turn Nat) (Reject Nat) Frame Nat where
   admit := World.admit env
+  note := World.root env
   handle _ f :=
     match hangUpAnswer f with
     | some (st, p) => .reply st p
@@ -261,9 +262,15 @@ def run (args : List String) : IO UInt32 := do
   -- waste (law 5): work done ÷ work the operation must do
   let records := (Log.recover keys.segment cadence.recordBytesMax origin.tag.bytes
     (r.disk.synced.extract origin.offset r.disk.synced.size)).records
-  let turns := records.foldl (fun acc rec => match (Record.codec dc).decode rec with
-    | .ok (ts, _) => acc ++ ts | .error _ => acc) []
-  let admittedBytes := turns.foldl (fun n t => n + (turnCodec.bytes t).size) 0
+  let stated := records.foldl (fun acc rec => match (Record.codec dc).decode rec with
+    | .ok ps => acc ++ ps | .error _ => acc) []
+  -- the (Turn, root) pairs recomputed by admitting the logged Turns from genesis: the page checks
+  -- below compare against THESE, never against the roots the records state
+  let turns : List (Turn Nat × Nat) := ((stated.map Prod.fst).foldl
+    (fun (acc : World Nat × Array (Turn Nat × Nat)) t => match World.admit env acc.1 t with
+      | .ok w' => (w', acc.2.push (t, World.root env w'))
+      | .error _ => acc) (genesis, #[])).2.toList
+  let admittedBytes := turns.foldl (fun n t => n + (turnCodec.bytes t.1).size) 0
   -- log pages (Host.Page) over the durable segment and the loop's index
   let page (budget start : Nat) := Id.run (Page.build env dc digestOf keys.segment cadence.recordBytesMax
     budget (fun off len => pure (r.disk.synced.extract off (off + len))) r.resident.index
@@ -423,6 +430,26 @@ def run (args : List String) : IO UInt32 := do
   check "plant-flip-byte: corrupt" (1 < full && isCorrupt (reopen g (flipByte firstSeg (origin.offset + 6))) origin.offset) failures
   check "plant-flip-header: corrupt (the frames after it are found by the forward scan)"
     (isCorrupt (reopen g (flipByte firstSeg origin.offset)) origin.offset) failures
+  -- plant-flip-root (HOST-29, KERNEL-7's tooth for `Rooted`): the first record re-encoded with
+  -- the root stated beside its first Turn changed, and the segment re-sealed after the origin
+  -- frame (so every tag verifies): the writer's reopen admits the Turn and refuses the stated root.
+  let rootFlipped : Option ByteArray :=
+    let rv := Log.recover keys.segment cadence.recordBytesMax segmentInitial firstSeg
+    match rv.records with
+    | o :: r0 :: rest => match (Record.codec dc).decode r0 with
+      | .ok ((t, root) :: ps) =>
+        some (Log.encodeAll keys.segment segmentInitial (o :: Record.encode dc (((t, root + 1) :: ps).toArray) :: rest))
+      | _ => none
+    | _ => none
+  match rootFlipped with
+  | none => check "plant-flip-root: the first record decodes into (Turn, root) pairs" false failures
+  | some seg =>
+    check "plant-flip-root fires: the re-sealed segment differs from the written one, same length"
+      (seg.size = firstSeg.size && seg != firstSeg) failures
+    check "plant-flip-root: one stated root flipped is refused `rootMismatch` at record 0, Turn 0"
+      (match reopen g seg with
+       | .error (.log (.record 0 (.rootMismatch 0))) => true
+       | _ => false) failures
   check "plant-flip-last-frame: torn (the stated undecidable case: one frame lost, loudly)"
     (match reopen g (flipByte firstSeg (firstSeg.size - 1)) with
      | .ok o => 0 < o.opened.torn ∧ o.opened.records + 1 = full

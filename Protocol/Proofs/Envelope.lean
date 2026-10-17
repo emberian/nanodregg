@@ -74,14 +74,14 @@ is inside the window. -/
 theorem Envelope.check_ok_iff (X : Ctx D) (w : World D) (e : Envelope D) :
     Envelope.check X w e = .ok () ↔
       e.world = w.origin ∧ e.validUntil ≤ e.notBefore + Kernel.Bounds.windowMax ∧
-      currentKey w e.member = some e.key ∧
+      currentKey X.env w e.member = some e.key ∧
       X.verify e.key (Envelope.message X e.world e.member e.grant e.start e.notBefore e.validUntil) e.signature = true ∧
       mayFollow X w e.member e.grant = true ∧ e.notBefore ≤ w.height ∧ w.height ≤ e.validUntil := by
   simp only [Envelope.check, bind, Except.bind, req]
   generalize Envelope.message X e.world e.member e.grant e.start e.notBefore e.validUntil = msg
   by_cases hw : e.world = w.origin <;>
   by_cases h0 : e.validUntil ≤ e.notBefore + Kernel.Bounds.windowMax <;>
-  by_cases h1 : currentKey w e.member = some e.key <;>
+  by_cases h1 : currentKey X.env w e.member = some e.key <;>
   by_cases h2 : X.verify e.key msg e.signature = true <;>
   by_cases h3 : mayFollow X w e.member e.grant = true <;>
   by_cases h5 : e.notBefore ≤ w.height <;>
@@ -100,14 +100,14 @@ theorem Envelope.check_ok_within {X : Ctx D} {w : World D} {e : Envelope D}
 that signed the envelope and whose follow grant is live; the World is below `notBefore`. -/
 theorem Envelope.check_notYet_authenticated (X : Ctx D) (w : World D) (e : Envelope D)
     (he : Envelope.check X w e = .error .notYet) :
-      e.world = w.origin ∧ currentKey w e.member = some e.key ∧
+      e.world = w.origin ∧ currentKey X.env w e.member = some e.key ∧
       X.verify e.key (Envelope.message X e.world e.member e.grant e.start e.notBefore e.validUntil) e.signature = true ∧
       mayFollow X w e.member e.grant = true ∧ w.height < e.notBefore := by
   simp only [Envelope.check, bind, Except.bind, req] at he ⊢
   generalize Envelope.message X e.world e.member e.grant e.start e.notBefore e.validUntil = msg at he ⊢
   by_cases hw : e.world = w.origin <;>
   by_cases h0 : e.validUntil ≤ e.notBefore + Kernel.Bounds.windowMax <;>
-  by_cases h1 : currentKey w e.member = some e.key <;>
+  by_cases h1 : currentKey X.env w e.member = some e.key <;>
   by_cases h2 : X.verify e.key msg e.signature = true <;>
   by_cases h3 : mayFollow X w e.member e.grant = true <;>
   by_cases h5 : e.notBefore ≤ w.height <;>
@@ -119,14 +119,14 @@ current key of a live member that signed the envelope and whose follow grant is 
 height it states is the World's. A stranger, a revoked member, a forged signature learn nothing. -/
 theorem Envelope.check_expired_authenticated (X : Ctx D) (w : World D) (e : Envelope D) (h : Nat)
     (he : Envelope.check X w e = .error (.expired h)) :
-      e.world = w.origin ∧ e.notBefore ≤ w.height ∧ currentKey w e.member = some e.key ∧
+      e.world = w.origin ∧ e.notBefore ≤ w.height ∧ currentKey X.env w e.member = some e.key ∧
       X.verify e.key (Envelope.message X e.world e.member e.grant e.start e.notBefore e.validUntil) e.signature = true ∧
       mayFollow X w e.member e.grant = true ∧ e.validUntil < w.height ∧ h = w.height := by
   simp only [Envelope.check, bind, Except.bind, req] at he ⊢
   generalize Envelope.message X e.world e.member e.grant e.start e.notBefore e.validUntil = msg at he ⊢
   by_cases hw : e.world = w.origin <;>
   by_cases h0 : e.validUntil ≤ e.notBefore + Kernel.Bounds.windowMax <;>
-  by_cases h1 : currentKey w e.member = some e.key <;>
+  by_cases h1 : currentKey X.env w e.member = some e.key <;>
   by_cases h2 : X.verify e.key msg e.signature = true <;>
   by_cases h3 : mayFollow X w e.member e.grant = true <;>
   by_cases h5 : e.notBefore ≤ w.height <;>
@@ -151,7 +151,7 @@ theorem Envelope.check_wrongWorld (X : Ctx D) (w : World D) (e : Envelope D) (h 
 bounds and starts above the World's height is refused `notYet`, by that name and no other. -/
 theorem Envelope.check_notYet_of (X : Ctx D) (w : World D) (e : Envelope D)
     (hw : e.world = w.origin) (h0 : e.validUntil ≤ e.notBefore + Kernel.Bounds.windowMax)
-    (h1 : currentKey w e.member = some e.key)
+    (h1 : currentKey X.env w e.member = some e.key)
     (h2 : X.verify e.key (Envelope.message X e.world e.member e.grant e.start e.notBefore e.validUntil) e.signature = true)
     (h3 : mayFollow X w e.member e.grant = true) (h5 : w.height < e.notBefore) :
     Envelope.check X w e = .error .notYet := by

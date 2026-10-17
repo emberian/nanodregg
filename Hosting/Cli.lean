@@ -130,8 +130,8 @@ def rounds (keys : Keys) (seg : File) (label pkgId : ByteArray) (out : IO.FS.Str
         IO.sleep tailPollMs.toUInt32
         rounds keys seg label pkgId out ch reader fuel t' st
       else
-        let touched := touchedIds (outs.toList.flatten)
-        let (st', acts) := Loop.step Digest.bytes label pkgId t'.world st touched reps
+        let touched := touchedIds (outs.toList.flatten.map Prod.fst)
+        let (st', acts) := Loop.step Host.Deployed.X.env Digest.bytes label pkgId t'.world st touched reps
         match ← send out acts with
         | some e => pure e
         | none => rounds keys seg label pkgId out ch reader fuel t' st'
@@ -152,7 +152,7 @@ def run (store : System.FilePath) (label : ByteArray) : IO Exit := do
       let input ← IO.getStdin
       let reader ← IO.asTask (readReports input ch lifetime) .dedicated
       let out ← IO.getStdout
-      let (st, acts) := Loop.step Digest.bytes label pkgId t.world Loop.State.empty
+      let (st, acts) := Loop.step Host.Deployed.X.env Digest.bytes label pkgId t.world Loop.State.empty
         (Loop.allIds t.world) []
       match ← send out acts with
       | some e => return e

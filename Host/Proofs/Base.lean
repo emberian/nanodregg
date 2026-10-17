@@ -32,6 +32,7 @@ import Host.Loop
 import Host.Proofs.Log
 import Host.Record
 import Kernel.Proofs.Origin
+import Kernel.Proofs.RootedFold
 
 namespace Nanodregg.Host
 
@@ -373,21 +374,47 @@ theorem genesisImage_origin {W F : Type} (keys : Keys) (c : Cadence) (world : Co
     rw [hlen, hx, originFault_none_iff]
     exact ⟨_, hr, ho.symm⟩
 
-/-- **HOST-25, completeness past genesis.** A record the writer's fold accepts keeps the World's
-origin (KERNEL's `fold_origin`), so every later base's World states the same origin as the
-genesis World whose chain the origin frame holds. -/
-theorem Record.step_origin {D : Type} [Ord D] [DecidableEq D] {dc : Codec.Stream D}
-    {E : Kernel.Env D} {w w' : Kernel.World D} {r : ByteArray}
-    (h : Record.step dc (Kernel.World.fold E) w r = .ok w') : w'.origin = w.origin := by
+/-- A record's run (`Record.runRooted`) that succeeds is a `Kernel.Rooted` run: every Turn
+admitted, every stated root the one admission reached (HOST-29). -/
+theorem Record.runRooted_ok {D F : Type} [Ord D] [DecidableEq D]
+    {admit : Kernel.World D → Kernel.Turn D → Except F (Kernel.World D)} {root : Kernel.World D → D} :
+    ∀ {i : Nat} {w w' : Kernel.World D} {ps : List (Kernel.Turn D × D)},
+      Record.runRooted admit root i w ps = .ok w' → Kernel.Rooted admit root w ps w'
+  | i, w, w', [], h => by
+      simp only [Record.runRooted] at h; cases h; rfl
+  | i, w, w', (t, r) :: rest, h => by
+      unfold Record.runRooted at h
+      split at h
+      · cases h
+      · rename_i w₁ ha
+        split at h
+        · rename_i hr
+          exact ⟨w₁, ha, hr.symm, Record.runRooted_ok h⟩
+        · cases h
+
+/-- **HOST-29: a record that opens is a rooted run of the pairs it decodes to.** -/
+theorem Record.step_rooted {D F : Type} [Ord D] [DecidableEq D] {dc : Codec.Stream D}
+    {admit : Kernel.World D → Kernel.Turn D → Except F (Kernel.World D)} {root : Kernel.World D → D}
+    {w w' : Kernel.World D} {r : ByteArray} (h : Record.step dc admit root w r = .ok w') :
+    ∃ ps, (Record.codec dc).decode r = .ok ps ∧ Kernel.Rooted admit root w ps w' := by
   unfold Record.step Record.stepTurns at h
   split at h
   · cases h
-  · split at h
+  · rename_i ps hd
+    split at h
     · cases h
-    · rename_i w₁ hf
-      split at h
-      · simp only [Except.map, Except.ok.injEq] at h
-        subst h; exact Kernel.Receive.fold_origin hf
-      · cases h
+    · rename_i w₁ hr
+      simp only [Except.map, Except.ok.injEq] at h
+      subst h
+      exact ⟨ps, hd, Record.runRooted_ok hr⟩
+
+/-- **HOST-25, completeness past genesis.** A record the writer's reopen accepts keeps the World's
+origin (`Record.step_rooted`, then KERNEL's `fold_origin`), so every later base's World states the
+same origin as the genesis World whose chain the origin frame holds. -/
+theorem Record.step_origin {D : Type} [Ord D] [DecidableEq D] {dc : Codec.Stream D}
+    {E : Kernel.Env D} {w w' : Kernel.World D} {r : ByteArray}
+    (h : Record.step dc (Kernel.World.admit E) (Kernel.World.root E) w r = .ok w') : w'.origin = w.origin := by
+  obtain ⟨_, _, hr⟩ := Record.step_rooted h
+  exact Kernel.Receive.fold_origin (Kernel.RootedFold.fold hr)
 
 end Nanodregg.Host

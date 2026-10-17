@@ -975,3 +975,86 @@ convention LEDGER proposed, because convention-bound authority is exactly how D6
 happened. The order puts my own KERNEL-24 first. Its justification is that three layers (PROTOCOL's
 wrongWorld row, TRANSPORT's envelope, CODEC's call codec) already wait on it, and it touches
 receive's first line, which D5 also rewrites.
+
+## KERNEL-30 · KERNEL-23 part 2 as built: the World IS one trie of cells and nullifiers; the root after each turn is in the chain (KERNEL-6, 2026-10-17)
+**Decision.** `World := {trie : Cells D, journal, height, chain, allowance, origin}`, where
+`Cells D = Trie.T (Slot D) Leaf D`, `Slot = cell id | nullifier n`, `Leaf = entry Entry | spent`. The
+fields `cells` and `spent` are DELETED (law 1: one authenticated map, not a map plus an index). The
+trie parameters are `trieSpec E`: bit 0 is the slot kind, bit i+1 is bit i of `E.bytes id`
+(MSB-first, `false` past the end), depth `Bounds.trieDepth = 257`, node hash `E.hash domTrie`, and the
+leaf value digest is `E.hash domLeaf (kind byte ‖ cellBytes)`. Every reader takes E:
+`w.entry/live/taken/isSpent E`, `pinned E w pins`. `chainNext E prev t root'` commits the root after
+the turn, `chainOf` folds `(turn, root)` pairs, and `genesisChain` is unchanged (the empty trie's
+root is a constant). `World.Equiv`'s trie component is `=`. The journal stays a TreeMap and is not
+authenticated (KERNEL-23's critique still stands).
+Theorems (Kernel/Proofs/{TrieMap,Cells,Fold,Equiv,Frame}): `World.Canon` holds at genesis
+(`genesis_canon`, `receive_genesis_canon`), and admit and fold keep it (`admit_canon`, `fold_canon`).
+`eq_of_get_eq`/`trie_ext` give history independence over CONTENTS, via `build_perm` on separated
+keys; `slots_separate` discharges separation for fixed-size injective digests, n ≤ 32.
+`slot_inclusion_sound`, `slot_exclusion_sound`, `live_inclusion_sound` and `unspent_sound` give
+`… ∨ Collision E.hash`. `prove_verifies` and `prove_absent` say the World proves what it holds and
+what it does not. `head_read_sound` is the phone's read: a head record that hashes to an admitted
+World's chain, plus a proof against the record's root, shows that World's slot, or a collision.
+`chain_binds` now binds `(turn, root)` lists, and `fold_reaches_host` says a follower at the host's
+(height, chain) holds the host's World, or a collision.
+Sim (the theorems' teeth). Every admitted turn replays its inserts from the pre-trie, and the
+replay must reach the admitted root (an unrehashed path goes red). The Sim proves and verifies
+every changed slot and one untouched one, plus each nullifier as absent BEFORE its turn. It forges
+four proofs, each of which must fail: arms `proof-sibling`, `proof-leaf`, `proof-tomb-live`,
+`proof-spent-unspent`, all in plantedArms. The Host's proofs verify at the follower's root. A
+checkpoint reopen rebuilds the trie by `Trie.build` from its listing and must equal the trie
+(listing and root).
+WASTE (deterministic counts): `admit hashes-per-touched-cell` 9.985 and `admit
+hashes-per-nullifier` 2.695 (kernel-sim --seeds 64, deployed). Of the 9.985, 1.92 is EMPTY-sibling
+hashes: `Trie.emptyHash` is recomputed at every node with an empty child, not cached. That is
+waste, not design, and it is the next cut (a cached empty digest in the Spec, with its premise in
+the soundness proofs). The rest is the uncompressed path (log₂ n + ~1.3 levels at ~100 slots) plus
+the sequential top-of-path repeats KERNEL-23 (h) predicted.
+**Alternatives.** Keep `spent` beside the trie (ROOT ruled cells + nullifiers, KERNEL-23).
+`World E`-indexed types, so that `w.live c` keeps its arity: 214 signature sites against ~60 reader
+sites, and it ties a World's TYPE to one Env. A pin digest as the leaf (KERNEL-23 (b) as written):
+pin-cell vs tomb vs spent would be three domains, and a cross-domain equality is not a `Collision`,
+so the soundness statement would need a weaker collision notion.
+**Critique.** World.Canon is a premise every World theorem now carries. It is proved for every
+World the kernel constructs. A decoder must establish it (CODEC: `world_decode_canon`), or it builds a trie
+whose proofs the kernel's theorems do not cover. The uncompressed trie pays ~log₂ n + 2 hashes per
+change. A path-compressed trie halves that only at sizes far beyond THE BAR, and costs a second
+shape argument. `Leaf.fits` (a cell slot holds an entry, a nullifier slot holds `spent`) is
+enforced by construction in commit, not by type, so a decoder must refuse a mismatched pair by
+name.
+**Meta-critique.** I took the trie as CODEC-2 and KERNEL-4 shaped it rather than re-deriving
+compression. The independent test is the phone's bytes (32 per level), which compression does not
+change. The single-domain leaf digest departs from KERNEL-23 (b). The pull towards keeping (b) was
+that it was already written; the soundness statement is what decides, and it decides for one
+domain.
+**Flag day.** The World codec becomes `kernel/world/v3` (CODEC-2, in the same landing), and every
+v2 base refuses to load through HOST's shape stamp. Every chain head after height 0 changes, so
+every Store re-geneses. The Turn and Call codecs are unchanged. PROTOCOL gains the head record
+(height, prev, turnDigest, root) and a Proof in `read`.
+**As landed (KERNEL-7).** Three amendments to the text above:
+(a) *The turn-bytes premise is restated over bounded turns.* `chainNext_inj`, `chain_binds`,
+`fold_head_binds` and `fold_reaches_host` used to assume `Function.Injective E.turnBytes`. That is
+FALSE at the deployed codec: `nat64` truncates a counter past 2^64, so two turns that differ only
+there share their bytes. They now take `TurnBytesInjOn E`, which says injective on the turns
+`checkBounds` passes, and is exactly what CODEC proves (`Codec.Proofs.Deployed.turnBytes_injective`).
+`chain_binds` takes a bounded-turn premise for each log. The fold theorems discharge it with
+`fold_bounded`, since an admitted turn is bounded (`admit_bounded`).
+`Receive.deployed_fold_reaches_host` is the instance with every premise discharged at the deployed
+codec, so the follower theorem is proved at Deployed.env, not only stated. Closes cv 01a1498e-8530.
+(b) *OPEN GAP: `CellsFit` is not yet discharged.* The read theorems (`slot_inclusion_sound`,
+`live_inclusion_sound`, `head_read_sound`) take `InjOn F E` and `w.CellsFit F E`. At the deployed
+codec `F` must be `Cell.Fits`, because `cellBytes` is injective only on fitting cells. No theorem
+yet shows that genesis, admit and fold keep `CellsFit Cell.Fits`. So these theorems are true
+statements about a World whose cells are known to fit, but they are NOT yet proved for the Worlds
+the deployed kernel builds. The premise is explicit in each statement, never a section variable.
+The proof (`admit_cellsFit`: postWrite's slot-count check, plus `checkBounds` for births; and a
+deployed instance theorem) lands with KERNEL-31 (cv 01a1498e-853e). Until then, nothing may cite
+these three theorems as proved at Deployed.env.
+(c) *HOST-29's per-turn roots.* A batch record is `List (Turn D × D)`, each Turn paired with the root
+after it. The separate end chain is deleted, and open refuses a stated root that disagrees, by
+name (`rootMismatch i`; host-sim plant `plant-flip-root`). The kernel gains one generic definition,
+`Rooted admit note` (with the roots inside the definition), and `World.RootedFold E`. Host's batch
+machine and Protocol's absorb both use these two, so no layer keeps its own copy.
+`Kernel/Proofs/RootedFold.lean` holds `Rooted.snoc`, `RootedFold.fold` and `RootedFold.chain`.
+Numbering: the carry (OPS-P1) is KERNEL-29, as proposals/ops.md and decisions/protocol.md already
+cite it. This port is KERNEL-30, and the genesisFits refusal is KERNEL-31.

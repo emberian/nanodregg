@@ -97,15 +97,15 @@ variable {D : Type} [Ord D] [DecidableEq D]
 
 /-- Every action is decided on the World's own cell at a touched id, and names that id's directory:
 no caller pairs a cell with a name. -/
-theorem reconcile_names {bytesOf : D → ByteArray} {label pkgId : ByteArray} {now : Nat}
+theorem reconcile_names {E : Env D} {bytesOf : D → ByteArray} {label pkgId : ByteArray} {now : Nat}
     {live : List Live} {w : World D} {ids : List D} {a : Action}
-    (h : a ∈ reconcile bytesOf label pkgId now live w ids) :
+    (h : a ∈ reconcile E bytesOf label pkgId now live w ids) :
     ∃ i ∈ ids, a.grain = dirOf (bytesOf i) ∧
-      decideCell label pkgId now live (dirOf (bytesOf i)) (w.live i) = some a.verdict := by
+      decideCell label pkgId now live (dirOf (bytesOf i)) (w.live E i) = some a.verdict := by
   unfold reconcile at h
   obtain ⟨i, hm, hd⟩ := List.mem_filterMap.mp h
   refine ⟨i, List.mem_eraseDups.mp (List.mem_of_mem_take hm), ?_⟩
-  rcases hv : decideCell label pkgId now live (dirOf (bytesOf i)) (w.live i) with _ | v
+  rcases hv : decideCell label pkgId now live (dirOf (bytesOf i)) (w.live E i) with _ | v
   · simp [hv] at hd
   · simp [hv] at hd
     subst hd
@@ -124,21 +124,21 @@ theorem filterMap_sublist_map {α β : Type} (l : List α) (f : α → Option β
 
 /-- At most one action per grain, given distinct directories for the distinct touched ids (`dirOf`
 is lowercase hex, so distinct id bytes give distinct directories). -/
-theorem reconcile_one_per_id {bytesOf : D → ByteArray} {label pkgId : ByteArray} {now : Nat}
+theorem reconcile_one_per_id {E : Env D} {bytesOf : D → ByteArray} {label pkgId : ByteArray} {now : Nat}
     {live : List Live} {w : World D} {ids : List D}
     (hnd : ((ids.eraseDups.take Bounds.grainsMax).map fun i => dirOf (bytesOf i)).Nodup) :
-    ((reconcile bytesOf label pkgId now live w ids).map (·.grain)).Nodup := by
+    ((reconcile E bytesOf label pkgId now live w ids).map (·.grain)).Nodup := by
   unfold reconcile
   rw [List.map_filterMap]
   refine hnd.sublist (filterMap_sublist_map _ _ _ ?_)
   intro i b hb
-  rcases hv : decideCell label pkgId now live (dirOf (bytesOf i)) (w.live i) with _ | v <;>
+  rcases hv : decideCell label pkgId now live (dirOf (bytesOf i)) (w.live E i) with _ | v <;>
     simp [hv] at hb
   exact hb.symm
 
-theorem reconcile_bounded (bytesOf : D → ByteArray) (label pkgId : ByteArray) (now : Nat)
+theorem reconcile_bounded (E : Env D) (bytesOf : D → ByteArray) (label pkgId : ByteArray) (now : Nat)
     (live : List Live) (w : World D) (ids : List D) :
-    (reconcile bytesOf label pkgId now live w ids).length ≤ Bounds.grainsMax := by
+    (reconcile E bytesOf label pkgId now live w ids).length ≤ Bounds.grainsMax := by
   unfold reconcile
   exact Nat.le_trans (List.length_filterMap_le _ _) (List.length_take_le _ _)
 
@@ -159,9 +159,9 @@ private theorem eraseDups_nodup (l : List D) : l.eraseDups.Nodup := eraseDups_no
 
 /-- One action per grain whenever distinct ids have distinct bytes (`reconcile_one_per_id` with its
 premise discharged by `dirOf_injective`). -/
-theorem reconcile_distinct {bytesOf : D → ByteArray} (hb : Function.Injective bytesOf)
+theorem reconcile_distinct {E : Env D} {bytesOf : D → ByteArray} (hb : Function.Injective bytesOf)
     {label pkgId : ByteArray} {now : Nat} {live : List Live} {w : World D} {ids : List D} :
-    ((reconcile bytesOf label pkgId now live w ids).map (·.grain)).Nodup :=
+    ((reconcile E bytesOf label pkgId now live w ids).map (·.grain)).Nodup :=
   reconcile_one_per_id (List.Pairwise.map (fun i => dirOf (bytesOf i))
     (fun _ _ hne heq => hne (hb (dirOf_injective heq)))
     ((eraseDups_nodup ids).sublist (List.take_sublist _ _)))
@@ -170,9 +170,9 @@ theorem digest_bytes_injective : Function.Injective Codec.Digest.bytes := by
   intro a b h; cases a; cases b; simp_all
 
 /-- On the deployed ids (32-byte digests), one action per grain per call. -/
-theorem reconcile_distinct_deployed {label pkgId : ByteArray} {now : Nat} {live : List Live}
+theorem reconcile_distinct_deployed {E : Env Codec.Digest} {label pkgId : ByteArray} {now : Nat} {live : List Live}
     {w : World Codec.Digest} {ids : List Codec.Digest} :
-    ((reconcile Codec.Digest.bytes label pkgId now live w ids).map (·.grain)).Nodup :=
+    ((reconcile E Codec.Digest.bytes label pkgId now live w ids).map (·.grain)).Nodup :=
   reconcile_distinct digest_bytes_injective
 
 end Nanodregg.Hosting.Proofs

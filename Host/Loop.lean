@@ -101,8 +101,9 @@ structure Checkpoint (W : Type) where
   write : W → Nat → Digest → Array Entry → IO (Except SealFault (Nat × ByteArray))
   async : Bool
 
-/-- How the loop writes a batch record and indexes it: the record of the staged Turns given the
-World after them, and the height and chain (`Env.bytes`) of a World. -/
+/-- How the loop writes a batch record and indexes it: the record of the staged entries (each Turn
+with the root after it, HOST-29) given the World after them, and the height and chain
+(`Env.bytes`) of a World. -/
 structure Recorder (W T : Type) where
   encode : W → Array T → ByteArray
   mark : W → Nat × ByteArray
@@ -258,7 +259,7 @@ def append (rec : Recorder W T) (s : Log.Sealer) (ck : Checkpoint W) (c : Cadenc
 
 /-- The loop. `rec.encode after staged` is the batch record (`Host.Record.encode`); `pager r d`
 builds a deferred reply (a `log` or `read` page: status, payload) from the durable state `r`. -/
-def serve (m : Machine W T R Frame) (rec : Recorder W T) (s : Log.Sealer) (ck : Checkpoint W)
+def serve {N : Type} (m : Machine W T R Frame N) (rec : Recorder W (T × N)) (s : Log.Sealer) (ck : Checkpoint W)
     (c : Cadence) (store : Store) (pager : Resident W → Deferred → IO (UInt8 × ByteArray)) (port : Port)
     (limits : Limits) : Nat → Resident W → IO (Exit × Resident W)
   | 0, r => finish .fuel r

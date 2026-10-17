@@ -129,35 +129,35 @@ theorem postWrite_keeps {c : D} {cell post : Cell} {ops : List Op}
     rw [hd] at ha; cases ha
 
 section Admit
-variable [Std.TransOrd D] [Std.LawfulEqOrd D]
 
-omit [DecidableEq D] in
-theorem insertAll_get_some {k : D} {e : Entry} :
-    ∀ {m : Std.TreeMap D Entry compare} {ps : List (D × Entry)}, (insertAll m ps)[k]? = some e →
-      (k, e) ∈ ps ∨ (k ∉ ps.map Prod.fst ∧ m[k]? = some e)
+omit [Ord D] in
+/-- A cell slot after writing entries holds one of them, or what it held before. -/
+theorem insertAll_get_some {E : Env D} {k : D} {e : Entry} :
+    ∀ {m : Cells D} {ps : List (D × Entry)},
+      (insertAll E m ps).get (trieSpec E) (.cell k) = some (.entry e) →
+      (k, e) ∈ ps ∨ (k ∉ ps.map Prod.fst ∧ m.get (trieSpec E) (.cell k) = some (.entry e))
   | m, [], h => .inr ⟨by simp, h⟩
   | m, p :: rest, h => by
-      rcases insertAll_get_some (m := m.insert p.1 p.2) (ps := rest) h with hr | ⟨hn, hm⟩
+      rcases insertAll_get_some (m := m.insert (trieSpec E) (.cell p.1) (.entry p.2)) (ps := rest) h
+        with hr | ⟨hn, hm⟩
       · exact .inl (by simp [hr])
-      · rw [Std.TreeMap.getElem?_insert] at hm
+      · rw [Trie.get_insert] at hm
         split at hm
         · rename_i he
-          have := Std.LawfulEqCmp.eq_of_compare he
-          subst this
-          simp only [Option.some.injEq] at hm
+          injection he with he
+          subst he
+          simp only [Option.some.injEq, Leaf.entry.injEq] at hm
           subst hm
           exact .inl (by simp)
         · rename_i hne
           refine .inr ⟨?_, hm⟩
           simp only [List.map_cons, List.mem_cons, not_or]
-          refine ⟨fun h => hne ?_, hn⟩
-          rw [h]; exact Std.ReflCmp.compare_self
+          exact ⟨fun h => hne (by rw [h]), hn⟩
 
-omit [Std.TransOrd D] [Std.LawfulEqOrd D] in
 /-- A touch that leaves a live cell behind wrote it: from a live cell, by `postWrite`. -/
 theorem touchCheck_live {E : Env D} {w : World D} {x : Touch D} {p : Post D} {c' : Cell}
     (h : touchCheck E w x = .ok (some p)) (he : p.entry = .live c') :
-    p.cell = x.cell ∧ ∃ cell ops, w.live x.cell = some cell ∧ x.act = .write ops ∧
+    p.cell = x.cell ∧ ∃ cell ops, w.live E x.cell = some cell ∧ x.act = .write ops ∧
       postWrite x.cell cell ops = .ok c' := by
   unfold touchCheck at h
   simp only [except_bind_ok] at h
@@ -166,7 +166,7 @@ theorem touchCheck_live {E : Env D} {w : World D} {x : Touch D} {p : Post D} {c'
   | keep => rw [ha] at h; simp [pure, Except.pure] at h
   | write ops =>
       rw [ha] at h
-      cases hc : w.live x.cell with
+      cases hc : w.live E x.cell with
       | none => rw [hc] at h; simp at h
       | some cell =>
           rw [hc] at h
@@ -177,7 +177,7 @@ theorem touchCheck_live {E : Env D} {w : World D} {x : Touch D} {p : Post D} {c'
           exact ⟨rfl, cell, ops, rfl, rfl, hp⟩
   | retire =>
       rw [ha] at h
-      cases hc : w.live x.cell with
+      cases hc : w.live E x.cell with
       | none => rw [hc] at h; simp at h
       | some cell =>
           rw [hc] at h
@@ -188,14 +188,12 @@ theorem touchCheck_live {E : Env D} {w : World D} {x : Touch D} {p : Post D} {c'
 /-- Every live cell after an admitted turn was born by it, or was live before and is either
 untouched or what a write of it left. -/
 theorem admit_live {E : Env D} {w w' : World D} {t : Turn D} {id : D} {c' : Cell}
-    (h : World.admit E w t = .ok w') (hl : w'.live id = some c') :
-    (id, c') ∈ t.creates ∨ ∃ cell, w.live id = some cell ∧
+    (h : World.admit E w t = .ok w') (hl : w'.live E id = some c') :
+    (id, c') ∈ t.creates ∨ ∃ cell, w.live E id = some cell ∧
       (c' = cell ∨ ∃ ops, postWrite id cell ops = .ok c') := by
   obtain ⟨posts, hk, rfl⟩ := admit_ok h
-  have hg : (commit E w t posts).cells[id]? = some (.live c') := by
-    unfold World.live at hl; split at hl
-    · rename_i hh; simp only [Option.some.injEq] at hl; rw [hh, hl]
-    · simp at hl
+  have hg := live_get hl
+  rw [show (commit E w t posts).trie = commitTrie E w t posts from rfl, commitTrie_cell] at hg
   rcases insertAll_get_some hg with hb | ⟨_, hm⟩
   · left
     unfold bornEntries at hb
@@ -213,7 +211,7 @@ theorem admit_live {E : Env D} {w w' : World D} {t : Turn D} {id : D} {c' : Cell
       obtain ⟨hpc, cell, ops, hc, _, hw⟩ := touchCheck_live hr hpe.2
       rw [← hpe.1, hpc]
       exact ⟨cell, hc, .inr ⟨ops, hw⟩⟩
-    · exact ⟨c', by unfold World.live; rw [hw], .inl rfl⟩
+    · exact ⟨c', by unfold World.live World.entry; rw [hw], .inl rfl⟩
 
 end Admit
 
@@ -228,7 +226,7 @@ variable {D : Type} [Ord D] [DecidableEq D]
 /-- Every live grant is append-only and names a target; a grant on the World has a parent unless
 it is one of the roots `R`. -/
 def WorldRooted (X : Ctx D) (R : D → Prop) (w : World D) : Prop :=
-  ∀ id cell, w.live id = some cell → cell.kind = kindGrant →
+  ∀ id cell, w.live X.env id = some cell → cell.kind = kindGrant →
     cell.discipline = .appendOnly ∧ (cell.slots.get grantTarget).isSome = true ∧
       (cell.slots.get grantTarget = some (X.env.bytes (worldId X)) →
         (cell.slots.get grantParent).isSome = true ∨ R id)
@@ -240,11 +238,10 @@ def BornRooted (X : Ctx D) (cell : Cell) : Prop :=
     (cell.slots.get grantTarget = some (X.env.bytes (worldId X)) → (cell.slots.get grantParent).isSome = true)
 
 section Step
-variable [Std.TransOrd D] [Std.LawfulEqOrd D]
 
 /-- Every live ROM cell sits at its content digest: a package's identity IS its id (KERNEL-3). -/
 def RomContent (E : Env D) (w : World D) : Prop :=
-  ∀ id cell, w.live id = some cell → cell.discipline = .rom → id = romIdOf E cell
+  ∀ id cell, w.live E id = some cell → cell.discipline = .rom → id = romIdOf E cell
 
 /-- **ROM ids are content, one step** (D5): the Turn names its births' ids, and `World.admit`
 refuses a ROM birth at any other id (`notContentId`); a ROM cell is never written. -/
@@ -436,7 +433,6 @@ theorem receiveWith_dispatch {X : Ctx D} {look : Pinned D} {c : Call D} {t : Tur
   exact h
 
 section Steps
-variable [Std.TransOrd D] [Std.LawfulEqOrd D]
 
 /-- **Derive-then-admit keeps the World rooted.** -/
 theorem step_rooted {X : Ctx D} {R : D → Prop} {w w' : World D} {c : Call D} {t : Turn D}
@@ -499,100 +495,64 @@ theorem founderRoot_target (X : Ctx D) (m : D) :
   simp [grantTarget, grantGrantee, grantIssuer]
 
 section Genesis
-variable [Std.TransOrd D] [Std.LawfulEqOrd D]
 
-omit [DecidableEq D] in
+/-- A live cell of the genesis World is one of the founders' entries. -/
+theorem genesis_live {X : Ctx D} {name nonce : ByteArray} {allowance : Nat}
+    {founders : List (ByteArray × D)} {id : D} {cell : Cell}
+    (hl : (genesis X name nonce allowance founders).live X.env id = some cell) :
+    (id, Entry.live cell) ∈ founderEntries X (originOf X name nonce allowance founders) founders := by
+  have hg := live_get hl
+  rcases insertAll_get_some (m := Trie.T.empty)
+      (ps := founderEntries X (originOf X name nonce allowance founders) founders) hg with h | ⟨_, h⟩
+  · exact h
+  · exact absurd (h.symm.trans (Trie.get_empty _ _)) (by simp)
+
+omit [Ord D] [DecidableEq D] in
+theorem mem_founderEntries {X : Ctx D} {o : D} {founders : List (ByteArray × D)} {id : D} {e : Entry}
+    (h : (id, e) ∈ founderEntries X o founders) :
+    ∃ p ∈ founders.zipIdx, (id = founderId X o p.2 ∧ e = .live (founderMember X p.1)) ∨
+      (id = founderGrantId X o p.2 ∧ e = .live (founderRoot X (founderId X o p.2))) := by
+  unfold founderEntries at h
+  obtain ⟨p, hp, hm⟩ := List.mem_flatMap.mp h
+  simp only [List.mem_cons, Prod.mk.injEq] at hm
+  rcases hm with hm | hm | hm
+  · exact ⟨p, hp, .inl hm⟩
+  · exact ⟨p, hp, .inr hm⟩
+  · simp at hm
+
 /-- **Genesis is rooted**, its roots the founders' grants. -/
 theorem genesis_rooted (X : Ctx D) (name nonce : ByteArray) (allowance : Nat)
     (founders : List (ByteArray × D)) :
     WorldRooted X (GenesisRoot X (originOf X name nonce allowance founders))
       (genesis X name nonce allowance founders) := by
-  let o := originOf X name nonce allowance founders
-  let P : Std.TreeMap D Entry compare → Prop := fun m => ∀ id cell, m[id]? = some (.live cell) →
-    cell.kind = kindGrant → cell.discipline = .appendOnly ∧ (cell.slots.get grantTarget).isSome = true ∧
-      (cell.slots.get grantTarget = some (X.env.bytes (worldId X)) →
-        (cell.slots.get grantParent).isSome = true ∨ GenesisRoot X o id)
-  have step : ∀ (l : List ((ByteArray × D) × Nat)) (m : Std.TreeMap D Entry compare), P m →
-      P (l.foldl (fun (m : Std.TreeMap D Entry compare) (p : (ByteArray × D) × Nat) =>
-        (m.insert (founderId X o p.2) (.live (founderMember X p.1))).insert
-          (founderGrantId X o p.2) (.live (founderRoot X (founderId X o p.2)))) m) := by
-    intro l
-    induction l with
-    | nil => intro m hm; exact hm
-    | cons p rest ih =>
-        intro m hm
-        apply ih
-        intro id cell hg hk
-        rw [Std.TreeMap.getElem?_insert] at hg
-        split at hg
-        · rename_i he
-          have := Std.LawfulEqCmp.eq_of_compare he
-          simp only [Option.some.injEq, Entry.live.injEq] at hg
-          subst hg
-          refine ⟨rfl, by rw [founderRoot_target]; rfl, fun _ => .inr ⟨p.2, this.symm⟩⟩
-        · rw [Std.TreeMap.getElem?_insert] at hg
-          split at hg
-          · simp only [Option.some.injEq, Entry.live.injEq] at hg
-            subst hg
-            simp [founderMember, kindMember, kindGrant] at hk
-          · exact hm id cell hg hk
-  have hP := step founders.zipIdx {} (by intro id cell hg; simp at hg)
   intro id cell hl hk
-  unfold World.live at hl
-  split at hl
-  · rename_i hh
-    simp only [Option.some.injEq] at hl
-    subst hl
-    exact hP id _ hh hk
-  · simp at hl
+  obtain ⟨p, _, ⟨_, he⟩ | ⟨hid, he⟩⟩ := mem_founderEntries (genesis_live hl)
+  · simp only [Entry.live.injEq] at he
+    subst he
+    simp [founderMember, kindMember, kindGrant] at hk
+  · simp only [Entry.live.injEq] at he
+    subst he
+    exact ⟨rfl, by rw [founderRoot_target]; rfl, fun _ => .inr ⟨p.2, hid⟩⟩
 
-omit [DecidableEq D] [Std.LawfulEqOrd D] in
 /-- The empty World holds no ROM cell at a wrong id: it holds none. -/
 theorem empty_romContent (E : Env D) (o : D) (a : Nat) : RomContent E (World.genesis E o a) := by
   intro id cell hl _
-  simp [World.live, World.genesis] at hl
+  exact absurd ((live_get hl).symm.trans (Trie.get_empty _ _)) (by simp)
 
-omit [DecidableEq D] [Std.LawfulEqOrd D] in
 /-- **Genesis bears no ROM cell**, so `fold_romContent` starts from it: the founders' cells are a
 RAM member and an append-only grant. -/
 theorem genesis_romContent (X : Ctx D) (name nonce : ByteArray) (allowance : Nat)
     (founders : List (ByteArray × D)) :
     RomContent X.env (genesis X name nonce allowance founders) := by
-  let o := originOf X name nonce allowance founders
-  let P : Std.TreeMap D Entry compare → Prop := fun m => ∀ (id : D) (cell : Cell),
-    m[id]? = some (Entry.live cell) → cell.discipline ≠ Discipline.rom
-  have step : ∀ (l : List ((ByteArray × D) × Nat)) (m : Std.TreeMap D Entry compare), P m →
-      P (l.foldl (fun (m : Std.TreeMap D Entry compare) (p : (ByteArray × D) × Nat) =>
-        (m.insert (founderId X o p.2) (.live (founderMember X p.1))).insert
-          (founderGrantId X o p.2) (.live (founderRoot X (founderId X o p.2)))) m) := by
-    intro l
-    induction l with
-    | nil => intro m hm; exact hm
-    | cons p rest ih =>
-        intro m hm
-        apply ih
-        intro id cell hg
-        rw [Std.TreeMap.getElem?_insert] at hg
-        split at hg
-        · simp only [Option.some.injEq, Entry.live.injEq] at hg
-          subst hg
-          simp [founderRoot]
-        · rw [Std.TreeMap.getElem?_insert] at hg
-          split at hg
-          · simp only [Option.some.injEq, Entry.live.injEq] at hg
-            subst hg
-            simp [founderMember]
-          · exact hm id cell hg
-  have hP := step founders.zipIdx {} (by intro id cell hg; simp at hg)
   intro id cell hl hrom
   exfalso
-  unfold World.live at hl
-  split at hl
-  · rename_i hh
-    simp only [Option.some.injEq] at hl
-    subst hl
-    exact hP id _ hh hrom
-  · simp at hl
+  obtain ⟨p, _, ⟨_, he⟩ | ⟨_, he⟩⟩ := mem_founderEntries (genesis_live hl)
+  · simp only [Entry.live.injEq] at he
+    subst he
+    simp [founderMember] at hrom
+  · simp only [Entry.live.injEq] at he
+    subst he
+    simp [founderRoot] at hrom
 
 end Genesis
 
@@ -626,10 +586,10 @@ ends at a live root grant in `R` whose issuer is the chain's principal (with `ge
 `audit_rooted`: a founder's genesis grant, issued by that founder).
 Needs the digest decoder to be canonical (a slot read back as a digest IS that digest's bytes). -/
 theorem chain_rooted {X : Ctx D} {R : D → Prop} {w : World D} {look : Pinned D}
-    (hw : WorldRooted X R w) (hlook : ∀ c v, look c = .ok v → v = w.live c)
+    (hw : WorldRooted X R w) (hlook : ∀ c v, look c = .ok v → v = w.live X.env c)
     (hdig : ∀ b d, X.digestOf b = some d → b = X.env.bytes d) {right : Right} :
     ∀ {pub : Bool} {g agent p : D}, Chain X look (worldId X) right pub g agent p →
-      ∃ r cell, R r ∧ w.live r = some cell ∧ slotDigest X r cell grantIssuer = .ok p
+      ∃ r cell, R r ∧ w.live X.env r = some cell ∧ slotDigest X r cell grantIssuer = .ok p
   | _, _, _, _, .root (g := g) hc ht _ _ hi hp => by
       obtain ⟨hlk, hk⟩ := readKind_ok hc
       obtain ⟨b, hb, hd⟩ := slotDigest_ok ht

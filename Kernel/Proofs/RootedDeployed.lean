@@ -7,6 +7,7 @@ World an audited log reaches from a founders' genesis is rooted, and every enrol
 it acts for a founder through that founder's own genesis grant.
 -/
 import Kernel.Proofs.Rooted
+import Kernel.Proofs.Fold
 import Codec.Proofs.Deployed
 
 namespace Nanodregg.Kernel.Receive
@@ -28,13 +29,13 @@ theorem deployed_enroll_founder (program : Program Digest) (name nonce : ByteArr
     (hw : audit (ctx program) (genesis (ctx program) name nonce allowance founders) l = .ok w)
     {c : Call Digest} {key : ByteArray} {next : Digest} {possession : ByteArray} {via : Digest}
     {t : Turn Digest}
-    (h : enroll (ctx program) (pinned w c.unsigned.pins) c key next possession via = .ok t) :
-    ∃ p r cell, GenesisRoot (ctx program) (originOf (ctx program) name nonce allowance founders) r ∧ w.live r = some cell ∧
+    (h : enroll (ctx program) (pinned (ctx program).env w c.unsigned.pins) c key next possession via = .ok t) :
+    ∃ p r cell, GenesisRoot (ctx program) (originOf (ctx program) name nonce allowance founders) r ∧ w.live (ctx program).env r = some cell ∧
       slotDigest (ctx program) r cell grantIssuer = .ok p ∧
-      Chain (ctx program) (pinned w c.unsigned.pins) (worldId (ctx program)) (.enroll 0) true via
+      Chain (ctx program) (pinned (ctx program).env w c.unsigned.pins) (worldId (ctx program)) (.enroll 0) true via
         c.unsigned.member p := by
   obtain ⟨⟨p, hc⟩, _⟩ := enroll_authorized h
-  have hlook : ∀ x v, pinned w c.unsigned.pins x = .ok v → v = w.live x := by
+  have hlook : ∀ x v, pinned (ctx program).env w c.unsigned.pins x = .ok v → v = w.live (ctx program).env x := by
     intro x v hx
     unfold pinned at hx
     split at hx
@@ -43,5 +44,15 @@ theorem deployed_enroll_founder (program : Program Digest) (name nonce : ByteArr
   obtain ⟨r, cell, hr, hl, hi⟩ := chain_rooted (deployed_audit_rooted program name nonce allowance founders hw)
     hlook (fun _ _ hd => (bytes_of_digestOf hd).symm) hc
   exact ⟨p, r, cell, hr, hl, hi, hc⟩
+
+/-- **Deployed: a follower at the host's head holds the host's World.** `fold_reaches_host` with
+every premise discharged at the deployed codec: 32-byte digests, injective digest bytes, and turn
+bytes injective on bounded turns (CODEC's `turnBytes_injective`; every admitted turn is bounded). -/
+theorem deployed_fold_reaches_host {g host follower : World Digest} {lh lf : List (Turn Digest)}
+    (hh : World.fold env g lh = .ok host) (hf : World.fold env g lf = .ok follower)
+    (hht : follower.height = host.height) (hc : follower.chain = host.chain) :
+    follower = host ∨ Collision env.hash :=
+  fold_reaches_host (n := 32) (fun d => d.size_eq) (fun _ _ h => bytes_injective h)
+    (fun ht ht' h => turnBytes_injective ht ht' h) hh hf hht hc
 
 end Nanodregg.Kernel.Receive

@@ -276,6 +276,6 @@ check is the World the call names (KERNEL-24): a call for another World is `wron
 `badSignature` or `unknownKey`, whatever else is wrong with it. -/
 def receive (X : Ctx D) (w : World D) (c : Call D) : Except (Refusal D) (Turn D) := do
   req (c.unsigned.world = w.origin) .wrongWorld
-  receiveWith X (pinned w c.unsigned.pins) c
+  receiveWith X (pinned X.env w c.unsigned.pins) c
 
 end Nanodregg.Kernel.Receive

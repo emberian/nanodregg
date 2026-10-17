@@ -26,12 +26,12 @@ open Nanodregg.Kernel Nanodregg.Kernel.Receive
 
 variable {D : Type} [Ord D] [DecidableEq D]
 
-theorem step_submit (X : Ctx D) (w : World D) (out : Out (Turn D)) (q : Request Frame) (c : Call D)
+theorem step_submit (X : Ctx D) (w : World D) (out : Out (Turn D × D)) (q : Request Frame) (c : Call D)
     (hop : Protocol.Op.ofCode? q.body.op = some .submit) (hc : X.decodeCall q.body.payload = some c) :
     ((machine X).step (w, out) q).1 =
         (match submit X w c with | .ok (_, w') => w' | .error _ => w) ∧
       ((machine X).step (w, out) q).2.staged =
-        (match submit X w c with | .ok (t, _) => out.staged.push t | .error _ => out.staged) := by
+        (match submit X w c with | .ok (t, w') => out.staged.push (t, World.root X.env w') | .error _ => out.staged) := by
   simp only [Machine.step, machine, handle, hop, hc, submit]
   cases hj : w.journal[txIdOf X c]? with
   | some p => simp
@@ -45,7 +45,7 @@ theorem step_submit (X : Ctx D) (w : World D) (out : Out (Turn D)) (q : Request 
       | error r => simp
       | ok w' => simp
 
-theorem step_journaled (X : Ctx D) (w : World D) (out : Out (Turn D)) (q : Request Frame) (c : Call D)
+theorem step_journaled (X : Ctx D) (w : World D) (out : Out (Turn D × D)) (q : Request Frame) (c : Call D)
     (h : Nat) (d : D)
     (hop : Protocol.Op.ofCode? q.body.op = some .submit) (hc : X.decodeCall q.body.payload = some c)
     (hj : w.journal[txIdOf X c]? = some (h, d)) :
@@ -56,7 +56,7 @@ theorem step_journaled (X : Ctx D) (w : World D) (out : Out (Turn D)) (q : Reque
 /-- A hang-up naming `r` is answered with exactly its acknowledgement, `closed ‖ r.name`
 (`Protocol.ack r`, whose reason is `r`: `Protocol.ackReason?_ack`), stages nothing and leaves the
 World as it was: it changes no other connection's reply. -/
-theorem step_hangup (X : Ctx D) (w : World D) (out : Out (Turn D)) (q : Request Frame)
+theorem step_hangup (X : Ctx D) (w : World D) (out : Out (Turn D × D)) (q : Request Frame)
     (r : Protocol.CloseReason) (hop : q.body.op = Protocol.hangupCode)
     (hp : Protocol.CloseReason.ofBytes? q.body.payload = some r) :
     (machine X).step (w, out) q =
@@ -67,7 +67,7 @@ theorem step_hangup (X : Ctx D) (w : World D) (out : Out (Turn D)) (q : Request 
 
 /-- A hang-up whose payload names no `CloseReason` is refused `badHangup` by name, and changes
 nothing else either. -/
-theorem step_hangup_bad (X : Ctx D) (w : World D) (out : Out (Turn D)) (q : Request Frame)
+theorem step_hangup_bad (X : Ctx D) (w : World D) (out : Out (Turn D × D)) (q : Request Frame)
     (hop : q.body.op = Protocol.hangupCode) (hp : Protocol.CloseReason.ofBytes? q.body.payload = none) :
     (machine X).step (w, out) q =
       (w, { out with

@@ -137,8 +137,9 @@ def onReject (X : Ctx D) (w : World D) (t : Turn D) (r : Reject D) : UInt8 × By
   | _ => named r.name
 
 /-- The writer's machine. -/
-def machine (X : Ctx D) : Machine (World D) (Turn D) (Reject D) Frame where
+def machine (X : Ctx D) : Machine (World D) (Turn D) (Reject D) Frame D where
   admit := World.admit X.env
+  note := World.root X.env
   handle := handle X
   refuse := onReject X
   ok := Protocol.Status.ok.code
