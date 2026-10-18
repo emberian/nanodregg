@@ -850,35 +850,6 @@ private theorem par_pre {E : Env D} {w : World D} {t : Turn D} (hr : w.RowsCanon
     rw [get_live hc]; rfl
   · cases this
 
-omit [Ord D] in
-/-- Removing listed entries one at a time: what is listed reads as absent, the rest as before. -/
-private theorem dropList_get {E : Env D} :
-    ∀ (L : List (RowSlot D × RowLeaf)) (acc : Rows D × Nat), Trie.Canon (rowSpec E) 0 acc.1 →
-      (L.map Prod.fst).Nodup → (∀ q ∈ L, q ∈ acc.1.toList) → ∀ k,
-      (L.foldl (fun acc p =>
-          (Trie.retainAt (rowSpec E) (fun k _ => decide (k ≠ p.1)) (rowPath E p.1) acc.1, acc.2 + rowEntryWeight p)) acc).1.get (rowSpec E) k =
-        if k ∈ L.map Prod.fst then none else acc.1.get (rowSpec E) k
-  | [], acc, _, _, _, k => by simp
-  | p :: L, acc, hc, hn, hm, k => by
-      simp only [List.foldl_cons]
-      have hp : acc.1.get (rowSpec E) p.1 = some p.2 := Trie.get_of_mem (rowSpec E) hc.1 (hm p (by simp))
-      obtain ⟨-, hcan, hget⟩ := rowsWeight_retain hc hp (rowPath E p.1) (under_rowPath E p.1)
-      simp only [List.map_cons, List.nodup_cons] at hn
-      have hm' : ∀ q ∈ L, q ∈ (Trie.retainAt (rowSpec E) (fun k' _ => decide (k' ≠ p.1)) (rowPath E p.1)
-          acc.1).toList := by
-        intro q hq
-        have hq1 : q.1 ≠ p.1 := fun e => hn.1 (e ▸ List.mem_map_of_mem hq)
-        have hg := Trie.get_of_mem (rowSpec E) hc.1 (hm q (List.mem_cons_of_mem _ hq))
-        refine (Trie.mem_toList (rowSpec E) 0 _ hcan.1 q.1 q.2).mpr ?_
-        change Trie.T.get _ _ _ = _
-        rw [hget, if_neg hq1, hg]
-      refine (dropList_get L (Trie.retainAt (rowSpec E) (fun k' _ => decide (k' ≠ p.1)) (rowPath E p.1) acc.1,
-        acc.2 + rowEntryWeight p) hcan hn.2 hm' k).trans ?_
-      dsimp only
-      rw [hget]
-      simp only [List.map_cons, List.mem_cons]
-      by_cases h1 : k = p.1 <;> by_cases h2 : k ∈ L.map Prod.fst <;> simp [h1, h2]
-
 /-- The heads a list of touches retires. -/
 private def retiredIn (xs : List (Touch D)) : RowSlot D → Bool
   | .head q _ => xs.any fun x => decide (x.act = .retire) && decide (x.cell = q)

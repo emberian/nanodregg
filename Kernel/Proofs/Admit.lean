@@ -251,4 +251,131 @@ theorem admit_journaled {E : Env D} {w w' : World D} {t : Turn D} (hc : w.Journa
   obtain ⟨posts, _, rfl⟩ := admit_ok h
   rw [commit_journalAt hc]; simp
 
+/-! ## The map under a turn's writes -/
+
+omit [Ord D] in
+theorem insertAll_get_of_not_mem {E : Env D} {c : D} :
+    ∀ {m : Cells D} {ps : List (D × Entry)},
+      c ∉ ps.map Prod.fst → (insertAll E m ps).get (trieSpec E) (.cell c) = m.get (trieSpec E) (.cell c)
+  | m, [], _ => rfl
+  | m, p :: rest, h => by
+      simp only [List.map_cons, List.mem_cons, not_or] at h
+      show (insertAll E (m.insert (trieSpec E) (.cell p.1) (.entry p.2)) rest).get _ _ = _
+      rw [insertAll_get_of_not_mem h.2, Trie.get_insert, if_neg]
+      intro he; injection he with he; exact h.1 he
+
+omit [Ord D] in
+/-- Writing cell entries leaves every nullifier slot alone. -/
+theorem insertAll_get_nullifier {E : Env D} {n : D} :
+    ∀ {m : Cells D} {ps : List (D × Entry)},
+      (insertAll E m ps).get (trieSpec E) (.nullifier n) = m.get (trieSpec E) (.nullifier n)
+  | m, [] => rfl
+  | m, p :: rest => by
+      show (insertAll E (m.insert (trieSpec E) (.cell p.1) (.entry p.2)) rest).get _ _ = _
+      rw [insertAll_get_nullifier, Trie.get_insert, if_neg]; intro he; cases he
+
+omit [Ord D] in
+/-- Spending nullifiers leaves every cell slot alone. -/
+theorem spendAll_get_cell {E : Env D} {c : D} :
+    ∀ {m : Cells D} {ns : List D},
+      (spendAll E m ns).get (trieSpec E) (.cell c) = m.get (trieSpec E) (.cell c)
+  | m, [] => rfl
+  | m, x :: rest => by
+      show (spendAll E (m.insert (trieSpec E) (.nullifier x) .spent) rest).get _ _ = _
+      rw [spendAll_get_cell, Trie.get_insert, if_neg]; intro he; cases he
+
+/-- A turn's map, read at a cell: its touches' and births' entries over the pre-state's. -/
+theorem commitTrie_cell {E : Env D} {w : World D} {t : Turn D} {posts : List (Post D)} {c : D} :
+    (commitTrie E w t posts).get (trieSpec E) (.cell c) =
+      (insertAll E (insertAll E w.trie (posts.map Post.pair)) (bornEntries t)).get (trieSpec E) (.cell c) :=
+  spendAll_get_cell
+
+theorem commitTrie_entry {E : Env D} {w : World D} {t : Turn D} {posts : List (Post D)} {c : D}
+    (hp : c ∉ (posts.map Post.pair).map Prod.fst) (hb : c ∉ (bornEntries t).map Prod.fst) :
+    (commitTrie E w t posts).get (trieSpec E) (.cell c) = w.trie.get (trieSpec E) (.cell c) := by
+  rw [commitTrie_cell, insertAll_get_of_not_mem hb, insertAll_get_of_not_mem hp]
+
+
+/-- A touch that leaves something behind leaves it at its own cell, and is not a `keep`. -/
+theorem touchCheck_some {E : Env D} {w : World D} {x : Touch D} {p : Post D}
+    (h : touchCheck E w x = .ok (some p)) : p.cell = x.cell ∧ x.act ≠ .keep := by
+  unfold touchCheck at h
+  simp only [except_bind_ok] at h
+  obtain ⟨⟨⟩, _, h⟩ := h
+  cases ha : x.act with
+  | keep => rw [ha] at h; simp [pure, Except.pure] at h
+  | write ops =>
+      rw [ha] at h
+      cases hc : w.live E x.cell with
+      | none => rw [hc] at h; simp at h
+      | some cell =>
+          rw [hc] at h
+          simp only [except_bind_ok, pure, Except.pure, Except.ok.injEq, Option.some.injEq] at h
+          obtain ⟨_, _, rfl⟩ := h
+          simp
+  | retire =>
+      rw [ha] at h
+      cases hc : w.live E x.cell with
+      | none => rw [hc] at h; simp at h
+      | some cell =>
+          rw [hc] at h
+          simp only [except_bind_ok, pure, Except.pure, Except.ok.injEq, Option.some.injEq] at h
+          obtain ⟨_, _, rfl⟩ := h
+          simp
+
+
+/-- What a checked turn changes is exactly at its non-`keep` touches. -/
+theorem posts_touched {E : Env D} {w : World D} {t : Turn D} {posts : List (Post D)}
+    (hk : Checked E w t posts) : ∀ p ∈ posts, ∃ x ∈ t.touches, p.cell = x.cell ∧ x.act ≠ .keep := by
+  obtain ⟨raw, hm, rfl⟩ := hk.touches
+  intro p hp
+  have hp : some p ∈ raw := by simpa [List.reduceOption, List.mem_filterMap] using hp
+  obtain ⟨x, hx, hr⟩ := mapEx_mem hm (some p) hp
+  exact ⟨x, hx, touchCheck_some hr⟩
+
+omit [Ord D] in
+theorem spendAll_spent_of_spent {E : Env D} {n : D} :
+    ∀ {m : Cells D} {ns : List D}, (m.get (trieSpec E) (.nullifier n)).isSome = true →
+      ((spendAll E m ns).get (trieSpec E) (.nullifier n)).isSome = true
+  | m, [], h => h
+  | m, x :: rest, h => by
+      show ((spendAll E (m.insert (trieSpec E) (.nullifier x) .spent) rest).get _ _).isSome = true
+      apply spendAll_spent_of_spent
+      rw [Trie.get_insert]; split <;> simp_all
+
+omit [Ord D] in
+theorem spendAll_spent_of_mem {E : Env D} {n : D} :
+    ∀ {m : Cells D} {ns : List D}, n ∈ ns →
+      ((spendAll E m ns).get (trieSpec E) (.nullifier n)).isSome = true
+  | m, [], h => by simp at h
+  | m, x :: rest, h => by
+      show ((spendAll E (m.insert (trieSpec E) (.nullifier x) .spent) rest).get _ _).isSome = true
+      simp only [List.mem_cons] at h
+      rcases h with rfl | h
+      · apply spendAll_spent_of_spent; rw [Trie.get_insert_self]; rfl
+      · exact spendAll_spent_of_mem h
+
+omit [Ord D] in
+theorem spendAll_get_nul {E : Env D} {n : D} :
+    ∀ {m : Cells D} {ns : List D},
+      (spendAll E m ns).get (trieSpec E) (.nullifier n) =
+        if n ∈ ns then some .spent else m.get (trieSpec E) (.nullifier n)
+  | m, [] => by simp [spendAll]
+  | m, x :: rest => by
+      show (spendAll E (m.insert (trieSpec E) (.nullifier x) .spent) rest).get _ _ = _
+      rw [spendAll_get_nul, Trie.get_insert]
+      by_cases hr : n ∈ rest
+      · simp [hr]
+      · by_cases hx : n = x
+        · subst hx; simp
+        · have : (Slot.nullifier n : Slot D) ≠ .nullifier x := by intro e; injection e with e; exact hx e
+          simp [hr, hx, this]
+
+/-- The map after a turn, at a nullifier: spent if the turn spends it, else as before. -/
+theorem commitTrie_nul {E : Env D} {w' : World D} {t : Turn D} {posts : List (Post D)} {n : D} :
+    (commitTrie E w' t posts).get (trieSpec E) (.nullifier n) =
+      if n ∈ t.nullifiers then some .spent else w'.trie.get (trieSpec E) (.nullifier n) := by
+  unfold commitTrie
+  rw [spendAll_get_nul, insertAll_get_nullifier, insertAll_get_nullifier]
+
 end Nanodregg.Kernel

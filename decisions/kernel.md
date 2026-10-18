@@ -2100,7 +2100,7 @@ def rowPin (E : Env D) : Option RowLeaf → D                -- the leaf digest,
 - *Check order* (changed): `… checkNullifiers, checkRowsRemain, checkRanges, rowsRun, checkCharge (credit posts + freed), checkCreates, checkSteps`. Rows run before the charge because the charge needs their credit. A turn with no row touches and no ranges is refused exactly as before (every rows check passes on empty lists; `rowsRemain` fires only on a retired parent that holds rows).
 - *Carry*: `Carried` gains `rows` (last field); `World.carried` and `carryWorld` carry them; the carry origin's input gains the rows root bytes after the cells root; `checkCarry`'s `allowanceTooLarge` bounds `cellsWeight + rowsWeight + allowance`, `entryTooLarge` bounds the rows-root bytes. Refusals are still not carried.
 - *Premise spread* (priced): `admit_world_weight`, `admit_conserves`, `fold_conserves`, `fold_world_weight`, `fold_budget_lt`, `carry_fold_budget_lt` gain `w.RowsCanon E` (`Trie.Canon (rowSpec E) 0 w.rows`). It is discharged at Deployed (`genesis_fold_budget_lt`, `deployed_budget_lt`: `receive_genesis_rowsCanon`, `fold_rowsCanon`, `carry_rowsCanon`). No cell reader gains a premise: `World.Canon` is unchanged (cells only); the new premise sits only on theorems whose subject, `World.weight`, now includes the rows. `admit_retire`'s conclusion adds `(rowsAfter E w t).2` (0 for a turn with no row touches). `rootsDigest_inj`, `head_roots`, `head_root`, `head_read_sound`, `head_absent_sound` open four roots.
-- *Theorems landed in `Kernel.Proofs.Rows`*: `rowStep_weight`, `rowsRun_weight`, `rowsAfter_weight`, `admit_rowsCanon`, `refuse_rows`, `fold_rowsCanon`, `admit_range_pins` / `range_stale_refused`, `admit_row_pins` / `rows_stale_refused` (slots distinct by `duplicateRow`, so no earlier touch moves a pinned row: `rowStep_get_other`). Still owed: `rows_separate` on the domain, `range_rows_exact` with its dropped-row tooth, `head_sum` / `sum_le_cap` and RowsOk (fits + headed) preservation for CODEC's refines, `admit_comm`, and the kernel-sim teeth (stale row pin, stale range pin, keyTaken, relationCapped plants) plus WASTE `rows-read-per-range-read`.
+- *Theorems landed in `Kernel.Proofs.Rows`*: `rowStep_weight`, `rowsRun_weight`, `rowsAfter_weight`, `admit_rowsCanon`, `refuse_rows`, `fold_rowsCanon`, `admit_range_pins` / `range_stale_refused`, `admit_row_pins` / `rows_stale_refused` (slots distinct by `duplicateRow`, so no earlier touch moves a pinned row: `rowStep_get_other`). Still owed: `rows_separate` on the domain, `range_rows_exact` with its dropped-row tooth, `head_sum` / `sum_le_cap` and RowsOk (fits + headed) preservation for CODEC's refines, `admit_comm`, and the kernel-sim teeth (stale row pin, stale range pin, keyTaken, relationCapped plants) plus WASTE `rows-read-per-range-read`. [KERNEL-51: now `rowStep_get_out`, heads included]
 
 **KERNEL-17 addendum (2026-10-18): five admission changes found while proving, all strengthening.**
 1. *Same-turn orphan (a real hole).* `rowStep` checked the parent live in the PRE-state only, so one turn could retire p and insert a row under p (the retire touch also satisfied `rowParentUnpinned`), leaving a row under a tombstone. Now refused `orphanRow p`.
@@ -2375,7 +2375,7 @@ CODEC's `kernel/refusals` (`refusalsFits`) checks each leaf alone, and none of t
   - (5) the price list above;
   - (6) this critique's first bullet.
 
-## KERNEL-51 PROPOSED · The frame rule as one scheme: `Kernel/Proofs/Logic/Frame.lean` (KERNEL-19, 2026-10-19; ROOT, from PROOF-TECHNIQUE-20261019.md §3–4). DESIGN ONLY until ROOT rules.
+## KERNEL-51 (PROPOSED, then BUILT: see AS BUILT below, which corrects this text) · The frame rule as one scheme: `Kernel/Proofs/Logic/Frame.lean` (KERNEL-19, 2026-10-19; ROOT, from PROOF-TECHNIQUE-20261019.md §3–4). DESIGN ONLY until ROOT rules.
 
 (Numbering: ROOT's message called this KERNEL-50. The refusalsCounted day took 50, so this is 51 and the head-read scheme is 52.)
 
@@ -2394,15 +2394,15 @@ CODEC's `kernel/refusals` (`refusalsFits`) checks each leaf alone, and none of t
 - `not_cellFoot_iff`: the old inline hypotheses (`∀ x ∈ t.touches, x.cell = c → x.act = .keep` and `c ∉ createdIds t`) ↔ `¬ CellFoot t (.cell c)`. This is the reader's evidence that the footprint is not larger than the hand statements' hypotheses.
 
 **Verified, not assumed (read on main 8ad3982).**
-- The cells field needs zero premises. `commitTrie_entry` (Frame.lean:55) takes only the two footprint facts. Its proof is `commitTrie_cell` + `insertAll_get_of_not_mem`, which rest on `Trie.get_insert`, and that is premise-free because of KERNEL-49 amendment 1's `rep` check. Nullifier monotonicity (`commitTrie_spent`) is premise-free too.
-- The rows field needs `Canon (rowSpec E) 0` exactly where the landed lemma takes it: `rowStep_get_other` (Rows.lean:449), because retract and `dropHeads` are `retainAt`.
+- The cells field needs zero premises. `commitTrie_entry` (Frame.lean:55) takes only the two footprint facts. Its proof is `commitTrie_cell` + `insertAll_get_of_not_mem`, which rest on `Trie.get_insert`, and that is premise-free because of KERNEL-49 amendment 1's `rep` check. Nullifier monotonicity (`commitTrie_spent`) is premise-free too. [KERNEL-51: deleted; `Frame.cells` + `spendAll_spent_of_mem`]
+- The rows field needs `Canon (rowSpec E) 0` exactly where the landed lemma takes it: `rowStep_get_other` (Rows.lean:449), because retract and `dropHeads` are `retainAt`. [KERNEL-51: now `rowStep_get_out`, heads included]
 - The journal field: `commit_journalAt` (Admit.lean:230) takes `JournalCanon`.
 - One correction to the scholar's sketch: `RowFoot.dropped` is right to name only heads, because `checkRowsRemain` refuses a retirement whose parent still holds a row. But that is a fact of `Checked`, so `admit_Frame` (which holds `Checked`) can use it, and a frame over bare `commit` could not.
 
 **Instances (statements and premise counts unchanged).**
 - Re-derived as one-liners from `admit_Frame`: `admit_frame`, `admit_rom`, `admit_nullifiers`.2 (0, 0, 0 invariants), and the ~22 hand restatements across Frame / RowsComm / RowsHead / Rows.
 - DELETED: RowsComm's private twins `commit_cell_frame`, `commitTrie_out`, `view_row_out`, plus the privates they carried.
-- `rowStep_get_other` stays as the per-step lemma the rows field is proved from.
+- `rowStep_get_other` stays as the per-step lemma the rows field is proved from. [KERNEL-51: now `rowStep_get_out`, heads included]
 
 **Teeth.**
 - `cellFoot_needs_born`: with `born` removed, `.cells` is false on a concrete create turn.
@@ -2443,3 +2443,33 @@ It appears in Cells.lean (cells), JournalHead.lean, RefusalsHead.lean (which cal
 - The reader reads eight statements once and four records.
 
 **Cost.** 2 lane-days. It should come AFTER KERNEL-51: both touch the head files and the hub metric.
+
+### KERNEL-51 AS BUILT (KERNEL-19 / K19-F, 2026-10-19; ROOT approved with conditions)
+- `Kernel/Proofs/Logic/Frame.lean` holds the following.
+  - `CellFoot`: the cell of a non-`keep` touch, a born id, a spent nullifier.
+  - `RowFoot`: tighter than the design. It holds the slot of a non-`keep` row touch, the head of a row it writes, and every head of a parent it retires.
+  - `structure Frame`, with four fields: `cells` (NO premise), `rows` (`w.RowsCanon E →`), `journal` (`w.JournalCanon E →`), `refusals` (`w.RefusalsCanon E →`). Height, steps and origin are NOT fields. They are `admit_height`, `admit_steps` and `admit_origin`, which sit below the hub; restating them would be a twin.
+  - `admit_Frame`.
+  - **`not_cellFoot_iff` is the reader's evidence** (ROOT's condition): `¬ CellFoot t (.cell c) ↔ (∀ x ∈ t.touches, x.cell = c → x.act = .keep) ∧ c ∉ createdIds t`. That is exactly the two hypotheses the hand frames took.
+  - Teeth, each a concrete turn whose admission is proved, so the smaller footprint's frame is false:
+    - `cellFoot_needs_born`: a born RAM cell reads `none` before and the cell after.
+    - `rowFoot_needs_head`: a `keep`-pinned parent with one insert has its head count go from 0 to 1.
+- Re-derived from `admit_Frame`, with statements and premises unchanged: `admit_frame` (`.cells` + `not_cellFoot_iff`), `admit_nullifiers`.2, and RowsComm's `admit_comm` cell reads (four sites through `.cells`).
+- DELETED:
+  - RowsComm's twins `commit_cell_frame` and `commitTrie_out`, plus the privates `insertAll_get_base`, `commitTrie_base`, `bornEntries_fst`, `mem_postKeys`, `keys_disjoint`;
+  - `commitTrie_spent`;
+  - `rowStep_get_other`. It is replaced by `rowStep_get_out` (every slot, heads included). This corrects the PROPOSED text above, which said it stays.
+- Kept: `view_row_out` (RowsComm). It is a lemma about RowsComm's private `view` model of inserts, never about `admit`, so the frame does not subsume it; the PROPOSED text's claim that it is deleted is withdrawn.
+- Not built: `refuse_Frame` (a refusal keeps height and steps, so it cannot share a turn-shaped structure; `refuse_frame` stands), and the origin/allowance/height/steps fields (see above).
+- Re-derived, in full: `admit_frame`, `admit_nullifiers`.2 and `admit_comm`'s cell reads. The PROPOSED text's "~22" was an overclaim.
+- New on the rows side: `foldRows_get_out` and `dropHeads_get_out`. No `admit`-level rows frame existed before.
+- The commit-map helpers moved down into Admit.lean / Rows.lean, so that the hub sits below Frame.lean's corollaries.
+- Ratchet: `theorems` 3890 → 3891 (+1); `max dependents of a non-foundation module` 229 → 230 (`Codec.Raw` gains the new module as a dependent); `Lean proof-modules` +1.
+- No premise is added anywhere. No definition changed. Nothing is re-emitted.
+
+**Critique.**
+- **The dropped-heads correction I gave ROOT was itself wrong.** `RowFoot.dropped` names only heads because `dropHeads` filters its listing to the retired cell's `.head` keys. That is a fact of the definition, not of `checkRowsRemain`, so a frame over bare `commit` could state it too; `dropHeads_get_out` uses no `Checked` fact. `checkRowsRemain` is what makes a retirement leave no orphan ROWS (`RowsOk`), which is a different claim. The scholar's sketch was right on this point, and my "correction" read a check where a definition was doing the work.
+- **The ratchet did not fall.** The scholar counted "~22 hand restatements"; a grep finds only `admit_frame`, `admit_rom`, `admit_nullifiers` and the RowsComm twins. The "−9 RowsComm privates" belong to `check_local`, the locality half, which this commit does not build. Net +1: four for the hub and its teeth, three for the rows frame that had never been stated at `admit` level, against nine deleted.
+- **`rowStep_get_other` was never the per-step lemma the rows field needs.** It covered rows only, so the heads frame had to be written.
+- The reader's check: no field whose subject is the cells takes a premise.
+- Locality (`check_local`, the RowsComm `touchCheck_congr` family) remains open. It is where the scholar's predicted fall actually is. Filed as a cv task.

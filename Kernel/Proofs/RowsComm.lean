@@ -14,6 +14,7 @@ import Kernel.Proofs.Rows
 import Kernel.Proofs.RowsHead
 import Kernel.Proofs.RowsSep
 import Kernel.Proofs.Cells
+import Kernel.Proofs.Logic.Frame
 
 namespace Nanodregg.Kernel
 
@@ -578,74 +579,24 @@ theorem rowsRun_comm {E : Env D} {w w₁ w₂ : World D} {t₁ t₂ : Turn D} {r
 /-! ## The cells under two turns -/
 
 omit [Ord D] in
-private theorem insertAll_get_base {E : Env D} {c : D} :
-    ∀ {m m' : Cells D} {ps : List (D × Entry)}, c ∈ ps.map Prod.fst →
+private theorem insertAll_congr {E : Env D} {c : D} :
+    ∀ {m m' : Cells D} {ps : List (D × Entry)}, m.get (trieSpec E) (.cell c) = m'.get (trieSpec E) (.cell c) →
       (insertAll E m ps).get (trieSpec E) (.cell c) = (insertAll E m' ps).get (trieSpec E) (.cell c)
+  | _, _, [], h => h
   | m, m', p :: rest, h => by
       show (insertAll E (m.insert (trieSpec E) (.cell p.1) (.entry p.2)) rest).get _ _ =
         (insertAll E (m'.insert (trieSpec E) (.cell p.1) (.entry p.2)) rest).get _ _
-      by_cases hr : c ∈ rest.map Prod.fst
-      · exact insertAll_get_base hr
-      · have hc : c = p.1 := by
-          simp only [List.map_cons, List.mem_cons] at h
-          exact h.resolve_right hr
-        rw [insertAll_get_of_not_mem hr, insertAll_get_of_not_mem hr, Trie.get_insert, Trie.get_insert,
-          if_pos (by rw [hc]), if_pos (by rw [hc])]
+      apply insertAll_congr
+      rw [Trie.get_insert, Trie.get_insert]
+      by_cases hc : (Slot.cell c : Slot D) = .cell p.1
+      · rw [if_pos hc, if_pos hc]
+      · rw [if_neg hc, if_neg hc]; exact h
 
-omit [Ord D] in
-private theorem spendAll_get_nul {E : Env D} {n : D} :
-    ∀ {m : Cells D} {ns : List D},
-      (spendAll E m ns).get (trieSpec E) (.nullifier n) =
-        if n ∈ ns then some .spent else m.get (trieSpec E) (.nullifier n)
-  | m, [] => by simp [spendAll]
-  | m, x :: rest => by
-      show (spendAll E (m.insert (trieSpec E) (.nullifier x) .spent) rest).get _ _ = _
-      rw [spendAll_get_nul, Trie.get_insert]
-      by_cases hr : n ∈ rest
-      · simp [hr]
-      · by_cases hx : n = x
-        · subst hx; simp
-        · have : (Slot.nullifier n : Slot D) ≠ .nullifier x := by intro e; injection e with e; exact hx e
-          simp [hr, hx, this]
-
-omit [Ord D] [DecidableEq D] in
-private theorem bornEntries_fst (t : Turn D) : (bornEntries t).map Prod.fst = createdIds t := by
-  unfold bornEntries createdIds; rw [List.map_map]; rfl
-
-/-- The map after a turn, at a cell the turn writes or bears, does not depend on the map before. -/
-private theorem commitTrie_base {E : Env D} {w' w'' : World D} {t : Turn D} {posts : List (Post D)} {c : D}
-    (h : c ∈ (posts.map Post.pair).map Prod.fst ∨ c ∈ createdIds t) :
+/-- The map after a turn, at a cell, depends on the map before only through that cell. -/
+private theorem commitTrie_congr {E : Env D} {w' w'' : World D} {t : Turn D} {posts : List (Post D)} {c : D}
+    (h : w'.trie.get (trieSpec E) (.cell c) = w''.trie.get (trieSpec E) (.cell c)) :
     (commitTrie E w' t posts).get (trieSpec E) (.cell c) = (commitTrie E w'' t posts).get (trieSpec E) (.cell c) := by
-  rw [commitTrie_cell, commitTrie_cell]
-  by_cases hb : c ∈ (bornEntries t).map Prod.fst
-  · exact insertAll_get_base hb
-  · rw [insertAll_get_of_not_mem hb, insertAll_get_of_not_mem hb]
-    rw [bornEntries_fst] at hb
-    exact insertAll_get_base (h.resolve_right hb)
-
-/-- The map after a turn, at a nullifier: spent if the turn spends it, else as before. -/
-private theorem commitTrie_nul {E : Env D} {w' : World D} {t : Turn D} {posts : List (Post D)} {n : D} :
-    (commitTrie E w' t posts).get (trieSpec E) (.nullifier n) =
-      if n ∈ t.nullifiers then some .spent else w'.trie.get (trieSpec E) (.nullifier n) := by
-  unfold commitTrie
-  rw [spendAll_get_nul, insertAll_get_nullifier, insertAll_get_nullifier]
-
-omit [Ord D] [DecidableEq D] in
-private theorem mem_postKeys {posts : List (Post D)} {c : D} (h : c ∈ (posts.map Post.pair).map Prod.fst) :
-    ∃ p ∈ posts, p.cell = c := by
-  simpa [List.map_map, Post.pair] using h
-
-/-- After a checked turn, a cell it neither writes (non-`keep`) nor bears reads as before. -/
-private theorem commit_cell_frame {E : Env D} {w : World D} {t : Turn D} {posts : List (Post D)} {c : D}
-    (hk : Checked E w t posts) (hnw : ∀ x ∈ t.touches, x.cell = c → x.act = .keep) (hnb : c ∉ createdIds t) :
-    (commit E w t posts).trie.get (trieSpec E) (.cell c) = w.trie.get (trieSpec E) (.cell c) := by
-  show (commitTrie E w t posts).get _ _ = _
-  apply commitTrie_entry
-  · intro hm
-    obtain ⟨p, hp, rfl⟩ := mem_postKeys hm
-    obtain ⟨x, hx, hc, ha⟩ := posts_touched hk p hp
-    exact ha (hnw x hx hc.symm)
-  · rw [bornEntries_fst]; exact hnb
+  rw [commitTrie_cell, commitTrie_cell]; exact insertAll_congr (insertAll_congr h)
 
 private theorem live_of_get {E : Env D} {w w' : World D} {c : D}
     (h : w'.trie.get (trieSpec E) (.cell c) = w.trie.get (trieSpec E) (.cell c)) :
@@ -676,6 +627,19 @@ private theorem foot_symm {t₁ t₂ : Turn D} (h : RowsCommFoot t₁ t₂) : Ro
     fun c hc => ⟨hb₂ c hc, fun h' => (hb₁ c h').2 hc⟩, fun c hc => (hb₁ c hc).1,
     fun n hn₂ hn₁ => hn n hn₁ hn₂, hi₂, hi₁, fun y hy x hx e => hd x hx y hy e.symm, hq₂, hq₁⟩
 
+omit [Ord D] [DecidableEq D] in
+/-- Disjoint footprints share no cell: a cell in one turn's `CellFoot` is outside the other's. -/
+private theorem foot_cell_disjoint {t₁ t₂ : Turn D} {c : D} (hfoot : RowsCommFoot t₁ t₂)
+    (h₁ : CellFoot t₁ (.cell c)) : ¬ CellFoot t₂ (.cell c) := by
+  obtain ⟨-, hkp, -, -, hb₁, hb₂, -⟩ := hfoot
+  cases h₁ with
+  | touched hx hne =>
+      exact not_cellFoot_iff.mpr ⟨fun y hy hyc => absurd (hkp _ hx _ hy hyc.symm).1 hne,
+        fun hb => hb₂ _ hb (List.mem_map_of_mem hx)⟩
+  | born hc =>
+      exact not_cellFoot_iff.mpr ⟨fun y hy hyc => absurd (by rw [← hyc]; exact List.mem_map_of_mem hy) (hb₁ _ hc).1,
+        (hb₁ _ hc).2⟩
+
 omit [Ord D] in
 private theorem forEx_ok_of {α ε : Type} {f g : α → Except ε Unit} {l : List α}
     (h : forEx f l = .ok ()) (hfg : ∀ a ∈ l, f a = .ok () → g a = .ok ()) : forEx g l = .ok () :=
@@ -700,7 +664,8 @@ private theorem check_after {E : Env D} {w : World D} {t₁ t₂ : Turn D} {post
     (hfoot : RowsCommFoot t₁ t₂) (hfit : RowsFitTogether E w.rows t₁ t₂)
     (hwin : w.height + 2 ≤ t₂.validUntil) (hchg : t₁.charge + t₂.charge ≤ w.allowance)
     (hsteps : w.steps + 2 < Bounds.counterLimit)
-    (hk₁ : Checked E w t₁ posts₁) (hk₂ : Checked E w t₂ posts₂) (hnew : w.journalAt E t₂.txId = none) :
+    (hk₁ : Checked E w t₁ posts₁) (hk₂ : Checked E w t₂ posts₂) (hnew : w.journalAt E t₂.txId = none)
+    (ha₁ : World.admit E w t₁ = .ok (commit E w t₁ posts₁)) :
     check E (commit E w t₁ posts₁) t₂ = .ok posts₂ ∧
       ∀ s, (rowsAfter E (commit E w t₁ posts₁) t₂).1.get (rowSpec E) s =
         view t₂.rows s (view t₁.rows s (w.rows.get (rowSpec E) s)) := by
@@ -709,7 +674,7 @@ private theorem check_after {E : Env D} {w : World D} {t₁ t₂ : Turn D} {post
   have hframe : ∀ c, (c ∈ t₂.touches.map Touch.cell ∨ c ∈ createdIds t₂) →
       (commit E w t₁ posts₁).trie.get (trieSpec E) (.cell c) = w.trie.get (trieSpec E) (.cell c) := by
     intro c hc
-    apply commit_cell_frame hk₁
+    refine (admit_Frame ha₁).cells (.cell c) (not_cellFoot_iff.mpr ⟨?_, ?_⟩)
     · intro x hx hxc
       rcases hc with hc | hc
       · obtain ⟨y, hy, rfl⟩ := List.mem_map.mp hc
@@ -817,31 +782,6 @@ private theorem check_after {E : Env D} {w : World D} {t₁ t₂ : Turn D} {post
   exact ⟨(), hk₂.bounds, (), hwin', (), hjour, (), hk₂.shape, raw, hmap', (), hposts ▸ hk₂.value, (), hnul',
     (), hremain, (), hranges, rr, hrr, (), hposts ▸ hcharge, (), hcreates, (), hst, by rw [hposts]; rfl⟩
 
-/-- A cell neither written (non-`keep`) nor borne by a checked turn: not among its keys. -/
-private theorem keys_disjoint {E : Env D} {w : World D} {t₁ t₂ : Turn D} {posts₁ posts₂ : List (Post D)}
-    (hk₁ : Checked E w t₁ posts₁) (hk₂ : Checked E w t₂ posts₂) (hfoot : RowsCommFoot t₁ t₂) (c : D)
-    (h₁ : c ∈ (posts₁.map Post.pair).map Prod.fst ∨ c ∈ createdIds t₁)
-    (h₂ : c ∈ (posts₂.map Post.pair).map Prod.fst ∨ c ∈ createdIds t₂) : False := by
-  obtain ⟨-, hkp, -, -, hb₁, hb₂, -⟩ := hfoot
-  rcases h₁ with h₁ | h₁ <;> rcases h₂ with h₂ | h₂
-  · obtain ⟨p₁, hp₁, rfl⟩ := mem_postKeys h₁
-    obtain ⟨p₂, hp₂, he⟩ := mem_postKeys h₂
-    obtain ⟨x, hx, hxc, hxa⟩ := posts_touched hk₁ p₁ hp₁
-    obtain ⟨y, hy, hyc, -⟩ := posts_touched hk₂ p₂ hp₂
-    exact hxa (hkp x hx y hy (by rw [← hxc, ← he, hyc])).1
-  · obtain ⟨p₁, hp₁, rfl⟩ := mem_postKeys h₁
-    obtain ⟨x, hx, hxc, -⟩ := posts_touched hk₁ p₁ hp₁
-    exact hb₂ _ h₂ (hxc ▸ List.mem_map_of_mem hx)
-  · obtain ⟨p₂, hp₂, rfl⟩ := mem_postKeys h₂
-    obtain ⟨y, hy, hyc, -⟩ := posts_touched hk₂ p₂ hp₂
-    exact (hb₁ _ h₁).1 (hyc ▸ List.mem_map_of_mem hy)
-  · exact (hb₁ c h₁).2 h₂
-
-private theorem commitTrie_out {E : Env D} {w' : World D} {t : Turn D} {posts : List (Post D)} {c : D}
-    (h : ¬(c ∈ (posts.map Post.pair).map Prod.fst ∨ c ∈ createdIds t)) :
-    (commitTrie E w' t posts).get (trieSpec E) (.cell c) = w'.trie.get (trieSpec E) (.cell c) :=
-  commitTrie_entry (fun hp => h (.inl hp)) (by rw [bornEntries_fst]; exact fun hb => h (.inr hb))
-
 /-! ## Two rains on one bell -/
 
 /-- **Admission commutes (KERNEL-46 amendment 3).** Two turns admitted from `w`, whose footprints are
@@ -864,12 +804,16 @@ theorem admit_comm {E : Env D} {w w₁ w₂ : World D} {t₁ t₂ : Turn D}
           sm + insA p rel t₁.rows + insA p rel t₂.rows, l, cap, wd, rt) := by
   obtain ⟨posts₁, hk₁, rfl⟩ := admit_ok h₁
   obtain ⟨posts₂, hk₂, rfl⟩ := admit_ok h₂
-  obtain ⟨hc12, hv12⟩ := check_after hjc hrc hfoot hfit hwin₂ hchg hsteps hk₁ hk₂ (admit_new h₂)
+  obtain ⟨hc12, hv12⟩ := check_after hjc hrc hfoot hfit hwin₂ hchg hsteps hk₁ hk₂ (admit_new h₂) h₁
   obtain ⟨hc21, hv21⟩ := check_after hjc hrc (foot_symm hfoot) (fit_symm hfit) hwin₁ (by omega) hsteps
-    hk₂ hk₁ (admit_new h₁)
+    hk₂ hk₁ (admit_new h₁) h₂
   have hd := hfoot.2.2.2.2.2.2.2.2.2.1
+  have h₁₂ : World.admit E (commit E w t₁ posts₁) t₂ = .ok (commit E (commit E w t₁ posts₁) t₂ posts₂) := by
+    unfold World.admit; rw [hc12]
+  have h₂₁ : World.admit E (commit E w t₂ posts₂) t₁ = .ok (commit E (commit E w t₂ posts₂) t₁ posts₁) := by
+    unfold World.admit; rw [hc21]
   refine ⟨commit E (commit E w t₁ posts₁) t₂ posts₂, commit E (commit E w t₂ posts₂) t₁ posts₁,
-    by unfold World.admit; rw [hc12], by unfold World.admit; rw [hc21], fun s => ?_, fun s => ?_,
+    h₁₂, h₂₁, fun s => ?_, fun s => ?_,
     fun p rel c sm l cap wd rt hh => ?_⟩
   · show rowAt E (rowsAfter E _ t₂).1 s = rowAt E (rowsAfter E _ t₁).1 s
     unfold rowAt; rw [hv12, hv21, view_comm hd]
@@ -882,17 +826,10 @@ theorem admit_comm {E : Env D} {w w₁ w₂ : World D} {t₁ t₂ : Turn D}
         rw [commitTrie_nul, commitTrie_nul]
         by_cases h1 : n ∈ t₁.nullifiers <;> by_cases h2 : n ∈ t₂.nullifiers <;> simp [h1, h2]
     | cell c =>
-        by_cases hK2 : c ∈ (posts₂.map Post.pair).map Prod.fst ∨ c ∈ createdIds t₂
-        · have hK1 := fun h => keys_disjoint hk₁ hk₂ hfoot c h hK2
-          rw [commitTrie_base (w'' := w) hK2, commitTrie_out hK1]
-          rfl
-        · rw [commitTrie_out hK2]
-          show (commitTrie E w t₁ posts₁).get _ _ = _
-          by_cases hK1 : c ∈ (posts₁.map Post.pair).map Prod.fst ∨ c ∈ createdIds t₁
-          · exact commitTrie_base hK1
-          · rw [commitTrie_out hK1, commitTrie_out hK1]
-            show _ = (commitTrie E w t₂ posts₂).get _ _
-            rw [commitTrie_out hK2]
+        by_cases hf₁ : CellFoot t₁ (.cell c)
+        · have hf₂ := foot_cell_disjoint hfoot hf₁
+          exact ((admit_Frame h₁₂).cells _ hf₂).trans (commitTrie_congr ((admit_Frame h₂).cells _ hf₂).symm)
+        · exact (commitTrie_congr ((admit_Frame h₁).cells _ hf₁)).trans ((admit_Frame h₂₁).cells _ hf₁).symm
   · apply get_headOf
     show (rowsAfter E _ t₂).1.get _ _ = _
     rw [hv12, headOf_some hh, view_head, view_head]

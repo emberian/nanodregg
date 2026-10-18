@@ -293,6 +293,35 @@ theorem dropList_weight {E : Env D} :
       omega
 
 omit [Ord D] in
+/-- Removing listed entries one at a time: what is listed reads as absent, the rest as before. -/
+theorem dropList_get {E : Env D} :
+    ∀ (L : List (RowSlot D × RowLeaf)) (acc : Rows D × Nat), Trie.Canon (rowSpec E) 0 acc.1 →
+      (L.map Prod.fst).Nodup → (∀ q ∈ L, q ∈ acc.1.toList) → ∀ k,
+      (L.foldl (fun acc p =>
+          (Trie.retainAt (rowSpec E) (fun k _ => decide (k ≠ p.1)) (rowPath E p.1) acc.1, acc.2 + rowEntryWeight p)) acc).1.get (rowSpec E) k =
+        if k ∈ L.map Prod.fst then none else acc.1.get (rowSpec E) k
+  | [], acc, _, _, _, k => by simp
+  | p :: L, acc, hc, hn, hm, k => by
+      simp only [List.foldl_cons]
+      have hp : acc.1.get (rowSpec E) p.1 = some p.2 := Trie.get_of_mem (rowSpec E) hc.1 (hm p (by simp))
+      obtain ⟨-, hcan, hget⟩ := rowsWeight_retain hc hp (rowPath E p.1) (under_rowPath E p.1)
+      simp only [List.map_cons, List.nodup_cons] at hn
+      have hm' : ∀ q ∈ L, q ∈ (Trie.retainAt (rowSpec E) (fun k' _ => decide (k' ≠ p.1)) (rowPath E p.1)
+          acc.1).toList := by
+        intro q hq
+        have hq1 : q.1 ≠ p.1 := fun e => hn.1 (e ▸ List.mem_map_of_mem hq)
+        have hg := Trie.get_of_mem (rowSpec E) hc.1 (hm q (List.mem_cons_of_mem _ hq))
+        refine (Trie.mem_toList (rowSpec E) 0 _ hcan.1 q.1 q.2).mpr ?_
+        change Trie.T.get _ _ _ = _
+        rw [hget, if_neg hq1, hg]
+      refine (dropList_get L (Trie.retainAt (rowSpec E) (fun k' _ => decide (k' ≠ p.1)) (rowPath E p.1) acc.1,
+        acc.2 + rowEntryWeight p) hcan hn.2 hm' k).trans ?_
+      dsimp only
+      rw [hget]
+      simp only [List.map_cons, List.mem_cons]
+      by_cases h1 : k = p.1 <;> by_cases h2 : k ∈ L.map Prod.fst <;> simp [h1, h2]
+
+omit [Ord D] in
 /-- **`dropHeads` gives back exactly what it removes**, and the rows stay canonical. -/
 theorem dropHeads_weight {E : Env D} (t : Turn D) :
     ∀ (acc : Rows D × Nat), Trie.Canon (rowSpec E) 0 acc.1 →
@@ -317,6 +346,46 @@ theorem dropHeads_weight {E : Env D} (t : Turn D) :
         have h2 := ih _ h1.2
         exact ⟨h2.1.trans h1.1, h2.2⟩
       · exact ih acc hc
+
+omit [Ord D] in
+/-- `dropHeads` removes only heads of the parents the turn retires: every other slot reads as
+before (the listing it removes is filtered to `.head` keys of the retired cell, so no premise of
+`Checked` is needed). -/
+theorem dropHeads_get_out {E : Env D} (t : Turn D) {s : RowSlot D}
+    (hs : ∀ x ∈ t.touches, x.act = .retire → ∀ rel, s ≠ .head x.cell rel) :
+    ∀ (acc : Rows D × Nat), Trie.Canon (rowSpec E) 0 acc.1 →
+      (dropHeads E t acc).1.get (rowSpec E) s = acc.1.get (rowSpec E) s := by
+  unfold dropHeads
+  generalize t.touches = xs at hs
+  induction xs with
+  | nil => intro acc _; rfl
+  | cons x xs ih =>
+      intro acc hc
+      have hs' : ∀ y ∈ xs, y.act = .retire → ∀ rel, s ≠ .head y.cell rel :=
+        fun y hy => hs y (List.mem_cons_of_mem _ hy)
+      simp only [List.foldl_cons]
+      split
+      · rename_i hx
+        have hsub : ((under (rowSpec E) (E.bytes x.cell) 257 acc.1).filter fun p => match p.1 with
+            | .head q _ => decide (q = x.cell)
+            | .row _ => false).Sublist acc.1.toList :=
+          List.filter_sublist.trans (under_sublist (rowSpec E) (E.bytes x.cell) 257 acc.1)
+        have hnod := List.Sublist.nodup (hsub.map Prod.fst) (Trie.toList_nodup (rowSpec E) 0 acc.1 hc.1)
+        have hmem : ∀ q ∈ ((under (rowSpec E) (E.bytes x.cell) 257 acc.1).filter fun p => match p.1 with
+            | .head q _ => decide (q = x.cell)
+            | .row _ => false), q ∈ acc.1.toList := fun q hq => hsub.subset hq
+        refine (ih hs' _ (dropList_weight _ acc hc hnod hmem).2).trans ?_
+        rw [dropList_get _ acc hc hnod hmem s, if_neg]
+        intro hm
+        obtain ⟨⟨k, v⟩, hq, hks⟩ := List.mem_map.mp hm
+        have hq2 := (List.mem_filter.mp hq).2
+        cases k with
+        | head q rel =>
+            simp only [decide_eq_true_eq] at hq2
+            subst hq2
+            exact hs x (by simp) hx rel hks.symm
+        | row _ => simp at hq2
+      · exact ih hs' acc hc
 
 /-- **A turn's row touches move the rows' weight exactly**: by their growth, less what they give
 back; and the rows stay canonical. -/
@@ -445,14 +514,14 @@ theorem rowStep_pin {E : Env D} {w : World D} {t : Turn D} {r r' : Rows D} {x : 
         exact of_decide_eq_true (req_ok.mp hp)
     | declare _ _ _ _ => simp at h
 
-/-- A row touch writes only its own slot and heads: every other row reads as before. -/
-theorem rowStep_get_other {E : Env D} {w : World D} {t : Turn D} {r r' : Rows D} {x : RowTouch D}
-    (hr : Trie.Canon (rowSpec E) 0 r) (h : rowStep E w t r x = .ok r')
-    {key : RowKey D} (hne : x.slot ≠ .row key) :
-    r'.get (rowSpec E) (.row key) = r.get (rowSpec E) (.row key) := by
-  have hhr : ∀ (p : D) (rel : Nat), (RowSlot.row key : RowSlot D) ≠ .head p rel := fun _ _ h => by cases h
+/-- **A row touch writes only its footprint**: a `keep` nothing; any other act its own slot and, for
+a row, its relation's head. Every other slot reads as before. -/
+theorem rowStep_get_out {E : Env D} {w : World D} {t : Turn D} {r r' : Rows D} {x : RowTouch D}
+    (hr : Trie.Canon (rowSpec E) 0 r) (h : rowStep E w t r x = .ok r') {s : RowSlot D}
+    (hs : x.act ≠ .keep → s ≠ x.slot ∧ ∀ key, x.slot = .row key → s ≠ .head key.parent key.rel) :
+    r'.get (rowSpec E) s = r.get (rowSpec E) s := by
   obtain ⟨slot, seen, act⟩ := x
-  simp only at hne
+  simp only at hs
   cases slot with
   | head p rel =>
       cases act with
@@ -462,13 +531,12 @@ theorem rowStep_get_other {E : Env D} {w : World D} {t : Turn D} {r r' : Rows D}
           obtain ⟨⟨⟩, -, ⟨⟩, -, ⟨⟩, -, ⟨⟩, -, ⟨⟩, -, hw⟩ := h
           simp only [pure, Except.pure, Except.ok.injEq] at hw
           subst hw
-          exact Trie.get_insert_ne (rowSpec E) _ _ (hhr p rel)
+          exact Trie.get_insert_ne (rowSpec E) _ _ (hs fun e => by cases e).1
       | keep => simp [rowStep] at h
       | insert _ _ => simp [rowStep] at h
       | upsert _ _ => simp [rowStep] at h
       | retract => simp [rowStep] at h
   | row k0 =>
-      have hk : (RowSlot.row key : RowSlot D) ≠ .row k0 := fun e => hne e.symm
       unfold rowStep at h
       simp only [except_bind_ok] at h
       obtain ⟨⟨⟩, -, ⟨⟩, -, ⟨⟩, -, h⟩ := h
@@ -483,20 +551,23 @@ theorem rowStep_get_other {E : Env D} {w : World D} {t : Turn D} {r r' : Rows D}
             simp only [pure, Except.pure, Except.ok.injEq] at h
             subst h; rfl
         | insert amt v =>
+            obtain ⟨hk, hh⟩ := hs fun e => by cases e
             simp only [except_bind_ok] at h
             obtain ⟨⟨⟩, -, ⟨⟩, -, ⟨⟩, -, ⟨⟩, -, ⟨⟩, -, h⟩ := h
             simp only [pure, Except.pure, Except.ok.injEq] at h
             subst h
             unfold setHead
-            rw [Trie.get_insert_ne (rowSpec E) _ _ (hhr _ _), Trie.get_insert_ne (rowSpec E) _ _ hk]
+            rw [Trie.get_insert_ne (rowSpec E) _ _ (hh k0 rfl), Trie.get_insert_ne (rowSpec E) _ _ hk]
         | upsert amt v =>
+            obtain ⟨hk, hh⟩ := hs fun e => by cases e
             simp only [except_bind_ok] at h
             obtain ⟨⟨⟩, -, ⟨⟩, -, ⟨⟩, -, ⟨⟩, -, h⟩ := h
             simp only [pure, Except.pure, Except.ok.injEq] at h
             subst h
             unfold setHead
-            rw [Trie.get_insert_ne (rowSpec E) _ _ (hhr _ _), Trie.get_insert_ne (rowSpec E) _ _ hk]
+            rw [Trie.get_insert_ne (rowSpec E) _ _ (hh k0 rfl), Trie.get_insert_ne (rowSpec E) _ _ hk]
         | retract =>
+            obtain ⟨hk, hh⟩ := hs fun e => by cases e
             simp only [except_bind_ok] at h
             obtain ⟨⟨⟩, -, ⟨⟩, -, h⟩ := h
             split at h
@@ -506,9 +577,29 @@ theorem rowStep_get_other {E : Env D} {w : World D} {t : Turn D} {r r' : Rows D}
               have hc' : r.get (rowSpec E) (.row k0) = some (.row a val) := hc
               obtain ⟨-, -, hget⟩ := rowsWeight_retain hr hc' (rowPath E (.row k0)) (under_rowPath E (.row k0))
               unfold setHead
-              rw [Trie.get_insert_ne (rowSpec E) _ _ (hhr _ _), hget, if_neg hk]
+              rw [Trie.get_insert_ne (rowSpec E) _ _ (hh k0 rfl), hget, if_neg hk]
             · simp at h
         | declare _ _ _ _ => simp at h
+
+/-- Every row touch of a turn, in order: a slot outside all their footprints reads as before. -/
+theorem foldRows_get_out {E : Env D} {w : World D} {t : Turn D} {s : RowSlot D} :
+    ∀ (l : List (RowTouch D)) (acc rr : Rows D × Nat), Trie.Canon (rowSpec E) 0 acc.1 →
+      l.foldlM (rowStepFreed E w t) acc = .ok rr →
+      (∀ x ∈ l, x.act ≠ .keep → s ≠ x.slot ∧ ∀ key, x.slot = .row key → s ≠ .head key.parent key.rel) →
+      rr.1.get (rowSpec E) s = acc.1.get (rowSpec E) s
+  | [], acc, rr, _, h, _ => by
+      simp only [List.foldlM_nil, pure, Except.pure, Except.ok.injEq] at h
+      subst h; rfl
+  | x :: rest, acc, rr, hc, h, hs => by
+      rw [List.foldlM_cons, except_bind_ok] at h
+      obtain ⟨acc', h1, h2⟩ := h
+      unfold rowStepFreed at h1
+      rw [except_bind_ok] at h1
+      obtain ⟨r1, hstep, he⟩ := h1
+      simp only [pure, Except.pure, Except.ok.injEq] at he
+      subst he
+      exact (foldRows_get_out rest _ rr (rowStep_weight hc hstep).2 h2
+        fun y hy => hs y (List.mem_cons_of_mem _ hy)).trans (rowStep_get_out hc hstep (hs x (by simp)))
 
 theorem foldRows_pins {E : Env D} {w : World D} {t : Turn D} :
     ∀ (l : List (RowTouch D)) (acc rr : Rows D × Nat), Trie.Canon (rowSpec E) 0 acc.1 →
@@ -532,7 +623,7 @@ theorem foldRows_pins {E : Env D} {w : World D} {t : Turn D} :
         have hne : y.slot ≠ .row key := by
           intro e; apply hn.1; rw [e, ← hs]; exact List.mem_map_of_mem hx'
         unfold rowAt at ih ⊢
-        rw [← rowStep_get_other hc hstep hne]
+        rw [← rowStep_get_out (s := .row key) hc hstep fun _ => ⟨fun e => hne e.symm, fun _ _ e => by cases e⟩]
         exact ih
 
 omit [Ord D] in
