@@ -116,6 +116,6 @@ omit [DecidableEq D] in
 /-- The carried state of a fitting World is in the codec's domain. -/
 theorem carried_fits {E : Env D} {PD : D → Prop} {w : World D} (hw : World.CodecFits E PD w) :
     Carried.CodecFits E PD w.carried :=
-  ⟨hw.1, hw.2.2.2.2.1, hw.2.2.1, hw.2.1, hw.2.2.2.2.2.2⟩
+  ⟨hw.1, Nat.lt_of_le_of_lt (Nat.le_add_left _ _) hw.2.2.2.2.1, hw.2.2.1, hw.2.1, hw.2.2.2.2.2.2⟩
 
 end Nanodregg.Codec.Kernel

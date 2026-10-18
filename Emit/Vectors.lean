@@ -205,6 +205,14 @@ def digest : G Digest := do
   for _ in [0:32] do b := b.push (← below 256).toUInt8
   return (Digest.ofBytes? b).getD Digest.zero
 
+/-- `kernel/world-budget`'s vectors: two drawn Worlds, then a third at the budget's boundary (storage plus
+allowance exactly 2^64 − 1, read back) and the same World one past it (refused `kernel/world-budget` by name,
+cv 01a14ba9-cbf4). Every counter of the refused one still fits its `u64`: only the sum is over. -/
+def worldVecs : G (List (World Sim.D)) := do
+  let drawn ← each 2 fun _ => Vectors.world
+  let w ← Vectors.world
+  return drawn ++ [{ w with allowance := 2 ^ 64 - 1 - w.weight }, { w with allowance := 2 ^ 64 - w.weight }]
+
 def sites : List Site :=
   [ site "i64" Stream.i64 (each 2 fun _ => (·.toInt64) <$> u64) text,
     site "bool" Stream.bool (pure [false, true]) text,
@@ -229,7 +237,7 @@ def sites : List Site :=
     site "kernel/journal-order" (journalTrie Sim.env Sim.dc)
       (each 2 fun _ => do return journalOf (← journal ((← below 1000) + 3))) (fun t => text t.toList),
     site "kernel/journal" (journalWire Sim.env Sim.dc) (each 2 fun _ => toWire <$> Vectors.world) printWire,
-    site "kernel/world" (Codec.Kernel.world Sim.env Sim.dc) (each 2 fun _ => Vectors.world) printWorld,
+    site "kernel/world-budget" (Codec.Kernel.world Sim.env Sim.dc) worldVecs printWorld,
     site "kernel/carried-journal" (carriedJournalWire Sim.env Sim.dc)
       (each 2 fun _ => carriedToWire <$> Vectors.carried) printCarriedWire,
     site "kernel/carried" (Codec.Kernel.carried Sim.env Sim.dc) (each 2 fun _ => Vectors.carried) printCarried,

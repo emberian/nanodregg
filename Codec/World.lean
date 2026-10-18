@@ -108,9 +108,12 @@ def toWire (w : World D) : WorldWire D :=
 def ofWire (x : WorldWire D) : World D := ⟨x.1, x.2.1, x.2.2.1, x.2.2.2.1, x.2.2.2.2.1, x.2.2.2.2.2⟩
 
 /-- The checkpoint: the World's parts, in canonical order, refused `kernel/journal` unless its journal
-is the window's. -/
+is the window's, and `kernel/world-budget` unless its storage plus allowance is below 2^64 (the bound genesis
+and carry check and admission conserves, KERNEL's `fold_budget_lt`; past it a retirement's credit
+would carry the allowance out of its `u64`, cv 01a14ba9-cbf4). -/
 def world [DecidableEq D] (E : Env D) (dc : Stream D) : Stream (World D) :=
-  refine "kernel/world" (journalWire E dc) (fun x => some (ofWire x)) toWire
+  refine "kernel/world-budget" (journalWire E dc)
+    (fun x => if cellsWeight x.1 + x.2.2.2.2.1 < 2 ^ 64 then some (ofWire x) else none) toWire
 
 /-- A log segment's batch record: at most `max` turns, each with the two roots after it, the cells' and
 the journal's (HOST-29, KERNEL-41: `chainNext` commits both, so the record's end chain is derivable and

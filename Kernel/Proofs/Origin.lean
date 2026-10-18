@@ -50,12 +50,15 @@ theorem genesis_chain (X : Ctx D) (name nonce : ByteArray) (allowance : Nat) (fo
     (genesisWorld X name nonce allowance founders).chain =
       World.genesisChain X.env (genesisWorld X name nonce allowance founders).origin := rfl
 
-/-- A genesis input within the raw codec's bounds (every length at most `Bounds.eventBytesMax`,
-the allowance below 2^64). `genesis` refuses by name outside it (`genesis_ok`). -/
+/-- A genesis input within the raw codec's bounds (every length at most `Bounds.eventBytesMax`) whose
+allowance plus the genesis World's storage is below 2^64 (so the allowance is, and `fold_conserves`
+keeps the sum below it on every World the genesis reaches: `Budget.fold_budget_lt`). `genesis`
+refuses by name outside it (`genesis_ok`). -/
 def GenesisFits (X : Ctx D) (name nonce : ByteArray) (allowance : Nat) (founders : List (ByteArray × D)) : Prop :=
-  name.size ≤ Bounds.eventBytesMax ∧ nonce.size ≤ Bounds.eventBytesMax ∧ allowance < 2 ^ 64 ∧
+  name.size ≤ Bounds.eventBytesMax ∧ nonce.size ≤ Bounds.eventBytesMax ∧
     founders.length ≤ Bounds.eventBytesMax ∧
-      ∀ f ∈ founders, f.1.size ≤ Bounds.eventBytesMax ∧ (X.env.bytes f.2).size ≤ Bounds.eventBytesMax
+    (∀ f ∈ founders, f.1.size ≤ Bounds.eventBytesMax ∧ (X.env.bytes f.2).size ≤ Bounds.eventBytesMax) ∧
+    (genesisWorld X name nonce allowance founders).weight + allowance < 2 ^ 64
 
 omit [Ord D] [DecidableEq D] in
 /-- Distinct refusals have distinct wire names: equal names, same constructor. -/
@@ -75,13 +78,18 @@ theorem checkFounders_ok {X : Ctx D} : ∀ {i : Nat} {fs : List (ByteArray × D)
       simp only [checkFounders, req_bind_ok, decide_eq_true_eq, List.mem_cons, forall_eq_or_imp]
       rw [checkFounders_ok, and_assoc]
 
-omit [Ord D] [DecidableEq D] in
 /-- **The genesis check is `GenesisFits`**, clause by clause. -/
 theorem checkGenesis_ok {X : Ctx D} {name nonce : ByteArray} {allowance : Nat} {founders : List (ByteArray × D)} :
     checkGenesis X name nonce allowance founders = .ok () ↔ GenesisFits X name nonce allowance founders := by
   have hc : Bounds.counterLimit = 2 ^ 64 := by decide
-  simp only [checkGenesis, req_bind_ok, decide_eq_true_eq, checkFounders_ok, hc]
-  exact Iff.rfl
+  simp only [checkGenesis, req_bind_ok, decide_eq_true_eq, hc]
+  simp only [except_bind_ok, req_ok, decide_eq_true_eq]
+  unfold GenesisFits
+  constructor
+  · rintro ⟨h1, h2, h3, ⟨⟩, h4, h5⟩
+    exact ⟨h1, h2, h3, checkFounders_ok.mp h4, h5⟩
+  · rintro ⟨h1, h2, h3, h4, h5⟩
+    exact ⟨h1, h2, h3, (), checkFounders_ok.mpr h4, h5⟩
 
 /-- **Genesis is checked** (KERNEL-31): it returns a World exactly on a `GenesisFits` input, and
 that World is `genesisWorld`. Every theorem about `genesisWorld` is a theorem about what `genesis`
@@ -107,15 +115,14 @@ theorem genesisInput_lawfulOn :
     (product_lawfulOn nat64_lawfulOn (rawList_lawfulOn (product_lawfulOn (rawBytes_lawfulOn _ (by decide))
       (rawBytes_lawfulOn _ (by decide))) _ (by decide))))
 
-omit [Ord D] [DecidableEq D] in
 theorem inputOf_fits {X : Ctx D} {name nonce : ByteArray} {allowance : Nat} {founders : List (ByteArray × D)}
     (h : GenesisFits X name nonce allowance founders) :
     let v := inputOf X name nonce allowance founders
     v.1.size ≤ Bounds.eventBytesMax ∧ (v.2.1.size ≤ Bounds.eventBytesMax ∧
       (v.2.2.1 < 2 ^ 64 ∧ (v.2.2.2.length ≤ Bounds.eventBytesMax ∧
         ∀ x ∈ v.2.2.2, x.1.size ≤ Bounds.eventBytesMax ∧ x.2.size ≤ Bounds.eventBytesMax))) := by
-  obtain ⟨h1, h2, h3, h4, h5⟩ := h
-  refine ⟨h1, h2, h3, by simpa [inputOf] using h4, ?_⟩
+  obtain ⟨h1, h2, h4, h5, h3⟩ := h
+  refine ⟨h1, h2, by simp only [inputOf]; omega, by simpa [inputOf] using h4, ?_⟩
   intro x hx
   simp only [inputOf, List.mem_map] at hx
   obtain ⟨f, hf, rfl⟩ := hx
@@ -158,7 +165,6 @@ theorem sum_inl_ne_inr {α β : Type} {P : α → Prop} {Q : β → Prop} {a : S
     Array.getElem?_append_left (by simp [u8, Stream.bytes])] at this
   simp [u8, Stream.bytes] at this
 
-omit [DecidableEq D] in
 /-- **Genesis commits to everything it was made from.** Two geneses with equal origins had equal
 names, nonces, allowances and founders (keys and next-key digests, in order), or the origin hash
 has a collision. -/

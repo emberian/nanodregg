@@ -1724,3 +1724,44 @@ actually take.
 **Meta-critique.** The call message was left bare because the envelope came later and added its own domain, a familiar pattern: the newer protocol is careful, and the older one is assumed safe because it was first.
 
 **Flag day.** Every signed call changes, and so does every rotation (signNext). No codec, tag or vector moves. Rows and kernel-sim re-run, and every Store re-geneses, because a log of old-signed calls re-verifies `badSignature` on replay and at audit.
+
+## KERNEL-43 · What bounds the allowance is storage PLUS allowance: genesis, carry and the World codec check the sum, and every reached World keeps it below 2^64 (KERNEL-13, 2026-10-18; cv 01a14ba9-cbf4, HOST-11's proof lane, ROOT ruling)
+**Defect.** `commit` sets `allowance := allowance + credit − charge`, and a retirement credits the retired cell's whole weight. `GenesisFits` and `CarryFits` bounded only `allowance < 2^64`. So `host import` of a carried file with allowance 2^64 − 1 beside a heavy live cell, followed by one light turn retiring that cell, left the allowance at 2^64 or past it. That is outside the World codec's `u64`: the next seal writes a base that does not read back, and export refuses. kernel-sim measured it at the deployed parameters: arm `carry-budget-plant:overflow` builds that carry unchecked (`carryWorld`) and reaches the overflow with one forged retire on every seed. `host genesis` was safe, since `allowanceMax` is 2^27.
+
+**Decision.**
+- `GenesisFits`: `(genesisWorld …).weight + allowance < 2^64`, refused `allowanceTooLarge`. It is the LAST clause and the last check (its constructor moved to the end), so the World is weighed only after every founder is within bounds.
+- `CarryFits`: `cellsWeight c.trie + c.allowance < 2^64`, refused `allowanceTooLarge`.
+- CODEC's `World.CodecFits`: `w.weight + w.allowance < 2^64`. The World refine, renamed `kernel/world` → `kernel/world-budget` (its tag moves), refuses a World whose sum is over, by name.
+- In each, the sum REPLACES the old allowance-only clause, which it implies. There is one clause, not two.
+- `Kernel.Proofs.Budget`:
+  - `fold_budget_lt` (from `fold_conserves`), `genesis_budget`, `carry_budget`, `genesis_fold_budget_lt` (no premise);
+  - `carry_fold_budget_lt` (premises: the carried trie Canon and Slotted, which the carried codec gives on import);
+  - `deployed_budget_lt`: every World reached from a genesis, or from a carry of a World a genesis reached, with no premise.
+- HOST's `Kept` gains the sum, kept by `admit_conserves`, so `openWith_exportFile_ok` loses `hallow` and has no premise.
+
+**Teeth.**
+- kernel-sim, in plantedArms:
+  - `carry-budget:allowanceTooLarge`: the crafted carry is refused;
+  - `carry-budget-edge:ok`: at sum 2^64 − 1 the carry is admitted, at least one light retire on it is admitted, and every one stays below 2^64 (the "stays below" half is `admit_conserves` of the same code and cannot go red alone; the arm's tooth is the boundary admission);
+  - `carry-budget-plant:overflow`: the unchecked carry overflows, so the probe fails unless the defect is real at these parameters.
+- Mutation (checkCarry back to allowance-only): 64/64 seeds FAIL with `probe carry-budget: an allowance of 2^64 - 1 beside live cells was carried`.
+- Codec vectors `kernel/world-budget` 2 and 3: a World at sum exactly 2^64 − 1 reads back, and the same World one past it is `refused … "kernel/world-budget"`, though every counter in it fits its `u64`.
+- `Codec.Kernel.world_decode_wire_overBudget` states the refusal for every wire value.
+
+**Critique.**
+- `checkGenesis` builds the genesis World to weigh it, and `genesis` builds it again to return it. That is O(founders) hashing, once per World, and it is named, not hidden. The alternative was a founder-weight formula proved ≥ the built World's weight: a second shape of one number.
+- `allowanceTooLarge` now means "the allowance is too large for this storage". The meaning widened under the same wire name. A new name (`budgetTooLarge`) would have been more exact, at the cost of a new name in every refusal table, for a clause that replaced the old one.
+- The first draft kept the `kernel/world` tag, calling the change "a narrowing, not a relabel", and planned that nothing would re-genesis. The vectors gate refused it: the two boundary vectors were "added under its unchanged tag". The gate was right. Bytes that decoded `ok` now decode `refused`, a change of meaning under the same bytes, and CODEC-28's rule is that this bumps the label. So the refinement was renamed `kernel/world-budget` and every Store re-geneses. That sentence is the gate earning its keep.
+- The decoder now computes `cellsWeight`: O(store) on a base read, which is already O(store).
+- The kernel's deployed theorem covers the lineage carry. The import of an arbitrary file reaches the bound through HOST's `Kept`, from the carried codec's canonicity. `checkCarry` itself does not check Canon, because the codec does.
+
+- Second-agent vacuity read (read-only reviewer): LAND on every theorem and arm. Its two findings are taken: the genesis budget check moved after the founder checks, and the edge arm now requires an admitted retire.
+
+**Meta-critique.** Every Fits predicate was written from the CODEC's shape: one `u64`, one clause, `x < 2^64`. The dynamics need a SUM, and nothing derived the bounds from what admission does to the fields. The same reading should be run on every counter admission moves. `height` is covered: one per turn, and `admit_height_lt` checks it. `charge` is checked per turn.
+
+**Flag day (`kernel!`).**
+- Statements change: `GenesisFits`, `CarryFits` and `World.CodecFits`, one clause each, replaced. `GenesisRefusal.allowanceTooLarge` moves last.
+- The World refine is renamed `kernel/world-budget`. Its tag moves, and so does every tag that embeds the World codec (`host/base/index-count`). Re-emitted: their codec vectors, with the boundary pair.
+- Refuses to load: every old Store base (its stamp names the old shape: `shapeMismatch`). Every Store re-geneses.
+- Also refused: a genesis or carry whose storage plus allowance is ≥ 2^64 (`allowanceTooLarge`), and a base World whose sum is ≥ 2^64 (`kernel/world-budget`).
+- WASTE rows unchanged.

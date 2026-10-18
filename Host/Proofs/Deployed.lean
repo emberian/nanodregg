@@ -19,15 +19,12 @@
   reopened World's carried bytes are the file's, so `importWith`'s `carryMismatch reopen` compare
   passes, with no premise beyond the import's and genesis's own success (the carried journal's
   window is the carried codec's `kernel/carried-journal`, added on HOST-39's finding);
-* `openWith_exportFile_ok` (HOST-28) — `host export` refuses no World the deployed open returns
-  whose allowance is below 2^64 (`hallow`, the ONE named premise): the base World is in the World
-  codec's domain because the codec read it (`kept_of_fits`), every record's admissions keep the
-  rest (`Kept`, `Record.foldlM_kept`), and the cell listing is below 2^24 leaves
-  (`openWith_listing_lt`: the base holds at most `baseRecordMax / 33` of them, and each leaf a
-  Turn adds costs 32 bytes of the tail `tailRead` bounds). `hallow` waits on cv 01a14ba9-cbf4
-  (KERNEL: `GenesisFits` / `CarryFits` / `World.CodecFits` must bound weight + allowance below
-  2^64); it is reachable without that, through `host import`: a carried allowance of 2^64 − 1 and
-  a light Turn that retires a heavy cell;
+* `openWith_exportFile_ok` (HOST-28) — `host export` refuses no World the deployed open returns,
+  no premise: the base World is in the World codec's domain because the codec read it
+  (`kept_of_fits`), every record's admissions keep the rest (`Kept`, `Record.foldlM_kept`; the
+  budget `weight + allowance < 2^64` by KERNEL's `admit_conserves`, cv 01a14ba9-cbf4), and the cell
+  listing is below 2^24 leaves (`openWith_listing_lt`: the base holds at most `baseRecordMax / 33`
+  of them, and each leaf a Turn adds costs 32 bytes of the tail `tailRead` bounds);
 * `openWith_journalOk` (KERNEL-41) — the World the deployed writer's open returns has a `JournalOk`
   journal (a canonical trie, every entry in its window, heights distinct): its base's World because
   the deployed World codec read it (`Codec.Deployed.world_get_journalOk`), every record after it by
@@ -42,6 +39,7 @@ import Host.Proofs.Backup
 import Host.Proofs.Genesis
 import Codec.Proofs.Deployed
 import Kernel.Proofs.JournalHead
+import Kernel.Proofs.Weight
 
 namespace Nanodregg.Host.Deployed
 
@@ -183,7 +181,7 @@ theorem founderEntries_length (o : D) (founders : List (ByteArray × D)) :
 /-- **The World `host genesis` makes is in the deployed World codec's domain**: its cells trie is
 canonical (`insertAll_canon`), every slot holds the leaf of its kind (`insertAll_fits`), every live
 cell fits the cell codec (KERNEL's `genesis_cellsFit`), it lists two entries per founder (within
-`worldMax`), its journal is empty, and its allowance is below 2^64 (`GenesisFits`). -/
+`worldMax`), its journal is empty, and its storage plus allowance is below 2^64 (`GenesisFits`). -/
 theorem genesisWorld_codecFits {name nonce : ByteArray} {allowance : Nat}
     {founders : List (ByteArray × D)} (hf : Receive.GenesisFits X name nonce allowance founders) :
     Codec.Kernel.World.CodecFits X.env (fun _ => True)
@@ -198,14 +196,14 @@ theorem genesisWorld_codecFits {name nonce : ByteArray} {allowance : Nat}
   have hlen := insertAll_length (E := X.env) (m := .empty)
     (founderEntries X (originOf X name nonce allowance founders) founders) (Trie.canon_empty _ 0).1
   rw [founderEntries_length] at hlen
-  have hfl := hf.2.2.2.1
+  have hfl := hf.2.2.1
   have hmem : ∀ p ∈ (Receive.genesisWorld X name nonce allowance founders).trie.toList,
       (Receive.genesisWorld X name nonce allowance founders).trie.get (trieSpec X.env) p.1 = some p.2 :=
     fun p hp => (Trie.mem_toList (trieSpec X.env) 0 _ hcanon.1 p.1 p.2).mp hp
   refine ⟨⟨⟨⟨?_, fun p hp => ⟨trivial, ?_⟩⟩, fun p hp => hslot _ _ (hmem p hp)⟩, hcanon⟩,
     ⟨⟨by simp [Receive.genesisWorld, World.genesis, Trie.T.toList], by simp [Receive.genesisWorld, World.genesis, Trie.T.toList]⟩,
       Trie.canon_empty _ 0⟩,
-    by simp [Receive.genesisWorld, World.genesis], trivial, hf.2.2.1, trivial,
+    by simp [Receive.genesisWorld, World.genesis], trivial, hf.2.2.2.2, trivial,
     journalFits_of_ok (genesisWorld_journalOk X name nonce allowance founders)⟩
   · have : (Trie.T.empty : Cells D).toList.length = 0 := rfl
     show (insertAll X.env .empty _).toList.length ≤ Codec.Kernel.worldMax
@@ -263,9 +261,9 @@ theorem importWorld_codecFits {name nonce : ByteArray} {want : Codec.Digest} {f 
     (h : Carry.importWorld X Codec.Deployed.digestCodec name nonce want f = .ok (w₀, r)) :
     Codec.Kernel.World.CodecFits X.env (fun _ => True) w₀ := by
   obtain ⟨hr, hw⟩ := Carry.importWorld_ok h
-  obtain ⟨_, rfl⟩ := Receive.carry_ok.mp hw
+  obtain ⟨hcf, rfl⟩ := Receive.carry_ok.mp hw
   have hfit := read_carried_fits hr
-  exact ⟨hfit.1, hfit.2.2.2.1, hfit.2.2.1, trivial, hfit.2.1, trivial, hfit.2.2.2.2⟩
+  exact ⟨hfit.1, hfit.2.2.2.1, hfit.2.2.1, trivial, hcf.2.2.1, trivial, hfit.2.2.2.2⟩
 
 /-- **`host import`'s Store reopens to the World the import made, holding exactly the file's
 carried bytes**: so `importWith`'s `carryMismatch reopen` compare passes whenever genesis writes
@@ -289,15 +287,17 @@ theorem import_reopens (keys : Keys) {name nonce : ByteArray} {want : Codec.Dige
 /-! ## What admission keeps of the World codec's domain (HOST-28) -/
 
 /-- The parts of `World.CodecFits` every admission keeps: a canonical cells trie whose slots hold
-the leaves of their kinds and whose live cells fit the cell codec, a `JournalOk` journal, and a
-height below 2^64. The two it does not keep are the cell listing's length and the allowance. -/
+the leaves of their kinds and whose live cells fit the cell codec, a `JournalOk` journal, a height
+below 2^64, and storage plus allowance below 2^64 (`admit_conserves`). The one it does not keep is
+the cell listing's length. -/
 def Kept (w : World D) : Prop :=
-  w.Canon X.env ∧ w.Slotted X.env ∧ w.CellsFit Codec.Kernel.Cell.Fits X.env ∧ w.JournalOk X.env ∧ w.height < 2 ^ 64
+  w.Canon X.env ∧ w.Slotted X.env ∧ w.CellsFit Codec.Kernel.Cell.Fits X.env ∧ w.JournalOk X.env ∧
+    w.height < 2 ^ 64 ∧ w.weight + w.allowance < 2 ^ 64
 
 theorem kept_admit {w w' : World D} {t : Turn D} (hk : Kept w) (h : World.admit X.env w t = .ok w') :
     Kept w' :=
   ⟨admit_canon hk.1 h, admit_slotted hk.2.1 h, admit_cellsFit hk.2.2.1 h, admit_journalOk hk.2.2.2.1 h,
-    admit_height_lt h⟩
+    admit_height_lt h, by have := admit_conserves hk.1 hk.2.1 h; have := hk.2.2.2.2.2; omega⟩
 
 theorem kept_fold : ∀ {w w' : World D} {l : List (Turn D)}, Kept w → World.fold X.env w l = .ok w' → Kept w'
   | w, w', [], hk, h => by simp [World.fold] at h; subst h; exact hk
@@ -321,7 +321,7 @@ theorem Record.foldlM_kept : ∀ {w w' : World D} {rs : List ByteArray}, Kept w 
 /-- A World in the World codec's domain is `Kept`. -/
 theorem kept_of_fits {w : World D} (hf : Codec.Kernel.World.CodecFits X.env (fun _ => True) w) : Kept w := by
   refine ⟨hf.1.2, fun s l hg => hf.1.1.2 (s, l) ((Trie.mem_toList (trieSpec X.env) 0 w.trie hf.1.2.1 s l).mpr hg),
-    fun s l hg => ?_, journalOk_of_fits hf.2.1.2 hf.2.2.2.2.2.2, hf.2.2.1⟩
+    fun s l hg => ?_, journalOk_of_fits hf.2.1.2 hf.2.2.2.2.2.2, hf.2.2.1, hf.2.2.2.2.1⟩
   have hl := (hf.1.1.1.2 (s, l) ((Trie.mem_toList (trieSpec X.env) 0 w.trie hf.1.2.1 s l).mpr hg)).2
   cases l with
   | entry e =>
@@ -330,16 +330,15 @@ theorem kept_of_fits {w : World D} (hf : Codec.Kernel.World.CodecFits X.env (fun
     | tomb => trivial
   | spent => trivial
 
-/-- A `Kept` World whose cell listing is within `worldMax` and whose allowance is below 2^64 is in
-the World codec's domain. -/
-theorem fits_of_kept {w : World D} (hk : Kept w) (hcount : w.trie.toList.length ≤ Codec.Kernel.worldMax)
-    (hallow : w.allowance < 2 ^ 64) : Codec.Kernel.World.CodecFits X.env (fun _ => True) w := by
+/-- A `Kept` World whose cell listing is within `worldMax` is in the World codec's domain. -/
+theorem fits_of_kept {w : World D} (hk : Kept w) (hcount : w.trie.toList.length ≤ Codec.Kernel.worldMax) :
+    Codec.Kernel.World.CodecFits X.env (fun _ => True) w := by
   have hmem : ∀ p ∈ w.trie.toList, w.trie.get (trieSpec X.env) p.1 = some p.2 :=
     fun p hp => (Trie.mem_toList (trieSpec X.env) 0 _ hk.1.1 p.1 p.2).mp hp
   have hj := journal_bounded hk.2.2.2.1
   refine ⟨⟨⟨⟨hcount, fun p hp => ⟨trivial, ?_⟩⟩, fun p hp => hk.2.1 _ _ (hmem p hp)⟩, hk.1⟩,
     ⟨⟨by unfold Bounds.journalMax; omega, fun p hp => ⟨trivial, ?_, trivial⟩⟩, hk.2.2.2.1.1⟩,
-    hk.2.2.2.2, trivial, hallow, trivial, journalFits_of_ok hk.2.2.2.1⟩
+    hk.2.2.2.2.1, trivial, hk.2.2.2.2.2, trivial, journalFits_of_ok hk.2.2.2.1⟩
   · have hl := hk.2.2.1 _ _ (hmem p hp)
     obtain ⟨s, l⟩ := p
     cases l with
@@ -349,7 +348,7 @@ theorem fits_of_kept {w : World D} (hk : Kept w) (hcount : w.trie.toList.length 
       | tomb => trivial
     | spent => trivial
   · have := (hk.2.2.2.1.2.1 p.1 p.2 (journalAt_of_mem hk.2.2.2.1.1 hp)).1
-    have := hk.2.2.2.2
+    have := hk.2.2.2.2.1
     omega
 
 /-- The base World of a deployed open is `Kept`, and so is the World it opens to. -/
@@ -569,17 +568,13 @@ theorem openWith_listing_lt {keys : Keys} {file I S : ByteArray} {o : Opening (W
   unfold stampBytes at hbs
   omega
 
-/-- **`host export` refuses no World the deployed open returns whose allowance is below 2^64**
-(HOST-28's completeness, short of `hallow`). Every part of the carried codec's domain but the
-allowance is proved: the base World's, read by the World codec, kept by every admission (`Kept`),
-and the cell listing below 2^24 leaves (`openWith_listing_lt`). `hallow` is the ONE named premise
-and waits on cv 01a14ba9-cbf4: KERNEL's `GenesisFits` / `CarryFits` / `World.CodecFits` must bound
-weight + allowance below 2^64, which admission conserves. Without it the premise is reachable
-through `host import`: a carried allowance of 2^64 − 1 and a light Turn that retires a heavy cell. -/
+/-- **`host export` refuses no World the deployed open returns** (HOST-28's completeness), no
+premise: the base World's part of the carried codec's domain is read by the World codec, kept by
+every admission (`Kept`, the budget by `admit_conserves`: cv 01a14ba9-cbf4), and the cell listing is
+below 2^24 leaves (`openWith_listing_lt`). -/
 theorem openWith_exportFile_ok {keys : Keys} {file I S : ByteArray} {o : Opening (World D)}
     (h : Id.run (openWith keys c world recorder.mark originChain foldStep file S.size I.size
-      (segReader I) (segReader S)) = .ok o)
-    (hallow : o.opened.world.allowance < 2 ^ 64) :
+      (segReader I) (segReader S)) = .ok o) :
     Carry.exportFile X.env Codec.Deployed.digestCodec o.opened.world =
       .ok (Carry.file X.env Codec.Deployed.digestCodec o.opened.world) := by
   obtain ⟨_, _, _, _, _, _, _, hk⟩ := openWith_kept h
@@ -587,7 +582,7 @@ theorem openWith_exportFile_ok {keys : Keys} {file I S : ByteArray} {o : Opening
     have := openWith_listing_lt h
     unfold Codec.Kernel.worldMax
     omega
-  have hf := fits_of_kept hk hcount hallow
+  have hf := fits_of_kept hk hcount
   exact Carry.exportFile_ok Codec.Deployed.digestCodec_lawful.on (Codec.Kernel.carried_fits hf) trivial trivial
     hf.2.2.1
 

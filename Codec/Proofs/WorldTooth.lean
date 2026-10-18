@@ -71,6 +71,7 @@ theorem world_reads_windowed_journal :
   world_decode_wire_ok u64_lawful.on (jt_wireFits _ (by decide) (by decide) jt_window (by decide))
     (by show journalFits 7 (jt [(1, (6, 3)), (2, (7, 4))]).toList = true
         rw [jt_window]; simp [journalFits, List.mergeSort, ascendingNat, Bounds.windowMax])
+    (by decide)
 
 /-- The plant: an entry above the World's height (never pruned, `replayed` forever) is refused
 `kernel/journal` by name. -/

@@ -1399,6 +1399,57 @@ def probeCarry (P : Params D) (st : State D) : State D :=
       let fresh := signed P { st with host := w' } f f.key (S.pinsFor P.env w' [f.id]) (.create none [] [])
       carryExpect P st w' fresh "carry-new" "ok"
 
+/-- A forged turn that retires `id` (a live cell) and nothing else: the light turn of cv 01a14ba9-cbf4.
+Its charge is its own weight; its credit is the retired cell's whole weight. -/
+def retireTurn (P : Params D) (w : World D) (id : D) (cell : Cell) : Turn D :=
+  let txId := P.env.hash "nanodregg/sim/forge" ("retire-budget".toUTF8 ++ P.env.bytes w.chain)
+  let t0 : Turn D := ⟨txId, w.height + 1, w.height + 1, [⟨id, pinOf P.env (some cell), .retire⟩], [], [], 0,
+    ByteArray.empty⟩
+  { t0 with charge := t0.weight }
+
+/-- The budget probe (cv 01a14ba9-cbf4, `Kernel.Proofs.Budget`), at the end of every seed, on the
+Host's World `w`:
+* `carry-budget:allowanceTooLarge` — the crafted carry, `w`'s cells beside an allowance of 2^64 − 1,
+  is refused by the checked carry (`CarryFits`'s budget clause);
+* `carry-budget-edge:ok` — the same carry at allowance 2^64 − 1 − weight (the boundary) is admitted,
+  and the light retire on it leaves storage plus allowance below 2^64 (`carry_fold_budget_lt`);
+* `carry-budget-plant:overflow` — the PLANT: the crafted carry built UNCHECKED (`carryWorld`, what the
+  old allowance-only check admitted) and the light retire of its heaviest retirable live cell carries
+  the allowance to 2^64 or past it, outside the World codec's `u64`. The plant must reach the overflow,
+  or the tooth is vacuous and the probe fails. -/
+def probeCarryBudget (P : Params D) (st : State D) : State D :=
+  let X := P.ctx
+  let w := st.host
+  let top := 2 ^ 64
+  let live := (w.trie.toList.filterMap fun p => match p with
+    | (.cell id, .entry (.live c)) => some (id, c)
+    | _ => none).mergeSort (fun a b => b.2.weight ≤ a.2.weight)
+  let crafted : Carried D := { w.carried with allowance := top - 1 }
+  let st := match carry X worldName (nonceOf 9) w.origin crafted with
+    | .error .allowanceTooLarge =>
+        { st with refusedAsExpected := st.refusedAsExpected + 1,
+                  seen := "carry-budget:allowanceTooLarge" :: "allowanceTooLarge" :: st.seen }
+    | .error r => failWith st s!"probe carry-budget: expected allowanceTooLarge, got {r.name}"
+    | .ok _ => failWith st "probe carry-budget: an allowance of 2^64 - 1 beside live cells was carried"
+  let st := match carry X worldName (nonceOf 9) w.origin { w.carried with allowance := top - 1 - w.weight } with
+    | .error r => failWith st s!"probe carry-budget-edge: refused {r.name} at weight + allowance = 2^64 - 1"
+    | .ok we =>
+        let after := live.filterMap fun (id, c) => match World.admit P.env we (retireTurn P we id c) with
+          | .ok we' => some we'
+          | .error _ => none
+        if after.isEmpty then failWith st "probe carry-budget-edge: no light retire was admitted on the boundary carry"
+        else if after.any (fun we' => decide (top ≤ we'.weight + we'.allowance)) then
+          failWith st "probe carry-budget-edge: a retire carried storage plus allowance past 2^64"
+        else { st with refusedAsExpected := st.refusedAsExpected + 1, seen := "carry-budget-edge:ok" :: st.seen }
+  let unchecked := carryWorld X worldName (nonceOf 9) w.origin crafted
+  let reached := live.findSome? fun (id, c) => match World.admit P.env unchecked (retireTurn P unchecked id c) with
+    | .ok w' => if top ≤ w'.allowance then some w'.allowance else none
+    | .error _ => none
+  match reached with
+  | some _ => { st with refusedAsExpected := st.refusedAsExpected + 1,
+                        seen := "carry-budget-plant:overflow" :: st.seen }
+  | none => failWith st "probe carry-budget-plant: no light retire on the unchecked carry overflowed the allowance"
+
 def run (P : Params D) (seed : Nat) (steps : Nat) : State D :=
   let rng : Rng := ⟨seed.toUInt64 * 0x2545F4914F6CDD1D + 1⟩
   let fk : List (ByteArray × ByteArray) :=
@@ -1459,6 +1510,7 @@ def run (P : Params D) (seed : Nat) (steps : Nat) : State D :=
     | .error (i, f) => { st with failures := s!"audit refused at {i}: {vname f}" :: st.failures }
   let st := probeSigDomain P st
   let st := probeCarry P st
+  let st := probeCarryBudget P st
   -- KERNEL-24: the same log's calls against a second genesis (same name and founders, another
   -- nonce) are each refused `wrongWorld`; another nonce, or the founders swapped, is another chain
   match genesis X worldName (nonceOf (seed + 1000000)) 100000000 founders with
@@ -1521,7 +1573,7 @@ def plantedArms : List String :=
    "journal-proof-height:refused", "journal-proof-admitted:refused", "journal-proof-stale:refused",
    "journal-proof-cells-root:refused", "carry-name:nameTooLong", "carry-old-call:replayed",
    "carry-old-world:wrongWorld", "carry-new:ok", "sig-bare:badSignature", "hash-count:empty-per-insert", "retain:canonical",
-   "retain-plant:refuted"]
+   "retain-plant:refuted", "carry-budget:allowanceTooLarge", "carry-budget-edge:ok", "carry-budget-plant:overflow"]
 
 /-- `--seeds N` runs seeds `0 … N-1`; otherwise each argument is a seed. -/
 def parseSeeds : List String → List Nat

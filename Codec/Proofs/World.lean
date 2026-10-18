@@ -270,11 +270,12 @@ theorem journalWire_lawfulOn (E : Env D) {PD : D → Prop} {dc : Stream D} (hd :
 
 /-- A World within the wire's bounds and the kernel's invariants: a canonical cells trie whose slots
 hold the leaves of their kinds, a canonical journal trie of at most `Bounds.journalMax` entries,
-every digest in the digest codec's domain, every counter below 2^64, and a journal that is the
+every digest in the digest codec's domain, the height below 2^64, storage plus allowance below 2^64
+(so the allowance is, and admission keeps it: KERNEL's `fold_budget_lt`), and a journal that is the
 window's (`journalFits`; every reached World's, by KERNEL's `journalFits_of_ok`). -/
 def World.CodecFits (E : Env D) (PD : D → Prop) (w : World D) : Prop :=
   CellsFits E PD w.trie ∧ JournalTrieFits E PD w.journal ∧
-  w.height < 2 ^ 64 ∧ PD w.chain ∧ w.allowance < 2 ^ 64 ∧ PD w.origin ∧
+  w.height < 2 ^ 64 ∧ PD w.chain ∧ w.weight + w.allowance < 2 ^ 64 ∧ PD w.origin ∧
   journalFits w.height w.journal.toList = true
 
 /-- **The World codec is lawful on `World.CodecFits`**: decode ∘ bytes is the identity, and whatever
@@ -282,11 +283,23 @@ decodes is exactly its bytes. -/
 theorem world_lawfulOn (E : Env D) {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc) :
     LawfulOn (World.CodecFits E PD) (world E dc) := by
   unfold world
-  refine (refine_lawfulOn (journalWire_lawfulOn E hd) "kernel/world" ?_ ?_).mono ?_ ?_
-  · intro y _; rfl
-  · intro x y h; cases h; rfl
-  · intro w h; exact ⟨h.1.1, h.1.2.1, h.1.2.2.1, h.1.2.2.2.1, h.1.2.2.2.2.1, h.1.2.2.2.2.2, h.2⟩
-  · intro w h; exact ⟨⟨h.1, h.2.1, h.2.2.1, h.2.2.2.1, h.2.2.2.2.1, h.2.2.2.2.2.1⟩, h.2.2.2.2.2.2⟩
+  refine (refine_lawfulOn_where (journalWire_lawfulOn E hd) "kernel/world-budget"
+    (Q := fun w : World D => w.weight + w.allowance < 2 ^ 64) ?_ ?_ ?_).mono ?_ ?_
+  · intro y _ hq
+    show (if cellsWeight y.trie + y.allowance < 2 ^ 64 then some (ofWire (toWire y)) else none) = some y
+    rw [if_pos (show cellsWeight y.trie + y.allowance < 2 ^ 64 from hq)]; rfl
+  · intro x y h
+    split at h
+    · cases h; rfl
+    · cases h
+  · intro x y h
+    split at h
+    · rename_i hq; cases h; exact hq
+    · cases h
+  · intro w h; exact ⟨h.1.1.1, h.1.1.2.1, h.1.1.2.2.1, h.1.1.2.2.2.1, h.2, h.1.1.2.2.2.2.2, h.1.2⟩
+  · intro w h
+    exact ⟨⟨⟨h.1, h.2.1, h.2.2.1, h.2.2.2.1, Nat.lt_of_le_of_lt (Nat.le_add_left _ _) h.2.2.2.2.1,
+      h.2.2.2.2.2.1⟩, h.2.2.2.2.2.2⟩, h.2.2.2.2.1⟩
 
 theorem world_bytes (E : Env D) (dc : Stream D) (w : World D) :
     (world E dc).bytes w = (journalWire E dc).bytes (toWire w) := rfl
@@ -369,13 +382,25 @@ theorem world_decode_journalOk {E : Env D} {PD : D → Prop} {dc : Stream D} (hd
   let hf := world_decode_fits hd h
   journalOk_of_fits hf.2.1.2 hf.2.2.2.2.2.2
 
-/-- A wire value in the wire's domain whose journal is the window's decodes to its World. -/
+/-- A wire value in the wire's domain whose journal is the window's and whose storage plus allowance is
+below 2^64 decodes to its World. -/
 theorem world_decode_wire_ok {E : Env D} {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc)
-    {x : WorldWire D} (hx : WireFits E PD x) (hj : journalFits x.2.2.1 x.2.1.toList = true) :
+    {x : WorldWire D} (hx : WireFits E PD x) (hj : journalFits x.2.2.1 x.2.1.toList = true)
+    (hw : cellsWeight x.1 + x.2.2.2.2.1 < 2 ^ 64) :
     (world E dc).decode ((worldWire E dc).bytes x) = .ok (ofWire x) := by
   have hb : (worldWire E dc).bytes x = (world E dc).bytes (ofWire x) := rfl
   rw [hb]
-  exact world_decode_bytes hd ⟨hx.1, hx.2.1, hx.2.2.1, hx.2.2.2.1, hx.2.2.2.2.1, hx.2.2.2.2.2, hj⟩
+  exact world_decode_bytes hd ⟨hx.1, hx.2.1, hx.2.2.1, hx.2.2.2.1, hw, hx.2.2.2.2.2, hj⟩
+
+/-- **The budget refusal** (cv 01a14ba9-cbf4): a wire value in the wire's domain, its journal the
+window's, whose storage plus allowance is 2^64 or more, is refused `kernel/world-budget` by name, at offset 0,
+although every counter in it fits its `u64`. -/
+theorem world_decode_wire_overBudget {E : Env D} {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc)
+    {x : WorldWire D} (hx : WireFits E PD x) (hj : journalFits x.2.2.1 x.2.1.toList = true)
+    (hw : ¬ cellsWeight x.1 + x.2.2.2.2.1 < 2 ^ 64) :
+    (world E dc).decode ((worldWire E dc).bytes x) = .error (.rejected 0 "kernel/world-budget") := by
+  have hg := (worldWire_lawfulOn E hd).get_of_occurs x ((worldWire E dc).bytes x) 0 hx (occursAt_self _)
+  simp only [world, decode, journalWire, refine, hg, hj, ite_true, if_neg hw]
 
 /-- **The refusal**: the same wire value with a journal that is not the window's is refused
 `kernel/journal` by name, at offset 0. -/

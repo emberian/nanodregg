@@ -30,9 +30,11 @@ open Nanodregg.Kernel Nanodregg.Codec Nanodregg.Codec.Stream
 
 variable {D : Type} [Ord D]
 
-/-- A carry input within the raw codec's bounds. `carry` refuses by name outside it. -/
+/-- A carry input within the raw codec's bounds, whose allowance plus the carried cells' storage is
+below 2^64 (so the allowance is, and every World folded from the carry keeps the sum below it:
+`Budget.carry_fold_budget_lt`). `carry` refuses by name outside it. -/
 def CarryFits (X : Ctx D) (name nonce : ByteArray) (fromOrigin : D) (c : Carried D) : Prop :=
-  name.size ≤ Bounds.eventBytesMax ∧ nonce.size ≤ Bounds.eventBytesMax ∧ c.allowance < 2 ^ 64 ∧
+  name.size ≤ Bounds.eventBytesMax ∧ nonce.size ≤ Bounds.eventBytesMax ∧ cellsWeight c.trie + c.allowance < 2 ^ 64 ∧
     c.height < 2 ^ 64 ∧ c.journal.toList.length ≤ Bounds.journalMax ∧
     (X.env.bytes fromOrigin).size ≤ Bounds.eventBytesMax ∧
     (X.env.bytes (c.trie.hashOf (trieSpec X.env))).size ≤ Bounds.eventBytesMax ∧
@@ -110,7 +112,7 @@ theorem carry_fits_input {X : Ctx D} {name nonce : ByteArray} {fromOrigin : D} {
           ∀ x ∈ v.2.2.2.2.2.2, x.1.size ≤ Bounds.eventBytesMax ∧
             (x.2.1 < 2 ^ 64 ∧ x.2.2.size ≤ Bounds.eventBytesMax))))))) := by
   obtain ⟨h1, h2, h3, h4, h5, h6, h7, h8⟩ := h
-  refine ⟨h1, h2, h6, h7, h3, h4, ?_, ?_⟩
+  refine ⟨h1, h2, h6, h7, by simp only [carryInputOf]; omega, h4, ?_, ?_⟩
   · simp only [carryInputOf, List.length_map]; exact h5
   · intro x hx
     simp only [carryInputOf, List.mem_map] at hx

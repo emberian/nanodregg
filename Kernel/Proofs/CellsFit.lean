@@ -233,7 +233,7 @@ theorem genesis_cellsFit {X : Receive.Ctx D} {name nonce : ByteArray} {allowance
   rintro ⟨id, e⟩ hq
   obtain ⟨p, hp, ⟨_, he⟩ | ⟨_, he⟩⟩ := Receive.mem_founderEntries hq
   · subst he
-    have hk := (hf.2.2.2.2 p.1 (List.fst_mem_of_mem_zipIdx hp)).1
+    have hk := (hf.2.2.2.1 p.1 (List.fst_mem_of_mem_zipIdx hp)).1
     refine ⟨kM, slotsOf_fits (by simpa using l2) fun q hq => ?_⟩
     simp only [List.mem_cons, List.not_mem_nil, or_false] at hq
     rcases hq with rfl | rfl

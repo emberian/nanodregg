@@ -104,12 +104,15 @@ origin with no hash collision (KERNEL-31). -/
 inductive GenesisRefusal
   | nameTooLong
   | nonceTooLong
-  | allowanceTooLarge
   | tooManyFounders
   /-- founder `index`'s key is longer than `Bounds.eventBytesMax` -/
   | founderKeyTooLong (index : Nat)
   /-- founder `index`'s next-key digest bytes are longer than `Bounds.eventBytesMax` -/
   | founderNextTooLong (index : Nat)
+  /-- the allowance plus the genesis World's storage is not below 2^64: past it a retirement's credit
+  could carry the allowance out of the World codec's `u64` (cv 01a14ba9-cbf4). Checked last, so the
+  World is weighed only once every founder is within bounds. -/
+  | allowanceTooLarge
   deriving DecidableEq, Repr
 
 /-- The refusal's name on the wire: its constructor's, arguments dropped. -/
@@ -135,9 +138,9 @@ def checkGenesis (X : Ctx D) (name nonce : ByteArray) (allowance : Nat) (founder
     Except GenesisRefusal Unit := do
   req (name.size ≤ Bounds.eventBytesMax) .nameTooLong
   req (nonce.size ≤ Bounds.eventBytesMax) .nonceTooLong
-  req (allowance < Bounds.counterLimit) .allowanceTooLarge
   req (founders.length ≤ Bounds.eventBytesMax) .tooManyFounders
   checkFounders X 0 founders
+  req ((genesisWorld X name nonce allowance founders).weight + allowance < Bounds.counterLimit) .allowanceTooLarge
 
 /-- THE genesis: refused by name outside `GenesisFits`, else `genesisWorld` (`genesis_ok`). -/
 def genesis (X : Ctx D) (name nonce : ByteArray) (allowance : Nat) (founders : List (ByteArray × D)) :
@@ -168,6 +171,8 @@ these bounds `carryInput`'s raw codec truncates, so two different carries would 
 inductive CarryRefusal
   | nameTooLong
   | nonceTooLong
+  /-- the carried allowance plus the carried cells' storage is not below 2^64 (`fold_conserves` keeps
+  that sum, so no later retirement can overflow the allowance; cv 01a14ba9-cbf4) -/
   | allowanceTooLarge
   | heightTooLarge
   | journalTooLong
@@ -188,7 +193,7 @@ def CarryRefusal.name : CarryRefusal → String
 def checkCarry (X : Ctx D) (name nonce : ByteArray) (fromOrigin : D) (c : Carried D) : Except CarryRefusal Unit := do
   req (name.size ≤ Bounds.eventBytesMax) .nameTooLong
   req (nonce.size ≤ Bounds.eventBytesMax) .nonceTooLong
-  req (c.allowance < Bounds.counterLimit) .allowanceTooLarge
+  req (cellsWeight c.trie + c.allowance < Bounds.counterLimit) .allowanceTooLarge
   req (c.height < Bounds.counterLimit) .heightTooLarge
   req (c.journal.toList.length ≤ Bounds.journalMax) .journalTooLong
   req ((X.env.bytes fromOrigin).size ≤ Bounds.eventBytesMax &&
