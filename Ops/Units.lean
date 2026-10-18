@@ -356,6 +356,12 @@ def keybrokerAction : KeybrokerExit → String
     "the anchors file fails custody or is missing: reinstall deploy/tls/anchors.pem owned by `nd`, mode 0644 (RUNBOOK §2a)"
   | .anchorsDir => "a directory above the anchors file is writable by another or owned by another user: fix the chain (RUNBOOK §2a, Dir)"
   | .anchorsMalformed => "the anchors file is not certificates only: reinstall deploy/tls/anchors.pem (the unit's ExecStartPre checks the installed copy)"
+  | .pinsLink | .pinsNotRegular | .pinsOwner | .pinsMode | .pinsLength | .pinsIo =>
+    "the pins file fails custody: install deploy/tls/pins (or the operator's computed pins) owned by `nd`, mode 0644 (RUNBOOK §2a)"
+  | .pinsMissing =>
+    "the pins file is missing: the unit stops and is not restarted (fatal, in RestartPreventExitStatus); install deploy/tls/pins (or the operator's computed pins) owned by `nd`, mode 0644 (RUNBOOK §2a), then start the unit"
+  | .pinsDir => "a directory above the pins file is writable by another or owned by another user: fix the chain (RUNBOOK §2a, Dir)"
+  | .pinsMalformed => "the pins file is not `HOST SHA256-HEX` lines (64 lowercase hex digits, each line ended by LF) or repeats a pin: rewrite it by the RUNBOOK's recipe"
   | .tlsConfig => "rustls refused the client configuration: a build defect, report to HOSTING"
   | .socket => "a resident socket could not be bound (a stale socket, a missing directory): stop the unit, check the runtime directory, start it"
   | .sockDir => "the broker's socket directory fails its checks: /run/nd-broker must be nd:nd-hosted mode 02710 (tmpfiles), every directory above it owned by root, and each resident directory in it nd's, mode 02710 (HOSTING-17, RUNBOOK §2a)"
@@ -440,9 +446,12 @@ def Broker.sysusers (b : Broker) : Except Refusal String := do
     s!"u {b.hosted} - \"nanodregg hosted grains (never the key holder)\" - -",
     ""]
 
-/-- keybroker's argv, in its order: KEYS ANCHORS SOCKDIR PIDS UPSTREAM STORE OPERATOR PEER DECIDER. -/
+/-- keybroker's argv, in its order: KEYS ANCHORS PINS SOCKDIR PIDS UPSTREAM STORE OPERATOR PEER DECIDER.
+PINS (HOSTING-28) is the operator's: a provider's key rotation rewrites it with no rebuild, so no
+ExecStartPre compares it with the build's `deploy/tls/pins` (as one does the anchors). -/
 def Broker.exec (b : Broker) : List Arg :=
   [.lit (b.bin ++ "/keybroker"), .lit (b.etc ++ "/provider.key"), .lit (b.etc ++ "/anchors.pem"),
+   .lit (b.etc ++ "/pins"),
    .lit b.sockdir, .lit b.pids, .lit b.upstream, .lit b.store,
    .var "ND_OPERATOR", .var "ND_PEER", .lit (b.bin ++ "/hosting-broker")]
 

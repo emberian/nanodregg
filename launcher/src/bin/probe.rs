@@ -7,7 +7,8 @@
 //! - `read`, `write`, `list`: the file system;
 //! - `connect`: open a unix socket (a resident's broker socket, HOSTING-17);
 //! - `ask`: connect to a broker socket and send one ask (model `claude-m`, 10 tokens, `hello`),
-//!   then print `ok answer <status>` or `ok refused <broker refusal>`. Every byte received is
+//!   then print `ok reply <text>` (the reply text the Lean decider read, HOSTING-29), `ok status
+//!   <status>` or `ok refused <broker refusal>`. Every byte received is
 //!   appended to `<grain>/vol/probe.recv`, so the test can check that no key reached the grain;
 //! - `wait`: wait (at most `WAIT`) until the file PATH exists, so a test can sequence the grain
 //!   with what it does outside (`ok`, or `denied timeout`);
@@ -81,7 +82,8 @@ fn ask(path: &str, recv: &Path) -> String {
         return "denied recv".into();
     }
     match Answer::decode(&f) {
-        Ok(Answer::Answer { status, .. }) => format!("ok answer {status}"),
+        Ok(Answer::Reply { text }) => format!("ok reply {}", String::from_utf8_lossy(&text)),
+        Ok(Answer::Status { status }) => format!("ok status {status}"),
         Ok(Answer::Refused { broker_refusal }) => format!("ok refused {}", broker_refusal.name()),
         Err(e) => format!("denied decode {e:?}"),
     }

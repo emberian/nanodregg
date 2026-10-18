@@ -82,7 +82,9 @@ fn refusals_by_name_and_no_key_reaches_the_resident() {
     let keys = key_file(&d, 0o600);
     let pki = Pki::new();
     let anchors = pki.anchors(&d, 0o644);
-    let (up, seen) = upstream(Mode::Ok, pki.server(HOST, false));
+    let server = pki.server(HOST, false);
+    pki.pin(&d, &[&server]);
+    let (up, seen) = upstream(Mode::Ok, &server);
     // resident 01: model m (slot 7), n (slot 9: no key), and a twice (ambiguous)
     let w = World::genesis("main");
     let m = w.allowance(&w.r1, "claude-m", 7, 100_000);
@@ -150,12 +152,14 @@ fn refusals_by_name_and_no_key_reaches_the_resident() {
     ));
     let a = r.ask(&ask(b"claude-m", 10, b"hello"));
     match &a {
-        Answer::Answer { status, body } => {
-            assert_eq!(*status, 200);
-            assert_eq!(body.as_slice(), b"{\"ok\":true}");
-        }
+        // the reply TEXT Lean read from the provider's JSON, never the provider's body
+        Answer::Reply { text } => assert_eq!(text.as_slice(), REPLY),
         other => panic!("expected a grant, got {other:?}"),
     }
+    assert!(
+        !contains(&r.got, b"\"stop_reason\""),
+        "a byte of the provider's JSON reached the resident"
+    );
     assert!(is_refused(
         &r.ask(&ask(b"claude-n", 10, b"hello")),
         BrokerRefusal::KeyMissing
@@ -189,7 +193,7 @@ fn refusals_by_name_and_no_key_reaches_the_resident() {
     // the operator revokes the second `a`: the first, unchanged since the start window, grants
     w.run(&["invoke", &a2, "0", "(record)"]);
     match r.ask(&ask(b"claude-a", 10, b"hello")) {
-        Answer::Answer { status, .. } => assert_eq!(status, 200),
+        Answer::Reply { text } => assert_eq!(text.as_slice(), REPLY),
         other => panic!("after the revoke, expected a grant on a, got {other:?}"),
     }
 
@@ -222,7 +226,9 @@ fn an_echoed_key_is_withheld() {
     let keys = key_file(&d, 0o600);
     let pki = Pki::new();
     let anchors = pki.anchors(&d, 0o644);
-    let (up, seen) = upstream(Mode::Echo, pki.server(HOST, false));
+    let server = pki.server(HOST, false);
+    pki.pin(&d, &[&server]);
+    let (up, seen) = upstream(Mode::Echo, &server);
     let w = World::genesis("echo");
     w.allowance(&w.r1, "claude-m", 7, 100_000);
     let t_before = early_in_window();
@@ -472,7 +478,9 @@ fn an_unverified_upstream_is_refused_by_name_and_gets_no_byte() {
         ),
     ] {
         sockdir(&d.socks);
-        let (up, seen) = upstream(mode, cert);
+        // pinned, so the Truncate case meets the TLS close, never the pin
+        pki.pin(&d, &[&cert]);
+        let (up, seen) = upstream(mode, &cert);
         let t0 = now_ms();
         let b = start(&d, &keys, &anchors, &up, &w);
         next_window(t0);
@@ -487,7 +495,7 @@ fn an_unverified_upstream_is_refused_by_name_and_gets_no_byte() {
                 "truncate: no request arrived"
             );
             assert!(
-                !contains(&r.got, b"{\"ok\":true}"),
+                !contains(&r.got, REPLY),
                 "truncate: the unauthenticated answer was relayed"
             );
         } else {
@@ -693,7 +701,7 @@ fn a_peer_of_another_uid_or_group_is_refused_by_name() {
     let keys = key_file(&d, 0o600);
     let pki = Pki::new();
     let anchors = pki.anchors(&d, 0o644);
-    let (up, seen) = upstream(Mode::Ok, pki.server(HOST, false));
+    let (up, seen) = upstream(Mode::Ok, &pki.server(HOST, false));
     let w = World::genesis("peer");
     w.allowance(&w.r1, "claude-m", 7, 100_000);
     let (uid, gid) = me(&d);
@@ -705,7 +713,7 @@ fn a_peer_of_another_uid_or_group_is_refused_by_name() {
     // through an upstream of its own: whether that ask is the start window's overSpend or, if a
     // window boundary passed, a grant that calls upstream, is timing, and must not reach `seen`,
     // the refused peers' upstream (HOST-11 saw it red once).
-    let (up_control, _) = upstream(Mode::Ok, pki.server(HOST, false));
+    let (up_control, _) = upstream(Mode::Ok, &pki.server(HOST, false));
     let b = start(&d, &keys, &anchors, &up_control, &w);
     let a = first(&b);
     assert!(
@@ -806,4 +814,211 @@ fn a_decider_killed_by_a_signal_is_restarted_not_stopped() {
         Some(i32::from(keybroker_exit::DECIDER_SIGNALED)),
         "exit code"
     );
+}
+
+/// One grant through keybroker over an upstream answering as `mode`, its leaf pinned: the
+/// resident's answer, every byte it received, and what the upstream received.
+fn one_grant(d: &Scratch, pki: &Pki, w: &World, mode: Mode) -> (Answer, Vec<u8>, usize) {
+    let keys = key_file(d, 0o600);
+    let anchors = pki.anchors(d, 0o644);
+    let server = pki.server(HOST, false);
+    pki.pin(d, &[&server]);
+    sockdir(&d.socks);
+    let (up, seen) = upstream(mode, &server);
+    let t0 = now_ms();
+    let b = start(d, &keys, &anchors, &up, w);
+    next_window(t0);
+    let mut r = Resident::connect(&b);
+    let a = r.ask(&ask(b"claude-m", 10, b"hello"));
+    let n = seen.lock().unwrap().len();
+    (a, r.got, n)
+}
+
+/// HOSTING-29: the resident receives the reply TEXT the Lean decider read out of the provider's
+/// JSON, never the body. Another status is passed on as the status, its body withheld; a 200 body
+/// with no reply text is `replyMalformed`; a reply text that spells the key through JSON escapes
+/// (the raw body never holds the key's bytes) is `keyEchoed`; escapes reach the resident decoded.
+#[test]
+fn the_resident_receives_the_text_lean_read_never_the_body() {
+    let d = dir("reply");
+    let pki = Pki::new();
+    let w = World::genesis("reply");
+    w.allowance(&w.r1, "claude-m", 7, 100_000);
+    const LIMITED: &[u8] =
+        b"{\"type\":\"error\",\"error\":{\"type\":\"rate_limit_error\",\"message\":\"slow down\"}}";
+    let (a, got, n) = one_grant(&d, &pki, &w, Mode::Says(429, LIMITED));
+    assert!(matches!(a, Answer::Status { status: 429 }), "a 429: {a:?}");
+    assert!(
+        n == 1 && !contains(&got, b"slow down"),
+        "a 429's body reached the resident"
+    );
+    let (a, _, n) = one_grant(&d, &pki, &w, Mode::Says(200, b"{\"ok\":true}"));
+    assert!(
+        is_refused(&a, BrokerRefusal::ReplyMalformed) && n == 1,
+        "a body with no content: {a:?}"
+    );
+    const SPELLED: &[u8] =
+        b"{\"content\":[{\"type\":\"text\",\"text\":\"\\u0043ANARY-sk-0123456789abcdef\"}]}";
+    assert!(
+        !contains(SPELLED, KEY),
+        "control: the raw body holds no key bytes"
+    );
+    let (a, got, n) = one_grant(&d, &pki, &w, Mode::Says(200, SPELLED));
+    assert!(
+        is_refused(&a, BrokerRefusal::KeyEchoed) && n == 1,
+        "a reply spelling the key: {a:?}"
+    );
+    assert!(!contains(&got, KEY), "the spelled key reached the resident");
+    const ESCAPED: &[u8] =
+        b"{\"content\":[{\"type\":\"text\",\"text\":\"a\\nb \\u00e9 \\\"q\\\"\"}]}";
+    let (a, _, _) = one_grant(&d, &pki, &w, Mode::Says(200, ESCAPED));
+    match a {
+        Answer::Reply { text } => assert_eq!(text, "a\nb é \"q\"".as_bytes()),
+        other => panic!("escapes: {other:?}"),
+    }
+}
+
+/// HOSTING-28: after rustls has verified the chain, the leaf's key must be one the operator's PINS
+/// file names for Lean's host, or the call is refused `pinMismatch` before a request byte is
+/// written. Two upstreams with certificates from the same CA for the same name: the pinned one is
+/// answered, the other refused. A pin for another host, and the shipped production file (no pin),
+/// refuse the pinned one too.
+#[test]
+fn a_leaf_key_the_operator_did_not_pin_is_refused_before_a_byte() {
+    let d = dir("pin");
+    let keys = key_file(&d, 0o600);
+    let pki = Pki::new();
+    let anchors = pki.anchors(&d, 0o644);
+    let w = World::genesis("pin");
+    w.allowance(&w.r1, "claude-m", 7, 100_000);
+    let pinned = pki.server(HOST, false);
+    let other = pki.server(HOST, false);
+    assert_ne!(pinned.pin, other.pin, "control: two leaf keys");
+    let prod = fs::read(repo().join("deploy/tls/pins")).unwrap();
+    let cases: [(&str, &Server, Vec<u8>, bool); 4] = [
+        (
+            "the pinned leaf",
+            &pinned,
+            format!("{HOST} {}\n", pinned.pin).into_bytes(),
+            true,
+        ),
+        (
+            "another leaf, same CA and name",
+            &other,
+            format!("{HOST} {}\n", pinned.pin).into_bytes(),
+            false,
+        ),
+        (
+            "the leaf pinned for another host",
+            &pinned,
+            format!("other.example {}\n", pinned.pin).into_bytes(),
+            false,
+        ),
+        ("the shipped production pins", &pinned, prod, false),
+    ];
+    for (what, server, pins, ok) in cases {
+        sockdir(&d.socks);
+        pins_file(&d, &pins);
+        let (up, seen) = upstream(Mode::Ok, server);
+        let t0 = now_ms();
+        let b = start(&d, &keys, &anchors, &up, &w);
+        next_window(t0);
+        let mut r = Resident::connect(&b);
+        let a = r.ask(&ask(b"claude-m", 10, b"hello"));
+        let n = seen.lock().unwrap().len();
+        if ok {
+            assert!(
+                matches!(&a, Answer::Reply { text } if text == REPLY),
+                "{what}: {a:?}"
+            );
+            assert_eq!(n, 1, "{what}: the upstream was not called");
+        } else {
+            assert!(is_refused(&a, BrokerRefusal::PinMismatch), "{what}: {a:?}");
+            assert_eq!(n, 0, "{what}: the upstream received a request");
+        }
+        assert!(
+            !contains(&r.got, KEY),
+            "{what}: the key reached the resident"
+        );
+        drop(r);
+        drop(b);
+    }
+}
+
+/// HOSTING-28: the PINS file is read once at start under `custody::read_public`, strictly; each
+/// refusal ends keybroker by name with Lean's code, before any socket opens. CONTROL: an empty file
+/// and the shipped production file pass (keybroker goes on to its decider).
+#[test]
+fn a_bad_pins_file_stops_keybroker_by_name() {
+    use nanodregg_launcher::broker_generated::keybroker_exit as k;
+    let d = dir("pins");
+    let keys = key_file(&d, 0o600);
+    let pki = Pki::new();
+    let anchors = pki.anchors(&d, 0o644);
+    let pin = pki.server(HOST, false).pin;
+    let pins = d.join("pins");
+    let good = format!("{HOST} {pin}\n");
+    let write = |b: &[u8], mode: u32| {
+        let _ = fs::remove_file(&pins);
+        fs::write(&pins, b).unwrap();
+        fs::set_permissions(&pins, fs::Permissions::from_mode(mode)).unwrap();
+    };
+    let malformed: Vec<(&str, String)> = vec![
+        ("uppercase hex", format!("{HOST} {}\n", pin.to_uppercase())),
+        ("63 digits", format!("{HOST} {}\n", &pin[1..])),
+        ("no final line feed", format!("{HOST} {pin}")),
+        ("a pin given twice", format!("{good}{good}")),
+        ("two spaces", format!("{HOST}  {pin}\n")),
+        ("an empty line", format!("{good}\n")),
+        ("a comment", format!("# pins\n{good}")),
+    ];
+    for (what, text) in &malformed {
+        write(text.as_bytes(), 0o644);
+        let (err, got) = ends(&d, &keys, &anchors);
+        assert!(
+            err.contains("keybroker: pinsMalformed\n"),
+            "{what}: stderr: {err}"
+        );
+        assert_eq!(got, Some(i32::from(k::PINS_MALFORMED)), "{what}: exit code");
+    }
+    write(good.as_bytes(), 0o666);
+    let (err, got) = ends(&d, &keys, &anchors);
+    assert!(
+        err.contains("keybroker: pinsMode\n") && got == Some(i32::from(k::PINS_MODE)),
+        "0666: {err}"
+    );
+    let _ = fs::remove_file(&pins);
+    std::os::unix::fs::symlink(&anchors, &pins).unwrap();
+    let (err, got) = ends(&d, &keys, &anchors);
+    assert!(
+        err.contains("keybroker: pinsLink\n") && got == Some(i32::from(k::PINS_LINK)),
+        "link: {err}"
+    );
+    let _ = fs::remove_file(&pins);
+    let (err, got) = ends(&d, &keys, &anchors);
+    assert!(
+        err.contains("keybroker: pinsMissing\n") && got == Some(i32::from(k::PINS_MISSING)),
+        "missing: {err}"
+    );
+    assert!(!d.join("socks").join("01").exists(), "a socket was opened");
+    for (what, text) in [
+        ("empty", Vec::new()),
+        ("good", good.into_bytes()),
+        (
+            "production",
+            fs::read(repo().join("deploy/tls/pins")).unwrap(),
+        ),
+    ] {
+        write(&text, 0o644);
+        let (err, got) = ends(&d, &keys, &anchors);
+        assert!(
+            err.contains("keybroker: deciderRefused"),
+            "control {what}: stderr: {err}"
+        );
+        assert_eq!(
+            got,
+            Some(i32::from(k::DECIDER_REFUSED)),
+            "control {what}: exit code"
+        );
+    }
 }

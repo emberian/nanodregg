@@ -90,6 +90,16 @@ inductive KeybrokerExit where
   | anchorsIo
   /-- the anchor file is not valid certificates only (HOSTING-15) -/
   | anchorsMalformed
+  | pinsLink
+  | pinsNotRegular
+  | pinsOwner
+  | pinsMode
+  | pinsLength
+  | pinsDir
+  | pinsMissing
+  | pinsIo
+  /-- the pin file is not `HOST SHA256-HEX` lines, each ended by LF, or names a pin twice (HOSTING-28) -/
+  | pinsMalformed
   /-- rustls refused the client configuration: a defect of the build -/
   | tlsConfig
   /-- a resident socket could not be bound (a stale socket, a missing SOCKDIR) -/
@@ -116,7 +126,8 @@ namespace KeybrokerExit
 def all : List KeybrokerExit :=
   [usage, keyFileLink, keyFileNotRegular, keyFileOwner, keyFileMode, keyFileLength, keyFileDir,
    keyFileIo, keyFileFormat, anchorsLink, anchorsNotRegular, anchorsOwner, anchorsMode, anchorsLength,
-   anchorsDir, anchorsMissing, anchorsIo, anchorsMalformed, tlsConfig, socket, deciderRefused, pidFile,
+   anchorsDir, anchorsMissing, anchorsIo, anchorsMalformed, pinsLink, pinsNotRegular, pinsOwner, pinsMode,
+   pinsLength, pinsDir, pinsMissing, pinsIo, pinsMalformed, tlsConfig, socket, deciderRefused, pidFile,
    deciderSignaled, deciderLost, sockDir, deciderMechanism]
 
 def code : KeybrokerExit → Nat
@@ -126,6 +137,8 @@ def code : KeybrokerExit → Nat
   | anchorsLength => 93 | anchorsDir => 94 | anchorsMissing => 95 | anchorsIo => 96
   | anchorsMalformed => 97 | tlsConfig => 98 | socket => 99 | deciderRefused => 100 | pidFile => 103
   | deciderSignaled => 102 | deciderLost => 104 | sockDir => 105 | deciderMechanism => 79
+  | pinsLink => 140 | pinsNotRegular => 141 | pinsOwner => 142 | pinsMode => 143 | pinsLength => 144
+  | pinsDir => 145 | pinsMissing => 146 | pinsIo => 147 | pinsMalformed => 148
 
 /-- Every own end but a signalled decider is fatal: each is a file, an argument or the build, and
 a restart reads the same one. -/

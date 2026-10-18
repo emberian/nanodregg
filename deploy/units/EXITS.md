@@ -85,6 +85,15 @@ code space holds both tables: `host` (Host.Status, below 64) and nd-supervise's 
 | 95 | anchorsMissing | fatal | stopped (RestartPreventExitStatus) | the anchors file fails custody or is missing: reinstall deploy/tls/anchors.pem owned by `nd`, mode 0644 (RUNBOOK §2a) |
 | 96 | anchorsIo | fatal | stopped (RestartPreventExitStatus) | the anchors file fails custody or is missing: reinstall deploy/tls/anchors.pem owned by `nd`, mode 0644 (RUNBOOK §2a) |
 | 97 | anchorsMalformed | fatal | stopped (RestartPreventExitStatus) | the anchors file is not certificates only: reinstall deploy/tls/anchors.pem (the unit's ExecStartPre checks the installed copy) |
+| 140 | pinsLink | fatal | stopped (RestartPreventExitStatus) | the pins file fails custody: install deploy/tls/pins (or the operator's computed pins) owned by `nd`, mode 0644 (RUNBOOK §2a) |
+| 141 | pinsNotRegular | fatal | stopped (RestartPreventExitStatus) | the pins file fails custody: install deploy/tls/pins (or the operator's computed pins) owned by `nd`, mode 0644 (RUNBOOK §2a) |
+| 142 | pinsOwner | fatal | stopped (RestartPreventExitStatus) | the pins file fails custody: install deploy/tls/pins (or the operator's computed pins) owned by `nd`, mode 0644 (RUNBOOK §2a) |
+| 143 | pinsMode | fatal | stopped (RestartPreventExitStatus) | the pins file fails custody: install deploy/tls/pins (or the operator's computed pins) owned by `nd`, mode 0644 (RUNBOOK §2a) |
+| 144 | pinsLength | fatal | stopped (RestartPreventExitStatus) | the pins file fails custody: install deploy/tls/pins (or the operator's computed pins) owned by `nd`, mode 0644 (RUNBOOK §2a) |
+| 145 | pinsDir | fatal | stopped (RestartPreventExitStatus) | a directory above the pins file is writable by another or owned by another user: fix the chain (RUNBOOK §2a, Dir) |
+| 146 | pinsMissing | fatal | stopped (RestartPreventExitStatus) | the pins file is missing: the unit stops and is not restarted (fatal, in RestartPreventExitStatus); install deploy/tls/pins (or the operator's computed pins) owned by `nd`, mode 0644 (RUNBOOK §2a), then start the unit |
+| 147 | pinsIo | fatal | stopped (RestartPreventExitStatus) | the pins file fails custody: install deploy/tls/pins (or the operator's computed pins) owned by `nd`, mode 0644 (RUNBOOK §2a) |
+| 148 | pinsMalformed | fatal | stopped (RestartPreventExitStatus) | the pins file is not `HOST SHA256-HEX` lines (64 lowercase hex digits, each line ended by LF) or repeats a pin: rewrite it by the RUNBOOK's recipe |
 | 98 | tlsConfig | fatal | stopped (RestartPreventExitStatus) | rustls refused the client configuration: a build defect, report to HOSTING |
 | 99 | socket | fatal | stopped (RestartPreventExitStatus) | a resident socket could not be bound (a stale socket, a missing directory): stop the unit, check the runtime directory, start it |
 | 100 | deciderRefused | fatal | stopped (RestartPreventExitStatus) | the sandbox refused the decider's policy or could not spawn it: check the mechanism (deploy/live/README.md) and the DECIDER path |

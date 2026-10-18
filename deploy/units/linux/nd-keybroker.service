@@ -13,10 +13,10 @@ EnvironmentFile=/etc/nd/keybroker/keybroker.env
 RuntimeDirectory=nd-keybroker
 # the installed anchors must be the build's pinned roots, byte for byte, at every start (OPS-7)
 ExecStartPre=/opt/nd/bin/emit-anchors --check /etc/nd/keybroker/anchors.pem
-ExecStart=/opt/nd/bin/keybroker /etc/nd/keybroker/provider.key /etc/nd/keybroker/anchors.pem /run/nd-broker /run/nd-keybroker api.anthropic.com:443 /srv/nd/store ${ND_OPERATOR} ${ND_PEER} /opt/nd/bin/hosting-broker
+ExecStart=/opt/nd/bin/keybroker /etc/nd/keybroker/provider.key /etc/nd/keybroker/anchors.pem /etc/nd/keybroker/pins /run/nd-broker /run/nd-keybroker api.anthropic.com:443 /srv/nd/store ${ND_OPERATOR} ${ND_PEER} /opt/nd/bin/hosting-broker
 Restart=on-failure
 RestartSec=2
-RestartPreventExitStatus=70 71 72 73 75 76 78 7 80 81 82 83 84 85 86 87 88 89 90 91 92 93 94 95 96 97 98 99 100 103 104 105 79
+RestartPreventExitStatus=70 71 72 73 75 76 78 7 80 81 82 83 84 85 86 87 88 89 90 91 92 93 94 95 96 97 140 141 142 143 144 145 146 147 148 98 99 100 103 104 105 79
 UMask=0077
 NoNewPrivileges=yes
 # AF_NETLINK: bwrap --unshare-net brings up the decider sandbox loopback over NETLINK_ROUTE; without it

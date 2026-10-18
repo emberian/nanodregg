@@ -13,7 +13,9 @@ removed), whose socket names are the only ones keybroker serves (HOSTING-26).
 
 At the open, every live cell id is read (`Loop.allIds`, once). Then, per request, it reads a frame
 from stdin: a `decide` header (resident, atMs), followed by the resident's ask frame, or a
-`residents` question (atMs). It catches the tail up (at most `drainMax` reads, past which it ends
+`residents` question (atMs), or a `reply` (an upstream's status and body after a grant), answered
+by `Broker.reply` (the reply text Lean reads, the status, or `replyMalformed`: HOSTING-29) with no
+follow. For the other two it catches the tail up (at most `drainMax` reads, past which it ends
 `behind` rather than answer from a stale World); re-reads the ids the new Turns touched
 (`Track.update`, exact by `Proofs.Allowance.update_tracks`) for both readers; follows the allowances
 (`Broker.follow` at the request's time); then answers a `decide` by `Broker.admit` (a socket whose
@@ -23,6 +25,7 @@ verdict frame goes to stdout per request. Every frame is `u32le len ‖ payload`
 is an `Exit` by name on stderr; asks are bounded by `lifetime`.
 -/
 import Hosting.Broker
+import Hosting.Reply
 import Hosting.BrokerExit
 import Hosting.Allowance
 import Hosting.Track
@@ -163,6 +166,9 @@ def serve (input out : IO.FS.Stream) : Nat → Follow → Broker → IO Exit
       let names := f.residents
       if Broker.Bounds.residentsMax < names.length then return .residentsPastBound names.length
       unless ← emit out (Broker.Verdict.residents names) do return .unencodable
+      serve input out fuel f b
+    | .reply status body =>
+      unless ← emit out (Broker.reply status body) do return .unencodable
       serve input out fuel f b
 
 /-- `S1,S2,…`: the key slots keybroker holds. -/

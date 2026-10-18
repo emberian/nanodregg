@@ -1,9 +1,12 @@
-//! `keybroker KEYS ANCHORS SOCKDIR PIDS UPSTREAM STORE OPERATOR PEER DECIDER`
+//! `keybroker KEYS ANCHORS PINS SOCKDIR PIDS UPSTREAM STORE OPERATOR PEER DECIDER`
 //!
 //! The provider-key broker's byte mover (HOSTING-12). It holds the operator's provider keys (the
 //! file KEYS, read once under the custody checks of `nanodregg_sandbox::custody`) and the TLS trust
 //! anchors (the PEM file ANCHORS, the operator's data: in production the installed copy of
-//! `deploy/tls/anchors.pem`, read once under `custody::read_public`), and serves one Unix
+//! `deploy/tls/anchors.pem`, read once under `custody::read_public`), the leaf-key pins (the file
+//! PINS, the operator's data shaped like ANCHORS: `HOST SHA256-HEX` lines, the SHA-256 of the
+//! provider's leaf certificate's SubjectPublicKeyInfo; in production the installed copy of
+//! `deploy/tls/pins`, emitted from Lean's `Hosting.Pins.pins`, HOSTING-28), and serves one Unix
 //! socket per resident, `SOCKDIR/<resident>/broker.sock` (HOSTING-17), for exactly the residents the
 //! World holds: it asks its decider `residents` at start and every `TICK`, binds a socket for each
 //! name newly answered (a resident grain's birth) and closes and removes the socket of each name no
@@ -21,9 +24,14 @@
 //! the allowances OPERATOR owns, which it may read and nothing else). A `grant` names a key slot and the
 //! upstream request Lean printed; keybroker dials UPSTREAM (`addr:port`, the operator's dial
 //! address), speaks TLS 1.3 (rustls with the ring provider, HOSTING-15) with SNI and certificate
-//! verification for the HOST the grant names (Lean's provider table, never the dial address), sends
-//! the request (HTTP/1.0, `Host:` Lean's host) with the slot's key in the header Lean named, and
-//! relays the status and body, unless the response holds the key (`keyEchoed`, withheld). A TLS
+//! verification for the HOST the grant names (Lean's provider table, never the dial address), then
+//! checks that the verified leaf's key is one PINS names for that host (`pinMismatch` otherwise,
+//! before any request byte, a host with no pin included), sends the request (HTTP/1.0, `Host:`
+//! Lean's host) with the slot's key in the header Lean named, and hands the upstream's status and
+//! body back to the decider (`reply`), which answers the reply TEXT Lean read from the provider's
+//! JSON, the status, or `replyMalformed` (HOSTING-29): the resident never receives the provider's
+//! body. A response holding the key is `keyEchoed` before Lean sees it, and a reply text holding it
+//! is `keyEchoed` before the resident does (an escape can spell the key without its bytes). A TLS
 //! failure is `tlsCertificate`, `tlsHostname` or `tlsProtocol`, never the upstream's text. It
 //! decides nothing: every verdict is the decider's, and every way it ends is a name on stderr. One
 //! ask at a time per resident (`busy`).
@@ -51,12 +59,15 @@ use nanodregg_sandbox::{Policy, command};
 use rustls::pki_types::pem::{PemObject, SectionKind};
 use rustls::pki_types::{CertificateDer, ServerName};
 use rustls::{CertificateError, ClientConfig, ClientConnection, RootCertStore, StreamOwned};
+use webpki::EndEntityCert;
 use zeroize::Zeroizing;
 
 /// The largest key file read.
 const KEYFILE_MAX: usize = 65536;
 /// The largest anchor file read (the pinned webpki bundle is about 200 KB).
 const ANCHORS_MAX: usize = 1 << 20;
+/// The largest pin file read.
+const PINS_MAX: usize = 1 << 16;
 /// How long one upstream call may take, connect to last byte.
 const UPSTREAM_TIMEOUT: Duration = Duration::from_secs(120);
 /// How long a resident's connection may sit idle between asks.
@@ -96,7 +107,7 @@ impl End {
     fn describe(&self) -> String {
         match self {
             End::Usage => {
-                "usage: keybroker KEYS ANCHORS SOCKDIR PIDS UPSTREAM STORE OPERATOR PEER DECIDER"
+                "usage: keybroker KEYS ANCHORS PINS SOCKDIR PIDS UPSTREAM STORE OPERATOR PEER DECIDER"
                     .into()
             }
             End::File(n, _) => (*n).into(),
@@ -115,7 +126,10 @@ impl End {
 
 fn main() -> ExitCode {
     let end = run();
-    eprintln!("keybroker: {}", end.describe());
+    // One write: the decider shares this stderr, and `eprintln!` may write a line in pieces that
+    // its line interleaves (GATES-6 saw `keybroker: hosting-broker: keybrokerGone sockDir …`).
+    let line = format!("keybroker: {}\n", end.describe());
+    let _ = std::io::stderr().write_all(line.as_bytes());
     ExitCode::from(match end {
         End::Usage => keybroker_exit::USAGE,
         End::File(_, code) => code,
@@ -162,6 +176,75 @@ fn anchors_end(e: &Refused) -> End {
         }
         Refused::Io(_) => End::File("anchorsIo", k::ANCHORS_IO),
     }
+}
+
+/// The pin file's custody refusal, by name. A file that is not there is `pinsMissing`.
+fn pins_end(e: &Refused) -> End {
+    use keybroker_exit as k;
+    match e {
+        Refused::Link => End::File("pinsLink", k::PINS_LINK),
+        Refused::NotRegular => End::File("pinsNotRegular", k::PINS_NOT_REGULAR),
+        Refused::Owner(_) => End::File("pinsOwner", k::PINS_OWNER),
+        Refused::Mode(_) => End::File("pinsMode", k::PINS_MODE),
+        Refused::Length(_) => End::File("pinsLength", k::PINS_LENGTH),
+        Refused::Dir(_) => End::File("pinsDir", k::PINS_DIR),
+        Refused::Io(e) if e.kind() == ErrorKind::NotFound => {
+            End::File("pinsMissing", k::PINS_MISSING)
+        }
+        Refused::Io(_) => End::File("pinsIo", k::PINS_IO),
+    }
+}
+
+/// Each host's pinned leaf keys: the SHA-256 of a SubjectPublicKeyInfo.
+type Pins = BTreeMap<Vec<u8>, Vec<[u8; 32]>>;
+
+/// The value of one lowercase hexadecimal digit.
+fn hex_val(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        _ => None,
+    }
+}
+
+/// `HOST HEX` per line, each ended by LF: HOST printable ASCII without a space, HEX exactly 64
+/// lowercase hexadecimal digits. An empty file is no pin at all (every call is refused
+/// `pinMismatch`). Any other line, or a pin given twice, is `None` (`pinsMalformed`): the file is
+/// the operator's whole pin set, so nothing in it is skipped.
+fn parse_pins(text: &[u8]) -> Option<Pins> {
+    let mut pins = Pins::new();
+    if text.is_empty() {
+        return Some(pins);
+    }
+    let body = text.strip_suffix(b"\n")?;
+    for line in body.split(|b| *b == b'\n') {
+        let sp = line.iter().position(|b| *b == b' ')?;
+        let (host, hex) = (&line[..sp], &line[sp + 1..]);
+        if host.is_empty() || !host.iter().all(u8::is_ascii_graphic) || hex.len() != 64 {
+            return None;
+        }
+        let mut pin = [0u8; 32];
+        for (i, pair) in hex.chunks(2).enumerate() {
+            pin[i] = hex_val(pair[0])? * 16 + hex_val(pair[1])?;
+        }
+        let set = pins.entry(host.to_vec()).or_default();
+        if set.contains(&pin) {
+            return None;
+        }
+        set.push(pin);
+    }
+    Some(pins)
+}
+
+/// The SHA-256 of the leaf certificate's SubjectPublicKeyInfo (DER, with its SEQUENCE header), as
+/// rustls verified it: the only certificate of the sent chain a pin can soundly name, since the
+/// verified path is not exposed and anything else in the sent chain is the server's choice.
+fn leaf_pin(conn: &ClientConnection) -> Option<[u8; 32]> {
+    let leaf = conn.peer_certificates()?.first()?;
+    let cert = EndEntityCert::try_from(leaf).ok()?;
+    let spki = cert.subject_public_key_info();
+    let d = ring::digest::digest(&ring::digest::SHA256, spki.as_ref());
+    d.as_ref().try_into().ok()
 }
 
 /// Concatenated PEM `CERTIFICATE` blocks, each a trust anchor webpki accepts. Any other PEM
@@ -219,6 +302,7 @@ fn now_ms() -> u64 {
 struct Shared {
     decider: Mutex<(ChildStdin, ChildStdout)>,
     keys: Keys,
+    pins: Pins,
     upstream: String,
     tls: Arc<ClientConfig>,
     /// the only uid served (`PEER`, the hosted uid)
@@ -232,6 +316,7 @@ fn run() -> End {
     let [
         keys_path,
         anchors_path,
+        pins_path,
         sockdir,
         pids,
         upstream,
@@ -257,6 +342,13 @@ fn run() -> End {
     };
     let Some(roots) = parse_anchors(&anchors) else {
         return End::File("anchorsMalformed", keybroker_exit::ANCHORS_MALFORMED);
+    };
+    let pins = match custody::read_public(&PathBuf::from(pins_path), 0..=PINS_MAX) {
+        Ok(p) => p,
+        Err(e) => return pins_end(&e),
+    };
+    let Some(pins) = parse_pins(&pins) else {
+        return End::File("pinsMalformed", keybroker_exit::PINS_MALFORMED);
     };
     let tls = match tls_config(roots) {
         Ok(c) => Arc::new(c),
@@ -322,6 +414,7 @@ fn run() -> End {
     let shared = Arc::new(Shared {
         decider: Mutex::new((din, dout)),
         keys,
+        pins,
         upstream,
         tls,
         peer,
@@ -628,14 +721,39 @@ fn ask_once(sh: &Shared, resident: &[u8], ask: &[u8]) -> Option<Answer> {
                 Err(why) => refused(why),
                 Ok(resp) if contains(&resp, key) => refused(BrokerRefusal::KeyEchoed),
                 Ok(resp) => match split_response(&resp) {
-                    Some((status, body)) => Answer::Answer {
-                        status,
-                        body: body.to_vec(),
-                    },
+                    Some((status, body)) => return reply(sh, status, body, key),
                     None => refused(BrokerRefusal::UpstreamFailed),
                 },
             }
         }
+        // a reply or status verdict to a decide is the decider out of turn: the connection closes
+        Verdict::Reply { .. } | Verdict::Status { .. } => return None,
+    })
+}
+
+/// The upstream's answer, read by the decider (`reply`): the reply text Lean read from a 200 body,
+/// the status of any other, or a refusal. A text holding the key is withheld (`keyEchoed`). `None`
+/// when the decider cannot be reached or answers out of turn.
+fn reply(sh: &Shared, status: u32, body: &[u8], key: &[u8]) -> Option<Answer> {
+    let req = Request::Reply {
+        status,
+        body: body.to_vec(),
+    }
+    .encode()
+    .ok()?;
+    let verdict = {
+        let mut d = sh.decider.lock().ok()?;
+        let (din, dout) = &mut *d;
+        write_frame(din, &req).ok()?;
+        din.flush().ok()?;
+        Verdict::decode(&read_frame(dout).ok()?).ok()?
+    };
+    Some(match verdict {
+        Verdict::Reply { text } if contains(&text, key) => refused(BrokerRefusal::KeyEchoed),
+        Verdict::Reply { text } => Answer::Reply { text },
+        Verdict::Status { status } => Answer::Status { status },
+        Verdict::Refuse { broker_refusal } => refused(broker_refusal),
+        Verdict::Grant { .. } | Verdict::Residents { .. } => return None,
     })
 }
 
@@ -674,7 +792,8 @@ fn io_refusal(e: &std::io::Error) -> BrokerRefusal {
     }
 }
 
-/// Dial UPSTREAM, complete a TLS 1.3 handshake verified for Lean's host, then `POST target
+/// Dial UPSTREAM, complete a TLS 1.3 handshake verified for Lean's host, check the leaf's key
+/// against the host's pins (`pinMismatch`, no request byte written), then `POST target
 /// HTTP/1.0` with `Host:` Lean's host, Lean's headers, the key header, and Lean's body; the whole
 /// response, at most `RESPONSE_MAX` bytes, ended by the server's `close_notify` (a close without
 /// it is a truncation nobody authenticated: `tlsProtocol`).
@@ -697,6 +816,12 @@ fn call(sh: &Shared, r: &Call<'_>, key: &[u8]) -> Result<Vec<u8>, BrokerRefusal>
     let mut conn = ClientConnection::new(Arc::clone(&sh.tls), name).map_err(|e| tls_refusal(&e))?;
     while conn.is_handshaking() {
         conn.complete_io(&mut t).map_err(|e| io_refusal(&e))?;
+    }
+    // the verified leaf's key must be one the operator pinned for Lean's host (HOSTING-28)
+    let pinned = sh.pins.get(r.host).map(Vec::as_slice).unwrap_or(&[]);
+    match leaf_pin(&conn) {
+        Some(p) if pinned.contains(&p) => {}
+        _ => return Err(BrokerRefusal::PinMismatch),
     }
     let mut s = StreamOwned::new(conn, t);
     let mut req = Zeroizing::new(Vec::with_capacity(r.body.len() + 512));

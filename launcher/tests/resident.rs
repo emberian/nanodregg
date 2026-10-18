@@ -67,7 +67,9 @@ fn a_resident_is_granted_through_its_own_socket_and_reaches_nothing_else() {
     let keys = key_file(&d, 0o600);
     let pki = Pki::new();
     let anchors = pki.anchors(&d, 0o644);
-    let (up, seen) = upstream(Mode::Ok, pki.server(HOST, false));
+    let server = pki.server(HOST, false);
+    pki.pin(&d, &[&server]);
+    let (up, seen) = upstream(Mode::Ok, &server);
     let sock = Short::new("r");
     sockdir(&sock.0);
     let sock = &sock.0;
@@ -275,7 +277,7 @@ fn a_resident_is_granted_through_its_own_socket_and_reaches_nothing_else() {
     let v = |n: &str| verdict(&vol, n).unwrap_or_else(|| "absent".into());
     assert_eq!(
         v("ask1"),
-        "ok answer 200",
+        "ok reply hello back",
         "R3: the resident was not granted"
     );
     assert_eq!(
@@ -409,7 +411,7 @@ fn a_resident_is_granted_through_its_own_socket_and_reaches_nothing_else() {
     );
     assert_eq!(
         v("ask2"),
-        "ok answer 200",
+        "ok reply hello back",
         "restart: the resident was not granted by keybroker's next life"
     );
     assert_eq!(v("own-list2"), "ok broker.sock", "R5b after the restart");

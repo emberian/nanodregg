@@ -222,6 +222,8 @@ pub mod wire {
         TlsProtocol,
         PeerRefused,
         NotResident,
+        ReplyMalformed,
+        PinMismatch,
     }
 
     impl BrokerRefusal {
@@ -249,6 +251,8 @@ pub mod wire {
                 BrokerRefusal::TlsProtocol => 19,
                 BrokerRefusal::PeerRefused => 20,
                 BrokerRefusal::NotResident => 21,
+                BrokerRefusal::ReplyMalformed => 22,
+                BrokerRefusal::PinMismatch => 23,
             }
         }
 
@@ -276,6 +280,8 @@ pub mod wire {
                 19 => Some(BrokerRefusal::TlsProtocol),
                 20 => Some(BrokerRefusal::PeerRefused),
                 21 => Some(BrokerRefusal::NotResident),
+                22 => Some(BrokerRefusal::ReplyMalformed),
+                23 => Some(BrokerRefusal::PinMismatch),
                 _ => None,
             }
         }
@@ -305,6 +311,8 @@ pub mod wire {
                 BrokerRefusal::TlsProtocol => "tlsProtocol",
                 BrokerRefusal::PeerRefused => "peerRefused",
                 BrokerRefusal::NotResident => "notResident",
+                BrokerRefusal::ReplyMalformed => "replyMalformed",
+                BrokerRefusal::PinMismatch => "pinMismatch",
             }
         }
     }
@@ -371,6 +379,7 @@ pub mod wire {
     pub enum Request {
         Decide { resident: Vec<u8>, at_ms: u64 },
         Residents { at_ms: u64 },
+        Reply { status: u32, body: Vec<u8> },
     }
 
     impl Request {
@@ -386,6 +395,11 @@ pub mod wire {
                 2 => {
                     let at_ms = c.u64()?;
                     Request::Residents { at_ms }
+                }
+                3 => {
+                    let status = c.u32()? as u32;
+                    let body = c.bytes(131072)?;
+                    Request::Reply { status, body }
                 }
                 tag => return Err(Refusal::BadTag { offset: at, tag }),
             };
@@ -404,6 +418,11 @@ pub mod wire {
                 Request::Residents { at_ms } => {
                     out.push(2);
                     out.extend_from_slice(&at_ms.to_le_bytes());
+                }
+                Request::Reply { status, body } => {
+                    out.push(3);
+                    out.extend_from_slice(&status.to_le_bytes());
+                    put_bytes(&mut out, body, 131072)?;
                 }
             }
             Ok(out)
@@ -426,6 +445,12 @@ pub mod wire {
         },
         Residents {
             names: Vec<Vec<u8>>,
+        },
+        Reply {
+            text: Vec<u8>,
+        },
+        Status {
+            status: u32,
         },
     }
 
@@ -459,6 +484,14 @@ pub mod wire {
                 3 => {
                     let names = c.list(131072)?;
                     Verdict::Residents { names }
+                }
+                4 => {
+                    let text = c.bytes(131072)?;
+                    Verdict::Reply { text }
+                }
+                5 => {
+                    let status = c.u32()? as u32;
+                    Verdict::Status { status }
                 }
                 tag => return Err(Refusal::BadTag { offset: at, tag }),
             };
@@ -495,6 +528,14 @@ pub mod wire {
                     out.push(3);
                     put_list(&mut out, names, 131072)?;
                 }
+                Verdict::Reply { text } => {
+                    out.push(4);
+                    put_bytes(&mut out, text, 131072)?;
+                }
+                Verdict::Status { status } => {
+                    out.push(5);
+                    out.extend_from_slice(&status.to_le_bytes());
+                }
             }
             Ok(out)
         }
@@ -502,8 +543,9 @@ pub mod wire {
 
     #[derive(Debug, Clone, PartialEq, Eq)]
     pub enum Answer {
-        Answer { status: u32, body: Vec<u8> },
+        Reply { text: Vec<u8> },
         Refused { broker_refusal: BrokerRefusal },
+        Status { status: u32 },
     }
 
     impl Answer {
@@ -512,13 +554,16 @@ pub mod wire {
             let at = c.i;
             let answer = match c.byte()? {
                 1 => {
-                    let status = c.u32()? as u32;
-                    let body = c.bytes(131072)?;
-                    Answer::Answer { status, body }
+                    let text = c.bytes(131072)?;
+                    Answer::Reply { text }
                 }
                 2 => {
                     let broker_refusal = c.one_of(BrokerRefusal::from_code)?;
                     Answer::Refused { broker_refusal }
+                }
+                3 => {
+                    let status = c.u32()? as u32;
+                    Answer::Status { status }
                 }
                 tag => return Err(Refusal::BadTag { offset: at, tag }),
             };
@@ -529,14 +574,17 @@ pub mod wire {
         pub fn encode(&self) -> Result<Vec<u8>, Refusal> {
             let mut out = Vec::new();
             match self {
-                Answer::Answer { status, body } => {
+                Answer::Reply { text } => {
                     out.push(1);
-                    out.extend_from_slice(&status.to_le_bytes());
-                    put_bytes(&mut out, body, 131072)?;
+                    put_bytes(&mut out, text, 131072)?;
                 }
                 Answer::Refused { broker_refusal } => {
                     out.push(2);
                     out.push(broker_refusal.code());
+                }
+                Answer::Status { status } => {
+                    out.push(3);
+                    out.extend_from_slice(&status.to_le_bytes());
                 }
             }
             Ok(out)
@@ -563,6 +611,15 @@ pub mod keybroker_exit {
     pub const ANCHORS_MISSING: u8 = 95;
     pub const ANCHORS_IO: u8 = 96;
     pub const ANCHORS_MALFORMED: u8 = 97;
+    pub const PINS_LINK: u8 = 140;
+    pub const PINS_NOT_REGULAR: u8 = 141;
+    pub const PINS_OWNER: u8 = 142;
+    pub const PINS_MODE: u8 = 143;
+    pub const PINS_LENGTH: u8 = 144;
+    pub const PINS_DIR: u8 = 145;
+    pub const PINS_MISSING: u8 = 146;
+    pub const PINS_IO: u8 = 147;
+    pub const PINS_MALFORMED: u8 = 148;
     pub const TLS_CONFIG: u8 = 98;
     pub const SOCKET: u8 = 99;
     pub const DECIDER_REFUSED: u8 = 100;
@@ -572,8 +629,8 @@ pub mod keybroker_exit {
     pub const SOCK_DIR: u8 = 105;
     pub const DECIDER_MECHANISM: u8 = 79;
     pub const ALL: &[u8] = &[
-        80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100, 103,
-        102, 104, 105, 79,
+        80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 140, 141, 142, 143,
+        144, 145, 146, 147, 148, 98, 99, 100, 103, 102, 104, 105, 79,
     ];
 }
 

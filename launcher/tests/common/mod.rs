@@ -16,12 +16,17 @@ use std::time::{Duration, Instant};
 use nanodregg_devtools::{Supervisor, lean_bin, nd, nd_supervise, repo, supervise_host};
 use nanodregg_launcher::broker_generated::wire::{Answer, Ask, BrokerRefusal};
 use nanodregg_launcher::broker_generated::{read_frame, write_frame};
-use rcgen::{BasicConstraints, CertificateParams, IsCa, Issuer, KeyPair};
+use rcgen::{BasicConstraints, CertificateParams, IsCa, Issuer, KeyPair, PublicKeyData};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use rustls::{ServerConfig, ServerConnection, StreamOwned};
 
 pub const KEY: &[u8] = b"CANARY-sk-0123456789abcdef";
 pub const WINDOW_MS: u64 = 3000;
+/// The reply text the fake provider's `Mode::Ok` body carries; the resident receives exactly this
+/// (HOSTING-29: Lean reads it out of the provider's JSON).
+pub const REPLY: &[u8] = b"hello back";
+/// The fake provider's Anthropic-shaped answer: fields before and after `content`, a nested object.
+pub const ANTHROPIC_BODY: &[u8] = b"{\"id\":\"msg_01\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"claude-m\",\"content\":[{\"type\":\"text\",\"text\":\"hello back\"}],\"stop_reason\":\"end_turn\",\"usage\":{\"input_tokens\":3,\"output_tokens\":2}}";
 
 /// A test's own scratch root, removed with its socket directory when the test ends.
 pub struct Scratch {
@@ -59,6 +64,9 @@ pub fn dir(name: &str) -> Scratch {
         "mech" => 'c',
         "sig" => 'g',
         "follow" => 'f',
+        "reply" => 'y',
+        "pin" => 'n',
+        "pins" => 'i',
         // resident.rs's own `Short`s are r, m, f, q, p
         "res" => 'k',
         other => panic!("plant: dir({other}) has no socket-directory letter"),
@@ -97,8 +105,17 @@ pub fn other_group(primary: u32) -> Option<u32> {
 /// Lean's host for every `claude-…` model (`Broker.anthropic.host`).
 pub const HOST: &str = "api.anthropic.com";
 
+/// A fake provider's TLS configuration and the pin of its leaf key: the lowercase hex SHA-256 of
+/// its SubjectPublicKeyInfo, as an operator's PINS line names it (HOSTING-28).
+pub struct Server {
+    pub tls: Arc<ServerConfig>,
+    pub pin: String,
+}
+
 /// The test's own PKI: a CA (whose certificate is the operator's anchor file) and server
-/// certificates for the fake upstream.
+/// certificates for the fake upstream. The operator's PINS file is `pins` beside the anchor file
+/// (`argv_with` passes it): `anchors` writes it empty (every grant refused `pinMismatch`), `pin`
+/// rewrites it to name the given servers' leaf keys for Lean's host.
 pub struct Pki {
     pub ca: Issuer<'static, KeyPair>,
     pub ca_pem: String,
@@ -120,11 +137,20 @@ impl Pki {
         let p = d.join("anchors.pem");
         fs::write(&p, &self.ca_pem).unwrap();
         fs::set_permissions(&p, fs::Permissions::from_mode(mode)).unwrap();
+        pins_file(d, b"");
         p
+    }
+    /// The operator's PINS file in `d`: `servers`' leaf keys, pinned for Lean's host.
+    pub fn pin(&self, d: &Path, servers: &[&Server]) -> PathBuf {
+        let text: String = servers
+            .iter()
+            .map(|s| format!("{HOST} {}\n", s.pin))
+            .collect();
+        pins_file(d, text.as_bytes())
     }
     /// A TLS 1.3 server with a certificate for `name`, signed by the CA, or (self_signed) by its
     /// own key.
-    pub fn server(&self, name: &str, self_signed: bool) -> Arc<ServerConfig> {
+    pub fn server(&self, name: &str, self_signed: bool) -> Server {
         self.server_at(name, self_signed, &rustls::version::TLS13)
     }
     /// A server that speaks only `version`, with a certificate for `name`.
@@ -133,8 +159,10 @@ impl Pki {
         name: &str,
         self_signed: bool,
         version: &'static rustls::SupportedProtocolVersion,
-    ) -> Arc<ServerConfig> {
+    ) -> Server {
         let key = KeyPair::generate().unwrap();
+        let spki = ring::digest::digest(&ring::digest::SHA256, &key.subject_public_key_info());
+        let pin: String = spki.as_ref().iter().map(|b| format!("{b:02x}")).collect();
         let params = CertificateParams::new(vec![name.to_owned()]).unwrap();
         let cert = if self_signed {
             params.self_signed(&key).unwrap()
@@ -143,15 +171,24 @@ impl Pki {
         };
         let der: CertificateDer<'static> = cert.der().clone();
         let pk = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(key.serialize_der()));
-        Arc::new(
+        let tls = Arc::new(
             ServerConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
                 .with_protocol_versions(&[version])
                 .unwrap()
                 .with_no_client_auth()
                 .with_single_cert(vec![der], pk)
                 .unwrap(),
-        )
+        );
+        Server { tls, pin }
     }
+}
+
+/// The operator's PINS file in `d` (`d/pins`, mode 0644) holding `bytes`.
+pub fn pins_file(d: &Path, bytes: &[u8]) -> PathBuf {
+    let p = d.join("pins");
+    fs::write(&p, bytes).unwrap();
+    fs::set_permissions(&p, fs::Permissions::from_mode(0o644)).unwrap();
+    p
 }
 
 pub fn key_file(d: &Path, mode: u32) -> PathBuf {
@@ -164,17 +201,20 @@ pub fn key_file(d: &Path, mode: u32) -> PathBuf {
 /// How the fake provider answers.
 #[derive(Clone, Copy, PartialEq)]
 pub enum Mode {
-    /// `200` and `{"ok":true}`, then `close_notify`
+    /// `200` and `ANTHROPIC_BODY` (whose reply text is `REPLY`), then `close_notify`
     Ok,
+    /// this status and this body, then `close_notify`
+    Says(u16, &'static [u8]),
     /// `200` and the request itself (the key included), then `close_notify`
     Echo,
-    /// `200` and `{"ok":true}`, then the TCP connection closes with no `close_notify`
+    /// `200` and `ANTHROPIC_BODY`, then the TCP connection closes with no `close_notify`
     Truncate,
 }
 
 /// A fake provider over TLS with the server configuration `tls`, answering as `mode` says; keeps
 /// every request it received. A connection whose handshake fails records nothing.
-pub fn upstream(mode: Mode, tls: Arc<ServerConfig>) -> (String, Arc<Mutex<Vec<Vec<u8>>>>) {
+pub fn upstream(mode: Mode, server: &Server) -> (String, Arc<Mutex<Vec<Vec<u8>>>>) {
+    let tls = Arc::clone(&server.tls);
     let l = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = l.local_addr().unwrap().to_string();
     let seen = Arc::new(Mutex::new(Vec::new()));
@@ -209,14 +249,14 @@ pub fn upstream(mode: Mode, tls: Arc<ServerConfig>) -> (String, Arc<Mutex<Vec<Ve
                 continue;
             }
             s2.lock().unwrap().push(req.clone());
-            let body = if mode == Mode::Echo {
-                req
-            } else {
-                b"{\"ok\":true}".to_vec()
+            let (status, body) = match mode {
+                Mode::Echo => (200, req),
+                Mode::Says(st, b) => (st, b.to_vec()),
+                Mode::Ok | Mode::Truncate => (200, ANTHROPIC_BODY.to_vec()),
             };
             let _ = c.write_all(
                 &[
-                    b"HTTP/1.0 200 OK\r\nContent-Length: ".as_slice(),
+                    format!("HTTP/1.0 {status} X\r\nContent-Length: ").as_bytes(),
                     body.len().to_string().as_bytes(),
                     b"\r\n\r\n",
                     &body,
@@ -612,7 +652,8 @@ pub fn rendered(values: &[(&str, &std::ffi::OsStr)]) -> Command {
     c
 }
 
-/// The test's values for the unit's words.
+/// The test's values for the unit's words. PINS is `pins` beside `anchors` (`Pki::anchors` writes
+/// it, `Pki::pin` fills it).
 #[allow(clippy::too_many_arguments)]
 pub fn argv(
     keys: &Path,
@@ -650,9 +691,11 @@ pub fn argv_with(
     peer: &str,
     decider: &Path,
 ) -> Command {
+    let pins = anchors.with_file_name("pins");
     rendered(&[
         ("/etc/nd/keybroker/provider.key", keys.as_os_str()),
         ("/etc/nd/keybroker/anchors.pem", anchors.as_os_str()),
+        ("/etc/nd/keybroker/pins", pins.as_os_str()),
         ("/run/nd-broker", socks.as_os_str()),
         ("/run/nd-keybroker", pids.as_os_str()),
         ("api.anthropic.com:443", std::ffi::OsStr::new(up)),

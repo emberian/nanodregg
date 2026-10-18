@@ -35,6 +35,10 @@ zeroize = { version = "=1.8.2", default-features = false, features = ["alloc"] }
 # Cargo.lock), TLS 1.3 only (no `tls12`), no aws-lc, no logging. Trusted, unverified: in the TCB
 # beside SHA-512, swapped only for a verified provider.
 rustls = { version = "=0.23.40", default-features = false, features = ["std", "ring"] }
+# keybroker's leaf-key pin (HOSTING-28): webpki parses the leaf rustls verified, ring hashes its
+# SubjectPublicKeyInfo. Both are already in the TCB under rustls (the same pinned versions).
+webpki = { package = "rustls-webpki", version = "=0.103.15", default-features = false, features = ["alloc"] }
+ring = { version = "=0.17.14", default-features = false }
 
 # The test harness (CLIENT's): lean_bin, the client's nd / nd-supervise, supervise_host.
 [dev-dependencies]

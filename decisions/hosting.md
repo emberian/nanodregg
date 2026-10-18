@@ -1598,3 +1598,200 @@ grain-launch unit (ExecStart, RestartPreventExitStatus 69) and EXITS.md are re-r
 - RUNBOOK's keybroker.env sentence is OPS-5's.
 - The broker test's resident names are real resident grains (`World::r1`, `r2`, born at genesis), and SOCKDIR is short (`short_dir`).
 - Nothing persisted changes.
+
+## HOSTING-29 The resident receives the reply TEXT; Lean reads the provider's JSON (HOSTING-9, 2026-10-19, ROOT ruling on HOSTING-8's three twin traps)
+
+**Ruling it builds under** (ROOT, 10-19): the real resident (HOSTING-27) is a Lean executable, and it must never parse provider bytes. If it did, a Rust resident would need three twins: a reader of Lang's text, a writer of Lang's string escaping, and a reader of the provider's JSON. keybroker's answer therefore carries the extracted reply text. This is a broker wire change, landed on one `hosting!` day together with HOSTING-28.
+
+**Decision.**
+- **Lean reads the provider's answer.** After a grant's upstream call, keybroker hands its decider a new request `reply 3 (status : u32, body)`. The decider answers with `Broker.reply` (Hosting/Reply.lean), a pure function:
+  - a status other than 200 becomes the new verdict `status 5`. The body is never read and never relayed.
+  - a 200 body is read for its reply text, the new verdict `reply 4 (text)`, or it is refused `replyMalformed` (new refusal, code 22).
+  - The decider holds no key and no member seed (charter row: no seed in a process that parses provider bytes). keybroker still decides nothing.
+- **The reader** (`Json.value` / `elems` / `members`) is an RFC 8259 value parser. It reads over the body's `ByteArray` at an index (law 3: bytes are never `List UInt8` in a def-module), and every function carries a structural fuel, so the teeth reduce in the kernel.
+  - Strings are read by `Json.unstr`, which handles every escape: `\" \\ \/ \b \f \n \r \t`, `\uXXXX` as UTF-8, and a surrogate pair as one scalar value. A raw control byte, an unknown escape, or a lone or reversed surrogate is refused. The reader is tail-recursive, so a 128 KB string costs no stack.
+  - Nesting deeper than `Bounds.depthMax` (64) is refused, because the reader recurses once per level. Every recursion is bounded by a fuel of three steps per byte.
+  - Numbers and the literals `true`, `false`, `null` are skipped, not kept. A number is a sign or digit followed by any run of number bytes. The lenient number cannot hold a structural byte, so it never moves where a value ends.
+- **What counts as the reply:** the `text` of the body's `content` blocks of type `text`, concatenated in order.
+  - The body must be one object, with nothing but whitespace after it.
+  - `content` is present and is an array (a repeat is refused by the duplicate rule below, so `field` takes the one copy).
+  - Each block is an object with exactly one `type`, which is a string. A `text` block has exactly one `text`, which is a string. A block of another type adds nothing.
+  - A key repeated in ANY object of the body, at any depth, refuses the body (`replyMalformed`), because a reader and the provider might disagree on which copy counts.
+  - No text block (an empty `content`, or only other types such as `tool_use`) is the empty reply, `.reply ""`. What to do with it is the resident's call.
+  - The text must be UTF-8 and at most `Bounds.replyMax` (frameMax − 64) bytes.
+- **The one reader.** `Json.unstr` is the deployed reader, and the proofs read Lean's own printer back with it. The private spec reader `Proofs.Broker.Json.unstr` is DELETED. `unstr_str`, `unstrAcc_esc` and `unstrAcc_str` now state facts about the deployed function, so `body_shape`'s "read back exactly" claim speaks of the code that runs.
+- **keybroker** (Rust):
+  - A response holding the key is still `keyEchoed` before Lean sees it, so the decider never holds key bytes.
+  - The reply TEXT is checked again, and a text holding the key is `keyEchoed` before the resident sees it. A JSON escape can spell the key without its bytes: `CANARY…` decodes to `CANARY…`.
+  - `Verdict::Reply` becomes `Answer::Reply`, `Verdict::Status` becomes `Answer::Status`, and a refusal becomes `Answer::Refused`. Any other verdict to a `reply` is the decider out of turn, and the connection closes.
+- **The answer frame changes** (append-only codes, case 1 re-shaped): `reply 1 (text)`, `refused 2`, `status 3 (status : u32)`. `answer 1 (status, body)` is deleted, so the resident's wire has no provider body at all.
+- Lean gains `Wire.decodeAnswer` and `Wire.encodeAsk` (`askWire?`). The resident (HOSTING-27) reads its answers, and writes its asks, with the one codec.
+- **THE BAR's "hosted Hermes" is the HOSTING-27 resident.** This decision is what makes it possible without a twin.
+
+**Theorems** (Hosting/Proofs/Reply.lean; axioms propext, Classical.choice, Quot.sound only):
+- `Proofs.Broker.reply_printed`, beside the printer's specification `escL`: a 200 body holding one text block printed by Lean's own `Json.str` reads back to exactly that text, for every UTF-8 text within `replyMax`, whatever bytes it holds. The proof runs the deployed reader over the printed body's bytes. Every key and the text are read by `unstr_str`: wherever the bytes from index `i` on are a printed string, the deployed `unstr` returns exactly its contents and the index after its closing quote.
+- `reply_status`: any status other than 200 is passed on as itself.
+- `reply_encodes`: every verdict `reply` returns has a frame, so `unencodable` stays unreachable.
+- `decodeRequest_reply`, `decodeAnswer_reply`, `answerCodec_lawful`: the frames round-trip.
+- Teeth, all `decide +kernel`:
+  - `anthropic_tooth`: an Anthropic-shaped body with fields before and after `content`, a nested `usage`, a `null`, a negative exponent number, and `\n \" \/ é 😀`.
+  - `blocks_tooth`: two text blocks around a `thinking` block, with keys in either order.
+  - `decoy_tooth`: a `content` written inside another field's string is not a field.
+  - `malformed_teeth`, each refused: a repeated `content`, a repeated `text`, a lone high surrogate, a reversed pair, a raw line feed in a string, trailing bytes, `content` as an object, a top-level array, a text block with no `text`.
+  - `utf8_tooth`: a raw 0xFF byte in the text is refused.
+  - `depth_tooth` and `object_depth_tooth`: a nesting of 64 levels is read and 65 is refused, whether arrays or objects.
+  - `escapes_tooth`: `\b \f \r \t`, uppercase hex, and a three-byte scalar (`\u20ac`).
+  - `whitespace_tooth`: a pretty-printed body.
+  - `fuel_tooth`: a 300-element array.
+  - `shape_teeth`, each refused: a duplicate `id`, a duplicate inside `usage`, the atoms `Z` and `tru`, a block with no `type`, a non-object block. `content:[]` and a body of only `tool_use` blocks are `.reply ""`.
+  - `status_tooth`.
+- `reply_over`: a reply text longer than `replyMax` is refused, whatever else holds.
+
+**Tests** (`cargo:launcher:broker`, `cargo:launcher:resident`):
+- The fake upstream answers an Anthropic-shaped body. The resident gets `reply "hello back"`, and no byte of the provider's JSON (`"stop_reason"`) reaches it.
+- `the_resident_receives_the_text_lean_read_never_the_body`:
+  - a 429 is `status 429`, and its body (`slow down`) never reaches the resident;
+  - `{"ok":true}` is `replyMalformed`;
+  - a text spelling the key through `C` is `keyEchoed`. CONTROL: the raw body holds no key bytes;
+  - escapes reach the resident decoded (`a\nb é "q"`).
+- The probe prints `ok reply <text>` / `ok status <n>` / `ok refused <name>`.
+
+**Alternatives.**
+1. A Rust JSON extractor in keybroker: a second reader of provider bytes, in the key-holding process. Refused (law 2, and HOSTING-12's "nothing in the key path parses provider JSON").
+2. Pass the whole body to the resident and let the model read it: then the resident parses provider bytes, which is HOSTING-8's twin (c). Refused.
+3. `Lean.Json.parse` from core: `import Lean` is refused outside Census (closure C2/C5). It reads `String` and not bytes, and nothing here proves it agrees with `Json.str`. Refused.
+4. Keep `answer status body` beside `reply`: two shapes. Refused (prefer deleting).
+
+**CRITIQUE.**
+- **The reader is a JSON parser in the decider: new attack surface.** It is bounded in depth (64), fuel (3/byte) and stack (tail-recursive strings, depth-bounded mutual recursion). It is not proved to terminate within its fuel on all inputs; it simply refuses when the fuel runs out.
+- **That the fuel `3 · length + 3` suffices for every valid body is not proved** (VACUITY-READER-H9's residual). A constant fuel of about 400 would survive every tooth. Running out of fuel only refuses, so this is liveness, never safety.
+- **Real bodies are larger than the teeth.** A 100 KB body is about 300 K fuel steps over a `List UInt8`. That is unmeasured for speed, and no wall-clock verdict is allowed. The first real call is where it is seen.
+- **The lenient number grammar** accepts `1-2e`. It cannot move a value boundary, and numbers are discarded, so the leniency is unobservable in the reply. It is still not RFC 8259, and that is named here.
+- **What is not proved:**
+  - Only a one-block body is proved to round-trip (`reply_printed`). Multi-block bodies, decoys and keys after `content` are teeth, not theorems.
+  - That `value` refuses every body a strict RFC 8259 parser refuses is not proved. The refusal teeth cover the cases above.
+- **Anthropic's `content` may hold `tool_use` blocks** once tools exist. They are skipped today; a tool-using resident needs its own decision.
+- **The reply drops `stop_reason`**, so a reply cut off at `max_tokens` reads as a whole reply. The resident cannot tell, and so cannot say "(truncated)".
+
+**META-CRITIQUE.** I chose to read the body into a value tree and then select from it, rather than scan for `"content"`. A scanner is the code a decoy defeats, and the tree makes "exactly once" a filter, not a search. My pull was toward the smaller scanner, and `decoy_tooth` is the reason I did not take it. I wanted a theorem over every body the provider might send. That is a grammar-level round trip, which I did not attempt, and I named the one-block theorem as what is proved.
+
+**Vacuity read (VACUITY-READER-H9).**
+- First pass: ACCEPT-WITH-HOLES. No statement was vacuous, collapsed or circular. `printed` is built by the deployed printer, and `escL` is tied to the deployed `esc` by `esc_data`. Nine holes, each with a surviving plant:
+  1. objects spent no depth (a stack blowup);
+  2. escapes nothing exercised (`\b \f \r \t`, uppercase hex, three-byte UTF-8);
+  3. whitespace never tested;
+  4. fuel only checked on small bodies;
+  5. `replyMax` not pinned;
+  6. atoms more lenient than documented;
+  7. untyped blocks;
+  8. the docstring claimed duplicates were refused everywhere, but the code refused them only for three keys (now: everywhere);
+  9. the empty reply not pinned.
+  All nine are closed by the teeth above, `reply_over`, and the any-depth duplicate check.
+- Second pass: ACCEPT, with one residual: the fuel's sufficiency, which is liveness only.
+
+**Plants** (hbox logs/hosting9-plants.py; the final run over the `ByteArray` reader is logs/hosting9-plants3.out, and every plant below is RED there):
+- `\n` decoded as `n`: `anthropic_tooth`.
+- `depthMax` 65: `value_printed` and `depth_tooth`.
+- The surrogate multiplier 1024 → 1000: `anthropic_tooth`.
+- The status check disabled: `reply_status` and `status_tooth`.
+- Trailing bytes accepted: `malformed_teeth`.
+- The UTF-8 check removed: `utf8_tooth`.
+- `\\` decoded as `/`: `unstrAcc_esc` (the printer and the reader disagree).
+- After the vacuity read, each RED:
+  - objects spending no depth: both depth teeth;
+  - `\t` read as a space, uppercase hex off by one, the 3-byte `utf8Of` bytes swapped: `escapes_tooth`;
+  - no whitespace: `whitespace_tooth`;
+  - fuel 70: `fuel_tooth`, `value_printed` and the depth teeth;
+  - any byte starting an atom, an untyped block dropped, duplicates allowed below the top: `shape_teeth`;
+  - `replyMax + 59`: `reply_over` and `reply_encodes`;
+  - an empty array refused: `shape_teeth`.
+- Rust:
+  - the text keyEchoed check deleted: the reply test (the spelled key reached the resident);
+  - the raw body relayed as the text: the main test;
+  - the status replaced by 200: the reply test.
+
+## HOSTING-28 The provider's leaf key is pinned, as operator data; the anchors are the provider's roots (HOSTING-9, 2026-10-19; ROOT ruling P2)
+
+**Ruling it builds under** (ROOT, 10-19). The first ruling was "a build-time constant". It could not have an accepted test case without trusting the test's public key in production, so ROOT re-ruled P2:
+- pins are operator DATA, shaped exactly like ANCHORS;
+- only the LEAF's SPKI is pinned;
+- the production file is emitted from a Lean constant and gated;
+- the check is fail closed;
+- the provider is never handshaken by the lanes (the first contact is Ember's act);
+- the anchors are narrowed to the provider's roots the same day.
+
+**Why only the leaf.** rustls exposes the chain the server SENT (`peer_certificates`), not the path it verified. The verified path needs a custom verifier, and that is the `dangerous` API HOSTING-15 rules out. A pin matched anywhere in the sent chain is unsound: a forger holding a mis-issued leaf adds the provider's real, public intermediate certificate to its chain and passes. The leaf is the one certificate rustls verified for the name, so it is the one a pin can soundly name.
+
+**Decision.**
+- **PINS**, keybroker's third argument: `keybroker KEYS ANCHORS PINS SOCKDIR PIDS UPSTREAM STORE OPERATOR PEER DECIDER`.
+  - It is read once at start through `custody::read_public` (the anchors' checks), at 0..=64 KiB.
+  - The format is strict: `HOST HEX` lines, each ended by LF. HOST is printable ASCII with no space. HEX is exactly 64 lowercase hexadecimal digits: the SHA-256 of the leaf certificate's DER SubjectPublicKeyInfo.
+  - An empty file is no pin at all. Any other shape, or a pin given twice, ends keybroker `pinsMalformed`. There are no comments, no blank lines, and no uppercase.
+  - Custody refusals end keybroker by name, before any socket opens: `pinsLink` 140, `pinsNotRegular` 141, `pinsOwner` 142, `pinsMode` 143, `pinsLength` 144, `pinsDir` 145, `pinsMissing` 146, `pinsIo` 147, `pinsMalformed` 148. All are fatal (`RestartPreventExitStatus`).
+- **The check.** After the TLS 1.3 handshake has verified the chain for Lean's host, keybroker hashes the leaf's SPKI and checks it against the host's set. `rustls-webpki` `EndEntityCert::subject_public_key_info` parses the leaf, and ring's SHA-256 hashes it; both are already in the TCB under rustls, at the same pinned versions.
+  - Not in the set, or a host with no pin, is refused `pinMismatch` (new refusal, code 23) before a request byte is written.
+  - The pin is host-scoped: a pin listed for another host does not count.
+- **`deploy/tls/pins` is EMPTY**, emitted by the new `emit-pins` from `Hosting.Pins.pins = []` and gated in `gates/generated.tsv`.
+  - No provider's leaf key has been read by anything in this tree, so every real call is refused `pinMismatch` until the operator computes the pin at the first real call.
+  - The installed copy, `/etc/nd/keybroker/pins`, is the operator's. Rotation is the operator's act with no rebuild, so there is no ExecStartPre comparing it with the build's copy (unlike the anchors).
+  - The operator's recipe, which goes in RUNBOOK §2a via OPS-5: `openssl s_client -connect api.anthropic.com:443 -servername api.anthropic.com </dev/null | openssl x509 -pubkey -noout | openssl pkey -pubin -outform der | sha256sum` gives one line `api.anthropic.com <hex>`. Across a rotation, keep the old line beside the new one.
+- **The anchors are the provider's roots: 7 of 121.**
+  - `emit-anchors` keeps only the crate roots whose DER SHA-256 is in `PROVIDER_ROOTS`: GTS Root R1, R3 and R4 (R2 is not in the crate), and SSL.com's four TLS roots (Root CA RSA and ECC, TLS RSA and ECC Root CA 2022).
+  - Provenance: Certificate Transparency (crt.sh, 10-18), never a handshake. The unexpired certificates for `api.anthropic.com` are issued by GTS WR3, WR1 and WE1, under GTS R1 and R4, and by Cloudflare TLS Issuing ECC/RSA CA 4, under SSL.com's transit CAs.
+  - `one_block_per_provider_root`: each kept fingerprint is exactly one root of the pinned crate.
+  - A provider that moves to another CA fails `tlsCertificate`. The fix is to add its root to `PROVIDER_ROOTS` and re-emit.
+- **TCB.** No new component: `rustls-webpki` 0.103.15 and `ring` 0.17.14 were already in keybroker's build under rustls, and now they are also direct dependencies.
+
+**Tests:**
+- `a_leaf_key_the_operator_did_not_pin_is_refused_before_a_byte`: two upstreams with certificates from the same CA for the same name.
+  - The pinned one is answered `reply "hello back"`.
+  - The other is `pinMismatch`, and its upstream receives nothing.
+  - The pinned leaf listed for `other.example` is `pinMismatch`.
+  - The shipped `deploy/tls/pins` (empty) is `pinMismatch`.
+- `a_bad_pins_file_stops_keybroker_by_name`:
+  - uppercase hex, 63 digits, no final LF, a repeated pin, two spaces, an empty line, and a `#` comment are each `pinsMalformed`;
+  - 0666 is `pinsMode`, a symlink is `pinsLink`, and a missing file is `pinsMissing`, each with Lean's code and no socket;
+  - CONTROL: an empty file, a good file and the production file each pass, and keybroker goes on to its decider.
+- The TLS plants pin their upstream, so the truncation case meets the TLS close, never the pin.
+
+**Alternatives.**
+1. The build-time constant (the first ruling): its accepted case needs the test key in production. Refused, as reasoned above.
+2. Pin the intermediate or the root in the sent chain: unsound. Refused.
+3. A custom verifier exposing the verified path: the `dangerous` API, refused by HOSTING-15.
+4. Narrow the anchors only, with no pin: the 7 roots would still be trusted for any key. The pin adds "this key", the anchors add "these issuers". Kept both.
+
+**CRITIQUE.**
+- **A leaf pin breaks at every provider key rotation.** Every ask is then `pinMismatch` until the operator re-pins. That is loud and fail closed, but it is an outage. Two lines across a rotation is the mitigation, and it needs the new key in advance, which a provider does not announce.
+- **The operator computes the pin over the same network** the pin defends. A pin taken during an attack pins the attacker. The recipe should be run from two vantage points; that is said in the RUNBOOK and is not checked.
+- **`PROVIDER_ROOTS` is Rust data in OPS's emitter**, beside Lean's provider table, not derived from it. A second provider row in Lean without roots here is refused `tlsCertificate` at the first call: loud, but a second source.
+- **The CT evidence is a snapshot.** Anthropic may issue from another CA tomorrow.
+- **`pinMismatch` cannot distinguish an attack from a rotation.** keybroker logs nothing per ask, so the operator learns it from the resident's refusals.
+
+**META-CRITIQUE.** I proposed P2 after showing the build-time constant could not be both safe and tested. That argument was about the test. The real argument is that a leaf pin must change without a build, and I found it second. The narrowing was ROOT's complement, and I think it does most of the work against the 121-CA exposure. The pin's marginal value over 7 roots is real (it defends against a mis-issuance by GTS or SSL.com) but smaller than it sounds.
+
+**Plants** (hbox logs/hosting9-plants.py; each RED):
+- The pin check deleted: the other leaf is answered.
+- The pin not host-scoped: `other.example`'s pin is accepted.
+- Uppercase hex accepted: `pinsMalformed` not raised.
+- PINS read without custody: 0666 accepted.
+- The anchors not narrowed: `one_block_per_provider_root`.
+
+**Also in this landing (GATES-6's flake).** keybroker writes its end line in ONE `write`. `eprintln!` wrote it in pieces, and the decider, which shares that stderr and may still be ending, could print inside it: `keybroker: hosting-broker: keybrokerGone sockDir …`. That made `a_bad_socket_directory_stops_keybroker_by_name` red under load, by a race of stderr, not by a verdict. One line under PIPE_BUF is one atomic write.
+
+**Flag day (HOSTING-28 + HOSTING-29, one `hosting!`).**
+- Broker frames:
+  - `answer 1` is now `reply 1 (text)`, and `status 3` is new;
+  - request `reply 3`, verdicts `reply 4` and `status 5`;
+  - refusals `replyMalformed` 22 and `pinMismatch` 23;
+  - `broker_generated.rs` is re-emitted.
+- keybroker's argv gains PINS. A keybroker started with the old ten words refuses `usage`. KeybrokerExit gains 140–148.
+- Re-emitted:
+  - `deploy/units` (nd-keybroker.service's ExecStart, RestartPreventExitStatus, EXITS.md);
+  - `deploy/tls/anchors.pem` (121 → 7 blocks);
+  - the new `deploy/tls/pins` (empty).
+- What now refuses:
+  - every real upstream call is `pinMismatch` until the operator pins;
+  - a certificate chaining to any of the 114 dropped roots is `tlsCertificate`;
+  - the live harness keybroker ends `pinsMissing` (146) until deploy/live/broker.sh installs `$R/etc/pins` (OPS-5's, after this hash).
+- `gates/codec-vectors.tsv` does NOT move: no codec vector covers the broker's tagged sets (checked: `codec-vectors --check` ok).
+- Nothing persisted changes.

@@ -76,6 +76,10 @@ package nanodregg where
 @[default_target] lean_exe «emit-broker» where
   root := `Emit.BrokerMain
 
+-- The provider leaf-key pins keybroker ships with (deploy/tls/pins, HOSTING-28). Imports Hosting.Pins.
+@[default_target] lean_exe «emit-pins» where
+  root := `Emit.PinsMain
+
 -- The codec vectors (gates/codec-vectors.tsv, CODEC-28): a change of meaning under the same tag is red.
 @[default_target] lean_exe «codec-vectors» where
   root := `Emit.VectorsMain

@@ -3,7 +3,7 @@ name = "nanodregg-anchors"
 version = "0.0.0"
 edition = "2024"
 publish = false
-description = "Emit the broker's production TLS trust anchors from the pinned webpki-root-certs, or check a shipped file against them byte for byte (HOSTING-15). Decides nothing: the roots are the crate's."
+description = "Emit the broker's production TLS trust anchors: the provider roots (by DER SHA-256) of the pinned webpki-root-certs, or check a shipped file against them byte for byte (HOSTING-15, HOSTING-28)."
 
 [[bin]]
 name = "emit-anchors"
@@ -12,6 +12,8 @@ path = "src/main.rs"
 [dependencies]
 # Production trust is pinned by build: this exact version, its roots in its order.
 webpki-root-certs = { version = "=1.0.9", default-features = false }
+# The provider roots are chosen by the SHA-256 of their DER (ring, pinned as keybroker's, HOSTING-28).
+ring = { version = "=0.17.14", default-features = false }
 
 [lints.rust]
 unsafe_code = "forbid"

@@ -9,11 +9,15 @@ pipe and socket a frame is `u32le len ‖ payload`, `1 ≤ len ≤ Bounds.frameM
     ask       ask      1  model, maxTokens : u32, system, roles (one byte per message), texts : list
     request   decide   1  resident, atMs : u64          (followed by the resident's ask frame, unread)
               residents 2 atMs : u64                    (which sockets to serve: HOSTING-26)
+              reply    3  status : u32, body            (the upstream's answer to a grant: HOSTING-29)
     verdict   grant    1  keySlot : u32, charged : u64, host, target, headers, keyHeader, body
               refuse   2  brokerRefusal : Refusal
               residents 3 names : list                  (the answer to `residents`)
-    answer    answer   1  status : u32, body             (the upstream's status and body)
+              reply    4  text                          (the reply text Lean read from a 200 body)
+              status   5  status : u32                  (the upstream answered another status)
+    answer    reply    1  text                          (the model's reply text, read by Lean)
               refused  2  brokerRefusal : Refusal
+              status   3  status : u32                  (the upstream's status other than 200; its body withheld)
 
 keybroker never decodes an ask: it puts a `decide` frame naming the socket's resident in front of
 the ask's bytes and hands both to Lean. So identity is the socket, and the only decoder of what a
@@ -21,7 +25,9 @@ resident sent is Lean's. A `grant` carries the upstream request Lean printed (th
 host, target, extra headers, the NAME of the key header, the JSON body); keybroker adds the key's
 bytes and nothing else. `host` is the name keybroker sends as SNI and `Host:` and verifies the
 provider's certificate for, so the operator's dial address chooses where bytes go and Lean's table
-chooses whom they must reach (HOSTING-15). Which sockets keybroker serves is Lean's too: it asks
+chooses whom they must reach (HOSTING-15). The upstream's answer goes back to Lean as a `reply`
+request: Lean reads the reply text out of the provider's JSON (`Hosting.Reply`), so the resident
+receives text, never the provider's body (HOSTING-29). Which sockets keybroker serves is Lean's too: it asks
 `residents` and binds exactly the names the decider answers, the resident grains the World holds
 (HOSTING-26; no operator list).
 This module imports no decision, so the emitter's closure is the Codec family and these lists.
@@ -100,6 +106,14 @@ inductive Refusal
   /-- the asking socket's resident is no resident grain of the World (it was removed, or never
   was): its socket is being closed, and nothing is decided for it (HOSTING-26) -/
   | notResident
+  /-- the upstream answered 200 with a body Lean could not read a reply text from
+  (`Hosting.Reply`): not one JSON object, no single `content` array, a malformed block, a text that
+  is not UTF-8 or longer than `replyMax`; the body is withheld (HOSTING-29) -/
+  | replyMalformed
+  /-- keybroker: the provider's leaf certificate verified, but its SubjectPublicKeyInfo's SHA-256
+  is not one the operator's PINS file names for the host Lean named (a host with no pin included);
+  no request byte was written (HOSTING-28) -/
+  | pinMismatch
   deriving DecidableEq, Repr
 
 namespace Refusal
@@ -107,7 +121,8 @@ namespace Refusal
 def all : List Refusal :=
   [noAllowance, allowanceMalformed, clockRegressed, badAsk, modelNotAllowed, tokensZero, tokensOver,
    messagesMalformed, textNotUtf8, overSpend, requestTooLarge, keyMissing, keyEchoed, upstreamFailed, busy,
-   allowanceAmbiguous, noProvider, tlsCertificate, tlsHostname, tlsProtocol, peerRefused, notResident]
+   allowanceAmbiguous, noProvider, tlsCertificate, tlsHostname, tlsProtocol, peerRefused, notResident,
+   replyMalformed, pinMismatch]
 
 def code : Refusal → UInt8
   | noAllowance => 0 | allowanceMalformed => 1 | clockRegressed => 2 | badAsk => 3
@@ -115,7 +130,7 @@ def code : Refusal → UInt8
   | textNotUtf8 => 8 | overSpend => 9 | requestTooLarge => 10 | keyMissing => 11 | keyEchoed => 12
   | upstreamFailed => 13 | busy => 14 | allowanceAmbiguous => 15 | noProvider => 16
   | tlsCertificate => 17 | tlsHostname => 18 | tlsProtocol => 19 | peerRefused => 20
-  | notResident => 21
+  | notResident => 21 | replyMalformed => 22 | pinMismatch => 23
 
 def name : Refusal → String
   | noAllowance => "noAllowance" | allowanceMalformed => "allowanceMalformed"
@@ -127,6 +142,7 @@ def name : Refusal → String
   | allowanceAmbiguous => "allowanceAmbiguous" | noProvider => "noProvider"
   | tlsCertificate => "tlsCertificate" | tlsHostname => "tlsHostname" | tlsProtocol => "tlsProtocol"
   | peerRefused => "peerRefused" | notResident => "notResident"
+  | replyMalformed => "replyMalformed" | pinMismatch => "pinMismatch"
 
 def ofCode? (b : UInt8) : Option Refusal := all.find? (·.code == b)
 
@@ -149,13 +165,25 @@ inductive Verdict
   | refuse (why : Refusal)
   /-- the resident grains whose sockets keybroker must serve, by socket name (`Controller.dirOf`) -/
   | residents (names : List ByteArray)
+  /-- the reply text Lean read from the upstream's 200 body (`Broker.reply`) -/
+  | reply (text : ByteArray)
+  /-- the upstream answered a status other than 200; its body is withheld -/
+  | status (code : UInt32)
   deriving DecidableEq
 
-/-- What keybroker asks: a decision for an ask on a resident's socket (its ask frame follows), or
-which residents to serve. -/
+/-- What a resident receives for one ask. -/
+inductive Answer
+  | reply (text : ByteArray)
+  | refused (why : Refusal)
+  | status (code : UInt32)
+  deriving DecidableEq
+
+/-- What keybroker asks: a decision for an ask on a resident's socket (its ask frame follows),
+which residents to serve, or the reply in an upstream's answer to a grant. -/
 inductive Request
   | decide (resident : ByteArray) (atMs : Nat)
   | residents (atMs : Nat)
+  | reply (status : UInt32) (body : ByteArray)
 
 namespace Wire
 
@@ -166,25 +194,31 @@ def askCases : Tagged :=
 
 def requestCases : Tagged :=
   [("decide", 1, [.bytes "resident", .u64 "atMs"]),
-   ("residents", 2, [.u64 "atMs"])]
+   ("residents", 2, [.u64 "atMs"]),
+   ("reply", 3, [.u32 "status", .bytes "body"])]
 
 def verdictCases : Tagged :=
   [("grant", 1, [.u32 "keySlot", .u64 "charged", .bytes "host", .bytes "target", .bytes "headers",
      .bytes "keyHeader", .bytes "body"]),
    ("refuse", 2, [refusalField]),
-   ("residents", 3, [.list "names"])]
+   ("residents", 3, [.list "names"]),
+   ("reply", 4, [.bytes "text"]),
+   ("status", 5, [.u32 "status"])]
 
 def answerCases : Tagged :=
-  [("answer", 1, [.u32 "status", .bytes "body"]),
-   ("refused", 2, [refusalField])]
+  [("reply", 1, [.bytes "text"]),
+   ("refused", 2, [refusalField]),
+   ("status", 3, [.u32 "status"])]
 
 abbrev AskTy := Tagged.Ty Bounds.frameMax askCases
 abbrev RequestTy := Tagged.Ty Bounds.frameMax requestCases
 abbrev VerdictTy := Tagged.Ty Bounds.frameMax verdictCases
+abbrev AnswerTy := Tagged.Ty Bounds.frameMax answerCases
 
 def askCodec : Stream AskTy := Tagged.codec Bounds.frameMax Bounds.frameMax_fits askCases
 def requestCodec : Stream RequestTy := Tagged.codec Bounds.frameMax Bounds.frameMax_fits requestCases
 def verdictCodec : Stream VerdictTy := Tagged.codec Bounds.frameMax Bounds.frameMax_fits verdictCases
+def answerCodec : Stream AnswerTy := Tagged.codec Bounds.frameMax Bounds.frameMax_fits answerCases
 
 def bytes? (b : ByteArray) : Option (Bytes Bounds.frameMax) :=
   if h : b.size ≤ Bounds.frameMax then some ⟨b, h⟩ else none
@@ -214,6 +248,7 @@ def decodeRequest (b : ByteArray) : Except Codec.Refusal Request :=
   (requestCodec.decode b).map fun
     | ⟨⟨0, _⟩, (r, t, ())⟩ => .decide r.val t.toNat
     | ⟨⟨1, _⟩, (t, ())⟩ => .residents t.toNat
+    | ⟨⟨2, _⟩, (s, b, ())⟩ => .reply s b.val
 
 def verdictWire? : Verdict → Option VerdictTy
   | .grant k c hs t h kh b => do
@@ -225,16 +260,47 @@ def verdictWire? : Verdict → Option VerdictTy
   | .residents names => do
     let a ← names.mapM bytes?
     if h : a.toArray.size ≤ Bounds.frameMax then pure ⟨⟨2, by decide⟩, (⟨a.toArray, h⟩, ())⟩ else none
+  | .reply t => do
+    let t ← bytes? t
+    pure ⟨⟨3, by decide⟩, (t, ())⟩
+  | .status s => pure ⟨⟨4, by decide⟩, (s, ())⟩
 
 def verdictOf : VerdictTy → Verdict
   | ⟨⟨0, _⟩, (k, c, hs, t, h, kh, b, ())⟩ => .grant k c.toNat hs.val t.val h.val kh.val b.val
   | ⟨⟨1, _⟩, (why, ())⟩ => .refuse ((Refusal.ofCode? why.val).get (refusal_of_contains _ why.property))
   | ⟨⟨2, _⟩, (ns, ())⟩ => .residents (ns.val.toList.map (·.val))
+  | ⟨⟨3, _⟩, (t, ())⟩ => .reply t.val
+  | ⟨⟨4, _⟩, (s, ())⟩ => .status s
 
 /-- A verdict's payload, when it fits one frame. -/
 def encodeVerdict (v : Verdict) : Option ByteArray := do
   let w ← verdictWire? v
   let b := verdictCodec.bytes w
+  if b.size ≤ Bounds.frameMax then some b else none
+
+def answerOf : AnswerTy → Answer
+  | ⟨⟨0, _⟩, (t, ())⟩ => .reply t.val
+  | ⟨⟨1, _⟩, (why, ())⟩ => .refused ((Refusal.ofCode? why.val).get (refusal_of_contains _ why.property))
+  | ⟨⟨2, _⟩, (s, ())⟩ => .status s
+
+/-- A resident's reading of keybroker's answer frame. -/
+def decodeAnswer (b : ByteArray) : Except Codec.Refusal Answer := (answerCodec.decode b).map answerOf
+
+def askWire? (a : Ask) : Option AskTy := do
+  let m ← bytes? a.model
+  let s ← bytes? a.system
+  let r ← bytes? a.roles
+  let ts ← a.texts.mapM bytes?
+  if hn : a.maxTokens < 2 ^ 32 then
+    if h : ts.toArray.size ≤ Bounds.frameMax then
+      pure ⟨⟨0, by decide⟩, (m, a.maxTokens.toUInt32, s, r, ⟨ts.toArray, h⟩, ())⟩
+    else none
+  else none
+
+/-- A resident's ask frame payload, when it fits one frame. -/
+def encodeAsk (a : Ask) : Option ByteArray := do
+  let w ← askWire? a
+  let b := askCodec.bytes w
   if b.size ≤ Bounds.frameMax then some b else none
 
 end Wire

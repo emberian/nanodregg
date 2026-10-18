@@ -4,4 +4,5 @@ emit-units	deploy/units
 emit-hosting	launcher/src/generated.rs
 emit-broker	launcher/src/broker_generated.rs
 cargo:emit-anchors	deploy/tls/anchors.pem
+emit-pins	deploy/tls/pins
 codec-vectors	gates/codec-vectors.tsv

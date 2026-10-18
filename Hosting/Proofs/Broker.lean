@@ -2,6 +2,7 @@
 # Hosting.Proofs.Broker — the broker never charges a resident past its cap, and a restart refunds nothing
 -/
 import Hosting.Broker
+import Hosting.Reply
 import Codec.Proofs.Layout
 
 namespace Nanodregg.Hosting.Proofs.Broker
@@ -10,8 +11,9 @@ open Nanodregg.Codec Nanodregg.Hosting.Broker
 
 /-! ## Specifications (private: the proofs' own; nothing deployed calls them)
 
-`Json.escL` is `Json.esc` as a list, `Json.unstr` reads a JSON string's contents after its opening
-quote, and `Json.bodySpec` is the body as a list of bytes. -/
+`Json.escL` is `Json.esc` as a list and `Json.bodySpec` is the body as a list of bytes. A string is
+read back by the DEPLOYED reader, `Broker.Json.unstr` (`Hosting.Reply`, the reader of the
+provider's answers, HOSTING-29): there is no second reader for the proofs. -/
 
 namespace Json
 
@@ -20,27 +22,6 @@ private def escL (x : UInt8) : List UInt8 :=
   else if x == 92 then [92, 92]
   else if x < 32 then [92, 117, 48, 48, Broker.Json.hexDigit (x.toNat / 16), Broker.Json.hexDigit (x.toNat % 16)]
   else [x]
-
-private def hexVal (h : UInt8) : Option Nat :=
-  if 48 ≤ h && h ≤ 57 then some (h.toNat - 48) else if 97 ≤ h && h ≤ 102 then some (h.toNat - 87) else none
-
-private def unstr : List UInt8 → Option (List UInt8 × List UInt8)
-  | [] => none
-  | x :: rest =>
-    if x == 34 then some ([], rest)
-    else if x == 92 then
-      match rest with
-      | 34 :: r => (unstr r).map fun (c, r) => (34 :: c, r)
-      | 92 :: r => (unstr r).map fun (c, r) => (92 :: c, r)
-      | 117 :: 48 :: 48 :: h :: l :: r =>
-        match hexVal h, hexVal l with
-        | some a, some b => if a * 16 + b < 32 then (unstr r).map fun (c, r) => ((a * 16 + b).toUInt8 :: c, r) else none
-        | _, _ => none
-      | _ => none
-    else if x < 32 then none
-    else (unstr rest).map fun (c, r) => (x :: c, r)
-termination_by l => l.length
-decreasing_by all_goals simp_all <;> omega
 
 private def u (s : String) : List UInt8 := s.toUTF8.data.toList
 
@@ -362,6 +343,14 @@ theorem verdictOf_wire {v : Verdict} {w : Wire.VerdictTy} (h : Wire.verdictWire?
       simp only [Wire.verdictOf]
       rw [mapM_bytes ha]
     · cases hw
+  | reply t =>
+    simp only [Wire.verdictWire?, bind, Option.bind_eq_some_iff, pure, Option.some.injEq] at h
+    obtain ⟨t', ht, rfl⟩ := h
+    simp [Wire.verdictOf, bytes?_val ht]
+  | status c =>
+    simp only [Wire.verdictWire?, pure, Option.some.injEq] at h
+    subst h
+    rfl
 
 /-! ## The printed string is one JSON string whose contents are the text -/
 
@@ -389,35 +378,128 @@ theorem str_data (acc b : ByteArray) :
   rw [Array.foldl_toList] at h
   simp only [Broker.Json.str, push_data, h, List.append_assoc, List.cons_append, List.nil_append]
 
-private theorem hex_round : ∀ n, n < 16 → Json.hexVal (Broker.Json.hexDigit n) = some n := by decide
+private theorem hex_round : ∀ n, n < 16 → Broker.Json.hexVal (Broker.Json.hexDigit n) = some n := by decide
 
-private theorem unstr_esc (x : UInt8) (L : List UInt8) :
-    Json.unstr (Json.escL x ++ L) = (Json.unstr L).map fun (c, r) => (x :: c, r) := by
-  unfold Json.escL
-  split
-  · rename_i h1; simp at h1; subst h1; simp only [List.cons_append, List.nil_append]; rw [Json.unstr.eq_def]; simp
-  · split
-    · rename_i h1 h2; simp at h2; subst h2; simp only [List.cons_append, List.nil_append]; rw [Json.unstr.eq_def]; simp
-    · split
+/-! ### The deployed string reader reads the printer back (over `ByteArray`, at an index) -/
+
+private theorem drop_cons {b : ByteArray} {i : Nat} {x : UInt8} {L : List UInt8}
+    (h : b.data.toList.drop i = x :: L) :
+    Broker.Json.byteAt b i = some x ∧ b.data.toList.drop (i + 1) = L := by
+  have hi : i < b.data.toList.length := by
+    rcases Nat.lt_or_ge i b.data.toList.length with hl | hl
+    · exact hl
+    · rw [List.drop_eq_nil_of_le hl] at h; cases h
+  rw [List.drop_eq_getElem_cons hi] at h
+  obtain ⟨hx, hL⟩ := List.cons.inj h
+  refine ⟨?_, hL⟩
+  have hs : i < b.size := hi
+  simp only [Broker.Json.byteAt, dif_pos hs, Option.some.injEq]
+  rw [← hx]
+  rfl
+
+private theorem drop_append {b : ByteArray} {i : Nat} {A B : List UInt8}
+    (h : b.data.toList.drop i = A ++ B) : b.data.toList.drop (i + A.length) = B := by
+  rw [← List.drop_drop, h, List.drop_left]
+
+private theorem push_eq_append (acc : ByteArray) (x : UInt8) : acc.push x = acc ++ ⟨#[x]⟩ := by
+  apply ByteArray.ext; simp [ByteArray.push]
+
+/-- One printed character is one step of the deployed reader, which pushes that character. -/
+private theorem unstrAcc_esc (b : ByteArray) (n i : Nat) (acc : ByteArray) (x : UInt8) (L : List UInt8)
+    (h : b.data.toList.drop i = Json.escL x ++ L) :
+    Broker.Json.unstrAcc b (n + 1) i acc = Broker.Json.unstrAcc b n (i + (Json.escL x).length) (acc.push x) := by
+  unfold Json.escL at h ⊢
+  split at h
+  · rename_i h1
+    simp at h1; subst h1
+    obtain ⟨h0, h0'⟩ := drop_cons h
+    obtain ⟨h1, -⟩ := drop_cons h0'
+    rw [Broker.Json.unstrAcc]
+    simp [h0, h1]
+  · split at h
+    · rename_i h1 h2
+      simp at h2; subst h2
+      obtain ⟨h0, h0'⟩ := drop_cons h
+      obtain ⟨h1, -⟩ := drop_cons h0'
+      rw [Broker.Json.unstrAcc]
+      simp [h0, h1]
+    · split at h
       · rename_i h1 h2 h3
         have hx : x.toNat < 32 := by simpa [UInt8.lt_iff_toNat_lt] using h3
         have ha := hex_round (x.toNat / 16) (by omega)
         have hb := hex_round (x.toNat % 16) (by omega)
-        have hv : x.toNat / 16 * 16 + x.toNat % 16 = x.toNat := by omega
-        simp only [List.cons_append, List.nil_append]; rw [Json.unstr.eq_def]
-        simp [ha, hb, hv, hx]
+        have h0v : Broker.Json.hexVal 48 = some 0 := by decide
+        obtain ⟨g0, d0⟩ := drop_cons h
+        obtain ⟨g1, d1⟩ := drop_cons d0
+        obtain ⟨g2, d2⟩ := drop_cons d1
+        obtain ⟨g3, d3⟩ := drop_cons d2
+        obtain ⟨g4, d4⟩ := drop_cons d3
+        obtain ⟨g5, -⟩ := drop_cons d4
+        have hq : Broker.Json.quadAt b (i + 2) = some x.toNat := by
+          simp only [Broker.Json.quadAt,
+            show i + 2 + 2 = i + 1 + 1 + 1 + 1 from rfl, show i + 2 + 3 = i + 1 + 1 + 1 + 1 + 1 from rfl,
+            show i + 2 = i + 1 + 1 from rfl, g2, g3, g4, g5, Broker.Json.quad, h0v, ha, hb, bind,
+            Option.bind, pure]
+          congr 1; omega
+        have hh : Broker.Json.isHigh x.toNat = false := by simp [Broker.Json.isHigh]; omega
+        have hl : Broker.Json.isLow x.toNat = false := by simp [Broker.Json.isLow]; omega
+        have hu : Broker.Json.utf8Of x.toNat = ⟨#[x]⟩ := by
+          simp only [Broker.Json.utf8Of, if_pos (show x.toNat < 0x80 by omega)]
+          simp
+        rw [Broker.Json.unstrAcc]
+        simp [g0, g1, hq, hh, hl, hu, push_eq_append, h3, show x ≠ 34 by simpa using h1,
+          show x ≠ 92 by simpa using h2]
       · rename_i h1 h2 h3
-        simp only [List.cons_append, List.nil_append]; rw [Json.unstr.eq_def]
-        simp_all
-        intro h; exact absurd h (by simpa [UInt8.lt_iff_toNat_lt, UInt8.le_iff_toNat_le] using h3)
+        obtain ⟨g0, -⟩ := drop_cons h
+        rw [Broker.Json.unstrAcc]
+        simp [g0, h1, h2, h3]
 
-/-- Reading a JSON string after `str`'s opening quote gives back exactly the text, and stops at
-`str`'s closing quote: no text a resident sends can end the string early or add a field. -/
-theorem unstr_str (t : List UInt8) (rest : List UInt8) :
-    Json.unstr (t.flatMap Json.escL ++ 34 :: rest) = some (t, rest) := by
-  induction t with
-  | nil => rw [List.flatMap_nil, List.nil_append, Json.unstr.eq_def]; simp
-  | cons x xs ih => rw [List.flatMap_cons, List.append_assoc, unstr_esc, ih]; rfl
+private theorem escL_length (x : UInt8) : 1 ≤ (Json.escL x).length := by
+  unfold Json.escL; split <;> (try split) <;> (try split) <;> simp
+
+private theorem flatMap_escL_length : ∀ t : List UInt8, t.length ≤ (t.flatMap Json.escL).length
+  | [] => by simp
+  | x :: xs => by
+    have := escL_length x
+    have := flatMap_escL_length xs
+    simp only [List.flatMap_cons, List.length_append, List.length_cons]; omega
+
+theorem unstrAcc_str (b : ByteArray) (t rest : List UInt8) (i n : Nat) (acc : ByteArray)
+    (h : b.data.toList.drop i = t.flatMap Json.escL ++ 34 :: rest) (hn : t.length < n) :
+    Broker.Json.unstrAcc b n i acc = some (acc ++ ⟨t.toArray⟩, i + (t.flatMap Json.escL).length + 1) := by
+  induction t generalizing i n acc with
+  | nil =>
+    obtain ⟨m, rfl⟩ : ∃ m, n = m + 1 := ⟨n - 1, by simp at hn; omega⟩
+    obtain ⟨g0, -⟩ := drop_cons (by simpa using h)
+    rw [Broker.Json.unstrAcc]
+    simp [g0]
+    apply ByteArray.ext; simp
+  | cons x xs ih =>
+    obtain ⟨m, rfl⟩ : ∃ m, n = m + 1 := ⟨n - 1, by simp at hn; omega⟩
+    rw [List.flatMap_cons, List.append_assoc] at h
+    rw [unstrAcc_esc b m i acc x _ h, ih (i + (Json.escL x).length) m (acc.push x) (drop_append h)
+      (by simp at hn; omega)]
+    simp only [Option.some.injEq, Prod.mk.injEq]
+    constructor
+    · apply ByteArray.ext; simp [ByteArray.push]
+    · simp only [List.flatMap_cons, List.length_append]; omega
+
+/-- **The deployed reader reads Lean's printed strings back.** Wherever the bytes from index `i` on
+are a string `str` printed (its contents `t`, escaped, then the closing quote), `unstr` gives back
+exactly `t` and the index just after the closing quote: no text a resident sends can end the string
+early or add a field, and the reader of provider answers (HOSTING-29) agrees with the printer. -/
+theorem unstr_str (b : ByteArray) (t rest : List UInt8) (i : Nat)
+    (h : b.data.toList.drop i = t.flatMap Json.escL ++ 34 :: rest) :
+    Broker.Json.unstr b i = some (⟨t.toArray⟩, i + (t.flatMap Json.escL).length + 1) := by
+  have hl : t.length < b.size := by
+    have h1 := congrArg List.length h
+    rw [List.length_drop] at h1
+    simp only [List.length_append, List.length_cons] at h1
+    have := flatMap_escL_length t
+    show t.length < b.data.toList.length
+    omega
+  have := unstrAcc_str b t rest i b.size .empty h hl
+  simpa [Broker.Json.unstr] using this
 
 private theorem lit_data (acc : ByteArray) (s : String) :
     (Broker.Json.lit acc s).data.toList = acc.data.toList ++ Json.u s := by
@@ -486,6 +568,101 @@ theorem body_shape {ask : Ask} {body : ByteArray} (h : requestBody ask = .ok bod
       rw [← h2, show (fun p : UInt8 × ByteArray => roleName p.1) = roleName ∘ Prod.fst from rfl,
         ← List.map_map, hz]
     simp [lit_data, messages_data, str_spec, Json.bodySpec, hs, List.append_assoc]
+
+/-! ## The reader of provider answers reads Lean's printer back (HOSTING-29) -/
+
+private theorem byteAt_eq (b : ByteArray) (k : Nat) : Broker.Json.byteAt b k = b.data.toList[k]? := by
+  unfold Broker.Json.byteAt
+  split
+  · rename_i h; rw [List.getElem?_eq_getElem (by exact h)]; rfl
+  · rename_i h; rw [List.getElem?_eq_none (by simpa using Nat.le_of_not_lt h)]
+
+/-- `{"content":[{"type":"text","text":` -/
+private def pre : List UInt8 :=
+  [123, 34, 99, 111, 110, 116, 101, 110, 116, 34, 58, 91, 123, 34, 116, 121, 112, 101, 34, 58, 34, 116,
+   101, 120, 116, 34, 44, 34, 116, 101, 120, 116, 34, 58]
+
+/-- The provider body holding one text block whose text Lean's own printer wrote. -/
+private def printed (t : ByteArray) : ByteArray :=
+  Broker.Json.lit (Broker.Json.str (Broker.Json.lit .empty "{\"content\":[{\"type\":\"text\",\"text\":") t) "}]}"
+
+private theorem printed_data (t : ByteArray) :
+    (printed t).data.toList = pre ++ 34 :: (t.data.toList.flatMap Json.escL ++ 34 :: [125, 93, 125]) := by
+  have h1 : ("{\"content\":[{\"type\":\"text\",\"text\":" : String).toUTF8.data.toList = pre := by decide
+  have h2 : ("}]}" : String).toUTF8.data.toList = [125, 93, 125] := by decide
+  simp only [printed, Broker.Json.lit, ByteArray.data_append, Array.toList_append, str_data, h1, h2]
+  simp
+
+private theorem plain_escL : ∀ l : List UInt8, (l.all fun x => decide (32 ≤ x) && x != 34 && x != 92) = true →
+    l.flatMap Json.escL = l
+  | [] => fun _ => rfl
+  | x :: xs => fun h => by
+    simp only [List.all_cons, Bool.and_eq_true, decide_eq_true_eq, bne_iff_ne, ne_eq] at h
+    obtain ⟨⟨⟨h32, h34⟩, h92⟩, hxs⟩ := h
+    have hx : Json.escL x = [x] := by
+      unfold Json.escL
+      have : ¬ x < 32 := by
+        intro hl; exact absurd (UInt8.lt_iff_toNat_lt.mp hl) (by have := UInt8.le_iff_toNat_le.mp h32; simp at this ⊢; omega)
+      simp [h34, h92, this]
+    rw [List.flatMap_cons, hx, plain_escL xs hxs]; rfl
+
+/-- **The reader of provider answers reads Lean's printer back**: a 200 body holding one text block
+whose text Lean's own `Json.str` printed is read to exactly that text, for every UTF-8 text within
+`replyMax`, whatever bytes it holds (quotes, backslashes, control bytes: `str`'s escapes). -/
+theorem reply_printed (t : ByteArray) (hu : utf8 t = true) (hs : t.size ≤ Bounds.replyMax) :
+    Broker.reply 200 (Broker.Json.lit (Broker.Json.str
+      (Broker.Json.lit .empty "{\"content\":[{\"type\":\"text\",\"text\":") t) "}]}") = .reply t := by
+  show Broker.reply 200 (printed t) = .reply t
+  have hd := printed_data t
+  generalize hE : (t.data.toList.flatMap Json.escL).length = E
+  have hsize : (printed t).size = E + 38 + 1 := by
+    show (printed t).data.toList.length = _
+    rw [hd]; simp [pre, hE]
+  have hat : ∀ k, Broker.Json.byteAt (printed t) k = (printed t).data.toList[k]? := byteAt_eq _
+  have hpre : ∀ k, k < 35 → Broker.Json.byteAt (printed t) k = (pre ++ [34])[k]? := by
+    intro k hk
+    rw [hat, hd, show pre ++ 34 :: (t.data.toList.flatMap Json.escL ++ 34 :: [125, 93, 125]) =
+      (pre ++ [34]) ++ (t.data.toList.flatMap Json.escL ++ 34 :: [125, 93, 125]) by simp]
+    rw [List.getElem?_append_left (by simp [pre]; omega)]
+  have hsuf : ∀ k, k < 4 → Broker.Json.byteAt (printed t) (E + 35 + k) = [34, 125, 93, 125][k]? := by
+    intro k hk
+    rw [hat, hd, show pre ++ 34 :: (t.data.toList.flatMap Json.escL ++ 34 :: [125, 93, 125]) =
+      (pre ++ 34 :: t.data.toList.flatMap Json.escL) ++ [34, 125, 93, 125] by simp]
+    rw [List.getElem?_append_right (by simp [pre, hE])]
+    congr 1; simp [pre, hE]
+  have hend : Broker.Json.byteAt (printed t) (E + 39) = none := by
+    rw [hat, List.getElem?_eq_none]; rw [hd]; simp [pre, hE]
+  have hb36 : Broker.Json.byteAt (printed t) (E + 36) = some 125 := hsuf 1 (by decide)
+  have hb37 : Broker.Json.byteAt (printed t) (E + 37) = some 93 := hsuf 2 (by decide)
+  have hb38 : Broker.Json.byteAt (printed t) (E + 38) = some 125 := hsuf 3 (by decide)
+  have hdrop : ∀ k, k ≤ 34 → (printed t).data.toList.drop k =
+      pre.drop k ++ 34 :: (t.data.toList.flatMap Json.escL ++ 34 :: [125, 93, 125]) := by
+    intro k hk; rw [hd, List.drop_append_of_le_length (by simp [pre]; omega)]
+  have key : ∀ (k : Nat) (w : List UInt8) (rest : List UInt8), k ≤ 34 →
+      (w.all fun x => decide (32 ≤ x) && x != 34 && x != 92) = true →
+      (printed t).data.toList.drop k = w ++ 34 :: rest →
+      Broker.Json.unstr (printed t) k = some (⟨w.toArray⟩, k + w.length + 1) := by
+    intro k w rest _ hw h
+    have := unstr_str (printed t) w rest k (by rw [plain_escL w hw]; exact h)
+    rwa [plain_escL w hw] at this
+  have u2 := key 2 [99, 111, 110, 116, 101, 110, 116] _ (by decide) (by decide) (by rw [hdrop 2 (by decide)]; rfl)
+  have u14 := key 14 [116, 121, 112, 101] _ (by decide) (by decide) (by rw [hdrop 14 (by decide)]; rfl)
+  have u21 := key 21 [116, 101, 120, 116] _ (by decide) (by decide) (by rw [hdrop 21 (by decide)]; rfl)
+  have u28 := key 28 [116, 101, 120, 116] _ (by decide) (by decide) (by rw [hdrop 28 (by decide)]; rfl)
+  have u35 : Broker.Json.unstr (printed t) 35 = some (⟨t.data.toList.toArray⟩, E + 36) := by
+    have := unstr_str (printed t) t.data.toList [125, 93, 125] 35 (by
+      rw [hd, show 35 = pre.length + 1 by rfl, ← List.drop_drop, List.drop_left]; rfl)
+    rw [this, hE]; congr 2; omega
+  have ht : (⟨t.data.toList.toArray⟩ : ByteArray) = t := by apply ByteArray.ext; simp
+  rw [ht] at u35
+  obtain ⟨m, hm⟩ : ∃ m, 3 * (printed t).size + 3 = m + 12 := ⟨3 * (printed t).size - 9, by rw [hsize]; omega⟩
+  have hr : Broker.Json.replyText (printed t) = some t := by
+    unfold Broker.Json.replyText
+    rw [hm, show Bounds.depthMax = 63 + 1 from rfl]
+    simp (config := { decide := true }) [Broker.Json.value, Broker.Json.members, Broker.Json.elems,
+      Broker.Json.ws, hsize, hpre, u2, u14, u21, u28, u35, hb36, hb37, hb38, hend,
+      Broker.Json.field, Broker.Json.blockText, pre]
+  simp [Broker.reply, hr, hu, hs]
 
 /-! ## Every verdict `step` returns has a frame (HOSTING-12's owed theorem) -/
 

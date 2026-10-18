@@ -309,6 +309,7 @@ checksum = "68354c5c6bd36d73ff3feceb05efa59b6acb7626617f4962be322a825e61f79a"
 name = "nanodregg-anchors"
 version = "0.0.0"
 dependencies = [
+ "ring",
  "webpki-root-certs",
 ]
 
@@ -343,7 +344,9 @@ dependencies = [
  "nanodregg-devtools",
  "nanodregg-sandbox",
  "rcgen",
+ "ring",
  "rustls",
+ "rustls-webpki",
  "zeroize",
 ]
 
