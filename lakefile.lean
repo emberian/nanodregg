@@ -138,6 +138,10 @@ extern_lib «ndhost» pkg := do
 @[default_target] lean_exe «bench-worstcut» where
   root := `Bench.WorstCutMain
 
+-- THE BAR's reopen at the worst World, the reader's bound: `bench-worstworld SCRATCH synthetic N | honest [STATE_BYTES]` (PERF-8).
+@[default_target] lean_exe «bench-worstworld» where
+  root := `Bench.WorstWorldMain
+
 -- OPS: renderers and drivers over the real `host` (nothing imports Ops).
 @[default_target] lean_lib Ops where
   globs := #[.submodules `Ops]

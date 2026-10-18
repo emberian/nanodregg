@@ -8,9 +8,9 @@ edit it, never pass it as a PATH). Ceilings live in `gates/ceilings.tsv`. A rise
 | metric | now | ceiling |
 |---|---|---|
 | Lean modules in the Host closure | 79 | 150 |
-| Lean modules | 339 | — |
+| Lean modules | 341 | — |
 | Lean proof-modules | 178 | — |
-| Lean lines (Bench) | 501 | — |
+| Lean lines (Bench) | 689 | — |
 | Lean lines (Census) | 244 | — |
 | Lean lines (Codec) | 12660 | — |
 | Lean lines (Emit) | 1541 | — |
@@ -22,9 +22,9 @@ edit it, never pass it as a PATH). Ceilings live in `gates/ceilings.tsv`. A rise
 | Lean lines (Ops) | 2296 | — |
 | Lean lines (Protocol) | 8780 | — |
 | Lean lines (deployed) | 20614 | — |
-| Lean lines (tooling: Sim, Rows, Journey, Census, Emit, Ops, Bench) | 15157 | — |
+| Lean lines (tooling: Sim, Rows, Journey, Census, Emit, Ops, Bench) | 15345 | — |
 | foundation modules | 7 | 8 |
-| max dependents of a non-foundation module | 238 | — |
+| max dependents of a non-foundation module | 240 | — |
 | theorems | 3952 | — |
 | partial defs (deployed) | 0 | 0 |
 | sorry | 0 | 0 |

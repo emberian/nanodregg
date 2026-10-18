@@ -419,3 +419,58 @@ reached below 1000 records.
 tree's, which is why only `--record` refuses dirt.
 
 **Status.** landed with this entry.
+
+## PERF-8 · The worst World is the reader's bound: a synthetic base at worldBytesMax, scaled into standing (2026-10-18, ROOT)
+
+**Decision.** `worldBytesMax` bounds what a base FILE may hold, whatever the genesis allowance. So the reopen's
+worst World is an adversarially sized base, not an honest history (ROOT). `bench-worstworld` (Bench/WorstWorld.lean)
+has two modes, both on the deployed path (`Host.genesis`'s seal and MAC, `openFollower`):
+- `SCRATCH synthetic N` (standing, N = 200000): N tombstones, the smallest cell entry at 35 B, at hashed ids
+  in the genesis trie. They are written as a Store's base and reopened, and the reopen must reach the
+  written roots. The base decode is counted under countingEnv. WASTE `worstworld
+  decode-trie-hashes-per-entry` 2.000 is scale-free, and the total derived at worldBytesMax is printed beside it.
+- `SCRATCH honest [STATE_BYTES]` (by hand): births until `submit` refuses, then the final base's reopen and
+  decode counted.
+
+`--harness-control` (either mode) requires the decoded roots to equal the written roots with their first
+byte flipped. A non-number argument gets the usage line and exit 2.
+
+**Measured.**
+
+| run | entries | base bytes | decode hashes (per entry) | reopen | build | RSS | load1 (24 cpus) |
+|---|---|---|---|---|---|---|---|
+| synthetic 200k (the row) | 200,002 | 7,000,416 | 400,003 (2.000) | 2.2 s | 13 s | 178 MB | 10.5–12 |
+| **synthetic at worldBytesMax (by hand)** | 7,669,002 | 268,415,416 (1.000) | 15,338,003 (2.000) | **120.7 s** | 13.8 min | 10.1 GB | 12–15 |
+| honest, 16-byte births (by hand) | 204,288 births | 22,247,840 (0.083) | — | 2.3 s | 11 min | 547 MB | 10–14 |
+| honest, 60 KB births (by hand) | 743 births | 44,702,268 (0.167) | — | 0.78 s | 27 s | 793 MB | ~11 |
+
+- The 200k row derives 7,669,574 entries and 15,339,110 hashes at worldBytesMax. The by-hand run at
+  7,669,000 entries measured 15,338,003.
+- Both honest runs end `rejected overAllowance`. Turn.weight = logWeight + growth, so a create's bytes are
+  paid three times (event, logged creates, growth), and the allowance (134,217,728) buys at most about a
+  third of itself as World. Encoded/weight is 1.001.
+- A reader-bound base reopens at 2× THE BAR's 60 s limit on this box. It goes to KERNEL-21 and HOST-14
+  (KERNEL-55) as evidence for option B: worldBytesMax derived to the allowance-implied ~84–87 MB. By my
+  estimate (not measured), that also meets the reopen limit, which needs below ~128 MiB of small entries
+  here. Once the bound is set, the row text names it and the derived total is re-pinned there.
+- The full 256 MiB run and the honest run stay by hand (ROOT): 60 minutes of standing would buy a number
+  the scaled row already derives.
+
+**Alternatives.**
+- (a) The full run in standing: 18 min and 10 GB each.
+- (b) An honest-history row only: it cannot reach the bound that the reader actually faces.
+- (c) Tombstones at sequential ids, an adversarial trie shape: not measured. Hashed ids give the honest
+  shape. Decode is 2 hashes per entry at both scales, so the shape seems not to matter for decode;
+  this is an inference.
+
+**CRITIQUE.**
+- The row pins hashes, not time. The 120.7 s is a clock on a loaded box, reported and never gated.
+- Decode is two hashes per entry, but the reopen's time is not all hashing: allocation and the trie
+  build are uncounted.
+- Tombstones are the smallest entry, but not the costliest per byte to decode if a live cell's decode
+  does more work. Spent nullifiers (also 32 B ids) were not tried.
+
+**META-CRITIQUE.** I first measured honest Worlds, because I read "worst World" as "worst history". ROOT's
+reframing to the reader's bound came from my own numbers, but I did not draw it.
+
+**Status.** open (re-pin at KERNEL-55's bound).
