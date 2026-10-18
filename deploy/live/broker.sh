@@ -4,7 +4,7 @@
 #
 # SRC holds bin/{host,live-calls,emit-units,keybroker,hosting-broker,emit-anchors,nd-supervise,
 # grain-launch,hosting-controller}, anchors.pem
-# (deploy/tls/anchors.pem) and EXITS.md (deploy/units/EXITS.md: codes are read from it by name, never
+# (deploy/tls/anchors.pem), pins (deploy/tls/pins, empty) and EXITS.md (deploy/units/EXITS.md: codes are read from it by name, never
 # typed here). ROOT must not exist; everything is written under it except the unit link
 # (`systemctl --user link`: four, nd-ops-live-keybroker, the writer nd-ops-live-serve that admits the
 # resident grain's two calls, and the two templates nd-ops-live-hfollow@ and nd-ops-live-grain@). Units are started and stopped BY NAME; the only process signalled by
@@ -55,6 +55,7 @@ mapfile -t g < "$R/calls/genesis.args"
 op=$(awk '/^founder 0 /{print $4}' "$R/report/genesis.txt")
 printf '7 CANARY-ops3-live-not-a-key\n' > "$R/etc/provider.key" && chmod 0600 "$R/etc/provider.key"
 cp "$SRC/anchors.pem" "$R/etc/anchors.pem" && chmod 0644 "$R/etc/anchors.pem"
+cp "$SRC/pins" "$R/etc/pins" && chmod 0644 "$R/etc/pins" || exit 2   # the shipped, EMPTY pins: the fixture never calls upstream
 printf 'ND_OPERATOR=%s\nND_PEER=%s\n' "$op" "$(id -u)" > "$R/etc/keybroker.env"
 "$B/emit-units" --live "$ROOT" "$U" || exit 2
 for u in $LINKS; do
