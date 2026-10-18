@@ -505,7 +505,8 @@ invariant). The backup holds that `file` and the append-only files with whatever
 since (`I ++ x`, `S ++ y`: `Store.backupOrder` copies them after the base). Then its open `R` is
 either the same base with at least the live records, its World and index the live ones advanced by
 the extra records' fold, ending no earlier; or a refusal by name: `tailTooLong` (the copy ran
-past a later seal and its tail), `corrupt`, or `record j` at a record past the live ones. Never a
+past a later seal and its tail: the tail it names is past the bound
+it names, HOST-55), `corrupt`, or `record j` at a record past the live ones. Never a
 shorter open, and never `indexShort`/`indexCorrupt`/`foreignSegment`/`foreignOrigin`/`tagWidth`/
 `shortRead`. The fold runs from the live state at the live position and ends at the backup's
 position (the extra records' index entries name their true offsets), and a `corrupt` refusal
@@ -520,7 +521,7 @@ theorem openWith_backup (keys : Keys) (c : Cadence) (world : Codec.Stream W) (ma
       o'.opened.records = o.opened.records + more.length ∧ o.pos.offset ≤ o'.pos.offset ∧
       foldRecords (indexed mark step) (o.opened.world, o.index, o.pos.offset) o.opened.records more =
         .ok (o'.opened.world, o'.index, o'.pos.offset)) ∨
-    (∃ n mx, R = .error (.base (.tailTooLong n mx))) ∨
+    (∃ n mx, R = .error (.base (.tailTooLong n mx)) ∧ mx < n) ∨
     (∃ off, R = .error (.log (.corrupt off)) ∧ o.pos.offset ≤ off) ∨
     (∃ j f, R = .error (.log (.record j f)) ∧ o.opened.records ≤ j) := by
   have hfile : ¬ frameMax c.baseRecordMax < file.size := by
@@ -539,7 +540,7 @@ theorem openWith_backup (keys : Keys) (c : Cadence) (world : Codec.Stream W) (ma
     unfold tailRead at htr
     rw [if_neg (by rw [size_append]; omega)] at htr
     split at htr
-    · cases htr; exact ⟨_, _, rfl⟩
+    · rename_i hgt; cases htr; exact ⟨_, _, rfl, hgt⟩
     · cases htr
   | ok len' =>
     obtain ⟨hs', _⟩ := tailRead_ok htr
@@ -725,7 +726,7 @@ count, which are at or past these (a later base sits at or past the live valid e
 least the live entries). So after any number of restarts and appends the later copies are the cut files
 plus whatever was appended since: `S.extract 0 o.pos.offset ++ y` and
 `I.extract 0 (o.sealed.index.count * entryBytes keys) ++ x`. The conclusion is `openWith_backup`'s:
-the same base with at least the live records, or a refusal by name (`tailTooLong`, `corrupt` at or
+the same base with at least the live records, or a refusal by name (`tailTooLong` past its bound, `corrupt` at or
 past the live position, `record j` past the live records). It generalizes `openWith_backup`, whose
 `S ++ y` is `S.extract 0 o.pos.offset ++ (S.extract o.pos.offset S.size ++ y)`. -/
 theorem openWith_backup_restart (keys : Keys) (c : Cadence) (world : Codec.Stream W)
@@ -740,7 +741,7 @@ theorem openWith_backup_restart (keys : Keys) (c : Cadence) (world : Codec.Strea
       o'.opened.records = o.opened.records + more.length ∧ o.pos.offset ≤ o'.pos.offset ∧
       foldRecords (indexed mark step) (o.opened.world, o.index, o.pos.offset) o.opened.records more =
         .ok (o'.opened.world, o'.index, o'.pos.offset)) ∨
-    (∃ n mx, R = .error (.base (.tailTooLong n mx))) ∨
+    (∃ n mx, R = .error (.base (.tailTooLong n mx)) ∧ mx < n) ∨
     (∃ off, R = .error (.log (.corrupt off)) ∧ o.pos.offset ≤ off) ∨
     (∃ j f, R = .error (.log (.record j f)) ∧ o.opened.records ≤ j) := by
   have hb := openWith_backup keys c world mark origin step file _ _ x y

@@ -2524,3 +2524,15 @@ They keep the faults their callers already name. They do not share a decoder fun
   - Both of HOSTING-10's "argued from code" claims rested on a claim about the runtime that nobody measured: "these exes install no signal handler". The runtime does install handlers, and it also ignores SIGPIPE, which turned the SIGPIPE plant into a check of Lean's runtime rather than of sock.c.
   - The lesson for every extern row: before a test is called a tooth for a C property, read the process's signal state (/proc/PID/status) and run the mutation once.
 - **Host's serve.** This is the client end of a Unix stream socket, and it is THE one: every Lean process in the repo that connects to a Unix socket uses Host.Sock. Host's own serving goes through nd-supervise's pipes today. If Host ever serves or connects to a socket itself, it extends Host/c/sock.c (an accept beside the connect, under the same deadline, the same names and the same tcb row). It does not add a second socket C file, so this is not a second implementation and must not become one.
+
+## HOST-55 · the backup theorems name the `tailTooLong` they refuse with its bound (2026-10-19, HOST-14; ROOT, after the disjunct audit)
+
+**The gap.** `openWith_backup` and `openWith_backup_restart` concluded with four outcomes. One of them, `∃ n mx, R = tailTooLong n mx`, stated the refusal name and nothing about its numbers. It was not vacuous: `R` is what the open computes, so the arm holds only when the open really refused. But it was loose. A `tailTooLong` whose tail sat within its bound would have satisfied it, and a loose arm is where the next vacuity hides (ROOT).
+
+**Decision.** The arm states `mx < n`: the tail the refusal names is past the bound it names. That is exactly the condition under which `tailRead` builds it. The proof takes the hypothesis from `tailRead`'s branch. No statement elsewhere destructures the arm.
+
+**Law-6 read (second agent, read-only, with the DISJUNCT check): LAND.** No disjunct of either conclusion follows from the premises alone: `hR` fixes `R`, each arm names a different constructor, and `mx < n` is the hypothesis of `tailRead`'s refusing branch. Nothing destructures the arms. Taken: the restart docstring names the bound, and a rewrap.
+
+**Disjunct audit (HOST-14, at da0593e).** Host/** states no `Collision` and uses none of the kernel theorems that conclude it. Its seven disjunctive statements are each a case split over one computed value: no disjunct is provable from the premises alone. This arm was the one loose one.
+
+**Flag day.** None. A theorem statement is strengthened; no code moves.
