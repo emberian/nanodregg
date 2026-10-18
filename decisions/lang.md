@@ -1732,3 +1732,171 @@ over a pinned total: 3,903 chars); one reply 40 required steps / 63 ticks. CoAut
 lines, 30,028 package bytes (over 4-slot lists: 63,865 / 142 / 52,965); propose 85/129, vote 115/166 (770 B logged), seal
 236/299 (676 B). Two answers / two proposals over one view both land, in both orders, to the same rows and cells roots
 (LT7c, LS10c); a vote and an edit of one proposal over one view: the second `stale` (LS11).
+
+## LANG-50 The authoring surface: a second reader that lowers to the core text `Lang.Read` reads, outside the TCB; with LANG-51, the two core additions it cannot do without (2026-10-18; PROPOSED, design only; LANG-15; DELVETALK-LEARNINGS §4.1/§4.5/§3.1, LANG-0 (c), LANG-45/47/49's measurements)
+**Why.** Every package anyone has written for nano was written in Lean, not in the language: `Std`, `Hosting.Grain`,
+`Ledger.Escrow` and the journey's `s!` templates are the authoring surface today, and only an agent with a Lean
+toolchain can use them. What a resident would write by hand is the printed core, and the two ports measured it:
+CoAuthor's 1,084-char state type written 41 times (70% of 63,865 chars, LANG-47); the tally's types 15/7/13 times
+(LANG-45); Lifecycle's state record 14 times in 7,709 bytes. The core is right for the kernel (closed, monomorphic,
+annotated, one checker proved equal to a relation). It is wrong for a hand. LANG-0 (c) deferred the Front because it
+had "no deployed consumer"; the consumer is now the Hermes resident (CHARTER's BAR) and THE BAR's `use=U` row.
+**Decision (proposed).**
+1. *One more reader, never in admission.* `Lang/Surface.lean`: `Surface.readPackage : String → Except ReadRefusal
+   Package` = `Read.parse` (the same s-expression parser) → `Surface.lower : SExp → P SExp` (a surface form to a CORE
+   form; every core node it makes carries the offset of the surface node that made it) → `Read.package` (the one core
+   reader). So the surface's output IS a core text read by `Lang.Read`; the surface never builds a `Term`.
+   `ob` and every tool that installs then do `Print.package` → `Read.readPackage` → `checkWith` → `encodePackage`:
+   what is installed is the printed core re-read by the one reader, so a surface bug can make a WRONG program (which
+   the checker and the laws judge like any other) but never an unread one. The kernel, the receivers and the
+   install check do not change. The surface is a superset: a core package text lowers to itself (theorem 1 below).
+2. *Package declarations*, any order, each at most once per name: `(type N T)` a type name, substituted wherever
+   `N` is written (types have no binders in the core, so a name is a macro and never reaches the core); `(state T)`;
+   `(rel ℓ (key (f T)…) (val T) (limit n) [(sum f) (cap n)] [(retract)] [(guard g)])` (defaults: no sum, cap 0,
+   insert-only, no guard: the core's `rels` entry with its defaults written for you); `(method ℓ [(reads (rel (points
+   n) | (range m k))…)] [(arg T)] [(calls (kind…)…)] [(edits n)] BODY)`; `(law ℓ CLAUSE)`; `(guard g BODY)`;
+   `(import N "hex")`; `(layer N)`. The core's `iface`, `methods`, `laws` and every binder annotation are DERIVED
+   from the declarations (iface = laws at `lawTy S` and methods at `methodTy S A ks R E es`, `Std.pkgOf`'s order), so
+   the state type is written once and no method type is written at all. Built-in type names: `Req`, `Verdict`,
+   `Occasion`, `AcctRef`, `Right`; type forms `(enum a b …)` (a sum of empty records), `(option T)`.
+3. *Fixed binder names by position* (delvetalk's `state, input, context`): a method binds `rows state arg req`, a law
+   `old new req`, a guard `state req edit`. A dotted atom `x.f.g` is `(. (. x f) g)` when `x` is bound and `x.f.g`
+   is not (a bound name wins, so no core text changes meaning).
+4. *Term forms, each filled ONLY from a declaration, never inferred* (the surface has no type inference, so it is not a
+   second checker): `ok` / `(refuse e)` (in a law or guard: the verdict injections; in a method: LANG-51's core
+   `refuse`); `(done STATE ITEM…)` the method result, each ITEM an edit `(insert rel K V)` `(upsert rel K V)`
+   `(retract rel K)` or a call `(transfer (f e)…)` `(invoke …)` … filling the declared edit and call slots in order,
+   the rest `none`, every `inj` annotation from `rels` and the declared call kinds; `(with e (f x)…)` the full state
+   record, every other field `(. e f)` (Std.methodOf's shape); `(N ℓ [e])` for a type name `N` of a sum: `(inj N ℓ
+   e)` (`(record)` if omitted); `(some T e)` / `(none T)`; `(is N e ℓ)` = `Std.isState`; `(all (c "why")…)`,
+   `(check (c "why")… BODY)`, `(any e…)`, `(and a b)`, `(not a)` = `Std.allOf/guards/anyOf/andT/notT` in the
+   context's `refuse`; `(index m)` a method's index (`Std.methodIndex`); `(fold (acc T init) (x rel) STEP BODY)` over
+   the method's declared range of `rel`: the `let` chain LANG-47 found by hand (one `let` per row slot, so the text
+   is linear, never doubled). A law clause is `(on occ [x] BODY)…` with `occ` one occasion or a list, then
+   `(else BODY)`, which is REQUIRED unless all five occasions are written (no silent default verdict). Std clauses
+   by name lower by CALLING the generator and printing its term: `(machine f initial (from method to)…)` declares law
+   `f` = `Std.machine` and a `Std.stepTo` method per method label not declared by hand; `(bounded f max)`,
+   `(allowlist id…)`, `(quorum …)`, `(windowed …)`. A clause's meaning theorem (LANG-20/26) is then about the very
+   term the surface emits.
+5. *Bounded argument forms (§4.5).* In an `arg` type only: `(nat lo hi)`, `(bytes lo hi)` (and a type name for one).
+   The core type is `nat`/`bytes`; the method body is prefixed by one check per bounded field in label order, `(if
+   IN-BOUNDS BODY (refuse "text 1..200"))` — the refusal names the field and the bound (delvetalk's dialect; its
+   obend night refused `from: 0` against `1..1e9` six times with no field named). A bound anywhere else (state,
+   rel value, inside a sum) is refused `boundOutsideArg`: a state bound is a law (`bounded`), a row bound a guard.
+6. *`layer` (amends LANG-18's "open recursion is a mixin the authoring tool writes").* `(layer N)` over the imported
+   package `N`: the layer has `N`'s state and rels EXACTLY, inherits `N`'s methods and laws, may add methods and laws
+   and override a method at the SAME type (`retypedOverride` otherwise), and may not override or drop a law
+   (`overridesLaw`: a layer never weakens its super's laws). It lowers to `(imports "N")`, `body = (extend (ref 0)
+   (ℓ new)…)`, iface = `N`'s plus the new fields, laws = `N`'s ∪ new. `(super m)` is `(. (ref 0) m)`, `N`'s OWN
+   method: the layer gives delvetalk's `Super.f` and override, and NOT late binding of self (LANG-18's old-self
+   `extend` stands, now as the surface's stated semantics: nano methods do not call siblings, calls are effects).
+   The super's checked core is what runs, its id is in the layer's imports, so "which layers made this object"
+   (LANG-1's lost reflection) is readable from the bytes. Lowering needs the super's package text (`ob` gains
+   `(check P (imports P…))`; a reader without the World passes it).
+7. *The source digest, beside the core and NOT in it (decides LANG-0's "one field").* The package bytes and id do not
+   change. A source binds to a package by computation, not by a stored claim: `ob (source TEXT)` answers the package
+   id the text lowers to and the source's digest, so anyone holding an id and a text checks the binding offline.
+   Putting the digest IN the package (LANG-0's literal reading) was rejected: the kernel cannot check it (no front end
+   in admission), so it would be an unchecked field inside ROM identity that the next reader trusts (CLAUDE.md's "a
+   no-op kept is worse"), and it would give two sources of one core two ids. Finding a text from an id is a store:
+   the Host keeps a source by package id ONLY after lowering it to that id (the Host may run the surface; admission
+   never does). That store is PROTOCOL/HOST's (cv task to PROTOCOL; not part of this build). The shipped packages
+   keep their surface text beside the core in the repo: `world/grain/Lifecycle.ob`, `world/hosting/Allowance.ob`,
+   `world/escrow/Escrow.ob`.
+8. *Errors name the surface line.* `Read.locate : SExp → (path : List String) → Nat` walks the core SExp along a
+   `TypeErr` path (LANG-27). Because lowering stamps each core node with its surface offset, `ob` answers
+   `refused illTyped noField @body.reply.fn.fn line 5: (. arg amout)`; `noMethod ℓ` / `badRel ℓ` / `relKey ℓ` name the
+   declaring line. A type in an answer prints with the package's names (`Surface.tyText names T`: the largest
+   subtree equal to a name's expansion prints as the name), so a wrong method type reads `(-> (rec) (-> State …))`,
+   not 1,084 characters.
+9. *The three shipped texts are re-emitted FROM their surface sources*, byte-identical core: the sims' rows
+   G0/A0/E0 become "`Print.package (Surface.readPackage world/…/X.ob)` = `world/…/X` = `Print.package` of the Lean
+   builder", and `--write-text` writes the core from the surface. Each row carries a PLANT: the row run on the
+   surface text with one token flipped (`(revoked true)` → `(revoked false)`, an edge reversed, `"notOpen"` →
+   `"notHeld"`) must go red. The Lean builders stay (their meaning theorems are about them: `Std.machine_invoke`, `stepTo_takes_every_edge`,
+   LEDGER's `escrow_absorbing`, …), and the row ties text to builder; a resident reads the `.ob`.
+**LANG-51 (proposed with it; a core change, append-only on the wire).** Two things the ports showed a hand cannot
+write in the core at all, which §4.5 and LANG-47's critique (2) need:
+- `refuse T e` (term tag 17): evaluates `e : bytes`, then the run ends in a new `Fault.refused why`; typed at the
+  annotation `T` (like `inj`). A method refuses by name today only through a `why` state field plus a law reading it
+  (CoAuthor's encoding: one field, one law and a `no` continuation per method, written in every method). Run in a
+  method it is `program "ℓ: refused why"`; in a law or guard `lawDenied ℓ: refused why`.
+- `len<= a n` (prim code appended): `a.size ≤ n : bool`, O(1). There is no byte length in the core, so `text 1..200`
+  cannot be checked at all.
+Both are new tags only: no shipped package's bytes, id or text change (Lifecycle, Allowance and Escrow use neither),
+THE BAR's counter values are unchanged (its programs use neither; `Need` gains two one-step rules). Reshaped
+statements, each restated with the new disjunct and nothing else, for the vacuity read: `Sound.step_fault`
+(a fault is `stuck`, a primitive's error, OR a `refuse`), `RunOK`'s fault set, `faultText`/`faultName`, and every
+theorem that enumerates `Fault` (to be listed by grep at build; `checked_never_stuck` keeps its statement). New
+theorems: typing/step/`BigStep` cases with `run_bigStep`/`bigStep_run` re-proved; `refuse_refuses` (a checked
+method whose body reaches `refuse e` is refused with exactly `e`'s bytes, never admitted) with its tooth.
+**Theorems (LANG-50).**
+1. `read_print_surface`: `Print.package p = some t → Surface.readPackage t = Read.readPackage t` (with LANG-29,
+   `= .ok p`): the surface reinterprets no printed core. Tooth: a printed package whose labels ARE the surface's head
+   words (a method `with`, a field `done`, a law `machine`, a relation `insert`) reads to itself, and a lowering that
+   rewrites heads in label position fails on that instance.
+2. `bound_check_meaning` over `BigStep`: the lowered prefix of a bounded method means `refused "f lo..hi"` iff some
+   bounded field is outside its bound (first in label order), else the body's meaning. Tooth: `bytes 1 200` at the
+   empty text and at 201 bytes, refused; at 1 and 200, the body.
+3. `tyText_names`: reading `Surface.tyText names T` back under `names` gives `T` (the named printer is an inverse).
+4. Rows: G0/A0/E0 byte identity with their plants (9); LT0 the tally's surface lowers to EXACTLY today's tally core;
+   LS0 CoAuthor re-cut on `refuse`; LE a planted type error on line 16 answers `line 16`; LL a layer over the tally
+   (one method added) installs and runs through the receivers, and a layer overriding the law `decider` is refused
+   `overridesLaw`.
+No theorem is offered for "the surface output is a core text": that is the pipeline's construction (1.), not a fact
+to prove, and it would collapse to `readPackage_package`.
+**Measured spec** (drafts in hand, chars of the surface text; core = what is shipped or printed today):
+| text | core today | surface | target |
+|---|---|---|---|
+| world/grain/Lifecycle | 7,709 | 277 | state record once |
+| world/hosting/Allowance | 2,625 | 478 | state record once |
+| world/escrow/Escrow | 12,019 | 2,223 | state record once |
+| CappedTally (journey LT) | 4,355 | 667 | under Mini's 1,269 (no comments) |
+| CoAuthor (journey LS) | 37,287 | 2,464 | under Mini's 7,896 (the pure story) |
+(The brief's "CoAuthor under 64 KiB with 8 slots" was met by LANG-49's relations, 30,028 package bytes with an 8-row
+range; the surface target is the hand's text, so it is set against Mini's.) Required steps and ticks: unchanged for
+Lifecycle/Allowance/Escrow/tally (identical core); CoAuthor's re-measured (it loses the `why` field and its law).
+**Price.** A second reader (~700–900 lines, Lang tooling, outside the deployed closure: no receiver imports it);
+`ob` reads both (it is a superset); `Read.locate` (+ a row); LANG-51's two constructors through every Lang proof
+that inducts on `Term`/`Prim`/`Fault` (statements unchanged except the fault enumerations above); cross-layer: the
+three `.ob` files and the G0/A0/E0 rows (HOSTING, LEDGER: not live, ROOT agrees). No kernel, codec or protocol change;
+CODEC's term vectors gain two tags if CODEC keeps vectors for Lang terms. No premise is added to any landed theorem.
+**What it does NOT do, and why.**
+- *No type variables, no row-generic mixins* (LANG-1/3's cuts stand). A type name is a macro over CLOSED types, so
+  every surface type is a core type and every core theorem (all about closed monomorphic terms) covers it. A layer
+  that adds state fields or relations would need either core row polymorphism (exact types are why `=` is type
+  equality and checking is a function proved equal to a relation) or re-elaborating the super's SOURCE at the
+  layer's types: then a package's meaning depends on names another author chose, its errors land in someone
+  else's file, and the super's checked core is not what runs. delvetalk does not do it either: its bell writes
+  `type State = Super.State`. A layer that wants more state is a new package; measured cost: its text.
+- *No inference.* No `inj` annotation, call kind or result type is guessed from context; all come from a
+  declaration. So the surface cannot disagree with the checker about a type: it never decides one.
+- *No join points by analysis.* `let` and `fold` share by hand; the surface does not find common tails (LANG-47's
+  doubling stays writable, now with `fold` beside it).
+- *Not in admission, not in the id.* The kernel judges the core; nothing about the source is stored by the kernel.
+**Alternatives.** (a) Lower straight to `Term` with the Std combinators called on terms (byte identity by
+construction for every combinator, not only the Std clauses): loses the offsets, so errors would point into a core
+no one wrote, and the surface would be a second term reader beside `Read.term`. Rejected; the combinators are
+small, mirrored in SExp, and held by the byte-identity rows. (b) Generate the shipped texts' surfaces from the Lean
+builders (a resugaring printer): the `.ob` would then be an output, never what an author writes. (c) Make the `.ob`
+the ONLY source (delete the Lean builders): their meaning theorems are proved about the builders, and re-proving them
+through the reader is a reduction bomb of the kind Poseidon2 taught; kept, tied by rows. (d) The source digest in
+the package: rejected in 7. (e) `refuse` as a surface pattern over a `why` field and a law: every package that refuses
+pays a state field and a law, and a resident must know the pattern; LANG-51 instead.
+**Critique.** (1) The combinators (`all`, `any`, `check`, `is`) are mirrored, not shared: a second statement of
+`Std.allOf`'s shape, held equal only by the rows over the texts that use them (Escrow uses all four). A theorem per
+combinator (`Read.term (lower (all cs)) = Std.allOf …`) would close it; I price it at a day and propose it only if a
+row ever drifts. (2) Fixed binder names (`state`, `arg`) are a dialect, and a dialect is something to learn; they
+also make `state.state` possible when a state has a field `state`. (3) `machine` declaring methods for you is
+action at a distance: a method appears with no `(method …)`. delvetalk's clause distance has the same property.
+(4) LANG-51 is a core change proposed inside a surface decision; it is separable, and without it §4.5 cannot be
+built at all (no length, no refusal), so I propose them together rather than ship bounds as a `why`-field pattern.
+(5) The source store (7) is the half of §3.1 a reader of someone else's object needs, and it is not in this build.
+**Meta-critique.** I measured the surface against texts that were written by generators, so the drafts benefit from
+regularities a hand-written package may not have (Lifecycle is 277 chars because it IS one Std clause). The honest
+tests are the two hand ports (the tally, CoAuthor), and the first resident package written in it, which I cannot
+measure. I also chose to keep the Lean builders, which keeps my layer's proofs where they are; the reason given (the
+meaning theorems are about the builders) is real, and the cost is a text and a builder that a row must keep equal.
+**Status.** PROPOSED (design only; ROOT rules on LANG-50 and LANG-51 separately). Build order if approved: LANG-51
+(core, its vacuity read) → `Lang/Surface.lean` + `Read.locate` + `ob` → the three `.ob` texts and rows → tally/
+CoAuthor re-cut → theorems 1–3 with teeth and the vacuity read.
