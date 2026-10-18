@@ -716,6 +716,83 @@ def usePlants (exe : String) (dir intact : System.FilePath) (calls : List (Call 
   IO.println s!"PLANT use-reads-every-call {if same then "PASS" else "FAIL"} :: {served.length} served, {got} (in process)"
   return (if u0 == "0" then 0 else 1) + (if selfOk.1 then 0 else 1) + (if same then 0 else 1)
 
+/-- HOST-43's `host seal STORE` through the real exe, on a copy of the intact Store (height 4,
+genesis base). A writer serving it holds the Store's lock: `host seal` is refused `locked` (16)
+and every Store file is byte-identical after it; the row asserts the writer was still running before
+and after the seal (OPS-4's first draft let the stdin handle go out of use, the writer ended at
+eof, and the seal ran on a stopped Store: exit 0, read as a host defect until reproduced by hand). With the writer stopped, one seal: the printed
+`sealed steps=S chain=C digest=D` is the World the Store holds, computed HERE by `Receive.submit`
+of the same five calls (steps, chain) and the unkeyed `Keys.worldDigest` of its bytes (digest:
+the pin an invitation names), and `host check` reads that base (`base_steps` = S). A second
+seal at the sealed position writes nothing: the same line, every file byte-identical and
+`base.world`'s modification time unchanged. -/
+def sealPlants (exe : String) (intact dir : System.FilePath) (w4 : World D) : IO Nat := do
+  let s := dir / "seal"
+  backup intact s
+  let c := Founder.create w4 4
+  let w5 ← match submit X w4 c with
+    | .ok (_, w) => pure w
+    | .error _ => do IO.eprintln "the seal fixture call does not admit in process"; return 1
+  let snap : IO (List ByteArray) := Host.Store.backupOrder.mapM fun (f : String) => IO.FS.readBinFile (s / System.FilePath.mk f)
+  let say (label : String) (ok : Bool) (detail : String) : IO Bool := do
+    IO.println s!"PLANT {label} {if ok then "PASS" else "FAIL"} :: {detail}"
+    return ok
+  let mut failed := 0
+  -- a live writer: fed one call, so its open (and lock) is proved by the height it reaches
+  let child ← IO.Process.spawn
+    { cmd := exe, args := #["serve", s.toString], stdin := .piped, stdout := .piped, stderr := .piped }
+  let (input, child) ← child.takeStdin
+  let out ← IO.asTask child.stdout.readBinToEnd (prio := .dedicated)
+  let err ← IO.asTask child.stderr.readToEnd (prio := .dedicated)
+  let waited ← IO.asTask child.wait (prio := .dedicated)
+  input.write (Founder.submitFrame c)
+  input.flush
+  let some _ ← awaitStatus exe s (field · "height" ≥ 5) | do
+    child.kill; IO.println "PLANT seal-live-writer-locked FAIL :: the writer never reached height 5"; return 1
+  let before ← snap
+  let liveBefore := !(← IO.hasFinished waited)
+  let r ← host exe ["seal", s.toString]
+  let after ← snap
+  let liveAfter := !(← IO.hasFinished waited)
+  unless ← say "seal-live-writer-locked" (liveBefore && liveAfter && r.code = Status.locked.code.toUInt32 && before == after)
+      s!"writer serving before={liveBefore} after={liveAfter}; exit={r.code} want=locked({Status.locked.code}) files unchanged={before == after} :: {r.out.replace "\n" " "}" do
+    failed := failed + 1
+  -- stop the writer: end of its input (the handle is used up to here, so it is not freed before the
+  -- seal ran: a dropped stdin closes the pipe and the writer ends at eof), a bounded wait, its own
+  -- Child handle if it overstays
+  input.flush
+  let (_, child) ← child.takeStdin
+  let mut steps := 0
+  while !(← IO.hasFinished waited) && steps < pollSteps do
+    IO.sleep pollMs
+    steps := steps + 1
+  unless ← IO.hasFinished waited do
+    child.kill
+    IO.println "PLANT seal-base-is-the-pin FAIL :: the writer did not end at eof within the deadline (killed by its own Child handle)"
+    return failed + 1
+  let _ ← IO.ofExcept waited.get
+  let _ ← IO.ofExcept out.get
+  let _ ← IO.ofExcept err.get
+  let want := s!"sealed steps={w5.steps} chain={w5.chain.toHex} digest={Protocol.Text.toHex (Codec.Hash.digest domBaseDigest (Host.Deployed.world.bytes w5)).bytes}"
+  let r1 ← host exe ["seal", s.toString]
+  let line1 := ((r1.out.splitOn "\n").find? (·.startsWith "sealed ")).getD ""
+  let st ← status exe s
+  let based := (st.map (field · "base_steps")) = some w5.steps && (st.map (field · "height")) = some 5
+  unless ← say "seal-base-is-the-pin" (r1.code = 0 && line1 = want && based)
+      s!"exit={r1.code} line=in-process {decide (line1 = want)} base_steps={(st.map (field · "base_steps")).getD 0} (want {w5.steps}) :: {line1}" do
+    failed := failed + 1
+  let b0 ← snap
+  let m0 ← (s / "base.world").metadata
+  let r2 ← host exe ["seal", s.toString]
+  let line2 := ((r2.out.splitOn "\n").find? (·.startsWith "sealed ")).getD ""
+  let b1 ← snap
+  let m1 ← (s / "base.world").metadata
+  let same := b0 == b1 && m0.modified == m1.modified
+  unless ← say "seal-again-idempotent" (r2.code = 0 && line2 = line1 && !line1.isEmpty && same)
+      s!"exit={r2.code} same line={decide (line2 = line1)} files and base.world mtime unchanged={same}" do
+    failed := failed + 1
+  return failed
+
 def run (exe : String) (dir : System.FilePath) : IO UInt32 := do
   if ← dir.pathExists then IO.eprintln s!"store-plants: {dir} exists"; return 2
   IO.FS.createDirAll dir
@@ -804,6 +881,7 @@ def run (exe : String) (dir : System.FilePath) : IO UInt32 := do
   failed := failed + (← carryPlants exe dir)
   failed := failed + (← missingPlants exe intact dir)
   failed := failed + (← joinPlants exe g.out dir)
+  failed := failed + (← sealPlants exe intact dir w4)
   if failed = 0 then IO.println "ALL PASS"; return 0
   IO.println s!"FAIL {failed} of {plants.length}"; return 1
 
