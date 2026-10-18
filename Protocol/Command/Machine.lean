@@ -165,6 +165,11 @@ def behind (steps tip : Nat) : Reply :=
 `Status.declined`): the attempt stays open. Printed `declined NAME`. -/
 def declined (name : String) : Reply :=
   .done CommandExit.declined.code.toUInt8 ByteArray.empty s!"declined {name}\n".toUTF8
+/-- The writer refused a page `pageIo` (HOST-48): its IO failed on that page and it serves on. "Not
+now", never "never": the command ends restart-class (`CommandExit.pageIo`), what was absorbed is
+kept, and the member runs it again. Printed `pageIo`. -/
+def notServed : Reply :=
+  .done CommandExit.pageIo.code.toUInt8 ByteArray.empty s!"{pageIoName}\n".toUTF8
 
 /-! ## Follow's state -/
 
@@ -654,7 +659,8 @@ def envelopeSign (tried : Nat) (m k : ByteArray) : Reply :=
   if tried &&& incomingBit = 0 then .sign m k else .signIncoming m k
 
 /-- The writer refused an envelope (phase 2): `expired` re-signs once (`reSign`); `unknownKey` to a
-verb that signs no call re-signs once by the incoming key; anything else ends the command by name. -/
+verb that signs no call re-signs once by the incoming key; `pageIo` ends the command restart-class
+(`notServed`, HOST-48); anything else ends the command by name. -/
 def envelopeRefused (X : Ctx D) (me : Self D) (argv : List ByteArray) (cmd : Cmd D)
     (startB pagesB upToB triedB p : ByteArray) : Reply :=
   match expiredHeight? p, Text.ofU64 startB, Text.ofU64 upToB, Text.ofU64 triedB with
@@ -665,6 +671,7 @@ def envelopeRefused (X : Ctx D) (me : Self D) (argv : List ByteArray) (cmd : Cmd
             .signIncoming (envelopeMessage X me h upTo) k
         else if readOnly cmd then refused (D := D) (.host "unknownKey")
         else refusedAt X (.host "unknownKey")
+      else if p = pageIoName.toUTF8 then notServed
       else refused (D := D) (.host (hostName p))
   | some height, some h, some upTo, some tried =>
       match reSign (D := D) me (tried &&& expiredBit ≠ 0) upTo height with
@@ -919,7 +926,7 @@ def step (X : Ctx D) (dc : Stream D) (B : Thin.Base (World D)) (me : Self D) (f 
                           fun k => .sign (adoptEnvelope X me upTo d.got.size) k)
             | some (.refused, p) =>
                 match expiredHeight? p with
-                | none => same (refused (D := D) (.host (hostName p)))
+                | none => same (if p = pageIoName.toUTF8 then notServed else refused (D := D) (.host (hostName p)))
                 | some height =>
                     match reSign (D := D) me (tried ≠ 0) upTo height with
                     | .error r => same (refused (D := D) r)

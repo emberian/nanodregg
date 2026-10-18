@@ -135,6 +135,12 @@ def ofCode? (b : UInt8) : Option Status := all.find? (·.code == b)
 
 end Status
 
+/-- The name a page is refused by when the writer's IO failed while building it (HOST-48): the
+writer refuses THAT page and serves on, so it says "not now", never "never". A follower that reads it
+ends its command restart-class (`CommandExit.pageIo`) and runs again; it is none of the read gate's
+names (`Host.pageIoName_fresh`). -/
+def pageIoName : String := "pageIo"
+
 /-- Why a connection was closed (law 7: every close is named to the peer, `Status.closed ‖ name`).
 The supervisor's mux decides WHEN, against the `Bounds` below; this is the whole vocabulary. -/
 inductive CloseReason

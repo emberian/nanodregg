@@ -65,11 +65,12 @@ theorem StoreFault.text_missing_injective {F : Type} (a b : StorePart)
 failed is refused by is none of the names a page reply otherwise carries: a page fault's (the
 pager's `named f.name`), an envelope refusal's, or a frame refusal's. -/
 theorem pageIoName_fresh :
-    (∀ f : Page.Fault, f.name ≠ pageIoName) ∧ (∀ r : Protocol.ReadRefusal, r.name ≠ pageIoName) ∧
-      (∀ r : FrameRefusal, r.name ≠ pageIoName) := by
+    (∀ f : Page.Fault, f.name ≠ Protocol.pageIoName) ∧
+      (∀ r : Protocol.ReadRefusal, r.name ≠ Protocol.pageIoName) ∧
+      (∀ r : FrameRefusal, r.name ≠ Protocol.pageIoName) := by
   refine ⟨fun f => ?_, fun r => ?_, fun r => ?_⟩
-  · cases f <;> simp [Page.Fault.name, pageIoName]
-  · cases r <;> simp [Protocol.ReadRefusal.name, pageIoName]
-  · cases r <;> simp [FrameRefusal.name, pageIoName]
+  · cases f <;> simp [Page.Fault.name, Protocol.pageIoName]
+  · cases r <;> simp [Protocol.ReadRefusal.name, Protocol.pageIoName]
+  · cases r <;> simp [FrameRefusal.name, Protocol.pageIoName]
 
 end Nanodregg.Host

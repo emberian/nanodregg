@@ -189,7 +189,7 @@ theorem envelopeRefused_incoming {X : Ctx D} {me : Self D} {argv : List ByteArra
       · split at h
         · simp [refused, Reply.cont] at h
         · rw [refusedAt_cont] at h; cases h
-    · simp [refused, Reply.cont] at h
+    · split at h <;> simp [refused, notServed, Reply.cont] at h
   · split at h
     · simp [refused, Reply.cont] at h
     · -- `split at h` split the goal's `match reSign …` with it
@@ -230,7 +230,7 @@ theorem step_incoming_kept {X : Ctx D} {dc : Codec.Stream D} {B : Thin.Base (Wor
   all_goals (repeat' split at h)
   all_goals (try simp only [Prod.mk.injEq] at h)
   all_goals (obtain ⟨-, -, rfl⟩ := h)
-  all_goals (try (simp [refused, printed, behind, Reply.cont] at hk; done))
+  all_goals (try (simp [refused, printed, behind, notServed, Reply.cont] at hk; done))
   all_goals (try (rw [refusedAt_cont] at hk; cases hk; done))
   all_goals (try (rw [render_cont] at hk; cases hk; done))
   all_goals (try (rw [describe_cont] at hk; cases hk; done))

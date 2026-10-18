@@ -1538,3 +1538,36 @@ than its docstring names. The `baseMoved` red caught it only because the expecta
 - `readText_reads` pins the output as `t ++ "\n"` but does not prove `t` holds no newline (that `Print.data` escapes one in a string is LANG's printer, not stated here); the row's `exact` check sees one line for its values.
 
 **Review.** LANG-16: YES (same read as `runSetup`; keep the `noText` refusal). Vacuity read (a second agent): both theorems OK. Fixes taken from it: the package goes through `Lang.load` (literally `runSetup`'s front half), the row's prints are exact, and the plant uses the verbatim pre-48 slot expression.
+
+## PROTOCOL-49 · a page refused `pageIo` is "not now", never "never": the command ends restart-class `CommandExit.pageIo` (57), what it absorbed is kept, and it runs again (2026-10-19, PROTOCOL-14; ROOT ruling on HOST-48 01396b7)
+
+**The gap.** HOST-48 made the writer refuse ONE page `pageIo` when its IO fails building that page, and serve on. Before, the error restarted the whole writer. The follower read that reply as any other refusal by name: exit 1 `refused pageIo`, which is final and fatal-class (a unit stops restarting on it). That was wrong. `pageIo` is the writer telling the follower "not now", not "never". The next page may well be served.
+
+**Decision.**
+- `Protocol.pageIoName` (Protocol/Table.lean) is now the one definition of the name. Host's `pageIoReply` and its STATUS line read it. Host's own copy is deleted, and `Host.pageIoName_fresh` now states freshness against it.
+- New `CommandExit.pageIo`, code 57. 56 is the Host's `positionUnfit`; `code_disjoint_host` refused 56 when it was tried. It is in the restart class and printed `pageIo`.
+- The machine's `notServed` reply ends the command with it. Two places produce it:
+  - the log phase (2), in `envelopeRefused`, before the by-name refusal;
+  - adopt's base-page phase (7).
+  Follow's state is unchanged and nothing is persisted, so what was absorbed stays absorbed. A write's catch-up signs nothing before its tip, so no call is in flight. An attempt's confirm or probe (`receipt CALL`) that meets `pageIo` is that request `lost`, and the attempt stays open.
+- Ops' `commandAction` names the operator's reading: automatic, and the next run asks again; if every run ends `pageIo`, look at the writer's disk (RUNBOOK §3). OPS-5 owns that sentence.
+
+**Theorems.**
+- `CommandExit.pageIo_restart`: restart class, not in the fatal codes.
+- `notServed_code`.
+- `step_pageIo_log`: at phase 2, any verb but `init`, with the three u64 fields readable, `refused pageIo` gives `(f, .steps [], notServed)`.
+- `step_pageIo_base`: the same at adopt's phase 7, given `adoptPin` holds.
+- The existing disjointness theorems (`code_injective`, `code_disjoint_host`, `code_disjoint_supervisor`, `restart_fatal_disjoint`, Ops' `mem_drivePrevent`) range over every constructor and so now cover `pageIo`.
+
+**Row `pageIo` (31 rows).**
+- A newcomer's write runs with every page refused `pageIo` and ends `pageIo`. The same write run again is `ok`, and the operator reads the value.
+- After a seal and an invite, a thin member's `adopt` with its base page refused `pageIo` ends `pageIo`, and run again it adopts and reads.
+- Plant `pageIoFatal`: the pre-49 mapping verbatim (exit 1, `refused pageIo`), substituted in Loopback's `.done` arm, never a flag in `Command`. Line 9 is `refused pageIo`.
+
+**Flag day.** A new command exit code: 57 `pageIo`. Re-emitted: `client/src/generated.rs` (`command_exit::PAGE_IO`) and `deploy/units/EXITS.md` (a restart row). A follower unit restarts on 57; before, it stopped on 1. No wire, Store or codec change.
+
+**Critique.**
+- The row's fault replaces the writer's reply with `Host.pageIoReply` on the loopback. It does not make the in-process writer's pager throw. HOST's own `pageIoPlant` in host-sim covers the writer half.
+- The restart itself is rendered, not hand-kept: `Ops.Units.drivePreventCodes` is `CommandExit.codesOf .fatal` (`mem_drivePrevent`), and `deploy/units` is generated from it, so 57 is restarted by construction of the units.
+- Only phases 2 and 7 receive a page reply, so the two step theorems are every place `pageIo` can arrive.
+- `step_pageIo_log` takes the three u64 fields as premises. Every state the machine writes has them, but that is not proved as one invariant here.

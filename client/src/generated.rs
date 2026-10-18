@@ -221,7 +221,8 @@ pub mod command_exit {
     pub const DECLINED: u8 = 53;
     pub const OPEN: u8 = 54;
     pub const HOST_CONTRADICTED: u8 = 55;
-    pub const ALL: &[u8] = &[0, 1, 2, 51, 52, 53, 54, 55];
+    pub const PAGE_IO: u8 = 57;
+    pub const ALL: &[u8] = &[0, 1, 2, 51, 52, 53, 54, 55, 57];
 }
 
 /// The read envelope's signing domain (Protocol.domEnvelope): an observer custody signs only

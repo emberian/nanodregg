@@ -36,15 +36,20 @@ inductive CommandExit where
   the attempt stays open and the Host's word is named (printed `hostContradicted HOSTSAID
   FOLLOWSAID`) -/
   | hostContradicted
+  /-- the writer refused a page `pageIo` (HOST-48): its IO failed building that page and it serves
+  on, so this is "not now", never "never". What was absorbed is kept and nothing was signed past
+  it; an attempt in flight stays open. Run again after the writer's next page (printed `pageIo`) -/
+  | pageIo
   deriving DecidableEq, Repr
 
 namespace CommandExit
 
-def all : List CommandExit := [ok, refused, uncertain, behind, client, declined, «open», hostContradicted]
+def all : List CommandExit := [ok, refused, uncertain, behind, client, declined, «open», hostContradicted, pageIo]
 
 def code : CommandExit → Nat
   | ok => 0 | refused => 1 | uncertain => 2 | behind => 51 | client => 52
-  | declined => 53 | «open» => 54 | hostContradicted => 55
+  | declined => 53 | «open» => 54 | hostContradicted => 55 | pageIo => 57
+  -- 56 is the Host's `positionUnfit` (`code_disjoint_host`)
   -- 50 was `absent` (deleted by PROTOCOL-46: `absent` is never the end of an attempt); never reused
 
 def ofCode? (n : Nat) : Option CommandExit := all.find? (·.code == n)

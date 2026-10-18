@@ -50,7 +50,7 @@ namespace CommandExit
 
 def cls : CommandExit → Host.ExitClass
   | ok => .done
-  | uncertain | behind | client | declined | «open» | hostContradicted => .restart
+  | uncertain | behind | client | declined | «open» | hostContradicted | pageIo => .restart
   | refused => .fatal
 
 /-- The codes of one class, in table order. -/

@@ -112,7 +112,7 @@ theorem envelopeRefused_ne_submit {X : Ctx D} {me : Self D} {argv : List ByteArr
   intro h
   unfold envelopeRefused next at h
   repeat' split at h
-  all_goals first | exact refusedAt_ne_submit h | (simp [refused] at h; done) | ((try dsimp only at h); exact envelopeSign_ne_submit h)
+  all_goals first | exact refusedAt_ne_submit h | (simp [refused] at h; done) | (simp [notServed] at h; done) | ((try dsimp only at h); exact envelopeSign_ne_submit h)
 
 theorem receiptLines_ne_submit {X : Ctx D} {dc : Codec.Stream D} {w : World D} {cb call k : ByteArray} :
     receiptLines X dc w cb ≠ .submit call k := by
@@ -169,7 +169,7 @@ theorem step_submit_planned {X : Ctx D} {dc : Codec.Stream D} {B : Thin.Base (Wo
     f' = f ∧ p = .steps [] ∧ ∃ key b u sig, plan X me f.world key b = .ok u ∧ call = X.callBytes ⟨u, sig⟩ := by
   unfold step next at h
   repeat' split at h
-  all_goals (try simp only [refused, printed, behind, Prod.mk.injEq, reduceCtorEq, and_false] at h)
+  all_goals (try simp only [refused, printed, behind, notServed, Prod.mk.injEq, reduceCtorEq, and_false] at h)
   all_goals (repeat' split at h)
   all_goals (try simp only [Prod.mk.injEq, reduceCtorEq, and_false] at h)
   all_goals (try (exfalso; obtain ⟨_, _, h⟩ := h; unfold render at h; repeat' split at h
@@ -505,5 +505,58 @@ theorem readText_reads {X : Ctx D} {w : World D} {obj : D} {cell : Cell}
     · cases ht
   · cases ht
 
+
+/-! ## `pageIo` is "not now" (HOST-48, PROTOCOL-49)
+
+Only two phases receive a page reply: the log phase (2, a `.host .log` page) and adopt's base-page
+phase (7, a `.host .read` page). No other phase (3, 5, 8, the submit) is answered by a page, so these
+two theorems are every place a `pageIo` reply can arrive. Each returns follow's state `f` unchanged
+with `.steps []`: the pages earlier steps absorbed were persisted by those steps and stay. -/
+
+/-- The writer's reply to a page whose IO failed, as a step result: `refused ‖ pageIo`. -/
+theorem pageIo_hostReply :
+    hostReply (ByteArray.mk #[Status.refused.code] ++ pageIoName.toByteArray) =
+      some (.refused, pageIoName.toByteArray) := by decide
+
+theorem pageIo_not_expired : expiredHeight? pageIoName.toByteArray = none := by decide
+
+theorem pageIo_ne_unknownKey : pageIoName.toByteArray ≠ ReadRefusal.unknownKey.payload := by decide
+
+/-- `notServed` ends with the code `pageIo`, never `refused`'s (restart class: `CommandExit.pageIo_restart`). -/
+theorem notServed_code : (∃ out err, notServed = .done CommandExit.pageIo.code.toUInt8 out err) ∧
+    CommandExit.pageIo.code ≠ CommandExit.refused.code :=
+  ⟨⟨_, _, rfl⟩, by decide⟩
+
+/-- **A page refused `pageIo` ends a catch-up restart-class** (HOST-48): at the log phase (2) of any
+verb but `init`, the writer's `refused pageIo` is answered `notServed`, follow's state unchanged and
+nothing persisted, never `refused` (exit 1). The three u64 fields hold as every state the machine
+writes holds them. -/
+theorem step_pageIo_log {X : Ctx D} {dc : Codec.Stream D} {B : Thin.Base (World D)} {me : Self D}
+    {f : Follow D} {kb a b c d e : ByteArray} {argv : List ByteArray} {cmd : Cmd D} {s u t : Nat}
+    (hst : State.ofBytes kb = some ⟨argv, 2, [a, b, c, d, e]⟩) (hp : parse X.digestOf argv = .ok cmd)
+    (hni : ∀ sp, cmd ≠ .init sp) (ha : Text.ofU64 a = some s) (hd : Text.ofU64 d = some u)
+    (he : Text.ofU64 e = some t) :
+    step X dc B me f kb (ByteArray.mk #[Status.refused.code] ++ pageIoName.toUTF8) =
+      (f, .steps [], notServed) := by
+  unfold step
+  simp only [hst, Option.map_some, Option.getD_some, hp]
+  cases cmd
+  case init sp => exact absurd rfl (hni sp)
+  all_goals simp [stepResult, custodyPhase, pageIo_hostReply, envelopeRefused, pageIo_not_expired, pageIo_ne_unknownKey, ha, hd, he]
+
+/-- **A base page refused `pageIo` ends an adoption restart-class** (HOST-48): at adopt's base-page
+phase (7), the writer's `refused pageIo` is answered `notServed`, follow's state (its download in
+progress included) unchanged and nothing persisted, never `refused`. -/
+theorem step_pageIo_base {X : Ctx D} {dc : Codec.Stream D} {B : Thin.Base (World D)} {me : Self D}
+    {f : Follow D} {kb o pg u t : ByteArray} {argv : List ByteArray} {inv key : ByteArray} {i : Invite.Invitation D}
+    {off pages upTo tried : Nat}
+    (hst : State.ofBytes kb = some ⟨argv, 7, [o, pg, u, t]⟩) (hp : parse X.digestOf argv = .ok (.adopt inv key))
+    (hi : adoptPin X me inv key = .ok i) (ho : Text.ofU64 o = some off) (hpg : Text.ofU64 pg = some pages)
+    (hu : Text.ofU64 u = some upTo) (ht : Text.ofU64 t = some tried) :
+    step X dc B me f kb (ByteArray.mk #[Status.refused.code] ++ pageIoName.toUTF8) =
+      (f, .steps [], notServed) := by
+  unfold step
+  simp only [hst, Option.map_some, Option.getD_some, hp]
+  simp [stepResult, custodyPhase, pageIo_hostReply, pageIo_not_expired, hi, ho, hpg, hu, ht]
 
 end Nanodregg.Protocol.Command

@@ -67,6 +67,8 @@ structure Sys where
   sealIgnored : Bool := false
   /-- `read OBJ` prints the raw state slots (a plant, PROTOCOL-48) -/
   rawSlots : Bool := false
+  /-- a page refused `pageIo` ends the command `refused pageIo`, exit 1 (a plant, PROTOCOL-49) -/
+  pageIoFatal : Bool := false
 
 def skipJudge (X : Ctx D) : Ctx D :=
   { X with program := { X.program with judge := fun _ _ _ _ _ _ => .ok () } }
@@ -106,6 +108,7 @@ def sys : Option Mutation → Sys
   | some .sealIgnored => { writer := { X := Sim.ctx }, follow := Sim.ctx, sealIgnored := true }
   | some .lieBase => { writer := { X := Sim.ctx, lieBase := true }, follow := Sim.ctx }
   | some .rawSlots => { writer := { X := Sim.ctx }, follow := Sim.ctx, rawSlots := true }
+  | some .pageIoFatal => { writer := { X := Sim.ctx }, follow := Sim.ctx, pageIoFatal := true }
 
 /-! ## Actors -/
 
@@ -493,6 +496,7 @@ def outcomeOf (exit : UInt8) (err : ByteArray) : Expect :=
       .contradicted (((e.trimAscii.toString.dropPrefix? "hostContradicted ").map (·.toString)).getD e)
   | some .behind => .behind
   | some .declined => .declined (((e.trimAscii.toString.dropPrefix? "declined ").map (·.toString)).getD e)
+  | some .pageIo => .pageIo
   | some .client | none => .refused s!"exit{exit.toNat}"
 
 def statusOutcome (reply : ByteArray) : Expect :=
@@ -547,7 +551,11 @@ def steps (name : String) (argv : List String) (fault : Fault) (depth : Nat) (b 
   | fuel + 1 => do
       match Reply.ofBytes b with
       | none => pure (.refused "badFrame", "")
-      | some (.done exit out err) => pure (outcomeOf exit err, (String.fromUTF8? out).getD "")
+      | some (.done exit out err) =>
+          -- the plant: `pageIo` read as the old final refusal, verbatim (exit 1, `refused pageIo`)
+          let (exit, err) := if (← get).sys.pageIoFatal && exit.toNat == CommandExit.pageIo.code then
+              (CommandExit.refused.code.toUInt8, s!"refused {pageIoName}\n".toUTF8) else (exit, err)
+          pure (outcomeOf exit err, (String.fromUTF8? out).getD "")
       | some (.sign msg k) =>
           let (n, a, key) ← custodyOf name fault
           resume name argv fault depth k (signWith key (a.next n) msg) fuel
@@ -564,7 +572,12 @@ def steps (name : String) (argv : List String) (fault : Fault) (depth : Nat) (b 
       | some (.host op p k) =>
           match ← ask op p with
           | none => pure (.refused "writerStopped", "")
-          | some res => resume name argv fault depth k (if op = .log then pageFault fault res else res) fuel
+          | some res =>
+              let res := match fault with
+                | .pageIo => if op = .log || op = .read then
+                    ByteArray.mk #[Host.pageIoReply.1] ++ Host.pageIoReply.2 else res
+                | _ => res
+              resume name argv fault depth k (if op = .log then pageFault fault res else res) fuel
       | some (.submit call k) => do
           sawCall name call
           let a ← actor name

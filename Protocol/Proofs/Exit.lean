@@ -52,4 +52,8 @@ theorem code_zero_iff (c : CommandExit) : c.code = 0 ↔ c = .ok := by cases c <
 /-- No code is both restarted and prevented from restarting. -/
 theorem restart_fatal_disjoint : ∀ c ∈ codesOf .restart, c ∉ codesOf .fatal := by decide
 
+/-- **`pageIo` is "not now"** (HOST-48): a page the writer could not build ends the command in the
+restart class, never the fatal one a refusal is in. -/
+theorem pageIo_restart : pageIo.cls = .restart ∧ pageIo.code ∉ codesOf .fatal := by decide
+
 end Nanodregg.Protocol.CommandExit

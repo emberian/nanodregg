@@ -48,12 +48,16 @@ inductive Expect
   /-- the Host said committed or refused and the member's follow says otherwise
   (`CommandExit.hostContradicted`): `HOSTSAID FOLLOWSAID` -/
   | contradicted (said : String)
+  /-- the writer refused a page `pageIo` (`CommandExit.pageIo`, HOST-48): not now, never never; the
+  member runs the command again -/
+  | pageIo
   deriving DecidableEq, Repr
 
 def Expect.text : Expect → String
   | .ok => "ok" | .refused n => s!"refused {n}" | .absent => "absent" | .uncertain => "uncertain"
   | .unsettled n => s!"uncertain {n}" | .hang => "hang" | .behind => "behind"
   | .declined n => s!"declined {n}" | .open => "open" | .contradicted n => s!"hostContradicted {n}"
+  | .pageIo => "pageIo"
 
 /-- What a line does. A member command goes through the one command language; the others are the
 operator's and the attempt store's acts, which are not member commands. -/
@@ -150,6 +154,9 @@ inductive Fault
   /-- the Host commits the submit, the reply is lost, and its lookup lies: `refused stale` for the
   committed call (PROTOCOL-46: the Host hints, follow settles) -/
   | lieLookup
+  /-- every `log` and `read` page this command asks for is refused by the writer's `pageIo` reply
+  (`Host.pageIoReply`: its IO failed building that page, and it serves on, HOST-48) -/
+  | pageIo
   deriving Repr
 
 /-- One line of a row. -/
@@ -251,6 +258,9 @@ inductive Mutation
   /-- `read OBJ` of a programmed object prints its raw state slots (`I=BYTES`, the shape before
   PROTOCOL-48), not its state value at the package's state type -/
   | rawSlots
+  /-- the follower reads a page refused `pageIo` as a final refusal (exit 1, `refused pageIo`), the
+  shape before PROTOCOL-49: "not now" read as "never" -/
+  | pageIoFatal
   deriving DecidableEq, Repr
 
 /-- A row's plant: the mutation, and the line that must catch it with the outcome it then gets. -/
@@ -587,6 +597,28 @@ def sealRow : Row where
     ok "thin" ["read", "@shared", "2=2", "3=7"],
     ok "thin2" ["adopt", "@pin", "@operator.key"]])
   plant := .caught .sealIgnored 22 (.refused "notBehind")
+
+/-- PROTOCOL-49 (HOST-48's ruling): a page the writer could not build is refused `pageIo` and the
+writer serves on, so the member's command ends `pageIo` (restart class), keeps what it absorbed, and
+the same command run again succeeds. Once on a write's catch-up (nothing signed: it lands once,
+after the re-run) and once on an adoption's base page (`read`). The plant reads `pageIo` as the old
+final refusal: line 9 is `refused pageIo`. -/
+def pageIoRow : Row where
+  name := "pageIo"
+  replaces := []
+  ops := everyWrite ++ [.read]
+  kinds := ["enroll", "install", "create", "grant", "write"]
+  drive := .members (welcome ++ join "sponsor" "thin" ++ [
+    { actor := "newcomer", act := .cmd ["write", "@shared", "2", "1", "--via", "@g"], expect := .pageIo,
+      fault := .pageIo },
+    ok "newcomer" ["write", "@shared", "2", "1", "--via", "@g"],
+    ok "operator" ["read", "@shared", "2=1"],
+    { actor := "operator", act := .seal, expect := .ok },
+    okBind "operator" ["invite", "@inputs"] "pin",
+    { actor := "thin", act := .cmd ["adopt", "@pin", "@operator.key"], expect := .pageIo, fault := .pageIo },
+    ok "thin" ["adopt", "@pin", "@operator.key"],
+    ok "thin" ["read", "@shared", "2=1"]])
+  plant := .caught .pageIoFatal 9 (.refused "pageIo")
 
 /-- PROTOCOL-47's tooth: a sponsor never signs the Host's word for where its base is. Every log
 page states the writer's newest durable base (its step count and digest); follow records its OWN
@@ -1103,7 +1135,7 @@ def settleRow : Row where
   plant := .caught .trustLookup 6 (.refused "stale")
 
 def rows : List Row :=
-  [journey, reopen, laws, rotate, audit, paging, coldCatchUp, inflatedHeight, forgotten, refusedRow, inviteRow, useRow, describeRow, stateRow, receiptRow, settleRow, carry, thin, thinStale, sealRow, basePin, wrongWorld, wrongWorldRead, pay, well, bounty, grain, hermes, bar,
+  [journey, reopen, laws, rotate, audit, paging, coldCatchUp, inflatedHeight, forgotten, refusedRow, inviteRow, useRow, describeRow, stateRow, receiptRow, settleRow, carry, thin, thinStale, sealRow, basePin, pageIoRow, wrongWorld, wrongWorldRead, pay, well, bounty, grain, hermes, bar,
    langJourney]
 
 end Nanodregg.Protocol

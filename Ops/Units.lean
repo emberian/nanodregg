@@ -721,6 +721,7 @@ def commandAction : CommandExit → String
   | .declined => "nothing: `sync` sends no call, so it is never `declined` (a submit's not-final refusal, PROTOCOL-41); seen from sync, report to PROTOCOL"
   | .open => "nothing: `sync` sends no call, so it never ends `open` (an attempt whose call may still land, PROTOCOL-46); seen from sync, report to PROTOCOL"
   | .hostContradicted => "nothing: `sync` sends no call, so the Host's word on a call is never contradicted (PROTOCOL-46); seen from sync, report to PROTOCOL"
+  | .pageIo => "automatic: the writer could not read one page from its disk (its stderr has `STATUS page refused=pageIo`) and serves on; the next run asks again. If every run ends pageIo, the writer's disk is the fault (RUNBOOK §3)"
 
 /-- How often the driver runs `nd sync`: systemd's `RestartSec` of an always-restarting unit. -/
 def syncSeconds : Nat := 40
