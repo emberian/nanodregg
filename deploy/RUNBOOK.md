@@ -540,7 +540,7 @@ outside the run root. Stop them by those files only (never by pattern).
 - stale re-runs reaching `declined refusalBudget`: honest contention spent the budget (KERNEL-19's open
   question). The members re-run later, after the window moves.
 
-### THE BAR v2: two friends over ssh, the real resident, a cold cache. PENDING (PERF-2): HOSTING-27's resident, the box, and a person at each friend's machine; nothing here has been run
+### THE BAR v2: two friends over ssh, the real resident, a cold cache. PENDING (PERF-2): the box, a person at each friend's machine, and Ember for drop_caches; the resident has landed (0e4d57f); nothing here has been run
 
 What v1 (`scripts/bar.sh`, above) is NOT, and v2 is: v1 runs one box with no ssh, uses a hosted-custody
 STAND-IN for the resident, and reopens with a warm OS cache (`BAR scope`). v2 measures the same four limits
@@ -577,7 +577,11 @@ Needs, each one RAN before the measure:
   - The resident never re-asks: one ask per ring, kept durably. `status N` comes back as the text
     `(status N)`, a refusal as `(refused NAME)`, a lost answer as `(unanswered ...)`. v2 records each such
     answer by name and does not re-ring (a re-ring is a new ask and a new meter charge).
-  - PENDING: HOSTING-27's landing hash (HOSTING-10 sends it).
+  - The resident landed at 0e4d57f (HOSTING-27). Its exe is `resident` (`lake build resident`), placed as
+    the grain's `pkg/resident`. `pkg/resident.conf` is `(record (bell #BELL) (grant #GRANT) (maxTokens N)
+    (model "M") (system "S"))`, GRANT the operator's `observe,invoke:0` grant on the bell to the resident's
+    member; the resident also needs an allowance on the model. The flow end to end is
+    `launcher/tests/resident_bell.rs`.
 
 The run, in order:
 1. Genesis with three founders (§1); each actor creates an object and grants it `anyone mutate`.
