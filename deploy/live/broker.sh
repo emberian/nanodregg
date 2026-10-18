@@ -41,7 +41,7 @@ SINCE=$(date '+%Y-%m-%d %H:%M:%S')
 jr() { journalctl --user -u "${1:-$UNIT}" --since "$SINCE" -o cat --no-pager 2>/dev/null; }
 exits() { jr | grep -o 'Main process exited, code=[a-z]*, status=[0-9A-Z]*' | tail -n 1; }
 fresh() { systemctl --user stop "$UNIT" 2>/dev/null; systemctl --user reset-failed "$UNIT" 2>/dev/null; return 0; }
-for nt in deciderSignaled:keybroker keyFileMode:keybroker sockDir:keybroker store:hosting-controller layoutMissing:grain-launch; do
+for nt in deciderSignaled:keybroker keyFileMode:keybroker sockDir:keybroker store:hosting-controller layoutMissing:grain-launch inviteRefused:host missing:host; do
   [ -n "$(code "${nt%%:*}" "${nt#*:}")" ] || { echo "no code for $nt in EXITS.md"; exit 2; }; done
 [ -x /usr/local/libexec/nd-bwrap ] || { echo "no mechanism at /usr/local/libexec/nd-bwrap (README.md)"; exit 2; }
 
@@ -134,11 +134,14 @@ chmod 2710 "$R/broker"
 
 fresh
 
-# L. the hosted follower (template, instance w) under nd-supervise --group: the World's genesis
-# reproduced into ROOT/hosted/worlds/w/store, its socket 0660 of the shared directory's group
+# L. the hosted follower (template, instance w) under nd-supervise --group: its Store JOINED from
+# founder 0's invitation with RUNBOOK §2b's argv (`host join STORE INVITATION KEY_HEX`, OPS-15),
+# its origin the writer's; its socket 0660 of the shared directory's group
 F=nd-ops-live-hfollow@w G=nd-ops-live-grain@w
-mkdir -p "$R/hosted/worlds/w/members" "$R/nd-follow" "$R/ws" "$R/env" "$R/pids/w" && chmod 0700 "$R/hosted" "$R/hosted/worlds" "$R/hosted/worlds/w" && chmod 2710 "$R/nd-follow" || exit 2
-"$B/host" genesis "$R/hosted/worlds/w/store" "${g[@]}" > "$R/report/genesis-hosted.txt" || exit 2
+mkdir -p "$R/hosted/worlds/w/members" "$R/hosted/worlds/w/store" "$R/nd-follow" "$R/ws" "$R/env" "$R/pids/w" && chmod 0700 "$R/hosted" "$R/hosted/worlds" "$R/hosted/worlds/w" "$R/hosted/worlds/w/store" && chmod 2710 "$R/nd-follow" || exit 2
+inv=$(cat "$R/calls/invitation") key=$(cat "$R/calls/sponsor.key")
+"$B/host" join "$R/hosted/worlds/w/store" "$inv" "$key" > "$R/report/join-hosted.txt" || exit 2
+[ "$(awk '/^origin /{print $2}' "$R/report/join-hosted.txt")" = "$(awk '/^origin /{print $2}' "$R/report/genesis.txt")" ] || { echo "the joined World is not the writer's"; exit 2; }
 gr=$(awk '/^founder 0 /{print $6}' "$R/report/genesis.txt")
 printf 'ND_MEMBER=%s\nND_GRANT=%s\nND_GID=%s\n' "$op" "$gr" "$(id -g)" > "$R/env/w.env"
 fsock=$R/nd-follow/w.sock
@@ -182,6 +185,26 @@ if gs && [ "$st" = "$(code layoutMissing grain-launch)" ] && [ "$nr" = 0 ]; then
   row layout-missing-stops PASS "ExecMainStatus=$st (layoutMissing) NRestarts=0 :: $(jr "$G" | grep -m1 -i layoutMissing | cut -c1-120)"
 else row layout-missing-stops FAIL "status=$st (want $(code layoutMissing grain-launch)) NRestarts=$nr $(prop ActiveState "$G")"; fi
 
-for u in "$F" "$G" "$X" nd-ops-live-hfollow@x; do systemctl --user stop "$u" 2>/dev/null; systemctl --user reset-failed "$u" 2>/dev/null; done
+# P. a forged invitation: `host join` refuses inviteRefused and writes nothing; the follower unit
+# started over that empty Store directory ends `missing` (fatal) and is NOT restarted: a refused
+# join never becomes a follower (OPS-15)
+P=nd-ops-live-hfollow@p
+mkdir -p "$R/hosted/worlds/p/store" && chmod 0700 "$R/hosted/worlds/p" "$R/hosted/worlds/p/store"
+cp "$R/env/w.env" "$R/env/p.env"
+forged=$(python3 -I -c 'import sys; h=sys.argv[1]; print(h[:-1] + ("1" if h[-1] == "0" else "0"))' "$inv")
+"$B/host" join "$R/hosted/worlds/p/store" "$forged" "$key" 2> "$R/report/join-forged.err"; jc=$?
+if [ "$forged" = "$inv" ] || [ "$jc" != "$(code inviteRefused host)" ] || [ -n "$(ls -A "$R/hosted/worlds/p/store")" ]; then
+  row forged-join-follower-stops FAIL "join exit $jc (want $(code inviteRefused host)) store $(ls -A "$R/hosted/worlds/p/store" | wc -l) files :: $(cat "$R/report/join-forged.err")"
+else
+  systemctl --user start "$P"
+  ps_() { local s; s=$(prop ActiveState "$P"); [ "$s" = failed ] || [ "$s" = inactive ]; }
+  wait_for 30 ps_
+  st=$(prop ExecMainStatus "$P") nr=$(prop NRestarts "$P")
+  if ps_ && [ "$st" = "$(code missing host)" ] && [ "$nr" = 0 ]; then
+    row forged-join-follower-stops PASS "join $(cat "$R/report/join-forged.err"); follower ExecMainStatus=$st (missing) NRestarts=0"
+  else row forged-join-follower-stops FAIL "follower status=$st (want $(code missing host)) NRestarts=$nr $(prop ActiveState "$P")"; fi
+fi
+
+for u in "$F" "$G" "$X" "$P" nd-ops-live-hfollow@x; do systemctl --user stop "$u" 2>/dev/null; systemctl --user reset-failed "$u" 2>/dev/null; done
 if [ $fail = 0 ]; then echo "ALL PASS"; exit 0; fi
 echo "FAIL $fail"; exit 1

@@ -3,7 +3,9 @@
 
 `live-calls DIR N` writes, for the test founder (`Ops.Founder`, RFC 8032 published vectors):
 `DIR/genesis.args` (one `host genesis` argument per line after STORE: the label, `--nonce`, the
-nonce, the founder's key and next key), `DIR/op` (the `submit` operation byte, decimal) and
+nonce, the founder's key and next key), `DIR/invitation` and `DIR/sponsor.key` (founder 0's
+invitation to that World and its public key, hex, one line each: `host join STORE INVITATION KEY`'s
+two arguments, RUNBOOK §2b), `DIR/op` (the `submit` operation byte, decimal) and
 `DIR/call-NNN.bin` (the i-th call's payload, `X.callBytes`, i < N), each a create holding one
 `Plants.slotBytes` slot so a few calls cross a 1 MiB seal or an `LimitFSIZE`. The calls are pinned
 in sequence on founder 0's cell, so they are sent in order and each must be admitted. The
@@ -30,6 +32,9 @@ def run : List String → IO UInt32
     IO.FS.createDirAll d
     IO.FS.writeFile (d / "genesis.args") ("\n".intercalate (label :: Founder.genesisArgs) ++ "\n")
     IO.FS.writeFile (d / "op") s!"{Protocol.Op.submit.code}\n"
+    let some inv := Founder.invitation label | IO.eprintln "live-calls: the invitation does not fit"; return 1
+    IO.FS.writeFile (d / "invitation") (Protocol.Text.toHex inv ++ "\n")
+    IO.FS.writeFile (d / "sponsor.key") (Protocol.Text.toHex Founder.key ++ "\n")
     let w₀ ← match Founder.world label with
       | .ok w => pure w
       | .error r => do IO.eprintln s!"live-calls: genesis refused {r.name}"; return 1

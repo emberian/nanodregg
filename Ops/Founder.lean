@@ -8,6 +8,7 @@ Ops (closure rule), and no real seed is ever written here.
 -/
 import Host.Deployed
 import Host.Wire
+import Protocol.Invite
 
 namespace Nanodregg.Ops.Founder
 
@@ -36,6 +37,20 @@ def genesisArgs : List String :=
 or its refusal. -/
 def world (name : String) : Except GenesisRefusal (World D) :=
   Receive.genesis X name.toUTF8 nonce allowanceMax [(key, nextKeyDigest X next)]
+
+/-- The test World's genesis inputs, the bytes `host genesis STORE name …genesisArgs` prints as
+`input HEX` (PROTOCOL-42): what founder 0 invites from. -/
+def input (name : String) : ByteArray :=
+  Protocol.Invite.inputBytes X name.toUTF8 nonce allowanceMax [(key, nextKeyDigest X next)]
+
+/-- Founder 0's invitation to the test World `name` at its genesis: the shape `invite INPUT`
+prints (PROTOCOL-42), pinning the genesis World under `Keys.worldDigest`'s unkeyed digest, naming
+founder 0 as sponsor and signed with the published TEST 1 secret over `Invite.message`. -/
+def invitation (name : String) : Option ByteArray := do
+  let w ← (world name).toOption
+  let pin : Protocol.Thin.Pin := ⟨w.steps, (Codec.Hash.digest domBaseDigest (Host.Deployed.world.bytes w)).bytes⟩
+  let u ← Protocol.Invite.unsignedBytes X (input name) pin (founderId X w.origin 0) key
+  Protocol.Invite.bytes u (Ed25519.sign seed (Protocol.Invite.message u))
 
 /-- `create` as the member `me`: after a carry (KERNEL-29) the members keep their old ids, keyed by
 the EXPORTED World's origin, while every call names the new World (`Unsigned.world`). -/

@@ -449,3 +449,52 @@ system sockets' parents are still unrun.
 restriction there) and did not apply the same reading to the keybroker unit OPS-2 rendered: I
 audited my own new unit and trusted the inherited one.
 **Status.** landed.
+
+## OPS-15 · a follow Store is JOINED from a signed invitation, never a reproduced genesis; the hosted follower's join is a hand-run operator verb (OPS-4, 2026-10-18; PROTOCOL-42, CLIENT-26, ROOT-ruled)
+
+**Decision.** (1) RUNBOOK §2: a member's follow Store comes from `nd --join KEY_FILE INVITATION
+~/.nd/follow-store /opt/nd/bin/host` into an empty 0700 directory, the invitation from the sponsor's
+`nd invite`, the sponsor's `key` (`nd --keys`) over a SECOND channel the joiner already trusts, in a
+file under the §2a chain (0644 or 0600, the joiner's). Refusals by name: inviteRefused pinMismatch /
+notSponsor / badInvitation (nd 1), the key file's chain (nd 52), `invitation: exists` (nd 52). (2)
+RUNBOOK §2b: the hosted follower's Store is `sudo -u nd-hosted /opt/nd/bin/host join STORE INVITATION
+KEY_HEX`, run by hand once per World. No join unit and no kept file. (3) §6.7 states the carry
+rejoin as trust on first use by design (cv 01a14de7-224a) with its mitigation. (4) store-plants gains
+six `join-*`/`follow-*` rows through the real host, using that argv; deploy/live row L joins instead of
+reproducing; row P (a follower over a refused join stops `missing`, NRestarts=0) is written and
+preflighted outside systemd, not yet run under it.
+**Alternatives.** (1) A rendered oneshot `nd-hosted-join@` that the follower Requires=. It would
+run `host` bare: nd-supervise is a socket mux and cannot run a one-shot that prints lines.
+Ops/Units.lean's own law is that a unit which would run the host unconfined is never rendered
+(`ofNode_supervised`). (2) ExecStartPre on the follower: on the second start it would be `exists`.
+(3) A confined store-only join in nd (`nd --join-store`, CLIENT): that would be a second join path,
+with no custody gain on a box whose operator is the sponsor (ROOT: not taken). (4) Key and
+invitation kept as files under the chain: a custody object with no reader. `host join` takes both
+as hex arguments, and the only Rust readers that enforce the chain (nd, keybroker) are not on this
+path.
+**The hosted path's chain rule is the operator's shell, not a Rust reader.** This is acceptable here
+for two reasons. The operator is the sponsor, so the key is its own `nd --keys` output and crosses
+no channel. The operator also owns the box, and whoever can alter its shell's input can already
+write /srv/nd-hosted. A member, whose key DOES cross a channel, gets the Rust-enforced chain through
+`nd --join`.
+**Plants and teeth (measured, hbox, wt/ops at 46c826e + this change; 66 rows ALL PASS).**
+- Signature and sponsor-key checks removed from `Invite.accept` (a building mutation): three rows go
+  red by name: `join-forged-invitation-writes-nothing`, `join-other-key-notSponsor-writes-nothing`
+  (each exit 0 with files written), and `follow-over-refused-join-is-fatal` (that directory now opens).
+- The nonce flipped inside `accept`'s genesis: `join-honest-is-the-writers-world` goes red (another
+  origin).
+- The `exists` check removed from `Host.Store.genesis`: `join-again-exists` goes red (io 13).
+- `follow-opens-the-joined-store` is a positive control. Its tooth is unmeasured.
+**CRITIQUE.** The hosted join runs unconfined as nd-hosted. It parses an invitation that the
+operator's own nd produced, which is the same exposure `host genesis` had there before. The
+founder residual is real: a founder still takes the writer's nonce on its word, and the mitigation
+(compare `input HEX` out of band) is a procedure, not a check. Row P has run on no systemd. The test
+invitation is built in Lean from published vectors (`Founder.invitation`), not by `nd invite`. Its
+fidelity to the deployed signer rests on both using `Invite.unsignedBytes`/`message`. Client's
+join.rs covers the nd-signed path.
+**META-CRITIQUE.** ROOT's brief named a unit, a theorem and an EXITS.md re-emit. I nearly built them
+because they were named, and the module's confinement law refused the shape. I asked before building
+rather than after. The phrase "operator data under the StrictModes chain" assumed a reader that the
+`host` verb does not have. I checked the verb's argv first, which made that visible.
+**Status.** landed (this commit); row P PENDING a box window.
+

@@ -597,6 +597,70 @@ def carryPlants (exe : String) (dir : System.FilePath) : IO Nat := do
   unless ← say "carry-two-imports-two-worlds" ok4 s!"exit={i2.code} origin {o2.getD "?"}" do failed := failed + 1
   return failed
 
+/-- PROTOCOL-42's `host join` through the real exe, as RUNBOOK §2b's install line runs it (the
+hosted follower's Store) and as `nd --join` runs it confined (a member's, §2): into a directory
+made empty first, from founder 0's invitation (`Founder.invitation`) and the sponsor key as hex.
+A forged invitation (one signature byte flipped, the flip asserted) and a key other than the
+sponsor's are refused `inviteRefused` (44) by name and the directory stays EMPTY (`join_genesis_iff`
+through the files); the honest join prints the writer's origin (as `host genesis` of Store `A` printed it),
+the sponsor's member id and the genesis inputs, and `host check` opens it at height 0; a second
+join into it is `exists`. Then the follower unit's verb: `host follow` over the refused join's
+empty directory ends `missing`, a FATAL class (the rendered unit's RestartPreventExitStatus,
+`ofNode_prevent`), so a refused join never becomes a follower that restarts; over the joined Store
+it opens (STATUS on stderr) and ends `eof` at the end of its input. -/
+def joinPlants (exe : String) (genesisOut : String) (dir : System.FilePath) : IO Nat := do
+  let w ← match Founder.world name with
+    | .ok w => pure w
+    | .error r => do IO.eprintln s!"genesis refused {r.name}"; return 1
+  let some inv := Founder.invitation name | IO.eprintln "the test invitation does not fit"; return 1
+  let some writerOrigin := lineField genesisOut "origin" | IO.eprintln "genesis printed no origin"; return 1
+  let say (label : String) (ok : Bool) (detail : String) : IO Bool := do
+    IO.println s!"PLANT {label} {if ok then "PASS" else "FAIL"} :: {detail}"
+    return ok
+  let empty (d : System.FilePath) : IO Bool := return (← d.readDir).isEmpty
+  let hex := Protocol.Text.toHex
+  let key := hex Founder.key
+  let mut failed := 0
+  let refused (label part : String) (inv k : String) : IO Bool := do
+    let d := dir / label
+    IO.FS.createDirAll d
+    let r ← host exe ["join", d.toString, inv, k]
+    let e ← empty d
+    let ok := r.code = Status.inviteRefused.code.toUInt32 && mentions r.out s!"refused inviteRefused {part}" && e
+    say label ok s!"exit={r.code} want=inviteRefused({Status.inviteRefused.code}) empty={e} :: {r.out.replace "\n" " "}"
+  let at_ := inv.size - 1
+  let forged := inv.set! at_ (inv.get! at_ ^^^ 1)
+  if forged == inv then IO.eprintln "the forgery is a no-op"; return 1
+  unless ← refused "join-forged-invitation-writes-nothing" "pinMismatch" (hex forged) key do failed := failed + 1
+  if Founder.next == Founder.key then IO.eprintln "the other key is the sponsor's"; return failed + 1
+  unless ← refused "join-other-key-notSponsor-writes-nothing" "notSponsor" (hex inv) (hex Founder.next) do
+    failed := failed + 1
+  let j := dir / "join-honest"
+  IO.FS.createDirAll j
+  let r ← host exe ["join", j.toString, hex inv, key]
+  let st ← status exe j
+  let origin := lineField r.out "origin"
+  let ok := r.code = 0 && origin = some w.origin.toHex && origin = some writerOrigin &&
+    lineField r.out "sponsor" = some (founderId X w.origin 0).toHex &&
+    lineField r.out "input" = some (hex (Founder.input name)) && (st.map (field · "height")) = some 0
+  unless ← say "join-honest-is-the-writers-world" ok
+      s!"exit={r.code} origin=writer's {decide (origin = some writerOrigin)} opens={st.isSome} :: {r.out.replace "\n" " "}" do
+    failed := failed + 1
+  unless ← judge ⟨"join-again-exists", .exists, host exe ["join", j.toString, hex inv, key]⟩ do failed := failed + 1
+  let member := (founderId X w.origin 0).toHex
+  let grant := (founderGrantId X w.origin 0).toHex
+  let d := dir / "join-forged-invitation-writes-nothing"
+  let (code, _, err) ← hostRaw exe ["follow", d.toString, member, grant] ByteArray.empty
+  let ok := code = Status.missing.code.toUInt32 && Status.missing.cls = .fatal && (← empty d)
+  unless ← say "follow-over-refused-join-is-fatal" ok
+      s!"exit={code} want=missing({Status.missing.code}, fatal: never restarted) :: {err.replace "\n" " "}" do
+    failed := failed + 1
+  let (code, _, err) ← hostRaw exe ["follow", j.toString, member, grant] ByteArray.empty
+  let ok := code = 0 && mentions err "STATUS"
+  unless ← say "follow-opens-the-joined-store" ok s!"exit={code} :: {err.replace "\n" " "}" do
+    failed := failed + 1
+  return failed
+
 def run (exe : String) (dir : System.FilePath) : IO UInt32 := do
   if ← dir.pathExists then IO.eprintln s!"store-plants: {dir} exists"; return 2
   IO.FS.createDirAll dir
@@ -683,6 +747,7 @@ def run (exe : String) (dir : System.FilePath) : IO UInt32 := do
   failed := failed + (← indexMovedPlant exe dir)
   failed := failed + (← carryPlants exe dir)
   failed := failed + (← missingPlants exe intact dir)
+  failed := failed + (← joinPlants exe g.out dir)
   if failed = 0 then IO.println "ALL PASS"; return 0
   IO.println s!"FAIL {failed} of {plants.length}"; return 1
 

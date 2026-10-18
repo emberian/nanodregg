@@ -126,3 +126,15 @@ ROW controller-store-refusal-stops PASS :: ExecMainStatus=109 (controller store,
 The anchors row's journal check was re-verified against run 2's own lines (five
 `run2/etc/anchors.pem differs` refusals, then the start limit); broker.sh now reads the journal
 `--since` its own start. Undone at 18:07:40Z (BURST5-UP-LOG §8).
+
+### The hosted follower's Store by `host join` (OPS-15, 2026-10-18) — rows L (changed) and P: NOT YET RUN under systemd
+
+Row L no longer reproduces the writer's genesis for the hosted follower: it joins it with RUNBOOK
+§2b's argv, `host join STORE INVITATION KEY_HEX`, from founder 0's invitation and key that
+`live-calls` writes (`calls/invitation`, `calls/sponsor.key`), and refuses to continue unless the
+joined origin is the writer's. Row P `forged-join-follower-stops`: one hex digit of the invitation
+changed, `host join` must end `inviteRefused` (44, by name from EXITS.md) with the Store directory
+empty, and the follower instance `p` started over it must end `missing` (20) with NRestarts=0.
+Preflighted on hbox outside systemd (OPS-4, ~/.cache/nd-t/ops4-pre1): join 0, origin the writer's;
+forged join 44 `refused inviteRefused pinMismatch`, 0 files; `host follow` over it 20 `refused
+missing key`. The systemd half waits for a box window (ROOT's word before any box change).

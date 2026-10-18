@@ -35,18 +35,54 @@ refuses a unit file that differs from the tables):
     nd-supervise /run/nd/host.sock --write /srv/nd/store --exec /opt/nd/bin/host --hide /srv/nd/ws --hide /home -- /opt/nd/bin/host serve /srv/nd/store
 
 Member machine (user unit `nd-host-follow.service`; `%h/.nd/nd-host-follow.env` holds
-`ND_MEMBER=<hex>` and `ND_GRANT=<hex>` from genesis/enrol):
+`ND_MEMBER=<hex>` and `ND_GRANT=<hex>`: a founder's from genesis, a joiner's from its enrolment below):
 
     nd-supervise %h/.nd/ws/follow.sock --write %h/.nd/follow-store --exec /opt/nd/bin/host --hide %h/.nd/ws --hide %h/.nd/holding -- /opt/nd/bin/host follow %h/.nd/follow-store ${ND_MEMBER} ${ND_GRANT}
 
 The writer's unit has `RuntimeDirectory=nd`: systemd makes `/run/nd` (owner nd) before every start
 and removes it at stop, and nd-supervise binds `/run/nd/host.sock` (0600, nd only) in it afresh.
 Without it nothing makes `/run/nd` on a fresh box and nd-supervise cannot bind its socket (not yet run under systemd: PENDING with §2).
-Before the first start the member makes the hidden directories, `mkdir -m 0700 ~/.nd ~/.nd/ws
-~/.nd/holding` (the writer's node likewise `/srv/nd/ws`), and its follow Store, which is the
-writer's genesis REPRODUCED with the writer's nonce: `host genesis ~/.nd/follow-store LABEL --nonce
-NONCE KEY_HEX NEXT_HEX…` with the label, nonce and founders the writer's genesis printed (KERNEL-24:
-same label, nonce and founders = the same World; its printed `chain` must equal the writer's).
+Before the first start the member makes the hidden directories and an EMPTY follow Store directory,
+`mkdir -m 0700 ~/.nd ~/.nd/ws ~/.nd/holding ~/.nd/follow-store` (the writer's node likewise
+`/srv/nd/ws`), its custody (`ND_WORKSPACE=~/.nd/ws ND_HOLDING=~/.nd/holding nd --init`), and then its
+follow Store FROM AN INVITATION its sponsor signed (PROTOCOL-42, CLIENT-26; `nd` below always runs
+with `ND_WORKSPACE`/`ND_HOLDING` set as here). The World is derived from inputs the sponsor signed,
+never from bytes the Host or anyone else hands over:
+
+1. The sponsor (any member; the operator's own member for the first joiners) prints the invitation
+   with `nd invite` (bare: it reads the World's genesis inputs the sponsor kept; a FOUNDER keeps them
+   once with `nd --input HEX`, the `input HEX` line its genesis printed last) and its public key with
+   `nd --keys` (the `key HEX` line).
+2. The two reach the joiner by TWO channels. The invitation may travel any way: it is checked. The
+   KEY is the trust root: it comes over a channel the joiner already trusts (in person, a message the
+   joiner can attribute), never from the Host, never in the same message as the invitation.
+3. The joiner writes the key's hex (one line) to `~/.nd/sponsor.pub`, owned by the joiner, mode 0644
+   (or 0600): no group or other write, every directory up to `/` passing §2a's chain rule.
+4. `nd --join ~/.nd/sponsor.pub INVITATION ~/.nd/follow-store /opt/nd/bin/host` — nd reads the key file
+   under the chain rule and runs `host join` confined (the follower's own policy); Lean accepts the
+   invitation under the key and only then writes the Store (`join_genesis_iff`). It prints the
+   genesis lines, `sponsor HEX`, `input HEX` and the joiner's `join HEX`, and keeps the invitation and
+   the inputs in the workspace (0600; the joiner can now `nd invite` others itself).
+5. The sponsor enrols it: `nd enroll JOIN_HEX` → `id MEMBER`; `nd grant world MEMBER observe --via
+   GRANT` → `id GRANT`. Those two are the joiner's `ND_MEMBER` / `ND_GRANT` in the env file above.
+
+Refused, each writing nothing (the Store directory stays empty, the workspace keeps nothing),
+planted against the real host (`client/tests/join.rs` through nd; store-plants `join-*` with the
+argv §2b runs): `refused inviteRefused pinMismatch` (nd exit 1: a byte changed after the sponsor
+signed, a forged nonce among them); `refused inviteRefused notSponsor` (exit 1: signed by another key
+than the one in the file); `refused inviteRefused badInvitation` (exit 1: not an invitation); a key
+file failing the chain, `key file: Dir(PATH)` / `Mode(M)` / `Owner(UID)` (nd exit 52); `invitation:
+exists` (exit 52, before host runs: this workspace has joined). A refusal by name means: get a fresh
+invitation and check the key's channel, not retry.
+
+The residual (stated, not closed): a FOUNDER's own follow Store is still the writer's genesis
+REPRODUCED, `host genesis ~/.nd/follow-store LABEL --nonce NONCE KEY_HEX NEXT_HEX…` with the label,
+nonce and founders the writer's genesis printed (KERNEL-24: same inputs = same World). The founder's
+keys are its own, but the NONCE is taken on the word of whoever ran the writer's genesis: trust on
+first use, narrower than before (one 32-byte value, not a whole World) and not zero. Mitigation:
+every founder compares the `input HEX` (or `origin HEX`) its own genesis printed with the one the
+writer's genesis printed, out of band and with another founder, before it keeps it with `nd --input`.
+Test fixtures that reproduce a genesis with a known nonce do so by construction (harmless).
 nd-supervise refuses a `--write` or `--hide` path that does not exist (64), and `host follow` on a
 directory with no Store is `io` (13); both stop the unit (measured on burst5, deploy/live/README.md).
 A host killed by a signal is nd-supervise's 66 childSignaled, restarted (on Linux bwrap reports it
@@ -145,11 +181,26 @@ Install, per World `L` (after §2a's users):
 
     sudo install -m 0644 deploy/units/linux/tmpfiles/nd-follow.conf /etc/tmpfiles.d/nd-follow.conf
     sudo systemd-tmpfiles --create /etc/tmpfiles.d/nd-follow.conf
-    sudo install -d -o nd-hosted -g nd-hosted -m 0700 /srv/nd-hosted /srv/nd-hosted/worlds /srv/nd-hosted/worlds/L /srv/nd-hosted/worlds/L/members
-    sudo -u nd-hosted /opt/nd/bin/host genesis /srv/nd-hosted/worlds/L/store L --nonce NONCE KEY_HEX NEXT_HEX...
+    sudo install -d -o nd-hosted -g nd-hosted -m 0700 /srv/nd-hosted /srv/nd-hosted/worlds /srv/nd-hosted/worlds/L /srv/nd-hosted/worlds/L/members /srv/nd-hosted/worlds/L/store
+    sudo -u nd-hosted /opt/nd/bin/host join /srv/nd-hosted/worlds/L/store INVITATION KEY_HEX
 
-(the writer's genesis REPRODUCED, as for a member, §2; its printed `chain` must equal the writer's),
-and `/etc/nd/hosted/L.env` (root-owned 0644) with `ND_MEMBER`/`ND_GRANT` of the follower's own
+The follower's Store is JOINED from the operator's invitation (PROTOCOL-42), never a reproduced
+genesis: INVITATION is the `invite HEX` the operator's own member prints (`nd invite`, §2 step 1)
+and KEY_HEX that member's own `key HEX` (`nd --keys`). Here the sponsor IS the operator and the box
+is the operator's, so the key crosses no channel and nothing is kept on the box: `host join` takes
+both as arguments, the operator's shell is the only reader, and to re-make the Store (moved aside
+after a `store` refusal, §5) the operator runs the same line with a fresh `nd invite`. It prints the
+genesis lines, then `sponsor HEX` (the operator's member id: OPERATOR_MEMBER in the observer's
+`nd init` below) and `input HEX`. A forged invitation is `refused inviteRefused pinMismatch` (44), a
+key other than the signer's `refused inviteRefused notSponsor` (44), both writing nothing; a join
+into a Store that exists is `refused exists` (17). If the follower unit is started over the empty
+directory a refused join left, `host follow` ends `missing` (20, fatal: the unit stops by name and
+is not restarted; it never follows a World nobody accepted). Planted through the real host with
+this argv (store-plants `join-forged-invitation-writes-nothing`, `join-other-key-notSponsor-writes-nothing`,
+`join-honest-is-the-writers-world`, `join-again-exists`, `follow-over-refused-join-is-fatal`,
+`follow-opens-the-joined-store`; under systemd, deploy/live/broker.sh row P: PENDING a box window).
+
+Then `/etc/nd/hosted/L.env` (root-owned 0644) with `ND_MEMBER`/`ND_GRANT` of the follower's own
 OBSERVE-ONLY member (the operator's member enrols it, then `grant world MEMBER observe --via GRANT`:
 PENDING, PROTOCOL-7) and `ND_GID=$(getent group nd | cut -d: -f3)`. `grain-launch` reads
 `ROOT/worlds/L/store` with ROOT `/srv/nd-hosted`, so the follower writes exactly there.
@@ -277,9 +328,12 @@ crosses: every old call and receipt is for the old World.
    (`carry-old-origin-call-not-admitted`); members sign the new origin as their SAME member ids
    (`carry-new-origin-call-admitted`); a call committed before the export still answers `lookup`
    committed (`carry-lookup-committed-after-import`: the journal is carried, PROTOCOL-29).
-7. Members re-create their follow Stores from the new World (§2: reproduce the import with its
-   printed nonce, or adopt). Two imports of one export are two Worlds (`carry-two-imports-two-worlds`):
-   import once.
+7. Members re-create their follow Stores from the new World by reproducing the import (the same
+   carried file, `--digest` and the import's printed `--nonce`). This is trust on first use BY DESIGN
+   (cv 01a14de7-224a): a carried World has no genesis inputs a sponsor could sign, so there is no
+   invitation to join from. Mitigation: each member compares the `origin` its own import printed with
+   the operator's, out of band. Two imports of one export are two Worlds
+   (`carry-two-imports-two-worlds`): the operator imports once, members reproduce that one.
 
 ## 7. Refusals and what the operator does
 
