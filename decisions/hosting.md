@@ -1957,3 +1957,16 @@ Unchanged: `parse_argv`, `place_args`, `accepted_is_plan`, `fit_size`, `answerTe
 **Critique.** The exit names are the decider table's, so a parent-closed pipe is still named `keybrokerGone` in hosting-residents' stderr although its parent is nd-members; renaming it `parentGone` would touch keybroker's table and units for a word. Left, stated. And `Follow` still carries `pkgId`/`operator`/`held` fields this decider never fills: the price of sharing the follow (and its theorems) instead of a second struct.
 
 **Meta-critique.** The first instinct was a `Grains` struct of its own with a grains-only absorb: three lines shorter and a twin of `Follow.absorbTurns`'s grains half, outside every theorem about it. Sharing the struct costs two unused fields and keeps the one theorem true of both deciders.
+
+## HOSTING-34 The resident on LANG-59's Bell: `answer` re-sends the ring's text, exactly-once is the `rings` guard (HOSTING-11, 2026-10-20; one `lang!` with LANG-19)
+
+**What changed for the resident.** LANG-59 deletes `answers`: a ring's answer lives in `rings[k]` (`(answer (option bytes)) (text bytes)`), and `answer` upserts it under a guard that refuses unless the ring is unanswered and the re-sent text is the ring's own. The resident:
+- `answerArgTy` = `(rec (notBefore nat) (ringText bytes) (ringer digest) (text bytes))` (labels ascending: "ringText" < "ringer"); `answerDatum r t` re-sends `r.text`, the text the pending row held when the resident read it (the same read, no new one). `Shape.read` still checks the described type against it, so a Bell whose `answer` differs ends `bellShape answerType`.
+- The tick, the decision, the intent record and `deliver` are unchanged: one read of `pending`, the kept ring first, a refusal judged by re-reading `pending`. The client pins both rows (`derivePins` twice).
+- `answerArg_reads` gains the premise `r.text.size ≤ bytesMax` (true of every text the reader produced) and reads back the four fields; `answerArg_some` stays unconditional. No other statement changed; no conclusion has a disjunct.
+
+**Row** `cargo:launcher:resident_bell` GREEN on main e1e8084 + LANG-19's logs/lang19-LANG-59.patch (154b6963) + this half (logs/hosting11-h34-bell2/3.log): Q1 both founders' rings land over one view; Q2 lowest first, answers read from `rings` as `(answer (some "hello back"))`; Q3 a second answer through the resident's member is `refused lawDenied` with the hint `rung: answered` (the guard reads the row as it is, before the kernel would say anything); Q4 the owner's answer `refused program`; Q5 retire admitted (its `rings` row gone); Q6 the intent survives a kill mid-ask. Plants re-run by hand (logs/hosting11-h34-plants.out): answering an answered ring, answering out of order, the intent dropped: each RED by name.
+
+**What this closes.** VACUITY-READER-H10's note on HOSTING-31 (a late answer landing on a re-rung key) was answered there by the row pin; it is now a CHECK: the answer names the ring's text and the guard compares (`rung: text`).
+
+**Critique.** The resident still trusts the pending row's text to be the ring's (both written by `ring` in one edit set). If they ever disagreed, every answer to that ring would be `rung: text` and the queue would stop at it (HOSTING-31's head-of-line note): a loud failure, not a wrong answer.

@@ -1,29 +1,41 @@
-; The Bell: a queue of rings a resident answers (LANG-58). A ring is keyed (notBefore, ringer): its
-; signed notBefore, so a ringer can jump the queue by at most the kernel's windowMax (1024) heights;
-; ties at one height go by ringer digest; one ringer twice from one view is keyTaken.
-; `pending` is exactly the unanswered rings, in ring order: the resident reads `read BELL pending 64`.
+; The Bell: a queue of rings a resident answers (LANG-58; LANG-59: answers live in `rings`). A ring is
+; keyed (notBefore, ringer): its signed notBefore, so a ringer can jump the queue by at most the
+; kernel's windowMax (1024) heights; ties at one height go by ringer digest; one ringer twice from one
+; view is keyTaken. `pending` is exactly the unanswered rings, in ring order: the resident reads
+; `read BELL pending 64`. A ring is answered once, by the resident, with the text it was rung with
+; sent back, and retired only once answered: the guard `rung` holds all of it for every method, a
+; layer's included, from the row it replaces.
 (package
   (state (rec (open bool) (resident digest)))
-  (rel answers (key (notBefore nat) (ringer digest)) (val (rec (text bytes))) (limit 1024) (retract) (guard said))
   (rel pending (key (notBefore nat) (ringer digest)) (val (rec (text bytes))) (limit 64) (retract) (guard queued))
-  (rel rings (key (notBefore nat) (ringer digest)) (val (rec (text bytes))) (limit 1024) (retract) (guard rung))
-  (method answer (arg (rec (notBefore nat) (ringer digest) (text (bytes 1 2000)))) (edits 2)
+  (rel rings (key (notBefore nat) (ringer digest)) (val (rec (answer (option bytes)) (text bytes))) (limit 1024)
+    (retract) (guard rung))
+  (method answer (arg (rec (notBefore nat) (ringText (bytes 1 2000)) (ringer digest) (text (bytes 1 2000))))
+    (edits 2)
     (check ((deq req.agent state.resident) "notResident")
-      (done state (insert answers (record (notBefore arg.notBefore) (ringer arg.ringer)) (record (text arg.text)))
+      (done state
+        (upsert rings (record (notBefore arg.notBefore) (ringer arg.ringer))
+          (record (answer (some bytes arg.text)) (text arg.ringText)))
         (retract pending (record (notBefore arg.notBefore) (ringer arg.ringer))))))
   (method close (done (with state (open false))))
   (method open (done (with state (open true))))
-  (method retire (arg (rec (notBefore nat) (ringer digest))) (edits 2)
-    (done state (retract answers (record (notBefore arg.notBefore) (ringer arg.ringer)))
-      (retract rings (record (notBefore arg.notBefore) (ringer arg.ringer)))))
+  (method retire (arg (rec (notBefore nat) (ringer digest))) (edits 1)
+    (done state (retract rings (record (notBefore arg.notBefore) (ringer arg.ringer)))))
   (method ring (arg (rec (text (bytes 1 2000)))) (edits 2)
     (check (state.open "closed")
       (done state (insert pending (record (notBefore req.notBefore) (ringer req.agent)) (record (text arg.text)))
-        (insert rings (record (notBefore req.notBefore) (ringer req.agent)) (record (text arg.text))))))
+        (insert rings (record (notBefore req.notBefore) (ringer req.agent))
+          (record (answer (none bytes)) (text arg.text))))))
   (guard queued (case edit (insert x (if (deq x.key.ringer req.agent) ok (refuse "notYours")))
     (retract x (if (deq req.agent state.resident) ok (refuse "notResident"))) (upsert x (refuse "final"))))
-  (guard rung (case edit (insert x (if (deq x.key.ringer req.agent) ok (refuse "notYours")))
-    (retract x ok) (upsert x (refuse "final"))))
-  (guard said (case edit (insert x (if (deq req.agent state.resident) ok (refuse "notResident")))
-    (retract x ok) (upsert x (refuse "final"))))
+  (guard rung (case edit
+    (insert x (check ((deq x.key.ringer req.agent) "notYours")
+      (case x.val.answer (none _ ok) (some _ (refuse "answered")))))
+    (upsert x (check ((deq req.agent state.resident) "notResident")
+      (case old (none _ (refuse "unrung"))
+        (some o (case o.answer (some _ (refuse "answered"))
+          (none _ (check ((beq x.val.text o.text) "text")
+            (case x.val.answer (none _ (refuse "unanswered")) (some _ ok)))))))))
+    (retract x (case old (none _ (refuse "unrung"))
+      (some o (case o.answer (none _ (refuse "unanswered")) (some _ ok)))))))
   (law bell (on invoke m (all ((deq new.resident old.resident) "resident"))) (else ok)))

@@ -603,7 +603,7 @@ def rowLeafHashedVecs : G (List ByteArray) := do
 One row per term tag (0–17; tag 15, a record's field, rides in the record row), per type tag (0–7; tag
 6, a row's field, rides in the record type), per primitive code (0–11), and per package section
 (imports, a relation with every option and one with none, methods and laws). Then the boundary: the
-first unused term tag (18), type tag (8) and primitive code (12), each refused `lang/package` by name.
+first unused term tag (18), type tag (8) and primitive code (12), each refused `lang/package/2` by name.
 A Lang change that gives one of them a meaning flips its row from refused to read under an unchanged
 tag: the gate goes red, and the label moves. -/
 
@@ -735,7 +735,7 @@ def sites : List Site :=
     site "host/base/index-count" (Host.Base.codec (Codec.Kernel.world Sim.env Sim.dc))
       (each 2 fun _ => do return ⟨← Vectors.world, ← nat64, ← digest, ← nat64, ← digest⟩) printBase,
     site "host/carried-head" (Host.Carry.head Sim.dc) (each 2 fun _ => do return ⟨← dig, ← nat64, ← dig⟩) text,
-    ⟨"lang/package", Tag.of "lang/package" Lang.Wire.packageCodec, pure packageVecs,
+    ⟨"lang/package/2", Tag.of "lang/package/2" Lang.Wire.packageCodec, pure packageVecs,
       print Lang.Wire.packageCodec text⟩,
     ⟨"lang/key", Tag.of "lang/key" (Lang.Wire.dataStream keyVecTy), pure keyVecs,
       print (Lang.Wire.dataStream keyVecTy) fun v => (Lang.Print.data (Lang.Wire.toData keyVecTy v)).getD "?"⟩,

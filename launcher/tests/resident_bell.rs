@@ -1,6 +1,6 @@
 //! THE BAR's hosted Hermes, end to end (`cargo:launcher:resident_bell`, HOSTING-27, HOSTING-31):
 //! the real resident, the Lean exe `resident`, confined under grain-launch with its Lean plan,
-//! answers the rings of a bell (`world/resident/Bell`, LANG-58: a queue of rings) with the reply
+//! answers the rings of a bell (`world/resident/Bell`, LANG-58/59: a queue of rings) with the reply
 //! keybroker got from the FAKE provider. The founders read the answers.
 //!
 //! Everything is the deployed path:
@@ -20,13 +20,15 @@
 //!   resident runs. BOTH land (the old Bell refused the second `busy`); the two keys share a
 //!   notBefore, so they were signed over one view.
 //! - Q2, lowest first: the resident starts with both pending and answers them in key order (its
-//!   log names each answer's key); both answers read back from `answers`, `pending` is empty, the
+//!   log names each answer's key); both answers read back from `rings` (`answer (some …)`),
+//!   `pending` is empty, the
 //!   provider saw exactly one request per ring, and no answer of the resident's was refused.
 //! - Q3, exactly once: a second answer to an answered ring, through the resident's own member, is
-//!   refused `missingRow` (the kernel: the pending row is gone), and nothing moves.
+//!   refused `lawDenied` (LANG-59: the rings guard, "rung: answered", reads the row as it is), and
+//!   nothing moves.
 //! - Q4, a stranger's answer: the operator answers a pending ring: `refused program`, the ring
 //!   still pending; the resident then answers it.
-//! - Q5, retire: the owner retires the lowest answered ring: admitted; its `answers` and `rings`
+//! - Q5, retire: the owner retires the lowest answered ring: admitted; its `rings`
 //!   rows are gone.
 //! - Q6, the intent: the resident is stopped after its ask reached the provider and before any
 //!   reply (the provider holds it back). Restarted, it answers that ring `(unanswered restart)` from
@@ -125,11 +127,23 @@ fn rows(out: &str) -> Vec<Row> {
         .collect()
 }
 
-/// `answer`'s argument for the ring keyed by `r`.
+/// The answered rings of `rings` lines (LANG-59: `(val (record (answer (some "A")) (text "T")))`),
+/// each as its key and its ANSWER text; an unanswered ring (`(answer (none (record)))`) is left out.
+fn answered(out: &str) -> Vec<Row> {
+    out.lines()
+        .filter(|l| l.contains("(answer (some \""))
+        .map(|l| Row {
+            text: between(l, "(answer (some \"", '"').to_owned(),
+            ..rows(l).remove(0)
+        })
+        .collect()
+}
+
+/// `answer`'s argument for the ring `r` (its key and its text, re-sent as `ringText`).
 fn answer_arg(r: &Row, text: &str) -> String {
     format!(
-        "(record (notBefore {}) (ringer #{}) (text \"{text}\"))",
-        r.not_before, r.ringer
+        "(record (notBefore {}) (ringText \"{}\") (ringer #{}) (text \"{text}\"))",
+        r.not_before, r.text, r.ringer
     )
 }
 
@@ -267,6 +281,7 @@ fn the_resident_answers_every_ring_lowest_first_once_and_nothing_else() {
     );
     let log = || gl.log();
     let rel = |o: &str, r: &str| rows(&w.run(&["read", o, r, "64"]));
+    let answers = |o: &str| answered(&w.run(&["read", o, "rings", "64"]));
     let start = || {
         w.run(&["invoke", &g, "1", "(record)"]);
         w.run(&["sync"]);
@@ -290,7 +305,7 @@ fn the_resident_answers_every_ring_lowest_first_once_and_nothing_else() {
         format!(
             "pending {:?}\nanswers {:?}\n{}",
             rel(o, "pending"),
-            rel(o, "answers"),
+            answers(o),
             log()
         )
     };
@@ -354,13 +369,10 @@ fn the_resident_answers_every_ring_lowest_first_once_and_nothing_else() {
         || log().contains("resident: bell answer method 0 pending limit 64"),
         &log,
     );
-    until(
-        "both answers",
-        120,
-        || rel(&b, "answers").len() == 2,
-        &|| state(&b),
-    );
-    let answers = rel(&b, "answers");
+    until("both answers", 120, || answers(&b).len() == 2, &|| {
+        state(&b)
+    });
+    let got = answers(&b);
     let expect: Vec<Row> = pending
         .iter()
         .map(|r| Row {
@@ -368,7 +380,7 @@ fn the_resident_answers_every_ring_lowest_first_once_and_nothing_else() {
             ..r.clone()
         })
         .collect();
-    assert_eq!(answers, expect, "Q2: each ring's answer, at its key");
+    assert_eq!(got, expect, "Q2: each ring's answer, at its key");
     assert_eq!(rel(&b, "pending"), vec![], "Q2: nothing pending");
     assert_eq!(
         answered_keys(&log()),
@@ -403,8 +415,9 @@ fn the_resident_answers_every_ring_lowest_first_once_and_nothing_else() {
         );
     }
 
-    // Q3: a second answer to an answered ring, through the resident's own member
-    let (exit, _, err) = member_cmd(
+    // Q3: a second answer to an answered ring, through the resident's own member: the rings
+    // guard reads the row as it is and refuses it (LANG-59: "rung: answered")
+    let (exit, out, err) = member_cmd(
         &member.sock,
         &[
             "invoke",
@@ -415,12 +428,16 @@ fn the_resident_answers_every_ring_lowest_first_once_and_nothing_else() {
             &gb,
         ],
     );
+    assert!(
+        out.contains("rung: answered"),
+        "Q3: the refusal is not the guard's `answered`: {out}"
+    );
     assert_eq!(
         (exit, err.trim_end()),
-        (1, "refused missingRow"),
-        "Q3: a second answer to one ring"
+        (1, "refused lawDenied"),
+        "Q3: a second answer to one ring: {out}"
     );
-    assert_eq!(rel(&b, "answers"), answers, "Q3: the answers moved");
+    assert_eq!(answers(&b), got, "Q3: the answers moved");
 
     // Q4: a stranger (the operator) answers a pending ring
     stop();
@@ -440,18 +457,11 @@ fn the_resident_answers_every_ring_lowest_first_once_and_nothing_else() {
         third,
         "Q4: a stranger's answer took the ring"
     );
-    assert_eq!(
-        rel(&b, "answers"),
-        answers,
-        "Q4: a stranger's answer landed"
-    );
+    assert_eq!(answers(&b), got, "Q4: a stranger's answer landed");
     start();
-    until(
-        "the third answer",
-        120,
-        || rel(&b, "answers").len() == 3,
-        &|| state(&b),
-    );
+    until("the third answer", 120, || answers(&b).len() == 3, &|| {
+        state(&b)
+    });
     assert_eq!(asks(), 3, "Q4: three rings, three asks:\n{}", log());
 
     // Q5: the owner retires the lowest answered ring
@@ -466,19 +476,12 @@ fn the_resident_answers_every_ring_lowest_first_once_and_nothing_else() {
     ]);
     w.run(&["sync"]);
     let low = |r: &Row| r.not_before == pending[0].not_before && r.ringer == pending[0].ringer;
-    assert!(
-        !rel(&b, "answers").iter().any(low),
-        "Q5: the retired answer stays"
-    );
+    assert!(!answers(&b).iter().any(low), "Q5: the retired answer stays");
     assert!(
         !rel(&b, "rings").iter().any(low),
         "Q5: the retired ring stays"
     );
-    assert_eq!(
-        rel(&b, "answers").len(),
-        2,
-        "Q5: retire took more than its ring"
-    );
+    assert_eq!(answers(&b).len(), 2, "Q5: retire took more than its ring");
 
     // Q6: stopped after its ask was spent, before any reply; restarted, it answers from the intent
     stop();
@@ -510,11 +513,9 @@ fn the_resident_answers_every_ring_lowest_first_once_and_nothing_else() {
         log()
     );
     assert!(
-        rel(&b, "answers")
-            .iter()
-            .any(|r| r.text == "(unanswered restart)"),
+        answers(&b).iter().any(|r| r.text == "(unanswered restart)"),
         "Q6: the held ring's answer is not the intent's: {:?}",
-        rel(&b, "answers")
+        answers(&b)
     );
 
     // the resident exe on a bell whose resident is the operator: one ask, then notResident
@@ -540,7 +541,7 @@ fn the_resident_answers_every_ring_lowest_first_once_and_nothing_else() {
         );
         let p = rel(bell, "pending");
         assert!(
-            p.len() == 1 && p[0].text == ring && rel(bell, "answers").is_empty(),
+            p.len() == 1 && p[0].text == ring && answers(bell).is_empty(),
             "{name}: the bell took an answer: {p:?}"
         );
     };

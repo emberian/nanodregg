@@ -13,9 +13,10 @@ member socket:
   limit the lines are ALL the pending rings (`Protocol.Proofs.Command.rangeLines_reads`), in
   ascending key order, which is ring order (`Lang.Proofs.KeyOrder.range_keys_ascend_read`).
 - It answers the lowest pending ring: `invoke OBJ <answer> ARG`, ARG `Lang.Print.data` of
-  `(record (notBefore N) (ringer #H) (text T))`. The bell inserts `answers[k]` and retracts
-  `pending[k]`; a second answer to `k` is refused by the kernel (the retract of an absent pinned
-  row, and `keyTaken` on `answers`).
+  `(record (notBefore N) (ringText X) (ringer #H) (text T))`, X the ring's text as the pending row
+  holds it. The bell (LANG-59) upserts `rings[k]` to `(answer (some T)) (text X)` and retracts
+  `pending[k]`; its `rings` guard refuses the upsert unless the ring is unanswered and X is the
+  ring's own text (`rung: answered`, `rung: text`), so exactly-once is a check on the row as it is.
 
 Everything it reads and writes is Lang's one reader and one printer. It holds no copy of either.
 
@@ -66,8 +67,11 @@ def Conf.read (text : String) : Option Conf :=
 
 /-! ## The description -/
 
-/-- The argument type of the bell's `answer`: the ring's key and the answer text. -/
-def answerArgTy : Ty := .record [("notBefore", .nat), ("ringer", .digest), ("text", .bytes)]
+/-- The argument type of the bell's `answer` (LANG-59): the ring's key, the ring's own text as the
+resident read it (`ringText`: the bell's guard refuses the answer unless it equals the ring's), and
+the answer text. Labels ascending, as every Lang row (`"ringText" < "ringer"`). -/
+def answerArgTy : Ty :=
+  .record [("notBefore", .nat), ("ringText", .bytes), ("ringer", .digest), ("text", .bytes)]
 
 /-- The key of the bell's `pending`, in declared order (key bytes follow it, LANG-49/57). -/
 def pendingKey : List (Label × Ty) := [("notBefore", .nat), ("ringer", .digest)]
@@ -197,9 +201,11 @@ def answerText : Broker.Answer → ByteArray
   | .refused why => fit (named s!"refused {why.name}")
   | .status c => fit (named s!"status {c}")
 
-/-- The `answer` argument's datum: the ring's key and the text, at `answerArgTy`. -/
+/-- The `answer` argument's datum, at `answerArgTy`: the ring's key, the ring's text re-sent, the
+answer text. -/
 def answerDatum (r : Ring) (t : ByteArray) : Data :=
-  .record [("notBefore", .nat r.notBefore), ("ringer", .digest r.ringer), ("text", .bytes t)]
+  .record [("notBefore", .nat r.notBefore), ("ringText", .bytes r.text), ("ringer", .digest r.ringer),
+    ("text", .bytes t)]
 
 /-- The `answer` argument for ring `r`, through Lang's one printer. -/
 def answerArg (r : Ring) (t : ByteArray) : Option String := Print.data (answerDatum r t)

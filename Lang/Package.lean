@@ -370,8 +370,12 @@ end
 /-- A relation's key width, for digests of `dw` bytes. -/
 def RelDecl.width (d : RelDecl) (dw : Nat) : Nat := keyRowWidth dw d.key
 
-/-- A guard's type: the object's state before, the request, one edit; a verdict. -/
-def guardTy (S : Ty) (d : RelDecl) : Ty := .fn S (.fn reqTy (.fn (relEditTy d) verdictTy))
+/-- What a guard judges (LANG-59): one edit of the relation, and `old`, the row now at the slot the
+caller pinned (`none` for a pinned-absent slot or an insert with no pin). -/
+def guardInTy (d : RelDecl) : Ty := .record [("edit", relEditTy d), ("old", optTy d.val)]
+
+/-- A guard's type: the object's state before, the request, one edit with its old row; a verdict. -/
+def guardTy (S : Ty) (d : RelDecl) : Ty := .fn S (.fn reqTy (.fn (guardInTy d) verdictTy))
 
 /-- The sum column is a natural field of the value record; `cap` is set exactly when it is. -/
 def RelDecl.sumOk (d : RelDecl) : Bool :=
@@ -585,11 +589,11 @@ only a package that is `packageWire` and fits, and `packageCodec_lawfulOn` is st
 def packageFit (p : Package) : Tree.Fitting nodeMax depthMax :=
   if h : (packageTree p).fits nodeMax depthMax then ⟨packageTree p, h⟩ else ⟨.node 1 .empty [], by decide⟩
 
-/-- The package codec: the tree stream refined by `packageOf`, refused `lang/package` by name (a refine
+/-- The package codec: the tree stream refined by `packageOf`, refused `lang/package/2` by name (a refine
 site, so `gates/codec-vectors.tsv` pins what package bytes mean: a new term, type or primitive tag
 turns a refused boundary row into a read one, and the label must move; cv 01a14e58-1586). -/
 def packageCodec : Stream Package :=
-  Stream.refine "lang/package" packageStream (fun t => packageOf t.val) packageFit
+  Stream.refine "lang/package/2" packageStream (fun t => packageOf t.val) packageFit
 
 /-- The bytes of a package; `none` when it has no tree in bounds (a label, row, index or literal
 past its bound, or nested deeper than `depthMax`). -/
@@ -608,7 +612,7 @@ def decodePackage (b : ByteArray) : Except Refusal Package :=
   | .ok t =>
     match packageOf t.val with
     | some p => .ok p
-    | none => .error (.rejected 0 "lang/package")
+    | none => .error (.rejected 0 "lang/package/2")
 
 end Wire
 end Nanodregg.Lang

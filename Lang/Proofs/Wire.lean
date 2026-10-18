@@ -61,7 +61,7 @@ theorem u32Of_some {p : ByteArray} {n : Nat} (h : u32Of p = some n) : u32Bytes n
   · simp at h
 
 theorem u64Of_bytes {n : Nat} (h : n < 2 ^ 64) : u64Of (u64Bytes n) = some n := by
-  simp only [u64Of, u64Bytes, Stream.decode_bytes Stream.u64_lawful, UInt64.toNat_ofNat_of_lt' h]
+  simp only [u64Of, u64Bytes, Stream.decode_bytes Stream.u64be_lawful, UInt64.toNat_ofNat_of_lt' h]
 
 theorem u64Of_some {p : ByteArray} {n : Nat} (h : u64Of p = some n) : u64Bytes n = p ∧ n < 2 ^ 64 := by
   unfold u64Of at h
@@ -70,7 +70,7 @@ theorem u64Of_some {p : ByteArray} {n : Nat} (h : u64Of p = some n) : u64Bytes n
     cases h
     refine ⟨?_, v.toNat_lt⟩
     simp only [u64Bytes, UInt64.ofNat_toNat]
-    exact (Stream.eq_bytes_of_decode Stream.u64_lawful hv).symm
+    exact (Stream.eq_bytes_of_decode Stream.u64be_lawful hv).symm
   · simp at h
 
 theorem boolOf_bytes (v : Bool) : boolOf (Stream.bool.bytes v) = some v := by
@@ -621,11 +621,11 @@ private theorem packageCodec_bytes {p : Package} (h : (packageTree p).fits nodeM
   show packageStream.put (packageFit p) ByteArray.empty = _
   rw [packageFit_eq h]; rfl
 
-/-- **`lang/package` is lawful on exactly the packages that have a tree in bounds** (`packageWire` and
+/-- **`lang/package/2` is lawful on exactly the packages that have a tree in bounds** (`packageWire` and
 `fits`): those round-trip, and whatever it reads is one of them, spelled one way. -/
 theorem packageCodec_lawfulOn :
     Stream.LawfulOn (fun p => packageWire p = true ∧ (packageTree p).fits nodeMax depthMax = true) packageCodec := by
-  refine (Stream.refine_lawfulOn_where (Stream.tree_lawful nodeMax depthMax (by decide)).on "lang/package"
+  refine (Stream.refine_lawfulOn_where (Stream.tree_lawful nodeMax depthMax (by decide)).on "lang/package/2"
     (Q := fun p => packageWire p = true ∧ (packageTree p).fits nodeMax depthMax = true) ?_ ?_ ?_).mono
     (fun _ h => h.2) (fun _ h => ⟨trivial, h⟩)
   · intro y _ hq
@@ -675,7 +675,7 @@ theorem decodePackage_eq_ok_iff {b : ByteArray} {p : Package} :
     · simp at h
 
 
-/-- `decodePackage` accepts exactly what the `lang/package` codec reads (they differ only in which
+/-- `decodePackage` accepts exactly what the `lang/package/2` codec reads (they differ only in which
 refusal names an input that is both a non-package tree and followed by trailing bytes). -/
 theorem decodePackage_eq_codec {b : ByteArray} {p : Package} :
     decodePackage b = .ok p ↔ packageCodec.decode b = .ok p := by
@@ -697,18 +697,18 @@ private def bodyTree (body : Tree) : Tree :=
   .node 0 .empty [.node 0 .empty [], tyTree (.record []), tyTree (.record []), body, .node 1 .empty [],
     .node 1 .empty [], .node 2 .empty []]
 
-/-- **`lang/package` refuses by name every tree `packageOf` does not read.** -/
+/-- **`lang/package/2` refuses by name every tree `packageOf` does not read.** -/
 theorem packageCodec_get_refused {b : ByteArray} {i j : Nat} {t : Tree.Fitting nodeMax depthMax}
     (h : packageStream.get b i = .ok (t, j)) (hn : packageOf t.val = none) :
-    packageCodec.get b i = .error (.rejected i "lang/package") := by
+    packageCodec.get b i = .error (.rejected i "lang/package/2") := by
   simp [packageCodec, Stream.refine, h, hn]
 
-/-- The plant: a body node of term tag 18 (no term has it) is no package, so `lang/package` refuses it
+/-- The plant: a body node of term tag 18 (no term has it) is no package, so `lang/package/2` refuses it
 (`packageCodec_get_refused`; the codec vectors' boundary row is a tree of the same layout). -/
 theorem package_refuses_unknown_term_tag : (packageOf (bodyTree (.node 18 .empty []))).isNone = true := by
   decide +kernel
 
-/-- `lang/package`'s domain is inhabited: the empty package has a tree in bounds. -/
+/-- `lang/package/2`'s domain is inhabited: the empty package has a tree in bounds. -/
 theorem empty_package_fits :
     packageWire ⟨[], .record [], .record [], .record [], [], [], []⟩ = true ∧
       (packageTree ⟨[], .record [], .record [], .record [], [], [], []⟩).fits nodeMax depthMax = true := by

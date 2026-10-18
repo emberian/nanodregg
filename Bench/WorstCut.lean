@@ -17,7 +17,7 @@ is filled, `recordTurnsMax` one-cell Turns per batch record, until the next fram
 of the smallest Turns of that shape, so the most steps.
 - `writes`: one-slot `write`s to the object;
 - `births`: one-slot data-object `create`s (the World grows by a cell per step);
-- `rows` (PERF-9): the deployed Bell queue (world/resident/Bell.ob, LANG-58): installed, a bell born
+- `rows` (PERF-9): the deployed Bell queue (world/resident/Bell.ob, LANG-58/59): installed, a bell born
   whose resident is a second founder, then ring, answer, retire, ... : every Turn a row-only invoke
   (see `rowsCall`);
 - `retires`: `revoke`s, each retiring one grant (a cell tombstoned, its weight credited). The grants
@@ -154,21 +154,21 @@ def admitBorn (w : World D) (m : Kernel.Sim.Gen.Member D) (pins : List D) (body 
   | .turn t => pure (s, w', t.creates.head?.map (·.1))
   | _ => throw "the call was not a Turn"
 
-/-! ### The `rows` shape: the deployed Bell (world/resident/Bell.ob, LANG-58), installed and rung
+/-! ### The `rows` shape: the deployed Bell (world/resident/Bell.ob, LANG-58/59), installed and rung
 
-A round of the Bell queue in THE BAR is a ring (2 row inserts) and its answer (1 insert, 1 retract);
-the owner retires an answered ring (2 retracts), which keeps `pending` under its 64 and `rings` under
-its 1024 for a whole tail. So the tail is ring, answer, retire, ring, ... : every Turn a row-only
+A round of the Bell queue in THE BAR is a ring (2 row inserts) and its answer (1 upsert of the ring's
+`rings` row with the answer, the ring's text sent back; 1 retract of `pending`); the owner retires an
+answered ring (1 retract of `rings`), which keeps `pending` under its 64 and `rings` under its 1024
+for a whole tail. So the tail is ring, answer, retire, ring, ... : every Turn a row-only
 invoke, no cell written. -/
 
 /-- What the rows tail needs: the resident member, the package, the bell, the resident's grant, and
-the three relations' declarations. -/
+the two relations' declarations. -/
 structure RowsCtx where
   b : Kernel.Sim.Gen.Member D
   pkg : D
   obj : D
   gr : D
-  dA : Lang.RelDecl
   dP : Lang.RelDecl
   dR : Lang.RelDecl
 
@@ -196,13 +196,14 @@ def rowsCall (rc : RowsCtx) (a : Kernel.Sim.Gen.Member D) (w : World D) (j ring 
       (.invoke rc.obj 4 (argOf (.record [("text", .bytes)]) (.record [("text", .bytes "r".toUTF8)])) 100000 none), w.height)
   | 1 =>
     (call w rc.b [rc.b.id, rc.obj, rc.pkg, rc.gr]
-      (.invoke rc.obj 0 (argOf (.record [("notBefore", .nat), ("ringer", .digest), ("text", .bytes)])
-        (.record [("notBefore", .nat ring), ("ringer", .digest (X.env.bytes a.id)), ("text", .bytes "a".toUTF8)])) 100000 (some rc.gr))
-      (pinRow rc w 1 rc.dP (ringKey ring a.id)), ring)
+      (.invoke rc.obj 0 (argOf (.record [("notBefore", .nat), ("ringText", .bytes), ("ringer", .digest), ("text", .bytes)])
+        (.record [("notBefore", .nat ring), ("ringText", .bytes "r".toUTF8), ("ringer", .digest (X.env.bytes a.id)),
+          ("text", .bytes "a".toUTF8)])) 100000 (some rc.gr))
+      (pinRow rc w 0 rc.dP (ringKey ring a.id) ++ pinRow rc w 1 rc.dR (ringKey ring a.id)), ring)
   | _ =>
     (call w a [a.id, rc.obj, rc.pkg]
       (.invoke rc.obj 3 (argOf (.record [("notBefore", .nat), ("ringer", .digest)]) (ringKey ring a.id)) 100000 none)
-      (pinRow rc w 0 rc.dA (ringKey ring a.id) ++ pinRow rc w 2 rc.dR (ringKey ring a.id)), ring)
+      (pinRow rc w 1 rc.dR (ringKey ring a.id)), ring)
 
 /-- Install the Bell, create a bell whose resident is `b`, grant `b` answer and ring: three admitted
 calls on `w`, staged; the context, the steps and the World after. -/
@@ -212,7 +213,6 @@ def bellBase (src : String) (a b : Kernel.Sim.Gen.Member D) (w : World D) :
     | .ok p => pure p
     | .error _ => throw s!"{bellSource} does not read as a package"
   let some pb := Lang.Wire.encodePackage p | throw "the Bell has no package bytes"
-  let some dA := p.rels.lookup "answers" | throw "the Bell has no answers"
   let some dP := p.rels.lookup "pending" | throw "the Bell has no pending"
   let some dR := p.rels.lookup "rings" | throw "the Bell has no rings"
   let (s1, w1, pkg?) ← admitBorn w a [a.id] (.install pb)
@@ -226,7 +226,7 @@ def bellBase (src : String) (a b : Kernel.Sim.Gen.Member D) (w : World D) :
   let some obj := obj? | throw "the create bore no bell"
   let (s3, w3, gr?) ← admitBorn w2 a [a.id, b.id, obj] (.grant obj b.id [.invoke 0, .invoke 4] none)
   let some gr := gr? | throw "the grant bore no cell"
-  pure (⟨b, pkg, obj, gr, dA, dP, dR⟩, #[s1, s2, s3], w3)
+  pure (⟨b, pkg, obj, gr, dP, dR⟩, #[s1, s2, s3], w3)
 
 /-- Seal a base at the Store's tail (`host seal`'s path: the writer's open, its file checkpoint,
 `sealNow`); the base it sealed, as the next writer's open reads it. Every writer this opens is dropped

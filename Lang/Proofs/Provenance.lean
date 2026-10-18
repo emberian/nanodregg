@@ -908,7 +908,7 @@ private theorem runMeasured_past_extraction_of (hdig : ∀ x, (digestOf (bytesOf
         match stateSlots S.row ds 0 with
         | some slots => do
             let es ← editsOf S.rels r.self e
-            guardEdits bytesOf S pkg r es
+            guardEdits bytesOf digestOf S rv pkg r es
             pure (slots, calls, es.map (fun x => (x.slot, x.act)), budget - left, S.pkgs)
         | none => .error (.program s!"{S.label}: state bytes") := by
   have hacc := runSetup_accepted_of hdig hS hr hx
@@ -978,7 +978,7 @@ theorem runMeasured_past_extraction {D : Type} {X : Ctx D} (hX : X.Lawful) {look
         match stateSlots S.row ds 0 with
         | some slots => do
             let es ← editsOf S.rels r.self e
-            guardEdits X.env.bytes S pkg r es
+            guardEdits X.env.bytes X.digestOf S rv pkg r es
             pure (slots, calls, es.map (fun x => (x.slot, x.act)), budget - left, S.pkgs)
         | none => .error (.program s!"{S.label}: state bytes") :=
   runMeasured_past_extraction_of (fun x => by simp [hX.digestOf_bytes x]) hS hr hx
@@ -1004,7 +1004,7 @@ theorem program_run_past_extraction {D : Type} {X : Ctx D} (hX : X.Lawful)
         match stateSlots S.row ds 0 with
         | some slots => do
             let es ← editsOf S.rels r.self e
-            guardEdits X.env.bytes S pkg r es
+            guardEdits X.env.bytes X.digestOf S rv pkg r es
             pure (slots, calls, es.map (fun x => (x.slot, x.act)), budget - left)
         | none => .error (.program s!"{S.label}: state bytes") := by
   obtain ⟨c, e, ds, calls, hd, hc, hm⟩ := runMeasured_past_extraction hX hS hr hx
@@ -1018,7 +1018,7 @@ theorem program_run_past_extraction {D : Type} {X : Ctx D} (hX : X.Lawful)
     simp only [bind, Except.bind]
     cases editsOf S.rels r.self e with
     | error _ => rfl
-    | ok es => cases hg : guardEdits X.env.bytes S pkg r es <;> simp [hg, Except.map, pure, Except.pure]
+    | ok es => cases hg : guardEdits X.env.bytes X.digestOf S rv pkg r es <;> simp [hg, Except.map, pure, Except.pure]
 
 /-- The deployed `Ctx`'s program is the language over the deployed codec itself: the second
 premise of `program_run_past_extraction` holds there by construction. -/
@@ -1062,7 +1062,7 @@ theorem runMeasured_past_extraction_sim {look : Pinned Kernel.Sim.D} {rv : RowVi
         match stateSlots S.row ds 0 with
         | some slots => do
             let es ← editsOf S.rels r.self e
-            guardEdits Kernel.Sim.dc.bytes S pkg r es
+            guardEdits Kernel.Sim.dc.bytes Kernel.Sim.digestOf S rv pkg r es
             pure (slots, calls, es.map (fun x => (x.slot, x.act)), budget - left, S.pkgs)
         | none => .error (.program s!"{S.label}: state bytes") :=
   runMeasured_past_extraction_of (fun x => by simp [Teeth.sim_digest_roundtrip]) hS hr hx

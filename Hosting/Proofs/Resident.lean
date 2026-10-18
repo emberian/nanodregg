@@ -17,8 +17,9 @@
 - `answerArg_some`, `keptText_some`: both always print, so `answer unprintable` is unreachable and
   `keep` never fails for want of a text.
 - `answerArg_reads`: the printed `answer` argument reads back, at the described argument type, to
-  exactly `(record (notBefore N) (ringer #H) (text T))` for the ring and text decided: what `invoke`
-  checks is the ring the resident picked and the text it kept.
+  exactly `(record (notBefore N) (ringText X) (ringer #H) (text T))` for the ring (key and text) and
+  the answer decided: what `invoke` checks is the ring the resident picked, its text as read, and
+  the text it kept (LANG-59: the bell's guard compares `ringText` with the ring's own).
 - `kept_reads`: what the volume keeps reads back to the same ring and text, so a restart answers
   that ring from it rather than asking again.
 - `exit_codes_nodup`: each end has its own code.
@@ -166,9 +167,11 @@ theorem textMax_le_bytesMax : textMax ≤ Lang.Bounds.bytesMax := by decide
 
 /-- The printed `answer` argument reads back to exactly the picked ring's key and the decided text. -/
 theorem answerArg_reads {r : Ring} {t : ByteArray} {s : String} (hn : r.notBefore < Lang.Bounds.natLimit)
-    (hg : r.ringer.size ≤ Lang.Bounds.digestBytesMax) (ht : t.size ≤ Lang.Bounds.bytesMax)
+    (hx : r.text.size ≤ Lang.Bounds.bytesMax) (hg : r.ringer.size ≤ Lang.Bounds.digestBytesMax)
+    (ht : t.size ≤ Lang.Bounds.bytesMax)
     (h : answerArg r t = some s) : Read.readData answerArgTy s = .ok (answerDatum r t) :=
-  Print.readData_data (.record (.cons (.nat hn) (.cons (.digest hg) (.cons (.bytes ht) .nil)))) (by decide) h
+  Print.readData_data
+    (.record (.cons (.nat hn) (.cons (.bytes hx) (.cons (.digest hg) (.cons (.bytes ht) .nil))))) (by decide) h
 
 /-- What the volume keeps reads back to the same ring (key and text) and answer. -/
 theorem kept_reads {r : Ring} {t : ByteArray} {s : String} (hn : r.notBefore < Lang.Bounds.natLimit)
@@ -187,13 +190,15 @@ theorem bytesSx_flat (t : ByteArray) : Print.need (Print.bytesSx t) = 1 ∧ Prin
 /-- The `answer` argument always prints: the resident's `answer unprintable` end is unreachable. -/
 theorem answerArg_some (r : Ring) (t : ByteArray) : (answerArg r t).isSome = true := by
   obtain ⟨hn, hw⟩ := bytesSx_flat t
+  obtain ⟨hn', hw'⟩ := bytesSx_flat r.text
   have h1 : Wire.labelOk "text" = true := by decide
   have h2 : Wire.labelOk "notBefore" = true := by decide
   have h3 : Wire.labelOk "ringer" = true := by decide
-  simp only [answerArg, answerDatum, Print.data, Print.dataSx, Print.dataFieldsSx, Print.label, h1, h2, h3]
+  have h4 : Wire.labelOk "ringText" = true := by decide
+  simp only [answerArg, answerDatum, Print.data, Print.dataSx, Print.dataFieldsSx, Print.label, h1, h2, h3, h4]
   simp [Print.fits, Print.fitsB]
   unfold Print.list Print.digestSx Print.atom
-  simp only [Print.need, Print.needs, Print.width, Print.widths, hn, hw]
+  simp only [Print.need, Print.needs, Print.width, Print.widths, hn, hw, hn', hw']
   constructor <;> simp [Read.depthMax, Read.listMax, Wire.depthMax, Wire.rowMax]
 
 /-- What the volume keeps always prints. -/

@@ -17,10 +17,11 @@ anything. It reads `pkg/resident.conf`, ONE Lang data value at `Bell.confTy`. Th
      (`(unanswered restart)`) for the ring, keyed by its `(notBefore, ringer)` and its text, then
      one ask on the broker socket; the answer text replaces the intent in `vol/kept-<bell>` before
      the bell sees it (every keep is synced, renamed, directory-synced and read back);
-   - answer (the kept ring, still pending): invoke `answer (notBefore, ringer, text)` with the kept
-     text. The client pins `pending[k]` itself (`derivePins`); the resident names no pin.
+   - answer (the kept ring, still pending): invoke `answer (notBefore, ringText, ringer, text)`
+     with the ring's text and the kept answer. The client pins `pending[k]` and `rings[k]` itself
+     (`derivePins`); the resident names no pin.
 4. The bell taking the answer forgets it. A refusal is judged by the bell's rows: if the ring is
-   no longer pending (answered already: the kernel refuses the second retract), the answer is
+   no longer pending (answered already: the `rings` guard refuses `rung: answered`), the answer is
    forgotten; if it is still pending, the resident ends `answerRefused NAME` (`program` for a
    method's check such as `notResident`, `grantRight` for a grant without the right). The kept
    text stays, so a restart answers again but never asks again.
@@ -35,9 +36,8 @@ asked twice. A ring that lands below the kept one waits for it (`decide_kept_fir
 order the resident keeps is "lowest first, the ring already asked about before any other", and a
 ringer's backdate by up to windowMax heights is the order's slack the resident trusts. A late
 landing of an unsettled answer cannot take a re-rung ring at the same key with another text: the
-row pin derivePins signs is the row leaf's digest (its value and version inside, KERNEL-54's
-`rowPin`), so a re-inserted row with another text makes the late call stale; with the same text
-it is the same-text case above.
+answer carries the ring's text and the `rings` guard refuses it unless that is the ring's own
+(`rung: text`, LANG-59); with the same text it is the same-text case above.
 `answerRefused` stops the whole queue, not one ring: a restart re-delivers the kept ring first and
 stops again until the operator acts. That is right for every refusal known to reach it (the
 resident is not the bell's, the grant lacks `invoke:0`, `answers` is full until the owner

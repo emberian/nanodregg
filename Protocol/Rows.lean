@@ -1326,11 +1326,11 @@ def rangeLimitRow : Row where
   plant := .caught .noReadLimit 6 .ok
 
 /-- cv 01a15039: a member reads WHY a method refused it, in the method's own words (LANG-51's
-`refuse`). The sponsor installs the shipped Bell (`world/resident/Bell`, LANG-58's queue of rings)
-with the newcomer as its resident and grants it `answer`. The sponsor, not the resident, answers:
-`refused program`, and its output says `refused notResident` (line 10). The resident answering a ring
-nobody rang is the kernel's `missingRow` (its retract of `pending` finds no row: a kernel name passes
-through as itself, no hint). The sponsor rings, and the resident reads the ring in `pending`. The
+`refuse`). The sponsor installs the shipped Bell (`world/resident/Bell`, LANG-58's queue of rings,
+LANG-59's answers in `rings`) with the newcomer as its resident and grants it `answer`. The sponsor, not
+the resident, answers: `refused program`, and its output says `refused notResident` (line 10). The
+resident answering a ring nobody rang is refused by the Bell's guard `rung` (`lawDenied`, hint
+`rung: unrung`: the guard sees the pinned slot empty). The sponsor rings, and the resident reads the ring in `pending`. The
 plant is the flattened output (the reason dropped): line 10 is `refused unprinted`. -/
 def bellRow : Row where
   name := "bell"
@@ -1343,17 +1343,18 @@ def bellRow : Row where
     okBind "sponsor" ["grant", "@bell", "@newcomer", "invoke:0"] "ga",
     { actor := "newcomer", act := .cmd ["read", "@bell", "?"], expect := .ok, bind := some "bell" },
     { actor := "sponsor", act := .cmd ["invoke", "@bell", "@bell.answer",
-        "(record (notBefore 1) (ringer #{@sponsor}) (text \"me\"))"],
+        "(record (notBefore 1) (ringText \"hi\") (ringer #{@sponsor}) (text \"me\"))"],
       expect := .refused "program", prints := some "refused notResident" },
-    no "newcomer" ["invoke", "@bell", "@bell.answer",
-      "(record (notBefore 1) (ringer #{@sponsor}) (text \"nobody rang\"))", "--via", "@ga"] "missingRow",
+    { actor := "newcomer", act := .cmd ["invoke", "@bell", "@bell.answer",
+        "(record (notBefore 1) (ringText \"hi\") (ringer #{@sponsor}) (text \"nobody rang\"))", "--via", "@ga"],
+      expect := .refused "lawDenied", prints := some "rung: unrung" },
     ok "sponsor" ["invoke", "@bell", "@bell.ring", "(record (text \"hello\"))"],
     { actor := "newcomer", act := .cmd ["read", "@bell", "pending", "64"], expect := .ok,
       prints := some "hello" }])
   plant := .caught .flatProgram 10 (.refused "unprinted")
 
 /-- The writer serves every event the kernel admits (PROTOCOL-18): the largest a row logs is the
-install of the shipped queue Bell (31.5 KB printed). Its submit commits and its confirm, the
+install of the shipped queue Bell (27.7 KB printed). Its submit commits and its confirm, the
 sponsor's own follow reading the log through the writer's pages, settles it. The plant is the
 budget guessed at 16384: the event never fits a page, the confirm's receipt is refused
 `badResult` (an empty page short of the tip) and the attempt ends `uncertain` (line 6). -/

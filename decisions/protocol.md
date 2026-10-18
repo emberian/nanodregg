@@ -1720,7 +1720,7 @@ Without the record, a stale call would stay `open` for ever, and the budget row 
 - Theorem `refusedAt_program`: the reply is exactly `refused program` on stderr and the hint line with the reason on stdout.
 - Row `bell` (new, on LANG-58's Bell, a queue of rings): the sponsor installs the SHIPPED Bell (`<world/resident/Bell`, no copy in the rows) with the newcomer as resident and grants it `answer`.
   - The sponsor (not the resident) answers: `refused program`, and its output says `refused notResident` (line 10).
-  - The resident answers a ring nobody rang: the kernel's `refused missingRow` (the retract of `pending` finds no row), a kernel name that passes through as itself.
+  - The resident answers a ring nobody rang (`(record (notBefore 1) (ringText "hi") (ringer …) (text "nobody rang"))`): since LANG-59 the Bell's guard `rung` refuses it, `refused lawDenied` with the hint `rung: unrung` (the pinned slot is empty); before LANG-59 it was the kernel's `missingRow` on the retract of `pending`.
   - The sponsor rings; the resident's `read @bell pending 64` shows it.
   - Plant `flatProgram` (the output flattened, the hint line removed: the stdio surface before this) is caught at line 10 `refused unprinted`.
 

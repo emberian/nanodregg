@@ -14,7 +14,11 @@
   to the key's declared fields, sorted).
 * `guard_never_stuck`, `guardEdits_never_stuck`: the guard `guardEdits` runs on each edit never
   ends `stuck`, as `runLaw_never_stuck` for laws: the guard field is typed `guardTy` at install
-  (`checkRel`) and the edit data conforms to the relation's edit type (`editsOf_conforms`).
+  (`checkRel`), the edit data conforms to the relation's edit type (`editsOf_conforms`) and its
+  old row to the option of the value type (`guardOld_conforms`, LANG-59).
+* `guardOld_unpinned`, `guardEdits_unpinned`: an upsert or retract with no pin is refused
+  `rowUnpinned` with the receiver's key, and `guardEdits` refuses it, at that edit's key, before any
+  guard runs.
 -/
 import Lang.Proofs.LawRun
 import Lang.Proofs.Check
@@ -433,8 +437,8 @@ theorem checkFields_guard {p : Package} (h : p.checkFields = .ok ()) {ℓ gl : L
   · cases h
 
 /-- The machine run inside a guard's `runLaw`: on a loaded package's declared guard, the state
-before the run (read at its row), a request in bounds and an edit of the relation's edit type, it
-ends with a value of `verdictTy` or a named budget/arithmetic fault (`guardTy`, checked at install
+before the run (read at its row), a request in bounds and a guard input at `guardInTy`, it ends
+with a value of `verdictTy` or a named budget/arithmetic fault (`guardTy`, checked at install
 by `checkRel`, types the application). -/
 theorem guard_run_ok {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D}
     {look : Pinned D} {fuel : Nat} {idb : ByteArray} {L : Loaded} {g : Nat} {p : Package}
@@ -442,7 +446,7 @@ theorem guard_run_ok {bytesOf : D → ByteArray} {digestOf : ByteArray → Optio
     (hload : load digestOf look fuel idb ⟨[], [], []⟩ = .ok (L, g))
     (hp : L.pkgs[g]? = some p) (hrel : Row.find? ℓ p.rels = some dl) (hg : dl.guard = some gl)
     (hold : readState digestOf (recordRow p.state) old = .ok od)
-    (hr : reqOk bytesOf r = true) (he : Conforms e (relEditTy dl)) :
+    (hr : reqOk bytesOf r = true) (he : Conforms e (guardInTy dl)) :
     RunOK L.ifaces verdictTy
       (run L.lib Bounds.stackMax ticks 0
         (State.init (apply3 g gl) [e.toVal, (reqData bytesOf r).toVal, od.toVal])) := by
@@ -452,16 +456,16 @@ theorem guard_run_ok {bytesOf : D → ByteArray} {digestOf : ByteArray → Optio
   have ho := readState_conforms hold
   rw [← hrec] at ho
   obtain ⟨row, hrow, hfind⟩ := recordRow_find (checkFields_guard hfields hrel hg)
-  have href : HasType (Loaded.ifaces L) [relEditTy dl, reqTy, p.state] (.ref g) (.record row) :=
+  have href : HasType (Loaded.ifaces L) [guardInTy dl, reqTy, p.state] (.ref g) (.record row) :=
     .ref (by rw [← hrow]; simp [Loaded.ifaces, hp])
-  have ht : HasType (Loaded.ifaces L) [relEditTy dl, reqTy, p.state] (apply3 g gl) verdictTy :=
+  have ht : HasType (Loaded.ifaces L) [guardInTy dl, reqTy, p.state] (apply3 g gl) verdictTy :=
     .app (.app (.app (.get href hfind) (.var rfl)) (.var rfl)) (.var rfl)
   exact run_sound hlib _ _ _ (.eval (.cons (toVal_typed he)
     (.cons (toVal_typed (reqOk_conforms hr)) (.cons (toVal_typed ho) .nil))) ht .nil)
 
 /-- **A relation's guard is never stuck** (LANG-49): `runLaw` on a loaded package's declared guard,
-over the state before the run, a request in bounds and an edit of the relation's edit type,
-returns a verdict or a named budget/arithmetic fault, never `stuck`. Mirrors
+over the state before the run, a request in bounds and a guard input at `guardInTy` (the edit
+and its old row), returns a verdict or a named budget/arithmetic fault, never `stuck`. Mirrors
 `runLaw_never_stuck`; teeth: `caseGuard_nat_stuck` (an edit of another shape IS stuck, so `he`
 is used) and `runLaw_nat_stuck` (an untyped guard body). -/
 theorem guard_never_stuck {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D}
@@ -470,7 +474,7 @@ theorem guard_never_stuck {bytesOf : D → ByteArray} {digestOf : ByteArray → 
     (hload : load digestOf look fuel idb ⟨[], [], []⟩ = .ok (L, g))
     (hp : L.pkgs[g]? = some p) (hrel : Row.find? ℓ p.rels = some dl) (hg : dl.guard = some gl)
     (hold : readState digestOf (recordRow p.state) old = .ok od)
-    (hr : reqOk bytesOf r = true) (he : Conforms e (relEditTy dl)) :
+    (hr : reqOk bytesOf r = true) (he : Conforms e (guardInTy dl)) :
     runLaw L.lib (.get (.ref g) gl) od (reqData bytesOf r) e ≠ .error .stuck := by
   have hrun := guard_run_ok (ticks := lawTicks) hload hp hrel hg hold hr he
   have hlib := (load_libTy hload).1
@@ -496,34 +500,116 @@ theorem guard_never_stuck {bytesOf : D → ByteArray} {digestOf : ByteArray → 
       intro h; cases h
       exact extract_progress (m := ⟨L.lib⟩) hlib verdictTy (by decide) hrun hx rfl
 
-/-- **The guards a method run's edits meet are never stuck** (LANG-49): past extraction, for every
-edit `editsOf` reads from the run's edits row and every guard its relation declares, the `runLaw`
-`guardEdits` makes (over the run's state, its request and the edit's data) is not `stuck`. -/
+theorem except_map_ok {α β ε : Type} {f : α → β} {e : Except ε α} {b : β} (h : e.map f = .ok b) :
+    ∃ a, e = .ok a ∧ b = f a := by
+  cases e with
+  | error _ => cases h
+  | ok a => exact ⟨a, rfl, by simp only [Except.map, Except.ok.injEq] at h; exact h.symm⟩
+
+/-- The old row `guardOld` finds is a value of the option of the relation's value type. -/
+theorem guardOld_conforms {digestOf : ByteArray → Option D} {rv : RowView D} {self : D} {x : Edit D}
+    {o : Data} (h : guardOld digestOf rv self x = .ok o) : Conforms o (optTy x.decl.val) := by
+  unfold guardOld at h
+  rcases hp : pinAt rv self x with _ | ⟨k, _ | l⟩
+  · simp only [hp] at h
+    split at h
+    · cases h; exact optD_conforms (by simp)
+    · cases h
+  · simp only [hp] at h; cases h; exact optD_conforms (by simp)
+  · cases l with
+    | head => simp only [hp] at h; cases h
+    | row a v n =>
+      simp only [hp] at h
+      obtain ⟨w, hw, rfl⟩ := except_map_ok h
+      exact optD_conforms fun y hy => by cases hy; exact valOf_conforms hw
+
+theorem guardIn_conforms {d : RelDecl} {e o : Data} (he : Conforms e (relEditTy d))
+    (ho : Conforms o (optTy d.val)) : Conforms (guardIn e o) (guardInTy d) :=
+  .record (.cons he (.cons ho .nil))
+
+theorem mapM_zip_ok {α β ε : Type} {f : α → Except ε β} :
+    ∀ {xs : List α} {ys : List β}, xs.mapM f = .ok ys → ∀ p ∈ xs.zip ys, f p.1 = .ok p.2
+  | [], ys, _ => by simp
+  | x :: xs, ys, h => by
+    rw [List.mapM_cons] at h
+    simp only [bind, Except.bind] at h
+    split at h
+    · cases h
+    · rename_i y hy
+      split at h
+      · cases h
+      · rename_i ys' hys
+        simp only [pure, Except.pure, Except.ok.injEq] at h
+        subst h
+        intro q hq
+        rcases List.mem_cons.mp hq with rfl | hq
+        · exact hy
+        · exact mapM_zip_ok hys q hq
+
+/-- **The guards a method run's edits meet are never stuck** (LANG-49, LANG-59): past extraction,
+for every edit `editsOf` reads from the run's edits row, paired with the old row `guardEdits`
+found for it (every `guardOld` succeeded: `olds`), and every guard its relation declares, the
+`runLaw` `guardEdits` makes (over the run's state, its request and `guardIn` of the edit's data
+and its old row) is not `stuck`. -/
 theorem guardEdits_never_stuck {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D}
     {look : Pinned D} {rv : RowView D} {pkg : D} {state : Slots} {method : Nat} {args : ByteArray}
     {r : Req D} {S : RunSetup} {budget used fuel left : Nat} {v : Val} {c e st : Data}
-    {es : List (Edit D)}
+    {es : List (Edit D)} {olds : List Data}
     (hS : runSetup bytesOf digestOf look rv pkg state method args r = .ok S)
     (hrun : run S.lib Bounds.stackMax budget 0 (State.init S.term S.env) = .value v used)
     (hx : (Machine.mk S.lib).extract S.ty fuel v = .ok (.record [("calls", c), ("edits", e), ("state", st)], left))
-    (hes : editsOf S.rels r.self e = .ok es) :
-    ∀ x ∈ es, ∀ gl, x.decl.guard = some gl →
-      runLaw S.lib (.get (.ref S.g) gl) S.state (reqData bytesOf r) x.data ≠ .error .stuck := by
+    (hes : editsOf S.rels r.self e = .ok es)
+    (hol : es.mapM (guardOld digestOf rv r.self) = .ok olds) :
+    ∀ q ∈ es.zip olds, ∀ gl, q.1.decl.guard = some gl →
+      runLaw S.lib (.get (.ref S.g) gl) S.state (reqData bytesOf r) (guardIn q.1.data q.2) ≠ .error .stuck := by
   obtain ⟨L, g, p, ℓ, sg, sd, ad, wd, hr0, hl, hp, hres, hst, hargs, -, hrows, rfl⟩ := runSetup_spec hS
   obtain ⟨mty, hm, hA⟩ := resolveMethod_spec hres
   have hok := invoke_never_stuck (ticks := budget) hl hp hm hA hst hargs hrows hr0
   simp only at hrun hx hes ⊢
   rw [hrun] at hok
   have hcf := extract_conforms (load_libTy hl).1 (resultTy p.state sg.calls (editTy p.rels) sg.edits) hok hx
-  intro x hx' gl hg
+  intro q hq gl hg
+  have hx' : q.1 ∈ es := (List.of_mem_zip hq).1
+  have ho := guardOld_conforms (mapM_zip_ok hol q hq)
   cases hcf with
   | record hrow =>
     cases hrow with
     | cons _ hrest =>
       cases hrest with
       | cons hed _ =>
-        obtain ⟨hd, hc⟩ := editsOf_conforms hed hes x hx'
-        exact guard_never_stuck hl hp hd hg hst hr0 hc
+        obtain ⟨hd, hc⟩ := editsOf_conforms hed hes q.1 hx'
+        exact guard_never_stuck hl hp hd hg hst hr0 (guardIn_conforms hc ho)
+
+/-- **An unpinned upsert or retract has no old row** (LANG-59): with no pin at its slot, an edit
+whose act needs one is refused `rowUnpinned` with its parent, relation and key, the refusal and
+key `rowTouchesOf` gives (`Kernel.Proofs.Audit`). -/
+theorem guardOld_unpinned {digestOf : ByteArray → Option D} {rv : RowView D} {self : D} {x : Edit D}
+    (hp : pinAt rv self x = none) (ha : x.act.unpinned = false) :
+    guardOld digestOf rv self x = .error (.rowUnpinned x.slot.under.1 x.slot.under.2 x.slot.keyBytes) := by
+  unfold guardOld
+  rw [hp]
+  simp [ha]
+
+theorem mapM_prefix_error {α β ε : Type} {f : α → Except ε β} {x : α} {e : ε} (hx : f x = .error e) :
+    ∀ (pre post : List α), (∀ y ∈ pre, ∃ b, f y = .ok b) → (pre ++ x :: post).mapM f = .error e
+  | [], post, _ => by simp [List.mapM_cons, hx, bind, Except.bind]
+  | y :: pre, post, h => by
+    obtain ⟨b, hb⟩ := h y (by simp)
+    have ih := mapM_prefix_error hx pre post (fun z hz => h z (by simp [hz]))
+    simp [List.mapM_cons, hb, bind, Except.bind, ih]
+
+/-- **`guardEdits` finds every old row before it runs a guard** (LANG-59): when an edit `x` is an
+unpinned upsert or retract and every edit before it has its old row, `guardEdits` refuses
+`rowUnpinned` with `x`'s own parent, relation and key, whatever any guard (of `x`, of an earlier
+edit, or of a later one) would say. -/
+theorem guardEdits_unpinned {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D}
+    {S : RunSetup} {rv : RowView D} {pkg : D} {r : Req D} {pre post : List (Edit D)} {x : Edit D}
+    (hpre : ∀ y ∈ pre, ∃ o, guardOld digestOf rv r.self y = .ok o)
+    (hp : pinAt rv r.self x = none) (ha : x.act.unpinned = false) :
+    guardEdits bytesOf digestOf S rv pkg r (pre ++ x :: post) =
+      .error (.rowUnpinned x.slot.under.1 x.slot.under.2 x.slot.keyBytes) := by
+  have hm := mapM_prefix_error (guardOld_unpinned (digestOf := digestOf) hp ha) pre post hpre
+  simp [guardEdits, hm, bind, Except.bind]
 
 end
 
@@ -618,7 +704,8 @@ private def okT : Term := .inj verdictTy "ok" (.record [])
 
 /-- A guard that cases on its edit (insert or upsert). -/
 private def caseGuard : Term :=
-  .lam (.record []) (.lam reqTy (.lam (relEditTy tRel) (.case (.var 0) [("insert", okT), ("upsert", okT)])))
+  .lam (.record []) (.lam reqTy (.lam (guardInTy tRel)
+    (.case (.get (.var 0) "edit") [("insert", okT), ("upsert", okT)])))
 
 /-- The tooth of `guard_never_stuck`'s edit-typing premise: the same guard on data that is not an
 edit IS stuck. -/
@@ -627,12 +714,57 @@ theorem caseGuard_nat_stuck :
       | .error .stuck => true
       | _ => false) = true := by decide
 
-/-- ... and on an edit of the relation's edit type it returns its verdict. -/
+/-- ... and on a guard input it returns its verdict. -/
 theorem caseGuard_edit_ok :
     (match runLaw [] caseGuard (.record []) (.record [])
-        (.inj "insert" (.record [("key", .record [("a", .nat 1)]), ("val", .nat 5)])) with
+        (guardIn (.inj "insert" (.record [("key", .record [("a", .nat 1)]), ("val", .nat 5)])) (optD none)) with
       | .ok (.ok ()) => true
       | _ => false) = true := by decide
+
+/-- A guard that admits an upsert over an absent row and refuses one over a present row: it reads
+only `old`. -/
+private def freshGuard : Term :=
+  .lam (.record []) (.lam reqTy (.lam (guardInTy tRel)
+    (.case (.get (.var 0) "old") [("none", okT), ("some", .inj verdictTy "refused" (.bytes ⟨#[116]⟩))])))
+
+private def upsert15 : Data := .inj "upsert" (.record [("key", .record [("a", .nat 1)]), ("val", .nat 5)])
+
+/-- The tooth that `old` reaches the guard (LANG-59): ONE edit, two old rows, two verdicts. A guard
+that saw only the edit could not tell these apart. -/
+theorem freshGuard_reads_old :
+    (match runLaw [] freshGuard (.record []) (.record []) (guardIn upsert15 (optD none)),
+           runLaw [] freshGuard (.record []) (.record []) (guardIn upsert15 (optD (some (.nat 4)))) with
+      | .ok (.ok ()), .ok (.error _) => true
+      | _, _ => false) = true := by decide
+
+private def tEditU : Edit Nat :=
+  { rel := 0, label := "t", decl := tRelR, data := upsert15,
+    slot := .row ⟨7, 0, (keyBytes tRel (.record [("a", .nat 1)])).getD .empty⟩, act := .upsert 0 .empty }
+
+/-- `guardOld_unpinned` is not about an empty view only: with the row pinned absent, the same
+upsert's old row is `none`. -/
+theorem guardOld_pinned_absent :
+    (match guardOld (fun _ => none) onePin 7 tEditU with
+     | .ok (.inj "none" (.record [])) => true
+     | _ => false) = true := by decide
+
+private def rowPin5 : RowView Nat :=
+  { points := fun _ _ => [((keyBytes tRel (.record [("a", .nat 1)])).getD .empty,
+      some (.row 0 ((Wire.encodeData tRel.val (.nat 5)).getD .empty) 0))],
+    ranges := fun _ _ => .ok [] }
+
+/-- ... and with the slot pinned holding a row of value 5, its old row is `some 5`: the value read
+back from the row's bytes. -/
+theorem guardOld_pinned_row :
+    (match guardOld (fun _ => none) rowPin5 7 tEditU with
+     | .ok (.inj "some" (.nat 5)) => true
+     | _ => false) = true := by decide
+
+/-- ... and with no pin at all it is refused `rowUnpinned` at the edit's key. -/
+theorem guardOld_unpinned_witness :
+    (match guardOld (fun _ => none) ⟨fun _ _ => [], fun _ _ => .ok []⟩ 7 tEditU with
+     | .error (.rowUnpinned 7 0 k) => decide (k = (keyBytes tRel (.record [("a", .nat 1)])).getD .empty)
+     | _ => false) = true := by decide
 
 /-! ## The row edits `Lang.program` hands KERNEL are its own object's (cv 01a14e16-78ac)
 

@@ -212,4 +212,28 @@ where
         pure (x :: (← go fs))
       | _ => .error (.program s!"edits: {ℓ}: not an option")
 
+/-! ## What a guard sees (LANG-59): the edit, and the row now at the slot the caller pinned -/
+
+/-- The pin under an edit's row slot: the caller's pin at its relation with its key bytes. -/
+def pinAt {D : Type} (rv : RowView D) (self : D) (e : Edit D) : Option (ByteArray × Option RowLeaf) :=
+  (rv.points self e.rel).find? fun p => decide (p.1 = e.slot.keyBytes)
+
+/-- The old row a guard sees, at `optTy` of the relation's value type: the value of the row now at
+the slot the caller pinned (the receiver's `RowView`, so a stale pin shows the current row; `valOf`,
+the conversion `relReads` uses), `none` for a pinned-absent slot or for an insert with no pin. An upsert or retract with no pin has no old row: refused `rowUnpinned` with the receiver's
+own parent, relation and key (`rowTouchesOf`'s refusal), so a caller that derives its pins from
+refusals learns the row whatever the guard would say. -/
+def guardOld {D : Type} (digestOf : ByteArray → Option D) (rv : RowView D) (self : D) (e : Edit D) :
+    Except (Refusal D) Data :=
+  match pinAt rv self e with
+  | some (_, none) => .ok (optD none)
+  | some (_, some (.row _ v _)) => (valOf digestOf e.decl s!"old: {e.label}" v).map fun x => optD (some x)
+  | some (_, some (.head ..)) => .error (.program s!"old: {e.label}: not a row")
+  | none =>
+    if e.act.unpinned then .ok (optD none)
+    else .error (.rowUnpinned e.slot.under.1 e.slot.under.2 e.slot.keyBytes)
+
+/-- A guard's input, at `guardInTy`: the edit's data and its old row. -/
+def guardIn (edit old : Data) : Data := .record [("edit", edit), ("old", old)]
+
 end Nanodregg.Lang

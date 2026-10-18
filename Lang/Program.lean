@@ -301,14 +301,18 @@ def runSetup (look : Pinned D) (rv : RowView D) (pkg : D) (state : Slots) (metho
          ty := resultTy p.state sg.calls (editTy p.rels) sg.edits, state := s,
          args := a, reads := rows, term := apply4 g ℓ, env := [(reqData bytesOf r).toVal, a.toVal, s.toVal, rows.toVal] }
 
-/-- Every edit judged by its relation's guard, if it has one, over the state before the run and
-the request (LANG-49: O(edits), never a relation; one law runner, `runLaw`). -/
-def guardEdits (S : RunSetup) (pkg : D) (r : Req D) (es : List (Edit D)) : Except (Refusal D) Unit :=
-  es.forM fun e =>
+/-- Every edit judged by its relation's guard, if it has one, over the state before the run, the
+request, and the edit with its old row (LANG-49: O(edits), never a relation; one law runner,
+`runLaw`). Every edit's old row is found first (`guardOld`), so an unpinned upsert or retract is
+refused `rowUnpinned` before any guard runs (LANG-59). -/
+def guardEdits (S : RunSetup) (rv : RowView D) (pkg : D) (r : Req D) (es : List (Edit D)) :
+    Except (Refusal D) Unit := do
+  let olds ← es.mapM (guardOld digestOf rv r.self)
+  (es.zip olds).forM fun (e, o) =>
     match e.decl.guard with
     | none => .ok ()
     | some gl =>
-      match runLaw S.lib (.get (.ref S.g) gl) S.state (reqData bytesOf r) e.data with
+      match runLaw S.lib (.get (.ref S.g) gl) S.state (reqData bytesOf r) (guardIn e.data o) with
       | .ok (.ok ()) => .ok ()
       | .ok (.error why) => .error (.lawDenied pkg s!"{gl}: {reasonText why}")
       | .error f => .error (.lawDenied pkg s!"{gl}: {faultText f}")
@@ -331,7 +335,7 @@ def runMeasured (look : Pinned D) (rv : RowView D) (pkg : D) (state : Slots) (me
       | some slots => do
         let calls ← callsOf digestOf c
         let es ← editsOf S.rels r.self e
-        guardEdits bytesOf S pkg r es
+        guardEdits bytesOf digestOf S rv pkg r es
         pure (slots, calls, es.map (fun x => (x.slot, x.act)), budget - left, S.pkgs)
       | none => throw (.program s!"{S.label}: state bytes")
     | .ok _ => throw (.program s!"{S.label}: state")

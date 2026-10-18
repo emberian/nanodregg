@@ -2,11 +2,11 @@
 # Lang.Wire — types and terms as CODEC's one recursive codec (`Codec.Tree`, CODEC-9)
 
 A type or a term is a `Codec.Tree`: one node per constructor, its tag byte, its scalar field as a
-payload written with CODEC's ordinary codecs (an index as `u32`, a natural as `u64`, a boolean as
-`bool`, a primitive's code as `u8`, a label or a byte literal as its raw bytes), and its subterms as
-children. A row entry `(ℓ, x)` is a FIELD node: the label as payload, `x` as its one child. The
-byte-level reading, the depth bound and the size bounds are `Stream.tree`'s, proved once
-(`Codec.Stream.tree_lawful`); this module only maps constructors to nodes and back.
+payload written with CODEC's ordinary codecs (an index as `u32`, a natural as `u64be` as Lang data's
+is (LANG-59), a boolean as `bool`, a primitive's code as `u8`, a label or a byte literal as its raw
+bytes), and its subterms as children. A row entry `(ℓ, x)` is a FIELD node: the label as payload,
+`x` as its one child. The byte-level reading, the depth bound and the size bounds are
+`Stream.tree`'s, proved once (`Codec.Stream.tree_lawful`); this module only maps constructors to nodes and back.
 
 `tyOf`/`termOf` accept exactly the trees `tyTree`/`termTree` write for a REPRESENTABLE type or term
 (`tyWire`, `termWire`: every label UTF-8 of at most `labelBytesMax` bytes, every row at most
@@ -60,7 +60,7 @@ def u32Of (p : ByteArray) : Option Nat :=
   | .error _ => none
 
 def u64Of (p : ByteArray) : Option Nat :=
-  match Stream.u64.decode p with
+  match Stream.u64be.decode p with
   | .ok v => some v.toNat
   | .error _ => none
 
@@ -70,7 +70,7 @@ def boolOf (p : ByteArray) : Option Bool :=
   | .error _ => none
 
 def u32Bytes (n : Nat) : ByteArray := Stream.u32.bytes (UInt32.ofNat n)
-def u64Bytes (n : Nat) : ByteArray := Stream.u64.bytes (UInt64.ofNat n)
+def u64Bytes (n : Nat) : ByteArray := Stream.u64be.bytes (UInt64.ofNat n)
 
 def primCode : Prim → UInt8
   | .add => 0 | .sub => 1 | .mul => 2 | .div => 3 | .mod => 4

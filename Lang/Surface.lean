@@ -27,8 +27,8 @@ text (`(package (imports …) …)`) is read by `Read.package` unchanged (`read_
 
 Every annotation the lowering writes comes from a declaration; nothing is inferred, so the
 surface never decides a type (the checker does). A method binds `rows state arg req`, a law
-`old new req`, a guard `state req edit`. A bounded argument field is checked before the body and
-refused by name: `refused "text 1..200"` (law 7). `layer` is LANG-18's old-self `extend` over the
+`old new req`, a guard `state req edit old` (LANG-59: `old` is the row the edit replaces, as the
+caller pinned it). A bounded argument field is checked before the body and refused by name: `refused "text 1..200"` (law 7). `layer` is LANG-18's old-self `extend` over the
 imported super package: same state and relations, its laws kept and never overridden
 (`Lang.Proofs.Surface.layer_keeps_laws`).
 -/
@@ -793,10 +793,13 @@ def lower (supers : List (ByteArray × Package)) (p : Nat) (ds : List SExp) : P 
     | none => throw (.noRel q g)
     | some (_, rd) =>
       let cg := { c with place := .guard }
-      let RE := relEditTy rd
-      let b' ← term cg Read.depthMax ["edit", "req", "state"] b
+      -- a guard binds `state req edit old` (LANG-59): its third argument is the guard input
+      -- record, bound as `edit` long enough to name its two fields
+      let b' ← term cg Read.depthMax ["edit", "old", "req", "state"] b
       pure (g, guardTy S rd, L q [A q "lam", A q "state", ← tyAt q S, L q [A q "lam", A q "req", ← tyAt q reqTy,
-        L q [A q "lam", A q "edit", ← tyAt q RE, b']]])
+        L q [A q "lam", A q "edit", ← tyAt q (guardInTy rd),
+          L q [A q "let", A q "old", ← tyAt q (optTy rd.val), L q [A q ".", A q "edit", A q "old"],
+            L q [A q "let", A q "edit", ← tyAt q (relEditTy rd), L q [A q ".", A q "edit", A q "edit"], b']]]]])
   -- read every field's core text with the one reader
   let mut fields : List (Label × Ty × Term) := []
   let mut sxs : List (Label × SExp × Nat) := []

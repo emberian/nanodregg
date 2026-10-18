@@ -2408,3 +2408,96 @@ a good queue order: the 1024-height bound is the price, stated in the decision a
 re-pins with the reason "the Bell became a queue"; the LB rows are re-cut (LB0-LB13). The resident (Hosting/Resident,
 launcher/tests/resident_bell.rs) cuts over in the same commit (HOSTING-11, HOSTING-31). An old Bell object's state does not read
 at the new state type; every Store re-geneses on the KERNEL-54 day anyway.
+
+## LANG-59 A guard sees the row its edit replaces; the Bell's exactly-once is a guard on one relation; term literals go big-endian (2026-10-20; ROOT APPROVED the design, Q1 yes, Q2 = (B); LANG-18 proposed, LANG-19 built; cv 01a150a4-27ee, cv 01a14fe9-784c; with HOSTING-11's resident cut-over)
+**What.** A relation's guard has type `S -> Req -> guardInTy d -> Verdict` with
+`guardInTy d = rec {edit : relEditTy d, old : optTy d.val}`: the arity stays 3, so the one law runner
+(`runLaw`, apply3) runs guards unchanged. `old` is the row now at the slot the caller pinned
+(`Lang.pinAt`, read through the receiver's `RowView`): a pinned-absent slot is `none`, a pinned row is its
+value read by `valOf` (the conversion
+`relReads` uses), an insert with no pin is `none`. An upsert or retract with no pin has no old row:
+`guardOld` refuses it `rowUnpinned parent rel key`, the refusal and key the receiver's `rowTouchesOf`
+gives. `guardEdits` finds EVERY edit's old row before it runs ANY guard, so a caller deriving pins from
+refusals learns each row whatever a guard would say (journey LB7v: the answered ring with only `rings`
+pinned is refused `rowUnpinned` at `pending`, not `rung: answered`). The surface binds a guard's
+`state req edit old`; it lowers to `(lam edit GIn (let old (option V) (. edit old) (let edit RE
+(. edit edit) BODY)))`, one binder name for the record so no fresh name can capture a user's. `old` is
+the row as the World holds it at the pin: when the pin is stale the guard judges the current row, and a
+refusal comes before the kernel's `stale` (LB8b).
+
+**Folded in (ROOT Q1, cv 01a14fe9-784c).** A natural in the package wire (a term literal, a relation's
+limit and cap) is `Stream.u64be`, as Lang data's is since LANG-57: one encoding of `nat` in both Lang wires.
+The refine is renamed `lang/package/2` (its content tag moves; codec-vectors re-drew exactly the 43
+`lang/package` rows, now under the site `lang/package/2`, which the census requires to carry the refine name; nothing else moved).
+
+**The Bell (ROOT Q2 = (B)).** Answered-ness moves into the row a guard sees. `answers` is deleted.
+
+    rel pending (notBefore nat)(ringer digest) -> (rec (text bytes))                         limit 64    guard queued
+    rel rings   (notBefore nat)(ringer digest) -> (rec (answer (option bytes)) (text bytes)) limit 1024  guard rung
+    ring   {text 1..2000}                          inserts pending[k] {text} and rings[k] {answer none, text}
+    answer {notBefore ringText ringer text}        notResident unless the resident; upserts rings[k] {answer some text,
+                                                   text ringText}, retracts pending[k]; reads no row
+    retire {notBefore ringer}                      retracts rings[k]
+    rung   insert: ringer = agent ("notYours"), answer none ("answered")
+           upsert: agent = resident ("notResident"); old present ("unrung"); old.answer none ("answered");
+                   new text = old.text ("text"); new answer some ("unanswered")
+           retract: old present ("unrung"), old.answer some ("unanswered")
+
+Exactly once is now ONE guard over ONE relation, layer-proof: a second answer is `rung: answered` (LB8),
+also over one view (LB8b), also through a layer that skips `pending` (LB13e). Retire takes only an answered
+ring (LB10b; a layer's `drop`, LB13f). A ring cannot be inserted already answered (LB13g), and an answer
+must send back the ring's own text (LB8t): the resident re-sends it (bounded 1..2000), so no method reads a
+row. `pending` stays the cursor: a range read cannot filter by value. LB13' plants `rung` open (and
+`queued`'s retract) and all four takeovers are admitted, so each refusal is the guard's.
+
+**CoAuthor.** `proposals` gains `authored`: an insert's author is its signer, and an upsert may not change
+the author (the method checked both, so a layer could not be stopped): LS12, a layer's `steal`, and LS12i,
+a layer's `forge` filing a proposal under another's name, are refused `authored: author`; LS12' (both arms
+planted `ok`) admits both. CappedTally: unchanged in meaning, its hand core re-written for the new iface
+type (LT0s holds byte for byte).
+
+**Statements restated, no new premise** (the reader's list; second-agent read with the disjunct check by
+a383cd00e4775b730: LAND-WITH-FIXES, all applied: `authored`'s insert arm (M1, LS12i), the words "the row
+now at the slot" (L1), `guardEdits_unpinned` strengthened to x's own key (L2), the tooth
+`guardOld_pinned_row` (L3); no theorem vacuous, no premise added; `hol` covers every guard run). `guard_run_ok`, `guard_never_stuck`: `Conforms e (relEditTy dl)` -> `Conforms e
+(guardInTy dl)`. `guardEdits_never_stuck`: binds `hol : es.mapM (guardOld digestOf rv r.self) = .ok olds`
+(guardEdits' own first pass, the computed input, not a premise on package or World) and concludes over
+`q ∈ es.zip olds` with `guardIn q.1.data q.2`, exactly the runs `guardEdits` makes. Provenance's four
+past-extraction equations: `guardEdits` gains `digestOf … rv`. Wire: `lang/package/2`. The tooth term
+`caseGuard` reads `.edit`. The 85 law theorems (Std, StdTeeth, Receiver, LawRun, StdFits): no file touched.
+New: `guardOld_conforms`, `guardIn_conforms`, `mapM_zip_ok`, `guardOld_unpinned`, `guardEdits_unpinned`
+(for edits `pre ++ x :: post` whose `pre` all have old rows, an unpinned upsert/retract `x` makes
+`guardEdits` refuse `rowUnpinned` at x's own parent, relation and key, whatever any guard says),
+`except_map_ok`, `mapM_prefix_error`; teeth `freshGuard_reads_old` (one edit, two old rows, two verdicts:
+`old` reaches the guard), `guardOld_pinned_absent`, `guardOld_pinned_row` and `guardOld_unpinned_witness`
+(none, some, refused).
+
+**Measured.** ring 79 required steps / 120 ticks (was 77 / 116), answer 96 / 143 (was 77 / 116): answer now
+builds an option and a two-field value; retire edits one row. Required steps count the method run and its
+extraction; guards run under `lawTicks` and are not in them, so CappedTally's and CoAuthor's rows do not
+move. Bell: 2,876 chars of surface, core 27,679 chars, 21,780 package bytes (was 31,542 / 24,906).
+bench-worstcut's rows tail: 24.892 trie-hashes per step (reopen and audit); the worst stays 33.938 (retires).
+
+**Critique.** (1) The guard sees the CURRENT row at a pin, not the pinned version: a stale answer is refused
+by the guard, never reaching `stale`; the verdict is the same (no write), the name differs, and a resident
+must read `rung: answered` as "already done". (2) The pin requirement is checked twice, by Lang (the old
+row's existence) and by the kernel (admission); one fact, two statements, by design: the alternative is a
+guessed `none` that would refuse ahead of the receiver. (3) Guards stay O(one edit) of one relation: a
+cross-relation fact (pending ⊆ unanswered rings) still holds only through the Bell's own methods; the
+resident may retract `pending[k]` without answering through a layer, leaving a ring unanswered and off the
+cursor (resident-only). (4) An old package's bytes decode under u64be as a DIFFERENT package rather than
+refusing: only the re-genesis makes that moot (as at LANG-57); a wire version byte would make it refuse.
+(5) The answer re-sends up to 2,000 bytes it does not change.
+**Meta-critique.** LANG-58 and the brief assumed "the guard sees the old row" closes the Bell's layer gaps;
+reading what each gap reads refuted it (they were cross-relation). (B) is justified without a layer: one
+relation fewer, one guard for exactly-once instead of two locks, and no row read in any method.
+**Flag day (`lang!`).** Every package re-ids (term literals u64be): Escrow, Lifecycle, Allowance, CappedTally,
+CoAuthor, the Bell, THE BAR's counter. Guarded packages' iface type changes (CappedTally, the Bell, CoAuthor
+gains a guard). Re-emitted: world/resident/Bell(.ob) (LB0 re-pins: "answers live in rings; a guard sees the
+old row"); the `lang/package` vectors (codec-vectors --write, tag moved). The other shipped cores
+(Escrow, Lifecycle, Allowance; E0s/G0s/A0s) hold no guard, so their TEXT is unchanged and --write-text
+writes nothing; their ids move. Refused now: an unpinned upsert/retract, `rowUnpinned` by Lang before any
+guard; a guard written at the old type, `badRel` at install; the guards' own refusals by name. The resident
+(Hosting/Resident, launcher/tests/resident_bell.rs) cuts over in the same commit (HOSTING-11), and
+bench-worstcut's rows tail (PERF-9) and PROTOCOL's bell row (an answer to a ring nobody rang is now
+`lawDenied` by `rung`, was `missingRow`) with it. Stores re-genesis.
