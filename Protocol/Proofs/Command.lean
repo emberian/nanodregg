@@ -13,6 +13,8 @@ import Kernel.Proofs.Receive
 import Kernel.Proofs.Fold
 import Kernel.Proofs.Refusals
 import Kernel.Proofs.Audit
+import Lang.Proofs.Print
+import Lang.Proofs.Invoke
 
 namespace Nanodregg.Protocol.Command
 
@@ -466,5 +468,42 @@ theorem absorbStep_refusal_recorded {X : Ctx D} {w w' : World D} {e : ByteArray}
     Kernel.Step.refusal.injEq] at h)
   obtain ⟨rfl, rfl⟩ := h
   exact ⟨_, _, ‹_›, recorded_answers ‹_›⟩
+
+/-! ## `read OBJ` of a programmed object (PROTOCOL-48) -/
+
+/-- `stateValue`'s value is the one `Lang.readState` reads at the package's state row. -/
+theorem stateValue_reads {X : Ctx D} {w : World D} {obj : D} {cell : Cell}
+    {row : List (Lang.Label × Lang.Ty)} {d : Lang.Data}
+    (h : stateValue X w obj cell = .ok (some (row, d))) :
+    Lang.readState X.digestOf row (stateOf cell) = .ok d := by
+  unfold stateValue at h
+  simp only [bind, Except.bind, Except.mapError] at h
+  repeat' split at h
+  all_goals (try simp only [pure, Except.pure, reduceCtorEq, Except.ok.injEq, Option.some.injEq,
+    Prod.mk.injEq] at h)
+  all_goals (try (obtain ⟨rfl, rfl⟩ := h))
+  all_goals (try assumption)
+  all_goals (try cases h)
+
+/-- **`read OBJ` of a programmed object prints exactly what `Lang.Read` reads back to its state**: the
+one line is `Lang.Print.data` of the value `Lang.readState` reads at the package's state row, and
+`Lang.Read.readData` at that row reads the line back to that very value (`Lang.Print.readData_data`). -/
+theorem readText_reads {X : Ctx D} {w : World D} {obj : D} {cell : Cell}
+    {row : List (Lang.Label × Lang.Ty)} {d : Lang.Data} {out : String}
+    (hv : stateValue X w obj cell = .ok (some (row, d))) (ht : readText X w obj cell = .ok out) :
+    ∃ t, out = t ++ "\n" ∧ Lang.Read.readData (.record row) t = .ok d := by
+  have hr := stateValue_reads hv
+  unfold readText at ht
+  rw [hv] at ht
+  simp only [bind, Except.bind] at ht
+  split at ht
+  · rename_i hwf
+    split at ht
+    · rename_i t hp
+      simp only [pure, Except.pure, Except.ok.injEq] at ht
+      exact ⟨t, ht.symm, Lang.Print.readData_data (Lang.readState_conforms hr) hwf hp⟩
+    · cases ht
+  · cases ht
+
 
 end Nanodregg.Protocol.Command

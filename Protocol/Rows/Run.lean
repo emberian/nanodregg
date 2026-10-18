@@ -101,17 +101,18 @@ def ms (ns : Nat) : String :=
   let f := toString ((ns / 1000) % 1000)
   s!"{ns / 1000000}.{"".pushn '0' (3 - f.length)}{f}"
 
-/-- THE BAR's record lines and its WASTE lines; an error if the invokes went unmeasured (a WASTE line
+/-- The row's liveness timings (`LIVE`: toy parameters, in process; never THE BAR, which is
+`scripts/bar.sh` over real processes) and its WASTE lines; an error if the invokes went unmeasured (a WASTE line
 over no calls would read as zero cost and pass the ratchet: a fail-open). -/
 def barLines (r : Row) (res : Loopback.Result) : IO (Option String) := do
   let timed := res.times.toList.filter fun t => (r.lines[t.line]?.bind (·.withinMs)).isSome
   let writes := (timed.filter fun t => match r.lines[t.line]? with
     | some { act := .cmd _, .. } => true | _ => false).flatMap (·.ns)
-  IO.println s!"BAR write-n {writes.length}"
-  IO.println s!"BAR write-p99-ms {ms (p99 writes)}"
+  IO.println s!"LIVE write-n {writes.length}"
+  IO.println s!"LIVE write-p99-ms {ms (p99 writes)}"
   for ns in res.reopenNs do
-    IO.println s!"BAR reopen-ms {ms ns}"
-  IO.println s!"BAR load {← load}"
+    IO.println s!"LIVE reopen-ms {ms ns}"
+  IO.println s!"LIVE load {← load}"
   -- the deterministic measures (pinned in gates/waste.tsv): over the invokes, the machine ticks
   -- per step the program requires (the size of its reference derivation, LANG's `requiredOf`) and
   -- the packages loaded and re-checked per call. Sums over sums, never a mean of ratios.

@@ -1506,3 +1506,35 @@ than its docstring names. The `baseMoved` red caught it only because the expecta
 - `baseMismatch`: the writer states a base digest that is not the sponsor's own World at that step count. Do not invite through that writer; investigate it (its Store or its page path lies).
 
 **Meta-critique.** Pinning the tip looked like "the World as it stands", but the joiner can only ever receive a base. The pin was naming something no reader could fetch. A signed claim should name what its consumer can check.
+
+## PROTOCOL-48 · `read OBJ` of a programmed object prints its state VALUE, one line through `Lang.Print` at the package's state type; a data object keeps `I=VALUE` (2026-10-19, PROTOCOL-13; ROOT ruling, HOSTING-8's need, LANG-16 reviews)
+
+**The gap.** `read OBJ` printed every object as its raw state slots (`I=BYTES`, bytes as UTF-8 or hex). A programmed object's slots are Lang's data codec (`Lang.Wire.encodeData` per field), so a reader holding only the text had to hand-decode that codec. HOSTING-8's real resident reads only through `nd --stdio`, and a Rust decoder of Lang's data codec would be a twin (law 2).
+
+**Decision.**
+- `Command.stateValue`: for an object with a package (`packageOf`), the package loaded as a method run loads it (`Lang.load`: closure, decode, `Package.checkWith`), its state row (`Lang.recordRow pk.state`) and the value `Lang.readState` reads there from `stateOf cell`: `Lang.runSetup`'s own front half. A data object: `none`.
+- `Command.readText`: a programmed object prints ONE line, `Lang.Print.data` of that value. A state type that is not well formed, or a value the printer has no text for, is refused `noText` (the printer never guesses). A data object prints its slots as before, one `KEY=VALUE` line each.
+- `render` checks `expect` (`I=V` on the raw slots) first, as before, then prints `readText`.
+- The text is the printer's ONE canonical form: an enum case in full (`(kind (app (record)))`) where an author may have written the reader's short form (`(kind app)`). Both read back to the same value.
+
+**Theorems** (Protocol/Proofs/Command.lean):
+- `stateValue_reads`: `stateValue`'s value is `Lang.readState`'s at the package's row.
+- `readText_reads`: the printed line `t` (output `t ++ "\n"`) reads back by `Lang.Read.readData (.record row) t` to exactly that value. It holds through `Lang.Print.readData_data` and `Lang.readState_conforms`. There is no `wf` premise, because `readText` checks it.
+
+**Row `state` (30 rows, ALL PASS).**
+- The sponsor creates a Lifecycle app from a state text.
+- The newcomer's `read @app` prints `(record (entry "app") (kind (app (record))) (phase (installed (record))))`.
+- After `start`, it prints `… (phase (running (record))))`.
+- Both reads check the WHOLE stdout (`Line.exact`, new), so a reader that printed the value AND the slots is red too.
+- Plant `rawSlots`: the reader prints the raw state slots by the pre-48 expression verbatim; line 6 is `refused unprinted`. It is the harness's substitution of the old printer in Loopback's `.cmd` arm, never a flag in `Command`.
+
+**Also in this commit (PERF-1's ask, STAND-INS C3).** The in-process `bar` row's timing lines are renamed `BAR …` → `LIVE …`, so only `scripts/bar.sh` prints lines named BAR. The row stays a liveness row with its `zeroDeadline` plant and its WASTE lines.
+
+**Flag day.** `read OBJ`'s stdout changes for programmed objects only. Nothing parses it today: the Rust tests read data objects (`1=hello`). No wire, Store or codec change.
+
+**Critique.**
+- `expect` still compares raw slot bytes by index, so a programmed object's expectation is written in the codec's bytes. An expectation in the value's text (`read OBJ 'phase=(running (record))'`) is the natural next form; it is not done here.
+- The `wf` refusal never fires for a loaded package (`checkWith` requires it, `Lang.Print.checkShape_wf`). It stays as a refusal by name that makes `readText_reads` premise-free; LANG-16 agreed.
+- `readText_reads` pins the output as `t ++ "\n"` but does not prove `t` holds no newline (that `Print.data` escapes one in a string is LANG's printer, not stated here); the row's `exact` check sees one line for its values.
+
+**Review.** LANG-16: YES (same read as `runSetup`; keep the `noText` refusal). Vacuity read (a second agent): both theorems OK. Fixes taken from it: the package goes through `Lang.load` (literally `runSetup`'s front half), the row's prints are exact, and the plant uses the verbatim pre-48 slot expression.

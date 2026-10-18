@@ -65,6 +65,8 @@ structure Sys where
   trustLookup : Bool := false
   /-- the operator's seal skips `Host.sealNow`: a restart and nothing sealed (a plant) -/
   sealIgnored : Bool := false
+  /-- `read OBJ` prints the raw state slots (a plant, PROTOCOL-48) -/
+  rawSlots : Bool := false
 
 def skipJudge (X : Ctx D) : Ctx D :=
   { X with program := { X.program with judge := fun _ _ _ _ _ _ => .ok () } }
@@ -103,6 +105,7 @@ def sys : Option Mutation → Sys
   | some .trustLookup => { writer := { X := Sim.ctx }, follow := Sim.ctx, trustLookup := true }
   | some .sealIgnored => { writer := { X := Sim.ctx }, follow := Sim.ctx, sealIgnored := true }
   | some .lieBase => { writer := { X := Sim.ctx, lieBase := true }, follow := Sim.ctx }
+  | some .rawSlots => { writer := { X := Sim.ctx }, follow := Sim.ctx, rawSlots := true }
 
 /-! ## Actors -/
 
@@ -746,7 +749,18 @@ def runAct (l : Line) : M (Expect × String) := do
   | .cmd argv =>
       match ← subst argv with
       | .error e => pure (.refused e, "")
-      | .ok av => command l.actor av l.fault 4
+      | .ok av =>
+          let (o, out) ← command l.actor av l.fault 4
+          if !(← get).sys.rawSlots || o != .ok then return (o, out)
+          -- the plant: the object's raw state slots, the shape before PROTOCOL-48
+          let X ← X
+          match parse (D := D) X.digestOf (av.map String.toUTF8) with
+          | .ok (.read obj _) =>
+              match (← actor l.actor).follow.world.live X.env obj with
+              | some cell => pure (o, String.join ((stateOf cell).map fun (k, v) =>
+                  s!"{k - stateBase}={(String.fromUTF8? v).getD (Text.toHex v)}\n"))
+              | none => pure (o, out)
+          | _ => pure (o, out)
   | .restart => pure (← restart false, "")
   | .seal => pure (← restart true, "")
   | .readElsewhere sameNonce => do
@@ -950,7 +964,8 @@ def runLine (i : Nat) (l : Line) (times : Nat) : M Expect := do
       for ln in out.splitOn "\n" do
         if ln ≠ "" then note s!"  | {ln}"
     let o := match l.prints with
-      | some t => if o = l.expect && (out.splitOn t).length ≤ 1 then .refused "unprinted" else o
+      | some t => if o = l.expect && (if l.exact then out ≠ t else (out.splitOn t).length ≤ 1)
+          then .refused "unprinted" else o
       | none => o
     let bound := if (← get).sys.zeroDeadline then l.withinMs.map fun _ => 0 else l.withinMs
     let o := match bound with

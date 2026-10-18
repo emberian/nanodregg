@@ -168,6 +168,8 @@ structure Line where
   /-- text the act must print (stdout) when it gets `expect`; missing, the line gets `refused
   unprinted` -/
   prints : Option String := none
+  /-- `prints` is the act's WHOLE stdout, not a part of it -/
+  exact : Bool := false
   deriving Repr
 
 /-- How a row is driven. -/
@@ -246,6 +248,9 @@ inductive Mutation
   | sealIgnored
   /-- the writer states its tip as its newest base, with the sealed base's digest (PROTOCOL-47) -/
   | lieBase
+  /-- `read OBJ` of a programmed object prints its raw state slots (`I=BYTES`, the shape before
+  PROTOCOL-48), not its state value at the package's state type -/
+  | rawSlots
   deriving DecidableEq, Repr
 
 /-- A row's plant: the mutation, and the line that must catch it with the outcome it then gets. -/
@@ -815,6 +820,33 @@ def describeRow : Row where
       expect := .refused "lawDenied", prints := some "hint lawDenied" }])
   plant := .caught .guessMethod 7 (.refused "grantRight")
 
+/-- PROTOCOL-48 (HOSTING-8's resident reads only through `nd --stdio`): `read OBJ` of a programmed
+object prints ONE line, its state value at the package's state type (`Lang.Print.data`), the text
+`Lang.Read` reads back to that value (`Proofs.Command.readText_reads`). The sponsor creates an app
+from a state text; the newcomer's read prints that value, and nothing else (`exact`), as the printer's one canonical text (an
+enum's case in full, `(kind (app (record)))`, where the creator wrote the reader's short form
+`(kind app)`); after `start` the read prints the moved phase. The plant is a reader that prints the raw state slots (the
+shape before PROTOCOL-48): line 6 is `refused unprinted`. -/
+def stateRow : Row where
+  name := "state"
+  replaces := []
+  ops := everyWrite
+  kinds := ["enroll", "grant", "install", "create", "invoke"]
+  drive := .members (join "sponsor" "newcomer" ++ [
+    okBind "operator" ["install", "<world/grain/Lifecycle"] "lifecycle",
+    okBind "sponsor" ["create", "--pkg", "@lifecycle",
+      "(record (entry \"app\") (kind app) (phase installed))"] "app",
+    okBind "sponsor" ["grant", "@app", "anyone", "invoke:1"] "pub",
+    { actor := "newcomer", act := .cmd ["read", "@app"], expect := .ok,
+      prints := some "(record (entry \"app\") (kind (app (record))) (phase (installed (record))))\n",
+      exact := true },
+    { actor := "newcomer", act := .cmd ["read", "@app", "?"], expect := .ok, bind := some "app" },
+    ok "newcomer" ["invoke", "@app", "@app.start", "(record)", "--via", "@pub"],
+    { actor := "newcomer", act := .cmd ["read", "@app"], expect := .ok,
+      prints := some "(record (entry \"app\") (kind (app (record))) (phase (running (record))))\n",
+      exact := true }])
+  plant := .caught .rawSlots 6 (.refused "unprinted")
+
 /-- PROTOCOL-45 (cv 01a14ade-0f69; delvetalk's top thirst, "a receipt as proof"): a member proves to
 itself what happened to a call from the head it holds alone. The member's follow makes a RECEIPT
 (`receipt CALL`: the roots and the trie paths for the call's id) and a phone, which holds only its own head
@@ -1071,7 +1103,7 @@ def settleRow : Row where
   plant := .caught .trustLookup 6 (.refused "stale")
 
 def rows : List Row :=
-  [journey, reopen, laws, rotate, audit, paging, coldCatchUp, inflatedHeight, forgotten, refusedRow, inviteRow, useRow, describeRow, receiptRow, settleRow, carry, thin, thinStale, sealRow, basePin, wrongWorld, wrongWorldRead, pay, well, bounty, grain, hermes, bar,
+  [journey, reopen, laws, rotate, audit, paging, coldCatchUp, inflatedHeight, forgotten, refusedRow, inviteRow, useRow, describeRow, stateRow, receiptRow, settleRow, carry, thin, thinStale, sealRow, basePin, wrongWorld, wrongWorldRead, pay, well, bounty, grain, hermes, bar,
    langJourney]
 
 end Nanodregg.Protocol

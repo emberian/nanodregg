@@ -468,17 +468,53 @@ def whoami : ByteArray := "nanodregg/protocol/whoami/v1".toUTF8
 
 def hex (X : Ctx D) (d : D) : String := Text.toHex (X.env.bytes d)
 
-/-- `read`: the object's state slots, one `KEY=VALUE` line each (keys relative to `stateBase`),
-after every expectation holds. -/
-def render (E : Env D) (w : World D) (obj : D) (expect : List (Nat × ByteArray)) : Reply :=
-  match w.live E obj with
+/-- A programmed object's state (PROTOCOL-48): its package loaded as every method run loads it
+(`Lang.load`: the closure, each package decoded and re-checked by `Package.checkWith`), its state row,
+and the value `Lang.readState` reads there from the cell's state slots: `Lang.runSetup`'s own front
+half. `none` for a data object. -/
+def stateValue (X : Ctx D) (w : World D) (obj : D) (cell : Cell) :
+    Except (Refusal D) (Option (List (Lang.Label × Lang.Ty) × Lang.Data)) := do
+  match ← (packageOf X obj cell).mapError .receive with
+  | none => pure none
+  | some p =>
+    let (L, g) ← (Lang.load X.digestOf (worldLook X.env w) Lang.closureDepthMax (X.env.bytes p)
+      ⟨[], [], []⟩).mapError .receive
+    let some pk := L.pkgs[g]? | throw (.receive (.program "closure"))
+    let row := Lang.recordRow pk.state
+    match Lang.readState X.digestOf row (stateOf cell) with
+    | .ok d => pure (some (row, d))
+    | .error e => throw (.receive (.program e))
+
+/-- What `read OBJ` prints (PROTOCOL-48). A programmed object: ONE line, its state value printed by
+`Lang.Print.data` at the package's state type, the text `Lang.Read.readData` reads back to that very
+value (`Proofs.Command.readText_reads`); a state type that is not well formed, or a value with no
+text, is `noText` (the printer never guesses). The `wf` refusal never fires for a loaded package
+(`Package.checkWith` requires it: `Lang.Print.checkShape_wf`); it is what makes `readText_reads`
+premise-free. A data object: its state slots, one `KEY=VALUE` line
+each (keys relative to `stateBase`). -/
+def readText (X : Ctx D) (w : World D) (obj : D) (cell : Cell) : Except (Refusal D) String := do
+  match ← stateValue X w obj cell with
+  | some (row, d) =>
+    if (Lang.Ty.record row).wf then
+      match Lang.Print.data d with
+      | some t => pure (t ++ "\n")
+      | none => throw .noText
+    else throw .noText
+  | none =>
+    pure (String.join ((stateOf cell).map fun (k, v) =>
+      s!"{k - stateBase}={(String.fromUTF8? v).getD (Text.toHex v)}\n"))
+
+/-- `read`: after every expectation on the raw state slots holds, the object's `readText`. -/
+def render (X : Ctx D) (w : World D) (obj : D) (expect : List (Nat × ByteArray)) : Reply :=
+  match w.live X.env obj with
   | none => refused (D := D) (.missingCell obj)
   | some cell =>
       match expect.find? fun (k, v) => cell.slots.get (stateBase + k) != some v with
       | some (k, _) => refused (D := D) (.expect k)
       | none =>
-          printed (String.join ((stateOf cell).map fun (k, v) =>
-            s!"{k - stateBase}={(String.fromUTF8? v).getD (Text.toHex v)}\n"))
+          match readText X w obj cell with
+          | .ok t => printed t
+          | .error r => refused r
 
 /-- The description's lines after its head (`Command.Describe`): the package's, or `data`, then each
 further law package of the object with its laws. -/
@@ -767,7 +803,7 @@ def step (X : Ctx D) (dc : Stream D) (B : Thin.Base (World D)) (me : Self D) (f 
                             (envelopeMessage X me pg.steps (pg.tipHeight + me.window)) k)
                       else
                       match cmd, Signed.ofBytes signedB with
-                      | .read obj ex, _ => moved w' ts (render X.env w' obj ex)
+                      | .read obj ex, _ => moved w' ts (render X w' obj ex)
                       | .describe obj, _ => moved w' ts (describe X w' obj)
                       | .sync, _ => moved w' ts (printed
                           s!"height {w'.height}\nchain {hex X w'.chain}\nroots {hex X (w'.roots X.env)}\n")
