@@ -1,0 +1,14 @@
+(package
+  (state (rec (answer bytes) (open bool) (pending bool) (resident digest) (ring bytes) (ringer digest)))
+  (method answer (arg (rec (text (bytes 1 2000))))
+    (check ((deq req.agent state.resident) "notResident") (state.pending "unrung")
+      (done (with state (answer arg.text) (pending false)))))
+  (method close (done (with state (open false))))
+  (method open (done (with state (open true))))
+  (method ring (arg (rec (text (bytes 1 2000))))
+    (check (state.open "closed") ((not state.pending) "busy")
+      (done (with state (answer "") (pending true) (ring arg.text) (ringer req.agent)))))
+  (law bell
+    (on (adopt birth) (all ((not new.pending) "rung")))
+    (on invoke m (all ((deq new.resident old.resident) "resident")))
+    (else ok)))

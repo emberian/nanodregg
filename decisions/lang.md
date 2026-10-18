@@ -1976,3 +1976,47 @@ FROM the surface.
   lower; LT0s gains a plant (`(cap 999)`); historical sizes labelled.
 - *Flag day:* none. No shipped byte, id or THE BAR value moves; three new files `world/*/*.ob`; HOSTING's and
   LEDGER's text writers now read them (ROOT for HOSTING/LEDGER).
+
+## LANG-52 The Bell: the first package a resident uses that a person wrote in the surface (2026-10-18; LANG-16, with HOSTING-8, who owns the resident process; STAND-INS-20261019 A1/E12)
+
+**What.** `world/resident/Bell.ob` (762 chars) and its emitted core `world/resident/Bell` (6,697 chars;
+5,234 package bytes). A ringer rings with a text; the hosted resident reads the bell, asks its model
+and answers; one ring at a time.
+
+    state (rec (answer bytes) (open bool) (pending bool) (resident digest) (ring bytes) (ringer digest))
+    answer {text (bytes 1 2000)}   refused notResident unless req.agent = state.resident; unrung unless pending
+    close / open                   set open (the owner's, or granted)
+    ring   {text (bytes 1 2000)}   refused closed unless open; busy while pending; sets ring, ringer = req.agent,
+                                   answer = "", pending
+    law bell                       a birth is not rung ("rung"); an invoke keeps resident ("resident")
+
+**Why state only, no relation (measured).** The resident reads the World only through `nd --stdio`, and
+`read OBJ` (Protocol/Command/Machine.lean `render`) prints state slots, never relation rows. A guestbook
+in `rel posts` would be a package no resident can read. A queue of rings is the bell over a relation,
+once a row read exists in the resident's verbs (PROTOCOL's).
+
+**Who may ring is the kernel's, who may answer is the text's.** Grants (KERNEL-25) decide who invokes
+`ring`. They cannot express "only the resident answers": the owner may invoke every method (LB8). So
+`answer` checks `req.agent = state.resident` in the text, by name.
+
+**The law is not a no-op.** No Bell method changes `resident` or rings at birth, but (a) the creator
+writes the birth state, so without `bell`'s birth arm an operator could seed a ring nobody rang
+(LB2), and (b) a layer may override `answer` and cannot override a law (LANG-50 `layer_keeps_laws`):
+LB13 installs a layer whose `answer` makes the signer the resident, and `bell` refuses it.
+
+**Critique.** (1) `busy` refuses a second ringer until the resident answers: a limit the read path
+forces, not a design preference. (2) `ringer` is any member the grants allow; the bell does not bound
+how often one member rings (a windowed law would, `(law ℓ (windowed f W limit))`, when a box shows the
+need). (3) `answer = ""` on ring is a value, not an absence: an `(option bytes)` would say "no answer
+yet" exactly, and costs the resident a sum to read; `pending` already says it.
+**Meta-critique.** (1) is the one that would harden into a stand-in: written down here and in a cv task,
+so the swap to a relation is findable (cv 01a14ece-43f1). (2) and (3) are taste until a resident runs: the bell is small
+enough that changing it is a re-emit of one text and its core, which LB0 checks.
+
+**Rows (lang-journey, through the real receivers).** LB0 source lowers to the shipped core byte for byte,
+plant `(pending true) -> (pending false)` caught; LB1 install; LB2 born rung refused (`bell: rung`);
+LB3 create with B the resident; LB4 grant B answer; LB5 unrung; LB6 ring (pending, ring, ringer read
+back); LB7 busy; LB8 the owner answers: notResident; LB9 empty text: `text 1..2000`; LB9b B rings: the
+kernel's grantRight; LB10 B answers (answer read back); LB11 unrung again; LB12/12b closed; LB13 the
+takeover layer refused (`bell: resident`). Plants: skip-judge makes LB2 and LB13c admitted. No theorem
+moves; no shipped core byte moves (the three shipped texts and the two ports are untouched).
