@@ -73,6 +73,11 @@ never from bytes the Host or anyone else hands over:
    - `refused baseMismatch`: the writer states a base digest that is not the sponsor's own World at
      that step count. Do NOT invite through this writer: it states a base it does not hold (a lying
      or forged base); stop and investigate it (`host check` on the writer's Store, §3).
+   `host seal` refuses by the names of `host serve` (the Store it cannot open; deploy/units/EXITS.md)
+   and `locked`; one more is its own, `positionUnfit` (56, fatal): the segment position is past
+   u64, which a base cannot spell; nothing was written, keep the Store untouched and report to HOST.
+   The joiner checks the pin: `nd adopt` prints `adopted STEPS DIGEST`, which must equal the `steps=`
+   and `digest=` of the operator's `sealed` line.
    Planted: store-plants `seal-live-writer-locked`, `seal-base-is-the-pin`, `seal-again-idempotent`;
    PROTOCOL's rows `seal`, `basePin`; client/tests/join.rs (a thin joiner adopts exactly the sealed
    `steps=` and `digest=`).
