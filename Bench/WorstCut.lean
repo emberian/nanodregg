@@ -10,13 +10,16 @@ is the deployed definition: `Receive.genesis`/`Receive.submit` under `Host.Deplo
 seed): a bench's fixed identity, never a custody mode, so every count below is a function of the
 code alone (the Store's random key moves MAC bytes, never a size or a count).
 
-Three Stores, one per tail SHAPE (PERF-6: which tail costs most is measured, never assumed), each
+Four Stores, one per tail SHAPE (PERF-6, PERF-9: which tail costs most is measured, never assumed), each
 under `SCRATCH/<shape>`. In each, one founder births one data object; a base is sealed; then the tail
 is filled, `recordTurnsMax` one-cell Turns per batch record, until the next frame would leave
 `tailMax` of that base (`withinTail` refuses it): the most a reopen can ever fold past its base, made
 of the smallest Turns of that shape, so the most steps.
 - `writes`: one-slot `write`s to the object;
 - `births`: one-slot data-object `create`s (the World grows by a cell per step);
+- `rows` (PERF-9): the deployed Bell queue (world/resident/Bell.ob, LANG-58): installed, a bell born
+  whose resident is a second founder, then ring, answer, retire, ... : every Turn a row-only invoke
+  (see `rowsCall`);
 - `retires`: `revoke`s, each retiring one grant (a cell tombstoned, its weight credited). The grants
   are born BEFORE the base, enough for the whole tail (a revoke's frame is sampled on the World and
   the count re-derived from the sealed base's tailMax until it suffices), sealing whenever the
@@ -34,16 +37,21 @@ lines, `WORSTCUT worst <metric> …` naming the costliest shape per metric, and
 `WASTE worstcut <metric> <ratio>` at that worst (trie hashes and verifies per step, reopen and
 re-derivation); ends `BENCH-WORSTCUT PASS`.
 `--harness-control`: the cut must also fill more than tailMax (a ratio above 1, which `withinTail`
-makes impossible), judged on the ordinary path after all three shapes are built, on the LAST shape
-counted (`retires`), so the control reads red only at the end of the shape loop:
-`FAIL retires: harness-control …`.
+makes impossible), judged on the ordinary path after all four shapes are built, on the LAST shape
+counted (`rows`), so the control reads red only at the end of the shape loop:
+`FAIL rows: harness-control …`.
 
-The three Stores are built at once (one dedicated task each: they share nothing but the process);
+The four Stores are built at once (one dedicated task each: they share nothing but the process);
 the counts run one at a time, since each captures the process's stderr.
 -/
 import Host.Deployed
 import Kernel.Sim.Deployed
 import Bench.Count
+import Lang.Surface
+import Lang.Read
+import Lang.Print
+import Lang.Rel
+import Lang.Program
 
 namespace Nanodregg.Bench.WorstCut
 
@@ -55,14 +63,19 @@ abbrev P : Kernel.Sim.Gen.Params D := Kernel.Sim.Deployed.params
 def founderSecret : ByteArray := "worstcut-founder".toUTF8
 def nextSecret : ByteArray := "worstcut-founder-next".toUTF8
 def founders : List (ByteArray × D) := [(P.pub founderSecret, nextKeyDigest X (P.pub nextSecret))]
+/-- The `rows` shape's second founder: the Bell's resident (the first rings and retires). -/
+def residentSecret : ByteArray := "worstcut-resident".toUTF8
+def residentNext : ByteArray := "worstcut-resident-next".toUTF8
+def foundersRows : List (ByteArray × D) := founders ++ [(P.pub residentSecret, nextKeyDigest X (P.pub residentNext))]
 
 /-- The founder's signed call of `body` on World `w`: Kernel.Sim.Gen's `signed` shape, its window
 starting at the World's height (the generator's `notBefore := 0` is refused past `windowMax`). -/
-def call (w : World D) (m : Kernel.Sim.Gen.Member D) (pins : List D) (body : Body D) : Call D :=
+def call (w : World D) (m : Kernel.Sim.Gen.Member D) (pins : List D) (body : Body D)
+    (rowPins : List (RowSlot D × D) := []) : Call D :=
   let u : Unsigned D :=
     { world := w.origin, member := m.id, key := P.pub m.key, notBefore := w.height,
       validUntil := w.height + 1 + 100, pins := Kernel.Sim.Gen.S.pinsFor X.env w pins,
-      maxCharge := 1000000, body }
+      maxCharge := 1000000, body, rowPins }
   { unsigned := u, signature := P.sign m.key (X.callMessage u) }
 
 /-- Submit `c` on `w` under the deployed `Ctx`; the Turn's step and roots, and the World after. -/
@@ -89,15 +102,16 @@ def openWith {F : Type} (dir : System.FilePath) (keys : Keys) (step : World D �
   return (← openFollower dir keys c world recorder.mark originChain step).mapError (·.text)
 
 /-- A tail's shape: the one kind of one-cell Turn it is made of. -/
-inductive Shape | writes | births | retires
+inductive Shape | writes | births | retires | rows
   deriving BEq
 
 def Shape.name : Shape → String
   | .writes => "writes"
   | .births => "births"
   | .retires => "retires"
+  | .rows => "rows"
 
-def Shape.all : List Shape := [.writes, .births, .retires]
+def Shape.all : List Shape := [.writes, .births, .retires, .rows]
 
 /-- What one shape's cut measured. -/
 structure Cut where
@@ -130,6 +144,7 @@ def tailCall (shape : Shape) (m : Kernel.Sim.Gen.Member D) (obj : D) (grants : A
   | .retires =>
     if h : i < grants.size then let g := grants[i]; .ok ([m.id, g], .revoke g)
     else .error s!"no grant left to retire at step {i} (the base holds {grants.size})"
+  | .rows => .error "the rows tail is rowsCall's"
 
 /-- Admit the founder's call of `body` on `w`, and the cell it bore, if any. -/
 def admitBorn (w : World D) (m : Kernel.Sim.Gen.Member D) (pins : List D) (body : Body D) :
@@ -138,6 +153,80 @@ def admitBorn (w : World D) (m : Kernel.Sim.Gen.Member D) (pins : List D) (body 
   match s.1 with
   | .turn t => pure (s, w', t.creates.head?.map (·.1))
   | _ => throw "the call was not a Turn"
+
+/-! ### The `rows` shape: the deployed Bell (world/resident/Bell.ob, LANG-58), installed and rung
+
+A round of the Bell queue in THE BAR is a ring (2 row inserts) and its answer (1 insert, 1 retract);
+the owner retires an answered ring (2 retracts), which keeps `pending` under its 64 and `rings` under
+its 1024 for a whole tail. So the tail is ring, answer, retire, ring, ... : every Turn a row-only
+invoke, no cell written. -/
+
+/-- What the rows tail needs: the resident member, the package, the bell, the resident's grant, and
+the three relations' declarations. -/
+structure RowsCtx where
+  b : Kernel.Sim.Gen.Member D
+  pkg : D
+  obj : D
+  gr : D
+  dA : Lang.RelDecl
+  dP : Lang.RelDecl
+  dR : Lang.RelDecl
+
+def bellSource : System.FilePath := "world" / "resident" / "Bell.ob"
+
+def argOf (T : Lang.Ty) (d : Lang.Data) : ByteArray := (Lang.Wire.encodeData T d).getD .empty
+
+def ringKey (nb : Nat) (ringer : D) : Lang.Data :=
+  .record [("notBefore", .nat nb), ("ringer", .digest (X.env.bytes ringer))]
+
+/-- Relation `rel`'s row at `key` on `w`, pinned at what the signer sees (Lang.Journey's `pinRow`). -/
+def pinRow (rc : RowsCtx) (w : World D) (rel : Nat) (d : Lang.RelDecl) (key : Lang.Data) : List (RowSlot D × D) :=
+  match Lang.keyBytes d key with
+  | some k =>
+    let s : RowSlot D := .row ⟨rc.obj, rel, k⟩
+    [(s, rowPin X.env (headFloor X.env w.rows rc.obj rel) (rowAt X.env w.rows s))]
+  | none => []
+
+/-- Rows tail step `j` on `w` (methods: answer 0, retire 3, ring 4); `ring` is the notBefore of the
+round's ring (set at phase 0). The call, and the ring's notBefore after it. -/
+def rowsCall (rc : RowsCtx) (a : Kernel.Sim.Gen.Member D) (w : World D) (j ring : Nat) : Call D × Nat :=
+  match j % 3 with
+  | 0 =>
+    (call w a [a.id, rc.obj, rc.pkg]
+      (.invoke rc.obj 4 (argOf (.record [("text", .bytes)]) (.record [("text", .bytes "r".toUTF8)])) 100000 none), w.height)
+  | 1 =>
+    (call w rc.b [rc.b.id, rc.obj, rc.pkg, rc.gr]
+      (.invoke rc.obj 0 (argOf (.record [("notBefore", .nat), ("ringer", .digest), ("text", .bytes)])
+        (.record [("notBefore", .nat ring), ("ringer", .digest (X.env.bytes a.id)), ("text", .bytes "a".toUTF8)])) 100000 (some rc.gr))
+      (pinRow rc w 1 rc.dP (ringKey ring a.id)), ring)
+  | _ =>
+    (call w a [a.id, rc.obj, rc.pkg]
+      (.invoke rc.obj 3 (argOf (.record [("notBefore", .nat), ("ringer", .digest)]) (ringKey ring a.id)) 100000 none)
+      (pinRow rc w 0 rc.dA (ringKey ring a.id) ++ pinRow rc w 2 rc.dR (ringKey ring a.id)), ring)
+
+/-- Install the Bell, create a bell whose resident is `b`, grant `b` answer and ring: three admitted
+calls on `w`, staged; the context, the steps and the World after. -/
+def bellBase (src : String) (a b : Kernel.Sim.Gen.Member D) (w : World D) :
+    Except String (RowsCtx × Array (Step D × D) × World D) := do
+  let p ← match Lang.Surface.readPackage src with
+    | .ok p => pure p
+    | .error _ => throw s!"{bellSource} does not read as a package"
+  let some pb := Lang.Wire.encodePackage p | throw "the Bell has no package bytes"
+  let some dA := p.rels.lookup "answers" | throw "the Bell has no answers"
+  let some dP := p.rels.lookup "pending" | throw "the Bell has no pending"
+  let some dR := p.rels.lookup "rings" | throw "the Bell has no rings"
+  let (s1, w1, pkg?) ← admitBorn w a [a.id] (.install pb)
+  let some pkg := pkg? | throw "the install bore no package"
+  let seed ← match Lang.Read.readData p.state s!"(record (open true) (resident #{Lang.Print.hex (X.env.bytes b.id)}))" with
+    | .ok (.record ds) => match Lang.stateSlots (Lang.recordRow p.state) ds 0 with
+      | some sl => pure sl
+      | none => throw "the bell's seed has no bytes"
+    | _ => throw "the bell's seed does not read"
+  let (s2, w2, obj?) ← admitBorn w1 a [a.id, pkg] (.create (some pkg) [] seed)
+  let some obj := obj? | throw "the create bore no bell"
+  let (s3, w3, gr?) ← admitBorn w2 a [a.id, b.id, obj] (.grant obj b.id [.invoke 0, .invoke 4] none)
+  let some gr := gr? | throw "the grant bore no cell"
+  pure (⟨b, pkg, obj, gr, dA, dP, dR⟩, #[s1, s2, s3], w3)
 
 /-- Seal a base at the Store's tail (`host seal`'s path: the writer's open, its file checkpoint,
 `sealNow`); the base it sealed, as the next writer's open reads it. Every writer this opens is dropped
@@ -202,7 +291,8 @@ stderr, run one at a time. -/
 def build (dir : System.FilePath) (shape : Shape) : IO (Except String Built) := do
   let name := shape.name
   if ← dir.pathExists then return .error s!"{dir} exists (SCRATCH must be fresh)"
-  let g ← match Receive.genesis X "worstcut".toUTF8 "worstcut-nonce".toUTF8 allowanceMax founders with
+  let fs := if shape == .rows then foundersRows else founders
+  let g ← match Receive.genesis X "worstcut".toUTF8 "worstcut-nonce".toUTF8 allowanceMax fs with
     | .ok g => pure g
     | .error r => return .error s!"genesis {r.name}"
   let m : Kernel.Sim.Gen.Member D := ⟨founderId X g.origin 0, founderSecret, nextSecret⟩
@@ -210,7 +300,8 @@ def build (dir : System.FilePath) (shape : Shape) : IO (Except String Built) := 
   let keys := Keys.ofKey key shapes
   if let .error f ← (Host.genesis dir key keys c world recorder.mark g : IO (Except (StoreFault (Record.Fault (Reject D))) Unit)) then
     return .error s!"Host.genesis {f.text}"
-  -- the object, in its own record
+  let bellSrc ← if shape == .rows then IO.FS.readFile bellSource else pure ""
+  -- the object, in its own record (for `rows`, with the Bell installed, a bell, and its grant)
   let wr0 ← match ← openWriter dir keys c world recorder.mark originChain foldStep with
     | .ok x => pure x
     | .error f => return .error s!"openWriter {f.text}"
@@ -218,7 +309,13 @@ def build (dir : System.FilePath) (shape : Shape) : IO (Except String Built) := 
     | .ok (s, w1, some o) => pure (s, w1, o)
     | .ok (_, _, none) => return .error "the create bore no cell"
     | .error e => return .error s!"create {e}"
-  match ← commit wr0.opening.sealed wr0.segment keys wr0.opening.pos #[s0] with
+  let (first, w1, rows?) ← if shape == .rows then do
+      let b : Kernel.Sim.Gen.Member D := ⟨founderId X g.origin 1, residentSecret, residentNext⟩
+      match bellBase bellSrc m b w1 with
+      | .ok (rc, ss, w') => pure (#[s0] ++ ss, w', some rc)
+      | .error e => return .error s!"the Bell: {e}"
+    else pure (#[s0], w1, none)
+  match ← commit wr0.opening.sealed wr0.segment keys wr0.opening.pos first with
   | .ok (some _) => pure ()
   | .ok none => return .error "the first record left tailMax"
   | .error e => return .error s!"commit {e}"
@@ -259,21 +356,29 @@ def build (dir : System.FilePath) (shape : Shape) : IO (Except String Built) := 
   let mut i := 0
   let mut records := 0
   let mut full := false
+  let mut ring := 0
   -- a bound on the loop, never reached: tailMax over the smallest frame
   for _ in [0:(c.tailMax sealed.bytes) / 64 + 1] do
     if full then break
     let mut staged : Array (Step D × D) := #[]
     let mut w' := w
     let mut j := i
+    let mut ring' := ring
     for _ in [0:recordTurnsMax] do
-      let r := match tailCall shape m obj grants j with
-        | .ok (pins, body) => admit w' (call w' m pins body)
-        | .error e => .error e
+      let cl : Except String (Call D) ← match rows? with
+        | some rc => do
+          let (cl, rg) := rowsCall rc m w' j ring'
+          ring' := rg
+          pure (Except.ok cl)
+        | none => pure (match tailCall shape m obj grants j with
+          | .ok (pins, body) => Except.ok (call w' m pins body)
+          | .error e => Except.error e)
+      let r := cl.bind (admit w')
       match r with
       | .ok (s, w'') => staged := staged.push s; w' := w''; j := j + 1
       | .error e => return .error s!"{name} step {j}: {e}"
     match ← commit sealed wr.segment keys pos staged with
-    | .ok (some p) => pos := p; w := w'; records := records + 1; i := j
+    | .ok (some p) => pos := p; w := w'; records := records + 1; i := j; ring := ring'
     | .ok none => full := true
     | .error e => return .error s!"commit {e}"
   unless full do return .error "the tail never reached tailMax within the loop's bound"

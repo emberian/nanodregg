@@ -474,3 +474,46 @@ byte flipped. A non-number argument gets the usage line and exit 2.
 reframing to the reader's bound came from my own numbers, but I did not draw it.
 
 **Status.** open (re-pin at KERNEL-55's bound).
+
+## PERF-9 · A fourth worst-cut shape: the deployed Bell queue's rows tail (2026-10-18, ROOT; LANG-58 96179fb)
+
+**Decision.** `bench-worstcut` gains the `rows` shape. With LANG-58, THE BAR's resident round is row-only
+Turns. A ring is 2 inserts; an answer is 1 insert and 1 retract; the owner's retire of an answered ring is
+2 retracts. So a rows tail is now a deployed case. Its Store:
+- has a second founder, the resident;
+- installs the Bell from `world/resident/Bell.ob` (the file the journey and HOSTING read), creates a bell
+  whose resident is the second founder, and grants it `answer` and `ring`, all in the first record;
+- seals the base over that;
+- fills the tail with ring, answer, retire cycles to the same ≥ 99 % cut. The cycles keep `pending` under
+  its 64 and `rings` under its 1024 for the whole tail; a tail of rings alone would meet `relationFull` at
+  64.
+Each ring's key is its own signed notBefore and the ringer. The answer and the retire pin the rows they
+consume, as `derivePins` would (Lang.Journey's `pinRow`). The control is judged on the last shape counted,
+which is now `rows` (GATES-6's rule).
+
+**Measured** (at 96179fb, hbox load1 8.5–12 on 24 cpus):
+
+| shape | base world B | steps | reopen h/step | audit h/step | verifies (reopen, audit) |
+|---|---|---|---|---|---|
+| writes | 588 | 28,928 | 20.382 | 20.382 | 0, 1.000 |
+| births | 588 | 33,088 | 33.036 | 33.036 | 0, 1.000 |
+| retires | 5,764,172 | 32,256 | **33.938** | **33.938** | 0, 1.000 |
+| rows | 26,670 | 16,128 | 28.804 | 28.804 | 0, 1.000 |
+
+- Rows cost less per step than retires, so the worst is still retires and nothing rises.
+- The kernel changes between 2d2189e and 96179fb moved retires 33.959 → 33.938 (writes 20.374 → 20.382,
+  births 33.031 → 33.036). The two hash ceilings fall to the measured 33.938.
+- A rows Turn is about 1.17 KB (16,128 steps in 18.8 MB), twice a write's, so the tail holds half the steps.
+- Cost: 7 min 08 s and 170 MB for the honest run (four concurrent builds). The control costs the same.
+
+**CRITIQUE.**
+- One ringer and one bell. Two friends ringing concurrently, as v2 does, put two rings per round; that is
+  the same Turn shape and not measured separately.
+- Per-step hashes: rows (28.8) sit between writes and births. Per reopen, the rows tail does fewer hashes
+  in total (464,558 against retires' 1,095,392), because its Turns are larger.
+
+**META-CRITIQUE.** I added the shape because it is now deployed, not because I expected it to be the worst,
+and it is not. The worst-cut rows now cover the three cell acts (write, birth, retire) and the row acts (insert,
+retract). A value transfer, which touches two cells, enrol and install are not measured as tails.
+
+**Status.** open.
