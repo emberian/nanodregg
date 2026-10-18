@@ -234,10 +234,20 @@ fn a_group_socket_binds_0660_only_in_a_shared_directory_of_that_group() {
     let m = std::fs::symlink_metadata(&sock).unwrap();
     assert_eq!((m.permissions().mode() & 0o7777, m.gid()), (0o660, g));
     drop(held);
+    // Each refusal names a socket nothing has ever bound, so only the refused supervisor could
+    // listen there. Reusing the held one's path raced (CLIENT-28 follow-up): it accepts
+    // before it spawns its child, and killed mid-spawn its half-forked child holds the listener
+    // until exec, so a connect to the stale path could succeed and read as "launched".
     let refused = |dir: &std::path::Path, group: u32, name: &str| {
-        let (code, err) = launch_group(&dir.join("follow.sock"), &ws, Some(group))
+        let sock = dir.join(format!("{name}.sock"));
+        let (code, err) = launch_group(&sock, &ws, Some(group))
             .err()
             .unwrap_or_else(|| panic!("plant: {} launched", dir.display()));
+        assert!(
+            !sock.exists(),
+            "{name}: refused, yet {} was bound",
+            sock.display()
+        );
         assert_eq!(
             code,
             Some(i32::from(
