@@ -71,3 +71,4 @@ gates/bar.tsv	PERF
 decisions/perf.md	PERF
 decisions/transport.md	TRANSPORT
 README.md	ROOT
+LICENSE	ROOT
