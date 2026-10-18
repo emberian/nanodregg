@@ -418,3 +418,90 @@ crosses: every old call and receipt is for the old World.
 unit does with it and what the operator does, generated from Host/Exit.lean, Protocol/Exit.lean
 and the exhaustive `Ops.Units.hostAction` / `supervisorAction` (a new status without an operator
 action does not build). No hand copy of it lives here.
+
+## 8. Measuring THE BAR — RAN (scripts/bar.sh, PERF-2/3/4, at 5f7c58d; standing runs the bounded form on every judge)
+
+THE BAR (CHARTER): two friends and a hosted resident; 1000 records; each write ≤ 5 s; a cold reopen ≤ 60 s;
+measured over sockets on a quiet box. `scripts/bar.sh` drives exactly the deployed binaries: one writer
+(`host serve`) and three actors, each with its own `nd` workspace, custody, and `host follow` Store. Every
+process is under `nd-supervise`. The actors are two friends (`nd --init`, a separate holding) and today's
+STAND-IN for the hosted resident (`nd --init-hosted`, driven by `nd` argv). HOSTING-8's resident replaces
+the stand-in.
+
+### The full measure (the operator, in a quiet window)
+
+    scripts/bar.sh --records 1000 [--record]
+
+- Run it from a checkout at the commit to be measured. It builds `host` and `bench-count` with lake, and
+  `nd` and `nd-supervise` with `cargo --release`.
+- `--root DIR` puts the Stores on DIR's device. The default is `$HOME`. The write latency is that device's
+  fsync, and the `BAR device` line names it (ext4/nvme measured ~40 ms per write at p50; ZFS on tank
+  ~540 ms). A tmpfs is refused by name.
+- The custody workspaces always go under `$HOME`. Custody refuses a key under any directory a group or
+  other can write (`refused … Dir`).
+- THE BAR is judged only when the box is quiet: load1 < 2 before AND after the run.
+  - Otherwise the verdict is `UNJUDGED load1 A/B >= 2`, naming any limit it would have exceeded.
+    UNJUDGED is never a pass.
+  - Limits come from `gates/bar.tsv` (`limit` rows: 5000, 60000).
+  - A broken run is RED at any load: a failed or silent `nd`, a writer that never answers, a follower
+    not at the writer's tip, use≠3, or a mid-run seal at the wrong step.
+- `--record` appends a `run` row to gates/bar.tsv: date, sha, device, mode, N, load, write p99, writer and
+  follow reopen, use, steps/cmd, seg-bytes/cmd, writer fds/cmd, verdict. These rows are the trend, never
+  a ratchet. Commit them through `scripts/commit` like any change.
+
+What one run does, in order:
+1. Genesis with three founders.
+2. Each actor creates an object and grants it `anyone mutate`.
+3. Half the writes, each actor alternating its own object and the next actor's through the grant.
+4. The writer is stopped by its PID file, `host seal W` runs, and the writer starts again.
+5. The other half of the writes.
+6. Every follow syncs, and `host check W --anchor` holds each follow's head.
+7. The cold reopens are timed: a new writer up to its first reply, then a new follow up to its first
+   `nd read` answered.
+8. `bench-count W` re-derives the writer's tail at deployed parameters.
+
+The lines to read:
+- `BAR verdict`.
+- `BAR limit write-p99-ms V limit L` and the two reopen limits.
+- `BAR use 3 of 3` (PROTOCOL-43: objects one member made and another used).
+- `BAR count stale-writes / stale-reruns / stale-after-sync`. A stale write is re-run after one `nd sync`,
+  at most 8 times. Each stale refusal spends the member's refusal budget (16 per window; cv 01a14edf-6f12).
+- `BAR count …` deterministic counts: steps, records and log bytes per command; supervisor fds; the reopen
+  tail; trie hashes and verifies per step.
+- `BAR load-before / load-after (N cpus)`.
+- `BAR scope`, which says what this run is NOT: one box, no ssh, the resident a stand-in, a warm OS cache.
+
+### The bounded form (standing; nothing for the operator to do)
+
+    scripts/bar.sh --records 60 --standing --root {fresh}        (gates/runs.tsv `script:scripts/bar.sh`)
+
+- One command at a time, so every count is a function of N.
+- The clock is reported, never judged.
+- The counts are pinned in gates/waste.tsv (op `bar`; ceilings only fall).
+- Its known-red control `--harness-control` must read RED naming `harness-control` with all four planted
+  expectations fired (limits 0, use 4 of 3, follow one step past the writer, bench-count's own control),
+  or the runner reads none of its verdicts.
+
+### The worst cut (a bench, not a bar run) — PENDING (PERF): `bench-worstcut` is not on main
+
+It lands as a standing-only row once GATES picks the mechanism; PERF sends the hash, and this paragraph then reads RAN.
+
+    bench-worstcut SCRATCH
+
+- Writes a deployed Store whose tail past its base fills tailMax: 28,928 one-slot writes, 18.85 MB of
+  18.88 MB.
+- Counts the reopen: 20.374 trie hashes and 0 verifies per step. A reopen verifies no signature
+  (HOST-22).
+- Counts the follower's re-derivation: 20.374 trie hashes and 1 verify per step.
+- About 2 min 16 s and 87 MB on hbox.
+
+### What a bad number means
+
+- write p99 high and load low: check the Store device's fsync first (`BAR device`).
+- reopen high: compare `BAR count reopen-tail-bytes` with the base. A writer whose seals stopped landing
+  reopens a longer tail; `host check` shows `base_steps` far behind `steps`.
+- `writer-supervisor-fds-per-command` above 0: nd-supervise is holding connections (cv 01a14ed9-8c59
+  was exactly that). At 1024 fds the box's soft limit refuses the unit at launch
+  (`refusedAtLaunch`, EXITS 64: `RLIMIT_NOFILE N is below the M fds it may hold`, CLIENT-28; raise `LimitNOFILE`).
+- stale re-runs reaching `declined refusalBudget`: honest contention spent the budget (KERNEL-19's open
+  question). The members re-run later, after the window moves.
