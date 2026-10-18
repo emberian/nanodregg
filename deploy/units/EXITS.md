@@ -59,7 +59,7 @@ code space holds both tables: `host` (Host.Status, below 64) and nd-supervise's 
 
 | code | name | class | systemd | operator |
 |---|---|---|---|---|
-| 64 | refusedAtLaunch | fatal | stopped (RestartPreventExitStatus) | refused before the child ran (nothing hidden, an unreadable argument, a socket it cannot bind, the sandbox's policy or mechanism): fix the unit or the box; the reason is on stderr |
+| 64 | refusedAtLaunch | fatal | stopped (RestartPreventExitStatus) | refused before the child ran (nothing hidden, an unreadable argument, a socket it cannot bind, the sandbox's policy or mechanism, a soft open-file limit below what the supervisor may hold): fix the unit or the box; the reason is on stderr. For `RLIMIT_NOFILE N is below the M fds it may hold` (CLIENT-28) raise the unit's LimitNOFILE (or `ulimit -n`) to at least M (71 at CONNECTIONS_MAX 64: its stdio, its socket, the child's two pipes, one per connection, one being refused `full`) |
 | 65 | childUnroutable | fatal | stopped (RestartPreventExitStatus) | the child wrote a frame the mux cannot route: a defect in the child, report to HOST and CLIENT |
 | 66 | childSignaled | restart | restarted after 2 s; failed past 5 starts in 120 s | automatic; the child was killed by a signal (the OOM killer, an operator; on Linux any mechanism exit of 128 or more, bwrap's 128+N); a crash on every start stops at the start limit |
 
