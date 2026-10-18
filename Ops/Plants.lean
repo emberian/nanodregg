@@ -30,6 +30,7 @@ the origin), or it FAILS instead of passing on a Store that never sealed.
 import Ops.Founder
 import Host.Exit
 import Host.Carry
+import Host.Check
 
 namespace Nanodregg.Ops.Plants
 
@@ -660,6 +661,60 @@ def joinPlants (exe : String) (genesisOut : String) (dir : System.FilePath) : IO
   unless ← say "follow-opens-the-joined-store" ok s!"exit={code} :: {err.replace "\n" " "}" do
     failed := failed + 1
   return failed
+/-- Founder 0 writes one state slot of `obj` (an object it made): a USE whose maker signed it. -/
+def selfWrite (w : World D) (obj : D) : Call D :=
+  let me := founderId X w.origin 0
+  let u : Unsigned D :=
+    { world := w.origin, member := me, key := Founder.key, notBefore := 0,
+      validUntil := Bounds.windowMax / 2 + 8,
+      pins := [(me, pinOf X.env (w.live X.env me)), (obj, pinOf X.env (w.live X.env obj))],
+      maxCharge := 1 <<< 40, body := .write obj [(stateBase, some "self".toUTF8)] none }
+  { unsigned := u, signature := Codec.Ed25519.sign Founder.seed (X.callMessage u) }
+
+/-- `use=` (PROTOCOL-43's count on a real Store, cv 01a14de7-225e), through the real exe and in
+process:
+* `use-zero-on-creates-only` (a control): `host check` of `intact` (4 creates, no use) reads 0;
+* `use-self-use-zero` (the tooth for the member condition): a copy of `intact` where founder 0 also
+  WRITES an object it made reads 0 through `host check`; a count that forgot "a member other than
+  the maker" reads 1 here (measured by mutating `Protocol.Use.sharedBy`). A positive count needs a
+  second member (an invitation and a grant), which row `use` holds;
+* `use-reads-every-call` (fidelity, IN PROCESS through `Host.Check.callsAt`, not the exe): the
+  calls read back from `intact`'s records are exactly the 4 served calls' bytes, in order.
+The number that failed. -/
+def usePlants (exe : String) (dir intact : System.FilePath) (calls : List (Call D)) (w4 : World D) :
+    IO Nat := do
+  let useOf (d : System.FilePath) : IO String := do
+    pure (((← status exe d).bind (·.lookup "use")).getD "?")
+  let u0 ← useOf intact
+  IO.println s!"PLANT use-zero-on-creates-only {if u0 == "0" then "PASS" else "FAIL"} :: host check intact reads use={u0}"
+  -- the self-use: the first call's object, written by its maker
+  let selfOk ← do
+    let .ok w0 := Founder.world name | pure (false, "genesis refused")
+    let some c0 := calls.head? | pure (false, "no calls")
+    let .ok (t0, _) := submit X w0 c0 | pure (false, "call 0 does not admit")
+    let some (obj, _) := t0.creates.head? | pure (false, "call 0 created nothing")
+    let c := selfWrite w4 obj
+    let .ok _ := submit X w4 c | pure (false, "the self-write does not admit in process")
+    let d := dir / "selfuse"
+    backup intact d
+    let r ← host exe ["serve", d.toString] (Founder.submitFrame c)
+    if r.code ≠ 0 then pure (false, s!"serve exit={r.code}") else
+    let u ← useOf d
+    pure (u == "0", s!"host check selfuse reads use={u}")
+  IO.println s!"PLANT use-self-use-zero {if selfOk.1 then "PASS" else "FAIL"} :: {selfOk.2}"
+  let opened ← Host.Check.openClean intact.toString
+  let readBack ← match opened with
+    | .error (s, n) => pure (Except.error s!"{s.name} {n}")
+    | .ok (keys, o) => Host.Check.callsAt intact.toString keys o
+  let served := calls.map X.callBytes
+  let same := match readBack with
+    | .ok cs => cs.map X.callBytes == served
+    | .error _ => false
+  let got := match readBack with
+    | .ok cs => s!"{cs.length} read back"
+    | .error n => s!"refused {n}"
+  IO.println s!"PLANT use-reads-every-call {if same then "PASS" else "FAIL"} :: {served.length} served, {got} (in process)"
+  return (if u0 == "0" then 0 else 1) + (if selfOk.1 then 0 else 1) + (if same then 0 else 1)
 
 def run (exe : String) (dir : System.FilePath) : IO UInt32 := do
   if ← dir.pathExists then IO.eprintln s!"store-plants: {dir} exists"; return 2
@@ -735,6 +790,7 @@ def run (exe : String) (dir : System.FilePath) : IO UInt32 := do
   let mut failed := 0
   for p in plants do
     unless ← judge p do failed := failed + 1
+  failed := failed + (← usePlants exe dir intact calls w4)
   -- `check` writes nothing: the torn copy still holds its torn bytes
   let tornNow := (← IO.FS.readBinFile (torn / "seg.log")).size
   let ro := tornNow = (at_ 2 + at_ 3) / 2

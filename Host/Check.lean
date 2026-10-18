@@ -5,7 +5,18 @@ The writer's own open (`openFollower`: the same `openAt`, no lock, nothing writt
 read as not yet written), folded with the writer's `foldStep` (every step taken by `World.step`: a recorded refusal is
 checked as a Turn is, its bounds, window, budget and stated roots), then one line on stdout:
 
-    STATUS height=H steps=N chain=C base_offset=O base_steps=B seg_bytes=S records=R torn=T anchor=A
+    STATUS height=H steps=N chain=C base_offset=O base_steps=B seg_bytes=S records=R torn=T use=U anchor=A
+
+`use=U` (PROTOCOL-43's count on a real Store, cv 01a14de7-225e) is the number of distinct objects
+made by one member and used by another (`Protocol.Use.shared`) over EVERY call the segment
+committed: the open does not fold the history before the base, so the calls come from the records
+(`Log.recover` of the segment to `seg_bytes`, each record by `Record.codec`, each admitted Turn's
+`event`, which is the call's bytes, by `X.decodeCall`, in log order), and the World `Use.shared` reads
+for makers is the opened one. A record or event that does not decode is refused `corrupt` with the
+name `corrupt use-record K` / `corrupt use-event K` (K counts the record frames after
+the origin frame / the Turns, from 0), never skipped; that is unreachable for a Store this Host wrote (it wrote each record by the
+same codec, and admission decoded each call). When a checkpoint drops history (KERNEL-44 Part 2),
+`use` counts since the oldest retained base and must say so.
 
 `anchor=none` says the check certified integrity and position only: a copy cut at a frame boundary,
 or a rollback to an older complete copy, opens cleanly and is NOT detected without an anchor
@@ -29,6 +40,7 @@ and chain, not lawfulness.
 -/
 import Host.Deployed
 import Host.Exit
+import Protocol.Use
 
 namespace Nanodregg.Host.Check
 
@@ -56,8 +68,52 @@ def Anchor.verdict (a : Anchor) (now : Nat) (chainAt : ByteArray) : Option Statu
   else if chainAt = a.chain then none
   else some .chainMismatch
 
-def statusLine (o : Opening (World D)) (anchor : String) : String :=
-  s!"STATUS height={o.opened.world.height} steps={o.opened.world.steps} chain={o.opened.world.chain.toHex} base_offset={o.sealed.offset} base_steps={o.sealed.steps} seg_bytes={o.pos.offset} records={o.opened.records} torn={o.opened.torn} anchor={anchor}"
+def statusLine (o : Opening (World D)) (use : Nat) (anchor : String) : String :=
+  s!"STATUS height={o.opened.world.height} steps={o.opened.world.steps} chain={o.opened.world.chain.toHex} base_offset={o.sealed.offset} base_steps={o.sealed.steps} seg_bytes={o.pos.offset} records={o.opened.records} torn={o.opened.torn} use={use} anchor={anchor}"
+
+/-- The Turns of a segment's records, in log order; `.error K` names the first record (counted
+from `i`) that does not decode. -/
+def turnsOf : Nat → List ByteArray → Except Nat (List (Turn D))
+  | _, [] => .ok []
+  | i, r :: rs =>
+    match (Record.codec Codec.Deployed.digestCodec).decode r with
+    | .error _ => .error i
+    | .ok ps => (Step.turns (ps.map Prod.fst) ++ ·) <$> turnsOf (i + 1) rs
+
+/-- Each Turn's call (its `event` is the call's bytes); `.error K` names the first Turn (counted from
+`i`) whose event does not decode. -/
+def callsOf : Nat → List (Turn D) → Except Nat (List (Receive.Call D))
+  | _, [] => .ok []
+  | i, t :: ts =>
+    match X.decodeCall t.event with
+    | none => .error i
+    | some c => (c :: ·) <$> callsOf (i + 1) ts
+
+/-- Every call the records committed, in log order; a refusal's name otherwise. -/
+def recordCalls (records : List ByteArray) : Except String (List (Receive.Call D)) :=
+  match turnsOf 0 records with
+  | .error k => .error s!"corrupt use-record {k}"
+  | .ok ts =>
+    match callsOf 0 ts with
+    | .error k => .error s!"corrupt use-event {k}"
+    | .ok cs => .ok cs
+
+/-- The calls of the whole segment to `seg_bytes` (history and tail), recovered clean record by
+record. -/
+def callsAt (store : String) (keys : Keys) (o : Opening (World D)) :
+    IO (Except String (List (Receive.Call D))) := do
+  let seg ← File.open (segmentPath store) .read
+  let bytes ← seg.readAt 0 o.pos.offset.toUSize
+  unless bytes.size = o.pos.offset do return .error Status.shortRead.name
+  let rv := Log.recover keys.segment c.recordBytesMax segmentInitial bytes
+  unless rv.tail == .clean && rv.validLen == o.pos.offset do return .error "corrupt use-segment"
+  -- the first frame is genesis's origin frame, not a record (HOST-18, `recordOffsets`)
+  return recordCalls (rv.records.drop 1)
+
+/-- `use=U`: `Protocol.Use.shared` over every call the segment committed, makers read from the
+opened World. -/
+def useAt (store : String) (keys : Keys) (o : Opening (World D)) : IO (Except String Nat) := do
+  return (← callsAt store keys o).map fun cs => (Protocol.Use.shared X o.opened.world cs).length
 
 def refuse (s : Status) (name : String := s.name) : IO UInt32 := do
   IO.eprintln s!"refused {name}"
@@ -106,8 +162,11 @@ def run (store : String) (anchor : Option Anchor) : IO UInt32 := do
   match ← openClean store with
   | .error (s, n) => refuse s n
   | .ok (keys, o) =>
+      match ← useAt store keys o with
+      | .error n => refuse (if n = Status.shortRead.name then .shortRead else .corrupt) n
+      | .ok use =>
       match anchor with
-      | none => IO.println (statusLine o "none"); return 0
+      | none => IO.println (statusLine o use "none"); return 0
       | some a =>
         let now := o.opened.world.steps
         let at_ ← if now < a.steps then pure (.ok ByteArray.empty) else chainAt store keys o a.steps
@@ -116,9 +175,9 @@ def run (store : String) (anchor : Option Anchor) : IO UInt32 := do
         | .ok ch =>
           match a.verdict now ch with
           | some s =>
-            IO.println (statusLine o s!"{a.steps}:{Protocol.Text.toHex a.chain}")
+            IO.println (statusLine o use s!"{a.steps}:{Protocol.Text.toHex a.chain}")
             refuse s
           | none =>
-            IO.println (statusLine o "ok"); return 0
+            IO.println (statusLine o use "ok"); return 0
 
 end Nanodregg.Host.Check
