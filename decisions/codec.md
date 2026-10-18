@@ -1561,3 +1561,37 @@ so they did not move. No Rust table carries a World tag, and the five emits chec
 **Flag day (with KERNEL-22's `kernel!`).** Moved: the refusal-slot shape, and with it every World and base tag.
 Every Store stamped with the old World tag refuses to open by its stamp, and the chain re-geneses. The carried
 shape is unchanged.
+
+## CODEC-39 · A World's encoded size, exactly, against its weight; the slack is 54/49 (cv 01a150a3-2523; CODEC-13 with HOST-14 and KERNEL-22, 2026-10-19)
+
+**What.** The bridge KERNEL-55 needs. KERNEL bounds a reached World's weight by its genesis allowance
+(`allowance_bounds_world`), and HOST's `worldBytesMax` bounds its encoded size. The statement was agreed with
+HOST-14, who reads it in `reached_size_le`, and with KERNEL-22, who accepted the factor.
+- `Codec/WorldSize.lean` (def-module) holds the measures, named in `Codec.Kernel`:
+  - `entrySlack = (54, 49)`;
+  - `worldFixed = 104`: four list headers, height/steps/allowance u64, chain and origin;
+  - `journalBytes` (72 per entry);
+  - `refusalsBytes` (per entry: tx 82, count/total 50, a misfit pairing up to 90);
+  - `liveCount`, `tombCount`, `spentCount`, `rowsCount` and `versionBytes`.
+- `Codec/Proofs/WorldSize.lean`:
+  - `world_size_eq` is exact, with only a 32-byte digest premise:
+    `size + 8·(live + rows) = weight + worldFixed + journalBytes + refusalsBytes + 3·(live + tomb) + 2·spent + versionBytes`.
+    Every byte has a term. `world_bytes_size_eq` is the same statement for the bytes.
+  - `world_size_le`, on `World.CodecFits`: `49·size ≤ 54·weight + 49·(journalBytes + refusalsBytes + worldFixed)`.
+    `world_size_le_div` is the floor form, and `world_size_le_deployed` is the bound at the deployed codec.
+  - `refusalsBytes_eq_of_fits` / `_le_of_fits`, on `refusalsFits`: `82·tx + 50·(others)`. HOST discharges the counts
+    from KERNEL-55 R1's `refusals_bounded` / `refusals_length_le`.
+- Why 54/49 and not the pre-54 35/32: `World.weight` charges each version 8 bytes (`counterWeight`), and the wire
+  writes it as a u64 varint of 1 to 10 bytes. An empty live cell weighs 49 (32 id, 8 version, 9 cell) and writes 54
+  at a version ≥ 2^63.
+  - A tombstone is 35/32, a spent nullifier 34/32 and a head 86/84.
+  - A row costs at most weight + 2, over a weight of at least 56.
+- Tooth: `world_size_slack_tight` (generic; `_deployed` at the deployed codec). `slackWorld`, one empty live cell at
+  version 2^63, is in `World.CodecFits` and meets the bound with equality (`49·158 = 54·49 + 49·104`). For every
+  ratio a/b below 54/49, the bound at (a, b) is false for it.
+- The module imports `Kernel.Proofs.Weight`, so that `Entry.weight`'s equation lemmas have one home. Without it the
+  census import failed on `Entry.weight.eq_1`, realized in both modules.
+- Vacuity read: no vacuous statement. Its flags were taken: the tooth now carries the CodecFits witness and every
+  ratio; the docstrings cite the kernel bound rather than restating it; the measures and the witness `slackWorld` live in a def-module (C3), so HOST can name them.
+
+**Flag day:** none. No wire, tag or vector moves, and nothing re-geneses.
