@@ -1922,3 +1922,57 @@ display). `ob` prints `fault refused <reason>`.
 - *Flag day:* none for shipped bytes. Lifecycle, Allowance and Escrow print byte-identical (G0/A0/E0 green); no
   package id moves; THE BAR's programs use neither tag. New: term tag 17, prim code 11, `Fault.refused`,
   `TypeError.badReason`, reader keyword `refuse` (a binder named `refuse` is now `reservedBinder`), `ReadRefusal.badRefuse`.
+
+**LANG-50 · Built (2026-10-18; LANG-15; ROOT APPROVED with conditions 1–4).** `Lang/Surface.lean` (the reader, never
+in admission: no receiver imports it), `Lang/Proofs/Surface.lean`, `Lang/Proofs/SurfaceTeeth.lean`; `ob` reads both
+forms; the three shipped packages have their surface sources beside their cores, and `--write-text` writes the core
+FROM the surface.
+- *Measured spec, met* (surface text chars; core chars; package bytes):
+  | text | core | surface | target |
+  |---|---|---|---|
+  | world/grain/Lifecycle | 7,709 (5,970 B) | 305 | state record once: met |
+  | world/hosting/Allowance | 2,625 (2,175 B) | 478 | met |
+  | world/escrow/Escrow | 12,019 (9,375 B) | 2,223 | met |
+  | CappedTally (LT0s) | 4,002 printed (3,034 B), byte-identical | 668 | under Mini's 1,269: met |
+  | CoAuthor (LS0) | 45,735 (36,979 B) | 2,464 | under Mini's 7,896: met |
+  | a layer over the tally (LL0) | 1,710 B | 111 | — |
+  The first three and the tally lower to EXACTLY the shipped/printed core (G0s, A0s, E0s, LT0s). CoAuthor's CORE grew
+  (37,287 → 45,735 chars, 30,028 → 36,979 bytes): it is now a different program (method refusals instead of a `why`
+  field and a law), and every `refuse` carries its method's full result type as its annotation (LANG-3's annotations,
+  measured: 16 refusal sites in the lowered core). Required steps / ticks: propose 85/129 → 102/152 (two bound checks), vote 115/166 →
+  111/159, seal 236/299 → 270/339 (`fold` binds its first row then walks all 8). THE BAR's programs are unchanged.
+- *How it differs from the proposal, and why.* (a) Bound checks are built on TERMS after the one reader read the method
+  (`boundCheck`, `wrapMethod`), not in the s-expression, so their meaning is a theorem about a Lean function; `ob`'s
+  error locator skips the checks (`locateField`). (b) A package's methods are sorted by label (as `Std.pkgOf`
+  and `Std.methodIndex` sort; CoAuthor's rows re-indexed: edit 0, propose 1, seal 2, vote 3), EXCEPT a layer, whose
+  methods are its super's in the super's order followed by its own sorted (`layer_keeps_indices`): a super law that
+  names a method by index still judges the same method. `(index m)` is the position in the package's method list.
+  (e) `(machine f initial (methods m…) edges…)` names the methods it steps; an edge naming any other is refused
+  (`unknownMethod`), so a typo never makes a public method. (c) A type name may name a bounded form (`(type Line (bytes 1 200))`), usable only in
+  an argument (`boundOutsideArg` elsewhere). (d) The story has no law. The hand port's `react` also refused a direct
+  `write`; KERNEL refuses that first for every programmed object (`hasMethods`, LS2b, measured), so a law arm would be
+  a no-op. The skip-judge plant no longer has a story row to bite (LS6c's line deleted; it bites in L*/LT*);
+  drop-range-row still bites at LS9.
+- *Theorems.* `read_print_surface` (every printed package is read by the surface exactly as by `Read.readPackage`);
+  `layer_keeps_laws` (a layer that lowers has all of its super's laws, imports exactly the super, shares state and
+  relations, and its body is `extend (ref 0) fs` with no field named like a super law), `layer_keeps_guards`,
+  `layer_keeps_indices`, `layer_law_is_super`, and `ext_sel_untouched` (the evaluator's form: for ANY value, record or
+  knot, extended by fields not named `ℓ`, selecting `ℓ` means exactly what it meant before); `boundCheck_in`,
+  `boundCheck_out` (the first field out of its bound refuses by exactly `"f lo..hi"`), `boundCheck_all_in`,
+  `Bound.cond_nat`, `Bound.cond_bytes`. Teeth: `empty_package_surface`; `layer_adds_method`, `layer_law_refused`,
+  `layer_retype_refused`, `layer_override_same_type`; `bound_name`, `bound_empty_refused`, `bound_long_refused`,
+  `bound_one_passes`, `bound_four_passes`. Rows: G0s/A0s/E0s (byte identity + a plant each: an edge reversed,
+  `(revoked true)` flipped, a reason renamed), LT0s (identical core; `Lang.Read` alone refuses the surface text),
+  LE (a misspelt field is refused naming its own line), LS4b/LS4c (`propose: refused slot 0..7`,
+  `propose: refused text 1..2000`), LL0–LL5 (a layer installs, its own `close` runs, the tally's `reply` runs from
+  the tally's installed core, the tally's law judges the layer's object, a layer naming `decider` is refused
+  `overridesLaw … line 5`).
+- *Vacuity read* (LAND-WITH-FIXES, all fixed here). H1: a layer re-sorted its super's method indices (fixed: prefix
+  order, `layer_keeps_indices`). H2: CoAuthor's lost write refusal (measured: KERNEL's `hasMethods`, row LS2b). H3:
+  `with` dropped an unknown or repeated field silently (now `noField`). M1: `is` with a foreign arm, a repeated `on`
+  arm or `else` (now refused). M2: a layer overriding a super's relation guard (now `overridesGuard`). M3: the law
+  theorem tied to the evaluator (`ext_sel_untouched`). M4: `wrapMethod` refuses a method that is not four binders
+  (`badShape`). M5: machine methods named. LOW: a bounded top-level argument refused; a shipped row's plant must still
+  lower; LT0s gains a plant (`(cap 999)`); historical sizes labelled.
+- *Flag day:* none. No shipped byte, id or THE BAR value moves; three new files `world/*/*.ob`; HOSTING's and
+  LEDGER's text writers now read them (ROOT for HOSTING/LEDGER).

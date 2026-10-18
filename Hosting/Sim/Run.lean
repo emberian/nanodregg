@@ -9,7 +9,9 @@ namespace Nanodregg.Hosting.Sim
 
 def runAll (args : List String) : IO UInt32 := do
   if args == ["--write-text"] then
-    let some t := lifecycle.bind Lang.Print.package | IO.eprintln "no text"; return 1
+    -- the core text is written from the surface source, through the lowering (LANG-50)
+    let src ← IO.FS.readFile sourcePath
+    let some t := Lang.Surface.coreText src | IO.eprintln s!"{sourcePath} does not lower"; return 1
     IO.FS.createDirAll (textPath.parent.getD ".")
     IO.FS.writeFile textPath t
     IO.println s!"wrote {textPath}"
@@ -28,11 +30,16 @@ def runAll (args : List String) : IO UInt32 := do
   IO.println s!"{if ok0 then "ok  " else "FAIL"} {l0}"
   let (la, oka) ← Allowance.textLine
   IO.println s!"{if oka then "ok  " else "FAIL"} {la}"
+  let (ls, oks) ← sourceLine
+  IO.println s!"{if oks then "ok  " else "FAIL"} {ls}"
+  let (las, okas) ← Allowance.sourceLine
+  IO.println s!"{if okas then "ok  " else "FAIL"} {las}"
   let some lc := lifecycle
     | IO.println "FAIL the grain package is not built (Std refused its inputs)"; return 1
   let runs := [journey .none lc, journey .skipJudge lc, Allowance.journey]
   for r in runs do for l in r.log do IO.println l
-  let bad := runs.foldl (· + ·.bad) ((if ok0 then 0 else 1) + (if oka then 0 else 1))
+  let bad := runs.foldl (· + ·.bad) ((if ok0 then 0 else 1) + (if oka then 0 else 1) +
+    (if oks then 0 else 1) + (if okas then 0 else 1))
   IO.println (if bad = 0 then "ALL PASS" else s!"hosting-sim: RED ({bad})")
   return if bad = 0 then 0 else 1
 

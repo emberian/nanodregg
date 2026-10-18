@@ -634,4 +634,43 @@ theorem caseGuard_edit_ok :
       | .ok (.ok ()) => true
       | _ => false) = true := by decide
 
+/-! ## The row edits `Lang.program` hands KERNEL are its own object's (cv 01a14e16-78ac)
+
+`runMeasured` reads a run's edits with `editsOf rels r.self`, so every row act is under the run's
+`self`. With `invokeRun`'s request (`self` = the invoked object), KERNEL's `rowParent` assertion in
+`invoke` (`e.1.under.1 = obj`, `Kernel.Proofs.Tree.invoke_ok`) never fires on a Lang method: it stays
+as KERNEL's own check where row edits enter, since `Program` is abstract to it, as `run_calls` is
+for `notCallable`. -/
+
+theorem runMeasured_rows_under {D : Type} {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D}
+    {look : Kernel.Receive.Pinned D} {rv : Kernel.Receive.RowView D} {pkg : D} {state : Kernel.Slots}
+    {method : Nat} {args : ByteArray} {r : Kernel.Receive.Req D} {budget : Nat} {s : Kernel.Slots}
+    {calls : List (Kernel.Receive.Body D)} {rows : List (Kernel.RowSlot D × Kernel.RowAct)} {t n : Nat}
+    (h : runMeasured bytesOf digestOf look rv pkg state method args r budget = .ok (s, calls, rows, t, n)) :
+    ∀ e ∈ rows, e.1.under.1 = r.self := by
+  unfold runMeasured at h
+  simp only [bind, Except.bind, pure, Except.pure] at h
+  split at h
+  · cases h
+  repeat' split at h
+  all_goals first | (simp at h; done) | skip
+  simp only [Except.ok.injEq, Prod.mk.injEq] at h
+  obtain ⟨-, -, rfl, -, -⟩ := h
+  exact editsOf_under ‹editsOf _ _ _ = .ok _›
+
+/-- **The rows `Lang.program` hands KERNEL**: every row act is under the run's own object. -/
+theorem run_rows_under {D : Type} {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D}
+    {look : Kernel.Receive.Pinned D} {rv : Kernel.Receive.RowView D} {pkg : D} {state : Kernel.Slots}
+    {method : Nat} {args : ByteArray} {r : Kernel.Receive.Req D} {budget : Nat} {s : Kernel.Slots}
+    {calls : List (Kernel.Receive.Body D)} {rows : List (Kernel.RowSlot D × Kernel.RowAct)} {t : Nat}
+    (h : (program bytesOf digestOf).run look rv pkg state method args r budget = .ok (s, calls, rows, t)) :
+    ∀ e ∈ rows, e.1.under.1 = r.self := by
+  simp only [program, Except.map] at h
+  split at h
+  · cases h
+  · rename_i x hx
+    simp only [Except.ok.injEq, Prod.mk.injEq] at h
+    obtain ⟨-, -, rfl, -⟩ := h
+    exact runMeasured_rows_under hx
+
 end Nanodregg.Lang

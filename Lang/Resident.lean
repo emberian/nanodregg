@@ -9,18 +9,24 @@ check (the install check, at the deployed digest),
 law runner the receiver calls). Refusals are printed by NAME, with the offset or label they are
 about.
 
-    (check PACKAGE)              ok BYTES bytes id HEX     | refused NAME …
+    (check PACKAGE)              ok BYTES bytes id HEX     | refused NAME … [line N]
+    (check PACKAGE (with SUPER…)) a layer, checked against the packages it imports
     (bytes PACKAGE)              hex of the package bytes  | refused NAME …
+    (core PACKAGE)               the core text a surface package lowers to
+    (source PACKAGE)             id HEX source DIGEST: what this text installs, and the text's own digest
     (type TERM)                  the closed term's type    | refused illTyped
     (eval TICKS TERM)            VALUE : TYPE used N of TICKS | fault NAME after N of TICKS
     (law PACKAGE LABEL OLD NEW REQ)   admitted | refused "REASON" | fault NAME
                                  (OLD/NEW read at the package's state type, REQ at `reqTy`)
 
-A package with imports cannot be checked here: the imports' interfaces live in the World, and this
-tool reads none (`refused imports`). The id is the deployed one only for an import-free package,
-which is exactly what it can check.
+PACKAGE is a core text or a surface text (`Lang.Surface`, LANG-50): a surface package is lowered,
+printed and read again by the one reader, and a refusal names the line of the text it is about
+(`refused illTyped noField @reply.body.body.body.body.target line 5`). A package with imports is
+checked only against the packages given after `with` (a layer's super), in order; this tool reads
+no World. The id is the deployed one.
 -/
 import Lang.Print
+import Lang.Surface
 import Lang.Law
 import Kernel.Receive.Call
 import Codec.Deployed
@@ -52,10 +58,10 @@ def readRefused (e : ReadRefusal) : Answer := no e.text
 /-- A type or value with no text: a label that is not one atom (`Print`). -/
 def unprintable : Answer := no "unprintable (a label that is not one atom)"
 
-/-- The package's bytes and id, or the install check's refusal. -/
-def checkPackage (p : Package) : Except Answer (ByteArray × String) := do
-  unless p.imports.isEmpty do throw (no "imports (a package with imports is checked by install)")
-  match p.checkWith [] with
+/-- The package's bytes and id, or the install check's refusal, against the imports' interfaces. -/
+def checkPackageWith (ifaces : List Ty) (p : Package) : Except Answer (ByteArray × String) := do
+  unless p.imports.length = ifaces.length do throw (no "imports (a package with imports is checked with its imports: (check P (with Q…)))")
+  match p.checkWith ifaces with
   | .error e => throw (no e.wire)
   | .ok () =>
     -- install's id-literal check (`Program.checkLits`) at the deployed digest (LANG-38)
@@ -66,20 +72,73 @@ def checkPackage (p : Package) : Except Answer (ByteArray × String) := do
       let id := romIdOf Codec.Deployed.env { kind := kindPackage, discipline := .rom, slots := [(0, b)] }
       pure (b, id.toHex)
 
-def readSub (x : SExp) : Except Answer Package :=
-  match package x with
-  | .ok p => .ok p
-  | .error e => .error (readRefused e)
+def checkPackage (p : Package) : Except Answer (ByteArray × String) := checkPackageWith [] p
 
-def answer : SExp → Answer
+/-- A refusal of the surface, with the line of `src` it is about. -/
+def surfaceRefused (src : String) (e : Surface.Refusal) : Answer := no (e.text src)
+
+def readSub (src : String) (supers : List (ByteArray × Package)) (x : SExp) : Except Answer Surface.Lowered :=
+  match Surface.readSExpWith supers x with
+  | .ok l => .ok l
+  | .error e => .error (surfaceRefused src e)
+
+/-- The interfaces of `p`'s imports, from the packages given. -/
+def ifacesOf (sup : List (ByteArray × Package)) (p : Package) : List Ty :=
+  p.imports.filterMap fun i => (sup.find? (fun (q : ByteArray × Package) => q.1 = i)).map fun q => q.2.iface
+
+/-- The supers of a layer, each read and checked in turn (each may itself be a layer over the ones
+before it); with their ids' bytes, for `(import N "hex")`. -/
+def supersOf (src : String) : List SExp → Except Answer (List (ByteArray × Package) × List Ty)
+  | [] => .ok ([], [])
+  | x :: xs => do
+    let (sup, ifs) ← supersOf src xs
+    let l ← readSub src sup x
+    let (b, _) ← checkPackageWith (ifacesOf sup l.pkg) l.pkg
+    let id := romIdOf Codec.Deployed.env { kind := kindPackage, discipline := .rom, slots := [(0, b)] }
+    pure ((id.bytes, l.pkg) :: sup, l.pkg.iface :: ifs)
+
+/-- Check a lowered package; an `illTyped` refusal names the line of the text its path points to. -/
+def checkLowered (src : String) (ifaces : List Ty) (l : Surface.Lowered) : Except Answer (ByteArray × String) :=
+  match checkPackageWith ifaces l.pkg with
+  | .ok r => .ok r
+  | .error a =>
+    match l.pkg.checkWith ifaces with
+    | .error (.illTyped why) =>
+      match Surface.locateField l why.path with
+      | some pos => .error (no s!"illTyped {why.text} line {Surface.lineOf src pos}")
+      | none => .error a
+    | _ => .error a
+
+def answer (src : String) : SExp → Answer
   | .list _ [.atom _ "check", px] =>
-    match readSub px >>= checkPackage with
+    match readSub src [] px >>= checkLowered src [] with
+    | .ok (b, id) => ok s!"ok {b.size} bytes id {id}"
+    | .error a => a
+  | .list _ [.atom _ "check", px, .list _ (.atom _ "with" :: qs)] =>
+    match (do
+      let (sup, _) ← supersOf src qs.reverse
+      let l ← readSub src sup px
+      checkLowered src (ifacesOf sup l.pkg) l) with
     | .ok (b, id) => ok s!"ok {b.size} bytes id {id}"
     | .error a => a
   | .list _ [.atom _ "bytes", px] =>
-    match readSub px >>= checkPackage with
+    match readSub src [] px >>= checkLowered src [] with
     | .ok (b, _) => ok (hex b)
     | .error a => a
+  | .list _ [.atom _ "core", px] =>
+    match readSub src [] px with
+    | .error a => a
+    | .ok l => match Print.package l.pkg with
+      | some t => ok t
+      | none => unprintable
+  | .list _ [.atom _ "source", px] =>
+    match readSub src [] px >>= checkLowered src [] with
+    | .error a => a
+    | .ok (_, id) =>
+      -- the package's own text: from its `(` to the `)` that closes `(source …)`, excluded
+      let rest := (src.toList.drop px.pos).reverse.dropWhile Char.isWhitespace
+      let body := String.ofList ((rest.drop 1).dropWhile Char.isWhitespace).reverse
+      ok s!"id {id} source {(Codec.Deployed.env.hash Surface.domSource body.toUTF8).toHex}"
   | .list _ [.atom _ "type", tx] =>
     match term depthMax [] tx with
     | .error e => readRefused e
@@ -109,7 +168,7 @@ def answer : SExp → Answer
             | some s => ok s!"<{s}> used {used} of {ticks}"
             | none => unprintable
   | .list _ [.atom _ "law", px, .atom _ ℓ, ox, nx, rx] =>
-    match readSub px >>= fun p => (checkPackage p).map fun _ => p with
+    match readSub src [] px >>= fun l => (checkLowered src [] l).map fun _ => l.pkg with
     | .error a => a
     | .ok p =>
       if ¬ ℓ ∈ p.laws then no s!"noLaw {ℓ}" else
@@ -120,13 +179,13 @@ def answer : SExp → Answer
         | .ok (.ok ()) => ok "admitted"
         | .ok (.error why) => no s!"\"{(String.fromUTF8? why).getD (hex why)}\""
         | .error f => no s!"fault {faultName f}"
-  | x => no s!"usage @{x.pos} (check P) (bytes P) (type T) (eval TICKS T) (law P LABEL OLD NEW REQ)"
+  | x => no s!"usage @{x.pos} (check P [(with Q…)]) (bytes P) (core P) (source P) (type T) (eval TICKS T) (law P LABEL OLD NEW REQ)"
 
 /-- One invocation: the text of one form. -/
 def run (text : String) : Answer :=
   if text.utf8ByteSize > inputMax then no s!"tooLarge (over {inputMax} bytes)" else
   match parse text with
   | .error e => readRefused e
-  | .ok x => answer x
+  | .ok x => answer text x
 
 end Nanodregg.Lang.Resident

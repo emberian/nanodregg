@@ -31,6 +31,9 @@ open Nanodregg.Hosting Nanodregg.Hosting.Sim
 
 def textPath : System.FilePath := "world" / "hosting" / "Allowance"
 
+/-- The allowance package's surface source (LANG-50): the core text is written from it. -/
+def sourcePath : System.FilePath := "world" / "hosting" / "Allowance.ob"
+
 def resident : ByteArray := "resident-R".toUTF8
 def alw : Broker.Allowance := ⟨"claude-m".toUTF8, 7, 1000, 60000, 5000, 100⟩
 
@@ -119,8 +122,16 @@ def textLine : IO (String × Bool) := do
   if have_ == want then return (s!"A0 {textPath} is the generated text ({want.length} bytes)", true)
   return (s!"A0 {textPath} differs from Lang.Print.package allowance (hosting-sim --write-text rewrites it)", false)
 
+/-- A0s: the surface source lowers to exactly the shipped core; `revoke` flipped is caught. -/
+def sourceLine : IO (String × Bool) := do
+  let src ← try IO.FS.readFile sourcePath catch _ => pure ""
+  let core ← try IO.FS.readFile textPath catch _ => pure ""
+  return Lang.Surface.shippedRow "A0s" src core Allow.allowance ("(revoked true)", "(revoked false)")
+
+/-- The core text, written from the surface source through the lowering. -/
 def writeText : IO Bool := do
-  let some t := Lang.Print.package Allow.allowance | return false
+  let src ← try IO.FS.readFile sourcePath catch _ => pure ""
+  let some t := Lang.Surface.coreText src | return false
   IO.FS.createDirAll (textPath.parent.getD ".")
   IO.FS.writeFile textPath t
   IO.println s!"wrote {textPath}"

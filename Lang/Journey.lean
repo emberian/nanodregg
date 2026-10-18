@@ -411,6 +411,17 @@ def dropLastRow (rv : RowView D) : RowView D :=
 def dropRangeRow : Program D :=
   { langProgram with run := fun look rv p s m a r b => langProgram.run look (dropLastRow rv) p s m a r b }
 
+/-- Plant 11: the run's row edits filed under the signer's id, not the object's (cv 01a14e16-78ac).
+`run_rows_under` says `Lang.program` never does this; KERNEL's `rowParent` is the check that would
+refuse it (LT4 under this plant). -/
+def foreignRow : Program D :=
+  { langProgram with run := fun look rv p s m a r b =>
+      (langProgram.run look rv p s m a r b).map fun (s', cs, rows, t) =>
+        (s', cs, rows.map (fun (sl, act) =>
+          ((match sl with
+            | .row k => .row { k with parent := r.agent }
+            | x => x), act)), t) }
+
 /-- A package with nothing in it but its imports (LI). -/
 def importer (imports : List ByteArray) : Package :=
   { imports, state := .record [], iface := .record [], body := .record [], methods := [], laws := [] }
@@ -418,7 +429,7 @@ def importer (imports : List ByteArray) : Package :=
 /-- Which program the journey runs under. -/
 inductive Mode
   | honest | skipJudge | eraseOccasion | erasePayload | dropCalls | rawInstall | bytesIds | skipLits
-  | totalDigest | unlawfulCodec | dropRangeRow
+  | totalDigest | unlawfulCodec | dropRangeRow | foreignRow
   deriving DecidableEq
 
 def Mode.program : Mode → Program D
@@ -434,6 +445,10 @@ def Mode.program : Mode → Program D
   -- its plant refuses the founder's own id, which `callRows` knows: it builds `unlawfulCodec a.id`
   | .unlawfulCodec => langProgram
   | .dropRangeRow => Journey.dropRangeRow
+  | .foreignRow => Journey.foreignRow
+
+/-- A method's refusal by name (LANG-51): `program "m: refused why"`. -/
+def refusedBy (v m why : String) : Bool := v.startsWith "refused program" && (v.splitOn s!"{m}: refused {why}").length > 1
 
 /-- A refusal by a law, with `why` in its reason. -/
 def deniedWith (v why : String) : Bool := v.startsWith "refused lawDenied" && (v.splitOn why).length > 1
@@ -561,6 +576,37 @@ def cappedTallyText : String := s!"
           (write x (inj {verdictText} ok (record)))))))))
 "
 
+/-- CappedTally in the authoring surface (LANG-50): the same package, written once, lowered to
+EXACTLY the core above (LT0s). -/
+def cappedTallySurface : String := "
+(package
+  (state (rec (closes nat) (decider digest)))
+  (rel answers (key (by digest) (n nat)) (val (rec (amount nat))) (limit 64) (sum amount) (cap 1000) (guard mine))
+  (method reply (arg (rec (amount nat) (by digest) (n nat))) (edits 1)
+    (done state (insert answers (record (by arg.by) (n arg.n)) (record (amount arg.amount)))))
+  (guard mine
+    (case edit
+      (insert x (if (deq x.key.by req.agent) ok (refuse \"not yours\")))
+      (upsert x (refuse \"answers are final\"))))
+  (law decider
+    (on invoke (if (deq req.agent old.decider) (if (<= req.validUntil old.closes) ok (refuse \"closed\"))
+                   (refuse \"not the decider\")))
+    (else ok)))
+"
+
+/-- The tally's surface with one field misspelt in `reply`'s body: the checker's refusal names the
+line it is on (LE). -/
+def tallyTypo : String := cappedTallySurface.replace "(amount arg.amount)" "(amount arg.amout)"
+
+/-- A layer over CappedTally (LANG-50 `layer`): one method added, `close`; the state, the
+relation, `reply` and the law `decider` are the tally's own, run from its installed core. -/
+def tallyLayerText (superHex : String) : String := s!"
+(package
+  (import tally \"{superHex}\")
+  (layer tally)
+  (method close (done (with state (closes 0)))))
+"
+
 /-- The required steps and machine ticks of an invoke on the Host's World, counted as THE BAR's row
 counts them (`Protocol.Rows.Loopback.measureInvoke`): `Lang.Need.requiredOf` and `runMeasured`. -/
 def measure (w : World D) (c : Call D) : Except String (Nat × Nat) :=
@@ -589,6 +635,47 @@ def signedRows (st : Sim.State) (m : Sim.Member) (pins : List (D × D)) (rowPins
       validUntil := st.host.height + 1 + 100, pins, maxCharge := 1000000, body, rowPins, ranges }
   { unsigned := u, signature := Sim.toy.sign m.key (Sim.toy.ctx.callMessage u) }
 
+/-- LL: a layer over the installed tally, through the receivers. -/
+def layerRows (mode : Mode) (r0 : Run) (a : Sim.Member) (pkg : D) (tally : Package) : Run := Id.run do
+  let prog := mode.program
+  let mut r := r0
+  let tb := Sim.dc.bytes pkg
+  let text := tallyLayerText (Print.hex tb)
+  let l ← match Surface.readWith [(tb, tally)] text with
+    | .ok l => pure l
+    | .error e => return note r s!"LL0 read the layer: {e.text text}" false
+  let p := l.pkg
+  let some lb := Wire.encodePackage p | return note r "LL0 the layer has no bytes" false
+  r := note r s!"LL0 a layer over CappedTally: {text.length} chars; {lb.size} package bytes; imports the tally; methods {p.methods} (the tally's reply keeps index 0); laws {p.laws}"
+    (p.imports == [tb] && p.methods == ["reply", "close"] && p.laws == ["decider"] && p.rels == tally.rels)
+  let bad := text.replace "(method close" "(law decider (else ok))\n  (method close"
+  r := note r s!"LL0b a layer that overrides the tally's law: {match Surface.readWith [(tb, tally)] bad with | .ok _ => "read" | .error e => e.text bad}"
+    (match Surface.readWith [(tb, tally)] bad with | .error (.overridesLaw _ "decider") => true | _ => false)
+  let (r1, v1, t1) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id, pkg]) (.install lb))
+  r := note r1 s!"LL1 A installs the layer: {v1}" (v1 == "admitted")
+  let some lid := t1.bind fun t => (createdIds t).head? | return note r "LL1 no package id" false
+  let some decA := Wire.encodeData .digest (.digest (Sim.dc.bytes a.id)) | return note r "LL no bytes" false
+  let some cl := nat64 (r.st.host.height + 200) | return note r "LL no bytes" false
+  let (r2, v2, t2) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id, lid, pkg])
+    (.create (some lid) [] [(stateBase, cl), (stateBase + 1, decA)]))
+  r := note r2 s!"LL2 A creates a tally under the layer, its own decider: {v2}" (v2 == "admitted")
+  let some obj := t2.bind fun t => (createdIds t).head? | return note r "LL2 no object id" false
+  let pins (r : Run) := Sim.S.pinsFor r.st.host [a.id, obj, lid, pkg]
+  let some ans := Wire.encodeData tallyArg (.record [("amount", .nat 5), ("by", .digest (Sim.dc.bytes a.id)), ("n", .nat 1)])
+    | return note r "LL no bytes" false
+  let some ans2 := Wire.encodeData tallyArg (.record [("amount", .nat 7), ("by", .digest (Sim.dc.bytes a.id)), ("n", .nat 2)])
+    | return note r "LL no bytes" false
+  let some none_ := Wire.encodeData (.record []) (.record []) | return note r "LL no bytes" false
+  let (r3, v3, _) := go prog r (Sim.signed r.st a a.key (pins r) (.invoke obj 0 ans 10000 none))
+  r := note r3 s!"LL3 A replies 5 through the layer (the tally's own reply): {v3}, total {headSum r3.st.host obj 0}"
+    (v3 == "admitted" && headSum r3.st.host obj 0 == some 5)
+  let (r4, v4, _) := go prog r (Sim.signed r.st a a.key (pins r) (.invoke obj 1 none_ 10000 none))
+  r := note r4 s!"LL4 A closes it (the layer's own method): {v4}" (v4 == "admitted")
+  let (r5, v5, _) := go prog r (Sim.signed r.st a a.key (pins r) (.invoke obj 0 ans2 10000 none))
+  r := note r5 s!"LL5 A replies after closing: {v5} (the tally's law, inherited, judges the layer's object)"
+    (deniedWith v5 "decider: closed" && headSum r.st.host obj 0 == some 5)
+  return r
+
 /-- The LT rows: CappedTally through the real receivers. `b` is the decider. -/
 def tallyRows (mode : Mode) (r0 : Run) (a b : Sim.Member) : Run := Id.run do
   let prog := mode.program
@@ -599,6 +686,21 @@ def tallyRows (mode : Mode) (r0 : Run) (a b : Sim.Member) : Run := Id.run do
   let some pb := Wire.encodePackage p | return note r "LT0 CappedTally has no bytes" false
   let printed := (Print.package p).getD ""
   r := note r s!"LT0 CappedTally read from text: {cappedTallyText.length} chars, {(cappedTallyText.splitOn "\n").length - 2} lines; {pb.size} package bytes; printed {printed.length} chars" (printed != "" && p.rels == tallyRels)
+  -- LT0s the surface text lowers to exactly this core; the core reader alone does not read it
+  let sameCore := Surface.coreText cappedTallySurface == some printed
+  let coreRefuses := (Read.readPackage cappedTallySurface).toOption.isNone
+  let planted := Surface.coreText (cappedTallySurface.replace "(cap 1000)" "(cap 999)")
+  let caught := planted.isSome && planted != some printed
+  r := note r s!"LT0s CappedTally in the surface: {cappedTallySurface.length} chars (Mini 1269 without comments) lowers to the same core byte for byte: {sameCore}; Lang.Read alone refuses it: {coreRefuses}; plant (cap 1000) -> (cap 999) caught: {caught}"
+    (sameCore && coreRefuses && caught && printed != "")
+  -- LE a misspelt field: the refusal names the line it is on
+  let typoLine := ((tallyTypo.splitOn "\n").zipIdx.find? (fun (l, _) => (l.splitOn "amout").length > 1)).map (·.2 + 1)
+  let leLine := match Surface.readWith [] tallyTypo with
+    | .ok l => match l.pkg.checkWith [] with
+      | .error (.illTyped why) => (Surface.locateField l why.path).map (Surface.lineOf tallyTypo)
+      | _ => none
+    | .error _ => none
+  r := note r s!"LE a misspelt field on line {typoLine}: the checker's refusal names line {leLine}" (leLine.isSome && leLine == typoLine)
   -- LT0b a key of bytes is not fixed-width: refused `relKey` at install
   let bad := { p with rels := [("answers", { answersDecl with key := [("by", .bytes), ("n", .nat)] })] }
   let some bb := Wire.encodePackage bad | return note r "LT0b no bytes" false
@@ -635,6 +737,8 @@ def tallyRows (mode : Mode) (r0 : Run) (a b : Sim.Member) : Run := Id.run do
   let c4 := reply b a600 pinsB (some gr)
   let m4 := measure r.st.host c4
   let (r4, v4, _) := go prog r c4
+  if mode = .foreignRow then
+    return note r4 s!"PLANT foreign-row: LT4 B's reply with its row filed under B's own id: {v4}" (v4.startsWith "refused rowParent")
   r := note r4 s!"LT4 B replies 600: {v4}, total {headSum r4.st.host obj 0}; required steps / ticks {match m4 with | .ok (q, t) => s!"{q} / {t}" | .error e => e}"
     (v4 == "admitted" && headSum r4.st.host obj 0 == some 600 && m4.isOk)
   -- LT5 600 + 500 is past the cap: the kernel's `relationCapped`, on the current head
@@ -679,6 +783,8 @@ def tallyRows (mode : Mode) (r0 : Run) (a b : Sim.Member) : Run := Id.run do
   let some gr8 := t8g.bind fun t => (createdIds t).head? | return note r "LT8 no grant id" false
   let (r8c, v8c, _) := go prog r (Sim.signed r.st b b.key (Sim.S.pinsFor r.st.host [b.id, obj8, pkg, gr8]) (.invoke obj8 0 a10 10000 (some gr8)))
   r := note r8c s!"LT8c B replies with a window 101 heights long: {v8c}" (deniedWith v8c "decider: closed")
+  if mode = .honest then
+    r := layerRows mode r a pkg p
   return r
 
 /-! ### LS: Mini's CoAuthor over relations (LANG-47 → LANG-49)
@@ -701,7 +807,7 @@ and a seal must start after it. The hand port before relations (LANG-47: lists b
 a bitmask of who voted, a `version` the law compared) was 63,865 chars, 142 lines and 52,965
 package bytes; LS0 prints this one's. -/
 
-def coS : Ty := .record [("closes", .nat), ("round", .nat), ("why", .bytes), ("window", .nat)]
+def coS : Ty := .record [("closes", .nat), ("round", .nat), ("window", .nat)]
 def passageTy : Ty := .record [("author", .digest), ("text", .bytes), ("votes", .nat)]
 def slotTy : Ty := .record [("slot", .nat)]
 def coRel (key : List (Label × Ty)) (val : Ty) : RelDecl :=
@@ -712,119 +818,53 @@ def chaptersDecl : RelDecl := coRel [("number", .nat)] passageTy
 def proposalsDecl : RelDecl := coRel [("round", .nat), ("slot", .nat)] passageTy
 def coRels : List (Label × RelDecl) :=
   [("authors", authorsDecl), ("ballots", ballotsDecl), ("chapters", chaptersDecl), ("proposals", proposalsDecl)]
-/-- `edit` and `vote` read one pinned proposal; `seal` the round's proposals, one range of 8. -/
-def pinRead : List (Label × RelRead) := [("proposals", ⟨1, none⟩)]
-def rangeRead : List (Label × RelRead) := [("proposals", ⟨0, some (1, 8)⟩)]
 def proposeArg : Ty := .record [("slot", .nat), ("text", .bytes)]
 def voteArg : Ty := .record [("slot", .nat)]
-def coE : Ty := editTy coRels
-def coMTy (R A : Ty) (es : Nat) : Ty := methodTy coS A [] R coE es
-def coST : String := tyS coS
-def coOE : String := tyS (optTy coE)
-/-- One edit slot holding edit `arm` of relation `rel`. -/
-def coEdit (rel : Label) (d : RelDecl) (arm key val : String) : String :=
-  s!"(inj {coOE} some (inj {tyS coE} {rel} (inj {tyS (relEditTy d)} {arm} (record (key {key}) (val {val})))))"
-def coNoEdit : String := s!"(inj {coOE} none (record))"
-def coEdits (es : List String) : String :=
-  "(record" ++ String.join (es.zipIdx.map fun p => s!" (e{p.2} {p.1})") ++ ")"
-/-- A success: the edits, the state unchanged. -/
-def coOk (es : List String) : String := s!"(record (calls (record)) (edits {coEdits es}) (state s))"
-/-- `body` with `no`, the refusal by a reason: no edits, the state with `why` set. -/
-def coNo (es : Nat) (body : String) : String :=
-  s!"(let no (-> bytes {tyS (resultTy coS [] coE es)})
-    (lam y bytes (record (calls (record)) (edits {coEdits (List.replicate es coNoEdit)}) (state (extend s (why y)))))
-    {body})"
-def coHead (R A : Ty) : String := s!"(fn (v {tyS R}) (s {coST}) (a {tyS A}) (r {rq})"
-def coOpen : String := "(<= (. r validUntil) (. s closes))"
-/-- `ok` with `p` the pinned proposal row and `q` its value, when it is this round's at `a.slot`. -/
-def coPointed (ok : String) : String :=
-  s!"(case (. (. v proposals) p0) (none x (no \"unknown\"))
-      (some p (case (. p val) (none x (no \"unknown\"))
-        (some q (if (if (== (. (. p key) round) (. s round)) (== (. (. p key) slot) (. a slot)) false)
-          {ok} (no \"unknown\"))))))"
 
-/-- `propose {slot, text}`: late, slot, else the passage and its author (`keyTaken`: proposed). -/
-def coPropose : String :=
-  s!"{coHead (.record []) proposeArg}
-  {coNo 2 s!"(if {coOpen}
-    (if (< (. a slot) 8)
-      {coOk [coEdit "authors" authorsDecl "insert" "(record (author (. r agent)) (round (. s round)))" "(record (slot (. a slot)))",
-             coEdit "proposals" proposalsDecl "insert" "(record (round (. s round)) (slot (. a slot)))"
-               "(record (author (. r agent)) (text (. a text)) (votes 0))"]}
-      (no \"slot\"))
-    (no \"late\"))"})"
-
-/-- `edit {slot, text}`: late, unknown, notAuthor, else the pinned passage rewritten. -/
-def coEditM : String :=
-  s!"{coHead (readsTy coRels pinRead) proposeArg}
-  {coNo 1 s!"(if {coOpen}
-    {coPointed s!"(if (deq (. q author) (. r agent))
-      {coOk [coEdit "proposals" proposalsDecl "upsert" "(. p key)" "(extend q (text (. a text)))"]}
-      (no \"notAuthor\"))"}
-    (no \"late\"))"})"
-
-/-- `vote {slot}`: late, unknown, else the ballot (`keyTaken`: voted) and the pinned passage's count. -/
-def coVote : String :=
-  s!"{coHead (readsTy coRels pinRead) voteArg}
-  {coNo 2 s!"(if {coOpen}
-    {coPointed (coOk [coEdit "ballots" ballotsDecl "insert" "(record (round (. s round)) (voter (. r agent)))" "(record (slot (. a slot)))",
-                      coEdit "proposals" proposalsDecl "upsert" "(. p key)" "(extend q (votes (+ (. q votes) 1)))"])}
-    (no \"late\"))"})"
-
-/-- `seal {}`: early, round, empty, else the leader of the signed range (a row replaces it only with
-strictly more votes, so a tie keeps the earlier slot) is the round's chapter and the next round opens. -/
-def coSeal : String :=
-  let rg := "(. (. v proposals) range)"
-  let rowT := tyS (rowTy proposalsDecl)
-  let better (cur : String) (i : Nat) :=
-    s!"(case (. (. {rg} rows) r{i}) (none x {cur}) (some q (if (< (. (. {cur} val) votes) (. (. q val) votes)) q {cur})))"
-  let done (w : String) :=
-    s!"(record (calls (record))
-      (edits {coEdits [coEdit "chapters" chaptersDecl "insert" "(record (number (. s round)))" s!"(. {w} val)"]})
-      (state (extend s (closes (+ (. s closes) (. s window))) (round (+ (. s round) 1)))))"
-  let rec chain : List Nat → String → String
-    | [], cur => done cur
-    | i :: is, cur => s!"(let b{i} {rowT} {better cur i}\n      {chain is s!"b{i}"})"
-  s!"{coHead (readsTy coRels rangeRead) (.record [])}
-  {coNo 1 s!"(if (<= (. r notBefore) (. s closes)) (no \"early\")
-    (if (== (. (. {rg} pre) round) (. s round))
-      (case (. (. {rg} rows) r0) (none x (no \"empty\"))
-        (some b0 {chain [1, 2, 3, 4, 5, 6, 7] "b0"}))
-      (no \"round\")))"})"
-
-/-- The one law: an invoke whose new state names a reason is refused by it; only methods move a story. -/
-def coLaw : String :=
-  let ok := s!"(inj {verdictText} ok (record))"
-  s!"(fn (old {coST}) (new {coST}) (r {rq})
-  (case (. r occasion)
-    (adopt x {ok})
-    (birth x (if (beq (. new why) \"\") {ok} (inj {verdictText} refused \"seeded\")))
-    (invoke m (if (beq (. new why) \"\") {ok} (inj {verdictText} refused (. new why))))
-    (relaw x {ok})
-    (write x (inj {verdictText} refused \"only its methods move a story\"))))"
-
-def coRelText (ℓ : Label) (d : RelDecl) : String :=
-  s!"({ℓ} (key{String.join (d.key.map fun f => s!" ({f.1} {tyS f.2})")}) (val {tyS d.val}) (limit {d.limit}) (sum) (cap 0) (retract false) (guard))"
-
-/-- CoAuthor as a resident writes it. -/
-def coAuthorText : String := s!"
-(package (imports)
-  (state {coST})
-  (iface (rec (edit {tyS (coMTy (readsTy coRels pinRead) proposeArg 1)})
-              (propose {tyS (coMTy (.record []) proposeArg 2)})
-              (react (-> {coST} (-> {coST} (-> {rq} {verdictText}))))
-              (seal {tyS (coMTy (readsTy coRels rangeRead) (.record []) 1)})
-              (vote {tyS (coMTy (readsTy coRels pinRead) voteArg 2)})))
-  (methods propose edit vote seal)
-  (laws react)
-  (rels {String.intercalate "\n        " (coRels.map fun r => coRelText r.1 r.2)})
-  (body
-    (record
-      (propose {coPropose})
-      (edit {coEditM})
-      (vote {coVote})
-      (seal {coSeal})
-      (react {coLaw}))))
+/-- CoAuthor as a resident writes it, in the authoring surface (LANG-50). A method refuses by name
+(`refuse`, LANG-51), so the story has no `why` field and no law. The hand port's `react` law also
+refused a direct `write`; KERNEL refuses that first, `hasMethods`, for every programmed object, before
+any law runs (LS2b), so a law arm for it would be a no-op. A proposal's slot is the bounded argument
+`(nat 0 7)` (refused `slot 0..7`), its text `(bytes 1 2000)`. The seal's walk over the range is
+`fold`, the `let` chain LANG-47 wrote by hand. -/
+def coAuthorText : String := "
+(package
+  (type Passage (rec (author digest) (text bytes) (votes nat)))
+  (state (rec (closes nat) (round nat) (window nat)))
+  (rel authors (key (round nat) (author digest)) (val (rec (slot nat))) (limit 4096))
+  (rel ballots (key (round nat) (voter digest)) (val (rec (slot nat))) (limit 4096))
+  (rel chapters (key (number nat)) (val Passage) (limit 4096))
+  (rel proposals (key (round nat) (slot nat)) (val Passage) (limit 4096))
+  (method propose (arg (rec (slot (nat 0 7)) (text (bytes 1 2000)))) (edits 2)
+    (check ((<= req.validUntil state.closes) \"late\")
+      (done state
+        (insert authors (record (author req.agent) (round state.round)) (record (slot arg.slot)))
+        (insert proposals (record (round state.round) (slot arg.slot))
+                          (record (author req.agent) (text arg.text) (votes 0))))))
+  (method edit (reads (proposals (points 1))) (arg (rec (slot nat) (text (bytes 1 2000)))) (edits 1)
+    (check ((<= req.validUntil state.closes) \"late\")
+      (case rows.proposals.p0 (none _ (refuse \"unknown\"))
+        (some p (case p.val (none _ (refuse \"unknown\"))
+          (some q (check ((and (== p.key.round state.round) (== p.key.slot arg.slot)) \"unknown\")
+                         ((deq q.author req.agent) \"notAuthor\")
+            (done state (upsert proposals p.key (extend q (text arg.text)))))))))))
+  (method vote (reads (proposals (points 1))) (arg (rec (slot nat))) (edits 2)
+    (check ((<= req.validUntil state.closes) \"late\")
+      (case rows.proposals.p0 (none _ (refuse \"unknown\"))
+        (some p (case p.val (none _ (refuse \"unknown\"))
+          (some q (check ((and (== p.key.round state.round) (== p.key.slot arg.slot)) \"unknown\")
+            (done state
+              (insert ballots (record (round state.round) (voter req.agent)) (record (slot arg.slot)))
+              (upsert proposals p.key (extend q (votes (+ q.votes 1))))))))))))
+  (method seal (reads (proposals (range 1 8))) (edits 1)
+    (check ((not (<= req.notBefore state.closes)) \"early\")
+           ((== rows.proposals.range.pre.round state.round) \"round\")
+      (case rows.proposals.range.rows.r0 (none _ (refuse \"empty\"))
+        (some first
+          (fold (best (row proposals) first) (q proposals)
+            (if (< best.val.votes q.val.votes) q best)
+            (done (extend state (closes (+ state.closes state.window)) (round (+ state.round 1)))
+              (insert chapters (record (number state.round)) best.val))))))))
 "
 
 /-- A call signed by `m` with the window `[nb, vu]`, its row pins and its range reads (the Sim's
@@ -855,18 +895,18 @@ def passageIs (d : Option Data) (txt : String) (votes : Nat) : Bool :=
 def storyRows (mode : Mode) (r0 : Run) (a b : Sim.Member) : Run := Id.run do
   let prog := mode.program
   let mut r := r0
-  let p ← match Read.readPackage coAuthorText with
+  let p ← match Surface.readPackage coAuthorText with
     | .ok p => pure p
-    | .error e => return note r s!"LS0 read CoAuthor: {e.text}" false
+    | .error e => return note r s!"LS0 read CoAuthor: {e.text coAuthorText}" false
   let some pb := Wire.encodePackage p | return note r "LS0 CoAuthor has no bytes" false
   let printed := (Print.package p).getD ""
-  r := note r s!"LS0 CoAuthor read from text: {coAuthorText.length} chars, {(coAuthorText.splitOn "\n").length - 2} lines; {pb.size} package bytes; printed {printed.length} chars (by hand over lists: 63865 chars, 142 lines, 52965 package bytes)"
-    (printed != "" && p.rels == coRels)
+  r := note r s!"LS0 CoAuthor read from its surface text: {coAuthorText.length} chars, {(coAuthorText.splitOn "\n").length - 2} lines; core {printed.length} chars; {pb.size} package bytes (historical, the hand ports' cores, their code since replaced: over relations 37287 chars / 30028 bytes; over lists 63865 / 52965)"
+    (printed != "" && p.rels == coRels && p.laws.isEmpty)
   let (r1, v1, t1) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id]) (.install pb))
   r := note r1 s!"LS1 A installs CoAuthor: {v1}" (v1 == "admitted")
   let some pkg := t1.bind fun t => (createdIds t).head? | return note r "LS1 no package id" false
   let closes := r.st.host.height + 12
-  let seedText := s!"(record (closes {closes}) (round 1) (why \"\") (window 20))"
+  let seedText := s!"(record (closes {closes}) (round 1) (window 20))"
   let seed ← match Read.readData p.state seedText with
     | .ok (.record ds) => match stateSlots (recordRow p.state) ds 0 with
       | some s => pure s
@@ -877,6 +917,10 @@ def storyRows (mode : Mode) (r0 : Run) (a b : Sim.Member) : Run := Id.run do
   let some obj := t2.bind fun t => (createdIds t).head? | return note r2 "LS2 no object id" false
   r := note r2 s!"LS2 A starts a story closing at {closes}: {v2}; its four relations are born empty"
     (v2 == "admitted" && [0, 1, 2, 3].all fun i => headCount r2.st.host obj i == some 0)
+  -- LS2b the owner writes `closes` directly: KERNEL refuses it (`hasMethods`) before any law
+  let some far := nat64 (closes + 1000) | return note r "LS2b no bytes" false
+  let (_, v2b, _) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id, obj, pkg]) (.write obj [(stateBase, some far)] none))
+  r := note r s!"LS2b A writes the story's closing height directly: {v2b}" (v2b.startsWith "refused hasMethods")
   -- every member acts through a grant on every method (KERNEL-25: invoke is the owner's, or granted)
   let (rg, vg, tg) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id, b.id, obj])
     (.grant obj b.id [.invoke 0, .invoke 1, .invoke 2, .invoke 3] none))
@@ -909,34 +953,37 @@ def storyRows (mode : Mode) (r0 : Run) (a b : Sim.Member) : Run := Id.run do
   let passage (w : World D) (round slot : Nat) : Option Data :=
     storyRow w obj 3 proposalsDecl (.record [("round", .nat round), ("slot", .nat slot)])
   -- LS4/LS5 two proposals; a second by the same author is the kernel's `keyTaken` on `authors`
-  let c4 := call r a 0 (proposeA 0 "a light on the rock") 0 closes [] []
+  let c4 := call r a 1 (proposeA 0 "a light on the rock") 0 closes [] []
   let (r4, v4, t4) := go prog r c4
   r := note r4 s!"LS4 A proposes \"a light on the rock\" at slot 0: {v4}; {cost c4 r.st.host t4}"
     (v4 == "admitted" && passageIs (passage r4.st.host 1 0) "a light on the rock" 0 && headCount r4.st.host obj 0 == some 1)
-  let (r5, v5, _) := go prog r (call r b 0 (proposeA 1 "a ship in the fog") 0 closes [] [])
+  -- LS4b/LS4c the bounded argument forms refuse by field and bound, by name
+  let (_, v4b, _) := go prog r (call r a 1 (proposeA 9 "far out") 0 closes [] [])
+  r := note r s!"LS4b A proposes at slot 9: {v4b}" (refusedBy v4b "propose" "slot 0..7")
+  let (_, v4c, _) := go prog r (call r a 1 (proposeA 3 "") 0 closes [] [])
+  r := note r s!"LS4c A proposes an empty passage: {v4c}" (refusedBy v4c "propose" "text 1..2000")
+  let (r5, v5, _) := go prog r (call r b 1 (proposeA 1 "a ship in the fog") 0 closes [] [])
   r := note r5 s!"LS5 B proposes \"a ship in the fog\" at slot 1: {v5}" (v5 == "admitted")
-  let (r5b, v5b, _) := go prog r (call r a 0 (proposeA 2 "another") 0 closes [] [])
+  let (r5b, v5b, _) := go prog r (call r a 1 (proposeA 2 "another") 0 closes [] [])
   r := note { r5b with log := r.log, bad := r.bad } s!"LS5b A proposes again, at slot 2: {v5b} (Mini's alreadyProposed)" (v5b.startsWith "rejected keyTaken")
   -- LS6 votes: B for slot 1 (counted), B again (`keyTaken` on `ballots`), A for an empty slot (unknown)
-  let c6 := call r b 2 (voteA 1) 0 closes (pinP r.st.host 1 1) []
+  let c6 := call r b 3 (voteA 1) 0 closes (pinP r.st.host 1 1) []
   let (r6, v6, t6) := go prog r c6
   r := note r6 s!"LS6 B votes for slot 1: {v6}; {cost c6 r.st.host t6}"
     (v6 == "admitted" && passageIs (passage r6.st.host 1 1) "a ship in the fog" 1)
-  let (r6b, v6b, _) := go prog r (call r b 2 (voteA 0) 0 closes (pinP r.st.host 1 0) [])
+  let (r6b, v6b, _) := go prog r (call r b 3 (voteA 0) 0 closes (pinP r.st.host 1 0) [])
   r := note { r6b with log := r.log, bad := r.bad } s!"LS6b B votes again, for slot 0: {v6b} (Mini's alreadyVoted)" (v6b.startsWith "rejected keyTaken")
-  let (r6c, v6c, _) := go prog r (call r a 2 (voteA 5) 0 closes (pinP r.st.host 1 5) [])
-  if mode = .skipJudge then
-    return note r6c s!"PLANT skip-judge: LS6c A's vote for the empty slot 5 must now be ADMITTED: {v6c}" (v6c == "admitted")
-  r := note r6c s!"LS6c A votes for the empty slot 5: {v6c}" (deniedWith v6c "react: unknown")
+  let (r6c, v6c, _) := go prog r (call r a 3 (voteA 5) 0 closes (pinP r.st.host 1 5) [])
+  r := note r6c s!"LS6c A votes for the empty slot 5: {v6c}" (refusedBy v6c "vote" "unknown")
   -- LS7 edits: A may not edit B's passage; B rewrites it
-  let (r7, v7, _) := go prog r (call r a 1 (proposeA 1 "mine now") 0 closes (pinP r.st.host 1 1) [])
-  r := note r7 s!"LS7 A edits B's passage: {v7}" (deniedWith v7 "react: notAuthor")
-  let (r7b, v7b, _) := go prog r (call r b 1 (proposeA 1 "a ship in the mist") 0 closes (pinP r.st.host 1 1) [])
+  let (r7, v7, _) := go prog r (call r a 0 (proposeA 1 "mine now") 0 closes (pinP r.st.host 1 1) [])
+  r := note r7 s!"LS7 A edits B's passage: {v7}" (refusedBy v7 "edit" "notAuthor")
+  let (r7b, v7b, _) := go prog r (call r b 0 (proposeA 1 "a ship in the mist") 0 closes (pinP r.st.host 1 1) [])
   r := note r7b s!"LS7b B rewrites its passage: {v7b}"
     (v7b == "admitted" && passageIs (passage r7b.st.host 1 1) "a ship in the mist" 1)
   -- LS8 a seal inside the window is early
-  let (r8, v8, _) := go prog r (call r a 3 noA 0 (r.st.host.height + 50) [] (rangeP r.st.host 1))
-  r := note r8 s!"LS8 A seals while the round is open: {v8}" (deniedWith v8 "react: early")
+  let (r8, v8, _) := go prog r (call r a 2 noA 0 (r.st.host.height + 50) [] (rangeP r.st.host 1))
+  r := note r8 s!"LS8 A seals while the round is open: {v8}" (refusedBy v8 "seal" "early")
   -- the World moves past `closes` (lawless data objects, one turn each)
   for _ in [0:20] do
     if r.st.host.height ≤ closes then
@@ -944,7 +991,7 @@ def storyRows (mode : Mode) (r0 : Run) (a b : Sim.Member) : Run := Id.run do
       r := { rp with log := r.log, bad := r.bad }
   -- LS9 the seal over the round's one range: B's rewritten passage (1 vote, the LAST row) beats A's
   let hs := r.st.host.height
-  let c9 := call r a 3 noA (closes + 1) (hs + 50) [] (rangeP r.st.host 1)
+  let c9 := call r a 2 noA (closes + 1) (hs + 50) [] (rangeP r.st.host 1)
   let (r9, v9, t9) := go prog r c9
   let chapter := storyRow r9.st.host obj 2 chaptersDecl (.record [("number", .nat 1)])
   if mode = .dropRangeRow then
@@ -954,8 +1001,8 @@ def storyRows (mode : Mode) (r0 : Run) (a b : Sim.Member) : Run := Id.run do
     (v9 == "admitted" && passageIs chapter "a ship in the mist" 1 && headCount r9.st.host obj 2 == some 1)
   -- LS10 round two: two proposals signed over ONE view land, in both orders, to the same World
   let closes2 := closes + 20
-  let c10a := call r a 0 (proposeA 0 "the keeper wakes") 0 closes2 [] []
-  let c10b := call r b 0 (proposeA 1 "the lamp goes out") 0 closes2 [] []
+  let c10a := call r a 1 (proposeA 0 "the keeper wakes") 0 closes2 [] []
+  let c10b := call r b 1 (proposeA 1 "the lamp goes out") 0 closes2 [] []
   let (q10b, w10b, _) := go prog r c10b
   let (q10ba, w10ba, _) := go prog q10b c10a
   let (r10a, v10a, _) := go prog r c10a
@@ -968,8 +1015,8 @@ def storyRows (mode : Mode) (r0 : Run) (a b : Sim.Member) : Run := Id.run do
       q10ba.st.host.rowsRoot Sim.env == r.st.host.rowsRoot Sim.env && q10ba.st.host.root Sim.env == r.st.host.root Sim.env)
   -- LS11 a vote and an edit of the SAME proposal over one view: the pinned row moved, honestly stale
   let pin11 := pinP r.st.host 2 1
-  let c11a := call r a 2 (voteA 1) 0 closes2 pin11 []
-  let c11b := call r b 1 (proposeA 1 "the lamp burns") 0 closes2 pin11 []
+  let c11a := call r a 3 (voteA 1) 0 closes2 pin11 []
+  let c11b := call r b 0 (proposeA 1 "the lamp burns") 0 closes2 pin11 []
   let (r11a, v11a, _) := go prog r c11a
   r := note r11a s!"LS11a A votes for B's round-two passage: {v11a}" (v11a == "admitted")
   let (r11b, v11b, _) := go prog r c11b
@@ -1182,6 +1229,8 @@ def journey (mode : Mode) : Run := Id.run do
     return callRows mode r a
   if mode = .dropRangeRow then
     return storyRows mode r a b
+  if mode = .foreignRow then
+    return tallyRows mode r a b
   -- L0 the resident's text reads to exactly the package
   let some ownedBytes := Wire.encodePackage owned | return note r "L0 Owned has no bytes" false
   let some illBytes := Wire.encodePackage illTyped | return note r "L0 illTyped has no bytes" false
@@ -1434,7 +1483,7 @@ def journey (mode : Mode) : Run := Id.run do
 
 def runAll : IO UInt32 := do
   let runs := [Mode.honest, .skipJudge, .eraseOccasion, .erasePayload, .dropCalls, .rawInstall, .bytesIds,
-    .skipLits, .totalDigest, .unlawfulCodec, .dropRangeRow].map journey
+    .skipLits, .totalDigest, .unlawfulCodec, .dropRangeRow, .foreignRow].map journey
   for r in runs do for l in r.log do IO.println l
   let bad := (runs.map (·.bad)).foldl (· + ·) 0
   IO.println s!"lang-journey: {if bad = 0 then "GREEN" else s!"RED ({bad})"}"

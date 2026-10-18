@@ -1,0 +1,5 @@
+(package
+  (state (rec (entry bytes) (kind (enum app resident)) (phase (enum installed removed running stopped))))
+  (machine phase installed (methods remove start stop)
+    (installed remove removed) (installed start running) (running stop stopped)
+    (stopped remove removed) (stopped start running)))

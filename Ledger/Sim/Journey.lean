@@ -40,6 +40,7 @@ import Kernel.Sim
 import Lang.Program
 import Lang.Print
 import Lang.Read
+import Lang.Surface
 import Ledger.Escrow
 
 namespace Nanodregg.Ledger.Sim
@@ -49,6 +50,15 @@ open Nanodregg.Ledger.Escrow
 abbrev D := Kernel.Sim.D
 
 def textPath : System.FilePath := "world" / "escrow" / "Escrow"
+
+/-- The escrow package's surface source (LANG-50): the core text is written from it. -/
+def sourcePath : System.FilePath := "world" / "escrow" / "Escrow.ob"
+
+/-- E0s: the surface source lowers to exactly the shipped core; one flipped reason is caught. -/
+def sourceLine : IO (String × Bool) := do
+  let src ← try IO.FS.readFile sourcePath catch _ => pure ""
+  let core ← try IO.FS.readFile textPath catch _ => pure ""
+  return Surface.shippedRow "E0s" src core escrow ("\"notOpen\")", "\"notHeld\")")
 
 def langProgram : Program D := Lang.program Kernel.Sim.dc.bytes Kernel.Sim.digestOf
 def skipJudge : Program D := { langProgram with judge := fun _ _ _ _ _ _ => .ok () }
@@ -279,7 +289,9 @@ def journey (mode : Mode) : Run := Id.run do
 
 def runAll (args : List String) : IO UInt32 := do
   if args == ["--write-text"] then
-    let some t := Print.package escrow | IO.eprintln "no text"; return 1
+    -- the core text is written from the surface source, through the lowering (LANG-50)
+    let src ← IO.FS.readFile sourcePath
+    let some t := Surface.coreText src | IO.eprintln s!"{sourcePath} does not lower"; return 1
     IO.FS.createDirAll (textPath.parent.getD ".")
     IO.FS.writeFile textPath t
     IO.println s!"wrote {textPath}"
@@ -293,9 +305,11 @@ def runAll (args : List String) : IO UInt32 := do
   | _ => IO.eprintln "usage: ledger-sim [SEED | --write-text]"; return 2
   let (l0, ok0) ← textLine
   IO.println s!"{if ok0 then "ok  " else "FAIL"} {l0}"
+  let (ls, oks) ← sourceLine
+  IO.println s!"{if oks then "ok  " else "FAIL"} {ls}"
   let runs := [Mode.honest, .skipJudge, .twoKeys, .dropCalls].map journey
   for r in runs do for l in r.log do IO.println l
-  let bad := runs.foldl (· + ·.bad) (if ok0 then 0 else 1)
+  let bad := runs.foldl (· + ·.bad) ((if ok0 then 0 else 1) + (if oks then 0 else 1))
   IO.println (if bad = 0 then "ALL PASS" else s!"ledger-sim: RED ({bad})")
   return if bad = 0 then 0 else 1
 

@@ -38,6 +38,7 @@ import Kernel.Sim
 import Lang.Program
 import Hosting.Package
 import Lang.Print
+import Lang.Surface
 import Hosting.Controller
 import Hosting.Loop
 
@@ -48,6 +49,9 @@ open Nanodregg.Hosting Nanodregg.Hosting.Grain
 abbrev D := Kernel.Sim.D
 
 def textPath : System.FilePath := "world" / "grain" / "Lifecycle"
+
+/-- The grain package's surface source (LANG-50): the core text is written from it. -/
+def sourcePath : System.FilePath := "world" / "grain" / "Lifecycle.ob"
 
 def langProgram : Program D := Lang.program Kernel.Sim.dc.bytes Kernel.Sim.digestOf
 def skipJudge : Program D := { langProgram with judge := fun _ _ _ _ _ _ => .ok () }
@@ -234,5 +238,12 @@ def textLine : IO (String × Bool) := do
   let have_ ← try IO.FS.readFile textPath catch _ => pure ""
   if have_ == want then return (s!"G0 {textPath} is the generated text ({want.length} bytes)", true)
   return (s!"G0 {textPath} differs from Lang.Print.package lifecycle (hosting-sim --write-text rewrites it)", false)
+
+/-- G0s: the surface source lowers to exactly the shipped core; one flipped edge is caught. -/
+def sourceLine : IO (String × Bool) := do
+  let some want := lifecycle | return ("G0s the grain package is not built", false)
+  let src ← try IO.FS.readFile sourcePath catch _ => pure ""
+  let core ← try IO.FS.readFile textPath catch _ => pure ""
+  return Lang.Surface.shippedRow "G0s" src core want ("(running stop stopped)", "(running stop removed)")
 
 end Nanodregg.Hosting.Sim
