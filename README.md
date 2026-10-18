@@ -114,4 +114,4 @@ its own row of the charter before building it; twenty-seven short prototypes wer
 missing surfaces and six assemblies chose what to keep. The day's record, including every ruling
 and every mistake, is in the project log outside this repository.
 
-License: not yet declared.
+License: AGPL-3.0 (see LICENSE).
