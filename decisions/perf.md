@@ -208,9 +208,16 @@ One condition is NOT met as ruled: trie hashes per step are counted (15.1–16.0
 but are not pinned. The trie's shape follows the ids. The ids follow each signed call's bytes, and those
 follow the run's random custody keys and genesis nonce, so the ratio moves by about 0.5 between identical
 runs. A ceiling pinned at one run's value would go red on a later honest run.
-To pin it, the bar's identities must be fixed: a seeded custody for the bar. That is key material (CLAUDE.md
-pause item 1, CLIENT's custody), so it is ROOT's call. Until then the line is
-`BAR count audit-hashes-per-step R (varies …: not pinned)`.
+Resolved by ROOT on the same day.
+- **No seeded custody.** The deployed client has no mode that makes keys predictable (PROTOCOL-32's rule
+  applied to key material).
+- **The row.** `bar trie-hashes-per-step` is pinned as a DRAW-DEPENDENT gross-regression ceiling of 19.5:
+  mean + 6 sd over 17 identical runs (14.37–16.96, mean 15.475, sd 0.663).
+- **Why not tighter.** A max-observed ceiling (16.1, or 17.0) would read red on about one honest run in 18.
+  kernel-sim's draw-dependent rows are fixed seeds; bar.sh draws fresh keys on every judge.
+- **How it moves.** It is never re-pinned upward, and a run above it is red. It is lowered only by decision,
+  or when KERNEL's draw-independent instrument (cv 01a14afe-7380, now noted with this consumer) replaces it.
+- **Visibility.** The exact per-run count is still printed, so drift inside the ceiling stays visible.
 
 ## PERF-4 · C6: THE BAR seals a base at its midpoint; the reopen reads base + tail (2026-10-18)
 
@@ -244,5 +251,60 @@ base-plus-tail path, the one law 5 is about, never ran in it.
 
 **META-CRITIQUE.** I chose the midpoint because it halves the tail visibly, not because a midpoint is
 anyone's worst case.
+
+**Status.** open.
+
+## PERF-5 · THE BAR's reopen at the true worst cut: a sized, standing-only bench row (2026-10-18)
+
+**Decision.** `bench-worstcut SCRATCH [--harness-control]` (Bench/WorstCut.lean) builds a Store on the
+deployed path:
+- `Receive.genesis` and `Receive.submit` under Host.Deployed.X, then `Host.genesis`, `openWriter`, and
+  `commitBatch`, each frame committed only with `withinTail`'s proof;
+- one founder births one data object, and `sealNow` seals a base over it;
+- the tail is filled with one-slot writes, `recordTurnsMax` per record, until `withinTail` refuses the next
+  frame. That is the most a reopen can ever fold past its base, in the smallest Turns, so the most steps.
+
+The calls are signed by `Kernel.Sim.Deployed.params` (Ed25519 from a Sim tag's seed). That is a bench's
+fixed identity, not a custody mode, so every count is a function of the code. The Store's random key moves
+MAC bytes only.
+
+Counted, each run required to reach the uncounted reopen's World:
+- the reopen, `foldStep` under countingEnv with a counted verify (HOST-22's path);
+- the follower re-derivation, `auditStep`.
+
+The tail must fill at least 99 % of tailMax, else `FAIL not the worst cut`. That is a floor, so it is the
+exe's own check; `withinTail` is the ceiling, by proof.
+
+Measured (deterministic, two runs equal):
+- the cut: 28,928 steps, 452 records, 18,850,208 bytes of tailMax 18,876,520 (0.999), over a 588-byte base;
+- reopen: 20.374 trie hashes and 0.000 verifies per step;
+- re-derivation: 20.374 trie hashes and 1.000 verifies per step;
+- cost: 2 min 16 s and 87 MB on hbox.
+
+It is a `standing:` row (GATES-17), never run by pre-push (ROOT: 4.5 min per judge with its control is too
+much on shared slots). Its 4 WASTE rows (op `worstcut`) are gated in standing and never re-pinned upward.
+The control requires the cut to exceed tailMax, which `withinTail` forbids, and reads
+`FAIL harness-control`.
+
+**Alternatives.**
+- (a) A bar run of 25k records over sockets: about 17 minutes of socket work per measure, for counts the
+  bench gives exactly.
+- (b) The parked b616a8d drivers (wall-clock medians): refused by the no-wall-clock rule, and stale against
+  today's API.
+- (c) Big births to fill the tail in fewer steps: the fewest steps is the best case for the fold, not the
+  worst.
+
+**Why.** THE BAR's 60 s reopen is the one limit not checked at its worst case. Its counts at the cut are what
+a deployed restart pays at most.
+
+**CRITIQUE.**
+- One object and one founder: the World is tiny (588 B base), so this is the worst TAIL. The worst World
+  (`worldBytesMax`, 256 MiB base) is a different axis, and still unmeasured.
+- 20.374 hashes per step is mostly the journal's window. It is pinned as measured, without a model of it.
+- The tail ratio of 0.999 depends on frame sizes, so it is checked as a floor rather than pinned.
+
+**META-CRITIQUE.** I picked writes to one object because they are the smallest Turn I could make. I did not
+prove they are the most expensive per step for the fold. A tail of births grows the trie and may cost more
+hashes per step.
 
 **Status.** open.

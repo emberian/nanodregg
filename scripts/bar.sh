@@ -29,8 +29,9 @@
 # come from `bench-count W` (PERF-3): the follower's re-derivation of the writer's tail under
 # KERNEL-36's countingEnv at deployed parameters, required to reach the host's own World, with a
 # toy-Store plant it must refuse by name. The host process counts nothing (law 3). Verifies per step
-# are exact and pinned; hashes per step depend on the trie's shape, which the run's random keys and
-# nonce draw, so they are reported, not pinned. Lang ticks: not counted.
+# are exact; trie hashes per step depend on the trie's shape, which the run's random keys and nonce
+# draw, so their ceiling is the max observed over many runs (ROOT, as kernel-sim's draw-dependent rows;
+# a run above it is red, never a re-pin). Lang ticks: not counted.
 #
 # Wall clock (`BAR write-p99-ms V limit L`, reopen-ms) is reported with the load average beside it
 # and judged only in full mode on a quiet box (load1 < 2 before and after; else UNJUDGED, never
@@ -92,7 +93,24 @@ if [ -n "$base" ]; then
   stores=$(mktemp -d "$(cd "$base" && pwd -P)/ndbar.XXXXXX") || { echo "BAR verdict RED setup: mktemp under $base"; rm -rf "$root"; exit 1; }
 else stores=$root
 fi
-trap 'for p in "$root"/*.pid; do [ -f "$p" ] && kill "$(cat "$p")" 2>/dev/null; done; rm -rf "$root" "$stores"' EXIT
+# PID files live OUTSIDE the directories this removes (ROOT, after two orphaned trees whose PID files
+# died with their run root): $HOME/.nd-bar/run.XXXXXX/NAME.pid, each removed only once its process is
+# seen gone, so a supervisor that outlives this script is still findable, and stoppable, by its file.
+mkdir -p -m 700 "$HOME/.nd-bar" || { echo "BAR verdict RED setup: mkdir $HOME/.nd-bar"; exit 1; }
+pids=$(mktemp -d "$HOME/.nd-bar/run.XXXXXX") || { echo "BAR verdict RED setup: mktemp under $HOME/.nd-bar"; exit 1; }
+cleanup() {
+  local p pid k
+  for p in "$pids"/*.pid; do [ -f "$p" ] && kill "$(cat "$p")" 2>/dev/null; done
+  for p in "$pids"/*.pid; do
+    [ -f "$p" ] || continue
+    pid=$(cat "$p")
+    for k in $(seq 1 100); do kill -0 "$pid" 2>/dev/null || break; sleep 0.1; done
+    if kill -0 "$pid" 2>/dev/null; then echo "BAR left running: pid $pid, its PID file $p" >&2; else rm -f "$p"; fi
+  done
+  rmdir "$pids" 2>/dev/null
+  rm -rf "$root" "$stores"
+}
+trap cleanup EXIT
 
 lim() { awk -F'\t' -v m="$1" '$1=="limit" && $2==m {print $3}' "$here/gates/bar.tsv"; }
 [ -n "$(lim write-p99-ms)" ] && [ -n "$(lim reopen-ms)" ] || { echo "BAR verdict RED gates/bar.tsv has no limit rows"; exit 1; }
@@ -100,11 +118,12 @@ scale=1; [ $control = 1 ] && scale=0
 wlim=$(awk -v l="$(lim write-p99-ms)" -v s="$scale" 'BEGIN{print l*s}')
 rlim=$(awk -v l="$(lim reopen-ms)" -v s="$scale" 'BEGIN{print l*s}')
 
-python3 -I - "$root" "$HOST" "$BIN" "$records" "$standing" "$control" "$stores" <<'PY' > "$root/out"
+python3 -I - "$root" "$HOST" "$BIN" "$records" "$standing" "$control" "$stores" "$pids" <<'PY' > "$root/out"
 import os, socket, struct, subprocess, sys, threading, time
 root, host, bindir = sys.argv[1], sys.argv[2], sys.argv[3]
 count = os.path.join(os.path.dirname(host), "bench-count")
-records, standing, control, stores = int(sys.argv[4]), sys.argv[5] == "1", sys.argv[6] == "1", sys.argv[7]
+records, standing, control, stores, pids = int(sys.argv[4]), sys.argv[5] == "1", sys.argv[6] == "1", sys.argv[7], sys.argv[8]
+def pidfile(name): return os.path.join(pids, name + ".pid")
 nd, sup = os.path.join(bindir, "nd"), os.path.join(bindir, "nd-supervise")
 red = []
 
@@ -149,11 +168,11 @@ if os.path.exists("/proc/self/mounts"):
 print(f"BAR fs {fstype}")
 
 def start(name, sock, hides, store, args):
-    """nd-supervise SOCK --hide … --write STORE --exec HOST -- HOST ARGS…, its PID in ROOT/NAME.pid
+    """nd-supervise SOCK --hide … --write STORE --exec HOST -- HOST ARGS…, its PID in PIDS/NAME.pid
     (the program is named to the sandbox: Linux's bwrap floor refuses one outside every path)."""
     cmd = [sup, sock] + sum((["--hide", h] for h in hides), []) + ["--write", store, "--exec", host, "--", host] + args
     p = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=open(os.path.join(root, name + ".err"), "w"))
-    open(os.path.join(root, name + ".pid"), "w").write(str(p.pid))
+    open(pidfile(name), "w").write(str(p.pid))
     return p
 
 def bound(sock, deadline_s):
@@ -176,11 +195,11 @@ def descendants(pid):
 
 def stop(name, p):
     """Stop a supervisor by its PID file; wait (deadline) for it and for every process under it."""
-    pid = int(open(os.path.join(root, name + ".pid")).read())
+    pid = int(open(pidfile(name)).read())
     kids = descendants(pid)
     os.kill(pid, 15)
     p.wait(timeout=30)
-    os.unlink(os.path.join(root, name + ".pid"))
+    os.unlink(pidfile(name))
     end = time.monotonic() + 30
     for k in kids:   # the child sees EOF on stdin and exits, releasing the Store's lock
         while time.monotonic() < end:
@@ -192,7 +211,7 @@ def stop(name, p):
 
 def hostio(name):
     """The confined `host` process's /proc/PID/io under supervisor NAME (Linux), else None."""
-    pid = int(open(os.path.join(root, name + ".pid")).read())
+    pid = int(open(pidfile(name)).read())
     for k in descendants(pid):
         try:
             if open(f"/proc/{k}/comm").read().strip() == "host":
@@ -252,7 +271,7 @@ def baseline(n):
     """Supervisor N's fds at rest: the least of 10 samples over 0.5 s (the probe connection `bound`
     made is closed by the mux asynchronously), None off Linux."""
     if not os.path.isdir("/proc/self/fd"): return None
-    pid = int(open(os.path.join(root, n + ".pid")).read())
+    pid = int(open(pidfile(n)).read())
     v = []
     for _ in range(10):
         v.append(len(os.listdir(f"/proc/{pid}/fd"))); time.sleep(0.05)
@@ -341,7 +360,7 @@ workload([p[len(p) // 2:] for p in plan])
 
 def fds(name):
     """Open file descriptors of supervisor NAME (Linux /proc), else None."""
-    try: return len(os.listdir(f"/proc/{int(open(os.path.join(root, name + '.pid')).read())}/fd"))
+    try: return len(os.listdir(f"/proc/{int(open(pidfile(name)).read())}/fd"))
     except OSError: return None
 
 # every follow at the writer's tip, and the writer holding each follow's head
@@ -437,9 +456,8 @@ print(f"BAR count reopen-tail-bytes {tailb} past the base at step {s1['base_step
 print(f"BAR count reopen-tail-bytes-per-command {ratio(tailb)}")
 if standing and not control:
     print(f"WASTE bar reopen-tail-bytes-per-command {ratio(tailb)}")
-    for l in bcl:   # verifies per step are exact; hashes per step vary with the drawn trie (reported)
-        if l.startswith("WASTE bar audit-verifies-per-step "): print(l)
-        elif l.startswith("WASTE bar audit-hashes-per-step "): print("BAR count" + l[len("WASTE bar"):] + " (varies with the run's random keys: not pinned)")
+    for l in bcl:   # verifies per step are exact; trie hashes per step are draw-dependent (ROOT: pinned at the max observed)
+        if l.startswith("WASTE bar "): print(l)
 print("BAR unmeasured ticks per command: no deployed counter for the Lang machine (PERF-3 counts hashes and verifies)")
 times.sort()
 ms = lambda ns: round(ns / 1e6, 3)

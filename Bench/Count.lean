@@ -22,7 +22,7 @@ The count is of the real workload or it is refused:
   replayed chain must equal the host's chain with its first byte flipped. It reads
   `FAIL harness-control …`.
 
-Prints `COUNT …` lines, `WASTE bar audit-hashes-per-step R`, `WASTE bar audit-verifies-per-step R`
+Prints `COUNT …` lines, `WASTE bar trie-hashes-per-step R`, `WASTE bar audit-verifies-per-step R`
 (per step of the tail the open replays: the steps past the newest base), and `BENCH-COUNT PASS`.
 -/
 import Host.Deployed
@@ -109,7 +109,7 @@ def count (args : List String) : IO UInt32 := do
   if steps == 0 then IO.println "FAIL count: no step past the base to count"; return 1
   let (h, v) := (marks err '#', marks err '@')
   IO.println s!"COUNT steps {steps} (past the base at step {o.sealed.steps}, offset {o.sealed.offset}) trie-hashes {h} verifies {v}"
-  IO.println s!"WASTE bar audit-hashes-per-step {ratio h steps}"
+  IO.println s!"WASTE bar trie-hashes-per-step {ratio h steps}"
   IO.println s!"WASTE bar audit-verifies-per-step {ratio v steps}"
   IO.println "BENCH-COUNT PASS"
   return 0

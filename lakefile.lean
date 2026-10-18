@@ -130,6 +130,10 @@ extern_lib «ndhost» pkg := do
 @[default_target] lean_exe «bench-count» where
   root := `Bench.CountMain
 
+-- THE BAR's reopen at the tailMax worst cut, a sized bench row: `bench-worstcut SCRATCH [--harness-control]` (PERF-5).
+@[default_target] lean_exe «bench-worstcut» where
+  root := `Bench.WorstCutMain
+
 -- OPS: renderers and drivers over the real `host` (nothing imports Ops).
 @[default_target] lean_lib Ops where
   globs := #[.submodules `Ops]
