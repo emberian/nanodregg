@@ -53,10 +53,7 @@ theorem refuse_steps {E : Env D} {w w' : World D} {r : Refused D} (h : World.ref
 theorem refuse_chain {E : Env D} {w w' : World D} {r : Refused D} (h : World.refuse E w r = .ok w') :
     w'.chain = refusalLink E w.chain r (w'.roots E) := by
   obtain ⟨_, rfl⟩ := refuse_ok h
-  unfold commitRefusal World.roots World.root World.journalRoot World.refusalsRoot World.rowsRoot
-  dsimp only
-  rw [Trie.rootWith_eq (trieSpec E) _ _ rfl, Trie.rootWith_eq (journalSpec E) _ _ rfl,
-    Trie.rootWith_eq (refusalSpec E) _ _ rfl, Trie.rootWith_eq (rowSpec E) _ _ rfl]
+  rfl
 
 theorem admit_steps {E : Env D} {w w' : World D} {t : Turn D} (h : World.admit E w t = .ok w') :
     w'.steps = w.steps + 1 := by

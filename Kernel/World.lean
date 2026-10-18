@@ -686,6 +686,16 @@ def bornId (E : Env D) (txId : D) (p : Cell × Nat) : D :=
 /-- The ids a turn's births carry (explicit in the Turn, D5). -/
 def createdIds (t : Turn D) : List D := t.creates.map Prod.fst
 
+/-- The roots digest of four tries, as a head commits it and as every read of it recomputes it: ONE
+lazy copy of the empty trie's digest shared by the four (KERNEL-35 at the roots: all four tries hash
+the empty tag in `domTrie`, so it is one value), so a roots digest costs at most one hash for its
+empty tries. `commitWith`, `commitRefusal` and `World.roots` all take it (cv 01a15107-2272: the
+read took each root's `hashOf`, one empty digest per empty trie, on every record check). -/
+def rootsOf (E : Env D) (trie : Cells D) (journal : Journal D) (refusals : Refusals D) (rows : Rows D) : D :=
+  let e : Thunk D := Thunk.mk fun _ => Trie.emptyHash (trieSpec E)
+  rootsDigest E (trie.rootWith (trieSpec E) e) (journal.rootWith (journalSpec E) e)
+    (refusals.rootWith (refusalSpec E) e) (rows.rootWith (rowSpec E) e)
+
 namespace World
 
 /-- The chain a World with identity `origin` starts at (KERNEL-24): `H(domGenesis, origin)`. -/
@@ -713,8 +723,7 @@ def rowsRoot (E : Env D) (w : World D) : D := w.rows.hashOf (rowSpec E)
 
 /-- The one digest of the roots a head link commits (`chainNext`, `refusalLink`): the cells', the
 journal's, the refusals' (KERNEL-47 amendment 3) and the rows' (KERNEL-48). -/
-def roots (E : Env D) (w : World D) : D :=
-  rootsDigest E (w.root E) (w.journalRoot E) (w.refusalsRoot E) (w.rowsRoot E)
+def roots (E : Env D) (w : World D) : D := rootsOf E w.trie w.journal w.refusals w.rows
 
 /-- What `w`'s roots digest hashes. -/
 def rootsPre (E : Env D) (w : World D) : String × ByteArray :=
@@ -1398,9 +1407,6 @@ def pruneRefusals (E : Env D) (H : Nat) (r : Refusals D) : Refusals D :=
 /-- The World after a checked turn, given the rows `rowsRun` reached (`rr`). Total: everything that
 can fail failed in `checkWith`. -/
 def commitWith (E : Env D) (w : World D) (t : Turn D) (posts : List (Post D)) (rr : Rows D × Nat) : World D :=
-  -- ONE lazy copy of the empty trie's digest for the four roots (KERNEL-35, at the roots only): all
-  -- four hash in `domTrie`, so their empty digest is one value
-  let e : Thunk D := Thunk.mk fun _ => Trie.emptyHash (trieSpec E)
   let trie := commitTrie E w t posts
   let journal := commitJournal E w t
   let refusals := pruneRefusals E (w.height + 1) w.refusals
@@ -1411,9 +1417,7 @@ def commitWith (E : Env D) (w : World D) (t : Turn D) (posts : List (Post D)) (r
     rows
     height := w.height + 1
     steps := w.steps + 1
-    chain := chainNext E w.chain t
-      (rootsDigest E (trie.rootWith (trieSpec E) e) (journal.rootWith (journalSpec E) e)
-        (refusals.rootWith (refusalSpec E) e) (rows.rootWith (rowSpec E) e))
+    chain := chainNext E w.chain t (rootsOf E trie journal refusals rows)
     allowance := w.allowance + credit posts + rr.2 - t.charge
     origin := w.origin }
 
@@ -1612,14 +1616,11 @@ def commitRefusals (E : Env D) (w : World D) (r : Refused D) : Refusals D :=
 /-- The World after a checked refusal: only the refusals, the step counter and the chain move. The
 cells, the journal, the height and the allowance are untouched (`refuse_frame`). -/
 def commitRefusal (E : Env D) (w : World D) (r : Refused D) : World D :=
-  let e : Thunk D := Thunk.mk fun _ => Trie.emptyHash (refusalSpec E)
   let refusals := commitRefusals E w r
   { w with
     refusals
     steps := w.steps + 1
-    chain := refusalLink E w.chain r
-      (rootsDigest E (w.trie.rootWith (trieSpec E) e) (w.journal.rootWith (journalSpec E) e)
-        (refusals.rootWith (refusalSpec E) e) (w.rows.rootWith (rowSpec E) e)) }
+    chain := refusalLink E w.chain r (rootsOf E w.trie w.journal refusals w.rows) }
 
 /-- Record a refusal (KERNEL-44). Fail-closed like `World.admit`. -/
 def World.refuse (E : Env D) (w : World D) (r : Refused D) : Except (Reject D) (World D) :=

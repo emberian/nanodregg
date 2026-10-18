@@ -398,7 +398,8 @@ theorem head_roots {w w' : World D} {s : Step D} (h : World.step E w s = .ok w')
   have hl : foldLinks E w [s] = [stepLinkPre E w.chain s (w'.roots E)] := by simp [foldLinks, h]
   rw [step_chain h] at hhead
   rcases headLink_roots hE hhead with rfl | col
-  · rcases rootsDigest_inj hE hrd with hr | col
+  · rw [World.roots_eq] at hrd
+    rcases rootsDigest_inj hE hrd with hr | col
     · exact .inl hr
     · refine .inr (CollidesAmong.mono (fun x hx => ?_) col)
       simp only [List.mem_cons, List.mem_nil_iff, or_false] at hx

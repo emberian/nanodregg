@@ -82,7 +82,16 @@ theorem admit_height {E : Env D} {w w' : World D} {t : Turn D}
 theorem admit_chain {E : Env D} {w w' : World D} {t : Turn D}
     (h : World.admit E w t = .ok w') : w'.chain = chainNext E w.chain t (w'.roots E) := by
   obtain ⟨_, _, rfl⟩ := admit_ok h
-  unfold commit commitWith World.roots World.root World.journalRoot World.refusalsRoot World.rowsRoot
+  rfl
+
+omit [DecidableEq D] in
+/-- **The roots a read recomputes are the roots' own digests** (cv 01a15107-2272): `World.roots`
+takes the four roots through ONE shared lazy empty digest (`rootsOf`), and that is the digest of
+the four roots' `hashOf`, each empty trie's being the empty digest. So sharing the empty digest
+changed no roots value: no head, record or proof digest moves. -/
+theorem World.roots_eq (E : Env D) (w : World D) :
+    w.roots E = rootsDigest E (w.root E) (w.journalRoot E) (w.refusalsRoot E) (w.rowsRoot E) := by
+  unfold World.roots rootsOf World.root World.journalRoot World.refusalsRoot World.rowsRoot
   dsimp only
   rw [Trie.rootWith_eq (trieSpec E) _ _ rfl, Trie.rootWith_eq (journalSpec E) _ _ rfl,
     Trie.rootWith_eq (refusalSpec E) _ _ rfl, Trie.rootWith_eq (rowSpec E) _ _ rfl]

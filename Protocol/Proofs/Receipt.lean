@@ -48,6 +48,7 @@ theorem check_committed {w : World D} (hc : w.JournalCanon E)
       CollidesAmong E.hash ([rootsPre E r.root r.jroot r.rroot r.rowsroot, w.rootsPre E] ++
         inclPres (journalSpec E) (journalPre E) txId (h, td) r.jpath w.journal) := by
   obtain ⟨-, hr, ha⟩ := check_ok hk
+  rw [World.roots_eq] at hr
   rcases rootsDigest_inj hE hr with ⟨-, hj, -, -⟩ | col
   · unfold answerOf at ha
     split at ha
@@ -83,6 +84,7 @@ theorem check_absent {w : World D} (hc : w.JournalCanon E)
       split at ha
       · rename_i hv
         refine ⟨by simpa using hf, ?_⟩
+        rw [World.roots_eq] at hr
         rcases rootsDigest_inj hE hr with ⟨-, hj, -, -⟩ | col
         · rw [hj] at hv
           exact (journal_exclusion_sound hE hn hc hv.1).imp_right
@@ -105,6 +107,7 @@ theorem check_refused_uncommitted {w : World D} (hc : w.JournalCanon E)
   · split at ha <;> cases ha
   · split at ha
     · rename_i hv
+      rw [World.roots_eq] at hr
       rcases rootsDigest_inj hE hr with ⟨-, hj, -, -⟩ | col
       · have hx := hv.2.2.2
         rw [hj] at hx
@@ -141,6 +144,7 @@ theorem check_refused_sound {w : World D} (hr : w.RefusalsOk E)
   · split at ha
     · rename_i hv
       cases ha
+      rw [World.roots_eq] at hrd
       rcases rootsDigest_inj hE hrd with ⟨-, -, hrr, -⟩ | col
       · have hx := hv.2.2.1
         rw [hrr] at hx
@@ -170,6 +174,7 @@ theorem check_absent_unrefused {w : World D} (hr : w.RefusalsOk E)
     · cases ha
     · split at ha
       · rename_i hv
+        rw [World.roots_eq] at hrd
         rcases rootsDigest_inj hE hrd with ⟨-, -, hrr, -⟩ | col
         · have hx := hv.2
           rw [hrr] at hx
@@ -269,7 +274,7 @@ theorem check_build {E : Env D} {w : World D} {tx : D} {nb : Nat} (hc : w.Journa
     (hnf : (build E w tx).answer ≠ .absent ∨ journalForgets w.height nb = false) :
     check E w.height (w.roots E) tx nb (build E w tx) = .ok (build E w tx).answer := by
   have hroots : rootsDigest E (build E w tx).root (build E w tx).jroot (build E w tx).rroot
-      (build E w tx).rowsroot = w.roots E := rfl
+      (build E w tx).rowsroot = w.roots E := by rw [World.roots_eq]; rfl
   unfold check
   rw [if_neg (by simp [build]), if_neg (by rw [hroots]; simp)]
   unfold answerOf
@@ -310,7 +315,7 @@ theorem check_build_forgotten {E : Env D} {w : World D} {tx : D} {nb : Nat}
     (ha : (build E w tx).answer = .absent) (hf : journalForgets w.height nb = true) :
     check E w.height (w.roots E) tx nb (build E w tx) = .error .forgotten := by
   have hroots : rootsDigest E (build E w tx).root (build E w tx).jroot (build E w tx).rroot
-      (build E w tx).rowsroot = w.roots E := rfl
+      (build E w tx).rowsroot = w.roots E := by rw [World.roots_eq]; rfl
   unfold check
   rw [if_neg (by simp [build]), if_neg (by rw [hroots]; simp)]
   unfold answerOf

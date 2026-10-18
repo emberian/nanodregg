@@ -258,24 +258,14 @@ def countingEnv (E : Env D) : Env D :=
   { E with hash := fun dom b =>
       if dom == domTrie then dbgTrace "#" fun _ => E.hash dom b else E.hash dom b }
 
-/-- The four roots a head commits, as `commitWith` takes them: ONE lazy empty digest shared by the
-four (KERNEL-35, at the roots only since KERNEL-49 (a): no node has an empty child, so only a root
-reads the empty digest). -/
-def rootsShared (E : Env D) (w : World D) : D × D × D × D :=
-  let e : Thunk D := Thunk.mk fun _ => Trie.emptyHash (trieSpec E)
-  (w.trie.rootWith (trieSpec E) e, w.journal.rootWith (journalSpec E) e,
-    w.refusals.rootWith (refusalSpec E) e, w.rows.rootWith (rowSpec E) e)
-
-/-- PLANT (the counter's tooth): the four roots each with its OWN empty digest, from its own spec
-(the sharing KERNEL-47 made, undone). The same roots, one more hash per further empty trie; `report`
-must count more for it than for `rootsShared` on a seed whose World had two empty tries at once (arm
-`hash-count:empty-per-root`). Since KERNEL-49 (a) no insert reads an empty digest; KERNEL-35's
+/-- PLANT (the counter's tooth): the roots digest with each root's own `hashOf`, an empty trie
+re-hashing the empty digest: `World.roots` as it read before cv 01a15107-2272 (and `commitWith`
+before KERNEL-47). The same value (`roots_eq`), one more hash per further empty trie; `report` must
+count more for it than for the real `World.roots` (`<O`) on a seed whose World had two empty tries at
+once (arm `hash-count:empty-per-root`). Since KERNEL-49 (a) no insert reads an empty digest; KERNEL-35's
 per-insert recomputation is planted against the requirement instead (`plantEmptyPerInsert`). -/
-def plantRootsUnshared (E : Env D) (w : World D) : D × D × D × D :=
-  (w.trie.rootWith (trieSpec E) (Thunk.mk fun _ => Trie.emptyHash (trieSpec E)),
-    w.journal.rootWith (journalSpec E) (Thunk.mk fun _ => Trie.emptyHash (journalSpec E)),
-    w.refusals.rootWith (refusalSpec E) (Thunk.mk fun _ => Trie.emptyHash (refusalSpec E)),
-    w.rows.rootWith (rowSpec E) (Thunk.mk fun _ => Trie.emptyHash (rowSpec E)))
+def plantRootsUnshared (E : Env D) (w : World D) : D :=
+  rootsDigest E (w.root E) (w.journalRoot E) (w.refusalsRoot E) (w.rowsRoot E)
 
 /-- PLANT `hash-required:empty-per-insert` (cv 01a14afe-7380): KERNEL-35's per-insert recomputation of
 the empty digest, written on the compressed trie: the cell write (`commitTrie` without the
@@ -291,9 +281,9 @@ def plantEmptyPerInsert (E : Env D) (w : World D) (t : Turn D) (posts : List (Po
 
 /-- The counted calls for one admitted turn `w → w'`: the whole admission (`<A`), its trie write
 without the nullifiers (`<C`, the cell share), its rows write (`<Q`, KERNEL-46/48: the rows trie's
-nodes hash in the one trie domain, so its share is bracketed apart), the four roots with their one
-shared empty digest (`<O`: since KERNEL-49 (a) the empty digest is read only at a root, so it is its
-own share), and the two plants (`<P`, `<E`). Each result must be what the uncounted call gives, or
+nodes hash in the one trie domain, so its share is bracketed apart), the roots digest as every read
+takes it (`<O`, the real `World.roots`, the four roots' one shared empty digest: since KERNEL-49 (a)
+the empty digest is read only at a root, so it is its own share), and the two plants (`<P`, `<E`). Each result must be what the uncounted call gives, or
 the counter changed the computation. Beside them, what the admission REQUIRES (`Required.admit`, read
 off the tries the uncounted replay builds and checked against `w'`'s roots), which `report` holds the
 whole count `<A` to: never below it, and at most its ceiling above. -/
@@ -313,9 +303,9 @@ def countTurn (E : Env D) (st : State D) (w w' : World D) (t : Turn D) : State D
         match rowsRun cE w t with
         | .ok rr => some rr.1
         | .error _ => none
-      let o := dbgTrace "<O" fun _ => rootsShared cE w'
+      let o := dbgTrace "<O" fun _ => w'.roots cE
       let p := dbgTrace "<P" fun _ => plantRootsUnshared cE w'
-      let roots := (w'.root E, w'.journalRoot E, w'.refusalsRoot E, w'.rowsRoot E)
+      let roots := w'.roots E
       let st := match a with
         | .ok w'' => if w''.root E == w'.root E then st
             else failWith st "hash count: the counted admission reached another root"
@@ -2608,6 +2598,8 @@ def report (P : Params D) (seeds : List Nat) (control : Bool := false) : IO UInt
   let mut rowsRootMarks := 0
   -- KERNEL-49 (a): the roots' empty digest (`<O`), and the stem probe (marks, inserts, worst insert)
   let mut emptyRootMarks := 0
+  -- the per-root plant's marks (`<P`): the roots read as before cv 01a15107-2272
+  let mut plantRootMarks := 0
   let mut stem : Nat × Nat × Nat := (0, 0, 0)
   let mut proofBytes : Nat × Nat := (0, 0)
   -- PERF-1: signature verifies of `judge` re-run on each recorded refusal (`<G`)
@@ -2672,6 +2664,7 @@ def report (P : Params D) (seeds : List Nat) (control : Bool := false) : IO UInt
       rf.2.2.2.2 + st.budgeted)
     rowsRootMarks := rowsRootMarks + m.rowsRoot
     emptyRootMarks := emptyRootMarks + m.emptyRoot
+    plantRootMarks := plantRootMarks + m.plant
     proofBytes := (proofBytes.1 + st.proofBytes, proofBytes.2 + st.proofs)
     stem := (stem.1 + (m.stemIns - m.stemBase), stem.2.1 + st.stemInserts, max stem.2.2 m.stemWorst)
     rw := (rw.1 + (m.rowIns - m.rowInsBase), rw.2.1 + st.rowInserts, rw.2.2.1 + (m.rowRet - m.rowRetBase),
@@ -2712,7 +2705,8 @@ def report (P : Params D) (seeds : List Nat) (control : Bool := false) : IO UInt
   IO.println s!"WASTE admit row-insert-hashes-per-required {showRatio (ratioUp rw.1 reqs.2.2.2.1)}"
   IO.println s!"WASTE admit row-retract-hashes-per-required {showRatio (ratioUp rw.2.2.1 reqs.2.2.2.2.1)}"
   IO.println s!"WASTE admit rows-read-per-range-read {showRatio (ratio rw.2.2.2.2.2 rw.2.2.2.2.1)}"
-  IO.println s!"WASTE admit hashes-per-turn-empty-root {showRatio (ratio emptyRootMarks admitted)}"
+  IO.println s!"WASTE admit hashes-per-turn-empty-root {showRatio (ratioUp emptyRootMarks admitted)}"
+  IO.println s!"kernel-sim: plant hash-count:empty-per-root (the roots read with a hashOf per root) reads hashes-per-turn-empty-root {showRatio (ratioUp plantRootMarks admitted)}"
   IO.println s!"WASTE admit row-insert-stem-hashes-per-required {showRatio (ratioUp stem.1 reqs.2.2.2.2.2)}"
   if P.proofSize.isSome then
     IO.println s!"WASTE proof bytes-per-inclusion {showRatio (ratio proofBytes.1 proofBytes.2)}"
