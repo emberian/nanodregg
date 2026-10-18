@@ -255,10 +255,14 @@ hidden path is `pathMissing` at each launch, then `crashLoop`): the install line
 ## 3. Status — RAN
 
     host check STORE
-    STATUS height=H chain=C base_offset=O base_height=B seg_bytes=S records=R torn=T anchor=none
+    STATUS height=H steps=N chain=C base_offset=O base_steps=B seg_bytes=S records=R torn=T use=U anchor=none
 
+(the line `Host.Check` prints, field by field; parse it by field name, never by position.)
 Read-only (no lock, writes nothing; works while the writer runs or is down). `torn>0` is the
 writer's unsynced last frame. `anchor=none` means: integrity and height only, NOT completeness.
+`use=U`: the number of distinct objects one member made that another member invoked or wrote, over
+every call committed in the Store's segment (history and tail). A Store used by one resident reads 0
+(PROTOCOL-43, db0b43c; planted: `use-zero-on-creates-only`, `use-self-use-zero`, `use-reads-every-call`).
 
 `check` reads EVERY `index.log` entry the base counts; an open reads only the last one (HOST-33).
 So a corrupt middle entry is refused at first read or by check, not at open: the writer opens and
