@@ -28,29 +28,11 @@ mod common;
 
 use std::fs;
 use std::path::Path;
-use std::process::{Command, Output};
 
 use common::*;
-use nanodregg_devtools::{lean_bin, nd};
+use nanodregg_devtools::lean_bin;
 
 const LABEL: &str = "w";
-
-/// The grantee's `nd`: its own workspace and holding, its own follow socket, the writer's host
-/// socket.
-fn member_nd(ws: &Path, holding: &Path, follow: &Path, host: &Path, args: &[&str]) -> Output {
-    Command::new(nd())
-        .env("ND_WORKSPACE", ws)
-        .env("ND_HOLDING", holding)
-        .env("ND_FOLLOW_SOCK", follow)
-        .env("ND_HOST_SOCK", host)
-        .args(args)
-        .output()
-        .unwrap()
-}
-
-fn both(o: &Output) -> String {
-    format!("{}{}", text(o), String::from_utf8_lossy(&o.stderr))
-}
 
 #[test]
 fn the_owner_stops_a_grain_and_a_start_only_grantee_cannot() {
@@ -98,7 +80,7 @@ fn the_owner_stops_a_grain_and_a_start_only_grantee_cannot() {
     for p in [&ws2, &h2] {
         nanodregg_devtools::mkdirs(p).unwrap();
     }
-    let (op_follow, host) = (w.ws.join("follow.sock"), w.ws.join("host.sock"));
+    let (op_follow, host) = (w.ws.join("follow.sock"), w.host_sock.clone());
     let o = member_nd(&ws2, &h2, &op_follow, &host, &["--init"]);
     assert!(o.status.success(), "grantee nd --init: {}", both(&o));
     let o = member_nd(&ws2, &h2, &op_follow, &host, &["init", &w.operator]);
@@ -118,16 +100,21 @@ fn the_owner_stops_a_grain_and_a_start_only_grantee_cannot() {
     nanodregg_devtools::mkdirs(&gl_pids).unwrap();
     let store = world.join("store");
     let controller = lean_bin("hosting-controller");
-    // a broker root of its own (an app plans no socket; grain-launch requires the root to exist
-    // and to be disjoint from the hosting root)
+    // a broker root and a member root of its own (an app plans no socket; grain-launch requires
+    // each root to exist and the three to be pairwise disjoint)
     let broker = Gone(nanodregg_devtools::scratch(&format!(
         "kbgb{}",
+        std::process::id()
+    )));
+    let member = Gone(nanodregg_devtools::scratch(&format!(
+        "kbgm{}",
         std::process::id()
     )));
     let gl = Logged::spawn(
         grain_launch_rendered(&[
             ("/srv/nd-hosted", hosting.as_os_str()),
             ("/run/nd-broker", broker.0.as_os_str()),
+            ("/run/nd-member", member.0.as_os_str()),
             ("%i", LABEL.as_ref()),
             ("/run/nd-grain-launch/%i", gl_pids.as_os_str()),
             ("/opt/nd/bin/hosting-controller", controller.as_os_str()),

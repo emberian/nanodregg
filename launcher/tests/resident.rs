@@ -1,6 +1,6 @@
-//! The resident row (`cargo:launcher:resident`, PROTOCOL-7's agreed need, HOSTING-17, HOSTING-21):
-//! a hosted resident, confined under grain-launch with a Lean plan, reaches ONLY its own broker
-//! socket and is granted through it.
+//! The resident row (`cargo:launcher:resident`, PROTOCOL-7's agreed need, HOSTING-17, HOSTING-21,
+//! HOSTING-25): a hosted resident, confined under grain-launch with a Lean plan, reaches ONLY its own
+//! broker socket, where it is granted, and its own member socket, through which it writes the World.
 //!
 //! Everything is the deployed path. A real Store (`host genesis`, `host serve`, and the operator's
 //! `host follow` Store under the hosting root, the one the controller tails). The operator installs
@@ -11,8 +11,16 @@
 //! the launch in Lean. The resident is the probe (launcher/src/bin/probe.rs). It is sequenced by
 //! files the test writes into its volume (`wait`), never by time.
 //!
-//! - R1: the launch's connect entry is read from grain-launch's report of the plan (one line per
-//!   socket, `grain-launch: <g> connect <path>`), and must be exactly BROKER/<dirOf>/broker.sock.
+//! - R1: the launch's connect entries are read from grain-launch's report of the plan (one line per
+//!   socket, `grain-launch: <g> connect <path>`), and must be exactly BROKER/<dirOf>/broker.sock then
+//!   MEMBER/<dirOf>/nd.sock (HOSTING-25: the typed member root).
+//! - W (HOSTING-25): the resident's member (enrolled by the operator, its custody in the hidden
+//!   member workspace `worlds/w/members/<dirOf>`) is served by `nd --stdio` on MEMBER/<dirOf>/nd.sock.
+//!   Inside, the resident `write`s the operator's data object it holds a mutate grant on, and the
+//!   operator `read`s the value over its own sockets. Its write to an object it holds no grant on is
+//!   refused, and the operator reads that object unchanged. An off-surface verb (`rotate`) is refused
+//!   `notOnSurface`. The other resident's member socket is ENOENT, and the member directory lists
+//!   exactly `nd.sock`. The member's key never enters the sandbox (the workspace is hidden: W-key).
 //! - R2: grain-launch resolves it through `Policy.connect` (one uid here: the socket is this uid's,
 //!   exactly 0600, because keybroker binds 0600 when PEER is its own uid, HOSTING-21). The
 //!   refusals at resolve are `refusals_at_resolve_by_name`.
@@ -74,6 +82,9 @@ fn a_resident_is_granted_through_its_own_socket_and_reaches_nothing_else() {
     let world = hosting.join("worlds").join(LABEL);
     // the member workspaces' directory: every plan hides it, and the sandbox refuses a missing path
     nanodregg_devtools::mkdirs(&world.join("members")).unwrap();
+    // the member root (HOSTING-25): a short scratch of its own, disjoint from the other two roots
+    let mroot = Short::new("m");
+    let mroot = &mroot.0;
     let w = World::genesis_following("res", Some(world.join("store")));
     let lifecycle = w.install("world/grain/Lifecycle");
     let g = line(
@@ -93,6 +104,32 @@ fn a_resident_is_granted_through_its_own_socket_and_reaches_nothing_else() {
         "plant: a grain id is not 64 lowercase hex digits: {g}"
     );
     w.allowance(&g, "claude-m", 7, 100_000);
+    // the resident's member, served on MEMBER/<g>/nd.sock (it must exist before the launch resolves
+    // it), and a second resident's member socket on the host, for no grain here
+    for r in [g.as_str(), OTHER] {
+        nanodregg_devtools::mkdirs(&mroot.join(r)).unwrap();
+        fs::set_permissions(mroot.join(r), fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    let other_m = mroot.join(OTHER).join("nd.sock");
+    let _other_m = UnixListener::bind(&other_m).unwrap();
+    fs::set_permissions(&other_m, fs::Permissions::from_mode(0o600)).unwrap();
+    let mfollow = Short::new("f");
+    let member = w.member(
+        &world.join("members").join(&g),
+        &mfollow.0.join("follow.sock"),
+        &w.root.join("stores/R"),
+        &mroot.join(&g).join("nd.sock"),
+        &d.join("pids"),
+    );
+    // the operator's objects: one the resident may mutate, one it holds no grant on
+    let obj = line(&w.run(&["create"]), "id ").to_owned();
+    let rm = line(
+        &w.run(&["grant", &obj, &member.id, "observe,mutate"]),
+        "id ",
+    )
+    .to_owned();
+    let bare = line(&w.run(&["create"]), "id ").to_owned();
+    w.run(&["write", &bare, "1", "operator"]);
     // the grain's package: the probe and its targets (the paths it tries are the host's)
     let gdir = world.join("grains").join(&g);
     let (pkg, vol) = (gdir.join("pkg"), gdir.join("vol"));
@@ -100,6 +137,7 @@ fn a_resident_is_granted_through_its_own_socket_and_reaches_nothing_else() {
     nanodregg_devtools::mkdirs(&vol).unwrap();
     place_exe(Path::new(env!("CARGO_BIN_EXE_probe")), &pkg.join("probe"));
     let own = sock.join(&g).join("broker.sock");
+    let ms = member.sock.display().to_string();
     let targets = [
         ("go1", "wait", vol.join("go1")),
         ("ask1", "ask", own.clone()),
@@ -111,6 +149,21 @@ fn a_resident_is_granted_through_its_own_socket_and_reaches_nothing_else() {
         ),
         ("sockdir-list", "list", sock.to_path_buf()),
         ("own-list", "list", sock.join(&g)),
+        (
+            "member-write",
+            "nd",
+            format!("{ms} write {obj} 1 resident --via {rm}").into(),
+        ),
+        ("member-read", "nd", format!("{ms} read {obj}").into()),
+        (
+            "member-nogrant",
+            "nd",
+            format!("{ms} write {bare} 1 resident").into(),
+        ),
+        ("member-rotate", "nd", format!("{ms} rotate").into()),
+        ("member-other", "connect", other_m.clone()),
+        ("member-list", "list", mroot.join(&g)),
+        ("member-key", "list", member.ws.clone()),
         ("go2", "wait", vol.join("go2")),
         ("ask2", "ask", own.clone()),
         ("own-list2", "list", sock.join(&g)),
@@ -150,6 +203,7 @@ fn a_resident_is_granted_through_its_own_socket_and_reaches_nothing_else() {
         grain_launch_rendered(&[
             ("/srv/nd-hosted", hosting.as_os_str()),
             ("/run/nd-broker", sock.as_os_str()),
+            ("/run/nd-member", mroot.as_os_str()),
             ("%i", LABEL.as_ref()),
             ("/run/nd-grain-launch/%i", gl_pids.as_os_str()),
             ("/opt/nd/bin/hosting-controller", controller.as_os_str()),
@@ -202,8 +256,8 @@ fn a_resident_is_granted_through_its_own_socket_and_reaches_nothing_else() {
         .collect();
     assert_eq!(
         connects,
-        vec![own.display().to_string()],
-        "R1: the plan's connect entries are not exactly BROKER/<dirOf>/broker.sock:\n{}",
+        vec![own.display().to_string(), ms.clone()],
+        "R1: the plan's connect entries are not exactly BROKER/<dirOf>/broker.sock, MEMBER/<dirOf>/nd.sock:\n{}",
         log()
     );
 
@@ -213,7 +267,7 @@ fn a_resident_is_granted_through_its_own_socket_and_reaches_nothing_else() {
     until(
         "the first round",
         60,
-        || verdict(&vol, "own-list").is_some(),
+        || verdict(&vol, "member-key").is_some(),
         &|| format!("{:?}\n{}", verdicts(&vol), log()),
     );
     let v = |n: &str| verdict(&vol, n).unwrap_or_else(|| "absent".into());
@@ -241,6 +295,56 @@ fn a_resident_is_granted_through_its_own_socket_and_reaches_nothing_else() {
         v("own-list"),
         "ok broker.sock",
         "R5b: the bound directory holds more than broker.sock"
+    );
+    // W: the resident reaches the World through its member socket, and only as its grants say
+    assert!(
+        v("member-write").starts_with("ok 0"),
+        "W: the resident's granted write: {}",
+        v("member-write")
+    );
+    assert_eq!(
+        v("member-read"),
+        "ok 0 1=resident",
+        "W: the resident reads its write back"
+    );
+    assert_eq!(
+        w.run(&["read", &obj]),
+        "1=resident\n",
+        "W: the operator reads the resident's write over its own sockets"
+    );
+    assert_eq!(
+        v("member-nogrant"),
+        "ok 1 refused noGrant",
+        "W: a write with no grant was not refused by name"
+    );
+    assert_eq!(
+        w.run(&["read", &bare]),
+        "1=operator\n",
+        "W: the ungranted object moved"
+    );
+    assert_eq!(
+        v("member-rotate"),
+        "ok 1 refused notOnSurface rotate",
+        "W: an off-surface verb"
+    );
+    assert_eq!(
+        v("member-other"),
+        "denied ENOENT",
+        "W: another resident's member socket"
+    );
+    assert_eq!(
+        v("member-list"),
+        "ok nd.sock",
+        "W: the member directory holds more than nd.sock"
+    );
+    assert_eq!(
+        v("member-key"),
+        "denied ENOENT",
+        "W-key: the member workspace (its custody) inside the sandbox"
+    );
+    assert!(
+        member.ws.join("keys").exists() || fs::read_dir(&member.ws).unwrap().next().is_some(),
+        "control: the member workspace holds its custody on the host"
     );
 
     // restart: keybroker stops (its own process) and a new life binds a new socket in the same
@@ -342,6 +446,14 @@ fn refusals_at_resolve_by_name() {
     let (broker, rd) = (&broker.0, broker.0.join(A));
     let s = rd.join("broker.sock");
     let elsewhere = broker.join("elsewhere");
+    // the member root holds the resident's right member socket throughout, so each refusal below
+    // is the broker socket's
+    let mroot = Short::new("p");
+    nanodregg_devtools::mkdirs(&mroot.0.join(A)).unwrap();
+    fs::set_permissions(mroot.0.join(A), fs::Permissions::from_mode(0o700)).unwrap();
+    let ms = mroot.0.join(A).join("nd.sock");
+    let _member = UnixListener::bind(&ms).unwrap();
+    fs::set_permissions(&ms, fs::Permissions::from_mode(0o600)).unwrap();
     let reset = || {
         let _ = fs::remove_dir_all(&rd);
         let _ = fs::remove_dir_all(&elsewhere);
@@ -357,6 +469,7 @@ fn refusals_at_resolve_by_name() {
         let out = Command::new(env!("CARGO_BIN_EXE_grain-launch"))
             .arg(root)
             .arg(broker)
+            .arg(&mroot.0)
             .arg("w1")
             .arg(&pids)
             .arg(lean_bin("hosting-drive"))

@@ -2,7 +2,7 @@
 //! from a LEAN plan (`hosting-drive`, which runs the deployed `plan` and `encodeAction`) writes its
 //! own volume and is denied: writing and reading another world's volume, writing its package, and
 //! reading its Store. The same probe run unconfined does all of those first, so the denials are not
-//! vacuous. Plants: a plan with `worlds/` added to `read` is refused (`exposed`), and a symlinked
+//! vacuous. Plants: a plan with `worlds/` added to `read` is refused (`foreignPath`), and a symlinked
 //! program pointing outside its package is refused (`programOutside`); each must show by name.
 //!
 //! On Linux bwrap mounts and does not filter exec: what the grain cannot see is absent (`ENOENT`),
@@ -16,7 +16,7 @@
 
 mod common;
 
-use common::place_exe;
+use common::{Gone, place_exe};
 use nanodregg_devtools::lean_bin;
 use nanodregg_launcher::generated::{controller_exit, launch_exit};
 use std::fs;
@@ -32,9 +32,22 @@ struct Tree {
     root: PathBuf,
     /// the broker root, a sibling of `root` (HOSTING-17 §8)
     broker: PathBuf,
+    /// the member root, a sibling of both (HOSTING-25)
+    member: PathBuf,
     pkg: PathBuf,
     vol: PathBuf,
     pids: PathBuf,
+}
+
+/// A test owns its tree: the three roots are removed when it is dropped, also when the test
+/// panics (unwinding drops it), so no judged run leaves a directory behind in the target dir
+/// (GATES-6, cv 01a14ed7-79cf).
+impl Drop for Tree {
+    fn drop(&mut self) {
+        for d in [&self.root, &self.broker, &self.member] {
+            let _ = fs::remove_dir_all(d);
+        }
+    }
 }
 
 fn tree(name: &str) -> Tree {
@@ -47,6 +60,10 @@ fn tree(name: &str) -> Tree {
         Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("isob-{}-{name}", std::process::id()));
     let _ = fs::remove_dir_all(&broker);
     fs::create_dir_all(&broker).unwrap();
+    let member =
+        Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("isom-{}-{name}", std::process::id()));
+    let _ = fs::remove_dir_all(&member);
+    fs::create_dir_all(&member).unwrap();
     let w1 = root.join("worlds/w1");
     let w2 = root.join("worlds/w2");
     let g = w1.join("grains").join(A);
@@ -56,6 +73,7 @@ fn tree(name: &str) -> Tree {
         pids: root.join("pids"),
         root: root.clone(),
         broker,
+        member,
     };
     for d in [
         w1.join("store"),
@@ -115,6 +133,7 @@ fn launch_as(t: &Tree, plant: bool, resident: bool) -> String {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_grain-launch"));
     cmd.arg(&t.root)
         .arg(&t.broker)
+        .arg(&t.member)
         .arg("w1")
         .arg(&t.pids)
         .arg(&drive);
@@ -207,11 +226,14 @@ fn a_grain_writes_its_volume_and_reaches_nothing_else() {
 }
 
 #[test]
-fn plant_a_plan_reading_worlds_is_refused_exposed() {
+fn plant_a_plan_reading_worlds_is_refused_foreign_path() {
     let t = tree("plant-worlds");
     let log = launch(&t, true);
+    // HOSTING-25: a read outside the grain's own directory is the frame's own defect, refused before
+    // the sandbox resolves anything (the sandbox's `Exposed`, the next barrier, is its own test:
+    // sandbox/tests/confine.rs)
     assert!(
-        log.contains("report failed exposed"),
+        log.contains("grain-launch: foreignPath") && log.contains(" worlds"),
         "a plan reading worlds/ was not refused by name:\n{log}"
     );
     assert!(verdicts(&t).is_empty(), "the planted plan ran the probe");
@@ -230,17 +252,30 @@ fn plant_a_symlinked_program_is_refused_program_outside() {
     assert!(verdicts(&t).is_empty(), "the linked program ran");
 }
 
-/// HOSTING-17 §8: a broker root inside the hosting root (or around it) would put every socket in it
-/// under a grain grant; grain-launch ends `rootsOverlap` before it starts the controller.
+/// HOSTING-17 §8, HOSTING-25: a socket root inside the hosting root (or around it) would put every
+/// socket in it under a grain grant, and a member root inside the broker root (or around it) would
+/// mix the two typed roots; grain-launch ends `rootsOverlap` before it starts the controller, for
+/// every pair of its three roots.
 #[test]
-fn a_broker_root_overlapping_the_hosting_root_is_refused() {
+fn overlapping_roots_are_refused() {
     let t = tree("overlap");
     let inside = t.root.join("worlds/w1/grains").join(A).join("vol");
     fs::create_dir_all(&inside).unwrap();
-    for broker in [inside.as_path(), t.root.parent().unwrap()] {
+    let in_broker = t.broker.join("m");
+    fs::create_dir_all(&in_broker).unwrap();
+    let up = t.root.parent().unwrap();
+    let pairs: [(&Path, &Path); 5] = [
+        (&inside, &t.member),
+        (up, &t.member),
+        (&t.broker, &inside),
+        (&t.broker, up),
+        (&t.broker, &in_broker),
+    ];
+    for (broker, member) in pairs {
         let out = Command::new(env!("CARGO_BIN_EXE_grain-launch"))
             .arg(&t.root)
             .arg(broker)
+            .arg(member)
             .arg("w1")
             .arg(&t.pids)
             .arg(lean_bin("hosting-drive"))
@@ -251,8 +286,9 @@ fn a_broker_root_overlapping_the_hosting_root_is_refused() {
         let err = String::from_utf8_lossy(&out.stderr);
         assert!(
             err.contains("grain-launch: rootsOverlap"),
-            "{}: stderr: {err}",
-            broker.display()
+            "{} {}: stderr: {err}",
+            broker.display(),
+            member.display()
         );
         assert!(!err.contains("report"), "a launch happened: {err}");
         assert_eq!(
@@ -283,6 +319,7 @@ fn grain_launch_exits_by_lean_table_and_passes_the_controller_through() {
         let out = Command::new(env!("CARGO_BIN_EXE_grain-launch"))
             .arg(&t.root)
             .arg(&t.broker)
+            .arg(&t.member)
             .arg("w1")
             .arg(&t.pids)
             .arg(lean_bin("hosting-controller"))
@@ -321,6 +358,7 @@ fn grain_launch_exits_by_lean_table_and_passes_the_controller_through() {
     let out = Command::new(env!("CARGO_BIN_EXE_grain-launch"))
         .arg(&t.root)
         .arg(&t.broker)
+        .arg(&t.member)
         .arg("w1")
         .arg(&t.pids)
         .arg(lean_bin("hosting-drive"))
@@ -340,13 +378,14 @@ fn grain_launch_exits_by_lean_table_and_passes_the_controller_through() {
     );
 }
 
-/// HOSTING-17 hole 1 (VACUITY-READER-H4): identity is the socket, so a resident must reach its OWN
-/// broker socket and nothing else in the broker root. The broker root holds two residents' listening
-/// sockets (BROKER/<A>/broker.sock, BROKER/<B>/broker.sock, one uid here: 0600 in 0700 directories,
-/// CLIENT-20's one-uid rule) and a file. Lean plans the resident (`hosting-drive --resident`): its
-/// connect entry is `<A>/broker.sock`, joined onto BROKER by grain-launch.
+/// HOSTING-17 hole 1 (VACUITY-READER-H4), HOSTING-25: identity is the socket, so a resident must
+/// reach its OWN broker socket and its OWN member socket and nothing else in either root. Each root
+/// holds two residents' listening sockets (BROKER/<A>/broker.sock, BROKER/<B>/broker.sock,
+/// MEMBER/<A>/nd.sock, MEMBER/<B>/nd.sock; one uid here: 0600 in 0700 directories, CLIENT-20's
+/// one-uid rule) and a file. Lean plans the resident (`hosting-drive --resident`): its socket entries
+/// are `<A>/broker.sock`, joined onto BROKER, and `<A>/nd.sock`, joined onto MEMBER, by grain-launch.
 #[test]
-fn a_resident_reaches_its_own_broker_socket_and_nothing_else() {
+fn a_resident_reaches_its_own_sockets_and_nothing_else() {
     use std::os::unix::net::UnixListener;
     let mut t = tree("resident");
     // A socket path is at most 107 bytes (sun_path) and a resident's directory name is 64 hex
@@ -358,28 +397,42 @@ fn a_resident_reaches_its_own_broker_socket_and_nothing_else() {
         tag.insert(0, char::from_digit(n % 36, 36).unwrap());
         n /= 36;
     }
-    t.broker = nanodregg_devtools::scratch(&format!("i{tag}"));
+    // the tree's own socket roots go first: the tree removes whatever its fields name when dropped
     let _ = fs::remove_dir_all(&t.broker);
-    nanodregg_devtools::mkdirs(&t.broker).unwrap();
+    let _ = fs::remove_dir_all(&t.member);
+    t.broker = nanodregg_devtools::scratch(&format!("i{tag}"));
+    t.member = nanodregg_devtools::scratch(&format!("j{tag}"));
     let mut held = Vec::new();
-    for g in [A, B] {
-        let d = t.broker.join(g);
-        fs::create_dir_all(&d).unwrap();
-        fs::set_permissions(&d, fs::Permissions::from_mode(0o700)).unwrap();
-        let s = d.join("broker.sock");
-        held.push(UnixListener::bind(&s).unwrap());
-        fs::set_permissions(&s, fs::Permissions::from_mode(0o600)).unwrap();
+    for (root, sock) in [(&t.broker, "broker.sock"), (&t.member, "nd.sock")] {
+        let _ = fs::remove_dir_all(root);
+        nanodregg_devtools::mkdirs(root).unwrap();
+        for g in [A, B] {
+            let d = root.join(g);
+            fs::create_dir_all(&d).unwrap();
+            fs::set_permissions(&d, fs::Permissions::from_mode(0o700)).unwrap();
+            let s = d.join(sock);
+            held.push(UnixListener::bind(&s).unwrap());
+            fs::set_permissions(&s, fs::Permissions::from_mode(0o600)).unwrap();
+        }
+        fs::write(root.join("secret"), b"ROOT-FILE").unwrap();
     }
-    fs::write(t.broker.join("secret"), b"BROKER-ROOT").unwrap();
     let own = t.broker.join(A).join("broker.sock");
     let other = t.broker.join(B).join("broker.sock");
+    let own_m = t.member.join(A).join("nd.sock");
+    let other_m = t.member.join(B).join("nd.sock");
     let text = format!(
-        "own-connect connect {}\nother-connect connect {}\nown-list list {}\nbroker-read read {}\nbroker-list list {}\n",
+        "own-connect connect {}\nother-connect connect {}\nown-list list {}\nbroker-read read {}\nbroker-list list {}\n\
+         own-member connect {}\nother-member connect {}\nown-member-list list {}\nmember-read read {}\nmember-list list {}\n",
         own.display(),
         other.display(),
         t.broker.join(A).display(),
         t.broker.join("secret").display(),
-        t.broker.display()
+        t.broker.display(),
+        own_m.display(),
+        other_m.display(),
+        t.member.join(A).display(),
+        t.member.join("secret").display(),
+        t.member.display()
     );
     fs::write(t.pkg.join("probe.targets"), text).unwrap();
     // CONTROL first: unconfined, the same probe reaches both sockets and the broker root.
@@ -390,7 +443,14 @@ fn a_resident_reaches_its_own_broker_socket_and_nothing_else() {
         .unwrap();
     assert!(st.success(), "control probe failed");
     let v = verdicts(&t);
-    for n in ["own-connect", "other-connect", "broker-read"] {
+    for n in [
+        "own-connect",
+        "other-connect",
+        "broker-read",
+        "own-member",
+        "other-member",
+        "member-read",
+    ] {
         assert_eq!(
             verdict(&v, n),
             "ok",
@@ -421,6 +481,35 @@ fn a_resident_reaches_its_own_broker_socket_and_nothing_else() {
         bl.starts_with("denied") || bl == format!("ok {A}"),
         "the broker root shows more than this resident's own directory: {bl}"
     );
+    // the member root, the same way (HOSTING-25)
+    assert_eq!(verdict(&v, "own-member"), "ok", "own member socket: {err}");
+    assert_eq!(
+        verdict(&v, "own-member-list"),
+        "ok nd.sock",
+        "own member directory"
+    );
+    for n in ["other-member", "member-read"] {
+        assert!(
+            verdict(&v, n).starts_with("denied"),
+            "{n} inside: {}",
+            verdict(&v, n)
+        );
+    }
+    let ml = verdict(&v, "member-list");
+    assert!(
+        ml.starts_with("denied") || ml == format!("ok {A}"),
+        "the member root shows more than this resident's own directory: {ml}"
+    );
+    // R1's isolation half: the launch named exactly the two own sockets, each under its own root
+    let connects: Vec<&str> = err
+        .lines()
+        .filter_map(|l| l.strip_prefix(&format!("grain-launch: {A} connect ")))
+        .collect();
+    assert_eq!(
+        connects,
+        vec![own.display().to_string(), own_m.display().to_string()],
+        "the plan's sockets: {err}"
+    );
     eprintln!(
         "resident: other-connect {}, broker-read {}, broker-list {}",
         verdict(&v, "other-connect"),
@@ -428,7 +517,50 @@ fn a_resident_reaches_its_own_broker_socket_and_nothing_else() {
         verdict(&v, "broker-list")
     );
     drop(held);
-    let _ = fs::remove_dir_all(&t.broker);
+}
+
+/// HOSTING-25: a launch frame naming another grain's socket, under either socket root, ends
+/// grain-launch `foreignPath` (fatal) before anything is resolved or launched. Lean's plans never
+/// do (`plan_sockets_named`), so the frames come from `hosting-drive --plant-foreign`. CONTROL: the
+/// same drive without the plant launches (`report started`), so the refusal is the frame's.
+#[test]
+fn a_launch_naming_another_grains_socket_is_refused_foreign_path() {
+    let t = tree("foreign");
+    let run = |plant: &[&str]| {
+        let out = Command::new(env!("CARGO_BIN_EXE_grain-launch"))
+            .arg(&t.root)
+            .arg(&t.broker)
+            .arg(&t.member)
+            .arg("w1")
+            .arg(&t.pids)
+            .arg(lean_bin("hosting-drive"))
+            .args(plant)
+            .args(["w1", A, "probe"])
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        (
+            String::from_utf8_lossy(&out.stderr).into_owned(),
+            out.status.code(),
+        )
+    };
+    for root in ["broker", "member"] {
+        let (err, code) = run(&["--resident", "--plant-foreign", root, B]);
+        assert!(
+            err.contains(&format!("grain-launch: foreignPath {A} {B}/")),
+            "{root}: stderr: {err}"
+        );
+        assert!(!err.contains("report started"), "{root}: launched: {err}");
+        assert_eq!(
+            code,
+            Some(i32::from(launch_exit::FOREIGN_PATH)),
+            "{root}: exit code"
+        );
+    }
+    // CONTROL: an app (no socket entries) under the same drive launches
+    fs::create_dir_all(&t.vol).unwrap();
+    let (err, _) = run(&[]);
+    assert!(err.contains("report started"), "control: {err}");
 }
 
 /// The ETXTBSY race (`place_exe`): while another thread spawns children as fast as it can (as
@@ -444,6 +576,7 @@ fn a_placed_executable_is_never_busy_under_concurrent_spawns() {
     let d = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("iso-{}-busy", std::process::id()));
     let _ = fs::remove_dir_all(&d);
     fs::create_dir_all(&d).unwrap();
+    let _gone = Gone(d.clone());
     let stop = Arc::new(AtomicBool::new(false));
     let s2 = Arc::clone(&stop);
     let spawner = std::thread::spawn(move || {
@@ -490,6 +623,7 @@ fn a_missing_layout_or_a_controller_that_never_ran_stops_grain_launch_by_name() 
         let out = Command::new(env!("CARGO_BIN_EXE_grain-launch"))
             .arg(&t.root)
             .arg(&t.broker)
+            .arg(&t.member)
             .arg("w1")
             .arg(&t.pids)
             .arg(controller)
@@ -556,4 +690,29 @@ fn a_missing_layout_or_a_controller_that_never_ran_stops_grain_launch_by_name() 
         Some(i32::from(launch_exit::CONTROLLER_MECHANISM)),
         "exit code"
     );
+}
+
+/// GATES-6 (cv 01a14ed7-79cf): a test that panics still removes its tree, because unwinding drops
+/// it. CONTROL: the three roots existed while the test ran.
+#[test]
+fn a_panicking_test_still_removes_its_tree() {
+    let seen = std::sync::Mutex::new(Vec::new());
+    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let t = tree("panics");
+        for d in [&t.root, &t.broker, &t.member] {
+            seen.lock().unwrap().push((d.clone(), d.is_dir()));
+        }
+        panic!("planted: the test fails while it holds its tree");
+    }));
+    assert!(r.is_err(), "control: the planted test did not panic");
+    let seen = seen.into_inner().unwrap();
+    assert_eq!(seen.len(), 3);
+    for (d, was) in seen {
+        assert!(
+            was,
+            "control: {} did not exist while the test ran",
+            d.display()
+        );
+        assert!(!d.exists(), "{} outlived its panicking test", d.display());
+    }
 }

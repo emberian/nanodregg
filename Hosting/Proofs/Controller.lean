@@ -9,6 +9,7 @@ does not decode, or does not desire `running`. `launch_complete`: such a grain I
 own cell at a touched id and names that id's directory.
 -/
 import Hosting.Controller
+import Hosting.Proofs.Plan
 import Lang.Print
 import Lang.Proofs.Print
 
@@ -288,5 +289,41 @@ theorem reconcile_labels_deployed {E : Env Codec.Digest} {label pkgId : ByteArra
   obtain ⟨i, -, hi⟩ := List.mem_filterMap.mp ha
   obtain ⟨v, -, rfl⟩ := Option.map_eq_some_iff.mp hi
   exact dirOf_labelOk (by rw [i.size_eq]; decide) (by rw [i.size_eq]; exact Nat.le_refl _)
+
+/-- The grain a lifecycle cell describes is named by the directory it was read under. -/
+theorem grainOf_named {g : ByteArray} {c : Cell} {gr : Grain} {ph : Phase}
+    (h : grainOf g c = some (gr, ph)) : gr.idHex = g := by
+  unfold grainOf at h
+  cases hk : Grain.kindOf c.slots <;> cases he : Grain.entryOf c.slots <;>
+    cases hp : Grain.phaseOf c.slots <;> simp_all [bind, Option.bind]
+  obtain ⟨rfl, -⟩ := h
+  rfl
+
+/-- **A launch the controller decides for directory `g` plans grain `g` and nothing else**
+(HOSTING-25; VACUITY-READER-H8's hole): its sockets of either root are `<g>/…`, and every path it
+allows lies under `worlds/<label>/grains/<g>` — the law grain-launch checks of every frame
+(`foreignPath`), stated of the decision that names the frame's grain. -/
+theorem launch_named {label pkgId : ByteArray} {now : Nat} {live : List Live} {g : ByteArray}
+    {cell : Option Cell} {p : Plan} (h : decideCell label pkgId now live g cell = some (.launch p)) :
+    (∀ x ∈ p.broker ++ p.member, x.head? = some g) ∧
+      (∀ x ∈ p.allowed, ([lit "worlds", label, lit "grains", g] : Path) <+: x) := by
+  obtain ⟨_c, gr, _hc, _hi, hgr, _hr, _hl, hp⟩ := launch_sound h
+  have hn := grainOf_named hgr
+  subst hn
+  refine ⟨plan_sockets_named hp, fun x hx => ?_⟩
+  have := plan_paths hp x hx
+  simpa [grainDir, worldRoot] using this
+
+/-- Every launch frame the controller writes names its own grain's paths and sockets: the frame's
+`grain` is the decision's directory (`reconcile_names`), and `launch_named` holds of it. -/
+theorem reconcile_launch_named {E : Env D} {bytesOf : D → ByteArray} {label pkgId : ByteArray}
+    {now : Nat} {live : List Live} {w : World D} {ids : List D} {a : Action} {p : Plan}
+    (h : a ∈ reconcile E bytesOf label pkgId now live w ids) (hv : a.verdict = .launch p) :
+    (∀ x ∈ p.broker ++ p.member, x.head? = some a.grain) ∧
+      (∀ x ∈ p.allowed, ([lit "worlds", label, lit "grains", a.grain] : Path) <+: x) := by
+  obtain ⟨i, -, hg, hd⟩ := reconcile_names h
+  rw [hg]
+  rw [hv] at hd
+  exact launch_named hd
 
 end Nanodregg.Hosting.Proofs

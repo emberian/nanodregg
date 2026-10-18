@@ -114,7 +114,7 @@ code space holds both tables: `host` (Host.Status, below 64) and nd-supervise's 
 | code | name | class | systemd | operator |
 |---|---|---|---|---|
 | 116 | usage | fatal | stopped (RestartPreventExitStatus) | the unit's argv is wrong or a root does not exist: fix the unit; make /srv/nd-hosted (RUNBOOK §2b) |
-| 117 | rootsOverlap | fatal | stopped (RestartPreventExitStatus) | the broker root and the hosting root nest (HOSTING-17 §8): /run/nd-broker and /srv/nd-hosted must be disjoint trees |
+| 117 | rootsOverlap | fatal | stopped (RestartPreventExitStatus) | two of grain-launch's roots nest (HOSTING-17 §8, HOSTING-25): /srv/nd-hosted, /run/nd-broker and /run/nd-member must be pairwise disjoint trees |
 | 118 | controllerRefused | fatal | stopped (RestartPreventExitStatus) | the sandbox refused the controller's policy or could not spawn it: check the mechanism (deploy/live/README.md) and the controller path |
 | 119 | frame | fatal | stopped (RestartPreventExitStatus) | a defect in the controller's actions: keep the World's state, report to HOSTING |
 | 120 | badAction | fatal | stopped (RestartPreventExitStatus) | a defect in the controller's actions: keep the World's state, report to HOSTING |
@@ -127,6 +127,7 @@ code space holds both tables: `host` (Host.Status, below 64) and nd-supervise's 
 | 127 | controllerLost | fatal | stopped (RestartPreventExitStatus) | grain-launch could not wait on its controller: nothing says a restart is safe; read the journal, then start the unit |
 | 67 | controllerMechanism | fatal | stopped (RestartPreventExitStatus) | the controller's sandbox or program failed before the controller ran (stderr names the raw code): fix the mechanism, then start the unit |
 | 68 | layoutMissing | fatal | stopped (RestartPreventExitStatus) | a directory the World's layout requires is absent (stderr names it, e.g. /srv/nd-hosted/worlds/LABEL/members): make it as nd-hosted 0700 (RUNBOOK §2b), then start the unit |
+| 69 | foreignPath | fatal | stopped (RestartPreventExitStatus) | a defect in the controller's actions: keep the World's state, report to HOSTING |
 
 ## hosting-controller (under grain-launch)
 

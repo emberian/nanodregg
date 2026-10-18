@@ -14,9 +14,15 @@ Layout under the root, for the Store labelled `l`:
     worlds/l/grains/<id>/pkg  the grain's package files    read (its program is pkg/<entry>)
     worlds/l/grains/<id>/vol  the grain's volume           read + write
 
-and under the operator's broker root (SOCKDIR, HOSTING-17), for a resident only:
+and, for a resident only, one socket under each of two further roots of the operator's:
 
-    <id>/broker.sock          its broker socket            connect (nothing else)
+    BROKER/<id>/broker.sock   its broker socket (keybroker, HOSTING-17)        connect
+    MEMBER/<id>/nd.sock       its member socket (`nd --stdio` as nd, HOSTING-20) connect
+
+The two socket lists are separate plan fields, each relative to its own root (`Plan.broker`,
+`Plan.member`), so a member socket cannot be planned as a broker socket or the reverse. Both
+entries are named by the grain's own directory: a plan names no socket of another grain
+(`Proofs.Plan.plan_sockets_own`), and grain-launch refuses a frame that does, `foreignPath`.
 
 There is no volume REQUEST (ASSEMBLY HOSTING-5): the volume is a function of (store, grain), so no
 input names another world's or grain's path. That a grain cannot reach `worlds/<other>` is the
@@ -75,22 +81,35 @@ def layoutHidden : List ByteArray := [lit "store", lit "members"]
 /-- A resident's broker socket's name in its own directory of the broker root (HOSTING-17 §2). -/
 def brokerSock : ByteArray := lit "broker.sock"
 
-/-- The sockets a grain may connect to, relative to the broker root: a resident its own broker
-socket `<id>/broker.sock` (the directory keybroker names by the same `dirOf`), an app none. -/
-def connectOf (g : Grain) : List Path :=
+/-- A resident's member socket's name in its own directory of the member root (HOSTING-20): the
+socket nd-supervise serves `nd --stdio` on, as nd, over the resident's member workspace
+`worlds/<l>/members/<id>` (hidden from every grain). -/
+def memberSock : ByteArray := lit "nd.sock"
+
+/-- The socket a resident may connect to under one root: its own directory there, and the root's
+one name in it; an app none. -/
+def socketOf (name : ByteArray) (g : Grain) : List Path :=
   match g.kind with
   | .app => []
-  | .resident => [[g.idHex, brokerSock]]
+  | .resident => [[g.idHex, name]]
+
+/-- Relative to the broker root: a resident's own broker socket `<id>/broker.sock` (the directory
+keybroker names by the same `dirOf`). -/
+def brokerOf (g : Grain) : List Path := socketOf brokerSock g
+
+/-- Relative to the member root: a resident's own member socket `<id>/nd.sock`, through which it
+reads and writes the World as its member (HOSTING-20, HOSTING-25). -/
+def memberOf (g : Grain) : List Path := socketOf memberSock g
 
 /-- The plan of a grain: run `pkg/<entry>`, read its package, read and write its volume, and (a
-resident) connect to its own broker socket; the Store and the member workspaces are hidden (the
-launcher's `Exposed` check is the second barrier). -/
+resident) connect to its own broker socket and its own member socket; the Store and the member
+workspaces are hidden (the launcher's `Exposed` check is the second barrier). -/
 def plan (l : ByteArray) (g : Grain) : Except Refusal Plan := do
   unless labelOk l do throw .labelUnclean
   unless labelOk g.idHex do throw .idUnclean
   unless Codec.Path.clean g.entry do throw .entryUnclean
   pure { program := pkgDir l g ++ [g.entry], read := [pkgDir l g], write := [volDir l g],
-         exec := [], connect := connectOf g, hidden := [storeDir l, membersDir l] }
+         exec := [], broker := brokerOf g, member := memberOf g, hidden := [storeDir l, membersDir l] }
 
 /-- Every path a plan ALLOWS. -/
 def Plan.allowed (p : Plan) : List Path := p.program :: p.read ++ p.write ++ p.exec

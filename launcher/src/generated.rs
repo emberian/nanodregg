@@ -418,7 +418,8 @@ pub mod wire {
             read: Vec<Vec<u8>>,
             write: Vec<Vec<u8>>,
             exec: Vec<Vec<u8>>,
-            connect: Vec<Vec<u8>>,
+            broker: Vec<Vec<u8>>,
+            member: Vec<Vec<u8>>,
             hidden: Vec<Vec<u8>>,
         },
         Kill {
@@ -441,7 +442,8 @@ pub mod wire {
                     let read = c.paths(4096)?;
                     let write = c.paths(4096)?;
                     let exec = c.paths(4096)?;
-                    let connect = c.paths(4096)?;
+                    let broker = c.paths(4096)?;
+                    let member = c.paths(4096)?;
                     let hidden = c.paths(4096)?;
                     Action::Launch {
                         grain,
@@ -449,7 +451,8 @@ pub mod wire {
                         read,
                         write,
                         exec,
-                        connect,
+                        broker,
+                        member,
                         hidden,
                     }
                 }
@@ -480,7 +483,8 @@ pub mod wire {
                     read,
                     write,
                     exec,
-                    connect,
+                    broker,
+                    member,
                     hidden,
                 } => {
                     out.push(1);
@@ -489,7 +493,8 @@ pub mod wire {
                     put_paths(&mut out, read, 4096)?;
                     put_paths(&mut out, write, 4096)?;
                     put_paths(&mut out, exec, 4096)?;
-                    put_paths(&mut out, connect, 4096)?;
+                    put_paths(&mut out, broker, 4096)?;
+                    put_paths(&mut out, member, 4096)?;
                     put_paths(&mut out, hidden, 4096)?;
                 }
                 Action::Kill { grain } => {
@@ -612,8 +617,9 @@ pub mod launch_exit {
     pub const CONTROLLER_LOST: u8 = 127;
     pub const CONTROLLER_MECHANISM: u8 = 67;
     pub const LAYOUT_MISSING: u8 = 68;
+    pub const FOREIGN_PATH: u8 = 69;
     pub const ALL: &[u8] = &[
-        116, 117, 118, 119, 120, 121, 122, 123, 124, 125, 126, 127, 67, 68,
+        116, 117, 118, 119, 120, 121, 122, 123, 124, 125, 126, 127, 67, 68, 69,
     ];
 }
 

@@ -36,28 +36,84 @@ pub struct PlanPaths<'a> {
     /// executable, under the hosting root
     pub exec: &'a [Vec<u8>],
     /// sockets, under the BROKER root (HOSTING-17 §6)
-    pub connect: &'a [Vec<u8>],
+    pub broker: &'a [Vec<u8>],
+    /// sockets, under the MEMBER root (HOSTING-20, HOSTING-25)
+    pub member: &'a [Vec<u8>],
     /// hidden, under the hosting root
     pub hidden: &'a [Vec<u8>],
 }
 
-/// The `sandbox::Policy` of a launch frame: every path joined onto `root`, except `connect`, joined
-/// onto `broker`. Nothing is added, dropped or reordered: the plan is Lean's.
-pub fn policy(root: &Path, broker: &Path, p: &PlanPaths<'_>) -> Policy {
-    let all = |base: &Path, ps: &[Vec<u8>]| ps.iter().map(|q| under(base, q)).collect();
+/// The operator's three roots a launch frame's paths are joined onto.
+pub struct Roots<'a> {
+    /// the hosting root: read, write, exec, hidden and the program
+    pub root: &'a Path,
+    /// the broker root (keybroker's SOCKDIR): the `broker` sockets
+    pub broker: &'a Path,
+    /// the member root: the `member` sockets
+    pub member: &'a Path,
+}
+
+/// The `sandbox::Policy` of a launch frame: every path joined onto the hosting root, except the two
+/// socket lists, each joined onto its own root (`connect` = the broker sockets, then the member
+/// sockets). Nothing is added, dropped or reordered: the plan is Lean's.
+pub fn policy(r: &Roots<'_>, p: &PlanPaths<'_>) -> Policy {
+    let all = |base: &Path, ps: &[Vec<u8>]| ps.iter().map(|q| under(base, q)).collect::<Vec<_>>();
+    let mut connect = all(r.broker, p.broker);
+    connect.extend(all(r.member, p.member));
     Policy {
-        read: all(root, p.read),
-        write: all(root, p.write),
-        exec: all(root, p.exec),
-        hidden: all(root, p.hidden),
-        connect: all(broker, p.connect),
+        read: all(r.root, p.read),
+        write: all(r.root, p.write),
+        exec: all(r.root, p.exec),
+        hidden: all(r.root, p.hidden),
+        connect,
     }
 }
 
-/// HOSTING-17 §8: the broker root and the hosting root are disjoint trees (on Linux every directory
-/// a grain may see is a connect grant to the sockets in it), compared after canonicalizing.
-pub fn roots_disjoint(root: &Path, broker: &Path) -> bool {
-    !(root.starts_with(broker) || broker.starts_with(root))
+/// HOSTING-17 §8, HOSTING-25: the hosting, broker and member roots are pairwise disjoint trees (on
+/// Linux every directory a grain may see is a connect grant to the sockets in it), compared after
+/// canonicalizing.
+pub fn roots_disjoint(r: &Roots<'_>) -> bool {
+    let apart = |a: &Path, b: &Path| !(a.starts_with(b) || b.starts_with(a));
+    apart(r.root, r.broker) && apart(r.root, r.member) && apart(r.broker, r.member)
+}
+
+/// The first path of a launch frame that is not the launched grain's own, or `None`: the program,
+/// read, write and exec paths must lie under `worlds/<label>/grains/<grain>/`, and each socket of
+/// either root must be `<grain>/<name>` (one name, no further component). Lean's launches never break
+/// this (`Hosting.Proofs.reconcile_launch_named`); a frame that does is a defect in the controller,
+/// and another grain's socket is another grain's identity, so grain-launch ends `foreignPath`
+/// instead of resolving it (HOSTING-25). Hidden paths are exempt: they name what the grain must
+/// not see.
+pub fn foreign_path<'a>(
+    label: &[u8],
+    grain: &[u8],
+    program: &'a [u8],
+    p: &PlanPaths<'a>,
+) -> Option<&'a [u8]> {
+    let own = [b"worlds/".as_slice(), label, b"/grains/", grain, b"/"].concat();
+    let under_own = |e: &[u8]| e.len() > own.len() && e.starts_with(&own);
+    let own_socket = |e: &[u8]| {
+        e.len() > grain.len() + 1
+            && e.starts_with(grain)
+            && e[grain.len()] == b'/'
+            && !e[grain.len() + 1..].contains(&b'/')
+    };
+    std::iter::once(program)
+        .chain(
+            p.read
+                .iter()
+                .chain(p.write)
+                .chain(p.exec)
+                .map(Vec::as_slice),
+        )
+        .find(|e| !under_own(e))
+        .or_else(|| {
+            p.broker
+                .iter()
+                .chain(p.member)
+                .map(Vec::as_slice)
+                .find(|e| !own_socket(e))
+        })
 }
 
 /// A grain name is a single directory-name component of lowercase ASCII letters, digits and `-`

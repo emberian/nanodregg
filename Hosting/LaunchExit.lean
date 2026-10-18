@@ -2,7 +2,7 @@
 # Hosting.LaunchExit — how grain-launch and its controller end, as data (OPS-3's ask, HOSTING-19)
 
 The grain-launch unit sees one code space, as keybroker's does (HOSTING-16): grain-launch's own ends
-(`LaunchExit`, 116 to 127, then 67 and 68: the space below 128 is nearly spent) and its controller's
+(`LaunchExit`, 116 to 127, then 67, 68 and 69: the space below 128 is nearly spent) and its controller's
 (`ControllerExit`, 0 and 106 and up), which grain-launch passes through when `hosting-controller` exits,
 but only a code `ControllerExit` names (`controller_exit::ALL`); any other is `controllerMechanism`. Each code has the Host's `ExitClass`, so `Ops.Units`
 renders the unit's `RestartPreventExitStatus` from `codesOf .fatal` of both tables. grain-launch reads
@@ -70,7 +70,7 @@ end ControllerExit
 inductive LaunchExit where
   /-- argv does not parse, or a root does not exist -/
   | usage
-  /-- the broker root and the hosting root nest (HOSTING-17 §8) -/
+  /-- two of the three roots (hosting, broker, member) nest (HOSTING-17 §8, HOSTING-25) -/
   | rootsOverlap
   /-- the sandbox refused the controller's policy, or it could not be spawned -/
   | controllerRefused
@@ -100,23 +100,29 @@ inductive LaunchExit where
   /-- a directory the World's layout hides (`Plan.layoutHidden` under `worlds/<label>`) is absent:
   the sandbox would refuse every launch `pathMissing` (HOSTING-24) -/
   | layoutMissing
+  /-- a launch names a path outside the launched grain's own: a program, read, write or exec path not
+  under `worlds/<label>/grains/<grain>/`, or a socket of either root not `<grain>/<name>`. A defect in
+  the controller (Lean's launches never do: `Proofs.reconcile_launch_named`), and another grain's
+  socket is another grain's identity (HOSTING-25) -/
+  | foreignPath
   deriving DecidableEq, Repr
 
 namespace LaunchExit
 
 def all : List LaunchExit :=
   [usage, rootsOverlap, controllerRefused, frame, badAction, badGrain, duplicateLaunch, reportPipe,
-   pidFile, lifetime, controllerSignaled, controllerLost, controllerMechanism, layoutMissing]
+   pidFile, lifetime, controllerSignaled, controllerLost, controllerMechanism, layoutMissing, foreignPath]
 
 def code : LaunchExit → Nat
   | usage => 116 | rootsOverlap => 117 | controllerRefused => 118 | frame => 119 | badAction => 120
   | badGrain => 121 | duplicateLaunch => 122 | reportPipe => 123 | pidFile => 124 | lifetime => 125
   | controllerSignaled => 126 | controllerLost => 127 | controllerMechanism => 67 | layoutMissing => 68
+  | foreignPath => 69
 
 def cls : LaunchExit → ExitClass
   | reportPipe | lifetime | controllerSignaled => .restart
   | usage | rootsOverlap | controllerRefused | frame | badAction | badGrain | duplicateLaunch | pidFile
-  | controllerLost | controllerMechanism | layoutMissing => .fatal
+  | controllerLost | controllerMechanism | layoutMissing | foreignPath => .fatal
 
 /-- The name printed on stderr (`grain-launch: NAME …`). -/
 def name (e : LaunchExit) : String := ((toString (repr e)).splitOn ".").getLast!

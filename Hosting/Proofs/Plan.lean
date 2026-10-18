@@ -3,8 +3,9 @@
 
 `plan_paths`: every path a plan allows lies under `worlds/<l>/grains/<id>`. `plan_not_exposed`: no
 allowed path is a prefix of a hidden one or lies inside one (the launcher's `Exposed` check is the
-same property on canonical OS paths, a second barrier). `plan_connect_own`: a grain may connect only
-to its own broker socket, and only a resident to any (HOSTING-17).
+same property on canonical OS paths, a second barrier). `plan_sockets_own`: a grain may connect only
+to its own broker socket and its own member socket, each under its own root, and only a resident to
+any (HOSTING-17, HOSTING-25).
 -/
 import Hosting.Plan
 
@@ -82,7 +83,8 @@ wrote `pkg` and read `vol` is refused here.) -/
 theorem plan_roles {l : ByteArray} {g : Grain} {p : Plan} (h : plan l g = .ok p) :
     labelOk l = true ∧ labelOk g.idHex = true ∧ clean g.entry = true ∧
       p = { program := pkgDir l g ++ [g.entry], read := [pkgDir l g], write := [volDir l g],
-            exec := [], connect := connectOf g, hidden := [storeDir l, membersDir l] } := by
+            exec := [], broker := brokerOf g, member := memberOf g,
+            hidden := [storeDir l, membersDir l] } := by
   unfold plan at h
   by_cases hl : labelOk l = true <;> by_cases hi : labelOk g.idHex = true <;>
     by_cases he : clean g.entry = true <;>
@@ -96,31 +98,56 @@ theorem plan_hidden_layout {l : ByteArray} {g : Grain} {p : Plan} (h : plan l g 
   obtain ⟨-, -, -, rfl⟩ := plan_roles h
   rfl
 
-/-- **A grain connects only to its own broker socket** (HOSTING-17): an app's plan names no socket,
-and a resident's names exactly `<its id>/broker.sock`, so identity-is-the-socket holds of the plan:
-no plan names another grain's socket (`plan_connect_disjoint`). -/
-theorem plan_connect_own {l : ByteArray} {g : Grain} {p : Plan} (h : plan l g = .ok p) :
-    p.connect = (match g.kind with | .app => [] | .resident => [[g.idHex, brokerSock]]) := by
+/-- **A grain connects only to its own sockets, each under its own root** (HOSTING-17, HOSTING-25):
+an app's plan names no socket; a resident's names exactly `<its id>/broker.sock` under the broker
+root and exactly `<its id>/nd.sock` under the member root. Identity is the socket, so no plan names
+another grain's socket of either kind (`plan_sockets_disjoint`). -/
+theorem plan_sockets_own {l : ByteArray} {g : Grain} {p : Plan} (h : plan l g = .ok p) :
+    p.broker = (match g.kind with | .app => [] | .resident => [[g.idHex, brokerSock]]) ∧
+      p.member = (match g.kind with | .app => [] | .resident => [[g.idHex, memberSock]]) := by
   obtain ⟨-, -, -, rfl⟩ := plan_roles h
-  rfl
+  cases hk : g.kind <;> simp [brokerOf, memberOf, socketOf, hk]
 
-theorem plan_connect_disjoint {l l' : ByteArray} {g g' : Grain} {p p' : Plan} (h : plan l g = .ok p)
-    (h' : plan l' g' = .ok p') (hne : g.idHex ≠ g'.idHex) : ∀ x ∈ p.connect, x ∉ p'.connect := by
-  intro x hx hx'
-  rw [plan_connect_own h] at hx
-  rw [plan_connect_own h'] at hx'
-  cases hk : g.kind <;> cases hk' : g'.kind <;> simp_all
-
-private theorem brokerSock_clean : clean brokerSock = true := by decide
-
-/-- Every component of a connect entry is clean: one directory below the broker root, one name in
-it (so the launcher's join stays inside the broker root). -/
-theorem plan_connect_clean {l : ByteArray} {g : Grain} {p : Plan} (h : plan l g = .ok p) :
-    ∀ x ∈ p.connect, x.length = 2 ∧ ∀ c ∈ x, clean c = true := by
-  have hi := labelOk_clean (plan_roles h).2.1
-  rw [plan_connect_own h]
+/-- Every socket entry of a plan, of either root, starts with the grain's own directory name: the
+law grain-launch checks of every launch frame (`foreignPath`), stated of Lean's plans; of the
+controller's frames, `reconcile_launch_named`. -/
+theorem plan_sockets_named {l : ByteArray} {g : Grain} {p : Plan} (h : plan l g = .ok p) :
+    ∀ x ∈ p.broker ++ p.member, x.head? = some g.idHex := by
+  obtain ⟨hb, hm⟩ := plan_sockets_own h
   intro x hx
-  cases hk : g.kind <;> simp_all [brokerSock_clean]
+  rw [hb, hm] at hx
+  cases hk : g.kind <;> simp [hk] at hx
+  rcases hx with rfl | rfl <;> rfl
+
+/-- Two different grains' plans name no common socket, under either root. -/
+theorem plan_sockets_disjoint {l l' : ByteArray} {g g' : Grain} {p p' : Plan} (h : plan l g = .ok p)
+    (h' : plan l' g' = .ok p') (hne : g.idHex ≠ g'.idHex) :
+    (∀ x ∈ p.broker, x ∉ p'.broker) ∧ (∀ x ∈ p.member, x ∉ p'.member) := by
+  have n1 := plan_sockets_named h
+  have n2 := plan_sockets_named h'
+  refine ⟨fun x hx hx' => ?_, fun x hx hx' => ?_⟩
+  · have := n1 x (List.mem_append_left _ hx); have := n2 x (List.mem_append_left _ hx'); simp_all
+  · have := n1 x (List.mem_append_right _ hx); have := n2 x (List.mem_append_right _ hx'); simp_all
+
+/-- A plan names at most two sockets in all (`sandbox::CONNECT_MAX` = 2, HOSTING-17 §5): a
+resident's broker socket and its member socket, the two the model driver reaches. -/
+theorem plan_sockets_max {l : ByteArray} {g : Grain} {p : Plan} (h : plan l g = .ok p) :
+    p.broker.length + p.member.length ≤ 2 := by
+  obtain ⟨hb, hm⟩ := plan_sockets_own h
+  rw [hb, hm]; cases g.kind <;> simp
+
+private theorem socks_clean : clean brokerSock = true ∧ clean memberSock = true := by decide
+
+/-- Every component of a socket entry is clean: one directory below its root, one name in it (so
+the launcher's join stays inside that root). -/
+theorem plan_sockets_clean {l : ByteArray} {g : Grain} {p : Plan} (h : plan l g = .ok p) :
+    ∀ x ∈ p.broker ++ p.member, x.length = 2 ∧ ∀ c ∈ x, clean c = true := by
+  have hi := labelOk_clean (plan_roles h).2.1
+  obtain ⟨hb, hm⟩ := plan_sockets_own h
+  rw [hb, hm]
+  intro x hx
+  cases hk : g.kind <;> simp [hk] at hx
+  rcases hx with rfl | rfl <;> simp [hi, socks_clean.1, socks_clean.2]
 
 theorem plan_paths {l : ByteArray} {g : Grain} {p : Plan} (h : plan l g = .ok p) :
     ∀ x ∈ p.allowed, grainDir l g <+: x := by
@@ -212,12 +239,13 @@ theorem planned_launch_encodes :
      | .error _ => false) = true := by
   decide +kernel
 
-/-- Tooth: a resident's plan (a 64-byte directory name) encodes, and its connect entry is its own
-socket and nothing else. -/
+/-- Tooth: a resident's plan (a 64-byte directory name) encodes, and its socket entries are its own
+broker socket and its own member socket, each in its own field, and nothing else. -/
 theorem planned_resident_encodes :
     (match plan (lit "w1") { idHex := ⟨Array.replicate 64 97⟩, kind := .resident, entry := lit "app" } with
      | .ok p => (Wire.encodeAction { grain := ⟨Array.replicate 64 97⟩, verdict := .launch p }).isSome &&
-         p.connect == [[⟨Array.replicate 64 97⟩, lit "broker.sock"]]
+         p.broker == [[⟨Array.replicate 64 97⟩, lit "broker.sock"]] &&
+         p.member == [[⟨Array.replicate 64 97⟩, lit "nd.sock"]]
      | .error _ => false) = true := by
   decide +kernel
 

@@ -234,8 +234,28 @@ pub struct World {
     pub pkg: String,
     pub ws: PathBuf,
     pub holding: PathBuf,
+    /// the writer's socket, alone in a directory of its own: a confined connector sees the socket's
+    /// directory (CLIENT-20), so it never sits in a workspace holding keys
+    pub host_sock: PathBuf,
     pub _serve: Supervisor,
     pub _follow: Supervisor,
+}
+
+/// A member's own `nd` (not the operator's): its own workspace and holding, its follow socket and
+/// the writer's host socket given explicitly.
+pub fn member_nd(ws: &Path, holding: &Path, follow: &Path, host: &Path, args: &[&str]) -> Output {
+    Command::new(nd())
+        .env("ND_WORKSPACE", ws)
+        .env("ND_HOLDING", holding)
+        .env("ND_FOLLOW_SOCK", follow)
+        .env("ND_HOST_SOCK", host)
+        .args(args)
+        .output()
+        .unwrap()
+}
+
+pub fn both(o: &Output) -> String {
+    format!("{}{}", text(o), String::from_utf8_lossy(&o.stderr))
 }
 
 pub fn text(o: &Output) -> String {
@@ -253,6 +273,7 @@ impl World {
         Command::new(nd())
             .env("ND_WORKSPACE", &self.ws)
             .env("ND_HOLDING", &self.holding)
+            .env("ND_HOST_SOCK", &self.host_sock)
             .args(args)
             .output()
             .unwrap()
@@ -317,7 +338,7 @@ impl World {
     pub fn genesis_following(name: &str, follow: Option<PathBuf>) -> World {
         // A short root: a Unix socket path must fit sun_path.
         let root = nanodregg_devtools::scratch(&format!("kbw{}{name}", std::process::id()));
-        for d in ["ws", "holding", "stores"] {
+        for d in ["ws", "holding", "stores", "run"] {
             nanodregg_devtools::mkdirs(&root.join(d)).unwrap();
         }
         let root = root.canonicalize().unwrap();
@@ -373,7 +394,7 @@ impl World {
         .collect();
         let serve = supervise_host(
             &nd_supervise(),
-            &ws.join("host.sock"),
+            &root.join("run/host.sock"),
             &ws,
             &store,
             &["serve", store.to_str().unwrap()],
@@ -385,6 +406,7 @@ impl World {
             &fstore,
             &["follow", fstore.to_str().unwrap(), operator, grant],
         );
+        let host_sock = root.join("run/host.sock");
         let mut w = World {
             root,
             store,
@@ -396,6 +418,7 @@ impl World {
             pkg: String::new(),
             ws,
             holding,
+            host_sock,
             _serve: serve,
             _follow: follow,
         };
@@ -407,6 +430,103 @@ impl World {
 impl Drop for World {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.root);
+    }
+}
+
+/// A resident's member (HOSTING-20, HOSTING-25): an observe-on-the-World member enrolled by the
+/// operator, its one-record hosted custody in `ws` (the member workspace `worlds/<l>/members/<dirOf>`,
+/// hidden from every grain), its own follower Store, and `nd --stdio` served on `sock` by
+/// nd-supervise, confined to write `ws` and connect [host.sock, its follow socket] (CLIENT-24). One
+/// uid here: nd-supervise binds 0600 with no `--group`/`--peer` (the deployment's 0660 group socket
+/// with its peer check is CLIENT-21/24's, declared unrun across uids).
+pub struct Member {
+    /// the member's id (hex), the resident's identity in the World
+    pub id: String,
+    pub ws: PathBuf,
+    pub sock: PathBuf,
+    _follow: Supervisor,
+    _stdio: Supervisor,
+}
+
+impl World {
+    /// Enrol a resident's member in `ws` and serve its `nd --stdio` on `sock` (whose directory must
+    /// exist); its follower Store at `store`, its follow socket `follow`, PID files in `pids`.
+    pub fn member(
+        &self,
+        ws: &Path,
+        follow: &Path,
+        store: &Path,
+        sock: &Path,
+        pids: &Path,
+    ) -> Member {
+        nanodregg_devtools::mkdirs(ws).unwrap();
+        fs::set_permissions(ws, fs::Permissions::from_mode(0o700)).unwrap();
+        let holding = ws.with_extension("holding");
+        nanodregg_devtools::mkdirs(&holding).unwrap();
+        fs::set_permissions(&holding, fs::Permissions::from_mode(0o700)).unwrap();
+        let (op_follow, host) = (self.ws.join("follow.sock"), self.host_sock.clone());
+        let o = member_nd(ws, &holding, &op_follow, &host, &["--init-hosted"]);
+        assert!(
+            o.status.success(),
+            "resident nd --init-hosted: {}",
+            both(&o)
+        );
+        let o = member_nd(ws, &holding, &op_follow, &host, &["init", &self.operator]);
+        assert!(o.status.success(), "resident nd init: {}", both(&o));
+        let token = line(&text(&o), "join ").to_owned();
+        let id = line(&self.run(&["enroll", &token]), "id ").to_owned();
+        let observe = line(
+            &self.run(&["grant", "world", &id, "observe", "--via", &self.grant]),
+            "id ",
+        )
+        .to_owned();
+        let follow_s = self.follower(store, follow, ws, &id, &observe);
+        let nd_exe = nd().canonicalize().unwrap();
+        let child = Command::new(nd_supervise())
+            .arg(sock)
+            // the operator's workspace (its custody), named hidden: nd-supervise starts no child
+            // with nothing hidden (CLIENT-8)
+            .arg("--hide")
+            .arg(&self.ws)
+            .arg("--write")
+            .arg(ws)
+            .arg("--exec")
+            .arg(&nd_exe)
+            .arg("--connect")
+            .arg(&host)
+            .arg("--connect")
+            .arg(follow)
+            .arg("--")
+            .arg(&nd_exe)
+            .arg("--stdio")
+            .arg(ws)
+            .arg(follow)
+            .arg(&host)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(fs::File::create(pids.join("member-stdio.err")).unwrap())
+            .spawn()
+            .unwrap();
+        let stdio = Supervisor::hold(child, pids.join("member-stdio.pid"));
+        until(
+            "the member socket",
+            20,
+            || UnixStream::connect(sock).is_ok(),
+            &|| {
+                format!(
+                    "nd-supervise never bound {}: {}",
+                    sock.display(),
+                    fs::read_to_string(pids.join("member-stdio.err")).unwrap_or_default()
+                )
+            },
+        );
+        Member {
+            id,
+            ws: ws.to_path_buf(),
+            sock: sock.to_path_buf(),
+            _follow: follow_s,
+            _stdio: stdio,
+        }
     }
 }
 

@@ -1,11 +1,15 @@
-//! `grain-launch ROOT BROKER LABEL PIDS CONTROLLER [ARG...]`
+//! `grain-launch ROOT BROKER MEMBER LABEL PIDS CONTROLLER [ARG...]`
 //!
 //! Starts CONTROLLER (the Lean `hosting-controller`, or the test's `hosting-drive`) confined, with
 //! read access to `ROOT/worlds/LABEL/store` only, and two pipes: it reads action frames from the
 //! controller's stdout and writes report frames to its stdin. Each launch is one
-//! `nanodregg_sandbox::command` over the frame's plan joined onto ROOT (its `connect` sockets onto
-//! BROKER, the broker's socket root, HOSTING-17; ROOT and BROKER must be disjoint trees, or the
-//! launcher ends `rootsOverlap` before it starts anything); each child gets a PID file
+//! `nanodregg_sandbox::command` over the frame's plan joined onto ROOT, its `broker` sockets onto
+//! BROKER (keybroker's socket root, HOSTING-17) and its `member` sockets onto MEMBER (where nd serves
+//! each resident's member socket, HOSTING-20/25). The three roots must be pairwise disjoint trees,
+//! or the launcher ends `rootsOverlap` before it starts anything. A launch naming a path that is not
+//! its own grain's (a program, read, write or exec path outside `worlds/LABEL/grains/<grain>/`, or a
+//! socket of either root other than `<grain>/<name>`) ends the run `foreignPath` (a defect in the
+//! controller: another grain's socket is another grain's identity). Each child gets a PID file
 //! `PIDS/<grain>.pid`, removed when the child is reaped. A kill stops the child by its own handle
 //! (the PID in that file). When the controller's pipe closes, every child is killed and reaped,
 //! then the launcher exits with a name on stderr. It decides nothing: a frame it cannot decode, or
@@ -14,6 +18,7 @@
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::io::Write;
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::process::ExitStatusExt;
 use std::path::PathBuf;
 use std::process::{Child, ChildStdin, ExitCode, Stdio};
@@ -24,7 +29,9 @@ use nanodregg_launcher::generated::wire::{Action, LaunchFailure, Report};
 use nanodregg_launcher::generated::{
     FrameError, LAYOUT_HIDDEN, controller_exit, launch_exit, read_frame, write_frame,
 };
-use nanodregg_launcher::{PlanPaths, failure_of, grain_name_ok, policy, roots_disjoint, under};
+use nanodregg_launcher::{
+    PlanPaths, Roots, failure_of, foreign_path, grain_name_ok, policy, roots_disjoint, under,
+};
 use nanodregg_sandbox::{Policy, command};
 
 /// How often children are polled for exit while no action arrives.
@@ -48,6 +55,8 @@ enum End {
     ControllerMechanism(i32),
     /// a directory the World's layout hides is absent (`LAYOUT_HIDDEN`, HOSTING-24)
     LayoutMissing(PathBuf),
+    /// a launch names a path that is not its grain's own (HOSTING-25)
+    ForeignPath(String),
     Frame(String),
     BadAction(String),
     BadGrain,
@@ -60,7 +69,9 @@ enum End {
 impl End {
     fn describe(&self) -> String {
         match self {
-            End::Usage => "usage: grain-launch ROOT BROKER LABEL PIDS CONTROLLER [ARG...]".into(),
+            End::Usage => {
+                "usage: grain-launch ROOT BROKER MEMBER LABEL PIDS CONTROLLER [ARG...]".into()
+            }
             End::RootsOverlap => "rootsOverlap".into(),
             End::ControllerRefused(e) => format!("controllerRefused {e}"),
             End::ControllerEnded(Some(c)) => format!("controllerEnded {c}"),
@@ -68,6 +79,7 @@ impl End {
             End::ControllerLost(e) => format!("controllerLost {e}"),
             End::ControllerMechanism(c) => format!("controllerMechanism {c}"),
             End::LayoutMissing(p) => format!("layoutMissing {}", p.display()),
+            End::ForeignPath(e) => format!("foreignPath {e}"),
             End::Frame(e) => format!("frame {e}"),
             End::BadAction(e) => format!("badAction {e}"),
             End::BadGrain => "badGrain".into(),
@@ -96,6 +108,7 @@ fn main() -> ExitCode {
         },
         End::ControllerMechanism(_) => k::CONTROLLER_MECHANISM,
         End::LayoutMissing(_) => k::LAYOUT_MISSING,
+        End::ForeignPath(_) => k::FOREIGN_PATH,
         End::ControllerEnded(None) => k::CONTROLLER_SIGNALED,
         End::ControllerLost(_) => k::CONTROLLER_LOST,
         End::Frame(_) => k::FRAME,
@@ -139,6 +152,9 @@ struct Grain {
 struct Launcher {
     root: PathBuf,
     broker: PathBuf,
+    member: PathBuf,
+    /// the Store label (`worlds/LABEL`), the root of every grain path a frame may name
+    label: Vec<u8>,
     pids: PathBuf,
     start: Instant,
     to_controller: ChildStdin,
@@ -185,8 +201,8 @@ impl Launcher {
             }
         }
         let program = under(&self.root, program);
-        // Each socket the plan lets this grain connect to, as joined onto BROKER: the resident row
-        // reads its connect path here, never computes it (PROTOCOL-7's R1).
+        // Each socket the plan lets this grain connect to, as joined onto its root (BROKER, then
+        // MEMBER): the resident row reads its connect paths here, never computes them (PROTOCOL-7's R1).
         for c in &policy.connect {
             eprintln!(
                 "grain-launch: {} connect {}",
@@ -266,17 +282,31 @@ impl Launcher {
                 read,
                 write,
                 exec,
-                connect,
+                broker,
+                member,
                 hidden,
             } => {
                 let paths = PlanPaths {
                     read: &read,
                     write: &write,
                     exec: &exec,
-                    connect: &connect,
+                    broker: &broker,
+                    member: &member,
                     hidden: &hidden,
                 };
-                let p = policy(&self.root, &self.broker, &paths);
+                if let Some(e) = foreign_path(&self.label, &grain, &program, &paths) {
+                    return Err(End::ForeignPath(format!(
+                        "{} {}",
+                        String::from_utf8_lossy(&grain),
+                        String::from_utf8_lossy(e)
+                    )));
+                }
+                let roots = Roots {
+                    root: &self.root,
+                    broker: &self.broker,
+                    member: &self.member,
+                };
+                let p = policy(&roots, &paths);
                 self.launch(grain, &program, &p)
             }
             Action::Kill { grain } => {
@@ -331,16 +361,22 @@ fn ended(code: Option<i32>) -> End {
 
 fn run() -> End {
     let args: Vec<OsString> = std::env::args_os().skip(1).collect();
-    let [root, broker, label, pids, controller, rest @ ..] = args.as_slice() else {
+    let [root, broker, member, label, pids, controller, rest @ ..] = args.as_slice() else {
         return End::Usage;
     };
-    let (Ok(root), Ok(broker)) = (
+    let (Ok(root), Ok(broker), Ok(member)) = (
         PathBuf::from(root).canonicalize(),
         PathBuf::from(broker).canonicalize(),
+        PathBuf::from(member).canonicalize(),
     ) else {
         return End::Usage;
     };
-    if !roots_disjoint(&root, &broker) {
+    let roots = Roots {
+        root: &root,
+        broker: &broker,
+        member: &member,
+    };
+    if !roots_disjoint(&roots) {
         return End::RootsOverlap;
     }
     // every directory Lean's plans hide must exist, or every launch would be refused pathMissing
@@ -376,6 +412,8 @@ fn run() -> End {
     let mut l = Launcher {
         root,
         broker,
+        member,
+        label: label.as_bytes().to_vec(),
         pids: PathBuf::from(pids),
         start: Instant::now(),
         to_controller,

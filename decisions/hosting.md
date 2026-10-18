@@ -1239,6 +1239,8 @@ measured fact.
 **Owed (HOSTING).** After `nd --stdio` lands: the MEMBER root in `Hosting/Plan.lean` (typed connect
 entries, the theorems restated per root), grain-launch's third root and pairwise `rootsOverlap`, the
 re-emit of the launch frame, and the resident row's second socket.
+**Built: HOSTING-25** (typed `broker`/`member` plan fields, grain-launch MEMBER, `foreignPath`, the row's
+member socket).
 
 ## HOSTING-21 The resident row, and keybroker's socket admits exactly PEER (HOSTING-7, 2026-10-18)
 
@@ -1412,3 +1414,110 @@ RestartPreventExitStatus and EXITS.md gain them (Ops.Units arms carried cross-la
 sentences). Every `byteModule` table gains `ALL` (client/src/generated.rs, launcher/src/generated.rs,
 launcher/src/broker_generated.rs re-emitted, unedited; CODEC-7 agreed the Emit/Rust.lean and
 Emit/Hosting.lean edits). generated.rs gains LAYOUT_HIDDEN. Nothing persisted changes.
+
+## HOSTING-25 The resident reaches the World: a typed MEMBER root, built as HOSTING-20 ruled (HOSTING-8, 2026-10-19)
+
+**Decision.** HOSTING-20's owed half, built. A plan's sockets are TYPED by their root: `Plan.connect` is
+deleted and replaced by two fields, `broker` (relative to the broker root, keybroker's SOCKDIR) and
+`member` (relative to the new MEMBER root, `/run/nd-member`). `Hosting.memberOf` gives a resident exactly
+`[[<dirOf id>, "nd.sock"]]`, the socket nd-supervise serves `nd --stdio` on as nd over the resident's member
+workspace `worlds/<l>/members/<dirOf id>`, which every plan already hides. An app gets none. The launch
+frame carries `broker` and `member` as two named `paths` fields (`launcher/src/generated.rs` re-emitted).
+grain-launch takes `ROOT BROKER MEMBER LABEL PIDS CONTROLLER …`, joins each list onto its own root, hands
+`sandbox::Policy.connect` = broker sockets then member sockets (at most `CONNECT_MAX` = 2), and refuses
+`rootsOverlap` for every pair of the three roots.
+- **"A member socket that is not its own" is refused by name, twice.** In Lean it cannot be planned:
+  `plan_sockets_own` (each field is exactly the grain's own socket of that root), `plan_sockets_named`
+  (every socket entry of either root begins with the grain's own directory) and `plan_sockets_disjoint`
+  (two grains' plans share no socket of either root). The member is keyed by the grain's id, so the plan
+  has no input that could name another member. Of the controller's frames, `reconcile_launch_named`:
+  every launch the controller writes has sockets `<a.grain>/…` and every allowed path under
+  `worlds/<label>/grains/<a.grain>` (through `grainOf_named` and `launch_named`). In Rust, grain-launch
+  checks that law of every launch frame before anything resolves (`foreign_path`): the program, read,
+  write and exec paths lie under `worlds/LABEL/grains/<grain>/`, and each socket of either root is
+  exactly `<grain>/<name>`. A frame that breaks it ends the run with the new LaunchExit `foreignPath`
+  (69, fatal): a defect in the controller, and the socket or package would be another grain's.
+- **The confinement is exactly [broker socket, member socket].** `plan_sockets_max`: a plan names at most
+  two sockets in all. The isolation test plants two residents' sockets under each root plus a file in
+  each root. The resident reaches its own two sockets, and the other resident's sockets and both files are
+  ENOENT. Its own directories list exactly `broker.sock` and `nd.sock`. The roots show at most its own
+  directory (bwrap scaffolding).
+- **The resident row writes the World.** `cargo:launcher:resident` now runs a real resident member
+  (`World::member`: `nd --init-hosted` in the member workspace, `init`, the operator's `enroll`, `grant
+  world … observe`, its own follower Store), with `nd --stdio` confined under nd-supervise (write = the
+  member workspace, connect = [host.sock, its follow socket], CLIENT-24). Measured inside the grain,
+  through MEMBER/<dirOf>/nd.sock, via the probe's new `nd` op (the client's own frame and layout code):
+  `write OBJ 1 resident --via RM` gives `ok 0 tx …` and `read OBJ` gives `ok 0 1=resident`. The operator's
+  `nd read OBJ` over its own sockets prints `1=resident`. A write to an object it holds no grant on gives
+  `ok 1 refused noGrant`, and the operator reads that object unchanged. `rotate` gives `ok 1 refused
+  notOnSurface rotate`. The other resident's member socket is `denied ENOENT`. The member directory lists
+  `nd.sock`. The member workspace (its custody) is `denied ENOENT` inside, while it holds custody on the
+  host. R1 now reads exactly `[BROKER/<g>/broker.sock, MEMBER/<g>/nd.sock]` from grain-launch's lines.
+- **Custody: nothing widens.** The member key stays in the member workspace, which every plan hides. The
+  grain sees a socket and never a key. The socket admits the hosted uid and group only (nd-supervise
+  `--group --peer`, CLIENT-21/24). Its surface is STDIO_VERBS, and custody refuses rotation. The
+  resident's authority is exactly its member's grants (HOSTING-20 CRITIQUE). The row grants `observe` on
+  the World and `observe,mutate` on one object, nothing else.
+- **The writer's socket sits alone in its own directory.** A confined connector sees its socket's whole
+  parent directory (CLIENT-20). The test World used to serve host.sock inside the operator's workspace,
+  where a `--connect` would have exposed the operator's custody to `nd --stdio`. `World` now serves
+  `run/host.sock` (`World::host_sock`, `ND_HOST_SOCK` set). That is a deployment fact for OPS: host.sock
+  never shares a directory with keys.
+- **Test trees are owned (GATES-6, cv 01a14ed7-79cf).** isolation.rs's `Tree` removes its three roots on
+  drop, so a judged run leaves nothing in the target dir, also when the test panics
+  (`a_panicking_test_still_removes_its_tree`). The busy test's directory is a `Gone`. The judge slots'
+  old leftovers are Ember's to remove, not this lane's.
+**Alternatives.** (1) One `connect : List (Root × Path)` list. That needs a tagged path entry in the Layout
+family (CODEC work) for the same typing two fields give for free. (2) Keep the untyped `connect` and
+append the member socket under BROKER. HOSTING-20 refused that (keybroker's directory must list exactly
+`broker.sock`, and a plan could confuse the roots). (3) Have grain-launch compute `<root>/<grain>/<name>`
+itself, making "own" structural in Rust too. That moves Lean's path rule into Rust (law 2) for a property
+the Lean theorem plus one frame-law check already give.
+**CRITIQUE.** `foreignPath` can be produced only by a frame Lean never writes (`hosting-drive
+--plant-foreign`, `--plant-read-worlds`), so in deployment it is a guard against a controller defect, not a
+path that runs. Its plants show the check fires, not that it is ever needed. Because it refuses a read
+outside the grain's directory first, the isolation row's `worlds/` plant now meets `foreignPath`, not the
+sandbox's `Exposed`. That is the next barrier, and its own test is sandbox/tests/confine.rs. The member socket's server is the test's
+nd-supervise. No unit renders it yet (owed by OPS: the per-resident member unit, as nd, with `--group
+--peer`, making `/run/nd-member/<dirOf>` 02710 first). The deployed shape therefore runs only in this
+row's one-uid form: 0600, no `--group/--peer`, because a 0660 socket of one's own uid is `connectMode`
+(HOSTING-21). The cross-uid peer check is CLIENT-21/24's plant, declared unrun across uids. The member's
+follow Store advances only when its nd reads (each `read`/`write` catches up first), so it lags no
+command. The member socket must exist before the launch resolves it, otherwise `pathMissing` and then
+crashLoop: the same ordering fact as the broker socket. HOSTING-26 settles that for keybroker. For the
+member socket it is the member unit's (OPS), started when the grain is born, before start.
+**META-CRITIQUE.** The first run of the member helper hid the operator's workspace and connected to a
+host.sock inside it. That would have been refused, or worse, exposed the workspace, had nd-supervise not
+refused a child with nothing hidden first for a different reason. The finding (a connect grant is a view
+of the socket's directory) is CLIENT-20's, already written down, and I still placed a socket next to keys.
+The harness now has no socket beside a key anywhere it builds.
+**Vacuity read (VACUITY-READER-H8, a fresh reader).** ACCEPT on the Plan, Wire and exit statements, with one REAL
+hole, now fixed. `plan_sockets_named` speaks of the Grain `grainOf` built, never of the frame's `grain`.
+`grainOf`'s `idHex := dir` was unstated, so `grainOf` naming another directory survived every theorem
+while Lean emitted another grain's sockets and package under this grain's name. Fixed by `grainOf_named`,
+`launch_named` and `reconcile_launch_named` (Proofs/Controller.lean). The reader's companion note, that
+Rust tied sockets to the frame's name but never the program or paths, is fixed by widening the check to
+`foreign_path`. Minor and accepted: Rust is stricter than Lean on socket depth (exactly two components), and
+69 is sysexits' EX_UNAVAILABLE, which nothing here uses.
+**Theorems** (Hosting/Proofs/Plan.lean, Hosting/Proofs/Controller.lean `grainOf_named`, `launch_named`,
+`reconcile_launch_named`): `plan_roles` restated (the plan has `broker := brokerOf g, member
+:= memberOf g`); `plan_sockets_own`, `plan_sockets_named`, `plan_sockets_disjoint`, `plan_sockets_max`,
+`plan_sockets_clean` replace `plan_connect_own/disjoint/clean`; tooth `planned_resident_encodes` (the
+broker field is `[<id>, broker.sock]`, the member field `[<id>, nd.sock]`, and the frame encodes);
+Proofs.Wire `launch_fields` names `broker` and `member`; Proofs.LaunchExit `codes_nodup/disjoint/reserved`
+cover 69.
+**Plants (run, hbox logs/hosting8-plants.py, output logs/hosting8-plants.out, each red).** p1 Lean's
+`memberOf` gives a resident nothing: red at R1, and isolation's own member socket. p2 grain-launch joins
+member sockets onto BROKER: red, the launch never comes (pathMissing → crashLoop, `hang: the launch`). p3
+the socket half of `foreign_path` removed: red, `foreignPath` not reported and the drive launches. p3b
+the path half removed: red, the `worlds/` read is not refused by name. p8 Lean's `grainOf` names
+another directory: `grainOf_named` fails to build. p4 broker and member
+roots allowed to nest: red, `overlapping_roots_are_refused` (the grain started). p5 the member sockets
+dropped from the policy: red at R1. p6 Lean's plan names another directory: `plan_sockets_own` and the
+tooth fail to build. p7 `Tree` not removed on drop: red, the panicking test's tree outlived it.
+**Flag day.** The launch frame's `connect` is replaced by `broker` and `member` (generated.rs re-emitted).
+grain-launch gains MEMBER (argv ROOT BROKER MEMBER LABEL PIDS CONTROLLER), and a grain-launch started with
+the old five-argument shape treats LABEL as MEMBER and refuses. LaunchExit gains `foreignPath` 69. The
+grain-launch unit (ExecStart, RestartPreventExitStatus 69) and EXITS.md are re-rendered.
+`deploy/units/linux/tmpfiles/nd-member.conf` is new. The launcher crate depends on nanodregg-client
+(Cargo.lock). Nothing persisted changes. Every resident launch now needs its member socket to exist.

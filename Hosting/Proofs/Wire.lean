@@ -97,11 +97,12 @@ theorem actionOf_wire {a : Action} {w : ActionTy} (h : actionWire? a = some w) :
     rcases h2 : paths? p.read with _ | a2 <;> simp [h2] at h
     rcases h3 : paths? p.write with _ | a3 <;> simp [h3] at h
     rcases h4 : paths? p.exec with _ | a4 <;> simp [h4] at h
-    rcases h6 : paths? p.connect with _ | a6 <;> simp [h6] at h
+    rcases h6 : paths? p.broker with _ | a6 <;> simp [h6] at h
+    rcases h7 : paths? p.member with _ | a7 <;> simp [h7] at h
     rcases h5 : paths? p.hidden with _ | a5 <;> simp [h5] at h
     subst h
     simp [actionOf, bytes?_val hg, path?_val h1, paths?_val h2, paths?_val h3, paths?_val h4,
-      paths?_val h5, paths?_val h6]
+      paths?_val h5, paths?_val h6, paths?_val h7]
   · simp at h; subst h; simp [actionOf, bytes?_val hg]
   · simp at h; subst h; simp [actionOf, bytes?_val hg, refusal_get]
 
@@ -138,7 +139,7 @@ theorem decodeReport_bytes {e : Report} {w : ReportTy} (h : reportWire? e = some
 
 The Rust launcher reads a launch frame's fields BY NAME (emitted from `actionCases`); Lean fills
 them by POSITION. `launch_fields` ties the two (by `Wire.pathNamed`/`pathsNamed`): the field named `program` carries the plan's
-program, and each `paths` field named `read`, `write`, `exec`, `connect`, `hidden` carries that list of the
+program, and each `paths` field named `read`, `write`, `exec`, `broker`, `member`, `hidden` carries that list of the
 plan. A swap of two same-typed slots in `actionWire?` and `actionOf` together keeps `actionOf_wire`
 true and turns this red. -/
 
@@ -150,7 +151,8 @@ theorem launch_fields {g : ByteArray} {p : Plan} {w : ActionTy}
       pathsNamed "read" (actionCases.get ⟨0, by decide⟩).2.2 v = some p.read ∧
       pathsNamed "write" (actionCases.get ⟨0, by decide⟩).2.2 v = some p.write ∧
       pathsNamed "exec" (actionCases.get ⟨0, by decide⟩).2.2 v = some p.exec ∧
-      pathsNamed "connect" (actionCases.get ⟨0, by decide⟩).2.2 v = some p.connect ∧
+      pathsNamed "broker" (actionCases.get ⟨0, by decide⟩).2.2 v = some p.broker ∧
+      pathsNamed "member" (actionCases.get ⟨0, by decide⟩).2.2 v = some p.member ∧
       pathsNamed "hidden" (actionCases.get ⟨0, by decide⟩).2.2 v = some p.hidden := by
   simp only [actionWire?, bind, Option.bind] at h
   rcases hg : bytes? g with _ | gv <;> simp [hg] at h
@@ -158,12 +160,13 @@ theorem launch_fields {g : ByteArray} {p : Plan} {w : ActionTy}
   rcases h2 : paths? p.read with _ | a2 <;> simp [h2] at h
   rcases h3 : paths? p.write with _ | a3 <;> simp [h3] at h
   rcases h4 : paths? p.exec with _ | a4 <;> simp [h4] at h
-  rcases h6 : paths? p.connect with _ | a6 <;> simp [h6] at h
+  rcases h6 : paths? p.broker with _ | a6 <;> simp [h6] at h
+  rcases h7 : paths? p.member with _ | a7 <;> simp [h7] at h
   rcases h5 : paths? p.hidden with _ | a5 <;> simp [h5] at h
   subst h
   refine ⟨_, rfl, ?_⟩
   simp [pathNamed, pathsNamed, actionCases, path?_val h1, paths?_val h2, paths?_val h3, paths?_val h4,
-    paths?_val h5, paths?_val h6]
+    paths?_val h5, paths?_val h6, paths?_val h7]
 
 /-- Tooth: the premise of `actionOf_wire` is met — a kill of a 64-byte name has a wire value and
 encodes, and a refusal reads back as ITS refusal, not another. -/

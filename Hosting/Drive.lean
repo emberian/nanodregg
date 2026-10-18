@@ -1,7 +1,8 @@
 /-
 # Hosting.Drive — `hosting-drive`: one Lean-planned launch, for the launcher's isolation test
 
-    hosting-drive [--plant-read-worlds] [--resident] [--exit-after-launch] LABEL IDHEX ENTRY
+    hosting-drive [--plant-read-worlds] [--resident] [--plant-foreign broker|member HEX]
+                  [--exit-after-launch] LABEL IDHEX ENTRY
 
 A stand-in for `hosting-controller` that needs no Store: it plans ONE grain (an app, or with
 `--resident` a resident, whose plan connects to its own broker socket, HOSTING-17) with the deployed
@@ -13,6 +14,11 @@ built in Rust (the launcher's test runs this exe).
 `--exit-after-launch` ends the drive right after it writes the launch, with the code a controller's
 Store refusal has (`ControllerExit.store`, 109): the launcher's next report then meets a gone reader,
 and its exit must still be the controller's code (HOSTING-19).
+
+`--plant-foreign ROOT HEX` is the launcher test's plant for HOSTING-25: the plan's socket entry under
+ROOT (`broker` or `member`) is replaced by the same socket of the grain directory HEX, which no Lean
+plan does (`Proofs.Plan.plan_sockets_named`), so grain-launch must end `foreignPath` before it
+launches anything.
 
 `--plant-read-worlds` is the test's plant: `worlds/` is added to the plan's `read`, which covers the
 hidden Store, so the sandbox must refuse the launch (`exposed`) — or, were the hidden check gone, the
@@ -69,11 +75,21 @@ def readReports (input : IO.FS.Stream) (grain : ByteArray) : Nat → IO Exit
       IO.eprintln s!"report failed {why.name}"
       return if g == grain then .done else .badReport "otherGrain"
 
-def run (plantReadWorlds abandon : Bool) (kind : Grain.Kind) (label idHex entry : ByteArray) : IO Exit := do
+/-- Which socket root `--plant-foreign` rewrites. -/
+inductive Foreign
+  | broker (hex : ByteArray)
+  | member (hex : ByteArray)
+
+def run (plantReadWorlds abandon : Bool) (foreign : Option Foreign) (kind : Grain.Kind)
+    (label idHex entry : ByteArray) : IO Exit := do
   match plan label { idHex, kind, entry } with
   | .error r => return .refused r
   | .ok p =>
     let p := if plantReadWorlds then { p with read := [lit "worlds"] :: p.read } else p
+    let p := match foreign with
+      | some (.broker h) => { p with broker := [[h, brokerSock]] }
+      | some (.member h) => { p with member := [[h, memberSock]] }
+      | none => p
     let some b := Wire.encodeAction { grain := idHex, verdict := .launch p } | return .unencodable
     let out ← IO.getStdout
     out.write (Host.Log.lenBytes b.size ++ b)
@@ -88,11 +104,15 @@ def main (args : List String) : IO UInt32 := do
   let (kind, rest) := match rest with
     | "--resident" :: rest => (Grain.Kind.resident, rest)
     | rest => (Grain.Kind.app, rest)
+  let (foreign, rest) := match rest with
+    | "--plant-foreign" :: "broker" :: h :: rest => (some (Foreign.broker h.toUTF8), rest)
+    | "--plant-foreign" :: "member" :: h :: rest => (some (Foreign.member h.toUTF8), rest)
+    | rest => (none, rest)
   let (abandon, rest) := match rest with
     | "--exit-after-launch" :: rest => (true, rest)
     | rest => (false, rest)
   let e ← match rest with
-    | [label, idHex, entry] => run plant abandon kind label.toUTF8 idHex.toUTF8 entry.toUTF8
+    | [label, idHex, entry] => run plant abandon foreign kind label.toUTF8 idHex.toUTF8 entry.toUTF8
     | _ => pure .usage
   IO.eprintln s!"hosting-drive: {e.name}"
   return e.code

@@ -10,7 +10,11 @@
 //!   then print `ok answer <status>` or `ok refused <broker refusal>`. Every byte received is
 //!   appended to `<grain>/vol/probe.recv`, so the test can check that no key reached the grain;
 //! - `wait`: wait (at most `WAIT`) until the file PATH exists, so a test can sequence the grain
-//!   with what it does outside (`ok`, or `denied timeout`).
+//!   with what it does outside (`ok`, or `denied timeout`);
+//! - `nd`: `NAME nd SOCK WORD...`: connect to a member socket (`nd --stdio` behind nd-supervise,
+//!   HOSTING-20) and send the WORDs as one command (the mux child wire, the client's own frame
+//!   and layout code), then print `ok <exit> <stdout>` (or `<stderr>` when the exit is not OK),
+//!   newlines as `|`.
 //!
 //! It finds itself by argv[0] (no /proc under bwrap). Exit 3 when it cannot write its own volume.
 
@@ -20,6 +24,9 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
+use nanodregg_client::generated::layout::{Command, CommandReply};
+use nanodregg_client::generated::{command_exit, follow_op, status};
+use nanodregg_client::{frame, table};
 use nanodregg_launcher::broker_generated::wire::{Answer, Ask};
 use nanodregg_launcher::broker_generated::{read_frame, write_frame};
 
@@ -80,6 +87,46 @@ fn ask(path: &str, recv: &Path) -> String {
     }
 }
 
+/// One command through a member socket: `ok <exit> <text>`, the reply's stdout when the exit is
+/// OK, else its stderr, newlines as `|`.
+fn nd(rest: &str) -> String {
+    let mut words = rest.split(' ');
+    let Some(sock) = words.next() else {
+        return "bad-nd".into();
+    };
+    let argv: Vec<Vec<u8>> = words.map(|w| w.as_bytes().to_vec()).collect();
+    let mut s = match UnixStream::connect(sock).and_then(|s| {
+        s.set_read_timeout(Some(table::REPLY))?;
+        Ok(s)
+    }) {
+        Ok(s) => s,
+        Err(e) => return errno(&e),
+    };
+    let Ok(c) = (Command { argv }).encode() else {
+        return "bad-nd".into();
+    };
+    if frame::write(&mut s, table::LIMITS, follow_op::COMMAND, &c).is_err() {
+        return "denied write".into();
+    }
+    let f = match frame::read(&mut s, table::LIMITS) {
+        Ok(f) if f.op == status::OK => f,
+        Ok(f) => return format!("denied op {}", f.op),
+        Err(e) => return format!("denied read {e:?}"),
+    };
+    match CommandReply::decode(&f.payload) {
+        Ok(r) => {
+            let text = if r.exit == command_exit::OK {
+                r.stdout
+            } else {
+                r.stderr
+            };
+            let text = String::from_utf8_lossy(&text).trim_end().replace('\n', "|");
+            format!("ok {} {text}", r.exit)
+        }
+        Err(e) => format!("denied decode {e:?}"),
+    }
+}
+
 fn wait(path: &str) -> String {
     let deadline = Instant::now() + WAIT;
     while Instant::now() < deadline {
@@ -101,6 +148,7 @@ fn attempt(op: &str, path: &str, recv: &Path) -> String {
         "connect" => UnixStream::connect(path).map(|_| ()),
         "ask" => return ask(path, recv),
         "wait" => return wait(path),
+        "nd" => return nd(path),
         "list" => match std::fs::read_dir(path) {
             Ok(rd) => {
                 let mut names: Vec<String> = rd

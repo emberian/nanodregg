@@ -339,6 +339,7 @@ version = "0.0.0"
 name = "nanodregg-launcher"
 version = "0.0.0"
 dependencies = [
+ "nanodregg-client",
  "nanodregg-devtools",
  "nanodregg-sandbox",
  "rcgen",

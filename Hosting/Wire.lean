@@ -6,7 +6,7 @@ REPORTS. Both are `Codec.Tagged` frames over the one Layout family, so the Rust 
 printed from these lists (`emit-hosting`) and the launcher holds no copy of a code, a bound or the
 path rule (law 2). On the pipe each frame is `u32le len ‖ payload`, `1 ≤ len ≤ Bounds.frameMax`.
 
-    actions  launch 1   grain, program : path, read write exec connect hidden : paths
+    actions  launch 1   grain, program : path, read write exec broker member hidden : paths
              kill   2   grain
              refuse 3   grain, grainRefusal : Refusal
     reports  started 1  grain, atMs
@@ -14,9 +14,10 @@ path rule (law 2). On the pipe each frame is `u32le len ‖ payload`, `1 ≤ len
              failed  3  grain, launchFailure : LaunchFailure, atMs
 
 `grain` is the grain's directory name (`Controller.dirOf`): the key a later kill and every report
-name the child by. Paths are relative to the operator's hosting root, except `connect`, whose paths
-are relative to the operator's broker root (SOCKDIR, HOSTING-17); the launcher joins those two roots
-and nothing else. This module imports no decision (not `Hosting.Plan`, not `Hosting.Controller`),
+name the child by. Paths are relative to the operator's hosting root, except the two socket lists,
+each relative to its own root: `broker` to the operator's broker root (SOCKDIR, HOSTING-17), `member`
+to the operator's member root (HOSTING-20, HOSTING-25); the launcher joins those three roots and
+nothing else. This module imports no decision (not `Hosting.Plan`, not `Hosting.Controller`),
 so the emitter's closure is the Codec family and these lists.
 -/
 import Codec.Layout
@@ -41,15 +42,19 @@ end Bounds
 /-- A path below the hosting root, as components (`Codec.Path`: clean, joined by `/` on the wire). -/
 abbrev Path := List ByteArray
 
-/-- The `sandbox::Policy` a grain is launched under, field for field, plus its program. `connect`
-names unix sockets the grain may connect to (CLIENT's `Policy.connect`), relative to the broker
-root, not the hosting root (HOSTING-17 §6, §8). -/
+/-- The `sandbox::Policy` a grain is launched under, field for field, plus its program. The
+sockets the grain may connect to (CLIENT's `Policy.connect` is `broker` then `member`, joined) are
+TYPED by the root they are relative to, never by the hosting root: `broker` under the broker root
+(HOSTING-17 §6, §8), `member` under the member root, where nd serves the resident's own member
+socket (HOSTING-20, HOSTING-25). A socket of one root cannot be named as the other's: they are two
+fields, each joined onto its own root. -/
 structure Plan where
   program : Path
   read : List Path
   write : List Path
   exec : List Path
-  connect : List Path
+  broker : List Path
+  member : List Path
   hidden : List Path
   deriving DecidableEq
 
@@ -168,7 +173,7 @@ namespace Wire
 
 def actionCases : Tagged :=
   [("launch", 1, [.bytes "grain", .path "program", .paths "read", .paths "write", .paths "exec",
-     .paths "connect", .paths "hidden"]),
+     .paths "broker", .paths "member", .paths "hidden"]),
    ("kill", 2, [.bytes "grain"]),
    ("refuse", 3, [.bytes "grain", .oneOf "grainRefusal" (Refusal.all.map fun r => (r.name, r.code))])]
 
@@ -228,16 +233,18 @@ def actionWire? (a : Action) : Option ActionTy := do
     let r ← paths? p.read
     let w ← paths? p.write
     let x ← paths? p.exec
-    let c ← paths? p.connect
+    let b ← paths? p.broker
+    let m ← paths? p.member
     let h ← paths? p.hidden
-    pure ⟨⟨0, by decide⟩, (g, prog, r, w, x, c, h, ())⟩
+    pure ⟨⟨0, by decide⟩, (g, prog, r, w, x, b, m, h, ())⟩
   | .kill => pure ⟨⟨1, by decide⟩, (g, ())⟩
   | .refuse why => pure ⟨⟨2, by decide⟩, (g, ⟨why.code, contains_of_mem _ _ _ why (by cases why <;> decide)⟩, ())⟩
 
 def actionOf : ActionTy → Action
-  | ⟨⟨0, _⟩, (g, prog, r, w, x, c, h, ())⟩ =>
+  | ⟨⟨0, _⟩, (g, prog, r, w, x, b, m, h, ())⟩ =>
     { grain := g.val, verdict := .launch { program := prog.val, read := unpaths r, write := unpaths w,
-                                           exec := unpaths x, connect := unpaths c, hidden := unpaths h } }
+                                           exec := unpaths x, broker := unpaths b, member := unpaths m,
+                                           hidden := unpaths h } }
   | ⟨⟨1, _⟩, (g, ())⟩ => { grain := g.val, verdict := .kill }
   | ⟨⟨2, _⟩, (g, why, ())⟩ =>
     { grain := g.val, verdict := .refuse ((Refusal.ofCode? why.val).get (refusal_of_contains _ why.property)) }
