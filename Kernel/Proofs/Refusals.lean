@@ -61,10 +61,39 @@ theorem refusedBounds_lt {r : Refused D} (h : checkRefusedBounds r = .ok ()) :
     r.notBefore < 2 ^ 64 ∧ r.validUntil < 2 ^ 64 ∧ r.code < 2 ^ 64 := by
   unfold checkRefusedBounds at h
   simp only [except_bind_ok] at h
-  obtain ⟨⟨⟩, -, hc⟩ := h
+  obtain ⟨⟨⟩, -, ⟨⟩, hc, -⟩ := h
   have := req_ok.mp hc
   simp only [Bool.and_eq_true, decide_eq_true_eq, counterLimit_eq] at this
   omega
+
+omit [Ord D] [DecidableEq D] in
+/-- A recorded refusal's window is no wider than an admissible call's (`checkBounds`' `window`). -/
+theorem refusedBounds_window {r : Refused D} (h : checkRefusedBounds r = .ok ()) :
+    r.validUntil ≤ r.notBefore + Bounds.windowMax := by
+  unfold checkRefusedBounds at h
+  simp only [except_bind_ok] at h
+  obtain ⟨⟨⟩, -, ⟨⟩, -, hw⟩ := h
+  simpa using req_ok.mp hw
+
+/-- **A recorded refusal's window ends within `windowMax` of the height it was refused at** (cv
+01a14e3c-f292, PROTOCOL's settle): the call's leaf records `w.height + 1` (`refuse_recorded`), and
+the call's `validUntil` is at most that plus `windowMax`, so below `2 * windowMax` past it: the
+refusal is final while the receipt horizon (`fold_refused_retains`) still shows it. (`refuse_window` is the
+window's other half: the height lies inside it.) -/
+theorem refuse_window_width {E : Env D} {w w' : World D} {r : Refused D} (h : World.refuse E w r = .ok w') :
+    r.validUntil ≤ w.height + 1 + Bounds.windowMax := by
+  obtain ⟨hb, hnb, -⟩ := refuse_facts h
+  have := refusedBounds_window hb
+  omega
+
+omit [Ord D] [DecidableEq D] in
+/-- TOOTH (`refuse_window_width`): a call whose window is one wider than `windowMax` is not recorded, so
+the bound is the check's, not an accident of the workload. -/
+theorem refusedBounds_wide (txId member : D) :
+    checkRefusedBounds (Refused.mk txId member 0 (Bounds.windowMax + 1) 0 ByteArray.empty) =
+      .error (.overBound .window) := by
+  simp [checkRefusedBounds, req, Bounds.windowMax, Bounds.counterLimit, Bounds.eventBytesMax, bind,
+    Except.bind]
 
 /-- The refusals after a refusal, read at any key: the call's leaf, the member's bumped count, else
 what was there. -/

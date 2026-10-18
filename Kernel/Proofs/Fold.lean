@@ -59,7 +59,7 @@ theorem refusedDigest_inj [Ord D] {E : Env D} {n : Nat} (hE : E.Lawful n) {r₁ 
     intro r hb
     unfold checkRefusedBounds at hb
     simp only [except_bind_ok] at hb
-    obtain ⟨⟨⟩, -, hc⟩ := hb
+    obtain ⟨⟨⟩, -, ⟨⟩, hc, -⟩ := hb
     have := req_ok.mp hc
     simp only [Bool.and_eq_true, decide_eq_true_eq, counterLimit_eq] at this
     omega

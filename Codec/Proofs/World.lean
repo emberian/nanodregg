@@ -250,7 +250,7 @@ theorem checkRefusedBounds_fits (r : Refused D) (h : checkRefusedBounds r = .ok 
     Refused.Fits (fun _ => True) r := by
   simp only [checkRefusedBounds, req, decide_eq_true_eq] at h
   simp only [bind_req, ite_req, Bool.and_eq_true, decide_eq_true_eq] at h
-  obtain ⟨hE, ⟨hN, hV⟩, hC⟩ := h
+  obtain ⟨hE, ⟨⟨hN, hV⟩, hC⟩, -⟩ := h
   exact ⟨trivial, trivial, by simpa [Bounds.counterLimit] using hN, by simpa [Bounds.counterLimit] using hV,
     by simpa [Bounds.counterLimit] using hC, hE⟩
 

@@ -1291,6 +1291,9 @@ def checkRefusedBounds (r : Refused D) : Except (Reject D) Unit := do
   req (r.event.size ≤ Bounds.eventBytesMax) (.overBound .event)
   req (r.notBefore < Bounds.counterLimit && r.validUntil < Bounds.counterLimit &&
        r.code < Bounds.counterLimit) (.overBound .counter)
+  -- a window no admissible call has (`checkBounds`) is not recorded: its refusal could never be
+  -- final within the horizon a receipt reads (`refuse_window`; PROTOCOL's settle)
+  req (r.validUntil ≤ r.notBefore + Bounds.windowMax) (.overBound .window)
 
 /-- A member's recorded refusals in the window of height `H`. -/
 def refusalCount (E : Env D) (w : World D) (m : D) : Nat :=
