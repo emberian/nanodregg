@@ -38,18 +38,22 @@ case $name in harness-control|*/*|'') echo "plant: bad NAME '$name'" >&2; exit 2
 
 # judge NAME EXPECT BUILD PATH=FILE... -> prints `PLANT NAME RED|GREEN|FAIL …|NOT JUDGED`; returns 0 when
 # the verdict is the expected one, 1 when not, 76 when killed.
+# The mode a file is planted with is the file's own, as `git add` would record it (scripts/commit
+# adds the worktree): 100755 when executable, else 100644. A non-executable plant of a script is
+# made by planting a non-executable FILE (it was always 100644, so no executable script could be
+# planted; PERF-1, 10-19).
+mode() { if [ -x "$1" ]; then echo 100755; else echo 100644; fi; }
 judge() {
-  local n=$1 want=$2 b=$3 kv p f m rc; shift 3
+  local n=$1 want=$2 b=$3 kv p f rc; shift 3
   export GIT_INDEX_FILE=$P/$n.idx
   git -C "$here" read-tree refs/heads/main || return 2
   for p in "${with[@]}"; do
-    m=$(git -C "$here" ls-files -s -- "$p" | cut -c1-6)
-    git -C "$here" update-index --add --cacheinfo "${m:-100644},$(git -C "$here" hash-object -w "$here/$p"),$p" || return 2
+    git -C "$here" update-index --add --cacheinfo "$(mode "$here/$p"),$(git -C "$here" hash-object -w "$here/$p"),$p" || return 2
   done
   for kv in "$@"; do
     p=${kv%%=*} f=${kv#*=}
     [ -f "$f" ] || { echo "plant: $n: no file $f" >&2; return 2; }
-    git -C "$here" update-index --add --cacheinfo "100644,$(git -C "$here" hash-object -w "$f"),$p" || return 2
+    git -C "$here" update-index --add --cacheinfo "$(mode "$f"),$(git -C "$here" hash-object -w "$f"),$p" || return 2
   done
   printf 'gates: plant %s\n\nGATE-CHANGE: plant\nCROSS-LAYER: plant\n' "$n" > "$P/$n.msg"
   local nb=()
