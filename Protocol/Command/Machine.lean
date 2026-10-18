@@ -672,12 +672,18 @@ def rangeRender (X : Ctx D) (w : World D) (obj : D) (rel : String) (most : Nat) 
     | .ok ts => printed (String.join (ts.map (· ++ "\n")))
     | .error r => refused (D := D) r
 
+/-- A text a program gave, on ONE line (a law or a method cannot add lines to the member's output). -/
+def oneLine (s : String) : String := (s.replace "\n" " ").replace "\r" " "
+
 /-- What to do next, for the refusals that have an answer (DELVETALK-LEARNINGS §4.3): printed on
 stdout beside `refused NAME` on stderr, so the name stays the verdict and the hint is text. -/
 def hint (X : Ctx D) : Refusal D → Option String
   | .reject (.stale c) => some s!"hint stale {hex X c}: this cell moved under the call; read it and run the command again"
   -- the law's own words (at most `Lang.reasonMax` bytes), on ONE line: a law cannot add lines
-  | .receive (.lawDenied l why) => some s!"hint lawDenied {hex X l}: {(why.replace "\n" " ").replace "\r" " "}"
+  | .receive (.lawDenied l why) => some s!"hint lawDenied {hex X l}: {oneLine why}"
+  -- a method's own refusal by its name (LANG-51's `refuse T "why"`: the Bell's `notResident`), as LANG
+  -- states it (`Lang.faultText`, at most `Lang.reasonMax` bytes), on ONE line (cv 01a15039)
+  | .receive (.program why) => some s!"hint program: {oneLine why}"
   | .host "stale" => some "hint stale: the World moved before the call landed; run the command again (it re-plans)"
   | .thin (.baseMoved _) => some "hint baseMoved: the writer's newest base is not at the invitation's pin; ask your sponsor for a fresh invitation"
   | .invite .noBase => some "hint noBase: follow has not verified the writer's newest base; the operator runs host seal STORE (writer stopped), then invite again"

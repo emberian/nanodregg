@@ -565,6 +565,17 @@ theorem readText_reads {X : Ctx D} {w : World D} {obj : D} {cell : Cell}
   · cases ht
 
 
+/-! ## A method's refusal by its own name (cv 01a15039) -/
+
+omit [Ord D] [DecidableEq D] in
+/-- **A method's refusal reaches the member's output in its own words** (cv 01a15039, LANG-51's
+`refuse T "why"`): `refused program` stays the verdict on stderr, and the reason LANG gave (the
+Bell's `answer: refused notResident`) is the hint line on stdout, on one line. -/
+theorem refusedAt_program (X : Ctx D) (why : String) :
+    refusedAt X (.receive (.program why)) =
+      .done CommandExit.refused.code.toUInt8 s!"hint program: {oneLine why}\n".toUTF8
+        s!"refused program\n".toUTF8 := rfl
+
 /-! ## Stale BEHIND, from the member's own fold (KERNEL-54, PROTOCOL-15's conditions 1 and 2) -/
 
 /-- **What `staleBehind` says**: the member's own call for its own World, planned at a height

@@ -1711,3 +1711,42 @@ Without the record, a stale call would stay `open` for ever, and the budget row 
 - Partner hunks: the client's drive bound and test are CLIENT-8's (agreed), in this patch; LANG's arity and floor hunks are in KERNEL-21's assembled tree.
 
 **Rows on 40879fa + KERNEL-21's kernel21-k54-snap2.patch + this patch (PROTOCOL-17's re-cut):** toy ALL PASS 34, deployed ALL PASS 33, every plant caught by name at its line (`refused`: settleDecline at 13 `refused stale`; `refusedFinal`: admitsRecorded at 17 `refused refusedFinal`).
+
+## PROTOCOL-54 · a method's refusal reaches the member in its own words: `hint program: answer: refused notResident` (2026-10-19, PROTOCOL-17; cv 01a15039-0a62, HOSTING-10's finding, ROOT assigned)
+
+**The gap.** `nd --stdio` printed a method-check refusal as the bare `refused program`. The method's own name (LANG-51's `refuse T "why"`, e.g. the Bell's `notResident`) never reached the member. HOSTING's resident judged by re-reading state; a member could not tell `notResident` from a type error.
+
+**Decision.** `Command.hint` gains the `program` arm. Beside `refused program` on stderr (the verdict stays the name, law 7), stdout carries `hint program: REASON`. REASON is LANG's own text (`Lang.faultText`: `refused notResident` for a `refuse`, at most `Lang.reasonMax` bytes), on one line (`Command.oneLine`, now shared with the lawDenied arm). This is PROTOCOL-44's hint rule; no new name and no new status. The Rust client forwards follow's stdout and stderr byte for byte (client/src/stdio.rs `answer`), so the client needs no lines (CLIENT stays at its ceiling).
+- Theorem `refusedAt_program`: the reply is exactly `refused program` on stderr and the hint line with the reason on stdout.
+- Row `bell` (new, on LANG-58's Bell, a queue of rings): the sponsor installs the SHIPPED Bell (`<world/resident/Bell`, no copy in the rows) with the newcomer as resident and grants it `answer`.
+  - The sponsor (not the resident) answers: `refused program`, and its output says `refused notResident` (line 10).
+  - The resident answers a ring nobody rang: the kernel's `refused missingRow` (the retract of `pending` finds no row), a kernel name that passes through as itself.
+  - The sponsor rings; the resident's `read @bell pending 64` shows it.
+  - Plant `flatProgram` (the output flattened, the hint line removed: the stdio surface before this) is caught at line 10 `refused unprinted`.
+
+**Critique.** REASON is free text from a package: a hostile package could print anything one line long (bounded by `reasonMax`, newlines folded). It is a hint, never a verdict; the verdict is the name on stderr. Other `program` reasons (`calls: …`, `decode …`) now reach the member too, which is the point: they were equally hidden.
+
+## PROTOCOL-55 · the rows' page budget is DERIVED from the kernel's event bound: `Kernel.Bounds.eventBytesMax + 5`, both parameter sets, with the theorem that a record's walk that has served nothing serves the first step past its start (2026-10-18, PROTOCOL-18; ROOT approved)
+
+**The red.** `rows bell` at the toy parameters printed `uncertain` for `install <world/resident/Bell` (line 6), which reads like the Host's failed-append reply. It was not one. The method was a trace: a temporary eprint of the confirm's inner `receipt CALL` outcome in `Loopback.drive` (reverted). It showed:
+- the writer COMMITTED the install (the attempt went submit → committed → confirm);
+- the confirm's receipt was `refused badResult`: follow's refusal of an empty page short of the tip (`Command/Machine.lean`, the log arm);
+- the page was empty because `Host.Page.walkTurnsAt` stops at the first event that does not fit the budget, and the install event (31.5 KB of printed Bell) is past the toy rows' 16384;
+- `drive` reads a confirm that follow refused as `lost`, and `Attempt.next` maps (confirm, lost) to `uncertain`.
+So a refusing confirm RENDERS as `uncertain` (the refusal-renders-as-the-verdict class).
+
+**Decision.**
+- `Rows.Params.pageBudget := Kernel.Bounds.eventBytesMax + 5` for `toy` and for `deployed`. The 5 is a page's 4-byte event length plus the event's 1-byte step tag (`Host.Page.stepEvent`).
+  - Theorem `Writer.walkTurnsAt_serves`: under such a budget, a record's walk that has served nothing serves the first step past its start whenever the kernel admitted that step's event (`eventSize s ≤ eventBytesMax`). The record may begin with skipped steps at or below `start`, and the accumulator may come from records skipped whole. `Params.toy_budget_serves` and `Params.deployed_budget_serves` discharge its premise.
+  - Tooth `Writer.walkTurnsAt_one_short`: at `+ 4`, through the walk itself, an event of the kernel's full size leaves the page EMPTY.
+  - Not proved: the lift through `Host.Page.walk` and `build` (which read the segment) to the page follow receives. Filed as cv 01a150c0. HOST's `budget_fits_event` is a separate closed inequality about `Page.budget`.
+  - A guess at the largest event the rows happen to log broke twice: 4096, broken by the grain row's lifecycle package, and 16384, broken by the queue Bell. A derived bound cannot break that way.
+- The first cut was `+ 4`, copied from HOST's `Host.Page.budget_fits_event`. The second-agent vacuity read caught it. HOST's statement leaves out the tag byte; it is masked at HOST's own budget by its slack, and no theorem consumes it. Reported to HOST through ROOT.
+- The deployed `4 * 16384 = 65536` was ALSO short, by 5 bytes. It was latent: no row logs an event that large.
+- It is a harness parameter (PROTOCOL-50: nothing in admission reads it); no admission or Host check moved.
+- Row `bigEvent` (new): `welcome`, then the sponsor installs the shipped Bell and creates one. Plant `guessedBudget` (the writer pages with the old 16384) is caught at line 6, `uncertain`.
+- `paging` re-measured at the derived budget: its 100 writes (108 steps) are still two pages, and `lieTip` is still read at line 11. What ends its pages is `recordTurnsMax` (64 events), under both parameter sets, not the budget. No row now ends a page by the budget with events already on it; `bigEvent`'s plant reaches only the budget's empty-page arm.
+
+**Critique.**
+- The `uncertain` that cost a trace is still an `uncertain` with no reason. The confirm's own refusal name (`badResult`) could ride the attempt's end as a hint line. That is nd's surface, though: the Rust attempt store also ends `Uncertain` with an empty payload (`client/src/run.rs`, `client/src/attempt.rs`). A rows-only hint would be a twin of a surface nd does not print. It needs CLIENT and PROTOCOL together and is filed as a task, not done here.
+- The budget is now the kernel's bound, not a frame. A row still sees pages end before the tip, because `recordTurnsMax` ends them.

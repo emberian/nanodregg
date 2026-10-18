@@ -82,6 +82,9 @@ structure Sys (D : Type) [Ord D] where
   dropRow : Bool := false
   /-- `read OBJ REL K` never checks K against the declared limit (a plant, PROTOCOL-51) -/
   noReadLimit : Bool := false
+  /-- `nd`'s output for a method's refusal drops its reason: the bare `refused program` (a plant,
+  cv 01a15039) -/
+  flatProgram : Bool := false
 
 def skipJudge (X : Ctx D) : Ctx D :=
   { X with program := { X.program with judge := fun _ _ _ _ _ _ => .ok () } }
@@ -126,6 +129,8 @@ def sys (R : Rows.Params D) : Option Mutation → Sys D
   | some .pageIoFatal => { writer := { R, X := R.ctx }, follow := R.ctx, pageIoFatal := true }
   | some .dropRow => { writer := { R, X := R.ctx }, follow := R.ctx, dropRow := true }
   | some .noReadLimit => { writer := { R, X := R.ctx }, follow := R.ctx, noReadLimit := true }
+  | some .flatProgram => { writer := { R, X := R.ctx }, follow := R.ctx, flatProgram := true }
+  | some .guessedBudget => { writer := { R := { R with pageBudget := 16384 }, X := R.ctx }, follow := R.ctx }
 
 /-! ## Actors -/
 
@@ -797,6 +802,9 @@ def runAct (l : Line) : M D (Expect × String) := do
       | .ok av =>
           let (o, out) ← command l.actor av l.fault 4
           let sy := (← get).sys
+          -- the plant: the output of a method's refusal flattened to its verdict, the reason dropped
+          if sy.flatProgram && o == .refused "program" then
+            return (o, "\n".intercalate ((out.splitOn "\n").filter fun ln => !ln.startsWith "hint program:"))
           if sy.dropRow || sy.noReadLimit then
             let X ← X
             match parse (D := D) X.digestOf (av.map String.toUTF8) with

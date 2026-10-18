@@ -28,8 +28,9 @@ def deployed : Params Digest :=
     sign := fun s m => Ed25519.sign (Kernel.Sim.Deployed.seed s) m
     keys := Host.Keys.ofKey storeKey Host.Deployed.shapes
     -- a write's event and record are about four times the toy's (32-byte digests and keys, 64-byte
-    -- signatures, against 8 and 8): the toy's byte bounds times four keep every row's shape
+    -- signatures, against 8 and 8): the toy's seal threshold times four keeps every row's shape
     sealMinBytes := 4 * 8192
-    pageBudget := 4 * 16384 }
+    -- every event the kernel admits (`Params.pageBudget`); the 4 * 16384 this replaced was 5 short
+    pageBudget := Kernel.Bounds.eventBytesMax + 5 }
 
 end Nanodregg.Protocol.Rows.Params

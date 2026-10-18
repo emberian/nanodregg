@@ -274,6 +274,12 @@ inductive Mutation
   /-- `read OBJ REL K` lists whatever K asks, never checking it against the relation's declared
   `limit` (`Command.rowLines` without `rangeLines`' bound, PROTOCOL-51) -/
   | noReadLimit
+  /-- `nd`'s output for a method's refusal is the bare `refused program`, its reason dropped (the
+  stdio surface before cv 01a15039): the hint line LANG's words travel on is removed -/
+  | flatProgram
+  /-- the writer pages with 16384 bytes, the guess at the largest event the rows log that the queue
+  Bell's install outgrew (PROTOCOL-18): an event past the budget is never served -/
+  | guessedBudget
   deriving DecidableEq, Repr
 
 /-- A row's plant: the mutation, and the line that must catch it with the outcome it then gets. -/
@@ -547,8 +553,10 @@ def audit : Row where
 /-- A log page holds at most a page budget of events (HOST-17), so it can end before the writer's
 tip, even inside a batch; a cold follower pages from each page's height until it reaches the tip
 the writer states. New in nanodregg (minidregg served the whole log in one frame), so it replaces
-no row. The rows' writer pages with a 16384-byte budget at the toy parameters (`Rows.Params.pageBudget`), so a hundred writes
-are several pages. -/
+no row. A page also ends at `recordTurnsMax` (64) events, and at these writes that is what ends it,
+under both parameter sets, before the budget (`Rows.Params.pageBudget`, every event the kernel
+admits) does: the row's 108 steps are two pages, so `lieTip` is read at line 11 (re-measured at the
+derived budget, PROTOCOL-18). -/
 def paging : Row where
   name := "paging"
   replaces := []
@@ -1317,8 +1325,50 @@ def rangeLimitRow : Row where
       prints := some "" }])
   plant := .caught .noReadLimit 6 .ok
 
+/-- cv 01a15039: a member reads WHY a method refused it, in the method's own words (LANG-51's
+`refuse`). The sponsor installs the shipped Bell (`world/resident/Bell`, LANG-58's queue of rings)
+with the newcomer as its resident and grants it `answer`. The sponsor, not the resident, answers:
+`refused program`, and its output says `refused notResident` (line 10). The resident answering a ring
+nobody rang is the kernel's `missingRow` (its retract of `pending` finds no row: a kernel name passes
+through as itself, no hint). The sponsor rings, and the resident reads the ring in `pending`. The
+plant is the flattened output (the reason dropped): line 10 is `refused unprinted`. -/
+def bellRow : Row where
+  name := "bell"
+  replaces := []
+  ops := everyWrite
+  kinds := ["enroll", "grant", "install", "create", "invoke"]
+  drive := .members (welcome ++ [
+    okBind "sponsor" ["install", "<world/resident/Bell"] "bellPkg",
+    okBind "sponsor" ["create", "--pkg", "@bellPkg", "(record (open true) (resident #{@newcomer}))"] "bell",
+    okBind "sponsor" ["grant", "@bell", "@newcomer", "invoke:0"] "ga",
+    { actor := "newcomer", act := .cmd ["read", "@bell", "?"], expect := .ok, bind := some "bell" },
+    { actor := "sponsor", act := .cmd ["invoke", "@bell", "@bell.answer",
+        "(record (notBefore 1) (ringer #{@sponsor}) (text \"me\"))"],
+      expect := .refused "program", prints := some "refused notResident" },
+    no "newcomer" ["invoke", "@bell", "@bell.answer",
+      "(record (notBefore 1) (ringer #{@sponsor}) (text \"nobody rang\"))", "--via", "@ga"] "missingRow",
+    ok "sponsor" ["invoke", "@bell", "@bell.ring", "(record (text \"hello\"))"],
+    { actor := "newcomer", act := .cmd ["read", "@bell", "pending", "64"], expect := .ok,
+      prints := some "hello" }])
+  plant := .caught .flatProgram 10 (.refused "unprinted")
+
+/-- The writer serves every event the kernel admits (PROTOCOL-18): the largest a row logs is the
+install of the shipped queue Bell (31.5 KB printed). Its submit commits and its confirm, the
+sponsor's own follow reading the log through the writer's pages, settles it. The plant is the
+budget guessed at 16384: the event never fits a page, the confirm's receipt is refused
+`badResult` (an empty page short of the tip) and the attempt ends `uncertain` (line 6). -/
+def bigEventRow : Row where
+  name := "bigEvent"
+  replaces := []
+  ops := everyWrite
+  kinds := ["enroll", "grant", "install", "create"]
+  drive := .members (welcome ++ [
+    okBind "sponsor" ["install", "<world/resident/Bell"] "bellPkg",
+    okBind "sponsor" ["create", "--pkg", "@bellPkg", "(record (open true) (resident #{@newcomer}))"] "bell"])
+  plant := .caught .guessedBudget 6 .uncertain
+
 def rows : List Row :=
   [journey, reopen, laws, rotate, audit, paging, coldCatchUp, inflatedHeight, forgotten, refusedRow, refusedFinalRow, inviteRow, useRow, describeRow, stateRow, receiptRow, settleRow, carry, thin, thinStale, sealRow, basePin, pageIoRow, wrongWorld, wrongWorldRead, pay, well, bounty, grain, hermes, bar,
-   langJourney, rangeRow, rangeLimitRow]
+   langJourney, rangeRow, rangeLimitRow, bellRow, bigEventRow]
 
 end Nanodregg.Protocol

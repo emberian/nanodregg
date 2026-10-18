@@ -50,12 +50,15 @@ structure Params (D : Type) [Ord D] where
   this scales with what a write costs in bytes at these parameters. -/
   sealMinBytes : Nat
   /-- the page budget the rows' writer pages with: HOST's `Page.budget` is a frame, which no row's
-  log reaches, so a row would never see a page end before the tip. It must hold every single event
-  the rows log (HOST's own premise, `Host.Page.budget_fits_event`, restated for the rows' events):
-  the largest is the grain row's install of the shipped lifecycle package (9000 bytes of text). An
-  event past it is never served, and the follower refuses the empty page short of the tip
-  `badResult` (how the 4096 this replaced was found). It still makes a cold follower page, and a
-  page holds as many writes as the toy's 16384 does (`paging`'s plant is read at its line). -/
+  log reaches, so a row would never see a page end before the tip. It must hold every event the
+  kernel admits: `Kernel.Bounds.eventBytesMax + 5`, DERIVED from the kernel bound (a page's 4-byte
+  event length and the event's 1-byte step tag, `Host.Page.stepEvent`). The theorem is
+  `Writer.walkTurnsAt_serves`: under such a budget a record's walk that has served nothing serves the
+  first step past its start. `Writer.walkTurnsAt_one_short` is the tooth at `+ 4`. An event past the budget is never served, the follower refuses the empty page short of
+  the tip `badResult`, and the attempt's confirm reads that as `uncertain`. A guess at the largest
+  event the rows happen to log broke twice: 4096 (the grain row's lifecycle package) and 16384 (the
+  queue Bell's install, 31.5 KB, PROTOCOL-18); the `bigEvent` row's plant is the old 16384. It still
+  makes a cold follower page (`paging` writes enough for several pages). -/
   pageBudget : Nat
 
 namespace Params
@@ -76,7 +79,7 @@ def toy : Params UInt64 :=
     sign := Kernel.Sim.toySign
     keys := Host.Sim.keys
     sealMinBytes := 8192
-    pageBudget := 16384 }
+    pageBudget := Kernel.Bounds.eventBytesMax + 5 }
 
 /-- The widths of what a parameter set's functions produce, measured by calling them: a digest's
 bytes, a public key, a signature, a base's digest and a Store tag. -/

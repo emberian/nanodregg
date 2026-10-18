@@ -186,6 +186,28 @@ def reopen (P : Params D) (index base seg : ByteArray) : Except String (Resident
       .ok { world := w, pos := o.pos, sealed := o.sealed,
             index := o.index }
 
+/-! ## The page budget serves every event the kernel admits (PROTOCOL-55) -/
+
+/-- The bytes of a step's event, as the kernel bounds them (`checkBounds`, `checkRefusedBounds`). -/
+def eventSize : Kernel.Step D → Nat
+  | .turn t => t.event.size
+  | .refusal r => r.event.size
+
+/-- `Host.Page.walkTurnsAt`'s fold step, spelled out so the theorems below can name it;
+`walkTurnsAt_eq` checks it IS the walk's (by `rfl`, so a change to the walk breaks the build here). -/
+abbrev walkStep (E : Env D) (B start : Nat) := fun (st : Page.Acc × D × Nat) (x : Kernel.Step D × D) =>
+    let (a, c, h) := st
+    let (t, root) := x
+    if a.full then st else
+    let c' := Kernel.stepLink E c t root
+    let h' := h + 1
+    let ev := Page.stepEvent t
+    if h' ≤ start then ({ a with steps := h', chain := E.bytes c' }, c', h')
+    else if Host.recordTurnsMax ≤ a.events.size ∨ B < a.bytes + 4 + ev.size then
+      ({ a with full := true }, c, h)
+    else ({ a with events := a.events.push ev, bytes := a.bytes + 4 + ev.size,
+                   steps := h', chain := E.bytes c', full := Host.recordTurnsMax ≤ a.events.size + 1 }, c', h')
+
 /-- A loop running on its own thread. -/
 structure Running (D : Type) [Ord D] where
   reqs : Std.CloseableChannel.Sync Frame
