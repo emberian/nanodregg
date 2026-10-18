@@ -1602,3 +1602,70 @@ cost it hides (eager evaluation of every slot) is measured above. I have not por
 quarter of what Mini's program is about. It is cut on purpose (LANG-6), so it is not counted as a loss here.
 **Status.** Rows LS0–LS10 built (lang-journey GREEN, including the skip-judge plant). The range read goes to ROOT
 and KERNEL-13 as an addition to LANG-44.
+
+## LANG-48 The pending slot: one Std law family for "a value whose shape is fixed now and which arrives later", with a meaning theorem after breadstuffs' `holeFill_binds_in_circuit` (2026-10-18; PROPOSED, design only; ROOT's queue item from MINI-CONCEPTS-IN-NANO-20261018 §6/§8)
+**Why.** Breadstuffs' weak guarded hole (B:`metatheory/Dregg2/Exec/GuardedHole.lean`) is "determination EAGER, witness
+LAZY". A hole's shape (which field, who fills it, the guard) is fixed when it is made, and only the value comes
+later. `holeFill_binds_in_circuit`: a successful fill commits exactly the underlying write and has discharged every
+guard caveat. `holeFill_rejects_guard_violation` is the tooth. The co-receipt (an open offer anyone matching may fill)
+is the same object with an open filler. Mini lost it (MINI-CONCEPTS §2), and nano has it only as hand-written
+patterns: LANG-45's CappedTally (a decider, a `closes` height, a cap law) and LEDGER's escrow (`held → released |
+refunded`, settled by the arbiter, absorbing). Two hand-written copies of one idea are the defect law 1 names, and
+each carries its own proofs (Ledger/Proofs/Escrow: `escrow_absorbing`, `escrow_one_payout`, …).
+**Decision (proposed).** A generator `Std.pending` in LANG-20's library, emitting a law term and the fill method,
+each with its meaning theorem over `BigStep`, as `quorum`/`windowed`/`machine` already are:
+1. *The slot.* A state field `f : pendingTy V = sum {open : rec {closes : nat, filler : fillerTy}, filled : rec {by :
+   digest, value : V}}`. `fillerTy = sum {anyone : rec {}, member : digest}`: `anyone` is the co-receipt's open offer,
+   `member` the decider or the arbiter. The shape is eager (filler, closes, `V`, and the guard below are fixed when the
+   slot is made). The value is lazy.
+2. *The guard*, given to the generator as a clause over `(old, value, req)` (an `At → Term` like every Std clause,
+   e.g. `value ≤ max` or `old.total + value ≤ cap`), so it may read the rest of the state but not write it.
+3. *Two modes.* `once` (escrow, offers): `filled` is absorbing. `accrue combine` (CappedTally): a fill keeps the slot
+   open and folds the value into a declared field by a declared combine (`add`), under the same guard.
+4. *The generated law*, by occasion:
+   - `birth`: the slot is `open` (no pre-filled seed).
+   - `invoke fillMethod`: `old.f` is `open {closes, filler}`, the signer matches `filler` (`anyone`, or `deq agent
+     d`), `req.validUntil ≤ closes`, the guard admits, `new.f` is `filled {by = agent, value}` (once; the value is
+     the method's argument, recorded), or the accrual is applied (accrue), and every other field is unchanged.
+   - Any other invoke or write: the slot's shape never changes while open, and `filled` never changes again.
+   - `relaw`/`adopt`: an object may not shed or add this law while the slot is open (LANG-24's adopt clause).
+5. *The generated method* `fill {value}` writes exactly that, and may declare one call slot (LANG-33). The funding
+   form emits a `transfer` from the object's held account to `by` (the escrow's payout: `once` key the slot's
+   nonce), so "funded by which escrow" is a declared call, atomic with the fill (the call tree co-fails).
+6. *The meaning theorem* `pending_fill_binds` (the nano `holeFill_binds_in_circuit`): `Admits (pendingLaw …) old new
+   req` at `invoke fill` ↔ `old.f = open {closes, filler}` ∧ the signer matches `filler` ∧ `req.validUntil ≤ closes`
+   ∧ the guard's meaning admits the value ∧ `new.f = filled {agent, value}` (or the accrual) ∧ every other field of
+   `new` equals `old`'s. Both directions, so the law admits EXACTLY the fills the shape promised: a fill binds its
+   value AND its guard, and nothing else moves. Teeth on the CHECKED output: a guard violation is refused, a second
+   fill of a `once` slot is refused (absorbing), a wrong filler and a late window are each refused, and an
+   `anyone` slot admits a stranger. Plus a run-level corollary through the receiver, as LANG-26's
+   `judgeOne_pkgOf_admits` did for quorum.
+7. *Instances.* CappedTally becomes `pending (accrue add total) (filler = member decider) (guard: total + value ≤
+   1000)`. Its hand-written `cap`/`decider` laws are deleted, and `grows` follows from `accrue add` over `nat`. The
+   escrow's settlement becomes `pending once (filler = member arbiter) V = sum {release, refund}` with the funding
+   call. LEDGER's `escrow_absorbing`/`escrow_one_payout` then restate as corollaries of `pending_fill_binds` (LEDGER
+   owns that restatement; its deposit phase stays its own). Journey LT re-reads its text from the generator, and the
+   escrow re-emits.
+8. *With LANG-44's rows.* An `open` slot can be a ROW keyed by its requester (or a nonce). A fill is then an `upsert`
+   pinned at that one row, so fills of different slots on one object have disjoint footprints and commute
+   (`admit_comm`), and the head's `count` says how many are open. Offers that many members fill at once (the
+   co-receipt market) need exactly that.
+**Price.** Kernel: zero (a law shape). Lang: Std gains a generator and its theorems (Proofs/Std, StdTeeth, StdFits'
+print bounds); nothing landed changes statement. LEDGER: the escrow re-emits (`ledger-sim --write-text`) and its
+proofs restate onto the family, which is LEDGER's work; it re-ids the escrow package. Rows: none until LANG-44.
+**Alternatives.** (a) A kernel `HoleSpec` (Mini's `Theory/GuardedAdvice.lean`): a second shape of "a law over pending
+state", and the kernel object never reached Mini's Host (MINI-CONCEPTS §6(4)). (b) Leave the two hand-written
+instances: two copies of one idea with two proof sets. (c) Suspended activities (`perform`/await): LANG-6's cut,
+measured. (d) Matching as a solver (find a filler for an offer): not adopted; matching is the guard, checked at fill.
+**Critique.** (1) The guard is a clause over `(old, value, req)`, so a guard over OTHER objects (a match against a
+counter-offer held elsewhere) is not expressible. That is the invariant-domain gap (MINI-CONCEPTS §4), and a fill
+can only pin what its signer pinned. (2) `accrue` makes CappedTally an instance, but at the cost of a mode. If accrue
+is really a different idea (a capped counter), it belongs to LANG-44's head `sum`/`cap`, and this family should be
+`once` only. I lean to keeping both until the rows land, then measuring which form residents write. (3) The strong
+hole (an undetermined amount or shape) stays inexpressible, as breadstuffs decided: `charge = weight` is fixed by
+the signer. (4) A `member` filler is one digest; a quorum of fillers is `quorum`, not this.
+**Meta-critique.** ROOT named the instances (CappedTally, escrow) before I designed the family, and I fitted the
+family to them: `accrue` exists so that CappedTally fits. The independent test is breadstuffs' own object: its
+`GuardedHole` is one field, one actor and one guard, written once. That is `once` mode exactly. `accrue` is my
+addition, and (2) says so.
+**Status.** PROPOSED (design only, ROOT rules). Build order if approved: after LANG-44 (its rows give the many-slots form).
