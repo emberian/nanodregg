@@ -2496,3 +2496,40 @@ It appears in Cells.lean (cells), JournalHead.lean, RefusalsHead.lean (which cal
 - **There were three instances, not four.** I claimed RowsHead.lean was a fourth chain without grepping it. It is the `RowsOk` invariant and holds no head reads. This is the same failure as KERNEL-51's "~22": a count nobody grepped.
 - **The rows cannot be an instance at all today.** `rowKeyBytes` writes the relation as `byte8 rel` and the key length as `byte8 k.size`, and both wrap at 256 (K19-READER3: `rel = 0` and `rel = 256` give one key), so `leafBody (rowSpec E)` is not injective and `Trie.inclusion_sound`'s unconditional `hL` is false for `rowSpec`. A rows phone read needs a key-predicate variant of the trie soundness theorems, and probably a verifier that refuses unfit keys. No deployed path verifies a rows proof today (reader K19-READER3: the receipt carries `rowsroot` only to rebuild `rootsDigest`, and range pins are re-executed), so this is not a live hole, and the encoding is fixed before the rows get a head read (cv task).
 - Vacuity read K19-READER3: LAND. Its one amendment (the `rel` byte wraps too) is taken here and in HeadRead's docstring.
+
+## KERNEL-53 · One signature verify per judgement: `judge` carries `submit`'s passing verify into the authentication (KERNEL-20, 2026-10-19; PERF-1 FINDING 3, routed by ROOT)
+
+**The defect (measured).** A recorded refusal cost TWO Ed25519 verifies. `judge` ran `submit`, whose `receive` verifies the signature (`checkSignature`, Derive.lean), and on any error then ran `authenticated`, which verified the same signature over the same bytes again. Every follower's `auditRefusal` goes through `judge`, so the follower paid it too. PERF-1 saw it as 502 verifies over 500 steps with 2 stale refusals (`bench-count`). It is a law-5 cost on exactly the refusals the contention finding says honest writers produce.
+
+**As built.**
+- `Verdict.verified : Verdict D → Bool` (Kernel/Receive/Submit.lean): was `submit`'s verdict reached only past a signature that verified? `true` for every refusal `receive` made after its signature check and every rejection `World.admit` made; `false` for `wrongWorld`, `badSignature`, `replayed _`, `refusedFinal _`.
+- `checkSignatureBy X c verified`: the signature check, or `.ok ()` when `verified`.
+- `authenticatedBy X w c verified`: the world check, `checkSignatureBy`, `authKey`. `authenticated X w c` is now `authenticatedBy X w c false` (the same value; one definition, not two).
+- `judgeBy X w c auth`: the one match (`submit`, then record when `auth v` and `World.refuse` takes it). `judge X w c := judgeBy X w c fun v => authenticatedBy X w c v.verified`. Nothing else changes; `auditRefusal` and `bench-count` inherit it.
+
+**Theorems (Kernel/Proofs/Audit.lean).**
+- `receive_checkSignature`: a `receive` that refused neither `wrongWorld` nor `badSignature` was reached through `checkSignature` passing.
+- `submit_verified`: `submit X w c = .error v → v.verified = true → checkSignature X c = .ok ()`. **The carried bit is the same verify.**
+- `authenticatedBy_verified`: for every verdict `submit` gives, `authenticatedBy X w c v.verified = authenticated X w c`.
+- `judge_eq`: `judge X w c = judgeBy X w c fun _ => authenticated X w c`, the two-verify judge, for every call. `judge_recorded` now rewrites by it. Every other `judge` theorem keeps its statement. Two proofs elsewhere change one token each, `unfold judge` → `unfold judge judgeBy`: Protocol/Proofs/Settle.lean:30 (`judge_admitted`) and Host/Proofs/Serve.lean:54. These are CROSS-LAYER, with PROTOCOL-14 and HOST-13 asked.
+- TOOTH `verified_eq_false_iff`: `v.verified = false` exactly for `wrongWorld`, `badSignature`, `replayed _`, `refusedFinal _`. A `verified` that were always `false` satisfies `judge_eq` and saves nothing; this refutes it, and it names the residue (below).
+- TOOTH `authenticatedBy_verify_irrel`: with the bit carried, the authentication is the same under ANY `verify` (`rfl`): the carried check verifies nothing.
+
+**Sim (kernel-sim).**
+- `verifyingCtx X` marks every verify (`@`, through `dbgTrace`, the way `countingEnv` marks hashes).
+- `record` re-judges each recorded refusal under it in bracket `<G`, before the `<F` hash bracket so that F's segment is unchanged. The PLANT `judgeTwice` runs in `<H`; it is `judgeBy … fun _ => authenticated …`, exactly `judge_eq`'s right side, not a hand copy. Both must record the same refusal.
+- An exact check on every seed: `judge`'s verifies ≥ recorded refusals, and the plant's verifies = `judge`'s + the recorded refusals whose verdict carried the verify (`Verdict.verified`). This goes red both if `judge` verifies twice again and if it verifies zero times.
+- Arm `verify-count:once` (in `plantedArms`): the plant counts more on a seed that recorded a refusal.
+- MUTATION, proven by hand: with `judge` set to the two-verify form, seeds 0–3 each FAIL (e.g. "judge 90 and the plant 90 verifies over 45 recorded refusals, 45 carried"). The old judge cost exactly 2.000 per refusal.
+- WASTE row `refuse verifies-per-refusal` = 1.000 (2640 recorded refusals over 64 seeds). It is new and pinned at 1.000.
+
+**THE BAR.** `bench-count`'s `bar audit-verifies-per-step` stays 1.000. Its 60-record standing workload records no refusal, so it could not see this defect; PERF-1's 500-step run with 2 refusals now reads 500 verifies (by `judge_eq` + `submit_verified`: each recorded refusal makes exactly the verifies its `submit` made). PERF-1 is asked to re-measure with refusals present.
+
+**Price, in premises on landed theorems.** None. No statement changes. `judge_recorded`'s proof changes one line (`unfold judge` → `rw [judge_eq]`). No cell, journal, refusals or rows reader is touched. No wire changes; nothing re-emits; nothing re-geneses.
+
+**Critique.**
+- *The residue is named, not hidden.* `badSignature` carries nothing. `Ctx.program` is a field (`checkInstall`, the law `judge`) that returns any `Refusal D`, so a `badSignature` verdict does not say that the signature verify failed, and `submit_verified` cannot be proved for it. Consequence: a call with a forged signature, which is DECLINED and never recorded, costs two verifies. It costs the Host a constant factor on spam, never a recorded step; `verified_eq_false_iff` is its exact boundary. The cure, if it is wanted, is a program-side refusal type that cannot spell the receive layer's names (so `badSignature` is attributable); filed as a cv task with the trigger "a measured forged-call flood", not done here.
+- *Why not return the bit from `submit`.* `submit`'s result is named in about 20 theorem statements over 10 proof files (Kernel, Protocol, Host; grepped). Carrying the bit in its result would restate all of them to say what the verdict already says. The verdict is the carrier; `submit_verified` is the theorem that it is sound.
+- *Why not hoist one verify before `submit`.* It would verify `wrongWorld` calls (now 0 verifies) and duplicate `submit`'s order in `judge`: a twin.
+- Vacuity read (K20-READER): LAND-WITH-FIXES, with eight items. Items 1–6 confirmed the statements: `verified_eq_false_iff` refutes the always-false carry, `submit_verified` refutes the always-true one, `badSignature` is spellable by `Program` (Call.lean:292), and no pre-existing statement changed. Taken: (7) the exact per-seed check, since the arm alone was one-directional; (8) the single `judgeBy`, so the plant is the theorem's right side.
+- *Meta-critique.* The first framing (in the queue) was "a `Verified` witness threaded from submit into authenticated". A witness type proves nothing the equation `judge_eq` does not, and costs a type change; the equation plus the iff is the smaller object that pins both halves (sound, and not vacuous).

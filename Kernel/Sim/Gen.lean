@@ -192,6 +192,8 @@ structure State (D : Type) [Ord D] where
   /-- KERNEL-44: refusals the Host recorded, the most any member had recorded in one window, the
   calls declined `refusalBudget`, and the record bytes of the recorded ones -/
   recorded : Nat := 0
+  /-- recorded refusals whose verdict carried its signature verify (`Verdict.verified`, PERF-1) -/
+  carried : Nat := 0
   refusalMax : Nat := 0
   budgeted : Nat := 0
   refusalBytes : Nat := 0
@@ -327,6 +329,9 @@ structure Marks where
   stemWorst : Nat := 0
   pendS : Option Nat := none
   pendT : Option Nat := none
+  /-- signature verifies (`@`) of `judge` and of the two-verify plant on recorded refusals (`<G`, `<H`) -/
+  verifyOnce : Nat := 0
+  verifyTwice : Nat := 0
 
 /-- An `S` mark count and its `T` met: the insert's own hashes, kept if the most so far. -/
 def pairStem (m : Marks) : Marks :=
@@ -335,11 +340,12 @@ def pairStem (m : Marks) : Marks :=
   | _, _ => m
 
 /-- `report`'s side: the marks of one captured run, summed per bracket tag (`A`, `C`, `P`, `J`,
-`K`, `R`, `F`, `Q`, `O`, and the rows probe's `W`, `V`, `X`, `Y`, `S`, `T`). An `S` and its `T` are one
+`K`, `R`, `F`, `Q`, `O`, the verify counter's `G`, `H` (counting `@`), and the rows probe's `W`, `V`, `X`, `Y`, `S`, `T`). An `S` and its `T` are one
 stem insert turn: their difference is that insert's hashes, the most of which is `stemWorst`. -/
 def countMarks (out : String) : Marks :=
   (out.splitOn "<").foldl (fun m seg =>
     let n := (seg.toList.filter (· == '#')).length
+    let v := (seg.toList.filter (· == '@')).length
     match seg.toList.head? with
     | some 'A' => { m with admit := m.admit + n }
     | some 'C' => { m with cells := m.cells + n }
@@ -356,6 +362,8 @@ def countMarks (out : String) : Marks :=
     | some 'O' => { m with emptyRoot := m.emptyRoot + n }
     | some 'S' => pairStem { m with stemIns := m.stemIns + n, pendS := some n }
     | some 'T' => pairStem { m with stemBase := m.stemBase + n, pendT := some n }
+    | some 'G' => { m with verifyOnce := m.verifyOnce + v }
+    | some 'H' => { m with verifyTwice := m.verifyTwice + v }
     | _ => m) {}
 
 /-- The slots a turn changed, in `commitTrie`'s order: its non-`keep` touches, its born cells,
@@ -527,6 +535,35 @@ def checkRoot (P : Params D) (st : State D) (w w' : World D) (t : Turn D) : Stat
       failWith st "root: a spent nullifier's path with an empty end verified"
     else meet st "proof-spent-empty:refused") st
 
+/-! ### The verify counter (PERF-1): one Ed25519 verify per judgement
+
+`verifyingCtx X` is `X` with every signature verify marked (`@`, through `dbgTrace` as the hash counter
+is). `record` re-judges each recorded refusal under it in a bracket (`<G`), and the plant `judgeTwice`
+(the two-verify judge before PERF-1: `submit` verifies, then `authenticated` verifies again) in
+another (`<H`). Arm `verify-count:once`: on a seed with a recorded refusal the plant must count more,
+or the counter is blind. Sim-only. -/
+
+def verifyingCtx (X : Ctx D) : Ctx D :=
+  { X with verify := fun k m s => dbgTrace "@" fun _ => X.verify k m s }
+
+/-- PLANT (the verify counter's tooth): `judge` as it was before PERF-1, authenticating a refused
+call by verifying its signature again: exactly `judge_eq`'s right side. The same Outcome; one more
+verify per refusal whose verdict carries the verify (`Verdict.verified`). -/
+def judgeTwice (X : Ctx D) (w : World D) (c : Call D) : Outcome D :=
+  judgeBy X w c fun _ => authenticated X w c
+
+/-- Both judges re-run under the verify counter, each in its bracket: each must record `r` again. -/
+def countVerifies (X : Ctx D) (st : State D) (c : Call D) (r : Refused D) : State D :=
+  let vX := verifyingCtx X
+  let once := dbgTrace "<G" fun _ => Receive.judge vX st.host c
+  let twice := dbgTrace "<H" fun _ => judgeTwice vX st.host c
+  let st := match once with
+    | .recorded _ r' _ => if r' = r then st else failWith st "verify count: the counted judge recorded another refusal"
+    | _ => failWith st "verify count: the counted judge did not record the refusal"
+  match twice with
+  | .recorded _ r' _ => if r' = r then st else failWith st "verify count: the two-verify plant recorded another refusal"
+  | _ => failWith st "verify count: the two-verify plant did not record the refusal"
+
 /-- The Host's recording of a refused call (KERNEL-44: `Receive.judge`), checked against the verdict
 `submit` gave: a recorded refusal is that verdict, logged as a step and its hashes counted (`<F`);
 an admitted call is never recorded, a refused one never admitted. -/
@@ -536,6 +573,8 @@ def record (P : Params D) (st : State D) (c : Call D) (verdict : Except (Verdict
   | .error v, .recorded v' r w' =>
       if v' ≠ v then failWith st s!"judge recorded {vname v'} for a call refused {vname v}"
       else
+        let st := countVerifies X st c r
+        let st := if v.verified then { st with carried := st.carried + 1 } else st
         let cE := countingEnv P.env
         let counted := dbgTrace "<F" fun _ => World.refuse cE st.host r
         let st := match counted with
@@ -2359,7 +2398,7 @@ def plantedArms : List String :=
    "journal-shadow-kept:replayed", "journal-shadow-reuse:replayed",
    "journal-proof-height:refused", "journal-proof-admitted:refused", "journal-proof-stale:refused",
    "journal-proof-cells-root:refused", "carry-name:nameTooLong", "carry-old-call:replayed",
-   "carry-old-world:wrongWorld", "carry-new:ok", "sig-bare:badSignature", "hash-count:empty-per-root", "retain:canonical",
+   "carry-old-world:wrongWorld", "carry-new:ok", "sig-bare:badSignature", "hash-count:empty-per-root", "verify-count:once", "retain:canonical",
    "retain-plant:refuted", "carry-budget:allowanceTooLarge", "carry-budget-edge:ok", "carry-budget-plant:overflow",
    "refusal-aba-stale:stale", "refusal-aba-recorded:recorded", "refusal-aba-pin:returned",
    "refusal-aba-plant:admitted", "refusal-final-fold:refusedFinal", "refusal-aba:refusedFinal",
@@ -2420,6 +2459,8 @@ def report (P : Params D) (seeds : List Nat) (control : Bool := false) : IO UInt
   let mut emptyRootMarks := 0
   let mut stem : Nat × Nat × Nat := (0, 0, 0)
   let mut proofBytes : Nat × Nat := (0, 0)
+  -- PERF-1: signature verifies of `judge` re-run on each recorded refusal (`<G`)
+  let mut verifies := 0
   for seed in seeds do
     -- the run's trie hashes are counted off its stderr (`countingEnv`); nothing else writes there
     let buf ← IO.mkRef ({} : IO.FS.Stream.Buffer)
@@ -2431,6 +2472,14 @@ def report (P : Params D) (seeds : List Nat) (control : Bool := false) : IO UInt
     -- at once (the first turns, before any refusal is recorded), or the counter is blind
     let st := if m.plant > m.emptyRoot then
         { st with seen := "hash-count:empty-per-root" :: st.seen } else st
+    -- the two-verify plant must cost more than `judge` on a seed that recorded a refusal
+    let st := if st.recorded > 0 && m.verifyTwice > m.verifyOnce then
+        { st with seen := "verify-count:once" :: st.seen } else st
+    -- exact, per seed: `judge` verifies at least once per recorded refusal (an authenticated call was
+    -- verified somewhere), and the plant exactly once more per refusal whose verdict carried it
+    let st := if m.verifyOnce ≥ st.recorded && m.verifyTwice = m.verifyOnce + st.carried then st
+      else failWith st s!"verify count: judge {m.verifyOnce} and the plant {m.verifyTwice} verifies over {st.recorded} recorded refusals, {st.carried} carried"
+    verifies := verifies + m.verifyOnce
     let (a, b) := maxWork st.log
     work := (max work.1 a, max work.2 b)
     admitted := admitted + st.admitted
@@ -2481,6 +2530,7 @@ def report (P : Params D) (seeds : List Nat) (control : Bool := false) : IO UInt
   IO.println s!"WASTE refuse hashes-per-refusal {showRatio (ratio rf.1 rf.2.1)}"
   IO.println s!"WASTE refuse record-bytes-per-refusal {showRatio (ratio rf.2.2.1 rf.2.1)}"
   IO.println s!"WASTE refuse refusals-per-member-window {showRatio (ratio rf.2.2.2.1 1)}"
+  IO.println s!"WASTE refuse verifies-per-refusal {showRatio (ratio verifies rf.2.1)}"
   IO.println s!"WASTE admit hashes-per-turn-rows-root {showRatio (ratio rowsRootMarks admitted)}"
   IO.println s!"WASTE admit hashes-per-row-insert {showRatio (ratio rw.1 rw.2.1)}"
   IO.println s!"WASTE admit hashes-per-row-retract {showRatio (ratio rw.2.2.1 rw.2.2.2.1)}"

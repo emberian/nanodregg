@@ -91,15 +91,38 @@ def authKey (X : Ctx D) (look : Pinned D) (c : Call D) : Except (Refusal D) Unit
   | .rotate key next => (rotate X look c key next).map fun _ => ()
   | _ => checkKey look c.unsigned
 
-/-- Was the call signed, for THIS World, by a key the member holds (KERNEL-44's class (A))? Only
-such a refusal is charged to the member and recorded; any other is answered and forgotten (U). -/
-def authenticated (X : Ctx D) (w : World D) (c : Call D) : Bool :=
+/-- Did `submit` reach verdict `v` only past a signature that VERIFIED (PERF-1)? A refusal `receive`
+made after its signature check (anything but `wrongWorld` and `badSignature`), or any rejection
+`World.admit` made, is reached only through `checkSignature`'s one verify passing (`submit_verified`).
+False for everything decided before that verify or by it: the journal (`replayed`), the recorded
+refusals (`refusedFinal`), the World the call names (`wrongWorld`), and `badSignature`, which a
+program may also name, so it does not say which verify failed. -/
+def Verdict.verified : Verdict D → Bool
+  | .refused .wrongWorld => false
+  | .refused .badSignature => false
+  | .refused _ => true
+  | .rejected (.replayed _) => false
+  | .rejected (.refusedFinal _) => false
+  | .rejected _ => true
+
+/-- The signature check, or nothing when it is already known to pass (`verified`): the verify is
+made at most once per judgement. -/
+def checkSignatureBy (X : Ctx D) (c : Call D) (verified : Bool) : Except (Refusal D) Unit :=
+  if verified then .ok () else checkSignature X c
+
+/-- Was the call signed, for THIS World, by a key the member holds (KERNEL-44's class (A)), the
+signature check skipped when `verified` already carries its passing (`judge`)? -/
+def authenticatedBy (X : Ctx D) (w : World D) (c : Call D) (verified : Bool) : Bool :=
   match (do
       req (c.unsigned.world = w.origin) .wrongWorld
-      checkSignature X c
+      checkSignatureBy X c verified
       authKey X (pinned X.env w c.unsigned.pins) c : Except (Refusal D) Unit) with
   | .ok () => true
   | .error _ => false
+
+/-- Was the call signed, for THIS World, by a key the member holds (KERNEL-44's class (A))? Only
+such a refusal is charged to the member and recorded; any other is answered and forgotten (U). -/
+def authenticated (X : Ctx D) (w : World D) (c : Call D) : Bool := authenticatedBy X w c false
 
 /-- What the Host does with a signed call (KERNEL-44): admitted; refused and RECORDED (final within
 the window: `submit_refused_final`); or refused and NOT recorded (`declined`: unauthenticated, early,
@@ -109,15 +132,24 @@ inductive Outcome (D : Type) [Ord D]
   | recorded (v : Verdict D) (r : Refused D) (w' : World D)
   | declined (v : Verdict D)
 
-def judge (X : Ctx D) (w : World D) (c : Call D) : Outcome D :=
+/-- `submit`, and for a refused call whether to record it, given how it is authenticated (`auth`
+of the verdict): recorded when authenticated and `World.refuse` takes it, declined otherwise. -/
+def judgeBy (X : Ctx D) (w : World D) (c : Call D) (auth : Verdict D → Bool) : Outcome D :=
   match submit X w c with
   | .ok (t, w') => .admitted t w'
   | .error v =>
-      if authenticated X w c then
+      if auth v then
         match World.refuse X.env w (refusedOf X c v) with
         | .ok w' => .recorded v (refusedOf X c v) w'
         | .error .refusalBudget => .declined (.rejected .refusalBudget)
         | .error _ => .declined v
       else .declined v
+
+/-- The Host's decision. The signature is verified ONCE (PERF-1): a verdict `submit` reached past
+its verify carries that verify's passing into the authentication (`Verdict.verified`), so a
+recorded refusal costs what its admission would have, one verify per signature it carries.
+`judge_eq`: the same Outcome as authenticating by `authenticated` (the two-verify judge). -/
+def judge (X : Ctx D) (w : World D) (c : Call D) : Outcome D :=
+  judgeBy X w c fun v => authenticatedBy X w c v.verified
 
 end Nanodregg.Kernel.Receive

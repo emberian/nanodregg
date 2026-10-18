@@ -51,7 +51,7 @@ theorem judge_journaled {X : Ctx D} {w : World D} {c : Call D} {h : Nat} {d : D}
           · cases hok
           · cases hok
     · exact ⟨_, rfl⟩
-  unfold judge
+  unfold judge judgeBy
   rw [hs]
   simp only
   split

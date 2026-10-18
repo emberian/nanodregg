@@ -27,7 +27,7 @@ variable {D : Type} [Ord D] [DecidableEq D]
 
 theorem judge_admitted {X : Ctx D} {w w' : World D} {c : Call D} {t : Turn D}
     (h : judge X w c = .admitted t w') : submit X w c = .ok (t, w') := by
-  unfold judge at h
+  unfold judge judgeBy at h
   split at h
   · rename_i hs; cases h; exact hs
   · split at h
