@@ -22,7 +22,9 @@ The count is of the real workload or it is refused:
   replayed chain must equal the host's chain with its first byte flipped. It reads
   `FAIL harness-control …`.
 
-Prints `COUNT …` lines, `WASTE bar trie-hashes-per-step R`, `WASTE bar audit-verifies-per-step R`
+Prints `COUNT …` lines, `WASTE bar trie-hashes-per-required R` (the trie hashes counted ÷ those the
+replayed steps require, `Kernel.Sim.Required`: exact on every draw, rounded up; a count below the
+requirement, or a requirement refused, is `FAIL required …`), `WASTE bar audit-verifies-per-step R`
 (per step of the tail the open replays: the steps past the newest base), and `BENCH-COUNT PASS`.
 -/
 import Host.Deployed
@@ -41,13 +43,27 @@ def countingX : Ctx D :=
     env := Kernel.Sim.Gen.countingEnv X.env
     verify := fun k m s => dbgTrace "@" fun _ => X.verify k m s }
 
+/-- What step `w → w'` requires of trie hashes (cv 01a14afe-7380): the transition's
+(`Kernel.Sim.Required.step`, read off the tries it built, uncounted) and the record's roots check of
+`w'` (one shared empty digest when one of its four roots is empty, `Required.emptyRoots`), marked `%`
+once per hash; `?` when the requirement is refused (a replay that does not reach `w'`). -/
+def markRequired (w : World D) (s : Step D) (w' : World D) : Except (Verdict D) (World D) :=
+  match Kernel.Sim.Required.step X.env w s w' with
+  | .ok n => dbgTrace ("".pushn '%' (n + Kernel.Sim.Required.emptyRoots w')) fun _ => .ok w'
+  | .error _ => dbgTrace "?" fun _ => .ok w'
+
 /-- A follower's re-derivation of one record (`auditStep` per step), its stated roots checked; each
-recorded refusal it re-judges is marked `!`, so a verify count is read against its Turns and refusals. -/
+recorded refusal it re-judges is marked `!`, so a verify count is read against its Turns and refusals;
+each step's requirement is marked beside it (`markRequired`). -/
 def auditRecord (w : World D) (r : ByteArray) : Except (Record.Fault (Verdict D)) (World D) :=
   Record.step Codec.Deployed.digestCodec
-    (fun w s => match s with
-      | .refusal _ => dbgTrace "!" fun _ => auditStep countingX w s
-      | _ => auditStep countingX w s)
+    (fun w s =>
+      let res := match s with
+        | .refusal _ => dbgTrace "!" fun _ => auditStep countingX w s
+        | _ => auditStep countingX w s
+      match res with
+      | .ok w' => markRequired w s w'
+      | .error e => .error e)
     (World.roots countingX.env) w r
 
 /-- Run `act` with stderr captured; its result and the captured text. -/
@@ -76,6 +92,11 @@ def toyPlant (dir : System.FilePath) : IO (Option String) := do
 
 def ratio (n d : Nat) : String :=
   let m := (n * 1000 + d / 2) / d
+  s!"{m / 1000}.{(toString (m % 1000 + 1000)).drop 1}"
+
+/-- `ratio` rounded UP: an exact row reads above 1.000 at a single extra hash. -/
+def ratioUp (n d : Nat) : String :=
+  let m := (n * 1000 + d - 1) / d
   s!"{m / 1000}.{(toString (m % 1000 + 1000)).drop 1}"
 
 def count (args : List String) : IO UInt32 := do
@@ -113,9 +134,17 @@ def count (args : List String) : IO UInt32 := do
   let steps := rw.steps - o.sealed.steps
   if steps == 0 then IO.println "FAIL count: no step past the base to count"; return 1
   let (h, v, rf) := (marks err '#', marks err '@', marks err '!')
-  IO.println s!"COUNT steps {steps} (past the base at step {o.sealed.steps}, offset {o.sealed.offset}) trie-hashes {h} verifies {v}"
+  let (q, refusedReq) := (marks err '%', marks err '?')
+  if refusedReq > 0 then
+    IO.println s!"FAIL required: {refusedReq} steps whose requirement was refused (a replay did not reach the World the step reached)"
+    return 1
+  if h < q then
+    IO.println s!"FAIL required: {h} trie hashes counted, below the {q} the steps require (the design changed: re-derive Kernel.Sim.Required)"
+    return 1
+  IO.println s!"COUNT steps {steps} (past the base at step {o.sealed.steps}, offset {o.sealed.offset}) trie-hashes {h} required {q} verifies {v}"
   IO.println s!"COUNT kinds turns {steps - rf} refusals {rf} (recorded refusals re-judged in the tail)"
-  IO.println s!"WASTE bar trie-hashes-per-step {ratio h steps}"
+  IO.println s!"COUNT trie-hashes-per-step {ratio h steps} (draw-dependent: the trie's shape follows the run's ids; the row is per required hash)"
+  IO.println s!"WASTE bar trie-hashes-per-required {ratioUp h q}"
   IO.println s!"WASTE bar audit-verifies-per-step {ratio v steps}"
   IO.println "BENCH-COUNT PASS"
   return 0

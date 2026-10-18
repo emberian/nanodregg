@@ -11,6 +11,7 @@ import Kernel.Receive.Audit
 import Kernel.Receive.Submit
 import Kernel.Receive.Follow
 import Kernel.Sim.Shadow
+import Kernel.Sim.Required
 
 namespace Nanodregg.Kernel.Sim.Gen
 
@@ -171,10 +172,12 @@ structure State (D : Type) [Ord D] where
   /-- each account's floor in the model: a well's starts at its cap, credit lines move it -/
   floors : List (D × Nat) := []
   onces : List (D × ByteArray) := []
-  /-- KERNEL-23 (h): the slots the admitted turns changed, cells and nullifiers apart (their hashes
-  are COUNTED, not modelled: `countingEnv`, `report`) -/
-  cellSlots : Nat := 0
-  nullSlots : Nat := 0
+  /-- cv 01a14afe-7380: the trie hashes the admitted run turns REQUIRE (`Required.admit`, read off the
+  tries they built), by part; `countTurn` counts what they made (`<A`) against it -/
+  required : Required.Parts := {}
+  /-- the cell inserts of the run turns (touches and births): the plant `hash-required:empty-per-insert`
+  makes exactly one more hash per each -/
+  cellInserts : Nat := 0
   /-- the call-tree arms (D5c) ran in this seed -/
   treeDone : Bool := false
   /-- admitted turns whose record bytes were compared with `Turn.logWeight` (at a 32-byte digest) -/
@@ -185,10 +188,14 @@ structure State (D : Type) [Ord D] where
   journalScanned : Nat := 0
   journalTurns : Nat := 0
   /-- KERNEL-41: the journal probe's inserts (`<K`, one per probe turn) and prunes (`<R`), whose
-  hashes it bracketed; `countTurn`'s `<J` brackets each run turn's journal write only to take it out
-  of the nullifier share -/
+  hashes it bracketed -/
   probeInserts : Nat := 0
   prunes : Nat := 0
+  /-- what the journal probe's inserts and prunes require (`Required.insertReq`, `Required.fresh`) -/
+  probeInsertReq : Nat := 0
+  pruneReq : Nat := 0
+  /-- what the recorded refusals require (`Required.refuse`, `<F`) -/
+  refuseReq : Nat := 0
   /-- KERNEL-44: refusals the Host recorded, the most any member had recorded in one window, the
   calls declined `refusalBudget`, and the record bytes of the recorded ones -/
   recorded : Nat := 0
@@ -205,6 +212,10 @@ structure State (D : Type) [Ord D] where
   rowsRead : Nat := 0
   /-- KERNEL-49 (a), the stem probe: row inserts under 64 u64-counter keys (`<S`/`<T`) -/
   stemInserts : Nat := 0
+  /-- what the rows probe's counted turns require of their rows share (`<W`-`<V`, `<X`-`<Y`, `<S`-`<T`) -/
+  rowInsReq : Nat := 0
+  rowRetReq : Nat := 0
+  stemReq : Nat := 0
   /-- the wire bytes of the changed cells' inclusion proofs (`Params.proofSize`), and how many -/
   proofBytes : Nat := 0
   proofs : Nat := 0
@@ -258,21 +269,34 @@ def rootsShared (E : Env D) (w : World D) : D × D × D × D :=
 /-- PLANT (the counter's tooth): the four roots each with its OWN empty digest, from its own spec
 (the sharing KERNEL-47 made, undone). The same roots, one more hash per further empty trie; `report`
 must count more for it than for `rootsShared` on a seed whose World had two empty tries at once (arm
-`hash-count:empty-per-root`). It replaces `hash-count:empty-per-insert`: since KERNEL-49 (a) no insert
-reads an empty digest, so that regression cannot be written. -/
+`hash-count:empty-per-root`). Since KERNEL-49 (a) no insert reads an empty digest; KERNEL-35's
+per-insert recomputation is planted against the requirement instead (`plantEmptyPerInsert`). -/
 def plantRootsUnshared (E : Env D) (w : World D) : D × D × D × D :=
   (w.trie.rootWith (trieSpec E) (Thunk.mk fun _ => Trie.emptyHash (trieSpec E)),
     w.journal.rootWith (journalSpec E) (Thunk.mk fun _ => Trie.emptyHash (journalSpec E)),
     w.refusals.rootWith (refusalSpec E) (Thunk.mk fun _ => Trie.emptyHash (refusalSpec E)),
     w.rows.rootWith (rowSpec E) (Thunk.mk fun _ => Trie.emptyHash (rowSpec E)))
 
+/-- PLANT `hash-required:empty-per-insert` (cv 01a14afe-7380): KERNEL-35's per-insert recomputation of
+the empty digest, written on the compressed trie: the cell write (`commitTrie` without the
+nullifiers), each insert followed by its own copy of the empty trie's digest, as every insert forced
+one before KERNEL-35. Its digests are returned so none is dropped; `report` requires exactly one more
+hash per cell insert than the real cell write (`<E` = `<C` + inserts), and the admission with it in
+place of the cell write to read above the requirement (`hashes-per-required`). -/
+def plantEmptyPerInsert (E : Env D) (w : World D) (t : Turn D) (posts : List (Post D)) : Cells D × List D :=
+  let S := trieSpec E
+  let step := fun (acc : Cells D × List D) (p : D × Entry) =>
+    (acc.1.insert S (.cell p.1) (.entry p.2), Trie.emptyHash S :: acc.2)
+  (bornEntries t).foldl step ((posts.map Post.pair).foldl step (w.trie, []))
+
 /-- The counted calls for one admitted turn `w → w'`: the whole admission (`<A`), its trie write
-without the nullifiers (`<C`, the cell share), its journal write (`<J`, KERNEL-41: the journal trie's
-nodes hash in the one trie domain, so its share is bracketed apart), its rows write (`<Q`,
-KERNEL-46/48, apart for the same reason), the four roots with their one shared empty digest (`<O`:
-since KERNEL-49 (a) the empty digest is read only at a root, so it is its own share), and the plant
-(`<P`). Each result must be what the uncounted call gives, or the counter changed the
-computation. -/
+without the nullifiers (`<C`, the cell share), its rows write (`<Q`, KERNEL-46/48: the rows trie's
+nodes hash in the one trie domain, so its share is bracketed apart), the four roots with their one
+shared empty digest (`<O`: since KERNEL-49 (a) the empty digest is read only at a root, so it is its
+own share), and the two plants (`<P`, `<E`). Each result must be what the uncounted call gives, or
+the counter changed the computation. Beside them, what the admission REQUIRES (`Required.admit`, read
+off the tries the uncounted replay builds and checked against `w'`'s roots), which `report` holds the
+whole count `<A` to: never below it, and at most its ceiling above. -/
 def countTurn (E : Env D) (st : State D) (w w' : World D) (t : Turn D) : State D :=
   let cE := countingEnv E
   let S := trieSpec E
@@ -282,7 +306,7 @@ def countTurn (E : Env D) (st : State D) (w w' : World D) (t : Turn D) : State D
       let t0 := { t with nullifiers := [] }
       let a := dbgTrace "<A" fun _ => World.admit cE w t
       let c := dbgTrace "<C" fun _ => commitTrie cE w t0 posts
-      let j := dbgTrace "<J" fun _ => commitJournal cE w t
+      let e := dbgTrace "<E" fun _ => plantEmptyPerInsert cE w t posts
       -- KERNEL-46/48: the rows' share, bracketed apart so the nullifier share is the nullifiers': as
       -- the compiled admission runs it (`World.admitImpl`, `@[csimp]`), `checkWith`'s ONE `rowsRun`
       let rq := dbgTrace "<Q" fun _ =>
@@ -298,8 +322,13 @@ def countTurn (E : Env D) (st : State D) (w w' : World D) (t : Turn D) : State D
         | .error _ => failWith st "hash count: the counted admission refused an admitted turn"
       let st := if c.hashOf S == (commitTrie E w t0 posts).hashOf S then st
         else failWith st "hash count: the counted cell write reached another root"
-      let st := if j.hashOf (journalSpec E) == w'.journalRoot E then st
-        else failWith st "hash count: the counted journal write reached another journal root"
+      let inserts := posts.length + t.creates.length
+      let st := if e.1.hashOf S == c.hashOf S && e.2.length == inserts &&
+          e.2.all (· == Trie.emptyHash S) then st
+        else failWith st "hash count: the empty-per-insert plant reached another root"
+      let st := match Required.admit E w t w' with
+        | .ok q => { st with required := st.required.add q, cellInserts := st.cellInserts + inserts }
+        | .error why => failWith st s!"hash required: {why}"
       let st := if rq.map (·.hashOf (rowSpec E)) == some (w'.rowsRoot E) then st
         else failWith st "hash count: the counted rows write reached another rows root"
       let st := if o == roots then st
@@ -312,7 +341,8 @@ structure Marks where
   admit : Nat := 0
   cells : Nat := 0
   plant : Nat := 0
-  journal : Nat := 0
+  /-- the plant `hash-required:empty-per-insert`'s cell write (`<E`) -/
+  plantInsert : Nat := 0
   probeInsert : Nat := 0
   prune : Nat := 0
   refuse : Nat := 0
@@ -341,7 +371,7 @@ def pairStem (m : Marks) : Marks :=
   | some a, some b => { m with stemWorst := max m.stemWorst (a - b), pendS := none, pendT := none }
   | _, _ => m
 
-/-- `report`'s side: the marks of one captured run, summed per bracket tag (`A`, `C`, `P`, `J`,
+/-- `report`'s side: the marks of one captured run, summed per bracket tag (`A`, `C`, `P`, `E`,
 `K`, `R`, `F`, `Q`, `O`, the verify counter's `G`, `H` (counting `@`), and the rows probe's `W`, `V`, `X`, `Y`, `S`, `T`). An `S` and its `T` are one
 stem insert turn: their difference is that insert's hashes, the most of which is `stemWorst`. -/
 def countMarks (out : String) : Marks :=
@@ -352,7 +382,7 @@ def countMarks (out : String) : Marks :=
     | some 'A' => { m with admit := m.admit + n }
     | some 'C' => { m with cells := m.cells + n }
     | some 'P' => { m with plant := m.plant + n }
-    | some 'J' => { m with journal := m.journal + n }
+    | some 'E' => { m with plantInsert := m.plantInsert + n }
     | some 'K' => { m with probeInsert := m.probeInsert + n }
     | some 'R' => { m with prune := m.prune + n }
     | some 'F' => { m with refuse := m.refuse + n }
@@ -408,8 +438,9 @@ def scanWorld (E : Env D) (st : State D) (w : World D) (what : String) : State D
       shapeScanRoot (refusalSpec E) w.refusals && shapeScanRoot (rowSpec E) w.rows then st
   else failWith st s!"shape scan: {what} holds a one-sided node, a non-ascending branching bit or an empty leaf"
 
-/-- After an admitted turn `w → w'`: replay its inserts from `w`'s trie with `w'`'s leaves (the
-replay must reach `w'`'s root, or a touched path was left unrehashed), count their hashes, prove
+/-- After an admitted turn `w → w'`: count its hashes and what they require (`countTurn`), replay its
+inserts from `w`'s trie with `w'`'s leaves (the replay must reach `w'`'s root, or a touched path was
+left unrehashed), prove
 and verify every changed slot and one untouched one against `w'`'s root, each nullifier as absent
 against `w`'s, and forge four proofs, each of which must fail to verify. -/
 def checkRoot (P : Params D) (st : State D) (w w' : World D) (t : Turn D) : State D :=
@@ -421,12 +452,7 @@ def checkRoot (P : Params D) (st : State D) (w w' : World D) (t : Turn D) : Stat
   let (tr, st) := slots.foldl (fun (tr, st) s =>
     match w'.trie.get S s with
     | none => (tr, failWith st "root: a changed slot is absent after the turn")
-    | some l =>
-        let tr' := tr.insert S s l
-        let st := match s with
-          | .cell _ => { st with cellSlots := st.cellSlots + 1 }
-          | .nullifier _ => { st with nullSlots := st.nullSlots + 1 }
-        (tr', st)) (w.trie, st)
+    | some l => (tr.insert S s l, st)) (w.trie, st)
   let st := if tr.hashOf S == w'.root E then st
     else failWith st "root: replaying the turn's inserts does not reach the admitted root"
   let root := w'.root E
@@ -573,7 +599,8 @@ def countVerifies (X : Ctx D) (st : State D) (c : Call D) (r : Refused D) : Stat
   | _ => failWith st "verify count: the two-verify plant did not record the refusal"
 
 /-- The Host's recording of a refused call (KERNEL-44: `Receive.judge`), checked against the verdict
-`submit` gave: a recorded refusal is that verdict, logged as a step and its hashes counted (`<F`);
+`submit` gave: a recorded refusal is that verdict, logged as a step and its hashes counted (`<F`)
+against what it requires (`Required.refuse`);
 an admitted call is never recorded, a refused one never admitted. -/
 def record (P : Params D) (st : State D) (c : Call D) (verdict : Except (Verdict D) (Turn D × World D)) : State D :=
   let X := P.ctx
@@ -589,6 +616,9 @@ def record (P : Params D) (st : State D) (c : Call D) (verdict : Except (Verdict
           | .ok w'' => if w''.refusalsRoot P.env == w'.refusalsRoot P.env then st
               else failWith st "hash count: the counted refusal reached another refusals root"
           | .error _ => failWith st "hash count: the counted refusal was refused"
+        let st := match Required.refuse P.env st.host r w' with
+          | .ok n => { st with refuseReq := st.refuseReq + n }
+          | .error why => failWith st s!"hash required: {why}"
         { st with host := w', log := st.log ++ [.refusal r], recorded := st.recorded + 1,
                   refusalMax := max st.refusalMax (refusalCount P.env w' r.member),
                   refusalBytes := st.refusalBytes + (refusedBytes P.env r).size }
@@ -1296,6 +1326,10 @@ proportional to the size of the World. -/
 /-- Thousandths, as an integer: `WASTE` lines carry a decimal ratio. -/
 def ratio (num den : Nat) : Nat := if den = 0 then 0 else num * 1000 / den
 
+/-- Thousandths rounded UP: an exact row (counted ÷ required, 1 when nothing is wasted) reads above
+1.000 at a single extra hash, however large the denominator. -/
+def ratioUp (num den : Nat) : Nat := if den = 0 then 0 else (num * 1000 + den - 1) / den
+
 def showRatio (milli : Nat) : String :=
   let frac := toString (milli % 1000)
   s!"{milli / 1000}.{"".pushn '0' (3 - frac.length)}{frac}"
@@ -1409,10 +1443,10 @@ def probeJournal (P : Params D) (st : State D) (seed : Nat) : State D :=
   if seed ≠ 0 then st else
   let W := Bounds.windowMax
   let n := 3 * W + 2
-  let step := fun (acc : Except String (World D × Nat × Nat × List (Turn D))) (i : Nat) =>
+  let step := fun (acc : Except String (World D × Nat × Nat × List (Turn D) × Nat × Nat)) (i : Nat) =>
     match acc with
     | .error e => .error e
-    | .ok (w, mx, scanned, log) =>
+    | .ok (w, mx, scanned, log, ri, rp) =>
       let H := w.height + 1
       let scan := if H % W = 0 then w.journal.toList.length + 1 else 0
       let t := journalTurn P i H H
@@ -1426,18 +1460,23 @@ def probeJournal (P : Params D) (st : State D) (seed : Nat) : State D :=
           let ins := dbgTrace "<K" fun _ =>
             w.journal.insert (journalSpec cE) t.txId (H, turnDigest P.env t)
           let after := if H % W = 0 then dbgTrace "<R" fun _ => pruneJournal cE H ins else ins
+          -- what they require (cv 01a14afe-7380), read off the uncounted journal before and after
+          let JS := journalSpec P.env
+          let insU := w.journal.insert JS t.txId (H, turnDigest P.env t)
+          let ri := ri + Required.insertReq JS w.journal insU t.txId
+          let rp := if H % W = 0 then rp + Required.fresh JS w'.journal insU else rp
           if after.hashOf (journalSpec P.env) != w'.journalRoot P.env then
             .error s!"the counted journal write at height {H} reached another journal root"
           else if w'.journal.toList.length < 3 * W then
-            .ok (w', max mx w'.journal.toList.length, scanned + scan, t :: log)
+            .ok (w', max mx w'.journal.toList.length, scanned + scan, t :: log, ri, rp)
           else .error s!"journal holds {w'.journal.toList.length} entries at height {w'.height}"
       | .error r => .error s!"journal turn {i} refused {r.name}"
   let g := World.genesis P.env P.zero 100000000
-  match (List.range n).foldl step (.ok (g, 0, 0, [])) with
+  match (List.range n).foldl step (.ok (g, 0, 0, [], 0, 0)) with
   | .error e => failWith st s!"probe journal: {e}"
-  | .ok (w, mx, scanned, log) =>
+  | .ok (w, mx, scanned, log, ri, rp) =>
       let st := { st with journalMax := mx, journalScanned := scanned, journalTurns := n,
-                          probeInserts := n, prunes := n / W }
+                          probeInserts := n, prunes := n / W, probeInsertReq := ri, pruneReq := rp }
       let tx := fun i => P.env.hash "nanodregg/sim/journal-tx" (toString i).toUTF8
       let missing := (List.range n).filter fun i =>
         !journalForgets w.height (i + 1) && (w.journalAt P.env (tx i)).isNone
@@ -1852,7 +1891,9 @@ write, the journal write, the refusals prune and the three roots, sharing ONE em
 `commit`'s order, so the empty digest is counted where `commit` first forces it). The difference is
 the rows' share: the compiled admission's (`World.admitImpl`) one `rowsRun` in `checkWith`, and the
 rows root `commitWith` takes. Each counted result must be what
-the uncounted admission reached, or the counter changed the computation. -/
+the uncounted admission reached, or the counter changed the computation. The share is held to what
+it requires (`Required.admit`'s rows part, plus the empty digest where the rows root alone forces
+it). -/
 def countRowsTurn (E : Env D) (st : State D) (w w' : World D) (t : Turn D) (stem : Bool := false) : State D :=
   let ins := t.rows.all fun x => match x.act with | .insert .. => true | _ => false
   let ret := t.rows.all fun x => match x.act with | .retract => true | _ => false
@@ -1876,9 +1917,17 @@ def countRowsTurn (E : Env D) (st : State D) (w w' : World D) (t : Turn D) (stem
         | .error _ => failWith st "rows hash count: the counted admission refused an admitted turn"
       let st := if b == (w'.root E, w'.journalRoot E, w'.refusalsRoot E) then st
         else failWith st "rows hash count: the counted non-rows share reached other roots"
-      if stem then { st with stemInserts := st.stemInserts + t.rows.length }
-      else if ins then { st with rowInserts := st.rowInserts + t.rows.length }
-      else { st with rowRetracts := st.rowRetracts + t.rows.length }
+      -- what the rows share requires: the row operations, and the empty digest when only the rows
+      -- root forces it (the base's three roots share the copy the four would)
+      match Required.admit E w t w' with
+      | .error why => failWith st s!"rows hash required: {why}"
+      | .ok q =>
+          let three := if Required.isEmpty w'.trie || Required.isEmpty w'.journal || Required.isEmpty w'.refusals
+            then 1 else 0
+          let req := q.rows + (q.roots - three)
+          if stem then { st with stemInserts := st.stemInserts + t.rows.length, stemReq := st.stemReq + req }
+          else if ins then { st with rowInserts := st.rowInserts + t.rows.length, rowInsReq := st.rowInsReq + req }
+          else { st with rowRetracts := st.rowRetracts + t.rows.length, rowRetReq := st.rowRetReq + req }
 
 /-- One rows turn at the REAL `World.admit`, its range reads and (if admitted) its hashes counted:
 the next World, or the refusal's name. -/
@@ -2469,7 +2518,8 @@ def plantedArms : List String :=
    "rows-taken-plant:caught", "rows-range-drop-plant:stale", "rows-repin-plant:stale",
    "proof-bit:refused", "depth-unhashed-plant:caught", "shape-unary-plant:caught",
    "pin-cell:same", "pin-cell-plant:caught", "pin-row:same", "pin-row-plant:caught",
-   "pin-range:same", "pin-range-plant:caught", "rows-stem:ok"]
+   "pin-range:same", "pin-range-plant:caught", "rows-stem:ok",
+   "hash-required:empty-per-insert"]
 
 /-- `--seeds N` (N ≥ 1) runs seeds `0 … N-1`; otherwise each argument is a seed; none is 64 seeds.
 `--harness-control` may stand anywhere (GATES-15). Anything else is refused (`none`): an argument
@@ -2500,7 +2550,13 @@ def report (P : Params D) (seeds : List Nat) (control : Bool := false) : IO UInt
   let mut restarts := 0
   let mut work : Nat × Nat := (0, 0)
   let mut seen : List String := []
-  let mut hashes : Nat × Nat × Nat × Nat := (0, 0, 0, 0)
+  -- cv 01a14afe-7380: what the run turns' admissions require, by part; their counted hashes (`<A`);
+  -- the plant's admissions (`<A` less `<C` plus `<E`)
+  let mut req : Required.Parts := {}
+  let mut counted := 0
+  let mut plantCounted := 0
+  -- (journal-probe inserts, prunes, refusals, row inserts, row retracts, stem inserts) required
+  let mut reqs : Nat × Nat × Nat × Nat × Nat × Nat := (0, 0, 0, 0, 0, 0)
   let mut weighed := 0
   let mut journal : Nat × Nat × Nat := (0, 0, 0)
   -- KERNEL-41: (journal-insert marks, inserts, prune marks, prunes)
@@ -2530,6 +2586,29 @@ def report (P : Params D) (seeds : List Nat) (control : Bool := false) : IO UInt
     -- at once (the first turns, before any refusal is recorded), or the counter is blind
     let st := if m.plant > m.emptyRoot then
         { st with seen := "hash-count:empty-per-root" :: st.seen } else st
+    -- cv 01a14afe-7380: every counted share against what it requires, never below it (a count below
+    -- the requirement means the design changed and `Required` must be re-derived with it)
+    let rowsIns := m.rowIns - m.rowInsBase
+    let rowsRet := m.rowRet - m.rowRetBase
+    let stemN := m.stemIns - m.stemBase
+    let st := [("admission", m.admit, st.required.total), ("journal insert", m.probeInsert, st.probeInsertReq),
+        ("journal prune", m.prune, st.pruneReq), ("refusal", m.refuse, st.refuseReq),
+        ("row insert", rowsIns, st.rowInsReq), ("row retract", rowsRet, st.rowRetReq),
+        ("stem insert", stemN, st.stemReq)].foldl (fun st (what, n, r) =>
+          if n < r then failWith st s!"hash required: the {what} hashes counted {n}, below the {r} they require"
+          else st) st
+    -- the empty-per-insert plant: exactly one more hash per cell insert, and the admission with it
+    -- reads above the requirement where the real one reads at it
+    let plantN := m.admit - m.cells + m.plantInsert
+    let st := if m.plantInsert = m.cells + st.cellInserts then st
+      else failWith st s!"hash required: the empty-per-insert plant counted {m.plantInsert}, the cell write {m.cells} over {st.cellInserts} inserts"
+    let st := if st.cellInserts > 0 && ratioUp plantN st.required.total > ratioUp m.admit st.required.total then
+        { st with seen := "hash-required:empty-per-insert" :: st.seen } else st
+    req := req.add st.required
+    counted := counted + m.admit
+    plantCounted := plantCounted + plantN
+    reqs := (reqs.1 + st.probeInsertReq, reqs.2.1 + st.pruneReq, reqs.2.2.1 + st.refuseReq,
+      reqs.2.2.2.1 + st.rowInsReq, reqs.2.2.2.2.1 + st.rowRetReq, reqs.2.2.2.2.2 + st.stemReq)
     -- the two-verify plant must cost more than `judge` on a seed that recorded a refusal
     let st := if st.recorded > 0 && m.verifyTwice > m.verifyOnce then
         { st with seen := "verify-count:once" :: st.seen } else st
@@ -2549,11 +2628,6 @@ def report (P : Params D) (seeds : List Nat) (control : Bool := false) : IO UInt
     journal := (max journal.1 st.journalMax, journal.2.1 + st.journalScanned, journal.2.2 + st.journalTurns)
     refused := refused + st.refusedAsExpected
     restarts := restarts + st.restarts
-    -- the nullifier share is the admission's less its cell write, its journal write, its rows write
-    -- and the roots' empty digest
-    hashes := (hashes.1 + m.cells, hashes.2.1 + st.cellSlots,
-      hashes.2.2.1 + (m.admit - m.cells - m.journal - m.rowsRoot - m.emptyRoot),
-      hashes.2.2.2 + st.nullSlots)
     jhashes := (jhashes.1 + m.probeInsert, jhashes.2.1 + st.probeInserts, jhashes.2.2.1 + m.prune,
       jhashes.2.2.2 + st.prunes)
     rf := (rf.1 + m.refuse, rf.2.1 + st.recorded, rf.2.2.1 + st.refusalBytes, max rf.2.2.2.1 st.refusalMax,
@@ -2583,23 +2657,25 @@ def report (P : Params D) (seeds : List Nat) (control : Bool := false) : IO UInt
     IO.println s!"FAIL planted refusals never met: {unmet}"
   IO.println s!"WASTE admit cells-touched-per-turn {showRatio work.1}"
   IO.println s!"WASTE fold work-per-turn {showRatio work.2}"
-  IO.println s!"WASTE admit hashes-per-touched-cell {showRatio (ratio hashes.1 hashes.2.1)}"
-  IO.println s!"WASTE admit hashes-per-nullifier {showRatio (ratio hashes.2.2.1 hashes.2.2.2)}"
-  IO.println s!"WASTE admit hashes-per-journal-entry {showRatio (ratio jhashes.1 jhashes.2.1)}"
-  IO.println s!"WASTE admit hashes-per-prune {showRatio (ratio jhashes.2.2.1 jhashes.2.2.2)}"
+  IO.println s!"kernel-sim: trie hashes of the run turns' admissions counted={counted} required={req.total} (cells {req.cells}, nullifiers {req.nullifiers}, journal {req.journal}, rows {req.rows}, refusals prune {req.refusals}, empty root {req.roots})"
+  IO.println s!"kernel-sim: plant hash-required:empty-per-insert counted={plantCounted}: hashes-per-required {showRatio (ratioUp plantCounted req.total)}"
+  IO.println s!"kernel-sim: required: journal probe inserts {reqs.1} (counted {jhashes.1}), prunes {reqs.2.1} (counted {jhashes.2.2.1}), refusals {reqs.2.2.1} (counted {rf.1}), row inserts {reqs.2.2.2.1} (counted {rw.1}), row retracts {reqs.2.2.2.2.1} (counted {rw.2.2.1}), stem inserts {reqs.2.2.2.2.2} (counted {stem.1})"
+  IO.println s!"WASTE admit hashes-per-required {showRatio (ratioUp counted req.total)}"
+  IO.println s!"WASTE admit journal-insert-hashes-per-required {showRatio (ratioUp jhashes.1 reqs.1)}"
+  IO.println s!"WASTE admit prune-hashes-per-required {showRatio (ratioUp jhashes.2.2.1 reqs.2.1)}"
   IO.println s!"WASTE admit journal-entries-per-window {showRatio (ratio journal.1 Bounds.windowMax)}"
   IO.println s!"WASTE admit journal-scanned-per-turn {showRatio (ratio journal.2.1 journal.2.2)}"
-  IO.println s!"WASTE refuse hashes-per-refusal {showRatio (ratio rf.1 rf.2.1)}"
+  IO.println s!"WASTE refuse hashes-per-required {showRatio (ratioUp rf.1 reqs.2.2.1)}"
   IO.println s!"WASTE refuse record-bytes-per-refusal {showRatio (ratio rf.2.2.1 rf.2.1)}"
   IO.println s!"WASTE refuse refusals-per-member-window {showRatio (ratio rf.2.2.2.1 1)}"
   IO.println s!"WASTE refuse verifies-per-refusal {showRatio (ratio verifies rf.2.1)}"
   IO.println s!"WASTE audit verifies-per-refusal {showRatio (ratio auditVerifies rf.2.1)}"
   IO.println s!"WASTE admit hashes-per-turn-rows-root {showRatio (ratio rowsRootMarks admitted)}"
-  IO.println s!"WASTE admit hashes-per-row-insert {showRatio (ratio rw.1 rw.2.1)}"
-  IO.println s!"WASTE admit hashes-per-row-retract {showRatio (ratio rw.2.2.1 rw.2.2.2.1)}"
+  IO.println s!"WASTE admit row-insert-hashes-per-required {showRatio (ratioUp rw.1 reqs.2.2.2.1)}"
+  IO.println s!"WASTE admit row-retract-hashes-per-required {showRatio (ratioUp rw.2.2.1 reqs.2.2.2.2.1)}"
   IO.println s!"WASTE admit rows-read-per-range-read {showRatio (ratio rw.2.2.2.2.2 rw.2.2.2.2.1)}"
   IO.println s!"WASTE admit hashes-per-turn-empty-root {showRatio (ratio emptyRootMarks admitted)}"
-  IO.println s!"WASTE admit hashes-per-row-insert-stem {showRatio (ratio stem.1 stem.2.1)}"
+  IO.println s!"WASTE admit row-insert-stem-hashes-per-required {showRatio (ratioUp stem.1 reqs.2.2.2.2.2)}"
   if P.proofSize.isSome then
     IO.println s!"WASTE proof bytes-per-inclusion {showRatio (ratio proofBytes.1 proofBytes.2)}"
   IO.println s!"kernel-sim: stem probe: {stem.2.1} inserts, the most one insert hashed {stem.2.2} (KERNEL-49 (c)'s bound 2·(rowDepth+1) = {2 * (Bounds.rowDepth + 1)})"
