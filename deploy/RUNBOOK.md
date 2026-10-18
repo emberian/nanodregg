@@ -579,19 +579,24 @@ Needs, each one RAN before the measure:
   (HOSTING-29: it receives `reply TEXT` and never a provider body). Its share of the writes is the resident's
   own work, not argv. `use` must be 3 of 3 (PROTOCOL-43), as in v1: it comes from the friends' writes (the
   bell is the resident's object, used by the friends who ring it).
-- **The resident's round** (HOSTING-10, the HOSTING-27 resident): one ring answered, which is two writes.
-  - A friend rings the resident's bell, `invoke BELL <ring> (record (text "..."))`. That is the friend's write.
-  - The resident sees `(pending true)` on its next tick (Resident.tickMs = 1 s), asks keybroker once, and
-    invokes `answer` through its member socket `--via` its grant. That is ONE write by the resident,
-    carrying the reply text (1..2000 bytes). The friend reads `(pending false) (answer "...")`.
-  - The resident writes only its bell and holds no `anyone mutate` grant (widening that is a custody call,
-    ROOT's).
-  - The World drives it (the bell's state); there is no argv or control socket. v2 rings, waits for the
-    answer to be read, then rings again: a bell refuses `busy` while a ring is pending. N concurrent rounds
-    need N bells and N residents.
-  - A round is timed from the ring's nd answer to the read that shows the answer; its floor is about one
-    tick + the ask + two command round trips. The ring and the answer each count as one of the 1000
-    records. The tick is reported.
+- **The resident's round** (HOSTING-11, under the bell queue LANG-58 / HOSTING-31, 96179fb): one ring
+  answered = 2 writes, neither of which writes the Bell's cell.
+  - A friend rings: 1 write inserting `pending[k]` and `rings[k]` (k = notBefore, ringer).
+  - The resident's tick (Resident.tickMs = 1 s) is ONE `read BELL pending 64`, which returns every
+    unanswered ring in key order. It answers the lowest first: 1 ask (keybroker), then 1 write, through its
+    member socket `--via` its grant, inserting `answers[k]` and retracting `pending[k]`. The answer carries
+    the reply text (1..2000 bytes).
+  - Required steps per ring and per answer: 77 (116 ticks), as LANG-18 measured (lang-journey LB4, LB7).
+  - The resident writes only its bell's relations and holds no `anyone mutate` grant (widening that is a
+    custody call, ROOT's). The World drives it; there is no argv or control socket.
+  - Rings from different ringers commute, so v2 rings from both friends at once. Each round is timed
+    from its ring's nd answer to the read that shows `answers[k]`; its floor is about one tick + the ask
+    + two command round trips. The ring and the answer each count as one of the 1000 records. The tick
+    is reported.
+  - The run's own limits, never the resident's: `relationFull` when 64 rings are pending or `rings` holds
+    1024 (until the owner retires answered ones). The 1000 records are at most 500 rings, inside 1024, so a
+    v2 run that meets `relationFull` is RED by name. One ringer ringing twice from one view is `keyTaken`:
+    v2 syncs before ringing again.
   - The resident never re-asks: one ask per ring, kept durably. `status N` comes back as the text
     `(status N)`, a refusal as `(refused NAME)`, a lost answer as `(unanswered ...)`. v2 records each such
     answer by name and does not re-ring (a re-ring is a new ask and a new meter charge).
