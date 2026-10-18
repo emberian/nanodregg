@@ -1580,7 +1580,7 @@ on a missing or unreadable file, and the status it ends as.**
 | `reopenAt` (fuel restart, inside `serving`) | `reopenFailed` 38 (stderr `reopenFailed missing`) | `ioServing` 6 (restart; the fresh open refuses `missing`) |
 | `serve` pager handles (seg/index, opened in `serving`) | at the open: `ioServing` 6 → restart → `missing` 20; removed after the open: the descriptor still reads the old inode, and the writer's next sync refuses (row below) | `ioServing` 6 |
 | `File.sync` of the writer's seg.log append handle (every batch) | removed mid-service: the sync fails (`st_nlink = 0`) → `uncertain` 3 (nothing acknowledged) → restart → `missing seg.log` 20 | `uncertain` 3 |
-| `pager` `.read` base per page | `ioServing` 6 → restart → `missing base.world` 20 | `ioServing` 6 (a page's IO error restarts the writer, not that page: an open edge) |
+| `pager` `.read` base per page | `ioServing` 6 → restart → `missing base.world` 20 | `ioServing` 6 (a page's IO error restarts the writer, not that page: an open edge; CLOSED by HOST-48: that page is refused `pageIo`, the writer serves on) |
 | `fileCheckpoint` (seal) | index.log removed: its sync fails → `sealIo` 5 → restart → `missing index.log`; base.world removed: refused before the rename → `sealIo` 5 → `missing base.world` | `sealIo` 5 |
 | `Check.openClean` re-reads, `chainAt` | race only (just checked present) | `io` 13 |
 | `genesis` (`createDirAll`, `writeNew`) | n/a (creates) | `io` 13; a directory left behind opens `missing` |
@@ -2234,3 +2234,45 @@ returns `Option`/`Except` over the SAME bound its decode enforces, and a theorem
 - `digestBytes = 32` is a Host constant restating the deployed digest codec's width. `step_size_le` checks it against `digestCodec.size` (`fun _ => rfl`), so a different width breaks the proof, not silently the bound.
 
 **Meta-critique.** HOST-18 wrote "nobody has questioned the 32 MiB" and HOST-41 wrote the exact formula, and it still took two successors to change one line. The number was cheap to fix and expensive to leave, because it was the torn window. The pattern to watch: a bound with a prose justification in its docstring and no theorem. `Cadence.deployed.worldBytesMax` (2^28, "~900 BAR stores") and `sealMinBytes` are still that kind. `worldBytesMax` at least has a refusal on both sides (`worldTooLarge`, the base frame's bound).
+
+## HOST-48 · a page's IO error refuses THAT page `pageIo`; the writer serves on (2026-10-19, HOST-13; HOST-35's named edge)
+
+**The defect.** `fillPages` ran the pager with no handler, so an IO error while building a deferred `log` or `read` page escaped `serve`. Examples: `base.world` unreadable when the `read` arm opens it, or a `readAt` on seg.log or index.log failing. `Cli.serving` caught it as `ioServing` (exit 6, restart). One failed read of one request stopped the writer for every member: its queued frames were answered `refused stopped`, its connections dropped, and a restart followed. HOST-35's table recorded this as the open edge `pager .read base per page → ioServing`.
+
+**Decision.**
+- `Loop.pageOrRefuse` builds each deferred page under `try`. On an IO error it answers that page `refused pageIo` (`pageIoReply`) and writes one `STATUS page refused=pageIo error="…"` line on stderr, with the error last. `fillPages` builds every page through it.
+- That covers both of `serve`'s page paths: a batch that staged nothing, and a batch after its sync. It covers every pager, deployed (`Host.Deployed.pager`) and simulated alike, because the guard is in the loop, not in each pager.
+- A page only reads. Nothing the loop holds or the disk has depends on it, so its failure is that request's failure.
+- **Exit table unchanged.** `ioServing` (6, restart) stays for an IO error that does escape the loop: the pager's handles opened in `serving`, the port, the channel. Its sentence ("an IO error after the open: check the disk") still holds. No new Status: `pageIo` is a refusal name on the existing `refused` status.
+- The client: a log page answered `refused` goes to PROTOCOL's `envelopeRefused`, which prints any name it does not special-case as `refused host pageIo` (CommandExit refused). At that phase nothing has been submitted, so no attempt settles on it. No Protocol change.
+- `pageIoName_fresh` (`Host.Proofs.Names`, law 7): `pageIo` is none of the names a page reply otherwise carries. Those are a page fault's (`Page.Fault.name`, what the pager's `named f.name` sends), an envelope refusal's (`ReadRefusal.name`) and a frame refusal's (`FrameRefusal.name`). So the client can never read it as another refusal.
+
+**Plant.** host-sim `plant-page-io`:
+- What it runs: the real `serve` and `restarts` over the in-memory Store. The plant machine defers every `log` frame, as `Host.handle` does after the envelope check. Its pager's FIRST page throws an IO error.
+- Checks:
+  - (fires) the pager was asked twice and its first page threw;
+  - the first log page is `refused pageIo`, and the second is served;
+  - the loop ends `eof` with one reply per request (14 of 14);
+  - every other reply, and the World, are identical to a control run whose pager never throws.
+- Seen RED with the `try` removed: `FAIL plant-page-io: the writer serves on (the IO error escaped the loop (plant: base.world unreadable))`.
+
+**Alternatives.**
+- (a) A per-arm handler inside `Host.Deployed.pager`. It covers only the deployed pager. A sim pager, or a future third arm, would be unguarded, and the plant would test a twin.
+- (b) A new Status (`pageFailed`, restart-class for the client), so clients would retry automatically. Rejected for now: the command fails by name and the member runs it again. Whether `refused host pageIo` should instead be a restart-class CommandExit is PROTOCOL's call, and it is asked (below). A Status would be a wire flag day for one transient case.
+- (c) Retry the read in the loop. That hides a disk that is failing, and the loop has no business sleeping.
+
+**Asked of PROTOCOL.** Should a log or read page `refused pageIo` map to a restart-class CommandExit (like `behind`) rather than `refused`? Until they answer, it is `refused host pageIo` (exit 1).
+
+**Flag day.** None. No byte on disk, no wire layout and no exit code changes. The new stderr line is `STATUS page refused=pageIo error="…"`; OPS-5 is told for the RUNBOOK. HOST-35's table row `pager .read base per page` is annotated CLOSED by HOST-48.
+
+**Critique.**
+- The plant drives the loop's guard with a sim pager. That `Host.Deployed.pager`'s file reads are guarded is read off from `serve` (every pager goes through `fillPages`), not planted at file level. No store-plants row removes base.world mid-service and asks for a page. That would be OPS's row to add, and it needs a signed `read` envelope.
+- `try … catch` catches every `IO.Error` the pager raises, including a programming error that throws (an index out of range in IO code would panic, not throw, so it is not caught). A pager bug that throws would read as `pageIo` forever, with the writer otherwise healthy. The stderr line names the error, so it is visible, not silent.
+- A disk that keeps failing now yields a stream of `pageIo` refusals instead of a restart loop. Writes still sync, and a sync failure still stops the writer (`uncertain`), so a dead disk still stops it. Only a disk whose reads fail and whose writes succeed keeps the writer up, answering pages `pageIo`. That is the correct answer for that disk.
+
+**Law-6 read (read-only reader): LAND.** `pageIoName_fresh` is a real case split over the three refusal types. Every payload a `log`/`read` reply can carry from the Host was enumerated (the pager's page faults, `handle`'s envelope refusals, `refuseQueued`'s `stopped`; `uncertainAll` carries another status). Both page paths of `serve` go through `fillPages`, and `Follow` has no pager. The client ends `refused (host pageIo)` before any submit (`envelopeRefused_ne_submit`), and the thin `read` path keeps its download. WEAK, named:
+- the theorem compares NAMES. `ReadRefusal.expired`'s payload is its name plus a height, still not `pageIo`, and the client reads it by name, but no payload-level conjunct states that;
+- which of `serve`'s two page paths the plant's throwing page lands in depends on the seeded split and is not pinned;
+- host-sim's `run` was at the elaborator's depth; the seed-only plant calls moved into `laterPlants` (a `set_option maxRecDepth` was refused by the set_option budget, rightly).
+
+**Meta-critique.** This took five lines of code and stood open for three decisions because it was filed as an "edge" in a table row. The table was the right place to find it and the wrong place to leave it. Every "an open edge" cell in decisions/host.md is a cv task or a fix, not a note.

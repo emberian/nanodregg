@@ -258,7 +258,8 @@ def importVerb (store name inPath digestHex : String) (nonceArg : Option String)
 
 /-- After the Store opened, an IO error that escapes the loop is the disk or the pipe misbehaving
 mid-service, the same class as `uncertain`: `ioServing`, restart (a fresh open recovers or
-refuses by name). -/
+refuses by name). A page's IO error does not escape: it refuses that page `pageIo`
+(`Host.pageOrRefuse`, HOST-48). -/
 def serving (act : IO UInt32) : IO UInt32 :=
   try act catch e => refuse .ioServing s!"ioServing {e}"
 

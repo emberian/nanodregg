@@ -778,6 +778,68 @@ def sealPlants (seed : Nat) (frames : List Frame) (failures : IO.Ref Nat) : IO U
       | .reply st p => st == Protocol.Status.refused.code && p == "unknownOp".toUTF8
       | _ => false) failures
 
+/-- plant-page-io (HOST-48): the real `serve` over the in-memory Store, with log requests deferred
+(the plant machine defers every `log` frame, as `Host.handle` does after the envelope check) and a
+pager whose FIRST page throws an IO error (an unreadable base.world or segment mid-service). The
+loop must refuse that one page `refused pageIo`, answer every other request exactly as a run whose
+pager never throws (its control), and end `eof` with the same World: the writer serves on. Before
+HOST-48 the error escaped `serve` and `serving` restarted the whole writer (`ioServing`). -/
+def pageIoPlant (seed : Nat) (failures : IO.Ref Nat) : IO Unit := do
+  let p := "plant-page-io"
+  let submits := ((scenario seed 12).map (·.1))
+  let logAt (i : Nat) : Frame := ⟨UInt32.ofNat (800000 + i), Protocol.Op.log.code, ByteArray.empty⟩
+  let frames := submits.take 4 ++ [logAt 0] ++ (submits.drop 4).take 4 ++ [logAt 1] ++ submits.drop 8
+  let pm : Machine (World Nat) (Step Nat) Frame Nat :=
+    { machine with handle := fun w f => if f.op == Protocol.Op.log.code then .defer (.log 0) else machine.handle w f }
+  let go (throwFirst : Bool) : IO (Except String (Exit × Resident (World Nat) × Array Reply × Nat)) := do
+    let fr ← IO.mkRef frames
+    let sp ← IO.mkRef (splits seed frames.length)
+    let sent ← IO.mkRef #[]
+    let calls ← IO.mkRef 0
+    let (gd, gb, gr) ← match genesisStore cadence with
+      | .ok g => pure g
+      | .error f => throw (IO.userError s!"genesis: {f.name}")
+    let disk ← IO.mkRef gd
+    let bases ← IO.mkRef gb
+    let pager : Resident (World Nat) → Deferred → IO (UInt8 × ByteArray) := fun _ _ => do
+      let n ← calls.modifyGet fun n => (n, n + 1)
+      if throwFirst && n == 0 then throw (IO.userError "plant: base.world unreadable")
+      return (Protocol.Status.ok.code, "page".toUTF8)
+    try
+      let (e, r) ← restarts (serve pm recorder keys.segment (memCheckpoint disk bases keys cadence world originChain)
+          cadence (memStore disk none) pager (scriptPort fr sp sent) ⟨16, 1 <<< 20⟩ 5)
+        (do
+          let d ← disk.get
+          let b ← bases.get
+          match reopenWith cadence b.index b.file d.synced with
+          | .error f => return .error (.reopenFailed f.name)
+          | .ok o => return .ok { world := o.opened.world, pos := o.pos, sealed := o.sealed, index := o.index })
+        recorder.mark (frames.length + 1) gr
+      return .ok (e, r, ← sent.get, ← calls.get)
+    catch err => return .error s!"the IO error escaped the loop ({err})"
+  match ← go true, ← go false with
+  | .error e, _ => check s!"{p}: the writer serves on ({e})" false failures
+  | _, .error e => check s!"{p}-control: the honest run serves ({e})" false failures
+  | .ok (e, r, sent, calls), .ok (ce, cr, csent, _) =>
+    check s!"{p} fires: the pager was asked {calls} times and its first page threw" (2 ≤ calls) failures
+    let byConn (rs : Array Reply) (c : Nat) : List (UInt8 × ByteArray) :=
+      (rs.toList.filter (·.conn.toNat == c)).map fun a => (a.status, a.payload)
+    check s!"{p}: the first log page is refused `pageIo`, the second is served"
+      (byConn sent 800000 == [pageIoReply] && byConn sent 800001 == [(Protocol.Status.ok.code, "page".toUTF8)]) failures
+    let others (rs : Array Reply) := (rs.toList.filter (·.conn.toNat != 800000)).map fun a => (a.conn, a.status, a.payload)
+    check s!"{p}: the loop ends `{e.name}` with one reply per request ({sent.size} of {frames.length}), every other reply and the World as the control's"
+      ((match e, ce with | .eof, .eof => true | _, _ => false) && sent.size == frames.length &&
+        csent.size == frames.length && others sent == others csent && sameWorld r.world cr.world) failures
+
+/-- The plants that need only the seed and the scenario: one call in `run`, whose `do` block is at
+the elaborator's depth. -/
+def laterPlants (seed : Nat) (frames : List Frame) (failures : IO.Ref Nat) : IO Unit := do
+  forgottenPlants failures
+  refusalPlants seed failures
+  rowsPlants seed failures
+  sealPlants seed frames failures
+  pageIoPlant seed failures
+
 /-- `host-sim [SEED] [--harness-control]`; any other argument is refused (exit 2), never read as seed 1.
 `--harness-control` (GATES-15) adds one check nothing meets to the ordinary run, so the run must end
 `FAIL harness-control …` / `N FAILED`: the known-red control gates/runs.py runs before reading a verdict. -/
@@ -1162,10 +1224,7 @@ def run (args : List String) : IO UInt32 := do
     (lookupAt 0 == "expired") failures
   check "plant-lookup-expired: a call that may still land answers `absent`"
     (lookupAt 1 == "absent") failures
-  forgottenPlants failures
-  refusalPlants seed failures
-  rowsPlants seed failures
-  sealPlants seed frames failures
+  laterPlants seed frames failures
   -- plant-hangup (PROTOCOL-23): a hang-up after every 7th request, for connections that are not
   -- the requests' own; each is acknowledged exactly once by name, and every other reply is the
   -- reply of the run without them

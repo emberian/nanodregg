@@ -61,4 +61,15 @@ theorem StoreFault.text_missing_injective {F : Type} (a b : StorePart)
     (h : (StoreFault.missing a : StoreFault F).text = (StoreFault.missing b : StoreFault F).text) : a = b := by
   cases a <;> cases b <;> first | rfl | (simp [StoreFault.text, StorePart.name] at h)
 
+/-- **A `pageIo` refusal is never mistaken for another** (HOST-48, law 7): the name a page whose IO
+failed is refused by is none of the names a page reply otherwise carries: a page fault's (the
+pager's `named f.name`), an envelope refusal's, or a frame refusal's. -/
+theorem pageIoName_fresh :
+    (∀ f : Page.Fault, f.name ≠ pageIoName) ∧ (∀ r : Protocol.ReadRefusal, r.name ≠ pageIoName) ∧
+      (∀ r : FrameRefusal, r.name ≠ pageIoName) := by
+  refine ⟨fun f => ?_, fun r => ?_, fun r => ?_⟩
+  · cases f <;> simp [Page.Fault.name, pageIoName]
+  · cases r <;> simp [Protocol.ReadRefusal.name, pageIoName]
+  · cases r <;> simp [FrameRefusal.name, pageIoName]
+
 end Nanodregg.Host

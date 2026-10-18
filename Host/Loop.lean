@@ -273,12 +273,30 @@ payload, and nothing else of any reply changes (its conn above all: `Proofs.Loop
 def applyPages (replies : Array Reply) (pages : Array (Nat × UInt8 × ByteArray)) : Array Reply :=
   pages.foldl (fun rs (i, status, payload) => rs.modify i fun rep => { rep with status, payload }) replies
 
-/-- Fill the replies that wait for a log page, from the durable state: build every page, then
-`applyPages`. -/
+/-- The name a page whose IO failed is refused by (HOST-48). Distinct from every name a page reply
+can otherwise carry (`Host.pageIoName_fresh`). -/
+def pageIoName : String := "pageIo"
+
+/-- A page refused because its IO failed: `refused pageIo`. -/
+def pageIoReply : UInt8 × ByteArray := (Protocol.Status.refused.code, pageIoName.toUTF8)
+
+/-- Build one deferred page; an IO error while building it refuses THAT page `pageIo` (one
+`STATUS page refused=pageIo` line on stderr, the error last), and the loop serves on (HOST-48). A page
+only reads (the newest base, the segment, index.log): nothing the loop holds or the disk has depends
+on it, so a failed read is that request's failure, not the writer's. Before HOST-48 the error escaped
+the loop and `serving` restarted the whole writer (`ioServing`). -/
+def pageOrRefuse (pager : Resident W → Deferred → IO (UInt8 × ByteArray)) (r : Resident W) (d : Deferred) :
+    IO (UInt8 × ByteArray) :=
+  try pager r d catch e => do
+    IO.eprintln s!"STATUS page refused={pageIoName} error=\"{e}\""
+    return pageIoReply
+
+/-- Fill the replies that wait for a log page, from the durable state: build every page
+(`pageOrRefuse`), then `applyPages`. -/
 def fillPages (pager : Resident W → Deferred → IO (UInt8 × ByteArray)) (r : Resident W) (out : Out T) :
     IO (Array Reply) := do
   let built ← out.pages.mapM fun (i, d) => do
-    let (status, payload) ← pager r d
+    let (status, payload) ← pageOrRefuse pager r d
     return (i, status, payload)
   return applyPages out.replies built
 
