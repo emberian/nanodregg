@@ -52,7 +52,30 @@ never from bytes the Host or anyone else hands over:
 1. The sponsor (any member; the operator's own member for the first joiners) prints the invitation
    with `nd invite` (bare: it reads the World's genesis inputs the sponsor kept; a FOUNDER keeps them
    once with `nd --input HEX`, the `input HEX` line its genesis printed last) and its public key with
-   `nd --keys` (the `key HEX` line).
+   `nd --keys` (the `key HEX` line). The invitation PINS the writer's newest base, as the sponsor's
+   OWN follow verified it (PROTOCOL-47, 5f9edc2): the step count the writer states for it and the
+   digest of follow's own World there, never the writer's word and never the sponsor's tip. A thin
+   joiner adopts exactly that base, so before inviting one the operator SEALS the writer (HOST-43):
+
+       systemctl stop nd-host-serve
+       sudo -u nd /opt/nd/bin/host seal /srv/nd/store      # prints `sealed steps=S chain=C digest=D`
+       systemctl start nd-host-serve
+
+   and then the sponsor runs `nd invite` (it catches up first, crossing the sealed base). `host seal`
+   is the operator's alone: no member operation seals. On a running writer it is refused `locked`
+   (16) and writes nothing; at an already-sealed position it writes nothing and prints the same line
+   again. The base stays the newest until the writer's next cadence seal (1 MiB of log), so later
+   commits do not spoil an invitation already made. The sponsor's refusals (nd exit 1, the name on
+   stderr, a hint on stdout):
+   - `refused noBase`: the sponsor's follow has not verified the writer's newest base (follow was
+     restarted since, the record is in its memory; or the writer sealed and follow has not crossed
+     it). Seal as above, then `nd invite` again.
+   - `refused baseMismatch`: the writer states a base digest that is not the sponsor's own World at
+     that step count. Do NOT invite through this writer: it states a base it does not hold (a lying
+     or forged base); stop and investigate it (`host check` on the writer's Store, §3).
+   Planted: store-plants `seal-live-writer-locked`, `seal-base-is-the-pin`, `seal-again-idempotent`;
+   PROTOCOL's rows `seal`, `basePin`; client/tests/join.rs (a thin joiner adopts exactly the sealed
+   `steps=` and `digest=`).
 2. The two reach the joiner by TWO channels. The invitation may travel any way: it is checked. The
    KEY is the trust root: it comes over a channel the joiner already trusts (in person, a message the
    joiner can attribute), never from the Host, never in the same message as the invitation.
@@ -83,6 +106,9 @@ first use, narrower than before (one 32-byte value, not a whole World) and not z
 every founder compares the `input HEX` (or `origin HEX`) its own genesis printed with the one the
 writer's genesis printed, out of band and with another founder, before it keeps it with `nd --input`.
 Test fixtures that reproduce a genesis with a known nonce do so by construction (harmless).
+The log reply's shape changed at PROTOCOL-47 (it states the newest base): a follower and a writer
+built on opposite sides of it refuse every log page `badResult`, so upgrade the writer and every
+follower together.
 nd-supervise refuses a `--write` or `--hide` path that does not exist (64), and `host follow` on a
 directory with no Store is `io` (13); both stop the unit (measured on burst5, deploy/live/README.md).
 A host killed by a signal is nd-supervise's 66 childSignaled, restarted (on Linux bwrap reports it
@@ -286,7 +312,8 @@ the ones the stale base counts: a reader ignores them, the writer's open truncat
 reopens at the same height). The OTHER orders are refused by name: `seg.log` copied before a seal is `segmentShort`
 (`copy-segment-before-base-wrong-order`), `index.log` copied before a seal is `indexShort`
 (`copy-index-before-base-wrong-order`); neither opens short. Record an anchor at the
-same time: `HEIGHT:CHAIN` from a member follower's head (its own `host check` on its follow
+same time: `HEIGHT:CHAIN` from a member follower's head (an operator's `host seal`, §2, is a seal like the
+cadence's: the same order covers a backup taken across it) (its own `host check` on its follow
 Store) or the highest receipt a client holds. The key travels with the copy (HOST-16: it guards
 integrity, not secrecy; a copy without it is `baseCorrupt`).
 
