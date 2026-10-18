@@ -1,5 +1,5 @@
-//! `nd-members MEMBER MEMBERS FOLLOW PIDS HOST_SOCK PEER SUPERVISE ND HOST STORE [--hide PATH]… --
-//! /ABS/DECIDER [ARG]…`
+//! `nd-members MEMBER MEMBERS STATE FOLLOW PIDS HOST_SOCK PEER SUPERVISE ND HOST STORE [--hide PATH]…
+//! -- /ABS/DECIDER [ARG]…`
 //!
 //! Each resident's member socket, for exactly the resident grains the World holds (HOSTING-30,
 //! CLIENT-29). It asks its decider `residents` at start and every `TICK` (the frames keybroker reads,
@@ -8,12 +8,16 @@
 //! nd-supervise does:
 //! - the resident's own follower (a follower is ONE member's command machine: every call and
 //!   envelope it plans names its MEMBER, so it is never shared), `FOLLOW/<name>/follow.sock` →
-//!   `host follow MEMBERS/<name>/store MEMBER GRANT`, MEMBER and GRANT read from the provisioning
-//!   step's `MEMBERS/<name>/follow` (`HEX HEX` and LF, 0600, chain-checked);
+//!   `host follow STATE/<name>/store MEMBER GRANT`, MEMBER and GRANT read from the provisioning
+//!   step's `STATE/<name>/follow` (`HEX HEX` and LF, 0600, chain-checked), confined to write that
+//!   Store, with MEMBERS hidden;
 //! - once that socket exists, `MEMBER/<name>/nd.sock` → `nd --stdio MEMBERS/<name>
 //!   FOLLOW/<name>/follow.sock HOST_SOCK`, confined to write the workspace and connect [HOST_SOCK,
-//!   its own follow socket] (CLIENT-24), the socket 0660 for uid PEER in MEMBER's group (`--group
-//!   --peer`), or 0600 when PEER is this uid (HOSTING-21).
+//!   its own follow socket] (CLIENT-24), with STATE hidden: it reads the World only through the
+//!   follow socket and can neither write nor read a follower Store or a `follow` file (HOSTING-32,
+//!   cv 01a1507c-7245; `Hosting.Proofs.Plan.roots_disjoint`: MEMBERS and STATE are disjoint trees).
+//!   The socket is 0660 for uid PEER in MEMBER's group (`--group --peer`), or 0600 when PEER is
+//!   this uid (HOSTING-21).
 //!
 //! Each child hides STORE and every `--hide` path; each has a PID file in PIDS. A child that ends is
 //! started again at most every `RESTART_AFTER`; past `STARTS_MAX` starts in `STARTS_WINDOW` the name
@@ -34,12 +38,12 @@ use std::process::{Child, ChildStdin, ChildStdout, Command, ExitCode, Stdio};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use nanodregg_launcher::broker_generated::{RESIDENTS_MAX, decider_exit, members_exit as exit};
-use nanodregg_launcher::grain_name_ok;
 use nanodregg_launcher::residents::{self, DeciderEnd};
+use nanodregg_launcher::{grain_name_ok, pairwise_apart};
 use nanodregg_sandbox::custody;
 use nanodregg_sandbox::{Policy, command};
 
-const USAGE: &str = "usage: nd-members MEMBER MEMBERS FOLLOW PIDS HOST_SOCK PEER SUPERVISE ND HOST STORE [--hide PATH]... -- /ABS/DECIDER [ARG]...";
+const USAGE: &str = "usage: nd-members MEMBER MEMBERS STATE FOLLOW PIDS HOST_SOCK PEER SUPERVISE ND HOST STORE [--hide PATH]... -- /ABS/DECIDER [ARG]...";
 /// How often the decider is asked (keybroker's tick): liveness only.
 const TICK: Duration = Duration::from_millis(200);
 /// Ticks a decider that stopped answering has to end on its own before it is stopped.
@@ -87,6 +91,8 @@ fn now_ms() -> u64 {
 struct Conf {
     member: PathBuf,
     members: PathBuf,
+    /// STATE: each resident's follower Store and `follow` file (`Hosting.stateRoot`)
+    state: PathBuf,
     follow: PathBuf,
     pids: PathBuf,
     host_sock: PathBuf,
@@ -104,11 +110,12 @@ struct Conf {
 fn run() -> End {
     let usage = || End(USAGE.into(), exit::USAGE);
     let mut argv = std::env::args_os().skip(1);
-    let fixed: Vec<PathBuf> = argv.by_ref().take(10).map(PathBuf::from).collect();
+    let fixed: Vec<PathBuf> = argv.by_ref().take(11).map(PathBuf::from).collect();
     let Ok(
         [
             member,
             members,
+            state,
             follow,
             pids,
             host_sock,
@@ -118,7 +125,7 @@ fn run() -> End {
             host,
             store,
         ],
-    ) = <[PathBuf; 10]>::try_from(fixed)
+    ) = <[PathBuf; 11]>::try_from(fixed)
     else {
         return usage();
     };
@@ -156,8 +163,25 @@ fn run() -> End {
     if let Err(e) = custody::check_private_dir(&members) {
         return root("membersRoot", exit::MEMBERS_ROOT, &members, &e);
     }
+    if let Err(e) = custody::check_private_dir(&state) {
+        return root("stateRoot", exit::STATE_ROOT, &state, &e);
+    }
     if let Err(e) = custody::check_private_dir(&follow) {
         return root("followRoot", exit::FOLLOW_ROOT, &follow, &e);
+    }
+    // the stdio child writes MEMBERS/<n> and the follower STATE/<n>/store: nested roots would put a
+    // Store in a workspace (or a socket directory in either), so they must be disjoint trees
+    let canon: Vec<PathBuf> = [&member, &members, &state, &follow]
+        .iter()
+        .filter_map(|p| p.canonicalize().ok())
+        .collect();
+    let refs: Vec<&Path> = canon.iter().map(PathBuf::as_path).collect();
+    if refs.len() != 4 || !pairwise_apart(&refs) {
+        let shown: Vec<String> = refs.iter().map(|p| p.display().to_string()).collect();
+        return End(
+            format!("rootsOverlap {}", shown.join(" ")),
+            exit::ROOTS_OVERLAP,
+        );
     }
     // the socket admits exactly PEER: its owner alone when PEER is this uid, else MEMBER's group
     let admit: Vec<OsString> = match peer == own {
@@ -176,6 +200,7 @@ fn run() -> End {
     let conf = Conf {
         member,
         members: members.clone(),
+        state: state.clone(),
         follow,
         pids,
         host_sock,
@@ -187,12 +212,13 @@ fn run() -> End {
         hide,
     };
 
-    // The decider reads the Store and runs itself; the member workspaces are hidden from it.
+    // The decider reads the Store and runs itself; the member workspaces and the follower state
+    // are hidden from it.
     let policy = Policy {
         read: vec![store.clone()],
         write: vec![],
         exec: vec![decider_path.clone()],
-        hidden: std::iter::once(members).chain(hidden).collect(),
+        hidden: [members, state].into_iter().chain(hidden).collect(),
         connect: vec![],
     };
     let dargs: Vec<&OsStr> = dargs.iter().map(OsString::as_os_str).collect();
@@ -350,12 +376,12 @@ fn parse_id(text: &[u8]) -> Option<Id> {
 /// `Err` is the line naming why not.
 fn provision(conf: &Conf, name: &str) -> Result<Id, String> {
     let missing = |why: String| format!("memberMissing {name} {why}");
-    let ws = conf.members.join(name);
-    let file = ws.join("follow");
+    let st = conf.state.join(name);
+    let file = st.join("follow");
     let text = custody::read_private(&file, 1..=FOLLOW_MAX)
         .map_err(|e| missing(format!("{} {e:?}", file.display())))?;
     let id = parse_id(&text).ok_or_else(|| missing(format!("{} malformed", file.display())))?;
-    let store = ws.join("store");
+    let store = st.join("store");
     if !std::fs::symlink_metadata(&store).is_ok_and(|m| m.is_dir()) {
         return Err(missing(format!("{} not a directory", store.display())));
     }
@@ -481,10 +507,11 @@ impl Pair {
         let fsock = conf.follow.join(name).join("follow.sock");
         let o = OsStr::new;
         if self.follow.due(name, "follow")? {
-            let store = ws.join("store");
+            let store = conf.state.join(name).join("store");
             let (f, h, st) = (fsock.as_os_str(), conf.host.as_os_str(), store.as_os_str());
             let mut a = vec![f, o("--write"), st, o("--exec"), h];
             a.extend(conf.hide.iter().map(OsString::as_os_str));
+            a.extend([o("--hide"), conf.members.as_os_str()]);
             a.extend([o("--"), h, o("follow"), st, &self.id.member, &self.id.grant]);
             self.follow.start(conf, name, "follow", &a)?;
         }
@@ -510,6 +537,7 @@ impl Pair {
                 f,
             ]);
             a.extend(conf.hide.iter().map(OsString::as_os_str));
+            a.extend([o("--hide"), conf.state.as_os_str()]);
             a.extend([o("--"), n, o("--stdio"), w, f, hs]);
             self.stdio.start(conf, name, "stdio", &a)?;
         }

@@ -77,14 +77,14 @@ theorem labelOk_refuses_nonascii : labelOk ⟨#[0xc3, 0xa9]⟩ = false := by dec
 theorem labelOk_accepts : labelOk (lit "w1") = true ∧ labelOk (lit "alice-2") = true := by decide
 
 /-- Each path of a plan in its ROLE: the program is `pkg/<entry>`, only `pkg` is read, only `vol` is
-written, nothing else is executable, and the Store and member workspaces are hidden. (The other
+written, nothing else is executable, and the Store is hidden. (The other
 theorems speak of `allowed`, the union; this one says which list each path is in, so a plan that
 wrote `pkg` and read `vol` is refused here.) -/
 theorem plan_roles {l : ByteArray} {g : Grain} {p : Plan} (h : plan l g = .ok p) :
     labelOk l = true ∧ labelOk g.idHex = true ∧ clean g.entry = true ∧
       p = { program := pkgDir l g ++ [g.entry], read := [pkgDir l g], write := [volDir l g],
             exec := [], broker := brokerOf g, member := memberOf g,
-            hidden := [storeDir l, membersDir l] } := by
+            hidden := [storeDir l] } := by
   unfold plan at h
   by_cases hl : labelOk l = true <;> by_cases hi : labelOk g.idHex = true <;>
     by_cases he : clean g.entry = true <;>
@@ -160,9 +160,9 @@ theorem plan_paths {l : ByteArray} {g : Grain} {p : Plan} (h : plan l g = .ok p)
   · exact ⟨[lit "pkg"], by simp [pkgDir]⟩
   · exact ⟨[lit "vol"], by simp [volDir]⟩
 
-/-- `grains` is neither `store` nor `members`, so the grain directory and the hidden directories
-part at the third component. -/
-private theorem grains_ne : lit "grains" ≠ lit "store" ∧ lit "grains" ≠ lit "members" := by
+/-- `grains` is not `store`, so the grain directory and the hidden Store part at the third
+component. -/
+private theorem grains_ne : lit "grains" ≠ lit "store" := by
   decide
 
 /-- Two paths that agree on `c` and then differ are not prefixes of one another. -/
@@ -183,22 +183,106 @@ theorem plan_not_exposed {l : ByteArray} {g : Grain} {p : Plan} (h : plan l g = 
     simp [grainDir]
   simp only [List.mem_cons, List.not_mem_nil, or_false] at hh
   rw [hx']
-  rcases hh with rfl | rfl
-  · exact ⟨parted (Ne.symm grains_ne.1), parted grains_ne.1⟩
-  · exact ⟨parted (Ne.symm grains_ne.2), parted grains_ne.2⟩
+  subst hh
+  exact ⟨parted (Ne.symm grains_ne), parted grains_ne⟩
 
-/-- No grain may reach the Stores files or a members workspace (where the seeds are). -/
-theorem plan_no_store_no_workspace {l : ByteArray} {g : Grain} {p : Plan} (h : plan l g = .ok p) :
-    ∀ x ∈ p.allowed, ¬ storeDir l <+: x ∧ ¬ membersDir l <+: x := by
-  have hh : storeDir l ∈ p.hidden ∧ membersDir l ∈ p.hidden := by
+/-- No grain may reach its Store's files. -/
+theorem plan_no_store {l : ByteArray} {g : Grain} {p : Plan} (h : plan l g = .ok p) :
+    ∀ x ∈ p.allowed, ¬ storeDir l <+: x := by
+  have hh : storeDir l ∈ p.hidden := by
     obtain ⟨-, -, -, rfl⟩ := plan_roles h
     simp
   intro x hx
-  exact ⟨(plan_not_exposed h _ hh.1 x hx).1, (plan_not_exposed h _ hh.2 x hx).1⟩
+  exact (plan_not_exposed h _ hh x hx).1
+
+/-! ## The deployed roots (HOSTING-32) -/
+
+private theorem hosted_ne_members : lit "nd-hosted" ≠ lit "nd-members" := by decide
+private theorem members_ne_follow : lit "members" ≠ lit "follow" := by decide
+
+/-- **The hosted root, World `l`'s member workspaces and World `l'`'s follower state are three
+disjoint trees** (cv 01a1507c-7245): none is a prefix of another, for every pair of labels. So the
+stdio child, whose only write is its workspace under `membersRoot l`, writes no follower Store
+(`stateRoot`), and nd-hosted's tree holds neither. -/
+theorem roots_disjoint (l l' : ByteArray) :
+    (¬ hostedRoot <+: membersRoot l ∧ ¬ membersRoot l <+: hostedRoot) ∧
+      (¬ hostedRoot <+: stateRoot l' ∧ ¬ stateRoot l' <+: hostedRoot) ∧
+      (¬ membersRoot l <+: stateRoot l' ∧ ¬ stateRoot l' <+: membersRoot l) := by
+  have e1 : hostedRoot = [lit "srv"] ++ lit "nd-hosted" :: [] := rfl
+  have e2 : membersRoot l = [lit "srv"] ++ lit "nd-members" :: [l, lit "members"] := rfl
+  have e3 : stateRoot l' = [lit "srv"] ++ lit "nd-members" :: [l', lit "follow"] := rfl
+  have same : ∀ {a b : Path}, a <+: b → a.length = b.length → a = b := fun h e => h.eq_of_length e
+  refine ⟨⟨?_, ?_⟩, ⟨?_, ?_⟩, ⟨fun h => ?_, fun h => ?_⟩⟩
+  · rw [e1, e2]; exact parted hosted_ne_members
+  · rw [e1, e2]; exact parted (Ne.symm hosted_ne_members)
+  · rw [e1, e3]; exact parted hosted_ne_members
+  · rw [e1, e3]; exact parted (Ne.symm hosted_ne_members)
+  · have := same h rfl
+    simp only [membersRoot, stateRoot, membersHome, List.cons_append, List.nil_append,
+      List.cons.injEq, true_and] at this
+    exact members_ne_follow this.2.1
+  · have := same h rfl
+    simp only [membersRoot, stateRoot, membersHome, List.cons_append, List.nil_append,
+      List.cons.injEq, true_and] at this
+    exact members_ne_follow this.2.1.symm
+
+/-- **No path under the hosted root reaches a member workspace or a follower Store, or contains
+one**: every path a plan names is joined onto `hostedRoot` (grain-launch's join), so no grain's
+plan, of any World, reaches either. -/
+theorem hosted_outside_members (l : ByteArray) (x : Path) :
+    ¬ membersRoot l <+: hostedRoot ++ x ∧ ¬ stateRoot l <+: hostedRoot ++ x ∧
+      ¬ hostedRoot ++ x <+: membersRoot l ∧ ¬ hostedRoot ++ x <+: stateRoot l := by
+  have e1 : hostedRoot ++ x = [lit "srv"] ++ lit "nd-hosted" :: x := rfl
+  have e2 : membersRoot l = [lit "srv"] ++ lit "nd-members" :: [l, lit "members"] := rfl
+  have e3 : stateRoot l = [lit "srv"] ++ lit "nd-members" :: [l, lit "follow"] := rfl
+  rw [e1, e2, e3]
+  exact ⟨parted (Ne.symm hosted_ne_members), parted (Ne.symm hosted_ne_members),
+    parted hosted_ne_members, parted hosted_ne_members⟩
+
+theorem bytes_size (p : Path) : (Path.bytes p).size = p.textBytes := by
+  induction p with
+  | nil => rfl
+  | cons c p ih =>
+    have h1 : (lit "/").size = 1 := by decide
+    simp only [Path.bytes, ByteArray.size_append, h1, ih, Path.textBytes, List.map_cons, List.sum_cons]
+    omega
+
+/-- **Every socket a resident's processes connect to fits `sun_path`** (HOST-52: `pathTooLong` at
+108), for every grain directory name the launcher accepts (`grain_name_ok`: at most 64 bytes) and
+every label: no socket root holds a label, so no label can push one past the bound. The longest is
+the follower's, 98 bytes at 64. -/
+theorem sockets_fit (n : ByteArray) (hn : n.size ≤ 64) :
+    (brokerRoot ++ [n, brokerSock]).textBytes ≤ sockPathMax ∧
+      (memberRoot ++ [n, memberSock]).textBytes ≤ sockPathMax ∧
+      (followSockRoot ++ [n, followSock]).textBytes ≤ sockPathMax := by
+  have h1 : (lit "run").size = 3 := by decide
+  have h2 : (lit "nd-broker").size = 9 := by decide
+  have h3 : (lit "nd-member").size = 9 := by decide
+  have h4 : (lit "nd-member-follow").size = 16 := by decide
+  have h5 : brokerSock.size = 11 := by decide
+  have h6 : memberSock.size = 7 := by decide
+  have h7 : followSock.size = 11 := by decide
+  simp only [brokerRoot, memberRoot, followSockRoot, Path.textBytes, List.cons_append,
+    List.nil_append, List.map_cons, List.map_nil, List.sum_cons, List.sum_nil, h1, h2, h3, h4, h5,
+    h6, h7, sockPathMax]
+  omega
+
+/-- A label is at most `componentMax` (64) bytes: one clean component. Every path rendered from
+a label (`membersRoot`, `stateRoot`, the units' `%i`) is bounded with it; no socket path holds one
+(`sockets_fit`). -/
+theorem labelOk_size {l : ByteArray} (h : labelOk l = true) : l.size ≤ Codec.Path.componentMax := by
+  have := labelOk_clean h
+  simp only [clean, Bool.and_eq_true, decide_eq_true_eq] at this
+  exact this.1.1.1.2
+
+/-- Tooth for `sockets_fit`: the bound is not slack. A 74-byte name puts the follower's socket at 108
+bytes, one past `sun_path`. -/
+theorem follow_sock_past_bound : (followSockRoot ++ [⟨Array.replicate 74 97⟩, followSock]).textBytes = 108 := by
+  decide
 
 private theorem lits_clean :
     clean (lit "worlds") = true ∧ clean (lit "grains") = true ∧ clean (lit "pkg") = true ∧
-      clean (lit "vol") = true ∧ clean (lit "store") = true ∧ clean (lit "members") = true := by
+      clean (lit "vol") = true ∧ clean (lit "store") = true := by
   decide
 
 /-- Every component of every path a plan names is clean: so the list-prefix facts above are facts
@@ -209,12 +293,12 @@ theorem plan_components_clean {l : ByteArray} {g : Grain} {p : Plan} (h : plan l
   obtain ⟨hl, hi, he, rfl⟩ := plan_roles h
   have hl := labelOk_clean hl
   have hi := labelOk_clean hi
-  obtain ⟨h1, h2, h3, h4, h5, h6⟩ := lits_clean
+  obtain ⟨h1, h2, h3, h4, h5⟩ := lits_clean
   intro x hx c hc
   simp only [Plan.allowed, List.cons_append, List.nil_append, List.append_nil, List.mem_cons,
     List.not_mem_nil, or_false] at hx
-  rcases hx with rfl | rfl | rfl | rfl | rfl <;>
-    simp only [pkgDir, volDir, grainDir, storeDir, membersDir, worldRoot,
+  rcases hx with rfl | rfl | rfl | rfl <;>
+    simp only [pkgDir, volDir, grainDir, storeDir, worldRoot,
       List.cons_append, List.nil_append, List.mem_cons, List.not_mem_nil, or_false] at hc <;>
     rcases hc with rfl | rfl | rfl | rfl | rfl | rfl <;> assumption
 

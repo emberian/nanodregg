@@ -76,8 +76,17 @@ pub fn policy(r: &Roots<'_>, p: &PlanPaths<'_>) -> Policy {
 /// Linux every directory a grain may see is a connect grant to the sockets in it), compared after
 /// canonicalizing.
 pub fn roots_disjoint(r: &Roots<'_>) -> bool {
-    let apart = |a: &Path, b: &Path| !(a.starts_with(b) || b.starts_with(a));
-    apart(r.root, r.broker) && apart(r.root, r.member) && apart(r.broker, r.member)
+    pairwise_apart(&[r.root, r.broker, r.member])
+}
+
+/// No path of `ps` lies under (or is) another: the roots are pairwise disjoint trees. The one
+/// comparison grain-launch's and nd-members' root checks share (HOSTING-32); callers canonicalize.
+pub fn pairwise_apart(ps: &[&Path]) -> bool {
+    ps.iter().enumerate().all(|(i, a)| {
+        ps[i + 1..]
+            .iter()
+            .all(|b| !(a.starts_with(b) || b.starts_with(a)))
+    })
 }
 
 /// The first path of a launch frame that is not the launched grain's own, or `None`: the program,

@@ -10,7 +10,6 @@ OS), a list of clean components.
 Layout under the root, for the Store labelled `l`:
 
     worlds/l/store            the Store's files            hidden from every grain
-    worlds/l/members          member workspaces (seeds)    hidden from every grain
     worlds/l/grains/<id>/pkg  the grain's package files    read (its program is pkg/<entry>)
     worlds/l/grains/<id>/vol  the grain's volume           read + write
 
@@ -18,6 +17,14 @@ and, for a resident only, one socket under each of two further roots of the oper
 
     BROKER/<id>/broker.sock   its broker socket (keybroker, HOSTING-17)        connect
     MEMBER/<id>/nd.sock       its member socket (`nd --stdio` as nd, HOSTING-20) connect
+
+The residents' members live OUTSIDE the hosted tree, under nd's own root (HOSTING-32, cv
+01a1507c-7245): `/srv/nd-members/l/members/<id>` is a resident member's workspace (its custody
+record: the ONLY path its `nd --stdio` child may write), `/srv/nd-members/l/follow/<id>` holds its
+follower's Store and its `follow` file (written only by its `host follow` child and the provisioning
+step), and `/run/nd-member-follow/<id>/follow.sock` is its follower's socket. No plan names any of
+them, and none lies under the hosted root (`Proofs.Plan.roots_disjoint`,
+`plan_outside_members`), so a grain reaches no workspace and no follower Store by construction.
 
 The two socket lists are separate plan fields, each relative to its own root (`Plan.broker`,
 `Plan.member`), so a member socket cannot be planned as a broker socket or the reverse. Both
@@ -67,7 +74,6 @@ structure Grain where
 
 def worldRoot (l : ByteArray) : Path := [lit "worlds", l]
 def storeDir (l : ByteArray) : Path := worldRoot l ++ [lit "store"]
-def membersDir (l : ByteArray) : Path := worldRoot l ++ [lit "members"]
 def grainDir (l : ByteArray) (g : Grain) : Path := worldRoot l ++ [lit "grains", g.idHex]
 def pkgDir (l : ByteArray) (g : Grain) : Path := grainDir l g ++ [lit "pkg"]
 def volDir (l : ByteArray) (g : Grain) : Path := grainDir l g ++ [lit "vol"]
@@ -76,14 +82,14 @@ def volDir (l : ByteArray) (g : Grain) : Path := grainDir l g ++ [lit "vol"]
 (`Proofs.plan_hidden_layout`: exactly a plan's `hidden`). grain-launch reads them (emitted as
 `LAYOUT_HIDDEN`) and refuses to start, `layoutMissing`, when one is absent: the sandbox refuses a
 missing hidden path at every launch (HOSTING-24). -/
-def layoutHidden : List ByteArray := [lit "store", lit "members"]
+def layoutHidden : List ByteArray := [lit "store"]
 
 /-- A resident's broker socket's name in its own directory of the broker root (HOSTING-17 §2). -/
 def brokerSock : ByteArray := lit "broker.sock"
 
 /-- A resident's member socket's name in its own directory of the member root (HOSTING-20): the
 socket nd-supervise serves `nd --stdio` on, as nd, over the resident's member workspace
-`worlds/<l>/members/<id>` (hidden from every grain). -/
+`/srv/nd-members/<l>/members/<id>` (outside the hosted tree, `membersRoot`). -/
 def memberSock : ByteArray := lit "nd.sock"
 
 /-- The socket a resident may connect to under one root: its own directory there, and the root's
@@ -102,14 +108,58 @@ reads and writes the World as its member (HOSTING-20, HOSTING-25). -/
 def memberOf (g : Grain) : List Path := socketOf memberSock g
 
 /-- The plan of a grain: run `pkg/<entry>`, read its package, read and write its volume, and (a
-resident) connect to its own broker socket and its own member socket; the Store and the member
-workspaces are hidden (the launcher's `Exposed` check is the second barrier). -/
+resident) connect to its own broker socket and its own member socket; the Store is hidden (the
+launcher's `Exposed` check is the second barrier), and the member workspaces and follower Stores
+are outside the hosted root altogether (`membersRoot`, `stateRoot`). -/
 def plan (l : ByteArray) (g : Grain) : Except Refusal Plan := do
   unless labelOk l do throw .labelUnclean
   unless labelOk g.idHex do throw .idUnclean
   unless Codec.Path.clean g.entry do throw .entryUnclean
   pure { program := pkgDir l g ++ [g.entry], read := [pkgDir l g], write := [volDir l g],
-         exec := [], broker := brokerOf g, member := memberOf g, hidden := [storeDir l, membersDir l] }
+         exec := [], broker := brokerOf g, member := memberOf g, hidden := [storeDir l] }
+
+/-! ## The deployed roots (absolute; HOSTING-32)
+
+Every root a hosted World's processes are given, as components of an absolute path. `Ops.Units`
+renders the units' arguments and tmpfiles from these (with the label `%i`), so the theorems below
+are about the deployed paths. -/
+
+/-- The operator's hosting root: the Stores, the grains' packages and volumes (nd-hosted's). -/
+def hostedRoot : Path := [lit "srv", lit "nd-hosted"]
+/-- The broker sockets' root (keybroker's, HOSTING-17). -/
+def brokerRoot : Path := [lit "run", lit "nd-broker"]
+/-- The member sockets' root (nd's, HOSTING-20): the one the grains' plans connect under. -/
+def memberRoot : Path := [lit "run", lit "nd-member"]
+/-- nd's own root for the residents' members of every World (nd 0700). -/
+def membersHome : Path := [lit "srv", lit "nd-members"]
+/-- World `l`'s resident member workspaces: `<id>` is one member's custody record, the only path its
+`nd --stdio` child may write. -/
+def membersRoot (l : ByteArray) : Path := membersHome ++ [l, lit "members"]
+/-- World `l`'s follower state: `<id>/store` (the resident's follower Store, written only by its
+`host follow` child) and `<id>/follow` (the member and grant it follows as, the provisioning
+step's). -/
+def stateRoot (l : ByteArray) : Path := membersHome ++ [l, lit "follow"]
+/-- The follower sockets' root (nd's 0700): `<id>/follow.sock`, each alone in its directory. Label-free
+and short, for sun_path. -/
+def followSockRoot : Path := [lit "run", lit "nd-member-follow"]
+/-- A resident follower's socket's name in its own directory of `followSockRoot`. -/
+def followSock : ByteArray := lit "follow.sock"
+
+/-- An absolute path's text, as bytes: a `/` before each component (what a unit's argument and a
+`connect` carry). -/
+def Path.bytes : Path → ByteArray
+  | [] => ByteArray.empty
+  | c :: p => (lit "/" ++ c) ++ Path.bytes p
+
+/-- An absolute path's text, for a unit file (`Ops.Units`). -/
+def Path.text (p : Path) : String := String.fromUTF8! (Path.bytes p)
+
+/-- The length of `Path.bytes` (`Proofs.Plan.bytes_size`). -/
+def Path.textBytes (p : Path) : Nat := (p.map (·.size + 1)).sum
+
+/-- The longest socket path `connect` takes: 107 bytes and a NUL in `sun_path` (HOST-52:
+`pathTooLong` at 108). -/
+def sockPathMax : Nat := 107
 
 /-- Every path a plan ALLOWS. -/
 def Plan.allowed (p : Plan) : List Path := p.program :: p.read ++ p.write ++ p.exec

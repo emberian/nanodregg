@@ -1,7 +1,8 @@
 //! nd-members (HOSTING-30, CLIENT-29): each resident grain the World holds gets its member socket
 //! `MEMBER/<dirOf>/nd.sock`, served by `nd --stdio` over its own member workspace and its OWN
-//! follower (`host follow MEMBERS/<name>/store MEMBER GRANT`, from the provisioning step's
-//! `MEMBERS/<name>/follow`), from the decider's `residents` frames: at birth, gone at removal.
+//! follower (`host follow STATE/<name>/store MEMBER GRANT`, from the provisioning step's
+//! `STATE/<name>/follow`), from the decider's `residents` frames: at birth, gone at removal. The
+//! stdio child writes its workspace and nothing of STATE (HOSTING-32: the probe in nd's place).
 //!
 //! Every plant runs the real binaries: a real writer and Store (`World`), the real decider
 //! (`hosting-broker`, which answers `residents` as `hosting-residents` will), nd-supervise, nd and
@@ -38,7 +39,7 @@ struct Roots {
 
 impl Roots {
     /// MEMBER (02710, this uid's) and FOLLOW (0700) short enough for a socket path under a 64-digit
-    /// name; MEMBERS and PIDS in a scratch tree of their own.
+    /// name; MEMBERS, STATE and PIDS in a scratch tree of their own.
     fn new(tag: char) -> Roots {
         let member = Short::new(&format!("M{tag}"));
         sockdir(&member.0);
@@ -48,9 +49,10 @@ impl Roots {
             "ndm{}{tag}",
             std::process::id()
         )));
-        for d in ["members", "pids"] {
+        for d in ["members", "state", "pids"] {
             nanodregg_devtools::mkdirs(&base.0.join(d)).unwrap();
         }
+        fs::set_permissions(base.0.join("state"), fs::Permissions::from_mode(0o700)).unwrap();
         Roots {
             member,
             follow,
@@ -59,6 +61,9 @@ impl Roots {
     }
     fn members(&self) -> PathBuf {
         self.base.0.join("members")
+    }
+    fn state(&self) -> PathBuf {
+        self.base.0.join("state")
     }
     fn pids(&self) -> PathBuf {
         self.base.0.join("pids")
@@ -73,7 +78,7 @@ impl Roots {
 
 /// Provision resident `name`'s member as the operator's provisioning step does: `nd
 /// --init-hosted` in `MEMBERS/<name>`, `init`, the operator's `enroll` and `grant world … observe`,
-/// its follower Store `MEMBERS/<name>/store` from the World's genesis, and `MEMBERS/<name>/follow`
+/// its follower Store `STATE/<name>/store` from the World's genesis, and `STATE/<name>/follow`
 /// (`MEMBER GRANT`, 0600). The member's id.
 fn provision(w: &World, r: &Roots, name: &str) -> String {
     let ws = r.members().join(name);
@@ -92,14 +97,17 @@ fn provision(w: &World, r: &Roots, name: &str) -> String {
         "id ",
     )
     .to_owned();
+    let st = r.state().join(name);
+    nanodregg_devtools::mkdirs(&st).unwrap();
+    fs::set_permissions(&st, fs::Permissions::from_mode(0o700)).unwrap();
     let o = Command::new(lean_bin("host"))
         .arg("genesis")
-        .arg(ws.join("store"))
+        .arg(st.join("store"))
         .args(&w.genesis_args)
         .output()
         .unwrap();
     assert_eq!(text(&o), w.genesis_out, "one genesis, another Store");
-    let f = ws.join("follow");
+    let f = st.join("follow");
     fs::write(&f, format!("{id} {observe}\n")).unwrap();
     fs::set_permissions(&f, fs::Permissions::from_mode(0o600)).unwrap();
     id
@@ -107,27 +115,29 @@ fn provision(w: &World, r: &Roots, name: &str) -> String {
 
 /// nd-members' argv over `w` and `r`, serving uid `peer`, with `decider` and its arguments.
 fn argv(w: &World, r: &Roots, peer: u32, decider: &Path, dargs: &[&std::ffi::OsStr]) -> Command {
-    argv_over(w, r, peer, &w.store, decider, dargs)
+    argv_over(w, r, peer, &w.store, &nd(), decider, dargs)
 }
 
-/// nd-members' argv with STORE (the decider's only readable path) given.
+/// nd-members' argv with STORE (the decider's only readable path) and ND given.
 fn argv_over(
     w: &World,
     r: &Roots,
     peer: u32,
     store: &Path,
+    nd_exe: &Path,
     decider: &Path,
     dargs: &[&std::ffi::OsStr],
 ) -> Command {
     let mut c = Command::new(env!("CARGO_BIN_EXE_nd-members"));
     c.arg(&r.member.0)
         .arg(r.members())
+        .arg(r.state())
         .arg(&r.follow.0)
         .arg(r.pids())
         .arg(&w.host_sock)
         .arg(peer.to_string())
         .arg(nd_supervise())
-        .arg(nd())
+        .arg(nd_exe)
         .arg(lean_bin("host"))
         .arg(store)
         .arg("--hide")
@@ -583,7 +593,7 @@ fn a_member_that_always_crashes_is_named_crash_loop_and_left_unbound() {
     let w = World::genesis("ndc");
     let r = Roots::new('c');
     provision(&w, &r, &w.r1);
-    let store = r.members().join(&w.r1).join("store");
+    let store = r.state().join(&w.r1).join("store");
     fs::remove_dir_all(&store).unwrap();
     nanodregg_devtools::mkdirs(&store).unwrap();
     let m = Members::start(&w, &r, uid(&r.member.0));
@@ -714,12 +724,45 @@ fn nd_members_ends_by_name() {
         assert_eq!(c, Some(i32::from(code)), "{name}: {l}");
         assert!(l.contains(name), "{name}: {l}");
     }
+    // STATE inside MEMBERS: a follower Store would sit in a workspace the stdio child writes
+    let inner = r.members().join("state");
+    fs::create_dir(&inner).unwrap();
+    fs::set_permissions(&inner, fs::Permissions::from_mode(0o700)).unwrap();
+    let nested = argv(&w, &r, me, &broker, &bargs);
+    let args: Vec<std::ffi::OsString> = nested
+        .get_args()
+        .map(|a| {
+            if a == r.state().as_os_str() {
+                inner.clone().into_os_string()
+            } else {
+                a.to_owned()
+            }
+        })
+        .collect();
+    let mut nested_c = Command::new(nested.get_program());
+    nested_c.args(&args);
+    let (l, c) = ends(&mut nested_c);
+    assert_eq!(
+        c,
+        Some(i32::from(members_exit::ROOTS_OVERLAP)),
+        "nested roots: {l}"
+    );
+    assert!(l.contains("rootsOverlap"), "nested roots: {l}");
+    fs::remove_dir(&inner).unwrap();
     // a decider that never ran its own end
     let (l, c) = ends(&mut argv(&w, &r, me, Path::new("/usr/bin/false"), &[]));
     assert_eq!(c, Some(i32::from(members_exit::DECIDER_MECHANISM)), "{l}");
     // a name that is not a grain directory name, and a World past the bound
     let (sh, dir) = stub(&r, vec![b"../x".to_vec()]);
-    let (l, c) = ends(&mut argv_over(&w, &r, me, &dir, &sh, &[dir.as_os_str()]));
+    let (l, c) = ends(&mut argv_over(
+        &w,
+        &r,
+        me,
+        &dir,
+        &nd(),
+        &sh,
+        &[dir.as_os_str()],
+    ));
     assert_eq!(
         c,
         Some(i32::from(members_exit::MEMBER_ROOT)),
@@ -729,7 +772,15 @@ fn nd_members_ends_by_name() {
         .map(|i| format!("{i:064x}").into_bytes())
         .collect();
     let (sh, dir) = stub(&r, past);
-    let (l, c) = ends(&mut argv_over(&w, &r, me, &dir, &sh, &[dir.as_os_str()]));
+    let (l, c) = ends(&mut argv_over(
+        &w,
+        &r,
+        me,
+        &dir,
+        &nd(),
+        &sh,
+        &[dir.as_os_str()],
+    ));
     assert_eq!(
         c,
         Some(i32::from(decider_exit::RESIDENTS_PAST_BOUND)),
@@ -742,7 +793,7 @@ fn nd_members_ends_by_name() {
         .collect();
     let (sh, dir) = stub(&r, at);
     let run = Logged::spawn(
-        argv_over(&w, &r, me, &dir, &sh, &[dir.as_os_str()]),
+        argv_over(&w, &r, me, &dir, &nd(), &sh, &[dir.as_os_str()]),
         r.base.0.join("bound.pid"),
     );
     std::thread::sleep(std::time::Duration::from_secs(2));
@@ -757,4 +808,109 @@ fn nd_members_ends_by_name() {
         "control: 1024 names read:\n{}",
         run.log()
     );
+}
+
+/// HOSTING-32 (cv 01a1507c-7245): the stdio child's only write is its member workspace. With the
+/// launcher's probe in nd's place (`probe --stdio WS …`, under exactly the policy nd-members gives
+/// `nd --stdio`), a write into its own follower Store, a read of its `follow` file and a listing of
+/// the Store are refused by the sandbox, while a write into the workspace lands. CONTROL: the same
+/// probe unconfined reaches all four, so each refusal is the sandbox's.
+#[test]
+fn the_stdio_child_writes_its_workspace_and_no_follower_store() {
+    let w = World::genesis("nds");
+    let r = Roots::new('s');
+    let g = w.r1.clone();
+    provision(&w, &r, &g);
+    let ws = r.members().join(&g);
+    let st = r.state().join(&g);
+    let targets = |tag: &str| {
+        format!(
+            "ws write {}\nstore write {}\nfollow read {}\nlist list {}\n",
+            ws.join(format!("probe.{tag}")).display(),
+            st.join("store").join(format!("probe.{tag}")).display(),
+            st.join("follow").display(),
+            st.join("store").display(),
+        )
+    };
+    let probe = Path::new(env!("CARGO_BIN_EXE_probe"));
+    let out = ws.join("probe.out");
+    // CONTROL: unconfined, the probe reaches every target
+    fs::write(ws.join("probe.targets"), targets("c")).unwrap();
+    let st_c = Command::new(probe)
+        .arg("--stdio")
+        .arg(&ws)
+        .status()
+        .unwrap();
+    assert!(
+        st_c.success(),
+        "control: the probe failed unconfined: {st_c}"
+    );
+    let got = fs::read_to_string(&out).unwrap();
+    assert_eq!(got.lines().count(), 4, "control: four targets tried: {got}");
+    for l in got.lines() {
+        assert!(
+            l.split(' ').nth(1) == Some("ok"),
+            "control: unconfined, {l}"
+        );
+    }
+    fs::remove_file(&out).unwrap();
+    fs::remove_file(st.join("store").join("probe.c")).unwrap();
+    // the probe as nd: nd-members starts it under the stdio child's policy once the follow socket is
+    // bound; it tries its targets and ends (nd-members restarts it, then names a crash loop)
+    fs::write(ws.join("probe.targets"), targets("s")).unwrap();
+    let args = broker_args(&w);
+    let args: Vec<&std::ffi::OsStr> = args.iter().map(|a| a.as_os_str()).collect();
+    let c = argv_over(
+        &w,
+        &r,
+        uid(&r.member.0),
+        &w.store,
+        probe,
+        &lean_bin("hosting-broker"),
+        &args,
+    );
+    let m = Members {
+        run: Some(Logged::spawn(c, r.base.0.join("nd-members.pid"))),
+        pids: r.pids(),
+    };
+    until(
+        "the probe's four lines",
+        60,
+        || fs::read_to_string(&out).is_ok_and(|t| t.lines().count() >= 4),
+        &|| m.log(),
+    );
+    assert!(
+        m.log().contains(&format!("{g} stdio ")),
+        "the probe did not run as the stdio child:\n{}",
+        m.log()
+    );
+    let got = fs::read_to_string(&out).unwrap();
+    let verdict = |name: &str| {
+        got.lines()
+            .find_map(|l| l.strip_prefix(&format!("{name} ")))
+            .unwrap_or("absent")
+            .to_owned()
+    };
+    assert_eq!(
+        verdict("ws"),
+        "ok",
+        "the stdio child cannot write its own workspace:\n{got}"
+    );
+    assert!(
+        verdict("store").starts_with("denied"),
+        "the stdio child wrote its follower Store:\n{got}"
+    );
+    assert!(
+        verdict("follow").starts_with("denied"),
+        "the stdio child read its follow file:\n{got}"
+    );
+    assert!(
+        verdict("list").starts_with("denied"),
+        "the stdio child listed its follower Store:\n{got}"
+    );
+    assert!(
+        !st.join("store").join("probe.s").exists(),
+        "a probe file landed in the follower Store"
+    );
+    drop(m);
 }

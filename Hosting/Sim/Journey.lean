@@ -88,7 +88,7 @@ def wantPlan (label hx : ByteArray) : Plan where
   exec := []
   broker := []
   member := []
-  hidden := [[lit "worlds", label, lit "store"], [lit "worlds", label, lit "members"]]
+  hidden := [[lit "worlds", label, lit "store"]]
 
 /-- The launcher's report of a grain whose child is running. -/
 def upLive (g : ByteArray) : Controller.Live := { grain := g, running := true, exits := [] }

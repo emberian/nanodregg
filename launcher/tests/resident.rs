@@ -80,8 +80,13 @@ fn a_resident_is_granted_through_its_own_socket_and_reaches_nothing_else() {
     )));
     let hosting = &hosting.0;
     let world = hosting.join("worlds").join(LABEL);
-    // the member workspaces' directory: every plan hides it, and the sandbox refuses a missing path
-    nanodregg_devtools::mkdirs(&world.join("members")).unwrap();
+    nanodregg_devtools::mkdirs(&world).unwrap();
+    // the member workspaces: outside the hosted tree, under nd's own root (HOSTING-32)
+    let members = Gone(nanodregg_devtools::scratch(&format!(
+        "ndr{}",
+        std::process::id()
+    )));
+    nanodregg_devtools::mkdirs(&members.0).unwrap();
     // the member root (HOSTING-25): a short scratch of its own, disjoint from the other two roots
     let mroot = Short::new("m");
     let mroot = &mroot.0;
@@ -119,7 +124,7 @@ fn a_resident_is_granted_through_its_own_socket_and_reaches_nothing_else() {
     fs::set_permissions(&other_m, fs::Permissions::from_mode(0o600)).unwrap();
     let mfollow = Short::new("f");
     let member = w.member(
-        &world.join("members").join(&g),
+        &members.0.join(&g),
         &mfollow.0.join("follow.sock"),
         &w.root.join("stores/R"),
         &mroot.join(&g).join("nd.sock"),

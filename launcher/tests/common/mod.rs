@@ -533,7 +533,7 @@ impl Drop for World {
 }
 
 /// A resident's member (HOSTING-20, HOSTING-25): an observe-on-the-World member enrolled by the
-/// operator, its one-record hosted custody in `ws` (the member workspace `worlds/<l>/members/<dirOf>`,
+/// operator, its one-record hosted custody in `ws` (the member workspace `/srv/nd-members/<l>/members/<dirOf>` when deployed,
 /// hidden from every grain), its own follower Store, and `nd --stdio` served on `sock` by
 /// nd-supervise, confined to write `ws` and connect [host.sock, its follow socket] (CLIENT-24). One
 /// uid here: nd-supervise binds 0600 with no `--group`/`--peer` (the deployment's 0660 group socket

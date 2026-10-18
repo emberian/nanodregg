@@ -9,11 +9,13 @@ Type=simple
 User=nd
 EnvironmentFile=/etc/nd/keybroker/keybroker.env
 RuntimeDirectory=nd-members-%i
+# TasksMax and RestrictAddressFamilies are unmeasured until a box window
 TasksMax=270338
-ExecStart=/opt/nd/bin/nd-members /run/nd-member /srv/nd-hosted/worlds/%i/members /run/nd-member-follow /run/nd-members-%i /run/nd/host.sock ${ND_PEER} /opt/nd/bin/nd-supervise /opt/nd/bin/nd /opt/nd/bin/host /srv/nd/store --hide /etc/nd --hide /home -- /opt/nd/bin/hosting-broker 0 1 /srv/nd/store ${ND_OPERATOR}
+# the decider's `0 1` (T0 SLOTS, read only by `decide`) goes with HOSTING-33's `hosting-residents STORE`
+ExecStart=/opt/nd/bin/nd-members /run/nd-member /srv/nd-members/%i/members /srv/nd-members/%i/follow /run/nd-member-follow /run/nd-members-%i /run/nd/host.sock ${ND_PEER} /opt/nd/bin/nd-supervise /opt/nd/bin/nd /opt/nd/bin/host /srv/nd/store --hide /etc/nd --hide /home -- /opt/nd/bin/hosting-broker 0 1 /srv/nd/store ${ND_OPERATOR}
 Restart=on-failure
 RestartSec=2
-RestartPreventExitStatus=70 71 72 73 75 76 78 7 150 151 152 153 154 155 156 158 159
+RestartPreventExitStatus=70 71 72 73 75 76 78 7 150 151 152 153 154 155 156 158 159 160 161
 UMask=0077
 NoNewPrivileges=yes
 # AF_NETLINK: the decider's and the children's bwrap bring a sandbox loopback up over NETLINK_ROUTE

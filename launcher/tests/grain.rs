@@ -42,7 +42,7 @@ fn the_owner_stops_a_grain_and_a_start_only_grantee_cannot() {
     )));
     let hosting = &hosting.0;
     let world = hosting.join("worlds").join(LABEL);
-    nanodregg_devtools::mkdirs(&world.join("members")).unwrap();
+    nanodregg_devtools::mkdirs(&world).unwrap();
     let w = World::genesis_following("grn", Some(world.join("store")));
     let lifecycle = w.lifecycle.clone();
     let g = line(

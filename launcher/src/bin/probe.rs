@@ -18,6 +18,11 @@
 //!   newlines as `|`.
 //!
 //! It finds itself by argv[0] (no /proc under bwrap). Exit 3 when it cannot write its own volume.
+//!
+//! Run in `nd`'s place by nd-members (`launcher/tests/members.rs`, HOSTING-32) it is started as
+//! `probe --stdio WS FOLLOW_SOCK HOST_SOCK`: then its directory is the member workspace WS, the one
+//! path that child may write: `WS/probe.targets` in, `WS/probe.out` out, so a test reads what nd's
+//! own confinement lets it touch.
 
 use std::io::{ErrorKind, Read, Write};
 use std::os::unix::net::UnixStream;
@@ -171,19 +176,20 @@ fn attempt(op: &str, path: &str, recv: &Path) -> String {
 }
 
 fn main() -> ExitCode {
-    let Some(me) = std::env::args_os().next().map(PathBuf::from) else {
-        return ExitCode::from(2);
-    };
-    let Some(pkg) = me.parent() else {
-        return ExitCode::from(2);
-    };
-    let Some(grain) = pkg.parent() else {
-        return ExitCode::from(2);
+    let args: Vec<PathBuf> = std::env::args_os().map(PathBuf::from).collect();
+    let (pkg, vol) = match args.as_slice() {
+        [_, flag, ws, ..] if flag.as_os_str() == "--stdio" => (ws.clone(), ws.clone()),
+        [me, ..] => {
+            let (Some(pkg), Some(grain)) = (me.parent(), me.parent().and_then(Path::parent)) else {
+                return ExitCode::from(2);
+            };
+            (pkg.to_path_buf(), grain.join("vol"))
+        }
+        [] => return ExitCode::from(2),
     };
     let Ok(targets) = std::fs::read_to_string(pkg.join("probe.targets")) else {
         return ExitCode::from(2);
     };
-    let vol = grain.join("vol");
     let recv = vol.join("probe.recv");
     let Ok(mut out) = std::fs::OpenOptions::new()
         .create(true)

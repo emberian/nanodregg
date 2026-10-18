@@ -174,7 +174,13 @@ fn the_resident_answers_every_ring_lowest_first_once_and_nothing_else() {
     )));
     let hosting = &hosting.0;
     let world = hosting.join("worlds").join(LABEL);
-    nanodregg_devtools::mkdirs(&world.join("members")).unwrap();
+    nanodregg_devtools::mkdirs(&world).unwrap();
+    // the member workspaces: outside the hosted tree, under nd's own root (HOSTING-32)
+    let members = Gone(nanodregg_devtools::scratch(&format!(
+        "ndb{}",
+        std::process::id()
+    )));
+    nanodregg_devtools::mkdirs(&members.0).unwrap();
     let mroot = Short::new("n");
     let mroot = &mroot.0;
     let w = World::genesis_following("bel", Some(world.join("store")));
@@ -184,7 +190,7 @@ fn the_resident_answers_every_ring_lowest_first_once_and_nothing_else() {
     fs::set_permissions(mroot.join(&g), fs::Permissions::from_mode(0o700)).unwrap();
     let mfollow = Short::new("e");
     let member = w.member(
-        &world.join("members").join(&g),
+        &members.0.join(&g),
         &mfollow.0.join("follow.sock"),
         &w.root.join("stores/R"),
         &mroot.join(&g).join("nd.sock"),

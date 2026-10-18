@@ -640,4 +640,4 @@ pub mod controller_exit {
 
 /// The directories under `worlds/<label>` every plan hides (`Hosting.layoutHidden`,
 /// `Proofs.plan_hidden_layout`): grain-launch refuses to start without them.
-pub const LAYOUT_HIDDEN: &[&str] = &["store", "members"];
+pub const LAYOUT_HIDDEN: &[&str] = &["store"];

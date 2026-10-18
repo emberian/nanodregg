@@ -77,7 +77,6 @@ fn tree(name: &str) -> Tree {
     };
     for d in [
         w1.join("store"),
-        w1.join("members"),
         w2.join("store"),
         w2.join("grains").join(B).join("vol"),
         t.pkg.clone(),
@@ -86,7 +85,6 @@ fn tree(name: &str) -> Tree {
         fs::create_dir_all(d).unwrap();
     }
     fs::write(w1.join("store/key"), b"STORE-KEY").unwrap();
-    fs::write(w1.join("members/seed"), b"SEED").unwrap();
     fs::write(w2.join("grains").join(B).join("vol/secret"), b"NEIGHBOUR").unwrap();
     place_exe(Path::new(env!("CARGO_BIN_EXE_probe")), &t.pkg.join("probe"));
     let nb = w2.join("grains").join(B).join("vol");
@@ -635,9 +633,12 @@ fn a_missing_layout_or_a_controller_that_never_ran_stops_grain_launch_by_name() 
             out.status.code(),
         )
     };
-    assert!(
-        LAYOUT_HIDDEN.contains(&"members") && LAYOUT_HIDDEN.contains(&"store"),
-        "control: the layout hides the Store and the member workspaces: {LAYOUT_HIDDEN:?}"
+    // the member workspaces and follower Stores are outside the hosted tree (HOSTING-32), so the
+    // layout a World needs under it is its Store alone
+    assert_eq!(
+        LAYOUT_HIDDEN,
+        &["store"],
+        "control: the layout grain-launch requires: {LAYOUT_HIDDEN:?}"
     );
     for name in LAYOUT_HIDDEN {
         let t = tree(&format!("layout-{name}"));

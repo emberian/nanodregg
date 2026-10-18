@@ -661,5 +661,7 @@ pub mod members_exit {
     pub const DECIDER_SIGNALED: u8 = 157;
     pub const DECIDER_LOST: u8 = 158;
     pub const DECIDER_MECHANISM: u8 = 159;
-    pub const ALL: &[u8] = &[150, 151, 152, 153, 154, 155, 156, 157, 158, 159];
+    pub const STATE_ROOT: u8 = 160;
+    pub const ROOTS_OVERLAP: u8 = 161;
+    pub const ALL: &[u8] = &[150, 151, 152, 153, 154, 155, 156, 157, 158, 159, 160, 161];
 }

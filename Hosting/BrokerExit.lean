@@ -166,7 +166,7 @@ inductive MembersExit where
   | memberRoot
   /-- MEMBERS fails `custody::check_private_dir` -/
   | membersRoot
-  /-- FOLLOW fails `custody::check_private_dir` -/
+  /-- FOLLOW (the follower sockets' root) fails `custody::check_private_dir` -/
   | followRoot
   /-- RLIMIT_NOFILE is below the fds one resident's nd-supervise may hold (CLIENT-28): every child
   inherits the limit, so each would refuse at launch -/
@@ -181,18 +181,25 @@ inductive MembersExit where
   | deciderLost
   /-- the decider's process ended with a code `DeciderExit` does not name (HOSTING-23) -/
   | deciderMechanism
+  /-- STATE (the follower Stores and `follow` files, `Hosting.stateRoot`, HOSTING-32) fails
+  `custody::check_private_dir` -/
+  | stateRoot
+  /-- two of MEMBER, MEMBERS, STATE and FOLLOW nest, after canonicalizing (HOSTING-32: the stdio
+  child's write set must never reach a follower Store; `Proofs.Plan.roots_disjoint` for the
+  deployed roots) -/
+  | rootsOverlap
   deriving DecidableEq, Repr
 
 namespace MembersExit
 
 def all : List MembersExit :=
   [usage, memberRoot, membersRoot, followRoot, fdLimit, deciderRefused, pidFile, deciderSignaled,
-   deciderLost, deciderMechanism]
+   deciderLost, deciderMechanism, stateRoot, rootsOverlap]
 
 def code : MembersExit → Nat
   | usage => 150 | memberRoot => 151 | membersRoot => 152 | followRoot => 153 | fdLimit => 154
   | deciderRefused => 155 | pidFile => 156 | deciderSignaled => 157 | deciderLost => 158
-  | deciderMechanism => 159
+  | deciderMechanism => 159 | stateRoot => 160 | rootsOverlap => 161
 
 /-- Every own end but a signalled decider is fatal: each is a root, an argument, a limit or the
 build, and a restart reads the same one. -/
