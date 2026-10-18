@@ -8,6 +8,7 @@ Rust lines (client library)	2520	CLIENT-1 split by ROOT 10-17: client/src minus 
 Rust lines (nd)	100	CLIENT-1 split by ROOT 10-17: the member command (argv to follow, the local custody verbs)
 Rust lines (attach/src)	300	ROOT 10-17: nd-attach, the box end of a friend's ssh session (CLIENT-12 B), its own crate and row
 Rust lines (nd-supervise)	160	CLIENT-1 split by ROOT 10-17: the supervisor binary (policy flags, launch, exit)
+Rust lines (nd-members)	550	CLIENT-29 / HOSTING-30 (ROOT ruling 2026-10-19, GATES-6): one per-World process binding each resident grain's member socket from its decider's residents frames; two nd-supervise children per resident (its own follower from MEMBERS/<name>/follow, its nd --stdio), restart backoff and crash-loop bound, socket directories made and checked alone, every end a Lean MembersExit name; pinned at the measured count
 Rust files with an unregistered generated header	0	a hand-written file wearing the emit-rust header (ROOT 10-16)
 partial defs (deployed)	0	law 4: no partial def in deployed code
 sorry	0	law 6: no sorry ever lands

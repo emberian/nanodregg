@@ -50,10 +50,9 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use nanodregg_launcher::broker_generated::wire::{Answer, BrokerRefusal, Request, Verdict};
-use nanodregg_launcher::broker_generated::{
-    FRAME_MAX, decider_exit, keybroker_exit, read_frame, write_frame,
-};
+use nanodregg_launcher::broker_generated::{FRAME_MAX, keybroker_exit, read_frame, write_frame};
 use nanodregg_launcher::grain_name_ok;
+use nanodregg_launcher::residents::{self, DeciderEnd};
 use nanodregg_sandbox::custody::{self, Refused};
 use nanodregg_sandbox::{Policy, command};
 use rustls::pki_types::pem::{PemObject, SectionKind};
@@ -464,23 +463,13 @@ fn run() -> End {
     };
     let status = ended;
     let _ = std::fs::remove_file(&pid_file);
-    match status {
-        // only a code Lean's DeciderExit names is the decider's own end. Under bwrap a status of
-        // 128 or more IS a signal death (the OOM killer: restartable, deciderSignaled); any other
-        // unnamed code is the mechanism's (bwrap's setup, a missing program), which a restart meets
-        // again (VACUITY-READER-H4 on HOSTING-23: 137 must not read as the mechanism)
-        Ok(s) => match s.code() {
-            Some(c) if c >= 128 => End::DeciderEnded(None),
-            Some(c) if !named_decider_code(c) => End::DeciderMechanism(c),
-            c => End::DeciderEnded(c),
-        },
+    // only a code Lean's DeciderExit names is the decider's own end (`residents::decider_end`)
+    match status.map(residents::decider_end) {
+        Ok(DeciderEnd::Own(c)) => End::DeciderEnded(Some(i32::from(c))),
+        Ok(DeciderEnd::Signaled) => End::DeciderEnded(None),
+        Ok(DeciderEnd::Mechanism(c)) => End::DeciderMechanism(c),
         Err(e) => End::DeciderLost(e.to_string()),
     }
-}
-
-/// Is `c` a code of Lean's `DeciderExit` (emitted as `decider_exit::ALL`)?
-fn named_decider_code(c: i32) -> bool {
-    u8::try_from(c).is_ok_and(|c| decider_exit::ALL.contains(&c))
 }
 
 /// HOSTING-17's check of SOCKDIR, before any socket opens: it passes `custody::check_shared_dir`
@@ -549,15 +538,9 @@ struct Served {
 
 /// The residents the decider answers, or `None` when it cannot be reached or answers anything else.
 fn residents(sh: &Shared) -> Option<Vec<Vec<u8>>> {
-    let req = Request::Residents { at_ms: now_ms() }.encode().ok()?;
     let mut d = sh.decider.lock().ok()?;
     let (din, dout) = &mut *d;
-    write_frame(din, &req).ok()?;
-    din.flush().ok()?;
-    match Verdict::decode(&read_frame(dout).ok()?).ok()? {
-        Verdict::Residents { names } => Some(names),
-        _ => None,
-    }
+    residents::ask(din, dout, now_ms())
 }
 
 /// Serve exactly `names`: bind a socket for each name not yet served (HOSTING-17's checks first),

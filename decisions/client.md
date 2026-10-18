@@ -847,3 +847,84 @@ Mutations, each red: kept-file read unchecked; key-file read unchecked; the exis
 - **When the child closes its stdout,** every open connection's last frame is `closed unreachable`, after the replies already queued for it (it was an empty frame, a bare EOF). `unreachable` is Lean's nearest name: the Host behind this socket cannot be reached. Its docstring in Protocol/Table.lean still says "nd-attach: the Store's socket does not accept a connection", so widening that doc to name the supervisor case is PROTOCOL's (asked through ROOT); no new name was added.
 - **Plants:** `supervise a_child_that_dies_is_named_unreachable_to_every_peer` (A answered and idle, B in flight: both read `closed unreachable`); `supervise a_launch_refused_before_the_child_leaves_no_socket` (`Exposed` policy → refusedAtLaunch, no socket file); `mux replies_route_by_connection_and_child_close_ends_serve` now requires `closed unreachable` on both connections (it encoded the bare EOF). Mutations: N1 empty last frame → both red; N2 bound before the child → red.
 - **Critique.** A peer that connects in the instant between the child's death and the supervisor's exit can still reach a backlog that is never accepted, and gets a reset. Naming that peer would need the accept thread to outlive `serve`. With bind-after-spawn, the window is the child's own death, not its launch.
+
+## CLIENT-29 · nd-members: each resident grain's member socket from the World, over its OWN follower; nd-member@ and its env file are deleted (2026-10-19, CLIENT-8; HOSTING-30 with HOSTING-9, ROOT rulings; HOSTING-10 agreed)
+**The gap (HOSTING-30 §1).** A resident's launch resolves `MEMBER/<dirOf id>/nd.sock`. It came from `nd-member@ID.service`, which needed a per-resident env file (`/etc/nd/hosted/member-ID.env`) and an operator who started the unit before the grain's birth. A launch that came first was refused `pathMissing` and counted toward `crashLoop`. keybroker had the same fault for broker sockets, and HOSTING-26 closed it from the World.
+
+**Decision.**
+- **`nd-members MEMBER MEMBERS FOLLOW PIDS HOST_SOCK PEER SUPERVISE ND HOST STORE [--hide PATH]… -- /ABS/DECIDER [ARG]…`** is one process per World, run as nd. It asks its decider `residents` at start and every 200 ms, using the frames keybroker reads (`launcher/src/residents.rs`: `ask` and `decider_end`, which both binaries call). It serves exactly the names answered: from a grain's birth to its removal, with no operator list and no env file.
+- **One follower per resident (ROOT ruled (A)).** A follower is not a read replica. It is one member's command machine. `host follow STORE MEMBER GRANT` starts `Follow.loop` with `Self = ⟨origin, member, grant⟩` (Host/Cli.lean:341), and every call it plans names `me.member` (Protocol/Command/Machine.lean:359), as does every envelope (:607). So per resident, nd-members runs two existing `nd-supervise` children:
+  - **follow**: `FOLLOW/<name>/follow.sock` → `host follow MEMBERS/<name>/store MEMBER GRANT`. The policy is write = the store, exec = host. MEMBER and GRANT are read from the provisioning step's `MEMBERS/<name>/follow`: `HEX HEX` and LF, 0600, read through `custody::read_private` (the chain rule).
+  - **stdio**: `MEMBER/<name>/nd.sock` → `nd --stdio MEMBERS/<name> FOLLOW/<name>/follow.sock HOST_SOCK`. The policy is write = the workspace, exec = nd, connect = [HOST_SOCK, its own follow socket] (CLIENT-24's fence, unchanged). The socket is 0660 with `--group <MEMBER's group> --peer PEER`, or 0600 with no group when PEER is this euid (HOSTING-21). The stdio child starts only once the follow socket exists, because its connect grant resolves the socket at launch.
+  - Each child hides STORE and every `--hide` path (the unit passes `/etc/nd` and `/home`). Each child has a PID file, `PIDS/<name>.<role>.pid`. The decider's is `PIDS/decider.pid`.
+- **nd-supervise is reused unchanged.** Bind-after-child, `peerRefused`, `fds_max` with `refusedAtLaunch`, and `closed unreachable` are each nd-supervise's own, per socket. nd-members holds no mux, reads no frame of a member socket, and holds no key.
+- **The decider** is started confined: read = STORE, exec = itself, hidden = MEMBERS and every `--hide`. Until HOSTING ships `hosting-residents STORE`, it is `hosting-broker`, which already answers `residents`.
+- **Placement: a launcher binary.** The residents codec is launcher's emitted `broker_generated.rs`, and launcher already depends on nanodregg-client (HOSTING-25), so a client-crate binary would be a dependency cycle. The ceiling row is its own.
+
+**What it refuses, by name.**
+- **Ends** (`members_exit`, Lean's `Hosting.MembersExit`, codes 150–159, emitted beside `keybroker_exit`): `usage`; `memberRoot` (MEMBER fails `check_shared_dir`, or a resident name fails `grain_name_ok`); `membersRoot`; `followRoot` (each fails `check_private_dir`); `fdLimit` (RLIMIT_NOFILE below `MUX.fds_max()` = 71: every child inherits the limit and would refuse at launch, so CLIENT-28's rule is applied once, here); `deciderRefused`; `pidFile`; `deciderSignaled` (restart); `deciderLost`; `deciderMechanism`. The decider's own end is passed through. All are fatal except `deciderSignaled`.
+- **A World past `RESIDENTS_MAX` (1024, emitted from `Broker.Bounds.residentsMax`) ends it with code 7**, DeciderExit's `residentsPastBound`. It is the same fact under the same code, whichever side counts first (`members_past_bound_code`).
+- **A resident's own trouble is a line on stderr, never an end**, because one resident must not stop the others:
+  - `memberMissing <name>` (no `follow` file, or a malformed one, or no store directory): retried every tick and named once, so provisioning just after the birth binds the resident within a tick.
+  - `socketDirShared <name>` (`MEMBER/<name>/` or `FOLLOW/<name>/` holds anything but its socket, CLIENT-20).
+  - `memberCrashLoop <name> <role>` (STARTS_MAX = 5 starts in 120 s, restarts at least RESTART_AFTER = 2 s apart: nd-member@'s StartLimit and RestartSec): the resident is left unbound until the answer changes.
+  - `memberSpawn <name> <role>`.
+- **A resident not in the World has no socket.** A removed resident loses both children (each stopped by its own handle), both sockets, both directories and both PID files. A connect to its socket is refused `ENOENT`.
+
+**Static bounds (law 4).**
+- nd-members' own fds are a constant, whatever the number of residents: 3 stdio, 2 decider pipes, and for an instant one spawn pipe, one PID-file write or one directory listing, so at most 6. The plant samples `/proc/PID/fd` before and after a birth and finds them equal.
+- Each resident's nd-supervise holds at most `fds_max` = 71 fds in its own process (CLIENT-28).
+- Processes: 1 + 1 decider + 2·N nd-supervise + 2·N bwrap/children ≤ 2 + 4·1024.
+- Threads: one per nd-supervise, plus 2 + 2·`CONNECTIONS_MAX` each.
+- The unit's TasksMax is therefore OPS's to set from these numbers.
+
+**Plants** (`launcher/tests/members.rs`, row `cargo:launcher:members`; real writer, Store, decider, nd-supervise, nd and host):
+- `each_resident_grain_gets_its_member_socket_and_a_removed_one_loses_it`:
+  - two residents born at genesis are bound; a `read` through each is served (`1=operator`); each socket is 0600 and its directory lists only `nd.sock`; an app grain gets nothing;
+  - a resident born while running, and provisioned only after its birth (its name is its id), is bound and served;
+  - nd-members' fds are unchanged;
+  - each child was started exactly once (no start spent on a refusal), and none ended;
+  - the removed resident's two directories and two PID files are gone, and a connect is `ENOENT`;
+  - CONTROL: r1 is still served.
+- `a_stranger_on_the_member_socket_is_refused_by_name`: with PEER set to another uid, the socket is 0660 and our connection is `closed peerRefused`.
+- `an_unprovisioned_member_or_a_shared_socket_directory_is_named_and_the_others_served`: `memberMissing` is named once; `socketDirShared` is named; r1 is served meanwhile; once the stray file goes, r2 is bound on a later tick.
+- `a_dead_follower_is_named_to_its_resident_and_started_again`:
+  - nd-members is held stopped while its follower is SIGKILLed, so the window is the test's and not a race with the tick;
+  - a `sync` then gets a named reply from nd (exit `client`, `nd: follow.sock: …`), never a bare EOF;
+  - once nd-members is continued, the follower is started again (a new PID) and `sync` is served.
+- `another_residents_follower_is_refused_by_name`: r1's workspace driven at r2's follow socket, by hand. The writer refuses its envelope (`unknownKey`), follow retries once by the incoming key (PROTOCOL-46), and stdio custody ends it `refused noRotation`. CONTROL: r1's own follower serves the same `sync`.
+- `a_member_that_always_crashes_is_named_crash_loop_and_left_unbound`: the follower Store is an empty directory. There are at most 2 starts in the first 1.5 s (the backoff), exactly 5 starts, then `memberCrashLoop`; at most one stdio start (nd-supervise binds the follow socket once host follow is spawned, an instant before host refuses its Store); no socket directory; no start after.
+- `nd_members_ends_by_name`:
+  - `usage`; `fdLimit` (`ulimit -n 40`); `memberRoot`, `membersRoot`, `followRoot` (each root at 0755); `deciderMechanism` (`/usr/bin/false`);
+  - a stub decider answering `../x` gives `memberRoot`, and answering 1025 names gives code 7 `residentsPastBound 1025`;
+  - CONTROL: 1024 names are read without an end.
+
+**Mutations, each red** (`logs/client8-mut.py`): M1 never unbind; M2 ask only once; M3 no peer admission; M4 a socket directory not alone accepted; M5 no fd check; M6 no resident bound; M7 the follower never reaped; M8 the follow identity swapped; M9 no name check; M10 a missing member not retried; M11 an unnamed decider code passed through; M12 no FOLLOW check; M13 stdio started before its follow socket; M14 no backoff; M15 no crash-loop bound. A first draft's workspace `check_private_dir` survived its mutation (M16: `read_private` of the `follow` file already applies the chain rule, and nd's custody checks the workspace itself), so it was deleted rather than kept as a check that no test can turn red.
+
+**Alternatives.**
+- (a) One process multiplexing N member sockets in-process (HOSTING-30 §4's sketch). It needs 1024 × 71 ≈ 72.7k fds in one process, plus a second mux owner in CLIENT's code. Composing nd-supervise keeps every per-socket law where it is already planted.
+- (b) A mode of nd-supervise: the same cycle problem (client cannot read the residents codec), and nd-supervise's one-socket shape would become a supervisor of supervisors.
+- (c) One shared follower per World (ROOT's first ruling). It does not work, as the CRITIQUE says.
+- (d) (B) of that question: one follower Store with `Self` supplied per command. It is filed as cv 01a14fb9-adb0 with its trigger (the disk cost of N follow Stores past a stated bound) and its custody question. It is not built, because it unbinds the follower's plan from one identity.
+- (e) systemd templates per resident, instantiated by a generator from the World (HOSTING-30's meta-critique). That puts World data into unit files, and a generator runs only at daemon-reload, so it does not track births.
+
+**CRITIQUE.**
+- **ROOT first ruled ONE shared member follower per World, on an assumed shape** ("a follow Store is a read replica"). The code corrected it before anything was built: the follower plans every call and envelope in its MEMBER's name, and a resident driving another member's follower is refused (the plant above). The ruling was withdrawn for (A). The brief was the least-checked source, as usual. The check was reading `Self`, not the follower's docstring.
+- **Shared fate.** nd-members restarting drops every resident's socket until it rebinds (about 200 ms plus each child's launch). Its children are not bwrapped, so a SIGKILLed nd-members leaves them running. In deployment the unit's control group stops them; in a test, `Members` stops them by their PID files. There is no safe way, without `unsafe`, to give them a parent-death signal.
+- **A removed resident's open connection gets a bare EOF.** Its nd-supervise is SIGKILLed by its handle, so the mux cannot write `closed unreachable` (CLIENT-28 law 7). The grain is being stopped by the controller on the same Turn, and new connects are `ENOENT`. A clean stop would need nd-supervise to handle SIGTERM (a signal handler, which needs `unsafe` or a new crate). This is offered to ROOT, not built.
+- **The stdio child may write the follower's Store.** The Store lies inside the workspace it writes (`MEMBERS/<name>/store`, ROOT's layout), and a hidden path may not lie inside a grant. Both processes are the same member's and run as nd, so this widens nothing across identities. A separate store root would narrow it.
+- **`noRotation` is the name a resident sees for "wrong follower".** The writer's `unknownKey` is the true cause. Follow's incoming-key retry reaches a custody that refuses rotation and renames the end. That is PROTOCOL's to sharpen (reported).
+- **The stub decider** (`/bin/sh` + `cat`) is the only way to plant the bad-name and past-bound ends without 1025 grains. It shows nd-members' own checks, not the decider's.
+- **Unrun:** a second real uid (the stranger plant uses PEER = another uid); the argv as OPS renders it (the unit is OPS-5's next step, and members.rs then switches to the rendered argv, as broker.rs does); the macOS half.
+
+**META-CRITIQUE.** I reached for nd-supervise composition partly because it is mine and planted. The test of that choice is whether nd-supervise's per-process shape (2N processes, 2N bwraps) becomes the cost a box notices before the fd bound does. Separately, I wrote the residents-bound check knowing the decider already ends at 1024. It stays because nd-members' process count is stated as a function of that bound, and Rust must not trust the bound it multiplies by. I also wrote a workspace check that turned out redundant, and only the mutation showed it.
+
+**Size.** nd-members 550 (new row, measured by gates/metrics/nd-members, which the parent gates also run; GATES-6 agreed), residents.rs 45 (launcher, unrowed like keybroker), keybroker −17. The client library is untouched at 2520.
+
+**Flag day.**
+- `nd-member@.service` and `/etc/nd/hosted/member-*.env` are deleted by OPS-5's re-render, which adds `nd-members@WORLD.service`.
+- RUNBOOK §2a's "start nd-member@ID before the birth" becomes "provision the member: `MEMBERS/<dirOf>/` with its custody, `store` (from the World's genesis) and `follow` (`MEMBER GRANT`, 0600)".
+- `broker_generated.rs` is re-emitted (`members_exit`, `RESIDENTS_MAX`).
+- Nothing persisted changes.
+
+**Status.** landed (this commit). The decider becomes `hosting-residents` when HOSTING ships it, and the resident row moves onto nd-members (HOSTING-10).

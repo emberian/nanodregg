@@ -153,4 +153,58 @@ def codesOf (k : ExitClass) : List Nat := (all.filter (·.cls == k)).map code
 
 end KeybrokerExit
 
+/-- Every way `nd-members` (HOSTING-30, CLIENT-29) ends on its own account. Its decider's exit is
+passed through as keybroker's is (`DeciderExit`); a World holding more resident grains than
+`Broker.Bounds.residentsMax` ends it with `DeciderExit.residentsPastBound`'s code 7, the same fact
+under the same code, whichever side counts first. A resident's own trouble (a member not
+provisioned, a socket directory not alone, a crash loop) is never an end: it is a name on stderr and
+that resident unbound, because one resident must not stop the others. -/
+inductive MembersExit where
+  /-- argv does not parse -/
+  | usage
+  /-- MEMBER fails `custody::check_shared_dir` (owner, mode 02710, the StrictModes chain) -/
+  | memberRoot
+  /-- MEMBERS fails `custody::check_private_dir` -/
+  | membersRoot
+  /-- FOLLOW fails `custody::check_private_dir` -/
+  | followRoot
+  /-- RLIMIT_NOFILE is below the fds one resident's nd-supervise may hold (CLIENT-28): every child
+  inherits the limit, so each would refuse at launch -/
+  | fdLimit
+  /-- the sandbox refused the decider's policy, or the decider could not be spawned -/
+  | deciderRefused
+  /-- a PID file could not be written -/
+  | pidFile
+  /-- the decider was killed by a signal: transient by assumption -/
+  | deciderSignaled
+  /-- the decider stopped answering `residents` (or answered out of turn) and did not end -/
+  | deciderLost
+  /-- the decider's process ended with a code `DeciderExit` does not name (HOSTING-23) -/
+  | deciderMechanism
+  deriving DecidableEq, Repr
+
+namespace MembersExit
+
+def all : List MembersExit :=
+  [usage, memberRoot, membersRoot, followRoot, fdLimit, deciderRefused, pidFile, deciderSignaled,
+   deciderLost, deciderMechanism]
+
+def code : MembersExit → Nat
+  | usage => 150 | memberRoot => 151 | membersRoot => 152 | followRoot => 153 | fdLimit => 154
+  | deciderRefused => 155 | pidFile => 156 | deciderSignaled => 157 | deciderLost => 158
+  | deciderMechanism => 159
+
+/-- Every own end but a signalled decider is fatal: each is a root, an argument, a limit or the
+build, and a restart reads the same one. -/
+def cls : MembersExit → ExitClass
+  | deciderSignaled => .restart
+  | _ => .fatal
+
+/-- The name printed on stderr (`nd-members: NAME …`). -/
+def name (e : MembersExit) : String := ((toString (repr e)).splitOn ".").getLast!
+
+def codesOf (k : ExitClass) : List Nat := (all.filter (·.cls == k)).map code
+
+end MembersExit
+
 end Nanodregg.Hosting

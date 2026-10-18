@@ -1,0 +1,8 @@
+#!/usr/bin/env python3
+"""Rust lines (nd-members): CLIENT-29 / HOSTING-30, the CLIENT binary in the launcher crate, bounded
+alone (gates/size.py runs every executable here with the tree root; ROOT ruling 2026-10-19, GATES-6)."""
+import os
+import sys
+
+with open(os.path.join(sys.argv[1], "launcher", "src", "bin", "nd-members.rs"), encoding="utf-8") as f:
+    print(f"Rust lines (nd-members)\t{len(f.readlines())}")

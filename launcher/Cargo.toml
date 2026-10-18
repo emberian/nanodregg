@@ -24,8 +24,16 @@ path = "src/bin/probe.rs"
 name = "keybroker"
 path = "src/bin/keybroker.rs"
 
+# Each resident's member socket, for exactly the World's resident grains (HOSTING-30, CLIENT-29):
+# two nd-supervise children per resident (its follower, its `nd --stdio`), from its decider's frames.
+[[bin]]
+name = "nd-members"
+path = "src/bin/nd-members.rs"
+
 [dependencies]
 nanodregg-sandbox = { path = "../sandbox" }
+# nd-members' RLIMIT_NOFILE check (CLIENT-28's rule), the client's pin.
+rustix = { version = "=1.1.2", default-features = false, features = ["std", "process"] }
 # The probe's `nd` op speaks the member socket's mux child wire with the client's own frame and
 # layout code (HOSTING-25), never a copy of it.
 nanodregg-client = { path = "../client" }

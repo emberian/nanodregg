@@ -46,4 +46,37 @@ an IO error and every defect stop the unit. -/
 theorem decider_restart_iff (e : DeciderExit) : e.cls = .restart ↔ e = .lifetime ∨ e = .behind := by
   cases e <;> decide
 
+theorem members_mem_all (e : MembersExit) : e ∈ MembersExit.all := by cases e <;> decide
+
+/-- nd-members' unit sees its own table and its decider's: one code per end across the two, and
+none of keybroker's (the two broker-family tables never share a code). -/
+theorem members_codes_nodup :
+    (DeciderExit.all.map DeciderExit.code ++ MembersExit.all.map MembersExit.code ++
+      KeybrokerExit.all.map KeybrokerExit.code).Nodup := by decide
+
+/-- No code of nd-members is a Host, nd-supervise or decider code (over the lists the emitter and
+`Ops.Units` read). -/
+theorem members_codes_disjoint :
+    (∀ a ∈ MembersExit.all, ∀ s ∈ Status.all, a.code ≠ s.code) ∧
+    (∀ a ∈ MembersExit.all, ∀ s ∈ SupervisorExit.all, a.code ≠ s.code) ∧
+    (∀ a ∈ MembersExit.all, ∀ d ∈ DeciderExit.all, a.code ≠ d.code) := by decide
+
+/-- None is 0, 1, 2 or 101 (a Rust panic), and every code fits an exit status. -/
+theorem members_codes_reserved :
+    ∀ a ∈ MembersExit.all, a.code ≠ 1 ∧ a.code ≠ 2 ∧ a.code ≠ 101 ∧ 0 < a.code ∧ a.code < 256 := by
+  decide
+
+/-- The unit's restart and prevent lists are disjoint. -/
+theorem members_restart_fatal_disjoint :
+    ∀ c ∈ DeciderExit.codesOf .restart ++ MembersExit.codesOf .restart,
+      c ∉ DeciderExit.codesOf .fatal ++ MembersExit.codesOf .fatal := by decide
+
+/-- Only a signalled decider is restarted; every root, limit and mechanism end stops the unit. -/
+theorem members_fatal_iff (e : MembersExit) : e.cls = .fatal ↔ e ≠ .deciderSignaled := by
+  cases e <;> decide
+
+/-- The World past the resident bound ends nd-members with the decider's own code for that fact. -/
+theorem members_past_bound_code : DeciderExit.residentsPastBound.code = 7 ∧
+    DeciderExit.residentsPastBound.cls = .fatal := by decide
+
 end Nanodregg.Hosting.Proofs.BrokerExit

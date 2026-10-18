@@ -15,6 +15,9 @@ pub mod generated;
 #[allow(missing_docs)]
 pub mod broker_generated;
 
+/// The residents frames and a decider's end, as keybroker and nd-members both read them.
+pub mod residents;
+
 use std::ffi::{OsStr, OsString};
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
