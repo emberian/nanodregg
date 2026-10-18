@@ -5,19 +5,23 @@
 module closes the chain from the deployed judge to those statements (LANG-20's named gap):
 1. `judgeOne_ok`: `judgeOne` admitting means the closure loaded, both states read at the package's
    state type, and `runLaw` admitted every law label of the package;
-2. `load_leaf`: a package with no imports loads as itself at closure index 0, its body relocated;
+2. `load_top`: the closure loaded for a package holds, at the index `load` returns, exactly that
+   package, its body relocated (imports or not);
 3. `relocate_noRef`: relocation is the identity on a term with no `ref` (`NoRef`), and every stdlib
    law is one (`noRef_quorumLaw`, `noRef_windowedLaw`, `noRef_machineLaw`, `noRef_bounded`,
    `noRef_allowlist`, `noRef_ownerSigns`);
 4. `find_of_mem_nodup` + `Row.sort_perm`: a `pkgOf` body's field `ℓ` is the generator's term.
-`judgeOne_pkgOf_admits` composes them. `judgeOne_quorum_change`, `judgeOne_quorum_relaw` and
+`judgeOne_admits` composes them for any package, a law as loaded (relocated into the closure);
+`judgeOne_pkgOf_admits` is its `pkgOf` instance, with distinct labels derived from the receiver's
+own load (`load_checked`, `pkgOf_labels_nodup`) and every stdlib law its own relocation. `judgeOne_quorum_change`, `judgeOne_quorum_relaw` and
 `judgeOne_machine_invoke` are the spec theorems restated about the receiver's run. They are no longer
 about a test's closed term, and "the receiver admitting a Std package means its spec" is now a
 theorem instead of a hypothesis.
 
-What is still assumed: the pinned cell holds exactly `pkgOf S laws methods` (`readPackage … = .ok`),
-its labels are distinct, and the digest decodes back (`digestOf (bytesOf law) = some law`, the
-round trip KERNEL's `Ctx.digestOf` documents). A package WITH imports is not covered (`load_leaf`).
+What is still assumed: the pinned cell holds the package (`readPackage … = .ok`; a cell holding its
+bytes does, `readPackage_installed`), and the digest decodes back (`digestOf (bytesOf law) = some
+law`, the lawful `Ctx`, LANG-46). A law inherited through a layer's `extend (ref 0)` is not a field
+of the layer's own body, so `judgeOne_admits` reaches it only at the super package.
 -/
 import Lang.Proofs.Std
 import Lang.Proofs.Load
@@ -60,22 +64,6 @@ theorem judgeOne_ok {look : Pinned D} {law : D} {old new : Kernel.Slots} {r : Re
   · cases h
 
 /-! ## Link 2: a package with no imports loads as itself, at index 0 -/
-
-theorem load_leaf {look : Pinned D} {law : D} {p : Package} {fuel : Nat} {L : Loaded} {g : Nat}
-    (hid : digestOf (bytesOf law) = some law) (hp : readPackage look law = .ok p) (hi : p.imports = [])
-    (h : load digestOf look (fuel + 1) (bytesOf law) ⟨[], [], []⟩ = .ok (L, g)) :
-    g = 0 ∧ L.pkgs = [p] ∧ L.lib = [p.body.relocate fun i => ([] : List Nat).getD i 0] := by
-  unfold load at h
-  simp only [indexIn, idOf, hid, hp, hi] at h
-  unfold loadAll at h
-  simp only [admitPackage, ifacesAt] at h
-  split at h
-  · cases h
-  · split at h
-    · cases h
-    · simp only [Except.ok.injEq, Prod.mk.injEq] at h
-      obtain ⟨rfl, rfl⟩ := h
-      exact ⟨rfl, rfl, rfl⟩
 
 /-- **What the receiver loads is what the cell holds**: a closure loaded for `law` has, at the index
 `load` returns, exactly the package `readPackage` reads from `law`'s cell (imports or not), with its
@@ -346,12 +334,106 @@ theorem isLaw_lawOf {S : Ty} {b ad rl c : Std.At → Term} : IsLaw (Std.lawOf S 
 theorem isLaw_lawOf5 {S : Ty} {b ad rl wr iv : Std.At → Term} : IsLaw (Std.lawOf5 S b ad rl wr iv) :=
   ⟨_, _, _, _, rfl⟩
 
+/-! ## The leftovers of LANG-4's vacuity read (LANG-55)
+
+`judgeOne_admits`: the receiver admitting means the laws' meaning for ANY package, imports or not
+(`load_top`), each law as loaded; `judgeOne_pkgOf_admits` is now its `pkgOf` instance and no longer
+assumes distinct labels: the receiver's load re-ran the install check (`load_checked`), whose
+canonical interface has them (`pkgOf_labels_nodup`). `readPackage_installed`: a package cell holding a package's bytes
+reads as that package (the codec is canonical, `decodePackage_eq_ok_iff`). -/
+
+/-- In a strictly ascending row every later label is above the head's. -/
+theorem ascending_head_lt {α : Type} {k : Label} {a : α} :
+    ∀ {r : List (Label × α)}, Row.ascending ((k, a) :: r) = true → ∀ e ∈ r, k < e.1
+  | [], _, e, he => by simp at he
+  | (k2, b) :: r, h, e, he => by
+    have h' : decide (k < k2) = true ∧ Row.ascending ((k2, b) :: r) = true := by
+      simpa [Row.ascending] using h
+    have hlt : k < k2 := of_decide_eq_true h'.1
+    simp only [List.mem_cons] at he
+    rcases he with rfl | he
+    · exact hlt
+    · exact String.lt_trans hlt (ascending_head_lt h'.2 e he)
+
+/-- A strictly ascending row has distinct labels. -/
+theorem ascending_labels_nodup {α : Type} : ∀ {r : List (Label × α)}, Row.ascending r = true → (r.map (·.1)).Nodup
+  | [], _ => by simp
+  | (k, a) :: r, h => by
+    have hr : Row.ascending r = true := by
+      cases r with
+      | nil => rfl
+      | cons c r => simpa [Row.ascending] using (by simpa [Row.ascending] using h : _ ∧ _).2
+    refine List.nodup_cons.2 ⟨?_, ascending_labels_nodup hr⟩
+    intro hm
+    obtain ⟨e, he, hek⟩ := List.mem_map.1 hm
+    have := ascending_head_lt h e he
+    rw [hek] at this
+    exact String.lt_irrefl _ this
+
+/-- **The distinct-labels premise is the install check's.** A `pkgOf` package whose interface is
+well formed (`checkShape` refuses `ifaceNotRecord` otherwise) has distinct law and method labels. -/
+theorem pkgOf_labels_nodup {S : Ty} {laws : List (Label × Term)} {methods : List (Label × Ty × List Ty × Term)}
+    (h : (Std.pkgOf S laws methods).checkShape = .ok ()) : (laws.map (·.1) ++ methods.map (·.1)).Nodup := by
+  have hwf : (Std.pkgOf S laws methods).iface.wf = true := by
+    unfold Package.checkShape at h
+    simp only [bind, Except.bind, pure, Except.pure] at h
+    repeat' split at h
+    all_goals first | (cases h; done) | skip
+    all_goals simp_all
+  simp only [Std.pkgOf, Ty.wf, Bool.and_eq_true] at hwf
+  have hnd := ascending_labels_nodup hwf.1
+  refine (List.Perm.nodup_iff ?_).1 hnd
+  refine ((Row.sort_perm _).map _).trans ?_
+  simp only [List.map_append, List.map_map]
+  refine List.Perm.append ?_ ?_
+  · have := (Row.sort_perm (Row.sort laws)).map (fun (y : Label × Term) => y.1)
+    simpa [Function.comp_def] using ((Row.sort_perm laws).map (fun (y : Label × Term) => y.1))
+  · simpa [Function.comp_def] using ((Row.sort_perm methods).map (fun (y : Label × Ty × List Ty × Term) => y.1))
+
+section
+variable {D : Type} (bytesOf : D → ByteArray) (digestOf : ByteArray → Option D)
+
+/-- **A package cell reads as the package whose bytes it holds** (`install` writes
+`encodePackage p` to slot 0 of a package cell). -/
+theorem readPackage_installed {look : Pinned D} {law : D} {cell : Kernel.Cell} {b : ByteArray} {p : Package}
+    (hc : readKind look law kindPackage = .ok cell) (hs : cell.slots.get 0 = some b)
+    (he : Wire.encodePackage p = some b) : readPackage look law = .ok p := by
+  unfold readPackage
+  rw [hc]
+  simp only [bind, Except.bind, hs, Wire.decodePackage_eq_ok_iff.2 he]
+  rfl
+
+/-- **The receiver's verdict is the laws' meaning, for any package.** If `judgeOne` admits
+`old → new` under `r` for the package `p` the pinned cell holds (with imports or not), then the
+states read at `p`'s state type, and every law label of `p` whose body field `t` has a law's shape
+`Admits` the transition as loaded: `t` relocated into the closure (`f`, one relocation for the
+package). A law naming no closure package is its own relocation (`relocate_noRef`). -/
+theorem judgeOne_admits {look : Pinned D} {law : D} {old new : Kernel.Slots} {r : Req D} {p : Package}
+    {fs : List (Label × Term)}
+    (hid : digestOf (bytesOf law) = some law) (hp : readPackage look law = .ok p) (hb : p.body = .record fs)
+    (h : judgeOne bytesOf digestOf look law old new r = .ok ()) :
+    ∃ o n lib f, readState digestOf (recordRow p.state) old = .ok o ∧
+      readState digestOf (recordRow p.state) new = .ok n ∧
+      ∀ ℓ ∈ p.laws, ∀ t, Row.find? ℓ fs = some t → IsLaw t →
+        Std.Admits lib (t.relocate f) (reqData bytesOf r) n o := by
+  obtain ⟨L, g, p', o, n, hload, hpg, ho, hn, hall⟩ := judgeOne_ok bytesOf digestOf h
+  obtain ⟨hpg', f, hlib⟩ := load_top bytesOf digestOf (fuel := closureDepthMax - 1) hid hp hload
+  rw [hpg'] at hpg
+  cases hpg
+  refine ⟨o, n, L.lib, f, ho, hn, fun ℓ hℓ t hf hlaw => ?_⟩
+  obtain ⟨A, B, C, b, rfl⟩ := hlaw
+  refine Std.runLaw_ref_admits (g := g) (fs := Term.relocateRow f fs) ?_ ?_ (hall ℓ hℓ)
+  · rw [hlib, hb]; rfl
+  · rw [find_relocateRow, hf]; rfl
+
+end
+
 section
 variable {D : Type} (bytesOf : D → ByteArray) (digestOf : ByteArray → Option D)
 
 /-- **The receiver's verdict is the laws' meaning.** If `judgeOne` (the receiver's judge of one law
 package) admits `old → new` under `r`, and the pinned package is a stdlib `pkgOf S laws methods`
-whose labels are distinct, then the old and new states read at `S`, and EVERY law of the package
+then the old and new states read at `S`, and EVERY law of the package
 that mentions no closure package and has a law's shape `Admits` that transition, with the request
 as the receiver built it. Each `Std` spec theorem (`quorum_change`, `machine_invoke`, …) then applies
 to the deployed run, not only to a test's closed term. -/
@@ -359,40 +441,36 @@ theorem judgeOne_pkgOf_admits {S : Ty} {laws : List (Label × Term)} {methods : 
     {look : Pinned D} {law : D} {old new : Kernel.Slots} {r : Req D}
     (hid : digestOf (bytesOf law) = some law)
     (hp : readPackage look law = .ok (Std.pkgOf S laws methods))
-    (hnd : (laws.map (·.1) ++ methods.map (·.1)).Nodup)
     (h : judgeOne bytesOf digestOf look law old new r = .ok ()) :
     ∃ o n, readState digestOf (recordRow S) old = .ok o ∧ readState digestOf (recordRow S) new = .ok n ∧
       ∀ x ∈ laws, NoRef x.2 → IsLaw x.2 → ∃ lib, Std.Admits lib x.2 (reqData bytesOf r) n o := by
-  obtain ⟨L, g, p, o, n, hload, hpg, ho, hn, hall⟩ := judgeOne_ok bytesOf digestOf h
-  obtain ⟨rfl, hpk, hlib⟩ := load_leaf bytesOf digestOf (fuel := 7) hid hp rfl hload
-  rw [hpk] at hpg
-  simp only [List.getElem?_cons_zero, Option.some.injEq] at hpg
-  subst hpg
+  -- distinct labels: the receiver's own load re-ran the install check (`load_checked`)
+  have hnd : (laws.map (·.1) ++ methods.map (·.1)).Nodup := by
+    obtain ⟨L, g, p', _, _, hload, hpg, -⟩ := judgeOne_ok bytesOf digestOf h
+    obtain ⟨hpg', -⟩ := load_top bytesOf digestOf (fuel := closureDepthMax - 1) hid hp hload
+    rw [hpg'] at hpg
+    cases hpg
+    exact pkgOf_labels_nodup (load_checked hload g _ hpg').1
+  let xs := Row.sort laws ++ (Row.sort methods).map (fun (l, _, _, t) => (l, t))
+  obtain ⟨o, n, lib, f, ho, hn, hall⟩ := judgeOne_admits bytesOf digestOf (fs := Row.sort xs) hid hp rfl h
   refine ⟨o, n, ho, hn, fun x hx hfree hlaw => ?_⟩
   obtain ⟨ℓ, t⟩ := x
-  obtain ⟨A, B, C, b, ht⟩ := hlaw
-  simp only at ht hfree
-  subst ht
-  have hsl : (ℓ, Term.lam A (.lam B (.lam C b))) ∈ Row.sort laws := (Row.sort_perm laws).mem_iff.2 hx
+  simp only at hfree hlaw
+  have hsl : (ℓ, t) ∈ Row.sort laws := (Row.sort_perm laws).mem_iff.2 hx
   have hmem : ℓ ∈ (Std.pkgOf S laws methods).laws := by
     simp only [Std.pkgOf, List.mem_map]
     exact ⟨_, hsl, rfl⟩
-  have hrun := hall ℓ hmem
-  let xs := Row.sort laws ++ (Row.sort methods).map (fun (l, _, _, t) => (l, t))
   have hxs : (xs.map (·.1)).Perm (laws.map (·.1) ++ methods.map (·.1)) := by
     simp only [xs, List.map_append, List.map_map]
     refine List.Perm.append ((Row.sort_perm laws).map _) ?_
     have := (Row.sort_perm methods).map (fun (y : Label × Ty × List Ty × Term) => y.1)
     simpa [Function.comp_def] using this
-  have hfind : Row.find? ℓ (Row.sort xs) = some (.lam A (.lam B (.lam C b))) :=
+  have hfind : Row.find? ℓ (Row.sort xs) = some t :=
     find_of_mem_nodup (((Row.sort_perm xs).map _).trans hxs |>.nodup_iff.2 hnd)
       ((Row.sort_perm xs).mem_iff.2 (List.mem_append_left _ hsl))
-  refine ⟨L.lib, Std.runLaw_ref_admits (g := 0)
-    (fs := Term.relocateRow (fun i => ([] : List Nat).getD i 0) (Row.sort xs)) ?_ ?_ hrun⟩
-  · rw [hlib]; simp only [Std.pkgOf, Term.relocate]; rfl
-  · rw [find_relocateRow, hfind]
-    simp only [Option.map_some]
-    rw [relocate_noRef _ _ hfree]
+  have := hall ℓ hmem t hfind hlaw
+  rw [relocate_noRef _ _ hfree] at this
+  exact ⟨lib, this⟩
 
 theorem reqData_agent (r : Req D) :
     (reqData bytesOf r).field "agent" = some (.digest (bytesOf r.agent)) := by
@@ -411,7 +489,6 @@ theorem judgeOne_quorum_change {S T : Ty} {ms : List ByteArray} {k : Nat} {g ℓ
     {look : Pinned D} {law : D} {old new : Kernel.Slots} {r : Req D}
     (hid : digestOf (bytesOf law) = some law)
     (hp : readPackage look law = .ok (Std.pkgOf S laws methods))
-    (hnd : (laws.map (·.1) ++ methods.map (·.1)).Nodup)
     {t : Term} (hqc : Std.quorum S T ms k g = .ok t) (hq : (ℓq, t) ∈ laws)
     (hocc : r.occasion = .write ∨ ∃ m, r.occasion = .invoke m)
     (h : judgeOne bytesOf digestOf look law old new r = .ok ()) :
@@ -429,7 +506,7 @@ theorem judgeOne_quorum_change {S T : Ty} {ms : List ByteArray} {k : Nat} {g ℓ
                 o.field "approvals" = some (.nat a) ∧ a / Std.pow2 i % 2 = 0 ∧
                 n.field "approvals" = some (.nat (a + Std.pow2 i)))))) := by
   obtain ⟨rfl, hms, hk1, hk2, _⟩ := Std.quorum_ok hqc
-  obtain ⟨o, n, ho, hn, hall⟩ := judgeOne_pkgOf_admits bytesOf digestOf hid hp hnd h
+  obtain ⟨o, n, ho, hn, hall⟩ := judgeOne_pkgOf_admits bytesOf digestOf hid hp h
   obtain ⟨lib, ha⟩ := hall _ hq (noRef_quorumLaw S T ms k g) isLaw_lawOf
   have hro := reqData_occasion bytesOf r
   refine ⟨hms, hk1, hk2, o, n, ho, hn, ?_⟩
@@ -445,7 +522,6 @@ theorem judgeOne_quorum_relaw {S T : Ty} {ms : List ByteArray} {k : Nat} {g ℓq
     {look : Pinned D} {law : D} {old new : Kernel.Slots} {r : Req D} {ls : List D}
     (hid : digestOf (bytesOf law) = some law)
     (hp : readPackage look law = .ok (Std.pkgOf S laws methods))
-    (hnd : (laws.map (·.1) ++ methods.map (·.1)).Nodup)
     {t : Term} (hqc : Std.quorum S T ms k g = .ok t) (hq : (ℓq, t) ∈ laws)
     (hocc : r.occasion = .relaw ls)
     (h : judgeOne bytesOf digestOf look law old new r = .ok ()) :
@@ -454,7 +530,7 @@ theorem judgeOne_quorum_relaw {S T : Ty} {ms : List ByteArray} {k : Nat} {g ℓq
       (∃ a, o.field "approvals" = some (.nat a) ∧ k ≤ Std.popcountNat a ms.length) ∧
       o.field "proposal" = some (.inj "laws" (.bytes (ls.foldl (fun acc l => acc ++ bytesOf l) .empty))) := by
   obtain ⟨rfl, hms, hk1, hk2, _⟩ := Std.quorum_ok hqc
-  obtain ⟨o, n, ho, _, hall⟩ := judgeOne_pkgOf_admits bytesOf digestOf hid hp hnd h
+  obtain ⟨o, n, ho, _, hall⟩ := judgeOne_pkgOf_admits bytesOf digestOf hid hp h
   obtain ⟨lib, ha⟩ := hall _ hq (noRef_quorumLaw S T ms k g) isLaw_lawOf
   have hro := reqData_occasion bytesOf r
   rw [hocc] at hro; simp only [occasionData] at hro
@@ -470,13 +546,12 @@ theorem judgeOne_machine_invoke {S : Ty} {f ℓm : Label} {states : List Label} 
     {look : Pinned D} {law : D} {old new : Kernel.Slots} {r : Req D} {m : Nat}
     (hid : digestOf (bytesOf law) = some law)
     (hp : readPackage look law = .ok (Std.pkgOf S laws methods))
-    (hnd : (laws.map (·.1) ++ methods.map (·.1)).Nodup)
     (hq : (ℓm, Std.machineLaw S f states initial edges) ∈ laws)
     (hocc : r.occasion = .invoke m)
     (h : judgeOne bytesOf digestOf look law old new r = .ok ()) :
     ∃ o n, readState digestOf (recordRow S) old = .ok o ∧ readState digestOf (recordRow S) new = .ok n ∧
       ∃ a b, (a, m, b) ∈ edges ∧ (∃ y, o.field f = some (.inj a y)) ∧ ∃ y, n.field f = some (.inj b y) := by
-  obtain ⟨o, n, ho, hn, hall⟩ := judgeOne_pkgOf_admits bytesOf digestOf hid hp hnd h
+  obtain ⟨o, n, ho, hn, hall⟩ := judgeOne_pkgOf_admits bytesOf digestOf hid hp h
   obtain ⟨lib, ha⟩ := hall _ hq (noRef_machineLaw S f states initial edges) isLaw_lawOf5
   have hro := reqData_occasion bytesOf r
   rw [hocc] at hro; simp only [occasionData] at hro
@@ -519,5 +594,16 @@ theorem methodIndex_pkgOf {S : Ty} {laws : List (Label × Term)} {methods : List
     rfl
   rw [hl] at hget
   exact hget
+
+/-! ## Teeth for LANG-55 -/
+
+/-- The install check refuses a `pkgOf` with a repeated label (so `pkgOf_labels_nodup`'s premise
+is not met by every package) and accepts one with distinct labels (so it is met by some). -/
+theorem checkShape_refuses_repeated_label :
+    ((Std.pkgOf (.record []) [("a", Std.ownerSigns (.record [])), ("a", Std.ownerSigns (.record []))] []).checkShape
+      matches .error _) = true := by decide +kernel
+theorem checkShape_accepts_distinct_labels :
+    ((Std.pkgOf (.record []) [("a", Std.ownerSigns (.record [])), ("b", Std.ownerSigns (.record []))] []).checkShape
+      matches .ok _) = true := by decide +kernel
 
 end Nanodregg.Lang

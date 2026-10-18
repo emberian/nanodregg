@@ -467,7 +467,8 @@ independent tests are the teeth (b) and law 1 (c), not my convenience.
 `old → new` and the pinned package is `Std.pkgOf S laws methods` (distinct labels, digest round trip),
 then both states read at `S` and every law of the package with no `ref` and a law's shape `Admits`
 the transition with the receiver's request. The proof has four links: `judgeOne_ok` (the for-loop over
-`p.laws` inverted), `load_leaf` (an import-free package loads as itself at 0), `relocate_noRef`
+`p.laws` inverted), `load_leaf` (an import-free package loads as itself at 0; deleted by LANG-55 for
+`load_top`, which covers imports), `relocate_noRef`
 with `noRef_<law>` for every Std law, and `find_of_mem_nodup` with `sortRow_perm`. Corollaries restate
 three specs on the deployed run: `judgeOne_quorum_change`, `judgeOne_quorum_relaw` and
 `judgeOne_machine_invoke`.
@@ -482,13 +483,15 @@ label is what the kernel's index runs; `load_top` shows the loaded package at `l
 field over `r`.
 **Critique.** The premise `readPackage … = .ok (pkgOf …)` is about the decoded package, so a package
 built by hand that equals a `pkgOf` output is covered and one that differs is not. The chain does not
-reach packages with imports (`load_leaf`). `NoRef`/`IsLaw` are per-law premises in the conclusion,
+reach packages with imports (`load_leaf`; LANG-55: `judgeOne_admits` does, through `load_top`). `NoRef`/`IsLaw` are per-law premises in the conclusion,
 discharged for every Std generator but not for a hand-written law. The conclusion is `∃ lib, Admits …`:
 sound for the Std specs, which hold for every `lib`, but weaker than naming `L.lib`.
 **Meta-critique.** I proved the import-free case because it is all the Std packages produce today.
 That is "the case that went quickly" once more, and it is labelled as such above. The distinct-labels
 premise could be derived from the install check (a non-ascending row does not check), and
-`load_leaf` names fuel 7 by `closureDepthMax = 8` definitionally; both are left as stated.
+`load_leaf` names fuel 7 by `closureDepthMax = 8` definitionally; both are left as stated. (LANG-55 closes
+both: distinct labels follow from the receiver's own load, `load_checked` + `pkgOf_labels_nodup`, and the
+fuel is `closureDepthMax - 1`.)
 **Status.** built.
 
 ## LANG-27 Type errors by name and path: `inferE` is the checker, `infer` its `toOption` (2026-10-17; LANG-3's open item 3)
@@ -2091,3 +2094,42 @@ than the proposal (`force 77` where 5 was proposed): `shared: not the proposal` 
 binding); LQ11/LQ11b the relaw arm, on a DATA object governed by the same law: removing the law with
 no quorum: `shared: no quorum` (skip-judge plant admits it); LW2b a birth claiming an epoch other than
 its window's: `rate: epoch is not the call's window`.
+
+## LANG-55 The receiver-admits chain loses three of its four stated gaps (2026-10-18; LANG-16; LANG-4's vacuity leftovers)
+
+LANG-26's `judgeOne_pkgOf_admits` named what it assumed. Three of those assumptions are now gone:
+
+- **Packages with imports.** `judgeOne_admits`: for ANY package `p` the pinned cell holds, with imports
+  or without, `judgeOne` admitting means that both states read at `p`'s state type, and that every law
+  label whose body field `t` has a law's shape `Admits` the transition AS LOADED, i.e. `t` relocated
+  into the closure (one relocation `f` for the package, on `load`'s own `lib`). A law that names no
+  closure package is its own relocation (`relocate_noRef`). So laws that do name imported packages
+  are covered too. The proof goes through `load_top`. `load_leaf` is deleted: `load_top` subsumes it.
+  The fuel is now named `closureDepthMax - 1`.
+- **Distinct labels: a premise REMOVED.** `judgeOne_pkgOf_admits` and its three corollaries
+  (`judgeOne_quorum_change`, `judgeOne_quorum_relaw`, `judgeOne_machine_invoke`) no longer take `hnd`.
+  The receiver's own load re-ran the install check (`load_checked`), and a `pkgOf` package that passes
+  `checkShape` has distinct labels, because its interface is a strictly ascending row
+  (`pkgOf_labels_nodup`, `ascending_labels_nodup`).
+- **The cell holds the package.** `readPackage_installed`: a package cell whose slot 0 holds
+  `encodePackage p` reads as `p` (`decodePackage_eq_ok_iff`: the codec is canonical).
+
+**Changed statements.** `judgeOne_pkgOf_admits`, `judgeOne_quorum_change`, `judgeOne_quorum_relaw` and
+`judgeOne_machine_invoke` each LOSE the premise `hnd` (a strengthening). Their conclusions are
+unchanged. `load_leaf` is deleted; it had no other user. No existing theorem gains a premise.
+
+**Still assumed, by name.** (1) The digest round trip. This is the lawful `Ctx` (LANG-46): KERNEL's
+law, not LANG's. (2) That a World's package cell holds bytes that `install` checked. This is KERNEL's
+admission invariant, and the receiver's load re-checks anyway. (3) A layer's laws reach the layer's
+body through `extend (ref 0)`. They are not fields of the layer's own record, so `judgeOne_admits`
+reaches them at the super package, not at the layer.
+**Critique.** (3) is real for surface layers. LANG-50's `layer_keeps_laws` covers it on the surface
+side. The receiver side needs `Sel` through `Ext` over a relocated `ref`, and nothing consumes it today:
+no deployed package is a layer.
+**Meta-critique.** (3) is not deferred silently: cv 01a14ef6-598d (trigger: the first deployed layer).
+The vacuity reader's first pass found that `pkgOf_labels_nodup` was a bridge nothing crossed while
+`hnd` stayed a premise. The fix was to derive `hnd` from the load and remove the premise, not to keep
+the lemma beside it.
+
+Teeth: the install check refuses a `pkgOf` with a repeated label and accepts one with distinct labels.
+So `pkgOf_labels_nodup`'s premise is neither vacuous nor universal.
