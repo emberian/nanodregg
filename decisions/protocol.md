@@ -1191,3 +1191,60 @@ than its docstring names. The `baseMoved` red caught it only because the expecta
   - `makerOf` counts only member owners: an object made inside an object run has an object as owner, which would have counted under `oneMember`;
   - the module doc no longer claims as a theorem that a one-resident run counts 0 (the plant shows it for this row);
   - nested uses are named as uncounted. Every gap errs low.
+
+## PROTOCOL-44 · objects describe themselves: `read OBJ ?` prints an object's methods (index, label, argument type, call slots) and laws through the one printer; refusals print what to do next (2026-10-18, PROTOCOL-9; DELVETALK-LEARNINGS §4.3)
+**Decision.**
+- **`read OBJ ?`** is a read kind, not a new verb. It parses to `Cmd.describe`. Follow catches up, then prints:
+  - `object HEX`, `owner HEX`;
+  - `package HEX`, or `data` for an object with no package;
+  - `state TYPE`;
+  - one `method I LABEL ARGTYPE` per method, in index order, with `call I J TYPE` for each declared call slot;
+  - `law LABEL` for each package law;
+  - `law HEX LABEL…` for each further law package of the object.
+- **Where the text comes from.**
+  - Every method line is `Lang.resolveMethod`'s answer at I: the same resolution that `invoke` and `Lang.argsOf` use.
+  - Every type is `Lang.Print.ty`, LANG-28's one printer, whose text `Lang.Read` reads back.
+  - If any part has no text, the description is refused `noText` (new constructor).
+  - Lean decides nothing beyond the printer and LANG's resolution.
+- **Theorems** (Proofs/Describe):
+  - `methodLine_resolves`: the printed line for index I is resolveMethod's label and the printed argument type at I;
+  - `packageLines_methods`: every index below the method count has its lines in the description;
+  - `mem_of_mapM`.
+  - Consent is kept: `describe_ne_submit` and `refusedAt_ne_submit` feed `step_submit_planned`, whose statement is unchanged.
+- **Hints** (`hint`, `refusedAt`). A refusal with a next step prints it on STDOUT; the name stays on stderr as the verdict.
+  - `stale CELL` (follow's own admission): the cell moved, read it and run again.
+  - `lawDenied LAWHEX`: the law's own words, which begin with the law LABEL (LANG's `label: reason`).
+  - From the writer, `stale` says the World moved and to run the command again (it re-plans). `lawDenied` points at `read OBJ ?`.
+  - Every other refusal prints no hint.
+- **Row `describe`** (25th).
+  - The sponsor makes a grain on the shipped lifecycle package and grants `anyone` `invoke:1`.
+  - A member who has never seen it runs `read @app ?` (line 6). The description binds `app.LABEL` to each printed index, and the line checks that it printed `law phase`.
+  - From that text alone the member starts it: `invoke @app @app.start (record) --via @pub` (line 7). The argument is written at the printed type `(rec)`.
+  - The second start is `lawDenied`, and it prints `hint lawDenied …: phase: no edge` (line 8).
+  - Plant `guessMethod`: a resident that does not read the description guesses method 0, so line 7 calls `remove` through a grant to `start` and is refused `grantRight`.
+  - New Line field `prints`: text the line must print, else `refused unprinted`. A line with `prints` shows its stdout in the transcript.
+- **HOST (cross-layer, CLIENT-26's ask, in the shape HOST-12 agreed for genesis).** `host join` now also prints `input HEX` LAST, so a joiner keeps the same `input` line a founder does and nd never parses the invitation.
+
+**Alternatives.**
+- (a) A new verb (`?` or `describe`). Rejected: it is a read of one object, and the verb ceiling is 20 (18 used).
+- (b) Print the whole package text (`Lang.Print.package`). Rejected: a resident needs the indices and argument types. A 7.5 KB package with its state repeated in every type is exactly what DELVETALK §4.1 says nobody can read.
+- (c) Carry hints in the wire payload. Rejected for now: `hostName` reads the whole payload as the name, so a hint there would change the name the attempt store and the rows read. Hints are client-side text, decided from the refusal VALUE follow holds.
+
+**Critique.**
+- The description prints raw core types. Lifecycle's state type is a 150-character line, and a method's argument `(rec)` must be written as `(record)`: a resident must know that a `rec` type is written as a `record` value. The authoring surface (DELVETALK §4.1, LANG) is what makes this readable. This read is only as readable as the core.
+- Writer-side hints are generic: the writer's refusal payload carries a name, not the cell or the law, so `stale` from the writer cannot name the cell.
+- The row's argument is the one value of `(rec)`, so it does not show a resident constructing a non-trivial argument from its printed type.
+
+**Meta-critique.** I first wrote that a hint in the wire frame was the better design, deferred for cost. That was the pricing move CLAUDE.md names, so I checked it.
+- Follow admits every call on its own World before it signs (consent, PROTOCOL-4). So a stale cell or a denying law is refused by FOLLOW, with the cell and the law's words in hand.
+- The writer refuses only what changed between plan and land: a race. For a race the answer is to run the command again, which re-plans on the moved World.
+- A writer-side cell id would add nothing a member acts on. So no flag day is owed.
+- If residents meet writer-side refusals that are not races, that is evidence the frame should carry more, and this decision is wrong.
+
+**Status.** BUILT. Rows ALL PASS 25.
+- Vacuity read (a second agent): every theorem was ACCEPTED.
+  Fixes taken from it:
+  - packageLines_methods states membership, not order, and its docstring now says so;
+  - a lawDenied hint prints the law words on ONE line (a law cannot add stdout lines);
+  - the description names install labelOk check as why labels print raw.
+  A client reads stdout after a refused exit as text only, never as data.

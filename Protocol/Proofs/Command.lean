@@ -86,6 +86,19 @@ theorem plan_admits {X : Ctx D} {me : Self D} {w : World D} {key : ByteArray} {b
       obtain ⟨h1, h2, h3, h4⟩ := planUnchecked_derives hp
       exact ⟨h1, h2, h3, t, w', h4, hw⟩
 
+omit [Ord D] [DecidableEq D] in
+theorem refusedAt_ne_submit {X : Ctx D} {r : Refusal D} {call k : ByteArray} :
+    refusedAt X r ≠ .submit call k := by
+  unfold refusedAt; split <;> simp [refused]
+
+/-- A description is printed or refused, never a step that asks for anything. -/
+theorem describe_ne_submit {X : Ctx D} {w : World D} {obj : D} {call k : ByteArray} :
+    describe X w obj ≠ .submit call k := by
+  unfold describe
+  split
+  · simp [refused]
+  · split <;> simp [refused, printed]
+
 /-- Consent at the wire: the only call `step` hands the client to submit is a call over a `u`
 that `plan` produced on follow's own World (hence derived and admitted there, `plan_admits`). -/
 theorem step_submit_planned {X : Ctx D} {B : Thin.Base (World D)} {me : Self D}
@@ -99,6 +112,9 @@ theorem step_submit_planned {X : Ctx D} {B : Thin.Base (World D)} {me : Self D}
   all_goals (try simp only [Prod.mk.injEq, reduceCtorEq, and_false] at h)
   all_goals (try (exfalso; obtain ⟨_, _, h⟩ := h; unfold render at h; repeat' split at h
                   all_goals simp [refused, printed] at h))
+  all_goals (try (exfalso; obtain ⟨_, _, h⟩ := h; exact describe_ne_submit h))
+  all_goals (try (exfalso; obtain ⟨_, _, h⟩ := h; exact refusedAt_ne_submit h))
+  all_goals (try (exfalso; exact refusedAt_ne_submit h))
   all_goals (try (obtain ⟨h1, h0, h2⟩ := h; injection h2 with h3 h4; subst h1 h0 h3
                   exact ⟨rfl, rfl, _, _, _, _, ‹plan _ _ _ _ _ = _›, rfl⟩))
   done

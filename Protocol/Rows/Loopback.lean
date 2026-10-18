@@ -56,6 +56,8 @@ structure Sys where
   trustFirstUse : Bool := false
   /-- every actor's client signs as the sponsor (a plant) -/
   oneMember : Bool := false
+  /-- a resident binds every described method as method 0 (a plant) -/
+  guessMethod : Bool := false
 
 def skipJudge (X : Ctx D) : Ctx D :=
   { X with program := { X.program with judge := fun _ _ _ _ _ _ => .ok () } }
@@ -89,6 +91,7 @@ def sys : Option Mutation → Sys
   | some .admitsRecorded => { writer := { X := Sim.ctx, admitsRecorded := true }, follow := Sim.ctx }
   | some .trustFirstUse => { writer := { X := Sim.ctx }, follow := Sim.ctx, trustFirstUse := true }
   | some .oneMember => { writer := { X := Sim.ctx }, follow := Sim.ctx, oneMember := true }
+  | some .guessMethod => { writer := { X := Sim.ctx }, follow := Sim.ctx, guessMethod := true }
 
 /-! ## Actors -/
 
@@ -829,6 +832,19 @@ def runLine (i : Nat) (l : Line) (times : Nat) : M Expect := do
     if j = 0 && o = .ok then
       if let some b := l.bind then
         if let some h := boundToken out then bind b h
+        -- a description (`read OBJ ?`): each `method I LABEL …` line binds `b.LABEL` to I
+        for ln in out.splitOn "\n" do
+          match ln.splitOn " " with
+          | "method" :: i :: lbl :: _ =>
+              bind s!"{b}.{lbl}" (if (← get).sys.guessMethod then "0" else i)
+          | _ => pure ()
+    -- a line that checks what it prints shows it in the transcript
+    if j = 0 && l.prints.isSome then
+      for ln in out.splitOn "\n" do
+        if ln ≠ "" then note s!"  | {ln}"
+    let o := match l.prints with
+      | some t => if o = l.expect && (out.splitOn t).length ≤ 1 then .refused "unprinted" else o
+      | none => o
     let bound := if (← get).sys.zeroDeadline then l.withinMs.map fun _ => 0 else l.withinMs
     let o := match bound with
       | some ms => if o = l.expect ∧ dt > ms * 1000000 then .hang else o

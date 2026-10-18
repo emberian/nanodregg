@@ -148,7 +148,9 @@ def joinWith {m : Type → Type} [Monad m] (fx : JoinFx m) (inviteHex keyHex : S
   match ← fx.genesis key w₀ with
   | .error f => fx.refuse f.status f.text
   | .ok () =>
-    fx.report (genesisLines w₀ i.nonce i.founders.length ++ [s!"sponsor {i.sponsor.toHex}"])
+    -- `input` LAST, the line `host genesis` prints: a joiner keeps it to invite from (CLIENT-26)
+    fx.report (genesisLines w₀ i.nonce i.founders.length ++ [s!"sponsor {i.sponsor.toHex}",
+      s!"input {Protocol.Text.toHex (Protocol.Invite.inputBytes X i.name i.nonce i.allowance i.founders)}"])
     return 0
 
 /-- `host join STORE INVITE_HEX KEY_HEX`: `joinWith` over the files. -/

@@ -7,24 +7,24 @@ edit it, never pass it as a PATH). Ceilings live in `gates/ceilings.tsv`. A rise
 
 | metric | now | ceiling |
 |---|---|---|
-| Lean modules in the Host closure | 73 | 150 |
-| Lean modules | 297 | — |
-| Lean proof-modules | 150 | — |
+| Lean modules in the Host closure | 75 | 150 |
+| Lean modules | 299 | — |
+| Lean proof-modules | 151 | — |
 | Lean lines (Census) | 244 | — |
 | Lean lines (Codec) | 10370 | — |
 | Lean lines (Emit) | 1208 | — |
-| Lean lines (Host) | 9628 | — |
+| Lean lines (Host) | 9630 | — |
 | Lean lines (Hosting) | 5274 | — |
 | Lean lines (Kernel) | 14014 | — |
 | Lean lines (Lang) | 17242 | — |
 | Lean lines (Ledger) | 1120 | — |
 | Lean lines (Ops) | 1937 | — |
-| Lean lines (Protocol) | 6234 | — |
-| Lean lines (deployed) | 16533 | — |
-| Lean lines (tooling: Sim, Rows, Journey, Census, Emit, Ops) | 11597 | — |
+| Lean lines (Protocol) | 6472 | — |
+| Lean lines (deployed) | 16642 | — |
+| Lean lines (tooling: Sim, Rows, Journey, Census, Emit, Ops) | 11645 | — |
 | foundation modules | 7 | 8 |
-| max dependents of a non-foundation module | 189 | — |
-| theorems | 3065 | — |
+| max dependents of a non-foundation module | 191 | — |
+| theorems | 3070 | — |
 | partial defs (deployed) | 0 | 0 |
 | sorry | 0 | 0 |
 | native (extern/implemented_by) | 9 | 9 |
@@ -42,4 +42,4 @@ edit it, never pass it as a PATH). Ceilings live in `gates/ceilings.tsv`. A rise
 | refusal constructors | 61 | — |
 | protocol status codes | 6 | — |
 | protocol step codes | 6 | — |
-| conformance rows | 24 | — |
+| conformance rows | 25 | — |

@@ -50,7 +50,9 @@ inductive Verb
   | grant
   /-- `revoke GRANT` -/
   | revoke
-  /-- `read OBJ [KEY=VALUE…]`: print the object's state slots; each `KEY=VALUE` must hold -/
+  /-- `read OBJ [KEY=VALUE…]`: print the object's state slots; each `KEY=VALUE` must hold.
+  `read OBJ ?`: print the object's self-description, its methods with their indices and argument
+  types and its laws (`Command.Describe`, PROTOCOL-44) -/
   | read
   /-- `rotate`: move the member to custody's precommitted NEXT key, precommitting the one after -/
   | rotate
@@ -125,6 +127,8 @@ inductive Cmd (D : Type)
   | grant (target : GrantTarget D) (grantee : Option D) (rights : List Right) (via : Option D)
   | revoke (grant : D)
   | read (obj : D) (expect : List (Nat × ByteArray))
+  /-- `read OBJ ?` -/
+  | describe (obj : D)
   | rotate
   /-- the invitation's bytes and the sponsor key the member trusts -/
   | adopt (invite key : ByteArray)
@@ -180,7 +184,7 @@ def usage : Verb → String
   | .write => "write OBJ KEY VALUE [--via GRANT]" | .law => "law OBJ LAW... [--via GRANT]"
   | .invoke => "invoke OBJ METHOD ARGS [--via GRANT]"
   | .grant => "grant TARGET|ACCOUNT|world MEMBER|anyone RIGHTS [--via PARENT]"
-  | .revoke => "revoke GRANT" | .read => "read OBJ [KEY=VALUE...]" | .rotate => "rotate"
+  | .revoke => "revoke GRANT" | .read => "read OBJ [KEY=VALUE...] | read OBJ ?" | .rotate => "rotate"
   | .adopt => "adopt INVITE KEY" | .sync => "sync" | .issue => "issue CAP"
   | .account => "account ASSET [--owner OWNER]"
   | .transfer => "transfer SRC DST AMOUNT [--via GRANT] [--once HEX]"
@@ -311,6 +315,7 @@ def parseVerb (v : Verb) (args : List String) : Except ParseRefusal (Cmd D) :=
       pure (.grant target grantee (← mapEx rightArg (rs.splitOn ","))
         (← viaArg digestOf .grant via))
   | .revoke, [g] => .revoke <$> digestArg digestOf g
+  | .read, [o, "?"] => .describe <$> digestArg digestOf o
   | .read, o :: es => do pure (.read (← digestArg digestOf o) (← mapEx expectArg es))
   | .rotate, [] => .ok .rotate
   | .sync, [] => .ok .sync

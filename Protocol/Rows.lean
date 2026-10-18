@@ -143,6 +143,9 @@ structure Line where
   /-- a liveness deadline: a run that has not ended after this many milliseconds of wall time is
   `hang` (a non-verdict), never a speed verdict -/
   withinMs : Option Nat := none
+  /-- text the act must print (stdout) when it gets `expect`; missing, the line gets `refused
+  unprinted` -/
+  prints : Option String := none
   deriving Repr
 
 /-- How a row is driven. -/
@@ -208,6 +211,9 @@ inductive Mutation
   /-- every actor's client signs as the sponsor (its member, its key): one resident playing every
   part, so every use is self-use -/
   | oneMember
+  /-- the resident's client does not read a description: every method it binds from one is
+  method 0 (a guess at the first method) -/
+  | guessMethod
   deriving DecidableEq, Repr
 
 /-- A row's plant: the mutation, and the line that must catch it with the outcome it then gets. -/
@@ -696,6 +702,32 @@ def useRow : Row where
     { actor := "hermes", act := .used 5, expect := .ok }])
   plant := .caught .oneMember 14 (.refused "unshared:0")
 
+/-- PROTOCOL-44 (DELVETALK-LEARNINGS §4.3): an object describes itself. The sponsor makes a grain
+on the shipped lifecycle package and grants `anyone` its start (the right names the method by its
+index, which the owner knows). A member who has never seen the object reads its description,
+`read OBJ ?`, which binds each printed `method I LABEL ARG` as `app.LABEL` = I, and starts it from
+that text alone: the method index, through the public grant, with an argument of the printed type
+(`(rec)`, written `(record)`). A second start is refused `lawDenied` by the package's law `phase`,
+and the refusal says so on stdout (`hint lawDenied …`). The plant is a resident that does not read
+the description and guesses method 0: line 7 calls `remove` through a grant to `start`,
+`grantRight`. -/
+def describeRow : Row where
+  name := "describe"
+  replaces := []
+  ops := everyWrite
+  kinds := ["enroll", "grant", "install", "create", "invoke"]
+  drive := .members (join "sponsor" "newcomer" ++ [
+    okBind "operator" ["install", "<world/grain/Lifecycle"] "lifecycle",
+    okBind "sponsor" ["create", "--pkg", "@lifecycle",
+      "(record (entry \"app\") (kind app) (phase installed))"] "app",
+    okBind "sponsor" ["grant", "@app", "anyone", "invoke:1"] "pub",
+    { actor := "newcomer", act := .cmd ["read", "@app", "?"], expect := .ok, bind := some "app",
+      prints := some "law phase" },
+    ok "newcomer" ["invoke", "@app", "@app.start", "(record)", "--via", "@pub"],
+    { actor := "newcomer", act := .cmd ["invoke", "@app", "@app.start", "(record)", "--via", "@pub"],
+      expect := .refused "lawDenied", prints := some "hint lawDenied" }])
+  plant := .caught .guessMethod 7 (.refused "grantRight")
+
 /-- OPS-P1's carry (KERNEL-29, HOST-28 at 6b89d6f): state crosses to a NEW World by export and
 import, never by history. A committed call; an import with a wrong digest is refused
 `carryMismatch` and the old writer still serves; the import with the file's digest makes the
@@ -886,7 +918,7 @@ def langJourney : Row where
   plant := .internal "a program whose judge admits everything: L4 set 101 must be admitted"
 
 def rows : List Row :=
-  [journey, reopen, laws, rotate, audit, paging, coldCatchUp, inflatedHeight, forgotten, refusedRow, inviteRow, useRow, carry, thin, thinStale, wrongWorld, wrongWorldRead, pay, well, bounty, grain, hermes, bar,
+  [journey, reopen, laws, rotate, audit, paging, coldCatchUp, inflatedHeight, forgotten, refusedRow, inviteRow, useRow, describeRow, carry, thin, thinStale, wrongWorld, wrongWorldRead, pay, well, bounty, grain, hermes, bar,
    langJourney]
 
 end Nanodregg.Protocol

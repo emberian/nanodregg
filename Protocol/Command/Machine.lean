@@ -43,6 +43,7 @@ import Kernel.Receive.Submit
 import Protocol.Command.Verb
 import Protocol.Envelope
 import Protocol.Invite
+import Protocol.Command.Describe
 import Protocol.Command.Exit
 import Lang.Program
 
@@ -94,6 +95,8 @@ inductive Refusal (D : Type)
   | thin (r : Thin.Refusal)
   /-- custody refused the step, by its name (`CustodyRefusal`) -/
   | custody (r : CustodyRefusal)
+  /-- `read OBJ ?`: some part of the object's description has no text (`Lang.Print`) -/
+  | noText
   /-- an invitation refused by `Invite.accept`'s name, or one for another World (PROTOCOL-42) -/
   | invite (r : Invite.Refusal)
   /-- the writer refused the envelope `expired` at `height` after follow's one re-signed envelope
@@ -133,6 +136,7 @@ def Refusal.name : Refusal D → String
   | .thin r => r.name
   | .custody r => r.name
   | .invite r => r.name
+  | .noText => "noText"
   | .expired _ => "expired"
 
 def refused (r : Refusal D) : Reply :=
@@ -290,7 +294,7 @@ def body (X : Ctx D) (me : Self D) (w : World D) (s : Signed) : Cmd D → Except
   | .account a o => .ok (.account a (o.getD me.member))
   | .transfer src dst n via once => .ok (.transfer src dst n via once)
   | .credit wl acct n via => .ok (.credit wl acct n via)
-  | .init _ | .read _ _ | .adopt _ _ | .sync | .invite _ => .error .badState
+  | .init _ | .read _ _ | .describe _ | .adopt _ _ | .sync | .invite _ => .error .badState
 
 /-- Derive with the signature not yet known, pinning each cell the derivation asks for. -/
 def derivePins (X : Ctx D) (w : World D) : Nat → Unsigned D → Except (Refusal D) (Unsigned D × Turn D)
@@ -427,6 +431,51 @@ def render (E : Env D) (w : World D) (obj : D) (expect : List (Nat × ByteArray)
       | none =>
           printed (String.join ((stateOf cell).map fun (k, v) =>
             s!"{k - stateBase}={(String.fromUTF8? v).getD (Text.toHex v)}\n"))
+
+/-- The description's lines after its head (`Command.Describe`): the package's, or `data`, then each
+further law package of the object with its laws. -/
+def describeLines (X : Ctx D) (w : World D) (obj : D) (cell : Cell) : Except (Refusal D) (List String) := do
+  let look := worldLook X.env w
+  let pkg ← (packageOf X obj cell).mapError .receive
+  let laws ← (lawsOf X obj cell).mapError .receive
+  let ps ← match pkg with
+    | none => pure ["data"]
+    | some p =>
+      let pk ← (Lang.readPackage look p).mapError .receive
+      match packageLines (D := D) pk with
+      | some ls => pure (s!"package {hex X p}" :: ls)
+      | none => throw .noText
+  let ls ← laws.mapM fun l => do
+    let lp ← (Lang.readPackage look l).mapError .receive
+    pure (s!"law {hex X l}" ++ String.join (lp.laws.map (" " ++ ·)))
+  pure (ps ++ ls)
+
+/-- `read OBJ ?`: the object's self-description (`Command.Describe`), on follow's caught-up World. -/
+def describe (X : Ctx D) (w : World D) (obj : D) : Reply :=
+  match w.live X.env obj with
+  | none => refused (D := D) (.missingCell obj)
+  | some cell =>
+    let head := s!"object {hex X obj}\n" ++
+      ((cell.slots.get slotOwner).map fun o => s!"owner {Text.toHex o}\n").getD ""
+    match describeLines X w obj cell with
+    | .ok ls => printed (head ++ String.join (ls.map (· ++ "\n")))
+    | .error r => refused (D := D) r
+
+/-- What to do next, for the refusals that have an answer (DELVETALK-LEARNINGS §4.3): printed on
+stdout beside `refused NAME` on stderr, so the name stays the verdict and the hint is text. -/
+def hint (X : Ctx D) : Refusal D → Option String
+  | .reject (.stale c) => some s!"hint stale {hex X c}: this cell moved under the call; read it and run the command again"
+  -- the law's own words (at most `Lang.reasonMax` bytes), on ONE line: a law cannot add lines
+  | .receive (.lawDenied l why) => some s!"hint lawDenied {hex X l}: {(why.replace "\n" " ").replace "\r" " "}"
+  | .host "stale" => some "hint stale: the World moved before the call landed; run the command again (it re-plans)"
+  | .host "lawDenied" => some "hint lawDenied: a law refused the call; `read OBJ ?` names the object's laws"
+  | _ => none
+
+/-- `refused r`, with its hint on stdout when it has one. -/
+def refusedAt (X : Ctx D) (r : Refusal D) : Reply :=
+  match hint X r with
+  | some h => .done CommandExit.refused.code.toUInt8 s!"{h}\n".toUTF8 s!"refused {r.name}\n".toUTF8
+  | none => refused (D := D) r
 
 /-- What a committed write prints: its transaction id and every cell it created. -/
 def receipt (X : Ctx D) (t : Turn D) : String :=
@@ -573,6 +622,7 @@ def step (X : Ctx D) (B : Thin.Base (World D)) (me : Self D) (f : Follow D) (kb 
                       else
                       match cmd, Signed.ofBytes signedB with
                       | .read obj ex, _ => moved w' ts (render X.env w' obj ex)
+                      | .describe obj, _ => moved w' ts (describe X w' obj)
                       | .sync, _ => moved w' ts (printed s!"height {w'.height}\nchain {hex X w'.chain}\n")
                       | .rotate, some _ => moved w' ts (again 5 [startB, signedB] fun k => .precommit k)
                       -- invite: the inputs make this World; pin it as it stands, sign with the
@@ -586,10 +636,10 @@ def step (X : Ctx D) (B : Thin.Base (World D)) (me : Self D) (f : Follow D) (kb 
                             | none => moved w' ts (refused (D := D) .badState)
                             | some u => moved w' ts (again 8 [signedB, u] fun k => .sign (Invite.message u) k)
                       | _, some s => match body X me w' s cmd with
-                        | .error r => moved w' ts (refused (D := D) r)
+                        | .error r => moved w' ts (refusedAt X r)
                         | .ok b =>
                           match plan X me w' s.key b with
-                          | .error r => moved w' ts (refused (D := D) r)
+                          | .error r => moved w' ts (refusedAt X r)
                           | .ok u => moved w' ts (again 3 [startB, signedB, X.callMessage u] fun k =>
                               .sign (X.callMessage u) k)
                       | _, none => moved w' ts (refused (D := D) .badState)
@@ -611,12 +661,12 @@ def step (X : Ctx D) (B : Thin.Base (World D)) (me : Self D) (f : Follow D) (kb 
             | .ok b =>
               if s2.key ≠ s.key then same (refused (D := D) .badResult) else
               match plan X me w s.key b with
-              | .error r => same (refused (D := D) r)
+              | .error r => same (refusedAt X r)
               | .ok u =>
                   if X.callMessage u ≠ ub then same (refused (D := D) .planMoved) else
                   let c : Call D := ⟨u, s2.signature⟩
                   match receive X w c with
-                  | .error r => same (refused (D := D) (.receive r))
+                  | .error r => same (refusedAt X (.receive r))
                   | .ok t => same (again 4 [startB, signedB, ub, (receipt X t).toUTF8] fun k =>
                       .submit (X.callBytes c) k)
           | _, _ => same (refused (D := D) .badResult)
@@ -637,7 +687,7 @@ def step (X : Ctx D) (B : Thin.Base (World D)) (me : Self D) (f : Follow D) (kb 
       | _, 4, [_, _, _, out] =>
           match hostReply result with
           | some (.ok, _) => same (.done CommandExit.ok.code.toUInt8 out ByteArray.empty)
-          | some (.refused, p) => same (refused (D := D) (.host (hostName p)))
+          | some (.refused, p) => same (refusedAt X (.host (hostName p)))
           | some (.declined, p) => same (declined (hostName p))
           | some (.absent, _) => same (.done CommandExit.absent.code.toUInt8 ByteArray.empty "absent\n".toUTF8)
           | some (.uncertain, _) => same (.done CommandExit.uncertain.code.toUInt8 ByteArray.empty "uncertain\n".toUTF8)
