@@ -54,6 +54,13 @@ the owner and the owner never changes). Rows:
   500, refused by `cap`; LT6 the owner replies, refused by `decider`; LT7 two answers signed over one
   view: the first admitted, the second `stale` (Mini's `add` deltas keep both); LT8 a tally that
   closes before the answer's window ends refuses it `closed` (Mini's `timedOut`, as a height).
+* LS (LANG-47) Mini's CoAuthor ported by hand (lists bounded to 4 slots; a method is Mini's `react`,
+  the law `react` names an unmoved story's refusal): LS0 it reads (sizes printed); LS1–LS3 install,
+  start, grant; LS4/LS5 two proposals, LS5b a second by one author `alreadyProposed`; LS6 a vote,
+  LS6b `alreadyVoted`, LS6c `unknown`; LS7 `notAuthor`, LS7b the author's rewrite; LS8 a seal in the
+  window `early`; LS9 the seal after it makes the rewritten passage chapter 1; LS10 two proposals
+  signed over one view: the second `stale` (with LANG-44's rows both would land). Plant skip-judge:
+  LS5b is then ADMITTED, a turn that changed nothing a reader sees (delvetalk's W7).
 * L7 the follower (`World.fold` from genesis) and the auditor reach the Host's World.
 * PLANT skip-judge: the same rows against a program whose `judge` admits everything: L4 must be
   ADMITTED there (the row flips), proving the refusal in L4 came from the law, not from elsewhere. LT5 too: its
@@ -621,6 +628,281 @@ def tallyRows (mode : Mode) (r0 : Run) (a b : Sim.Member) : Run := Id.run do
   r := note r8c s!"LT8c B replies with a window 101 heights long: {v8c}" (deniedWith v8c "decider: closed")
   return r
 
+/-! ### LS: Mini's CoAuthor ported by hand (LANG-47, the list-shaped sample LANG-45's critique asked for)
+
+Mini `world/story/CoAuthor.obend` at 2c27b08b (486 lines): a crowd writes a story one chapter a round;
+any author proposes one passage and may edit it while the round is open, each elector votes once,
+and after the window anyone seals the round: the most-voted proposal (ties to the earliest) becomes
+the next chapter, forever. Its state is three recursive lists (`Proposals`, `Ballots`, `Chapters`).
+nano has no list, so the port bounds each by fixed slots: 4 proposals, 4 electors (a bitmask for
+who voted, each proposal counting its own votes), 4 chapters. A method cannot refuse, so each method
+is Mini's `react` (a moved story with `version + 1`, or the story with `why` set; a list walk becomes
+a chain of `let`-shared continuations, since writing the walk's tail in both arms of a `case` doubles
+the text at every slot), and the one law
+`react` turns an unmoved story into a refusal named by `why`. Now is the signer's window: a round is
+open to an act whose window ends by `closes`, and a seal must start after it. -/
+
+def csPT : String := "(rec (author digest) (id nat) (text bytes) (votes nat))"
+def csOP : String := s!"(sum (none (rec)) (some {csPT}))"
+def csPS : String := s!"(rec (p0 {csOP}) (p1 {csOP}) (p2 {csOP}) (p3 {csOP}))"
+def csCT : String := "(rec (author digest) (id nat) (number nat) (text bytes) (votes nat))"
+def csOC : String := s!"(sum (none (rec)) (some {csCT}))"
+def csCS : String := s!"(rec (k0 {csOC}) (k1 {csOC}) (k2 {csOC}) (k3 {csOC}))"
+def csOD : String := "(sum (none (rec)) (some digest))"
+def csES : String := s!"(rec (e0 {csOD}) (e1 {csOD}) (e2 {csOD}) (e3 {csOD}))"
+def csST : String :=
+  s!"(rec (chapters {csCS}) (closes nat) (count nat) (done bool) (electors {csES}) (nextId nat) (proposals {csPS}) (title bytes) (total nat) (version nat) (voted nat) (why bytes) (window nat))"
+def csRes : String := s!"(rec (calls (rec)) (state {csST}))"
+def csNone (T : String) : String := s!"(inj (sum (none (rec)) (some {T})) none (record))"
+def csSome (T e : String) : String := s!"(inj (sum (none (rec)) (some {T})) some {e})"
+/-- The story refused with `why`, unmoved. -/
+def csNo (why : String) : String := s!"(extend s (why \"{why}\"))"
+/-- The story moved by `fields`. -/
+def csMoved (fields : String) : String := s!"(extend s {fields} (version (+ (. s version) 1)) (why \"\"))"
+/-- The four slots of a row, by label. -/
+def csSlots (p : String) : List String := [s!"{p}0", s!"{p}1", s!"{p}2", s!"{p}3"]
+/-- `(. (. s f) i)`. -/
+def csAt (f i : String) : String := s!"(. (. s {f}) {i})"
+/-- A Boolean `or` of a list (false for none). -/
+def csAny : List String → String
+  | [] => "false"
+  | [x] => x
+  | x :: xs => s!"(if {x} true {csAny xs})"
+def csOpen : String := "(<= (. r validUntil) (. s closes))"
+
+/-- `propose {text}`: complete, late, alreadyProposed, full (nano's bound), else the first free slot. -/
+def csPropose : String :=
+  let mine (i : String) := s!"(case {csAt "proposals" i} (none x false) (some q (deq (. q author) (. r agent))))"
+  let newP := csSome csPT "(record (author (. r agent)) (id (. s nextId)) (text (. a text)) (votes 0))"
+  let rec place : List String → String
+    | [] => csNo "full"
+    | i :: is => s!"(case {csAt "proposals" i} (none x {csMoved s!"(proposals (extend (. s proposals) ({i} {newP}))) (nextId (+ (. s nextId) 1))"}) (some x {place is}))"
+  s!"(fn (s {csST}) (a (rec (text bytes))) (r {rq})
+  (record (calls (record)) (state
+    (if (. s done) {csNo "complete"}
+      (if {csOpen}
+        (if {csAny ((csSlots "p").map mine)} {csNo "alreadyProposed"}
+          {place (csSlots "p")})
+        {csNo "late"})))))"
+
+/-- `edit {id, text}`: complete, sealed, unknown, late, notAuthor, else the passage rewritten. -/
+def csEdit : String :=
+  let sealedAt (k : String) := s!"(case {csAt "chapters" k} (none x false) (some c (== (. c id) (. a id))))"
+  let rec find : List String → String
+    | [] => csNo "unknown"
+    | i :: is => s!"(let k{i} {csST} {find is} (case {csAt "proposals" i} (none x k{i})
+        (some q (if (== (. q id) (. a id))
+          (if {csOpen}
+            (if (deq (. q author) (. r agent))
+              {csMoved s!"(proposals (extend (. s proposals) ({i} {csSome csPT "(extend q (text (. a text)))"})))"}
+              {csNo "notAuthor"})
+            {csNo "late"})
+          k{i}))))"
+  s!"(fn (s {csST}) (a (rec (id nat) (text bytes))) (r {rq})
+  (record (calls (record)) (state
+    (if (. s done) {csNo "complete"}
+      (if {csAny ((csSlots "k").map sealedAt)} {csNo "sealed"}
+        {find (csSlots "p")})))))"
+
+/-- `vote {pick}`: complete, late, notElector, alreadyVoted, unknown, else the vote counted. -/
+def csVote : String :=
+  let bit (n : Nat) := s!"(== (% (/ (. s voted) {2 ^ n}) 2) 1)"
+  let rec find (n : Nat) : List String → String
+    | [] => csNo "unknown"
+    | i :: is => s!"(let k{i} {csST} {find n is} (case {csAt "proposals" i} (none x k{i})
+        (some q (if (== (. q id) (. a pick))
+          {csMoved s!"(proposals (extend (. s proposals) ({i} {csSome csPT "(extend q (votes (+ (. q votes) 1)))"}))) (voted (+ (. s voted) {2 ^ n}))"}
+          k{i}))))"
+  let rec elector : List (String × Nat) → String
+    | [] => csNo "notElector"
+    | (e, n) :: es => s!"(let j{n} {csST} {elector es} (case {csAt "electors" e} (none x j{n})
+        (some m (if (deq m (. r agent))
+          (if {bit n} {csNo "alreadyVoted"} {find n (csSlots "p")})
+          j{n}))))"
+  s!"(fn (s {csST}) (a (rec (pick nat))) (r {rq})
+  (record (calls (record)) (state
+    (if (. s done) {csNo "complete"}
+      (if {csOpen}
+        {elector ((csSlots "e").zip [0, 1, 2, 3])}
+        {csNo "late"})))))"
+
+/-- `seal {}`: complete, early, else the leader (only a strictly greater count replaces it, so a tie
+keeps the earlier slot) becomes chapter `count + 1`, the round clears and the next opens from now; a
+round with no proposal is extended by a window. -/
+def csSeal : String :=
+  let better (cur p : String) := s!"(case {p} (none x {cur}) (some q (case {cur} (none y {p}) (some c (if (< (. c votes) (. q votes)) {p} {cur})))))"
+  let emptyPs := s!"(record (p0 {csNone csPT}) (p1 {csNone csPT}) (p2 {csNone csPT}) (p3 {csNone csPT}))"
+  let chapter := s!"(record (author (. w author)) (id (. w id)) (number (+ (. s count) 1)) (text (. w text)) (votes (. w votes)))"
+  let rec put : List (String × Nat) → String
+    | [] => csNo "storyFull"
+    | (k, n) :: ks => s!"(if (== (. s count) {n})
+        {csMoved s!"(chapters (extend (. s chapters) ({k} {csSome csCT chapter}))) (closes (+ (. r notBefore) (. s window))) (count (+ (. s count) 1)) (done (== (+ (. s count) 1) (. s total))) (proposals {emptyPs}) (voted 0)"}
+        {put ks})"
+  s!"(fn (s {csST}) (a (rec)) (r {rq})
+  (record (calls (record)) (state
+    (if (. s done) {csNo "complete"}
+      (if (<= (. r notBefore) (. s closes)) {csNo "early"}
+        (let b1 {csOP} {better (csAt "proposals" "p0") (csAt "proposals" "p1")}
+        (let b2 {csOP} {better "b1" (csAt "proposals" "p2")}
+        (let b3 {csOP} {better "b2" (csAt "proposals" "p3")}
+          (case b3
+            (none x {csMoved "(closes (+ (. r notBefore) (. s window)))"})
+            (some w {put ((csSlots "k").zip [0, 1, 2, 3])}))))))))))"
+
+/-- The one law: a story a method did not move is refused by its `why`; only methods change it. -/
+def csLaw : String :=
+  s!"(fn (old {csST}) (new {csST}) (r {rq})
+  (case (. r occasion)
+    (adopt x (inj {verdictText} ok (record)))
+    (birth x (if (== (. new version) 0) (inj {verdictText} ok (record)) (inj {verdictText} refused \"seeded\")))
+    (invoke m (if (== (. new version) (+ (. old version) 1)) (inj {verdictText} ok (record)) (inj {verdictText} refused (. new why))))
+    (relaw x (inj {verdictText} ok (record)))
+    (write x (inj {verdictText} refused \"only its methods move a story\"))))"
+
+def csMTy (A : String) : String := s!"(-> {csST} (-> {A} (-> {rq} {csRes})))"
+
+/-- CoAuthor as a resident writes it (the type strings above stand in for the aliases a surface would give). -/
+def coAuthorText : String := s!"
+(package (imports)
+  (state {csST})
+  (iface (rec (edit {csMTy "(rec (id nat) (text bytes))"})
+              (propose {csMTy "(rec (text bytes))"})
+              (react (-> {csST} (-> {csST} (-> {rq} {verdictText}))))
+              (seal {csMTy "(rec)"})
+              (vote {csMTy "(rec (pick nat))"})))
+  (methods propose edit vote seal)
+  (laws react)
+  (body
+    (record
+      (propose {csPropose})
+      (edit {csEdit})
+      (vote {csVote})
+      (seal {csSeal})
+      (react {csLaw}))))
+"
+
+/-- A call signed by `m` with the window `[nb, vu]` (the Sim's `signed` fixes `[0, height + 101]`). -/
+def signedAt (st : Sim.State) (m : Sim.Member) (pins : List (D × D)) (body : Body D) (nb vu : Nat) : Call D :=
+  let u : Unsigned D :=
+    { world := st.host.origin
+      member := m.id
+      key := Sim.toy.pub m.key
+      notBefore := nb
+      validUntil := vu
+      pins := pins
+      maxCharge := 1000000
+      body := body }
+  { unsigned := u, signature := Sim.toy.sign m.key (Sim.toy.ctx.callMessage u) }
+
+/-- A story's state field by its index in `csST`'s row (0 chapters, 6 proposals). -/
+def storyField (w : World D) (obj : D) (T : Ty) (i : Nat) : Option Data :=
+  match (slotOf Sim.env w obj i).map (Wire.decodeData T) with
+  | some (.ok d) => some d
+  | _ => none
+
+/-- The LS rows: CoAuthor through the real receivers. `a` and `b` are authors and electors. -/
+def storyRows (mode : Mode) (r0 : Run) (a b : Sim.Member) : Run := Id.run do
+  let prog := mode.program
+  let mut r := r0
+  let p ← match Read.readPackage coAuthorText with
+    | .ok p => pure p
+    | .error e => return note r s!"LS0 read CoAuthor: {e.text}" false
+  let some pb := Wire.encodePackage p | return note r "LS0 CoAuthor has no bytes" false
+  let printed := (Print.package p).getD ""
+  r := note r s!"LS0 CoAuthor read from text: {coAuthorText.length} chars, {(coAuthorText.splitOn "\n").length - 2} lines; {pb.size} package bytes; printed {printed.length} chars" (printed != "")
+  let (r1, v1, t1) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id]) (.install pb))
+  r := note r1 s!"LS1 A installs CoAuthor: {v1}" (v1 == "admitted")
+  let some pkg := t1.bind fun t => (createdIds t).head? | return note r "LS1 no package id" false
+  let hexOf (m : Sim.Member) : String := (Print.data (.digest (Sim.dc.bytes m.id))).getD ""
+  let closes := r.st.host.height + 12
+  let noneP := "(record (p0 none) (p1 none) (p2 none) (p3 none))"
+  let seedText := s!"(record (chapters (record (k0 none) (k1 none) (k2 none) (k3 none))) (closes {closes}) (count 0)
+    (done false) (electors (record (e0 (some {hexOf a})) (e1 (some {hexOf b})) (e2 none) (e3 none))) (nextId 1)
+    (proposals {noneP}) (title \"the lighthouse\") (total 3) (version 0) (voted 0) (why \"\") (window 10))"
+  let seed ← match Read.readData p.state seedText with
+    | .ok (.record ds) => match stateSlots (recordRow p.state) ds 0 with
+      | some s => pure s
+      | none => return note r "LS2 seed has no bytes" false
+    | .ok _ => return note r "LS2 seed is not a record" false
+    | .error e => return note r s!"LS2 read seed: {e.text}" false
+  let (r2, v2, t2) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id, pkg]) (.create (some pkg) [] seed))
+  r := note r2 s!"LS2 A starts \"the lighthouse\", 3 chapters, electors A and B, closing at {closes}: {v2}" (v2 == "admitted")
+  let some obj := t2.bind fun t => (createdIds t).head? | return note r "LS2 no object id" false
+  -- every member acts through a grant on every method (KERNEL-25: invoke is the owner's, or granted)
+  let (rg, vg, tg) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id, b.id, obj])
+    (.grant obj b.id [.invoke 0, .invoke 1, .invoke 2, .invoke 3] none))
+  r := note rg s!"LS3 A grants B propose, edit, vote, seal: {vg}" (vg == "admitted")
+  let some gr := tg.bind fun t => (createdIds t).head? | return note r "LS3 no grant id" false
+  let args (T : Ty) (d : Data) : ByteArray := (Wire.encodeData T d).getD .empty
+  let textA (s : String) := args (.record [("text", .bytes)]) (.record [("text", .bytes s.toUTF8)])
+  let editA (i : Nat) (s : String) := args (.record [("id", .nat), ("text", .bytes)]) (.record [("id", .nat i), ("text", .bytes s.toUTF8)])
+  let pickA (i : Nat) := args (.record [("pick", .nat)]) (.record [("pick", .nat i)])
+  let noA := args (.record []) (.record [])
+  let pinsOf (r : Run) (m : Sim.Member) := Sim.S.pinsFor r.st.host ([m.id, obj, pkg] ++ if m.id == b.id then [gr] else [])
+  let viaOf (m : Sim.Member) : Option D := if m.id == b.id then some gr else none
+  let act (r : Run) (m : Sim.Member) (method : Nat) (x : ByteArray) (nb vu : Nat) : Run × String × Option (Turn D) :=
+    go prog r (signedAt r.st m (pinsOf r m)
+      (.invoke obj method x 100000 (viaOf m)) nb vu)
+  -- LS4/LS5 two proposals; a second by the same author is refused
+  let c4 := signedAt r.st a (pinsOf r a) (.invoke obj 0 (textA "a light on the rock") 100000 none) 0 closes
+  let m4 := measure r.st.host c4
+  let (r4, v4, _) := go prog r c4
+  r := note r4 s!"LS4 A proposes \"a light on the rock\": {v4}; required steps / ticks {match m4 with | .ok (q, t) => s!"{q} / {t}" | .error e => e}" (v4 == "admitted")
+  let (r5, v5, _) := act r b 0 (textA "a ship in the fog") 0 closes
+  r := note r5 s!"LS5 B proposes \"a ship in the fog\": {v5}" (v5 == "admitted")
+  let (r5b, v5b, _) := act r a 0 (textA "another") 0 closes
+  if mode = .skipJudge then
+    return note r5b s!"PLANT skip-judge: LS5b A's second proposal must now be ADMITTED, a turn that did nothing: {v5b}" (v5b == "admitted")
+  r := note r5b s!"LS5b A proposes again: {v5b}" (deniedWith v5b "react: alreadyProposed")
+  -- LS6 votes: B for 2 (counted), B again (alreadyVoted), A for 99 (unknown)
+  let c6 := signedAt r.st b (pinsOf r b) (.invoke obj 2 (pickA 2) 100000 (some gr)) 0 closes
+  let m6 := measure r.st.host c6
+  let (r6, v6, t6) := go prog r c6
+  r := note r6 s!"LS6 B votes for 2: {v6}; required steps / ticks {match m6 with | .ok (q, t) => s!"{q} / {t}" | .error e => e}; its turn logs {(t6.map Turn.logWeight).getD 0} bytes" (v6 == "admitted")
+  let (r6b, v6b, _) := act r b 2 (pickA 1) 0 closes
+  r := note r6b s!"LS6b B votes again: {v6b}" (deniedWith v6b "react: alreadyVoted")
+  let (r6c, v6c, _) := act r a 2 (pickA 99) 0 closes
+  r := note r6c s!"LS6c A votes for 99: {v6c}" (deniedWith v6c "react: unknown")
+  -- LS7 edits: A may not edit B's passage; B rewrites it
+  let (r7, v7, _) := act r a 1 (editA 2 "mine now") 0 closes
+  r := note r7 s!"LS7 A edits B's passage: {v7}" (deniedWith v7 "react: notAuthor")
+  let (r7b, v7b, _) := act r b 1 (editA 2 "a ship in the mist") 0 closes
+  r := note r7b s!"LS7b B rewrites its passage: {v7b}" (v7b == "admitted")
+  -- LS8 a seal inside the window is early
+  let (r8, v8, _) := act r a 3 noA 0 (r.st.host.height + 50)
+  r := note r8 s!"LS8 A seals while the round is open: {v8}" (deniedWith v8 "react: early")
+  -- the World moves past `closes` (lawless data objects, one turn each)
+  for _ in [0:20] do
+    if r.st.host.height ≤ closes then
+      let (rp, _, _) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id]) (.create none [] []))
+      r := { rp with log := r.log, bad := r.bad }
+  -- LS9 the seal: B's rewritten passage (1 vote) beats A's (0) and becomes chapter 1
+  let hs := r.st.host.height
+  let c9 := signedAt r.st a (pinsOf r a) (.invoke obj 3 noA 100000 none) (closes + 1) (hs + 50)
+  let m9 := measure r.st.host c9
+  let (r9, v9, t9) := go prog r c9
+  let chT ← match Read.readTy csCS with
+    | .ok T => pure T
+    | .error e => return note r s!"LS9 read the chapters type: {e.text}" false
+  let chapterOk := match storyField r9.st.host obj chT 0 with
+    | some (.record [("k0", .inj "some" (.record fs)), _, _, _]) =>
+        (match fs.lookup "text", fs.lookup "votes" with
+          | some (.bytes t), some (.nat 1) => t == "a ship in the mist".toUTF8
+          | _, _ => false)
+    | _ => false
+  r := note r9 s!"LS9 A seals after the window: {v9}; chapter 1 is B's rewritten passage with 1 vote: {chapterOk}; required steps / ticks {match m9 with | .ok (q, t) => s!"{q} / {t}" | .error e => e}; its turn logs {(t9.map Turn.logWeight).getD 0} bytes" (v9 == "admitted" && chapterOk)
+  -- LS10 round two: two proposals signed over ONE view; with relations both would land (LANG-44)
+  let closes2 := hs + 10
+  let pins10 := Sim.S.pinsFor r.st.host [a.id, b.id, obj, pkg, gr]
+  let c10a := signedAt r.st a pins10 (.invoke obj 0 (textA "the keeper wakes") 100000 none) 0 closes2
+  let c10b := signedAt r.st b pins10 (.invoke obj 0 (textA "the lamp goes out") 100000 (some gr)) 0 closes2
+  let (r10a, v10a, _) := go prog r c10a
+  r := note r10a s!"LS10a A proposes in round two: {v10a}" (v10a == "admitted")
+  let (r10b, v10b, _) := go prog r c10b
+  r := note r10b s!"LS10b B proposes in round two, signed over the same view as A: {v10b} (Mini's story is one sequence; on a shared World the second author is refused)"
+    (v10b.startsWith "rejected stale")
+  return r
+
 /-- The install-closure rows (LI, LANG-35): `Top` imports `Mid` imports `Owned` (`pkg`). -/
 def installRows (mode : Mode) (r0 : Run) (a : Sim.Member) (pkg : D) : Run := Id.run do
   let prog := mode.program
@@ -1000,6 +1282,7 @@ def journey (mode : Mode) : Run := Id.run do
     r := note r s!"L11d A keeps BirthOnly and adds Frozen: {v11d}" (v11d == "admitted")
   if mode = .honest || mode = .skipJudge then
     r := tallyRows mode r a b
+    r := storyRows mode r a b
   r := callRows mode r a
   -- L7 follower and auditor
   match World.fold Sim.env g r.st.log with

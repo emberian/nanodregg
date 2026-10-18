@@ -1517,3 +1517,88 @@ the law is a constructed `Ctx` that no run uses.
 the journey's own tooth had silently stopped being one: a premise moved and the plant did not follow it. That is
 the failure "A FALSIFIER THAT STOPPED FALSIFYING" names, caught before landing.
 **Status.** built (this commit). Nothing re-ids.
+
+## LANG-47 The list-shaped sample: Mini's CoAuthor ported by hand; three relations are its first need, and its seal needs a RANGE read, which LANG-44 v0 does not have (2026-10-18; ROOT's order after LANG-45; journey rows LS0–LS10)
+**What was ported.** Mini `world/story/CoAuthor.obend` at 2c27b08b (486 lines). A crowd writes a story one chapter
+per round. Each author proposes one passage and may edit it while the round is open. Each elector votes once.
+After the window anyone seals the round, and the most-voted proposal (ties go to the earliest) becomes the next
+chapter, forever. Its state is three recursive lists: `Proposals`, `Ballots` and `Chapters`. The port is
+`Lang.Journey.coAuthorText`:
+- Each list is bounded to 4 slots: 4 proposals, 4 electors, 4 chapters. A bitmask records who voted, and each
+  proposal counts its own votes.
+- A method cannot refuse. Each method is therefore Mini's `react`: it returns either the moved story (`version + 1`)
+  or the unmoved story with `why` set. The one law `react` refuses an unmoved story by its `why`, and refuses every
+  `write`.
+- Now is the signer's window: an act is in the round when its window ends by `closes`, and a seal must start after
+  `closes`.
+The rows, through the real receivers:
+- LS4/LS5: two proposals. LS5b: a second proposal by one author, refused `alreadyProposed`.
+- LS6: a vote is counted. LS6b: a second vote, refused `alreadyVoted`. LS6c: a vote for an unknown proposal,
+  refused `unknown`.
+- LS7: another author's edit, refused `notAuthor`. LS7b: the author's own rewrite.
+- LS8: a seal inside the window, refused `early`.
+- LS9: the seal after the window makes the rewritten passage chapter 1, with its 1 vote.
+- LS10: two proposals signed over one view. The second is `stale`.
+- Plant skip-judge: LS5b is then ADMITTED, a turn that changed nothing a reader sees (delvetalk's W7, here exactly
+  what the law exists to refuse).
+**Measured** (deterministic counts, lang-journey on hbox at 7869bbc + this row):
+| | Mini (.obend) | nano (core text, lists bounded to 4) |
+|---|---|---|
+| lines | 486 (67 comment, 106 blank; 296 for the pure story, 51 for its activity, 139 for scenario and tests) | 142 (long lines) |
+| characters | 13,872 non-comment; 7,896 for the pure story | 63,865 |
+| package bytes | (front-end artifact) | 52,965, of the kernel's 65,536 per event |
+| required steps / ticks | (call-by-need, not counted) | propose 135 / 191, vote 226 / 322, seal 184 / 261 |
+| bytes one turn logs | (n/a) | vote 655, seal 563 |
+- **The first port could not be installed.** It wrote each list walk the way a Mini `match` on a list reads: the
+  walk's tail written in both arms of a `case`. The core has no join point and no recursion, so the text DOUBLES at
+  every slot. With 4 slots that made 125,955 characters and 114,004 package bytes, and the World refused the install
+  `overBound` (eventBytesMax 65,536). This is the recorded "linear in Mini, exponential in nano" case, met for real.
+  It is exponential in program SIZE, not in run time (LANG-2's case is run time under call-by-value). Sharing each
+  tail through a `let` (a chain of continuations, evaluated eagerly) made it linear: 52,965 bytes. Eight slots would
+  not fit under the bound even so.
+- Where the 63,865 characters go: the 1,084-character state type is written 41 times (44,444 characters, 70%):
+  10 in the interface, 7 in method and law binders, 24 in the `let` continuations. The authoring-surface need again,
+  sharper than LANG-45's, because a list-shaped state is a big type.
+- What a vote costs: the `proposals` field is ONE slot (LANG-11), so a vote rewrites every passage of the round (655
+  bytes logged for one ballot). A relation row would log one ballot.
+**What could not be expressed, and what replaced it.**
+1. *Unbounded lists.* The bound is 4: a fifth proposal is refused `full` and a fifth chapter `storyFull`, while Mini's
+   `total` is any number. This is the relation need, measured: CoAuthor is THREE relations. `proposals` is keyed
+   `{author}`, and `keyTaken` IS `alreadyProposed`. `ballots` is keyed `{voter}`, and `keyTaken` IS `alreadyVoted`.
+   `chapters` is keyed `{number}` and insert-only (a sealed chapter is "never edited again" by declaration).
+2. *A refusal from a method* (`Transition.refused`): replaced by `version`/`why` plus the law, an encoding every
+   method must carry. A surface needs `refuse` (delvetalk has `refuse(line)`); in the core it is this pattern.
+3. *`now`*: the signer's window, as in LANG-45.
+4. *The activity's `publish`*: not ported (no activities, LANG-6); a chapter is state, and a reader reads it.
+5. *Concurrency.* Two proposals or two votes over one view: the second is `stale` (LS10). With LANG-44's rows,
+   proposals and ballots are unpinned births at distinct keys and both land.
+**What it says about LANG-44, beyond LANG-45.**
+- Rows are this program's first need, and keyed inserts give two of its refusals for free.
+- The SEAL reads the whole round: the winner is an arg-max over the proposals and their votes. LANG-44 v0 gives
+  only point reads of pinned rows (its critique (5): "range reads inside a method are not in v0"), so seal cannot
+  be written over relations without a RANGE read. The read is bounded, because the round's proposals relation has a
+  limit, and a range pin (the subtree's hash: stale if any row in it moved) is exactly right for seal: a seal must
+  see the whole round, and a vote landing under it must make it stale.
+- So LANG-44 needs, before its build: a range read (a method declares `(rel, at most k rows)`; the signer pins the
+  relation's subtree root; the receiver supplies its rows in key order, refused `rangeTooLong` past k) and the
+  kernel's range pin. That is a kernel arm KERNEL-13 must co-sign with the rest.
+- Per-proposal vote counts are a `count` per pick. With ballots keyed `{voter}`, a vote count is a filtered count,
+  O(relation). Two honest answers: key ballots `{pick, voter}` and count a pick's subtree (a sub-range count; the
+  head has only the whole relation's count), or keep a `votes` column on the proposal row updated under a pin
+  (votes then conflict per proposal, which is honest: two votes for one passage race). I recommend the sub-range: a
+  range read over `{pick, *}` returns the votes for one pick, and seal reads at most `limit` of them.
+- Clearing a round means retracting every proposal and ballot: O(round) at seal, bounded by the limits, which is a
+  retract-many act (or a relation per round: a key prefix `{round, …}`, so nothing is retracted and the old round's
+  rows are a closed prefix). The prefix form is better: history is kept, and nothing is O(round) at seal.
+**Critique.** (1) A bound of 4 is mine. Mini's story has no bound, and every bound I pick is a refusal Mini does not
+have. (2) `let`-shared continuations evaluate every slot eagerly. That is linear, but a run pays for slots it does not
+need (vote: 226 steps). (3) The CBV `let` chain is a hand transformation a surface would do (join points); a resident
+writing the core by hand will write the doubling version first, as I did. (4) Two samples now, CappedTally and
+CoAuthor, and they disagree on the first need (a counter, rows). Both are given by LANG-44 as amended, plus the range
+read this sample adds.
+**Meta-critique.** I wrote the doubling version first because the Mini source reads that way. The finding
+("exponential in size") came from the World refusing my install, not from my design. The `let` fix is mine, and the
+cost it hides (eager evaluation of every slot) is measured above. I have not ported the Activity layer, which is a
+quarter of what Mini's program is about. It is cut on purpose (LANG-6), so it is not counted as a loss here.
+**Status.** Rows LS0–LS10 built (lang-journey GREEN, including the skip-judge plant). The range read goes to ROOT
+and KERNEL-13 as an addition to LANG-44.
