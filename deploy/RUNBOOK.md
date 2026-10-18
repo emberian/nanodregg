@@ -330,6 +330,14 @@ naming it, `refused indexCorrupt entry K`. Planted in store-plants on the sealed
 `check`: run it on every backup (§4) and after any unclean stop. A corrupt LAST entry still stops
 the open (`indexCorrupt`, the unit stops).
 
+A failed READ of the Store's files for one page (an IO error in `log` or `read`, HOST-48 01396b7) is
+refused that page, `refused pageIo`, and the writer keeps serving: it does not exit `ioServing` (6).
+The writer's stderr carries one line per failed page, `STATUS page refused=pageIo error="<the IO
+error>"`. The member sees `refused host pageIo` and runs its command again. One line means a
+transient read failure; if it repeats, check the disk (`base.world`, `seg.log` and `index.log` are
+readable by the writer's user) and run `host check STORE`. Planted in the Host's simulation
+(`pageIoPlant`: the first page is refused, the second is served). The exit table is unchanged.
+
 ## 4. Backup — RAN (stopped and LIVE: store-plants)
 
 Copy the files in the order `deploy/units/STORE.md` lists (generated from
