@@ -138,3 +138,18 @@ empty, and the follower instance `p` started over it must end `missing` (20) wit
 Preflighted on hbox outside systemd (OPS-4, ~/.cache/nd-t/ops4-pre1): join 0, origin the writer's;
 forged join 44 `refused inviteRefused pinMismatch`, 0 files; `host follow` over it 20 `refused
 missing key`. The systemd half waits for a box window (ROOT's word before any box change).
+
+### Every journal read is this run's (OPS-16, 2026-10-18; GATES-5's fail-open finding)
+
+harness.sh read `journalctl --user -u UNIT` with no bound, so rows D (`Start request repeated too
+quickly`), E (the last `Main process exited`) and F (`STATUS follow`) could pass on a PREVIOUS run's
+lines (a kept unit link keeps one journal), and row B printed the post-restart feed without judging
+it. broker.sh's `--since` bound had one-second granularity. Both now source `journal.sh`: every
+journal read is `jr`, i.e. `journalctl --user … --after-cursor=CUR`, CUR recorded at the run's start
+(`report/journal-cursor`). `journal_mark` is a plant run first in every run: a tagged marker written
+before the cursor must be invisible to `jr` and one written after it visible, or the run stops
+`journal-reads-only-this-run FAIL` (exit 2) before any unit starts. Measured on hbox (no unit): PASS;
+with `jr` replaced by the unbounded read, refused by name ("a line from before the run passes the
+filter", exit 2). Row B now requires the restarted writer to admit the next call (one `status=0`) and
+`host check` to read height 5. The bundle (SRC) now carries `journal.sh` beside `feed.py`/`broker.sh`.
+Neither script has run under systemd since this change (a box window).

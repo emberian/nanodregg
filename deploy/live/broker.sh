@@ -18,6 +18,7 @@
 set -uo pipefail
 SRC=${1:?usage: broker.sh SRC ROOT} ROOT=${2:?usage: broker.sh SRC ROOT}
 [ -e "$ROOT" ] && { echo "$ROOT exists: every run gets a fresh ROOT"; exit 2; }
+. "$SRC/journal.sh" || exit 2
 umask 022
 mkdir -p "$ROOT/bin" && chmod 0755 "$ROOT" || exit 2
 cp "$SRC"/bin/{host,live-calls,emit-units,keybroker,hosting-broker,emit-anchors,nd-supervise,grain-launch,hosting-controller} "$ROOT/bin/" || exit 2
@@ -35,11 +36,10 @@ wait_for() { local end=$((SECONDS+$1)); shift
 active() { [ "$(prop ActiveState)" = active ]; }
 settled() { local s; s=$(prop ActiveState); [ "$s" = failed ] || [ "$s" = inactive ]; }
 restarted_past() { [ "$(prop NRestarts)" -gt "$1" ] && active; }
-# journal reads are this run's, from SINCE on (a link kept across runs keeps one journal: run 2's
-# first draft read run 1's lines)
-SINCE=$(date '+%Y-%m-%d %H:%M:%S')
-jr() { journalctl --user -u "${1:-$UNIT}" --since "$SINCE" -o cat --no-pager 2>/dev/null; }
-exits() { jr | grep -o 'Main process exited, code=[a-z]*, status=[0-9A-Z]*' | tail -n 1; }
+# journal reads are this run's, after the cursor journal.sh records (a link kept across runs keeps
+# one journal: run 2's first draft read run 1's lines; `--since` had one-second granularity)
+ju() { jr -u "${1:-$UNIT}"; }
+exits() { ju | grep -o 'Main process exited, code=[a-z]*, status=[0-9A-Z]*' | tail -n 1; }
 fresh() { systemctl --user stop "$UNIT" 2>/dev/null; systemctl --user reset-failed "$UNIT" 2>/dev/null; return 0; }
 for nt in deciderSignaled:keybroker keyFileMode:keybroker sockDir:keybroker store:hosting-controller layoutMissing:grain-launch inviteRefused:host missing:host; do
   [ -n "$(code "${nt%%:*}" "${nt#*:}")" ] || { echo "no code for $nt in EXITS.md"; exit 2; }; done
@@ -48,6 +48,7 @@ for nt in deciderSignaled:keybroker keyFileMode:keybroker sockDir:keybroker stor
 # the fixture: a genesis Store, the provider key (a canary, never a real key), the pinned anchors,
 # SOCKDIR 02710, the environment file
 mkdir -p "$R/etc" "$R/pids" "$R/broker" "$R/calls" "$R/report" "$U" && chmod 0700 "$R/etc" && chmod 2710 "$R/broker" || exit 2
+journal_mark "$R/report"
 "$B/live-calls" "$R/calls" 1 >/dev/null || exit 2
 mapfile -t g < "$R/calls/genesis.args"
 "$B/host" genesis "$R/store" "${g[@]}" > "$R/report/genesis.txt" || exit 2
@@ -77,7 +78,7 @@ if wait_for 30 up; then
   if [ "$m" = "660 $(id -g)" ] && [ "$dm" = 2710 ] && [ "$nnp" = yes ] && [ -n "$dexe" ]; then
     row keybroker-unit-starts PASS "active; socket $m dir $dm; decider pid $dp exe $dexe; NoNewPrivileges=$nnp"
   else row keybroker-unit-starts FAIL "socket '$m' dir '$dm' NoNewPrivileges=$nnp decider exe '$dexe'"; fi
-else row keybroker-unit-starts FAIL "$(prop ActiveState)/$(prop Result) $(exits) :: $(jr | tail -n 4 | tr '\n' ';')"; fi
+else row keybroker-unit-starts FAIL "$(prop ActiveState)/$(prop Result) $(exits) :: $(ju | tail -n 4 | tr '\n' ';')"; fi
 
 # H. a signalled decider: keybroker ends deciderSignaled (restart class), systemd restarts it
 n0=$(prop NRestarts)
@@ -95,15 +96,15 @@ else row decider-killed-is-restarted FAIL "keybroker not up with a decider PID f
 # I. an installed anchors copy edited by one byte: ExecStartPre refuses every start, the unit
 # stops at the start limit, keybroker never runs
 fresh
-SINCE=$(date '+%Y-%m-%d %H:%M:%S')
+CUR=$(journalctl --user --show-cursor -n 0 --no-pager 2>/dev/null | sed -n 's/^-- cursor: //p'); [ -n "$CUR" ] || exit 2  # row I reads only its own lines
 cp "$R/etc/anchors.pem" "$R/report/anchors.good"
 python3 -I -c 'import sys; p=sys.argv[1]; b=bytearray(open(p,"rb").read()); i=len(b)//2; b[i]^=1; open(p,"wb").write(b)' "$R/etc/anchors.pem"
 if cmp -s "$R/etc/anchors.pem" "$R/report/anchors.good"; then row anchors-edited-refused-at-start FAIL "the edit is a no-op"; else
   rm -f "$sock"
   systemctl --user start "$UNIT"
   wait_for 60 settled
-  lim=$(jr | grep -c 'Start request repeated too quickly')
-  pre=$(jr | grep -m1 -i 'emit-anchors' | cut -c1-160)
+  lim=$(ju | grep -c 'Start request repeated too quickly')
+  pre=$(ju | grep -m1 -i 'emit-anchors' | cut -c1-160)
   if settled && [ "$lim" -ge 1 ] && [ ! -S "$sock" ]; then
     row anchors-edited-refused-at-start PASS "Result=$(prop Result); start limit hit; journal: $pre"
   else row anchors-edited-refused-at-start FAIL "$(prop ActiveState)/$(prop Result) limit=$lim :: $pre"; fi
@@ -151,7 +152,7 @@ if wait_for 30 fup; then
   m=$(stat -c '%a %g' "$fsock")
   if [ "$m" = "660 $(id -g)" ]; then row hosted-follower-starts PASS "active; socket $m (--group)"
   else row hosted-follower-starts FAIL "socket '$m'"; fi
-else row hosted-follower-starts FAIL "$(prop ActiveState "$F")/$(prop Result "$F") :: $(jr "$F" | tail -n 3 | tr '\n' ';')"; fi
+else row hosted-follower-starts FAIL "$(prop ActiveState "$F")/$(prop Result "$F") :: $(ju "$F" | tail -n 3 | tr '\n' ';')"; fi
 
 # M. grain-launch (template, instance w) starts its confined controller over the follow Store and
 # keeps running (the World has no grain: nothing is launched)
@@ -159,7 +160,7 @@ systemctl --user start "$G"
 sleep 10
 if [ "$(prop ActiveState "$G")" = active ] && [ "$(prop NRestarts "$G")" = 0 ]; then
   row grain-launch-starts PASS "active after 10 s, NRestarts=0, MainPID $(prop MainPID "$G")"
-else row grain-launch-starts FAIL "$(prop ActiveState "$G")/$(prop Result "$G") status=$(prop ExecMainStatus "$G") :: $(jr "$G" | tail -n 3 | tr '\n' ';')"; fi
+else row grain-launch-starts FAIL "$(prop ActiveState "$G")/$(prop Result "$G") status=$(prop ExecMainStatus "$G") :: $(ju "$G" | tail -n 3 | tr '\n' ';')"; fi
 systemctl --user stop "$G"
 
 # N. a controller Store refusal stops the launcher by name: instance x over an empty store directory
@@ -182,7 +183,7 @@ gs() { local s; s=$(prop ActiveState "$G"); [ "$s" = failed ] || [ "$s" = inacti
 wait_for 30 gs
 st=$(prop ExecMainStatus "$G") nr=$(prop NRestarts "$G")
 if gs && [ "$st" = "$(code layoutMissing grain-launch)" ] && [ "$nr" = 0 ]; then
-  row layout-missing-stops PASS "ExecMainStatus=$st (layoutMissing) NRestarts=0 :: $(jr "$G" | grep -m1 -i layoutMissing | cut -c1-120)"
+  row layout-missing-stops PASS "ExecMainStatus=$st (layoutMissing) NRestarts=0 :: $(ju "$G" | grep -m1 -i layoutMissing | cut -c1-120)"
 else row layout-missing-stops FAIL "status=$st (want $(code layoutMissing grain-launch)) NRestarts=$nr $(prop ActiveState "$G")"; fi
 
 # P. a forged invitation: `host join` refuses inviteRefused and writes nothing; the follower unit

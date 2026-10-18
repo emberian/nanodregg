@@ -498,3 +498,24 @@ rather than after. The phrase "operator data under the StrictModes chain" assume
 `host` verb does not have. I checked the verb's argv first, which made that visible.
 **Status.** landed (this commit); row P PENDING a box window.
 
+
+## OPS-16 · the live harness judges only this run's journal: a cursor, planted (OPS-4, 2026-10-18; GATES-5's fail-open finding, ROOT)
+
+**Decision.** deploy/live/journal.sh, sourced by harness.sh and broker.sh: `jr ARGS` =
+`journalctl --user ARGS --after-cursor=CUR`. CUR is recorded at the run's start and written to
+`report/journal-cursor`. Every journal read a row judges goes through `jr`. `journal_mark` plants
+the filter itself before any unit starts: a marker written before CUR must be hidden and one written
+after it seen, or the run stops `journal-reads-only-this-run FAIL` (exit 2). Row B now judges the
+post-restart feed (one `status=0`, height 5) instead of printing it.
+**Alternatives.** (1) The unit's InvocationID: a restart changes it, and rows B, D and E judge
+the exit of the invocation BEFORE the restart, so a per-invocation filter hides exactly the line
+they need. (2) `--since` the run's start: one-second granularity, so a previous run that ended in
+the same second leaks in (broker.sh had this). (3) A fresh unit name per run: that leaves a link
+per run in ~/.config/systemd/user.
+**CRITIQUE.** The plant proves the cursor filter on a TAG, and the rows read by UNIT. Both go
+through the same `jr` and the same `--after-cursor`, but `-u` matching is journald's, not mine.
+The tooth swaps the function, not journald. Neither script has run under systemd since the change.
+**META-CRITIQUE.** broker.sh's comment recorded that run 2's first draft had read run 1's lines.
+OPS-3 fixed that script and did not carry the lesson to harness.sh, OPS-2's. Same pattern as OPS-14:
+the new file audited, the inherited one trusted.
+**Status.** landed (this commit); systemd re-run PENDING a box window.
