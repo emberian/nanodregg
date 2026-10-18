@@ -154,7 +154,7 @@ fresh
 # founder 0's invitation with RUNBOOK §2b's argv (`host join STORE INVITATION KEY_HEX`, OPS-15),
 # its origin the writer's; its socket 0660 of the shared directory's group
 F=nd-ops-live-hfollow@w G=nd-ops-live-grain@w
-mkdir -p "$R/hosted/worlds/w/members" "$R/hosted/worlds/w/store" "$R/nd-follow" "$R/member" "$R/ws" "$R/env" "$R/pids/w" && chmod 0700 "$R/hosted" "$R/hosted/worlds" "$R/hosted/worlds/w" "$R/hosted/worlds/w/store" && chmod 2710 "$R/nd-follow" "$R/member" || exit 2
+mkdir -p "$R/hosted/worlds/w/store" "$R/nd-follow" "$R/member" "$R/ws" "$R/env" "$R/pids/w" && chmod 0700 "$R/hosted" "$R/hosted/worlds" "$R/hosted/worlds/w" "$R/hosted/worlds/w/store" && chmod 2710 "$R/nd-follow" "$R/member" || exit 2
 inv=$(cat "$R/calls/invitation") key=$(cat "$R/calls/sponsor.key")
 "$B/host" join "$R/hosted/worlds/w/store" "$inv" "$key" > "$R/report/join-hosted.txt" || exit 2
 [ "$(awk '/^origin /{print $2}' "$R/report/join-hosted.txt")" = "$(awk '/^origin /{print $2}' "$R/report/genesis.txt")" ] || { echo "the joined World is not the writer's"; exit 2; }
@@ -180,7 +180,7 @@ systemctl --user stop "$G"
 
 # N. a controller Store refusal stops the launcher by name: instance x over an empty store directory
 X=nd-ops-live-grain@x
-mkdir -p "$R/hosted/worlds/x/store" "$R/hosted/worlds/x/members" "$R/pids/x" && chmod 0700 "$R/hosted/worlds/x"
+mkdir -p "$R/hosted/worlds/x/store" "$R/pids/x" && chmod 0700 "$R/hosted/worlds/x"
 systemctl --user start "$X"
 xs() { local s; s=$(prop ActiveState "$X"); [ "$s" = failed ] || [ "$s" = inactive ]; }
 wait_for 30 xs
@@ -189,10 +189,12 @@ if xs && [ "$st" = "$(code store hosting-controller)" ] && [ "$nr" = 0 ]; then
   row controller-store-refusal-stops PASS "ExecMainStatus=$st (controller store, passed through) NRestarts=0"
 else row controller-store-refusal-stops FAIL "status=$st (want $(code store hosting-controller)) NRestarts=$nr $(prop ActiveState "$X")"; fi
 
-# O. a layout directory missing (worlds/w/members): grain-launch refuses layoutMissing at start, by
-# name, before the controller runs; never restarted
-systemctl --user stop "$X" 2>/dev/null; systemctl --user reset-failed "$G" 2>/dev/null
-rmdir "$R/hosted/worlds/w/members"
+# O. a layout directory missing (instance y has no worlds/y/store; LAYOUT_HIDDEN is just `store` since
+# HOSTING-32): grain-launch refuses layoutMissing at start, by name, before the controller runs; never restarted
+systemctl --user stop "$X" 2>/dev/null
+G=nd-ops-live-grain@y
+mkdir -p "$R/hosted/worlds/y" "$R/pids/y" && chmod 0700 "$R/hosted/worlds/y" || exit 2
+systemctl --user reset-failed "$G" 2>/dev/null
 systemctl --user start "$G"
 gs() { local s; s=$(prop ActiveState "$G"); [ "$s" = failed ] || [ "$s" = inactive ]; }
 wait_for 30 gs
@@ -221,6 +223,6 @@ else
   else row forged-join-follower-stops FAIL "follower status=$st (want $(code missing host)) NRestarts=$nr $(prop ActiveState "$P")"; fi
 fi
 
-for u in "$F" "$G" "$X" "$P" nd-ops-live-hfollow@x; do systemctl --user stop "$u" 2>/dev/null; systemctl --user reset-failed "$u" 2>/dev/null; done
+for u in "$F" "$G" nd-ops-live-grain@w "$X" "$P" nd-ops-live-hfollow@x; do systemctl --user stop "$u" 2>/dev/null; systemctl --user reset-failed "$u" 2>/dev/null; done
 if [ $fail = 0 ]; then echo "ALL PASS"; exit 0; fi
 echo "FAIL $fail"; exit 1

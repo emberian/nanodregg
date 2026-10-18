@@ -95,10 +95,10 @@ The same script then runs the hosted pair, rendered as user-unit templates by `O
 grain-launch-starts (active 10 s later, NRestarts 0: the confined controller tails the follow
 Store), controller-store-refusal-stops (instance `x` over an empty store directory: the
 controller's `store` passed through, the unit stopped; `x` gets its `members` directory, since
-HOSTING-24 a487504 refuses a missing one first), layout-missing-stops (w's `members` removed:
+HOSTING-24 a487504 refuses a missing one first), layout-missing-stops (instance `y` has no `store` directory; since HOSTING-32 that is the only hidden layout path:
 grain-launch refuses `layoutMissing` 68 at start, naming the path, never restarted). Codes come
 from EXITS.md by table and name. Rows N and O preflighted on hbox outside systemd at a487504:
-`layoutMissing .../worlds/w/members` exit 68; x with members, empty store: 109.
+`layoutMissing .../worlds/w/members` exit 68 (then; now `.../worlds/y/store`); x with an empty store: 109.
 Run under systemd: burst5 run 1 and run 2, below (row O added after the run: not yet run under systemd).
 
 ### broker.sh on burst5-a (OPS-3, 2026-10-17 18:04–18:07Z, systemd 255, bundle bf1839b, taskset 0-1)

@@ -258,7 +258,7 @@ Install, per World `L` (after §2a's users):
 
     sudo install -m 0644 deploy/units/linux/tmpfiles/nd-follow.conf /etc/tmpfiles.d/nd-follow.conf
     sudo systemd-tmpfiles --create /etc/tmpfiles.d/nd-follow.conf
-    sudo install -d -o nd-hosted -g nd-hosted -m 0700 /srv/nd-hosted /srv/nd-hosted/worlds /srv/nd-hosted/worlds/L /srv/nd-hosted/worlds/L/members /srv/nd-hosted/worlds/L/store
+    sudo install -d -o nd-hosted -g nd-hosted -m 0700 /srv/nd-hosted /srv/nd-hosted/worlds /srv/nd-hosted/worlds/L /srv/nd-hosted/worlds/L/store
     sudo -u nd-hosted /opt/nd/bin/host join /srv/nd-hosted/worlds/L/store INVITATION KEY_HEX
 
 The follower's Store is JOINED from the operator's invitation (PROTOCOL-42), never a reproduced
@@ -306,16 +306,28 @@ sits alone in `/run/nd`, never beside keys.
 
 PROVISIONING a resident replaces "start a unit before the birth": the name is the grain's id, so it may be
 done just after the birth, and nd-members binds the socket within a tick. Under
-`MEMBERS = /srv/nd-hosted/worlds/L/members`, owned by nd, 0700, with the StrictModes chain clean:
+the roots OUTSIDE the hosted tree (HOSTING-32, ROOT's ruling: a grain's plan reaches neither a member
+workspace nor a follower Store; the stdio child's write set is MEMBERS alone), all nd 0700 with the
+StrictModes chain clean (`nd-members.conf` makes `/srv/nd-members`; the rest is made at provisioning):
+
+    sudo install -m 0644 deploy/units/linux/tmpfiles/nd-members.conf /etc/tmpfiles.d/nd-members.conf
+    sudo systemd-tmpfiles --create /etc/tmpfiles.d/nd-members.conf
+    sudo -u nd install -d -m 0700 /srv/nd-members/L /srv/nd-members/L/members /srv/nd-members/L/follow
+
+`MEMBERS = /srv/nd-members/L/members`, `STATE = /srv/nd-members/L/follow`. Per resident `<dirOf id>`:
 - `MEMBERS/<dirOf id>/` holds the member's custody (`nd --init-hosted`, `nd init`, the operator's `enroll`
-  and `grant world … observe`);
-- `MEMBERS/<dirOf id>/store`, made by `host genesis` with the World's genesis arguments, or `host join`;
-- `MEMBERS/<dirOf id>/follow`, one line `MEMBER_HEX GRANT_HEX` and LF, mode 0600.
+  and `grant world … observe`): the workspace `nd --stdio` writes;
+- `STATE/<dirOf id>/store`, the follower's Store, made by `host genesis … --nonce` with the World's genesis
+  arguments; written only by the `host follow` child;
+- `STATE/<dirOf id>/follow`, one line `MEMBER_HEX GRANT_HEX` and LF, mode 0600: the member and grant the
+  follower acts as, so the stdio child cannot rewrite it either.
+The five roots (MEMBER, MEMBERS, STATE, FOLLOW, and the hosted tree) must be pairwise disjoint trees: nd-members
+ends `rootsOverlap` (161) otherwise, and `stateRoot` (160) if STATE is not a 0700 nd directory with a clean chain.
 A resident's own trouble is never an exit; it is a line in the journal and that resident unbound while the
 others are served: `memberMissing NAME …` (not provisioned yet; retried every tick), `socketDirShared NAME …`
 (its directory holds something other than its socket: remove it), `memberCrashLoop NAME ROLE` (5 starts in
 120 s; unbound until the World's resident set changes) and `memberSpawn NAME ROLE`. The unit's own ends are
-EXITS.md's nd-members table (150-159; only a signalled decider restarts; 7 is more than 1024 resident
+EXITS.md's nd-members table (150-161; only a signalled decider restarts; 7 is more than 1024 resident
 grains). A removed resident loses both children, sockets and directories.
 A launch whose member socket is missing is refused `pathMissing` and counted (as for the broker socket), so
 provision before the grain is started. `foreignPath` (69, fatal) is a defect in the controller's actions,
@@ -362,8 +374,10 @@ A resident sees a new turn only after the driver's next `sync` (HOSTING-7's resi
 113537f): the driver is a HARD dependency of hosting, so `nd-grain-launch@L` Wants=/After=
 `nd-follow-drive@L` as well as the follower. A stopped or refused driver is a resident that never
 sees new turns (liveness, not safety); every launch and stop waits up to `RestartSec` (40 s) plus
-one sync. `worlds/L/members` must exist before the first launch (every plan hides it; a missing
-hidden path is `pathMissing` at each launch, then `crashLoop`): the install line above makes it.
+one sync. `worlds/L/store` must exist before the first launch (every plan hides it; a missing
+hidden path is `layoutMissing` at start, `pathMissing` at a launch, then `crashLoop`): the install line above
+makes it. Since HOSTING-32 the hosted tree holds no member workspace: those are nd's, under
+`/srv/nd-members/L` (§2b, provisioning).
 
 ## 3. Status — RAN
 
