@@ -574,7 +574,7 @@ The run, in order:
 5. Every follow syncs; `host check W --anchor` holds each follow's head; `bench-count` re-derives the tail
    (counts only: verifies 1.000 per step, trie hashes under the bar row).
 6. **Cold reopens.** Stop the writer and the friends' follows by their PID files. Drop the page cache on
-   each machine (`sync; echo 3 > /proc/sys/vm/drop_caches`, as root on EACH machine: the operator's act, unconfirmed whether each friend allows it; and a box
+   each machine (`sync; echo 3 > /proc/sys/vm/drop_caches`, as root on EACH machine: a box act, ROOT-ruled the operator's: Ember drops the page cache on each machine (root), then says go. The run neither does nor assumes it; and a box
    where that is not allowed cannot run v2), then time: the writer from unit start to its first reply, and
    each friend's follow from start to its first `nd read` answered over ssh.
 
