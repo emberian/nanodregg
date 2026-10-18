@@ -2820,3 +2820,45 @@ Status: PROPOSED.
 **KERNEL-54 moved the constant.** A head's floor and a row's version are World bytes the log does not carry, so the tight term (a pinless declare at a head, slot weight 34) is growth 34 + 50 = 84 against log 34 + 27 = 61: r = 84/61 (it was 76/61). Every other term is below it: a create (40 + w)/(32 + w), an insert or upsert at most 56/49, a write's ops below its act, a nullifier 1, keeps, retires, retracts and range reads 0. So the potential is Φ = 145 · weight + 84 · allowance and f = 84/145 ≈ 0.5793 (it was 76/137 ≈ 0.5547). At A = 2^27: 84 · 2^27 / 145 = 77,753,718 (post-54) against 76 · 2^27 / 137 = 74,456,549 (pre-54); PERF-2's bench row pins the post-54 figure, whatever HOST adds for genesis weight, journal, refusals and framing.
 **Built (part 1).** Kernel/World.lean `potentialRatio := (84, 145)` and `potential w := 145 · w.weight + 84 · w.allowance` (HOST reads both by name). Kernel/Proofs/Weight.lean: `RowTouch.growth_le_weight`, `Turn.growth_le_logWeight` (61 · g ≤ 84 · L), `admit_potential`, `fold_potential` (premises exactly `fold_conserves`'s), `allowance_bounds_world` (145 · w'.weight ≤ potential w). TOOTH: `RowTouch.declare_growth_tight`, the equality 61 · 84 = 84 · 61 at a pinless declare, so 84/61 cannot be lowered. `fold_world_weight` keeps its statement as the weak form. The Weight header's "HOST-14's `worldBytesMax` is the genesis allowance" was false and is replaced: the allowance budgets turn records and World weight, not the whole Store (KERNEL-12's and KERNEL-18's wording is corrected by this entry).
 **Critique.** The separable bound is loose where it matters least: 84/61 is attained only by an all-declare World, and every declare needs its parent created in the same turn, so the reachable maximum is below 84/145 of the allowance; a joint bound is a harder theorem for a few percent. **Meta-critique.** The constant was priced on the pre-54 Turn and would have been wired into HOST as a literal; the post-54 recomputation is what the names `potential`/`potentialRatio` are for: the next field that adds World bytes without log bytes moves them here, once.
+
+## KERNEL-55 AS BUILT, part 2: the refusals trie is bounded by the kernel (R1; lane r1 of KERNEL-21/22)
+**The cap.** `Bounds.refusalsPerWindowMax` = C = 16,384 recorded refusals per window, all members together. It is checked in `checkRefusal` after the per-member budget, `req (refusalTotal E w < C) .refusalsFull`. `Reject.refusalsFull` is appended last; `Receive.judgeBy` declines it as `rejected refusalsFull` and never records it (`judgeBy_refusalsFull`). The cost is a liveness cost on refusal finality and never one on admission: past C, one flood of colluding members leaves every refusal unrecorded until the window turns.
+**The key and why.** The World's count per window is a third refusals key, `RefusalSlot.total (origin : D) (win : UInt64)`. Its bytes are `⟨#[2]⟩ ++ E.bytes origin ++ u64 win`. It holds the existing `count n` leaf, is bumped by `commitRefusals` (a third insert), is pruned like a member's count (current window only, `keptRefusal`), and is read by `refusalTotal`. The origin is a FILLER. Every refusals key is one kind byte, one digest and eight bytes; on that fixed width rest `refusalKeyBytes_size`, the leaf body's injectivity and CODEC's key order. A member-less key has no digest of its own: `D` carries no `Inhabited` and `Env` no width. Three alternatives were rejected:
+- variable-width keys reopen those proofs and CODEC's order theorems;
+- a hashed constant puts a hash in every routing bit;
+- a scalar World field puts a new field on every `{w with ..}` frame proof and on the World header codec, which are more premises on landed theorems for no gain.
+
+The origin is a real digest of the World, constant over its life, and `refusalsCounted` refuses a total under any other digest.
+**What a decoded base must satisfy.** `refusalsCounted` (CODEC's `kernel/refusals-counted`) now also checks:
+- the total leaf is at (origin, current window);
+- it equals the window's record count, all members together;
+- it is present when the window has a record;
+- each of the two windows before holds at most C records.
+
+`World.CountedOk` gains the same four conjuncts, `refusalsCounted_iff` decides them, and `fold_countedOk` keeps them. When a window turns, its total becomes the previous window's record count.
+**The bound** (Kernel/Proofs/RefusalsBound.lean). `refusals_bounded (hw : RefusalsOk) (hc : CountedOk)` states, over the listing, records ≤ 3C ∧ member counts ≤ C ∧ totals ≤ 1 ∧ length = their sum. It comes in these forms:
+- `fold_refusals_bounded`;
+- `reach_refusals_bounded` and `deployed_reach_refusals_bounded`, with no premise;
+- `refusals_bounded_of_counted`, for a decoded base;
+- `refusals_length_le`, at most 4C + 1 entries.
+
+Exactly three windows' records coexist (`refusal_window_range`), and three is tight (`refusal_window_three`): at the prune that opens window j, the last record of window j−2, refused at (j−1)·windowMax, is kept and fits, so two windows would be wrong. The member counts are bounded by the window's records, because each count leaf is a member with a record this window and the keys are distinct. At the deployed C the trie holds 49,152 records, 16,384 counts and 1 total. In bytes, refusals ≤ 82·3C + 50·(C+1) = 4,849,714 B, and with it the derived `worldBytesMax` pair is 91,914,347 B post-54 and 87,654,733 B pre-54. HOST-14 confirmed the pair, with CODEC-13's `world_size_le`.
+**Teeth.**
+- `refusalsOk_bounds_nothing`: for every n there is a `RefusalsOk` World holding n records, so the per-leaf check bounds nothing and the bound rests on `CountedOk`.
+- `counted_world`: for every n ≤ C there is a `RefusalsOk ∧ CountedOk` World with members 0…n−1, one record and count each, total n, n steps, so the teeth stand on a World the fold reaches and the decoder admits.
+- `checkRefusal_full` and `refusalsFull_independent`: on `counted_world` at C, every member charged once, the refusal is declined `refusalsFull`, so the cap binds where the per-member budget does not.
+- `uncapped_overflows`: committed at C, as a kernel without the check would commit it, the total is C+1 and the World is not `RefusalsOk`.
+- `refusalsCounted_total_lowered` (and `_exists`, premise-free on `counted_world` at 2): a total lowered to reset the World's budget still fits and is refused.
+- kernel-sim: `refusals-full`, `refusals-full-control`, `refusals-full-plant`, `refusals-total-plant`.
+
+The cap is not reached through `judge`, because C records need over a thousand enrolled members at 16 each; the probe builds the World at the cap.
+**Statements moved.**
+- One landed helper gained a premise, forced: `refuse_sumN` now requires `g` to be 0 on total keys (the old statement is false once a third key is inserted). Its only callers are in its own file, and they pass such a `g`.
+- `checkRefusal_facts` and `refuse_facts` carry the total inside their sixth conjunct.
+- `refuse_refusalAt` gains a first branch; `commitRefusal_refusals` gains the third insert.
+- HOST's `refuse_refusals_listing` (+3) and `_two` (=3) follow HOST-14's patch. CODEC's slot codec gains arm 2 and its vectors re-emit (CODEC-13).
+- WASTE `refuse hashes-per-refusal` moves 11.362 → 15.284 (the third insert, one shared path per window).
+
+**Flag day.** The refusals key wire gains kind 2, the refusals root of every World with a record changes, and every devnet Store re-geneses. A base whose window has records but no total, or whose total disagrees with them, is refused `kernel/refusals-counted`.
+**The price ROOT accepted in R1** (the reader's reading, K22-READER-R1). About C/16 = 1,024 members, each at its own per-member budget of 16, exhaust the World's window cap and stall refusal finality for every member until the window turns. Admission is unaffected, and each such member costs an enrollment. `refusalsFull_independent` is that World in Lean, at count 1 each: the cap binds where the per-member budget does not.
+**Critique.** R1 trades fairness for a theorem: that thousand-member flood suppresses everyone's records for a window, where R2 kept KERNEL-44's per-member shape but rested on a membership theorem that does not exist. **Meta-critique.** The brief's `total (win)` key could not be fixed width; reading `refusalKeyBytes_size`'s consumers before writing the def is what surfaced the filler. Without that read, the variable-width route would have been the default, and it would have broken CODEC's order proofs silently in another layer.

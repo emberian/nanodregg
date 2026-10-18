@@ -1673,7 +1673,14 @@ def arm (st : State D) (name : String) (ok : Bool) (msg : String) : State D :=
   `refusalBudget`, not recorded.
 * `refusals-counted`: the Host's World passes `refusalsCounted` (KERNEL-50). PLANT
   `refusals-counted-plant`: one of the founder's charges moved to another member, counts only; every
-  leaf still fits (`refusalsFits`) and `refusalsCounted` refuses it. -/
+  leaf still fits (`refusalsFits`) and `refusalsCounted` refuses it.
+* `refusals-full` (KERNEL-55 R1): the Host's World with its total at `Bounds.refusalsPerWindowMax`
+  declines `refusalsFull` a record charged to a member with no count (the cap is not the member's
+  budget); `refusals-full-control`: the Host's own World takes it. PLANT `refusals-full-plant`: the
+  record committed past the cap leaves a total that misfits `refusalsFits`. PLANT
+  `refusals-total-plant`: the total lowered by one fits, and `refusalsCounted` refuses it. The cap
+  itself is not reached through `judge`: C = 16,384 records need over a thousand enrolled members at
+  16 each, which a seed's founders cannot sign cheaply; the probe builds the World at the cap. -/
 def probeRefusals (P : Params D) (st : State D) (g : World D) : State D :=
   let X := P.ctx
   let E := P.env
@@ -1787,6 +1794,35 @@ def probeRefusals (P : Params D) (st : State D) (g : World D) : State D :=
           (refusalsFits moved.height moved.refusals.toList && !refusalsCounted E moved)
           "a moved charge passed refusalsCounted (or the plant misfit refusalsFits)"
       else failWith st "probe refusals: no member with two charges to move (the plant is blind)"
+    -- KERNEL-55 R1, the World's cap: the Host's World with its total raised to C declines a record
+    -- charged to a member with no count at all, `refusalsFull`; the same record on the Host's World is
+    -- taken and bumps the total (the control); PLANT: committed past the cap, as a kernel without the
+    -- check would, the total is C + 1 and misfits `refusalsFits`; PLANT: the total lowered by one fits
+    -- and `refusalsCounted` refuses it
+    let cur := refusalWindow w.height
+    let rFull := { refusedOf X c17 (.rejected (.missingCell o)) with member := o }
+    let rsFull := w.refusals.insert (refusalSpec E) (.total w.origin cur) (.count Bounds.refusalsPerWindowMax)
+    let wFull : World D := { w with refusals := rsFull }
+    let st := match World.refuse E wFull rFull, World.refuse E w rFull with
+      | .ok _, _ => failWith st "probe refusals: a refusal past the World's cap was recorded"
+      | .error .refusalsFull, .ok w1 =>
+          let st := meet st "refusals-full:refusalsFull"
+          let st := arm st "refusals-full-control:ok" (refusalTotal E w1 == refusalTotal E w + 1)
+            "the control refusal did not bump the World's total"
+          let over := commitRefusal E wFull rFull
+          arm st "refusals-full-plant:overflow"
+            (refusalTotal E over == Bounds.refusalsPerWindowMax + 1 && !refusalsFits over.height over.refusals.toList)
+            "the uncapped commit's total still fits (the plant is blind)"
+      | .error .refusalsFull, .error e => failWith st s!"probe refusals: the control refusal was refused {e.name}"
+      | .error e, _ => failWith st s!"probe refusals: at the World's cap the refusal was refused {e.name}, not refusalsFull"
+    let tot := refusalTotal E w
+    let rsLow := w.refusals.insert (refusalSpec E) (.total w.origin cur) (.count (tot - 1))
+    let lowered : World D := { w with refusals := rsLow }
+    let st := if 2 ≤ tot then
+        arm st "refusals-total-plant:refused"
+          (refusalsFits lowered.height lowered.refusals.toList && !refusalsCounted E lowered)
+          "a lowered total passed refusalsCounted (or the plant misfit refusalsFits)"
+      else failWith st "probe refusals: fewer than two records this window (the total plant is blind)"
     st
   | _, _ => failWith st "probe refusals: the objects were not created"
 
@@ -2511,6 +2547,8 @@ def plantedArms : List String :=
    "refusal-early-plant:refusedFinal", "refusal-early-window:ok", "refusal-rotate-stranger:notPrecommitted",
    "refusal-rotate-kept:declined", "refusal-rotate-plant:authenticated", "refusal-budget:refusalBudget",
    "refusal-forged-code:eventMismatch", "refusals-counted:counted", "refusals-counted-plant:refused",
+   "refusals-full:refusalsFull", "refusals-full-control:ok", "refusals-full-plant:overflow",
+   "refusals-total-plant:refused",
    "rows-insert:ok", "rows-keyTaken:keyTaken", "rows-aba-floor:moved", "rows-aba:stale",
    "rows-missingRow:missingRow", "rows-relationCapped:relationCapped",
    "rows-relationFull:relationFull", "rows-retract:ok", "rows-retractForbidden:retractForbidden",

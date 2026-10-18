@@ -177,26 +177,30 @@ end Leaves
 
 /-! ## The refusals' keys and leaves (KERNEL-44) -/
 
-/-- A refusals key in the digest codec's domain: its id, or its member. -/
+/-- A refusals key in the digest codec's domain: its id, its member, or (a total, KERNEL-55 R1) the
+origin it is filed under. -/
 def RefusalSlot.Fits (PD : D → Prop) : RefusalSlot D → Prop
   | .tx i => PD i
   | .count m _ => PD m
+  | .total o _ => PD o
 
-abbrev RefusalSlotWireFits (PD : D → Prop) : (s : Fin 2) → RefusalSlotF D s → Prop
+abbrev RefusalSlotWireFits (PD : D → Prop) : (s : Fin 3) → RefusalSlotF D s → Prop
   | 0 => PD
   | 1 => fun p => PD p.1 ∧ True
+  | 2 => fun p => PD p.1 ∧ True
 
 omit [Ord D] in
 theorem refusalSlotWire_lawfulOn {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc) :
     ∀ s, LawfulOn (RefusalSlotWireFits PD s) (refusalSlotWire dc s)
   | 0 => hd
   | 1 => product_lawfulOn hd u64_lawful.on
+  | 2 => product_lawfulOn hd u64_lawful.on
 
 omit [Ord D] in
 theorem refusalSlot_lawfulOn {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc) :
     LawfulOn (RefusalSlot.Fits PD) (refusalSlot dc) := by
   unfold refusalSlot
-  refine (refine_lawfulOn (choice_lawfulOn 2 (by decide) (refusalSlotWire_lawfulOn hd)) "kernel/refusal-slot"
+  refine (refine_lawfulOn (choice_lawfulOn 3 (by decide) (refusalSlotWire_lawfulOn hd)) "kernel/refusal-slot"
     ?_ ?_).mono ?_ ?_
   · intro y _; cases y <;> rfl
   · intro x y h
@@ -204,12 +208,15 @@ theorem refusalSlot_lawfulOn {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD
     match s, v, h with
     | 0, i, h => simp at h; subst h; rfl
     | 1, (m, w), h => simp at h; subst h; rfl
+    | 2, (o, w), h => simp at h; subst h; rfl
   · intro y h; cases y with
     | tx i => exact h
     | count m w => exact h.1
+    | total o w => exact h.1
   · intro y h; cases y with
     | tx i => exact h
     | count m w => exact ⟨h, trivial⟩
+    | total o w => exact ⟨h, trivial⟩
 
 /-- A refusals leaf's counters below 2^64 (what the leaf digest needs to be injective,
 `refusalDigest_inj`). -/
@@ -418,7 +425,7 @@ theorem refusalLeaf_fits_of_refusalsFits {H : Nat} {l : List (RefusalSlot D × R
   intro p hp
   have hq := List.all_eq_true.mp h p hp
   obtain ⟨k, v⟩ := p
-  cases k <;> cases v <;> simp_all [RefusalLeaf.Fits, refusalFits, Bounds.counterLimit, Bounds.refusalsPerWindow] <;>
+  cases k <;> cases v <;> simp_all [RefusalLeaf.Fits, refusalFits, Bounds.counterLimit, Bounds.refusalsPerWindow, Bounds.refusalsPerWindowMax] <;>
     omega
 
 omit [Ord D] in

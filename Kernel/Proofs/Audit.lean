@@ -115,6 +115,7 @@ theorem judge_recorded {X : Ctx D} {w w' : World D} {c : Call D} {v : Verdict D}
           exact ⟨hs, ha, rfl, hr⟩
         · cases h
         · cases h
+        · cases h
       · cases h
 
 /-! ## Stale is never recorded (KERNEL-54) -/

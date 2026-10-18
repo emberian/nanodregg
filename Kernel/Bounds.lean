@@ -61,6 +61,16 @@ def refusalDepth : Nat := 328
 /-- The authenticated, in-window refusals one member may have recorded per window of `windowMax`
 heights (KERNEL-44): a flood costs the flooder this many records per window, then `refusalBudget`. -/
 def refusalsPerWindow : Nat := 16
+/-- The authenticated, in-window refusals the World records per window, all members together
+(KERNEL-55 R1): past it a refusal is declined `refusalsFull`, a liveness cost on refusal finality
+until the window turns, never on admission (~C/16 members at their own budget exhaust it:
+`refusalsFull_independent`, the cap binds where the per-member budget does not). It bounds the refusals trie by a kernel fold theorem with
+no receive premise (`Kernel.Proofs.RefusalsBound.fold_refusals_bounded`): a record lives while
+`H < h + 2 * windowMax` at the multiples of `windowMax`, so the records of exactly three windows
+coexist (the current one and the two before), at most `3 * refusalsPerWindowMax` `tx` leaves; the
+counts are the current window's, at most one per member with a record in it, so at most
+`refusalsPerWindowMax`; and one `total`. At 16,384: 49,152 records, 16,384 counts, 1 total. -/
+def refusalsPerWindowMax : Nat := 16384
 /-- The calls one method run may return (LEDGER-5, LANG-23: LANG's `callsTy` has this arity). -/
 def callsMax : Nat := 8
 /-- How deep a tree of calls may nest below the signed call (an object's call is depth 1). -/

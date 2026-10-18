@@ -121,7 +121,8 @@ theorem refusalsOk_fits {w : World D} (hr : w.RefusalsOk E) :
     ∀ k v, w.refusalAt E k = some v → Codec.Kernel.RefusalLeaf.Fits v := by
   intro k v hk
   have hf := hr.2 k v hk
-  cases k <;> cases v <;> simp only [refusalFits, Bounds.counterLimit, Bounds.refusalsPerWindow, decide_eq_true_eq] at hf <;>
+  cases k <;> cases v <;> simp only [refusalFits, Bounds.counterLimit, Bounds.refusalsPerWindow, Bounds.refusalsPerWindowMax,
+    decide_eq_true_eq] at hf <;>
     simp only [Codec.Kernel.RefusalLeaf.Fits] <;> (try cases hf) <;> omega
 
 include hE in

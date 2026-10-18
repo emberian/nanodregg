@@ -219,6 +219,14 @@ def countsOf (h : Nat) (l : List (RefusalSlot Sim.D × RefusalLeaf Sim.D)) : Lis
     | _ => none
   cur.eraseDups.map fun m => (.count m (refusalWindow h), .count (cur.count m))
 
+/-- The total leaf a listing's records make at height `h` under origin `o` (KERNEL-55 R1's
+`refusalsCounted`): the number of records in the window of `h`, all members together, present iff
+there is one. -/
+def totalOf (h : Nat) (o : Sim.D) (l : List (RefusalSlot Sim.D × RefusalLeaf Sim.D)) :
+    List (RefusalSlot Sim.D × RefusalLeaf Sim.D) :=
+  let n := (l.map (refusedWin (h / Bounds.windowMax))).sum
+  if n = 0 then [] else [(.total o (refusalWindow h), .count n)]
+
 /-- A refusals listing a World at height `h` can hold (KERNEL-44, KERNEL-50): one to three refused
 transaction ids, each refused at a height at or just below `h + 1` and charged to one of one or two
 drawn members, and each charged member's count of its records in the current window (`refusalsFits`,
@@ -247,17 +255,25 @@ def world : G (World Sim.D) := do
   let t ← trie
   let j ← journal h
   let r ← refusals h
-  -- every recorded refusal cost a step that did not raise the height (`refusalsCounted`)
-  return { trie := t, journal := journalOf j, refusals := refusalsOf r,
-           rows := rowsOf (← rows (liveIds t)), height := h, steps := h + (r.map refusedOne).sum + (← below 5),
-           chain := ← dig, allowance := ← below (2 ^ 40), origin := ← dig }
+  let rw ← rows (liveIds t)
+  let extra ← below 5
+  let chain ← dig
+  let allowance ← below (2 ^ 40)
+  let origin ← dig
+  -- every recorded refusal cost a step that did not raise the height (`refusalsCounted`); the
+  -- window's total is filed under the origin (KERNEL-55 R1)
+  return { trie := t, journal := journalOf j, refusals := refusalsOf (r ++ totalOf h origin r),
+           rows := rowsOf rw, height := h, steps := h + (r.map refusedOne).sum + extra,
+           chain, allowance, origin }
 
 /-- `w` with one more refusal recorded, transaction `k` charged to `m` at height `w.height + 1` (in
-the current window), and the step it cost: the two inserts `commitRefusals` makes. -/
+the current window), and the step it cost: the three inserts `commitRefusals` makes (the record, the
+member's count, the World's total). -/
 def addRecord (w : World Sim.D) (k m : Sim.D) (code : Nat) : World Sim.D :=
   { w with
-    refusals := (w.refusals.insert (refusalSpec Sim.env) (.tx k) (.refused (w.height + 1) code m)).insert
-      (refusalSpec Sim.env) (.count m (refusalWindow w.height)) (.count (refusalCount Sim.env w m + 1))
+    refusals := ((w.refusals.insert (refusalSpec Sim.env) (.tx k) (.refused (w.height + 1) code m)).insert
+      (refusalSpec Sim.env) (.count m (refusalWindow w.height)) (.count (refusalCount Sim.env w m + 1))).insert
+      (refusalSpec Sim.env) (.total w.origin (refusalWindow w.height)) (.count (refusalTotal Sim.env w + 1))
     steps := w.steps + 1 }
 
 def refused : G (Refused Sim.D) := do
@@ -352,7 +368,9 @@ def worldVecs : G (List (World Sim.D)) := do
 /-- `kernel/refusals`' vectors: two drawn Worlds, then the per-window budget's boundary pair (KERNEL-44):
 a member charged exactly `Bounds.refusalsPerWindow` refusals this window, its records and its count
 (read back), and the same World charged one more (refused `kernel/refusals` by name: the count is past
-the budget). -/
+the budget); then the World cap's boundary pair (KERNEL-55 R1): a World whose window total is exactly
+`Bounds.refusalsPerWindowMax` (read back) and one past it (refused `kernel/refusals` by name). The cap
+pair is the listing check alone: whether the total is its records' is `kernel/refusals-counted`'s. -/
 def refusalsVecs : G (List (WorldWire Sim.D)) := do
   let drawn ← each 2 fun _ => toWire <$> Vectors.world
   let w ← Vectors.world
@@ -363,7 +381,13 @@ def refusalsVecs : G (List (WorldWire Sim.D)) := do
       refusals := refusalsOf (w.refusals.toList ++ (ks.take n).map (fun k => (.tx k, .refused (w.height + 1) 1 m)) ++
         [(.count m (refusalWindow w.height), .count n)])
       steps := w.steps + n }
-  return drawn ++ [toWire (at_ Bounds.refusalsPerWindow), toWire (at_ (Bounds.refusalsPerWindow + 1))]
+  let w' ← Vectors.world
+  let total (n : Nat) : World Sim.D :=
+    { w' with
+      refusals := refusalsOf (w'.refusals.toList.filter (fun p => match p.1 with | .total _ _ => false | _ => true) ++
+        [(.total w'.origin (refusalWindow w'.height), .count n)]) }
+  return drawn ++ [toWire (at_ Bounds.refusalsPerWindow), toWire (at_ (Bounds.refusalsPerWindow + 1)),
+    toWire (total Bounds.refusalsPerWindowMax), toWire (total (Bounds.refusalsPerWindowMax + 1))]
 
 /-- `kernel/steps`' vectors: two drawn Worlds, then the boundary pair over a World with no refusals
 recorded (so its records cost no steps): a step count equal to the height (read back) and one less
@@ -389,7 +413,9 @@ def disjointVecs : G (List (WorldWire Sim.D)) := do
 /-- `kernel/refusals-counted`'s vectors (KERNEL-50): two drawn Worlds, then the boundary pair: a World
 holding two refusals charged to `m` and one to `m'` this window, counted (read back), and the same
 World with one of `m`'s charges moved to `m'`, counts only, the records untouched and the sum of the
-counts unchanged (KERNEL-50 `refusalsCounted_moved`; refused `kernel/refusals-counted` by name). -/
+counts unchanged (KERNEL-50 `refusalsCounted_moved`; refused `kernel/refusals-counted` by name); and
+`w₁` with its window total one over its records (KERNEL-55 R1; refused `kernel/refusals-counted` by
+name). -/
 def countedVecs : G (List (WorldWire Sim.D)) := do
   let drawn ← each 2 fun _ => toWire <$> Vectors.world
   let w ← Vectors.world
@@ -401,7 +427,10 @@ def countedVecs : G (List (WorldWire Sim.D)) := do
     { w₁ with
       refusals := (w₁.refusals.insert (refusalSpec Sim.env) (.count m win) (.count (refusalCount Sim.env w₁ m - 1))).insert
         (refusalSpec Sim.env) (.count m' win) (.count (refusalCount Sim.env w₁ m' + 1)) }
-  return drawn ++ [toWire w₁, toWire moved]
+  let over : World Sim.D :=
+    { w₁ with
+      refusals := w₁.refusals.insert (refusalSpec Sim.env) (.total w₁.origin win) (.count (refusalTotal Sim.env w₁ + 1)) }
+  return drawn ++ [toWire w₁, toWire moved, toWire over]
 
 /-- `kernel/row-key`'s vectors: a head and a drawn row, then the key width's boundary pair: a row key of
 exactly `Bounds.keyBytesMax` (128) bytes reads back, one of 129 is refused by the codec (`pastBound` at
@@ -665,11 +694,15 @@ def sites : List Site :=
       (each 2 fun _ => do return journalOf (← journal ((← below 1000) + 3))) (fun t => text t.toList),
     site "kernel/proof" (proof (journalSpec Sim.env) Sim.dc Sim.dc) proofVecs text,
     site "kernel/refusal-slot" (refusalSlot Sim.dc)
-      (each 2 fun k => if k = 0 then do return .tx (← dig) else do return .count (← dig) (← u64)) text,
+      (each 3 fun k => match k with
+        | 0 => do return .tx (← dig) | 1 => do return .count (← dig) (← u64) | _ => do return .total (← dig) (← u64)) text,
     site "kernel/refusal-leaf" (refusalLeaf Sim.dc)
       (each 2 fun k => if k = 0 then do return .refused (← nat64) (← nat64) (← dig) else do return .count (← nat64)) text,
     site "kernel/refusal-order" (refusalsTrie Sim.env Sim.dc)
-      (each 2 fun _ => do return refusalsOf (← refusals ((← below 1000) + 3))) (fun t => text t.toList),
+      (each 2 fun _ => do
+        let h := (← below 1000) + 3
+        let r ← refusals h
+        return refusalsOf (r ++ totalOf h (← dig) r)) (fun t => text t.toList),
     site "kernel/row-key" (Codec.Kernel.rowKey Sim.dc) rowKeyVecs text,
     ⟨"kernel/row-leaf", Tag.of "kernel/row-leaf" Codec.Kernel.rowLeaf, rowLeafVecs, print Codec.Kernel.rowLeaf text⟩,
     ⟨"kernel/row-leaf-hashed", Tag.of "kernel/row-leaf-hashed" Codec.Kernel.rowLeafHashed, rowLeafHashedVecs,

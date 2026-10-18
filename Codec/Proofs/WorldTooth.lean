@@ -176,9 +176,10 @@ private theorem rx_wireFits (l : List (RefusalSlot Sim.D × RefusalLeaf Sim.D)) 
         cases p.1 <;> trivial⟩, Trie.canon_build _ 0 l hn⟩, ⟨⟨by simp [Trie.T.toList, worldMax], by simp [Trie.T.toList]⟩, Trie.canon_empty _ 0⟩,
     show 7 < 2 ^ 64 by decide, hst, trivial, show 0 < 2 ^ 64 by decide, trivial⟩
 
-/-- Member 2's `n` refusals recorded at height 7 (transaction ids 1 to `n`), and its count `n`. -/
+/-- Member 2's `n` refusals recorded at height 7 (transaction ids 1 to `n`), its count `n`, and the
+World's window total `n` under the origin 0 (KERNEL-55 R1). -/
 private abbrev atCount (n : Nat) : List (RefusalSlot Sim.D × RefusalLeaf Sim.D) :=
-  (List.range n).map (fun i => (.tx (UInt64.ofNat (i + 1)), .refused 7 3 2)) ++ [(.count 2 0, .count n)]
+  (List.range n).map (fun i => (.tx (UInt64.ofNat (i + 1)), .refused 7 3 2)) ++ [(.count 2 0, .count n), (.total 0 0, .count n)]
 
 private theorem rt_atCount1 : (rt (atCount 1)).toList = atCount 1 := by
   decide +kernel
@@ -191,9 +192,10 @@ private theorem rt_atCount17 : (rt (atCount 17)).toList = atCount 17 := by
 
 private theorem atCount_fits (n : Nat) (hn : n < 2 ^ 64) : ∀ p ∈ atCount n, RefusalLeaf.Fits p.2 := by
   intro p hp
-  simp only [atCount, List.mem_append, List.mem_map, List.mem_range, List.mem_singleton] at hp
-  rcases hp with ⟨i, -, rfl⟩ | rfl
+  simp only [atCount, List.mem_append, List.mem_map, List.mem_range, List.mem_cons, List.mem_nil_iff, or_false] at hp
+  rcases hp with ⟨i, -, rfl⟩ | rfl | rfl
   · exact ⟨by decide, by decide⟩
+  · exact hn
   · exact hn
 
 private theorem atCount_wireFits (n steps : Nat) (hn : n < 2 ^ 64) (hst : steps < 2 ^ 64)
@@ -315,23 +317,25 @@ private theorem ry_one_wireFits (H steps : Nat) (hH : H < 2 ^ 64) (hst : steps <
 private theorem journalFits_nil (H : Nat) : journalFits H (Trie.T.empty : Journal Sim.D).toList = true := by
   simp [journalFits, Trie.T.toList, ascendingNat]
 
-private theorem pair_fits (k k' : RefusalSlot Sim.D) {h c n : Nat} {m : Sim.D} (hh : h < 2 ^ 64) (hc : c < 2 ^ 64)
-    (hn : n < 2 ^ 64) : ∀ p ∈ [(k, RefusalLeaf.refused h c m), (k', RefusalLeaf.count n)], RefusalLeaf.Fits p.2 := by
+private theorem triple_fits (k k' k'' : RefusalSlot Sim.D) {h c n : Nat} {m : Sim.D} (hh : h < 2 ^ 64) (hc : c < 2 ^ 64)
+    (hn : n < 2 ^ 64) :
+    ∀ p ∈ [(k, RefusalLeaf.refused h c m), (k', RefusalLeaf.count n), (k'', RefusalLeaf.count n)], RefusalLeaf.Fits p.2 := by
   intro p hp
   simp only [List.mem_cons, List.mem_nil_iff, or_false] at hp
-  rcases hp with rfl | rfl
+  rcases hp with rfl | rfl | rfl
   · exact ⟨hh, hc⟩
+  · exact hn
   · exact hn
 
 /-- A call refused at `height + 1` (8, at height 7), the height it would have been admitted at, reads
 back (with its member's count, and the step it cost): the accepted twin of
 `world_refuses_future_refusal`. -/
 theorem world_reads_refusal_at_next_height :
-    (world Sim.env Sim.dc).decode ((worldWire Sim.env Sim.dc).bytes (rx (rt [(.tx 1, .refused 8 3 2), (.count 2 0, .count 1)]) 8)) =
-      .ok (ofWire (rx (rt [(.tx 1, .refused 8 3 2), (.count 2 0, .count 1)]) 8)) :=
+    (world Sim.env Sim.dc).decode ((worldWire Sim.env Sim.dc).bytes (rx (rt [(.tx 1, .refused 8 3 2), (.count 2 0, .count 1), (.total 0 0, .count 1)]) 8)) =
+      .ok (ofWire (rx (rt [(.tx 1, .refused 8 3 2), (.count 2 0, .count 1), (.total 0 0, .count 1)]) 8)) :=
   world_decode_wire_ok u64_lawful.on
     (rx_wireFits _ 8 (by decide) (by simp [worldMax]) (by decide) (by decide +kernel)
-      (pair_fits _ _ (by decide) (by decide) (by decide)))
+      (triple_fits _ _ _ (by decide) (by decide) (by decide)))
     journalFits_empty (by decide +kernel) (by decide +kernel) (by decide) (by decide +kernel) rowsFits_empty
     rowsHeaded_empty (rowsParented_empty _) (by decide)
 
@@ -396,11 +400,11 @@ theorem world_reads_height_eq_steps :
 counted, eight steps: seven Turns and the refusal). -/
 theorem world_reads_refused_not_journaled :
     (world Sim.env Sim.dc).decode ((worldWire Sim.env Sim.dc).bytes
-        (.empty, jt [(1, (7, 3))], rt [(.tx 2, .refused 7 3 2), (.count 2 0, .count 1)], (.empty : Rows Sim.D), 7, 8, 0, 0, 0)) =
-      .ok (ofWire (.empty, jt [(1, (7, 3))], rt [(.tx 2, .refused 7 3 2), (.count 2 0, .count 1)], (.empty : Rows Sim.D), 7, 8, 0, 0, 0)) := by
+        (.empty, jt [(1, (7, 3))], rt [(.tx 2, .refused 7 3 2), (.count 2 0, .count 1), (.total 0 0, .count 1)], (.empty : Rows Sim.D), 7, 8, 0, 0, 0)) =
+      .ok (ofWire (.empty, jt [(1, (7, 3))], rt [(.tx 2, .refused 7 3 2), (.count 2 0, .count 1), (.total 0 0, .count 1)], (.empty : Rows Sim.D), 7, 8, 0, 0, 0)) := by
   have hj := jt_wireFits [(1, (7, 3))] (by decide) (by decide) (jt_one _ _ _) (by decide)
-  have hr := rx_wireFits [(.tx 2, .refused 7 3 2), (.count 2 0, .count 1)] 8 (by decide) (by simp [worldMax]) (by decide)
-    (by decide +kernel) (pair_fits _ _ (by decide) (by decide) (by decide))
+  have hr := rx_wireFits [(.tx 2, .refused 7 3 2), (.count 2 0, .count 1), (.total 0 0, .count 1)] 8 (by decide) (by simp [worldMax]) (by decide)
+    (by decide +kernel) (triple_fits _ _ _ (by decide) (by decide) (by decide))
   exact world_decode_wire_ok u64_lawful.on
     ⟨hj.1, hj.2.1, hr.2.2.1, hr.2.2.2⟩
     (by show journalFits 7 (jt [(1, (7, 3))]).toList = true
@@ -425,31 +429,33 @@ or one dropped), and the right counts at too few steps, are refused `kernel/refu
 name, although every earlier check passes them: each count is within the budget and of the current
 window, so `kernel/refusals` admits it. -/
 
-private abbrev charged (a b : Nat) : List (RefusalSlot Sim.D × RefusalLeaf Sim.D) :=
+private abbrev charged (a b : Nat) (t : Nat := 3) : List (RefusalSlot Sim.D × RefusalLeaf Sim.D) :=
   [(.tx 1, .refused 7 3 2), (.tx 2, .refused 7 3 2), (.tx 3, .refused 7 3 5), (.count 2 0, .count a),
-   (.count 5 0, .count b)]
+   (.count 5 0, .count b), (.total 0 0, .count t)]
 
 private theorem rt_charged21 : (rt (charged 2 1)).toList = charged 2 1 := by decide +kernel
 private theorem rt_charged12 : (rt (charged 1 2)).toList = charged 1 2 := by decide +kernel
 private theorem rt_charged11 : (rt (charged 1 1)).toList = charged 1 1 := by decide +kernel
 
-private theorem charged_wireFits (a b steps : Nat) (ha : a < 2 ^ 64) (hb : b < 2 ^ 64) (hst : steps < 2 ^ 64)
-    (ht : (rt (charged a b)).toList = charged a b) : WireFits Sim.env (fun _ => True) (rx (rt (charged a b)) steps) :=
+private theorem charged_wireFits (a b steps : Nat) {t : Nat} (ha : a < 2 ^ 64) (hb : b < 2 ^ 64) (hst : steps < 2 ^ 64)
+    (htt : t < 2 ^ 64) (ht : (rt (charged a b t)).toList = charged a b t) :
+    WireFits Sim.env (fun _ => True) (rx (rt (charged a b t)) steps) :=
   rx_wireFits _ steps hst (by simp [worldMax]) (by simp [charged]) ht (by
     intro p hp
     simp only [charged, List.mem_cons, List.mem_nil_iff, or_false] at hp
-    rcases hp with rfl | rfl | rfl | rfl | rfl
+    rcases hp with rfl | rfl | rfl | rfl | rfl | rfl
     · exact ⟨by decide, by decide⟩
     · exact ⟨by decide, by decide⟩
     · exact ⟨by decide, by decide⟩
     · exact ha
-    · exact hb)
+    · exact hb
+    · exact htt)
 
 /-- The counts the history wrote read back. -/
 theorem world_reads_counted_charges :
     (world Sim.env Sim.dc).decode ((worldWire Sim.env Sim.dc).bytes (rx (rt (charged 2 1)) 10)) =
       .ok (ofWire (rx (rt (charged 2 1)) 10)) :=
-  world_decode_wire_ok u64_lawful.on (charged_wireFits 2 1 10 (by decide) (by decide) (by decide) rt_charged21)
+  world_decode_wire_ok u64_lawful.on (charged_wireFits 2 1 10 (by decide) (by decide) (by decide) (by decide) rt_charged21)
     journalFits_empty (by decide +kernel) (by decide +kernel) (by decide) (by decide +kernel) rowsFits_empty
     rowsHeaded_empty (rowsParented_empty _) (by decide)
 
@@ -458,7 +464,7 @@ records untouched and the sum of the counts unchanged, is refused `kernel/refusa
 theorem world_refuses_moved_charge :
     (world Sim.env Sim.dc).decode ((worldWire Sim.env Sim.dc).bytes (rx (rt (charged 1 2)) 10)) =
       .error (.rejected 0 "kernel/refusals-counted") :=
-  world_decode_wire_countedRefused u64_lawful.on (charged_wireFits 1 2 10 (by decide) (by decide) (by decide) rt_charged12)
+  world_decode_wire_countedRefused u64_lawful.on (charged_wireFits 1 2 10 (by decide) (by decide) (by decide) (by decide) rt_charged12)
     journalFits_empty (by decide +kernel) (by decide +kernel) (by decide) (by decide +kernel)
 
 /-- **The plant**: one of member 2's charges dropped (its budget partly reset) is refused
@@ -466,7 +472,85 @@ theorem world_refuses_moved_charge :
 theorem world_refuses_lowered_charge :
     (world Sim.env Sim.dc).decode ((worldWire Sim.env Sim.dc).bytes (rx (rt (charged 1 1)) 10)) =
       .error (.rejected 0 "kernel/refusals-counted") :=
-  world_decode_wire_countedRefused u64_lawful.on (charged_wireFits 1 1 10 (by decide) (by decide) (by decide) rt_charged11)
+  world_decode_wire_countedRefused u64_lawful.on (charged_wireFits 1 1 10 (by decide) (by decide) (by decide) (by decide) rt_charged11)
+    journalFits_empty (by decide +kernel) (by decide +kernel) (by decide) (by decide +kernel)
+
+/-! ## The World's refusals cap (KERNEL-55 R1)
+
+The window total, a `count` leaf under the third key kind `total` (origin, window), is at most
+`Bounds.refusalsPerWindowMax` (C = 16384) by `kernel/refusals`, and is its records' (all members
+together, present iff there is one) by `kernel/refusals-counted`. The cap's boundary pair is the
+listing check (`refusalsFits`) alone; the records-backed twin at C is `codec-vectors`' row (C records
+are past what `decide` should evaluate). -/
+
+/-- At the cap: a total of exactly C, of the current window, is a leaf `refusalsFits` admits. -/
+theorem refusalsFits_total_at_cap :
+    refusalsFits 7 [((.total 0 0 : RefusalSlot Sim.D), (.count Bounds.refusalsPerWindowMax : RefusalLeaf Sim.D))] = true := by
+  decide
+
+/-- **The plant**: one past the cap, a total of C + 1, is refused `kernel/refusals` by name. -/
+theorem world_refuses_total_past_cap :
+    (world Sim.env Sim.dc).decode ((worldWire Sim.env Sim.dc).bytes
+        (ry 7 (rt [(.total 0 0, .count (Bounds.refusalsPerWindowMax + 1))]) 7)) =
+      .error (.rejected 0 "kernel/refusals") :=
+  world_decode_wire_refusalsRefused u64_lawful.on (ry_one_wireFits 7 7 (by decide) (by decide) _ _ (show _ < 2 ^ 64 by decide))
+    (journalFits_nil 7) (by dsimp only [ofWire, ry]; rw [rt_one]; decide)
+
+private theorem rt_charged214 : (rt (charged 2 1 4)).toList = charged 2 1 4 := by decide +kernel
+
+/-- **The plant**: the history's counts with the window total one over its three records is refused
+`kernel/refusals-counted` by name (`kernel/refusals` admits it: 4 is within the cap);
+`world_reads_counted_charges` is its accepted twin at 3. -/
+theorem world_refuses_total_over_records :
+    (world Sim.env Sim.dc).decode ((worldWire Sim.env Sim.dc).bytes (rx (rt (charged 2 1 4)) 10)) =
+      .error (.rejected 0 "kernel/refusals-counted") :=
+  world_decode_wire_countedRefused u64_lawful.on (charged_wireFits 2 1 10 (by decide) (by decide) (by decide) (by decide) rt_charged214)
+    journalFits_empty (by decide +kernel) (by decide +kernel) (by decide) (by decide +kernel)
+
+private abbrev strayTotal : List (RefusalSlot Sim.D × RefusalLeaf Sim.D) := charged 2 1 ++ [(.total 1 0, .count 3)]
+
+private theorem rt_strayTotal : (rt strayTotal).toList = strayTotal := by decide +kernel
+
+/-- **The plant**: the history's records, counts and total, and a second total of the same window and
+count under a digest that is not the World's origin (1, where the origin is 0), is refused
+`kernel/refusals-counted` by name: `refusalsFits` admits it (the listing check reads no origin), so only
+the counted check's `o = w.origin` refuses it. `world_reads_counted_charges` is its accepted twin. -/
+theorem world_refuses_stray_total :
+    (world Sim.env Sim.dc).decode ((worldWire Sim.env Sim.dc).bytes (rx (rt strayTotal) 10)) =
+      .error (.rejected 0 "kernel/refusals-counted") :=
+  world_decode_wire_countedRefused u64_lawful.on
+    (rx_wireFits _ 10 (by decide) (by simp [worldMax]) (by decide) rt_strayTotal (by
+      intro p hp
+      simp only [strayTotal, List.cons_append, List.nil_append, List.mem_cons, List.mem_nil_iff, or_false] at hp
+      rcases hp with rfl | rfl | rfl | rfl | rfl | rfl | rfl
+      · exact ⟨by decide, by decide⟩
+      · exact ⟨by decide, by decide⟩
+      · exact ⟨by decide, by decide⟩
+      · show 2 < 2 ^ 64; decide
+      · show 1 < 2 ^ 64; decide
+      · show 3 < 2 ^ 64; decide
+      · show 3 < 2 ^ 64; decide))
+    journalFits_empty (by decide +kernel) (by decide +kernel) (by decide) (by decide +kernel)
+
+private abbrev untotalled : List (RefusalSlot Sim.D × RefusalLeaf Sim.D) := (charged 2 1).take 5
+
+private theorem rt_untotalled : (rt untotalled).toList = untotalled := by decide +kernel
+
+/-- **The plant**: the history's records and counts with no window total is refused
+`kernel/refusals-counted` by name (a window with a record holds its total). -/
+theorem world_refuses_missing_total :
+    (world Sim.env Sim.dc).decode ((worldWire Sim.env Sim.dc).bytes (rx (rt untotalled) 10)) =
+      .error (.rejected 0 "kernel/refusals-counted") :=
+  world_decode_wire_countedRefused u64_lawful.on
+    (rx_wireFits _ 10 (by decide) (by simp [worldMax]) (by decide) rt_untotalled (by
+      intro p hp
+      simp only [untotalled, List.take, List.mem_cons, List.mem_nil_iff, or_false] at hp
+      rcases hp with rfl | rfl | rfl | rfl | rfl
+      · exact ⟨by decide, by decide⟩
+      · exact ⟨by decide, by decide⟩
+      · exact ⟨by decide, by decide⟩
+      · show 2 < 2 ^ 64; decide
+      · show 1 < 2 ^ 64; decide))
     journalFits_empty (by decide +kernel) (by decide +kernel) (by decide) (by decide +kernel)
 
 /-- **The plant**: the history's counts at nine steps (three refusals and height 7 need ten; the height
@@ -474,7 +558,7 @@ alone, which `kernel/steps` checks, is within nine) are refused `kernel/refusals
 theorem world_refuses_records_past_steps :
     (world Sim.env Sim.dc).decode ((worldWire Sim.env Sim.dc).bytes (rx (rt (charged 2 1)) 9)) =
       .error (.rejected 0 "kernel/refusals-counted") :=
-  world_decode_wire_countedRefused u64_lawful.on (charged_wireFits 2 1 9 (by decide) (by decide) (by decide) rt_charged21)
+  world_decode_wire_countedRefused u64_lawful.on (charged_wireFits 2 1 9 (by decide) (by decide) (by decide) (by decide) rt_charged21)
     journalFits_empty (by decide +kernel) (by decide +kernel) (by decide) (by decide +kernel)
 
 /-! ## The rows' teeth (KERNEL-46/48, CODEC-33)

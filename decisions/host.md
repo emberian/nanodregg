@@ -2590,3 +2590,19 @@ Until HOST-57 lands the derivation as code, `Cadence.deployed.worldBytesMax` is 
 - Taken: three texts that claimed a derived byte bound now say weight bound (Bounds, Exit, Units); the genesis corollary; cv 01a150ed-7bf7 for imported and joined premises.
 
 **Meta-critique.** KERNEL-55's import wedge was found by reading what `CarryFits` bounds (`< 2^64`), not by a failure. The join path had the same hole and nobody named it until the check needed a home: any path that creates a Store from a World someone else made is an import.
+
+## HOST-58 · a recorded refusal adds three refusals entries (KERNEL-55 R1's World total), priced at 96 bytes of its step (2026-10-19, HOST-14; Host half of KERNEL-22's R1 `kernel!`)
+
+**The change.** R1 adds a third refusals key per recorded refusal: the World's window total (`.total w.origin win`), which carries the kernel-wide cap `refusalsPerWindowMax`. `World.refuse` now inserts three keys (tx, the member's count, the World's total).
+- `refuse_refusals_listing` goes from `+ 2` to `+ 3`.
+- The tooth `refuse_refusals_listing_two` is renamed `refuse_refusals_listing_three` and states `= 3`: three distinct keys from an empty trie, so `+ 3` is attained.
+- `stepWeight` prices a refusal step at 96, not 64. `record_steps_le` proves a refusal's step is at least 96 bytes: its txId and member (32 each) and the 32-byte roots digest beside it. The step is at least 121 bytes in fact (three nat64 fields, the call bytes, the tag).
+- `fold_listing` and `openWith_listing_lt` keep their statements: every listing entry is still paid by 32 bytes of what the open read.
+
+**Alternative not taken.** KERNEL-22's `refusals_length_le` (≤ 4C + 1, no premise) could bound the refusals listing on its own. Re-pricing keeps one uniform, premise-free argument. That bound is the fallback if a refusal step ever carries fewer than 3 × 32 bytes.
+
+**HOST-50/HOST-46's W1 ("no closed instance") is unchanged**: the tooth is still stated over any World with empty refusals, not a closed instance.
+
+**Law-6 read (second agent, read-only, with the DISJUNCT check): LAND-WITH-FIXES.** No disjunct and no vacuity: the premises are satisfiable because `refuse` succeeds on an empty trie. `= 3` is attained (three different `RefusalSlot` constructors). The 96 is justified with slack. The 2^24 arithmetic still consumes the refusal term through `record_steps_le`. Taken: the rename (`_two` → `_three`).
+
+**Flag day.** None of Host's own. It rides R1's `kernel!` re-genesis.

@@ -63,7 +63,8 @@ def rejectNames : List String :=
    "bornTouched", "missingCell", "romWrite", "romRetire", "appendOnly", "valueMalformed", "belowFloor",
    "notConserved", "floorNotConserved", "refusedFinal", "refusalBudget", "keyTaken", "relationFull",
    "relationCapped", "rowParentUnpinned", "orphanRow", "rowsRemain", "keyWidth", "noRelation",
-   "retractForbidden", "declareLate", "rangeTooLong", "duplicateRow", "rowShape", "missingRow"]
+   "retractForbidden", "declareLate", "rangeTooLong", "duplicateRow", "rowShape", "missingRow",
+   "refusalsFull"]
 
 /-- A verdict's wire name. -/
 def Verdict.name : Verdict D → String
@@ -136,7 +137,8 @@ def authenticated (X : Ctx D) (w : World D) (c : Call D) : Bool := authenticated
 
 /-- What the Host does with a signed call (KERNEL-44): admitted; refused and RECORDED (final within
 the window: `submit_refused_final`); or refused and NOT recorded (`declined`: stale (KERNEL-54), unauthenticated, early,
-or over the member's `refusalBudget`, which is the verdict then). None of these is final by a
+or over the member's `refusalBudget`, or the World's `refusalsFull` (KERNEL-55 R1), which is the
+verdict then). None of these is final by a
 record; a stale whose pin the fold has moved past (BEHIND) is final by the fold instead
 (`stale_behind_forever`), and an AHEAD stale is not final. -/
 inductive Outcome (D : Type) [Ord D]
@@ -157,6 +159,7 @@ def judgeBy (X : Ctx D) (w : World D) (c : Call D) (auth : Verdict D → Bool) :
         match World.refuse X.env w (refusedOf X c v) with
         | .ok w' => .recorded v (refusedOf X c v) w'
         | .error .refusalBudget => .declined (.rejected .refusalBudget)
+        | .error .refusalsFull => .declined (.rejected .refusalsFull)
         | .error _ => .declined v
       else .declined v
 

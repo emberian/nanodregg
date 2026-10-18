@@ -362,6 +362,8 @@ theorem judge_windowedIn {X : Ctx D} {S : List (Kernel.Step D)} {w w' : World D}
   rw [refuse_refusalAt href] at hk
   split at hk
   · rename_i he; cases he
+  split at hk
+  · rename_i he; cases he
   · split at hk
     · rename_i _ he
       injection he with he

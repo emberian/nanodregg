@@ -11,8 +11,8 @@ status must say whether the verdict is final. This function is the one rule; `Ho
   (`codeName`), final; this is the resubmit and the A→B→A case, answered without re-deriving;
 * the call's window has passed (`validUntil ≤ height`): `refused NAME`, final by height (no later
   height admits it);
-* otherwise `declined NAME`, NOT final: an unauthenticated code, an early `outsideWindow`, or
-  `refusalBudget`. Nothing is recorded, and the same bytes may still be admitted later.
+* otherwise `declined NAME`, NOT final: an unauthenticated code, an early `outsideWindow`,
+  `refusalBudget`, or the World's `refusalsFull` (KERNEL-55 R1). Nothing is recorded, and the same bytes may still be admitted later.
 
 Finality is read from the World (the record, the height), not from the verdict's name. A resubmit of
 a recorded call leaves `judge` as `declined (refusedFinal code)`, and a late call can be refused by any

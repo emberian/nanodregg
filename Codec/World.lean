@@ -135,25 +135,38 @@ def journalTrie [DecidableEq D] (E : Env D) (dc : Stream D) : Stream (Journal D)
 
 /-! ## The refusals (KERNEL-44, KERNEL-47)
 
-The third trie: a refused transaction id (`tx`) holding the height and code it was refused at, or a
-member's refusal count for one window (`count`). Written as its listing and read back by `build`, as
+The third trie: a refused transaction id (`tx`) holding the height and code it was refused at, a
+member's refusal count for one window (`count`), or the World's refusal count for one window, all
+members together (`total`, KERNEL-55 R1, a `count` leaf under the World's origin; at most
+`Bounds.refusalsPerWindowMax`, which `kernel/refusals` checks). Written as its listing and read back by `build`, as
 the other two (`kernel/refusal-order`); which key holds which leaf, and the window facts, are the
 World's `kernel/refusals` refusal (KERNEL's `refusalsFits`, which refuses a misfit pairing). -/
 
-abbrev RefusalSlotF (D : Type) : Fin 2 → Type
+abbrev RefusalSlotF (D : Type) : Fin 3 → Type
   | 0 => D
   | 1 => D × UInt64
+  | 2 => D × UInt64
 
-def refusalSlotWire (dc : Stream D) : (s : Fin 2) → Stream (RefusalSlotF D s)
+def refusalSlotWire (dc : Stream D) : (s : Fin 3) → Stream (RefusalSlotF D s)
   | 0 => dc
   | 1 => product dc u64
+  | 2 => product dc u64
 
-/-- A refusals key: its kind (0 a refused transaction id, 1 a member's window count, as in
-`refusalKeyBytes`), then the id, or the member and the window. -/
+/-- A refusals key: its kind (0 a refused transaction id, 1 a member's window count, 2 the World's
+window total, as in `refusalKeyBytes`), then the id, or the member and the window, or the origin
+and the window. The kind byte leads the key bytes, so a listing holds every `tx`, then every
+`count`, then the `total` (`Codec.Proofs.SlotOrder.refusalKeyBytes_kind_lt`). -/
 def refusalSlot (dc : Stream D) : Stream (RefusalSlot D) :=
-  refine "kernel/refusal-slot" (choice 2 (refusalSlotWire dc))
-    (fun | ⟨0, i⟩ => some (.tx i) | ⟨1, (m, w)⟩ => some (.count m w))
-    (fun | .tx i => ⟨0, i⟩ | .count m w => ⟨1, (m, w)⟩)
+  refine "kernel/refusal-slot" (choice 3 (refusalSlotWire dc))
+    (fun | ⟨0, i⟩ => some (.tx i) | ⟨1, (m, w)⟩ => some (.count m w) | ⟨2, (o, w)⟩ => some (.total o w))
+    (fun | .tx i => ⟨0, i⟩ | .count m w => ⟨1, (m, w)⟩ | .total o w => ⟨2, (o, w)⟩)
+
+/-- A refusals key's kind: the wire's choice tag and the key bytes' first byte (`refusalKeyBytes`): 0 a
+refused transaction id, 1 a member's window count, 2 the World's window total (KERNEL-55 R1). -/
+def refusalKind {K : Type} : RefusalSlot K → Nat
+  | .tx _ => 0
+  | .count _ _ => 1
+  | .total _ _ => 2
 
 abbrev RefusalLeafF (D : Type) : Fin 2 → Type
   | 0 => Nat × Nat × D
@@ -219,7 +232,8 @@ def journalWire [DecidableEq D] (E : Env D) (dc : Stream D) : Stream (WorldWire 
 
 /-- The World's contents, refused by name unless its refusals are the window's (KERNEL-47's
 `refusalsFits`: each key holds the leaf of its kind, refused calls inside their kept window, counts for
-the current window and within `Bounds.refusalsPerWindow`). -/
+the current window and within `Bounds.refusalsPerWindow`, the window total (KERNEL-55 R1) for the
+current window and within `Bounds.refusalsPerWindowMax`). -/
 def refusalsWire [DecidableEq D] (E : Env D) (dc : Stream D) : Stream (WorldWire D) :=
   refine "kernel/refusals" (journalWire E dc)
     (fun x => if refusalsFits (ofWire x).height (ofWire x).refusals.toList then some x else none) id
@@ -240,8 +254,11 @@ def stepsWire [DecidableEq D] (E : Env D) (dc : Stream D) : Stream (WorldWire D)
 
 /-- The World's contents, refused by name unless its refusal counts are its records' (KERNEL-50's
 `refusalsCounted`: records plus height at most the step count, every count leaf the tally of its
-member's records this window, every member with a record this window counted; a fold never reaches
-another World, `fold_refusalsCounted`), so a decoded base cannot hold a lowered or moved charge. -/
+member's records this window, every member with a record this window counted; KERNEL-55 R1: the window
+total filed under the World's origin, equal to the window's records and present when one is, and each of
+the two windows before holding at most `Bounds.refusalsPerWindowMax` records; a fold never reaches
+another World, `fold_refusalsCounted`), so a decoded base cannot hold a lowered or moved charge, nor a
+lowered, raised or stray total. -/
 def countedWire [DecidableEq D] (E : Env D) (dc : Stream D) : Stream (WorldWire D) :=
   refine "kernel/refusals-counted" (stepsWire E dc)
     (fun x => if refusalsCounted E (ofWire x) then some x else none) id

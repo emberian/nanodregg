@@ -218,6 +218,48 @@ theorem refusalOrder_refuses {b : ByteArray} {i j : Nat} {l : List (RefusalSlot 
     (refusalsTrie env digestCodec).get b i = .error (.rejected i "kernel/refusal-order") :=
   refusalsTrie_get_refused Receive.deployed_lawful h ho
 
+private theorem refusalList_get (l : List (RefusalSlot Digest × RefusalLeaf Digest))
+    (hf : l.length ≤ worldMax ∧ ∀ p ∈ l, RefusalSlot.Fits (fun _ => True) p.1 ∧ RefusalLeaf.WireFits (fun _ => True) p.2) :
+    (rawList worldMax (product (refusalSlot digestCodec) (refusalLeaf digestCodec))).get
+        ((rawList worldMax (product (refusalSlot digestCodec) (refusalLeaf digestCodec))).bytes l) 0 =
+      .ok (l, ((rawList worldMax (product (refusalSlot digestCodec) (refusalLeaf digestCodec))).bytes l).size) := by
+  simpa using (rawList_lawfulOn (product_lawfulOn (refusalSlot_lawfulOn digest_lawful.on)
+    (refusalLeaf_lawfulOn digest_lawful.on)) worldMax (by decide)).get_of_occurs l _ 0 hf (occursAt_self _)
+
+/-- The two keys of the three-kind teeth: a member's count and the World's total, one window, one digest. -/
+private abbrev cnt : RefusalSlot Digest := .count lo 0
+private abbrev tot : RefusalSlot Digest := .total lo 0
+
+/-- **Tooth (KERNEL-55 R1).** The World's total listed before a member's count is refused
+`kernel/refusal-order` by name, though the two keys share their digest and window: the kind byte
+(2 against 1) orders them. -/
+theorem refusals_refuses_total_before_count :
+    (refusalsTrie env digestCodec).decode
+        ((rawList worldMax (product (refusalSlot digestCodec) (refusalLeaf digestCodec))).bytes
+          [(tot, .count 1), (cnt, .count 1)]) =
+      .error (.rejected 0 "kernel/refusal-order") := by
+  have hg := refusalList_get [(tot, .count 1), (cnt, .count 1)] ⟨by decide, by simp [RefusalSlot.Fits, RefusalLeaf.WireFits]⟩
+  have ho : ¬ [(tot, (.count 1 : RefusalLeaf Digest)), (cnt, .count 1)].Pairwise (RefusalBefore env) := by
+    intro hp
+    have h1 : RefusalBefore env (tot, .count 1) (cnt, .count 1) :=
+      (List.pairwise_cons.mp hp).1 _ (List.mem_singleton_self _)
+    have h2 := refusalKeyBytes_kind_lt env (k := cnt) (k' := tot) (by decide)
+    unfold RefusalBefore at h1
+    rw [Std.OrientedCmp.eq_swap (cmp := compare), h2] at h1; cases h1
+  unfold Stream.decode
+  rw [refusalOrder_refuses hg ho]
+
+/-- The same two keys, the count first, are read back. -/
+theorem refusals_reads_count_before_total :
+    (refusalsTrie env digestCodec).decode
+        ((rawList worldMax (product (refusalSlot digestCodec) (refusalLeaf digestCodec))).bytes
+          [(cnt, .count 1), (tot, .count 1)]) =
+      .ok (Trie.build (refusalSpec env) (refusalSpec env).depth 0 [(cnt, .count 1), (tot, .count 1)]) := by
+  have hg := refusalList_get [(cnt, .count 1), (tot, .count 1)] ⟨by decide, by simp [RefusalSlot.Fits, RefusalLeaf.WireFits]⟩
+  unfold Stream.decode
+  rw [(refusalOrder_iff hg).mpr (List.pairwise_pair.mpr (refusalKeyBytes_kind_lt env (by decide)))]
+  simp
+
 /-! ## The rows (KERNEL-46/48) -/
 
 /-- The deployed digest codec writes the deployed `Env`'s bytes. -/

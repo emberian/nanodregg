@@ -23,8 +23,8 @@
 * `openWith_codecFits` (cv 01a14e33-3911) — every World the deployed open returns is in the World
   codec's domain, no premise: `Kept` carries the refusals (`RefusalsOk`, disjoint from the journal)
   and the step counter as well, and `openWith_listing_lt` bounds the cells, rows and refusals
-  listings together (a recorded refusal adds at most two refusals entries, `refuse_refusals_listing`,
-  paid for by 64 bytes of its record; an admission only prunes them, `admit_refusals_listing`). So
+  listings together (a recorded refusal adds at most three refusals entries, `refuse_refusals_listing`,
+  paid for by 96 bytes of its step; an admission only prunes them, `admit_refusals_listing`). So
   the next seal's base reads back with no premise (`sealed_opens_deployed`);
 * `openWith_exportFile_ok` (HOST-28) — `host export` refuses no World the deployed open returns,
   no premise: the base World is in the World codec's domain because the codec read it
@@ -673,10 +673,10 @@ theorem admit_refusals_listing {w w' : World D} {t : Turn D} (hc : w.RefusalsCan
     exact List.length_filter_le _ _
   · exact Nat.le_refl _
 
-/-- (ii''') **A recorded refusal adds at most two refusals entries**: the transaction's leaf and the
-member's window count (`commitRefusals`, two inserts). -/
+/-- (ii''') **A recorded refusal adds at most three refusals entries**: the transaction's leaf, the
+member's window count and the World's window total (`commitRefusals`, three inserts; KERNEL-55 R1). -/
 theorem refuse_refusals_listing {w w' : World D} {r : Refused D} (hc : w.RefusalsCanon X.env)
-    (h : World.refuse X.env w r = .ok w') : w'.refusals.toList.length ≤ w.refusals.toList.length + 2 := by
+    (h : World.refuse X.env w r = .ok w') : w'.refusals.toList.length ≤ w.refusals.toList.length + 3 := by
   obtain ⟨_, rfl⟩ := refuse_ok h
   rw [commitRefusal_refusals]
   have hr1 := Trie.routed_insert (refusalSpec X.env) (.tx r.txId) (.refused (w.height + 1) r.code r.member) hc.1
@@ -687,14 +687,24 @@ theorem refuse_refusals_listing {w w' : World D} {r : Refused D} (hc : w.Refusal
   have f2 := List.length_filter_le (fun q : RefusalSlot D × RefusalLeaf D =>
     decide (q.1 ≠ RefusalSlot.count r.member (refusalWindow w.height)))
     (w.refusals.insert (refusalSpec X.env) (.tx r.txId) (.refused (w.height + 1) r.code r.member)).toList
-  simp only [List.length_append, List.length_singleton] at p1 p2
+  have hr2 := Trie.routed_insert (refusalSpec X.env) (.count r.member (refusalWindow w.height))
+    (.count (refusalCount X.env w r.member + 1)) hr1
+  have p3 := (Trie.toList_insert_perm (refusalSpec X.env) hr2 (.total w.origin (refusalWindow w.height))
+    (.count (refusalTotal X.env w + 1))).length_eq
+  have f3 := List.length_filter_le (fun q : RefusalSlot D × RefusalLeaf D =>
+    decide (q.1 ≠ RefusalSlot.total w.origin (refusalWindow w.height)))
+    ((w.refusals.insert (refusalSpec X.env) (.tx r.txId) (.refused (w.height + 1) r.code r.member)).insert
+      (refusalSpec X.env) (.count r.member (refusalWindow w.height)) (.count (refusalCount X.env w r.member + 1))).toList
+  simp only [List.length_append, List.length_singleton] at p1 p2 p3
   omega
 
-/-- A step's log weight: a Turn's (`Turn.logWeight`); a recorded refusal's two refusals entries,
-32 bytes each of its record (`record_steps_le`: a refusal writes its transaction id and member). -/
+/-- A step's log weight: a Turn's (`Turn.logWeight`); a recorded refusal's three refusals entries,
+32 bytes each of its step (`record_steps_le`: a refusal's record holds its transaction id and member,
+and the step carries the 32-byte roots digest beside it; KERNEL-55 R1's third entry, the World's
+window total, is paid from that digest's bytes). -/
 private def stepWeight : Step D → Nat
   | .turn t => t.logWeight
-  | .refusal _ => 64
+  | .refusal _ => 96
 
 /-- The three listings a fold reaches, 32 bytes per entry, grow by at most the steps' weights. -/
 theorem fold_listing : ∀ {w w' : World D} {l : List (Step D)}, Kept w →
@@ -722,7 +732,8 @@ theorem fold_listing : ∀ {w w' : World D} {l : List (Step D)}, Kept w →
       omega
 
 /-- (iii) **A record's bytes are at least the weight of its steps**: a Turn's log weight
-(`turn_size_logWeight`), a refusal's 64 (its transaction id and member digests). -/
+(`turn_size_logWeight`), a refusal's 96 (its transaction id and member digests and the roots digest
+beside it). -/
 theorem record_steps_le {r : ByteArray} {ps : List (Step D × D)}
     (h : (Record.codec Codec.Deployed.digestCodec).decode r = .ok ps) :
     ((ps.map Prod.fst).map stepWeight).sum ≤ r.size := by
@@ -744,7 +755,7 @@ theorem record_steps_le {r : ByteArray} {ps : List (Step D × D)}
         rw [Codec.Kernel.turn_size_logWeight (fun _ => rfl)]
         omega
       | refusal r =>
-        show 64 ≤ (1 + (Codec.Kernel.refused Codec.Deployed.digestCodec).size r) + _
+        show 96 ≤ (1 + (Codec.Kernel.refused Codec.Deployed.digestCodec).size r) + _
         have e : ∀ d : Codec.Digest, Codec.Deployed.digestCodec.size d = 32 := fun _ => rfl
         simp only [Codec.Kernel.refused, Codec.Stream.refine, Codec.Stream.product, e]
         omega) ps

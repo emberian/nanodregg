@@ -182,27 +182,18 @@ omit [DecidableEq D] in
 /-- A refusals key's bytes determine it (a kind byte, a digest of fixed size, eight bytes). -/
 theorem refusalKeyBytes_inj {k k' : RefusalSlot D} (h : refusalKeyBytes E k = refusalKeyBytes E k') : k = k' := by
   have hsz : ∀ d : D, (E.bytes d).size = n := hE.size
-  cases k <;> cases k' <;> simp only [refusalKeyBytes, Nanodregg.Codec.Stream.nat64_bytes] at h
-  · obtain ⟨h1, -⟩ := bytes_append_inj h (by simp [hsz])
-    obtain ⟨-, h2⟩ := bytes_append_inj h1 rfl
-    rw [hE.bytes_inj h2]
-  · obtain ⟨h1, -⟩ := bytes_append_inj h (by simp [hsz])
-    obtain ⟨h0, -⟩ := bytes_append_inj h1 rfl
-    have := congrArg (fun z : ByteArray => z.data.toList) h0
-    simp at this
-  · obtain ⟨h1, -⟩ := bytes_append_inj h (by simp [hsz])
-    obtain ⟨h0, -⟩ := bytes_append_inj h1 rfl
-    have := congrArg (fun z : ByteArray => z.data.toList) h0
-    simp at this
-  · obtain ⟨h1, hw⟩ := bytes_append_inj h (by simp [hsz])
-    obtain ⟨-, hm⟩ := bytes_append_inj h1 rfl
+  cases k <;> cases k' <;> simp only [refusalKeyBytes, Nanodregg.Codec.Stream.nat64_bytes] at h <;>
+    obtain ⟨h1, hw⟩ := bytes_append_inj h (by simp [hsz]) <;>
+    obtain ⟨h0, hm⟩ := bytes_append_inj h1 rfl <;>
+    (try (have := congrArg (fun z : ByteArray => z.data.toList) h0; simp at this; done)) <;>
+    (try (rw [hE.bytes_inj hm]; done)) <;>
     rw [hE.bytes_inj hm, Nanodregg.Codec.Stream.bytes_injective Nanodregg.Codec.Stream.u64_lawful hw]
 
 include hE in
 omit [DecidableEq D] in
 /-- **The refusals trie's bits tell any two keys apart within its depth** (KERNEL-47 amendment 4):
-no premise but a lawful `Env`. A refused id and a count never share a route (the kind byte), two
-counts differ in their member or their window's eight bytes. -/
+no premise but a lawful `Env`. A refused id, a count and a total never share a route (the kind
+byte), two counts (or two totals) differ in their digest or their window's eight bytes. -/
 theorem refusals_separate : Trie.Separates (refusalSpec E) := by
   have hn := hE.n_le
   intro k k' hne

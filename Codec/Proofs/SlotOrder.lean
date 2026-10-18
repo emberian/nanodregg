@@ -203,6 +203,15 @@ theorem bitLt_refusalSpec_iff {E : Env D} {n : Nat} (hE : E.Lawful n) (k k' : Re
     exact ⟨i, Nat.zero_le i, by show i < Bounds.refusalDepth; unfold Bounds.refusalDepth; omega,
       fun j _ hj => hpre j hj, h1, h2⟩
 
+omit [Ord D] [DecidableEq D] in
+/-- **The kind leads the refusals' key order** (KERNEL-55 R1's three kinds): a key of a lower kind is
+below one of a higher kind whatever their digests and windows, at any `Env` (the kind byte is byte 0).
+So a canonical refusals listing holds its `tx` keys, then its `count` keys, then its `total`. -/
+theorem refusalKeyBytes_kind_lt (E : Env D) {k k' : RefusalSlot D} (h : refusalKind k < refusalKind k') :
+    compare (refusalKeyBytes E k).data (refusalKeyBytes E k').data = .lt := by
+  cases k <;> cases k' <;> simp only [refusalKind] at h <;> (try omega) <;>
+    simp [refusalKeyBytes, Array.compare_eq_compare_toList] <;> rfl
+
 /-- The refusals' key order, in bytes. -/
 def RefusalBefore (E : Env D) (p q : RefusalSlot D × RefusalLeaf D) : Prop :=
   compare (refusalKeyBytes E p.1).data (refusalKeyBytes E q.1).data = .lt

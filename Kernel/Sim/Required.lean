@@ -207,12 +207,14 @@ def admit (E : Env D) (w : World D) (t : Turn D) (w' : World D) : Except String 
   pure { cells := nc, nullifiers := nn, journal := insertReq JS w.journal j1 t.txId + fresh JS j2 j1,
          rows := nr, refusals := fresh (refusalSpec E) w'.refusals w.refusals, roots := emptyRoots w' }
 
-/-- **What recording a refusal `w → w'` requires**: its two inserts (the transaction's leaf, then the
-member's window count, `commitRefusals`) and the head's empty digest. -/
+/-- **What recording a refusal `w → w'` requires**: its three inserts (the transaction's leaf, the
+member's window count, then the World's window total, `commitRefusals`; KERNEL-55 R1) and the head's
+empty digest. -/
 def refuse (E : Env D) (w : World D) (r : Refused D) (w' : World D) : Except String Nat := do
   let RS := refusalSpec E
   let (t, n) := applyAll RS (fun k => (w'.refusals.get RS k).getD (.count 0)) w.refusals
-    [.ins (.tx r.txId), .ins (.count r.member (refusalWindow w.height))]
+    [.ins (.tx r.txId), .ins (.count r.member (refusalWindow w.height)),
+     .ins (.total w.origin (refusalWindow w.height))]
   unless t.hashOf RS == w'.refusalsRoot E do throw "the refusal's inserts do not reach the recorded refusals root"
   pure (n + emptyRoots w')
 

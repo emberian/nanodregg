@@ -112,7 +112,7 @@ inductive Status
   /-- `submit` only: refused by name and NOT recorded, so NOT final (PROTOCOL-41, KERNEL-47
   amendment 7). The payload is the name. The call was not authenticated for this World (an
   unauthenticated code), or its window has not opened (an early `outsideWindow`), or its member's
-  refusals this window are spent (`refusalBudget`). The same bytes may still be admitted later (a
+  refusals this window are spent (`refusalBudget`), or the World's are (`refusalsFull`, KERNEL-55 R1). The same bytes may still be admitted later (a
   call signed with the precommitted next key is `unknownKey` until the rotate, and admissible after it),
   so the attempt stays open. A `refused` reply is the final one: the refusal is recorded, or was
   recorded before, or the call's window has passed -/

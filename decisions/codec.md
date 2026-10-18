@@ -1517,3 +1517,47 @@ reinterpreted); re-genesis.
 other would be a twin. The guard is structural: both refine the one `RowLeafF` through the one `rowLeafOfWire`, so a new
 field must be added to both wires to type-check. The varint makes weight ≥ bytes false for versions at or past 2^56
 (nine and ten bytes); the bound that holds is `varint64_size_le`, and HOST's base rows measure the actual.
+
+## CODEC-38 · The World's refusals total on the wire: a third refusals key kind, the cap's boundary pair (KERNEL-55 part 2, R1, with KERNEL-22; CODEC-13, 2026-10-19)
+
+**Shape.** KERNEL-22's R1 adds `RefusalSlot.total (origin) (win)`, key bytes `[2] ‖ origin ‖ u64 win`, leafed by the
+existing `count n`. `kernel/refusal-slot` becomes `choice 3`: arm 2 = `product dc u64`, the same body as a member's
+count (arm 1), so the wire key is the key bytes' kind byte then the same fixed-width body. No leaf kind is added
+(`kernel/refusal-leaf` is unchanged, its tag and rows stay as they are).
+- `RefusalSlot.Fits`, `RefusalSlotWireFits`, `refusalSlotWire_lawfulOn` and `refusalSlot_lawfulOn` take the third
+  arm. `refusalLeaf_fits_of_refusalsFits` takes `Bounds.refusalsPerWindowMax` into its simp set, because `refusalFits`
+  now bounds a total by it.
+- Canonicity of the three-kind order: `refusalKeyBytes_kind_lt` (SlotOrder) says a key of a lower kind sorts below
+  one of a higher kind at any `Env`, whatever the digests and windows, so a canonical listing holds `tx`, then
+  `count`, then the `total`. The order theorem `refusalOrder_iff` is unchanged: it is stated over `refusalKeyBytes`
+  and holds for the third kind because `refusalKeyBytes_size` is still `1 + n + 8`.
+- Teeth. In TrieOrderDeployed (deployed digest): `refusals_refuses_total_before_count`, where a total listed
+  before a count with the SAME digest and window is refused `kernel/refusal-order` by name (only the kind byte
+  orders them), and `refusals_reads_count_before_total`, the accepted twin. In WorldTooth (Sim):
+  `refusalsFits_total_at_cap` (a total of C = 16384 passes the listing check), `world_refuses_total_past_cap`
+  (C + 1 is refused `kernel/refusals`), `world_refuses_total_over_records` (a total of 4 over 3 records is refused
+  `kernel/refusals-counted`, though `kernel/refusals` admits it), `world_refuses_missing_total` (records this
+  window with no total are refused `kernel/refusals-counted`) and `world_refuses_stray_total` (a second total
+  under a digest other than the origin, which `refusalsFits` admits because it reads no origin, is refused
+  `kernel/refusals-counted`). Between them the three counted teeth guard each clause of the total arm: the
+  count, the presence and the origin. Not toothed by the codec: the clauses capping the two previous windows at
+  C records each. A plant there needs C + 1 records; `decide` should not hold that, and no vector row should. Every accepted WorldTooth World with a record this
+  window now carries its total (`atCount`, `charged`, and the next-height and not-journaled twins).
+
+**Vectors.** The `kernel/refusals` site gains the cap's boundary pair: a drawn World whose window total is exactly
+`Bounds.refusalsPerWindowMax` is read back, and the same World at C + 1 is refused `kernel/refusals` by name.
+`kernel/refusals-counted` gains a row: the counted World with its total one over its records, refused by name.
+`kernel/refusal-slot` draws all three kinds, and `kernel/refusal-order` and every drawn World carry the total
+their records make (`totalOf`; `addRecord` makes `commitRefusals`' three inserts). Re-pinned because their tags
+moved (each holds `refusalSlot`): refusal-slot, refusal-order, journal, refusals, refusals-disjoint, steps,
+refusals-counted, rows, rows-headed, rows-parented, world-budget, host/base/index-count. 228 vectors over 54 sites.
+`codec-vectors --write` into an empty file reproduces the table byte for byte. The carried sites hold no refusals,
+so they did not move. No Rust table carries a World tag, and the five emits check unchanged.
+
+**What is not a vector.** A records-backed World at the cap (C records, C counts) is outside what a vector row or
+`decide` should hold. The cap's pair is therefore the listing check alone; that the total equals its records is
+`kernel/refusals-counted`'s, toothed at small counts.
+
+**Flag day (with KERNEL-22's `kernel!`).** Moved: the refusal-slot shape, and with it every World and base tag.
+Every Store stamped with the old World tag refuses to open by its stamp, and the chain re-geneses. The carried
+shape is unchanged.

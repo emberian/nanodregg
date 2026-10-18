@@ -3,8 +3,10 @@
 
 A member's window count is a cache of its records: `checkRefusal` reads it in one lookup instead of
 scanning. `World.CountedOk` says the cache is exact: every record cost a step that did not raise the
-height (records + height ≤ steps), and every member's count for the current window is the number of
-its records this window. Every reached World holds it (`fold_countedOk`, `reach_countedOk`,
+height (records + height ≤ steps), every member's count for the current window is the number of
+its records this window, the World's total (KERNEL-55 R1) is the number of all records this window
+and sits under the World's origin, and the two windows before hold at most
+`Bounds.refusalsPerWindowMax` records each (what `Kernel.Proofs.RefusalsBound` reads). Every reached World holds it (`fold_countedOk`, `reach_countedOk`,
 `deployed_reach_refusalsCounted`), and `refusalsCounted` decides it (`refusalsCounted_iff`), so
 CODEC's `kernel/refusals-counted` refuses a base holding a count no history produces. The tooth
 `refusalsCounted_moved` (and `refusalsCounted_moved_exists`): a World with one member's charge moved
@@ -57,6 +59,17 @@ theorem sumN_eq_zero_of {α : Type} (g : α → Nat) : ∀ {l : List α}, (∀ x
       rw [h y (List.mem_cons_self ..), sumN_eq_zero_of g (fun x hx => h x (List.mem_cons_of_mem _ hx))]
 
 omit [Ord D] in
+/-- An insert at a key whose entries a sum ignores moves the sum not at all. -/
+theorem sumN_insert_zero {E : Env D} (g : RefusalSlot D × RefusalLeaf D → Nat) {t : Refusals D}
+    (hr : Trie.Routed (refusalSpec E) 0 t) (k : RefusalSlot D) (v : RefusalLeaf D) (hg : ∀ v, g (k, v) = 0) :
+    ((t.insert (refusalSpec E) k v).toList.map g).sum = (t.toList.map g).sum := by
+  cases hk : t.get (refusalSpec E) k with
+  | none => rw [Trie.sumN_insert_none _ g hr v hk, hg]; rfl
+  | some old =>
+      have := Trie.sumN_insert_some _ g hr v hk
+      rw [hg, hg] at this; omega
+
+omit [Ord D] in
 /-- An insert at a count key moves no sum that ignores count entries. -/
 theorem sumN_insert_count {E : Env D} (g : RefusalSlot D × RefusalLeaf D → Nat)
     (hg : ∀ m win v, g (.count m win, v) = 0) {t : Refusals D} (hr : Trie.Routed (refusalSpec E) 0 t)
@@ -78,6 +91,7 @@ theorem tallyAt_step (E : Env D) (seed : D) (H : Nat) (m : D) (t : Refusals D)
   obtain ⟨k, v⟩ := p
   cases k with
   | count m' win => cases v <;> simp [tallyStep, refusedIn]
+  | total o win => cases v <;> simp [tallyStep, refusedIn]
   | tx id =>
       cases v with
       | count n => simp [tallyStep, refusedIn]
@@ -118,6 +132,7 @@ theorem tally_support (E : Env D) (seed : D) (H : Nat) :
       obtain ⟨k', v'⟩ := p
       cases k' with
       | count m' win => cases v' <;> exact ht k v hk
+      | total o win => cases v' <;> exact ht k v hk
       | tx id =>
           cases v' with
           | count n => exact ht k v hk
@@ -161,11 +176,17 @@ theorem refusalTally_get (E : Env D) (seed : D) (H : Nat) (l : List (RefusalSlot
 
 /-! ## The invariant -/
 
-/-- **A World's refusal counts are its records'**: records + height ≤ steps, and every member's count
-for the current window is the number of its records this window. -/
+/-- **A World's refusal counts are its records'**: records + height ≤ steps; every member's count
+for the current window is the number of its records this window; the World's total for the current
+window is the number of all records this window (KERNEL-55 R1); each of the two windows before holds
+at most `Bounds.refusalsPerWindowMax` records; and every total leaf is under the World's origin. -/
 def World.CountedOk (E : Env D) (w : World D) : Prop :=
   (w.refusals.toList.map refusedOne).sum + w.height ≤ w.steps ∧
-    ∀ m, refusalCount E w m = (w.refusals.toList.map (refusedIn w.height m)).sum
+    (∀ m, refusalCount E w m = (w.refusals.toList.map (refusedIn w.height m)).sum) ∧
+    refusalTotal E w = (w.refusals.toList.map (refusedWin (w.height / Bounds.windowMax))).sum ∧
+    (w.refusals.toList.map (refusedWin (w.height / Bounds.windowMax - 1))).sum ≤ Bounds.refusalsPerWindowMax ∧
+    (w.refusals.toList.map (refusedWin (w.height / Bounds.windowMax - 2))).sum ≤ Bounds.refusalsPerWindowMax ∧
+    ∀ o win v, w.refusalAt E (.total o win) = some v → o = w.origin
 
 omit [Ord D] [DecidableEq D] in
 /-- Two consecutive windows have different names (UInt64 never wraps onto its predecessor). -/
@@ -188,43 +209,86 @@ theorem refusalsCounted_iff {E : Env D} {w : World D} (hw : w.RefusalsOk E) :
   unfold refusalsCounted World.CountedOk
   simp only [Bool.and_eq_true, decide_eq_true_eq, List.all_eq_true]
   constructor
-  · rintro ⟨h1, hall⟩
-    refine ⟨h1, fun m => ?_⟩
-    unfold refusalCount
-    cases hg : w.refusalAt E (.count m (refusalWindow w.height)) with
-    | some v =>
-        cases v with
-        | refused h c mb =>
-            have := hw.2 _ _ hg; simp [refusalFits] at this
-        | count n =>
-            have := hall _ ((hmem _ _).mpr hg)
-            simp only [decide_eq_true_eq] at this
-            rw [refusalTally_get] at this
-            split at this
-            · cases this; rfl
-            · cases this
-    | none =>
-        simp only
-        apply Eq.symm
-        apply Nat.eq_zero_of_not_pos
-        intro hpos
-        obtain ⟨⟨k, v⟩, hp, hpos'⟩ := exists_pos_of_sumN_pos _ hpos
-        cases k with
-        | count m' win => cases v <;> simp [refusedIn] at hpos'
-        | tx id =>
-            cases v with
-            | count n => simp [refusedIn] at hpos'
-            | refused h c mb =>
-                simp only [refusedIn] at hpos'
-                split at hpos'
-                · rename_i hc
-                  obtain ⟨rfl, hwin⟩ := hc
-                  have := hall _ hp
-                  simp only [hwin, decide_true, Bool.not_true, Bool.false_or] at this
-                  rw [hg] at this; cases this
-                · simp at hpos'
-  · rintro ⟨h1, hcount⟩
-    refine ⟨h1, ?_⟩
+  · rintro ⟨⟨h1, hp1, hp2⟩, hall⟩
+    have hrec : ∀ id h c mb, (RefusalSlot.tx id, RefusalLeaf.refused h c mb) ∈ w.refusals.toList →
+        (h - 1) / Bounds.windowMax = w.height / Bounds.windowMax →
+        (w.refusalAt E (.count mb (refusalWindow w.height))).isSome = true ∧
+          (w.refusalAt E (.total w.origin (refusalWindow w.height))).isSome = true := by
+      intro id h c mb hp hwin
+      have := hall _ hp
+      simp only [hwin, decide_true, Bool.not_true, Bool.false_or, Bool.and_eq_true] at this
+      exact this
+    refine ⟨h1, fun m => ?_, ?_, hp1, hp2, ?_⟩
+    · unfold refusalCount
+      cases hg : w.refusalAt E (.count m (refusalWindow w.height)) with
+      | some v =>
+          cases v with
+          | refused h c mb =>
+              have := hw.2 _ _ hg; simp [refusalFits] at this
+          | count n =>
+              have := hall _ ((hmem _ _).mpr hg)
+              simp only [decide_eq_true_eq] at this
+              rw [refusalTally_get] at this
+              split at this
+              · cases this; rfl
+              · cases this
+      | none =>
+          simp only
+          apply Eq.symm
+          apply Nat.eq_zero_of_not_pos
+          intro hpos
+          obtain ⟨⟨k, v⟩, hp, hpos'⟩ := exists_pos_of_sumN_pos _ hpos
+          cases k with
+          | count m' win => cases v <;> simp [refusedIn] at hpos'
+          | total o win => cases v <;> simp [refusedIn] at hpos'
+          | tx id =>
+              cases v with
+              | count n => simp [refusedIn] at hpos'
+              | refused h c mb =>
+                  simp only [refusedIn] at hpos'
+                  split at hpos'
+                  · rename_i hc
+                    obtain ⟨rfl, hwin⟩ := hc
+                    have := (hrec id h c _ hp hwin).1
+                    rw [hg] at this; cases this
+                  · simp at hpos'
+    · unfold refusalTotal
+      cases hg : w.refusalAt E (.total w.origin (refusalWindow w.height)) with
+      | some v =>
+          cases v with
+          | refused h c mb => have := hw.2 _ _ hg; simp [refusalFits] at this
+          | count n =>
+              have := hall _ ((hmem _ _).mpr hg)
+              simp only [decide_eq_true_eq] at this
+              exact this.2.2
+      | none =>
+          simp only
+          apply Eq.symm
+          apply Nat.eq_zero_of_not_pos
+          intro hpos
+          obtain ⟨⟨k, v⟩, hp, hpos'⟩ := exists_pos_of_sumN_pos _ hpos
+          cases k with
+          | count m' win => cases v <;> simp [refusedWin] at hpos'
+          | total o win => cases v <;> simp [refusedWin] at hpos'
+          | tx id =>
+              cases v with
+              | count n => simp [refusedWin] at hpos'
+              | refused h c mb =>
+                  simp only [refusedWin] at hpos'
+                  split at hpos'
+                  · rename_i hwin
+                    have := (hrec id h c mb hp hwin).2
+                    rw [hg] at this; cases this
+                  · simp at hpos'
+    · intro o win v hg
+      cases v with
+      | refused h c mb => have := hw.2 _ _ hg; simp [refusalFits] at this
+      | count n =>
+          have := hall _ ((hmem _ _).mpr hg)
+          simp only [decide_eq_true_eq] at this
+          exact this.1
+  · rintro ⟨h1, hcount, htot, hp1, hp2, horig⟩
+    refine ⟨⟨h1, hp1, hp2⟩, ?_⟩
     rintro ⟨k, v⟩ hp
     have hg := (hmem _ _).mp hp
     cases k with
@@ -241,20 +305,41 @@ theorem refusalsCounted_iff {E : Env D} {w : World D} (hw : w.RefusalsOk E) :
             rw [hg] at hc
             simp only at hc
             rw [refusalTally_get, if_pos ⟨rfl, by omega⟩, ← hc]
+    | total o win =>
+        cases v with
+        | refused h c mb => trivial
+        | count n =>
+            simp only [decide_eq_true_eq]
+            have hf := hw.2 _ _ hg
+            simp only [refusalFits, decide_eq_true_eq] at hf
+            obtain ⟨rfl, -, -⟩ := hf
+            have ho := horig _ _ _ hg
+            subst ho
+            refine ⟨rfl, rfl, ?_⟩
+            unfold refusalTotal at htot
+            rw [hg] at htot
+            exact htot
     | tx id =>
         cases v with
         | count n => trivial
         | refused h c mb =>
-            simp only [Bool.or_eq_true, Bool.not_eq_true', decide_eq_false_iff_not]
+            simp only [Bool.or_eq_true, Bool.not_eq_true', decide_eq_false_iff_not, Bool.and_eq_true]
             by_cases hwin : (h - 1) / Bounds.windowMax = w.height / Bounds.windowMax
             · right
-              have hle := le_sumN_of_mem (refusedIn w.height mb) hp
-              simp only [refusedIn, hwin, and_self, if_true] at hle
-              have hc := hcount mb
-              unfold refusalCount at hc
-              cases hr : w.refusalAt E (.count mb (refusalWindow w.height)) with
-              | some _ => rfl
-              | none => rw [hr] at hc; simp only at hc; omega
+              refine ⟨?_, ?_⟩
+              · have hle := le_sumN_of_mem (refusedIn w.height mb) hp
+                simp only [refusedIn, hwin, and_self, if_true] at hle
+                have hc := hcount mb
+                unfold refusalCount at hc
+                cases hr : w.refusalAt E (.count mb (refusalWindow w.height)) with
+                | some _ => rfl
+                | none => rw [hr] at hc; simp only at hc; omega
+              · have hle := le_sumN_of_mem (refusedWin (w.height / Bounds.windowMax)) hp
+                simp only [refusedWin, hwin, if_true] at hle
+                unfold refusalTotal at htot
+                cases hr : w.refusalAt E (.total w.origin (refusalWindow w.height)) with
+                | some _ => rfl
+                | none => rw [hr] at htot; simp only at htot; omega
             · left; exact hwin
 
 /-- **The counts are the records' on a World that passes `refusalsCounted`**: the reader the codec's
@@ -262,21 +347,27 @@ refusal hands a decoded base. -/
 theorem refusalCount_eq_of_counted {E : Env D} {w : World D} (hw : w.RefusalsOk E)
     (hc : refusalsCounted E w = true) (m : D) :
     refusalCount E w m = (w.refusals.toList.map (refusedIn w.height m)).sum :=
-  ((refusalsCounted_iff hw).mp hc).2 m
+  ((refusalsCounted_iff hw).mp hc).2.1 m
 
 /-! ## Every step keeps it -/
 
 theorem countedOk_of_empty {E : Env D} {w : World D} (h : w.refusals = .empty) (hs : w.height ≤ w.steps) :
     w.CountedOk E := by
-  refine ⟨by rw [h]; show 0 + w.height ≤ w.steps; omega, fun m => ?_⟩
-  unfold refusalCount World.refusalAt
-  rw [h]; rfl
+  refine ⟨by rw [h]; show 0 + w.height ≤ w.steps; omega, fun m => ?_, ?_, ?_, ?_, ?_⟩
+  · unfold refusalCount World.refusalAt
+    rw [h]; rfl
+  · unfold refusalTotal World.refusalAt
+    rw [h]; rfl
+  · rw [h]; exact Nat.zero_le _
+  · rw [h]; exact Nat.zero_le _
+  · intro o win v hg
+    unfold World.refusalAt at hg; rw [h] at hg; cases hg
 
-/-- A recorded refusal adds its one record to every sum over the listing that ignores count
-entries. -/
+/-- A recorded refusal adds its one record to every sum over the listing that ignores count and
+total entries. -/
 theorem refuse_sumN {E : Env D} {w w' : World D} {r : Refused D} (hw : w.RefusalsOk E)
     (h : World.refuse E w r = .ok w') (g : RefusalSlot D × RefusalLeaf D → Nat)
-    (hg : ∀ m win v, g (.count m win, v) = 0) :
+    (hg : ∀ m win v, g (.count m win, v) = 0) (hgt : ∀ o win v, g (.total o win, v) = 0) :
     (w'.refusals.toList.map g).sum =
       (w.refusals.toList.map g).sum + g (.tx r.txId, .refused (w.height + 1) r.code r.member) := by
   obtain ⟨-, -, -, -, hnot, -⟩ := refuse_facts h
@@ -288,36 +379,107 @@ theorem refuse_sumN {E : Env D} {w w' : World D} {r : Refused D} (hw : w.Refusal
         | refused hh code mb => exact absurd hk (hnot hh code mb)
         | count n => have := hw.2 _ _ hk; simp [refusalFits] at this
   obtain ⟨_, rfl⟩ := refuse_ok h
-  rw [commitRefusal_refusals, sumN_insert_count g hg (Trie.routed_insert _ _ _ hw.1.1),
-    Trie.sumN_insert_none _ g hw.1.1 _ hnone]
+  rw [commitRefusal_refusals,
+    sumN_insert_zero g (Trie.routed_insert _ _ _ (Trie.routed_insert _ _ _ hw.1.1)) _ _ (hgt _ _),
+    sumN_insert_count g hg (Trie.routed_insert _ _ _ hw.1.1), Trie.sumN_insert_none _ g hw.1.1 _ hnone]
 
 theorem refuse_countedOk {E : Env D} {w w' : World D} {r : Refused D} (hw : w.RefusalsOk E)
     (hc : w.CountedOk E) (h : World.refuse E w r = .ok w') : w'.CountedOk E := by
   have hh := (refuse_frame h).2.2.1
-  refine ⟨?_, fun m => ?_⟩
-  · rw [refuse_sumN hw h refusedOne (fun _ _ v => by cases v <;> rfl), hh, refuse_steps h]
-    have := hc.1; simp only [refusedOne]; omega
-  · rw [refuse_refusalCount h m, hh, refuse_sumN hw h (refusedIn w.height m) (fun _ _ v => by cases v <;> rfl),
-      hc.2 m]
+  have ho := (refuse_frame h).2.2.2.2
+  obtain ⟨-, -, -, -, -, -, htl⟩ := refuse_facts h
+  obtain ⟨hc1, hc2, hc3, hc4, hc5, hc6⟩ := hc
+  have hs : ∀ k, (w'.refusals.toList.map (refusedWin k)).sum =
+      (w.refusals.toList.map (refusedWin k)).sum + (if w.height / Bounds.windowMax = k then 1 else 0) := by
+    intro k
+    rw [refuse_sumN hw h (refusedWin k) (fun _ _ v => by cases v <;> rfl) (fun _ _ v => by cases v <;> rfl)]
+    simp [refusedWin]
+  refine ⟨?_, fun m => ?_, ?_, ?_, ?_, ?_⟩
+  · rw [refuse_sumN hw h refusedOne (fun _ _ v => by cases v <;> rfl) (fun _ _ v => by cases v <;> rfl), hh,
+      refuse_steps h]
+    simp only [refusedOne]; omega
+  · rw [refuse_refusalCount h m, hh,
+      refuse_sumN hw h (refusedIn w.height m) (fun _ _ v => by cases v <;> rfl) (fun _ _ v => by cases v <;> rfl),
+      hc2 m]
     simp only [refusedIn, Nat.add_sub_cancel, and_true]
     by_cases hm : m = r.member
     · subst hm; simp
     · simp [hm, Ne.symm hm]
+  · have ht : refusalTotal E w' = refusalTotal E w + 1 := by
+      unfold refusalTotal
+      rw [ho, hh, refuse_refusalAt h, if_pos rfl]
+      rfl
+    rw [ht, hh, hs, hc3, if_pos rfl]
+  · rw [hh, hs]
+    by_cases he : w.height / Bounds.windowMax = w.height / Bounds.windowMax - 1
+    · rw [if_pos he, ← he, ← hc3]; omega
+    · rw [if_neg he]; omega
+  · rw [hh, hs]
+    by_cases he : w.height / Bounds.windowMax = w.height / Bounds.windowMax - 2
+    · rw [if_pos he, ← he, ← hc3]; omega
+    · rw [if_neg he]; omega
+  · intro o win v hg
+    rw [refuse_refusalAt h] at hg
+    rw [ho]
+    split at hg
+    · rename_i he; cases he; rfl
+    · split at hg
+      · rename_i he; cases he
+      · split at hg
+        · rename_i he; cases he
+        · exact hc6 o win v hg
 
 theorem admit_countedOk {E : Env D} {w w' : World D} {t : Turn D} (hw : w.RefusalsOk E)
     (hc : w.CountedOk E) (h : World.admit E w t = .ok w') : w'.CountedOk E := by
   have hh := admit_height h
   have hst := admit_steps h
+  have ho : w'.origin = w.origin := step_origin (s := .turn t) h
   have hr : w'.refusals = pruneRefusals E (w.height + 1) w.refusals := by
     obtain ⟨_, _, rfl⟩ := admit_ok h; rfl
+  obtain ⟨hc1, hc2, hc3, hc4, hc5, hc6⟩ := hc
+  have hc6' : ∀ o win v, w'.refusalAt E (.total o win) = some v → o = w'.origin := by
+    intro o win v hg
+    rw [ho]
+    rw [admit_refusalAt hw.1 h] at hg
+    split at hg
+    · exact hc6 o win v (Option.filter_eq_some_iff.mp hg).1
+    · exact hc6 o win v hg
   by_cases hz : (w.height + 1) % Bounds.windowMax = 0
   · have hl : w'.refusals.toList = w.refusals.toList.filter fun p => keptRefusal (w.height + 1) p.1 p.2 := by
       rw [hr]; unfold pruneRefusals; rw [if_pos hz]
       exact Trie.toList_retainAt (refusalSpec E) _ [] 0 w.refusals hw.1.1 (fun _ _ _ _ _ _ h => by simp at h)
-    refine ⟨?_, fun m => ?_⟩
+    have hq : (w.height + 1) / Bounds.windowMax = w.height / Bounds.windowMax + 1 := by
+      rw [windowMax_eq] at hz ⊢; omega
+    -- no record of the old World is of the new window
+    have hold : ∀ p ∈ w.refusals.toList, ∀ m,
+        refusedIn (w.height + 1) m p = 0 ∧ refusedWin ((w.height + 1) / Bounds.windowMax) p = 0 := by
+      intro p hp m
+      obtain ⟨k, v⟩ := p
+      cases k with
+      | count _ _ => cases v <;> exact ⟨rfl, rfl⟩
+      | total _ _ => cases v <;> exact ⟨rfl, rfl⟩
+      | tx id =>
+          cases v with
+          | count _ => exact ⟨rfl, rfl⟩
+          | refused hh' c mb =>
+              have hf := hw.2 _ _ ((Trie.mem_toList (refusalSpec E) 0 w.refusals hw.1.1 _ _).mp hp)
+              simp only [refusalFits, decide_eq_true_eq] at hf
+              have : (hh' - 1) / Bounds.windowMax ≤ w.height / Bounds.windowMax :=
+                Nat.div_le_div_right (by omega)
+              refine ⟨?_, ?_⟩
+              · simp only [refusedIn]
+                rw [if_neg]
+                rintro ⟨-, hwin⟩
+                omega
+              · simp only [refusedWin]
+                rw [if_neg]
+                omega
+    have hle : ∀ k, (w'.refusals.toList.map (refusedWin k)).sum ≤ (w.refusals.toList.map (refusedWin k)).sum := by
+      intro k; rw [hl]; exact sumN_filter_le _ _ _
+    refine ⟨?_, fun m => ?_, ?_, ?_, ?_, hc6'⟩
     · rw [hl, hh, hst]
       have := sumN_filter_le refusedOne (fun p => keptRefusal (w.height + 1) p.1 p.2) w.refusals.toList
-      have := hc.1; omega
+      omega
     · have h0 : refusalCount E w' m = 0 := by
         unfold refusalCount
         rw [admit_refusalAt hw.1 h, if_pos hz, hh]
@@ -334,24 +496,33 @@ theorem admit_countedOk {E : Env D} {w w' : World D} {t : Turn D} (hw : w.Refusa
       apply Eq.symm
       apply sumN_eq_zero_of
       intro p hp
-      have hp' := (List.mem_filter.mp hp).1
-      obtain ⟨k, v⟩ := p
-      cases k with
-      | count _ _ => cases v <;> rfl
-      | tx id =>
-          cases v with
-          | count _ => rfl
-          | refused hh' c mb =>
-              have hf := hw.2 _ _ ((Trie.mem_toList (refusalSpec E) 0 w.refusals hw.1.1 _ _).mp hp')
-              simp only [refusalFits, decide_eq_true_eq] at hf
-              simp only [refusedIn]
-              rw [if_neg]
-              rintro ⟨-, hwin⟩
-              have hq : (w.height + 1) / Bounds.windowMax = w.height / Bounds.windowMax + 1 := by
-                rw [windowMax_eq] at hz ⊢; omega
-              have : (hh' - 1) / Bounds.windowMax ≤ w.height / Bounds.windowMax :=
-                Nat.div_le_div_right (by omega)
-              omega
+      exact (hold p (List.mem_filter.mp hp).1 m).1
+    · have h0 : refusalTotal E w' = 0 := by
+        unfold refusalTotal
+        rw [admit_refusalAt hw.1 h, if_pos hz, hh, ho]
+        cases hg : w.refusalAt E (.total w.origin (refusalWindow (w.height + 1))) with
+        | none => rfl
+        | some v =>
+            have hf := hw.2 _ _ hg
+            cases v with
+            | refused _ _ _ => simp [refusalFits] at hf
+            | count n =>
+                simp only [refusalFits, decide_eq_true_eq] at hf
+                exact absurd hf.1 (refusalWindow_succ_ne hz)
+      rw [h0, hl, hh]
+      apply Eq.symm
+      apply sumN_eq_zero_of
+      intro p hp
+      exact (hold p (List.mem_filter.mp hp).1 w.origin).2
+    · rw [hh, hq, Nat.add_sub_cancel]
+      have := hle (w.height / Bounds.windowMax)
+      have := refusalTotal_le hw
+      omega
+    · rw [hh, hq]
+      have h2 : w.height / Bounds.windowMax + 1 - 2 = w.height / Bounds.windowMax - 1 := by omega
+      rw [h2]
+      have := hle (w.height / Bounds.windowMax - 1)
+      omega
   · have hl : w'.refusals = w.refusals := by rw [hr]; unfold pruneRefusals; rw [if_neg hz]
     have hq : (w.height + 1) / Bounds.windowMax = w.height / Bounds.windowMax := by
       rw [windowMax_eq] at hz ⊢; omega
@@ -359,9 +530,17 @@ theorem admit_countedOk {E : Env D} {w w' : World D} {t : Turn D} (hw : w.Refusa
       intro m; funext p
       obtain ⟨k, v⟩ := p
       cases k <;> cases v <;> simp only [refusedIn, hq]
-    refine ⟨?_, fun m => ?_⟩
-    · rw [hl, hh, hst]; have := hc.1; omega
-    · rw [admit_refusalCount hw.1 h hz m, hl, hh, hfun m]; exact hc.2 m
+    have hwin : refusalWindow (w.height + 1) = refusalWindow w.height := by
+      unfold refusalWindow; rw [hq]
+    refine ⟨?_, fun m => ?_, ?_, ?_, ?_, hc6'⟩
+    · rw [hl, hh, hst]; omega
+    · rw [admit_refusalCount hw.1 h hz m, hl, hh, hfun m]; exact hc2 m
+    · have ht : refusalTotal E w' = refusalTotal E w := by
+        unfold refusalTotal
+        rw [admit_refusalAt hw.1 h, if_neg hz, hh, ho, hwin]
+      rw [ht, hl, hh, hq]; exact hc3
+    · rw [hl, hh, hq]; exact hc4
+    · rw [hl, hh, hq]; exact hc5
 
 theorem step_countedOk {E : Env D} {w w' : World D} {s : Step D} (hw : w.RefusalsOk E)
     (hc : w.CountedOk E) (h : World.step E w s = .ok w') : w'.CountedOk E := by
