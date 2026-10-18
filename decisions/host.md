@@ -2462,3 +2462,65 @@ They keep the faults their callers already name. They do not share a decoder fun
 
 **Meta-critique.** HOST-49's "unreachable" rested on "every reader runs only on an opened Store". It forgot that an open validates the tail, not the history. A reader of history needs its own refusals, whatever the open checked.
 
+## HOST-52 · `Host.Sock`: THE client end of a Unix stream socket, 156 lines of C beside the Store's, every call bounded, every failure named (2026-10-19, HOSTING-10 for HOSTING-27's resident; HOST-13 agreed with conditions, HOST-14 read the diff; ROOT ruling 10-19)
+
+**The gap.** HOSTING-27's resident is a Lean executable (ROOT, 10-19: a Rust resident would be three twins). It must talk to two Unix sockets: its member socket (`nd --stdio`) and its broker socket (keybroker). Lean 4.30's Std has TCP and UDP but no AF_UNIX. `Host.File`'s `pread` fails ESPIPE on a socket. A Rust stdio relay was refused: it would be a second process, plus a rule about what may exec inside the grain.
+
+**Decision.**
+- `Host/c/sock.c` gives three externs, declared in `Host/Sock.lean`:
+  - `nd_unix_connect PATH MS`: a non-blocking AF_UNIX connect (atomic SOCK_CLOEXEC|SOCK_NONBLOCK on Linux; fcntl on Darwin).
+  - `nd_conn_write_all`: send with MSG_NOSIGNAL until every byte is out.
+  - `nd_conn_read MAX`: recv, 1..MAX bytes, or empty exactly at end of stream.
+- An opaque handle carries the fd and its timeout. The finalizer is the only close of a live handle. `Conn.stream` makes it an `IO.FS.Stream`, so `Host.readExact` reads it unchanged. A `timeout` is an IO exception that escapes `readExact`, not a `none`, so a caller catches it and names it. The resident does, in `Resident.Sockets`.
+- HOST-13's conditions, each met:
+  1. **Bounded.** Every call runs under the connection's timeout as a CLOCK_MONOTONIC deadline, with `poll` before each syscall. Connect is non-blocking: an AF_UNIX connect on Linux never answers EINPROGRESS, and a full backlog answers EAGAIN at once. The EINPROGRESS arm (poll POLLOUT, then SO_ERROR) is for platforms that answer it. A zero timeout is refused `timeoutZero` at connect; without that, every later call would answer `timeout` at once.
+  2. **EINTR** (and EAGAIN after a poll) is retried on what is left of the deadline, never reported.
+  3. **`max` = 0 is refused** `readMaxZero`, so an empty read means only EOF. Above 16 MiB is refused `readMaxPastBound` before any allocation. The largest legal frame is 262,148 bytes.
+  4. **The path is checked before any copy**: `pathEmpty`, `pathNul` (a NUL that `lean_string_cstr` would cut), and `pathTooLong` at sizeof(sun_path) = 108 bytes. 107 bytes connects.
+  5. **SIGPIPE.** MSG_NOSIGNAL on every send (SO_NOSIGPIPE on Darwin). HOST-14 measured that Lean's runtime already ignores SIGPIPE (SigIgn 0x1000) before any of our code runs. So the mid-write plant pins the composite (EPIPE named, the process lives) and is NOT a tooth for the flag. The flag stays so this file does not rest on a runtime internal.
+  6. **One tcb row** (`extern:Host.Sock`), one native-allow row, and named contract tests. `cargo:launcher:sock` drives the Lean `host-sock-probe` against a peer it holds:
+     - EOF is an empty read;
+     - timeout is bounded;
+     - EINTR: signal 33, glibc's SIGSETXID, which every Lean exe catches, is sent to every thread every 200 ms during a 1500 ms read. It ends exactly `timeout`, in [1500, 2500) ms;
+     - readMaxZero and readMaxPastBound;
+     - pathEmpty, pathNul, pathTooLong at 108 bytes with nothing created, and 107 connecting;
+     - timeoutZero;
+     - a peer that shuts its reading side mid-write gives exactly `send: Broken pipe (errno 32)`, and the probe exits 0;
+     - an absent path;
+     - a full backlog (a backlog-1 listener that never accepts) gives `connect: … (errno 11)` at once, after at least one queued connect;
+     - an echo control.
+  - **Mutations, run once by hand** (logs/hosting10-sock-m1.c, -m2.c). Reporting EINTR turns the row red: `r16 err poll: Interrupted system call (errno 4)`. Restarting the deadline per retry turns it red too: `the deadline did not hold across retries: 2.739148561s`.
+- Every other failure is the call and its errno, written one way. `file.c`'s `io_errno` became the library's shared `nd_io_errno` (a rename, no behaviour change). sock.c restates its prototype; a third C file means a header.
+- This is THE socket client. Host's own serving goes through nd-supervise's pipes today. If Host ever serves or connects to a socket itself, it extends `sock.c` (an accept beside the connect, under the same deadline, names and tcb row), never a second socket C file.
+
+**Flag day.** None. A new extern, a new exe and a new row (plus a rustix dev-dependency edge in Cargo.lock; rustix is already in the build through the sandbox, with the same pin and feature). No Store, wire or theorem change.
+
+**Critique.**
+- The error is a string, so a Lean caller that wants to branch on it compares text. The resident only logs these and decides by which step failed, so nothing branches on the text today. A typed error (an `Except` of a named inductive across the FFI) is the right next shape if anything ever does.
+- The deadline is per call, not per exchange. A peer that drips one byte per (timeout − ε) holds a `readExact` for up to n × timeout. Every frame the resident reads is bounded, so the bound is finite and stated rather than tight.
+- 156 lines against the ruling's "~70". The difference is the EINPROGRESS arm, the path, size and timeout checks HOST-14 asked for, and comments. It is not a second mechanism.
+- The external class is registered lazily without a lock, as in file.c. Two racing first connects would register two identical classes, which is harmless.
+
+**Meta-critique.** Both of my "argued from code" claims rested on a claim about the runtime that I never measured: "these exes install no signal handler". The runtime catches 7, 11 and 33, and ignores SIGPIPE. That turned my SIGPIPE plant into a check of Lean's runtime and made EINTR plantable after all. HOST-14 measured it from /proc in minutes. Before calling a test a tooth for a C property, read the process's signal state and run the mutation once. Both are done here.
+
+**Co-signed.** HOST-14, on the final 789-line diff (built in wt/host at c18e028; cargo:launcher:sock green; m1 re-run red by HOST-14), on fixes F1–F6 (all taken; see above), after reading the final diff.
+
+- **Read.** The C is correct where it counts:
+  - socket/fcntl/setsockopt/connect each close the fd on failure, and none closes twice;
+  - poll's -1 keeps its errno to the caller;
+  - the deadline is one CLOCK_MONOTONIC sum per call (uint32 ms in int64, no overflow), and a retry re-polls on the remainder;
+  - send continues partial writes;
+  - recv's 0 is EOF only because max = 0 is refused;
+  - the finalizer is the only close of a live handle.
+- **Measured** (hbox, the built probe, /proc and strace; logs/host14-sigign.py, logs/host14-eintr.py):
+  - (a) The probe IGNORES SIGPIPE before any of our code runs: SigIgn 0x1000, set by Lean's runtime, under a parent that restored SIG_DFL. MSG_NOSIGNAL stays, so the C does not rest on a runtime internal. But the mid-write plant cannot redden when it is removed, and every text that says "the process lives, so no SIGPIPE killed it" must say that instead.
+  - (b) The exe CATCHES signals 7 (SIGBUS), 11 (SIGSEGV) and 33 (SigCgt 0x100000440); 33 is glibc's SIGSETXID. Its handler returns at once for a sender that is not the process itself. kill(tid, 33) aimed at the reading thread interrupted poll three times (ERESTART_RESTARTBLOCK). sock.c re-polled on 1496, 1196, then 895 ms, and the read ended `timeout` at 2.01 s against 2000. So "EINTR cannot be made to happen in these executables" is FALSE; it is plantable.
+- **Critique (HOST-14's).**
+  - The Lean-side contract has one trap the C cannot see: `timeout` is an IO exception that escapes Host.readExact. It is not `none`, so a caller that reads frames from a Conn must catch it and name it (Wire.Stop.readFailed exists).
+  - The per-call deadline does not bound a frame, as HOSTING-10's critique says. Today's largest socket frame is 262,148 bytes (Protocol.Bounds.frameBytesMax + 4), against ND_READ_MAX = 16 MiB, so the read bound never bites a legal frame.
+  - The external class is registered lazily without a lock: two racing first connects register two identical classes. That is harmless, and it is the same as file.c.
+  - nd_io_errno's prototype is restated in sock.c, not shared through a header. A signature drift would link silently; with two files this is acceptable, but a third C file means a header.
+- **Meta-critique.**
+  - Both of HOSTING-10's "argued from code" claims rested on a claim about the runtime that nobody measured: "these exes install no signal handler". The runtime does install handlers, and it also ignores SIGPIPE, which turned the SIGPIPE plant into a check of Lean's runtime rather than of sock.c.
+  - The lesson for every extern row: before a test is called a tooth for a C property, read the process's signal state (/proc/PID/status) and run the mutation once.
+- **Host's serve.** This is the client end of a Unix stream socket, and it is THE one: every Lean process in the repo that connects to a Unix socket uses Host.Sock. Host's own serving goes through nd-supervise's pipes today. If Host ever serves or connects to a socket itself, it extends Host/c/sock.c (an accept beside the connect, under the same deadline, the same names and the same tcb row). It does not add a second socket C file, so this is not a second implementation and must not become one.

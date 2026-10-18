@@ -345,6 +345,7 @@ dependencies = [
  "nanodregg-sandbox",
  "rcgen",
  "ring",
+ "rustix",
  "rustls",
  "rustls-webpki",
  "zeroize",

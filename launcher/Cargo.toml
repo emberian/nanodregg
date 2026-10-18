@@ -49,6 +49,9 @@ rcgen = { version = "=0.14.8", default-features = false, features = ["ring", "pe
 # keybroker too (never in its own build: resolver 3 keeps dev features out), so keybroker's
 # `with_protocol_versions(&[TLS13])` is the line the plant tests.
 rustls = { version = "=0.23.40", default-features = false, features = ["std", "ring", "tls12"] }
+# The sock test's full-backlog listener (backlog 1; std's UnixListener cannot set one). Already in
+# the build through the sandbox with the same pin and feature.
+rustix = { version = "=1.1.2", default-features = false, features = ["std", "net"] }
 
 [lints.rust]
 unsafe_code = "forbid"

@@ -61,6 +61,7 @@ package nanodregg where
 @[default_target] lean_exe «hosting-broker» where
   root := `Hosting.BrokerMain
 
+
 -- The Rust copy of the protocol table (client/src/generated.rs). Imports Protocol; nothing imports it.
 @[default_target] lean_lib Emit where
   globs := #[.submodules `Emit]
@@ -106,7 +107,7 @@ package nanodregg where
 @[default_target] lean_exe «rows» where
   root := `Protocol.Rows.Main
 
--- Host/c/*.c: the Store's physical IO (Host.File's externs). Sorted, so the archive is reproducible.
+-- Host/c/*.c: the Store's physical IO (Host.File's externs) and a Unix socket's client end (Host.Sock's). Sorted, so the archive is reproducible.
 extern_lib «ndhost» pkg := do
   let dir := pkg.dir / "Host" / "c"
   let srcs := (← dir.readDir).filter (·.path.extension == some "c") |>.map (·.path)
@@ -161,3 +162,7 @@ extern_lib «ndhost» pkg := do
 -- The loop over a real Store directory (Host.Store + Host/c/file.c): lock, torn-file truncation.
 @[default_target] lean_exe «host-file-sim» where
   root := `Host.Sim.FileMain
+
+-- Host.Sock's contracts (Host/c/sock.c), driven by launcher/tests/sock.rs, which holds the peer.
+@[default_target] lean_exe «host-sock-probe» where
+  root := `Host.Sim.SockMain

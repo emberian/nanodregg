@@ -14,6 +14,7 @@ ledger-sim	1	ALL PASS	1 --harness-control
 hosting-controller	-	the deployed controller; hosting-sim G17 runs its Loop.step, the launcher isolation test runs the exe	-
 hosting-drive	-	a test driver: launcher/tests/isolation.rs runs it (one Lean-planned launch)	-
 hosting-broker	-	keybroker decider (follows a Store); the launcher broker test runs the exe over a real Store	-
+host-sock-probe	-	a test driver: launcher/tests/sock.rs runs it against the peer it holds (Host.Sock's contracts)	-
 lang-journey	(none)	lang-journey: GREEN	--harness-control
 rows	(none) ; --deployed	ALL PASS	--harness-control
 store-plants	{host} {fresh}	ALL PASS	{host} {fresh} --harness-control
@@ -31,6 +32,7 @@ cargo:launcher:path_vectors	emit-hosting	exit 0	nobin ok
 cargo:launcher:broker	hosting-broker,host	exit 0	nobin RED
 cargo:launcher:resident	hosting-controller,hosting-broker,host,hosting-drive	exit 0	nobin RED
 cargo:launcher:grain	hosting-controller,host	exit 0	nobin RED
+cargo:launcher:sock	host-sock-probe	exit 0	nobin RED
 cargo:devtools:workspace	host	exit 0	nobin RED
 cargo:client:join	host	exit 0	nobin RED
 cargo:client:real	host	exit 0	nobin RED

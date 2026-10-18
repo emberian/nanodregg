@@ -1,2 +1,3 @@
 # module<TAB>reason — the only modules that may declare @[extern] / @[implemented_by]
 Host.File	the Store's physical IO (fsync/F_FULLFSYNC, pread, ftruncate, flock): Lean core has none; Host/c/file.c, ROOT ruling 2026-10-16
+Host.Sock	the client end of a Unix stream socket (connect, write all, read; each bounded by a deadline): Lean 4.30 has no AF_UNIX; Host/c/sock.c, ROOT ruling 2026-10-19 for HOSTING-27's resident, HOST-52
