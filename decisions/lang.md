@@ -2320,3 +2320,15 @@ tooth, a direct byte tooth. Not done (optional): keyOrder as a strict total orde
 d.key.length)` is always true (`Row.sort` is a permutation, `Row.length_sort`): it checks nothing.
 Distinct key labels are enforced by `(keyTy d).wf` (sorted strictly ascending), which `keyBytes_keyOf`
 uses. Reported to ROOT.
+
+**LANG-57 addendum: the always-true key check is deleted, with its fact as a theorem (ROOT's ruling, 2026-10-19).**
+`checkRel` held `decide ((Row.sort d.key).length = d.key.length)`, which is true of every list (`Row.sort` is a
+permutation, `Row.length_sort`): a gate that could not go red, and its presence told readers that key-label
+distinctness was checked there. Distinctness was already enforced by the next conjunct, `(keyTy d).wf`: the sorted
+key fields must strictly ascend. ROOT ruled "replace, not merely delete; pick by which leaves one check". A new
+`keyLabelsDup` check would be a twin of `wf`, so the honest move is the deletion WITH the fact: `checkRel_key_nodup`
+(Lang/Proofs/KeyOrder.lean): `checkRel S row (ℓ, d) = .ok () → (d.key.map (·.1)).Nodup`, through `wf` alone. Plant:
+`checkRel_refuses_dup_key_label` (a key declaring `n` twice is refused `relKey "r"` by name) against its twin
+`checkRel_admits_distinct_key_labels`. No verdict moves (the deleted conjunct was always true), nothing re-ids,
+nothing re-emits; `checkRel`'s docstring now names where distinctness comes from. Proofs that destructured the
+conjunction re-indexed (`keyBytes_compare_installed`, `range_keys_ascend_read`); no statement text changed.

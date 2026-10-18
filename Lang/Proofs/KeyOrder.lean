@@ -228,7 +228,7 @@ theorem keyBytes_compare_installed {S : Ty} {row : List (Label × Ty)} {ℓ : La
   · rename_i hk
     simp only [Bool.and_eq_true, Bool.not_eq_true', decide_eq_true_eq, List.all_eq_true] at hk
     simp only [List.all_eq_true]
-    exact fun f hf => (hk.1.1.1.2 f hf).2
+    exact fun f hf => (hk.1.1.2 f hf).2
   · cases hc
 
 /-! ## The reader's keys: `keyOf` reads exactly the bytes `keyBytes` writes -/
@@ -395,7 +395,7 @@ theorem range_keys_ascend_read {D : Type} [DecidableEq D] {E : Kernel.Env D} {n 
     · rename_i hk
       simp only [Bool.and_eq_true, Bool.not_eq_true', decide_eq_true_eq, List.all_eq_true] at hk
       simp only [List.all_eq_true]
-      exact fun f hf => (hk.1.1.1.2 f hf).2
+      exact fun f hf => (hk.1.1.2 f hf).2
     · cases hd
   have hwf : (keyTy d).wf = true := by
     unfold checkRel at hd
@@ -512,5 +512,38 @@ ring 1 compare below ring 256's. -/
 private theorem queue_key_bytes_1_256 : compare (queueKey 1).data (queueKey 256).data = .lt := by
   rw [Array.compare_eq_compare_toList, u8_list_compare]
   decide
+
+/-! ## Distinct key labels have one source: `(keyTy d).wf` -/
+
+/-- **An installed relation's key labels are distinct** (ROOT's ruling on the always-true length check,
+2026-10-19): `checkRel` refuses `relKey` unless `keyTy d` (the key's fields, sorted) is canonical, and a
+canonical row strictly ascends, so no label repeats. The one check is `wf`; tooth
+`checkRel_refuses_dup_key_label`. -/
+theorem checkRel_key_nodup {S : Ty} {row : List (Label × Ty)} {ℓ : Label} {d : RelDecl}
+    (hd : checkRel S row (ℓ, d) = .ok ()) : (d.key.map (·.1)).Nodup := by
+  have hwf : (keyTy d).wf = true := by
+    unfold checkRel at hd
+    simp only [bind, Except.bind] at hd
+    split at hd
+    · rename_i hk
+      simp only [Bool.and_eq_true, decide_eq_true_eq] at hk
+      exact hk.1.2
+    · cases hd
+  have hasc : Row.ascending (Row.sort d.key) = true := by
+    simp only [keyTy, Ty.wf, Bool.and_eq_true] at hwf; exact hwf.1
+  exact ((Row.sort_perm d.key).map _).nodup_iff.1 (ascending_nodup hasc)
+
+/-- A key declaring the label `n` twice. -/
+private def dupDecl : RelDecl :=
+  { key := [("n", .nat), ("n", .bool)], val := .record [], limit := 8, sum := none, cap := 0, retract := false,
+    guard := none }
+
+/-- **Tooth**: two key fields of one label are refused `relKey`, by name, through `wf` alone. -/
+private theorem checkRel_refuses_dup_key_label :
+    checkRel (.record []) [] ("r", dupDecl) = .error (.relKey "r") := rfl
+
+/-- Its twin: the same key with distinct labels installs. -/
+private theorem checkRel_admits_distinct_key_labels :
+    checkRel (.record []) [] ("r", { dupDecl with key := [("m", .nat), ("n", .bool)] }) = .ok () := rfl
 
 end Nanodregg.Lang

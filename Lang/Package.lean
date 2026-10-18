@@ -382,13 +382,14 @@ def RelDecl.sumOk (d : RelDecl) : Bool :=
       | .record r => Row.find? f r == some .nat
       | _ => false
 
-/-- One relation: a fixed-width key of distinct fields within `keyBytesMax` at the deployed digest
-width (`relKey`), and a data value, a limit within `rowsPerRelationMax`, a sum column and a guard of
+/-- One relation: a fixed-width key of distinct fields (distinct because `keyTy d` is canonical: its
+sorted labels strictly ascend, `Lang.Proofs.KeyOrder.checkRel_key_nodup`) within `keyBytesMax` at the
+deployed digest width (`relKey`), and a data value, a limit within `rowsPerRelationMax`, a sum column and a guard of
 the right type (`badRel`). -/
 def checkRel (S : Ty) (row : List (Label × Ty)) (r : Label × RelDecl) : Except CheckError Unit := do
   let (ℓ, d) := r
   unless !d.key.isEmpty && decide (d.key.length ≤ keyFieldsMax) && d.key.all (fun f => Wire.labelOk f.1 && keyFixed f.2) &&
-      decide ((Row.sort d.key).length = d.key.length) && (keyTy d).wf &&
+      (keyTy d).wf &&
       decide (d.width Bounds.digestBytesMax ≤ Kernel.Bounds.keyBytesMax) do throw (.relKey ℓ)
   unless d.val.wf && d.val.isData && Wire.tyWire d.val && decide (1 ≤ d.limit) &&
       decide (d.limit ≤ Kernel.Bounds.rowsPerRelationMax) && d.sumOk &&
