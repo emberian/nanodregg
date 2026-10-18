@@ -20,6 +20,14 @@
 #  7. leaves this worktree on the new main (`checkout --detach NEW`), moves the primary checkout
 #     (the read-only reference) to it when that is clean, and pushes main to origin.
 # Works from any worktree of the repo (scripts/worktree LAYER makes one).
+#
+# Detached landing (GATES-14): record the PID of scripts/commit ITSELF, not of a wrapping subshell:
+#     nohup bash -c 'exec scripts/commit -m MSG PATH...' > LOG 2>&1 & echo $! > job.pid
+# (`exec` makes $! the script's own PID; a bare `( ... ) &` records the subshell and orphans the
+# judge, KERNEL-12). The attempt that judges is a re-exec of main's own copy; when
+# NANODREGG_COMMIT_PID_FILE is set it writes ITS PID there. Never stop a judge by its PID file: a
+# killed judge writes nothing and its slot is taken by flock until it exits. Wait for it, with a
+# deadline, and read the log.
 set -uo pipefail
 . "$(dirname "$0")/gate-lib.sh"
 # Every attempt runs main's OWN copy of scripts/commit and scripts/pre-push, materialized fresh
@@ -41,6 +49,7 @@ if [ -z "${ND_COMMIT_ATTEMPT:-}" ]; then
   echo "scripts/commit: main kept moving; gave up after ${COMMIT_RETRIES:-5} attempts"; exit 1
 fi
 scripts=${ND_COMMIT_SCRIPTS:-$(dirname "$0")}
+[ -n "${NANODREGG_COMMIT_PID_FILE:-}" ] && echo $$ > "$NANODREGG_COMMIT_PID_FILE"
 msgsrc="" msgfile="" cross="" nobuild=""
 paths=()
 while [ $# -gt 0 ]; do

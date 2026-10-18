@@ -309,3 +309,45 @@ so returning to one means the shape returned too; the meaning of the old vectors
 **Meta-critique.** I took the 20-line version CODEC-6 specified; the deeper question, whether "decoded text" is a
 faithful enough witness of meaning (Repr can print two different values alike), belongs to CODEC's printer.
 **Status.** built (this commit).
+
+## GATES-14 · The ungated toy run is deleted; the judge writes its own PID (2026-10-18)
+
+**Decision.** (a) `kernel-sim --toy` is deleted (Kernel/Sim/Main.lean runs the deployed parameters and refuses `--toy` by name; the
+Kernel/Sim.lean docstring says so). The toy PARAMETERS stay: `lang-journey`, `host-sim`, `Protocol.Rows.Sim` and the codec
+teeth build on `Kernel.Sim.toy`; only the one ungated driver of the generator under them goes. (cv 01a14d89-b259;
+KERNEL-47's find: `carry-budget-plant` red on 9/16 seeds at the 8-byte digest with and without the real code.)
+(b) `scripts/commit`'s header gains the rule: a detached landing records the PID of scripts/commit ITSELF
+(`nohup bash -c 'exec scripts/commit -m MSG PATH...' > LOG 2>&1 & echo $! > job.pid`), not a subshell's; never stop a judge
+by its PID file, wait for it with a deadline. And the attempt that judges, which is a re-exec of main's own copy (so
+`$!` of the outer is not its PID once anything wraps it), writes `$$` to `$NANODREGG_COMMIT_PID_FILE` when that is set
+(one line). (cv 01a14be4-9353; KERNEL-12's orphaned judge.) CROSS-LAYER: Kernel/Sim is KERNEL's.
+**Why (a).** A run in no gates/runs.tsv row is one nobody reads, and this one's plant could not go red: at a UInt64
+digest a cell weighs less than the 32 bytes a retire charges per digest field, so no live set can outweigh a retire and
+`carry-budget-plant:overflow` has nothing to find. "A plant that cannot go red is not a plant" (CHARTER, teeth; a gate
+that cannot go red is not a gate). An ungated run with a vacuous plant is worse than no run: it reads as coverage.
+**Alternatives.** (1) A runs.tsv row `kernel-sim --toy --seeds N` that must PASS, with the plant made to bite by scaling
+the retire charge to the toy digest width (`digestWeight` is the constant 32 in Kernel/Turn.lean and the plant's crafted
+carry is built against it). Biting needs the weight function parameterised on the digest width, which touches
+Kernel/Budget, its proofs (`Kernel/Proofs/Budget.lean` names this arm as its tooth) and the deployed weight pins: far more
+than 20 lines, and it would change what `logWeight` means at the toy only to make a toy plant bite. Not done. (2) Keep
+`--toy` and skip the plant at a toy width, as `weighed` already skips the logWeight comparison (Gen.lean:309): a run that
+silently skips its own teeth is the same defect with a quieter face. Not done. The plant itself stays and bites in the
+gated deployed run (runs.tsv `kernel-sim --seeds 64`, `carry-budget-plant:overflow` in `Gen.planted`).
+**Plants.** (a) `kernel-sim --toy 1` exits 2 with `kernel-sim: --toy was removed (GATES-14 …)`, not a silent deployed run (the first draft let `parseSeeds` ignore the flag and print ALL PASS; found by running it). `grep -rn -- '--toy' gates scripts lakefile.lean` empty (only decisions history names it). (b) `logs/gates4-pidplant.sh`
+from a layer worktree, running the re-exec'd path directly with SIZE.md (refused right after the PID line): control, the
+file holds the script's own PID (`bash -c 'echo $$ > own; exec scripts/commit ...'` then `pf == own`); var unset, no file;
+the line removed from a copy, no file, plant red. Output: `control: PASS`, `unset var: PASS`, `mutation (line removed):
+RED as it must`.
+**Critique.** Deleting the mode leaves the generator under toy parameters untested by any simulation other than the
+journeys' own: the toy Gen coverage (random acts at a UInt64 digest, where tries are shallow and adversarially weak,
+decisions/kernel.md) was real signal for the other 11 planted refusals, and it is gone. It was ungated, so no landing
+depended on it, but a developer iterating on a probe in seconds at a toy lost a fast loop; the deployed run is minutes.
+The PID line only helps a caller who sets the variable; the rule in the header is prose, and nothing refuses a
+subshell-wrapped landing.
+**Meta-critique.** I priced option (1) as "more than 20 lines" without writing it; the estimate is from the call sites I
+read (Budget, its proof file, the weight pins), and the instruction preferred deletion above that bound. The wording
+"cannot go red" is the real reason, not the cost: even at 5 lines a plant that bites only because the toy charge was
+retuned tests the retune, not the deployed budget. And the PID plant runs the inner path directly: it does not exercise
+the outer re-exec materialisation, which `scripts/commit` landing this very commit does (the first landing after this
+one is its end-to-end check).
+**Status.** built (this commit).

@@ -1,8 +1,9 @@
 /-
 # Kernel.Sim — the seeded simulation's TOY parameters (the generator is `Kernel.Sim.Gen`)
 
-`lake exe kernel-sim --toy --seeds N` runs N seeded scenarios under these parameters
-(`kernel-sim` without `--toy` runs the deployed ones, `Kernel.Sim.Deployed`). Each drives the REAL
+`lake exe kernel-sim --seeds N` runs N seeded scenarios under the DEPLOYED parameters
+(`Kernel.Sim.Deployed`); these toy parameters have no `kernel-sim` run (GATES-14: the carry-budget
+plant is vacuous at an 8-byte digest) and serve `lang-journey`, `host-sim` and the codec teeth. Each drives the REAL
 receive path (`Receive.submit`: journal, then the receivers, then `World.admit`) with honest and
 adversarial calls, checks every verdict against the one the generator built the call to get (by
 refusal NAME), restarts the "Host" from a fold of its own log at random points, and at the end
