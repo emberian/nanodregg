@@ -19,6 +19,11 @@ locks: it writes) throwing `none`: the same function, so the same order of effec
 -/
 import Host.Cli
 import Host.Proofs.Carry
+import Kernel.Proofs.Weight
+import Codec.Proofs.Digest
+import Kernel.Proofs.Origin
+import Kernel.Proofs.Cells
+import Kernel.Proofs.Rows
 
 namespace Nanodregg.Host.Cli
 
@@ -34,11 +39,13 @@ theorem import_genesis_iff (name digestHex : String) (nonceR : Except Status Byt
           refuse := fun _ _ => pure 1, report := fun _ => pure () } name digestHex = .error (some (k, w)) ↔
     ∃ want nonce bytes r, hexDigest digestHex = some want ∧ nonceR = .ok nonce ∧ inR = .ok bytes ∧
       Carry.importWorld X Codec.Deployed.digestCodec name.toUTF8 nonce want bytes = .ok (w, r) ∧
-      keyR = some k := by
+      budgetFault w = none ∧ keyR = some k := by
   unfold importWith
   cases hd : hexDigest digestHex <;> cases nonceR <;> cases inR <;>
     simp only [bind, Except.bind, pure, Except.pure] <;>
     (repeat' split) <;> simp_all [Prod.ext_iff, and_comm]
+  all_goals (try (intro h₁; subst h₁; simp_all))
+  all_goals (try (exact ⟨fun hh => ⟨hh.2, hh.1, hh.2 ▸ ‹budgetFault _ = none›⟩, fun hh => ⟨hh.2.1, hh.1⟩⟩))
 
 /-- **`host join` writes no Store path before the invitation is accepted** (PROTOCOL-42, HOST-12's
 condition). `genesis` is reached, with key `k` and World `w`, EXACTLY when INVITE and KEY parsed,
@@ -51,11 +58,13 @@ theorem join_genesis_iff (inviteHex keyHex : String) (keyR : Option Digest) (k :
         { key := pure keyR, genesis := fun k₀ w₀ => throw (some (k₀, w₀)),
           refuse := fun _ _ => pure 1, report := fun _ => pure () } inviteHex keyHex = .error (some (k, w)) ↔
     ∃ inv trusted i, Protocol.Text.ofHex inviteHex = some inv ∧ Protocol.Text.ofHex keyHex = some trusted ∧
-      Protocol.Invite.accept X trusted inv = .ok (i, w) ∧ keyR = some k := by
+      Protocol.Invite.accept X trusted inv = .ok (i, w) ∧ budgetFault w = none ∧ keyR = some k := by
   unfold joinWith
   cases hi : Protocol.Text.ofHex inviteHex <;> cases hk : Protocol.Text.ofHex keyHex <;>
     simp only [bind, Except.bind, pure, Except.pure] <;>
     (repeat' split) <;> simp_all [Prod.ext_iff, and_comm]
+  all_goals (try (intro h₁; subst h₁; simp_all))
+  all_goals (try (exact ⟨fun hh => ⟨hh.2, hh.1, hh.2 ▸ ‹budgetFault _ = none›⟩, fun hh => ⟨hh.2.1, hh.1⟩⟩))
 
 /-- **`host seal` writes only after the writer's open succeeded** (HOST-43): the seal effect, the
 one that writes, is reached with the opened Store `r` EXACTLY when the key read and the writer's
@@ -71,5 +80,45 @@ theorem seal_writes_iff {R : Type} (keyR : Except (StoreFault (Record.Fault (Rej
   unfold sealWith
   cases keyR <;> simp only [bind, Except.bind, pure, Except.pure] <;>
     (repeat' split) <;> simp_all
+
+/-- **A World that passes the budget check stays within the World bound's weight** (HOST-56,
+KERNEL-55): every World an admitted fold reaches from it weighs at most `potentialMax / 145`
+(`allowance_bounds_world` with the check's second arm). This is the weight half of the writer-side
+`reached_size_le`; the bytes half is CODEC's size equality (cv 01a150a3-2523). -/
+theorem budget_reaches {w w' : World D} {l : List (Step D)} (hb : budgetFault w = none)
+    (hc : w.Canon X.env) (hf : w.Slotted X.env) (hr : w.RowsCanon X.env) (h : World.fold X.env w l = .ok w') :
+    potentialRatio.2 * w'.weight ≤ potentialMax := by
+  have hw := allowance_bounds_world hc hf hr h
+  unfold budgetFault at hb
+  split at hb
+  · cases hb
+  · split at hb
+    · cases hb
+    · omega
+
+/-- **`budget_reaches` at the World `host genesis` admits** (HOST-56): a genesis World the kernel
+makes (`Receive.genesis`) and the budget check passes stays within `potentialMax / 145` of weight
+over every admitted fold; Canon, Slotted and RowsCanon hold at a genesis World
+(`receive_genesis_canon`, `receive_genesis_slotted`, `receive_genesis_rowsCanon`). Imported and joined
+Worlds: cv 01a150ed-7bf7. -/
+theorem genesis_budget_reaches {name nonce : ByteArray} {allowance : Nat} {fs : List (ByteArray × D)}
+    {w w' : World D} {l : List (Step D)} (hg : Receive.genesis X name nonce allowance fs = .ok w)
+    (hb : budgetFault w = none) (h : World.fold X.env w l = .ok w') :
+    potentialRatio.2 * w'.weight ≤ potentialMax := by
+  obtain ⟨-, rfl⟩ := Receive.genesis_ok.mp hg
+  exact budget_reaches hb (receive_genesis_canon X _ _ _ _) (receive_genesis_slotted X _ _ _ _)
+    (receive_genesis_rowsCanon X _ _ _ _) h
+
+/-- **The allowance arm** (HOST-56, ROOT's Q3): a World carrying more than `allowanceMax` is refused
+`allowancePastBound`, whatever its weight. -/
+theorem budgetFault_allowance {w : World D} (h : allowanceMax < w.allowance) :
+    budgetFault w = some .allowancePastBound := by
+  unfold budgetFault; rw [if_pos h]
+
+/-- **The potential arm, the one the allowance arm misses** (HOST-56): a World whose allowance passes
+but whose potential is past `potentialMax` is refused `potentialPastBound`. -/
+theorem budgetFault_potential {w : World D} (ha : w.allowance ≤ allowanceMax) (hp : potentialMax < potential w) :
+    budgetFault w = some .potentialPastBound := by
+  unfold budgetFault; rw [if_neg (by omega), if_pos hp]
 
 end Nanodregg.Host.Cli

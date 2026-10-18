@@ -127,6 +127,15 @@ inductive Status where
   /-- a seal at a segment position past u64: the base cannot spell where the log after it begins,
   so the base would not read back; refused before anything is written, a defect (HOST-46) -/
   | positionUnfit
+  /-- `host genesis` / `join` / `import`: the World's allowance is past `allowanceMax` (HOST-56,
+  KERNEL-55 Q3): a forged or foreign lineage, or an invitation made under another budget. Nothing
+  was written -/
+  | allowancePastBound
+  /-- `host genesis` / `join` / `import`: the World's storage potential (`Kernel.potential`: weight and
+  allowance together) is past `Host.Cli.potentialMax`, so admitted turns could grow its weight past
+  `potentialMax / 145`, the weight bound this budget admits (`Host.Cli.budget_reaches`, HOST-56).
+  Nothing was written -/
+  | potentialPastBound
   deriving DecidableEq, Repr
 
 namespace Status
@@ -137,7 +146,7 @@ def all : List Status :=
    segmentShort, tailTooLong, foreignSegment, corrupt, record, tagWidth, behindAnchor, chainMismatch,
    badIndex, pageTooLarge, pastEnd, shortBase, reopenFailed, reopenDiverged, lifetime, stream, noThreads,
    shapeMismatch, foreignOrigin, indexShort, indexCorrupt, entryUnfit, indexMoved, carryMismatch,
-   inviteRefused, positionUnfit]
+   inviteRefused, positionUnfit, allowancePastBound, potentialPastBound]
 
 def code : Status → Nat
   | eof => 0
@@ -185,6 +194,8 @@ def code : Status → Nat
   | carryMismatch => 49
   | inviteRefused => 44
   | positionUnfit => 56
+  | allowancePastBound => 58
+  | potentialPastBound => 59
 
 def cls : Status → ExitClass
   | eof => .done
@@ -193,7 +204,8 @@ def cls : Status → ExitClass
   | locked | .exists | badKey | shortRead | missing | baseTooLarge | baseCorrupt | baseUndecodable
   | segmentShort | tailTooLong | foreignSegment | corrupt | record | tagWidth | behindAnchor | chainMismatch
   | badIndex | pageTooLarge | pastEnd | shortBase | reopenFailed | reopenDiverged | noThreads
-  | shapeMismatch | foreignOrigin | indexShort | indexCorrupt | entryUnfit | carryMismatch | inviteRefused | positionUnfit => .fatal
+  | shapeMismatch | foreignOrigin | indexShort | indexCorrupt | entryUnfit | carryMismatch | inviteRefused | positionUnfit
+  | allowancePastBound | potentialPastBound => .fatal
 
 /-- The name printed beside the code (`refused NAME` / `exit NAME` on stderr). -/
 def name (s : Status) : String := ((toString (repr s)).splitOn ".").getLast!

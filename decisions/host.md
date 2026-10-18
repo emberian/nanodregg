@@ -2536,3 +2536,57 @@ They keep the faults their callers already name. They do not share a decoder fun
 **Disjunct audit (HOST-14, at da0593e).** Host/** states no `Collision` and uses none of the kernel theorems that conclude it. Its seven disjunctive statements are each a case split over one computed value: no disjunct is provable from the premises alone. This arm was the one loose one.
 
 **Flag day.** None. A theorem statement is strengthened; no code moves.
+
+## HOST-56 · genesis, join and import refuse a World whose budget this binary does not admit: `allowancePastBound` and `potentialPastBound` (2026-10-19, HOST-14; KERNEL-55, ROOT Q1 = B and Q3; the HOST half, part 1)
+
+**The wedge.** KERNEL-20 found it (KERNEL-55): `host import` checked a carried World's allowance only against `< 2^64` (`CarryFits`). A carried World with a large allowance imported. Its members grew it by admitted, acknowledged turns until the next seal refused `worldTooLarge`, and the Store stopped. `host join` had the same hole: an invitation's allowance comes from its signed inputs, so it can carry another budget.
+
+**Decision.**
+- `allowanceMax` is PRIMARY: `1 <<< 27`, KERNEL-15's useful life, the same value as before, so no invitation's input bytes move.
+- `genesisWeightMax = 1 <<< 20` is new and HOST's choice: about 7,000 founders' cells at a genesis.
+- `Host.Cli.potentialMax = ratio.2 · genesisWeightMax + ratio.1 · allowanceMax`, read through `Kernel.potentialRatio` by name (84/145 since KERNEL-54).
+- `Host.Cli.budgetFault` is checked in `host genesis`, `host join` and `host import`, before any effect writes. It has two arms, both fatal:
+  - `allowancePastBound` (58): allowance > allowanceMax. This is ROOT's Q3.
+  - `potentialPastBound` (59): `Kernel.potential w` > potentialMax. This is the arm the wedge needs: an allowance check alone admits a carried World heavy enough that admitted turns grow it past the World bound derived for this budget.
+- Code 57 is PROTOCOL's `pageIo` (CommandExit). 58 and 59 collide with nothing (Protocol 50–57; SupervisorExit 64+).
+- Both prose ratios are deleted from Host/Bounds.lean: "256 MiB is ~900 BAR stores" and "the other half is headroom".
+
+**Theorems** (Host/Proofs/Cli.lean):
+- `budget_reaches`: a World that passes the check, folded by admitted steps, weighs at most `potentialMax / 145` (`145·w'.weight ≤ potentialMax`, from `allowance_bounds_world`). The premises are Canon, Slotted and RowsCanon at X.env.
+- `genesis_budget_reaches`: `budget_reaches` at the World `host genesis` admits, its premises discharged by `receive_genesis_canon/slotted/rowsCanon`.
+- `budgetFault_allowance` and `budgetFault_potential`: the two arms.
+- `import_genesis_iff` and `join_genesis_iff` each gain `budgetFault w = none`: genesis is reached exactly when, among the other checks, the budget passes.
+
+**Plant.** host-file-sim `plant-import-budget` drives the deployed `Cli.importWith` (the function `importVerb` runs at IO) over carried files of real deployed genesis Worlds, exported by `Carry.exportFile`. It records the first effect reached.
+- A World carrying 2^40 is refused `allowancePastBound`.
+- A World at exactly allowanceMax with 3,257 founders (weight 1,048,754) PASSES the allowance arm and is refused `potentialPastBound`.
+- Controls: 1 founder, and 3,254 founders (weight 1,047,788), both reach genesis.
+- RED with the potential arm disabled: the heavy World reached genesis.
+
+**worldBytesMax: the figure is PENDING, not landed.** The derivation is `worldWeightMax = genesisWeightMax + 84·allowanceMax/145 = 78,802,294`, then CODEC-13's entry factor `entrySlack` = 54/49 (a live entry whose version varint takes 10 bytes against its 8-byte charge), the journal (221,184), R1's refusals term (4,849,714 at C = 16,384) and `worldFixed` (104). It gives **91,914,347 B (about 91.91 MB) post-54** (pre-54, at 76/137 and 35/32: 87,654,733). Two inputs are not yet theorems:
+- KERNEL-22's part 2, the R1 cap C (16,384 assumed here);
+- CODEC-13's `world_size_eq` / `world_size_le` (cv 01a150a3-2523). The statement is agreed with HOST-14; the factor 54/49 is its proposal, not yet proved.
+
+Until HOST-57 lands the derivation as code, `Cadence.deployed.worldBytesMax` is still the old literal 2^28. PERF-2 measured that a base at that size reopens in 120.7 s against THE BAR's 60 s. No reader may take the 91.91 MB in this text for the bound.
+
+**What refuses now that did not.** Genesis, join and import of a World this binary's budget does not admit: a carried World with an allowance past allowanceMax, a World whose potential is past potentialMax, and a genesis whose founders weigh past genesisWeightMax.
+- A previously exported honest World still imports: Φ never rises over a fold and the allowance only falls, so an export of any lineage that began at or under this budget passes. (Answer for OPS-5's RUNBOOK §6.)
+- A World from a lineage with a larger genesis budget refuses by name, which is the point.
+- Nothing re-geneses.
+
+**Cross-layer.**
+- Ops/Units.lean gains the two status texts: OPS-5 agreed, with its wording conditions taken.
+- deploy/units was re-emitted (`emit-units deploy/units`, `--check deploy/units` clean): EXITS.md gains two rows, and three units' RestartPreventExitStatus gain 58 and 59 (derived from the fatal class).
+
+**Critique.**
+- `budget_reaches` bounds weight, not bytes. Until CODEC's equality lands, `worldTooLarge` is not yet proved unreachable: that is HOST-57's `reached_size_le`.
+- Its premises (Canon, Slotted, RowsCanon) are discharged for genesis Worlds (`genesis_budget_reaches`). For imported and joined Worlds they are NOT yet composed: `CarryFits` does not check them, and the pieces (CODEC's `carried_decode_canon` and `carried_decode_fits`, KERNEL's `carry_canon`; the join World is a `genesisWorld`) are filed as cv 01a150ed-7bf7, due before HOST-57's `reached_size_le` consumes them. The refusal itself does not depend on them: it is a strict addition.
+- genesisWeightMax caps founders at about 7,000 at a genesis, below KERNEL's GenesisFits (65,536). That is HOST's choice: a founder set past it is refused by name before anything is written, not wedged later.
+
+**Law-6 read (second agent, read-only, with the DISJUNCT check): LAND-WITH-FIXES.**
+- No disjunct and no vacuity: both arm theorems have satisfiable premises, which the plant meets.
+- `budget_reaches` uses only the potential arm, and would be false for a World that passes only the allowance arm.
+- The iffs still hold in both directions, and no deployed path bypasses the check (only the Bench tools call Host.genesis directly).
+- Taken: three texts that claimed a derived byte bound now say weight bound (Bounds, Exit, Units); the genesis corollary; cv 01a150ed-7bf7 for imported and joined premises.
+
+**Meta-critique.** KERNEL-55's import wedge was found by reading what `CarryFits` bounds (`< 2^64`), not by a failure. The join path had the same hole and nobody named it until the check needed a home: any path that creates a Store from a World someone else made is an import.

@@ -54,6 +54,8 @@ code space holds both tables: `host` (Host.Status, below 64) and nd-supervise's 
 | 48 | indexMoved | restart | restarted after 2 s; failed past 5 starts in 120 s | automatic; index.log changed size under the writer (another process wrote or truncated it): the restart's open truncates orphan entries or refuses indexShort; if it repeats, find the other writer |
 | 49 | carryMismatch | fatal | stopped (RestartPreventExitStatus) | the carried file is not the one exported (digest), does not decode, or the imported Store reopened to other bytes (stderr names which): re-export from the STOPPED old Store and copy the printed digest exactly; remove a Store left by `carryMismatch reopen` and report it to HOST |
 | 56 | positionUnfit | fatal | stopped (RestartPreventExitStatus) | a defect: a seal at a segment position past u64, which a base cannot spell (HOST-46); nothing was written; keep the Store untouched, report to HOST |
+| 58 | allowancePastBound | fatal | stopped (RestartPreventExitStatus) | genesis/join/import refused before writing: the World's allowance is past this binary's allowanceMax (a forged or foreign lineage, or an invitation made with another budget); do not import it (nothing was written) |
+| 59 | potentialPastBound | fatal | stopped (RestartPreventExitStatus) | genesis/join/import refused before writing: the World's weight and allowance together (Kernel.potential) are past this binary's potentialMax, the weight bound its budget admits (a carried World heavier than a lineage that began under this budget can become, or a genesis past genesisWeightMax; rebuild the genesis with fewer or lighter founders) (nothing was written) |
 
 ## nd-supervise
 

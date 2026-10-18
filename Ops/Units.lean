@@ -275,6 +275,8 @@ def hostAction : Status → String
   | .recordTooLarge | .worldTooLarge | .indexTooLarge =>
     "a defect or the HOST-14 design limit: report to HOST"
   | .entryUnfit => "a defect: a seal met an index entry the entry layout cannot spell (HOST-31); keep the Store untouched, report to HOST"
+  | .allowancePastBound => "genesis/join/import refused before writing: the World's allowance is past this binary's allowanceMax (a forged or foreign lineage, or an invitation made with another budget); do not import it (nothing was written)"
+  | .potentialPastBound => "genesis/join/import refused before writing: the World's weight and allowance together (Kernel.potential) are past this binary's potentialMax, the weight bound its budget admits (a carried World heavier than a lineage that began under this budget can become, or a genesis past genesisWeightMax; rebuild the genesis with fewer or lighter founders) (nothing was written)"
   | .positionUnfit => "a defect: a seal at a segment position past u64, which a base cannot spell (HOST-46); nothing was written; keep the Store untouched, report to HOST"
   | .carryMismatch => "the carried file is not the one exported (digest), does not decode, or the imported Store reopened to other bytes (stderr names which): re-export from the STOPPED old Store and copy the printed digest exactly; remove a Store left by `carryMismatch reopen` and report it to HOST"
   | .inviteRefused => "the invitation does not verify against the key you trust (stderr names why): obtain a fresh invitation from your sponsor and check the sponsor key you were given; nothing was written"

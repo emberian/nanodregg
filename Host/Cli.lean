@@ -113,6 +113,20 @@ def genesisLines (w₀ : World D) (nonce : ByteArray) (n : Nat) : List String :=
     s!"founder {i} member {(Receive.founderId X w₀.origin i).toHex} grant {(Receive.founderGrantId X w₀.origin i).toHex}") ++
   [s!"chain {w₀.chain.toHex}"]
 
+/-- The most storage potential (`Kernel.potential`) a World this binary writes may carry: a World
+at `genesisWeightMax` holding `allowanceMax`, by KERNEL's ratio (read by name, never a literal). -/
+def potentialMax : Nat := potentialRatio.2 * genesisWeightMax + potentialRatio.1 * allowanceMax
+
+/-- The budget check every World this binary creates a Store from passes (HOST-56, KERNEL-55; `host
+genesis`, `host join`, `host import`, before anything is written): its allowance within
+`allowanceMax` (ROOT's Q3), and its potential within `potentialMax`. The second arm is what bounds the
+World a fold reaches (`Host.Cli.budget_reaches`): an allowance check alone admits a carried World
+heavy enough that admitted turns grow it past the derived World bound. -/
+def budgetFault (w : World D) : Option Status :=
+  if allowanceMax < w.allowance then some .allowancePastBound
+  else if potentialMax < potential w then some .potentialPastBound
+  else none
+
 def genesisVerb (store name : String) (nonceArg : Option String) (fs : List String) : IO UInt32 := do
   let some fs := founders fs | refuse .usage "founders"
   let nonce ← match ← genesisNonce nonceArg with
@@ -122,6 +136,7 @@ def genesisVerb (store name : String) (nonceArg : Option String) (fs : List Stri
   let w₀ ← match Receive.genesis X name.toUTF8 nonce allowanceMax fs with
     | .ok w => pure w
     | .error r => return ← refuse .usage r.name
+  if let some s := budgetFault w₀ then return ← refuse s s.name
   let some key := Digest.ofBytes? (← IO.getRandomBytes 32) | refuse .entropy
   match ← (Host.genesis store key (Keys.ofKey key shapes) c world recorder.mark w₀ :
       IO (Except (StoreFault (Record.Fault (Reject D))) Unit)) with
@@ -152,6 +167,9 @@ def joinWith {m : Type → Type} [Monad m] (fx : JoinFx m) (inviteHex keyHex : S
     | .ok p => pure p
     | .error (.inputs r) => return ← fx.refuse .usage r.name
     | .error r => return ← fx.refuse .inviteRefused s!"inviteRefused {r.name}"
+  match budgetFault w₀ with
+  | some s => return ← fx.refuse s s.name
+  | none => pure ()
   let some key ← fx.key | fx.refuse .entropy Status.entropy.name
   match ← fx.genesis key w₀ with
   | .error f => fx.refuse f.status f.text
@@ -225,6 +243,9 @@ def importWith {m : Type → Type} [Monad m] (fx : ImportFx m) (name digestHex :
   let (w₀, r) ← match Carry.importWorld X dc name.toUTF8 nonce want bytes with
     | .ok p => pure p
     | .error (s, n) => return ← fx.refuse s n
+  match budgetFault w₀ with
+  | some s => return ← fx.refuse s s.name
+  | none => pure ()
   let some key ← fx.key | fx.refuse .entropy Status.entropy.name
   match ← fx.genesis key w₀ with
   | .error f => fx.refuse f.status f.text

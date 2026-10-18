@@ -77,9 +77,15 @@ and tag (32) it names. So every base `Base.file` writes is within one base frame
 (`Host.Proofs.Genesis.Base.read_file`). -/
 def baseRecordMax (c : Cadence) : Nat := c.worldBytesMax + stampBytes + 2 * (8 + Log.tagBytes)
 
-/-- `host serve`'s numbers. The base: THE BAR's World is ~290 KB (HOST-14), so 256 MiB is ~900 BAR
-stores; at CODEC's measured KMAC (184 MB/s) its seal is ~1.5 s of Task time and its decode at open
-is the dominant term of a cold reopen (measured in decisions/host.md HOST-14). A record: 64 turns
+/-- `host serve`'s numbers. The base: `worldBytesMax` is the reader's bound on a base World (open
+refuses a larger base file `baseTooLarge` before decoding it) and the seal's encode twin
+(`worldTooLarge`). It is NOT yet derived: it is the old literal, which PERF-2 measured reopening in
+120.7 s against THE BAR's 60 s at its own size. KERNEL-55 (ROOT Q1 = B) is to derive it (HOST-57):
+`Host.Cli.budget_reaches` bounds the WEIGHT of every World a budget-admitted World folds to, under
+KERNEL's Canon, Slotted and RowsCanon premises (proved for genesis Worlds; composed for imported and
+joined ones by cv 01a150ed-7bf7), and CODEC's size equality (`world_size_le`, cv 01a150a3-2523, not yet
+a theorem) is to turn that weight into bytes. The derivation replaces this literal, never sits beside
+it. A record: 64 turns
 of steps `World.step` took, `recordBytesDerived` (HOST-47: it was 32 MiB, twice that, and the torn-tail
 window `Log.frameMax recordBytesMax` with it). -/
 def deployed : Cadence where
@@ -89,10 +95,14 @@ def deployed : Cadence where
 
 end Cadence
 
-/-- The genesis allowance of a deployed Store: half of `worldBytesMax`. `fold_world_weight`
-(KERNEL-18) bounds the World's weight by its genesis weight plus the allowance; the other half is
-headroom for the encoding's per-entry overhead over `World.weight`, which the seal asserts
-(`worldTooLarge`), since CODEC's `size ≤ c · weight` is not yet a theorem. -/
-def allowanceMax : Nat := Cadence.deployed.worldBytesMax / 2
+/-- The genesis allowance of a deployed Store, and the most a World this binary genesises, joins or
+imports may carry (`allowancePastBound`, HOST-56): KERNEL-15's useful life. PRIMARY (KERNEL-55, ROOT
+Q1 = B): the World bound is derived from it, never the other way. -/
+def allowanceMax : Nat := 1 <<< 27
+
+/-- The most weight a World this binary genesises, joins or imports may hold beside its allowance
+(HOST-56, HOST's choice): ~7,000 founders' cells at a genesis. Together with `allowanceMax` it fixes
+the most storage potential an admitted World carries (`Host.Cli.potentialMax`). -/
+def genesisWeightMax : Nat := 1 <<< 20
 
 end Nanodregg.Host

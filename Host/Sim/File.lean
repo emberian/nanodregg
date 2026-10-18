@@ -30,6 +30,7 @@ Prints `FAIL <check>` per failure and `ALL PASS` when none.
 import Host.Store
 import Host.Keys
 import Host.Sim.Run
+import Host.Cli
 
 namespace Nanodregg.Host.Sim.File
 
@@ -437,6 +438,61 @@ def boundPlants (root : System.FilePath) (key : Digest) (keys : Keys) (failures 
     check s!"{q}{tag}: a verifying frame of a {n}-byte record is refused `{want}` and the file is unchanged ({name}, seg.log {before} -> {after})"
       (name == want && before == after) failures
 
+/-- plant-import-budget (HOST-56, KERNEL-55): the deployed `host import` decision (`Cli.importWith`,
+the function `importVerb` runs at `IO`) over carried files of real deployed genesis Worlds, exported
+by the deployed `Carry.exportFile`; the first effect it reaches is recorded. A World carrying 2^40
+is refused `allowancePastBound`; a World carrying exactly `allowanceMax` whose founders weigh past
+`genesisWeightMax` PASSES the allowance arm and is refused `potentialPastBound` (the arm an
+allowance check alone misses). CONTROLS through the same path: one founder at `allowanceMax`, and
+founders just under `genesisWeightMax`, reach `genesis`. -/
+def budgetPlants (failures : IO.Ref Nat) : IO Unit := do
+  let p := "plant-import-budget"
+  let X := Nanodregg.Host.Deployed.X
+  let keyOf (i : Nat) : ByteArray := Stream.nat64.bytes i ++ ByteArray.mk (Array.replicate 24 7)
+  let fs (n : Nat) := (List.range n).map fun i => (keyOf i, Receive.nextKeyDigest X (keyOf (i + 1)))
+  let nonce := ByteArray.mk (Array.replicate 32 1)
+  let worldOf (allowance n : Nat) : Option (World Nanodregg.Host.Deployed.D) :=
+    match Receive.genesis X "budget".toUTF8 nonce allowance (fs n) with
+    | .ok w => some w
+    | .error _ => none
+  let importOf (w : World Nanodregg.Host.Deployed.D) : IO String := do
+    match Carry.exportFile X.env Codec.Deployed.digestCodec w with
+    | .error f => pure s!"export {f.name}"
+    | .ok bytes =>
+      let first ← IO.mkRef "none"
+      let mark (e : String) : IO Unit := do if (← first.get) == "none" then first.set e
+      let _ ← Cli.importWith (m := IO) (name := "imported") (digestHex := (Carry.digestOf bytes).toHex)
+        { nonce := pure (.ok nonce), readIn := pure (.ok bytes), key := pure (some Digest.zero),
+          genesis := fun _ _ => do mark "genesis"; pure (.error .locked),
+          reopen := fun _ => do mark "reopen"; pure (.error .locked),
+          refuse := fun s _ => do mark s!"refused {s.name}"; pure 1,
+          report := fun _ => pure () }
+      first.get
+  let w1 := (worldOf allowanceMax 1).map (·.weight) |>.getD 0
+  let w2 := (worldOf allowanceMax 2).map (·.weight) |>.getD 0
+  let per := w2 - w1
+  let over := (genesisWeightMax - w1) / max per 1 + 2
+  let under := (genesisWeightMax - w1) / max per 1 - 1
+  let shown (o : Option (World Nanodregg.Host.Deployed.D)) : IO String := match o with
+    | some w => do pure s!"{← importOf w} (weight {w.weight}, allowance {w.allowance})"
+    | none => pure "genesis refused"
+  let big := worldOf (2 ^ 40) 1
+  let heavy := worldOf allowanceMax over
+  let ctl := worldOf allowanceMax 1
+  let light := worldOf allowanceMax under
+  let sBig ← shown big
+  let sHeavy ← shown heavy
+  let sCtl ← shown ctl
+  let sLight ← shown light
+  check s!"{p}: a World carrying 2^40 is refused `allowancePastBound` ({sBig})"
+    (sBig.startsWith "refused allowancePastBound") failures
+  check s!"{p}: a World at allowanceMax with {over} founders past genesisWeightMax {genesisWeightMax} passes the allowance arm and is refused `potentialPastBound` ({sHeavy})"
+    (0 < per && (heavy.map (fun w => decide (w.allowance ≤ allowanceMax) && decide (genesisWeightMax < w.weight)) |>.getD false) &&
+      sHeavy.startsWith "refused potentialPastBound") failures
+  check s!"{p}-control: one founder at allowanceMax reaches genesis ({sCtl}); {under} founders under genesisWeightMax reach genesis ({sLight})"
+    (sCtl.startsWith "genesis" && sLight.startsWith "genesis" &&
+      (light.map (fun w => decide (w.weight ≤ genesisWeightMax)) |>.getD false)) failures
+
 /-- plant-empty-record (HOST-49, HOST-21's adopt argument): every record a Store holds advances its
 step count, so a World at step 0 has no record past its base (`Host.Deployed.openWith_steps_zero`).
 Reader: a frame that VERIFIES under the Store key, holding the codec's own bytes of NO steps, appended
@@ -641,6 +697,7 @@ def body (seed : Nat) (dirA dirB : System.FilePath) (control : Bool := false) : 
   wideFollowPlant (dirB / "wide") key keys failures
   boundPlants (dirB / "bound") key keys failures
   emptyPlants (dirB / "empty") key keys failures
+  budgetPlants failures
   positionPlant (dirB / "position") key keys failures
   if control then check "harness-control: GATES-15's known-red control, an expectation nothing meets (this run must read RED)" false failures
   let n ← failures.get
