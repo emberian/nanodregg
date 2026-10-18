@@ -5,7 +5,8 @@
   bit function and ANY tree (no premise): `insAt` splits exactly where `getAt`'s `diverge` check
   refuses.
 * `inclusion_sound` / `exclusion_sound`: a proof that verifies against the root of a well-formed
-  trie tells the truth about the key, or exhibits two different byte strings with one hash.
+  trie tells the truth about the key, or two different byte strings among those the read compares
+  (`readPres`: the proof's, then the trie's along the key's path) have one hash (`CollAmong`).
   Inclusion also needs the trie routed (a key that leaves a node's skipped bits is answered `none`
   by `getAt`, so a malformed tree could hold it in a leaf); exclusion does not.
 * `rep_first`: a canonical node's `rep` is the first key it lists. `rep` is a cache, not hashed: two
@@ -546,8 +547,30 @@ def Routed : Nat → T K V D → Prop
       (∀ p ∈ l.toList, S.bit p.1 b = false) ∧ (∀ p ∈ r.toList, S.bit p.1 b = true) ∧
       Routed (b + 1) l ∧ Routed (b + 1) r
 
-/-- Two different byte strings with one digest. -/
-def Coll : Prop := ∃ a b : ByteArray, a ≠ b ∧ S.hash a = S.hash b
+/-- Two different byte strings OF `L` with one digest. A collision among SOME two byte strings is a
+theorem of every hash into a finite digest type (pigeonhole), so it binds nothing; the soundness
+theorems below name the byte strings they compare (`readPres`: what the presented proof hashes and
+what the trie hashed along the key's path) and escape only by a collision among those. -/
+def CollAmong (L : List ByteArray) : Prop := ∃ a ∈ L, ∃ b ∈ L, a ≠ b ∧ S.hash a = S.hash b
+
+omit [DecidableEq K] in
+theorem CollAmong.mono {L L' : List ByteArray} (hsub : ∀ x ∈ L, x ∈ L') :
+    CollAmong S L → CollAmong S L'
+  | ⟨a, ha, b, hb, hne, h⟩ => ⟨a, hsub a ha, b, hsub b hb, hne, h⟩
+
+omit [DecidableEq K] in
+/-- Two different heads with one digest collide among the two lists. -/
+theorem CollAmong.heads {x y : ByteArray} {L L' : List ByteArray} (h : S.hash x = S.hash y)
+    (hne : x ≠ y) : CollAmong S ((x :: L) ++ (y :: L')) :=
+  ⟨x, by simp, y, by simp, hne, h⟩
+
+omit [DecidableEq K] in
+/-- A collision among the tails is one among the lists. -/
+theorem CollAmong.tails {x y : ByteArray} {L L' : List ByteArray} :
+    CollAmong S (L ++ L') → CollAmong S ((x :: L) ++ (y :: L')) :=
+  CollAmong.mono S fun z hz => by
+    simp only [List.mem_append, List.mem_cons] at hz ⊢
+    rcases hz with h | h <;> simp [h]
 
 omit [DecidableEq K] in
 theorem tagged_inj {a b : UInt8} {x y : ByteArray} (h : tagged a x = tagged b y) : a = b ∧ x = y := by
@@ -556,14 +579,6 @@ theorem tagged_inj {a b : UInt8} {x y : ByteArray} (h : tagged a x = tagged b y)
   refine ⟨?_, h₂⟩
   have := congrArg (fun z : ByteArray => z.data.toList) h₁
   simpa using this
-
-omit [DecidableEq K] in
-/-- Equal digests of differently tagged or different bytes are a collision. -/
-theorem hash_tagged {a b : UInt8} {x y : ByteArray}
-    (h : S.hash (tagged a x) = S.hash (tagged b y)) : (a = b ∧ x = y) ∨ Coll S := by
-  by_cases he : tagged a x = tagged b y
-  · exact .inl (tagged_inj he)
-  · exact .inr ⟨_, _, he, h⟩
 
 /-- **A branching bit's two bytes name it**, below `2 ^ 16`. -/
 theorem u16_inj {a b : Nat} (ha : a < 2 ^ 16) (hb : b < 2 ^ 16) (h : u16 a = u16 b) : a = b := by
@@ -665,50 +680,42 @@ variable (hL : ∀ x y, leafBody S x = leafBody S y → x = y)
 include hL hN
 
 omit [DecidableEq K] in
-/-- **A path that recomputes the root ends where the trie's path for the key ends**, or the hash
-has a collision. Its bits must lie below `depth` (`ascends`), as a well-formed node's do: two bits
-are told apart by their u16 only below `2 ^ 16`. -/
+/-- **A path that recomputes the root ends where the trie's path for the key ends**, or two of the
+byte strings compared collide: one the path hashes (`climbPres`) against one the trie hashed along
+the key's path (`pathPres`). Its bits must lie below `depth` (`ascends`), as a well-formed node's
+do: two bits are told apart by their u16 only below `2 ^ 16`. -/
 theorem climb_sound (k : K) :
     ∀ (d : Nat) (t : T K V D) (sibs : List (Nat × D)) (term : Option (List (K × D))),
       WF S t → ascends S d sibs = true → climb S k sibs (termHash S term) = t.hashOf S →
-      term = (proveAt S k t).term ∨ Coll S
+      term = (proveAt S k t).term ∨ CollAmong S (climbPres S k sibs term ++ pathPres S k t)
   | d, .empty, [], none, _, _, _ => .inl rfl
   | d, .empty, [], some kds, _, _, h => by
-      rcases hash_tagged S h with ⟨h1, _⟩ | c
-      · exact absurd h1 (by decide)
-      · exact .inr c
+      simp only [climb, termHash, T.hashOf, leafHash, emptyHash] at h
+      exact .inr (CollAmong.heads S h fun he => absurd (tagged_inj he).1 (by decide))
   | d, .empty, (b', s) :: rest, term, _, _, h => by
-      simp only [climb] at h
-      split at h <;>
-      · rcases hash_tagged S h with ⟨h1, _⟩ | c
-        · exact absurd h1 (by decide)
-        · exact .inr c
+      simp only [climb, T.hashOf, emptyHash] at h
+      cases hk : S.bit k b' <;> simp only [hk] at h <;>
+      · simp only [climbPres, pathPres, hk]
+        exact .inr (CollAmong.heads S h fun he => absurd (tagged_inj he).1 (by decide))
   | d, .leaf hv kvs, [], none, hw, _, h => by
-      simp only [climb, termHash, T.hashOf, WF] at h hw; rw [hw] at h
-      rcases hash_tagged S h with ⟨h1, _⟩ | c
-      · exact absurd h1 (by decide)
-      · exact .inr c
+      simp only [climb, termHash, T.hashOf, WF, emptyHash] at h hw; rw [hw] at h
+      exact .inr (CollAmong.heads S h fun he => absurd (tagged_inj he).1 (by decide))
   | d, .leaf hv kvs, [], some kds, hw, _, h => by
       simp only [climb, termHash, T.hashOf, WF] at h hw; rw [hw] at h
-      rcases hash_tagged S h with ⟨_, hb⟩ | c
-      · exact .inl (by simp [proveAt, hL _ _ hb])
-      · exact .inr c
+      by_cases he : termPre S (some kds) = termPre S (some (digests S kvs))
+      · exact .inl (by simp [proveAt, hL _ _ (tagged_inj he).2])
+      · exact .inr (CollAmong.heads S h he)
   | d, .leaf hv kvs, (b', s) :: rest, term, hw, _, h => by
       simp only [climb, T.hashOf, WF] at h hw; rw [hw] at h
-      split at h <;>
-      · rcases hash_tagged S h with ⟨h1, _⟩ | c
-        · exact absurd h1 (by decide)
-        · exact .inr c
+      cases hk : S.bit k b' <;> simp only [hk] at h <;>
+      · simp only [climbPres, pathPres, hk]
+        exact .inr (CollAmong.heads S h fun he => absurd (tagged_inj he).1 (by decide))
   | d, .node hv b rep l r, [], none, hw, _, h => by
-      simp only [climb, termHash, T.hashOf, WF] at h hw; rw [hw.2.1] at h
-      rcases hash_tagged S h with ⟨h1, _⟩ | c
-      · exact absurd h1 (by decide)
-      · exact .inr c
+      simp only [climb, termHash, T.hashOf, WF, emptyHash] at h hw; rw [hw.2.1] at h
+      exact .inr (CollAmong.heads S h fun he => absurd (tagged_inj he).1 (by decide))
   | d, .node hv b rep l r, [], some kds, hw, _, h => by
-      simp only [climb, termHash, T.hashOf, WF] at h hw; rw [hw.2.1] at h
-      rcases hash_tagged S h with ⟨h1, _⟩ | c
-      · exact absurd h1 (by decide)
-      · exact .inr c
+      simp only [climb, termHash, T.hashOf, WF, leafHash] at h hw; rw [hw.2.1] at h
+      exact .inr (CollAmong.heads S h fun he => absurd (tagged_inj he).1 (by decide))
   | d, .node hv b rep l r, (b', s) :: rest, term, hw, ha, h => by
       obtain ⟨hb, hh, hwl, hwr⟩ := hw
       simp only [ascends, Bool.and_eq_true, decide_eq_true_eq] at ha
@@ -718,38 +725,46 @@ theorem climb_sound (k : K) :
       simp only [climb, T.hashOf] at h; rw [hh] at h
       cases hk : S.bit k b'
       · simp only [hk] at h
-        rcases hash_tagged S h with ⟨_, hx⟩ | c
-        · obtain ⟨rfl, hxy⟩ := node_bytes l2 l1 hx
-          simp only [proveAt, hk]
-          exact climb_sound k (b' + 1) l rest term hwl ha (hN _ _ _ _ hxy).1
-        · exact .inr c
+        by_cases hx : nodePre S b' (climb S k rest (termHash S term)) s = nodePre S b (l.hashOf S) (r.hashOf S)
+        · obtain ⟨rfl, hxy⟩ := node_bytes l2 l1 (tagged_inj hx).2
+          simp only [proveAt, climbPres, pathPres, hk]
+          rcases climb_sound k (b' + 1) l rest term hwl ha (hN _ _ _ _ hxy).1 with he | c
+          · exact .inl he
+          · exact .inr (CollAmong.tails S c)
+        · simp only [climbPres, pathPres, hk]
+          exact .inr (CollAmong.heads S h hx)
       · simp only [hk] at h
-        rcases hash_tagged S h with ⟨_, hx⟩ | c
-        · obtain ⟨rfl, hxy⟩ := node_bytes l2 l1 hx
-          simp only [proveAt, hk]
-          exact climb_sound k (b' + 1) r rest term hwr ha (hN _ _ _ _ hxy).2
-        · exact .inr c
+        by_cases hx : nodePre S b' s (climb S k rest (termHash S term)) = nodePre S b (l.hashOf S) (r.hashOf S)
+        · obtain ⟨rfl, hxy⟩ := node_bytes l2 l1 (tagged_inj hx).2
+          simp only [proveAt, climbPres, pathPres, hk]
+          rcases climb_sound k (b' + 1) r rest term hwr ha (hN _ _ _ _ hxy).2 with he | c
+          · exact .inl he
+          · exact .inr (CollAmong.tails S c)
+        · simp only [climbPres, pathPres, hk]
+          exact .inr (CollAmong.heads S h hx)
 
 variable [DecidableEq D]
 
 /-- **Inclusion is sound.** A proof that verifies against a well-formed, routed trie's root shows
-the digest of the value the trie holds at the key, or the hash has a collision. -/
+the digest of the value the trie holds at the key, or two of the byte strings the read compares
+collide (`readPres`: the proof's against the trie's path). -/
 theorem inclusion_sound {t : T K V D} {k : K} {dig : D} {p : Proof K D} (hw : WF S t)
     (hr : Routed S 0 t) (hv : verifyInclusion S (t.hashOf S) k dig p = true) :
-    (∃ v, t.get S k = some v ∧ S.vdigest v = dig) ∨ Coll S := by
+    (∃ v, t.get S k = some v ∧ S.vdigest v = dig) ∨ CollAmong S (readPres S k p t) := by
   unfold verifyInclusion at hv
   cases ht : p.term with
   | none => simp [ht] at hv
   | some kds =>
       simp only [ht, Bool.and_eq_true, decide_eq_true_eq] at hv
-      rcases climb_sound S hL hN k 0 t p.sibs (some kds) hw hv.1 hv.2.2 with he | c
-      · exact .inl (proveAt_some_getAt S k 0 t kds dig hr he.symm hv.2.1)
+      rcases climb_sound S hL hN k 0 t p.sibs p.term hw hv.1 (by rw [ht]; exact hv.2.2) with he | c
+      · rw [ht] at he
+        exact .inl (proveAt_some_getAt S k 0 t kds dig hr he.symm hv.2.1)
       · exact .inr c
 
 /-- **Exclusion is sound.** A proof of absence that verifies against a well-formed trie's root
-means the trie holds nothing at the key, or the hash has a collision. -/
+means the trie holds nothing at the key, or two of the byte strings the read compares collide. -/
 theorem exclusion_sound {t : T K V D} {k : K} {p : Proof K D} (hw : WF S t)
-    (hv : verifyExclusion S (t.hashOf S) k p = true) : t.get S k = none ∨ Coll S := by
+    (hv : verifyExclusion S (t.hashOf S) k p = true) : t.get S k = none ∨ CollAmong S (readPres S k p t) := by
   unfold verifyExclusion at hv
   simp only [Bool.and_eq_true, decide_eq_true_eq] at hv
   rcases climb_sound S hL hN k 0 t p.sibs p.term hw hv.1.1 hv.2 with he | c
@@ -1700,9 +1715,9 @@ end Nanodregg.Kernel.Trie.RepTooth
 
 /-! ## Teeth for the proof premises, on a toy with an injective hash
 
-`toyI` hashes a byte string to its own bytes, so equal digests are equal bytes and `Coll toyI` is
-false (`toyI_noColl`); its key and digest encodings are prefix-free, so `climb_sound`'s `hL` and `hN`
-hold too (`toyI_hL`, `toyI_hN`). What each tooth below exhibits is therefore no hash's fault: the
+`toyI` hashes a byte string to its own bytes, so equal digests are equal bytes and `CollAmong toyI L`
+is false for every `L` (`toyI_noColl`); its key and digest encodings are prefix-free, so
+`climb_sound`'s `hL` and `hN` hold too (`toyI_hL`, `toyI_hN`). What each tooth below exhibits is therefore no hash's fault: the
 premise or check it names is the one that stops it. -/
 
 namespace Nanodregg.Kernel.Trie.Teeth
@@ -1748,8 +1763,8 @@ private theorem unary_prefix : ∀ {a c : Nat} {s s' : List UInt8}, unary a ++ s
       exact ⟨rfl, rfl⟩
 
 /-- `toyI`'s hash is injective. -/
-theorem toyI_noColl : ¬ Coll toyI := by
-  rintro ⟨a, b, hne, h⟩
+theorem toyI_noColl (L : List ByteArray) : ¬ CollAmong toyI L := by
+  rintro ⟨a, -, b, -, hne, h⟩
   exact hne (ByteArray.ext (Array.toList_inj.mp h))
 
 /-- `climb_sound`'s `hN` holds for `toyI`. -/
@@ -1824,7 +1839,7 @@ private theorem badRep_facts :
 `get` reads `none` (it refuses `0` on the skipped bit the `rep` claims). -/
 theorem inclusion_needs_routed :
     WF toyI badRep ∧ Shallow toyI 0 badRep ∧ ¬ Routed toyI 0 badRep ∧
-    ¬ Coll toyI ∧ (∀ x y, leafBody toyI x = leafBody toyI y → x = y) ∧
+    (∀ L, ¬ CollAmong toyI L) ∧ (∀ x y, leafBody toyI x = leafBody toyI y → x = y) ∧
     (∀ a b c e, toyI.dbytes a ++ toyI.dbytes b = toyI.dbytes c ++ toyI.dbytes e → a = c ∧ b = e) ∧
     verifyInclusion toyI (badRep.hashOf toyI) 0 (toyI.vdigest 7) (badRep.prove toyI 0) = true ∧
     badRep.get toyI 0 = none :=
@@ -1869,7 +1884,7 @@ injective hash with `hL` and `hN`, a verifier without the bound accepts `forged`
 for key `1`, which the trie holds. `verifyExclusion` refuses it. -/
 theorem ascends_bound_needed :
     u16 (0 + 2 ^ 16) = u16 0 ∧
-    Canon toyI 0 goodT ∧ ¬ Coll toyI ∧ (∀ x y, leafBody toyI x = leafBody toyI y → x = y) ∧
+    Canon toyI 0 goodT ∧ (∀ L, ¬ CollAmong toyI L) ∧ (∀ x y, leafBody toyI x = leafBody toyI y → x = y) ∧
     (∀ a b c e, toyI.dbytes a ++ toyI.dbytes b = toyI.dbytes c ++ toyI.dbytes e → a = c ∧ b = e) ∧
     goodT.get toyI 1 = some 8 ∧
     verifyExclusionNoBound (goodT.hashOf toyI) 1 forged = true ∧

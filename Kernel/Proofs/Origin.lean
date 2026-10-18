@@ -3,13 +3,15 @@
 
 * `admit_origin`, `fold_origin`: no Turn changes the origin.
 * `genesis_inj`: two geneses with one origin were made from the same name, nonce, allowance and
-  founders, or the origin hash has a collision; `genesis_chain_inj`: the same for the genesis
-  chain (one more hash).
+  founders, or their two origin inputs collide (`originPre`); `genesis_chain_inj`: the same for the
+  genesis chain (one more hash, `World.genesisPre`). Teeth `genesis_inj_sep`, `genesis_chain_inj_sep`:
+  where the hash separates the two inputs, the equality alone.
 * `admitted_elsewhere_refused`: a call one World admitted is, on any World with another origin,
   refused `wrongWorld` (or, if that World's journal holds the same transaction id, `replayed`;
   either way never admitted).
 -/
 import Kernel.Proofs.Lawful
+import Kernel.Proofs.Fold
 import Kernel.Proofs.Refuse
 import Kernel.Proofs.Receive
 import Kernel.Receive.Follow
@@ -20,10 +22,6 @@ namespace Nanodregg.Kernel.Receive
 open Nanodregg.Kernel Nanodregg.Codec Nanodregg.Codec.Stream
 
 variable {D : Type} [Ord D] [DecidableEq D]
-
-omit [Ord D] [DecidableEq D] in
-/-- A collision of the hash under one domain: two byte strings, one digest. -/
-def HashColl (E : Env D) (dom : String) : Prop := ∃ a b : ByteArray, a ≠ b ∧ E.hash dom a = E.hash dom b
 
 theorem admit_origin {E : Env D} {w w' : World D} {t : Turn D} (h : World.admit E w t = .ok w') :
     w'.origin = w.origin := by
@@ -160,15 +158,16 @@ theorem sum_inl_ne_inr {α β : Type} {P : α → Prop} {Q : β → Prop} {a : S
   simp [u8, Stream.bytes] at this
 
 /-- **Genesis commits to everything it was made from.** Two geneses with equal origins had equal
-names, nonces, allowances and founders (keys and next-key digests, in order), or the origin hash
-has a collision. -/
+names, nonces, allowances and founders (keys and next-key digests, in order), or their two origin
+inputs collide. -/
 theorem genesis_inj {X : Ctx D} {n : Nat} (hE : X.env.Lawful n)
     {name nonce name' nonce' : ByteArray} {allowance allowance' : Nat}
     {founders founders' : List (ByteArray × D)}
     (hf : GenesisFits X name nonce allowance founders) (hf' : GenesisFits X name' nonce' allowance' founders')
     (h : originOf X name nonce allowance founders = originOf X name' nonce' allowance' founders') :
     (name = name' ∧ nonce = nonce' ∧ allowance = allowance' ∧ founders = founders') ∨
-      HashColl X.env domOrigin := by
+      CollidesAmong X.env.hash
+        [originPre X name nonce allowance founders, originPre X name' nonce' allowance' founders'] := by
   by_cases hbytes : originInput.bytes (.inl (inputOf X name nonce allowance founders)) =
       originInput.bytes (.inl (inputOf X name' nonce' allowance' founders'))
   · left
@@ -185,18 +184,38 @@ theorem genesis_inj {X : Ctx D} {n : Nat} (hE : X.env.Lawful n)
       exact Prod.ext hab.1 (hE.bytes_eq hab.2)
     exact map_inj hinj hl
   · right
-    exact ⟨_, _, hbytes, h⟩
+    exact .pair (fun he => hbytes (congrArg Prod.snd he)) h
 
 omit [DecidableEq D] in
 /-- **The genesis chain commits to the origin** (one more hash): equal genesis chains, equal
-origins, or a collision of the genesis hash. With `genesis_inj`, equal genesis chains mean equal
+origins, or the two genesis inputs collide. With `genesis_inj`, equal genesis chains mean equal
 inputs, up to two collisions. -/
 theorem genesis_chain_inj {X : Ctx D} {n : Nat} (hE : X.env.Lawful n)
     {o o' : D} (h : X.env.hash domGenesis (X.env.bytes o) = X.env.hash domGenesis (X.env.bytes o')) :
-    o = o' ∨ HashColl X.env domGenesis := by
+    o = o' ∨ CollidesAmong X.env.hash [World.genesisPre X.env o, World.genesisPre X.env o'] := by
   by_cases he : X.env.bytes o = X.env.bytes o'
   · exact .inl (hE.bytes_eq he)
-  · exact .inr ⟨_, _, he, h⟩
+  · exact .inr (.pair (fun e => he (congrArg Prod.snd e)) h)
+
+/-- **Tooth of `genesis_inj`**: where the hash separates the two origin inputs, equal origins are
+equal genesis inputs. -/
+theorem genesis_inj_sep {X : Ctx D} {n : Nat} (hE : X.env.Lawful n)
+    {name nonce name' nonce' : ByteArray} {allowance allowance' : Nat}
+    {founders founders' : List (ByteArray × D)}
+    (hf : GenesisFits X name nonce allowance founders) (hf' : GenesisFits X name' nonce' allowance' founders')
+    (hs : Separates X.env.hash
+      [originPre X name nonce allowance founders, originPre X name' nonce' allowance' founders'])
+    (h : originOf X name nonce allowance founders = originOf X name' nonce' allowance' founders') :
+    name = name' ∧ nonce = nonce' ∧ allowance = allowance' ∧ founders = founders' :=
+  hs.elim (genesis_inj hE hf hf' h)
+
+omit [DecidableEq D] in
+/-- **Tooth of `genesis_chain_inj`**: where the hash separates the two genesis inputs, equal genesis
+chains are equal origins. -/
+theorem genesis_chain_inj_sep {X : Ctx D} {n : Nat} (hE : X.env.Lawful n) {o o' : D}
+    (hs : Separates X.env.hash [World.genesisPre X.env o, World.genesisPre X.env o'])
+    (h : X.env.hash domGenesis (X.env.bytes o) = X.env.hash domGenesis (X.env.bytes o')) : o = o' :=
+  hs.elim (genesis_chain_inj hE h)
 
 
 /-- **A call is bound to one World.** A call that one World admitted is never admitted by a World

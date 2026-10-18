@@ -278,4 +278,44 @@ def verifyExclusion (root : D) (k : K) (p : Proof K D) : Bool :=
    | none => true) &&
   climb S k p.sibs (termHash S p.term) = root
 
+/-! ### What a read compares: the bytes each hash along a path takes (KERNEL-56) -/
+
+omit [DecidableEq K] [DecidableEq D] in
+/-- The bytes a path's end hashes: an empty trie's tag, or a leaf's entries. -/
+def termPre : Option (List (K × D)) → ByteArray
+  | none => tagged 0 ByteArray.empty
+  | some kds => tagged 1 (leafBody S kds)
+
+omit [DecidableEq K] [DecidableEq D] in
+/-- The bytes a node hashes. -/
+def nodePre (b : Nat) (l r : D) : ByteArray := tagged 2 (u16 b ++ S.dbytes l ++ S.dbytes r)
+
+omit [DecidableEq K] [DecidableEq D] in
+/-- The bytes `climb` hashes for `k`, from the root down, then the end's (`termPre`). -/
+def climbPres (k : K) : List (Nat × D) → Option (List (K × D)) → List ByteArray
+  | [], term => [termPre S term]
+  | (b, s) :: rest, term =>
+      (match S.bit k b with
+       | true => nodePre S b s (climb S k rest (termHash S term))
+       | false => nodePre S b (climb S k rest (termHash S term)) s) :: climbPres k rest term
+
+omit [DecidableEq K] [DecidableEq D] in
+/-- The bytes a trie hashed along the path `proveAt` follows for `k` (each node over its children's
+cached digests), then its end's. -/
+def pathPres (k : K) : T K V D → List ByteArray
+  | .empty => [termPre S none]
+  | .leaf _ kvs => [termPre S (some (digests S kvs))]
+  | .node _ b _ l r =>
+      nodePre S b (l.hashOf S) (r.hashOf S) ::
+        (match S.bit k b with
+         | true => pathPres k r
+         | false => pathPres k l)
+
+omit [DecidableEq K] [DecidableEq D] in
+/-- **What a read compares**: the bytes the presented proof `p` hashes for `k`, then the bytes the
+trie `t` hashed along `k`'s path. Every soundness theorem of a proof escapes only by a collision
+among these. -/
+def readPres (k : K) (p : Proof K D) (t : T K V D) : List ByteArray :=
+  climbPres S k p.sibs p.term ++ pathPres S k t
+
 end Nanodregg.Kernel.Trie

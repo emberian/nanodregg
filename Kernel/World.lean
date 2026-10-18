@@ -303,7 +303,8 @@ def domRomId : String := "nanodregg/kernel/rom-id/v1"
 /-- The trie's node hash (`Trie.Spec.hash`: the shape tag byte, then the shape's bytes). -/
 def domTrie : String := "nanodregg/kernel/trie/v1"
 /-- A trie leaf's value digest: ONE domain, a kind byte first, so two different leaves have one
-digest only by a collision in that domain (`Collision`), never across domains. -/
+digest only by a collision of their two inputs in that domain (`leafDigest_inj`), never across
+domains. -/
 def domLeaf : String := "nanodregg/kernel/trie-leaf/v2"
 /-- A journal leaf's value digest (`journalDigest`, KERNEL-41): its own domain, so a journal entry's
 digest is never a cell leaf's but by a collision. -/
@@ -342,10 +343,24 @@ def rootsDigest (E : Env D) (root jroot rroot rowsroot : D) : D :=
   E.hash domRoots (E.bytes root ++ E.bytes jroot ++ E.bytes rroot ++ E.bytes rowsroot)
 
 /-- The head link: a kind byte (0 a Turn, 1 a recorded refusal: one domain, so a turn link equal to
-a refusal link is a `Collision`, KERNEL-47 amendment 2), the previous head, the step's digest, and
-the roots digest after the step. -/
+a refusal link is a collision of the two links' inputs, `headLink_inj`, KERNEL-47 amendment 2), the
+previous head, the step's digest, and the roots digest after the step. -/
 def headLink (E : Env D) (prev : D) (tag : UInt8) (d rd : D) : D :=
   E.hash domChain (⟨#[tag]⟩ ++ E.bytes prev ++ E.bytes d ++ E.bytes rd)
+
+omit [Ord D] in
+/-- What `headLink` hashes. -/
+def linkPre (E : Env D) (prev : D) (tag : UInt8) (d rd : D) : String × ByteArray :=
+  (domChain, ⟨#[tag]⟩ ++ E.bytes prev ++ E.bytes d ++ E.bytes rd)
+
+omit [Ord D] in
+/-- What `rootsDigest` hashes. -/
+def rootsPre (E : Env D) (a b c d : D) : String × ByteArray :=
+  (domRoots, E.bytes a ++ E.bytes b ++ E.bytes c ++ E.bytes d)
+
+omit [Ord D] in
+/-- What `refusedDigest` hashes. -/
+def refusedPre (E : Env D) (r : Refused D) : String × ByteArray := (domRefused, refusedBytes E r)
 
 /-- The next chain head after an admitted Turn commits to the previous one, the Turn, and the ROOTS
 AFTER it (KERNEL-23 (d), KERNEL-41, KERNEL-47): `rd` is `rootsDigest` of the cells', journal's and
@@ -392,6 +407,10 @@ def leafBytes (E : Env D) : Leaf → ByteArray
 /-- What a leaf commits to of its value. -/
 def leafDigest (E : Env D) (l : Leaf) : D := E.hash domLeaf (leafBytes E l)
 
+omit [Ord D] in
+/-- What `leafDigest` hashes. -/
+def leafPre (E : Env D) (l : Leaf) : String × ByteArray := (domLeaf, leafBytes E l)
+
 /-- The deployed trie: depth `Bounds.trieDepth` (a kind bit and 256 id bits). -/
 def trieSpec (E : Env D) : Trie.Spec (Slot D) Leaf D where
   bit := slotBit E
@@ -406,6 +425,11 @@ def trieSpec (E : Env D) : Trie.Spec (Slot D) Leaf D where
 then the turn digest's bytes (injective on heights below 2^64, which every reached World's are). -/
 def journalDigest (E : Env D) (e : Nat × D) : D :=
   E.hash domJournal (Nanodregg.Codec.Stream.nat64.bytes e.1 ++ E.bytes e.2)
+
+omit [Ord D] in
+/-- What `journalDigest` hashes. -/
+def journalPre (E : Env D) (e : Nat × D) : String × ByteArray :=
+  (domJournal, Nanodregg.Codec.Stream.nat64.bytes e.1 ++ E.bytes e.2)
 
 /-- The journal trie (KERNEL-41): routed by the transaction id's bytes, most significant bit first,
 depth `Bounds.journalDepth` (256 id bits, a 32-byte digest); nodes hashed in the one trie domain;
@@ -435,6 +459,10 @@ def refusalLeafBytes (E : Env D) : RefusalLeaf D → ByteArray
 
 def refusalDigest (E : Env D) (l : RefusalLeaf D) : D := E.hash domRefusal (refusalLeafBytes E l)
 
+omit [Ord D] in
+/-- What `refusalDigest` hashes. -/
+def refusalPre (E : Env D) (v : RefusalLeaf D) : String × ByteArray := (domRefusal, refusalLeafBytes E v)
+
 /-- The refusals trie (KERNEL-44, KERNEL-47): routed by the key's bytes, most significant bit first,
 depth `Bounds.refusalDepth` (41 bytes); nodes in the one trie domain; leaves by `refusalDigest`. -/
 def refusalSpec (E : Env D) : Trie.Spec (RefusalSlot D) (RefusalLeaf D) D where
@@ -445,6 +473,29 @@ def refusalSpec (E : Env D) : Trie.Spec (RefusalSlot D) (RefusalLeaf D) D where
   dbytes := E.bytes
   kbytes := refusalKeyBytes E
   vdigest := refusalDigest E
+
+section Reads
+variable {K V : Type} [DecidableEq K]
+
+omit [Ord D] [DecidableEq K] in
+/-- Trie-node bytes as the kernel's hash takes them: in `domTrie`. -/
+def trieIn (L : List ByteArray) : List (String × ByteArray) := L.map fun b => (domTrie, b)
+
+omit [Ord D] [DecidableEq K] in
+/-- **What a read compares**, as the kernel's hash takes it: the trie-node bytes the presented proof
+hashes for `k` and those the trie hashed along `k`'s path (`Trie.readPres`), in `domTrie`. -/
+def readPres (S : Trie.Spec K V D) (k : K) (p : Trie.Proof K D) (t : Trie.T K V D) :
+    List (String × ByteArray) :=
+  trieIn (Trie.readPres S k p t)
+
+omit [Ord D] in
+/-- **What an inclusion read compares**: the claimed value's leaf input, the trie's value's at `k`
+(if any), and `readPres`. -/
+def inclPres (S : Trie.Spec K V D) (vpre : V → String × ByteArray) (k : K) (v : V)
+    (p : Trie.Proof K D) (t : Trie.T K V D) : List (String × ByteArray) :=
+  vpre v :: ((t.get S k).toList.map vpre ++ readPres S k p t)
+
+end Reads
 
 /-- A refusals key holds the leaf of its kind. -/
 def RefusalLeaf.fits {D : Type} : RefusalSlot D → RefusalLeaf D → Bool
@@ -622,6 +673,9 @@ namespace World
 /-- The chain a World with identity `origin` starts at (KERNEL-24): `H(domGenesis, origin)`. -/
 def genesisChain (E : Env D) (origin : D) : D := E.hash domGenesis (E.bytes origin)
 
+/-- What `genesisChain` hashes. -/
+def genesisPre (E : Env D) (origin : D) : String × ByteArray := (domGenesis, E.bytes origin)
+
 /-- An empty World with identity `origin`, its chain at `genesisChain`. -/
 def genesis (E : Env D) (origin : D) (allowance : Nat) : World D :=
   { trie := .empty, journal := .empty, refusals := .empty, height := 0, steps := 0,
@@ -643,6 +697,10 @@ def rowsRoot (E : Env D) (w : World D) : D := w.rows.hashOf (rowSpec E)
 journal's, the refusals' (KERNEL-47 amendment 3) and the rows' (KERNEL-48). -/
 def roots (E : Env D) (w : World D) : D :=
   rootsDigest E (w.root E) (w.journalRoot E) (w.refusalsRoot E) (w.rowsRoot E)
+
+/-- What `w`'s roots digest hashes. -/
+def rootsPre (E : Env D) (w : World D) : String × ByteArray :=
+  Nanodregg.Kernel.rootsPre E (w.root E) (w.journalRoot E) (w.refusalsRoot E) (w.rowsRoot E)
 
 /-- What a carry takes from this World (KERNEL-29). -/
 def carried (w : World D) : Carried D := ⟨w.trie, w.allowance, w.height, w.journal, w.rows⟩
@@ -1526,5 +1584,65 @@ def stepLink (E : Env D) (c : D) : Step D → D → D
 def chainOf (E : Env D) (c : D) : List (Step D × D) → D
   | [] => c
   | (t, r) :: rest => chainOf E (stepLink E c t r) rest
+
+/-! ## What a chain compares: the inputs each digest along a log takes (KERNEL-56) -/
+
+omit [Ord D] [DecidableEq D] in
+/-- A step's kind byte in its head link (a Turn 0, a recorded refusal 1). -/
+def Step.tag : Step D → UInt8
+  | .turn _ => 0
+  | .refusal _ => 1
+
+omit [Ord D] [DecidableEq D] in
+/-- A step's digest in its head link. -/
+def stepDigest (E : Env D) : Step D → D
+  | .turn t => turnDigest E t
+  | .refusal r => refusedDigest E r
+
+omit [Ord D] [DecidableEq D] in
+/-- What a step's digest hashes. -/
+def stepPre (E : Env D) : Step D → String × ByteArray
+  | .turn t => (domTurn, E.turnBytes t)
+  | .refusal r => refusedPre E r
+
+omit [Ord D] [DecidableEq D] in
+/-- What the link a step adds to the chain `c` hashes. -/
+def stepLinkPre (E : Env D) (c : D) (s : Step D) (rs : D) : String × ByteArray :=
+  linkPre E c s.tag (stepDigest E s) rs
+
+omit [Ord D] [DecidableEq D] in
+/-- The inputs one chain step compares: its link's and its step digest's. -/
+def stepPres (E : Env D) (c : D) (s : Step D) (rs : D) : List (String × ByteArray) :=
+  [stepLinkPre E c s rs, stepPre E s]
+
+omit [Ord D] [DecidableEq D] in
+/-- The inputs a chain compares along a log from `c`: each step's (`stepPres`). -/
+def chainPres (E : Env D) (c : D) : List (Step D × D) → List (String × ByteArray)
+  | [] => []
+  | (s, r) :: rest => stepPres E c s r ++ chainPres E (stepLink E c s r) rest
+
+/-- The inputs the chain of a log compares, as `World.fold` runs it from `w`: each step's link and
+step digest (`stepPres`), over the roots digest the step left. -/
+def foldPres (E : Env D) : World D → List (Step D) → List (String × ByteArray)
+  | _, [] => []
+  | w, s :: rest =>
+      match World.step E w s with
+      | .ok w' => stepPres E w.chain s (w'.roots E) ++ foldPres E w' rest
+      | .error _ => []
+
+/-- The links a log adds to the chain, as `World.fold` runs it from `w` (`stepLinkPre`). -/
+def foldLinks (E : Env D) : World D → List (Step D) → List (String × ByteArray)
+  | _, [] => []
+  | w, s :: rest =>
+      match World.step E w s with
+      | .ok w' => stepLinkPre E w.chain s (w'.roots E) :: foldLinks E w' rest
+      | .error _ => []
+
+/-- **What opening a head record compares** (`head_roots`, `fold_head_roots`): the record's link
+input and roots input, the roots input of the World `w₂` the steps `l` reach from `w`, and the links
+`l` adds to the chain (`foldLinks`). -/
+def headPres (E : Env D) (w : World D) (l : List (Step D)) (w₂ : World D) (prev : D) (g : UInt8)
+    (td rd root' jroot' rroot' wroot' : D) : List (String × ByteArray) :=
+  linkPre E prev g td rd :: rootsPre E root' jroot' rroot' wroot' :: w₂.rootsPre E :: foldLinks E w l
 
 end Nanodregg.Kernel

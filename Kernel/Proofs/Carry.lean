@@ -7,11 +7,12 @@ re-genesis, never by a migration). It is checked like genesis (`carry_ok`: refus
 
 * `carry_carried`: the new World carries exactly what it was given — byte equality of the
   carried state is HOST's import check (HOST-28), and this is what makes it the right one;
-* `carry_origin_ne_genesis`: a carry's origin is never a genesis's origin, or the origin hash has
-  a collision (the two inputs are tagged apart, `originInput`);
+* `carry_origin_ne_genesis`: a carry's origin equal to a genesis's is a collision between the
+  two origin inputs (tagged apart, `originInput`); its tooth `carry_origin_ne_genesis_sep`;
 * `carry_inj`: a carry's origin commits to its name, nonce, the exported World's origin, the
-  trie's root, the rows' root, the allowance, the height and the journal's listing, or a collision (with both
-  journals canonical, the journal itself: `carry_inj_canon`);
+  trie's root, the rows' root, the allowance, the height and the journal's listing, or the two
+  carry inputs collide (with both journals canonical, the journal itself: `carry_inj_canon`; teeth
+  `carry_inj_sep`, `carry_inj_canon_sep`);
 * `carry_canon`, `carry_cellsFit`, `carry_journalOk`: the new World keeps every invariant the
   read and journal theorems rest on (true by construction: the fields are copied);
   `carry_journal_fits`, `carry_fold_journal_bounded`: a reached World always fits a carry, and
@@ -100,13 +101,24 @@ theorem carryInput_lawfulOn :
           (product_lawfulOn nat64_lawfulOn (rawBytes_lawfulOn _ (by decide)))) _ (by decide))))))))
 
 omit [Ord D] in
-/-- **A carry's origin is never a genesis's**, or the origin hash has a collision: the two inputs
-are the two cases of one tagged codec, so their bytes differ in the first byte. -/
+/-- **A carry's origin is never a genesis's** but by a collision between the two origin inputs:
+they are the two cases of one tagged codec, so their bytes differ in the first byte. -/
 theorem carry_origin_ne_genesis [Ord D] [DecidableEq D] {X : Ctx D} {name nonce : ByteArray} {fromOrigin : D}
     {c : Carried D} {name' nonce' : ByteArray} {allowance : Nat} {founders : List (ByteArray × D)}
     (h : carryOriginOf X name nonce fromOrigin c = originOf X name' nonce' allowance founders) :
-    HashColl X.env domOrigin :=
-  ⟨_, _, (sum_inl_ne_inr genesisInput_lawfulOn carryInput_lawfulOn _ _).symm, h⟩
+    CollidesAmong X.env.hash [carryOriginPre X name nonce fromOrigin c, originPre X name' nonce' allowance founders] :=
+  .pair (fun he => (sum_inl_ne_inr genesisInput_lawfulOn carryInput_lawfulOn _ _).symm (congrArg Prod.snd he)) h
+
+omit [Ord D] in
+/-- **Tooth of `carry_origin_ne_genesis`**: where the hash separates the two origin inputs, a carry's
+origin is not a genesis's. -/
+theorem carry_origin_ne_genesis_sep [Ord D] [DecidableEq D] {X : Ctx D} {name nonce : ByteArray}
+    {fromOrigin : D} {c : Carried D} {name' nonce' : ByteArray} {allowance : Nat}
+    {founders : List (ByteArray × D)}
+    (hs : Separates X.env.hash
+      [carryOriginPre X name nonce fromOrigin c, originPre X name' nonce' allowance founders]) :
+    carryOriginOf X name nonce fromOrigin c ≠ originOf X name' nonce' allowance founders :=
+  fun h => hs.not_collides (carry_origin_ne_genesis h)
 
 theorem carry_fits_input {X : Ctx D} {name nonce : ByteArray} {fromOrigin : D} {c : Carried D}
     (h : CarryFits X name nonce fromOrigin c) :
@@ -127,7 +139,7 @@ theorem carry_fits_input {X : Ctx D} {name nonce : ByteArray} {fromOrigin : D} {
 
 /-- **A carry commits to everything it was made from**: two carries with one origin had the same
 name, nonce, exported origin, trie root, rows root, allowance, height and journal listing, or the
-origin hash has a collision. -/
+two carry inputs collide. -/
 theorem carry_inj {X : Ctx D}
     {n : Nat} (hE : X.env.Lawful n)
     {name nonce name' nonce' : ByteArray} {f f' : D} {c c' : Carried D}
@@ -136,7 +148,8 @@ theorem carry_inj {X : Ctx D}
     (name = name' ∧ nonce = nonce' ∧ f = f' ∧
       c.trie.hashOf (trieSpec X.env) = c'.trie.hashOf (trieSpec X.env) ∧
       c.rows.hashOf (rowSpec X.env) = c'.rows.hashOf (rowSpec X.env) ∧ c.allowance = c'.allowance ∧
-      c.height = c'.height ∧ c.journal.toList = c'.journal.toList) ∨ HashColl X.env domOrigin := by
+      c.height = c'.height ∧ c.journal.toList = c'.journal.toList) ∨
+        CollidesAmong X.env.hash [carryOriginPre X name nonce f c, carryOriginPre X name' nonce' f' c'] := by
   by_cases hbytes : originInput.bytes (.inr (carryInputOf X name nonce f c)) =
       originInput.bytes (.inr (carryInputOf X name' nonce' f' c'))
   · left
@@ -153,7 +166,7 @@ theorem carry_inj {X : Ctx D}
       exact Prod.ext (hE.bytes_eq hab.1) (Prod.ext hab.2.1 (hE.bytes_eq hab.2.2))
     exact map_inj hinj hl
   · right
-    exact ⟨_, _, hbytes, h⟩
+    exact .pair (fun he => hbytes (congrArg Prod.snd he)) h
 
 /-- **With canonical journals, a carry's origin commits to the journal itself** (`carry_inj` and
 `Trie.eq_of_toList_eq`: a canonical trie is a function of its listing). -/
@@ -165,10 +178,38 @@ theorem carry_inj_canon [DecidableEq D] {X : Ctx D} {n : Nat} (hE : X.env.Lawful
     (name = name' ∧ nonce = nonce' ∧ f = f' ∧
       c.trie.hashOf (trieSpec X.env) = c'.trie.hashOf (trieSpec X.env) ∧
       c.rows.hashOf (rowSpec X.env) = c'.rows.hashOf (rowSpec X.env) ∧ c.allowance = c'.allowance ∧
-      c.height = c'.height ∧ c.journal = c'.journal) ∨ HashColl X.env domOrigin := by
+      c.height = c'.height ∧ c.journal = c'.journal) ∨
+        CollidesAmong X.env.hash [carryOriginPre X name nonce f c, carryOriginPre X name' nonce' f' c'] := by
   rcases carry_inj hE hf hf' h with ⟨h1, h2, h3, h4, h4', h5, h6, h7⟩ | hc
   · exact .inl ⟨h1, h2, h3, h4, h4', h5, h6, Trie.eq_of_toList_eq (journalSpec X.env) hj hj' h7⟩
   · exact .inr hc
+
+/-- **Tooth of `carry_inj`**: where the hash separates the two carry inputs, equal origins are equal
+carry inputs. -/
+theorem carry_inj_sep {X : Ctx D} {n : Nat} (hE : X.env.Lawful n)
+    {name nonce name' nonce' : ByteArray} {f f' : D} {c c' : Carried D}
+    (hf : CarryFits X name nonce f c) (hf' : CarryFits X name' nonce' f' c')
+    (hs : Separates X.env.hash [carryOriginPre X name nonce f c, carryOriginPre X name' nonce' f' c'])
+    (h : carryOriginOf X name nonce f c = carryOriginOf X name' nonce' f' c') :
+    name = name' ∧ nonce = nonce' ∧ f = f' ∧
+      c.trie.hashOf (trieSpec X.env) = c'.trie.hashOf (trieSpec X.env) ∧
+      c.rows.hashOf (rowSpec X.env) = c'.rows.hashOf (rowSpec X.env) ∧ c.allowance = c'.allowance ∧
+      c.height = c'.height ∧ c.journal.toList = c'.journal.toList :=
+  hs.elim (carry_inj hE hf hf' h)
+
+/-- **Tooth of `carry_inj_canon`**: where the hash separates the two carry inputs, equal origins of
+canonical carries are equal journals. -/
+theorem carry_inj_canon_sep [DecidableEq D] {X : Ctx D} {n : Nat} (hE : X.env.Lawful n)
+    {name nonce name' nonce' : ByteArray} {f f' : D} {c c' : Carried D}
+    (hj : Trie.Canon (journalSpec X.env) 0 c.journal) (hj' : Trie.Canon (journalSpec X.env) 0 c'.journal)
+    (hf : CarryFits X name nonce f c) (hf' : CarryFits X name' nonce' f' c')
+    (hs : Separates X.env.hash [carryOriginPre X name nonce f c, carryOriginPre X name' nonce' f' c'])
+    (h : carryOriginOf X name nonce f c = carryOriginOf X name' nonce' f' c') :
+    name = name' ∧ nonce = nonce' ∧ f = f' ∧
+      c.trie.hashOf (trieSpec X.env) = c'.trie.hashOf (trieSpec X.env) ∧
+      c.rows.hashOf (rowSpec X.env) = c'.rows.hashOf (rowSpec X.env) ∧ c.allowance = c'.allowance ∧
+      c.height = c'.height ∧ c.journal = c'.journal :=
+  hs.elim (carry_inj_canon hE hj hj' hf hf' h)
 
 /-- A carried World is canonical when the exported one was: the trie is the same. -/
 theorem carry_canon {X : Ctx D} {name nonce : ByteArray} {w w' : World D} (hc : w.Canon X.env)

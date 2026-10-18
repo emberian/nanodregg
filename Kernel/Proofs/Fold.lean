@@ -2,9 +2,10 @@
 # Kernel.Proofs.Fold — what a log means, and why a follower can trust a head
 
 `World.fold` is the follower and the reopening Host. The headline theorem, `chain_binds`: two
-logs of the same length that reach the same chain from the same genesis are the same log, or
-the hash has a collision — so a follower that checks one signed `(steps, chain)` (KERNEL-47: a recorded refusal advances the steps and the chain, not the height) knows every
-turn before it.
+logs of the same length that reach the same chain from the same genesis are the same log, or two
+of the inputs the two chains compare collide (`CollidesAmong E.hash (chainPres …)`; its tooth
+`chain_binds_sep`) — so a follower that checks one signed `(steps, chain)` (KERNEL-47: a recorded
+refusal advances the steps and the chain, not the height) knows every turn before it.
 -/
 import Kernel.Proofs.Refuse
 import Kernel.Proofs.Bytes
@@ -15,9 +16,76 @@ namespace Nanodregg.Kernel
 section Chain
 variable {D : Type}
 
-/-- Two different inputs with one digest. -/
-def Collision (hash : String → ByteArray → D) : Prop :=
-  ∃ dom a b, a ≠ b ∧ hash dom a = hash dom b
+/-! ### Escapes name their inputs
+
+A digest equality the kernel compares can fail to bind only where the hash maps two DIFFERENT
+inputs to one digest, and the inputs in question are the theorem's own: the (domain, bytes) inputs
+of the digests it compares. `CollidesAmong hash S` says exactly that, for a list `S` each theorem
+builds from its own objects (`linkPre`, `chainPres`, `foldPres`, ...). A collision among SOME two
+inputs holds of every hash into a finite `D` by pigeonhole, so `E.Lawful` proves it and it would make
+every disjunct it appears in vacuous. `Separates hash S` (the hash tells the inputs of `S` apart) is
+the tooth: under it each theorem's conclusion is its binding fact alone (`Separates.elim`). -/
+
+/-- Two different inputs, both in `S`, with one digest. -/
+def CollidesAmong (hash : String → ByteArray → D) (S : List (String × ByteArray)) : Prop :=
+  ∃ p ∈ S, ∃ q ∈ S, p ≠ q ∧ hash p.1 p.2 = hash q.1 q.2
+
+theorem CollidesAmong.mono {hash : String → ByteArray → D} {S S' : List (String × ByteArray)}
+    (hsub : ∀ x ∈ S, x ∈ S') : CollidesAmong hash S → CollidesAmong hash S'
+  | ⟨p, hp, q, hq, hne, h⟩ => ⟨p, hsub p hp, q, hsub q hq, hne, h⟩
+
+/-- Two different inputs with one digest collide among the pair. -/
+theorem CollidesAmong.pair {hash : String → ByteArray → D} {p q : String × ByteArray} (hne : p ≠ q)
+    (h : hash p.1 p.2 = hash q.1 q.2) : CollidesAmong hash [p, q] :=
+  ⟨p, by simp, q, by simp, hne, h⟩
+
+/-- The hash tells the inputs of `S` apart. -/
+def Separates (hash : String → ByteArray → D) (S : List (String × ByteArray)) : Prop :=
+  ∀ p ∈ S, ∀ q ∈ S, hash p.1 p.2 = hash q.1 q.2 → p = q
+
+theorem Separates.not_collides {hash : String → ByteArray → D} {S : List (String × ByteArray)}
+    (hs : Separates hash S) : ¬ CollidesAmong hash S
+  | ⟨p, hp, q, hq, hne, h⟩ => hne (hs p hp q hq h)
+
+/-- **The tooth's form.** Under `Separates hash S`, a conclusion `P ∨ CollidesAmong hash S` is `P`. -/
+theorem Separates.elim {hash : String → ByteArray → D} {S : List (String × ByteArray)} {P : Prop}
+    (hs : Separates hash S) (h : P ∨ CollidesAmong hash S) : P :=
+  h.resolve_right hs.not_collides
+
+theorem Separates.mono {hash : String → ByteArray → D} {S S' : List (String × ByteArray)}
+    (hsub : ∀ x ∈ S, x ∈ S') (hs : Separates hash S') : Separates hash S :=
+  fun p hp q hq h => hs p (hsub p hp) q (hsub q hq) h
+
+/-- An injective hash separates every list: `Separates` is no contradiction. -/
+theorem separates_of_injective {hash : String → ByteArray → D}
+    (hinj : ∀ d a e b, hash d a = hash e b → d = e ∧ a = b) (S : List (String × ByteArray)) :
+    Separates hash S :=
+  fun _ _ _ _ h => Prod.ext (hinj _ _ _ _ h).1 (hinj _ _ _ _ h).2
+
+/-- `Env.Lawful` says nothing of the hash: an `Env` with its hash swapped stays lawful. -/
+theorem Env.Lawful.withHash [Ord D] {E : Env D} {n : Nat} (hE : E.Lawful n) (f : String → ByteArray → D) :
+    ({ E with hash := f } : Env D).Lawful n :=
+  ⟨hE.size, hE.n_le, hE.bytes_inj, hE.turnBytes_injOn, hE.cellBytes_injOn⟩
+
+/-- **The floor of `Separates` under a lawful `Env`.** Over a `D` with two distinct digests, every
+lawful `Env` has a lawful sibling (its hash swapped for a toy one) that separates the concrete
+two-input list `S₀` (satisfiable), and one that does not (refutable): the lawful premises neither
+force a tooth's `Separates` premise nor exclude it. At the deployed width: `separates_floor_32`. -/
+theorem separates_lawful_floor [Ord D] {E : Env D} {n : Nat} (hE : E.Lawful n) {a b : D} (hab : a ≠ b) :
+    (∃ E' : Env D, E'.Lawful n ∧ Separates E'.hash [("a", ByteArray.empty), ("b", ByteArray.empty)]) ∧
+      ∃ E' : Env D, E'.Lawful n ∧ ¬ Separates E'.hash [("a", ByteArray.empty), ("b", ByteArray.empty)] := by
+  refine ⟨⟨{ E with hash := fun dom _ => if dom = "a" then a else b }, hE.withHash _, ?_⟩,
+    ⟨{ E with hash := fun _ _ => a }, hE.withHash _, ?_⟩⟩
+  · intro p hp q hq h
+    simp only [List.mem_cons, List.not_mem_nil, or_false] at hp hq
+    rcases hp with rfl | rfl <;> rcases hq with rfl | rfl <;> simp_all
+  · intro hs
+    have := hs ("a", ByteArray.empty) (by simp) ("b", ByteArray.empty) (by simp) rfl
+    simp at this
+
+theorem stepLink_eq (E : Env D) (c : D) (s : Step D) (rs : D) :
+    stepLink E c s rs = headLink E c s.tag (stepDigest E s) rs := by
+  cases s <;> rfl
 
 theorem chainOf_concat {E : Env D} :
     ∀ {c : D} {l : List (Step D × D)} {t : Step D} {r : D},
@@ -27,17 +95,26 @@ theorem chainOf_concat {E : Env D} :
       show chainOf E (stepLink E c x rx) (rest ++ [(t, r)]) = _
       rw [chainOf_concat]; rfl
 
+theorem chainPres_concat {E : Env D} :
+    ∀ {c : D} {l : List (Step D × D)} {t : Step D} {r : D},
+      chainPres E c (l ++ [(t, r)]) = chainPres E c l ++ stepPres E (chainOf E c l) t r
+  | c, [], t, r => by simp [chainPres, chainOf]
+  | c, (x, rx) :: rest, t, r => by
+      show stepPres E c x rx ++ chainPres E (stepLink E c x rx) (rest ++ [(t, r)]) = _
+      rw [chainPres_concat]; simp [chainPres, chainOf]
+
 theorem nat64_size (k : Nat) : (Nanodregg.Codec.Stream.nat64.bytes k).size = 8 := by
   rw [Nanodregg.Codec.Stream.nat64_bytes, Nanodregg.Codec.Stream.u64_bytes]; rfl
 
 theorem counterLimit_eq : Bounds.counterLimit = 2 ^ 64 := by decide
 
 /-- One head link determines its predecessor, its kind byte, its step digest and its roots digest,
-or exhibits a collision (in `domChain`). -/
+or the two links' inputs collide (in `domChain`). -/
 theorem headLink_inj [Ord D] {E : Env D} {n : Nat} (hE : E.Lawful n)
     {c₁ c₂ d₁ d₂ r₁ r₂ : D} {g₁ g₂ : UInt8}
     (h : headLink E c₁ g₁ d₁ r₁ = headLink E c₂ g₂ d₂ r₂) :
-    (c₁ = c₂ ∧ g₁ = g₂ ∧ d₁ = d₂ ∧ r₁ = r₂) ∨ Collision E.hash := by
+    (c₁ = c₂ ∧ g₁ = g₂ ∧ d₁ = d₂ ∧ r₁ = r₂) ∨
+      CollidesAmong E.hash [linkPre E c₁ g₁ d₁ r₁, linkPre E c₂ g₂ d₂ r₂] := by
   unfold headLink at h
   by_cases hin : (⟨#[g₁]⟩ : ByteArray) ++ E.bytes c₁ ++ E.bytes d₁ ++ E.bytes r₁ =
       ⟨#[g₂]⟩ ++ E.bytes c₂ ++ E.bytes d₂ ++ E.bytes r₂
@@ -48,12 +125,14 @@ theorem headLink_inj [Ord D] {E : Env D} {n : Nat} (hE : E.Lawful n)
       have := congrArg (fun z : ByteArray => z.data.toList) hg
       simpa using this
     exact .inl ⟨hE.bytes_inj hc, hg', hE.bytes_inj hd, hE.bytes_inj hr⟩
-  · exact .inr ⟨_, _, _, hin, h⟩
+  · exact .inr (.pair (fun he => hin (congrArg Prod.snd he)) h)
 
-/-- A recorded refusal's digest determines it, within `Bounds`, or the hash collides. -/
+/-- A recorded refusal's digest determines it, within `Bounds`, or the two inputs collide (in
+`domRefused`). -/
 theorem refusedDigest_inj [Ord D] {E : Env D} {n : Nat} (hE : E.Lawful n) {r₁ r₂ : Refused D}
     (hb₁ : checkRefusedBounds r₁ = .ok ()) (hb₂ : checkRefusedBounds r₂ = .ok ())
-    (h : refusedDigest E r₁ = refusedDigest E r₂) : r₁ = r₂ ∨ Collision E.hash := by
+    (h : refusedDigest E r₁ = refusedDigest E r₂) :
+    r₁ = r₂ ∨ CollidesAmong E.hash [refusedPre E r₁, refusedPre E r₂] := by
   have bnd : ∀ {r : Refused D}, checkRefusedBounds r = .ok () →
       r.notBefore < 2 ^ 64 ∧ r.validUntil < 2 ^ 64 ∧ r.code < 2 ^ 64 := by
     intro r hb
@@ -78,39 +157,49 @@ theorem refusedDigest_inj [Ord D] {E : Env D} {n : Nat} (hE : E.Lawful n) {r₁ 
     exact .inl ⟨hE.bytes_inj h1, hE.bytes_inj hm, Nanodregg.Codec.Stream.nat64_lawfulOn.bytes_injective a₁ a₂ hnb,
       Nanodregg.Codec.Stream.nat64_lawfulOn.bytes_injective b₁ b₂ hvu,
       Nanodregg.Codec.Stream.nat64_lawfulOn.bytes_injective c₁ c₂ hco, hev⟩
-  · exact .inr ⟨_, _, _, hin, h⟩
+  · exact .inr (.pair (fun he => hin (congrArg Prod.snd he)) h)
 
 /-- One chain step between bounded steps determines its predecessor, its step and the roots digest
-after it, or exhibits a collision: a turn link is never a refusal link (the kind byte), and each
-kind's digest determines its step. -/
+after it, or the two steps' inputs collide (`stepPres`: the links', the step digests'): a turn link
+is never a refusal link (the kind byte), and each kind's digest determines its step. -/
 theorem stepLink_inj [Ord D] {E : Env D} {n : Nat} (hE : E.Lawful n)
     {c₁ c₂ : D} {r₁ r₂ : D} {s₁ s₂ : Step D} (hb₁ : s₁.Bounded) (hb₂ : s₂.Bounded)
     (h : stepLink E c₁ s₁ r₁ = stepLink E c₂ s₂ r₂) :
-    (c₁ = c₂ ∧ s₁ = s₂ ∧ r₁ = r₂) ∨ Collision E.hash := by
-  cases s₁ <;> cases s₂ <;> simp only [stepLink, chainNext, refusalLink] at h <;>
-    rcases headLink_inj hE h with ⟨hc, hg, hd, hr⟩ | hcol <;>
-    first
-    | exact .inr hcol
-    | (simp at hg)
-    | skip
-  · rename_i t₁ t₂
-    unfold turnDigest at hd
-    by_cases hti : E.turnBytes t₁ = E.turnBytes t₂
-    · exact .inl ⟨hc, by rw [hE.turnBytes_injOn hb₁ hb₂ hti], hr⟩
-    · exact .inr ⟨_, _, _, hti, hd⟩
-  · rename_i q₁ q₂
-    rcases refusedDigest_inj hE hb₁ hb₂ hd with rfl | hcol
-    · exact .inl ⟨hc, rfl, hr⟩
-    · exact .inr hcol
+    (c₁ = c₂ ∧ s₁ = s₂ ∧ r₁ = r₂) ∨ CollidesAmong E.hash (stepPres E c₁ s₁ r₁ ++ stepPres E c₂ s₂ r₂) := by
+  have hsub : ∀ {a b : String × ByteArray}, a = stepLinkPre E c₁ s₁ r₁ ∨ a = stepPre E s₁ →
+      b = stepLinkPre E c₂ s₂ r₂ ∨ b = stepPre E s₂ →
+      ∀ x ∈ [a, b], x ∈ stepPres E c₁ s₁ r₁ ++ stepPres E c₂ s₂ r₂ := by
+    intro a b ha hb x hx
+    simp only [List.mem_cons, List.mem_nil_iff, or_false] at hx
+    rcases hx with rfl | rfl
+    · rcases ha with rfl | rfl <;> simp [stepPres]
+    · rcases hb with rfl | rfl <;> simp [stepPres]
+  rw [stepLink_eq, stepLink_eq] at h
+  rcases headLink_inj hE h with ⟨hc, hg, hd, hr⟩ | hcol
+  · cases s₁ <;> cases s₂ <;> simp only [Step.tag, stepDigest] at hg hd
+    · rename_i t₁ t₂
+      unfold turnDigest at hd
+      by_cases hti : E.turnBytes t₁ = E.turnBytes t₂
+      · exact .inl ⟨hc, by rw [hE.turnBytes_injOn hb₁ hb₂ hti], hr⟩
+      · exact .inr (CollidesAmong.mono (hsub (.inr rfl) (.inr rfl))
+          (.pair (fun he => hti (congrArg Prod.snd he)) hd))
+    · simp at hg
+    · simp at hg
+    · rename_i q₁ q₂
+      rcases refusedDigest_inj hE hb₁ hb₂ hd with rfl | hcol
+      · exact .inl ⟨hc, rfl, hr⟩
+      · exact .inr (CollidesAmong.mono (hsub (.inr rfl) (.inr rfl)) hcol)
+  · exact .inr (CollidesAmong.mono (hsub (.inl rfl) (.inl rfl)) hcol)
 
 /-- **Follower soundness.** Two logs of one length that reach one chain from one start are one
-log with one roots digest after every step, or the hash collides, provided every step of both logs
-is bounded (an admitted or recorded step always is: `fold_bounded`). With `fold_chain` and
+log with one roots digest after every step, or two of the inputs the two chains compare collide
+(`chainPres` of both logs: each step's link and step digest), provided every step of both logs is
+bounded (an admitted or recorded step always is: `fold_bounded`). With `fold_chain` and
 `fold_steps`: a follower holding a trusted `(steps, chain)` holds the only log that produces it. -/
 theorem chain_binds [Ord D] {E : Env D} {n : Nat} (hE : E.Lawful n) {c : D} :
     ∀ (k : Nat) (l₁ l₂ : List (Step D × D)), l₁.length = k → l₂.length = k →
       (∀ p ∈ l₁, p.1.Bounded) → (∀ p ∈ l₂, p.1.Bounded) →
-      chainOf E c l₁ = chainOf E c l₂ → l₁ = l₂ ∨ Collision E.hash
+      chainOf E c l₁ = chainOf E c l₂ → l₁ = l₂ ∨ CollidesAmong E.hash (chainPres E c l₁ ++ chainPres E c l₂)
   | 0, l₁, l₂, h₁, h₂, _, _, _ => by
       rw [List.length_eq_zero_iff] at h₁ h₂; subst h₁; subst h₂; exact Or.inl rfl
   | k + 1, l₁, l₂, h₁, h₂, hl₁, hl₂, h => by
@@ -120,14 +209,50 @@ theorem chain_binds [Ord D] {E : Env D} {n : Nat} (hE : E.Lawful n) {c : D} :
       · simp at h₂
       simp only [List.concat_eq_append] at h h₁ h₂ hl₁ hl₂ ⊢
       rw [chainOf_concat, chainOf_concat] at h
+      rw [chainPres_concat, chainPres_concat]
       rcases stepLink_inj hE (hl₁ _ (List.mem_append_right _ (List.mem_singleton_self _)))
           (hl₂ _ (List.mem_append_right _ (List.mem_singleton_self _))) h with ⟨hc, rfl, rfl⟩ | hcol
       · simp only [List.length_append, List.length_singleton, Nat.add_right_cancel_iff] at h₁ h₂
         rcases chain_binds hE k a₁ a₂ h₁ h₂ (fun p hp => hl₁ p (List.mem_append_left _ hp))
             (fun p hp => hl₂ p (List.mem_append_left _ hp)) hc with rfl | hcol
         · exact Or.inl rfl
-        · exact Or.inr hcol
-      · exact Or.inr hcol
+        · refine Or.inr (CollidesAmong.mono (fun x hx => ?_) hcol)
+          simp only [List.mem_append] at hx ⊢
+          rcases hx with hx | hx <;> simp [hx]
+      · refine Or.inr (CollidesAmong.mono (fun x hx => ?_) hcol)
+        simp only [List.mem_append] at hx ⊢
+        rcases hx with hx | hx <;> simp [hx]
+
+/-- TOOTH (`headLink_inj`): under a hash that separates the two links' inputs, one link is one
+(predecessor, kind, digest, roots digest). -/
+theorem headLink_inj_sep [Ord D] {E : Env D} {n : Nat} (hE : E.Lawful n)
+    {c₁ c₂ d₁ d₂ r₁ r₂ : D} {g₁ g₂ : UInt8}
+    (hs : Separates E.hash [linkPre E c₁ g₁ d₁ r₁, linkPre E c₂ g₂ d₂ r₂])
+    (h : headLink E c₁ g₁ d₁ r₁ = headLink E c₂ g₂ d₂ r₂) : c₁ = c₂ ∧ g₁ = g₂ ∧ d₁ = d₂ ∧ r₁ = r₂ :=
+  hs.elim (headLink_inj hE h)
+
+/-- TOOTH (`refusedDigest_inj`). -/
+theorem refusedDigest_inj_sep [Ord D] {E : Env D} {n : Nat} (hE : E.Lawful n) {r₁ r₂ : Refused D}
+    (hb₁ : checkRefusedBounds r₁ = .ok ()) (hb₂ : checkRefusedBounds r₂ = .ok ())
+    (hs : Separates E.hash [refusedPre E r₁, refusedPre E r₂])
+    (h : refusedDigest E r₁ = refusedDigest E r₂) : r₁ = r₂ :=
+  hs.elim (refusedDigest_inj hE hb₁ hb₂ h)
+
+/-- TOOTH (`stepLink_inj`): under a hash that separates the two steps' inputs, one link is one step. -/
+theorem stepLink_inj_sep [Ord D] {E : Env D} {n : Nat} (hE : E.Lawful n)
+    {c₁ c₂ : D} {r₁ r₂ : D} {s₁ s₂ : Step D} (hb₁ : s₁.Bounded) (hb₂ : s₂.Bounded)
+    (hs : Separates E.hash (stepPres E c₁ s₁ r₁ ++ stepPres E c₂ s₂ r₂))
+    (h : stepLink E c₁ s₁ r₁ = stepLink E c₂ s₂ r₂) : c₁ = c₂ ∧ s₁ = s₂ ∧ r₁ = r₂ :=
+  hs.elim (stepLink_inj hE hb₁ hb₂ h)
+
+/-- TOOTH (`chain_binds`): under a hash that separates the inputs both chains compare, one chain is
+one log. -/
+theorem chain_binds_sep [Ord D] {E : Env D} {n : Nat} (hE : E.Lawful n) {c : D}
+    {l₁ l₂ : List (Step D × D)} (hl : l₁.length = l₂.length)
+    (hb₁ : ∀ p ∈ l₁, p.1.Bounded) (hb₂ : ∀ p ∈ l₂, p.1.Bounded)
+    (hs : Separates E.hash (chainPres E c l₁ ++ chainPres E c l₂))
+    (h : chainOf E c l₁ = chainOf E c l₂) : l₁ = l₂ :=
+  hs.elim (chain_binds hE l₁.length l₁ l₂ rfl hl.symm hb₁ hb₂ h)
 
 end Chain
 
@@ -224,16 +349,18 @@ theorem fold_height_le_steps {E : Env D} {w w' : World D} {l : List (Step D)} (h
     (h : World.fold E w l = .ok w') : w'.height ≤ w'.steps := by
   have := fold_steps_height h; omega
 
-/-- The chain a fold stamps: the log's steps, each with the roots digest its step left. -/
+/-- The chain a fold stamps: the log's steps, each with the roots digest its step left; the inputs
+that chain compares are the fold's (`foldPres`). -/
 theorem fold_chain {E : Env D} :
     ∀ {w w' : World D} {l : List (Step D)}, World.fold E w l = .ok w' →
       ∃ rs : List D, rs.length = l.length ∧ w'.chain = chainOf E w.chain (l.zip rs) ∧
-        (l ≠ [] → rs.getLast? = some (w'.roots E))
-  | w, w', [], h => by simp [World.fold] at h; subst h; exact ⟨[], rfl, rfl, fun h => absurd rfl h⟩
+        (l ≠ [] → rs.getLast? = some (w'.roots E)) ∧ chainPres E w.chain (l.zip rs) = foldPres E w l
+  | w, w', [], h => by
+      simp [World.fold] at h; subst h; exact ⟨[], rfl, rfl, fun h => absurd rfl h, rfl⟩
   | w, w', t :: rest, h => by
       obtain ⟨w₁, h₁, h₂⟩ := fold_cons_ok.mp h
-      obtain ⟨rs, hl, hc, hr⟩ := fold_chain h₂
-      refine ⟨w₁.roots E :: rs, by simp [hl], ?_, fun _ => ?_⟩
+      obtain ⟨rs, hl, hc, hr, hp⟩ := fold_chain h₂
+      refine ⟨w₁.roots E :: rs, by simp [hl], ?_, fun _ => ?_, ?_⟩
       · rw [hc, step_chain h₁]; rfl
       · cases rest with
         | nil =>
@@ -241,6 +368,9 @@ theorem fold_chain {E : Env D} :
             simp [World.fold] at h₂; subst h₂; rfl
         | cons u us =>
             simp [List.getLast?_cons, hr (by simp)]
+      · show stepPres E w.chain t (w₁.roots E) ++ chainPres E (stepLink E w.chain t (w₁.roots E)) (rest.zip rs) = _
+        rw [← step_chain h₁, hp]
+        simp only [foldPres, h₁]
 
 /-- **Charge exactness over a log.** Each turn of an admitted log paid exactly its weight (where
 the budget went is `Kernel.Proofs.Weight.fold_conserves`). -/
@@ -278,18 +408,20 @@ theorem fold_bounded {E : Env D} :
       · exact fold_bounded h₂ x hx
 
 /-- The follower's theorem in its usable form: same start, same `(steps, chain)` after folding, same
-log (or a collision). KERNEL-47 amendment 1: the premise is equal STEPS, not equal height; a refusal
-advances the chain and the steps but not the height. -/
+log, or two of the inputs the two folds' chains compare collide (`foldPres` of both logs). KERNEL-47
+amendment 1: the premise is equal STEPS, not equal height; a refusal advances the chain and the steps
+but not the height. -/
 theorem fold_head_binds {E : Env D} {n : Nat} (hE : E.Lawful n)
     {g w₁ w₂ : World D} {l₁ l₂ : List (Step D)}
     (h₁ : World.fold E g l₁ = .ok w₁) (h₂ : World.fold E g l₂ = .ok w₂)
     (hs : w₁.steps = w₂.steps) (hc : w₁.chain = w₂.chain) :
-    l₁ = l₂ ∨ Collision E.hash := by
+    l₁ = l₂ ∨ CollidesAmong E.hash (foldPres E g l₁ ++ foldPres E g l₂) := by
   have hl : l₁.length = l₂.length := by
     have := fold_steps h₁; have := fold_steps h₂; omega
-  obtain ⟨rs₁, hr₁, hc₁, _⟩ := fold_chain h₁
-  obtain ⟨rs₂, hr₂, hc₂, _⟩ := fold_chain h₂
+  obtain ⟨rs₁, hr₁, hc₁, _, hp₁⟩ := fold_chain h₁
+  obtain ⟨rs₂, hr₂, hc₂, _, hp₂⟩ := fold_chain h₂
   rw [hc₁, hc₂] at hc
+  rw [← hp₁, ← hp₂]
   rcases chain_binds hE l₁.length (l₁.zip rs₁) (l₂.zip rs₂) (by simp [hr₁])
       (by simp [hr₂, hl]) (fun p hp => fold_bounded h₁ p.1 (List.of_mem_zip hp).1)
       (fun p hp => fold_bounded h₂ p.1 (List.of_mem_zip hp).1) hc with he | hcol
@@ -305,15 +437,34 @@ theorem fold_det {E : Env D} {g w₁ w₂ : World D} {l : List (Step D)}
 
 /-- **The fold reaches the host's World.** A follower that folds a log from the host's genesis and
 reaches the host's `(steps, chain)` holds the host's World — every cell, nullifier, journal entry,
-recorded refusal, the budget and the root — or the hash has a collision. -/
+recorded refusal, the budget and the root — or two of the inputs the two folds' chains compare
+collide (`foldPres` of the follower's log and of the host's). -/
 theorem fold_reaches_host {E : Env D} {n : Nat} (hE : E.Lawful n)
     {g host follower : World D} {lh lf : List (Step D)}
     (hh : World.fold E g lh = .ok host) (hf : World.fold E g lf = .ok follower)
     (hst : follower.steps = host.steps) (hc : follower.chain = host.chain) :
-    follower = host ∨ Collision E.hash := by
+    follower = host ∨ CollidesAmong E.hash (foldPres E g lf ++ foldPres E g lh) := by
   rcases fold_head_binds hE hf hh hst hc with rfl | hcol
   · exact .inl (fold_det hf hh)
   · exact .inr hcol
+
+/-- TOOTH (`fold_head_binds`): under a hash that separates the inputs both folds' chains compare,
+one `(steps, chain)` is one log. -/
+theorem fold_head_binds_sep {E : Env D} {n : Nat} (hE : E.Lawful n)
+    {g w₁ w₂ : World D} {l₁ l₂ : List (Step D)}
+    (h₁ : World.fold E g l₁ = .ok w₁) (h₂ : World.fold E g l₂ = .ok w₂)
+    (hs : w₁.steps = w₂.steps) (hc : w₁.chain = w₂.chain)
+    (hsep : Separates E.hash (foldPres E g l₁ ++ foldPres E g l₂)) : l₁ = l₂ :=
+  hsep.elim (fold_head_binds hE h₁ h₂ hs hc)
+
+/-- TOOTH (`fold_reaches_host`): under a hash that separates the inputs both folds' chains compare,
+the follower at the host's head holds the host's World. -/
+theorem fold_reaches_host_sep {E : Env D} {n : Nat} (hE : E.Lawful n)
+    {g host follower : World D} {lh lf : List (Step D)}
+    (hh : World.fold E g lh = .ok host) (hf : World.fold E g lf = .ok follower)
+    (hst : follower.steps = host.steps) (hc : follower.chain = host.chain)
+    (hsep : Separates E.hash (foldPres E g lf ++ foldPres E g lh)) : follower = host :=
+  hsep.elim (fold_reaches_host hE hh hf hst hc)
 
 /-- `World.fold` is the monadic left fold of `World.step` (HOST's `staged_rooted` builds on it). -/
 theorem fold_foldlM {E : Env D} :

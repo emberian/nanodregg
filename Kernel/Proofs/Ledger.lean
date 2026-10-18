@@ -242,18 +242,27 @@ theorem readRef_ok {X : Ctx D} {look : Pinned D} {r : AcctRef D} {id : D} {cell 
 
 omit [DecidableEq D] in
 /-- **One account per (owner, denomination)** (KERNEL-28 (d)): two pairs with one account id are
-the same pair, or the account hash has a collision. Over a lawful `Env` (digest bytes injective and
+the same pair, or the two account inputs collide (`accountPre`; tooth `account_keyed_sep`). Over a lawful `Env` (digest bytes injective and
 all of one size `n`, the deployed 32), the hash's input splits back into the owner and the
 denomination. -/
 theorem account_keyed {X : Ctx D} {n : Nat} (hE : X.env.Lawful n) {a s b t : D}
-    (h : accountId X a s = accountId X b t) : (a, s) = (b, t) ∨ HashColl X.env domAccount := by
+    (h : accountId X a s = accountId X b t) :
+    (a, s) = (b, t) ∨ CollidesAmong X.env.hash [accountPre X a s, accountPre X b t] := by
   by_cases he : X.env.bytes a ++ X.env.bytes s = X.env.bytes b ++ X.env.bytes t
   · left
     obtain ⟨h1, h2⟩ := (ByteArray.append_eq_append_iff_of_size_eq_left
       (by rw [hE.size a, hE.size b])).mp he
     rw [hE.bytes_eq h1, hE.bytes_eq h2]
   · right
-    exact ⟨_, _, he, h⟩
+    exact .pair (fun e => he (congrArg Prod.snd e)) h
+
+omit [DecidableEq D] in
+/-- **Tooth of `account_keyed`**: where the hash separates the two account inputs, one account id
+is one (owner, denomination). -/
+theorem account_keyed_sep {X : Ctx D} {n : Nat} (hE : X.env.Lawful n) {a s b t : D}
+    (hs : Separates X.env.hash [accountPre X a s, accountPre X b t])
+    (h : accountId X a s = accountId X b t) : (a, s) = (b, t) :=
+  hs.elim (account_keyed hE h)
 
 omit [Ord D] [DecidableEq D] in
 /-- **An account is born at its keyed id**, owned by the named owner, of the named denomination,

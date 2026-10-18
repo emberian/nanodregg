@@ -7,13 +7,16 @@ KERNEL-23 part 2, at the World:
 * `trie_ext`: two canonical Worlds that hold the same leaf at every slot have the SAME trie, so the
   same root, whatever order their turns ran in (history independence over contents).
 * `slot_inclusion_sound` / `slot_exclusion_sound`: a proof that verifies against a World's root
-  tells the truth about the slot, or `Collision E.hash`. `prove_verifies` / `prove_excludes'`: the
-  World proves every slot it holds, and every slot it does not.
+  tells the truth about the slot, or two of the inputs the read compares collide (`inclPres`,
+  `readPres`; KERNEL-56: a collision among SOME two inputs is a theorem of every lawful `Env`).
+  `prove_verifies` / `prove_excludes'`: the World proves every slot it holds, and every slot it does
+  not.
 * `journal_separate`, `journalBody_inj`: the journal trie's parameters meet the same premises (its
   phone theorems: `Kernel.Proofs.JournalHead`).
 * `head_read_sound`: the phone's theorem. Take a head record `(prev, turnDigest, root', jroot')` that hashes
   to the chain of a World an admitted turn reached, and a proof that verifies against `root'`. Then
-  that World holds the slot, or the hash collides.
+  that World holds the slot, or two of the inputs the opening (`headPres`) and the read compare
+  collide. Teeth (`*_sep`): under `Separates` of those inputs, the binding fact alone.
 Premises: `hE : E.Lawful n` (`Kernel.Proofs.Lawful`: one digest size `n ≤ 32`, injective digest
 bytes, `cellBytes` injective on `Cell.Fits`; it is not injective on every cell, CODEC-12), and every live
 cell of the World fits (`w.CellsFit Cell.Fits E`). `Kernel.Proofs.CellsFit` proves that
@@ -252,11 +255,6 @@ end Params
 
 /-! ## Inclusion and exclusion at the World -/
 
-omit [Ord D] [DecidableEq D] in
-/-- A trie collision is a `Collision` of the kernel's hash (in `domTrie`). -/
-theorem coll_collision {E : Env D} (h : Trie.Coll (trieSpec E)) : Collision E.hash := by
-  obtain ⟨a, b, hne, he⟩ := h; exact ⟨domTrie, a, b, hne, he⟩
-
 /-- A leaf whose cell (if any) satisfies `F`: the cells on which the cell codec is injective
 (deployed: `Codec.Cell.Fits`; the deployed codec is NOT injective on all cells, CODEC-12), with its
 version below 2^64 (KERNEL-54: `leafBytes` spells it in eight bytes). -/
@@ -309,12 +307,13 @@ theorem leafBytes_inj {E : Env D} {F : Cell → Prop} (hcb : InjOn F E) {l l' : 
       | spent => rfl
 
 omit [Ord D] [DecidableEq D] in
+/-- A leaf digest determines its leaf on `F`, or the two inputs collide (in `domLeaf`). -/
 theorem leafDigest_inj {E : Env D} {F : Cell → Prop} (hcb : InjOn F E) {l l' : Leaf}
     (hf : l.CellFit F) (hf' : l'.CellFit F)
-    (h : leafDigest E l = leafDigest E l') : l = l' ∨ Collision E.hash := by
+    (h : leafDigest E l = leafDigest E l') : l = l' ∨ CollidesAmong E.hash [leafPre E l, leafPre E l'] := by
   by_cases hb : leafBytes E l = leafBytes E l'
   · exact .inl (leafBytes_inj hcb hf hf' hb)
-  · exact .inr ⟨domLeaf, _, _, hb, h⟩
+  · exact .inr (.pair (fun he => hb (congrArg Prod.snd he)) h)
 
 section Sound
 variable {E : Env D} {n : Nat} (hE : E.Lawful n)
@@ -323,39 +322,45 @@ include hE
 omit [DecidableEq D] in
 /-- **The cells' trie is a `HeadSound` instance** (KERNEL-52) on `Leaf.CellFit Cell.Fits`, where
 the cell codec is injective (`hE.cellBytes_injOn`). -/
-theorem cells_headSound : HeadSound E (trieSpec E) (Leaf.CellFit Codec.Kernel.Cell.Fits) :=
-  ⟨leafBody_inj hE, dbytes_pair_inj hE, leafDigest_inj hE.cellBytes_injOn, coll_collision⟩
+theorem cells_headSound : HeadSound E (trieSpec E) (Leaf.CellFit Codec.Kernel.Cell.Fits) (leafPre E) :=
+  ⟨leafBody_inj hE, dbytes_pair_inj hE, fun _ => rfl, fun _ => rfl,
+    fun hf hf' h => leafBytes_inj hE.cellBytes_injOn hf hf' (congrArg Prod.snd h)⟩
 
 /-- **Inclusion is sound at the World**, for a claimed leaf and a World whose cells fit
-(`Cell.Fits`, where a lawful `Env`'s cell codec is injective). -/
+(`Cell.Fits`, where a lawful `Env`'s cell codec is injective), or two of the inputs the read compares
+collide (`inclPres`). -/
 theorem slot_inclusion_sound {w : World D} (hc : w.Canon E)
     (hwf : w.CellsFit Codec.Kernel.Cell.Fits E) {s : Slot D} {l : Leaf}
     (hlf : l.CellFit Codec.Kernel.Cell.Fits)
     {p : Trie.Proof (Slot D) D} (hv : Trie.verifyInclusion (trieSpec E) (w.root E) s (leafDigest E l) p = true) :
-    w.trie.get (trieSpec E) s = some l ∨ Collision E.hash :=
+    w.trie.get (trieSpec E) s = some l ∨ CollidesAmong E.hash (inclPres (trieSpec E) (leafPre E) s l p w.trie) :=
   (cells_headSound hE).inclusion hc hwf hlf hv
 
-/-- **Exclusion is sound at the World.** -/
+/-- **Exclusion is sound at the World**, or two of the inputs the read compares collide
+(`readPres`). -/
 theorem slot_exclusion_sound {w : World D} (hc : w.Canon E) {s : Slot D} {p : Trie.Proof (Slot D) D}
     (hv : Trie.verifyExclusion (trieSpec E) (w.root E) s p = true) :
-    w.trie.get (trieSpec E) s = none ∨ Collision E.hash :=
+    w.trie.get (trieSpec E) s = none ∨ CollidesAmong E.hash (readPres (trieSpec E) s p w.trie) :=
   (cells_headSound hE).exclusion hc hv
 
-/-- A live cell proved against the root is the World's live cell, or the hash collides. -/
+/-- A live cell proved against the root is the World's live cell, or two of the inputs the read
+compares collide. -/
 theorem live_inclusion_sound {w : World D} (hc : w.Canon E)
     (hwf : w.CellsFit Codec.Kernel.Cell.Fits E) {c : D} {cell : Cell} {v : Nat}
     (hcf : (Leaf.entry (.live cell v)).CellFit Codec.Kernel.Cell.Fits)
     {p : Trie.Proof (Slot D) D}
     (hv : Trie.verifyInclusion (trieSpec E) (w.root E) (.cell c) (leafDigest E (.entry (.live cell v))) p = true) :
-    w.entry E c = some (.live cell v) ∨ Collision E.hash := by
+    w.entry E c = some (.live cell v) ∨
+      CollidesAmong E.hash (inclPres (trieSpec E) (leafPre E) (.cell c) (.entry (.live cell v)) p w.trie) := by
   rcases slot_inclusion_sound hE hc hwf hcf hv with hg | col
   · left; unfold World.entry; rw [hg]
   · exact .inr col
 
-/-- An unspent nullifier proved against the root is unspent in the World, or the hash collides. -/
+/-- An unspent nullifier proved against the root is unspent in the World, or two of the inputs the
+read compares collide. -/
 theorem unspent_sound {w : World D} (hc : w.Canon E) {nf : D} {p : Trie.Proof (Slot D) D}
     (hv : Trie.verifyExclusion (trieSpec E) (w.root E) (.nullifier nf) p = true) :
-    w.isSpent E nf = false ∨ Collision E.hash := by
+    w.isSpent E nf = false ∨ CollidesAmong E.hash (readPres (trieSpec E) (.nullifier nf) p w.trie) := by
   rcases slot_exclusion_sound hE hc hv with hg | col
   · left; unfold World.isSpent; rw [hg]; rfl
   · exact .inr col
@@ -367,21 +372,20 @@ theorem trie_ext {a b : World D} (ha : a.Canon E) (hb' : b.Canon E)
   Trie.eq_of_get_eq (trieSpec E) (slots_separate hE) ha hb' he
 
 omit [DecidableEq D] in
-/-- A head record that hashes to a chain link names that link's roots digest, or the hash collides. -/
+/-- A head record that hashes to a chain link names that link's roots digest, or the record's and
+the link's inputs collide. -/
 theorem headLink_roots {c prev td rd : D} {g : UInt8} {s : Step D} {rs : D}
-    (hhead : headLink E prev g td rd = stepLink E c s rs) : rd = rs ∨ Collision E.hash := by
-  have : stepLink E c s rs = headLink E c (match s with | .turn _ => 0 | .refusal _ => 1)
-      (match s with | .turn t => turnDigest E t | .refusal r => refusedDigest E r) rs := by
-    cases s <;> rfl
-  rw [this] at hhead
+    (hhead : headLink E prev g td rd = stepLink E c s rs) :
+    rd = rs ∨ CollidesAmong E.hash [linkPre E prev g td rd, stepLinkPre E c s rs] := by
+  rw [stepLink_eq] at hhead
   rcases headLink_inj hE hhead with ⟨_, _, _, h⟩ | col
   · exact .inl h
   · exact .inr col
 
 omit [DecidableEq D] in
-/-- The roots digest opens to one quadruple of roots, or the hash collides (in `domRoots`). -/
+/-- The roots digest opens to one quadruple of roots, or the two inputs collide (in `domRoots`). -/
 theorem rootsDigest_inj {a b c d a' b' c' d' : D} (h : rootsDigest E a b c d = rootsDigest E a' b' c' d') :
-    (a = a' ∧ b = b' ∧ c = c' ∧ d = d') ∨ Collision E.hash := by
+    (a = a' ∧ b = b' ∧ c = c' ∧ d = d') ∨ CollidesAmong E.hash [rootsPre E a b c d, rootsPre E a' b' c' d'] := by
   unfold rootsDigest at h
   by_cases hin : E.bytes a ++ E.bytes b ++ E.bytes c ++ E.bytes d =
       E.bytes a' ++ E.bytes b' ++ E.bytes c' ++ E.bytes d'
@@ -389,33 +393,41 @@ theorem rootsDigest_inj {a b c d a' b' c' d' : D} (h : rootsDigest E a b c d = r
     obtain ⟨hab, hc⟩ := bytes_append_inj habc (by simp [hE.size])
     obtain ⟨ha, hb⟩ := bytes_append_inj hab (by simp [hE.size])
     exact .inl ⟨hE.bytes_inj ha, hE.bytes_inj hb, hE.bytes_inj hc, hE.bytes_inj hd⟩
-  · exact .inr ⟨domRoots, _, _, hin, h⟩
+  · exact .inr (.pair (fun he => hin (congrArg Prod.snd he)) h)
 
 /-- A head record that hashes to the chain a step reached, with its roots digest opened, names that
-World's four roots (cells', journal's, refusals', rows'), or the hash collides. Any step: a phone reads a
-head after a recorded refusal as after a Turn. -/
+World's four roots (cells', journal's, refusals', rows'), or two of the inputs the opening compares
+collide (`headPres`: the record's link against the step's, the record's roots against the World's).
+Any step: a phone reads a head after a recorded refusal as after a Turn. -/
 theorem head_roots {w w' : World D} {s : Step D} (h : World.step E w s = .ok w')
     {prev td rd root' jroot' rroot' wroot' : D} {g : UInt8} (hhead : headLink E prev g td rd = w'.chain)
     (hrd : rootsDigest E root' jroot' rroot' wroot' = rd) :
     (root' = w'.root E ∧ jroot' = w'.journalRoot E ∧ rroot' = w'.refusalsRoot E ∧ wroot' = w'.rowsRoot E) ∨
-      Collision E.hash := by
+      CollidesAmong E.hash (headPres E w [s] w' prev g td rd root' jroot' rroot' wroot') := by
+  have hl : foldLinks E w [s] = [stepLinkPre E w.chain s (w'.roots E)] := by simp [foldLinks, h]
   rw [step_chain h] at hhead
   rcases headLink_roots hE hhead with rfl | col
-  · exact rootsDigest_inj hE hrd
-  · exact .inr col
+  · rcases rootsDigest_inj hE hrd with hr | col
+    · exact .inl hr
+    · refine .inr (CollidesAmong.mono (fun x hx => ?_) col)
+      simp only [List.mem_cons, List.mem_nil_iff, or_false] at hx
+      rcases hx with rfl | rfl <;> simp [headPres, World.rootsPre]
+  · refine .inr (CollidesAmong.mono (fun x hx => ?_) col)
+    simp only [List.mem_cons, List.mem_nil_iff, or_false] at hx
+    rcases hx with rfl | rfl <;> simp [headPres, hl]
 
-/-- A head record that hashes to a stepped World's chain names that World's root, or the hash
-collides. -/
+/-- A head record that hashes to a stepped World's chain names that World's root, or two of the
+inputs the opening compares collide. -/
 theorem head_root {w w' : World D} {s : Step D} (h : World.step E w s = .ok w') {prev td rd root' jroot' rroot' wroot' : D}
     {g : UInt8} (hhead : headLink E prev g td rd = w'.chain) (hrd : rootsDigest E root' jroot' rroot' wroot' = rd) :
-    root' = w'.root E ∨ Collision E.hash := by
+    root' = w'.root E ∨ CollidesAmong E.hash (headPres E w [s] w' prev g td rd root' jroot' rroot' wroot') := by
   rcases head_roots hE h hhead hrd with ⟨hr, _⟩ | col
   · exact .inl hr
   · exact .inr col
 
 /-- **The phone's read.** A head record that hashes to the chain a step reached, its roots digest
-opened, and a proof that verifies against the opened cells' root, show a slot of that World, or a
-collision. -/
+opened, and a proof that verifies against the opened cells' root, show a slot of that World, or two
+of the inputs the opening and the read compare collide. -/
 theorem head_read_sound {w w' : World D} {s : Step D}
     (hc : w.Canon E) (h : World.step E w s = .ok w') (hwf : w'.CellsFit Codec.Kernel.Cell.Fits E)
     {prev td rd root' jroot' rroot' wroot' : D} {g : UInt8}
@@ -423,7 +435,9 @@ theorem head_read_sound {w w' : World D} {s : Step D}
     {sl : Slot D} {l : Leaf} (hlf : l.CellFit Codec.Kernel.Cell.Fits)
     {p : Trie.Proof (Slot D) D}
     (hv : Trie.verifyInclusion (trieSpec E) root' sl (leafDigest E l) p = true) :
-    w'.trie.get (trieSpec E) sl = some l ∨ Collision E.hash :=
+    w'.trie.get (trieSpec E) sl = some l ∨
+      CollidesAmong E.hash (headPres E w [s] w' prev g td rd root' jroot' rroot' wroot' ++
+        inclPres (trieSpec E) (leafPre E) sl l p w'.trie) :=
   (cells_headSound hE).head_read (fun r _ _ _ => r) (step_canon hc h) rfl hwf (head_roots hE h hhead hrd) hlf hv
 
 /-- **The phone's read of an absence** (an unspent nullifier, an unused id) against a head. -/
@@ -432,8 +446,74 @@ theorem head_absent_sound {w w' : World D} {s : Step D} (hc : w.Canon E)
     (hhead : headLink E prev g td rd = w'.chain) (hrd : rootsDigest E root' jroot' rroot' wroot' = rd)
     {sl : Slot D} {p : Trie.Proof (Slot D) D}
     (hv : Trie.verifyExclusion (trieSpec E) root' sl p = true) :
-    w'.trie.get (trieSpec E) sl = none ∨ Collision E.hash :=
+    w'.trie.get (trieSpec E) sl = none ∨
+      CollidesAmong E.hash (headPres E w [s] w' prev g td rd root' jroot' rroot' wroot' ++
+        readPres (trieSpec E) sl p w'.trie) :=
   (cells_headSound hE).head_absent (fun r _ _ _ => r) (step_canon hc h) rfl (head_roots hE h hhead hrd) hv
+
+/-! ### Teeth: under `Separates` of the inputs each theorem names, its binding fact alone -/
+
+omit [DecidableEq D] in
+/-- TOOTH (`leafDigest_inj`). -/
+theorem leafDigest_inj_sep {l l' : Leaf} (hf : l.CellFit Codec.Kernel.Cell.Fits)
+    (hf' : l'.CellFit Codec.Kernel.Cell.Fits) (hsep : Separates E.hash [leafPre E l, leafPre E l'])
+    (h : leafDigest E l = leafDigest E l') : l = l' :=
+  hsep.elim (leafDigest_inj hE.cellBytes_injOn hf hf' h)
+
+omit [DecidableEq D] in
+/-- TOOTH (`rootsDigest_inj`). -/
+theorem rootsDigest_inj_sep {a b c d a' b' c' d' : D}
+    (hsep : Separates E.hash [rootsPre E a b c d, rootsPre E a' b' c' d'])
+    (h : rootsDigest E a b c d = rootsDigest E a' b' c' d') : a = a' ∧ b = b' ∧ c = c' ∧ d = d' :=
+  hsep.elim (rootsDigest_inj hE h)
+
+/-- TOOTH (`slot_inclusion_sound`). -/
+theorem slot_inclusion_sound_sep {w : World D} (hc : w.Canon E)
+    (hwf : w.CellsFit Codec.Kernel.Cell.Fits E) {s : Slot D} {l : Leaf}
+    (hlf : l.CellFit Codec.Kernel.Cell.Fits) {p : Trie.Proof (Slot D) D}
+    (hsep : Separates E.hash (inclPres (trieSpec E) (leafPre E) s l p w.trie))
+    (hv : Trie.verifyInclusion (trieSpec E) (w.root E) s (leafDigest E l) p = true) :
+    w.trie.get (trieSpec E) s = some l :=
+  hsep.elim (slot_inclusion_sound hE hc hwf hlf hv)
+
+/-- TOOTH (`slot_exclusion_sound`). -/
+theorem slot_exclusion_sound_sep {w : World D} (hc : w.Canon E) {s : Slot D} {p : Trie.Proof (Slot D) D}
+    (hsep : Separates E.hash (readPres (trieSpec E) s p w.trie))
+    (hv : Trie.verifyExclusion (trieSpec E) (w.root E) s p = true) :
+    w.trie.get (trieSpec E) s = none :=
+  hsep.elim (slot_exclusion_sound hE hc hv)
+
+/-- TOOTH (`head_roots`): under a hash that separates the opening's inputs, a head record that
+hashes to a stepped World's chain opens to that World's roots. -/
+theorem head_roots_sep {w w' : World D} {s : Step D} (h : World.step E w s = .ok w')
+    {prev td rd root' jroot' rroot' wroot' : D} {g : UInt8}
+    (hsep : Separates E.hash (headPres E w [s] w' prev g td rd root' jroot' rroot' wroot'))
+    (hhead : headLink E prev g td rd = w'.chain) (hrd : rootsDigest E root' jroot' rroot' wroot' = rd) :
+    root' = w'.root E ∧ jroot' = w'.journalRoot E ∧ rroot' = w'.refusalsRoot E ∧ wroot' = w'.rowsRoot E :=
+  hsep.elim (head_roots hE h hhead hrd)
+
+/-- TOOTH (`head_read_sound`). -/
+theorem head_read_sound_sep {w w' : World D} {s : Step D}
+    (hc : w.Canon E) (h : World.step E w s = .ok w') (hwf : w'.CellsFit Codec.Kernel.Cell.Fits E)
+    {prev td rd root' jroot' rroot' wroot' : D} {g : UInt8}
+    (hhead : headLink E prev g td rd = w'.chain) (hrd : rootsDigest E root' jroot' rroot' wroot' = rd)
+    {sl : Slot D} {l : Leaf} (hlf : l.CellFit Codec.Kernel.Cell.Fits) {p : Trie.Proof (Slot D) D}
+    (hsep : Separates E.hash (headPres E w [s] w' prev g td rd root' jroot' rroot' wroot' ++
+      inclPres (trieSpec E) (leafPre E) sl l p w'.trie))
+    (hv : Trie.verifyInclusion (trieSpec E) root' sl (leafDigest E l) p = true) :
+    w'.trie.get (trieSpec E) sl = some l :=
+  hsep.elim (head_read_sound hE hc h hwf hhead hrd hlf hv)
+
+/-- TOOTH (`head_absent_sound`). -/
+theorem head_absent_sound_sep {w w' : World D} {s : Step D} (hc : w.Canon E)
+    (h : World.step E w s = .ok w') {prev td rd root' jroot' rroot' wroot' : D} {g : UInt8}
+    (hhead : headLink E prev g td rd = w'.chain) (hrd : rootsDigest E root' jroot' rroot' wroot' = rd)
+    {sl : Slot D} {p : Trie.Proof (Slot D) D}
+    (hsep : Separates E.hash (headPres E w [s] w' prev g td rd root' jroot' rroot' wroot' ++
+      readPres (trieSpec E) sl p w'.trie))
+    (hv : Trie.verifyExclusion (trieSpec E) root' sl p = true) :
+    w'.trie.get (trieSpec E) sl = none :=
+  hsep.elim (head_absent_sound hE hc h hhead hrd hv)
 
 end Sound
 

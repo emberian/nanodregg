@@ -44,7 +44,9 @@ theorem check_committed {w : World D} (hc : w.JournalCanon E)
     (hfit : ∀ k e, w.journalAt E k = some e → e.1 < 2 ^ 64)
     {H : Nat} {txId : D} {nb : Nat} {r : Receipt D} {h : Nat} {td : D}
     (hk : check E H (w.roots E) txId nb r = .ok (.committed h td)) :
-    w.journalAt E txId = some (h, td) ∨ Collision E.hash := by
+    w.journalAt E txId = some (h, td) ∨
+      CollidesAmong E.hash ([rootsPre E r.root r.jroot r.rroot r.rowsroot, w.rootsPre E] ++
+        inclPres (journalSpec E) (journalPre E) txId (h, td) r.jpath w.journal) := by
   obtain ⟨-, hr, ha⟩ := check_ok hk
   rcases rootsDigest_inj hE hr with ⟨-, hj, -, -⟩ | col
   · unfold answerOf at ha
@@ -53,20 +55,23 @@ theorem check_committed {w : World D} (hc : w.JournalCanon E)
       · rename_i hv
         cases ha
         rw [hj] at hv
-        exact journal_inclusion_sound hE hn hc hfit hv.1 hv.2
+        exact (journal_inclusion_sound hE hn hc hfit hv.1 hv.2).imp_right
+          (CollidesAmong.mono fun x hx => List.mem_append_right _ hx)
       · cases ha
     · split at ha <;> cases ha
     · split at ha
       · cases ha
       · split at ha <;> cases ha
-  · exact .inr col
+  · exact .inr (CollidesAmong.mono (fun x hx => List.mem_append_left _ hx) col)
 
 include hE hn in
 /-- **An absent receipt is the World's journal absence**, and only while `journalForgets` is false. -/
 theorem check_absent {w : World D} (hc : w.JournalCanon E)
     {txId : D} {nb : Nat} {r : Receipt D}
     (hk : check E w.height (w.roots E) txId nb r = .ok .absent) :
-    journalForgets w.height nb = false ∧ (w.journalAt E txId = none ∨ Collision E.hash) := by
+    journalForgets w.height nb = false ∧ (w.journalAt E txId = none ∨
+      CollidesAmong E.hash ([rootsPre E r.root r.jroot r.rroot r.rowsroot, w.rootsPre E] ++
+        readPres (journalSpec E) txId r.jpath w.journal)) := by
   obtain ⟨-, hr, ha⟩ := check_ok hk
   unfold answerOf at ha
   split at ha
@@ -80,8 +85,9 @@ theorem check_absent {w : World D} (hc : w.JournalCanon E)
         refine ⟨by simpa using hf, ?_⟩
         rcases rootsDigest_inj hE hr with ⟨-, hj, -, -⟩ | col
         · rw [hj] at hv
-          exact journal_exclusion_sound hE hn hc hv.1
-        · exact .inr col
+          exact (journal_exclusion_sound hE hn hc hv.1).imp_right
+            (CollidesAmong.mono fun x hx => List.mem_append_right _ hx)
+        · exact .inr (CollidesAmong.mono (fun x hx => List.mem_append_left _ hx) col)
       · cases ha
 
 include hE hn in
@@ -90,7 +96,9 @@ collision (a relay cannot turn a committed call into `refused`). -/
 theorem check_refused_uncommitted {w : World D} (hc : w.JournalCanon E)
     {H : Nat} {txId : D} {nb : Nat} {r : Receipt D} {h code : Nat} {m : D}
     (hk : check E H (w.roots E) txId nb r = .ok (.refused h code m)) :
-    w.journalAt E txId = none ∨ Collision E.hash := by
+    w.journalAt E txId = none ∨
+      CollidesAmong E.hash ([rootsPre E r.root r.jroot r.rroot r.rowsroot, w.rootsPre E] ++
+        readPres (journalSpec E) txId r.jpath w.journal) := by
   obtain ⟨-, hr, ha⟩ := check_ok hk
   unfold answerOf at ha
   split at ha
@@ -100,8 +108,9 @@ theorem check_refused_uncommitted {w : World D} (hc : w.JournalCanon E)
       rcases rootsDigest_inj hE hr with ⟨-, hj, -, -⟩ | col
       · have hx := hv.2.2.2
         rw [hj] at hx
-        exact journal_exclusion_sound hE hn hc hx
-      · exact .inr col
+        exact (journal_exclusion_sound hE hn hc hx).imp_right
+          (CollidesAmong.mono fun x hx => List.mem_append_right _ hx)
+      · exact .inr (CollidesAmong.mono (fun x hx => List.mem_append_left _ hx) col)
     · cases ha
   · split at ha
     · cases ha
@@ -121,7 +130,9 @@ include hE in
 theorem check_refused_sound {w : World D} (hr : w.RefusalsOk E)
     {H : Nat} {txId : D} {nb : Nat} {r : Receipt D} {h code : Nat} {m : D}
     (hk : check E H (w.roots E) txId nb r = .ok (.refused h code m)) :
-    w.refusalAt E (.tx txId) = some (.refused h code m) ∨ Collision E.hash := by
+    w.refusalAt E (.tx txId) = some (.refused h code m) ∨
+      CollidesAmong E.hash ([rootsPre E r.root r.jroot r.rroot r.rowsroot, w.rootsPre E] ++
+        inclPres (refusalSpec E) (refusalPre E) (.tx txId) (.refused h code m) r.rpath w.refusals) := by
   obtain ⟨-, hrd, ha⟩ := check_ok hk
   unfold answerOf at ha
   split at ha
@@ -132,8 +143,10 @@ theorem check_refused_sound {w : World D} (hr : w.RefusalsOk E)
       rcases rootsDigest_inj hE hrd with ⟨-, -, hrr, -⟩ | col
       · have hx := hv.2.2.1
         rw [hrr] at hx
-        exact refusal_inclusion_sound hE hr.1 (refusalsOk_fits hr) ⟨hv.1, hv.2.1⟩ hx
-      · exact .inr col
+        exact (refusal_inclusion_sound hE hr.1 (refusalsOk_fits hr) (v := .refused h code m) ⟨hv.1, hv.2.1⟩
+          hx).imp_right
+          (CollidesAmong.mono fun x hx => List.mem_append_right _ hx)
+      · exact .inr (CollidesAmong.mono (fun x hx => List.mem_append_left _ hx) col)
     · cases ha
   · split at ha
     · cases ha
@@ -144,7 +157,9 @@ include hE in
 theorem check_absent_unrefused {w : World D} (hr : w.RefusalsOk E)
     {H : Nat} {txId : D} {nb : Nat} {r : Receipt D}
     (hk : check E H (w.roots E) txId nb r = .ok .absent) :
-    w.refusalAt E (.tx txId) = none ∨ Collision E.hash := by
+    w.refusalAt E (.tx txId) = none ∨
+      CollidesAmong E.hash ([rootsPre E r.root r.jroot r.rroot r.rowsroot, w.rootsPre E] ++
+        readPres (refusalSpec E) (.tx txId) r.rpath w.refusals) := by
   obtain ⟨-, hrd, ha⟩ := check_ok hk
   unfold answerOf at ha
   split at ha
@@ -157,9 +172,67 @@ theorem check_absent_unrefused {w : World D} (hr : w.RefusalsOk E)
         rcases rootsDigest_inj hE hrd with ⟨-, -, hrr, -⟩ | col
         · have hx := hv.2
           rw [hrr] at hx
-          exact refusal_exclusion_sound hE hr.1 hx
-        · exact .inr col
+          exact (refusal_exclusion_sound hE hr.1 hx).imp_right
+            (CollidesAmong.mono fun x hx => List.mem_append_right _ hx)
+        · exact .inr (CollidesAmong.mono (fun x hx => List.mem_append_left _ hx) col)
       · cases ha
+
+include hE hn in
+/-- TOOTH (`check_committed`): where the hash separates the inputs it compares, a committed receipt
+is the World's journal entry. -/
+theorem check_committed_sep {w : World D} (hc : w.JournalCanon E)
+    (hfit : ∀ k e, w.journalAt E k = some e → e.1 < 2 ^ 64)
+    {H : Nat} {txId : D} {nb : Nat} {r : Receipt D} {h : Nat} {td : D}
+    (hk : check E H (w.roots E) txId nb r = .ok (.committed h td))
+    (hs : Separates E.hash ([rootsPre E r.root r.jroot r.rroot r.rowsroot, w.rootsPre E] ++
+      inclPres (journalSpec E) (journalPre E) txId (h, td) r.jpath w.journal)) :
+    w.journalAt E txId = some (h, td) :=
+  (check_committed hE hn hc hfit hk).resolve_right hs.not_collides
+
+include hE hn in
+/-- TOOTH (`check_absent`): where the hash separates the inputs it compares, an absent receipt is
+the World's journal absence, while `journalForgets` is false. -/
+theorem check_absent_sep {w : World D} (hc : w.JournalCanon E)
+    {txId : D} {nb : Nat} {r : Receipt D}
+    (hk : check E w.height (w.roots E) txId nb r = .ok .absent)
+    (hs : Separates E.hash ([rootsPre E r.root r.jroot r.rroot r.rowsroot, w.rootsPre E] ++
+      readPres (journalSpec E) txId r.jpath w.journal)) :
+    journalForgets w.height nb = false ∧ w.journalAt E txId = none :=
+  have h := check_absent hE hn hc hk
+  ⟨h.1, h.2.resolve_right hs.not_collides⟩
+
+include hE hn in
+/-- TOOTH (`check_refused_uncommitted`): where the hash separates the inputs it compares, a refused
+receipt's id is absent from the World's journal. -/
+theorem check_refused_uncommitted_sep {w : World D} (hc : w.JournalCanon E)
+    {H : Nat} {txId : D} {nb : Nat} {r : Receipt D} {h code : Nat} {m : D}
+    (hk : check E H (w.roots E) txId nb r = .ok (.refused h code m))
+    (hs : Separates E.hash ([rootsPre E r.root r.jroot r.rroot r.rowsroot, w.rootsPre E] ++
+      readPres (journalSpec E) txId r.jpath w.journal)) :
+    w.journalAt E txId = none :=
+  (check_refused_uncommitted hE hn hc hk).resolve_right hs.not_collides
+
+include hE in
+/-- TOOTH (`check_refused_sound`): where the hash separates the inputs it compares, a refused
+receipt is the World's recorded refusal. -/
+theorem check_refused_sound_sep {w : World D} (hr : w.RefusalsOk E)
+    {H : Nat} {txId : D} {nb : Nat} {r : Receipt D} {h code : Nat} {m : D}
+    (hk : check E H (w.roots E) txId nb r = .ok (.refused h code m))
+    (hs : Separates E.hash ([rootsPre E r.root r.jroot r.rroot r.rowsroot, w.rootsPre E] ++
+      inclPres (refusalSpec E) (refusalPre E) (.tx txId) (.refused h code m) r.rpath w.refusals)) :
+    w.refusalAt E (.tx txId) = some (.refused h code m) :=
+  (check_refused_sound hE hr hk).resolve_right hs.not_collides
+
+include hE in
+/-- TOOTH (`check_absent_unrefused`): where the hash separates the inputs it compares, an absent
+receipt shows no refusal recorded. -/
+theorem check_absent_unrefused_sep {w : World D} (hr : w.RefusalsOk E)
+    {H : Nat} {txId : D} {nb : Nat} {r : Receipt D}
+    (hk : check E H (w.roots E) txId nb r = .ok .absent)
+    (hs : Separates E.hash ([rootsPre E r.root r.jroot r.rroot r.rowsroot, w.rootsPre E] ++
+      readPres (refusalSpec E) (.tx txId) r.rpath w.refusals)) :
+    w.refusalAt E (.tx txId) = none :=
+  (check_absent_unrefused hE hr hk).resolve_right hs.not_collides
 
 end Sound
 

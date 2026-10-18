@@ -6,7 +6,8 @@ The twin of `Kernel.Proofs.JournalHead` for the third trie. The chain commits th
 code, at which height), that a member's window count is what it is, or that a key is absent.
 
 * `refusal_inclusion_sound` / `refusal_exclusion_sound`: a proof that verifies against a World's
-  refusals root tells the truth about the key, or `Collision E.hash`;
+  refusals root tells the truth about the key, or two of the inputs the read compares collide
+  (`inclPres`, `readPres`; KERNEL-56);
   `refusal_prove_verifies` / `refusal_prove_absent`: the World proves every leaf it holds, and every
   key it does not.
 * `head_refusal_read` / `head_refusal_absent`: the same against a head record that hashes to the
@@ -16,7 +17,7 @@ code, at which height), that a member's window count is what it is, or that a ke
   `.tx` leaf through every fold below `h + 2 * windowMax`; `head_refused_retained` is what a phone
   is shown of it (the head's refusals root is the World's and the World's own proof of the record
   verifies against it), and `head_refused_not_absent` (the twin of `head_absent_admitted`): below
-  that height no exclusion proof of the call verifies against the head, but by a collision.
+  that height no exclusion proof of the call verifies against the head, but by a collision among the inputs it compares.
 Premises: `hE : E.Lawful n` (no `0 < n`: a refusals leaf body carries a 9-byte key besides the
 digests, so an empty leaf is told from a full one at any digest size, `refusalBody_inj`); the
 refusals trie canonical (`RefusalsCanon`), and, for inclusion, every leaf of the World and the
@@ -79,13 +80,13 @@ theorem refusalLeafBytes_inj {E : Env D} {n : Nat} (hE : E.Lawful n) {v v' : Ref
 
 omit [DecidableEq D] in
 /-- **A refusals leaf digest determines its leaf** on the leaf codec's domain and a lawful `Env`, or
-the hash collides in `domRefusal`. -/
+the two inputs collide (in `domRefusal`). -/
 theorem refusalDigest_inj {E : Env D} {n : Nat} (hE : E.Lawful n) {v v' : RefusalLeaf D} (hv : Codec.Kernel.RefusalLeaf.Fits v)
     (hv' : Codec.Kernel.RefusalLeaf.Fits v') (h : refusalDigest E v = refusalDigest E v') :
-    v = v' ∨ Collision E.hash := by
+    v = v' ∨ CollidesAmong E.hash [refusalPre E v, refusalPre E v'] := by
   by_cases hb : refusalLeafBytes E v = refusalLeafBytes E v'
   · exact .inl (refusalLeafBytes_inj hE hv hv' hb)
-  · exact .inr ⟨domRefusal, _, _, hb, h⟩
+  · exact .inr (.pair (fun he => hb (congrArg Prod.snd he)) h)
 
 omit [DecidableEq D] in
 theorem refusalBody_size {E : Env D} {n : Nat} (hE : E.Lawful n) (kds : List (RefusalSlot D × D)) :
@@ -120,11 +121,6 @@ theorem refusalBody_inj {E : Env D} {n : Nat} (hE : E.Lawful n) : ∀ x y : List
         (by simp only [ByteArray.size_append, refusalKeyBytes_size hE, hE.size])
       obtain ⟨hk, hd⟩ := bytes_append_inj hh (by rw [refusalKeyBytes_size hE, refusalKeyBytes_size hE])
       rw [Prod.ext (refusalKeyBytes_inj hE hk) (hE.bytes_inj hd), refusalBody_inj hE xs ys ht]
-
-omit [Ord D] [DecidableEq D] in
-/-- A refusals-trie collision is a `Collision` of the kernel's hash (in `domTrie`). -/
-theorem refusal_coll_collision {E : Env D} (h : Trie.Coll (refusalSpec E)) : Collision E.hash := by
-  obtain ⟨a, b, hne, he⟩ := h; exact ⟨domTrie, a, b, hne, he⟩
 
 /-- **Every leaf of a `RefusalsOk` World is in the leaf codec's domain**: the World's own
 `refusalFits` bounds every counter. -/
@@ -161,39 +157,42 @@ include hE in
 omit [DecidableEq D] in
 /-- **The refusals' trie is a `HeadSound` instance** (KERNEL-52) on `RefusalLeaf.Fits`, at any
 digest size (`refusalBody_inj`). -/
-theorem refusal_headSound : HeadSound E (refusalSpec E) Codec.Kernel.RefusalLeaf.Fits :=
-  ⟨refusalBody_inj hE, dbytes_pair_inj hE, refusalDigest_inj hE, refusal_coll_collision⟩
+theorem refusal_headSound : HeadSound E (refusalSpec E) Codec.Kernel.RefusalLeaf.Fits (refusalPre E) :=
+  ⟨refusalBody_inj hE, dbytes_pair_inj hE, fun _ => rfl, fun _ => rfl,
+    fun hv hv' h => refusalLeafBytes_inj hE hv hv' (congrArg Prod.snd h)⟩
 
 include hE in
 /-- **Refusals inclusion is sound at the World**: a claimed leaf proved against the refusals root is
-the World's leaf, or a collision. -/
+the World's leaf, or two of the inputs it compares collide. -/
 theorem refusal_inclusion_sound {w : World D} (hc : w.RefusalsCanon E)
     (hfit : ∀ k v, w.refusalAt E k = some v → Codec.Kernel.RefusalLeaf.Fits v) {k : RefusalSlot D}
     {v : RefusalLeaf D} (hv : Codec.Kernel.RefusalLeaf.Fits v) {p : Trie.Proof (RefusalSlot D) D}
     (hp : Trie.verifyInclusion (refusalSpec E) (w.refusalsRoot E) k (refusalDigest E v) p = true) :
-    w.refusalAt E k = some v ∨ Collision E.hash :=
+    w.refusalAt E k = some v ∨ CollidesAmong E.hash (inclPres (refusalSpec E) (refusalPre E) k v p w.refusals) :=
   (refusal_headSound hE).inclusion hc hfit hv hp
 
 include hE in
 /-- **Refusals exclusion is sound at the World**: a key proved absent against the refusals root is
-not in the World's refusals, or a collision. -/
+not in the World's refusals, or two of the inputs it compares collide. -/
 theorem refusal_exclusion_sound {w : World D} (hc : w.RefusalsCanon E) {k : RefusalSlot D}
     {p : Trie.Proof (RefusalSlot D) D}
     (hp : Trie.verifyExclusion (refusalSpec E) (w.refusalsRoot E) k p = true) :
-    w.refusalAt E k = none ∨ Collision E.hash :=
+    w.refusalAt E k = none ∨ CollidesAmong E.hash (readPres (refusalSpec E) k p w.refusals) :=
   (refusal_headSound hE).exclusion hc hp
 
 include hE in
 /-- **The phone's refusals read**: a head record that hashes to the chain a step (a Turn or a
 recorded refusal) reached, and an inclusion proof against the record's refusals root, show the leaf
-in that World's refusals, or a collision. -/
+in that World's refusals, or two of the inputs it compares collide. -/
 theorem head_refusal_read {w w' : World D} {s : Step D} (hw : w.RefusalsOk E)
     (h : World.step E w s = .ok w') {prev td rd root' jroot' rroot' wroot' : D} {g : UInt8}
     (hhead : headLink E prev g td rd = w'.chain) (hrd : rootsDigest E root' jroot' rroot' wroot' = rd)
     {k : RefusalSlot D} {v : RefusalLeaf D} (hv : Codec.Kernel.RefusalLeaf.Fits v)
     {p : Trie.Proof (RefusalSlot D) D}
     (hp : Trie.verifyInclusion (refusalSpec E) rroot' k (refusalDigest E v) p = true) :
-    w'.refusalAt E k = some v ∨ Collision E.hash :=
+    w'.refusalAt E k = some v ∨
+      CollidesAmong E.hash (headPres E w [s] w' prev g td rd root' jroot' rroot' wroot' ++
+        inclPres (refusalSpec E) (refusalPre E) k v p w'.refusals) :=
   (refusal_headSound hE).head_read (fun _ _ r _ => r) (step_refusalsOk hw h).1 rfl
     (refusalsOk_fits (step_refusalsOk hw h)) (head_roots hE h hhead hrd) hv hp
 
@@ -205,7 +204,9 @@ theorem head_refusal_absent {w w' : World D} {s : Step D} (hc : w.RefusalsCanon 
     (hhead : headLink E prev g td rd = w'.chain) (hrd : rootsDigest E root' jroot' rroot' wroot' = rd)
     {k : RefusalSlot D} {p : Trie.Proof (RefusalSlot D) D}
     (hp : Trie.verifyExclusion (refusalSpec E) rroot' k p = true) :
-    w'.refusalAt E k = none ∨ Collision E.hash :=
+    w'.refusalAt E k = none ∨
+      CollidesAmong E.hash (headPres E w [s] w' prev g td rd root' jroot' rroot' wroot' ++
+        readPres (refusalSpec E) k p w'.refusals) :=
   (refusal_headSound hE).head_absent (fun _ _ r _ => r) (step_refusalsCanon hc h) rfl
     (head_roots hE h hhead hrd) hp
 
@@ -216,7 +217,7 @@ include hE in
 `World.refuse` recorded `r` from `w₀`, on every World `w₂` a later log reaches below
 `w₀.height + 1 + 2 * windowMax`, a head record that hashes to `w₂`'s chain opens to `w₂`'s refusals
 root, and `w₂`'s own proof of the call's `.tx` leaf, refused at `w₀.height + 1` with `r.code`,
-verifies against it; or the hash collides. -/
+verifies against it; or two of the opening's inputs collide (`headPres`). -/
 theorem head_refused_retained {w₀ w₁ w₂ : World D} {r : Refused D} {l : List (Step D)}
     (hc : w₀.RefusalsCanon E) (hjc : w₀.JournalCanon E) (h₁ : World.refuse E w₀ r = .ok w₁)
     (hf : World.fold E w₁ l = .ok w₂) (hlt : w₂.height < w₀.height + 1 + 2 * Bounds.windowMax)
@@ -224,7 +225,8 @@ theorem head_refused_retained {w₀ w₁ w₂ : World D} {r : Refused D} {l : Li
     (hhead : headLink E prev g td rd = w₂.chain) (hrd : rootsDigest E root' jroot' rroot' wroot' = rd) :
     (rroot' = w₂.refusalsRoot E ∧
       Trie.verifyInclusion (refusalSpec E) rroot' (.tx r.txId) (refusalDigest E (.refused (w₀.height + 1) r.code r.member))
-        (w₂.refusals.prove (refusalSpec E) (.tx r.txId)) = true) ∨ Collision E.hash := by
+        (w₂.refusals.prove (refusalSpec E) (.tx r.txId)) = true) ∨
+      CollidesAmong E.hash (headPres E w₀ (.refusal r :: l) w₂ prev g td rd root' jroot' rroot' wroot') := by
   obtain ⟨-, -, -, hj, -, -⟩ := refuse_facts h₁
   have hjc₁ : w₁.JournalCanon E := by
     unfold World.JournalCanon; rw [(refuse_frame h₁).2.1]; exact hjc
@@ -238,14 +240,16 @@ theorem head_refused_retained {w₀ w₁ w₂ : World D} {r : Refused D} {l : Li
 include hE in
 /-- **Exclusion below the horizon refutes**: the twin of `head_absent_admitted`. After `World.refuse`
 recorded `r` from `w₀`, no exclusion proof of the call's `.tx` key verifies against the head of any
-World a later log reaches below `w₀.height + 1 + 2 * windowMax`, but by a collision. -/
+World a later log reaches below `w₀.height + 1 + 2 * windowMax`, but by a collision among the inputs it compares. -/
 theorem head_refused_not_absent {w₀ w₁ w₂ : World D} {r : Refused D} {l : List (Step D)}
     (hc : w₀.RefusalsCanon E) (hjc : w₀.JournalCanon E) (h₁ : World.refuse E w₀ r = .ok w₁)
     (hf : World.fold E w₁ l = .ok w₂) (hlt : w₂.height < w₀.height + 1 + 2 * Bounds.windowMax)
     {prev td rd root' jroot' rroot' wroot' : D} {g : UInt8}
     (hhead : headLink E prev g td rd = w₂.chain) (hrd : rootsDigest E root' jroot' rroot' wroot' = rd)
     {p : Trie.Proof (RefusalSlot D) D}
-    (hp : Trie.verifyExclusion (refusalSpec E) rroot' (.tx r.txId) p = true) : Collision E.hash := by
+    (hp : Trie.verifyExclusion (refusalSpec E) rroot' (.tx r.txId) p = true) :
+    CollidesAmong E.hash (headPres E w₀ (.refusal r :: l) w₂ prev g td rd root' jroot' rroot' wroot' ++
+      readPres (refusalSpec E) (.tx r.txId) p w₂.refusals) := by
   obtain ⟨-, -, -, hj, -, -⟩ := refuse_facts h₁
   have hjc₁ : w₁.JournalCanon E := by
     unfold World.JournalCanon; rw [(refuse_frame h₁).2.1]; exact hjc
@@ -255,8 +259,8 @@ theorem head_refused_not_absent {w₀ w₁ w₂ : World D} {r : Refused D} {l : 
   rcases fold_head_roots hE (s := .refusal r) h₁ hf hhead hrd with ⟨-, -, rfl, -⟩ | col
   · rcases refusal_exclusion_sound hE (fold_refusalsCanon hc₁ hf) hp with hnone | col
     · rw [hr₂] at hnone; cases hnone
-    · exact col
-  · exact col
+    · exact CollidesAmong.mono (fun x hx => List.mem_append_right _ hx) col
+  · exact CollidesAmong.mono (fun x hx => List.mem_append_left _ hx) col
 
 /-! ## Teeth -/
 
@@ -267,7 +271,7 @@ theorem refusal_inclusion_wrong_leaf {w : World D} (hw : w.RefusalsOk E) {k : Re
     {v v' : RefusalLeaf D} (hg : w.refusalAt E k = some v') (hne : v ≠ v')
     (hv : Codec.Kernel.RefusalLeaf.Fits v) {p : Trie.Proof (RefusalSlot D) D}
     (hp : Trie.verifyInclusion (refusalSpec E) (w.refusalsRoot E) k (refusalDigest E v) p = true) :
-    Collision E.hash := by
+    CollidesAmong E.hash (inclPres (refusalSpec E) (refusalPre E) k v p w.refusals) := by
   rcases refusal_inclusion_sound hE hw.1 (refusalsOk_fits hw) hv hp with h | c
   · rw [hg] at h; cases h; exact absurd rfl hne
   · exact c
@@ -279,7 +283,8 @@ collision. -/
 theorem refusal_inclusion_other_key {w : World D} (hw : w.RefusalsOk E) {k k' : RefusalSlot D}
     {v : RefusalLeaf D} (hg : w.refusalAt E k = some v) (hg' : w.refusalAt E k' = none)
     (hp : Trie.verifyInclusion (refusalSpec E) (w.refusalsRoot E) k' (refusalDigest E v)
-      (w.refusals.prove (refusalSpec E) k) = true) : Collision E.hash := by
+      (w.refusals.prove (refusalSpec E) k) = true) :
+    CollidesAmong E.hash (inclPres (refusalSpec E) (refusalPre E) k' v (w.refusals.prove (refusalSpec E) k) w.refusals) := by
   rcases refusal_inclusion_sound hE hw.1 (refusalsOk_fits hw) (refusalsOk_fits hw k v hg) hp with h | c
   · rw [hg'] at h; cases h
   · exact c
@@ -288,10 +293,92 @@ include hE in
 /-- TOOTH (`refusal_exclusion_sound`): **a held key proved absent refutes.** -/
 theorem refusal_exclusion_held {w : World D} (hc : w.RefusalsCanon E) {k : RefusalSlot D}
     {v : RefusalLeaf D} (hg : w.refusalAt E k = some v) {p : Trie.Proof (RefusalSlot D) D}
-    (hp : Trie.verifyExclusion (refusalSpec E) (w.refusalsRoot E) k p = true) : Collision E.hash := by
+    (hp : Trie.verifyExclusion (refusalSpec E) (w.refusalsRoot E) k p = true) :
+    CollidesAmong E.hash (readPres (refusalSpec E) k p w.refusals) := by
   rcases refusal_exclusion_sound hE hc hp with h | c
   · rw [hg] at h; cases h
   · exact c
+
+/-! ### Teeth: under `Separates` of the inputs each theorem names, its binding fact alone -/
+
+include hE in
+omit [DecidableEq D] in
+/-- TOOTH (`refusalDigest_inj`). -/
+theorem refusalDigest_inj_sep {v v' : RefusalLeaf D} (hv : Codec.Kernel.RefusalLeaf.Fits v)
+    (hv' : Codec.Kernel.RefusalLeaf.Fits v') (hsep : Separates E.hash [refusalPre E v, refusalPre E v'])
+    (h : refusalDigest E v = refusalDigest E v') : v = v' :=
+  hsep.elim (refusalDigest_inj hE hv hv' h)
+
+include hE in
+/-- TOOTH (`refusal_inclusion_sound`). -/
+theorem refusal_inclusion_sound_sep {w : World D} (hc : w.RefusalsCanon E)
+    (hfit : ∀ k v, w.refusalAt E k = some v → Codec.Kernel.RefusalLeaf.Fits v) {k : RefusalSlot D}
+    {v : RefusalLeaf D} (hv : Codec.Kernel.RefusalLeaf.Fits v) {p : Trie.Proof (RefusalSlot D) D}
+    (hsep : Separates E.hash (inclPres (refusalSpec E) (refusalPre E) k v p w.refusals))
+    (hp : Trie.verifyInclusion (refusalSpec E) (w.refusalsRoot E) k (refusalDigest E v) p = true) :
+    w.refusalAt E k = some v :=
+  hsep.elim (refusal_inclusion_sound hE hc hfit hv hp)
+
+include hE in
+/-- TOOTH (`refusal_exclusion_sound`). -/
+theorem refusal_exclusion_sound_sep {w : World D} (hc : w.RefusalsCanon E) {k : RefusalSlot D}
+    {p : Trie.Proof (RefusalSlot D) D} (hsep : Separates E.hash (readPres (refusalSpec E) k p w.refusals))
+    (hp : Trie.verifyExclusion (refusalSpec E) (w.refusalsRoot E) k p = true) : w.refusalAt E k = none :=
+  hsep.elim (refusal_exclusion_sound hE hc hp)
+
+include hE in
+/-- TOOTH (`head_refusal_read`). -/
+theorem head_refusal_read_sep {w w' : World D} {s : Step D} (hw : w.RefusalsOk E)
+    (h : World.step E w s = .ok w') {prev td rd root' jroot' rroot' wroot' : D} {g : UInt8}
+    (hhead : headLink E prev g td rd = w'.chain) (hrd : rootsDigest E root' jroot' rroot' wroot' = rd)
+    {k : RefusalSlot D} {v : RefusalLeaf D} (hv : Codec.Kernel.RefusalLeaf.Fits v)
+    {p : Trie.Proof (RefusalSlot D) D}
+    (hsep : Separates E.hash (headPres E w [s] w' prev g td rd root' jroot' rroot' wroot' ++
+      inclPres (refusalSpec E) (refusalPre E) k v p w'.refusals))
+    (hp : Trie.verifyInclusion (refusalSpec E) rroot' k (refusalDigest E v) p = true) :
+    w'.refusalAt E k = some v :=
+  hsep.elim (head_refusal_read hE hw h hhead hrd hv hp)
+
+include hE in
+/-- TOOTH (`head_refusal_absent`). -/
+theorem head_refusal_absent_sep {w w' : World D} {s : Step D} (hc : w.RefusalsCanon E)
+    (h : World.step E w s = .ok w') {prev td rd root' jroot' rroot' wroot' : D} {g : UInt8}
+    (hhead : headLink E prev g td rd = w'.chain) (hrd : rootsDigest E root' jroot' rroot' wroot' = rd)
+    {k : RefusalSlot D} {p : Trie.Proof (RefusalSlot D) D}
+    (hsep : Separates E.hash (headPres E w [s] w' prev g td rd root' jroot' rroot' wroot' ++
+      readPres (refusalSpec E) k p w'.refusals))
+    (hp : Trie.verifyExclusion (refusalSpec E) rroot' k p = true) : w'.refusalAt E k = none :=
+  hsep.elim (head_refusal_absent hE hc h hhead hrd hp)
+
+include hE in
+/-- TOOTH (`head_refused_retained`): under a hash that separates the opening's inputs, a phone is
+shown the recorded refusal at every head below its horizon. -/
+theorem head_refused_retained_sep {w₀ w₁ w₂ : World D} {r : Refused D} {l : List (Step D)}
+    (hc : w₀.RefusalsCanon E) (hjc : w₀.JournalCanon E) (h₁ : World.refuse E w₀ r = .ok w₁)
+    (hf : World.fold E w₁ l = .ok w₂) (hlt : w₂.height < w₀.height + 1 + 2 * Bounds.windowMax)
+    {prev td rd root' jroot' rroot' wroot' : D} {g : UInt8}
+    (hsep : Separates E.hash (headPres E w₀ (.refusal r :: l) w₂ prev g td rd root' jroot' rroot' wroot'))
+    (hhead : headLink E prev g td rd = w₂.chain) (hrd : rootsDigest E root' jroot' rroot' wroot' = rd) :
+    rroot' = w₂.refusalsRoot E ∧
+      Trie.verifyInclusion (refusalSpec E) rroot' (.tx r.txId) (refusalDigest E (.refused (w₀.height + 1) r.code r.member))
+        (w₂.refusals.prove (refusalSpec E) (.tx r.txId)) = true :=
+  hsep.elim (head_refused_retained hE hc hjc h₁ hf hlt hhead hrd)
+
+include hE in
+/-- TOOTH (`head_refused_not_absent`): under a hash that separates the inputs the opening and the
+read compare, no exclusion proof of a recorded call verifies against a head below its horizon. -/
+theorem head_refused_not_absent_sep {w₀ w₁ w₂ : World D} {r : Refused D} {l : List (Step D)}
+    (hc : w₀.RefusalsCanon E) (hjc : w₀.JournalCanon E) (h₁ : World.refuse E w₀ r = .ok w₁)
+    (hf : World.fold E w₁ l = .ok w₂) (hlt : w₂.height < w₀.height + 1 + 2 * Bounds.windowMax)
+    {prev td rd root' jroot' rroot' wroot' : D} {g : UInt8}
+    (hhead : headLink E prev g td rd = w₂.chain) (hrd : rootsDigest E root' jroot' rroot' wroot' = rd)
+    {p : Trie.Proof (RefusalSlot D) D}
+    (hsep : Separates E.hash (headPres E w₀ (.refusal r :: l) w₂ prev g td rd root' jroot' rroot' wroot' ++
+      readPres (refusalSpec E) (.tx r.txId) p w₂.refusals)) :
+    Trie.verifyExclusion (refusalSpec E) rroot' (.tx r.txId) p = false := by
+  cases hv : Trie.verifyExclusion (refusalSpec E) rroot' (.tx r.txId) p
+  · rfl
+  · exact absurd (head_refused_not_absent hE hc hjc h₁ hf hlt hhead hrd hv) hsep.not_collides
 
 end Sound
 
@@ -328,7 +415,7 @@ open Nanodregg.Kernel Nanodregg.Codec Nanodregg.Codec.Deployed
 
 /-- **Deployed: the phone's refusals read.** On a World a checked genesis and a fold reach, a head
 record that hashes to the chain the next step reached, and an inclusion proof against the record's
-refusals root, show the leaf in that World's refusals, or a collision. The one premise left is the
+refusals root, show the leaf in that World's refusals, or two of the inputs it compares collide. The one premise left is the
 claimed leaf's: its counters are below 2^64 (`u64`s on the wire). -/
 theorem deployed_head_refusal_read (program : Program Digest) {name nonce : ByteArray} {allowance : Nat}
     {founders : List (ByteArray × Digest)} {g w w' : World Digest} {l : List (Step Digest)} {s : Step Digest}
@@ -338,7 +425,9 @@ theorem deployed_head_refusal_read (program : Program Digest) {name nonce : Byte
     (hrd : rootsDigest env root' jroot' rroot' wroot' = rd) {k : RefusalSlot Digest} {v : RefusalLeaf Digest}
     (hv : Codec.Kernel.RefusalLeaf.Fits v) {p : Trie.Proof (RefusalSlot Digest) Digest}
     (hp : Trie.verifyInclusion (refusalSpec env) rroot' k (refusalDigest env v) p = true) :
-    w'.refusalAt env k = some v ∨ Collision env.hash :=
+    w'.refusalAt env k = some v ∨
+      CollidesAmong env.hash (headPres env w [s] w' prev tag td rd root' jroot' rroot' wroot' ++
+        inclPres (refusalSpec env) (refusalPre env) k v p w'.refusals) :=
   head_refusal_read deployed_lawful (deployed_reach_refusalsOk program hg hl) h hhead hrd hv hp
 
 /-- **Deployed: the phone's refusals absence**, no premise. -/
@@ -350,7 +439,9 @@ theorem deployed_head_refusal_absent (program : Program Digest) {name nonce : By
     (hrd : rootsDigest env root' jroot' rroot' wroot' = rd) {k : RefusalSlot Digest}
     {p : Trie.Proof (RefusalSlot Digest) Digest}
     (hp : Trie.verifyExclusion (refusalSpec env) rroot' k p = true) :
-    w'.refusalAt env k = none ∨ Collision env.hash :=
+    w'.refusalAt env k = none ∨
+      CollidesAmong env.hash (headPres env w [s] w' prev tag td rd root' jroot' rroot' wroot' ++
+        readPres (refusalSpec env) k p w'.refusals) :=
   head_refusal_absent deployed_lawful (deployed_reach_refusalsOk program hg hl).1 h hhead hrd hp
 
 /-- **Deployed: a recorded refusal is shown at every head below its horizon**, no premise. -/
@@ -366,7 +457,8 @@ theorem deployed_head_refused_retained (program : Program Digest) {name nonce : 
     (rroot' = w₂.refusalsRoot env ∧
       Trie.verifyInclusion (refusalSpec env) rroot' (.tx r.txId)
         (refusalDigest env (.refused (w₀.height + 1) r.code r.member))
-        (w₂.refusals.prove (refusalSpec env) (.tx r.txId)) = true) ∨ Collision env.hash :=
+        (w₂.refusals.prove (refusalSpec env) (.tx r.txId)) = true) ∨
+      CollidesAmong env.hash (headPres env w₀ (.refusal r :: l) w₂ prev tag td rd root' jroot' rroot' wroot') :=
   head_refused_retained deployed_lawful (deployed_reach_refusalsOk program hg hl₀).1
     (deployed_reach_journalOk program hg hl₀).1 h₁ hf hlt hhead hrd
 
@@ -380,7 +472,9 @@ theorem deployed_head_refused_not_absent (program : Program Digest) {name nonce 
     {prev td rd root' jroot' rroot' wroot' : Digest} {tag : UInt8}
     (hhead : headLink env prev tag td rd = w₂.chain)
     (hrd : rootsDigest env root' jroot' rroot' wroot' = rd) {p : Trie.Proof (RefusalSlot Digest) Digest}
-    (hp : Trie.verifyExclusion (refusalSpec env) rroot' (.tx r.txId) p = true) : Collision env.hash :=
+    (hp : Trie.verifyExclusion (refusalSpec env) rroot' (.tx r.txId) p = true) :
+    CollidesAmong env.hash (headPres env w₀ (.refusal r :: l) w₂ prev tag td rd root' jroot' rroot' wroot' ++
+      readPres (refusalSpec env) (.tx r.txId) p w₂.refusals) :=
   head_refused_not_absent deployed_lawful (deployed_reach_refusalsOk program hg hl₀).1
     (deployed_reach_journalOk program hg hl₀).1 h₁ hf hlt hhead hrd hp
 

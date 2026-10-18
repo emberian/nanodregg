@@ -68,6 +68,11 @@ def originInput : Stream (GenesisInput ⊕ CarryInput) := sum genesisInput carry
 def originOf (X : Ctx D) (name nonce : ByteArray) (allowance : Nat) (founders : List (ByteArray × D)) : D :=
   X.env.hash domOrigin (originInput.bytes (.inl (inputOf X name nonce allowance founders)))
 
+/-- What `originOf` hashes. -/
+def originPre (X : Ctx D) (name nonce : ByteArray) (allowance : Nat) (founders : List (ByteArray × D)) :
+    String × ByteArray :=
+  (domOrigin, originInput.bytes (.inl (inputOf X name nonce allowance founders)))
+
 /-- Founder ids are keyed by the World's ORIGIN, so two Worlds with one name share no member id. -/
 def founderId (X : Ctx D) (origin : D) (i : Nat) : D :=
   X.env.hash domFounder (X.env.bytes origin ++ index32 i)
@@ -161,6 +166,10 @@ def carryInputOf (X : Ctx D) (name nonce : ByteArray) (fromOrigin : D) (c : Carr
 roots. -/
 def carryOriginOf (X : Ctx D) (name nonce : ByteArray) (fromOrigin : D) (c : Carried D) : D :=
   X.env.hash domOrigin (originInput.bytes (.inr (carryInputOf X name nonce fromOrigin c)))
+
+/-- What `carryOriginOf` hashes. -/
+def carryOriginPre (X : Ctx D) (name nonce : ByteArray) (fromOrigin : D) (c : Carried D) : String × ByteArray :=
+  (domOrigin, originInput.bytes (.inr (carryInputOf X name nonce fromOrigin c)))
 
 /-- The World a carry builds, UNCHECKED: the carried state under a new origin, its chain at
 `genesisChain` of that origin. No founders: the members are the carried member cells, and their

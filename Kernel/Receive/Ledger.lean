@@ -32,6 +32,10 @@ per pair, and anyone (an object too) can name it without reading a cell. -/
 def accountId (X : Ctx D) (owner asset : D) : D :=
   X.env.hash domAccount (X.env.bytes owner ++ X.env.bytes asset)
 
+/-- What `accountId` hashes. -/
+def accountPre (X : Ctx D) (owner asset : D) : String × ByteArray :=
+  (domAccount, X.env.bytes owner ++ X.env.bytes asset)
+
 /-- The id an account reference names. -/
 def AcctRef.resolve (X : Ctx D) : AcctRef D → D
   | .well a => a

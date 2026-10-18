@@ -12,10 +12,11 @@ follower judges against its own fold, so it knows which World it observed a pin 
 
 Each theorem's hash escape is a collision among a CONCRETE list of inputs (`CollidesAmong hash S`),
 the (domain, bytes) inputs of the very pins it compares: `pinPre`, `rowPre`, `rangePre` and, as a
-range pin embeds its rows' leaf digests, `leafPres` of both listings. `Collision` (SOME two inputs
-collide) is not a disjunct: pigeonhole proves it of every hash into a finite `D`, so `E.Lawful` makes
-it a theorem and `∨ Collision E.hash` would make each statement vacuous. Two inputs in different
-domains are two different inputs, so no premise separates the domains.
+range pin embeds its rows' leaf digests, `leafPres` of both listings (`CollidesAmong` and its tooth
+`Separates` live in `Kernel.Proofs.Fold`). A collision among SOME two inputs is not a disjunct:
+pigeonhole proves it of every hash into a finite `D`, so it would make each statement vacuous (KERNEL-56
+deleted every such predicate). Two inputs in different domains are two different inputs, so no premise
+separates the domains.
 
 * `stale_behind_forever` — cells: a cell pin observed at `w₀` and stale at `w` is stale at every `w'`
   the fold reaches, or the hash collides on the pin inputs of `w₀`'s and `w'`'s entry. The pin reads
@@ -214,17 +215,7 @@ private theorem entry_behind_forever {E : Env D} {w₀ w w' : World D} {l₁ l�
 A pin is the hash of one (domain, bytes) input. A theorem that a pin has moved can fail only where
 the hash maps two DIFFERENT inputs to one digest, and the inputs in question are the theorem's own:
 the pin inputs of the Worlds it compares. `CollidesAmong hash S` says exactly that, for a list `S`
-the theorem builds from its own objects. `Collision` (an equality of SOME two inputs) holds of every
-hash into a finite `D` by pigeonhole, so `E.Lawful` proves it, and it is no disjunct here. -/
-
-/-- Two different inputs, both in `S`, with one digest. -/
-def CollidesAmong (hash : String → ByteArray → D) (S : List (String × ByteArray)) : Prop :=
-  ∃ p ∈ S, ∃ q ∈ S, p ≠ q ∧ hash p.1 p.2 = hash q.1 q.2
-
-omit [Ord D] [DecidableEq D] in
-theorem CollidesAmong.mono {hash : String → ByteArray → D} {S S' : List (String × ByteArray)}
-    (hsub : ∀ x ∈ S, x ∈ S') : CollidesAmong hash S → CollidesAmong hash S'
-  | ⟨p, hp, q, hq, hne, h⟩ => ⟨p, hsub p hp, q, hsub q hq, hne, h⟩
+the theorem builds from its own objects (`CollidesAmong`, Kernel/Proofs/Fold.lean). -/
 
 omit [Ord D] [DecidableEq D] in
 theorem pinOf_eq_pre (E : Env D) (e : Option Entry) : pinOf E e = E.hash (pinPre E e).1 (pinPre E e).2 := by
@@ -1420,3 +1411,51 @@ theorem rangePin_floorless_recurs :
           exact ⟨vEnv, dW0, w, w', [.turn dT1], [.turn dT2], 7, 3, 1, 5, ByteArray.empty, [], rL, [],
             Trie.canon_insert _ _ _ (Trie.canon_empty _ 0), by unfold World.RowsOk; decide, h₁, h₂,
             by decide, by decide, by decide, h0, hL, hL', hst, ⟨_, _, hlive⟩, rfl, hfl, rfl, hne⟩
+
+/-! ## Teeth (KERNEL-56): under a hash that separates the inputs compared, the collision arm is gone -/
+
+/-- TOOTH (`stale_behind_forever`): where the hash separates the two pin inputs, a cell pin observed
+on the fold and stale now is stale for ever. -/
+theorem stale_behind_forever_sep {E : Env D} {w₀ w w' : World D}
+    {l₁ l₂ : List (Step D)} (hf : w₀.CellsFit Cell.Fits E)
+    (h₁ : World.fold E w₀ l₁ = .ok w) (h₂ : World.fold E w l₂ = .ok w') {c : D}
+    (hs : Separates E.hash [pinPre E (w₀.entry E c), pinPre E (w'.entry E c)])
+    (hstale : pinOf E (w.entry E c) ≠ pinOf E (w₀.entry E c)) :
+    pinOf E (w'.entry E c) ≠ pinOf E (w₀.entry E c) :=
+  hs.elim (stale_behind_forever hf h₁ h₂ hstale)
+
+/-- TOOTH (`row_stale_behind_forever`): where the hash separates the two row-pin inputs, a row pin
+observed on the fold and stale now is stale for ever, or the parent is retired. -/
+theorem row_stale_behind_forever_sep [Std.TransOrd D] [Std.LawfulEqOrd D] {E : Env D} {n : Nat}
+    (hE : E.Lawful n) {w₀ w w' : World D}
+    {l₁ l₂ : List (Step D)} (hr : w₀.RowsCanon E) (hok : w₀.RowsOk E)
+    (h₁ : World.fold E w₀ l₁ = .ok w) (h₂ : World.fold E w l₂ = .ok w') {key : RowKey D}
+    (hs : Separates E.hash [rowPre (headFloor E w₀.rows key.parent key.rel) (rowAt E w₀.rows (.row key)),
+      rowPre (headFloor E w'.rows key.parent key.rel) (rowAt E w'.rows (.row key))])
+    (hstale : rowPin E (headFloor E w.rows key.parent key.rel) (rowAt E w.rows (.row key)) ≠
+      rowPin E (headFloor E w₀.rows key.parent key.rel) (rowAt E w₀.rows (.row key))) :
+    rowPin E (headFloor E w'.rows key.parent key.rel) (rowAt E w'.rows (.row key)) ≠
+        rowPin E (headFloor E w₀.rows key.parent key.rel) (rowAt E w₀.rows (.row key)) ∨
+      w'.entry E key.parent = some .tomb :=
+  (row_stale_behind_forever hE hr hok h₁ h₂ hstale).imp_right hs.elim
+
+/-- TOOTH (`range_stale_behind_forever`): where the hash separates the two range-pin inputs and both
+listings' leaf inputs, a range pin observed on the fold and stale now is stale for ever, or the
+parent is retired. -/
+theorem range_stale_behind_forever_sep [Std.TransOrd D] [Std.LawfulEqOrd D] {E : Env D} {n : Nat}
+    (hE : E.Lawful n) {w₀ w w' : World D}
+    {l₁ l₂ : List (Step D)} (hr : w₀.RowsCanon E) (hok : w₀.RowsOk E)
+    (h₁ : World.fold E w₀ l₁ = .ok w) (h₂ : World.fold E w l₂ = .ok w')
+    {parent : D} {rel width most : Nat} {pre : ByteArray} {l₀ l l' : List (RowSlot D × RowLeaf)}
+    (hrel : rel < 256) (hwd : pre.size ≤ width) (hwd' : width < 256)
+    (h0 : rangeRows E w₀.rows parent rel width pre most = some l₀)
+    (hw : rangeRows E w.rows parent rel width pre most = some l)
+    (hw' : rangeRows E w'.rows parent rel width pre most = some l')
+    (hs : Separates E.hash (rangePre E parent rel width pre (headFloor E w₀.rows parent rel) l₀ ::
+      rangePre E parent rel width pre (headFloor E w'.rows parent rel) l' :: (leafPres l₀ ++ leafPres l')))
+    (hstale : rangePin E parent rel width pre (headFloor E w.rows parent rel) l ≠
+      rangePin E parent rel width pre (headFloor E w₀.rows parent rel) l₀) :
+    rangePin E parent rel width pre (headFloor E w'.rows parent rel) l' ≠
+        rangePin E parent rel width pre (headFloor E w₀.rows parent rel) l₀ ∨
+      w'.entry E parent = some .tomb :=
+  (range_stale_behind_forever hE hr hok h₁ h₂ hrel hwd hwd' h0 hw hw' hstale).imp_right hs.elim
