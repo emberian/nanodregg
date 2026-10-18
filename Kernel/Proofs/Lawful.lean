@@ -1,7 +1,9 @@
 /-
 # Kernel.Proofs.Lawful — what the kernel's theorems assume of an `Env`, in one place (KERNEL-37)
 
-`Env.Lawful E n` gathers every premise about an `Env` that a kernel theorem takes:
+`Env.Lawful E n` gathers every premise about an `Env` that a kernel theorem takes (and
+`Receive.Ctx.Lawful X`, the one premise about a receive `Ctx` beyond its `Env`: its digest decoder
+reads every id's bytes back):
 
 * `size`: every digest's bytes have one size `n`, and `n_le`: `n ≤ 32`, so a slot's bits fit the
   trie's depth;
@@ -54,5 +56,15 @@ theorem Env.Lawful.refutable (n : Nat) :
     ¬ ({ hash := fun _ _ => false, bytes := fun _ => ByteArray.empty, turnBytes := fun _ => ByteArray.empty,
          cellBytes := fun _ => ByteArray.empty } : Env Bool).Lawful n :=
   fun h => Bool.noConfusion (h.bytes_inj (a₁ := true) (a₂ := false) rfl)
+
+/-- **What the receive layer assumes of a `Ctx` beyond its `Env`** (cv 01a14b28-7029, KERNEL-12's
+agreement): its digest decoder reads every id's own bytes back. A request's ids (the signer, the
+principal, the object) are the World's own, so they enter a run as `X.env.bytes` of a `D` and no
+boundary check reads them; this law is why every id a method run holds is one `X.digestOf` accepts
+(`Lang.Proofs.Provenance.runSetup_accepted`). It holds at the deployed codec
+(`Receive.deployed_ctx_lawful`) and at the Sim's (`Lang.sim_ctx_lawful`), and a decoder that drops a
+byte breaks it (`Lang.sim_drop_not_lawful`). -/
+structure Receive.Ctx.Lawful (X : Receive.Ctx D) : Prop where
+  digestOf_bytes : ∀ x, X.digestOf (X.env.bytes x) = some x
 
 end Nanodregg.Kernel

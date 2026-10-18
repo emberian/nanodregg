@@ -69,10 +69,11 @@ the owner and the owner never changes). Rows:
   check without its id-literal check: LD2 must be ADMITTED. PLANT total-digest: run and judge with a
   `digestOf` that accepts any bytes: LD3 and LD4b must be ADMITTED, so their refusals came from the
   boundary's digest check. Each of the three runs only the call rows up to its own.
-* PLANT unlawful-codec: the method run under a World whose digest codec refuses the founder's own
-  id (`Lang.Proofs.Provenance`'s `hdig` false there): LD5c must be refused by `callsOf`, by name,
+* PLANT unlawful-codec: the method run by a program whose decoder refuses the founder's own id inside
+  a lawful `Ctx` (`Lang.Proofs.Provenance.program_run_past_extraction`'s `hp` false there): LD5c must be refused by `callsOf`, by name,
   `calls: c0 obj: not a digest`. A request's ids are the one source no boundary check reads, so this
-  is the only way to reach that refusal, and the premise of `runMeasured_past_extraction` is not decoration.
+  is the only way to reach that refusal, and the second premise of
+  `program_run_past_extraction` (the program decodes with the `Ctx`'s own codec) is not decoration.
 * PLANT erase-payload: the occasion's payload is lost (a relaw names no laws, every invoke is
   method 0): L8e must be admitted and L10d refused, so the payload reaches the law.
 -/
@@ -379,7 +380,7 @@ def totalDigest : Program D :=
   { langProgram with run := t.run, judge := t.judge }
 
 /-- A digest decoder that refuses exactly member `x`'s own id: a World whose codec does not read
-that id back (`Lang.Proofs.Provenance`'s `hdig` false at `x`). -/
+that id back. Plant 9 gives it to the program only, so the `Ctx` stays lawful and `program_run_past_extraction`'s `hp` is what fails. -/
 def refusing (x : D) (b : ByteArray) : Option D := if b = Sim.dc.bytes x then none else Sim.digestOf b
 
 /-- Plant 9: the method run under a World whose codec refuses member `x`'s id. A request's ids are

@@ -1492,3 +1492,28 @@ both cases ((ii) is a head field, not a second design). Still, the order of buil
 program ported, not this one.
 **Status.** Rows LT0–LT8 built (lang-journey GREEN, including the skip-judge plant). (ii) goes to ROOT as an
 amendment to LANG-44's kernel half, and KERNEL-13 is told.
+
+## LANG-46 The digest round trip is a law of the `Ctx`, not a free premise: `Receive.Ctx.Lawful` (2026-10-18; cv 01a14b28-7029, LANG-41's owed item; agreed by KERNEL-12 and KERNEL-13)
+**Decision.** Kernel/Proofs/Lawful.lean adds `Receive.Ctx.Lawful X` with one field,
+`digestOf_bytes : ∀ x, X.digestOf (X.env.bytes x) = some x`: the receive layer's one assumption about a `Ctx`
+beyond its `Env`. It is discharged with no premise in two places. At the deployed codec it is
+`Receive.deployed_ctx_lawful` (any program, from `Codec.Deployed.digestOf_bytes`). At the Sim it is
+`Lang.sim_ctx_lawful` (any program, from `sim_digest_roundtrip`). Its refutation tooth is `sim_drop_not_lawful`: the
+Sim `Ctx` with a decoder that drops the first byte is not lawful (id 0, `decide`). Provenance's `runSetup_accepted`
+and `runMeasured_past_extraction` now take `hX : X.Lawful`, and the old `hdig` forms are private lemmas. The
+vacuity read found a HIGH: the law speaks of the `Ctx`'s decoder, while `Lang.program` carries its own, and LD5's
+plant changes only the program's, so LD5 was no tooth of `hX`. That gave
+`program_run_past_extraction (hX) (hp : X.program = Lang.program X.env.bytes X.digestOf)`, stated over
+`X.program.run`, the run the receivers make. `deployed_program_own_codec` (rfl) meets `hp` at the deployed `Ctx`.
+Journey LD5 (PLANT unlawful-codec) breaks `hp`, and `sim_drop_not_lawful` breaks the law.
+**Alternatives.** (a) A field of `Env.Lawful`: impossible, since `Env` has no decoder. (b) Bundle `Env.Lawful` into
+`Ctx.Lawful`: the Sim's `Env` has no lawfulness proof, so the Sim discharge would gain a premise (KERNEL-12's
+condition forbids it). (c) Make `Ctx.program` derived from the codec: that is a kernel shape change for a Lang
+fact, and the receivers' `Program` is abstract on purpose (law 4).
+**Critique.** `hp` is a structural premise that the deployed `Ctx` meets by construction. Nothing stops a future
+`Ctx` from pairing a lawful decoder with a program over another one; that is what LD5 does, on purpose. The tooth of
+the law is a constructed `Ctx` that no run uses.
+**Meta-critique.** I first restated the theorems over the law and called the condition met. The reviewer saw that
+the journey's own tooth had silently stopped being one: a premise moved and the plant did not follow it. That is
+the failure "A FALSIFIER THAT STOPPED FALSIFYING" names, caught before landing.
+**Status.** built (this commit). Nothing re-ids.

@@ -15,15 +15,20 @@ id of the request (`agent`, `principal`, `self`), a digest of the arguments, a d
 the World held, or an id literal of the loaded closure. Each source is checked where it enters:
 the arguments and the state by `digestOf` (`runSetup`), the literals at every load (`checkLits`,
 `load_lits`), and the request's ids are the World's own (`bytesOf` of a `D`). So, for a World whose
-codec reads its own ids back (`hdig`), every digest of the result is accepted
-(`runSetup_accepted`), and `callsOf`'s `not a digest` refusal is unreachable: past extraction the
+codec reads its own ids back (a lawful `Ctx`, `Receive.Ctx.Lawful`, cv 01a14b28-7029), every digest
+of the result is accepted (`runSetup_accepted`), and `callsOf`'s `not a digest` refusal is unreachable: past extraction the
 deployed run refuses only for state without bytes (`runMeasured_past_extraction`, cv
-01a14af1-2132). Its tooth is journey LD5: a World whose codec refuses one member's own id (`hdig`
-false) makes `callsOf` refuse that member named in a call, by name.
+01a14af1-2132), and `X.program.run` reads its calls when the program decodes with the `Ctx`'s own
+codec (`program_run_past_extraction`). Its teeth: `sim_drop_not_lawful`, a decoder that drops a byte
+is not lawful; and journey LD5, a program whose decoder refuses one member's own id (the `Ctx`'s
+does not) makes `callsOf` refuse that member named in a call, by name. The law is discharged at the Sim (`sim_ctx_lawful`) and at the deployed
+codec (`Receive.deployed_ctx_lawful`).
 -/
 import Lang.Proofs.CallLive
 import Lang.Sim.Need
 import Lang.Proofs.CallTeeth
+import Kernel.Proofs.Lawful
+import Codec.Deployed
 
 namespace Nanodregg.Lang
 
@@ -709,7 +714,7 @@ theorem runSetup_sources {look : Pinned D} {pkg : D} {state : Kernel.Slots} {met
 checks, the closure's literals by `checkLits` at load, and the request's ids because they are the
 World's own (`hdig`, the World's codec reads its ids back). So every digest a method run returns is
 one `digestOf` accepts. -/
-theorem runSetup_accepted (hdig : ∀ x, (digestOf (bytesOf x)).isSome = true) {look : Pinned D} {pkg : D}
+private theorem runSetup_accepted_of (hdig : ∀ x, (digestOf (bytesOf x)).isSome = true) {look : Pinned D} {pkg : D}
     {state : Kernel.Slots} {method : Nat} {args : ByteArray} {r : Req D} {S : RunSetup}
     {budget used fuel left : Nat} {v : Val} {d : Data}
     (hS : runSetup bytesOf digestOf look pkg state method args r = .ok S)
@@ -752,7 +757,7 @@ state has no bytes at its type. So `calls: cI FIELD: not a digest` is unreachabl
 Lang output: every digest of the calls is one the boundary or the World accepted
 (`runSetup_accepted`), and a calls row of its type is refused only for a digest `digestOf` refuses
 (`callsOf_live`). Tooth: journey LD5, where `hdig` fails for one member and `callsOf` refuses it. -/
-theorem runMeasured_past_extraction (hdig : ∀ x, (digestOf (bytesOf x)).isSome = true) {look : Pinned D}
+private theorem runMeasured_past_extraction_of (hdig : ∀ x, (digestOf (bytesOf x)).isSome = true) {look : Pinned D}
     {pkg : D} {state : Kernel.Slots} {method : Nat} {args : ByteArray} {r : Req D} {budget : Nat}
     {S : RunSetup} {used left : Nat} {v : Val} {d : Data}
     (hS : runSetup bytesOf digestOf look pkg state method args r = .ok S)
@@ -764,7 +769,7 @@ theorem runMeasured_past_extraction (hdig : ∀ x, (digestOf (bytesOf x)).isSome
         match stateSlots S.row ds 0 with
         | some slots => .ok (slots, calls, budget - left, S.pkgs)
         | none => .error (.program s!"{S.label}: state bytes") := by
-  have hacc := runSetup_accepted hdig hS hr hx
+  have hacc := runSetup_accepted_of hdig hS hr hx
   have hS' := hS
   obtain ⟨L, g, p, ℓ, A, ks, sd, ad, hr0, hl, hp, hres, hst, hargs, -, rfl⟩ := runSetup_spec hS
   obtain ⟨mty, hm, hA⟩ := resolveMethod_spec hres
@@ -799,12 +804,90 @@ theorem runMeasured_past_extraction (hdig : ∀ x, (digestOf (bytesOf x)).isSome
 end
 
 
-/-- The Sim's World meets `hdig` (its codec reads its own ids back, `sim_digest_roundtrip`), so
-`runMeasured_past_extraction` holds there with no premise on the World: every admitted Sim run
-past extraction reads its calls. -/
-theorem sim_hdig (x : Kernel.Sim.D) : (Kernel.Sim.digestOf (Kernel.Sim.dc.bytes x)).isSome = true := by
-  simp [Teeth.sim_digest_roundtrip]
+/-- **Every id a run holds is accepted, from the law** (cv 01a14b28-7029): for a lawful `Ctx`
+(`Receive.Ctx.Lawful`: its decoder reads every id back), every digest of a method run's extracted
+result is one `X.digestOf` accepts. The request's ids need nothing more than the law. -/
+theorem runSetup_accepted {D : Type} {X : Ctx D} (hX : X.Lawful) {look : Pinned D} {pkg : D}
+    {state : Kernel.Slots} {method : Nat} {args : ByteArray} {r : Req D} {S : RunSetup}
+    {budget used fuel left : Nat} {v : Val} {d : Data}
+    (hS : runSetup X.env.bytes X.digestOf look pkg state method args r = .ok S)
+    (hr : run S.lib Bounds.stackMax budget 0 (State.init S.term S.env) = .value v used)
+    (hx : (Machine.mk S.lib).extract S.ty fuel v = .ok (d, left)) :
+    ∀ b ∈ d.digests, (X.digestOf b).isSome = true :=
+  runSetup_accepted_of (fun x => by simp [hX.digestOf_bytes x]) hS hr hx
 
+/-- **`callsOf` never refuses a checked run, from the law** (cv 01a14af1-2132, cv 01a14b28-7029): under a
+lawful `Ctx`, past extraction the deployed run reads its calls and refuses only for state without
+bytes. The law can fail (`sim_drop_not_lawful`); that the law reaches the decoder the program
+actually runs with is `program_run_past_extraction`'s second premise. -/
+theorem runMeasured_past_extraction {D : Type} {X : Ctx D} (hX : X.Lawful) {look : Pinned D}
+    {pkg : D} {state : Kernel.Slots} {method : Nat} {args : ByteArray} {r : Req D} {budget : Nat}
+    {S : RunSetup} {used left : Nat} {v : Val} {d : Data}
+    (hS : runSetup X.env.bytes X.digestOf look pkg state method args r = .ok S)
+    (hr : run S.lib Bounds.stackMax budget 0 (State.init S.term S.env) = .value v used)
+    (hx : (Machine.mk S.lib).extract S.ty (budget - used) v = .ok (d, left)) :
+    ∃ (c : Data) (ds : List (Label × Data)) (calls : List (Body D)),
+      d = .record [("calls", c), ("state", .record ds)] ∧ callsOf X.digestOf c = .ok calls ∧
+      runMeasured X.env.bytes X.digestOf look pkg state method args r budget =
+        match stateSlots S.row ds 0 with
+        | some slots => .ok (slots, calls, budget - left, S.pkgs)
+        | none => .error (.program s!"{S.label}: state bytes") :=
+  runMeasured_past_extraction_of (fun x => by simp [hX.digestOf_bytes x]) hS hr hx
+
+/-- **The run a `Ctx`'s program makes reads its calls** (cv 01a14b28-7029): when the `Ctx` is lawful AND
+its program is the language over the `Ctx`'s own codec (`hp`: the program decodes with the decoder
+the law is about), `X.program.run` past extraction returns the calls `callsOf` read, refusing only for
+state without bytes. The law can fail (`sim_drop_not_lawful`, a refutation, not a run); the second
+premise is shown to bite by a run: journey LD5 (PLANT unlawful-codec), a program whose decoder refuses
+a member's id inside a lawful Sim `Ctx`, where `callsOf` refuses by name. The deployed `Ctx` meets both
+(`Receive.deployed_ctx_lawful`, `deployed_program_own_codec`). -/
+theorem program_run_past_extraction {D : Type} {X : Ctx D} (hX : X.Lawful)
+    (hp : X.program = Lang.program X.env.bytes X.digestOf) {look : Pinned D}
+    {pkg : D} {state : Kernel.Slots} {method : Nat} {args : ByteArray} {r : Req D} {budget : Nat}
+    {S : RunSetup} {used left : Nat} {v : Val} {d : Data}
+    (hS : runSetup X.env.bytes X.digestOf look pkg state method args r = .ok S)
+    (hr : run S.lib Bounds.stackMax budget 0 (State.init S.term S.env) = .value v used)
+    (hx : (Machine.mk S.lib).extract S.ty (budget - used) v = .ok (d, left)) :
+    ∃ (c : Data) (ds : List (Label × Data)) (calls : List (Body D)),
+      d = .record [("calls", c), ("state", .record ds)] ∧ callsOf X.digestOf c = .ok calls ∧
+      X.program.run look pkg state method args r budget =
+        match stateSlots S.row ds 0 with
+        | some slots => .ok (slots, calls, budget - left)
+        | none => .error (.program s!"{S.label}: state bytes") := by
+  obtain ⟨c, ds, calls, hd, hc, hm⟩ := runMeasured_past_extraction hX hS hr hx
+  refine ⟨c, ds, calls, hd, hc, ?_⟩
+  rw [hp]
+  show (runMeasured X.env.bytes X.digestOf look pkg state method args r budget).map _ = _
+  rw [hm]
+  cases stateSlots S.row ds 0 <;> rfl
+
+/-- The deployed `Ctx`'s program is the language over the deployed codec itself: the second
+premise of `program_run_past_extraction` holds there by construction. -/
+theorem deployed_program_own_codec :
+    (Codec.Deployed.ctx (Lang.program Codec.Digest.bytes Codec.Digest.ofBytes?)).program =
+      Lang.program (Codec.Deployed.ctx (Lang.program Codec.Digest.bytes Codec.Digest.ofBytes?)).env.bytes
+        (Codec.Deployed.ctx (Lang.program Codec.Digest.bytes Codec.Digest.ofBytes?)).digestOf := rfl
+
+/-- **The Sim's `Ctx` is lawful**, whatever its program: its decoder reads every toy id back
+(`sim_digest_roundtrip`). So `runMeasured_past_extraction` holds at the Sim with no premise. -/
+theorem sim_ctx_lawful (prog : Program Kernel.Sim.D) : (Kernel.Sim.ctxWith prog).Lawful :=
+  ⟨Teeth.sim_digest_roundtrip⟩
+
+/-- **The law can fail** (KERNEL-12's condition): the Sim's `Ctx` with a decoder that drops the first
+byte of what it reads is not lawful; it no longer reads the id 0 back. -/
+theorem sim_drop_not_lawful (prog : Program Kernel.Sim.D) :
+    ¬ ({ Kernel.Sim.ctxWith prog with
+          digestOf := fun b => Kernel.Sim.digestOf (b.extract 1 b.size) } : Ctx Kernel.Sim.D).Lawful :=
+  fun h => by
+    have h0 : Kernel.Sim.digestOf ((Kernel.Sim.dc.bytes 0).extract 1 (Kernel.Sim.dc.bytes 0).size) = some 0 :=
+      h.digestOf_bytes 0
+    have hn : Kernel.Sim.digestOf ((Kernel.Sim.dc.bytes 0).extract 1 (Kernel.Sim.dc.bytes 0).size) = none := by
+      decide
+    rw [hn] at h0
+    cases h0
+
+/-- At the Sim, with no premise: every admitted Sim run past extraction reads its calls (the Sim's
+decoder reads its ids back, `sim_digest_roundtrip`, the fact `sim_ctx_lawful` is built from). -/
 theorem runMeasured_past_extraction_sim {look : Pinned Kernel.Sim.D} {pkg : Kernel.Sim.D} {state : Kernel.Slots}
     {method : Nat} {args : ByteArray} {r : Req Kernel.Sim.D} {budget : Nat} {S : RunSetup} {used left : Nat}
     {v : Val} {d : Data}
@@ -817,7 +900,7 @@ theorem runMeasured_past_extraction_sim {look : Pinned Kernel.Sim.D} {pkg : Kern
         match stateSlots S.row ds 0 with
         | some slots => .ok (slots, calls, budget - left, S.pkgs)
         | none => .error (.program s!"{S.label}: state bytes") :=
-  runMeasured_past_extraction sim_hdig hS hr hx
+  runMeasured_past_extraction_of (fun x => by simp [Teeth.sim_digest_roundtrip]) hS hr hx
 
 /-! ## Teeth -/
 

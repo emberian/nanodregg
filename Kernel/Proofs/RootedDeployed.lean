@@ -36,6 +36,11 @@ theorem deployed_lawful : env.Lawful 32 where
   turnBytes_injOn := fun ht ht' h => turnBytes_injective ht ht' h
   cellBytes_injOn := deployed_injOn
 
+/-- **The deployed `Ctx` is lawful**, whatever its program: the deployed digest decoder reads every
+digest's 32 bytes back (`Codec.Deployed.digestOf_bytes`). -/
+theorem deployed_ctx_lawful (program : Program Digest) : (ctx program).Lawful :=
+  ⟨fun d => Nanodregg.Codec.Deployed.digestOf_bytes d⟩
+
 /-- **Deployed: an audited World is rooted at its founders.** -/
 theorem deployed_audit_rooted (program : Program Digest) (name nonce : ByteArray) (allowance : Nat)
     (founders : List (ByteArray × Digest)) {w' : World Digest} {l : List (Turn Digest)}
