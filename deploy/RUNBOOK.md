@@ -559,9 +559,25 @@ Needs, each one RAN before the measure:
 - **The resident.** The HOSTING-27 Lean resident runs as a grain under grain-launch. It writes through its
   own member socket (HOSTING-25: MEMBER/<dirOf>/nd.sock served by `nd --stdio`) and asks through keybroker
   (HOSTING-29: it receives `reply TEXT` and never a provider body). Its share of the writes is the resident's
-  own work, not argv. OPEN, HOSTING-27 decides (unconfirmed): each round it asks once and writes the reply's
-  digest into its object, so a provider answer is on the write path exactly as deployed. HOSTING-27 decides
-  what a round is. `use` must be 3 of 3 (PROTOCOL-43), as in v1.
+  own work, not argv. `use` must be 3 of 3 (PROTOCOL-43), as in v1: it comes from the friends' writes (the
+  bell is the resident's object, used by the friends who ring it).
+- **The resident's round** (HOSTING-10, the HOSTING-27 resident): one ring answered, which is two writes.
+  - A friend rings the resident's bell, `invoke BELL <ring> (record (text "..."))`. That is the friend's write.
+  - The resident sees `(pending true)` on its next tick (Resident.tickMs = 1 s), asks keybroker once, and
+    invokes `answer` through its member socket `--via` its grant. That is ONE write by the resident,
+    carrying the reply text (1..2000 bytes). The friend reads `(pending false) (answer "...")`.
+  - The resident writes only its bell and holds no `anyone mutate` grant (widening that is a custody call,
+    ROOT's).
+  - The World drives it (the bell's state); there is no argv or control socket. v2 rings, waits for the
+    answer to be read, then rings again: a bell refuses `busy` while a ring is pending. N concurrent rounds
+    need N bells and N residents.
+  - A round is timed from the ring's nd answer to the read that shows the answer; its floor is about one
+    tick + the ask + two command round trips. The ring and the answer each count as one of the 1000
+    records. The tick is reported.
+  - The resident never re-asks: one ask per ring, kept durably. `status N` comes back as the text
+    `(status N)`, a refusal as `(refused NAME)`, a lost answer as `(unanswered ...)`. v2 records each such
+    answer by name and does not re-ring (a re-ring is a new ask and a new meter charge).
+  - PENDING: HOSTING-27's landing hash (HOSTING-10 sends it).
 
 The run, in order:
 1. Genesis with three founders (§1); each actor creates an object and grants it `anyone mutate`.
@@ -580,8 +596,8 @@ The run, in order:
 
 Judging is v1's: limits from `gates/bar.tsv` (5000, 60000), judged only at load1 < 2 on the box AND on both
 friend machines, otherwise UNJUDGED (never a pass). A broken run is RED at any load: a refused connect, a
-`closed …` from nd-attach, a follow not at the writer's tip, use ≠ 3, or a resident `refused` other than a
-provider `status N` (v2 records those and re-asks once; a second refusal is RED, naming it).
+`closed …` from nd-attach, a follow not at the writer's tip, use ≠ 3, or a resident answer other than
+a reply text (`(status N)`, `(refused NAME)` and `(unanswered ...)` are recorded by name, never re-rung).
 
 `--record` appends a `run` row with mode `v2`, the three machines' load lines, each machine's device line, the
 ssh RTT (median of 20 `ssh box true`, reported, never judged), and the wall-clock numbers. As in v1, the clock
