@@ -14,7 +14,10 @@
 //! - a model whose slot has no key: `keyMissing` (Lean's, from the slots keybroker passed);
 //!   two allowances for one resident and model: `allowanceAmbiguous`; a second connection while
 //!   one is open: `busy`;
-//! - identity is the socket: resident `02`'s socket, with no allowance, is `noAllowance`;
+//! - identity is the socket: the second resident grain's socket, with no allowance, is `noAllowance`;
+//! - HOSTING-26: the sockets are the World's resident grains, never an operator list: a resident grain
+//!   born while keybroker runs gets its socket, an app grain none; a removed one's socket and
+//!   directory go, and an ask on a connection still open to it is refused `notResident`;
 //! - live: the operator `set`s the `m` allowance (a new budget: the ask after it is `overSpend`),
 //!   creates a second `m` allowance (`allowanceAmbiguous`) and revokes it, and revokes one of the
 //!   two `a` allowances (the ask on `a` is granted again);
@@ -42,6 +45,7 @@ mod common;
 
 use std::fs;
 use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
+use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::{Duration, Instant};
@@ -52,7 +56,8 @@ use nanodregg_launcher::broker_generated::read_frame;
 use nanodregg_launcher::broker_generated::wire::{Answer, BrokerRefusal};
 use rcgen::KeyPair;
 
-/// keybroker for residents `01` and `02` over the World `w`, trusting `anchors`, serving this uid.
+/// keybroker over the World `w` (whose resident grains are `w.r1` and `w.r2`), trusting `anchors`,
+/// serving this uid.
 fn start(d: &Scratch, keys: &Path, anchors: &Path, up: &str, w: &World) -> Broker {
     start_peer(d, keys, anchors, up, w, me(d).0)
 }
@@ -66,7 +71,7 @@ fn start_peer(d: &Scratch, keys: &Path, anchors: &Path, up: &str, w: &World, pee
         anchors,
         up,
         w,
-        &["01", "02"],
+        &[&w.r1, &w.r2],
         peer,
     )
 }
@@ -80,10 +85,10 @@ fn refusals_by_name_and_no_key_reaches_the_resident() {
     let (up, seen) = upstream(Mode::Ok, pki.server(HOST, false));
     // resident 01: model m (slot 7), n (slot 9: no key), and a twice (ambiguous)
     let w = World::genesis("main");
-    let m = w.allowance("01", "claude-m", 7, 100_000);
-    w.allowance("01", "claude-n", 9, 100_000);
-    w.allowance("01", "claude-a", 7, 100_000);
-    let a2 = w.allowance("01", "claude-a", 7, 100_000);
+    let m = w.allowance(&w.r1, "claude-m", 7, 100_000);
+    w.allowance(&w.r1, "claude-n", 9, 100_000);
+    w.allowance(&w.r1, "claude-a", 7, 100_000);
+    let a2 = w.allowance(&w.r1, "claude-a", 7, 100_000);
     let t_before = early_in_window();
     let b = start(&d, &keys, &anchors, &up, &w);
     let mut r = Resident::connect(&b);
@@ -137,8 +142,8 @@ fn refusals_by_name_and_no_key_reaches_the_resident() {
     assert!(is_refused(&busy, BrokerRefusal::Busy));
 
     next_window(t_before);
-    // identity is the socket: 02 has a socket but no allowance, so it is refused whatever it asks
-    let mut other = Resident::connect_as(&b, "02");
+    // identity is the socket: r2 has a socket but no allowance, so it is refused whatever it asks
+    let mut other = Resident::connect_as(&b, &w.r2);
     assert!(is_refused(
         &other.ask(&ask(b"claude-m", 10, b"hello")),
         BrokerRefusal::NoAllowance
@@ -172,7 +177,7 @@ fn refusals_by_name_and_no_key_reaches_the_resident() {
         "a changed allowance kept its meter"
     );
     // a second allowance on m CREATED while keybroker runs: the broker sees the born id
-    let m2 = w.allowance("01", "claude-m", 7, 5);
+    let m2 = w.allowance(&w.r1, "claude-m", 7, 5);
     assert!(
         is_refused(
             &r.ask(&ask(b"claude-m", 10, b"hello")),
@@ -219,7 +224,7 @@ fn an_echoed_key_is_withheld() {
     let anchors = pki.anchors(&d, 0o644);
     let (up, seen) = upstream(Mode::Echo, pki.server(HOST, false));
     let w = World::genesis("echo");
-    w.allowance("01", "claude-m", 7, 100_000);
+    w.allowance(&w.r1, "claude-m", 7, 100_000);
     let t_before = early_in_window();
     let b = start(&d, &keys, &anchors, &up, &w);
     let mut r = Resident::connect(&b);
@@ -283,7 +288,6 @@ fn ends_with(
         "127.0.0.1:9",
         store,
         "00",
-        "01",
         &peer.to_string(),
         decider,
     )
@@ -441,7 +445,7 @@ fn an_unverified_upstream_is_refused_by_name_and_gets_no_byte() {
     let pki = Pki::new();
     let anchors = pki.anchors(&d, 0o644);
     let w = World::genesis("tls");
-    w.allowance("01", "claude-m", 7, 100_000);
+    w.allowance(&w.r1, "claude-m", 7, 100_000);
     // an upstream whose certificate no anchor signs; one the CA signed for another host; one that
     // speaks only TLS 1.2 (keybroker offers only 1.3); and one that answers in full but closes
     // without `close_notify` (an unauthenticated end: the answer could be truncated)
@@ -505,10 +509,13 @@ fn an_unverified_upstream_is_refused_by_name_and_gets_no_byte() {
 fn a_bad_socket_directory_stops_keybroker_by_name() {
     let d = dir("sockdir");
     let keys = key_file(&d, 0o600);
-    let anchors = Pki::new().anchors(&d, 0o644);
+    let pki = Pki::new();
+    let anchors = pki.anchors(&d, 0o644);
     let k = nanodregg_launcher::broker_generated::keybroker_exit::SOCK_DIR;
     let socks = d.socks.clone();
-    let r = socks.join("01");
+    // the resident directories are checked when the World's resident grains are served (HOSTING-26)
+    let w = World::genesis("sockdir");
+    let r = socks.join(&w.r1);
     let reset = || {
         let _ = fs::remove_dir_all(&socks);
         sockdir(&socks);
@@ -538,7 +545,7 @@ fn a_bad_socket_directory_stops_keybroker_by_name() {
     for (what, plant) in cases {
         reset();
         plant();
-        let (err, got) = ends(&d, &keys, &anchors);
+        let (err, got) = ends_over(&d, &keys, &anchors, &w.store);
         assert!(err.contains("keybroker: sockDir "), "{what}: stderr: {err}");
         assert_eq!(got, Some(i32::from(k)), "{what}: exit code");
         let s = r.join("broker.sock");
@@ -547,15 +554,21 @@ fn a_bad_socket_directory_stops_keybroker_by_name() {
             "{what}: a socket was opened"
         );
     }
-    // CONTROL: the same SOCKDIR made right passes the socket checks: keybroker starts its decider
-    // (which ends `io`: the STORE holds no Store) and binds the socket
+    // CONTROL: the same SOCKDIR made right passes the socket checks: keybroker serves the World's
+    // resident grain and binds its socket
     reset();
-    let empty = d.join("empty-store");
-    nanodregg_devtools::mkdirs(&empty).unwrap();
-    let (err, _) = ends_over(&d, &keys, &anchors, &empty);
-    assert!(!err.contains("sockDir"), "control: stderr: {err}");
+    let up = "127.0.0.1:9";
+    let b = start_residents(
+        &socks,
+        &d.join("pids"),
+        &keys,
+        &anchors,
+        up,
+        &w,
+        &[&w.r1],
+        me(&d).0,
+    );
     let m = fs::symlink_metadata(r.join("broker.sock")).unwrap();
-    assert!(m.file_type().is_socket(), "control: no socket bound");
     // serving its own uid (one uid: no group is needed), the socket is its owner's alone
     assert_eq!(
         m.permissions().mode() & 0o7777,
@@ -563,9 +576,25 @@ fn a_bad_socket_directory_stops_keybroker_by_name() {
         "control: socket mode serving this uid"
     );
     assert_eq!(m.gid(), me(&socks).1, "control: socket group");
-    // serving another uid (the deployment: nd serves nd-hosted), it is opened to SOCKDIR's group
-    let (err, _) = ends_serving(&d, &keys, &anchors, &empty, me(&socks).0.wrapping_add(1));
-    assert!(!err.contains("sockDir"), "another uid: stderr: {err}");
+    assert_eq!(
+        fs::symlink_metadata(&r).unwrap().permissions().mode() & 0o7777,
+        0o2710,
+        "control: resident directory mode"
+    );
+    drop(b);
+    // CONTROL: the next life meets the last life's socket, unlinks it and binds again; serving another
+    // uid (the deployment: nd serves nd-hosted), it is opened to SOCKDIR's group
+    let other = me(&socks).0.wrapping_add(1);
+    let b = start_residents(
+        &socks,
+        &d.join("pids"),
+        &keys,
+        &anchors,
+        up,
+        &w,
+        &[&w.r1],
+        other,
+    );
     let m = fs::symlink_metadata(r.join("broker.sock")).unwrap();
     assert!(m.file_type().is_socket(), "another uid: no socket bound");
     assert_eq!(
@@ -574,19 +603,88 @@ fn a_bad_socket_directory_stops_keybroker_by_name() {
         "another uid: socket mode"
     );
     assert_eq!(m.gid(), me(&socks).1, "another uid: socket group");
+    drop(b);
+}
+
+/// HOSTING-26: keybroker serves exactly the World's resident grains, learned from its decider. At
+/// start: one socket per resident grain (`r1`, `r2`), none for an app grain. A resident grain born
+/// while keybroker runs gets its socket (no restart, no operator list). The operator's `remove` of a
+/// resident grain closes its socket and removes its directory, and an ask on a connection that was
+/// open to it is refused `notResident` (the decider no longer holds it). SOCKDIR lists exactly the
+/// served residents throughout.
+#[test]
+fn sockets_follow_the_worlds_resident_grains() {
+    let d = dir("follow");
+    let keys = key_file(&d, 0o600);
+    let pki = Pki::new();
+    let anchors = pki.anchors(&d, 0o644);
+    let w = World::genesis("follow");
+    let app = line(
+        &w.run(&[
+            "create",
+            "--pkg",
+            &w.lifecycle,
+            "(record (entry \"app\") (kind app) (phase installed))",
+        ]),
+        "id ",
+    )
+    .to_owned();
+    let b = start(&d, &keys, &anchors, "127.0.0.1:9", &w);
+    let listing = || {
+        let mut v: Vec<String> = fs::read_dir(&d.socks)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        v.sort();
+        v
+    };
+    let mut want = vec![w.r1.clone(), w.r2.clone()];
+    want.sort();
     assert_eq!(
-        fs::symlink_metadata(&r).unwrap().permissions().mode() & 0o7777,
-        0o2710,
-        "control: resident directory mode"
+        listing(),
+        want,
+        "start: SOCKDIR is not exactly the resident grains"
     );
-    // CONTROL: the next life meets the last life's socket, unlinks it and binds again
-    let (err, _) = ends_over(&d, &keys, &anchors, &empty);
+    assert!(!d.socks.join(&app).exists(), "an app grain got a socket");
+    // a birth while keybroker runs
+    let r3 = w.resident("r3");
+    let s3 = d.socks.join(&r3).join("broker.sock");
+    until(
+        "the born resident's socket",
+        20,
+        || UnixStream::connect(&s3).is_ok(),
+        &|| format!("{:?}", listing()),
+    );
+    // a connection open to r2, then the operator removes r2 (lifecycle method 0, remove)
+    let mut open2 = Resident::connect_as(&b, &w.r2);
+    w.run(&["invoke", &w.r2, "0", "(record)"]);
+    until(
+        "the removed resident's socket to go",
+        20,
+        || !d.socks.join(&w.r2).exists(),
+        &|| format!("{:?}", listing()),
+    );
+    let mut want = vec![w.r1.clone(), r3.clone()];
+    want.sort();
+    assert_eq!(
+        listing(),
+        want,
+        "after the removal: SOCKDIR is not exactly the resident grains"
+    );
+    let a = open2.ask(&ask(b"claude-m", 10, b"hello"));
     assert!(
-        !err.contains("sockDir") && !err.contains("keybroker: socket "),
-        "restart: stderr: {err}"
+        is_refused(&a, BrokerRefusal::NotResident),
+        "an ask on the removed resident's open connection: {a:?}"
     );
-    let again = fs::symlink_metadata(r.join("broker.sock")).unwrap();
-    assert!(again.file_type().is_socket(), "restart: no socket bound");
+    // CONTROL: r1, still a resident, is decided (no allowance here: noAllowance, not notResident)
+    let mut r1 = Resident::connect_as(&b, &w.r1);
+    let a = r1.ask(&ask(b"claude-m", 10, b"hello"));
+    assert!(
+        is_refused(&a, BrokerRefusal::NoAllowance),
+        "control: a resident's ask: {a:?}"
+    );
+    drop(b);
 }
 
 #[test]
@@ -597,7 +695,7 @@ fn a_peer_of_another_uid_or_group_is_refused_by_name() {
     let anchors = pki.anchors(&d, 0o644);
     let (up, seen) = upstream(Mode::Ok, pki.server(HOST, false));
     let w = World::genesis("peer");
-    w.allowance("01", "claude-m", 7, 100_000);
+    w.allowance(&w.r1, "claude-m", 7, 100_000);
     let (uid, gid) = me(&d);
     let first = |b: &Broker| {
         let mut r = Resident::connect(b);

@@ -228,4 +228,12 @@ def step (b : Broker) (r : ByteArray) (now : Nat) (askBytes : ByteArray) : Broke
       (b', .grant g.keySlot g.charged g.upstream.host g.upstream.target g.upstream.headers g.upstream.keyHeader g.body)
     | .error why => (b, .refuse why)
 
+/-- One ask as `hosting-broker` admits it (HOSTING-26): only a resident the World holds is decided
+(`residents`: the socket names of its born, unremoved resident grains); any other socket's ask is
+refused `notResident` and leaves the broker unchanged. A socket whose grain was removed is closed by
+keybroker when it learns so; an ask already on its open connection meets this. -/
+def admit (residents : List ByteArray) (b : Broker) (r : ByteArray) (now : Nat) (askBytes : ByteArray) :
+    Broker × Verdict :=
+  if residents.contains r then step b r now askBytes else (b, .refuse .notResident)
+
 end Nanodregg.Hosting.Broker

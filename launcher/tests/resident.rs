@@ -58,8 +58,6 @@ use std::process::{Command, Stdio};
 use common::*;
 use nanodregg_devtools::lean_bin;
 
-/// The second resident keybroker serves (a socket that exists on the host, for no grain here).
-const OTHER: &str = "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2";
 /// The Store label of the World the grain lives in.
 const LABEL: &str = "w";
 
@@ -86,7 +84,11 @@ fn a_resident_is_granted_through_its_own_socket_and_reaches_nothing_else() {
     let mroot = Short::new("m");
     let mroot = &mroot.0;
     let w = World::genesis_following("res", Some(world.join("store")));
-    let lifecycle = w.install("world/grain/Lifecycle");
+    let lifecycle = w.lifecycle.clone();
+    // the other resident: a resident grain of the World (born at genesis, never started), so
+    // keybroker serves its socket on the host (HOSTING-26)
+    let other = w.r1.clone();
+    let other = other.as_str();
     let g = line(
         &w.run(&[
             "create",
@@ -106,11 +108,11 @@ fn a_resident_is_granted_through_its_own_socket_and_reaches_nothing_else() {
     w.allowance(&g, "claude-m", 7, 100_000);
     // the resident's member, served on MEMBER/<g>/nd.sock (it must exist before the launch resolves
     // it), and a second resident's member socket on the host, for no grain here
-    for r in [g.as_str(), OTHER] {
+    for r in [g.as_str(), other] {
         nanodregg_devtools::mkdirs(&mroot.join(r)).unwrap();
         fs::set_permissions(mroot.join(r), fs::Permissions::from_mode(0o700)).unwrap();
     }
-    let other_m = mroot.join(OTHER).join("nd.sock");
+    let other_m = mroot.join(other).join("nd.sock");
     let _other_m = UnixListener::bind(&other_m).unwrap();
     fs::set_permissions(&other_m, fs::Permissions::from_mode(0o600)).unwrap();
     let mfollow = Short::new("f");
@@ -145,7 +147,7 @@ fn a_resident_is_granted_through_its_own_socket_and_reaches_nothing_else() {
         (
             "other-connect",
             "connect",
-            sock.join(OTHER).join("broker.sock"),
+            sock.join(other).join("broker.sock"),
         ),
         ("sockdir-list", "list", sock.to_path_buf()),
         ("own-list", "list", sock.join(&g)),
@@ -178,7 +180,7 @@ fn a_resident_is_granted_through_its_own_socket_and_reaches_nothing_else() {
     assert!(keys.is_file() && fs::metadata(&own).is_err());
 
     let (uid, _) = me(sock);
-    let residents = [g.as_str(), OTHER];
+    let residents = [g.as_str(), other];
     let kb = start_residents(
         sock,
         &d.join("pids"),
@@ -191,7 +193,7 @@ fn a_resident_is_granted_through_its_own_socket_and_reaches_nothing_else() {
     );
     let t1 = now_ms();
     assert!(
-        fs::symlink_metadata(sock.join(OTHER).join("broker.sock")).is_ok(),
+        fs::symlink_metadata(sock.join(other).join("broker.sock")).is_ok(),
         "control: the other resident's socket exists on the host"
     );
 
@@ -353,6 +355,39 @@ fn a_resident_is_granted_through_its_own_socket_and_reaches_nothing_else() {
     fs::write(&pid_file, format!("{}\n", kb.child.id())).unwrap();
     drop(kb);
     let _ = fs::remove_file(&pid_file);
+    // THE RACE (HOSTING-26), planted: a resident grain born and started while keybroker has not
+    // learned its birth (here: keybroker is down) is launched before its broker socket exists. Its
+    // package, volume and member socket exist, so the launch is refused `pathMissing` for the broker
+    // socket alone, by name, and the controller counts it as an exit. When keybroker comes back it
+    // learns the birth and binds the socket.
+    let c = w.resident("probe");
+    let cdir = world.join("grains").join(&c);
+    for p in ["pkg", "vol"] {
+        nanodregg_devtools::mkdirs(&cdir.join(p)).unwrap();
+    }
+    place_exe(
+        Path::new(env!("CARGO_BIN_EXE_probe")),
+        &cdir.join("pkg/probe"),
+    );
+    fs::write(cdir.join("pkg/probe.targets"), b"").unwrap();
+    nanodregg_devtools::mkdirs(&mroot.join(&c)).unwrap();
+    fs::set_permissions(mroot.join(&c), fs::Permissions::from_mode(0o700)).unwrap();
+    let cm = mroot.join(&c).join("nd.sock");
+    let _cm = UnixListener::bind(&cm).unwrap();
+    fs::set_permissions(&cm, fs::Permissions::from_mode(0o600)).unwrap();
+    w.run(&["invoke", &c, "1", "(record)"]);
+    w.run(&["sync"]);
+    until(
+        "the race's refusal",
+        60,
+        || log().contains(&format!("grain-launch: {c} failed pathMissing")),
+        &log,
+    );
+    assert!(
+        !log().contains(&format!("grain-launch: {c} started")),
+        "the race: a resident started with no broker socket:\n{}",
+        log()
+    );
     let kb = start_residents(
         sock,
         &d.join("pids"),
@@ -360,7 +395,7 @@ fn a_resident_is_granted_through_its_own_socket_and_reaches_nothing_else() {
         &anchors,
         &up,
         &w,
-        &residents,
+        &[g.as_str(), other, c.as_str()],
         uid,
     );
     let t2 = now_ms();

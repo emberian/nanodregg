@@ -8,6 +8,7 @@ a state whose every field is distinct, for both values of `revoked`, so a method
 wrong field, or writes a constant, is caught.
 -/
 import Hosting.Allowance
+import Hosting.Track
 import Lang.Print
 import Lang.Read
 import Lang.Eval
@@ -204,16 +205,20 @@ theorem seed_teeth :
       (Wire.encodeData .bool (.bool true)).map fun b => s.set (slotAt 6) b) = true := by
   decide +kernel
 
-/-! ## Following the World: the broker's allowances are the World's -/
+/-! ## Following the World: what the broker holds is the World's, for any reader
+
+Stated over `Track.update` with an arbitrary reader `read`, so they hold of both things
+`hosting-broker` follows: the operator's allowances (`Allow.allowanceOf`) and the resident grains
+whose sockets keybroker serves (`Controller.residentOf`, HOSTING-26). -/
 
 section Follow
-variable {D : Type} [Ord D] [DecidableEq D]
+variable {D : Type} [Ord D] [DecidableEq D] {α : Type}
 
-theorem mem_update {E : Env D} {pkgId op : ByteArray} {w : World D}
-    {cur : List (D × (ByteArray × Broker.Allowance))} {ids : List D} {i : D} {x : ByteArray × Broker.Allowance} :
-    (i, x) ∈ update E pkgId op w cur ids ↔
-      ((i, x) ∈ cur ∧ i ∉ ids) ∨ (i ∈ ids ∧ readAt E pkgId op w i = some x) := by
-  simp only [update, List.mem_append, List.mem_filter, List.mem_filterMap, List.mem_eraseDups,
+theorem mem_update {E : Env D} {read : Cell → Option α} {w : World D}
+    {cur : List (D × α)} {ids : List D} {i : D} {x : α} :
+    (i, x) ∈ Track.update E read w cur ids ↔
+      ((i, x) ∈ cur ∧ i ∉ ids) ∨ (i ∈ ids ∧ Track.readAt E read w i = some x) := by
+  simp only [Track.update, List.mem_append, List.mem_filter, List.mem_filterMap, List.mem_eraseDups,
     Option.map_eq_some_iff, Prod.mk.injEq, Bool.not_eq_true']
   constructor
   · rintro (h | ⟨j, hj, y, hy, rfl, rfl⟩)
@@ -223,37 +228,37 @@ theorem mem_update {E : Env D} {pkgId op : ByteArray} {w : World D}
     · exact .inl ⟨h.1, by simpa using h.2⟩
     · exact .inr ⟨i, hj, x, hy, rfl, rfl⟩
 
-/-- Round 0: over ids `ids` from nothing, the bindings are exactly the readable allowances among them. -/
-theorem update_start {E : Env D} {pkgId op : ByteArray} {w : World D} {ids : List D} (i : D)
-    (x : ByteArray × Broker.Allowance) :
-    (i, x) ∈ update E pkgId op w [] ids ↔ i ∈ ids ∧ readAt E pkgId op w i = some x := by
+/-- Round 0: over ids `ids` from nothing, the bindings are exactly the readable cells among them. -/
+theorem update_start {E : Env D} {read : Cell → Option α} {w : World D} {ids : List D} (i : D) (x : α) :
+    (i, x) ∈ Track.update E read w [] ids ↔ i ∈ ids ∧ Track.readAt E read w i = some x := by
   rw [mem_update]; simp
 
-/-- A batch `ts` folds `w` to `w'`: if `cur` held exactly the readable allowances of `w`, then
-`update` over the batch's touched ids (what `hosting-broker` passes) holds exactly those of `w'`.
-An id no Turn touched keeps its World entry (`fold_frame`; a recorded refusal touches no cell), so
-keeping its binding is right. -/
-theorem update_tracks {E : Env D} {pkgId op : ByteArray} {w w' : World D} {ts : List (Step D)}
-    {cur : List (D × (ByteArray × Broker.Allowance))}
-    (hc : ∀ i x, (i, x) ∈ cur ↔ readAt E pkgId op w i = some x)
+/-- A batch `ts` folds `w` to `w'`: if `cur` held exactly the readable cells of `w`, then `update`
+over the batch's touched ids (what `hosting-broker` passes) holds exactly those of `w'`. An id no
+Turn touched keeps its World entry (`fold_frame`; a recorded refusal touches no cell), so keeping
+its binding is right. -/
+theorem update_tracks {E : Env D} {read : Cell → Option α} {w w' : World D} {ts : List (Step D)}
+    {cur : List (D × α)}
+    (hc : ∀ i x, (i, x) ∈ cur ↔ Track.readAt E read w i = some x)
     (h : World.fold E w ts = .ok w') :
-    ∀ i x, (i, x) ∈ update E pkgId op w' cur (Controller.touchedIds (Step.turns ts)) ↔ readAt E pkgId op w' i = some x := by
+    ∀ i x, (i, x) ∈ Track.update E read w' cur (Controller.touchedIds (Step.turns ts)) ↔
+      Track.readAt E read w' i = some x := by
   intro i x
   rw [mem_update]
   by_cases hi : i ∈ Controller.touchedIds (Step.turns ts)
   · simp [hi]
-  · have hr : readAt E pkgId op w' i = readAt E pkgId op w i := by
-      unfold Allow.readAt World.live
+  · have hr : Track.readAt E read w' i = Track.readAt E read w i := by
+      unfold Track.readAt World.live
       rw [Proofs.fold_frame h hi]
     simp [hi, hr, hc]
 
 /-- `absorb` is `update` over the batch's touched ids: what the broker holds after a catch-up is
 exactly the World's. -/
-theorem absorb_tracks {E : Env D} {pkgId op : ByteArray} {w w' : World D} {ts : List (Step D)}
-    {cur : List (D × (ByteArray × Broker.Allowance))}
-    (hc : ∀ i x, (i, x) ∈ cur ↔ readAt E pkgId op w i = some x)
+theorem absorb_tracks {E : Env D} {read : Cell → Option α} {w w' : World D} {ts : List (Step D)}
+    {cur : List (D × α)}
+    (hc : ∀ i x, (i, x) ∈ cur ↔ Track.readAt E read w i = some x)
     (h : World.fold E w ts = .ok w') :
-    ∀ i x, (i, x) ∈ absorb E pkgId op w' cur (Step.turns ts) ↔ readAt E pkgId op w' i = some x :=
+    ∀ i x, (i, x) ∈ Track.absorb E read w' cur (Step.turns ts) ↔ Track.readAt E read w' i = some x :=
   update_tracks hc h
 
 /-- Round 0 misses nothing: in a canonical World (`World.Canon`, kept by every admitted Turn,
@@ -271,16 +276,16 @@ theorem allIds_complete {E : Env D} {w : World D} (hw : w.Canon E) {i : D} {c : 
     · cases he
   · cases h
 
-/-- So round 0 over `Loop.allIds` holds exactly the World's readable allowances. -/
-theorem start_tracks {E : Env D} {pkgId op : ByteArray} {w : World D} (hw : w.Canon E) :
-    ∀ i x, (i, x) ∈ update E pkgId op w [] (Loop.allIds w) ↔ readAt E pkgId op w i = some x := by
+/-- So round 0 over `Loop.allIds` holds exactly the World's readable cells. -/
+theorem start_tracks {E : Env D} {read : Cell → Option α} {w : World D} (hw : w.Canon E) :
+    ∀ i x, (i, x) ∈ Track.update E read w [] (Loop.allIds w) ↔ Track.readAt E read w i = some x := by
   intro i x
   rw [update_start]
   constructor
   · exact fun h => h.2
   · intro h
     refine ⟨?_, h⟩
-    unfold Allow.readAt at h
+    unfold Track.readAt at h
     cases hl : w.live E i with
     | none => rw [hl] at h; cases h
     | some c => exact allIds_complete hw hl

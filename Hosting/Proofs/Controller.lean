@@ -10,6 +10,7 @@ own cell at a touched id and names that id's directory.
 -/
 import Hosting.Controller
 import Hosting.Proofs.Plan
+import Hosting.Track
 import Lang.Print
 import Lang.Proofs.Print
 
@@ -181,6 +182,13 @@ private theorem hexChars_length (b : ByteArray) : (Lang.Print.hexChars b).length
     | cons x xs ih => simp [ih]; omega
   rw [this, Array.length_toList]; rfl
 
+/-- A directory name is two hex digits per id byte: a 32-byte id is a 64-byte name. -/
+theorem dirOf_size (b : ByteArray) : (dirOf b).size = 2 * b.size := by
+  have henc := enc_hex (Lang.Print.hexChars b) (fun c hc => Lang.Print.hexChars_digit hc)
+  have hd : (dirOf b).data.toList = (Lang.Print.hexChars b).utf8Encode.data.toList := by
+    simp [dirOf, Lang.Print.hex]
+  rw [← ByteArray.size_data, ← Array.length_toList, hd, henc.1, hexChars_length]
+
 /-- A grain directory name is an accepted label: lowercase hex, two digits per byte, so a World
 id of 1 to 32 bytes never meets `plan`'s `idUnclean` (and two ids are never one directory on a
 case-insensitive file system). -/
@@ -325,5 +333,83 @@ theorem reconcile_launch_named {E : Env D} {bytesOf : D → ByteArray} {label pk
   rw [hg]
   rw [hv] at hd
   exact launch_named hd
+
+/-- `grainOf` reads kind, entry and phase from the cell alone: under another name it describes the
+same grain renamed. -/
+theorem grainOf_rename_map (g g' : ByteArray) (c : Cell) :
+    grainOf g' c = (grainOf g c).map fun q => ({ q.1 with idHex := g' }, q.2) := by
+  simp only [grainOf]
+  cases Grain.kindOf c.slots <;> cases Grain.entryOf c.slots <;> cases Grain.phaseOf c.slots <;> rfl
+
+theorem grainOf_rename {g g' : ByteArray} {c : Cell} {gr : Grain} {ph : Phase}
+    (h : grainOf g c = some (gr, ph)) : grainOf g' c = some ({ gr with idHex := g' }, ph) := by
+  rw [grainOf_rename_map g g' c, h]
+  rfl
+
+/-- A launch whose plan names a broker socket is of a cell `residentOf` reads: a born, unremoved
+resident grain (HOSTING-26). -/
+theorem launch_resident {label pkgId : ByteArray} {now : Nat} {live : List Live} {g : ByteArray}
+    {c : Cell} {p : Plan} (h : decideCell label pkgId now live g (some c) = some (.launch p))
+    (hb : p.broker ≠ []) : residentOf pkgId c = some () := by
+  obtain ⟨c', gr, hc, hig, hgr, _hr, _hl, hp⟩ := launch_sound h
+  cases hc
+  have hown := (plan_sockets_own hp).1
+  have hk : gr.kind = .resident := by
+    cases hk : gr.kind
+    · rw [hk] at hown; exact absurd hown hb
+    · rfl
+  unfold residentOf
+  rw [grainOf_rename (g' := .empty) hgr]
+  simp [hig, hk]
+
+/-- **Every broker socket the controller plans is one keybroker serves** (HOSTING-26): if the
+decider's held resident grains are exactly what `residentOf` reads of a World `w`
+(`Proofs.Allowance.update_tracks`), then a launch the controller decides on `w`'s cell at id `i`
+whose plan names a broker socket names a socket in the decider's answer (`dirOf` of a held id). The
+socket's name is the plan's (`plan_sockets_own`: `[dirOf, broker.sock]`). The decider and the
+controller follow two Stores of one World; on the same World they agree, and the lag between them is
+the race HOSTING-26 names. -/
+theorem launch_served {E : Env D} {bytesOf : D → ByteArray} {label pkgId : ByteArray} {now : Nat}
+    {live : List Live} {w : World D} {held : List (D × Unit)}
+    (hc : ∀ i x, (i, x) ∈ held ↔ Track.readAt E (residentOf pkgId) w i = some x)
+    {i : D} {p : Plan}
+    (h : decideCell label pkgId now live (dirOf (bytesOf i)) (w.live E i) = some (.launch p))
+    (hb : p.broker ≠ []) : dirOf (bytesOf i) ∈ held.map (fun q => dirOf (bytesOf q.1)) := by
+  obtain ⟨c, gr, hl, -, -, -, -, -⟩ := launch_sound h
+  rw [hl] at h
+  have hr := launch_resident h hb
+  have hm : (i, ()) ∈ held := (hc i ()).mpr (by simp [Track.readAt, hl, hr])
+  exact List.mem_map.mpr ⟨_, hm, rfl⟩
+
+/-- **Exactly which cells keybroker serves** (HOSTING-26, VACUITY-READER-H8b's H1): `residentOf`
+reads a cell iff it is a lifecycle object whose state decodes, of kind `resident`, in a phase other
+than `removed`. -/
+theorem residentOf_iff {pkgId : ByteArray} {c : Cell} :
+    residentOf pkgId c = some () ↔ isGrain pkgId c = true ∧
+      ∃ gr ph, grainOf .empty c = some (gr, ph) ∧ gr.kind = .resident ∧ ph ≠ .removed := by
+  unfold residentOf
+  rcases hg : grainOf .empty c with _ | ⟨gr, ph⟩
+  · simp
+  · by_cases hi : isGrain pkgId c = true <;> by_cases hk : gr.kind = .resident <;>
+      by_cases hp : ph = .removed <;> simp_all
+    all_goals exact ⟨gr, ph, ⟨rfl, rfl⟩, hk, hp⟩
+
+/-- A cell `residentOf` reads under the lifecycle id `pkgId`; the teeth below vary one fact each. -/
+private def lifeCell (pkg : ByteArray) (k : Grain.Kind) (ph : Phase) : Option Cell := do
+  let en ← Lang.Wire.encodeData .bytes (.bytes (lit "p"))
+  let kd ← Lang.Wire.encodeData Grain.kindTy (.inj k.label Grain.unitD)
+  let p ← Lang.Wire.encodeData Grain.phaseTy (.inj ph.label Grain.unitD)
+  pure { kind := Receive.kindObject, discipline := .appendOnly,
+         slots := [(Receive.slotPackage, pkg), (Grain.slotEntry, en), (Grain.slotKind, kd), (Grain.slotPhase, p)] }
+
+/-- Teeth for `residentOf`: a born resident and a running one are served; an app, a removed resident,
+and a look-alike object of another package are not. -/
+theorem residentOf_teeth :
+    (lifeCell (lit "L") .resident .installed).map (residentOf (lit "L")) = some (some ()) ∧
+    (lifeCell (lit "L") .resident .running).map (residentOf (lit "L")) = some (some ()) ∧
+    (lifeCell (lit "L") .app .installed).map (residentOf (lit "L")) = some none ∧
+    (lifeCell (lit "L") .resident .removed).map (residentOf (lit "L")) = some none ∧
+    (lifeCell (lit "X") .resident .installed).map (residentOf (lit "L")) = some none := by
+  decide +kernel
 
 end Nanodregg.Hosting.Proofs

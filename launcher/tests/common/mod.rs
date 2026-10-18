@@ -46,9 +46,24 @@ impl Drop for Scratch {
 pub fn dir(name: &str) -> Scratch {
     let d = nanodregg_devtools::scratch(&format!("kb-{}-{name}", std::process::id()));
     nanodregg_devtools::mkdirs(&d.join("pids")).unwrap();
-    // A Unix socket path is at most 107 bytes (sun_path), and a judge slot's target dir is deeper
-    // than that: the sockets live in a short directory of this process's own.
-    let socks = nanodregg_devtools::scratch(&format!("kb{}{name}", std::process::id()));
+    // A Unix socket path is at most 107 bytes (sun_path) and a resident's socket directory is its
+    // grain's 64 hex digits (HOSTING-26: keybroker serves the World's resident grains), so SOCKDIR
+    // is as short as `Short`'s: one letter per test and this process's pid in base 36.
+    let letter = match name {
+        "main" => 'm',
+        "echo" => 'e',
+        "mode" => 'o',
+        "tls" => 't',
+        "sockdir" => 's',
+        "peer" => 'p',
+        "mech" => 'c',
+        "sig" => 'g',
+        "follow" => 'f',
+        // resident.rs's own `Short`s are r, m, f, q, p
+        "res" => 'k',
+        other => panic!("plant: dir({other}) has no socket-directory letter"),
+    };
+    let socks = short_dir(&letter.to_string());
     sockdir(&socks);
     std::os::unix::fs::symlink(&socks, d.join("socks")).unwrap();
     Scratch {
@@ -232,6 +247,12 @@ pub struct World {
     pub genesis_args: Vec<String>,
     pub genesis_out: String,
     pub pkg: String,
+    /// `world/grain/Lifecycle`'s id
+    pub lifecycle: String,
+    /// two resident grains born at genesis (installed, never started): keybroker serves exactly the
+    /// World's resident grains (HOSTING-26), so these are the sockets a broker test asks on
+    pub r1: String,
+    pub r2: String,
     pub ws: PathBuf,
     pub holding: PathBuf,
     /// the writer's socket, alone in a directory of its own: a confined connector sees the socket's
@@ -321,6 +342,16 @@ impl World {
             store,
             &["follow", store.to_str().unwrap(), member, grant],
         )
+    }
+
+    /// A resident grain born (installed) with entry `entry`: its id, its socket's name.
+    pub fn resident(&self, entry: &str) -> String {
+        let state = format!("(record (entry \"{entry}\") (kind resident) (phase installed))");
+        line(
+            &self.run(&["create", "--pkg", &self.lifecycle, &state]),
+            "id ",
+        )
+        .to_owned()
     }
 
     /// `nd install` of the package text at `rel` in the repository; its id.
@@ -416,6 +447,9 @@ impl World {
             genesis_args,
             genesis_out: g.clone(),
             pkg: String::new(),
+            lifecycle: String::new(),
+            r1: String::new(),
+            r2: String::new(),
             ws,
             holding,
             host_sock,
@@ -423,6 +457,9 @@ impl World {
             _follow: follow,
         };
         w.pkg = w.install("world/hosting/Allowance");
+        w.lifecycle = w.install("world/grain/Lifecycle");
+        w.r1 = w.resident("r1");
+        w.r2 = w.resident("r2");
         w
     }
 }
@@ -533,6 +570,8 @@ impl World {
 pub struct Broker {
     pub child: Child,
     pub socks: PathBuf,
+    /// the residents whose sockets the test waited for (the first is `Resident::connect`'s)
+    pub names: Vec<String>,
 }
 
 impl Drop for Broker {
@@ -583,7 +622,6 @@ pub fn argv(
     up: &str,
     store: &Path,
     operator: &str,
-    residents: &str,
     peer: &str,
 ) -> Command {
     argv_with(
@@ -594,7 +632,6 @@ pub fn argv(
         up,
         store,
         operator,
-        residents,
         peer,
         &lean_bin("hosting-broker"),
     )
@@ -610,7 +647,6 @@ pub fn argv_with(
     up: &str,
     store: &Path,
     operator: &str,
-    residents: &str,
     peer: &str,
     decider: &Path,
 ) -> Command {
@@ -622,7 +658,6 @@ pub fn argv_with(
         ("api.anthropic.com:443", std::ffi::OsStr::new(up)),
         ("/srv/nd/store", store.as_os_str()),
         ("${ND_OPERATOR}", std::ffi::OsStr::new(operator)),
-        ("${ND_RESIDENTS}", std::ffi::OsStr::new(residents)),
         ("${ND_PEER}", std::ffi::OsStr::new(peer)),
         ("/opt/nd/bin/hosting-broker", decider.as_os_str()),
     ])
@@ -648,7 +683,7 @@ pub struct Resident {
 
 impl Resident {
     pub fn connect(b: &Broker) -> Resident {
-        Resident::connect_as(b, "01")
+        Resident::connect_as(b, &b.names[0])
     }
     pub fn connect_as(b: &Broker, name: &str) -> Resident {
         let s = UnixStream::connect(b.socks.join(name).join("broker.sock")).unwrap();
@@ -703,10 +738,10 @@ pub fn now_ms() -> u64 {
         .unwrap()
         .as_millis() as u64
 }
-/// keybroker for `residents` over the World `w`, trusting `anchors`, serving the uid `peer`; its
-/// sockets in `socks` (02710, this uid's), its PID files in `pids`. Waits (bounded) until every
-/// resident's socket is bound at the mode that admits exactly `peer`: 0600 when `peer` is this
-/// uid, else 0660 (HOSTING-17 §5, HOSTING-21).
+/// keybroker over the World `w`, trusting `anchors`, serving the uid `peer`; its sockets in `socks`
+/// (02710, this uid's), its PID files in `pids`. It serves the World's resident grains (HOSTING-26:
+/// no operator list); this waits (bounded) until each of `residents` is bound at the mode that admits
+/// exactly `peer`: 0600 when `peer` is this uid, else 0660 (HOSTING-17 §5, HOSTING-21).
 #[allow(clippy::too_many_arguments)]
 pub fn start_residents(
     socks: &Path,
@@ -731,7 +766,6 @@ pub fn start_residents(
         up,
         &w.store,
         &w.operator,
-        &residents.join(","),
         &peer.to_string(),
     )
     .stderr(Stdio::piped())
@@ -758,6 +792,7 @@ pub fn start_residents(
     Broker {
         child,
         socks: socks.to_path_buf(),
+        names: residents.iter().map(|r| r.to_string()).collect(),
     }
 }
 
@@ -787,21 +822,28 @@ pub fn place_exe(src: &Path, dst: &Path) {
 /// resident's directory name is 64 hex digits, so SOCKDIR must stay within 30 bytes. Removed on drop.
 pub struct Short(pub PathBuf);
 
+/// A short scratch directory `<prefix><pid in base 36>` (made fresh): a socket path is at most 107
+/// bytes and a resident's directory name is 64 hex digits, so a socket root must stay within 30
+/// bytes. The caller removes it.
+pub fn short_dir(prefix: &str) -> PathBuf {
+    let mut n = std::process::id();
+    let mut tag = String::new();
+    while n > 0 {
+        tag.insert(0, char::from_digit(n % 36, 36).unwrap());
+        n /= 36;
+    }
+    let p = nanodregg_devtools::scratch(&format!("{prefix}{tag}"));
+    assert!(
+        p.as_os_str().len() + 1 + 64 + "/broker.sock".len() <= 107,
+        "plant: {} is too long for a socket path",
+        p.display()
+    );
+    p
+}
+
 impl Short {
     pub fn new(prefix: &str) -> Short {
-        let mut n = std::process::id();
-        let mut tag = String::new();
-        while n > 0 {
-            tag.insert(0, char::from_digit(n % 36, 36).unwrap());
-            n /= 36;
-        }
-        let p = nanodregg_devtools::scratch(&format!("{prefix}{tag}"));
-        assert!(
-            p.as_os_str().len() + 1 + 64 + "/broker.sock".len() <= 107,
-            "plant: {} is too long for a socket path",
-            p.display()
-        );
-        Short(p)
+        Short(short_dir(prefix))
     }
 }
 

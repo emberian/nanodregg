@@ -108,6 +108,7 @@ code space holds both tables: `host` (Host.Status, below 64) and nd-supervise's 
 | 76 | store | fatal | stopped (RestartPreventExitStatus) | the Store the decider follows refused to open: run `host check STORE`; restore if it refuses (RUNBOOK §5) |
 | 77 | behind | restart | restarted after 2 s; failed past 5 starts in 120 s | automatic: the decider fell behind the writer's tail; a fresh open reads the World whole |
 | 78 | io | fatal | stopped (RestartPreventExitStatus) | an IO error escaped the decider (the call and error are on stderr): check the Store's disk and permissions |
+| 7 | residentsPastBound | fatal | stopped (RestartPreventExitStatus) | the World holds more resident grains than one keybroker serves (1024, HOSTING-26; stderr names the count): remove resident grains, or run a second World |
 
 ## grain-launch (the nd-grain-launch@ unit; its controller's codes below are passed through)
 

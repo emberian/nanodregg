@@ -3,7 +3,7 @@
 
 An exit status is a verdict (law 7), read by the service manager. keybroker's unit sees one code
 space: keybroker's own ends (`KeybrokerExit`, 80 and up) and its decider's (`DeciderExit`, 70 and
-up), which keybroker passes through when `hosting-broker` exits, as nd-supervise passes the Host's.
+up, and 7), which keybroker passes through when `hosting-broker` exits, as nd-supervise passes the Host's.
 Only a code `DeciderExit` names is passed through (`decider_exit::ALL`); any other is the mechanism's
 (`deciderMechanism`, fatal).
 Each code has the Host's `ExitClass`: `done` (0 only), `restart` (a fresh start recovers) or `fatal`
@@ -42,21 +42,26 @@ inductive DeciderExit where
   | behind
   /-- an IO error escaped: the call and error are on stderr -/
   | io
+  /-- the World holds more resident grains than `Broker.Bounds.residentsMax`: their socket names
+  do not fit one answer, and serving some of them would be a silent choice (HOSTING-26) -/
+  | residentsPastBound
   deriving DecidableEq, Repr
 
 namespace DeciderExit
 
 def all : List DeciderExit :=
-  [keybrokerGone, usage, badFrame, badRequest, unencodable, lifetime, noPackage, store, behind, io]
+  [keybrokerGone, usage, badFrame, badRequest, unencodable, lifetime, noPackage, store, behind, io,
+   residentsPastBound]
 
 def code : DeciderExit → Nat
   | keybrokerGone => 0 | usage => 70 | badFrame => 71 | badRequest => 72 | unencodable => 73
   | lifetime => 74 | noPackage => 75 | store => 76 | behind => 77 | io => 78
+  | residentsPastBound => 7
 
 def cls : DeciderExit → ExitClass
   | keybrokerGone => .done
   | lifetime | behind => .restart
-  | usage | badFrame | badRequest | unencodable | noPackage | store | io => .fatal
+  | usage | badFrame | badRequest | unencodable | noPackage | store | io | residentsPastBound => .fatal
 
 def codesOf (k : ExitClass) : List Nat := (all.filter (·.cls == k)).map code
 

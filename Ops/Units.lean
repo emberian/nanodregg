@@ -343,6 +343,7 @@ def deciderAction : DeciderExit → String
   | .store => "the Store the decider follows refused to open: run `host check STORE`; restore if it refuses (RUNBOOK §5)"
   | .behind => "automatic: the decider fell behind the writer's tail; a fresh open reads the World whole"
   | .io => "an IO error escaped the decider (the call and error are on stderr): check the Store's disk and permissions"
+  | .residentsPastBound => "the World holds more resident grains than one keybroker serves (1024, HOSTING-26; stderr names the count): remove resident grains, or run a second World"
 
 /-- What the operator does when keybroker ends on its own account. -/
 def keybrokerAction : KeybrokerExit → String
@@ -368,7 +369,8 @@ def keybrokerAction : KeybrokerExit → String
 def brokerPreventCodes : List Nat := DeciderExit.codesOf .fatal ++ KeybrokerExit.codesOf .fatal
 
 /-- The keybroker unit's operator data: paths through `checkPath`, the rest literal or from the
-unit's environment file (`ND_OPERATOR`, `ND_RESIDENTS`, `ND_PEER`: the `nd-hosted` uid, HOSTING-17). -/
+unit's environment file (`ND_OPERATOR`, `ND_PEER`: the `nd-hosted` uid, HOSTING-17). Which residents it
+serves is the World's, never the operator's (HOSTING-26). -/
 structure Broker where
   name : String
   bin : String
@@ -438,11 +440,11 @@ def Broker.sysusers (b : Broker) : Except Refusal String := do
     s!"u {b.hosted} - \"nanodregg hosted grains (never the key holder)\" - -",
     ""]
 
-/-- keybroker's argv, in its order: KEYS ANCHORS SOCKDIR PIDS UPSTREAM STORE OPERATOR RESIDENTS PEER DECIDER. -/
+/-- keybroker's argv, in its order: KEYS ANCHORS SOCKDIR PIDS UPSTREAM STORE OPERATOR PEER DECIDER. -/
 def Broker.exec (b : Broker) : List Arg :=
   [.lit (b.bin ++ "/keybroker"), .lit (b.etc ++ "/provider.key"), .lit (b.etc ++ "/anchors.pem"),
    .lit b.sockdir, .lit b.pids, .lit b.upstream, .lit b.store,
-   .var "ND_OPERATOR", .var "ND_RESIDENTS", .var "ND_PEER", .lit (b.bin ++ "/hosting-broker")]
+   .var "ND_OPERATOR", .var "ND_PEER", .lit (b.bin ++ "/hosting-broker")]
 
 def Broker.systemd (b : Broker) : Except Refusal String := do
   b.check

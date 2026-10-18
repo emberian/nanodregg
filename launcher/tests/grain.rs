@@ -44,7 +44,7 @@ fn the_owner_stops_a_grain_and_a_start_only_grantee_cannot() {
     let world = hosting.join("worlds").join(LABEL);
     nanodregg_devtools::mkdirs(&world.join("members")).unwrap();
     let w = World::genesis_following("grn", Some(world.join("store")));
-    let lifecycle = w.install("world/grain/Lifecycle");
+    let lifecycle = w.lifecycle.clone();
     let g = line(
         &w.run(&[
             "create",

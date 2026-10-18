@@ -323,6 +323,15 @@ private theorem bytes?_val {b : ByteArray} {v : Bytes Bounds.frameMax} (h : Wire
     v.val = b := by
   unfold Wire.bytes? at h; split at h <;> simp_all; rw [← h]
 
+/-- Each name `bytes?` accepted reads back as itself. -/
+private theorem mapM_bytes : ∀ {l : List ByteArray} {a : List (Bytes Bounds.frameMax)},
+    l.mapM Wire.bytes? = some a → a.map (·.val) = l
+  | [], a, h => by simp only [List.mapM_nil, pure, Option.some.injEq] at h; subst h; rfl
+  | x :: xs, a, h => by
+    simp only [List.mapM_cons, bind, Option.bind_eq_some_iff, pure, Option.some.injEq] at h
+    obtain ⟨v, hv, vs, hvs, rfl⟩ := h
+    simp [bytes?_val hv, mapM_bytes hvs]
+
 /-- The wire value of a verdict reads back as that verdict, field for field (so keybroker, reading
 by name, gets the key slot, the charge and Lean's request bytes). -/
 theorem verdictOf_wire {v : Verdict} {w : Wire.VerdictTy} (h : Wire.verdictWire? v = some w) :
@@ -344,6 +353,15 @@ theorem verdictOf_wire {v : Verdict} {w : Wire.VerdictTy} (h : Wire.verdictWire?
     simp only [Wire.verdictOf]
     have := ofCode?_code why
     simp [this]
+  | residents names =>
+    simp only [Wire.verdictWire?, bind, Option.bind_eq_some_iff] at h
+    obtain ⟨a, ha, hw⟩ := h
+    split at hw
+    · simp only [pure, Option.some.injEq] at hw
+      subst hw
+      simp only [Wire.verdictOf]
+      rw [mapM_bytes ha]
+    · cases hw
 
 /-! ## The printed string is one JSON string whose contents are the text -/
 
@@ -503,16 +521,20 @@ theorem providerOf_fits {m : ByteArray} {u : Upstream} (h : providerOf m = some 
   subst hm
   decide
 
+/-- A refusal is a two-byte frame. -/
+theorem refuse_encodes (why : Broker.Refusal) : (Wire.encodeVerdict (.refuse why)).isSome = true := by
+  simp only [Wire.encodeVerdict, Wire.verdictWire?, pure, bind, Option.bind]
+  rw [← verdictCodec_lawful.size_eq, refuse_size _ rfl]
+  simp [Bounds.frameMax]
+
 /-- The verdict of every `step` encodes in one frame: a refusal is two bytes, and a grant's fields
 (Lean's body within `bodyMax`, the provider's fixed request fields, a charge below `capMax`) fit
 `frameMax`. So
 `hosting-broker`'s `unencodable` end is unreachable: an assertion, never a path. -/
+
 theorem step_encodes (b : Broker) (r : ByteArray) (now : Nat) (askBytes : ByteArray) :
     (Wire.encodeVerdict (Broker.step b r now askBytes).2).isSome = true := by
-  have refuse : ∀ why, (Wire.encodeVerdict (.refuse why)).isSome = true := fun why => by
-    simp only [Wire.encodeVerdict, Wire.verdictWire?, pure, bind, Option.bind]
-    rw [← verdictCodec_lawful.size_eq, refuse_size _ rfl]
-    simp [Bounds.frameMax]
+  have refuse := refuse_encodes
   unfold Broker.step
   split
   · exact refuse _
@@ -536,6 +558,74 @@ theorem step_encodes (b : Broker) (r : ByteArray) (now : Nat) (askBytes : ByteAr
       rw [if_pos (by unfold Bounds.bodyMax Bounds.frameMax at hbs; unfold Bounds.frameMax; omega)]
       rfl
     · exact refuse _
+
+/-! ## Which sockets keybroker serves, and who is decided (HOSTING-26) -/
+
+/-- A socket whose resident the World does not hold is refused `notResident`, and the broker is
+unchanged: no meter moves for it. -/
+theorem admit_notResident {rs : List ByteArray} {b : Broker} {r : ByteArray} {now : Nat}
+    {ask : ByteArray} (h : rs.contains r = false) :
+    Broker.admit rs b r now ask = (b, .refuse .notResident) := by
+  simp [Broker.admit, h]
+
+/-- A resident the World holds is decided exactly as before. -/
+theorem admit_resident {rs : List ByteArray} {b : Broker} {r : ByteArray} {now : Nat}
+    {ask : ByteArray} (h : rs.contains r = true) :
+    Broker.admit rs b r now ask = Broker.step b r now ask := by
+  simp [Broker.admit, h]
+
+/-- Every verdict `admit` returns has a frame. -/
+theorem admit_encodes (rs : List ByteArray) (b : Broker) (r : ByteArray) (now : Nat) (ask : ByteArray) :
+    (Wire.encodeVerdict (Broker.admit rs b r now ask).2).isSome = true := by
+  unfold Broker.admit
+  split
+  · exact step_encodes b r now ask
+  · exact refuse_encodes _
+
+private theorem mapM_bytes_some : ∀ {l : List ByteArray}, (∀ n ∈ l, n.size ≤ Bounds.frameMax) →
+    ∃ a, l.mapM Wire.bytes? = some a ∧ a.length = l.length
+  | [], _ => ⟨[], rfl, rfl⟩
+  | x :: xs, h => by
+    obtain ⟨a, ha, hl⟩ := mapM_bytes_some (l := xs) (fun n hn => h n (by simp [hn]))
+    have hx : x.size ≤ Bounds.frameMax := h x (by simp)
+    refine ⟨⟨x, hx⟩ :: a, ?_, by simp [hl]⟩
+    simp [List.mapM_cons, Wire.bytes?, hx, ha, bind, Option.bind, pure]
+
+private theorem foldl_size_le : ∀ (l : List (Bytes Broker.Bounds.frameMax)) (acc : Nat),
+    (∀ x ∈ l, x.val.size ≤ 64) →
+      l.foldl (fun n x => n + (4 + x.val.size)) acc ≤ acc + 68 * l.length
+  | [], acc, _ => by simp
+  | x :: xs, acc, h => by
+    simp only [List.foldl_cons, List.length_cons]
+    have hx := h x (by simp)
+    have := foldl_size_le xs (acc + (4 + x.val.size)) (fun y hy => h y (by simp [hy]))
+    omega
+
+/-- **A `residents` answer of at most `residentsMax` socket names of 64 bytes fits one frame**: so
+`hosting-broker`'s `unencodable` end is unreachable for it, and `residentsPastBound` is the one
+named end of a World holding more resident grains than one keybroker serves. -/
+theorem residents_encode {names : List ByteArray} (hn : names.length ≤ Bounds.residentsMax)
+    (hs : ∀ n ∈ names, n.size ≤ 64) : (Wire.encodeVerdict (.residents names)).isSome = true := by
+  obtain ⟨a, ha, hl⟩ := mapM_bytes_some (l := names) (fun n hn' => by
+    have := hs n hn'; unfold Bounds.frameMax; omega)
+  have hval := mapM_bytes ha
+  have ha64 : ∀ x ∈ a, x.val.size ≤ 64 := by
+    intro x hx
+    exact hs x.val (hval ▸ List.mem_map_of_mem hx)
+  have hsz : a.toArray.size ≤ Broker.Bounds.frameMax := by
+    rw [List.size_toArray, hl]; unfold Broker.Bounds.residentsMax at hn; unfold Broker.Bounds.frameMax; omega
+  have hf := foldl_size_le a 4 ha64
+  rw [hl] at hf
+  have hb : 1 + ((4 + 68 * names.length) + 0) ≤ Broker.Bounds.frameMax := by
+    unfold Broker.Bounds.residentsMax at hn; unfold Broker.Bounds.frameMax; omega
+  simp only [Wire.encodeVerdict, Wire.verdictWire?, ha, bind, Option.bind, dif_pos hsz, pure]
+  rw [← verdictCodec_lawful.size_eq]
+  rw [if_pos]
+  · rfl
+  show 1 + (Array.foldl _ 4 a.toArray + 0) ≤ Broker.Bounds.frameMax
+  rw [List.foldl_toArray']
+  exact Nat.le_trans (Nat.add_le_add_left (Nat.add_le_add_right hf 0) 1) hb
+  all_goals rfl
 
 /-! ## Teeth: closed instances that make the general theorems non-vacuous -/
 
@@ -659,5 +749,11 @@ theorem system_tooth : bodyIs
     "{\"model\":\"claude-m\",\"max_tokens\":10,\"system\":\"s\\\"\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]}".toUTF8
     (requestBody { ask1 with system := "s\"".toUTF8, texts := ["hi".toUTF8] }) = true := by
   decide +kernel
+
+/-- Tooth: `admit` refuses a stranger and decides a resident (the same ask, two verdicts). -/
+theorem admit_tooth :
+    (Broker.admit [] b0 res 60000 ⟨#[7, 0]⟩).2 = .refuse .notResident ∧
+      (Broker.admit [res] b0 res 60000 ⟨#[7, 0]⟩).2 = .refuse .badAsk := by
+  decide
 
 end Nanodregg.Hosting.Proofs.Broker

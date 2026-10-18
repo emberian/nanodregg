@@ -127,30 +127,6 @@ def allowanceOf (pkgId operator : ByteArray) (c : Cell) : Option (ByteArray × B
     | _ => none
   else none
 
-/-! ## Following the World -/
-
-variable {D : Type} [Ord D] [DecidableEq D]
-
-/-- The allowance at id `i` of `w`, as the broker reads it. -/
-def readAt (E : Env D) (pkgId operator : ByteArray) (w : World D) (i : D) :
-    Option (ByteArray × Broker.Allowance) :=
-  (w.live E i).bind (allowanceOf pkgId operator)
-
-/-- The allowances the broker holds, by World id, once the ids `ids` were touched: each touched id
-is read again, every other binding kept. `Proofs.Allowance.update_tracks`: with HOSTING-10's batch
-frame, the bindings are exactly the World's readable allowances. -/
-def update (E : Env D) (pkgId operator : ByteArray) (w : World D)
-    (cur : List (D × (ByteArray × Broker.Allowance))) (ids : List D) :
-    List (D × (ByteArray × Broker.Allowance)) :=
-  cur.filter (fun p => !ids.contains p.1) ++
-    ids.eraseDups.filterMap fun i => (readAt E pkgId operator w i).map (i, ·)
-
-/-- What `hosting-broker` does with a catch-up: the World `w'` the tail reached and the Turns it
-absorbed; every id they touched or bore (`Controller.touchedIds`) is read again
-(`Proofs.Allowance.absorb_tracks`). -/
-def absorb (E : Env D) (pkgId operator : ByteArray) (w' : World D)
-    (held : List (D × (ByteArray × Broker.Allowance))) (turns : List (Turn D)) :
-    List (D × (ByteArray × Broker.Allowance)) :=
-  update E pkgId operator w' held (Controller.touchedIds turns)
+/-! ## Following the World: `Track.update` over `allowanceOf` (Hosting/Track.lean) -/
 
 end Nanodregg.Hosting.Allow

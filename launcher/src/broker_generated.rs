@@ -221,6 +221,7 @@ pub mod wire {
         TlsHostname,
         TlsProtocol,
         PeerRefused,
+        NotResident,
     }
 
     impl BrokerRefusal {
@@ -247,6 +248,7 @@ pub mod wire {
                 BrokerRefusal::TlsHostname => 18,
                 BrokerRefusal::TlsProtocol => 19,
                 BrokerRefusal::PeerRefused => 20,
+                BrokerRefusal::NotResident => 21,
             }
         }
 
@@ -273,6 +275,7 @@ pub mod wire {
                 18 => Some(BrokerRefusal::TlsHostname),
                 19 => Some(BrokerRefusal::TlsProtocol),
                 20 => Some(BrokerRefusal::PeerRefused),
+                21 => Some(BrokerRefusal::NotResident),
                 _ => None,
             }
         }
@@ -301,6 +304,7 @@ pub mod wire {
                 BrokerRefusal::TlsHostname => "tlsHostname",
                 BrokerRefusal::TlsProtocol => "tlsProtocol",
                 BrokerRefusal::PeerRefused => "peerRefused",
+                BrokerRefusal::NotResident => "notResident",
             }
         }
     }
@@ -366,6 +370,7 @@ pub mod wire {
     #[derive(Debug, Clone, PartialEq, Eq)]
     pub enum Request {
         Decide { resident: Vec<u8>, at_ms: u64 },
+        Residents { at_ms: u64 },
     }
 
     impl Request {
@@ -377,6 +382,10 @@ pub mod wire {
                     let resident = c.bytes(131072)?;
                     let at_ms = c.u64()?;
                     Request::Decide { resident, at_ms }
+                }
+                2 => {
+                    let at_ms = c.u64()?;
+                    Request::Residents { at_ms }
                 }
                 tag => return Err(Refusal::BadTag { offset: at, tag }),
             };
@@ -390,6 +399,10 @@ pub mod wire {
                 Request::Decide { resident, at_ms } => {
                     out.push(1);
                     put_bytes(&mut out, resident, 131072)?;
+                    out.extend_from_slice(&at_ms.to_le_bytes());
+                }
+                Request::Residents { at_ms } => {
+                    out.push(2);
                     out.extend_from_slice(&at_ms.to_le_bytes());
                 }
             }
@@ -410,6 +423,9 @@ pub mod wire {
         },
         Refuse {
             broker_refusal: BrokerRefusal,
+        },
+        Residents {
+            names: Vec<Vec<u8>>,
         },
     }
 
@@ -439,6 +455,10 @@ pub mod wire {
                 2 => {
                     let broker_refusal = c.one_of(BrokerRefusal::from_code)?;
                     Verdict::Refuse { broker_refusal }
+                }
+                3 => {
+                    let names = c.list(131072)?;
+                    Verdict::Residents { names }
                 }
                 tag => return Err(Refusal::BadTag { offset: at, tag }),
             };
@@ -470,6 +490,10 @@ pub mod wire {
                 Verdict::Refuse { broker_refusal } => {
                     out.push(2);
                     out.push(broker_refusal.code());
+                }
+                Verdict::Residents { names } => {
+                    out.push(3);
+                    put_list(&mut out, names, 131072)?;
                 }
             }
             Ok(out)
@@ -564,5 +588,6 @@ pub mod decider_exit {
     pub const STORE: u8 = 76;
     pub const BEHIND: u8 = 77;
     pub const IO: u8 = 78;
-    pub const ALL: &[u8] = &[0, 70, 71, 72, 73, 74, 75, 76, 77, 78];
+    pub const RESIDENTS_PAST_BOUND: u8 = 7;
+    pub const ALL: &[u8] = &[0, 70, 71, 72, 73, 74, 75, 76, 77, 78, 7];
 }

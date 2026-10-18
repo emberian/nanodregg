@@ -8,19 +8,24 @@ keybroker starts it with `T0`, the operator clock (ms) at the start of this brok
 allowance whose slot has no key is refused `keyMissing` before any charge). STORE is the World it
 follows, read and never written: HOST's tail (`Host.Tail`), the open and then O(appended bytes)
 per ask. OPERATOR is the operator's member id in lowercase hex; only allowance objects it owns are
-read (`Allow.allowanceOf`).
+read (`Allow.allowanceOf`). It also follows the resident grains (`Controller.residentOf`: born, not
+removed), whose socket names are the only ones keybroker serves (HOSTING-26).
 
-At the open, every live cell id is read (`Loop.allIds`, once). Then, per ask, it reads a `decide`
-frame (resident, atMs) and the resident's ask frame from stdin; catches the tail up (at most
-`drainMax` reads, past which it ends `behind` rather than decide on a stale World); re-reads the
-ids the new Turns touched (`Allow.update`, exact by `Proofs.Allowance.update_tracks`); follows
-them (`Broker.follow` at the ask's time); runs `Broker.step`; and writes one verdict frame to
-stdout. Every frame is `u32le len ‖ payload`, `1 ≤ len ≤ Broker.Bounds.frameMax`. Every way it ends
+At the open, every live cell id is read (`Loop.allIds`, once). Then, per request, it reads a frame
+from stdin: a `decide` header (resident, atMs), followed by the resident's ask frame, or a
+`residents` question (atMs). It catches the tail up (at most `drainMax` reads, past which it ends
+`behind` rather than answer from a stale World); re-reads the ids the new Turns touched
+(`Track.update`, exact by `Proofs.Allowance.update_tracks`) for both readers; follows the allowances
+(`Broker.follow` at the request's time); then answers a `decide` by `Broker.admit` (a socket whose
+resident the World does not hold is refused `notResident`) and a `residents` by the resident grains'
+socket names (`Controller.dirOf`, at most `residentsMax`, else it ends `residentsPastBound`). One
+verdict frame goes to stdout per request. Every frame is `u32le len ‖ payload`, `1 ≤ len ≤ Broker.Bounds.frameMax`. Every way it ends
 is an `Exit` by name on stderr; asks are bounded by `lifetime`.
 -/
 import Hosting.Broker
 import Hosting.BrokerExit
 import Hosting.Allowance
+import Hosting.Track
 import Hosting.Loop
 import Host.Deployed
 import Host.Tail
@@ -57,17 +62,21 @@ inductive Exit
   /-- `drainMax` reads did not catch the tail up -/
   | behind
   | io (msg : String)
+  /-- the World holds more resident grains than `Broker.Bounds.residentsMax` -/
+  | residentsPastBound (n : Nat)
 
 def Exit.name : Exit → String
   | .keybrokerGone => "keybrokerGone" | .usage => "usage" | .badFrame => "badFrame"
   | .badRequest => "badRequest" | .unencodable => "unencodable" | .lifetime => "lifetime"
   | .noPackage => "noPackage" | .store n => s!"store {n}" | .behind => "behind" | .io m => s!"io {m}"
+  | .residentsPastBound n => s!"residentsPastBound {n}"
 
 /-- The kind of an end, in the exit table (`Hosting.BrokerExit`). -/
 def Exit.kind : Exit → DeciderExit
   | .keybrokerGone => .keybrokerGone | .usage => .usage | .badFrame => .badFrame
   | .badRequest => .badRequest | .unencodable => .unencodable | .lifetime => .lifetime
   | .noPackage => .noPackage | .store _ => .store | .behind => .behind | .io _ => .io
+  | .residentsPastBound _ => .residentsPastBound
 
 def Exit.code (e : Exit) : UInt32 := e.kind.code.toUInt32
 
@@ -81,14 +90,20 @@ def readFrame (input : IO.FS.Stream) : IO (Option (Except Exit ByteArray)) := do
 
 abbrev D := Host.Deployed.D
 
-/-- What the broker follows: the tail, its read handle, and the allowances it holds by World id. -/
+/-- What the broker follows: the tail, its read handle, the allowances it holds by World id, and the
+resident grains it holds by World id (`lifeId`: the lifecycle package's id). -/
 structure Follow where
   keys : Keys
   seg : File
   pkgId : ByteArray
   operator : ByteArray
+  lifeId : ByteArray
   tail : Tail (World D)
   held : List (D × (ByteArray × Allowance))
+  grains : List (D × Unit)
+
+/-- The socket names keybroker serves: the held resident grains' `dirOf`. -/
+def Follow.residents (f : Follow) : List ByteArray := f.grains.map fun p => Controller.dirOf p.1.bytes
 
 /-- Read what was appended until nothing is new, at most `n` reads; the Turns absorbed (a recorded
 refusal moves no cell, `Kernel.refuse_frame`, so only the log's Turns are read). -/
@@ -102,37 +117,60 @@ def catchUp (keys : Keys) (seg : File) : Nat → Tail (World D) → List (Turn D
       if outs.isEmpty && t'.pos.offset == t.pos.offset then pure (.ok (t', acc))
       else catchUp keys seg n t' (acc ++ Step.turns (outs.toList.flatten.map Prod.fst))
 
+/-- A catch-up's effect on what the broker follows: the tail reached and both readers re-read over
+the Turns absorbed (`Proofs.Residents.absorbTurns_tracks`). -/
+def Follow.absorbTurns (f : Follow) (t : Tail (World D)) (turns : List (Turn D)) : Follow :=
+  { f with tail := t,
+           held := Track.absorb Host.Deployed.X.env (Allow.allowanceOf f.pkgId f.operator) t.world f.held turns,
+           grains := Track.absorb Host.Deployed.X.env (Controller.residentOf f.lifeId) t.world f.grains turns }
+
 /-- Before an ask at `now`: catch up, re-read the touched ids, follow them. -/
 def refresh (f : Follow) (b : Broker) (now : Nat) : IO (Except Exit (Follow × Broker)) := do
   match ← catchUp f.keys f.seg drainMax f.tail [] with
   | .error e => pure (.error e)
   | .ok (t, turns) =>
     if turns.isEmpty then return .ok ({ f with tail := t }, b)
-    let held := Allow.absorb Host.Deployed.X.env f.pkgId f.operator t.world f.held turns
-    pure (.ok ({ f with tail := t, held }, b.follow now (held.map (·.2))))
+    let f' := f.absorbTurns t turns
+    pure (.ok (f', b.follow now (f'.held.map (·.2))))
+
+/-- Write one verdict frame. -/
+def emit (out : IO.FS.Stream) (v : Broker.Verdict) : IO Bool := do
+  let some bytes := Wire.encodeVerdict v | return false
+  out.write (Host.Log.lenBytes bytes.size ++ bytes)
+  out.flush
+  return true
 
 def serve (input out : IO.FS.Stream) : Nat → Follow → Broker → IO Exit
   | 0, _, _ => pure .lifetime
   | fuel + 1, f, b => do
     let some hdr ← readFrame input | return .keybrokerGone
     let .ok hdr := hdr | return .badFrame
-    let some ask ← readFrame input | return .keybrokerGone
-    let .ok ask := ask | return .badFrame
-    let .ok (r, now) := Wire.decodeRequest hdr | return .badRequest
-    let (f, b) ← match ← refresh f b now with
-      | .ok fb => pure fb
-      | .error e => return e
-    let (b', v) := Broker.step b r now ask
-    let some bytes := Wire.encodeVerdict v | return .unencodable
-    out.write (Host.Log.lenBytes bytes.size ++ bytes)
-    out.flush
-    serve input out fuel f b'
+    let .ok req := Wire.decodeRequest hdr | return .badRequest
+    match req with
+    | .decide r now =>
+      let some ask ← readFrame input | return .keybrokerGone
+      let .ok ask := ask | return .badFrame
+      let (f, b) ← match ← refresh f b now with
+        | .ok fb => pure fb
+        | .error e => return e
+      let (b', v) := Broker.admit f.residents b r now ask
+      unless ← emit out v do return .unencodable
+      serve input out fuel f b'
+    | .residents now =>
+      let (f, b) ← match ← refresh f b now with
+        | .ok fb => pure fb
+        | .error e => return e
+      let names := f.residents
+      if Broker.Bounds.residentsMax < names.length then return .residentsPastBound names.length
+      unless ← emit out (Broker.Verdict.residents names) do return .unencodable
+      serve input out fuel f b
 
 /-- `S1,S2,…`: the key slots keybroker holds. -/
 def parseSlots (s : String) : Option (List Nat) := (s.splitOn ",").mapM String.toNat?
 
 def run (t0 : Nat) (keys : List Nat) (store : System.FilePath) (operator : ByteArray) : IO Exit := do
   let some pid := Allow.allowanceId Host.Deployed.X.env | return .noPackage
+  let some lid := Controller.lifecycleId Host.Deployed.X.env | return .noPackage
   match ← (readKey store : IO (Except (StoreFault (Host.Record.Fault (Kernel.Reject D))) Digest)) with
   | .error f => return .store f.text
   | .ok key =>
@@ -142,8 +180,10 @@ def run (t0 : Nat) (keys : List Nat) (store : System.FilePath) (operator : ByteA
     | .error f => return .store f.text
     | .ok (t, seg) =>
       let pkgId := pid.bytes
-      let held := Allow.update Host.Deployed.X.env pkgId operator t.world [] (Loop.allIds t.world)
-      serve (← IO.getStdin) (← IO.getStdout) lifetime ⟨sk, seg, pkgId, operator, t, held⟩
+      let ids := Loop.allIds t.world
+      let held := Track.update Host.Deployed.X.env (Allow.allowanceOf pkgId operator) t.world [] ids
+      let grains := Track.update Host.Deployed.X.env (Controller.residentOf lid.bytes) t.world [] ids
+      serve (← IO.getStdin) (← IO.getStdout) lifetime ⟨sk, seg, pkgId, operator, lid.bytes, t, held, grains⟩
         (Broker.start t0 keys (held.map (·.2)))
 
 def main (args : List String) : IO UInt32 := do

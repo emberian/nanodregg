@@ -1521,3 +1521,80 @@ the old five-argument shape treats LABEL as MEMBER and refuses. LaunchExit gains
 grain-launch unit (ExecStart, RestartPreventExitStatus 69) and EXITS.md are re-rendered.
 `deploy/units/linux/tmpfiles/nd-member.conf` is new. The launcher crate depends on nanodregg-client
 (Cargo.lock). Nothing persisted changes. Every resident launch now needs its member socket to exist.
+
+## HOSTING-26 keybroker serves the World's resident grains; `RESIDENTS` is deleted (HOSTING-8, 2026-10-19; HOSTING-18 RULED (A) by ROOT)
+
+**Decision.** keybroker's operator argument RESIDENTS was deleted. It was a second copy of a World fact, which law 1 forbids. keybroker now serves exactly the World's resident grains, learned from its decider's frames, from each grain's birth.
+- **Which grains.** `Controller.residentOf` reads a cell as a resident grain when all of these hold:
+  - it is a lifecycle object (`isGrain`);
+  - its state decodes by the controller's own reader (`grainOf`);
+  - its kind is `resident`;
+  - its phase is anything but `removed`.
+  A grain is therefore served from `installed`, its birth, before its start can be decided.
+- **How the decider follows them.** `hosting-broker` follows the cells with the same act it uses for the operator's allowances: `Track.update`/`Track.absorb` (new Hosting/Track.lean, generic over the reader; the allowance copies `Allow.readAt/update/absorb` were deleted). Every id is read at the open, then every touched id after each catch-up. `update_tracks`, `absorb_tracks` and `start_tracks` are now stated for any reader, so the held set is exactly the World's.
+- **The request.** A new request `residents (atMs)` makes the decider catch up and answer `residents (names)`: the held grains' `dirOf`, at most `Bounds.residentsMax` = 1024. Past that bound the decider ends with the new DeciderExit `residentsPastBound` (7, fatal) by name. It never truncates silently.
+- **keybroker's tick.** keybroker asks every `TICK` (200 ms), binds a socket for each new name (HOSTING-17's directory checks first, as at start), and closes and removes the socket and directory of each name that is gone. A wrong-kind answer, or a decider that does not answer, is the decider's end (bounded wait) or `deciderLost`.
+- **"A resident not in the World is refused by name": three layers.**
+  1. It has no socket: keybroker never binds a name the World does not hold. SOCKDIR lists exactly the resident grains.
+  2. An ask on a connection that was open to a resident since removed is refused `notResident`, a new wire refusal (code 21). `Broker.admit` decides only a socket whose name the World holds, and `admit_notResident` shows the broker is unchanged.
+  3. A plan's broker socket is always one keybroker serves (`launch_served`).
+- **Theorems.**
+  - `launch_resident`: a launch whose plan names a broker socket is of a cell `residentOf` reads.
+  - `residentOf_iff` and `residentOf_teeth`; `Follow.absorbTurns` with `absorbTurns_tracks`, `residents_mem`, `answer_encodes`, `decodeRequest_*` (Proofs/Residents.lean); `dirOf_size`.
+  - `launch_served`: if the held set tracks the World (the premise `update_tracks` gives), every broker socket the controller plans for id `i` is `dirOf i` of a held id. That is the decider's answer, and the plan's socket name (`plan_sockets_own`).
+  - `grainOf_rename(_map)`.
+  - `admit_notResident`, `admit_resident`, `admit_encodes`.
+  - `residents_encode`: 1024 names of 64 bytes always fit one frame, so `unencodable` stays unreachable.
+  - `verdictOf_wire` gains the residents case.
+  - `refuse_encodes` is factored out.
+  - `admit_tooth`.
+  - The code-space theorems cover 7.
+**THE RACE (named, planted; ROOT: option (B) only if a deployment hits it).**
+- **Where it comes from.** The decider follows the writer's Store, and the controller follows its own follower Store, which is driven by `nd sync`. On one World they agree (`launch_served`). Between two Stores of one World there is lag.
+- **What it does.** A resident grain born and started before keybroker has learned the birth gets a launch whose broker socket does not exist yet. The launch is refused `pathMissing`, and the controller counts that as an exit. Five within its window refuse `crashLoop` until the window passes and a new Turn arrives.
+- **Planted in the resident row.** keybroker is down while a resident grain is created and started. Its package, volume and member socket exist, so `grain-launch: <c> failed pathMissing` is for the broker socket alone, and the grain never starts. keybroker's next life learns the birth and binds the socket.
+- **Why it is rare in deployment.** The decider reads the writer's Store, which leads; the controller reads a follower that trails by up to one `nd sync` interval. So the birth reaches keybroker first unless keybroker is down or more than a tick behind.
+- **(B), if a deployment hits it.** Have the controller hold a resident's launch until its socket exists. That needs the controller to see the socket, which it must not: it is confined to its Store.
+**Alternatives.**
+- (1) Bind from the operator's allowances (cv 01a14ad0-ae99's first wording). Refused: a resident grain with no allowance yet would have no socket, its launch would crash-loop, and the socket set would differ from the plans' (`launch_served` would be false). Under this decision such a grain has a socket and is refused `noAllowance` by name.
+- (2) Have the decider push resident frames unasked. Refused: keybroker's decider pipe is request/response under one lock, so a push needs a second reader thread and an interleaving protocol, which polling avoids at the cost of one tick of latency.
+- (3) Keep RESIDENTS and check it against the World. Refused: that keeps two shapes (CLAUDE.md: prefer deleting).
+**CRITIQUE.**
+- **Liveness, not safety.** The 200 ms poll costs a decider lock and an empty `Tail.next` per tick. An ask waits behind a residents poll at most one catch-up.
+- **The 1024 bound** is a design ceiling with a fatal, named end, not a measured limit.
+- **A removed resident's in-flight connection** stays open until it asks: it is then refused `notResident`, or it times out (`RESIDENT_IDLE`). The serving thread of a removed socket ends on its next wake: keybroker connects to it once to wake the accept.
+- **A grain removed while running** loses its broker socket at once. The controller kills it on the same Turn, so it holds a dead connection for at most that interval.
+- **One uid only.** `launch_served` speaks of one World, and the two-Store lag is the race above. The cross-uid shape is unrun on hbox, as in HOSTING-21.
+**META-CRITIQUE.** The cv task worded the derivation from allowances, and I first reached for that, because the decider already followed allowances. The plans' socket set is a property of lifecycle grains, not of allowances. A socket set taken from allowances would have reintroduced the very mismatch this decision deletes, one level down. Stating `launch_served` before choosing the reader is what showed it.
+**Vacuity read (VACUITY-READER-H8b).**
+- **Second pass: ACCEPT** (the four holes are closed). The links that remain code only: `run`'s seeding, catchUp's Turns, `serve`'s order of checks, and keybroker.rs binding exactly the answered names.
+- **First pass: NOT ACCEPTED.** No statement was vacuous, and the coverage direction (`launch_served`) holds. "Exactly" and "always encodes" were code only. Four holes, all fixed:
+  - H1. `residentOf` had no upper bound. Now `residentOf_iff`, plus `residentOf_teeth` by `decide +kernel`: a born resident and a running one are read; an app, a removed resident and a look-alike of another package are not.
+  - H2. The IO loop's links. `refresh` now calls the pure `Follow.absorbTurns`, and `Proofs.Residents.absorbTurns_tracks` and `residents_mem` cover it.
+  - H3. `residents_encode`'s premise was never met for what `serve` emits. Now `dirOf_size` (no premise) and `Proofs.Residents.answer_encodes`.
+  - H4. `decodeRequest` had no theorem. Now `decodeRequest_residents` and `decodeRequest_decide` (round trips).
+  - A tautological helper conjunct was deleted.
+- **Still code only:**
+  - `run`'s seeding of both readers through `Track.update … [] (Loop.allIds …)`, which `start_tracks` speaks of;
+  - the older allowance link, that a drain's Turns are `Step.turns ts` of a fold.
+- **Plants:** r1 (drop `isGrain`) and r2 (`absorbTurns` keeps `f.grains`) both fail to build.
+**Plants** (run with hbox logs/hosting8-plants26.py, output logs/hosting8-plants26.out; each was red):
+
+| plant | mutation | red at |
+|---|---|---|
+| q1 | `residentOf` ignores kind | "start: SOCKDIR is not exactly the resident grains" (an app is served) |
+| q2 | `residentOf` serves removed grains | "the removed resident's socket to go" (hang) |
+| q3 | `admit` decides everyone | the removed resident's open connection gets `noAllowance`, not `notResident` |
+| q4 | keybroker never unbinds | the socket never goes (hang) |
+| q5 | keybroker asks only once | "the born resident's socket" (hang) |
+| q6 | the decider's grains are not followed | the born socket (hang) |
+| q7 | `residentOf` reads `app` | `launch_resident` fails to build |
+
+**Flag day.**
+- keybroker's argv is KEYS ANCHORS SOCKDIR PIDS UPSTREAM STORE OPERATOR PEER DECIDER. RESIDENTS is gone; a keybroker started with the old ten words refuses `usage`.
+- New request `residents` (2) and verdict `residents` (3); Broker.Refusal gains `notResident` 21 (broker_generated.rs re-emitted).
+- DeciderExit gains `residentsPastBound` 7.
+- Re-rendered: nd-keybroker.service (ExecStart without ${ND_RESIDENTS}, RestartPreventExitStatus 7) and EXITS.md.
+- RUNBOOK's keybroker.env sentence is OPS-5's.
+- The broker test's resident names are real resident grains (`World::r1`, `r2`, born at genesis), and SOCKDIR is short (`short_dir`).
+- Nothing persisted changes.

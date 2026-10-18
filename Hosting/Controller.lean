@@ -61,6 +61,16 @@ def grainOf (dir : ByteArray) (c : Cell) : Option (Grain × Phase) := do
   let p ← Grain.phaseOf s
   pure ({ idHex := dir, kind := k, entry := e }, p)
 
+/-- A resident grain that is born and not removed: a lifecycle object (`isGrain`) whose state
+decodes (`grainOf`, the controller's own reader), of kind `resident`, in any phase but `removed`.
+keybroker serves exactly these grains' broker sockets (HOSTING-26): the set covers every grain the
+controller may launch as a resident (`Proofs.launch_served`), from its birth, so its socket exists
+before its start can be decided. -/
+def residentOf (pkgId : ByteArray) (c : Cell) : Option Unit :=
+  match grainOf .empty c with
+  | some (gr, ph) => if isGrain pkgId c && gr.kind == .resident && ph != .removed then some () else none
+  | none => none
+
 def runningIn (live : List Live) (g : ByteArray) : Bool := live.any fun l => l.grain == g && l.running
 
 /-- Every exit the launcher reported for `g`, across all its reports. -/
