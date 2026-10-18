@@ -44,6 +44,7 @@ import Protocol.Command.Verb
 import Protocol.Envelope
 import Protocol.Invite
 import Protocol.Command.Describe
+import Protocol.Receipt
 import Protocol.Command.Exit
 import Lang.Program
 
@@ -294,7 +295,7 @@ def body (X : Ctx D) (me : Self D) (w : World D) (s : Signed) : Cmd D → Except
   | .account a o => .ok (.account a (o.getD me.member))
   | .transfer src dst n via once => .ok (.transfer src dst n via once)
   | .credit wl acct n via => .ok (.credit wl acct n via)
-  | .init _ | .read _ _ | .describe _ | .adopt _ _ | .sync | .invite _ => .error .badState
+  | .init _ | .read _ _ | .describe _ | .adopt _ _ | .sync | .invite _ | .receipt _ => .error .badState
 
 /-- Derive with the signature not yet known, pinning each cell the derivation asks for. -/
 def derivePins (X : Ctx D) (w : World D) : Nat → Unsigned D → Except (Refusal D) (Unsigned D × Turn D)
@@ -468,6 +469,7 @@ def hint (X : Ctx D) : Refusal D → Option String
   -- the law's own words (at most `Lang.reasonMax` bytes), on ONE line: a law cannot add lines
   | .receive (.lawDenied l why) => some s!"hint lawDenied {hex X l}: {(why.replace "\n" " ").replace "\r" " "}"
   | .host "stale" => some "hint stale: the World moved before the call landed; run the command again (it re-plans)"
+  | .thin (.baseMoved _) => some "hint baseMoved: the writer's newest base is not at the invitation's pin; ask your sponsor for a fresh invitation"
   | .host "lawDenied" => some "hint lawDenied: a law refused the call; `read OBJ ?` names the object's laws"
   | _ => none
 
@@ -623,7 +625,12 @@ def step (X : Ctx D) (B : Thin.Base (World D)) (me : Self D) (f : Follow D) (kb 
                       match cmd, Signed.ofBytes signedB with
                       | .read obj ex, _ => moved w' ts (render X.env w' obj ex)
                       | .describe obj, _ => moved w' ts (describe X w' obj)
-                      | .sync, _ => moved w' ts (printed s!"height {w'.height}\nchain {hex X w'.chain}\n")
+                      | .sync, _ => moved w' ts (printed
+                          s!"height {w'.height}\nchain {hex X w'.chain}\nroots {hex X (w'.roots X.env)}\n")
+                      -- the receipt for a transaction id, against the World follow just caught up to
+                      | .receipt tx, _ => moved w' ts (match Receipt.bytes X.env (Receipt.build X.env w' tx) with
+                          | some b => printed s!"receipt {Text.toHex b}\n"
+                          | none => refused (D := D) .badState)
                       | .rotate, some _ => moved w' ts (again 5 [startB, signedB] fun k => .precommit k)
                       -- invite: the inputs make this World; pin it as it stands, sign with the
                       -- key the writer just took for this member's envelope
@@ -708,7 +715,7 @@ def step (X : Ctx D) (B : Thin.Base (World D)) (me : Self D) (f : Follow D) (kb 
           | .ok i =>
           let pin := i.pin
           let drop (r : Thin.Refusal) : Follow D × Persist D × Reply :=
-            ({ f with download := none }, .steps [], refused (D := D) (.thin r))
+            ({ f with download := none }, .steps [], refusedAt X (.thin r))
           match Text.ofU64 offB, Text.ofU64 pagesB, Text.ofU64 upToB, Text.ofU64 triedB with
           | some off, some pages, some upTo, some tried =>
             match hostReply result with

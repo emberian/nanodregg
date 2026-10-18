@@ -72,6 +72,12 @@ inductive Act
   and used by another over every call the writer committed (`Protocol.Use.shared`, PROTOCOL-43):
   `ok` when there are at least `atLeast`, else `refused unshared:N` -/
   | used (atLeast : Nat)
+  /-- the actor runs `receipt TXID` for OWNER's last call (its frozen bytes' transaction id) -/
+  | receiptOf (owner : String)
+  /-- the actor, holding only its own head (its follow World's height and roots), checks the
+  receipt bound to `receipt` for OWNER's last call (`Protocol.Receipt.check`); `ok` prints the
+  answer, else `refused NAME` -/
+  | verify (owner receipt : String)
   /-- every call the writer committed so far is submitted, byte-identical and in order, to a SECOND
   writer made by a second genesis with the same name, allowance and founders, and the same nonce
   (`sameNonce`: a restore of the same World) or another one (OPS's cross-World replay). The outcome
@@ -128,6 +134,9 @@ inductive Fault
   /-- the invitation reaches the actor through a relay that changed its nonce (a forged origin: the
   relay's own World); `resign`: the relay also re-signs it with its own key -/
   | forgeInvite (resign : Bool)
+  /-- the receipt reaches the checker through a relay that states `absent` over the same paths (a
+  host that says "not admitted") -/
+  | forgeReceipt
   deriving Repr
 
 /-- One line of a row. -/
@@ -214,6 +223,8 @@ inductive Mutation
   /-- the resident's client does not read a description: every method it binds from one is
   method 0 (a guess at the first method) -/
   | guessMethod
+  /-- the phone believes a receipt's stated answer with its roots matched, never checking the paths -/
+  | trustReceipt
   deriving DecidableEq, Repr
 
 /-- A row's plant: the mutation, and the line that must catch it with the outcome it then gets. -/
@@ -728,6 +739,38 @@ def describeRow : Row where
       expect := .refused "lawDenied", prints := some "hint lawDenied" }])
   plant := .caught .guessMethod 7 (.refused "grantRight")
 
+/-- PROTOCOL-45 (cv 01a14ade-0f69; delvetalk's top thirst, "a receipt as proof"): a member proves to
+itself what happened to a call from the head it holds alone. The member's follow makes a RECEIPT
+(`receipt TXID`: the roots and the trie paths for the id) and a phone, which holds only its own head
+(height and roots, as `sync` prints them), checks it (`Receipt.check`). A committed write checks
+`committed`; the same receipt relayed by a host that says "not admitted" (`absent` over the same
+paths) is refused `pathMismatch`; a call the writer refused and RECORDED checks `refused` with its
+code (PROTOCOL-41); a call that never reached the writer checks `absent`, inside the window. The
+plant is a phone that believes the stated answer: line 10 `ok`. -/
+def receiptRow : Row where
+  name := "receipt"
+  replaces := []
+  ops := settled
+  kinds := ["enroll", "install", "create", "grant", "write"]
+  drive := .members (welcome ++ [
+    ok "newcomer" ["write", "@shared", "2", "1", "--via", "@g"],
+    ok "operator" ["read", "@shared", "2=1"],
+    { actor := "newcomer", act := .receiptOf "newcomer", expect := .ok, bind := some "rc1" },
+    { actor := "operator", act := .verify "newcomer" "rc1", expect := .ok, prints := some "committed" },
+    { actor := "operator", act := .verify "newcomer" "rc1", expect := .refused "pathMismatch",
+      fault := .forgeReceipt },
+    ok "sponsor" ["write", "@shared", "2", "5"],
+    { actor := "newcomer", act := .forge ["write", "@shared", "3", "7", "--via", "@g"],
+      expect := .refused "stale" },
+    { actor := "newcomer", act := .receiptOf "newcomer", expect := .ok, bind := some "rc2" },
+    ok "operator" ["read", "@shared", "2=5"],
+    { actor := "operator", act := .verify "newcomer" "rc2", expect := .ok, prints := some "refused" },
+    { actor := "sponsor", act := .cmd ["write", "@shared", "3", "1"], expect := .absent,
+      fault := .neverForward },
+    { actor := "sponsor", act := .receiptOf "sponsor", expect := .ok, bind := some "rc3" },
+    { actor := "operator", act := .verify "sponsor" "rc3", expect := .ok, prints := some "absent" }])
+  plant := .caught .trustReceipt 10 .ok
+
 /-- OPS-P1's carry (KERNEL-29, HOST-28 at 6b89d6f): state crosses to a NEW World by export and
 import, never by history. A committed call; an import with a wrong digest is refused
 `carryMismatch` and the old writer still serves; the import with the file's digest makes the
@@ -918,7 +961,7 @@ def langJourney : Row where
   plant := .internal "a program whose judge admits everything: L4 set 101 must be admitted"
 
 def rows : List Row :=
-  [journey, reopen, laws, rotate, audit, paging, coldCatchUp, inflatedHeight, forgotten, refusedRow, inviteRow, useRow, describeRow, carry, thin, thinStale, wrongWorld, wrongWorldRead, pay, well, bounty, grain, hermes, bar,
+  [journey, reopen, laws, rotate, audit, paging, coldCatchUp, inflatedHeight, forgotten, refusedRow, inviteRow, useRow, describeRow, receiptRow, carry, thin, thinStale, wrongWorld, wrongWorldRead, pay, well, bounty, grain, hermes, bar,
    langJourney]
 
 end Nanodregg.Protocol

@@ -227,7 +227,7 @@ pub const ENVELOPE_DOMAIN: &[u8] = &[
 /// The verbs a hosted resident may run through `nd --stdio` (Protocol.Command.stdioVerbs).
 pub const STDIO_VERBS: &[&str] = &[
     "enroll", "install", "create", "write", "law", "invoke", "grant", "revoke", "read", "sync",
-    "issue", "account", "transfer", "credit",
+    "issue", "account", "transfer", "credit", "receipt",
 ];
 
 /// Why `nd --stdio` refuses a request before follow sees it (Protocol.StdioRefusal).

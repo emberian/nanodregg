@@ -79,20 +79,24 @@ inductive Verb
   inputs, which must make the member's own World), the pin of the member's World as it stands, and
   the member's id and key (PROTOCOL-42); prints `invite HEX` -/
   | invite
+  /-- `receipt TXID`: catch up, then print a RECEIPT for the transaction id against follow's World:
+  its roots and the trie paths that show it committed, refused or absent (`Protocol.Receipt`,
+  PROTOCOL-45); prints `receipt HEX` -/
+  | receipt
   deriving DecidableEq, Repr
 
 namespace Verb
 
 def all : List Verb :=
   [init, enroll, install, create, write, law, invoke, grant, revoke, read, rotate, adopt, sync, issue, account,
-   transfer, credit, invite]
+   transfer, credit, invite, receipt]
 
 def word : Verb → String
   | init => "init" | enroll => "enroll" | install => "install"
   | create => "create" | write => "write" | law => "law" | invoke => "invoke"
   | grant => "grant" | revoke => "revoke" | read => "read" | rotate => "rotate" | adopt => "adopt"
   | sync => "sync" | issue => "issue" | account => "account" | transfer => "transfer" | credit => "credit"
-  | invite => "invite"
+  | invite => "invite" | receipt => "receipt"
 
 def ofWord? (s : String) : Option Verb := all.find? (·.word == s)
 
@@ -140,6 +144,7 @@ inductive Cmd (D : Type)
   | credit (well : D) (acct : AcctRef D) (amount : Nat) (via : Option D)
   /-- the World's origin inputs (`Receive.genesisInput` bytes) -/
   | invite (input : ByteArray)
+  | receipt (txId : D)
 
 /-- Every way an argv is refused. -/
 inductive ParseRefusal
@@ -190,6 +195,7 @@ def usage : Verb → String
   | .transfer => "transfer SRC DST AMOUNT [--via GRANT] [--once HEX]"
   | .credit => "credit WELL ACCT AMOUNT [--via GRANT]"
   | .invite => "invite INPUT"
+  | .receipt => "receipt TXID"
 
 def argvSize (argv : List ByteArray) : Nat := 4 + (argv.map (4 + ·.size)).sum
 
@@ -324,6 +330,7 @@ def parseVerb (v : Verb) (args : List String) : Except ParseRefusal (Cmd D) :=
       | some inv, some key => .ok (.adopt inv key)
       | none, _ => .error (.badToken i)
       | _, none => .error (.badToken k)
+  | .receipt, [t] => .receipt <$> digestArg digestOf t
   | .invite, [i] =>
       match Text.ofHex i with
       | some input => .ok (.invite input)

@@ -31,6 +31,7 @@ import Protocol.Attempt
 import Host.Carry
 import Protocol.Invite
 import Protocol.Use
+import Protocol.Receipt
 
 namespace Nanodregg.Protocol.Rows.Loopback
 
@@ -58,6 +59,8 @@ structure Sys where
   oneMember : Bool := false
   /-- a resident binds every described method as method 0 (a plant) -/
   guessMethod : Bool := false
+  /-- the phone believes a receipt's stated answer (a plant) -/
+  trustReceipt : Bool := false
 
 def skipJudge (X : Ctx D) : Ctx D :=
   { X with program := { X.program with judge := fun _ _ _ _ _ _ => .ok () } }
@@ -92,6 +95,7 @@ def sys : Option Mutation → Sys
   | some .trustFirstUse => { writer := { X := Sim.ctx }, follow := Sim.ctx, trustFirstUse := true }
   | some .oneMember => { writer := { X := Sim.ctx }, follow := Sim.ctx, oneMember := true }
   | some .guessMethod => { writer := { X := Sim.ctx }, follow := Sim.ctx, guessMethod := true }
+  | some .trustReceipt => { writer := { X := Sim.ctx }, follow := Sim.ctx, trustReceipt := true }
 
 /-! ## Actors -/
 
@@ -318,6 +322,7 @@ def boundToken (out : String) : Option String :=
     | ["id", h] => some h
     | ["join", h] => some h
     | ["invite", h] => some h
+    | ["receipt", h] => some h
     | _ => none
 
 /-! ## Custody and the writer's socket -/
@@ -796,6 +801,28 @@ def runAct (l : Line) : M (Expect × String) := do
         | _, _ => pure (.refused "badToken", "")
       | .ok _ => pure (.refused "badToken", "")
       | .error e => pure (.refused e, "")
+  | .receiptOf owner => do
+      let st ← get
+      match (← actor owner).last >>= st.sys.follow.decodeCall with
+      | none => pure (.refused "noAttempt", "")
+      | some c => command l.actor ["receipt", Text.toHex (st.sys.follow.env.bytes (txIdOf st.sys.follow c))] .none 4
+  | .verify owner rc => do
+      let st ← get
+      let X := st.sys.follow
+      let some c := (← actor owner).last >>= X.decodeCall | return (.refused "noAttempt", "")
+      let some rb := st.binds.lookup rc >>= Text.ofHex | return (.refused s!"unbound {rc}", "")
+      let some r := Receipt.ofBytes X.digestOf rb | return (.refused "badReceipt", "")
+      let r := match l.fault with
+        | .forgeReceipt => { r with answer := .absent }
+        | _ => r
+      -- the phone's head: its own World's height and roots, nothing the receipt states
+      let w := (← actor l.actor).follow.world
+      let ans := if st.sys.trustReceipt then
+          (if rootsDigest X.env r.root r.jroot r.rroot = w.roots X.env then .ok r.answer else .error .headMismatch)
+        else Receipt.check X.env w.height (w.roots X.env) (txIdOf X c) c.unsigned.notBefore r
+      match ans with
+      | .ok a => pure (.ok, Receipt.Answer.text X.env.bytes a)
+      | .error e => pure (.refused e.name, "")
   | .used atLeast => do
       -- the member's own World, caught up; the calls the writer committed, as its clients sent them
       let (o, _) ← command l.actor ["sync"] .none 4

@@ -1152,6 +1152,12 @@ than its docstring names. The `baseMoved` red caught it only because the expecta
   - the invitation-world refusal is named otherWorld, apart from the envelope and thin wrongWorld;
   - the docstring says the sponsor id is stated, not verified.
   Kept as stated: name_injective is at tag level (as Thin).
+- **Addendum (2026-10-18, PROTOCOL-9; ROOT's ruling on cv 01a14de7-224a, and CLIENT-5's measurement).**
+  - **What a carried World's joiner trusts instead.** A carried World (KERNEL-29) is made from a FILE: the exported cells, under a new origin that commits the old origin, the carried trie's root and the journal (`CarryInput`). No list of inputs rebuilds it, so no invitation can be accepted into a genesis.
+    - Its joiner trusts the OPERATOR who ran the carry. The operator exported a stopped Store, copied the printed digest out of band, imported with `--digest`, and `host import` printed the new origin.
+    - The member takes that origin as `Self.world` on the operator's word: by name, trust on first use (the rows' `rejoin`), exactly as much as every member trusted the carry itself.
+    - What would replace that trust: a sponsor in the carried World signs an invitation whose pin is the carried World's base, and the joiner adopts thin under the sponsor's key. That stays open by design until a carried World has members who want it.
+  - **Deployed thin adopt has no seal.** CLIENT-5 measured it through the real host: `adopt INVITE KEY` answers `baseMoved` unless the inviter's tip equals a cadence base. The rows seal with a harness act (`Writer.checkpoint`), and no host verb or op seals on demand. Deployed thin joining from an invitation is therefore not usable yet; full joining (`host join` + fold) is. Asked of HOST-12: a `host seal` on a stopped writer, or a seal request.
 
 ## PROTOCOL-43 · the use row: objects made by one member and used by another, counted from signed calls; THE BAR's purpose as a row (2026-10-18, PROTOCOL-9; DELVETALK-LEARNINGS §4.7, §7)
 **Decision.**
@@ -1248,3 +1254,52 @@ than its docstring names. The `baseMoved` red caught it only because the expecta
   - a lawDenied hint prints the law words on ONE line (a law cannot add stdout lines);
   - the description names install labelOk check as why labels print raw.
   A client reads stdout after a refused exit as text only, never as data.
+
+## PROTOCOL-45 · a receipt as proof: what happened to a call, shown against the head a member holds; `receipt TXID`; row `receipt` (2026-10-18, PROTOCOL-9; cv 01a14ade-0f69 by KERNEL-11, KERNEL-41/44/47 roots; delvetalk's top thirst)
+**Decision.**
+- **A head** is a World's height and its ROOTS digest (`World.roots`: the cells', journal's and refusals' roots, which every head link commits, KERNEL-47). `sync` now prints `roots HEX` beside height and chain.
+- **A receipt** (`Protocol/Receipt.lean`) for a transaction id carries:
+  - the three roots;
+  - an answer: `committed h td` (journal inclusion, KERNEL-41), `refused h code` (the recorded refusal's inclusion at `.tx id`, KERNEL-44 / PROTOCOL-41), or `absent` (both exclusions);
+  - both trie paths.
+- **`Receipt.check E height roots txId notBefore r`** trusts nothing the receipt states. It refuses by name:
+  - `otherTx`;
+  - `headMismatch` (its roots do not open the head's);
+  - `pathMismatch` (a path does not verify for the stated answer);
+  - `forgotten` (`absent` past `journalForgets`: absence then says nothing, PROTOCOL-33);
+  - and `badReceipt` on the wire.
+- **Theorems** (Proofs/Receipt):
+  - `check_committed`: a committed receipt that checks against a World's roots is that World's journal entry, or a collision;
+  - `check_absent`: an absent one is the journal's absence, and only while `journalForgets` is false;
+  - `check_refused_uncommitted`: a refused receipt (the refused arm ALSO checks the journal exclusion) shows the id absent from the World's journal, so a relay cannot turn a committed call into `refused`;
+  - `check_refused`: the refusal path verifies against the head's refusals root;
+  - `check_ok`.
+- **Verb `receipt TXID`** (the 19th): follow catches up and prints `receipt HEX`, built from its World (`Receipt.build`: the trie's own `prove`). It is on the stdio surface: a resident wants receipts too. generated.rs re-emits STDIO_VERBS.
+- **Row `receipt`** (26th):
+  - a committed write checks `committed` against the phone's head (another member holding only its own height and roots);
+  - the same receipt relayed by a host that says "not admitted" (`absent` over the same paths) is `pathMismatch` (line 10);
+  - a call refused and RECORDED (forged stale) checks `refused` with its code;
+  - a call that never reached the writer checks `absent`.
+  - Plant `trustReceipt` (a phone that believes the stated answer once the roots match) turns line 10 to `ok`.
+- **Hint:** `baseMoved` now prints "ask your sponsor for a fresh invitation" (CLIENT-26's ask: the hint is Lean's to print).
+
+**Alternatives.**
+- (a) Check against a bare CHAIN digest: the head record `(prev, kind, step digest, roots)` hashing to the chain, as KERNEL's `head_journal_read` states. That is the reading for a third party who holds only a chain. It needs the World to carry its last link (prev, kind, step digest), which no World holds today (follow knows them only while absorbing). Chosen instead: the roots digest, which the chain commits and which a member's own fold computes in O(1). A chain-anchored receipt is the head record plus this one; that is cv 01a14ade-0f69's remaining half.
+- (b) Put the receipt in the Host's `lookup` reply, so the attempt store never takes "absent" on the Host's word. That is the cv's motivating case, and the consumer this format exists for. It needs HOST to build receipts in serve and CLIENT to check them in the attempt store, with this check. Next, with HOST and CLIENT.
+
+**Critique.**
+- The row's receipts are built by the owner's follow and checked by another member against its own head. Both are honest folds, so the row shows the format and the check, not a lying Host's receipt in the attempt store. Until (b) is built, `absent` from a lookup is still the Host's word.
+- `refused` is checked against the refusals root, but KERNEL states no refusals-trie inclusion soundness (`journal_inclusion_sound`'s twin). So `check_refused` says less than the other two. Owed by KERNEL (cv).
+- A phone must hold a head at or after the call. A head older than the call cannot answer `committed`, and `absent` against an old head says nothing about later. The verifier does not know whether its head is "after"; the member does.
+- `absent` checks the refusals exclusion inside the journal window. Whether the refusals prune on the same horizon is KERNEL's (KERNEL-44 prunes by window). If they prune sooner, `absent` can be shown for a call that was refused and then pruned. The attempt store's resend of the same bytes then meets the kernel again, never a double effect.
+
+**Meta-critique.** I chose roots over a chain because roots needed nothing from KERNEL. A chain-anchored receipt is what the cv asked for. I have named it as the remaining half instead of shipping it, because the World's last link is KERNEL's field to add, and KERNEL-17 is mid-flag-day.
+
+**Status.** BUILT. Rows ALL PASS 26.
+- Vacuity read (a second agent): every theorem was ACCEPTED.
+  Fixes taken from it:
+  - the module doc no longer claims that a relay cannot change a refused answer, only what is proved;
+  - the refused arm now also requires journal exclusion (check_refused_uncommitted).
+  Open:
+  - check_committed takes the journal heights fit below 2^64 as a premise, true of reached Worlds below 2^64 height; no lemma names it yet;
+  - a relayed head must bind its height to its roots.
