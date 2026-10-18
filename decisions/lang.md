@@ -1196,3 +1196,229 @@ name, though it was harmless. (3) The theorem is lookup-level (`stepTarget es i 
 **Meta-critique.** It is a refusal added to a generator, a strengthening, so it is not a pause item.
 Hosting's lifecycle machine (`Hosting/Package.lean`) is deterministic, so its package bytes are unchanged.
 **Status.** built (this commit). Nothing re-ids: valid inputs produce the same terms.
+
+## LANG-44 Relations: keyed, bounded rows under an object, in a third instance of the one trie; inserts at distinct keys commute because their footprints are disjoint, never because a pin is relaxed (2026-10-18; PROPOSED, LANG-13 with a KERNEL half for KERNEL-13 to co-sign; Ember's delvetalk question; DELVETALK-LEARNINGS §4.2; LANG-1's critique)
+**Ember's question.** "didn't we have some learnings from delvetalk that were to apply? especially about its
+relation-based state model? I feel like that is maybe a genuinely different constructional alternative to this
+blockchain replay stuff (maybe it isn't)."
+
+**(a) The two models, precisely.**
+- *delvetalk* (dt = `~/dev/delvetalk2`). An object is `{maker, pin, law, version, behaviour, state}`; essential state
+  is scalar fields plus RELATIONS, "derived state is a pure Bend function and is never written" (dt:docs/FOUNDATION.md
+  §8 principles, §9). A relation is `Relation<T>` declared once per package as `{field, key, limit, retain?}`; the
+  host keeps it canonical after every write: rows sorted by the canonical bytes of the key projection, no key twice,
+  at most `limit` (default 4,096), the first rows in key order dropped past it (§9 "Canonical form"; invariant 10).
+  Edits are data: `insert | upsert | retract` beside `keep | add | append` (§9 "Edits"). A turn records the roots
+  it read (object version, a field, or per-cell: the rows forced, the key-order spans walked, the gaps a lookup fell
+  in) and commits "iff every root is current or every edit of a moved root commutes" (invariant 2): `keep`, `add`,
+  `append`, `insert` re-apply on the current state and are re-judged there (an insert meeting another row of its
+  key is `keyTaken`, binding); `upsert`/`retract` commit when no admitted write since the read touched the key
+  (`keysChangedSince`, a per-object index of height to keys); otherwise `staleRoot`, transient, re-run once. "Two
+  agents raining on one bell never collide" (§9 "Inserts commute; rows rebase"; `test_commute`,
+  dt:tests/README.md "Host"). The rule is `#guard`ed, not proved (§1 "Not proved"). Laws over relations are
+  `insertOnly(F)`, counts and column membership (§9), and `insertOnly` is judged over BOTH sides' rows
+  (dt:docs/KERNEL-HANDOFF.md §16 item 17: ~12 ms per 2,048-row write; item 3: a Bend law reads a whole state per
+  write). The journal is one entry per turn, admitted or refused, with a receipt; "Replay re-judges recorded edits
+  and never re-runs resident Bend" (dt:README.md:195–211; dt:docs/AUTHORING.md opening). One Lean process is the
+  only writer, so its method runs are TRUSTED: replay re-judges the laws over the recorded edits and does not
+  check that the edits are what the method computes. A bell is a RECORD layer with one relation of 768 rains
+  keyed `{author, at, n}` (dt:world/bodies/bell.obend:16–47), and its rain writes `lines: insert {...}` AND
+  `next: add 1n` (bell.obend:52): a row plus a commuting counter.
+- *nanodregg* (nd = hbox main). A cell is `{kind, discipline, slots}`, a bounded canonical map `Nat → bytes`
+  (Kernel/Cell.lean); an object's state is a record whose field `i` is the slot `stateBase + i` (LANG-11). The
+  World is ONE trie of cells and nullifiers (KERNEL-30) plus the journal as a second instance of the trie type
+  (KERNEL-41 (a′)); the head link commits both roots. A Turn names each cell once, `Touch {cell, seen, act}`,
+  `Act := keep | write ops | retire`; `touchCheck` refuses `stale` unless `pinOf (current cell) = seen` (KERNEL-11,
+  Kernel/World.lean `touchCheck`). The pin is the SIGNER's: `Unsigned.pins` is signed, and `sealTurn` makes the
+  touches from it (Kernel/Receive/Call.lean `touchesOf`). The receiver derives on the Host's CURRENT World
+  (`Receive.submit`: `receive X w c`, then `World.admit`), so a method always runs on current state; the only thing
+  that makes the second of two concurrent writers fail is that its signer pinned a digest that moved. Blind writes
+  are gone (KERNEL-11 critique: "two writers of one hot cell conflict"). The core has no list or recursive type
+  (LANG-1 critique: "a wiki page's list of links has no type. That is the first language extension a real app will
+  demand"). Replay has TWO forms: `World.fold` re-applies recorded ops (re-runs nothing), and the follower's
+  `audit` (Kernel/Receive/Audit.lean) re-derives every Turn from its signed event, i.e. RE-RUNS the receivers,
+  methods and laws included, and requires the same Turn. Correction to the reading that both systems "never re-run
+  resident code": nanodregg's auditing follower does, and that is the check on an untrusted writer (there is no
+  proof system: admission is checked by re-execution).
+
+**(b) An alternative to replay, or a layer?** Not an alternative to replay. Both systems keep a totally ordered
+journal of one entry per turn, both rebuild state by folding it from a checkpoint, and delvetalk even carries a town
+across editions by rebuilding every object (dt:README.md:213–218). What is genuinely different is (1) the unit of
+state (a keyed row vs a whole cell) and (2) the commit rule (a moved root admitted when the edits commute vs every
+pin exact). Those are a concurrency design, orthogonal to replay. The one reading under which relations ARE a
+different construction is the CRDT one: an insert-only relation is a grow-only set, and a set of facts that commute
+needs no total order, so replicas could converge by union and an auditor could check each fact independently of
+order. That holds only for the commuting fragment; nanodregg's value discipline, authority, limits, escrow phases
+and once-keys do not commute, so the World keeps its total order. Relations are therefore a LAYER over the pinned
+World. But not in the shape "an `insert` act that commutes against a MOVED pin" (DELVETALK §4.2's phrasing): that
+shape relaxes a pin, and the right shape relaxes nothing. In nanodregg the Host already re-derives on current state
+(the rebase delvetalk has to perform is free here). The only obstacle to "two rains on one bell both land" is pin
+GRANULARITY: both rains pin the whole bell cell, and the first one moves it. Give rows their own leaves, keyed under
+the object, and a rain that inserts at its own key, pins the bell's cell with `keep` and pins no other row, has a
+footprint disjoint from every other rain's. Both land, in either order, to the same World, and `stale_refused` keeps
+its exact statement for every pin, a row pin included. Commutation becomes a THEOREM about disjoint footprints
+(`admit_comm`, below), not an admission rule, so the delvetalk rule that was only `#guard`ed arrives proved.
+
+**Decision (proposed).**
+*LANG half.*
+1. A package declares its relations beside its state: `Package.rels : List (Label × RelDecl)`, at most
+   `relsMax = 8`, `RelDecl := {key : Ty, val : Ty, limit : Nat, retract : Bool}`. A relation is a PLACE, never a
+   value: no term has a relation type, so no method holds a whole relation (law 5 by construction).
+2. Keys are FIXED-WIDTH data: `nat`, `bool`, `digest`, enum sums (all arms `rec {}`), and records of those; `bytes`,
+   functions and payload-carrying sums are refused at install by name (`relKey`). Key bytes are the ordinary data
+   encoding with naturals BIG-ENDIAN (a Lang data flag day: every nat in state goes u64 BE, so one encoding is
+   order-preserving; CODEC supplies `u64be` in the one family). So the trie's byte order IS the key order, with
+   records ordered by their labels in canonical (ascending) order: delvetalk's "shorter-column surprise" becomes a
+   "label-order rule" (`{a_at, b_author}` sorts by `at` first), stated, not surprising.
+3. Reads are DATA, like calls (LANG-21/23/33): a method declares `rs : List (Label × Nat)`, how many rows of each
+   relation it reads (≤ `readsMax`), and receives `reads : rec {ℓ : rec {r0..r(k-1) : rec {key : K, val : optTy V}}}`,
+   filled by the receiver from the call's ROW PINS in pin order (absent → `none`). A method reads exactly the rows
+   its signer pinned: there is no lookup oracle in the machine, so Eval/BigStep/Need are untouched.
+4. Writes are DATA: a method declares `es ≤ editsMax` edit slots and returns
+   `rec {calls, edits : rec {e0..e(m-1) : optTy editTy}, state}`, `editTy = sum {insert : rec {key, rel, val}, upsert
+   : …, retract : rec {key, rel}}` (one sum over the package's relations, by label).
+   `methodTy S A ks rs es = fn S (fn A (fn reqTy (fn readsTy (rec {calls, edits, state})))))`.
+5. Row GUARDS judge each edit, O(edits), never a relation: `RelDecl.guard : Label` names a body field of type
+   `fn S (fn reqTy (fn editTy verdictTy))` (the object's state before, the request, one edit). The bell's guard is
+   "the row's author is `req.agent`". `retract = false` makes the relation insert-only by declaration (the kernel
+   refuses a retract by name; delvetalk's `insertOnly(F)` without a judge reading both sides' rows, which is §16 item
+   17's fix by construction). The old/new law type is UNCHANGED, so the 85 law theorems keep their statements
+   (Std, StdTeeth, Receiver, LawRun, StdFits).
+
+*KERNEL half (for KERNEL-13 to co-sign; the KERNEL-41 (a′) pattern).*
+6. `World.rows : Trie.T D RowKey RowLeaf D`, a THIRD instance of the one trie type (cells, journal, rows); the head
+   link commits three roots: `headLink E prev td root′ jroot′ rroot′`. `RowKey = parent : D, rel : u8, k : bytes`
+   with bits `bytes parent ‖ rel ‖ tag ‖ k` (tag 0 = the relation's HEAD, tag 1 = a row), depth
+   `256 + 16 + 8·keyBytesMax`. Width is fixed per relation (the head records it), so the key set is prefix-free
+   with no World invariant: rows of one relation share a prefix, so a relation is a SUBTREE: ordered, enumerable,
+   and authenticated by the rows root (a phone verifies a page of rains against one head).
+7. `RowLeaf := head (count limit width : Nat) | row (val : ByteArray)`. The head is written ONLY by the kernel:
+   born with the parent (the create receiver emits one per `RelDecl`), `count` maintained by admission, `limit`
+   checked at admission on the CURRENT count (`relationFull`, binding like `keyTaken`, never stale).
+8. `Turn.rows : List (RowTouch D)`, `RowTouch := {key : RowKey D, seen : Option D, act : RowAct}`,
+   `RowAct := keep | insert v | upsert v | retract`. `seen = some d` is an exact pin (the row's leaf digest or the
+   absent pin), refused `stale` when it moved, exactly as a cell pin. `seen = none` is allowed ONLY for `insert`, and
+   then the key must be absent at admission (`keyTaken`): an insert is a BIRTH of a row, unpinned like a cell birth
+   (KERNEL-11: a born id is never touched). `upsert`/`retract` must pin (no blind write). Every row's parent must be
+   a cell the turn touches (`rowParentUnpinned`), live (`orphanRow`), so a turn still changes only what hangs under
+   cells it observed.
+9. Retract REMOVES the leaf with the canonical collapse (`Trie.retainAt` on the row's path, KERNEL-41 step 1), so a
+   relation truly forgets and its storage is bounded by `limit`. The collapse premise (`RowsCanon`) lands on the
+   rows trie's readers only, as `JournalCanon` did (KERNEL-41 (a′) (5)); no cell reader gains anything. A parent
+   with a non-empty relation cannot retire (`rowsRemain`).
+10. Storage: a row's bytes are growth (`Turn.growth`), charged and conserved like a cell's (KERNEL-12/15/19); a
+    retract credits them back.
+11. The new theorem that is the point: `admit_comm`: two turns whose footprints are disjoint (no cell either writes is
+    touched by the other; no row key either writes is pinned or written by the other; their inserts at distinct keys)
+    admitted in either order from `w` reach Worlds with equal cells and rows tries (heights, journals and chains
+    differ by construction). Tooth: the bell row below, and a plant that makes the rain pin the relation's head (the
+    whole relation) turns the second rain `stale`.
+
+**(c) The concurrency gain and its exact cost (premises, not only hashes).** Gain: N writers inserting distinct
+keys under one object all land, without re-signing, and the result does not depend on their order (`admit_comm`).
+Hashes: one row path plus the head's (they share the `parent ‖ rel` prefix) per insert, ≈ 2 × 13.7 at the journal's
+measured steady state (`admit hashes-per-journal-entry`), pinned as `admit hashes-per-row-insert` on landing; one
+more 32-byte block per turn in the link. Premises and statements, enumerated by grep over theorem STATEMENTS on
+main 189c201 (a statement mentioning the link, the weight, the bounds or Carried):
+- Statement changes, no new premise (the link gains a root, Carried gains rows): Kernel/Proofs Cells
+  `headLink_roots`, `head_roots`, `head_root`, `head_read_sound`, `head_absent_sound`; Fold `chainOf_concat`,
+  `chainNext_inj`, `chain_binds`, `fold_chain`; Admit `admit_chain`; JournalHead (7: `journal_inclusion_sound` …
+  `journal_prove_absent`); RootedDeployed (8 `deployed_head_*`); RootedFold `RootedFold.chain`; Host Base
+  `Record.step_origin`, `Record.foldlM_journalOk`, Serve `step_submit`; Carry (16), CarryRooted (2), Codec Carried
+  (12), Host Carry (5), Host Deployed (4): Carried's listing gains the rows listing. About 66 statements.
+- Weight: `admit_world_weight`, `fold_world_weight`, `admit_conserves`, `fold_conserves`, `touches_weight` and the
+  rest of Kernel/Proofs/Weight (14 statements) and Codec/Proofs/Kernel's 6 weight statements gain the rows term;
+  `checkBounds` statements (Admit 2, Fold 4, Codec Kernel 2) gain `rowsMax`.
+- NEW premise `RowsCanon` (Trie.Canon at the rows root) on rows readers only; genesis gives it, insert and
+  `retainAt` keep it; reached corollaries premise-free (as `reach_journalOk`).
+- NO premise on any cell reader: `admit_frame`, `rom_keep`, `admit_rom`, `admit_nullifiers`, `admit_live`, the Value
+  and Ledger sums, Rooted stay as they are, because rows are not slots of the cell trie (the reason (a) of KERNEL-41
+  was rejected applies with full force to rows-as-cell-trie-slots: a removing retract would collapse across kinds).
+- `stale_refused`/`admit_pins` extended to row pins with the SAME conclusion (a moved pin refuses); not weakened.
+- Codec: Turn codec (rows list), World and Carried codecs (rows listing rebuilt by `build`, canonicity `=`), Package
+  (`rels`), data nat → u64 BE; vectors re-pinned (CODEC).
+- Lang, enumerated the same way (Lang/Proofs, 896 theorems): method-shape statements (24: Call 5, CallLive 3, Invoke
+  3, Load 4, Need 4, NeedComplete 1, Provenance 4) restate over the new `methodTy`; package-shape statements (69,
+  mostly PrintWire 14, Invoke 11, Load 10) restate over `Package.rels`; law statements (85) UNCHANGED because guards
+  are a separate field type, not a new law argument. New: `rows_of_pins` (the reads row is exactly the pinned rows),
+  `editsOf` round trip and liveness twins of `callsOf`'s, `guard_never_stuck` (a twin of `law_never_stuck`'s
+  statement over `runLaw`).
+
+**(d) Journal, checkpoint, replay.** The journal's unit stays the Turn: delvetalk's is one entry per turn too, and
+commutation here needs no per-edit entries because it comes from disjoint footprints. A Turn's rows are its edits,
+so a turn appending to a collection logs O(row), where today the only way to keep a collection is one bytes field
+rewritten whole per append (O(n) per append, O(n²) of log over a relation's life; and every such write conflicts).
+A sealed base holds the rows trie as an ascending listing (like the journal), bounded by Σ limits. Ember's "the amount
+of replay is too damn high": what already bounds it is the sealed base (open reads base + one index entry + tail,
+`open bytes-read-per-record` 1.007, HOST-33), the base/4 seal cadence (HOST-14), the journal window (KERNEL-33), thin
+consent `adopt HEIGHT DIGEST` (PROTOCOL-14/18/37) and carry, which keeps state and never history (law 1). What is
+still unbounded: an AUDITING follower from genesis re-derives every Turn, methods included: O(history) re-execution,
+and the price of not trusting the writer. delvetalk's replay is cheaper because its host is trusted to run methods.
+A "laws-only audit" (re-judge authority and laws over recorded ops, never re-run methods) would cut it, and it
+WEAKENS a check (the writer could apply any ops the laws admit): a pause item, recorded as a fork for ROOT, not
+proposed. Relations shrink replay bytes for collection-shaped objects and remove conflict retries; they do not change
+the O(history) audit.
+
+**(e) Bounded.** Per relation: fixed key width ≤ `keyBytesMax` (64), value ≤ `valueBytesMax`, `limit ≤
+Bounds.rowsPerRelationMax` (4,096, delvetalk's), checked at admission on the current head count. Per method:
+`readsMax`, `editsMax` (8 each, like `callsMax`). Per turn: `rowsMax` row touches. Reads and writes are O(touched
+rows) by construction: a method sees only pinned rows, a guard sees one edit, the kernel walks one path per row and
+one per head. Enumeration (a card listing the latest rains) is a READ off the request path: a subtree walk with a range
+proof, O(rows returned + depth), served by HOST/PROTOCOL.
+
+**(f) Rejected shapes.**
+- *An unbounded list (μ-types or a built-in `list`) in the core.* State would be a whole list per field: every
+  append re-encodes and rewrites it (O(n) per write, O(n²) log), two writers conflict on the field, a law reads both
+  sides whole (delvetalk's §16 item 17), and the demand machine's budget theorems must reach a recursive fold.
+- *Relations as a store beside the World* (a table per object, SQLite, a host index): two maps over one key space,
+  not committed by the head; a second admission path; law 1.
+- *Rows as slots of the parent cell, with an `insert` act checked against a pin that masks the relation* (the literal
+  §4.2 shape): it relaxes a pin (a weakened check); `pinOf` and the leaf digest hash the whole cell, so every insert
+  is O(relation) and a relation's life O(n²); slot keys are `Nat < 2^32`, so byte keys and their order do not fit; the
+  cell's 1024-slot bound caps it.
+- *Rows as ordinary cells at hashed ids* `H(domRow, parent ‖ rel ‖ key)` (keyed ids like LEDGER's accounts): the
+  cheapest (no trie change), and wrong: hashed ids scatter a relation, so it cannot be enumerated or range-proved
+  without an index beside the World (law 1), there is no count to bound it, and a retired row tombstones its key
+  forever.
+- *Rows as a third slot kind of the cell trie*: ordered and enumerable, but a removing retract collapses nodes across
+  kinds, which is exactly KERNEL-41 (a)'s rejected premise spread over ~150 cell theorems; with tombstones instead,
+  a relation never forgets.
+- *delvetalk's commuting `keep` (a last-writer-wins scalar set re-applied on current state)*: a blind write; KERNEL-11
+  removed them on purpose.
+
+**Open, not decided here: commuting COUNTERS.** delvetalk's `add` and Mini's `EditNat.add` (Mini world/activity/
+Tally.obend: "a concurrent write … is kept, never overwritten") commute too, and the bell itself bumps `next: add 1n`.
+Rows do not give them. A count of a relation is the head's `count` (derived, never written, readable by pinning the
+head, which then conflicts by design). A SUM with a cap (Mini's CappedTally: `law cap: new.total <= 1000`) is not:
+the honest options are an `Act.add` on a declared counter slot checked at admission on the current value (a pin
+that excludes that slot: a weakened pin, so a pause item) or a per-contribution relation whose head carries a
+declared aggregate. The deciding experiment (LANG-45, CappedTally ported by hand) measures this need; ROOT rules
+after it.
+
+**Critique.** (1) It is large: a kernel day of KERNEL-41's size plus a Lang day of LANG-33's, and both halves must
+land before anything uses rows (the kernel half alone is inert unless the data-object `write` receiver can emit
+rows, which it should, so the kernel half is live and testable on its own). (2) Reads are declared by the signer, so
+a method that must "find a free key" cannot search; it must be told which key to check (the client plans: PROTOCOL-11's
+`plan` already re-derives). (3) Fixed-width keys exclude text keys: a wiki page keyed by title must key by the
+title's digest and loses alphabetical order. (4) `count` is the only aggregate; a law over "the rows as a whole" is
+not expressible, by design. (5) Range reads inside a method (a span pin, delvetalk's `spans`) are not in v0. (6) Data
+nat → big-endian moves every state byte: free here (re-genesis), but it is a second Lang data flag day after
+LANG-38. (7) Creator-added laws cannot constrain rows (guards are the package's, in ROM).
+**Meta-critique.** I came to this with ROOT's and the reader's phrase, "an insert that commutes against a moved pin",
+and the pull was to build exactly that, because it is the delvetalk rule. The independent test was to ask what the pin
+protects and when the second rain actually fails: in nanodregg the Host already re-runs the method on current state,
+so the conflict is only the pin's granularity, and a finer footprint makes commutation a consequence instead of a
+rule that relaxes a check. The rows-trie shape is the KERNEL-41 (a′) shape, which I like because it was just ruled;
+that is familiarity, and the test it must pass is the premise enumeration above (no cell reader gains a premise),
+not the precedent. I have not measured anything: every hash figure here is an estimate from the journal's row.
+**Flag day.** Turn (rows), World and Carried (rows trie), the head link (three roots), Package (`rels`), `methodTy`
+(reads, edits), data nat → u64 BE: every chain, every package id and every state byte change; every Store
+re-geneses; an old base refuses `shapeMismatch`, an old package `malformedCell`. Re-emits: world/grain/Lifecycle and
+world/hosting/Allowance (HOSTING), world/escrow/Escrow (LEDGER, `ledger-sim --write-text`), THE BAR's counter
+(PROTOCOL), codec vectors (CODEC); new waste rows `admit hashes-per-row-insert`, `admit hashes-per-row-retract`.
+**Acceptance row (lang:, after both halves).** A bell package (`rains : rel {at : nat, author : digest} → bytes,
+limit 768, retract false`, guard author = agent): two members' rains pinned at the same bell digest both admitted,
+in both orders to equal cells and rows roots; the same key twice `keyTaken`; the 769th `relationFull`; a rain with
+another's author refused by the guard; a retract refused by declaration; plant: pinning the head on insert makes the
+second rain `stale`.
+**Status.** PROPOSED. Sent to ROOT and KERNEL-13 before any code.
