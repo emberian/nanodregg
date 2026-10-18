@@ -14,9 +14,9 @@ A RECEIPT for a transaction id carries the four roots and the trie paths that an
 `Proofs.Receipt.check_committed` / `check_absent` / `check_refused_uncommitted` say a receipt that
 checks against a World's roots tells the truth about that World's JOURNAL (the entry, its absence),
 or the hash collides: a relay cannot turn a committed call into `absent` or `refused`, nor change
-its entry. What a `refused` receipt says about the REFUSALS trie (the recorded height and code) is
-only that its path verifies against the head's refusals root (`check_refused`): KERNEL states no
-refusals-trie soundness yet (cv 01a14dfa-200a). The head is the member's own folded World (its
+its entry. A `refused` receipt is the World's recorded refusal, its height and code, and an `absent`
+one shows no refusal recorded either (`check_refused_sound`, `check_absent_unrefused`, through
+KERNEL's refusals soundness, `Kernel.Proofs.RefusalsHead`). The head is the member's own folded World (its
 height and roots together); a relayed head would need its height bound to the roots.
 
 `build` is how a member's follow makes one from the World it folded (`receipt CALL`), and
@@ -81,7 +81,8 @@ def answerOf (E : Env D) (height : Nat) (txId : D) (notBefore : Nat) (r : Receip
       then .ok (.committed h td) else .error .pathMismatch
   | .refused h code =>
       -- recorded refused AND not committed: the journal path must show the id absent
-      if Trie.verifyInclusion (refusalSpec E) r.rroot (.tx txId) (refusalDigest E (.refused h code)) r.rpath = true ∧
+      if h < 2 ^ 64 ∧ code < 2 ^ 64 ∧
+          Trie.verifyInclusion (refusalSpec E) r.rroot (.tx txId) (refusalDigest E (.refused h code)) r.rpath = true ∧
           Trie.verifyExclusion (journalSpec E) r.jroot txId r.jpath = true
       then .ok (.refused h code) else .error .pathMismatch
   | .absent =>

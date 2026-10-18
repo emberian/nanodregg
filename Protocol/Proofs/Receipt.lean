@@ -13,6 +13,7 @@ establish: the path verifies against the head's refusals root.
 import Protocol.Receipt
 import Kernel.Proofs.JournalHead
 import Kernel.Proofs.Refusals
+import Kernel.Proofs.RefusalsHead
 
 namespace Nanodregg.Protocol.Receipt
 
@@ -95,7 +96,7 @@ theorem check_refused_uncommitted {w : World D} (hc : w.JournalCanon E)
   · split at ha
     · rename_i hv
       rcases rootsDigest_inj hE hr with ⟨-, hj, -, -⟩ | col
-      · have hx := hv.2
+      · have hx := hv.2.2.2
         rw [hj] at hx
         exact journal_exclusion_sound hE hn hc hx
       · exact .inr col
@@ -103,6 +104,60 @@ theorem check_refused_uncommitted {w : World D} (hc : w.JournalCanon E)
   · split at ha
     · cases ha
     · split at ha <;> cases ha
+
+/-- Every refusals leaf of a RefusalsOk World fits its wire form (what KERNEL's soundness asks). -/
+theorem refusalsOk_fits {w : World D} (hr : w.RefusalsOk E) :
+    ∀ k v, w.refusalAt E k = some v → Codec.Kernel.RefusalLeaf.Fits v := by
+  intro k v hk
+  have hf := hr.2 k v hk
+  cases k <;> cases v <;> simp only [refusalFits, Bounds.counterLimit, Bounds.refusalsPerWindow, decide_eq_true_eq] at hf <;>
+    simp only [Codec.Kernel.RefusalLeaf.Fits] <;> (try cases hf) <;> omega
+
+include hE in
+/-- **A refused receipt is the World's recorded refusal**, its height and code, or a collision
+(KERNEL's `refusal_inclusion_sound`): a relay cannot change what was recorded. -/
+theorem check_refused_sound {w : World D} (hr : w.RefusalsOk E)
+    {H : Nat} {txId : D} {nb : Nat} {r : Receipt D} {h code : Nat}
+    (hk : check E H (w.roots E) txId nb r = .ok (.refused h code)) :
+    w.refusalAt E (.tx txId) = some (.refused h code) ∨ Collision E.hash := by
+  obtain ⟨-, hrd, ha⟩ := check_ok hk
+  unfold answerOf at ha
+  split at ha
+  · split at ha <;> cases ha
+  · split at ha
+    · rename_i hv
+      cases ha
+      rcases rootsDigest_inj hE hrd with ⟨-, -, hrr, -⟩ | col
+      · have hx := hv.2.2.1
+        rw [hrr] at hx
+        exact refusal_inclusion_sound hE hr.1 (refusalsOk_fits hr) ⟨hv.1, hv.2.1⟩ hx
+      · exact .inr col
+    · cases ha
+  · split at ha
+    · cases ha
+    · split at ha <;> cases ha
+
+include hE in
+/-- **An absent receipt shows no refusal recorded either**, or a collision. -/
+theorem check_absent_unrefused {w : World D} (hr : w.RefusalsOk E)
+    {H : Nat} {txId : D} {nb : Nat} {r : Receipt D}
+    (hk : check E H (w.roots E) txId nb r = .ok .absent) :
+    w.refusalAt E (.tx txId) = none ∨ Collision E.hash := by
+  obtain ⟨-, hrd, ha⟩ := check_ok hk
+  unfold answerOf at ha
+  split at ha
+  · split at ha <;> cases ha
+  · split at ha <;> cases ha
+  · split at ha
+    · cases ha
+    · split at ha
+      · rename_i hv
+        rcases rootsDigest_inj hE hrd with ⟨-, -, hrr, -⟩ | col
+        · have hx := hv.2
+          rw [hrr] at hx
+          exact refusal_exclusion_sound hE hr.1 hx
+        · exact .inr col
+      · cases ha
 
 end Sound
 
@@ -119,28 +174,13 @@ theorem check_refused {E : Env D} {H : Nat} {roots txId : D} {nb : Nat} {r : Rec
   split at ha
   · split at ha <;> cases ha
   · split at ha
-    · rename_i hv; cases ha; exact hv.1
+    · rename_i hv; cases ha; exact hv.2.2.1
     · cases ha
   · split at ha
     · cases ha
     · split at ha <;> cases ha
 
 /-! ## Completeness: the member's own receipt checks (PROTOCOL-46) -/
-
-/-- **A World proves every refusals leaf it holds** (the refusals twin of
-`Kernel.journal_prove_verifies`). -/
-theorem refusals_prove_verifies {E : Env D} {w : World D} (hc : w.RefusalsCanon E) {k : RefusalSlot D}
-    {l : RefusalLeaf} (hg : w.refusalAt E k = some l) :
-    Trie.verifyInclusion (refusalSpec E) (w.refusalsRoot E) k (refusalDigest E l)
-      (w.refusals.prove (refusalSpec E) k) = true :=
-  Trie.prove_includes (refusalSpec E) hc.2.1 (Trie.shallow_of_shape _ 0 _ hc.2.2) hg
-
-/-- **A World proves every refusals key it does not hold** (the twin of
-`Kernel.journal_prove_absent`). -/
-theorem refusals_prove_absent {E : Env D} {w : World D} (hc : w.RefusalsCanon E) {k : RefusalSlot D}
-    (hg : w.refusalAt E k = none) :
-    Trie.verifyExclusion (refusalSpec E) (w.refusalsRoot E) k (w.refusals.prove (refusalSpec E) k) = true :=
-  Trie.prove_excludes (refusalSpec E) hc.2.1 (Trie.shallow_of_shape _ 0 _ hc.2.2) hg
 
 /-- **The receipt a World builds checks against that World's own head**, answering what it states,
 unless the answer is `absent` past `journalForgets` (where `check` refuses `forgotten`:
@@ -172,7 +212,9 @@ theorem check_build {E : Env D} {w : World D} {tx : D} {nb : Nat} (hc : w.Journa
               have ha : (build E w tx).answer = .refused h code := by simp [build, hjx, hrx]
               rw [ha]
               simp only
-              rw [if_pos ⟨refusals_prove_verifies hr.1 hrx, journal_prove_absent hc hjx⟩]
+              have hf := hr.2 _ _ hrx
+              simp only [refusalFits, Bounds.counterLimit, decide_eq_true_eq] at hf
+              rw [if_pos ⟨by omega, by omega, refusal_prove_verifies hr.1 hrx, journal_prove_absent hc hjx⟩]
           | count n =>
               have := hr.2 _ _ hrx
               simp [refusalFits] at this
@@ -184,7 +226,7 @@ theorem check_build {E : Env D} {w : World D} {tx : D} {nb : Nat} (hc : w.Journa
             rcases hnf with h | h
             · exact absurd ha h
             · exact h
-          rw [if_neg (by simp [hf]), if_pos ⟨journal_prove_absent hc hjx, refusals_prove_absent hr.1 hrx⟩]
+          rw [if_neg (by simp [hf]), if_pos ⟨journal_prove_absent hc hjx, refusal_prove_absent hr.1 hrx⟩]
 
 /-- `check_build`'s premise is exact: the built `absent` past `journalForgets` is refused
 `forgotten`, never an answer. -/
