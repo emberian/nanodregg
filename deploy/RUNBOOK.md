@@ -154,6 +154,13 @@ systemd 256: the tmpfiles line fails `Failed to resolve user 'nd'` until the use
     sudo systemd-sysusers
     sudo install -m 0644 deploy/units/linux/tmpfiles/nd-broker.conf /etc/tmpfiles.d/nd-broker.conf
     sudo systemd-tmpfiles --create /etc/tmpfiles.d/nd-broker.conf
+    sudo install -m 0644 deploy/units/linux/tmpfiles/nd-member.conf /etc/tmpfiles.d/nd-member.conf
+    sudo systemd-tmpfiles --create /etc/tmpfiles.d/nd-member.conf
+
+The second pair makes the MEMBER root `/run/nd-member` (`d /run/nd-member 2710 nd nd-hosted -`, the same
+shape, HOSTING-20/25): a resident's member socket `/run/nd-member/<dirOf id>/nd.sock` is served as
+nd and reached by the hosted group. It must be disjoint from `/srv/nd-hosted` and `/run/nd-broker`
+(grain-launch refuses nesting: `rootsOverlap`, 117).
 
 The render refuses a hosted user equal to the key holder (`hostedIsKeyHolder`,
 `Ops.Units.Broker.check_hosted_ne_user`): keybroker cannot tell that misconfiguration from the
@@ -239,7 +246,25 @@ PENDING, PROTOCOL-7) and `ND_GID=$(getent group nd | cut -d: -f3)`. `grain-launc
 The LAUNCHER, per World `L`, from `deploy/units/linux/nd-grain-launch@.service` (as nd-hosted;
 after the follower, `Wants=`/`After=`; PID files in its RuntimeDirectory `/run/nd-grain-launch/L`):
 
-    grain-launch /srv/nd-hosted /run/nd-broker L /run/nd-grain-launch/L /opt/nd/bin/hosting-controller /srv/nd-hosted/worlds/L/store L
+    grain-launch /srv/nd-hosted /run/nd-broker /run/nd-member L /run/nd-grain-launch/L /opt/nd/bin/hosting-controller /srv/nd-hosted/worlds/L/store L
+
+The MEMBER socket, per resident grain (HOSTING-20/25), from `deploy/units/linux/nd-member@.service`
+(as nd; the instance is the grain's directory, its id in lowercase hex). nd-supervise serves
+`/run/nd-member/%i/nd.sock` (0660, group nd-hosted, only the hosted uid admitted: `--group` /
+`--peer`) and runs `nd --stdio` over the resident's own member workspace, the only path it writes;
+the operator's workspace (`/etc/nd`) and `/home` are hidden. The unit makes `/run/nd-member/%i` 02710
+first (nd-supervise makes no directory). Its environment file `/etc/nd/hosted/member-%i.env` (owner
+nd, 0600) holds the box's own values: `ND_GID`, `ND_PEER` (the nd-hosted gid and uid, as for
+keybroker), `ND_MEMBER_WS` (`/srv/nd-hosted/worlds/L/members/%i`), `ND_FOLLOW_SOCK` (that member's own
+follower socket, from `host follow` as that member) and `ND_HOST_SOCK` (`/run/nd/host.sock`). The child
+connects to exactly the last two, and a confined connector sees its socket's WHOLE parent directory
+(CLIENT-20): each of the two sockets must sit alone in its directory, never in a workspace that holds
+keys. `/run/nd` holds only `host.sock`; give the member's follower socket a directory of its own. The
+unit must be up before the grain starts: a launch whose member socket is missing is refused
+`pathMissing` and then crash-loops. How the unit learns of a grain's birth is HOSTING's open item;
+until it settles, the operator starts `nd-member@ID` before the resident's grain is born.
+`foreignPath` (69, fatal) is a defect in the controller's actions, not the box: keep the World's
+state, report to HOSTING. Not yet run under systemd (the live harness renders no member unit).
 
 The controller reads only the follow Store (`Launcher.check_follower`: the render refuses a launcher
 whose Store is not its follower's, or whose user is not the follower's). Its exits and the

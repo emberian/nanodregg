@@ -139,7 +139,7 @@ fresh
 # founder 0's invitation with RUNBOOK §2b's argv (`host join STORE INVITATION KEY_HEX`, OPS-15),
 # its origin the writer's; its socket 0660 of the shared directory's group
 F=nd-ops-live-hfollow@w G=nd-ops-live-grain@w
-mkdir -p "$R/hosted/worlds/w/members" "$R/hosted/worlds/w/store" "$R/nd-follow" "$R/ws" "$R/env" "$R/pids/w" && chmod 0700 "$R/hosted" "$R/hosted/worlds" "$R/hosted/worlds/w" "$R/hosted/worlds/w/store" && chmod 2710 "$R/nd-follow" || exit 2
+mkdir -p "$R/hosted/worlds/w/members" "$R/hosted/worlds/w/store" "$R/nd-follow" "$R/member" "$R/ws" "$R/env" "$R/pids/w" && chmod 0700 "$R/hosted" "$R/hosted/worlds" "$R/hosted/worlds/w" "$R/hosted/worlds/w/store" && chmod 2710 "$R/nd-follow" "$R/member" || exit 2
 inv=$(cat "$R/calls/invitation") key=$(cat "$R/calls/sponsor.key")
 "$B/host" join "$R/hosted/worlds/w/store" "$inv" "$key" > "$R/report/join-hosted.txt" || exit 2
 [ "$(awk '/^origin /{print $2}' "$R/report/join-hosted.txt")" = "$(awk '/^origin /{print $2}' "$R/report/genesis.txt")" ] || { echo "the joined World is not the writer's"; exit 2; }
