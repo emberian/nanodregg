@@ -168,16 +168,21 @@ theorem fromUTF8_toUTF8 {b : ByteArray} {t : String} (h : String.fromUTF8? b = s
   · cases h; rfl
   · cases h
 
-/-- What printed bytes are: a quote-free string of the same bytes, or `#hex` of them. -/
+/-- What printed bytes are: a quote-free string of plain characters holding the same bytes, or
+`#hex` of them. -/
 theorem bytesSx_cases (b : ByteArray) :
-    (∃ t, bytesSx b = .str 0 t ∧ t.toUTF8 = b ∧ '"' ∉ t.toList) ∨ bytesSx b = atom ("#" ++ hex b) := by
+    (∃ t, bytesSx b = .str 0 t ∧ t.toUTF8 = b ∧ '"' ∉ t.toList ∧ ∀ c ∈ t.toList, plainChar c = true) ∨
+      bytesSx b = atom ("#" ++ hex b) := by
   unfold bytesSx
   split
   · rename_i t ht
     split
-    · exact .inr rfl
     · rename_i hq
-      exact .inl ⟨t, rfl, fromUTF8_toUTF8 ht, by simpa using hq⟩
+      have hall := List.all_eq_true.1 hq
+      refine .inl ⟨t, rfl, fromUTF8_toUTF8 ht, fun hm => ?_, hall⟩
+      have := hall _ hm
+      simp [plainChar] at this
+    · exact .inr rfl
   · exact .inr rfl
 
 theorem toNat_repr (n : Nat) : (Nat.repr n).toNat? = some n := Nat.toNat?_repr n
@@ -885,7 +890,7 @@ theorem hexAtom_ok (b : ByteArray) : Ok (atom ("#" ++ hex b)) := by
   · exact mem_hexChars hc
 
 theorem bytesSx_ok (b : ByteArray) : Ok (bytesSx b) := by
-  rcases bytesSx_cases b with ⟨t, e, _, hq⟩ | e <;> rw [e]
+  rcases bytesSx_cases b with ⟨t, e, _, hq, -⟩ | e <;> rw [e]
   · exact .str hq
   · exact hexAtom_ok b
 

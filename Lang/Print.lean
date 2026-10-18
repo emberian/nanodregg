@@ -86,10 +86,14 @@ def hexChars (b : ByteArray) : List Char :=
 
 def hex (b : ByteArray) : String := String.ofList (hexChars b)
 
-/-- Bytes as `"text"` when they are UTF-8 holding no `"`, else as `#hex`. -/
+/-- A character a string literal may show as itself: printable (no control character, so no line
+break: a printed value is one line, `Lang.Proofs.Print.data_one_line`) and not the closing quote. -/
+def plainChar (c : Char) : Bool := decide (32 ≤ c.toNat) && c.toNat != 127 && c != '"'
+
+/-- Bytes as `"text"` when they are UTF-8 of plain characters only, else as `#hex`. -/
 def bytesSx (b : ByteArray) : SExp :=
   match String.fromUTF8? b with
-  | some t => if t.toList.contains '"' then atom ("#" ++ hex b) else .str 0 t
+  | some t => if t.toList.all plainChar then .str 0 t else atom ("#" ++ hex b)
   | none => atom ("#" ++ hex b)
 
 def bytesText (b : ByteArray) : String := text (bytesSx b)

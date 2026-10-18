@@ -2133,3 +2133,30 @@ the lemma beside it.
 
 Teeth: the install check refuses a `pkgOf` with a repeated label and accepts one with distinct labels.
 So `pkgOf_labels_nodup`'s premise is neither vacuous nor universal.
+
+## LANG-56 A printed value is one line: the printer shows a byte string as text only when every character is plain (2026-10-18; LANG-16; PROTOCOL-13's open item after PROTOCOL-48)
+
+**The defect (measured by reading `Print.bytesSx`).** A byte string that is UTF-8 with no `"` printed as a
+string literal VERBATIM, line feeds included. PROTOCOL-48's `read OBJ` prints a programmed object's state
+as `Print.data` plus one newline, and a resident reads `nd --stdio` replies by lines. The Bell's `answer`
+is a model's reply, so it will hold line feeds: the reply would have spanned lines, and "one line" was
+true only for the rows' sample values.
+
+**Decision.** `Print.plainChar c := 32 ≤ c.toNat ∧ c.toNat ≠ 127 ∧ c ≠ '"'`. `bytesSx` prints `"text"`
+only when every character is plain, and `#hex` otherwise. The reader is unchanged: it reads both. So
+`readData_data` (print, then read, gives the same value) holds as before, and its proof changed in one
+pattern (`bytesSx_cases` gains a conjunct: every character is plain). New module
+`Lang/Proofs/PrintLine.lean`: `data_one_line`, which says `Print.data`'s text holds no line feed and no
+carriage return. It comes through `chars_noBreak` (an `Ok` form whose strings are plain prints no line
+break; an atom is delimiter-free, so no whitespace) and `dataSx_plain`.
+Teeth: `"a\nb"` prints as `#610a62`; `"a b"` prints as itself.
+
+**Shipped texts.** Lifecycle, Allowance, Escrow and the Bell print byte for byte as before (G0/G0s,
+A0/A0s, E0/E0s, LB0 all pass). None holds a control character in a byte literal. Rows `state` and
+`describe` pass. No package BYTES move: the printer is outside the wire.
+
+**Critique.** A reply with line feeds is now hex in `read OBJ`, which is unreadable to a person. The
+resident reads it with `Lang.Read.readData`, which is what PROTOCOL-48 ruled anyway (no hand decode).
+An escape syntax inside string literals (`\n`) would keep it readable, but it is a READER change: a
+second spelling of the same bytes, plus a proof obligation on every string. **Meta-critique.** The
+reader stays as small as it is; if people need to read answers by eye, `ob` can render, outside the TCB.
