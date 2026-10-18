@@ -19,6 +19,14 @@
                                                    trust root: never take it from the Host), then the
                                                    one genesis of the signed inputs; nothing is
                                                    written unless both passed (`join_genesis_iff`)
+    host seal STORE                                the OPERATOR's seal of a STOPPED writer's Store
+                                                   (HOST-43): the Store's lock (a live writer holds
+                                                   it: `locked`), one seal of the World at its
+                                                   position through the writer's own checkpoint
+                                                   (`Loop.sealNow`), then `sealed steps=S chain=C
+                                                   digest=D`, the base a thin member adopts; at a
+                                                   sealed position it writes nothing. No socket op
+                                                   seals: a forced seal writes the whole World
     host import STORE NAME IN --digest HEX [--nonce HEX32]
                                                    a new Store from a carried file: the digest is
                                                    REQUIRED and checked, with the stamp and the
@@ -74,7 +82,7 @@ def refuse (status : Status) (name : String := status.name) : IO UInt32 := do
 def refuseStore {F : Type} (f : StoreFault F) : IO UInt32 := refuse f.status f.text
 
 def usage : String :=
-  "usage: host genesis STORE NAME [--nonce HEX32] [KEY_HEX NEXT_HEX]... | host serve STORE | host join STORE INVITE_HEX KEY_HEX | host follow STORE MEMBER_HEX GRANT_HEX | host check STORE [--anchor STEPS:CHAIN_HEX] | host export STORE OUT | host import STORE NAME IN --digest HEX [--nonce HEX32]"
+  "usage: host genesis STORE NAME [--nonce HEX32] [KEY_HEX NEXT_HEX]... | host serve STORE | host seal STORE | host join STORE INVITE_HEX KEY_HEX | host follow STORE MEMBER_HEX GRANT_HEX | host check STORE [--anchor STEPS:CHAIN_HEX] | host export STORE OUT | host import STORE NAME IN --digest HEX [--nonce HEX32]"
 
 def hexDigest (s : String) : Option Digest := Protocol.Text.ofHex s >>= Digest.ofBytes?
 
@@ -335,10 +343,57 @@ def followVerb (store memberHex grantHex : String) : IO UInt32 := do
       wr.segment.sync  -- the follower's handle, and so its lock, lives to here
       return code
 
+/-- What `host seal` reaches outside itself: the key, the writer's open (the Store's lock), the
+seal (`Loop.sealNow` over the Store's checkpoint: the ONE effect that writes), the refusal and the
+report. -/
+structure SealFx (m : Type → Type) (R : Type) where
+  key : m (Except (StoreFault (Record.Fault (Reject D))) Digest)
+  open_ : Digest → m (Except (StoreFault (Record.Fault (Reject D))) R)
+  write : R → m (Except SealFault Sealed)
+  refuse : Status → String → m UInt32
+  report : Sealed → m Unit
+
+/-- `host seal`'s decision over its effects (HOST-43): the key, then the writer's open, and only
+then the one seal; any refusal before it is answered by name with nothing written
+(`Host.Proofs.Cli.seal_writes_iff`). -/
+def sealWith {m : Type → Type} [Monad m] {R : Type} (fx : SealFx m R) : m UInt32 := do
+  match ← fx.key with
+  | .error f => fx.refuse f.status f.text
+  | .ok key =>
+    match ← fx.open_ key with
+    | .error f => fx.refuse f.status f.text
+    | .ok r =>
+      match ← fx.write r with
+      | .error f => fx.refuse f.status f.name
+      | .ok s => fx.report s; return 0
+
+/-- `host seal STORE` (HOST-43): `sealWith` over the files. The open is the writer's
+(`openWriter`: the Store's lock, so a running writer refuses it `locked`); the seal is `sealNow`
+with the writer's own file checkpoint, inline (the process waits for its one base); the report is
+the base an invitation pins: `sealed steps=S chain=C digest=D`. -/
+def sealVerb (store : String) : IO UInt32 := do
+  let held ← IO.mkRef (none : Option (Writer (World D)))
+  let code ← sealWith (R := Keys × Writer (World D))
+    { key := readKey store
+      open_ := fun key => do
+        let keys := Keys.ofKey key shapes
+        match ← openWriter store keys c world recorder.mark originChain foldStep with
+        | .error f => return .error f
+        | .ok wr => held.set (some wr); return .ok (keys, wr)
+      write := fun (keys, wr) => do
+        let ck := fileCheckpoint store keys c world recorder.mark originChain wr.index (async := false)
+        return (← sealNow ck recorder.mark wr.opening.resident).map (·.sealed)
+      refuse := fun s n => refuse s n
+      report := fun s => IO.println s!"sealed steps={s.steps} chain={Protocol.Text.toHex s.chain} digest={Protocol.Text.toHex s.digest}" }
+  -- the writer's handle, and so its lock, lives to here
+  if let some wr := ← held.get then wr.segment.sync
+  return code
+
 def verb : List String → IO UInt32
   | "genesis" :: store :: name :: "--nonce" :: n :: fs => genesisVerb store name (some n) fs
   | "genesis" :: store :: name :: fs => genesisVerb store name none fs
   | ["serve", store] => serveVerb store
+  | ["seal", store] => sealVerb store
   | ["follow", store, member, grant] => followVerb store member grant
   | ["join", store, inv, key] => joinVerb store inv key
   | ["check", store] => Check.run store none

@@ -731,6 +731,53 @@ def rowsPlants (seed : Nat) (failures : IO.Ref Nat) : IO Unit := do
           (a.rows.toList == kw.rows.toList && a.rowsRoot kx.env == kw.rowsRoot kx.env && cbytes a == cbytes kw &&
             a.origin != kw.origin) failures
 
+/-- HOST-43's plants: the operator's seal (`Loop.sealNow`, the act `host seal STORE` runs over the
+files) over the in-memory Store.
+* `plant-seal-verb`: a Store with a tail past its newest base, sealed: the newest base is at the
+  tip, and the one open of the Store replays no record and reaches the same World and position;
+* `plant-seal-again`: a second seal at the sealed position writes nothing (no base, no entry);
+* `plant-member-seal`: no member op seals: a frame naming no op of PROTOCOL's table (whatever a
+  member sends to ask for a seal) is refused `unknownOp` by name, and stages nothing. -/
+def sealPlants (seed : Nat) (frames : List Frame) (failures : IO.Ref Nat) : IO Unit := do
+  let r ← runOnce seed (frames.take 37) none
+  check s!"plant-seal-verb fires: the Store has a tail past its newest base ({r.resident.pos.offset - r.resident.sealed.offset} bytes)"
+    (r.resident.sealed.offset < r.resident.pos.offset) failures
+  let disk ← IO.mkRef r.disk
+  let bases ← IO.mkRef r.bases
+  let ck := memCheckpoint disk bases keys cadence world originChain
+  match ← sealNow ck recorder.mark r.resident with
+  | .error f => check s!"plant-seal-verb: the seal ({f.name})" false failures
+  | .ok r₁ =>
+    let b₁ ← bases.get
+    check "plant-seal-verb: the newest base is at the tip"
+      (r₁.sealed.offset = r.resident.pos.offset && r₁.sealed.steps = r.resident.world.steps) failures
+    check "plant-seal-verb: the one open replays no record and reaches the same World and position"
+      (match reopenIn b₁.index b₁.file (← disk.get).synced with
+       | .ok o => o.opened.records = 0 && sameWorld o.opened.world r.resident.world &&
+           o.opened.world.steps = r.resident.world.steps && o.pos.offset = r.resident.pos.offset
+       | .error _ => false) failures
+    match ← sealNow ck recorder.mark r₁ with
+    | .error f => check s!"plant-seal-again: the second seal ({f.name})" false failures
+    | .ok r₂ =>
+      let b₂ ← bases.get
+      check "plant-seal-again: a second seal at the sealed position writes nothing"
+        (b₂.written = b₁.written && b₂.history.size = b₁.history.size && b₂.index.size = b₁.index.size &&
+          r₂.sealed.offset = r₁.sealed.offset) failures
+  -- a member cannot ask for a seal: the real handler, Kernel.Sim's ctx
+  let kx := Kernel.Sim.ctx
+  let kw : World Kernel.Sim.D := World.genesis kx.env (kx.env.hash "nanodregg/host-sim/origin/v1" "seal".toUTF8) (2 ^ 40)
+  let free := (List.range 256).filter fun b => (Protocol.Op.ofCode? b.toUInt8).isNone && (Protocol.childKindOf? b.toUInt8).isNone
+  -- the tooth: the member op table is pinned; a new op (a seal request among them) reds this until
+  -- HOST re-reads it, so an op that seals cannot arrive unseen
+  check "plant-member-seal fires: PROTOCOL's member op table is exactly submit, lookup, read, log, command, resume (no op seals)"
+    (Protocol.Op.all.map Protocol.Op.code == [1, 2, 3, 4, 5, 6].map Nat.toUInt8) failures
+  check s!"plant-member-seal fires: {free.length} op codes name no op (any of them is what a seal request would be)"
+    (free.length = 249) failures
+  check "plant-member-seal: every frame naming no op is refused `unknownOp` and stages nothing"
+    (free.all fun b => match handle kx kw ⟨0, b.toUInt8, ByteArray.empty⟩ with
+      | .reply st p => st == Protocol.Status.refused.code && p == "unknownOp".toUTF8
+      | _ => false) failures
+
 def run (args : List String) : IO UInt32 := do
   let seed := (args.head? >>= String.toNat?).getD 1
   let failures ← IO.mkRef 0
@@ -1110,6 +1157,7 @@ def run (args : List String) : IO UInt32 := do
   forgottenPlants failures
   refusalPlants seed failures
   rowsPlants seed failures
+  sealPlants seed frames failures
   -- plant-hangup (PROTOCOL-23): a hang-up after every 7th request, for connections that are not
   -- the requests' own; each is acknowledged exactly once by name, and every other reply is the
   -- reply of the run without them

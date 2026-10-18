@@ -57,4 +57,19 @@ theorem join_genesis_iff (inviteHex keyHex : String) (keyR : Option Digest) (k :
     simp only [bind, Except.bind, pure, Except.pure] <;>
     (repeat' split) <;> simp_all [Prod.ext_iff, and_comm]
 
+/-- **`host seal` writes only after the writer's open succeeded** (HOST-43): the seal effect, the
+one that writes, is reached with the opened Store `r` EXACTLY when the key read and the writer's
+open (the Store's lock) both succeeded with it. Its `→` half is refuse-before-write (a live writer's
+`locked`, a missing key, a foreign or corrupt Store write nothing); its `←` half is the tooth: an
+opened Store is sealed, so the claim is false of a verb that skips the seal or seals another Store. -/
+theorem seal_writes_iff {R : Type} (keyR : Except (StoreFault (Record.Fault (Reject D))) Digest)
+    (openR : Digest → Except (StoreFault (Record.Fault (Reject D))) R) (r : R) :
+    sealWith (m := Except (Option R))
+        { key := pure keyR, open_ := fun k => pure (openR k), write := fun r₀ => throw (some r₀),
+          refuse := fun _ _ => pure 1, report := fun _ => pure () } = .error (some r) ↔
+    ∃ k, keyR = .ok k ∧ openR k = .ok r := by
+  unfold sealWith
+  cases keyR <;> simp only [bind, Except.bind, pure, Except.pure] <;>
+    (repeat' split) <;> simp_all
+
 end Nanodregg.Host.Cli

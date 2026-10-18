@@ -223,21 +223,40 @@ def reap (r : Resident W) : IO (Except SealFault (Resident W)) := do
       | .error f => return .error f
     else return .ok r
 
+/-- Wait for the seal in flight, if any, and take its base up. -/
+def settlePending (r : Resident W) : IO (Except SealFault (Resident W)) := do
+  match r.pending with
+  | none => return .ok r
+  | some p => match ← settle p with
+    | .ok sealed => return .ok (r.install sealed)
+    | .error f => return .error f
+
+/-- THE seal act (HOST-43): wait for the seal in flight; then, unless the newest base is already at
+the World's position, seal the World as it stands through `ck` (the Store's own checkpoint path:
+entries since the base, the base file, sync, rename) and take the base up. The operator's
+`host seal STORE`, the loop's inline seal (`makeRoom`) and the member rows' checkpoint are this one
+function over their Store's `Checkpoint` (law 1). -/
+def sealNow (ck : Checkpoint W) (mark : W → Nat × ByteArray) (r : Resident W) :
+    IO (Except SealFault (Resident W)) := do
+  let r ← match ← settlePending r with
+    | .ok r => pure r
+    | .error f => return .error f
+  if r.sealed.offset = r.pos.offset then return .ok r
+  match ← settle (← spawnSeal ck mark r.world r.pos r.sealed r.index) with
+  | .ok sealed => return .ok (r.install sealed)
+  | .error f => return .error f
+
 /-- Make room for a frame of `n` bytes: wait for the seal in flight, and if the tail is still too
-long, seal the World as it stands and wait for that. After the second step the newest base is at
+long, seal the World as it stands (`sealNow`). After the second step the newest base is at
 `pos`, so any frame up to `Log.frameMax c.recordBytesMax` fits (`Host.Proofs.Base.within_after_seal`). -/
 def makeRoom (ck : Checkpoint W) (mark : W → Nat × ByteArray) (c : Cadence) (r : Resident W) (n : Nat) :
     IO (Except SealFault (Resident W)) := do
   if withinTail c r.sealed r.pos.offset n then return .ok r
-  let r ← match r.pending with
-    | none => pure r
-    | some p => match ← settle p with
-      | .ok sealed => pure (r.install sealed)
-      | .error f => return .error f
+  let r ← match ← settlePending r with
+    | .ok r => pure r
+    | .error f => return .error f
   if withinTail c r.sealed r.pos.offset n then return .ok r
-  match ← settle (← spawnSeal ck mark r.world r.pos r.sealed r.index) with
-  | .ok sealed => return .ok (r.install sealed)
-  | .error f => return .error f
+  sealNow ck mark r
 
 /-- The end of a run: the seal in flight is waited for, so a base the loop started is never
 abandoned half-written by the exit. -/
