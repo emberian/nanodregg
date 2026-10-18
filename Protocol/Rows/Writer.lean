@@ -4,31 +4,35 @@
 The writer the rows drive is `Host.serve` (the deployed loop: group commit, the seal cadence,
 whole-World bases) over the in-memory disk (`Host.Sim.memStore`, `Host.Sim.memCheckpoint`), on a
 dedicated thread, fed through a channel port; it reopens with `Host.openWith` (one base, the tail
-after it, `Host.Record.step` folding each batch record and asserting its chain). The sealers are the
-Sim's toy MACs (`Host.Sim.keys`); the cadence is small enough that the rows seal bases.
+after it, `Host.Record.step` folding each batch record and asserting its chain). Generic in the
+digest: the codecs and the sealers are the run's `Rows.Params` (the toy's FNV tags, or `host`'s
+KMAC256 sealers at the deployed parameters); the cadence is small enough that the rows seal bases.
 
 Every arm is HOST's: `log` is `Host.handle`'s (the read envelope checked against the World as the
 batch advanced it) and its page is `Host.Page.build` over the in-memory segment (`pager`), the
 same code `Host.Deployed.pager` runs over the segment file. The one deviation is a plant
 (`Params.gateLog = false`).
 -/
-import Protocol.Rows.Sim
+import Protocol.Rows.Params
 import Protocol.Envelope
 import Host.Serve
 import Host.Loop
 import Host.Open
 import Host.Record
 import Host.Sim.MemStore
-import Host.Sim.Toy
 import Host.Page
 
 namespace Nanodregg.Protocol.Rows.Writer
 
 open Nanodregg.Kernel Nanodregg.Kernel.Receive Nanodregg.Host Nanodregg.Protocol
-open Nanodregg.Protocol.Rows.Sim (D)
+
+variable {D : Type} [Ord D] [DecidableEq D]
 
 /-- The writer's parameters, which a plant may mutate. -/
-structure Params where
+structure Params (D : Type) [Ord D] where
+  /-- the run's parameters -/
+  R : Rows.Params D
+  /-- the writer's kernel parameters: `R.ctx`, or a plant's mutation of it -/
   X : Ctx D
   /-- serve `log` only to an envelope `Envelope.check` accepts (HOST's `handle`); `false` is the
   plant that answers a page to any envelope that decodes -/
@@ -60,18 +64,10 @@ structure Params where
   writer that lies about where its base is, PROTOCOL-47) -/
   lieBase : Bool := false
 
-/-- Small enough that a row of a few dozen turns seals bases; the deployed bounds on size. -/
-def cadence : Cadence :=
-  { sealMinBytes := 8192, worldBytesMax := Cadence.deployed.worldBytesMax,
+/-- The run's seal threshold (`Rows.Params.sealMinBytes`); the deployed bounds on size. -/
+def cadence (P : Params D) : Cadence :=
+  { sealMinBytes := P.R.sealMinBytes, worldBytesMax := Cadence.deployed.worldBytesMax,
     recordBytesMax := Cadence.deployed.recordBytesMax }
-
-/-- The page budget the rows' writer pages with: HOST's `Page.budget` is a frame, which no row's
-log reaches, so a row would never see a page end before the tip. It must hold every single event
-the rows log (HOST's own premise, `Host.Page.budget_fits_event`, restated for the rows' events):
-the largest is the grain row's install of the shipped lifecycle package (9000 bytes of text). An
-event past it is never served, and the follower refuses the empty page short of the tip
-`badResult` (how the 4096 this replaced was found). 16384 still makes a cold follower page. -/
-def pageBudget : Nat := 16384
 
 def limits : Limits := ⟨16, 1 <<< 20⟩
 /-- Batches one round of the loop serves before it ends `fuel` (`Host.restarts` reopens in process). -/
@@ -85,7 +81,7 @@ def unspend (E : Env D) (w : World D) : World D :=
       | .nullifier _ => false).foldl (fun m p => m.insert (trieSpec E) p.1 p.2) .empty }
 
 /-- The writer's step count and chain, as `Host.Recorder.mark` writes them (KERNEL-47). -/
-def mark (P : Params) (w : World D) : Nat × ByteArray := (w.steps, P.X.env.bytes w.chain)
+def mark (P : Params D) (w : World D) : Nat × ByteArray := (w.steps, P.X.env.bytes w.chain)
 
 /-- The `admitsRecorded` plant's submit: a call whose transaction id holds a recorded refusal is
 admitted on the World with its refusals forgotten, the refusals are put back, and the client is
@@ -103,7 +99,7 @@ def admitRecorded (X : Ctx D) (w : World D) (f : Frame) : Option (Answer (World 
 /-- `Host.handle`, except under a plant: `openLog` pages a `log` envelope that decodes without
 `Envelope.check`; `forgetSpent` judges a submit on the World with its spent set forgotten (and
 keeps the World that reaches); `admitsRecorded` commits a recorded call. -/
-def machine (P : Params) : Machine (World D) (Kernel.Step D) Frame D where
+def machine (P : Params D) : Machine (World D) (Kernel.Step D) Frame D where
   note := World.roots P.X.env
   handle w f :=
     if !P.gateLog && f.op = Op.log.code then
@@ -135,16 +131,15 @@ structure Mem where
   bases : IO.Ref Host.Sim.Bases
 
 /-- HOST's in-memory checkpoint (its entries tagged for the Store of the World it seals, HOST-33). -/
-def checkpoint (P : Params) (m : Mem) : Checkpoint (World D) :=
-  Host.Sim.memCheckpoint m.disk m.bases Host.Sim.keys cadence Sim.world
+def checkpoint (P : Params D) (m : Mem) : Checkpoint (World D) :=
+  Host.Sim.memCheckpoint m.disk m.bases P.R.keys (cadence P) P.R.world
     (fun w => P.X.env.bytes (World.genesisChain P.X.env w.origin))
 
 /-- HOST's pager (`Host.Page.build` + `Host.Page.bytes`) over the in-memory segment's synced bytes
 and `index.log` (`Host.Page.entryAt`): what `Host.Deployed.pager` does over the files. -/
-def pager (X : Ctx D) (lieTip forgeBase lieBase : Bool) (m : Mem) (r : Resident (World D)) :
-    Deferred → IO (UInt8 × ByteArray)
+def pager (P : Params D) (m : Mem) (r : Resident (World D)) : Deferred → IO (UInt8 × ByteArray)
   | .read start => do
-    if !forgeBase then Host.Sim.memBasePage Page.budget m.bases r start else
+    if !P.forgeBase then Host.Sim.memBasePage Page.budget m.bases r start else
     -- the World bytes follow the base frame's 4-byte length; flip one in the middle
     let file := Host.Sim.flipByte (← m.bases.get).file (4 + r.sealed.bytes / 2)
     match Id.run (Page.basePage Page.budget (fun off len => pure (file.extract off (off + len))) r.sealed start) with
@@ -153,35 +148,36 @@ def pager (X : Ctx D) (lieTip forgeBase lieBase : Bool) (m : Mem) (r : Resident 
   | .log start => do
   let seg := (← m.disk.get).synced
   let idx := (← m.bases.get).index
-  match Id.run (Page.build X.env Sim.dc X.digestOf Host.Sim.keys.segment cadence.recordBytesMax
-      pageBudget (fun off len => pure (seg.extract off (off + len)))
-      (Page.entryAt (Host.Sim.keys.forStore (X.env.bytes (World.genesisChain X.env r.world.origin)))
+  let X := P.X
+  match Id.run (Page.build X.env P.R.dc X.digestOf P.R.keys.segment (cadence P).recordBytesMax
+      P.R.pageBudget (fun off len => pure (seg.extract off (off + len)))
+      (Page.entryAt (P.R.keys.forStore (X.env.bytes (World.genesisChain X.env r.world.origin)))
         (fun off len => pure (idx.extract off (off + len))) r.sealed.index.count r.index)
       (r.sealed.index.count + r.index.size) r.pos.offset
       (r.world.steps, X.env.bytes r.world.chain) start) with
   | .error f => pure (Status.refused.code, f.name.toUTF8)
   | .ok a =>
     -- `lieTip` hides the log after the page, so a base after the page too (a consistent lie)
-    let baseSteps := if lieBase then r.world.steps
-      else if lieTip then min r.sealed.steps a.steps else r.sealed.steps
-    match Page.bytes a (if lieTip then a.steps else r.world.steps) r.world.height baseSteps r.sealed.digest with
+    let baseSteps := if P.lieBase then r.world.steps
+      else if P.lieTip then min r.sealed.steps a.steps else r.sealed.steps
+    match Page.bytes a (if P.lieTip then a.steps else r.world.steps) r.world.height baseSteps r.sealed.digest with
     | .ok b => pure (Status.ok.code, b)
     | .error f => pure (Status.refused.code, f.name.toUTF8)
 
 /-- A Store as genesis leaves it (HOST's `memGenesis`: the origin frame, the base after it), and
 the loop's state the one open gives over it. -/
-def genesisStore (P : Params) (g : World D) : IO (Except String (Mem × Resident (World D))) := do
-  match Host.Sim.memGenesis Host.Sim.keys cadence Sim.world (mark P)
+def genesisStore (P : Params D) (g : World D) : IO (Except String (Mem × Resident (World D))) := do
+  match Host.Sim.memGenesis P.R.keys (cadence P) P.R.world (mark P)
       (fun w => P.X.env.bytes (World.genesisChain P.X.env w.origin))
-      (Record.step Sim.dc (World.step P.X.env) (World.roots P.X.env)) g with
+      (Record.step P.R.dc (World.step P.X.env) (World.roots P.X.env)) g with
   | .error f => return .error f.name
   | .ok (d, b, r) => return .ok (⟨← IO.mkRef d, ← IO.mkRef b⟩, r)
 
 /-- The one open over the in-memory Store: HOST's `openWith`, the writer's fold. -/
-def reopen (P : Params) (index base seg : ByteArray) : Except String (Resident (World D)) :=
-  match Id.run (openWith Host.Sim.keys cadence Sim.world (mark P)
+def reopen (P : Params D) (index base seg : ByteArray) : Except String (Resident (World D)) :=
+  match Id.run (openWith P.R.keys (cadence P) P.R.world (mark P)
       (fun w => P.X.env.bytes (World.genesisChain P.X.env w.origin))
-      (Record.step Sim.dc (World.step P.X.env) (World.roots P.X.env))
+      (Record.step P.R.dc (World.step P.X.env) (World.roots P.X.env))
       base seg.size index.size (fun off len => pure (.ok (index.extract off (off + len))))
       fun off len => pure (.ok (seg.extract off (off + len)))) with
   | .error f => .error f.name
@@ -191,32 +187,32 @@ def reopen (P : Params) (index base seg : ByteArray) : Except String (Resident (
             index := o.index }
 
 /-- A loop running on its own thread. -/
-structure Running where
+structure Running (D : Type) [Ord D] where
   reqs : Std.CloseableChannel.Sync Frame
   reps : Std.CloseableChannel.Sync Host.Reply
   task : Task (Except IO.Error (Exit × Resident (World D)))
 
-def start (P : Params) (m : Mem) (r : Resident (World D)) : IO Running := do
+def start (P : Params D) (m : Mem) (r : Resident (World D)) : IO (Running D) := do
   let reqs ← Std.CloseableChannel.Sync.new
   let reps ← Std.CloseableChannel.Sync.new
   let port := channelPort reqs (← IO.mkRef none) fun r => do discard <| (reps.send r).toBaseIO
   let task ← IO.asTask (prio := .dedicated) do
     try
-      serve (machine P) ⟨fun _ ts => Record.encode Sim.dc ts, mark P⟩ Host.Sim.keys.segment
-        (checkpoint P m) cadence (Host.Sim.memStore m.disk none) (pager P.X P.lieTip P.forgeBase P.lieBase m)
+      serve (machine P) ⟨fun _ ts => Record.encode P.R.dc ts, mark P⟩ P.R.keys.segment
+        (checkpoint P m) (cadence P) (Host.Sim.memStore m.disk none) (pager P m)
         port limits fuel r
     finally
       discard <| (reps.close).toBaseIO
   pure ⟨reqs, reps, task⟩
 
 /-- One request and its reply; `none` once the loop has stopped. -/
-def Running.ask (h : Running) (f : Frame) : IO (Option Host.Reply) := do
+def Running.ask (h : Running D) (f : Frame) : IO (Option Host.Reply) := do
   match ← (h.reqs.send f).toBaseIO with
   | .error _ => pure none
   | .ok () => h.reps.recv
 
 /-- Stop the loop at a frame boundary; why it stopped and its last state. -/
-def Running.stop (h : Running) : IO (Except String (Exit × Resident (World D))) := do
+def Running.stop (h : Running D) : IO (Except String (Exit × Resident (World D))) := do
   discard <| (h.reqs.close).toBaseIO
   match ← IO.wait h.task with
   | .ok r => pure (.ok r)

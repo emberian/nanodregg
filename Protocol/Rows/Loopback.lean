@@ -7,7 +7,9 @@ thread) and, per actor, an in-process client that plays the parts `nd` and custo
 
 * every step crosses the wire: the command is `commandFrame` bytes, each step `Reply.bytes`, each
   resume `resumeFrame` bytes, each one decoded back by the one reader before it is used;
-* custody holds the actor's toy key (`key:NAME`, next `next:NAME`) and answers `signResultFrame`;
+* custody holds the actor's secret (`key:NAME:GEN`; its next is generation GEN+1) and answers
+  `signResultFrame` with the run's key model: the public keys (`Params.pub`) and the signature
+  (`Params.sign`) — the toy's (a secret is its own public key) or Ed25519 at the deployed parameters;
 * a `host` step is relayed to the writer as a frame; a `submit` step is frozen as the actor's
   attempt and sent, and a lost reply is settled by `lookup` of the same bytes, never re-signed
   (the attempt store's rule, CLIENT-3);
@@ -21,6 +23,9 @@ what that invitation's signed inputs make, never the writer's World handed over.
 (an id nobody enrolled) until a line binds its member id and its World grant. After a carry the
 carried World has no invitation (it is made from a file), so an actor first used there takes the
 carried World as given: trust on first use, by name (`rejoin` too).
+
+The whole driver is generic in the digest `D`: a run is `run P …` under one `Rows.Params D`, the
+toy's or the deployed (`rows --deployed`, PROTOCOL-50). Nothing in a row reads which.
 -/
 import Protocol.Rows.Writer
 import Lang.Sim.Need
@@ -36,12 +41,13 @@ import Protocol.Receipt
 namespace Nanodregg.Protocol.Rows.Loopback
 
 open Nanodregg.Kernel Nanodregg.Kernel.Receive Nanodregg.Protocol Nanodregg.Protocol.Command
-open Nanodregg.Protocol.Rows.Sim (D)
+
+variable {D : Type} [Ord D] [DecidableEq D]
 
 /-! ## The system a row runs, and its mutations -/
 
-structure Sys where
-  writer : Writer.Params
+structure Sys (D : Type) [Ord D] where
+  writer : Writer.Params D
   follow : Ctx D
   /-- after a lost reply the client signs afresh instead of looking up (a plant) -/
   resendFresh : Bool := false
@@ -79,45 +85,50 @@ def accountByAsset (X : Ctx D) : Ctx D :=
   { X with env := { X.env with hash := fun dom b =>
       if dom = domAccount then X.env.hash dom (b.extract (b.size / 2) b.size) else X.env.hash dom b } }
 
-def sys : Option Mutation → Sys
-  | none => { writer := { X := Sim.ctx }, follow := Sim.ctx }
-  | some .openLog => { writer := { X := Sim.ctx, gateLog := false }, follow := Sim.ctx }
-  | some .skipJudge => { writer := { X := skipJudge Sim.ctx }, follow := skipJudge Sim.ctx }
+/-- The run's system under the parameters `R`, mutated by a plant. -/
+def sys (R : Rows.Params D) : Option Mutation → Sys D
+  | none => { writer := { R, X := R.ctx }, follow := R.ctx }
+  | some .openLog => { writer := { R, X := R.ctx, gateLog := false }, follow := R.ctx }
+  | some .skipJudge => { writer := { R, X := skipJudge R.ctx }, follow := skipJudge R.ctx }
   | some .followVerifyAll =>
-      { writer := { X := Sim.ctx }, follow := { Sim.ctx with verify := fun _ _ _ => true } }
-  | some .forgetJournal => { writer := { X := Sim.ctx, forgetJournal := true }, follow := Sim.ctx }
-  | some .resendFresh => { writer := { X := Sim.ctx }, follow := Sim.ctx, resendFresh := true }
-  | some .zeroDeadline => { writer := { X := Sim.ctx }, follow := Sim.ctx, zeroDeadline := true }
-  | some .advanceOnSend => { writer := { X := Sim.ctx }, follow := Sim.ctx, advanceOnSend := true }
-  | some .lieTip => { writer := { X := Sim.ctx, lieTip := true }, follow := Sim.ctx }
-  | some .forgeBase => { writer := { X := Sim.ctx, forgeBase := true }, follow := Sim.ctx }
-  | some .unstatedExpiry => { writer := { X := Sim.ctx, unstatedExpiry := true }, follow := Sim.ctx }
-  | some .ignoreNotBefore => { writer := { X := Sim.ctx, ignoreNotBefore := true }, follow := Sim.ctx }
-  | some .forgottenRefused => { writer := { X := Sim.ctx, forgottenRefused := true }, follow := Sim.ctx }
-  | some .nonceRepeats => { writer := { X := Sim.ctx }, follow := Sim.ctx, nonceRepeats := true }
+      { writer := { R, X := R.ctx }, follow := { R.ctx with verify := fun _ _ _ => true } }
+  | some .forgetJournal => { writer := { R, X := R.ctx, forgetJournal := true }, follow := R.ctx }
+  | some .resendFresh => { writer := { R, X := R.ctx }, follow := R.ctx, resendFresh := true }
+  | some .zeroDeadline => { writer := { R, X := R.ctx }, follow := R.ctx, zeroDeadline := true }
+  | some .advanceOnSend => { writer := { R, X := R.ctx }, follow := R.ctx, advanceOnSend := true }
+  | some .lieTip => { writer := { R, X := R.ctx, lieTip := true }, follow := R.ctx }
+  | some .forgeBase => { writer := { R, X := R.ctx, forgeBase := true }, follow := R.ctx }
+  | some .unstatedExpiry => { writer := { R, X := R.ctx, unstatedExpiry := true }, follow := R.ctx }
+  | some .ignoreNotBefore => { writer := { R, X := R.ctx, ignoreNotBefore := true }, follow := R.ctx }
+  | some .forgottenRefused => { writer := { R, X := R.ctx, forgottenRefused := true }, follow := R.ctx }
+  | some .nonceRepeats => { writer := { R, X := R.ctx }, follow := R.ctx, nonceRepeats := true }
   | some .accountByAsset =>
-      { writer := { X := accountByAsset Sim.ctx }, follow := accountByAsset Sim.ctx }
-  | some .writerForgetsSpent => { writer := { X := Sim.ctx, forgetSpent := true }, follow := Sim.ctx }
-  | some .importTrustsFile => { writer := { X := Sim.ctx }, follow := Sim.ctx, importTrustsFile := true }
-  | some .admitsRecorded => { writer := { X := Sim.ctx, admitsRecorded := true }, follow := Sim.ctx }
-  | some .trustFirstUse => { writer := { X := Sim.ctx }, follow := Sim.ctx, trustFirstUse := true }
-  | some .oneMember => { writer := { X := Sim.ctx }, follow := Sim.ctx, oneMember := true }
-  | some .guessMethod => { writer := { X := Sim.ctx }, follow := Sim.ctx, guessMethod := true }
-  | some .trustReceipt => { writer := { X := Sim.ctx }, follow := Sim.ctx, trustReceipt := true }
-  | some .trustLookup => { writer := { X := Sim.ctx }, follow := Sim.ctx, trustLookup := true }
-  | some .sealIgnored => { writer := { X := Sim.ctx }, follow := Sim.ctx, sealIgnored := true }
-  | some .lieBase => { writer := { X := Sim.ctx, lieBase := true }, follow := Sim.ctx }
-  | some .rawSlots => { writer := { X := Sim.ctx }, follow := Sim.ctx, rawSlots := true }
-  | some .pageIoFatal => { writer := { X := Sim.ctx }, follow := Sim.ctx, pageIoFatal := true }
+      { writer := { R, X := accountByAsset R.ctx }, follow := accountByAsset R.ctx }
+  | some .writerForgetsSpent => { writer := { R, X := R.ctx, forgetSpent := true }, follow := R.ctx }
+  | some .importTrustsFile => { writer := { R, X := R.ctx }, follow := R.ctx, importTrustsFile := true }
+  | some .admitsRecorded => { writer := { R, X := R.ctx, admitsRecorded := true }, follow := R.ctx }
+  | some .trustFirstUse => { writer := { R, X := R.ctx }, follow := R.ctx, trustFirstUse := true }
+  | some .oneMember => { writer := { R, X := R.ctx }, follow := R.ctx, oneMember := true }
+  | some .guessMethod => { writer := { R, X := R.ctx }, follow := R.ctx, guessMethod := true }
+  | some .trustReceipt => { writer := { R, X := R.ctx }, follow := R.ctx, trustReceipt := true }
+  | some .trustLookup => { writer := { R, X := R.ctx }, follow := R.ctx, trustLookup := true }
+  | some .sealIgnored => { writer := { R, X := R.ctx }, follow := R.ctx, sealIgnored := true }
+  | some .lieBase => { writer := { R, X := R.ctx, lieBase := true }, follow := R.ctx }
+  | some .rawSlots => { writer := { R, X := R.ctx }, follow := R.ctx, rawSlots := true }
+  | some .pageIoFatal => { writer := { R, X := R.ctx }, follow := R.ctx, pageIoFatal := true }
 
 /-! ## Actors -/
 
 def founders : List String := ["sponsor", "operator"]
 
-/-- Custody's toy key of generation `gen` (toy parameters: a key is its own public and secret). -/
-def keyOf (name : String) (gen : Nat) : ByteArray := s!"key:{name}:{gen}".toUTF8
+/-- Custody's secret of generation `gen`. Its public key is the run's `Params.pub` of it (under the
+toy parameters the secret itself; at the deployed ones the Ed25519 public key of its seed). -/
+def secretOf (name : String) (gen : Nat) : ByteArray := s!"key:{name}:{gen}".toUTF8
 
-structure Actor where
+/-- The public key of custody's secret of generation `gen`. -/
+def keyOf (R : Rows.Params D) (name : String) (gen : Nat) : ByteArray := R.pub (secretOf name gen)
+
+structure Actor (D : Type) [Ord D] where
   self : Self D
   /-- the actor's `host follow`: its World and any base download in progress -/
   follow : Command.Follow D
@@ -130,9 +141,10 @@ structure Actor where
   /-- the rotation attempt: its settlement as committed advances custody (CLIENT-13) -/
   armed : Option ByteArray := none
 
-def Actor.key (n : String) (a : Actor) : ByteArray := keyOf n a.gen
-def Actor.next (n : String) (a : Actor) : ByteArray := keyOf n (a.gen + 1)
-def Actor.pending (n : String) (a : Actor) : ByteArray := keyOf n (a.gen + 2)
+/-- Custody's secrets: the current key's, the next one's and the pending one's. -/
+def Actor.key (n : String) (a : Actor D) : ByteArray := secretOf n a.gen
+def Actor.next (n : String) (a : Actor D) : ByteArray := secretOf n (a.gen + 1)
+def Actor.pending (n : String) (a : Actor D) : ByteArray := secretOf n (a.gen + 2)
 
 /-- One line's measured run. -/
 structure Timed where
@@ -150,15 +162,15 @@ structure Invoked where
   extracted : Nat
   pkgs : Nat
 
-structure St where
-  sys : Sys
-  host : Writer.Running
+structure St (D : Type) [Ord D] where
+  sys : Sys D
+  host : Writer.Running D
   mem : Writer.Mem
   genesis : World D
   /-- the origin of the lineage's FIRST genesis: founder ids are names minted there, and a carry
   keeps them (KERNEL-40, opacity); never recompute them from a carried World's origin -/
   lineage : D
-  actors : List (String × Actor) := []
+  actors : List (String × Actor D) := []
   binds : List (String × String) := []
   ops : List Op := []
   kinds : List String := []
@@ -175,13 +187,16 @@ structure St where
   /-- the rows' founding invitation: the sponsor's, at genesis, pinning the genesis World -/
   invitation : ByteArray := ByteArray.empty
 
-abbrev M := StateT St IO
+abbrev M (D : Type) [Ord D] := StateT (St D) IO
 
-def X : M (Ctx D) := do pure (← get).sys.follow
+def X : M D (Ctx D) := do pure (← get).sys.follow
 
-def note (s : String) : M Unit := modify fun st => { st with log := st.log.push s }
+/-- The run's parameters. -/
+def params : M D (Rows.Params D) := do pure (← get).sys.writer.R
 
-def sawOp (op : Op) : M Unit :=
+def note (s : String) : M D Unit := modify fun st => { st with log := st.log.push s }
+
+def sawOp (op : Op) : M D Unit :=
   modify fun st => if st.ops.contains op then st else { st with ops := st.ops ++ [op] }
 
 /-- The receiver kind of a call: its `Body` constructor (Protocol.Rows' `kinds`). -/
@@ -225,8 +240,8 @@ def measureInvoke (X : Ctx D) (w : World D) (c : Call D) : Option (Except String
     | .error _ => none
   | _ => none
 
-def sawCall (name : String) (call : ByteArray) : M Unit := do
-  let decoded := Sim.ctx.decodeCall call
+def sawCall (name : String) (call : ByteArray) : M D Unit := do
+  let decoded := (← get).sys.writer.R.ctx.decodeCall call
   let k := match decoded with
     | some c => kindName c.unsigned.body
     | none => "undecodable"
@@ -240,7 +255,7 @@ def founderIndex (name : String) : Option Nat := founders.idxOf? name
 /-- How a joiner decides an invitation: `Invite.accept` under the key it trusts; under the plant
 `trustFirstUse`, the shape before PROTOCOL-42: the inputs as they arrive, signer and signature
 unchecked. -/
-def acceptAs (s : Sys) (key bytes : ByteArray) : Except Invite.Refusal (Invite.Invitation D × World D) :=
+def acceptAs (s : Sys D) (key bytes : ByteArray) : Except Invite.Refusal (Invite.Invitation D × World D) :=
   if s.trustFirstUse then
     match Invite.ofBytes s.follow bytes with
     | none => .error .badInvitation
@@ -249,7 +264,7 @@ def acceptAs (s : Sys) (key bytes : ByteArray) : Except Invite.Refusal (Invite.I
       | .error r => .error (.inputs r)
   else Invite.accept s.follow key bytes
 
-def freshActor (name : String) : M Actor := do
+def freshActor (name : String) : M D (Actor D) := do
   let st ← get
   let X := st.sys.writer.X
   -- a founder's World is its own genesis; a joiner's is what the founding invitation makes, or,
@@ -258,7 +273,7 @@ def freshActor (name : String) : M Actor := do
     | some _ => pure st.genesis
     | none =>
       if st.genesis.origin ≠ st.lineage then pure st.genesis else
-      match acceptAs st.sys (keyOf "sponsor" 0) st.invitation with
+      match acceptAs st.sys (keyOf st.sys.writer.R "sponsor" 0) st.invitation with
       | .ok (_, w) => pure w
       | .error r => throw (IO.userError s!"the founding invitation refused {r.name}")
   let self : Self D := match founderIndex name with
@@ -268,7 +283,7 @@ def freshActor (name : String) : M Actor := do
                 grant := X.env.hash "nanodregg/rows/stranger-grant/v1" name.toUTF8, window := 100 }
   pure { self, follow := { world := w } }
 
-def actor (name : String) : M Actor := do
+def actor (name : String) : M D (Actor D) := do
   match (← get).actors.lookup name with
   | some a => pure a
   | none =>
@@ -276,14 +291,14 @@ def actor (name : String) : M Actor := do
       modify fun st => { st with actors := st.actors ++ [(name, a)] }
       pure a
 
-def setActor (name : String) (a : Actor) : M Unit :=
+def setActor (name : String) (a : Actor D) : M D Unit :=
   modify fun st => { st with actors := st.actors.map fun (n, b) => if n = name then (n, a) else (n, b) }
 
 /-- Bind `b` to `hex`; a bound member id, or a World grant bound as `NAME.grant`, becomes that
 actor's. -/
-def bind (b hex : String) : M Unit := do
+def bind (b hex : String) : M D Unit := do
   modify fun st => { st with binds := (b, hex) :: st.binds }
-  let some d := Text.ofHex hex >>= Sim.digestOf | return
+  let some d := Text.ofHex hex >>= (← params).ctx.digestOf | return
   let (who, isFollow) := if b.endsWith ".grant" then ((b.dropEnd 6).toString, true) else (b, false)
   if (← get).actors.any (·.1 = who) then
     let a ← actor who
@@ -312,7 +327,7 @@ def substInner (binds : List (String × String)) : Nat → String → Except Str
 /-- A line's argv as the member's shell would hand it to `nd`: `@NAME` is the hex bound to NAME,
 `{@NAME}` the same inside a text, and `<PATH` the text of the file PATH in this tree (a shipped
 package, `nd install "$(cat PATH)"`). -/
-def subst (argv : List String) : M (Except String (List String)) := do
+def subst (argv : List String) : M D (Except String (List String)) := do
   let binds := (← get).binds
   let mut out : Array String := #[]
   for a in argv do
@@ -344,19 +359,19 @@ def boundToken (out : String) : Option String :=
 /-- Custody's answer to a sign step: `ok ‖ (key, next, signature)` (every step result is
 `status ‖ payload`); `stolen` replaces the key it signs
 with (a thief holding a victim's current key). -/
-def signWith (key next msg : ByteArray) : ByteArray :=
-  match Text.fit Bounds.frameBytesMax key, Text.fit Bounds.frameBytesMax next,
-      Text.fit Bounds.frameBytesMax (Sim.sign key msg) with
+def signWith (R : Rows.Params D) (key next msg : ByteArray) : ByteArray :=
+  match Text.fit Bounds.frameBytesMax (R.pub key), Text.fit Bounds.frameBytesMax (R.pub next),
+      Text.fit Bounds.frameBytesMax (R.sign key msg) with
   | some k, some n, some s => ByteArray.mk #[Status.ok.code] ++ signResultFrame.bytes (k, n, s, ())
   | _, _, _ => ByteArray.empty
 
-def precommitResult (next pending : ByteArray) : ByteArray :=
-  match Text.fit Bounds.frameBytesMax next, Text.fit Bounds.frameBytesMax pending with
+def precommitResult (R : Rows.Params D) (next pending : ByteArray) : ByteArray :=
+  match Text.fit Bounds.frameBytesMax (R.pub next), Text.fit Bounds.frameBytesMax (R.pub pending) with
   | some n, some p => ByteArray.mk #[Status.ok.code] ++ precommitResultFrame.bytes (n, p, ())
   | _, _ => ByteArray.empty
 
 /-- The actor's custody name and current key under a fault (a thief signs with a stolen key). -/
-def custodyOf (name : String) (fault : Fault) : M (String × Actor × ByteArray) := do
+def custodyOf (name : String) (fault : Fault) : M D (String × Actor D × ByteArray) := do
   let a ← actor name
   match fault with
   | .stolenKey v => let va ← actor v; pure (name, a, va.key v)
@@ -366,7 +381,7 @@ def custodyOf (name : String) (fault : Fault) : M (String × Actor × ByteArray)
 
 /-- The member the actor's client signs as: its own, a victim's (`stolenKey`), or under the plant
 `oneMember` the sponsor's. -/
-def selfOf (name : String) (fault : Fault) : M (Self D) := do
+def selfOf (name : String) (fault : Fault) : M D (Self D) := do
   match fault with
   | .stolenKey v => pure (← actor v).self
   | _ => if (← get).sys.oneMember then pure (← actor "sponsor").self else pure (← actor name).self
@@ -374,7 +389,7 @@ def selfOf (name : String) (fault : Fault) : M (Self D) := do
 /-- Custody settles its armed rotation on the attempt's END, which only the member's own follow
 makes final (PROTOCOL-46): committed advances it, refused drops it; declined, open, contradicted or
 uncertain keeps it armed (CLIENT-13, PROTOCOL-41). -/
-def settle (name : String) (call : ByteArray) (a : Attempt.Action) : M Unit := do
+def settle (name : String) (call : ByteArray) (a : Attempt.Action) : M D Unit := do
   let ac ← actor name
   if ac.armed = some call then
     match a with
@@ -389,15 +404,15 @@ def custodyRefused (r : CustodyRefusal) : ByteArray :=
 
 /-- Custody's `signIncoming` (CLIENT-13 amended): only a read envelope's message, only while a
 rotation is armed (in flight), signed by the incoming (next) key. -/
-def signIncoming (name : String) (msg : ByteArray) : M ByteArray := do
+def signIncoming (name : String) (msg : ByteArray) : M D ByteArray := do
   let a ← actor name
   if msg.extract 0 domEnvelope.size ≠ domEnvelope then
     pure (custodyRefused .envelopeOnly)
   else if a.armed.isNone then pure (custodyRefused .notArmed)
-  else pure (signWith (a.next name) (a.pending name) msg)
+  else pure (signWith (← params) (a.next name) (a.pending name) msg)
 
 /-- Send one frame to the writer; its reply as `status ‖ payload`, or `none` if it has stopped. -/
-def ask (op : Op) (payload : ByteArray) : M (Option ByteArray) := do
+def ask (op : Op) (payload : ByteArray) : M D (Option ByteArray) := do
   sawOp op
   let st ← get
   set { st with conn := st.conn + 1 }
@@ -405,21 +420,21 @@ def ask (op : Op) (payload : ByteArray) : M (Option ByteArray) := do
   | some r => pure (some (ByteArray.mk #[r.status] ++ r.payload))
   | none => pure none
 
-/-- How the rows' followers read a base: the Sim's World codec and the writer's own `worldDigest`. -/
-def base : Thin.Base (World D) :=
-  ⟨Sim.world, World.steps, Host.Sim.keys.worldDigest, Writer.cadence.worldBytesMax⟩
+/-- How the rows' followers read a base: the run's World codec and the writer's own `worldDigest`. -/
+def base (R : Rows.Params D) : Thin.Base (World D) :=
+  ⟨R.world, World.steps, R.keys.worldDigest, Host.Cadence.deployed.worldBytesMax⟩
 
 /-- Send one frame to the actor's `host follow` (`Host.Follow.answer`, the deployed per-frame
 decision, on the actor's follow state); the step's bytes, or the name follow refused it by. What
 follow would persist is not modelled here: the actor's state is in memory. -/
 def followAsk (name : String) (self : Self D) (op : Op) (payload : ByteArray) :
-    M (Except String ByteArray) := do
+    M D (Except String ByteArray) := do
   sawOp op
   let a ← actor name
   let st ← get
   set { st with conn := st.conn + 1 }
   let (fs', _, status, p) :=
-    Host.Follow.answer (← X) Sim.dc base self a.follow ⟨UInt32.ofNat st.conn, op.code, payload⟩
+    Host.Follow.answer (← X) (← params).dc (base (← params)) self a.follow ⟨UInt32.ofNat st.conn, op.code, payload⟩
   setActor name { a with follow := fs' }
   pure (if status = Status.ok.code then .ok p else .error (Command.hostName p))
 
@@ -512,7 +527,7 @@ def statusOutcome (reply : ByteArray) : Expect :=
 
 mutual
 /-- Run `argv` as actor `name`: start, then every step through the wire until `done`. -/
-def command (name : String) (argv : List String) (fault : Fault) : Nat → M (Expect × String)
+def command (name : String) (argv : List String) (fault : Fault) : Nat → M D (Expect × String)
   | 0 => pure (.refused "tooDeep", "")
   | depth + 1 => do
       let a ← actor name
@@ -533,7 +548,7 @@ termination_by d => (d, 0, 0)
 
 /-- Feed a step's result back to follow, through the resume frame. -/
 def resume (name : String) (argv : List String) (fault : Fault) (depth : Nat) (k result : ByteArray) :
-    Nat → M (Expect × String)
+    Nat → M D (Expect × String)
   | 0 => pure (.refused "tooManySteps", "")
   | fuel + 1 => do
       let some kf := Text.fit Bounds.frameBytesMax k | return (.refused "badState", "")
@@ -546,7 +561,7 @@ termination_by fuel => (depth, fuel + 1, 0)
 
 /-- Perform one step the follow machine asked for. -/
 def steps (name : String) (argv : List String) (fault : Fault) (depth : Nat) (b : ByteArray) :
-    Nat → M (Expect × String)
+    Nat → M D (Expect × String)
   | 0 => pure (.refused "tooManySteps", "")
   | fuel + 1 => do
       match Reply.ofBytes b with
@@ -558,13 +573,13 @@ def steps (name : String) (argv : List String) (fault : Fault) (depth : Nat) (b 
           pure (outcomeOf exit err, (String.fromUTF8? out).getD "")
       | some (.sign msg k) =>
           let (n, a, key) ← custodyOf name fault
-          resume name argv fault depth k (signWith key (a.next n) msg) fuel
+          resume name argv fault depth k (signWith (← params) key (a.next n) msg) fuel
       | some (.precommit k) =>
           let a ← actor name
-          resume name argv fault depth k (precommitResult (a.next name) (a.pending name)) fuel
+          resume name argv fault depth k (precommitResult (← params) (a.next name) (a.pending name)) fuel
       | some (.signNext msg k) =>
           let a ← actor name
-          let r := signWith (a.next name) (a.pending name) msg
+          let r := signWith (← params) (a.next name) (a.pending name) msg
           setActor name (if (← get).sys.advanceOnSend then { a with gen := a.gen + 1 } else { a with arming := true })
           resume name argv fault depth k r fuel
       | some (.signIncoming msg k) =>
@@ -612,7 +627,7 @@ FIRST submit after the writer took it; `lieLookup` does that and rewrites the Ho
 it. `host` is the Host's last word, `said` follow's settle text. -/
 def drive (name : String) (call : ByteArray) (fault : Fault) (depth : Nat) :
     Nat → Nat → Option (Attempt.Request × Attempt.Seen) → Option ByteArray → Option Attempt.Seen →
-      String → M (Except String ByteArray)
+      String → M D (Except String ByteArray)
   | 0, _, _, _, _, _ => pure (.error "attemptFuel")
   | fuel + 1, sends, last, reply, host, said => do
       let hostSaid (r : ByteArray) : Attempt.Seen := classify r
@@ -682,7 +697,7 @@ opened to. The reopen's wall time is THE BAR's `reopen-ms`. With `sealFirst`, th
 sealed between the stop and the reopen by the deployed act, `Host.sealNow` over the in-memory
 Store's checkpoint: what `host seal STORE` does over the files (HOST-43), so the rows seal only as
 an operator can. -/
-def restart (sealFirst : Bool) : M Expect := do
+def restart (sealFirst : Bool) : M D Expect := do
   let st ← get
   match ← st.host.stop with
   | .error e => pure (.refused s!"writerFailed {e}")
@@ -706,7 +721,7 @@ def restart (sealFirst : Bool) : M Expect := do
   | .ok (exit, _) => pure (.refused s!"writer{exit.name}")
 
 /-- Open a copy of the Store whose base file has the byte at `off` flipped. -/
-def reopenFlipped (off : Nat) : M Expect := do
+def reopenFlipped (off : Nat) : M D Expect := do
   let st ← get
   let d ← st.mem.disk.get
   let bs ← st.mem.bases.get
@@ -714,7 +729,7 @@ def reopenFlipped (off : Nat) : M Expect := do
   | .error f => pure (.refused f)
   | .ok _ => pure .ok
 
-def retry (name : String) : M Expect := do
+def retry (name : String) : M D Expect := do
   match (← actor name).last with
   | none => pure (.refused "noAttempt")
   | some call =>
@@ -730,12 +745,13 @@ def retry (name : String) : M Expect := do
 /-- A SECOND writer, from a genesis of the same name, allowance and founders as the rows' writer, and
 the same nonce (`sameNonce`, or under the `nonceRepeats` plant: a restore of the same World) or
 another one (another World). -/
-def secondWriter (sameNonce : Bool) : M (Except String Writer.Running) := do
+def secondWriter (sameNonce : Bool) : M D (Except String (Writer.Running D)) := do
   let st ← get
   let X := st.sys.writer.X
-  let nonce := if sameNonce || st.sys.nonceRepeats then Sim.nonce else flipLast Sim.nonce
-  let fs := founders.map fun n => (keyOf n 0, nextKeyDigest X (keyOf n 1))
-  let g ← match Receive.genesis X Sim.worldName nonce Sim.allowance fs with
+  let R := st.sys.writer.R
+  let nonce := if sameNonce || st.sys.nonceRepeats then Rows.Params.nonce else flipLast Rows.Params.nonce
+  let fs := founders.map fun n => (keyOf R n 0, nextKeyDigest X (keyOf R n 1))
+  let g ← match Receive.genesis X Rows.Params.worldName nonce Rows.Params.allowance fs with
     | .ok g => pure g
     | .error r => return .error s!"genesis refused {r.name}"
   match ← Writer.genesisStore st.sys.writer g with
@@ -744,20 +760,20 @@ def secondWriter (sameNonce : Bool) : M (Except String Writer.Running) := do
 
 /-- An invitation as a relay hands it on under `forgeInvite`: its nonce changed (the relay's own
 World), its signature kept, or (`resign`) re-signed by the relay's own key. -/
-def forgeInvite (X : Ctx D) (resign : Bool) (b : ByteArray) : ByteArray :=
+def forgeInvite (R : Rows.Params D) (X : Ctx D) (resign : Bool) (b : ByteArray) : ByteArray :=
   match Invite.ofBytes X b with
   | none => b
   | some i =>
     let input := Invite.inputBytes X i.name (flipLast i.nonce) i.allowance i.founders
-    let key := if resign then keyOf "relay" 0 else i.key
+    let key := if resign then keyOf R "relay" 0 else i.key
     match Invite.unsignedBytes X input i.pin i.sponsor key with
     | none => b
     | some u =>
-      let sig := if resign then Sim.sign key (Invite.message u) else i.signature
+      let sig := if resign then R.sign (secretOf "relay" 0) (Invite.message u) else i.signature
       (Invite.bytes u sig).getD b
 
 /-- Run one act once; its outcome and what it printed. -/
-def runAct (l : Line) : M (Expect × String) := do
+def runAct (l : Line) : M D (Expect × String) := do
   match l.act with
   | .cmd argv =>
       match ← subst argv with
@@ -782,9 +798,10 @@ def runAct (l : Line) : M (Expect × String) := do
       let a ← actor l.actor
       let X := st.sys.writer.X
       let upTo := a.self.window
-      let key := a.key l.actor
-      let sig := Sim.sign key (Command.envelopeMessage X a.self 0 upTo)
-      let some p := Envelope.bytes X (Command.envelopeOf a.self 0 upTo ⟨key, a.next l.actor, sig⟩)
+      let R := st.sys.writer.R
+      let sig := R.sign (a.key l.actor) (Command.envelopeMessage X a.self 0 upTo)
+      let some p := Envelope.bytes X (Command.envelopeOf a.self 0 upTo
+          ⟨R.pub (a.key l.actor), R.pub (a.next l.actor), sig⟩)
         | return (.refused "badState", "")
       match ← secondWriter sameNonce with
       | .error e => return (.refused e, "")
@@ -801,15 +818,16 @@ def runAct (l : Line) : M (Expect × String) := do
         let a ← actor l.actor
         let X ← X
         let w := a.follow.world
-        let key := a.key l.actor
+        let R ← params
+        let key := R.pub (a.key l.actor)
         match parse (D := D) X.digestOf (av.map String.toUTF8) with
         | .error r => pure (.refused r.name, "")
         | .ok cmd =>
-          match body X a.self w ⟨key, a.next l.actor, ByteArray.empty⟩ cmd >>= fun b =>
+          match body X a.self w ⟨key, R.pub (a.next l.actor), ByteArray.empty⟩ cmd >>= fun b =>
               planUnchecked X a.self w key b with
           | .error r => pure (.refused r.name, "")
           | .ok (u, _) =>
-            let call := X.callBytes ⟨u, Sim.sign key (X.callMessage u)⟩
+            let call := X.callBytes ⟨u, R.sign (a.key l.actor) (X.callMessage u)⟩
             sawCall l.actor call
             -- the forged call is the actor's last: `retry` looks it up, `resubmit` sends it again
             setActor l.actor { a with last := some call }
@@ -825,7 +843,8 @@ def runAct (l : Line) : M (Expect × String) := do
       | .error e => pure (.refused s!"writerFailed {e}", "")
       | .ok (.eof, r0) =>
         let X := st.sys.writer.X
-        match Host.Carry.exportFile X.env Sim.dc r0.world with
+        let R := st.sys.writer.R
+        match Host.Carry.exportFile X.env R.dc r0.world with
         | .error f => do
             set { st with host := ← Writer.start st.sys.writer st.mem r0 }
             pure (.refused f.name, "")
@@ -835,7 +854,7 @@ def runAct (l : Line) : M (Expect × String) := do
             else match Codec.Digest.ofBytes? (flipLast d.bytes) with
               | some d' => d'
               | none => d
-          match Host.Carry.importWorld X Sim.dc Sim.worldName (flipLast Sim.nonce) want f with
+          match Host.Carry.importWorld X R.dc Rows.Params.worldName (flipLast Rows.Params.nonce) want f with
           | .error (s, _) => do
               -- refused before anything is written: the old writer serves on
               set { st with host := ← Writer.start st.sys.writer st.mem r0 }
@@ -886,7 +905,7 @@ def runAct (l : Line) : M (Expect × String) := do
         | some ib, some kb =>
           let st ← get
           let ib := match l.fault with
-            | .forgeInvite resign => forgeInvite st.sys.follow resign ib
+            | .forgeInvite resign => forgeInvite st.sys.writer.R st.sys.follow resign ib
             | _ => ib
           match acceptAs st.sys kb ib with
           | .error r => pure (.refused r.name, "")
@@ -907,7 +926,7 @@ def runAct (l : Line) : M (Expect × String) := do
       let X := st.sys.follow
       let some c := (← actor owner).last >>= X.decodeCall | return (.refused "noAttempt", "")
       let some rb := st.binds.lookup rc >>= Text.ofHex | return (.refused s!"unbound {rc}", "")
-      let some r := Receipt.ofBytes X.env Sim.dc rb | return (.refused "badReceipt", "")
+      let some r := Receipt.ofBytes X.env st.sys.writer.R.dc rb | return (.refused "badReceipt", "")
       let r := match l.fault with
         | .forgeReceipt => { r with answer := .absent }
         | _ => r
@@ -955,7 +974,7 @@ def runAct (l : Line) : M (Expect × String) := do
 
 /-- Run a line `times` times; the first outcome that is not the declared one, else the declared
 one. A run past `withinMs` (a liveness deadline) is `hang`. -/
-def runLine (i : Nat) (l : Line) (times : Nat) : M Expect := do
+def runLine (i : Nat) (l : Line) (times : Nat) : M D Expect := do
   let mut got := l.expect
   let mut ns : List Nat := []
   for j in List.range times do
@@ -999,30 +1018,35 @@ structure Result where
   times : Array Timed
   reopenNs : List Nat
   invokes : Array (Except String Invoked)
+  /-- the run's cost in deterministic units: frames sent on either socket, and the steps of the
+  writer's World when it stopped -/
+  frames : Nat
+  steps : Nat
 
-/-- Run a member row against a fresh deployment under `m`; `times` scales every repeated line. -/
-def run (m : Option Mutation) (lines : List Line) (times : Option Nat) : IO Result := do
-  let s := sys m
-  let fs := founders.map fun n => (keyOf n 0, nextKeyDigest s.writer.X (keyOf n 1))
-  let g ← match Receive.genesis s.writer.X Sim.worldName Sim.nonce Sim.allowance fs with
+/-- Run a member row against a fresh deployment under the parameters `R` and the plant `m`;
+`times` scales every repeated line. -/
+def run (R : Rows.Params D) (m : Option Mutation) (lines : List Line) (times : Option Nat) : IO Result := do
+  let s := sys R m
+  let fs := founders.map fun n => (keyOf R n 0, nextKeyDigest s.writer.X (keyOf R n 1))
+  let g ← match Receive.genesis s.writer.X Rows.Params.worldName Rows.Params.nonce Rows.Params.allowance fs with
     | .ok g => pure g
     | .error r => throw (IO.userError s!"genesis refused {r.name}")
   let (mem, r₀) ← match ← Writer.genesisStore s.writer g with
     | .ok m => pure m
     | .error e => throw (IO.userError s!"genesis: {e}")
   let host ← Writer.start s.writer mem r₀
-  let go : M (List Expect) := lines.zipIdx.mapM fun (l, i) =>
+  let go : M D (List Expect) := lines.zipIdx.mapM fun (l, i) =>
     runLine i l (if l.times > 1 then times.getD l.times else l.times)
   let hex (d : D) := Text.toHex (s.writer.X.env.bytes d)
   -- the World's origin inputs, as the founders hold them (`host genesis` prints them), and another
   -- World's (the nonce changed)
-  let inputs := Invite.inputBytes s.writer.X Sim.worldName Sim.nonce Sim.allowance fs
-  let other := Invite.inputBytes s.writer.X Sim.worldName (flipLast Sim.nonce) Sim.allowance fs
+  let inputs := Invite.inputBytes s.writer.X Rows.Params.worldName Rows.Params.nonce Rows.Params.allowance fs
+  let other := Invite.inputBytes s.writer.X Rows.Params.worldName (flipLast Rows.Params.nonce)
+    Rows.Params.allowance fs
   -- the founding invitation: the sponsor's, pinning the genesis World
-  let sKey := keyOf "sponsor" 0
   let invitation ← match Invite.unsignedBytes s.writer.X inputs
-      ⟨g.steps, base.digest (Sim.world.bytes g)⟩ (founderId s.writer.X g.origin 0) sKey with
-    | some u => match Invite.bytes u (Sim.sign sKey (Invite.message u)) with
+      ⟨g.steps, (base R).digest (R.world.bytes g)⟩ (founderId s.writer.X g.origin 0) (keyOf R "sponsor" 0) with
+    | some u => match Invite.bytes u (R.sign (secretOf "sponsor" 0) (Invite.message u)) with
       | some b => pure b
       | none => throw (IO.userError "the founding invitation does not fit")
     | none => throw (IO.userError "the founding invitation does not fit")
@@ -1030,9 +1054,12 @@ def run (m : Option Mutation) (lines : List Line) (times : Option Nat) : IO Resu
     [(n, hex (founderId s.writer.X g.origin i)),
      (n ++ ".grant", hex (founderGrantId s.writer.X g.origin i))]) ++
     [("inputs", Text.toHex inputs), ("otherInputs", Text.toHex other)] ++
-    (founders ++ ["newcomer"]).map fun n => (n ++ ".key", Text.toHex (keyOf n 0))
+    (founders ++ ["newcomer"]).map fun n => (n ++ ".key", Text.toHex (keyOf R n 0))
   let (outcomes, st) ← go.run { sys := s, host, mem, genesis := g, lineage := g.origin, binds, invitation }
-  let _ ← st.host.stop
-  pure ⟨{ outcomes, ops := st.ops, kinds := st.kinds }, st.log, st.times, st.reopenNs, st.invokes⟩
+  let steps := match ← st.host.stop with
+    | .ok (_, r) => r.world.steps
+    | .error _ => 0
+  pure ⟨{ outcomes, ops := st.ops, kinds := st.kinds }, st.log, st.times, st.reopenNs, st.invokes,
+    st.conn, steps⟩
 
 end Nanodregg.Protocol.Rows.Loopback

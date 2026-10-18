@@ -13,9 +13,19 @@ the runner holds the child's handle, so the kill names exactly the process it st
 follow machine and custody, every step through the wire codecs), under the deadline the same way;
 then, if it passed, once more under its plant, which must be caught at its line by its outcome.
 `--times N` scales every repeated line (THE BAR: `rows --times 1000 bar`).
+
+`--deployed` runs every member row (and its plant) at the DEPLOYED parameters
+(`Rows.Params.deployed`: `host`'s own `Ctx`, World codec and KMAC256 sealers, custody's Ed25519
+keys) instead of the toy's; it selects the parameters the harness instantiates the one pipeline
+with, never a mode inside admission (PROTOCOL-50). Before any row, the run measures its parameters'
+widths (`Params.atDeployed`: a 32-byte digest, an Ed25519 key and signature, a 32-byte base digest
+and tag) and requires the toy's to FAIL that check by name (`digest 8≠32`): the plant that the
+check reads the parameters at all. Each row prints its cost in deterministic units beside the
+verdict: `COST <row> frames <frames sent on either socket> steps <the writer's World steps>`.
 -/
 import Protocol.Rows.Judge
 import Protocol.Rows.Loopback
+import Protocol.Rows.Deployed
 
 namespace Nanodregg.Protocol.Rows
 
@@ -59,9 +69,9 @@ def runExe (name : String) (args : List String) : IO Ran := do
       pure (.observed { exit := code, last := lastLine o } (o ++ e))
 
 /-- Run a member row in a task, polling it under the row's deadline. -/
-def runMembers (m : Option Mutation) (ls : List Line) (times : Option Nat) :
-    IO (Except String Loopback.Result) := do
-  let t ← IO.asTask (prio := .dedicated) (Loopback.run m ls times)
+def runMembers {D : Type} [Ord D] [DecidableEq D] (R : Params D) (m : Option Mutation) (ls : List Line)
+    (times : Option Nat) : IO (Except String Loopback.Result) := do
+  let t ← IO.asTask (prio := .dedicated) (Loopback.run R m ls times)
   let rec poll : Nat → IO Bool
     | 0 => pure false
     | n + 1 => do
@@ -140,20 +150,24 @@ def barLines (r : Row) (res : Loopback.Result) : IO (Option String) := do
       return some s!"bar: plant {name} BLIND: {ratio total required} is not above {ratio ticks required}"
   return none
 
-def drive (r : Row) (times : Option Nat) (control : Bool := false) : IO Ran :=
+/-- Drive one row under the parameters `R`. `measures`: print THE BAR row's LIVE and WASTE lines
+(the toy run's; the deployed run prints none, so a WASTE measure is collected once). -/
+def drive {D : Type} [Ord D] [DecidableEq D] (R : Params D) (r : Row) (times : Option Nat)
+    (control : Bool := false) (measures : Bool := true) : IO Ran :=
   if let some why := r.blockedOn then pure (.pending s!"blocked on {why}") else
   match r.drive with
   | .exe name args _ => runExe name args
   | .members ls => do
-      match ← runMembers none ls times with
+      match ← runMembers R none ls times with
       | .error e => pure (.broken e)
       | .ok res =>
-          if r.name = "bar" then
+          IO.println s!"COST {r.name} frames {res.frames} steps {res.steps}"
+          if r.name = "bar" && measures then
             if let some e ← barLines r res then return .broken e
           let t := String.intercalate "\n" res.log.toList
           match judge r res.observed, r.plant with
           | .pass, .caught m line got =>
-              match ← runMembers (some m) ls times with
+              match ← runMembers R (some m) ls times with
               | .error e => pure (.broken s!"plant {repr m}: {e}")
               | .ok pr =>
                   -- `--harness-control` (GATES-15): the plant is read at a line the row does not
@@ -170,12 +184,13 @@ def tail (t : String) : String :=
   String.intercalate "\n" ((ls.drop (ls.length - 40)).map ("  | " ++ ·))
 
 /-- Run the rows; the exit code is the runner's verdict. -/
-def runAll (selected : List Row) (times : Option Nat) (verbose : Bool) (control : Bool := false) : IO UInt32 := do
+def runAll {D : Type} [Ord D] [DecidableEq D] (R : Params D) (selected : List Row) (times : Option Nat)
+    (verbose : Bool) (control : Bool := false) (measures : Bool := true) : IO UInt32 := do
   let mut failed := 0
   let mut pending := 0
   let mut hung := 0
   for r in selected do
-    match ← drive r times control with
+    match ← drive R r times control measures with
     | .pending why =>
         pending := pending + 1
         IO.println s!"ROW {r.name} PENDING {why}"
@@ -204,12 +219,26 @@ def runAll (selected : List Row) (times : Option Nat) (verbose : Bool) (control 
   else
     IO.println "ALL PASS"; pure 0
 
-/-- `rows [-v] [--times N] [--harness-control] [ROW…]`. `--harness-control` (GATES-15) reads every
-plant at a line its row does not have, so every planted row must read `FAIL … BLIND … (harness-control)`:
-the known-red control gates/runs.py runs before reading a verdict. -/
+/-- The deployed run's parameter check, before any row: the deployed parameters measure the deployed
+widths, and the toy's are refused by name (the plant: a check that passed the toy would not be
+reading the widths). An error names what is wrong. -/
+def checkDeployed : Except String Unit := do
+  match Params.atDeployed Params.deployed with
+  | .error e => throw s!"the deployed parameters are not at the deployed widths: {e}"
+  | .ok () => pure ()
+  match Params.atDeployed Params.toy with
+  | .ok () => throw "plant toyWidths BLIND: the toy parameters pass the deployed-width check"
+  | .error e =>
+    if (e.splitOn " ").head? ≠ some "digest" then throw s!"plant toyWidths MOVED: refused {e}, not digest"
+
+/-- `rows [--deployed] [-v] [--times N] [--harness-control] [ROW…]`. `--harness-control` (GATES-15)
+reads every plant at a line its row does not have, so every planted row must read
+`FAIL … BLIND … (harness-control)`: the known-red control gates/runs.py runs before reading a
+verdict. `--deployed` runs at the deployed parameters (above). -/
 def main (args : List String) : IO UInt32 := do
   let control := args.contains "--harness-control"
-  let args := args.filter (· != "--harness-control")
+  let deployed := args.contains "--deployed"
+  let args := args.filter fun a => a != "--harness-control" && a != "--deployed"
   let (verbose, args) := match args with
     | "-v" :: rest => (true, rest)
     | _ => (false, args)
@@ -220,6 +249,17 @@ def main (args : List String) : IO UInt32 := do
   if !unknown.isEmpty then
     IO.eprintln s!"rows: no such row: {String.intercalate " " unknown}"
     return 2
-  runAll (if args.isEmpty then rows else rows.filter fun r => args.contains r.name) times verbose control
+  let selected := if args.isEmpty then rows else rows.filter fun r => args.contains r.name
+  if deployed then
+    if let .error e := checkDeployed then
+      IO.println s!"PARAMS {e}"
+      IO.println "FAIL 1 of 1"
+      return 1
+    IO.println s!"PARAMS {Params.deployed.name}: {repr Params.deployed.widths}"
+    IO.println s!"PLANT toyWidths caught: {match Params.atDeployed Params.toy with | .error e => e | .ok () => "-"}"
+    -- the Lean-internal rows run their own executables, whose parameters are their own
+    runAll Params.deployed (selected.filter fun r => r.drive matches .members _) times verbose control false
+  else
+    runAll Params.toy selected times verbose control
 
 end Nanodregg.Protocol.Rows

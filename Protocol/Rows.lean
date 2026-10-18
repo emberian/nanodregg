@@ -465,7 +465,7 @@ def audit : Row where
 /-- A log page holds at most a page budget of events (HOST-17), so it can end before the writer's
 tip, even inside a batch; a cold follower pages from each page's height until it reaches the tip
 the writer states. New in nanodregg (minidregg served the whole log in one frame), so it replaces
-no row. The rows' writer pages with a 16384-byte budget (`Writer.pageBudget`), so a hundred writes
+no row. The rows' writer pages with a 16384-byte budget at the toy parameters (`Rows.Params.pageBudget`), so a hundred writes
 are several pages. -/
 def paging : Row where
   name := "paging"
@@ -573,11 +573,13 @@ act (`Host.sealNow`, `host seal STORE`'s core), and its `invite` pins the newest
 verified, its OWN digest of its own World at the base's step count, never the writer's tip. So an
 invitation made after the log moved on past the base (twelve writes, fewer than the rows' seal
 cadence) still names the base, and a thin member adopts it; before PROTOCOL-47 `invite` pinned the
-tip, and this adopt was `baseMoved` (CLIENT-5's finding). A thin member that adopted an earlier pin
-of the same base adopts too. The plant is a seal that seals nothing (`sealIgnored`): the first
+tip, and this adopt was `baseMoved` (CLIENT-5's finding). A thin member holding the earlier pin of
+the same base adopts too. The plant is a seal that seals nothing (`sealIgnored`): the first
 invitation then pins the writer's genesis base (the newest base the operator's follow verified),
-which a thin member already holds, so its adopt (line 22) is refused `notBehind` by name. New in
-nanodregg. -/
+which a thin member already holds, so its adopt (line 19) is refused `notBehind` by name. That adopt
+comes first: what the SECOND invitation pins under the plant depends on whether the writer's own
+cadence sealed during the twelve writes, which is a byte count and differs between the toy and the
+deployed parameters (PROTOCOL-50); the first invitation's does not. New in nanodregg. -/
 def sealRow : Row where
   name := "seal"
   replaces := []
@@ -592,11 +594,11 @@ def sealRow : Row where
     { actor := "newcomer", act := .cmd ["write", "@shared", "2", "2", "--via", "@g"], expect := .ok,
       times := 12 },
     okBind "operator" ["invite", "@inputs"] "pin2",
+    ok "thin2" ["adopt", "@pin", "@operator.key"],
     ok "thin" ["adopt", "@pin2", "@operator.key"],
     ok "thin" ["write", "@shared", "3", "7", "--via", "@gt"],
-    ok "thin" ["read", "@shared", "2=2", "3=7"],
-    ok "thin2" ["adopt", "@pin", "@operator.key"]])
-  plant := .caught .sealIgnored 22 (.refused "notBehind")
+    ok "thin" ["read", "@shared", "2=2", "3=7"]])
+  plant := .caught .sealIgnored 19 (.refused "notBehind")
 
 /-- PROTOCOL-49 (HOST-48's ruling): a page the writer could not build is refused `pageIo` and the
 writer serves on, so the member's command ends `pageIo` (restart class), keeps what it absorbed, and

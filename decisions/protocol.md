@@ -1571,3 +1571,45 @@ than its docstring names. The `baseMoved` red caught it only because the expecta
 - The restart itself is rendered, not hand-kept: `Ops.Units.drivePreventCodes` is `CommandExit.codesOf .fatal` (`mem_drivePrevent`), and `deploy/units` is generated from it, so 57 is restarted by construction of the units.
 - Only phases 2 and 7 receive a page reply, so the two step theorems are every place `pageIo` can arrive.
 - `step_pageIo_log` takes the three u64 fields as premises. Every state the machine writes has them, but that is not proved as one invariant here.
+
+## PROTOCOL-50 · the member rows run at the deployed parameters too: one pipeline generic in the digest, `rows --deployed` beside the toy run (2026-10-19, PROTOCOL-15; STAND-INS-20261019 §4 D1, swap 7)
+
+**The gap.** Until now, no member row had run at the deployed parameters. `Protocol.Rows.Sim` fixed `D := UInt64`, hashed with FNV-1a, signed with `toySign` (where a secret is its own public key), and sealed the Store with the Host Sim's FNV tags. THE BAR (`scripts/bar.sh`) drives the real binaries at deployed parameters. The 30 member rows its claims rest on did not.
+
+**Decision.**
+- `Protocol.Rows.Params D` holds everything the one pipeline is instantiated with:
+  - `ctx` (with LANG's program);
+  - `dc`, the digest codec;
+  - `world`, the World codec;
+  - custody's key model: `pub` (a secret's public key) and `sign`;
+  - `keys`, the Store's sealers and base digest;
+  - the rows' two byte bounds: `sealMinBytes` and `pageBudget`.
+- `Params.toy` is the old instance, byte for byte: every ROW line of the toy run matches main's.
+- `Params.deployed` (Protocol/Rows/Deployed.lean) is `host`'s own instance:
+  - `Host.Deployed.X`, `Host.Deployed.world`, and `Host.Keys.ofKey` under `Host.Deployed.shapes` (KMAC256 tags, the unkeyed base digest);
+  - custody's keys are Ed25519, with seed `Kernel.Sim.Deployed.seed`.
+- `Protocol.Rows.Sim` is deleted.
+- Loopback and Writer are generic in `D` (`{D} [Ord D] [DecidableEq D]`; `Sys D`, `Actor D`, `St D`, `M D`, `Writer.Params D` carries `R`). Custody now holds SECRETS (`secretOf`); every place a key is carried uses `R.pub`, and every signature uses `R.sign`. That covers:
+  - the sign result frame and the precommit result;
+  - the founders' list and `nextKeyDigest`;
+  - the founding invitation and a relay's re-signed one;
+  - the `.key` binds;
+  - `readElsewhere`'s envelope and a forged call.
+  The toy's `pub` is the identity, so its run is unchanged. At deployed parameters, a key confusion would refuse a signature by name.
+- `rows --deployed` runs every member row and its plant under `Params.deployed`. The Lean-internal rows run their own exes, so it skips them, and it prints no LIVE/WASTE lines, so a WASTE measure is collected once (from the toy run). `--deployed` selects the parameters the HARNESS instantiates. It is never a mode inside admission: nothing in Kernel, Host or Protocol.Command reads which instance is running (PROTOCOL-32).
+- **The plant that the run is at the deployed parameters.** Before any row, `Params.atDeployed` measures the parameters by calling them: the digest's bytes, `pub`, `sign`, the base digest and a segment tag must be 32/32/64/32/32. The deployed instance must pass. The toy must FAIL, by name, `digest 8≠32`; otherwise the run is `plant toyWidths BLIND`, or `MOVED` if it fails on another width.
+- **Cost, in deterministic units.** Every row prints `COST <row> frames <frames on either socket> steps <writer World steps>` in both runs, so the two runs' cost reads beside each other without a clock.
+- `gates/runs.tsv`: the rows row runs `(none) ; --deployed` (GATES-6 agreed). One toy `--harness-control` control serves both, since the BLIND reader is the same generic `drive`. `--deployed --harness-control` was run by hand and read FAIL 30 of 30 BLIND.
+
+**What the deployed run found, and what changed for it.**
+1. With the toy's byte bounds, `thinStale` (line 15) and `seal` (line 22) were `refused baseMoved`. Both rows rest on a premise: "twelve writes, fewer than the rows' seal cadence". `sealMinBytes` is in bytes, and a deployed write is about four times a toy one (32-byte digests and keys and 64-byte signatures, against 8 and 8). At 8192, the writer's own cadence sealed during the twelve writes and moved the base off the pin. That is honest behaviour, and the row's premise was the parameter-bound part. So the byte bounds are now Params fields: the toy keeps 8192/16384, and the deployed is ×4.
+2. With the toy's page budget, `paging`'s plant `lieTip` bit one line EARLY: line 10 read `contradicted "committed open"` against the declared line 11. Deployed events are bigger, so there are more pages and the lie reaches the sponsor's own write. With the ×4 budget it is caught at its line again.
+3. With the ×4 bounds, `seal`'s plant `sealIgnored` was caught at the first thin adopt (line 19 `notBehind`), not at line 22. Under that plant, what the SECOND invitation pins depends on whether the writer's cadence sealed during the twelve writes. That is a byte count, and it differs between the parameter sets (the welcome's package text is fixed-size, so it does not scale ×4). The row now adopts the FIRST invitation first. Under the plant, that one always pins the genesis base. The plant is read at line 19 in both runs, by the same name.
+
+**Rows: 31, toy ALL PASS; deployed 30 member rows ALL PASS** (tables in the commit message).
+
+**Critique.**
+- The ×4 is chosen, not derived: it is the ratio of a write's bytes, rounded. A row whose shape depends on a byte bound depends on it at both parameter sets. The two runs now both pass with every plant at its declared line, and that is the evidence the bounds keep the shapes. A bound that drifts shows as a plant caught off its line (BLIND) or an honest line refused, never as a silent pass.
+- The deployed run is in process. It has no sockets: the wire codecs carry every step, but the transport is a channel. THE BAR remains the over-sockets measure. This closes D1's "no member row at deployed parameters", not A/C's socket gaps.
+- `atDeployed` measures the parameter FUNCTIONS, not the bytes the run logged. The run uses exactly those functions (`R.ctx`, `R.pub`, `R.sign`, `R.keys`), and nothing else in the pipeline produces digests, keys or tags.
+- Cost: deployed 67 s, toy 18 s (hbox, swarm-build; recorded for the record, judged by nothing). `forgotten` and `refused` are ~35 k frames each and dominate. Their counts are heights, so they cannot be scaled by `--times`.
