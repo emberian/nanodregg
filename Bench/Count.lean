@@ -41,9 +41,14 @@ def countingX : Ctx D :=
     env := Kernel.Sim.Gen.countingEnv X.env
     verify := fun k m s => dbgTrace "@" fun _ => X.verify k m s }
 
-/-- A follower's re-derivation of one record (`auditStep` per step), its stated roots checked. -/
+/-- A follower's re-derivation of one record (`auditStep` per step), its stated roots checked; each
+recorded refusal it re-judges is marked `!`, so a verify count is read against its Turns and refusals. -/
 def auditRecord (w : World D) (r : ByteArray) : Except (Record.Fault (Verdict D)) (World D) :=
-  Record.step Codec.Deployed.digestCodec (auditStep countingX) (World.roots countingX.env) w r
+  Record.step Codec.Deployed.digestCodec
+    (fun w s => match s with
+      | .refusal _ => dbgTrace "!" fun _ => auditStep countingX w s
+      | _ => auditStep countingX w s)
+    (World.roots countingX.env) w r
 
 /-- Run `act` with stderr captured; its result and the captured text. -/
 def captured {α : Type} (act : IO α) : IO (α × String) := do
@@ -107,8 +112,9 @@ def count (args : List String) : IO UInt32 := do
       return 1
   let steps := rw.steps - o.sealed.steps
   if steps == 0 then IO.println "FAIL count: no step past the base to count"; return 1
-  let (h, v) := (marks err '#', marks err '@')
+  let (h, v, rf) := (marks err '#', marks err '@', marks err '!')
   IO.println s!"COUNT steps {steps} (past the base at step {o.sealed.steps}, offset {o.sealed.offset}) trie-hashes {h} verifies {v}"
+  IO.println s!"COUNT kinds turns {steps - rf} refusals {rf} (recorded refusals re-judged in the tail)"
   IO.println s!"WASTE bar trie-hashes-per-step {ratio h steps}"
   IO.println s!"WASTE bar audit-verifies-per-step {ratio v steps}"
   IO.println "BENCH-COUNT PASS"

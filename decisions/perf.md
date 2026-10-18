@@ -370,3 +370,52 @@ hashes per step.
 transfer touching two cells) costs more per step.
 
 **Status.** open.
+
+## PERF-7 · bar.sh measures only binaries that are this tree's, by lake's and cargo's own reports (2026-10-18, ROOT)
+
+**Decision.** Before anything runs, bar.sh proves the four binaries it will measure are built from the tree it
+names:
+- **Lean.** The bin directory must be this tree's `.lake/build/bin`, either as ND_LEAN_BIN (which is how
+  runs.py passes it) or built here. Any other directory is `RED binaries-foreign`. Then
+  `lake build --no-build host bench-count` must succeed: lake's own trace check, which exits non-zero when
+  a target would rebuild. Otherwise `RED binaries-stale`.
+- **cargo.** After the build, `cargo build --message-format=json` must report nd and nd-supervise as
+  `fresh`, at exactly the paths that run. Otherwise `RED binaries-stale`, naming which.
+- **What it prints.** The build no longer goes to `/dev/null`: `BAR built lean: N targets rebuilt`, then
+  `BAR binaries` with each binary's SHA-256 prefix, the tree's sha, and its count of dirty tracked paths.
+  `--record` on a dirty tree is `RED dirty-tree`, because its sha would name another tree.
+- **bench-count.** It marks each recorded refusal it re-judges and prints `COUNT kinds turns T refusals R`,
+  so a verify count is read against its kinds and not inferred.
+
+**Why.** PERF-1's 506 verifies over 502 steps on c18e028 most likely came from a bench-count not rebuilt
+from that Kernel: the build output went to /dev/null, and the worktree held uncommitted edits. KERNEL-20
+measured 503/503 and 510/510. That is the stale-binary class: a number from a binary other than the one
+claimed.
+
+**Plants (by hand, all at a18d6ea + this change):**
+- a comment appended to Bench/Count.lean, with ND_LEAN_BIN set (no rebuild): `RED binaries-stale: lake
+  reports host or bench-count out of date`;
+- ND_LEAN_BIN an empty directory elsewhere: `RED binaries-foreign`;
+- a comment appended to client/src/attempt.rs, with ND_BIN prebuilt: `RED binaries-stale: nd: not fresh;
+  nd-supervise: not fresh`.
+The standing form still reads PASS, and its control still fires all four expectations.
+
+**Measured with it** (full mode, clean tree a18d6ea except this change; load1 14–57, so the clock is
+UNJUDGED and only counts are read):
+- `count steps 217 … verifies 217` with `kinds turns 198 refusals 19`;
+- `205 … 205` with `198 + 7`.
+So one verify per step, refusals included, and `bar audit-verifies-per-step` stays 1.000 with its text
+corrected. Two runs at 800 and 1000 records ended `RED resident nd write exit 53: declined refusalBudget`.
+That is PROTOCOL-13's open contention finding (cv 01a14edf-6f12), and on a box at load1 34–49 it is now
+reached below 1000 records.
+
+**CRITIQUE.**
+- `--no-build` trusts lake's traces. A binary edited in place after a build, with the sources unchanged,
+  passes. The SHA-256 line makes that visible, but nothing refuses it.
+- The cargo check runs a second (no-op) build. When it is not a no-op, it rebuilds the binaries and then
+  refuses, so a re-run would pass. That is right: the re-run measures the rebuilt binaries.
+
+**META-CRITIQUE.** I assert freshness, not identity with the commit. A dirty tree's binaries are that dirty
+tree's, which is why only `--record` refuses dirt.
+
+**Status.** landed with this entry.

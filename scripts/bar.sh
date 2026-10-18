@@ -50,7 +50,8 @@
 # 775 build tree is, so that directory's chain is checked and RED by name too. Without --root the
 # Stores share the $HOME directory. Both are removed on exit (a SIGKILL leaves them: KB under $HOME). Every process this starts is stopped by its PID file; every wait has
 # a deadline. ND_LEAN_BIN / ND_BIN name prebuilt bin directories (host; nd, nd-supervise); unset,
-# this builds them (lake build host; cargo build --release).
+# this builds them (lake build host; cargo build --release). Either way they must be this tree's and up
+# to date with it, by lake's and cargo's own reports, or the run is RED binaries-stale/-foreign.
 set -uo pipefail
 here=$(cd "$(dirname "$0")/.." && pwd -P)
 records=1000 record=0 standing=0 control=0 base=
@@ -71,20 +72,62 @@ case $records in ''|*[!0-9]*) echo "bar: --records must be a number" >&2; exit 2
 load() { if [ -r /proc/loadavg ]; then cut -d' ' -f1-3 /proc/loadavg; else sysctl -n vm.loadavg | tr -d '{}' | awk '{print $1, $2, $3}'; fi; }
 before=$(load)
 
-# absolute: the sandbox names the program by its real path
-if [ -n "${ND_LEAN_BIN:-}" ]; then HOST=$(cd "$ND_LEAN_BIN" && pwd -P)/host || exit 1; else
-  ( cd "$here" && lake build host bench-count >/dev/null ) || { echo "BAR verdict RED build:host"; exit 1; }
-  HOST=$here/.lake/build/bin/host
+# absolute: the sandbox names the program by its real path. The binaries measured are this tree's
+# or the run is refused (ROOT 2026-10-18, the stale-binary class: a `lake build … >/dev/null` hid that
+# bench-count was not rebuilt from the Kernel it claimed to measure, and a stale count was read):
+# - Lean: the bin directory must be THIS tree's .lake/build/bin (ND_LEAN_BIN, as runs.py passes it, or
+#   built here), and lake's own report must say host and bench-count are up to date with the tree's
+#   sources (`lake build --no-build`, which exits non-zero when a target would rebuild);
+# - cargo: after the build, cargo's own JSON report must name nd and nd-supervise `fresh` at exactly
+#   the paths run;
+# what was built, each binary's SHA-256 and the tree's sha and dirty-path count are printed; `--record`
+# on a dirty tree is refused (its sha would name another tree).
+buildlog=$(mktemp "${TMPDIR:-/tmp}/ndbar-build.XXXXXX") || { echo "BAR verdict RED setup: mktemp for the build log"; exit 1; }
+lakebin=$here/.lake/build/bin
+if [ -z "${ND_LEAN_BIN:-}" ]; then
+  ( cd "$here" && lake build host bench-count ) > "$buildlog" 2>&1 \
+    || { tail -n 20 "$buildlog"; rm -f "$buildlog"; echo "BAR verdict RED build:host"; exit 1; }
+  echo "BAR built lean: $(grep -c 'Built\|Compiled' "$buildlog") targets rebuilt ($(tail -n 1 "$buildlog"))"
+  ND_LEAN_BIN=$lakebin
 fi
+leanbin=$(cd "$ND_LEAN_BIN" 2>/dev/null && pwd -P) || { rm -f "$buildlog"; echo "BAR verdict RED binaries-missing ($ND_LEAN_BIN)"; exit 1; }
+if [ "$leanbin" != "$(cd "$lakebin" 2>/dev/null && pwd -P)" ]; then
+  rm -f "$buildlog"; echo "BAR verdict RED binaries-foreign: ND_LEAN_BIN $leanbin is not this tree's $lakebin"; exit 1
+fi
+( cd "$here" && lake build --no-build host bench-count ) > "$buildlog" 2>&1 \
+  || { tail -n 5 "$buildlog"; rm -f "$buildlog"; echo "BAR verdict RED binaries-stale: lake reports host or bench-count out of date with this tree's sources"; exit 1; }
+HOST=$leanbin/host
 # --standing judges counts only, so it takes the dev profile a gate's cargo rows already built; the
 # full bar's clock is release's.
 if [ $standing = 1 ]; then profile=dev dir=debug; else profile=release dir=release; fi
 if [ -n "${ND_BIN:-}" ]; then BIN=$(cd "$ND_BIN" && pwd -P) || exit 1; else
   cargo build --quiet --profile $profile --manifest-path "$here/Cargo.toml" -p nanodregg-client --bin nd --bin nd-supervise \
-    || { echo "BAR verdict RED build:client"; exit 1; }
-  BIN=${CARGO_TARGET_DIR:-$here/target}/$dir
+    || { rm -f "$buildlog"; echo "BAR verdict RED build:client"; exit 1; }
+  BIN=$(cd "${CARGO_TARGET_DIR:-$here/target}/$dir" && pwd -P) || exit 1
 fi
-[ -x "$HOST" ] && [ -x "$(dirname "$HOST")/bench-count" ] && [ -x "$BIN/nd" ] && [ -x "$BIN/nd-supervise" ] || { echo "BAR verdict RED binaries-missing ($HOST, $BIN)"; exit 1; }
+cargo build --profile $profile --manifest-path "$here/Cargo.toml" -p nanodregg-client --bin nd --bin nd-supervise \
+  --message-format=json 2>/dev/null > "$buildlog"
+fresh=$(python3 -I - "$buildlog" "$BIN" <<'PY'
+import json, os, sys
+log, bindir = sys.argv[1], sys.argv[2]
+seen = {}
+for line in open(log):
+    try: m = json.loads(line)
+    except ValueError: continue
+    if m.get("reason") == "compiler-artifact" and m.get("target", {}).get("name") in ("nd", "nd-supervise") and m.get("executable"):
+        seen[m["target"]["name"]] = (m.get("fresh"), os.path.realpath(m["executable"]))
+bad = [f"{n}: {'absent from cargo report' if n not in seen else ('not fresh' if not seen[n][0] else 'cargo built ' + seen[n][1])}"
+       for n in ("nd", "nd-supervise") if n not in seen or not seen[n][0] or seen[n][1] != os.path.realpath(os.path.join(bindir, n))]
+print("ok" if not bad else "; ".join(bad))
+PY
+)
+rm -f "$buildlog"
+[ "$fresh" = ok ] || { echo "BAR verdict RED binaries-stale: $fresh (cargo's report for this tree, against $BIN)"; exit 1; }
+[ -x "$HOST" ] && [ -x "$leanbin/bench-count" ] && [ -x "$BIN/nd" ] && [ -x "$BIN/nd-supervise" ] || { echo "BAR verdict RED binaries-missing ($HOST, $BIN)"; exit 1; }
+sha() { if command -v sha256sum >/dev/null; then sha256sum "$1" | cut -c1-16; else shasum -a 256 "$1" | cut -c1-16; fi; }
+dirty=$(git -C "$here" status --porcelain --untracked-files=no 2>/dev/null | wc -l | tr -d ' ')
+echo "BAR binaries host $(sha "$HOST") bench-count $(sha "$leanbin/bench-count") nd $(sha "$BIN/nd") nd-supervise $(sha "$BIN/nd-supervise"); lake and cargo report them up to date with tree $(git -C "$here" rev-parse --short HEAD 2>/dev/null || echo none), $dirty dirty tracked paths"
+if [ $record = 1 ] && [ "$dirty" != 0 ]; then echo "BAR verdict RED dirty-tree: --record names a sha, and $dirty tracked paths differ from it"; exit 1; fi
 
 [ -n "${HOME:-}" ] && [ -d "$HOME" ] || { echo "BAR verdict RED setup: HOME is not a directory (custody's workspaces live under it)"; exit 1; }
 root=$(mktemp -d "$(cd "$HOME" && pwd -P)/ndbar.XXXXXX") || { echo "BAR verdict RED setup: mktemp under $HOME"; exit 1; }
