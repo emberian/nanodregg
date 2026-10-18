@@ -17,6 +17,7 @@ import Kernel.Proofs.Refusals
 import Kernel.Proofs.Fold
 import Kernel.Proofs.Receive
 import Kernel.Proofs.Journal
+import Protocol.Proofs.Command
 
 namespace Nanodregg.Protocol.Settle
 
@@ -254,5 +255,200 @@ theorem settle_open_not_final {X : Ctx D} {w w' : World D} {c : Call D} {t : Tur
       | count n => simp [ofReceipt, hnf, hnot]
 
 end Member
+
+/-- **`settle_final_never_admits` on every World folded from a genesis (`Receive.genesisWorld`)**: a call settled
+`expired` or `refused` from the receipt follow built there is admitted by no later World. -/
+theorem settle_final_reached {X : Ctx D} {name nonce : ByteArray} {a : Nat} {fs : List (ByteArray × D)}
+    {l₀ : List (Kernel.Step D)} {w w' : World D} {c : Call D} {l : List (Kernel.Step D)}
+    (hw : World.fold X.env (genesisWorld X name nonce a fs) l₀ = .ok w)
+    (hv : ofReceipt (journalForgets w.height c.unsigned.notBefore) w.height c.unsigned.validUntil
+        (Receipt.build X.env w (txIdOf X c)).answer = .expired ∨
+      ∃ code, ofReceipt (journalForgets w.height c.unsigned.notBefore) w.height c.unsigned.validUntil
+        (Receipt.build X.env w (txIdOf X c)).answer = .refused code)
+    (hf : World.fold X.env w l = .ok w') : ∀ out, submit X w' c ≠ .ok out :=
+  settle_final_never_admits (fold_refusalsOk (genesisWorld_refusalsOk X name nonce a fs) hw).1
+    (fold_journalOk (genesisWorld_journalOk X name nonce a fs) hw).1 hv hf
+
+/-! ## The refused arm never answers `open` on a World follow absorbed from a genesis (`Receive.genesisWorld`)
+
+KERNEL records a refusal only for a call whose window is no wider than an admissible call's
+(8ad3982, `Kernel.refuse_window_width`): the leaf records `h = w.height + 1` and the call's
+`validUntil ≤ h + windowMax`. Follow takes a refusal only as the one its own `judge` records for the
+call it decoded (`Command.absorbStep`), so on a World follow absorbed (`WindowedIn S`, `S` the steps
+follow took) every refusal leaf at a transaction id is the leaf of a call in `S` with that id whose
+window closes within `windowMax` of `h`. The member's own call has that id: either its window closes
+by `h + windowMax` and `ofReceipt` answers `refused` (`h + windowMax ≤ h + 2 · windowMax`), or `S`
+itself holds a DIFFERENT call (a narrower window) under the member's transaction id: a hash collision
+in follow's own log, or the member's call is outside the codec's domain (`callBytes` is injective
+only on calls that fit it).
+
+A World carried from a base (`adopt`, an opened Store) is not covered: its refusal leaves keep only
+`(h, code)`, not the call. There, `ofReceipt`'s own check is what keeps the arm safe.
+
+* `absorbPage_windowedIn`, `absorbed_windowedIn` (from `genesisWorld_windowedIn`): the invariant
+  along follow's absorption;
+* `windowedIn_refused`: the member's call refused at `h` closes by `h + windowMax`, or `S` holds a
+  colliding call;
+* `settle_refused_final`: the refused arm answers `refused`, or `S` holds a colliding call;
+  `settle_refused_absorbed`: the same with `S` exactly the steps follow took from a genesis.
+-/
+
+section Windowed
+
+/-- Every recorded refusal on `w` is the record `judge` makes for a call that a refusal step of `S`
+carries, at that call's id, and the call's window closes within `windowMax` of the record's height;
+and the refusals are `RefusalsOk`. -/
+def WindowedIn (X : Ctx D) (S : List (Kernel.Step D)) (w : World D) : Prop :=
+  w.RefusalsOk X.env ∧ ∀ id h code, w.refusalAt X.env (.tx id) = some (.refused h code) →
+    ∃ c v, Kernel.Step.refusal (refusedOf X c v) ∈ S ∧ txIdOf X c = id ∧
+      c.unsigned.validUntil ≤ h + Bounds.windowMax
+
+theorem windowedIn_mono {X : Ctx D} {S S' : List (Kernel.Step D)} {w : World D} (hs : ∀ s ∈ S, s ∈ S')
+    (hw : WindowedIn X S w) : WindowedIn X S' w := by
+  refine ⟨hw.1, fun id h code hk => ?_⟩
+  obtain ⟨c, v, hm, hid, hvu⟩ := hw.2 id h code hk
+  exact ⟨c, v, hs _ hm, hid, hvu⟩
+
+/-- The World a genesis builds records no refusal (founders are trie entries only). -/
+theorem genesisWorld_windowedIn (X : Ctx D) (S : List (Kernel.Step D)) (name nonce : ByteArray) (a : Nat)
+    (fs : List (ByteArray × D)) : WindowedIn X S (genesisWorld X name nonce a fs) := by
+  refine ⟨genesisWorld_refusalsOk X name nonce a fs, fun id h code hk => ?_⟩
+  have he : (genesisWorld X name nonce a fs).refusals = .empty := rfl
+  unfold World.refusalAt at hk
+  rw [he] at hk
+  cases hk
+
+/-- An admission keeps every refusal leaf or prunes it; it records none. -/
+theorem admit_windowedIn {X : Ctx D} {S : List (Kernel.Step D)} {w w' : World D} {t : Turn D}
+    (hw : WindowedIn X S w) (h : World.admit X.env w t = .ok w') : WindowedIn X S w' := by
+  refine ⟨admit_refusalsOk hw.1 h, fun id hh code hk => ?_⟩
+  rw [admit_refusalAt hw.1.1 h] at hk
+  split at hk
+  · exact hw.2 id hh code (Option.filter_eq_some_iff.mp hk).1
+  · exact hw.2 id hh code hk
+
+/-- A refusal `judge` records adds its call's leaf, inside the window bound, carried by the step. -/
+theorem judge_windowedIn {X : Ctx D} {S : List (Kernel.Step D)} {w w' : World D} {c : Call D}
+    {v : Receive.Verdict D} {r : Refused D}
+    (hw : WindowedIn X S w) (hj : judge X w c = .recorded v r w') :
+    WindowedIn X (S ++ [.refusal r]) w' := by
+  obtain ⟨-, -, hr, href⟩ := judge_recorded hj
+  refine ⟨refuse_refusalsOk hw.1 href, fun id hh code hk => ?_⟩
+  have hwid := refuse_window_width href
+  rw [refuse_refusalAt href] at hk
+  split at hk
+  · rename_i he; cases he
+  · split at hk
+    · rename_i _ he
+      injection he with he
+      injection hk with hk
+      injection hk with h1 h2
+      subst hr he h1
+      exact ⟨c, v, by simp, rfl, hwid⟩
+    · obtain ⟨c', v', hm, hid, hvu⟩ := hw.2 id hh code hk
+      exact ⟨c', v', by simp [hm], hid, hvu⟩
+
+/-- One step follow absorbs keeps the invariant, with the step taken. -/
+theorem absorbStep_windowedIn {X : Ctx D} {S : List (Kernel.Step D)} {w w' : World D} {e : ByteArray}
+    {s : Kernel.Step D} (hw : WindowedIn X S w) (h : Command.absorbStep X w e = .ok (s, w')) :
+    WindowedIn X (S ++ [s]) w' := by
+  unfold Command.absorbStep at h
+  repeat' split at h
+  all_goals (try simp only [Except.ok.injEq, Prod.mk.injEq, reduceCtorEq] at h)
+  all_goals (obtain ⟨rfl, rfl⟩ := h)
+  · exact windowedIn_mono (fun _ hm => by simp [hm]) (admit_windowedIn hw (submit_ok ‹_›).2.2)
+  · exact judge_windowedIn hw ‹_›
+
+theorem absorb_windowedIn {X : Ctx D} {S : List (Kernel.Step D)} :
+    ∀ (evs : List ByteArray) {w w' : World D} {acc ts : Array (Kernel.Step D × D)},
+      WindowedIn X (S ++ acc.toList.map Prod.fst) w → Command.absorb X w acc evs = .ok (w', ts) →
+        WindowedIn X (S ++ ts.toList.map Prod.fst) w'
+  | [], w, w', acc, ts, hw, h => by
+    simp only [Command.absorb, Except.ok.injEq, Prod.mk.injEq] at h
+    obtain ⟨rfl, rfl⟩ := h
+    exact hw
+  | e :: es, w, w', acc, ts, hw, h => by
+    unfold Command.absorb at h
+    split at h
+    · rename_i s w₁ hs
+      refine absorb_windowedIn es (windowedIn_mono (fun x hm => ?_) (absorbStep_windowedIn hw hs)) h
+      simpa [List.append_assoc] using hm
+    · cases h
+
+/-- **The invariant along every page follow absorbs**, with the page's steps taken. -/
+theorem absorbPage_windowedIn {X : Ctx D} {S : List (Kernel.Step D)} {w w' : World D}
+    {evs : List ByteArray} {steps base : Nat} {chain : ByteArray} {ts : List (Kernel.Step D × D)}
+    {wb? : Option (World D)} (hw : WindowedIn X S w)
+    (h : Command.absorbPage X w evs steps chain base = .ok (w', ts, wb?)) :
+    WindowedIn X (S ++ ts.map Prod.fst) w' := by
+  obtain ⟨wb, tb, ts', h₁, h₂, rfl, -, -⟩ := Command.absorbPage_ok h
+  have h0 : WindowedIn X (S ++ (#[] : Array (Kernel.Step D × D)).toList.map Prod.fst) w := by simpa using hw
+  exact absorb_windowedIn _ (absorb_windowedIn _ h0 h₁) h₂
+
+/-- **The member's call, refused at `h` on a `WindowedIn S` World, closes within `windowMax` of `h`**,
+or a refusal step of `S` carries a different call (its window closes earlier) under the member's
+transaction id. -/
+theorem windowedIn_refused {X : Ctx D} {S : List (Kernel.Step D)} {w : World D} {c : Call D}
+    {h code : Nat} (hw : WindowedIn X S w)
+    (hr : (Receipt.build X.env w (txIdOf X c)).answer = .refused h code) :
+    c.unsigned.validUntil ≤ h + Bounds.windowMax ∨
+      ∃ c' v, Kernel.Step.refusal (refusedOf X c' v) ∈ S ∧ txIdOf X c' = txIdOf X c ∧
+        c'.unsigned.validUntil < c.unsigned.validUntil := by
+  rw [build_answer] at hr
+  split at hr
+  · cases hr
+  · split at hr
+    · rename_i h' code' hk
+      injection hr with e1 e2
+      subst e1 e2
+      obtain ⟨c', v, hm, hid, hvu⟩ := hw.2 _ _ _ hk
+      by_cases hle : c.unsigned.validUntil ≤ h' + Bounds.windowMax
+      · exact .inl hle
+      · exact .inr ⟨c', v, hm, hid, by omega⟩
+    · cases hr
+
+/-- **The refused arm's `open` is dead** on a `WindowedIn S` World: a receipt that refuses the member's
+own call settles `refused`, unless `S` carries a colliding call. -/
+theorem settle_refused_final {X : Ctx D} {S : List (Kernel.Step D)} {w : World D} {c : Call D}
+    {fg : Bool} {H h code : Nat} (hw : WindowedIn X S w)
+    (hr : (Receipt.build X.env w (txIdOf X c)).answer = .refused h code) :
+    ofReceipt fg H c.unsigned.validUntil (Receipt.build X.env w (txIdOf X c)).answer = .refused code ∨
+      ∃ c' v, Kernel.Step.refusal (refusedOf X c' v) ∈ S ∧ txIdOf X c' = txIdOf X c ∧
+        c'.unsigned.validUntil < c.unsigned.validUntil := by
+  rcases windowedIn_refused hw hr with hv | hcol
+  · left
+    rw [hr]
+    simp only [ofReceipt]
+    rw [if_pos (by omega)]
+  · exact .inr hcol
+
+/-- Follow's absorption from `w`: a run of pages, each taken by `absorbPage`, and `S` the steps they
+took, in order. -/
+inductive Absorbed (X : Ctx D) : World D → List (Kernel.Step D) → World D → Prop
+  | nil (w : World D) : Absorbed X w [] w
+  | page {w w' w'' : World D} {evs : List ByteArray} {steps base : Nat} {chain : ByteArray}
+      {ts : List (Kernel.Step D × D)} {wb? : Option (World D)} {S : List (Kernel.Step D)}
+      (h : Command.absorbPage X w evs steps chain base = .ok (w', ts, wb?)) (rest : Absorbed X w' S w'') :
+      Absorbed X w (ts.map Prod.fst ++ S) w''
+
+theorem absorbed_windowedIn {X : Ctx D} {S₀ S : List (Kernel.Step D)} {w w' : World D}
+    (hw : WindowedIn X S₀ w) (h : Absorbed X w S w') : WindowedIn X (S₀ ++ S) w' := by
+  induction h generalizing S₀ with
+  | nil => simpa using hw
+  | page hp _ ih => simpa [List.append_assoc] using ih (absorbPage_windowedIn hw hp)
+
+/-- **The refused arm's `open` is dead on the World follow absorbed from a genesis**, with `S` the
+steps follow itself took: a receipt refusing the member's call settles `refused`, unless follow's own
+log carries a different call (a narrower window) under the member's transaction id. -/
+theorem settle_refused_absorbed {X : Ctx D} {name nonce : ByteArray} {a : Nat}
+    {fs : List (ByteArray × D)} {S : List (Kernel.Step D)} {w : World D} {c : Call D} {fg : Bool}
+    {H h code : Nat} (ha : Absorbed X (genesisWorld X name nonce a fs) S w)
+    (hr : (Receipt.build X.env w (txIdOf X c)).answer = .refused h code) :
+    ofReceipt fg H c.unsigned.validUntil (Receipt.build X.env w (txIdOf X c)).answer = .refused code ∨
+      ∃ c' v, Kernel.Step.refusal (refusedOf X c' v) ∈ S ∧ txIdOf X c' = txIdOf X c ∧
+        c'.unsigned.validUntil < c.unsigned.validUntil :=
+  settle_refused_final (by simpa using absorbed_windowedIn (genesisWorld_windowedIn X [] name nonce a fs) ha) hr
+
+end Windowed
 
 end Nanodregg.Protocol.Settle

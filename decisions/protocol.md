@@ -1402,8 +1402,8 @@ than its docstring names. The `baseMoved` red caught it only because the expecta
 - Ops/Units `commandAction` re-cut (OPS-4).
 
 **Critique.**
-- `settle_final_never_admits` is about `submit`, the writer's admission. A follower's audit admits only logged turns derived from calls, so it inherits the same window and journal facts. It is not stated here separately.
-- `refused`'s arm needs `validUntil ≤ h + 2·windowMax`. That is NOT true of every recorded call (the vacuity read found it): `checkRefusal` checks `notBefore ≤ height + 1 ≤ validUntil` but never the width, so a recorded call wider than `windowMax` settles `open`, then `forgotten`, and never final. This is a completeness gap, not unsoundness. Asked of KERNEL: check the width before recording, which makes this arm dead and provable.
+- `settle_final_never_admits` is about `submit`, the writer's admission. Follow's absorption (`Command.absorbStep`) admits a logged turn only through `submit` on its own World, so it inherits the same window and journal facts. It is not stated here separately.
+- `refused`'s arm needs `validUntil ≤ h + 2·windowMax`. That is NOT true of every recorded call (the vacuity read found it): `checkRefusal` checks `notBefore ≤ height + 1 ≤ validUntil` but never the width, so a recorded call wider than `windowMax` settles `open`, then `forgotten`, and never final. This is a completeness gap, not unsoundness. Asked of KERNEL: check the width before recording, which makes this arm dead and provable. CLOSED for absorbed Worlds (PROTOCOL-13): KERNEL-18 checks the width (8ad3982, `refuse_window_width`). `WindowedIn X S w` says every refusal leaf is the record `judge` makes for a call that a refusal step of `S` carries, at its id, with `validUntil ≤ h + windowMax`; it holds at the World a genesis builds (`genesisWorld_windowedIn`, founders included) and along every page follow absorbs, with the page's steps added to `S` (`absorbStep_windowedIn`, `absorb_windowedIn`, `absorbPage_windowedIn`, `absorbed_windowedIn`: the code follow runs, not `Receive.audit`). `settle_refused_absorbed`: on the World follow absorbed from a genesis, with `S` exactly the steps it took, a receipt refusing the member's call settles `refused`, or follow's own log carries a DIFFERENT call (a narrower window) under the member's transaction id: a hash collision in that log, or the member's call is outside the codec's domain (`callBytes` is injective only on calls that fit). That disjunct is a fact about a concrete log; it is not the abstract `Collision`, which pigeonhole makes true of the 32-byte deployed hash. NOT covered: a World carried from a base (adopt, an opened Store) keeps only `(h, code)` per refusal, so `WindowedIn` cannot be shown there, and `ofReceipt`'s `validUntil ≤ h + 2·windowMax` check is what keeps the arm safe on it. The check stays; it also keeps `settle_final_never_admits` free of any absorption premise (its premises are `RefusalsCanon`, `JournalCanon` and the answer).
 - Every final settlement costs one follow catch-up. An absent call is final only after its window, at most `windowMax` heights.
 
 **Status.** BUILT; rows ALL PASS 27.
@@ -1413,7 +1413,7 @@ than its docstring names. The `baseMoved` red caught it only because the expecta
   - `envelopeRefused_once` / `_write` derive their `expiredHeight?` premise (`expiredHeight_unknownKey`);
   - `next_absent_probes` is stated for every `b`, and `next_ends_open` is added.
 - Open:
-  - a named reached-World lemma for `check_build`'s u64 height fit, and `deployed_*` compositions;
+  - a named reached-World lemma for `check_build`'s u64 height fit, and `deployed_*` compositions. CLOSED: `reached_journal_fits`, `check_build_reached`, `settle_final_reached` (over `World.fold X.env (genesisWorld X name nonce a fs) l = .ok w`, the World a genesis builds, founders included; no other premise; a carried World is not covered), and, for the refused arm, `settle_refused_final` above;
   - the incoming bit's persistence across the step machine is not proved, only the local once;
   - the Rust wiring (`settle_seen` reading follow's line) is CLIENT's tests, not a theorem.
 
@@ -1500,5 +1500,9 @@ than its docstring names. The `baseMoved` red caught it only because the expecta
 - Persisting `verified` would be a Store-format change; that is not done now.
 - One World encode and hash per crossing: bounded by the seal cadence, not per page.
 - No row restarts a follow, so `noBase` is held by `pinOf_none` / `pinOf_other`, not by a row line.
+
+**The sponsor's actions (RUNBOOK §2, OPS 5a71be7).**
+- `noBase`: stop the writer, `host seal STORE`, start it, let follow catch up past the base, invite again.
+- `baseMismatch`: the writer states a base digest that is not the sponsor's own World at that step count. Do not invite through that writer; investigate it (its Store or its page path lies).
 
 **Meta-critique.** Pinning the tip looked like "the World as it stands", but the joiner can only ever receive a base. The pin was naming something no reader could fetch. A signed claim should name what its consumer can check.

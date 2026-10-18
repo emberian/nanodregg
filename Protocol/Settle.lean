@@ -59,10 +59,13 @@ and decides it here:
 * `committed h td`: the journal holds it; final;
 * `refused code`: the refusals hold its recorded refusal, and the call's window closes before the
   record can be pruned (`validUntil ≤ h + 2 · windowMax`); final. Otherwise the answer is `open`,
-  the safe side. The kernel records a refusal without checking the window's WIDTH
-  (`checkRefusal` checks only `notBefore ≤ height + 1 ≤ validUntil`), so a recorded call wider than
-  `windowMax` settles `open`, never final: a completeness gap, asked of KERNEL (width checked before
-  recording makes this arm dead);
+  the safe side. On a World follow absorbed from a genesis that `open` is dead: the kernel records
+  only a window no wider than `windowMax` (`checkRefusedBounds`, 8ad3982), and follow takes a
+  refusal only as its own `judge` records it, so the member's own call refused at `h` closes by
+  `h + windowMax`, unless follow's own log carries a different call under the member's id (a
+  hash collision, or a call outside the codec's domain) (`settle_refused_absorbed`). A World carried from a base keeps only
+  `(h, code)` per refusal, so there this check is what keeps the arm safe, and it stays: it also
+  keeps `settle_final_never_admits` free of any absorption premise;
 * `expired`: absent, and the head is at or past the call's `validUntil`; final (no later World
   admits it: the kernel's window);
 * `open`: absent while the window is live. NOT final: whoever holds the signed bytes (the Host,
@@ -70,7 +73,9 @@ and decides it here:
 * `forgotten`: absent past `journalForgets`: absence no longer says the call did not land.
 
 Theorems: `Protocol.Proofs.Settle` (`settle_committed`, `settle_final_never_admits`,
-`settle_open_not_final`) and `Protocol.Proofs.Receipt` (`check_build`).
+`settle_open_not_final`, `settle_refused_absorbed`, `settle_refused_final`, `absorbed_windowedIn`,
+`settle_final_reached`) and
+`Protocol.Proofs.Receipt` (`check_build`, `check_build_reached`).
 -/
 
 /-- What follow says happened to a call. -/
