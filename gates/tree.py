@@ -25,7 +25,7 @@ THEOREM_KINDS = {"theorem", "lemma"}
 # the journeys, the census, the Rust emitter and Ops (the unit renderer and the store plants, run by
 # an operator beside the node, never inside it; closure C10) are made of. SIZE.md counts it in its
 # own row; closure C9 keeps every deployed module from importing it.
-TOOLING_LIBS = {"Census", "Emit", "Ops"}
+TOOLING_LIBS = {"Census", "Emit", "Ops", "Bench"}
 TOOLING_COMPONENTS = {"Sim", "Rows", "Journey"}
 MODIFIERS = {"private", "protected", "noncomputable", "partial", "unsafe", "nonrec", "public",
              "meta", "scoped", "local"}

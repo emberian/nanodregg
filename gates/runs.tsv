@@ -36,4 +36,5 @@ cargo:client:real	host	exit 0	nobin RED
 cargo:client:stdio	host	exit 0	nobin RED
 cargo:client:supervise	host	exit 0	nobin RED
 cargo:attach:attach	host	exit 0	nobin RED
+bench-count	-	PERF-3's counter over THE BAR's Store: scripts/bar.sh runs it on the Store it made (its toy-Store plant, its WASTE lines, its --harness-control under the row's control)	-
 script:scripts/bar.sh	--records 60 --standing --root {fresh}	BAR verdict PASS	--records 60 --standing --root {fresh} --harness-control

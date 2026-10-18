@@ -13,6 +13,10 @@
 #           member that did not make it: `host check`'s use= must be exactly 3 (PROTOCOL-43).
 # Full mode (default): the actors write concurrently (THE BAR). `--standing`: one command at a time,
 # so every count below is a function of N alone (the bounded run standing makes on every judge).
+# Halfway through the writes every actor waits while the writer is stopped, sealed (`host seal`,
+# HOST-43) and started again (C6): the final reopen reads a base past genesis and the second half's
+# tail, never the tailMax worst cut (~25k records away: tailMax ~18.9 MB at deployed cadence since
+# HOST-47; a Bench case).
 # Every `nd` is timed from its spawner (exec to exit). Then each follow is synced to the tip and
 # checked against the writer (`host check W --anchor` its head), the writer and one follow are
 # stopped by their PID files and started again (the cold reopens: spawn -> first reply).
@@ -21,17 +25,21 @@
 # writer's Store before and after (steps, records, seg_bytes, use), the reopen's tail (steps and
 # bytes past the base), and on Linux the writer's /proc/PID/io (syscalls and bytes through read and
 # write). They print as `BAR count …` lines, and in --standing also as `WASTE bar <metric> <ratio>`
-# lines that gates/waste.tsv pins (ceilings only fall). Hashes and ticks are NOT counted: the
-# deployed path has no counter (swap 10, PERF-3); the line `BAR unmeasured` says so.
+# lines that gates/waste.tsv pins (ceilings only fall). Signature verifies and trie hashes per step
+# come from `bench-count W` (PERF-3): the follower's re-derivation of the writer's tail under
+# KERNEL-36's countingEnv at deployed parameters, required to reach the host's own World, with a
+# toy-Store plant it must refuse by name. The host process counts nothing (law 3). Verifies per step
+# are exact and pinned; hashes per step depend on the trie's shape, which the run's random keys and
+# nonce draw, so they are reported, not pinned. Lang ticks: not counted.
 #
 # Wall clock (`BAR write-p99-ms V limit L`, reopen-ms) is reported with the load average beside it
 # and judged only in full mode on a quiet box (load1 < 2 before and after; else UNJUDGED, never
 # PASS). --standing never judges a clock. Limits are gates/bar.tsv `limit` rows.
 #
 # --harness-control (GATES-15's known-red control): every comparator gets one expectation nothing
-# meets: limits 0 (any measured time is over; judged at any load and in --standing), use must be 4 of 3, and the
-# follow-at-tip check expects one step more than the writer holds. The verdict is RED naming
-# `harness-control` only when ALL THREE fired; a control in which one stayed quiet prints the pass
+# meets: limits 0 (any measured time is over; judged at any load and in --standing), use must be 4 of 3, the
+# follow-at-tip check expects one step more than the writer holds, and bench-count runs with its own
+# --harness-control. The verdict is RED naming `harness-control` only when ALL FOUR fired; a control in which one stayed quiet prints the pass
 # line and exits 0, so the runner (gates/runs.py) refuses every verdict of this row.
 #
 # Two fresh directories. The Stores (the bulk, and the device whose fsync a write pays) go under
@@ -64,7 +72,7 @@ before=$(load)
 
 # absolute: the sandbox names the program by its real path
 if [ -n "${ND_LEAN_BIN:-}" ]; then HOST=$(cd "$ND_LEAN_BIN" && pwd -P)/host || exit 1; else
-  ( cd "$here" && lake build host >/dev/null ) || { echo "BAR verdict RED build:host"; exit 1; }
+  ( cd "$here" && lake build host bench-count >/dev/null ) || { echo "BAR verdict RED build:host"; exit 1; }
   HOST=$here/.lake/build/bin/host
 fi
 # --standing judges counts only, so it takes the dev profile a gate's cargo rows already built; the
@@ -75,7 +83,7 @@ if [ -n "${ND_BIN:-}" ]; then BIN=$(cd "$ND_BIN" && pwd -P) || exit 1; else
     || { echo "BAR verdict RED build:client"; exit 1; }
   BIN=${CARGO_TARGET_DIR:-$here/target}/$dir
 fi
-[ -x "$HOST" ] && [ -x "$BIN/nd" ] && [ -x "$BIN/nd-supervise" ] || { echo "BAR verdict RED binaries-missing ($HOST, $BIN)"; exit 1; }
+[ -x "$HOST" ] && [ -x "$(dirname "$HOST")/bench-count" ] && [ -x "$BIN/nd" ] && [ -x "$BIN/nd-supervise" ] || { echo "BAR verdict RED binaries-missing ($HOST, $BIN)"; exit 1; }
 
 [ -n "${HOME:-}" ] && [ -d "$HOME" ] || { echo "BAR verdict RED setup: HOME is not a directory (custody's workspaces live under it)"; exit 1; }
 root=$(mktemp -d "$(cd "$HOME" && pwd -P)/ndbar.XXXXXX") || { echo "BAR verdict RED setup: mktemp under $HOME"; exit 1; }
@@ -95,6 +103,7 @@ rlim=$(awk -v l="$(lim reopen-ms)" -v s="$scale" 'BEGIN{print l*s}')
 python3 -I - "$root" "$HOST" "$BIN" "$records" "$standing" "$control" "$stores" <<'PY' > "$root/out"
 import os, socket, struct, subprocess, sys, threading, time
 root, host, bindir = sys.argv[1], sys.argv[2], sys.argv[3]
+count = os.path.join(os.path.dirname(host), "bench-count")
 records, standing, control, stores = int(sys.argv[4]), sys.argv[5] == "1", sys.argv[6] == "1", sys.argv[7]
 nd, sup = os.path.join(bindir, "nd"), os.path.join(bindir, "nd-supervise")
 red = []
@@ -239,8 +248,16 @@ for i, a in enumerate(actors):
     os.symlink(wsock, os.path.join(a["ws"], "host.sock"))
     bound(start_follow(i, a), 30).close()
 
-fds0 = {n: len(os.listdir(f"/proc/{int(open(os.path.join(root, n + '.pid')).read())}/fd")) if os.path.isdir("/proc/self/fd") else None
-        for n in ["writer"] + [f"follow{i}" for i in range(len(actors))]}
+def baseline(n):
+    """Supervisor N's fds at rest: the least of 10 samples over 0.5 s (the probe connection `bound`
+    made is closed by the mux asynchronously), None off Linux."""
+    if not os.path.isdir("/proc/self/fd"): return None
+    pid = int(open(os.path.join(root, n + ".pid")).read())
+    v = []
+    for _ in range(10):
+        v.append(len(os.listdir(f"/proc/{pid}/fd"))); time.sleep(0.05)
+    return min(v)
+fds0 = {n: baseline(n) for n in ["writer"] + [f"follow{i}" for i in range(len(actors))]}
 times, lock, stale, recur, staled = [], threading.Lock(), [0], [0], [0]
 STALE_MAX = 8
 def nd_ok(a, args, key=None):
@@ -295,18 +312,32 @@ for j in range(writes):
     else:
         b = actors[(i + 1) % len(actors)]
         plan[i].append(["write", b["obj"], str(n % 16 + 1), f"v{n:06d}", "--via", b["pub"]])
-if standing:
-    for k in range(max(len(p) for p in plan)):
-        for i, a in enumerate(actors):
-            if k < len(plan[i]) and not red: nd_ok(a, plan[i][k])
-else:
-    def member(i):
-        for args in plan[i]:
-            if red or nd_ok(actors[i], args) is None: return
-    ts = [threading.Thread(target=member, args=(i,)) for i in range(len(actors))]
-    for t in ts: t.start()
-    for t in ts: t.join()
-if red: stderrs(); print("RED " + "; ".join(red)); raise SystemExit(0)
+def workload(plan):
+    if standing:
+        for k in range(max(len(p) for p in plan)):
+            for i, a in enumerate(actors):
+                if k < len(plan[i]) and not red: nd_ok(a, plan[i][k])
+    else:
+        def member(i):
+            for args in plan[i]:
+                if red or nd_ok(actors[i], args) is None: return
+        ts = [threading.Thread(target=member, args=(i,)) for i in range(len(actors))]
+        for t in ts: t.start()
+        for t in ts: t.join()
+    if red: stderrs(); print("RED " + "; ".join(red)); raise SystemExit(0)
+
+# C6: a base past genesis. Half the writes, then every actor waits while the writer is stopped by its
+# PID file, sealed (`host seal`, HOST-43: the writer's own open and checkpoint, inline) and started
+# again; then the other half. The final reopen reads that base and the second half's tail.
+workload([p[:len(p) // 2] for p in plan])
+stop("writer", writer)
+sl = run([host, "seal", W])
+if sl.returncode or not sl.stdout.startswith("sealed steps="): die(f"host seal W: {(sl.stderr or sl.stdout).strip()}")
+sealed_at = int(sl.stdout.split()[1].split("=", 1)[1])
+writer = start("writer", wsock, hides, W, ["serve", W])
+bound(wsock, 30).close()
+fds0["writer"] = baseline("writer")
+workload([p[len(p) // 2:] for p in plan])
 
 def fds(name):
     """Open file descriptors of supervisor NAME (Linux /proc), else None."""
@@ -329,6 +360,7 @@ stop("writer", writer)
 s1, why = status(W)
 if s1 is None: die(f"host check W: {why}")
 steps = int(s1["steps"]) - int(s0["steps"])
+if int(s1["base_steps"]) != sealed_at: red.append(f"the writer's base is at step {s1['base_steps']}, `host seal` sealed step {sealed_at}")
 at_tip = int(s1["steps"]) + (1 if control else 0)
 fired = []
 for i, a in enumerate(actors):
@@ -363,9 +395,27 @@ for i, a in enumerate(actors[:1]):
     stop(f"follow{i}", follows[i])
 stop("writer", writer)
 
+# PERF-3: the tail's work re-derived at deployed parameters from this very Store (bench-count: the
+# follower's audit under countingEnv and a counted verify, required to reach the host's own World;
+# its toy-Store plant must be refused by name)
+bc = run([count, W, os.path.join(stores, "count")] + (["--harness-control"] if control else []), timeout=600)
+bcl = bc.stdout.splitlines()
+for l in bcl:
+    if l.startswith(("COUNT ", "PLANT ")): print(f"BAR {l.lower() if l.startswith('COUNT ') else l}")
+if not any(l.startswith("PLANT toy-store refused") for l in bcl):
+    red.append("bench-count: its toy-Store plant was not refused by name")
+if control:
+    # quiet, the control's shell names it missed (`count`), so the runner refuses the row
+    if any(l.startswith("FAIL harness-control") for l in bcl): fired.append("bench-count harness-control")
+elif bc.returncode or bcl[-1:] != ["BENCH-COUNT PASS"]:
+    red.append(f"bench-count: {next((l for l in bcl if l.startswith('FAIL')), (bc.stderr or 'exit ' + str(bc.returncode)).strip())}")
+
 N = records
 def ratio(x): return f"{x / N:.3f}"
-counts = [("steps-per-command", steps), ("records-per-command", int(s1["records"]) - int(s0["records"])),
+# STATUS records counts the records past the base (the open's fold), so the ratio is taken over the
+# steps past it: after the mid-run seal, the second half
+tailsteps = int(s1["steps"]) - int(s1["base_steps"])
+counts = [("steps-per-command", steps),
           ("seg-bytes-per-command", int(s1["seg_bytes"]) - int(s0["seg_bytes"]))]
 if io:
     counts += [("writer-read-syscalls-per-command", int(io["syscr"])), ("writer-write-syscalls-per-command", int(io["syscw"])),
@@ -373,6 +423,8 @@ if io:
 if sfds["writer"] is not None:
     counts += [("writer-supervisor-fds-per-command", sfds["writer"] - fds0["writer"]),
                ("follow-supervisor-fds-per-command", max(sfds[f"follow{i}"] - fds0[f"follow{i}"] for i in range(len(actors))))]
+print(f"BAR count records-per-command {int(s1['records']) / tailsteps:.3f} ({s1['records']} records over the {tailsteps} steps past the base)")
+if standing and not control: print(f"WASTE bar records-per-command {int(s1['records']) / tailsteps:.3f}")
 for m, v in counts:
     print(f"BAR count {m} {ratio(v)} ({v} over {N} commands)")
     # the /proc io counts drift by one between identical runs: reported, not pinned (PERF-2)
@@ -380,8 +432,15 @@ for m, v in counts:
         print(f"WASTE bar {m} {ratio(v)}")
 print(f"BAR count stale-writes {staled[0]} stale-reruns {stale[0]} stale-after-sync {recur[0]} (writes that met `refused stale`; re-runs, each after one nd sync; re-runs stale again. A stale refusal is a recorded step and spends the member's refusal budget)")
 print(f"BAR count reopen-tail-steps {int(s1['steps']) - int(s1['base_steps'])} (steps past the base the writer's reopen folds, no signature verified: HOST-22)")
-print(f"BAR count reopen-tail-bytes {int(s1['seg_bytes']) - int(s1['base_offset'])}")
-print("BAR unmeasured hashes and ticks per command: the deployed path has no counter (swap 10, PERF-3)")
+tailb = int(s1['seg_bytes']) - int(s1['base_offset'])
+print(f"BAR count reopen-tail-bytes {tailb} past the base at step {s1['base_steps']} (sealed mid-run, C6; not the tailMax worst cut)")
+print(f"BAR count reopen-tail-bytes-per-command {ratio(tailb)}")
+if standing and not control:
+    print(f"WASTE bar reopen-tail-bytes-per-command {ratio(tailb)}")
+    for l in bcl:   # verifies per step are exact; hashes per step vary with the drawn trie (reported)
+        if l.startswith("WASTE bar audit-verifies-per-step "): print(l)
+        elif l.startswith("WASTE bar audit-hashes-per-step "): print("BAR count" + l[len("WASTE bar"):] + " (varies with the run's random keys: not pinned)")
+print("BAR unmeasured ticks per command: no deployed counter for the Lang machine (PERF-3 counts hashes and verifies)")
 times.sort()
 ms = lambda ns: round(ns / 1e6, 3)
 pct = lambda q: times[min(len(times) - 1, (len(times) * q) // 100)] if times else 0
@@ -422,11 +481,12 @@ if [ $rc -ne 0 ] || [ -z "$status" ]; then
   [ "$verdict" = "RED " ] && verdict="RED driver-exit-$rc"
 elif [ "${status%% *}" = RED ]; then verdict=$status
 elif [ $control = 1 ]; then
-  # all three planted expectations must have fired, each through its own comparator
+  # all four planted expectations must have fired, each through its own comparator
   missed=""
   [ -n "$over" ] || missed="$missed limit"
   case $fired in *"use "*) ;; *) missed="$missed use" ;; esac
   case $fired in *"follow "*) ;; *) missed="$missed at-tip" ;; esac
+  case $fired in *"bench-count harness-control"*) ;; *) missed="$missed count" ;; esac
   if [ -z "$missed" ]; then verdict="RED harness-control: $over; $fired"
   else  # a planted expectation stayed quiet: the control PASSES, so the runner reads no verdict of this row
     echo "BAR control: a planted expectation stayed quiet:$missed"; echo "BAR verdict PASS"; exit 0

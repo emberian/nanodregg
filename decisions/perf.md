@@ -191,4 +191,58 @@ defects nothing else could have seen:
 wants the process itself to count, the honest version is a HOST-owned `host check --count` that runs this same
 replay inside the deployed binary. It would add no premise either. That is the real alternative to this one.
 
-**Status.** PROPOSED to ROOT 2026-10-18.
+**Status.** ruled by ROOT 2026-10-18: the PERF exe, not `host check --count` (the deployed binary counts
+nothing, law 3), on four conditions. Built as follows.
+- **(i) The count is of the real workload.** `Record.step` checks every replayed record's stated roots, and
+  the final World must equal the host's own reopen (`foldStep`) in steps, chain and roots digest. Anything
+  else is `FAIL replay …`.
+- **(ii) Pinned rows are ceilings that only fall, with the reason.** `bar audit-verifies-per-step` 1.000.
+- **(iii) A toy Store is refused by name.** Before counting, `bench-count` writes SCRATCH/toy by the Sim's toy
+  genesis and opens it the counting way. It reads `PLANT toy-store refused shapeMismatch`; if it opened, that
+  would be `FAIL plant toy-store`.
+- **(iv) `--harness-control`.** The replayed chain must equal the host's chain with one bit flipped, which
+  reads `FAIL harness-control`. bar.sh's control passes it as its fourth comparator, mutation-proven
+  ("stayed quiet: count").
+
+One condition is NOT met as ruled: trie hashes per step are counted (15.1–16.0 over five runs at 60 records)
+but are not pinned. The trie's shape follows the ids. The ids follow each signed call's bytes, and those
+follow the run's random custody keys and genesis nonce, so the ratio moves by about 0.5 between identical
+runs. A ceiling pinned at one run's value would go red on a later honest run.
+To pin it, the bar's identities must be fixed: a seeded custody for the bar. That is key material (CLAUDE.md
+pause item 1, CLIENT's custody), so it is ROOT's call. Until then the line is
+`BAR count audit-hashes-per-step R (varies …: not pinned)`.
+
+## PERF-4 · C6: THE BAR seals a base at its midpoint; the reopen reads base + tail (2026-10-18)
+
+**Decision.**
+- At the midpoint of the writes every actor waits. The writer is stopped by its PID file (its confined child
+  seen to exit, so the lock is free), `host seal W` runs (HOST-43: the writer's own open and checkpoint,
+  inline; exit 0 and `sealed steps=S` are required), and the writer is started again.
+- The final STATUS must have base_steps = S, else RED.
+- The reopen then reads that base plus the second half's tail. `bar reopen-tail-bytes-per-command` (350.300
+  at 60 records) is pinned. bench-count replays exactly that tail.
+- HOST-13 agreed: no cadence knob. Cadence.deployed is the one table, and a bar-only cadence would be a
+  second shape.
+
+**Alternatives.**
+- (a) A smaller sealMinBytes for the bar. Refused, as a second shape (law 1).
+- (b) Run past 1 MiB so the writer seals on its own: about 1400 records. Refused: THE BAR is 1000, and
+  cadence-dependent seal points move with every record-size change.
+- (c) Seal the follow Stores too. Not done: the follower reopen measured is still a genesis base plus the
+  whole tail.
+
+**Why.** Every reopen THE BAR ran before this folded the whole history from genesis, so the open's
+base-plus-tail path, the one law 5 is about, never ran in it.
+
+**CRITIQUE.**
+- This is not the worst cut. The tailMax cut (~18.9 MB since HOST-47's derived recordBytesMax, ~25k records
+  of THE BAR's mix) is a Bench case that is still unmeasured.
+- The stop and seal pause sits between two halves, not inside any timed command, so the clock never sees a
+  seal.
+- On tank (ZFS), serial writes measured p50 543 ms, against 32 ms on ext4/nvme: the device dominates, and
+  bar.sh's device line says which one was used.
+
+**META-CRITIQUE.** I chose the midpoint because it halves the tail visibly, not because a midpoint is
+anyone's worst case.
+
+**Status.** open.

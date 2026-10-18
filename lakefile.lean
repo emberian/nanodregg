@@ -122,6 +122,14 @@ extern_lib «ndhost» pkg := do
 @[default_target] lean_exe «host» where
   root := `Host.Main
 
+-- PERF: tools over a real Store the deployed host wrote (tooling; nothing imports Bench).
+@[default_target] lean_lib Bench where
+  globs := #[.submodules `Bench]
+
+-- THE BAR's work at deployed parameters: `bench-count STORE SCRATCH [--harness-control]` (PERF-3; scripts/bar.sh runs it).
+@[default_target] lean_exe «bench-count» where
+  root := `Bench.CountMain
+
 -- OPS: renderers and drivers over the real `host` (nothing imports Ops).
 @[default_target] lean_lib Ops where
   globs := #[.submodules `Ops]
