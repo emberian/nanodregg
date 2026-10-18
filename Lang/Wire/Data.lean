@@ -3,7 +3,8 @@
 
 Data is written TYPE-DIRECTED and needs no recursive codec: the reader knows the type, and the type
 is finite, so `dataStream T` is a composition of CODEC's ordinary combinators by recursion on `T`.
-A natural is `u64`, a boolean `bool`, a byte string `bytesOf bytesMax`, a digest `bytesOf digestBytesMax` (a digest's
+A natural is `u64be` (big-endian, so a relation key's bytes compare as its numbers: LANG-57), a
+boolean `bool`, a byte string `bytesOf bytesMax`, a digest `bytesOf digestBytesMax` (a digest's
 validity is the World's `digestOf`, asked where data enters a run: `Lang.Program`, LANG-38), a record the `product` of its
 fields in row order (no labels), a sum CODEC's `choice` over its arms (one tag byte, the arm's
 index, then the payload). A function type has no data. So the stream's `Shape` IS the type's structure,
@@ -50,7 +51,7 @@ def noData : Stream Empty := Stream.refine "lang/data: no value" Stream.unit (fu
 
 mutual
 def dataStream : (T : Ty) → Stream (DataAt T)
-  | .nat => Stream.u64
+  | .nat => Stream.u64be
   | .bool => Stream.bool
   | .bytes => Stream.bytesOf Bounds.bytesMax (by decide)
   | .digest => Stream.bytesOf Bounds.digestBytesMax (by decide)

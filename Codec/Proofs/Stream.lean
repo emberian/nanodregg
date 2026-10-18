@@ -282,6 +282,54 @@ theorem u64_lawful : Lawful u64 where
       · omega
     · cases h
 
+@[simp] theorem u64be_size (v : UInt64) : (u64be.bytes v).size = 8 := rfl
+
+@[simp] theorem u64be_bytes (v : UInt64) :
+    u64be.bytes v = ⟨#[(v >>> 56).toUInt8, (v >>> 48).toUInt8, (v >>> 40).toUInt8, (v >>> 32).toUInt8,
+      (v >>> 24).toUInt8, (v >>> 16).toUInt8, (v >>> 8).toUInt8, v.toUInt8]⟩ := rfl
+
+/-- `u64be` is `u64`'s bytes in reverse order: lawful by the same split (LANG-57). -/
+theorem u64be_lawful : Lawful u64be where
+  put_eq v buf := by
+    simp only [u64be, push_eq_append, ByteArray.append_assoc]
+    rfl
+  size_eq _ := rfl
+  get_of_occurs v b i h := by
+    obtain ⟨hs, hk⟩ := occursAt_iff_getElem.mp h
+    have hs' : i + 8 ≤ b.size := hs
+    have h0 : b[i + 0] = (v >>> 56).toUInt8 := hk 0 (Nat.lt_of_lt_of_le (by decide) (Nat.le_of_eq (u64be_size v).symm))
+    have h1 : b[i + 1] = (v >>> 48).toUInt8 := hk 1 (Nat.lt_of_lt_of_le (by decide) (Nat.le_of_eq (u64be_size v).symm))
+    have h2 : b[i + 2] = (v >>> 40).toUInt8 := hk 2 (Nat.lt_of_lt_of_le (by decide) (Nat.le_of_eq (u64be_size v).symm))
+    have h3 : b[i + 3] = (v >>> 32).toUInt8 := hk 3 (Nat.lt_of_lt_of_le (by decide) (Nat.le_of_eq (u64be_size v).symm))
+    have h4 : b[i + 4] = (v >>> 24).toUInt8 := hk 4 (Nat.lt_of_lt_of_le (by decide) (Nat.le_of_eq (u64be_size v).symm))
+    have h5 : b[i + 5] = (v >>> 16).toUInt8 := hk 5 (Nat.lt_of_lt_of_le (by decide) (Nat.le_of_eq (u64be_size v).symm))
+    have h6 : b[i + 6] = (v >>> 8).toUInt8 := hk 6 (Nat.lt_of_lt_of_le (by decide) (Nat.le_of_eq (u64be_size v).symm))
+    have h7 : b[i + 7] = v.toUInt8 := hk 7 (Nat.lt_of_lt_of_le (by decide) (Nat.le_of_eq (u64be_size v).symm))
+    have h0' : b[i] = (v >>> 56).toUInt8 := h0
+    simp only [u64be, hs', ↓reduceDIte, h0', h1, h2, h3, h4, h5, h6, h7]
+    rw [ofLE64_split]
+    rfl
+  occurs_of_get {b i v j} h := by
+    simp only [u64be] at h
+    split at h
+    · rename_i hi
+      cases h
+      obtain ⟨e7, e6, e5, e4, e3, e2, e1, e0⟩ :=
+        split_ofLE64 b[i+7] b[i+6] b[i+5] b[i+4] b[i+3] b[i+2] b[i+1] b[i]
+      refine ⟨rfl, occursAt_iff_getElem.mpr ⟨hi, fun k hk => ?_⟩⟩
+      have hk' : k < 8 := hk
+      rcases k with _ | _ | _ | _ | _ | _ | _ | _ | k
+      · exact e0.symm
+      · exact e1.symm
+      · exact e2.symm
+      · exact e3.symm
+      · exact e4.symm
+      · exact e5.symm
+      · exact e6.symm
+      · exact e7.symm
+      · omega
+    · cases h
+
 @[simp] theorem digest_bytes (d : Digest) : digest.bytes d = d.bytes := by
   simp [bytes, digest, ByteArray.empty_append]
 

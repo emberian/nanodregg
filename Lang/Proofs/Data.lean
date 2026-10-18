@@ -58,7 +58,7 @@ theorem noData_lawful : Lawful noData :=
 
 mutual
 theorem dataStream_lawful : (T : Ty) → tyWire T = true → Lawful (dataStream T)
-  | .nat, _ => u64_lawful
+  | .nat, _ => u64be_lawful
   | .bool, _ => bool_lawful
   | .bytes, _ => bytesOf_lawful _ (by decide)
   | .digest, _ => bytesOf_lawful _ (by decide)

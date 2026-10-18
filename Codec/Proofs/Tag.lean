@@ -51,7 +51,7 @@ theorem varint_prefix : ∀ (m n : Nat) (x y : ByteArray), Stream.varint.bytes m
 
 mutual
 theorem Shape.put_eq : ∀ (s : Shape) (b : ByteArray), s.put b = b ++ s.put ByteArray.empty
-  | .unit, b | .u8, b | .u32, b | .u64, b | .varint, b | .digest, b | .u16, b => by
+  | .unit, b | .u8, b | .u32, b | .u64, b | .varint, b | .digest, b | .u16, b | .u64be, b => by
     simp only [Shape.put, push_eq_append, ByteArray.empty_append]
   | .bytes max, b | .oneOf _, b | .bytes8 max, b => by
     simp only [Shape.put]
@@ -108,7 +108,7 @@ private def Shape.code : Shape → UInt8
   | .unit => 0 | .u8 => 1 | .u32 => 2 | .u64 => 3 | .varint => 4 | .digest => 5 | .bytes _ => 6
   | .option _ => 7 | .product _ _ => 8 | .sum _ _ => 9 | .array _ _ => 10 | .refine _ _ => 11
   | .framed _ _ => 12 | .tagged _ => 13 | .tree _ _ => 14 | .oneOf _ => 15 | .within _ _ => 16
-  | .bytes8 _ => 17 | .u16 => 18
+  | .bytes8 _ => 17 | .u16 => 18 | .u64be => 19
 
 private def Shape.tail : Shape → ByteArray
   | .bytes m | .bytes8 m => Stream.varint.bytes m
@@ -126,7 +126,7 @@ private theorem Shape.put_cons (s : Shape) : s.put ByteArray.empty = ⟨#[s.code
   have pv : ∀ n b, putVarint n b = b ++ Stream.varint.bytes n := fun n b => putVarint_eq n b
   have e1 : ∀ k : UInt8, ByteArray.empty.push k = ⟨#[k]⟩ := fun k => rfl
   cases s with
-  | unit | u8 | u32 | u64 | varint | digest | u16 => rfl
+  | unit | u8 | u32 | u64 | varint | digest | u16 | u64be => rfl
   | bytes m | bytes8 m => simp only [Shape.put, Shape.code, Shape.tail, pv, e1]
   | option x => simp only [Shape.put, Shape.code, Shape.tail, e1]; rw [Shape.put_eq]
   | product x y | sum x y =>

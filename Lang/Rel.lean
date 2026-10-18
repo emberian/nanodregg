@@ -48,6 +48,33 @@ def keyOf (d : RelDecl) (m : Nat) (b : ByteArray) : Except String Data :=
   | .ok _ => .error "key: not a record"
   | .error e => .error s!"key: {repr e}"
 
+mutual
+/-- The order a key field's values list in (LANG-57): a natural by value, `false` before `true`, a
+digest shorter first and then bytewise, an enumeration by its arm (a canonical sum's arms ascend, so
+by label), a record field by field in row order. `Lang.Proofs.KeyOrder.keyBytes_compare`: this is the
+order of the key's BYTES, so it is the order a range read lists rows in. -/
+def keyCmp : Ty → Data → Data → Ordering
+  | .nat, .nat a, .nat b => compare a b
+  | .bool, .bool a, .bool b => compare a b
+  | .digest, .digest a, .digest b => (compare a.size b.size).then (compare a.data b.data)
+  | .sum r, .inj a _, .inj b _ => compare (r.findIdx (·.1 == a)) (r.findIdx (·.1 == b))
+  | .record r, .record fs, .record gs => keyRowCmp r fs gs
+  | _, _, _ => .eq
+
+def keyRowCmp : List (Label × Ty) → List (Label × Data) → List (Label × Data) → Ordering
+  | (_, t) :: r, (_, a) :: fs, (_, b) :: gs => (keyCmp t a b).then (keyRowCmp r fs gs)
+  | _, _, _ => .eq
+end
+
+/-- Two keys of a relation in its DECLARED order: field by field in the order the relation declares
+them, each by `keyCmp` (LANG-57). -/
+def keyOrder : List (Label × Ty) → Data → Data → Ordering
+  | [], _, _ => .eq
+  | (ℓ, t) :: r, k, k' =>
+    match k.field ℓ, k'.field ℓ with
+    | some a, some b => (keyCmp t a b).then (keyOrder r k k')
+    | _, _ => .eq
+
 /-- A row value's sum column (0 without one). -/
 def amtOf (d : RelDecl) (v : Data) : Nat :=
   match d.sum with

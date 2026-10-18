@@ -4,6 +4,8 @@ import Host.Base
 import Host.Carry
 import Lang.Wire.Data
 import Lang.Package
+import Lang.Rel
+import Lang.Print
 import Kernel.Sim
 
 /-!
@@ -472,6 +474,33 @@ def carriedParentedVecs : G (List (CarriedWire Sim.D)) := do
   let r := rowsOf (c.rows.toList ++ [(.head p 9, .head 1 5 4 40 3 true), (.row ⟨p, 9, k⟩, .row 5 ByteArray.empty)])
   return drawn ++ [carriedToWire { c with trie := withLive c.trie p, rows := r }, carriedToWire { c with rows := r }]
 
+/-! ### A relation key (LANG-57)
+
+A key's bytes are the data encoding of its fields in declared order (`Lang.keyBytes`), and the range
+read lists rows in key-byte order, so the encoding IS the order (`Lang.Proofs.KeyOrder.keyBytes_compare`).
+One fixed key `(n nat) (f bool) (d digest)`: naturals 0, 1, 255, 256 and 2^64 - 1 (the bytes ascend
+with the numbers: big-endian), a 31-byte digest before a 32-byte one, `true` after `false`, and the
+boundary row, a key cut one byte short, refused. A change of the natural's wire moves the shape, so
+the tag, and every row is re-drawn. -/
+
+open Lang in
+def keyVecDecl : RelDecl :=
+  { key := [("n", .nat), ("f", .bool), ("d", .digest)], val := .record [], limit := 1, sum := none, cap := 0,
+    retract := false, guard := none }
+
+open Lang in
+def keyVecTy : Ty := keyWireTy keyVecDecl keyVecDecl.key.length
+
+open Lang in
+def keyVec (n : Nat) (f : Bool) (dlen : Nat) : ByteArray :=
+  (keyBytes keyVecDecl (.record [("d", .digest ⟨Array.replicate dlen 0xab⟩), ("f", .bool f), ("n", .nat n)])).getD
+    ByteArray.empty
+
+def keyVecs : List ByteArray :=
+  let full := keyVec 256 false 32
+  [keyVec 0 false 32, keyVec 1 false 32, keyVec 255 false 32, full, keyVec (2 ^ 64 - 1) false 32,
+    keyVec 1 false 31, keyVec 1 true 32, full.extract 0 (full.size - 1)]
+
 /-! ### A package (cv 01a14e58-1586, LANG-15's set)
 
 One row per term tag (0–17; tag 15, a record's field, rides in the record row), per type tag (0–7; tag
@@ -603,6 +632,8 @@ def sites : List Site :=
     site "host/carried-head" (Host.Carry.head Sim.dc) (each 2 fun _ => do return ⟨← dig, ← nat64, ← dig⟩) text,
     ⟨"lang/package", Tag.of "lang/package" Lang.Wire.packageCodec, pure packageVecs,
       print Lang.Wire.packageCodec text⟩,
+    ⟨"lang/key", Tag.of "lang/key" (Lang.Wire.dataStream keyVecTy), pure keyVecs,
+      print (Lang.Wire.dataStream keyVecTy) fun v => (Lang.Print.data (Lang.Wire.toData keyVecTy v)).getD "?"⟩,
     ⟨"lang/data: no value", Tag.of "lang/data: no value" Lang.Wire.noData, pure [ByteArray.empty],
       print Lang.Wire.noData (fun e => nomatch e)⟩ ]
 

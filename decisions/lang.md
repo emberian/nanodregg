@@ -2176,3 +2176,147 @@ index `stepTo` resolved `m` to (the one the machine law compares an invoke with)
 method list holds `m` (`methodIndex_pkgOf`), and invoking it lands at the edge's target. Vacuity reader:
 LAND. Both of its optional LOW follow-ups (the other three facts in loaded form, and the index tie) are
 done here.
+
+## LANG-57 A relation's keys list in their declared order: a natural in Lang data is big-endian, and key-byte order is a theorem about fields (2026-10-19; ROOT APPROVED 2026-10-19, ROOT for CODEC; LANG-17; PROTOCOL-16's FINDING on PROTOCOL-51, cv 01a14f18-b8c8; blocks cv 01a14ece-43f1, the Bell as a queue)
+
+**The defect (measured by reading `Lang/Wire/Data.lean:53` and `Codec/Stream.lean:124`).** A key's bytes are the data
+encoding of its fields in declared order (`Lang.Rel.keyBytes`, LANG-49). A natural is written `Stream.u64`:
+eight bytes, LITTLE-endian. The kernel's range read lists rows in strictly ascending key-BYTE order
+(`range_rows_exact` (ii), `Kernel/Proofs/RowsRange.lean:604`; MSB-first, CODEC-29). So a relation keyed
+`(n nat)` lists 0, 256, 512, …, 1, 257, …: 256 lands between 0 and 1. Every ordered use of a nat key is wrong
+past 255 (the Bell's rings, any log, any "next id"), and nothing says so: the only order statement is about
+bytes, and no statement relates it to the fields.
+
+**Census of key field types (`Lang.keyFixed`, `Package.lean:340`), what each encoding does to order:**
+- `nat` → u64 LE: WRONG (the defect).
+- `bool` → one byte 00/01: false first. Right.
+- enumeration (a sum of `rec {}` arms) → one tag byte = the arm's index; a canonical type's arms ascend, so arm
+  order = label order. Right.
+- `digest` → `u32 len (LE) ‖ bytes`. `digestBytesMax = 32 < 256`, so the LE length is `[n,0,0,0]` and its
+  bytes compare as `n`: shorter first, then bytewise (shortlex). A total order, and the only one a digest has.
+- record → its fields' encodings concatenated. Lexicographic product, PROVIDED two different field values never
+  have one encoding a proper prefix of the other: true (fixed width per type; two digests of different length
+  differ at their first byte).
+So ONE encoding is wrong, and fixing it makes key-byte order the field-wise lexicographic order with no
+premise at all.
+
+**Decision.**
+1. **CODEC primitive (ROOT for CODEC):** `Stream.u64be : Stream UInt64`, eight bytes most significant first,
+   new `Shape.u64be` with tag code 19 in `Shape.put` (`Shape.put_prefix` extended, as CODEC-35 did for u16),
+   `u64be_lawful` beside `u64_lawful`. Not a `refine` of `u64` through a byte swap: a refine keeps the inner
+   Shape, so the tag would claim `.u64` (LE) for big-endian bytes, a shape that lies.
+2. **Lang data's natural is `u64be`** (`dataStream .nat := Stream.u64be`). `DataAt .nat` stays `UInt64`;
+   `toData`/`ofData` do not change. Key bytes stay EXACTLY the data encoding (one codec, one decoder:
+   `keyOf` still reads through `decodeData`). Values and state slots move with it (see flag day): there is
+   one encoding of a Lang natural as data, not a key one and a value one.
+3. **The order, as a theorem** (new def `Lang.keyCmp : Ty → Data → Data → Ordering` in Lang/Rel.lean, the
+   declared order: a natural by value, `false` first, an enumeration by arm index, a digest shortlex, a record
+   field by field; `keyRowCmp` over the declared key fields), in new leaf `Lang/Proofs/KeyOrder.lean`:
+   - `keyBytes_compare`: `keyBytes d k = some b → keyBytes d k' = some b' →
+      compare b.data b'.data = keyRowCmp d.key k k'`. (As built: one premise, every key field fixed-width,
+      which installation supplies; see "As built".)
+   - `range_keys_ascend` (the queue's statement, composing `range_rows_exact`): in a range read the kernel
+     returns for one relation, the keys `keyOf` reads (rangeRowData's path) are strictly ascending in
+     `keyRowCmp`. (All rows under one `rowsPrefix … width` have keys of exactly `width` bytes, so
+     `compare (rowKeyBytes …)` reduces to `compare` of the key bytes: no new premise beyond
+     `range_rows_exact`'s own.)
+   - Teeth: see "As built".
+4. **Vectors (ROOT for CODEC, both table rules hold).** The package wire holds NO data (Ty, Term, RelDecl
+   only; term literals are `Lang.Wire.u64Bytes`, unchanged), so `lang/package` does NOT see this change —
+   the brief's assumption is wrong, and today no vector pins data bytes at all. New site `lang/key`
+   (`Tag.of "lang/key" (dataStream keyVecTy)`, not a refine: its shape is all primitives, so the tag itself
+   sees the natural's wire; one fixed declaration `(n nat) (f bool) (d digest)`) with rows: k0 = 0, 1, 255, 256, 2^64-1 (bytes visibly ascending),
+   a `k2` of 31 vs 32 bytes, and the boundary row (a key cut one byte short, refused `truncated`). Rule 1 (re-draw
+   only where the tag moves): no existing site's shape contains `dataStream`, so no existing row moves; the
+   new site is drawn fresh. Rule 2 (unchanged tag ⇒ unchanged decoded text): vacuous for existing rows.
+
+**Premise spread (statements that name key or data bytes), all re-checked, none gains a premise:**
+- Lang: `dataStream_lawful` (Proofs/Data, nat case `u64be_lawful`), the decoder-conformance theorems built on
+  it, `keyOf_keyBytes`/`_fields` (Proofs/Rel), `keyOf_conforms`/`_key` (Proofs/Invoke), `editOf_spec`,
+  `editOf_amt`, `valOf_decodes`, `relReads_points`: all state over `keyBytes`/`encodeData`/`decodeData`
+  symbolically; texts unchanged, proofs re-run. Concrete bytes: `Lang/Journey.lean` builds keys through
+  `keyBytes` (symbolic); any journey row printing hex of a nat datum re-pins (listed at landing).
+- Kernel: none. `rowKeyBytes` carries key bytes as given (KERNEL-46); `range_rows_exact` is about bytes.
+  `Kernel.Sim.dc = Stream.u64` (the toy digest) is a different codec and does not move.
+- Codec: `Shape.put`, `Shape.put_prefix` and every exhaustive match on `Shape` (Codec/Tag, Codec/Proofs/Tag,
+  Census/Refines) gain one case. `u64`, `nat64`, the World wire: unchanged.
+- PROTOCOL-51 (in flight): its theorems are over `rangeRows`' list and `Lang.Print`; texts unchanged.
+
+**Flag day (`lang!`).** What changes bytes: every Lang datum holding a natural — object state slots,
+row values, row KEYS, method arguments (`Program`'s call data) — so every World holding a programmed object
+with a nat re-geneses (devnet re-genesis; sims rebuild their Worlds). What does NOT: package bytes and ids (no
+data in the wire), every shipped text (G0/G0s, A0/A0s, E0/E0s, LB0 compare texts), every kernel/codec vector
+(no site contains dataStream). What refuses: an old data blob with a nat decodes at the wrong value (same
+width — it is NOT refused, it is misread). Accepted because nothing holds old data (greenfield); the
+re-genesis is the refusal. New vectors: the `lang/key` site.
+
+**Critique.**
+- (a) The alternative "keep data LE, write KEY bytes with a second, big-endian key codec" keeps value bytes
+  but makes two encodings of one `Data` and two decoders (`keyOf` would stop being `decodeData`), which is the
+  twin the repo keeps deleting. Refused.
+- (b) "A fixed-width big-endian `seq` type for ordered keys": a new `Ty` constructor through the checker,
+  machine, reader, printer and surface, and `nat` keys would STILL misorder silently. Refused.
+- (c) "A digest key with no order" gives up the queue. Refused.
+- (d) The term wire's natural literal stays LE (`u64Bytes`, a `Codec.Tree` payload, never ordered, like
+  every kernel number). So Lang has two spellings of a natural: data (ordered, BE) and term literal (LE).
+  Changing the literal too would re-id every package and re-draw 43 `lang/package` rows for consistency
+  alone; not proposed.
+- (e) A blob written under the old wire reads as a different number instead of refusing. The re-genesis is
+  what makes that harmless; there is no in-band epoch on Lang data. Named, not fixed.
+**Meta-critique.** (d) is the place this could be wrong: "two spellings that agree today will disagree
+later" is the repo's rule, and here they already disagree by design. The defence is that they are
+different wires (a term payload vs data) with no function that moves bytes between them; if one ever
+appears (a literal compiled into a stored datum by bytes), the literal moves too. And the order theorem is
+the real deliverable: without `keyBytes_compare` the BE switch would be one more byte fact nobody can rely
+on; with it, "ring order" is a statement a resident's reader can cite.
+
+
+**As built (what changed from the proposal).**
+- `Codec.Stream.u64be` + `Shape.u64be` (tag 19) + `u64be_lawful` (Codec/Proofs/Stream.lean); new
+  Codec/Proofs/Order.lean: `compare_append` (lexicographic order cuts at a common length),
+  `u64be_compare` (two values' bytes compare as the values), teeth `u64_misorders` (under `u64`, 256's
+  bytes come before 1's) and `u64be_orders_1_256`.
+- Lang/Rel.lean: `keyCmp`/`keyRowCmp` (a field value's order) and `keyOrder` (declared order). New leaf
+  Lang/Proofs/KeyOrder.lean: `dataCmp`/`rowCmp` (the encoding at a fixed-width type, followed by
+  anything, compares as `keyCmp` then the rest), `keyBytes_compare`, `keyBytes_compare_installed`,
+  `range_keys_ascend` (on `range_rows_exact_of`'s premises: one digest size n ≤ 32, injective bytes —
+  weaker than `Env.Lawful`, so the toy below satisfies it), and after the vacuity read: `keyBytes_keyOf`
+  (the converse of `keyOf_keyBytes`, at a canonical key type) and `range_keys_ascend_read` (the keys the
+  READER decodes, `rangeRowData`'s path, are strictly ascending, for an installed relation; a row whose key
+  does not decode is outside the statement, and `rangeRowData` refuses the whole read on it). Teeth:
+  `key_order_1_256`, `key_order_declared_first` (declared order, not label order),
+  `key_order_digest_shortlex`; on a concrete rows trie (ring 256 inserted first) `queue_lists_1_first`
+  against `le_queue_lists_256_first` (the old little-endian key bytes list 256 first: the key-level
+  refutation of the old wire), `queue_key_bytes_1_256` (bytes computed by `decide`, not through
+  `keyBytes_compare`), `range_keys_ascend_read_satisfiable` (every premise met on that trie, the read's
+  two keys `.lt` from the theorem).
+- **Correction to "no premise".** `keyBytes_compare` takes `d.key.all (keyFixed ·.2)`: a `bytes` key
+  field (length is a 4-byte LE u32 up to bytesMax) would NOT be order-preserving, so the theorem is false
+  without it. It is exactly the check `checkRel` makes at install, so `keyBytes_compare_installed` takes
+  `checkRel S row (ℓ, d) = .ok ()` instead: no premise beyond installation. `range_keys_ascend` takes
+  `range_rows_exact`'s own premises plus the same one.
+- **The LE form cannot be "refused by name"**: every eight bytes are some `u64be`, so a little-endian
+  blob decodes, to a different number. The tooth for the old wire is the theorem `u64_misorders`; the
+  `lang/key` site's refused boundary row is a key cut one byte short (`truncated`).
+- `lang/key` site: 8 rows (k0 = 0, 1, 255, 256, 2^64-1; a 31-byte digest; `true`; the cut key). 199
+  vectors / 52 sites; `--check` ok; no existing row moved (`git diff` adds 8 lines only).
+- Measured on the candidate: lang-journey GREEN; ledger-sim, hosting-sim 1-3, host-sim 1, kernel-sim 64,
+  rows and rows --deployed ALL PASS; every generated table `--check` rc 0. **Nothing re-pinned**: no
+  journey row, sim row or vector pinned the bytes of a Lang natural (the reason the `lang/key` site was
+  needed). Shipped texts (G0/G0s, A0/A0s, E0/E0s, LB0) byte-identical; package bytes and ids unchanged.
+- The term wire's natural literal (`Lang.Wire.u64Bytes`) stays LE: the term wire is never ordered (no
+  function compares package bytes, and no bytes move from a term payload into data). ROOT accepted it
+  for now; cv 01a14fe9-784c moves it at the next `lang!` that re-ids every package anyway.
+
+**Build order (done):** CODEC half (u64be, Shape 19, lawful, put_prefix) + Lang half (dataStream, keyCmp,
+KeyOrder.lean, the `lang/key` site) in ONE `lang!` commit with `--cross-layer` for Codec/ + Emit/Vectors
++ gates/codec-vectors.tsv (ROOT stands in for CODEC). Then the Bell as a queue (cv 01a14ece-43f1) once
+PROTOCOL-51 lands.
+
+**Vacuity read** (a383cd00e4775b730): LAND-WITH-FIXES, none vacuous; fixes done: the read-side form
+(`keyBytes_keyOf`, `range_keys_ascend_read`), a concrete instance of the range theorem, the key-level LE
+tooth, a direct byte tooth. Not done (optional): keyOrder as a strict total order corollary.
+**Finding, not acted on (a check, so a pause item):** `checkRel`'s `decide ((Row.sort d.key).length =
+d.key.length)` is always true (`Row.sort` is a permutation, `Row.length_sort`): it checks nothing.
+Distinct key labels are enforced by `(keyTy d).wf` (sorted strictly ascending), which `keyBytes_keyOf`
+uses. Reported to ROOT.

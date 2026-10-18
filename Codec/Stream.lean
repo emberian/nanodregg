@@ -55,6 +55,9 @@ inductive Shape where
   /-- Two bytes, little-endian (`Codec.Raw.nat16`): a trie node's branching bit on a proof's path
   (KERNEL-49). -/
   | u16
+  /-- Eight bytes, BIG-endian (`Stream.u64be`): a Lang datum's natural, so a relation key's bytes compare as its
+  numbers (LANG-57). -/
+  | u64be
   deriving Repr
 
 /-- A byte string of at most `max` bytes. -/
@@ -131,6 +134,20 @@ def u64 : Stream UInt64 where
   get b i :=
     if h : i + 8 ≤ b.size then
       .ok (ofLE64 b[i] b[i+1] b[i+2] b[i+3] b[i+4] b[i+5] b[i+6] b[i+7], i + 8)
+    else .error (.truncated i 8)
+
+/-- A 64-bit number as eight bytes, most significant first (LANG-57: a Lang datum's natural, so the
+bytes of two keys compare as the numbers do). -/
+def u64be : Stream UInt64 where
+  shape := .u64be
+  size _ := 8
+  put v buf :=
+    (((((((buf.push (v >>> 56).toUInt8).push (v >>> 48).toUInt8).push (v >>> 40).toUInt8).push
+      (v >>> 32).toUInt8).push (v >>> 24).toUInt8).push (v >>> 16).toUInt8).push
+      (v >>> 8).toUInt8).push v.toUInt8
+  get b i :=
+    if h : i + 8 ≤ b.size then
+      .ok (ofLE64 b[i+7] b[i+6] b[i+5] b[i+4] b[i+3] b[i+2] b[i+1] b[i], i + 8)
     else .error (.truncated i 8)
 
 /-- A digest: its 32 bytes, raw. -/
