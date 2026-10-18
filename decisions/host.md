@@ -2606,3 +2606,17 @@ Until HOST-57 lands the derivation as code, `Cadence.deployed.worldBytesMax` is 
 **Law-6 read (second agent, read-only, with the DISJUNCT check): LAND-WITH-FIXES.** No disjunct and no vacuity: the premises are satisfiable because `refuse` succeeds on an empty trie. `= 3` is attained (three different `RefusalSlot` constructors). The 96 is justified with slack. The 2^24 arithmetic still consumes the refusal term through `record_steps_le`. Taken: the rename (`_two` → `_three`).
 
 **Flag day.** None of Host's own. It rides R1's `kernel!` re-genesis.
+
+## HOST-59 · imported and joined Worlds meet `budget_reaches`' premises: the bound holds at every World this binary creates a Store from (2026-10-19, HOST-14; HOST-56's named gap, cv 01a150ed-7bf7)
+
+**The gap.** HOST-56's `budget_reaches` takes KERNEL's Canon, Slotted and RowsCanon. HOST-56 discharged them for genesis Worlds only (`genesis_budget_reaches`). The imported and joined Worlds, the ones the potential arm exists for, rested on an uncomposed premise (second-agent read of HOST-56).
+
+**Decision.** Two theorems, no premise beyond the path's own success:
+- `importWorld_premises`: the World `Carry.importWorld` makes is KERNEL's carry (`carryWorld`) of a carried state the carried codec decoded. `carry_ok` keeps that state's cells and rows tries, and `carried_decode_fits` says they are canonical and every cell leaf fits its slot.
+- `accept_premises`: the World an accepted invitation makes is KERNEL's genesis World of its signed inputs (`genesis_ok`, then `receive_genesis_canon/slotted/rowsCanon`).
+
+Corollaries: `import_budget_reaches` and `join_budget_reaches`. With `genesis_budget_reaches`, every World `host genesis`, `join` or `import` admits stays within `potentialMax / 145` of weight over every admitted fold. HOST-57's `reached_size_le` will consume exactly these three.
+
+**Law-6 read (second agent, read-only, with the DISJUNCT check): LAND-WITH-FIXES.** No disjunct and no vacuity; the premises are satisfiable (HOST-56's plant controls succeed through importWorld). `accept_premises` comes from the one success branch of `accept`. `carryWorld` keeps `c.trie` and `c.rows`, and the CodecFits fields mean what is claimed. Taken: the accept proof uses PROTOCOL's `accept_ok` rather than a split-and-simp, and "will consume".
+
+**Flag day.** None. Theorems only; no code moves.

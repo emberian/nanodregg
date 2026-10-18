@@ -24,6 +24,10 @@ import Codec.Proofs.Digest
 import Kernel.Proofs.Origin
 import Kernel.Proofs.Cells
 import Kernel.Proofs.Rows
+import Kernel.Proofs.Carry
+import Codec.Proofs.Carried
+import Codec.Proofs.Deployed
+import Protocol.Proofs.Invite
 
 namespace Nanodregg.Host.Cli
 
@@ -120,5 +124,69 @@ but whose potential is past `potentialMax` is refused `potentialPastBound`. -/
 theorem budgetFault_potential {w : World D} (ha : w.allowance ≤ allowanceMax) (hp : potentialMax < potential w) :
     budgetFault w = some .potentialPastBound := by
   unfold budgetFault; rw [if_neg (by omega), if_pos hp]
+
+/-- **An imported World meets `budget_reaches`' premises** (HOST-59, cv 01a150ed-7bf7): the World
+`Carry.importWorld` makes is KERNEL's carry of a carried state the carried codec decoded
+(`carried_decode_fits`), and the carry keeps that state's cells and rows tries
+(`carryWorld`), so they are canonical and every cell leaf fits its slot. No premise. -/
+theorem importWorld_premises {name nonce : ByteArray} {want : Digest} {f : ByteArray} {w : World D}
+    {r : Carry.Read D} (h : Carry.importWorld X Codec.Deployed.digestCodec name nonce want f = .ok (w, r)) :
+    w.Canon X.env ∧ w.Slotted X.env ∧ w.RowsCanon X.env := by
+  unfold Carry.importWorld at h
+  split at h
+  · cases h
+  · cases h
+  · rename_i r₀ hr
+    split at h
+    · rename_i w₀ hw
+      cases h
+      unfold Carry.read at hr
+      split at hr
+      · cases hr
+      split at hr
+      · cases hr
+      split at hr
+      · cases hr
+      rename_i hd j _
+      split at hr
+      · cases hr
+      rename_i c hc
+      split at hr
+      · cases hr
+      cases hr
+      have hf := Codec.Kernel.carried_decode_fits Codec.Deployed.digestCodec_lawful.on hc
+      unfold Carry.world at hw
+      obtain ⟨-, rfl⟩ := Receive.carry_ok.mp hw
+      exact ⟨hf.cells.2,
+        fun s l hg => hf.cells.1.2 (s, l) ((Trie.mem_toList (trieSpec X.env) 0 c.trie hf.cells.2.1 s l).mpr hg),
+        hf.rows.listing.2⟩
+    all_goals cases h
+
+/-- **A joined World meets `budget_reaches`' premises** (HOST-59): the World an accepted invitation
+makes is KERNEL's genesis World of its signed inputs (PROTOCOL's `accept_ok`, `genesis_ok`). No premise. -/
+theorem accept_premises {trusted inv : ByteArray} {i : Protocol.Invite.Invitation D} {w : World D}
+    (h : Protocol.Invite.accept X trusted inv = .ok (i, w)) :
+    w.Canon X.env ∧ w.Slotted X.env ∧ w.RowsCanon X.env := by
+  have hg := (Protocol.Invite.accept_ok h).2.2.2
+  obtain ⟨-, rfl⟩ := Receive.genesis_ok.mp hg
+  exact ⟨receive_genesis_canon X _ _ _ _, receive_genesis_slotted X _ _ _ _, receive_genesis_rowsCanon X _ _ _ _⟩
+
+/-- **`budget_reaches` at every World `host import` admits** (HOST-59): no premise beyond the import
+and the fold. -/
+theorem import_budget_reaches {name nonce : ByteArray} {want : Digest} {f : ByteArray} {w w' : World D}
+    {r : Carry.Read D} {l : List (Step D)}
+    (h : Carry.importWorld X Codec.Deployed.digestCodec name nonce want f = .ok (w, r))
+    (hb : budgetFault w = none) (hf : World.fold X.env w l = .ok w') :
+    potentialRatio.2 * w'.weight ≤ potentialMax :=
+  let ⟨hc, hs, hr⟩ := importWorld_premises h
+  budget_reaches hb hc hs hr hf
+
+/-- **`budget_reaches` at every World `host join` admits** (HOST-59). -/
+theorem join_budget_reaches {trusted inv : ByteArray} {i : Protocol.Invite.Invitation D} {w w' : World D}
+    {l : List (Step D)} (h : Protocol.Invite.accept X trusted inv = .ok (i, w))
+    (hb : budgetFault w = none) (hf : World.fold X.env w l = .ok w') :
+    potentialRatio.2 * w'.weight ≤ potentialMax :=
+  let ⟨hc, hs, hr⟩ := accept_premises h
+  budget_reaches hb hc hs hr hf
 
 end Nanodregg.Host.Cli
