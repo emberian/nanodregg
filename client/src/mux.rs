@@ -14,6 +14,10 @@
 //! - a connection is `idle` only when it is silent at a frame boundary with no request in flight;
 //!   a request in flight longer than `REPLY_MS_MAX` is `replyTimeout` (a Host that loses a reply
 //!   must not wedge the connection forever); a started frame must finish within `FRAME_MS_MAX`;
+//! - a connection is one fd; `end` takes its writer's sender, so the writer drains at most a reply
+//!   and the close (each write within `reply_write`) and returns; the connection counts against
+//!   `connections_max` until its fd closes, so [`MuxLimits::fds_max`] bounds the process (CLIENT-28:
+//!   the writer once held its own sender and outlived every connection, two fds and a thread each);
 //! - every close is named to the peer: one frame `status::CLOSED ‖ CloseReason::name()`, written
 //!   best-effort by the connection's writer (one writer per stream, so frames never interleave),
 //!   then the stream is shut down. The over-the-bound connection is answered `full` the same way,
@@ -25,8 +29,8 @@ use std::collections::{HashMap, VecDeque};
 use std::io::{self, ErrorKind, Read, Write};
 use std::net::Shutdown;
 use std::os::unix::net::{UnixListener, UnixStream};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{Receiver, SyncSender, TrySendError, sync_channel};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -53,6 +57,14 @@ pub struct MuxLimits {
     pub reply_write: Duration,
 }
 
+impl MuxLimits {
+    /// The supervisor process's open fds at most: stdin, stdout, stderr, the listener and the
+    /// child's two pipes; one per counted connection; and the one accepted to be answered `full`.
+    pub const fn fds_max(&self) -> u64 {
+        6 + self.connections_max as u64 + 1
+    }
+}
+
 /// Why [`serve`] returned. Every end is the supervisor's exit.
 #[derive(Debug)]
 pub enum MuxEnd {
@@ -74,9 +86,10 @@ enum Out {
 }
 
 struct Conn {
-    /// A handle on the stream for shutting it down (the writer owns its own clone).
+    /// The connection's one fd: the reader reads it, the writer writes it, `end` shuts it down.
     stream: UnixStream,
-    out: SyncSender<Out>,
+    /// The writer's one sender, taken by `end`: the writer returns once its queue is drained.
+    out: Mutex<Option<SyncSender<Out>>>,
     /// A reply is queued and not yet taken by the writer: the one slot is full.
     slot: AtomicBool,
     /// When each request in flight was forwarded, oldest first; and when the connection last
@@ -87,6 +100,14 @@ struct Conn {
     /// Why the mux ended this connection, owed to the child as a hang-up (PROTOCOL-23); unset
     /// when the child itself closed it.
     hang: Mutex<Option<CloseReason>>,
+    /// The counted connections; this one leaves the count when its fd closes.
+    live: Arc<AtomicUsize>,
+}
+
+impl Drop for Conn {
+    fn drop(&mut self) {
+        self.live.fetch_sub(1, Ordering::SeqCst);
+    }
 }
 
 struct Shared<I> {
@@ -94,6 +115,7 @@ struct Shared<I> {
     child_in: Mutex<Option<I>>,
     conns: Mutex<Conns>,
     exhausted: AtomicBool,
+    live: Arc<AtomicUsize>,
 }
 
 struct Conns {
@@ -123,7 +145,8 @@ impl<I> Shared<I> {
             return;
         };
         let _ = c.stream.shutdown(Shutdown::Read);
-        let said = last.is_some_and(|b| c.out.try_send(Out::Last(b)).is_ok());
+        let tx = lock(&c.out).take();
+        let said = last.is_some_and(|b| tx.is_some_and(|t| t.try_send(Out::Last(b)).is_ok()));
         if !said {
             let _ = c.stream.shutdown(Shutdown::Both);
         }
@@ -145,7 +168,7 @@ fn close_frame(r: CloseReason) -> Vec<u8> {
 }
 
 /// Write `bytes` within `limit`, then flush.
-fn write_within(w: &mut UnixStream, limit: Duration, bytes: &[u8]) -> io::Result<()> {
+fn write_within(mut w: &UnixStream, limit: Duration, bytes: &[u8]) -> io::Result<()> {
     w.set_write_timeout(Some(limit))?;
     w.write_all(bytes)?;
     w.flush()
@@ -180,6 +203,7 @@ where
             next: Some(0),
         }),
         exhausted: AtomicBool::new(false),
+        live: Arc::new(AtomicUsize::new(0)),
     });
     let accepting = Arc::clone(&shared);
     thread::spawn(move || accept(&listener, &accepting, limits, peer));
@@ -211,61 +235,63 @@ fn accept<I: Write + Send + 'static>(
     limits: MuxLimits,
     peer: Option<(u32, u32)>,
 ) {
+    let mut failed = 0u64;
     for stream in listener.incoming() {
-        let Ok(mut stream) = stream else { continue };
+        let stream = match stream {
+            Ok(s) => s,
+            Err(e) => {
+                // No peer to name it to: counted, and paced so a lasting error cannot spin.
+                failed += 1;
+                eprintln!("mux: accept failed ({failed} so far): {e}");
+                thread::sleep(limits.reply_write);
+                continue;
+            }
+        };
         if let Some(p) = peer
             && nanodregg_sandbox::custody::peer_cred(&stream).ok() != Some(p)
         {
-            let close = close_frame(CloseReason::PeerRefused);
-            let _ = write_within(&mut stream, limits.reply_write, &close);
-            let _ = stream.shutdown(Shutdown::Both);
+            refuse(&stream, limits, CloseReason::PeerRefused);
             continue;
         }
-        let (Ok(writer), Ok(handle)) = (stream.try_clone(), stream.try_clone()) else {
-            continue;
-        };
-        // Two slots: at most one reply (the `slot` flag) and the one close.
-        let (tx, rx) = sync_channel(2);
-        let conn = Arc::new(Conn {
-            stream: handle,
-            out: tx,
-            slot: AtomicBool::new(false),
-            flight: Mutex::new((VecDeque::new(), Instant::now())),
-            writer: Mutex::new(None),
-            hang: Mutex::new(None),
-        });
         let id = {
             let mut conns = lock(&shared.conns);
             match conns.next {
-                _ if conns.open.len() >= limits.connections_max as usize => None,
+                _ if shared.live.load(Ordering::SeqCst) >= limits.connections_max as usize => None,
                 Some(id) => {
                     conns.next = id.checked_add(1);
-                    conns.open.insert(id, Arc::clone(&conn));
                     Some(id)
                 }
                 None => None,
             }
         };
         let Some(id) = id else {
-            let _ = write_within(
-                &mut stream,
-                limits.reply_write,
-                &close_frame(CloseReason::Full),
-            );
-            let _ = stream.shutdown(Shutdown::Both);
+            refuse(&stream, limits, CloseReason::Full);
             if lock(&shared.conns).next.is_none() && !shared.exhausted.swap(true, Ordering::SeqCst)
             {
                 lock(&shared.child_in).take();
             }
             continue;
         };
+        // Two slots: at most one reply (the `slot` flag) and the one close.
+        let (tx, rx) = sync_channel(2);
+        shared.live.fetch_add(1, Ordering::SeqCst);
+        let conn = Arc::new(Conn {
+            stream,
+            out: Mutex::new(Some(tx)),
+            slot: AtomicBool::new(false),
+            flight: Mutex::new((VecDeque::new(), Instant::now())),
+            writer: Mutex::new(None),
+            hang: Mutex::new(None),
+            live: Arc::clone(&shared.live),
+        });
+        lock(&shared.conns).open.insert(id, Arc::clone(&conn));
         let sh = Arc::clone(shared);
         let c = Arc::clone(&conn);
-        let w = thread::spawn(move || write_loop(id, writer, &rx, &c, &sh, limits));
+        let w = thread::spawn(move || write_loop(id, &rx, &c, &sh, limits));
         *lock(&conn.writer) = Some(w);
         let sh = Arc::clone(shared);
         thread::spawn(move || {
-            let why = forward(id, stream, &conn, &sh, limits);
+            let why = forward(id, &conn, &sh, limits);
             sh.close(id, why);
             // The connection's reader is the one thread that writes its frames to the child, so
             // the hang-up follows its last request.
@@ -283,26 +309,25 @@ fn accept<I: Write + Send + 'static>(
     }
 }
 
+/// Answer a connection that is not admitted with its named close, then shut it.
+fn refuse(s: &UnixStream, limits: MuxLimits, why: CloseReason) {
+    let _ = write_within(s, limits.reply_write, &close_frame(why));
+    let _ = s.shutdown(Shutdown::Both);
+}
+
 /// The connection's one writer: replies in order, then (if any) the named close.
-fn write_loop<I>(
-    id: u32,
-    mut w: UnixStream,
-    rx: &Receiver<Out>,
-    c: &Conn,
-    sh: &Shared<I>,
-    limits: MuxLimits,
-) {
+fn write_loop<I>(id: u32, rx: &Receiver<Out>, c: &Conn, sh: &Shared<I>, limits: MuxLimits) {
     while let Ok(out) = rx.recv() {
         match out {
             Out::Reply(bytes) => {
                 c.slot.store(false, Ordering::SeqCst);
-                if write_within(&mut w, limits.reply_write, &bytes).is_err() {
+                if write_within(&c.stream, limits.reply_write, &bytes).is_err() {
                     sh.close(id, Some(CloseReason::ReplyWriteFailed));
                 }
             }
             Out::Last(bytes) => {
-                let _ = write_within(&mut w, limits.reply_write, &bytes);
-                let _ = w.shutdown(Shutdown::Both);
+                let _ = write_within(&c.stream, limits.reply_write, &bytes);
+                let _ = c.stream.shutdown(Shutdown::Both);
                 return;
             }
         }
@@ -332,16 +357,11 @@ fn timed_out(e: &io::Error) -> bool {
 
 /// Client → child: each client frame becomes one child frame tagged with `id`. Returns why the
 /// connection ends (`None`: the peer left or the child is gone).
-fn forward<I: Write>(
-    id: u32,
-    s: UnixStream,
-    c: &Conn,
-    sh: &Shared<I>,
-    limits: MuxLimits,
-) -> Option<CloseReason> {
+fn forward<I: Write>(id: u32, c: &Conn, sh: &Shared<I>, limits: MuxLimits) -> Option<CloseReason> {
     let child_max = limits.frame.frame_bytes_max.saturating_add(CONN as u32);
     // The boundary wait wakes at least this often to judge `idle` and `replyTimeout`.
     let tick = limits.idle.min(limits.reply) / 4;
+    let s = &c.stream;
     let mut first = [0u8; 1];
     loop {
         if s.set_read_timeout(Some(tick.max(Duration::from_millis(1))))
@@ -349,7 +369,7 @@ fn forward<I: Write>(
         {
             return None;
         }
-        match (&s).read(&mut first) {
+        match { s }.read(&mut first) {
             Ok(0) => return None,
             Ok(_) => {}
             Err(e) if timed_out(&e) => {
@@ -367,7 +387,7 @@ fn forward<I: Write>(
         }
         let started = Instant::now();
         let mut rest = Deadline {
-            s: &s,
+            s,
             until: started + limits.frame_deadline,
         };
         let f = match frame::read(&mut (&first[..]).chain(&mut rest), limits.frame) {
@@ -442,11 +462,10 @@ fn route<I>(child_out: &mut impl Read, shared: &Shared<I>, limits: MuxLimits) ->
             shared.close(id, Some(CloseReason::ReplyBacklog));
             continue;
         }
-        match c.out.try_send(Out::Reply(bytes)) {
-            Ok(()) => {}
-            Err(TrySendError::Full(_) | TrySendError::Disconnected(_)) => {
-                shared.close(id, Some(CloseReason::ReplyBacklog));
-            }
+        // No sender: the connection is ending, and its reply is dropped like any for a gone one.
+        let sent = lock(&c.out).as_ref().map(|t| t.try_send(Out::Reply(bytes)));
+        if let Some(Err(_)) = sent {
+            shared.close(id, Some(CloseReason::ReplyBacklog));
         }
     }
 }

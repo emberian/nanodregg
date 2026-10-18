@@ -336,3 +336,114 @@ fn a_peer_outside_uid_and_group_is_closed_peer_refused() {
     assert!(String::from_utf8_lossy(&o.stderr).contains("--peer needs --group"));
     let _ = std::fs::remove_dir_all(&root);
 }
+
+/// The supervisor's open fds and threads, from /proc (Linux).
+#[cfg(target_os = "linux")]
+fn held(pid: u32) -> (u64, u64) {
+    let fds = std::fs::read_dir(format!("/proc/{pid}/fd"))
+        .unwrap()
+        .count();
+    let status = std::fs::read_to_string(format!("/proc/{pid}/status")).unwrap();
+    let threads = status
+        .lines()
+        .find_map(|l| l.strip_prefix("Threads:"))
+        .unwrap();
+    (fds as u64, threads.trim().parse().unwrap())
+}
+
+/// `held(pid)` once it reads `want`, or what it read at the 10 s deadline (100 ms sleeps).
+#[cfg(target_os = "linux")]
+fn settled(pid: u32, want: (u64, u64)) -> (u64, u64) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let now = held(pid);
+        if now == want || std::time::Instant::now() >= deadline {
+            return now;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+/// CLIENT-28 (PERF-1 FINDING 1: the writer's supervisor gained 252 fds over 120 commands, then
+/// dropped connections without a word at RLIMIT_NOFILE). The real supervisor, counted from /proc:
+/// after 200 connections that asked and left it holds exactly the fds and threads it held before
+/// them; with `CONNECTIONS_MAX` connections open at once it holds at most `MUX.fds_max()` fds and two
+/// threads per connection, and one more connection is answered `full`.
+#[cfg(target_os = "linux")]
+#[test]
+fn every_connection_gives_back_its_fds_and_threads() {
+    use nanodregg_client::generated as g;
+    let ws = std::env::temp_dir().join(format!("nd-sup-fds-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&ws);
+    std::fs::create_dir(&ws).unwrap();
+    let ws = ws.canonicalize().unwrap();
+    std::fs::write(ws.join("seed"), b"SEED").unwrap();
+    let sock = std::env::temp_dir().join(format!("nd-sup-fds-{}.sock", std::process::id()));
+    let mut sup = common::supervise(&sock, &ws, &[], CHILD, &[&ws.join("seed")]);
+    let pid = sup.child().id();
+    let connect = || {
+        let mut c = UnixStream::connect(&sock).unwrap();
+        c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+        frame::write(&mut c, table::LIMITS, 5, b"").unwrap();
+        assert_eq!(frame::read(&mut c, table::LIMITS).unwrap().op, 6);
+        c
+    };
+    drop(connect());
+    std::thread::sleep(Duration::from_millis(500));
+    let before = held(pid);
+    for _ in 0..200 {
+        drop(connect());
+    }
+    let after = settled(pid, before);
+    let open: Vec<UnixStream> = (0..table::MUX.connections_max).map(|_| connect()).collect();
+    let peak = held(pid);
+    let mut past = UnixStream::connect(&sock).unwrap();
+    past.set_read_timeout(Some(Duration::from_secs(10)))
+        .unwrap();
+    let full = frame::read(&mut past, table::LIMITS).unwrap();
+    drop(open);
+    let end = settled(pid, before);
+    let _ = std::fs::remove_file(&sock);
+    std::fs::remove_dir_all(&ws).unwrap();
+    assert_eq!(after, before, "(fds, threads) after 200 connections ended");
+    let per_conn = 2 * u64::from(table::MUX.connections_max);
+    assert!(
+        peak.0 <= table::MUX.fds_max() && peak.1 <= before.1 + per_conn,
+        "{} open: {peak:?} past the bound ({} fds, {before:?} + {per_conn} threads)",
+        table::MUX.connections_max,
+        table::MUX.fds_max()
+    );
+    assert_eq!(
+        (full.op, full.payload.as_slice()),
+        (g::status::CLOSED, g::CloseReason::Full.name().as_bytes())
+    );
+    assert_eq!(end, before, "(fds, threads) after every connection ended");
+}
+
+/// CLIENT-28: with RLIMIT_NOFILE below the fds it may hold (`MUX.fds_max()`), the supervisor
+/// refuses to start, by name, rather than refuse connections it counted as admissible.
+#[test]
+fn an_fd_limit_below_the_bound_is_refused_at_launch() {
+    let sock = std::env::temp_dir().join(format!("nd-sup-nofile-{}.sock", std::process::id()));
+    let out = Command::new("sh")
+        .arg("-c")
+        .arg(format!(
+            "ulimit -n {} && exec \"$0\" \"$1\" --hide /nonexistent -- /bin/true",
+            table::MUX.fds_max() - 1
+        ))
+        .arg(env!("CARGO_BIN_EXE_nd-supervise"))
+        .arg(&sock)
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_file(&sock);
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("RLIMIT_NOFILE"),
+        "{out:?}"
+    );
+    assert_eq!(
+        out.status.code(),
+        Some(i32::from(
+            nanodregg_client::generated::supervisor_exit::REFUSED_AT_LAUNCH
+        ))
+    );
+}

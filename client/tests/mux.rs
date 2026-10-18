@@ -285,3 +285,34 @@ fn the_child_hears_every_end_by_name() {
         "a client sending the hang-up byte"
     );
 }
+
+/// CLIENT-28: a connection counts against the bound until its fd closes, not until it leaves the
+/// routing table. A has left (`peerLeft`) but its reader still holds it, blocked handing the child
+/// its hang-up through a full pipe: B is `full`. Once the child reads, A's fd closes and C is
+/// admitted with the next id.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_connection_counts_until_its_fd_closes() {
+    let (listener, path) = socket("live");
+    let (mut req_r, req_w) = io::pipe().unwrap();
+    let (rep_r, _rep_w) = io::pipe().unwrap();
+    req_w.try_clone().unwrap().write_all(&[0; 65_536]).unwrap(); // Linux's pipe capacity: full
+    thread::spawn(move || mux::serve(listener, req_w, rep_r, limits(1, 10_000)));
+    drop(UnixStream::connect(&path).unwrap());
+    thread::sleep(Duration::from_millis(300));
+    let mut b = UnixStream::connect(&path).unwrap();
+    assert_closed(&mut b, L, CloseReason::Full);
+    req_r.read_exact(&mut [0; 65_536]).unwrap();
+    let hang = frame::read_body(&mut req_r, 68).unwrap();
+    assert_eq!(
+        (&hang[..5], &hang[5..]),
+        (&[0, 0, 0, 0, g::HANGUP][..], &b"peerLeft"[..])
+    );
+    thread::sleep(Duration::from_millis(300));
+    let mut c = UnixStream::connect(&path).unwrap();
+    frame::write(&mut c, L, 5, b"x").unwrap();
+    assert_eq!(
+        frame::read_body(&mut req_r, 68).unwrap(),
+        [1, 0, 0, 0, 5, b'x']
+    );
+}

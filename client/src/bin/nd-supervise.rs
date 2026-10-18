@@ -85,6 +85,15 @@ fn main() -> ExitCode {
 
 fn run() -> Result<ExitCode, String> {
     let a = parse(std::env::args_os().skip(1))?;
+    // Law 4: every fd the mux may hold is one the kernel will give (CLIENT-28).
+    let need = table::MUX.fds_max();
+    if let Some(have) = rustix::process::getrlimit(rustix::process::Resource::Nofile).current
+        && have < need
+    {
+        return Err(format!(
+            "nd-supervise: RLIMIT_NOFILE {have} is below the {need} fds it may hold (CLIENT-28)"
+        ));
+    }
     let listener = sockets::bind_supervised(&a.socket, a.group)
         .map_err(|e| format!("nd-supervise: {}: {e}", a.socket.display()))?;
     let args: Vec<&std::ffi::OsStr> = a.args.iter().map(OsString::as_os_str).collect();

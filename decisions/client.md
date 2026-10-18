@@ -321,6 +321,7 @@ Size: client/src rises 1715 → 1959 of its 2000 ceiling; `nd-attach` (~127 line
 old `route`; the mutation checks (six, each red) are the evidence, not a deployed measurement over
 sshd.
 **Status.** landed (this commit). `nd-attach` waits on the hang-up frame and the size ceiling.
+**Amended (CLIENT-28, 2026-10-18).** The ≤ 2·64 + accept thread bound was false: a writer never ended when its peer left (2 fds + 1 thread leaked per connection), and `full` counted map entries. A connection is now one fd, counted until it closes.
 
 ## CLIENT-15 one custody read for every key holder, in the sandbox crate (2026-10-17, CLIENT-3; asked by HOSTING-3)
 
@@ -793,3 +794,51 @@ Mutations, each red: kept-file read unchecked; key-file read unchecked; the exis
 **Meta-critique.** I found defect 3 by reading `Envelope.check` before writing `confirm`, not by a test: every stub I would have written signs with whatever key the test chose, so the stubs would have been green over a permanent lockout. The `EnvelopeFollow` model in run.rs exists to make that class visible, and it is still a model: the real Machine's retry is checked only by the real round trip's rotate.
 
 **Size.** client library 2342 → 2495 (ceiling 2350; asked ROOT for 2500 with the breakdown: attempt +49, run +72, custody +33, table +2).
+
+## CLIENT-28 · a connection is one fd with one end: the supervisor gives back what each connection held, and `full` bounds its fds (2026-10-18, CLIENT-7; PERF-1 FINDING 1, ROOT rulings)
+**The defects (verified at source, then measured before the fix).**
+1. **The leak.** `write_loop` held an `Arc<Conn>`, and `Conn` held the writer's only `SyncSender` and the writer's own `JoinHandle`. When a peer left, `end(id, None)` sent nothing, so `rx.recv()` never returned. The writer thread stayed blocked for good with both `try_clone`s of the stream (its own and `Conn.stream`): two fds and one thread per connection. A `replyWriteFailed` close whose `Last` frame could not be queued did the same. Measured with the real `nd-supervise` from `/proc/PID`: (10 fds, 4 threads) after a warm connection, then (410, 204) after 200 connections that asked and left. PERF-1 saw +252 fds over 120 commands. Near RLIMIT_NOFILE 1024 the `try_clone` failed, and `accept` dropped the connection with `else { continue }`: no frame, no count, so nd saw EPIPE on its first write.
+2. **The bound bounded nothing (ROOT condition 1).** `full` compared `connections_max` with the routing map. A connection leaves the map in `end`, before its writer and its fds are gone, so `CONNECTIONS_MAX` (Lean's 64) put no bound on the supervisor's fds or threads. CLIENT-14's "≤ 2·64 + accept" threads was false until this commit.
+
+**Decision.**
+- **One fd per connection.** `Conn` owns the accepted stream. The reader (`forward`) reads `&c.stream`, the writer writes `&c.stream`, and `end` shuts it down. There is no `try_clone`, so the silent `else { continue }` has nothing left to guard and is gone. Read and write timeouts are separate socket options, and `shutdown` applies to the socket, so sharing one fd changes nothing the clones did.
+- **`end` takes the writer's sender** (`out: Mutex<Option<SyncSender>>`). The writer drains what is queued (at most one reply and the close, each write within `reply_write`) and returns on `Last` or on the closed channel. `route` finding no sender drops the reply, like any reply for a gone connection.
+- **A connection counts until its fd closes.** It is counted when it is admitted and released in `Conn`'s `Drop`. The fd closes in that same drop, once the routing table, the reader, the writer and any in-flight `route` have all let go. `accept` refuses `full` against that count. The name is Lean's existing `CloseReason.full`. ROOT ruled that a second name (`tooManyPeers`) would be a twin of the same bound.
+- **The static bound (law 4):** `MuxLimits::fds_max() = 6 + connections_max + 1`: stdin, stdout, stderr, the listener and the child's two pipes; one fd per counted connection; and the one connection accepted only to be answered `full`. Threads: main, accept, and two per counted connection. Writer threads are detached by design. Each ends within 2·`reply_write` of its connection's end, and the number alive is bounded by the count. `serve` still joins the writers of the connections open when the child closes.
+- **`nd-supervise` refuses at launch** (`refusedAtLaunch`, stderr `RLIMIT_NOFILE N is below the M fds it may hold`) when its soft RLIMIT_NOFILE is below `fds_max` (71 today). It never raises the limit itself.
+- **An `accept()` error** has no peer to name it to: it is counted on stderr (`mux: accept failed (K so far): E`) and paced by `reply_write`. Before, it was a silent `continue` that would spin on EMFILE/ENFILE.
+
+**Measured after (hbox, the same plant).** (6, 2) before; (6, 2) after 200 connections; (70, 130) with 64 open, under a bound of 71; one more connection is answered `full`; (6, 2) after all of them end.
+
+**Plants.** `client/tests/supervise.rs`:
+- `every_connection_gives_back_its_fds_and_threads` (Linux, `/proc`): after 200 connections the counts equal those before; at 64 open the counts are within `fds_max` and two threads per connection; the 65th is `full`; the counts return after everything ends. It is red on the old code at (410, 204).
+- `an_fd_limit_below_the_bound_is_refused_at_launch` (`ulimit -n fds_max-1`).
+
+`client/tests/mux.rs` `a_connection_counts_until_its_fd_closes` (Linux): A leaves, but its reader is blocked handing the child its hang-up through a full pipe. B is `full`. Once the child reads, A's fd closes and C is admitted with the next id.
+
+**Mutations, each red** (`logs/client7-mut.py`):
+- M1 the writer keeps its sender. Red in `every_connection`: the leak now shows as `full` at the 65th sequential connection, because the count holds.
+- M2 the count is of map entries again (ROOT condition 1). Red in `a_connection_counts_until_its_fd_closes`.
+- M3 no launch check.
+- M4 a silent close at the bound (the old silent `continue` in its new place).
+- M5 the count is never released.
+
+**Alternatives.**
+- (a) Close the leaked handles in `end`: the thread still blocks unless the sender goes too. It is the same fix with two owners.
+- (b) Raise RLIMIT_NOFILE: it postpones the leak and fixes nothing.
+- (c) One epoll thread: CLIENT-14 (a) still holds.
+- (d) Release the count when the connection leaves the map (the old shape): defect 2.
+- (e) Exit the supervisor on an accept error, the one restart path: a transient ENFILE would then cold-restart the writer's Host. Pacing is less destructive, and the error is counted.
+
+**Critique.**
+- A connection whose peer has left still costs a slot until its writer drains: up to 2·`reply_write` against a peer that stopped reading. Under churn against a stalled peer, an honest client can therefore see `full` sooner than before. That is the bound being true, but it is a behaviour change.
+- The count and the pacing are Rust's (law 2 stretch, as CLIENT-14's clocks).
+- `fds_max`'s 6 is the supervisor binary's own shape, written as a constant in the mux. A seventh fd in nd-supervise would pass the launch check and could exceed the bound by one before `every_connection` names it.
+- `accept`'s stderr count is not plantable without exhausting the system's file table; it is a report, not a check.
+- `nd-attach` still clones per upstream connection (two fds each, at most `PEER_CONNECTIONS_MAX` = 8); its clone failure is named `unreachable`, so it is not this defect.
+
+**Meta-critique.** PERF-1 found this by running THE BAR, not by any client plant. CLIENT-14's tests checked every NAMED end and never what an end gives back. The one plant that counts resources against the real binary is the class this adds. The fd/thread plant and the launch refusal are Linux-only (`/proc`, and the bound is judged on hbox); macOS stays declared unrun, as the other macOS halves.
+
+**Size.** client library 2495 → 2514 (ROOT ruling 2026-10-18: ceiling 2500 → 2520); nd-supervise 118 → 127 of 160.
+
+**Status.** landed (this commit). Operator sentence for EXITS.md sent to OPS-5. PERF-1 re-measures the WASTE rows.
