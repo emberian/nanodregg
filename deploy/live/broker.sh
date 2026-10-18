@@ -55,7 +55,7 @@ mapfile -t g < "$R/calls/genesis.args"
 op=$(awk '/^founder 0 /{print $4}' "$R/report/genesis.txt")
 printf '7 CANARY-ops3-live-not-a-key\n' > "$R/etc/provider.key" && chmod 0600 "$R/etc/provider.key"
 cp "$SRC/anchors.pem" "$R/etc/anchors.pem" && chmod 0644 "$R/etc/anchors.pem"
-printf 'ND_OPERATOR=%s\nND_RESIDENTS=01\nND_PEER=%s\n' "$op" "$(id -u)" > "$R/etc/keybroker.env"
+printf 'ND_OPERATOR=%s\nND_PEER=%s\n' "$op" "$(id -u)" > "$R/etc/keybroker.env"
 "$B/emit-units" --live "$ROOT" "$U" || exit 2
 for u in $LINKS; do
   l=$HOME/.config/systemd/user/$u.service

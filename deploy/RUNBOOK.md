@@ -177,12 +177,20 @@ parent must also pass (a group-writable home is refused `Dir(/home/USER)`). The 
 rendered by emit-units as `deploy/units/linux/nd-keybroker.service` (system unit, User=nd):
 - install `keybroker`, `hosting-broker` and `emit-anchors` in `/opt/nd/bin`; write
   `/etc/nd/keybroker/keybroker.env` (owned by root or nd, not group/other writable) with
-  `ND_OPERATOR=<operator member hex>`, `ND_RESIDENTS=<comma-separated resident names>` and
+  `ND_OPERATOR=<operator member hex>` and
   `ND_PEER=<the uid of nd-hosted>` (`id -u nd-hosted`: the one uid keybroker serves, HOSTING-17 §3);
 - every start first runs `emit-anchors --check /etc/nd/keybroker/anchors.pem`: an installed copy
   that differs from the build's pinned roots by one byte refuses to start (and, failing on every
   start, stops at the start limit; the journal names it);
-- resident `r`'s socket is `/run/nd-broker/<r>/broker.sock`: keybroker makes `<r>` (02710, the
+- there is no operator list of residents (HOSTING-26, ruled (A)): keybroker asks its decider which
+  resident grains the World holds, every 200 ms, so a resident's socket appears when its grain is born
+  and goes, with its directory, when the grain is removed, with no restart and no operator step. A
+  World with more than 1024 resident grains stops the unit `residentsPastBound` (decider 7, EXITS.md);
+  an ask on a socket whose resident was since removed is refused `notResident`. A resident started
+  before keybroker has learned its birth is refused `pathMissing` and counted; keybroker's next poll
+  binds the socket;
+- resident `r`'s socket (`r` is the grain's directory, its id in lowercase hex) is
+  `/run/nd-broker/<r>/broker.sock`: keybroker makes `<r>` (02710, the
   hosted group by setgid) and binds the socket 0660 nd:nd-hosted; on every accept it serves only a
   peer of uid ND_PEER and SOCKDIR's group, anything else is refused `peerRefused` on the wire. A
   SOCKDIR of any other owner, group or mode, or a directory above it writable by another, ends
