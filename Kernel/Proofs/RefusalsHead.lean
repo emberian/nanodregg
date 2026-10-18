@@ -158,19 +158,21 @@ section Sound
 variable {E : Env D} {n : Nat} (hE : E.Lawful n)
 
 include hE in
+omit [DecidableEq D] in
+/-- **The refusals' trie is a `HeadSound` instance** (KERNEL-52) on `RefusalLeaf.Fits`, at any
+digest size (`refusalBody_inj`). -/
+theorem refusal_headSound : HeadSound E (refusalSpec E) Codec.Kernel.RefusalLeaf.Fits :=
+  ⟨refusalBody_inj hE, dbytes_pair_inj hE, refusalDigest_inj hE, refusal_coll_collision⟩
+
+include hE in
 /-- **Refusals inclusion is sound at the World**: a claimed leaf proved against the refusals root is
 the World's leaf, or a collision. -/
 theorem refusal_inclusion_sound {w : World D} (hc : w.RefusalsCanon E)
     (hfit : ∀ k v, w.refusalAt E k = some v → Codec.Kernel.RefusalLeaf.Fits v) {k : RefusalSlot D}
     {v : RefusalLeaf D} (hv : Codec.Kernel.RefusalLeaf.Fits v) {p : Trie.Proof (RefusalSlot D) D}
     (hp : Trie.verifyInclusion (refusalSpec E) (w.refusalsRoot E) k (refusalDigest E v) p = true) :
-    w.refusalAt E k = some v ∨ Collision E.hash := by
-  rcases Trie.inclusion_sound (refusalSpec E) (refusalBody_inj hE) (dbytes_pair_inj hE) hc.2.1 hc.1 hp
-    with ⟨v', hg, hd⟩ | c
-  · rcases refusalDigest_inj hE (hfit k v' hg) hv hd with rfl | c
-    · exact .inl hg
-    · exact .inr c
-  · exact .inr (refusal_coll_collision c)
+    w.refusalAt E k = some v ∨ Collision E.hash :=
+  (refusal_headSound hE).inclusion hc hfit hv hp
 
 include hE in
 /-- **Refusals exclusion is sound at the World**: a key proved absent against the refusals root is
@@ -178,11 +180,8 @@ not in the World's refusals, or a collision. -/
 theorem refusal_exclusion_sound {w : World D} (hc : w.RefusalsCanon E) {k : RefusalSlot D}
     {p : Trie.Proof (RefusalSlot D) D}
     (hp : Trie.verifyExclusion (refusalSpec E) (w.refusalsRoot E) k p = true) :
-    w.refusalAt E k = none ∨ Collision E.hash := by
-  rcases Trie.exclusion_sound (refusalSpec E) (refusalBody_inj hE) (dbytes_pair_inj hE) hc.2.1 hp
-    with h | c
-  · exact .inl h
-  · exact .inr (refusal_coll_collision c)
+    w.refusalAt E k = none ∨ Collision E.hash :=
+  (refusal_headSound hE).exclusion hc hp
 
 include hE in
 /-- **The phone's refusals read**: a head record that hashes to the chain a step (a Turn or a
@@ -194,11 +193,9 @@ theorem head_refusal_read {w w' : World D} {s : Step D} (hw : w.RefusalsOk E)
     {k : RefusalSlot D} {v : RefusalLeaf D} (hv : Codec.Kernel.RefusalLeaf.Fits v)
     {p : Trie.Proof (RefusalSlot D) D}
     (hp : Trie.verifyInclusion (refusalSpec E) rroot' k (refusalDigest E v) p = true) :
-    w'.refusalAt E k = some v ∨ Collision E.hash := by
-  rcases head_roots hE h hhead hrd with ⟨-, -, rfl, -⟩ | col
-  · have hw' := step_refusalsOk hw h
-    exact refusal_inclusion_sound hE hw'.1 (refusalsOk_fits hw') hv hp
-  · exact .inr col
+    w'.refusalAt E k = some v ∨ Collision E.hash :=
+  (refusal_headSound hE).head_read (fun _ _ r _ => r) (step_refusalsOk hw h).1 rfl
+    (refusalsOk_fits (step_refusalsOk hw h)) (head_roots hE h hhead hrd) hv hp
 
 include hE in
 /-- **The phone's refusals absence** against a head: the key is not in that World's refusals, or a
@@ -208,32 +205,9 @@ theorem head_refusal_absent {w w' : World D} {s : Step D} (hc : w.RefusalsCanon 
     (hhead : headLink E prev g td rd = w'.chain) (hrd : rootsDigest E root' jroot' rroot' wroot' = rd)
     {k : RefusalSlot D} {p : Trie.Proof (RefusalSlot D) D}
     (hp : Trie.verifyExclusion (refusalSpec E) rroot' k p = true) :
-    w'.refusalAt E k = none ∨ Collision E.hash := by
-  rcases head_roots hE h hhead hrd with ⟨-, -, rfl, -⟩ | col
-  · exact refusal_exclusion_sound hE (step_refusalsCanon hc h) hp
-  · exact .inr col
-
-include hE in
-/-- A head record that hashes to the chain of a World a log reached after a step names that World's
-four roots, or a collision (the head is the log's last link). -/
-theorem fold_head_roots {w₀ w₁ w₂ : World D} {s : Step D} {l : List (Step D)}
-    (h₁ : World.step E w₀ s = .ok w₁) (hf : World.fold E w₁ l = .ok w₂)
-    {prev td rd root' jroot' rroot' wroot' : D} {g : UInt8}
-    (hhead : headLink E prev g td rd = w₂.chain) (hrd : rootsDigest E root' jroot' rroot' wroot' = rd) :
-    (root' = w₂.root E ∧ jroot' = w₂.journalRoot E ∧ rroot' = w₂.refusalsRoot E ∧
-      wroot' = w₂.rowsRoot E) ∨ Collision E.hash := by
-  cases l with
-  | nil =>
-      simp [World.fold] at hf; subst hf
-      exact head_roots hE h₁ hhead hrd
-  | cons u us =>
-      rcases List.eq_nil_or_concat (u :: us) with he | ⟨a, b, he⟩
-      · cases he
-      · rw [he, List.concat_eq_append] at hf
-        obtain ⟨w₃, _, h₃⟩ := fold_append.mp hf
-        obtain ⟨w₄, h₄, h₅⟩ := fold_cons_ok.mp h₃
-        simp [World.fold] at h₅; subst h₅
-        exact head_roots hE h₄ hhead hrd
+    w'.refusalAt E k = none ∨ Collision E.hash :=
+  (refusal_headSound hE).head_absent (fun _ _ r _ => r) (step_refusalsCanon hc h) rfl
+    (head_roots hE h hhead hrd) hp
 
 /-! ## The prune horizon, at the head -/
 

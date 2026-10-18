@@ -25,6 +25,7 @@ import Kernel.Proofs.Frame
 import Kernel.Proofs.TrieMap
 import Kernel.Receive.Follow
 import Kernel.Proofs.Lawful
+import Kernel.Proofs.Logic.HeadRead
 
 namespace Nanodregg.Kernel
 
@@ -317,28 +318,26 @@ section Sound
 variable {E : Env D} {n : Nat} (hE : E.Lawful n)
 include hE
 
+omit [DecidableEq D] in
+/-- **The cells' trie is a `HeadSound` instance** (KERNEL-52) on `Leaf.CellFit Cell.Fits`, where
+the cell codec is injective (`hE.cellBytes_injOn`). -/
+theorem cells_headSound : HeadSound E (trieSpec E) (Leaf.CellFit Codec.Kernel.Cell.Fits) :=
+  ⟨leafBody_inj hE, dbytes_pair_inj hE, leafDigest_inj hE.cellBytes_injOn, coll_collision⟩
+
 /-- **Inclusion is sound at the World**, for a claimed leaf and a World whose cells fit
 (`Cell.Fits`, where a lawful `Env`'s cell codec is injective). -/
 theorem slot_inclusion_sound {w : World D} (hc : w.Canon E)
     (hwf : w.CellsFit Codec.Kernel.Cell.Fits E) {s : Slot D} {l : Leaf}
     (hlf : l.CellFit Codec.Kernel.Cell.Fits)
     {p : Trie.Proof (Slot D) D} (hv : Trie.verifyInclusion (trieSpec E) (w.root E) s (leafDigest E l) p = true) :
-    w.trie.get (trieSpec E) s = some l ∨ Collision E.hash := by
-  rcases Trie.inclusion_sound (trieSpec E) (leafBody_inj hE) (dbytes_pair_inj hE) hc.2.1 hc.1 hv
-    with ⟨v, hg, hd⟩ | c
-  · rcases leafDigest_inj hE.cellBytes_injOn (hwf s v hg) hlf hd with rfl | c
-    · exact .inl hg
-    · exact .inr c
-  · exact .inr (coll_collision c)
+    w.trie.get (trieSpec E) s = some l ∨ Collision E.hash :=
+  (cells_headSound hE).inclusion hc hwf hlf hv
 
 /-- **Exclusion is sound at the World.** -/
 theorem slot_exclusion_sound {w : World D} (hc : w.Canon E) {s : Slot D} {p : Trie.Proof (Slot D) D}
     (hv : Trie.verifyExclusion (trieSpec E) (w.root E) s p = true) :
-    w.trie.get (trieSpec E) s = none ∨ Collision E.hash := by
-  rcases Trie.exclusion_sound (trieSpec E) (leafBody_inj hE) (dbytes_pair_inj hE) hc.2.1 hv
-    with h | c
-  · exact .inl h
-  · exact .inr (coll_collision c)
+    w.trie.get (trieSpec E) s = none ∨ Collision E.hash :=
+  (cells_headSound hE).exclusion hc hv
 
 /-- A live cell proved against the root is the World's live cell, or the hash collides. -/
 theorem live_inclusion_sound {w : World D} (hc : w.Canon E)
@@ -421,10 +420,8 @@ theorem head_read_sound {w w' : World D} {s : Step D}
     {sl : Slot D} {l : Leaf} (hlf : l.CellFit Codec.Kernel.Cell.Fits)
     {p : Trie.Proof (Slot D) D}
     (hv : Trie.verifyInclusion (trieSpec E) root' sl (leafDigest E l) p = true) :
-    w'.trie.get (trieSpec E) sl = some l ∨ Collision E.hash := by
-  rcases head_root hE h hhead hrd with rfl | col
-  · exact slot_inclusion_sound hE (step_canon hc h) hwf hlf hv
-  · exact .inr col
+    w'.trie.get (trieSpec E) sl = some l ∨ Collision E.hash :=
+  (cells_headSound hE).head_read (fun r _ _ _ => r) (step_canon hc h) rfl hwf (head_roots hE h hhead hrd) hlf hv
 
 /-- **The phone's read of an absence** (an unspent nullifier, an unused id) against a head. -/
 theorem head_absent_sound {w w' : World D} {s : Step D} (hc : w.Canon E)
@@ -432,10 +429,8 @@ theorem head_absent_sound {w w' : World D} {s : Step D} (hc : w.Canon E)
     (hhead : headLink E prev g td rd = w'.chain) (hrd : rootsDigest E root' jroot' rroot' wroot' = rd)
     {sl : Slot D} {p : Trie.Proof (Slot D) D}
     (hv : Trie.verifyExclusion (trieSpec E) root' sl p = true) :
-    w'.trie.get (trieSpec E) sl = none ∨ Collision E.hash := by
-  rcases head_root hE h hhead hrd with rfl | col
-  · exact slot_exclusion_sound hE (step_canon hc h) hv
-  · exact .inr col
+    w'.trie.get (trieSpec E) sl = none ∨ Collision E.hash :=
+  (cells_headSound hE).head_absent (fun r _ _ _ => r) (step_canon hc h) rfl (head_roots hE h hhead hrd) hv
 
 end Sound
 

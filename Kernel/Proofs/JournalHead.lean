@@ -72,30 +72,29 @@ section Sound
 variable {E : Env D} {n : Nat} (hE : E.Lawful n) (hn : 0 < n)
 
 include hE hn in
+omit [DecidableEq D] in
+/-- **The journal's trie is a `HeadSound` instance** (KERNEL-52) on entries whose height is below
+2^64, at a digest of at least one byte (`journalBody_inj`). -/
+theorem journal_headSound : HeadSound E (journalSpec E) (fun e : Nat × D => e.1 < 2 ^ 64) :=
+  ⟨journalBody_inj hE hn, dbytes_pair_inj hE, journalDigest_inj hE, journal_coll_collision⟩
+
+include hE hn in
 /-- **Journal inclusion is sound at the World**: a claimed entry proved against the journal root is
 the World's entry, or a collision. -/
 theorem journal_inclusion_sound {w : World D} (hc : w.JournalCanon E)
     (hfit : ∀ k e, w.journalAt E k = some e → e.1 < 2 ^ 64) {k : D} {e : Nat × D} (he : e.1 < 2 ^ 64)
     {p : Trie.Proof D D}
     (hv : Trie.verifyInclusion (journalSpec E) (w.journalRoot E) k (journalDigest E e) p = true) :
-    w.journalAt E k = some e ∨ Collision E.hash := by
-  rcases Trie.inclusion_sound (journalSpec E) (journalBody_inj hE hn) (dbytes_pair_inj hE) hc.2.1 hc.1 hv
-    with ⟨v, hg, hd⟩ | c
-  · rcases journalDigest_inj hE (hfit k v hg) he hd with rfl | c
-    · exact .inl hg
-    · exact .inr c
-  · exact .inr (journal_coll_collision c)
+    w.journalAt E k = some e ∨ Collision E.hash :=
+  (journal_headSound hE hn).inclusion hc hfit he hv
 
 include hE hn in
 /-- **Journal exclusion is sound at the World**: an id proved absent against the journal root is
 not in the World's journal, or a collision. -/
 theorem journal_exclusion_sound {w : World D} (hc : w.JournalCanon E) {k : D} {p : Trie.Proof D D}
     (hv : Trie.verifyExclusion (journalSpec E) (w.journalRoot E) k p = true) :
-    w.journalAt E k = none ∨ Collision E.hash := by
-  rcases Trie.exclusion_sound (journalSpec E) (journalBody_inj hE hn) (dbytes_pair_inj hE) hc.2.1 hv
-    with h | c
-  · exact .inl h
-  · exact .inr (journal_coll_collision c)
+    w.journalAt E k = none ∨ Collision E.hash :=
+  (journal_headSound hE hn).exclusion hc hv
 
 include hE hn in
 /-- **The phone's journal read**: a head record that hashes to the chain an admitted turn reached,
@@ -105,10 +104,9 @@ theorem head_journal_read {w w' : World D} {t : Turn D} (hw : w.JournalOk E)
     (h : World.admit E w t = .ok w') {prev td rd root' jroot' rroot' wroot' : D} {g : UInt8}
     (hhead : headLink E prev g td rd = w'.chain) (hrd : rootsDigest E root' jroot' rroot' wroot' = rd) {k : D} {e : Nat × D} (he : e.1 < 2 ^ 64)
     {p : Trie.Proof D D} (hv : Trie.verifyInclusion (journalSpec E) jroot' k (journalDigest E e) p = true) :
-    w'.journalAt E k = some e ∨ Collision E.hash := by
-  rcases head_roots hE (s := .turn t) h hhead hrd with ⟨-, rfl, -, -⟩ | col
-  · exact journal_inclusion_sound hE hn (admit_journalCanon hw.1 h) (admit_journal_heights hw h) he hv
-  · exact .inr col
+    w'.journalAt E k = some e ∨ Collision E.hash :=
+  (journal_headSound hE hn).head_read (fun _ j _ _ => j) (admit_journalCanon hw.1 h) rfl
+    (admit_journal_heights hw h) (head_roots hE (s := .turn t) h hhead hrd) he hv
 
 include hE hn in
 /-- **The phone's journal absence** against a head: the id is not in that World's journal, or a
@@ -117,10 +115,31 @@ theorem head_journal_absent {w w' : World D} {t : Turn D} (hc : w.JournalCanon E
     (h : World.admit E w t = .ok w') {prev td rd root' jroot' rroot' wroot' : D} {g : UInt8}
     (hhead : headLink E prev g td rd = w'.chain) (hrd : rootsDigest E root' jroot' rroot' wroot' = rd) {k : D} {p : Trie.Proof D D}
     (hv : Trie.verifyExclusion (journalSpec E) jroot' k p = true) :
-    w'.journalAt E k = none ∨ Collision E.hash := by
-  rcases head_roots hE (s := .turn t) h hhead hrd with ⟨-, rfl, -, -⟩ | col
-  · exact journal_exclusion_sound hE hn (admit_journalCanon hc h) hv
-  · exact .inr col
+    w'.journalAt E k = none ∨ Collision E.hash :=
+  (journal_headSound hE hn).head_absent (fun _ j _ _ => j) (admit_journalCanon hc h) rfl
+    (head_roots hE (s := .turn t) h hhead hrd) hv
+
+include hE in
+/-- A head record that hashes to the chain of a World a log reached after a step names that World's
+four roots, or a collision (the head is the log's last link). -/
+theorem fold_head_roots {w₀ w₁ w₂ : World D} {s : Step D} {l : List (Step D)}
+    (h₁ : World.step E w₀ s = .ok w₁) (hf : World.fold E w₁ l = .ok w₂)
+    {prev td rd root' jroot' rroot' wroot' : D} {g : UInt8}
+    (hhead : headLink E prev g td rd = w₂.chain) (hrd : rootsDigest E root' jroot' rroot' wroot' = rd) :
+    (root' = w₂.root E ∧ jroot' = w₂.journalRoot E ∧ rroot' = w₂.refusalsRoot E ∧
+      wroot' = w₂.rowsRoot E) ∨ Collision E.hash := by
+  cases l with
+  | nil =>
+      simp [World.fold] at hf; subst hf
+      exact head_roots hE h₁ hhead hrd
+  | cons u us =>
+      rcases List.eq_nil_or_concat (u :: us) with he | ⟨a, b, he⟩
+      · cases he
+      · rw [he, List.concat_eq_append] at hf
+        obtain ⟨w₃, _, h₃⟩ := fold_append.mp hf
+        obtain ⟨w₄, h₄, h₅⟩ := fold_cons_ok.mp h₃
+        simp [World.fold] at h₅; subst h₅
+        exact head_roots hE h₄ hhead hrd
 
 include hE hn in
 /-- **Exclusion while `journalForgets` is false is a refutation of admission.** If `t` was admitted
@@ -134,25 +153,7 @@ theorem head_absent_admitted {w₀ w₁ w₂ : World D} {t : Turn D} {l : List (
     (hv : Trie.verifyExclusion (journalSpec E) jroot' t.txId p = true) : Collision E.hash := by
   have hin := fold_answers hc h₁ hf hnf
   have hc₂ := fold_journalCanon (admit_journalCanon hc h₁) hf
-  -- the head names w₂'s journal root: the last link of the fold that reached it
-  have hroot : jroot' = w₂.journalRoot E ∨ Collision E.hash := by
-    cases l with
-    | nil =>
-        simp [World.fold] at hf; subst hf
-        rcases head_roots hE (s := .turn t) h₁ hhead hrd with ⟨-, h, -⟩ | col
-        · exact .inl h
-        · exact .inr col
-    | cons u us =>
-        rcases List.eq_nil_or_concat (u :: us) with he | ⟨a, b, he⟩
-        · cases he
-        · rw [he, List.concat_eq_append] at hf
-          obtain ⟨w₃, _, h₃⟩ := fold_append.mp hf
-          obtain ⟨w₄, h₄, h₅⟩ := fold_cons_ok.mp h₃
-          simp [World.fold] at h₅; subst h₅
-          rcases head_roots hE h₄ hhead hrd with ⟨-, h, -⟩ | col
-          · exact .inl h
-          · exact .inr col
-  rcases hroot with rfl | col
+  rcases fold_head_roots hE (s := .turn t) h₁ hf hhead hrd with ⟨-, rfl, -, -⟩ | col
   · rcases journal_exclusion_sound hE hn hc₂ hv with hnone | col
     · rw [hin] at hnone; cases hnone
     · exact col

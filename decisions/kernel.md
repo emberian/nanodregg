@@ -2416,7 +2416,7 @@ CODEC's `kernel/refusals` (`refusalsFits`) checks each leaf alone, and none of t
 
 **Cost.** One lane, 1–2 days, serial.
 
-## KERNEL-52 PROPOSED · The head-read family as ONE authenticated-map scheme over `Trie.Spec`, instantiated per trie (KERNEL-19, 2026-10-19; ROOT, PROOF-TECHNIQUE §4.1 item 3). DESIGN ONLY.
+## KERNEL-52 (PROPOSED, then BUILT: see AS BUILT below, which corrects this text) · The head-read family as ONE authenticated-map scheme over `Trie.Spec`, instantiated per trie (KERNEL-19, 2026-10-19; ROOT, PROOF-TECHNIQUE §4.1 item 3). DESIGN ONLY.
 
 **Today.** The same chain of theorems is restated per trie:
 - `*_inclusion_sound`, `*_exclusion_sound`, `*_prove_verifies`, `*_prove_absent`;
@@ -2473,3 +2473,26 @@ It appears in Cells.lean (cells), JournalHead.lean, RefusalsHead.lean (which cal
 - **`rowStep_get_other` was never the per-step lemma the rows field needs.** It covered rows only, so the heads frame had to be written.
 - The reader's check: no field whose subject is the cells takes a premise.
 - Locality (`check_local`, the RowsComm `touchCheck_congr` family) remains open. It is where the scholar's predicted fall actually is. Filed as a cv task.
+
+### KERNEL-52 AS BUILT (KERNEL-19 / K19-H, 2026-10-19; ROOT approved)
+- `Kernel/Proofs/Logic/HeadRead.lean` (94 lines; imports only Fold and TrieMap) holds `structure HeadSound (E) (S : Trie.Spec K V D) (Fits) : Prop`, with four fields: `body_inj`, `pair_inj`, `vdigest_inj` (up to `Collision`) and `coll`. It is Prop-valued, so closure C3 is green.
+- The family over it:
+  - `HeadSound.inclusion` and `.exclusion`, over any canonical trie;
+  - `.head_read` and `.head_absent`. These take `head_roots`' conclusion and a selector `pick` of the four roots, so HeadRead sits below Cells and nothing moved for the cycle.
+- Three records, each with its premises:
+  - `cells_headSound (hE)`: the cell `InjOn` comes from `hE.cellBytes_injOn`;
+  - `journal_headSound (hE) (hn : 0 < n)`;
+  - `refusal_headSound (hE)`: `Fits` is `RefusalLeaf.Fits`.
+- Twelve landed theorems are now one-line corollaries, with their statements unchanged (checked mechanically against HEAD over all 72 theorems of the three files): `slot_inclusion_sound`, `slot_exclusion_sound`, `head_read_sound`, `head_absent_sound`, `journal_inclusion_sound`, `journal_exclusion_sound`, `head_journal_read`, `head_journal_absent`, `refusal_inclusion_sound`, `refusal_exclusion_sound`, `head_refusal_read`, `head_refusal_absent`.
+- `fold_head_roots` moved down to JournalHead, and `head_absent_admitted`'s 18-line inline copy of it was deleted.
+- Not built:
+  - Generic prove theorems: `Trie.prove_includes` and `prove_excludes` already are that statement.
+  - Generic deployed forms: they were already one line each.
+  - A rows instance: see the critique.
+- Ratchet: theorems 3899 → 3906, hub 232 → 233, Kernel lines 22321 → 22385. No premise or statement changed. Nothing is re-emitted.
+
+**Critique.**
+- **The scheme did not pay on the ratchet.** The proposal predicted "~45 → 8 + 4", but with every landed name kept as a corollary (ROOT's condition 1) the count can only rise. Lines rose too: at three instances, the ~7 lines saved per instance do not cover a 94-line hub. What it buys is that the soundness argument exists once, and the next trie gets the whole family from a four-field record. It was still worth landing, but the prediction was wrong, and I wrote it.
+- **There were three instances, not four.** I claimed RowsHead.lean was a fourth chain without grepping it. It is the `RowsOk` invariant and holds no head reads. This is the same failure as KERNEL-51's "~22": a count nobody grepped.
+- **The rows cannot be an instance at all today.** `rowKeyBytes` writes the relation as `byte8 rel` and the key length as `byte8 k.size`, and both wrap at 256 (K19-READER3: `rel = 0` and `rel = 256` give one key), so `leafBody (rowSpec E)` is not injective and `Trie.inclusion_sound`'s unconditional `hL` is false for `rowSpec`. A rows phone read needs a key-predicate variant of the trie soundness theorems, and probably a verifier that refuses unfit keys. No deployed path verifies a rows proof today (reader K19-READER3: the receipt carries `rowsroot` only to rebuild `rootsDigest`, and range pins are re-executed), so this is not a live hole, and the encoding is fixed before the rows get a head read (cv task).
+- Vacuity read K19-READER3: LAND. Its one amendment (the `rel` byte wraps too) is taken here and in HeadRead's docstring.
