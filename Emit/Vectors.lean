@@ -3,6 +3,7 @@ import Codec.Layout
 import Host.Base
 import Host.Carry
 import Lang.Wire.Data
+import Lang.Package
 import Kernel.Sim
 
 /-!
@@ -36,7 +37,7 @@ open Nanodregg.Kernel Nanodregg.Kernel.Receive Nanodregg.Codec Nanodregg.Codec.K
 
 deriving instance Repr for RowKey, RowSlot, RowLeaf, RowAct, RowTouch, RangeRead, Op, Cell, Entry, Slot, Leaf,
   Act, Touch, Turn, Right, AcctRef, Body, Unsigned, Call, Host.Entry, Host.Carry.Head, RefusalSlot, RefusalLeaf,
-  Refused, Step, Trie.Proof
+  Refused, Step, Trie.Proof, Lang.Term, Lang.RelDecl, Lang.Package
 
 /-! ## Values, drawn from the simulation's generator -/
 
@@ -427,6 +428,76 @@ def carriedParentedVecs : G (List (CarriedWire Sim.D)) := do
   let r := rowsOf (c.rows.toList ++ [(.head p 9, .head 1 5 4 40 3 true), (.row ⟨p, 9, k⟩, .row 5 ByteArray.empty)])
   return drawn ++ [carriedToWire { c with trie := withLive c.trie p, rows := r }, carriedToWire { c with rows := r }]
 
+/-! ### A package (cv 01a14e58-1586, LANG-15's set)
+
+One row per term tag (0–17; tag 15, a record's field, rides in the record row), per type tag (0–7; tag
+6, a row's field, rides in the record type), per primitive code (0–11), and per package section
+(imports, a relation with every option and one with none, methods and laws). Then the boundary: the
+first unused term tag (18), type tag (8) and primitive code (12), each refused `lang/package` by name.
+A Lang change that gives one of them a meaning flips its row from refused to read under an unchanged
+tag: the gate goes red, and the label moves. -/
+
+open Lang in
+/-- The empty package around a body and a state type. -/
+def pkgOf (body : Term) (state : Ty := .record []) : Package :=
+  { imports := [], state, iface := .record [], body, methods := [], laws := [] }
+
+open Lang in
+/-- An operand of a primitive's operand type. -/
+def operand : Ty → Term
+  | .bytes => .bytes ⟨#[0x61]⟩
+  | .digest => .digest ⟨#[0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08]⟩
+  | .bool => .bool true
+  | _ => .nat 1
+
+open Lang in
+def termRows : List Term :=
+  [.var 0, .lam .nat (.var 0), .app (.var 0) (.nat 1), .fix (.var 0), .nat 7, .bool true, .bytes ⟨#[0x68, 0x69]⟩,
+   .prim .add (.nat 1) (.nat 2), .record [("a", .nat 1)], .get (.var 0) "a", .extend (.var 0) [("b", .nat 2)],
+   .inj (.sum [("a", .nat)]) "a" (.nat 1), .case (.var 0) [("a", .var 0)], .ite (.bool true) (.nat 1) (.nat 2),
+   .ref 0, .digest ⟨#[0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08]⟩, .refuse .nat "too big".toUTF8]
+
+open Lang in
+def tyRows : List Ty :=
+  [.nat, .bool, .bytes, .fn .nat .bool, .record [("a", .nat)], .sum [("a", .nat), ("b", .record [])], .digest]
+
+open Lang in
+def primRows : List Term :=
+  [.add, .sub, .mul, .div, .mod, .eq, .lt, .le, .beq, .cat, .deq, .lenLe].map fun p =>
+    .prim p (operand p.left) (operand p.right)
+
+open Lang in
+def relAll : RelDecl :=
+  { key := [("k", .nat)], val := .record [("n", .nat)], limit := 4, sum := some "n", cap := 10, retract := true,
+    guard := some "g" }
+
+open Lang in
+def relNone : RelDecl :=
+  { key := [("k", .nat)], val := .nat, limit := 1, sum := none, cap := 0, retract := false, guard := none }
+
+open Lang in
+def sectionRows : List Package :=
+  [{ pkgOf (.record []) with imports := [⟨#[0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08]⟩] },
+   { pkgOf (.record []) with rels := [("r", relAll)] },
+   { pkgOf (.record []) with rels := [("r", relNone)] },
+   { pkgOf (.record []) with methods := ["m"], laws := ["l"] }]
+
+open Lang Lang.Wire in
+/-- A package tree with `body` and `state` as given trees (the boundary rows: a node no reader knows). -/
+def rawPackage (body state : Tree) : ByteArray :=
+  let t : Tree := .node 0 .empty [.node 0 .empty [], state, tyTree (.record []), body, .node 1 .empty [],
+    .node 1 .empty [], .node 2 .empty []]
+  if h : t.fits nodeMax depthMax then packageStream.bytes ⟨t, h⟩ else ByteArray.empty
+
+open Lang Lang.Wire in
+def packageVecs : List ByteArray :=
+  -- through `encodePackage`: a row whose package had no tree in bounds would be empty bytes, refused
+  (termRows.map pkgOf ++ tyRows.map (pkgOf (.record []) ·) ++ primRows.map pkgOf ++ sectionRows).map
+      (fun p => (encodePackage p).getD ByteArray.empty) ++
+    [rawPackage (.node 18 .empty []) (tyTree (.record [])),
+     rawPackage (termTree (.record [])) (.node 8 .empty []),
+     rawPackage (.node 7 (Stream.u8.bytes 12) [termTree (.nat 1), termTree (.nat 2)]) (tyTree (.record []))]
+
 def sites : List Site :=
   [ site "i64" Stream.i64 (each 2 fun _ => (·.toInt64) <$> u64) text,
     site "bool" Stream.bool (pure [false, true]) text,
@@ -485,6 +556,8 @@ def sites : List Site :=
     site "host/base/index-count" (Host.Base.codec (Codec.Kernel.world Sim.env Sim.dc))
       (each 2 fun _ => do return ⟨← Vectors.world, ← nat64, ← digest, ← nat64, ← digest⟩) printBase,
     site "host/carried-head" (Host.Carry.head Sim.dc) (each 2 fun _ => do return ⟨← dig, ← nat64, ← dig⟩) text,
+    ⟨"lang/package", Tag.of "lang/package" Lang.Wire.packageCodec, pure packageVecs,
+      print Lang.Wire.packageCodec text⟩,
     ⟨"lang/data: no value", Tag.of "lang/data: no value" Lang.Wire.noData, pure [ByteArray.empty],
       print Lang.Wire.noData (fun e => nomatch e)⟩ ]
 

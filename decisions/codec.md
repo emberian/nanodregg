@@ -1426,3 +1426,37 @@ leaf holds one key: a singleton term would make the wire smaller but put a "leav
 receipt's round trip. The sibling list's `S.depth` bound is implied by the ascent and kept only so a reader stops at
 the count. `kernel/proof` checks shape, not hashes: a well-formed proof can still fail to climb to the root, which is
 the verifier's job, not the codec's.
+
+## CODEC-36 · A package's codec is a refine site, so the vectors gate sees a new Lang tag (cv 01a14e58-1586; CODEC-11 with LANG-15's yes, 2026-10-19)
+
+**The gap.** LANG-51 added a term tag (`refuse`, 17) and a primitive (`lenLe`, 11). Bytes that used to be refused now
+read as a package. The vectors gate saw none of it: a package was decoded by `packageStream` (the generic
+`Codec.Tree`) followed by `packageOf` written out by hand, so it was not a refine site. The tree's shape cannot see tags,
+so no tag moved either.
+
+**Decision.**
+- `Lang.Wire.packageCodec := refine "lang/package" packageStream (packageOf ·.val) packageFit`.
+  - `packageFit p` is `packageTree p` when that fits. Otherwise it is a fixed refused node, which is never written:
+    `encodePackage` writes only a package that is `packageWire` and fits.
+  - `encodePackage` writes `packageCodec.bytes p`, the same bytes as before.
+  - `decodePackage` keeps its own order, the whole-input check before `packageOf`, so every verdict is unchanged
+    (LANG-15's condition). `decodePackage_eq_codec` proves it accepts exactly what `packageCodec.decode` accepts.
+- Theorems in Lang/Proofs/Wire.lean:
+  - `packageCodec_lawfulOn`: lawful on exactly `packageWire ∧ fits`.
+  - `decodePackage_eq_ok_iff`: statement unchanged.
+  - `packageCodec_get_refused`: every tree `packageOf` does not read is refused by name.
+  - Teeth: `package_refuses_unknown_term_tag` against `package_reads_known_term_tag`.
+
+**Vectors (43, LANG-15's set).**
+- One row per term tag 0–17, type tag 0–7 and primitive 0–11.
+- One row per package section: imports; a relation with every option set; one with none; methods and laws.
+- The boundary rows: term tag 18, type tag 8 and primitive 12, each refused `lang/package`. When Lang gives one of
+  them a meaning, its row flips from refused to read under an unchanged tag, the gate goes red, and the label must
+  move (`lang/package/2`, …). That is how a new tag is announced.
+
+**Flag day.** None. No byte, verdict or stored package changes, and nothing re-geneses. The lang-journey run is GREEN;
+ledger-sim and hosting-sim 1–3 report ALL PASS, including the byte-identity rows E0/E0s/G0/G0s/A0/A0s.
+
+**Critique.** The boundary rows catch the NEXT tag only, so a Lang change that adds two tags flips one row; that is
+enough to go red. A change of meaning inside an existing tag (a field read differently) is caught only by the rows
+that use that tag, so each tag has one row, not a sweep of its payloads.

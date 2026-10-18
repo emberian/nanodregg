@@ -8,6 +8,7 @@ codec: `decodePackage_eq_ok_iff : decodePackage b = .ok p ↔ encodePackage p = 
 -/
 import Lang.Package
 import Codec.Proofs.Tree
+import Codec.Proofs.Raw
 
 namespace Nanodregg.Lang.Wire
 
@@ -611,6 +612,34 @@ theorem tree_of_packageOf {t : Tree} {p : Package} (h : packageOf t = some p) :
     · simp at h
   · simp at h
 
+private theorem packageFit_eq {p : Package} (h : (packageTree p).fits nodeMax depthMax = true) :
+    packageFit p = ⟨packageTree p, h⟩ := by
+  simp [packageFit, h]
+
+private theorem packageCodec_bytes {p : Package} (h : (packageTree p).fits nodeMax depthMax = true) :
+    packageCodec.bytes p = packageStream.bytes ⟨packageTree p, h⟩ := by
+  show packageStream.put (packageFit p) ByteArray.empty = _
+  rw [packageFit_eq h]; rfl
+
+/-- **`lang/package` is lawful on exactly the packages that have a tree in bounds** (`packageWire` and
+`fits`): those round-trip, and whatever it reads is one of them, spelled one way. -/
+theorem packageCodec_lawfulOn :
+    Stream.LawfulOn (fun p => packageWire p = true ∧ (packageTree p).fits nodeMax depthMax = true) packageCodec := by
+  refine (Stream.refine_lawfulOn_where (Stream.tree_lawful nodeMax depthMax (by decide)).on "lang/package"
+    (Q := fun p => packageWire p = true ∧ (packageTree p).fits nodeMax depthMax = true) ?_ ?_ ?_).mono
+    (fun _ h => h.2) (fun _ h => ⟨trivial, h⟩)
+  · intro y _ hq
+    rw [packageFit_eq hq.2]
+    exact packageOf_packageTree hq.1
+  · intro x y h
+    obtain ⟨et, -⟩ := tree_of_packageOf h
+    have hfit : (packageTree y).fits nodeMax depthMax = true := et ▸ x.2
+    rw [packageFit_eq hfit]
+    exact Subtype.ext et
+  · intro x y h
+    obtain ⟨et, wt⟩ := tree_of_packageOf h
+    exact ⟨wt, et ▸ x.2⟩
+
 /-- The package codec is canonical: a package has exactly one byte string, and those bytes decode
 to it and to nothing else. -/
 theorem decodePackage_eq_ok_iff {b : ByteArray} {p : Package} :
@@ -630,7 +659,7 @@ theorem decodePackage_eq_ok_iff {b : ByteArray} {p : Package} :
         have hb := (Stream.decode_eq_ok_iff (Stream.tree_lawful nodeMax depthMax (by decide))).mp ht
         have hfit : (packageTree q).fits nodeMax depthMax = true := et ▸ t.2
         have htq : (⟨packageTree q, hfit⟩ : Tree.Fitting nodeMax depthMax) = t := Subtype.ext et
-        simp only [encodePackage, wt, if_true, dif_pos hfit, htq, hb]
+        simp only [encodePackage, wt, if_true, hfit, packageCodec_bytes hfit, htq, hb]
         rfl
   · intro h
     unfold encodePackage at h
@@ -640,9 +669,53 @@ theorem decodePackage_eq_ok_iff {b : ByteArray} {p : Package} :
       · rename_i hfit
         cases h
         unfold decodePackage
-        rw [packageStream, Stream.decode_bytes (Stream.tree_lawful nodeMax depthMax (by decide))]
+        rw [packageCodec_bytes hfit, packageStream, Stream.decode_bytes (Stream.tree_lawful nodeMax depthMax (by decide))]
         simp only [packageOf_packageTree hw]
       · simp at h
     · simp at h
+
+
+/-- `decodePackage` accepts exactly what the `lang/package` codec reads (they differ only in which
+refusal names an input that is both a non-package tree and followed by trailing bytes). -/
+theorem decodePackage_eq_codec {b : ByteArray} {p : Package} :
+    decodePackage b = .ok p ↔ packageCodec.decode b = .ok p := by
+  rw [decodePackage_eq_ok_iff, packageCodec_lawfulOn.decode_eq_ok_iff]
+  unfold encodePackage
+  constructor
+  · intro h
+    split at h
+    · rename_i hw
+      split at h
+      · rename_i hfit; cases h; exact ⟨⟨hw, hfit⟩, rfl⟩
+      · cases h
+    · cases h
+  · rintro ⟨⟨hw, hfit⟩, rfl⟩
+    simp [hw, hfit]
+
+/-- A package tree around a body tree (the teeth below). -/
+private def bodyTree (body : Tree) : Tree :=
+  .node 0 .empty [.node 0 .empty [], tyTree (.record []), tyTree (.record []), body, .node 1 .empty [],
+    .node 1 .empty [], .node 2 .empty []]
+
+/-- **`lang/package` refuses by name every tree `packageOf` does not read.** -/
+theorem packageCodec_get_refused {b : ByteArray} {i j : Nat} {t : Tree.Fitting nodeMax depthMax}
+    (h : packageStream.get b i = .ok (t, j)) (hn : packageOf t.val = none) :
+    packageCodec.get b i = .error (.rejected i "lang/package") := by
+  simp [packageCodec, Stream.refine, h, hn]
+
+/-- The plant: a body node of term tag 18 (no term has it) is no package, so `lang/package` refuses it
+(`packageCodec_get_refused`; the codec vectors' boundary row is a tree of the same layout). -/
+theorem package_refuses_unknown_term_tag : (packageOf (bodyTree (.node 18 .empty []))).isNone = true := by
+  decide +kernel
+
+/-- `lang/package`'s domain is inhabited: the empty package has a tree in bounds. -/
+theorem empty_package_fits :
+    packageWire ⟨[], .record [], .record [], .record [], [], [], []⟩ = true ∧
+      (packageTree ⟨[], .record [], .record [], .record [], [], [], []⟩).fits nodeMax depthMax = true := by
+  decide +kernel
+
+/-- The twin: the same package with the body `record []` reads. -/
+theorem package_reads_known_term_tag : (packageOf (bodyTree (termTree (.record [])))).isSome = true := by
+  decide +kernel
 
 end Nanodregg.Lang.Wire

@@ -578,15 +578,29 @@ def packageWire (p : Package) : Bool :=
 /-- The one codec of a package: the tree stream at the language's bounds. -/
 def packageStream : Stream (Tree.Fitting nodeMax depthMax) := Stream.tree nodeMax depthMax (by decide)
 
+/-- A package's tree as the tree stream's value: `packageTree p` when it fits the language's bounds.
+The fallback (`.node 1 .empty []`, which `packageOf` refuses) is never written: `encodePackage` writes
+only a package that is `packageWire` and fits, and `packageCodec_lawfulOn` is stated on exactly those. -/
+def packageFit (p : Package) : Tree.Fitting nodeMax depthMax :=
+  if h : (packageTree p).fits nodeMax depthMax then ⟨packageTree p, h⟩ else ⟨.node 1 .empty [], by decide⟩
+
+/-- The package codec: the tree stream refined by `packageOf`, refused `lang/package` by name (a refine
+site, so `gates/codec-vectors.tsv` pins what package bytes mean: a new term, type or primitive tag
+turns a refused boundary row into a read one, and the label must move; cv 01a14e58-1586). -/
+def packageCodec : Stream Package :=
+  Stream.refine "lang/package" packageStream (fun t => packageOf t.val) packageFit
+
 /-- The bytes of a package; `none` when it has no tree in bounds (a label, row, index or literal
 past its bound, or nested deeper than `depthMax`). -/
 def encodePackage (p : Package) : Option ByteArray :=
   if packageWire p then
-    if h : (packageTree p).fits nodeMax depthMax then some (packageStream.bytes ⟨packageTree p, h⟩)
+    if (packageTree p).fits nodeMax depthMax then some (packageCodec.bytes p)
     else none
   else none
 
-/-- Exactly one package tree, which reads as a package. -/
+/-- Exactly one package tree, which reads as a package. `packageCodec`'s reading, with the tree
+stream's whole-input check (trailing bytes) made before `packageOf`, as it always was: the accepted
+packages are `packageCodec.decode`'s exactly (`decodePackage_eq_codec`). -/
 def decodePackage (b : ByteArray) : Except Refusal Package :=
   match packageStream.decode b with
   | .error e => .error e
