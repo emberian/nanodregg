@@ -79,6 +79,9 @@ inductive Refusal (D : Type)
   | missingCell (cell : D)
   /-- the writer's stated step count and chain after a log page are not what follow's fold reached -/
   | chainMismatch (steps : Nat)
+  /-- a log page carried more steps than `Bounds.pageStepsMax`, more than one follower record holds
+  (HOST-41): refused before any of it is absorbed -/
+  | pageTooLong (count : Nat)
   /-- the derivation asked for more cells than `Kernel.Bounds.touchesMax` -/
   | tooManyPins
   /-- a base download refused, by `Protocol.Thin`'s name -/
@@ -118,6 +121,7 @@ def Refusal.name : Refusal D → String
   | .missingCell _ => "missingCell"
   | .tooManyPins => "tooManyPins"
   | .chainMismatch _ => "chainMismatch"
+  | .pageTooLong _ => "pageTooLong"
   | .thin r => r.name
   | .custody r => r.name
   | .expired _ => "expired"
@@ -385,9 +389,11 @@ def logPage (b : ByteArray) : Option LogPage :=
   | .error _ => none
 
 /-- Absorb a page and require follow's fold to reach the writer's stated step count and chain (the
-pair the kernel's `fold_reaches_host` binds). -/
+pair the kernel's `fold_reaches_host` binds). A page of more steps than `Bounds.pageStepsMax` (one
+follower record) is refused `pageTooLong` before any of it is absorbed (HOST-41). -/
 def absorbPage (X : Ctx D) (w : World D) (evs : List ByteArray) (steps : Nat) (chain : ByteArray) :
-    Except (Refusal D) (World D × List (Kernel.Step D × D)) := do
+    Except (Refusal D) (World D × List (Kernel.Step D × D)) :=
+  if Bounds.pageStepsMax < evs.length then .error (.pageTooLong evs.length) else do
   let (w', ts) ← absorb X w #[] evs
   if w'.steps = steps ∧ X.env.bytes w'.chain = chain then pure (w', ts.toList)
   else throw (.chainMismatch steps)

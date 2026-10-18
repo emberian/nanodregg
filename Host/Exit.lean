@@ -236,7 +236,7 @@ def Exit.status : Exit → Status
   | .fuel => .fuel
   | .uncertain _ => .uncertain
   | .sealFailed f => f.status
-  | .recordTooLarge _ => .recordTooLarge
+  | .recordTooLarge _ _ => .recordTooLarge
   | .reopenFailed _ => .reopenFailed
   | .reopenDiverged => .reopenDiverged
   | .lifetime => .lifetime

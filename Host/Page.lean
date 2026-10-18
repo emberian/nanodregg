@@ -2,7 +2,8 @@
 # Host.Page — a `log` page, read from the durable segment
 
     page start = the events of the steps start+1, start+2, … in log order, as many as fit
-                 `budget` bytes, then the step count and chain after the last of them
+                 `budget` bytes and at most `recordTurnsMax`, then the step count and chain after
+                 the last of them
 
 A position in the log is a STEP count (KERNEL-47 amendment 1): every step, an admitted Turn or a
 recorded refusal, is one event of a page, `0 ‖ the call` for a Turn (its `event`) and `1 ‖ the call`
@@ -19,7 +20,10 @@ tag before it: a frame that does not verify is refused `corrupt` by name, never 
 is decoded, and the chain is advanced step by step from the entry's chain with the roots digest the
 record states beside each step (`stepLink E c s roots`, HOST-29, KERNEL-47; the writer's reopen
 checked every stated pair against its own step), so a page may end inside a record and still state
-the exact chain after its last event, without taking any step. Work: at most 1 + ⌈log₂ count⌉ entry reads to
+the exact chain after its last event, without taking any step. A page holds at most
+`recordTurnsMax` events (`Host.Proofs.Page.build_events_le`): a follower appends one page's steps as
+ONE record, and a record holds at most that many, so a page never holds more steps than its
+follower may write. Work: at most 1 + ⌈log₂ count⌉ entry reads to
 locate, then O(page bytes). The page holds durable records only: the loop builds it after the
 batch's sync.
 
@@ -79,8 +83,9 @@ def stepEvent : Step D → ByteArray
   | .turn t => ⟨#[0]⟩ ++ t.event
   | .refusal r => ⟨#[1]⟩ ++ r.event
 
-/-- One record's (step, roots) pairs: skip those at or below `start`, serve the rest while they fit;
-with the chain and step count after the last step walked. -/
+/-- One record's (step, roots) pairs: skip those at or below `start`, serve the rest while they fit
+`budget` and the page holds fewer than `recordTurnsMax` events (it is `full` once it holds that
+many); with the chain and step count after the last step walked. -/
 def walkTurnsAt (E : Env D) (budget start : Nat) (chain₀ : D) (h₀ : Nat) (ts : List (Step D × D)) (acc : Acc) :
     Acc × D × Nat :=
   ts.foldl (fun (st : Acc × D × Nat) (t, root) =>
@@ -90,9 +95,11 @@ def walkTurnsAt (E : Env D) (budget start : Nat) (chain₀ : D) (h₀ : Nat) (ts
     let h' := h + 1
     let ev := stepEvent t
     if h' ≤ start then ({ a with steps := h', chain := E.bytes c' }, c', h')
-    else if budget < a.bytes + 4 + ev.size then ({ a with full := true }, c, h)
+    else if recordTurnsMax ≤ a.events.size ∨ budget < a.bytes + 4 + ev.size then
+      ({ a with full := true }, c, h)
     else ({ a with events := a.events.push ev, bytes := a.bytes + 4 + ev.size,
-                   steps := h', chain := E.bytes c' }, c', h')) (acc, chain₀, h₀)
+                   steps := h', chain := E.bytes c', full := recordTurnsMax ≤ a.events.size + 1 }, c', h'))
+    (acc, chain₀, h₀)
 
 /-- One record's (step, roots) pairs walked (`walkTurnsAt`): what the page holds after it. -/
 def walkTurns (E : Env D) (budget start : Nat) (chain₀ : D) (h₀ : Nat) (ts : List (Step D × D)) (acc : Acc) : Acc :=

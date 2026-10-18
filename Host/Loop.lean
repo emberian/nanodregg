@@ -68,9 +68,10 @@ inductive Exit where
   | uncertain (detail : String)
   /-- a seal failed; every reply already sent is durable in the segment; restart and recover -/
   | sealFailed (fault : SealFault)
-  /-- a batch record over `Cadence.recordBytesMax`: the batch was not appended and its replies
-  were `uncertain` -/
-  | recordTooLarge (bytes : Nat)
+  /-- a batch the recorder refuses (more Turns than one record holds, `bytes = none`) or whose
+  record is over `Cadence.recordBytesMax` bytes: the batch was not appended and its replies were
+  `uncertain` -/
+  | recordTooLarge (turns : Nat) (bytes : Option Nat)
   /-- a fuel restart's reopen refused (the refusal's name) -/
   | reopenFailed (name : String)
   /-- the reopened Store is not the state the loop held: a defect in the open or the append path -/
@@ -86,7 +87,7 @@ def Exit.name : Exit → String
   | .fuel => "fuel"
   | .uncertain _ => "uncertain"
   | .sealFailed _ => "sealFailed"
-  | .recordTooLarge _ => "recordTooLarge"
+  | .recordTooLarge _ _ => "recordTooLarge"
   | .reopenFailed _ => "reopenFailed"
   | .reopenDiverged => "reopenDiverged"
   | .lifetime => "lifetime"
@@ -111,7 +112,8 @@ with the roots digest after it, HOST-29, KERNEL-47) given the World after them, 
 position of a World: its step count and chain (`Env.bytes`). The position is steps, not height: a
 recorded refusal is a step at an unchanged height. -/
 structure Recorder (W T : Type) where
-  encode : W → Array T → ByteArray
+  /-- the batch record of the staged pairs, or `none` when they are more than one record may hold -/
+  encode : W → Array T → Option ByteArray
   mark : W → Nat × ByteArray
 
 /-- A seal in flight: the offset it seals at, the sealed World's step count and chain, the index
@@ -265,8 +267,9 @@ start a seal if the cadence is reached. The writer's loop and the follower's (`H
 append through this, so both keep the same Store invariants. On a refusal nothing was appended
 past what was synced, and the caller answers its requests `uncertain`. -/
 def append (rec : Recorder W T) (s : Log.Sealer) (ck : Checkpoint W) (c : Cadence) (store : Store)
-    (r : Resident W) (w' : W) (record : ByteArray) : IO (Except Exit (Resident W)) := do
-  if c.recordBytesMax < record.size then return .error (.recordTooLarge record.size)
+    (r : Resident W) (w' : W) (staged : Array T) : IO (Except Exit (Resident W)) := do
+  let some record := rec.encode w' staged | return .error (.recordTooLarge staged.size none)
+  if c.recordBytesMax < record.size then return .error (.recordTooLarge staged.size (some record.size))
   let r ← match ← makeRoom ck rec.mark c r (frameSize record) with
     | .ok r => pure r
     | .error f => return .error (.sealFailed f)
@@ -281,9 +284,9 @@ def append (rec : Recorder W T) (s : Log.Sealer) (ck : Checkpoint W) (c : Cadenc
       return .ok r
   else
     -- not proved unreachable (makeRoom's inline seal is IO): a named stop
-    return .error (.recordTooLarge record.size)
+    return .error (.recordTooLarge staged.size (some record.size))
 
-/-- The loop. `rec.encode after staged` is the batch record (`Host.Record.encode`); `pager r d`
+/-- The loop. `append` writes `rec.encode after staged`, the batch record (`Host.Record.encode`); `pager r d`
 builds a deferred reply (a `log` or `read` page: status, payload) from the durable state `r`. -/
 def serve {N : Type} (m : Machine W T Frame N) (rec : Recorder W (T × N)) (s : Log.Sealer) (ck : Checkpoint W)
     (c : Cadence) (store : Store) (pager : Resident W → Deferred → IO (UInt8 × ByteArray)) (port : Port)
@@ -301,7 +304,7 @@ def serve {N : Type} (m : Machine W T Frame N) (rec : Recorder W (T × N)) (s : 
       (← fillPages pager r out).forM port.send
       serve m rec s ck c store pager port limits fuel r
     else
-      match ← append rec s ck c store r w' (rec.encode w' out.staged) with
+      match ← append rec s ck c store r w' out.staged with
       | .error e =>
         (uncertainAll out.replies).forM port.send
         finish e r

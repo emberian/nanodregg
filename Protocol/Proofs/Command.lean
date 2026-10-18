@@ -165,6 +165,8 @@ theorem absorbPage_admits {X : Ctx D} {w w' : World D} {evs : List ByteArray} {s
     {chain : ByteArray} {ts : List (Kernel.Step D × D)} (h : absorbPage X w evs steps chain = .ok (w', ts)) :
     World.RootedFold X.env w ts w' := by
   unfold absorbPage at h
+  split at h
+  · cases h
   simp only [bind, Except.bind] at h
   split at h
   · cases h
@@ -176,6 +178,15 @@ theorem absorbPage_admits {X : Ctx D} {w w' : World D} {evs : List ByteArray} {s
       simpa [hl] using hf
     · cases h
 
+/-- **A page longer than one follower record is refused before any of it is absorbed** (HOST-41):
+`pageTooLong`, by name, with the page's count; `step` answers an `absorbPage` error with follow's
+state unchanged and nothing to persist (its `same` arm). -/
+theorem absorbPage_tooLong {X : Ctx D} {w : World D} {evs : List ByteArray} {steps : Nat}
+    {chain : ByteArray} (h : Bounds.pageStepsMax < evs.length) :
+    absorbPage X w evs steps chain = .error (.pageTooLong evs.length) := by
+  unfold absorbPage
+  exact if_pos h
+
 /-- What a page `absorbPage` accepts ends at the writer's stated step count: the pair the kernel's
 `fold_reaches_host` binds (with the chain), so an honest page leaves follow's World equal to the
 writer's, or exhibits a hash collision. -/
@@ -183,6 +194,8 @@ theorem absorbPage_steps {X : Ctx D} {w w' : World D} {evs : List ByteArray} {st
     {chain : ByteArray} {ts : List (Kernel.Step D × D)} (h : absorbPage X w evs steps chain = .ok (w', ts)) :
     w'.steps = steps ∧ X.env.bytes w'.chain = chain := by
   unfold absorbPage at h
+  split at h
+  · cases h
   simp only [bind, Except.bind] at h
   split at h
   · cases h

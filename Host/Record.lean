@@ -40,9 +40,12 @@ def Fault.name {F : Type} : Fault F → String
 
 def codec (dc : Stream D) : Stream (List (Step D × D)) := Nanodregg.Codec.Kernel.batch recordTurnsMax dc
 
-/-- The record of `staged`: each step with the roots digest after it (`Machine.note`). -/
-def encode (dc : Stream D) (staged : Array (Step D × D)) : ByteArray :=
-  (codec dc).bytes staged.toList
+/-- The record of `staged`: each step with the roots digest after it (`Machine.note`); `none` when
+`staged` holds more than `recordTurnsMax` pairs, the count `codec`'s decode refuses (`pastBound`).
+So a writer never writes a record its own reader refuses on its count (`Host.Record.encode_decode`);
+the append path refuses `none` as `recordTooLarge`. -/
+def encode (dc : Stream D) (staged : Array (Step D × D)) : Option ByteArray :=
+  if staged.size ≤ recordTurnsMax then some ((codec dc).bytes staged.toList) else none
 
 /-- A World's position in its log: its STEP count and its chain (`Env.bytes`). The one `mark` every
 Store's index, pages and restarts read (`Loop.Recorder.mark`), deployed and simulated alike: a

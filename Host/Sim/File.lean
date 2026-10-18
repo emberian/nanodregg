@@ -184,7 +184,7 @@ def restartPlant (root : System.FilePath) (key : Digest) (keys : Keys) (seed : N
   let segBefore ← fileSize (segmentPath dir)
   let idxBefore ← fileSize (indexPath dir)
   let extra := Log.frame keys.segment cur.pos.tag.bytes
-    (recorder.encode cur.opened.world #[(.turn (mkTurn 77777 0 1024 [77777]), 0)])
+    ((Record.codec dc).bytes [(.turn (mkTurn 77777 0 1024 [77777]), 0)])
   let half := extra.extract 0 (extra.size / 2)
   let orphan := ByteArray.mk (Array.replicate (entryBytes keys / 2) 0xAB)
   let f ← File.open (segmentPath dir) .append
@@ -260,6 +260,118 @@ def restartPlants (root : System.FilePath) (key : Digest) (keys : Keys) (seed : 
   restartPlant (root / "after-copy") key keys seed frames false failures
   restartPlant (root / "after-newer-base") key keys seed frames true failures
 
+/-- The wide plants' cadence: the deployed record bound (so the byte bound does not mask the Turn
+bound) and no seal in the scenario (the writer's whole log is its tail). -/
+def wide : Cadence := { cadence with sealMinBytes := 1 <<< 20, recordBytesMax := Cadence.deployed.recordBytesMax }
+
+/-- A `log` page from `start` over a Store's files, as `Host.Deployed.pager` builds it: the
+deployed `Page.build` and `Page.budget`, the index read through `Page.entryAt`. -/
+def filePage (keys : Keys) (seg idx : ByteArray) (o : Opening (World Nat)) (start : Nat) :
+    Except Page.Fault Page.Acc :=
+  Id.run (Page.build env dc digestOf keys.segment wide.recordBytesMax Page.budget
+    (fun off len => pure (seg.extract off (off + len)))
+    (Page.entryAt (keys.forStore (originChain o.opened.world)) (fun off len => pure (idx.extract off (off + len)))
+      o.sealed.index.count o.index)
+    (o.sealed.index.count + o.index.size) o.pos.offset (recorder.mark o.opened.world) start)
+
+/-- The follower's append (`Host.Follow.loop`'s `.steps ts` arm): the pairs it absorbed from one
+page, taken by its own World (`runRooted`: each step taken, its stated roots digest checked), then
+appended as ONE record through `Host.append` with the deployed recorder's call. -/
+def followAppend (fdir : System.FilePath) (keys : Keys) (fwr : Writer (World Nat)) (r : Resident (World Nat))
+    (ps : List (Step Nat × Nat)) : IO (Except String (Resident (World Nat))) := do
+  match Record.runRooted (World.step env) (World.roots env) 0 r.world ps with
+  | .error f => return .error s!"the follower refuses the page ({f.name})"
+  | .ok w' =>
+    match ← append recorder keys.segment (fileCheckpoint fdir keys wide world recorder.mark originChain fwr.index) wide
+        (fileStore fwr.segment) r w' ps.toArray with
+    | .error e => return .error e.name
+    | .ok r => return .ok r
+
+/-- plant-follow-wide-page: a writer log of more steps than one record may hold
+(`recordTurnsMax`), caught up by a fresh follower from step 0 page by page through the deployed
+`Page.build`, each page's steps appended as one record (`followAppend`), then the follower Store
+reopened through the one open. Every page holds at most `recordTurnsMax` events, and the reopen
+reaches the writer's World. plant-follow-wide-page-refused: the whole log's pairs handed to the
+follower's append as ONE page (a writer that ignores the bound) are refused `recordTooLarge` by
+name, nothing is written, and the follower Store still opens. -/
+def wideFollowPlant (root : System.FilePath) (key : Digest) (keys : Keys) (failures : IO.Ref Nat) : IO Unit := do
+  let p := "plant-follow-wide-page"
+  let n := 100
+  let frames : List Frame := (List.range n).map fun i =>
+    submitFrame i (.turn (mkTurn (1000 + i) 0 1024 [5000 + i]))
+  let wdir := root / "writer"
+  let _ ← (Host.genesis wdir key keys wide world recorder.mark Sim.genesis : IO (Except Fault Unit))
+  match ← serveDir wdir keys wide 1 frames with
+  | .error e => check s!"{p}: the writer serves {n} Turns ({e})" false failures
+  | .ok (wr, _) =>
+  check s!"{p} fires: the writer log holds {wr.world.steps} Turns, more than one record may ({recordTurnsMax})"
+    (recordTurnsMax < wr.world.steps) failures
+  match ← follow wdir keys wide with
+  | .error e => check s!"{p}: the writer Store opens ({e.name})" false failures
+  | .ok o =>
+  let seg ← IO.FS.readBinFile (segmentPath wdir)
+  let idx ← IO.FS.readBinFile (indexPath wdir)
+  -- the writer records pairs in log order (its origin frame first, not a batch)
+  let rv := Log.recover keys.segment wide.recordBytesMax segmentInitial seg
+  let pairs := (rv.records.drop 1).foldl (fun acc r =>
+    match (Record.codec dc).decode r with
+    | .ok ps => acc ++ ps
+    | .error _ => acc) []
+  check s!"{p} fires: the writer records decode to its {wr.world.steps} Turns"
+    (pairs.length = wr.world.steps) failures
+  -- the honest catch-up
+  let fdir := root / "follower"
+  let _ ← (Host.genesis fdir key keys wide world recorder.mark Sim.genesis : IO (Except Fault Unit))
+  let caught ← do
+    match ← (openWriter fdir keys wide world recorder.mark originChain foldStep : IO (Except Fault _)) with
+    | .error e => pure (Except.error s!"open {e.name}")
+    | .ok fwr =>
+      let mut r := fwr.opening.resident
+      let mut sizes : Array Nat := #[]
+      let mut err : Option String := none
+      for _ in [0:n + 1] do
+        if wr.world.steps ≤ r.world.steps then break
+        match filePage keys seg idx o r.world.steps with
+        | .error f => err := some s!"page {f.name}"; break
+        | .ok a =>
+          sizes := sizes.push a.events.size
+          let ps := (pairs.drop r.world.steps).take a.events.size
+          match ← followAppend fdir keys fwr r ps with
+          | .error e => err := some e; break
+          | .ok r' => r := r'
+      fwr.segment.sync
+      pure (match err with | some e => .error e | none => .ok (r, sizes))
+  match caught with
+  | .error e =>
+    check s!"{p}: the follower catches up page by page ({e})" false failures
+  | .ok (r, sizes) =>
+    let most := sizes.foldl max 0
+    check s!"{p}: every page holds at most recordTurnsMax = {recordTurnsMax} events (pages {sizes.toList})"
+      (most ≤ recordTurnsMax) failures
+    check s!"{p}: the follower reached the writer World in {sizes.size} pages" (sameWorld r.world wr.world) failures
+    let re ← follow fdir keys wide
+    check s!"{p}: the follower Store reopens through the open to the writer World ({match re with | .ok _ => "opened" | .error e => e.name})"
+      (match re with | .ok o => sameWorld o.opened.world wr.world | .error _ => false) failures
+  -- a writer that ignores the bound: the whole log as ONE page
+  let q := "plant-follow-wide-page-refused"
+  let gdir := root / "greedy"
+  let _ ← (Host.genesis gdir key keys wide world recorder.mark Sim.genesis : IO (Except Fault Unit))
+  check s!"{q} fires: the one page holds {pairs.length} pairs, more than recordTurnsMax" (recordTurnsMax < pairs.length) failures
+  let before ← fileSize (segmentPath gdir)
+  let res ← do
+    match ← (openWriter gdir keys wide world recorder.mark originChain foldStep : IO (Except Fault _)) with
+    | .error e => pure (Except.error s!"open {e.name}")
+    | .ok fwr =>
+      let x ← followAppend gdir keys fwr fwr.opening.resident pairs
+      fwr.segment.sync
+      pure x
+  let after ← fileSize (segmentPath gdir)
+  check s!"{q}: the follower append refuses `recordTooLarge` and writes nothing ({match res with | .ok _ => "appended" | .error e => e}, seg.log {before} -> {after})"
+    ((match res with | .error e => e = "recordTooLarge" | .ok _ => false) && before = after) failures
+  let re ← follow gdir keys wide
+  check s!"{q}: the follower Store still opens ({match re with | .ok _ => "opened" | .error e => e.name})"
+    (match re with | .ok _ => true | .error _ => false) failures
+
 def body (seed : Nat) (dirA dirB : System.FilePath) : IO UInt32 := do
   let failures ← IO.mkRef 0
   let frames := (scenario seed 200).map (·.1)
@@ -282,7 +394,7 @@ def body (seed : Nat) (dirA dirB : System.FilePath) : IO UInt32 := do
       let baseBytes ← IO.FS.readBinFile (basePath dir)
       IO.FS.writeBinFile (baseTmpPath dir) (baseBytes.extract 0 (baseBytes.size / 2))
       let extra := Log.frame keys.segment r.pos.tag.bytes
-        (recorder.encode r.world #[(.turn (mkTurn 77777 0 1024 [77777]), 0)])
+        ((Record.codec dc).bytes [(.turn (mkTurn 77777 0 1024 [77777]), 0)])
       let half := extra.extract 0 (extra.size / 2)
       let f ← File.open (segmentPath dir) .append
       f.writeAll half
@@ -355,6 +467,7 @@ def body (seed : Nat) (dirA dirB : System.FilePath) : IO UInt32 := do
           ((match opened with | .error f => f.name = "foreignSegment" | .ok _ => false) && before = after) failures
   missingPlants (dirB / "missing") key keys failures
   restartPlants (dirB / "restart") key keys seed frames failures
+  wideFollowPlant (dirB / "wide") key keys failures
   let n ← failures.get
   IO.println (if n = 0 then "ALL PASS" else s!"{n} FAILED")
   return (if n = 0 then 0 else 1)

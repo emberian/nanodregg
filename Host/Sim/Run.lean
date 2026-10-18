@@ -765,9 +765,14 @@ def run (args : List String) : IO UInt32 := do
       -- the stated chain is the chain of the log's first `a.steps` steps
       unless a.chain = env.bytes (chainOf env genesis.chain (turns.take a.steps)) do
         pagesOk := false; IO.println s!"  page from {start} states a wrong chain at {a.steps}"
-      -- a page ending anywhere states the chain the rest of the log continues from
+      -- a deployed-budget page from anywhere holds the rest of the log up to one record's steps
+      -- (`recordTurnsMax`, `Page.build_events_le`) and states the chain at its last step
       match page Page.budget start with
-      | .ok whole => unless whole.steps = w.steps ∧ whole.chain = env.bytes w.chain do pagesOk := false
+      | .ok whole =>
+        unless whole.events.size = min recordTurnsMax (w.steps - start) ∧
+            whole.steps = start + whole.events.size ∧
+            whole.chain = env.bytes (chainOf env genesis.chain (turns.take whole.steps)) do
+          pagesOk := false; IO.println s!"  deployed-budget page from {start}: {whole.events.size} events to {whole.steps}"
       | .error _ => pagesOk := false
       served := served + a.events.size; start := a.steps; pageCount := pageCount + 1
   -- a one-event page from EVERY step, mid-record ones included
@@ -780,7 +785,7 @@ def run (args : List String) : IO UInt32 := do
   let lastOk := match page 50 start with
     | .ok a => a.events.size = 0 ∧ a.steps = w.steps ∧ a.chain = env.bytes w.chain
     | .error _ => false
-  check s!"log pages: {pageCount} pages of 10 events serve every event once, each page states the log's chain at its last step; a one-event page from every step"
+  check s!"log pages: {pageCount} pages of 10 events serve every event once, each page states the log's chain at its last step; a deployed-budget page from each holds at most recordTurnsMax events; a one-event page from every step"
     (pagesOk && served = w.steps && lastOk) failures
   check "plant-page-flip: a flipped byte in a served frame is refused `corrupt`"
     (match (memPage r.bases.index (flipByte r.disk.synced (origin.offset + 6)) r.resident Page.budget 0).1 with
@@ -936,7 +941,8 @@ def run (args : List String) : IO UInt32 := do
     match rv.records with
     | o :: r0 :: rest => match (Record.codec dc).decode r0 with
       | .ok ((t, roots) :: ps) =>
-        some (Log.encodeAll keys.segment segmentInitial (o :: Record.encode dc (((t, roots + 1) :: ps).toArray) :: rest))
+        (Record.encode dc (((t, roots + 1) :: ps).toArray)).map fun r =>
+          Log.encodeAll keys.segment segmentInitial (o :: r :: rest)
       | _ => none
     | _ => none
   match rootFlipped with

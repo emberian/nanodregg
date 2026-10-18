@@ -1,5 +1,5 @@
 /-
-# Host.Proofs.Page — a log page always has room for the next event, and is never built from an entry that failed
+# Host.Proofs.Page — a log page always has room for the next event, is never built from an entry that failed, and never holds more steps than one record
 
 `Page.walkTurns` stops a page when the next event does not fit the budget. With the deployed
 budget that can only happen after at least one event: every event fits an empty page
@@ -17,11 +17,22 @@ built from ONE of them, the one `locate` returns.
 * `build_badIndex` — the tooth: when the first entry a search reads does not read back, the page
   is refused `badIndex 0`, by name.
 
+A page and the record its follower writes from it (HOST-11 L41: a follower appends one page's
+Turns as ONE record, and a record's decode refuses more than `recordTurnsMax` Turns):
+
+* `build_events_le` — every page `build` returns holds at most `recordTurnsMax` events;
+* `Record.encode_eq_some` / `Record.encode_none` — `Record.encode` writes exactly the codec's bytes
+  for at most `recordTurnsMax` pairs and refuses (`none`) more, which the append path names
+  `recordTooLarge`;
+* `Record.encode_decode` / `Record.step_encode` — a record `encode` returns decodes back to its
+  pairs (each fitting the codec), so the reopen's step over it is the run of those very pairs.
+
 Stated in `Id` over a pure reader; `Host.Deployed.pager` runs the same `build` in `IO` over the
 files.
 -/
 import Host.Page
 import Host.Proofs.Index
+import Codec.Proofs.World
 
 namespace Nanodregg.Host.Page
 
@@ -142,4 +153,114 @@ theorem build_badIndex {D : Type} [Ord D] [DecidableEq D] (E : Kernel.Env D) (dc
   simp only [build, locate, entryAt, bind, pure, Nat.zero_mul, if_pos hd, hr]
   rw [if_neg (by omega)]
 
+/-! ## A page holds at most one record's steps -/
+
+theorem foldl_inv {α β : Type} (P : β → Prop) (f : β → α → β) (h : ∀ b a, P b → P (f b a)) :
+    ∀ (l : List α) (b : β), P b → P (l.foldl f b)
+  | [], _, hb => hb
+  | a :: l, b, hb => foldl_inv P f h l (f b a) (h b a hb)
+
+/-- One record's walk never takes a page past `recordTurnsMax` events. -/
+theorem walkTurnsAt_events_le {D : Type} [Ord D] [DecidableEq D] (E : Kernel.Env D) (budget start : Nat)
+    (chain₀ : D) (h₀ : Nat) (ts : List (Kernel.Step D × D)) (acc : Acc)
+    (h : acc.events.size ≤ recordTurnsMax) :
+    (walkTurnsAt E budget start chain₀ h₀ ts acc).1.events.size ≤ recordTurnsMax := by
+  unfold walkTurnsAt
+  refine foldl_inv (fun st : Acc × D × Nat => st.1.events.size ≤ recordTurnsMax) _ ?_ ts _ h
+  rintro ⟨a, c, k⟩ ⟨t, root⟩ hb
+  simp only at hb ⊢
+  split
+  · exact hb
+  · split
+    · exact hb
+    · split
+      · exact hb
+      · rename_i hn
+        simp only [Array.size_push]
+        omega
+
+theorem walk_events_le {D : Type} [Ord D] [DecidableEq D] {E : Kernel.Env D} {dc : Codec.Stream D}
+    {s : Log.Sealer} {recordMax budget : Nat} {read : Nat → Nat → Id ByteArray} {endOff start : Nat} :
+    ∀ (fuel off : Nat) (c : D) (acc a : Acc), acc.events.size ≤ recordTurnsMax →
+      walk E dc s recordMax budget read endOff start fuel off c acc = .ok a →
+      a.events.size ≤ recordTurnsMax := by
+  intro fuel
+  induction fuel with
+  | zero =>
+    intro off c acc a hacc h
+    simp only [walk, pure] at h
+    cases h; exact hacc
+  | succ fuel ih =>
+    intro off c acc a hacc h
+    simp only [walk, bind, pure] at h
+    split at h
+    · cases h; exact hacc
+    · split at h
+      · cases h
+      · split at h
+        · cases h
+        · exact ih _ _ _ _ (walkTurnsAt_events_le E budget start c acc.steps _ acc hacc) h
+
+/-- **Every page `build` returns holds at most `recordTurnsMax` events** (HOST-11 L41): a follower
+appends one page's steps as one record, so an honest page never asks it to write a record its
+reopen refuses on its count. -/
+theorem build_events_le {D : Type} [Ord D] [DecidableEq D] {E : Kernel.Env D} {dc : Codec.Stream D}
+    {digestOf : ByteArray → Option D} {s : Log.Sealer} {recordMax budget : Nat}
+    {read : Nat → Nat → Id ByteArray} {get : Nat → Id (Except Fault Entry)} {count endOff : Nat}
+    {now : Nat × ByteArray} {start : Nat} {a : Acc}
+    (h : build E dc digestOf s recordMax budget read get count endOff now start = .ok a) :
+    a.events.size ≤ recordTurnsMax := by
+  rcases build_located h with ⟨_, rfl⟩ | ⟨k, e, c, _, _, _, hw⟩
+  · show 0 ≤ recordTurnsMax; exact Nat.zero_le _
+  · exact walk_events_le _ _ _ _ _ (Nat.zero_le _) hw
+
 end Nanodregg.Host.Page
+
+namespace Nanodregg.Host.Record
+
+open Nanodregg.Kernel Nanodregg.Codec
+
+variable {D : Type}
+
+/-- `encode` writes the codec's bytes of exactly the pairs it was given, and only for at most
+`recordTurnsMax` of them. -/
+theorem encode_eq_some {dc : Stream D} {staged : Array (Step D × D)} {b : ByteArray} :
+    encode dc staged = some b ↔ staged.size ≤ recordTurnsMax ∧ b = (codec dc).bytes staged.toList := by
+  unfold encode
+  split
+  · rename_i hs
+    exact ⟨fun h => ⟨hs, (Option.some.inj h).symm⟩, fun ⟨_, hb⟩ => hb ▸ rfl⟩
+  · rename_i hs
+    exact ⟨fun h => (by cases h), fun ⟨h, _⟩ => absurd h hs⟩
+
+/-- **The tooth**: more than `recordTurnsMax` pairs are refused (`none`), never encoded; the append
+path names it `recordTooLarge` and writes nothing. -/
+theorem encode_none {dc : Stream D} {staged : Array (Step D × D)} (h : recordTurnsMax < staged.size) :
+    encode dc staged = none := by
+  unfold encode
+  rw [if_neg (by omega)]
+
+/-- **A writer never writes a record its own reader refuses**: a record `encode` returns, of pairs
+that each fit the codec (`Step.Fits`, and the roots digest), decodes back to exactly those pairs. -/
+theorem encode_decode {PD : D → Prop} {dc : Stream D} (hd : Stream.LawfulOn PD dc)
+    {staged : Array (Step D × D)} {b : ByteArray} (h : encode dc staged = some b)
+    (hf : ∀ p ∈ staged.toList, Kernel.Step.Fits PD p.1 ∧ PD p.2) :
+    (codec dc).decode b = .ok staged.toList := by
+  obtain ⟨hs, rfl⟩ := encode_eq_some.mp h
+  exact (Codec.Kernel.batch_lawfulOn hd recordTurnsMax (by decide)).decode_bytes
+    ⟨by simpa using hs, hf⟩
+
+/-- The reopen's step over a record `encode` returned is the rooted run of its very pairs: it is
+never refused `undecodable`. -/
+theorem step_encode [Ord D] [DecidableEq D] {F : Type} {PD : D → Prop} {dc : Stream D} (hd : Stream.LawfulOn PD dc)
+    (admit : World D → Step D → Except F (World D)) (root : World D → D) (w : World D)
+    {staged : Array (Step D × D)} {b : ByteArray} (h : encode dc staged = some b)
+    (hf : ∀ p ∈ staged.toList, Kernel.Step.Fits PD p.1 ∧ PD p.2) :
+    step dc admit root w b = runRooted admit root 0 w staged.toList := by
+  unfold step stepTurns
+  rw [encode_decode hd h hf]
+  dsimp only
+  cases runRooted admit root 0 w staged.toList <;> rfl
+
+end Nanodregg.Host.Record
+

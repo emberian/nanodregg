@@ -2010,3 +2010,100 @@ label of "limit" on a premise is a claim, and it is checked like any other.
 - Nine WASTE ceilings rise. Each is a denominator fall, argued per row, but a ceiling that rises on argument is exactly what the gate exists to make loud.
 
 **Meta-critique.** The deepest change here, positions in steps, came from asking what the follower must compare, not from the refusal record itself: KERNEL-47's step counter forced it into every place the Host names a point in the log (index, pages, read pages, anchors, restarts). I found the read page's height only because the thin pin was PROTOCOL's to rename; a position number defined in one layer and read in another is the shape to grep for next time.
+
+## HOST-41 · a follower wrote records its own reopen refuses: a page holds at most one record's steps, and no writer encodes a count its decode refuses (2026-10-17, HOST-11; found by reading, confirmed red by lane a53d31d238840be6e; rebased over the refusals day 38d94e1 by HOST-12, landed after HOST-42)
+
+**Defect (REAL, confirmed red).**
+- A batch record's codec is `batch recordTurnsMax dc`, a `rawList 64`. Its `put` writes any length; its
+  `get` refuses a count above 64.
+- The writer stages at most `batchMax = recordTurnsMax` Turns per record, so it was safe.
+- The FOLLOWER (`Follow.loop`) appends all Turns absorbed from ONE `log` page as ONE record, and a page
+  was bounded only by bytes (~255 KiB of events, hundreds of small events).
+- So a follower catching up on more than 64 Turns in one page wrote a record its own reopen refused
+  (`record j`), and the Store never opened again.
+- host-file-sim `plant-follow-wide-page`, red on main 71379a1: a 100-Turn writer log, one page of 100
+  events, the deployed `Host.append` returned ok, and `openFollower` refused `record`.
+- No row or sim drove the follower's append and then a reopen across more than 64 Turns. The Loopback
+  rows keep follow state in memory and never append.
+
+**Decision.**
+- `Page.walkTurnsAt` stops a page at `recordTurnsMax` events: it is full when the 64th is pushed.
+  So a page never holds more Turns than one record may. A catch-up takes ⌈n/64⌉ pages instead of
+  ⌈bytes/budget⌉.
+- `Record.encode` returns `Option`: `none` above `recordTurnsMax`. A writer cannot encode a count
+  its decode refuses (law: what is written reads back).
+- `Host.append` takes the staged pairs and encodes them itself, so the writer and the follower share
+  ONE guarded path. A follower handed a page over the cap (a writer that does not obey it) is refused
+  `recordTooLarge` by name and writes nothing. It is the existing Exit, now carrying
+  `(turns, bytes?)`: no new Status and no Ops sentence.
+- Theorems:
+  - `Page.build_events_le`: every page `build` returns holds at most recordTurnsMax events.
+  - `Record.encode_eq_some`, `encode_none`, `Record.encode_decode`: under `LawfulOn PD dc` and the
+    pairs' fit, what encode returns decodes to exactly the pairs.
+  - `Record.step_encode`.
+  - At Deployed: `runRooted_fits` (pairs a rooted run admitted fit the codec: `admit` checks
+    bounds first), `limits_batchMax`, `recorder_encode_none`, and `foldStep_recorder_encode`. The
+    last says a record encoded from admitted pairs reopens to the World the run reached, with no
+    premise beyond the admission.
+
+**The fork, stated (a reader asked).**
+- (a) CHOSEN: the page holds at most one record's Turns. One invariant, a theorem, and no new
+  write-path state.
+- (b) Rejected: keep pages byte-bounded and have the follower split one page into ⌈n/64⌉ records
+  inside `append`. Each chunk needs its own `makeRoom` (else several frames land between seal
+  checks and the tail can pass `tailMax`, which open refuses `tailTooLong`), and a seal mid-page
+  needs the intermediate World, which absorb does not return. That is more state on the write path
+  for a throughput gain.
+- The price of (a): catch-up per command becomes `pagesPerCommandMax` (28) × 64 = 1792 Turns, where
+  it was thousands of small events per page. A member further behind takes several commands and is
+  `behind` meanwhile.
+- The writer itself stages at most 64 Turns per batch, so one page per writer record matches its
+  granularity. If 1792 is too low, the knob is PROTOCOL's `pagesPerCommandMax`, not the page.
+- PROTOCOL-7 AGREED: `behind` is its own restart-class exit (CommandExit 51), so a timer re-runs it; pagesPerCommandMax rises only with a measured reason. An over-cap page is refused at the reader as `pageTooLong` (Protocol, beside chainMismatch), and append's guard stays as the backstop.
+
+**Plants.**
+- host-file-sim `plant-follow-wide-page` (over real files, the real `Host.append` and
+  `openFollower`): pages [100] → [64, 36], and the follower Store reopens to the writer World.
+- `plant-follow-wide-page-refused`: an over-cap append is refused `recordTooLarge`, seg.log is
+  unchanged (44 → 44), and the Store still opens. It was red before the fix: appended 44 → 7284,
+  and the reopen refused `record`.
+- The plant uses the deployed `recordBytesMax`, so the byte check cannot pre-empt the count.
+- host-sim's deployed-budget page check is restated: it holds exactly min(64, remaining) events and
+  states the chain at its last height.
+- All verdicts green (host-sim, host-file-sim and hosting-sim ×3, rows, store-plants; whole tree
+  460 jobs). WASTE: no row moved. Page counts are not a WASTE metric.
+
+**Rebased over the refusals day (HOST-12, on 38d94e1).** A page's events and a record's pairs are
+STEPS now (HOST-42), so the cap is on steps: a page holds at most `recordTurnsMax` steps, `Record.encode`
+refuses more than that many `(Step, roots)` pairs, and `Persist.steps` is the follower's batch. The
+Deployed theorems take `World.step`: `step_fits` (a Turn by `checkBounds_fits`, a refusal by CODEC's
+`checkRefusedBounds_fits`), `runRooted_fits`, `foldStep_recorder_encode`. The file-sim plant pages by
+steps. Verdicts on 38d94e1 + this: host-sim, host-file-sim, hosting-sim ×3 and store-plants ALL PASS
+(`plant-follow-wide-page` pages [64, 36]; `-refused` seg.log 44 → 44). The reader-side `pageTooLong`
+is PROTOCOL-9's to restate over the new absorb (PROTOCOL-8's handoff item 0); it lands in the same commit.
+Law-6 read of the rebase (read-only reader): LAND. Fixed: `limits_batchMax`'s docstring claimed a
+staged bound no theorem stated; `Machine.staged_size_le` (at most one staged pair per request) now
+states it. Left, named: `foldStep_recorder_encode` takes the rooted run as a premise (the writer's is
+`Machine.staged_rooted`, the follower's `Protocol.Command.step_persists_admitted`; no single theorem
+from `append` to reopen); `recorder_encode_none` is `Record.encode_none` at the deployed recorder,
+an instance, not new evidence; a foreign page over the cap stops the follower `recordTooLarge`
+(safe: nothing written) until PROTOCOL's `pageTooLong` refuses it at the reader.
+
+**Flag day.** None in bytes (record and base layouts unchanged). A follower Store that already holds a
+record over 64 Turns still refuses `record` at open. None exists: every Store re-genesised at 5eb9b30
+today. Consumers that page (`Command.step`, the phone, Thin) see shorter pages. Each already pages
+"until its height reaches tip", and rows stay 21/21.
+
+**Critique.**
+- `Follow.loop` is fixed to the deployed Digest and reached only through Host/Cli. The plant drives
+  its exact `append` call and the follower's open, with the follower's admission stood in by
+  `runRooted` over the writer's records, because toy events are empty and cannot be re-derived from
+  page bytes. The CLI loop around that call is read off, not run at more than 64 Turns.
+- 32 MiB `recordBytesMax` vs the real largest record (4 + 64·(weightMax + 64) ≈ 16.0 MiB) is now
+  a question with a precise answer: every record is ≤ that by construction. Shrinking the bound
+  (and with it the torn window) is the next item.
+
+**Meta-critique.** This is the third instance today of the same class: a writer that can write what
+its own reader refuses (HOST-39's base bound, the carried journal window, this). Every one was
+invisible to green plants. The cheap general check is now law in Host: every encode on a write path
+returns `Option`/`Except` over the SAME bound its decode enforces, and a theorem ties the two.

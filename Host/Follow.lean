@@ -6,7 +6,10 @@
       resume(k, result)  → Command.step: absorbs any log page it carried, every event re-derived
                            (PROTOCOL-4)                                        → a step
       steps absorbed     → appended to follow's own segment as one batch record, durably, BEFORE
-                           the step is answered (`Host.append`, the writer's own append path)
+                           the step is answered (`Host.append`, the writer's own append path);
+                           a page of more steps than one record holds (`recordTurnsMax`, which
+                           an honest page never exceeds: `Page.build_events_le`) is refused
+                           `recordTooLarge`, never written as a record its reopen refuses
 
 Follow decides nothing the kernel does not: `Command.step` re-judges every logged event (a Turn by
 `Receive.submit`, a recorded refusal by `Receive.judge`, which must record the very same refusal)
@@ -101,7 +104,7 @@ def loop (keys : Keys) (me : Command.Self D) (store : Store) (ck : Checkpoint (W
       port.send ⟨f.conn, status, payload⟩
       loop keys me store ck port dl fuel { r with world := fs'.world }
     | .steps ts =>
-      match ← append recorder keys.segment ck c store r fs'.world (recorder.encode fs'.world ts.toArray) with
+      match ← append recorder keys.segment ck c store r fs'.world ts.toArray with
       | .error e =>
         port.send ⟨f.conn, Status.uncertain.code, ByteArray.empty⟩
         finish e r

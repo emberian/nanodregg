@@ -40,6 +40,8 @@ import Host.Proofs.Base
 import Host.Proofs.Carry
 import Host.Proofs.Backup
 import Host.Proofs.Genesis
+import Host.Proofs.Page
+import Kernel.Proofs.Admit
 import Codec.Proofs.Deployed
 import Kernel.Proofs.JournalHead
 import Kernel.Proofs.Weight
@@ -654,5 +656,60 @@ theorem openWith_exportFile_ok {keys : Keys} {file I S : ByteArray} {o : Opening
     omega
   exact Carry.exportFile_ok Codec.Deployed.digestCodec_lawful.on (carriedFits_of_kept hk hcount) trivial trivial
     hk.2.2.2.2.1
+
+
+/-! ## A record appended from steps taken reopens (HOST-11 L41, rebased over KERNEL-47) -/
+
+/-- Every step `World.step` takes fits the wire's bounds: a Turn by `checkBounds_fits` (`World.admit`
+checks them first), a refusal by `checkRefusedBounds_fits` (`World.refuse` checks them first). -/
+theorem step_fits {w w' : World D} {s : Step D} (h : World.step X.env w s = .ok w') :
+    Codec.Kernel.Step.Fits (fun _ => True) s := by
+  cases s with
+  | turn t =>
+    obtain ⟨_, hk, _⟩ := admit_ok h
+    exact Codec.Kernel.checkBounds_fits t hk.bounds
+  | refusal r => exact Codec.Kernel.checkRefusedBounds_fits r (refuse_facts h).1
+
+/-- Every step a rooted run takes fits the wire's bounds (`step_fits`). -/
+theorem runRooted_fits {root : World D → D} :
+    ∀ {i : Nat} {w w' : World D} {ps : List (Step D × D)},
+      Record.runRooted (World.step X.env) root i w ps = .ok w' →
+        ∀ p ∈ ps, Codec.Kernel.Step.Fits (fun _ => True) p.1
+  | _, _, _, [], _, _, hp => nomatch hp
+  | i, w, w', (t, r) :: rest, h, p, hp => by
+    simp only [Record.runRooted] at h
+    split at h
+    · cases h
+    · rename_i w₁ ha
+      split at h
+      · rcases List.mem_cons.mp hp with rfl | hp
+        · exact step_fits ha
+        · exact runRooted_fits h p hp
+      · cases h
+
+/-- The loop's request bound is one record's steps: with `drain`'s bound (`drainM_conserves`) and
+`Machine.staged_size_le` (at most one staged pair per request), the writer stages at most
+`recordTurnsMax` pairs per batch. -/
+theorem limits_batchMax : limits.batchMax = recordTurnsMax := rfl
+
+/-- **The deployed recorder refuses more pairs than one record holds**: `Host.append` then stops
+`recordTooLarge` and writes nothing (the follower handed a page of more steps than `recordTurnsMax`). -/
+theorem recorder_encode_none {w : World D} {staged : Array (Step D × D)}
+    (h : recordTurnsMax < staged.size) : recorder.encode w staged = none :=
+  Record.encode_none h
+
+/-- **A record the writer or the follower appends reopens to the World its pairs reached**: a record
+the deployed recorder returns (at most `recordTurnsMax` pairs, `Record.encode_eq_some`), of pairs
+that a rooted run of `World.step` from `w` accepted (what `Protocol.Command.step` and the loop's
+`admitBatch` do before `Host.append`), is folded at reopen (`foldStep`, the one step of `openWriter`
+and `openFollower`) to the same World `w'`, never refused `undecodable`. -/
+theorem foldStep_recorder_encode {w₀ w w' : World D} {staged : Array (Step D × D)} {b : ByteArray}
+    (h : recorder.encode w₀ staged = some b)
+    (hr : Record.runRooted (World.step X.env) (World.roots X.env) 0 w staged.toList = .ok w') :
+    foldStep w b = .ok w' := by
+  have hf : ∀ p ∈ staged.toList, Codec.Kernel.Step.Fits (fun _ => True) p.1 ∧ True :=
+    fun p hp => ⟨runRooted_fits hr p hp, trivial⟩
+  show Record.step Codec.Deployed.digestCodec (World.step X.env) (World.roots X.env) w b = .ok w'
+  rw [Record.step_encode Codec.Deployed.digestCodec_lawful.on _ _ w h hf, hr]
 
 end Nanodregg.Host.Deployed

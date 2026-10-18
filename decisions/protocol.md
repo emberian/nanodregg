@@ -1067,3 +1067,16 @@ than its docstring names. The `baseMoved` red caught it only because the expecta
 **Meta-critique.** The first sketch classified by the Outcome constructor (recorded ⇒ final). Reading `judge` showed that a resubmit of a recorded call comes out `declined`, and that sketch would have answered the A→B→A resubmit as NOT final: the defect this day exists to close, reintroduced at the wire.
 
 **Status.** BUILT in the refusals day (KERNEL-14's one commit). CLIENT owes the attempt store's `declined` arm (ROOT relays). The emitted status and command-exit tables move: `generated.rs` re-emits.
+
+**Addendum (2026-10-18, PROTOCOL-9; HOST-41, agreed by PROTOCOL-7): the reader refuses a page longer than one record.**
+- **Decision.** `Bounds.pageStepsMax` = 64 is the number of steps one `log` page may carry: one follower record's worth. HOST's `recordTurnsMax` is that number, and HOST's pager stops a page there.
+- **Refusal.** `absorbPage` refuses a longer page as `pageTooLong COUNT` before it absorbs any step of it. Follow's state is unchanged and nothing is persisted: this is the `same` arm of `step`, by the same route as `chainMismatch`.
+- **Theorem.** `Proofs.Command.absorbPage_tooLong`.
+- **Why.** Before this, a follower handed a 100-step page appended a record its own reopen refused (`host.md` HOST-41). The writer's cap is the fix. This check is the reader's half, so an uncapped writer is named at the member rather than at the member's next reopen.
+- **Measured probe.** The reader check on a writer WITHOUT HOST's cap (main 38d94e1 plus only this change) turned three rows red by name:
+  - paging line 10, `refused pageTooLong`;
+  - coldCatchUp line 10, the same;
+  - inflatedHeight's plant run.
+  With HOST's cap, rows are ALL PASS 22. That probe is the plant. There is no standing plant: the cap is inside HOST's pager, and the rows have no knob for it.
+- **Critique.** Catch-up per command is now 28 × 64 = 1792 steps, and a member further behind exits `behind` (restart class). Two named constants now hold one number, ours and HOST's `recordTurnsMax`. The single-source is HOST's to make: `recordTurnsMax := Protocol.Bounds.pageStepsMax`, or an `rfl` theorem.
+- **Meta-critique.** I took PROTOCOL-7's agreement as settled and did not re-derive the 64. That number is HOST's measured record bound, not ours.

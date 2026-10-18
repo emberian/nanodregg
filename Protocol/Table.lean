@@ -20,6 +20,7 @@ Each operation names the one function that answers it (`receiver`). The names ar
 receiving layers commit those declarations; a gate then resolves each name in the environment.
 -/
 import Codec.Layout
+import Host.Bounds
 
 namespace Nanodregg.Protocol
 
@@ -385,6 +386,10 @@ the page's start, relay `log`). A follow further behind than this ends the comma
 keeping what it absorbed, and the member runs it again. With the at most four other steps of any
 command it fits `stepsPerCommandMax` (`Bounds.pages_fit_steps`). -/
 def pagesPerCommandMax : Nat := 28
+/-- Steps one `log` page may carry: one follower record's worth (HOST-41), so a follower appends one
+page as one record: it IS HOST's `recordTurnsMax` (the batch codec's count bound), one source.
+Follow refuses a longer page `pageTooLong`. -/
+def pageStepsMax : Nat := Host.recordTurnsMax
 /-- Connections one `nd-supervise` holds open at once (either socket). It bounds the supervisor's
 memory: each connection buffers at most one frame per direction, so the whole mux holds at most
 `2 * connectionsMax * frameBytesMax` bytes (32 MiB). A deployment's members are friends, not the

@@ -65,6 +65,30 @@ theorem Machine.staged_rooted (m : Machine W T Q N) {step : W → T → Except R
     Rooted step m.note w (m.admitBatch w qs).2.staged.toList (m.admitBatch w qs).1 :=
   m.run_rooted hm w qs (w, {}) rfl
 
+/-- A step stages at most one pair. -/
+theorem Machine.step_staged (m : Machine W T Q N) (acc : W × Out (T × N)) (q : Request Q) :
+    (m.step acc q).2.staged.size ≤ acc.2.staged.size + 1 := by
+  obtain ⟨w, out⟩ := acc
+  unfold Machine.step
+  simp only
+  split <;> simp
+
+/-- **A batch stages at most one pair per request** (HOST-41): with the loop's `drain` bound on the
+requests (`limits.batchMax = recordTurnsMax`), the writer never stages more than one record holds. -/
+theorem Machine.staged_size_le (m : Machine W T Q N) (w : W) (qs : List (Request Q)) :
+    (m.admitBatch w qs).2.staged.size ≤ qs.length := by
+  suffices ∀ acc : W × Out (T × N), (m.run acc qs).2.staged.size ≤ acc.2.staged.size + qs.length by
+    simpa using this (w, {})
+  induction qs with
+  | nil => intro acc; simp [Machine.run]
+  | cons q qs ih =>
+    intro acc
+    show (m.run (m.step acc q) qs).2.staged.size ≤ _
+    have := ih (m.step acc q)
+    have := m.step_staged acc q
+    simp only [List.length_cons]
+    omega
+
 theorem Machine.step_replies (m : Machine W T Q N) (acc : W × Out (T × N)) (q : Request Q) :
     (m.step acc q).2.replies.size = acc.2.replies.size + 1 := by
   obtain ⟨w, out⟩ := acc
