@@ -793,7 +793,7 @@ def sealPlants (exe : String) (intact dir : System.FilePath) (w4 : World D) : IO
     failed := failed + 1
   return failed
 
-def run (exe : String) (dir : System.FilePath) : IO UInt32 := do
+def run (exe : String) (dir : System.FilePath) (control : Bool := false) : IO UInt32 := do
   if ← dir.pathExists then IO.eprintln s!"store-plants: {dir} exists"; return 2
   IO.FS.createDirAll dir
   let a := dir / "A"
@@ -865,6 +865,11 @@ def run (exe : String) (dir : System.FilePath) : IO UInt32 := do
      ⟨"past-height-other-history-anchor", .chainMismatch, check intact ["--anchor", anchorArg wb3]⟩,
      ⟨"missing-store", .io, check (dir / "absent")⟩]
   let mut failed := 0
+  -- `--harness-control` (GATES-15): the intact copy judged as if it had to be refused `corrupt`, a
+  -- plant nothing meets, on the ordinary judge path: the run must read `PLANT harness-control FAIL`.
+  -- It proves `judge`, the failed count and the exit; the rows that print through their own `say`
+  -- predicates (live, carry, join, seal, use) are covered by their own measured teeth, not by this.
+  let plants := plants ++ (if control then [⟨"harness-control", .corrupt, check intact anchor⟩] else [])
   for p in plants do
     unless ← judge p do failed := failed + 1
   failed := failed + (← usePlants exe dir intact calls w4)
@@ -887,6 +892,7 @@ def run (exe : String) (dir : System.FilePath) : IO UInt32 := do
 
 def main : List String → IO UInt32
   | [exe, dir] => run exe dir
-  | _ => do IO.eprintln "usage: store-plants HOST_EXE DIR"; return 2
+  | [exe, dir, "--harness-control"] => run exe dir true
+  | _ => do IO.eprintln "usage: store-plants HOST_EXE DIR [--harness-control]"; return 2
 
 end Nanodregg.Ops.Plants

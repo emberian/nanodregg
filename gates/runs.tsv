@@ -3,27 +3,28 @@
 # cargo:CRATE:TEST rows: a Rust integration test driving the named Lean exes (gates/runs.py).
 # their 4th column is the known-red control (GATES-15): `nobin RED` = with ND_LEAN_BIN an empty directory the test
 # must fail (it drives the exes it names); `nobin ok` = it runs no exe (it reads a generated table; the named exe only
-# selects it) and must pass without them. Lean verdict rows gain their `--harness-control` column in landing B.
+# selects it) and must pass without them. A Lean verdict row's 4th column is its known-red control: arguments with
+# --harness-control, run first; it must read RED naming harness-control or no verdict of that exe is read (GATES-15).
 # Measured 10-17 on hbox (standing tree, swarm-build): the whole set is ~17 s.
-kernel-sim	--seeds 64	ALL PASS
-host-sim	1 ; 2 ; 3	ALL PASS
-host-file-sim	1 ; 2 ; 3	ALL PASS
-hosting-sim	1 ; 2 ; 3	ALL PASS
-ledger-sim	1	ALL PASS
-hosting-controller	-	the deployed controller; hosting-sim G17 runs its Loop.step, the launcher isolation test runs the exe
-hosting-drive	-	a test driver: launcher/tests/isolation.rs runs it (one Lean-planned launch)
-hosting-broker	-	keybroker decider (follows a Store); the launcher broker test runs the exe over a real Store
-lang-journey	(none)	lang-journey: GREEN
-rows	(none)	ALL PASS
-store-plants	{host} {fresh}	ALL PASS
-host	-	the deployed binary; the sims, rows and plants drive it
-emit-rust	-	a generator; gates/generated.tsv checks its output
-emit-units	-	a generator; gates/generated.tsv checks its output
-emit-hosting	-	a generator; gates/generated.tsv checks its output
-emit-broker	-	a generator; gates/generated.tsv checks its output
-codec-vectors	-	a generator; gates/generated.tsv checks its output (a change of meaning under an unchanged tag is red, CODEC-28)
-live-calls	-	a generator of deploy/live/ inputs; deploy/live/harness.sh drives it against running units
-ob	-	LANG's resident check, an interactive tool: lang-journey and the rows drive the same code
+kernel-sim	--seeds 64	ALL PASS	--seeds 16 --harness-control
+host-sim	1 ; 2 ; 3	ALL PASS	1 --harness-control
+host-file-sim	1 ; 2 ; 3	ALL PASS	1 --harness-control
+hosting-sim	1 ; 2 ; 3	ALL PASS	1 --harness-control
+ledger-sim	1	ALL PASS	1 --harness-control
+hosting-controller	-	the deployed controller; hosting-sim G17 runs its Loop.step, the launcher isolation test runs the exe	-
+hosting-drive	-	a test driver: launcher/tests/isolation.rs runs it (one Lean-planned launch)	-
+hosting-broker	-	keybroker decider (follows a Store); the launcher broker test runs the exe over a real Store	-
+lang-journey	(none)	lang-journey: GREEN	--harness-control
+rows	(none)	ALL PASS	--harness-control
+store-plants	{host} {fresh}	ALL PASS	{host} {fresh} --harness-control
+host	-	the deployed binary; the sims, rows and plants drive it	-
+emit-rust	-	a generator; gates/generated.tsv checks its output	-
+emit-units	-	a generator; gates/generated.tsv checks its output	-
+emit-hosting	-	a generator; gates/generated.tsv checks its output	-
+emit-broker	-	a generator; gates/generated.tsv checks its output	-
+codec-vectors	-	a generator; gates/generated.tsv checks its output (a change of meaning under an unchanged tag is red, CODEC-28)	-
+live-calls	-	a generator of deploy/live/ inputs; deploy/live/harness.sh drives it against running units	-
+ob	-	LANG's resident check, an interactive tool: lang-journey and the rows drive the same code	-
 cargo:launcher:isolation	hosting-drive,hosting-controller	exit 0	nobin RED
 cargo:launcher:path_vectors	emit-hosting	exit 0	nobin ok
 cargo:launcher:broker	hosting-broker,host	exit 0	nobin RED

@@ -296,6 +296,9 @@ def runAll (args : List String) : IO UInt32 := do
     IO.FS.writeFile textPath t
     IO.println s!"wrote {textPath}"
     return 0
+  -- `--harness-control` (GATES-15): one line nothing meets, counted on the ordinary path
+  let control := args.contains "--harness-control"
+  let args := args.filter (· != "--harness-control")
   match args with
   | [] => pure ()
   | [seed] =>
@@ -308,6 +311,9 @@ def runAll (args : List String) : IO UInt32 := do
   let (ls, oks) ← sourceLine
   IO.println s!"{if oks then "ok  " else "FAIL"} {ls}"
   let runs := [Mode.honest, .skipJudge, .twoKeys, .dropCalls].map journey
+  let runs := match control, runs with
+    | true, r :: rest => note r "harness-control: GATES-15's known-red control, an expectation nothing meets (this run must read RED)" false :: rest
+    | _, rs => rs
   for r in runs do for l in r.log do IO.println l
   let bad := runs.foldl (· + ·.bad) ((if ok0 then 0 else 1) + (if oks then 0 else 1))
   IO.println (if bad = 0 then "ALL PASS" else s!"ledger-sim: RED ({bad})")

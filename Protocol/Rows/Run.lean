@@ -139,7 +139,7 @@ def barLines (r : Row) (res : Loopback.Result) : IO (Option String) := do
       return some s!"bar: plant {name} BLIND: {ratio total required} is not above {ratio ticks required}"
   return none
 
-def drive (r : Row) (times : Option Nat) : IO Ran :=
+def drive (r : Row) (times : Option Nat) (control : Bool := false) : IO Ran :=
   if let some why := r.blockedOn then pure (.pending s!"blocked on {why}") else
   match r.drive with
   | .exe name args _ => runExe name args
@@ -155,9 +155,12 @@ def drive (r : Row) (times : Option Nat) : IO Ran :=
               match ← runMembers (some m) ls times with
               | .error e => pure (.broken s!"plant {repr m}: {e}")
               | .ok pr =>
+                  -- `--harness-control` (GATES-15): the plant is read at a line the row does not
+                  -- have, a plant line that never fires; the runner must call it BLIND
+                  let line := if control then r.lines.length else line
                   if caught r pr.observed line got then pure (.observed res.observed t)
                   else pure (.broken s!"plant {repr m} BLIND: line {line} expected to get {got.text}, \
-                    outcomes {repr pr.observed.outcomes}")
+                    outcomes {repr pr.observed.outcomes}{if control then " (harness-control)" else ""}")
           | _, _ => pure (.observed res.observed t)
 
 /-- The last lines of a transcript, indented, for a failing row. -/
@@ -166,12 +169,12 @@ def tail (t : String) : String :=
   String.intercalate "\n" ((ls.drop (ls.length - 40)).map ("  | " ++ ·))
 
 /-- Run the rows; the exit code is the runner's verdict. -/
-def runAll (selected : List Row) (times : Option Nat) (verbose : Bool) : IO UInt32 := do
+def runAll (selected : List Row) (times : Option Nat) (verbose : Bool) (control : Bool := false) : IO UInt32 := do
   let mut failed := 0
   let mut pending := 0
   let mut hung := 0
   for r in selected do
-    match ← drive r times with
+    match ← drive r times control with
     | .pending why =>
         pending := pending + 1
         IO.println s!"ROW {r.name} PENDING {why}"
@@ -200,7 +203,12 @@ def runAll (selected : List Row) (times : Option Nat) (verbose : Bool) : IO UInt
   else
     IO.println "ALL PASS"; pure 0
 
+/-- `rows [-v] [--times N] [--harness-control] [ROW…]`. `--harness-control` (GATES-15) reads every
+plant at a line its row does not have, so every planted row must read `FAIL … BLIND … (harness-control)`:
+the known-red control gates/runs.py runs before reading a verdict. -/
 def main (args : List String) : IO UInt32 := do
+  let control := args.contains "--harness-control"
+  let args := args.filter (· != "--harness-control")
   let (verbose, args) := match args with
     | "-v" :: rest => (true, rest)
     | _ => (false, args)
@@ -211,6 +219,6 @@ def main (args : List String) : IO UInt32 := do
   if !unknown.isEmpty then
     IO.eprintln s!"rows: no such row: {String.intercalate " " unknown}"
     return 2
-  runAll (if args.isEmpty then rows else rows.filter fun r => args.contains r.name) times verbose
+  runAll (if args.isEmpty then rows else rows.filter fun r => args.contains r.name) times verbose control
 
 end Nanodregg.Protocol.Rows

@@ -1,3 +1,3 @@
 import Lang.Journey
 
-def main : IO UInt32 := Nanodregg.Lang.Journey.runAll
+def main (args : List String) : IO UInt32 := Nanodregg.Lang.Journey.runAll args

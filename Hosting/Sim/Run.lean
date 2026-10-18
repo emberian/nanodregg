@@ -19,6 +19,9 @@ def runAll (args : List String) : IO UInt32 := do
     return 0
   -- standing runs every `*-sim` as `EXE SEED`. These journeys have no generator, so the seed selects
   -- nothing; it is accepted (a natural, said so on the first line) and anything else is refused.
+  -- `--harness-control` (GATES-15): one line nothing meets, counted on the ordinary path
+  let control := args.contains "--harness-control"
+  let args := args.filter (· != "--harness-control")
   match args with
   | [] => pure ()
   | [seed] =>
@@ -37,6 +40,9 @@ def runAll (args : List String) : IO UInt32 := do
   let some lc := lifecycle
     | IO.println "FAIL the grain package is not built (Std refused its inputs)"; return 1
   let runs := [journey .none lc, journey .skipJudge lc, Allowance.journey]
+  let runs := match control, runs with
+    | true, r :: rest => note r "harness-control: GATES-15's known-red control, an expectation nothing meets (this run must read RED)" false :: rest
+    | _, rs => rs
   for r in runs do for l in r.log do IO.println l
   let bad := runs.foldl (· + ·.bad) ((if ok0 then 0 else 1) + (if oka then 0 else 1) +
     (if oks then 0 else 1) + (if okas then 0 else 1))

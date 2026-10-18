@@ -2358,14 +2358,28 @@ def plantedArms : List String :=
    "pin-cell:same", "pin-cell-plant:caught", "pin-row:same", "pin-row-plant:caught",
    "pin-range:same", "pin-range-plant:caught", "rows-stem:ok"]
 
-/-- `--seeds N` runs seeds `0 … N-1`; otherwise each argument is a seed. -/
-def parseSeeds : List String → List Nat
-  | ["--seeds", n] => List.range (n.toNat?.getD 64)
-  | [] => List.range 64
-  | args => args.filterMap String.toNat?
+/-- `--seeds N` (N ≥ 1) runs seeds `0 … N-1`; otherwise each argument is a seed; none is 64 seeds.
+`--harness-control` may stand anywhere (GATES-15). Anything else is refused (`none`): an argument
+that is not read is never a run of other seeds (it was: `kernel-sim foo` ran zero seeds and printed
+`ALL PASS`). -/
+def parseArgs (args : List String) : Option (List Nat × Bool) :=
+  let control := args.contains "--harness-control"
+  let seeds := match args.filter (· != "--harness-control") with
+    | ["--seeds", n] => n.toNat?.bind fun k => if k = 0 then none else some (List.range k)
+    | [] => some (List.range 64)
+    | rest => rest.mapM String.toNat?
+  seeds.map (·, control)
 
-/-- Run seeds under `P` and report; 0 when every seed passes and every planted refusal is met. -/
-def report (P : Params D) (seeds : List Nat) : IO UInt32 := do
+/-- The name `--harness-control` adds to the required arms (GATES-15): nothing meets it, so a
+run with it must read `FAIL planted refusals never met: [harness-control]`, the known-red control
+gates/runs.py runs before it reads kernel-sim's verdict. -/
+def controlArm : String := "harness-control"
+
+/-- Run seeds under `P` and report; 0 (`ALL PASS`) when every seed passes and every planted
+refusal is met. The planted refusals are judged only over 16 or more seeds; a shorter run that
+fails nothing ends `PLANTS NOT JUDGED …` with exit 3, never `ALL PASS` (it did: the gate was skipped
+and the run passed). `control` adds `controlArm` to the required arms. -/
+def report (P : Params D) (seeds : List Nat) (control : Bool := false) : IO UInt32 := do
   IO.println s!"kernel-sim under {P.name}"
   let mut bad := 0
   let mut admitted := 0
@@ -2435,7 +2449,7 @@ def report (P : Params D) (seeds : List Nat) : IO UInt32 := do
     bad := bad + 1
     IO.println s!"FAIL log weight compared on {weighed} of {admitted} admitted turns"
   -- every planted refusal must have been met: a name the generator never reaches is not tested
-  let unmet := (planted ++ plantedArms).filter fun n => !seen.contains n
+  let unmet := (planted ++ plantedArms ++ (if control then [controlArm] else [])).filter fun n => !seen.contains n
   if !unmet.isEmpty && seeds.length ≥ 16 then
     bad := bad + 1
     IO.println s!"FAIL planted refusals never met: {unmet}"
@@ -2462,7 +2476,11 @@ def report (P : Params D) (seeds : List Nat) : IO UInt32 := do
   if rf.2.2.2.1 > Bounds.refusalsPerWindow then
     bad := bad + 1
     IO.println s!"FAIL a member had {rf.2.2.2.1} refusals recorded in one window (bound {Bounds.refusalsPerWindow})"
-  if bad = 0 then IO.println "ALL PASS"
-  return if bad = 0 then 0 else 1
+  if bad > 0 then return 1
+  if seeds.length < 16 then
+    IO.println s!"PLANTS NOT JUDGED ({seeds.length} seeds; the planted refusals need 16 or more)"
+    return 3
+  IO.println "ALL PASS"
+  return 0
 
 end Nanodregg.Kernel.Sim.Gen

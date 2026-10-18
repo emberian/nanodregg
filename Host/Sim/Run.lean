@@ -778,8 +778,16 @@ def sealPlants (seed : Nat) (frames : List Frame) (failures : IO.Ref Nat) : IO U
       | .reply st p => st == Protocol.Status.refused.code && p == "unknownOp".toUTF8
       | _ => false) failures
 
+/-- `host-sim [SEED] [--harness-control]`; any other argument is refused (exit 2), never read as seed 1.
+`--harness-control` (GATES-15) adds one check nothing meets to the ordinary run, so the run must end
+`FAIL harness-control …` / `N FAILED`: the known-red control gates/runs.py runs before reading a verdict. -/
 def run (args : List String) : IO UInt32 := do
-  let seed := (args.head? >>= String.toNat?).getD 1
+  let control := args.contains "--harness-control"
+  let some seed := (match args.filter (· != "--harness-control") with
+      | [] => some 1
+      | [s] => s.toNat?
+      | _ => none)
+    | IO.eprintln s!"usage: host-sim [SEED] [--harness-control] (got {args})"; return 2
   let failures ← IO.mkRef 0
   let sc := scenario seed 200
   let frames := sc.map (·.1)
@@ -1172,6 +1180,7 @@ def run (args : List String) : IO UInt32 := do
       (acks.map (·.conn.toNat)) == hangs.map (900000 + ·) &&
       rest.map (fun a => (a.conn, a.status, a.payload)) == r.replies.toList.map (fun a => (a.conn, a.status, a.payload)) &&
       h.resident.world.chain = w.chain) failures
+  if control then check "harness-control: GATES-15's known-red control, an expectation nothing meets (this run must read RED)" false failures
   let n ← failures.get
   IO.println (if n = 0 then "ALL PASS" else s!"{n} FAILED")
   return (if n = 0 then 0 else 1)

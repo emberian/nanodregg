@@ -69,12 +69,8 @@ def table(root: str) -> dict[str, tuple[list[list[str]] | None, str, list[str] |
         if not line.strip() or line.startswith("#"):
             continue
         f = line.rstrip("\n").split("\t")
-        # LANDING A (GATES-15): a Lean verdict row may still have no control column; landing B
-        # (every verdict exe's --harness-control) makes it required and deletes this clause.
-        if len(f) not in (3, 4) or not all(x.strip() for x in f) or (len(f) == 3 and f[0].startswith("cargo:")):
+        if len(f) != 4 or not all(x.strip() for x in f):
             raise ValueError(f"{RUNS}:{n}: need exe<TAB>runs<TAB>pass<TAB>control: {line.rstrip()!r}")
-        if len(f) == 3:
-            f.append("-" if f[1].strip() == "-" else "")
         if f[0] in out:
             raise ValueError(f"{RUNS}:{n}: second row for {f[0]}")
         if f[0].startswith("cargo:"):
@@ -86,9 +82,6 @@ def table(root: str) -> dict[str, tuple[list[list[str]] | None, str, list[str] |
             if f[3].strip() != "-":
                 raise ValueError(f"{RUNS}:{n}: a `-` row has control `-`: {line.rstrip()!r}")
             out[f[0]] = (None, f[2], None)
-            continue
-        if f[3] == "":
-            out[f[0]] = ([[] if r.strip() == "(none)" else r.split() for r in f[1].split(" ; ")], f[2], None)
             continue
         if f"--{CONTROL}" not in f[3].split():
             raise ValueError(f"{RUNS}:{n}: verdict row {f[0]} needs a known-red control, an argument list with "
@@ -285,15 +278,12 @@ def main() -> int:
                 bad = None if v == "ok" or v.startswith(("KILLED", "TIMEOUT")) else \
                     f"RED(harness: declared `nobin ok` but with no Lean binaries it read {v})"
             cv, cargs = (bad or ("ok(known-red control read red)" if control == "nobin RED" else v)), []
-        elif control is None:   # landing A only: no control column yet (deleted by landing B)
-            out, v, bad, cv, cargs = "", "ok", None, None, None
         else:
             out, v = run(t, exe, control, passline, os.path.join(scratch, f"{exe}-control"), bindir)
             bad = control_reads_red(exe, v, out)
             cv, cargs = (bad or "ok(known-red control read red)"), control
         # A control's WASTE lines are not measurements (it plants); they are never collected.
-        if cv is not None:
-            report(exe, cargs, cv if not v.startswith(("KILLED", "TIMEOUT", "ABSENT")) or bad else v, out, " (control)")
+        report(exe, cargs, cv if not v.startswith(("KILLED", "TIMEOUT", "ABSENT")) or bad else v, out, " (control)")
         if bad or v.startswith(("KILLED", "TIMEOUT", "ABSENT")):
             for args in runs:
                 print(f"  run {exe} {' '.join(args)}: UNREAD(its known-red control did not read red)")

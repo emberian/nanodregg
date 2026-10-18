@@ -372,7 +372,7 @@ def wideFollowPlant (root : System.FilePath) (key : Digest) (keys : Keys) (failu
   check s!"{q}: the follower Store still opens ({match re with | .ok _ => "opened" | .error e => e.name})"
     (match re with | .ok _ => true | .error _ => false) failures
 
-def body (seed : Nat) (dirA dirB : System.FilePath) : IO UInt32 := do
+def body (seed : Nat) (dirA dirB : System.FilePath) (control : Bool := false) : IO UInt32 := do
   let failures ← IO.mkRef 0
   let frames := (scenario seed 200).map (·.1)
   let key ← newKey
@@ -468,6 +468,7 @@ def body (seed : Nat) (dirA dirB : System.FilePath) : IO UInt32 := do
   missingPlants (dirB / "missing") key keys failures
   restartPlants (dirB / "restart") key keys seed frames failures
   wideFollowPlant (dirB / "wide") key keys failures
+  if control then check "harness-control: GATES-15's known-red control, an expectation nothing meets (this run must read RED)" false failures
   let n ← failures.get
   IO.println (if n = 0 then "ALL PASS" else s!"{n} FAILED")
   return (if n = 0 then 0 else 1)
@@ -476,13 +477,21 @@ def body (seed : Nat) (dirA dirB : System.FilePath) : IO UInt32 := do
 (DIR defaults to `.lake/host-file-sim`), which this run creates, refuses to reuse, and removes
 when it ends (D9: no runtime temp-file primitive; they abort under a missing TMPDIR). -/
 def run (args : List String) : IO UInt32 := do
-  let seed := (args.head? >>= String.toNat?).getD 1
-  let root : System.FilePath := (args.drop 1).head?.getD ".lake/host-file-sim"
+  -- `--harness-control` (GATES-15): one check nothing meets, inside the ordinary run. Any other
+  -- argument that is not `SEED [DIR]` is refused, never read as seed 1 or as a directory.
+  let control := args.contains "--harness-control"
+  let (some seed, root) := (match args.filter (· != "--harness-control") with
+      | [] => (some 1, ".lake/host-file-sim")
+      | [s] => (s.toNat?, ".lake/host-file-sim")
+      | [s, d] => (s.toNat?, d)
+      | _ => (none, ""))
+    | IO.eprintln s!"usage: host-file-sim [SEED [DIR]] [--harness-control] (got {args})"; return 2
+  let root : System.FilePath := root
   let runDir := root / s!"run-{seed}-{← IO.rand 0 (1 <<< 30)}"
   if ← runDir.pathExists then
     IO.eprintln s!"refused exists {runDir}"; return 2
   IO.FS.createDirAll runDir
-  try body seed (runDir / "a") (runDir / "b")
+  try body seed (runDir / "a") (runDir / "b") control
   finally IO.FS.removeDirAll runDir
 
 end Nanodregg.Host.Sim.File

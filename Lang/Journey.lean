@@ -1481,9 +1481,20 @@ def journey (mode : Mode) : Run := Id.run do
   | .error (i, e) => r := note r s!"L7 auditor refused at {i}: {reprStr e}" false
   return r
 
-def runAll : IO UInt32 := do
+/-- `lang-journey [--harness-control]`; any other argument is refused (exit 2). `--harness-control`
+(GATES-15) adds one line nothing meets to the honest journey, counted on the ordinary path, so the run
+must end `lang-journey: RED (1)`: the known-red control gates/runs.py runs before reading a verdict. -/
+def runAll (args : List String) : IO UInt32 := do
+  let some control := (match args with
+      | [] => some false
+      | ["--harness-control"] => some true
+      | _ => none)
+    | IO.eprintln s!"usage: lang-journey [--harness-control] (got {args})"; return 2
   let runs := [Mode.honest, .skipJudge, .eraseOccasion, .erasePayload, .dropCalls, .rawInstall, .bytesIds,
     .skipLits, .totalDigest, .unlawfulCodec, .dropRangeRow, .foreignRow].map journey
+  let runs := match control, runs with
+    | true, r :: rest => note r "harness-control: GATES-15's known-red control, an expectation nothing meets (this run must read RED)" false :: rest
+    | _, rs => rs
   for r in runs do for l in r.log do IO.println l
   let bad := (runs.map (·.bad)).foldl (· + ·) 0
   IO.println s!"lang-journey: {if bad = 0 then "GREEN" else s!"RED ({bad})"}"
