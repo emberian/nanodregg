@@ -54,7 +54,8 @@ if [ "$build" = ok ]; then
     [ -n "$exe" ] && [ "$(run generated_check "$T" "$exe" "$out")" = RED ] && census=RED
   done < <(generated_checks "$T")
   # runs: every verdict exe as gates/runs.tsv says (sims, journeys, rows, plants), gates/runs.py.
-  wrapped python3 "$T/gates/runs.py" "$T" --waste-out "$G/waste.measured" > "$G/runs.out" 2>> "$log"; rc=$?
+  # --standing: the `standing:` rows (minutes-long benches) run here and nowhere else (GATES-17)
+  wrapped python3 "$T/gates/runs.py" "$T" --standing --waste-out "$G/waste.measured" > "$G/runs.out" 2>> "$log"; rc=$?
   cat "$G/runs.out" >> "$log"
   first() { grep -m1 -E "^  run .*: $1" "$G/runs.out" | sed 's/^  run //'; }
   case $rc in

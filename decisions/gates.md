@@ -400,3 +400,16 @@ Measured before the column was written: 10 of the 11 cargo rows go red with no L
 - A red stays red: runs.tsv with bar.sh's pass line changed reads `run script:scripts/bar.sh --records 60 --standing --root {fresh}: RED(exit 0, last line: BAR verdict PASS)`, `runs: RED`, `PRE-PUSH RED`.
 - The old judge: KERNEL-19's attempt 2, quoted above.
 **Critique.** A real hang now costs a lander two deadlines (20 min) per attempt instead of one, and it reads NOT JUDGED rather than naming a red; the partial output in the log is where the name is. KILLED(load) and UNREAD(timeout) share exit 76, so a lane that loops on NOT JUDGED will loop on a real hang too. The message says which, and the log has the last line.
+
+## GATES-17 · A standing-only verdict row: `standing:EXE` runs in standing and never in pre-push (2026-10-19)
+
+**Decision.** gates/runs.tsv accepts a row key `standing:EXE` for a lean_exe EXE. It has the four columns of an exe row and needs a `--harness-control` control; `-` is refused. An EXE has one row, plain or standing. runs.py runs `standing:` rows only with `--standing`, which scripts/standing.sh passes and pre-push never does. Without it the row prints `run standing:EXE: NOT RUN(standing-only)`, whatever changed, a lakefile or runs.tsv change included. First row: PERF-5's bench-worstcut, about 4.5 min with its control (ROOT: standing-only).
+**Absence is refused.** Deleting the row reds check.py: `lean_exe EXE has no row`. Turning it into a `-` row passes check.py, but its pinned WASTE rows then go unmeasured, and standing's full waste check (waste.py --measured) reds a pinned row with no measurement. Pre-push's waste check is partial and skips pinned-but-unmeasured rows, which is why the row may be absent from pre-push without going red there.
+**Alternatives.** (a) A separate standing table (gates/standing-runs.tsv). Refused: two tables that classify the same exes are two shapes that will disagree; check.py would have to join them. (b) A fifth column. Refused: every row would gain a column that means nothing for all but one, and the strict four-column parse would need an optional field again (the leniency GATES-15 B deleted). (c) Select standing rows by a cost estimate. Refused: wall clock.
+**Plants** (hbox logs/gates6-g17plants.sh, .out; ledger-sim's row as the stand-in standing row):
+- `PLANT g17-dash RED: runs: gates/runs.tsv:13: a standing row is a verdict run (runs, pass, a --harness-control control), never `-``
+- `PLANT g17-dup RED: runs: gates/runs.tsv:41: second row for ledger-sim`
+- `PLANT g17-gone RED: runs: lean_exe ledger-sim has no row in gates/runs.tsv …`
+- `PLANT g17-prepush-skips GREEN (control)` with a runs.tsv change (which selects every exe) and `run standing:ledger-sim: NOT RUN(standing-only)`. Pre-push never ran it.
+- The standing side, that the row runs under --standing and its unmeasured waste rows red, is quoted by PERF-5's landing from the first standing that holds bench-worstcut.
+**Critique.** A standing row's verdict arrives a landing late, at the next standing and not at the commit that broke it. That is the price ROOT accepted for a minutes-long bench. Standing names the first red run, so the breaking commit is found by bisecting standing, not by the judge.

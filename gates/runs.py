@@ -37,6 +37,13 @@ ND_BIN is removed from its environment, so it builds the candidate's client (GAT
 no import closure to select it by, so it is selected on every judge (fail-closed: a script row is never
 skipped because its inputs are unknown).
 
+A row `standing:EXE` is a verdict row of the lean_exe EXE that runs in standing only (GATES-17: a
+bench whose run costs minutes). It is read exactly as an exe's row and needs a --harness-control
+control; `-` is refused. runs.py runs it only with --standing (scripts/standing.sh); a pre-push run
+prints `run standing:EXE: NOT RUN(standing-only)` and never runs it, whatever changed. An EXE has
+one row, plain or standing. Its WASTE rows are judged by standing's full waste check, where a pinned
+row with no measurement is red, so a standing row that stops running is red there.
+
 A cargo run is ok on exit 0 with libtest's summary saying at least one test passed (a run that
 ran zero tests, or whose summary the reader cannot find, is RED: an absent verdict is not a pass).
 A run is ok on exit 0 with its pass line last; INCOMPLETE on exit 3 (a row with no driver yet:
@@ -71,6 +78,7 @@ DEADLINE = int(os.environ.get("ND_RUN_DEADLINE", "600"))
 
 CONTROL = "harness-control"
 NOBIN = ("nobin RED", "nobin ok")
+STANDING = "standing:"
 
 
 def table(root: str) -> dict[str, tuple[list[list[str]] | None, str, list[str] | str | None]]:
@@ -86,14 +94,16 @@ def table(root: str) -> dict[str, tuple[list[list[str]] | None, str, list[str] |
         f = line.rstrip("\n").split("\t")
         if len(f) != 4 or not all(x.strip() for x in f):
             raise ValueError(f"{RUNS}:{n}: need exe<TAB>runs<TAB>pass<TAB>control: {line.rstrip()!r}")
-        if f[0] in out:
-            raise ValueError(f"{RUNS}:{n}: second row for {f[0]}")
+        if f[0] in out or f[0].removeprefix(STANDING) in out or STANDING + f[0] in out:
+            raise ValueError(f"{RUNS}:{n}: second row for {f[0].removeprefix(STANDING)}")
         if f[0].startswith("cargo:"):
             if len(f[0].split(":")) != 3 or f[2] != "exit 0" or f[3] not in NOBIN:
                 raise ValueError(f"{RUNS}:{n}: a cargo row is cargo:CRATE:TEST<TAB>EXE,…<TAB>exit 0<TAB>nobin RED|nobin ok: {line.rstrip()!r}")
             out[f[0]] = ([[x.strip() for x in f[1].split(",") if x.strip()]], f[2], f[3])
             continue
         if f[1].strip() == "-":
+            if f[0].startswith(STANDING):
+                raise ValueError(f"{RUNS}:{n}: a standing row is a verdict run (runs, pass, a --{CONTROL} control), never `-`: {line.rstrip()!r}")
             if f[3].strip() != "-":
                 raise ValueError(f"{RUNS}:{n}: a `-` row has control `-`: {line.rstrip()!r}")
             out[f[0]] = (None, f[2], None)
@@ -115,8 +125,11 @@ def check(t: tree.Tree) -> list[str]:
     exes = set(t.exes)
     cargo = {k for k in rows if k.startswith("cargo:")}
     script = {k for k in rows if k.startswith("script:")}
-    red = ([f"lean_exe {e} has no row in {RUNS} (a verdict run, or `-` with why it is not one)" for e in sorted(exes - set(rows))]
-           + [f"{RUNS} row {e} names no lean_exe" for e in sorted(set(rows) - exes - cargo - script)]
+    standing = {k for k in rows if k.startswith(STANDING)}
+    named = (set(rows) - standing) | {k.removeprefix(STANDING) for k in standing}
+    red = ([f"lean_exe {e} has no row in {RUNS} (a verdict run, or `-` with why it is not one)" for e in sorted(exes - named)]
+           + [f"{RUNS} row {e} names no lean_exe" for e in sorted(set(rows) - exes - cargo - script - standing)]
+           + [f"{RUNS} row {k} names no lean_exe" for k in sorted(standing) if k.removeprefix(STANDING) not in exes]
            + [f"{RUNS} row {k}: no executable {k[len('script:'):]}" for k in sorted(script)
               if not os.access(os.path.join(t.root, k[len("script:"):]), os.X_OK)]
            + [f"{RUNS} row {k}: a script row is a verdict run (runs, pass, a --{CONTROL} control), never `-`"
@@ -193,9 +206,10 @@ def run(t: tree.Tree, exe: str, args: list[str], passline: str, fresh: str, bind
             return "", "ABSENT(no binary: host)"
     else:
         host = os.path.join(bindir, "host")
-        argv = [os.path.join(bindir, exe)] + [x.replace("{host}", host).replace("{fresh}", fresh) for x in args]
+        name = exe.removeprefix(STANDING)
+        argv = [os.path.join(bindir, name)] + [x.replace("{host}", host).replace("{fresh}", fresh) for x in args]
         if not os.path.isfile(argv[0]):
-            return "", "ABSENT(no binary: " + exe + ")"
+            return "", "ABSENT(no binary: " + name + ")"
     try:
         r = subprocess.run(argv, cwd=t.root, capture_output=True, text=True, timeout=DEADLINE, env=env)
         out = r.stdout + r.stderr
@@ -259,6 +273,8 @@ def main() -> int:
     ap.add_argument("root")
     ap.add_argument("--changed")
     ap.add_argument("--waste-out")
+    ap.add_argument("--standing", action="store_true", help="also run the `standing:` rows (scripts/standing.sh\n"
+                    "only; pre-push never passes it: GATES-17)")
     ap.add_argument("--table", help="judge with this runs.tsv instead of TREE's (pre-push runs the\n"
                     "candidate's table over the parent tree, so both sides make the same runs)")
     a = ap.parse_args()
@@ -276,6 +292,12 @@ def main() -> int:
         own = {}
     changed = open(a.changed, encoding="utf-8").read().split() if a.changed else None
     want = selected(t, changed, rows)
+    standing = sorted(k for k in rows if k.startswith(STANDING))
+    if a.standing:
+        want |= set(standing)
+    else:
+        for k in standing:
+            print(f"  run {k}: NOT RUN(standing-only)")
     bindir = os.path.join(t.root, ".lake", "build", "bin")
     nobin = os.path.join(t.root, ".lake", "runs", "nobin")
     scratch = os.path.join(t.root, ".lake", "runs")
