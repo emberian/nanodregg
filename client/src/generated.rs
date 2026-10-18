@@ -154,6 +154,58 @@ pub mod supervisor_exit {
     pub const ALL: &[u8] = &[64, 65, 66];
 }
 
+/// How the `host` executable ended (Host.Status): nd maps `host join`'s exit by it (CLIENT-26).
+pub mod host_status {
+    pub const EOF: u8 = 0;
+    pub const UNCERTAIN: u8 = 3;
+    pub const FUEL: u8 = 4;
+    pub const SEAL_IO: u8 = 5;
+    pub const USAGE: u8 = 8;
+    pub const ENTROPY: u8 = 9;
+    pub const RECORD_TOO_LARGE: u8 = 10;
+    pub const WORLD_TOO_LARGE: u8 = 11;
+    pub const INDEX_TOO_LARGE: u8 = 12;
+    pub const IO: u8 = 13;
+    pub const IO_SERVING: u8 = 6;
+    pub const LOCKED: u8 = 16;
+    pub const EXISTS: u8 = 17;
+    pub const BAD_KEY: u8 = 18;
+    pub const SHORT_READ: u8 = 19;
+    pub const MISSING: u8 = 20;
+    pub const BASE_TOO_LARGE: u8 = 21;
+    pub const BASE_CORRUPT: u8 = 22;
+    pub const BASE_UNDECODABLE: u8 = 23;
+    pub const SEGMENT_SHORT: u8 = 24;
+    pub const TAIL_TOO_LONG: u8 = 25;
+    pub const FOREIGN_SEGMENT: u8 = 29;
+    pub const CORRUPT: u8 = 26;
+    pub const RECORD: u8 = 27;
+    pub const TAG_WIDTH: u8 = 28;
+    pub const BEHIND_ANCHOR: u8 = 32;
+    pub const CHAIN_MISMATCH: u8 = 33;
+    pub const BAD_INDEX: u8 = 34;
+    pub const PAGE_TOO_LARGE: u8 = 35;
+    pub const PAST_END: u8 = 36;
+    pub const SHORT_BASE: u8 = 37;
+    pub const REOPEN_FAILED: u8 = 38;
+    pub const REOPEN_DIVERGED: u8 = 39;
+    pub const LIFETIME: u8 = 40;
+    pub const STREAM: u8 = 41;
+    pub const NO_THREADS: u8 = 42;
+    pub const SHAPE_MISMATCH: u8 = 43;
+    pub const FOREIGN_ORIGIN: u8 = 30;
+    pub const INDEX_SHORT: u8 = 45;
+    pub const INDEX_CORRUPT: u8 = 46;
+    pub const ENTRY_UNFIT: u8 = 47;
+    pub const INDEX_MOVED: u8 = 48;
+    pub const CARRY_MISMATCH: u8 = 49;
+    pub const INVITE_REFUSED: u8 = 44;
+    pub const ALL: &[u8] = &[
+        0, 3, 4, 5, 8, 9, 10, 11, 12, 13, 6, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 29, 26, 27,
+        28, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 30, 45, 46, 47, 48, 49, 44,
+    ];
+}
+
 pub mod command_exit {
     pub const OK: u8 = 0;
     pub const REFUSED: u8 = 1;

@@ -696,3 +696,60 @@ The client half, all mechanical from the table:
 **Critique.** An open attempt for a deterministic refusal (badSignature) stays open until its window passes and the lookup answers `expired`. A timer re-running it spends one lookup per run. That is bounded, but it is waste. CLIENT-5 may want `nd` to say so.
 
 **For CLIENT-5.** Read this first. Nothing else in the client changed.
+
+## CLIENT-26 · `nd --join`: a member's own World from an invitation its sponsor signed (2026-10-18, CLIENT-5; PROTOCOL-42/44, ROOT rulings on (a)–(c))
+**Decision.** `nd --join KEY_FILE INVITATION STORE /ABS/HOST` replaces the deployed client's trust on first use: RUNBOOK §2's reproduction of the writer's genesis with the writer's nonce.
+- **Two channels, one per trust level.**
+  - The sponsor's public KEY is a FILE (hex, one optional newline), read by `custody::read_public` under the StrictModes chain (CLIENT-19). It is the trust root, a person's word, so it must sit where no other uid could have swapped it.
+  - The INVITATION is a hex ARGUMENT. It is untrusted until Lean's `Invite.accept` checks it, so it may arrive relayed or pasted, even through the Host.
+  - Never one blob: a blob carrying both would let whoever relays the invitation also choose the key.
+- **nd decides nothing.**
+  - `host join STORE INVITATION KEY` runs `accept` and writes STORE only when it passed (`join_genesis_iff`).
+  - nd maps host's exit by the emitted tables:
+    - `host_status::INVITE_REFUSED` (44) → `command_exit::REFUSED`, host's `refused inviteRefused NAME` passed through;
+    - any other non-zero → `command_exit::CLIENT` (52), host's stderr in the message;
+    - nothing is kept on either.
+  - Then `init SPONSOR` (the id `host join` printed) is follow's. It signs whoami and possession and prints `join HEX`.
+- **One spawner.** `join::confined` is the only way nd starts `host`. It is used by `host join` and by init's one-shot follower. Shape:
+  - its policy is the member follower unit's own flag words (`--write STORE --exec HOST --hide WS [--hide HOLDING]`);
+  - those words are read by `Policy::list`, the parser nd-supervise reads its argv with (moved into sandbox/ and shared, not re-stated);
+  - it launches through `nanodregg_sandbox::command`, the same mechanism nd-supervise uses.
+  - A member follower's policy still comes from Rust and the unit text rather than a Lean plan. Hosting's grains have one; cv 01a14df6-0647.
+- **init's follower.** `host follow STORE 0^32 0^32` runs one-shot on a socket pair, speaking the mux child wire with connection 0. Each direction is bounded by `replyMsMax`.
+  - init needs no World (`Machine.start`) and no Self, so the placeholder ids are never read. The rows use the same stranger placeholder.
+  - A Host step asked during init is an error (`NoHost`).
+  - Follow exits on stdin EOF.
+- **What the workspace keeps.** Two non-secret files, 0600, `create_once`:
+  - `invitation`, as received;
+  - `input`, the genesis inputs `host join` printed (PROTOCOL-44). Founders keep `host genesis`'s line with `nd --input HEX`.
+  Both are re-read under the chain rule (`read_private`):
+  - bare `nd invite` becomes `invite <input>`;
+  - `nd adopt KEY_FILE` becomes `adopt <invitation> <key>`.
+  Explicit hex forms pass through unread. A workspace that has joined refuses a second `--join` (`invitation: exists`) before host runs.
+- **Off the stdio surface.** `--join`, `--input`, `invite` and `adopt` are not in STDIO_VERBS. stdio's argv is decided before any of this (notOnSurface), and nothing on the stdio path reads an argv path (CLIENT-24's canary stays).
+- **Deleted.** `adopt STEPS DIGEST` and its out-of-band pin are gone. The client held only the stdio plant's argv for it, now `adopt INVITE KEY`'s shape.
+
+**Plants** (`client/tests/join.rs`, row `cargo:client:join`, the real host over sockets; a filtered target):
+- a forged invitation (one signature nibble) is `refused inviteRefused pinMismatch`, exit 1, with workspace and Store unwritten;
+- a key other than the sponsor's is `notSponsor`, likewise;
+- a key file under a 0770 directory is `key file: Dir(…)`, exit 52, likewise;
+- the honest join: origin = the sponsor's, `sponsor` = the founder's id, `input` = genesis's; both kept 0600; a second join is refused `exists`;
+- enrolled and granted, the joiner's write is served and the founder reads it;
+- the joiner's bare `invite` is served from its kept input;
+- a kept invitation widened to 0640 is `invitation: Mode(…)`, and a 0770 workspace is `Dir(…)`;
+- a thin joiner's `nd adopt KEY_FILE` reaches Lean with the kept bytes: the wrong key is `notSponsor`, the sponsor's is `baseMoved` (residue 1).
+
+Mutations, each red: kept-file read unchecked; key-file read unchecked; the exists check removed; keeping before `host join`; refusal stderr dropped; 44 mapped as CLIENT.
+
+**Residue.**
+1. The deployed `host` has no seal act. The writer seals only at its cadence (1 MiB), and the rows' `seal` is a harness checkpoint, so a served real thin adopt needs the inviter's tip to land on a cadence base. PROTOCOL-9 records it in PROTOCOL-42's critique; until it lands, deployed thin joining is unusable and full joining (`host join`, then fold) is the path.
+2. The `baseMoved` hint ("ask your sponsor for a fresh invitation") is follow's rendering (PROTOCOL-45), not nd's.
+3. A failed init after a successful join leaves a joined Store and the kept files. The recovery is to empty STORE, remove the two files, and join again. No refusal here can come from the join itself.
+
+**Critique.**
+- nd now execs `host` itself (until now only nd-supervise did). It is confined, but it is a second caller of the spawner.
+- The flag-word spelling inside `confined` is ceremony to share one parser. It shares the parser, not the policy's source: the follower's policy should be a Lean plan.
+- The placeholder follower is a real follower process for two signatures.
+- The client half of a served thin adopt cannot be driven through the real host. The plant stops at Lean's `baseMoved` under the right key. ROOT routes the fix (a `host seal` verb, or the rows' seal as a real act) to HOST-12 and PROTOCOL-9.
+
+**Meta-critique.** I first proposed exec'ing host directly and called it "the supervisor path". ROOT read that as a second spawner and refused. The correction showed that the premise ("nd already spawns follow on pipes") was false in both directions: nd spawned nothing, and the one spawner is the sandbox's.

@@ -36,7 +36,9 @@ def packLines (indent : String) (width : Nat) (items : List String) : List Strin
   let (lines, cur) := items.foldl (fun (acc : List String × List String) it =>
     let (lines, cur) := acc
     if cur.isEmpty then (lines, [it])
-    else if (close (it :: cur)).length ≤ width then (lines, it :: cur)
+    -- rustfmt fills a short-item line to one column under `width` (measured: a 100-column line
+    -- of the host_status list is rewrapped by `cargo fmt`)
+    else if (close (it :: cur)).length < width then (lines, it :: cur)
     else (close cur :: lines, [it])) ([], [])
   (if cur.isEmpty then lines else close cur :: lines).reverse
 
@@ -688,6 +690,9 @@ def file : Except String String := do
      custodyRefusalEnum,
      byteModule "step" Step.all Step.code,
      byteModule "supervisor_exit" SupervisorExit.all (fun s => s.code.toUInt8),
+     "/// How the `host` executable ended (Host.Status): nd maps `host join`'s exit by it (CLIENT-26).
+" ++
+       byteModule "host_status" Nanodregg.Host.Status.all (fun s => s.code.toUInt8),
      byteModule "command_exit" CommandExit.all (fun c => c.code.toUInt8),
      "/// The read envelope's signing domain (Protocol.domEnvelope): an observer custody signs only\n" ++
        "/// messages that begin with it (HOSTING-17 §7, CLIENT-22).\n" ++

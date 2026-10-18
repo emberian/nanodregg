@@ -12,7 +12,7 @@ edit it, never pass it as a PATH). Ceilings live in `gates/ceilings.tsv`. A rise
 | Lean proof-modules | 151 | — |
 | Lean lines (Census) | 244 | — |
 | Lean lines (Codec) | 10370 | — |
-| Lean lines (Emit) | 1208 | — |
+| Lean lines (Emit) | 1213 | — |
 | Lean lines (Host) | 9630 | — |
 | Lean lines (Hosting) | 5274 | — |
 | Lean lines (Kernel) | 14014 | — |
@@ -21,7 +21,7 @@ edit it, never pass it as a PATH). Ceilings live in `gates/ceilings.tsv`. A rise
 | Lean lines (Ops) | 1937 | — |
 | Lean lines (Protocol) | 6472 | — |
 | Lean lines (deployed) | 16642 | — |
-| Lean lines (tooling: Sim, Rows, Journey, Census, Emit, Ops) | 11645 | — |
+| Lean lines (tooling: Sim, Rows, Journey, Census, Emit, Ops) | 11650 | — |
 | foundation modules | 7 | 8 |
 | max dependents of a non-foundation module | 191 | — |
 | theorems | 3070 | — |
@@ -29,12 +29,12 @@ edit it, never pass it as a PATH). Ceilings live in `gates/ceilings.tsv`. A rise
 | sorry | 0 | 0 |
 | native (extern/implemented_by) | 9 | 9 |
 | C lines | 159 | 159 |
-| Rust lines | 13185 | — |
-| Rust lines (nd) | 94 | 100 |
-| Rust lines (nd-supervise) | 122 | 160 |
-| Rust lines (client library) | 2129 | 2150 |
+| Rust lines | 13725 | — |
+| Rust lines (nd) | 98 | 100 |
+| Rust lines (nd-supervise) | 118 | 160 |
+| Rust lines (client library) | 2342 | 2350 |
 | Rust lines (attach/src) | 148 | 300 |
-| Rust lines (generated) | 1930 | — |
+| Rust lines (generated) | 1982 | — |
 | Rust files with an unregistered generated header | 0 | 0 |
 | protocol operations | 6 | 6 |
 | call kinds (Receive.Body constructors) | 13 | 13 |

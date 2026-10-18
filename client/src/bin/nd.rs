@@ -6,7 +6,7 @@
 //! resident's one-record keys; `nd --init-observer` an observe-only follower driver's record,
 //! which signs read envelopes only (CLIENT-22): a joined `--init-hosted` record sealed by
 //! `nd --seal-observer` (a one-way rename); `nd --keys` prints custody's public keys (`key HEX`, `next HEX`)
-//! for the operator's `host genesis`. `$ND_HOLDING` is read again only to rotate.
+//! for the operator's `host genesis`. `$ND_HOLDING` is read again only to rotate. `nd --join`: [`join`].
 //! `nd --stdio WORKSPACE FOLLOW_SOCK HOST_SOCK` serves a hosted resident's commands on stdin
 //! (nd-supervise's child, CLIENT-24: only STDIO_VERBS, no rotation). `$ND_FOLLOW_SOCK` / `$ND_HOST_SOCK` name the two sockets when they are not the workspace's
 //! (HOSTING-17 §7: nd, as nd, drives the nd-hosted follower through its socket in /run/nd-follow).
@@ -20,7 +20,7 @@ use std::process::ExitCode;
 use nanodregg_client::custody::Custody;
 use nanodregg_client::sockets::{FollowSocket, HostSocket};
 use nanodregg_client::table;
-use nanodregg_client::{run, stdio};
+use nanodregg_client::{join, run, stdio};
 
 fn main() -> ExitCode {
     match go() {
@@ -57,7 +57,10 @@ fn go() -> Result<u8, String> {
         Custody::seal_observer(&ws).map_err(|e| e.to_string())?;
         return Ok(0);
     }
-    let custody = Custody::open(&ws, holding).map_err(|e| e.to_string())?;
+    let custody = Custody::open(&ws, holding.clone()).map_err(|e| e.to_string())?;
+    if let Some(done) = join::from_argv(&ws, holding.as_deref(), &custody, &argv) {
+        return done;
+    }
     if argv.len() == 1 && argv[0] == "--keys" {
         let hex = |b: &[u8]| b.iter().map(|x| format!("{x:02x}")).collect::<String>();
         let key = custody.public_key().map_err(|e| e.to_string())?;
@@ -71,6 +74,7 @@ fn go() -> Result<u8, String> {
         .map_err(|e| format!("follow.sock: {e}"))?;
     let mut host = HostSocket::connect(&sock("ND_HOST_SOCK", "host.sock"), table::REPLY)
         .map_err(|e| format!("host.sock: {e}"))?;
+    let argv = join::kept(&ws, argv)?;
     let argv: Vec<Vec<u8>> = argv.into_iter().map(OsString::into_vec).collect();
     let (exit, stdout, stderr) = run::run(
         &argv,

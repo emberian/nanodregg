@@ -47,6 +47,21 @@ pub struct Policy {
     pub connect: Vec<PathBuf>,
 }
 
+impl Policy {
+    /// The list a launcher flag names (`--read`, `--write`, `--exec`, `--hide`, `--connect`): the one
+    /// reading of a policy's flag words, nd-supervise's argv and `nd --join`'s spawner (CLIENT-26).
+    pub fn list(&mut self, flag: &std::ffi::OsStr) -> Option<&mut Vec<PathBuf>> {
+        Some(match flag.to_str()? {
+            "--read" => &mut self.read,
+            "--write" => &mut self.write,
+            "--exec" => &mut self.exec,
+            "--hide" => &mut self.hidden,
+            "--connect" => &mut self.connect,
+            _ => return None,
+        })
+    }
+}
+
 /// Why a child was not launched.
 #[derive(Debug)]
 pub enum ConfineError {

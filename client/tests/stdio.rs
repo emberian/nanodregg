@@ -211,7 +211,7 @@ fn a_resident_runs_world_verbs_through_nd_stdio_and_nothing_else() {
         &["--init"],
         &["rotate"],
         &["init", member],
-        &["adopt", "1", "00"],
+        &["adopt", "00", "00"],
         &["ND_WORKSPACE=/tmp", "read", &obj],
         &[],
     ] {

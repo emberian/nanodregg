@@ -60,49 +60,63 @@ impl FollowSocket {
     pub fn connect(path: &Path, reply: Duration) -> io::Result<Self> {
         connect(path, reply).map(Self)
     }
-    fn ask(&mut self, op: u8, payload: &[u8]) -> io::Result<Step> {
-        let (status, reply) = exchange(&mut self.0, op, payload)?;
-        if status != g::status::OK {
-            // Follow answers every command, its own refusals included, with a `done` step; any
-            // other status is follow refusing the frame itself, and is not rendered as a verdict.
-            // A supervisor close is named by its emitted CloseReason name (PROTOCOL-22).
-            let what = if status == g::status::CLOSED {
-                "closed".to_string()
-            } else {
-                format!("status {status}:")
-            };
-            return Err(io::Error::other(format!(
-                "{what} {}",
-                String::from_utf8_lossy(&reply)
-            )));
-        }
-        Step::decode(&reply).map_err(|r| malformed("step", r))
+    fn ask(&mut self, (op, payload): (u8, Vec<u8>)) -> io::Result<Step> {
+        let (status, reply) = exchange(&mut self.0, op, &payload)?;
+        step(status, &reply)
     }
+}
+
+/// Follow's reply as a step. Follow answers every command, its own refusals included, with a
+/// `done` step; any other status is follow refusing the frame itself, and is not rendered as a
+/// verdict. A supervisor close is named by its emitted CloseReason name (PROTOCOL-22).
+pub(crate) fn step(status: u8, reply: &[u8]) -> io::Result<Step> {
+    if status != g::status::OK {
+        let what = if status == g::status::CLOSED {
+            "closed".to_string()
+        } else {
+            format!("status {status}:")
+        };
+        return Err(io::Error::other(format!(
+            "{what} {}",
+            String::from_utf8_lossy(reply)
+        )));
+    }
+    Step::decode(reply).map_err(|r| malformed("step", r))
+}
+
+/// A `command` request: its op and its payload, bounded by `argvBytesMax`.
+pub(crate) fn command(argv: &[Vec<u8>]) -> io::Result<(u8, Vec<u8>)> {
+    let payload = layout::Command {
+        argv: argv.to_vec(),
+    }
+    .encode()
+    .map_err(|r| malformed("argv", r))?;
+    if payload.len() as u64 > u64::from(g::ARGV_BYTES_MAX) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("argv: pastBound argvBytesMax ({} bytes)", payload.len()),
+        ));
+    }
+    Ok((g::follow_op::COMMAND, payload))
+}
+
+/// A `resume` request.
+pub(crate) fn resume(k: &[u8], outcome: &Outcome) -> io::Result<(u8, Vec<u8>)> {
+    let payload = layout::Resume {
+        k: k.to_vec(),
+        result: outcome.result(),
+    }
+    .encode()
+    .map_err(|r| malformed("resume", r))?;
+    Ok((g::follow_op::RESUME, payload))
 }
 
 impl Follow for FollowSocket {
     fn command(&mut self, argv: &[Vec<u8>]) -> io::Result<Step> {
-        let payload = layout::Command {
-            argv: argv.to_vec(),
-        }
-        .encode()
-        .map_err(|r| malformed("argv", r))?;
-        if payload.len() as u64 > u64::from(g::ARGV_BYTES_MAX) {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!("argv: pastBound argvBytesMax ({} bytes)", payload.len()),
-            ));
-        }
-        self.ask(g::follow_op::COMMAND, &payload)
+        self.ask(command(argv)?)
     }
     fn resume(&mut self, k: &[u8], outcome: &Outcome) -> io::Result<Step> {
-        let payload = layout::Resume {
-            k: k.to_vec(),
-            result: outcome.result(),
-        }
-        .encode()
-        .map_err(|r| malformed("resume", r))?;
-        self.ask(g::follow_op::RESUME, &payload)
+        self.ask(resume(k, outcome)?)
     }
 }
 

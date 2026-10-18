@@ -49,12 +49,8 @@ fn parse(mut argv: impl Iterator<Item = OsString>) -> Result<Args, String> {
                 } = Some(n);
                 continue;
             }
-            Some(a) if a == "--connect" => &mut policy.connect,
-            Some(a) if a == "--hide" => &mut policy.hidden,
-            Some(a) if a == "--read" => &mut policy.read,
-            Some(a) if a == "--write" => &mut policy.write,
-            Some(a) if a == "--exec" => &mut policy.exec,
-            _ => return Err(USAGE.into()),
+            Some(a) => policy.list(&a).ok_or(USAGE)?,
+            None => return Err(USAGE.into()),
         };
         list.push(PathBuf::from(argv.next().ok_or(USAGE)?));
     }
