@@ -583,18 +583,18 @@ def envelopeRefused (X : Ctx D) (me : Self D) (argv : List ByteArray) (cmd : Cmd
   | _, _, _, _ => refused (D := D) .badState
 
 /-- The `receipt CALL` lines: the receipt, the head it was built at, and the settlement. -/
-def receiptText (X : Ctx D) (w : World D) (c : Call D) : Option String :=
+def receiptText (X : Ctx D) (dc : Stream D) (w : World D) (c : Call D) : Option String :=
   let r := Receipt.build X.env w (txIdOf X c)
   let v := Settle.ofReceipt (journalForgets w.height c.unsigned.notBefore) w.height
     c.unsigned.validUntil r.answer
-  (Receipt.bytes X.env r).map fun b =>
+  (Receipt.bytes X.env dc r).map fun b =>
     s!"receipt {Text.toHex b}\nhead {w.steps} {w.height} {hex X (w.roots X.env)}\nsettle {v.text X.env.bytes}\n"
 
-def receiptLines (X : Ctx D) (w : World D) (cb : ByteArray) : Reply :=
+def receiptLines (X : Ctx D) (dc : Stream D) (w : World D) (cb : ByteArray) : Reply :=
   match X.decodeCall cb with
   | none => refused (D := D) .badCall
   | some c =>
-      match receiptText X w c with
+      match receiptText X dc w c with
       | some t => printed t
       | none => refused (D := D) .badState
 
@@ -650,8 +650,8 @@ def start (X : Ctx D) (me : Self D) (f : Follow D) (argv : List ByteArray) : Rep
 /-- One step: the continuation, the result of the step it asked for, and follow's state. It
 answers follow's state after the step, what to persist (a log page's Turns, re-derived; a base it
 adopted; `[]` for every other step), and the next reply. `B` is how an adopted base is read
-(its World codec and the digest a pin names). -/
-def step (X : Ctx D) (B : Thin.Base (World D)) (me : Self D) (f : Follow D) (kb result : ByteArray) :
+(its World codec and the digest a pin names); `dc` is the digest codec a receipt is written in. -/
+def step (X : Ctx D) (dc : Stream D) (B : Thin.Base (World D)) (me : Self D) (f : Follow D) (kb result : ByteArray) :
     Follow D × Persist D × Reply :=
   let w := f.world
   let same (r : Reply) : Follow D × Persist D × Reply := (f, .steps [], r)
@@ -725,7 +725,7 @@ def step (X : Ctx D) (B : Thin.Base (World D)) (me : Self D) (f : Follow D) (kb 
                           s!"height {w'.height}\nchain {hex X w'.chain}\nroots {hex X (w'.roots X.env)}\n")
                       -- the receipt for a signed call, against the World follow just caught up to,
                       -- and the member's settlement of it (PROTOCOL-46)
-                      | .receipt cb, _ => moved w' ts (receiptLines X w' cb)
+                      | .receipt cb, _ => moved w' ts (receiptLines X dc w' cb)
                       | .rotate, some _ => moved w' ts (again 5 [startB, signedB] fun k => .precommit k)
                       -- invite: the inputs make this World; pin it as it stands, sign with the
                       -- key the writer just took for this member's envelope

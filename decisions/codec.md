@@ -1381,3 +1381,48 @@ in order they pass `rowsFits`. Dropping the canonicity premise is refuted by ord
 **Critique.** `hlen` stays the caller's: `RowsOk` bounds rows per relation, not the listing, since parents are
 not statically bounded. HOST discharges it at export (the writer refuses past `worldMax` as the reader does).
 Vacuity read (second agent): LAND; both its optional additions taken (the genesis instance, the tooth's note).
+
+## CODEC-35 · The trie day, codec half: a proof's path carries its bits; the listings did not move (KERNEL-49 (a), CODEC-11, 2026-10-18)
+
+**Decision.** KERNEL-49 (a) compresses the one trie: a node branches at the first bit its keys disagree on and its
+hash commits that bit as a u16, so a proof's sibling is `(bit, digest)`.
+- **The proof wire is a codec.** `Codec.Kernel.proof S kc dc : Stream (Trie.Proof K D)` (Codec/World.lean) =
+  `option (rawList worldMax (kc × dc)) ‖ rawList S.depth (nat16 × dc)`, read back only when `Trie.ascends S 0 sibs`
+  (each bit at least one past the last, below `S.depth`: the check `verifyInclusion` / `verifyExclusion` make before
+  hashing), refused `kernel/proof` by name otherwise. A NEW refine site (new tag). New primitive `Shape.u16` (tag code 18,
+  `Shape.put_prefix` extended) and `Stream.nat16` (two bytes LE, `nat16_lawfulOn` on `< 2^16`).
+  `Codec/Proofs/TrieProof.lean`: `proof_lawfulOn` (exact on `ProofFits`: entries and digests in their codecs' domains,
+  at most `worldMax` entries, bits ascending; the length and u16 bounds follow from the ascent, `ascends_length`,
+  `ascends_lt`), `proof_decode_ascends`, `proof_get_refused`. PROTOCOL agreed (PROTOCOL-11 → PROTOCOL-12): the receipt
+  carries it as `.bytes "jpath"` / `.bytes "rpath"` in place of jterm/jkeys/jdigests/jsibs and their r-twins (one
+  codec, not a Layout list plus a bits list that could disagree).
+- **The listings did not move, by theorem and by plant.** `build_listing_iff` keeps its statement over the compressed
+  `build` (now proved via `build_listing_iff_le`, fuel `S.depth - d ≤ f`, splitting at `splitBit`: `splitBit_none` /
+  `_some`, `bitLt_skip` (on keys agreeing on `[d, b)`, BitLt from d is BitLt from b), `sepAt_skip` / `_side` / `_sub`,
+  `mem_build`): the accepted listings are exactly those in bit order, a fact about keys, not shapes. So every
+  listing statement (`listing_check_iff`, `trieListing_get_*`, `cells_get_*`, SlotOrder, RowOrder, TrieOrderDeployed's
+  `trieOrder_iff` … `rowOrder_iff`, RowsReached) is text-unchanged and re-checked. `Codec/Proofs/ListingPin.lean`: six
+  plants, each the PRE-day bytes of one vector (`kernel/trie-order` 1, `journal-order` 1, `refusal-order` 1,
+  `row-order` 0 (a head and three rows sharing the 280-bit stem), `steps` 0 (a whole World), `carried` 1) reproduced
+  by the compressed `Trie.insert` in reverse order (`decide +kernel`). And `codec-vectors --write` into an EMPTY file
+  (every site drawn fresh through the new trie) equals the table byte for byte except the new site.
+- **Adapted, no statement changed:** `leavesNodup` (node pattern), `leavesNodup_of_routed` (Routed's new node clause),
+  `nodup_of_leavesNodup_build` (cased on `splitBit`).
+
+**Teeth** (Codec/Proofs/WorldTooth.lean, Sim, plant beside its twin): `proof_refuses_past_depth` (one sibling at bit
+`journalDepth`) against `proof_reads_deepest_bit` (`journalDepth - 1`); `proof_refuses_repeated_bit` (bits 5, 5)
+against `proof_reads_ascending_bits` (5, 6).
+
+**Vectors.** One new site, `kernel/proof` (under `journalSpec Sim.env`): a drawn journal's inclusion proof, an
+absent id's proof, and the boundary pair (bit 255 read back, bit 256 refused `kernel/proof`). 144 vectors / 49 sites,
+`--write` from main's table then `--check` ok; no other row moved.
+
+**Flag day (codec's part).** The proof wire is new (the receipt re-cut is PROTOCOL's); an old receipt refuses on
+parse. Every root re-geneses (KERNEL's). The World, carried, rows, journal and refusals listings, and every vector
+under an unchanged tag, are byte-identical. No generated Rust table moves (no name moved; five emits `--check` rc 0).
+
+**Critique.** `proof` reads a leaf's entries as a list (at most `worldMax`), though at the deployed specs a canonical
+leaf holds one key: a singleton term would make the wire smaller but put a "leaves hold one key" premise on the
+receipt's round trip. The sibling list's `S.depth` bound is implied by the ascent and kept only so a reader stops at
+the count. `kernel/proof` checks shape, not hashes: a well-formed proof can still fail to climb to the root, which is
+the verifier's job, not the codec's.

@@ -79,7 +79,7 @@ theorem journal_inclusion_sound {w : World D} (hc : w.JournalCanon E)
     {p : Trie.Proof D D}
     (hv : Trie.verifyInclusion (journalSpec E) (w.journalRoot E) k (journalDigest E e) p = true) :
     w.journalAt E k = some e ∨ Collision E.hash := by
-  rcases Trie.inclusion_sound (journalSpec E) (journalBody_inj hE hn) (dbytes_pair_inj hE) hc.2.1 hv
+  rcases Trie.inclusion_sound (journalSpec E) (journalBody_inj hE hn) (dbytes_pair_inj hE) hc.2.1 hc.1 hv
     with ⟨v, hg, hd⟩ | c
   · rcases journalDigest_inj hE (hfit k v hg) he hd with rfl | c
     · exact .inl hg
@@ -171,6 +171,6 @@ theorem journal_prove_verifies {E : Env D} {w : World D} (hc : w.JournalCanon E)
 theorem journal_prove_absent {E : Env D} {w : World D} (hc : w.JournalCanon E) {k : D}
     (hg : w.journalAt E k = none) :
     Trie.verifyExclusion (journalSpec E) (w.journalRoot E) k (w.journal.prove (journalSpec E) k) = true :=
-  Trie.prove_excludes (journalSpec E) hc.2.1 (Trie.shallow_of_shape _ 0 _ hc.2.2) hg
+  Trie.prove_excludes (journalSpec E) hc.2.1 hc.1 (Trie.shallow_of_shape _ 0 _ hc.2.2) hg
 
 end Nanodregg.Kernel

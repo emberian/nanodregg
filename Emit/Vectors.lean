@@ -36,7 +36,7 @@ open Nanodregg.Kernel Nanodregg.Kernel.Receive Nanodregg.Codec Nanodregg.Codec.K
 
 deriving instance Repr for RowKey, RowSlot, RowLeaf, RowAct, RowTouch, RangeRead, Op, Cell, Entry, Slot, Leaf,
   Act, Touch, Turn, Right, AcctRef, Body, Unsigned, Call, Host.Entry, Host.Carry.Head, RefusalSlot, RefusalLeaf,
-  Refused, Step
+  Refused, Step, Trie.Proof
 
 /-! ## Values, drawn from the simulation's generator -/
 
@@ -185,6 +185,19 @@ def journal (h : Nat) : G (List (Sim.D × (Nat × Sim.D))) := do
 /-- The canonical journal trie of a listing (KERNEL-41). -/
 def journalOf (l : List (Sim.D × (Nat × Sim.D))) : Journal Sim.D :=
   Trie.build (journalSpec Sim.env) (journalSpec Sim.env).depth 0 l
+
+/-- `kernel/proof`'s vectors (KERNEL-49 (a)), under the journal's spec: a drawn journal's proof for one of
+its ids (a leaf's entry) and for a drawn id (absent), then the depth's boundary pair: a path whose one
+sibling branches at bit `journalDepth - 1` (read back) and the same path at `journalDepth` (refused
+`kernel/proof` by name: no node of the trie branches at or past its depth). -/
+def proofVecs : G (List (Trie.Proof Sim.D Sim.D)) := do
+  let l ← journal ((← below 1000) + 3)
+  let t := journalOf l
+  let k := (l.head?.map (·.1)).getD 0
+  let s ← dig
+  let deep (b : Nat) : Trie.Proof Sim.D Sim.D := ⟨some [(k, s)], [(b, s)]⟩
+  return [t.prove (journalSpec Sim.env) k, t.prove (journalSpec Sim.env) (← dig),
+    deep (Bounds.journalDepth - 1), deep Bounds.journalDepth]
 
 /-- A refusals listing a World at height `h` can hold (KERNEL-44): one to three refused transaction
 ids, each refused at a height at or just below `h + 1`, and one to two members' counts for the current
@@ -437,6 +450,7 @@ def sites : List Site :=
     site "kernel/trie-order" (cells Sim.env Sim.dc) (each 2 fun _ => trie) (fun t => text t.toList),
     site "kernel/journal-order" (journalTrie Sim.env Sim.dc)
       (each 2 fun _ => do return journalOf (← journal ((← below 1000) + 3))) (fun t => text t.toList),
+    site "kernel/proof" (proof (journalSpec Sim.env) Sim.dc Sim.dc) proofVecs text,
     site "kernel/refusal-slot" (refusalSlot Sim.dc)
       (each 2 fun k => if k = 0 then do return .tx (← dig) else do return .count (← dig) (← u64)) text,
     site "kernel/refusal-leaf" refusalLeaf

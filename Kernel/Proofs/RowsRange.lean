@@ -4,11 +4,16 @@
 ROOT's condition (a), KERNEL-46/48:
 
 * `takeList_eq`: `takeList n` is `T.toList` cut at `n`.
-* `under_eq`: on a routed trie routed by its keys' bytes, `under` is the listing filtered by
-  `startsWith pre`, cut at `n`, given that a key whose bits agree with `pre`'s is at least
-  `pre.size` long; `under_needs_long`: that premise is needed. `range_prefix_long` discharges it
-  for the range prefix from one digest size and `pre.size ≤ width < 256`; `under_rows` is the
-  instance.
+* `under_eq`: on a routed trie of canonical shape routed by its keys' bytes, `under` is the listing
+  filtered by `startsWith pre`, cut at `n`, given that a key whose bits agree with `pre`'s is at
+  least `pre.size` long. The descent reads only the branching bits; the bits a path skips are
+  checked once, against the `rep` of the first node branching past the prefix, which in a canonical
+  shape is a key of that subtree and agrees with all of them below its branching bit.
+  `under_needs_long`: the length premise is needed; `under_needs_rep`: the `rep` check is (without
+  it a row that does not start with the prefix is listed); `under_needs_shape`: the canonical shape
+  is (a routed tree whose `rep` is not one of its keys misses rows). `range_prefix_long` discharges
+  the length premise for the range prefix from one digest size and `pre.size ≤ width < 256`;
+  `under_rows` is the instance.
 * `range_rows_exact` ((i) exactly the rows under the prefix, (ii) strictly ascending key bytes,
   (iii) at most `most`), with `range_rows_none` (refused iff more than `most`), and the admitted form
   `admit_range_exact`: the listing whose pin the signer gave is the World's rows under the prefix.
@@ -34,7 +39,7 @@ variable {D : Type}
 theorem takeList_eq {K V : Type} : ∀ (n : Nat) (t : Trie.T K V D), takeList n t = t.toList.take n
   | _, .empty => by simp [takeList, Trie.T.toList]
   | _, .leaf _ kvs => by simp [takeList, Trie.T.toList]
-  | n, .node _ l r => by
+  | n, .node _ _ _ l r => by
       unfold takeList
       split
       · subst_vars; simp
@@ -88,62 +93,94 @@ private theorem startsWith_of_bits {pre b : ByteArray} (hs : pre.size ≤ b.size
 section Under
 variable {K V : Type} (S : Trie.Spec K V D)
 
-/-- **`under` lists the entries under the prefix, in trie order, cut at `n`**, on a routed trie
-routed by its keys' bytes, from a depth `d` whose first `d` bits every key shares with `pre`. The
-one premise beyond routing (`hlong`) is what a byte prefix needs of the encoding: a key whose bits
-agree with `pre`'s is at least `pre.size` bytes long (a shorter key reads its missing bits as 0 and
-would be listed by `takeList` although it does not start with `pre`; `under_needs_long`). -/
+/-- **`under` lists the entries under the prefix, in trie order, cut at `n`**, on a routed trie of
+canonical shape routed by its keys' bytes, from a depth `d` below which its keys all agree. The
+descent follows the prefix's bit at each node's branching bit and checks no skipped bit; at the
+first node branching past the prefix, its `rep` (a key of the subtree, by the shape) agrees with
+every key below on every bit below the branching bit, so on the whole prefix, and one `startsWith`
+on it decides the subtree. The one premise beyond routing and shape (`hlong`) is what a byte prefix
+needs of the encoding: a key whose bits agree with `pre`'s is at least `pre.size` bytes long (a
+shorter key reads its missing bits as 0; `under_needs_long`). -/
 theorem under_eq (hbit : ∀ k i, S.bit k i = byteBit (S.kbytes k) i) (pre : ByteArray) (n : Nat) :
-    ∀ (d : Nat) (t : Trie.T K V D), Trie.Routed S d t →
-      (∀ p ∈ t.toList, ∀ i, i < d → byteBit (S.kbytes p.1) i = byteBit pre i) →
+    ∀ (d : Nat) (t : Trie.T K V D), Trie.Routed S d t → Trie.Shape S d t →
+      (∀ p ∈ t.toList, ∀ q ∈ t.toList, ∀ i, i < d → S.bit p.1 i = S.bit q.1 i) →
       (∀ p ∈ t.toList, (∀ i, i < 8 * pre.size → byteBit (S.kbytes p.1) i = byteBit pre i) →
         pre.size ≤ (S.kbytes p.1).size) →
-      under S pre n d t = (t.toList.filter fun p => startsWith pre (S.kbytes p.1)).take n
-  | _, .empty, _, _, _ => by simp [under, Trie.T.toList]
-  | _, .leaf _ kvs, _, _, _ => by simp [under, Trie.T.toList]
-  | d, .node h l r, hr, hpath, hlong => by
-      obtain ⟨hl, hrt, hrl, hrr⟩ := hr
+      under S pre n t = (t.toList.filter fun p => startsWith pre (S.kbytes p.1)).take n
+  | _, .empty, _, _, _, _ => by simp [under, Trie.T.toList]
+  | _, .leaf _ kvs, _, _, _, _ => by simp [under, Trie.T.toList]
+  | d, .node h b rep l r, hr, hs, hagree, hlong => by
+      obtain ⟨-, hrep, hl, hrt, hrl, hrr⟩ := hr
+      obtain ⟨-, -, hfirst, -, hsl, hsr⟩ := hs
+      have inL : ∀ p ∈ l.toList, p ∈ l.toList ++ r.toList := fun p hp => List.mem_append_left _ hp
+      have inR : ∀ p ∈ r.toList, p ∈ l.toList ++ r.toList := fun p hp => List.mem_append_right _ hp
+      -- every two keys of the subtree agree below `b`: below `d` by `hagree`, on `[d, b)` through `rep`
+      have hall : ∀ p ∈ l.toList ++ r.toList, ∀ q ∈ l.toList ++ r.toList, ∀ i, i < b →
+          S.bit p.1 i = S.bit q.1 i := by
+        intro p hp q hq i hi
+        by_cases hid : i < d
+        · exact hagree p hp q hq i hid
+        · rw [hrep p hp i (by omega) hi, hrep q hq i (by omega) hi]
       unfold under
       split
-      · rename_i hd
-        have hside : ∀ (s : Trie.T K V D) (b : Bool), (∀ p ∈ s.toList, S.bit p.1 d = b) →
-            b ≠ byteBit pre d → s.toList.filter (fun p => startsWith pre (S.kbytes p.1)) = [] := by
-          intro s b hb hne
+      · rename_i hb
+        have hside : ∀ (s : Trie.T K V D) (c : Bool), (∀ p ∈ s.toList, S.bit p.1 b = c) →
+            c ≠ byteBit pre b → s.toList.filter (fun p => startsWith pre (S.kbytes p.1)) = [] := by
+          intro s c hc hne
           refine List.filter_eq_nil_iff.mpr fun p hp hst => hne ?_
-          rw [← hb p hp, hbit, bits_of_startsWith hst hd]
-        have hsub : ∀ (s : Trie.T K V D), (∀ p ∈ s.toList, p ∈ (Trie.T.node h l r).toList) →
-            (∀ p ∈ s.toList, S.bit p.1 d = byteBit pre d) →
-            (∀ p ∈ s.toList, ∀ i, i < d + 1 → byteBit (S.kbytes p.1) i = byteBit pre i) := by
-          intro s hs hb p hp i hi
+          rw [← hc p hp, hbit, bits_of_startsWith hst hb]
+        have hsub : ∀ (s : Trie.T K V D), (∀ p ∈ s.toList, p ∈ l.toList ++ r.toList) →
+            (∀ p ∈ s.toList, ∀ q ∈ s.toList, S.bit p.1 b = S.bit q.1 b) →
+            ∀ p ∈ s.toList, ∀ q ∈ s.toList, ∀ i, i < b + 1 → S.bit p.1 i = S.bit q.1 i := by
+          intro s hs' hsb p hp q hq i hi
           rcases Nat.lt_or_eq_of_le (Nat.le_of_lt_succ hi) with hlt | rfl
-          · exact hpath p (hs p hp) i hlt
-          · rw [← hbit]; exact hb p hp
-        cases hpb : byteBit pre d
+          · exact hall p (hs' p hp) q (hs' q hq) i hlt
+          · exact hsb p hp q hq
+        cases hpb : byteBit pre b
         · simp only [Bool.false_eq_true, if_false]
-          rw [under_eq hbit pre n (d + 1) l hrl
-            (hsub l (fun p hp => by simp [Trie.T.toList, hp]) fun p hp => by rw [hl p hp, hpb])
-            (fun p hp => hlong p (by simp [Trie.T.toList, hp]))]
+          rw [under_eq hbit pre n (b + 1) l hrl hsl
+            (hsub l inL fun p hp q hq => by rw [hl p hp, hl q hq])
+            (fun p hp => hlong p (inL p hp))]
           simp only [Trie.T.toList, List.filter_append, hside r true hrt (by rw [hpb]; decide), List.append_nil]
         · simp only [if_true]
-          rw [under_eq hbit pre n (d + 1) r hrr
-            (hsub r (fun p hp => by simp [Trie.T.toList, hp]) fun p hp => by rw [hrt p hp, hpb])
-            (fun p hp => hlong p (by simp [Trie.T.toList, hp]))]
+          rw [under_eq hbit pre n (b + 1) r hrr hsr
+            (hsub r inR fun p hp q hq => by rw [hrt p hp, hrt q hq])
+            (fun p hp => hlong p (inR p hp))]
           simp only [Trie.T.toList, List.filter_append, hside l false hl (by rw [hpb]; decide), List.nil_append]
-      · rename_i hd
-        rw [takeList_eq]
-        congr 1
-        symm
-        refine List.filter_eq_self.mpr fun p hp => ?_
-        have hb : ∀ i, i < 8 * pre.size → byteBit (S.kbytes p.1) i = byteBit pre i :=
-          fun i hi => hpath p hp i (by omega)
-        exact startsWith_of_bits (hlong p hp hb) hb
+      · rename_i hb
+        -- the shape makes `rep` a key of the subtree (its first)
+        obtain ⟨x, hx, hxr⟩ : ∃ x ∈ l.toList ++ r.toList, x.1 = rep := by
+          cases hlt : l.toList with
+          | nil => rw [hlt] at hfirst; cases hfirst
+          | cons y ys => rw [hlt] at hfirst; exact ⟨y, by simp, by simpa using hfirst⟩
+        have hagx : ∀ p ∈ l.toList ++ r.toList, ∀ i, i < 8 * pre.size →
+            byteBit (S.kbytes p.1) i = byteBit (S.kbytes rep) i := by
+          intro p hp i hi
+          rw [← hbit, ← hbit, ← hxr]; exact hall p hp x hx i (by omega)
+        split
+        · rename_i hst
+          rw [takeList_eq]
+          congr 1
+          symm
+          refine List.filter_eq_self.mpr fun p hp => ?_
+          have hbits : ∀ i, i < 8 * pre.size → byteBit (S.kbytes p.1) i = byteBit pre i :=
+            fun i hi => (hagx p hp i hi).trans (bits_of_startsWith hst hi)
+          exact startsWith_of_bits (hlong p hp hbits) hbits
+        · rename_i hst
+          have hnil : (l.toList ++ r.toList).filter (fun p => startsWith pre (S.kbytes p.1)) = [] := by
+            refine List.filter_eq_nil_iff.mpr fun p hp hps => hst ?_
+            have hbits : ∀ i, i < 8 * pre.size → byteBit (S.kbytes x.1) i = byteBit pre i := fun i hi => by
+              rw [hxr, ← hagx p hp i hi]; exact bits_of_startsWith hps hi
+            rw [← hxr]; exact startsWith_of_bits (hlong x hx hbits) hbits
+          simp only [Trie.T.toList, hnil, List.take_nil]
 
 end Under
 
-/-- A trie of byte strings routed by their own bits (the `under_needs_long` witness). -/
+/-- A trie of byte strings routed by their own bits (the teeth's witness). -/
 private def bytesSpec : Trie.Spec ByteArray Unit UInt8 where
   bit k := byteBit k
   depth := 64
+  depth_lt := by decide
   hash _ := 0
   dbytes d := ⟨#[d]⟩
   kbytes k := k
@@ -153,14 +190,67 @@ private def shortLong : Trie.T ByteArray Unit UInt8 :=
   (Trie.T.empty.insert bytesSpec ⟨#[0]⟩ ()).insert bytesSpec ⟨#[0, 0, 1]⟩ ()
 
 /-- **`under_eq`'s length premise is needed**: on a canonical trie holding `[0]` and `[0, 0, 1]`,
-`under` at prefix `[0, 0]` lists `[0]` too (its missing second byte reads as zero bits, so it routes
-into the subtree listed whole), although `[0]` does not start with `[0, 0]`. This is the case
-`checkRanges`'s `pre.size ≤ width` refusal (`keyWidth`) excludes for rows. -/
+`under` at prefix `[0, 0]` lists nothing, although `[0, 0, 1]` starts with `[0, 0]`: the short key
+reads its missing bits as zero, so it agrees with the prefix's bits, is the subtree's first key (its
+`rep`), and fails the prefix check that decides the whole subtree. This is the case `checkRanges`'s
+`pre.size ≤ width` refusal (`keyWidth`) excludes for rows. -/
 theorem under_needs_long :
     Trie.Canon bytesSpec 0 shortLong ∧
-    under bytesSpec ⟨#[0, 0]⟩ 5 0 shortLong ≠
+    under bytesSpec ⟨#[0, 0]⟩ 5 shortLong ≠
       (shortLong.toList.filter fun p => startsWith ⟨#[0, 0]⟩ (bytesSpec.kbytes p.1)).take 5 :=
   ⟨Trie.canon_insert _ _ _ (Trie.canon_insert _ _ _ (Trie.canon_empty _ 0)), by decide⟩
+
+/-- `under` with its `rep` check removed: past the prefix, a subtree's first `n`, whatever its keys
+(the descent alone, which reads only branching bits). -/
+private def underNoRep {K V : Type} (S : Trie.Spec K V D) (pre : ByteArray) (n : Nat) :
+    Trie.T K V D → List (K × V)
+  | .empty => []
+  | .leaf _ kvs => (kvs.filter fun p => startsWith pre (S.kbytes p.1)).take n
+  | .node h b rep l r =>
+      if b < 8 * pre.size then (if byteBit pre b then underNoRep S pre n r else underNoRep S pre n l)
+      else takeList n (.node h b rep l r)
+
+/-- `[0x80, 0]` and `[0x80, 1]`: one node branching at bit 15, past a one-byte prefix, its bits
+`0..14` skipped. -/
+private def skipped : Trie.T ByteArray Unit UInt8 :=
+  (Trie.T.empty.insert bytesSpec ⟨#[0x80, 0]⟩ ()).insert bytesSpec ⟨#[0x80, 1]⟩ ()
+
+/-- **`under`'s `rep` check is needed**: on a canonical trie whose one node branches past the prefix
+`[0]` and whose keys both start `0x80`, `under` lists exactly the (no) entries under `[0]`, and the
+same descent without the check lists `[0x80, 0]`, which does not start with `[0]`: the descent
+never reads the skipped bits, and bit 0 is one of them. -/
+theorem under_needs_rep :
+    Trie.Canon bytesSpec 0 skipped ∧
+    under bytesSpec ⟨#[0]⟩ 5 skipped =
+      (skipped.toList.filter fun p => startsWith ⟨#[0]⟩ (bytesSpec.kbytes p.1)).take 5 ∧
+    ∃ p ∈ underNoRep bytesSpec ⟨#[0]⟩ 5 skipped, startsWith ⟨#[0]⟩ (bytesSpec.kbytes p.1) = false :=
+  ⟨Trie.canon_insert _ _ _ (Trie.canon_insert _ _ _ (Trie.canon_empty _ 0)), by decide,
+    ⟨(⟨#[0x80, 0]⟩, ()), by
+      rw [show underNoRep bytesSpec ⟨#[0]⟩ 5 skipped = [(⟨#[0x80, 0]⟩, ()), (⟨#[0x80, 1]⟩, ())] by decide]
+      simp, by decide⟩⟩
+
+/-- A routed tree whose inner node's `rep` is not one of its keys: the root branches at bit 0; its
+left child holds `[0, 0]` and `[0, 1]` (branching at bit 15) under the `rep` `[0x80, 0]`, which
+agrees with them on the bits routing checks there (`[1, 15)`) and not on bit 0. -/
+private def badRep : Trie.T ByteArray Unit UInt8 :=
+  .node 0 0 ⟨#[0, 0]⟩ (.node 0 15 ⟨#[0x80, 0]⟩ (.leaf 0 [(⟨#[0, 0]⟩, ())]) (.leaf 0 [(⟨#[0, 1]⟩, ())]))
+    (.leaf 0 [(⟨#[0x80, 5]⟩, ())])
+
+/-- **`under_eq`'s shape premise is needed**: `badRep` is routed, and `under` at prefix `[0]` lists
+nothing although two of its keys start with `[0]`: routing constrains an inner `rep` only on the
+bits below its node's own depth, so a `rep` outside the subtree can fail the prefix the keys
+pass. -/
+theorem under_needs_shape :
+    Trie.Routed bytesSpec 0 badRep ∧ under bytesSpec ⟨#[0]⟩ 5 badRep = [] ∧
+    (badRep.toList.filter fun p => startsWith ⟨#[0]⟩ (bytesSpec.kbytes p.1)).length = 2 := by
+  refine ⟨?_, by decide, by decide⟩
+  have agree : ∀ (L : List (ByteArray × Unit)) (rep : ByteArray) (d b : Nat),
+      (∀ p ∈ L, ∀ i, i < b → d ≤ i → bytesSpec.bit p.1 i = bytesSpec.bit rep i) →
+      ∀ p ∈ L, ∀ i, d ≤ i → i < b → bytesSpec.bit p.1 i = bytesSpec.bit rep i :=
+    fun L rep d b h p hp i h1 h2 => h p hp i h2 h1
+  refine ⟨Nat.le_refl 0, agree _ _ _ _ (by decide), by decide, by decide,
+    ⟨by decide, agree _ _ _ _ (by decide), by decide, by decide, by simp [Trie.Routed],
+      by simp [Trie.Routed]⟩, by simp [Trie.Routed]⟩
 
 
 /-! ## Bytes as lists -/
@@ -233,15 +323,15 @@ theorem range_prefix_long (E : Env D) {n : Nat} (hsize : ∀ d, (E.bytes d).size
       rw [hP, hs]
       omega
 
-/-- **The listing lemma for a range read**: on a routed rows trie (every digest `n` bytes,
+/-- **The listing lemma for a range read**: on a canonical rows trie (every digest `n` bytes,
 `pre.size ≤ width < 256`), `under` at the range prefix is the trie's listing filtered by the prefix,
 cut at `m`. -/
 theorem under_rows (E : Env D) {n : Nat} (hsize : ∀ d, (E.bytes d).size = n) {r : Rows D}
-    (hr : Trie.Routed (rowSpec E) 0 r) {parent : D} {rel width : Nat} {pre : ByteArray}
+    (hc : Trie.Canon (rowSpec E) 0 r) {parent : D} {rel width : Nat} {pre : ByteArray}
     (hw : pre.size ≤ width) (hw' : width < 256) (m : Nat) :
-    under (rowSpec E) (rowsPrefix E parent rel width ++ pre) m 0 r =
+    under (rowSpec E) (rowsPrefix E parent rel width ++ pre) m r =
       (r.toList.filter fun p => startsWith (rowsPrefix E parent rel width ++ pre) (rowKeyBytes E p.1)).take m :=
-  under_eq (rowSpec E) (fun _ _ => rfl) _ m 0 r hr (fun _ _ _ hi => absurd hi (Nat.not_lt_zero _))
+  under_eq (rowSpec E) (fun _ _ => rfl) _ m 0 r hc.1 hc.2.2 (fun _ _ _ _ _ hi => absurd hi (Nat.not_lt_zero _))
     (fun p _ hb => range_prefix_long E hsize hw hw' p.1 hb)
 
 end Rows
@@ -250,6 +340,15 @@ end Rows
 
 section Order
 variable {K V : Type} (S : Trie.Spec K V D)
+
+/-- `BitLt` from a deeper depth `e`, with the keys agreeing on `[d, e)`, is `BitLt` from `d`. -/
+private theorem bitLt_of_agree {d e : Nat} {k k' : K} (h : BitLt S e k k') (hde : d ≤ e)
+    (he : ∀ j, d ≤ j → j < e → S.bit k j = S.bit k' j) : BitLt S d k k' := by
+  obtain ⟨i, hi, hid, hpre, h1, h2⟩ := h
+  refine ⟨i, by omega, hid, fun j hj hji => ?_, h1, h2⟩
+  by_cases hje : j < e
+  · exact he j hj hje
+  · exact hpre j (by omega) hji
 
 /-- On a canonical subtree whose keys share their first `d` bits, the listing filtered by `Q` is in
 bit order, given that two distinct keys `Q` keeps differ above the trie's depth. -/
@@ -275,35 +374,55 @@ private theorem filter_pairwise (Q : K × V → Bool) : ∀ (d : Nat) (t : Trie.
         have hb : b ∈ kvs.filter Q := by rw [hf]; simp
         rw [List.mem_filter] at ha hb
         have hne : a.1 ≠ b.1 := fun h => (List.nodup_cons.mp hnd).1 (by simp [h])
-        by_cases hd : d < S.depth
-        · have := hs.2 hd; simp at hlen; omega
-        · obtain ⟨i, hi, hbit⟩ := hsep a ha.1 b hb.1 ha.2 hb.2 hne
-          exact hbit (hpath a ha.1 b hb.1 i (by omega))
-  | d, .node _ l r, hr, hs, hpath, hsep => by
-      obtain ⟨hl, hrt, hrl, hrr⟩ := hr
-      obtain ⟨hd, -, hsl, hsr⟩ := hs
+        obtain ⟨i, hi, hbit⟩ := hsep a ha.1 b hb.1 ha.2 hb.2 hne
+        by_cases hid : i < d
+        · exact hbit (hpath a ha.1 b hb.1 i hid)
+        · simp at hlen
+          exact hbit (hs.2 (by omega) a ha.1 b hb.1 i (by omega) hi)
+  | d, .node _ b rep l r, hr, hs, hpath, hsep => by
+      obtain ⟨hdb, hrep, hl, hrt, hrl, hrr⟩ := hr
+      obtain ⟨-, hbd, -, -, hsl, hsr⟩ := hs
       have inL : ∀ p ∈ l.toList, p ∈ l.toList ++ r.toList := fun p hp => List.mem_append_left _ hp
       have inR : ∀ p ∈ r.toList, p ∈ l.toList ++ r.toList := fun p hp => List.mem_append_right _ hp
       simp only [Trie.T.toList] at hpath hsep
+      -- two keys of the subtree agree on `[d, b)`, through `rep`
+      have hmid : ∀ p ∈ l.toList ++ r.toList, ∀ q ∈ l.toList ++ r.toList, ∀ j, d ≤ j → j < b →
+          S.bit p.1 j = S.bit q.1 j := fun p hp q hq j h1 h2 => by
+        rw [hrep p hp j h1 h2, hrep q hq j h1 h2]
+      have hside : ∀ (s : Trie.T K V D), (∀ p ∈ s.toList, p ∈ l.toList ++ r.toList) →
+          (∀ p ∈ s.toList, ∀ q ∈ s.toList, S.bit p.1 b = S.bit q.1 b) →
+          (s.toList.filter Q).Pairwise (fun x y => BitLt S (b + 1) x.1 y.1) →
+          (s.toList.filter Q).Pairwise (fun x y => BitLt S d x.1 y.1) := by
+        intro s hs' hsb hp
+        refine List.Pairwise.imp_of_mem (fun ha hc h => bitLt_of_agree S h (by omega) fun j h1 h2 => ?_) hp
+        have ha' := (List.mem_filter.mp ha).1
+        have hc' := (List.mem_filter.mp hc).1
+        rcases Nat.lt_or_eq_of_le (Nat.le_of_lt_succ h2) with hlt | rfl
+        · exact hmid _ (hs' _ ha') _ (hs' _ hc') j h1 hlt
+        · exact hsb _ ha' _ hc'
+      have hsub : ∀ (s : Trie.T K V D), (∀ p ∈ s.toList, p ∈ l.toList ++ r.toList) →
+          (∀ p ∈ s.toList, ∀ q ∈ s.toList, S.bit p.1 b = S.bit q.1 b) →
+          ∀ p ∈ s.toList, ∀ q ∈ s.toList, ∀ j, j < b + 1 → S.bit p.1 j = S.bit q.1 j := by
+        intro s hs' hsb p hp q hq j hj
+        rcases Nat.lt_or_eq_of_le (Nat.le_of_lt_succ hj) with hlt | rfl
+        · by_cases hjd : j < d
+          · exact hpath p (hs' p hp) q (hs' q hq) j hjd
+          · exact hmid p (hs' p hp) q (hs' q hq) j (by omega) hlt
+        · exact hsb p hp q hq
+      have hbl : ∀ p ∈ l.toList, ∀ q ∈ l.toList, S.bit p.1 b = S.bit q.1 b := fun p hp q hq => by
+        rw [hl p hp, hl q hq]
+      have hbr : ∀ p ∈ r.toList, ∀ q ∈ r.toList, S.bit p.1 b = S.bit q.1 b := fun p hp q hq => by
+        rw [hrt p hp, hrt q hq]
       simp only [Trie.T.toList, List.filter_append, List.pairwise_append]
-      refine ⟨?_, ?_, ?_⟩
-      · refine List.Pairwise.imp_of_mem (fun ha hb h => bitLt_of_succ S h ?_)
-          (filter_pairwise Q (d + 1) l hrl hsl (fun p hp q hq j hj => ?_)
-            (fun p hp q hq => hsep p (inL p hp) q (inL q hq)))
-        · rw [hl _ (List.mem_filter.mp ha).1, hl _ (List.mem_filter.mp hb).1]
-        · rcases Nat.lt_or_eq_of_le (Nat.le_of_lt_succ hj) with hlt | rfl
-          · exact hpath p (inL p hp) q (inL q hq) j hlt
-          · rw [hl p hp, hl q hq]
-      · refine List.Pairwise.imp_of_mem (fun ha hb h => bitLt_of_succ S h ?_)
-          (filter_pairwise Q (d + 1) r hrr hsr (fun p hp q hq j hj => ?_)
-            (fun p hp q hq => hsep p (inR p hp) q (inR q hq)))
-        · rw [hrt _ (List.mem_filter.mp ha).1, hrt _ (List.mem_filter.mp hb).1]
-        · rcases Nat.lt_or_eq_of_le (Nat.le_of_lt_succ hj) with hlt | rfl
-          · exact hpath p (inR p hp) q (inR q hq) j hlt
-          · rw [hrt p hp, hrt q hq]
-      · intro a ha b hb
-        exact ⟨d, Nat.le_refl d, hd, fun _ hj hji => absurd hji (by omega),
-          hl _ (List.mem_filter.mp ha).1, hrt _ (List.mem_filter.mp hb).1⟩
+      refine ⟨hside l inL hbl (filter_pairwise Q (b + 1) l hrl hsl (hsub l inL hbl)
+          (fun p hp q hq => hsep p (inL p hp) q (inL q hq))),
+        hside r inR hbr (filter_pairwise Q (b + 1) r hrr hsr (hsub r inR hbr)
+          (fun p hp q hq => hsep p (inR p hp) q (inR q hq))), ?_⟩
+      intro a ha c hc
+      have ha' := inL _ (List.mem_filter.mp ha).1
+      have hc' := inR _ (List.mem_filter.mp hc).1
+      exact ⟨b, hdb, hbd, fun j h1 h2 => hmid _ ha' _ hc' j h1 h2,
+        hl _ (List.mem_filter.mp ha).1, hrt _ (List.mem_filter.mp hc).1⟩
 
 end Order
 
@@ -380,14 +499,14 @@ private theorem listed_key (E : Env D) {n : Nat} (hsize : ∀ d, (E.bytes d).siz
 omit [DecidableEq D] in
 /-- The rows under a range prefix: the trie's listing, filtered by the prefix. -/
 private theorem rangeRows_some {E : Env D} {n : Nat} (hsize : ∀ d, (E.bytes d).size = n) {r : Rows D}
-    (hr : Trie.Routed (rowSpec E) 0 r) {parent : D} {rel width : Nat} {pre : ByteArray}
+    (hc : Trie.Canon (rowSpec E) 0 r) {parent : D} {rel width : Nat} {pre : ByteArray}
     (hw : pre.size ≤ width) (hw' : width < 256) {most : Nat} {l : List (RowSlot D × RowLeaf)}
     (h : rangeRows E r parent rel width pre most = some l) :
     l = r.toList.filter (fun p => startsWith (rowsPrefix E parent rel width ++ pre) (rowKeyBytes E p.1)) ∧
       l.length ≤ most := by
   unfold rangeRows at h
   simp only at h
-  rw [under_rows E hsize hr hw hw'] at h
+  rw [under_rows E hsize hc hw hw'] at h
   split at h
   · rename_i hle
     cases h
@@ -399,24 +518,24 @@ private theorem rangeRows_some {E : Env D} {n : Nat} (hsize : ∀ d, (E.bytes d)
 omit [DecidableEq D] in
 /-- **(iii) A range read is refused exactly when more than `most` rows are under its prefix.** -/
 theorem range_rows_none {E : Env D} {n : Nat} (hsize : ∀ d, (E.bytes d).size = n) {r : Rows D}
-    (hr : Trie.Routed (rowSpec E) 0 r) {parent : D} {rel width : Nat} {pre : ByteArray}
+    (hc : Trie.Canon (rowSpec E) 0 r) {parent : D} {rel width : Nat} {pre : ByteArray}
     (hw : pre.size ≤ width) (hw' : width < 256) (most : Nat) :
     rangeRows E r parent rel width pre most = none ↔
       most < (r.toList.filter fun p =>
         startsWith (rowsPrefix E parent rel width ++ pre) (rowKeyBytes E p.1)).length := by
   unfold rangeRows
   simp only
-  rw [under_rows E hsize hr hw hw', List.length_take]
+  rw [under_rows E hsize hc hw hw', List.length_take]
   split <;> simp <;> omega
 
 /-- **(i) The rows a range read lists are exactly the rows under its prefix.** -/
 theorem range_rows_mem {E : Env D} {n : Nat} (hsize : ∀ d, (E.bytes d).size = n) {r : Rows D}
-    (hr : Trie.Routed (rowSpec E) 0 r) {parent : D} {rel width : Nat} {pre : ByteArray}
+    (hc : Trie.Canon (rowSpec E) 0 r) {parent : D} {rel width : Nat} {pre : ByteArray}
     (hw : pre.size ≤ width) (hw' : width < 256) {most : Nat} {l : List (RowSlot D × RowLeaf)}
     (h : rangeRows E r parent rel width pre most = some l) (s : RowSlot D) (v : RowLeaf) :
     (s, v) ∈ l ↔ rowAt E r s = some v ∧
       startsWith (rowsPrefix E parent rel width ++ pre) (rowKeyBytes E s) = true := by
-  rw [(rangeRows_some hsize hr hw hw' h).1, List.mem_filter, Trie.mem_toList (rowSpec E) 0 r hr]
+  rw [(rangeRows_some hsize hc hw hw' h).1, List.mem_filter, Trie.mem_toList (rowSpec E) 0 r hc.1]
   rfl
 
 omit [DecidableEq D] in
@@ -429,7 +548,7 @@ theorem range_rows_sorted {E : Env D} {n : Nat} (hsize : ∀ d, (E.bytes d).size
     (hw : pre.size ≤ width) (hw' : width < 256) {most : Nat} {l : List (RowSlot D × RowLeaf)}
     (h : rangeRows E r parent rel width pre most = some l) :
     l.Pairwise fun a b => compare (rowKeyBytes E a.1).data (rowKeyBytes E b.1).data = .lt := by
-  rw [(rangeRows_some hsize hc.1 hw hw' h).1]
+  rw [(rangeRows_some hsize hc hw hw' h).1]
   have hkey : ∀ p ∈ r.toList,
       startsWith (rowsPrefix E parent rel width ++ pre) (rowKeyBytes E p.1) = true →
       ∃ k : ByteArray, p.1 = .row ⟨parent, rel % 256, k⟩ ∧ k.size = width % 256 ∧ k.size ≤ Bounds.keyBytesMax ∧
@@ -474,8 +593,8 @@ theorem range_rows_exact_of {E : Env D} {n : Nat} (hsize : ∀ d, (E.bytes d).si
       startsWith (rowsPrefix E parent rel width ++ pre) (rowKeyBytes E s) = true) ∧
     l.Pairwise (fun a b => compare (rowKeyBytes E a.1).data (rowKeyBytes E b.1).data = .lt) ∧
     l.length ≤ most :=
-  ⟨range_rows_mem hsize hc.1 hw hw' h, range_rows_sorted hsize hn hinj hc hfit hw hw' h,
-    (rangeRows_some hsize hc.1 hw hw' h).2⟩
+  ⟨range_rows_mem hsize hc hw hw' h, range_rows_sorted hsize hn hinj hc hfit hw hw' h,
+    (rangeRows_some hsize hc hw hw' h).2⟩
 
 /-- **`range_rows_exact`** (ROOT's condition (a), KERNEL-46/48): over a lawful `Env`, on canonical rows
 whose entries fit, a range read at `pre.size ≤ width < 256` that is not refused lists (i) exactly
@@ -592,16 +711,16 @@ theorem rangePinBytes_erase_ne (E : Env D) (parent : D) (rel width : Nat) (pre :
 of (i)) and a row `p` of it, `l.erase p` does NOT list exactly the rows under the prefix: `p` is one
 of them and it is gone. -/
 theorem range_rows_erase_not_exact {E : Env D} {n : Nat} (hsize : ∀ d, (E.bytes d).size = n) {r : Rows D}
-    (hr : Trie.Routed (rowSpec E) 0 r) {parent : D} {rel width : Nat} {pre : ByteArray}
+    (hc : Trie.Canon (rowSpec E) 0 r) {parent : D} {rel width : Nat} {pre : ByteArray}
     (hw : pre.size ≤ width) (hw' : width < 256) {most : Nat} {l : List (RowSlot D × RowLeaf)}
     (h : rangeRows E r parent rel width pre most = some l) {p : RowSlot D × RowLeaf} (hp : p ∈ l) :
     ¬ ∀ s v, (s, v) ∈ l.erase p ↔ rowAt E r s = some v ∧
       startsWith (rowsPrefix E parent rel width ++ pre) (rowKeyBytes E s) = true := by
   intro hx
   have hnd : l.Nodup := by
-    rw [(rangeRows_some hsize hr hw hw' h).1]
-    exact (Trie.nodup_of_map_fst (Trie.toList_nodup (rowSpec E) 0 r hr)).filter _
-  have hin := (hx p.1 p.2).mpr ((range_rows_mem hsize hr hw hw' h p.1 p.2).mp hp)
+    rw [(rangeRows_some hsize hc hw hw' h).1]
+    exact (Trie.nodup_of_map_fst (Trie.toList_nodup (rowSpec E) 0 r hc.1)).filter _
+  have hin := (hx p.1 p.2).mpr ((range_rows_mem hsize hc hw hw' h p.1 p.2).mp hp)
   rw [hnd.mem_erase_iff] at hin
   exact hin.1 rfl
 
@@ -672,7 +791,7 @@ theorem range_rows_satisfiable :
       l.Pairwise (fun a b => compare (rowKeyBytes E a.1).data (rowKeyBytes E b.1).data = .lt) :=
   ⟨toyEnv, toyRows, toyListing, toy_size, toy_inj, toy_canon, toy_fit, toy_range, rfl,
     ⟨(toyS3, .row 1 ByteArray.empty), by decide, by decide⟩,
-    range_rows_mem toy_size toy_canon.1 (by decide) (by decide) toy_range,
+    range_rows_mem toy_size toy_canon (by decide) (by decide) toy_range,
     range_rows_sorted toy_size (by decide) toy_inj toy_canon toy_fit (by decide) (by decide) toy_range⟩
 
 /-- **(c) The seal tooth**: on that listing, the arg-max seal is `toyS2`; drop its row and the seal
@@ -686,7 +805,7 @@ theorem range_seal_tooth :
     rangePinBytes toyEnv 7 3 2 ⟨#[1]⟩ (toyListing.erase (toyS2, .row 9 ByteArray.empty)) ≠
       rangePinBytes toyEnv 7 3 2 ⟨#[1]⟩ toyListing :=
   ⟨by decide, by decide,
-    range_rows_erase_not_exact toy_size toy_canon.1 (by decide) (by decide) toy_range (by decide),
+    range_rows_erase_not_exact toy_size toy_canon (by decide) (by decide) toy_range (by decide),
     rangePinBytes_erase_ne _ _ _ _ _ (by decide)⟩
 
 /-! ## A turn with a range read is admitted (the admitted form is not vacuous)

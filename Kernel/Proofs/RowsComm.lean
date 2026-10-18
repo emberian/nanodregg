@@ -199,11 +199,11 @@ private def Cond (E : Env D) (w : World D) (t : Turn D) (r : Rows D) (xs : List 
 
 private theorem ins_step_ok {E : Env D} {w : World D} {t : Turn D} {r r' : Rows D} {x : RowTouch D}
     {key : RowKey D} {amt : Nat} {v : ByteArray} (hs : x.slot = .row key) (ha : x.act = .insert amt v)
-    (h : rowStep E w t (Thunk.mk fun _ => Trie.emptyHash (rowSpec E)) r x = .ok r') :
+    (h : rowStep E w t r x = .ok r') :
     Stat E w t x key v ∧ rowAt E r (.row key) = none ∧ ∃ c sm l cap rt,
       headOf E r key.parent key.rel = some (c, sm, l, cap, key.k.size, rt) ∧ c < l ∧ sm + amt ≤ cap ∧
       r' = setHead E (r.insert (rowSpec E) (.row key) (.row amt v)) key.parent key.rel (c + 1) (sm + amt)
-        l cap key.k.size rt (Thunk.mk fun _ => Trie.emptyHash (rowSpec E)) := by
+        l cap key.k.size rt := by
   obtain ⟨slot, seen, act⟩ := x
   simp only at hs ha
   subst hs ha
@@ -229,8 +229,8 @@ private theorem ins_step_of {E : Env D} {w : World D} {t : Turn D} {r : Rows D} 
     (hst : Stat E w t x key v) (hrow : rowAt E r (.row key) = none) {c sm l cap : Nat} {rt : Bool}
     (hh : headOf E r key.parent key.rel = some (c, sm, l, cap, key.k.size, rt)) (hcl : c < l)
     (hcap : sm + amt ≤ cap) :
-    rowStep E w t (Thunk.mk fun _ => Trie.emptyHash (rowSpec E)) r x = .ok (setHead E (r.insert (rowSpec E) (.row key) (.row amt v)) key.parent key.rel
-      (c + 1) (sm + amt) l cap key.k.size rt (Thunk.mk fun _ => Trie.emptyHash (rowSpec E))) := by
+    rowStep E w t r x = .ok (setHead E (r.insert (rowSpec E) (.row key) (.row amt v)) key.parent key.rel
+      (c + 1) (sm + amt) l cap key.k.size rt) := by
   obtain ⟨slot, seen, act⟩ := x
   simp only at hs ha
   subst hs ha
@@ -242,7 +242,7 @@ private theorem ins_step_of {E : Env D} {w : World D} {t : Turn D} {r : Rows D} 
 omit [Ord D] in
 private theorem get_step {E : Env D} (r : Rows D) (key : RowKey D) (amt : Nat) (v : ByteArray)
     (c sm l cap wd : Nat) (rt : Bool) (s : RowSlot D) :
-    (setHead E (r.insert (rowSpec E) (.row key) (.row amt v)) key.parent key.rel c sm l cap wd rt (Thunk.mk fun _ => Trie.emptyHash (rowSpec E))).get
+    (setHead E (r.insert (rowSpec E) (.row key) (.row amt v)) key.parent key.rel c sm l cap wd rt).get
         (rowSpec E) s =
       if s = .head key.parent key.rel then some (.head c sm l cap wd rt)
       else if s = .row key then some (.row amt v) else r.get (rowSpec E) s := by
@@ -252,7 +252,7 @@ private theorem get_step {E : Env D} (r : Rows D) (key : RowKey D) (amt : Nat) (
 omit [Ord D] in
 private theorem headOf_step {E : Env D} (r : Rows D) (key : RowKey D) (amt : Nat) (v : ByteArray)
     (c sm l cap wd : Nat) (rt : Bool) (p : D) (rel : Nat) :
-    headOf E (setHead E (r.insert (rowSpec E) (.row key) (.row amt v)) key.parent key.rel c sm l cap wd rt (Thunk.mk fun _ => Trie.emptyHash (rowSpec E)))
+    headOf E (setHead E (r.insert (rowSpec E) (.row key) (.row amt v)) key.parent key.rel c sm l cap wd rt)
         p rel =
       if key.parent = p ∧ key.rel = rel then some (c, sm, l, cap, wd, rt) else headOf E r p rel := by
   unfold headOf rowAt
@@ -266,7 +266,7 @@ private theorem headOf_step {E : Env D} (r : Rows D) (key : RowKey D) (amt : Nat
 omit [Ord D] in
 private theorem rowAt_step {E : Env D} (r : Rows D) (key k : RowKey D) (amt : Nat) (v : ByteArray)
     (c sm l cap wd : Nat) (rt : Bool) (hk : k ≠ key) :
-    rowAt E (setHead E (r.insert (rowSpec E) (.row key) (.row amt v)) key.parent key.rel c sm l cap wd rt (Thunk.mk fun _ => Trie.emptyHash (rowSpec E)))
+    rowAt E (setHead E (r.insert (rowSpec E) (.row key) (.row amt v)) key.parent key.rel c sm l cap wd rt)
         (.row k) = rowAt E r (.row k) := by
   unfold rowAt
   rw [get_step, if_neg (by intro e; cases e), if_neg (by intro e; injection e with e; exact hk e)]
@@ -276,8 +276,7 @@ omit [Ord D] in
 private theorem step_view {E : Env D} {r : Rows D} {x : RowTouch D} {key : RowKey D} {amt : Nat}
     {v : ByteArray} (hs : x.slot = .row key) (ha : x.act = .insert amt v) {c sm l cap wd : Nat} {rt : Bool}
     (hh : r.get (rowSpec E) (.head key.parent key.rel) = some (.head c sm l cap wd rt)) (s : RowSlot D) :
-    (setHead E (r.insert (rowSpec E) (.row key) (.row amt v)) key.parent key.rel (c + 1) (sm + amt) l cap wd rt
-        (Thunk.mk fun _ => Trie.emptyHash (rowSpec E))).get (rowSpec E) s = view1 x s (r.get (rowSpec E) s) := by
+    (setHead E (r.insert (rowSpec E) (.row key) (.row amt v)) key.parent key.rel (c + 1) (sm + amt) l cap wd rt).get (rowSpec E) s = view1 x s (r.get (rowSpec E) s) := by
   rw [get_step]
   simp only [view1, hs, ha]
   cases s with
@@ -304,7 +303,7 @@ private theorem step_view {E : Env D} {r : Rows D} {x : RowTouch D} {key : RowKe
 of the read before, and the rows it started from met `Cond`. -/
 private theorem fold_fwd {E : Env D} {w : World D} {t : Turn D} :
     ∀ (xs : List (RowTouch D)) (acc rr : Rows D × Nat), InsOnly xs → (xs.map RowTouch.slot).Nodup →
-      xs.foldlM (rowStepFreed E w t (Thunk.mk fun _ => Trie.emptyHash (rowSpec E))) acc = .ok rr →
+      xs.foldlM (rowStepFreed E w t) acc = .ok rr →
       rr.2 = acc.2 ∧ (∀ s, rr.1.get (rowSpec E) s = view xs s (acc.1.get (rowSpec E) s)) ∧
         Cond E w t acc.1 xs
   | [], acc, rr, _, _, h => by
@@ -371,7 +370,7 @@ private theorem fold_fwd {E : Env D} {w : World D} {t : Turn D} :
 /-- **A run of inserts, backward**: from rows meeting `Cond`, it passes, giving nothing back. -/
 private theorem fold_bwd {E : Env D} {w : World D} {t : Turn D} :
     ∀ (xs : List (RowTouch D)) (r : Rows D) (f : Nat), InsOnly xs → (xs.map RowTouch.slot).Nodup →
-      Cond E w t r xs → ∃ r', xs.foldlM (rowStepFreed E w t (Thunk.mk fun _ => Trie.emptyHash (rowSpec E))) (r, f) = .ok (r', f)
+      Cond E w t r xs → ∃ r', xs.foldlM (rowStepFreed E w t) (r, f) = .ok (r', f)
   | [], r, _, _, _, _ => ⟨r, rfl⟩
   | x :: rest, r, f, hi, hn, ⟨hc1, hc2⟩ => by
       obtain ⟨key, amt, v, hs, ha⟩ := hi x (by simp)
@@ -390,7 +389,7 @@ private theorem fold_bwd {E : Env D} {w : World D} {t : Turn D} :
       have hnot : ∀ z ∈ rest, z.slot ≠ .row key := fun z hz e =>
         hn.1 (by rw [hs, ← e]; exact List.mem_map_of_mem hz)
       have hcond : Cond E w t (setHead E (r.insert (rowSpec E) (.row key) (.row amt v)) key.parent key.rel
-          (c + 1) (sm + amt) l cap key.k.size rt (Thunk.mk fun _ => Trie.emptyHash (rowSpec E))) rest := by
+          (c + 1) (sm + amt) l cap key.k.size rt) rest := by
         refine ⟨fun z hz kz amt' v' hzs hza => ?_, fun p rel hpos => ?_⟩
         · obtain ⟨hst', hrow', c', sm', l', cap', rt', hh'⟩ := hc1 z (by simp [hz]) kz amt' v' hzs hza
           have hk : kz ≠ key := fun e => hnot z hz (by rw [hzs, e])
@@ -415,8 +414,8 @@ private theorem fold_bwd {E : Env D} {w : World D} {t : Turn D} :
             exact ⟨c', sm', l', cap', wd', rt', by rw [headOf_step, if_neg hpr]; exact hh', h1, h2⟩
       obtain ⟨r', hr'⟩ := fold_bwd rest _ f hirest hn.2 hcond
       refine ⟨r', ?_⟩
-      have h1 : rowStepFreed E w t (Thunk.mk fun _ => Trie.emptyHash (rowSpec E)) (r, f) x = .ok (setHead E (r.insert (rowSpec E) (.row key) (.row amt v))
-          key.parent key.rel (c + 1) (sm + amt) l cap key.k.size rt (Thunk.mk fun _ => Trie.emptyHash (rowSpec E)), f) := by
+      have h1 : rowStepFreed E w t (r, f) x = .ok (setHead E (r.insert (rowSpec E) (.row key) (.row amt v))
+          key.parent key.rel (c + 1) (sm + amt) l cap key.k.size rt, f) := by
         unfold rowStepFreed; rw [hstep]; simp [rowFreed, ha, bind, Except.bind, pure, Except.pure]
       rw [List.foldlM_cons, h1]
       exact hr'
@@ -427,14 +426,14 @@ private theorem fold_bwd {E : Env D} {w : World D} {t : Turn D} :
 def NoRetire (t : Turn D) : Prop := ∀ x ∈ t.touches, x.act ≠ .retire
 
 omit [Ord D] in
-private theorem foldl_noRetire {E : Env D} {e : Trie.EmptyDigest D} :
+private theorem foldl_noRetire {E : Env D} :
     ∀ (l : List (Touch D)) (acc : Rows D × Nat), (∀ x ∈ l, x.act ≠ .retire) →
       l.foldl (fun acc x => match x.act with
         | .retire =>
-            ((under (rowSpec E) (E.bytes x.cell) 257 0 acc.1).filter fun p => match p.1 with
+            ((under (rowSpec E) (E.bytes x.cell) 257 acc.1).filter fun p => match p.1 with
               | .head q _ => decide (q = x.cell)
               | .row _ => false).foldl (fun acc p =>
-                (Trie.retainAt (rowSpec E) (fun k _ => decide (k ≠ p.1)) (rowPath E p.1) acc.1 e,
+                (Trie.retainAt (rowSpec E) (fun k _ => decide (k ≠ p.1)) (rowPath E p.1) acc.1,
                   acc.2 + rowEntryWeight p)) acc
         | _ => acc) acc = acc
   | [], _, _ => rfl
@@ -443,10 +442,10 @@ private theorem foldl_noRetire {E : Env D} {e : Trie.EmptyDigest D} :
       have hx : x.act ≠ .retire := h x (by simp)
       have e1 : (match x.act with
         | .retire =>
-            ((under (rowSpec E) (E.bytes x.cell) 257 0 acc.1).filter fun p => match p.1 with
+            ((under (rowSpec E) (E.bytes x.cell) 257 acc.1).filter fun p => match p.1 with
               | .head q _ => decide (q = x.cell)
               | .row _ => false).foldl (fun acc p =>
-                (Trie.retainAt (rowSpec E) (fun k _ => decide (k ≠ p.1)) (rowPath E p.1) acc.1 e,
+                (Trie.retainAt (rowSpec E) (fun k _ => decide (k ≠ p.1)) (rowPath E p.1) acc.1,
                   acc.2 + rowEntryWeight p)) acc
         | _ => acc) = acc := by
         cases ha : x.act with
@@ -457,15 +456,15 @@ private theorem foldl_noRetire {E : Env D} {e : Trie.EmptyDigest D} :
 
 omit [Ord D] in
 /-- A turn that retires nothing drops no head. -/
-private theorem dropHeads_noRetire {E : Env D} {t : Turn D} {e : Trie.EmptyDigest D} (h : NoRetire t)
-    (acc : Rows D × Nat) : dropHeads E t e acc = acc :=
+private theorem dropHeads_noRetire {E : Env D} {t : Turn D} (h : NoRetire t)
+    (acc : Rows D × Nat) : dropHeads E t acc = acc :=
   foldl_noRetire t.touches acc h
 
 /-- What a passing `rowsRun` of a turn that retires nothing is: its run of row touches, from the
 World's rows, over distinct slots. -/
 private theorem rowsRun_fold {E : Env D} {w : World D} {t : Turn D} {rr : Rows D × Nat} (hnr : NoRetire t)
-    (h : rowsRun E w t (Thunk.mk fun _ => Trie.emptyHash (rowSpec E)) = .ok rr) :
-    (t.rows.map RowTouch.slot).Nodup ∧ t.rows.foldlM (rowStepFreed E w t (Thunk.mk fun _ => Trie.emptyHash (rowSpec E))) (w.rows, 0) = .ok rr := by
+    (h : rowsRun E w t = .ok rr) :
+    (t.rows.map RowTouch.slot).Nodup ∧ t.rows.foldlM (rowStepFreed E w t) (w.rows, 0) = .ok rr := by
   unfold rowsRun at h
   simp only [except_bind_ok] at h
   obtain ⟨⟨⟩, -, ⟨⟩, -, h⟩ := h
@@ -481,9 +480,9 @@ private theorem rowsRun_fold {E : Env D} {w : World D} {t : Turn D} {rr : Rows D
 /-- A passing `rowsRun` of a turn that retires nothing stays passing from any World whose run of
 the turn's row touches passes. -/
 private theorem rowsRun_of_fold {E : Env D} {w w' : World D} {t : Turn D} {rr rr' : Rows D × Nat}
-    (hnr : NoRetire t) (h : rowsRun E w t (Thunk.mk fun _ => Trie.emptyHash (rowSpec E)) = .ok rr)
-    (hf : t.rows.foldlM (rowStepFreed E w' t (Thunk.mk fun _ => Trie.emptyHash (rowSpec E))) (w'.rows, 0) = .ok rr') :
-    rowsRun E w' t (Thunk.mk fun _ => Trie.emptyHash (rowSpec E)) = .ok rr' := by
+    (hnr : NoRetire t) (h : rowsRun E w t = .ok rr)
+    (hf : t.rows.foldlM (rowStepFreed E w' t) (w'.rows, 0) = .ok rr') :
+    rowsRun E w' t = .ok rr' := by
   unfold rowsRun at h ⊢
   simp only [except_bind_ok] at h ⊢
   obtain ⟨⟨⟩, h1, ⟨⟩, h2, h⟩ := h
@@ -525,10 +524,10 @@ and leave every read at `view` of both lists over the pre-state. -/
 private theorem rowsRun_after {E : Env D} {w w₁ : World D} {t₁ t₂ : Turn D} {rr₁ rr₂ : Rows D × Nat}
     (hnr₁ : NoRetire t₁) (hnr₂ : NoRetire t₂) (hi₁ : InsOnly t₁.rows) (hi₂ : InsOnly t₂.rows)
     (hd : ∀ x ∈ t₁.rows, ∀ y ∈ t₂.rows, x.slot ≠ y.slot) (hfit : RowsFitTogether E w.rows t₁ t₂)
-    (h₁ : rowsRun E w t₁ (Thunk.mk fun _ => Trie.emptyHash (rowSpec E)) = .ok rr₁) (h₂ : rowsRun E w t₂ (Thunk.mk fun _ => Trie.emptyHash (rowSpec E)) = .ok rr₂)
+    (h₁ : rowsRun E w t₁ = .ok rr₁) (h₂ : rowsRun E w t₂ = .ok rr₂)
     (hrows : w₁.rows = rr₁.1)
     (hl : ∀ c, (t₂.touches.any fun y => decide (y.cell = c)) = true → w₁.live E c = w.live E c) :
-    ∃ rr, rowsRun E w₁ t₂ (Thunk.mk fun _ => Trie.emptyHash (rowSpec E)) = .ok rr ∧ rr.2 = 0 ∧
+    ∃ rr, rowsRun E w₁ t₂ = .ok rr ∧ rr.2 = 0 ∧
       ∀ s, rr.1.get (rowSpec E) s = view t₂.rows s (view t₁.rows s (w.rows.get (rowSpec E) s)) := by
   obtain ⟨hn₁, hf₁⟩ := rowsRun_fold hnr₁ h₁
   obtain ⟨hn₂, hf₂⟩ := rowsRun_fold hnr₂ h₂
@@ -560,11 +559,11 @@ slot, and every head has moved by the sum of both turns' inserts. -/
 theorem rowsRun_comm {E : Env D} {w w₁ w₂ : World D} {t₁ t₂ : Turn D} {rr₁ rr₂ : Rows D × Nat}
     (hnr₁ : NoRetire t₁) (hnr₂ : NoRetire t₂) (hi₁ : InsOnly t₁.rows) (hi₂ : InsOnly t₂.rows)
     (hd : ∀ x ∈ t₁.rows, ∀ y ∈ t₂.rows, x.slot ≠ y.slot) (hfit : RowsFitTogether E w.rows t₁ t₂)
-    (h₁ : rowsRun E w t₁ (Thunk.mk fun _ => Trie.emptyHash (rowSpec E)) = .ok rr₁) (h₂ : rowsRun E w t₂ (Thunk.mk fun _ => Trie.emptyHash (rowSpec E)) = .ok rr₂)
+    (h₁ : rowsRun E w t₁ = .ok rr₁) (h₂ : rowsRun E w t₂ = .ok rr₂)
     (hrows₁ : w₁.rows = rr₁.1) (hrows₂ : w₂.rows = rr₂.1)
     (hl₁ : ∀ c, (t₂.touches.any fun y => decide (y.cell = c)) = true → w₁.live E c = w.live E c)
     (hl₂ : ∀ c, (t₁.touches.any fun y => decide (y.cell = c)) = true → w₂.live E c = w.live E c) :
-    ∃ rr₁₂ rr₂₁, rowsRun E w₁ t₂ (Thunk.mk fun _ => Trie.emptyHash (rowSpec E)) = .ok rr₁₂ ∧ rowsRun E w₂ t₁ (Thunk.mk fun _ => Trie.emptyHash (rowSpec E)) = .ok rr₂₁ ∧
+    ∃ rr₁₂ rr₂₁, rowsRun E w₁ t₂ = .ok rr₁₂ ∧ rowsRun E w₂ t₁ = .ok rr₂₁ ∧
       rr₁₂.2 = 0 ∧ rr₂₁.2 = 0 ∧ (∀ s, rowAt E rr₁₂.1 s = rowAt E rr₂₁.1 s) ∧
       ∀ p rel c sm l cap wd rt, headOf E w.rows p rel = some (c, sm, l, cap, wd, rt) →
         headOf E rr₁₂.1 p rel = some (c + insN p rel t₁.rows + insN p rel t₂.rows,
@@ -976,8 +975,8 @@ private def plantStep (E : Env D) (w : World D) (t : Turn D) (r : Rows D) (x : R
   match x.slot, x.act with
   | .row key, .insert _ _ => do
       req (decide (x.seen = some (rowPin E (rowAt E r (.head key.parent key.rel))))) (.stale key.parent)
-      rowStep E w t (Thunk.mk fun _ => Trie.emptyHash (rowSpec E)) r { x with seen := none }
-  | _, _ => rowStep E w t (Thunk.mk fun _ => Trie.emptyHash (rowSpec E)) r x
+      rowStep E w t r { x with seen := none }
+  | _, _ => rowStep E w t r x
 
 /-- **Tooth 2: an insert that pins its head refuses the second rain `stale`.** After the first rain
 inserts into a relation, the head has moved (its count by one), so a second insert into the same
@@ -986,14 +985,14 @@ true, unless two different row leaves share a digest. `admit_comm` needs heads u
 theorem plant_second_rain_stale {E : Env D} {w : World D} {t₁ t₂ : Turn D} {r r₁ : Rows D}
     {x₁ x₂ : RowTouch D} {k₁ k₂ : RowKey D} {a₁ a₂ : Nat} {v₁ v₂ : ByteArray}
     (hinj : ∀ l l' : RowLeaf, rowDigest E l = rowDigest E l' → l = l')
-    (hs₁ : x₁.slot = .row k₁) (ha₁ : x₁.act = .insert a₁ v₁) (h₁ : rowStep E w t₁ (Thunk.mk fun _ => Trie.emptyHash (rowSpec E)) r x₁ = .ok r₁)
+    (hs₁ : x₁.slot = .row k₁) (ha₁ : x₁.act = .insert a₁ v₁) (h₁ : rowStep E w t₁ r x₁ = .ok r₁)
     (hs₂ : x₂.slot = .row k₂) (ha₂ : x₂.act = .insert a₂ v₂) (hp : k₂.parent = k₁.parent) (hr : k₂.rel = k₁.rel)
     (hseen : x₂.seen = some (rowPin E (rowAt E r (.head k₁.parent k₁.rel)))) :
     plantStep E w t₂ r₁ x₂ = .error (.stale k₂.parent) := by
   obtain ⟨-, -, c, sm, l, cap, rt, hh, -, -, rfl⟩ := ins_step_ok hs₁ ha₁ h₁
   have hg := headOf_some hh
   have hmoved : rowPin E (rowAt E (setHead E (r.insert (rowSpec E) (.row k₁) (.row a₁ v₁)) k₁.parent k₁.rel
-      (c + 1) (sm + a₁) l cap k₁.k.size rt (Thunk.mk fun _ => Trie.emptyHash (rowSpec E))) (.head k₁.parent k₁.rel)) ≠
+      (c + 1) (sm + a₁) l cap k₁.k.size rt) (.head k₁.parent k₁.rel)) ≠
       rowPin E (rowAt E r (.head k₁.parent k₁.rel)) := by
     unfold rowAt
     rw [get_step, if_pos rfl, hg]
@@ -1008,7 +1007,7 @@ theorem plant_second_rain_stale {E : Env D} {w : World D} {t₁ t₂ : Turn D} {
   simp only [hp, hr]
   rw [show decide (some (rowPin E (rowAt E r (.head k₁.parent k₁.rel))) = some (rowPin E (rowAt E
       (setHead E (r.insert (rowSpec E) (.row k₁) (.row a₁ v₁)) k₁.parent k₁.rel (c + 1) (sm + a₁) l cap
-        k₁.k.size rt (Thunk.mk fun _ => Trie.emptyHash (rowSpec E))) (.head k₁.parent k₁.rel)))) = false from
+        k₁.k.size rt) (.head k₁.parent k₁.rel)))) = false from
     decide_eq_false fun e => hmoved (Option.some.inj e).symm]
   rfl
 

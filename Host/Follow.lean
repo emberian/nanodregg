@@ -56,7 +56,7 @@ def window : Nat := 128
 what to make durable before replying (`Command.Persist`), the reply. Generic in the `Ctx` and the
 way a base is read (`Protocol.Thin.Base`), so PROTOCOL's rows drive this very function on their
 toy digest. -/
-def answer {D : Type} [Ord D] [DecidableEq D] (X : Receive.Ctx D) (B : Protocol.Thin.Base (World D))
+def answer {D : Type} [Ord D] [DecidableEq D] (X : Receive.Ctx D) (dc : Stream D) (B : Protocol.Thin.Base (World D))
     (me : Command.Self D) (fs : Command.Follow D) (f : Frame) :
     Command.Follow D × Command.Persist D × UInt8 × ByteArray :=
   let refused (r : Refusal) := (fs, .steps [], named r.name)
@@ -77,7 +77,7 @@ def answer {D : Type} [Ord D] [DecidableEq D] (X : Receive.Ctx D) (B : Protocol.
     match resumeFrame.decode f.payload with
     | .error _ => refused .undecodableResume
     | .ok (k, result, ()) =>
-      let (fs', p, r) := Command.step X B me fs k.1 result.1
+      let (fs', p, r) := Command.step X dc B me fs k.1 result.1
       stepOut fs' p r
   | some op => refused (.wrongSocket op)
 
@@ -97,7 +97,7 @@ def loop (keys : Keys) (me : Command.Self D) (store : Store) (ck : Checkpoint (W
       | .error f => return (.sealFailed f, { r with pending := none })
     let some f ← port.recv | finish .eof r
     let (fs', p, status, payload) :=
-      answer X ⟨world, World.steps, keys.worldDigest, c.worldBytesMax⟩ me ⟨r.world, ← dl.get⟩ f
+      answer X Codec.Deployed.digestCodec ⟨world, World.steps, keys.worldDigest, c.worldBytesMax⟩ me ⟨r.world, ← dl.get⟩ f
     dl.set fs'.download
     match p with
     | .steps [] =>

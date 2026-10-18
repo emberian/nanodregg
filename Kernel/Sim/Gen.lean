@@ -92,6 +92,9 @@ structure Params (D : Type) where
   pub : ByteArray → ByteArray
   sign : ByteArray → ByteArray → ByteArray
   zero : D
+  /-- the wire bytes of a cell proof (CODEC's `proof (trieSpec env)` at the deployed codecs), where the
+  instance has the proof codec; `report` prints `proof bytes-per-inclusion` only then -/
+  proofSize : Option (Trie.Proof (Slot D) D → Nat) := none
 
 /-- The instance's `Env`: its `Ctx`'s, so the two cannot disagree. -/
 abbrev Params.env {D : Type} (P : Params D) : Env D := P.ctx.env
@@ -198,6 +201,11 @@ structure State (D : Type) [Ord D] where
   rowRetracts : Nat := 0
   rangeReads : Nat := 0
   rowsRead : Nat := 0
+  /-- KERNEL-49 (a), the stem probe: row inserts under 64 u64-counter keys (`<S`/`<T`) -/
+  stemInserts : Nat := 0
+  /-- the wire bytes of the changed cells' inclusion proofs (`Params.proofSize`), and how many -/
+  proofBytes : Nat := 0
+  proofs : Nat := 0
 
 def nameOf {α : Type} [Repr α] (a : α) : String :=
   match (reprStr a).splitOn " " with
@@ -237,20 +245,32 @@ def countingEnv (E : Env D) : Env D :=
   { E with hash := fun dom b =>
       if dom == domTrie then dbgTrace "#" fun _ => E.hash dom b else E.hash dom b }
 
-/-- PLANT (the counter's tooth): `commitTrie` with the empty digest recomputed per insert, the
-regression KERNEL-35 removed. The same map, more hashes; `report` must count more for it (arm
-`hash-count:empty-per-insert`). -/
-def plantCommitPerInsert (E : Env D) (w : World D) (t : Turn D) (posts : List (Post D)) : Cells D :=
-  let S := trieSpec E
-  let m := (posts.map Post.pair ++ bornEntries t).foldl
-    (fun m p => m.insert S (.cell p.1) (.entry p.2)) w.trie
-  t.nullifiers.foldl (fun m n => m.insert S (.nullifier n) .spent) m
+/-- The four roots a head commits, as `commitWith` takes them: ONE lazy empty digest shared by the
+four (KERNEL-35, at the roots only since KERNEL-49 (a): no node has an empty child, so only a root
+reads the empty digest). -/
+def rootsShared (E : Env D) (w : World D) : D × D × D × D :=
+  let e : Thunk D := Thunk.mk fun _ => Trie.emptyHash (trieSpec E)
+  (w.trie.rootWith (trieSpec E) e, w.journal.rootWith (journalSpec E) e,
+    w.refusals.rootWith (refusalSpec E) e, w.rows.rootWith (rowSpec E) e)
+
+/-- PLANT (the counter's tooth): the four roots each with its OWN empty digest, from its own spec
+(the sharing KERNEL-47 made, undone). The same roots, one more hash per further empty trie; `report`
+must count more for it than for `rootsShared` on a seed whose World had two empty tries at once (arm
+`hash-count:empty-per-root`). It replaces `hash-count:empty-per-insert`: since KERNEL-49 (a) no insert
+reads an empty digest, so that regression cannot be written. -/
+def plantRootsUnshared (E : Env D) (w : World D) : D × D × D × D :=
+  (w.trie.rootWith (trieSpec E) (Thunk.mk fun _ => Trie.emptyHash (trieSpec E)),
+    w.journal.rootWith (journalSpec E) (Thunk.mk fun _ => Trie.emptyHash (journalSpec E)),
+    w.refusals.rootWith (refusalSpec E) (Thunk.mk fun _ => Trie.emptyHash (refusalSpec E)),
+    w.rows.rootWith (rowSpec E) (Thunk.mk fun _ => Trie.emptyHash (rowSpec E)))
 
 /-- The counted calls for one admitted turn `w → w'`: the whole admission (`<A`), its trie write
 without the nullifiers (`<C`, the cell share), its journal write (`<J`, KERNEL-41: the journal trie's
-nodes hash in the one trie domain, so its share is bracketed apart), its rows write and rows root
-(`<Q`, KERNEL-46/48, apart for the same reason), and the plant (`<P`). Each
-result must be what the uncounted call gives, or the counter changed the computation. -/
+nodes hash in the one trie domain, so its share is bracketed apart), its rows write (`<Q`,
+KERNEL-46/48, apart for the same reason), the four roots with their one shared empty digest (`<O`:
+since KERNEL-49 (a) the empty digest is read only at a root, so it is its own share), and the plant
+(`<P`). Each result must be what the uncounted call gives, or the counter changed the
+computation. -/
 def countTurn (E : Env D) (st : State D) (w w' : World D) (t : Turn D) : State D :=
   let cE := countingEnv E
   let S := trieSpec E
@@ -259,20 +279,17 @@ def countTurn (E : Env D) (st : State D) (w w' : World D) (t : Turn D) : State D
   | .ok posts =>
       let t0 := { t with nullifiers := [] }
       let a := dbgTrace "<A" fun _ => World.admit cE w t
-      -- one empty-digest thunk for the cell and journal brackets, as `commit` shares one (KERNEL-47):
-      -- it is counted where it is first forced, so the two shares never both count it
-      let e : Trie.EmptyDigest D := Thunk.mk fun _ => Trie.emptyHash (trieSpec cE)
-      let c := dbgTrace "<C" fun _ => commitTrie cE w t0 posts e
-      let j := dbgTrace "<J" fun _ => commitJournal cE w t e
+      let c := dbgTrace "<C" fun _ => commitTrie cE w t0 posts
+      let j := dbgTrace "<J" fun _ => commitJournal cE w t
       -- KERNEL-46/48: the rows' share, bracketed apart so the nullifier share is the nullifiers': as
       -- the compiled admission runs it (`World.admitImpl`, `@[csimp]`), `checkWith`'s ONE `rowsRun`
-      -- under its own empty-digest thunk, then `commitWith`'s rows root under the shared one (an EMPTY
-      -- rows trie's root forces it on a turn whose paths met no empty sibling)
       let rq := dbgTrace "<Q" fun _ =>
-        match rowsRun cE w t (Thunk.mk fun _ => Trie.emptyHash (rowSpec cE)) with
-        | .ok rr => some (rr.1.hashOf (rowSpec cE) e)
+        match rowsRun cE w t with
+        | .ok rr => some rr.1
         | .error _ => none
-      let p := dbgTrace "<P" fun _ => plantCommitPerInsert cE w t posts
+      let o := dbgTrace "<O" fun _ => rootsShared cE w'
+      let p := dbgTrace "<P" fun _ => plantRootsUnshared cE w'
+      let roots := (w'.root E, w'.journalRoot E, w'.refusalsRoot E, w'.rowsRoot E)
       let st := match a with
         | .ok w'' => if w''.root E == w'.root E then st
             else failWith st "hash count: the counted admission reached another root"
@@ -281,10 +298,12 @@ def countTurn (E : Env D) (st : State D) (w w' : World D) (t : Turn D) : State D
         else failWith st "hash count: the counted cell write reached another root"
       let st := if j.hashOf (journalSpec E) == w'.journalRoot E then st
         else failWith st "hash count: the counted journal write reached another journal root"
-      let st := if rq == some (w'.rowsRoot E) then st
+      let st := if rq.map (·.hashOf (rowSpec E)) == some (w'.rowsRoot E) then st
         else failWith st "hash count: the counted rows write reached another rows root"
-      if p.hashOf S == w'.root E then st
-      else failWith st "hash count: the per-insert plant reached another root"
+      let st := if o == roots then st
+        else failWith st "hash count: the counted roots are not the admitted World's"
+      if p == roots then st
+      else failWith st "hash count: the per-root plant reached other roots"
 
 /-- The marks of one captured run, summed per bracket tag. -/
 structure Marks where
@@ -300,9 +319,24 @@ structure Marks where
   rowInsBase : Nat := 0
   rowRet : Nat := 0
   rowRetBase : Nat := 0
+  /-- the four roots' empty digest (`<O`, KERNEL-49 (a)) -/
+  emptyRoot : Nat := 0
+  /-- the stem probe (`<S` less `<T`): its row inserts' hashes, and the most one insert cost -/
+  stemIns : Nat := 0
+  stemBase : Nat := 0
+  stemWorst : Nat := 0
+  pendS : Option Nat := none
+  pendT : Option Nat := none
+
+/-- An `S` mark count and its `T` met: the insert's own hashes, kept if the most so far. -/
+def pairStem (m : Marks) : Marks :=
+  match m.pendS, m.pendT with
+  | some a, some b => { m with stemWorst := max m.stemWorst (a - b), pendS := none, pendT := none }
+  | _, _ => m
 
 /-- `report`'s side: the marks of one captured run, summed per bracket tag (`A`, `C`, `P`, `J`,
-`K`, `R`, `F`, `Q`, and the rows probe's `W`, `V`, `X`, `Y`). -/
+`K`, `R`, `F`, `Q`, `O`, and the rows probe's `W`, `V`, `X`, `Y`, `S`, `T`). An `S` and its `T` are one
+stem insert turn: their difference is that insert's hashes, the most of which is `stemWorst`. -/
 def countMarks (out : String) : Marks :=
   (out.splitOn "<").foldl (fun m seg =>
     let n := (seg.toList.filter (· == '#')).length
@@ -319,6 +353,9 @@ def countMarks (out : String) : Marks :=
     | some 'V' => { m with rowInsBase := m.rowInsBase + n }
     | some 'X' => { m with rowRet := m.rowRet + n }
     | some 'Y' => { m with rowRetBase := m.rowRetBase + n }
+    | some 'O' => { m with emptyRoot := m.emptyRoot + n }
+    | some 'S' => pairStem { m with stemIns := m.stemIns + n, pendS := some n }
+    | some 'T' => pairStem { m with stemBase := m.stemBase + n, pendT := some n }
     | _ => m) {}
 
 /-- The slots a turn changed, in `commitTrie`'s order: its non-`keep` touches, its born cells,
@@ -340,6 +377,26 @@ def checkLogWeight (P : Params D) (st : State D) (t : Turn D) : State D :=
     else failWith st s!"log weight: the record is {n} bytes, Turn.logWeight says {t.logWeight}"
   else st
 
+/-- The shape scan (KERNEL-49 (a)): a subtree whose every node has two non-empty children and branches
+at a bit at or past `d` (strictly below its parent's children) and below the depth, and whose every
+leaf holds an entry. An `empty` passes only as a whole trie (`shapeScanRoot`). Run on every World the
+sim reaches through the deployed admission (`checkRoot`, `rowsTry`, the Host's World at each seed's
+end); planted in `probeTrieShape` with a unary node, which it must refuse. -/
+def shapeScan {K V D' : Type} (S : Trie.Spec K V D') : Nat → Trie.T K V D' → Bool
+  | _, .empty => false
+  | _, .leaf _ kvs => !kvs.isEmpty
+  | d, .node _ b _ l r => decide (d ≤ b) && decide (b < S.depth) && shapeScan S (b + 1) l && shapeScan S (b + 1) r
+
+def shapeScanRoot {K V D' : Type} (S : Trie.Spec K V D') : Trie.T K V D' → Bool
+  | .empty => true
+  | t => shapeScan S 0 t
+
+/-- A World's four tries pass the shape scan, or the seed fails naming `what`. -/
+def scanWorld (E : Env D) (st : State D) (w : World D) (what : String) : State D :=
+  if shapeScanRoot (trieSpec E) w.trie && shapeScanRoot (journalSpec E) w.journal &&
+      shapeScanRoot (refusalSpec E) w.refusals && shapeScanRoot (rowSpec E) w.rows then st
+  else failWith st s!"shape scan: {what} holds a one-sided node, a non-ascending branching bit or an empty leaf"
+
 /-- After an admitted turn `w → w'`: replay its inserts from `w`'s trie with `w'`'s leaves (the
 replay must reach `w'`'s root, or a touched path was left unrehashed), count their hashes, prove
 and verify every changed slot and one untouched one against `w'`'s root, each nullifier as absent
@@ -349,6 +406,7 @@ def checkRoot (P : Params D) (st : State D) (w w' : World D) (t : Turn D) : Stat
   let S := trieSpec E
   let slots := changedSlots t
   let st := countTurn E st w w' t
+  let st := scanWorld E st w' "an admitted turn's World"
   let (tr, st) := slots.foldl (fun (tr, st) s =>
     match w'.trie.get S s with
     | none => (tr, failWith st "root: a changed slot is absent after the turn")
@@ -365,7 +423,12 @@ def checkRoot (P : Params D) (st : State D) (w w' : World D) (t : Turn D) : Stat
     match w'.trie.get S s with
     | none => if Trie.verifyExclusion S root s (w'.trie.prove S s) then st
         else failWith st "root: an absent slot's exclusion proof does not verify"
-    | some l => if Trie.verifyInclusion S root s (leafDigest E l) (w'.trie.prove S s) then st
+    | some l =>
+        let pr := w'.trie.prove S s
+        let st := match s, P.proofSize with
+          | .cell _, some size => { st with proofBytes := st.proofBytes + size pr, proofs := st.proofs + 1 }
+          | _, _ => st
+        if Trie.verifyInclusion S root s (leafDigest E l) pr then st
         else failWith st "root: a slot's inclusion proof does not verify"
   let untouched : Slot D := .cell (cellIdOf E t.txId 1000)
   let st := (slots ++ [untouched] ++ (st.members.head?.map fun m => Slot.cell m.id).toList).foldl verifyAt st
@@ -376,7 +439,7 @@ def checkRoot (P : Params D) (st : State D) (w w' : World D) (t : Turn D) : Stat
   let forged : Trie.Proof (Slot D) D → Trie.Proof (Slot D) D := fun p =>
     match p.sibs with
     | [] => p
-    | s :: rest => ⟨p.term, (if s == E.hash domTrie "forged".toUTF8 then E.hash domTrie "forged2".toUTF8
+    | s :: rest => ⟨p.term, (s.1, if s.2 == E.hash domTrie "forged".toUTF8 then E.hash domTrie "forged2".toUTF8
         else E.hash domTrie "forged".toUTF8) :: rest⟩
   let st := match slots.head? with
     | none => st
@@ -400,10 +463,22 @@ def checkRoot (P : Params D) (st : State D) (w w' : World D) (t : Turn D) : Stat
               failWith st "root: a stale (pre-turn) proof verified against the new root"
             else meet st "proof-stale:refused"
             -- a proof longer than the trie's depth is refused before anything is hashed
-            let long : Trie.Proof (Slot D) D := ⟨p.term, p.sibs ++ List.replicate (S.depth + 1) root⟩
-            if Trie.verifyInclusion S root s (leafDigest E l) long then
+            let long : Trie.Proof (Slot D) D := ⟨p.term, p.sibs ++ List.replicate (S.depth + 1) (0, root)⟩
+            let st := if Trie.verifyInclusion S root s (leafDigest E l) long then
               failWith st "root: a proof longer than the depth verified"
             else meet st "proof-overlong:refused"
+            -- KERNEL-49 (a): the honest proof with its last sibling claiming the next bit (the bits
+            -- still ascend below the depth, so only the node hash's committed `b` can refuse it)
+            match p.sibs.getLast? with
+            | some (b, sd) =>
+                if b + 1 < S.depth then
+                  let moved : Trie.Proof (Slot D) D := ⟨p.term, p.sibs.dropLast ++ [(b + 1, sd)]⟩
+                  if !Trie.ascends S 0 moved.sibs then failWith st "root: the moved-bit proof does not ascend"
+                  else if Trie.verifyInclusion S root s (leafDigest E l) moved then
+                    failWith st "root: a proof claiming another branching bit verified"
+                  else meet st "proof-bit:refused"
+                else st
+            | none => st
   -- a retired cell claimed live: its old cell against the tombstone's path
   let st := t.touches.foldl (fun st x =>
     match x.act, w.live E x.cell with
@@ -1374,15 +1449,18 @@ def plantRetainAll {K V D' : Type} (S : Trie.Spec K V D') (q : K → V → Bool)
       else
         let kept := kvs.filter fun p => q p.1 p.2
         if kept.isEmpty then (.empty, true) else (Trie.mkLeaf S kept, true)
-  | .node h l r =>
-      let a := plantRetainAll S q l
-      let b := plantRetainAll S q r
-      if a.2 || b.2 then (Trie.mkNode S a.1 b.1, true) else (.node h l r, false)
+  | .node h b rep l r =>
+      let x := plantRetainAll S q l
+      let y := plantRetainAll S q r
+      if x.2 || y.2 then (Trie.mkNode S b rep x.1 y.1, true) else (.node h b rep l r, false)
 
-/-- The plant's `retainAt` at path `[true]`. -/
+/-- The plant's `retainAt` at path `[true]` (a node branching at bit 0 takes its right side; any
+other is filtered whole, as `retainAt` does where the path has no bit `b`). -/
 def plantRetainRight {K V D' : Type} (S : Trie.Spec K V D') (q : K → V → Bool) :
     Trie.T K V D' → Trie.T K V D'
-  | .node _ l r => Trie.mkNode S l (plantRetainAll S q r).1
+  | .node h b rep l r =>
+      if b = 0 then Trie.mkNode S b rep l (plantRetainAll S q r).1
+      else (plantRetainAll S q (.node h b rep l r)).1
   | t => (plantRetainAll S q t).1
 
 /-- The retain probe, every seed: a trie of up to 4 cells (tombstones) and 1–6 spent nullifiers;
@@ -1681,7 +1759,7 @@ def countRangeReads (E : Env D) (st : State D) (w : World D) (t : Turn D) : Stat
     match headOf E w.rows q.parent q.rel with
     | some (_, _, _, _, width, _) =>
         if q.pre.size ≤ width then
-          let n := (under (rowSpec E) (rowsPrefix E q.parent q.rel width ++ q.pre) (q.most + 1) 0 w.rows).length
+          let n := (under (rowSpec E) (rowsPrefix E q.parent q.rel width ++ q.pre) (q.most + 1) w.rows).length
           let st := { st with rangeReads := st.rangeReads + 1, rowsRead := st.rowsRead + n }
           if n ≤ q.most + 1 then st
           else failWith st s!"probe rows: a range read listed {n} rows, past most + 1 = {q.most + 1}"
@@ -1696,7 +1774,7 @@ write, the journal write, the refusals prune and the three roots, sharing ONE em
 the rows' share: the compiled admission's (`World.admitImpl`) one `rowsRun` in `checkWith`, and the
 rows root `commitWith` takes. Each counted result must be what
 the uncounted admission reached, or the counter changed the computation. -/
-def countRowsTurn (E : Env D) (st : State D) (w w' : World D) (t : Turn D) : State D :=
+def countRowsTurn (E : Env D) (st : State D) (w w' : World D) (t : Turn D) (stem : Bool := false) : State D :=
   let ins := t.rows.all fun x => match x.act with | .insert .. => true | _ => false
   let ret := t.rows.all fun x => match x.act with | .retract => true | _ => false
   if t.rows.isEmpty || !t.ranges.isEmpty || !(ins || ret) then st else
@@ -1705,42 +1783,46 @@ def countRowsTurn (E : Env D) (st : State D) (w w' : World D) (t : Turn D) : Sta
   | .ok posts =>
       let cE := countingEnv E
       let whole := fun (_ : Unit) => World.admit cE w t
-      let a := if ins then dbgTrace "<W" whole else dbgTrace "<X" whole
+      let a := if stem then dbgTrace "<S" whole else if ins then dbgTrace "<W" whole else dbgTrace "<X" whole
       let base := fun (_ : Unit) =>
-        let e : Trie.EmptyDigest D := Thunk.mk fun _ => Trie.emptyHash (trieSpec cE)
-        let trie := commitTrie cE w t posts e
-        let journal := commitJournal cE w t e
-        let refusals := pruneRefusals cE (w.height + 1) w.refusals e
-        (trie.hashOf (trieSpec cE) e, journal.hashOf (journalSpec cE) e, refusals.hashOf (refusalSpec cE) e)
-      let b := if ins then dbgTrace "<V" base else dbgTrace "<Y" base
+        let e : Thunk D := Thunk.mk fun _ => Trie.emptyHash (trieSpec cE)
+        let trie := commitTrie cE w t posts
+        let journal := commitJournal cE w t
+        let refusals := pruneRefusals cE (w.height + 1) w.refusals
+        (trie.rootWith (trieSpec cE) e, journal.rootWith (journalSpec cE) e, refusals.rootWith (refusalSpec cE) e)
+      let b := if stem then dbgTrace "<T" base else if ins then dbgTrace "<V" base else dbgTrace "<Y" base
       let st := match a with
         | .ok w'' => if w''.rowsRoot E == w'.rowsRoot E then st
             else failWith st "rows hash count: the counted admission reached another rows root"
         | .error _ => failWith st "rows hash count: the counted admission refused an admitted turn"
       let st := if b == (w'.root E, w'.journalRoot E, w'.refusalsRoot E) then st
         else failWith st "rows hash count: the counted non-rows share reached other roots"
-      if ins then { st with rowInserts := st.rowInserts + t.rows.length }
+      if stem then { st with stemInserts := st.stemInserts + t.rows.length }
+      else if ins then { st with rowInserts := st.rowInserts + t.rows.length }
       else { st with rowRetracts := st.rowRetracts + t.rows.length }
 
 /-- One rows turn at the REAL `World.admit`, its range reads and (if admitted) its hashes counted:
 the next World, or the refusal's name. -/
-def rowsTry (P : Params D) (st : State D) (w : World D) (t : Turn D) : State D × Except String (World D) :=
+def rowsTry (P : Params D) (st : State D) (w : World D) (t : Turn D) (stem : Bool := false) :
+    State D × Except String (World D) :=
   let st := countRangeReads P.env st w t
   match World.admit P.env w t with
-  | .ok w' => (countRowsTurn P.env st w w' t, .ok w')
+  | .ok w' => (scanWorld P.env (countRowsTurn P.env st w w' t stem) w' "a rows turn's World", .ok w')
   | .error r => (st, .error r.name)
 
 /-- The rows probe's monad: the Sim's state, and the first failure (which ends the probe). -/
 abbrev RowsM (D : Type) [Ord D] (α : Type) := ExceptT String (StateM (State D)) α
 
-def rowsStep (P : Params D) (w : World D) (t : Turn D) : RowsM D (Except String (World D)) := do
-  let (st, r) := rowsTry P (← get) w t
+def rowsStep (P : Params D) (w : World D) (t : Turn D) (stem : Bool := false) :
+    RowsM D (Except String (World D)) := do
+  let (st, r) := rowsTry P (← get) w t stem
   set st
   pure r
 
 /-- A turn the probe needs admitted. -/
-def rowsOk (P : Params D) (w : World D) (t : Turn D) (what : String) : RowsM D (World D) := do
-  match ← rowsStep P w t with
+def rowsOk (P : Params D) (w : World D) (t : Turn D) (what : String) (stem : Bool := false) :
+    RowsM D (World D) := do
+  match ← rowsStep P w t stem with
   | .ok w' => pure w'
   | .error n => throw s!"{what}: refused {n}"
 
@@ -1797,6 +1879,192 @@ def argMaxAmt (l : List (RowSlot D × RowLeaf)) : Option ByteArray :=
         | none => some (k.k, a)
     | _ => best) none).map (·.1)
 
+/-! ### Pins across the compressed trie (KERNEL-49 (a), ROOT condition 2)
+
+A pin is bytes a turn signs about what the World holds: a cell pin (`pinOf` of the live cell), a row
+pin (`rowPin` of the leaf), a range pin (`rangePin` of the listing under a prefix). Path compression
+changes how the trie is walked, never what a read returns, so every pin must equal the one computed
+from a REFERENCE that does not walk the trie at all: an association list, and for a range the
+reference listing sorted by key bytes. Each pin kind has a plant, a perturbed walk, that the
+reference must catch. -/
+
+/-- Byte strings in lexicographic order, a proper prefix first: for prefix-free keys, the trie's
+order (bits most significant first, left before right). -/
+def bytesLt (a b : ByteArray) : Bool := decide (a.toList < b.toList)
+
+/-- The value at `k` in an association list (the last write wins). -/
+def assoc {K V : Type} [DecidableEq K] (l : List (K × V)) (k : K) : Option V :=
+  (l.reverse.find? fun p => p.1 = k).map (·.2)
+
+/-- PLANT (the cell pin's): the uncompressed walk on the compressed shape, each node read at the bit
+its DEPTH names (the old reader: one level per bit), not the bit it branches on. -/
+def plantGetByDepth {K V D' : Type} [DecidableEq K] (S : Trie.Spec K V D') (k : K) :
+    Nat → Trie.T K V D' → Option V
+  | _, .empty => none
+  | _, .leaf _ kvs => Trie.find k kvs
+  | d, .node _ _ _ l r => if S.bit k d then plantGetByDepth S k (d + 1) r else plantGetByDepth S k (d + 1) l
+
+/-- PLANT (the row pin's): the walk with its children swapped (bit 1 read left). -/
+def plantGetSwapped {K V D' : Type} [DecidableEq K] (S : Trie.Spec K V D') (k : K) :
+    Trie.T K V D' → Option V
+  | .empty => none
+  | .leaf _ kvs => Trie.find k kvs
+  | .node _ b _ l r => if S.bit k b then plantGetSwapped S k l else plantGetSwapped S k r
+
+/-- PLANT (the range pin's): `under` without its `rep` check, so a subtree the path reached on the
+prefix's bits at its branchings is listed though its keys leave the prefix on a skipped bit. -/
+def plantUnder {K V : Type} (S : Trie.Spec K V D) (pre : ByteArray) (n : Nat) : Trie.T K V D → List (K × V)
+  | .empty => []
+  | .leaf _ kvs => (kvs.filter fun p => startsWith pre (S.kbytes p.1)).take n
+  | .node h b rep l r =>
+      if b < 8 * pre.size then
+        (if byteBit pre b then plantUnder S pre n r else plantUnder S pre n l)
+      else takeList n (.node h b rep l r)
+
+/-! ### The forgery tooth (KERNEL-49 (a), ROOT): a node hash without its branching bit
+
+`Trie.nodeHash` commits `u16 b`. The plant hashes `tagged 2 (left ‖ right)`, its climb and its
+exclusion check mirrored. Under it a proof may claim a branching bit the node does not have, steer
+`k`'s walk into the other side and end at a leaf there that does not hold `k`: an exclusion proof of
+a key the trie holds. The deployed `verifyExclusion` refuses the same proof against the real root. -/
+
+def plantNodeHash {K V D' : Type} (S : Trie.Spec K V D') (l r : D') : D' :=
+  S.hash (Trie.tagged 2 (S.dbytes l ++ S.dbytes r))
+
+/-- A subtree's digest under the plant (its cached digests ignored below a leaf). -/
+def plantHash {K V D' : Type} (S : Trie.Spec K V D') : Trie.T K V D' → D'
+  | .empty => Trie.emptyHash S
+  | .leaf h _ => h
+  | .node _ _ _ l r => plantNodeHash S (plantHash S l) (plantHash S r)
+
+/-- `Trie.proveAt` with the plant's sibling digests. -/
+def plantProve {K V D' : Type} (S : Trie.Spec K V D') (k : K) : Trie.T K V D' → Trie.Proof K D'
+  | .empty => ⟨none, []⟩
+  | .leaf _ kvs => ⟨some (Trie.digests S kvs), []⟩
+  | .node _ b _ l r =>
+      if S.bit k b then let p := plantProve S k r; ⟨p.term, (b, plantHash S l) :: p.sibs⟩
+      else let p := plantProve S k l; ⟨p.term, (b, plantHash S r) :: p.sibs⟩
+
+/-- `Trie.climb` with the plant's node hash. -/
+def plantClimb {K V D' : Type} (S : Trie.Spec K V D') (k : K) : List (Nat × D') → D' → D'
+  | [], h => h
+  | (b, s) :: rest, h =>
+      let c := plantClimb S k rest h
+      if S.bit k b then plantNodeHash S s c else plantNodeHash S c s
+
+/-- `Trie.verifyExclusion` with the plant's climb (every other check kept). -/
+def plantVerifyExclusion {K V D' : Type} [DecidableEq K] [DecidableEq D'] (S : Trie.Spec K V D')
+    (root : D') (k : K) (p : Trie.Proof K D') : Bool :=
+  Trie.ascends S 0 p.sibs &&
+  (match p.term with
+   | some kds => (Trie.find k kds).isNone
+   | none => true) &&
+  plantClimb S k p.sibs (Trie.termHash S p.term) = root
+
+/-- The trie-shape probe, every seed, on tries of its own (no World): the forgery tooth
+(`depth-unhashed-plant:caught`), a unary node refused by the shape scan every reached World passes
+(`shape-unary-plant:caught`; the theorem is lane A's `canon_no_empty_child`), and the cell pin through the deployed read against
+an association list (`pin-cell:same`) with its plant caught (`pin-cell-plant:caught`). -/
+def probeTrieShape (P : Params D) (st : State D) (seed : Nat) : State D :=
+  let E := P.env
+  let S := trieSpec E
+  let id := fun (tag : String) (i : Nat) => E.hash "nanodregg/sim/shape" s!"{tag}/{seed}/{i}".toUTF8
+  -- nullifiers only: every key's bit 0 is set, so the root branches at a bit b ≥ 1
+  let ns := (List.range (seed % 7 + 2)).map fun i => Slot.nullifier (id "n" i)
+  let t : Cells D := ns.foldl (fun t n => t.insert S n .spent) .empty
+  let st := match t with
+    | .node _ b _ l r =>
+        match l.first with
+        | none => failWith st "probe shape: the root's left side is empty"
+        | some k =>
+            let q := plantProve S k r
+            let forged : Trie.Proof (Slot D) D := ⟨q.term, (0, plantHash S l) :: q.sibs⟩
+            let real : Trie.Proof (Slot D) D :=
+              let q := r.prove S k
+              ⟨q.term, (0, l.hashOf S) :: q.sibs⟩
+            if b = 0 || (t.get S k).isNone then failWith st "probe shape: the forgery's premise (b ≥ 1, k held) failed"
+            else if !plantVerifyExclusion S (plantHash S t) k forged then
+              failWith st "probe shape: the depth-unhashed plant refused its own forgery (the tooth is blind)"
+            else if Trie.verifyExclusion S (t.hashOf S) k real then
+              failWith st "probe shape: an exclusion proof of a held key, claiming another branching bit, verified"
+            else meet st "depth-unhashed-plant:caught"
+    | _ => failWith st "probe shape: two or more nullifiers made no node"
+  -- PLANT (the shape scan's): a unary node (one empty child) over the same keys. The scan the sim runs
+  -- on every World it reaches must refuse it, and pass the deployed trie it wraps; beside that, the
+  -- unary node does not hash as the canonical trie of its listing (history independence would break)
+  let unary : Cells D := Trie.mkNode S 0 (ns.headD (.cell P.zero)) t .empty
+  let canon := Trie.build S S.depth 0 unary.toList
+  let st := if !shapeScanRoot S t then failWith st "probe shape: the deployed trie fails the shape scan"
+    else if canon.hashOf S != t.hashOf S then failWith st "probe shape: the trie is not the build of its listing"
+    else if shapeScanRoot S unary then failWith st "probe shape: the shape scan passed a unary node (the scan is blind)"
+    else if unary.toList == canon.toList && unary.hashOf S != canon.hashOf S then meet st "shape-unary-plant:caught"
+    else failWith st "probe shape: a unary node reached the canonical root"
+  -- the cell pin: cells (live and tombstones) and nullifiers with ids sharing their first byte or not
+  let cell := fun (i : Nat) => ({ kind := kindObject, discipline := .ram, slots := [(stateBase, nat i)] } : Cell)
+  let ws : List (Slot D × Leaf) := (List.range (seed % 9 + 3)).map (fun i =>
+      (Slot.cell (id "c" i), if i % 4 = 3 then Leaf.entry .tomb else .entry (.live (cell i)))) ++
+    ns.map (·, .spent) ++ [(Slot.cell (id "c" 0), .entry (.live (cell 100)))]
+  let m : Cells D := ws.foldl (fun m p => m.insert S p.1 p.2) .empty
+  let w : World D := { World.genesis E P.zero 0 with trie := m }
+  let liveOf := fun (l : Option Leaf) => match l with
+    | some (.entry (.live c)) => some c
+    | _ => none
+  let probes := (List.range (seed % 9 + 6)).map (id "c") ++ (List.range 3).map (id "absent")
+  let same := probes.all fun c => pinOf E (w.live E c) == pinOf E (liveOf (assoc ws (.cell c)))
+  let plantMoved := probes.any fun c => pinOf E (liveOf (plantGetByDepth S (.cell c) 0 m)) != pinOf E (liveOf (assoc ws (.cell c)))
+  let st := if same then meet st "pin-cell:same" else failWith st "probe shape: a cell pin differs from the association list's"
+  if plantMoved then meet st "pin-cell-plant:caught" else st
+
+/-- The rows reference of the probe's parent: both heads and every modelled row, in key-byte order,
+built from the model alone (no trie). -/
+def rowsReference (E : Env D) (p : D) (model : RowModel) : List (RowSlot D × RowLeaf) :=
+  let ms := fun (rel : Nat) => model.filter (·.1 = rel)
+  let heads : List (RowSlot D × RowLeaf) :=
+    [(.head p 0, .head (ms 0).length ((ms 0).map (·.2.2)).sum 3 10 2 true),
+     (.head p 1, .head (ms 1).length ((ms 1).map (·.2.2)).sum 8 1000 2 false)]
+  let rows : List (RowSlot D × RowLeaf) := model.map fun m =>
+    (.row ⟨p, m.1, m.2.1.toUTF8⟩, .row m.2.2 ("v-" ++ m.2.1).toUTF8)
+  (heads ++ rows).mergeSort fun a b => bytesLt (rowKeyBytes E a.1) (rowKeyBytes E b.1)
+
+/-- The row and range pins at `w` against the reference (`pin-row:same`, `pin-range:same`), and their
+plants caught (`pin-row-plant:caught`, `pin-range-plant:caught`). -/
+def pinsAgree (E : Env D) (w : World D) (p : D) (model : RowModel) : RowsM D Unit := do
+  let ref := rowsReference E p model
+  let slots : List (RowSlot D) := ref.map (·.1) ++
+    [.row ⟨p, 0, "zz".toUTF8⟩, .row ⟨p, 1, "b9".toUTF8⟩, .row ⟨p, 1, "a".toUTF8⟩, .head p 2]
+  hit "pin-row:same" (slots.all fun s => rowPin E (rowAt E w.rows s) == rowPin E (assoc ref s))
+    "a row pin differs from the reference listing's"
+  hit "pin-row-plant:caught" (slots.any fun s =>
+    rowPin E (plantGetSwapped (rowSpec E) s w.rows) != rowPin E (assoc ref s)) "the swapped walk read every row pin right"
+  let pres : List ByteArray := ["", "a", "b", "c", "d", "e", "f", "b0", "b1", "bz", "c0"].map String.toUTF8
+  let refList := fun (rel : Nat) (pre : ByteArray) =>
+    ref.filter fun x => startsWith (rowsPrefix E p rel 2 ++ pre) (rowKeyBytes E x.1)
+  let honest := fun (rel : Nat) (pre : ByteArray) => (rangeRows E w.rows p rel 2 pre 100).getD []
+  hit "pin-range:same" (pres.all fun pre => [0, 1].all fun rel =>
+      rangePin E p rel 2 pre (honest rel pre) == rangePin E p rel 2 pre (refList rel pre) &&
+        (rangeRows E w.rows p rel 2 pre 100).isSome)
+    "a range pin differs from the reference listing's"
+  hit "pin-range-plant:caught" (pres.any fun pre => [0, 1].any fun rel =>
+      rangePin E p rel 2 pre (plantUnder (rowSpec E) (rowsPrefix E p rel 2 ++ pre) 101 w.rows) !=
+        rangePin E p rel 2 pre (refList rel pre))
+    "the listing without the rep check pinned every range right"
+
+/-- The stem probe (KERNEL-49 (a)): a parent born with one relation of key width 8, then 64 turns each
+inserting one row whose key is a big-endian u64 counter, so the keys agree on their first 58 bits.
+Each insert's hashes are counted (`<S` less `<T`; `stemWorst`, the most one insert cost). -/
+def probeStem (P : Params D) (w0 : World D) : RowsM D Unit := do
+  let E := P.env
+  let cell : Cell := { kind := kindObject, discipline := .ram, slots := [(stateBase, nat 1)] }
+  let p := cellIdOf E (rowsTx P w0 "stem-create") 0
+  let decl : RowTouch D := { slot := .head p 0, seen := none, act := .declare 64 1000000 8 false }
+  let w1 ← rowsOk P w0 (rowsTurn P w0 "stem-create" [] [(p, cell)] [decl] []) "stem: the parent's birth"
+  let be := fun (i : Nat) => ByteArray.mk ((List.range 8).reverse.map fun j => (i >>> (8 * j)).toUInt8).toArray
+  let wN ← (List.range 64).foldlM (fun w i => do
+      let ins : RowTouch D := { slot := .row ⟨p, 0, be i⟩, seen := none, act := .insert 1 ByteArray.empty }
+      rowsOk P w (rowsTurn P w s!"stem-{i}" [⟨p, pinOf E (w.live E p), .keep⟩] [] [ins] []) s!"stem insert {i}" true) w1
+  hit "rows-stem:ok" (headCS E wN p 0 == some (64, 64) &&
+    (List.range 64).all fun i => (rowAt E wN.rows (.row ⟨p, 0, be i⟩)).isSome) "the 64 stem rows are not all there"
+
 /-- The rows probe, at the end of every seed, on a side World from the Host's (`RowsM`'s note).
 Relation 0 (limit 3, cap 10, key width 2, retractable) and relation 1 (limit 8, cap 1000, width 2,
 not retractable) are declared by the turn that bears their parent, a data object; every row turn
@@ -1849,7 +2117,7 @@ def probeRows (P : Params D) (seed : Nat) : RowsM D Unit := do
   let planted := match headOf E w2.rows p 0 with
     | some (c, s, l, cap, wd, r) =>
         let over := w2.rows.insert (rowSpec E) (.row (key 0 "a0")) (.row 1 "v-a0".toUTF8)
-        let rows := setHead E over p 0 (c + 1) (s + 1) l cap wd r (Thunk.mk fun _ => Trie.emptyHash (rowSpec E))
+        let rows := setHead E over p 0 (c + 1) (s + 1) l cap wd r
         some { w2 with rows }
     | none => none
   hit "rows-taken-plant:caught"
@@ -1905,6 +2173,7 @@ def probeRows (P : Params D) (seed : Nat) : RowsM D Unit := do
   let some l7 := listing w7 4 | throw "rows-range-stale: the new listing passed most"
   let w8 ← rowsOk P w7 (readT w7 "range-new-pin" (range 4 (rangePin E p 1 2 pre l7))) "rows-range-stale's re-read"
   rowsAgree E w8 p m7 "rows-range-stale"
+  pinsAgree E w8 p m7
   -- two rains on one World
   let a1 := seed % 7 + 1
   let a2 := seed % 5 + 2
@@ -1930,6 +2199,7 @@ def probeRows (P : Params D) (seed : Nat) : RowsM D Unit := do
   | .error "stale" => modify (meet · "rows-repin-plant:stale")
   | .error n => throw s!"rows-repin-plant: expected stale, got {n}"
   | .ok _ => throw "rows-repin-plant: a rain admitted after the other rain re-wrote the parent it pins"
+  probeStem P w0
 
 def run (P : Params D) (seed : Nat) (steps : Nat) : State D :=
   let rng : Rng := ⟨seed.toUInt64 * 0x2545F4914F6CDD1D + 1⟩
@@ -1945,7 +2215,7 @@ def run (P : Params D) (seed : Nat) (steps : Nat) : State D :=
   let holds := (List.range fk.length).map fun i =>
     (founderId X g.origin i, (⟨[founderGrantId X g.origin i], true, enrollMax⟩ : Holding D))
   let st0 : State D := { rng, host := g, members, holds }
-  let st0 := probeRetain P (probeJournal P (probeGenesis P st0 founders) seed) seed
+  let st0 := probeTrieShape P (probeRetain P (probeJournal P (probeGenesis P st0 founders) seed) seed) seed
   -- install the deny-all law package first
   let f := founder0 P st0
   let c := signed P st0 f f.key (S.pinsFor P.env g [f.id]) (.install denyAll)
@@ -1973,6 +2243,7 @@ def run (P : Params D) (seed : Nat) (steps : Nat) : State D :=
       if same P.env w st.host then { st with host := w, restarts := st.restarts + 1 }
       else { st with failures := "checkpoint: the rebuilt trie differs (root or listing)" :: st.failures }
     else st) st
+  let st := scanWorld P.env st st.host "the Host's World at the seed's end"
   -- the follower and the auditor, from genesis
   let st := match World.fold P.env g st.log with
     | .ok w =>
@@ -2071,7 +2342,7 @@ def plantedArms : List String :=
    "journal-shadow-kept:replayed", "journal-shadow-reuse:replayed",
    "journal-proof-height:refused", "journal-proof-admitted:refused", "journal-proof-stale:refused",
    "journal-proof-cells-root:refused", "carry-name:nameTooLong", "carry-old-call:replayed",
-   "carry-old-world:wrongWorld", "carry-new:ok", "sig-bare:badSignature", "hash-count:empty-per-insert", "retain:canonical",
+   "carry-old-world:wrongWorld", "carry-new:ok", "sig-bare:badSignature", "hash-count:empty-per-root", "retain:canonical",
    "retain-plant:refuted", "carry-budget:allowanceTooLarge", "carry-budget-edge:ok", "carry-budget-plant:overflow",
    "refusal-aba-stale:stale", "refusal-aba-recorded:recorded", "refusal-aba-pin:returned",
    "refusal-aba-plant:admitted", "refusal-final-fold:refusedFinal", "refusal-aba:refusedFinal",
@@ -2082,7 +2353,10 @@ def plantedArms : List String :=
    "rows-insert:ok", "rows-keyTaken:keyTaken", "rows-relationCapped:relationCapped",
    "rows-relationFull:relationFull", "rows-retract:ok", "rows-retractForbidden:retractForbidden",
    "rows-rangeTooLong:rangeTooLong", "rows-range:ok", "rows-range-stale:stale", "rows-two-rains:both",
-   "rows-taken-plant:caught", "rows-range-drop-plant:stale", "rows-repin-plant:stale"]
+   "rows-taken-plant:caught", "rows-range-drop-plant:stale", "rows-repin-plant:stale",
+   "proof-bit:refused", "depth-unhashed-plant:caught", "shape-unary-plant:caught",
+   "pin-cell:same", "pin-cell-plant:caught", "pin-row:same", "pin-row-plant:caught",
+   "pin-range:same", "pin-range-plant:caught", "rows-stem:ok"]
 
 /-- `--seeds N` runs seeds `0 … N-1`; otherwise each argument is a seed. -/
 def parseSeeds : List String → List Nat
@@ -2111,6 +2385,10 @@ def report (P : Params D) (seeds : List Nat) : IO UInt32 := do
   let mut rw : Nat × Nat × Nat × Nat × Nat × Nat := (0, 0, 0, 0, 0, 0)
   -- KERNEL-46/48: the rows' share of the run turns' admissions (`<Q`)
   let mut rowsRootMarks := 0
+  -- KERNEL-49 (a): the roots' empty digest (`<O`), and the stem probe (marks, inserts, worst insert)
+  let mut emptyRootMarks := 0
+  let mut stem : Nat × Nat × Nat := (0, 0, 0)
+  let mut proofBytes : Nat × Nat := (0, 0)
   for seed in seeds do
     -- the run's trie hashes are counted off its stderr (`countingEnv`); nothing else writes there
     let buf ← IO.mkRef ({} : IO.FS.Stream.Buffer)
@@ -2118,10 +2396,10 @@ def report (P : Params D) (seeds : List Nat) : IO UInt32 := do
     let st ← IO.lazyPure fun _ => run P seed 120
     let _ ← IO.setStderr old
     let m := countMarks (String.fromUTF8! (← buf.get).data)
-    -- the plant must cost more whenever the run met an empty sibling, or the counter is blind;
-    -- the plant writes no journal, so it is compared with the admission's share without it
-    let st := if m.plant > m.admit - m.journal then
-        { st with seen := "hash-count:empty-per-insert" :: st.seen } else st
+    -- the per-root plant must cost more than the shared roots whenever a World had two empty tries
+    -- at once (the first turns, before any refusal is recorded), or the counter is blind
+    let st := if m.plant > m.emptyRoot then
+        { st with seen := "hash-count:empty-per-root" :: st.seen } else st
     let (a, b) := maxWork st.log
     work := (max work.1 a, max work.2 b)
     admitted := admitted + st.admitted
@@ -2129,15 +2407,19 @@ def report (P : Params D) (seeds : List Nat) : IO UInt32 := do
     journal := (max journal.1 st.journalMax, journal.2.1 + st.journalScanned, journal.2.2 + st.journalTurns)
     refused := refused + st.refusedAsExpected
     restarts := restarts + st.restarts
-    -- the nullifier share is the admission's less its cell write, its journal write and its rows
-    -- write with the rows root
-    hashes := (hashes.1 + m.cells, hashes.2.1 + st.cellSlots, hashes.2.2.1 + (m.admit - m.cells - m.journal - m.rowsRoot),
+    -- the nullifier share is the admission's less its cell write, its journal write, its rows write
+    -- and the roots' empty digest
+    hashes := (hashes.1 + m.cells, hashes.2.1 + st.cellSlots,
+      hashes.2.2.1 + (m.admit - m.cells - m.journal - m.rowsRoot - m.emptyRoot),
       hashes.2.2.2 + st.nullSlots)
     jhashes := (jhashes.1 + m.probeInsert, jhashes.2.1 + st.probeInserts, jhashes.2.2.1 + m.prune,
       jhashes.2.2.2 + st.prunes)
     rf := (rf.1 + m.refuse, rf.2.1 + st.recorded, rf.2.2.1 + st.refusalBytes, max rf.2.2.2.1 st.refusalMax,
       rf.2.2.2.2 + st.budgeted)
     rowsRootMarks := rowsRootMarks + m.rowsRoot
+    emptyRootMarks := emptyRootMarks + m.emptyRoot
+    proofBytes := (proofBytes.1 + st.proofBytes, proofBytes.2 + st.proofs)
+    stem := (stem.1 + (m.stemIns - m.stemBase), stem.2.1 + st.stemInserts, max stem.2.2 m.stemWorst)
     rw := (rw.1 + (m.rowIns - m.rowInsBase), rw.2.1 + st.rowInserts, rw.2.2.1 + (m.rowRet - m.rowRetBase),
       rw.2.2.2.1 + st.rowRetracts, rw.2.2.2.2.1 + st.rangeReads, rw.2.2.2.2.2 + st.rowsRead)
     seen := (st.seen ++ seen).eraseDups
@@ -2172,6 +2454,11 @@ def report (P : Params D) (seeds : List Nat) : IO UInt32 := do
   IO.println s!"WASTE admit hashes-per-row-insert {showRatio (ratio rw.1 rw.2.1)}"
   IO.println s!"WASTE admit hashes-per-row-retract {showRatio (ratio rw.2.2.1 rw.2.2.2.1)}"
   IO.println s!"WASTE admit rows-read-per-range-read {showRatio (ratio rw.2.2.2.2.2 rw.2.2.2.2.1)}"
+  IO.println s!"WASTE admit hashes-per-turn-empty-root {showRatio (ratio emptyRootMarks admitted)}"
+  IO.println s!"WASTE admit hashes-per-row-insert-stem {showRatio (ratio stem.1 stem.2.1)}"
+  if P.proofSize.isSome then
+    IO.println s!"WASTE proof bytes-per-inclusion {showRatio (ratio proofBytes.1 proofBytes.2)}"
+  IO.println s!"kernel-sim: stem probe: {stem.2.1} inserts, the most one insert hashed {stem.2.2} (KERNEL-49 (c)'s bound 2·(rowDepth+1) = {2 * (Bounds.rowDepth + 1)})"
   if rf.2.2.2.1 > Bounds.refusalsPerWindow then
     bad := bad + 1
     IO.println s!"FAIL a member had {rf.2.2.2.1} refusals recorded in one window (bound {Bounds.refusalsPerWindow})"

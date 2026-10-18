@@ -167,6 +167,47 @@ theorem nat8_lawfulOn : LawfulOn (· < 256) nat8 where
       exact ⟨w.toNat_lt, rfl, o⟩
     · cases g
 
+theorem nat16_bytes (n : Nat) : nat16.bytes n = ⟨#[UInt8.ofNat n, UInt8.ofNat (n / 256)]⟩ := rfl
+
+@[simp] theorem nat16_size (n : Nat) : (nat16.bytes n).size = 2 := rfl
+
+theorem nat16_lawfulOn : LawfulOn (· < 2 ^ 16) nat16 where
+  put_eq n buf := by
+    simp only [nat16, push_eq_append, ByteArray.append_assoc]
+    rfl
+  size_eq _ := rfl
+  get_of_occurs n b i hn h := by
+    obtain ⟨hs, hk⟩ := occursAt_iff_getElem.mp h
+    have hs' : i + 2 ≤ b.size := hs
+    have h0 : b[i + 0] = UInt8.ofNat n := hk 0 (by rw [nat16_size]; decide)
+    have h1 : b[i + 1] = UInt8.ofNat (n / 256) := hk 1 (by rw [nat16_size]; decide)
+    have h0' : b[i] = UInt8.ofNat n := h0
+    have e : (UInt8.ofNat n).toNat + 256 * (UInt8.ofNat (n / 256)).toNat = n := by
+      simp only [UInt8.toNat_ofNat']
+      omega
+    simp only [nat16, hs', ↓reduceDIte, h0', h1, e]
+    rfl
+  occurs_of_get {b i v j} h := by
+    simp only [nat16] at h
+    split at h
+    · rename_i hi
+      cases h
+      have l0 := b[i].toNat_lt
+      have l1 := b[i + 1].toNat_lt
+      refine ⟨by omega, by rw [nat16_size], occursAt_iff_getElem.mpr ⟨by rw [nat16_size]; exact hi, fun k hk => ?_⟩⟩
+      have hk' : k < 2 := by rwa [nat16_size] at hk
+      rcases k with _ | _ | k
+      · show b[i + 0] = UInt8.ofNat (b[i].toNat + 256 * b[i + 1].toNat)
+        apply UInt8.toNat_inj.mp
+        simp only [UInt8.toNat_ofNat', Nat.add_zero]
+        omega
+      · show b[i + 1] = UInt8.ofNat ((b[i].toNat + 256 * b[i + 1].toNat) / 256)
+        apply UInt8.toNat_inj.mp
+        simp only [UInt8.toNat_ofNat']
+        omega
+      · omega
+    · cases h
+
 theorem bytes8_bytes (max : Nat) (v : ByteArray) :
     (bytes8 max).bytes v = u8.bytes (UInt8.ofNat v.size) ++ v := by
   show u8.put _ ByteArray.empty ++ v = _

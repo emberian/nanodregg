@@ -30,7 +30,7 @@ structure Checked (E : Env D) (w : World D) (t : Turn D) (posts : List (Post D))
   creates : checkCreates E w t = .ok ()
   rowsRemain : checkRowsRemain E w t = .ok ()
   ranges : checkRanges E w t = .ok ()
-  rows : rowsRun E w t (Thunk.mk fun _ => Trie.emptyHash (rowSpec E)) = .ok (rowsAfter E w t)
+  rows : rowsRun E w t = .ok (rowsAfter E w t)
 
 theorem check_ok {E : Env D} {w : World D} {t : Turn D} {posts : List (Post D)}
     (h : check E w t = .ok posts) : Checked E w t posts := by
@@ -81,7 +81,11 @@ theorem admit_height {E : Env D} {w w' : World D} {t : Turn D}
 /-- The chain commits to the root AFTER the turn (KERNEL-23 (d)). -/
 theorem admit_chain {E : Env D} {w w' : World D} {t : Turn D}
     (h : World.admit E w t = .ok w') : w'.chain = chainNext E w.chain t (w'.roots E) := by
-  obtain ⟨_, _, rfl⟩ := admit_ok h; rfl
+  obtain ⟨_, _, rfl⟩ := admit_ok h
+  unfold commit commitWith World.roots World.root World.journalRoot World.refusalsRoot World.rowsRoot
+  dsimp only
+  rw [Trie.rootWith_eq (trieSpec E) _ _ rfl, Trie.rootWith_eq (journalSpec E) _ _ rfl,
+    Trie.rootWith_eq (refusalSpec E) _ _ rfl, Trie.rootWith_eq (rowSpec E) _ _ rfl]
 
 /-- **Charge exactness.** An admitted turn paid exactly its weight, could afford it with what
 its touches and its row touches give back, and the budget moved by exactly the charge less that
@@ -184,7 +188,7 @@ theorem pruneJournal_get {E : Env D} {H : Nat} {j : Journal D} (hj : Trie.Canon 
       if H % Bounds.windowMax = 0 then (j.get (journalSpec E) k).filter (kept H) else j.get (journalSpec E) k := by
   unfold pruneJournal
   split
-  · exact Trie.get_retainAt (journalSpec E) _ [] hj (fun _ _ _ => trivial) k
+  · exact Trie.get_retainAt (journalSpec E) _ [] hj (fun _ _ _ _ _ _ h => by simp at h) k
   · rfl
 
 omit [Ord D] [DecidableEq D] in
@@ -193,7 +197,7 @@ theorem pruneJournal_canon {E : Env D} {H : Nat} {j : Journal D} (hj : Trie.Cano
     Trie.Canon (journalSpec E) 0 (pruneJournal E H j) := by
   unfold pruneJournal
   split
-  · exact Trie.canon_retainAt (journalSpec E) _ [] 0 j hj (fun _ _ _ => trivial)
+  · exact Trie.canon_retainAt (journalSpec E) _ [] 0 j hj (fun _ _ _ _ _ _ h => by simp at h)
   · exact hj
 
 /-- **Every admission keeps the journal trie canonical.** -/

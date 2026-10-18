@@ -23,16 +23,20 @@ def World.RowsCanon (E : Env D) (w : World D) : Prop := Trie.Canon (rowSpec E) 0
 /-! ## A key lies under its own path -/
 
 omit [Ord D] [DecidableEq D] in
-theorem under_range {K V : Type} (S : Trie.Spec K V D) (k : K) :
-    ∀ (n d : Nat), Trie.Under S d ((List.range' d n).map (S.bit k)) k
-  | 0, _ => trivial
-  | n + 1, d => by
-      rw [List.range'_succ, List.map_cons]
-      exact ⟨rfl, under_range S k n (d + 1)⟩
+theorem under_range {K V : Type} (S : Trie.Spec K V D) (k : K) (n : Nat) :
+    Trie.Under S 0 ((List.range n).map (S.bit k)) k := by
+  intro i _ b hb
+  rw [List.getElem?_map] at hb
+  rcases h : (List.range n)[i]? with _ | j
+  · simp [h] at hb
+  · obtain ⟨hlt, hj⟩ := List.getElem?_eq_some_iff.mp h
+    rw [List.getElem_range] at hj
+    subst hj
+    simpa [h] using hb
 
 omit [Ord D] [DecidableEq D] in
 theorem under_rowPath (E : Env D) (s : RowSlot D) : Trie.Under (rowSpec E) 0 (rowPath E s) s := by
-  unfold rowPath; rw [List.range_eq_range']; exact under_range (rowSpec E) s _ 0
+  unfold rowPath; exact under_range (rowSpec E) s _
 
 /-! ## The rows' weight under one write -/
 
@@ -82,7 +86,7 @@ counters). -/
 theorem rowsWeight_setHead {E : Env D} {r : Rows D} (hr : Trie.Routed (rowSpec E) 0 r) {p : D} {rel : Nat}
     {c s l cap wd : Nat} {rt : Bool} {c' s' : Nat}
     (h : r.get (rowSpec E) (.head p rel) = some (.head c s l cap wd rt)) :
-    rowsWeight (setHead E r p rel c' s' l cap wd rt (Thunk.mk fun _ => Trie.emptyHash (rowSpec E))) = rowsWeight r := by
+    rowsWeight (setHead E r p rel c' s' l cap wd rt) = rowsWeight r := by
   have := rowsWeight_insert_some hr (.head c' s' l cap wd rt) h
   simp only [rowEntryWeight, RowLeaf.weight] at this
   unfold setHead
@@ -108,7 +112,7 @@ theorem head_ne_row {p : D} {rel : Nat} {key : RowKey D} : (RowSlot.head p rel :
 /-- **One row touch moves the rows' weight exactly**: by its growth, less what it gives back; and
 the rows stay canonical. -/
 theorem rowStep_weight {E : Env D} {w : World D} {t : Turn D} {r r' : Rows D} {x : RowTouch D}
-    (hr : Trie.Canon (rowSpec E) 0 r) (h : rowStep E w t (Thunk.mk fun _ => Trie.emptyHash (rowSpec E)) r x = .ok r') :
+    (hr : Trie.Canon (rowSpec E) 0 r) (h : rowStep E w t r x = .ok r') :
     rowsWeight r' + rowFreed E r x = rowsWeight r + x.growth ∧ Trie.Canon (rowSpec E) 0 r' := by
   obtain ⟨slot, seen, act⟩ := x
   cases slot with
@@ -208,7 +212,7 @@ theorem rowStep_weight {E : Env D} {w : World D} {t : Turn D} {r r' : Rows D} {x
 
 theorem foldRows_weight {E : Env D} {w : World D} {t : Turn D} :
     ∀ (l : List (RowTouch D)) (acc rr : Rows D × Nat), Trie.Canon (rowSpec E) 0 acc.1 →
-      l.foldlM (rowStepFreed E w t (Thunk.mk fun _ => Trie.emptyHash (rowSpec E))) acc = .ok rr →
+      l.foldlM (rowStepFreed E w t) acc = .ok rr →
       rowsWeight rr.1 + rr.2 = rowsWeight acc.1 + acc.2 + (l.map RowTouch.growth).sum ∧
         Trie.Canon (rowSpec E) 0 rr.1
   | [], acc, rr, hc, h => by
@@ -234,7 +238,7 @@ omit [Ord D] [DecidableEq D] in
 theorem takeList_sublist {K V : Type} : ∀ (n : Nat) (t : Trie.T K V D), (takeList n t).Sublist t.toList
   | _, .empty => by simp [takeList, Trie.T.toList]
   | n, .leaf _ kvs => by simpa [takeList, Trie.T.toList] using List.take_sublist n kvs
-  | n, .node _ l r => by
+  | n, .node _ _ _ l r => by
       unfold takeList; simp only [Trie.T.toList]
       split
       · exact List.nil_sublist _
@@ -243,18 +247,20 @@ theorem takeList_sublist {K V : Type} : ∀ (n : Nat) (t : Trie.T K V D), (takeL
 omit [Ord D] [DecidableEq D] in
 /-- A bounded listing lists entries the trie holds, each once. -/
 theorem under_sublist {K V : Type} (S : Trie.Spec K V D) (pre : ByteArray) (n : Nat) :
-    ∀ (d : Nat) (t : Trie.T K V D), (under S pre n d t).Sublist t.toList
-  | _, .empty => by simp [under, Trie.T.toList]
-  | _, .leaf _ kvs => by
+    ∀ (t : Trie.T K V D), (under S pre n t).Sublist t.toList
+  | .empty => by simp [under, Trie.T.toList]
+  | .leaf _ kvs => by
       simp only [under, Trie.T.toList]
       exact (List.take_sublist _ _).trans List.filter_sublist
-  | d, .node h l r => by
+  | .node h b rep l r => by
       unfold under; simp only [Trie.T.toList]
       split
       · split
-        · exact (under_sublist S pre n (d + 1) r).trans (List.sublist_append_right _ _)
-        · exact (under_sublist S pre n (d + 1) l).trans (List.sublist_append_left _ _)
-      · exact takeList_sublist n (.node h l r)
+        · exact (under_sublist S pre n r).trans (List.sublist_append_right _ _)
+        · exact (under_sublist S pre n l).trans (List.sublist_append_left _ _)
+      · split
+        · exact takeList_sublist n (.node h b rep l r)
+        · exact List.nil_sublist _
 
 omit [Ord D] in
 /-- Removing listed entries one at a time: each gives back exactly its weight. -/
@@ -262,8 +268,7 @@ theorem dropList_weight {E : Env D} :
     ∀ (L : List (RowSlot D × RowLeaf)) (acc : Rows D × Nat), Trie.Canon (rowSpec E) 0 acc.1 →
       (L.map Prod.fst).Nodup → (∀ q ∈ L, q ∈ acc.1.toList) →
       let rr := L.foldl (fun acc p =>
-          (Trie.retainAt (rowSpec E) (fun k _ => decide (k ≠ p.1)) (rowPath E p.1) acc.1
-            (Thunk.mk fun _ => Trie.emptyHash (rowSpec E)), acc.2 + rowEntryWeight p)) acc
+          (Trie.retainAt (rowSpec E) (fun k _ => decide (k ≠ p.1)) (rowPath E p.1) acc.1, acc.2 + rowEntryWeight p)) acc
       rowsWeight rr.1 + rr.2 = rowsWeight acc.1 + acc.2 ∧ Trie.Canon (rowSpec E) 0 rr.1
   | [], acc, hc, _, _ => ⟨rfl, hc⟩
   | p :: L, acc, hc, hn, hm => by
@@ -280,8 +285,7 @@ theorem dropList_weight {E : Env D} :
         rw [hget, if_neg hq1, hg])
       refine ⟨?_, ih.2⟩
       have h1 := ih.1
-      have e1 : ((Trie.retainAt (rowSpec E) (fun k _ => decide (k ≠ p.1)) (rowPath E p.1) acc.1
-            (Thunk.mk fun _ => Trie.emptyHash (rowSpec E)), acc.2 + rowEntryWeight p) : Rows D × Nat).1 =
+      have e1 : ((Trie.retainAt (rowSpec E) (fun k _ => decide (k ≠ p.1)) (rowPath E p.1) acc.1, acc.2 + rowEntryWeight p) : Rows D × Nat).1 =
           Trie.retainAt (rowSpec E) (fun k _ => decide (k ≠ p.1)) (rowPath E p.1) acc.1 := rfl
       rw [e1] at h1
       rw [show ((p.1, p.2) : RowSlot D × RowLeaf) = p from rfl] at hw
@@ -292,9 +296,9 @@ omit [Ord D] in
 /-- **`dropHeads` gives back exactly what it removes**, and the rows stay canonical. -/
 theorem dropHeads_weight {E : Env D} (t : Turn D) :
     ∀ (acc : Rows D × Nat), Trie.Canon (rowSpec E) 0 acc.1 →
-      rowsWeight (dropHeads E t (Thunk.mk fun _ => Trie.emptyHash (rowSpec E)) acc).1 +
-          (dropHeads E t (Thunk.mk fun _ => Trie.emptyHash (rowSpec E)) acc).2 = rowsWeight acc.1 + acc.2 ∧
-        Trie.Canon (rowSpec E) 0 (dropHeads E t (Thunk.mk fun _ => Trie.emptyHash (rowSpec E)) acc).1 := by
+      rowsWeight (dropHeads E t acc).1 +
+          (dropHeads E t acc).2 = rowsWeight acc.1 + acc.2 ∧
+        Trie.Canon (rowSpec E) 0 (dropHeads E t acc).1 := by
   unfold dropHeads
   generalize t.touches = xs
   induction xs with
@@ -303,10 +307,10 @@ theorem dropHeads_weight {E : Env D} (t : Turn D) :
       intro acc hc
       simp only [List.foldl_cons]
       split
-      · have hsub : ((under (rowSpec E) (E.bytes x.cell) 257 0 acc.1).filter fun p => match p.1 with
+      · have hsub : ((under (rowSpec E) (E.bytes x.cell) 257 acc.1).filter fun p => match p.1 with
             | .head q _ => decide (q = x.cell)
             | .row _ => false).Sublist acc.1.toList :=
-          List.filter_sublist.trans (under_sublist (rowSpec E) (E.bytes x.cell) 257 0 acc.1)
+          List.filter_sublist.trans (under_sublist (rowSpec E) (E.bytes x.cell) 257 acc.1)
         have h1 := dropList_weight _ acc hc
           (List.Sublist.nodup (hsub.map Prod.fst) (Trie.toList_nodup (rowSpec E) 0 acc.1 hc.1))
           (fun q hq => hsub.subset hq)
@@ -317,7 +321,7 @@ theorem dropHeads_weight {E : Env D} (t : Turn D) :
 /-- **A turn's row touches move the rows' weight exactly**: by their growth, less what they give
 back; and the rows stay canonical. -/
 theorem rowsRun_weight {E : Env D} {w : World D} {t : Turn D} {rr : Rows D × Nat}
-    (hr : w.RowsCanon E) (h : rowsRun E w t (Thunk.mk fun _ => Trie.emptyHash (rowSpec E)) = .ok rr) :
+    (hr : w.RowsCanon E) (h : rowsRun E w t = .ok rr) :
     rowsWeight rr.1 + rr.2 = rowsWeight w.rows + (t.rows.map RowTouch.growth).sum ∧
       Trie.Canon (rowSpec E) 0 rr.1 := by
   unfold rowsRun at h
@@ -410,7 +414,7 @@ theorem range_stale_refused {E : Env D} {w : World D} {t : Turn D} {q : RangeRea
 /-- A row touch that passes saw its row's pin in the rows it was judged on. -/
 theorem rowStep_pin {E : Env D} {w : World D} {t : Turn D} {r r' : Rows D} {x : RowTouch D}
     {key : RowKey D} {s : D} (hs : x.slot = .row key) (hseen : x.seen = some s)
-    (h : rowStep E w t (Thunk.mk fun _ => Trie.emptyHash (rowSpec E)) r x = .ok r') :
+    (h : rowStep E w t r x = .ok r') :
     rowPin E (rowAt E r (.row key)) = s := by
   obtain ⟨slot, seen, act⟩ := x
   simp only at hs hseen
@@ -443,7 +447,7 @@ theorem rowStep_pin {E : Env D} {w : World D} {t : Turn D} {r r' : Rows D} {x : 
 
 /-- A row touch writes only its own slot and heads: every other row reads as before. -/
 theorem rowStep_get_other {E : Env D} {w : World D} {t : Turn D} {r r' : Rows D} {x : RowTouch D}
-    (hr : Trie.Canon (rowSpec E) 0 r) (h : rowStep E w t (Thunk.mk fun _ => Trie.emptyHash (rowSpec E)) r x = .ok r')
+    (hr : Trie.Canon (rowSpec E) 0 r) (h : rowStep E w t r x = .ok r')
     {key : RowKey D} (hne : x.slot ≠ .row key) :
     r'.get (rowSpec E) (.row key) = r.get (rowSpec E) (.row key) := by
   have hhr : ∀ (p : D) (rel : Nat), (RowSlot.row key : RowSlot D) ≠ .head p rel := fun _ _ h => by cases h
@@ -509,7 +513,7 @@ theorem rowStep_get_other {E : Env D} {w : World D} {t : Turn D} {r r' : Rows D}
 theorem foldRows_pins {E : Env D} {w : World D} {t : Turn D} :
     ∀ (l : List (RowTouch D)) (acc rr : Rows D × Nat), Trie.Canon (rowSpec E) 0 acc.1 →
       (l.map RowTouch.slot).Nodup →
-      l.foldlM (rowStepFreed E w t (Thunk.mk fun _ => Trie.emptyHash (rowSpec E))) acc = .ok rr →
+      l.foldlM (rowStepFreed E w t) acc = .ok rr →
       ∀ x ∈ l, ∀ key s, x.slot = .row key → x.seen = some s → rowPin E (rowAt E acc.1 (.row key)) = s
   | [], _, _, _, _, _, x, hx, _, _, _, _ => by simp at hx
   | y :: rest, acc, rr, hc, hn, h, x, hx, key, s, hs, hseen => by

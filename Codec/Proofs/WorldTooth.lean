@@ -682,4 +682,60 @@ theorem carried_refuses_uncounted_row :
     (by show rowsHeaded (wr (headed 2)).toList = false
         rw [wr_headed2]; decide +kernel)
 
+/-! ## The proof wire's teeth (KERNEL-49 (a), `kernel/proof`)
+
+A path's bits must ascend below the trie's depth: each plant beside the twin it differs from by one
+bit. -/
+
+/-- The deepest bit a journal node can branch on (`journalDepth - 1`) reads back. -/
+theorem proof_reads_deepest_bit :
+    (match (proof (journalSpec Sim.env) Sim.dc Sim.dc).decode
+        ((proofWire Bounds.journalDepth Sim.dc Sim.dc).bytes (some [(0, 0)], [(Bounds.journalDepth - 1, 0)])) with
+     | .ok p => p.sibs == [(Bounds.journalDepth - 1, 0)]
+     | .error _ => false) = true := by decide +kernel
+
+/-- The plant: one bit past it (`journalDepth`) is refused `kernel/proof` by name. -/
+theorem proof_refuses_past_depth :
+    (match (proof (journalSpec Sim.env) Sim.dc Sim.dc).decode
+        ((proofWire Bounds.journalDepth Sim.dc Sim.dc).bytes (some [(0, 0)], [(Bounds.journalDepth, 0)])) with
+     | .error (.rejected _ "kernel/proof") => true
+     | _ => false) = true := by decide +kernel
+
+/-- Two siblings at ascending bits over a leaf read back. -/
+theorem proof_reads_ascending_bits :
+    (match (proof (journalSpec Sim.env) Sim.dc Sim.dc).decode
+        ((proofWire Bounds.journalDepth Sim.dc Sim.dc).bytes (some [(0, 0)], [(5, 0), (6, 1)])) with
+     | .ok p => p.sibs == [(5, 0), (6, 1)]
+     | .error _ => false) = true := by decide +kernel
+
+/-- The plant: the same two siblings at one bit twice are refused `kernel/proof` by name (a node's
+child branches below it). -/
+theorem proof_refuses_repeated_bit :
+    (match (proof (journalSpec Sim.env) Sim.dc Sim.dc).decode
+        ((proofWire Bounds.journalDepth Sim.dc Sim.dc).bytes (some [(0, 0)], [(5, 0), (5, 1)])) with
+     | .error (.rejected _ "kernel/proof") => true
+     | _ => false) = true := by decide +kernel
+
+/-- The empty trie's proof (no sibling) reads back. -/
+theorem proof_reads_empty_trie :
+    (match (proof (journalSpec Sim.env) Sim.dc Sim.dc).decode
+        ((proofWire Bounds.journalDepth Sim.dc Sim.dc).bytes (none, [])) with
+     | .ok p => p.term.isNone && p.sibs.isEmpty
+     | .error _ => false) = true := by decide +kernel
+
+/-- The plant: an empty end under a sibling is refused `kernel/proof` by name (no node has an empty
+child). -/
+theorem proof_refuses_empty_under_sibling :
+    (match (proof (journalSpec Sim.env) Sim.dc Sim.dc).decode
+        ((proofWire Bounds.journalDepth Sim.dc Sim.dc).bytes (none, [(5, 0)])) with
+     | .error (.rejected _ "kernel/proof") => true
+     | _ => false) = true := by decide +kernel
+
+/-- The plant: a leaf with no entry is refused `kernel/proof` by name (no leaf is empty). -/
+theorem proof_refuses_empty_leaf :
+    (match (proof (journalSpec Sim.env) Sim.dc Sim.dc).decode
+        ((proofWire Bounds.journalDepth Sim.dc Sim.dc).bytes (some [], [(5, 0)])) with
+     | .error (.rejected _ "kernel/proof") => true
+     | _ => false) = true := by decide +kernel
+
 end Nanodregg.Codec.Kernel

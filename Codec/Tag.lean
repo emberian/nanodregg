@@ -39,6 +39,7 @@ def Shape.put : Shape → ByteArray → ByteArray
   | .oneOf codes, b => Stream.putVarint codes.size (b.push 15) ++ ⟨codes⟩
   | .within limit s, b => s.put (Stream.putVarint limit (b.push 16))
   | .bytes8 max, b => Stream.putVarint max (b.push 17)
+  | .u16, b => b.push 18
 
 /-- Each case's code byte and shape, in order. -/
 def Shape.putCases : List (UInt8 × Shape) → ByteArray → ByteArray

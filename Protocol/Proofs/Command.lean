@@ -112,8 +112,8 @@ theorem envelopeRefused_ne_submit {X : Ctx D} {me : Self D} {argv : List ByteArr
   repeat' split at h
   all_goals first | exact refusedAt_ne_submit h | (simp [refused] at h; done) | ((try dsimp only at h); exact envelopeSign_ne_submit h)
 
-theorem receiptLines_ne_submit {X : Ctx D} {w : World D} {cb call k : ByteArray} :
-    receiptLines X w cb ≠ .submit call k := by
+theorem receiptLines_ne_submit {X : Ctx D} {dc : Codec.Stream D} {w : World D} {cb call k : ByteArray} :
+    receiptLines X dc w cb ≠ .submit call k := by
   intro h
   unfold receiptLines at h
   repeat' split at h
@@ -161,9 +161,9 @@ theorem envelopeRefused_write {X : Ctx D} {me : Self D} {argv : List ByteArray} 
 
 /-- Consent at the wire: the only call `step` hands the client to submit is a call over a `u`
 that `plan` produced on follow's own World (hence derived and admitted there, `plan_admits`). -/
-theorem step_submit_planned {X : Ctx D} {B : Thin.Base (World D)} {me : Self D}
+theorem step_submit_planned {X : Ctx D} {dc : Codec.Stream D} {B : Thin.Base (World D)} {me : Self D}
     {f f' : Follow D} {p : Persist D}
-    {kb result call k : ByteArray} (h : step X B me f kb result = (f', p, .submit call k)) :
+    {kb result call k : ByteArray} (h : step X dc B me f kb result = (f', p, .submit call k)) :
     f' = f ∧ p = .steps [] ∧ ∃ key b u sig, plan X me f.world key b = .ok u ∧ call = X.callBytes ⟨u, sig⟩ := by
   unfold step next at h
   repeat' split at h
@@ -289,9 +289,9 @@ theorem absorbPage_steps {X : Ctx D} {w w' : World D} {evs : List ByteArray} {st
 /-- **What follow persists, its own fold taken, each roots digest its own.** Every pair follow
 persists is a step its own `World.step` took, in order from its World, beside the roots digest of
 the World that step reached (HOST-29, KERNEL-47), ending at follow's next World. -/
-theorem step_persists_admitted {X : Ctx D} {B : Thin.Base (World D)} {me : Self D}
+theorem step_persists_admitted {X : Ctx D} {dc : Codec.Stream D} {B : Thin.Base (World D)} {me : Self D}
     {f f' : Follow D} {ts : List (Kernel.Step D × D)} {kb result : ByteArray} {r : Reply}
-    (h : step X B me f kb result = (f', .steps ts, r)) :
+    (h : step X dc B me f kb result = (f', .steps ts, r)) :
     World.RootedFold X.env f.world ts f'.world := by
   unfold step next at h
   repeat' split at h
@@ -304,9 +304,9 @@ theorem step_persists_admitted {X : Ctx D} {B : Thin.Base (World D)} {me : Self 
     | (obtain ⟨rfl, rfl, -⟩ := h; rfl)
 
 /-- HOST-22's consumer: what follow persists folds, with `World.fold`, to follow's next World. -/
-theorem step_persists_folds {X : Ctx D} {B : Thin.Base (World D)} {me : Self D}
+theorem step_persists_folds {X : Ctx D} {dc : Codec.Stream D} {B : Thin.Base (World D)} {me : Self D}
     {f f' : Follow D} {ts : List (Kernel.Step D × D)} {kb result : ByteArray} {r : Reply}
-    (h : step X B me f kb result = (f', .steps ts, r)) :
+    (h : step X dc B me f kb result = (f', .steps ts, r)) :
     World.fold X.env f.world (ts.map Prod.fst) = .ok f'.world :=
   RootedFold.fold (step_persists_admitted h)
 

@@ -2241,3 +2241,68 @@ Not changed: rows_separate stays CODEC's (`rows_separateOn`, tooth `rows_kindByt
 - The cost figures are PREDICTED from definitions plus textbook trie constants; the probe is tiny (≤ 8 rows), so its figure flatters every option equally.
 - The ~97 and ~180 counts are statements naming internals (a regex over statements), not proof obligations. As KERNEL-47's meta-critique warns, the proofs are where the price hides: (a)'s `Shape` must state "first divergence", and `build_toList`'s induction changes measure from depth to fuel-with-skips.
 - (a) makes a node's hash 2 bytes longer: the hash count is unchanged, and the bytes hashed rise ~3%.
+
+### KERNEL-49 RULED (a), and amendment 1 (KERNEL-18, 2026-10-18; ROOT accepted): a node keeps a representative key
+
+**ROOT's ruling (10-18).** (a) is approved, Q49: the depth bound is a `Spec` FIELD. Conditions:
+1. the reader lists every restated statement and asserts that no cell reader gained a premise;
+2. the proof wire gains a u16 per sibling and the receipt is re-cut (PROTOCOL-11), while listings and the three pin kinds stay byte-identical, with a plant per pin kind;
+3. KERNEL-35's per-node empty-digest plumbing is DELETED;
+4. the WASTE rows are re-pinned DOWN with measured values;
+5. (c)'s bound is stated: 2·(`rowDepth` + 1) = 2610 hashes per insert, × `rowsMax` 32 = 83,520 per turn, which is what option (c) would have had to print and an arm show;
+plus the forgery tooth (plant `depth-unhashed`).
+
+**Amendment 1: what the proposal missed.**
+- In a path-compressed trie a node skips the bits its keys agree on. With a `getAt` that follows only the branching bits, `get` after `insert` is exact only on a ROUTED trie. That holds for a canonical tree; it fails for an arbitrary one.
+- `get_insert` today has no premise. It is used about 60 times, in Frame (`admit_frame`, `admit_rom`, `fold_rom`, `admit_nullifiers` …), Value, Weight, CellsFit and Rows*, over arbitrary Worlds. Under the proposal's shape it would gain `Routed S 0 t`, which spreads as `World.Canon` premises onto those theorems.
+- The proposal's "0 premises" counted statements that NAME trie internals; it never counted the theorems that USE `get_insert`. That is the error KERNEL-47's meta-critique warned of, now found in the proofs.
+
+**The fix, which is forced: `T.node h b rep l r`.**
+- `rep` is the subtree's first key in trie order. It is a cache of the bits every key below agrees on, and it is NOT hashed, so roots and the proof wire are unaffected.
+- `getAt k d` checks `k` against `rep` on the skipped bits `[d, b)` (`diverge`). When they differ, `getAt` answers `none` before following bit `b`.
+- `insAt` splits exactly where `diverge` says. `getAt` and `insAt` therefore consult the same datum, and `get_insert` holds on ANY tree, with no premise.
+- Any design that lets `getAt` ignore the skipped bits makes `insAt`'s split depend on a key-set invariant that an arbitrary tree can violate. So a premise-free `get_insert` needs `getAt` to read what `insAt` reads.
+
+**Its price, premises first** (the reader's list, K18-READER over the joint tree):
+- `Trie.inclusion_sound` and `Trie.prove_excludes` gain `Routed S 0 t`, and `getAt_proveAt` gains `Routed S d t`. A malformed tree could hold a key in a leaf that `getAt`'s check refuses: such a proof's leaf holds `k`, yet `getAt` reads none. The premise-free direction is `getAt_some_proveAt`.
+- Every caller holds the trie's `Canon` and passes `hc.1`: three `inclusion_sound` sites and three `prove_excludes` sites, in Cells, JournalHead and RefusalsHead. So no cell reader's statement changes: Cells, JournalHead, RefusalsHead, RootedDeployed, Value, Weight, Frame, CellsFit and Protocol/Proofs/Receipt keep their text.
+- Inside the trie's own proofs:
+  - `climb_sound` gains `ascends` (`u16` wraps at 2^16), which the verifier supplies;
+  - `shape_insAt` gains `Routed`, which `canon_insert` passes;
+  - `wf_mkNode` gains `b < depth`;
+  - `canon_join` gains the agreement on `[d, b)`.
+- In the rows readers:
+  - `under_eq` gains `Shape`. Its agreement premise becomes "keys agree pairwise below d" (vacuous at d = 0, where every caller sits).
+  - `under_rows`, `range_rows_none`, `range_rows_mem`, `range_rows_erase_not_exact` and RowsHead's `under_parent` go from `Routed` to `Canon`. This is forced (tooth `under_needs_shape`): `under` reads `rep`'s bytes, so `rep` must be a key of the subtree.
+  - Every caller already held `Canon`. `range_rows_exact`, `admit_range_exact` and `fold_range_exact` keep their text.
+  - `Rows.under_range` is restated at `d = 0` (`Under` now indexes the path absolutely, as `retainAt` reads `path[b]?`).
+- `exclusion_sound` stays WF-only. When `getAt` answers `none` early, the exclusion claim is true; otherwise `getAt` and `proveAt` walk the same path.
+- Work: one comparison of at most `depth` bits per `get`, spread along the path, and no hash.
+- `rep` is canonical (a node's first key, `T.first`), so `build_toList` keeps `=`. `insAt` maintains it by `precedes` (k comes first in trie order) without walking.
+- `under` reads `rep` for its one prefix check.
+
+**What the day re-emits, re-geneses and refuses** (unchanged from the proposal):
+- every root changes, so every Store re-geneses, and `rootsDigest`, every chain head, genesis, the carried origin and every vector carrying a root re-emit;
+- `Proof.sibs : List (Nat × D)`, so the proof wire gains a u16 per sibling and the receipt is re-cut, and an old proof refuses on parse;
+- listings, cell pins, row pins and range pins are byte-identical.
+
+**Measured (kernel-sim --seeds 64, COUNTED; ROOT conditions 4 and 5).**
+- Ceilings, every one falling:
+  - `hashes-per-row-insert` 564.071 → 7.642;
+  - `-row-retract` 569.000 → 6.000;
+  - `-touched-cell` 8.900 → 6.757;
+  - `-nullifier` 3.317 → 2.865;
+  - `-journal-entry` 13.672 → 12.162;
+  - `-prune` 539.333 → 418.333;
+  - refuse `hashes-per-refusal` 26.829 → 11.410;
+  - `hashes-per-turn-rows-root` 0.128 → 0.
+- New rows:
+  - `hashes-per-turn-empty-root` 1.000: the shared empty digest, moved out of the cell, nullifier and rows rows, not a new cost;
+  - `hashes-per-row-insert-stem` 7.515: 64 u64-counter keys sharing 58 bits, ≈ the random-key figure as predicted;
+  - `proof bytes-per-inclusion` 257.133 = 74 + 34n, n ≈ 5.39.
+- (c)'s bound, as (c) would have had to print it: 2·(`rowDepth` + 1) = 2610 hashes per insert, × `rowsMax` 32 = 83,520 per turn. The worst single insert the stem probe measured under (a) is 11.
+- Plants:
+  - `depth-unhashed`: `b` dropped from the node hash, a forged exclusion VERIFIES under the plant and is refused by the deployed verifier;
+  - `proof-bit:refused`;
+  - one per pin kind (cell, row, range: the pins equal a trie-free reference, and a perturbed read is caught);
+  - CODEC's six ListingPin plants: the pre-day listing bytes reproduced by the compressed trie.

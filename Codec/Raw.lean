@@ -47,6 +47,16 @@ def nat8 : Stream Nat where
     | .ok (v, j) => .ok (v.toNat, j)
     | .error e => .error e
 
+/-- A natural as two little-endian bytes (canonical below 2^16): a trie node's branching bit on a
+proof's path (KERNEL-49 (a); the node hash commits it as a u16). -/
+def nat16 : Stream Nat where
+  shape := .u16
+  size _ := 2
+  put n buf := (buf.push (UInt8.ofNat n)).push (UInt8.ofNat (n / 256))
+  get b i :=
+    if h : i + 2 ≤ b.size then .ok (b[i].toNat + 256 * b[i + 1].toNat, i + 2)
+    else .error (.truncated i 2)
+
 /-- `u8 len ‖ bytes`, at most `max` bytes (canonical for `max < 256`): a rows key, a range prefix
 (KERNEL-46's `rowKeyBytes`, whose length byte makes the key prefix-free). -/
 def bytes8 (max : Nat) : Stream ByteArray where

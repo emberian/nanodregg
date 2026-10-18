@@ -1,31 +1,41 @@
 /-
-# Kernel.Trie — a persistent binary Merkle trie (KERNEL-23)
+# Kernel.Trie — a persistent, path-compressed binary Merkle trie (KERNEL-23, KERNEL-49 (a))
 
-The authenticated map the World's cells and spent nullifiers live in. Keys are routed by their bits
-(`Spec.bit k d`: bit `d` of the key) down an UNCOMPRESSED binary trie: a subtree holding no key is
-`empty`, one holding one key is a `leaf`, one holding more is a `node` whose children split them by
-the next bit. The shape is therefore a function of the key set, not of the insertion order. A leaf
-holds a LIST of entries only at `Spec.depth`, where keys whose bits agree that far can no longer be
-told apart (an encoding that is not injective; the deployed one is). So `get` after `insert` is
-exact for ANY bit function: correctness never rests on a hash or an encoding, only the proofs' size
-does.
+The authenticated map the World's cells, journal, refusals and rows live in. Keys are routed by
+their bits (`Spec.bit k i`: bit `i` of the key). A subtree holding no key is `empty` (only ever a
+whole trie: no node has an empty child), one holding one key is a `leaf`, and one holding more is a
+`node` that BRANCHES at `b`, the first bit on which its keys differ: those with bit `b` clear go
+left, the rest right. The bits every key of the subtree agrees on are skipped, so a path is as long
+as the number of branchings above the key, not the key's length. The shape is a function of the key
+set, not of the insertion order. A leaf holds a LIST of entries only when its keys agree on every
+bit below `Spec.depth` (an encoding that is not injective; the deployed ones are). So `get` after
+`insert` is exact for ANY bit function and ANY tree, canonical or not: a node keeps a representative
+key (`rep`), `getAt` refuses a key that leaves it on the skipped bits, and `insAt` splits exactly
+there, so the two always agree on where a key belongs (`Kernel.Proofs.Trie.get_insert`, no
+premise). Correctness never rests on a hash or an encoding, only the proofs' soundness does.
 
 Every node caches its digest. One byte domain separates the three shapes: `empty = H(0)`,
-`leaf = H(1 ‖ k ‖ digest v …)`, `node = H(2 ‖ left ‖ right)`. A node's depth is its position, so
-the branching bit needs no committing: a proof's i-th sibling sits at depth i, and the side is the
-key's bit i. That makes EXCLUSION proofs as sound as inclusion ones (Kernel.Proofs.Trie).
+`leaf = H(1 ‖ k ‖ digest v …)`, `node = H(2 ‖ u16 b ‖ left ‖ right)`. The branching bit IS
+committed: a proof's i-th sibling carries the bit its node branches on, and the side is the key's
+bit there. Without `b` in the hash a proof could claim other bits and steer a key's walk to a leaf
+`get` never reaches, and an exclusion proof would forge (the sim plant `depth-unhashed`). With it,
+exclusion proofs are as sound as inclusion ones (Kernel.Proofs.Trie). `Spec.depth_lt` keeps every
+branching bit inside a u16.
 
-Work per `insert`: one path from the root to the key's leaf is rebuilt, one hash per node on it
-(and one for its leaf); the empty subtree's digest is hashed at most once per turn (KERNEL-35).
+Work per `insert`: one path from the root to the key's leaf is rebuilt, one hash per node on it,
+plus its leaf, plus at most one new node where the key's bits first leave the path's.
 -/
 namespace Nanodregg.Kernel.Trie
 
 /-- How a trie routes, hashes and encodes. -/
 structure Spec (K V D : Type) where
-  /-- bit `d` of a key -/
+  /-- bit `i` of a key -/
   bit : K → Nat → Bool
-  /-- the depth below which a leaf holds one key -/
+  /-- the bits a key is routed by: a node branches below it, and a leaf holds several keys only
+  when they agree on every bit below it -/
   depth : Nat
+  /-- a node commits its branching bit as a u16 -/
+  depth_lt : depth < 2 ^ 16
   hash : ByteArray → D
   dbytes : D → ByteArray
   kbytes : K → ByteArray
@@ -35,190 +45,237 @@ structure Spec (K V D : Type) where
 inductive T (K V D : Type) where
   | empty
   | leaf (h : D) (kvs : List (K × V))
-  | node (h : D) (l r : T K V D)
+  /-- `b`: the bit the node branches on; `rep`: its first key in trie order, a cache (not hashed)
+  of the bits every key below agrees on, which `getAt` checks and `insAt` splits at -/
+  | node (h : D) (b : Nat) (rep : K) (l r : T K V D)
 
-/-- What a proof carries of the subtree it ends at: an empty side, or a leaf's entries as
+/-- What a proof carries of the subtree it ends at: an empty trie, or a leaf's entries as
 (key, value digest). -/
 structure Proof (K D : Type) where
   term : Option (List (K × D))
-  /-- the siblings along the key's path, from the root down -/
-  sibs : List D
+  /-- the siblings along the key's path, from the root down, each with the bit its node branches
+  on -/
+  sibs : List (Nat × D)
 
 variable {K V D : Type} (S : Spec K V D)
 
 /-- A shape tag, then its bytes. -/
 def tagged (t : UInt8) (b : ByteArray) : ByteArray := ⟨#[t]⟩ ++ b
 
+/-- A branching bit's two bytes, big-endian (injective below `2 ^ 16`). -/
+def u16 (b : Nat) : ByteArray := ⟨#[(b / 256).toUInt8, b.toUInt8]⟩
+
 def leafBody (kds : List (K × D)) : ByteArray :=
   kds.foldr (fun p acc => S.kbytes p.1 ++ S.dbytes p.2 ++ acc) ByteArray.empty
 
 def emptyHash : D := S.hash (tagged 0 ByteArray.empty)
 def leafHash (kds : List (K × D)) : D := S.hash (tagged 1 (leafBody S kds))
-def nodeHash (l r : D) : D := S.hash (tagged 2 (S.dbytes l ++ S.dbytes r))
+def nodeHash (b : Nat) (l r : D) : D := S.hash (tagged 2 (u16 b ++ S.dbytes l ++ S.dbytes r))
 
 def digests (kvs : List (K × V)) : List (K × D) := kvs.map fun p => (p.1, S.vdigest p.2)
 
-/-- The empty subtree's digest, forced at most once by whoever holds it (KERNEL-35). -/
-abbrev EmptyDigest (D : Type) := Thunk D
+/-- A subtree's digest. Only a whole trie is ever `empty`, so the empty digest is hashed only where
+a root is read (`T.rootWith`). -/
+def T.hashOf : T K V D → D
+  | .empty => emptyHash S
+  | .leaf h _ => h
+  | .node h _ _ _ _ => h
 
-/-- A subtree's digest. `e` is the empty subtree's, `emptyHash S` unless a caller passes its own
-lazy copy: the mutation path makes one per `World.commitTrie` and forces it only if a path meets an
-empty sibling, so an insert pays no hash for an empty sibling and a turn pays at most one. Every
-theorem is stated at the default. -/
-def T.hashOf (t : T K V D) (e : EmptyDigest D := Thunk.mk fun _ => emptyHash S) : D :=
+/-- A root's digest, an empty trie's read from `e`: the World commits four roots per head and shares
+one lazy empty digest among them, so a head pays at most one hash for its empty tries (KERNEL-35, at
+the roots only). -/
+def T.rootWith (t : T K V D) (e : Thunk D) : D :=
   match t with
   | .empty => e.get
-  | .leaf h _ => h
-  | .node h _ _ => h
+  | t => t.hashOf S
 
 def mkLeaf (kvs : List (K × V)) : T K V D := .leaf (leafHash S (digests S kvs)) kvs
 
-def mkNode (l r : T K V D) (e : EmptyDigest D := Thunk.mk fun _ => emptyHash S) : T K V D :=
-  .node (nodeHash S (l.hashOf S e) (r.hashOf S e)) l r
+def mkNode (b : Nat) (rep : K) (l r : T K V D) : T K V D :=
+  .node (nodeHash S b (l.hashOf S) (r.hashOf S)) b rep l r
 
 variable [DecidableEq K]
 
 /-- The value at `k` in a leaf's entries. -/
 def find {α : Type} (k : K) (kvs : List (K × α)) : Option α := (kvs.find? fun p => p.1 = k).map (·.2)
 
-/-- The value at `k`, walking from depth `d`. -/
+
+/-- The first bit from `d` below `depth` on which the keys of `kvs` do not all agree. -/
+def splitBit (d : Nat) : List (K × V) → Option Nat
+  | [] => none
+  | p :: rest => (List.range' d (S.depth - d)).find? fun i => rest.any fun q => S.bit q.1 i != S.bit p.1 i
+
+/-- The first bit from `d` below `b` on which `k` and `k'` differ. -/
+def diverge (k k' : K) (d b : Nat) : Option Nat :=
+  (List.range' d (b - d)).find? fun i => S.bit k i != S.bit k' i
+
+/-- The value at `k`, in a subtree whose keys agree with `k` on every bit below `d`: at a node
+branching at `b`, `k` must agree with the node's `rep` on the skipped bits `[d, b)` (else no key
+below is `k`), then it follows its bit `b`; at a leaf, whole keys are compared. -/
 def getAt (k : K) : Nat → T K V D → Option V
   | _, .empty => none
   | _, .leaf _ kvs => find k kvs
-  | d, .node _ l r =>
-      match S.bit k d with
-      | true => getAt k (d + 1) r
-      | false => getAt k (d + 1) l
+  | d, .node _ b rep l r =>
+      match diverge S k rep d b with
+      | some _ => none
+      | none =>
+          match S.bit k b with
+          | true => getAt k (b + 1) r
+          | false => getAt k (b + 1) l
 
-/-- The canonical subtree at depth `d` holding `kvs` (`fuel` levels left before `depth`); `e` as in
-`T.hashOf`. -/
-def build (f d : Nat) (kvs : List (K × V)) (e : EmptyDigest D := Thunk.mk fun _ => emptyHash S) :
-    T K V D :=
-  match f, d, kvs with
-  | _, _, [] => .empty
-  | _, _, [x] => mkLeaf S [x]
-  | 0, _, kvs => mkLeaf S kvs
-  | f + 1, d, kvs =>
-      mkNode S (build f (d + 1) (kvs.filter fun p => !S.bit p.1 d) e)
-        (build f (d + 1) (kvs.filter fun p => S.bit p.1 d) e) e
+/-- Whether `k` comes before `k'` in trie order, given they agree below `d`: at their first
+differing bit below `depth`, `k`'s is clear. Keys agreeing on every bit below `depth` share a leaf,
+where a new key goes last. -/
+def precedes (k k' : K) (d : Nat) : Bool :=
+  match diverge S k k' d S.depth with
+  | some e => !S.bit k e
+  | none => false
 
-/-- Set `k` to `v`, from depth `d`: one path rebuilt; `e` as in `T.hashOf`. -/
-def insAt (k : K) (v : V) (d : Nat) (t : T K V D)
-    (e : EmptyDigest D := Thunk.mk fun _ => emptyHash S) : T K V D :=
-  match d, t with
+/-- The subtree's first key in trie order, read from its root (no walk). -/
+def T.first : T K V D → Option K
+  | .empty => none
+  | .leaf _ kvs => kvs.head?.map (·.1)
+  | .node _ _ rep _ _ => some rep
+
+/-- The canonical subtree holding `kvs`, whose keys agree on every bit below `d` (`fuel` levels
+left; `depth - d` always suffices, since each node branches at a bit `≥ d`). -/
+def build (f d : Nat) (kvs : List (K × V)) : T K V D :=
+  match f, kvs with
+  | _, [] => .empty
+  | _, [x] => mkLeaf S [x]
+  | 0, kvs => mkLeaf S kvs
+  | f + 1, p :: rest =>
+      match splitBit S d (p :: rest) with
+      | none => mkLeaf S (p :: rest)
+      | some b =>
+          let l := build f (b + 1) ((p :: rest).filter fun q => !S.bit q.1 b)
+          mkNode S b (l.first.getD p.1) l (build f (b + 1) ((p :: rest).filter fun q => S.bit q.1 b))
+
+/-- Set `k` to `v` in a subtree whose keys agree with `k` on every bit below `d`: one path rebuilt.
+Where `k` first leaves a node's skipped bits (against its `rep`, as `getAt` reads), a new node
+branches between `k`'s leaf and the node, whose cached hash is kept. A node's `rep` becomes `k` when
+`k` lands first in trie order. -/
+def insAt (k : K) (v : V) : Nat → T K V D → T K V D
   | _, .empty => mkLeaf S [(k, v)]
   | d, .leaf _ kvs =>
       if kvs.any (fun p => p.1 = k) then mkLeaf S (kvs.map fun p => if p.1 = k then (k, v) else p)
-      else build S (S.depth - d) d (kvs ++ [(k, v)]) e
-  | d, .node _ l r =>
-      match S.bit k d with
-      | true => mkNode S l (insAt k v (d + 1) r e) e
-      | false => mkNode S (insAt k v (d + 1) l e) r e
+      else build S (S.depth - d) d (kvs ++ [(k, v)])
+  | d, .node h b rep l r =>
+      match diverge S k rep d b with
+      | some c =>
+          match S.bit k c with
+          | true => mkNode S c rep (.node h b rep l r) (mkLeaf S [(k, v)])
+          | false => mkNode S c k (mkLeaf S [(k, v)]) (.node h b rep l r)
+      | none =>
+          match S.bit k b with
+          | true => mkNode S b rep l (insAt k v (b + 1) r)
+          | false => mkNode S b (if precedes S k rep (b + 1) then k else rep) (insAt k v (b + 1) l) r
 
-/-- The proof for `k`, from depth `d`: the siblings down its path and what the path ends at; `e` as
-in `T.hashOf` (an empty sibling costs at most one hash per proof). -/
-def proveAt (k : K) (d : Nat) (t : T K V D) (e : EmptyDigest D := Thunk.mk fun _ => emptyHash S) :
-    Proof K D :=
-  match d, t with
-  | _, .empty => ⟨none, []⟩
-  | _, .leaf _ kvs => ⟨some (digests S kvs), []⟩
-  | d, .node _ l r =>
-      match S.bit k d with
-      | true => let p := proveAt k (d + 1) r e; ⟨p.term, l.hashOf S e :: p.sibs⟩
-      | false => let p := proveAt k (d + 1) l e; ⟨p.term, r.hashOf S e :: p.sibs⟩
+/-- The proof for `k`: the siblings down its path, each with its node's branching bit, and what the
+path ends at. It follows `k`'s bits only (a key that leaves a node's skipped bits is shown absent by
+the leaf its bits reach, which does not hold it). -/
+def proveAt (k : K) : T K V D → Proof K D
+  | .empty => ⟨none, []⟩
+  | .leaf _ kvs => ⟨some (digests S kvs), []⟩
+  | .node _ b _ l r =>
+      match S.bit k b with
+      | true => let p := proveAt k r; ⟨p.term, (b, l.hashOf S) :: p.sibs⟩
+      | false => let p := proveAt k l; ⟨p.term, (b, r.hashOf S) :: p.sibs⟩
 
 def termHash : Option (List (K × D)) → D
   | none => emptyHash S
   | some kds => leafHash S kds
 
-/-- The root a path recomputes: the siblings from depth `d` down, over the end's digest. -/
-def climb (k : K) : Nat → List D → D → D
-  | _, [], h => h
-  | d, s :: rest, h =>
-      let c := climb k (d + 1) rest h
-      match S.bit k d with
-      | true => nodeHash S s c
-      | false => nodeHash S c s
+/-- The root a path recomputes: the siblings from the root down, over the end's digest. -/
+def climb (k : K) : List (Nat × D) → D → D
+  | [], h => h
+  | (b, s) :: rest, h =>
+      let c := climb k rest h
+      match S.bit k b with
+      | true => nodeHash S b s c
+      | false => nodeHash S b c s
 
 def T.get (t : T K V D) (k : K) : Option V := getAt S k 0 t
-def T.insert (t : T K V D) (k : K) (v : V) (e : EmptyDigest D := Thunk.mk fun _ => emptyHash S) :
-    T K V D :=
-  insAt S k v 0 t e
-def T.prove (t : T K V D) (k : K) (e : EmptyDigest D := Thunk.mk fun _ => emptyHash S) :
-    Proof K D :=
-  proveAt S k 0 t e
+def T.insert (t : T K V D) (k : K) (v : V) : T K V D := insAt S k v 0 t
+def T.prove (t : T K V D) (k : K) : Proof K D := proveAt S k t
 
 /-- Every entry, left to right. -/
 def T.toList : T K V D → List (K × V)
   | .empty => []
   | .leaf _ kvs => kvs
-  | .node _ l r => l.toList ++ r.toList
+  | .node _ _ _ l r => l.toList ++ r.toList
 
 def insertAll (t : T K V D) (kvs : List (K × V)) : T K V D :=
   kvs.foldl (fun t p => t.insert S p.1 p.2) t
 
 /-! ## Retain: the canonical erase (KERNEL-41)
 
-`retainAt path q` keeps, in the subtree at `path`, the entries `q` keeps. What it returns is the
-canonical trie of what is left (`Kernel.Proofs.TrieRetain.retainAt_eq_build`), without listing
+`retainAt path q` keeps, in the subtree `path` leads to, the entries `q` keeps. What it returns is
+the canonical trie of what is left (`Kernel.Proofs.TrieRetain.retainAt_eq_build`), without listing
 and rebuilding it: a subtree that drops nothing is returned as it is (no hash), a leaf is re-hashed
-only when it keeps some of several entries, and a node whose children keep at most one key between
-them collapses (`join`). -/
+only when it keeps some of several entries, and a node one of whose children keeps nothing is
+replaced by the other child whole (`join`), its cached hash reused. -/
 
-/-- Two children joined canonically: a node, unless they hold one key between them (that key's
-leaf, its cached hash reused, since a leaf's hash does not depend on its depth) or none (`empty`);
-`e` as in `T.hashOf`. -/
-def join (l r : T K V D) (e : EmptyDigest D := Thunk.mk fun _ => emptyHash S) : T K V D :=
+/-- Two children of a node branching at `b`, joined canonically: a node, unless one side is empty,
+when the other side is returned whole (a subtree's hash commits its own branching bits, not its
+position, so its cached hash stands). -/
+def join (b : Nat) (l r : T K V D) : T K V D :=
   match l, r with
-  | .empty, .empty => .empty
-  | .empty, .leaf h [x] => .leaf h [x]
-  | .leaf h [x], .empty => .leaf h [x]
-  | l, r => mkNode S l r e
+  | .empty, r => r
+  | l, .empty => l
+  | l, r =>
+      match l.first with
+      | some x => mkNode S b x l r
+      | none => r
 
-/-- The entries of `t` that `q` keeps, and whether any was dropped; `e` as in `T.hashOf`. -/
-def retainAll (q : K → V → Bool) (t : T K V D) (e : EmptyDigest D := Thunk.mk fun _ => emptyHash S) :
-    T K V D × Bool :=
-  match t with
+/-- The entries of `t` that `q` keeps, and whether any was dropped. -/
+def retainAll (q : K → V → Bool) : T K V D → T K V D × Bool
   | .empty => (.empty, false)
   | .leaf h kvs =>
       if kvs.all (fun p => q p.1 p.2) then (.leaf h kvs, false)
       else
         let kept := kvs.filter fun p => q p.1 p.2
         if kept.isEmpty then (.empty, true) else (mkLeaf S kept, true)
-  | .node h l r =>
-      let a := retainAll q l e
-      let b := retainAll q r e
-      if a.2 || b.2 then (join S a.1 b.1 e, true) else (.node h l r, false)
+  | .node h b rep l r =>
+      let x := retainAll q l
+      let y := retainAll q r
+      if x.2 || y.2 then (join S b x.1 y.1, true) else (.node h b rep l r, false)
 
-/-- `retainAll q` on the subtree at `path` (bit `i` of the path chooses the side at depth `i`), the
-nodes above it re-joined; a path that ends early at a leaf filters that leaf. Entries off the path
-are kept, so a caller's `q` must keep them (the kernel's keeps every slot that is not a journal
-entry); `e` as in `T.hashOf`. -/
-def retainAt (q : K → V → Bool) (path : List Bool) (t : T K V D)
-    (e : EmptyDigest D := Thunk.mk fun _ => emptyHash S) : T K V D :=
-  match path, t with
-  | [], t => (retainAll S q t e).1
-  | _ :: _, .empty => .empty
-  | _ :: _, .leaf h kvs => (retainAll S q (.leaf h kvs) e).1
-  | b :: p, .node _ l r =>
-      if b then join S l (retainAt q p r e) e else join S (retainAt q p l e) r e
+/-- `retainAll q` on the subtree `path` leads to (at a node branching at `b`, the path's bit `b`
+chooses the side), the nodes above it re-joined; where the path has no bit `b`, the whole subtree is
+filtered. Entries off the path are kept, so a caller's `q` must keep them (the kernel's keeps every
+slot that is not the one removed, or not a journal entry). -/
+def retainAt (q : K → V → Bool) (path : List Bool) : T K V D → T K V D
+  | .empty => .empty
+  | .leaf h kvs => (retainAll S q (.leaf h kvs)).1
+  | .node h b rep l r =>
+      match path[b]? with
+      | some true => join S b l (retainAt q path r)
+      | some false => join S b (retainAt q path l) r
+      | none => (retainAll S q (.node h b rep l r)).1
+
+/-- The siblings' branching bits ascend from `d` and stay below `depth`: a path is at most `depth`
+long, and every bit it claims fits the u16 a node commits. -/
+def ascends : Nat → List (Nat × D) → Bool
+  | _, [] => true
+  | d, (b, _) :: rest => decide (d ≤ b) && decide (b < S.depth) && ascends (b + 1) rest
 
 variable [DecidableEq D]
 
-/-- Does `p` show `k` ↦ a value with digest `dig` under `root`? Bounded: a path longer than
-`depth` is refused before anything is hashed. -/
+/-- Does `p` show `k` ↦ a value with digest `dig` under `root`? Bounded: a path whose bits do not
+ascend below `depth` is refused before anything is hashed. -/
 def verifyInclusion (root : D) (k : K) (dig : D) (p : Proof K D) : Bool :=
-  p.sibs.length ≤ S.depth &&
+  ascends S 0 p.sibs &&
   match p.term with
-  | some kds => find k kds = some dig && climb S k 0 p.sibs (termHash S p.term) = root
+  | some kds => find k kds = some dig && climb S k p.sibs (termHash S p.term) = root
   | none => false
 
 /-- Does `p` show `k` absent under `root`? -/
 def verifyExclusion (root : D) (k : K) (p : Proof K D) : Bool :=
-  p.sibs.length ≤ S.depth &&
+  ascends S 0 p.sibs &&
   (match p.term with
    | some kds => (find k kds).isNone
    | none => true) &&
-  climb S k 0 p.sibs (termHash S p.term) = root
+  climb S k p.sibs (termHash S p.term) = root
 
 end Nanodregg.Kernel.Trie

@@ -24,6 +24,7 @@ height and roots together); a relayed head would need its height bound to the ro
 built receipt checks against the member's own head).
 -/
 import Kernel.World
+import Codec.World
 import Protocol.Command.Text
 import Protocol.Table
 
@@ -110,70 +111,48 @@ def build (E : Env D) (w : World D) (txId : D) : Receipt D :=
     rowsroot := w.rowsRoot E, answer,
     jpath := w.journal.prove (journalSpec E) txId, rpath := w.refusals.prove (refusalSpec E) (.tx txId) }
 
-/-! ## Wire form -/
+/-! ## Wire form
+
+The two paths are CODEC's trie proof (`Codec.Kernel.proof`, KERNEL-49 (a)): each sibling with the bit
+its node branches on, read back only when the bits ascend below the trie's depth. Every digest is
+the digest codec's `dc` (deployed: `Codec.Deployed.digestCodec`). -/
 
 def layout : Layout :=
   [.byte "answer", .u64 "a", .u64 "b", .bytes "turn", .bytes "txId", .bytes "root", .bytes "jroot",
-   .bytes "rroot", .bytes "rowsroot", .byte "jterm", .list "jkeys", .list "jdigests", .list "jsibs",
-   .byte "rterm", .list "rkeys", .list "rdigests", .list "rsibs"]
+   .bytes "rroot", .bytes "rowsroot", .bytes "jpath", .bytes "rpath"]
 
 def frame : Stream (Layout.Ty Protocol.Bounds.frameBytesMax layout) :=
   Layout.codec Protocol.Bounds.frameBytesMax (by decide) layout
 
-/-- A refusals key from its bytes (`refusalKeyBytes`'s inverse on its image). -/
-def refusalKeyOf (digestOf : ByteArray → Option D) (b : ByteArray) : Option (RefusalSlot D) :=
-  if h : 9 ≤ b.size then
-    let mid := b.extract 1 (b.size - 8)
-    let tail := b.extract (b.size - 8) b.size
-    if b[0] = 0 then
-      if tail = Stream.nat64.bytes 0 then (digestOf mid).map .tx else none
-    else if b[0] = 1 then
-      match Stream.u64.decode tail with
-      | .ok win => (digestOf mid).map (.count · win)
-      | .error _ => none
-    else none
-  else none
+/-- The journal path's codec: keys and digests are transaction ids and digests. -/
+def jproof (E : Env D) (dc : Stream D) : Stream (Trie.Proof D D) :=
+  Codec.Kernel.proof (journalSpec E) dc dc
 
-def proofParts {K : Type} (kb : K → ByteArray) (db : D → ByteArray) (p : Trie.Proof K D) :
-    UInt8 × List ByteArray × List ByteArray × List ByteArray :=
-  match p.term with
-  | none => (0, [], [], p.sibs.map db)
-  | some kds => (1, kds.map (kb ·.1), kds.map (db ·.2), p.sibs.map db)
+/-- The refusals path's codec: keys are refusals slots (`Codec.Kernel.refusalSlot`). -/
+def rproof (E : Env D) (dc : Stream D) : Stream (Trie.Proof (RefusalSlot D) D) :=
+  Codec.Kernel.proof (refusalSpec E) (Codec.Kernel.refusalSlot dc) dc
 
-def proofOf {K : Type} (ko : ByteArray → Option K) (digestOf : ByteArray → Option D)
-    (t : UInt8) (ks ds ss : List ByteArray) : Option (Trie.Proof K D) := do
-  let sibs ← ss.mapM digestOf
-  if t = 0 then
-    if ks.isEmpty && ds.isEmpty then pure ⟨none, sibs⟩ else none
-  else if t = 1 then
-    if ks.length = ds.length then pure ⟨some (← (ks.zip ds).mapM fun (k, d) => do pure (← ko k, ← digestOf d)), sibs⟩
-    else none
-  else none
-
-def bytes (E : Env D) (r : Receipt D) : Option ByteArray := do
+def bytes (E : Env D) (dc : Stream D) (r : Receipt D) : Option ByteArray := do
   let f := Text.fit Protocol.Bounds.frameBytesMax
-  let fl := Text.fitList Protocol.Bounds.frameBytesMax
   let (tag, a, b, turn) : UInt8 × Nat × Nat × ByteArray := match r.answer with
-    | .committed h td => (0, h, 0, E.bytes td)
+    | .committed h td => (0, h, 0, dc.bytes td)
     | .refused h code => (1, h, code, ByteArray.empty)
     | .absent => (2, 0, 0, ByteArray.empty)
-  let (jt, jk, jd, js) := proofParts E.bytes E.bytes r.jpath
-  let (rt, rk, rd, rs) := proofParts (refusalKeyBytes E) E.bytes r.rpath
-  pure (frame.bytes (tag, a.toUInt64, b.toUInt64, ← f turn, ← f (E.bytes r.txId), ← f (E.bytes r.root),
-    ← f (E.bytes r.jroot), ← f (E.bytes r.rroot), ← f (E.bytes r.rowsroot), jt, ← fl jk, ← fl jd, ← fl js, rt, ← fl rk, ← fl rd,
-    ← fl rs, ()))
+  pure (frame.bytes (tag, a.toUInt64, b.toUInt64, ← f turn, ← f (dc.bytes r.txId), ← f (dc.bytes r.root),
+    ← f (dc.bytes r.jroot), ← f (dc.bytes r.rroot), ← f (dc.bytes r.rowsroot),
+    ← f ((jproof E dc).bytes r.jpath), ← f ((rproof E dc).bytes r.rpath), ()))
 
-def ofBytes (digestOf : ByteArray → Option D) (b : ByteArray) : Option (Receipt D) :=
+def ofBytes (E : Env D) (dc : Stream D) (b : ByteArray) : Option (Receipt D) :=
+  let dig (x : ByteArray) : Option D := (dc.decode x).toOption
   match frame.decode b with
   | .error _ => none
-  | .ok (tag, a, bb, turn, tx, root, jroot, rroot, rowsroot, jt, jk, jd, js, rt, rk, rd, rs, ()) => do
-    let answer ← if tag = 0 then (digestOf turn.1).map (.committed a.toNat)
+  | .ok (tag, a, bb, turn, tx, root, jroot, rroot, rowsroot, jp, rp, ()) => do
+    let answer ← if tag = 0 then (dig turn.1).map (.committed a.toNat)
       else if tag = 1 then some (.refused a.toNat bb.toNat)
       else if tag = 2 then some .absent else none
-    pure { txId := ← digestOf tx.1, root := ← digestOf root.1, jroot := ← digestOf jroot.1,
-           rroot := ← digestOf rroot.1, rowsroot := ← digestOf rowsroot.1, answer,
-           jpath := ← proofOf digestOf digestOf jt (Text.unlist jk) (Text.unlist jd) (Text.unlist js),
-           rpath := ← proofOf (refusalKeyOf digestOf) digestOf rt (Text.unlist rk) (Text.unlist rd)
-             (Text.unlist rs) }
+    pure { txId := ← dig tx.1, root := ← dig root.1, jroot := ← dig jroot.1,
+           rroot := ← dig rroot.1, rowsroot := ← dig rowsroot.1, answer,
+           jpath := ← ((jproof E dc).decode jp.1).toOption,
+           rpath := ← ((rproof E dc).decode rp.1).toOption }
 
 end Nanodregg.Protocol.Receipt

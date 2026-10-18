@@ -386,8 +386,6 @@ theorem admit_world_weight {E : Env D} {w w' : World D} {t : Turn D} {posts : Li
   rw [show commitTrie E w t posts =
     spendAll E (insertAll E (insertAll E w.trie (posts.map Post.pair)) (bornEntries t)) t.nullifiers
     from rfl, hs]
-  have hra : rowsAfter E w t (Thunk.mk fun _ => Trie.emptyHash (trieSpec E)) = rowsAfter E w t := rfl
-  rw [hra]
   have hrw := rowsAfter_weight hr hk
   omega
 

@@ -324,7 +324,7 @@ theorem slot_inclusion_sound {w : World D} (hc : w.Canon E)
     (hlf : l.CellFit Codec.Kernel.Cell.Fits)
     {p : Trie.Proof (Slot D) D} (hv : Trie.verifyInclusion (trieSpec E) (w.root E) s (leafDigest E l) p = true) :
     w.trie.get (trieSpec E) s = some l ∨ Collision E.hash := by
-  rcases Trie.inclusion_sound (trieSpec E) (leafBody_inj hE) (dbytes_pair_inj hE) hc.2.1 hv
+  rcases Trie.inclusion_sound (trieSpec E) (leafBody_inj hE) (dbytes_pair_inj hE) hc.2.1 hc.1 hv
     with ⟨v, hg, hd⟩ | c
   · rcases leafDigest_inj hE.cellBytes_injOn (hwf s v hg) hlf hd with rfl | c
     · exact .inl hg
@@ -449,6 +449,6 @@ theorem prove_verifies {E : Env D} {w : World D} (hc : w.Canon E) {s : Slot D} {
 theorem prove_absent {E : Env D} {w : World D} (hc : w.Canon E) {s : Slot D}
     (hg : w.trie.get (trieSpec E) s = none) :
     Trie.verifyExclusion (trieSpec E) (w.root E) s (w.trie.prove (trieSpec E) s) = true :=
-  Trie.prove_excludes (trieSpec E) hc.2.1 (Trie.shallow_of_shape _ 0 _ hc.2.2) hg
+  Trie.prove_excludes (trieSpec E) hc.2.1 hc.1 (Trie.shallow_of_shape _ 0 _ hc.2.2) hg
 
 end Nanodregg.Kernel

@@ -374,6 +374,7 @@ def leafDigest (E : Env D) (l : Leaf) : D := E.hash domLeaf (leafBytes E l)
 def trieSpec (E : Env D) : Trie.Spec (Slot D) Leaf D where
   bit := slotBit E
   depth := Bounds.trieDepth
+  depth_lt := by decide
   hash := E.hash domTrie
   dbytes := E.bytes
   kbytes := slotBytes E
@@ -390,6 +391,7 @@ leaves digested by `journalDigest`. -/
 def journalSpec (E : Env D) : Trie.Spec D (Nat × D) D where
   bit k := byteBit (E.bytes k)
   depth := Bounds.journalDepth
+  depth_lt := by decide
   hash := E.hash domTrie
   dbytes := E.bytes
   kbytes := E.bytes
@@ -415,6 +417,7 @@ depth `Bounds.refusalDepth` (41 bytes); nodes in the one trie domain; leaves by 
 def refusalSpec (E : Env D) : Trie.Spec (RefusalSlot D) RefusalLeaf D where
   bit k := byteBit (refusalKeyBytes E k)
   depth := Bounds.refusalDepth
+  depth_lt := by decide
   hash := E.hash domTrie
   dbytes := E.bytes
   kbytes := refusalKeyBytes E
@@ -465,6 +468,7 @@ nodes in the one trie domain; leaves by `rowDigest`. -/
 def rowSpec (E : Env D) : Trie.Spec (RowSlot D) RowLeaf D where
   bit k := byteBit (rowKeyBytes E k)
   depth := Bounds.rowDepth
+  depth_lt := by decide
   hash := E.hash domTrie
   dbytes := E.bytes
   kbytes := rowKeyBytes E
@@ -492,28 +496,33 @@ it holds `n`, so a bounded read pays for what it returns plus one path. -/
 def takeList {K V : Type} (n : Nat) : Trie.T K V D → List (K × V)
   | .empty => []
   | .leaf _ kvs => kvs.take n
-  | .node _ l r =>
+  | .node _ _ _ l r =>
       if n = 0 then [] else
         let a := takeList n l
         a ++ takeList (n - a.length) r
 
 /-- At most `n` entries of a trie under a byte prefix, in trie order (left, the 0 bit, first):
-descend by the prefix's bits; past them, the subtree's first `n` (`takeList`); at a leaf, the first
-`n` of those whose key bytes start with the prefix. Work: one path plus the entries returned. -/
-def under {K V : Type} (S : Trie.Spec K V D) (pre : ByteArray) (n : Nat) : Nat → Trie.T K V D → List (K × V)
-  | _, .empty => []
-  | _, .leaf _ kvs => (kvs.filter fun p => startsWith pre (S.kbytes p.1)).take n
-  | d, .node h l r =>
-      if d < 8 * pre.size then
-        (if byteBit pre d then under S pre n (d + 1) r else under S pre n (d + 1) l)
-      else takeList n (.node h l r)
+descend by the prefix's bits at each node's branching bit; at the first node branching past them,
+the subtree's first `n` (`takeList`) if its keys start with the prefix (one representative key read:
+the path skipped bits) and none otherwise; at a leaf, the first `n` of those whose key bytes start
+with the prefix. Work: one path plus the entries returned, and no hash. -/
+def under {K V : Type} (S : Trie.Spec K V D) (pre : ByteArray) (n : Nat) : Trie.T K V D → List (K × V)
+  | .empty => []
+  | .leaf _ kvs => (kvs.filter fun p => startsWith pre (S.kbytes p.1)).take n
+  | .node h b rep l r =>
+      if b < 8 * pre.size then
+        (if byteBit pre b then under S pre n r else under S pre n l)
+      else
+        -- every key of the subtree agrees with its `rep` on every bit below `b`, so on the whole
+        -- prefix: the bits the path skipped are checked here, once, by one key's bytes
+        if startsWith pre (S.kbytes rep) then takeList n (.node h b rep l r) else []
 
 /-- A range read's rows (LANG-44 (c)): those of `rel` under `parent` whose key starts with `pre`,
 in key order, given the relation's key `width`; `none` past `most` (`rangeTooLong`: refused, never
 truncated). At most `most + 1` rows are read (KERNEL-48: the WASTE row rows-read-per-range-read). -/
 def rangeRows (E : Env D) (r : Rows D) (parent : D) (rel width : Nat) (pre : ByteArray) (most : Nat) :
     Option (List (RowSlot D × RowLeaf)) :=
-  let l := under (rowSpec E) (rowsPrefix E parent rel width ++ pre) (most + 1) 0 r
+  let l := under (rowSpec E) (rowsPrefix E parent rel width ++ pre) (most + 1) r
   if l.length ≤ most then some l else none
 
 /-- What a range pin asserts (the second pin kind): the relation, the width and the prefix, then
@@ -946,15 +955,14 @@ def insA (p : D) (rel : Nat) : List (RowTouch D) → Nat
   | x :: rest => insA1 p rel x + insA p rel rest
 
 /-- Write a relation's head with a new count and sum, its declaration unchanged. -/
-def setHead (E : Env D) (r : Rows D) (parent : D) (rel count sum limit cap width : Nat) (retract : Bool)
-    (e : Trie.EmptyDigest D) : Rows D :=
-  r.insert (rowSpec E) (.head parent rel) (.head count sum limit cap width retract) e
+def setHead (E : Env D) (r : Rows D) (parent : D) (rel count sum limit cap width : Nat) (retract : Bool) : Rows D :=
+  r.insert (rowSpec E) (.head parent rel) (.head count sum limit cap width retract)
 
 /-- One row touch, judged on the rows written so far this turn (slots are distinct, so a row's pin
 is judged against the pre-state; a head's count and sum accumulate: the head update is additive,
 never pinned, KERNEL-46 amendment 3). The parent must be pinned by the turn (`rowParentUnpinned`)
 and live (`orphanRow`), or, for `declare`, born by it (`declareLate`). -/
-def rowStep (E : Env D) (w : World D) (t : Turn D) (e : Trie.EmptyDigest D) (r : Rows D)
+def rowStep (E : Env D) (w : World D) (t : Turn D) (r : Rows D)
     (x : RowTouch D) : Except (Reject D) (Rows D) := do
   match x.slot, x.act with
   | .head p rel, .declare limit cap width retract => do
@@ -965,7 +973,7 @@ def rowStep (E : Env D) (w : World D) (t : Turn D) (e : Trie.EmptyDigest D) (r :
       req (decide (limit ≤ Bounds.rowsPerRelationMax) && decide (width ≤ Bounds.keyBytesMax) &&
         decide (cap < Bounds.counterLimit)) (.overBound .rows)
       req (rowAt E r (.head p rel)).isNone (.keyTaken p)
-      pure (setHead E r p rel 0 0 limit cap width retract e)
+      pure (setHead E r p rel 0 0 limit cap width retract)
   | .head p _, _ => .error (.rowShape p)
   | .row key, act => do
       let p := key.parent
@@ -990,8 +998,8 @@ def rowStep (E : Env D) (w : World D) (t : Turn D) (e : Trie.EmptyDigest D) (r :
               req (decide (count < limit)) (.relationFull p)
               req (decide (sum + amt ≤ cap)) (.relationCapped p)
               req (decide (v.size ≤ Bounds.valueBytesMax)) (.overBound .valueBytes)
-              pure (setHead E (r.insert (rowSpec E) (.row key) (.row amt v) e) p key.rel (count + 1)
-                (sum + amt) limit cap width retract e)
+              pure (setHead E (r.insert (rowSpec E) (.row key) (.row amt v)) p key.rel (count + 1)
+                (sum + amt) limit cap width retract)
           | .upsert amt v => do
               pinned
               req (decide (v.size ≤ Bounds.valueBytesMax)) (.overBound .valueBytes)
@@ -999,15 +1007,15 @@ def rowStep (E : Env D) (w : World D) (t : Turn D) (e : Trie.EmptyDigest D) (r :
               let fresh := cur.isNone
               req (!fresh || decide (count < limit)) (.relationFull p)
               req (decide (sum - old + amt ≤ cap)) (.relationCapped p)
-              pure (setHead E (r.insert (rowSpec E) (.row key) (.row amt v) e) p key.rel
-                (if fresh then count + 1 else count) (sum - old + amt) limit cap width retract e)
+              pure (setHead E (r.insert (rowSpec E) (.row key) (.row amt v)) p key.rel
+                (if fresh then count + 1 else count) (sum - old + amt) limit cap width retract)
           | .retract => do
               pinned
               req retract (.retractForbidden p)
               match cur with
               | some (.row a _) =>
                   pure (setHead E (Trie.retainAt (rowSpec E) (fun k _ => decide (k ≠ .row key))
-                    (rowPath E (.row key)) r e) p key.rel (count - 1) (sum - a) limit cap width retract e)
+                    (rowPath E (.row key)) r) p key.rel (count - 1) (sum - a) limit cap width retract)
               | _ => .error (.stale p)
           | .declare .. => .error (.rowShape p)
 
@@ -1019,28 +1027,28 @@ def rowFreed (E : Env D) (r : Rows D) (x : RowTouch D) : Nat :=
   | _ => 0
 
 /-- One row touch with what it gives back, accumulated. -/
-def rowStepFreed (E : Env D) (w : World D) (t : Turn D) (e : Trie.EmptyDigest D) (acc : Rows D × Nat)
+def rowStepFreed (E : Env D) (w : World D) (t : Turn D) (acc : Rows D × Nat)
     (x : RowTouch D) : Except (Reject D) (Rows D × Nat) := do
-  let r ← rowStep E w t e acc.1 x
+  let r ← rowStep E w t acc.1 x
   pure (r, acc.2 + rowFreed E acc.1 x)
 
 /-- A retired parent's heads leave with it, and give their weight back. `checkRowsRemain` refused a
 retirement whose parent still holds a row, and `rowStep` refuses a row under a parent the turn
 retires (`orphanRow`), so what is under a retired parent is its heads (at most 256, `rel < 256`).
 Work: one path per head removed. -/
-def dropHeads (E : Env D) (t : Turn D) (e : Trie.EmptyDigest D) (acc : Rows D × Nat) : Rows D × Nat :=
+def dropHeads (E : Env D) (t : Turn D) (acc : Rows D × Nat) : Rows D × Nat :=
   t.touches.foldl (fun acc x => match x.act with
     | .retire =>
-        ((under (rowSpec E) (E.bytes x.cell) 257 0 acc.1).filter fun p => match p.1 with
+        ((under (rowSpec E) (E.bytes x.cell) 257 acc.1).filter fun p => match p.1 with
           | .head q _ => decide (q = x.cell)
           | .row _ => false).foldl (fun acc p =>
-            (Trie.retainAt (rowSpec E) (fun k _ => decide (k ≠ p.1)) (rowPath E p.1) acc.1 e,
+            (Trie.retainAt (rowSpec E) (fun k _ => decide (k ≠ p.1)) (rowPath E p.1) acc.1,
               acc.2 + rowEntryWeight p)) acc
     | _ => acc) acc
 
 /-- Every row touch, in order, from the World's rows; slots distinct (`duplicateRow`). Returns the
 rows after the turn and the storage its row touches give back (`rowFreed`, summed). -/
-def rowsRun (E : Env D) (w : World D) (t : Turn D) (e : Trie.EmptyDigest D) :
+def rowsRun (E : Env D) (w : World D) (t : Turn D) :
     Except (Reject D) (Rows D × Nat) := do
   req (decide (t.rows.length ≤ Bounds.rowsMax) && decide (t.ranges.length ≤ Bounds.rangesMax)) (.overBound .rows)
   req (t.rows.all fun x => match x.slot with
@@ -1049,14 +1057,13 @@ def rowsRun (E : Env D) (w : World D) (t : Turn D) (e : Trie.EmptyDigest D) :
   match t.rows.find? (fun x => decide (1 < (t.rows.filter fun y => decide (y.slot = x.slot)).length)) with
   | some x => .error (.duplicateRow (match x.slot with | .head p _ => p | .row k => k.parent))
   | none => do
-      let acc ← t.rows.foldlM (rowStepFreed E w t e) (w.rows, 0)
-      pure (dropHeads E t e acc)
+      let acc ← t.rows.foldlM (rowStepFreed E w t) (w.rows, 0)
+      pure (dropHeads E t acc)
 
 /-- The rows after a checked turn and what its row touches give back. `check` ran `rowsRun` to
-`.ok`, so the fallback is unreachable after it. `e` as in `Trie.T.hashOf`. -/
-def rowsAfter (E : Env D) (w : World D) (t : Turn D)
-    (e : Trie.EmptyDigest D := Thunk.mk fun _ => Trie.emptyHash (rowSpec E)) : Rows D × Nat :=
-  match rowsRun E w t e with
+`.ok`, so the fallback is unreachable after it. -/
+def rowsAfter (E : Env D) (w : World D) (t : Turn D) : Rows D × Nat :=
+  match rowsRun E w t with
   | .ok r => r
   | .error _ => (w.rows, 0)
 
@@ -1084,7 +1091,7 @@ def checkRowsRemain (E : Env D) (w : World D) (t : Turn D) : Except (Reject D) U
     | .retire =>
         -- a parent holds at most 256 heads (`rel < 256`), so 257 entries under it include a row:
         -- the read stops there, and a full listing is refused as one
-        let l := under (rowSpec E) (E.bytes x.cell) 257 0 w.rows
+        let l := under (rowSpec E) (E.bytes x.cell) 257 w.rows
         req (decide (l.length ≤ 256) && l.all fun p =>
           match p.1 with | .row _ => false | .head .. => true) (.rowsRemain x.cell)
     | _ => .ok ()) t.touches
@@ -1102,7 +1109,7 @@ def checkWith (E : Env D) (w : World D) (t : Turn D) : Except (Reject D) (List (
   checkNullifiers E w t
   checkRowsRemain E w t
   checkRanges E w t
-  let rr ← rowsRun E w t (Thunk.mk fun _ => Trie.emptyHash (rowSpec E))
+  let rr ← rowsRun E w t
   checkCharge w t (credit posts + rr.2)
   checkCreates E w t
   checkSteps w
@@ -1115,25 +1122,19 @@ def check (E : Env D) (w : World D) (t : Turn D) : Except (Reject D) (List (Post
 def bornEntries (t : Turn D) : List (D × Entry) :=
   t.creates.map fun p => (p.1, .live p.2)
 
-/-- Write cell entries into the map, one path each (`e`: the empty subtree's digest, as in
-`Trie.T.hashOf`). -/
-def insertAll (E : Env D) (m : Cells D) (ps : List (D × Entry))
-    (e : Trie.EmptyDigest D := Thunk.mk fun _ => Trie.emptyHash (trieSpec E)) : Cells D :=
-  ps.foldl (fun m p => m.insert (trieSpec E) (.cell p.1) (.entry p.2) e) m
+/-- Write cell entries into the map, one path each. -/
+def insertAll (E : Env D) (m : Cells D) (ps : List (D × Entry)) : Cells D :=
+  ps.foldl (fun m p => m.insert (trieSpec E) (.cell p.1) (.entry p.2)) m
 
 /-- Mark nullifiers spent, one path each. -/
-def spendAll (E : Env D) (m : Cells D) (ns : List D)
-    (e : Trie.EmptyDigest D := Thunk.mk fun _ => Trie.emptyHash (trieSpec E)) : Cells D :=
-  ns.foldl (fun m n => m.insert (trieSpec E) (.nullifier n) .spent e) m
+def spendAll (E : Env D) (m : Cells D) (ns : List D) : Cells D :=
+  ns.foldl (fun m n => m.insert (trieSpec E) (.nullifier n) .spent) m
 
-/-- The map after a checked turn: its touches' entries, its born cells, its nullifiers. One lazy
-copy of the empty subtree's digest is handed down every path, so it is hashed at most once per turn
-and only if a path meets an empty sibling (KERNEL-35); `commit` hands it the one copy it shares with
-the journal and the refusals (KERNEL-47). -/
-def commitTrie (E : Env D) (w : World D) (t : Turn D) (posts : List (Post D))
-    (e : Trie.EmptyDigest D := Thunk.mk fun _ => Trie.emptyHash (trieSpec E)) : Cells D :=
-  spendAll E (insertAll E (insertAll E w.trie (posts.map Post.pair) e) (bornEntries t) e)
-    t.nullifiers e
+/-- The map after a checked turn: its touches' entries, its born cells, its nullifiers. No path
+reads an empty digest (no node has an empty child, KERNEL-49 (a)); only an empty ROOT does, in
+`commitWith` (`T.rootWith`, one lazy copy shared by the four roots). -/
+def commitTrie (E : Env D) (w : World D) (t : Turn D) (posts : List (Post D)) : Cells D :=
+  spendAll E (insertAll E (insertAll E w.trie (posts.map Post.pair)) (bornEntries t)) t.nullifiers
 
 
 /-- A journal entry `(h, d)` is still kept at height `H`: fewer than `2 * Bounds.windowMax`
@@ -1144,12 +1145,11 @@ def kept (H : Nat) (e : Nat × D) : Bool := decide (H < e.1 + 2 * Bounds.windowM
 
 /-- The journal at height `H`: at every multiple of `Bounds.windowMax`, the entries no longer
 `kept` are dropped (`Trie.retainAt` at the root: the canonical erase, a subtree that drops nothing
-is kept with its hash, a node left with one key collapses to its leaf); between multiples it is
+is kept with its hash, a node left with one side empty is replaced by the other side whole); between multiples it is
 unchanged. One pass over at most `3 * Bounds.windowMax` entries once per `windowMax` heights, and one
-structure (no second index by height). `e` as in `Trie.T.hashOf`. -/
-def pruneJournal (E : Env D) (H : Nat) (j : Journal D)
-    (e : Trie.EmptyDigest D := Thunk.mk fun _ => Trie.emptyHash (journalSpec E)) : Journal D :=
-  if H % Bounds.windowMax = 0 then Trie.retainAt (journalSpec E) (fun _ x => kept H x) [] j e else j
+structure (no second index by height). -/
+def pruneJournal (E : Env D) (H : Nat) (j : Journal D) : Journal D :=
+  if H % Bounds.windowMax = 0 then Trie.retainAt (journalSpec E) (fun _ x => kept H x) [] j else j
 
 /-- Whether a World at height `H` can no longer answer for a call with window start `notBefore`:
 its entry, if it was admitted, may have been pruned. Below this height an absent transaction id
@@ -1202,11 +1202,9 @@ def refusalsDisjoint (E : Env D) (w : World D) : Bool :=
     | _, _ => true
 
 /-- The journal after a checked turn: the turn's entry inserted at the new height, then pruned if
-that height is a multiple of `Bounds.windowMax`. One lazy copy of the empty subtree's digest serves
-the insert and the prune (KERNEL-35's rule); `commit` hands it the one copy of the turn. -/
-def commitJournal (E : Env D) (w : World D) (t : Turn D)
-    (e : Trie.EmptyDigest D := Thunk.mk fun _ => Trie.emptyHash (journalSpec E)) : Journal D :=
-  pruneJournal E (w.height + 1) (w.journal.insert (journalSpec E) t.txId (w.height + 1, turnDigest E t) e) e
+that height is a multiple of `Bounds.windowMax`. -/
+def commitJournal (E : Env D) (w : World D) (t : Turn D) : Journal D :=
+  pruneJournal E (w.height + 1) (w.journal.insert (journalSpec E) t.txId (w.height + 1, turnDigest E t))
 
 /-- Is a refusals leaf still kept at height `H` (KERNEL-44, KERNEL-47 amendment 5)? A refused call's
 leaf while `kept` (KERNEL-33's rule: it was refused at `h` inside its window, so it outlives every
@@ -1218,19 +1216,18 @@ def keptRefusal (H : Nat) : RefusalSlot D → RefusalLeaf → Bool
 
 /-- The refusals at height `H`: pruned with the journal, at every multiple of `Bounds.windowMax`, by
 the same canonical `Trie.retainAt`; unchanged between multiples. -/
-def pruneRefusals (E : Env D) (H : Nat) (r : Refusals D)
-    (e : Trie.EmptyDigest D := Thunk.mk fun _ => Trie.emptyHash (refusalSpec E)) : Refusals D :=
-  if H % Bounds.windowMax = 0 then Trie.retainAt (refusalSpec E) (keptRefusal H) [] r e else r
+def pruneRefusals (E : Env D) (H : Nat) (r : Refusals D) : Refusals D :=
+  if H % Bounds.windowMax = 0 then Trie.retainAt (refusalSpec E) (keptRefusal H) [] r else r
 
 /-- The World after a checked turn, given the rows `rowsRun` reached (`rr`). Total: everything that
 can fail failed in `checkWith`. -/
 def commitWith (E : Env D) (w : World D) (t : Turn D) (posts : List (Post D)) (rr : Rows D × Nat) : World D :=
-  -- ONE lazy copy of the empty subtree's digest for the three tries (KERNEL-35's rule, per turn): all
-  -- three hash nodes in `domTrie`, so their empty digest is one value
-  let e : Trie.EmptyDigest D := Thunk.mk fun _ => Trie.emptyHash (trieSpec E)
-  let trie := commitTrie E w t posts e
-  let journal := commitJournal E w t e
-  let refusals := pruneRefusals E (w.height + 1) w.refusals e
+  -- ONE lazy copy of the empty trie's digest for the four roots (KERNEL-35, at the roots only): all
+  -- four hash in `domTrie`, so their empty digest is one value
+  let e : Thunk D := Thunk.mk fun _ => Trie.emptyHash (trieSpec E)
+  let trie := commitTrie E w t posts
+  let journal := commitJournal E w t
+  let refusals := pruneRefusals E (w.height + 1) w.refusals
   let rows := rr.1
   { trie
     journal
@@ -1239,15 +1236,15 @@ def commitWith (E : Env D) (w : World D) (t : Turn D) (posts : List (Post D)) (r
     height := w.height + 1
     steps := w.steps + 1
     chain := chainNext E w.chain t
-      (rootsDigest E (trie.hashOf (trieSpec E) e) (journal.hashOf (journalSpec E) e) (refusals.hashOf (refusalSpec E) e)
-        (rows.hashOf (rowSpec E) e))
+      (rootsDigest E (trie.rootWith (trieSpec E) e) (journal.rootWith (journalSpec E) e)
+        (refusals.rootWith (refusalSpec E) e) (rows.rootWith (rowSpec E) e))
     allowance := w.allowance + credit posts + rr.2 - t.charge
     origin := w.origin }
 
 /-- The World after a checked turn: `commitWith` at the rows `rowsAfter` recomputes (the
 specification; compiled callers run `World.admitImpl`, which commits the rows `checkWith` reached). -/
 def commit (E : Env D) (w : World D) (t : Turn D) (posts : List (Post D)) : World D :=
-  commitWith E w t posts (rowsAfter E w t (Thunk.mk fun _ => Trie.emptyHash (trieSpec E)))
+  commitWith E w t posts (rowsAfter E w t)
 
 /-- THE transition. Fail-closed: a refusal returns no World. -/
 def World.admit (E : Env D) (w : World D) (t : Turn D) : Except (Reject D) (World D) :=
@@ -1266,15 +1263,9 @@ private theorem bind_ok_iff {ε α β : Type} {x : Except ε α} {f : α → Exc
     (x >>= f) = .ok b ↔ ∃ a, x = .ok a ∧ f a = .ok b := by
   cases x <;> simp [bind, Except.bind]
 
-omit [Ord D] [DecidableEq D] in
-/-- The rows' empty-subtree digest is the cells': both specs hash nodes in `domTrie`. -/
-private theorem emptyDigest_rows_cells (E : Env D) :
-    (Thunk.mk fun _ => Trie.emptyHash (trieSpec E) : Trie.EmptyDigest D) =
-      Thunk.mk fun _ => Trie.emptyHash (rowSpec E) := rfl
-
 private theorem checkWith_rows {E : Env D} {w : World D} {t : Turn D} {posts : List (Post D)}
     {rr : Rows D × Nat} (h : checkWith E w t = .ok (posts, rr)) :
-    rowsRun E w t (Thunk.mk fun _ => Trie.emptyHash (rowSpec E)) = .ok rr := by
+    rowsRun E w t = .ok rr := by
   unfold checkWith at h
   simp only [bind_ok_iff] at h
   obtain ⟨⟨⟩, -, ⟨⟩, -, ⟨⟩, -, ⟨⟩, -, raw, -, ⟨⟩, -, ⟨⟩, -, ⟨⟩, -, ⟨⟩, -, rr', hrw, ⟨⟩, -,
@@ -1293,7 +1284,7 @@ recomputes the rows) equals `World.admitImpl` (the rows `checkWith` reached, com
       obtain ⟨posts, rr⟩ := pr
       show Except.ok (commit E w t posts) = Except.ok (commitWith E w t posts rr)
       unfold commit rowsAfter
-      rw [emptyDigest_rows_cells, checkWith_rows h]
+      rw [checkWith_rows h]
 
 /-- A recorded refusal's numbers are within `Bounds` (so `refusedBytes` is injective). -/
 def checkRefusedBounds (r : Refused D) : Except (Reject D) Unit := do
@@ -1326,23 +1317,22 @@ def checkRefusal (E : Env D) (w : World D) (r : Refused D) : Except (Reject D) U
       | _ => req (refusalCount E w r.member < Bounds.refusalsPerWindow) .refusalBudget
 
 /-- The refusals after a checked refusal: its leaf at the transaction id, the member's count bumped.
-Two paths; one lazy empty digest as in `commitJournal`. -/
-def commitRefusals (E : Env D) (w : World D) (r : Refused D)
-    (e : Trie.EmptyDigest D := Thunk.mk fun _ => Trie.emptyHash (refusalSpec E)) : Refusals D :=
-  (w.refusals.insert (refusalSpec E) (.tx r.txId) (.refused (w.height + 1) r.code) e).insert (refusalSpec E)
-    (.count r.member (refusalWindow w.height)) (.count (refusalCount E w r.member + 1)) e
+Two paths. -/
+def commitRefusals (E : Env D) (w : World D) (r : Refused D) : Refusals D :=
+  (w.refusals.insert (refusalSpec E) (.tx r.txId) (.refused (w.height + 1) r.code)).insert (refusalSpec E)
+    (.count r.member (refusalWindow w.height)) (.count (refusalCount E w r.member + 1))
 
 /-- The World after a checked refusal: only the refusals, the step counter and the chain move. The
 cells, the journal, the height and the allowance are untouched (`refuse_frame`). -/
 def commitRefusal (E : Env D) (w : World D) (r : Refused D) : World D :=
-  let e : Trie.EmptyDigest D := Thunk.mk fun _ => Trie.emptyHash (refusalSpec E)
-  let refusals := commitRefusals E w r e
+  let e : Thunk D := Thunk.mk fun _ => Trie.emptyHash (refusalSpec E)
+  let refusals := commitRefusals E w r
   { w with
     refusals
     steps := w.steps + 1
     chain := refusalLink E w.chain r
-      (rootsDigest E (w.trie.hashOf (trieSpec E) e) (w.journal.hashOf (journalSpec E) e) (refusals.hashOf (refusalSpec E) e)
-        (w.rows.hashOf (rowSpec E) e)) }
+      (rootsDigest E (w.trie.rootWith (trieSpec E) e) (w.journal.rootWith (journalSpec E) e)
+        (refusals.rootWith (refusalSpec E) e) (w.rows.rootWith (rowSpec E) e)) }
 
 /-- Record a refusal (KERNEL-44). Fail-closed like `World.admit`. -/
 def World.refuse (E : Env D) (w : World D) (r : Refused D) : Except (Reject D) (World D) :=

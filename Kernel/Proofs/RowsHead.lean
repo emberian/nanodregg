@@ -327,8 +327,7 @@ private theorem setHead_inv {E : Env D} {w : World D} {t : Turn D} {r r1 r' : Ro
     (hc : (r1.toList.map (gc key.parent key.rel)).sum = c')
     (hs : (r1.toList.map (gs key.parent key.rel)).sum = s')
     (hcl : c' ≤ limit) (hsc : s' ≤ cap)
-    (he : r' = setHead E r1 key.parent key.rel c' s' limit cap width retract
-      (Thunk.mk fun _ => Trie.emptyHash (rowSpec E))) :
+    (he : r' = setHead E r1 key.parent key.rel c' s' limit cap width retract) :
     Inv E r' ∧ Par E w t r' ∧ NoRetL E t.touches r' := by
   obtain ⟨hF, hH1, hH2⟩ := hi
   have hget : ∀ k, r'.get (rowSpec E) k =
@@ -412,7 +411,7 @@ private theorem declare_inv {E : Env D} {w : World D} {t : Turn D} {r r' : Rows 
     {retract : Bool} (hr : Trie.Canon (rowSpec E) 0 r) (hi : Inv E r) (hp : Par E w t r) (hn : NoRetL E t.touches r)
     (hnone : r.get (rowSpec E) (.head p rel) = none) (hrel : rel < 256) (hlim : limit ≤ Bounds.rowsPerRelationMax)
     (hwd : width ≤ Bounds.keyBytesMax) (hcap : cap < Bounds.counterLimit) (hlate : p ∈ createdIds t)
-    (he : r' = setHead E r p rel 0 0 limit cap width retract (Thunk.mk fun _ => Trie.emptyHash (rowSpec E))) :
+    (he : r' = setHead E r p rel 0 0 limit cap width retract) :
     Inv E r' ∧ Par E w t r' ∧ NoRetL E t.touches r' := by
   obtain ⟨hF, hH1, hH2⟩ := hi
   have hget : ∀ k, r'.get (rowSpec E) k =
@@ -482,7 +481,7 @@ private theorem declare_inv {E : Env D} {w : World D} {t : Turn D} {r r' : Rows 
 private theorem rowStep_inv {E : Env D} {w : World D} {t : Turn D} {r r' : Rows D} {x : RowTouch D}
     (hr : Trie.Canon (rowSpec E) 0 r) (hi : Inv E r) (hp : Par E w t r) (hn : NoRetL E t.touches r)
     (hb : ∀ key, x.slot = .row key → key.rel < 256 ∧ key.k.size ≤ Bounds.keyBytesMax)
-    (h : rowStep E w t (Thunk.mk fun _ => Trie.emptyHash (rowSpec E)) r x = .ok r') :
+    (h : rowStep E w t r x = .ok r') :
     Inv E r' ∧ Par E w t r' ∧ NoRetL E t.touches r' := by
   obtain ⟨slot, seen, act⟩ := x
   cases slot with
@@ -617,7 +616,7 @@ private theorem foldRows_inv {E : Env D} {w : World D} {t : Turn D} :
     ∀ (l : List (RowTouch D)) (acc rr : Rows D × Nat), Trie.Canon (rowSpec E) 0 acc.1 → Inv E acc.1 →
       Par E w t acc.1 → NoRetL E t.touches acc.1 →
       (∀ x ∈ l, ∀ key, x.slot = .row key → key.rel < 256 ∧ key.k.size ≤ Bounds.keyBytesMax) →
-      l.foldlM (rowStepFreed E w t (Thunk.mk fun _ => Trie.emptyHash (rowSpec E))) acc = .ok rr →
+      l.foldlM (rowStepFreed E w t) acc = .ok rr →
       Trie.Canon (rowSpec E) 0 rr.1 ∧ Inv E rr.1 ∧ Par E w t rr.1 ∧ NoRetL E t.touches rr.1
   | [], acc, rr, hc, hi, hp, hn, _, h => by
       simp only [List.foldlM_nil, pure, Except.pure, Except.ok.injEq] at h
@@ -638,12 +637,12 @@ private theorem foldRows_inv {E : Env D} {w : World D} {t : Turn D} :
 omit [Ord D] in
 private theorem setHead_len {E : Env D} {r : Rows D} (hr : Trie.Routed (rowSpec E) 0 r) {p : D} {rel : Nat}
     {old : RowLeaf} (h : r.get (rowSpec E) (.head p rel) = some old) (c s l cap wd : Nat) (rt : Bool) :
-    (setHead E r p rel c s l cap wd rt (Thunk.mk fun _ => Trie.emptyHash (rowSpec E))).toList.length =
+    (setHead E r p rel c s l cap wd rt).toList.length =
       r.toList.length := by
   unfold setHead; exact len_insert_some hr h _
 
 private theorem rowStep_len {E : Env D} {w : World D} {t : Turn D} {r r' : Rows D} {x : RowTouch D}
-    (hr : Trie.Canon (rowSpec E) 0 r) (h : rowStep E w t (Thunk.mk fun _ => Trie.emptyHash (rowSpec E)) r x = .ok r') :
+    (hr : Trie.Canon (rowSpec E) 0 r) (h : rowStep E w t r x = .ok r') :
     r'.toList.length ≤ r.toList.length + 1 := by
   obtain ⟨slot, seen, act⟩ := x
   cases slot with
@@ -714,7 +713,7 @@ private theorem rowStep_len {E : Env D} {w : World D} {t : Turn D} {r r' : Rows 
 
 private theorem foldRows_len {E : Env D} {w : World D} {t : Turn D} :
     ∀ (l : List (RowTouch D)) (acc rr : Rows D × Nat), Trie.Canon (rowSpec E) 0 acc.1 →
-      l.foldlM (rowStepFreed E w t (Thunk.mk fun _ => Trie.emptyHash (rowSpec E))) acc = .ok rr →
+      l.foldlM (rowStepFreed E w t) acc = .ok rr →
       Trie.Canon (rowSpec E) 0 rr.1 ∧ rr.1.toList.length ≤ acc.1.toList.length + l.length
   | [], acc, rr, hc, h => by
       simp only [List.foldlM_nil, pure, Except.pure, Except.ok.injEq] at h
@@ -737,11 +736,9 @@ omit [Ord D] in
 private theorem dropList_len {E : Env D} :
     ∀ (L : List (RowSlot D × RowLeaf)) (acc : Rows D × Nat), Trie.Canon (rowSpec E) 0 acc.1 →
       Trie.Canon (rowSpec E) 0 (L.foldl (fun acc p =>
-          (Trie.retainAt (rowSpec E) (fun k _ => decide (k ≠ p.1)) (rowPath E p.1) acc.1
-            (Thunk.mk fun _ => Trie.emptyHash (rowSpec E)), acc.2 + rowEntryWeight p)) acc).1 ∧
+          (Trie.retainAt (rowSpec E) (fun k _ => decide (k ≠ p.1)) (rowPath E p.1) acc.1, acc.2 + rowEntryWeight p)) acc).1 ∧
       (L.foldl (fun acc p =>
-          (Trie.retainAt (rowSpec E) (fun k _ => decide (k ≠ p.1)) (rowPath E p.1) acc.1
-            (Thunk.mk fun _ => Trie.emptyHash (rowSpec E)), acc.2 + rowEntryWeight p)) acc).1.toList.length ≤
+          (Trie.retainAt (rowSpec E) (fun k _ => decide (k ≠ p.1)) (rowPath E p.1) acc.1, acc.2 + rowEntryWeight p)) acc).1.toList.length ≤
         acc.1.toList.length
   | [], acc, hc => ⟨hc, Nat.le_refl _⟩
   | p :: L, acc, hc => by
@@ -754,7 +751,7 @@ private theorem dropList_len {E : Env D} :
 omit [Ord D] in
 private theorem dropHeads_len {E : Env D} (t : Turn D) :
     ∀ (acc : Rows D × Nat), Trie.Canon (rowSpec E) 0 acc.1 →
-      (dropHeads E t (Thunk.mk fun _ => Trie.emptyHash (rowSpec E)) acc).1.toList.length ≤ acc.1.toList.length := by
+      (dropHeads E t acc).1.toList.length ≤ acc.1.toList.length := by
   unfold dropHeads
   generalize t.touches = xs
   induction xs with
@@ -763,7 +760,7 @@ private theorem dropHeads_len {E : Env D} (t : Turn D) :
       intro acc hc
       simp only [List.foldl_cons]
       split
-      · have h1 := dropList_len (E := E) ((under (rowSpec E) (E.bytes x.cell) 257 0 acc.1).filter fun p =>
+      · have h1 := dropList_len (E := E) ((under (rowSpec E) (E.bytes x.cell) 257 acc.1).filter fun p =>
           match p.1 with
           | .head q _ => decide (q = x.cell)
           | .row _ => false) acc hc
@@ -812,14 +809,14 @@ private theorem startsWith_key {E : Env D} {n : Nat} (hE : E.Lawful n) (p : D) (
       exact hx key.parent _
 
 private theorem under_parent {E : Env D} {n : Nat} (hE : E.Lawful n) {r : Rows D}
-    (hr : Trie.Routed (rowSpec E) 0 r) (p : D) (m : Nat) :
-    under (rowSpec E) (E.bytes p) m 0 r = (r.toList.filter fun q => decide (parentOf q.1 = p)).take m := by
+    (hc : Trie.Canon (rowSpec E) 0 r) (p : D) (m : Nat) :
+    under (rowSpec E) (E.bytes p) m r = (r.toList.filter fun q => decide (parentOf q.1 = p)).take m := by
   have hlong : ∀ q : RowSlot D × RowLeaf, (E.bytes p).size ≤ ((rowSpec E).kbytes q.1).size := by
     rintro ⟨s, _⟩
     show (E.bytes p).size ≤ (rowKeyBytes E s).size
     cases s <;> simp [rowKeyBytes, rowsPrefix, ByteArray.size_append, hE.size] <;> omega
-  rw [under_eq (rowSpec E) (fun _ _ => rfl) (E.bytes p) m 0 r hr
-    (fun _ _ _ hi => absurd hi (Nat.not_lt_zero _)) (fun q _ _ => hlong q)]
+  rw [under_eq (rowSpec E) (fun _ _ => rfl) (E.bytes p) m 0 r hc.1 hc.2.2
+    (fun _ _ _ _ _ hi => absurd hi (Nat.not_lt_zero _)) (fun q _ _ => hlong q)]
   congr 1
   exact List.filter_congr fun q _ => startsWith_key hE p q.1
 
@@ -832,7 +829,7 @@ private theorem noRet_pre {E : Env D} {n : Nat} (hE : E.Lawful n) {w : World D} 
   have h2 := req_ok.mp h1
   simp only [Bool.and_eq_true, decide_eq_true_eq, List.all_eq_true] at h2
   obtain ⟨hlen, hall⟩ := h2
-  rw [under_parent hE hr.1 x.cell 257] at hlen hall
+  rw [under_parent hE hr x.cell 257] at hlen hall
   have hmem : (RowSlot.row key, v) ∈ w.rows.toList.filter (fun q => decide (parentOf q.1 = x.cell)) :=
     List.mem_filter.mpr ⟨(Trie.mem_toList (rowSpec E) 0 _ hr.1 _ _).mpr hg, by simp [parentOf, hc]⟩
   rw [List.length_take] at hlen
@@ -859,8 +856,7 @@ private theorem dropList_get {E : Env D} :
     ∀ (L : List (RowSlot D × RowLeaf)) (acc : Rows D × Nat), Trie.Canon (rowSpec E) 0 acc.1 →
       (L.map Prod.fst).Nodup → (∀ q ∈ L, q ∈ acc.1.toList) → ∀ k,
       (L.foldl (fun acc p =>
-          (Trie.retainAt (rowSpec E) (fun k _ => decide (k ≠ p.1)) (rowPath E p.1) acc.1
-            (Thunk.mk fun _ => Trie.emptyHash (rowSpec E)), acc.2 + rowEntryWeight p)) acc).1.get (rowSpec E) k =
+          (Trie.retainAt (rowSpec E) (fun k _ => decide (k ≠ p.1)) (rowPath E p.1) acc.1, acc.2 + rowEntryWeight p)) acc).1.get (rowSpec E) k =
         if k ∈ L.map Prod.fst then none else acc.1.get (rowSpec E) k
   | [], acc, _, _, _, k => by simp
   | p :: L, acc, hc, hn, hm, k => by
@@ -898,7 +894,7 @@ if it is one, as before otherwise. -/
 private theorem dropHeads_char {E : Env D} {n : Nat} (hE : E.Lawful n) (t : Turn D) (acc : Rows D × Nat)
     (hc : Trie.Canon (rowSpec E) 0 acc.1) (hf : ∀ k v, acc.1.get (rowSpec E) k = some v → rowFits k v = true)
     (hn : NoRetL E t.touches acc.1) (k : RowSlot D) :
-    (dropHeads E t (Thunk.mk fun _ => Trie.emptyHash (rowSpec E)) acc).1.get (rowSpec E) k =
+    (dropHeads E t acc).1.get (rowSpec E) k =
       if retiredIn t.touches k then none else acc.1.get (rowSpec E) k := by
   unfold dropHeads
   generalize t.touches = xs at hn ⊢
@@ -941,9 +937,9 @@ private theorem dropHeads_char {E : Env D} {n : Nat} (hE : E.Lawful n) (t : Turn
                 obtain ⟨rel, he, hrel⟩ := hP q hq1 (of_decide_eq_true hq2)
                 rw [he]; exact List.mem_map.mpr ⟨rel, List.mem_range.mpr hrel, rfl⟩)
             simpa using h1
-          have hlist : under (rowSpec E) (E.bytes x.cell) 257 0 acc.1 =
+          have hlist : under (rowSpec E) (E.bytes x.cell) 257 acc.1 =
               acc.1.toList.filter fun q => decide (parentOf q.1 = x.cell) := by
-            rw [under_parent hE hc.1, List.take_of_length_le (by omega)]
+            rw [under_parent hE hc, List.take_of_length_le (by omega)]
           rw [hlist]
           have hsubL : ∀ q ∈ ((acc.1.toList.filter fun q => decide (parentOf q.1 = x.cell)).filter
               fun p => headIs x.cell p.1), q ∈ acc.1.toList :=
@@ -955,8 +951,7 @@ private theorem dropHeads_char {E : Env D} {n : Nat} (hE : E.Lawful n) (t : Turn
           have hgetL := dropList_get _ acc hc hnodL hsubL
           have hcanL := (dropList_weight _ acc hc hnodL hsubL).2
           have hfL : ∀ k v, (List.foldl (fun acc p =>
-              (Trie.retainAt (rowSpec E) (fun k _ => decide (k ≠ p.1)) (rowPath E p.1) acc.1
-                (Thunk.mk fun _ => Trie.emptyHash (rowSpec E)), acc.2 + rowEntryWeight p)) acc
+              (Trie.retainAt (rowSpec E) (fun k _ => decide (k ≠ p.1)) (rowPath E p.1) acc.1, acc.2 + rowEntryWeight p)) acc
               ((acc.1.toList.filter fun q => decide (parentOf q.1 = x.cell)).filter
                 fun p => headIs x.cell p.1)).1.get (rowSpec E) k = some v → rowFits k v = true := by
             intro k v h; rw [hgetL k] at h; split at h
@@ -1320,7 +1315,6 @@ private def plantInsert (E : Env D) (r : Rows D) (key : RowKey D) (amt : Nat) : 
   match headOf E r key.parent key.rel with
   | some (count, sum, limit, cap, width, retract) =>
       setHead E r key.parent key.rel (count + 1) (sum + amt) limit cap width retract
-        (Thunk.mk fun _ => Trie.emptyHash (rowSpec E))
   | none => r
 
 private theorem plant_breaks (E : Env D) (p : D) (cell : Cell) (w0 : World D)
@@ -1340,7 +1334,7 @@ private theorem plant_breaks (E : Env D) (p : D) (cell : Cell) (w0 : World D)
     · assumption
     · cases this
   have hplant : plantInsert E w0.rows ⟨p, 0, ByteArray.empty⟩ 5 =
-      setHead E w0.rows p 0 (0 + 1) (0 + 5) 1 10 0 false (Thunk.mk fun _ => Trie.emptyHash (rowSpec E)) := by
+      setHead E w0.rows p 0 (0 + 1) (0 + 5) 1 10 0 false := by
     unfold plantInsert headOf rowAt
     rw [hget0, if_pos rfl]
   refine ⟨?_, ?_⟩
@@ -1376,16 +1370,14 @@ private theorem plant_breaks (E : Env D) (p : D) (cell : Cell) (w0 : World D)
     simp only at hf hh
     rw [hplant] at hf hh
     have hr1 : Trie.Canon (rowSpec E) 0
-        (setHead E w0.rows p 0 (0 + 1) (0 + 5) 1 10 0 false (Thunk.mk fun _ => Trie.emptyHash (rowSpec E))) := by
+        (setHead E w0.rows p 0 (0 + 1) (0 + 5) 1 10 0 false) := by
       unfold setHead; exact Trie.canon_insert (rowSpec E) _ _ hr0
     have hi := (inv_iff hr1.1).mpr ⟨hf, hh⟩
-    have hg1 : (setHead E w0.rows p 0 (0 + 1) (0 + 5) 1 10 0 false
-        (Thunk.mk fun _ => Trie.emptyHash (rowSpec E))).get (rowSpec E) (.head p 0) =
+    have hg1 : (setHead E w0.rows p 0 (0 + 1) (0 + 5) 1 10 0 false).get (rowSpec E) (.head p 0) =
         some (.head (0 + 1) (0 + 5) 1 10 0 false) := by
       unfold setHead; exact Trie.get_insert_self (rowSpec E) _ _ _
     have hc := (hi.2.2 _ _ _ _ _ _ _ _ hg1).1
-    have hz : ((setHead E w0.rows p 0 (0 + 1) (0 + 5) 1 10 0 false
-        (Thunk.mk fun _ => Trie.emptyHash (rowSpec E))).toList.map (gc p 0)).sum = 0 := by
+    have hz : ((setHead E w0.rows p 0 (0 + 1) (0 + 5) 1 10 0 false).toList.map (gc p 0)).sum = 0 := by
       apply sum_zero
       rintro ⟨k, v⟩ hq
       have := Trie.get_of_mem (rowSpec E) hr1.1 hq

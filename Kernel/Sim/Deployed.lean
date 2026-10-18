@@ -27,6 +27,9 @@ def params : Gen.Params Digest :=
     ctx := Deployed.ctx (Gen.program Digest.ofBytes? 32)
     pub := fun s => Ed25519.publicKey (seed s)
     sign := fun s m => Ed25519.sign (seed s) m
-    zero := Digest.zero }
+    zero := Digest.zero
+    -- CODEC's proof wire (KERNEL-49 (a)): its length, computed without encoding (`Stream.size`)
+    proofSize := some fun p =>
+      (Codec.Kernel.proof (trieSpec Deployed.env) (Codec.Kernel.slot Deployed.digestCodec) Deployed.digestCodec).size p }
 
 end Nanodregg.Kernel.Sim.Deployed

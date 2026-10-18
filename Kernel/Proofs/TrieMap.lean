@@ -141,9 +141,37 @@ theorem filter_eq_true (d : Nat) (l : List (K × V)) :
   congr 1; funext p; cases S.bit p.1 d <;> rfl
 
 omit [DecidableEq K] in
-/-- **`build` is order-blind on separated keys.** -/
-theorem build_perm : ∀ (f d : Nat) (l₁ l₂ : List (K × V)), l₁.Perm l₂ → (l₁.map Prod.fst).Nodup →
-    f = S.depth - d → SepAt S d l₁ → build S f d l₁ = build S f d l₂
+/-- Separated keys that agree on `[d, c)` and on bit `c` are separated from `c + 1`. -/
+theorem sepAt_split {d c : Nat} {l : List (K × V)} (hs : SepAt S d l)
+    (hag : ∀ p ∈ l, ∀ q ∈ l, ∀ i, d ≤ i → i < c → S.bit p.1 i = S.bit q.1 i) (bb : Bool) :
+    SepAt S (c + 1) (l.filter fun p => S.bit p.1 c == bb) := by
+  intro p hp q hq hne
+  simp only [List.mem_filter, beq_iff_eq] at hp hq
+  obtain ⟨i, hi, hd, hb⟩ := hs p hp.1 q hq.1 hne
+  refine ⟨i, ?_, hd, hb⟩
+  by_cases h1 : i < c
+  · exact absurd (hag p hp.1 q hq.1 i hi h1) hb
+  · by_cases h2 : i = c
+    · subst h2; exact absurd (hp.2.trans hq.2.symm) hb
+    · omega
+
+omit [DecidableEq K] in
+/-- Where entries first part does not depend on their order. -/
+theorem splitBit_perm {d : Nat} : ∀ {l₁ l₂ : List (K × V)}, l₁.Perm l₂ → splitBit S d l₁ = splitBit S d l₂
+  | [], l₂, hp => by have := hp.nil_eq; subst this; rfl
+  | _ :: _, [], hp => absurd hp.eq_nil (by simp)
+  | p :: rest, p' :: rest', hp => by
+      simp only [splitBit]
+      congr 1; funext i
+      apply Bool.eq_iff_iff.mpr
+      rw [any_split, any_split]
+      constructor
+      · rintro ⟨x, hx, y, hy, h⟩; exact ⟨x, hp.mem_iff.mp hx, y, hp.mem_iff.mp hy, h⟩
+      · rintro ⟨x, hx, y, hy, h⟩; exact ⟨x, hp.mem_iff.mpr hx, y, hp.mem_iff.mpr hy, h⟩
+
+omit [DecidableEq K] in
+theorem build_perm_le : ∀ (f d : Nat) (l₁ l₂ : List (K × V)), l₁.Perm l₂ → (l₁.map Prod.fst).Nodup →
+    S.depth - d ≤ f → SepAt S d l₁ → build S f d l₁ = build S f d l₂
   | f, d, l₁, l₂, hp, hn, hf, hs => by
       match l₁, l₂, hp.length_eq with
       | [], [], _ => rfl
@@ -151,26 +179,52 @@ theorem build_perm : ∀ (f d : Nat) (l₁ l₂ : List (K × V)), l₁.Perm l₂
           have : l₂ = [x] := (List.perm_singleton.mp hp.symm)
           subst this; rfl
       | a :: b :: rest, l₂, hl =>
-          have hl₂ : 2 ≤ l₂.length := by simp at hl; omega
+          obtain ⟨a', b', rest', rfl⟩ : ∃ a' b' rest', l₂ = a' :: b' :: rest' := by
+            match l₂, hl with
+            | a' :: b' :: rest', _ => exact ⟨a', b', rest', rfl⟩
+          have hab : a.1 ≠ b.1 := by
+            simp only [List.map_cons, List.nodup_cons, List.mem_cons] at hn
+            exact fun he => hn.1 (Or.inl he)
+          obtain ⟨i, hi, hd, hne⟩ := hs a (by simp) b (by simp) hab
           cases f with
-          | zero =>
-              exfalso
-              have hab : a.1 ≠ b.1 := by
-                simp only [List.map_cons, List.nodup_cons, List.mem_cons] at hn
-                exact fun he => hn.1 (Or.inl he)
-              obtain ⟨i, hi, hd, _⟩ := hs a (by simp) b (by simp) hab
-              omega
+          | zero => omega
           | succ f =>
-              rw [build_split S f d _ (by simp), build_split S f d l₂ hl₂]
-              have hf' : f = S.depth - (d + 1) := by omega
-              have hn₀ := (List.Perm.nodup_iff (hp.map Prod.fst)).mp hn
-              have sub : ∀ (q : K × V → Bool), ((((a :: b :: rest).filter q).map Prod.fst).Nodup) :=
-                fun q => hn.sublist (List.filter_sublist.map Prod.fst)
-              rw [filter_not_eq S d (a :: b :: rest), filter_not_eq S d l₂,
-                filter_eq_true S d (a :: b :: rest), filter_eq_true S d l₂]
-              rw [build_perm f (d + 1) _ _ (hp.filter _) (sub _) hf' (sepAt_filter S hs false),
-                build_perm f (d + 1) _ _ (hp.filter _) (sub _) hf' (sepAt_filter S hs true)]
+              have hsp := splitBit_perm S (d := d) hp
+              cases hs1 : splitBit S d (a :: b :: rest) with
+              | none =>
+                  exfalso
+                  exact hne ((splitBit_none S).mp hs1 i hi hd b (by simp)).symm
+              | some c =>
+                  rw [hs1] at hsp
+                  have hbd := splitBit_bounds S hs1
+                  have hag0 := splitBit_agree S hs1
+                  have hag : ∀ p ∈ a :: b :: rest, ∀ q ∈ a :: b :: rest, ∀ j, d ≤ j → j < c →
+                      S.bit p.1 j = S.bit q.1 j := fun p hp q hq j h1 h2 => by
+                    rw [hag0 p hp j h1 h2, hag0 q hq j h1 h2]
+                  have sub : ∀ (q : K × V → Bool), ((((a :: b :: rest).filter q).map Prod.fst).Nodup) :=
+                    fun q => hn.sublist (List.filter_sublist.map Prod.fst)
+                  have hL : build S f (c + 1) ((a :: b :: rest).filter fun q => !S.bit q.1 c) =
+                      build S f (c + 1) ((a' :: b' :: rest').filter fun q => !S.bit q.1 c) := by
+                    rw [filter_not_eq S c (a :: b :: rest), filter_not_eq S c (a' :: b' :: rest')]
+                    exact build_perm_le f (c + 1) _ _ (hp.filter _) (sub _) (by omega)
+                      (sepAt_split S hs hag false)
+                  have hR : build S f (c + 1) ((a :: b :: rest).filter fun q => S.bit q.1 c) =
+                      build S f (c + 1) ((a' :: b' :: rest').filter fun q => S.bit q.1 c) := by
+                    rw [filter_eq_true S c (a :: b :: rest), filter_eq_true S c (a' :: b' :: rest')]
+                    exact build_perm_le f (c + 1) _ _ (hp.filter _) (sub _) (by omega)
+                      (sepAt_split S hs hag true)
+                  obtain ⟨⟨xl, hxl, hbl⟩, _⟩ := splitBit_sides S hs1
+                  obtain ⟨y, hy⟩ := build_first_some S f (c + 1) ((a :: b :: rest).filter fun q => !S.bit q.1 c)
+                    (List.ne_nil_of_mem (List.mem_filter.mpr ⟨hxl, by simp [hbl]⟩))
+                  rw [build_split S f d c a _ hs1, build_split S f d c a' _ hsp.symm, ← hL, ← hR, hy]
+                  rfl
 termination_by f => f
+
+omit [DecidableEq K] in
+/-- **`build` is order-blind on separated keys.** -/
+theorem build_perm : ∀ (f d : Nat) (l₁ l₂ : List (K × V)), l₁.Perm l₂ → (l₁.map Prod.fst).Nodup →
+    f = S.depth - d → SepAt S d l₁ → build S f d l₁ = build S f d l₂ :=
+  fun f d l₁ l₂ hp hn hf hs => build_perm_le S f d l₁ l₂ hp hn (by omega) hs
 
 /-- **Contents determine the trie.** Two canonical tries that hold the same value at every key are
 equal (so: one root), when the bit function separates keys. -/
@@ -191,6 +245,7 @@ omit [DecidableEq K] in
 theorem shallow_of_shape : ∀ (d : Nat) (t : T K V D), Shape S d t → Shallow S d t
   | _, .empty, _ => trivial
   | _, .leaf _ _, _ => trivial
-  | d, .node _ l r, ⟨hd, _, hl, hr⟩ => ⟨hd, shallow_of_shape (d + 1) l hl, shallow_of_shape (d + 1) r hr⟩
+  | _, .node _ b _ l r, ⟨hdb, hb, _, _, hl, hr⟩ =>
+      ⟨hdb, hb, shallow_of_shape (b + 1) l hl, shallow_of_shape (b + 1) r hr⟩
 
 end Nanodregg.Kernel.Trie

@@ -128,9 +128,9 @@ variable {K V D' : Type} [DecidableEq K] (S : Trie.Spec K V D')
 theorem leavesNodup_of_routed : ∀ (d : Nat) (t : Trie.T K V D'), Trie.Routed S d t → leavesNodup t = true
   | _, .empty, _ => rfl
   | _, .leaf _ _, h => by simpa [leavesNodup] using h
-  | d, .node _ l r, h => by
+  | _, .node _ b _ l r, h => by
       simp only [leavesNodup, Bool.and_eq_true]
-      exact ⟨leavesNodup_of_routed (d + 1) l h.2.2.1, leavesNodup_of_routed (d + 1) r h.2.2.2⟩
+      exact ⟨leavesNodup_of_routed (b + 1) l h.2.2.2.2.1, leavesNodup_of_routed (b + 1) r h.2.2.2.2.2⟩
 
 /-- A rebuilt trie whose leaves hold each key once came from a listing that holds each key once. -/
 theorem nodup_of_leavesNodup_build : ∀ (f d : Nat) (l : List (K × V)),
@@ -139,10 +139,13 @@ theorem nodup_of_leavesNodup_build : ∀ (f d : Nat) (l : List (K × V)),
   | _, _, [_], _ => by simp
   | 0, _, a :: b :: rest, h => by simpa [Trie.build, Trie.mkLeaf, leavesNodup] using h
   | f + 1, d, a :: b :: rest, h => by
-      simp only [Trie.build, Trie.mkNode, leavesNodup, Bool.and_eq_true] at h
-      have hl := nodup_of_leavesNodup_build f (d + 1) _ h.1
-      have hr := nodup_of_leavesNodup_build f (d + 1) _ h.2
-      have hp := List.filter_append_perm (fun p : K × V => !S.bit p.1 d) (a :: b :: rest)
+      cases hsb : Trie.splitBit S d (a :: b :: rest) with
+      | none => simpa [Trie.build, hsb, Trie.mkLeaf, leavesNodup] using h
+      | some c =>
+      simp only [Trie.build, hsb, Trie.mkNode, leavesNodup, Bool.and_eq_true] at h
+      have hl := nodup_of_leavesNodup_build f (c + 1) _ h.1
+      have hr := nodup_of_leavesNodup_build f (c + 1) _ h.2
+      have hp := List.filter_append_perm (fun p : K × V => !S.bit p.1 c) (a :: b :: rest)
       simp only [Bool.not_not] at hp
       refine (hp.map Prod.fst).nodup_iff.mp ?_
       rw [List.map_append, List.nodup_append]

@@ -145,7 +145,7 @@ theorem refusal_prove_verifies {E : Env D} {w : World D} (hc : w.RefusalsCanon E
 theorem refusal_prove_absent {E : Env D} {w : World D} (hc : w.RefusalsCanon E) {k : RefusalSlot D}
     (hg : w.refusalAt E k = none) :
     Trie.verifyExclusion (refusalSpec E) (w.refusalsRoot E) k (w.refusals.prove (refusalSpec E) k) = true :=
-  Trie.prove_excludes (refusalSpec E) hc.2.1 (Trie.shallow_of_shape _ 0 _ hc.2.2) hg
+  Trie.prove_excludes (refusalSpec E) hc.2.1 hc.1 (Trie.shallow_of_shape _ 0 _ hc.2.2) hg
 
 /-! ## Soundness at the World and at a head -/
 
@@ -160,7 +160,7 @@ theorem refusal_inclusion_sound {w : World D} (hc : w.RefusalsCanon E)
     {v : RefusalLeaf} (hv : Codec.Kernel.RefusalLeaf.Fits v) {p : Trie.Proof (RefusalSlot D) D}
     (hp : Trie.verifyInclusion (refusalSpec E) (w.refusalsRoot E) k (refusalDigest E v) p = true) :
     w.refusalAt E k = some v ∨ Collision E.hash := by
-  rcases Trie.inclusion_sound (refusalSpec E) (refusalBody_inj hE) (dbytes_pair_inj hE) hc.2.1 hp
+  rcases Trie.inclusion_sound (refusalSpec E) (refusalBody_inj hE) (dbytes_pair_inj hE) hc.2.1 hc.1 hp
     with ⟨v', hg, hd⟩ | c
   · rcases refusalDigest_inj (hfit k v' hg) hv hd with rfl | c
     · exact .inl hg

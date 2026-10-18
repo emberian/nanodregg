@@ -2164,3 +2164,16 @@ returns `Option`/`Except` over the SAME bound its decode enforces, and a theorem
 **Critique.** A stopped-writer verb puts the inviter's writer down for a reopen; frequent invitations make that real downtime. The verb also gives the operator a way to grow the base series faster than the cadence (each seal a whole-World write): operator-chosen, bounded by their own patience, not a member's.
 
 **Meta-critique.** The rows passed with a seal the deployed host could not perform; a harness act with no deployed twin is the same "test passes, product cannot" shape as a cfg-test twin. The cure is the same: one function both call.
+
+## HOST-45 · KERNEL-49 (a), path compression in the one trie, HOST's half: no Host code moves; every reopen, backup, seal and export theorem re-verified (2026-10-18, HOST-12; with KERNEL-18, CODEC-11, PROTOCOL-12 in ONE kernel! landing)
+
+**Decision.** Host passes no empty-digest argument and states nothing about a trie node's shape: it reads the tries through KERNEL's lemmas (`toList_insert_perm`, `mem_toList`, `Canon`, `insertAll_*`), whose names and statements the trie day keeps. So HOST's half is a re-verifying build, not an edit: on 66815ff + kernel18-joint2 (md5 2cf778dc) every Host module and proof builds unchanged (Host/Proofs/{Base,Backup,Deployed,Genesis,Seal,Serve,Index,Page,Cli} included), and host-sim, host-file-sim, hosting-sim (seeds 1–3), store-plants and rows are ALL PASS. The one Host line that moves is PROTOCOL-12's `dc` pass-through in `Host.Follow.answer` (HOST agreed).
+
+**WASTE.** All 24 HOST rows measure EXACTLY their pinned values: they are byte ratios of records, bases and index entries, and the trie day keeps listings (hence base bytes) byte-identical; only roots change.
+
+**Flag day.** Every root changes, so the World and carried tags move (CODEC-11) and every Store re-geneses: an old base refuses `shapeMismatch`, an old carried export refuses by stamp. No Host layout, Status or codec of HOST's moves.
+
+**Critique.** "No code moved" is evidence that Host reads the trie only through KERNEL's lemma surface, which is the intended boundary; it is also evidence that no Host theorem says anything about a root's VALUE (they compare roots for equality, never compute one), so a root-function change cannot reach them. If a Host theorem ever states a root, the next trie change will.
+
+**Meta-critique.** A day whose Host half is a build is still a day: the checks are the re-verification, and the WASTE equality is the measurement that listings stayed byte-identical, which the ruling asserted and nothing else in HOST's checks would have caught had it been false.
+

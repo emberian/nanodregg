@@ -52,6 +52,9 @@ inductive Shape where
   /-- A byte string of at most `max` bytes behind a ONE-byte length (`Codec.Raw.bytes8`, `max < 256`): a
   rows key's bytes, a range prefix (KERNEL-46's `rowKeyBytes`). -/
   | bytes8 (max : Nat)
+  /-- Two bytes, little-endian (`Codec.Raw.nat16`): a trie node's branching bit on a proof's path
+  (KERNEL-49). -/
+  | u16
   deriving Repr
 
 /-- A byte string of at most `max` bytes. -/

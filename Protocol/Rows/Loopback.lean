@@ -409,7 +409,7 @@ def followAsk (name : String) (self : Self D) (op : Op) (payload : ByteArray) :
   let st ← get
   set { st with conn := st.conn + 1 }
   let (fs', _, status, p) :=
-    Host.Follow.answer (← X) base self a.follow ⟨UInt32.ofNat st.conn, op.code, payload⟩
+    Host.Follow.answer (← X) Sim.dc base self a.follow ⟨UInt32.ofNat st.conn, op.code, payload⟩
   setActor name { a with follow := fs' }
   pure (if status = Status.ok.code then .ok p else .error (Command.hostName p))
 
@@ -873,7 +873,7 @@ def runAct (l : Line) : M (Expect × String) := do
       let X := st.sys.follow
       let some c := (← actor owner).last >>= X.decodeCall | return (.refused "noAttempt", "")
       let some rb := st.binds.lookup rc >>= Text.ofHex | return (.refused s!"unbound {rc}", "")
-      let some r := Receipt.ofBytes X.digestOf rb | return (.refused "badReceipt", "")
+      let some r := Receipt.ofBytes X.env Sim.dc rb | return (.refused "badReceipt", "")
       let r := match l.fault with
         | .forgeReceipt => { r with answer := .absent }
         | _ => r

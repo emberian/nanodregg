@@ -52,7 +52,11 @@ theorem refuse_steps {E : Env D} {w w' : World D} {r : Refused D} (h : World.ref
 /-- The chain commits the roots AFTER the refusal, by the refusal's own link (kind byte 1). -/
 theorem refuse_chain {E : Env D} {w w' : World D} {r : Refused D} (h : World.refuse E w r = .ok w') :
     w'.chain = refusalLink E w.chain r (w'.roots E) := by
-  obtain ⟨_, rfl⟩ := refuse_ok h; rfl
+  obtain ⟨_, rfl⟩ := refuse_ok h
+  unfold commitRefusal World.roots World.root World.journalRoot World.refusalsRoot World.rowsRoot
+  dsimp only
+  rw [Trie.rootWith_eq (trieSpec E) _ _ rfl, Trie.rootWith_eq (journalSpec E) _ _ rfl,
+    Trie.rootWith_eq (refusalSpec E) _ _ rfl, Trie.rootWith_eq (rowSpec E) _ _ rfl]
 
 theorem admit_steps {E : Env D} {w w' : World D} {t : Turn D} (h : World.admit E w t = .ok w') :
     w'.steps = w.steps + 1 := by
@@ -204,7 +208,7 @@ theorem pruneRefusals_canon {E : Env D} {H : Nat} {r : Refusals D} (hr : Trie.Ca
     Trie.Canon (refusalSpec E) 0 (pruneRefusals E H r) := by
   unfold pruneRefusals
   split
-  · exact Trie.canon_retainAt (refusalSpec E) _ [] 0 r hr (fun _ _ _ => trivial)
+  · exact Trie.canon_retainAt (refusalSpec E) _ [] 0 r hr (fun _ _ _ _ _ _ h => by simp at h)
   · exact hr
 
 omit [Ord D] in
@@ -216,7 +220,7 @@ theorem pruneRefusals_get {E : Env D} {H : Nat} {r : Refusals D} (hr : Trie.Cano
       else r.get (refusalSpec E) k := by
   unfold pruneRefusals
   split
-  · exact Trie.get_retainAt (refusalSpec E) _ [] hr (fun _ _ _ => trivial) k
+  · exact Trie.get_retainAt (refusalSpec E) _ [] hr (fun _ _ _ _ _ _ h => by simp at h) k
   · rfl
 
 theorem commit_refusals {E : Env D} {w : World D} {t : Turn D} {posts : List (Post D)} :

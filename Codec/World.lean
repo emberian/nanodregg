@@ -72,7 +72,7 @@ whose bits all agree, which for the deployed fixed-width ids means one key.) -/
 def leavesNodup {K V D' : Type} [DecidableEq K] : Trie.T K V D' → Bool
   | .empty => true
   | .leaf _ kvs => decide (kvs.map Prod.fst).Nodup
-  | .node _ l r => leavesNodup l && leavesNodup r
+  | .node _ _ _ l r => leavesNodup l && leavesNodup r
 
 /-- The trie's listing, each slot holding the leaf of its kind. -/
 def fitList [DecidableEq D] (dc : Stream D) : Stream (List (Slot D × Leaf)) :=
@@ -87,6 +87,38 @@ def listingAccept {K V : Type} [DecidableEq K] [DecidableEq V] (S : Trie.Spec K 
     Option (Trie.T K V D) :=
   let t := Trie.build S S.depth 0 l
   if t.toList == l && leavesNodup t then some t else none
+
+/-! ## A trie's proof (KERNEL-49 (a): the phone's path wire) -/
+
+/-- A sibling on a proof's path: the bit its node branches on, then the sibling's digest. The bit is a
+`nat16` (two bytes, little-endian, as every codec integer); the node hash commits the same number in its
+own big-endian `Trie.u16`, so the two spellings differ and each is injective below `2 ^ 16`. -/
+def sibling (dc : Stream D) : Stream (Nat × D) := product nat16 dc
+
+/-- A trie proof as written, its path not yet checked: what the path ends at (`none`: the empty trie;
+`some`: a leaf's entries as key and value digest, at most `worldMax`), then the siblings from the root
+down, at most `depth`. -/
+def proofWire {K : Type} (depth : Nat) (kc : Stream K) (dc : Stream D) :
+    Stream (Option (List (K × D)) × List (Nat × D)) :=
+  product (option (rawList worldMax (product kc dc))) (rawList depth (sibling dc))
+
+/-- Is `x` a path a trie can show: its siblings' bits ascend below `S.depth` (`Trie.ascends S 0`, the
+check `verifyInclusion` / `verifyExclusion` make before hashing), and it ends at a leaf's entries (at
+least one: no leaf is empty) or at the empty trie with no sibling (only a whole trie is empty). -/
+def proofShaped {K V : Type} [DecidableEq K] (S : Trie.Spec K V D) (x : Option (List (K × D)) × List (Nat × D)) :
+    Bool :=
+  Trie.ascends S 0 x.2 && match x.1 with
+    | none => x.2.isEmpty
+    | some kds => !kds.isEmpty
+
+/-- A trie proof under `S` (`Trie.Proof`), read back only when it is `proofShaped`, refused
+`kernel/proof` otherwise: a bit out of order or at or past the depth, an empty leaf, or siblings above
+an empty trie is no path of a trie. The bits are on the wire because the node hash commits them
+(KERNEL-49 (a)); a proof that claimed other bits would climb to another root. -/
+def proof {K V : Type} [DecidableEq K] (S : Trie.Spec K V D) (kc : Stream K) (dc : Stream D) :
+    Stream (Trie.Proof K D) :=
+  refine "kernel/proof" (proofWire S.depth kc dc)
+    (fun x => if proofShaped S x = true then some ⟨x.1, x.2⟩ else none) (fun p => (p.term, p.sibs))
 
 /-- The cells' trie, as its listing (`kernel/trie-order`). -/
 def cells [DecidableEq D] (E : Env D) (dc : Stream D) : Stream (Cells D) :=
