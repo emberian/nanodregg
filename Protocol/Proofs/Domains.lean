@@ -1,14 +1,15 @@
 /-
 # Protocol.Proofs.Domains — every message a member key signs begins with its own domain (KERNEL-42)
 
-A member key signs four shapes: a call (`Receive.Ctx.callMessage`, `domCall`), a possession
+A member key signs five shapes: a call (`Receive.Ctx.callMessage`, `domCall`), a possession
 proof (`Receive.possessionMessage`, `tagPossession`), a read envelope (`Envelope.message`,
-`domEnvelope`) and `init`'s identity probe (`Command.whoami`, a constant). Each pair of domains
+`domEnvelope`), `init`'s identity probe (`Command.whoami`, a constant) and an invitation
+(`Invite.message`, `domInvite`, PROTOCOL-42). Each pair of domains
 differs at a byte both hold, so no message of one shape is a message of another, whatever follows
 the domain: a signature made for one is never one over another, with no hash premise. An observer
 custody that signs only messages beginning with `domEnvelope` (HOSTING-17 §7, CLIENT-22) therefore
-never signs a call, a possession proof or a probe (`call_not_envelope`, `possession_not_envelope`,
-`whoami_not_envelope`).
+never signs a call, a possession proof, a probe or an invitation (`call_not_envelope`,
+`possession_not_envelope`, `whoami_not_envelope`, `invite_not_envelope`).
 -/
 import Protocol.Command.Machine
 
@@ -87,5 +88,34 @@ theorem call_not_whoami (X : Ctx D) (u : Unsigned D) : X.callMessage u ≠ Comma
   intro h
   exact call_whoami_disjoint (X.unsignedBytes u) ByteArray.empty
     (by rw [ByteArray.append_empty]; exact h)
+
+/-! ## The invitation's domain against the other four (byte 10 or 19 differs) -/
+
+theorem invite_call_disjoint (r s : ByteArray) : Invite.domInvite ++ r ≠ domCall ++ s :=
+  append_ne_of_byte (i := 10) (by decide) (by decide) (by decide)
+
+theorem invite_possession_disjoint (r s : ByteArray) : Invite.domInvite ++ r ≠ tagPossession ++ s :=
+  append_ne_of_byte (i := 10) (by decide) (by decide) (by decide)
+
+theorem invite_envelope_disjoint (r s : ByteArray) : Invite.domInvite ++ r ≠ domEnvelope ++ s :=
+  append_ne_of_byte (i := 19) (by decide) (by decide) (by decide)
+
+theorem invite_whoami_disjoint (r s : ByteArray) : Invite.domInvite ++ r ≠ Command.whoami ++ s :=
+  append_ne_of_byte (i := 19) (by decide) (by decide) (by decide)
+
+/-- **No invitation message begins with the envelope domain**: an envelope-only custody never
+signs an invitation. -/
+theorem invite_not_envelope (u r : ByteArray) : domEnvelope ++ r ≠ Invite.message u :=
+  fun h => invite_envelope_disjoint u r h.symm
+
+/-- **An invitation's message is never a call's**: a signed invitation is never a signed call. -/
+theorem invite_not_call (X : Ctx D) (v : Unsigned D) (u : ByteArray) : Invite.message u ≠ X.callMessage v :=
+  invite_call_disjoint u (X.unsignedBytes v)
+
+theorem invite_not_possession (X : Ctx D) (sponsor next : D) (key u : ByteArray) :
+    Invite.message u ≠ possessionMessage X sponsor next key := by
+  unfold possessionMessage
+  simp only [ByteArray.append_assoc]
+  exact invite_possession_disjoint _ _
 
 end Nanodregg.Protocol

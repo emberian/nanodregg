@@ -19,7 +19,12 @@ height and re-signs ONCE a command for that height + window (`reSign`, PROTOCOL-
 (precommitting the digest of its PENDING key) and has it signed by `signNext`; custody advances on
 its own settlement of the submit (CLIENT-13).
 
-`adopt HEIGHT DIGEST` (thin consent, PROTOCOL-14 A) pages the writer's newest base with `read`, one
+`invite INPUT` (PROTOCOL-42) catches up, checks that INPUT makes the member's own World, pins that
+World (its step count, the digest of its bytes) and has custody sign the invitation; it prints
+`invite HEX`.
+
+`adopt INVITE KEY` (thin consent, PROTOCOL-14 A) takes its pin from an invitation `Invite.accept`
+accepts under the sponsor key KEY, and pages the writer's newest base with `read`, one
 signed envelope per page, `Protocol.Thin.accept` deciding each page; the download so far lives in
 follow's state (`Follow.download`, memory only), and an adopted base replaces follow's World and is
 handed back as `Persist.adopt` for follow to seal as its own newest base. From there every command
@@ -37,6 +42,7 @@ only if follow's own World admits the Turn it derives (consent: `Protocol.Proofs
 import Kernel.Receive.Submit
 import Protocol.Command.Verb
 import Protocol.Envelope
+import Protocol.Invite
 import Protocol.Command.Exit
 import Lang.Program
 
@@ -88,6 +94,8 @@ inductive Refusal (D : Type)
   | thin (r : Thin.Refusal)
   /-- custody refused the step, by its name (`CustodyRefusal`) -/
   | custody (r : CustodyRefusal)
+  /-- an invitation refused by `Invite.accept`'s name, or one for another World (PROTOCOL-42) -/
+  | invite (r : Invite.Refusal)
   /-- the writer refused the envelope `expired` at `height` after follow's one re-signed envelope
   of this command, or stated a height that a re-signed envelope would not cover (PROTOCOL-19) -/
   | expired (height : Nat)
@@ -124,6 +132,7 @@ def Refusal.name : Refusal D → String
   | .pageTooLong _ => "pageTooLong"
   | .thin r => r.name
   | .custody r => r.name
+  | .invite r => r.name
   | .expired _ => "expired"
 
 def refused (r : Refusal D) : Reply :=
@@ -204,9 +213,10 @@ def hostReply (b : ByteArray) : Option (Status × ByteArray) :=
 
 /-- The phases whose result is custody's: 1 (an envelope's or init's signature), 2 for `init`
 only (its possession signature; every other verb's phase 2 is a `log` reply), 3 (a call's
-signature, by `sign` or `signNext`), 5 (`precommit`), 6 (an adopt envelope's signature). -/
+signature, by `sign` or `signNext`), 5 (`precommit`), 6 (an adopt envelope's signature), 8 (an
+invitation's signature). -/
 def custodyPhase (isInit : Bool) (phase : UInt8) : Bool :=
-  phase == 1 || phase == 3 || phase == 5 || phase == 6 || (isInit && phase == 2)
+  phase == 1 || phase == 3 || phase == 5 || phase == 6 || phase == 8 || (isInit && phase == 2)
 
 /-- Custody's result (`u8 status ‖ payload`): ok hands on the payload, refused carries one of
 `CustodyRefusal` by `custodyRefusalLayout`; anything else is `badResult`. -/
@@ -280,7 +290,7 @@ def body (X : Ctx D) (me : Self D) (w : World D) (s : Signed) : Cmd D → Except
   | .account a o => .ok (.account a (o.getD me.member))
   | .transfer src dst n via once => .ok (.transfer src dst n via once)
   | .credit wl acct n via => .ok (.credit wl acct n via)
-  | .init _ | .read _ _ | .adopt _ | .sync => .error .badState
+  | .init _ | .read _ _ | .adopt _ _ | .sync | .invite _ => .error .badState
 
 /-- Derive with the signature not yet known, pinning each cell the derivation asks for. -/
 def derivePins (X : Ctx D) (w : World D) : Nat → Unsigned D → Except (Refusal D) (Unsigned D × Turn D)
@@ -452,12 +462,33 @@ def envelopeOf (me : Self D) (start upTo : Nat) (s : Signed) : Envelope D :=
 def adoptEnvelope (X : Ctx D) (me : Self D) (upTo offset : Nat) : ByteArray :=
   envelopeMessage X me offset upTo
 
+/-- The pin an `adopt` takes: that of an invitation `Invite.accept` accepts under the trusted `key`,
+to the member's own World (re-derived at every step from the argv, like every plan). -/
+def adoptPin (X : Ctx D) (me : Self D) (inv key : ByteArray) : Except (Refusal D) (Invite.Invitation D) :=
+  match Invite.accept X key inv with
+  | .error r => .error (.invite r)
+  | .ok (i, g) => if g.origin = me.world then .ok i else .error (.invite .otherWorld)
+
+/-- `invite`'s check of its INPUT: the inputs decode and make the member's own World. -/
+def inviteInput (X : Ctx D) (me : Self D) (input : ByteArray) : Except (Refusal D) Unit :=
+  match genesisInput.decode input with
+  | .error _ => .error (.invite .badInvitation)
+  | .ok (name, nonce, allowance, fs) =>
+    match Invite.foundersOf X fs with
+    | none => .error (.invite .badInvitation)
+    | some founders =>
+      if originOf X name nonce allowance founders = me.world then .ok () else .error (.invite .otherWorld)
+
 def start (X : Ctx D) (me : Self D) (f : Follow D) (argv : List ByteArray) : Reply :=
   let w := f.world
   match parse X.digestOf argv with
   | .error r => refused (D := D) (.parse r)
   | .ok (.init _) => next (D := D) ⟨argv, 1, []⟩ fun k => .sign whoami k
-  | .ok (.adopt pin) =>
+  | .ok (.adopt inv key) =>
+      match adoptPin X me inv key with
+      | .error r => refused (D := D) r
+      | .ok i =>
+      let pin := i.pin
       if w.steps ≠ 0 then refused (D := D) (.thin (.notAtGenesis w.steps)) else
       if pin.steps ≤ w.steps then refused (D := D) (.thin (.notBehind w.steps)) else
       let off := Thin.offset pin f.download
@@ -544,6 +575,16 @@ def step (X : Ctx D) (B : Thin.Base (World D)) (me : Self D) (f : Follow D) (kb 
                       | .read obj ex, _ => moved w' ts (render X.env w' obj ex)
                       | .sync, _ => moved w' ts (printed s!"height {w'.height}\nchain {hex X w'.chain}\n")
                       | .rotate, some _ => moved w' ts (again 5 [startB, signedB] fun k => .precommit k)
+                      -- invite: the inputs make this World; pin it as it stands, sign with the
+                      -- key the writer just took for this member's envelope
+                      | .invite input, some s =>
+                          match inviteInput X me input with
+                          | .error r => moved w' ts (refused (D := D) r)
+                          | .ok () =>
+                            match Invite.unsignedBytes X input ⟨w'.steps, B.digest (B.world.bytes w')⟩
+                                me.member s.key with
+                            | none => moved w' ts (refused (D := D) .badState)
+                            | some u => moved w' ts (again 8 [signedB, u] fun k => .sign (Invite.message u) k)
                       | _, some s => match body X me w' s cmd with
                         | .error r => moved w' ts (refused (D := D) r)
                         | .ok b =>
@@ -603,7 +644,7 @@ def step (X : Ctx D) (B : Thin.Base (World D)) (me : Self D) (f : Follow D) (kb 
           -- a settlement is never `closed`: the client settles a closed connection by lookup
           | some (.closed, _) | none => same (refused (D := D) .badResult)
       -- adopt: the envelope for the page at `off`, signed; ask for the base page
-      | .adopt _, 6, [offB, pagesB, upToB, triedB] =>
+      | .adopt _ _, 6, [offB, pagesB, upToB, triedB] =>
           match Signed.ofBytes result, Text.ofU64 offB, Text.ofU64 upToB with
           | some s, some off, some upTo =>
               match Envelope.bytes X (envelopeOf me off upTo s) with
@@ -611,7 +652,11 @@ def step (X : Ctx D) (B : Thin.Base (World D)) (me : Self D) (f : Follow D) (kb 
               | none => same (refused (D := D) .badState)
           | _, _, _ => same (refused (D := D) .badResult)
       -- adopt: one base page, decided by `Thin.accept`; the next page, or the World adopted
-      | .adopt pin, 7, [offB, pagesB, upToB, triedB] =>
+      | .adopt inv key, 7, [offB, pagesB, upToB, triedB] =>
+          match adoptPin X me inv key with
+          | .error r => same (refused (D := D) r)
+          | .ok i =>
+          let pin := i.pin
           let drop (r : Thin.Refusal) : Follow D × Persist D × Reply :=
             ({ f with download := none }, .steps [], refused (D := D) (.thin r))
           match Text.ofU64 offB, Text.ofU64 pagesB, Text.ofU64 upToB, Text.ofU64 triedB with
@@ -645,6 +690,17 @@ def step (X : Ctx D) (B : Thin.Base (World D)) (me : Self D) (f : Follow D) (kb 
                         .sign (adoptEnvelope X me upTo' off) k)
             | _ => same (refused (D := D) .badResult)
           | _, _, _, _ => same (refused (D := D) .badState)
+      -- invite: custody's signature over the invitation, by the key the envelope was signed with
+      | .invite _, 8, [signedB, u] =>
+          match Signed.ofBytes signedB, Signed.ofBytes result with
+          | some s, some s2 =>
+              if s2.key ≠ s.key then same (refused (D := D) .badResult) else
+              -- custody's signature is checked here, not first at the joiner
+              if !X.verify s2.key (Invite.message u) s2.signature then same (refused (D := D) .badResult) else
+              match Invite.bytes u s2.signature with
+              | some b => same (printed s!"invite {Text.toHex b}\n")
+              | none => same (refused (D := D) .badState)
+          | _, _ => same (refused (D := D) .badResult)
       | _, _, _ => same (refused (D := D) .badState)
 
 end Nanodregg.Protocol.Command

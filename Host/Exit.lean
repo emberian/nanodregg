@@ -120,6 +120,10 @@ inductive Status where
   anchor is not its carried height, the kernel refused the carried state, or the imported Store
   reopened to other carried bytes; `host export`: its own file did not read back (HOST-28) -/
   | carryMismatch
+  /-- `host join`: the invitation does not decode, is signed by another key than the one the joiner
+  trusts, or its signature does not verify over its bytes (`Protocol.Invite.accept`, PROTOCOL-42);
+  stderr names which. Nothing was written -/
+  | inviteRefused
   deriving DecidableEq, Repr
 
 namespace Status
@@ -129,7 +133,8 @@ def all : List Status :=
    locked, .exists, badKey, shortRead, missing, baseTooLarge, baseCorrupt, baseUndecodable,
    segmentShort, tailTooLong, foreignSegment, corrupt, record, tagWidth, behindAnchor, chainMismatch,
    badIndex, pageTooLarge, pastEnd, shortBase, reopenFailed, reopenDiverged, lifetime, stream, noThreads,
-   shapeMismatch, foreignOrigin, indexShort, indexCorrupt, entryUnfit, indexMoved, carryMismatch]
+   shapeMismatch, foreignOrigin, indexShort, indexCorrupt, entryUnfit, indexMoved, carryMismatch,
+   inviteRefused]
 
 def code : Status → Nat
   | eof => 0
@@ -175,6 +180,7 @@ def code : Status → Nat
   | entryUnfit => 47
   | indexMoved => 48
   | carryMismatch => 49
+  | inviteRefused => 44
 
 def cls : Status → ExitClass
   | eof => .done
@@ -183,7 +189,7 @@ def cls : Status → ExitClass
   | locked | .exists | badKey | shortRead | missing | baseTooLarge | baseCorrupt | baseUndecodable
   | segmentShort | tailTooLong | foreignSegment | corrupt | record | tagWidth | behindAnchor | chainMismatch
   | badIndex | pageTooLarge | pastEnd | shortBase | reopenFailed | reopenDiverged | noThreads
-  | shapeMismatch | foreignOrigin | indexShort | indexCorrupt | entryUnfit | carryMismatch => .fatal
+  | shapeMismatch | foreignOrigin | indexShort | indexCorrupt | entryUnfit | carryMismatch | inviteRefused => .fatal
 
 /-- The name printed beside the code (`refused NAME` / `exit NAME` on stderr). -/
 def name (s : Status) : String := ((toString (repr s)).splitOn ".").getLast!

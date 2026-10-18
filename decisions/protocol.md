@@ -1080,3 +1080,114 @@ than its docstring names. The `baseMoved` red caught it only because the expecta
   With HOST's cap, rows are ALL PASS 22. That probe is the plant. There is no standing plant: the cap is inside HOST's pager, and the rows have no knob for it.
 - **Critique.** Catch-up per command is now 28 × 64 = 1792 steps, and a member further behind exits `behind` (restart class). Two named constants now hold one number, ours and HOST's `recordTurnsMax`. The single-source is HOST's to make: `recordTurnsMax := Protocol.Bounds.pageStepsMax`, or an `rfl` theorem.
 - **Meta-critique.** I took PROTOCOL-7's agreement as settled and did not re-derive the 64. That number is HOST's measured record bound, not ours.
+
+## PROTOCOL-42 · an invitation: the joiner derives the World it joins from inputs a sponsor key it trusts signed; `invite`, `adopt INVITE KEY`, `host join`; row `invite` (2026-10-18, PROTOCOL-9; TRANSPORT's D7 and ASSEMBLY D1's open critique, with HOST-12)
+**Decision.**
+- **What an invitation is** (`Protocol/Invite.lean`).
+  - Wire form: `unsigned ‖ signature`.
+  - `unsigned` = (the World's origin inputs as `Receive.genesisInput` bytes, i.e. name, nonce, allowance and founders as (key, next-key digest); the pin's step count; the pin's digest; the sponsor's member id; the sponsor's key).
+  - The sponsor's member key signs `domInvite ‖ unsigned`, where `domInvite` = "nanodregg/protocol/invitation/v1". It is pairwise disjoint from the four other signed shapes (`invite_*_disjoint`, `invite_not_envelope`, `invite_not_call`, `invite_not_possession`).
+- **What a joiner decides** (`Invite.accept X trusted bytes`, in order):
+  - `badInvitation`: the bytes do not decode;
+  - `notSponsor`: the key is not the one the joiner trusts out of band;
+  - `pinMismatch`: the signature does not verify over the bytes carried;
+  - `Receive.genesis` of the signed inputs, which refuses by `GenesisRefusal`'s name.
+  The World returned is what the joiner's own Store starts from, and its origin is the member's `Self.world`. Theorems:
+  - `accept_ok`: every field is the decode of the verified bytes, and the World is `genesis` of the inputs among them;
+  - `accept_origin`;
+  - `accept_unverified`: a forged input or pin is `pinMismatch`;
+  - `accept_untrusted`.
+- **Verbs.**
+  - `invite INPUT` (the 18th verb). It catches up, refuses `otherWorld` unless INPUT makes the member's own World, pins that World (its steps, `B.digest` of its bytes), has custody sign the invitation with the key its envelope was just authenticated with, and prints `invite HEX`.
+  - `adopt INVITE KEY` replaces `adopt STEPS DIGEST`: the pin comes signed (`adoptPin` = the same `accept`, plus `otherWorld` for another World's invitation). The out-of-band pin channel ("Ember's, unbuilt") and the rows' `attest` act are DELETED.
+  - `invite` is off the stdio surface: a resident vouches for no one (`invite_not_on_surface`).
+- **HOST (cross-layer, HOST-12 agreed, with its amendment).**
+  - `host join STORE INVITE_HEX KEY_HEX` runs `Invite.accept`, then the one `Host.genesis` of the World that `accept` returned. It prints genesis's lines plus `sponsor HEX`, the id `init` names.
+  - New fatal `Status.inviteRefused` (44), printed `refused inviteRefused NAME`. Malformed hex is `usage`. A genesis refusal keeps genesis's status and name.
+  - `join_genesis_iff`: genesis is the first writing effect reached exactly when the hex parsed and `accept` accepted. That is refuse-before-write, and its tooth.
+  - `host genesis` prints `input HEX` LAST, so no current parser moves.
+  - OPS (ROOT for OPS): the `hostAction` arm, and units re-emitted (`RestartPreventExitStatus` gains 44).
+- **Trust on first use: what flips, what stays.**
+  - Before this, every row actor's `Self.world` and first World were the writer's genesis handed over by the harness: TOFU in all 22 rows. The deployed client was TOFU too (inputs copied from `host genesis`).
+  - Now every non-founder rows actor first accepts the rows' FOUNDING INVITATION (the sponsor's, at genesis) under the sponsor's key. Founders start from the genesis they made.
+  - STILL TOFU, by name:
+    - (1) the carry row's `rejoin`, and any actor first used after a carry: a carried World is made from a FILE, not from inputs, so no invitation can carry it. Next: an invitation whose pin is the carried World's base, which a thin joiner adopts;
+    - (2) the deployed client until CLIENT-5 calls `host join` (below).
+- **Row `invite`** (23rd). The lines:
+  - the sponsor invites; a joiner accepts, joins, writes and reads on the World it derived;
+  - the invitation relayed with its nonce changed (a hostile Host's own World) is `pinMismatch` (14), and relayed and re-signed by the relay, `notSponsor` (15);
+  - a joiner trusting another key refuses the honest invitation `notSponsor` (16), and so does a thin member's `adopt` (18);
+  - a sponsor asked to invite to another World's inputs refuses `otherWorld` (17).
+  Plant `trustFirstUse` (the joiner takes the inputs unchecked) turns line 14 `ok`. The thin rows (thin, thinStale, refused) now adopt from the operator's `invite` under `@operator.key`, and keep their plants at their lines.
+- **The client's need (CLIENT-5, `nd init SPONSOR`).** ROOT relays.
+  - A joiner receives an INVITATION (hex) and its sponsor's KEY by two channels; the key is the person's word.
+  - It runs `host join STORE INVITE KEY` (exit 44 `inviteRefused NAME` names the refusal; nothing is written), then `init` with the printed `sponsor` id.
+  - It KEEPS the invitation: its inputs are what it later invites from (`invite INPUT`), and a thin member adopts with `adopt INVITE KEY`.
+  - Founders keep `host genesis`'s `input` line.
+  - nd decides none of this: both checks are Lean's.
+
+**Alternatives.**
+- (a) Sign the origin digest instead of the inputs. Rejected: the joiner needs the inputs to build its genesis World anyway, and signing the bytes it decodes means `accept_ok` needs no hash premise.
+- (b) Trust the sponsor's member ID instead of a key. Rejected: an id is an origin-keyed hash, which the joiner cannot check before it has the World.
+- (c) Keep `adopt STEPS DIGEST` beside `adopt INVITE KEY`. Rejected: two shapes of one trust input, and the old one is the unbuilt channel.
+- (d) D7's `attesterNotMember` (after decoding, the signer's key must be the current key of a live member of the pinned World). DECLINED:
+  - With an honest host, the pinned World is the real World as the sponsor saw it, and the sponsor's envelope was just authenticated with that key, so the check cannot fail.
+  - With a hostile host and a thief holding a rotated-away key, the thief also chooses the World bytes behind the digest, so the check passes on the forged World.
+  - So it is either redundant or defeated. A gate that cannot go red is not a gate. The joiner's trust root is the key it was given; what protects against a stolen old key is the person handing out the current one.
+
+**Critique.**
+- The trust root is a key a person hands over. A sponsor who rotates invalidates every key fingerprint it gave out (`notSponsor` until a fresh one arrives), and a stolen sponsor key plus a hostile host still forges a thin joiner's World (the pin binds bytes the thief chooses). A full joiner is safer: it re-derives every Turn from the genesis of the signed inputs. The host can withhold or fork the log after genesis, but it cannot hand over another World.
+- `invite` encodes the whole World to compute its digest: O(World) on the inviter's client, once per invitation. That is not the writer's request path (law 5), but it is O(store) work, and a large World makes `invite` slow.
+- The pin is the inviter's World at its tip. A thin joiner needs the writer's newest base at exactly that step count (`baseMoved` otherwise), so in practice an operator seals before inviting a thin member. A full joiner ignores the pin.
+- Carried Worlds are still TOFU.
+- `host join` is checked by a theorem and by a smoke run (garbage hex is `usage`, a non-invitation `inviteRefused badInvitation`, exit 44, no Store written). No deployed test drives a real invitation through it: that needs CLIENT's custody.
+
+**Meta-critique.**
+- I came to D7 prepared to build `attesterNotMember` because the brief named it. I declined it only after pricing what a thief can forge. A check carried forward from a design document is a check nobody has yet attacked.
+- I reached for the TOFU flip in the harness (`freshActor`) partly because it made "which rows flip" a one-line answer. It does flip every row, but the only refusal those rows exercise is the invite row's.
+
+**Status.** BUILT. Rows ALL PASS 23 (logs/protocol9-inv-rows2.log). Full `lake build` green. The emit checks pass, with units re-emitted.
+- Vacuity read (a second agent): every theorem ACCEPTED. Fixes taken from it:
+  - invite phase 8 verifies custody signature before printing (it was checked by key equality only);
+  - the invitation-world refusal is named otherWorld, apart from the envelope and thin wrongWorld;
+  - the docstring says the sponsor id is stated, not verified.
+  Kept as stated: name_injective is at tag level (as Thin).
+
+## PROTOCOL-43 · the use row: objects made by one member and used by another, counted from signed calls; THE BAR's purpose as a row (2026-10-18, PROTOCOL-9; DELVETALK-LEARNINGS §4.7, §7)
+**Decision.**
+- **The measure** (`Protocol/Use.lean`):
+  - `usedBy c`: the member a call is signed for, and the object it invokes or writes.
+  - `makerOf`: the object's owner slot, when the owner is a live member. The kernel sets it to the actor of the `create`, and no act changes it; an object made inside another object's run is owned by that object and is not counted.
+  - `shared X w calls`: the distinct objects some call uses whose member is not the maker.
+  - Theorems:
+    - `mem_shared`: an object counts ⇔ a call uses it and is signed for a member other than its maker;
+    - `shared_self`: if every using call is signed for the maker, the count is 0;
+    - `shared_nodup`.
+- **Row `use`** (24th).
+  - The two founders each make two counters on THE BAR's counter package and grant `anyone` its `add` (PROTOCOL-26).
+  - Each adds to the other's two. A friend's add to its own is self-use and is not counted.
+  - Line 14: `used 4`. The act catches up (`sync`) and counts on the member's own World over every call the writer committed. This is delvetalk's go/no-go: "resident-made things used by a resident other than their maker, at least 4".
+  - Then Hermes joins, adds to a friend's counter, and makes one a friend uses. Line 22: `used 5`.
+  - Each count is printed as a `USE … shared-objects N of M committed calls` line in the transcript.
+- **Plant `oneMember`.** Every client signs as the sponsor: one resident playing every part. Every command still succeeds through the public grants, and line 14 reads `refused unshared:0`.
+- **New act `used N`**: `refused unshared:N` below N.
+
+**Alternatives.**
+- (a) Count by the actor who ran the command (the harness's name). Rejected: that measures the harness. The plant would read 4, because actor names differ while members do not.
+- (b) An OPS metric over a live Store. Also worth having, later. But a row runs on every landing and holds the definition to a plant now, while a live metric needs residents first.
+- (c) Count writes and invokes separately, or weight by call count. Rejected: delvetalk's question is whether a thing was used by another member at all. A distinct-object count is the go/no-go's unit.
+
+**Critique.**
+- The row exercises the measure. It does not make anyone use anything: a row that scripts two friends using each other's counters will always pass.
+- The number that matters is the same count on a real Store with real residents. Nothing computes that yet: it needs a reader over a Store's committed calls (OPS or HOST), and that is where this count should go next.
+- `committed` is the calls the rows' attempt store settled as committed, not a re-read of the writer's log.
+- A `grant` or a ledger `transfer` to another member's account is not a "use" here. Neither is a read: reads are not calls.
+
+**Meta-critique.** Delvetalk named the measure, and I adopted its threshold of 4 unexamined. It was a playtest's go/no-go for a night, not a property of a system. Here 4 is just the row's scripted count, held so that a plant reading 0 is red.
+
+**Status.** BUILT. Row `use`, plant `oneMember`@14 `refused unshared:0`.
+- Vacuity read (a second agent): the six theorems were ACCEPTED.
+  Fixes taken from it:
+  - `makerOf` counts only member owners: an object made inside an object run has an object as owner, which would have counted under `oneMember`;
+  - the module doc no longer claims as a theorem that a one-resident run counts 0 (the plant shows it for this row);
+  - nested uses are named as uncounted. Every gap errs low.

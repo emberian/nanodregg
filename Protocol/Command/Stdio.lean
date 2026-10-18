@@ -10,6 +10,7 @@ empty argv and an excluded verb are all refused `notOnSurface` by one name. Excl
 - `rotate`: rotation is the operator's, and custody in stdio mode refuses `precommit` and
   `signNext` as `noRotation`, a second fence;
 - `adopt`: it replaces follow's World with a downloaded base.
+- `invite`: an invitation is a person's word for the World (PROTOCOL-42); a resident vouches for no one.
 Theorems: `Protocol.Proofs.Stdio`.
 -/
 import Protocol.Command.Verb
@@ -20,7 +21,7 @@ namespace Nanodregg.Protocol.Command
 /-- Whether a resident may run a verb through `nd --stdio`. A total match with no wildcard: a new
 verb does not compile until its author decides its arm, so the surface never widens by default. -/
 def Verb.onStdio : Verb → Bool
-  | .init | .rotate | .adopt => false
+  | .init | .rotate | .adopt | .invite => false
   | .enroll | .install | .create | .write | .law | .invoke | .grant | .revoke | .read | .sync
   | .issue | .account | .transfer | .credit => true
 

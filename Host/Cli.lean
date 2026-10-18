@@ -12,6 +12,13 @@
     host export STORE OUT                          write the carried file of a STOPPED Store's World
                                                    (Host.Carry), print `carried DIGEST`, `from
                                                    ORIGIN`, `anchor S:C`; writes nothing in STORE
+    host join STORE INVITE_HEX KEY_HEX              a member's own Store, from an invitation its
+                                                   sponsor signed (PROTOCOL-42): `Invite.accept`
+                                                   under KEY_HEX, the sponsor's member PUBLIC key
+                                                   as the member received it OUT OF BAND (the
+                                                   trust root: never take it from the Host), then the
+                                                   one genesis of the signed inputs; nothing is
+                                                   written unless both passed (`join_genesis_iff`)
     host import STORE NAME IN --digest HEX [--nonce HEX32]
                                                    a new Store from a carried file: the digest is
                                                    REQUIRED and checked, with the stamp and the
@@ -35,6 +42,7 @@ import Host.Exit
 import Host.Check
 import Kernel.Receive.Follow
 import Host.Carry
+import Protocol.Invite
 
 namespace Nanodregg.Host.Cli
 
@@ -66,7 +74,7 @@ def refuse (status : Status) (name : String := status.name) : IO UInt32 := do
 def refuseStore {F : Type} (f : StoreFault F) : IO UInt32 := refuse f.status f.text
 
 def usage : String :=
-  "usage: host genesis STORE NAME [--nonce HEX32] [KEY_HEX NEXT_HEX]... | host serve STORE | host follow STORE MEMBER_HEX GRANT_HEX | host check STORE [--anchor STEPS:CHAIN_HEX] | host export STORE OUT | host import STORE NAME IN --digest HEX [--nonce HEX32]"
+  "usage: host genesis STORE NAME [--nonce HEX32] [KEY_HEX NEXT_HEX]... | host serve STORE | host join STORE INVITE_HEX KEY_HEX | host follow STORE MEMBER_HEX GRANT_HEX | host check STORE [--anchor STEPS:CHAIN_HEX] | host export STORE OUT | host import STORE NAME IN --digest HEX [--nonce HEX32]"
 
 def hexDigest (s : String) : Option Digest := Protocol.Text.ofHex s >>= Digest.ofBytes?
 
@@ -90,6 +98,13 @@ def genesisNonce : Option String → IO (Except Status ByteArray)
       let b ← try IO.getRandomBytes 32 catch _ => pure ByteArray.empty
       pure (if b.size = 32 then .ok b else .error .entropy)
 
+/-- What a genesis prints: the origin, the nonce, each founder's member and grant ids, the chain. -/
+def genesisLines (w₀ : World D) (nonce : ByteArray) (n : Nat) : List String :=
+  [s!"origin {w₀.origin.toHex}", s!"nonce {Protocol.Text.toHex nonce}"] ++
+  (List.range n).map (fun i =>
+    s!"founder {i} member {(Receive.founderId X w₀.origin i).toHex} grant {(Receive.founderGrantId X w₀.origin i).toHex}") ++
+  [s!"chain {w₀.chain.toHex}"]
+
 def genesisVerb (store name : String) (nonceArg : Option String) (fs : List String) : IO UInt32 := do
   let some fs := founders fs | refuse .usage "founders"
   let nonce ← match ← genesisNonce nonceArg with
@@ -104,12 +119,45 @@ def genesisVerb (store name : String) (nonceArg : Option String) (fs : List Stri
       IO (Except (StoreFault (Record.Fault (Reject D))) Unit)) with
   | .error f => refuseStore f
   | .ok () =>
-    IO.println s!"origin {w₀.origin.toHex}"
-    IO.println s!"nonce {Protocol.Text.toHex nonce}"
-    for i in List.range fs.length do
-      IO.println s!"founder {i} member {(Receive.founderId X w₀.origin i).toHex} grant {(Receive.founderGrantId X w₀.origin i).toHex}"
-    IO.println s!"chain {w₀.chain.toHex}"
+    (genesisLines w₀ nonce fs.length).forM IO.println
+    -- last, so no parser of the lines above moves: the inputs a founder invites from (PROTOCOL-42)
+    IO.println s!"input {Protocol.Text.toHex (Protocol.Invite.inputBytes X name.toUTF8 nonce allowanceMax fs)}"
     return 0
+
+/-- What `join` reaches outside itself: the Store key (the OS random source), `genesis` (the one
+effect that writes a Store path), the refusal and the report. -/
+structure JoinFx (m : Type → Type) where
+  key : m (Option Digest)
+  genesis : Digest → World D → m (Except (StoreFault (Record.Fault (Reject D))) Unit)
+  refuse : Status → String → m UInt32
+  report : List String → m Unit
+
+/-- `host join`'s decision over its effects. INVITE and KEY parse as hex (`usage`), the invitation
+is accepted under KEY (`Protocol.Invite.accept`: any refusal but the genesis's is `inviteRefused`
+by name; a genesis refusal is `usage` by its own name, as `host genesis` refuses it), the key is
+drawn; only then `genesis` writes the World the signed inputs make. `Host.Proofs.Cli.join_genesis_iff`
+states, over this function, that `genesis` runs exactly when every check before it passed. -/
+def joinWith {m : Type → Type} [Monad m] (fx : JoinFx m) (inviteHex keyHex : String) : m UInt32 := do
+  let some inv := Protocol.Text.ofHex inviteHex | fx.refuse .usage "invite"
+  let some trusted := Protocol.Text.ofHex keyHex | fx.refuse .usage "key"
+  let (i, w₀) ← match Protocol.Invite.accept X trusted inv with
+    | .ok p => pure p
+    | .error (.inputs r) => return ← fx.refuse .usage r.name
+    | .error r => return ← fx.refuse .inviteRefused s!"inviteRefused {r.name}"
+  let some key ← fx.key | fx.refuse .entropy Status.entropy.name
+  match ← fx.genesis key w₀ with
+  | .error f => fx.refuse f.status f.text
+  | .ok () =>
+    fx.report (genesisLines w₀ i.nonce i.founders.length ++ [s!"sponsor {i.sponsor.toHex}"])
+    return 0
+
+/-- `host join STORE INVITE_HEX KEY_HEX`: `joinWith` over the files. -/
+def joinVerb (store inviteHex keyHex : String) : IO UInt32 :=
+  joinWith (inviteHex := inviteHex) (keyHex := keyHex)
+    { key := return Digest.ofBytes? (← IO.getRandomBytes 32)
+      genesis := fun key w₀ => Host.genesis store key (Keys.ofKey key shapes) c world recorder.mark w₀
+      refuse := fun s n => refuse s n
+      report := fun ls => ls.forM IO.println }
 
 /-- `host export STORE OUT`: the read-only open `check` makes (`openClean`), the carried file of
 its World, checked to read back (`Carry.exportFile`), written to OUT only (never over an existing
@@ -290,6 +338,7 @@ def verb : List String → IO UInt32
   | "genesis" :: store :: name :: fs => genesisVerb store name none fs
   | ["serve", store] => serveVerb store
   | ["follow", store, member, grant] => followVerb store member grant
+  | ["join", store, inv, key] => joinVerb store inv key
   | ["check", store] => Check.run store none
   | ["check", store, "--anchor", a] => do
     let some a := Check.Anchor.parse a | refuse .usage "anchor"

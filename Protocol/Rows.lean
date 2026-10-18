@@ -63,10 +63,15 @@ inductive Act
   /-- the operator seals a base of the writer's World as it stands, then restarts the loop from it
   (the writer's newest base is then at its tip) -/
   | seal
-  /-- the actor, a full follower, states the pin of its own World out of band (the channel is
-  Ember's, unbuilt): binds `NAME` to the digest of its World bytes and `NAME.steps` to its step
-  count (its log position) -/
-  | attest (name : String)
+  /-- the actor accepts the invitation bound to `invite` under the sponsor key bound to `key`
+  (`Invite.accept`, the decision `host join` makes, PROTOCOL-42): its `Self.world` is the accepted
+  World's origin and its follow starts from that World. Every actor not a founder has already
+  accepted the rows' founding invitation (the sponsor's, at genesis) when it is first used -/
+  | accept (invite key : String)
+  /-- the actor catches up (`sync`), then counts, on its own World, the objects made by one member
+  and used by another over every call the writer committed (`Protocol.Use.shared`, PROTOCOL-43):
+  `ok` when there are at least `atLeast`, else `refused unshared:N` -/
+  | used (atLeast : Nat)
   /-- every call the writer committed so far is submitted, byte-identical and in order, to a SECOND
   writer made by a second genesis with the same name, allowance and founders, and the same nonce
   (`sameNonce`: a restore of the same World) or another one (OPS's cross-World replay). The outcome
@@ -120,6 +125,9 @@ inductive Fault
   /-- the actor signs as member `victim` with the victim's CURRENT key (stolen), its own custody
   holding every other key -/
   | stolenKey (victim : String)
+  /-- the invitation reaches the actor through a relay that changed its nonce (a forged origin: the
+  relay's own World); `resign`: the relay also re-signs it with its own key -/
+  | forgeInvite (resign : Bool)
   deriving Repr
 
 /-- One line of a row. -/
@@ -194,6 +202,12 @@ inductive Mutation
   with the refusals forgotten) and still answers it `refused NAME`: a writer that tells the client a
   final no and commits the call anyway (the A→B→A defect, as a lie) -/
   | admitsRecorded
+  /-- the joiner takes an invitation's inputs as they arrive, checking neither its signer nor its
+  signature: trust on first use, the shape before PROTOCOL-42 -/
+  | trustFirstUse
+  /-- every actor's client signs as the sponsor (its member, its key): one resident playing every
+  part, so every use is self-use -/
+  | oneMember
   deriving DecidableEq, Repr
 
 /-- A row's plant: the mutation, and the line that must catch it with the outcome it then gets. -/
@@ -448,8 +462,9 @@ deleted thin consent frames 230–232): a member that never folded the log adopt
 newest base, pinned by a full follower's word, then is an ordinary follower from the base on: it
 re-derives the suffix and signs a write planned on it. The full follower (`operator`) catches up,
 the writer seals at its tip, and the operator states the pin of its own World (`attest`, out of
-band). A newer seal moves the base off the pin: a member (`late`) holding the old pin is refused
-`baseMoved`. -/
+band until PROTOCOL-42; now an invitation the operator signs, `invite`, and the thin member's
+`adopt INVITE KEY` accepts it under the operator's key). A newer seal moves the base off the pin: a
+member (`late`) holding the old invitation is refused `baseMoved`. -/
 def thin : Row where
   name := "thin"
   replaces := ["journey.d/jthin-consent"]
@@ -460,13 +475,13 @@ def thin : Row where
     ok "newcomer" ["write", "@shared", "2", "1", "--via", "@g"],
     ok "operator" ["read", "@shared", "2=1"],
     { actor := "operator", act := .seal, expect := .ok },
-    { actor := "operator", act := .attest "pin", expect := .ok },
-    ok "thin" ["adopt", "@pin.steps", "@pin"],
+    okBind "operator" ["invite", "@inputs"] "pin",
+    ok "thin" ["adopt", "@pin", "@operator.key"],
     ok "newcomer" ["write", "@shared", "2", "2", "--via", "@g"],
     ok "thin" ["write", "@shared", "3", "7", "--via", "@gt"],
     ok "thin" ["read", "@shared", "2=2", "3=7"],
     { actor := "operator", act := .seal, expect := .ok },
-    no "late" ["adopt", "@pin.steps", "@pin"] "baseMoved"])
+    no "late" ["adopt", "@pin", "@operator.key"] "baseMoved"])
   plant := .caught .forgeBase 17 (.refused "baseMismatch")
 
 /-- A thin member whose pin is more than a window old (PROTOCOL-37; PROTOCOL-4's leftover, adopt's
@@ -489,10 +504,10 @@ def thinStale : Row where
     { actor := "thin", act := .window 5, expect := .ok },
     ok "operator" ["read", "@shared"],
     { actor := "operator", act := .seal, expect := .ok },
-    { actor := "operator", act := .attest "pin", expect := .ok },
+    okBind "operator" ["invite", "@inputs"] "pin",
     { actor := "newcomer", act := .cmd ["write", "@shared", "2", "1", "--via", "@g"], expect := .ok,
       times := 12 },
-    ok "thin" ["adopt", "@pin.steps", "@pin"],
+    ok "thin" ["adopt", "@pin", "@operator.key"],
     ok "thin" ["write", "@shared", "3", "7", "--via", "@gt"],
     ok "thin" ["read", "@shared", "2=1", "3=7"]])
   plant := .caught .unstatedExpiry 15 (.refused "expired")
@@ -604,8 +619,8 @@ def refusedRow : Row where
     join "sponsor" "thinr" ++ [
     ok "operator" ["read", "@shared", "2=9"],
     { actor := "operator", act := .seal, expect := .ok },
-    { actor := "operator", act := .attest "pin", expect := .ok },
-    ok "thinr" ["adopt", "@pin.steps", "@pin"],
+    okBind "operator" ["invite", "@inputs"] "pin",
+    ok "thinr" ["adopt", "@pin", "@operator.key"],
     ok "sponsor" ["write", "@shared", "2", "4"],
     ok "thinr" ["read", "@shared", "2=4"],
     -- past the window: the record is pruned, and the answer is `forgotten`, never `refused`
@@ -614,12 +629,80 @@ def refusedRow : Row where
     { actor := "newcomer", act := .retry, expect := .unsettled "forgotten" }])
   plant := .caught .admitsRecorded 18 (.refused "refusedFinal")
 
+/-- PROTOCOL-42: a joiner derives the World it joins from an invitation its sponsor signed, never
+from the first bytes it sees. The sponsor signs one (`invite`, from the World's origin inputs, which
+founders hold from `host genesis` and joiners from their own invitation); a joiner accepts it under
+the sponsor key it trusts and joins, writes and reads on the World it derived. The same invitation
+relayed with its nonce changed (a hostile Host's own World) is refused `pinMismatch`; relayed and
+re-signed by the relay, `notSponsor`; a joiner trusting another key refuses the honest one
+`notSponsor`, and so does a thin member's `adopt` of it; a sponsor asked to invite to inputs that
+are not its World refuses `otherWorld`. The
+plant is trust on first use: the joiner takes the forged origin, line 14 `ok`. -/
+def inviteRow : Row where
+  name := "invite"
+  replaces := []
+  ops := everyWrite
+  kinds := ["enroll", "install", "create", "grant", "write"]
+  drive := .members (welcome ++ [
+    okBind "sponsor" ["invite", "@inputs"] "inv",
+    { actor := "joiner", act := .accept "inv" "sponsor.key", expect := .ok }] ++
+    join "sponsor" "joiner" ++ [
+    okBind "sponsor" ["grant", "@shared", "@joiner", "observe,mutate"] "gj",
+    ok "joiner" ["write", "@shared", "2", "5", "--via", "@gj"],
+    ok "joiner" ["read", "@shared", "2=5"],
+    { actor := "mallory", act := .accept "inv" "sponsor.key", expect := .refused "pinMismatch",
+      fault := .forgeInvite false },
+    { actor := "mallory", act := .accept "inv" "sponsor.key", expect := .refused "notSponsor",
+      fault := .forgeInvite true },
+    { actor := "joiner", act := .accept "inv" "newcomer.key", expect := .refused "notSponsor" },
+    no "sponsor" ["invite", "@otherInputs"] "otherWorld",
+    no "late" ["adopt", "@inv", "@newcomer.key"] "notSponsor"])
+  plant := .caught .trustFirstUse 14 .ok
+
+/-- THE BAR's purpose as a row (PROTOCOL-43; DELVETALK-LEARNINGS §4.7, §7): two friends and a
+hosted resident use what the others made. Each friend (the founders) makes two counters on THE BAR's
+programmed counter package and grants `anyone` its `add` (a public object, PROTOCOL-26); each adds
+to the other's two (a friend's add to its own is not counted). The measure, `Protocol.Use.shared` on
+the member's own World over every committed call, is at least 4 (delvetalk's go/no-go); then Hermes
+joins, uses a friend's counter and makes one a friend uses: at least 5. The plant is one resident
+playing every part (`oneMember`: every client signs as the sponsor): every command still succeeds,
+and the count reads 0 at line 14, by name. -/
+def useRow : Row where
+  name := "use"
+  replaces := []
+  ops := everyWrite
+  kinds := ["install", "create", "grant", "invoke", "enroll"]
+  drive := .members ([
+    okBind "sponsor" ["install", counter] "counter",
+    okBind "sponsor" ["create", "--pkg", "@counter", "(record (total 0))"] "a1",
+    okBind "sponsor" ["create", "--pkg", "@counter", "(record (total 0))"] "a2",
+    okBind "sponsor" ["grant", "@a1", "anyone", "invoke:0"] "pa1",
+    okBind "sponsor" ["grant", "@a2", "anyone", "invoke:0"] "pa2",
+    okBind "operator" ["create", "--pkg", "@counter", "(record (total 0))"] "b1",
+    okBind "operator" ["create", "--pkg", "@counter", "(record (total 0))"] "b2",
+    okBind "operator" ["grant", "@b1", "anyone", "invoke:0"] "pb1",
+    okBind "operator" ["grant", "@b2", "anyone", "invoke:0"] "pb2",
+    ok "operator" ["invoke", "@a1", "0", "1", "--via", "@pa1"],
+    ok "operator" ["invoke", "@a2", "0", "1", "--via", "@pa2"],
+    ok "sponsor" ["invoke", "@b1", "0", "1", "--via", "@pb1"],
+    ok "sponsor" ["invoke", "@b2", "0", "1", "--via", "@pb2"],
+    ok "sponsor" ["invoke", "@a1", "0", "5"],
+    { actor := "operator", act := .used 4, expect := .ok }] ++
+    join "sponsor" "hermes" ++ [
+    ok "hermes" ["invoke", "@a1", "0", "1", "--via", "@pa1"],
+    okBind "hermes" ["create", "--pkg", "@counter", "(record (total 0))"] "h1",
+    okBind "hermes" ["grant", "@h1", "anyone", "invoke:0"] "ph1",
+    ok "sponsor" ["invoke", "@h1", "0", "1", "--via", "@ph1"],
+    { actor := "hermes", act := .used 5, expect := .ok }])
+  plant := .caught .oneMember 14 (.refused "unshared:0")
+
 /-- OPS-P1's carry (KERNEL-29, HOST-28 at 6b89d6f): state crosses to a NEW World by export and
 import, never by history. A committed call; an import with a wrong digest is refused
 `carryMismatch` and the old writer still serves; the import with the file's digest makes the
 carried World the writer. There the last committed call is still answered `ok` by lookup (the
 journal is carried, PROTOCOL-30); a NEW call signed for the old origin is `wrongWorld` (`declined`, PROTOCOL-41); a member
-re-invited to the new origin writes on the carried cells, and a founder acting for the first time
+re-invited to the new origin (`rejoin`: trust on first use, the one row act that still is: a carried
+World is made from a file, not from inputs an invitation could carry, PROTOCOL-42) writes on the carried cells, and a founder acting for the first time
 after the carry does so under the id the lineage's first genesis minted. -/
 def carry : Row where
   name := "carry"
@@ -803,7 +886,7 @@ def langJourney : Row where
   plant := .internal "a program whose judge admits everything: L4 set 101 must be admitted"
 
 def rows : List Row :=
-  [journey, reopen, laws, rotate, audit, paging, coldCatchUp, inflatedHeight, forgotten, refusedRow, carry, thin, thinStale, wrongWorld, wrongWorldRead, pay, well, bounty, grain, hermes, bar,
+  [journey, reopen, laws, rotate, audit, paging, coldCatchUp, inflatedHeight, forgotten, refusedRow, inviteRow, useRow, carry, thin, thinStale, wrongWorld, wrongWorldRead, pay, well, bounty, grain, hermes, bar,
    langJourney]
 
 end Nanodregg.Protocol

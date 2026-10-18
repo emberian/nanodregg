@@ -4,8 +4,7 @@
 A thin member holds a PIN: a log position (a step count, KERNEL-47) and the digest of the World
 bytes at that position
 (`Host.Keys.worldDigest`, deployed `Hash.digest "nanodregg/host/base-digest/v1"`, unkeyed, HOST-15), which
-it trusts out of
-band: its own earlier fold, or a full follower's word (that channel is Ember's, unbuilt). It pages
+it takes from an invitation signed by the sponsor key it trusts (`Protocol.Invite`, PROTOCOL-42). It pages
 the writer's newest base with `read` (`readReplyLayout`) and `accept` decides each page. It trusts
 NOTHING the page states: the assembled bytes are adopted only if they hash to the pin and decode to
 a World at the pinned step count (`Protocol.Proofs.Thin.accept_done`). A forged byte anywhere in the

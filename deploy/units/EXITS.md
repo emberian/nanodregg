@@ -47,6 +47,7 @@ code space holds both tables: `host` (Host.Status, below 64) and nd-supervise's 
 | 41 | stream | restart | restarted after 2 s; failed past 5 starts in 120 s | automatic: the request pipe broke; the restart re-pairs it with nd-supervise |
 | 42 | noThreads | fatal | stopped (RestartPreventExitStatus) | the runtime ran a dedicated task inline: a build or platform defect, report to HOST |
 | 43 | shapeMismatch | fatal | stopped (RestartPreventExitStatus) | the base was written under other codec shapes: re-genesis from a checked export (RUNBOOK §6) |
+| 44 | inviteRefused | fatal | stopped (RestartPreventExitStatus) | the invitation does not verify against the key you trust (stderr names why): obtain a fresh invitation from your sponsor and check the sponsor key you were given; nothing was written |
 | 45 | indexShort | fatal | stopped (RestartPreventExitStatus) | index.log is shorter than the entries the base counts (a copy cut short, or the file truncated): restore index.log from this Store's own backup taken after its base.world; never restart it |
 | 46 | indexCorrupt | fatal | stopped (RestartPreventExitStatus) | an index.log entry the base counts does not verify under this Store's key at its position (from open: the last one; from `host check`: the entry named on stderr): restore index.log from this Store's own backup; never restart it |
 | 47 | entryUnfit | fatal | stopped (RestartPreventExitStatus) | a defect: a seal met an index entry the entry layout cannot spell (HOST-31); keep the Store untouched, report to HOST |

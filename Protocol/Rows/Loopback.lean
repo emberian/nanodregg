@@ -14,8 +14,13 @@ thread) and, per actor, an in-process client that plays the parts `nd` and custo
 * every operation sent on either socket is recorded, so the judge compares OBSERVED ops with the
   row's declared ones (`judge_members_pass_iff`).
 
-The founders `sponsor` and `operator` are the genesis World (`Receive.genesis`); any other actor is
-a stranger (an id nobody enrolled) until a line binds its member id and its World grant.
+The founders `sponsor` and `operator` are the genesis World (`Receive.genesis`, from the inputs they
+hold). Any other actor first accepts the rows' FOUNDING INVITATION, the sponsor's at genesis, under
+the sponsor's key (`Invite.accept`, PROTOCOL-42): its `Self.world` and its follow's first World are
+what that invitation's signed inputs make, never the writer's World handed over. It is a stranger
+(an id nobody enrolled) until a line binds its member id and its World grant. After a carry the
+carried World has no invitation (it is made from a file), so an actor first used there takes the
+carried World as given: trust on first use, by name (`rejoin` too).
 -/
 import Protocol.Rows.Writer
 import Lang.Sim.Need
@@ -24,6 +29,8 @@ import Protocol.Command.Wire
 import Host.Follow
 import Protocol.Attempt
 import Host.Carry
+import Protocol.Invite
+import Protocol.Use
 
 namespace Nanodregg.Protocol.Rows.Loopback
 
@@ -45,6 +52,10 @@ structure Sys where
   nonceRepeats : Bool := false
   /-- the import is handed the file's own digest (a plant) -/
   importTrustsFile : Bool := false
+  /-- a joiner takes an invitation's inputs unchecked (a plant) -/
+  trustFirstUse : Bool := false
+  /-- every actor's client signs as the sponsor (a plant) -/
+  oneMember : Bool := false
 
 def skipJudge (X : Ctx D) : Ctx D :=
   { X with program := { X.program with judge := fun _ _ _ _ _ _ => .ok () } }
@@ -76,6 +87,8 @@ def sys : Option Mutation → Sys
   | some .writerForgetsSpent => { writer := { X := Sim.ctx, forgetSpent := true }, follow := Sim.ctx }
   | some .importTrustsFile => { writer := { X := Sim.ctx }, follow := Sim.ctx, importTrustsFile := true }
   | some .admitsRecorded => { writer := { X := Sim.ctx, admitsRecorded := true }, follow := Sim.ctx }
+  | some .trustFirstUse => { writer := { X := Sim.ctx }, follow := Sim.ctx, trustFirstUse := true }
+  | some .oneMember => { writer := { X := Sim.ctx }, follow := Sim.ctx, oneMember := true }
 
 /-! ## Actors -/
 
@@ -139,6 +152,8 @@ structure St where
   /-- every call the attempt store settled as committed, in order: the writer's log, as its clients
   sent it -/
   committed : Array ByteArray := #[]
+  /-- the rows' founding invitation: the sponsor's, at genesis, pinning the genesis World -/
+  invitation : ByteArray := ByteArray.empty
 
 abbrev M := StateT St IO
 
@@ -201,15 +216,36 @@ def sawCall (name : String) (call : ByteArray) : M Unit := do
 
 def founderIndex (name : String) : Option Nat := founders.idxOf? name
 
+/-- How a joiner decides an invitation: `Invite.accept` under the key it trusts; under the plant
+`trustFirstUse`, the shape before PROTOCOL-42: the inputs as they arrive, signer and signature
+unchecked. -/
+def acceptAs (s : Sys) (key bytes : ByteArray) : Except Invite.Refusal (Invite.Invitation D × World D) :=
+  if s.trustFirstUse then
+    match Invite.ofBytes s.follow bytes with
+    | none => .error .badInvitation
+    | some i => match genesis s.follow i.name i.nonce i.allowance i.founders with
+      | .ok w => .ok (i, w)
+      | .error r => .error (.inputs r)
+  else Invite.accept s.follow key bytes
+
 def freshActor (name : String) : M Actor := do
   let st ← get
   let X := st.sys.writer.X
+  -- a founder's World is its own genesis; a joiner's is what the founding invitation makes, or,
+  -- after a carry, the carried World as given (no invitation reaches it)
+  let w ← match founderIndex name with
+    | some _ => pure st.genesis
+    | none =>
+      if st.genesis.origin ≠ st.lineage then pure st.genesis else
+      match acceptAs st.sys (keyOf "sponsor" 0) st.invitation with
+      | .ok (_, w) => pure w
+      | .error r => throw (IO.userError s!"the founding invitation refused {r.name}")
   let self : Self D := match founderIndex name with
-    | some i => { world := st.genesis.origin, member := founderId X st.lineage i, grant := founderGrantId X st.lineage i,
+    | some i => { world := w.origin, member := founderId X st.lineage i, grant := founderGrantId X st.lineage i,
                   window := 100 }
-    | none => { world := st.genesis.origin, member := X.env.hash "nanodregg/rows/stranger/v1" name.toUTF8,
+    | none => { world := w.origin, member := X.env.hash "nanodregg/rows/stranger/v1" name.toUTF8,
                 grant := X.env.hash "nanodregg/rows/stranger-grant/v1" name.toUTF8, window := 100 }
-  pure { self, follow := { world := st.genesis } }
+  pure { self, follow := { world := w } }
 
 def actor (name : String) : M Actor := do
   match (← get).actors.lookup name with
@@ -272,12 +308,13 @@ def subst (argv : List String) : M (Except String (List String)) := do
       | .error e => return .error e
   return .ok out.toList
 
-/-- The first `id HEX` or `join HEX` a command printed. -/
+/-- The first `id HEX`, `join HEX` or `invite HEX` a command printed. -/
 def boundToken (out : String) : Option String :=
   (out.splitOn "\n").findSome? fun l =>
     match l.splitOn " " with
     | ["id", h] => some h
     | ["join", h] => some h
+    | ["invite", h] => some h
     | _ => none
 
 /-! ## Custody and the writer's socket -/
@@ -301,7 +338,16 @@ def custodyOf (name : String) (fault : Fault) : M (String × Actor × ByteArray)
   let a ← actor name
   match fault with
   | .stolenKey v => let va ← actor v; pure (name, a, va.key v)
-  | _ => pure (name, a, a.key name)
+  | _ =>
+    if (← get).sys.oneMember then let sa ← actor "sponsor"; pure (name, a, sa.key "sponsor")
+    else pure (name, a, a.key name)
+
+/-- The member the actor's client signs as: its own, a victim's (`stolenKey`), or under the plant
+`oneMember` the sponsor's. -/
+def selfOf (name : String) (fault : Fault) : M (Self D) := do
+  match fault with
+  | .stolenKey v => pure (← actor v).self
+  | _ => if (← get).sys.oneMember then pure (← actor "sponsor").self else pure (← actor name).self
 
 /-- Custody settles its armed rotation on the attempt's settlement: committed advances it,
 refused (final) drops it, declined, absent or uncertain keeps it armed (CLIENT-13, PROTOCOL-41). -/
@@ -464,9 +510,7 @@ def command (name : String) (argv : List String) (fault : Fault) : Nat → M (Ex
       let gw := (← get).genesis
       let a := if coldFault fault then { a with follow := { world := gw } } else a
       setActor name a
-      let self ← match fault with
-        | .stolenKey v => pure (← actor v).self
-        | _ => pure a.self
+      let self ← selfOf name fault
       let some argvF := (Text.fitList Bounds.argvBytesMax (argv.map String.toUTF8)).bind fun v =>
           if h : (Codec.Layout.codec Bounds.argvBytesMax (by decide) commandLayout).size (v, ()) ≤
               Bounds.argvBytesMax then some (⟨(v, ()), h⟩ : { v : Codec.Layout.Ty Bounds.argvBytesMax commandLayout //
@@ -485,10 +529,7 @@ def resume (name : String) (argv : List String) (fault : Fault) (depth : Nat) (k
   | fuel + 1 => do
       let some kf := Text.fit Bounds.frameBytesMax k | return (.refused "badState", "")
       let some rf := Text.fit Bounds.frameBytesMax result | return (.refused "badResult", "")
-      let a ← actor name
-      let self ← match fault with
-        | .stolenKey v => pure (← actor v).self
-        | _ => pure a.self
+      let self ← selfOf name fault
       match ← followAsk name self .resume (resumeFrame.bytes (kf, rf, ())) with
       | .error n => pure (.refused n, "")
       | .ok b => steps name argv fault depth b fuel
@@ -608,6 +649,20 @@ def secondWriter (sameNonce : Bool) : M (Except String Writer.Running) := do
   | .error e => return .error e
   | .ok (mem, r₀) => return .ok (← Writer.start st.sys.writer mem r₀)
 
+/-- An invitation as a relay hands it on under `forgeInvite`: its nonce changed (the relay's own
+World), its signature kept, or (`resign`) re-signed by the relay's own key. -/
+def forgeInvite (X : Ctx D) (resign : Bool) (b : ByteArray) : ByteArray :=
+  match Invite.ofBytes X b with
+  | none => b
+  | some i =>
+    let input := Invite.inputBytes X i.name (flipLast i.nonce) i.allowance i.founders
+    let key := if resign then keyOf "relay" 0 else i.key
+    match Invite.unsignedBytes X input i.pin i.sponsor key with
+    | none => b
+    | some u =>
+      let sig := if resign then Sim.sign key (Invite.message u) else i.signature
+      (Invite.bytes u sig).getD b
+
 /-- Run one act once; its outcome and what it printed. -/
 def runAct (l : Line) : M (Expect × String) := do
   match l.act with
@@ -720,11 +775,34 @@ def runAct (l : Line) : M (Expect × String) := do
           match outs.toList.zipIdx.find? (fun (o, _) => decide (o ≠ first)) with
           | some (o, i) => pure (.refused s!"mixed:{i}:{o.text}", "")
           | none => pure (first, "")
-  | .attest pin => do
-      let w := (← actor l.actor).follow.world
-      bind pin (Text.toHex (base.digest (Sim.world.bytes w)))
-      bind s!"{pin}.steps" (toString w.steps)
-      pure (.ok, "")
+  | .accept inv key => do
+      match ← subst [s!"@{inv}", s!"@{key}"] with
+      | .ok [ih, kh] =>
+        match Text.ofHex ih, Text.ofHex kh with
+        | some ib, some kb =>
+          let st ← get
+          let ib := match l.fault with
+            | .forgeInvite resign => forgeInvite st.sys.follow resign ib
+            | _ => ib
+          match acceptAs st.sys kb ib with
+          | .error r => pure (.refused r.name, "")
+          | .ok (_, w) =>
+            let a ← actor l.actor
+            setActor l.actor { a with self := { a.self with world := w.origin }, follow := { world := w } }
+            pure (.ok, "")
+        | _, _ => pure (.refused "badToken", "")
+      | .ok _ => pure (.refused "badToken", "")
+      | .error e => pure (.refused e, "")
+  | .used atLeast => do
+      -- the member's own World, caught up; the calls the writer committed, as its clients sent them
+      let (o, _) ← command l.actor ["sync"] .none 4
+      if o ≠ .ok then return (.refused s!"sync:{o.text}", "")
+      let st ← get
+      let a ← actor l.actor
+      let calls := st.committed.toList.filterMap st.sys.follow.decodeCall
+      let n := (Use.shared st.sys.follow a.follow.world calls).length
+      note s!"USE {l.actor} shared-objects {n} of {calls.length} committed calls"
+      if atLeast ≤ n then pure (.ok, "") else pure (.refused s!"unshared:{n}", "")
   | .retry => pure (← retry l.actor, "")
   | .resubmit => do
       match (← actor l.actor).last with
@@ -785,10 +863,24 @@ def run (m : Option Mutation) (lines : List Line) (times : Option Nat) : IO Resu
   let go : M (List Expect) := lines.zipIdx.mapM fun (l, i) =>
     runLine i l (if l.times > 1 then times.getD l.times else l.times)
   let hex (d : D) := Text.toHex (s.writer.X.env.bytes d)
-  let binds := founders.zipIdx.flatMap fun (n, i) =>
+  -- the World's origin inputs, as the founders hold them (`host genesis` prints them), and another
+  -- World's (the nonce changed)
+  let inputs := Invite.inputBytes s.writer.X Sim.worldName Sim.nonce Sim.allowance fs
+  let other := Invite.inputBytes s.writer.X Sim.worldName (flipLast Sim.nonce) Sim.allowance fs
+  -- the founding invitation: the sponsor's, pinning the genesis World
+  let sKey := keyOf "sponsor" 0
+  let invitation ← match Invite.unsignedBytes s.writer.X inputs
+      ⟨g.steps, base.digest (Sim.world.bytes g)⟩ (founderId s.writer.X g.origin 0) sKey with
+    | some u => match Invite.bytes u (Sim.sign sKey (Invite.message u)) with
+      | some b => pure b
+      | none => throw (IO.userError "the founding invitation does not fit")
+    | none => throw (IO.userError "the founding invitation does not fit")
+  let binds := founders.zipIdx.flatMap (fun (n, i) =>
     [(n, hex (founderId s.writer.X g.origin i)),
-     (n ++ ".grant", hex (founderGrantId s.writer.X g.origin i))]
-  let (outcomes, st) ← go.run { sys := s, host, mem, genesis := g, lineage := g.origin, binds }
+     (n ++ ".grant", hex (founderGrantId s.writer.X g.origin i))]) ++
+    [("inputs", Text.toHex inputs), ("otherInputs", Text.toHex other)] ++
+    (founders ++ ["newcomer"]).map fun n => (n ++ ".key", Text.toHex (keyOf n 0))
+  let (outcomes, st) ← go.run { sys := s, host, mem, genesis := g, lineage := g.origin, binds, invitation }
   let _ ← st.host.stop
   pure ⟨{ outcomes, ops := st.ops, kinds := st.kinds }, st.log, st.times, st.reopenNs, st.invokes⟩
 

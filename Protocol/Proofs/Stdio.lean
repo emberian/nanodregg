@@ -1,18 +1,18 @@
 /-
-# Protocol.Proofs.Stdio — the stdio surface excludes exactly init, rotate and adopt
+# Protocol.Proofs.Stdio — the stdio surface excludes exactly init, rotate, adopt and invite
 -/
 import Protocol.Command.Stdio
 import Protocol.Proofs.Command
 
 namespace Nanodregg.Protocol.Command
 
-/-- A verb is on the stdio surface exactly when it is none of the three excluded ones. -/
-theorem mem_stdioVerbs (v : Verb) : v ∈ stdioVerbs ↔ v ≠ .init ∧ v ≠ .rotate ∧ v ≠ .adopt := by
+/-- A verb is on the stdio surface exactly when it is none of the four excluded ones. -/
+theorem mem_stdioVerbs (v : Verb) : v ∈ stdioVerbs ↔ v ≠ .init ∧ v ≠ .rotate ∧ v ≠ .adopt ∧ v ≠ .invite := by
   cases v <;> decide
 
 /-- What nd checks: a verb's word is on the emitted list exactly when the verb is on the surface. -/
 theorem word_mem_stdioWords (v : Verb) :
-    v.word ∈ stdioWords ↔ v ≠ .init ∧ v ≠ .rotate ∧ v ≠ .adopt := by
+    v.word ∈ stdioWords ↔ v ≠ .init ∧ v ≠ .rotate ∧ v ≠ .adopt ∧ v ≠ .invite := by
   cases v <;> decide
 
 /-- **What nd's check means, for any string it receives**: a word is on the emitted list exactly
@@ -34,6 +34,7 @@ theorem mem_stdioWords_iff (w : String) :
 theorem init_not_on_surface : Verb.init.word ∉ stdioWords := by decide
 theorem rotate_not_on_surface : Verb.rotate.word ∉ stdioWords := by decide
 theorem adopt_not_on_surface : Verb.adopt.word ∉ stdioWords := by decide
+theorem invite_not_on_surface : Verb.invite.word ∉ stdioWords := by decide
 
 end Nanodregg.Protocol.Command
 

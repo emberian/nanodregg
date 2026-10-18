@@ -40,4 +40,21 @@ theorem import_genesis_iff (name digestHex : String) (nonceR : Except Status Byt
     simp only [bind, Except.bind, pure, Except.pure] <;>
     (repeat' split) <;> simp_all [Prod.ext_iff, and_comm]
 
+/-- **`host join` writes no Store path before the invitation is accepted** (PROTOCOL-42, HOST-12's
+condition). `genesis` is reached, with key `k` and World `w`, EXACTLY when INVITE and KEY parsed,
+`Invite.accept` accepted the invitation under KEY making `w`, and the key effect answered `k`. Its
+`→` half is refuse-before-write; its `←` half is the tooth: an accepted invitation reaches genesis
+with the World `accept` made, so the claim is false of a `join` that writes first or writes another
+World. -/
+theorem join_genesis_iff (inviteHex keyHex : String) (keyR : Option Digest) (k : Digest) (w : World D) :
+    joinWith (m := Except (Option (Digest × World D)))
+        { key := pure keyR, genesis := fun k₀ w₀ => throw (some (k₀, w₀)),
+          refuse := fun _ _ => pure 1, report := fun _ => pure () } inviteHex keyHex = .error (some (k, w)) ↔
+    ∃ inv trusted i, Protocol.Text.ofHex inviteHex = some inv ∧ Protocol.Text.ofHex keyHex = some trusted ∧
+      Protocol.Invite.accept X trusted inv = .ok (i, w) ∧ keyR = some k := by
+  unfold joinWith
+  cases hi : Protocol.Text.ofHex inviteHex <;> cases hk : Protocol.Text.ofHex keyHex <;>
+    simp only [bind, Except.bind, pure, Except.pure] <;>
+    (repeat' split) <;> simp_all [Prod.ext_iff, and_comm]
+
 end Nanodregg.Host.Cli
