@@ -1910,3 +1910,75 @@ Ember's "too damn high" is these four.
 
 **Critique.** A deferral with a trigger is only as good as the trigger's detector. Nothing in the gates notices "two members needed one turn". The detector is the row author choosing escrow, so every escrow row's decision entry should say whether it would have preferred one turn.
 **Meta-critique.** The omission happened because nano was rebuilt from a charter of laws, and no law spoke about signers per turn. A rebuild inherits the old system's decisions only where someone re-decides them.
+
+## KERNEL-46 · LANG-44's kernel half, CO-SIGNED with five amendments, and LANG-45's (ii) capped sum ACCEPTED into it (KERNEL-13, 2026-10-18; LANG-44 items 6–11 and (c), as ROOT approved them; LANG-45 (ii) for ROOT's ruling). Design; the kernel half is built after KERNEL-44's refusals day.
+
+**Co-signed as written:**
+- the rows as a third instance of the one trie (the (a′) pattern);
+- `Turn.rows : List (RowTouch D)` with an exact pin or an unpinned birth;
+- `keyTaken` / `relationFull` judged on the current World and binding;
+- `upsert`/`retract` must pin;
+- the parent touched (`rowParentUnpinned`) and live (`orphanRow`);
+- `rowsRemain` on a parent's retire;
+- retract REMOVES via `retainAt` (no tombstone: a relation forgets, storage is bounded by `limit`);
+- row bytes are growth and weight;
+- `RowsCanon` on rows readers only;
+- `stale_refused` keeps its exact statement for cell pins, with a NEW sibling `rows_stale_refused` for row pins, the same conclusion;
+- head born with the parent. Born-at-first-insert would make the insert carry `limit`/`width`, which is signer-supplied data the kernel would have to trust or re-check against a package, a Lang fact inside admission.
+
+**Amendments (each a change to the LANG-44 text; argued):**
+1. **The key encodes its own length:** `bytes parent ‖ u8 rel ‖ u8 tag ‖ u8 |k| ‖ k`.
+   - LANG-44 says "width is fixed per relation (the head records it), so the key set is prefix-free with no World invariant". It is not.
+   - The trie routes by bits up to a fixed depth. A row key `p‖r‖1‖a` and a longer `p‖r‖1‖a‖00…` route identically, so `Separates rowSpec` would hold only on Worlds where every row's width matches its head's: a World invariant that every rows theorem would carry as a premise.
+   - With the length byte the encoding is injective and prefix-free by itself, and `rows_separate` is proved unconditionally, as `slots_separate` and `journal_separate` are.
+   - Admission still refuses a key whose width differs from its head's (`keyWidth`), as a RULE, not as something a proof leans on.
+   - Depth: 256 + 24 + 8·keyBytesMax.
+2. **The heads are birthed by an act, not by `creates`:** `RowAct.declare (limit cap width : Nat) (retract : Bool)` with `seen = none`.
+   - It is allowed only in the turn whose `creates` bears the parent (`declareLate` otherwise), and only by the create receiver.
+   - `Turn.creates : List (D × Cell)` keeps its shape, and every theorem over `creates` keeps its statement.
+3. **The head is never pinned by an insert, and that is a theorem.**
+   - `admit_comm` cannot be "disjoint footprints" plain, because two inserts under one relation BOTH write the head (count, and with (ii) sum). The head update is ADDITIVE, and that is the commutation.
+   - Statement: for t₁, t₂ admissible from w whose footprints are disjoint OUTSIDE heads, and whose head updates fit together (count₁+count₂ within `limit`, sum within `cap`), BOTH orders admit, and they reach equal cells and rows tries. The conclusion includes admission in both orders, not only equality-if-both-admit: the weaker form is true of a design that refuses the second order.
+   - Plant: an insert that pins its head makes the second rain `stale`.
+4. **One `Roots` digest in the head link.** KERNEL-44 adds `refusals` and this adds `rows`, so the link's arity would change twice.
+   - Instead, `headLink E prev td rootsDigest` with `rootsDigest = H(domRoots ‖ cellsRoot ‖ journalRoot ‖ rowsRoot ‖ refusalsRoot)`.
+   - The phone proves one extra hash, and a fifth trie changes `World.roots` and nothing in the chain lemmas.
+   - KERNEL-44's day introduces it with three roots; this day adds `rows` to `World.roots`.
+5. **The world's weight counts rows.** `World.weight = cellsWeight trie + rowsWeight rows`, so KERNEL-43's `weight + allowance < 2^64` covers them by `fold_conserves` with no new clause. CODEC's budget refine reads both, with the tag moved in this day.
+
+**LANG-45 (ii), the capped sum: ACCEPTED as one head field, not a second rule.**
+- The head is `head (count sum limit cap width : Nat) (retract : Bool)`. A row leaf is `row (amt : Nat) (val : ByteArray)`.
+- `amt` is a KERNEL field beside the bytes: the kernel never parses Lang data. Lang guarantees `amt` = the declared column, by `rows_of_pins` / `editsOf`'s round trip.
+- insert/upsert/retract move `sum` by +amt / (new − old) / −amt. `relationCapped` refuses on the CURRENT sum, binding like `relationFull`.
+- Theorems:
+  - `head_sum`: on every reached World, each head's `sum` = Σ `amt` over its rows and `count` = their number. This makes "only the kernel writes the head" a checkable fact rather than a prose rule.
+  - `sum_le_cap`.
+- A relation without a sum column declares `cap = 0` and `amt = 0` on every row.
+- (i), an `Act.add` against a pin that masks a slot, stays REFUSED: it weakens a pin.
+
+**Signatures (proposed; LANG writes against these, KERNEL commits them in the rows day):**
+```lean
+structure RowKey (D : Type) where parent : D; rel : Nat; k : ByteArray        -- rel < 256, k.size ≤ keyBytesMax
+inductive RowSlot (D : Type) | head (parent : D) (rel : Nat) | row (key : RowKey D)
+inductive RowLeaf | head (count sum limit cap width : Nat) (retract : Bool) | row (amt : Nat) (val : ByteArray)
+abbrev Rows (D : Type) := Trie.T D (RowSlot D) RowLeaf D   -- (K V D order as Trie.T's)
+def rowSpec (E : Env D) : Trie.Spec (RowSlot D) RowLeaf D  -- bit over parent ‖ rel ‖ tag ‖ u8 |k| ‖ k
+inductive RowAct | keep | insert (amt : Nat) (v : ByteArray) | upsert (amt : Nat) (v : ByteArray) | retract
+               | declare (limit cap width : Nat) (retract : Bool)
+structure RowTouch (D : Type) where slot : RowSlot D; seen : Option D; act : RowAct
+-- Turn gains  rows : List (RowTouch D);  World gains  rows : Rows D;  World.admit E w t keeps its type
+def World.rowAt (E : Env D) (w : World D) (s : RowSlot D) : Option RowLeaf
+def rowPin (E : Env D) : Option RowLeaf → D                -- the leaf digest, or the absent pin
+-- Reject gains: keyTaken relationFull relationCapped rowParentUnpinned orphanRow rowsRemain keyWidth
+--               noRelation retractForbidden declareLate
+```
+- Lang's methods return edits.
+- The receiver turns each edit into a `RowTouch` with `seen := the signer's row pin` for upsert and retract, and `none` for insert.
+- `declare` touches come only from the create receiver, one per `RelDecl`.
+
+**Critique.**
+- A rows day after KERNEL-44's means two flag days of the same shape (a new trie, a new root, a new carried listing). The `Roots` digest makes the second cheaper but not free.
+- `amt` duplicates a value Lang also holds in `val`. The duplication is the price of a kernel that never parses Lang data, and `editsOf`'s round trip is the check that keeps the two equal. A Lang bug would show as a sum that disagrees with the rows' decoded columns, which a sim arm should recompute.
+- With no tombstone a key can be re-inserted after a retract, so a row pin can see A→retract→A. That is the same content-addressed-pin behaviour cells have, and it is not new.
+
+**Meta-critique.** LANG-44's "no World invariant" was believed because the precedent (the journal) has fixed-width keys. The check that caught it was asking what `Separates` needs, not whether the shape matches a landed one.
