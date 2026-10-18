@@ -61,6 +61,10 @@ package nanodregg where
 @[default_target] lean_exe «hosting-broker» where
   root := `Hosting.BrokerMain
 
+-- nd-members' decider (HOSTING-33): the World's resident grains, nothing else (no clock, no key slots).
+@[default_target] lean_exe «hosting-residents» where
+  root := `Hosting.ResidentsMain
+
 -- THE BAR's hosted Hermes (HOSTING-27): a resident grain's program; answers its bell through its
 -- member socket with what keybroker answers on its broker socket.
 @[default_target] lean_exe «resident» where

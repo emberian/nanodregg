@@ -587,10 +587,11 @@ def memberFollowTmpfiles : String :=
 
 /-- The unit that serves every resident grain's member socket of one World `%i` (HOSTING-30): as nd, one
 process asking its decider which resident grains the World holds, and per provisioned resident two
-nd-supervise children (its own follower, its `nd --stdio`). The box's own values: `ND_OPERATOR` and
-`ND_PEER` come from keybroker's environment file (the same two values; there is no per-resident file,
-the member is provisioned under `members`, RUNBOOK §2b). `decider` and `deciderArgs` are the
-decider's: hosting-broker (`T0 SLOTS STORE OPERATOR`) until HOSTING ships `hosting-residents STORE`. -/
+nd-supervise children (its own follower, its `nd --stdio`). The box's own value `ND_PEER` comes from
+keybroker's environment file (the same value; there is no per-resident file, the member is provisioned
+under MEMBERS and STATE, RUNBOOK §2b). The decider is `hosting-residents STORE` (HOSTING-33): it
+answers only `residents`, so it takes no clock, no key slots and no operator
+(`membersUnit_decider_store`, Ops/Proofs/Units.lean). -/
 structure Members where
   name : String
   bin : String
@@ -619,8 +620,9 @@ def membersUnit : Members :=
     state := (Nanodregg.Hosting.stateRoot (Nanodregg.Hosting.lit "%i")).text, follow := memberFollowDir,
     runtime := "nd-members-%i", hostSock := "/run/nd/host.sock", store := "/srv/nd/store",
     hide := ["/etc/nd", "/home"], user := "nd", envFile := "/etc/nd/keybroker/keybroker.env",
-    decider := "/opt/nd/bin/hosting-broker",
-    deciderArgs := [.lit "0", .lit "1", .lit "/srv/nd/store", .var "ND_OPERATOR"] }
+    decider := "/opt/nd/bin/hosting-residents",
+    deciderArgs := [.lit "/srv/nd/store"] }
+
 
 def Members.pids (m : Members) : String := "/run/" ++ m.runtime
 
@@ -656,7 +658,6 @@ def Members.systemd (m : Members) : Except Refusal String := do
     s!"RuntimeDirectory={m.runtime}",
     "# TasksMax and RestrictAddressFamilies are unmeasured until a box window",
     s!"TasksMax={tasksMax}",
-    "# the decider's `0 1` (T0 SLOTS, read only by `decide`) goes with HOSTING-33's `hosting-residents STORE`",
     s!"ExecStart={spaced (m.exec.map Arg.systemd)}",
     "Restart=on-failure",
     s!"RestartSec={restartSeconds}",

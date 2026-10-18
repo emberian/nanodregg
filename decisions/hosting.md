@@ -1941,3 +1941,19 @@ Unchanged: `parse_argv`, `place_args`, `accepted_is_plan`, `fit_size`, `answerTe
 - The tests still pass nd-members' argv by hand (members.rs); switching them to the rendered ExecStart is CLIENT-9's (ROOT's note).
 
 **Meta-critique.** ROOT's example put the follower sockets under /srv/nd-members/<L>/follow and then needed a label bound to fit sun_path. Splitting the follower's STATE (a Store and a file: any length) from its SOCKET (bounded) removes the constraint instead of budgeting it: the length theorem is about roots that hold no label. I checked whether a label bound was missing anyway and found it already in `clean` (64); the honest move was a theorem naming it, not a new constant.
+
+## HOSTING-33 `hosting-residents STORE`: nd-members' decider answers only `residents`, so its unit carries no stand-in clock or key slots (HOSTING-11, 2026-10-20; ROOT, from CLIENT-8's close-out)
+
+**What.** nd-members (HOSTING-30) asked `hosting-broker T0 SLOTS STORE OPERATOR` only for `residents`; the unit gave it `0 1` for a clock and a key-slot list no `residents` answer reads, and the operator id, which only allowances need. `hosting-residents STORE` (`Hosting/ResidentsCli.lean`, `lean_exe hosting-residents`, root `Hosting.ResidentsMain`) follows the World and answers `residents` frames, nothing else.
+
+**No twin.** It is hosting-broker's follow with the rest removed: the same `BrokerCli.Follow`, `catchUp`, `Follow.absorbTurns`, `readFrame`, `emit` and `Exit` (so the `DeciderExit` table, `Proofs.Residents.absorbTurns_tracks`, `residents_mem` and `answer_encodes` are about it too). It holds no `Broker` and no operator: with an empty operator `Allow.allowanceOf` matches nothing, so `held` stays empty. A `decide` or `reply` frame ends it `badRequest`; any argv but one STORE, `usage`.
+
+**The unit.** `membersUnit.decider` = /opt/nd/bin/hosting-residents, `deciderArgs` = [/srv/nd/store]; `membersUnit_decider_store` (Ops/Proofs/Units.lean) `: membersUnit.deciderArgs = [.lit membersUnit.store]` (by `rfl`: putting a literal back fails the build: the plant ROOT asked for, as a theorem). The unit comment about `0 1` goes; ND_OPERATOR is no longer in nd-members' argv (ND_PEER still is).
+
+**Rows.** `cargo:launcher:members` 9/9 now drives `hosting-residents` (its row's exes: hosting-residents,host); new `the_residents_decider_answers_residents_and_refuses_a_decide`: the World's two resident grains answered; a `decide` frame ends it `badRequest` (72); no argv and `0 1` end it `usage` (70).
+
+**Flag day.** nd-members@.service re-emitted (decider and its argv). keybroker still runs hosting-broker (it decides asks). Nothing persisted.
+
+**Critique.** The exit names are the decider table's, so a parent-closed pipe is still named `keybrokerGone` in hosting-residents' stderr although its parent is nd-members; renaming it `parentGone` would touch keybroker's table and units for a word. Left, stated. And `Follow` still carries `pkgId`/`operator`/`held` fields this decider never fills: the price of sharing the follow (and its theorems) instead of a second struct.
+
+**Meta-critique.** The first instinct was a `Grains` struct of its own with a grains-only absorb: three lines shorter and a twin of `Follow.absorbTurns`'s grains half, outside every theorem about it. Sharing the struct costs two unused fields and keeps the one theorem true of both deciders.

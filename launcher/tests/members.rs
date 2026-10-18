@@ -5,7 +5,7 @@
 //! stdio child writes its workspace and nothing of STATE (HOSTING-32: the probe in nd's place).
 //!
 //! Every plant runs the real binaries: a real writer and Store (`World`), the real decider
-//! (`hosting-broker`, which answers `residents` as `hosting-residents` will), nd-supervise, nd and
+//! (`hosting-residents STORE`, HOSTING-33, which answers only `residents`), nd-supervise, nd and
 //! host. Each nd-members child has a PID file in PIDS; `Members` stops nd-members by its handle and
 //! then each child by its PID file, never by a pattern.
 //!
@@ -148,14 +148,9 @@ fn argv_over(
     c
 }
 
-/// The real decider's argv after DECIDER: `T0 SLOTS STORE OPERATOR`.
+/// The real decider's argv after DECIDER (`hosting-residents STORE`, HOSTING-33): the Store alone.
 fn broker_args(w: &World) -> Vec<std::ffi::OsString> {
-    vec![
-        now_ms().to_string().into(),
-        "1".into(),
-        w.store.clone().into(),
-        w.operator.clone().into(),
-    ]
+    vec![w.store.clone().into()]
 }
 
 /// A running nd-members. Dropped: nd-members stopped by its handle, then each child it left by
@@ -169,7 +164,7 @@ impl Members {
     fn start(w: &World, r: &Roots, peer: u32) -> Members {
         let args = broker_args(w);
         let args: Vec<&std::ffi::OsStr> = args.iter().map(|a| a.as_os_str()).collect();
-        let c = argv(w, r, peer, &lean_bin("hosting-broker"), &args);
+        let c = argv(w, r, peer, &lean_bin("hosting-residents"), &args);
         Members {
             run: Some(Logged::spawn(c, r.base.0.join("nd-members.pid"))),
             pids: r.pids(),
@@ -696,7 +691,7 @@ fn nd_members_ends_by_name() {
     let w = World::genesis("nde");
     let r = Roots::new('e');
     let me = uid(&r.member.0);
-    let broker = lean_bin("hosting-broker");
+    let broker = lean_bin("hosting-residents");
     let bargs = broker_args(&w);
     let bargs: Vec<&std::ffi::OsStr> = bargs.iter().map(|a| a.as_os_str()).collect();
     let (l, c) = ends(Command::new(env!("CARGO_BIN_EXE_nd-members")).arg("x"));
@@ -866,7 +861,7 @@ fn the_stdio_child_writes_its_workspace_and_no_follower_store() {
         uid(&r.member.0),
         &w.store,
         probe,
-        &lean_bin("hosting-broker"),
+        &lean_bin("hosting-residents"),
         &args,
     );
     let m = Members {
@@ -913,4 +908,59 @@ fn the_stdio_child_writes_its_workspace_and_no_follower_store() {
         "a probe file landed in the follower Store"
     );
     drop(m);
+}
+
+/// HOSTING-33: nd-members' decider, `hosting-residents STORE`, answers `residents` with the World's
+/// resident grains and nothing else: a `decide` frame (keybroker's question, never nd-members') ends
+/// it `badRequest`, and any argv but one STORE ends it `usage`. It is given no clock, no key slots
+/// and no operator (the unit's `membersUnit_decider_store`).
+#[test]
+fn the_residents_decider_answers_residents_and_refuses_a_decide() {
+    use nanodregg_launcher::broker_generated::wire::Request;
+    let w = World::genesis("ndh");
+    let exe = lean_bin("hosting-residents");
+    for args in [vec![], vec!["0", "1"]] {
+        let o = Command::new(&exe).args(&args).output().unwrap();
+        assert_eq!(
+            o.status.code(),
+            Some(i32::from(decider_exit::USAGE)),
+            "argv {args:?}: {}",
+            String::from_utf8_lossy(&o.stderr)
+        );
+    }
+    let mut child = Command::new(&exe)
+        .arg(&w.store)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut din = child.stdin.take().unwrap();
+    let mut dout = child.stdout.take().unwrap();
+    let mut names = nanodregg_launcher::residents::ask(&mut din, &mut dout, now_ms())
+        .expect("a residents answer");
+    names.sort();
+    let mut want = vec![w.r1.clone().into_bytes(), w.r2.clone().into_bytes()];
+    want.sort();
+    assert_eq!(names, want, "the World's resident grains");
+    let decide = Request::Decide {
+        resident: w.r1.clone().into_bytes(),
+        at_ms: now_ms(),
+    }
+    .encode()
+    .unwrap();
+    write_frame(&mut din, &decide).unwrap();
+    drop(din);
+    let o = child.wait_with_output().unwrap();
+    assert_eq!(
+        o.status.code(),
+        Some(i32::from(decider_exit::BAD_REQUEST)),
+        "a decide frame: {}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&o.stderr).contains("hosting-residents: badRequest"),
+        "{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
 }

@@ -227,4 +227,9 @@ theorem Driver.check_trusted (d : Driver) (h : d.check = .ok ()) : d.trusted = t
     rw [this] at h; cases h
   · rfl
 
+/-- nd-members' decider is given exactly the Store the unit already names, nothing else: no literal
+stands in for a clock or a key-slot list it never reads (HOSTING-33; `hosting-broker`'s `0 1` are
+gone), and no operator id reaches it. -/
+theorem membersUnit_decider_store : membersUnit.deciderArgs = [.lit membersUnit.store] := rfl
+
 end Nanodregg.Ops.Units
