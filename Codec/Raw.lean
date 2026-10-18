@@ -86,7 +86,8 @@ def rawList (max : Nat) (c : Stream α) : Stream (List α) where
     | .error e => .error e
     | .ok (n, j) =>
       if n.toNat ≤ max then
-        match getMany c b n.toNat j (Array.emptyWithCapacity n.toNat) with
+        -- the count is the input's claim: reserve no more than the bytes left could hold
+        match getMany c b n.toNat j (Array.emptyWithCapacity (min n.toNat (b.size - j))) with
         | .ok (a, k) => .ok (a.toList, k)
         | .error e => .error e
       else .error (.pastBound i max n.toNat)

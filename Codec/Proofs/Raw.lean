@@ -533,4 +533,37 @@ theorem refine_get_inner {γ : Type} {c : Stream α} {name : String} {accept : �
     · rename_i y' hy; cases h; exact ⟨x, hx, hy⟩
     · cases h
 
+/-! ## An over-claimed count (the reader's reservation)
+
+A list's count is the input's claim. `rawList` and `array` reserve room for at most the bytes left
+(`min n (b.size - j)`), not for the count: five bytes claiming `2 ^ 32 - 1` one-byte elements once
+made the reader ask for ~32 GB before reading the second element (an out-of-memory panic under an
+8 GB address-space limit, measured on hbox). Each tooth: such an input is refused at the first
+missing element, beside its twin whose count is honest. -/
+
+/-- The plant: four bytes claiming `2 ^ 32 - 1` elements and one element are refused `truncated` at the
+second element. -/
+theorem rawList_refuses_overclaimed_count :
+    (match (rawList (2 ^ 32 - 1) u8).decode ⟨#[0xff, 0xff, 0xff, 0xff, 0x00]⟩ with
+     | .error (.truncated 5 1) => true
+     | _ => false) = true := by decide +kernel
+
+/-- The twin: the same element under an honest count of one reads back. -/
+theorem rawList_reads_honest_count :
+    (match (rawList (2 ^ 32 - 1) u8).decode ⟨#[0x01, 0x00, 0x00, 0x00, 0x00]⟩ with
+     | .ok l => l == [0]
+     | .error _ => false) = true := by decide +kernel
+
+/-- The plant over `array`: the same over-claimed count is refused `truncated`. -/
+theorem array_refuses_overclaimed_count :
+    (match (array (2 ^ 32 - 1) u8).decode ⟨#[0xff, 0xff, 0xff, 0xff, 0x00]⟩ with
+     | .error (.truncated 5 1) => true
+     | _ => false) = true := by decide +kernel
+
+/-- The twin over `array`: an honest count of one reads back. -/
+theorem array_reads_honest_count :
+    (match (array (2 ^ 32 - 1) u8).decode ⟨#[0x01, 0x00, 0x00, 0x00, 0x00]⟩ with
+     | .ok a => a.val.toList == [0]
+     | .error _ => false) = true := by decide +kernel
+
 end Nanodregg.Codec.Stream

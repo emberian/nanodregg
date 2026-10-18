@@ -228,7 +228,8 @@ def array (max : Nat) (c : Stream α) (_fits : max < 2 ^ 32 := by decide) : Stre
     | .error e => .error e
     | .ok (n, j) =>
       if n.toNat ≤ max then
-        match getMany c b n.toNat j (Array.emptyWithCapacity n.toNat) with
+        -- the count is the input's claim: reserve no more than the bytes left could hold
+        match getMany c b n.toNat j (Array.emptyWithCapacity (min n.toNat (b.size - j))) with
         | .ok (a, k) =>
           if h : a.size ≤ max then .ok (⟨a, h⟩, k) else .error (.pastBound i max a.size)
         | .error e => .error e
