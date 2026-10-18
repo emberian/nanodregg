@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
 # scripts/plant — judge a planted mutation through scripts/pre-push, and READ the verdict (GATES-15).
 #
-#   scripts/plant [--build] [--with PATH]... NAME EXPECT [PATH=FILE]...
+#   scripts/plant [--build] [--with PATH]... [--cross-layer REASON] NAME EXPECT [PATH=FILE]...
+#
+# The plant's message carries `CROSS-LAYER: plant: <every layer gates/OWNERS names, and ROOT>` so a
+# mutation of any layer's file passes owners (GATES-18 requires each owner named); --cross-layer
+# REASON replaces that line (an empty REASON omits it), to plant the owners gate itself.
 #
 # The candidate is main + each `--with PATH` as this worktree has it (an unlanded gate under test)
 # + each PATH replaced by FILE's bytes (the plant). It is judged by this worktree's scripts/pre-push
@@ -23,16 +27,17 @@ here=$(cd "$(dirname "$0")/.." && pwd -P)
 common=$(cd "$here" && cd "$(git rev-parse --git-common-dir)" && pwd -P)
 P=$common/nanodregg-plant
 mkdir -p "$P"
-build=0 with=()
+build=0 with=() cross=
 while [ $# -gt 0 ]; do
   case $1 in
     --build) build=1 ;;
     --with) with+=("$2"); shift ;;
+    --cross-layer) cross=${2-}; cross_set=1; shift ;;
     *) break ;;
   esac
   shift
 done
-[ $# -ge 2 ] || { echo "usage: scripts/plant [--build] [--with PATH]... NAME EXPECT [PATH=FILE]..." >&2; exit 2; }
+[ $# -ge 2 ] || { echo "usage: scripts/plant [--build] [--with PATH]... [--cross-layer REASON] NAME EXPECT [PATH=FILE]..." >&2; exit 2; }
 name=$1 expect=$2; shift 2
 case $name in harness-control|*/*|'') echo "plant: bad NAME '$name'" >&2; exit 2 ;; esac
 
@@ -55,7 +60,10 @@ judge() {
     [ -f "$f" ] || { echo "plant: $n: no file $f" >&2; return 2; }
     git -C "$here" update-index --add --cacheinfo "$(mode "$f"),$(git -C "$here" hash-object -w "$f"),$p" || return 2
   done
-  printf 'gates: plant %s\n\nGATE-CHANGE: plant\nCROSS-LAYER: plant\n' "$n" > "$P/$n.msg"
+  printf 'gates: plant %s\n\nGATE-CHANGE: plant\n' "$n" > "$P/$n.msg"
+  if [ -z "${cross_set:-}" ]; then
+    printf 'CROSS-LAYER: plant: %s\n' "$({ awk -F'\t' '!/^#/ && NF == 2 && $2 != "SHARED" {print $2}' "$here/gates/OWNERS"; echo ROOT; } | sort -u | tr '\n' ' ')" >> "$P/$n.msg"
+  elif [ -n "$cross" ]; then printf 'CROSS-LAYER: %s\n' "$cross" >> "$P/$n.msg"; fi
   local nb=()
   [ "$b" = 1 ] || { printf 'NO-BUILD: plant\n' >> "$P/$n.msg"; nb=(--no-build); }
   ( cd "$here" && scripts/pre-push --index --base refs/heads/main --message "$P/$n.msg" "${nb[@]}" ) > "$P/$n.out" 2>&1

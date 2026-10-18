@@ -3,8 +3,11 @@ from stale private indexes silently reverted another layer's files).
 
 The layer is the commit subject's prefix (`kernel: …`); every changed path must be owned by
 that layer (gates/OWNERS, longest prefix) or be SHARED. Red otherwise, naming each foreign path
-and its owner, unless the message carries `CROSS-LAYER: <reason>` (the reason is the record).
-A path no OWNERS row covers belongs to ROOT.
+and its owner, unless the message's `CROSS-LAYER: <reason>` lines name that owner (GATES-18): the
+layer's name as a word, alone or as a lane (`HOST`, `HOST-13 agreed`, `ROOT for HOST`). A reason
+that names only other layers no longer covers a path it does not name (c18e028 changed
+gates/waste.tsv under a reason naming HOST and PROTOCOL only). A path no OWNERS row covers belongs
+to ROOT, so its reason names ROOT.
 """
 import os
 import re
@@ -42,8 +45,21 @@ def check(root: str, changed: list[str], message: str) -> list[str]:
     layers = SUBJECT[m.group(1)]
     rows = table(root)
     foreign = [(p, owner(rows, p)) for p in changed if owner(rows, p) not in layers | {"SHARED"}]
-    if not foreign or re.search(r"(?m)^CROSS-LAYER:\s*\S", message):
+    if not foreign:
         return []
+    reasons = "\n".join(re.findall(r"(?m)^CROSS-LAYER:\s*(\S.*)$", message))
     who = "/".join(sorted(layers))
-    return [f"{who} commit touches {p}, owned by {o}" for p, o in foreign] + [
-        "split the commit, or add 'CROSS-LAYER: <reason>' to the message"]
+    if not reasons:
+        return [f"{who} commit touches {p}, owned by {o}" for p, o in foreign] + [
+            "split the commit, or add 'CROSS-LAYER: <reason>' naming each owner to the message"]
+    unnamed = [(p, o) for p, o in foreign if not named(reasons, o)]
+    return [f"{who} commit touches {p}, owned by {o}, and no CROSS-LAYER line names {o}" for p, o in unnamed] + (
+        [f"name each owner in a CROSS-LAYER line ('{o}-N agreed …', or 'ROOT for {o}' when no {o} lane is live)"
+         for o in sorted({o for _, o in unnamed})])
+
+
+def named(reasons: str, layer: str) -> bool:
+    """The layer's name as a whole word, alone or as a lane (`HOST-13`): `HOST` is not named by
+    `HOSTING`, nor `CODEC` by `codec` (layer names are upper case in OWNERS and in lane names); `_`
+    and `/` separate words (`ROOT_for_HOSTING/LEDGER` names HOSTING and LEDGER)."""
+    return re.search(rf"(?<![A-Za-z0-9]){re.escape(layer)}(?:-\d+)?(?![A-Za-z0-9])", reasons) is not None
