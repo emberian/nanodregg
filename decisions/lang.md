@@ -2160,3 +2160,19 @@ resident reads it with `Lang.Read.readData`, which is what PROTOCOL-48 ruled any
 An escape syntax inside string literals (`\n`) would keep it readable, but it is a READER change: a
 second spelling of the same bytes, plus a proof obligation on every string. **Meta-critique.** The
 reader stays as small as it is; if people need to read answers by eye, `ob` can render, outside the TCB.
+
+**LANG-53 addendum (cv 01a14edf-6505 closed).** In Lang/Proofs/StdRun.lean, `stepTo_loaded` covers a `pkgOf`
+package the pinned cell holds whose method `ℓm` is a `stepTo` output. It shows that the closure the
+receiver's own `load` returns (runSetup's exact call) holds, at `load`'s index, a record whose field `ℓm`
+is that method. So the `lib[g]`/field premises are derived and no longer assumed. They come from:
+- `load_top`;
+- `load_checked` with `pkgOf_labels_nodup`, so the labels are distinct;
+- `noRef_stepLaw` with `relocate_noRef`, so relocation leaves the method unchanged.
+
+`stepTo_moves_loaded`, `stepTo_keeps_loaded`, `stepTo_stays_loaded` and `stepTo_run_moves_loaded` are the
+four run-level facts on `L.lib` with `apply4 g ℓm`. `stepTo_invoke_loaded` covers the case where the
+generator's methods are the package's own and the method is installed under its own label. There, the
+index `stepTo` resolved `m` to (the one the machine law compares an invoke with) is where the package's
+method list holds `m` (`methodIndex_pkgOf`), and invoking it lands at the edge's target. Vacuity reader:
+LAND. Both of its optional LOW follow-ups (the other three facts in loaded form, and the index tie) are
+done here.

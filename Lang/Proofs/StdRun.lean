@@ -6,7 +6,10 @@ every declared edge (`stepTo_takes_every_edge`). This module runs the generated 
 receiver runs it (`apply4 g ℓm` over rows, state, argument and request, the env `runSetup` builds) over
 the reference semantics: `stepTo_moves` (the state field lands at the edge's target), `stepTo_keeps`
 (every other field kept), `stepTo_stays` (off every edge the field stays, and `machine_invoke` then
-refuses), `stepTo_run_moves` (the CEK machine returns exactly that). Its own module so that the
+refuses), `stepTo_run_moves` (the CEK machine returns exactly that), and their `_loaded` forms (the
+same on the closure the receiver's `load` returns, for a `pkgOf` package the cell holds: the
+`lib[g]`/field premises discharged, `stepTo_loaded`); `stepTo_invoke_loaded` ties the index the
+kernel invokes to the method label whose edges it runs. Its own module so that the
 reference-semantics completeness (`Lang.Proofs.Complete`) and `Lang.Program` do not widen the import
 cone of every consumer of `Lang.Proofs.Std`. Teeth at the end: kernel-evaluated machine runs.
 -/
@@ -14,6 +17,7 @@ import Lang.Proofs.Std
 import Lang.Proofs.Complete
 import Lang.Proofs.Row
 import Lang.Program
+import Lang.Proofs.Receiver
 
 namespace Nanodregg.Lang.Std
 
@@ -303,6 +307,153 @@ theorem stepTo_stays {S : Ty} {f : Label} {states methods : List Label} {m : Lab
   subst hS
   rw [← htgt]
   exact stepLaw_moves rfl (sel_method hg hm) hf hx hs
+
+/-! ## As the receiver loads it: the package premises discharged (cv 01a14edf-6505) -/
+
+/-- `stepLaw` names no closure package, so relocation leaves it as it is. -/
+theorem noRef_stepLaw (S : Ty) (f : Label) (states : List Label) (i : Nat) (es : List (Label × Nat × Label)) :
+    NoRef (stepLaw S f states i es) := by
+  simp only [stepLaw, NoRef, resultT, callsT, NoRefRow, true_and, and_true]
+  refine ⟨by simp [NoRefRow], ?_⟩
+  rw [NoRefStd.row_iff]
+  intro e he
+  simp only [List.mem_map] at he
+  obtain ⟨⟨ℓ, T⟩, -, rfl⟩ := he
+  dsimp only
+  split
+  · simp only [NoRef, true_and]
+    rw [NoRefStd.row_iff]
+    intro a ha
+    simp only [List.mem_map] at ha
+    obtain ⟨_, -, rfl⟩ := ha
+    simp [NoRef, NoRefRow]
+  · simp [NoRef]
+
+section
+open Nanodregg.Kernel.Receive
+variable {D : Type} (bytesOf : D → ByteArray) (digestOf : ByteArray → Option D)
+
+/-- **The receiver's closure holds the generated method under its label.** For a `pkgOf` package the
+pinned cell holds, the closure the receiver's own `load` returns has a record at `load`'s index whose
+field `ℓm` is the method `stepTo` generated: the `lib[g]`/field premises of `stepTo_moves`,
+`stepTo_keeps`, `stepTo_stays` and `stepTo_run_moves`, derived (`load_top`; labels distinct by
+`load_checked` + `pkgOf_labels_nodup`; `noRef_stepLaw` + `relocate_noRef`). -/
+theorem stepTo_loaded {look : Pinned D} {law : D} {L : Loaded} {g : Nat}
+    {S : Ty} {f : Label} {states methods : List Label} {m : Label}
+    {edges : List (Label × Label × Label)} {t : Term}
+    {laws : List (Label × Term)} {ms : List (Label × Ty × List Ty × Term)} {ℓm : Label} {A : Ty} {ks : List Ty}
+    (hid : digestOf (bytesOf law) = some law) (hp : readPackage look law = .ok (pkgOf S laws ms))
+    (hload : load digestOf look closureDepthMax (bytesOf law) ⟨[], [], []⟩ = .ok (L, g))
+    (hm : (ℓm, A, ks, t) ∈ ms) (h : stepTo S f states methods m edges = .ok t) :
+    ∃ fs, L.lib[g]? = some (.record fs) ∧ Row.find? ℓm fs = some t := by
+  obtain ⟨hpg, fr, hlib⟩ := load_top bytesOf digestOf (fuel := closureDepthMax - 1) hid hp hload
+  have hnd := pkgOf_labels_nodup (load_checked hload g _ hpg).1
+  obtain ⟨i, es, -, -, rfl, -⟩ := stepTo_takes_every_edge h
+  let xs := Row.sort laws ++ (Row.sort ms).map (fun (l, _, _, t) => (l, t))
+  have hxs : (xs.map (·.1)).Perm (laws.map (·.1) ++ ms.map (·.1)) := by
+    simp only [xs, List.map_append, List.map_map]
+    refine List.Perm.append ((Row.sort_perm laws).map _) ?_
+    have := (Row.sort_perm ms).map (fun (y : Label × Ty × List Ty × Term) => y.1)
+    simpa [Function.comp_def] using this
+  have hmem : (ℓm, stepLaw S f states i es) ∈ Row.sort xs := by
+    refine (Row.sort_perm xs).mem_iff.2 (List.mem_append_right _ ?_)
+    exact List.mem_map.2 ⟨(ℓm, A, ks, _), (Row.sort_perm ms).mem_iff.2 hm, rfl⟩
+  have hfind := find_of_mem_nodup (((Row.sort_perm xs).map _).trans hxs |>.nodup_iff.2 hnd) hmem
+  refine ⟨Term.relocateRow fr (Row.sort xs), by rw [hlib]; rfl, ?_⟩
+  rw [find_relocateRow, hfind]
+  simp only [Option.map_some]
+  rw [relocate_noRef _ _ (noRef_stepLaw _ _ _ _ _)]
+
+/-- **The generated machine method, as the receiver loads and runs it**: `stepTo_moves` on the
+closure `load` returns (`L.lib`, `apply4 g ℓm`: the term and environment `runSetup` builds). -/
+theorem stepTo_moves_loaded {look : Pinned D} {law : D} {L : Loaded} {g : Nat}
+    {S : Ty} {f : Label} {states methods : List Label} {m : Label}
+    {edges : List (Label × Label × Label)} {t : Term} {row : List (Label × Ty)} {x y : Label}
+    {laws : List (Label × Term)} {ms : List (Label × Ty × List Ty × Term)} {ℓm : Label} {A : Ty} {ks : List Ty}
+    {sd u : Data} {rws ad rq : Val} {E : Env}
+    (hid : digestOf (bytesOf law) = some law) (hp : readPackage look law = .ok (pkgOf S laws ms))
+    (hload : load digestOf look closureDepthMax (bytesOf law) ⟨[], [], []⟩ = .ok (L, g))
+    (hm : (ℓm, A, ks, t) ∈ ms)
+    (h : stepTo S f states methods m edges = .ok t) (hS : S = .record row) (hf : f ∈ row.map (·.1))
+    (he : (x, m, y) ∈ edges) (hs : sd.field f = some (.inj x u)) :
+    BigStep L.lib (rq :: ad :: sd.toVal :: rws :: E) (.get (.get (apply4 g ℓm) "state") f)
+      (.ok (.inj y (.record []))) := by
+  obtain ⟨fs, hg, hfs⟩ := stepTo_loaded bytesOf digestOf hid hp hload hm h
+  exact stepTo_moves h hS hf he hs hg hfs
+
+/-- And every other field is kept, on the loaded closure. -/
+theorem stepTo_keeps_loaded {look : Pinned D} {law : D} {L : Loaded} {g : Nat}
+    {S : Ty} {f ℓ : Label} {states methods : List Label} {m : Label}
+    {edges : List (Label × Label × Label)} {t : Term} {row : List (Label × Ty)}
+    {laws : List (Label × Term)} {ms : List (Label × Ty × List Ty × Term)} {ℓm : Label} {A : Ty} {ks : List Ty}
+    {sd z : Data} {rws ad rq : Val} {E : Env}
+    (hid : digestOf (bytesOf law) = some law) (hp : readPackage look law = .ok (pkgOf S laws ms))
+    (hload : load digestOf look closureDepthMax (bytesOf law) ⟨[], [], []⟩ = .ok (L, g))
+    (hm : (ℓm, A, ks, t) ∈ ms)
+    (h : stepTo S f states methods m edges = .ok t) (hS : S = .record row) (hl : ℓ ∈ row.map (·.1))
+    (hne : ℓ ≠ f) (hs : sd.field ℓ = some z) :
+    BigStep L.lib (rq :: ad :: sd.toVal :: rws :: E) (.get (.get (apply4 g ℓm) "state") ℓ) (.ok z.toVal) := by
+  obtain ⟨fs, hg, hfs⟩ := stepTo_loaded bytesOf digestOf hid hp hload hm h
+  exact stepTo_keeps h hS hl hne hs hg hfs
+
+/-- Off every edge the field stays, on the loaded closure. -/
+theorem stepTo_stays_loaded {look : Pinned D} {law : D} {L : Loaded} {g : Nat}
+    {S : Ty} {f : Label} {states methods : List Label} {m : Label}
+    {edges : List (Label × Label × Label)} {t : Term} {row : List (Label × Ty)} {x : Label}
+    {laws : List (Label × Term)} {ms : List (Label × Ty × List Ty × Term)} {ℓm : Label} {A : Ty} {ks : List Ty}
+    {sd u : Data} {rws ad rq : Val} {E : Env}
+    (hid : digestOf (bytesOf law) = some law) (hp : readPackage look law = .ok (pkgOf S laws ms))
+    (hload : load digestOf look closureDepthMax (bytesOf law) ⟨[], [], []⟩ = .ok (L, g))
+    (hm : (ℓm, A, ks, t) ∈ ms)
+    (h : stepTo S f states methods m edges = .ok t) (hS : S = .record row) (hf : f ∈ row.map (·.1))
+    (hno : ∀ y, (x, m, y) ∉ edges) (hx : x ∈ states) (hs : sd.field f = some (.inj x u)) :
+    BigStep L.lib (rq :: ad :: sd.toVal :: rws :: E) (.get (.get (apply4 g ℓm) "state") f)
+      (.ok (.inj x (.record []))) := by
+  obtain ⟨fs, hg, hfs⟩ := stepTo_loaded bytesOf digestOf hid hp hload hm h
+  exact stepTo_stays h hS hf hno hx hs hg hfs
+
+/-- **The receiver's machine runs it there**: the CEK machine on the loaded closure returns `y` under
+large enough bounds and no other value under any. -/
+theorem stepTo_run_moves_loaded {look : Pinned D} {law : D} {L : Loaded} {g : Nat}
+    {S : Ty} {f : Label} {states methods : List Label} {m : Label}
+    {edges : List (Label × Label × Label)} {t : Term} {row : List (Label × Ty)} {x y : Label}
+    {laws : List (Label × Term)} {ms : List (Label × Ty × List Ty × Term)} {ℓm : Label} {A : Ty} {ks : List Ty}
+    {sd u : Data} {rws ad rq : Val} {E : Env}
+    (hid : digestOf (bytesOf law) = some law) (hp : readPackage look law = .ok (pkgOf S laws ms))
+    (hload : load digestOf look closureDepthMax (bytesOf law) ⟨[], [], []⟩ = .ok (L, g))
+    (hm : (ℓm, A, ks, t) ∈ ms)
+    (h : stepTo S f states methods m edges = .ok t) (hS : S = .record row) (hf : f ∈ row.map (·.1))
+    (he : (x, m, y) ∈ edges) (hs : sd.field f = some (.inj x u)) :
+    let T := Term.get (.get (apply4 g ℓm) "state") f
+    let env := rq :: ad :: sd.toVal :: rws :: E
+    (∃ D n, ∀ cap fuel, D ≤ cap → n < fuel → ∃ used,
+        run L.lib cap fuel 0 (State.init T env) = .value (.inj y (.record [])) used) ∧
+      ∀ cap fuel used v, run L.lib cap fuel 0 (State.init T env) = .value v used → v = .inj y (.record []) := by
+  obtain ⟨fs, hg, hfs⟩ := stepTo_loaded bytesOf digestOf hid hp hload hm h
+  exact stepTo_run_moves h hS hf he hs hg hfs
+
+/-- **Invoking method `m` runs `m`'s edges.** When the generator's methods are the package's own
+(`methods = ms.map (·.1)`) and the method is installed under its own label (`ℓm = m`), the index
+`stepTo` resolved `m` to (the one the machine law compares the invoke payload with) is where the
+package's method list, which the kernel's `invoke` indexes, holds `m` (`methodIndex_pkgOf`), and
+invoking it on the loaded closure lands `f` at the edge's target. -/
+theorem stepTo_invoke_loaded {look : Pinned D} {law : D} {L : Loaded} {g : Nat}
+    {S : Ty} {f : Label} {states : List Label} {m : Label}
+    {edges : List (Label × Label × Label)} {t : Term} {row : List (Label × Ty)} {x y : Label}
+    {laws : List (Label × Term)} {ms : List (Label × Ty × List Ty × Term)} {A : Ty} {ks : List Ty}
+    {sd u : Data} {rws ad rq : Val} {E : Env}
+    (hid : digestOf (bytesOf law) = some law) (hp : readPackage look law = .ok (pkgOf S laws ms))
+    (hload : load digestOf look closureDepthMax (bytesOf law) ⟨[], [], []⟩ = .ok (L, g))
+    (hm : (m, A, ks, t) ∈ ms)
+    (h : stepTo S f states (ms.map (·.1)) m edges = .ok t) (hS : S = .record row) (hf : f ∈ row.map (·.1))
+    (he : (x, m, y) ∈ edges) (hs : sd.field f = some (.inj x u)) :
+    ∃ i, methodIndex (ms.map (·.1)) m = some i ∧ (pkgOf S laws ms).methods[i]? = some m ∧
+      BigStep L.lib (rq :: ad :: sd.toVal :: rws :: E) (.get (.get (apply4 g m) "state") f)
+        (.ok (.inj y (.record []))) := by
+  obtain ⟨i, es, hi, -, -, -⟩ := stepTo_takes_every_edge h
+  exact ⟨i, hi, methodIndex_pkgOf hi, stepTo_moves_loaded bytesOf digestOf hid hp hload hm h hS hf he hs⟩
+
+end
 
 end Nanodregg.Lang.Std
 
