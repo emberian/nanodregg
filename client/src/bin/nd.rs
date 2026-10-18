@@ -7,7 +7,8 @@
 //! which signs read envelopes only (CLIENT-22): a joined `--init-hosted` record sealed by
 //! `nd --seal-observer` (a one-way rename); `nd --keys` prints custody's public keys (`key HEX`, `next HEX`)
 //! for the operator's `host genesis`. `$ND_HOLDING` is read again only to rotate.
-//! `$ND_FOLLOW_SOCK` / `$ND_HOST_SOCK` name the two sockets when they are not the workspace's
+//! `nd --stdio WORKSPACE FOLLOW_SOCK HOST_SOCK` serves a hosted resident's commands on stdin
+//! (nd-supervise's child, CLIENT-24: only STDIO_VERBS, no rotation). `$ND_FOLLOW_SOCK` / `$ND_HOST_SOCK` name the two sockets when they are not the workspace's
 //! (HOSTING-17 §7: nd, as nd, drives the nd-hosted follower through its socket in /run/nd-follow).
 
 use std::ffi::OsString;
@@ -17,9 +18,9 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use nanodregg_client::custody::Custody;
-use nanodregg_client::run;
 use nanodregg_client::sockets::{FollowSocket, HostSocket};
 use nanodregg_client::table;
+use nanodregg_client::{run, stdio};
 
 fn main() -> ExitCode {
     match go() {
@@ -33,8 +34,11 @@ fn main() -> ExitCode {
 }
 
 fn go() -> Result<u8, String> {
-    let ws = PathBuf::from(std::env::var_os("ND_WORKSPACE").ok_or("ND_WORKSPACE is not set")?);
     let argv: Vec<OsString> = std::env::args_os().skip(1).collect();
+    if let Some(served) = stdio::from_argv(&argv) {
+        return served;
+    }
+    let ws = PathBuf::from(std::env::var_os("ND_WORKSPACE").ok_or("ND_WORKSPACE is not set")?);
     let holding = std::env::var_os("ND_HOLDING").map(PathBuf::from);
     if argv.len() == 1
         && (argv[0] == "--init" || argv[0] == "--init-hosted" || argv[0] == "--init-observer")

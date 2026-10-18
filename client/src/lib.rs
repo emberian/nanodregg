@@ -15,4 +15,5 @@ pub mod generated;
 pub mod mux;
 pub mod run;
 pub mod sockets;
+pub mod stdio;
 pub mod table;

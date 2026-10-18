@@ -320,3 +320,32 @@ fn a_joined_record_is_sealed_as_an_observer_by_one_rename() {
     done(&ws);
     let _ = h;
 }
+
+/// CLIENT-24: the custody `nd --stdio` opens refuses precommit and signNext (`noRotation`), so a
+/// resident's command can never rotate the key it runs under; it still signs.
+#[test]
+fn a_stdio_custody_signs_but_never_rotates() {
+    let (ws, _) = scratch("stdio-custody");
+    Custody::create_same_record(&ws).unwrap();
+    let c = Custody::open(&ws, None).unwrap();
+    assert!(
+        c.precommit().is_ok(),
+        "control: an ordinary custody precommits"
+    );
+    let (ws2, _) = scratch("stdio-custody-2");
+    Custody::create_same_record(&ws2).unwrap();
+    let c = Custody::open(&ws2, None).unwrap().refusing_rotation();
+    assert!(c.sign(b"a call").is_ok());
+    assert!(matches!(c.precommit(), Err(CustodyError::NoRotation)));
+    assert!(matches!(
+        c.sign_next(b"rotate"),
+        Err(CustodyError::NoRotation)
+    ));
+    assert_eq!(
+        fs::metadata(ws2.join("keys")).unwrap().len(),
+        64,
+        "no pending key minted"
+    );
+    done(&ws);
+    done(&ws2);
+}

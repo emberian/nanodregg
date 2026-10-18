@@ -152,11 +152,22 @@ fn write_within(w: &mut UnixStream, limit: Duration, bytes: &[u8]) -> io::Result
 }
 
 /// Run the mux until the child closes. `child_in`/`child_out` are the child's stdin and stdout.
-pub fn serve<I, O>(
+pub fn serve<I, O>(listener: UnixListener, child_in: I, child_out: O, limits: MuxLimits) -> MuxEnd
+where
+    I: Write + Send + 'static,
+    O: Read,
+{
+    serve_admitting(listener, child_in, child_out, limits, None)
+}
+
+/// [`serve`], admitting only connections whose peer is `peer = (uid, gid)` (`SO_PEERCRED`,
+/// HOSTING-20); any other is closed `peerRefused` before a frame is read or a connection id spent.
+pub fn serve_admitting<I, O>(
     listener: UnixListener,
     child_in: I,
     mut child_out: O,
     limits: MuxLimits,
+    peer: Option<(u32, u32)>,
 ) -> MuxEnd
 where
     I: Write + Send + 'static,
@@ -171,7 +182,7 @@ where
         exhausted: AtomicBool::new(false),
     });
     let accepting = Arc::clone(&shared);
-    thread::spawn(move || accept(&listener, &accepting, limits));
+    thread::spawn(move || accept(&listener, &accepting, limits, peer));
     let mut end = route(&mut child_out, &shared, limits);
     if matches!(end, MuxEnd::ChildClosed) && shared.exhausted.load(Ordering::SeqCst) {
         end = MuxEnd::ConnectionIdsExhausted;
@@ -198,9 +209,18 @@ fn accept<I: Write + Send + 'static>(
     listener: &UnixListener,
     shared: &Arc<Shared<I>>,
     limits: MuxLimits,
+    peer: Option<(u32, u32)>,
 ) {
     for stream in listener.incoming() {
         let Ok(mut stream) = stream else { continue };
+        if let Some(p) = peer
+            && nanodregg_sandbox::custody::peer_cred(&stream).ok() != Some(p)
+        {
+            let close = close_frame(CloseReason::PeerRefused);
+            let _ = write_within(&mut stream, limits.reply_write, &close);
+            let _ = stream.shutdown(Shutdown::Both);
+            continue;
+        }
         let (Ok(writer), Ok(handle)) = (stream.try_clone(), stream.try_clone()) else {
             continue;
         };

@@ -45,6 +45,8 @@ pub enum CustodyError {
     /// An observer (envelope-only) custody was asked to sign what is not a read envelope, or to
     /// precommit or rotate (CLIENT-22).
     EnvelopeOnly,
+    /// A custody opened by `nd --stdio` was asked to precommit or rotate (CLIENT-24).
+    NoRotation,
     /// The separate holding is not named (`ND_HOLDING`) or not present.
     HoldingAbsent,
     /// `signNext` without a precommitted pending key.
@@ -82,6 +84,7 @@ impl CustodyError {
             Self::Mismatch(_) => CustodyRefusal::Mismatch,
             Self::Io(_) => CustodyRefusal::Io,
             Self::EnvelopeOnly => CustodyRefusal::EnvelopeOnly,
+            Self::NoRotation => CustodyRefusal::NoRotation,
         }
     }
 }
@@ -324,6 +327,8 @@ pub struct Custody {
     keys: Box<dyn Keys>,
     /// An observer: it signs read envelopes only (CLIENT-22).
     envelope_only: bool,
+    /// Opened by `nd --stdio`: no precommit, no rotation (CLIENT-24).
+    rotation_refused: bool,
 }
 
 impl Custody {
@@ -402,10 +407,20 @@ impl Custody {
             ws: ws.to_path_buf(),
             keys,
             envelope_only,
+            rotation_refused: false,
         };
         c.keys.current()?;
         c.keys.next_public()?;
         Ok(c)
+    }
+
+    /// This custody, refusing `precommit` and `signNext` (`noRotation`): `nd --stdio`'s, so a
+    /// resident's command can never rotate the key it runs under (CLIENT-24).
+    pub fn refusing_rotation(self) -> Self {
+        Self {
+            rotation_refused: true,
+            ..self
+        }
     }
 
     /// The current public key.
@@ -440,6 +455,9 @@ impl Custody {
         if self.envelope_only {
             return Err(CustodyError::EnvelopeOnly);
         }
+        if self.rotation_refused {
+            return Err(CustodyError::NoRotation);
+        }
         let next = self.keys.next_public()?;
         if let Some(p) = self.keys.pending()? {
             return Ok((next, public(&p)));
@@ -454,6 +472,9 @@ impl Custody {
     pub fn sign_next(&self, message: &[u8]) -> Result<(SignResult, Rotation), CustodyError> {
         if self.envelope_only {
             return Err(CustodyError::EnvelopeOnly);
+        }
+        if self.rotation_refused {
+            return Err(CustodyError::NoRotation);
         }
         if self.armed()?.is_some() {
             return Err(CustodyError::RotationInFlight);

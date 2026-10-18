@@ -269,3 +269,70 @@ fn a_group_socket_binds_0660_only_in_a_shared_directory_of_that_group() {
     drop(held);
     let _ = std::fs::remove_dir_all(&root);
 }
+
+/// HOSTING-20: `--peer UID` (with `--group GID`) admits only a peer whose (uid, gid) is (UID, GID);
+/// any other connection is closed `peerRefused` before a frame is read. Control: our own uid is
+/// served. `--peer` without `--group` refuses to launch.
+#[test]
+fn a_peer_outside_uid_and_group_is_closed_peer_refused() {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    let root = nanodregg_devtools::scratch(&format!("sup-peer-{}", std::process::id()));
+    let (ws, shared) = (root.join("ws"), root.join("p"));
+    nanodregg_devtools::mkdirs(&ws).unwrap();
+    nanodregg_devtools::mkdirs(&shared).unwrap();
+    std::fs::set_permissions(&shared, std::fs::Permissions::from_mode(0o2710)).unwrap();
+    let me = std::fs::metadata(&shared).unwrap();
+    let run = |peer: u32, name: &str| {
+        let sock = shared.join(name);
+        let child = Command::new(env!("CARGO_BIN_EXE_nd-supervise"))
+            .arg(&sock)
+            .args([
+                "--group",
+                &me.gid().to_string(),
+                "--peer",
+                &peer.to_string(),
+            ])
+            .arg("--hide")
+            .arg(&ws)
+            .args(["--exec", "/usr/bin/cat", "--", "/usr/bin/cat"])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let held = common::Supervisor::hold(child, root.join(format!("{name}.pid")));
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        let mut c = loop {
+            if let Ok(c) = UnixStream::connect(&sock) {
+                break c;
+            }
+            assert!(std::time::Instant::now() < deadline, "neverBound");
+            std::thread::sleep(Duration::from_millis(50));
+        };
+        c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+        let _ = frame::write(&mut c, table::LIMITS, 5, b"x");
+        let f = frame::read(&mut c, table::LIMITS).unwrap();
+        drop(held);
+        (f.op, f.payload)
+    };
+    assert_eq!(
+        run(me.uid(), "own.sock"),
+        (5, b"x".to_vec()),
+        "control: our uid is served"
+    );
+    assert_eq!(
+        run(me.uid() + 1, "other.sock"),
+        (
+            nanodregg_client::generated::status::CLOSED,
+            b"peerRefused".to_vec()
+        )
+    );
+    let o = Command::new(env!("CARGO_BIN_EXE_nd-supervise"))
+        .args(["/tmp/nd-never.sock", "--peer", "1", "--hide"])
+        .arg(&ws)
+        .args(["--", "/usr/bin/true"])
+        .output()
+        .unwrap();
+    assert!(String::from_utf8_lossy(&o.stderr).contains("--peer needs --group"));
+    let _ = std::fs::remove_dir_all(&root);
+}

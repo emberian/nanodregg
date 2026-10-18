@@ -27,3 +27,7 @@ cargo:launcher:broker	hosting-broker,host	exit 0
 cargo:launcher:resident	hosting-controller,hosting-broker,host,hosting-drive	exit 0
 cargo:launcher:grain	hosting-controller,host	exit 0
 cargo:devtools:workspace	host	exit 0
+cargo:client:real	host	exit 0
+cargo:client:stdio	host	exit 0
+cargo:client:supervise	host	exit 0
+cargo:attach:attach	host	exit 0

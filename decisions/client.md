@@ -631,3 +631,43 @@ Host (init, enroll, grant observe, its own `host follow`, seal, `sync` and `read
 fences above). Mutations, each red: the prefix check (real), the armed check, the pending check,
 the exists pre-check, the shape check.
 **Status.** landed (this commit).
+
+## CLIENT-24 `nd --stdio`: a hosted resident's commands through nd-supervise, a surface it cannot widen (2026-10-17, CLIENT-3; HOSTING-20, ROOT rulings, PROTOCOL-40)
+
+**Decision.** `nd --stdio WORKSPACE FOLLOW_SOCK HOST_SOCK` is nd-supervise's child serving one
+resident over the mux child wire: each request `follow_op::COMMAND ‖ layout::Command{argv}` is one
+nd command, each reply `status::OK ‖ layout::CommandReply{exit, stdout, stderr}` (PROTOCOL-40). The
+places are nd's argv at start (the sandbox clears the environment); the peer sends argv words only.
+The surface is the MODE's property, never the peer's:
+(a) argv[0] must be in `generated::STDIO_VERBS` (Lean's `Verb.onStdio`, a total match: every World
+verb but init, rotate, adopt; `Command.mem_stdioWords_iff`), else `refused notOnSurface VERB`
+before follow sees anything: flags (`--keys`, `--init`), custody words, an `ND_WORKSPACE=…` word;
+(b) a request that is not `COMMAND ‖ Command` is `refused undecodable`;
+(c) the custody it opens (`stdio::custody`) refuses `precommit` and `signNext` as `noRotation`
+(CustodyRefusal 9), a second fence behind (a);
+(d) nd-supervise `--peer UID` (with `--group GID`) admits only a connection whose `SO_PEERCRED`
+is (UID, GID); any other is closed `peerRefused` before a frame is read or a connection id is spent.
+It runs CONFINED (HOSTING-7, ROOT): nd-supervise `--write WORKSPACE --exec ND --connect HOST_SOCK
+--connect FOLLOW_SOCK` (connectMax = 2); nothing else is visible, provider keys included. nd-supervise
+gains `--connect` for that. **Corrected premise (ROOT accepted):** a resident cannot make nd read a
+file: `install TEXT` takes the package text inline, and nothing in nd or follow resolves an argv
+word against the file system (checked on main). The class "no path-valued argument" is true by
+construction; the canary plant keeps it so. The socket (HOSTING-7): `/run/nd-member/<id>/nd.sock`,
+0660 in a setgid 02710 nd:nd-hosted directory, `--group nd-hosted --peer <nd-hosted uid>`.
+**Alternatives.** An unconfined trusted child (wider than needed); an env switch for the mode (a
+dropped variable would widen it); a Rust verb list (a twin of Lean's; a new verb would be on it by
+default).
+**Critique.** Requests are served in order, one at a time (one resident, one socket); a slow command
+delays the next. nd's own failures inside a request answer exit CLIENT with `nd: …`, as nd does.
+nd-supervise's `bind` and the stdio argv now live in the library (the two binaries' ceilings hold).
+Found on the way: a stale `host` exe answered `badResult` to the new custody refusal tag, until
+rebuilt; the client's Lean-driving tests are now gates/runs.tsv rows so the judge rebuilds first.
+**Plants.** client/tests/stdio.rs (through the real Host, nd --stdio confined under nd-supervise):
+a read and a granted write served; seven off-surface argvs refused `notOnSurface`; another op and
+non-Command bytes `undecodable`; a canary file named as `install`'s text never read; with the
+surface widened in process to `rotate`, custody refuses `noRotation` and mints nothing.
+client/tests/supervise.rs: `--peer` own uid served, another uid closed `peerRefused`, `--peer`
+without `--group` refused. client/tests/custody.rs: a stdio custody signs, never precommits or
+rotates. Mutations, each red: the surface check, the op check, the peer check, the custody guards,
+`--connect` mapped to read, the stdio custody opened without `refusing_rotation`.
+**Status.** landed (this commit).
