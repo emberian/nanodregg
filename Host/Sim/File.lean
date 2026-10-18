@@ -469,6 +469,20 @@ def emptyPlants (root : System.FilePath) (key : Digest) (keys : Keys) (failures 
     | .ok _ => "opened"
   check s!"{p}: the follower and writer opens refuse record 0 `emptyRecord` and the file is unchanged ({shown o}, {shown w}, seg.log {before} -> {after})"
     (isEmpty o && isEmpty w && before == after) failures
+  -- the pager's side (HOST-54): a page walks records BEFORE the base too, which no open folds, so
+  -- `Page.walk` refuses the verifying frame of no steps `corrupt` at its offset by itself; CONTROL:
+  -- the same frame holding one step walks
+  let walkAt (r : ByteArray) : String :=
+    let buf := seg ++ Log.frame keys.segment prev r
+    match Id.run (Page.walk env dc keys.segment cadence.recordBytesMax 1000
+        (fun off len => pure (buf.extract off (off + len))) buf.size 0 1 seg.size 0
+        { steps := 0, chain := ByteArray.empty }) with
+    | .error (.corrupt off) => s!"corrupt {off}"
+    | .error _ => "refused"
+    | .ok _ => "walked"
+  let rec1 := (Record.codec dc).bytes [(.turn (mkTurn 77777 0 1024 [77777]), 0)]
+  check s!"{p}-page: Page.walk refuses the frame of no steps `corrupt {seg.size}` ({walkAt rec0}); control: one step walks ({walkAt rec1})"
+    (walkAt rec0 == s!"corrupt {seg.size}" && walkAt rec1 == "walked") failures
   -- the writer's side: the one append path writes nothing for an empty batch
   for (tag, staged) in [("", (#[] : Array (Step Nat × Nat))),
       ("-control", #[(.turn (mkTurn 4242 0 1024 [4242]), 0)])] do

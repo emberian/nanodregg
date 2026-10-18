@@ -199,6 +199,7 @@ theorem walk_events_le {D : Type} [Ord D] [DecidableEq D] {E : Kernel.Env D} {dc
       · cases h
       · split at h
         · cases h
+        · cases h
         · exact ih _ _ _ _ (walkTurnsAt_events_le E budget start c acc.steps _ acc hacc) h
 
 /-- **Every page `build` returns holds at most `recordTurnsMax` events** (HOST-11 L41): a follower

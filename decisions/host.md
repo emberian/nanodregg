@@ -2317,7 +2317,7 @@ returns `Option`/`Except` over the SAME bound its decode enforces, and a theorem
 
   So a live follower at step 0 has appended nothing since its open. The sequencing of those facts inside the IO loop is read off, not proved (law 6's usual IO edge).
 - Adopt itself (PROTOCOL's `notAtGenesis` and Follow's seal of `w'` with an empty index) is read off too, not run against a Store at step 0 with a record. With the reader refusal no such Store opens.
-- Two other decoders of a record do not go through `stepTurns`: `Page.walk` (a page) and `Check.turnsOf` (`host check`). An empty record would walk there as zero events. That is unreachable today: open refuses such a Store, and both run only on an opened one. Still, it is a second reader whose acceptance differs. Named.
+- Two other decoders of a record do not go through `stepTurns`: `Page.walk` (a page) and `Check.turnsOf` (`host check`). An empty record would walk there as zero events. That is unreachable today: open refuses such a Store, and both run only on an opened one. (Corrected by HOST-54: both also read records BEFORE the base, which no open folds, so it was reachable; both now refuse it.) Still, it is a second reader whose acceptance differs. Named.
 - These are theorems of the pure `openWith` over `segReader`, like every open theorem here. The IO `openAt` is the same generic code instantiated over files.
 
 **Law-6 read (read-only reader): LAND.** No vacuity and no collapse: the open is the one Cli uses (`Cadence.deployed`, `Deployed.foldStep`), the premise is met at genesis, and `encode_eq_some`'s restatement only strengthens its `.mp` uses. Fixed: two docstrings (`encode_eq_some`, `Fault.empty`). Its WEAKs are in the critique above: the open-versus-live-World edge, the base-count gap (cv 01a14f2a-8c82), the second decoders, and pure versus IO.
@@ -2431,3 +2431,34 @@ No theorem changed. Both are plants over deployed code. The vacuity question is 
 - Fixed: three docstrings (Proofs/Deployed's "`entriesSeq_read` has no premise", and Index's header ×2).
 
 **Meta-critique.** HOST-49 named this gap as "follows by an induction no theorem states". The cheaper move was a one-conjunct check that turns the induction into a local fact, and the check also covers a Store this binary did not write. The pattern: when a theorem needs a history argument, look for a check at the read that makes it local.
+
+## HOST-54 · the page walker and `host check` refuse a record of no steps, as the open does (2026-10-19, HOST-14; HOST-49's named second readers)
+
+**The defect.** HOST-49 made the open's reader (`Record.stepTurns`) refuse a record that decodes to no steps (`empty`). Two other decoders of a record did not:
+- `Page.walk` (a `log` page);
+- `Check.turnsOf` (`host check`'s use count).
+
+HOST-49 called that unreachable, because open refuses such a Store and both run only on an opened one. That was wrong. Both read records BEFORE the base, which no open folds. So an empty record in a frame that verifies under the Store key, sitting before the base, passed the open. A page then walked it as zero events, and `check` read it as zero Turns. Two readers accepted what the third refused.
+
+**Decision.** Each gains the `.ok []` arm `stepTurns` has:
+- `walk` refuses `corrupt off`;
+- `turnsOf` refuses `.error i` (`corrupt use-record i`).
+
+They keep the faults their callers already name. They do not share a decoder function with `stepTurns`. Changing `stepTurns`' body would move HOSTING's `stepTurns_fold` proof for no new refusal. If a fourth record decoder appears, that is the trigger to factor out one `Record.steps?`.
+
+**Theorems.**
+- `Check.turnsOf_empty`: the codec's own bytes of `[]` are refused at their position. Its statement is false without the arm.
+- `Page.walk_events_le` gains the one case.
+
+**Plant.** host-file-sim `plant-empty-record-page`. The real `Page.walk` is run over a frame that verifies under the Store key, holding the record of no steps, and refuses it `corrupt 44`. Its control is the same frame holding one step, which walks. Seeds 1–3: ALL PASS. RED with the walk arm removed: it read "walked".
+
+**Flag day.** None in bytes. What refuses now: a page or `host check` over a Store holding an empty record before its base. No writer writes one: `encode` refuses it and `append` skips it (HOST-49).
+
+**Critique.**
+- `turnsOf`'s tooth is a theorem, not a run over a real Store. `host check` over a hand-built Store holding an empty record before its base is not planted. The run plant covers the pager.
+- The two arms copy one line of `stepTurns`. That is three places stating "a record has at least one step", agreeing today.
+
+**Law-6 read (second agent, read-only): LAND-WITH-FIXES.** `turnsOf_empty` is not vacuous: its input is concrete, and without the arm it is `.ok []`. The plant goes through the real `walk`, and its control takes the same path. No other record decoder exists in Host, Hosting, Ops, Protocol, Ledger, launcher or client, and nothing in Rust decodes a Store record. Fixed: HOST-49's "unreachable" sentence now points here, and Check.lean's header names the empty arm.
+
+**Meta-critique.** HOST-49's "unreachable" rested on "every reader runs only on an opened Store". It forgot that an open validates the tail, not the history. A reader of history needs its own refusals, whatever the open checked.
+

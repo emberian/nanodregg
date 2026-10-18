@@ -12,7 +12,8 @@ made by one member and used by another (`Protocol.Use.shared`) over EVERY call t
 committed: the open does not fold the history before the base, so the calls come from the records
 (`Log.recover` of the segment to `seg_bytes`, each record by `Record.codec`, each admitted Turn's
 `event`, which is the call's bytes, by `X.decodeCall`, in log order), and the World `Use.shared` reads
-for makers is the opened one. A record or event that does not decode is refused `corrupt` with the
+for makers is the opened one. A record or event that does not decode, or a record that holds no step
+(HOST-54), is refused `corrupt` with the
 name `corrupt use-record K` / `corrupt use-event K` (K counts the record frames after
 the origin frame / the Turns, from 0), never skipped; that is unreachable for a Store this Host wrote (it wrote each record by the
 same codec, and admission decoded each call). When a checkpoint drops history (KERNEL-44 Part 2),
@@ -72,12 +73,15 @@ def statusLine (o : Opening (World D)) (use : Nat) (anchor : String) : String :=
   s!"STATUS height={o.opened.world.height} steps={o.opened.world.steps} chain={o.opened.world.chain.toHex} base_offset={o.sealed.offset} base_steps={o.sealed.steps} seg_bytes={o.pos.offset} records={o.opened.records} torn={o.opened.torn} use={use} anchor={anchor}"
 
 /-- The Turns of a segment's records, in log order; `.error K` names the first record (counted
-from `i`) that does not decode. -/
+from `i`) that does not decode, or that holds no step (HOST-54: refused as the open's
+`Record.stepTurns` refuses it `empty`; `check` reads the records BEFORE the base too, which no open
+folds). -/
 def turnsOf : Nat → List ByteArray → Except Nat (List (Turn D))
   | _, [] => .ok []
   | i, r :: rs =>
     match (Record.codec Codec.Deployed.digestCodec).decode r with
     | .error _ => .error i
+    | .ok [] => .error i
     | .ok ps => (Step.turns (ps.map Prod.fst) ++ ·) <$> turnsOf (i + 1) rs
 
 /-- Each Turn's call (its `event` is the call's bytes); `.error K` names the first Turn (counted from

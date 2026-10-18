@@ -153,7 +153,9 @@ def frameOf (s : Log.Sealer) (recordMax : Nat) (read : Nat → Nat → m ByteArr
 
 /-- The frames from `off` to `endOff` (the durable end), at most `fuel` of them, walked into
 `acc` with the chain `c` and step count `acc.steps` before the frame at `off`: each frame verified
-(`frameOf`) and decoded, else `corrupt off`. Stops when the page is full. -/
+(`frameOf`) and decoded to at least one step, else `corrupt off` (a record of no steps is refused as
+the open's `Record.stepTurns` refuses it `empty`, HOST-49/HOST-54: a page walks records BEFORE the
+base too, which no open folds). Stops when the page is full. -/
 def walk (E : Env D) (dc : Stream D) (s : Log.Sealer) (recordMax budget : Nat) (read : Nat → Nat → m ByteArray)
     (endOff start : Nat) : Nat → Nat → D → Acc → m (Except Fault Acc)
   | 0, _, _, acc => return .ok acc
@@ -164,6 +166,7 @@ def walk (E : Env D) (dc : Stream D) (s : Log.Sealer) (recordMax budget : Nat) (
     | some r =>
       match (Record.codec dc).decode r with
       | .error _ => return .error (.corrupt off)
+      | .ok [] => return .error (.corrupt off)
       | .ok ts =>
         let (a, c', _) := walkTurnsAt E budget start c acc.steps ts acc
         walk E dc s recordMax budget read endOff start fuel (off + frameSize r) c' a

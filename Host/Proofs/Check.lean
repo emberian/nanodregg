@@ -2,6 +2,8 @@
 # Host.Proofs.Check — `host check --anchor` passes exactly when the Store reached the anchor
 -/
 import Host.Check
+import Codec.Proofs.World
+import Codec.Proofs.Deployed
 
 namespace Nanodregg.Host.Check
 
@@ -32,5 +34,14 @@ theorem Anchor.verdict_fatal (a : Anchor) (now : Nat) (ch : ByteArray) (s : Stat
   · split at h
     · cases h
     · cases h; rfl
+
+/-- **The tooth of `turnsOf`'s empty arm** (HOST-54): the record of no steps, the codec's own bytes
+of `[]`, is refused at its position, never read as a record of zero Turns. The open refuses it
+`empty` (`Record.step_empty`); `check` reads the records before the base too, which no open folds. -/
+theorem turnsOf_empty (i : Nat) (rs : List ByteArray) :
+    turnsOf i ((Record.codec Codec.Deployed.digestCodec).bytes [] :: rs) = .error i := by
+  unfold turnsOf Record.codec
+  rw [(Codec.Kernel.batch_lawfulOn Codec.Deployed.digestCodec_lawful.on recordTurnsMax (by decide)).decode_bytes
+    ⟨by simp, by simp⟩]
 
 end Nanodregg.Host.Check
