@@ -2194,3 +2194,43 @@ returns `Option`/`Except` over the SAME bound its decode enforces, and a theorem
 
 **Meta-critique.** HOST-43's deployed theorem shipped with two named gaps and a cv; closing them took one lane and found a fourth instance of the writer/reader bound class. Named gaps are cheap to close when the name is precise.
 
+
+## HOST-47 · the record bound is DERIVED, not picked: `recordBytesMax` = 16,779,332 (was 32 MiB), and the torn-tail window halves with it (2026-10-19, HOST-13; HOST-41's critique, HOST-18's "nobody has questioned the 32 MiB")
+
+**The defect.** `Cadence.deployed.recordBytesMax := 1 <<< 25` was a number with a comment ("64 turns of at most `weightMax` each, with room"), not a derivation. It was about twice the largest record the writer can produce. The bound is the torn-tail window (`Log.badTail`: up to `frameMax recordBytesMax` bytes of non-verifying tail are read as the one unsynced frame and TRUNCATED by the writer), `Tail.next`'s one read, and `tailMax`'s frame term. So every byte of slack was a byte of acknowledged-looking data the writer may cut without refusing, and a byte the open may read.
+
+**Decision.**
+- `Host/Bounds.lean` derives the bound from the bounds that make a record. A record is CODEC's `batch recordTurnsMax digestCodec`: a `u32` count, then at most `recordTurnsMax` (64) pairs. Each pair is a step plus the 32-byte roots digest (`digestBytes`). A step is CODEC's choice byte plus one of two things:
+  - a Turn, whose bytes ARE its log weight (`turn_size_logWeight`), ≤ its weight ≤ `weightMax` once admitted (`admit_weight`);
+  - a recorded refusal (`refusedBytesMax` = two digests, three u64s, a u32 length and at most `callMax` bytes, which `checkRefusedBounds` enforces).
+  So `stepBytesMax = 1 + max weightMax refusedBytesMax` and `recordBytesDerived = 4 + 64·(stepBytesMax + 32)` = **16,779,332**, and `Cadence.deployed.recordBytesMax := recordBytesDerived`.
+- Theorems (`Host.Proofs.Deployed`; `Record.runRooted_of_rooted` in `Host.Proofs.Base`):
+  - `step_size_le`: every step `World.step` takes is ≤ `stepBytesMax` on the wire.
+  - `runRooted_size_le`: every pair of a rooted run is ≤ `stepBytesMax + digestBytes`.
+  - **`recorder_encode_size_le`**: a record the deployed recorder returns, of pairs a rooted run of `World.step` took, is ≤ `c.recordBytesMax`. So `Host.append`'s byte check never fires on admitted work at the deployed instance, and every frame the loop writes passes the reader's `frameAt` length gate at the same number. The writer and the reader share ONE bound, and a theorem ties it to the kernel's (HOST-41's law).
+  - `recordBytesMax_deployed`: the value, pinned.
+  - `openWith_listing_lt`'s numeric step re-pins `tailMax` to the new frame term. Its statement is unchanged and now holds with more room.
+- What refuses, by name, at exactly the derived number (host-file-sim `boundPlants`, both sides, each with an at-the-bound control):
+  - `plant-record-over-bound`: one never-judged refusal whose call makes the record bound+1 bytes is refused `recordTooLarge` by the real `append`, and seg.log is unchanged (44 → 44). The control at exactly the bound is appended as one frame.
+  - `plant-frame-over-bound`: a frame that VERIFIES under the Store key, over a bound+1-byte record, is refused `corrupt` by the writer's open, and seg.log is unchanged. Past the length gate it is more than one frame's worth, so it is never a torn tail. The control at the bound passes the length gate and is refused `record` (undecodable).
+  - Seen RED with the deployed cadence put back to 32 MiB: `2 FAILED` (the over-bound record was appended 44 → 16779413; the over-bound frame read as `record`, not `corrupt`). The plants size from `recordBytesDerived`, not from the cadence field, so they read red if the cadence stops being the derived number.
+
+**Torn window.** `Log.frameMax c.recordBytesMax`: 33,554,468 → 16,779,368 bytes. This halves three things: the most a writer's open may truncate as "the one unsynced frame", `Tail.next`'s single read, and `tailMax`'s frame term. HOST-12's undecidable last-frame case (a corruption inside the last frame looks like a tear) is unchanged in kind and halved in reach.
+
+**Alternatives.**
+- (a) A per-batch byte budget in the loop (stage until the record would pass some smaller number). That changes batching, not the bound: the reader's gate must still admit the largest record the writer CAN write. That is the derived number unless the kernel bounds shrink.
+- (b) Shrink `weightMax`. That is KERNEL's bound, and it prices Turns, not frames. Not Host's to move.
+- (c) Keep 32 MiB as headroom for a future step kind. A future step kind moves `stepBytesMax` through this derivation, and `step_size_le` goes red at the new constructor. Headroom that is not derived is exactly the slack this removes.
+
+**Flag day.** None in bytes: no layout, codec or stamp moves, and no Store re-geneses. A Store holding a frame between 16,779,332 and 32 MiB now refuses `corrupt` (or reads it as torn when it is the last frame). By `recorder_encode_size_le` no deployed writer could have written one. Consumers of `Cadence.deployed.recordBytesMax` move with it: Host's pager and check, PROTOCOL's rows writer (`Protocol/Rows/Writer.lean`, toy digests, records far smaller), and host-file-sim's `wide`.
+
+**Law-6 read (read-only reader): LAND.** No `P → P`, no collapse. The bound in the theorem is the `c.recordBytesMax` that `append` and every reader (`openLog`, the pager, `host check`) use, and the derivation matches the wire byte for byte. If it undercounted, the proof would not close. Fixed: the theorem's premise was a successful `Record.runRooted`, which neither the writer nor the follower states (they state `Kernel.Rooted` / `World.RootedFold`), and only the runRooted → Rooted direction existed. `Record.runRooted_of_rooted` (the converse) now exists, and `recorder_encode_size_le` takes `World.RootedFold` directly. Left, named:
+- the writer plant's record is a toy-codec refusal far over `callMax`. The byte gate does not depend on the codec, so it tests the number, not an admissible record;
+- the bound is not shown tight (below).
+
+**Critique.**
+- `recorder_encode_size_le` takes the rooted run (`World.RootedFold`) as a premise. The writer's is `Machine.staged_rooted` and the follower's is `Protocol.Command.step_persists_admitted`. No single theorem runs from `Host.append`'s call site, inside IO, to the bound, so the byte check stays in `append` as a live refusal (the plant exercises it), not as dead code.
+- The bound is proved SOUND (every record fits), not TIGHT. A Turn reaches its log weight ≈ `weightMax` only with no World growth, e.g. four 64 KiB slot overwrites. That is plausible, but no closed instance shows a 16 MiB record of admitted Turns. If one is far from reachable, the window is still looser than it needs to be. That is a measurement nobody has made, and it is named here.
+- `digestBytes = 32` is a Host constant restating the deployed digest codec's width. `step_size_le` checks it against `digestCodec.size` (`fun _ => rfl`), so a different width breaks the proof, not silently the bound.
+
+**Meta-critique.** HOST-18 wrote "nobody has questioned the 32 MiB" and HOST-41 wrote the exact formula, and it still took two successors to change one line. The number was cheap to fix and expensive to leave, because it was the torn window. The pattern to watch: a bound with a prose justification in its docstring and no theorem. `Cadence.deployed.worldBytesMax` (2^28, "~900 BAR stores") and `sealMinBytes` are still that kind. `worldBytesMax` at least has a refusal on both sides (`worldTooLarge`, the base frame's bound).

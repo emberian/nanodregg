@@ -503,6 +503,15 @@ theorem sum_map_ge {β : Type} (f : β → Nat) (k : Nat) (hf : ∀ x, k ≤ f x
     simp only [List.map_cons, List.sum_cons, List.length_cons, Nat.mul_succ]
     omega
 
+theorem sum_map_le_const {β : Type} {f : β → Nat} {k : Nat} : ∀ {l : List β}, (∀ x ∈ l, f x ≤ k) →
+    (l.map f).sum ≤ l.length * k
+  | [], _ => by simp
+  | x :: l, h => by
+    have := sum_map_le_const (l := l) (fun y hy => h y (List.mem_cons_of_mem x hy))
+    have := h x List.mem_cons_self
+    simp only [List.map_cons, List.sum_cons, List.length_cons, Nat.succ_mul]
+    omega
+
 theorem sum_map_le {β : Type} (f g : β → Nat) (hf : ∀ x, f x ≤ g x) :
     ∀ l : List β, (l.map f).sum ≤ (l.map g).sum
   | [] => by simp
@@ -779,7 +788,7 @@ theorem openWith_listing_lt {keys : Keys} {file I S : ByteArray} {o : Opening (W
   have hl := Record.foldlM_listing hk hf
   have hw := world_size_listing b.world
   have e1 : c.baseRecordMax = 268435568 := rfl
-  have e2 : c.tailMax n = 2 * max 1048576 (n / 4) + (4 + 33554432 + 32) := rfl
+  have e2 : c.tailMax n = 2 * max 1048576 (n / 4) + (4 + 16779332 + 32) := rfl
   have hm : max 1048576 (n / 4) ≤ 1048576 + n / 4 :=
     Nat.max_le.mpr ⟨Nat.le_add_right _ _, Nat.le_add_left _ _⟩
   unfold stampBytes at hbs
@@ -839,6 +848,79 @@ theorem runRooted_fits {root : World D → D} :
         · exact step_fits ha
         · exact runRooted_fits h p hp
       · cases h
+
+/-- **Every step `World.step` takes is at most `stepBytesMax` bytes on the wire** (HOST-47): a Turn
+is its log weight (`turn_size_logWeight`), at most its weight, at most `weightMax` (`admit_weight`);
+a refusal is its fixed fields and a call of at most `callMax` bytes (`checkRefusedBounds_fits`). -/
+theorem step_size_le {w w' : World D} {s : Step D} (h : World.step X.env w s = .ok w') :
+    (Codec.Kernel.step Codec.Deployed.digestCodec).size s ≤ stepBytesMax := by
+  cases s with
+  | turn t =>
+    show 1 + (Codec.Kernel.turn Codec.Deployed.digestCodec).size t ≤ stepBytesMax
+    rw [Codec.Kernel.turn_size_logWeight (fun _ => rfl)]
+    obtain ⟨_, hl, hw⟩ := admit_weight h
+    simp only [stepBytesMax]
+    omega
+  | refusal r =>
+    have hf := Codec.Kernel.checkRefusedBounds_fits r (refuse_facts h).1
+    have he : r.event.size ≤ Codec.Kernel.callMax := hf.2.2.2.2.2
+    show 1 + (Codec.Kernel.refused Codec.Deployed.digestCodec).size r ≤ stepBytesMax
+    have e : ∀ d : Codec.Digest, Codec.Deployed.digestCodec.size d = 32 := fun _ => rfl
+    simp only [Codec.Kernel.refused, Codec.Stream.refine, Codec.Stream.product, Codec.Stream.nat64,
+      Codec.Stream.rawBytes, e]
+    simp only [stepBytesMax, refusedBytesMax, digestBytes]
+    omega
+
+/-- Every pair a rooted run takes is at most `stepBytesMax + digestBytes` bytes (`step_size_le`). -/
+theorem runRooted_size_le {root : World D → D} :
+    ∀ {i : Nat} {w w' : World D} {ps : List (Step D × D)},
+      Record.runRooted (World.step X.env) root i w ps = .ok w' →
+        ∀ p ∈ ps, (Codec.Stream.product (Codec.Kernel.step Codec.Deployed.digestCodec)
+          Codec.Deployed.digestCodec).size p ≤ stepBytesMax + digestBytes
+  | _, _, _, [], _, _, hp => nomatch hp
+  | i, w, w', (t, r) :: rest, h, p, hp => by
+    simp only [Record.runRooted] at h
+    split at h
+    · cases h
+    · rename_i w₁ ha
+      split at h
+      · rcases List.mem_cons.mp hp with rfl | hp
+        · show (Codec.Kernel.step Codec.Deployed.digestCodec).size t + 32 ≤ _
+          have := step_size_le ha
+          simp only [digestBytes]
+          omega
+        · exact runRooted_size_le h p hp
+      · cases h
+
+/-- **Every record the deployed writer or follower appends is within `recordBytesMax`** (HOST-47):
+a record the deployed recorder returns (at most `recordTurnsMax` pairs, `Record.encode_eq_some`) of
+pairs that are a rooted run of `World.step` (`World.RootedFold`: what the writer's
+`Machine.staged_rooted` states at the deployed machine and the follower's
+`Protocol.Command.step_persists_admitted` states of its page) is at most `recordBytesDerived` bytes, the deployed
+`recordBytesMax`. So `Host.append`'s byte check never fires at the deployed instance, and every
+frame the deployed loop writes passes the reader's `frameAt` length gate at the same bound. -/
+theorem recorder_encode_size_le {w₀ w w' : World D} {staged : Array (Step D × D)} {b : ByteArray}
+    (h : recorder.encode w₀ staged = some b)
+    (hr : World.RootedFold X.env w staged.toList w') :
+    b.size ≤ c.recordBytesMax := by
+  obtain ⟨hs, hb⟩ := Record.encode_eq_some.mp h
+  have hl := Codec.Kernel.batch_lawfulOn Codec.Deployed.digestCodec_lawful.on recordTurnsMax (by decide)
+  have e : (Codec.Kernel.batch recordTurnsMax Codec.Deployed.digestCodec).size staged.toList =
+      staged.toList.foldl (fun n x => n + (Codec.Stream.product (Codec.Kernel.step Codec.Deployed.digestCodec)
+        Codec.Deployed.digestCodec).size x) 4 := rfl
+  have hsz : b.size = (Codec.Kernel.batch recordTurnsMax Codec.Deployed.digestCodec).size staged.toList := by
+    rw [hb]; exact (hl.size_eq _).symm
+  rw [hsz, e, foldl_add_eq]
+  have hle := sum_map_le_const (runRooted_size_le (Record.runRooted_of_rooted (i := 0) hr))
+  have hn : staged.toList.length ≤ recordTurnsMax := by simpa using hs
+  have : staged.toList.length * (stepBytesMax + digestBytes) ≤ recordTurnsMax * (stepBytesMax + digestBytes) :=
+    Nat.mul_le_mul_right _ hn
+  show _ ≤ recordBytesDerived
+  simp only [recordBytesDerived]
+  omega
+
+/-- The derived bound's value: 16,779,332 bytes, about half the 32 MiB it replaced. -/
+theorem recordBytesMax_deployed : c.recordBytesMax = 16779332 := by decide
 
 /-- The loop's request bound is one record's steps: with `drain`'s bound (`drainM_conserves`) and
 `Machine.staged_size_le` (at most one staged pair per request), the writer stages at most

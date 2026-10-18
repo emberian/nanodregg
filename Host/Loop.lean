@@ -70,7 +70,8 @@ inductive Exit where
   | sealFailed (fault : SealFault)
   /-- a batch the recorder refuses (more Turns than one record holds, `bytes = none`) or whose
   record is over `Cadence.recordBytesMax` bytes: the batch was not appended and its replies were
-  `uncertain` -/
+  `uncertain`. At the deployed cadence the byte arm never fires on steps `World.step` took
+  (`Host.Deployed.recorder_encode_size_le`, HOST-47); it stays as the refusal of anything else. -/
   | recordTooLarge (turns : Nat) (bytes : Option Nat)
   /-- a fuel restart's reopen refused (the refusal's name) -/
   | reopenFailed (name : String)

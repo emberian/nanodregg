@@ -20,6 +20,9 @@
    tail of seg.log and an orphan of index.log) between the base copy and the later copies, right
    after the copy or after sealing a newer base, opens to the copied base with at least the live
    records; its control, seg.log cut below the live valid end, does not.
+7. plant-record-over-bound / plant-frame-over-bound (HOST-47, `boundPlants`): a record one byte over
+   the derived `recordBytesMax` is refused `recordTooLarge` by the writer's append and `corrupt` by the
+   open; at exactly the bound, appended / past the length gate.
 Prints `FAIL <check>` per failure and `ALL PASS` when none.
 -/
 import Host.Store
@@ -372,6 +375,66 @@ def wideFollowPlant (root : System.FilePath) (key : Digest) (keys : Keys) (failu
   check s!"{q}: the follower Store still opens ({match re with | .ok _ => "opened" | .error e => e.name})"
     (match re with | .ok _ => true | .error _ => false) failures
 
+/-- plant-record-over-bound / plant-frame-over-bound (HOST-47): the deployed `recordBytesMax` is
+DERIVED (`recordBytesDerived`, the largest record of steps `World.step` took,
+`Host.Deployed.recorder_encode_size_le`), half the 32 MiB it replaced, and it bites on both sides at
+exactly that number. Writer: one never-judged refusal whose call makes the record `bound + 1` bytes is
+refused `recordTooLarge` by the real `append` and seg.log is unchanged; its control, `bound` bytes, is
+appended (one frame). Reader: a frame that VERIFIES under the Store key, holding `bound + 1` bytes, is
+refused `corrupt` by the writer's open (past the length gate it is more than one frame's worth, so it
+is never a torn tail) and seg.log is unchanged; its control, `bound` bytes, passes the length gate and is
+refused `record` (undecodable). Both read red at the old 32 MiB bound. -/
+def boundPlants (root : System.FilePath) (key : Digest) (keys : Keys) (failures : IO.Ref Nat) : IO Unit := do
+  -- the DERIVED number (from Kernel's and CODEC's bounds), not the cadence's field: the plant reads
+  -- red if the deployed cadence stops being it
+  let bound := recordBytesDerived
+  -- a record of `n` bytes: count, choice byte, five u64 fields, the call's length, the call, the roots
+  let pair (n : Nat) : Step Nat × Nat :=
+    (.refusal ⟨1, 2, 0, 1, 0, ByteArray.mk (Array.replicate (n - 57) 0)⟩, 0)
+  let p := "plant-record-over-bound"
+  for (tag, n) in [("", bound + 1), ("-control", bound)] do
+    let dir := root / s!"writer{tag}"
+    let _ ← (Host.genesis dir key keys wide world recorder.mark Sim.genesis : IO (Except Fault Unit))
+    let staged := #[pair n]
+    let size := (Record.encode dc staged).map (·.size)
+    check s!"{p}{tag} fires: the record is {size} bytes, want {n} (the derived bound is {bound}, the deployed cadence's {wide.recordBytesMax})" (size == some n) failures
+    let before ← fileSize (segmentPath dir)
+    let res ← do
+      match ← (openWriter dir keys wide world recorder.mark originChain foldStep : IO (Except Fault _)) with
+      | .error e => pure (Except.error s!"open {e.name}")
+      | .ok fwr =>
+        let r := fwr.opening.resident
+        let x ← append recorder keys.segment (fileCheckpoint dir keys wide world recorder.mark originChain fwr.index)
+          wide (fileStore fwr.segment) r r.world staged
+        fwr.segment.sync
+        pure (match x with | .error e => Except.error e.name | .ok _ => Except.ok ())
+    let after ← fileSize (segmentPath dir)
+    let shown := match res with | .ok () => "appended" | .error e => e
+    if tag == "" then
+      check s!"{p}: the append refuses `recordTooLarge` and writes nothing ({shown}, seg.log {before} -> {after})"
+        ((match res with | .error e => e == "recordTooLarge" | .ok () => false) && before == after) failures
+    else
+      check s!"{p}-control: a record of exactly the bound is appended as one frame ({shown}, seg.log {before} -> {after})"
+        ((match res with | .ok () => true | .error _ => false) && after == before + Log.frameMax n) failures
+  let q := "plant-frame-over-bound"
+  for (tag, n, want) in [("", bound + 1, "corrupt"), ("-control", bound, "record")] do
+    let dir := root / s!"reader{tag}"
+    let _ ← (Host.genesis dir key keys wide world recorder.mark Sim.genesis : IO (Except Fault Unit))
+    let seg ← IO.FS.readBinFile (segmentPath dir)
+    -- every frame ends with its tag: the tag the next frame chains from is the segment's last 32 bytes
+    let prev := seg.extract (seg.size - Log.tagBytes) seg.size
+    let fr := Log.frame keys.segment prev (ByteArray.mk (Array.replicate n 255))
+    let f ← File.open (segmentPath dir) .append
+    f.writeAll fr
+    f.sync
+    let before ← fileSize (segmentPath dir)
+    check s!"{q}{tag} fires: the appended frame is {fr.size} bytes over a {n}-byte record" (before == seg.size + Log.frameMax n) failures
+    let opened ← (openWriter dir keys wide world recorder.mark originChain foldStep : IO (Except Fault _))
+    let after ← fileSize (segmentPath dir)
+    let name := match opened with | .ok _ => "opened" | .error e => e.name
+    check s!"{q}{tag}: a verifying frame of a {n}-byte record is refused `{want}` and the file is unchanged ({name}, seg.log {before} -> {after})"
+      (name == want && before == after) failures
+
 def body (seed : Nat) (dirA dirB : System.FilePath) (control : Bool := false) : IO UInt32 := do
   let failures ← IO.mkRef 0
   let frames := (scenario seed 200).map (·.1)
@@ -468,6 +531,7 @@ def body (seed : Nat) (dirA dirB : System.FilePath) (control : Bool := false) : 
   missingPlants (dirB / "missing") key keys failures
   restartPlants (dirB / "restart") key keys seed frames failures
   wideFollowPlant (dirB / "wide") key keys failures
+  boundPlants (dirB / "bound") key keys failures
   if control then check "harness-control: GATES-15's known-red control, an expectation nothing meets (this run must read RED)" false failures
   let n ← failures.get
   IO.println (if n = 0 then "ALL PASS" else s!"{n} FAILED")

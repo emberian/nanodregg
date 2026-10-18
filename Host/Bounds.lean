@@ -16,6 +16,7 @@ HOST-22 (as ruled): an open re-verifies nothing. Writer and follower both reopen
 `World.fold` (O(touched) per Turn), so the byte bound is the bound on open work.
 -/
 import Host.Log
+import Codec.Kernel
 
 namespace Nanodregg.Host
 
@@ -27,6 +28,28 @@ def recordTurnsMax : Nat := 64
 
 /-- The width of the shape stamp at the head of a base record (a digest, `Base.shapeStamp`). -/
 def stampBytes : Nat := 32
+
+/-! ## The largest batch record, derived (HOST-47)
+
+A record is CODEC's `batch recordTurnsMax digestCodec` (`Host.Record.codec`): a `u32` count, then
+at most `recordTurnsMax` pairs of a step and the 32-byte roots digest after it. A step is CODEC's
+choice byte and either a Turn, whose bytes are its log weight (`Codec.Kernel.turn_size_logWeight`),
+at most its weight, at most `weightMax` once admitted (`Kernel.admit_weight`); or a recorded refusal:
+two digests, three `u64`s, and the signed call as `u32` length and at most `callMax` bytes
+(`checkRefusedBounds`). `Host.Deployed.recorder_encode_size_le` proves every record the deployed
+writer or follower encodes from steps `World.step` took is within `recordBytesDerived`. -/
+
+/-- The deployed digest's width on the wire (`Codec.Deployed.digestCodec`). -/
+def digestBytes : Nat := 32
+
+/-- The widest recorded refusal on the wire. -/
+def refusedBytesMax : Nat := 2 * digestBytes + 3 * 8 + 4 + Codec.Kernel.callMax
+
+/-- The widest step on the wire: the choice byte and the wider of a Turn and a refusal. -/
+def stepBytesMax : Nat := 1 + max Kernel.Bounds.weightMax refusedBytesMax
+
+/-- The largest batch record of steps `World.step` took: 16,779,332 bytes (16 MiB + 2116). -/
+def recordBytesDerived : Nat := 4 + recordTurnsMax * (stepBytesMax + digestBytes)
 
 structure Cadence where
   /-- the fewest segment bytes between two seals -/
@@ -57,11 +80,12 @@ def baseRecordMax (c : Cadence) : Nat := c.worldBytesMax + stampBytes + 2 * (8 +
 /-- `host serve`'s numbers. The base: THE BAR's World is ~290 KB (HOST-14), so 256 MiB is ~900 BAR
 stores; at CODEC's measured KMAC (184 MB/s) its seal is ~1.5 s of Task time and its decode at open
 is the dominant term of a cold reopen (measured in decisions/host.md HOST-14). A record: 64 turns
-of at most `Kernel.Bounds.weightMax` weight each, with room for the encoding's length fields. -/
+of steps `World.step` took, `recordBytesDerived` (HOST-47: it was 32 MiB, twice that, and the torn-tail
+window `Log.frameMax recordBytesMax` with it). -/
 def deployed : Cadence where
   sealMinBytes := 1 <<< 20
   worldBytesMax := 1 <<< 28
-  recordBytesMax := 1 <<< 25
+  recordBytesMax := recordBytesDerived
 
 end Cadence
 

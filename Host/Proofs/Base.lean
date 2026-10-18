@@ -516,6 +516,22 @@ theorem Record.runRooted_ok {D F : Type} [Ord D] [DecidableEq D]
           exact ⟨w₁, ha, hr.symm, Record.runRooted_ok h⟩
         · cases h
 
+/-- The converse of `Record.runRooted_ok` (HOST-47): a `Kernel.Rooted` run is one `Record.runRooted`
+accepts, from any index. So a premise stated over `runRooted` is discharged by the writer's
+`Machine.staged_rooted` and the follower's `World.RootedFold` alike. -/
+theorem Record.runRooted_of_rooted {D F : Type} [Ord D] [DecidableEq D]
+    {admit : Kernel.World D → Kernel.Step D → Except F (Kernel.World D)} {root : Kernel.World D → D} :
+    ∀ {i : Nat} {w w' : Kernel.World D} {ps : List (Kernel.Step D × D)},
+      Kernel.Rooted admit root w ps w' → Record.runRooted admit root i w ps = .ok w'
+  | i, w, w', [], h => by
+      simp only [Kernel.Rooted] at h; subst h; rfl
+  | i, w, w', (t, r) :: rest, h => by
+      obtain ⟨w₁, ha, hr, hrest⟩ := h
+      unfold Record.runRooted
+      rw [ha]
+      simp only [← hr, if_true]
+      exact Record.runRooted_of_rooted hrest
+
 /-- **HOST-29: a record that opens is a rooted run of the pairs it decodes to.** -/
 theorem Record.step_rooted {D F : Type} [Ord D] [DecidableEq D] {dc : Codec.Stream D}
     {admit : Kernel.World D → Kernel.Step D → Except F (Kernel.World D)} {root : Kernel.World D → D}
