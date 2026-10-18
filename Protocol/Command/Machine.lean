@@ -120,6 +120,11 @@ inductive Reply
   | signIncoming (message k : ByteArray)
   deriving Inhabited
 
+/-- The continuation a reply carries, if any. -/
+def Reply.cont : Reply → Option ByteArray
+  | .done .. => none
+  | .sign _ k | .host _ _ k | .submit _ k | .precommit k | .signNext _ k | .signIncoming _ k => some k
+
 variable {D : Type} [Ord D] [DecidableEq D]
 
 /-- The refusal's name on the wire (law 7): the constructor, arguments dropped. PROTOCOL's own
@@ -208,6 +213,15 @@ def State.ofBytes (b : ByteArray) : Option State :=
   match stateFrame.decode b with
   | .ok (a, p, c, ()) => some { argv := Text.unlist a, phase := p, acc := Text.unlist c }
   | .error _ => none
+
+/-- The `tried` field of an envelope-phase state (1: `[start, pages, upTo, tried]`, 2: `[start,
+signed, pages, upTo, tried]`), as `step` reads it: bit 0 the one `expired` re-sign, bit 1 the
+incoming key (`expiredBit`, `incomingBit`). -/
+def State.tried (s : State) : Option Nat :=
+  match s.phase, s.acc with
+  | 1, [_, _, _, t] => Text.ofU64 t
+  | 2, [_, _, _, _, t] => Text.ofU64 t
+  | _, _ => none
 
 /-- A step carrying the next state, or `badState` if the state does not fit a frame. -/
 def next (s : State) (f : ByteArray → Reply) : Reply :=

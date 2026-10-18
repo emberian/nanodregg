@@ -154,7 +154,9 @@ inductive CloseReason
   | full
   /-- `nd-attach`: a frame for a connection that already ended -/
   | ended
-  /-- `nd-attach`: the Store's socket does not accept a connection -/
+  /-- nothing behind the socket answers: at `nd-attach`, the Store's socket does not accept a
+  connection; at `nd-supervise`, its child's stdout closed (the child is gone), so every open peer is
+  closed with this name -/
   | unreachable
   /-- the client ended its stream at a frame boundary; named to the CHILD in its hang-up (there is
   no peer left to tell) -/
