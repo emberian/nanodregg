@@ -2060,3 +2060,27 @@ Vacuity read (second agent, statements only, two passes): LAND-WITH-FIXES; fixed
 restatement, bounds docstring, distinguishing teeth (fork; backOnly run from `c`), stepTo_stays; the LOW
 (premises from pkgOf/Load) is cv 01a14edf-6505. No
 existing statement changed; no new premise on an existing theorem. No shipped byte moves.
+
+## LANG-54 Std `quorum` and `windowed` run through the receivers as SURFACE laws (2026-10-18; LANG-16; LANG-12/13's owed journey rows)
+
+**What.** lang-journey rows LQ1–LQ10 and LW1–LW8: two packages written in the surface, each with one
+Std clause as its law (`(law shared (quorum value 2 #a #b))`, `(law rate (windowed value 64 2))`),
+installed, created, invoked by methods and judged by the real receivers. Until now these laws were
+proved (`Lang.Proofs.Std`) and run by `runLaw` on closed instances (StdTeeth) but never judged a
+turn.
+
+- quorum: propose 5; apply with no approvals and with one of two: `shared: no quorum`; A setting B's
+  bit, and A approving twice: `shared: not an approval`; B (through a grant) approves and applies:
+  value 5, approvals reset to 0.
+- windowed: every call is signed with a window inside one epoch of 64 heights; two changes count
+  1, 2; a third: `rate: rate limit 2`; an unchanged write is not counted; a window spanning two
+  epochs: `rate: window spans epochs`; in the next epoch the count restarts at 1.
+- Plants: skip-judge admits LQ5 and LW5.
+
+**Critique.** The methods are deliberately permissive (`approve` adds whatever bit it is given,
+`set` trusts its own epoch arithmetic): the rows test the LAW, and a method that pre-checked would
+hide whether the law bites. A package a person ships would refuse in the method too, by name.
+**Meta-critique.** That makes these demonstration packages, not world/ packages, so they stay inline
+in the journey (like CappedTally's layer), not in `world/`. If a resident needs a shared setting or a
+rate, the Bell's critique (2) is where `windowed` lands for real.
+No theorem moves; no shipped byte moves.
