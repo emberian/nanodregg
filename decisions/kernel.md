@@ -1765,3 +1765,148 @@ actually take.
 - Refuses to load: every old Store base (its stamp names the old shape: `shapeMismatch`). Every Store re-geneses.
 - Also refused: a genesis or carry whose storage plus allowance is ≥ 2^64 (`allowanceTooLarge`), and a base World whose sum is ≥ 2^64 (`kernel/world-budget`).
 - WASTE rows unchanged.
+
+## KERNEL-44 PROPOSED · A refusal is a recorded system interaction, bounded per member per window; replay is bounded by a checkpoint rule (KERNEL-13, 2026-10-18; Ember's call (8) of 10-17: "they WERE system interactions", "the amount of replay is too damn high"). DESIGN ONLY until ROOT rules; the HOST half is for HOST-12.
+
+### Part 1 · Refusals
+
+**Today.** A refused frame is answered `refused NAME` and leaves no trace: not in the log, the World, the journal or the chain (`Host.Serve.handle`, every `.error r => refuse (named r.name)`). A lost reply makes a later `lookup` of that call answer `absent`. A resubmit is derived AGAIN against a moved World. Because the call's pins fix its view and a pin can return to an old value (a write A→B→A), the same call can later be ADMITTED, after the client's attempt store has ended it REFUSED. That is a false final verdict. The refusal is a system interaction the system forgot, and the forgetting is a correctness gap, not just a missing feature.
+
+**Two classes, split at the line the kernel already draws** (`receive` = `wrongWorld` → `checkSignature` → `keyRule` → derive → `World.admit`):
+- **(U) unauthenticated.** The frame is refused before a live member's key verified the call: `undecodableCall`, `unknownOp`, `wrongWorld`, `badSignature`, `unknownKey`, and `unpinned` at the key read. No member can be charged, so it is answered and NOT stored. Its cost to the host is a decode plus at most one signature verify, the same as today, and nothing persists. A client can recompute every (U) verdict itself (decode, the World digest, the signature and the key it signed with), so a host attestation would add nothing a client cannot check.
+- **(A) authenticated.** Every refusal after `keyRule` passed: a derive refusal (`noGrant`, `grantRight`, `lawDenied`, `callTooDeep`, …) or an admit refusal (`stale`, `outsideWindow`, `overBound`, `notConserved`, `spent`, …). The member's current key signed exactly this call, so the refusal is charged to that member and RECORDED.
+
+**The record (the kernel's).**
+- A third instance of the one trie type: `World.refusals : Trie.T D D RefusalLeaf D`, under `refusalSpec E`.
+  - Leaf `refused h code` sits at key `txId`: refused at height `h`, `code` its refusal's index.
+  - Leaf `count win n` sits at key `H(domRefusalCount ‖ member ‖ u64 win)`.
+  - Both key kinds are digests from disjoint hash domains, so no prefix code is needed. The cross-kind collapse that sank KERNEL-41 (a) does not arise, because every reader of this trie already takes its Canon, as journal readers do.
+- `recordRefusal` runs ONLY on (A):
+  - Refused `refusalBudget` (by name) when the member's count for window `win = h / W` has reached `Bounds.refusalsPerWindow` (proposed 16). The call is then answered like (U), unstored.
+  - Otherwise it inserts `refused` and bumps `count`.
+- Pruned with the journal, by the same `retainAt` at multiples of W: `refused h _` is kept while `h + 2W > H` (KERNEL-33's kept rule), and `count win _` while `win = H / W`.
+- Bounded: at most members × refusalsPerWindow × 3 live `refused` leaves. A member cannot exceed its slots; a non-member pays nothing and stores nothing.
+
+**Finality (the semantic change, the point of the record).**
+- `submit` of a txId found `refused h code` answers `refused NAME` WITHOUT re-deriving. This is the twin of `replayed`, and makes a recorded refusal final for that txId within the window.
+- `lookup` answers:
+  - `refused NAME` (status `refused`, payload the name) while the record is kept;
+  - `uncertain forgotten` past `journalForgets`, the PROTOCOL-33 row shape unchanged;
+  - `absent` / `expired` as today for a txId never seen.
+- PROTOCOL-33's rule holds: past the window, nothing is answered `refused` that could have committed. A refused record and an admitted entry for one txId cannot both exist: a txId is admitted at most once (`submit_once`), and a recorded refusal short-circuits every later submit.
+
+**The receipt.** For (A), the receipt is the record's inclusion proof against the head, by the same machinery as the journal (KERNEL-41's `head_journal_read`). No host signing key is needed.
+- A host-SIGNED receipt for every refusal (the brief's sketch) needs a host identity key. That is custody (pause list 1) and → Ember. It buys nothing for (U), which the client recomputes, and nothing for (A), which the chain proves.
+- So the proposal is NO host key. (U) replies stay unsigned and are flagged in the wire doc as recomputable.
+
+**Commitment and replay.**
+- The batch record gains the (A) refusals of the batch, as `(call bytes, code)` in arrival order.
+- A follower re-derives each one: `receive` on the World where it arrived must refuse with the same code. This is an `auditRefusal` step, so a host that invents a refusal is caught exactly as one that invents a turn.
+- A refusal does NOT advance `height`. Windows are in heights, so refusals cannot shorten anyone's window. That is the DoS argument for heights.
+- The chain does advance. The head link gains a refusals root, `chainNext E prev t (cellsRoot′, journalRoot′, refusalRoot′)`, and a refusal step links by its own domain-separated `refusalLink prev callDigest refusalRoot′`.
+
+**DoS argument.**
+- (U) costs the host one decode plus one verify and zero bytes stored, as today.
+- (A) costs a live member one of `refusalsPerWindow` slots per window. A record is ≤ `Bounds.callBytesMax` log bytes plus one trie insert (≈14 hashes, KERNEL-41's journal row).
+- A flooding member burns its own slots and then degrades to (U) treatment. Other members are untouched.
+- WASTE rows, pinned:
+  - `admit hashes-per-refusal`, with a cap; the insert plus the count bump is ≈ 2 × 14;
+  - `log bytes-per-refusal`;
+  - `refusals-kept-per-member-window` ≤ 16;
+  - a plant: a 17th authenticated refusal in one window is `refusalBudget` and is not stored.
+
+**Price, in premises on landed theorems (the KERNEL-41 lesson; counts from grep at f1c5f01).**
+- `World.fold` today folds `List (Turn D)`. With refusal steps it folds `List (Step D)` (`turn t | refusal c code`).
+  - This is the expensive part: ~109 statement lines in 35 files name `World.fold`. Every one changes STATEMENT, though not premise: a fold over steps whose refusal steps are no-ops on cells and journal.
+  - `fold_conserves`, `fold_canon`, `fold_slotted`, `fold_journalOk`, `fold_budget_lt` and `fold_answers` each gain one trivial case: a refusal step touches only `refusals` and `chain`.
+  - `fold_reaches_host` / `fold_head_binds` / `chain_binds` gain the refusal-link case and a Collision disjunct for `refusalLink` vs `chainNext`. The domains are disjoint, so this is a domain-disjointness lemma, no new hash premise.
+- `submit_once`, `derived_once`, `admit_spacing`: unchanged in statement. A refused record is not an admission.
+  - NEW `submit_refused_final`: a recorded `refused` answers every resubmit of that txId within the window.
+  - Its tooth is the A→B→A arm: the same stale call, resubmitted after the pin returns, is answered `refused stale`, never admitted.
+- `lookup_expired_final` / `absent_final` (HOST): their "not journaled" premise becomes "neither journaled nor refused-recorded". One more conjunct, discharged by the same reached-World facts.
+- Codec: a `kernel/refusal-order` trie listing, a `refusals` field in the World and carried wires (tags move: a re-genesis), and the batch record's refusal list.
+- No cell reader gains a premise. `RefusalsCanon` falls only on refusal readers, as `JournalCanon` does.
+- Alternative (A′), cheaper and refused here: a HOST-local `refusals.log` (MAC'd, pruned by window), consulted by lookup/submit, outside the World and the chain.
+  - It costs no kernel theorem, gives the same finality on the writer, and survives a restart.
+  - But it is unprovable to a phone or a follower, a host can forge or drop it undetected, and a backup without it silently loses finality.
+  - It is the containment pattern CLAUDE.md names: the right shape is (A), with its price stated.
+
+**Carry.** A carry carries NOTHING of `refusals`.
+- Finality of a refusal is a window-scoped promise, the window is the World's, and a carry starts a new World under a new origin.
+- A call refused in the old World is `wrongWorld` in the new one (KERNEL-24) anyway, so the record could never be consulted there.
+- Carrying it would add a third trie to the carried codec for zero answers. `carry_replayed` (journaled calls answered) stays: an admitted call's receipt IS consulted across the carry, because it committed.
+
+### Part 2 · Replay and checkpoints
+
+**What already bounds replay:**
+- The writer's open reads ONE sealed base, its last index entry and at most `tailMax = 2·cadence + frameMax` bytes of tail (`Host.Proofs.Base.openWith_reads`). Restart replay is bounded by the cadence, not by history.
+- A member's follower reopens its own Store the same way.
+- Thin consent (HOST-15, PROTOCOL-14 option A) catches up from a served base plus the tail.
+- The journal is pruned to the window (KERNEL-33).
+
+**What remains unbounded (all O(history), all reading seg.log/index.log, which are never pruned):**
+- `host check` reads the whole segment from the origin frame (`historyClean`) and every index entry (`indexClean`).
+- A backup copies the whole segment and index (`Store.backupOrder`).
+- A NEW follower that audits from genesis pages and folds every record since height 0 (`log` from `start` = 0; `host follow`'s `Receive.audit`).
+- Disk: seg.log + index.log grow by every batch forever.
+Ember's "too damn high" is these four.
+
+**The checkpoint rule.**
+- A base IS a checkpoint. A Store keeps the newest `Bounds.retainBases` (proposed 4) sealed bases' worth of segment.
+- Retention bound: segment bytes before the oldest retained base are DROPPED. The segment becomes a sequence of files `seg.<k>.log`, one per sealed base, each beginning with a `checkpoint` frame. Its record is the base's position triple `(height, chain, base digest)`, MAC'd, chaining from the previous file's last tag.
+- `host check` verifies only what remains: the oldest retained file's checkpoint frame, then forward. It reports `retained_from=H`.
+- A follower or backup older than the retention bound gets `log` refused `checkpointed H` (by name) and must start from a served base ≥ H.
+
+**What the chain still binds.**
+- Every head commits its predecessor (`chainNext`), so the retained suffix's first chain value binds the dropped prefix.
+- Anyone who kept the dropped segment can prove it against the retained chain, and the origin frame's genesis chain still binds the lineage. A copy of the dropped prefix is checkable, not trusted.
+- What is LOST is the ability of a fresh party to re-derive the dropped prefix from THIS Store. A follower starting from a checkpoint trusts that the base's World is the fold of what it no longer sees.
+- That is the real price, named: auditability from genesis becomes "auditability from the oldest retained base, unless someone archived the prefix". (An archive role, the hosted follower keeping everything, recovers it. That is an OPS decision, not a kernel one.)
+
+**Price in landed theorems.**
+- `fold_reaches_host`: unchanged in statement. It is over a fold from `g`, so a follower starting from a checkpoint instantiates `g` := the checkpoint's World and needs `World.Rooted` facts of it. The reached-World theorems (`deployed_*`) then need a NEW "a base World is reached" premise, discharged by the base being sealed from a folded World on THIS writer, plus the MAC. For a received base it is NOT discharged: that is the trust above, stated as a premise (`CheckpointTrusted`).
+- The backup theorems (`openWith_backup`, `openWith_cut`, `openWith_backup_restart`): restated over the file sequence, with the origin frame replaced by the oldest retained checkpoint frame. `historyClean` becomes "clean from the oldest checkpoint".
+- The carry: unchanged. A carry already starts from one World with no history, which is the same move as a checkpoint, made by hand.
+- Refuses by name: `log` before the retained range (`checkpointed H`); `host check` of a Store whose oldest checkpoint frame fails its MAC (`checkpointCorrupt`); open of a Store missing a retained file (`storeMissing`, HOST-35's shape).
+
+**HOST half (for HOST-12, after ROOT rules).** Build `seg.<k>.log` rotation at seal and the retention drop:
+- the drop is a `rename` to `dropped/`, then an unlink only after the next seal is durable;
+- the checkpoint frame, `historyClean` from it, and `log`'s `checkpointed` refusal;
+- the refusal record in the batch, and the refusal steps in the open's fold;
+- lookup/submit consulting `refusals`.
+
+**Critique.**
+- (A) makes the World carry a third trie and every head commit a third root, for a feature whose only reader is lookup and finality. (A′) is a tenth of the cost. The argument for (A) is that a refusal you cannot prove is not a recorded interaction, and Ember's word was "recorded".
+- `refusalsPerWindow` is a taste number. 16 per member per 1024 heights is generous for honest clients and makes a flood cost 16 records per member per window.
+- Making refusals final per txId changes what a client may do after `refused stale`. It must re-sign (a new txId), which it already must, because the old pins are wrong.
+- The checkpoint rule changes "a follower can audit from genesis" from a property of every Store into a property of an archive. That is a weakening of what a backup proves, and it is pause item 2 (weakens a check). Ember's call (8) asks for it explicitly, but ROOT should rule it as the weakening it is.
+
+**Meta-critique.** Both parts are about forgetting. The system already forgets admitted calls on a schedule (the window) and remembers that it forgot (`forgotten`). Refusals were forgotten with no schedule and no memory of forgetting, and history was never forgotten at all. The design gives the three one rule: remember for the window, then say `forgotten`.
+
+**Flag day (if built).** World, carried and batch codecs move tags; every Store re-geneses; the head link gains a root; the phone's journal proofs gain a sibling for refusals.
+
+## KERNEL-45 PROPOSED · A Turn is the hyperedge for ONE signer; multi-signer and cross-World joint turns are DEFERRED with triggers (KERNEL-13, 2026-10-18; ROOT, from MINI-CONCEPTS-IN-NANO-20261018.md §4 and its closing half-page). Decision only; no code.
+
+**What nano has.** Mini's hyperedge ("a single-cell action is ι = 1, a transfer ι = 2, an N-party joint turn ι = N") survives in nano for one signer:
+- A Turn names many cells (`touches`, each pinned by `seen`), plus `creates` and `nullifiers`, all admitted atomically by `World.admit`.
+- `balanced` is LEDGER's `checkValue` (`notConserved`).
+- The invoke call tree (LANG-21/23/33) visits each object once, runs every visited object's laws, and seals ONE Turn, so the tree commits or fails whole.
+
+**What was lost by omission, now decided:**
+1. **A Turn is the hyperedge for one signer.** This is the kernel's turn model, stated: one `Call`, one member, one key, one signature (KERNEL-42's `callMessage`); any number of cells, atomic.
+2. **Multi-signer atomic turns: DEFERRED.**
+   - Trigger: the first row where two members must exchange value in one turn (A's asset for B's, atomically), where escrow plus two turns is not acceptable to that row's owner.
+   - The price when triggered, from the report's §4(4) (theorem names read, counts not measured):
+     - `Call` carries a list of `(member, key, signature)` over one `callMessage`;
+     - `receive` checks each signer, and authority becomes "the signer who owns that cell";
+     - `receive_ok`'s signed clause and `write_authorized` / `invoke_authorized` / `enroll_authorized` gain a signer index;
+     - PROTOCOL-39's disjoint signed shapes gain one;
+     - `stale_refused`, `admit_value` and the frame theorems are untouched (`World.admit` never sees signers);
+     - CLIENT gains co-signature assembly (new protocol);
+     - the call codec and every Store re-genesis.
+   - Today's substitute: `Std.quorum` (sequential, not atomic) and the escrow.
+3. **Joint laws across objects** (Mini's ObjectiveDomain): DEFERRED with the same trigger class: the first row whose invariant spans two objects changed in one turn. Price: a separate judge (as LANG-44's row guards are), so the 85 law theorems in Lang/Proofs/Receiver.lean keep their statements.
+4. **Cross-World joint turns: DEFERRED behind "a second writer for one World".** KERNEL-24's `wrongWorld`, the FIRST check, stands: a call names one World. A joint turn across Worlds is agreement machinery, and nano has one writer per Store by charter.
+
+**Critique.** A deferral with a trigger is only as good as the trigger's detector. Nothing in the gates notices "two members needed one turn". The detector is the row author choosing escrow, so every escrow row's decision entry should say whether it would have preferred one turn.
+**Meta-critique.** The omission happened because nano was rebuilt from a charter of laws, and no law spoke about signers per turn. A rebuild inherits the old system's decisions only where someone re-decides them.
