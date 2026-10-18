@@ -1795,3 +1795,68 @@ grain-launch unit (ExecStart, RestartPreventExitStatus 69) and EXITS.md are re-r
   - the live harness keybroker ends `pinsMissing` (146) until deploy/live/broker.sh installs `$R/etc/pins` (OPS-5's, after this hash).
 - `gates/codec-vectors.tsv` does NOT move: no codec vector covers the broker's tagged sets (checked: `codec-vectors --check` ok).
 - Nothing persisted changes.
+
+## HOSTING-27 The real resident: a Lean executable that answers a bell, THE BAR's hosted Hermes (HOSTING-10, 2026-10-19; ROOT rulings 10-19)
+
+**What it is.** `resident` (`lean_exe`, `Hosting/Resident/*.lean`, root `Hosting.Resident.Main` holding only `main`) is THE BAR's "hosted Hermes": the process that answers a person in the World with a model's words. A resident grain runs it as `pkg/resident`, confined by grain-launch like any grain:
+- it reads its package and its volume;
+- it connects to its own broker socket and its own member socket;
+- it sees nothing else.
+
+It serves ONE bell (`world/resident/Bell`, LANG-52) named in its config. When a ring is pending, it asks keybroker once, with the ring's text as the one user message, and answers the bell with the reply text Lean read out of the provider's JSON (HOSTING-29). The founder rings and reads; the resident answers.
+
+**What stands between it and a real model.** The operator's acts, not code:
+1. **The provider's leaf SPKI pin in the deployed PINS file** (HOSTING-28). It ships empty, so every real call is refused `pinMismatch` before a request byte. The resident then answers every ring `(refused pinMismatch)`.
+2. **A provider key in keybroker's key file** (Ember's act). Without one, the answer is `(refused keyMissing)`.
+3. An allowance for the resident on the model (the operator's `create --pkg Allowance`).
+
+The real upstream is never in a test.
+
+**Decision (ROOT's rulings, each built).**
+- **A Lean exe, not Rust.** A Rust resident would have needed three twins (law 2): a reader of Lang's printed text, a Lang string printer, and a JSON reader. The resident reads the bell's state line with `Lang.Read.readData` at the type the bell's description prints (PROTOCOL-44 `state TYPE`, PROTOCOL-48 `read OBJ`, `readText_reads`). It writes its answer with `Lang.Print.data` (`answerArg_reads`). It asks with `Broker.Wire.encodeAsk` and reads `decodeAnswer`. The method index of `answer` comes from the description's `method I answer (rec (text bytes))` line, never from the program.
+- **Sockets through `Host.Sock`** (HOST-52, co-signed HOST-14, landed first). The member wire is the client's: `u32le len ‖ Op.command ‖ commandLayout`, answered `u32le len ‖ Status ‖ commandReplyLayout`, every layout `Protocol.Table`'s through the one codec. Every socket failure comes back as a named value. A `timeout` that escapes `Host.readExact` is caught.
+- **No `IO.appPath`** (absent under bwrap). **argv is the plan, field for field.** grain-launch passes EVERY grain its launch frame's paths, joined exactly as the policy joins them (`launcher::plan_argv`):
+  - the program, then for each of read, write, exec, broker and member a count and its paths;
+  - hidden paths are not passed.
+  The resident accepts only its own plan. `Resident.place` reads label, grain and entry from the program path, computes Lean's `plan l g` for that resident grain, takes the three roots off the front, and requires argv to be EXACTLY that plan joined onto them (`accepted_is_plan`). Anything else ends `argvNotPlan` before a file is read: broker and member swapped, a dropped or extra path, another resident's socket, a count that is not `toString`'s spelling. The paths it then uses are the plan's, not argv's (equal by the theorem).
+- **The config is ONE Lang data value**, `pkg/resident.conf`, read by `readData` at the fixed `confTy = (rec (bell digest) (grant digest) (maxTokens nat) (model bytes) (system bytes))`. `grant` is the operator's grant to the resident's member that `invoke … --via` names. A file over 64 KiB, or missing, is `confMissing`. A value not of the type (or an id not 32 bytes) is `confMalformed`.
+- **Exactly one ask per ring.** Each ask costs the meter.
+  - Before a byte of the ask leaves, the resident keeps an intent for the ring, `(unanswered restart)`, in `vol/kept-<bell>`. Each keep is a fresh file, synced (`Host.File`), renamed, directory-synced, and read back equal, or the resident ends `volume`.
+  - A not-sent ask (connect or write failed) forgets the intent. Keybroker made no call.
+  - A spent ask replaces the intent with the answer text: the reply fitted to 1..2000 bytes at a UTF-8 boundary, or a named text (`(refused NAME)`, `(status N)`, `(unanswered WHY)`, `(empty reply)`). That replacement happens before `invoke`.
+  - A kept answer is delivered, never re-asked (`decide_kept`, `decide_ask`), across failed invokes and restarts. The bell taking it forgets it.
+- **A refusal is judged by the bell's STATE, not its name.** The member surface renders every method-check refusal as `refused program`: the bell's own reason (`unrung`, `notResident`) does not cross `nd --stdio` (found by the row, not by reading). So after any refusal the resident reads the bell again.
+  - If the same ring still waits, the bell refused THIS answer. The resident ends `answerRefused NAME` (`program`, `grantRight`, `noGrant`, …) with the text kept, and the controller's restarts re-deliver, are refused again up to `crashLoop`, and never ask again.
+  - Otherwise the ring was answered or replaced (the `unrung` race), and the kept answer is forgotten.
+- **The loop is total**: `lifetimeTicks` = 2^48 ticks of `tickMs` = 1 s, exhaustion ends `lifetime` (law 4). Exits are named, codes 10–16 (`exit_codes_nodup`); a grain's code is the controller's to count, never a verdict.
+
+**Theorems** (`Hosting/Proofs/Resident.lean`): `parse_argv`, `place_args`, `accepted_is_plan`; `decide_idle`, `decide_kept`, `decide_ask`; `utf8Prefix_size`, `fit_size`, `answerText_size`; `answerArg_some`, `answerArg_reads`; `keptText_some`, `kept_reads`; `exit_codes_nodup`. **VACUITY-READER-H10** (a second agent, two passes):
+- Pass 1 found that the theorems covered the pure functions while Run.lean could still ask twice. The holes: the keep result was checked after delivery; a crash between "ask sent" and "answer kept"; a non-durable keep; no read-back; an unproved "unprintable" branch. Each is fixed: the intent record, keep-before-deliver, Host.File sync + rename + dir sync + read-back, answerArg_some/keptText_some, and paths taken from the plan.
+- Pass 2: "no ask can be sent twice for one ring now". answerArg_reads and kept_reads moved WEAK → OK.
+- accepted_is_plan stays WEAK on its `plan` conjunct (a field of `Placed`, so free). Its content is `argv = p.args.argv` and `kind = resident`, and Run's paths come from `p.plan`.
+- decide_* still cover the pure function. The loop's order of effects is argued, not proved (critique below).
+- Pass 2's three small holes are fixed: a refusal whose state cannot be re-read stops after `unreadMax` = 8 in a row; the full stderr line is logged with the name; the identity limit is named in Run's header.
+
+**Row `cargo:launcher:resident_bell`**: the real host, the real `hosting-controller` under grain-launch's unit argv, keybroker on its unit argv, the FAKE provider, and the resident's member served by `nd --stdio`. GREEN in about 12 s (logs/hosting10-bell-nocapture.log).
+- B1: the founder rings `hi` and reads exactly `(record (answer "hello back") (open true) (pending false) (resident #M) (ring "hi") (ringer #OP))`.
+- B2: a second ring gets its own answer. The provider has received exactly 2 requests, and still 2 after five idle ticks. The key went upstream on both (control) and is in no file of the resident's volume.
+- unrung: the resident's member answers a bell with nothing pending; it is refused and the state does not move.
+- notResident: the operator answering is refused.
+- The resident exe on a bell whose resident is the operator: one ask, `answerRefused program`; restarted, it answers from the kept text; the provider's count rises by exactly one.
+- The resident exe on a bell whose grant lacks `invoke:0`: one ask, then `answerRefused grantRight`, the same way.
+- Off its fence: the true argv (read from grain-launch's report) passes `place` and reaches the config (`confMissing`, exit 11). Broker and member swapped, and another resident's broker socket, each end `argvNotPlan` (exit 10).
+- **Plant, run once by hand:** grain-launch's `plan_argv` with member before broker. The real launch's resident ends `resident: argvNotPlan not this resident's plan`, and the row is RED at "the resident learns the bell" (logs/hosting10-bell-m3.log).
+
+**Flag day.** grain-launch's children now receive argv: every grain gets its plan's paths. The probe ignores them. Nothing persisted, no frame and no codec changes. New: `lean_exe resident`, the row, `world/resident/Bell` used by HOSTING for the first time.
+
+**Critique.**
+- **"Exactly once" is proved for the pure decision, not for the loop.** The loop's ask arm is: keep the intent, ask, keep the answer, deliver. That sequence is argued from Run.lean and tested by the row (the provider's count), not proved. A theorem over `tick` with ask/keep/deliver as effect labels would close it.
+- **A ring is identified by (ringer, text).** Two identical rings in a row cannot be told apart. Kept answers are cleared on delivery, so this matters only when a delivery is unsettled and the same person rings the same text again: they get the earlier answer. A ring counter in the Bell's state (LANG's) would give a true identity.
+- **A misconfigured resident spends one ask before it learns.** The stdio surface has no "who am I" verb, so the resident cannot check `state.resident` against itself before asking. On `notResident` / `noGrant` it ends, and kept text stops every further ask. One ask per misconfiguration is the price, stated rather than hidden. A member-id verb (PROTOCOL's) would remove it.
+- **A refusal judged by state can misjudge one case.** An identical new ring (same ringer, same text) arriving between an `unrung` refusal and the re-read looks like the old ring still waiting, so the resident ends `answerRefused` wrongly. A restart then answers it from the kept text. No ask is repeated. The ring identity limit is the root cause, again.
+- **The member surface drops a method's refusal reason** (`refused program`). PROTOCOL-15 was told. When `refused program REASON` crosses it, `deliver` can name the refusal, and still judge by state.
+- **The shape is read once per process.** A bell whose package changes under a running resident is met by `answerRefused` or `bellShape`, not followed.
+- **The 2000-byte bound is a copy.** The description shows `answer`'s type (`bytes`), not its bound (`(bytes 1 2000)` is a check in the method). `textMax` is the one copy here, and a bell that bounds tighter refuses by name, which ends the resident without a second ask.
+- **It polls**, one `read` per second through the member's follower. THE BAR v2 (PERF-2) measures that; a follow-socket notification is the alternative and is not built.
+
+**Meta-critique.** The first draft exited on a refusal with nothing kept. Its exit was clean, its log line named the refusal, and the controller restarted it into a second, third and fourth ask for one ring. The row's provider count is what showed the shape was wrong, not any reading of the code. The second draft kept the answer after the ask, and the vacuity reader found the crash window between "ask sent" and "answer kept". The intent record closes that window at the cost of one extra durable write per ring. The lesson is the one HOST-14 gave about SIGPIPE: the property ("never twice") lives in the order of effects, which is exactly where neither a type nor the pure theorems look.

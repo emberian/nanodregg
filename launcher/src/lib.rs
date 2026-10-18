@@ -15,7 +15,7 @@ pub mod generated;
 #[allow(missing_docs)]
 pub mod broker_generated;
 
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 
@@ -147,4 +147,25 @@ pub fn failure_of(e: &ConfineError) -> LaunchFailure {
         ConfineError::SocketInGrant(_) => LaunchFailure::SocketInGrant,
         ConfineError::GrantUnlisted(_) => LaunchFailure::GrantUnlisted,
     }
+}
+
+/// A grain's argv (HOSTING-27): its launch frame's paths joined exactly as [`policy`] joins them, in
+/// `Plan` order: the program, then for each of read, write, exec, broker and member its count and its
+/// paths. Hidden paths are not passed (they name what the grain must not see). The sandbox clears the
+/// environment and a confined grain has no /proc, so argv is how it learns where it is. The resident
+/// (`Hosting.Resident.place`) accepts only its own plan joined onto three roots, so a field passed
+/// out of order here is refused there by name (`argvNotPlan`).
+pub fn plan_argv(r: &Roots<'_>, program: &[u8], p: &PlanPaths<'_>) -> Vec<OsString> {
+    let mut v = vec![under(r.root, program).into_os_string()];
+    for (base, ps) in [
+        (r.root, p.read),
+        (r.root, p.write),
+        (r.root, p.exec),
+        (r.broker, p.broker),
+        (r.member, p.member),
+    ] {
+        v.push(ps.len().to_string().into());
+        v.extend(ps.iter().map(|q| under(base, q).into_os_string()));
+    }
+    v
 }

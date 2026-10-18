@@ -9,7 +9,8 @@
 //! or the launcher ends `rootsOverlap` before it starts anything. A launch naming a path that is not
 //! its own grain's (a program, read, write or exec path outside `worlds/LABEL/grains/<grain>/`, or a
 //! socket of either root other than `<grain>/<name>`) ends the run `foreignPath` (a defect in the
-//! controller: another grain's socket is another grain's identity). Each child gets a PID file
+//! controller: another grain's socket is another grain's identity). Every child's argv is its plan's
+//! paths as joined, field for field (`plan_argv`, HOSTING-27). Each child gets a PID file
 //! `PIDS/<grain>.pid`, removed when the child is reaped. A kill stops the child by its own handle
 //! (the PID in that file). When the controller's pipe closes, every child is killed and reaped,
 //! then the launcher exits with a name on stderr. It decides nothing: a frame it cannot decode, or
@@ -30,7 +31,8 @@ use nanodregg_launcher::generated::{
     FrameError, LAYOUT_HIDDEN, controller_exit, launch_exit, read_frame, write_frame,
 };
 use nanodregg_launcher::{
-    PlanPaths, Roots, failure_of, foreign_path, grain_name_ok, policy, roots_disjoint, under,
+    PlanPaths, Roots, failure_of, foreign_path, grain_name_ok, plan_argv, policy, roots_disjoint,
+    under,
 };
 use nanodregg_sandbox::{Policy, command};
 
@@ -187,7 +189,13 @@ impl Launcher {
         })
     }
 
-    fn launch(&mut self, grain: Vec<u8>, program: &[u8], policy: &Policy) -> Result<(), End> {
+    fn launch(
+        &mut self,
+        grain: Vec<u8>,
+        program: &[u8],
+        policy: &Policy,
+        argv: &[OsString],
+    ) -> Result<(), End> {
         if !grain_name_ok(&grain) {
             return Err(End::BadGrain);
         }
@@ -210,7 +218,8 @@ impl Launcher {
                 c.display()
             );
         }
-        let mut cmd = match command(policy, program.as_os_str(), &[]) {
+        let argv: Vec<&std::ffi::OsStr> = argv.iter().map(OsString::as_os_str).collect();
+        let mut cmd = match command(policy, program.as_os_str(), &argv) {
             Ok(c) => c,
             Err(e) => return self.failed(grain, failure_of(&e)),
         };
@@ -307,7 +316,8 @@ impl Launcher {
                     member: &self.member,
                 };
                 let p = policy(&roots, &paths);
-                self.launch(grain, &program, &p)
+                let argv = plan_argv(&roots, &program, &paths);
+                self.launch(grain, &program, &p, &argv)
             }
             Action::Kill { grain } => {
                 self.kill(&grain);

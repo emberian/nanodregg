@@ -69,6 +69,8 @@ pub fn dir(name: &str) -> Scratch {
         "pins" => 'i',
         // resident.rs's own `Short`s are r, m, f, q, p
         "res" => 'k',
+        // resident_bell.rs's own `Short`s are b, n, e
+        "bel" => 'l',
         other => panic!("plant: dir({other}) has no socket-directory letter"),
     };
     let socks = short_dir(&letter.to_string());

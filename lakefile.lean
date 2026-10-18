@@ -61,6 +61,11 @@ package nanodregg where
 @[default_target] lean_exe «hosting-broker» where
   root := `Hosting.BrokerMain
 
+-- THE BAR's hosted Hermes (HOSTING-27): a resident grain's program; answers its bell through its
+-- member socket with what keybroker answers on its broker socket.
+@[default_target] lean_exe «resident» where
+  root := `Hosting.Resident.Main
+
 
 -- The Rust copy of the protocol table (client/src/generated.rs). Imports Protocol; nothing imports it.
 @[default_target] lean_lib Emit where
