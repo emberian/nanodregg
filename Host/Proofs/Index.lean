@@ -14,10 +14,14 @@
 * `seal_at_end` / `seal_indexMoved` — a seal appends exactly at the end of the entries the newest
   base counts, or refuses `indexMoved`;
 * `entriesSeq_read` — the `index.log` successive seals write from genesis reads back, every entry
-  at its position, and the one check open makes passes on it (no Store this Host writes is refused);
-* `indexNamed_none` / `indexNamed_unread` — what the one open check means, and its tooth;
+  at its position, and the one check open makes passes on it for a base whose step count is past
+  every entry's (no Store this Host writes is refused: the tie to the sealed World is
+  `Host.sealed_opens`);
+* `indexNamed_none` / `indexNamed_unread` / `indexNamed_notBefore` — what the one open check means, and its
+  teeth (HOST-53: the last entry's record began before the base's World);
 * (`Host.Proofs.Base.openWith_verifies_named`) — an open that succeeds found `index.log` holding every entry the base
-  counts, and its last entry reading back at its position with the tag the base names;
+  counts, and its last entry reading back at its position with the tag the base names, its record
+  begun before the base's World (HOST-53);
 * `indexClean_none` / `indexClean_unread` — `host check` reads EVERY entry: when it passes, each
   reads back at its position and names its record's offset.
 -/
@@ -236,11 +240,12 @@ theorem seal_indexMoved {W : Type} (keys : Keys) (c : Cadence) (world : Codec.St
 /-! ## The one check open makes, and the whole check `host check` makes -/
 
 /-- What `indexNamed` passing means: at count 0 the base names no last tag; otherwise the bytes
-read back as entry `count - 1` at its position, with the tag the base names. -/
-theorem indexNamed_none {keys : Keys} {n : Nat} {last : Codec.Digest} {b : ByteArray}
-    (h : indexNamed keys n last b = none) :
+read back as entry `count - 1` at its position, with the tag the base names, and its record began
+before the base's World (HOST-53). -/
+theorem indexNamed_none {keys : Keys} {n : Nat} {last : Codec.Digest} {before : Nat} {b : ByteArray}
+    (h : indexNamed keys n last before b = none) :
     (n = 0 ∧ last = Codec.Digest.zero) ∨
-      (0 < n ∧ ∃ e, Entry.read keys (n - 1) b = some e ∧ e.tag keys (n - 1) = last) := by
+      (0 < n ∧ ∃ e, Entry.read keys (n - 1) b = some e ∧ e.tag keys (n - 1) = last ∧ e.steps < before) := by
   unfold indexNamed at h
   by_cases hn : n = 0
   · rw [if_pos hn] at h
@@ -251,24 +256,53 @@ theorem indexNamed_none {keys : Keys} {n : Nat} {last : Codec.Digest} {b : ByteA
     split at h
     · cases h
     · rename_i e he
-      by_cases ht : e.tag keys (n - 1) = last
-      · exact Or.inr ⟨by omega, e, he, ht⟩
+      by_cases ht : e.tag keys (n - 1) = last ∧ e.steps < before
+      · exact Or.inr ⟨by omega, e, he, ht.1, ht.2⟩
       · rw [if_neg ht] at h; cases h
+
+/-- The check passes for any later step count once it passes for one: a base further along the
+same log names the same last entry. -/
+theorem indexNamed_mono {keys : Keys} {n : Nat} {last : Codec.Digest} {before before' : Nat}
+    {b : ByteArray} (hle : before ≤ before') (h : indexNamed keys n last before b = none) :
+    indexNamed keys n last before' b = none := by
+  unfold indexNamed at h ⊢
+  by_cases hn : n = 0
+  · rw [if_pos hn] at h ⊢; exact h
+  · rw [if_neg hn] at h ⊢
+    split at h
+    · cases h
+    · rename_i e he
+      by_cases ht : e.tag keys (n - 1) = last ∧ e.steps < before
+      · rw [if_pos ⟨ht.1, by omega⟩]
+      · rw [if_neg ht] at h; cases h
+
+/-- **The step tooth of `indexNamed_none`** (HOST-53): a last entry that reads back with the base's
+`indexLast` but whose record does not begin before the base's World (its step count is not below
+the base's) is refused `indexCorrupt`. At `before = 0` every entry is refused: a base at step 0
+counts none. -/
+theorem indexNamed_notBefore (keys : Keys) {n : Nat} (last : Codec.Digest) {before : Nat} {b : ByteArray}
+    {e : Entry} (hn : 0 < n) (h : Entry.read keys (n - 1) b = some e) (hs : before ≤ e.steps) :
+    indexNamed keys n last before b = some .indexCorrupt := by
+  unfold indexNamed
+  rw [if_neg (by omega), h]
+  simp only
+  rw [if_neg (fun hc => Nat.lt_irrefl _ (Nat.lt_of_lt_of_le hc.2 hs))]
 
 /-- **The binding tooth of `indexNamed_none`**: a last entry that reads back, but whose tag is not
 the `indexLast` the base names (a correctly-tagged entry of an older or another index), is refused
 `indexCorrupt`. -/
-theorem indexNamed_otherLast (keys : Keys) {n : Nat} (last : Codec.Digest) {b : ByteArray} {e : Entry}
-    (hn : 0 < n) (h : Entry.read keys (n - 1) b = some e) (ht : e.tag keys (n - 1) ≠ last) :
-    indexNamed keys n last b = some .indexCorrupt := by
+theorem indexNamed_otherLast (keys : Keys) {n : Nat} (last : Codec.Digest) {before : Nat} {b : ByteArray}
+    {e : Entry} (hn : 0 < n) (h : Entry.read keys (n - 1) b = some e) (ht : e.tag keys (n - 1) ≠ last) :
+    indexNamed keys n last before b = some .indexCorrupt := by
   unfold indexNamed
   rw [if_neg (by omega), h]
-  simp only [ht, if_false]
+  simp only [ht, false_and, if_false]
 
 /-- **The tooth of `indexNamed_none`**: a last entry that does not read back at its position is
 refused `indexCorrupt`. -/
-theorem indexNamed_unread (keys : Keys) {n : Nat} (last : Codec.Digest) {b : ByteArray} (hn : 0 < n)
-    (h : Entry.read keys (n - 1) b = none) : indexNamed keys n last b = some .indexCorrupt := by
+theorem indexNamed_unread (keys : Keys) {n : Nat} (last : Codec.Digest) {before : Nat} {b : ByteArray}
+    (hn : 0 < n) (h : Entry.read keys (n - 1) b = none) :
+    indexNamed keys n last before b = some .indexCorrupt := by
   unfold indexNamed
   rw [if_neg (by omega), h]
 
@@ -388,14 +422,18 @@ theorem lastAt_within (keys : Keys) (n : Nat) : (lastAt keys n).1 + (lastAt keys
     exact Nat.le_refl _
 
 /-- One seal keeps the open check passing: if `pre` holds the `ix.count` entries the old base
-counts and its last entry reads back with the old last tag, then `pre` with this seal's entries
-holds the new count and its last entry reads back with the new last tag. -/
+counts and its last entry reads back with the old last tag before the old base's step count, then
+`pre` with this seal's entries holds the new count and its last entry reads back with the new last
+tag before the new base's step count, given that the new base is no earlier (`hle`) and every
+entry the seal writes began before it (`hall`). -/
 theorem entries_named {keys : Keys} {ix ix' : IndexAt} {es : Array Entry} {p pre : ByteArray}
+    {before before' : Nat}
     (h : Base.entries keys ix es = .ok (p, ix')) (hpre : pre.size = ix.count * entryBytes keys)
-    (hn : indexNamed keys ix.count ix.last
-      (pre.extract (lastAt keys ix.count).1 ((lastAt keys ix.count).1 + (lastAt keys ix.count).2)) = none) :
+    (hn : indexNamed keys ix.count ix.last before
+      (pre.extract (lastAt keys ix.count).1 ((lastAt keys ix.count).1 + (lastAt keys ix.count).2)) = none)
+    (hle : before ≤ before') (hall : ∀ e ∈ es.toList, e.steps < before') :
     (pre ++ p).size = ix'.count * entryBytes keys ∧
-      indexNamed keys ix'.count ix'.last ((pre ++ p).extract (lastAt keys ix'.count).1
+      indexNamed keys ix'.count ix'.last before' ((pre ++ p).extract (lastAt keys ix'.count).1
         ((lastAt keys ix'.count).1 + (lastAt keys ix'.count).2)) = none := by
   obtain ⟨hfit, hc, _, hp, hnil, hlast⟩ := entries_ok h
   have hsz : ∀ e ∈ es.toList, e.chain.size = keys.chainBytes := fun e he => ((Entry.fits_iff _ e).mp (hfit e he)).2.2
@@ -403,7 +441,7 @@ theorem entries_named {keys : Keys} {ix ix' : IndexAt} {es : Array Entry} {p pre
   · obtain rfl := hnil he
     rw [hp, he]
     simp only [Entry.run, ByteArray.append_empty]
-    exact ⟨hpre, hn⟩
+    exact ⟨hpre, indexNamed_mono hle hn⟩
   · have hpos : 0 < es.size := by
       rcases Nat.eq_zero_or_pos es.size with h0 | h0
       · exact absurd (by simpa using Array.eq_empty_of_size_eq_zero h0) he
@@ -424,21 +462,23 @@ theorem entries_named {keys : Keys} {ix ix' : IndexAt} {es : Array Entry} {p pre
     rw [if_neg (by omega), hr]
     have hel : es.toList[es.size - 1]'(by simp; omega) = es[es.size - 1]'(by omega) := by
       simp only [Array.getElem_toList]
-    simp only [hel, hlast _ hb, if_true]
+    have hin : es[es.size - 1]'(by omega) ∈ es.toList := Array.getElem_mem_toList ..
+    simp only [hel, hlast _ hb, true_and, if_pos (hall _ hin)]
 
-theorem entriesSeq_named (keys : Keys) : ∀ (ess : List (Array Entry)) (ix : IndexAt) (pre : ByteArray)
+theorem entriesSeq_named (keys : Keys) (before : Nat) : ∀ (ess : List (Array Entry)) (ix : IndexAt) (pre : ByteArray)
     {bytes : ByteArray} {ix'' : IndexAt}, Base.entriesSeq keys ix ess = .ok (bytes, ix'') →
     pre.size = ix.count * entryBytes keys →
-    indexNamed keys ix.count ix.last
+    indexNamed keys ix.count ix.last before
       (pre.extract (lastAt keys ix.count).1 ((lastAt keys ix.count).1 + (lastAt keys ix.count).2)) = none →
+    (∀ e ∈ (ess.map Array.toList).flatten, e.steps < before) →
     (pre ++ bytes).size = ix''.count * entryBytes keys ∧
-      indexNamed keys ix''.count ix''.last ((pre ++ bytes).extract (lastAt keys ix''.count).1
+      indexNamed keys ix''.count ix''.last before ((pre ++ bytes).extract (lastAt keys ix''.count).1
         ((lastAt keys ix''.count).1 + (lastAt keys ix''.count).2)) = none
-  | [], ix, pre, bytes, ix'', h, hpre, hn => by
+  | [], ix, pre, bytes, ix'', h, hpre, hn, _ => by
     simp only [Base.entriesSeq, Except.ok.injEq, Prod.mk.injEq] at h
     obtain ⟨rfl, rfl⟩ := h
     simp only [ByteArray.append_empty]; exact ⟨hpre, hn⟩
-  | es :: ess, ix, pre, bytes, ix'', h, hpre, hn => by
+  | es :: ess, ix, pre, bytes, ix'', h, hpre, hn, hall => by
     simp only [Base.entriesSeq] at h
     split at h
     · cases h
@@ -447,8 +487,9 @@ theorem entriesSeq_named (keys : Keys) : ∀ (ess : List (Array Entry)) (ix : In
       · cases h
       · rename_i ps ix2 hps
         cases h
-        obtain ⟨h1, h2⟩ := entries_named hp hpre hn
-        have := entriesSeq_named keys ess ix' (pre ++ p) hps h1 h2
+        simp only [List.map_cons, List.flatten_cons, List.mem_append] at hall
+        obtain ⟨h1, h2⟩ := entries_named hp hpre hn (Nat.le_refl _) (fun e he => hall e (Or.inl he))
+        have := entriesSeq_named keys before ess ix' (pre ++ p) hps h1 h2 (fun e he => hall e (Or.inr he))
         rwa [ByteArray.append_assoc] at this
 
 theorem entriesSeq_run (keys : Keys) : ∀ (ess : List (Array Entry)) (ix : IndexAt)
@@ -484,26 +525,29 @@ theorem entriesSeq_run (keys : Keys) : ∀ (ess : List (Array Entry)) (ix : Inde
 check** (HOST-33; replaces HOST-31's `indexEntries_pages`). The `index.log` successive seals write
 from genesis (`Base.entriesSeq` from `indexStart`, one `Base.entries` per seal) is exactly
 `entryBytes` per entry; EVERY entry handed to every seal reads back at its own position, in
-order (`run_read`); and the check open makes over the last one passes (`indexNamed`). No premise:
-`Base.entries` refuses an entry outside the layout (`entryUnfit`). That successive seals are what
+order (`run_read`); and the check open makes over the last one passes (`indexNamed`) for a base whose
+step count is past every entry's (`hb`: a base is sealed after the records its entries index, each
+of which moved the step count, HOST-53). No other premise: `Base.entries` refuses an entry outside
+the layout (`entryUnfit`). That successive seals are what
 the loop's seals append is two facts: each seal appends at the end (`seal_at_end`, `indexMoved`
 otherwise), and seal k+1 is handed seal k's returned `IndexAt` (`spawnSeal` passes
 `sealed.index`, `settle` stores the returned one, at most one seal pending): read off
 Host/Loop.lean (IO), not proved. -/
 theorem entriesSeq_read (keys : Keys) (ess : List (Array Entry)) {bytes : ByteArray} {ix : IndexAt}
-    (h : Base.entriesSeq keys indexStart ess = .ok (bytes, ix)) :
+    {before : Nat} (h : Base.entriesSeq keys indexStart ess = .ok (bytes, ix))
+    (hb : ∀ e ∈ (ess.map Array.toList).flatten, e.steps < before) :
     bytes.size = ix.count * entryBytes keys ∧ ix.count = (ess.map Array.toList).flatten.length ∧
       (∀ (i : Nat) (hi : i < (ess.map Array.toList).flatten.length),
         Entry.read keys i (bytes.extract (i * entryBytes keys) (i * entryBytes keys + entryBytes keys)) =
           some (ess.map Array.toList).flatten[i]) ∧
-      indexNamed keys ix.count ix.last
+      indexNamed keys ix.count ix.last before
         (bytes.extract (lastAt keys ix.count).1 ((lastAt keys ix.count).1 + (lastAt keys ix.count).2)) = none := by
-  obtain ⟨hb, hc, hf⟩ := entriesSeq_run keys ess indexStart h
-  have hn := entriesSeq_named keys ess indexStart ByteArray.empty h (by simp [indexStart])
-    (by simp [indexNamed, indexStart])
+  obtain ⟨hr, hc, hf⟩ := entriesSeq_run keys ess indexStart h
+  have hn := entriesSeq_named keys before ess indexStart ByteArray.empty h (by simp [indexStart])
+    (by simp [indexNamed, indexStart]) hb
   simp only [ByteArray.empty_append] at hn
   refine ⟨hn.1, by simpa [indexStart] using hc, fun i hi => ?_, hn.2⟩
-  rw [hb]
+  rw [hr]
   have := run_read keys indexStart.count _ i hi hf
   simpa [indexStart] using this
 

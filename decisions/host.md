@@ -2385,3 +2385,49 @@ No theorem changed. Both are plants over deployed code. The vacuity question is 
 - The liar is a function in the plant, not a mutation of `Host.handle`. It shows the fold catches the lie. It does not show that `Host.handle` can never tell it, which is `machine_commits`' job as a theorem.
 
 **Meta-critique.** Both teeth took a few dozen lines once someone asked. HOST-50 kept them as "kept, with a trigger" because each had a covering check elsewhere (PROTOCOL's rows; a theorem). "Covered elsewhere" was true and was still the wrong reason: the layer's own sim is where a later Host change is first judged.
+
+## HOST-53 · open's one index check also requires that the base's last entry began before the base's World, so a base at step 0 counts no entry (2026-10-19, HOST-14; HOST-49's named gap, cv 01a14f2a-8c82)
+
+**The gap.** HOST-49's `openWith_steps_zero` proved that a Store the deployed open opens at step 0 has no record past its base and that its base is at step 0. It did not prove that the base counts no `index.log` entry. Adopt seals the adopted base with an EMPTY index (`indexStart`). That drops nothing only if the old base counted nothing. HOST-49 argued this by an induction over seals that no theorem states. Open checked the base's last entry for its position and its tag. It never checked the entry against the base it belongs to. A base at step 0 naming an entry with a verifying tag (for example, a writer bug that hands a seal the wrong `IndexAt`) opened.
+
+**Decision.** `indexNamed` (the one check open makes over the one entry it reads, HOST-33) takes the base World's step count `before` (`(mark b.world).1`). At count > 0 it refuses `indexCorrupt` unless the entry's `steps < before`. The entry's `steps` is the World's step count BEFORE its record (`Open.indexed`), and every record moves the step count (HOST-49, `foldStep_steps`). So an honest base's last entry is always strictly before it, and nothing is strictly before step 0.
+- Theorems:
+  - `Host.Deployed.openWith_steps_zero` gains `o.sealed.index.count = 0`. The whole adopt fact is now a theorem of the deployed open.
+  - `indexNamed_none` states the new conjunct.
+  - `indexNamed_notBefore` is the tooth: an entry that reads back with the base's `indexLast` but whose step count is ≥ `before` is refused, so at `before = 0` every entry is refused.
+  - `indexNamed_mono`: a later base passes wherever an earlier one did.
+  - `openWith_verifies_named` states the step bound.
+  - `Backup.indexed_foldlM_steps`: every entry an indexed fold holds is below the World it reached, and the World's step count never falls.
+- Completeness (no honest Store is refused):
+  - `seal_facts` / `sealed_opens` / `sealed_opens_clean` / `sealed_unindexed_refused` gain the premise `hmono` (a fold step strictly moves the mark's step count), discharged at the deployed instance by `foldStep_steps` in `sealed_opens_deployed`. The new base's last entry is either the old base's (strictly below the old World, which is ≤ the new) or the newest tail record's (strictly below the World after it).
+  - `entries_named` / `entriesSeq_named` / `entriesSeq_read` take the step count of the base being opened, with the premise that every entry is below it. A base is sealed after the records its entries index.
+
+**Plant.** host-sim `plant-index-ahead`:
+- The newest base is re-sealed (real `Base.file` under the Store keys), naming a last entry re-tagged with a step count at the base's own and at one past it. Every tag verifies, and both are refused `indexCorrupt`.
+- Controls through the same forging path: the honest step count and the base's step count less one both open.
+- Seeds 1, 2 and 3: ALL PASS. RED with the condition made vacuous (`e.steps < before ∨ True`): `FAIL plant-index-ahead`, `1 FAILED`.
+
+**Flag day.** None in bytes. No layout, codec, stamp or exit code moves. What refuses now that did not: a base whose last counted entry does not begin before its World, as `indexCorrupt` (exit 46, fatal, the same remedy: restore from this Store's own backup). No deployed writer writes one; the completeness theorems above say so of the pure seal.
+
+**Alternatives.**
+- (a) A separate check beside `indexNamed` over the same bytes. Rejected: two checks of one entry, and about a dozen `unfold openWith` proofs would gain a case. The one check grew a conjunct instead.
+- (b) A new fault name (`indexAhead`). Rejected for now: the remedy and exit class are `indexCorrupt`'s, and a new name moves the exit table and OPS's units text for no new operator action. If an operator ever needs to tell the two apart, the trigger is a support case that restored the wrong file.
+- (c) Prove the induction over seals instead of checking. There is no "reachable Store" predicate to state it over, and the theorem would cover only Stores this binary wrote. The check covers any bytes.
+- (d) Also check the entry's offset against the base's offset. That is the same class: an entry naming a record at or past its base. Not taken here. Trigger: a page or `host check` finding an entry past its base. `indexClean` already ties every entry's offset to its record's frame.
+
+**Critique.**
+- The completeness theorems are about the pure seal of a pure open (`Base.seal` after `openWith` over bytes). That the loop's seals are exactly these is read off Host/Loop.lean (spawnSeal hands `sealed.index`; settle stores the returned one), as HOST-33 said of `entriesSeq_read`.
+- The bound checks the LAST entry only. Entries before it are checked by a page as it reads them and by `host check` (`indexClean`: offsets match the records, steps never fall). Since steps never fall and the last is below the base, every counted entry is below the base once `host check` has passed. The open alone does not see a middle entry.
+- `entriesSeq_read`'s `before` is free: the theorem holds for any step count past every entry, and does not itself tie the check to a sealed World. That tie is `sealed_opens`, which uses the open's own `(mark o.opened.world).1` (second-agent read).
+- The live loop pushes an entry as `⟨(mark r.world).1, …⟩` just before the World moves, and writes nothing for an empty batch, so the loop's seals meet `hmono`'s shape. This is read off Host/Loop.lean and relies on the Machine advancing `steps` for a non-empty batch (KERNEL's `step_steps`), not proved over the IO loop.
+- Checked while reading adopt (Follow's `.adopt`): it seals with `indexStart` and `#[]`, and `Base.seal` refuses `indexMoved` unless `index.log` is empty. At step 0 that holds now. The base counts nothing (this decision), and orphan entries come only from a seal whose base never landed, which leaves records past the old base, so the open would not be at step 0. A hand-placed foreign `index.log` would fail adopt with `sealFailed indexMoved`, named and not silent.
+- `hmono` is strict increase, true at the deployed instance because every record holds at least one step (HOST-49's `emptyRecord`). Without HOST-49 this decision would refuse a Store holding an empty record as its last before a base. That is the right refusal, but it shows how this rests on HOST-49.
+
+**Law-6 read (second agent, read-only): LAND-WITH-FIXES.**
+- No vacuity: `openWith_steps_zero`'s new conjunct comes from the entry bound and `b.world.steps = 0`; the tooth's premises are satisfiable; the `#[]` start of `indexed_foldlM_steps` is met.
+- `hmono` is met by `foldStep_steps` through `recorder_mark` (rfl).
+- No writer seals a base past its last entry: the loop, adopt (`indexStart`), genesis, join/import (through genesis); every other `Base.file` call is a sim plant.
+- The plant changes only `steps`, and its controls take the same path.
+- Fixed: three docstrings (Proofs/Deployed's "`entriesSeq_read` has no premise", and Index's header ×2).
+
+**Meta-critique.** HOST-49 named this gap as "follows by an induction no theorem states". The cheaper move was a one-conjunct check that turns the induction into a local fact, and the check also covers a Store this binary did not write. The pattern: when a theorem needs a history argument, look for a check at the read that makes it local.

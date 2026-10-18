@@ -324,6 +324,27 @@ def entryPlants (r : RunResult) (failures : IO.Ref Nat) : IO Unit := do
       faultName (reopenIn foreign r.bases.file r.disk.synced) = "indexCorrupt" &&
       faultName (reopenIn spliced r.bases.file r.disk.synced) = "opened" &&
       indexClean sk spliced count offsets == some midK) failures
+  -- plant-index-ahead (HOST-53): the newest base re-sealed naming a last entry re-tagged with a step
+  -- count AT the base's own (the record it indexes would begin at or after the base's World). Every
+  -- tag verifies; open refuses `indexCorrupt`. CONTROLS through the same forging path: the honest
+  -- step count, and the base's step count less one (the strict bound's other side), both open.
+  let ahead (s : Nat) : Option (ByteArray × ByteArray) :=
+    match Base.read keys cadence world r.bases.file, honest.getLast? with
+    | .ok (b, _, _), some last =>
+      let e : Entry := { last with steps := s }
+      match Base.file keys cadence world b.world ⟨b.offset, b.tag⟩ ⟨count, e.tag sk (count - 1)⟩ with
+      | .ok f => some (Entry.run sk 0 (honest.dropLast ++ [e]), f)
+      | .error _ => none
+    | _, _ => none
+  let baseSteps := match opened with | .ok o => o.sealed.steps | .error _ => 0
+  let lastSteps := match honest.getLast? with | some e => e.steps | none => 0
+  let verdict (s : Nat) : String := match ahead s with
+    | some (i, f) => faultName (reopenIn i f r.disk.synced)
+    | none => "unforged"
+  check s!"plant-index-ahead: a last entry at the base's own step count {baseSteps} (every tag verifying) is refused `indexCorrupt`; controls: its honest {lastSteps} and {baseSteps - 1} open"
+    (0 < baseSteps && lastSteps < baseSteps && verdict baseSteps = "indexCorrupt" &&
+      verdict (baseSteps + 1) = "indexCorrupt" && verdict lastSteps = "opened" &&
+      verdict (baseSteps - 1) = "opened") failures
   let raw := r.bases.index.extract eb (2 * eb) ++ r.bases.index.extract 0 eb ++ r.bases.index.extract (2 * eb) named
   let retagSwap := match honest with
     | a :: b :: rest => Entry.run sk 0 (b :: a :: rest) | _ => r.bases.index

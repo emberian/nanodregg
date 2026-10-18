@@ -149,7 +149,7 @@ theorem openWith_reads {W F : Type} (keys : Keys) (c : Cadence) (world : Codec.S
               · rw [if_pos hq2] at h
                 simp only [StateT.pure, pure] at h; injection h with h1; cases h1
               rw [if_neg hq2] at h
-              cases hix : indexNamed (keys.forStore (origin b.world)) b.indexCount b.indexLast
+              cases hix : indexNamed (keys.forStore (origin b.world)) b.indexCount b.indexLast (mark b.world).1
                   (answerI (lastAt keys b.indexCount).1 (lastAt keys b.indexCount).2) with
               | some e => rw [hix] at h; simp only [StateT.pure, pure] at h; injection h with h1; cases h1
               | none =>
@@ -369,7 +369,8 @@ theorem openWith_origin {W F : Type} (keys : Keys) (c : Cadence) (world : Codec.
 `open_verifies_named`). Whatever `index.log` it was handed: the file holds every entry the opened
 base counts, and either the base counts none and names no last tag, or the bytes at the last
 counted entry read back as an entry AT THAT POSITION (its tag verified there, `Entry.read_sound`)
-whose tag is the `indexLast` the base names, both under the keys of THIS Store (`Keys.forStore`
+whose tag is the `indexLast` the base names and whose record began before the base's World (its step
+count is below the base's, HOST-53), both under the keys of THIS Store (`Keys.forStore`
 of the decoded base World's origin chain, which the origin frame states: HOST-25). That binds the
 base's count to an entry the writer of this Store sealed. It says nothing about the entries before it: a page checks each one it reads
 (`Host.Proofs.Page.build_located`), and `host check` checks all of them (`indexClean_none`). -/
@@ -384,7 +385,8 @@ theorem openWith_verifies_named {W F : Type} (keys : Keys) (c : Cadence) (world 
           Entry.read (keys.forStore (origin b.world)) (o.sealed.index.count - 1)
             (idx.extract ((o.sealed.index.count - 1) * entryBytes keys)
               ((o.sealed.index.count - 1) * entryBytes keys + entryBytes keys)) = some e ∧
-          e.tag (keys.forStore (origin b.world)) (o.sealed.index.count - 1) = o.sealed.index.last)) := by
+          e.tag (keys.forStore (origin b.world)) (o.sealed.index.count - 1) = o.sealed.index.last ∧
+          e.steps < (mark b.world).1)) := by
   unfold openWith at h
   split at h
   · cases h

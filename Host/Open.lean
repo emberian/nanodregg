@@ -163,7 +163,8 @@ bytes) and refuse unless it verifies and states `origin b.world`, the genesis ch
 World's own origin (`originFault`, HOST-25), refuse `indexShort` unless `index.log` (`indexSize`
 bytes, `readIndex` its reader) holds every entry the base counts and `indexCorrupt` past
 `indexMax`, read the ONE entry the base names last (`lastAt`) and refuse `indexCorrupt` unless it
-reads back at its position with the base's `indexLast` (`indexNamed`, HOST-33), and `openLog` the
+reads back at its position with the base's `indexLast` and begins before the base's World
+(`indexNamed`, HOST-33, HOST-53), and `openLog` the
 tail from the base's World, indexing it from an empty Array (the entries since the base). Open
 reads no other entry: a page checks the ones it reads, `host check` all of them. A `corrupt`
 offset is absolute in the segment. -/
@@ -199,7 +200,7 @@ def openWith {m : Type → Type} [Monad m] (keys : Keys) (c : Cadence) (world : 
   | .error e => return .error e
   | .ok ib =>
   if ib.size ≠ (lastAt keys b.indexCount).2 then return .error (.shortRead ib.size (lastAt keys b.indexCount).2) else
-  match indexNamed (keys.forStore (origin b.world)) b.indexCount b.indexLast ib with
+  match indexNamed (keys.forStore (origin b.world)) b.indexCount b.indexLast (mark b.world).1 ib with
   | some e => return .error (.base e)
   | none =>
   let tail := read.extract Log.tagBytes read.size

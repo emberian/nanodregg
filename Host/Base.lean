@@ -380,7 +380,8 @@ inductive BaseFault where
   | indexShort (size offset : Nat)
   /-- the last entry the base counts does not read back as an entry at its position under this
   Store's key (`Entry.read`), or its tag is not the `indexLast` the base names (HOST-33: the one
-  entry open reads; `host check` reads them all) -/
+  entry open reads; `host check` reads them all), or its record does not begin before the base's
+  World (its step count is not below the base's, HOST-53) -/
   | indexCorrupt
   deriving Repr
 
@@ -417,13 +418,17 @@ def lastAt (keys : Keys) (count : Nat) : Nat × Nat :=
 
 /-- The one index check open makes (HOST-33), over the bytes `lastAt` read: at count 0 nothing,
 and the base names no last tag; otherwise those bytes read back as entry `count - 1` at its own
-position (`Entry.read`), and its tag is the `indexLast` the base names. The entries before it are
-checked when a page reads them (`Host.Page.entryAt`) and by `host check` (`indexClean`). -/
-def indexNamed (keys : Keys) (count : Nat) (last : Digest) (bytes : ByteArray) : Option BaseFault :=
+position (`Entry.read`), its tag is the `indexLast` the base names, and its record began before
+the base's World (`e.steps < before`, `before` the base World's step count, HOST-53: every record
+moves the step count, so a base at step 0 counts no entry, `Host.Deployed.openWith_steps_zero`).
+The entries before it are checked when a page reads them (`Host.Page.entryAt`) and by `host check`
+(`indexClean`). -/
+def indexNamed (keys : Keys) (count : Nat) (last : Digest) (before : Nat) (bytes : ByteArray) :
+    Option BaseFault :=
   if count = 0 then (if last = Digest.zero then none else some .indexCorrupt) else
   match Entry.read keys (count - 1) bytes with
   | none => some .indexCorrupt
-  | some e => if e.tag keys (count - 1) = last then none else some .indexCorrupt
+  | some e => if e.tag keys (count - 1) = last ∧ e.steps < before then none else some .indexCorrupt
 
 /-- `host check`'s whole-index audit (HOST-33 condition 1): `bytes` are the entries a base counts,
 `offsets` the offsets of the record frames before its offset (`Log.recover` of the history, the

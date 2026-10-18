@@ -303,6 +303,36 @@ theorem indexed_foldlM_size (mark : W → Nat × ByteArray) (step : W → ByteAr
       simp only [Array.size_push, List.length_cons] at this ⊢
       omega
 
+/-- **Every entry an indexed fold holds began before the World it reached** (HOST-53), when every
+step moves the mark's step count (`hmono`; at the deployed instance `foldStep_steps`): the entry of
+a record is the mark BEFORE it, and the fold only moves on. The World's step count never falls. -/
+theorem indexed_foldlM_steps (mark : W → Nat × ByteArray) (step : W → ByteArray → Except F W)
+    (hmono : ∀ w r w', step w r = .ok w' → (mark w).1 < (mark w').1) :
+    ∀ (rs : List ByteArray) (w : W) (idx : Array Entry) (off : Nat) {st : W × Array Entry × Nat},
+      rs.foldlM (indexed mark step) (w, idx, off) = .ok st →
+      (∀ e ∈ idx.toList, e.steps < (mark w).1) →
+      (mark w).1 ≤ (mark st.1).1 ∧ ∀ e ∈ st.2.1.toList, e.steps < (mark st.1).1
+  | [], w, idx, off, st, h, hi => by
+    simp only [List.foldlM, pure, Except.pure, Except.ok.injEq] at h
+    subst h; exact ⟨Nat.le_refl _, hi⟩
+  | r :: rs, w, idx, off, st, h, hi => by
+    simp only [List.foldlM] at h
+    cases hs : step w r with
+    | error e => simp [indexed, hs, bind, Except.bind] at h
+    | ok w' =>
+      have hlt := hmono w r w' hs
+      rcases hm : mark w with ⟨a, ch⟩
+      rw [hm] at hlt hi
+      simp only [indexed, hs, hm, bind, Except.bind, pure, Except.pure] at h
+      have hi' : ∀ e ∈ (idx.push ⟨a, off, ch⟩).toList, e.steps < (mark w').1 := by
+        intro e he
+        simp only [Array.toList_push, List.mem_append, List.mem_singleton] at he
+        rcases he with he | rfl
+        · exact Nat.lt_trans (hi e he) hlt
+        · exact hlt
+      obtain ⟨hle, hall⟩ := indexed_foldlM_steps mark step hmono rs w' _ _ h hi'
+      exact ⟨by simp only at hlt ⊢; omega, hall⟩
+
 /-- An indexed open of a tail from offset `off₀` ends its fold at `off₀ + validLen`: the offset the
 next record's entry names is where the valid bytes end. -/
 theorem openLog_indexed_off (s : Sealer) (m : Nat) (mark : W → Nat × ByteArray)
@@ -344,7 +374,7 @@ theorem openWith_seg_ok (keys : Keys) (c : Cadence) (world : Codec.Stream W) (ma
       S.extract (b.offset - tagBytes) b.offset = b.tag.bytes ∧
       originFault (F := F) keys.segment (S.extract 0 (originLen b.offset)) (origin b.world) = none ∧
       b.indexCount ≤ indexMax ∧ b.indexCount * entryBytes keys ≤ I.size ∧
-      indexNamed (keys.forStore (origin b.world)) b.indexCount b.indexLast
+      indexNamed (keys.forStore (origin b.world)) b.indexCount b.indexLast (mark b.world).1
         (I.extract (lastAt keys b.indexCount).1 ((lastAt keys b.indexCount).1 + (lastAt keys b.indexCount).2)) = none ∧
       openLog keys.segment c.recordBytesMax (indexed mark step) (b.world, #[], b.offset) b.tag.bytes
         (S.extract b.offset S.size) = .ok op ∧

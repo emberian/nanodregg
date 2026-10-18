@@ -6,7 +6,8 @@
   frame (KERNEL's `genesis_chain`), and the deployed genesis image passes the origin check;
 * `mark_chain_width` (HOST-33) — every chain the deployed loop puts in an index entry is the width
   the deployed Store's entries hold (`Keys.ofKey`'s `chainBytes`), so `entryUnfit`'s chain arm
-  cannot fire at the deployed instance (the generic round trip, `entriesSeq_read`, has no premise);
+  cannot fire at the deployed instance (the generic round trip, `entriesSeq_read`, has one premise:
+  every entry began before the base being opened, HOST-53);
 * `foldStep_originChain` (HOST-25) — a record the deployed reopen folds keeps `originChain`
   (`Record.step_origin`, from KERNEL's `fold_origin`), so every later base's World states the chain
   the origin frame holds;
@@ -993,18 +994,32 @@ theorem openWith_steps_records {keys : Keys} {file I S : ByteArray} {o : Opening
   exact ⟨b, n, d, hb, by rw [hn]; exact foldlM_steps hf⟩
 
 /-- **HOST-21's adopt argument, proved**: a Store the deployed open opens at step 0 holds no record
-past its base, the loop holds no index entry after it, and the base itself is at step 0. So the
-measure PROTOCOL's adopt checks (`w.steps ≠ 0` refuses `notAtGenesis`) is "nothing past the image",
-and the adopted base's empty index drops nothing. -/
+past its base, the loop holds no index entry after it, the base itself is at step 0, and the base
+counts no entry of `index.log` (HOST-53: open refuses a base whose last entry does not begin before
+its World, and nothing begins before step 0). So the measure PROTOCOL's adopt checks (`w.steps ≠ 0`
+refuses `notAtGenesis`) is "nothing past the image", and the adopted base's empty index
+(`indexStart`) drops nothing, neither the loop's entries nor the old base's. -/
 theorem openWith_steps_zero {keys : Keys} {file I S : ByteArray} {o : Opening (World D)}
     (h : Id.run (openWith keys c world recorder.mark originChain foldStep file S.size I.size
       (segReader I) (segReader S)) = .ok o) (h0 : o.opened.world.steps = 0) :
-    o.opened.records = 0 ∧ o.index.size = 0 ∧
+    o.opened.records = 0 ∧ o.index.size = 0 ∧ o.sealed.index.count = 0 ∧
       ∃ (b : Base (World D)) (n : Nat) (d : ByteArray), Base.read keys c world file = .ok (b, n, d) ∧
         b.world.steps = 0 := by
   obtain ⟨b, n, d, hb, hle⟩ := openWith_steps_records h
   have hi := openWith_tail_entries keys c world recorder.mark originChain foldStep file I S h
-  exact ⟨by omega, by omega, b, n, d, hb, by omega⟩
+  have hc : o.sealed.index.count = 0 := by
+    obtain ⟨b', _, _, _, _, _, hb', _, _, _, _, _, _, hix, _, _, ho⟩ :=
+      openWith_seg_ok keys c world recorder.mark originChain foldStep file I S h
+    have hbb : b = b' := by rw [hb] at hb'; cases hb'; rfl
+    subst hbb
+    rw [ho]
+    show b.indexCount = 0
+    rcases indexNamed_none hix with ⟨hz, -⟩ | ⟨-, e, -, -, hs⟩
+    · exact hz
+    · rw [recorder_mark] at hs
+      simp only at hs
+      omega
+  exact ⟨by omega, by omega, hc, b, n, d, hb, by omega⟩
 
 /-- The loop's request bound is one record's steps: with `drain`'s bound (`drainM_conserves`) and
 `Machine.staged_size_le` (at most one staged pair per request), the writer stages at most

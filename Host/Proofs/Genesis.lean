@@ -108,7 +108,8 @@ theorem tailRead_self (c : Cadence) (baseBytes size : Nat) : tailRead c baseByte
   unfold tailRead; simp
 
 /-- A base that counts no entry and names `Digest.zero` passes the index check. -/
-theorem indexNamed_zero (keys : Keys) (b : ByteArray) : indexNamed keys 0 Codec.Digest.zero b = none := by
+theorem indexNamed_zero (keys : Keys) (before : Nat) (b : ByteArray) :
+    indexNamed keys 0 Codec.Digest.zero before b = none := by
   unfold indexNamed; simp
 
 /-- **An empty tail opens clean**: to the base's World, no record, nothing valid, nothing torn, and
