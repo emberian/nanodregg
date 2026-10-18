@@ -4,9 +4,15 @@
 A turn's charge includes `Turn.growth`, the most it can add to the World; what its touches do not
 use of that (a retired cell's weight, a write's ops beyond what the cell grew) is credited back
 (KERNEL-15). So storage is CONSERVED: over any admitted log, World storage plus log storage plus
-the budget left equal where they started (`fold_conserves`), and with a genesis budget below a
-bound the World's size is below it forever (`fold_world_weight`): HOST-14's `worldBytesMax` is the
-genesis allowance. `admit_retire`: retiring gives back exactly the retired cells' weight.
+the budget left equal where they started (`fold_conserves`): the allowance budgets turn records and
+World weight (not the whole Store: record framing, recorded refusals and the index are not charged).
+A turn adds to the World at most `84/61` of its record (`Turn.growth_le_logWeight`, tight at a
+pinless declare, `RowTouch.declare_growth_tight`), so the potential `145 · weight + 84 · allowance`
+never rises (`fold_potential`, KERNEL-55) and the World stays within `84/145` of its allowance
+(`allowance_bounds_world`). Deriving HOST's `worldBytesMax` from it also needs CODEC's World size
+equality, which is not yet a theorem (KERNEL-55 part 2).
+`fold_world_weight` (weight ≤ weight + allowance) is its weakening. `admit_retire`: retiring gives
+back exactly the retired cells' weight.
 -/
 import Kernel.Proofs.Cells
 import Kernel.Proofs.Rows
@@ -264,6 +270,51 @@ theorem credit_retires {E : Env D} {w : World D} :
                         simp only [Entry.weight]
                         omega
 
+omit [Ord D] [DecidableEq D] in
+private theorem sum_map_mul_le {α : Type} (f g : α → Nat) (a b : Nat) (h : ∀ x, a * f x ≤ b * g x) :
+    ∀ l : List α, a * (l.map f).sum ≤ b * (l.map g).sum
+  | [] => by simp
+  | x :: l => by
+      have := sum_map_mul_le f g a b h l
+      have := h x
+      simp only [List.map_cons, List.sum_cons, Nat.mul_add]; omega
+
+omit [Ord D] [DecidableEq D] in
+/-- A row touch adds to the World at most `84/61` of its log bytes. -/
+theorem RowTouch.growth_le_weight (x : RowTouch D) : 61 * x.growth ≤ 84 * x.weight := by
+  rcases x with ⟨slot, seen, act⟩
+  cases slot <;> cases act <;>
+    simp only [RowTouch.growth, RowTouch.weight, RowSlot.weight, RowLeaf.weight, RowAct.logWeight,
+      digestWeight, counterWeight, headerWeight] <;> split <;> omega
+
+omit [Ord D] [DecidableEq D] in
+/-- **A turn adds to the World at most `84/61` of its log record** (KERNEL-55): term by term, a
+create (`40 + w` against `32 + w`), a write's ops (against its act), a nullifier (32 against 32), an
+insert or upsert, and a declare at a head (84 against 61, the tight term: the head's floor, count and
+sum are World bytes the log does not carry). -/
+theorem Turn.growth_le_logWeight (t : Turn D) : 61 * t.growth ≤ 84 * t.logWeight := by
+  have hc := sum_map_mul_le (fun p : D × Cell => digestWeight + counterWeight + p.2.weight)
+    (fun p => digestWeight + p.2.weight) 61 84
+    (fun p => by simp only [digestWeight, counterWeight]; omega) t.creates
+  have ht := sum_map_mul_le (fun x : Touch D => x.act.opsWeight) Touch.weight 61 84
+    (fun x => by
+      rcases x with ⟨c, s, a⟩
+      cases a <;> simp only [Act.opsWeight, Touch.weight, Act.logWeight, headerWeight, digestWeight] <;> omega)
+    t.touches
+  have hr := sum_map_mul_le RowTouch.growth RowTouch.weight 61 84 RowTouch.growth_le_weight t.rows
+  simp only [Turn.growth, Turn.logWeight, Nat.mul_add] at *
+  omega
+
+omit [Ord D] [DecidableEq D] in
+/-- **The tooth: `84/61` is attained** by a row touch, a declare at a head with no pin (growth 84, log
+61), so `RowTouch.growth_le_weight`'s ratio cannot be lowered. At turn level (80 fixed log bytes per
+turn) 84/61 is the supremum over unboundedly many such declares, not an attained value. -/
+theorem RowTouch.declare_growth_tight (p : D) (rel limit cap width : Nat) (retract : Bool) :
+    61 * (RowTouch.mk (.head p rel) none (.declare limit cap width retract)).growth =
+      84 * (RowTouch.mk (.head p rel) none (.declare limit cap width retract)).weight := by
+  simp [RowTouch.growth, RowTouch.weight, RowSlot.weight, RowLeaf.weight, RowAct.logWeight,
+    digestWeight, counterWeight]
+
 end Turn
 
 section World
@@ -458,12 +509,54 @@ theorem fold_conserves {E : Env D} :
       simp only [Step.turns]
       omega
 
-/-- HOST-14's `worldBytesMax`: a World folded from `w` never holds more than `w`'s storage plus
-its budget, whatever it admits and retires (credit never lets it exceed the genesis bound). -/
+/-- A World folded from `w` never holds more than `w`'s storage plus its budget, whatever it admits
+and retires. The weak form: `allowance_bounds_world` is the stronger one (`84/145` of the
+allowance). -/
 theorem fold_world_weight {E : Env D} {w w' : World D} {l : List (Step D)} (hc : w.Canon E)
     (hf : w.Slotted E) (hr : w.RowsCanon E) (h : World.fold E w l = .ok w') :
     w'.weight ≤ w.weight + w.allowance := by
   have := fold_conserves hc hf hr h; omega
+
+/-- **The potential never rises over a turn** (KERNEL-55). -/
+theorem admit_potential {E : Env D} {w w' : World D} {t : Turn D} (hc : w.Canon E) (hf : w.Slotted E)
+    (hr : w.RowsCanon E) (h : World.admit E w t = .ok w') : potential w' ≤ potential w := by
+  have hcons := admit_conserves hc hf hr h
+  obtain ⟨posts', hk', hw'⟩ := admit_ok h
+  have hww := admit_world_weight hc hf hr hk' hw'
+  have hg := Turn.growth_le_logWeight t
+  simp only [potential, potentialRatio]
+  omega
+
+/-- **The potential never rises over a fold**: a turn by `admit_potential`; a recorded refusal
+leaves weight and allowance alone (`refuse_frame`). -/
+theorem fold_potential {E : Env D} :
+    ∀ {w w' : World D} {l : List (Step D)}, w.Canon E → w.Slotted E → w.RowsCanon E →
+      World.fold E w l = .ok w' → potential w' ≤ potential w
+  | w, w', [], _, _, _, h => by simp [World.fold] at h; subst h; exact Nat.le_refl _
+  | w, w', .turn t :: rest, hc, hf, hr, h => by
+      obtain ⟨w₁, h₁, h₂⟩ := fold_cons_ok.mp h
+      have ih := fold_potential (admit_canon hc h₁) (admit_slotted hf h₁) (admit_rowsCanon hr h₁) h₂
+      have := admit_potential hc hf hr h₁
+      omega
+  | w, w', .refusal r :: rest, hc, hf, hr, h => by
+      obtain ⟨w₁, h₁, h₂⟩ := fold_cons_ok.mp h
+      have ih := fold_potential (refuse_canon hc h₁)
+        (fun s l hg => hf s l (by rw [← refuse_trie h₁]; exact hg)) (refuse_rowsCanon hr h₁) h₂
+      obtain ⟨ht, -, -, ha, -⟩ := refuse_frame h₁
+      have hw : w₁.weight = w.weight := by unfold World.weight; rw [ht, refuse_rows h₁]
+      have : potential w₁ = potential w := by simp only [potential, hw, ha]
+      omega
+
+/-- **The allowance bounds the World at `84/145` of itself** (KERNEL-55, ROOT's Q1 = B): every
+World a fold reaches from `w` has `145 · weight ≤ 145 · w.weight + 84 · w.allowance`. HOST's
+World bound is to follow from this theorem (a World's weight is at most `w.weight + ⌊84 · w.allowance / 145⌋`,
+the floor valid since weights are whole numbers), with CODEC's size equality (KERNEL-55 part 2). -/
+theorem allowance_bounds_world {E : Env D} {w w' : World D} {l : List (Step D)} (hc : w.Canon E)
+    (hf : w.Slotted E) (hr : w.RowsCanon E) (h : World.fold E w l = .ok w') :
+    potentialRatio.2 * w'.weight ≤ potential w := by
+  have := fold_potential hc hf hr h
+  simp only [potential, potentialRatio] at *
+  omega
 
 end World
 

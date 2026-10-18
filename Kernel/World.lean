@@ -775,6 +775,17 @@ def weight (w : World D) : Nat :=
 
 end World
 
+/-- The storage potential's ratio (KERNEL-55), `(numerator, denominator)` = `(84, 145)`. A turn adds
+to the World at most `84/61` of its log record (`Turn.growth_le_logWeight`, tight at a pinless declare:
+growth 84, log 61), so `145 · weight + 84 · allowance` never rises (`fold_potential`) and the allowance
+bounds the World at `84/145` of itself (`allowance_bounds_world`). HOST is to read these two numbers
+by name for its World bound (KERNEL-55 part 2, with CODEC's size equality). -/
+def potentialRatio : Nat × Nat := (84, 145)
+
+/-- The storage potential of a World (KERNEL-55): `145 · weight + 84 · allowance`. -/
+def potential [DecidableEq D] (w : World D) : Nat :=
+  potentialRatio.2 * w.weight + potentialRatio.1 * w.allowance
+
 /-- The cell an entry holds (a tombstone holds none). -/
 def Entry.cell? : Entry → Option Cell
   | .live c _ => some c

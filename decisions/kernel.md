@@ -2640,3 +2640,183 @@ ROOT's prior was the last-write height. It loses on the measurement: 0 premises 
 **Premises.** None added. Conclusions changed only in the escape. Three refutation theorems whose conclusion WAS the escape (head_absent_admitted, head_refused_not_absent, deployed_head_absent_admitted) now have teeth stating the binding fact directly (the exclusion proof does not verify). Statements outside Kernel: Protocol/Proofs/Receipt.lean's five receipt checks, S = [the receipt's roots input, the World's roots input, the read's inputs]; LEDGER's account_keyed / deployed_account_keyed (ROOT for LEDGER).
 **What it does not move.** No definition a node runs changes value, no wire, no hash input, no vector: nothing re-geneses, nothing re-emits.
 **Critique.** The restatement doubles as the cheapest audit the kernel has had: every escape now has to name what it compares, and a theorem whose proof cannot name its colliding pair does not compile. Its cost is statement size (S lists, threaded through the trie helpers). **Meta-critique.** This was found because a proof lane tried to close a sorry honestly and noticed it could close it in one line. Green builds, census, and two earlier vacuity reads all passed these 61 statements; the reader rule ROOT added ("a disjunct provable from the premises alone, or from the instance, is vacuous") is the instrument that would have seen it, and it now runs on every reader brief.
+
+
+## KERNEL-55 (PROPOSED) · A create's bytes, and what `worldBytesMax` protects: one potential theorem, a derived bound, and two writer paths that reach it today (KERNEL-20 / K20-P55, 2026-10-19; PERF-2's item-2 lead, routed by ROOT; HOST-14 to co-sign). DESIGN ONLY until ROOT rules.
+
+Tags: MEASURED = grepped or read at main a18d6ea (or read in a log); ARITH = computed from measured numbers or definitions; ASSUMED = not checked.
+
+**The defect (measured by PERF-2, re-read here).**
+- `bench-worstworld` (draft, wt/perf) births cells from one member until submit refuses. MEASURED (PERF-LOG.md, `logs/perf2-ww2.log`):
+  - 60 KB cells: `overAllowance` after 743 births. World 44,702,268 B (0.167 of `worldBytesMax`), weight 44,646,433, allowance left 25,241.
+  - 16-byte cells: `overAllowance` after 204,288 births. World 22,247,840 B (0.083), weight 21,450,546, allowance left 512, encoded/weight 1.037. The segment at the last seal is 119,636,228 B.
+- Charge per birth (ARITH):
+  - 60 KB: 180,609 B. The cell is 60,057 B (60,000 + 2 slot headers + the 32-byte owner slot + 9), and 3 × 60,057 = 180,171, plus 438 fixed.
+  - 16 B: 657 B, against 105 B of World per birth. The World is 16 % of the charge.
+- So `worldBytesMax` (2^28, Host/Bounds.lean:87) is never reached by these folds. Two docstrings state ratios that the code does not have (MEASURED):
+  - Host/Bounds.lean:80: "256 MiB is ~900 BAR stores". ARITH: 2^28 / 290 KB = 925. That is a division, not a reason.
+  - Host/Bounds.lean:92–95: `allowanceMax := worldBytesMax / 2`, "the other half is headroom for the encoding's per-entry overhead over `World.weight`". The measured overhead is 0.1 % (60 KB) to 3.7 % (16 B). The other half is in fact spent by the LOG half of the charge.
+- Kernel/Proofs/Weight.lean:8 and :446 say "HOST-14's `worldBytesMax` is the genesis allowance", and KERNEL-18's title says the same. That is false too: `fold_world_weight` bounds `World.weight` by `w.weight + w.allowance`, which is not the encoded size, and `worldBytesMax` is twice the allowance.
+
+**Two writer paths reach `worldBytesMax` today. It is NOT only the reader's bound.** ROOT's framing ("the reader's bound, not the writer's") holds for genesis Worlds and small founder sets only.
+1. **Import.** MEASURED: `host import` (Host/Cli.lean:215 `importWith`) bounds the carried file by `carriedMax` and checks KERNEL's `CarryFits`. `CarryFits` (Kernel/Proofs/Carry.lean:37) bounds only `cellsWeight + rowsWeight + allowance < 2^64`. Nothing compares the carried allowance with `allowanceMax`. A carried World with allowance 2^40 imports, its members grow it past 2^28 by admitted, acknowledged turns, and the next seal refuses `worldTooLarge`. MEASURED (Host/Sim/Run.lean:25, plant-world-too-large): the loop then stops `sealFailed worldTooLarge`. ASSUMED, not run: every restart re-folds the tail and fails the seal again, so the Store is wedged, not refused by name. CHARTER law 5 asks for "a `worldBytesMax` bound that refuses by name where the design must change". A whole-Store stop after acknowledged turns is not that.
+2. **The refusals trie is in the encoded World, but in neither `World.weight` nor the charge.**
+   - MEASURED: `World.weight` is `cellsWeight + rowsWeight` only (World.lean:665). Recorded refusals are not charged (KERNEL-44: rate-limited instead). The trie keeps a refused call while `H < h + 2·windowMax`, pruned at window multiples (`keptRefusal`, World.lean:1214), so up to three windows' records. Each member records at most `refusalsPerWindow` = 16 per window (`checkRefusal`).
+   - ARITH from Codec/World.lean's refusal wire: a tx entry is 1+32 + 1+8+8+32 = 82 B, and a count entry 1+32+8 + 1+8 = 50 B. That is ≤ 48·82 + 50 = **3,986 B per member**, uncharged.
+   - Membership is ≤ 257 × founders (KERNEL-20's critique, decisions/kernel.md:396). That is prose, not a theorem (grepped: no statement names `enrollMax`). `GenesisFits` allows founders up to 65,536.
+   - At 64 founders the term is 16,448 × 3,986 = 65.6 MB (ARITH). ASSUMED, at ~900 B charged per enrolment: the allowance pays for ~149k members, so a World with ≥ ~580 founders can be driven past 2^28 by refusals alone, every turn admitted.
+   - The kernel itself does not tie `r.member` to a member cell. It bounds per `D`, and `Receive.judge` authenticates. So no kernel-level fold theorem bounds this trie at all today.
+
+### (a) Is the triple payment of a create intended? Yes. Each copy is bytes the Store holds. No copy is counted twice.
+
+| Copy | Where it lives | What it pays for |
+|---|---|---|
+| `event.size` (in `Turn.logWeight`) | seg.log, forever. MEASURED: seg.log is append-only with no rotation or compaction (decisions/host.md:2344). | The signed call: the authority evidence every follower re-verifies and re-derives from (`rederive`, `eventMismatch`). The kernel never parses it. A data create's call carries the slots, so the bytes are there. ASSUMED in general: a method may create a large cell from a small call, so "×3" is the data-create case, not a kernel invariant. |
+| `creates` (in `Turn.logWeight`) | seg.log, forever | The derived effect, so `World.admit` alone replays the log (the writer's reopen fold, thin consent) without running receivers or verifying. CODEC proves the record is exactly `logWeight` bytes (`turnBytes_size`, Codec/Proofs/Deployed.lean:66). |
+| `Turn.growth` | the World, and every base file each seal rewrites | The resident copy. `admit_world_weight` proves the World grows by exactly `growth − credit`. |
+
+- **Verdict.** The charge is what KERNEL-12 said it is: record bytes plus World bytes. `turnBytes_size` and `admit_conserves` already pin both halves as equalities, so there is no double count, and no defect tooth is owed for (a).
+- **What IS wrong is the claim "the allowance budgets the whole Store".** It undercounts. It is never a double count:
+  - **Record framing.** ARITH from perf2-ww2: segment 119,636,228 B over Σ`logWeight` 112,766,670 B is 1.061, or ~33.6 B per turn of step tag and root digest outside the turn's bytes.
+  - **Recorded refusals.** Their log records are uncharged. Each is up to 2·32 + 3·8 + 4 + `callMax` (64 KiB) B, ≤ 16 per member per window. So seg.log growth from refusals is bounded per window of admitted turns, but not by the allowance.
+  - **`index.log`.**
+  - The fix is to say it right: "the allowance budgets turn records and `World.weight`". The refusal-log growth is KERNEL-44's / KERNEL-54's to price, and is raised as Q5 below, not decided here.
+- **Do not de-duplicate the log by dropping `creates` or `event`.**
+  - Dropping `creates` makes every reopen and every thin replay run receivers and verify one signature per step. That is HOST-14's cold-reopen budget, measured.
+  - Dropping `event` deletes the signature, and with it the audit.
+  - Restating a created cell's bytes only once would need the kernel to parse events (law: the event is opaque).
+
+### (b) What `worldBytesMax` protects, and its honest value
+
+**It has two jobs (MEASURED uses):**
+- **Reader bound.** Before decoding an untrusted World, it bounds the memory a decode may take:
+  - open refuses a base frame past `baseRecordMax` before reading (`Base.read_file`, Host/Proofs/Genesis.lean);
+  - import reads at most `carriedMax` (Cli.lean:192);
+  - the follower's download is bounded by it (Host/Follow.lean:100).
+  - This job holds whatever any allowance says. A decoded base may claim anything up to it, so PERF-2's adversarial reopen must be benched at it.
+- **Writer's last line.** The seal refuses `worldTooLarge` (`Base.file`, `Base.seal`; Host/Base.lean:225, :264). HOST-41's law keeps that refusal: every encode refuses over the bound its decode enforces. On the writer path it must be **provably unreachable**, because reaching it is a wedge. Today it is reachable (the two paths above).
+
+**The theorem that makes it honest: a potential, not a ratio.**
+- ARITH from the definitions in Kernel/Turn.lean. For every turn, **`61 · t.growth ≤ 76 · t.logWeight`**, term by term:
+  - a create costs the same `digestWeight + cell.weight` in both;
+  - a write's `opsWeight` is ≤ its `Act.logWeight` (+5);
+  - a nullifier costs 32 in both;
+  - an insert or upsert has growth = log − 1 (or −33);
+  - **a declare** has growth `s + 42` against log `s + 27`, with `s = RowSlot.weight ≥ 34`, so 61(s+42) ≤ 76(s+27) ⟺ s ≥ 34. **Tight at a head.** The 15-byte gap is the head's `count` and `sum` counters, which the log does not carry. This is the one place a turn adds more World than log.
+- Then **Φ = 137 · weight + 76 · allowance never rises over any fold**:
+  - per turn, ΔΦ = 137(g − cr) + 76(cr − L − g) = 61g − 76L − 61cr ≤ 0, where `cr` is all credit back (`admit_world_weight`, `commitWith`);
+  - a refusal step leaves weight and allowance unchanged (`refuse_frame`).
+- Proposed statements, all NEW (Kernel/Proofs/Weight.lean):
+  - `Turn.growth_le_logWeight : 61 * t.growth ≤ 76 * t.logWeight`;
+  - `admit_potential` and `fold_potential : 137 * w'.weight + 76 * w'.allowance ≤ 137 * w.weight + 76 * w.allowance` (premises exactly `fold_conserves`'s: `Canon`, `Slotted`, `RowsCanon`);
+  - corollary **`allowance_bounds_world : 137 * w'.weight ≤ 137 * w.weight + 76 * w.allowance`**, the form ROOT asked for, with f(A) = 76A/137 ≈ 0.5547·A.
+  - The loose form, `fold_world_weight` (weight ≤ w.weight + A), stays: it is `fold_potential`'s weakening.
+
+**The encoded size, as CODEC's owed equality** (KERNEL-18's critique and Host/Bounds.lean:95 both say "CODEC's `size ≤ c · weight` is not yet a theorem").
+- ARITH from Codec/World.lean, ASSUMED one byte per `choice` tag:
+  - a live cell entry is `weight + 3` on the wire (slot tag, leaf tag, entry tag);
+  - a tomb is 35 against weight 32;
+  - a spent nullifier is 34 against 32;
+  - a rows entry is exactly its weight (`rowKeyBytes` / `rowLeafBytes`);
+  - a journal entry is 72 B, ≤ 3·`windowMax` entries;
+  - plus the refusals and a fixed tail (height, steps, chain, allowance, origin, four list headers).
+- This agrees with both PERF-2 runs:
+  - 60 KB: 743·3 + 743·72 + ~104 fixed = 55,829, against 55,835 measured;
+  - 16 B: 612,864 + 2,048·72 = 760,320, against 797,294. **36,974 B (0.17 %) unexplained**, flagged.
+- Proposed: `Codec.Kernel.world_size_eq` (an equality in entry counts, CODEC's style like `turn_size_logWeight`). Its corollary: `size ≤ 35·weight/32 + 72·journalMax + refusalsBytes + worldFixed`.
+
+**The refusals term needs a bound before any f exists.** This is a fork (Q2):
+- **(R1) A kernel-wide cap.** `Bounds.refusalsPerWindowMax` (C), checked in `checkRefusal` beside the per-member one, refused `refusalBudget`.
+  - Bound: ≤ 3C tx entries + C counts, so refusalsBytes ≤ 3C·82 + C·50. At C = 16,384 that is 4.85 MB (ARITH).
+  - It is a kernel fold theorem with no receive premise.
+  - Cost: past C, one flood of colluding members leaves everyone's refusals unrecorded until the window turns. That is a liveness cost on refusal finality, never on admission.
+- **(R2) Per member, as now.** Bound: 3,986 B × members-ever. It needs two theorems:
+  - a Receive-level "a recorded refusal's member is an enrolled member", over audited logs, not `World.fold`;
+  - the membership bound ≤ 257 × founders (prose today).
+  - Plus a Host `foundersMax`. The term is 2.0 MB at 2 founders, 16.4 MB at 16, 65.6 MB at 64.
+- KERNEL-54 (the stale budget) changes the per-member shape either way: whatever it rules, this term must follow it.
+
+**The honest value (ARITH, deployed `allowanceMax` = 2^27, genesis weight ≈ 0, journal 221,184 B):**
+
+| Route | World weight max | Encoded max | / 2^28 |
+|---|---|---|---|
+| loose (`fold_world_weight`), R2 at 2 founders | 134,217,728 | 149.1 MB | 0.555 |
+| potential (Φ), R2 at 2 founders | 74,456,549 | 83.7 MB | 0.312 |
+| potential, R2 at 16 founders | same | 98.0 MB | 0.365 |
+| potential, R2 at 64 founders | same | 147.2 MB | 0.548 |
+| potential, R1 (C = 16,384) | same | 86.5 MB | 0.322 |
+
+The existing 2^28 happens to be sufficient for small founder sets even under the loose theorem, but for neither stated reason. The headroom it carries is not derived.
+
+### Options
+- **(A) Prose only.** Delete the two ratios and write the two jobs. Keep 2^28.
+  - Leaves both writer paths (import, refusals), and the bound stays an undocumented 1.8–3.2× slack.
+  - Rejected: a refusal that wedges the Store stays reachable.
+- **(B) Derive `worldBytesMax` from the allowance.** Primary `allowanceMax` = 2^27 (the useful life KERNEL-15 set).
+  - `worldWeightMax := genesisReserve + 76·allowanceMax/137`.
+  - `worldBytesMax := 35·worldWeightMax/32 + 72·journalMax + refusalsBytesMax + worldFixed`, about 84–87 MB.
+  - Host checks Φ at genesis AND import: `137·w.weight + 76·w.allowance ≤ 137·worldWeightMax`. Refused by name, as a Host refusal before `genesis` writes.
+  - An exported World from any honest lineage passes, because Φ never rises. Only a forged or foreign budget is refused.
+  - Theorem `reached_size_le`: every World the writer reaches encodes within `worldBytesMax`, so `worldTooLarge` is unreachable on the writer path.
+  - The reader bound falls ~3×, and so does PERF-2's adversarial reopen.
+- **(C) Derive the allowance from `worldBytesMax`.** Primary `worldBytesMax` = 2^28 (HOST-14's measured design ceiling: ~5 s decode at open, decisions/host.md:443).
+  - `worldWeightMax := 32·(2^28 − journal − refusals − fixed)/35`, ≈ 240.8 MB with R1.
+  - `allowanceMax := 137·(worldWeightMax − genesisReserve)/76`, ≈ 434 MB, about 3.2× today's useful life, at the reader bound HOST-14 already priced.
+  - The same Φ check, and the same `reached_size_le`.
+
+**Recommendation: (C), with R1, if HOST-14 co-signs that 2^28 is still the ceiling it wants. Otherwise (B).**
+- Both carry the same theorems. They differ only in which constant is primary, and that is HOST-14's call: it owns memory and reopen.
+- (C) gives honest Stores the memory the reader bound already pays for. (B) keeps the useful life and shrinks the worst reopen.
+- In both:
+  - delete Host/Bounds.lean:80's "~900 BAR stores" and :92–95's "other half is headroom" (no prose ratio replaces them; the def is the derivation);
+  - correct Weight.lean:8 and :446 and amend KERNEL-18's title ("`worldBytesMax` is DERIVED from the allowance by `fold_potential` + `world_size_eq`", not "is the genesis budget");
+  - correct KERNEL-12's and Turn.lean's "budget for the whole Store" to "turn records and World weight".
+- **Teeth.**
+  1. **Kernel.** Plant `RowLeaf.head` weight +16 (or drop the declare term from `Turn.logWeight`): `growth_le_logWeight` fails (omega), so the 76/137 is not decorative.
+  2. **Host.** host-sim arm `import-over-budget`: a carried World with allowance 2^40 is refused by name before `genesis` writes. Its control is an exported honest World, which imports.
+  3. **Host.** `plant-world-at-derived-cap`: `worldBytesMax := derived − 1` must make the max-World arm red. The arm is an adversarial World at the bound (all-declare or tomb-heavy plus a full refusals trie), built through admitted turns in host-sim at toy parameters. It catches a derivation whose f is too small.
+  4. **PERF-2** benches the worst reopen as a decoded base at exactly `worldBytesMax`, and pins it.
+
+### Price, in premises on landed theorems
+Grepped with `kernel20-stmts.py` over `worldBytesMax, allowanceMax, baseRecordMax, carriedMax, fold_world_weight, CarryFits, GenesisFits, Turn.growth, refusalsPerWindow, Cadence.deployed`.
+- **Kernel, potential and growth lemma.** New theorems only. `fold_world_weight` keeps its statement (re-proved as a corollary, or left as is). No statement names `Turn.growth` except `admit_world_weight`, which is unchanged.
+- **Kernel, R1.** `checkRefusal` gains one `req`. `checkRefusal_facts` and `refuse_facts` (Kernel/Proofs/Refusals.lean) gain one conjunct each. `refusalCount_le`, `fold_member_refusals_le`, `refusalsCounted_moved` and `refusalsCounted_moved_exists` keep their statements, since the per-member bound is untouched. CODEC's `refusalsFits` gains the global count clause, so a decoded base over C is refused `kernel/refusals`. `world_decode_refusalsOk` keeps its statement, and its proof gains the clause.
+- **Kernel, R2.** Two new theorem families at the Receive level, and `GenesisFits` gains a founders bound if Host's cap moves into the kernel. That changes `genesis_ok`, `checkFounders_ok`, `inputOf_fits`, `genesis_inj`, `genesis_cellsFit` and `genesisWorld_codecFits` (six statements that destructure or restate `GenesisFits`), or none if the cap stays a Host check. This is a reason for R1.
+- **Host.**
+  - `importWith` gains the Φ check, so `import_genesis_iff` (Host/Proofs/Cli.lean:27) gains one conjunct.
+  - The genesis CLI gains the same check, with no landed statement over it (grepped).
+  - Every `baseRecordMax` / `worldBytesMax` statement is parametric in `c : Cadence`, so the eight Seal, Base and Genesis theorems keep their statements.
+  - The Deployed discharge of `worldBytesMax < 2^32` (decisions/host.md:1083) holds under (B) and (C).
+  - `CarryFits` is untouched: the budget is Host's number (KERNEL-18: "HOST's choice"), so the check lives in Host.
+- **CODEC.** `world_size_eq` is new.
+- **Flag day.** Under (C), `allowanceMax` changes, so the genesis invite's input bytes (`Protocol.Invite.inputBytes … allowanceMax`) change, and every devnet Store re-geneses. Under (B), `Cadence.deployed.worldBytesMax` changes. A base over the new bound is refused `baseTooLarge`, and none exists (the largest measured is 44.7 MB). Bench/WorstCut, Ops/Founder and Ops/Plants read `allowanceMax` by name and re-run.
+
+### Critique
+- **f is loose where it matters least.** 76/137 is attained only by an all-declare World, and each declare needs a parent create in the same turn (ratio 1/2), so the reachable maximum lies between 0.5 and 0.5547 of the allowance. The 35/32 encoding factor is attained only by an all-tomb World. The two extremes cannot coexist. A joint bound is tighter, but it is a harder theorem for a few percent. I chose the separable one.
+- **R1 trades fairness for a theorem.** A global cap lets ~1,000 colluding members suppress everyone's refusal records for up to three windows. R2 keeps KERNEL-44's per-member shape, but its bound rests on a membership theorem that does not exist and on a founders cap that `GenesisFits` does not impose. I lean R1 because the kernel then bounds what its own fold reaches. That is the place a bound should live.
+- **The import wedge is ASSUMED past the first stop.** I read that the loop stops `sealFailed worldTooLarge`. I did not run a restart. If restart refuses at open instead, the defect is "an acknowledged Store that will not reopen", which is no better.
+- **The membership arithmetic is ASSUMED** at ~900 B per enrolment. Hybrid keys (CLIENT-11) make enrolment heavier and the refusal path harder to reach. The import path does not depend on it.
+- **36,974 B of the 16 B run are unexplained.** Until `world_size_eq` is proved, my accounting matches one run exactly and the other to 0.17 %.
+
+### Meta-critique
+- ROOT's item arrived framed as "the triple payment is probably a double count, and `worldBytesMax` is only the reader's". I was primed to find a defect in (a). Instead the accounting holds, by two equalities that already exist, and the defects are in (b) on paths the item did not name (import, refusals). Check that I did not invent (b)'s defects to have one:
+  - the import path is two reads: `importWith` has no allowance check, and `CarryFits`' clause is `< 2^64`;
+  - the refusal term is a codec read plus `keptRefusal`.
+  - Both are measured code, not inference.
+- I recommended (C) partly because "3.2× useful life at no new memory" is a satisfying number. The honest test is HOST-14's: is 2^28 still the size at which the design must change, now that a reopen at it has never been benched? PERF-2's bench decides that, so the recommendation is conditional on it, not on the arithmetic.
+
+### Questions
+- **ROOT, Q1.** (B) or (C): which constant is primary? Defer to HOST-14 on the ceiling.
+- **ROOT, Q2.** R1 (global refusal cap, kernel theorem) or R2 (per member, membership theorem plus a founders cap)? This is a genuine fork (pause item 4). It interacts with KERNEL-54.
+- **ROOT, Q3.** May the Φ check refuse an import whose lineage is foreign (a forged allowance)? It weakens nothing that exists. It is a new refusal on a path that today admits a wedge.
+- **HOST-14, Q4.** Co-sign or reject 2^28 as the reader ceiling before PERF-2's worst-reopen bench, or after it? Do you want the seal's `worldTooLarge` kept as the encode-side twin (HOST-41), with `reached_size_le` proving it unreachable on the writer path?
+- **ROOT, Q5.** Recorded refusals' LOG bytes are uncharged and not allowance-bounded (≤ 16 × ~64 KiB per member per window). KERNEL-44's checkpoint rule bounds replay, not disk. File as a cv task for KERNEL-44/54's owner, or fold it into this decision?
+- **CODEC (FYI).** `world_size_eq`, an equality in entry counts, is the theorem KERNEL-18 has owed you since 10-16.
+
+Status: PROPOSED.
+
+## KERNEL-55 RULED (ROOT, 2026-10-19) and AS BUILT, part 1: the potential (KERNEL-21)
+**Rulings.** Q1 = B: `allowanceMax` = 2^27 stays primary (KERNEL-15's useful life); `worldBytesMax` is DERIVED from `allowance_bounds_world` and CODEC's size equality (HOST-14's commit); both prose ratios ("~900 BAR stores", "the other half is headroom") are deleted, no ratio replaces them. Q2 = R1: `membersMax` is not a Bounds constant (Lang's `membersMax` = 63 is a quorum mask; Receive's `enrollMax` = 256 is per grant; no membership theorem exists), so the refusals trie is bounded by a kernel-wide cap per window (part 2). Q3 = YES: import refuses a carried allowance above `allowanceMax` by name, with a tooth (HOST-14's two arms: `allowancePastBound`, and `potentialPastBound`, since an allowance check alone still lets a weight-heavy carried World through). Q4: HOST-14 co-signed B and rejected 2^28 as the reader ceiling on PERF-2's measurement (a base at 2^28 reopened in 120.7 s, 2× THE BAR's 60 s). Q5: the refusals trie's bytes fold into the bound via R1; framing and index.log are HOST's theorem.
+**KERNEL-54 moved the constant.** A head's floor and a row's version are World bytes the log does not carry, so the tight term (a pinless declare at a head, slot weight 34) is growth 34 + 50 = 84 against log 34 + 27 = 61: r = 84/61 (it was 76/61). Every other term is below it: a create (40 + w)/(32 + w), an insert or upsert at most 56/49, a write's ops below its act, a nullifier 1, keeps, retires, retracts and range reads 0. So the potential is Φ = 145 · weight + 84 · allowance and f = 84/145 ≈ 0.5793 (it was 76/137 ≈ 0.5547). At A = 2^27: 84 · 2^27 / 145 = 77,753,718 (post-54) against 76 · 2^27 / 137 = 74,456,549 (pre-54); PERF-2's bench row pins the post-54 figure, whatever HOST adds for genesis weight, journal, refusals and framing.
+**Built (part 1).** Kernel/World.lean `potentialRatio := (84, 145)` and `potential w := 145 · w.weight + 84 · w.allowance` (HOST reads both by name). Kernel/Proofs/Weight.lean: `RowTouch.growth_le_weight`, `Turn.growth_le_logWeight` (61 · g ≤ 84 · L), `admit_potential`, `fold_potential` (premises exactly `fold_conserves`'s), `allowance_bounds_world` (145 · w'.weight ≤ potential w). TOOTH: `RowTouch.declare_growth_tight`, the equality 61 · 84 = 84 · 61 at a pinless declare, so 84/61 cannot be lowered. `fold_world_weight` keeps its statement as the weak form. The Weight header's "HOST-14's `worldBytesMax` is the genesis allowance" was false and is replaced: the allowance budgets turn records and World weight, not the whole Store (KERNEL-12's and KERNEL-18's wording is corrected by this entry).
+**Critique.** The separable bound is loose where it matters least: 84/61 is attained only by an all-declare World, and every declare needs its parent created in the same turn, so the reachable maximum is below 84/145 of the allowance; a joint bound is a harder theorem for a few percent. **Meta-critique.** The constant was priced on the pre-54 Turn and would have been wired into HOST as a literal; the post-54 recomputation is what the names `potential`/`potentialRatio` are for: the next field that adds World bytes without log bytes moves them here, once.
