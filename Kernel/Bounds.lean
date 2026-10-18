@@ -10,7 +10,7 @@ namespace Nanodregg.Kernel
 /-- The name of each bound, carried by `Reject.overBound` on the wire. -/
 inductive Bound
   | touches | opsPerWrite | creates | nullifiers
-  | event | slotsPerCell | slotKey | valueBytes | window | weight | counter | denoms
+  | event | slotsPerCell | slotKey | valueBytes | window | weight | counter | denoms | rows
   deriving DecidableEq, Repr
 
 namespace Bounds
@@ -69,6 +69,17 @@ budget PROTOCOL's client signs for every invoke (`invokeBudget` = 100000), and 2
 power of two that does; THE BAR's invoke measures 30 ticks per call (gates/waste.tsv), so the cap
 is ~4000 such runs. -/
 def treeTicksMax : Nat := 131072
+
+/-- A row key's width bound (LANG-44 (e) said 64; KERNEL-48 raises it to 128: a key of two digests in Lang's data encoding, each with CODEC's length byte, is 66 bytes, and CoAuthor's ballots are keyed {pick, voter}). -/
+def keyBytesMax : Nat := 128
+/-- The rows trie's depth (KERNEL-46 amendment 1): a 32-byte parent, the relation, the tag and the
+length bytes, then at most `keyBytesMax` key bytes. -/
+def rowDepth : Nat := 256 + 24 + 8 * keyBytesMax
+/-- A relation's row limit (LANG-44 (e), delvetalk's). -/
+def rowsPerRelationMax : Nat := 4096
+/-- Row touches per turn, and range reads per turn (KERNEL-48). -/
+def rowsMax : Nat := 32
+def rangesMax : Nat := 4
 
 end Bounds
 end Nanodregg.Kernel

@@ -1669,3 +1669,66 @@ family to them: `accrue` exists so that CappedTally fits. The independent test i
 `GuardedHole` is one field, one actor and one guard, written once. That is `once` mode exactly. `accrue` is my
 addition, and (2) says so.
 **Status.** PROPOSED (design only, ROOT rules). Build order if approved: after LANG-44 (its rows give the many-slots form).
+
+## LANG-49 · Relations built: LANG-44's Lang half as ruled (rows, range reads, head sum/cap), against KERNEL-48's signatures (2026-10-18; LANG-14, on the one `kernel!` rows day with KERNEL-16, CODEC-9 and HOST)
+**Decision.**
+- *Declared per package.* `Package.rels : List (Label × RelDecl)` (labels ascending, ≤ `relsMax` 8), relation `i`
+  is the `i`-th. `RelDecl := {key : List (Label × Ty) (DECLARED order), val : Ty, limit, sum : Option Label, cap,
+  retract : Bool, guard : Option Label}`. Install refuses by name: `relKey ℓ` (a key that is empty, has > 8 fields,
+  a repeated label, a field that is not fixed-width data (nat, bool, digest, an enumeration, records of those;
+  bytes/functions/payload sums refused), or is wider than `Kernel.Bounds.keyBytesMax` (128) at the deployed 32-byte
+  digest), `badRel ℓ` (a value that is not wire data; limit outside 1..`rowsPerRelationMax`; `sum` not a nat field of
+  a record value, or `cap` set without it (cap 0 ⇔ no sum, the kernel's convention); a guard that is not an interface
+  field of type `fn S (fn reqTy (fn relEditTy verdictTy))`), `tooManyRels`.
+- *Key bytes* are the ordinary data encoding of the key's fields in declared order (`keyWireTy`: positional labels
+  `k0 …`, so CODEC's record = product writes them; a range prefix is the first `m` fields). The method sees a key as a
+  record (labels ascending). No `u64be` flag day: v0 ranges are PREFIX-EQUALITY, never intervals, so numeric key
+  order is unused (named limit: "the latest rows by number" is not a range until CODEC gives `u64be`).
+- *A method's shape* (one shape for every method): `methodTy S A ks R E es = fn R (fn S (fn A (fn reqTy (rec {calls,
+  edits, state})))))`. ROWS FIRST, so every body's state/argument/request keep `var 2/1/0`. `R` is a record over the
+  relations the method reads: per relation `p0 … p(n-1) : optTy (rec {key, val : optTy V})` (the caller's row pins
+  under it, in pin order; absent row = `val none`; more pins than slots refused) and optionally `range : rec {pre :
+  first-m-fields record, rows : rec {r0 … r(k-1) : optTy (rec {key, val})}}` (the one signed range under it; its
+  `most` ≤ k; none or two signed ranges refused). `edits : rec {e0 … e(m-1) : optTy editTy}`, `editTy = sum over the
+  package's relations of sum {insert : row, [retract : rec {key}] (only if retract), upsert : row}`. Bounds: points ≤ 8,
+  range rows ≤ 8, edits ≤ 8 (each ≤ 10 so slot labels ascend), plus the kernel's per-turn `rowsMax` 32 / `rangesMax` 4.
+  `methodSig S rels` reads the declaration back EXACTLY (it rebuilds `readsTy`/`editsTy` and compares), returning
+  `Sig {arg, calls, reads, edits}`. A method that reads and edits nothing has `R = rec {}`, `edits = rec {}`.
+- *The run* (`Program.run`, now `Pinned → RowView → … → Slots × calls × row edits × ticks`): `readsData` builds `R`
+  from the `RowView` (`points`, `ranges` under `(self, i)` only: no lookup oracle, Eval/BigStep/Need untouched);
+  `editsOf` reads the edits row into `(RowSlot.row ⟨self, i, keyBytes⟩, insert|upsert amt v | retract)`, `amt` = the
+  value's sum column (0 without one); then each edit's GUARD runs through the one law runner `runLaw` over (state
+  before, request, the relation edit): O(edits), never a relation (law 5); refusal `lawDenied pkg "GUARD: reason"`.
+  `Program.rels` gives a create the `declare limit cap width retract` acts (width at the World's digest width).
+- *Receive* (Kernel/Receive, with KERNEL-15's agreement, cross-layer): `Unsigned.rowPins`, `Unsigned.ranges` (signed);
+  `RowView`/`rowView` (the view of the CURRENT World through the caller's row pins and signed ranges, listings at the
+  head's width, `rangeTooLong` never truncated); `Draft.rows`; `sealTurn` → `Turn.rows` (each row pin with its act or
+  `keep`, then unpinned inserts/declares) and `Turn.ranges`; new receive refusals `rowUnpinned`, `rangeUnpinned`,
+  `rangeTooLong`, `rowParent` (law 4: a run edits only its own object's rows, asserted where edits enter),
+  `duplicateRow`. `receive_congr` gains its one honest premise: the two `RowView`s agree.
+- *Text*: a seventh package section `(rels (ℓ (key (f T)…) (val T) (limit n) (sum [f]) (cap n) (retract b) (guard
+  [g]))…)` between `laws` and `body`, always present; the wire's package node gains a seventh child `node 2 [rel…]`.
+**Critique.** (1) The rows argument is verbose for a resident: `p0 … p(n-1)` slots and the `range` record are
+fixed-arity data, the cost of "no lookup oracle"; the authoring surface (LANG-50) is where this gets names. (2) A
+range's `most` must be ≤ the method's slots, and the method must still CHECK `pre` against its own state (a signer
+may pin a different round's range); the type gives the method `pre`, not the obligation. (3) Guards are package code
+like methods; a guard sees (state before, request, edit), NOT the old row, so "an upsert may not change the author"
+is not a guard (CoAuthor has none for that reason; the method checks it); on a programmed object they are a declarative per-edit invariant (as laws are), not a second authority.
+(4) Head reads (count/sum) are not offered: pinning the head would serialize every insert, by design; a method that
+needs the sum cannot see it (the tally does not: the kernel enforces the cap). (5) One method shape for all means
+the ROWLESS methods pay for the rows methods' shape: THE BAR's counter `add 1` rose from 1.545 to 1.577 ticks per
+required step (one more application, one more extracted field); ROOT ruled the ceiling 1.546 → 1.578 with that reason
+(law 1: one shape over two). It also means every package re-ids and every hand-written text gains `(v (rec))`, `(edits (record))` and `(rels)`.
+**Meta-critique.** The pull was toward an optional rows argument (methods without rows keep three binders) because it
+spares Ledger/Hosting/Protocol proofs a restatement; that is two method shapes, the thing this repo deletes. Rows-first
+was chosen for a cheaper reason (indices unchanged) and I checked it is not worse for the reader: the surface binds by
+name anyway.
+**Flag day.** Package bytes (seventh node), every method type (rows binder, edits field), every package id; the call
+(Unsigned rowPins/ranges); re-emits world/grain/Lifecycle, world/hosting/Allowance (hosting-sim --write-text),
+world/escrow/Escrow (ledger-sim --write-text), THE BAR counter; an old package text refuses `notPackage`, an old
+package's bytes `lang/package` (decode), an old method type `badMethod`.
+**Measured (the rows half of LANG-50's spec).** CappedTally on a relation: 4,355 chars / 3,034 package bytes (by hand
+over a pinned total: 3,903 chars); one reply 40 required steps / 63 ticks. CoAuthor on four relations: 37,287 chars, 67
+lines, 30,028 package bytes (over 4-slot lists: 63,865 / 142 / 52,965); propose 85/129, vote 115/166 (770 B logged), seal
+236/299 (676 B). Two answers / two proposals over one view both land, in both orders, to the same rows and cells roots
+(LT7c, LS10c); a vote and an edit of one proposal over one view: the second `stale` (LS11).

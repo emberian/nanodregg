@@ -22,7 +22,7 @@ variable {D : Type} [Ord D] [DecidableEq D]
 omit [Ord D] in
 theorem check_ok {E : Env D} {H : Nat} {roots txId : D} {nb : Nat} {r : Receipt D} {a : Answer D}
     (h : check E H roots txId nb r = .ok a) :
-    r.txId = txId ∧ rootsDigest E r.root r.jroot r.rroot = roots ∧ answerOf E H txId nb r = .ok a := by
+    r.txId = txId ∧ rootsDigest E r.root r.jroot r.rroot r.rowsroot = roots ∧ answerOf E H txId nb r = .ok a := by
   unfold check at h
   split at h
   · cases h
@@ -42,7 +42,7 @@ theorem check_committed {w : World D} (hc : w.JournalCanon E)
     (hk : check E H (w.roots E) txId nb r = .ok (.committed h td)) :
     w.journalAt E txId = some (h, td) ∨ Collision E.hash := by
   obtain ⟨-, hr, ha⟩ := check_ok hk
-  rcases rootsDigest_inj hE hr with ⟨-, hj, -⟩ | col
+  rcases rootsDigest_inj hE hr with ⟨-, hj, -, -⟩ | col
   · unfold answerOf at ha
     split at ha
     · split at ha
@@ -74,7 +74,7 @@ theorem check_absent {w : World D} (hc : w.JournalCanon E)
       split at ha
       · rename_i hv
         refine ⟨by simpa using hf, ?_⟩
-        rcases rootsDigest_inj hE hr with ⟨-, hj, -⟩ | col
+        rcases rootsDigest_inj hE hr with ⟨-, hj, -, -⟩ | col
         · rw [hj] at hv
           exact journal_exclusion_sound hE hn hc hv.1
         · exact .inr col
@@ -93,7 +93,7 @@ theorem check_refused_uncommitted {w : World D} (hc : w.JournalCanon E)
   · split at ha <;> cases ha
   · split at ha
     · rename_i hv
-      rcases rootsDigest_inj hE hr with ⟨-, hj, -⟩ | col
+      rcases rootsDigest_inj hE hr with ⟨-, hj, -, -⟩ | col
       · have hx := hv.2
         rw [hj] at hx
         exact journal_exclusion_sound hE hn hc hx
@@ -110,7 +110,7 @@ omit [Ord D] in
 refusal it states, the head's roots opening to that root. -/
 theorem check_refused {E : Env D} {H : Nat} {roots txId : D} {nb : Nat} {r : Receipt D} {h code : Nat}
     (hk : check E H roots txId nb r = .ok (.refused h code)) :
-    rootsDigest E r.root r.jroot r.rroot = roots ∧
+    rootsDigest E r.root r.jroot r.rroot r.rowsroot = roots ∧
       Trie.verifyInclusion (refusalSpec E) r.rroot (.tx txId) (refusalDigest E (.refused h code)) r.rpath = true := by
   obtain ⟨-, hr, ha⟩ := check_ok hk
   refine ⟨hr, ?_⟩

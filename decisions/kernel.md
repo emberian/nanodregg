@@ -2072,3 +2072,40 @@ def rowPin (E : Env D) : Option RowLeaf → D                -- the leaf digest,
 **Meta-critique.** Every amendment here came from asking what a landed theorem's proof would need, rather than whether the shape resembled a landed one. KERNEL-44 was written by the same method one step removed: it priced statement lines, not proof obligations. Amendments 1 and 2 are proof obligations it could not have seen without opening `chain_binds`.
 
 **Flag day (on the one day with CODEC-8 and HOST-12).** The World, base and carried codecs gain `refusals` and `steps`; the head link changes (tag byte, roots digest); the batch record carries steps; every Store re-geneses; `kernel/world-budget` and the head tags move.
+
+## KERNEL-48 · The rows day's signatures, in code and staged (KERNEL-15, 2026-10-18; KERNEL-46 as co-signed, LANG-44 (c) with ROOT's range-read conditions)
+**In code** (staged in logs/kernel15-rows-sig.patch; it builds `Kernel.World`; nothing is wired yet):
+- Kernel/Turn.lean: `RowKey`, `RowSlot` (head | row), `RowLeaf` (head count sum limit cap width retract | row amt val), `RowAct` (keep | insert | upsert | retract | declare limit cap width retract), `RowTouch` {slot, seen : Option D, act}, `RangeRead` {parent, rel, pre, most, seen}.
+- Kernel/World.lean: `Rows`; `rowKeyBytes`, length-prefixed per amendment 1 (a head is `parent ‖ rel ‖ 0`, a row is `parent ‖ rel ‖ 1 ‖ |k| ‖ k`); `rowLeafBytes` / `rowDigest`; `rowSpec`; `RowLeaf.fits`; `rowAt`; `rowPin`, the first pin kind (a leaf digest, or a domain-separated absent pin); `under`, a prefix walk of the one trie (one path, then the entries returned); `rangeRows` (`none` = `rangeTooLong`, never truncated); `rangePin`, the second pin kind (the relation, width and prefix, the listing's length, then every row's key bytes and leaf digest in key order).
+- Kernel/Bounds.lean: `keyBytesMax` 128 (LANG-44 said 64; a two-digest key is 66 bytes), `rowDepth` = 256 + 24 + 8·keyBytesMax, `rowsPerRelationMax` 4096.
+
+**Planned next, the wiring (not in this patch):**
+- `Turn.rows : List (RowTouch D)` and `Turn.ranges : List (RangeRead D)`; `World.rows : Rows D`.
+- `rootsDigest` gains the rows root (amendment 4); `World.weight` counts rows (amendment 5).
+- Reject gains keyTaken, relationFull, relationCapped, rowParentUnpinned, orphanRow, rowsRemain, keyWidth, noRelation, retractForbidden, declareLate, rangeTooLong. A range pin that moved is `stale parent`.
+- Theorems:
+  - rows_separate (unconditional);
+  - rows_stale_refused;
+  - range_stale_refused, with stale_refused's conclusion;
+  - range_rows_exact: the supplied rows are exactly the keys under the pinned prefix, in key order. Its tooth: a listing with one row dropped has a different pin, and the dropped row's seal arg-max is refuted;
+  - head_sum and sum_le_cap;
+  - admit_comm: both orders admit, additive heads.
+- WASTE `rows-read-per-range-read`.
+- Bounds rowsMax and rangesMax per turn.
+
+**Critique.** `under` lists the whole subtree before `rangeRows` compares its length with `most`. That is bounded by `rowsPerRelationMax` but is not an early stop; the wiring makes it stop at `most + 1`. `startsWith` re-checks a leaf's keys against the prefix, because a shallow leaf holds keys of any path.
+
+**KERNEL-16 addendum (2026-10-18): rows are charged, carried, and pinned (wired, not yet landed).**
+- *Charge* (amendment 5, done): `RowLeaf.weight` (head 1 + 5·8 + 1; row 1 + 8 + 4 + |v|), `rowEntryWeight (s, l) = s.weight + l.weight`, `World.weight = cellsWeight trie + rowsWeight rows`. `Turn.growth` adds `RowTouch.growth`: a declare its head entry, an insert or an upsert its whole row entry, else 0. An upsert of an existing row and a retract give back the entry they replace or remove (`rowFreed`, judged on the rows before the touch). `rowsRun` returns `(rows, freed)`; `rowsAfter` is its value after `check`; `commit` sets `allowance := allowance + credit posts + freed − charge`. A head write over a head costs nothing (its size does not depend on its counters).
+- *Check order* (changed): `… checkNullifiers, checkRowsRemain, checkRanges, rowsRun, checkCharge (credit posts + freed), checkCreates, checkSteps`. Rows run before the charge because the charge needs their credit. A turn with no row touches and no ranges is refused exactly as before (every rows check passes on empty lists; `rowsRemain` fires only on a retired parent that holds rows).
+- *Carry*: `Carried` gains `rows` (last field); `World.carried` and `carryWorld` carry them; the carry origin's input gains the rows root bytes after the cells root; `checkCarry`'s `allowanceTooLarge` bounds `cellsWeight + rowsWeight + allowance`, `entryTooLarge` bounds the rows-root bytes. Refusals are still not carried.
+- *Premise spread* (priced): `admit_world_weight`, `admit_conserves`, `fold_conserves`, `fold_world_weight`, `fold_budget_lt`, `carry_fold_budget_lt` gain `w.RowsCanon E` (`Trie.Canon (rowSpec E) 0 w.rows`). It is discharged at Deployed (`genesis_fold_budget_lt`, `deployed_budget_lt`: `receive_genesis_rowsCanon`, `fold_rowsCanon`, `carry_rowsCanon`). No cell reader gains a premise: `World.Canon` is unchanged (cells only); the new premise sits only on theorems whose subject, `World.weight`, now includes the rows. `admit_retire`'s conclusion adds `(rowsAfter E w t).2` (0 for a turn with no row touches). `rootsDigest_inj`, `head_roots`, `head_root`, `head_read_sound`, `head_absent_sound` open four roots.
+- *Theorems landed in `Kernel.Proofs.Rows`*: `rowStep_weight`, `rowsRun_weight`, `rowsAfter_weight`, `admit_rowsCanon`, `refuse_rows`, `fold_rowsCanon`, `admit_range_pins` / `range_stale_refused`, `admit_row_pins` / `rows_stale_refused` (slots distinct by `duplicateRow`, so no earlier touch moves a pinned row: `rowStep_get_other`). Still owed: `rows_separate` on the domain, `range_rows_exact` with its dropped-row tooth, `head_sum` / `sum_le_cap` and RowsOk (fits + headed) preservation for CODEC's refines, `admit_comm`, and the kernel-sim teeth (stale row pin, stale range pin, keyTaken, relationCapped plants) plus WASTE `rows-read-per-range-read`.
+
+**KERNEL-17 addendum (2026-10-18): five admission changes found while proving, all strengthening.**
+1. *Same-turn orphan (a real hole).* `rowStep` checked the parent live in the PRE-state only, so one turn could retire p and insert a row under p (the retire touch also satisfied `rowParentUnpinned`), leaving a row under a tombstone. Now refused `orphanRow p`.
+2. *Heads leave with their parent (`dropHeads`).* `checkRowsRemain` refused a retire while rows remained, but the heads stayed: garbage that counted in `World.weight` and was never credited back. `rowsRun` now ends by removing each retired parent's heads (one `retainAt` path each, ≤ 256 since `rel < 256`) and adds their `rowEntryWeight` to the freed total, so `fold_conserves` stays exact. This is what makes CODEC-9's `rowsParented` (every head's parent is live; over the parts `trie rows`, so the carried wire checks it too) true of every reached World.
+3. *A range prefix no longer than the key.* `checkRanges` refuses `keyWidth` unless `q.pre.size ≤ width`. Without it a key SHORTER than the prefix, whose missing bits read as 0, routes into the subtree `under` lists whole, so the listing was not the filtered one and `range_rows_exact` was false.
+4. *Bounded reads (the KERNEL-48 critique).* `under S pre n` returns at most n entries and stops walking (`takeList n` past the prefix); `rangeRows` reads `most + 1`; `checkRowsRemain` reads 257 and refuses a full listing (more than 256 entries under a parent means a row). WASTE `rows-read-per-range-read` measures it.
+5. *Names.* `rejectNames` gains the 13 rows Rejects in constructor order and `refusalNames` LANG-14's 5 receive refusals: every recorded reject code shifts, so the vectors re-emit and old refusal records refuse by stamp.
+Not changed: rows_separate stays CODEC's (`rows_separateOn`, tooth `rows_kindByte_needed`); no Kernel twin.

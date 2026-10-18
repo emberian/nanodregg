@@ -10,7 +10,7 @@ re-genesis, never by a migration). It is checked like genesis (`carry_ok`: refus
 * `carry_origin_ne_genesis`: a carry's origin is never a genesis's origin, or the origin hash has
   a collision (the two inputs are tagged apart, `originInput`);
 * `carry_inj`: a carry's origin commits to its name, nonce, the exported World's origin, the
-  trie's root, the allowance, the height and the journal's listing, or a collision (with both
+  trie's root, the rows' root, the allowance, the height and the journal's listing, or a collision (with both
   journals canonical, the journal itself: `carry_inj_canon`);
 * `carry_canon`, `carry_cellsFit`, `carry_journalOk`: the new World keeps every invariant the
   read and journal theorems rest on (true by construction: the fields are copied);
@@ -30,14 +30,17 @@ open Nanodregg.Kernel Nanodregg.Codec Nanodregg.Codec.Stream
 
 variable {D : Type} [Ord D]
 
-/-- A carry input within the raw codec's bounds, whose allowance plus the carried cells' storage is
+/-- A carry input within the raw codec's bounds, whose allowance plus the carried cells' and rows'
+storage is
 below 2^64 (so the allowance is, and every World folded from the carry keeps the sum below it:
 `Budget.carry_fold_budget_lt`). `carry` refuses by name outside it. -/
 def CarryFits (X : Ctx D) (name nonce : ByteArray) (fromOrigin : D) (c : Carried D) : Prop :=
-  name.size ≤ Bounds.eventBytesMax ∧ nonce.size ≤ Bounds.eventBytesMax ∧ cellsWeight c.trie + c.allowance < 2 ^ 64 ∧
+  name.size ≤ Bounds.eventBytesMax ∧ nonce.size ≤ Bounds.eventBytesMax ∧
+    cellsWeight c.trie + rowsWeight c.rows + c.allowance < 2 ^ 64 ∧
     c.height < 2 ^ 64 ∧ c.journal.toList.length ≤ Bounds.journalMax ∧
     (X.env.bytes fromOrigin).size ≤ Bounds.eventBytesMax ∧
     (X.env.bytes (c.trie.hashOf (trieSpec X.env))).size ≤ Bounds.eventBytesMax ∧
+    (X.env.bytes (c.rows.hashOf (rowSpec X.env))).size ≤ Bounds.eventBytesMax ∧
     ∀ p ∈ c.journal.toList, (X.env.bytes p.1).size ≤ Bounds.eventBytesMax ∧ p.2.1 < 2 ^ 64 ∧
       (X.env.bytes p.2.2).size ≤ Bounds.eventBytesMax
 
@@ -48,10 +51,10 @@ theorem checkCarry_ok {X : Ctx D} {name nonce : ByteArray} {fromOrigin : D} {c :
   simp only [checkCarry, req_bind_ok, req_ok, decide_eq_true_eq, Bool.and_eq_true, List.all_eq_true, hc]
   unfold CarryFits
   constructor
-  · rintro ⟨h1, h2, h3, h4, h5, ⟨⟨h6, h7⟩, h8⟩⟩
-    exact ⟨h1, h2, h3, h4, h5, h6, h7, fun p hp => ⟨(h8 p hp).1.1, (h8 p hp).1.2, (h8 p hp).2⟩⟩
-  · rintro ⟨h1, h2, h3, h4, h5, h6, h7, h8⟩
-    exact ⟨h1, h2, h3, h4, h5, ⟨⟨h6, h7⟩, fun p hp => ⟨⟨(h8 p hp).1, (h8 p hp).2.1⟩, (h8 p hp).2.2⟩⟩⟩
+  · rintro ⟨h1, h2, h3, h4, h5, ⟨⟨⟨h6, h7⟩, h7'⟩, h8⟩⟩
+    exact ⟨h1, h2, h3, h4, h5, h6, h7, h7', fun p hp => ⟨(h8 p hp).1.1, (h8 p hp).1.2, (h8 p hp).2⟩⟩
+  · rintro ⟨h1, h2, h3, h4, h5, h6, h7, h7', h8⟩
+    exact ⟨h1, h2, h3, h4, h5, ⟨⟨⟨h6, h7⟩, h7'⟩, fun p hp => ⟨⟨(h8 p hp).1, (h8 p hp).2.1⟩, (h8 p hp).2.2⟩⟩⟩
 
 /-- **Carry is checked**: it returns a World exactly on a `CarryFits` input, and that World is
 `carryWorld`. -/
@@ -74,25 +77,27 @@ theorem carry_carried {X : Ctx D} {name nonce : ByteArray} {fromOrigin : D} {c :
   rfl
 
 /-- **Export, then carry: the same state.** The new World holds the exported World's trie,
-allowance, height and journal; only its chain and origin are its own. -/
+allowance, height, journal and rows; only its chain and origin are its own. -/
 theorem carry_of_carried {X : Ctx D} {name nonce : ByteArray} {w w' : World D}
     (h : carry X name nonce w.origin w.carried = .ok w') :
     w'.trie = w.trie ∧ w'.allowance = w.allowance ∧ w'.height = w.height ∧ w'.journal = w.journal ∧
-      w'.chain = World.genesisChain X.env w'.origin := by
+      w'.rows = w.rows ∧ w'.chain = World.genesisChain X.env w'.origin := by
   obtain ⟨_, rfl⟩ := carry_ok.mp h
-  exact ⟨rfl, rfl, rfl, rfl, rfl⟩
+  exact ⟨rfl, rfl, rfl, rfl, rfl, rfl⟩
 
 theorem carryInput_lawfulOn :
     LawfulOn (fun v : CarryInput => v.1.size ≤ Bounds.eventBytesMax ∧ (v.2.1.size ≤ Bounds.eventBytesMax ∧
-      (v.2.2.1.size ≤ Bounds.eventBytesMax ∧ (v.2.2.2.1.size ≤ Bounds.eventBytesMax ∧ (v.2.2.2.2.1 < 2 ^ 64 ∧
-        (v.2.2.2.2.2.1 < 2 ^ 64 ∧ (v.2.2.2.2.2.2.length ≤ Bounds.journalMax ∧
-          ∀ x ∈ v.2.2.2.2.2.2, x.1.size ≤ Bounds.eventBytesMax ∧
-            (x.2.1 < 2 ^ 64 ∧ x.2.2.size ≤ Bounds.eventBytesMax)))))))) carryInput :=
+      (v.2.2.1.size ≤ Bounds.eventBytesMax ∧ (v.2.2.2.1.size ≤ Bounds.eventBytesMax ∧
+        (v.2.2.2.2.1.size ≤ Bounds.eventBytesMax ∧ (v.2.2.2.2.2.1 < 2 ^ 64 ∧
+        (v.2.2.2.2.2.2.1 < 2 ^ 64 ∧ (v.2.2.2.2.2.2.2.length ≤ Bounds.journalMax ∧
+          ∀ x ∈ v.2.2.2.2.2.2.2, x.1.size ≤ Bounds.eventBytesMax ∧
+            (x.2.1 < 2 ^ 64 ∧ x.2.2.size ≤ Bounds.eventBytesMax))))))))) carryInput :=
   product_lawfulOn (rawBytes_lawfulOn _ (by decide)) (product_lawfulOn (rawBytes_lawfulOn _ (by decide))
     (product_lawfulOn (rawBytes_lawfulOn _ (by decide)) (product_lawfulOn (rawBytes_lawfulOn _ (by decide))
+      (product_lawfulOn (rawBytes_lawfulOn _ (by decide))
       (product_lawfulOn nat64_lawfulOn (product_lawfulOn nat64_lawfulOn
         (rawList_lawfulOn (product_lawfulOn (rawBytes_lawfulOn _ (by decide))
-          (product_lawfulOn nat64_lawfulOn (rawBytes_lawfulOn _ (by decide)))) _ (by decide)))))))
+          (product_lawfulOn nat64_lawfulOn (rawBytes_lawfulOn _ (by decide)))) _ (by decide))))))))
 
 omit [Ord D] in
 /-- **A carry's origin is never a genesis's**, or the origin hash has a collision: the two inputs
@@ -107,12 +112,13 @@ theorem carry_fits_input {X : Ctx D} {name nonce : ByteArray} {fromOrigin : D} {
     (h : CarryFits X name nonce fromOrigin c) :
     let v := carryInputOf X name nonce fromOrigin c
     v.1.size ≤ Bounds.eventBytesMax ∧ (v.2.1.size ≤ Bounds.eventBytesMax ∧
-      (v.2.2.1.size ≤ Bounds.eventBytesMax ∧ (v.2.2.2.1.size ≤ Bounds.eventBytesMax ∧ (v.2.2.2.2.1 < 2 ^ 64 ∧
-        (v.2.2.2.2.2.1 < 2 ^ 64 ∧ (v.2.2.2.2.2.2.length ≤ Bounds.journalMax ∧
-          ∀ x ∈ v.2.2.2.2.2.2, x.1.size ≤ Bounds.eventBytesMax ∧
-            (x.2.1 < 2 ^ 64 ∧ x.2.2.size ≤ Bounds.eventBytesMax))))))) := by
-  obtain ⟨h1, h2, h3, h4, h5, h6, h7, h8⟩ := h
-  refine ⟨h1, h2, h6, h7, by simp only [carryInputOf]; omega, h4, ?_, ?_⟩
+      (v.2.2.1.size ≤ Bounds.eventBytesMax ∧ (v.2.2.2.1.size ≤ Bounds.eventBytesMax ∧
+        (v.2.2.2.2.1.size ≤ Bounds.eventBytesMax ∧ (v.2.2.2.2.2.1 < 2 ^ 64 ∧
+        (v.2.2.2.2.2.2.1 < 2 ^ 64 ∧ (v.2.2.2.2.2.2.2.length ≤ Bounds.journalMax ∧
+          ∀ x ∈ v.2.2.2.2.2.2.2, x.1.size ≤ Bounds.eventBytesMax ∧
+            (x.2.1 < 2 ^ 64 ∧ x.2.2.size ≤ Bounds.eventBytesMax)))))))) := by
+  obtain ⟨h1, h2, h3, h4, h5, h6, h7, h7', h8⟩ := h
+  refine ⟨h1, h2, h6, h7, h7', by simp only [carryInputOf]; omega, h4, ?_, ?_⟩
   · simp only [carryInputOf, List.length_map]; exact h5
   · intro x hx
     simp only [carryInputOf, List.mem_map] at hx
@@ -120,15 +126,16 @@ theorem carry_fits_input {X : Ctx D} {name nonce : ByteArray} {fromOrigin : D} {
     exact h8 p hp
 
 /-- **A carry commits to everything it was made from**: two carries with one origin had the same
-name, nonce, exported origin, trie root, allowance, height and journal listing, or the origin hash
-has a collision. -/
+name, nonce, exported origin, trie root, rows root, allowance, height and journal listing, or the
+origin hash has a collision. -/
 theorem carry_inj {X : Ctx D}
     {n : Nat} (hE : X.env.Lawful n)
     {name nonce name' nonce' : ByteArray} {f f' : D} {c c' : Carried D}
     (hf : CarryFits X name nonce f c) (hf' : CarryFits X name' nonce' f' c')
     (h : carryOriginOf X name nonce f c = carryOriginOf X name' nonce' f' c') :
     (name = name' ∧ nonce = nonce' ∧ f = f' ∧
-      c.trie.hashOf (trieSpec X.env) = c'.trie.hashOf (trieSpec X.env) ∧ c.allowance = c'.allowance ∧
+      c.trie.hashOf (trieSpec X.env) = c'.trie.hashOf (trieSpec X.env) ∧
+      c.rows.hashOf (rowSpec X.env) = c'.rows.hashOf (rowSpec X.env) ∧ c.allowance = c'.allowance ∧
       c.height = c'.height ∧ c.journal.toList = c'.journal.toList) ∨ HashColl X.env domOrigin := by
   by_cases hbytes : originInput.bytes (.inr (carryInputOf X name nonce f c)) =
       originInput.bytes (.inr (carryInputOf X name' nonce' f' c'))
@@ -138,8 +145,8 @@ theorem carry_inj {X : Ctx D}
     have he := carryInput_lawfulOn.bytes_injective (carry_fits_input hf) (carry_fits_input hf')
       (ba_append_cancel _ _ _ hbytes)
     simp only [carryInputOf, Prod.mk.injEq] at he
-    obtain ⟨rfl, rfl, hfo, hr, ha, hh, hl⟩ := he
-    refine ⟨rfl, rfl, hE.bytes_eq hfo, hE.bytes_eq hr, ha, hh, ?_⟩
+    obtain ⟨rfl, rfl, hfo, hr, hrr, ha, hh, hl⟩ := he
+    refine ⟨rfl, rfl, hE.bytes_eq hfo, hE.bytes_eq hr, hE.bytes_eq hrr, ha, hh, ?_⟩
     have hinj : Function.Injective (fun p : D × Nat × D => (X.env.bytes p.1, p.2.1, X.env.bytes p.2.2)) := by
       intro a b hab
       simp only [Prod.mk.injEq] at hab
@@ -156,10 +163,11 @@ theorem carry_inj_canon [DecidableEq D] {X : Ctx D} {n : Nat} (hE : X.env.Lawful
     (hf : CarryFits X name nonce f c) (hf' : CarryFits X name' nonce' f' c')
     (h : carryOriginOf X name nonce f c = carryOriginOf X name' nonce' f' c') :
     (name = name' ∧ nonce = nonce' ∧ f = f' ∧
-      c.trie.hashOf (trieSpec X.env) = c'.trie.hashOf (trieSpec X.env) ∧ c.allowance = c'.allowance ∧
+      c.trie.hashOf (trieSpec X.env) = c'.trie.hashOf (trieSpec X.env) ∧
+      c.rows.hashOf (rowSpec X.env) = c'.rows.hashOf (rowSpec X.env) ∧ c.allowance = c'.allowance ∧
       c.height = c'.height ∧ c.journal = c'.journal) ∨ HashColl X.env domOrigin := by
-  rcases carry_inj hE hf hf' h with ⟨h1, h2, h3, h4, h5, h6, h7⟩ | hc
-  · exact .inl ⟨h1, h2, h3, h4, h5, h6, Trie.eq_of_toList_eq (journalSpec X.env) hj hj' h7⟩
+  rcases carry_inj hE hf hf' h with ⟨h1, h2, h3, h4, h4', h5, h6, h7⟩ | hc
+  · exact .inl ⟨h1, h2, h3, h4, h4', h5, h6, Trie.eq_of_toList_eq (journalSpec X.env) hj hj' h7⟩
   · exact .inr hc
 
 /-- A carried World is canonical when the exported one was: the trie is the same. -/
@@ -216,7 +224,7 @@ state (`pinned` reads only the trie), whatever the origin and chain were. -/
 theorem receive_reorigin [DecidableEq D] {X : Ctx D} {w : World D} {c : Call D} {o ch : D}
     {rf : Refusals D} {st : Nat} (hc : c.unsigned.world = o) :
     receive X { w with origin := o, chain := ch, refusals := rf, steps := st } c =
-      receiveWith X (pinned X.env w c.unsigned.pins) c := by
+      receiveWith X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c := by
   unfold receive
   simp only [req, decide_eq_true hc, if_true]
   rfl
@@ -224,7 +232,7 @@ theorem receive_reorigin [DecidableEq D] {X : Ctx D} {w : World D} {c : Call D} 
 /-- A call that names its World is derived from the World's pinned state alone. -/
 theorem receive_named [DecidableEq D] {X : Ctx D} {w : World D} {c : Call D}
     (hc : c.unsigned.world = w.origin) :
-    receive X w c = receiveWith X (pinned X.env w c.unsigned.pins) c := by
+    receive X w c = receiveWith X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c := by
   unfold receive
   simp only [req, decide_eq_true hc, if_true]
   rfl
@@ -235,7 +243,7 @@ same members, keys, grants and cells at the same ids), so the members keep their
 rights. (On the old World the same call is `wrongWorld`: it names the new origin.) -/
 theorem carry_receive [DecidableEq D] {X : Ctx D} {name nonce : ByteArray} {w w' : World D}
     (h : carry X name nonce w.origin w.carried = .ok w') {c : Call D} (hc : c.unsigned.world = w'.origin) :
-    receive X w' c = receiveWith X (pinned X.env w c.unsigned.pins) c := by
+    receive X w' c = receiveWith X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c := by
   obtain ⟨_, rfl⟩ := carry_ok.mp h
   exact receive_reorigin (w := w) hc
 

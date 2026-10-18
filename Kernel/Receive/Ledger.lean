@@ -75,14 +75,14 @@ def capMax : Nat := 2 ^ 63
 def issue (X : Ctx D) (c : Call D) (a : At D) (cap : Nat) : Except (Refusal D) (Draft D) := do
   let well := cellIdOf X.env (txIdOf X c) a.base
   req (decide (cap ≤ capMax)) (.overflow well)
-  pure ⟨bornAt X c a.base [accountCell X a.actor (X.env.bytes well) cap], [], []⟩
+  pure ⟨bornAt X c a.base [accountCell X a.actor (X.env.bytes well) cap], [], [], []⟩
 
 /-- `account asset owner`: the empty account of the asset's denomination owned by `owner`, at its
 keyed id. Anyone may open anyone's (it is empty, floor 0, and only its owner can debit it); a
 second open of the pair is `World.admit`'s `idTaken`. It does not read the well, so opening an
 account never pins the hot cell. -/
 def account (X : Ctx D) (asset owner : D) : Except (Refusal D) (Draft D) :=
-  pure ⟨[(accountId X owner asset, accountCell X owner (X.env.bytes asset) 0)], [], []⟩
+  pure ⟨[(accountId X owner asset, accountCell X owner (X.env.bytes asset) 0)], [], [], []⟩
 
 /-- The write setting an account's balance. -/
 def setBalance (b : Int) : Act := .write [.set Value.balanceKey (Value.balanceBytes b)]
@@ -102,7 +102,7 @@ def transfer (X : Ctx D) (look : Pinned D) (a : At D) (srcR dstR : AcctRef D) (a
   let db := dv.balance + amount
   req (Value.fits sb) (.overflow src)
   req (Value.fits db) (.overflow dst)
-  pure ⟨[], [(src, setBalance sb), (dst, setBalance db)], (once.map (onceNullifier X src)).toList⟩
+  pure ⟨[], [(src, setBalance sb), (dst, setBalance db)], (once.map (onceNullifier X src)).toList, []⟩
 
 /-- The write setting an account's floor. -/
 def setFloor (f : Nat) : Act := .write [.set Value.floorKey (Value.floorBytes f)]
@@ -123,6 +123,6 @@ def credit (X : Ctx D) (look : Pinned D) (a : At D) (well : D) (acctR : AcctRef 
   req (decide (av.denom = wv.denom)) (.assetMismatch acct)
   req (decide (amount ≤ wv.floor)) (.overflow well)
   req (decide (av.floor + amount ≤ capMax)) (.overflow acct)
-  pure ⟨[], [(well, setFloor (wv.floor - amount)), (acct, setFloor (av.floor + amount))], []⟩
+  pure ⟨[], [(well, setFloor (wv.floor - amount)), (acct, setFloor (av.floor + amount))], [], []⟩
 
 end Nanodregg.Kernel.Receive

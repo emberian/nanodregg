@@ -155,16 +155,17 @@ variable {D : Type} {bytesOf : D → ByteArray} {digestOf : ByteArray → Option
 /-- **The required count exists for every admitted invoke** (cv 01a14aba-1281): `requiredOf` never
 refuses `required: fuel` or `required: extraction` on an invoke `runMeasured` admits; it counts,
 and the count is below the ticks charged. -/
-theorem requiredOf_total {look : Pinned D} {pkg : D} {state : Slots} {method : Nat}
-    {args : ByteArray} {r : Req D} {budget : Nat} {s : Slots} {calls : List (Body D)} {ticks k : Nat}
-    (hm : runMeasured bytesOf digestOf look pkg state method args r budget = .ok (s, calls, ticks, k)) :
-    ∃ N, Need.requiredOf bytesOf digestOf look pkg state method args r budget = .ok N ∧ N < ticks := by
+theorem requiredOf_total {look : Pinned D} {rv : RowView D} {pkg : D} {state : Slots} {method : Nat}
+    {args : ByteArray} {r : Req D} {budget : Nat} {s : Slots} {calls : List (Body D)}
+    {rows : List (RowSlot D × RowAct)} {ticks k : Nat}
+    (hm : runMeasured bytesOf digestOf look rv pkg state method args r budget = .ok (s, calls, rows, ticks, k)) :
+    ∃ N, Need.requiredOf bytesOf digestOf look rv pkg state method args r budget = .ok N ∧ N < ticks := by
   obtain ⟨S, v, used, d, left, hs, hr, he, rfl⟩ := runMeasured_setup hm
   obtain ⟨n, hd⟩ := bigStep_derives (run_bigStep hr)
   obtain ⟨m, hf⟩ := extract_forces S.ty he
   obtain ⟨h1, h2⟩ := derives_lt_used hd hr
   have h3 := forces_le hf he
-  have hq : Need.requiredOf bytesOf digestOf look pkg state method args r budget = .ok (n + m) := by
+  have hq : Need.requiredOf bytesOf digestOf look rv pkg state method args r budget = .ok (n + m) := by
     simp [Need.requiredOf, bind, Except.bind, hs, need_complete hd budget (by omega),
       needExtract_complete hf budget (by omega), pure, Except.pure]
   -- the floor has one source: `required_lt_ticks`

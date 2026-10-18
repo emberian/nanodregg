@@ -55,7 +55,7 @@ theorem derivePins_keeps {X : Ctx D} {w : World D} :
 theorem planUnchecked_derives {X : Ctx D} {me : Self D} {w : World D} {key : ByteArray} {b : Body D}
     {u : Unsigned D} {t : Turn D} (h : planUnchecked X me w key b = .ok (u, t)) :
     u.member = me.member ∧ u.key = key ∧ u.body = b ∧
-      deriveTurn X (pinned X.env w u.pins) ⟨u, ByteArray.empty⟩ = .ok t := by
+      deriveTurn X (pinned X.env w u.pins) (rowView X.env w u) ⟨u, ByteArray.empty⟩ = .ok t := by
   simp only [planUnchecked, bind, Except.bind] at h
   split at h
   · cases h
@@ -73,7 +73,7 @@ theorem planUnchecked_derives {X : Ctx D} {me : Self D} {w : World D} {key : Byt
 theorem plan_admits {X : Ctx D} {me : Self D} {w : World D} {key : ByteArray} {b : Body D}
     {u : Unsigned D} (h : plan X me w key b = .ok u) :
     u.member = me.member ∧ u.key = key ∧ u.body = b ∧
-    ∃ t w', deriveTurn X (pinned X.env w u.pins) ⟨u, ByteArray.empty⟩ = .ok t ∧
+    ∃ t w', deriveTurn X (pinned X.env w u.pins) (rowView X.env w u) ⟨u, ByteArray.empty⟩ = .ok t ∧
       World.admit X.env w t = .ok w' := by
   unfold plan at h
   split at h

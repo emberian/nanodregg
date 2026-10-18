@@ -93,9 +93,9 @@ private def isIllTyped : Except CheckError Unit → Bool
   | .error (.illTyped _) => true
   | _ => false
 
-/-- `λ s a r. {calls = {c0 = slot}, state = s}` -/
+/-- `λ rows s a r. {calls = {c0 = slot}, edits = {}, state = s}` -/
 private def goWith (slot : Term) : Term :=
-  .lam S1 (.lam (.record []) (.lam reqTy (resultT (callsT [slot]) (.var 2))))
+  .lam (.record []) (.lam S1 (.lam (.record []) (.lam reqTy (resultT (callsT [slot]) (.var 2)))))
 
 /-- An `invoke` call of call type `T`. -/
 private def anInvoke (T : Ty) : Term :=

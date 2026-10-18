@@ -38,8 +38,8 @@ def callLines (i : Nat) (ks : List Lang.Ty) : Option (List String) :=
 def methodLine (p : Lang.Package) (i : Nat) : Option (List String) :=
   match Lang.resolveMethod (D := D) p i with
   | .error _ => none
-  | .ok (ℓ, A, ks) =>
-    match Lang.Print.ty A, callLines i ks with
+  | .ok (ℓ, sg) =>
+    match Lang.Print.ty sg.arg, callLines i sg.calls with
     | some a, some cs => some (s!"method {i} {ℓ} {a}" :: cs)
     | _, _ => none
 

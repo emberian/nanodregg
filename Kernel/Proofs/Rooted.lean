@@ -347,9 +347,9 @@ theorem sealTurn_creates {X : Ctx D} {c : Call D} {cr : List (D × Cell)} {efs :
 /-- **No receiver bears an unrooted grant**, anywhere in a call's tree. Only `grant` bears a grant
 cell, append-only, and on the World only with a parent (`grant_rooted`). Needs the digest's bytes
 to be injective (a target read back as the World's bytes IS the World). -/
-theorem derive_born {X : Ctx D} {look : Pinned D} {c : Call D} {d : Draft D}
+theorem derive_born {X : Ctx D} {look : Pinned D} {rv : RowView D} {c : Call D} {d : Draft D}
     {n : Nat} (hE : X.env.Lawful n)
-    (h : derive X look c = .ok d) : ∀ p ∈ d.creates, BornRooted X p.2 := by
+    (h : derive X look rv c = .ok d) : ∀ p ∈ d.creates, BornRooted X p.2 := by
   have notGrant : ∀ (cell : Cell) (base : Nat), cell.kind ≠ kindGrant →
       ∀ p ∈ bornAt X c base [cell], BornRooted X p.2 := by
     intro cell base hk p hp hpk
@@ -361,7 +361,7 @@ theorem derive_born {X : Ctx D} {look : Pinned D} {c : Call D} {d : Draft D}
     rcases List.mem_append.mp hp with hp | hp
     · exact ha p hp
     · exact hb p hp
-  · intro _ _ p hp; simp at hp
+  · intro _ _ _ _ p hp; simp at hp
   · intro sub wk actor b r hb h
     cases b with
     | invoke => simp [Body.isInvoke] at hb
@@ -385,9 +385,14 @@ theorem derive_born {X : Ctx D} {look : Pinned D} {c : Call D} {d : Draft D}
         exact notGrant _ _ (by simp [kindPackage, kindGrant])
     | create pkg laws state =>
         have hd := stepped_draft h
-        simp only [create, except_bind_ok, pure, Except.pure, Except.ok.injEq] at hd
+        simp only [create, except_bind_ok, pure, Except.pure] at hd
         obtain ⟨⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, hr⟩ := hd
-        rw [← hr]
+        have hc : r.1.creates = bornAt X c wk.born [objectCell X actor pkg laws state] := by
+          cases pkg <;>
+          · simp only [except_bind_ok, Except.ok.injEq] at hr
+            obtain ⟨_, _, hr⟩ := hr
+            rw [← hr]
+        rw [hc]
         exact notGrant _ _ (by simp [objectCell, kindObject, kindGrant])
     | write obj edits via =>
         have hd := stepped_draft h
@@ -451,8 +456,8 @@ theorem derive_born {X : Ctx D} {look : Pinned D} {c : Call D} {d : Draft D}
         simp
 
 /-- What a derived Turn bears: the call's Draft, sealed once. -/
-theorem receiveWith_born {X : Ctx D} {look : Pinned D} {c : Call D} {t : Turn D}
-    (h : receiveWith X look c = .ok t) : ∃ d, derive X look c = .ok d ∧ t.creates = d.creates := by
+theorem receiveWith_born {X : Ctx D} {look : Pinned D} {rv : RowView D} {c : Call D} {t : Turn D}
+    (h : receiveWith X look rv c = .ok t) : ∃ d, derive X look rv c = .ok d ∧ t.creates = d.creates := by
   obtain ⟨_, d, hd, hs⟩ := receiveWith_sealed h
   exact ⟨d, hd, (sealTurn_ok hs).2.2.2.2.2.2.2.1⟩
 

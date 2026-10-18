@@ -36,6 +36,32 @@ def nat32 : Stream Nat where
     | .ok (v, j) => .ok (v.toNat, j)
     | .error e => .error e
 
+/-- A natural as one byte (canonical below 256): a relation's index, a rows key's width (KERNEL's
+`byte8`). -/
+def nat8 : Stream Nat where
+  shape := .u8
+  size _ := 1
+  put n buf := u8.put (UInt8.ofNat n) buf
+  get b i :=
+    match u8.get b i with
+    | .ok (v, j) => .ok (v.toNat, j)
+    | .error e => .error e
+
+/-- `u8 len ‖ bytes`, at most `max` bytes (canonical for `max < 256`): a rows key, a range prefix
+(KERNEL-46's `rowKeyBytes`, whose length byte makes the key prefix-free). -/
+def bytes8 (max : Nat) : Stream ByteArray where
+  shape := .bytes8 max
+  size v := 1 + v.size
+  put v buf := u8.put (UInt8.ofNat v.size) buf ++ v
+  get b i :=
+    match u8.get b i with
+    | .error e => .error e
+    | .ok (n, j) =>
+      if n.toNat ≤ max then
+        if j + n.toNat ≤ b.size then .ok (b.extract j (j + n.toNat), j + n.toNat)
+        else .error (.truncated j n.toNat)
+      else .error (.pastBound i max n.toNat)
+
 /-- `u32 len ‖ bytes`, at most `max` bytes (canonical for `max < 2^32`). -/
 def rawBytes (max : Nat) : Stream ByteArray where
   shape := .bytes max

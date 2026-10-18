@@ -13,7 +13,7 @@ refinement. A relabelling (`accept` and `back` changed together: two same-typed 
 swapped) keeps the shape, the tag and every lawfulness theorem, and changes what stored bytes mean
 (`Codec.Kernel.slot_relabel_unseen`). This is the detector for it.
 
-`gates/codec-vectors.tsv` holds, for every refine site (the census's 33), a few vectors: bytes encoded
+`gates/codec-vectors.tsv` holds, for every refine site the refine census finds, a few vectors: bytes encoded
 from values drawn deterministically from `Kernel.Sim`'s generator (seeded by the site's name), with the
 site's tag and the decoded value as `print` shows it. The kernel codecs are taken at `Kernel.Sim`'s
 parameters (`D = UInt64`, `dc = u64`, `Sim.env`).
@@ -34,8 +34,9 @@ namespace Nanodregg.Emit.Vectors
 
 open Nanodregg.Kernel Nanodregg.Kernel.Receive Nanodregg.Codec Nanodregg.Codec.Kernel
 
-deriving instance Repr for Op, Cell, Entry, Slot, Leaf, Act, Touch, Turn, Right, AcctRef, Body, Unsigned,
-  Call, Host.Entry, Host.Carry.Head, RefusalSlot, RefusalLeaf, Refused, Step
+deriving instance Repr for RowKey, RowSlot, RowLeaf, RowAct, RowTouch, RangeRead, Op, Cell, Entry, Slot, Leaf,
+  Act, Touch, Turn, Right, AcctRef, Body, Unsigned, Call, Host.Entry, Host.Carry.Head, RefusalSlot, RefusalLeaf,
+  Refused, Step
 
 /-! ## Values, drawn from the simulation's generator -/
 
@@ -76,9 +77,63 @@ def act (k : Nat) : G Act := do
   | 1 => return .write (← list 2 (do op (← below 2)))
   | _ => return .retire
 def touch : G (Touch Sim.D) := do return ⟨← dig, ← dig, ← act (← below 3)⟩
+/-! ### Rows (KERNEL-46/48) -/
+
+/-- A byte string of exactly `n` drawn bytes. -/
+def bytesN (n : Nat) : G ByteArray := do
+  let mut b := ByteArray.empty
+  for _ in [0:n] do
+    b := b.push (← below 256).toUInt8
+  return b
+def rowSlot (k : Nat) : G (RowSlot Sim.D) := do
+  if k = 0 then return .head (← dig) (← below 256)
+  else return .row ⟨← dig, ← below 256, ← bytes 6⟩
+def rowLeaf (k : Nat) : G RowLeaf := do
+  if k = 0 then return .head (← below 9) (← below 900) (← below 4096) (← nat64) (← below 129) ((← below 2) = 0)
+  else return .row (← nat64) (← bytes 6)
+def rowAct (k : Nat) : G RowAct := do
+  match k with
+  | 0 => return .keep
+  | 1 => return .insert (← nat64) (← bytes 4)
+  | 2 => return .upsert (← nat64) (← bytes 4)
+  | 3 => return .retract
+  | _ => return .declare (← below 4097) (← nat64) (← below 129) ((← below 2) = 0)
+def rowTouch : G (RowTouch Sim.D) := do return ⟨← rowSlot (← below 2), ← opt dig, ← rowAct (← below 5)⟩
+def rangeRead : G (RangeRead Sim.D) := do return ⟨← dig, ← below 256, ← bytes 4, ← nat64, ← dig⟩
+
+/-- A rows listing a World can hold (`rowsFits`, `rowsHeaded`, `rowsParented` over a trie whose live
+cells are `ps`): one or two relations under parents drawn from `ps` (none if `ps` is empty), each a head
+counting and summing its one to three rows, its keys of the head's width. -/
+def rows (ps : List Sim.D) : G (List (RowSlot Sim.D × RowLeaf)) := do
+  if ps.isEmpty then return []
+  let nrel := (← below 2) + 1
+  let mut out := []
+  for _ in [0:nrel] do
+    let p := ps.getD (← below ps.length) 0
+    let rel ← below 256
+    let width := (← below 8) + 1
+    let n := (← below 3) + 1
+    let mut keys : List ByteArray := []
+    for _ in [0:n] do keys := keys ++ [← bytesN width]
+    let uniq := keys.eraseDups
+    let mut rs := []
+    let mut sum := 0
+    for k in uniq do
+      let amt ← below 50
+      sum := sum + amt
+      rs := rs ++ [(RowSlot.row ⟨p, rel, k⟩, RowLeaf.row amt (← bytes 6))]
+    let limit := uniq.length + (← below 3)
+    let cap := sum + (← below 100)
+    out := out ++ (RowSlot.head p rel, RowLeaf.head uniq.length sum limit cap width ((← below 2) = 0)) :: rs
+  return out
+
+/-- The canonical rows trie of a listing (KERNEL-48). -/
+def rowsOf (l : List (RowSlot Sim.D × RowLeaf)) : Rows Sim.D :=
+  Trie.build (rowSpec Sim.env) (rowSpec Sim.env).depth 0 l
+
 def turn : G (Turn Sim.D) := do
   return ⟨← dig, ← nat64, ← nat64, ← list 2 touch, ← list 1 (do return (← dig, ← cell)), ← list 2 dig, ← nat64,
-    ← bytes 8⟩
+    ← bytes 8, ← list 2 rowTouch, ← list 1 rangeRead⟩
 def right (k : Nat) : G Right := do
   match k with
   | 0 => return .observe
@@ -103,7 +158,8 @@ def body (k : Nat) : G (Body Sim.D) := do
   | 11 => return .transfer (← acctRef (← below 2)) (← acctRef (← below 2)) (← nat64) (← opt dig) (← opt (bytes 4))
   | _ => return .credit (← dig) (← acctRef (← below 2)) (← nat64) (← opt dig)
 def unsigned (k : Nat) : G (Unsigned Sim.D) := do
-  return ⟨← dig, ← dig, ← bytes 4, ← nat64, ← nat64, ← list 2 (do return (← dig, ← dig)), ← nat64, ← body k⟩
+  return ⟨← dig, ← dig, ← bytes 4, ← nat64, ← nat64, ← list 2 (do return (← dig, ← dig)), ← nat64, ← body k,
+    ← list 1 (do return (← rowSlot (← below 2), ← dig)), ← list 1 rangeRead⟩
 
 /-- A canonical trie of a few slots, each holding the leaf of its kind. -/
 def trie : G (Cells Sim.D) := do
@@ -143,9 +199,20 @@ def refusals (h : Nat) : G (List (RefusalSlot Sim.D × RefusalLeaf)) := do
 def refusalsOf (l : List (RefusalSlot Sim.D × RefusalLeaf)) : Refusals Sim.D :=
   Trie.build (refusalSpec Sim.env) (refusalSpec Sim.env).depth 0 l
 
+/-- The live cells of a cells trie: the parents a relation may sit under. -/
+def liveIds (t : Cells Sim.D) : List Sim.D :=
+  t.toList.filterMap fun p => match p with | (.cell c, .entry (.live _)) => some c | _ => none
+
+/-- A cells trie with one more live cell, `p`. -/
+def withLive (t : Cells Sim.D) (p : Sim.D) : Cells Sim.D :=
+  Trie.build (trieSpec Sim.env) (trieSpec Sim.env).depth 0 (t.toList ++ [(.cell p, .entry (.live ⟨0, .ram, []⟩))])
+
 def world : G (World Sim.D) := do
   let h := (← below 1000) + 3
-  return ⟨← trie, journalOf (← journal h), refusalsOf (← refusals h), h, h + (← below 5), ← dig, ← nat64, ← dig⟩
+  let t ← trie
+  return { trie := t, journal := journalOf (← journal h), refusals := refusalsOf (← refusals h),
+           rows := rowsOf (← rows (liveIds t)), height := h, steps := h + (← below 5), chain := ← dig, allowance := ← below (2 ^ 40),
+           origin := ← dig }
 
 def refused : G (Refused Sim.D) := do
   return ⟨← dig, ← dig, ← nat64, ← nat64, ← below 40, ← bytes 8⟩
@@ -155,7 +222,9 @@ def step (k : Nat) : G (Step Sim.D) := do
 
 def carried : G (Carried Sim.D) := do
   let h := (← below 1000) + 3
-  return ⟨← trie, ← nat64, h, journalOf (← journal h)⟩
+  let t ← trie
+  return { trie := t, allowance := ← nat64, height := h, journal := journalOf (← journal h),
+           rows := rowsOf (← rows (liveIds t)) }
 
 /-! ## The one printer -/
 
@@ -164,14 +233,15 @@ def text {α : Type} [Repr α] (v : α) : String := (repr v).pretty 1000000
 
 def printWorld (w : World Sim.D) : String :=
   s!"\{trie := {text w.trie.toList}, journal := {text w.journal.toList}, " ++
-    s!"refusals := {text w.refusals.toList}, height := {w.height}, steps := {w.steps}, " ++
+    s!"refusals := {text w.refusals.toList}, rows := {text w.rows.toList}, height := {w.height}, " ++
+    s!"steps := {w.steps}, " ++
     s!"chain := {w.chain}, allowance := {w.allowance}, origin := {w.origin}}"
 
 def printWire (x : WorldWire Sim.D) : String := printWorld (ofWire x)
 
 def printCarried (c : Carried Sim.D) : String :=
   s!"\{trie := {text c.trie.toList}, allowance := {c.allowance}, height := {c.height}, " ++
-    s!"journal := {text c.journal.toList}}"
+    s!"journal := {text c.journal.toList}, rows := {text c.rows.toList}}"
 
 def printCarriedWire (x : CarriedWire Sim.D) : String := printCarried (carriedOfWire x)
 
@@ -264,6 +334,86 @@ def disjointVecs : G (List (WorldWire Sim.D)) := do
     { base with journal := journalOf (w.journal.toList ++ [(k, (w.height - 5, ← dig))]) }
   return drawn ++ [toWire base, toWire both]
 
+/-- `kernel/row-key`'s vectors: a head and a drawn row, then the key width's boundary pair: a row key of
+exactly `Bounds.keyBytesMax` (128) bytes reads back, one of 129 is refused by the codec (`pastBound` at
+the length byte; admission's own refusal of a wider key is `overBound rows`, and of a key not at its
+relation's width `keyWidth`). -/
+def rowKeyVecs : G (List (RowSlot Sim.D)) := do
+  let p ← dig
+  let rel ← below 256
+  return [← rowSlot 0, ← rowSlot 1, .row ⟨p, rel, ← bytesN Bounds.keyBytesMax⟩,
+    .row ⟨p, rel, ← bytesN (Bounds.keyBytesMax + 1)⟩]
+
+/-- `kernel/range-read`'s vectors: two drawn, then the prefix's boundary pair (128 bytes read back, 129
+refused `pastBound`). -/
+def rangeReadVecs : G (List (RangeRead Sim.D)) := do
+  let drawn ← each 2 fun _ => rangeRead
+  let q ← rangeRead
+  return drawn ++ [{ q with pre := ← bytesN Bounds.keyBytesMax }, { q with pre := ← bytesN (Bounds.keyBytesMax + 1) }]
+
+/-- A range pin's input over a drawn rows listing: a relation's rows under a prefix of their keys. -/
+def rangePinVec : G (RangePinWire Sim.D) := do
+  let l ← rows [← dig]
+  match l with
+  | (.head p rel, .head _ _ _ _ width _) :: _ =>
+    let rs := (rowsOf l).toList.filter fun q => match q.1 with
+      | .row k => decide (k.parent = p) && decide (k.rel = rel) | _ => false
+    return (p, rel, width, ByteArray.empty, rs.map fun q => (q.1, rowDigest Sim.env q.2))
+  | _ => return (← dig, 0, 0, ByteArray.empty, [])
+
+/-- `kernel/rows`' vectors: two drawn Worlds, then the cap's boundary pair: a relation whose one row's amount
+is exactly its cap, its head counting and summing it (read back), and the same World one past it (refused
+`kernel/rows` by name). -/
+def rowsVecs : G (List (WorldWire Sim.D)) := do
+  let drawn ← each 2 fun _ => toWire <$> Vectors.world
+  let w ← Vectors.world
+  let p ← dig
+  let k ← bytesN 2
+  let at_ (sum : Nat) : World Sim.D :=
+    { w with rows := rowsOf (w.rows.toList ++ [(.head p 7, .head 1 sum 4 40 2 true), (.row ⟨p, 7, k⟩, .row sum ByteArray.empty)]) }
+  return drawn ++ [toWire (at_ 40), toWire (at_ 41)]
+
+/-- `kernel/rows-headed`'s vectors: two drawn Worlds, then the count's boundary pair: a head counting
+its one row (read back), and the same World with the head counting two (refused `kernel/rows-headed`). -/
+def headedVecs : G (List (WorldWire Sim.D)) := do
+  let drawn ← each 2 fun _ => toWire <$> Vectors.world
+  let w ← Vectors.world
+  let p ← dig
+  let k ← bytesN 3
+  let at_ (count : Nat) : World Sim.D :=
+    { w with rows := rowsOf (w.rows.toList ++ [(.head p 9, .head count 5 4 40 3 true), (.row ⟨p, 9, k⟩, .row 5 ByteArray.empty)]) }
+  return drawn ++ [toWire (at_ 1), toWire (at_ 2)]
+
+/-- `kernel/carried-rows` / `-headed`: two drawn carried states, then the World vectors' boundary rows. -/
+def carriedRowsVecs (forCap : Bool) : G (List (CarriedWire Sim.D)) := do
+  let drawn ← each 2 fun _ => carriedToWire <$> Vectors.carried
+  let c ← Vectors.carried
+  let p ← dig
+  let k ← bytesN 3
+  let at_ (count sum : Nat) : Carried Sim.D :=
+    { c with rows := rowsOf (c.rows.toList ++ [(.head p 9, .head count sum 4 40 3 true), (.row ⟨p, 9, k⟩, .row sum ByteArray.empty)]) }
+  return drawn ++ (if forCap then [carriedToWire (at_ 1 40), carriedToWire (at_ 1 41)]
+    else [carriedToWire (at_ 1 5), carriedToWire (at_ 2 5)])
+
+/-- `kernel/rows-parented`'s vectors: two drawn Worlds, then the boundary pair: a relation under a live
+parent cell (read back), and the same World without that cell (refused `kernel/rows-parented`). -/
+def parentedVecs : G (List (WorldWire Sim.D)) := do
+  let drawn ← each 2 fun _ => toWire <$> Vectors.world
+  let w ← Vectors.world
+  let p ← dig
+  let k ← bytesN 3
+  let r := rowsOf (w.rows.toList ++ [(.head p 9, .head 1 5 4 40 3 true), (.row ⟨p, 9, k⟩, .row 5 ByteArray.empty)])
+  return drawn ++ [toWire { w with trie := withLive w.trie p, rows := r }, toWire { w with rows := r }]
+
+/-- `kernel/carried-rows-parented`'s vectors: the same pair over a carried state. -/
+def carriedParentedVecs : G (List (CarriedWire Sim.D)) := do
+  let drawn ← each 2 fun _ => carriedToWire <$> Vectors.carried
+  let c ← Vectors.carried
+  let p ← dig
+  let k ← bytesN 3
+  let r := rowsOf (c.rows.toList ++ [(.head p 9, .head 1 5 4 40 3 true), (.row ⟨p, 9, k⟩, .row 5 ByteArray.empty)])
+  return drawn ++ [carriedToWire { c with trie := withLive c.trie p, rows := r }, carriedToWire { c with rows := r }]
+
 def sites : List Site :=
   [ site "i64" Stream.i64 (each 2 fun _ => (·.toInt64) <$> u64) text,
     site "bool" Stream.bool (pure [false, true]) text,
@@ -293,6 +443,17 @@ def sites : List Site :=
       (each 2 fun k => if k = 0 then do return .refused (← nat64) (← nat64) else do return .count (← nat64)) text,
     site "kernel/refusal-order" (refusalsTrie Sim.env Sim.dc)
       (each 2 fun _ => do return refusalsOf (← refusals ((← below 1000) + 3))) (fun t => text t.toList),
+    site "kernel/row-key" (Codec.Kernel.rowKey Sim.dc) rowKeyVecs text,
+    site "kernel/row-leaf" Codec.Kernel.rowLeaf (each 2 Vectors.rowLeaf) text,
+    site "kernel/row-act" Codec.Kernel.rowAct (each 5 Vectors.rowAct) text,
+    site "kernel/row-touch" (Codec.Kernel.rowTouch Sim.dc) (each 2 fun _ => Vectors.rowTouch) text,
+    site "kernel/range-read" (Codec.Kernel.rangeRead Sim.dc) rangeReadVecs text,
+    site "kernel/range-pin" (Codec.Kernel.rangePinWire Sim.dc) (each 2 fun _ => rangePinVec) text,
+    site "kernel/row-order" (rowsTrie Sim.env Sim.dc) (each 2 fun _ => do return rowsOf (← rows [← dig]))
+      (fun t => text t.toList),
+    site "kernel/rows" (rowsWire Sim.env Sim.dc) rowsVecs printWire,
+    site "kernel/rows-headed" (headedWire Sim.env Sim.dc) headedVecs printWire,
+    site "kernel/rows-parented" (parentedWire Sim.env Sim.dc) parentedVecs printWire,
     site "kernel/journal" (journalWire Sim.env Sim.dc) (each 2 fun _ => toWire <$> Vectors.world) printWire,
     site "kernel/refusals" (refusalsWire Sim.env Sim.dc) refusalsVecs printWire,
     site "kernel/refusals-disjoint" (disjointWire Sim.env Sim.dc) disjointVecs printWire,
@@ -302,6 +463,9 @@ def sites : List Site :=
     site "kernel/world-budget" (Codec.Kernel.world Sim.env Sim.dc) worldVecs printWorld,
     site "kernel/carried-journal" (carriedJournalWire Sim.env Sim.dc)
       (each 2 fun _ => carriedToWire <$> Vectors.carried) printCarriedWire,
+    site "kernel/carried-rows" (carriedRowsWire Sim.env Sim.dc) (carriedRowsVecs true) printCarriedWire,
+    site "kernel/carried-rows-headed" (carriedHeadedWire Sim.env Sim.dc) (carriedRowsVecs false) printCarriedWire,
+    site "kernel/carried-rows-parented" (carriedParentedWire Sim.env Sim.dc) carriedParentedVecs printCarriedWire,
     site "kernel/carried" (Codec.Kernel.carried Sim.env Sim.dc) (each 2 fun _ => Vectors.carried) printCarried,
     site "path/badComponent" (Field.pathCodec pathMax (by decide)) pathVecs (fun p => text p.val),
     site "host/base/index-count" (Host.Base.codec (Codec.Kernel.world Sim.env Sim.dc))

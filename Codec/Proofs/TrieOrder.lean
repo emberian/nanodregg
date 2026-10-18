@@ -1,5 +1,6 @@
 import Codec.Proofs.World
 import Kernel.Proofs.TrieMap
+import Kernel.Proofs.TrieOrder
 
 /-!
 # The trie's listing order, from its own bits (CODEC-28 step 2, generic half)
@@ -21,53 +22,7 @@ open Nanodregg.Kernel Nanodregg.Codec.Stream
 section Bits
 variable {K V D' : Type} (S : Trie.Spec K V D')
 
-/-- `k` routes before `k'` from depth `d`: at the first bit in `[d, depth)` where they differ, the
-bit of `k` is clear and the bit of `k'` is set. -/
-def BitLt (d : Nat) (k k' : K) : Prop :=
-  ∃ i, d ≤ i ∧ i < S.depth ∧ (∀ j, d ≤ j → j < i → S.bit k j = S.bit k' j) ∧
-    S.bit k i = false ∧ S.bit k' i = true
-
-theorem bitLt_irrefl {d : Nat} {k : K} : ¬ BitLt S d k k := fun ⟨_, _, _, _, h1, h2⟩ => by
-  rw [h1] at h2; cases h2
-
-theorem bitLt_asymm {d : Nat} {k k' : K} (h : BitLt S d k k') : ¬ BitLt S d k' k := by
-  rintro ⟨i', hd', _, hpre', h1', h2'⟩
-  obtain ⟨i, hd, _, hpre, h1, h2⟩ := h
-  rcases Nat.lt_trichotomy i i' with hlt | rfl | hgt
-  · have := hpre' i hd hlt; rw [h1, h2] at this; cases this
-  · rw [h1] at h2'; cases h2'
-  · have := hpre i' hd' hgt; rw [h1', h2'] at this; cases this
-
-/-- Two keys parted at `d` the other way round are not in `BitLt` order from `d`. -/
-theorem not_bitLt_of_bit {d : Nat} {k k' : K} (hk : S.bit k d = true) (hk' : S.bit k' d = false) :
-    ¬ BitLt S d k k' := by
-  rintro ⟨i, hd, _, hpre, h1, _⟩
-  rcases Nat.lt_or_eq_of_le hd with hlt | rfl
-  · have := hpre d (Nat.le_refl d) hlt; rw [hk, hk'] at this; cases this
-  · rw [hk] at h1; cases h1
-
-theorem bitLt_at {d : Nat} {k k' : K} (hd : d < S.depth) (hk : S.bit k d = false)
-    (hk' : S.bit k' d = true) : BitLt S d k k' :=
-  ⟨d, Nat.le_refl d, hd, fun _ hj hji => absurd hji (by omega), hk, hk'⟩
-
-theorem not_bitLt_deep {d : Nat} {k k' : K} (hd : S.depth ≤ d) : ¬ BitLt S d k k' :=
-  fun ⟨_, h1, h2, _⟩ => by omega
-
-theorem bitLt_of_succ {d : Nat} {k k' : K} (h : BitLt S (d + 1) k k') (he : S.bit k d = S.bit k' d) :
-    BitLt S d k k' := by
-  obtain ⟨i, hd, hi, hpre, h1, h2⟩ := h
-  refine ⟨i, by omega, hi, fun j hj hji => ?_, h1, h2⟩
-  rcases Nat.lt_or_eq_of_le hj with hlt | rfl
-  · exact hpre j hlt hji
-  · exact he
-
-theorem bitLt_succ {d : Nat} {k k' : K} (h : BitLt S d k k') (he : S.bit k d = S.bit k' d) :
-    BitLt S (d + 1) k k' := by
-  obtain ⟨i, hd, hi, hpre, h1, h2⟩ := h
-  refine ⟨i, ?_, hi, fun j hj hji => hpre j (by omega) hji, h1, h2⟩
-  rcases Nat.lt_or_eq_of_le hd with hlt | rfl
-  · exact hlt
-  · rw [h1, h2] at he; cases he
+-- `BitLt` and its first lemmas (`bitLt_irrefl` … `bitLt_succ`) are `Kernel.Proofs.TrieOrder`'s.
 
 /-- A listing in `BitLt` order from `d` is its keys with bit `d` clear, then those with it set. -/
 theorem eq_filter_append {d : Nat} : ∀ (l : List (K × V)), l.Pairwise (fun p q => BitLt S d p.1 q.1) →
@@ -215,6 +170,45 @@ theorem trieListing_get_ordered (S : Trie.Spec K V D') (hsep : Trie.Separates S)
       obtain ⟨rfl, rfl⟩ := h
       exact ⟨l, rfl, ho, rfl⟩
     · rw [trieListing_get_refused S hsep hg ho] at h; cases h
+
+/-! ### Separation on the listing (KERNEL-48's rows: a trie separated on its keys' domain only) -/
+
+/-- A listing in bit order whose keys are separated is accepted. -/
+theorem trieListing_get_ok_sep (S : Trie.Spec K V D') {name : String}
+    {c : Stream (List (K × V))} {b : ByteArray} {i j : Nat} {l : List (K × V)}
+    (h : c.get b i = .ok (l, j)) (hsep : Trie.SepAt S 0 l) (ho : l.Pairwise (fun p q => BitLt S 0 p.1 q.1)) :
+    (refine name c (listingAccept S) Trie.T.toList).get b i = .ok (Trie.build S S.depth 0 l, j) := by
+  have hc := (build_listing_iff S _ 0 l rfl hsep).mpr ho
+  simp only [listingAccept, refine, h]
+  rw [if_pos (by rw [Bool.and_eq_true, beq_iff_eq]; exact hc)]
+
+/-- **Every other listing whose keys are separated is refused by the codec's name.** -/
+theorem trieListing_get_refused_sep (S : Trie.Spec K V D') {name : String}
+    {c : Stream (List (K × V))} {b : ByteArray} {i j : Nat} {l : List (K × V)}
+    (h : c.get b i = .ok (l, j)) (hsep : Trie.SepAt S 0 l) (ho : ¬ l.Pairwise (fun p q => BitLt S 0 p.1 q.1)) :
+    (refine name c (listingAccept S) Trie.T.toList).get b i = .error (.rejected i name) := by
+  have hc : ¬ (((Trie.build S S.depth 0 l).toList == l && leavesNodup (Trie.build S S.depth 0 l)) = true) :=
+    fun hc => ho ((build_listing_iff S _ 0 l rfl hsep).mp (by rwa [Bool.and_eq_true, beq_iff_eq] at hc))
+  simp only [listingAccept, refine, h]
+  rw [if_neg hc]
+
+/-- What a trie-listing codec whose decoded keys are separated accepts was a listing in bit order. -/
+theorem trieListing_get_ordered_sep (S : Trie.Spec K V D') {name : String}
+    {c : Stream (List (K × V))} {b : ByteArray} {i j : Nat} {t : Trie.T K V D'}
+    (hsep : ∀ l j, c.get b i = .ok (l, j) → Trie.SepAt S 0 l)
+    (h : (refine name c (listingAccept S) Trie.T.toList).get b i = .ok (t, j)) :
+    ∃ l, c.get b i = .ok (l, j) ∧ l.Pairwise (fun p q => BitLt S 0 p.1 q.1) ∧
+      t = Trie.build S S.depth 0 l := by
+  cases hg : c.get b i with
+  | error e => simp [refine, hg] at h
+  | ok r =>
+    obtain ⟨l, j'⟩ := r
+    by_cases ho : l.Pairwise (fun p q => BitLt S 0 p.1 q.1)
+    · rw [trieListing_get_ok_sep S hg (hsep l j' hg) ho] at h
+      simp only [Except.ok.injEq, Prod.mk.injEq] at h
+      obtain ⟨rfl, rfl⟩ := h
+      exact ⟨l, rfl, ho, rfl⟩
+    · rw [trieListing_get_refused_sep S hg (hsep l j' hg) ho] at h; cases h
 
 end Listing
 

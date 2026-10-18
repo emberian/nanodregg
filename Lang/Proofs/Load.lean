@@ -290,26 +290,54 @@ theorem callSlotsOf_spec {row : List (Label × Ty)} {ks : List Ty} (h : callSlot
     exact (zip_map_fst_snd row).symm
   · cases h
 
-theorem methodSig_spec {S t A : Ty} {ks : List Ty} (h : methodSig S t = some (A, ks)) :
-    t = methodTy S A ks ∧ ks.length ≤ Kernel.Bounds.callsMax := by
-  unfold methodSig at h
+theorem editSlotsOf_spec {rels : List (Label × RelDecl)} {row : List (Label × Ty)} {es : Nat}
+    (h : editSlotsOf rels row = some es) :
+    row = (slotLabels "e" es).map (fun l => (l, optTy (editTy rels))) ∧ es ≤ editsMax := by
+  unfold editSlotsOf at h
+  split at h
+  · rename_i hc; cases h; exact ⟨hc.2, hc.1⟩
+  · cases h
+
+theorem readsOf_spec {rels : List (Label × RelDecl)} {R : Ty} {rs : List (Label × RelRead)}
+    (h : readsOf rels R = some rs) : readsTy rels rs = R := by
+  unfold readsOf at h
   split at h
   · split at h
-    · rename_i row S'' hc
-      obtain ⟨rfl, rfl, rfl, _⟩ := hc
-      simp only [Option.map_eq_some_iff, Prod.mk.injEq] at h
-      obtain ⟨ks', hks, rfl, rfl⟩ := h
-      obtain ⟨hrow, hlen⟩ := callSlotsOf_spec hks
-      subst hrow
-      exact ⟨rfl, hlen⟩
+    · split at h
+      · rename_i hR; cases h; exact hR
+      · cases h
     · cases h
   · cases h
 
-theorem methodArg_spec {S t A : Ty} (h : methodArg S t = some A) : ∃ ks, t = methodTy S A ks := by
+/-- **The type IS the declaration** (LANG-49): a method field's signature reads back exactly the
+type it was read from, its rows argument, call slots and edit slots included. -/
+theorem methodSig_spec {S : Ty} {rels : List (Label × RelDecl)} {t : Ty} {sg : Sig}
+    (h : methodSig S rels t = some sg) :
+    t = methodTy S sg.arg sg.calls (readsTy rels sg.reads) (editTy rels) sg.edits ∧
+      sg.calls.length ≤ Kernel.Bounds.callsMax ∧ sg.edits ≤ editsMax := by
+  unfold methodSig at h
+  split at h
+  · split at h
+    · rename_i hc
+      obtain ⟨rfl, rfl, rfl, _⟩ := hc
+      split at h
+      · rename_i ks es rs hks hes hrs
+        cases h
+        obtain ⟨hrow, hlen⟩ := callSlotsOf_spec hks
+        obtain ⟨herow, hes'⟩ := editSlotsOf_spec hes
+        have hR := readsOf_spec hrs
+        subst hrow herow hR
+        exact ⟨rfl, hlen, hes'⟩
+      · cases h
+    · cases h
+  · cases h
+
+theorem methodArg_spec {S : Ty} {rels : List (Label × RelDecl)} {t A : Ty} (h : methodArg S rels t = some A) :
+    ∃ ks rs es, t = methodTy S A ks (readsTy rels rs) (editTy rels) es := by
   unfold methodArg at h
   simp only [Option.map_eq_some_iff] at h
-  obtain ⟨⟨A', ks⟩, hs, rfl⟩ := h
-  exact ⟨ks, (methodSig_spec hs).1⟩
+  obtain ⟨sg, hs, rfl⟩ := h
+  exact ⟨sg.calls, sg.reads, sg.edits, (methodSig_spec hs).1⟩
 
 theorem recordRow_find {T : Ty} {ℓ : Label} {t : Ty} (h : Row.find? ℓ (recordRow T) = some t) :
     ∃ row, T = .record row ∧ Row.find? ℓ row = some t := by
@@ -317,50 +345,54 @@ theorem recordRow_find {T : Ty} {ℓ : Label} {t : Ty} (h : Row.find? ℓ (recor
 
 /-- A method of a loaded package, applied to a state, arguments and a request of the right types,
 runs in the loaded closure without ever reaching `stuck`: it ends with a result of the package's
-`resultTy` (the calls it makes and the new state), or a named budget/arithmetic fault. (That the values decoded from the cells HAVE those
+`resultTy` (the calls it makes, its row edits and the new state), or a named budget/arithmetic fault. (That the values decoded from the cells HAVE those
 types is `decodeData_conforms`/`readState_conforms`; `Lang.Proofs.Invoke` composes them.) -/
 theorem method_run_sound {D : Type} {digestOf : ByteArray → Option D} {look : Pinned D}
-    {fuel : Nat} {idb : ByteArray} {L : Loaded} {g : Nat} {p : Package} {ℓ : Label} {mty A : Ty}
-    {ks : List Ty} {sv av rv : Val} {ticks : Nat}
+    {fuel : Nat} {idb : ByteArray} {L : Loaded} {g : Nat} {p : Package} {ℓ : Label} {mty : Ty}
+    {sg : Sig} {sv av rv wv : Val} {ticks : Nat}
     (hload : load digestOf look fuel idb ⟨[], [], []⟩ = .ok (L, g))
     (hp : L.pkgs[g]? = some p)
-    (hm : Row.find? ℓ (recordRow p.iface) = some mty) (hA : methodSig p.state mty = some (A, ks))
-    (hs : ValTy (Loaded.ifaces L) sv p.state) (ha : ValTy (Loaded.ifaces L) av A)
-    (hr : ValTy (Loaded.ifaces L) rv reqTy) :
-    RunOK (Loaded.ifaces L) (resultTy p.state ks)
-      (run L.lib Bounds.stackMax ticks 0 (State.init (apply3 g ℓ) [rv, av, sv])) := by
+    (hm : Row.find? ℓ (recordRow p.iface) = some mty) (hA : methodSig p.state p.rels mty = some sg)
+    (hs : ValTy (Loaded.ifaces L) sv p.state) (ha : ValTy (Loaded.ifaces L) av sg.arg)
+    (hr : ValTy (Loaded.ifaces L) rv reqTy) (hw : ValTy (Loaded.ifaces L) wv (readsTy p.rels sg.reads)) :
+    RunOK (Loaded.ifaces L) (resultTy p.state sg.calls (editTy p.rels) sg.edits)
+      (run L.lib Bounds.stackMax ticks 0 (State.init (apply4 g ℓ) [rv, av, sv, wv])) := by
   obtain ⟨hlib, _⟩ := load_libTy hload
   obtain ⟨row, hrow, hfind⟩ := recordRow_find hm
   have hmt := (methodSig_spec hA).1
   subst hmt
-  have href : HasType (Loaded.ifaces L) [reqTy, A, p.state] (.ref g) (.record row) :=
+  have href : HasType (Loaded.ifaces L) [reqTy, sg.arg, p.state, readsTy p.rels sg.reads] (.ref g)
+      (.record row) :=
     .ref (by rw [← hrow]; simp [Loaded.ifaces, hp])
-  have ht : HasType (Loaded.ifaces L) [reqTy, A, p.state] (apply3 g ℓ) (resultTy p.state ks) :=
-    .app (.app (.app (.get href hfind) (.var rfl)) (.var rfl)) (.var rfl)
-  exact run_sound hlib _ _ _ (.eval (.cons hr (.cons ha (.cons hs .nil))) ht .nil)
+  have ht : HasType (Loaded.ifaces L) [reqTy, sg.arg, p.state, readsTy p.rels sg.reads] (apply4 g ℓ)
+      (resultTy p.state sg.calls (editTy p.rels) sg.edits) :=
+    .app (.app (.app (.app (.get href hfind) (.var rfl)) (.var rfl)) (.var rfl)) (.var rfl)
+  exact run_sound hlib _ _ _ (.eval (.cons hr (.cons ha (.cons hs (.cons hw .nil)))) ht .nil)
 
 /-- **What a run starts from** (LANG-41): `runSetup` admits exactly when the request is in bounds,
 the closure loads, the method resolves, the state reads at its row and the arguments decode at their
 type with every digest accepted; the setup is then those values. -/
 theorem runSetup_spec {D : Type} {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D}
-    {look : Pinned D} {pkg : D} {state : Kernel.Slots} {method : Nat} {args : ByteArray} {r : Req D} {S : RunSetup}
-    (h : runSetup bytesOf digestOf look pkg state method args r = .ok S) :
-    ∃ (L : Loaded) (g : Nat) (p : Package) (ℓ : Label) (A : Ty) (ks : List Ty) (sd ad : Data),
+    {look : Pinned D} {rv : RowView D} {pkg : D} {state : Kernel.Slots} {method : Nat} {args : ByteArray}
+    {r : Req D} {S : RunSetup}
+    (h : runSetup bytesOf digestOf look rv pkg state method args r = .ok S) :
+    ∃ (L : Loaded) (g : Nat) (p : Package) (ℓ : Label) (sg : Sig) (sd ad wd : Data),
       reqOk bytesOf r = true ∧
       load digestOf look closureDepthMax (bytesOf pkg) ⟨[], [], []⟩ = .ok (L, g) ∧ L.pkgs[g]? = some p ∧
-      resolveMethod (D := D) p method = .ok (ℓ, A, ks) ∧
+      resolveMethod (D := D) p method = .ok (ℓ, sg) ∧
       readState digestOf (recordRow p.state) state = .ok sd ∧
-      Wire.decodeData A args = .ok ad ∧ digestsOk digestOf ad.digests = true ∧
-      S = { lib := L.lib, pkgs := L.pkgs.length, label := ℓ, row := recordRow p.state,
-            ty := resultTy p.state ks, state := sd, args := ad, term := apply3 g ℓ,
-            env := [(reqData bytesOf r).toVal, ad.toVal, sd.toVal] } := by
+      Wire.decodeData sg.arg args = .ok ad ∧ digestsOk digestOf ad.digests = true ∧
+      readsData digestOf p.rels rv r.self sg.reads = .ok wd ∧
+      S = { lib := L.lib, pkgs := L.pkgs.length, g, rels := p.rels, label := ℓ, row := recordRow p.state,
+            ty := resultTy p.state sg.calls (editTy p.rels) sg.edits, state := sd, args := ad,
+            reads := wd, term := apply4 g ℓ, env := [(reqData bytesOf r).toVal, ad.toVal, sd.toVal, wd.toVal] } := by
   unfold runSetup at h
   simp only [bind, Except.bind, pure, Except.pure] at h
   repeat' split at h
   all_goals first | (simp at h; done) | skip
   simp only [Except.ok.injEq] at h
   subst h
-  exact ⟨_, _, _, _, _, _, _, _, ‹_›, ‹_›, ‹_›, ‹_›, ‹_›, ‹_›, ‹_›, rfl⟩
+  exact ⟨_, _, _, _, _, _, _, _, ‹_›, ‹_›, ‹_›, ‹_›, ‹_›, ‹_›, ‹_›, ‹_›, rfl⟩
 
 /-- **An installed package loads** (LANG-35): if the install check admits bytes `b` and the cell
 named by `idb` holds `b` as a package, a run's `load` of `idb` succeeds under the same pinned view,

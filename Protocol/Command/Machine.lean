@@ -302,7 +302,7 @@ def derivePins (X : Ctx D) (w : World D) : Nat → Unsigned D → Except (Refusa
   | 0, _ => .error .tooManyPins
   | fuel + 1, u =>
       let look := pinned X.env w u.pins
-      match (do keyRule look u; deriveTurn X look ⟨u, ByteArray.empty⟩) with
+      match (do keyRule look u; deriveTurn X look (rowView X.env w u) ⟨u, ByteArray.empty⟩) with
       | .error (.unpinned c) =>
           derivePins X w fuel { u with pins := u.pins ++ [(c, pinOf X.env (w.live X.env c))] }
       | .error r => .error (.receive r)
@@ -328,7 +328,7 @@ def planUnchecked (X : Ctx D) (me : Self D) (w : World D) (key : ByteArray) (b :
       body := b }
   let (u1, t1) ← derivePins X w Kernel.Bounds.touchesMax u0
   let u := { u1 with maxCharge := t1.charge + chargeSlack }
-  match deriveTurn X (pinned X.env w u.pins) ⟨u, ByteArray.empty⟩ with
+  match deriveTurn X (pinned X.env w u.pins) (rowView X.env w u) ⟨u, ByteArray.empty⟩ with
   | .error r => .error (.receive r)
   | .ok t => .ok (u, t)
 

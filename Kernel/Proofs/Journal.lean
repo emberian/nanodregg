@@ -397,7 +397,7 @@ theorem check_journal_congr {E : Env D} {w : World D} {t : Turn D} {j : Journal 
     rw [show ({ w with journal := j } : World D).journalAt E t.txId = j.get (journalSpec E) t.txId
       from rfl, hj]
     rfl
-  unfold check
+  unfold check checkWith
   rw [h]
   rfl
 
@@ -423,15 +423,15 @@ theorem check_journal_filter {E : Env D} {w : World D} {t : Turn D} {H : Nat} {J
             simp only [kept, decide_eq_true_eq]; rw [windowMax_eq] at *; omega
           simp [Option.filter, hkept]
     exact (check_journal_congr hg).symm
-  · unfold check
+  · unfold check checkWith
     cases hb : checkBounds t with
-    | error _ => simp [bind, Except.bind]
+    | error _ => simp [bind, Except.bind, Except.map]
     | ok u =>
         cases hw' : checkWindow w t with
         | ok v => exact absurd hw' hwin
         | error e =>
             have : checkWindow { w with journal := J } t = .error e := hw'
-            simp [bind, Except.bind, this]
+            simp [bind, Except.bind, Except.map, this]
 
 /-- **Pruning changes no check.** For a turn whose window ends by its transaction id's entry
 height plus `windowMax` (a retry of the call that entry records: same call, same window), the

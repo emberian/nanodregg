@@ -1,5 +1,5 @@
 import Codec.Kernel
-import Codec.Proofs.Raw
+import Codec.Proofs.Rows
 
 /-!
 # The kernel codecs are canonical on the values KERNEL admits
@@ -118,7 +118,9 @@ def Turn.Fits (PD : D → Prop) (t : Turn D) : Prop :=
   (t.touches.length ≤ Bounds.touchesMax ∧ ∀ x ∈ t.touches, Touch.Fits PD x) ∧
   (t.creates.length ≤ Bounds.createsMax ∧ ∀ c ∈ t.creates, PD c.1 ∧ Cell.Fits c.2) ∧
   (t.nullifiers.length ≤ Bounds.nullifiersMax ∧ ∀ n ∈ t.nullifiers, PD n) ∧
-  t.charge < 2 ^ 64 ∧ t.event.size ≤ Bounds.eventBytesMax
+  t.charge < 2 ^ 64 ∧ t.event.size ≤ Bounds.eventBytesMax ∧
+  (t.rows.length ≤ Bounds.rowsMax ∧ ∀ x ∈ t.rows, RowTouch.Fits PD x) ∧
+  (t.ranges.length ≤ Bounds.rangesMax ∧ ∀ q ∈ t.ranges, RangeRead.Fits PD q)
 
 theorem turn_lawfulOn {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc) :
     LawfulOn (Turn.Fits PD) (turn dc) := by
@@ -128,7 +130,9 @@ theorem turn_lawfulOn {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc) :
       (product_lawfulOn (rawList_lawfulOn (touch_lawfulOn hd) _ (by decide))
         (product_lawfulOn (rawList_lawfulOn (product_lawfulOn hd cell_lawfulOn) _ (by decide))
           (product_lawfulOn (rawList_lawfulOn hd _ (by decide))
-            (product_lawfulOn nat64_lawfulOn (rawBytes_lawfulOn _ (by decide)))))))))
+            (product_lawfulOn nat64_lawfulOn (product_lawfulOn (rawBytes_lawfulOn _ (by decide))
+              (product_lawfulOn (rawList_lawfulOn (rowTouch_lawfulOn hd) _ (by decide))
+                (rawList_lawfulOn (rangeRead_lawfulOn hd) _ (by decide)))))))))))
     "kernel/turn" ?_ ?_).mono ?_ ?_
   · intro y _; rfl
   · intro x y h; simp at h; subst h; rfl
@@ -275,7 +279,8 @@ theorem body_lawfulOn {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc) :
 
 def Unsigned.Fits (PD : D → Prop) (u : Unsigned D) : Prop :=
   PD u.world ∧ PD u.member ∧ BytesFits u.key ∧ u.notBefore < 2 ^ 64 ∧ u.validUntil < 2 ^ 64 ∧
-  ListFits (fun p => PD p.1 ∧ PD p.2) u.pins ∧ u.maxCharge < 2 ^ 64 ∧ Body.Fits PD u.body
+  ListFits (fun p => PD p.1 ∧ PD p.2) u.pins ∧ u.maxCharge < 2 ^ 64 ∧ Body.Fits PD u.body ∧
+  ListFits (fun p => RowSlot.Fits PD p.1 ∧ PD p.2) u.rowPins ∧ ListFits (RangeRead.Fits PD) u.ranges
 
 theorem unsigned_lawfulOn {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc) :
     LawfulOn (Unsigned.Fits PD) (unsigned dc) := by
@@ -283,7 +288,9 @@ theorem unsigned_lawfulOn {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc
   refine (refine_lawfulOn
     (product_lawfulOn hd (product_lawfulOn hd (product_lawfulOn (rawBytes_lawfulOn _ (by decide)) (product_lawfulOn nat64_lawfulOn
       (product_lawfulOn nat64_lawfulOn (product_lawfulOn (rawList_lawfulOn (product_lawfulOn hd hd) _ (by decide))
-        (product_lawfulOn nat64_lawfulOn (body_lawfulOn hd))))))))
+        (product_lawfulOn nat64_lawfulOn (product_lawfulOn (body_lawfulOn hd)
+          (product_lawfulOn (rawList_lawfulOn (product_lawfulOn (rowKey_lawfulOn hd) hd) _ (by decide))
+            (rawList_lawfulOn (rangeRead_lawfulOn hd) _ (by decide)))))))))))
     "kernel/unsigned" ?_ ?_).mono ?_ ?_
   · intro y _; rfl
   · intro x y h; simp at h; subst h; rfl
@@ -318,10 +325,10 @@ canonical and `turnBytes` is injective on admitted turns (with `turn_lawfulOn`).
 theorem checkBounds_fits (t : Turn D) (h : checkBounds t = .ok ()) : Turn.Fits (fun _ => True) t := by
   simp only [checkBounds, req, decide_eq_true_eq] at h
   simp only [bind_req, ite_req, List.all_eq_true, Bool.and_eq_true, decide_eq_true_eq] at h
-  obtain ⟨hT, hOps, hC, hN, hE, hS, ⟨hKc, hKt⟩, ⟨hVc, hVt⟩, _, _, ⟨⟨⟨hVu, hNb⟩, hCh⟩, hKind⟩⟩ := h
+  obtain ⟨hT, hOps, hC, hN, hE, hS, ⟨hKc, hKt⟩, ⟨hVc, hVt⟩, _, _, ⟨⟨⟨hVu, hNb⟩, hCh⟩, hKind⟩, hR⟩ := h
   refine ⟨trivial, by simpa [Bounds.counterLimit] using hNb, by simpa [Bounds.counterLimit] using hVu,
     ⟨hT, fun x hx => ⟨trivial, trivial, ?_⟩⟩, ⟨hC, fun c hc => ⟨trivial, ?_, hS c hc, fun p hp => ⟨?_, hVc c hc p hp⟩⟩⟩,
-    ⟨hN, fun _ _ => trivial⟩, by simpa [Bounds.counterLimit] using hCh, hE⟩
+    ⟨hN, fun _ _ => trivial⟩, by simpa [Bounds.counterLimit] using hCh, hE, ?_, ?_⟩
   · have hops := hOps x hx
     have hk := hKt x hx
     have hv := hVt x hx
@@ -339,6 +346,15 @@ theorem checkBounds_fits (t : Turn D) (h : checkBounds t = .ok ()) : Turn.Fits (
       | erase key => simpa [Op.Fits, Op.key, Bounds.slotKeyLimit] using k
   · simpa [Bounds.kindLimit] using hKind c hc
   · simpa [Bounds.slotKeyLimit] using hKc c hc p hp
+  · refine ⟨hR.1.1.1, fun x hx => ?_⟩
+    obtain ⟨hs, ha⟩ := hR.1.2 x hx
+    obtain ⟨slot, seen, act⟩ := x
+    refine ⟨?_, ?_, ?_⟩
+    · cases slot <;> simp_all [RowSlot.Fits]
+    · cases seen <;> trivial
+    · cases act <;> simp_all [RowAct.Fits, Bounds.counterLimit]
+  · exact ⟨hR.1.1.2, fun q hq => let h := hR.2 q hq
+      ⟨trivial, h.1.1, h.1.2, by simpa [Bounds.counterLimit] using h.2, trivial⟩⟩
 
 /-! ## The Env/Ctx facts -/
 
@@ -396,6 +412,26 @@ theorem cell_size (c : Cell) : cell.size c = c.weight := by
   rw [slot_size_eq]
   omega
 
+theorem rowKey_size {dc : Stream D} (hdc : ∀ d, dc.size d = 32) (s : RowSlot D) :
+    (rowKey dc).size s = s.weight := by
+  cases s <;> simp [rowKey, RowSlot.weight, digestWeight, refine, product, nat8, choice, tagged, unit, bytes8,
+    rowKindWire, hdc] <;> omega
+
+theorem rowAct_size (a : RowAct) : rowAct.size a = a.logWeight := by
+  cases a <;> simp [rowAct, rowActWire, RowAct.logWeight, counterWeight, headerWeight, refine, choice, tagged, unit,
+    product, nat64, rawBytes, Stream.bool, u8] <;> omega
+
+theorem rowTouch_size {dc : Stream D} (hdc : ∀ d, dc.size d = 32) (x : RowTouch D) :
+    (rowTouch dc).size x = x.weight := by
+  obtain ⟨s, seen, a⟩ := x
+  cases seen <;> simp [rowTouch, RowTouch.weight, digestWeight, refine, product, option, hdc, rowKey_size hdc,
+    rowAct_size] <;> omega
+
+theorem rangeRead_size {dc : Stream D} (hdc : ∀ d, dc.size d = 32) (q : RangeRead D) :
+    (rangeRead dc).size q = q.weight := by
+  simp [rangeRead, RangeRead.weight, digestWeight, counterWeight, refine, product, nat8, nat64, bytes8, hdc]
+  omega
+
 theorem touch_size {dc : Stream D} (hdc : ∀ d, dc.size d = 32) (x : Touch D) :
     (touch dc).size x = x.weight := by
   simp [touch, Touch.weight, digestWeight, refine, product, hdc, act_size]
@@ -405,15 +441,15 @@ theorem touch_size {dc : Stream D} (hdc : ∀ d, dc.size d = 32) (x : Touch D) :
 theorem turn_size_logWeight {dc : Stream D} (hdc : ∀ d, dc.size d = 32) (t : Turn D) :
     (turn dc).size t = t.logWeight := by
   simp [turn, Turn.logWeight, digestWeight, counterWeight, headerWeight, refine, product, nat64, rawList,
-    rawBytes, hdc, foldl_add_size, touch_size hdc, cell_size]
+    rawBytes, hdc, foldl_add_size, touch_size hdc, cell_size, rowTouch_size hdc, rangeRead_size hdc]
   omega
 
 
 /-- Tooth: the digest premise is load-bearing — with a length-prefixed digest (4 bytes for the empty
-one) the empty turn's record is 44 bytes, not its log weight 72. -/
+one) the empty turn's record is 52 bytes, not its log weight 80. -/
 theorem turn_size_needs_digest32 :
-    (turn (rawBytes 64)).size (⟨ByteArray.empty, 0, 0, [], [], [], 0, ByteArray.empty⟩ : Turn ByteArray) = 44 ∧
-      Turn.logWeight (⟨ByteArray.empty, 0, 0, [], [], [], 0, ByteArray.empty⟩ : Turn ByteArray) = 72 := by
+    (turn (rawBytes 64)).size (⟨ByteArray.empty, 0, 0, [], [], [], 0, ByteArray.empty, [], []⟩ : Turn ByteArray) = 52 ∧
+      Turn.logWeight (⟨ByteArray.empty, 0, 0, [], [], [], 0, ByteArray.empty, [], []⟩ : Turn ByteArray) = 80 := by
   decide
 
 end Nanodregg.Codec.Kernel

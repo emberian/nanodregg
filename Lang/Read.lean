@@ -11,7 +11,8 @@ Not admission: a resident (or its client) reads text into a `Package`, checks it
             | (digest #hex) | (fix e) | (OP e e) with OP ∈ + - * / % == < <= beq cat deq
             | (record (l e)…) | (. e l) | (extend e (l e)…) | (inj T l e)
             | (case e (l x e)…) | (if e e e) | (ref i) | (e e…)
-    package ::= (package (imports "hex"…) (state T) (iface T) (methods l…) (laws l…) (body e))
+    package ::= (package (imports "hex"…) (state T) (iface T) (methods l…) (laws l…) (rels rel…) (body e))
+    rel     ::= (l (key (l T)…) (val T) (limit n) (sum [l]) (cap n) (retract b) (guard [l]))
 
 A binder (`lam`, `let`, `fn`, a `case` arm) may not be named like a literal, a head word or a
 primitive (`reservedBinder`).
@@ -78,7 +79,7 @@ inductive ReadRefusal
   | badImport (pos : Nat)
   /-- `methods` and `laws` list labels -/
   | badLabel (pos : Nat)
-  /-- not `(package (imports …) (state T) (iface T) (methods …) (laws …) (body e))` -/
+  /-- not `(package (imports …) (state T) (iface T) (methods …) (laws …) (rels …) (body e))` -/
   | notPackage (pos : Nat)
   /-- a data literal that is not a value of the type it is read at (or out of the data bounds) -/
   | notOfType (pos : Nat)
@@ -293,18 +294,42 @@ def labels : List SExp → P (List Label)
   | .atom _ ℓ :: rest => do pure (ℓ :: (← labels rest))
   | x :: _ => .error (.badLabel x.pos)
 
+/-- A key's fields `(l T)…`, in DECLARED order (a key's bytes follow it; LANG-49). -/
+def keyFields : List SExp → P (List (Label × Ty))
+  | [] => .ok []
+  | .list _ [.atom _ ℓ, t] :: rest => do pure ((ℓ, ← ty depthMax t) :: (← keyFields rest))
+  | x :: _ => .error (.badEntry x.pos)
+
+/-- An optional label: `()` or `(l)` after the section word. -/
+def optLabel (p : Nat) : List SExp → P (Option Label)
+  | [] => .ok none
+  | [.atom _ ℓ] => .ok (some ℓ)
+  | _ => .error (.badEntry p)
+
+/-- A relation: `(l (key (l T)…) (val T) (limit n) (sum [l]) (cap n) (retract b) (guard [l]))`. -/
+def rel : SExp → P (Label × RelDecl)
+  | .list p [.atom _ ℓ, .list _ (.atom _ "key" :: ks), .list _ [.atom _ "val", v],
+      .list _ [.atom _ "limit", .atom _ l], .list _ (.atom _ "sum" :: su), .list _ [.atom _ "cap", .atom _ c],
+      .list _ [.atom _ "retract", .atom _ r], .list _ (.atom _ "guard" :: gu)] =>
+    match l.toNat?, c.toNat?, (if r = "true" then some true else if r = "false" then some false else none) with
+    | some limit, some cap, some retract => do
+      pure (ℓ, { key := ← keyFields ks, val := ← ty depthMax v, limit, sum := ← optLabel p su, cap, retract,
+                 guard := ← optLabel p gu })
+    | _, _, _ => .error (.badEntry p)
+  | y => .error (.badEntry y.pos)
+
 def package (x : SExp) : P Package :=
   match x with
   | .list _ [.atom _ "package", .list _ (.atom _ "imports" :: is), .list _ [.atom _ "state", s],
       .list _ [.atom _ "iface", i], .list _ (.atom _ "methods" :: ms), .list _ (.atom _ "laws" :: ls),
-      .list _ [.atom _ "body", b]] => do
+      .list _ (.atom _ "rels" :: rs), .list _ [.atom _ "body", b]] => do
     let imports ← is.mapM fun
       | .str p h => match unhex ByteArray.empty h.toList with
         | some bs => .ok bs
         | none => .error (.badImport p)
       | y => .error (.badImport y.pos)
     pure { imports, state := ← ty depthMax s, iface := ← ty depthMax i, body := ← term depthMax [] b,
-           methods := ← labels ms, laws := ← labels ls }
+           methods := ← labels ms, laws := ← labels ls, rels := ← rs.mapM rel }
   | y => .error (.notPackage y.pos)
 
 /-! ## Data literals at a known type

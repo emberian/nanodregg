@@ -85,7 +85,7 @@ def enroll (X : Ctx D) (look : Pinned D) (c : Call D) (a : At D) (key : ByteArra
   req (X.verify key (possessionMessage X a.actor next key) possession) .badPossession
   let slots := slotsOf [(slotKey, key), (slotNext, X.env.bytes next),
     (slotSponsor, X.env.bytes a.actor)]
-  pure ⟨bornAt X c a.base [{ kind := kindMember, discipline := .ram, slots }], spend.toList, []⟩
+  pure ⟨bornAt X c a.base [{ kind := kindMember, discipline := .ram, slots }], spend.toList, [], []⟩
 
 /-- Signed by the new key; the new key's digest must be the one precommitted. -/
 def rotate (X : Ctx D) (look : Pinned D) (c : Call D) (key : ByteArray) (next : D) :
@@ -96,13 +96,13 @@ def rotate (X : Ctx D) (look : Pinned D) (c : Call D) (key : ByteArray) (next : 
   let committed ← slotDigest X u.member m slotNext
   req (committed = nextKeyDigest X key) (.notPrecommitted u.member)
   let ops := [Op.set slotKey key, Op.set slotNext (X.env.bytes next)]
-  pure ⟨[], [(u.member, .write ops)], []⟩
+  pure ⟨[], [(u.member, .write ops)], [], []⟩
 
 /-- `install pkg`: a ROM package cell, its id its content digest (KERNEL-3). -/
 def install (X : Ctx D) (look : Pinned D) (c : Call D) (a : At D) (pkg : ByteArray) :
     Except (Refusal D) (Draft D) := do
   X.program.checkInstall look pkg
-  pure ⟨bornAt X c a.base [{ kind := kindPackage, discipline := .rom, slots := [(0, pkg)] }], [], []⟩
+  pure ⟨bornAt X c a.base [{ kind := kindPackage, discipline := .rom, slots := [(0, pkg)] }], [], [], []⟩
 
 def objectCell (X : Ctx D) (owner : D) (pkg : Option D) (laws : List D) (state : Slots) : Cell :=
   { kind := kindObject, discipline := .ram,
@@ -120,8 +120,14 @@ def create (X : Ctx D) (look : Pinned D) (c : Call D) (a : At D) (pkg : Option D
   checkPackage look pkg
   checkLaws look laws
   checkState state
-  X.program.judge look pkg laws state state (reqOf u (cellIdOf X.env (txIdOf X c) a.base) a.actor .birth)
-  pure ⟨bornAt X c a.base [objectCell X a.actor pkg laws state], [], []⟩
+  let self := cellIdOf X.env (txIdOf X c) a.base
+  X.program.judge look pkg laws state state (reqOf u self a.actor .birth)
+  -- LANG-49: the heads of the package's relations are born with the object, in relation order
+  let decls ← match pkg with
+    | some p => X.program.rels look p self
+    | none => pure []
+  pure ⟨bornAt X c a.base [objectCell X a.actor pkg laws state], [], [],
+    decls.zipIdx.map fun d => (.head self d.2, d.1)⟩
 
 def applyEdits (s : Slots) (edits : List (Nat × Option ByteArray)) : Slots :=
   edits.foldl (fun s e => match e.2 with
@@ -140,7 +146,7 @@ def write (X : Ctx D) (look : Pinned D) (c : Call D) (a : At D) (obj : D)
   let new := applyEdits old edits
   let laws ← lawsOf X obj cell
   X.program.judge look none laws old new (reqOf u obj principal .write)
-  pure ⟨[], writeOf obj (diffOps old new), []⟩
+  pure ⟨[], writeOf obj (diffOps old new), [], []⟩
 
 /-- Replace a data object's extra laws; the laws in force judge the change. -/
 def law (X : Ctx D) (look : Pinned D) (c : Call D) (a : At D) (obj : D) (laws' : List D) (via : Option D) :
@@ -158,7 +164,7 @@ def law (X : Ctx D) (look : Pinned D) (c : Call D) (a : At D) (obj : D) (laws' :
   -- (LANG-4: re-judging it on `adopt` refused every relaw that keeps a quorum)
   X.program.judge look none (laws'.filter fun l => decide (l ∉ laws)) (stateOf cell) (stateOf cell)
     (reqOf u obj principal (.adopt laws'))
-  pure ⟨[], writeOf obj (diffOps (lawSlotsOf cell) (lawSlots X laws')), []⟩
+  pure ⟨[], writeOf obj (diffOps (lawSlotsOf cell) (lawSlots X laws')), [], []⟩
 
 def requireMethods (obj : D) : Option D → Except (Refusal D) D
   | none => .error (.noMethods obj)
@@ -200,20 +206,22 @@ def deriveCalls (sub : Sub D) (obj : D) (own : Draft D) (wk : Walk D) (calls : L
 /-- `invoke`: the owner's authority (KERNEL-25), the run under what the pool has left (its used
 ticks asserted, `overTicks`), the laws over old and new, then the calls the run returned, as the
 object. An object already invoked in the tree is `revisited`. -/
-def invoke (X : Ctx D) (look : Pinned D) (c : Call D) (sub : Sub D) (wk : Walk D) (actor : D)
+def invoke (X : Ctx D) (look : Pinned D) (rv : RowView D) (c : Call D) (sub : Sub D) (wk : Walk D) (actor : D)
     (obj : D) (method : Nat) (args : ByteArray) (budget : Nat) (via : Option D) :
     Except (Refusal D) (Draft D × Walk D) := do
   req (!wk.visited.contains obj) (.revisited obj)
   let (cell, p, r) ← invokeRun X look c actor obj method via
   let old := stateOf cell
   let fuel := min budget wk.pool
-  let (new, calls, used) ← X.program.run look p old method args r fuel
+  let (new, calls, rows, used) ← X.program.run look rv p old method args r fuel
   req (decide (used ≤ fuel)) .overTicks
+  -- LANG-49: a run edits only its own object's rows (law 4: asserted where row edits enter)
+  forEx (fun e => req (decide (e.1.under.1 = obj)) (.rowParent obj)) rows
   checkState new
   let laws ← lawsOf X obj cell
   X.program.judge look (some p) laws old new r
   req (decide (calls.length ≤ Bounds.callsMax)) .tooManyCalls
-  deriveCalls sub obj ⟨[], writeOf obj (diffOps old new), []⟩
+  deriveCalls sub obj ⟨[], writeOf obj (diffOps old new), [], rows⟩
     { wk with visited := obj :: wk.visited, pool := wk.pool - used } calls
 
 /-- The enrolment count a list of rights grants (several `enroll` rights add up). -/
@@ -266,21 +274,21 @@ def grant (X : Ctx D) (look : Pinned D) (c : Call D) (a : At D) (target grantee 
   let slots := slotsOf ([(grantTarget, X.env.bytes target), (grantGrantee, X.env.bytes grantee),
       (grantIssuer, X.env.bytes a.actor)] ++
     (parent.map fun p => (grantParent, X.env.bytes p)).toList ++ rightSlots rights)
-  pure ⟨bornAt X c a.base [{ kind := kindGrant, discipline := .appendOnly, slots }], carve.toList, []⟩
+  pure ⟨bornAt X c a.base [{ kind := kindGrant, discipline := .appendOnly, slots }], carve.toList, [], []⟩
 
 /-- The issuer retires a grant; every chain through it dies with it. -/
 def revoke (X : Ctx D) (look : Pinned D) (a : At D) (g : D) : Except (Refusal D) (Draft D) := do
   let cell ← readKind look g kindGrant
   let issuer ← slotDigest X g cell grantIssuer
   req (issuer = a.actor) (.notIssuer g)
-  pure ⟨[], [(g, .retire)], []⟩
+  pure ⟨[], [(g, .retire)], [], []⟩
 
 /-- A receiver's Draft, and the walk past its fresh births. -/
 def stepped (wk : Walk D) (d : Except (Refusal D) (Draft D)) : Except (Refusal D) (Draft D × Walk D) :=
   d.map fun d => (d, { wk with born := wk.born + d.creates.length })
 
 /-- One receiver of a call's tree, as `actor`; `sub` derives an invoke's calls one level down. -/
-def dispatch (X : Ctx D) (look : Pinned D) (c : Call D) (sub : Sub D) (wk : Walk D) (actor : D) :
+def dispatch (X : Ctx D) (look : Pinned D) (rv : RowView D) (c : Call D) (sub : Sub D) (wk : Walk D) (actor : D) :
     Body D → Except (Refusal D) (Draft D × Walk D)
   | .enroll key next possession via => stepped wk (enroll X look c ⟨actor, wk.born⟩ key next possession via)
   | .rotate key next => stepped wk (rotate X look c key next)
@@ -288,7 +296,7 @@ def dispatch (X : Ctx D) (look : Pinned D) (c : Call D) (sub : Sub D) (wk : Walk
   | .create pkg laws state => stepped wk (create X look c ⟨actor, wk.born⟩ pkg laws state)
   | .write obj edits via => stepped wk (write X look c ⟨actor, wk.born⟩ obj edits via)
   | .law obj laws via => stepped wk (law X look c ⟨actor, wk.born⟩ obj laws via)
-  | .invoke obj method args budget via => invoke X look c sub wk actor obj method args budget via
+  | .invoke obj method args budget via => invoke X look rv c sub wk actor obj method args budget via
   | .grant target grantee rights parent =>
       stepped wk (grant X look c ⟨actor, wk.born⟩ target grantee rights parent)
   | .revoke g => stepped wk (revoke X look ⟨actor, wk.born⟩ g)
@@ -300,10 +308,10 @@ def dispatch (X : Ctx D) (look : Pinned D) (c : Call D) (sub : Sub D) (wk : Walk
 /-- The deriver of a call made `n` levels above the depth bound: a call of a kind an object may
 not exercise is `notCallable`, a call past the bound `callTooDeep`; otherwise THE SAME `dispatch`
 the signed call goes through, with the calling object as actor (`effect_as_signed`). -/
-def tree (X : Ctx D) (look : Pinned D) (c : Call D) : Nat → Sub D
+def tree (X : Ctx D) (look : Pinned D) (rv : RowView D) (c : Call D) : Nat → Sub D
   | 0 => fun _ _ _ => .error .callTooDeep
   | n + 1 => fun wk obj b =>
-      if b.callable then dispatch X look c (tree X look c n) wk obj b
+      if b.callable then dispatch X look rv c (tree X look rv c n) wk obj b
       else .error (.notCallable b.kindName)
 
 /-- The pool a signed call's tree runs on: an invoke's signed budget, capped at
@@ -313,8 +321,8 @@ def poolOf : Body D → Nat
   | _ => 0
 
 /-- The signed call's Draft: its Body at the signer, its calls down to `callDepthMax`. -/
-def derive (X : Ctx D) (look : Pinned D) (c : Call D) : Except (Refusal D) (Draft D) :=
-  (dispatch X look c (tree X look c Bounds.callDepthMax) ⟨[], poolOf c.unsigned.body, 0⟩
+def derive (X : Ctx D) (look : Pinned D) (rv : RowView D) (c : Call D) : Except (Refusal D) (Draft D) :=
+  (dispatch X look rv c (tree X look rv c Bounds.callDepthMax) ⟨[], poolOf c.unsigned.body, 0⟩
     c.unsigned.member c.unsigned.body).map (·.1)
 
 /-- A rotation is signed by the incoming key; every other call by the member's current key. -/
@@ -324,21 +332,21 @@ def keyRule (look : Pinned D) (u : Unsigned D) : Except (Refusal D) Unit :=
   | _ => checkKey look u
 
 /-- The signed call's Turn: its tree's Draft, sealed ONCE (KERNEL-28 (c)). -/
-def deriveTurn (X : Ctx D) (look : Pinned D) (c : Call D) : Except (Refusal D) (Turn D) := do
-  let d ← derive X look c
-  sealTurn X c d.creates d.effects d.nullifiers
+def deriveTurn (X : Ctx D) (look : Pinned D) (rv : RowView D) (c : Call D) : Except (Refusal D) (Turn D) := do
+  let d ← derive X look rv c
+  sealTurn X c d.creates d.effects d.nullifiers d.rows
 
 /-- Derive from the pinned view: signature, key, then the call's tree. -/
-def receiveWith (X : Ctx D) (look : Pinned D) (c : Call D) : Except (Refusal D) (Turn D) := do
+def receiveWith (X : Ctx D) (look : Pinned D) (rv : RowView D) (c : Call D) : Except (Refusal D) (Turn D) := do
   checkSignature X c
   keyRule look c.unsigned
-  deriveTurn X look c
+  deriveTurn X look rv c
 
 /-- THE derivation: a signed call against a World, through the caller's pins only. The FIRST
 check is the World the call names (KERNEL-24): a call for another World is `wrongWorld`, never
 `badSignature` or `unknownKey`, whatever else is wrong with it. -/
 def receive (X : Ctx D) (w : World D) (c : Call D) : Except (Refusal D) (Turn D) := do
   req (c.unsigned.world = w.origin) .wrongWorld
-  receiveWith X (pinned X.env w c.unsigned.pins) c
+  receiveWith X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c
 
 end Nanodregg.Kernel.Receive

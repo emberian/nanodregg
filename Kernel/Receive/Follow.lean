@@ -44,16 +44,19 @@ def inputOf (X : Ctx D) (name nonce : ByteArray) (allowance : Nat) (founders : L
   (name, nonce, allowance, founders.map fun f => (f.1, X.env.bytes f.2))
 
 /-- What a carry is made from (KERNEL-29), as CODEC's raw combinators write it: the name, HOST's
-nonce, the exported World's origin bytes, the carried trie's root bytes, the allowance, the
-height, and the journal listing (each entry's id bytes, height, turn-digest bytes, in trie order). -/
-abbrev CarryInput := ByteArray × ByteArray × ByteArray × ByteArray × Nat × Nat × List (ByteArray × Nat × ByteArray)
+nonce, the exported World's origin bytes, the carried trie's root bytes, the carried rows' root
+bytes (KERNEL-48), the allowance, the height, and the journal listing (each entry's id bytes,
+height, turn-digest bytes, in trie order). -/
+abbrev CarryInput :=
+  ByteArray × ByteArray × ByteArray × ByteArray × ByteArray × Nat × Nat × List (ByteArray × Nat × ByteArray)
 
 open Nanodregg.Codec Nanodregg.Codec.Stream in
 def carryInput : Stream CarryInput :=
   product (rawBytes Bounds.eventBytesMax) (product (rawBytes Bounds.eventBytesMax)
-    (product (rawBytes Bounds.eventBytesMax) (product (rawBytes Bounds.eventBytesMax) (product nat64
-      (product nat64 (rawList Bounds.journalMax
-        (product (rawBytes Bounds.eventBytesMax) (product nat64 (rawBytes Bounds.eventBytesMax)))))))))
+    (product (rawBytes Bounds.eventBytesMax) (product (rawBytes Bounds.eventBytesMax)
+      (product (rawBytes Bounds.eventBytesMax) (product nat64
+        (product nat64 (rawList Bounds.journalMax
+          (product (rawBytes Bounds.eventBytesMax) (product nat64 (rawBytes Bounds.eventBytesMax))))))))))
 
 open Nanodregg.Codec Nanodregg.Codec.Stream in
 /-- A World's identity input: a genesis's or a carry's, under one domain, the case tagged by one
@@ -151,10 +154,11 @@ def genesis (X : Ctx D) (name nonce : ByteArray) (allowance : Nat) (founders : L
 /-! ## Carry (KERNEL-29): a new World from a carried state -/
 
 def carryInputOf (X : Ctx D) (name nonce : ByteArray) (fromOrigin : D) (c : Carried D) : CarryInput :=
-  (name, nonce, X.env.bytes fromOrigin, X.env.bytes (c.trie.hashOf (trieSpec X.env)), c.allowance, c.height,
-    c.journal.toList.map fun p => (X.env.bytes p.1, p.2.1, X.env.bytes p.2.2))
+  (name, nonce, X.env.bytes fromOrigin, X.env.bytes (c.trie.hashOf (trieSpec X.env)),
+    X.env.bytes (c.rows.hashOf (rowSpec X.env)), c.allowance, c.height, c.journal.toList.map fun p => (X.env.bytes p.1, p.2.1, X.env.bytes p.2.2))
 
-/-- A carried World's identity: everything the carry is made from, the trie by its root. -/
+/-- A carried World's identity: everything the carry is made from, the trie and the rows by their
+roots. -/
 def carryOriginOf (X : Ctx D) (name nonce : ByteArray) (fromOrigin : D) (c : Carried D) : D :=
   X.env.hash domOrigin (originInput.bytes (.inr (carryInputOf X name nonce fromOrigin c)))
 
@@ -163,7 +167,8 @@ def carryOriginOf (X : Ctx D) (name nonce : ByteArray) (fromOrigin : D) (c : Car
 keys sign the new World's calls (`Unsigned.world` = the new origin). -/
 def carryWorld (X : Ctx D) (name nonce : ByteArray) (fromOrigin : D) (c : Carried D) : World D :=
   let o := carryOriginOf X name nonce fromOrigin c
-  { trie := c.trie, journal := c.journal, refusals := .empty, height := c.height, steps := c.height,
+  { trie := c.trie, journal := c.journal, refusals := .empty, rows := c.rows, height := c.height,
+    steps := c.height,
     chain := World.genesisChain X.env o, allowance := c.allowance, origin := o }
 
 /-- Why a carry is refused (law 7): one constructor per clause of `CarryFits`, in its order. Past
@@ -171,12 +176,12 @@ these bounds `carryInput`'s raw codec truncates, so two different carries would 
 inductive CarryRefusal
   | nameTooLong
   | nonceTooLong
-  /-- the carried allowance plus the carried cells' storage is not below 2^64 (`fold_conserves` keeps
+  /-- the carried allowance plus the carried cells' and rows' storage is not below 2^64 (`fold_conserves` keeps
   that sum, so no later retirement can overflow the allowance; cv 01a14ba9-cbf4) -/
   | allowanceTooLarge
   | heightTooLarge
   | journalTooLong
-  /-- a digest's bytes (the exported origin, the root, a journal entry's) are longer than
+  /-- a digest's bytes (the exported origin, the two roots, a journal entry's) are longer than
   `Bounds.eventBytesMax`, or an entry's height is past the counter limit -/
   | entryTooLarge
   deriving DecidableEq, Repr
@@ -193,11 +198,12 @@ def CarryRefusal.name : CarryRefusal → String
 def checkCarry (X : Ctx D) (name nonce : ByteArray) (fromOrigin : D) (c : Carried D) : Except CarryRefusal Unit := do
   req (name.size ≤ Bounds.eventBytesMax) .nameTooLong
   req (nonce.size ≤ Bounds.eventBytesMax) .nonceTooLong
-  req (cellsWeight c.trie + c.allowance < Bounds.counterLimit) .allowanceTooLarge
+  req (cellsWeight c.trie + rowsWeight c.rows + c.allowance < Bounds.counterLimit) .allowanceTooLarge
   req (c.height < Bounds.counterLimit) .heightTooLarge
   req (c.journal.toList.length ≤ Bounds.journalMax) .journalTooLong
   req ((X.env.bytes fromOrigin).size ≤ Bounds.eventBytesMax &&
       (X.env.bytes (c.trie.hashOf (trieSpec X.env))).size ≤ Bounds.eventBytesMax &&
+      (X.env.bytes (c.rows.hashOf (rowSpec X.env))).size ≤ Bounds.eventBytesMax &&
       c.journal.toList.all fun p => (X.env.bytes p.1).size ≤ Bounds.eventBytesMax &&
         p.2.1 < Bounds.counterLimit && (X.env.bytes p.2.2).size ≤ Bounds.eventBytesMax) .entryTooLarge
 

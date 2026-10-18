@@ -31,12 +31,28 @@ theorem id_reads : Read.readTerm ((term (.lam .nat (.var 0))).get bound_var_prin
   readTerm_term (.lam rfl .var) (Option.some_get _).symm
 
 /-- The empty package (WireTeeth's `tiny`): `readPackage_package`'s premises are met. -/
-theorem empty_package_prints : (package (Package.mk [] (.record []) (.record []) (.record []) [] [])).isSome = true := by
+theorem empty_package_prints : (package (Package.mk [] (.record []) (.record []) (.record []) [] [] [])).isSome = true := by
   decide
 
 theorem empty_package_reads :
-    Read.readPackage ((package (Package.mk [] (.record []) (.record []) (.record []) [] [])).get empty_package_prints) =
-      .ok (Package.mk [] (.record []) (.record []) (.record []) [] []) :=
-  readPackage_package rfl rfl (.record rfl .nil) (Option.some_get _).symm
+    Read.readPackage ((package (Package.mk [] (.record []) (.record []) (.record []) [] [] [])).get empty_package_prints) =
+      .ok (Package.mk [] (.record []) (.record []) (.record []) [] [] []) :=
+  readPackage_package rfl rfl rfl (.record rfl .nil) (Option.some_get _).symm
+
+/-- A relation whose value type is not canonical (a record with its fields descending): the
+package prints, and reads back as a DIFFERENT package (the reader sorts the fields), so
+`readPackage_package`'s `relWf` premise is not idle. -/
+private def badRel : Package :=
+  Package.mk [] (.record []) (.record []) (.record []) [] []
+    [("r", { key := [("k", .nat)], val := .record [("b", .nat), ("a", .nat)], limit := 1, sum := none,
+             cap := 0, retract := false, guard := none })]
+
+theorem badRel_prints : (package badRel).isSome = true := by decide
+
+theorem badRel_reads_other :
+    (match Read.readPackage ((package badRel).get badRel_prints) with
+     | .ok q => decide (q.rels ≠ badRel.rels)
+     | .error _ => false) = true := by
+  native_decide
 
 end Nanodregg.Lang.Print

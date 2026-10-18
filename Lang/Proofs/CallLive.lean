@@ -522,30 +522,31 @@ theorem callSlotsOf_ok : ∀ {row : List (Label × Ty)} {ks : List Ty},
       · cases hT
     | tail _ hk => exact callSlotsOf_ok hks' k hk
 
-theorem methodSig_slots {S t A : Ty} {ks : List Ty} (h : methodSig S t = some (A, ks)) :
-    ∀ k ∈ ks, callSlotOk k = true := by
+theorem methodSig_slots {S t : Ty} {rels : List (Label × RelDecl)} {sg : Sig}
+    (h : methodSig S rels t = some sg) : ∀ k ∈ sg.calls, callSlotOk k = true := by
   unfold methodSig at h
   split at h
   · split at h
-    · unfold callSlotsOf at h
-      simp only [Option.map_eq_some_iff] at h
-      obtain ⟨ks', hks', he⟩ := h
-      cases he
-      split at hks'
-      · exact callSlotsOf_ok hks'
-      · cases hks'
+    · split at h
+      · rename_i ks es rs hks hes hrs
+        cases h
+        unfold callSlotsOf at hks
+        split at hks
+        · exact callSlotsOf_ok hks
+        · cases hks
+      · cases h
     · cases h
   · cases h
 
-theorem resolveMethod_spec {p : Package} {method : Nat} {ℓ : Label} {A : Ty} {ks : List Ty}
-    (h : resolveMethod (D := D) p method = .ok (ℓ, A, ks)) :
-    ∃ mty, Row.find? ℓ (recordRow p.iface) = some mty ∧ methodSig p.state mty = some (A, ks) := by
+theorem resolveMethod_spec {p : Package} {method : Nat} {ℓ : Label} {sg : Sig}
+    (h : resolveMethod (D := D) p method = .ok (ℓ, sg)) :
+    ∃ mty, Row.find? ℓ (recordRow p.iface) = some mty ∧ methodSig p.state p.rels mty = some sg := by
   unfold resolveMethod at h
   simp only [pure, Except.pure] at h
   repeat' split at h
   all_goals first | (simp at h; done) | skip
   simp only [Except.ok.injEq, Prod.mk.injEq] at h
-  obtain ⟨rfl, rfl, rfl⟩ := h
+  obtain ⟨rfl, rfl⟩ := h
   exact ⟨_, by assumption, by assumption⟩
 
 /-! ## The deployed run -/
@@ -565,40 +566,40 @@ its slot names. So a method makes at most as many calls as it declares slots, an
 one slot (the run's result is typed by `invoke_never_stuck`, the calls row conforms by
 `extract_conforms`, and `callsOf_go_kinds` reads it). Exercised with calls by journey LC0–LC4 and LC6. -/
 theorem runMeasured_kinds {bytesOf : D → ByteArray}
-    {look : Pinned D} {pkg : D} {state : Slots} {method : Nat} {args : ByteArray} {r : Req D}
-    {budget : Nat} {s : Slots} {calls : List (Body D)} {t n : Nat}
-    (h : runMeasured bytesOf digestOf look pkg state method args r budget = .ok (s, calls, t, n)) :
-    ∃ (ℓ : Label) (A : Ty) (ks : List Ty) (L : Loaded) (g : Nat) (p : Package),
+    {look : Pinned D} {rv : RowView D} {pkg : D} {state : Slots} {method : Nat} {args : ByteArray}
+    {r : Req D} {budget : Nat} {s : Slots} {calls : List (Body D)} {rows : List (RowSlot D × RowAct)}
+    {t n : Nat}
+    (h : runMeasured bytesOf digestOf look rv pkg state method args r budget = .ok (s, calls, rows, t, n)) :
+    ∃ (ℓ : Label) (sg : Sig) (L : Loaded) (g : Nat) (p : Package),
       load digestOf look closureDepthMax (bytesOf pkg) ⟨[], [], []⟩ = .ok (L, g) ∧ L.pkgs[g]? = some p ∧
-      resolveMethod (D := D) p method = .ok (ℓ, A, ks) ∧
-      ∃ ks', ks'.Sublist ks ∧
+      resolveMethod (D := D) p method = .ok (ℓ, sg) ∧
+      ∃ ks', ks'.Sublist sg.calls ∧
         Matched (fun b k => ∃ arms, k = .sum arms ∧ b.kindName ∈ arms.map Prod.fst) calls ks' := by
   unfold runMeasured at h
   simp only [bind, Except.bind, pure, Except.pure] at h
   split at h
   · cases h
   rename_i S hS
-  obtain ⟨L, g, p, ℓ, A, ks, sd, ad, hr0, hl, hp, hres, hst, hargs, -, rfl⟩ := runSetup_spec hS
+  obtain ⟨L, g, p, ℓ, sg, sd, ad, wd, hr0, hl, hp, hres, hst, hargs, -, hrows, rfl⟩ := runSetup_spec hS
   simp only at h
   repeat' split at h
   all_goals first | (simp at h; done) | skip
   simp only [Except.ok.injEq, Prod.mk.injEq] at h
-  obtain ⟨-, rfl, -, -⟩ := h
-  rename_i v used hrun _ c ds left hx _ slots _ _ calls' hc
+  obtain ⟨-, rfl, -, -, -⟩ := h
   obtain ⟨mty, hm, hA⟩ := resolveMethod_spec hres
-  have hok := invoke_never_stuck (ticks := budget) hl hp hm hA hst hargs hr0
-  rw [hrun] at hok
-  have hcf := extract_conforms (load_libTy hl).1 (resultTy p.state ks) hok hx
+  have hok := invoke_never_stuck (ticks := budget) hl hp hm hA hst hargs hrows hr0
+  rw [‹run _ _ _ _ _ = .value _ _›] at hok
+  have hcf := extract_conforms (load_libTy hl).1 _ hok ‹(Machine.mk _).extract _ _ _ = Except.ok _›
   have hks := methodSig_slots hA
-  refine ⟨ℓ, A, ks, L, g, p, hl, hp, hres, ?_⟩
+  refine ⟨ℓ, sg, L, g, p, hl, hp, hres, ?_⟩
   cases hcf with
   | record hrow =>
     cases hrow with
     | cons hcalls _ =>
       cases hcalls with
       | record hcs =>
-        obtain ⟨ts, hts, hf⟩ := callsOf_go_kinds hcs (slotRow_callsTy hks) hc
-        have hsnd : ((slotLabels "c" ks.length).zip (ks.map optTy)).map Prod.snd = ks.map optTy :=
+        obtain ⟨ts, hts, hf⟩ := callsOf_go_kinds hcs (slotRow_callsTy hks) ‹callsOf.go _ _ = Except.ok _›
+        have hsnd : ((slotLabels "c" sg.calls.length).zip (sg.calls.map optTy)).map Prod.snd = sg.calls.map optTy :=
           List.map_snd_zip (by simp [slotLabels])
         rw [hsnd] at hts
         obtain ⟨ks', hks', rfl⟩ := sublist_map_inv hts
@@ -610,13 +611,14 @@ theorem runMeasured_kinds {bytesOf : D → ByteArray}
 
 /-- A run makes at most as many calls as the resolved method declares slots. -/
 theorem runMeasured_calls_le {bytesOf : D → ByteArray}
-    {look : Pinned D} {pkg : D} {state : Slots} {method : Nat} {args : ByteArray} {r : Req D}
-    {budget : Nat} {s : Slots} {calls : List (Body D)} {t n : Nat}
-    (h : runMeasured bytesOf digestOf look pkg state method args r budget = .ok (s, calls, t, n)) :
-    ∃ (ℓ : Label) (A : Ty) (ks : List Ty) (L : Loaded) (g : Nat) (p : Package),
+    {look : Pinned D} {rv : RowView D} {pkg : D} {state : Slots} {method : Nat} {args : ByteArray}
+    {r : Req D} {budget : Nat} {s : Slots} {calls : List (Body D)} {rows : List (RowSlot D × RowAct)}
+    {t n : Nat}
+    (h : runMeasured bytesOf digestOf look rv pkg state method args r budget = .ok (s, calls, rows, t, n)) :
+    ∃ (ℓ : Label) (sg : Sig) (L : Loaded) (g : Nat) (p : Package),
       load digestOf look closureDepthMax (bytesOf pkg) ⟨[], [], []⟩ = .ok (L, g) ∧ L.pkgs[g]? = some p ∧
-      resolveMethod (D := D) p method = .ok (ℓ, A, ks) ∧ calls.length ≤ ks.length := by
-  obtain ⟨ℓ, A, ks, L, g, p, hl, hp, hres, ks', hsub, hf⟩ := runMeasured_kinds h
-  exact ⟨ℓ, A, ks, L, g, p, hl, hp, hres, hf.length_eq ▸ hsub.length_le⟩
+      resolveMethod (D := D) p method = .ok (ℓ, sg) ∧ calls.length ≤ sg.calls.length := by
+  obtain ⟨ℓ, sg, L, g, p, hl, hp, hres, ks', hsub, hf⟩ := runMeasured_kinds h
+  exact ⟨ℓ, sg, L, g, p, hl, hp, hres, hf.length_eq ▸ hsub.length_le⟩
 
 end Nanodregg.Lang

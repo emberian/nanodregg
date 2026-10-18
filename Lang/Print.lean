@@ -188,13 +188,29 @@ def data (v : Data) : Option String := (dataSx v).bind fits
 
 /-! ## Packages -/
 
-/-- The six sections of `(package …)`, in the order `Read.package` requires. -/
+/-- An optional label after a section word. -/
+def optLabelSx : Option Label → Option (List SExp)
+  | none => some []
+  | some ℓ => do pure [← label ℓ]
+
+/-- A relation (LANG-49), as `Read.rel` reads it: its key's fields in declared order. -/
+def relSx (r : Label × RelDecl) : Option SExp := do
+  let d := r.2
+  pure (list [← label r.1,
+    list (atom "key" :: (← d.key.mapM fun f => do pure (list [← label f.1, ← tySx f.2]))),
+    list [atom "val", ← tySx d.val], list [atom "limit", atom (Nat.repr d.limit)],
+    list (atom "sum" :: (← optLabelSx d.sum)), list [atom "cap", atom (Nat.repr d.cap)],
+    list [atom "retract", atom (if d.retract then "true" else "false")],
+    list (atom "guard" :: (← optLabelSx d.guard))])
+
+/-- The seven sections of `(package …)`, in the order `Read.package` requires. -/
 def sectionsSx (p : Package) : Option (List SExp) := do
   pure [list (atom "imports" :: p.imports.map fun i => .str 0 (hex i)),
     list [atom "state", ← tySx p.state],
     list [atom "iface", ← tySx p.iface],
     list (atom "methods" :: (← p.methods.mapM label)),
     list (atom "laws" :: (← p.laws.mapM label)),
+    list (atom "rels" :: (← p.rels.mapM relSx)),
     list [atom "body", ← termSx 0 p.body]]
 
 /-- The package's text, one section per line. -/

@@ -297,9 +297,9 @@ omit [Ord D] in
 /-- **An object pays only from what it owns** (KERNEL-28 (b) with `effect_as_signed`). A transfer an
 object's run asks for moves value out of an account only if the OBJECT owns it, or holds a grant
 chain for `mutate` on it rooted at its owner; the signer's own authority is not lent. -/
-theorem effect_transfer_authorized {X : Ctx D} {look : Pinned D} {c : Call D} {n : Nat} {wk : Walk D}
+theorem effect_transfer_authorized {X : Ctx D} {look : Pinned D} {rv : RowView D} {c : Call D} {n : Nat} {wk : Walk D}
     {obj : D} {srcR dstR : AcctRef D} {amount : Nat} {via : Option D} {once : Option ByteArray}
-    {r : Draft D × Walk D} (h : tree X look c n wk obj (.transfer srcR dstR amount via once) = .ok r) :
+    {r : Draft D × Walk D} (h : tree X look rv c n wk obj (.transfer srcR dstR amount via once) = .ok r) :
     ∃ cell owner, readKind look (srcR.resolve X) kindAccount = .ok cell ∧
       slotDigest X (srcR.resolve X) cell slotOwner = .ok owner ∧
       (via = none ∧ obj = owner ∨
@@ -367,14 +367,14 @@ def ZeroBorn (d : Draft D) : Prop :=
 omit [Ord D] in
 /-- **An object's calls bear only empty value cells**: no callable receiver issues (`issue` is not
 callable), `account` bears balance and floor 0, and the rest bear no value cell. -/
-theorem tree_zeroBorn {X : Ctx D} {look : Pinned D} {c : Call D} :
-    ∀ n wk a b r, tree X look c n wk a b = .ok r → ZeroBorn r.1 := by
+theorem tree_zeroBorn {X : Ctx D} {look : Pinned D} {rv : RowView D} {c : Call D} :
+    ∀ n wk a b r, tree X look rv c n wk a b = .ok r → ZeroBorn r.1 := by
   refine tree_all ?_ ?_ ?_
   · intro a b ha hb p hp
     rcases List.mem_append.mp hp with hp | hp
     · exact ha p hp
     · exact hb p hp
-  · intro _ _ p hp; simp at hp
+  · intro _ _ _ _ p hp; simp at hp
   · intro sub wk actor b r hc hi h
     cases b with
     | invoke => simp [Body.isInvoke] at hi
@@ -422,8 +422,8 @@ its floor is 0 unless the signed call is `issue cap`, and then the floor IS the 
 denomination is the bytes of the turn's first born id: the well names itself. With
 `Kernel.Proofs.Value.admit_birth` and `fold_floors_held`, the cap is the denomination's floor sum
 forever. -/
-theorem derive_value_born {X : Ctx D} {look : Pinned D} {c : Call D} {d : Draft D}
-    (h : derive X look c = .ok d) :
+theorem derive_value_born {X : Ctx D} {look : Pinned D} {rv : RowView D} {c : Call D} {d : Draft D}
+    (h : derive X look rv c = .ok d) :
     ∀ p ∈ d.creates, ∀ v, Value.ofCell p.2 = some v →
       v.balance = 0 ∧ (v.floor = 0 ∨ ∃ cap, c.unsigned.body = .issue cap ∧ v.floor = cap ∧
         v.denom = X.env.bytes (cellIdOf X.env (txIdOf X c) 0)) := by
@@ -438,7 +438,7 @@ theorem derive_value_born {X : Ctx D} {look : Pinned D} {c : Call D} {d : Draft 
   generalize hb : c.unsigned.body = b at hr
   cases b with
   | invoke obj method args budget via =>
-      obtain ⟨_, _, _, _, _, _, _, _, _, _, _, hd⟩ := invoke_ok hr
+      obtain ⟨_, _, _, _, _, _, _, _, _, _, _, _, _, hd⟩ := invoke_ok hr
       have hz : ZeroBorn r.1 := by
         refine foldCalls_all (P := ZeroBorn) ?_ (fun wk a b r h => tree_zeroBorn _ wk a b r h) _ _ ?_ hd
         · intro a b ha hb p hp
@@ -490,9 +490,14 @@ theorem derive_value_born {X : Ctx D} {look : Pinned D} {c : Call D} {d : Draft 
       rw [this, ofCell_not_value (by simp)] at hv; cases hv
   | create pkg laws state =>
       have hd := stepped_draft hr
-      simp only [create, except_bind_ok, pure, Except.pure, Except.ok.injEq] at hd
+      simp only [create, except_bind_ok, pure, Except.pure] at hd
       obtain ⟨⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, hd⟩ := hd
-      rw [← hd]
+      have hc : r.1.creates = bornAt X c 0 [objectCell X c.unsigned.member pkg laws state] := by
+        cases pkg <;>
+        · simp only [except_bind_ok, Except.ok.injEq] at hd
+          obtain ⟨_, _, hd⟩ := hd
+          rw [← hd]
+      rw [hc]
       intro p hp v hv
       have := mem_bornAt_cell hp
       simp only [List.mem_singleton] at this

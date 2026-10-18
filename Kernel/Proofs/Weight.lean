@@ -9,6 +9,7 @@ bound the World's size is below it forever (`fold_world_weight`): HOST-14's `wor
 genesis allowance. `admit_retire`: retiring gives back exactly the retired cells' weight.
 -/
 import Kernel.Proofs.Cells
+import Kernel.Proofs.Rows
 
 namespace Nanodregg.Kernel
 
@@ -313,11 +314,12 @@ theorem receive_genesis_slotted (X : Receive.Ctx D) (name nonce : ByteArray) (al
 
 variable [Std.TransOrd D] [Std.LawfulEqOrd D]
 
-/-- **An admitted turn moves storage exactly.** The World grows by the turn's growth less what its
-touches give back. -/
+/-- **An admitted turn moves storage exactly.** The World (cells and rows) grows by the turn's
+growth less what its touches and its row touches give back. -/
 theorem admit_world_weight {E : Env D} {w w' : World D} {t : Turn D} {posts : List (Post D)}
-    (hc : w.Canon E) (hf : w.Slotted E) (hk : Checked E w t posts) (h : w' = commit E w t posts) :
-    w'.weight + credit posts = w.weight + t.growth := by
+    (hc : w.Canon E) (hf : w.Slotted E) (hr : w.RowsCanon E) (hk : Checked E w t posts)
+    (h : w' = commit E w t posts) :
+    w'.weight + credit posts + (rowsAfter E w t).2 = w.weight + t.growth := by
   subst h
   obtain ⟨raw, hm, hposts⟩ := hk.touches
   have hshape := hk.shape
@@ -375,7 +377,7 @@ theorem admit_world_weight {E : Env D} {w w' : World D} {t : Turn D} {posts : Li
       cases hg : w.trie.get (trieSpec E) (.nullifier n) with
       | none => rfl
       | some l => simp [World.isSpent, hg] at this)
-  unfold World.weight commit Turn.growth
+  unfold World.weight commit commitWith Turn.growth
   dsimp only
   have hcw : cellsWeight (insertAll E (insertAll E w.trie (posts.map Post.pair)) (bornEntries t)) +
       credit posts = cellsWeight w.trie + (t.touches.map fun x => x.act.opsWeight).sum +
@@ -384,13 +386,16 @@ theorem admit_world_weight {E : Env D} {w w' : World D} {t : Turn D} {posts : Li
   rw [show commitTrie E w t posts =
     spendAll E (insertAll E (insertAll E w.trie (posts.map Post.pair)) (bornEntries t)) t.nullifiers
     from rfl, hs]
+  have hra : rowsAfter E w t (Thunk.mk fun _ => Trie.emptyHash (trieSpec E)) = rowsAfter E w t := rfl
+  rw [hra]
+  have hrw := rowsAfter_weight hr hk
   omega
 
 /-- **Storage is conserved.** An admitted turn's World storage, plus its log record, plus the
 budget left, is exactly the World storage and budget before it: nothing is created or lost, a
 retirement or a shrinking write hands its bytes back to the budget. -/
 theorem admit_conserves {E : Env D} {w w' : World D} {t : Turn D} (hc : w.Canon E) (hf : w.Slotted E)
-    (h : World.admit E w t = .ok w') :
+    (hr : w.RowsCanon E) (h : World.admit E w t = .ok w') :
     w'.weight + t.logWeight + w'.allowance = w.weight + w.allowance := by
   obtain ⟨hch, posts, hk, _, hal⟩ := admit_charge h
   obtain ⟨posts', hk', hw'⟩ := admit_ok h
@@ -399,18 +404,19 @@ theorem admit_conserves {E : Env D} {w w' : World D} {t : Turn D} (hc : w.Canon 
     obtain ⟨r2, h2, e2⟩ := hk'.touches
     rw [h1] at h2; cases h2; rw [e1, e2]
   subst this
-  have hw := admit_world_weight hc hf hk' hw'
+  have hw := admit_world_weight hc hf hr hk' hw'
   unfold Turn.weight at hch
   omega
 
 omit [Std.TransOrd D] [Std.LawfulEqOrd D] in
 /-- **Credit on retirement** (KERNEL-15). A turn that only keeps and retires cells leaves the
-budget at what it was, plus the weight of every cell it retired, less its charge. -/
+budget at what it was, plus the weight of every cell it retired, plus what its row touches give
+back (`rowsAfter`; nothing for a turn with no row touches), less its charge. -/
 theorem admit_retire {E : Env D} {w w' : World D} {t : Turn D}
     (h : World.admit E w t = .ok w') (ha : ∀ x ∈ t.touches, x.act = .keep ∨ x.act = .retire) :
     w'.allowance + t.charge = w.allowance +
       ((t.touches.filter fun x => x.act == .retire).map fun x =>
-        ((w.live E x.cell).map Cell.weight).getD 0).sum := by
+        ((w.live E x.cell).map Cell.weight).getD 0).sum + (rowsAfter E w t).2 := by
   obtain ⟨_, posts, hk, _, hal⟩ := admit_charge h
   obtain ⟨raw, hm, rfl⟩ := hk.touches
   rw [hal, credit_retires t.touches raw hm ha]
@@ -420,29 +426,31 @@ storage of the log's TURN records plus the budget left equal the World's storage
 start. Recorded refusals are not charged to the budget (KERNEL-44): their log bytes are bounded by
 rate instead, `Bounds.refusalsPerWindow` per member per window (`fold_member_refusals_le`). -/
 theorem fold_conserves {E : Env D} :
-    ∀ {w w' : World D} {l : List (Step D)}, w.Canon E → w.Slotted E → World.fold E w l = .ok w' →
+    ∀ {w w' : World D} {l : List (Step D)}, w.Canon E → w.Slotted E → w.RowsCanon E →
+      World.fold E w l = .ok w' →
       w'.weight + ((Step.turns l).map Turn.logWeight).sum + w'.allowance = w.weight + w.allowance
-  | w, w', [], _, _, h => by simp [World.fold] at h; subst h; simp [Step.turns]
-  | w, w', .turn t :: rest, hc, hf, h => by
+  | w, w', [], _, _, _, h => by simp [World.fold] at h; subst h; simp [Step.turns]
+  | w, w', .turn t :: rest, hc, hf, hr, h => by
       obtain ⟨w₁, h₁, h₂⟩ := fold_cons_ok.mp h
-      have ih := fold_conserves (admit_canon hc h₁) (admit_slotted hf h₁) h₂
-      have hw := admit_conserves hc hf h₁
+      have ih := fold_conserves (admit_canon hc h₁) (admit_slotted hf h₁) (admit_rowsCanon hr h₁) h₂
+      have hw := admit_conserves hc hf hr h₁
       simp only [Step.turns, List.map_cons, List.sum_cons]
       omega
-  | w, w', .refusal r :: rest, hc, hf, h => by
+  | w, w', .refusal r :: rest, hc, hf, hr, h => by
       obtain ⟨w₁, h₁, h₂⟩ := fold_cons_ok.mp h
       have ih := fold_conserves (refuse_canon hc h₁)
-        (fun s l hg => hf s l (by rw [← refuse_trie h₁]; exact hg)) h₂
+        (fun s l hg => hf s l (by rw [← refuse_trie h₁]; exact hg)) (refuse_rowsCanon hr h₁) h₂
       obtain ⟨ht, -, -, ha, -⟩ := refuse_frame h₁
-      have hw : w₁.weight = w.weight := by unfold World.weight; rw [ht]
+      have hw : w₁.weight = w.weight := by unfold World.weight; rw [ht, refuse_rows h₁]
       simp only [Step.turns]
       omega
 
 /-- HOST-14's `worldBytesMax`: a World folded from `w` never holds more than `w`'s storage plus
 its budget, whatever it admits and retires (credit never lets it exceed the genesis bound). -/
 theorem fold_world_weight {E : Env D} {w w' : World D} {l : List (Step D)} (hc : w.Canon E)
-    (hf : w.Slotted E) (h : World.fold E w l = .ok w') : w'.weight ≤ w.weight + w.allowance := by
-  have := fold_conserves hc hf h; omega
+    (hf : w.Slotted E) (hr : w.RowsCanon E) (h : World.fold E w l = .ok w') :
+    w'.weight ≤ w.weight + w.allowance := by
+  have := fold_conserves hc hf hr h; omega
 
 end World
 

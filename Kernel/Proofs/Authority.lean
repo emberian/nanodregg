@@ -114,10 +114,10 @@ omit [Ord D] in
 /-- **Invoke authority** (KERNEL-25, the twin of `write_authorized`). A derived `invoke` comes from
 the object's owner, or from an agent holding a grant chain for `invoke method` whose root issuer is
 the owner; a stranger to the object without a grant is refused `noGrant`. The laws only refine. -/
-theorem invoke_authorized {X : Ctx D} {look : Pinned D} {c : Call D} {sub : Sub D} {wk : Walk D}
+theorem invoke_authorized {X : Ctx D} {look : Pinned D} {rv : RowView D} {c : Call D} {sub : Sub D} {wk : Walk D}
     {actor obj : D} {method : Nat} {args : ByteArray} {budget : Nat} {via : Option D}
     {r : Draft D × Walk D}
-    (h : invoke X look c sub wk actor obj method args budget via = .ok r) :
+    (h : invoke X look rv c sub wk actor obj method args budget via = .ok r) :
     ∃ cell owner, readKind look obj kindObject = .ok cell ∧
       slotDigest X obj cell slotOwner = .ok owner ∧
       (via = none ∧ actor = owner ∨
@@ -142,12 +142,12 @@ omit [Ord D] in
 /-- **A stranger to the object is refused by name** (KERNEL-25). A member who is not a programmed
 object's owner and invokes it with no grant is refused `noGrant obj`, whatever the laws say: the
 refusal comes before any method runs or any law judges. -/
-theorem invoke_stranger_noGrant {X : Ctx D} {look : Pinned D} {c : Call D} {sub : Sub D}
+theorem invoke_stranger_noGrant {X : Ctx D} {look : Pinned D} {rv : RowView D} {c : Call D} {sub : Sub D}
     {wk : Walk D} {actor obj p owner : D} {method : Nat} {args : ByteArray} {budget : Nat}
     {cell : Cell} (hv : obj ∉ wk.visited)
     (hc : readKind look obj kindObject = .ok cell) (hp : packageOf X obj cell = .ok (some p))
     (ho : slotDigest X obj cell slotOwner = .ok owner) (hne : actor ≠ owner) :
-    invoke X look c sub wk actor obj method args budget none = .error (.noGrant obj) := by
+    invoke X look rv c sub wk actor obj method args budget none = .error (.noGrant obj) := by
   simp [invoke, invokeRun, hv, hc, hp, requireMethods, ownerAuthority, ho, principalOf, req, hne, bind,
     Except.bind]
 
@@ -183,8 +183,8 @@ theorem law_authorized {X : Ctx D} {look : Pinned D} {c : Call D} {a : At D} {ob
 
 /-- **Current key.** Every derived call that is not a rotation is signed by a key its member cell
 holds as current. -/
-theorem key_current {X : Ctx D} {look : Pinned D} {c : Call D} {t : Turn D}
-    (h : receiveWith X look c = .ok t) (hnr : ∀ k n, c.unsigned.body ≠ .rotate k n) :
+theorem key_current {X : Ctx D} {look : Pinned D} {rv : RowView D} {c : Call D} {t : Turn D}
+    (h : receiveWith X look rv c = .ok t) (hnr : ∀ k n, c.unsigned.body ≠ .rotate k n) :
     ∃ m, readKind look c.unsigned.member kindMember = .ok m ∧
       m.slots.get slotKey = some c.unsigned.key := by
   have hk := receiveWith_key h

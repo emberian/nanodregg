@@ -26,24 +26,6 @@ namespace Nanodregg.Lang
 
 open Nanodregg.Kernel.Receive
 
-theorem forIn_yield_ok {α ε : Type} (P : α → Prop) :
-    ∀ (l : List α) (f : α → PUnit → Except ε (ForInStep PUnit)),
-      (∀ a u s, f a u = .ok s → s = .yield PUnit.unit ∧ P a) →
-      forIn l PUnit.unit f = .ok PUnit.unit → ∀ a ∈ l, P a
-  | [], _, _, _ => by simp
-  | a :: l, f, hf, h => by
-    simp only [List.forIn_cons] at h
-    cases hfa : f a PUnit.unit with
-    | error e => rw [hfa] at h; simp [bind, Except.bind] at h
-    | ok s =>
-      obtain ⟨rfl, hpa⟩ := hf a _ s hfa
-      rw [hfa] at h
-      simp only [bind, Except.bind] at h
-      intro b hb
-      rcases List.mem_cons.1 hb with rfl | hb
-      · exact hpa
-      · exact forIn_yield_ok P l f hf h b hb
-
 section
 variable {D : Type} (bytesOf : D → ByteArray) (digestOf : ByteArray → Option D)
 

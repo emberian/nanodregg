@@ -53,15 +53,15 @@ def textPath : System.FilePath := "world" / "escrow" / "Escrow"
 def langProgram : Program D := Lang.program Kernel.Sim.dc.bytes Kernel.Sim.digestOf
 def skipJudge : Program D := { langProgram with judge := fun _ _ _ _ _ _ => .ok () }
 def dropCalls : Program D :=
-  { langProgram with run := fun look p s m a r b => (langProgram.run look p s m a r b).map fun x => (x.1, [], x.2.2) }
+  { langProgram with run := fun look rv p s m a r b => (langProgram.run look rv p s m a r b).map fun x => (x.1, [], x.2.2) }
 
 /-- The plant package: `refund` spends its own key, so the two payouts are two nullifiers. -/
 def twoKeys : Package :=
   Std.pkgOf stateTy [("escrow", law)] (methods.map fun (ℓ, A, ks, t) =>
     if ℓ = "refund" then
-      (ℓ, A, ks, .lam stateTy (.lam unit (.lam reqTy (resultT
+      (ℓ, A, ks, .lam (.record []) (.lam stateTy (.lam unit (.lam reqTy (resultT
         (callsT [someCallT T (transferT (ofT (rq "self")) (ofT (st "depositor")) noneD (someB (.bytes "refund".toUTF8)))])
-        (.record (keep "refunded"))))))
+        (.record (keep "refunded")))))))
     else (ℓ, A, ks, t))
 
 inductive Mode | honest | skipJudge | twoKeys | dropCalls

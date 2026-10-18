@@ -190,19 +190,20 @@ def measureInvoke (X : Ctx D) (w : World D) (c : Call D) : Option (Except String
   match c.unsigned.body with
   | .invoke obj method args budget via =>
     let look := pinned X.env w c.unsigned.pins
+    let rv := rowView X.env w c.unsigned
     match invokeRun X look c c.unsigned.member obj method via with
     | .ok (cell, p, r) =>
-      match Lang.runMeasured X.env.bytes X.digestOf look p (stateOf cell) method args r budget with
-      | .ok (_, _, ticks, pkgs) =>
+      match Lang.runMeasured X.env.bytes X.digestOf look rv p (stateOf cell) method args r budget with
+      | .ok (_, _, _, ticks, pkgs) =>
         let text : Receive.Refusal D → String := fun | .program s => s | e => e.name
         let count := do
-          let required ← Lang.Need.requiredOf X.env.bytes X.digestOf look p (stateOf cell) method
+          let required ← Lang.Need.requiredOf X.env.bytes X.digestOf look rv p (stateOf cell) method
             args r budget
-          let honest ← Lang.Need.runTicksBy X.env.bytes X.digestOf Lang.step look p (stateOf cell)
+          let honest ← Lang.Need.runTicksBy X.env.bytes X.digestOf Lang.step look rv p (stateOf cell)
             method args r budget
-          let wasted ← Lang.Need.runTicksBy X.env.bytes X.digestOf Lang.Need.wasteStep look p
+          let wasted ← Lang.Need.runTicksBy X.env.bytes X.digestOf Lang.Need.wasteStep look rv p
             (stateOf cell) method args r budget
-          let (once, twice) ← Lang.Need.extractTicksTwice X.env.bytes X.digestOf look p (stateOf cell)
+          let (once, twice) ← Lang.Need.extractTicksTwice X.env.bytes X.digestOf look rv p (stateOf cell)
             method args r budget
           if once ≠ ticks then throw (Receive.Refusal.program s!"extraction recount {once} is not the run's {ticks}")
           pure ({ ticks, required, planted := ticks - honest + wasted, extracted := twice, pkgs } : Invoked)
@@ -818,7 +819,7 @@ def runAct (l : Line) : M (Expect × String) := do
       -- the phone's head: its own World's height and roots, nothing the receipt states
       let w := (← actor l.actor).follow.world
       let ans := if st.sys.trustReceipt then
-          (if rootsDigest X.env r.root r.jroot r.rroot = w.roots X.env then .ok r.answer else .error .headMismatch)
+          (if rootsDigest X.env r.root r.jroot r.rroot r.rowsroot = w.roots X.env then .ok r.answer else .error .headMismatch)
         else Receipt.check X.env w.height (w.roots X.env) (txIdOf X c) c.unsigned.notBefore r
       match ans with
       | .ok a => pure (.ok, Receipt.Answer.text X.env.bytes a)

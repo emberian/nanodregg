@@ -662,6 +662,75 @@ def refusalPlants (seed : Nat) (failures : IO.Ref Nat) : IO Unit := do
       check "plant-lookup-recorded: the prune at 3·windowMax drops the record, and lookup answers `uncertain forgotten`"
         ((w₃.refusalAt kx.env (.tx (Receive.txIdOf kx c))).isNone && lookupOn w₃ == "uncertain forgotten") failures
 
+/-- A priced Turn on `w`, open from the next height (K17-SIM's recipe, Kernel/Sim/Gen's `probeRows`). -/
+def rowsMk {D : Type} [Ord D] [DecidableEq D] (E : Env D) (w : World D) (tag : String) (touches : List (Touch D))
+    (creates : List (D × Cell)) (rows : List (RowTouch D)) : Turn D :=
+  let t0 : Turn D := ⟨E.hash "nanodregg/host-sim/rows" (tag.toUTF8 ++ E.bytes w.chain), w.height + 1,
+    w.height + 64, touches, creates, [], 0, ByteArray.empty, rows, []⟩
+  ⟨t0.txId, t0.notBefore, t0.validUntil, t0.touches, t0.creates, t0.nullifiers, t0.weight, t0.event, t0.rows, t0.ranges⟩
+
+/-- The two rows Turns from `w` (KERNEL-46/48): a parent cell born with one declared relation (limit 3,
+cap 10, key width 2, retractable), then one row inserted under it with the parent pinned. -/
+def rowsTurns {D : Type} [Ord D] [DecidableEq D] (E : Env D) (w : World D) : Except (Reject D) (List (Turn D) × World D) := do
+  let t1₀ := rowsMk E w "create" [] [] []
+  let p := cellIdOf E t1₀.txId 0
+  let cell : Cell := ⟨2, .ram, [(16, ByteArray.empty)]⟩
+  let t1 := rowsMk E w "create" [] [(p, cell)] [⟨.head p 0, none, .declare 3 10 2 true⟩]
+  let w1 ← World.admit E w t1
+  let keep : Touch D := ⟨p, pinOf E (w1.live E p), .keep⟩
+  let t2 := rowsMk E w1 "insert" [keep] [] [⟨.row ⟨p, 0, "a0".toUTF8⟩, none, .insert 2 "v-a0".toUTF8⟩]
+  let w2 ← World.admit E w1 t2
+  return ([t1, t2], w2)
+
+/-- The rows day's plants (KERNEL-46/48, HOST-44):
+* `plant-rows-survive-reopen`: a parent with a declared relation and one row, served through the toy
+  loop as two Turns, is in the World the one open of the Store reaches: the same rows listing, the
+  same rows root, its head counting the row;
+* `plant-rows-carry`: a World holding rows exports and imports (Kernel.Sim's ctx, the real carry codec)
+  with its rows in the carried bytes, the head and the row read back after the import; the control
+  (the same World with its rows emptied) exports DIFFERENT carried bytes, so a carry that dropped rows
+  would be caught. -/
+def rowsPlants (seed : Nat) (failures : IO.Ref Nat) : IO Unit := do
+  match rowsTurns env genesis with
+  | .error e => check s!"plant-rows-survive-reopen: the two rows Turns admit at the toy env ({e.name})" false failures
+  | .ok (ts, wk) =>
+    let frames := ts.zipIdx.map fun (t, i) => submitFrame i (.turn t)
+    -- a cadence that seals after every batch, so the reopen reads the rows from a SEALED BASE (the
+    -- World codec), not only by replaying the records
+    let eager : Cadence := { cadence with sealMinBytes := 1 }
+    let r ← runWith eager seed frames none
+    let w := r.resident.world
+    check s!"plant-rows-survive-reopen fires: the newest base holds both rows Turns (base steps {r.resident.sealed.steps})"
+      (r.resident.sealed.steps = 2) failures
+    check s!"plant-rows-survive-reopen fires: the loop holds {w.rows.toList.length} rows entries (a head and a row)"
+      (w.rows.toList.length = 2 && w.rows.toList == wk.rows.toList) failures
+    let p := cellIdOf env (rowsMk env genesis "create" [] [] []).txId 0
+    match reopenWith eager r.bases.index r.bases.file r.disk.synced with
+    | .error f => check s!"plant-rows-survive-reopen: the Store opens ({f.name})" false failures
+    | .ok o =>
+      check "plant-rows-survive-reopen: the one open (from the base, no record replayed) reaches the same rows listing and root, the head counting its row"
+        (o.opened.records = 0 && o.opened.world.rows.toList == w.rows.toList && o.opened.world.rowsRoot env == w.rowsRoot env &&
+          (match headOf env o.opened.world.rows p 0 with | some (1, 2, 3, 10, 2, true) => true | _ => false) &&
+          rowAt env o.opened.world.rows (.row ⟨p, 0, "a0".toUTF8⟩) == some (.row 2 "v-a0".toUTF8)) failures
+  let kx := Kernel.Sim.ctx
+  let kdc := Kernel.Sim.dc
+  let kw₀ : World Kernel.Sim.D := World.genesis kx.env (kx.env.hash "nanodregg/host-sim/origin/v1" "rows".toUTF8) (2 ^ 40)
+  match rowsTurns kx.env kw₀ with
+  | .error e => check s!"plant-rows-carry: the rows Turns admit at Kernel.Sim's env ({e.name})" false failures
+  | .ok (_, kw) =>
+    let cbytes (v : World Kernel.Sim.D) := (Codec.Kernel.carried kx.env kdc).bytes v.carried
+    check "plant-rows-carry fires: the carried bytes of the World with rows differ from the same World without them"
+      (cbytes kw != cbytes (World.mk kw.trie kw.journal kw.refusals .empty kw.height kw.steps kw.chain kw.allowance kw.origin)) failures
+    match Carry.exportFile kx.env kdc kw with
+    | .error f => check s!"plant-rows-carry: export of a World with rows ({f.name})" false failures
+    | .ok f =>
+      match Carry.importWorld kx kdc "rows".toUTF8 (ByteArray.mk (Array.replicate 32 3)) (Carry.digestOf f) f with
+      | .error _ => check "plant-rows-carry: the exported file imports" false failures
+      | .ok (a, _) =>
+        check "plant-rows-carry: export then import keeps the rows (listing and root) under a new origin"
+          (a.rows.toList == kw.rows.toList && a.rowsRoot kx.env == kw.rowsRoot kx.env && cbytes a == cbytes kw &&
+            a.origin != kw.origin) failures
+
 def run (args : List String) : IO UInt32 := do
   let seed := (args.head? >>= String.toNat?).getD 1
   let failures ← IO.mkRef 0
@@ -1040,6 +1109,7 @@ def run (args : List String) : IO UInt32 := do
     (lookupAt 1 == "absent") failures
   forgottenPlants failures
   refusalPlants seed failures
+  rowsPlants seed failures
   -- plant-hangup (PROTOCOL-23): a hang-up after every 7th request, for connections that are not
   -- the requests' own; each is acknowledged exactly once by name, and every other reply is the
   -- reply of the run without them

@@ -22,6 +22,7 @@ import Lang.Law
 import Lang.Wire.Data
 import Lang.Read
 import Lang.Call
+import Lang.Rel
 
 namespace Nanodregg.Lang
 
@@ -215,6 +216,11 @@ def reqData (r : Req D) : Data :=
 def apply3 (g : Nat) (ℓ : Label) : Term :=
   .app (.app (.app (.get (.ref g) ℓ) (.var 2)) (.var 1)) (.var 0)
 
+/-- Apply method `ℓ` of closure body `g` to its rows, state, arguments and request, bound as
+`var 3, var 2, var 1, var 0` (LANG-49: rows first). -/
+def apply4 (g : Nat) (ℓ : Label) : Term :=
+  .app (.app (.app (.app (.get (.ref g) ℓ) (.var 3)) (.var 2)) (.var 1)) (.var 0)
+
 def recordRow : Ty → List (Label × Ty)
   | .record r => r
   | _ => []
@@ -247,11 +253,11 @@ def judge (look : Pinned D) (pkg : Option D) (laws : List D) (old new : Slots) (
 
 /-- Method `method` of package `p`: its label, its argument type and its call slots (the one
 resolution: the run and the resident readers below all ask here). -/
-def resolveMethod (p : Package) (method : Nat) : Except (Refusal D) (Label × Ty × List Ty) := do
+def resolveMethod (p : Package) (method : Nat) : Except (Refusal D) (Label × Sig) := do
   let some ℓ := p.methods[method]? | throw (.program s!"no method {method}")
   let some mty := Row.find? ℓ (recordRow p.iface) | throw (.program s!"no method {ℓ}")
-  let some (A, ks) := methodSig p.state mty | throw (.program s!"method {ℓ}")
-  pure (ℓ, A, ks)
+  let some sg := methodSig p.state p.rels mty | throw (.program s!"method {ℓ}")
+  pure (ℓ, sg)
 
 /-- What a method run starts from once every boundary check has passed (LANG-41): the closure's
 bodies and size, the method's label, the state's record row, the type the result is extracted at,
@@ -262,55 +268,83 @@ closure's id literals checked at load (`checkLits`). -/
 structure RunSetup where
   lib : List Term
   pkgs : Nat
+  /-- the package's index in the closure, and its relations (LANG-49: guards run at `g`) -/
+  g : Nat
+  rels : List (Label × RelDecl)
   label : Label
   row : List (Label × Ty)
   ty : Ty
   state : Data
   args : Data
+  /-- the rows argument (LANG-49): what `readsData` built from the caller's view; the env's fourth value -/
+  reads : Data
   term : Term
   env : Env
 
 /-- The front half of every method run: the request's bounds, the closure loaded and re-checked
 (LANG-16), the method resolved, the state read at its row and the arguments decoded at their type,
 each refused by name. `runMeasured` runs from it; the WASTE counter (`Lang.Need`) counts from it. -/
-def runSetup (look : Pinned D) (pkg : D) (state : Slots) (method : Nat) (args : ByteArray) (r : Req D) :
-    Except (Refusal D) RunSetup := do
+def runSetup (look : Pinned D) (rv : RowView D) (pkg : D) (state : Slots) (method : Nat) (args : ByteArray)
+    (r : Req D) : Except (Refusal D) RunSetup := do
   unless reqOk bytesOf r do throw (.program "request out of bounds")
   let (L, g) ← load digestOf look closureDepthMax (bytesOf pkg) ⟨[], [], []⟩
   let some p := L.pkgs[g]? | throw (.program "closure")
-  let (ℓ, A, ks) ← resolveMethod p method
+  let (ℓ, sg) ← resolveMethod p method
   let row := recordRow p.state
   let s ← match readState digestOf row state with | .ok d => pure d | .error e => throw (.program e)
-  let a ← match Wire.decodeData A args with
+  let a ← match Wire.decodeData sg.arg args with
     | .ok d => if digestsOk digestOf d.digests then pure d else throw (.program "arguments: not a digest")
     | .error e => throw (.program s!"arguments: {decodeText e}")
-  pure { lib := L.lib, pkgs := L.pkgs.length, label := ℓ, row, ty := resultTy p.state ks, state := s,
-         args := a, term := apply3 g ℓ, env := [(reqData bytesOf r).toVal, a.toVal, s.toVal] }
+  let rows ← readsData digestOf p.rels rv r.self sg.reads
+  pure { lib := L.lib, pkgs := L.pkgs.length, g, rels := p.rels, label := ℓ, row,
+         ty := resultTy p.state sg.calls (editTy p.rels) sg.edits, state := s,
+         args := a, reads := rows, term := apply4 g ℓ, env := [(reqData bytesOf r).toVal, a.toVal, s.toVal, rows.toVal] }
+
+/-- Every edit judged by its relation's guard, if it has one, over the state before the run and
+the request (LANG-49: O(edits), never a relation; one law runner, `runLaw`). -/
+def guardEdits (S : RunSetup) (pkg : D) (r : Req D) (es : List (Edit D)) : Except (Refusal D) Unit :=
+  es.forM fun e =>
+    match e.decl.guard with
+    | none => .ok ()
+    | some gl =>
+      match runLaw S.lib (.get (.ref S.g) gl) S.state (reqData bytesOf r) e.data with
+      | .ok (.ok ()) => .ok ()
+      | .ok (.error why) => .error (.lawDenied pkg s!"{gl}: {reasonText why}")
+      | .error f => .error (.lawDenied pkg s!"{gl}: {faultText f}")
 
 /-- Run method `method` of package `pkg` on `state`: the new state slots and the calls the method
 makes as the object (`callsOf`, in slot order), with what the run cost (WASTE rows, PROTOCOL-4):
 the machine steps the method and its extraction used, and the packages of the closure loaded and
 re-checked (LANG-16). `runMethod` and `program`'s `run` are its components, so a measured number
 is the deployed run's. -/
-def runMeasured (look : Pinned D) (pkg : D) (state : Slots) (method : Nat) (args : ByteArray)
-    (r : Req D) (budget : Nat) : Except (Refusal D) (Slots × List (Body D) × Nat × Nat) := do
-  let S ← runSetup bytesOf digestOf look pkg state method args r
+def runMeasured (look : Pinned D) (rv : RowView D) (pkg : D) (state : Slots) (method : Nat) (args : ByteArray)
+    (r : Req D) (budget : Nat) :
+    Except (Refusal D) (Slots × List (Body D) × List (RowSlot D × RowAct) × Nat × Nat) := do
+  let S ← runSetup bytesOf digestOf look rv pkg state method args r
   match run S.lib Bounds.stackMax budget 0 (State.init S.term S.env) with
   | .fault f _ => throw (.program s!"{S.label}: {faultText f}")
   | .value v used =>
     match (Machine.mk S.lib).extract S.ty (budget - used) v with
-    | .ok (.record [("calls", c), ("state", .record ds)], left) =>
+    | .ok (.record [("calls", c), ("edits", e), ("state", .record ds)], left) =>
       match stateSlots S.row ds 0 with
       | some slots => do
         let calls ← callsOf digestOf c
-        pure (slots, calls, budget - left, S.pkgs)
+        let es ← editsOf S.rels r.self e
+        guardEdits bytesOf S pkg r es
+        pure (slots, calls, es.map (fun x => (x.slot, x.act)), budget - left, S.pkgs)
       | none => throw (.program s!"{S.label}: state bytes")
     | .ok _ => throw (.program s!"{S.label}: state")
     | .error f => throw (.program s!"{S.label}: {faultText f}")
 
-def runMethod (look : Pinned D) (pkg : D) (state : Slots) (method : Nat) (args : ByteArray)
-    (r : Req D) (budget : Nat) : Except (Refusal D) (Slots × List (Body D)) :=
-  (runMeasured bytesOf digestOf look pkg state method args r budget).map fun x => (x.1, x.2.1)
+def runMethod (look : Pinned D) (rv : RowView D) (pkg : D) (state : Slots) (method : Nat) (args : ByteArray)
+    (r : Req D) (budget : Nat) : Except (Refusal D) (Slots × List (Body D) × List (RowSlot D × RowAct)) :=
+  (runMeasured bytesOf digestOf look rv pkg state method args r budget).map fun x => (x.1, x.2.1, x.2.2.1)
+
+/-- The `declare` acts of the relations of an object of package `pkg` born at `self`, in
+relation order: each key's width at the World's digest width (`self`'s). -/
+def relsOf (look : Pinned D) (pkg : D) (self : D) : Except (Refusal D) (List RowAct) := do
+  let p ← readPackage look pkg
+  pure (p.rels.map fun r => .declare r.2.limit r.2.cap (r.2.width (bytesOf self).size) r.2.retract)
 
 /-! ## The resident readers: TEXT at a package's types (what `nd create --pkg` and `nd invoke` sign)
 
@@ -335,8 +369,8 @@ def seedOf (look : Pinned D) (pkg : D) (text : String) : Except (Refusal D) Slot
 /-- Method `method`'s arguments read at its argument type, as the bytes the run decodes. -/
 def argsOf (look : Pinned D) (pkg : D) (method : Nat) (text : String) : Except (Refusal D) ByteArray := do
   let p ← readPackage look pkg
-  let (_, A, _) ← resolveMethod p method
-  match Wire.encodeData A (← readAt digestOf A text) with
+  let (_, sg) ← resolveMethod p method
+  match Wire.encodeData sg.arg (← readAt digestOf sg.arg text) with
   | some b => pure b
   | none => throw (.program "arguments: no bytes at the argument type")
 
@@ -347,7 +381,9 @@ def program (bytesOf : D → ByteArray) (digestOf : ByteArray → Option D) : Pr
   checkInstall := checkInstall digestOf
   judge := judge bytesOf digestOf
   -- the slots, the calls the method makes as the object, and the ticks it used (LEDGER-8 (e))
-  run := fun look pkg state method args r budget =>
-    (runMeasured bytesOf digestOf look pkg state method args r budget).map fun x => (x.1, x.2.1, x.2.2.1)
+  run := fun look rv pkg state method args r budget =>
+    (runMeasured bytesOf digestOf look rv pkg state method args r budget).map fun x =>
+      (x.1, x.2.1, x.2.2.1, x.2.2.2.1)
+  rels := relsOf bytesOf
 
 end Nanodregg.Lang

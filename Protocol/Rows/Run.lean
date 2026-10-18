@@ -93,8 +93,8 @@ def ratio (a b : Nat) : String :=
 
 /-- The plants' ratios on THE BAR's workload, stated: a plant is a tooth only while it bites by
 exactly this much (both above the waste.tsv ceiling 1.546). -/
-def plantAppStated : String := "1.818"
-def plantExtractStated : String := "2.136"
+def plantAppStated : String := "1.885"
+def plantExtractStated : String := "2.154"
 
 /-- Nanoseconds as milliseconds with three decimals. -/
 def ms (ns : Nat) : String :=

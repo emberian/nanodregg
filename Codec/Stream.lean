@@ -49,6 +49,9 @@ inductive Shape where
   | oneOf (codes : Array UInt8)
   /-- `s`, whose whole encoding is at most `limit` bytes. -/
   | within (limit : Nat) (s : Shape)
+  /-- A byte string of at most `max` bytes behind a ONE-byte length (`Codec.Raw.bytes8`, `max < 256`): a
+  rows key's bytes, a range prefix (KERNEL-46's `rowKeyBytes`). -/
+  | bytes8 (max : Nat)
   deriving Repr
 
 /-- A byte string of at most `max` bytes. -/

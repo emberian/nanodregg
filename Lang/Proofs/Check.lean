@@ -244,4 +244,23 @@ theorem check_iff {t : Term} {T : Ty} : check Δ t T = true ↔ HasType Δ [] t 
   unfold check
   cases checkE Δ t T <;> simp [Except.toBool]
 
+/-- A `for` loop in `Except` that finished: every element passed its body. -/
+theorem forIn_yield_ok {α ε : Type} (P : α → Prop) :
+    ∀ (l : List α) (f : α → PUnit → Except ε (ForInStep PUnit)),
+      (∀ a u s, f a u = .ok s → s = .yield PUnit.unit ∧ P a) →
+      forIn l PUnit.unit f = .ok PUnit.unit → ∀ a ∈ l, P a
+  | [], _, _, _ => by simp
+  | a :: l, f, hf, h => by
+    simp only [List.forIn_cons] at h
+    cases hfa : f a PUnit.unit with
+    | error e => rw [hfa] at h; simp [bind, Except.bind] at h
+    | ok s =>
+      obtain ⟨rfl, hpa⟩ := hf a _ s hfa
+      rw [hfa] at h
+      simp only [bind, Except.bind] at h
+      intro b hb
+      rcases List.mem_cons.1 hb with rfl | hb
+      · exact hpa
+      · exact forIn_yield_ok P l f hf h b hb
+
 end Nanodregg.Lang

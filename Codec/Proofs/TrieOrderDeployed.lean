@@ -1,4 +1,5 @@
 import Codec.Proofs.SlotOrder
+import Codec.Proofs.RowOrder
 import Kernel.Proofs.RootedDeployed
 
 /-!
@@ -216,5 +217,36 @@ theorem refusalOrder_refuses {b : ByteArray} {i j : Nat} {l : List (RefusalSlot 
     (ho : ¬ l.Pairwise (RefusalBefore env)) :
     (refusalsTrie env digestCodec).get b i = .error (.rejected i "kernel/refusal-order") :=
   refusalsTrie_get_refused Receive.deployed_lawful h ho
+
+/-! ## The rows (KERNEL-46/48) -/
+
+/-- The deployed digest codec writes the deployed `Env`'s bytes. -/
+theorem digestCodec_bytes (d : Digest) : digestCodec.bytes d = env.bytes d := by
+  show ByteArray.empty ++ d.bytes = d.bytes
+  rw [ByteArray.empty_append]
+
+/-- **The deployed rows key bytes are injective on keys within bounds** (`rowKeyBytes_inj`). -/
+theorem rowKeyBytes_inj {s s' : RowSlot Digest} (hs : RowSlot.Fits (fun _ => True) s)
+    (hs' : RowSlot.Fits (fun _ => True) s') (h : rowKeyBytes env s = rowKeyBytes env s') : s = s' :=
+  Nanodregg.Codec.Kernel.rowKeyBytes_inj digestCodec_lawful.on digestCodec_bytes hs hs' h
+
+/-- **The deployed rows listing is accepted exactly when strictly ascending by key bytes**
+(`rowKeyBytes`: the parent's 32 bytes, the relation, the kind, a row's length byte and key). -/
+theorem rowOrder_iff {b : ByteArray} {i j : Nat} {l : List (RowSlot Digest × RowLeaf)}
+    (h : (rowsListing digestCodec).get b i = .ok (l, j)) :
+    (rowsTrie env digestCodec).get b i = .ok (Trie.build (rowSpec env) (rowSpec env).depth 0 l, j) ↔
+      l.Pairwise (RowBefore env) := by
+  constructor
+  · intro hc
+    by_cases ho : l.Pairwise (RowBefore env)
+    · exact ho
+    · rw [rowsTrie_get_refused digestCodec_lawful.on Receive.deployed_lawful digestCodec_bytes h ho] at hc; cases hc
+  · exact rowsTrie_get_ok digestCodec_lawful.on Receive.deployed_lawful digestCodec_bytes h
+
+/-- **Any other deployed rows listing is refused `kernel/row-order` by name.** -/
+theorem rowOrder_refuses {b : ByteArray} {i j : Nat} {l : List (RowSlot Digest × RowLeaf)}
+    (h : (rowsListing digestCodec).get b i = .ok (l, j)) (ho : ¬ l.Pairwise (RowBefore env)) :
+    (rowsTrie env digestCodec).get b i = .error (.rejected i "kernel/row-order") :=
+  rowsTrie_get_refused digestCodec_lawful.on Receive.deployed_lawful digestCodec_bytes h ho
 
 end Nanodregg.Codec.Deployed

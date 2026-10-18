@@ -2107,3 +2107,28 @@ today. Consumers that page (`Command.step`, the phone, Thin) see shorter pages. 
 its own reader refuses (HOST-39's base bound, the carried journal window, this). Every one was
 invisible to green plants. The cheap general check is now law in Host: every encode on a write path
 returns `Option`/`Except` over the SAME bound its decode enforces, and a theorem ties the two.
+
+## HOST-44 · KERNEL-46/48 (rows), HOST's half: the carried state and the base carry rows; `host export` stays complete with no premise (2026-10-18, HOST-12; with KERNEL-17, CODEC-9/10, LANG-14 in ONE kernel! landing)
+
+**Decision.**
+- **No Host code moves.** The base is CODEC's World codec and the batch record CODEC's step codec; the rows trie rides inside both, so the shape stamp flips through the World and carried tags (CODEC-9) and every Store re-geneses; an old base refuses `shapeMismatch`, an old carried export refuses by its stamp. `Carry` reads the new `Carried` (rows last) unchanged.
+- **`Kept` becomes a structure** (named fields, so a later part moves no projection) and gains `rowsCanon` (what `admit_conserves` now reads, the weight being cells + rows) and `rowsOk` (KERNEL-17's `World.RowsOk`: every entry fits, every head sums its rows, every relation's parent is live). `kept_admit` takes them through `admit_rowsCanon` and `admit_rowsOk` (at `Receive.deployed_lawful`), `kept_refuse` through `refuse_rowsCanon`/`refuse_rowsOk` (a refusal moves no row); `kept_of_fits` reads them off the decoded base (`RowsCodecFits`).
+- **Export completeness keeps its statement.** `carriedFits_of_kept` fills `Carried.CodecFits.rows` by CODEC-10's `Deployed.rowsCodecFits_of_ok` from `rowsCanon`, `rowsOk` and the rows listing's length; that length is DERIVED, never a premise: `world_size_listing` now counts 33 bytes of the World's encoding per cell leaf AND per rows entry (`rows_entry_size`), `admit_listing` bounds cells and rows together (a rows entry per row touch, KERNEL's `admit_rows_listing`, each touch ≥ 32 bytes of the log weight), so `openWith_listing_lt` states cells + rows < 2^24 for every World the deployed open returns. `openWith_exportFile_ok` is unchanged in statement and premise-free (ROOT ruled option 2, a premise on it, out).
+- `genesisWorld_codecFits` / `importWorld_codecFits` fill the new `rows` field (genesis: the empty trie; import: the carried rows).
+
+**Theorems (restated or new).** New: `rows_entry_size`, `admit_cells_listing` (the cells-only part, stronger than before: bounded by the touches/creates/nullifiers parts of the log weight). Restated over cells + rows, no new premise: `world_size_listing`, `admit_listing` (+ `RowsCanon`, which `Kept` carries), `fold_listing`, `Record.foldlM_listing`, `openWith_listing_lt` (the sum). `carriedFits_of_kept` takes the rows count where it took the cells count (both discharged at Deployed by `openWith_listing_lt`). `kept_*`/`Kept` as above.
+
+**Plants (host-sim `rowsPlants`).** `plant-rows-survive-reopen`: a parent with a declared relation and one row, served as two Turns through the toy loop under a cadence that seals every batch, is in the World the open reaches from the sealed base with no record replayed (same listing, same rows root, the head counting its row). `plant-rows-carry`: a World holding rows exports and imports through the real carry codec (Kernel.Sim's ctx) with its rows; the tooth: the same World with its rows emptied exports different carried bytes, so a carry that dropped rows is caught.
+
+**Law-6 read (read-only reader): LAND.** No tautology, no collapse; the only added premises are `RowsCanon` on the listing lemmas (carried by `Kept`) and the rows count on `carriedFits_of_kept` (discharged at the deployed open); `openWith_exportFile_ok` byte-identical in statement. Its WEAK (the reopen plant could pass by replay alone) is fixed above.
+
+**WASTE.** Re-pinned (gates/waste.tsv): nine rows fall; two rise, each still under its bound: `seal bytes-per-appended-byte` 1.534 → 1.676 (seed 1's seal points moved: one more base crosses the toy cadence; each base now carries the rows trie) and `seal base-bytes-net-of-growth-per-appended-byte-steady-at-8000` 3.905 → 3.912 (≤ 4).
+
+**Flag day.** World and carried codecs (CODEC-9) move the stamp: every Store re-geneses; old bases refuse `shapeMismatch`; old carried exports refuse by stamp.
+
+**Critique.**
+- The listing bound is stated for cells + rows TOGETHER (< 2^24) and split to each ≤ worldMax; a deployment with a far larger base would have to re-prove it, as before.
+- The trust point is that KERNEL's `World.RowsOk` says what the codec's rows checks say (`rowsCodecFits_of_ok` is that bridge, proved by CODEC-10); were they to drift, the export's own `exportCheck` still decodes what it writes, so a drift surfaces as a refusal, never as a bad file.
+- The reopen plant runs under a cadence that seals every batch, so it reads the rows from a sealed base (the World codec) with no record replayed; a reopen that only replayed records would have hidden a base codec that dropped rows (the law-6 reader's finding).
+
+**Meta-critique.** The one place the rows day reached HOST's theorems was a length nobody bounds statically (parents are not bounded): CODEC-10 said so plainly, and the open's byte bounds were again the answer. The open is the Host's one source of every size fact; a new trie in the World should be met by asking what the open's byte bounds say about it first.

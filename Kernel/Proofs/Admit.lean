@@ -26,17 +26,29 @@ structure Checked (E : Env D) (w : World D) (t : Turn D) (posts : List (Post D))
   touches : ∃ raw, mapEx (touchCheck E w) t.touches = .ok raw ∧ posts = raw.reduceOption
   value : checkValue E t posts = .ok ()
   nullifiers : checkNullifiers E w t = .ok ()
-  charge : checkCharge w t (credit posts) = .ok ()
+  charge : checkCharge w t (credit posts + (rowsAfter E w t).2) = .ok ()
   creates : checkCreates E w t = .ok ()
+  rowsRemain : checkRowsRemain E w t = .ok ()
+  ranges : checkRanges E w t = .ok ()
+  rows : rowsRun E w t (Thunk.mk fun _ => Trie.emptyHash (rowSpec E)) = .ok (rowsAfter E w t)
 
 theorem check_ok {E : Env D} {w : World D} {t : Turn D} {posts : List (Post D)}
     (h : check E w t = .ok posts) : Checked E w t posts := by
-  unfold check at h
+  obtain ⟨rr₀, h⟩ : ∃ rr₀, checkWith E w t = .ok (posts, rr₀) := by
+    unfold check at h
+    cases hc : checkWith E w t with
+    | error r => rw [hc] at h; cases h
+    | ok pr => rw [hc] at h; cases h; exact ⟨pr.2, rfl⟩
+  unfold checkWith at h
   simp only [except_bind_ok] at h
-  obtain ⟨⟨⟩, h1, ⟨⟩, h2, ⟨⟩, h3, ⟨⟩, h4, raw, h5, ⟨⟩, hv, ⟨⟩, h6, ⟨⟩, h7, ⟨⟩, h8, ⟨⟩, hs, h9⟩ := h
-  simp only [pure, Except.pure, Except.ok.injEq] at h9
+  obtain ⟨⟨⟩, h1, ⟨⟩, h2, ⟨⟩, h3, ⟨⟩, h4, raw, h5, ⟨⟩, hv, ⟨⟩, h6, ⟨⟩, hrr, ⟨⟩, hrg, rr, hrw, ⟨⟩, h7,
+    ⟨⟩, h8, ⟨⟩, hs, h9⟩ := h
+  simp only [pure, Except.pure, Except.ok.injEq, Prod.mk.injEq] at h9
+  obtain ⟨h9, -⟩ := h9
   subst h9
-  exact ⟨h1, h3, h4, h2, hs, ⟨raw, h5, rfl⟩, hv, h6, h7, h8⟩
+  have ha : rowsAfter E w t = rr := by unfold rowsAfter; rw [hrw]
+  rw [← ha] at hrw h7
+  exact ⟨h1, h3, h4, h2, hs, ⟨raw, h5, rfl⟩, hv, h6, h7, h8, hrr, hrg, hrw⟩
 
 /-- Every touch of a checked turn passed `touchCheck`. -/
 theorem Checked.touch {E : Env D} {w : World D} {t : Turn D} {posts : List (Post D)}
@@ -72,19 +84,22 @@ theorem admit_chain {E : Env D} {w w' : World D} {t : Turn D}
   obtain ⟨_, _, rfl⟩ := admit_ok h; rfl
 
 /-- **Charge exactness.** An admitted turn paid exactly its weight, could afford it with what
-its touches give back, and the budget moved by exactly the charge less that credit (KERNEL-15). -/
+its touches and its row touches give back, and the budget moved by exactly the charge less that
+credit (KERNEL-15, KERNEL-48). -/
 theorem admit_charge {E : Env D} {w w' : World D} {t : Turn D}
     (h : World.admit E w t = .ok w') :
-    t.charge = t.weight ∧ ∃ posts, Checked E w t posts ∧ t.charge ≤ w.allowance + credit posts ∧
-      w'.allowance + t.charge = w.allowance + credit posts := by
+    t.charge = t.weight ∧ ∃ posts, Checked E w t posts ∧
+      t.charge ≤ w.allowance + credit posts + (rowsAfter E w t).2 ∧
+      w'.allowance + t.charge = w.allowance + credit posts + (rowsAfter E w t).2 := by
   obtain ⟨posts, hc, rfl⟩ := admit_ok h
   have hch := hc.charge
   unfold checkCharge at hch
   simp only [except_bind_ok] at hch
   obtain ⟨⟨⟩, h1, h2⟩ := hch
   rw [req_ok, decide_eq_true_eq] at h1 h2
-  refine ⟨h1, posts, hc, h2, ?_⟩
-  show w.allowance + credit posts - t.charge + t.charge = w.allowance + credit posts
+  refine ⟨h1, posts, hc, by omega, ?_⟩
+  show w.allowance + credit posts + (rowsAfter E w t).2 - t.charge + t.charge =
+    w.allowance + credit posts + (rowsAfter E w t).2
   omega
 
 /-- **The weight bound.** An admitted turn costs at most `Bounds.weightMax`, its log record
@@ -135,8 +150,8 @@ theorem stale_named {E : Env D} {w : World D} {t : Turn D} {pre post : List (Tou
     World.admit E w t = .error (.stale x.cell) := by
   have hm : mapEx (touchCheck E w) t.touches = .error (.stale x.cell) := by
     rw [ht]; exact mapEx_error_at (touchCheck_stale hstale) post hpre
-  unfold World.admit check
-  simp [hb, hj, hs, hw, hm, bind, Except.bind]
+  unfold World.admit check checkWith
+  simp [hb, hj, hs, hw, hm, bind, Except.bind, Except.map]
 
 /-- A retry of an admitted transaction inside its window is answered `replayed` with its
 height, whatever else is true of the World now (only the static bounds and the window are
@@ -147,8 +162,8 @@ theorem replay_named {E : Env D} {w : World D} {t : Turn D} {h : Nat} {d : D}
     (hj : w.journalAt E t.txId = some (h, d)) :
     World.admit E w t = .error (.replayed h) := by
   have : checkJournal E w t = .error (.replayed h) := by simp [checkJournal, hj]
-  unfold World.admit check
-  simp [hb, hw, this, bind, Except.bind]
+  unfold World.admit check checkWith
+  simp [hb, hw, this, bind, Except.bind, Except.map]
 
 /-- The World's journal trie is canonical (`Trie.Canon` at the root, KERNEL-41): what a lookup
 after a prune rests on. Genesis gives it, every insert and prune keeps it (`admit_journalCanon`). -/

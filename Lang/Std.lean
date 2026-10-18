@@ -323,8 +323,8 @@ def stepLaw (S : Ty) (f : Label) (states : List Label) (m : Nat) (edges : List (
   let target := stepTarget edges m
   let next : Term := .case (.get (.var 2) f)
     ((Row.sort (states.map fun x => (x, ()))).map fun (x, _) => (x, .inj (stateTy states) (target x) (.record [])))
-  .lam S (.lam (.record []) (.lam reqTy (resultT (callsT [])
-    (.record (row.map fun (ℓ, _) => (ℓ, if ℓ = f then next else .get (.var 2) ℓ))))))
+  .lam (.record []) (.lam S (.lam (.record []) (.lam reqTy (resultT (callsT [])
+    (.record (row.map fun (ℓ, _) => (ℓ, if ℓ = f then next else .get (.var 2) ℓ)))))))
 
 /-- A method's index in a package: its place among the package's method labels in `pkgOf`'s
 (sorted) order. -/
@@ -389,17 +389,19 @@ def pkgOf (S : Ty) (laws : List (Label × Term)) (methods : List (Label × Ty ×
     body := .record (Row.sort (laws ++ ms.map (fun (l, _, _, t) => (l, t)))),
     methods := ms.map (·.1), laws := laws.map (·.1) }
 
-/-- A method that makes no calls: `λ state arg req. {calls = {}, state = {fields}}` with the
-state at `var 2`, the argument at `var 1`, the request at `var 0`; its type is `methodTy S A`. -/
+/-- A method that reads no rows and makes no calls and no edits:
+`λ rows state arg req. {calls = {}, edits = {}, state = {fields}}` with the state at `var 2`, the
+argument at `var 1`, the request at `var 0` (the empty rows record at `var 3`); its type is
+`methodTy S A`. -/
 def methodOf (S A : Ty) (fields : List (Label × Term)) : Term :=
-  .lam S (.lam A (.lam reqTy (resultT (callsT []) (.record (Row.sort fields)))))
+  .lam (.record []) (.lam S (.lam A (.lam reqTy (resultT (callsT []) (.record (Row.sort fields))))))
 
 /-- A method with call slots `slots` (each a `noCallT T` or `someCallT T t`, under the method's
-three binders, in slot order) as the object; its type is `methodTy S A ks` for the slots' call
+four binders, in slot order) as the object; its type is `methodTy S A ks` for the slots' call
 types `ks`. More than `Kernel.Bounds.callsMax` slots is refused. -/
 def methodWith (S A : Ty) (slots : List Term) (fields : List (Label × Term)) : Except StdRefusal Term := do
   need (slots.length ≤ Kernel.Bounds.callsMax) .tooManyCalls
-  pure (.lam S (.lam A (.lam reqTy (resultT (callsT slots) (.record (Row.sort fields))))))
+  pure (.lam (.record []) (.lam S (.lam A (.lam reqTy (resultT (callsT slots) (.record (Row.sort fields)))))))
 
 /-- The body under a law's three binders (a stdlib law is always `λ old new req. body`). -/
 def lawBody : Term → Term

@@ -33,6 +33,9 @@ private def look (id : D) (c : Cell) : Pinned D := fun i => if i = id then .ok (
 
 private def owner : D := 7
 
+/-- The Lifecycle methods read no rows: an empty row view. -/
+private def noRows : RowView D := ⟨fun _ _ => [], fun _ _ => .ok []⟩
+
 private def reqFor (e : Event) : Req D :=
   { agent := owner, principal := owner, self := owner, notBefore := 0, validUntil := 0, occasion := .invoke e.index }
 
@@ -45,7 +48,7 @@ private def slotsAt (k : Kind) (p : Phase) : Option Slots := do
 private def slotCase (k : Kind) (p : Phase) (e : Event) : Bool :=
   match pkgCell, pkgId, slotsAt k p, noArgs with
   | some c, some id, some s, some args =>
-    match prog.run (look id c) id s e.index args (reqFor e) 100000 with
+    match prog.run (look id c) noRows id s e.index args (reqFor e) 100000 with
     | .error _ => false
     | .ok (s', calls, _) =>
       calls.isEmpty &&

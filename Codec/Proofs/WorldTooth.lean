@@ -16,6 +16,15 @@ namespace Nanodregg.Codec.Kernel
 
 open Nanodregg.Kernel Nanodregg.Codec.Stream
 
+private theorem rowsFits_empty : rowsFits Sim.env (Trie.T.empty : Rows Sim.D).toList = true := by
+  simp [rowsFits, ascendingBytes, Trie.T.toList]
+
+private theorem rowsHeaded_empty : rowsHeaded (Trie.T.empty : Rows Sim.D).toList = true := by
+  simp [rowsHeaded, Trie.T.toList]
+
+private theorem rowsParented_empty (t : Cells Sim.D) : rowsParented Sim.env t (Trie.T.empty : Rows Sim.D) = true := by
+  simp [rowsParented, Trie.T.toList]
+
 /-- The listing is the canonical trie's own: it decodes, and lists back the same entries. -/
 theorem cells_reads_canonical_listing :
     (match (cells Sim.env Sim.dc).decode ((fitList Sim.dc).bytes [(.cell 0, .entry .tomb), (.nullifier 0, .spent)]) with
@@ -58,27 +67,27 @@ private theorem jt_shared : (jt [(1, (7, 3)), (2, (7, 4))]).toList = [(1, (7, 3)
 
 private theorem jt_wireFits (l : List (Sim.D × (Nat × Sim.D))) (hl : l.length ≤ Bounds.journalMax)
     (hn : (l.map Prod.fst).Nodup) (ht : (jt l).toList = l) (hp : ∀ p ∈ l, p.2.1 < 2 ^ 64) :
-    WireFits Sim.env (fun _ => True) (.empty, jt l, (.empty : Refusals Sim.D), 7, 7, 0, 0, 0) :=
+    WireFits Sim.env (fun _ => True) (.empty, jt l, (.empty : Refusals Sim.D), (.empty : Rows Sim.D), 7, 7, 0, 0, 0) :=
   ⟨⟨⟨⟨by simp [Trie.T.toList, worldMax], by simp [Trie.T.toList]⟩, by simp [Trie.T.toList]⟩,
     Trie.canon_empty _ 0⟩,
     ⟨⟨by rw [ht]; exact hl, fun p hp' => ⟨trivial, hp p (ht ▸ hp'), trivial⟩⟩, Trie.canon_build _ 0 l hn⟩,
-    ⟨⟨by simp [Trie.T.toList, worldMax], by simp [Trie.T.toList]⟩, Trie.canon_empty _ 0⟩,
+    ⟨⟨by simp [Trie.T.toList, worldMax], by simp [Trie.T.toList]⟩, Trie.canon_empty _ 0⟩, ⟨⟨by simp [Trie.T.toList, worldMax], by simp [Trie.T.toList]⟩, Trie.canon_empty _ 0⟩,
     show 7 < 2 ^ 64 by decide, show 7 < 2 ^ 64 by decide, trivial, show 0 < 2 ^ 64 by decide, trivial⟩
 
 /-- A journal inside the window decodes: entries at heights 6 and 7 of a World at height 7. -/
 theorem world_reads_windowed_journal :
-    (world Sim.env Sim.dc).decode ((worldWire Sim.env Sim.dc).bytes (.empty, jt [(1, (6, 3)), (2, (7, 4))], (.empty : Refusals Sim.D), 7, 7, 0, 0, 0)) =
-      .ok (ofWire (.empty, jt [(1, (6, 3)), (2, (7, 4))], (.empty : Refusals Sim.D), 7, 7, 0, 0, 0)) :=
+    (world Sim.env Sim.dc).decode ((worldWire Sim.env Sim.dc).bytes (.empty, jt [(1, (6, 3)), (2, (7, 4))], (.empty : Refusals Sim.D), (.empty : Rows Sim.D), 7, 7, 0, 0, 0)) =
+      .ok (ofWire (.empty, jt [(1, (6, 3)), (2, (7, 4))], (.empty : Refusals Sim.D), (.empty : Rows Sim.D), 7, 7, 0, 0, 0)) :=
   world_decode_wire_ok u64_lawful.on (jt_wireFits _ (by decide) (by decide) jt_window (by decide))
     (by show journalFits 7 (jt [(1, (6, 3)), (2, (7, 4))]).toList = true
         rw [jt_window]; simp [journalFits, List.mergeSort, ascendingNat, Bounds.windowMax])
-    (by simp [refusalsFits, Trie.T.toList]) (by simp [refusalsDisjoint, ofWire, Trie.T.toList])
-    (by decide) (by decide)
+    (by simp [refusalsFits, ofWire, Trie.T.toList]) (by simp [refusalsDisjoint, ofWire, Trie.T.toList])
+    (by decide) rowsFits_empty rowsHeaded_empty (rowsParented_empty _) (by decide)
 
 /-- The plant: an entry above the World's height (never pruned, `replayed` forever) is refused
 `kernel/journal` by name. -/
 theorem world_refuses_future_entry :
-    (world Sim.env Sim.dc).decode ((worldWire Sim.env Sim.dc).bytes (.empty, jt [(1, (8, 3))], (.empty : Refusals Sim.D), 7, 7, 0, 0, 0)) =
+    (world Sim.env Sim.dc).decode ((worldWire Sim.env Sim.dc).bytes (.empty, jt [(1, (8, 3))], (.empty : Refusals Sim.D), (.empty : Rows Sim.D), 7, 7, 0, 0, 0)) =
       .error (.rejected 0 "kernel/journal") :=
   world_decode_wire_refused u64_lawful.on (jt_wireFits _ (by decide) (by decide) (jt_one _ _ _) (by decide))
     (by show journalFits 7 (jt [(1, (8, 3))]).toList = false
@@ -86,7 +95,7 @@ theorem world_refuses_future_entry :
 
 /-- Two entries at one height (two admissions in one turn) are refused `kernel/journal`. -/
 theorem world_refuses_shared_height :
-    (world Sim.env Sim.dc).decode ((worldWire Sim.env Sim.dc).bytes (.empty, jt [(1, (7, 3)), (2, (7, 4))], (.empty : Refusals Sim.D), 7, 7, 0, 0, 0)) =
+    (world Sim.env Sim.dc).decode ((worldWire Sim.env Sim.dc).bytes (.empty, jt [(1, (7, 3)), (2, (7, 4))], (.empty : Refusals Sim.D), (.empty : Rows Sim.D), 7, 7, 0, 0, 0)) =
       .error (.rejected 0 "kernel/journal") :=
   world_decode_wire_refused u64_lawful.on (jt_wireFits _ (by decide) (by decide) jt_shared (by decide))
     (by show journalFits 7 (jt [(1, (7, 3)), (2, (7, 4))]).toList = false
@@ -94,20 +103,22 @@ theorem world_refuses_shared_height :
 
 /-- A carried state whose journal is the window's at its height decodes, exactly (KERNEL-41). -/
 theorem carried_reads_windowed_journal :
-    (carried Sim.env Sim.dc).decode ((carriedWire Sim.env Sim.dc).bytes (.empty, 5, 7, jt [(1, (6, 3)), (2, (7, 4))])) =
-      .ok ⟨.empty, 5, 7, jt [(1, (6, 3)), (2, (7, 4))]⟩ := by
+    (carried Sim.env Sim.dc).decode ((carriedWire Sim.env Sim.dc).bytes (.empty, 5, 7, jt [(1, (6, 3)), (2, (7, 4))], .empty)) =
+      .ok ⟨.empty, 5, 7, jt [(1, (6, 3)), (2, (7, 4))], .empty⟩ := by
   have hw := jt_wireFits _ (by decide) (by decide) jt_window (by decide)
-  show (carried Sim.env Sim.dc).decode ((carried Sim.env Sim.dc).bytes ⟨.empty, 5, 7, jt [(1, (6, 3)), (2, (7, 4))]⟩) = _
-  exact carried_decode_bytes (c := ⟨.empty, 5, 7, jt [(1, (6, 3)), (2, (7, 4))]⟩) u64_lawful.on ⟨hw.1, show 5 < 2 ^ 64 by decide, show 7 < 2 ^ 64 by decide, hw.2.1,
-    by rw [jt_window]; simp [journalFits, List.mergeSort, ascendingNat, Bounds.windowMax]⟩
+  show (carried Sim.env Sim.dc).decode ((carried Sim.env Sim.dc).bytes ⟨.empty, 5, 7, jt [(1, (6, 3)), (2, (7, 4))], .empty⟩) = _
+  exact carried_decode_bytes (c := ⟨.empty, 5, 7, jt [(1, (6, 3)), (2, (7, 4))], .empty⟩) u64_lawful.on ⟨hw.1, show 5 < 2 ^ 64 by decide, show 7 < 2 ^ 64 by decide, hw.2.1,
+    by rw [jt_window]; simp [journalFits, List.mergeSort, ascendingNat, Bounds.windowMax],
+    ⟨⟨⟨by simp [Trie.T.toList, worldMax], by simp [Trie.T.toList]⟩, Trie.canon_empty _ 0⟩, rowsFits_empty, rowsHeaded_empty, rowsParented_empty _⟩⟩
 
 /-- **The plant (HOST-11's find)**: a carried state with an entry above its height is refused
 `kernel/carried-journal` by name, before any import could genesis-write a Store from it. -/
 theorem carried_refuses_future_entry :
-    (carried Sim.env Sim.dc).decode ((carriedWire Sim.env Sim.dc).bytes (.empty, 5, 7, jt [(1, (8, 3))])) =
+    (carried Sim.env Sim.dc).decode ((carriedWire Sim.env Sim.dc).bytes (.empty, 5, 7, jt [(1, (8, 3))], .empty)) =
       .error (.rejected 0 "kernel/carried-journal") := by
   have hw := jt_wireFits _ (by decide) (by decide) (jt_one 1 3 8) (by decide)
-  exact carried_decode_wire_refused u64_lawful.on ⟨hw.1, show 5 < 2 ^ 64 by decide, show 7 < 2 ^ 64 by decide, hw.2.1⟩
+  exact carried_decode_wire_refused u64_lawful.on ⟨hw.1, show 5 < 2 ^ 64 by decide, show 7 < 2 ^ 64 by decide, hw.2.1,
+    ⟨⟨by simp [Trie.T.toList, worldMax], by simp [Trie.T.toList]⟩, Trie.canon_empty _ 0⟩⟩
     (by show journalFits 7 (jt [(1, (8, 3))]).toList = false
         rw [jt_one]; exact journalFits_future 7 1 3)
 
@@ -151,7 +162,7 @@ private abbrev rt (l : List (RefusalSlot Sim.D × RefusalLeaf)) : Refusals Sim.D
 
 /-- A World wire at height 7, empty cells and journal, with refusals `r` and `steps` steps. -/
 private abbrev rx (r : Refusals Sim.D) (steps : Nat) : WorldWire Sim.D :=
-  (.empty, (.empty : Journal Sim.D), r, 7, steps, 0, 0, 0)
+  (.empty, (.empty : Journal Sim.D), r, (.empty : Rows Sim.D), 7, steps, 0, 0, 0)
 
 private theorem rx_wireFits (l : List (RefusalSlot Sim.D × RefusalLeaf)) (steps : Nat) (hst : steps < 2 ^ 64)
     (hl : l.length ≤ worldMax) (hn : (l.map Prod.fst).Nodup) (ht : (rt l).toList = l)
@@ -162,7 +173,7 @@ private theorem rx_wireFits (l : List (RefusalSlot Sim.D × RefusalLeaf)) (steps
     ⟨⟨by simp [Trie.T.toList, Bounds.journalMax, Bounds.windowMax], by simp [Trie.T.toList]⟩, Trie.canon_empty _ 0⟩,
     ⟨⟨by rw [ht]; exact hl, fun p hp' => by
         refine ⟨?_, hp p (ht ▸ hp')⟩
-        cases p.1 <;> trivial⟩, Trie.canon_build _ 0 l hn⟩,
+        cases p.1 <;> trivial⟩, Trie.canon_build _ 0 l hn⟩, ⟨⟨by simp [Trie.T.toList, worldMax], by simp [Trie.T.toList]⟩, Trie.canon_empty _ 0⟩,
     show 7 < 2 ^ 64 by decide, hst, trivial, show 0 < 2 ^ 64 by decide, trivial⟩
 
 private abbrev atCount (n : Nat) : List (RefusalSlot Sim.D × RefusalLeaf) :=
@@ -195,7 +206,7 @@ theorem world_reads_refusals_at_budget :
   world_decode_wire_ok u64_lawful.on (atCount_wireFits 16 (by decide) rt_atCount16) journalFits_empty
     (by show refusalsFits 7 (rt (atCount 16)).toList = true
         rw [rt_atCount16]; decide)
-    (by decide +kernel) (by decide) (by decide)
+    (by decide +kernel) (by decide) rowsFits_empty rowsHeaded_empty (rowsParented_empty _) (by decide)
 
 /-- **The plant**: one past the budget, a count of 17, is refused `kernel/refusals` by name. -/
 theorem world_refuses_count_past_budget :
@@ -238,7 +249,7 @@ theorem world_refuses_height_past_steps :
       .error (.rejected 0 "kernel/steps") :=
   world_decode_wire_stepsRefused u64_lawful.on
     (rx_wireFits [] 6 (by decide) (by simp) (by simp) (by simp [rt, Trie.build, Trie.T.toList]) (by simp))
-    journalFits_empty (by simp [refusalsFits, Trie.T.toList])
+    journalFits_empty (by simp [refusalsFits, ofWire, Trie.T.toList])
     (by simp [refusalsDisjoint, ofWire, Trie.T.toList]) (by decide)
 
 /-- **The plant**: the refusals listing in the other order is refused `kernel/refusal-order` by name. -/
@@ -261,7 +272,7 @@ theorem refusals_reads_canonical_listing :
 refused `kernel/refusals-disjoint` by name; no fold reaches it (KERNEL's `fold_refusalsDisjoint`). -/
 theorem world_refuses_refused_and_journaled :
     (world Sim.env Sim.dc).decode ((worldWire Sim.env Sim.dc).bytes
-        (.empty, jt [(1, (7, 3))], rt [(.tx 1, .refused 7 3)], 7, 7, 0, 0, 0)) =
+        (.empty, jt [(1, (7, 3))], rt [(.tx 1, .refused 7 3)], (.empty : Rows Sim.D), 7, 7, 0, 0, 0)) =
       .error (.rejected 0 "kernel/refusals-disjoint") := by
   have hj := jt_wireFits [(1, (7, 3))] (by decide) (by decide) (jt_one _ _ _) (by decide)
   have hr := rx_wireFits [(.tx 1, .refused 7 3)] 7 (by decide) (by simp [worldMax]) (by simp) (rt_one _ _)
@@ -280,7 +291,7 @@ theorem world_refuses_refused_and_journaled :
 refused at height 2049 is still kept (`4096 < 2049 + 2048`) and one refused at 2048 is stale. -/
 
 private abbrev ry (H : Nat) (r : Refusals Sim.D) (steps : Nat) : WorldWire Sim.D :=
-  (.empty, (.empty : Journal Sim.D), r, H, steps, 0, 0, 0)
+  (.empty, (.empty : Journal Sim.D), r, (.empty : Rows Sim.D), H, steps, 0, 0, 0)
 
 private theorem ry_one_wireFits (H : Nat) (hH : H < 2 ^ 64) (k : RefusalSlot Sim.D) (v : RefusalLeaf)
     (hv : RefusalLeaf.Fits v) : WireFits Sim.env (fun _ => True) (ry H (rt [(k, v)]) H) :=
@@ -289,7 +300,7 @@ private theorem ry_one_wireFits (H : Nat) (hH : H < 2 ^ 64) (k : RefusalSlot Sim
     ⟨⟨by simp [Trie.T.toList, Bounds.journalMax, Bounds.windowMax], by simp [Trie.T.toList]⟩, Trie.canon_empty _ 0⟩,
     ⟨⟨by rw [rt_one]; simp [worldMax], fun p hp' => by
         rw [rt_one] at hp'; simp at hp'; subst hp'
-        exact ⟨by cases k <;> trivial, hv⟩⟩, Trie.canon_build _ 0 _ (by simp)⟩,
+        exact ⟨by cases k <;> trivial, hv⟩⟩, Trie.canon_build _ 0 _ (by simp)⟩, ⟨⟨by simp [Trie.T.toList, worldMax], by simp [Trie.T.toList]⟩, Trie.canon_empty _ 0⟩,
     hH, hH, trivial, show 0 < 2 ^ 64 by decide, trivial⟩
 
 private theorem journalFits_nil (H : Nat) : journalFits H (Trie.T.empty : Journal Sim.D).toList = true := by
@@ -301,14 +312,16 @@ theorem world_reads_refusal_at_next_height :
     (world Sim.env Sim.dc).decode ((worldWire Sim.env Sim.dc).bytes (ry 7 (rt [(.tx 1, .refused 8 3)]) 7)) =
       .ok (ofWire (ry 7 (rt [(.tx 1, .refused 8 3)]) 7)) :=
   world_decode_wire_ok u64_lawful.on (ry_one_wireFits 7 (by decide) _ _ ⟨by decide, by decide⟩)
-    (journalFits_nil 7) (by rw [rt_one]; decide) (by decide +kernel) (by decide) (by decide)
+    (journalFits_nil 7) (by dsimp only [ofWire, ry]; rw [rt_one]; decide) (by decide +kernel) (by decide) rowsFits_empty rowsHeaded_empty (rowsParented_empty _)
+    (by decide)
 
 /-- At a window boundary, a call refused 2048 heights ago is still kept (2049 at height 4096)... -/
 theorem world_reads_refusal_at_window_edge :
     (world Sim.env Sim.dc).decode ((worldWire Sim.env Sim.dc).bytes (ry 4096 (rt [(.tx 1, .refused 2049 3)]) 4096)) =
       .ok (ofWire (ry 4096 (rt [(.tx 1, .refused 2049 3)]) 4096)) :=
   world_decode_wire_ok u64_lawful.on (ry_one_wireFits 4096 (by decide) _ _ ⟨by decide, by decide⟩)
-    (journalFits_nil 4096) (by rw [rt_one]; decide) (by decide +kernel) (by decide) (by decide)
+    (journalFits_nil 4096) (by dsimp only [ofWire, ry]; rw [rt_one]; decide) (by decide +kernel) (by decide) rowsFits_empty
+    rowsHeaded_empty (rowsParented_empty _) (by decide)
 
 /-- **The plant**: ...and one height older (2048) is stale, refused `kernel/refusals` (it should have
 been pruned). -/
@@ -316,35 +329,36 @@ theorem world_refuses_stale_refusal :
     (world Sim.env Sim.dc).decode ((worldWire Sim.env Sim.dc).bytes (ry 4096 (rt [(.tx 1, .refused 2048 3)]) 4096)) =
       .error (.rejected 0 "kernel/refusals") :=
   world_decode_wire_refusalsRefused u64_lawful.on (ry_one_wireFits 4096 (by decide) _ _ ⟨by decide, by decide⟩)
-    (journalFits_nil 4096) (by rw [rt_one]; decide)
+    (journalFits_nil 4096) (by dsimp only [ofWire, ry]; rw [rt_one]; decide)
 
 /-- A count for the current window (0, at height 7) reads back... -/
 theorem world_reads_current_window_count :
     (world Sim.env Sim.dc).decode ((worldWire Sim.env Sim.dc).bytes (ry 7 (rt [(.count 2 0, .count 1)]) 7)) =
       .ok (ofWire (ry 7 (rt [(.count 2 0, .count 1)]) 7)) :=
   world_decode_wire_ok u64_lawful.on (ry_one_wireFits 7 (by decide) _ _ (show _ < 2 ^ 64 by decide))
-    (journalFits_nil 7) (by rw [rt_one]; decide) (by decide +kernel) (by decide) (by decide)
+    (journalFits_nil 7) (by dsimp only [ofWire, ry]; rw [rt_one]; decide) (by decide +kernel) (by decide) rowsFits_empty rowsHeaded_empty (rowsParented_empty _)
+    (by decide)
 
 /-- **The plant**: ...and a count for another window (1) is refused `kernel/refusals`. -/
 theorem world_refuses_past_window_count :
     (world Sim.env Sim.dc).decode ((worldWire Sim.env Sim.dc).bytes (ry 7 (rt [(.count 2 1, .count 1)]) 7)) =
       .error (.rejected 0 "kernel/refusals") :=
   world_decode_wire_refusalsRefused u64_lawful.on (ry_one_wireFits 7 (by decide) _ _ (show _ < 2 ^ 64 by decide))
-    (journalFits_nil 7) (by rw [rt_one]; decide)
+    (journalFits_nil 7) (by dsimp only [ofWire, ry]; rw [rt_one]; decide)
 
 /-- **The plant**: a count of 0 (a key the kernel never writes) is refused `kernel/refusals`. -/
 theorem world_refuses_zero_count :
     (world Sim.env Sim.dc).decode ((worldWire Sim.env Sim.dc).bytes (ry 7 (rt [(.count 2 0, .count 0)]) 7)) =
       .error (.rejected 0 "kernel/refusals") :=
   world_decode_wire_refusalsRefused u64_lawful.on (ry_one_wireFits 7 (by decide) _ _ (show _ < 2 ^ 64 by decide))
-    (journalFits_nil 7) (by rw [rt_one]; decide)
+    (journalFits_nil 7) (by dsimp only [ofWire, ry]; rw [rt_one]; decide)
 
 /-- **The plant**: a count key holding a refused leaf is refused `kernel/refusals` (the other misfit). -/
 theorem world_refuses_misfit_count_key :
     (world Sim.env Sim.dc).decode ((worldWire Sim.env Sim.dc).bytes (ry 7 (rt [(.count 2 0, .refused 7 3)]) 7)) =
       .error (.rejected 0 "kernel/refusals") :=
   world_decode_wire_refusalsRefused u64_lawful.on (ry_one_wireFits 7 (by decide) _ _ ⟨by decide, by decide⟩)
-    (journalFits_nil 7) (by rw [rt_one]; decide)
+    (journalFits_nil 7) (by dsimp only [ofWire, ry]; rw [rt_one]; decide)
 
 /-- The accepted twin of `world_refuses_height_past_steps`: the same World with 7 steps reads back. -/
 theorem world_reads_height_eq_steps :
@@ -352,14 +366,14 @@ theorem world_reads_height_eq_steps :
       .ok (ofWire (rx .empty 7)) :=
   world_decode_wire_ok u64_lawful.on
     (rx_wireFits [] 7 (by decide) (by simp) (by simp) (by simp [rt, Trie.build, Trie.T.toList]) (by simp))
-    journalFits_empty (by simp [refusalsFits, Trie.T.toList])
-    (by simp [refusalsDisjoint, ofWire, Trie.T.toList]) (by decide) (by decide)
+    journalFits_empty (by simp [refusalsFits, ofWire, Trie.T.toList])
+    (by simp [refusalsDisjoint, ofWire, Trie.T.toList]) (by decide) rowsFits_empty rowsHeaded_empty (rowsParented_empty _) (by decide)
 
 /-- The accepted twin of `world_refuses_refused_and_journaled`: id 1 journaled, id 2 refused. -/
 theorem world_reads_refused_not_journaled :
     (world Sim.env Sim.dc).decode ((worldWire Sim.env Sim.dc).bytes
-        (.empty, jt [(1, (7, 3))], rt [(.tx 2, .refused 7 3)], 7, 7, 0, 0, 0)) =
-      .ok (ofWire (.empty, jt [(1, (7, 3))], rt [(.tx 2, .refused 7 3)], 7, 7, 0, 0, 0)) := by
+        (.empty, jt [(1, (7, 3))], rt [(.tx 2, .refused 7 3)], (.empty : Rows Sim.D), 7, 7, 0, 0, 0)) =
+      .ok (ofWire (.empty, jt [(1, (7, 3))], rt [(.tx 2, .refused 7 3)], (.empty : Rows Sim.D), 7, 7, 0, 0, 0)) := by
   have hj := jt_wireFits [(1, (7, 3))] (by decide) (by decide) (jt_one _ _ _) (by decide)
   have hr := rx_wireFits [(.tx 2, .refused 7 3)] 7 (by decide) (by simp [worldMax]) (by simp) (rt_one _ _)
     (by intro p hp; simp at hp; subst hp; exact ⟨by decide, by decide⟩)
@@ -369,7 +383,7 @@ theorem world_reads_refused_not_journaled :
         rw [jt_one]; simp [journalFits, ascendingNat, Bounds.windowMax])
     (by show refusalsFits 7 (rt [(.tx 2, .refused 7 3)]).toList = true
         rw [rt_one]; decide)
-    (by decide +kernel) (by decide) (by decide)
+    (by decide +kernel) (by decide) rowsFits_empty rowsHeaded_empty (rowsParented_empty _) (by decide)
 
 /-- **The plant**: a call recorded refused at height 0 (a fold records `height + 1 ≥ 1`) is refused
 `kernel/refusals`. -/
@@ -377,6 +391,295 @@ theorem world_refuses_refusal_at_zero :
     (world Sim.env Sim.dc).decode ((worldWire Sim.env Sim.dc).bytes (ry 7 (rt [(.tx 1, .refused 0 3)]) 7)) =
       .error (.rejected 0 "kernel/refusals") :=
   world_decode_wire_refusalsRefused u64_lawful.on (ry_one_wireFits 7 (by decide) _ _ ⟨by decide, by decide⟩)
-    (journalFits_nil 7) (by rw [rt_one]; decide)
+    (journalFits_nil 7) (by dsimp only [ofWire, ry]; rw [rt_one]; decide)
+
+/-! ## The rows' teeth (KERNEL-46/48, CODEC-33)
+
+A World at height 7 whose rows hold one relation (parent 1, relation 7) declared with a limit of 4 rows,
+a cap of 40 and a key width of 2. The cap's boundary: a relation summing exactly its cap reads back, one
+past it is refused `kernel/rows`. A head counting a row it does not hold is refused
+`kernel/rows-headed`; the same head with its row reads back. The listing in the other order is refused
+`kernel/row-order`. -/
+
+/-- The canonical rows trie of a listing, at Sim's parameters. -/
+private abbrev wr (l : List (RowSlot Sim.D × RowLeaf)) : Rows Sim.D :=
+  Trie.build (rowSpec Sim.env) (rowSpec Sim.env).depth 0 l
+
+/-- The cells listing of a World holding one live cell, id 1 (the relations' parent). -/
+private abbrev parentCells : List (Slot Sim.D × Leaf) := [(.cell 1, .entry (.live ⟨0, .ram, []⟩))]
+
+/-- The cells trie holding the parent, at Sim's parameters. -/
+private abbrev pc (b : Bool) : Cells Sim.D :=
+  if b then Trie.build (trieSpec Sim.env) (trieSpec Sim.env).depth 0 parentCells else .empty
+
+private theorem pc_toList : (pc true).toList = parentCells := by
+  cases hd : (trieSpec Sim.env).depth <;> simp [pc, parentCells, Trie.build, Trie.mkLeaf, Trie.T.toList, hd]
+
+private theorem pc_fits (b : Bool) : CellsFits Sim.env (fun _ => True) (pc b) := by
+  cases b
+  · exact ⟨⟨⟨by simp [pc, Trie.T.toList, worldMax], by simp [pc, Trie.T.toList]⟩, by simp [pc, Trie.T.toList]⟩,
+      Trie.canon_empty _ 0⟩
+  · refine ⟨⟨⟨by rw [pc_toList]; simp [worldMax], fun p hp => ?_⟩, fun p hp => ?_⟩, ?_⟩
+    · rw [pc_toList] at hp; simp only [parentCells, List.mem_cons, List.mem_nil_iff, or_false] at hp; subst hp
+      exact ⟨trivial, by decide, by simp [Slots.Fits, Bounds.slotsPerCellMax]⟩
+    · rw [pc_toList] at hp; simp only [parentCells, List.mem_cons, List.mem_nil_iff, or_false] at hp; subst hp; rfl
+    · exact Trie.canon_build _ 0 _ (by simp [parentCells])
+
+/-- A World wire at height 7, empty but for its rows and, if `b`, the live parent cell 1. -/
+private abbrev wxp (b : Bool) (r : Rows Sim.D) : WorldWire Sim.D :=
+  (pc b, (.empty : Journal Sim.D), (.empty : Refusals Sim.D), r, 7, 7, 0, 0, 0)
+
+private abbrev wx (r : Rows Sim.D) : WorldWire Sim.D := wxp true r
+
+private theorem wxp_wireFits (b : Bool) (l : List (RowSlot Sim.D × RowLeaf)) (hl : l.length ≤ worldMax)
+    (hn : (l.map Prod.fst).Nodup) (ht : (wr l).toList = l)
+    (hp : ∀ p ∈ l, RowSlot.Fits (fun _ => True) p.1 ∧ RowLeaf.Fits p.2) :
+    WireFits Sim.env (fun _ => True) (wxp b (wr l)) :=
+  ⟨pc_fits b,
+    ⟨⟨by simp [Trie.T.toList, Bounds.journalMax, Bounds.windowMax], by simp [Trie.T.toList]⟩, Trie.canon_empty _ 0⟩,
+    ⟨⟨by simp [Trie.T.toList, worldMax], by simp [Trie.T.toList]⟩, Trie.canon_empty _ 0⟩,
+    ⟨⟨by rw [ht]; exact hl, fun p hp' => hp p (ht ▸ hp')⟩, Trie.canon_build _ 0 l hn⟩,
+    show 7 < 2 ^ 64 by decide, show 7 < 2 ^ 64 by decide, trivial, show 0 < 2 ^ 64 by decide, trivial⟩
+
+private theorem wx_wireFits (l : List (RowSlot Sim.D × RowLeaf)) (hl : l.length ≤ worldMax)
+    (hn : (l.map Prod.fst).Nodup) (ht : (wr l).toList = l)
+    (hp : ∀ p ∈ l, RowSlot.Fits (fun _ => True) p.1 ∧ RowLeaf.Fits p.2) :
+    WireFits Sim.env (fun _ => True) (wx (wr l)) :=
+  wxp_wireFits true l hl hn ht hp
+
+private abbrev capped (sum : Nat) : List (RowSlot Sim.D × RowLeaf) :=
+  [(.head 1 7, .head 1 sum 4 40 2 true), (.row ⟨1, 7, ⟨#[3, 4]⟩⟩, .row sum ByteArray.empty)]
+
+private theorem wr_capped40 : (wr (capped 40)).toList = capped 40 := by decide +kernel
+private theorem wr_capped41 : (wr (capped 41)).toList = capped 41 := by decide +kernel
+
+private theorem capped_wireFits (sum : Nat) (hs : sum < 2 ^ 64) (ht : (wr (capped sum)).toList = capped sum) :
+    WireFits Sim.env (fun _ => True) (wx (wr (capped sum))) :=
+  wx_wireFits _ (by simp [worldMax]) (by simp [capped]) ht (by
+    intro p hp; simp only [capped, List.mem_cons, List.mem_nil_iff, or_false] at hp
+    rcases hp with rfl | rfl
+    · exact ⟨⟨trivial, by decide⟩, by decide, hs, by decide, by decide, by decide⟩
+    · exact ⟨⟨trivial, by decide, by decide⟩, hs, by decide⟩)
+
+private theorem refusals_nil : refusalsFits 7 (Trie.T.empty : Refusals Sim.D).toList = true := by
+  simp [refusalsFits, Trie.T.toList]
+
+private theorem disjoint_nil (r : Rows Sim.D) : refusalsDisjoint Sim.env (ofWire (wx r)) = true := by
+  simp [refusalsDisjoint, ofWire, Trie.T.toList]
+
+/-- **The plant**: a relation whose one row's amount (41) passes its cap (40), its head counting and
+summing it, is refused `kernel/rows` by name. -/
+theorem world_refuses_sum_past_cap :
+    (world Sim.env Sim.dc).decode ((worldWire Sim.env Sim.dc).bytes (wx (wr (capped 41)))) =
+      .error (.rejected 0 "kernel/rows") :=
+  world_decode_wire_rowsRefused u64_lawful.on (capped_wireFits 41 (by decide) wr_capped41) journalFits_empty
+    refusals_nil (disjoint_nil _) (by decide)
+    (by show rowsFits Sim.env (wr (capped 41)).toList = false
+        rw [wr_capped41]; decide +kernel)
+
+/-- The twin at the cap: the same relation summing exactly its cap (40) reads back. -/
+theorem world_reads_sum_at_cap :
+    (world Sim.env Sim.dc).decode ((worldWire Sim.env Sim.dc).bytes (wx (wr (capped 40)))) =
+      .ok (ofWire (wx (wr (capped 40)))) :=
+  world_decode_wire_ok u64_lawful.on (capped_wireFits 40 (by decide) wr_capped40) journalFits_empty refusals_nil
+    (disjoint_nil _) (by decide)
+    (by show rowsFits Sim.env (wr (capped 40)).toList = true
+        rw [wr_capped40]; decide +kernel)
+    (by show rowsHeaded (wr (capped 40)).toList = true
+        rw [wr_capped40]; decide) (by decide +kernel) (by decide +kernel)
+
+private abbrev declared : List (RowSlot Sim.D × RowLeaf) := [(.head 1 7, .head 0 0 4 40 2 true)]
+
+private theorem wr_declared : (wr declared).toList = declared := by
+  cases hd : (rowSpec Sim.env).depth <;> simp [wr, declared, Trie.build, Trie.mkLeaf, Trie.T.toList, hd]
+
+/-- A declared relation holding no rows (count 0, sum 0) reads back. -/
+theorem world_reads_declared_relation :
+    (world Sim.env Sim.dc).decode ((worldWire Sim.env Sim.dc).bytes (wx (wr declared))) =
+      .ok (ofWire (wx (wr declared))) :=
+  world_decode_wire_ok u64_lawful.on
+    (wx_wireFits _ (by simp [worldMax]) (by simp) wr_declared (by
+      intro p hp; simp only [declared, List.mem_cons, List.mem_nil_iff, or_false] at hp; subst hp
+      exact ⟨⟨trivial, by decide⟩, by decide, by decide, by decide, by decide, by decide⟩))
+    journalFits_empty refusals_nil (disjoint_nil _) (by decide)
+    (by show rowsFits Sim.env (wr declared).toList = true
+        rw [wr_declared]; decide)
+    (by show rowsHeaded (wr declared).toList = true
+        rw [wr_declared]; decide) (by decide +kernel) (by decide +kernel)
+
+private abbrev headed (count : Nat) : List (RowSlot Sim.D × RowLeaf) :=
+  [(.head 1 7, .head count 5 4 40 2 true), (.row ⟨1, 7, ⟨#[3, 4]⟩⟩, .row 5 ByteArray.empty)]
+
+private theorem wr_headed1 : (wr (headed 1)).toList = headed 1 := by decide +kernel
+private theorem wr_headed2 : (wr (headed 2)).toList = headed 2 := by decide +kernel
+
+private theorem headed_wireFits (count : Nat) (hc : count < 2 ^ 64) (ht : (wr (headed count)).toList = headed count) :
+    WireFits Sim.env (fun _ => True) (wx (wr (headed count))) :=
+  wx_wireFits _ (by simp [worldMax]) (by simp [headed]) ht (by
+    intro p hp; simp only [headed, List.mem_cons, List.mem_nil_iff, or_false] at hp
+    rcases hp with rfl | rfl
+    · exact ⟨⟨trivial, by decide⟩, hc, by decide, by decide, by decide, by decide⟩
+    · exact ⟨⟨trivial, by decide, by decide⟩, by decide, by decide⟩)
+
+/-- A head counting and summing its one row reads back: the twin of `world_refuses_uncounted_row`. -/
+theorem world_reads_counted_row :
+    (world Sim.env Sim.dc).decode ((worldWire Sim.env Sim.dc).bytes (wx (wr (headed 1)))) =
+      .ok (ofWire (wx (wr (headed 1)))) :=
+  world_decode_wire_ok u64_lawful.on (headed_wireFits 1 (by decide) wr_headed1) journalFits_empty refusals_nil
+    (disjoint_nil _) (by decide)
+    (by show rowsFits Sim.env (wr (headed 1)).toList = true
+        rw [wr_headed1]; decide +kernel)
+    (by show rowsHeaded (wr (headed 1)).toList = true
+        rw [wr_headed1]; decide +kernel) (by decide +kernel) (by decide +kernel)
+
+/-- **The plant**: the same relation with its parent absent (no cell 1) is refused `kernel/rows-parented`
+by name: a head is born only under a cell its turn creates and goes with its parent, so no fold reaches
+it. Its twin is `world_reads_counted_row`. -/
+theorem world_refuses_orphan_relation :
+    (world Sim.env Sim.dc).decode ((worldWire Sim.env Sim.dc).bytes (wxp false (wr (headed 1)))) =
+      .error (.rejected 0 "kernel/rows-parented") :=
+  world_decode_wire_parentedRefused u64_lawful.on
+    (wxp_wireFits false _ (by simp [worldMax]) (by simp [headed]) wr_headed1 (by
+      intro p hp; simp only [headed, List.mem_cons, List.mem_nil_iff, or_false] at hp
+      rcases hp with rfl | rfl
+      · exact ⟨⟨trivial, by decide⟩, by decide, by decide, by decide, by decide, by decide⟩
+      · exact ⟨⟨trivial, by decide, by decide⟩, by decide, by decide⟩))
+    journalFits_empty refusals_nil (by simp [refusalsDisjoint, ofWire, Trie.T.toList]) (by decide)
+    (by show rowsFits Sim.env (wr (headed 1)).toList = true
+        rw [wr_headed1]; decide +kernel)
+    (by show rowsHeaded (wr (headed 1)).toList = true
+        rw [wr_headed1]; decide +kernel) (by decide +kernel)
+
+/-- **The plant**: the same head counting two rows (it holds one) is refused `kernel/rows-headed`. -/
+theorem world_refuses_uncounted_row :
+    (world Sim.env Sim.dc).decode ((worldWire Sim.env Sim.dc).bytes (wx (wr (headed 2)))) =
+      .error (.rejected 0 "kernel/rows-headed") :=
+  world_decode_wire_headedRefused u64_lawful.on (headed_wireFits 2 (by decide) wr_headed2) journalFits_empty
+    refusals_nil (disjoint_nil _) (by decide)
+    (by show rowsFits Sim.env (wr (headed 2)).toList = true
+        rw [wr_headed2]; decide +kernel)
+    (by show rowsHeaded (wr (headed 2)).toList = false
+        rw [wr_headed2]; decide +kernel)
+
+/-- **The plant**: the rows listing in the other order (the row before its head) is refused
+`kernel/row-order` by name. -/
+theorem rows_refuses_swapped_listing :
+    (match (rowsTrie Sim.env Sim.dc).decode
+        ((rawList worldMax (product (rowKey Sim.dc) rowLeaf)).bytes (headed 1).reverse) with
+     | .error (.rejected _ "kernel/row-order") => true
+     | _ => false) = true := by decide +kernel
+
+/-- The canonical order reads back. -/
+theorem rows_reads_canonical_listing :
+    (match (rowsTrie Sim.env Sim.dc).decode
+        ((rawList worldMax (product (rowKey Sim.dc) rowLeaf)).bytes (headed 1)) with
+     | .ok t => t.toList == headed 1
+     | .error _ => false) = true := by decide +kernel
+
+/-- **The plant**: a row key whose length byte claims 129 bytes, one past `Bounds.keyBytesMax`, is
+refused `pastBound` at that byte, before any key byte is read. -/
+theorem rowKey_refuses_wide_key :
+    (match (rowKey Sim.dc).decode (Sim.dc.bytes 1 ++ ⟨#[7, 1, 129]⟩) with
+     | .error (.pastBound _ 128 129) => true
+     | _ => false) = true := by decide +kernel
+
+/-- The twin: a key of exactly `Bounds.keyBytesMax` bytes is within the codec's domain, so it reads back. -/
+theorem rowKey_reads_widest_key (k : ByteArray) (hk : k.size = Bounds.keyBytesMax) :
+    (rowKey Sim.dc).decode ((rowKey Sim.dc).bytes (.row ⟨1, 7, k⟩)) = .ok (.row ⟨1, 7, k⟩) :=
+  (rowKey_lawfulOn u64_lawful.on).decode_bytes ⟨trivial, show (7 : Nat) < 256 by decide, Nat.le_of_eq hk⟩
+
+/-! ### The kind byte is load-bearing (KERNEL-17's ask, for `rows_separateOn`) -/
+
+/-- The rows key bytes WITHOUT the kind byte: a head `parent ‖ rel`, a row `parent ‖ rel ‖ |k| ‖ k`. -/
+private def keyNoKind (E : Env Sim.D) : RowSlot Sim.D → ByteArray
+  | .head p rel => E.bytes p ++ byte8 rel
+  | .row key => E.bytes key.parent ++ byte8 key.rel ++ byte8 key.k.size ++ key.k
+
+private theorem byteBit_append_zero (a : ByteArray) (i : Nat) : byteBit (a ++ ⟨#[0]⟩) i = byteBit a i := by
+  unfold byteBit
+  by_cases h1 : i / 8 < a.size
+  · have h2 : i / 8 < (a ++ ⟨#[0]⟩).size := by simp [ByteArray.size_append]; omega
+    rw [dif_pos h2, dif_pos h1, ByteArray.getElem_append_left h1]
+  · rw [dif_neg h1]
+    by_cases h3 : i / 8 < (a ++ ⟨#[0]⟩).size
+    · rw [dif_pos h3]
+      have he : i / 8 = a.size := by simp [ByteArray.size_append] at h3; omega
+      have : (a ++ ⟨#[0]⟩)[i / 8] = 0 := by
+        rw [ByteArray.getElem_append_right (by omega)]; simp [he]
+      rw [this]; simp
+    · rw [dif_neg h3]
+
+/-- **The tooth**: without the kind byte, the head of relation 7 under parent 1 and the row of that
+relation with the empty key are two different keys within bounds whose bits agree everywhere (`byteBit`
+reads past a string's end as 0, and the row's length byte is 0), so the rows trie could not separate
+them. KERNEL's `rows_separateOn` (Kernel/Proofs/RowsSep.lean) rests on the kind byte. -/
+theorem rows_kindByte_needed :
+    RowSlot.Fits (fun _ => True) (RowSlot.head (1 : Sim.D) 7) ∧
+      RowSlot.Fits (fun _ => True) (RowSlot.row ⟨(1 : Sim.D), 7, ByteArray.empty⟩) ∧
+      RowSlot.head (1 : Sim.D) 7 ≠ RowSlot.row ⟨1, 7, ByteArray.empty⟩ ∧
+      ∀ i, byteBit (keyNoKind Sim.env (.head 1 7)) i = byteBit (keyNoKind Sim.env (.row ⟨1, 7, ByteArray.empty⟩)) i := by
+  refine And.intro (by simp [RowSlot.Fits]) (And.intro (by simp [RowSlot.Fits]) (And.intro ?_ fun i => ?_))
+  · intro h; cases h
+  have e : keyNoKind Sim.env (.row ⟨1, 7, ByteArray.empty⟩) = keyNoKind Sim.env (.head 1 7) ++ ⟨#[0]⟩ := by
+    simp only [keyNoKind, byte8, ByteArray.append_empty, ByteArray.size_empty]; rfl
+  rw [e, byteBit_append_zero]
+
+/-- The carried twin: a carried state whose head counts its one row reads back, exactly. -/
+theorem carried_reads_counted_row :
+    (carried Sim.env Sim.dc).decode ((carriedWire Sim.env Sim.dc).bytes (pc true, 5, 7, .empty, wr (headed 1))) =
+      .ok ⟨pc true, 5, 7, .empty, wr (headed 1)⟩ := by
+  have hw := headed_wireFits 1 (by decide) wr_headed1
+  show (carried Sim.env Sim.dc).decode ((carried Sim.env Sim.dc).bytes ⟨pc true, 5, 7, .empty, wr (headed 1)⟩) = _
+  exact carried_decode_bytes u64_lawful.on ⟨hw.1, show 5 < 2 ^ 64 by decide, show 7 < 2 ^ 64 by decide, hw.2.1,
+    by simp [journalFits, Trie.T.toList, ascendingNat],
+    ⟨hw.2.2.2.1, by show rowsFits Sim.env (wr (headed 1)).toList = true
+                    rw [wr_headed1]; decide +kernel,
+     by show rowsHeaded (wr (headed 1)).toList = true
+        rw [wr_headed1]; decide +kernel,
+     by decide +kernel⟩⟩
+
+/-- **The plant**: the same carried state without its parent cell is refused
+`kernel/carried-rows-parented` by name. -/
+theorem carried_refuses_orphan_relation :
+    (carried Sim.env Sim.dc).decode ((carriedWire Sim.env Sim.dc).bytes (.empty, 5, 7, .empty, wr (headed 1))) =
+      .error (.rejected 0 "kernel/carried-rows-parented") := by
+  have hw := wxp_wireFits false (headed 1) (by simp [worldMax]) (by simp [headed]) wr_headed1 (by
+      intro p hp; simp only [headed, List.mem_cons, List.mem_nil_iff, or_false] at hp
+      rcases hp with rfl | rfl
+      · exact ⟨⟨trivial, by decide⟩, by decide, by decide, by decide, by decide, by decide⟩
+      · exact ⟨⟨trivial, by decide, by decide⟩, by decide, by decide⟩)
+  exact carried_decode_wire_parentedRefused u64_lawful.on
+    ⟨hw.1, show 5 < 2 ^ 64 by decide, show 7 < 2 ^ 64 by decide, hw.2.1, hw.2.2.2.1⟩
+    (by simp [journalFits, carriedOfWire, Trie.T.toList, ascendingNat])
+    (by show rowsFits Sim.env (wr (headed 1)).toList = true
+        rw [wr_headed1]; decide +kernel)
+    (by show rowsHeaded (wr (headed 1)).toList = true
+        rw [wr_headed1]; decide +kernel)
+    (by decide +kernel)
+
+/-- **The plant**: a carried state whose relation sums past its cap is refused `kernel/carried-rows`. -/
+theorem carried_refuses_sum_past_cap :
+    (carried Sim.env Sim.dc).decode ((carriedWire Sim.env Sim.dc).bytes (pc true, 5, 7, .empty, wr (capped 41))) =
+      .error (.rejected 0 "kernel/carried-rows") := by
+  have hw := capped_wireFits 41 (by decide) wr_capped41
+  exact carried_decode_wire_rowsRefused u64_lawful.on
+    ⟨hw.1, show 5 < 2 ^ 64 by decide, show 7 < 2 ^ 64 by decide, hw.2.1, hw.2.2.2.1⟩
+    (by simp [journalFits, carriedOfWire, Trie.T.toList, ascendingNat])
+    (by show rowsFits Sim.env (wr (capped 41)).toList = false
+        rw [wr_capped41]; decide +kernel)
+
+/-- **The plant**: a carried state whose rows hold a head counting a row it does not hold is refused
+`kernel/carried-rows-headed`, before any import could genesis-write a Store from it. -/
+theorem carried_refuses_uncounted_row :
+    (carried Sim.env Sim.dc).decode ((carriedWire Sim.env Sim.dc).bytes (pc true, 5, 7, .empty, wr (headed 2))) =
+      .error (.rejected 0 "kernel/carried-rows-headed") := by
+  have hw := headed_wireFits 2 (by decide) wr_headed2
+  exact carried_decode_wire_headedRefused u64_lawful.on
+    ⟨hw.1, show 5 < 2 ^ 64 by decide, show 7 < 2 ^ 64 by decide, hw.2.1, hw.2.2.2.1⟩
+    (by simp [journalFits, carriedOfWire, Trie.T.toList, ascendingNat])
+    (by show rowsFits Sim.env (wr (headed 2)).toList = true
+        rw [wr_headed2]; decide +kernel)
+    (by show rowsHeaded (wr (headed 2)).toList = false
+        rw [wr_headed2]; decide +kernel)
 
 end Nanodregg.Codec.Kernel

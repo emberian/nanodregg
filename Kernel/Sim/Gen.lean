@@ -77,11 +77,12 @@ def program (digestOf : ByteArray → Option D) (width : Nat) : Program D :=
             else .ok ()
         | .ok none => .error (.missingCell l)
         | .error e => .error e) laws
-    run := fun _ _ state method args r budget =>
-      if method = 0 then .ok (state.set stateBase args, [], min 1 budget)
-      else if method = 5 then .ok (state, [], budget + 1)
-      else if method ≤ 6 then .ok (state, stubCalls digestOf width method args r budget, min 1 budget)
-      else .error (.program "no such method") }
+    run := fun _ _ _ state method args r budget =>
+      if method = 0 then .ok (state.set stateBase args, [], [], min 1 budget)
+      else if method = 5 then .ok (state, [], [], budget + 1)
+      else if method ≤ 6 then .ok (state, stubCalls digestOf width method args r budget, [], min 1 budget)
+      else .error (.program "no such method")
+    rels := fun _ _ _ => .ok [] }
 
 /-- What an instance supplies: its `Ctx` (whose `env` the generator hashes and encodes with), how
 a secret becomes a public key and signs, a default digest, and a name for the report. -/
@@ -191,6 +192,12 @@ structure State (D : Type) [Ord D] where
   refusalMax : Nat := 0
   budgeted : Nat := 0
   refusalBytes : Nat := 0
+  /-- KERNEL-46/48, the rows probe: row inserts and retracts in the admitted turns whose hashes it
+  bracketed (`<W`/`<V`, `<X`/`<Y`), the range reads its turns made, and the rows those reads listed -/
+  rowInserts : Nat := 0
+  rowRetracts : Nat := 0
+  rangeReads : Nat := 0
+  rowsRead : Nat := 0
 
 def nameOf {α : Type} [Repr α] (a : α) : String :=
   match (reprStr a).splitOn " " with
@@ -241,7 +248,8 @@ def plantCommitPerInsert (E : Env D) (w : World D) (t : Turn D) (posts : List (P
 
 /-- The counted calls for one admitted turn `w → w'`: the whole admission (`<A`), its trie write
 without the nullifiers (`<C`, the cell share), its journal write (`<J`, KERNEL-41: the journal trie's
-nodes hash in the one trie domain, so its share is bracketed apart), and the plant (`<P`). Each
+nodes hash in the one trie domain, so its share is bracketed apart), its rows write and rows root
+(`<Q`, KERNEL-46/48, apart for the same reason), and the plant (`<P`). Each
 result must be what the uncounted call gives, or the counter changed the computation. -/
 def countTurn (E : Env D) (st : State D) (w w' : World D) (t : Turn D) : State D :=
   let cE := countingEnv E
@@ -256,6 +264,14 @@ def countTurn (E : Env D) (st : State D) (w w' : World D) (t : Turn D) : State D
       let e : Trie.EmptyDigest D := Thunk.mk fun _ => Trie.emptyHash (trieSpec cE)
       let c := dbgTrace "<C" fun _ => commitTrie cE w t0 posts e
       let j := dbgTrace "<J" fun _ => commitJournal cE w t e
+      -- KERNEL-46/48: the rows' share, bracketed apart so the nullifier share is the nullifiers': as
+      -- the compiled admission runs it (`World.admitImpl`, `@[csimp]`), `checkWith`'s ONE `rowsRun`
+      -- under its own empty-digest thunk, then `commitWith`'s rows root under the shared one (an EMPTY
+      -- rows trie's root forces it on a turn whose paths met no empty sibling)
+      let rq := dbgTrace "<Q" fun _ =>
+        match rowsRun cE w t (Thunk.mk fun _ => Trie.emptyHash (rowSpec cE)) with
+        | .ok rr => some (rr.1.hashOf (rowSpec cE) e)
+        | .error _ => none
       let p := dbgTrace "<P" fun _ => plantCommitPerInsert cE w t posts
       let st := match a with
         | .ok w'' => if w''.root E == w'.root E then st
@@ -265,6 +281,8 @@ def countTurn (E : Env D) (st : State D) (w w' : World D) (t : Turn D) : State D
         else failWith st "hash count: the counted cell write reached another root"
       let st := if j.hashOf (journalSpec E) == w'.journalRoot E then st
         else failWith st "hash count: the counted journal write reached another journal root"
+      let st := if rq == some (w'.rowsRoot E) then st
+        else failWith st "hash count: the counted rows write reached another rows root"
       if p.hashOf S == w'.root E then st
       else failWith st "hash count: the per-insert plant reached another root"
 
@@ -277,9 +295,14 @@ structure Marks where
   probeInsert : Nat := 0
   prune : Nat := 0
   refuse : Nat := 0
+  rowsRoot : Nat := 0
+  rowIns : Nat := 0
+  rowInsBase : Nat := 0
+  rowRet : Nat := 0
+  rowRetBase : Nat := 0
 
 /-- `report`'s side: the marks of one captured run, summed per bracket tag (`A`, `C`, `P`, `J`,
-`K`, `R`). -/
+`K`, `R`, `F`, `Q`, and the rows probe's `W`, `V`, `X`, `Y`). -/
 def countMarks (out : String) : Marks :=
   (out.splitOn "<").foldl (fun m seg =>
     let n := (seg.toList.filter (· == '#')).length
@@ -291,6 +314,11 @@ def countMarks (out : String) : Marks :=
     | some 'K' => { m with probeInsert := m.probeInsert + n }
     | some 'R' => { m with prune := m.prune + n }
     | some 'F' => { m with refuse := m.refuse + n }
+    | some 'Q' => { m with rowsRoot := m.rowsRoot + n }
+    | some 'W' => { m with rowIns := m.rowIns + n }
+    | some 'V' => { m with rowInsBase := m.rowInsBase + n }
+    | some 'X' => { m with rowRet := m.rowRet + n }
+    | some 'Y' => { m with rowRetBase := m.rowRetBase + n }
     | _ => m) {}
 
 /-- The slots a turn changed, in `commitTrie`'s order: its non-`keep` touches, its born cells,
@@ -392,7 +420,7 @@ def checkRoot (P : Params D) (st : State D) (w w' : World D) (t : Turn D) : Stat
   -- pre-turn exclusion proof against the new root, and the journal proof against the CELLS root
   let JS := journalSpec E
   let jroot := w'.journalRoot E
-  let st := if headLink E w.chain 0 (turnDigest E t) (rootsDigest E root jroot (w'.refusalsRoot E)) == w'.chain then st
+  let st := if headLink E w.chain 0 (turnDigest E t) (rootsDigest E root jroot (w'.refusalsRoot E) (w'.rowsRoot E)) == w'.chain then st
     else failWith st "journal head: the head link over the two roots is not the admitted chain"
   let entry : Nat × D := (w.height + 1, turnDigest E t)
   let jp := w'.journal.prove JS t.txId
@@ -521,7 +549,7 @@ def metAtAdmit (st : State D) (what want : String) : Except (Reject D) (World D)
 def forgedTurn (P : Params D) (w : World D) (tag : String) (touches : List (Touch D)) (creates : List Cell) : Turn D :=
   let txId := P.env.hash "nanodregg/sim/forge" (tag.toUTF8 ++ P.env.bytes w.chain)
   let t0 : Turn D := ⟨txId, 0, w.height + 1, touches,
-    creates.zipIdx.map (fun p => (bornId P.env txId p, p.1)), [], 0, ByteArray.empty⟩
+    creates.zipIdx.map (fun p => (bornId P.env txId p, p.1)), [], 0, ByteArray.empty, [], []⟩
   { t0 with charge := t0.weight }
 
 /-- The value probes: forged turns no receiver derives, each refused by the kernel by name. -/
@@ -1166,21 +1194,23 @@ def maxWork (log : List (Step D)) : Nat × Nat :=
   let log := Step.turns log
   log.foldl (fun (a, b) t => let (x, y) := turnWork t; (max a x, max b y)) (0, 0)
 
-/-- Same contents and the same ROOTS (both tries are canonical, so the same listing is the same
+/-- Same contents and the same ROOTS (the four tries are canonical, so the same listing is the same
 trie: KERNEL-41). -/
 def same (E : Env D) (a b : World D) : Bool :=
   a.trie.toList == b.trie.toList && a.root E == b.root E && a.journal.toList == b.journal.toList &&
   a.journalRoot E == b.journalRoot E && a.refusals.toList == b.refusals.toList &&
-  a.refusalsRoot E == b.refusalsRoot E && a.steps == b.steps &&
+  a.refusalsRoot E == b.refusalsRoot E && a.rows.toList == b.rows.toList &&
+  a.rowsRoot E == b.rowsRoot E && a.steps == b.steps &&
   a.height == b.height && a.chain == b.chain && a.allowance == b.allowance && a.origin == b.origin
 
-/-- A World rebuilt from its own listings, as a checkpoint decode does (CODEC-19): both tries by
+/-- A World rebuilt from its own listings, as a checkpoint decode does (CODEC-19): the four tries by
 `Trie.build` (KERNEL-23, KERNEL-41: the same tries, `build_toList`). -/
 def reopened (E : Env D) (w : World D) : World D :=
   let trie := Trie.build (trieSpec E) (trieSpec E).depth 0 w.trie.toList
   let journal := Trie.build (journalSpec E) (journalSpec E).depth 0 w.journal.toList
   let refusals := Trie.build (refusalSpec E) (refusalSpec E).depth 0 w.refusals.toList
-  { w with trie, journal, refusals }
+  let rows := Trie.build (rowSpec E) (rowSpec E).depth 0 w.rows.toList
+  { w with trie, journal, refusals, rows }
 
 def worldName : ByteArray := "sim".toUTF8
 
@@ -1569,7 +1599,7 @@ Its charge is its own weight; its credit is the retired cell's whole weight. -/
 def retireTurn (P : Params D) (w : World D) (id : D) (cell : Cell) : Turn D :=
   let txId := P.env.hash "nanodregg/sim/forge" ("retire-budget".toUTF8 ++ P.env.bytes w.chain)
   let t0 : Turn D := ⟨txId, w.height + 1, w.height + 1, [⟨id, pinOf P.env (some cell), .retire⟩], [], [], 0,
-    ByteArray.empty⟩
+    ByteArray.empty, [], []⟩
   { t0 with charge := t0.weight }
 
 /-- The budget probe (cv 01a14ba9-cbf4, `Kernel.Proofs.Budget`), at the end of every seed, on the
@@ -1614,6 +1644,292 @@ def probeCarryBudget (P : Params D) (st : State D) : State D :=
   | some _ => { st with refusedAsExpected := st.refusedAsExpected + 1,
                         seen := "carry-budget-plant:overflow" :: st.seen }
   | none => failWith st "probe carry-budget-plant: no light retire on the unchecked carry overflowed the allowance"
+
+/-! ### Rows (KERNEL-46/48): keyed rows under a parent, through the REAL `World.admit`
+
+The stub program declares no relation (`rels` is empty), so the Host's own log holds no rows and
+every existing WASTE row is unmoved. The rows probe forges its turns on a side World that starts at
+the Host's final World (as `probeValue` forges value turns): the World it continues with after a
+refusal is the one before it, and `rowsAgree` compares that World with the Sim's own model of every
+row after each step, so a refused turn that had moved a row, a head's count or its sum is red there.
+The hashes of its admitted insert-only and retract-only turns are COUNTED (`countingEnv`, brackets
+`<W`/`<V` and `<X`/`<Y`), and its range reads' listings are the kernel's own `under` reads. -/
+
+/-- The probe's transaction id for `tag` on `w`. -/
+def rowsTx (P : Params D) (w : World D) (tag : String) : D :=
+  P.env.hash "nanodregg/sim/rows" (tag.toUTF8 ++ P.env.bytes w.chain)
+
+/-- A forged rows turn on `w`: the given touches, births, row touches and range reads, re-priced, its
+window open from the next height for 64 heights (so a turn built on `w` can follow another). -/
+def rowsTurn (P : Params D) (w : World D) (tag : String) (touches : List (Touch D))
+    (creates : List (D × Cell)) (rows : List (RowTouch D)) (ranges : List (RangeRead D)) : Turn D :=
+  let t0 : Turn D :=
+    { txId := rowsTx P w tag, notBefore := w.height + 1, validUntil := w.height + 64, touches, creates,
+      nullifiers := [], charge := 0, event := ByteArray.empty, rows, ranges }
+  { t0 with charge := t0.weight }
+
+/-- A relation's head as `(count, sum)`. -/
+def headCS (E : Env D) (w : World D) (p : D) (rel : Nat) : Option (Nat × Nat) :=
+  (headOf E w.rows p rel).map fun h => (h.1, h.2.1)
+
+/-- The rows the kernel lists for each of `t`'s range reads (`rangeRows`' own `under` call, at the
+same arguments, on the pre-state it judges), counted into `rangeReads` and `rowsRead`; a read that
+lists more than `most + 1` rows is red (the early stop, KERNEL-17 addendum 4). A read whose relation
+is undeclared or whose prefix is wider than its keys never reaches the listing, and is not counted. -/
+def countRangeReads (E : Env D) (st : State D) (w : World D) (t : Turn D) : State D :=
+  t.ranges.foldl (fun st q =>
+    match headOf E w.rows q.parent q.rel with
+    | some (_, _, _, _, width, _) =>
+        if q.pre.size ≤ width then
+          let n := (under (rowSpec E) (rowsPrefix E q.parent q.rel width ++ q.pre) (q.most + 1) 0 w.rows).length
+          let st := { st with rangeReads := st.rangeReads + 1, rowsRead := st.rowsRead + n }
+          if n ≤ q.most + 1 then st
+          else failWith st s!"probe rows: a range read listed {n} rows, past most + 1 = {q.most + 1}"
+        else st
+    | none => st) st
+
+/-- The counted hashes of one admitted rows turn `w → w'` whose row touches are all inserts, or all
+retracts, and which reads no range: the whole REAL `World.admit` under the counting Env (`<W` for
+inserts, `<X` for retracts), and everything its `commit` does besides the rows (`<V`, `<Y`: the cell
+write, the journal write, the refusals prune and the three roots, sharing ONE empty-digest thunk in
+`commit`'s order, so the empty digest is counted where `commit` first forces it). The difference is
+the rows' share: the compiled admission's (`World.admitImpl`) one `rowsRun` in `checkWith`, and the
+rows root `commitWith` takes. Each counted result must be what
+the uncounted admission reached, or the counter changed the computation. -/
+def countRowsTurn (E : Env D) (st : State D) (w w' : World D) (t : Turn D) : State D :=
+  let ins := t.rows.all fun x => match x.act with | .insert .. => true | _ => false
+  let ret := t.rows.all fun x => match x.act with | .retract => true | _ => false
+  if t.rows.isEmpty || !t.ranges.isEmpty || !(ins || ret) then st else
+  match check E w t with
+  | .error _ => failWith st "rows hash count: an admitted turn does not re-check"
+  | .ok posts =>
+      let cE := countingEnv E
+      let whole := fun (_ : Unit) => World.admit cE w t
+      let a := if ins then dbgTrace "<W" whole else dbgTrace "<X" whole
+      let base := fun (_ : Unit) =>
+        let e : Trie.EmptyDigest D := Thunk.mk fun _ => Trie.emptyHash (trieSpec cE)
+        let trie := commitTrie cE w t posts e
+        let journal := commitJournal cE w t e
+        let refusals := pruneRefusals cE (w.height + 1) w.refusals e
+        (trie.hashOf (trieSpec cE) e, journal.hashOf (journalSpec cE) e, refusals.hashOf (refusalSpec cE) e)
+      let b := if ins then dbgTrace "<V" base else dbgTrace "<Y" base
+      let st := match a with
+        | .ok w'' => if w''.rowsRoot E == w'.rowsRoot E then st
+            else failWith st "rows hash count: the counted admission reached another rows root"
+        | .error _ => failWith st "rows hash count: the counted admission refused an admitted turn"
+      let st := if b == (w'.root E, w'.journalRoot E, w'.refusalsRoot E) then st
+        else failWith st "rows hash count: the counted non-rows share reached other roots"
+      if ins then { st with rowInserts := st.rowInserts + t.rows.length }
+      else { st with rowRetracts := st.rowRetracts + t.rows.length }
+
+/-- One rows turn at the REAL `World.admit`, its range reads and (if admitted) its hashes counted:
+the next World, or the refusal's name. -/
+def rowsTry (P : Params D) (st : State D) (w : World D) (t : Turn D) : State D × Except String (World D) :=
+  let st := countRangeReads P.env st w t
+  match World.admit P.env w t with
+  | .ok w' => (countRowsTurn P.env st w w' t, .ok w')
+  | .error r => (st, .error r.name)
+
+/-- The rows probe's monad: the Sim's state, and the first failure (which ends the probe). -/
+abbrev RowsM (D : Type) [Ord D] (α : Type) := ExceptT String (StateM (State D)) α
+
+def rowsStep (P : Params D) (w : World D) (t : Turn D) : RowsM D (Except String (World D)) := do
+  let (st, r) := rowsTry P (← get) w t
+  set st
+  pure r
+
+/-- A turn the probe needs admitted. -/
+def rowsOk (P : Params D) (w : World D) (t : Turn D) (what : String) : RowsM D (World D) := do
+  match ← rowsStep P w t with
+  | .ok w' => pure w'
+  | .error n => throw s!"{what}: refused {n}"
+
+/-- Arm `arm:want`: the kernel refuses the turn by that exact name. -/
+def rowsRefused (P : Params D) (w : World D) (t : Turn D) (arm want : String) : RowsM D Unit := do
+  match ← rowsStep P w t with
+  | .ok _ => throw s!"{arm}: admitted (expected {want})"
+  | .error n => if n = want then modify (meet · s!"{arm}:{want}") else throw s!"{arm}: expected {want}, got {n}"
+
+/-- Arm `arm` met when `ok`. -/
+def hit (arm : String) (ok : Bool) (msg : String) : RowsM D Unit :=
+  if ok then modify (meet · arm) else throw s!"{arm}: {msg}"
+
+/-- The Sim's model of the probe's rows: `(rel, key, amt)` of every row it expects live under `p`. -/
+abbrev RowModel := List (Nat × String × Nat)
+
+/-- Where `w`'s rows under `p` (relations 0 and 1) differ from the model, if anywhere: a head's
+count or sum that is not the model's, a modelled row missing or holding another amt, a row the model
+does not hold, or a rows listing that does not fit or is not headed (`rowsFits`, `rowsHeaded`: what a
+decoded base must satisfy). -/
+def rowsDiff (E : Env D) (w : World D) (p : D) (model : RowModel) : Option String :=
+  let rels := [0, 1]
+  let heads := rels.filterMap fun rel =>
+    let ms := model.filter (·.1 = rel)
+    match headCS E w p rel with
+    | some (c, s) =>
+        if c = ms.length ∧ s = (ms.map (·.2.2)).sum then none
+        else some s!"relation {rel}'s head holds ({c}, {s}), the model ({ms.length}, {(ms.map (·.2.2)).sum})"
+    | none => some s!"relation {rel} has no head"
+  let rows := model.filterMap fun m =>
+    match rowAt E w.rows (.row ⟨p, m.1, m.2.1.toUTF8⟩) with
+    | some (.row a _) => if a = m.2.2 then none else some s!"row {m.2.1} holds amt {a}, the model {m.2.2}"
+    | _ => some s!"row {m.2.1} is missing"
+  let listed := (w.rows.toList.filter fun x => match x.1 with
+    | .row k => decide (k.parent = p) | _ => false).length
+  let l := w.rows.toList
+  match heads ++ rows with
+  | f :: _ => some f
+  | [] =>
+      if listed ≠ model.length then some s!"{listed} rows listed, the model holds {model.length}"
+      else if !(rowsFits E l && rowsHeaded l) then some "the rows listing does not fit or is not headed"
+      else none
+
+def rowsAgree (E : Env D) (w : World D) (p : D) (model : RowModel) (what : String) : RowsM D Unit :=
+  match rowsDiff E w p model with
+  | none => pure ()
+  | some f => throw s!"{what}: the World differs from the model: {f}"
+
+/-- The key of the listing's row with the greatest amt (the first, on a tie): a method's arg-max. -/
+def argMaxAmt (l : List (RowSlot D × RowLeaf)) : Option ByteArray :=
+  (l.foldl (fun best x => match x with
+    | (.row k, .row a _) => match best with
+        | some (_, b) => if b < a then some (k.k, a) else best
+        | none => some (k.k, a)
+    | _ => best) none).map (·.1)
+
+/-- The rows probe, at the end of every seed, on a side World from the Host's (`RowsM`'s note).
+Relation 0 (limit 3, cap 10, key width 2, retractable) and relation 1 (limit 8, cap 1000, width 2,
+not retractable) are declared by the turn that bears their parent, a data object; every row turn
+pins the parent with `keep`. Arms, each by its exact name:
+* `rows-insert:ok` — an insert moves the head from (0, 0) to (1, amt) and the row is there;
+* `rows-keyTaken:keyTaken` — the same key again; `rows-relationCapped:relationCapped` — an amt past
+  the cap; `rows-relationFull:relationFull` — a fourth row in a relation of limit 3;
+* `rows-retract:ok` — a pinned retract removes the row and takes its amt off the head;
+  `rows-retractForbidden:retractForbidden` — a retract in relation 1;
+* `rows-rangeTooLong:rangeTooLong` — a range whose listing passes `most` (refused, never truncated);
+  `rows-range:ok` — the same range under its honest pin and a `most` it fits;
+* `rows-range-stale:stale` — a range pin taken, a row lands under its prefix, the read with the old
+  pin is `stale`; under the new pin it is admitted;
+* `rows-two-rains:both` — two turns built on ONE World, each inserting its own key into relation 1
+  and pinning the parent `keep`: both admit in either order, each order ends at count + 2 and
+  sum + a₁ + a₂, and the two orders reach the same rows root and the same cells root.
+Plants, each a kernel misbehaviour the probe must catch by name:
+* `rows-taken-plant:caught` — the insert of a taken key let through (`rowStep`'s insert without its
+  `keyTaken` check: the leaf overwritten, the head counted up): the World it commits differs from the
+  model (`rowsDiff`: the head counts two rows over one, and the row's amt is overwritten);
+* `rows-range-drop-plant:stale` — a listing with its arg-max row dropped: its pin differs from the
+  honest one, the kernel refuses a read under it `stale`, and its arg-max is another key;
+* `rows-repin-plant:stale` — the first rain also WRITES the parent: the second rain's `keep` pin is
+  then stale and refused, though the other order admits both. Neither rain writing a cell the other
+  pins is the premise under which `rows-two-rains:both` holds (KERNEL-46's `admit_comm`: the head
+  update is additive and unpinned, so two inserts under one relation commute). -/
+def probeRows (P : Params D) (seed : Nat) : RowsM D Unit := do
+  let E := P.env
+  let w0 := (← get).host
+  let cell : Cell := { kind := kindObject, discipline := .ram, slots := [(stateBase, nat 0)] }
+  let p := cellIdOf E (rowsTx P w0 "create") 0
+  let decl := fun (rel limit cap width : Nat) (retract : Bool) =>
+    ({ slot := .head p rel, seen := none, act := .declare limit cap width retract } : RowTouch D)
+  let w1 ← rowsOk P w0 (rowsTurn P w0 "create" [] [(p, cell)] [decl 0 3 10 2 true, decl 1 8 1000 2 false] [])
+    "the parent's birth with its relations"
+  rowsAgree E w1 p [] "after the declares"
+  let keep := fun (w : World D) => (⟨p, pinOf E (w.live E p), .keep⟩ : Touch D)
+  let key := fun (rel : Nat) (k : String) => (⟨p, rel, k.toUTF8⟩ : RowKey D)
+  let ins := fun (rel : Nat) (k : String) (amt : Nat) =>
+    ({ slot := .row (key rel k), seen := none, act := .insert amt ("v-" ++ k).toUTF8 } : RowTouch D)
+  let insT := fun (w : World D) (tag : String) (xs : List (RowTouch D)) => rowsTurn P w tag [keep w] [] xs []
+  -- relation 0: insert, a taken key, the cap, the limit, a retract
+  let w2 ← rowsOk P w1 (insT w1 "insert-a0" [ins 0 "a0" 2]) "rows-insert"
+  hit "rows-insert:ok" (headCS E w1 p 0 == some (0, 0) && headCS E w2 p 0 == some (1, 2) &&
+    rowAt E w2.rows (.row (key 0 "a0")) == some (.row 2 "v-a0".toUTF8)) "the head or the row did not move"
+  let m2 : RowModel := [(0, "a0", 2)]
+  rowsAgree E w2 p m2 "rows-insert"
+  rowsRefused P w2 (insT w2 "taken" [ins 0 "a0" 1]) "rows-keyTaken" "keyTaken"
+  -- PLANT (a): the same insert let through, as `rowStep` would commit it without `keyTaken`
+  let planted := match headOf E w2.rows p 0 with
+    | some (c, s, l, cap, wd, r) =>
+        let over := w2.rows.insert (rowSpec E) (.row (key 0 "a0")) (.row 1 "v-a0".toUTF8)
+        let rows := setHead E over p 0 (c + 1) (s + 1) l cap wd r (Thunk.mk fun _ => Trie.emptyHash (rowSpec E))
+        some { w2 with rows }
+    | none => none
+  hit "rows-taken-plant:caught"
+    (match planted with
+     | some wp => (rowsDiff E wp p m2).isSome && !rowsHeaded wp.rows.toList
+     | none => false) "a taken key let through left a World the model and rowsHeaded accept"
+  rowsRefused P w2 (insT w2 "capped" [ins 0 "a1" 9]) "rows-relationCapped" "relationCapped"
+  rowsAgree E w2 p m2 "after the refusals"
+  let w3 ← rowsOk P w2 (insT w2 "fill" [ins 0 "a1" 3, ins 0 "a2" 1]) "rows-fill"
+  let m3 : RowModel := m2 ++ [(0, "a1", 3), (0, "a2", 1)]
+  rowsAgree E w3 p m3 "rows-fill"
+  rowsRefused P w3 (insT w3 "full" [ins 0 "a3" 0]) "rows-relationFull" "relationFull"
+  let pinA1 := rowPin E (rowAt E w3.rows (.row (key 0 "a1")))
+  let w4 ← rowsOk P w3 (rowsTurn P w3 "retract" [keep w3] []
+    [{ slot := .row (key 0 "a1"), seen := some pinA1, act := .retract }] []) "rows-retract"
+  hit "rows-retract:ok" (headCS E w4 p 0 == some (2, 3) && (rowAt E w4.rows (.row (key 0 "a1"))).isNone)
+    "the retract left the row or the head"
+  let m4 : RowModel := [(0, "a0", 2), (0, "a2", 1)]
+  rowsAgree E w4 p m4 "rows-retract"
+  -- relation 1: rows, a forbidden retract, range reads
+  let w5 ← rowsOk P w4 (insT w4 "rel1" [ins 1 "b0" 5, ins 1 "b1" 7, ins 1 "c0" 1]) "rows-rel1"
+  let m5 : RowModel := m4 ++ [(1, "b0", 5), (1, "b1", 7), (1, "c0", 1)]
+  rowsAgree E w5 p m5 "rows-rel1"
+  rowsRefused P w5 (rowsTurn P w5 "retract-forbidden" [keep w5] []
+    [{ slot := .row (key 1 "b0"), seen := some (rowPin E (rowAt E w5.rows (.row (key 1 "b0")))), act := .retract }] [])
+    "rows-retractForbidden" "retractForbidden"
+  let pre := "b".toUTF8
+  let listing := fun (w : World D) (most : Nat) => rangeRows E w.rows p 1 2 pre most
+  let range := fun (most : Nat) (seen : D) => ({ parent := p, rel := 1, pre, most, seen } : RangeRead D)
+  let readT := fun (w : World D) (tag : String) (q : RangeRead D) => rowsTurn P w tag [keep w] [] [] [q]
+  rowsRefused P w5 (readT w5 "range-long" (range 1 P.zero)) "rows-rangeTooLong" "rangeTooLong"
+  let some l5 := listing w5 4 | throw "rows-range: the honest listing passed most"
+  let pin5 := rangePin E p 1 2 pre l5
+  let w6 ← rowsOk P w5 (readT w5 "range" (range 4 pin5)) "rows-range"
+  hit "rows-range:ok" (l5.length == 2) s!"the listing under b holds {l5.length} rows, not 2"
+  rowsAgree E w6 p m5 "rows-range"
+  -- PLANT (b): the listing with its arg-max row dropped
+  let top := argMaxAmt l5
+  let dropped := l5.filter fun x => match x.1 with | .row k => some k.k != top | _ => true
+  let pinD := rangePin E p 1 2 pre dropped
+  match ← rowsStep P w6 (readT w6 "range-drop" (range 4 pinD)) with
+  | .error "stale" =>
+      hit "rows-range-drop-plant:stale" (pinD != pin5 && dropped.length + 1 == l5.length &&
+        argMaxAmt dropped != top && top == some "b1".toUTF8) "the dropped listing's pin or arg-max agreed with the honest one"
+  | .error n => throw s!"rows-range-drop-plant: expected stale, got {n}"
+  | .ok _ => throw "rows-range-drop-plant: a read under the dropped listing's pin was admitted"
+  -- a range pin taken, then a row lands under its prefix
+  let some l6 := listing w6 4 | throw "rows-range-stale: the honest listing passed most"
+  let pin6 := rangePin E p 1 2 pre l6
+  let w7 ← rowsOk P w6 (insT w6 "lands" [ins 1 "b2" 2]) "rows-range-stale's insert"
+  let m7 : RowModel := m5 ++ [(1, "b2", 2)]
+  rowsRefused P w7 (readT w7 "range-old-pin" (range 4 pin6)) "rows-range-stale" "stale"
+  let some l7 := listing w7 4 | throw "rows-range-stale: the new listing passed most"
+  let w8 ← rowsOk P w7 (readT w7 "range-new-pin" (range 4 (rangePin E p 1 2 pre l7))) "rows-range-stale's re-read"
+  rowsAgree E w8 p m7 "rows-range-stale"
+  -- two rains on one World
+  let a1 := seed % 7 + 1
+  let a2 := seed % 5 + 2
+  let r1 := insT w8 "rain-1" [ins 1 "d1" a1]
+  let r2 := insT w8 "rain-2" [ins 1 "d2" a2]
+  let x1 ← rowsOk P w8 r1 "rows-two-rains: the first rain first"
+  let x12 ← rowsOk P x1 r2 "rows-two-rains: the second rain second"
+  let y2 ← rowsOk P w8 r2 "rows-two-rains: the second rain first"
+  let y21 ← rowsOk P y2 r1 "rows-two-rains: the first rain second"
+  let some (c8, s8) := headCS E w8 p 1 | throw "rows-two-rains: relation 1 has no head"
+  hit "rows-two-rains:both" (headCS E x12 p 1 == some (c8 + 2, s8 + a1 + a2) &&
+    headCS E y21 p 1 == some (c8 + 2, s8 + a1 + a2) && x12.rowsRoot E == y21.rowsRoot E &&
+    x12.root E == y21.root E) "the two orders reached other heads or other roots"
+  let m9 : RowModel := m7 ++ [(1, "d1", a1), (1, "d2", a2)]
+  rowsAgree E x12 p m9 "rows-two-rains (1, 2)"
+  rowsAgree E y21 p m9 "rows-two-rains (2, 1)"
+  -- PLANT (c): the first rain also writes the parent cell
+  let r1w := rowsTurn P w8 "rain-1-repin" [{ (keep w8) with act := .write [.set stateBase (nat 1)] }] [] [ins 1 "d1" a1] []
+  let z1 ← rowsOk P w8 r1w "rows-repin-plant: the writing rain"
+  let z2 ← rowsOk P w8 r2 "rows-repin-plant: the second rain first"
+  let _ ← rowsOk P z2 r1w "rows-repin-plant: the writing rain second"
+  match ← rowsStep P z1 r2 with
+  | .error "stale" => modify (meet · "rows-repin-plant:stale")
+  | .error n => throw s!"rows-repin-plant: expected stale, got {n}"
+  | .ok _ => throw "rows-repin-plant: a rain admitted after the other rain re-wrote the parent it pins"
 
 def run (P : Params D) (seed : Nat) (steps : Nat) : State D :=
   let rng : Rng := ⟨seed.toUInt64 * 0x2545F4914F6CDD1D + 1⟩
@@ -1690,6 +2006,9 @@ def run (P : Params D) (seed : Nat) (steps : Nat) : State D :=
   let st := probeSigDomain P st
   let st := probeCarry P st
   let st := probeCarryBudget P st
+  let st := match ((probeRows P seed).run).run st with
+    | (.ok (), st) => st
+    | (.error f, st) => failWith st s!"probe rows: {f}"
   -- KERNEL-24: the same log's calls against a second genesis (same name and founders, another
   -- nonce) are each refused `wrongWorld`; another nonce, or the founders swapped, is another chain
   match genesis X worldName (nonceOf (seed + 1000000)) 100000000 founders with
@@ -1759,7 +2078,11 @@ def plantedArms : List String :=
    "refusal-early-refused:outsideWindow", "refusal-early:declined", "refusal-early-kernel:outsideWindow",
    "refusal-early-plant:refusedFinal", "refusal-early-window:ok", "refusal-rotate-stranger:notPrecommitted",
    "refusal-rotate-kept:declined", "refusal-rotate-plant:authenticated", "refusal-budget:refusalBudget",
-   "refusal-forged-code:eventMismatch"]
+   "refusal-forged-code:eventMismatch",
+   "rows-insert:ok", "rows-keyTaken:keyTaken", "rows-relationCapped:relationCapped",
+   "rows-relationFull:relationFull", "rows-retract:ok", "rows-retractForbidden:retractForbidden",
+   "rows-rangeTooLong:rangeTooLong", "rows-range:ok", "rows-range-stale:stale", "rows-two-rains:both",
+   "rows-taken-plant:caught", "rows-range-drop-plant:stale", "rows-repin-plant:stale"]
 
 /-- `--seeds N` runs seeds `0 … N-1`; otherwise each argument is a seed. -/
 def parseSeeds : List String → List Nat
@@ -1783,6 +2106,11 @@ def report (P : Params D) (seeds : List Nat) : IO UInt32 := do
   let mut jhashes : Nat × Nat × Nat × Nat := (0, 0, 0, 0)
   -- KERNEL-44: (refuse marks, recorded refusals, record bytes, most per member per window, budgeted)
   let mut rf : Nat × Nat × Nat × Nat × Nat := (0, 0, 0, 0, 0)
+  -- KERNEL-46/48: (insert marks less their non-rows share, inserts, retract marks less theirs,
+  -- retracts, range reads, rows those reads listed)
+  let mut rw : Nat × Nat × Nat × Nat × Nat × Nat := (0, 0, 0, 0, 0, 0)
+  -- KERNEL-46/48: the rows' share of the run turns' admissions (`<Q`)
+  let mut rowsRootMarks := 0
   for seed in seeds do
     -- the run's trie hashes are counted off its stderr (`countingEnv`); nothing else writes there
     let buf ← IO.mkRef ({} : IO.FS.Stream.Buffer)
@@ -1801,13 +2129,17 @@ def report (P : Params D) (seeds : List Nat) : IO UInt32 := do
     journal := (max journal.1 st.journalMax, journal.2.1 + st.journalScanned, journal.2.2 + st.journalTurns)
     refused := refused + st.refusedAsExpected
     restarts := restarts + st.restarts
-    -- the nullifier share is the admission's less its cell write and its journal write
-    hashes := (hashes.1 + m.cells, hashes.2.1 + st.cellSlots, hashes.2.2.1 + (m.admit - m.cells - m.journal),
+    -- the nullifier share is the admission's less its cell write, its journal write and its rows
+    -- write with the rows root
+    hashes := (hashes.1 + m.cells, hashes.2.1 + st.cellSlots, hashes.2.2.1 + (m.admit - m.cells - m.journal - m.rowsRoot),
       hashes.2.2.2 + st.nullSlots)
     jhashes := (jhashes.1 + m.probeInsert, jhashes.2.1 + st.probeInserts, jhashes.2.2.1 + m.prune,
       jhashes.2.2.2 + st.prunes)
     rf := (rf.1 + m.refuse, rf.2.1 + st.recorded, rf.2.2.1 + st.refusalBytes, max rf.2.2.2.1 st.refusalMax,
       rf.2.2.2.2 + st.budgeted)
+    rowsRootMarks := rowsRootMarks + m.rowsRoot
+    rw := (rw.1 + (m.rowIns - m.rowInsBase), rw.2.1 + st.rowInserts, rw.2.2.1 + (m.rowRet - m.rowRetBase),
+      rw.2.2.2.1 + st.rowRetracts, rw.2.2.2.2.1 + st.rangeReads, rw.2.2.2.2.2 + st.rowsRead)
     seen := (st.seen ++ seen).eraseDups
     match st.failures.reverse with
     | [] => IO.println s!"PASS seed {seed}: admitted={st.admitted} refused-as-expected={st.refusedAsExpected} restarts={st.restarts}"
@@ -1836,6 +2168,10 @@ def report (P : Params D) (seeds : List Nat) : IO UInt32 := do
   IO.println s!"WASTE refuse hashes-per-refusal {showRatio (ratio rf.1 rf.2.1)}"
   IO.println s!"WASTE refuse record-bytes-per-refusal {showRatio (ratio rf.2.2.1 rf.2.1)}"
   IO.println s!"WASTE refuse refusals-per-member-window {showRatio (ratio rf.2.2.2.1 1)}"
+  IO.println s!"WASTE admit hashes-per-turn-rows-root {showRatio (ratio rowsRootMarks admitted)}"
+  IO.println s!"WASTE admit hashes-per-row-insert {showRatio (ratio rw.1 rw.2.1)}"
+  IO.println s!"WASTE admit hashes-per-row-retract {showRatio (ratio rw.2.2.1 rw.2.2.2.1)}"
+  IO.println s!"WASTE admit rows-read-per-range-read {showRatio (ratio rw.2.2.2.2.2 rw.2.2.2.2.1)}"
   if rf.2.2.2.1 > Bounds.refusalsPerWindow then
     bad := bad + 1
     IO.println s!"FAIL a member had {rf.2.2.2.1} refusals recorded in one window (bound {Bounds.refusalsPerWindow})"

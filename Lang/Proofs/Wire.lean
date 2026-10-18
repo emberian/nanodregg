@@ -472,22 +472,123 @@ theorem map_of_importsOf : (ts : List Tree) → ∀ {ds : List ByteArray}, impor
       · simp at h
     · simp at h
 
+theorem optLabelOf_leaf : (o : Option Label) → o.all labelOk = true → optLabelOf (optLabelLeaf o) = some o
+  | none, _ => by simp [optLabelLeaf, optLabelOf]
+  | some ℓ, h => by
+    simp only [Option.all_some] at h
+    simp [optLabelLeaf, optLabelOf, String.toUTF8_eq_toByteArray, labelOf_toUTF8 h]
+
+theorem tree_of_optLabelOf {t : Tree} {o : Option Label} (h : optLabelOf t = some o) :
+    optLabelLeaf o = t ∧ o.all labelOk = true := by
+  unfold optLabelOf at h
+  split at h
+  · split at h
+    · rename_i he; cases h; subst he; simp [optLabelLeaf]
+    · simp at h
+  · rename_i p
+    simp only [Option.map_eq_some_iff] at h
+    obtain ⟨ℓ, hl, rfl⟩ := h
+    obtain ⟨el, wl⟩ := labelOf_some hl
+    simp [optLabelLeaf, String.toUTF8_eq_toByteArray, el, wl]
+  · simp at h
+
+theorem keyFieldsOf_map : (fs : List (Label × Ty)) → fs.all (fun f => labelOk f.1 && tyWire f.2) = true →
+    keyFieldsOf (fs.map fun f => .node 6 f.1.toByteArray [tyTree f.2]) = some fs
+  | [], _ => rfl
+  | (ℓ, T) :: fs, h => by
+    simp only [List.all_cons, Bool.and_eq_true] at h
+    simp only [List.map_cons, keyFieldsOf, labelOf_toUTF8 h.1.1, tyOf_tyTree T h.1.2,
+      keyFieldsOf_map fs h.2]
+
+theorem map_of_keyFieldsOf : (ts : List Tree) → ∀ {fs : List (Label × Ty)}, keyFieldsOf ts = some fs →
+    fs.map (fun f => Tree.node 6 f.1.toByteArray [tyTree f.2]) = ts ∧
+      fs.all (fun f => labelOk f.1 && tyWire f.2) = true
+  | [], fs, h => by simp only [keyFieldsOf, Option.some.injEq] at h; subst h; simp
+  | t :: ts, fs, h => by
+    unfold keyFieldsOf at h
+    split at h
+    · simp_all
+    · rename_i p t' ts' heq
+      injection heq with h1 h2
+      subst h1 h2
+      split at h
+      · rename_i ℓ T fs' hl ht hs
+        cases h
+        obtain ⟨el, wl⟩ := labelOf_some hl
+        obtain ⟨et, wt⟩ := tree_of_tyOf ht
+        obtain ⟨es, ws⟩ := map_of_keyFieldsOf ts hs
+        simp [el, wl, et, wt, es, ws]
+      · simp at h
+    · simp at h
+
+theorem relOf_relTree (r : Label × RelDecl) (h : relWire r = true) : relOf (relTree r) = some r := by
+  obtain ⟨ℓ, ⟨key, val, limit, sum, cap, retract, guard⟩⟩ := r
+  simp only [relWire, Bool.and_eq_true, decide_eq_true_eq] at h
+  obtain ⟨⟨⟨⟨⟨⟨hl, hk⟩, hv⟩, hlim⟩, hcap⟩, hsu⟩, hg⟩ := h
+  cases retract <;>
+    simp [relTree, relOf, String.toUTF8_eq_toByteArray, labelOf_toUTF8 hl, keyFieldsOf_map _ hk,
+      tyOf_tyTree _ hv, u64Of_bytes hlim, u64Of_bytes hcap, optLabelOf_leaf _ hsu, optLabelOf_leaf _ hg]
+
+theorem tree_of_relOf {t : Tree} {r : Label × RelDecl} (h : relOf t = some r) :
+    relTree r = t ∧ relWire r = true := by
+  unfold relOf at h
+  split at h
+  · rename_i p ek ks v lim su ca rt er gu
+    split at h
+    · rename_i hc
+      split at h
+      · rename_i ℓ key val limit sum cap guard hl hk hv hlim hsu hca hg
+        cases h
+        obtain ⟨el, wl⟩ := labelOf_some hl
+        obtain ⟨ek', wk⟩ := map_of_keyFieldsOf ks hk
+        obtain ⟨ev, wv⟩ := tree_of_tyOf hv
+        obtain ⟨elim, wlim⟩ := u64Of_some hlim
+        obtain ⟨esu, wsu⟩ := tree_of_optLabelOf hsu
+        obtain ⟨eca, wca⟩ := u64Of_some hca
+        obtain ⟨eg, wg⟩ := tree_of_optLabelOf hg
+        obtain ⟨rfl, rfl, hrt⟩ := hc
+        rcases hrt with rfl | rfl <;>
+          simp [relTree, relWire, String.toUTF8_eq_toByteArray, el, wl, ek', wk, ev, wv, elim, wlim,
+            esu, wsu, eca, wca, eg, wg]
+      · simp at h
+    · simp at h
+  · simp at h
+
+theorem relsOf_map : (rs : List (Label × RelDecl)) → rs.all relWire = true → relsOf (rs.map relTree) = some rs
+  | [], _ => rfl
+  | r :: rs, h => by
+    simp only [List.all_cons, Bool.and_eq_true] at h
+    simp only [List.map_cons, relsOf, relOf_relTree r h.1, relsOf_map rs h.2]
+
+theorem map_of_relsOf : (ts : List Tree) → ∀ {rs : List (Label × RelDecl)}, relsOf ts = some rs →
+    rs.map relTree = ts ∧ rs.all relWire = true
+  | [], rs, h => by simp only [relsOf, Option.some.injEq] at h; subst h; simp
+  | t :: ts, rs, h => by
+    simp only [relsOf] at h
+    split at h
+    · rename_i r rs' hr hs
+      cases h
+      obtain ⟨e1, w1⟩ := tree_of_relOf hr
+      obtain ⟨e2, w2⟩ := map_of_relsOf ts hs
+      simp [e1, w1, e2, w2]
+    · simp at h
+
 theorem packageOf_packageTree {p : Package} (h : packageWire p = true) :
     packageOf (packageTree p) = some p := by
   simp only [packageWire, Bool.and_eq_true] at h
-  obtain ⟨⟨⟨⟨⟨hi, hs⟩, hf⟩, hb⟩, hm⟩, hl⟩ := h
+  obtain ⟨⟨⟨⟨⟨⟨hi, hs⟩, hf⟩, hb⟩, hm⟩, hl⟩, hr⟩ := h
   simp only [packageTree, packageOf, and_self, if_true, importsOf_map _ hi, tyOf_tyTree _ hs,
-    tyOf_tyTree _ hf, termOf_termTree _ hb, labelsOf_map _ hm, labelsOf_map _ hl]
+    tyOf_tyTree _ hf, termOf_termTree _ hb, labelsOf_map _ hm, labelsOf_map _ hl, relsOf_map _ hr]
 
 theorem tree_of_packageOf {t : Tree} {p : Package} (h : packageOf t = some p) :
     packageTree p = t ∧ packageWire p = true := by
   unfold packageOf at h
   split at h
-  · rename_i e ei is s i b em ms el ls
+  · rename_i e ei is s i b em ms el ls er rs
     split at h
     · rename_i he
       split at h
-      · rename_i imports state iface body methods laws hi hs hf hb hm hl
+      · rename_i imports state iface body methods laws rels hi hs hf hb hm hl hr
         cases h
         obtain ⟨ei', wi⟩ := map_of_importsOf is hi
         obtain ⟨es, ws⟩ := tree_of_tyOf hs
@@ -495,8 +596,9 @@ theorem tree_of_packageOf {t : Tree} {p : Package} (h : packageOf t = some p) :
         obtain ⟨eb, wb⟩ := tree_of_termOf hb
         obtain ⟨em', wm⟩ := map_of_labelsOf ms hm
         obtain ⟨el', wl⟩ := map_of_labelsOf ls hl
-        obtain ⟨rfl, rfl, rfl, rfl⟩ := he
-        simp [packageTree, packageWire, ei', es, ef, eb, em', el', wi, ws, wf, wb, wm, wl]
+        obtain ⟨er', wr⟩ := map_of_relsOf rs hr
+        obtain ⟨rfl, rfl, rfl, rfl, rfl⟩ := he
+        simp [packageTree, packageWire, ei', es, ef, eb, em', el', er', wi, ws, wf, wb, wm, wl, wr]
       · simp at h
     · simp at h
   · simp at h

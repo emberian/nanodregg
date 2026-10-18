@@ -103,4 +103,22 @@ theorem sort_map (g : Label × α → Label × β) (hg : ∀ z, (g z).1 = z.1) :
 
 theorem length_sort (xs : List (Label × α)) : (sort xs).length = xs.length := (sort_perm xs).length_eq
 
+/-- Inserting related entries at one label keeps two label-aligned rows related. -/
+theorem Rel.insert {R : α → β → Prop} {ℓ : Label} {a : α} {b : β} (hab : R a b) :
+    ∀ {xs : List (Label × α)} {ys : List (Label × β)}, Rel R xs ys →
+      Rel R (Row.insert (ℓ, a) xs) (Row.insert (ℓ, b) ys)
+  | _, _, .nil => .cons hab .nil
+  | _, _, .cons (ℓ := k) hk hr => by
+    by_cases h : ℓ ≤ k
+    · simp only [Row.insert, h, if_true]; exact .cons hab (.cons hk hr)
+    · simp only [Row.insert, h, if_false]; exact .cons hk (Rel.insert hab hr)
+
+/-- Sorting keeps two label-aligned rows related: the sort looks only at the labels. -/
+theorem Rel.sort {R : α → β → Prop} :
+    ∀ {xs : List (Label × α)} {ys : List (Label × β)}, Rel R xs ys → Rel R (Row.sort xs) (Row.sort ys)
+  | _, _, .nil => .nil
+  | _, _, .cons h hr => by
+    show Rel R (Row.insert _ (Row.sort _)) (Row.insert _ (Row.sort _))
+    exact Rel.insert h (Rel.sort hr)
+
 end Nanodregg.Lang.Row

@@ -131,12 +131,12 @@ def law : Term := Std.lawOf5 stateTy startC startC frozenC frozenC invokeC
 /-! ## The package -/
 
 def methods : List (Label × Ty × List Ty × Term) :=
-  [("deposit", depositArg, [T], .lam stateTy (.lam depositArg (.lam reqTy
-      (resultT (callsT [someCallT T depositCall]) (.record (keep "held")))))),
-   ("refund", unit, [T], .lam stateTy (.lam unit (.lam reqTy
-      (resultT (callsT [someCallT T (payoutCall "depositor")]) (.record (keep "refunded")))))),
-   ("release", unit, [T], .lam stateTy (.lam unit (.lam reqTy
-      (resultT (callsT [someCallT T (payoutCall "beneficiary")]) (.record (keep "released"))))))]
+  [("deposit", depositArg, [T], .lam (.record []) (.lam stateTy (.lam depositArg (.lam reqTy
+      (resultT (callsT [someCallT T depositCall]) (.record (keep "held"))))))),
+   ("refund", unit, [T], .lam (.record []) (.lam stateTy (.lam unit (.lam reqTy
+      (resultT (callsT [someCallT T (payoutCall "depositor")]) (.record (keep "refunded"))))))),
+   ("release", unit, [T], .lam (.record []) (.lam stateTy (.lam unit (.lam reqTy
+      (resultT (callsT [someCallT T (payoutCall "beneficiary")]) (.record (keep "released")))))))]
 
 def escrow : Package := Std.pkgOf stateTy [("escrow", law)] methods
 

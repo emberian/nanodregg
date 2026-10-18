@@ -79,29 +79,6 @@ theorem receive_genesis_canon (X : Receive.Ctx D) (name nonce : ByteArray) (allo
 section Params
 variable {E : Env D} {n : Nat} (hE : E.Lawful n)
 
-omit [Ord D] [DecidableEq D] in
-theorem testBit_byte {x : UInt8} {k : Nat} (hk : 8 ≤ k) : x.toNat.testBit k = false :=
-  Nat.testBit_lt_two_pow (Nat.lt_of_lt_of_le x.toNat_lt (Nat.pow_le_pow_right (by decide) hk))
-
-omit [Ord D] [DecidableEq D] in
-/-- Two byte strings of one size with the same bits are equal. -/
-theorem byteBit_ext {a b : ByteArray} (hs : a.size = b.size)
-    (h : ∀ i, i < 8 * a.size → byteBit a i = byteBit b i) : a = b := by
-  apply ByteArray.ext; apply Array.ext (by simpa using hs)
-  intro j hja hjb
-  have hj : j < a.size := hja
-  apply UInt8.toNat_inj.mp
-  apply Nat.eq_of_testBit_eq
-  intro k
-  by_cases hk : k < 8
-  · have hi := h (8 * j + (7 - k)) (by omega)
-    have e1 : (8 * j + (7 - k)) / 8 = j := by omega
-    have e2 : 7 - (8 * j + (7 - k)) % 8 = k := by omega
-    unfold byteBit at hi
-    simp only [e1, e2, hj, hs ▸ hj, dite_true] at hi
-    exact hi
-  · rw [testBit_byte (by omega), testBit_byte (by omega)]
-
 include hE in
 omit [DecidableEq D] in
 /-- The slot bits tell any two slots apart within the trie's depth. -/
@@ -400,22 +377,26 @@ theorem headLink_roots {c prev td rd : D} {g : UInt8} {s : Step D} {rs : D}
   · exact .inr col
 
 omit [DecidableEq D] in
-/-- The roots digest opens to one triple of roots, or the hash collides (in `domRoots`). -/
-theorem rootsDigest_inj {a b c a' b' c' : D} (h : rootsDigest E a b c = rootsDigest E a' b' c') :
-    (a = a' ∧ b = b' ∧ c = c') ∨ Collision E.hash := by
+/-- The roots digest opens to one quadruple of roots, or the hash collides (in `domRoots`). -/
+theorem rootsDigest_inj {a b c d a' b' c' d' : D} (h : rootsDigest E a b c d = rootsDigest E a' b' c' d') :
+    (a = a' ∧ b = b' ∧ c = c' ∧ d = d') ∨ Collision E.hash := by
   unfold rootsDigest at h
-  by_cases hin : E.bytes a ++ E.bytes b ++ E.bytes c = E.bytes a' ++ E.bytes b' ++ E.bytes c'
-  · obtain ⟨hab, hc⟩ := bytes_append_inj hin (by simp [hE.size])
+  by_cases hin : E.bytes a ++ E.bytes b ++ E.bytes c ++ E.bytes d =
+      E.bytes a' ++ E.bytes b' ++ E.bytes c' ++ E.bytes d'
+  · obtain ⟨habc, hd⟩ := bytes_append_inj hin (by simp [hE.size])
+    obtain ⟨hab, hc⟩ := bytes_append_inj habc (by simp [hE.size])
     obtain ⟨ha, hb⟩ := bytes_append_inj hab (by simp [hE.size])
-    exact .inl ⟨hE.bytes_inj ha, hE.bytes_inj hb, hE.bytes_inj hc⟩
+    exact .inl ⟨hE.bytes_inj ha, hE.bytes_inj hb, hE.bytes_inj hc, hE.bytes_inj hd⟩
   · exact .inr ⟨domRoots, _, _, hin, h⟩
 
 /-- A head record that hashes to the chain a step reached, with its roots digest opened, names that
-World's three roots (cells', journal's, refusals'), or the hash collides. Any step: a phone reads a
+World's four roots (cells', journal's, refusals', rows'), or the hash collides. Any step: a phone reads a
 head after a recorded refusal as after a Turn. -/
-theorem head_roots {w w' : World D} {s : Step D} (h : World.step E w s = .ok w') {prev td rd root' jroot' rroot' : D}
-    {g : UInt8} (hhead : headLink E prev g td rd = w'.chain) (hrd : rootsDigest E root' jroot' rroot' = rd) :
-    (root' = w'.root E ∧ jroot' = w'.journalRoot E ∧ rroot' = w'.refusalsRoot E) ∨ Collision E.hash := by
+theorem head_roots {w w' : World D} {s : Step D} (h : World.step E w s = .ok w')
+    {prev td rd root' jroot' rroot' wroot' : D} {g : UInt8} (hhead : headLink E prev g td rd = w'.chain)
+    (hrd : rootsDigest E root' jroot' rroot' wroot' = rd) :
+    (root' = w'.root E ∧ jroot' = w'.journalRoot E ∧ rroot' = w'.refusalsRoot E ∧ wroot' = w'.rowsRoot E) ∨
+      Collision E.hash := by
   rw [step_chain h] at hhead
   rcases headLink_roots hE hhead with rfl | col
   · exact rootsDigest_inj hE hrd
@@ -423,8 +404,8 @@ theorem head_roots {w w' : World D} {s : Step D} (h : World.step E w s = .ok w')
 
 /-- A head record that hashes to a stepped World's chain names that World's root, or the hash
 collides. -/
-theorem head_root {w w' : World D} {s : Step D} (h : World.step E w s = .ok w') {prev td rd root' jroot' rroot' : D}
-    {g : UInt8} (hhead : headLink E prev g td rd = w'.chain) (hrd : rootsDigest E root' jroot' rroot' = rd) :
+theorem head_root {w w' : World D} {s : Step D} (h : World.step E w s = .ok w') {prev td rd root' jroot' rroot' wroot' : D}
+    {g : UInt8} (hhead : headLink E prev g td rd = w'.chain) (hrd : rootsDigest E root' jroot' rroot' wroot' = rd) :
     root' = w'.root E ∨ Collision E.hash := by
   rcases head_roots hE h hhead hrd with ⟨hr, _⟩ | col
   · exact .inl hr
@@ -435,8 +416,8 @@ opened, and a proof that verifies against the opened cells' root, show a slot of
 collision. -/
 theorem head_read_sound {w w' : World D} {s : Step D}
     (hc : w.Canon E) (h : World.step E w s = .ok w') (hwf : w'.CellsFit Codec.Kernel.Cell.Fits E)
-    {prev td rd root' jroot' rroot' : D} {g : UInt8}
-    (hhead : headLink E prev g td rd = w'.chain) (hrd : rootsDigest E root' jroot' rroot' = rd)
+    {prev td rd root' jroot' rroot' wroot' : D} {g : UInt8}
+    (hhead : headLink E prev g td rd = w'.chain) (hrd : rootsDigest E root' jroot' rroot' wroot' = rd)
     {sl : Slot D} {l : Leaf} (hlf : l.CellFit Codec.Kernel.Cell.Fits)
     {p : Trie.Proof (Slot D) D}
     (hv : Trie.verifyInclusion (trieSpec E) root' sl (leafDigest E l) p = true) :
@@ -447,8 +428,8 @@ theorem head_read_sound {w w' : World D} {s : Step D}
 
 /-- **The phone's read of an absence** (an unspent nullifier, an unused id) against a head. -/
 theorem head_absent_sound {w w' : World D} {s : Step D} (hc : w.Canon E)
-    (h : World.step E w s = .ok w') {prev td rd root' jroot' rroot' : D} {g : UInt8}
-    (hhead : headLink E prev g td rd = w'.chain) (hrd : rootsDigest E root' jroot' rroot' = rd)
+    (h : World.step E w s = .ok w') {prev td rd root' jroot' rroot' wroot' : D} {g : UInt8}
+    (hhead : headLink E prev g td rd = w'.chain) (hrd : rootsDigest E root' jroot' rroot' wroot' = rd)
     {sl : Slot D} {p : Trie.Proof (Slot D) D}
     (hv : Trie.verifyExclusion (trieSpec E) root' sl p = true) :
     w'.trie.get (trieSpec E) sl = none ∨ Collision E.hash := by

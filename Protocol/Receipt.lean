@@ -2,8 +2,8 @@
 # Protocol.Receipt — a receipt as proof: what happened to a call, shown against a head (PROTOCOL-45)
 
 The head a member holds is its World's height and ROOTS digest (`World.roots`: the cells', the
-journal's and the refusals' roots, which every head link commits, KERNEL-47). A RECEIPT for a
-transaction id carries the three roots and the trie paths that answer the id:
+journal's, the refusals' and the rows' roots, which every head link commits, KERNEL-47, KERNEL-48).
+A RECEIPT for a transaction id carries the four roots and the trie paths that answer the id:
 
 * `committed h td`: the journal holds `(h, td)` at the id (an inclusion path, KERNEL-41);
 * `refused h code`: the refusals hold the recorded refusal at `.tx id` (KERNEL-44, PROTOCOL-41);
@@ -43,6 +43,7 @@ structure Receipt (D : Type) where
   root : D
   jroot : D
   rroot : D
+  rowsroot : D
   answer : Answer D
   jpath : Trie.Proof D D
   rpath : Trie.Proof (RefusalSlot D) D
@@ -92,7 +93,7 @@ def answerOf (E : Env D) (height : Nat) (txId : D) (notBefore : Nat) (r : Receip
 def check (E : Env D) (height : Nat) (roots txId : D) (notBefore : Nat) (r : Receipt D) :
     Except Refusal (Answer D) :=
   if r.txId ≠ txId then .error .otherTx
-  else if rootsDigest E r.root r.jroot r.rroot ≠ roots then .error .headMismatch
+  else if rootsDigest E r.root r.jroot r.rroot r.rowsroot ≠ roots then .error .headMismatch
   else answerOf E height txId notBefore r
 
 /-- A receipt from a World: its roots, what it holds at the id, and both paths. -/
@@ -102,14 +103,15 @@ def build (E : Env D) (w : World D) (txId : D) : Receipt D :=
     | none => match w.refusalAt E (.tx txId) with
       | some (.refused h code) => .refused h code
       | _ => .absent
-  { txId, root := w.root E, jroot := w.journalRoot E, rroot := w.refusalsRoot E, answer,
+  { txId, root := w.root E, jroot := w.journalRoot E, rroot := w.refusalsRoot E,
+    rowsroot := w.rowsRoot E, answer,
     jpath := w.journal.prove (journalSpec E) txId, rpath := w.refusals.prove (refusalSpec E) (.tx txId) }
 
 /-! ## Wire form -/
 
 def layout : Layout :=
   [.byte "answer", .u64 "a", .u64 "b", .bytes "turn", .bytes "txId", .bytes "root", .bytes "jroot",
-   .bytes "rroot", .byte "jterm", .list "jkeys", .list "jdigests", .list "jsibs",
+   .bytes "rroot", .bytes "rowsroot", .byte "jterm", .list "jkeys", .list "jdigests", .list "jsibs",
    .byte "rterm", .list "rkeys", .list "rdigests", .list "rsibs"]
 
 def frame : Stream (Layout.Ty Protocol.Bounds.frameBytesMax layout) :=
@@ -155,18 +157,18 @@ def bytes (E : Env D) (r : Receipt D) : Option ByteArray := do
   let (jt, jk, jd, js) := proofParts E.bytes E.bytes r.jpath
   let (rt, rk, rd, rs) := proofParts (refusalKeyBytes E) E.bytes r.rpath
   pure (frame.bytes (tag, a.toUInt64, b.toUInt64, ← f turn, ← f (E.bytes r.txId), ← f (E.bytes r.root),
-    ← f (E.bytes r.jroot), ← f (E.bytes r.rroot), jt, ← fl jk, ← fl jd, ← fl js, rt, ← fl rk, ← fl rd,
+    ← f (E.bytes r.jroot), ← f (E.bytes r.rroot), ← f (E.bytes r.rowsroot), jt, ← fl jk, ← fl jd, ← fl js, rt, ← fl rk, ← fl rd,
     ← fl rs, ()))
 
 def ofBytes (digestOf : ByteArray → Option D) (b : ByteArray) : Option (Receipt D) :=
   match frame.decode b with
   | .error _ => none
-  | .ok (tag, a, bb, turn, tx, root, jroot, rroot, jt, jk, jd, js, rt, rk, rd, rs, ()) => do
+  | .ok (tag, a, bb, turn, tx, root, jroot, rroot, rowsroot, jt, jk, jd, js, rt, rk, rd, rs, ()) => do
     let answer ← if tag = 0 then (digestOf turn.1).map (.committed a.toNat)
       else if tag = 1 then some (.refused a.toNat bb.toNat)
       else if tag = 2 then some .absent else none
     pure { txId := ← digestOf tx.1, root := ← digestOf root.1, jroot := ← digestOf jroot.1,
-           rroot := ← digestOf rroot.1, answer,
+           rroot := ← digestOf rroot.1, rowsroot := ← digestOf rowsroot.1, answer,
            jpath := ← proofOf digestOf digestOf jt (Text.unlist jk) (Text.unlist jd) (Text.unlist js),
            rpath := ← proofOf (refusalKeyOf digestOf) digestOf rt (Text.unlist rk) (Text.unlist rd)
              (Text.unlist rs) }

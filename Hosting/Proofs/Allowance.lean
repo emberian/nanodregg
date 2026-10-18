@@ -52,15 +52,15 @@ private def rqD : Data :=
     ("principal", .digest .empty), ("self", .digest .empty), ("validUntil", .nat 0)]
 
 private def resultOf (m : Label) : Term :=
-  .app (.app (.app (.get allowance.body m) (.var 2)) (.var 1)) (.var 0)
+  .app (.app (.app (.app (.get allowance.body m) (.var 3)) (.var 2)) (.var 1)) (.var 0)
 
 /-- Field `f` of the state half of method `m`'s result. -/
 private def fieldOf (m : Label) (arg : Data) (st : Data) (f : Label) : Outcome :=
-  eval [] fuel (.get (.get (resultOf m) "state") f) [rqD.toVal, arg.toVal, st.toVal]
+  eval [] fuel (.get (.get (resultOf m) "state") f) [rqD.toVal, arg.toVal, st.toVal, (Data.record []).toVal]
 
 /-- The calls half of method `m`'s result. -/
 private def callsOf (m : Label) (arg : Data) (st : Data) : Outcome :=
-  eval [] fuel (.get (resultOf m) "calls") [rqD.toVal, arg.toVal, st.toVal]
+  eval [] fuel (.get (resultOf m) "calls") [rqD.toVal, arg.toVal, st.toVal, (Data.record []).toVal]
 
 private def emptyIs : Outcome → Bool
   | .value (.record []) _ => true
@@ -89,9 +89,9 @@ theorem methods_write :
 to the empty record. -/
 theorem methods_no_calls :
     ((match allowance.iface with | .record r => Row.find? "revoke" r | _ => none).bind
-        (methodSig allowance.state) = some (unit, []) ∧
+        (methodSig allowance.state allowance.rels) = some ⟨unit, [], [], 0⟩ ∧
       (match allowance.iface with | .record r => Row.find? "set" r | _ => none).bind
-        (methodSig allowance.state) = some (setTy, [])) ∧
+        (methodSig allowance.state allowance.rels) = some ⟨setTy, [], [], 0⟩) ∧
     ∀ rv ∈ [true, false], (emptyIs (callsOf "revoke" (.record []) (stD rv)) && emptyIs (callsOf "set" argD (stD rv))) = true := by
   decide +kernel
 

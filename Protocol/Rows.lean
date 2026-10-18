@@ -272,7 +272,7 @@ def verdictTy : String := Lang.Print.tyText Lang.verdictTy
 /-- A law package over a data object, with one law `l` whose body is `verdict`. -/
 def lawPackage (l verdict : String) : String :=
   s!"(package (imports) (state (rec)) (iface (rec ({l} (-> (rec) (-> (rec) (-> {reqTy} {verdictTy}))))))
-    (methods) (laws {l})
+    (methods) (laws {l}) (rels)
     (body (record ({l} (fn (old (rec)) (new (rec)) (r {reqTy}) {verdict})))))"
 
 def permitAll : String := lawPackage "permit" s!"(inj {verdictTy} ok (record))"
@@ -290,12 +290,12 @@ def counter : String :=
   let S := "(rec (total nat))"
   let res := Lang.Print.tyText (Lang.resultTy (.record [("total", .nat)])) (by decide +kernel)
   s!"(package (imports) (state {S})
-    (iface (rec (add (-> {S} (-> nat (-> {reqTy} {res}))))
+    (iface (rec (add (-> (rec) (-> {S} (-> nat (-> {reqTy} {res})))))
                 (bounded (-> {S} (-> {S} (-> {reqTy} {verdictTy}))))))
-    (methods add) (laws bounded)
+    (methods add) (laws bounded) (rels)
     (body (record
-      (add (fn (s {S}) (n nat) (r {reqTy})
-        (record (calls {Lang.Print.noCallsText}) (state (record (total (+ (. s total) n)))))))
+      (add (fn (v (rec)) (s {S}) (n nat) (r {reqTy})
+        (record (calls {Lang.Print.noCallsText}) (edits (record)) (state (record (total (+ (. s total) n)))))))
       (bounded (fn (old {S}) (new {S}) (r {reqTy})
         (if (<= (. new total) 1000000)
             (inj {verdictTy} ok (record))

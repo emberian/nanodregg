@@ -43,6 +43,8 @@ import Host.Proofs.Genesis
 import Host.Proofs.Page
 import Kernel.Proofs.Admit
 import Codec.Proofs.Deployed
+import Codec.Proofs.RowsReached
+import Kernel.Proofs.RowsHead
 import Kernel.Proofs.JournalHead
 import Kernel.Proofs.Weight
 
@@ -245,7 +247,12 @@ theorem genesisWorld_codecFits {name nonce : ByteArray} {allowance : Nat}
              journalFits := journalFits_of_ok (genesisWorld_journalOk X name nonce allowance founders),
              refusalsFits := by simp [Receive.genesisWorld, World.genesis, Trie.T.toList, refusalsFits],
              refusalsDisjoint := by simp [Receive.genesisWorld, World.genesis, Trie.T.toList, refusalsDisjoint],
-             steps := by simp [Receive.genesisWorld, World.genesis] }
+             steps := by simp [Receive.genesisWorld, World.genesis],
+             rows := ⟨⟨⟨by simp [Receive.genesisWorld, World.genesis, Trie.T.toList],
+                 by simp [Receive.genesisWorld, World.genesis, Trie.T.toList]⟩, Trie.canon_empty _ 0⟩,
+               by simp [Receive.genesisWorld, World.genesis, Trie.T.toList, rowsFits, ascendingBytes],
+               by simp [Receive.genesisWorld, World.genesis, Trie.T.toList, rowsHeaded],
+               by simp [Receive.genesisWorld, World.genesis, Trie.T.toList, rowsParented]⟩ }
   · have : (Trie.T.empty : Cells D).toList.length = 0 := rfl
     show (insertAll X.env .empty _).toList.length ≤ Codec.Kernel.worldMax
     unfold Codec.Kernel.worldMax Bounds.eventBytesMax at *
@@ -304,10 +311,10 @@ theorem importWorld_codecFits {name nonce : ByteArray} {want : Codec.Digest} {f 
   obtain ⟨hr, hw⟩ := Carry.importWorld_ok h
   obtain ⟨hcf, rfl⟩ := Receive.carry_ok.mp hw
   have hfit := read_carried_fits hr
-  exact { cells := hfit.1, journal := hfit.2.2.2.1,
+  exact { cells := hfit.cells, journal := hfit.journal,
           refusals := ⟨⟨by simp [carryWorld, Trie.T.toList], by simp [carryWorld, Trie.T.toList]⟩, Trie.canon_empty _ 0⟩,
-          height := hfit.2.2.1, stepsLt := hfit.2.2.1, chain := trivial, budget := hcf.2.2.1, origin := trivial,
-          journalFits := hfit.2.2.2.2,
+          height := hfit.height, stepsLt := hfit.height, chain := trivial, budget := hcf.2.2.1, origin := trivial,
+          journalFits := hfit.journalFits, rows := hfit.rows,
           refusalsFits := by simp [carryWorld, Trie.T.toList, refusalsFits],
           refusalsDisjoint := by simp [carryWorld, Trie.T.toList, refusalsDisjoint],
           steps := Nat.le_refl _ }
@@ -339,22 +346,33 @@ trie whose slots hold the leaves of their kinds and whose live cells fit the cel
 (`admit_conserves`). The one it does not keep is the cell listing's length. A recorded refusal moves
 none of them (`refuse_frame`: it touches only the refusals, the step counter and the chain), and
 a carry carries no refusals (KERNEL-44), so `host export` needs nothing of them. -/
-def Kept (w : World D) : Prop :=
-  w.Canon X.env ∧ w.Slotted X.env ∧ w.CellsFit Codec.Kernel.Cell.Fits X.env ∧ w.JournalOk X.env ∧
-    w.height < 2 ^ 64 ∧ w.weight + w.allowance < 2 ^ 64
+structure Kept (w : World D) : Prop where
+  canon : w.Canon X.env
+  slotted : w.Slotted X.env
+  cellsFit : w.CellsFit Codec.Kernel.Cell.Fits X.env
+  journalOk : w.JournalOk X.env
+  height : w.height < 2 ^ 64
+  budget : w.weight + w.allowance < 2 ^ 64
+  /-- the rows trie canonical (KERNEL-46): what `admit_conserves` reads of the rows' weight -/
+  rowsCanon : w.RowsCanon X.env
+  /-- every rows entry fits, every head sums its rows, every relation's parent is live (KERNEL-48's
+  `World.RowsOk`): the rows part of the carried codec's domain but the listing's length -/
+  rowsOk : w.RowsOk X.env
 
 theorem kept_admit {w w' : World D} {t : Turn D} (hk : Kept w) (h : World.admit X.env w t = .ok w') :
     Kept w' :=
-  ⟨admit_canon hk.1 h, admit_slotted hk.2.1 h, admit_cellsFit hk.2.2.1 h, admit_journalOk hk.2.2.2.1 h,
-    admit_height_lt h, by have := admit_conserves hk.1 hk.2.1 h; have := hk.2.2.2.2.2; omega⟩
+  ⟨admit_canon hk.canon h, admit_slotted hk.slotted h, admit_cellsFit hk.cellsFit h, admit_journalOk hk.journalOk h,
+    admit_height_lt h, by have := admit_conserves hk.canon hk.slotted hk.rowsCanon h; have := hk.budget; omega,
+    admit_rowsCanon hk.rowsCanon h, admit_rowsOk Receive.deployed_lawful hk.rowsCanon hk.rowsOk h⟩
 
 theorem kept_refuse {w w' : World D} {r : Refused D} (hk : Kept w) (h : World.refuse X.env w r = .ok w') :
     Kept w' := by
   obtain ⟨ht, hj, hh, ha, -⟩ := refuse_frame h
-  have hw : w'.weight = w.weight := by unfold World.weight; rw [ht]
-  refine ⟨refuse_canon hk.1 h, fun s l hg => hk.2.1 s l (by rw [← ht]; exact hg),
-    fun s l hg => hk.2.2.1 s l (by rw [← ht]; exact hg), refuse_journalOk hk.2.2.2.1 h,
-    by rw [hh]; exact hk.2.2.2.2.1, by rw [hw, ha]; exact hk.2.2.2.2.2⟩
+  have hw : w'.weight = w.weight := by unfold World.weight; rw [ht, refuse_rows h]
+  exact ⟨refuse_canon hk.canon h, fun s l hg => hk.slotted s l (by rw [← ht]; exact hg),
+    fun s l hg => hk.cellsFit s l (by rw [← ht]; exact hg), refuse_journalOk hk.journalOk h,
+    by rw [hh]; exact hk.height, by rw [hw, ha]; exact hk.budget, refuse_rowsCanon hk.rowsCanon h,
+    refuse_rowsOk hk.rowsOk h⟩
 
 theorem kept_fold {w w' : World D} {l : List (Step D)} (hk : Kept w) (h : World.fold X.env w l = .ok w') : Kept w' :=
   fold_keeps (P := Kept) kept_admit kept_refuse hk h
@@ -375,7 +393,11 @@ theorem Record.foldlM_kept : ∀ {w w' : World D} {rs : List ByteArray}, Kept w 
 /-- A World in the World codec's domain is `Kept`. -/
 theorem kept_of_fits {w : World D} (hf : Codec.Kernel.World.CodecFits X.env (fun _ => True) w) : Kept w := by
   refine ⟨hf.cells.2, fun s l hg => hf.cells.1.2 (s, l) ((Trie.mem_toList (trieSpec X.env) 0 w.trie hf.cells.2.1 s l).mpr hg),
-    fun s l hg => ?_, journalOk_of_fits hf.journal.2 hf.journalFits, hf.height, hf.budget⟩
+    fun s l hg => ?_, journalOk_of_fits hf.journal.2 hf.journalFits, hf.height, hf.budget, hf.rows.listing.2,
+    ⟨fun p hp => by
+      have := hf.rows.fits
+      simp only [rowsFits, Bool.and_eq_true, List.all_eq_true] at this
+      exact this.2 p hp, hf.rows.headed, hf.rows.parented⟩⟩
   have hl := (hf.cells.1.1.2 (s, l) ((Trie.mem_toList (trieSpec X.env) 0 w.trie hf.cells.2.1 s l).mpr hg)).2
   cases l with
   | entry e =>
@@ -386,17 +408,18 @@ theorem kept_of_fits {w : World D} (hf : Codec.Kernel.World.CodecFits X.env (fun
 
 /-- A `Kept` World whose cell listing is within `worldMax` is in the carried codec's domain (what
 `host export` writes: the cells, the budget, the height and the journal; no refusals, KERNEL-44). -/
-theorem carriedFits_of_kept {w : World D} (hk : Kept w) (hcount : w.trie.toList.length ≤ Codec.Kernel.worldMax) :
+theorem carriedFits_of_kept {w : World D} (hk : Kept w) (hcount : w.trie.toList.length ≤ Codec.Kernel.worldMax)
+    (hrcount : w.rows.toList.length ≤ Codec.Kernel.worldMax) :
     Codec.Kernel.Carried.CodecFits X.env (fun _ => True) w.carried := by
   have hmem : ∀ p ∈ w.trie.toList, w.trie.get (trieSpec X.env) p.1 = some p.2 :=
-    fun p hp => (Trie.mem_toList (trieSpec X.env) 0 _ hk.1.1 p.1 p.2).mp hp
-  have hj := journal_bounded hk.2.2.2.1
+    fun p hp => (Trie.mem_toList (trieSpec X.env) 0 _ hk.canon.1 p.1 p.2).mp hp
+  have hj := journal_bounded hk.journalOk
   unfold World.carried
-  refine ⟨⟨⟨⟨hcount, fun p hp => ⟨trivial, ?_⟩⟩, fun p hp => hk.2.1 _ _ (hmem p hp)⟩, hk.1⟩,
-    Nat.lt_of_le_of_lt (Nat.le_add_left _ _) hk.2.2.2.2.2, hk.2.2.2.2.1,
-    ⟨⟨by show w.journal.toList.length ≤ _; unfold Bounds.journalMax; omega, fun p hp => ⟨trivial, ?_, trivial⟩⟩, hk.2.2.2.1.1⟩,
-    journalFits_of_ok hk.2.2.2.1⟩
-  · have hl := hk.2.2.1 _ _ (hmem p hp)
+  refine ⟨⟨⟨⟨hcount, fun p hp => ⟨trivial, ?_⟩⟩, fun p hp => hk.slotted _ _ (hmem p hp)⟩, hk.canon⟩,
+    Nat.lt_of_le_of_lt (Nat.le_add_left _ _) hk.budget, hk.height,
+    ⟨⟨by show w.journal.toList.length ≤ _; unfold Bounds.journalMax; omega, fun p hp => ⟨trivial, ?_, trivial⟩⟩, hk.journalOk.1⟩,
+    journalFits_of_ok hk.journalOk, Codec.Deployed.rowsCodecFits_of_ok hk.rowsCanon hk.rowsOk hrcount⟩
+  · have hl := hk.cellsFit _ _ (hmem p hp)
     obtain ⟨s, l⟩ := p
     cases l with
     | entry e =>
@@ -404,8 +427,8 @@ theorem carriedFits_of_kept {w : World D} (hk : Kept w) (hcount : w.trie.toList.
       | live c => exact hl
       | tomb => trivial
     | spent => trivial
-  · have := (hk.2.2.2.1.2.1 p.1 p.2 (journalAt_of_mem hk.2.2.2.1.1 hp)).1
-    have := hk.2.2.2.2.1
+  · have := (hk.journalOk.2.1 p.1 p.2 (journalAt_of_mem hk.journalOk.1 hp)).1
+    have := hk.height
     omega
 
 /-- The base World of a deployed open is `Kept`, and so is the World it opens to. -/
@@ -469,16 +492,34 @@ theorem listing_entry_size (x : Slot D × Leaf) :
     simp [Codec.Stream.product, Codec.Kernel.slot, Codec.Stream.refine, Codec.Stream.choice,
       Codec.Stream.tagged, Codec.Stream.digest]
 
-/-- (i) **The World's bytes are at least 33 per listed leaf.** -/
-theorem world_size_listing (w : World D) : 33 * w.trie.toList.length ≤ world.size w := by
-  have h1 : (Codec.Kernel.cells Codec.Deployed.env Codec.Deployed.digestCodec).size w.trie ≤ world.size w := by
-    show _ ≤ (Codec.Kernel.cells Codec.Deployed.env Codec.Deployed.digestCodec).size w.trie + _
-    exact Nat.le_add_right _ _
+/-- Every rows listing entry costs at least 33 bytes of the World's encoding (its parent digest and
+relation byte, KERNEL-46). -/
+theorem rows_entry_size (x : RowSlot D × RowLeaf) :
+    33 ≤ (Codec.Stream.product (Codec.Kernel.rowKey Codec.Deployed.digestCodec) Codec.Kernel.rowLeaf).size x := by
+  obtain ⟨s, l⟩ := x
+  cases s <;>
+    simp [Codec.Stream.product, Codec.Kernel.rowKey, Codec.Stream.refine, Codec.Stream.choice,
+      Codec.Stream.tagged, Codec.Stream.digest] <;> omega
+
+/-- (i) **The World's bytes are at least 33 per listed cell leaf and per listed rows entry.** -/
+theorem world_size_listing (w : World D) :
+    33 * w.trie.toList.length + 33 * w.rows.toList.length ≤ world.size w := by
+  have h1 : (Codec.Kernel.cells Codec.Deployed.env Codec.Deployed.digestCodec).size w.trie +
+      (Codec.Kernel.rowsTrie Codec.Deployed.env Codec.Deployed.digestCodec).size w.rows ≤ world.size w := by
+    show _ ≤ (Codec.Kernel.cells Codec.Deployed.env Codec.Deployed.digestCodec).size w.trie +
+      ((Codec.Kernel.journalTrie Codec.Deployed.env Codec.Deployed.digestCodec).size w.journal +
+      ((Codec.Kernel.refusalsTrie Codec.Deployed.env Codec.Deployed.digestCodec).size w.refusals +
+      ((Codec.Kernel.rowsTrie Codec.Deployed.env Codec.Deployed.digestCodec).size w.rows + _)))
+    omega
   have h2 : (Codec.Kernel.cells Codec.Deployed.env Codec.Deployed.digestCodec).size w.trie =
       w.trie.toList.foldl (fun n x => n + (Codec.Stream.product (Codec.Kernel.slot Codec.Deployed.digestCodec)
         Codec.Kernel.leaf).size x) 4 := rfl
-  rw [h2, foldl_add_eq] at h1
+  have h3 : (Codec.Kernel.rowsTrie Codec.Deployed.env Codec.Deployed.digestCodec).size w.rows =
+      w.rows.toList.foldl (fun n x => n + (Codec.Stream.product (Codec.Kernel.rowKey Codec.Deployed.digestCodec)
+        Codec.Kernel.rowLeaf).size x) 4 := rfl
+  rw [h2, h3, foldl_add_eq, foldl_add_eq] at h1
   have := sum_map_ge _ 33 listing_entry_size w.trie.toList
+  have := sum_map_ge _ 33 rows_entry_size w.rows.toList
   omega
 
 theorem spendAll_length {E : Env D} :
@@ -508,11 +549,12 @@ theorem mapEx_length {α β ε : Type} {f : α → Except ε β} :
       · cases h
     · cases h
 
-/-- (ii) **An admission adds at most one leaf per touch, created cell and nullifier**, and each of
-those costs at least 32 bytes of the Turn's log weight. -/
-theorem admit_listing {w w' : World D} {t : Turn D} (hc : w.Canon X.env)
+/-- (ii) **An admission adds at most one cell leaf per touch, created cell and nullifier**, each
+costing at least 32 bytes of its part of the Turn's log weight. -/
+theorem admit_cells_listing {w w' : World D} {t : Turn D} (hc : w.Canon X.env)
     (h : World.admit X.env w t = .ok w') :
-    32 * w'.trie.toList.length ≤ 32 * w.trie.toList.length + t.logWeight := by
+    32 * w'.trie.toList.length ≤ 32 * w.trie.toList.length + ((t.touches.map Touch.weight).sum +
+      (t.creates.map fun p => digestWeight + p.2.weight).sum + 32 * t.nullifiers.length) := by
   obtain ⟨posts, hk, rfl⟩ := admit_ok h
   obtain ⟨raw, hm, hp⟩ := hk.touches
   have hpl : posts.length ≤ t.touches.length := by
@@ -530,8 +572,22 @@ theorem admit_listing {w w' : World D} {t : Turn D} (hc : w.Canon X.env)
   have hg : (bornEntries t).length = t.creates.length := by simp [bornEntries]
   show 32 * (spendAll X.env (insertAll X.env (insertAll X.env w.trie (posts.map Post.pair)) (bornEntries t))
     t.nullifiers).toList.length ≤ _
+  omega
+
+/-- (ii') **An admission adds at most one cell leaf per touch, created cell and nullifier, and at
+most one rows entry per row touch** (`admit_rows_listing`), each costing at least 32 bytes of the
+Turn's log weight. -/
+theorem admit_listing {w w' : World D} {t : Turn D} (hc : w.Canon X.env) (hr : w.RowsCanon X.env)
+    (h : World.admit X.env w t = .ok w') :
+    32 * w'.trie.toList.length + 32 * w'.rows.toList.length ≤
+      32 * w.trie.toList.length + 32 * w.rows.toList.length + t.logWeight := by
+  have hcl := admit_cells_listing hc h
+  have hrow := admit_rows_listing hr h
+  have hrw := sum_map_ge RowTouch.weight 32 (fun x => by
+    unfold RowTouch.weight; cases x.slot <;> simp [RowSlot.weight, digestWeight] <;> omega) t.rows
   have hlw : t.logWeight ≥ (t.touches.map Touch.weight).sum +
-      (t.creates.map fun p => digestWeight + p.2.weight).sum + 32 * t.nullifiers.length := by
+      (t.creates.map fun p => digestWeight + p.2.weight).sum + 32 * t.nullifiers.length +
+      (t.rows.map RowTouch.weight).sum := by
     unfold Turn.logWeight; simp only [show digestWeight = 32 from rfl]; omega
   omega
 
@@ -540,21 +596,25 @@ private def stepWeight : Step D → Nat
   | .turn t => t.logWeight
   | .refusal _ => 0
 
-theorem fold_listing : ∀ {w w' : World D} {l : List (Step D)}, w.Canon X.env → World.fold X.env w l = .ok w' →
-    32 * w'.trie.toList.length ≤ 32 * w.trie.toList.length + (l.map stepWeight).sum
-  | w, w', [], _, h => by simp [World.fold] at h; subst h; simp
-  | w, w', s :: rest, hc, h => by
+theorem fold_listing : ∀ {w w' : World D} {l : List (Step D)}, w.Canon X.env → w.RowsCanon X.env →
+    World.fold X.env w l = .ok w' →
+    32 * w'.trie.toList.length + 32 * w'.rows.toList.length ≤
+      32 * w.trie.toList.length + 32 * w.rows.toList.length + (l.map stepWeight).sum
+  | w, w', [], _, _, h => by simp [World.fold] at h; subst h; simp
+  | w, w', s :: rest, hc, hr, h => by
     obtain ⟨w₁, h₁, h₂⟩ := fold_cons_ok.mp h
-    have b := fold_listing (step_canon hc h₁) h₂
     cases s with
     | turn t =>
-      have a := admit_listing hc h₁
+      have b := fold_listing (admit_canon hc h₁) (admit_rowsCanon hr h₁) h₂
+      have a := admit_listing hc hr h₁
       simp only [List.map_cons, List.sum_cons, stepWeight]
       omega
     | refusal r =>
+      have b := fold_listing (refuse_canon hc h₁) (refuse_rowsCanon hr h₁) h₂
       have a : w₁.trie = w.trie := (refuse_frame h₁).1
+      have a2 : w₁.rows = w.rows := refuse_rows h₁
       simp only [List.map_cons, List.sum_cons, stepWeight]
-      rw [a] at b
+      rw [a, a2] at b
       omega
 
 /-- (iii) **A record's bytes are at least the log weight of its Turns** (`turn_size_logWeight`). -/
@@ -581,33 +641,34 @@ theorem record_steps_le {r : ByteArray} {ps : List (Step D × D)}
       | refusal _ => exact Nat.zero_le _) ps
   omega
 
-theorem Record.foldlM_listing : ∀ {w w' : World D} {rs : List ByteArray}, w.Canon X.env →
+theorem Record.foldlM_listing : ∀ {w w' : World D} {rs : List ByteArray}, w.Canon X.env → w.RowsCanon X.env →
     rs.foldlM foldStep w = .ok w' →
-      32 * w'.trie.toList.length ≤ 32 * w.trie.toList.length + (rs.map ByteArray.size).sum
-  | w, w', [], _, h => by
+      32 * w'.trie.toList.length + 32 * w'.rows.toList.length ≤
+        32 * w.trie.toList.length + 32 * w.rows.toList.length + (rs.map ByteArray.size).sum
+  | w, w', [], _, _, h => by
     simp only [List.foldlM_nil, pure, Except.pure, Except.ok.injEq] at h
     subst h; simp
-  | w, w', r :: rs, hc, h => by
+  | w, w', r :: rs, hc, hrc, h => by
     simp only [List.foldlM_cons, bind, Except.bind] at h
     split at h
     · cases h
     · rename_i w₁ h₁
       obtain ⟨ps, hd, hr⟩ := Record.step_rooted h₁
       have hf := RootedFold.fold hr
-      have a := fold_listing hc hf
+      have a := fold_listing hc hrc hf
       have b := record_steps_le hd
-      have ih := Record.foldlM_listing (fold_canon hc hf) h
+      have ih := Record.foldlM_listing (fold_canon hc hf) (fold_rowsCanon hrc hf) h
       simp only [List.map_cons, List.sum_cons]
       omega
 
-/-- **Every World the deployed open returns lists fewer than 2^24 leaves.** The base World is at
-most `c.baseRecordMax` bytes, 33 per leaf (`world_size_listing`); the tail `tailRead` admits is at
-most `c.tailMax` of it, and every leaf a record's Turns add costs 32 of its bytes
-(`admit_listing`, `record_steps_le`). -/
+/-- **Every World the deployed open returns lists fewer than 2^24 cell leaves and rows entries
+together.** The base World is at most `c.baseRecordMax` bytes, 33 per leaf or entry
+(`world_size_listing`); the tail `tailRead` admits is at most `c.tailMax` of it, and every leaf or
+entry a record's Turns add costs 32 of its bytes (`admit_listing`, `record_steps_le`). -/
 theorem openWith_listing_lt {keys : Keys} {file I S : ByteArray} {o : Opening (World D)}
     (h : Id.run (openWith keys c world recorder.mark originChain foldStep file S.size I.size
       (segReader I) (segReader S)) = .ok o) :
-    o.opened.world.trie.toList.length < 2 ^ 24 := by
+    o.opened.world.trie.toList.length + o.opened.world.rows.toList.length < 2 ^ 24 := by
   obtain ⟨b, n, d, rs, hb, hf, _, _, _, he⟩ :=
     openWith_world keys c world recorder.mark originChain foldStep file I S h
   obtain ⟨b', n', d', len, _, _, hb', hlen, -⟩ :=
@@ -631,7 +692,7 @@ theorem openWith_listing_lt {keys : Keys} {file I S : ByteArray} {o : Opening (W
   obtain ⟨b₂, n₂, d₂, rs₂, hb₂, hk, hf₂, -⟩ := openWith_kept h
   rw [hb] at hb₂
   cases hb₂
-  have hl := Record.foldlM_listing hk.1 hf
+  have hl := Record.foldlM_listing hk.canon hk.rowsCanon hf
   have hw := world_size_listing b.world
   have e1 : c.baseRecordMax = 268435568 := rfl
   have e2 : c.tailMax n = 2 * max 1048576 (n / 4) + (4 + 33554432 + 32) := rfl
@@ -650,12 +711,13 @@ theorem openWith_exportFile_ok {keys : Keys} {file I S : ByteArray} {o : Opening
     Carry.exportFile X.env Codec.Deployed.digestCodec o.opened.world =
       .ok (Carry.file X.env Codec.Deployed.digestCodec o.opened.world) := by
   obtain ⟨_, _, _, _, _, _, _, hk⟩ := openWith_kept h
+  have hl := openWith_listing_lt h
   have hcount : o.opened.world.trie.toList.length ≤ Codec.Kernel.worldMax := by
-    have := openWith_listing_lt h
-    unfold Codec.Kernel.worldMax
-    omega
-  exact Carry.exportFile_ok Codec.Deployed.digestCodec_lawful.on (carriedFits_of_kept hk hcount) trivial trivial
-    hk.2.2.2.2.1
+    unfold Codec.Kernel.worldMax; omega
+  have hrcount : o.opened.world.rows.toList.length ≤ Codec.Kernel.worldMax := by
+    unfold Codec.Kernel.worldMax; omega
+  exact Carry.exportFile_ok Codec.Deployed.digestCodec_lawful.on
+    (carriedFits_of_kept hk hcount hrcount) trivial trivial hk.height
 
 
 /-! ## A record appended from steps taken reopens (HOST-11 L41, rebased over KERNEL-47) -/

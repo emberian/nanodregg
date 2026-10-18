@@ -39,12 +39,13 @@ def reqWith (agent self : ByteArray) (occ : Data) : Data :=
 
 def reqOf (agent self : ByteArray) (m : Nat) : Data := reqWith agent self (.inj "invoke" (.nat m))
 
-/-- Method `ℓ` of the package body applied to the bound state, argument and request (`var 2`,
-`var 1`, `var 0`), as `Lang.Program` applies it. -/
+/-- Method `ℓ` of the package body applied to the bound rows, state, argument and request (`var 3`,
+`var 2`, `var 1`, `var 0`), as `Lang.Program` applies it (LANG-49: rows first; the escrow reads
+none, so its rows are `rec {}`). -/
 def methodAt (ℓ : Label) : Term :=
   match escrow.body with
   | .record fs => match Row.find? ℓ fs with
-    | some t => .app (.app (.app t (.var 2)) (.var 1)) (.var 0)
+    | some t => .app (.app (.app (.app t (.var 3)) (.var 2)) (.var 1)) (.var 0)
     | none => .nat 0
   | _ => .nat 0
 
@@ -71,14 +72,14 @@ def valueOf : Outcome → Option Val
 /-- What the call in method `ℓ`'s slot is, field by field, over the reference evaluator:
 `(src owner, src asset, dst owner, dst asset, amount, via, once)`. -/
 def callOfMethod (ℓ : Label) (state arg rq : Data) : List (Option Val) :=
-  let run (t : Term) := valueOf (eval [] 1000 (slotField ℓ t) [rq.toVal, arg.toVal, state.toVal])
+  let run (t : Term) := valueOf (eval [] 1000 (slotField ℓ t) [rq.toVal, arg.toVal, state.toVal, (Data.record []).toVal])
   [run (ownerOf "src"), run (assetOf "src"), run (ownerOf "dst"), run (assetOf "dst"),
     run (.get (.var 0) "amount"), run (someOf "via"), run (someOf "once")]
 
 /-- The state method `ℓ` writes, field by field, over the reference evaluator, in `stateTy`'s order. -/
 def stateOfMethod (ℓ : Label) (state arg rq : Data) : List (Option Val) :=
   ["amount", "arbiter", "asset", "beneficiary", "depositor", "nonce", "phase"].map fun f =>
-    valueOf (eval [] 1000 (.get (.get (methodAt ℓ) "state") f) [rq.toVal, arg.toVal, state.toVal])
+    valueOf (eval [] 1000 (.get (.get (methodAt ℓ) "state") f) [rq.toVal, arg.toVal, state.toVal, (Data.record []).toVal])
 
 /-- A call spends the payout key out of the escrow's own account `of self asset`. -/
 def spendsB (self asset : ByteArray) : List (Option Val) → Bool

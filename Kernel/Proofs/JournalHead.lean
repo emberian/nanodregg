@@ -37,7 +37,7 @@ theorem admit_height_lt {E : Env D} {w w' : World D} {t : Turn D} (h : World.adm
   have hb := admit_bounded h
   unfold checkBounds at hb
   simp only [except_bind_ok] at hb
-  obtain ⟨⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, hc⟩ := hb
+  obtain ⟨⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, hc, -⟩ := hb
   rw [req_ok] at hc
   simp only [Bool.and_eq_true, decide_eq_true_eq, List.all_eq_true] at hc
   rw [admit_height h]
@@ -102,11 +102,11 @@ include hE hn in
 and an inclusion proof against the record's journal root, show the entry in that World's journal,
 or a collision. -/
 theorem head_journal_read {w w' : World D} {t : Turn D} (hw : w.JournalOk E)
-    (h : World.admit E w t = .ok w') {prev td rd root' jroot' rroot' : D} {g : UInt8}
-    (hhead : headLink E prev g td rd = w'.chain) (hrd : rootsDigest E root' jroot' rroot' = rd) {k : D} {e : Nat × D} (he : e.1 < 2 ^ 64)
+    (h : World.admit E w t = .ok w') {prev td rd root' jroot' rroot' wroot' : D} {g : UInt8}
+    (hhead : headLink E prev g td rd = w'.chain) (hrd : rootsDigest E root' jroot' rroot' wroot' = rd) {k : D} {e : Nat × D} (he : e.1 < 2 ^ 64)
     {p : Trie.Proof D D} (hv : Trie.verifyInclusion (journalSpec E) jroot' k (journalDigest E e) p = true) :
     w'.journalAt E k = some e ∨ Collision E.hash := by
-  rcases head_roots hE (s := .turn t) h hhead hrd with ⟨-, rfl, -⟩ | col
+  rcases head_roots hE (s := .turn t) h hhead hrd with ⟨-, rfl, -, -⟩ | col
   · exact journal_inclusion_sound hE hn (admit_journalCanon hw.1 h) (admit_journal_heights hw h) he hv
   · exact .inr col
 
@@ -114,11 +114,11 @@ include hE hn in
 /-- **The phone's journal absence** against a head: the id is not in that World's journal, or a
 collision. -/
 theorem head_journal_absent {w w' : World D} {t : Turn D} (hc : w.JournalCanon E)
-    (h : World.admit E w t = .ok w') {prev td rd root' jroot' rroot' : D} {g : UInt8}
-    (hhead : headLink E prev g td rd = w'.chain) (hrd : rootsDigest E root' jroot' rroot' = rd) {k : D} {p : Trie.Proof D D}
+    (h : World.admit E w t = .ok w') {prev td rd root' jroot' rroot' wroot' : D} {g : UInt8}
+    (hhead : headLink E prev g td rd = w'.chain) (hrd : rootsDigest E root' jroot' rroot' wroot' = rd) {k : D} {p : Trie.Proof D D}
     (hv : Trie.verifyExclusion (journalSpec E) jroot' k p = true) :
     w'.journalAt E k = none ∨ Collision E.hash := by
-  rcases head_roots hE (s := .turn t) h hhead hrd with ⟨-, rfl, -⟩ | col
+  rcases head_roots hE (s := .turn t) h hhead hrd with ⟨-, rfl, -, -⟩ | col
   · exact journal_exclusion_sound hE hn (admit_journalCanon hc h) hv
   · exact .inr col
 
@@ -128,8 +128,8 @@ from `w₀` and its log reaches `w₂`, a World at a height where `journalForget
 is false, no proof shows `t`'s transaction id absent against `w₂`'s head, but by a collision. -/
 theorem head_absent_admitted {w₀ w₁ w₂ : World D} {t : Turn D} {l : List (Step D)}
     (hc : w₀.JournalCanon E) (h₁ : World.admit E w₀ t = .ok w₁) (hf : World.fold E w₁ l = .ok w₂)
-    (hnf : journalForgets w₂.height t.notBefore = false) {prev td rd root' jroot' rroot' : D} {g : UInt8}
-    (hhead : headLink E prev g td rd = w₂.chain) (hrd : rootsDigest E root' jroot' rroot' = rd)
+    (hnf : journalForgets w₂.height t.notBefore = false) {prev td rd root' jroot' rroot' wroot' : D} {g : UInt8}
+    (hhead : headLink E prev g td rd = w₂.chain) (hrd : rootsDigest E root' jroot' rroot' wroot' = rd)
     {p : Trie.Proof D D}
     (hv : Trie.verifyExclusion (journalSpec E) jroot' t.txId p = true) : Collision E.hash := by
   have hin := fold_answers hc h₁ hf hnf

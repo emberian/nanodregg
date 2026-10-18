@@ -147,6 +147,69 @@ theorem rawBytes_lawfulOn (max : Nat) (fits : max < 2 ^ 32) : LawfulOn (·.size 
         · cases h
       · cases h
 
+theorem nat8_bytes (n : Nat) : nat8.bytes n = u8.bytes (UInt8.ofNat n) := rfl
+
+theorem nat8_lawfulOn : LawfulOn (· < 256) nat8 where
+  put_eq n buf := u8_lawful.put_eq _ buf
+  size_eq _ := rfl
+  get_of_occurs n b i hn o := by
+    rw [nat8_bytes] at o ⊢
+    have g := u8_lawful.get_of_occurs _ b i o
+    simp only [nat8, g]
+    rw [UInt8.toNat_ofNat_of_lt' (by simpa [UInt8.size] using hn)]
+  occurs_of_get {b i v j} g := by
+    simp only [nat8] at g
+    split at g
+    · rename_i w k hw
+      cases g
+      obtain ⟨rfl, o⟩ := u8_lawful.occurs_of_get hw
+      rw [nat8_bytes, UInt8.ofNat_toNat]
+      exact ⟨w.toNat_lt, rfl, o⟩
+    · cases g
+
+theorem bytes8_bytes (max : Nat) (v : ByteArray) :
+    (bytes8 max).bytes v = u8.bytes (UInt8.ofNat v.size) ++ v := by
+  show u8.put _ ByteArray.empty ++ v = _
+  rw [u8_lawful.put_eq, ByteArray.empty_append]
+
+theorem bytes8_lawfulOn (max : Nat) (fits : max < 256) : LawfulOn (·.size ≤ max) (bytes8 max) where
+  put_eq v buf := by
+    rw [bytes8_bytes]
+    show u8.put _ buf ++ v = _
+    rw [u8_lawful.put_eq, ByteArray.append_assoc]
+  size_eq v := by rw [bytes8_bytes, ByteArray.size_append]; rfl
+  get_of_occurs v b i hv h := by
+    rw [bytes8_bytes] at h ⊢
+    obtain ⟨h1, ⟨hs, he⟩⟩ := occursAt_append.mp h
+    have hn : (UInt8.ofNat v.size).toNat = v.size :=
+      UInt8.toNat_ofNat_of_lt' (by simp only [UInt8.size]; omega)
+    rw [u8_size] at hs he
+    have hget := u8_lawful.get_of_occurs _ _ _ h1
+    rw [u8_size] at hget
+    simp only [bytes8, hget, hn, hv, ↓reduceIte, hs, ByteArray.size_append, u8_size,
+      ← Nat.add_assoc, he]
+  occurs_of_get {b i v j} h := by
+    simp only [bytes8] at h
+    split at h
+    · cases h
+    · rename_i n k hk
+      split at h
+      · rename_i hmax
+        split at h
+        · rename_i hb
+          cases h
+          obtain ⟨rfl, o1⟩ := u8_lawful.occurs_of_get hk
+          simp only [u8_size] at hb ⊢
+          have hsz : (b.extract (i + 1) (i + 1 + n.toNat)).size = n.toNat := by
+            rw [ByteArray.size_extract]; omega
+          rw [bytes8_bytes]
+          simp only [hsz, UInt8.ofNat_toNat]
+          refine ⟨by omega, by simp [ByteArray.size_append, hsz]; omega, occursAt_append.mpr ⟨o1, ?_⟩⟩
+          simp only [u8_size]
+          exact ⟨by rw [hsz]; exact hb, by rw [hsz]⟩
+        · cases h
+      · cases h
+
 /-! ## Combinators on domains -/
 
 theorem product_lawfulOn {Pa : α → Prop} {Pc : β → Prop} {a : Stream α} {c : Stream β}

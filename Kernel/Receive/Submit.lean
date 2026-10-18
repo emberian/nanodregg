@@ -53,14 +53,17 @@ def refusalNames : List String :=
    "hasMethods", "noMethods", "noGrant", "grantTarget", "grantRight", "grantWidens", "unrooted",
    "enrollSpent", "notIssuer", "grantTooDeep", "overPrice", "undecodableEvent", "eventMismatch",
    "duplicateEffect", "sameAccount", "zeroAmount", "assetMismatch", "overflow", "notWell",
-   "notCallable", "callTooDeep", "revisited", "tooManyCalls", "overTicks"]
+   "notCallable", "callTooDeep", "revisited", "tooManyCalls", "overTicks", "rowUnpinned", "rangeUnpinned",
+   "rangeTooLong", "rowParent", "duplicateRow"]
 
 /-- The wire names of the kernel's rejections, in constructor order (checked against `Reject.name`). -/
 def rejectNames : List String :=
   ["overBound", "replayed", "duplicateTouch", "duplicateNullifier", "duplicateKey", "nonCanonicalCell",
    "outsideWindow", "stale", "spent", "chargeMismatch", "overAllowance", "idTaken", "notContentId",
    "bornTouched", "missingCell", "romWrite", "romRetire", "appendOnly", "valueMalformed", "belowFloor",
-   "notConserved", "floorNotConserved", "refusedFinal", "refusalBudget"]
+   "notConserved", "floorNotConserved", "refusedFinal", "refusalBudget", "keyTaken", "relationFull",
+   "relationCapped", "rowParentUnpinned", "orphanRow", "rowsRemain", "keyWidth", "noRelation",
+   "retractForbidden", "declareLate", "rangeTooLong", "duplicateRow", "rowShape"]
 
 /-- A verdict's wire name. -/
 def Verdict.name : Verdict D → String

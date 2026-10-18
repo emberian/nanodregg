@@ -1221,3 +1221,163 @@ gives the deployed reading without a second check.
 moved". But the rename rule exists for meaning moving under an UNCHANGED tag. Here the shape moves the tag anyway,
 and the budget's meaning is unchanged. Renaming would have been ceremony that teaches the next reader the wrong
 rule.
+
+## CODEC-33 · The rows on the wire: a fourth trie, the turn's row touches and range reads, and the kernel's own byte functions as codec sites (KERNEL-46/48 with KERNEL-15/16 and LANG-14; CODEC-9, 2026-10-18)
+**Decision.**
+- **The kernel's byte functions ARE codec bytes (ROOT's ruling on the kernel-functions vectors).** Rather than a
+  separate table of function outputs, each of KERNEL's three byte functions is proved equal to a lawful codec's
+  bytes, so it is a refine site like any other: the census finds it, it carries a lawfulness theorem, and its
+  vectors sit in `gates/codec-vectors.tsv` under the same immutability rule.
+  - `rowKeyBytes E s = (rowKey dc).bytes s` (`rowKeyBytes_eq`), site `kernel/row-key`:
+    `dc × nat8 rel × choice 2 (unit | bytes8 keyBytesMax)`, i.e. `parent ‖ rel ‖ 0` or `parent ‖ rel ‖ 1 ‖ |k| ‖ k`.
+  - `rowLeafBytes l = rowLeaf.bytes l` (`rowLeafBytes_eq`, for every leaf), site `kernel/row-leaf`:
+    `choice 2 (nat64⁵ × bool | nat64 × rawBytes valueBytesMax)`. KERNEL-48 gave the row value a u32 length
+    prefix for this (CODEC-9's ask A); before it the value was trailing and no codec spelled it.
+  - `rangePinBytes E p rel w pre l = (rangePinWire dc).bytes (p, rel, w, pre, l.map (key, rowDigest leaf))`
+    (`rangePinBytes_eq`), site `kernel/range-pin`: `dc × nat8 × oneOf #[1] × nat8 × bytes8 keyBytesMax ×
+    rawList rowsPerRelationMax (rowKey × dc)`. KERNEL-48 factored `rangePinBytes` out of `rangePin` and made its
+    count four bytes (ask B), so the listing is rawList's.
+  - What follows from lawfulness, named: `rowKeyBytes_inj` / `rowKeyBytes_decode`, `rowLeafBytes_inj` /
+    `rowLeafBytes_decode`, `rangePinBytes_inj` / `rangePinBytes_decode`. Injective on the domain (relation and
+    width below 256, key and prefix ≤ keyBytesMax = 128, value ≤ valueBytesMax, counters < 2^64, ≤ 4096 rows),
+    and the bytes read back. A range pin binds the parent, relation, width, prefix and the listing of (key, leaf
+    DIGEST): a leaf is bound through `rowDigest`, i.e. up to a collision of the hash, and that is the claim.
+  - Two primitives: `nat8` (shape `u8`, LawfulOn `< 256`) and `bytes8 max` (a one-byte length, new Shape
+    constructor `bytes8`, code 17; `Shape.put_prefix` extended). Every existing shape's bytes are unchanged, so no
+    existing tag moved for this.
+- **The turn** (`kernel/turn`): `… ‖ event ‖ rows ‖ ranges`, `rows = rawList rowsMax rowTouch`,
+  `ranges = rawList rangesMax rangeRead`.
+  - `kernel/row-act`: `choice 5` in constructor order (keep | insert amt v | upsert amt v | retract |
+    declare limit cap width retract); `kernel/row-touch`: `rowKey × option dc × rowAct`; `kernel/range-read`:
+    `dc × nat8 × bytes8 keyBytesMax × nat64 × dc`.
+  - `Turn.Fits` gains both lists; `checkBounds_fits` reaches them because KERNEL-48 moved the rows' syntactic wire
+    bounds into `checkBounds` (ask C): every admitted turn is in the codec's domain, so `turnBytes` stays
+    injective on admitted turns.
+  - CODEC-26 holds: `turn_size_logWeight` is re-proved with KERNEL's `RowSlot.weight`, `RowAct.logWeight`,
+    `RowTouch.weight`, `RangeRead.weight` (ask D). Its tooth now reads 52 bytes against a log weight of 80.
+- **The call** (`kernel/unsigned`): `… ‖ body ‖ rowPins ‖ ranges` (LANG-14), `rowPins = rawList callMax (rowKey × dc)`,
+  `ranges = rawList callMax rangeRead`; `Unsigned.Fits` gains both.
+- **The World wire**: `cells ‖ journal ‖ refusals ‖ rows ‖ height ‖ steps ‖ chain ‖ allowance ‖ origin`.
+  - `rowsTrie = refine "kernel/row-order" (rawList worldMax (rowKey × rowLeaf)) (listingAccept (rowSpec E)) toList`,
+    the fourth instance of the one listing refinement. The wire bound is `worldMax`, as for the refusals: a reached
+    World holds ≤ 4096 rows per relation and ≤ 256 relations per live parent, but the parents have no static
+    bound, so a static rows bound would restate the map bound, weaker.
+  - Refine chain: … `kernel/steps` → `kernel/rows` (KERNEL's `rowsFits E rows.toList`: kind, rel < 256,
+    key ≤ 128, limit ≤ 4096, width ≤ 128, count ≤ limit, sum ≤ cap < 2^64, amt < 2^64, value ≤ valueBytesMax,
+    ascending by key bytes) → `kernel/rows-headed` (`rowsHeaded`: every row has its head at the head's width,
+    every head's count and sum are its rows') → `kernel/rows-parented` (`rowsParented E trie rows`, which KERNEL-17 added to KERNEL-48 at CODEC-9's ask:
+    every relation's parent is a live cell; added from the vacuity read, the class of `kernel/refusals-disjoint`:
+    no fold reaches a relation under an absent or retired parent, since a head is born only under a cell its turn
+    creates and KERNEL-17's `dropHeads` removes a retired parent's heads) → `kernel/world-budget`.
+  - Every check reads the wire through `ofWire` BY NAME (`(ofWire x).height`, …), not by tuple position: the next
+    part added moves no check.
+  - `kernel/world-budget` reads `World.weight + allowance < 2^64`, and `World.weight` is now
+    `cellsWeight + rowsWeight` (KERNEL-16). The predicate's meaning moved with the weight; the tag moves anyway
+    with the wire, so no rename (CODEC-32's meta-critique).
+- **`World.CodecFits` gains ONE field**, `rows : RowsCodecFits E PD w.trie w.rows`, a structure with one field
+  per site: `listing` (kernel/row-key, kernel/row-leaf, kernel/row-order), `fits` (kernel/rows), `headed`
+  (kernel/rows-headed), `parented` (kernel/rows-parented). No existing projection moved.
+- **Carried** (KERNEL-46: rows are state, carried whole): `cells ‖ allowance ‖ height ‖ journal ‖ rows`, refined
+  `kernel/carried-journal` → `kernel/carried-rows` → `kernel/carried-rows-headed` →
+  `kernel/carried-rows-parented` → `kernel/carried`.
+  `Carried.CodecFits` became a structure (cells, allowance, height, journal, journalFits, rows) in the same move.
+  `carried_fits` reads the World's rows field. `carried_decode_rows`: an import never genesis-writes a Store whose
+  base the World codec would refuse `kernel/rows`, `kernel/rows-headed` or `kernel/rows-parented`.
+- **Order in bytes, at variable width** (`Codec.Proofs.RowOrder`, the one new proof):
+  - `compare_lt_iff_bits_differIn`: for two byte strings that differ at a byte inside both, `compare` is the order
+    of the first differing bit (which then lies inside both). `compare_lt_of_bits_at` generalizes CODEC-29's
+    lemma to unequal sizes.
+  - `rowKeyBytes_differIn`: two different keys within bounds differ at a byte inside both, because the rows key
+    codec is lawful, so no key's bytes begin another's (prefix-freedom is a consequence of `rowKey_lawfulOn`, not
+    a separate argument).
+  - `rows_separateOn` (KERNEL's, Kernel/Proofs/RowsSep.lean; Codec's twin deleted by CODEC-10) / `rows_sepAt`:
+    separation on the keys' DOMAIN. `Trie.Separates (rowSpec E)` over all
+    `RowSlot` is false (`byte8` truncates rel mod 256; a 256-byte key writes length 0; keys past 128 bytes run past
+    `rowDepth`); CODEC-9 reported it and KERNEL-48 now says "on its domain". The listing theorems got `_sep`
+    variants that take separation of the listing's keys (`trieListing_get_ok_sep` / `_refused_sep` /
+    `_ordered_sep`); the rows codec's decoded keys are in the domain by construction.
+  - `bitLt_rowSpec_iff`, `rowsTrie_get_ok` / `_refused` / `_ordered` over `RowBefore`; deployed `rowOrder_iff`,
+    `rowOrder_refuses`, `rowKeyBytes_inj`.
+- **Teeth** (Codec/Proofs/WorldTooth.lean, Sim, each plant with its accepted twin):
+  - `world_refuses_sum_past_cap` (one row of 41 under cap 40, `kernel/rows`) against `world_reads_sum_at_cap` (40);
+  - `world_refuses_uncounted_row` (`kernel/rows-headed`) against `world_reads_counted_row`;
+  - `world_refuses_orphan_relation` (no cell 1, `kernel/rows-parented`) against `world_reads_counted_row`;
+  - `world_reads_declared_relation` (a head with no rows);
+  - `rows_refuses_swapped_listing` (`kernel/row-order`) against `rows_reads_canonical_listing`;
+  - `rowKey_refuses_wide_key` (a length byte of 129, `pastBound 128 129`) against `rowKey_reads_widest_key` (any
+    128-byte key);
+  - carried: `carried_refuses_sum_past_cap` (`kernel/carried-rows`), `carried_refuses_uncounted_row`
+    (`-headed`), `carried_refuses_orphan_relation` (`-parented`), against `carried_reads_counted_row`;
+  - `rows_kindByte_needed` (KERNEL-17's ask): without the kind byte, the head of relation 7 under parent 1 and
+    that relation's row with the empty key are two in-domain keys whose bits agree everywhere, so
+    `rows_separateOn` rests on the kind byte.
+- **Vectors.** Thirteen new sites: kernel/row-key, row-leaf, row-act, row-touch, range-read, range-pin, row-order,
+  rows, rows-headed, rows-parented, carried-rows, carried-rows-headed, carried-rows-parented. The table holds 140
+  vectors over 48 sites (`--write` from main's table, then `--check` ok). Boundary pairs:
+  - `kernel/row-key`: a key of 128 bytes reads back, 129 is refused `pastBound 128 129` at its length byte;
+  - `kernel/range-read`: a prefix of 128 bytes, and 129 refused `pastBound`;
+  - `kernel/rows` and `kernel/carried-rows`: one row whose amount is the cap (40), and one past (41);
+  - `kernel/rows-headed` and `kernel/carried-rows-headed`: a head counting its one row, and counting two;
+  - `kernel/rows-parented` and `kernel/carried-rows-parented`: a relation under a live cell, and the same rows
+    without that cell.
+  Drawn Worlds and carried states put their relations only under their own live cells (`liveIds`).
+  ROOT's boundary pairs were named in kernel refusals (`keyWidth` at 128/129, `rangeTooLong` at k/k+1). The codec
+  cannot refuse those: `keyWidth` is a key not at its RELATION's width and `rangeTooLong` is a listing longer than
+  the signer's `most`, both judged against the World by admission. What the codec refuses is the wire bound
+  (`pastBound` past 128), and that is the pair in the table; `keyWidth` and `rangeTooLong` are KERNEL's teeth.
+
+- **Memory shape (CODEC-20).** maxrss under `lake env lean`: Codec/Proofs/Rows 0.75 GB, RowOrder 0.75, Kernel 0.75,
+  World 0.75, Carried 0.75, WorldTooth 1.13 (was 0.78; the rows teeth build Sim tries of depth 1304 by `decide +kernel`).
+
+**Flag day.**
+- Shapes that changed: the turn record (rows, ranges), the signed call (rowPins, ranges), the World wire (a rows
+  listing), the carried wire (a rows listing), `rowLeafBytes` (the value's length prefix) and `rangePinBytes` (a
+  four-byte count).
+- Tags that move (measured: exactly these rows changed under `--write`): `kernel/turn`, `kernel/unsigned`,
+  `kernel/call`, `kernel/step`, every World-wire site (kernel/journal, kernel/refusals, kernel/refusals-disjoint,
+  kernel/steps, kernel/world-budget), `kernel/carried-journal`, `kernel/carried`, `host/base/index-count`, and the
+  thirteen new sites. No other row of main's table changed. An old carried
+  export now refuses by its stamp (unlike CODEC-32, where it still imported).
+- Re-emitted: gates/codec-vectors.tsv (`--write` from main's table). Re-genesis: every Store (the roots digest gained
+  the rows root; the turn and call bytes moved).
+- Refuses to load: an old base (`shapeMismatch` by stamp), an old batch record, an old carried export.
+
+**Critique.**
+- (1) `rowsFits`'s ascending clause restates what `kernel/row-order` already enforces on a decoded listing (the
+  trie's order IS the bytes' order, `bitLt_rowSpec_iff`). It is KERNEL's predicate, checked as one; the cost is
+  one comparison per entry.
+- (2) That admission keeps `rowsFits` / `rowsHeaded` / `rowsParented` (`World.RowsOk`, `admit_rowsOk`,
+  `fold_rowsOk`, `head_sum`) is KERNEL-17's, in Kernel/Proofs/RowsHead.lean. HOST's export completeness
+  (`carriedFits_of_kept`) reads the rows off `Kept` through it. Until it lands, export re-reads its own file and
+  refuses rather than writes a bad one.
+- (3) `Unsigned.Fits` gained `rowPins` and `ranges`, and nothing proves an admitted call is in that domain. It
+  needs no proof: a call is only ever decoded from the wire, and the decoder refuses anything outside it.
+
+**Meta-critique.** The first plan for the kernel-functions vectors was a second table of function outputs keyed
+by an Emit-side label. That would have been a second detector with its own label discipline, and a label nobody
+bumps when the function changes. Proving each function equal to a codec's bytes made it an ordinary site: the tag
+moves when the shape moves, and the census already requires the theorem.
+
+## CODEC-34 · A reached World's rows are in the codec's domain (HOST-12's export completeness; CODEC-10, 2026-10-18, against KERNEL-17's `World.RowsOk`)
+
+**Decision.** `Codec.Kernel.rowsCodecFits_of_ok` (Codec/Proofs/RowsReached.lean): over a lawful digest codec
+writing a lawful `Env`'s bytes, a World with `RowsCanon E`, `RowsOk E` and at most `worldMax` listed rows has
+`RowsCodecFits E (fun _ => True) w.trie w.rows`. Deployed: `Codec.Deployed.rowsCodecFits_of_ok` (at
+`Receive.deployed_lawful`, `digestCodec_bytes`) and `Deployed.genesis_rowsCodecFits` (the premises meet at
+genesis) and `Deployed.fold_rowsCodecFits` (every World the deployed fold reaches from genesis, with
+RowsCanon and RowsOk discharged by KERNEL's `deployed_fold_rowsOk`; only the listing bound is the caller's). `RowsOk` hands over `rowFits` (hence both entry domains), `rowsHeaded` and `rowsParented`; the one
+field it does not is the listing's ascending key bytes, drawn from canonicity: `build_listing_iff` at
+`Trie.build_toList` gives bit order, `bitLt_rowSpec_iff` makes it `compare` order on the key bytes, and
+`toList_lt_of_compare_lt` (with `byteArray_toList_eq`) makes that the `List` order `ascendingBytes` decides.
+No new refine site, no tag moves, no vector moves.
+
+**Tooth.** `rowsCodecFits_needs_order`: two empty heads of one parent, swapped in one (non-canonical) leaf,
+pass `rowFits` and `rowsHeaded` and the length bound, and fit no `RowsCodecFits` for any `PD` and any cells;
+in order they pass `rowsFits`. Dropping the canonicity premise is refuted by order alone.
+
+**Also.** `rowsListing` (the rows listing codec) moved from Codec/Proofs/RowOrder.lean into Codec/World.lean
+(a proof module exported an abbrev: closure C3), and `rowsTrie` now refines it by name: one shape, not two.
+
+**Critique.** `hlen` stays the caller's: `RowsOk` bounds rows per relation, not the listing, since parents are
+not statically bounded. HOST discharges it at export (the writer refuses past `worldMax` as the reader does).
+Vacuity read (second agent): LAND; both its optional additions taken (the genesis instance, the tooth's note).

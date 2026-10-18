@@ -11,7 +11,7 @@ refines on it (CODEC's `World.CodecFits`).
 * `fold_budget_lt`: a fold keeps `weight + allowance < 2^64` (from `fold_conserves`);
 * `genesis_budget`, `carry_budget`: a checked genesis or carry starts below it;
 * `genesis_fold_budget_lt`, `carry_fold_budget_lt`: every World a genesis, or a carry of a
-  canonical slotted state (what the carried codec reads), reaches is below it;
+  canonical slotted state with canonical rows (what the carried codec reads), reaches is below it;
 * `deployed_budget_lt`: at the deployed codec, every World reached from a genesis, or from a carry of
   a World a genesis reached, with no premise.
 
@@ -31,9 +31,9 @@ variable {D : Type} [Ord D] [DecidableEq D] [Std.TransOrd D] [Std.LawfulEqOrd D]
 
 /-- **A fold keeps the budget below 2^64**: storage plus allowance never grows (`fold_conserves`). -/
 theorem fold_budget_lt {E : Env D} {w w' : World D} {l : List (Step D)} (hc : w.Canon E) (hs : w.Slotted E)
-    (hb : w.weight + w.allowance < 2 ^ 64) (h : World.fold E w l = .ok w') :
+    (hr : w.RowsCanon E) (hb : w.weight + w.allowance < 2 ^ 64) (h : World.fold E w l = .ok w') :
     w'.weight + w'.allowance < 2 ^ 64 := by
-  have := fold_conserves hc hs h
+  have := fold_conserves hc hs hr h
   omega
 
 omit [Std.TransOrd D] [Std.LawfulEqOrd D] in
@@ -58,7 +58,8 @@ theorem genesis_fold_budget_lt {X : Ctx D} {name nonce : ByteArray} {allowance :
   have hb := genesis_budget hg
   obtain ⟨_, rfl⟩ := genesis_ok.mp hg
   exact fold_budget_lt (receive_genesis_canon X name nonce allowance founders)
-    (receive_genesis_slotted X name nonce allowance founders) hb hl
+    (receive_genesis_slotted X name nonce allowance founders)
+    (receive_genesis_rowsCanon X name nonce allowance founders) hb hl
 
 omit [Std.TransOrd D] [Std.LawfulEqOrd D] in
 /-- A carried World's slots hold the leaves of their kinds when the exported one's did (the trie is the same). -/
@@ -67,12 +68,20 @@ theorem carry_slotted {X : Ctx D} {name nonce : ByteArray} {w w' : World D} (hs 
   obtain ⟨_, rfl⟩ := carry_ok.mp h
   exact hs
 
+omit [Std.TransOrd D] [Std.LawfulEqOrd D] [DecidableEq D] in
+/-- A carried World's rows are canonical when the exported one's were (the rows are the same). -/
+theorem carry_rowsCanon {X : Ctx D} {name nonce : ByteArray} {w w' : World D} (hr : w.RowsCanon X.env)
+    (h : carry X name nonce w.origin w.carried = .ok w') : w'.RowsCanon X.env := by
+  obtain ⟨_, rfl⟩ := carry_ok.mp h
+  exact hr
+
 /-- **Every World a checked carry reaches is below the budget**, given what the carried codec gives
-of the carried trie on import (canonical, every slot holding the leaf of its kind). -/
+of the carried tries on import (canonical, every slot holding the leaf of its kind; the rows
+canonical). -/
 theorem carry_fold_budget_lt {X : Ctx D} {name nonce : ByteArray} {f : D} {c : Carried D} {w w' : World D}
     {l : List (Step D)} (h : carry X name nonce f c = .ok w) (hc : w.Canon X.env) (hs : w.Slotted X.env)
-    (hl : World.fold X.env w l = .ok w') : w'.weight + w'.allowance < 2 ^ 64 :=
-  fold_budget_lt hc hs (carry_budget h) hl
+    (hr : w.RowsCanon X.env) (hl : World.fold X.env w l = .ok w') : w'.weight + w'.allowance < 2 ^ 64 :=
+  fold_budget_lt hc hs hr (carry_budget h) hl
 
 open Nanodregg.Codec.Deployed in
 /-- **Deployed: every World reached from a genesis or a carry has storage plus allowance below 2^64**,
@@ -92,6 +101,9 @@ theorem deployed_budget_lt (program : Program Digest) {name nonce : ByteArray} {
     fold_canon (receive_genesis_canon (ctx program) name nonce allowance founders) hl
   have hsl : w.Slotted (ctx program).env :=
     fold_slotted (receive_genesis_slotted (ctx program) name nonce allowance founders) hl
-  exact carry_fold_budget_lt (X := ctx program) hc (carry_canon hcan hc) (carry_slotted hsl hc) hl'
+  have hrc : w.RowsCanon (ctx program).env :=
+    fold_rowsCanon (receive_genesis_rowsCanon (ctx program) name nonce allowance founders) hl
+  exact carry_fold_budget_lt (X := ctx program) hc (carry_canon hcan hc) (carry_slotted hsl hc)
+    (carry_rowsCanon hrc hc) hl'
 
 end Nanodregg.Kernel.Receive

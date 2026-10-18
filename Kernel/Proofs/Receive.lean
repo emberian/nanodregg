@@ -21,21 +21,23 @@ theorem receive_wrongWorld {X : Ctx D} {w : World D} {c : Call D} (h : c.unsigne
     receive X w c = .error .wrongWorld := by
   simp [receive, req, h, bind, Except.bind]
 
-/-- A derived call named this World, and is the derivation through its pins. -/
+/-- A derived call named this World, and is the derivation through its pins and its rows. -/
 theorem receive_ok_with {X : Ctx D} {w : World D} {c : Call D} {t : Turn D}
     (h : receive X w c = .ok t) :
-    c.unsigned.world = w.origin ∧ receiveWith X (pinned X.env w c.unsigned.pins) c = .ok t := by
+    c.unsigned.world = w.origin ∧
+      receiveWith X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c = .ok t := by
   unfold receive at h
   simp only [except_bind_ok] at h
   obtain ⟨⟨⟩, hw, h⟩ := h
   rw [req_ok, decide_eq_true_eq] at hw
   exact ⟨hw, h⟩
 
-/-- **Consent determinism.** A derivation depends only on the World's identity and the cells the
-caller pinned: two Worlds that agree there derive the same Turn (or the same refusal) from the
-same call. -/
+/-- **Consent determinism.** A derivation depends only on the World's identity, the cells the
+caller pinned and the rows it observed: two Worlds that agree there derive the same Turn (or the
+same refusal) from the same call. -/
 theorem receive_congr {X : Ctx D} {w₁ w₂ : World D} {c : Call D} (ho : w₁.origin = w₂.origin)
-    (agree : ∀ p ∈ c.unsigned.pins, w₁.live X.env p.1 = w₂.live X.env p.1) :
+    (agree : ∀ p ∈ c.unsigned.pins, w₁.live X.env p.1 = w₂.live X.env p.1)
+    (rows : rowView X.env w₁ c.unsigned = rowView X.env w₂ c.unsigned) :
     receive X w₁ c = receive X w₂ c := by
   have hv : pinned X.env w₁ c.unsigned.pins = pinned X.env w₂ c.unsigned.pins := by
     funext x
@@ -46,13 +48,13 @@ theorem receive_congr {X : Ctx D} {w₁ w₂ : World D} {c : Call D} (ho : w₁.
       simp only [hx, if_true]
       rw [← hpx', agree p hp]
     · simp only [hx]; rfl
-  unfold receive; rw [hv, ho]
+  unfold receive; rw [hv, ho, rows]
 
 /-- A sealed Turn pays exactly its weight, within the signed ceiling, and carries the caller's
 pins as its touches, its window, its call and the receiver's nullifiers; every effect is on a
 pinned cell. -/
 theorem sealTurn_ok {X : Ctx D} {c : Call D} {cr : List (D × Cell)} {efs : List (D × Act)}
-    {ns : List D} {t : Turn D} (h : sealTurn X c cr efs ns = .ok t) :
+    {ns : List D} {rs : List (RowSlot D × RowAct)} {t : Turn D} (h : sealTurn X c cr efs ns rs = .ok t) :
     t.charge = t.weight ∧ t.charge ≤ c.unsigned.maxCharge ∧
       t.touches = touchesOf c.unsigned.pins efs ∧
       t.event = X.callBytes c ∧ t.txId = txIdOf X c ∧ t.notBefore = c.unsigned.notBefore ∧
@@ -60,7 +62,7 @@ theorem sealTurn_ok {X : Ctx D} {c : Call D} {cr : List (D × Cell)} {efs : List
       (∀ e ∈ efs, ∃ p ∈ c.unsigned.pins, p.1 = e.1) := by
   unfold sealTurn at h
   simp only [except_bind_ok] at h
-  obtain ⟨⟨⟩, hp, h⟩ := h
+  obtain ⟨⟨⟩, hp, _, _, h⟩ := h
   split at h
   · simp only [Except.ok.injEq] at h
     subst h
@@ -97,10 +99,11 @@ theorem touchesOf_pins (pins : List (D × D)) (efs : List (D × Act)) :
 
 /-- **One seal per call** (KERNEL-28 (c)). A derived Turn is the ONE seal of the call's whole
 Draft: what its Body derived at the signer, and every call of its tree. -/
-theorem receiveWith_sealed {X : Ctx D} {look : Pinned D} {c : Call D} {t : Turn D}
-    (h : receiveWith X look c = .ok t) :
+theorem receiveWith_sealed {X : Ctx D} {look : Pinned D} {rv : RowView D} {c : Call D} {t : Turn D}
+    (h : receiveWith X look rv c = .ok t) :
     X.verify c.unsigned.key (X.callMessage c.unsigned) c.signature = true ∧
-      ∃ d, derive X look c = .ok d ∧ sealTurn X c d.creates d.effects d.nullifiers = .ok t := by
+      ∃ d, derive X look rv c = .ok d ∧
+        sealTurn X c d.creates d.effects d.nullifiers d.rows = .ok t := by
   unfold receiveWith at h
   simp only [except_bind_ok] at h
   obtain ⟨⟨⟩, hs, ⟨⟩, _, h⟩ := h
@@ -126,8 +129,8 @@ theorem receive_ok {X : Ctx D} {w : World D} {c : Call D} {t : Turn D}
   exact ⟨hv, h1, h2, by rw [h3]; exact touchesOf_pins _ _, h4, h5, h6, h7⟩
 
 /-- Every call but a rotation is signed by its member's current key. -/
-theorem receiveWith_key {X : Ctx D} {look : Pinned D} {c : Call D} {t : Turn D}
-    (h : receiveWith X look c = .ok t) : keyRule look c.unsigned = .ok () := by
+theorem receiveWith_key {X : Ctx D} {look : Pinned D} {rv : RowView D} {c : Call D} {t : Turn D}
+    (h : receiveWith X look rv c = .ok t) : keyRule look c.unsigned = .ok () := by
   unfold receiveWith at h
   simp only [except_bind_ok] at h
   obtain ⟨⟨⟩, _, ⟨⟩, hk, _⟩ := h

@@ -2,8 +2,8 @@
 # Hosting.Proofs.Package — the generated package computes the lifecycle
 
 Each evaluation theorem is the kernel running LANG's machine (`Lang.eval`) on a field of the package
-BODY, applied as `Lang.Program` applies it (`apply3` over the `Data.toVal` values of decoded state
-and of the request), over every phase, event and act. `phase` is a sum of empty records, so a
+BODY, applied as `Lang.Program` applies it (a law by `apply3` over the `Data.toVal` values of
+decoded state and of the request, a method by `apply4` with its rows first: `rec {}`, it reads none), over every phase, event and act. `phase` is a sum of empty records, so a
 decoded state holds one of exactly these values: the case split is exhaustive by the type.
 
 LANG's `Proofs.Std` proves `machineLaw`'s spec in general (`machine_birth`, `machine_invoke`,
@@ -69,6 +69,10 @@ private def rqD (occasion : Data) (principal : ByteArray := .empty) : Data :=
 private def bodyAt (ℓ : Label) : Term :=
   .app (.app (.app (.get body ℓ) (.var 2)) (.var 1)) (.var 0)
 
+/-- Method `ℓ` of the package body applied to its four bound values (rows first, LANG-49). -/
+private def methodAt (ℓ : Label) : Term :=
+  .app (.app (.app (.app (.get body ℓ) (.var 3)) (.var 2)) (.var 1)) (.var 0)
+
 private def lawOn (ℓ : Label) (rq new old : Data) : Outcome :=
   eval [] fuel (bodyAt ℓ) [rq.toVal, new.toVal, old.toVal]
 
@@ -78,8 +82,8 @@ private def bA : ByteArray := "a".toUTF8
 /-- Field `f` of the result half `half` (`state` or `calls`) of method `e`, run from a state of
 kind `k`, phase `p`, entry `bE`. -/
 private def resultField (half : Label) (e : Event) (k : Kind) (p : Phase) (f : Label) : Outcome :=
-  eval [] fuel (.get (.get (bodyAt e.label) half) f)
-    [(rqD (invokeD e.index) bA).toVal, unitD.toVal, (stD p k bE).toVal]
+  eval [] fuel (.get (.get (methodAt e.label) half) f)
+    [(rqD (invokeD e.index) bA).toVal, unitD.toVal, (stD p k bE).toVal, unitD.toVal]
 
 /-- Field `f` of the state method `e` writes. -/
 private def methodField (e : Event) (k : Kind) (p : Phase) (f : Label) : Outcome :=
@@ -87,8 +91,8 @@ private def methodField (e : Event) (k : Kind) (p : Phase) (f : Label) : Outcome
 
 /-- The calls row of method `e`, run from a state of kind `k`, phase `p`, entry `bE`. -/
 private def resultCalls (e : Event) (k : Kind) (p : Phase) : Outcome :=
-  eval [] fuel (.get (bodyAt e.label) "calls")
-    [(rqD (invokeD e.index) bA).toVal, unitD.toVal, (stD p k bE).toVal]
+  eval [] fuel (.get (methodAt e.label) "calls")
+    [(rqD (invokeD e.index) bA).toVal, unitD.toVal, (stD p k bE).toVal, unitD.toVal]
 
 /-- The calls row is the empty record. -/
 private def emptyIs : Outcome → Bool
@@ -147,7 +151,7 @@ lifecycle step moves the phase and nothing else), and `lifecycle_checks` holds i
 theorem method_no_calls :
     (Grain.lifecycle?.toOption.map fun p => Event.all.all fun e =>
       decide (((match p.iface with | .record r => Row.find? e.label r | _ => none).bind
-        (methodSig p.state)) = some (unit, []))) = some true := by
+        (methodSig p.state p.rels)) = some ⟨unit, [], [], 0⟩)) = some true := by
   decide +kernel
 
 /-- And every method's calls row evaluates to the empty record, for every kind, phase and event. -/

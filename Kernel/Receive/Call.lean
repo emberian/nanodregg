@@ -95,6 +95,11 @@ structure Unsigned (D : Type) where
   pins : List (D × D)
   maxCharge : Nat
   body : Body D
+  /-- the row slots the caller observed (KERNEL-48, LANG-49): a point read's or an upsert's or a
+  retract's row, each at the digest the caller saw (`rowPin`) -/
+  rowPins : List (RowSlot D × D) := []
+  /-- the range reads the caller observed (the second pin kind), each at its listing's pin -/
+  ranges : List (RangeRead D) := []
   deriving DecidableEq
 
 structure Call (D : Type) where
@@ -172,6 +177,17 @@ inductive Refusal (D : Type)
   | tooManyCalls
   /-- a run reported more ticks than it was given: the kernel's assertion where `used` enters -/
   | overTicks
+  /-- a run read a row of relation `rel` under `parent` the caller did not pin (LANG-49) -/
+  | rowUnpinned (parent : D) (rel : Nat)
+  /-- a run read a range of relation `rel` under `parent` the caller did not sign -/
+  | rangeUnpinned (parent : D) (rel : Nat)
+  /-- a signed range holds more rows than its `most` (refused, never truncated) -/
+  | rangeTooLong (parent : D)
+  /-- a method returned a row edit under an object other than its own: the kernel's assertion
+  where row edits enter (law 4) -/
+  | rowParent (obj : D)
+  /-- a receiver gave one row slot two effects -/
+  | duplicateRow (parent : D)
   deriving DecidableEq, Repr
 
 /-- The refusal's name on the wire (law 7): its constructor's, arguments dropped
@@ -214,9 +230,28 @@ def Refusal.name {D : Type} : Refusal D → String
   | .revisited _ => "revisited"
   | .tooManyCalls => "tooManyCalls"
   | .overTicks => "overTicks"
+  | .rowUnpinned _ _ => "rowUnpinned"
+  | .rangeUnpinned _ _ => "rangeUnpinned"
+  | .rangeTooLong _ => "rangeTooLong"
+  | .rowParent _ => "rowParent"
+  | .duplicateRow _ => "duplicateRow"
 
 /-- A receiver's only access to state: live cells at pinned ids. -/
 abbrev Pinned (D : Type) := D → Except (Refusal D) (Option Cell)
+
+/-- A receiver's only access to rows (LANG-49, KERNEL-48): the caller's row pins under
+`(parent, rel)`, in pin order, as each row's key bytes and its current leaf; and the caller's
+signed ranges under `(parent, rel)`, in signed order, each as its prefix, its `most` and its
+current listing (`rangeTooLong` past its `most`: refused, never truncated). A run reads no other
+row. -/
+structure RowView (D : Type) where
+  points : D → Nat → List (ByteArray × Option RowLeaf)
+  ranges : D → Nat → Except (Refusal D) (List (ByteArray × Nat × List (RowSlot D × RowLeaf)))
+
+/-- The parent and relation a row slot is under. -/
+def _root_.Nanodregg.Kernel.RowSlot.under {D : Type} : RowSlot D → D × Nat
+  | .head p rel => (p, rel)
+  | .row k => (k.parent, k.rel)
 
 /-- Which act the laws in force are judging. A law sees `old` and `new` state; without the
 occasion a birth (`create` judges the seed as `old = new`) and a law replacement (`law` judges the
@@ -261,9 +296,14 @@ structure Program (D : Type) where
   judge : Pinned D → (pkg : Option D) → (laws : List D) → (old new : Slots) → Req D →
     Except (Refusal D) Unit
   /-- run a method: the new state slots (the receiver then judges them), the calls it makes as
-  the object (LEDGER-5, LANG-23), and the ticks it used of `budget` (LEDGER-8 (e)) -/
-  run : Pinned D → (pkg : D) → (state : Slots) → (method : Nat) → (args : ByteArray) → Req D →
-    (budget : Nat) → Except (Refusal D) (Slots × List (Body D) × Nat)
+  the object (LEDGER-5, LANG-23), its row edits (LANG-49: inserts, upserts and retracts under the
+  object's own relations, each already judged by its relation's guard), and the ticks it used of
+  `budget` (LEDGER-8 (e)). It reads rows only through the `RowView`. -/
+  run : Pinned D → RowView D → (pkg : D) → (state : Slots) → (method : Nat) → (args : ByteArray) →
+    Req D → (budget : Nat) → Except (Refusal D) (Slots × List (Body D) × List (RowSlot D × RowAct) × Nat)
+  /-- the relations an object of package `pkg` born at `self` holds, as the `declare` acts of
+  their heads in relation-index order (LANG-49, KERNEL-46 amendment 2) -/
+  rels : Pinned D → (pkg : D) → (self : D) → Except (Refusal D) (List RowAct)
 
 /-- What the receive layer needs beyond the kernel's `Env`: the call's canonical bytes (the
 signed message and the logged event), the digest decoder, the verifier, the program. CODEC
@@ -327,6 +367,22 @@ variable {D : Type} [Ord D]
 def pinned [DecidableEq D] (E : Env D) (w : World D) (pins : List (D × D)) : Pinned D := fun c =>
   if pins.any (fun p => p.1 = c) then .ok (w.live E c) else .error (.unpinned c)
 
+/-- The rows a caller observed, on `w`: its pinned rows' leaves, and its signed ranges' current
+listings at their relations' widths (the pre-state `rangeRows` admission recomputes). -/
+def rowView [DecidableEq D] (E : Env D) (w : World D) (u : Unsigned D) : RowView D where
+  points parent rel := u.rowPins.filterMap fun p =>
+    match p.1 with
+    | .row k => if k.parent = parent ∧ k.rel = rel then some (k.k, rowAt E w.rows p.1) else none
+    | .head .. => none
+  ranges parent rel :=
+    (u.ranges.filter fun q => q.parent = parent ∧ q.rel = rel).mapM fun q =>
+      match headOf E w.rows parent rel with
+      | none => .error (.rangeUnpinned parent rel)
+      | some (_, _, _, _, width, _) =>
+        match rangeRows E w.rows parent rel width q.pre q.most with
+        | none => .error (.rangeTooLong parent)
+        | some l => .ok (q.pre, q.most, l)
+
 def reqOf (u : Unsigned D) (self principal : D) (occasion : Occasion D) : Req D :=
   { agent := u.member, principal, self, notBefore := u.notBefore, validUntil := u.validUntil, occasion }
 
@@ -389,9 +445,11 @@ structure Draft (D : Type) where
   creates : List (D × Cell)
   effects : List (D × Act)
   nullifiers : List D
+  /-- row effects (LANG-49): a create's `declare`s, a run's inserts, upserts and retracts -/
+  rows : List (RowSlot D × RowAct) := []
 
 def Draft.append (a b : Draft D) : Draft D :=
-  ⟨a.creates ++ b.creates, a.effects ++ b.effects, a.nullifiers ++ b.nullifiers⟩
+  ⟨a.creates ++ b.creates, a.effects ++ b.effects, a.nullifiers ++ b.nullifiers, a.rows ++ b.rows⟩
 
 /-- Where in a call's tree a receiver runs (LEDGER-8 (b)): `actor` is whose authority it spends
 (the signer at the top, the calling object for an effect, KERNEL-28 (b)); `base` is the fresh
@@ -417,20 +475,50 @@ def Body.kindName : Body D → String
   | .grant .. => "grant" | .revoke .. => "revoke" | .issue .. => "issue"
   | .account .. => "account" | .transfer .. => "transfer" | .credit .. => "credit"
 
+/-- What row effects do to row slot `s`: `keep` when there is none. -/
+def rowActFor [DecidableEq D] (rows : List (RowSlot D × RowAct)) (s : RowSlot D) : RowAct :=
+  match rows.find? (fun e => e.1 = s) with
+  | some (_, a) => a
+  | none => .keep
+
+/-- The first element that occurs again later (at most `Bounds.rowsMax` row effects reach it). -/
+def dupBy {α : Type} [DecidableEq α] : List α → Option α
+  | [] => none
+  | x :: xs => if xs.contains x then some x else dupBy xs
+
+/-- A row act that needs no pin: a birth (`insert` of a row, `declare` of a head). -/
+def _root_.Nanodregg.Kernel.RowAct.unpinned : RowAct → Bool
+  | .insert .. | .declare .. => true
+  | _ => false
+
+/-- The caller's row pins as row touches, each with its act, then every unpinned row effect
+(an insert or a declare) with no pin. A pinned effect on an unpinned slot is `rowUnpinned`; one
+slot given two effects is `duplicateRow`. -/
+def rowTouchesOf [Ord D] [DecidableEq D] (pins : List (RowSlot D × D)) (rows : List (RowSlot D × RowAct)) :
+    Except (Refusal D) (List (RowTouch D)) := do
+  forEx (fun e => req (e.2.unpinned || pins.any fun p => p.1 = e.1) (.rowUnpinned e.1.under.1 e.1.under.2)) rows
+  match dupBy (rows.map Prod.fst) with
+  | some s => throw (.duplicateRow s.under.1)
+  | none => pure ()
+  pure (pins.map (fun p => { slot := p.1, seen := some p.2, act := rowActFor rows p.1 }) ++
+    (rows.filter fun e => !(pins.any fun p => p.1 = e.1)).map fun e => { slot := e.1, seen := none, act := e.2 })
+
 /-- The Turn a call's effects become: its births at the ids the receiver computed, the caller's window, the caller's pins as touches carrying
 the effects (a receiver writes or retires only cells it read, so only pinned ones: `unpinned`
 otherwise; at most one effect per cell: `duplicateEffect`), the receiver's nullifiers, the call as
 the event, the exact charge (refused above the signed ceiling). -/
 def sealTurn [DecidableEq D] (X : Ctx D) (c : Call D) (creates : List (D × Cell))
-    (effects : List (D × Act)) (nullifiers : List D) : Except (Refusal D) (Turn D) := do
+    (effects : List (D × Act)) (nullifiers : List D) (rows : List (RowSlot D × RowAct) := []) :
+    Except (Refusal D) (Turn D) := do
   let pins := c.unsigned.pins
   effectsPinned pins effects
+  let rts ← rowTouchesOf c.unsigned.rowPins rows
   let t0 : Turn D :=
     { txId := txIdOf X c, notBefore := c.unsigned.notBefore, validUntil := c.unsigned.validUntil,
       touches := touchesOf pins effects,
       creates,
       nullifiers, charge := 0,
-      event := X.callBytes c }
+      event := X.callBytes c, rows := rts, ranges := c.unsigned.ranges }
   let t := { t0 with charge := t0.weight }
   if t.charge ≤ c.unsigned.maxCharge then .ok t else .error (.overPrice t.charge)
 

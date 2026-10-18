@@ -3,9 +3,9 @@ import Codec.Kernel
 /-!
 # Codec.World — the canonical bytes of a whole World (the checkpoint, HOST-14's base)
 
-`trie ‖ journal ‖ refusals ‖ height u64 ‖ steps u64 ‖ chain ‖ allowance u64 ‖ origin`. The World's three maps are tries
+`trie ‖ journal ‖ refusals ‖ rows ‖ height u64 ‖ steps u64 ‖ chain ‖ allowance u64 ‖ origin`. The World's four maps are tries
 (KERNEL-23 cells and spent nullifiers; KERNEL-41 the journal, under `journalSpec`; KERNEL-44 the
-refusals, under `refusalSpec`), and each is written
+refusals, under `refusalSpec`; KERNEL-48 the rows, under `rowSpec`), and each is written
 as its listing (`Trie.T.toList`, left to right by key bits) and read back by `Trie.build` over that
 listing (`listingAccept`): every node hash is recomputed, none is ever read from the wire (CODEC-19), and
 a listing is refused by name unless it is exactly the rebuilt trie's own (no key twice in a leaf).
@@ -19,7 +19,9 @@ the contents. The World is refused `kernel/journal` unless its journal is the wi
 `journalFits`, every entry at or below the height and inside the window, one entry per height), so a
 decoded base carries `World.JournalOk` (`world_decode_journalOk`); `kernel/refusals` unless its refusals
 are the window's (KERNEL-47's `refusalsFits`), so it carries `World.RefusalsOk`
-(`world_decode_refusalsOk`); and `kernel/steps` unless its height is at most its step count.
+(`world_decode_refusalsOk`); `kernel/steps` unless its height is at most its step count; and
+`kernel/rows` / `kernel/rows-headed` / `kernel/rows-parented` unless its rows fit, every head counts its
+rows and every relation's parent is live (KERNEL-48).
 `world.size w` is the encoded length, computed from the entries without encoding (HOST's
 `worldBytesMax`).
 -/
@@ -139,31 +141,50 @@ def refusalsTrie [DecidableEq D] (E : Env D) (dc : Stream D) : Stream (Refusals 
   refine "kernel/refusal-order" (rawList worldMax (product (refusalSlot dc) refusalLeaf))
     (listingAccept (refusalSpec E)) Trie.T.toList
 
-/-- The World's contents, in canonical order: the three tries, the height, the step count, the
-chain, the allowance, the origin. -/
-abbrev WorldWire (D : Type) := Cells D × Journal D × Refusals D × Nat × Nat × D × Nat × D
+/-! ## The rows (KERNEL-46/48)
+
+The fourth trie: relations' heads and rows under their parents, keyed and leafed by `rowKey` and
+`rowLeaf`, whose bytes are KERNEL's `rowKeyBytes` and `rowLeafBytes` (`Codec.Proofs.Rows`). Written as
+its listing and read back by `build` (`kernel/row-order`); which key holds which leaf, the bounds and the
+heads' counts are the World's `kernel/rows` and `kernel/rows-headed` refusals. -/
+
+/-- The rows listing codec the World and carried wires read (`rowsTrie` refines it). -/
+abbrev rowsListing (dc : Stream D) : Stream (List (RowSlot D × RowLeaf)) :=
+  rawList worldMax (product (rowKey dc) rowLeaf)
+
+/-- The rows' trie, as its listing (`kernel/row-order`): at most `worldMax` entries on the wire (a
+reached World holds at most `Bounds.rowsPerRelationMax` rows per relation, 256 relations per live
+parent: the parents are not statically bounded, so the wire bound is the map bound, as the refusals'). -/
+def rowsTrie [DecidableEq D] (E : Env D) (dc : Stream D) : Stream (Rows D) :=
+  refine "kernel/row-order" (rowsListing dc) (listingAccept (rowSpec E)) Trie.T.toList
+
+/-- The World's contents, in canonical order: the four tries, the height, the step count, the
+chain, the allowance, the origin. Every check below reads them through `ofWire`, by name, so a part
+added later moves no check. -/
+abbrev WorldWire (D : Type) := Cells D × Journal D × Refusals D × Rows D × Nat × Nat × D × Nat × D
 
 def worldWire [DecidableEq D] (E : Env D) (dc : Stream D) : Stream (WorldWire D) :=
-  product (cells E dc) (product (journalTrie E dc) (product (refusalsTrie E dc)
-    (product nat64 (product nat64 (product dc (product nat64 dc))))))
+  product (cells E dc) (product (journalTrie E dc) (product (refusalsTrie E dc) (product (rowsTrie E dc)
+    (product nat64 (product nat64 (product dc (product nat64 dc)))))))
+
+def toWire (w : World D) : WorldWire D :=
+  (w.trie, w.journal, w.refusals, w.rows, w.height, w.steps, w.chain, w.allowance, w.origin)
+
+def ofWire (x : WorldWire D) : World D :=
+  { trie := x.1, journal := x.2.1, refusals := x.2.2.1, rows := x.2.2.2.1, height := x.2.2.2.2.1,
+    steps := x.2.2.2.2.2.1, chain := x.2.2.2.2.2.2.1, allowance := x.2.2.2.2.2.2.2.1, origin := x.2.2.2.2.2.2.2.2 }
 
 /-- The World's contents, refused by name unless the journal is the window's (KERNEL-39). -/
 def journalWire [DecidableEq D] (E : Env D) (dc : Stream D) : Stream (WorldWire D) :=
   refine "kernel/journal" (worldWire E dc)
-    (fun x => if journalFits x.2.2.2.1 x.2.1.toList then some x else none) id
+    (fun x => if journalFits (ofWire x).height (ofWire x).journal.toList then some x else none) id
 
 /-- The World's contents, refused by name unless its refusals are the window's (KERNEL-47's
 `refusalsFits`: each key holds the leaf of its kind, refused calls inside their kept window, counts for
 the current window and within `Bounds.refusalsPerWindow`). -/
 def refusalsWire [DecidableEq D] (E : Env D) (dc : Stream D) : Stream (WorldWire D) :=
   refine "kernel/refusals" (journalWire E dc)
-    (fun x => if refusalsFits x.2.2.2.1 x.2.2.1.toList then some x else none) id
-
-def toWire (w : World D) : WorldWire D :=
-  (w.trie, w.journal, w.refusals, w.height, w.steps, w.chain, w.allowance, w.origin)
-
-def ofWire (x : WorldWire D) : World D :=
-  ⟨x.1, x.2.1, x.2.2.1, x.2.2.2.1, x.2.2.2.2.1, x.2.2.2.2.2.1, x.2.2.2.2.2.2.1, x.2.2.2.2.2.2.2⟩
+    (fun x => if refusalsFits (ofWire x).height (ofWire x).refusals.toList then some x else none) id
 
 /-- The World's contents, refused by name unless no transaction id is both recorded refused and
 journaled (KERNEL's `refusalsDisjoint`; a fold never reaches such a World, `fold_refusalsDisjoint`):
@@ -177,18 +198,43 @@ height (KERNEL's `fold_height_le_steps`: every admitted Turn is a step, a refusa
 advance the height; genesis starts both at 0, a carry both at the carried height). -/
 def stepsWire [DecidableEq D] (E : Env D) (dc : Stream D) : Stream (WorldWire D) :=
   refine "kernel/steps" (disjointWire E dc)
-    (fun x => if x.2.2.2.1 ≤ x.2.2.2.2.1 then some x else none) id
+    (fun x => if (ofWire x).height ≤ (ofWire x).steps then some x else none) id
 
+/-- The World's contents, refused by name unless every rows entry fits (KERNEL-48's `rowsFits`: each
+key holds the leaf of its kind, a relation below 256, a key of at most `Bounds.keyBytesMax` bytes, a
+head's limit at most `Bounds.rowsPerRelationMax`, its width at most `Bounds.keyBytesMax`, its count at
+most its limit, its sum at most its cap below 2^64, a row's amount below 2^64 and its value at most
+`Bounds.valueBytesMax`; the listing strictly ascending by `rowKeyBytes`). -/
+def rowsWire [DecidableEq D] (E : Env D) (dc : Stream D) : Stream (WorldWire D) :=
+  refine "kernel/rows" (stepsWire E dc)
+    (fun x => if rowsFits E (ofWire x).rows.toList then some x else none) id
+
+/-- The World's contents, refused by name unless every row has its head, at the head's width, and
+every head counts and sums exactly its rows (KERNEL-48's `rowsHeaded`, the decode-side twin of
+`head_sum`). -/
+def headedWire [DecidableEq D] (E : Env D) (dc : Stream D) : Stream (WorldWire D) :=
+  refine "kernel/rows-headed" (rowsWire E dc)
+    (fun x => if rowsHeaded (ofWire x).rows.toList then some x else none) id
+
+/-- The World's contents, refused by name unless every relation's parent is a live cell (KERNEL-48's
+`rowsParented`: a head is born only under a parent its turn creates, a parent's heads go when it is
+retired, so no fold reaches a relation under an absent or retired parent; rows need their head, so the
+heads suffice). -/
+def parentedWire [DecidableEq D] (E : Env D) (dc : Stream D) : Stream (WorldWire D) :=
+  refine "kernel/rows-parented" (headedWire E dc)
+    (fun x => if rowsParented E (ofWire x).trie (ofWire x).rows then some x else none) id
 
 /-- The checkpoint: the World's parts, in canonical order, refused `kernel/journal` unless its journal
 is the window's, `kernel/refusals` unless its refusals are, `kernel/refusals-disjoint` unless no
 transaction id is both refused and journaled, `kernel/steps` unless its height is at most
-its step count, and `kernel/world-budget` unless its storage plus allowance is below 2^64 (the bound genesis
-and carry check and admission conserves, KERNEL's `fold_budget_lt`; past it a retirement's credit
-would carry the allowance out of its `u64`, cv 01a14ba9-cbf4). -/
+its step count, `kernel/rows` unless every rows entry fits, `kernel/rows-headed` unless every head
+counts its rows, `kernel/rows-parented` unless every relation's parent is live, and `kernel/world-budget` unless its storage (cells and rows, `World.weight`) plus
+allowance is below 2^64 (the bound genesis and carry check and admission conserves, KERNEL's
+`fold_budget_lt`; past it a retirement's credit would carry the allowance out of its `u64`, cv
+01a14ba9-cbf4). -/
 def world [DecidableEq D] (E : Env D) (dc : Stream D) : Stream (World D) :=
-  refine "kernel/world-budget" (stepsWire E dc)
-    (fun x => if cellsWeight x.1 + x.2.2.2.2.2.2.1 < 2 ^ 64 then some (ofWire x) else none) toWire
+  refine "kernel/world-budget" (parentedWire E dc)
+    (fun x => if (ofWire x).weight + (ofWire x).allowance < 2 ^ 64 then some (ofWire x) else none) toWire
 
 /-- A recorded refusal as the log carries it (KERNEL-44): transaction id, signer, window, code, and the
 signed call's bytes (at most `callMax`, KERNEL's `checkRefusedBounds`), which the follower decodes and
@@ -219,31 +265,53 @@ derivable and not written). -/
 def batch (max : Nat) (dc : Stream D) : Stream (List (Step D × D)) :=
   rawList max (product (step dc) dc)
 
-/-! ## The carried state (CODEC-22, KERNEL-29)
+/-! ## The carried state (CODEC-22, KERNEL-29, KERNEL-48)
 
-`trie ‖ allowance u64 ‖ height u64 ‖ journal`: both tries as their listings (the cells' `kernel/leaf-fit`
-and `kernel/trie-order` refusals, the journal's `kernel/journal-order`), refused `kernel/carried-journal`
-unless the journal is the window's at the carried height. An export stamps the shape's
-tag; the import compares it before decoding. -/
+`trie ‖ allowance u64 ‖ height u64 ‖ journal ‖ rows`: the three tries as their listings (the cells'
+`kernel/leaf-fit` and `kernel/trie-order` refusals, the journal's `kernel/journal-order`, the rows'
+`kernel/row-order`), refused `kernel/carried-journal` unless the journal is the window's at the carried
+height, `kernel/carried-rows` unless every rows entry fits, `kernel/carried-rows-headed` unless every
+head counts its rows, and `kernel/carried-rows-parented` unless every relation's parent is a live cell. An export stamps the shape's tag; the import compares it before decoding. -/
 
 /-- The carried state's contents, in canonical order. -/
-abbrev CarriedWire (D : Type) := Cells D × Nat × Nat × Journal D
+abbrev CarriedWire (D : Type) := Cells D × Nat × Nat × Journal D × Rows D
 
 def carriedWire [DecidableEq D] (E : Env D) (dc : Stream D) : Stream (CarriedWire D) :=
-  product (cells E dc) (product nat64 (product nat64 (journalTrie E dc)))
+  product (cells E dc) (product nat64 (product nat64 (product (journalTrie E dc) (rowsTrie E dc))))
 
-def carriedToWire (c : Carried D) : CarriedWire D := (c.trie, c.allowance, c.height, c.journal)
+def carriedToWire (c : Carried D) : CarriedWire D := (c.trie, c.allowance, c.height, c.journal, c.rows)
 
-def carriedOfWire (x : CarriedWire D) : Carried D := ⟨x.1, x.2.1, x.2.2.1, x.2.2.2⟩
+def carriedOfWire (x : CarriedWire D) : Carried D :=
+  { trie := x.1, allowance := x.2.1, height := x.2.2.1, journal := x.2.2.2.1, rows := x.2.2.2.2 }
 
 /-- The carried state's contents, refused by name unless the journal is the window's at the carried
 height (KERNEL-39's `journalFits`, as the World's `kernel/journal`; HOST-11's find): a carried file with
 a future or stale entry never reaches `importWorld`. -/
 def carriedJournalWire [DecidableEq D] (E : Env D) (dc : Stream D) : Stream (CarriedWire D) :=
   refine "kernel/carried-journal" (carriedWire E dc)
-    (fun x => if journalFits x.2.2.1 x.2.2.2.toList then some x else none) id
+    (fun x => if journalFits (carriedOfWire x).height (carriedOfWire x).journal.toList then some x else none) id
 
+/-- The carried state's contents, refused by name unless every rows entry fits (`rowsFits`, as the
+World's `kernel/rows`). -/
+def carriedRowsWire [DecidableEq D] (E : Env D) (dc : Stream D) : Stream (CarriedWire D) :=
+  refine "kernel/carried-rows" (carriedJournalWire E dc)
+    (fun x => if rowsFits E (carriedOfWire x).rows.toList then some x else none) id
+
+/-- The carried state's contents, refused by name unless every head counts its rows (`rowsHeaded`,
+as the World's `kernel/rows-headed`). -/
+def carriedHeadedWire [DecidableEq D] (E : Env D) (dc : Stream D) : Stream (CarriedWire D) :=
+  refine "kernel/carried-rows-headed" (carriedRowsWire E dc)
+    (fun x => if rowsHeaded (carriedOfWire x).rows.toList then some x else none) id
+
+/-- The carried state's contents, refused by name unless every relation's parent is a live carried
+cell (`rowsParented`, as the World's `kernel/rows-parented`). -/
+def carriedParentedWire [DecidableEq D] (E : Env D) (dc : Stream D) : Stream (CarriedWire D) :=
+  refine "kernel/carried-rows-parented" (carriedHeadedWire E dc)
+    (fun x => if rowsParented E (carriedOfWire x).trie (carriedOfWire x).rows then some x else none) id
+
+/-- The carried state (KERNEL-48: it carries the rows, so its shape and tag moved; an export of the
+old shape refuses by its stamp). -/
 def carried [DecidableEq D] (E : Env D) (dc : Stream D) : Stream (Carried D) :=
-  refine "kernel/carried" (carriedJournalWire E dc) (fun x => some (carriedOfWire x)) carriedToWire
+  refine "kernel/carried" (carriedParentedWire E dc) (fun x => some (carriedOfWire x)) carriedToWire
 
 end Nanodregg.Codec.Kernel

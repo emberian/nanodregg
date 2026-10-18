@@ -39,6 +39,64 @@ structure Touch (D : Type) where
   act : Act
   deriving DecidableEq
 
+/-! ## Rows (KERNEL-46, LANG-44): keyed, bounded rows under an object, the FOURTH instance of the
+one trie. These are the signatures LANG writes against; admission arrives with the rows day. -/
+
+/-- A row's key: the parent object, the relation's index under it (`< 256`), and the key bytes
+(`≤ Bounds.keyBytesMax`, the relation's fixed width). -/
+structure RowKey (D : Type) where
+  parent : D
+  rel : Nat
+  k : ByteArray
+  deriving DecidableEq
+
+/-- A key of the rows trie: a relation's head (born by a `declare` act with its parent), or a row. -/
+inductive RowSlot (D : Type)
+  | head (parent : D) (rel : Nat)
+  | row (key : RowKey D)
+  deriving DecidableEq
+
+/-- What the rows trie holds: at a head, the relation's row count and `amt` sum (written by the
+kernel only, `head_sum`), its row `limit`, its sum `cap` (0: no sum column), the key `width`, and
+whether rows may be retracted; at a row, its `amt` (the declared sum column, a kernel field beside
+the bytes: the kernel never parses Lang data) and its value bytes. -/
+inductive RowLeaf
+  | head (count sum limit cap width : Nat) (retract : Bool)
+  | row (amt : Nat) (val : ByteArray)
+  deriving DecidableEq
+
+/-- What a turn does to a row slot. `insert` is unpinned (it binds on the current World:
+`keyTaken`, `relationFull`, `relationCapped`); `upsert` and `retract` pin the row; `declare` births
+a head, only in the turn whose `creates` bears the parent, by its create receiver. -/
+inductive RowAct
+  | keep
+  | insert (amt : Nat) (v : ByteArray)
+  | upsert (amt : Nat) (v : ByteArray)
+  | retract
+  | declare (limit cap width : Nat) (retract : Bool)
+  deriving DecidableEq
+
+/-- One row slot a turn names: the slot, the row pin the signer saw (`none` for an insert or a
+declare), and the act. -/
+structure RowTouch (D : Type) where
+  slot : RowSlot D
+  seen : Option D
+  act : RowAct
+  deriving DecidableEq
+
+/-- A range read (LANG-44 (c), LANG-47; the SECOND pin kind): the rows of relation `rel` under
+`parent` whose key starts with `pre`, at most `most` of them, pinned by `seen = rangePin` of their
+listing. Admission recomputes the listing (refused `rangeTooLong` past `most`, never truncated)
+and refuses `stale` on a different pin: a row landing under a pinned range makes it stale. -/
+structure RangeRead (D : Type) where
+  parent : D
+  rel : Nat
+  pre : ByteArray
+  most : Nat
+  seen : D
+  deriving DecidableEq
+
+
 structure Turn (D : Type) where
   txId : D
   notBefore : Nat
@@ -48,6 +106,10 @@ structure Turn (D : Type) where
   nullifiers : List D
   charge : Nat
   event : ByteArray
+  /-- the row slots the turn names (KERNEL-46/48) -/
+  rows : List (RowTouch D) := []
+  /-- the range reads the turn pins (LANG-44 (c), the second pin kind) -/
+  ranges : List (RangeRead D) := []
   deriving DecidableEq
 
 /-- The cells a turn bears, without their ids. -/
@@ -70,6 +132,43 @@ def Act.logWeight : Act → Nat
   | .write ops => 1 + headerWeight + (ops.map Op.weight).sum
   | _ => 1
 
+/-- A rows slot in the log, exactly `rowKeyBytes`: the parent, the relation byte, the kind byte,
+and a row's length byte and key (CODEC-9). -/
+def RowSlot.weight {D : Type} : RowSlot D → Nat
+  | .head _ _ => digestWeight + 2
+  | .row key => digestWeight + 3 + key.k.size
+
+/-- A row act in the log: a tag byte; insert and upsert their amt (u64) and value (u32 length);
+declare its limit, cap and width (u64 each) and the retract flag. -/
+def RowAct.logWeight : RowAct → Nat
+  | .insert _ v | .upsert _ v => 1 + counterWeight + headerWeight + v.size
+  | .declare .. => 1 + 3 * counterWeight + 1
+  | _ => 1
+
+/-- A row touch in the log: the slot, the optional pin (a tag byte, then the digest), the act. -/
+def RowTouch.weight {D : Type} (x : RowTouch D) : Nat :=
+  x.slot.weight + (if x.seen.isSome then 1 + digestWeight else 1) + x.act.logWeight
+
+/-- A range read in the log: parent, relation byte, the prefix (a length byte and its bytes), most
+(u64), the pin. -/
+def RangeRead.weight {D : Type} (q : RangeRead D) : Nat :=
+  2 * digestWeight + 2 + counterWeight + q.pre.size
+
+/-- What a rows leaf holds in the World beyond its key (`Kernel.rowEntryWeight`): a head its kind
+byte, five counters and the retract flag; a row its kind byte, its amt and its length-prefixed value. -/
+def RowLeaf.weight : RowLeaf → Nat
+  | .head .. => 1 + 5 * counterWeight + 1
+  | .row _ v => 1 + counterWeight + headerWeight + v.size
+
+/-- The most a row touch adds to the World (KERNEL-46 amendment 5): a declare its head, an insert or
+an upsert its whole row with its key. An upsert of a row that exists, and a retract, give back the
+row they replace or remove (`Kernel.rowFreed`), as a touch gives back what a cell does not grow. -/
+def RowTouch.growth {D : Type} (x : RowTouch D) : Nat :=
+  match x.act with
+  | .declare l c w r => x.slot.weight + (RowLeaf.head 0 0 l c w r).weight
+  | .insert a v | .upsert a v => x.slot.weight + (RowLeaf.row a v).weight
+  | _ => 0
+
 /-- A touch in the log: id, seen digest and the act. -/
 def Touch.weight {D : Type} (x : Touch D) : Nat := 2 * digestWeight + x.act.logWeight
 
@@ -84,18 +183,23 @@ def Turn.logWeight {D : Type} (t : Turn D) : Nat :=
     + headerWeight + digestWeight * t.nullifiers.length
     + counterWeight
     + headerWeight + t.event.size
+    + headerWeight + (t.rows.map RowTouch.weight).sum
+    + headerWeight + (t.ranges.map RangeRead.weight).sum
 
 /-- The most a turn can add to the World (`Kernel.Proofs.Weight.admit_world_weight`): each born
-cell with its id, each write's ops, each spent nullifier. A retirement and an overwrite only
-shrink or keep a cell. Its journal entry is not growth: the journal is pruned to the window
-(KERNEL-33), a bounded overhead of every World. -/
+cell with its id, each write's ops, each spent nullifier, each row touch's growth (KERNEL-46
+amendment 5). A retirement and an overwrite only shrink or keep a cell; an upsert of an existing
+row and a retract are credited back. Its journal entry is not growth: the journal is pruned to the
+window (KERNEL-33), a bounded overhead of every World. -/
 def Turn.growth {D : Type} (t : Turn D) : Nat :=
   (t.creates.map fun p => digestWeight + p.2.weight).sum
     + (t.touches.map fun x => x.act.opsWeight).sum
     + digestWeight * t.nullifiers.length
+    + (t.rows.map RowTouch.growth).sum
 
 /-- The exact charge of a turn: the storage it costs, its log record plus its World growth.
 Independent of the charge's value, so a turn can state its own price. -/
 def Turn.weight {D : Type} (t : Turn D) : Nat := t.logWeight + t.growth
+
 
 end Nanodregg.Kernel

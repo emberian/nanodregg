@@ -1078,10 +1078,171 @@ theorem imports_ok : ∀ (is : List ByteArray), OkL (is.map fun i => .str 0 (hex
   | [] => .nil
   | i :: is => .cons (.str fun h => by have := mem_hexChars (b := i) (c := '"') (by simpa [hex] using h); simp [isDelim] at this) (imports_ok is)
 
-/-- A package whose body is canonical and whose state and interface types are canonical reads back
-from its text: `Read.readPackage` returns exactly the package that was printed. -/
+/-! ## Relations (LANG-49): each prints as `Read.rel` reads it -/
+
+theorem optLabelSx_ok : ∀ (o : Option Label) {xs : List SExp}, optLabelSx o = some xs → OkL xs
+  | none, _, h => by simp only [optLabelSx, Option.some.injEq] at h; subst h; exact .nil
+  | some ℓ, _, h => by
+    simp only [optLabelSx, bind, Option.bind_eq_some_iff, pure, Option.some.injEq] at h
+    obtain ⟨x, hx, rfl⟩ := h
+    exact .cons (label_ok hx) .nil
+
+theorem optLabel_read (p : Nat) : ∀ (o : Option Label) {xs ys : List SExp}, optLabelSx o = some xs →
+    SameL xs ys → Read.optLabel p ys = .ok o
+  | none, _, _, h, hs => by
+    simp only [optLabelSx, Option.some.injEq] at h; subst h; cases sameL_nil hs; rfl
+  | some ℓ, _, _, h, hs => by
+    simp only [optLabelSx, bind, Option.bind_eq_some_iff, pure, Option.some.injEq] at h
+    obtain ⟨x, hx, rfl⟩ := h
+    obtain ⟨rfl, -⟩ := label_some hx
+    obtain ⟨y, ys, rfl, hy, hrest⟩ := sameL_cons hs
+    cases sameL_nil hrest
+    obtain ⟨q, rfl⟩ := same_atom hy
+    rfl
+
+theorem keyFields_ok : ∀ (key : List (Label × Ty)) {xs : List SExp},
+    key.mapM (fun f => do pure (list [← label f.1, ← tySx f.2])) = some xs → OkL xs
+  | [], _, h => by simp only [List.mapM_nil, pure, Option.some.injEq] at h; subst h; exact .nil
+  | f :: key, _, h => by
+    simp only [List.mapM_cons, bind, Option.bind_eq_some_iff, pure, Option.some.injEq] at h
+    obtain ⟨x, ⟨xl, hl, xt, ht, rfl⟩, xr, hr, rfl⟩ := h
+    exact .cons (.list (.cons (label_ok hl) (.cons (tySx_ok _ ht) .nil))) (keyFields_ok key hr)
+
+theorem keyFields_read : ∀ (key : List (Label × Ty)) {xs ys : List SExp},
+    key.mapM (fun f => do pure (list [← label f.1, ← tySx f.2])) = some xs → SameL xs ys →
+    needs xs ≤ depthMax → key.all (fun f => f.2.wf) = true → Read.keyFields ys = .ok key
+  | [], _, _, h, hs, _, _ => by
+    simp only [List.mapM_nil, pure, Option.some.injEq] at h; subst h; cases sameL_nil hs; rfl
+  | f :: key, _, _, h, hs, hn, hw => by
+    simp only [List.mapM_cons, bind, Option.bind_eq_some_iff, pure, Option.some.injEq] at h
+    obtain ⟨x, ⟨xl, hl, xt, ht, rfl⟩, xr, hr, rfl⟩ := h
+    obtain ⟨rfl, -⟩ := label_some hl
+    simp only [List.all_cons, Bool.and_eq_true] at hw
+    obtain ⟨y, ys, rfl, hy, hrest⟩ := sameL_cons hs
+    obtain ⟨q, z, rfl, g⟩ := same_list hy
+    obtain ⟨w1, z, rfl, k1, g⟩ := sameL_cons g
+    obtain ⟨w2, z, rfl, k2, g⟩ := sameL_cons g
+    cases sameL_nil g
+    obtain ⟨r1, rfl⟩ := same_atom k1
+    simp only [need, needs, list, atom] at hn
+    have eT := ty_tySx f.2 depthMax ht k2 (by omega) hw.1
+    have eR := keyFields_read key hr hrest (by omega) hw.2
+    simp [Read.keyFields, eT, eR]
+    rfl
+
+theorem needs_le_of_mem : ∀ {xs : List SExp} {x : SExp}, x ∈ xs → need x ≤ needs xs
+  | _ :: _, _, .head _ => by simp only [needs]; omega
+  | _ :: _, _, .tail _ h => by have := needs_le_of_mem h; simp only [needs]; omega
+
+theorem need_lt_list {p : Nat} {xs : List SExp} {x : SExp} (h : x ∈ xs) : need x < need (.list p xs) := by
+  have := needs_le_of_mem h; simp only [need]; omega
+
+/-- A relation's types are canonical: its key fields' and its value's (what `Read.ty` returns). -/
+private def relWf (r : Label × RelDecl) : Bool := r.2.val.wf && r.2.key.all (fun f => f.2.wf)
+
+theorem relSx_ok {r : Label × RelDecl} {x : SExp} (h : relSx r = some x) : Ok x := by
+  simp only [relSx, bind, Option.bind_eq_some_iff, pure, Option.some.injEq] at h
+  obtain ⟨xl, hl, xk, hk, xv, hv, xs, hsu, xg, hg, rfl⟩ := h
+  exact .list (.cons (label_ok hl) (.cons (.list (.cons (kw_ok _) (keyFields_ok _ hk)))
+    (.cons (.list (.cons (kw_ok _) (.cons (tySx_ok _ hv) .nil)))
+    (.cons (.list (.cons (kw_ok _) (.cons (repr_ok _) .nil)))
+    (.cons (.list (.cons (kw_ok _) (optLabelSx_ok _ hsu)))
+    (.cons (.list (.cons (kw_ok _) (.cons (repr_ok _) .nil)))
+    (.cons (.list (.cons (kw_ok _) (.cons (by split <;> exact kw_ok _) .nil)))
+    (.cons (.list (.cons (kw_ok _) (optLabelSx_ok _ hg))) .nil))))))))
+
+theorem rel_relSx {r : Label × RelDecl} {x y : SExp} (h : relSx r = some x) (hs : Same x y)
+    (hn : need x ≤ depthMax) (hw : relWf r = true) : Read.rel y = .ok r := by
+  obtain ⟨ℓ, ⟨key, val, limit, sum, cap, retract, guard⟩⟩ := r
+  simp only [relWf, Bool.and_eq_true] at hw
+  simp only [relSx, bind, Option.bind_eq_some_iff, pure, Option.some.injEq] at h
+  obtain ⟨xl, hl, xk, hk, xv, hv, xs, hsu, xg, hg, rfl⟩ := h
+  obtain ⟨rfl, -⟩ := label_some hl
+  obtain ⟨q, z, rfl, g⟩ := same_list hs
+  obtain ⟨y0, z, rfl, h0, g⟩ := sameL_cons g
+  obtain ⟨y1, z, rfl, h1, g⟩ := sameL_cons g
+  obtain ⟨y2, z, rfl, h2, g⟩ := sameL_cons g
+  obtain ⟨y3, z, rfl, h3, g⟩ := sameL_cons g
+  obtain ⟨y4, z, rfl, h4, g⟩ := sameL_cons g
+  obtain ⟨y5, z, rfl, h5, g⟩ := sameL_cons g
+  obtain ⟨y6, z, rfl, h6, g⟩ := sameL_cons g
+  obtain ⟨y7, z, rfl, h7, g⟩ := sameL_cons g
+  cases sameL_nil g
+  obtain ⟨r0, rfl⟩ := same_atom h0
+  -- key
+  obtain ⟨q1, z1, rfl, g1⟩ := same_list h1
+  obtain ⟨w1, z1, rfl, k1, t1⟩ := sameL_cons g1
+  obtain ⟨r1, rfl⟩ := same_atom k1
+  -- val
+  obtain ⟨q2, z2, rfl, g2⟩ := same_list h2
+  obtain ⟨w2, z2, rfl, k2, g2⟩ := sameL_cons g2
+  obtain ⟨v2, z2, rfl, m2, g2⟩ := sameL_cons g2
+  cases sameL_nil g2
+  obtain ⟨r2, rfl⟩ := same_atom k2
+  -- limit
+  obtain ⟨q3, z3, rfl, g3⟩ := same_list h3
+  obtain ⟨w3, z3, rfl, k3, g3⟩ := sameL_cons g3
+  obtain ⟨v3, z3, rfl, m3, g3⟩ := sameL_cons g3
+  cases sameL_nil g3
+  obtain ⟨r3, rfl⟩ := same_atom k3
+  obtain ⟨s3, rfl⟩ := same_atom m3
+  -- sum
+  obtain ⟨q4, z4, rfl, g4⟩ := same_list h4
+  obtain ⟨w4, z4, rfl, k4, t4⟩ := sameL_cons g4
+  obtain ⟨r4, rfl⟩ := same_atom k4
+  -- cap
+  obtain ⟨q5, z5, rfl, g5⟩ := same_list h5
+  obtain ⟨w5, z5, rfl, k5, g5⟩ := sameL_cons g5
+  obtain ⟨v5, z5, rfl, m5, g5⟩ := sameL_cons g5
+  cases sameL_nil g5
+  obtain ⟨r5, rfl⟩ := same_atom k5
+  obtain ⟨s5, rfl⟩ := same_atom m5
+  -- retract
+  obtain ⟨q6, z6, rfl, g6⟩ := same_list h6
+  obtain ⟨w6, z6, rfl, k6, g6⟩ := sameL_cons g6
+  obtain ⟨v6, z6, rfl, m6, g6⟩ := sameL_cons g6
+  cases sameL_nil g6
+  obtain ⟨r6, rfl⟩ := same_atom k6
+  -- guard
+  obtain ⟨q7, z7, rfl, g7⟩ := same_list h7
+  obtain ⟨w7, z7, rfl, k7, t7⟩ := sameL_cons g7
+  obtain ⟨r7, rfl⟩ := same_atom k7
+  simp only [need, needs, list, atom] at hn
+  have eK := keyFields_read key hk t1 (by omega) hw.2
+  have eV := ty_tySx val depthMax hv m2 (by omega) hw.1
+  have eS := optLabel_read q sum hsu t4
+  have eG := optLabel_read q guard hg t7
+  cases retract <;>
+  · obtain ⟨s6, rfl⟩ := same_atom m6
+    simp [Read.rel, eK, eV, eS, eG]
+    rfl
+
+theorem rels_ok : ∀ (rs : List (Label × RelDecl)) {xs : List SExp}, rs.mapM relSx = some xs → OkL xs
+  | [], _, h => by simp only [List.mapM_nil, pure, Option.some.injEq] at h; subst h; exact .nil
+  | r :: rs, _, h => by
+    simp only [List.mapM_cons, bind, Option.bind_eq_some_iff, pure, Option.some.injEq] at h
+    obtain ⟨x, hx, xr, hr, rfl⟩ := h
+    exact .cons (relSx_ok hx) (rels_ok rs hr)
+
+theorem rels_mapM : ∀ (rs : List (Label × RelDecl)) {xs ys : List SExp}, rs.mapM relSx = some xs →
+    SameL xs ys → needs xs ≤ depthMax → rs.all relWf = true → ys.mapM Read.rel = .ok rs
+  | [], _, _, h, hs, _, _ => by
+    simp only [List.mapM_nil, pure, Option.some.injEq] at h; subst h; cases sameL_nil hs; rfl
+  | r :: rs, _, _, h, hs, hn, hw => by
+    simp only [List.mapM_cons, bind, Option.bind_eq_some_iff, pure, Option.some.injEq] at h
+    obtain ⟨x, hx, xr, hr, rfl⟩ := h
+    simp only [List.all_cons, Bool.and_eq_true] at hw
+    obtain ⟨y, ys, rfl, hy, hrest⟩ := sameL_cons hs
+    simp only [needs] at hn
+    have e1 := rel_relSx hx hy (by omega) hw.1
+    have e2 := rels_mapM rs hr hrest (by omega) hw.2
+    simp [List.mapM_cons, e1, e2]
+    rfl
+
+/-- A package whose body is canonical and whose state, interface and relation types are canonical
+reads back from its text: `Read.readPackage` returns exactly the package that was printed. -/
 theorem readPackage_package {p : Package} {s : String} (hs : p.state.wf = true) (hi : p.iface.wf = true)
-    (hb : Canon p.body) (h : package p = some s) : readPackage s = .ok p := by
+    (hr : p.rels.all relWf = true) (hb : Canon p.body) (h : package p = some s) : readPackage s = .ok p := by
   simp only [package, bind, Option.bind_eq_some_iff] at h
   obtain ⟨xs, hxs, h⟩ := h
   split at h
@@ -1089,16 +1250,17 @@ theorem readPackage_package {p : Package} {s : String} (hs : p.state.wf = true) 
     obtain ⟨hn, hw⟩ := fitsB_iff.mp hf
     simp only [pure, Option.some.injEq] at h; subst h
     simp only [sectionsSx, bind, Option.bind_eq_some_iff, pure, Option.some.injEq] at hxs
-    obtain ⟨xS, hS, xI, hI, xm, hm, xl, hlw, xB, hB, rfl⟩ := hxs
+    obtain ⟨xS, hS, xI, hI, xm, hm, xl, hlw, xR, hR, xB, hB, rfl⟩ := hxs
     have hok : OkL (atom "package" :: [list (atom "imports" :: p.imports.map fun i => .str 0 (hex i)),
         list [atom "state", xS], list [atom "iface", xI], list (atom "methods" :: xm),
-        list (atom "laws" :: xl), list [atom "body", xB]]) :=
+        list (atom "laws" :: xl), list (atom "rels" :: xR), list [atom "body", xB]]) :=
       .cons (kw_ok _) (.cons (.list (.cons (kw_ok _) (imports_ok _)))
         (.cons (.list (.cons (kw_ok _) (.cons (tySx_ok _ hS) .nil)))
         (.cons (.list (.cons (kw_ok _) (.cons (tySx_ok _ hI) .nil)))
         (.cons (.list (.cons (kw_ok _) (labels_ok _ hm)))
         (.cons (.list (.cons (kw_ok _) (labels_ok _ hlw)))
-        (.cons (.list (.cons (kw_ok _) (.cons (termSx_ok _ 0 hB) .nil))) .nil))))))
+        (.cons (.list (.cons (kw_ok _) (rels_ok _ hR)))
+        (.cons (.list (.cons (kw_ok _) (.cons (termSx_ok _ 0 hB) .nil))) .nil)))))))
     obtain ⟨ys, hy, hsame⟩ := parse_layout (sep := ['\n', ' ', ' ']) ⟨by decide, by decide⟩ hok hn hw
     simp only [readPackage, hy, bind, Except.bind]
     obtain ⟨y0, ys, rfl, h0, hl⟩ := sameL_cons hsame
@@ -1108,6 +1270,7 @@ theorem readPackage_package {p : Package} {s : String} (hs : p.state.wf = true) 
     obtain ⟨y4, ys, rfl, h4, hl⟩ := sameL_cons hl
     obtain ⟨y5, ys, rfl, h5, hl⟩ := sameL_cons hl
     obtain ⟨y6, ys, rfl, h6, hl⟩ := sameL_cons hl
+    obtain ⟨y7, ys, rfl, h7, hl⟩ := sameL_cons hl
     cases sameL_nil hl
     obtain ⟨r0, rfl⟩ := same_atom h0
     -- imports
@@ -1125,11 +1288,11 @@ theorem readPackage_package {p : Package} {s : String} (hs : p.state.wf = true) 
     obtain ⟨v3, z3, rfl, m3, g3⟩ := sameL_cons g3
     cases sameL_nil g3
     obtain ⟨r3, rfl⟩ := same_atom k3
-    obtain ⟨q6, z6, rfl, g6⟩ := same_list h6
-    obtain ⟨w6, z6, rfl, k6, g6⟩ := sameL_cons g6
-    obtain ⟨v6, z6, rfl, m6, g6⟩ := sameL_cons g6
-    cases sameL_nil g6
-    obtain ⟨r6, rfl⟩ := same_atom k6
+    obtain ⟨q7, z7, rfl, g7⟩ := same_list h7
+    obtain ⟨w7, z7, rfl, k7, g7⟩ := sameL_cons g7
+    obtain ⟨v7, z7, rfl, m7, g7⟩ := sameL_cons g7
+    cases sameL_nil g7
+    obtain ⟨r7, rfl⟩ := same_atom k7
     -- methods, laws
     obtain ⟨q4, z4, rfl, g4⟩ := same_list h4
     obtain ⟨w4, z4, rfl, k4, t4⟩ := sameL_cons g4
@@ -1137,14 +1300,32 @@ theorem readPackage_package {p : Package} {s : String} (hs : p.state.wf = true) 
     obtain ⟨q5, z5, rfl, g5⟩ := same_list h5
     obtain ⟨w5, z5, rfl, k5, t5⟩ := sameL_cons g5
     obtain ⟨r5, rfl⟩ := same_atom k5
-    simp only [need, needs, list, atom] at hn
-    have eS := ty_tySx p.state depthMax hS m2 (by simp only [depthMax] at hn ⊢; omega) hs
-    have eI := ty_tySx p.iface depthMax hI m3 (by simp only [depthMax] at hn ⊢; omega) hi
-    have eB := term_termSx p.body 0 depthMax hB m6 (by simp only [depthMax] at hn ⊢; omega) hb
+    -- rels
+    obtain ⟨q6, z6, rfl, g6⟩ := same_list h6
+    obtain ⟨w6, z6, rfl, k6, t6⟩ := sameL_cons g6
+    obtain ⟨r6, rfl⟩ := same_atom k6
+    have bS : need xS ≤ depthMax :=
+      Nat.le_of_lt (Nat.lt_trans (need_lt_list (p := 0) (xs := [atom "state", xS]) (by simp))
+        (Nat.lt_of_lt_of_le (need_lt_list (x := list [atom "state", xS]) (by simp)) hn))
+    have bI : need xI ≤ depthMax :=
+      Nat.le_of_lt (Nat.lt_trans (need_lt_list (p := 0) (xs := [atom "iface", xI]) (by simp))
+        (Nat.lt_of_lt_of_le (need_lt_list (x := list [atom "iface", xI]) (by simp)) hn))
+    have bB : need xB ≤ depthMax :=
+      Nat.le_of_lt (Nat.lt_trans (need_lt_list (p := 0) (xs := [atom "body", xB]) (by simp))
+        (Nat.lt_of_lt_of_le (need_lt_list (x := list [atom "body", xB]) (by simp)) hn))
+    have bR : needs xR ≤ depthMax := by
+      have h1 : needs xR < need (list (atom "rels" :: xR)) := by
+        unfold list; simp only [need, needs]; omega
+      exact Nat.le_of_lt (Nat.lt_trans h1
+        (Nat.lt_of_lt_of_le (need_lt_list (x := list (atom "rels" :: xR)) (by simp)) hn))
+    have eS := ty_tySx p.state depthMax hS m2 bS hs
+    have eI := ty_tySx p.iface depthMax hI m3 bI hi
+    have eB := term_termSx p.body 0 depthMax hB m7 bB hb
     rw [scope_zero] at eB
     have eM := labels_mapM p.methods hm t4
     have eL := labels_mapM p.laws hlw t5
-    simp only [Read.package, eS, eI, eB, eM, eL]
+    have eR := rels_mapM p.rels hR t6 bR hr
+    simp only [Read.package, eS, eI, eB, eM, eL, eR]
     rw [mapM_imports ?hf p.imports t1]
     · rfl
     · intro q i; simp [hex, unhex_hexChars]
@@ -1216,6 +1397,52 @@ theorem checkShape_wf {p : Package} (h : p.checkShape = .ok ()) : p.state.wf = t
     cases p.state <;> simp [isRecordData]
     intro h _; exact h
 
+theorem rowWf_iff : ∀ r : List (Label × Ty), Ty.rowWf r = true ↔ ∀ f ∈ r, f.2.wf = true
+  | [] => by simp [Ty.rowWf]
+  | (ℓ, t) :: r => by simp [Ty.rowWf, rowWf_iff r]
+
+theorem relWf_of {ℓ : Label} {d : RelDecl} (hk : (keyTy d).wf = true) (hv : d.val.wf = true) :
+    relWf (ℓ, d) = true := by
+  simp only [keyTy, Ty.wf, Bool.and_eq_true] at hk
+  have hall := (rowWf_iff _).mp hk.2
+  simp only [relWf, hv, Bool.true_and, List.all_eq_true]
+  intro f hf
+  exact hall f ((Row.sort_perm d.key).mem_iff.mpr hf)
+
+/-- The install check's relation clause makes every relation's types canonical: its value's
+(`badRel`) and its key fields' (`relKey`: the key record, its fields sorted, is canonical). -/
+theorem checkRel_wf {S : Ty} {row : List (Label × Ty)} {r : Label × RelDecl}
+    (h : checkRel S row r = .ok ()) : relWf r = true := by
+  obtain ⟨ℓ, d⟩ := r
+  unfold checkRel at h
+  simp only [bind, Except.bind, pure, Except.pure, throw, throwThe, MonadExceptOf.throw] at h
+  repeat' split at h
+  all_goals first | cases h | skip
+  all_goals exact relWf_of (by simp_all) (by simp_all)
+
+theorem checkRels_wf {S : Ty} {row : List (Label × Ty)} {rels : List (Label × RelDecl)}
+    (h : checkRels S row rels = .ok ()) : rels.all relWf = true := by
+  unfold checkRels at h
+  simp only [bind, Except.bind, pure, Except.pure] at h
+  repeat' split at h
+  all_goals first | cases h | skip
+  rename_i v hfor
+  cases v
+  rw [List.all_eq_true]
+  refine forIn_yield_ok _ _ _ (fun r u s hs => ?_) hfor
+  split at hs
+  · cases hs
+  · rename_i hc; cases hs; exact ⟨rfl, checkRel_wf hc⟩
+
+theorem checkFields_rels {p : Package} (h : p.checkFields = .ok ()) : p.rels.all relWf = true := by
+  unfold Package.checkFields at h
+  split at h
+  · simp only [bind, Except.bind] at h
+    split at h
+    · cases h
+    · rename_i hr; exact checkRels_wf hr
+  · cases h
+
 /-- A package the install check accepts reads back from its text (over canonical import
 interfaces; `Package.checkShape` checks the package's own types). -/
 theorem readPackage_checked {ifaces : List Ty} {p : Package} {s : String} (hΔ : ∀ A ∈ ifaces, A.wf = true)
@@ -1232,7 +1459,7 @@ theorem readPackage_checked {ifaces : List Ty} {p : Package} {s : String} (hΔ :
       split at hbody
       · rename_i heq
         subst heq
-        exact readPackage_package hS hI (hasType_canon hΔ (by simp) (inferE_sound hT)) h
+        exact readPackage_package hS hI (checkFields_rels hc) (hasType_canon hΔ (by simp) (inferE_sound hT)) h
       · cases hbody
     · cases hbody
 

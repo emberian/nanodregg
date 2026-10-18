@@ -384,7 +384,7 @@ theorem escrow_decodes : ∃ b, Wire.encodePackage escrow = some b ∧ Wire.deco
 theorem escrow_slots :
     ["deposit", "refund", "release"].all (fun ℓ =>
       decide (((match escrow.iface with | .record r => Row.find? ℓ r | _ => none).bind
-        (methodSig escrow.state)).map (fun x : Ty × List Ty => x.2) = some [T])) = true := by
+        (methodSig escrow.state escrow.rels)).map (fun x : Sig => x.calls) = some [T])) = true := by
   decide +kernel
 
 theorem escrow_body : escrow.body = .record bodyFields := rfl

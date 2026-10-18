@@ -88,17 +88,17 @@ theorem state_fields_wf {p : Package} (h : p.checkShape = .ok ()) : Ty.rowWf (re
   cases hs : p.state <;> simp_all [isRecordData, recordRow, Ty.wf]
 
 theorem methodArg_wf {p : Package} {ℓ : Label} {mty A : Ty} (h : p.checkShape = .ok ())
-    (hm : Row.find? ℓ (recordRow p.iface) = some mty) (hA : methodArg p.state mty = some A) :
+    (hm : Row.find? ℓ (recordRow p.iface) = some mty) (hA : methodArg p.state p.rels mty = some A) :
     A.wf = true := by
   have hw := (checkShape_ok h).2
   obtain ⟨row, hrow, hf⟩ := recordRow_find hm
   rw [hrow] at hw
   simp only [Ty.wf, Bool.and_eq_true] at hw
   have := rowWf_find hw.2 hf
-  obtain ⟨ks, hks⟩ := methodArg_spec hA
+  obtain ⟨ks, rs, es, hks⟩ := methodArg_spec hA
   rw [hks] at this
   simp only [methodTy, Ty.wf, Bool.and_eq_true] at this
-  exact this.2.1
+  exact this.2.2.1
 
 theorem tyRowWire_iff : ∀ {r : List (Label × Ty)},
     Wire.tyRowWire r = true ↔ ∀ e ∈ r, Wire.labelOk e.1 = true ∧ Wire.tyWire e.2 = true
@@ -122,7 +122,7 @@ theorem state_fields_dataTy {p : Package} (h : p.checkShape = .ok ()) (hw : Wire
     ∀ e ∈ recordRow p.state, Wire.dataTy e.2 = true := by
   have hs := (checkShape_ok h).1
   simp only [Wire.packageWire, Bool.and_eq_true] at hw
-  have hws := hw.1.1.1.1.2
+  have hws := hw.1.1.1.1.1.2
   intro e he
   cases hst : p.state with
   | record row =>
@@ -137,19 +137,19 @@ theorem state_fields_dataTy {p : Package} (h : p.checkShape = .ok ()) (hw : Wire
 /-- Every method argument type of a loaded package has a data codec. -/
 theorem methodArg_dataTy {p : Package} {ℓ : Label} {mty A : Ty} (h : p.checkShape = .ok ())
     (hpw : Wire.packageWire p = true)
-    (hm : Row.find? ℓ (recordRow p.iface) = some mty) (hA : methodArg p.state mty = some A) :
+    (hm : Row.find? ℓ (recordRow p.iface) = some mty) (hA : methodArg p.state p.rels mty = some A) :
     Wire.dataTy A = true := by
   simp only [Wire.packageWire, Bool.and_eq_true] at hpw
-  have hwi := hpw.1.1.1.2
+  have hwi := hpw.1.1.1.1.2
   obtain ⟨row, hrow, hf⟩ := recordRow_find hm
   rw [hrow] at hwi
   simp only [Wire.tyWire, Bool.and_eq_true] at hwi
   have ht := tyRowWire_find hwi.2 hf
-  obtain ⟨ks, hks⟩ := methodArg_spec hA
+  obtain ⟨ks, rs, es, hks⟩ := methodArg_spec hA
   rw [hks] at ht
   simp only [methodTy, Wire.tyWire, Bool.and_eq_true] at ht
   simp only [Wire.dataTy, Bool.and_eq_true]
-  exact ⟨methodArg_wf h hm hA, ht.2.1⟩
+  exact ⟨methodArg_wf h hm hA, ht.2.2.1⟩
 
 /-- At a `dataTy` type the decoder is the type's stream: its type gate is passed. -/
 theorem decodeData_of_dataTy {T : Ty} (h : Wire.dataTy T = true) (b : ByteArray) :
@@ -180,28 +180,216 @@ theorem checkFields_law {p : Package} (h : p.checkFields = .ok ()) {ℓ : Label}
     simp only [bind, Except.bind] at h
     split at h
     · simp at h
-    · rw [hrow]; exact checkLaws_find h ℓ hl
+    · split at h
+      · simp at h
+      · rw [hrow]; exact checkLaws_find h ℓ hl
   · simp at h
+
+/-! ## A method's rows argument is a value of its declared rows type (LANG-49) -/
+
+theorem rowConforms_of_rel : ∀ {ds : List (Label × Data)} {r : List (Label × Ty)},
+    Row.Rel Conforms ds r → RowConforms ds r
+  | _, _, .nil => .nil
+  | _, _, .cons h hr => .cons h (rowConforms_of_rel hr)
+
+theorem rowConforms_append : ∀ {a b : List (Label × Data)} {r s : List (Label × Ty)},
+    RowConforms a r → RowConforms b s → RowConforms (a ++ b) (r ++ s)
+  | _, _, _, _, .nil, h => h
+  | _, _, _, _, .cons h1 h2, h => .cons h1 (rowConforms_append h2 h)
+
+theorem optD_conforms {T : Ty} : ∀ {o : Option Data}, (∀ x, o = some x → Conforms x T) →
+    Conforms (optD o) (optTy T)
+  | none, _ => .inj (by simp [Row.find?]) (.record .nil)
+  | some x, h => .inj (by simp [Row.find?]) (h x rfl)
+
+theorem zipIdx_slots_conforms {T : Ty} {xs : List Data} (hx : ∀ x ∈ xs, Conforms x T) :
+    ∀ (L : List Label) (k : Nat),
+      RowConforms ((L.zipIdx k).map fun p => (p.1, optD xs[p.2]?)) (L.map fun l => (l, optTy T))
+  | [], _ => .nil
+  | l :: L, k => by
+    simp only [List.zipIdx_cons, List.map_cons]
+    exact .cons (optD_conforms fun x hx' => hx x (List.mem_of_getElem? hx')) (zipIdx_slots_conforms hx L (k + 1))
+
+theorem slotsD_conforms {T : Ty} {xs : List Data} (hx : ∀ x ∈ xs, Conforms x T) (c : String) (n : Nat) :
+    RowConforms (slotsD c n xs) ((slotLabels c n).map fun l => (l, optTy T)) :=
+  zipIdx_slots_conforms hx _ 0
+
+theorem zip_rel : ∀ (l : List (Label × Ty)) (n : Nat) (fs : List (Label × Data)) (f : Nat → Label),
+    RowConforms fs ((l.zipIdx n).map fun p => (f p.2, p.1.2)) →
+    Row.Rel Conforms ((l.zip fs).map fun p => (p.1.1, p.2.2)) l
+  | [], _, fs, _, h => by cases h; exact .nil
+  | (ℓ, T) :: l, n, fs, f, h => by
+    simp only [List.zipIdx_cons, List.map_cons] at h
+    cases h with
+    | cons hd hr =>
+      simp only [List.zip_cons_cons, List.map_cons]
+      exact .cons hd (zip_rel l (n + 1) _ f hr)
+
+/-- A key read back from its bytes is a value of the prefix's record type. -/
+theorem keyOf_conforms {d : RelDecl} {m : Nat} {b : ByteArray} {k : Data} (h : keyOf d m b = .ok k) :
+    Conforms k (preTy d m) := by
+  unfold keyOf at h
+  split at h
+  · rename_i fs hfs
+    cases h
+    have hc : Conforms (.record fs) (.record _) := decodeData_conforms hfs
+    cases hc with
+    | record hr =>
+      exact .record (rowConforms_of_rel (Row.Rel.sort (zip_rel (d.key.take m) 0 fs (fun i => "k" ++ toString i) hr)))
+  · cases h
+  · cases h
+
+theorem keyOf_conforms_key {d : RelDecl} {b : ByteArray} {k : Data} (h : keyOf d d.key.length b = .ok k) :
+    Conforms k (keyTy d) := by
+  have := keyOf_conforms h
+  rwa [preTy, List.take_length] at this
+
+theorem checked_eq {D : Type} {digestOf : ByteArray → Option D} {what : String} {d d' : Data}
+    (h : checked digestOf what d = .ok d') : d' = d := by
+  unfold checked at h; split at h <;> simp_all
+
+theorem liftS_eq {D α : Type} {what : String} {e : Except String α} {a : α}
+    (h : liftS (D := D) what e = .ok a) : e = .ok a := by
+  unfold liftS at h; split at h <;> simp_all
+
+theorem valOf_conforms {D : Type} {digestOf : ByteArray → Option D} {d : RelDecl} {what : String}
+    {b : ByteArray} {v : Data} (h : valOf digestOf d what b = .ok v) : Conforms v d.val := by
+  unfold valOf at h
+  split at h
+  · rename_i v' hv; rw [checked_eq h]; exact decodeData_conforms hv
+  · cases h
+
+theorem mapM_ok_mem {α β ε : Type} {f : α → Except ε β} :
+    ∀ {xs : List α} {ys : List β}, xs.mapM f = .ok ys → ∀ y ∈ ys, ∃ x ∈ xs, f x = .ok y
+  | [], ys, h => by
+    simp only [List.mapM_nil, pure, Except.pure, Except.ok.injEq] at h; subst h; simp
+  | x :: xs, ys, h => by
+    rw [List.mapM_cons] at h
+    simp only [bind, Except.bind] at h
+    split at h
+    · cases h
+    · rename_i y hy
+      split at h
+      · cases h
+      · rename_i ys' hys
+        simp only [pure, Except.pure, Except.ok.injEq] at h
+        subst h
+        intro z hz
+        rcases List.mem_cons.mp hz with rfl | hz
+        · exact ⟨x, by simp, hy⟩
+        · obtain ⟨w, hw, hf⟩ := mapM_ok_mem hys z hz
+          exact ⟨w, by simp [hw], hf⟩
+
+theorem map_some_ok {ε : Type} {e : Except ε Data} {o : Option Data} (h : (some <$> e) = .ok o) :
+    ∃ v, e = .ok v ∧ o = some v := by
+  cases e with
+  | error _ => cases h
+  | ok v => simp only [Functor.map, Except.map, Except.ok.injEq] at h; exact ⟨v, rfl, h.symm⟩
+
+theorem key_conf {D : Type} {digestOf : ByteArray → Option D} {d : RelDecl} {w w' : String}
+    {b : ByteArray} {k0 k : Data} (h2 : checked digestOf w' k0 = .ok k)
+    (h1 : liftS (D := D) w (keyOf d d.key.length b) = .ok k0) : Conforms k (keyTy d) := by
+  rw [checked_eq h2]; exact keyOf_conforms_key (liftS_eq h1)
+
+theorem pre_conf {D : Type} {digestOf : ByteArray → Option D} {d : RelDecl} {m : Nat} {w w' : String}
+    {b : ByteArray} {k0 k : Data} (h2 : checked digestOf w' k0 = .ok k)
+    (h1 : liftS (D := D) w (keyOf d m b) = .ok k0) : Conforms k (preTy d m) := by
+  rw [checked_eq h2]; exact keyOf_conforms (liftS_eq h1)
+
+theorem relReads_conforms {D : Type} {digestOf : ByteArray → Option D} {rv : RowView D} {self : D}
+    {i : Nat} {ℓ : Label} {d : RelDecl} {x : RelRead} {v : Data}
+    (h : relReads digestOf rv self i ℓ d x = .ok v) : Conforms v (relReadTy d x) := by
+  unfold relReads at h
+  simp only [bind, Except.bind, pure, Except.pure] at h
+  repeat' split at h
+  all_goals first | cases h | skip
+  all_goals
+    simp only [relReadTy, ‹x.range = _›]
+    refine .record (rowConforms_append (slotsD_conforms ?pts "p" _) ?rng)
+    case pts =>
+      intro y hy
+      obtain ⟨q, -, hq⟩ := mapM_ok_mem ‹List.mapM _ (rv.points self i) = Except.ok _› y hy
+      repeat' split at hq
+      all_goals first | cases hq | skip
+      all_goals
+        refine .record (.cons (key_conf ‹_› ‹_›) (.cons ?_ .nil))
+        exact optD_conforms (fun w hw => by
+          first
+            | (cases hw; done)
+            | (cases hw
+               obtain ⟨u, hu, hs⟩ := map_some_ok ‹(some <$> valOf digestOf d _ _) = Except.ok _›
+               cases hs; exact valOf_conforms hu))
+    case rng =>
+      first
+        | exact .nil
+        | rename_i rs hrows
+          refine .cons (.record (.cons (pre_conf ‹_› ‹_›) (.cons (.record (slotsD_conforms ?_ "r" _)) .nil))) .nil
+          intro y hy
+          obtain ⟨q, -, hq⟩ := mapM_ok_mem hrows y hy
+          repeat' split at hq
+          all_goals first | cases hq | skip
+          all_goals exact .record (.cons (key_conf ‹_› ‹_›) (.cons (valOf_conforms ‹_›) .nil))
+
+theorem mapM_rowConforms {α ε : Type} {f : α → Except ε (Label × Data)} {g : α → Option (Label × Ty)}
+    (hf : ∀ a y, f a = .ok y → ∃ t, g a = some t ∧ y.1 = t.1 ∧ Conforms y.2 t.2) :
+    ∀ {xs : List α} {ys : List (Label × Data)}, xs.mapM f = .ok ys → RowConforms ys (xs.filterMap g)
+  | [], ys, h => by
+    simp only [List.mapM_nil, pure, Except.pure, Except.ok.injEq] at h; subst h; exact .nil
+  | x :: xs, ys, h => by
+    rw [List.mapM_cons] at h
+    simp only [bind, Except.bind] at h
+    split at h
+    · cases h
+    · rename_i y hy
+      split at h
+      · cases h
+      · rename_i ys' hys
+        simp only [pure, Except.pure, Except.ok.injEq] at h
+        subst h
+        obtain ⟨t, hg, h1, h2⟩ := hf x y hy
+        obtain ⟨ℓ, v⟩ := y
+        obtain ⟨ℓ', T⟩ := t
+        simp only at h1 h2
+        subst h1
+        rw [List.filterMap_cons, hg]
+        exact .cons h2 (mapM_rowConforms hf hys)
+
+/-- **The rows a run reads are a value of the method's declared rows type** (LANG-49): what
+`readsData` builds from the caller's row view is data at `readsTy`, whatever the view holds. -/
+theorem readsData_conforms {D : Type} {digestOf : ByteArray → Option D} {rels : List (Label × RelDecl)}
+    {rv : RowView D} {self : D} {rs : List (Label × RelRead)} {v : Data}
+    (h : readsData digestOf rels rv self rs = .ok v) : Conforms v (readsTy rels rs) := by
+  unfold readsData at h
+  simp only [bind, Except.bind, pure, Except.pure] at h
+  split at h
+  · cases h
+  · rename_i fs hfs
+    cases h
+    refine .record (mapM_rowConforms (fun a y hy => ?_) hfs)
+    repeat' split at hy
+    all_goals first | cases hy | skip
+    exact ⟨_, by rw [‹Row.find? _ rels = some _›]; rfl, rfl, relReads_conforms ‹_›⟩
 
 /-- The run inside `Program.run`, on what it decoded, never reaches `stuck`: it ends with a value
 of the method's result type (its calls and its new state) or a named non-`stuck` fault. -/
 theorem invoke_never_stuck {D : Type} {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D}
     {look : Pinned D} {fuel : Nat} {idb : ByteArray} {L : Loaded} {g : Nat} {p : Package}
-    {ℓ : Label} {mty A : Ty} {ks : List Ty} {state : Slots} {args : ByteArray} {sd ad : Data} {r : Req D}
-    {ticks : Nat}
+    {rv : RowView D} {ℓ : Label} {mty : Ty} {sg : Sig} {state : Slots} {args : ByteArray}
+    {sd ad wd : Data} {r : Req D} {ticks : Nat}
     (hload : load digestOf look fuel idb ⟨[], [], []⟩ = .ok (L, g))
     (hp : L.pkgs[g]? = some p)
-    (hm : Row.find? ℓ (recordRow p.iface) = some mty) (hA : methodSig p.state mty = some (A, ks))
+    (hm : Row.find? ℓ (recordRow p.iface) = some mty) (hA : methodSig p.state p.rels mty = some sg)
     (hstate : readState digestOf (recordRow p.state) state = .ok sd)
-    (hargs : Wire.decodeData A args = .ok ad)
+    (hargs : Wire.decodeData sg.arg args = .ok ad)
+    (hrows : readsData digestOf p.rels rv r.self sg.reads = .ok wd)
     (hr : reqOk bytesOf r = true) :
-    RunOK L.ifaces (resultTy p.state ks)
+    RunOK L.ifaces (resultTy p.state sg.calls (editTy p.rels) sg.edits)
       (run L.lib Bounds.stackMax ticks 0
-        (State.init (apply3 g ℓ) [(reqData bytesOf r).toVal, ad.toVal, sd.toVal])) := by
+        (State.init (apply4 g ℓ) [(reqData bytesOf r).toVal, ad.toVal, sd.toVal, wd.toVal])) := by
   have hs := readState_conforms hstate
   rw [← checkShape_state ((load_checked hload g p hp).1)] at hs
   exact method_run_sound hload hp hm hA (toVal_typed hs) (toVal_typed (decodeData_conforms hargs))
-    (toVal_typed (reqOk_conforms hr))
+    (toVal_typed (reqOk_conforms hr)) (toVal_typed (readsData_conforms hrows))
 
 /-- The twin for laws: every law of a loaded package, run in `Program.judge` on the old and new states
 it decoded from the slots and the request, never reaches `stuck`: it ends with a value of
@@ -238,8 +426,8 @@ data the text read to: so the run (`runMeasured`, which resolves the same method
 planned call's arguments. -/
 theorem argsOf_decodes {D : Type} [DecidableEq D] {digestOf : ByteArray → Option D} {look : Pinned D}
     {pkg : D} {method : Nat} {text : String} {b : ByteArray} (h : argsOf digestOf look pkg method text = .ok b) :
-    ∃ p ℓ A ks d, readPackage look pkg = .ok p ∧ resolveMethod (D := D) p method = .ok (ℓ, A, ks) ∧
-      readAt digestOf A text = .ok d ∧ Wire.decodeData A b = .ok d := by
+    ∃ p ℓ sg d, readPackage look pkg = .ok p ∧ resolveMethod (D := D) p method = .ok (ℓ, sg) ∧
+      readAt digestOf sg.arg text = .ok d ∧ Wire.decodeData sg.arg b = .ok d := by
   unfold argsOf at h
   simp only [bind, Except.bind] at h
   split at h
@@ -248,14 +436,14 @@ theorem argsOf_decodes {D : Type} [DecidableEq D] {digestOf : ByteArray → Opti
     split at h
     · cases h
     · rename_i la hr
-      obtain ⟨ℓ, A, ks⟩ := la
+      obtain ⟨ℓ, sg⟩ := la
       split at h
       · cases h
       · rename_i d hd
         split at h
         · rename_i b' he
           cases h
-          exact ⟨p, ℓ, A, ks, d, hp, hr, hd, Wire.decodeData_eq_ok_iff.mpr he⟩
+          exact ⟨p, ℓ, sg, d, hp, hr, hd, Wire.decodeData_eq_ok_iff.mpr he⟩
         · cases h
 
 theorem lookup_append_of_lt {pre t : Slots} {k : Nat} (h : ∀ e ∈ pre, e.1 < k) :

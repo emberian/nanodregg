@@ -118,4 +118,13 @@ theorem world_get_height_le_steps {b : ByteArray} {i j : Nat} {w : World Digest}
     (h : world.get b i = .ok (w, j)) : w.height ≤ w.steps :=
   Nanodregg.Codec.Kernel.world_get_height_le_steps digestCodec_lawful.on h
 
+/-- **A reopened base's rows fit and every head counts its rows** (KERNEL-48). -/
+theorem world_decode_rows {b : ByteArray} {w : World Digest} (h : world.decode b = .ok w) :
+    RowsCodecFits env (fun _ => True) w.trie w.rows :=
+  Nanodregg.Codec.Kernel.world_decode_rows digestCodec_lawful.on h
+
+theorem world_get_rows {b : ByteArray} {i j : Nat} {w : World Digest} (h : world.get b i = .ok (w, j)) :
+    RowsCodecFits env (fun _ => True) w.trie w.rows :=
+  Nanodregg.Codec.Kernel.world_get_rows digestCodec_lawful.on h
+
 end Nanodregg.Codec.Deployed
