@@ -53,4 +53,142 @@ runs; the plant is what proves the comparator can fail. (5) `load1 < 2` is a Mac
 `create` as THE record because PROTOCOL's in-process row does: the journeys' records are
 births and writes, and I did not check that a write-heavy mix behaves the same.
 
-**Status.** open (GATES: the standing hook + plant, ID-9).
+**Status.** superseded by PERF-2 (2026-10-18): the Linux path, a third actor, the standing row, and counts in place of a clock in the gate.
+
+## PERF-2 · THE BAR runs on Linux, in standing, and gates counts, never a clock (2026-10-18)
+
+**Decision.**
+- **The Linux path runs.** `scripts/bar.sh` names the program to the sandbox (`--exec HOST`), because the Linux
+  bwrap floor refuses a program outside every path. The Stores go in a fresh directory under `--root` (the gate
+  passes its `{fresh}` scratch, which runs.py removes, GATES-6). A RAM file system there makes every fsync free,
+  and bar.sh goes RED by name; hbox's `/tmp` is tmpfs. The custody workspaces, sockets and logs (KB) go in a
+  fresh directory under `$HOME`. Custody refuses a key under any directory a group or other can write (sshd's
+  StrictModes), and every path under /tank/dregg-build is 775, so bar.sh checks that chain and goes RED by name.
+- **Three actors, and the workload uses each other's work.** The actors are two friends (`nd --init`, separate
+  holding) and the hosted-resident STAND-IN (`nd --init-hosted`, one-record custody, driven by `nd` argv). The
+  stand-in has no model and no `nd --stdio` wire; HOSTING-8's resident replaces it. N records are N write
+  commands. First each actor creates one object and grants it `anyone mutate` (6 records). Then come N−6
+  writes, round robin over the actors, each actor alternating its own object and the next actor's object
+  through the grant.
+  - `host check`'s `use=` must be exactly 3 (PROTOCOL-43, cv 01a14e19-a82f).
+  - Every follow must be at the writer's step count, and the writer must hold each follow's head
+    (`host check W --anchor`).
+  - A write refused `stale` is re-run after one `nd sync`, at most 8 times, and counted.
+- **Two modes.** Full (default) is concurrent: THE BAR's clock, release binaries, limits judged only when
+  load1 < 2. `--standing` runs one command at a time on the dev profile, judges counts only, and reports the
+  clock. In serial order every count is a function of N alone.
+- **Counts, from the deployed binaries.** All count lines print as `BAR count …`; in `--standing` the pinned
+  ones also print as `WASTE bar <metric> <ratio>`, which gates/waste.tsv pins (ceilings only fall).
+  - The writer Store's `host check` STATUS, before and after: steps, records and seg_bytes per command. These
+    are pinned.
+  - The open fds each nd-supervise holds once every connection has closed (settled within 5 s), minus at
+    start. These are pinned at 0. They were 2.200 and 0.733, a leak this bar found (cv 01a14ed9-8c59), until
+    CLIENT-28 (cf79591) fixed it.
+  - The writer's /proc io (read/write syscalls and bytes per command). These are reported, not pinned: they
+    drift by one between identical runs.
+  - The reopen's tail (steps and bytes past the base).
+- **The standing row.** `gates/runs.tsv`: `script:scripts/bar.sh  --records 60 --standing --root {fresh}  BAR
+  verdict PASS  --records 60 --standing --root {fresh} --harness-control`. runs.py drops ND_BIN from the row's
+  environment, so bar.sh always builds the candidate's client (GATES-6). gates/runs.py gains the `script:` row kind (cross-layer, GATES-6).
+  The row is selected on every judge and takes about 16 s.
+- **The control (`--harness-control`).** Each of the three comparators gets one expectation nothing meets:
+  limits 0 (GATES-6: any measured time is over, so the control cannot depend on the box's speed; it replaces the old BAR_LIMIT_SCALE plant, and a gate now runs it), use must be 4 of 3, and the follow must
+  be one step past the writer.
+  - The control reads RED naming `harness-control` only when all three fired.
+  - If any one stays quiet, it prints the pass line, and runs.py refuses the row.
+  - Each disabled comparator was mutation-proven on hbox ("a planted expectation stayed quiet: use / at-tip /
+    limit").
+- **gates/bar.tsv** keeps the two `limit` rows. Its `run` rows are the trend (date, sha, device, mode, N, load,
+  clock numbers, use, steps/cmd, seg-bytes/cmd, writer fds/cmd, verdict), never a ratchet.
+
+**Alternatives.**
+- (a) Pin counts in gates/bar.tsv with bar.sh as their judge, as the brief said. Refused: that is a second
+  ratchet beside waste.py, with its own raise rule and its own "pinned but unmeasured" rule. Law 1.
+- (b) Gate the clock on a quiet box. Refused: Ember, no wall-clock benchmarks. A limit is a liveness deadline.
+  Full mode still judges it, but only on a quiet box, and the standing row never does.
+- (c) Make the standing row concurrent. Refused: group commit makes records and bytes per command depend on
+  timing. The serial run gives exact counts, and ceilings pinned from it hold for the concurrent run too,
+  because batching only lowers them.
+- (d) Raise the soft fd limit to get through 1000. Refused: it hides the leak the bar found.
+
+**Why.** The only number that answers THE BAR is one the deployed processes produce. On a box that is never
+quiet, the part of it a gate can hold is the deterministic counts. The first day of running it found two
+defects nothing else could have seen:
+- nd-supervise leaks ~2 fds and a thread per connection, so at 1000 records connections are dropped silently
+  (cv 01a14ed9-8c59, CLIENT-7).
+- An honest stale re-run spends the refusal budget (KERNEL-19, PROTOCOL-13; work/PERF-LOG.md FINDING 2).
+
+**CRITIQUE.**
+- (1) The "resident" is a third member with hosted custody. It shares the CLI path, and no model chooses its
+  writes.
+- (2) One box, no ssh, a warm OS cache. These are C2's gaps, and they remain.
+- (3) Hashes and verifies are not counted: the deployed path has no counter (PERF-3). Verifies per reopen are 0
+  by design (HOST-22). A follow verifies every step it absorbs. The at-tip check already fixes that number to
+  steps per command, so it has no row of its own: a second row would be a twin of steps-per-command.
+- (4) seg-bytes-per-command depends on N (745.9 at 30, 757.7 at 60). It is pinned at the row's N, so a change
+  to the workload re-pins it.
+- (5) A fd row at 0 sees a leak only of fds held after the connections close. A supervisor that leaks while
+  connections are open and frees on close is CLIENT-28's 71-fd bound's business, not this row's.
+
+**META-CRITIQUE.**
+- I kept bar.sh's one-file shape (python in a heredoc) because PERF owns only that path. A reader pays for that.
+- I chose writes to make use=3 because writes need no package text. A Lang mirror of the counter package in
+  bash would be a twin. So invokes (the counter's `add`) are not in THE BAR's mix.
+- The serial standing row measures a workload no friend produces. It holds counts, and it says nothing about
+  contention.
+
+- **First runs at 1000 (b9cd50f, hbox, noisy box).** Two full runs, both UNJUDGED (load1 15–17 on 24 cpus):
+
+  | run | write p50 / p99 / max (ms) | writer reopen (ms) | follow reopen (ms) | use | steps/cmd | records/cmd | stale re-runs |
+  |---|---|---|---|---|---|---|---|
+  | 1 | 55.9 / 136.6 / 182.2 | 110.1 | 110.6 | 3 | 1.015 | 0.603 | 15 |
+  | 2 | 42.8 / 75.2 / 89.7 | 105.2 | 106.7 | 3 | 1.000 | 0.531 | 0 |
+
+  Both are inside the limits (5000, 60000) by 37–570x. This is the baseline THE BAR v2 is measured against.
+  Before cf79591, every 1000-record run was RED at 8–12 s.
+
+**Status.** open (GATES-6 agreed 2026-10-18: the `script:` row kind, conditions 1–3 met).
+
+## PERF-3 · PROPOSED to ROOT: deployed-parameter counts from THE BAR's own Store (swap 10, C4/C5) (2026-10-18)
+
+**Decision (proposed).** A PERF tool exe, `bench-count STORE`, in `Bench/Count.lean`.
+- It opens a Store the deployed host wrote: bar.sh's writer Store, kept for it by a `--keep-store` flag.
+- It opens it read-only, through `Host.Check.openClean` (the open `check` uses).
+- It re-folds every record of the segment with the deployed definitions (`Record.step Codec.Deployed.digestCodec
+  (World.step E) (World.roots E)`). E is `Kernel.Sim.Gen.countingEnv X.env`: the deployed Env, with every
+  trie-domain hash marked. Signature verifies are counted through the same mark on the verify the receive path
+  calls.
+- It prints `WASTE bar hashes-per-step`, `WASTE bar hashes-per-touched-cell` and `WASTE bar verifies-per-step`.
+  These come from the deployed digest (cSHAKE256, 32 bytes), deployed Bounds and Ed25519, over THE BAR's
+  workload. bar.sh's standing row runs it on the Store it just made.
+- The host-sim/kernel-sim WASTE rows keep their toy-scale role. The same metric at deployed scale gets its own
+  row. A toy row that disagrees by more than its stated factor is a finding, not a re-pin.
+
+**Price.**
+- Premises on landed theorems: none. No deployed module changes, and the exe imports Host.Deployed and
+  Kernel.Sim.Gen; it is imported by nothing.
+- Bytes: one lean_exe (~150 lines, Bench/ is PERF's), plus its runs.tsv row (`-`: run by bar.sh, which owns
+  its verdict), plus ~1 s per judge.
+- `countingEnv` moves from Sim-only to a second consumer. That is KERNEL-36's instrument used as written, not a
+  copy.
+
+**Alternatives.**
+- (a) A counter inside the host process, printed in STATUS (`hashes=H verifies=V`). The deployed Env would need
+  an IO effect inside a pure hash: dbgTrace or an unsafe ref, inside the TCB. Refused as priced: it weakens
+  what the TCB is (CLAUDE.md pause item 2), to count something the replay counts exactly.
+- (b) Thread a work tally through World.step. Every World.step theorem would gain a component. That is the
+  premise spread minted-price-premises-not-only-cost warns about.
+- (c) `perf stat --no-scale` instructions per command on the writer. Deterministic only to a few percent, and
+  it counts the runtime, not the kernel's work. Useful as a report, not as a ceiling.
+
+**CRITIQUE.**
+- The replay is the deployed DEFINITIONS at deployed parameters, not the deployed PROCESS. A regression in the
+  process's own path (a second fold on serve, re-hashing in the pager) is invisible to it. PERF-2's /proc and
+  fd counts are what see that side.
+- dbgTrace-to-stderr counting costs ~1 write per hash: fine for 60 records, slow at 1000.
+
+**META-CRITIQUE.** I priced (a) out partly because I cannot land it (KERNEL/HOST own those paths). If ROOT
+wants the process itself to count, the honest version is a HOST-owned `host check --count` that runs this same
+replay inside the deployed binary. It would add no premise either. That is the real alternative to this one.
+
+**Status.** PROPOSED to ROOT 2026-10-18.

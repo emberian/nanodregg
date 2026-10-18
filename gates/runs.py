@@ -27,6 +27,16 @@ first such row when none is selected). It runs `cargo test --locked --manifest-p
 ND_LEAN_BIN = the tree's built bin directory, after the build; it is selected when CRATE/ changed or
 any exe it drives is selected.
 
+A row `script:PATH` is a script of this tree that drives the built Lean exes and the client binaries
+over real sockets (PERF-2: scripts/bar.sh, THE BAR at a bounded scale). `runs` are its argument lists
+as for an exe (`{fresh}` is a fresh directory that exists when the run starts and is removed after),
+`pass` its last stdout line, and `control` its known-red control (an argument list with
+--harness-control, read exactly as an exe's). It runs with ND_LEAN_BIN = the built bin directory and
+the cargo target directory a cargo row uses, so it builds no Lean and shares the cargo artifacts;
+ND_BIN is removed from its environment, so it builds the candidate's client (GATES-6). It has
+no import closure to select it by, so it is selected on every judge (fail-closed: a script row is never
+skipped because its inputs are unknown).
+
 A cargo run is ok on exit 0 with libtest's summary saying at least one test passed (a run that
 ran zero tests, or whose summary the reader cannot find, is RED: an absent verdict is not a pass).
 A run is ok on exit 0 with its pass line last; INCOMPLETE on exit 3 (a row with no driver yet:
@@ -99,8 +109,13 @@ def check(t: tree.Tree) -> list[str]:
         return [str(e)]
     exes = set(t.exes)
     cargo = {k for k in rows if k.startswith("cargo:")}
+    script = {k for k in rows if k.startswith("script:")}
     red = ([f"lean_exe {e} has no row in {RUNS} (a verdict run, or `-` with why it is not one)" for e in sorted(exes - set(rows))]
-           + [f"{RUNS} row {e} names no lean_exe" for e in sorted(set(rows) - exes - cargo)])
+           + [f"{RUNS} row {e} names no lean_exe" for e in sorted(set(rows) - exes - cargo - script)]
+           + [f"{RUNS} row {k}: no executable {k[len('script:'):]}" for k in sorted(script)
+              if not os.access(os.path.join(t.root, k[len("script:"):]), os.X_OK)]
+           + [f"{RUNS} row {k}: a script row is a verdict run (runs, pass, a --{CONTROL} control), never `-`"
+              for k in sorted(script) if rows[k][0] is None])
     for k in sorted(cargo):
         _, crate, test = k.split(":")
         if not os.path.isfile(os.path.join(t.root, crate, "tests", test + ".rs")):
@@ -113,11 +128,12 @@ def check(t: tree.Tree) -> list[str]:
 
 def selected(t: tree.Tree, changed: list[str] | None, rows: dict) -> set[str]:
     cargo = {k: rows[k][0][0] for k in rows if k.startswith("cargo:")}
+    script = {k for k in rows if k.startswith("script:")}
     if changed is None or any(p in ("lakefile.lean", "lean-toolchain", RUNS) or p.endswith((".c", ".h")) for p in changed):
-        return set(t.exes) | set(cargo)
+        return set(t.exes) | set(cargo) | script
     mods = {p[:-5].replace("/", ".") for p in changed if p.endswith(".lean")}
     out = {e for e, r in t.exes.items() if t.closure([r]) & mods}
-    return out | {k for k, drives in cargo.items()
+    return out | script | {k for k, drives in cargo.items()
                   if set(drives) & out or any(p.startswith(k.split(":")[1] + "/") for p in changed)}
 
 
@@ -160,6 +176,16 @@ def run(t: tree.Tree, exe: str, args: list[str], passline: str, fresh: str, bind
         missing = [e for e in drives if not os.path.isfile(os.path.join(bindir, e))]
         if missing:
             return "", "ABSENT(no binary: " + ", ".join(missing) + ")"
+    elif exe.startswith("script:"):
+        # `{fresh}` exists for a script (its bulk goes there and is removed after); ND_BIN is dropped so the
+        # script builds the candidate's own client, never a prebuilt one the judge's environment names
+        os.makedirs(fresh)
+        argv = [os.path.join(t.root, exe[len("script:"):])] + [x.replace("{fresh}", fresh) for x in args]
+        env = dict(os.environ, ND_LEAN_BIN=bindir,
+                   CARGO_TARGET_DIR=os.environ.get("CARGO_TARGET_DIR", os.path.join(t.root, ".lake", "cargo-target")))
+        env.pop("ND_BIN", None)
+        if not os.path.isfile(os.path.join(bindir, "host")):
+            return "", "ABSENT(no binary: host)"
     else:
         host = os.path.join(bindir, "host")
         argv = [os.path.join(bindir, exe)] + [x.replace("{host}", host).replace("{fresh}", fresh) for x in args]
@@ -240,7 +266,8 @@ def main() -> int:
     def mine(exe: str) -> bool:
         m = own.get(exe)
         return m is not None and m[1:] == rows[exe][1:] and (not exe.startswith("cargo:") or os.path.isfile(
-            os.path.join(t.root, exe.split(":")[1], "tests", exe.split(":")[2] + ".rs")))
+            os.path.join(t.root, exe.split(":")[1], "tests", exe.split(":")[2] + ".rs"))) and (
+            not exe.startswith("script:") or os.path.isfile(os.path.join(t.root, exe[len("script:"):])))
 
     def report(exe: str, args: list[str], v: str, out: str, tag: str = "") -> None:
         sys.stderr.write(out)

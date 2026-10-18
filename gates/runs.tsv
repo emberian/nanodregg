@@ -36,3 +36,4 @@ cargo:client:real	host	exit 0	nobin RED
 cargo:client:stdio	host	exit 0	nobin RED
 cargo:client:supervise	host	exit 0	nobin RED
 cargo:attach:attach	host	exit 0	nobin RED
+script:scripts/bar.sh	--records 60 --standing --root {fresh}	BAR verdict PASS	--records 60 --standing --root {fresh} --harness-control

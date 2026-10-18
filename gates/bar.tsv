@@ -1,6 +1,11 @@
-# gates/bar.tsv — THE BAR (owner: PERF). `limit` rows are the ceilings scripts/bar.sh judges
-# against (CHARTER: 1000 records, write ≤ 5 s, cold reopen ≤ 60 s); `run` rows are the trend of
-# judged and unjudged runs (scripts/bar.sh --record), never a ratchet: wall time on one device.
-# kind	metric|date	value|sha	device	load (before / after)	write-p99-ms	reopen-ms	verdict
+# gates/bar.tsv — THE BAR (owner: PERF; decisions/perf.md PERF-1, PERF-2).
+# `limit` rows: the wall-clock ceilings scripts/bar.sh judges in full mode on a quiet box only
+# (CHARTER: 1000 records, write <= 5 s, cold reopen <= 60 s); never in --standing, never on a loaded box.
+# `run` rows: one per `scripts/bar.sh --record` — the trend of runs, never a ratchet (wall time on one
+# device under its load). The deterministic counts are pinned in gates/waste.tsv (op `bar`), not here.
+# kind	metric|date	value|sha	device mode N	load (before / after)	write-p99-ms	reopen-ms	follow-reopen-ms	use	steps/cmd	seg-bytes/cmd	writer-fds/cmd	verdict
 limit	write-p99-ms	5000
 limit	reopen-ms	60000
+run	2026-10-18T12:18Z	b9cd50f	Linux x86_64 standing N=60	15.16 15.87 13.25 / 16.50 16.14 13.38	121.64	12.708	55.201	3	1.000	757.700	0.000	PASS
+run	2026-10-18T12:19Z	b9cd50f	Linux x86_64 full N=1000	16.50 16.14 13.38 / 17.17 16.35 13.54	136.619	110.074	110.59	3	1.015	760.896	0.000	UNJUDGED load1 16.50/17.17 >= 2
+run	2026-10-18T12:19Z	b9cd50f	Linux x86_64 full N=1000	17.17 16.35 13.54 / 15.45 16.01 13.49	75.177	105.249	106.689	3	1.000	749.871	0.000	UNJUDGED load1 17.17/15.45 >= 2
