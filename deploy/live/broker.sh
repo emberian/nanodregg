@@ -6,8 +6,8 @@
 # grain-launch,hosting-controller}, anchors.pem
 # (deploy/tls/anchors.pem) and EXITS.md (deploy/units/EXITS.md: codes are read from it by name, never
 # typed here). ROOT must not exist; everything is written under it except the unit link
-# (`systemctl --user link`: three, nd-ops-live-keybroker and the two templates nd-ops-live-hfollow@ and
-# nd-ops-live-grain@). Units are started and stopped BY NAME; the only process signalled by
+# (`systemctl --user link`: four, nd-ops-live-keybroker, the writer nd-ops-live-serve that admits the
+# resident grain's two calls, and the two templates nd-ops-live-hfollow@ and nd-ops-live-grain@). Units are started and stopped BY NAME; the only process signalled by
 # hand is the decider, by the PID in keybroker's own PID file (ROOT/pids/decider.pid). Every wait is
 # bounded. One line per row, then `ALL PASS` or `FAIL k`:
 #   ROW NAME PASS|FAIL|INFO :: detail
@@ -21,10 +21,10 @@ SRC=${1:?usage: broker.sh SRC ROOT} ROOT=${2:?usage: broker.sh SRC ROOT}
 . "$SRC/journal.sh" || exit 2
 umask 022
 mkdir -p "$ROOT/bin" && chmod 0755 "$ROOT" || exit 2
-cp "$SRC"/bin/{host,live-calls,emit-units,keybroker,hosting-broker,emit-anchors,nd-supervise,grain-launch,hosting-controller} "$ROOT/bin/" || exit 2
+cp "$SRC"/bin/{host,live-calls,emit-units,keybroker,hosting-broker,emit-anchors,nd-supervise,grain-launch,hosting-controller} "$ROOT/bin/" && cp "$SRC/feed.py" "$ROOT/" || exit 2
 B=$ROOT/bin U=$ROOT/units R=$ROOT
 UNIT=nd-ops-live-keybroker
-LINKS="nd-ops-live-keybroker nd-ops-live-hfollow@ nd-ops-live-grain@"
+LINKS="nd-ops-live-keybroker nd-ops-live-hfollow@ nd-ops-live-grain@ nd-ops-live-serve"
 code() { # NAME TABLE: the code of NAME in EXITS.md's table whose heading starts `## TABLE`
   awk -F'|' -v n=" $1 " -v t="## $2" 'index($0, t) == 1 {in_t=1; next} /^## / {in_t=0}
     in_t && $3 == n {gsub(/ /, "", $2); print $2; exit}' "$SRC/EXITS.md"; }
@@ -64,20 +64,34 @@ for u in $LINKS; do
   systemctl --user link "$U/$u.service" >/dev/null || exit 2
 done
 systemctl --user daemon-reload
+# the World's resident grain (HOSTING-26): keybroker binds a socket only for a resident grain the Store
+# holds, so the rendered writer admits live-calls' two grain calls (install the lifecycle package,
+# create the grain) before any keybroker row; the socket's directory is the grain's name
+mkdir -p "$R/ws"
+S=nd-ops-live-serve
+systemctl --user start "$S"
+wait_for 30 test -S "$R/ws/serve.sock" || { echo "the writer for the grain calls did not bind"; exit 2; }
+gout=$(python3 -I "$R/feed.py" "$R/ws/serve.sock" "$R/calls" 0 2 grain | tr '\n' ';')
+systemctl --user stop "$S"
+gchk=$("$B/host" check "$R/store" | grep -o ' height=[0-9]*' | tr -d ' ')
+[ "$gchk" = height=2 ] && [ "$(echo "$gout" | grep -o 'status=0' | wc -l)" = 2 ] || { echo "the grain calls were not admitted: $gout check $gchk"; exit 2; }
+gdir=$(cat "$R/calls/grain.dir")
 fresh
-sock=$R/broker/01/broker.sock
+sock=$R/broker/$gdir/broker.sock
 
 # G. the rendered unit starts: ExecStartPre passes on the pinned anchors, keybroker binds the
-# resident's socket 0660 in its 02710 directory and its decider runs confined, under NoNewPrivileges
+# resident's socket in its 02710 directory (0600: PEER is this uid, keybroker's one-uid mode, HOSTING-21;
+# the deployment's two-uid socket is 0660) and its decider runs confined, under NoNewPrivileges
 systemctl --user start "$UNIT"
 up() { [ -S "$sock" ] && [ -s "$R/pids/decider.pid" ] && active; }
 if wait_for 30 up; then
   dp=$(cat "$R/pids/decider.pid")
-  m=$(stat -c '%a %g' "$sock") dm=$(stat -c '%a' "$R/broker/01")
+  m=$(stat -c '%a %g' "$sock") dm=$(stat -c '%a' "$R/broker/$gdir")
   nnp=$(prop NoNewPrivileges) dexe=$(readlink "/proc/$dp/exe" 2>/dev/null)
-  if [ "$m" = "660 $(id -g)" ] && [ "$dm" = 2710 ] && [ "$nnp" = yes ] && [ -n "$dexe" ]; then
-    row keybroker-unit-starts PASS "active; socket $m dir $dm; decider pid $dp exe $dexe; NoNewPrivileges=$nnp"
-  else row keybroker-unit-starts FAIL "socket '$m' dir '$dm' NoNewPrivileges=$nnp decider exe '$dexe'"; fi
+  ghost=$(ls -A "$R/broker" | grep -vx "$gdir" | tr '\n' ' ')
+  if [ "$m" = "600 $(id -g)" ] && [ "$dm" = 2710 ] && [ -z "$ghost" ] && [ "$nnp" = yes ] && [ -n "$dexe" ]; then
+    row keybroker-unit-starts PASS "active; the World's resident grain $gdir has socket $m dir $dm and nothing else is listed; decider pid $dp exe $dexe; NoNewPrivileges=$nnp"
+  else row keybroker-unit-starts FAIL "socket '$m' dir '$dm' unlisted names '$ghost' NoNewPrivileges=$nnp decider exe '$dexe'"; fi
 else row keybroker-unit-starts FAIL "$(prop ActiveState)/$(prop Result) $(exits) :: $(ju | tail -n 4 | tr '\n' ';')"; fi
 
 # H. a signalled decider: keybroker ends deciderSignaled (restart class), systemd restarts it

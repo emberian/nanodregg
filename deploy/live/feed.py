@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""deploy/live/feed.py SOCKET CALLDIR FROM TO — send calls FROM..TO-1 (live-calls payloads) to a
+"""deploy/live/feed.py SOCKET CALLDIR FROM TO [PREFIX] — send calls FROM..TO-1 (live-calls payloads
+PREFIX-NNN.bin, default `call`; `grain` is the resident grain's two calls) to a
 unit's client socket, one at a time, and print each reply's status byte.
 
 A client frame is `u32le len ‖ op ‖ payload` with len counting the op byte (client/src/frame.rs);
@@ -25,17 +26,18 @@ def read_exact(s, n):
 
 
 def main():
-    if len(sys.argv) != 5:
-        print("usage: feed.py SOCKET CALLDIR FROM TO", file=sys.stderr)
+    if len(sys.argv) not in (5, 6):
+        print("usage: feed.py SOCKET CALLDIR FROM TO [PREFIX]", file=sys.stderr)
         return 2
     sock, calls, lo, hi = sys.argv[1], sys.argv[2], int(sys.argv[3]), int(sys.argv[4])
+    prefix = sys.argv[5] if len(sys.argv) == 6 else "call"
     with open(os.path.join(calls, "op")) as f:
         op = int(f.read().strip())
     s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     s.settimeout(REPLY_SECONDS)
     s.connect(sock)
     for i in range(lo, hi):
-        with open(os.path.join(calls, "call-%03d.bin" % i), "rb") as f:
+        with open(os.path.join(calls, "%s-%03d.bin" % (prefix, i)), "rb") as f:
             payload = f.read()
         s.sendall(struct.pack("<I", 1 + len(payload)) + bytes([op]) + payload)
         try:

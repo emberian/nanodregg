@@ -54,11 +54,14 @@ def invitation (name : String) : Option ByteArray := do
 
 /-- `create` as the member `me`: after a carry (KERNEL-29) the members keep their old ids, keyed by
 the EXPORTED World's origin, while every call names the new World (`Unsigned.world`). -/
-def createAs (me : D) (w : World D) (i : Nat) (state : Slots := []) : Call D :=
+def callAs (me : D) (w : World D) (i : Nat) (pinned : List D) (body : Body D) : Call D :=
   let u : Unsigned D :=
     { world := w.origin, member := me, key, notBefore := 0, validUntil := Bounds.windowMax / 2 + i,
-      pins := [(me, pinOf X.env (w.live X.env me))], maxCharge := 1 <<< 40, body := .create none [] state }
+      pins := pinned.map fun id => (id, pinOf X.env (w.live X.env id)), maxCharge := 1 <<< 40, body }
   { unsigned := u, signature := Ed25519.sign seed (X.callMessage u) }
+
+def createAs (me : D) (w : World D) (i : Nat) (state : Slots := []) : Call D :=
+  callAs me w i [me] (.create none [] state)
 
 /-- The `i`-th call: founder 0 creates an empty data object, pinned on its own member cell as it
 is in `w` (distinct `i < windowMax / 2`, distinct `validUntil`, distinct txId), holding `state`
