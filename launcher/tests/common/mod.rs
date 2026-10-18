@@ -10,6 +10,7 @@ use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -213,9 +214,24 @@ pub enum Mode {
     Truncate,
 }
 
+/// Every request a fake provider received, in order.
+pub type Seen = Arc<Mutex<Vec<Vec<u8>>>>;
+
 /// A fake provider over TLS with the server configuration `tls`, answering as `mode` says; keeps
 /// every request it received. A connection whose handshake fails records nothing.
-pub fn upstream(mode: Mode, server: &Server) -> (String, Arc<Mutex<Vec<Vec<u8>>>>) {
+pub fn upstream(mode: Mode, server: &Server) -> (String, Seen) {
+    let (addr, seen, _) = upstream_held(mode, server);
+    (addr, seen)
+}
+
+/// The longest a held reply waits for its release.
+pub const HOLD_MAX: Duration = Duration::from_secs(60);
+
+/// `upstream`, and a switch: while it is set, a request is recorded and its reply held back (at
+/// most `HOLD_MAX`), so a test can end the asker after its ask was spent and before any answer.
+pub fn upstream_held(mode: Mode, server: &Server) -> (String, Seen, Arc<AtomicBool>) {
+    let hold = Arc::new(AtomicBool::new(false));
+    let h2 = Arc::clone(&hold);
     let tls = Arc::clone(&server.tls);
     let l = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = l.local_addr().unwrap().to_string();
@@ -251,6 +267,10 @@ pub fn upstream(mode: Mode, server: &Server) -> (String, Arc<Mutex<Vec<Vec<u8>>>
                 continue;
             }
             s2.lock().unwrap().push(req.clone());
+            let held = Instant::now();
+            while h2.load(Ordering::SeqCst) && held.elapsed() < HOLD_MAX {
+                std::thread::sleep(Duration::from_millis(50));
+            }
             let (status, body) = match mode {
                 Mode::Echo => (200, req),
                 Mode::Says(st, b) => (st, b.to_vec()),
@@ -271,7 +291,7 @@ pub fn upstream(mode: Mode, server: &Server) -> (String, Arc<Mutex<Vec<Vec<u8>>>
             let _ = c.flush();
         }
     });
-    (addr, seen)
+    (addr, seen, hold)
 }
 
 /// A real Store and the operator's custody: `host genesis` from custody's own keys, `host serve`

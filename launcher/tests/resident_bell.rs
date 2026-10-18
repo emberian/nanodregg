@@ -1,41 +1,47 @@
-//! THE BAR's hosted Hermes, end to end (`cargo:launcher:resident_bell`, HOSTING-27): the real
-//! resident, the Lean exe `resident`, confined under grain-launch with its Lean plan, answers a
-//! bell (`world/resident/Bell`, LANG-52) that the founder rings, with the reply keybroker got from
-//! the FAKE provider. The founder reads the answer.
+//! THE BAR's hosted Hermes, end to end (`cargo:launcher:resident_bell`, HOSTING-27, HOSTING-31):
+//! the real resident, the Lean exe `resident`, confined under grain-launch with its Lean plan,
+//! answers the rings of a bell (`world/resident/Bell`, LANG-58: a queue of rings) with the reply
+//! keybroker got from the FAKE provider. The founders read the answers.
 //!
 //! Everything is the deployed path:
 //! - a real Store, with the operator's follower Store under the hosting root;
 //! - keybroker on the emitted unit's argv;
 //! - grain-launch on ITS unit's argv over the real `hosting-controller`;
 //! - the resident's member, served by `nd --stdio` under nd-supervise on MEMBER/<dirOf>/nd.sock;
-//! - the operator's Bell object, `resident` = that member, with `observe,invoke:0` granted to it
-//!   (the config names the grant; `invoke … --via` it).
+//! - a second founder, C, a member with its own `nd --stdio`, granted `ring` on the bell;
+//! - the operator's Bell object, `resident` = the resident's member, with `observe,invoke:0`
+//!   granted to it (the config names the grant; `invoke … --via` it).
 //!
 //! The resident reads `pkg/resident.conf` (one Lang value) and its plan from argv. It learns
-//! `answer`'s index from the description. Sequencing waits on what the founder reads, never on time
-//! alone.
+//! `answer`'s index and `pending`'s limit from the description, and each tick reads every pending
+//! ring with ONE range read. Sequencing waits on what the founders read, never on time alone.
 //!
-//! - B1: the founder rings `hi`. The founder reads exactly
-//!   `(record (answer "hello back") (open true) (pending false) (resident #M) (ring "hi") (ringer #OP))`.
-//! - B2, exactly one ask per ring: a second ring gets its own answer. After it, the fake provider
-//!   has received exactly two requests, and still two after several more ticks with nothing
-//!   pending. The key went upstream on both (CONTROL); the resident's volume never holds it.
-//! - Refused, each by name. The member surface names a method's check `program`; the bell's own reason
-//!   (`unrung`, `notResident`) does not cross it, and Lang's journey LB5/LB8 pin those reasons:
-//!   - (unrung) the resident's member answers a bell that is not pending: `refused program`, and
-//!     the state does not move.
-//!   - (notResident) the operator answers: `refused program`. The resident exe, configured for a
-//!     bell whose resident is the operator (granted invoke), asks ONCE. Its answer is refused, the
-//!     bell still waits, so it ends `answerRefused program`. The controller restarts it; it answers
-//!     again from its kept text and asks no more (the provider's count rises by exactly one).
-//!   - (grantRight) the resident exe, configured for a bell whose grant to it carries `observe`
-//!     but not `invoke:0`, ends `answerRefused grantRight`, again after exactly one ask.
-//!   - (off its fence) the resident exe refuses an argv that is not its own plan before it reads
-//!     anything: its broker and member sockets swapped (a reordering of grain-launch's fields), and
-//!     another resident's broker socket, each end `argvNotPlan` (exit 10). CONTROL: its true argv,
-//!     read back from grain-launch's report, passes `place` and reaches the config (exit 11, run
-//!     with no config). Inside the sandbox that other socket does not even exist: the resident row's
-//!     R5.
+//! - Q1, the row the queue was bought for: the operator and C ring at the same moment, before the
+//!   resident runs. BOTH land (the old Bell refused the second `busy`); the two keys share a
+//!   notBefore, so they were signed over one view.
+//! - Q2, lowest first: the resident starts with both pending and answers them in key order (its
+//!   log names each answer's key); both answers read back from `answers`, `pending` is empty, the
+//!   provider saw exactly one request per ring, and no answer of the resident's was refused.
+//! - Q3, exactly once: a second answer to an answered ring, through the resident's own member, is
+//!   refused `missingRow` (the kernel: the pending row is gone), and nothing moves.
+//! - Q4, a stranger's answer: the operator answers a pending ring: `refused program`, the ring
+//!   still pending; the resident then answers it.
+//! - Q5, retire: the owner retires the lowest answered ring: admitted; its `answers` and `rings`
+//!   rows are gone.
+//! - Q6, the intent: the resident is stopped after its ask reached the provider and before any
+//!   reply (the provider holds it back). Restarted, it answers that ring `(unanswered restart)` from
+//!   the intent it kept BEFORE the ask, and asks no more.
+//! - Refused, each by name (HOSTING-27's, re-cut to the queue): the resident exe on a bell whose
+//!   resident is the operator ends `answerRefused program` after exactly one ask, restarts, answers
+//!   from its kept text and asks no more; on a bell whose grant lacks `invoke:0`, `answerRefused
+//!   grantRight`; an argv that is not its plan, `argvNotPlan` (CONTROL: its true argv reaches the
+//!   config).
+//!
+//! Plants (HOSTING-31, each run by hand, red by name): answering an answered ring (decideTick
+//! without the pending check, with the kept answer not forgotten on delivery) → Q2 "an answer was
+//! refused"; answering out of order (the highest pending) → Q2 "lowest first"; the intent dropped
+//! (no keep before the ask) → Q6 "a restart asked again"; a stranger's answer (the Bell without its
+//! resident check and guard) → Q4 "a stranger's answer landed".
 //!
 //! Needs the built Lean exes (`resident`, `hosting-controller`, `hosting-broker`, `host`) and the
 //! client's `nd`/`nd-supervise`. A missing one fails by name.
@@ -49,6 +55,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::process::Command;
+use std::sync::atomic::Ordering;
 
 use common::*;
 use nanodregg_client::generated::layout::{Command as NdCommand, CommandReply};
@@ -79,11 +86,9 @@ fn member_cmd(sock: &Path, argv: &[&str]) -> (u8, String, String) {
     )
 }
 
-/// The Bell's state text for a new bell whose resident is `resident`.
-fn bell_state(resident: &str, ringer: &str) -> String {
-    format!(
-        "(record (answer \"\") (open true) (pending false) (resident #{resident}) (ring \"\") (ringer #{ringer}))"
-    )
+/// The Bell's state for a new bell whose resident is `resident`.
+fn bell_state(resident: &str) -> String {
+    format!("(record (open true) (resident #{resident}))")
 }
 
 /// The resident's config for bell `bell`.
@@ -93,16 +98,73 @@ fn conf(bell: &str, grant: &str) -> String {
     )
 }
 
+/// The text between `pre` and the next `end` in `l`.
+fn between<'a>(l: &'a str, pre: &str, end: char) -> &'a str {
+    let i = l.find(pre).unwrap_or_else(|| panic!("no `{pre}` in {l}")) + pre.len();
+    let rest = &l[i..];
+    &rest[..rest.find(end).unwrap()]
+}
+
+/// A row of one of the Bell's relations, as `read OBJ REL K` prints it:
+/// `(record (key (record (notBefore N) (ringer #H))) (val (record (text "T"))))`.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct Row {
+    not_before: u64,
+    ringer: String,
+    text: String,
+}
+
+fn rows(out: &str) -> Vec<Row> {
+    out.lines()
+        .filter(|l| !l.is_empty())
+        .map(|l| Row {
+            not_before: between(l, "(notBefore ", ')').parse().unwrap(),
+            ringer: between(l, "(ringer #", ')').to_owned(),
+            text: between(l, "(text \"", '"').to_owned(),
+        })
+        .collect()
+}
+
+/// `answer`'s argument for the ring keyed by `r`.
+fn answer_arg(r: &Row, text: &str) -> String {
+    format!(
+        "(record (notBefore {}) (ringer #{}) (text \"{text}\"))",
+        r.not_before, r.ringer
+    )
+}
+
+/// The keys of the resident's `answered N HEX K bytes` lines, in the order it logged them.
+fn answered_keys(log: &str) -> Vec<(u64, String)> {
+    log.lines()
+        .filter_map(|l| l.split_once("resident: answered ").map(|x| x.1))
+        .map(|l| {
+            let mut w = l.split(' ');
+            (
+                w.next().unwrap().parse().unwrap(),
+                w.next().unwrap().to_owned(),
+            )
+        })
+        .collect()
+}
+
 #[test]
-fn the_resident_answers_the_bell_once_per_ring_and_nothing_else() {
+fn the_resident_answers_every_ring_lowest_first_once_and_nothing_else() {
     let d = dir("bel");
     let keys = key_file(&d, 0o600);
     let pki = Pki::new();
     let anchors = pki.anchors(&d, 0o644);
     let server = pki.server(HOST, false);
     pki.pin(&d, &[&server]);
-    let (up, seen) = upstream(Mode::Ok, &server);
+    let (up, seen, hold) = upstream_held(Mode::Ok, &server);
     let asks = || seen.lock().unwrap().len();
+    let asked_about = |ring: &str| {
+        let needle = format!("\"{ring}\"");
+        seen.lock()
+            .unwrap()
+            .iter()
+            .filter(|r| contains(r, needle.as_bytes()))
+            .count()
+    };
     let sock = Short::new("b");
     sockdir(&sock.0);
     let sock = &sock.0;
@@ -130,23 +192,37 @@ fn the_resident_answers_the_bell_once_per_ring_and_nothing_else() {
     );
     let m = member.id.clone();
     let op = w.operator.clone();
+    // C, the second founder: a member of its own, with its own `nd --stdio`
+    let (cfollow, csock) = (Short::new("f"), Short::new("c"));
+    let cpids = d.join("cpids");
+    nanodregg_devtools::mkdirs(&cpids).unwrap();
+    let founder_c = w.member(
+        &d.join("c-ws"),
+        &cfollow.0.join("follow.sock"),
+        &w.root.join("stores/C"),
+        &csock.0.join("nd.sock"),
+        &cpids,
+    );
+    let c = founder_c.id.clone();
     // the bells: B (the resident's, granted), NG (the resident's, no grant), NR (the operator's,
     // granted)
     let bell_pkg = w.install("world/resident/Bell");
     let create = |resident: &str| {
         line(
-            &w.run(&["create", "--pkg", &bell_pkg, &bell_state(resident, &op)]),
+            &w.run(&["create", "--pkg", &bell_pkg, &bell_state(resident)]),
             "id ",
         )
         .to_owned()
     };
     let (b, ng, nr) = (create(&m), create(&m), create(&op));
-    let grant = |o: &str, rights: &str| line(&w.run(&["grant", o, &m, rights]), "id ").to_owned();
+    let grant =
+        |o: &str, to: &str, rights: &str| line(&w.run(&["grant", o, to, rights]), "id ").to_owned();
     let (gb, gnr, gng) = (
-        grant(&b, "observe,invoke:0"),
-        grant(&nr, "observe,invoke:0"),
-        grant(&ng, "observe"),
+        grant(&b, &m, "observe,invoke:0"),
+        grant(&nr, &m, "observe,invoke:0"),
+        grant(&ng, &m, "observe"),
     );
+    let gc = grant(&b, &c, "observe,invoke:4");
     // the grain's package: the resident and its config
     let gdir = world.join("grains").join(&g);
     let (pkg, vol) = (gdir.join("pkg"), gdir.join("vol"));
@@ -184,7 +260,7 @@ fn the_resident_answers_the_bell_once_per_ring_and_nothing_else() {
         d.join("grain-launch.pid"),
     );
     let log = || gl.log();
-    let read = |o: &str| w.run(&["read", o]).trim_end().to_owned();
+    let rel = |o: &str, r: &str| rows(&w.run(&["read", o, r, "64"]));
     let start = || {
         w.run(&["invoke", &g, "1", "(record)"]);
         w.run(&["sync"]);
@@ -193,41 +269,121 @@ fn the_resident_answers_the_bell_once_per_ring_and_nothing_else() {
         w.run(&["invoke", &g, "2", "(record)"]);
         w.run(&["sync"]);
     };
+    let no_child = || {
+        until(
+            "no child of the grain",
+            60,
+            || fs::read_dir(&gl_pids).unwrap().next().is_none(),
+            &log,
+        );
+    };
+    let ring_op = |o: &str, text: &str| {
+        w.run(&["invoke", o, "4", &format!("(record (text \"{text}\"))")]);
+    };
+    let state = |o: &str| {
+        format!(
+            "pending {:?}\nanswers {:?}\n{}",
+            rel(o, "pending"),
+            rel(o, "answers"),
+            log()
+        )
+    };
+
+    // Q1: two founders ring at one moment, before the resident runs: both land, over one view
+    w.run(&["sync"]);
+    member_cmd(&founder_c.sock, &["sync"]);
+    std::thread::scope(|s| {
+        s.spawn(|| ring_op(&b, "from-op"));
+        s.spawn(|| {
+            let (exit, out, err) = member_cmd(
+                &founder_c.sock,
+                &[
+                    "invoke",
+                    &b,
+                    "4",
+                    "(record (text \"from-c\"))",
+                    "--via",
+                    &gc,
+                ],
+            );
+            assert_eq!(exit, 0, "C's ring: {out}{err}");
+        });
+    });
+    w.run(&["sync"]);
+    let pending = rel(&b, "pending");
+    assert_eq!(
+        pending
+            .iter()
+            .map(|r| r.text.as_str())
+            .collect::<std::collections::BTreeSet<_>>(),
+        ["from-c", "from-op"].into_iter().collect(),
+        "Q1: both rings land: {pending:?}"
+    );
+    assert_eq!(
+        pending[0].not_before, pending[1].not_before,
+        "Q1: the two rings were signed over one view: {pending:?}"
+    );
+    assert!(
+        pending[0] < pending[1],
+        "Q1: the range read lists in key order: {pending:?}"
+    );
+    let ringers: std::collections::BTreeSet<_> = pending.iter().map(|r| r.ringer.clone()).collect();
+    assert_eq!(
+        ringers,
+        [op.clone(), c.clone()].into_iter().collect(),
+        "Q1: the ringers"
+    );
+    assert_eq!(
+        rel(&b, "rings"),
+        pending,
+        "Q1: rings holds what pending holds"
+    );
+
+    // Q2: the resident answers both, lowest first
     next_window(t1);
     start();
     until(
         "the resident learns the bell",
         90,
-        || log().contains("resident: bell answer method 0"),
+        || log().contains("resident: bell answer method 0 pending limit 64"),
         &log,
     );
-
-    // B1: the founder rings; the resident answers; the founder reads it
-    w.run(&["invoke", &b, "3", "(record (text \"hi\"))"]);
-    let answered = |text: &str, ring: &str| {
-        format!(
-            "(record (answer \"{text}\") (open true) (pending false) (resident #{m}) (ring \"{ring}\") (ringer #{op}))"
-        )
-    };
     until(
-        "the first answer",
-        90,
-        || read(&b) == answered("hello back", "hi"),
-        &|| format!("{}\n{}", read(&b), log()),
+        "both answers",
+        120,
+        || rel(&b, "answers").len() == 2,
+        &|| state(&b),
     );
-    assert_eq!(asks(), 1, "B1: one ring, one ask");
-
-    // B2: a second ring, its own ask and answer; then nothing more
-    w.run(&["invoke", &b, "3", "(record (text \"again\"))"]);
-    until(
-        "the second answer",
-        90,
-        || read(&b) == answered("hello back", "again"),
-        &|| format!("{}\n{}", read(&b), log()),
+    let answers = rel(&b, "answers");
+    let expect: Vec<Row> = pending
+        .iter()
+        .map(|r| Row {
+            text: String::from_utf8_lossy(REPLY).into_owned(),
+            ..r.clone()
+        })
+        .collect();
+    assert_eq!(answers, expect, "Q2: each ring's answer, at its key");
+    assert_eq!(rel(&b, "pending"), vec![], "Q2: nothing pending");
+    assert_eq!(
+        answered_keys(&log()),
+        pending
+            .iter()
+            .map(|r| (r.not_before, r.ringer.clone()))
+            .collect::<Vec<_>>(),
+        "Q2: lowest first: the resident answered out of order:\n{}",
+        log()
     );
-    // five ticks with nothing pending: an absence has only time to wait on
-    std::thread::sleep(std::time::Duration::from_secs(5));
-    assert_eq!(asks(), 2, "B2: two rings, exactly two asks:\n{}", log());
+    assert_eq!(asks(), 2, "Q2: two rings, two asks:\n{}", log());
+    assert_eq!(
+        (asked_about("from-op"), asked_about("from-c")),
+        (1, 1),
+        "Q2: exactly one request per ring"
+    );
+    assert!(
+        !log().contains("resident: answer refused"),
+        "Q2: an answer was refused: the resident answered a ring that was not pending:\n{}",
+        log()
+    );
     let reqs = seen.lock().unwrap().clone();
     assert!(
         reqs.iter()
@@ -241,42 +397,128 @@ fn the_resident_answers_the_bell_once_per_ring_and_nothing_else() {
         );
     }
 
-    // unrung: the resident's member answers a bell with nothing pending
+    // Q3: a second answer to an answered ring, through the resident's own member
     let (exit, _, err) = member_cmd(
         &member.sock,
-        &["invoke", &b, "0", "(record (text \"x\"))", "--via", &gb],
+        &[
+            "invoke",
+            &b,
+            "0",
+            &answer_arg(&pending[0], "x"),
+            "--via",
+            &gb,
+        ],
     );
     assert_eq!(
         (exit, err.trim_end()),
-        (1, "refused program"),
-        "unrung: an answer with nothing pending"
+        (1, "refused missingRow"),
+        "Q3: a second answer to one ring"
     );
-    assert_eq!(
-        read(&b),
-        answered("hello back", "again"),
-        "unrung: the bell moved"
-    );
-    // notResident (the operator answers)
-    let o = w.nd(&["invoke", &b, "0", "(record (text \"x\"))"]);
+    assert_eq!(rel(&b, "answers"), answers, "Q3: the answers moved");
+
+    // Q4: a stranger (the operator) answers a pending ring
+    stop();
+    no_child();
+    ring_op(&b, "third");
+    w.run(&["sync"]);
+    let third = rel(&b, "pending");
+    assert_eq!(third.len(), 1, "Q4: the third ring is pending: {third:?}");
+    let o = w.nd(&["invoke", &b, "0", &answer_arg(&third[0], "x")]);
     assert!(
         both(&o).contains("refused program"),
-        "notResident: the operator answered: {}",
+        "Q4: a stranger's answer landed: {}",
         both(&o)
+    );
+    assert_eq!(
+        rel(&b, "pending"),
+        third,
+        "Q4: a stranger's answer took the ring"
+    );
+    assert_eq!(
+        rel(&b, "answers"),
+        answers,
+        "Q4: a stranger's answer landed"
+    );
+    start();
+    until(
+        "the third answer",
+        120,
+        || rel(&b, "answers").len() == 3,
+        &|| state(&b),
+    );
+    assert_eq!(asks(), 3, "Q4: three rings, three asks:\n{}", log());
+
+    // Q5: the owner retires the lowest answered ring
+    w.run(&[
+        "invoke",
+        &b,
+        "3",
+        &format!(
+            "(record (notBefore {}) (ringer #{}))",
+            pending[0].not_before, pending[0].ringer
+        ),
+    ]);
+    w.run(&["sync"]);
+    let low = |r: &Row| r.not_before == pending[0].not_before && r.ringer == pending[0].ringer;
+    assert!(
+        !rel(&b, "answers").iter().any(low),
+        "Q5: the retired answer stays"
+    );
+    assert!(
+        !rel(&b, "rings").iter().any(low),
+        "Q5: the retired ring stays"
+    );
+    assert_eq!(
+        rel(&b, "answers").len(),
+        2,
+        "Q5: retire took more than its ring"
+    );
+
+    // Q6: stopped after its ask was spent, before any reply; restarted, it answers from the intent
+    stop();
+    no_child();
+    ring_op(&b, "held");
+    let before = asks();
+    hold.store(true, Ordering::SeqCst);
+    start();
+    until(
+        "the held ask reaches the provider",
+        120,
+        || asks() == before + 1,
+        &log,
+    );
+    stop();
+    no_child();
+    hold.store(false, Ordering::SeqCst);
+    start();
+    until(
+        "the held ring answered",
+        120,
+        || rel(&b, "pending").is_empty(),
+        &|| state(&b),
+    );
+    assert_eq!(
+        (asks(), asked_about("held")),
+        (before + 1, 1),
+        "Q6: the intent dropped: a restart asked again:\n{}",
+        log()
+    );
+    assert!(
+        rel(&b, "answers")
+            .iter()
+            .any(|r| r.text == "(unanswered restart)"),
+        "Q6: the held ring's answer is not the intent's: {:?}",
+        rel(&b, "answers")
     );
 
     // the resident exe on a bell whose resident is the operator: one ask, then notResident
     let mutation = |bell: &str, via: &str, ring: &str, name: &str| {
         stop();
-        until(
-            "no child of the grain",
-            60,
-            || fs::read_dir(&gl_pids).unwrap().next().is_none(),
-            &log,
-        );
+        no_child();
         let before = asks();
         let refusals = log().matches(&format!("answerRefused {name}")).count();
         fs::write(pkg.join("resident.conf"), conf(bell, via)).unwrap();
-        w.run(&["invoke", bell, "3", &format!("(record (text \"{ring}\"))")]);
+        ring_op(bell, ring);
         start();
         until(
             &format!("two {name} ends"),
@@ -290,9 +532,10 @@ fn the_resident_answers_the_bell_once_per_ring_and_nothing_else() {
             "{name}: the resident asked more than once for one ring:\n{}",
             log()
         );
+        let p = rel(bell, "pending");
         assert!(
-            read(bell).contains("(pending true)"),
-            "{name}: the bell took an answer"
+            p.len() == 1 && p[0].text == ring && rel(bell, "answers").is_empty(),
+            "{name}: the bell took an answer: {p:?}"
         );
     };
     mutation(&nr, &gnr, "nr", "program");
@@ -362,5 +605,6 @@ fn the_resident_answers_the_bell_once_per_ring_and_nothing_else() {
     drop(gl);
     drop(kb);
     drop(member);
+    drop(founder_c);
     drop(w);
 }

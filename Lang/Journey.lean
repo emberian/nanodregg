@@ -1041,10 +1041,12 @@ def installRows (mode : Mode) (r0 : Run) (a : Sim.Member) (pkg : D) : Run := Id.
   r := note ri3 s!"LI3 install Top pinning Mid and Owned: {vi3}" (vi3 == "admitted")
   return r
 
-/-! ## LB: the Bell, the first package a resident uses that a person wrote in the surface
+/-! ## LB: the Bell, a queue of rings a resident answers (LANG-52, re-cut as a queue by LANG-58)
 
 `world/resident/Bell.ob` is read from disk by `runAll` (one copy of the text: the file HOSTING's
-resident installs). A ringer rings with a text; the resident answers it; one ring at a time. -/
+resident installs). A ring inserts `pending` and `rings` at `(notBefore, ringer)`; the resident reads
+`pending` (the unanswered rings, in ring order) and answers one: `answers` gains the row, `pending`
+loses it. Relations by index: answers 0, pending 1, rings 2. -/
 
 /-- Where the Bell's surface source and its emitted core live. -/
 def bellSourcePath : System.FilePath := "world" / "resident" / "Bell.ob"
@@ -1059,21 +1061,45 @@ def asBool : Option Data → Option Bool | some (.bool b) => some b | _ => none
 def asBytes : Option Data → Option ByteArray | some (.bytes b) => some b | _ => none
 def asDigest : Option Data → Option ByteArray | some (.digest b) => some b | _ => none
 
-/-- The Bell's `text` argument. -/
-def bellArg (s : String) : ByteArray := (Wire.encodeData (.record [("text", .bytes)]) (.record [("text", .bytes s.toUTF8)])).getD .empty
+/-- An argument record's bytes at its type. -/
+def argBytes (T : Ty) (d : Data) : ByteArray := (Wire.encodeData T d).getD .empty
 
-/-- A layer over the Bell whose `answer` takes the bell over (sets `resident` to the signer) and
-drops the resident check: the Bell's law `bell`, which no layer can override, refuses it. -/
+/-- `ring`'s argument. -/
+def bellArg (s : String) : ByteArray := argBytes (.record [("text", .bytes)]) (.record [("text", .bytes s.toUTF8)])
+
+/-- A ring's key: its signed `notBefore` and its ringer. -/
+def ringKey (nb : Nat) (ringer : Sim.Member) : Data :=
+  .record [("notBefore", .nat nb), ("ringer", .digest (Sim.dc.bytes ringer.id))]
+
+/-- `answer`'s argument: the ring's key and the answer's text. -/
+def answerArg (nb : Nat) (ringer : Sim.Member) (s : String) : ByteArray :=
+  argBytes (.record [("notBefore", .nat), ("ringer", .digest), ("text", .bytes)])
+    (.record [("notBefore", .nat nb), ("ringer", .digest (Sim.dc.bytes ringer.id)), ("text", .bytes s.toUTF8)])
+
+/-- `retire`'s argument: the ring's key. -/
+def retireArg (nb : Nat) (ringer : Sim.Member) : ByteArray :=
+  argBytes (.record [("notBefore", .nat), ("ringer", .digest)]) (ringKey nb ringer)
+
+/-- A layer over the Bell: `answer` without the resident check, `rewrite` (an upsert of an answer),
+`say` (an answer with no pending row) and `seize` (the signer becomes the resident). The guards and the
+law, which no layer can override, refuse what each would break. Methods: the Bell's first (answer 0,
+close 1, open 2, retire 3, ring 4), then the layer's own (rewrite 5, say 6, seize 7). -/
 def bellTakeover (superHex : String) : String := s!"
 (package
   (import bell \"{superHex}\")
   (layer bell)
-  (method answer (arg (rec (text bytes)))
-    (done (with state (answer arg.text) (pending false) (resident req.agent)))))
+  (method answer (arg (rec (notBefore nat) (ringer digest) (text (bytes 1 2000)))) (edits 2)
+    (done state (insert answers (record (notBefore arg.notBefore) (ringer arg.ringer)) (record (text arg.text)))
+      (retract pending (record (notBefore arg.notBefore) (ringer arg.ringer)))))
+  (method rewrite (arg (rec (notBefore nat) (ringer digest) (text bytes))) (edits 1)
+    (done state (upsert answers (record (notBefore arg.notBefore) (ringer arg.ringer)) (record (text arg.text)))))
+  (method say (arg (rec (notBefore nat) (ringer digest) (text bytes))) (edits 1)
+    (done state (insert answers (record (notBefore arg.notBefore) (ringer arg.ringer)) (record (text arg.text)))))
+  (method seize (done (with state (resident req.agent)))))
 "
 
 /-- The LB rows: the Bell through the real receivers. `a` is the operator (owner, and a ringer);
-`b` is the resident. Under `skipJudge` the two law rows are the plant. -/
+`b` is the resident (and a ringer). Under `skipJudge` the law row is the plant. -/
 def bellRows (mode : Mode) (r0 : Run) (a b : Sim.Member) (src : String) : Run := Id.run do
   let prog := mode.program
   let mut r := r0
@@ -1082,84 +1108,216 @@ def bellRows (mode : Mode) (r0 : Run) (a b : Sim.Member) (src : String) : Run :=
     | .error e => return note r s!"LB1 read the Bell ({bellSourcePath}): {e.text src}" false
   let some pb := Wire.encodePackage p | return note r "LB1 the Bell has no bytes" false
   let (r1, v1, t1) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id]) (.install pb))
-  r := note r1 s!"LB1 A installs the Bell from its surface source ({src.length} chars, {pb.size} package bytes; methods {p.methods}, laws {p.laws}): {v1}"
-    (v1 == "admitted" && p.methods == ["answer", "close", "open", "ring"] && p.laws == ["bell"] && p.rels.isEmpty)
+  r := note r1 s!"LB1 A installs the Bell from its surface source ({src.length} chars, {pb.size} package bytes; methods {p.methods}, laws {p.laws}, relations {p.rels.map (·.1)}): {v1}"
+    (v1 == "admitted" && p.methods == ["answer", "close", "open", "retire", "ring"] && p.laws == ["bell"] &&
+      p.rels.map (·.1) == ["answers", "pending", "rings"])
   let some pkg := t1.bind fun t => (createdIds t).head? | return note r "LB1 no package id" false
-  let seedOf (pending : Bool) : Option Slots :=
-    match Read.readData p.state s!"(record (answer \"\") (open true) (pending {pending}) (resident #{Print.hex (Sim.dc.bytes b.id)}) (ring \"\") (ringer #{Print.hex (Sim.dc.bytes a.id)}))" with
-    | .ok (.record ds) => stateSlots (recordRow p.state) ds 0
-    | _ => none
-  let some rung := seedOf true | return note r "LB2 no seed" false
-  let some seed := seedOf false | return note r "LB2 no seed" false
-  -- LB2 the law: a bell is never born rung (a ring nobody rang)
-  let (r2, v2, _) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id, pkg]) (.create (some pkg) [] rung))
-  r := { r2 with log := r.log, bad := r.bad }
-  if mode = .skipJudge then
-    r := note r s!"PLANT skip-judge: LB2 a bell born rung must now be admitted: {v2}" (v2 == "admitted")
-  else
-    r := note r s!"LB2 A creates a bell already rung: {v2}" (deniedWith v2 "bell: rung")
-  let (r3, v3, t3) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id, pkg]) (.create (some pkg) [] seed))
-  let some obj := t3.bind fun t => (createdIds t).head? | return note r3 s!"LB3 no bell: {v3}" false
-  r := note r3 s!"LB3 A creates the bell, B its resident: {v3}"
-    (v3 == "admitted" && asBool (bellField p r3.st.host obj "pending") == some false)
-  let (r4, v4, t4) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id, b.id, obj]) (.grant obj b.id [.invoke 0] none))
-  r := note r4 s!"LB4 A grants B answer: {v4}" (v4 == "admitted")
-  let some gr := t4.bind fun t => (createdIds t).head? | return note r "LB4 no grant id" false
-  let byA (r : Run) (m : Nat) (x : ByteArray) : Call D :=
-    Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id, obj, pkg]) (.invoke obj m x 100000 none)
-  let byB (r : Run) (m : Nat) (x : ByteArray) : Call D :=
-    Sim.signed r.st b b.key (Sim.S.pinsFor r.st.host [b.id, obj, pkg, gr]) (.invoke obj m x 100000 (some gr))
-  let (r5, v5, _) := go prog r (byB r 0 (bellArg "nobody rang"))
-  r := note r5 s!"LB5 B answers before any ring: {v5}" (refusedBy v5 "answer" "unrung")
-  let (r6, v6, _) := go prog r (byA r 3 (bellArg "is anyone home?"))
-  r := note r6 s!"LB6 A rings \"is anyone home?\": {v6}"
-    (v6 == "admitted" && asBool (bellField p r6.st.host obj "pending") == some true &&
-      asBytes (bellField p r6.st.host obj "ring") == some "is anyone home?".toUTF8 &&
-      asDigest (bellField p r6.st.host obj "ringer") == some (Sim.dc.bytes a.id))
-  let (r7, v7, _) := go prog r (byA r 3 (bellArg "hello?"))
-  r := note r7 s!"LB7 A rings again while the ring is pending: {v7}" (refusedBy v7 "ring" "busy")
-  let (r8, v8, _) := go prog r (byA r 0 (bellArg "me, the owner"))
-  r := note r8 s!"LB8 A (the owner, who may invoke every method) answers its own ring: {v8}" (refusedBy v8 "answer" "notResident")
-  let (r9, v9, _) := go prog r (byB r 0 (bellArg ""))
-  r := note r9 s!"LB9 B answers with an empty text: {v9}" (refusedBy v9 "answer" "text 1..2000")
-  let (r9b, v9b, _) := go prog r (byB r 3 (bellArg "may I ring?"))
-  r := note r9b s!"LB9b B rings (its grant names answer only): {v9b}" (v9b.startsWith "refused grantRight")
-  let (r10, v10, _) := go prog r (byB r 0 (bellArg "yes, I am here"))
-  r := note r10 s!"LB10 B answers \"yes, I am here\": {v10}"
-    (v10 == "admitted" && asBool (bellField p r10.st.host obj "pending") == some false &&
-      asBytes (bellField p r10.st.host obj "answer") == some "yes, I am here".toUTF8 &&
-      asBytes (bellField p r10.st.host obj "ring") == some "is anyone home?".toUTF8)
-  let (r11, v11, _) := go prog r (byB r 0 (bellArg "again"))
-  r := note r11 s!"LB11 B answers twice: {v11}" (refusedBy v11 "answer" "unrung")
-  let (r12, v12, _) := go prog r (byA r 1 ((Wire.encodeData (.record []) (.record [])).getD .empty))
+  let some dA := p.rels.lookup "answers" | return note r "LB1 no answers" false
+  let some dP := p.rels.lookup "pending" | return note r "LB1 no pending" false
+  let some dR := p.rels.lookup "rings" | return note r "LB1 no rings" false
+  let seed ← match Read.readData p.state s!"(record (open true) (resident #{Print.hex (Sim.dc.bytes b.id)}))" with
+    | .ok (.record ds) => match stateSlots (recordRow p.state) ds 0 with
+      | some s => pure s
+      | none => return note r "LB2 seed has no bytes" false
+    | _ => return note r "LB2 no seed" false
+  let (r2, v2, t2) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id, pkg]) (.create (some pkg) [] seed))
+  let some obj := t2.bind fun t => (createdIds t).head? | return note r2 s!"LB2 no bell: {v2}" false
+  r := note r2 s!"LB2 A creates the bell, B its resident: {v2}; its three relations are born empty"
+    (v2 == "admitted" && [0, 1, 2].all fun i => headCount r2.st.host obj i == some 0)
+  let (r3, v3, t3) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id, b.id, obj]) (.grant obj b.id [.invoke 0, .invoke 4] none))
+  r := note r3 s!"LB3 A grants B answer and ring: {v3}" (v3 == "admitted")
+  let some gr := t3.bind fun t => (createdIds t).head? | return note r "LB3 no grant id" false
+  let pinsOf (r : Run) (m : Sim.Member) := Sim.S.pinsFor r.st.host ([m.id, obj, pkg] ++ if m.id == b.id then [gr] else [])
+  let viaOf (m : Sim.Member) : Option D := if m.id == b.id then some gr else none
+  -- the row of relation `rel` (declared `d`) at `key`, pinned at what the signer sees on `w`
+  let pinRow (w : World D) (rel : Nat) (d : RelDecl) (key : Data) : List (RowSlot D × D) :=
+    match keyBytes d key with
+    | some k => let s : RowSlot D := .row ⟨obj, rel, k⟩; [(s, rowPin Sim.env (headFloor Sim.env w.rows obj rel) (rowAt Sim.env w.rows s))]
+    | none => []
+  let call (r : Run) (m : Sim.Member) (method : Nat) (x : ByteArray) (nb : Nat)
+      (rowPins : List (RowSlot D × D) := []) : Call D :=
+    signedAt r.st m (pinsOf r m) (.invoke obj method x 100000 (viaOf m)) nb (nb + 1024) rowPins
+  let rowText (w : World D) (rel : Nat) (d : RelDecl) (key : Data) : Option ByteArray :=
+    asBytes ((storyRow w obj rel d key).bind (·.field "text"))
+  let present (w : World D) (rel : Nat) (d : RelDecl) (key : Data) : Bool :=
+    match keyBytes d key with
+    | some k => (rowAt Sim.env w.rows (.row ⟨obj, rel, k⟩)).isSome
+    | none => false
+  -- the pending rings' keys in the order `read BELL pending 64` lists them (THE range read)
+  let queue (w : World D) : List (Nat × ByteArray) :=
+    match headOf Sim.env w.rows obj 1 with
+    | some (_, _, _, _, width, _) =>
+      match rangeRows Sim.env w.rows obj 1 width .empty 64 with
+      | some l => match rangeRowData Sim.digestOf "pending" dP l with
+        | .ok ds => ds.filterMap fun d => match d.field "key" |>.bind (·.field "notBefore"), d.field "key" |>.bind (·.field "ringer") with
+          | some (.nat n), some (.digest g) => some (n, g)
+          | _, _ => none
+        | .error _ => []
+      | none => []
+    | none => []
+  let cost (c : Call D) (w : World D) : String :=
+    s!"required steps / ticks {match measure w c with | .ok (q, k) => s!"{q} / {k}" | .error e => e}"
+  -- LB4 A rings: one turn, two inserts, no cell write
+  let h0 := r.st.host.height
+  let k0 := ringKey h0 a
+  let c4 := call r a 4 (bellArg "is anyone home?") h0
+  let (r4, v4, t4) := go prog r c4
+  r := note r4 s!"LB4 A rings \"is anyone home?\" at notBefore {h0}: {v4}; {cost c4 r.st.host}"
+    (v4 == "admitted" && rowText r4.st.host 1 dP k0 == some "is anyone home?".toUTF8 &&
+      rowText r4.st.host 2 dR k0 == some "is anyone home?".toUTF8 &&
+      (t4.map fun t => t.creates.isEmpty && t.rows.length == 2 && t.touches.all (·.act == .keep) &&
+        t.touches.any (·.cell == obj)) == some true)
+  -- LB5 two rings over ONE view, A's and B's: both land, in both orders, to the same World
+  let h1 := r.st.host.height
+  let c5a := call r a 4 (bellArg "anyone?") h1
+  let c5b := call r b 4 (bellArg "me too") h1
+  let (q5b, w5b, _) := go prog r c5b
+  let (q5ba, w5ba, _) := go prog q5b c5a
+  let (r5a, v5a, _) := go prog r c5a
+  r := note r5a s!"LB5a A rings at notBefore {h1}: {v5a}" (v5a == "admitted")
+  let (r5b, v5b, _) := go prog r c5b
+  r := note r5b s!"LB5b B rings, signed over the same view as A: {v5b}" (v5b == "admitted" && headCount r5b.st.host obj 1 == some 3)
+  r := note r s!"LB5c the other order (B then A): {w5b}, {w5ba}; the same rows root and cells root"
+    (w5b == "admitted" && w5ba == "admitted" && headCount q5ba.st.host obj 1 == some 3 &&
+      q5ba.st.host.rowsRoot Sim.env == r.st.host.rowsRoot Sim.env && q5ba.st.host.root Sim.env == r.st.host.root Sim.env)
+  let (r5d, v5d, _) := go prog r (call r a 4 (bellArg "again") h1)
+  r := note { r5d with log := r.log, bad := r.bad } s!"LB5d A rings again at notBefore {h1}: {v5d}" (v5d.startsWith "rejected keyTaken")
+  -- LB6 the queue in ring order: A's first ring, then the two at h1 (by ringer digest)
+  let q6 := queue r.st.host
+  let ab := [Sim.dc.bytes a.id, Sim.dc.bytes b.id]
+  let tie := if compare (Sim.dc.bytes a.id).toList (Sim.dc.bytes b.id).toList == .lt then ab else ab.reverse
+  r := note r s!"LB6 the resident's read of pending lists {q6.length} rings, lowest first: notBefore {q6.map (·.1)}"
+    (q6 == [(h0, Sim.dc.bytes a.id)] ++ tie.map (h1, ·))
+  -- LB7 the resident answers the LOWEST pending ring (its row pinned)
+  let c7 := call r b 0 (answerArg h0 a "yes, I am here") r.st.host.height (pinRow r.st.host 1 dP k0)
+  let (r7, v7, _) := go prog r c7
+  r := note r7 s!"LB7 B answers the lowest ring \"yes, I am here\": {v7}; {cost c7 r.st.host}; the queue now starts at notBefore {(queue r7.st.host).head?.map (·.1)}"
+    (v7 == "admitted" && rowText r7.st.host 0 dA k0 == some "yes, I am here".toUTF8 &&
+      !present r7.st.host 1 dP k0 && rowText r7.st.host 2 dR k0 == some "is anyone home?".toUTF8 &&
+      (queue r7.st.host).map (·.1) == [h1, h1])
+  -- LB7u the same answer unpinned: the receiver asks for the row (what derivePins answers)
+  let (_, v7u, _) := go prog r (call r b 0 (answerArg h1 a "hi") r.st.host.height)
+  r := note r s!"LB7u B answers A's ring at {h1} without its row pinned: {v7u}" (v7u.startsWith "refused rowUnpinned")
+  -- LB8 exactly once: the answered ring again (its pending row is gone)
+  let (r8, v8, _) := go prog r (call r b 0 (answerArg h0 a "again") r.st.host.height (pinRow r.st.host 1 dP k0))
+  r := note { r8 with log := r.log, bad := r.bad } s!"LB8 B answers the answered ring again: {v8}" (v8.startsWith "rejected missingRow")
+  -- LB8b two answers of one ring over one view: the second's pin moved
+  let k1 := ringKey h1 a
+  let pins8 := pinRow r.st.host 1 dP k1
+  let c8a := call r b 0 (answerArg h1 a "first") r.st.host.height pins8
+  let c8b := call r b 0 (answerArg h1 a "second") r.st.host.height pins8
+  let (r8a, v8a, _) := go prog r c8a
+  r := note r8a s!"LB8a B answers A's ring at {h1}: {v8a}" (v8a == "admitted")
+  let (r8b, v8b, _) := go prog r c8b
+  r := note { r8b with log := r.log, bad := r.bad } s!"LB8b B answers it again over the same view: {v8b}; the answer stays \"first\""
+    (v8b.startsWith "rejected stale" && rowText r.st.host 0 dA k1 == some "first".toUTF8)
+  -- LB9 only the resident answers; LB9b the text bound
+  let kb := ringKey h1 b
+  let (r9, v9, _) := go prog r (call r a 0 (answerArg h1 b "me, the owner") r.st.host.height (pinRow r.st.host 1 dP kb))
+  r := note r9 s!"LB9 A (the owner, who may invoke every method) answers B's ring: {v9}" (refusedBy v9 "answer" "notResident")
+  let (r9b, v9b, _) := go prog r (call r b 0 (answerArg h1 b "") r.st.host.height (pinRow r.st.host 1 dP kb))
+  r := note r9b s!"LB9b B answers with an empty text: {v9b}" (refusedBy v9b "answer" "text 1..2000")
+  -- LB10 retire: an answered ring leaves both relations; a pending one is refused
+  let (r10, v10, _) := go prog r (call r a 3 (retireArg h0 a) r.st.host.height (pinRow r.st.host 0 dA k0 ++ pinRow r.st.host 2 dR k0))
+  r := note r10 s!"LB10 A retires the answered ring at {h0}: {v10}"
+    (v10 == "admitted" && !present r10.st.host 0 dA k0 && !present r10.st.host 2 dR k0 &&
+      headCount r10.st.host obj 0 == some 1 && headCount r10.st.host obj 2 == some 2)
+  let (r10b, v10b, _) := go prog r (call r a 3 (retireArg h1 b) r.st.host.height (pinRow r.st.host 0 dA kb ++ pinRow r.st.host 2 dR kb))
+  r := note { r10b with log := r.log, bad := r.bad } s!"LB10b A retires B's ring, still pending: {v10b}" (v10b.startsWith "rejected missingRow")
+  -- LB11 the queue's bound: A fills pending to its limit, 64, one ring per height; the 65th is relationFull
+  let mut fills := 0
+  while headCount r.st.host obj 1 != some 64 && fills < 64 do
+    fills := fills + 1
+    let (rf, _, _) := go prog r (call r a 4 (bellArg "full?") r.st.host.height)
+    r := { rf with log := r.log, bad := r.bad }
+  let (r11, v11, _) := go prog r (call r a 4 (bellArg "one more") r.st.host.height)
+  r := note { r11 with log := r.log, bad := r.bad } s!"LB11 pending holds {headCount r.st.host obj 1}; A rings once more: {v11}"
+    (headCount r.st.host obj 1 == some 64 && v11.startsWith "rejected relationFull")
+  -- LB12 closed
+  let (r12, v12, _) := go prog r (call r a 1 (argBytes (.record []) (.record [])) r.st.host.height)
   r := note r12 s!"LB12 A closes the bell: {v12}" (v12 == "admitted" && asBool (bellField p r12.st.host obj "open") == some false)
-  let (r12b, v12b, _) := go prog r (byA r 3 (bellArg "after hours"))
+  let (r12b, v12b, _) := go prog r (call r a 4 (bellArg "after hours") r.st.host.height)
   r := note r12b s!"LB12b A rings a closed bell: {v12b}" (refusedBy v12b "ring" "closed")
-  -- LB13 the law outlives every layer: a layer whose answer takes the bell over is refused
-  let tb := Sim.dc.bytes pkg
-  let text := bellTakeover (Print.hex tb)
-  let l ← match Surface.readWith [(tb, p)] text with
-    | .ok l => pure l
-    | .error e => return note r s!"LB13 read the takeover layer: {e.text text}" false
-  let some lb := Wire.encodePackage l.pkg | return note r "LB13 the layer has no bytes" false
-  let (r13, v13, t13) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id, pkg]) (.install lb))
-  r := note r13 s!"LB13 A installs a layer over the Bell whose answer takes the bell over: {v13}; laws {l.pkg.laws}"
-    (v13 == "admitted" && l.pkg.laws == ["bell"])
-  let some lid := t13.bind fun t => (createdIds t).head? | return note r "LB13 no layer id" false
-  let (r13b, v13b, t13b) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id, lid, pkg]) (.create (some lid) [] seed))
-  let some lobj := t13b.bind fun t => (createdIds t).head? | return note r13b s!"LB13 no object: {v13b}" false
-  r := r13b
-  let byAL (r : Run) (m : Nat) (x : ByteArray) : Call D :=
-    Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id, lobj, lid, pkg]) (.invoke lobj m x 100000 none)
-  let (r13c, v13c, _) := go prog r (byAL r 3 (bellArg "who answers?"))
-  r := note r13c s!"LB13b A rings the layered bell (the Bell's own ring): {v13c}" (v13c == "admitted")
-  let (r13d, v13d, _) := go prog r (byAL r 0 (bellArg "I do now"))
-  r := { r13d with log := r.log, bad := r.bad }
+  -- LB13 guards and the law outlive every layer. `layered q` installs package `q` (the Bell, or a
+  -- planted copy of it), the takeover layer over it, and a bell of the layer whose resident is B,
+  -- with B granted `say`; it gives the run, the layer's id and the bell's.
+  let layered (q : Package) (installed : Option D) (r : Run) : Except String (Run × List D × D × D) := do
+    let some qb := Wire.encodePackage q | throw "no bytes"
+    let (ra, qid) ← match installed with
+      | some i => pure (r, i)
+      | none =>
+        let (ra, va, ta) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id]) (.install qb))
+        match ta.bind fun t => (createdIds t).head? with
+        | some i => pure (ra, i)
+        | none => throw s!"install: {va}"
+    let tq := Sim.dc.bytes qid
+    let text := bellTakeover (Print.hex tq)
+    let l ← (Surface.readWith [(tq, q)] text).mapError fun e => s!"read the layer: {e.text text}"
+    let some lb := Wire.encodePackage l.pkg | throw "the layer has no bytes"
+    unless l.pkg.laws == ["bell"] do throw s!"the layer's laws {l.pkg.laws}"
+    -- the indices below are these: the Bell's methods first, then the layer's own
+    unless l.pkg.methods == ["answer", "close", "open", "retire", "ring", "rewrite", "say", "seize"] do
+      throw s!"the layer's methods {l.pkg.methods}"
+    let (rb, vb, tb) := go prog ra (Sim.signed ra.st a a.key (Sim.S.pinsFor ra.st.host [a.id, qid]) (.install lb))
+    let some lid := tb.bind fun t => (createdIds t).head? | throw s!"layer install: {vb}"
+    let (rc, vc, tc) := go prog rb (Sim.signed rb.st a a.key (Sim.S.pinsFor rb.st.host [a.id, lid, qid]) (.create (some lid) [] seed))
+    let some lobj := tc.bind fun t => (createdIds t).head? | throw s!"create: {vc}"
+    let (rd, vd, td) := go prog rc (Sim.signed rc.st a a.key (Sim.S.pinsFor rc.st.host [a.id, b.id, lobj]) (.grant lobj b.id [.invoke 6] none))
+    let some gid := td.bind fun t => (createdIds t).head? | throw s!"grant: {vd}"
+    pure ({ rd with log := r.log, bad := r.bad }, [lobj, lid, qid], lobj, gid)
+  -- A, not the resident, answers through the layer's `answer` (which checks nothing): A rings first
+  let takeover (r : Run) (ids : List D) (lobj : D) : String :=
+    let hl := r.st.host.height
+    let (rr, vr, _) := go prog r (signedAt r.st a (Sim.S.pinsFor r.st.host (a.id :: ids)) (.invoke lobj 4 (bellArg "who answers?") 100000 none) hl (hl + 1024))
+    match keyBytes dP (ringKey hl a), vr == "admitted" with
+    | none, _ => "no key"
+    | _, false => s!"the ring before it: {vr}"
+    | some k, true =>
+      let ls : RowSlot D := .row ⟨lobj, 1, k⟩
+      let (_, v, _) := go prog rr (signedAt rr.st a (Sim.S.pinsFor rr.st.host (a.id :: ids)) (.invoke lobj 0 (answerArg hl a "I do now") 100000 none)
+        rr.st.host.height (rr.st.host.height + 1024) [(ls, rowPin Sim.env (headFloor Sim.env rr.st.host.rows lobj 1) (rowAt Sim.env rr.st.host.rows ls))])
+      v
+  let (rL, ids, lobj, gid) ← match layered p (some pkg) r with
+    | .ok x => pure x
+    | .error e => return note r s!"LB13 the layered bell: {e}" false
+  r := note rL s!"LB13 A installs a layer over the Bell (answer without the resident check, rewrite, say, seize) and a bell of it, B its resident"
+    (asDigest (bellField p rL.st.host lobj "resident") == some (Sim.dc.bytes b.id))
+  let v13c := takeover r ids lobj
+  r := note r s!"LB13c A answers through the layer, not being the resident: {v13c}" (deniedWith v13c "said: notResident")
+  -- the guard is what refuses: the Bell with `said`'s insert arm made `ok` admits the same answer
+  let planted := (src.replace "(insert x (if (deq req.agent state.resident) ok (refuse \"notResident\")))" "(insert x ok)").replace
+    "(retract x (if (deq req.agent state.resident) ok (refuse \"notResident\")))" "(retract x ok)"
+  match Surface.readPackage planted with
+  | .error e => r := note r s!"LB13c' read the planted Bell: {e.text planted}" false
+  | .ok pq =>
+    match layered pq none r with
+    | .error e => r := note r s!"LB13c' the planted layered bell: {e}" false
+    | .ok (rq, qids, qobj, _) =>
+      let vq := takeover rq qids qobj
+      r := note r s!"LB13c' the same answer on a Bell whose `said` admits any inserter and `queued` any retracter: {vq} (planted {planted != src})"
+        (planted != src && vq == "admitted")
+  -- LB13e answers are never changed in place: the layer's `rewrite` upserts answers[k], pinned
+  let ksay := ringKey 7 a
+  let some ksb := keyBytes dA ksay | return note r "LB13 no key" false
+  let sayArg (s : String) : ByteArray := answerArg 7 a s
+  let byBL (r : Run) (m : Nat) (x : ByteArray) (rowPins : List (RowSlot D × D)) : Call D :=
+    signedAt r.st b (Sim.S.pinsFor r.st.host (b.id :: gid :: ids)) (.invoke lobj m x 100000 (some gid)) r.st.host.height (r.st.host.height + 1024) rowPins
+  let (r13f, v13f, _) := go prog r (byBL r 6 (sayArg "said once") [])
+  r := note r13f s!"LB13f B, the resident, files answers[7, A] through the layer's say (no pending row): {v13f}" (v13f == "admitted")
+  let (r13g, v13g, _) := go prog r (byBL r 6 (sayArg "said twice") [])
+  r := note { r13g with log := r.log, bad := r.bad } s!"LB13g B files it again: {v13g} (the kernel's lock alone)" (v13g.startsWith "rejected keyTaken")
+  let as : RowSlot D := .row ⟨lobj, 0, ksb⟩
+  let (_, v13e, _) := go prog r (signedAt r.st a (Sim.S.pinsFor r.st.host (a.id :: ids)) (.invoke lobj 5 (sayArg "changed") 100000 none)
+    r.st.host.height (r.st.host.height + 1024) [(as, rowPin Sim.env (headFloor Sim.env r.st.host.rows lobj 0) (rowAt Sim.env r.st.host.rows as))])
+  r := note r s!"LB13e A rewrites answers[7, A] in place through the layer: {v13e}" (deniedWith v13e "said: final")
+  let (r13h, v13h, _) := go prog r (signedAt r.st a (Sim.S.pinsFor r.st.host (a.id :: ids)) (.invoke lobj 7 (argBytes (.record []) (.record [])) 100000 none)
+    r.st.host.height (r.st.host.height + 1024))
+  r := { r13h with log := r.log, bad := r.bad }
   if mode = .skipJudge then
-    r := note r s!"PLANT skip-judge: LB13c the takeover must now be admitted: {v13d}" (v13d == "admitted")
+    r := note r s!"PLANT skip-judge: LB13d the seizure must now be admitted: {v13h}" (v13h == "admitted")
   else
-    r := note r s!"LB13c A answers through the takeover, making itself the resident: {v13d}"
-      (deniedWith v13d "bell: resident" && asDigest (bellField p r.st.host lobj "resident") == some (Sim.dc.bytes b.id))
+    r := note r s!"LB13d A seizes the layered bell, making itself the resident: {v13h}"
+      (deniedWith v13h "bell: resident" && asDigest (bellField p r.st.host lobj "resident") == some (Sim.dc.bytes b.id))
   return r
 
 /-! ## LQ / LW: the Std laws `quorum` and `windowed`, written as surface laws, through the receivers -/
@@ -1788,7 +1946,7 @@ def runAll (args : List String) : IO UInt32 := do
   let bellCore ← try IO.FS.readFile bellCorePath catch _ => pure ""
   -- LB0 the Bell's surface source lowers to exactly the core shipped beside it; one flipped edit is caught
   let (l0, ok0) := match Surface.readPackage bell with
-    | .ok want => Surface.shippedRow "LB0" bell bellCore want ("(pending true)", "(pending false)")
+    | .ok want => Surface.shippedRow "LB0" bell bellCore want ("(limit 64)", "(limit 65)")
     | .error e => (s!"LB0 read {bellSourcePath}: {e.text bell}", false)
   IO.println s!"{if ok0 then "ok  " else "FAIL"} {l0}"
   let runs := [Mode.honest, .skipJudge, .eraseOccasion, .erasePayload, .dropCalls, .rawInstall, .bytesIds,

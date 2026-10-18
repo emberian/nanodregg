@@ -2332,3 +2332,79 @@ key fields must strictly ascend. ROOT ruled "replace, not merely delete; pick by
 `checkRel_admits_distinct_key_labels`. No verdict moves (the deleted conjunct was always true), nothing re-ids,
 nothing re-emits; `checkRel`'s docstring now names where distinctness comes from. Proofs that destructured the
 conjunction re-indexed (`keyBytes_compare_installed`, `range_keys_ascend_read`); no statement text changed.
+
+## LANG-58 The Bell is a queue of rings: `pending` is the cursor, a ring is keyed by its signed notBefore and its ringer, and nothing a ring or an answer writes is the bell's cell (2026-10-19; ROOT APPROVED Q1-Q4; LANG-18; cv 01a14ece-43f1; HOSTING-10's requirements; with HOSTING-11's resident cut-over, HOSTING-31)
+**What.** `world/resident/Bell.ob` (2,367 chars, of which 390 are its header comment) and its core
+`world/resident/Bell` (31,542 chars; 24,906 package bytes) replace LANG-52's state-only bell.
+
+    state   (rec (open bool) (resident digest))
+    rel answers (notBefore nat)(ringer digest) -> (rec (text bytes))  limit 1024  retract  guard said
+    rel pending (notBefore nat)(ringer digest) -> (rec (text bytes))  limit 64    retract  guard queued
+    rel rings   (notBefore nat)(ringer digest) -> (rec (text bytes))  limit 1024  retract  guard rung
+    ring   {text 1..2000}            closed unless open; inserts pending[k] and rings[k], k = (req.notBefore, req.agent)
+    answer {notBefore ringer text}   notResident unless the agent is the resident; inserts answers[k], retracts pending[k]
+    retire {notBefore ringer}        retracts answers[k] and rings[k]
+    open / close                     as before
+    guards  rung: insert ringer = agent ("notYours"), upsert "final" | queued: insert ringer = agent, retract by the
+            resident ("notResident"), upsert "final" | said: insert by the resident, upsert "final"
+    law bell  an invoke keeps resident ("resident")
+
+**The key (ROOT Q1).** A state counter makes `ring` write the bell's cell, so two rings over one view collide (the
+second is stale, declined, re-signed): it gives up LANG-44's acceptance row, and a `lo` in state would make every
+answer collide with every ring too. A {ringer, nonce} key commutes but orders by digest: the smallest digest is
+served first, always. `(notBefore, ringer)` commutes (LB5c: two rings over one view, both orders, equal rows and
+cells roots) and orders by admission to within the kernel's window, since `notBefore ≤ h+1 ≤ validUntil ≤
+notBefore + windowMax`: **a ringer can jump the queue by at most windowMax = 1024 heights; ties at one height break
+by ringer digest; one ringer twice from one view is `keyTaken`.** The clock is the one Std `windowed` uses. The key
+field is named `notBefore` so `read BELL ?`'s rel line says which clock it is (a package doc line is cv
+01a15078-f528). Rejected: a kernel-supplied admission height in `Req` (exact order, but an unpinned input to every
+method and a height premise on `receive_congr`).
+
+**The cursor is a relation, not a number (ROOT Q4).** A range prefix is exact-match (Lang.preBytes), so a state
+low-water mark cannot start a read at itself; answered rows at the front of `rings` would hide new rings from any
+K-row read. `pending` is exactly the unanswered rings: `read BELL pending 64` lists them lowest first (LANG-57's range_keys_ascend; LB6
+checks the order and the digest tie at one height, at heights under 256, so it is not itself evidence for
+big-endian), and answering removes the ring from it (LB7). The read refuses past K (`rangeTooLong`, never
+truncated), so the resident reads K = pending's described limit.
+
+**Exactly once, twice.** An answered ring has no pending row: answering it again is refused `missingRow` (LB8; the
+KERNEL-54 name for a retract of an absent pinned row). Two answers over one view both pin pending[k]: the second
+is `stale` (LB8b). And answers[k] is an unpinned insert, so a second one is `keyTaken` (LB13g: a layer's
+`say`, which files answers[k] with no pending row, twice: the kernel's lock alone). No answer is changed IN PLACE:
+answers and rings refuse upsert by GUARD, which no layer can override (LB13e `said: final`), and only the resident
+inserts an answer or retracts a pending ring (LB13c `said: notResident`; LB13c' plants both guard arms open and the
+same answer is admitted). An answer can be RETIRED (retire, or a layer method: any signer may retract answers and
+rings rows), and a retired key can be rung again inside its window; that is a new ring at a reused key, not a
+rewrite of the old answer, which is gone.
+
+**No row read in any method (ROOT Q2).** `answer` and `retire` compute keys from their arguments and read nothing.
+Invoked without pins, `answer` is refused `rowUnpinned` naming the key (LB7u); nd's `derivePins` (PROTOCOL-17, on
+the KERNEL-54 day) pins that row and re-plans. So the resident passes arguments only.
+
+**Bounded.** pending 64: a ring past it is `relationFull` (LB11), the old `busy` at depth 64. rings 1024: past it
+a ring is `relationFull` until the owner retires answered rings (who may retire is the grants'). Retiring a pending
+ring is refused `missingRow` on answers[k] (LB10b). Text 1..2000 by the bounded argument (LB9b). Held twice: a
+pending ring's text is in pending and rings, at most 64 × 2000 B, both final (HOSTING-10: one read per tick, text and
+cursor from one listing).
+
+**Measured.** ring: 77 required steps / 116 ticks; answer: 77 / 116 (lang-journey LB4, LB7). THE BAR round stays
+2 writes (one ring, one answer), neither touching a cell. Rows per ring 2 inserts; per answer 1 insert + 1 retract.
+
+**Critique.** (1) The order is window-coarse and signer-influenced, by up to 1024 heights: a fairness bound, not
+FIFO. (2) "retire takes answered rows only" holds against a layer for answers[k] (missingRow) but a layer method
+can retract rings[k] alone, or retract a pending ring as the resident: a guard does not see the old row (LANG-49
+critique 3). LANG-59 (guards see the pinned old row) is its trigger. (3) The surface is 1,977 chars without its
+comment, over the 1,500 target: ~600 are the guards, which are the layer-proofing; a guard macro is a LANG-50
+follow-up. (4) The owner must retire, or the bell stops taking rings at 1024 (RUNBOOK, OPS). (5) The text held twice
+is two copies of one value written by one method, neither changeable in place; a layer method may retract one copy
+and a ringer re-insert it with other text, so they agree only through the Bell's own methods (LANG-59 again). Likewise, on a layered object answers ⊄
+rings: a layer method may file an answer to a ring never rung (LB13f); only the Bell's own methods keep
+pending ⊆ rings, answers ⊆ rings and pending ∩ answers = ∅.
+**Meta-critique.** The sketch I inherited (counter + lo) carried HOSTING's authority; the read path (an exact-match
+prefix cannot start at lo) refuted it before any taste did. The `notBefore` clock is a precedent; I checked that it
+is sound (signed, kernel-bounded, re-derived identically by an auditor), and that being a precedent does not make it
+a good queue order: the 1024-height bound is the price, stated in the decision and in the text's header.
+**Flag day (`lang!`).** world/resident/Bell(.ob) re-emit; the Bell's package id changes; LB0's byte-identity row
+re-pins with the reason "the Bell became a queue"; the LB rows are re-cut (LB0-LB13). The resident (Hosting/Resident,
+launcher/tests/resident_bell.rs) cuts over in the same commit (HOSTING-11, HOSTING-31). An old Bell object's state does not read
+at the new state type; every Store re-geneses on the KERNEL-54 day anyway.
