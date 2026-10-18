@@ -19,6 +19,7 @@ filter) is gone with the thing; what it checked about the WORLD stays.
 -/
 import Protocol.Table
 import Lang.Print
+import Lang.Surface
 
 namespace Nanodregg.Protocol
 
@@ -261,6 +262,12 @@ inductive Mutation
   /-- the follower reads a page refused `pageIo` as a final refusal (exit 1, `refused pageIo`), the
   shape before PROTOCOL-49: "not now" read as "never" -/
   | pageIoFatal
+  /-- `read OBJ REL K` prints the rows' lines with the first one dropped: a reader that loses a row
+  (PROTOCOL-51) -/
+  | dropRow
+  /-- `read OBJ REL K` lists whatever K asks, never checking it against the relation's declared
+  `limit` (`Command.rowLines` without `rangeLines`' bound, PROTOCOL-51) -/
+  | noReadLimit
   deriving DecidableEq, Repr
 
 /-- A row's plant: the mutation, and the line that must catch it with the outcome it then gets. -/
@@ -336,6 +343,26 @@ def counter : String :=
         (if (<= (. new total) 1000000)
             (inj {verdictTy} ok (record))
             (inj {verdictTy} refused \"over a million\")))))))"
+
+/-- A queue of rings over a relation (PROTOCOL-51's stand-in for the Bell as a queue, cv
+01a14ece-43f1, until LANG re-cuts the Bell): `ring` inserts its text at key `(round, n)`, `n` the
+state's `next`, and moves `next` on. Written in LANG's authoring surface, installed as the core text
+LANG's one printer gives it. -/
+def ringsSource : String := "
+(package
+  (state (rec (next nat)))
+  (rel rings (key (round nat) (n nat)) (val (rec (text bytes))) (limit 64))
+  (method ring (arg (rec (round nat) (text bytes))) (edits 1)
+    (done (with state (next (+ state.next 1)))
+      (insert rings (record (round arg.round) (n state.next)) (record (text arg.text)))))
+  (law always (else ok)))
+"
+
+/-- `ringsSource` as `install` reads it (empty, and so refused by `install`, if it had no text). -/
+def ringsQueue : String :=
+  match Lang.Surface.readPackage ringsSource with
+  | .ok p => (Lang.Print.package p).getD ""
+  | .error _ => ""
 
 /-! ## The rows -/
 
@@ -1136,8 +1163,64 @@ def settleRow : Row where
     ok "operator" ["read", "@shared", "2=6"]])
   plant := .caught .trustLookup 6 (.refused "stale")
 
+/-- The queue every range row starts from: a newcomer, the operator's `rings` package, the sponsor's
+queue `q` and its public `ring` grant `pub`. -/
+def queue : List Line :=
+  join "sponsor" "newcomer" ++ [
+    okBind "operator" ["install", ringsQueue] "rings",
+    okBind "sponsor" ["create", "--pkg", "@rings", "(record (next 0))"] "q",
+    okBind "sponsor" ["grant", "@q", "anyone", "invoke:0"] "pub"]
+
+/-- PROTOCOL-51 (cv 01a14f18-b8c8, the Bell as a queue's unblocker): a resident reads a relation's
+rows in key order from the text alone. The newcomer reads the queue's description, which names the
+relation, its key's fields in declared order and its limit (`rel …`, LANG's printer), and binds
+`ring` from it; three rings land (round 2 first, then two in round 1); `read @q rings 8` prints
+exactly the three rows, ONE line each, in key-BYTE order (round 1's two before round 2's, not ring
+order), each `Lang.Print.data` text of the row at the relation's row type
+(`Proofs.Command.rangeLines_reads`); with the prefix `(record (round 1))` exactly round 1's two;
+`rings 2` over three rows is `rangeTooLong` (refused, never truncated: the method path's name), and a
+relation the package does not declare is `unknownRelation`. The plant is a reader that drops a row:
+line 10 is `refused unprinted`. -/
+def rangeRow : Row where
+  name := "range"
+  replaces := []
+  ops := everyWrite
+  kinds := ["enroll", "grant", "install", "create", "invoke"]
+  drive := .members (queue ++ [
+    { actor := "newcomer", act := .cmd ["read", "@q", "?"], expect := .ok, bind := some "q",
+      prints := some "rel (rings (key (round nat) (n nat)) (val (rec (text bytes))) (limit 64)" },
+    ok "sponsor" ["invoke", "@q", "@q.ring", "(record (round 2) (text \"b\"))"],
+    ok "newcomer" ["invoke", "@q", "@q.ring", "(record (round 1) (text \"a\"))", "--via", "@pub"],
+    ok "newcomer" ["invoke", "@q", "@q.ring", "(record (round 1) (text \"c\"))", "--via", "@pub"],
+    { actor := "newcomer", act := .cmd ["read", "@q", "rings", "8"], expect := .ok, exact := true,
+      prints := some ("(record (key (record (n 1) (round 1))) (val (record (text \"a\"))))\n" ++
+        "(record (key (record (n 2) (round 1))) (val (record (text \"c\"))))\n" ++
+        "(record (key (record (n 0) (round 2))) (val (record (text \"b\"))))\n") },
+    { actor := "newcomer", act := .cmd ["read", "@q", "rings", "8", "(record (round 1))"], expect := .ok,
+      exact := true,
+      prints := some ("(record (key (record (n 1) (round 1))) (val (record (text \"a\"))))\n" ++
+        "(record (key (record (n 2) (round 1))) (val (record (text \"c\"))))\n") },
+    no "newcomer" ["read", "@q", "rings", "2"] "rangeTooLong",
+    no "newcomer" ["read", "@q", "bells", "8"] "unknownRelation"])
+  plant := .caught .dropRow 10 (.refused "unprinted")
+
+/-- PROTOCOL-51: K past the relation's declared `limit` (64, printed in the description) is refused
+`rangePastLimit` by name before any row is read (`Proofs.Command.rangeLines_pastLimit`); K at the
+limit over the empty relation prints nothing. The plant is a reader that never checks K: line 6 is
+`ok`. -/
+def rangeLimitRow : Row where
+  name := "rangeLimit"
+  replaces := []
+  ops := everyWrite
+  kinds := ["enroll", "grant", "install", "create"]
+  drive := .members (queue ++ [
+    no "newcomer" ["read", "@q", "rings", "65"] "rangePastLimit",
+    { actor := "newcomer", act := .cmd ["read", "@q", "rings", "64"], expect := .ok, exact := true,
+      prints := some "" }])
+  plant := .caught .noReadLimit 6 .ok
+
 def rows : List Row :=
   [journey, reopen, laws, rotate, audit, paging, coldCatchUp, inflatedHeight, forgotten, refusedRow, inviteRow, useRow, describeRow, stateRow, receiptRow, settleRow, carry, thin, thinStale, sealRow, basePin, pageIoRow, wrongWorld, wrongWorldRead, pay, well, bounty, grain, hermes, bar,
-   langJourney]
+   langJourney, rangeRow, rangeLimitRow]
 
 end Nanodregg.Protocol

@@ -34,6 +34,12 @@ def keyToWire (d : RelDecl) (key : Data) : Option Data :=
 def keyBytes (d : RelDecl) (key : Data) : Option ByteArray :=
   (keyToWire d key).bind (Wire.encodeData (keyWireTy d d.key.length))
 
+/-- The bytes of a key's first `m` declared fields, as a range's prefix (PROTOCOL-51): the key
+wire at `m` fields of `v`'s fields of those labels (`preBytes_full`: at every field, `keyBytes`). -/
+def preBytes (d : RelDecl) (m : Nat) (v : Data) : Option ByteArray :=
+  ((d.key.take m).zipIdx.mapM fun p => (v.field p.1.1).map fun x => ("k" ++ toString p.2, x)).bind
+    fun fs => Wire.encodeData (keyWireTy d m) (.record fs)
+
 /-- The first `m` fields read back from their bytes, as a record with the declared labels sorted. -/
 def keyOf (d : RelDecl) (m : Nat) (b : ByteArray) : Except String Data :=
   match Wire.decodeData (keyWireTy d m) b with
@@ -80,6 +86,18 @@ def valOf (d : RelDecl) (what : String) (b : ByteArray) : Except (Refusal D) Dat
   | .ok v => checked digestOf what v
   | .error e => .error (.program s!"{what}: value {repr e}")
 
+/-- A range read's rows as data (LANG-49): each row's key read back at every key field (`keyOf`)
+and its value at the relation's value type (`valOf`), both `checked`, in the listing's order. The
+one conversion: a method's range slots (`relReads`) and a member's `read OBJ REL K` (PROTOCOL-51). -/
+def rangeRowData (ℓ : Label) (d : RelDecl) (rows : List (RowSlot D × RowLeaf)) :
+    Except (Refusal D) (List Data) :=
+  rows.mapM fun r => do
+    match r with
+    | (.row key, .row _ v) =>
+      let kd ← checked digestOf s!"rows: {ℓ}: key" (← liftS s!"rows: {ℓ}" (keyOf d d.key.length key.k))
+      pure (Data.record [("key", kd), ("val", ← valOf digestOf d s!"rows: {ℓ}" v)])
+    | _ => throw (.program s!"rows: {ℓ}: not a row")
+
 /-- One relation's reads: the caller's pins under it in pin order (at most `x.points`, else
 refused), and its one signed range, if the method declares one (its `most` at most the method's
 slots; exactly one signed range, else refused). -/
@@ -101,12 +119,7 @@ def relReads (rv : RowView D) (self : D) (i : Nat) (ℓ : Label) (d : RelDecl) (
       | [(pre, most, rows)] =>
         unless most ≤ k do throw (.program s!"rows: {ℓ}: range of {most} past {k} slots")
         let p ← checked digestOf s!"rows: {ℓ}: prefix" (← liftS s!"rows: {ℓ}: prefix" (keyOf d m pre))
-        let rs ← rows.mapM fun r => do
-          match r with
-          | (.row key, .row _ v) =>
-            let kd ← checked digestOf s!"rows: {ℓ}: key" (← liftS s!"rows: {ℓ}" (keyOf d d.key.length key.k))
-            pure (Data.record [("key", kd), ("val", ← valOf digestOf d s!"rows: {ℓ}" v)])
-          | _ => throw (.program s!"rows: {ℓ}: not a row")
+        let rs ← rangeRowData digestOf ℓ d rows
         pure [("range", Data.record [("pre", p), ("rows", .record (slotsD "r" k rs))])]
       | [] => throw (.program s!"rows: {ℓ}: no signed range")
       | _ => throw (.program s!"rows: {ℓ}: two signed ranges")

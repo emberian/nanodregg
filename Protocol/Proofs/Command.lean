@@ -14,6 +14,7 @@ import Kernel.Proofs.Fold
 import Kernel.Proofs.Refusals
 import Kernel.Proofs.Audit
 import Lang.Proofs.Print
+import Lang.Proofs.PrintLine
 import Lang.Proofs.Invoke
 
 namespace Nanodregg.Protocol.Command
@@ -101,6 +102,14 @@ theorem describe_ne_submit {X : Ctx D} {w : World D} {obj : D} {call k : ByteArr
   · simp [refused]
   · split <;> simp [refused, printed]
 
+/-- A range read is printed or refused, never a step that asks for anything (PROTOCOL-51). -/
+theorem rangeRender_ne_submit {X : Ctx D} {w : World D} {obj : D} {rel : String} {most : Nat}
+    {pre : Option String} {call k : ByteArray} : rangeRender X w obj rel most pre ≠ .submit call k := by
+  unfold rangeRender
+  split
+  · simp [refused]
+  · split <;> simp [refused, printed]
+
 omit [Ord D] [DecidableEq D] in
 theorem envelopeSign_ne_submit {t : Nat} {m k' call k : ByteArray} : envelopeSign t m k' ≠ .submit call k := by
   unfold envelopeSign; split <;> simp
@@ -175,6 +184,7 @@ theorem step_submit_planned {X : Ctx D} {dc : Codec.Stream D} {B : Thin.Base (Wo
   all_goals (try (exfalso; obtain ⟨_, _, h⟩ := h; unfold render at h; repeat' split at h
                   all_goals simp [refused, printed] at h))
   all_goals (try (exfalso; obtain ⟨_, _, h⟩ := h; exact describe_ne_submit h))
+  all_goals (try (exfalso; obtain ⟨_, _, h⟩ := h; exact rangeRender_ne_submit h))
   all_goals (try (exfalso; obtain ⟨_, _, h⟩ := h; exact refusedAt_ne_submit h))
   all_goals (try (exfalso; exact refusedAt_ne_submit h))
   all_goals (try (exfalso; obtain ⟨_, _, h⟩ := h; exact envelopeRefused_ne_submit h))
@@ -476,7 +486,7 @@ theorem stateValue_reads {X : Ctx D} {w : World D} {obj : D} {cell : Cell}
     {row : List (Lang.Label × Lang.Ty)} {d : Lang.Data}
     (h : stateValue X w obj cell = .ok (some (row, d))) :
     Lang.readState X.digestOf row (stateOf cell) = .ok d := by
-  unfold stateValue at h
+  unfold stateValue objectPackage at h
   simp only [bind, Except.bind, Except.mapError] at h
   repeat' split at h
   all_goals (try simp only [pure, Except.pure, reduceCtorEq, Except.ok.injEq, Option.some.injEq,
@@ -505,6 +515,129 @@ theorem readText_reads {X : Ctx D} {w : World D} {obj : D} {cell : Cell}
     · cases ht
   · cases ht
 
+
+/-! ## `read OBJ REL K [PREFIX]` (PROTOCOL-51) -/
+
+omit [Ord D] [DecidableEq D] in
+/-- An `Option` `mapM` that succeeds keeps the length and pairs each output with its input. -/
+theorem mapM_some_zip {α β : Type} {f : α → Option β} :
+    ∀ {xs : List α} {ys : List β}, xs.mapM f = some ys →
+      ys.length = xs.length ∧ ∀ p ∈ ys.zip xs, f p.2 = some p.1
+  | [], ys, h => by
+    simp only [List.mapM_nil, Option.pure_def, Option.some.injEq] at h; subst h; simp
+  | x :: xs, ys, h => by
+    rw [List.mapM_cons] at h
+    cases hx : f x with
+    | none => simp [hx] at h
+    | some y =>
+      cases hl : xs.mapM f with
+      | none => simp [hx, hl] at h
+      | some ys' =>
+        simp only [hx, hl, Option.bind_eq_bind, Option.bind_some, Option.pure_def, Option.some.injEq] at h
+        subst h
+        obtain ⟨hlen, hz⟩ := mapM_some_zip hl
+        refine ⟨by simp [hlen], fun p hp => ?_⟩
+        rcases List.mem_cons.mp hp with rfl | hp
+        · exact hx
+        · exact hz p hp
+
+/-- The relation `relationOf` names is the package's own: `objectPackage` (the package every method
+run loads) declares it at index `i` (the kernel's `rel`) as `d`. -/
+theorem relationOf_spec {X : Ctx D} {w : World D} {obj : D} {cell : Cell} {rel : String} {i : Nat}
+    {d : Lang.RelDecl} (h : relationOf X w obj cell rel = .ok (i, d)) :
+    ∃ pk, objectPackage X w obj cell = .ok (some pk) ∧ Lang.relIndex pk.rels rel = some i ∧
+      Lang.Row.find? rel pk.rels = some d := by
+  unfold relationOf at h
+  split at h
+  · cases h
+  · cases h
+  · rename_i pk hp
+    split at h
+    · rename_i i' d' hi hd
+      cases h
+      exact ⟨pk, hp, hi, hd⟩
+    · cases h
+
+/-- **`read OBJ REL K [PREFIX]` prints exactly the range read's rows, each on a line `Lang.Read`
+reads back to its row** (PROTOCOL-51). Lines `ts` mean: the object's package declares REL (index `i`,
+declaration `d`); K is within the declared `limit`; PREFIX is the bytes `pb`, at most the key width;
+THE range read (`Kernel.rangeOf`, a method's range read's own function) lists `l` (not refused);
+`Lang.rangeRowData` (a method's range slots' own conversion) makes it the data `ds`; there is ONE
+line per listed row (`ts.length = l.length = ds.length`: none dropped, none added); and each line,
+paired with its datum (`ts.zip ds`), is `Lang.Print.data` text that `Lang.Read.readData` at the
+relation's row type reads back to that datum, the datum of the listed row in the same place, with
+no line break in it (`Lang.Print.data_one_line`). What `l` holds — the
+rows under `obj` and REL whose key starts with the prefix, in ascending key-byte order, at most K —
+is `Kernel.range_rows_exact` (premise `pb.size ≤ width` given here). -/
+theorem rangeLines_reads {X : Ctx D} {w : World D} {obj : D} {cell : Cell} {rel : String} {most : Nat}
+    {pre : Option String} {ts : List String} (h : rangeLines X w obj cell rel most pre = .ok ts) :
+    ∃ i d pb width l ds, relationOf X w obj cell rel = .ok (i, d) ∧ most ≤ d.limit ∧
+      prefixBytes d pre = some pb ∧ rangeOf X.env w.rows obj i pb most = some (width, some l) ∧
+      pb.size ≤ width ∧ Lang.rangeRowData X.digestOf rel d l = .ok ds ∧ ts.length = l.length ∧
+      ts.length = ds.length ∧
+      ∀ p ∈ ts.zip ds, Lang.Read.readData (Lang.rowTy d) p.1 = .ok p.2 ∧
+        ∀ c ∈ p.1.toList, c ≠ '\n' ∧ c ≠ '\r' := by
+  unfold rangeLines at h
+  cases hrel : relationOf X w obj cell rel with
+  | error r => rw [hrel] at h; cases h
+  | ok p =>
+    obtain ⟨i, d⟩ := p
+    rw [hrel] at h
+    simp only at h
+    by_cases hlim : most ≤ d.limit
+    · rw [if_pos hlim] at h
+      unfold rowLines at h
+      cases hpb : prefixBytes d pre with
+      | none => rw [hpb] at h; cases h
+      | some pb =>
+        rw [hpb] at h
+        simp only at h
+        cases hro : rangeOf X.env w.rows obj i pb most with
+        | none => rw [hro] at h; cases h
+        | some q =>
+          obtain ⟨width, lo⟩ := q
+          rw [hro] at h
+          simp only at h
+          by_cases hw : pb.size ≤ width
+          · rw [if_pos hw] at h
+            cases lo with
+            | none => cases h
+            | some l =>
+              simp only at h
+              cases hds : Lang.rangeRowData X.digestOf rel d l with
+              | error r => rw [hds] at h; cases h
+              | ok ds =>
+                rw [hds] at h
+                simp only at h
+                by_cases hwf : (Lang.rowTy d).wf = true
+                · rw [if_pos hwf] at h
+                  cases hts : ds.mapM Lang.Print.data with
+                  | none => rw [hts] at h; cases h
+                  | some ts' =>
+                    rw [hts] at h
+                    cases h
+                    obtain ⟨hlen, hz⟩ := mapM_some_zip hts
+                    refine ⟨i, d, pb, width, l, ds, rfl, hlim, hpb, hro, hw, hds, ?_, hlen, ?_⟩
+                    · rw [hlen, Lang.rangeRowData_length hds]
+                    · intro p hp
+                      have hd := hz p hp
+                      exact ⟨Lang.Print.readData_data
+                          (Lang.rangeRowData_conforms hds p.2 (List.of_mem_zip hp).2) hwf hd,
+                        Lang.Print.data_one_line hd⟩
+                · rw [if_neg hwf] at h; cases h
+          · rw [if_neg hw] at h; cases h
+    · rw [if_neg hlim] at h; cases h
+
+/-- **K past the declared `limit` is refused by name** (PROTOCOL-51): `rangePastLimit`, before any
+row is read. -/
+theorem rangeLines_pastLimit {X : Ctx D} {w : World D} {obj : D} {cell : Cell} {rel : String}
+    {most i : Nat} {d : Lang.RelDecl} {pre : Option String} (hrel : relationOf X w obj cell rel = .ok (i, d))
+    (hk : d.limit < most) :
+    rangeLines X w obj cell rel most pre = .error (.rangePastLimit most) := by
+  unfold rangeLines
+  rw [hrel]
+  simp only
+  rw [if_neg (by omega)]
 
 /-! ## `pageIo` is "not now" (HOST-48, PROTOCOL-49)
 

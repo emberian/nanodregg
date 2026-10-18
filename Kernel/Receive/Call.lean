@@ -368,7 +368,7 @@ def pinned [DecidableEq D] (E : Env D) (w : World D) (pins : List (D × D)) : Pi
   if pins.any (fun p => p.1 = c) then .ok (w.live E c) else .error (.unpinned c)
 
 /-- The rows a caller observed, on `w`: its pinned rows' leaves, and its signed ranges' current
-listings at their relations' widths (the pre-state `rangeRows` admission recomputes). -/
+listings at their relations' widths (`rangeOf`: the pre-state `rangeRows` admission recomputes). -/
 def rowView [DecidableEq D] (E : Env D) (w : World D) (u : Unsigned D) : RowView D where
   points parent rel := u.rowPins.filterMap fun p =>
     match p.1 with
@@ -376,12 +376,10 @@ def rowView [DecidableEq D] (E : Env D) (w : World D) (u : Unsigned D) : RowView
     | .head .. => none
   ranges parent rel :=
     (u.ranges.filter fun q => q.parent = parent ∧ q.rel = rel).mapM fun q =>
-      match headOf E w.rows parent rel with
+      match rangeOf E w.rows parent rel q.pre q.most with
       | none => .error (.rangeUnpinned parent rel)
-      | some (_, _, _, _, width, _) =>
-        match rangeRows E w.rows parent rel width q.pre q.most with
-        | none => .error (.rangeTooLong parent)
-        | some l => .ok (q.pre, q.most, l)
+      | some (_, none) => .error (.rangeTooLong parent)
+      | some (_, some l) => .ok (q.pre, q.most, l)
 
 def reqOf (u : Unsigned D) (self principal : D) (occasion : Occasion D) : Req D :=
   { agent := u.member, principal, self, notBefore := u.notBefore, validUntil := u.validUntil, occasion }

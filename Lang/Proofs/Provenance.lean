@@ -725,6 +725,23 @@ theorem slotsD_digests {xs : List Data} (hx : ∀ x ∈ xs, ∀ b ∈ x.digests,
     (c : String) (n : Nat) : ∀ b ∈ Data.rowDigests (slotsD c n xs), (digestOf b).isSome = true :=
   zipIdx_slots_digests hx _ 0
 
+/-- **Every digest of a range read's rows is one `digestOf` accepted** (PROTOCOL-51): each key and
+value `rangeRowData` builds passed `checked`. -/
+theorem rangeRowData_digests {ℓ : Label} {dl : RelDecl} {rows : List (RowSlot D × RowLeaf)}
+    {ds : List Data} (h : rangeRowData digestOf ℓ dl rows = .ok ds) :
+    ∀ y ∈ ds, ∀ b ∈ y.digests, (digestOf b).isSome = true := by
+  unfold rangeRowData at h
+  intro y hy
+  obtain ⟨q, -, hq⟩ := mapM_ok_mem h y hy
+  simp only [bind, Except.bind, pure, Except.pure] at hq
+  repeat' split at hq
+  all_goals first | cases hq | skip
+  all_goals
+    simp only [Data.digests, Data.rowDigests, List.append_nil, List.mem_append]
+    rintro z (hz | hz)
+    · exact checked_digests ‹_› z hz
+    · exact valOf_digests ‹_› z hz
+
 theorem relReads_digests {rv : RowView D} {self : D} {i : Nat} {ℓ : Label} {dl : RelDecl} {x : RelRead}
     {v : Data} (h : relReads digestOf rv self i ℓ dl x = .ok v) :
     ∀ b ∈ v.digests, (digestOf b).isSome = true := by
@@ -755,15 +772,7 @@ theorem relReads_digests {rv : RowView D} {self : D} {i : Nat} {ℓ : Label} {dl
            simp only [Data.rowDigests, Data.digests, List.append_nil, List.mem_append] at hb
            rcases hb with hb | hb
            · exact checked_digests ‹_› b hb
-           · refine slotsD_digests (fun y hy => ?_) "r" _ b hb
-             obtain ⟨q, -, hq⟩ := mapM_ok_mem hrows y hy
-             repeat' split at hq
-             all_goals first | cases hq | skip
-             all_goals
-               simp only [Data.digests, Data.rowDigests, List.append_nil, List.mem_append]
-               rintro z (hz | hz)
-               · exact checked_digests ‹_› z hz
-               · exact valOf_digests ‹_› z hz)
+           · exact slotsD_digests (fun y hy => rangeRowData_digests hrows y hy) "r" _ b hb)
 
 /-- **Every digest of the rows a run reads is one `digestOf` accepted** (LANG-49): what `readsData`
 builds from the caller's row view holds only keys, prefixes and values that passed `checked`. -/

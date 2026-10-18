@@ -136,6 +136,13 @@ theorem describe_cont {X : Ctx D} {w : World D} {obj : D} : (describe X w obj).c
   · simp [refused, Reply.cont]
   · split <;> simp [refused, printed, Reply.cont]
 
+theorem rangeRender_cont {X : Ctx D} {w : World D} {obj : D} {rel : String} {most : Nat}
+    {pre : Option String} : (rangeRender X w obj rel most pre).cont = none := by
+  unfold rangeRender
+  split
+  · simp [refused, Reply.cont]
+  · split <;> simp [refused, printed, Reply.cont]
+
 theorem render_cont {X : Ctx D} {w : World D} {obj : D} {ex : List (Nat × ByteArray)} :
     (render X w obj ex).cont = none := by
   unfold render
@@ -234,6 +241,7 @@ theorem step_incoming_kept {X : Ctx D} {dc : Codec.Stream D} {B : Thin.Base (Wor
   all_goals (try (rw [refusedAt_cont] at hk; cases hk; done))
   all_goals (try (rw [render_cont] at hk; cases hk; done))
   all_goals (try (rw [describe_cont] at hk; cases hk; done))
+  all_goals (try (rw [rangeRender_cont] at hk; cases hk; done))
   all_goals (try (rw [receiptLines_cont] at hk; cases hk; done))
   all_goals (try (rw [settled_cont] at hk; cases hk; done))
   all_goals (try (obtain rfl : _ = _ := Option.some.inj ‹some _ = some _›))

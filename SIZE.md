@@ -16,16 +16,16 @@ edit it, never pass it as a PATH). Ceilings live in `gates/ceilings.tsv`. A rise
 | Lean lines (Emit) | 1541 | — |
 | Lean lines (Host) | 11275 | — |
 | Lean lines (Hosting) | 6504 | — |
-| Lean lines (Kernel) | 22565 | — |
-| Lean lines (Lang) | 22191 | — |
+| Lean lines (Kernel) | 22573 | — |
+| Lean lines (Lang) | 22254 | — |
 | Lean lines (Ledger) | 1141 | — |
 | Lean lines (Ops) | 2296 | — |
-| Lean lines (Protocol) | 8780 | — |
-| Lean lines (deployed) | 20659 | — |
-| Lean lines (tooling: Sim, Rows, Journey, Census, Emit, Ops, Bench) | 15394 | — |
+| Lean lines (Protocol) | 9177 | — |
+| Lean lines (deployed) | 20797 | — |
+| Lean lines (tooling: Sim, Rows, Journey, Census, Emit, Ops, Bench) | 15504 | — |
 | foundation modules | 7 | 8 |
 | max dependents of a non-foundation module | 240 | — |
-| theorems | 3952 | — |
+| theorems | 3964 | — |
 | partial defs (deployed) | 0 | 0 |
 | sorry | 0 | 0 |
 | native (extern/implemented_by) | 12 | 12 |
@@ -43,4 +43,4 @@ edit it, never pass it as a PATH). Ceilings live in `gates/ceilings.tsv`. A rise
 | refusal constructors | 79 | — |
 | protocol status codes | 6 | — |
 | protocol step codes | 7 | — |
-| conformance rows | 31 | — |
+| conformance rows | 33 | — |

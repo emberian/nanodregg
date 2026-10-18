@@ -1613,3 +1613,46 @@ than its docstring names. The `baseMoved` red caught it only because the expecta
 - The deployed run is in process. It has no sockets: the wire codecs carry every step, but the transport is a channel. THE BAR remains the over-sockets measure. This closes D1's "no member row at deployed parameters", not A/C's socket gaps.
 - `atDeployed` measures the parameter FUNCTIONS, not the bytes the run logged. The run uses exactly those functions (`R.ctx`, `R.pub`, `R.sign`, `R.keys`), and nothing else in the pipeline produces digests, keys or tags.
 - Cost: deployed 67 s, toy 18 s (hbox, swarm-build; recorded for the record, judged by nothing). `forgotten` and `refused` are ~35 k frames each and dominate. Their counts are heights, so they cannot be scaled by `--times`.
+
+## PROTOCOL-51 · `read OBJ REL K [PREFIX]`: a resident reads a relation's rows, in key order, through THE range read (2026-10-19, PROTOCOL-16; cv 01a14f18-b8c8, LANG-52's ask, for the Bell as a queue cv 01a14ece-43f1)
+
+**The gap.** A programmed object's relations (LANG-49) could be read only by its own methods, as range slots. A resident has only the command language, so it could not see a queue's rows at all. HOSTING's real resident reads the Bell, and the Bell as a queue waits on this.
+
+**Decision.**
+- `read OBJ REL K [PREFIX]`, a new form of `read`:
+  - REL is a relation the object's package declares. Its first argument has no `=`; an argument with `=` is still a `KEY=VALUE` expectation.
+  - K is the most rows listed.
+  - PREFIX is LANG text of the key's first fields, read at `Lang.preTy d m` for the first `m` it reads at. With no PREFIX, every row is listed.
+  - The read is answered on follow's caught-up World, as `read OBJ` is. It is `readOnly`, so it never plans or signs a call (`rangeRender_ne_submit` joins the consent theorem's arms).
+- **One path, never a second.**
+  - Kernel: `Kernel.rangeOf` (the head's key width, then `rangeRows`) is factored out of `Receive.rowView`. A method's range read and this read both call it. KERNEL-20 agreed.
+  - Lang: `Lang.rangeRowData` (each row's key by `keyOf` at every field and its value by `valOf`, both `checked`) is factored out of `Lang.relReads`' range arm. `relReads` and this read both call it. ROOT agreed, standing in for LANG. LANG-17 then reviewed as owner and said yes on two conditions: `preBytes` moves into Lang, and the `wf` comment is reworded. It also gave the second-agent read of the Protocol statements.
+  - Lang: the prefix's bytes are `Lang.preBytes d m v` (the key wire of the first `m` declared fields). `Lang.preBytes_full`: at every field it IS `keyBytes`, so a range's prefix and an edit's key are one encoding (LANG-17's condition).
+  - Each row prints on ONE line: `Lang.Print.data` of the row datum `(record (key …) (val …))`, at the relation's row type `Lang.rowTy d`.
+- **Refusals.** The method path's own names: `rangeUnpinned` (no head), `keyWidth` (the prefix is longer than the key), and `rangeTooLong` (more than K rows; refused, never truncated). This read adds:
+  - `unknownRelation`: the package declares no REL; a data object declares none;
+  - `rangePastLimit`: K is past the relation's declared `limit`;
+  - `badPrefix`: PREFIX reads at none of the prefix types;
+  - `noText`: a refusal, never an acceptance. `checkRel` makes it unreachable for an installed package (it checks `keyTy d` and `d.val` wf), but that is not proved here.
+- **From the text alone.** `read OBJ ?` gains a `rel …` line for each relation. It is LANG's own printer's text (`Lang.Print.relSx`): the label, the key's fields in DECLARED order (a prefix is the first ones), the value type, and the `limit` that bounds K (`packageLines_rels`).
+- **Theorems** (Protocol/Proofs/Command.lean):
+  - `rangeLines_reads`: lines `ts` mean that:
+    - the package declares REL as `(i, d)` (`relationOf_spec`: in the very package a method run loads);
+    - K ≤ `d.limit`;
+    - the prefix bytes `pb` are at most the key width;
+    - `rangeOf` lists `l`, and `rangeRowData` makes it `ds`;
+    - `ts.length = l.length = ds.length`;
+    - each line, paired with its datum, is text that `Lang.Read.readData (Lang.rowTy d)` reads back to that datum (`Lang.Print.readData_data` over `Lang.rangeRowData_conforms`), with no `\n` or `\r` in it (`Lang.Print.data_one_line`).
+  - What `l` holds (exactly the rows under the prefix, ascending key-BYTE order, at most K) is `Kernel.range_rows_exact`. Its `pre.size ≤ width` premise is a conjunct here.
+  - `rangeLines_pastLimit` is the K tooth.
+  - Lang (`Lang/Proofs/Invoke.lean`, `Provenance.lean`): `rangeRowData_conforms`, `rangeRowData_length`, `rangeRowData_digests`. `relReads_conforms` and `relReads_digests` keep their statements; only their proofs now go through the factored lemmas.
+- **Rows** (33 toy, 32 deployed):
+  - `range` (stand-in queue `ringsQueue`, written in LANG's surface, installed as LANG's printed core): the newcomer reads the description and binds `ring` from it. Three rings land (round 2 first). `read @q rings 8` prints EXACTLY the three rows in key-byte order: round 1's two before round 2's, not ring order. With the prefix `(record (round 1))` it prints exactly two. `rings 2` is `rangeTooLong`, and `bells` is `unknownRelation`. Plant `dropRow` (a reader that loses its first row) is caught at line 10 `refused unprinted`.
+  - `rangeLimit`: `rings 65` is `rangePastLimit`, and `rings 64` over the empty relation prints nothing. Plant `noReadLimit` (the reader WITHOUT the bound: `Command.rowLines` called directly, the same function `rangeLines` wraps, so no flag lives in the machine) is caught at line 6 `ok`.
+
+**Critique.**
+- "Key order" is key-BYTE order, by theorem (`range_rows_exact`). Today a nat key field is CODEC u64 little-endian, so byte order is not numeric order past 255: a queue keyed `(n nat)` would list 256 between 0 and 1. That is LANG's key wire (LANG-57, LANG-17: Lang naturals big-endian). The statements here do not change under it; only the concrete key bytes re-pin. The rows' keys are below 256, so their printed order stands either way.
+- `ringsQueue` stands in for the Bell. When LANG re-cuts the Bell as a queue, the row should install the Bell itself.
+- A reply past `Bounds.frameBytesMax`: I first proposed a `pastFrame` refusal, on the claim that such a reply "has no bytes". That claim was wrong. `host follow` already answers an unframeable step `refused stepTooLarge` (Host/Follow.lean:64–66), so the member gets a name, not a silent failure. `pastFrame` was not added; two names for one bound would be the "two shapes" the doctrine deletes. A relation's rows can still outgrow a frame (64 rows × up to 64 KiB values), and then K or the prefix must narrow it.
+- The read lists at most K rows and refuses more. There is no cursor yet: a resident pages by prefix. A "rows after key X" form is the next ask if a queue needs it.
+- Plan-side range reads (a member INVOKING a method that declares a range) still sign no `ranges`: `plan` builds none. That is the next Protocol gap for a queue that reads itself.

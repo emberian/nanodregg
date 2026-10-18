@@ -60,8 +60,37 @@ theorem packageLines_methods {p : Lang.Package} {ls : List String}
     cases hm : (List.range p.methods.length).mapM (methodLine (D := D) p) with
     | none => simp [hs, hm] at h
     | some mss =>
-      simp only [hs, hm, Option.bind_eq_bind, Option.bind_some, Option.pure_def, Option.some.injEq] at h
-      obtain ⟨ms, hms, hmem⟩ := mem_of_mapM hm i (List.mem_range.mpr hi)
-      exact ⟨ms, hms, fun l hl => by rw [← h]; simp; right; left; exact ⟨ms, hmem, hl⟩⟩
+      cases hr : p.rels.mapM relLine with
+      | none => simp [hs, hm, hr] at h
+      | some rs =>
+        simp only [hs, hm, hr, Option.bind_eq_bind, Option.bind_some, Option.pure_def,
+          Option.some.injEq] at h
+        obtain ⟨ms, hms, hmem⟩ := mem_of_mapM hm i (List.mem_range.mpr hi)
+        exact ⟨ms, hms, fun l hl => by
+          rw [← h]
+          exact List.mem_append_left _ (List.mem_append_left _
+            (List.mem_cons_of_mem _ (List.mem_flatten.mpr ⟨ms, hmem, hl⟩)))⟩
+
+omit [Ord D] [DecidableEq D] in
+/-- **Every relation of the package has its line** (PROTOCOL-51): the description holds
+`relLine r` (LANG's printer's text of `r`) for every relation `r` the package declares, so a
+resident learns the relation, its key fields in declared order and its `limit` from the text. -/
+theorem packageLines_rels {p : Lang.Package} {ls : List String}
+    (h : packageLines (D := D) p = some ls) (r : Lang.Label × Lang.RelDecl) (hr : r ∈ p.rels) :
+    ∃ t, relLine r = some t ∧ t ∈ ls := by
+  unfold packageLines at h
+  cases hs : Lang.Print.ty p.state with
+  | none => simp [hs] at h
+  | some st =>
+    cases hm : (List.range p.methods.length).mapM (methodLine (D := D) p) with
+    | none => simp [hs, hm] at h
+    | some mss =>
+      cases hrs : p.rels.mapM relLine with
+      | none => simp [hs, hm, hrs] at h
+      | some rs =>
+        simp only [hs, hm, hrs, Option.bind_eq_bind, Option.bind_some, Option.pure_def,
+          Option.some.injEq] at h
+        obtain ⟨t, ht, hmem⟩ := mem_of_mapM hrs r hr
+        exact ⟨t, ht, by rw [← h]; exact List.mem_append_right _ hmem⟩
 
 end Nanodregg.Protocol.Command

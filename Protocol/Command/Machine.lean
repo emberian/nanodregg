@@ -108,6 +108,12 @@ inductive Refusal (D : Type)
   | expired (height : Nat)
   /-- `receipt CALL` whose bytes do not decode as a signed call -/
   | badCall
+  /-- `read OBJ REL K`: the object's package declares no relation REL (a data object declares none) -/
+  | unknownRelation (rel : String)
+  /-- `read OBJ REL K`: K is past the relation's declared `limit` (PROTOCOL-51) -/
+  | rangePastLimit (most : Nat)
+  /-- `read OBJ REL K PREFIX`: PREFIX reads at none of the relation's prefix types -/
+  | badPrefix
 
 /-- A step answered to the client. -/
 inductive Reply
@@ -151,6 +157,9 @@ def Refusal.name : Refusal D → String
   | .noText => "noText"
   | .expired _ => "expired"
   | .badCall => "badCall"
+  | .unknownRelation _ => "unknownRelation"
+  | .rangePastLimit _ => "rangePastLimit"
+  | .badPrefix => "badPrefix"
 
 def refused (r : Refusal D) : Reply :=
   .done CommandExit.refused.code.toUInt8 ByteArray.empty s!"refused {r.name}\n".toUTF8
@@ -334,7 +343,7 @@ def body (X : Ctx D) (me : Self D) (w : World D) (s : Signed) : Cmd D → Except
   | .account a o => .ok (.account a (o.getD me.member))
   | .transfer src dst n via once => .ok (.transfer src dst n via once)
   | .credit wl acct n via => .ok (.credit wl acct n via)
-  | .init _ | .read _ _ | .describe _ | .adopt _ _ | .sync | .invite _ | .receipt _ => .error .badState
+  | .init _ | .read _ _ | .describe _ | .rangeRead .. | .adopt _ _ | .sync | .invite _ | .receipt _ => .error .badState
 
 /-- Derive with the signature not yet known, pinning each cell the derivation asks for. -/
 def derivePins (X : Ctx D) (w : World D) : Nat → Unsigned D → Except (Refusal D) (Unsigned D × Turn D)
@@ -487,18 +496,27 @@ def whoami : ByteArray := "nanodregg/protocol/whoami/v1".toUTF8
 
 def hex (X : Ctx D) (d : D) : String := Text.toHex (X.env.bytes d)
 
-/-- A programmed object's state (PROTOCOL-48): its package loaded as every method run loads it
+/-- A programmed object's package (PROTOCOL-48): loaded as every method run loads it
 (`Lang.load`: the closure, each package decoded and re-checked by `Package.checkWith`), its state row,
 and the value `Lang.readState` reads there from the cell's state slots: `Lang.runSetup`'s own front
 half. `none` for a data object. -/
-def stateValue (X : Ctx D) (w : World D) (obj : D) (cell : Cell) :
-    Except (Refusal D) (Option (List (Lang.Label × Lang.Ty) × Lang.Data)) := do
+def objectPackage (X : Ctx D) (w : World D) (obj : D) (cell : Cell) :
+    Except (Refusal D) (Option Lang.Package) := do
   match ← (packageOf X obj cell).mapError .receive with
   | none => pure none
   | some p =>
     let (L, g) ← (Lang.load X.digestOf (worldLook X.env w) Lang.closureDepthMax (X.env.bytes p)
       ⟨[], [], []⟩).mapError .receive
     let some pk := L.pkgs[g]? | throw (.receive (.program "closure"))
+    pure (some pk)
+
+/-- The object's state value at its package's state row (`objectPackage`, then `Lang.readState`);
+`none` for a data object. -/
+def stateValue (X : Ctx D) (w : World D) (obj : D) (cell : Cell) :
+    Except (Refusal D) (Option (List (Lang.Label × Lang.Ty) × Lang.Data)) := do
+  match ← objectPackage X w obj cell with
+  | none => pure none
+  | some pk =>
     let row := Lang.recordRow pk.state
     match Lang.readState X.digestOf row (stateOf cell) with
     | .ok d => pure (some (row, d))
@@ -562,6 +580,83 @@ def describe (X : Ctx D) (w : World D) (obj : D) : Reply :=
       ((cell.slots.get slotOwner).map fun o => s!"owner {Text.toHex o}\n").getD ""
     match describeLines X w obj cell with
     | .ok ls => printed (head ++ String.join (ls.map (· ++ "\n")))
+    | .error r => refused (D := D) r
+
+/-! ## `read OBJ REL K [PREFIX]` — a range read over a relation (PROTOCOL-51)
+
+The rows of relation REL of the object's package whose key starts with PREFIX, at most K, through
+THE range read a method's range read gets: `Kernel.rangeOf` on follow's caught-up World (a method's
+is `Receive.rowView`'s, the same function), each row as data by `Lang.rangeRowData` (a method's
+range slots are `Lang.relReads`', the same function), each printed on ONE line by `Lang.Print.data`
+at the relation's row type (`Proofs.Command.rangeLines_reads`: every line reads back to its row, and
+the lines are exactly the listing's rows, in its order, which is key-BYTE order by theorem
+(`range_rows_exact`); whether that is a field's natural order is LANG's key wire, LANG-57). The refusals are the
+method path's by name (`rangeUnpinned`, `keyWidth`, `rangeTooLong`, never truncated) and K past the
+relation's declared `limit` (`rangePastLimit`). -/
+
+/-- Relation `rel` of the object's package: its index (the kernel's `rel`) and its declaration. -/
+def relationOf (X : Ctx D) (w : World D) (obj : D) (cell : Cell) (rel : String) :
+    Except (Refusal D) (Nat × Lang.RelDecl) :=
+  match objectPackage X w obj cell with
+  | .error r => .error r
+  | .ok none => .error (.unknownRelation rel)
+  | .ok (some pk) =>
+    match Lang.relIndex pk.rels rel, Lang.Row.find? rel pk.rels with
+    | some i, some d => .ok (i, d)
+    | _, _ => .error (.unknownRelation rel)
+
+/-- PREFIX's bytes: `Lang.preBytes` (the key wire of the first `m` declared key fields), for the
+first `m` whose prefix type (`Lang.preTy`) `Lang.Read.readData` reads the text at; no text: every
+row (no bytes). -/
+def prefixBytes (d : Lang.RelDecl) : Option String → Option ByteArray
+  | none => some ByteArray.empty
+  | some t =>
+    (List.range (d.key.length + 1)).findSome? fun m =>
+      match Lang.Read.readData (Lang.preTy d m) t with
+      | .ok v => Lang.preBytes d m v
+      | .error _ => none
+
+/-- The rows' lines of relation `i` (declared `d`) under `obj`, the K bound aside. -/
+def rowLines (X : Ctx D) (w : World D) (obj : D) (i : Nat) (d : Lang.RelDecl) (rel : String)
+    (most : Nat) (pre : Option String) : Except (Refusal D) (List String) :=
+  match prefixBytes d pre with
+  | none => .error .badPrefix
+  | some pb =>
+    match rangeOf X.env w.rows obj i pb most with
+    | none => .error (.receive (.rangeUnpinned obj i))
+    | some (width, lo) =>
+      if pb.size ≤ width then
+        match lo with
+        | none => .error (.receive (.rangeTooLong obj))
+        | some l =>
+          match Lang.rangeRowData X.digestOf rel d l with
+          | .error r => .error (.receive r)
+          | .ok ds =>
+            -- a refusal (`noText`), never an acceptance; `checkRel` makes it unreachable for an
+            -- installed package (`keyTy d` and `d.val` are checked wf), not proved here; it is what
+            -- makes `rangeLines_reads` premise-free
+            if (Lang.rowTy d).wf then
+              match ds.mapM Lang.Print.data with
+              | some ts => .ok ts
+              | none => .error .noText
+            else .error .noText
+      else .error (.reject (.keyWidth obj))
+
+/-- `read OBJ REL K [PREFIX]`'s lines: K within the relation's declared `limit`, then `rowLines`. -/
+def rangeLines (X : Ctx D) (w : World D) (obj : D) (cell : Cell) (rel : String) (most : Nat)
+    (pre : Option String) : Except (Refusal D) (List String) :=
+  match relationOf X w obj cell rel with
+  | .error r => .error r
+  | .ok (i, d) => if most ≤ d.limit then rowLines X w obj i d rel most pre else .error (.rangePastLimit most)
+
+/-- `read OBJ REL K [PREFIX]` on follow's caught-up World: one line per row. -/
+def rangeRender (X : Ctx D) (w : World D) (obj : D) (rel : String) (most : Nat) (pre : Option String) :
+    Reply :=
+  match w.live X.env obj with
+  | none => refused (D := D) (.missingCell obj)
+  | some cell =>
+    match rangeLines X w obj cell rel most pre with
+    | .ok ts => printed (String.join (ts.map (· ++ "\n")))
     | .error r => refused (D := D) r
 
 /-- What to do next, for the refusals that have an answer (DELVETALK-LEARNINGS §4.3): printed on
@@ -648,7 +743,7 @@ incoming key signed; it ends `refused unknownKey` with the hint to sync. -/
 
 /-- The verbs that sign no call: the only ones whose envelope may be signed by the incoming key. -/
 def readOnly : Cmd D → Bool
-  | .read _ _ | .describe _ | .sync | .receipt _ => true
+  | .read _ _ | .describe _ | .rangeRead .. | .sync | .receipt _ => true
   | _ => false
 
 def incomingBit : Nat := 2
@@ -826,6 +921,7 @@ def step (X : Ctx D) (dc : Stream D) (B : Thin.Base (World D)) (me : Self D) (f 
                       match cmd, Signed.ofBytes signedB with
                       | .read obj ex, _ => moved w' ts (render X w' obj ex)
                       | .describe obj, _ => moved w' ts (describe X w' obj)
+                      | .rangeRead obj rel k pre, _ => moved w' ts (rangeRender X w' obj rel k pre)
                       | .sync, _ => moved w' ts (printed
                           s!"height {w'.height}\nchain {hex X w'.chain}\nroots {hex X (w'.roots X.env)}\n")
                       -- the receipt for a signed call, against the World follow just caught up to,

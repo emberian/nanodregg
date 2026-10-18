@@ -12,6 +12,9 @@ the text says exactly what `invoke` will check:
     method I LABEL ARGTYPE         one per method, I being the index `invoke OBJ I ARGS` names
     call I J TYPE                  method I's declared call slot J (LANG-23)
     law LABEL                      each law of the package
+    rel (LABEL (key …) (val T) …)  each relation of the package (`Lang.Print.relSx`): its key's
+                                   fields in DECLARED order (a range prefix is the first ones) and
+                                   its `limit` (the most `read OBJ REL K` lists, PROTOCOL-51)
     law HEX LABEL…                 each further law package of the object, with its laws
 
 Each method line is `Lang.resolveMethod`'s answer for that index: the label `invoke` resolves, and
@@ -43,10 +46,15 @@ def methodLine (p : Lang.Package) (i : Nat) : Option (List String) :=
     | some a, some cs => some (s!"method {i} {ℓ} {a}" :: cs)
     | _, _ => none
 
-/-- A package's description lines: its state, every method in index order, its laws. -/
+/-- A relation as text: LANG's own printer's (`Lang.Print.relSx`, the form `Lang.Read` reads). -/
+def relLine (r : Lang.Label × Lang.RelDecl) : Option String :=
+  ((Lang.Print.relSx r).bind Lang.Print.fits).map fun t => s!"rel {t}"
+
+/-- A package's description lines: its state, every method in index order, its laws, its relations. -/
 def packageLines (p : Lang.Package) : Option (List String) := do
   let st ← Lang.Print.ty p.state
   let ms ← (List.range p.methods.length).mapM (methodLine (D := D) p)
-  pure ((s!"state {st}" :: ms.flatten) ++ p.laws.map fun ℓ => s!"law {ℓ}")
+  let rs ← p.rels.mapM relLine
+  pure ((s!"state {st}" :: ms.flatten) ++ p.laws.map (fun ℓ => s!"law {ℓ}") ++ rs)
 
 end Nanodregg.Protocol.Command

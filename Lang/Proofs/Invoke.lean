@@ -296,6 +296,44 @@ theorem pre_conf {D : Type} {digestOf : ByteArray → Option D} {d : RelDecl} {m
     (h1 : liftS (D := D) w (keyOf d m b) = .ok k0) : Conforms k (preTy d m) := by
   rw [checked_eq h2]; exact keyOf_conforms (liftS_eq h1)
 
+theorem mapM_ok_length {α β ε : Type} {f : α → Except ε β} :
+    ∀ {xs : List α} {ys : List β}, xs.mapM f = .ok ys → ys.length = xs.length
+  | [], ys, h => by
+    simp only [List.mapM_nil, pure, Except.pure, Except.ok.injEq] at h; subst h; rfl
+  | x :: xs, ys, h => by
+    rw [List.mapM_cons] at h
+    simp only [bind, Except.bind] at h
+    split at h
+    · cases h
+    · split at h
+      · cases h
+      · rename_i ys' hys
+        simp only [pure, Except.pure, Except.ok.injEq] at h
+        subst h
+        simp [mapM_ok_length hys]
+
+/-- **A range read's rows are rows of the relation** (LANG-49, PROTOCOL-51): every datum
+`rangeRowData` builds is a value of `rowTy d`, its key at the key type and its value at the value
+type. -/
+theorem rangeRowData_conforms {D : Type} {digestOf : ByteArray → Option D} {ℓ : Label} {d : RelDecl}
+    {rows : List (RowSlot D × RowLeaf)} {ds : List Data} (h : rangeRowData digestOf ℓ d rows = .ok ds) :
+    ∀ y ∈ ds, Conforms y (rowTy d) := by
+  unfold rangeRowData at h
+  intro y hy
+  obtain ⟨q, -, hq⟩ := mapM_ok_mem h y hy
+  simp only [bind, Except.bind, pure, Except.pure] at hq
+  repeat' split at hq
+  all_goals first | cases hq | skip
+  all_goals exact .record (.cons (key_conf ‹_› ‹_›) (.cons (valOf_conforms ‹_›) .nil))
+
+/-- **One datum per listed row** (PROTOCOL-51): `rangeRowData` drops no row of the listing and adds
+none. -/
+theorem rangeRowData_length {D : Type} {digestOf : ByteArray → Option D} {ℓ : Label} {d : RelDecl}
+    {rows : List (RowSlot D × RowLeaf)} {ds : List Data} (h : rangeRowData digestOf ℓ d rows = .ok ds) :
+    ds.length = rows.length := by
+  unfold rangeRowData at h
+  exact mapM_ok_length h
+
 theorem relReads_conforms {D : Type} {digestOf : ByteArray → Option D} {rv : RowView D} {self : D}
     {i : Nat} {ℓ : Label} {d : RelDecl} {x : RelRead} {v : Data}
     (h : relReads digestOf rv self i ℓ d x = .ok v) : Conforms v (relReadTy d x) := by
@@ -323,12 +361,8 @@ theorem relReads_conforms {D : Type} {digestOf : ByteArray → Option D} {rv : R
       first
         | exact .nil
         | rename_i rs hrows
-          refine .cons (.record (.cons (pre_conf ‹_› ‹_›) (.cons (.record (slotsD_conforms ?_ "r" _)) .nil))) .nil
-          intro y hy
-          obtain ⟨q, -, hq⟩ := mapM_ok_mem hrows y hy
-          repeat' split at hq
-          all_goals first | cases hq | skip
-          all_goals exact .record (.cons (key_conf ‹_› ‹_›) (.cons (valOf_conforms ‹_›) .nil))
+          exact .cons (.record (.cons (pre_conf ‹_› ‹_›)
+            (.cons (.record (slotsD_conforms (rangeRowData_conforms hrows) "r" _)) .nil))) .nil
 
 theorem mapM_rowConforms {α ε : Type} {f : α → Except ε (Label × Data)} {g : α → Option (Label × Ty)}
     (hf : ∀ a y, f a = .ok y → ∃ t, g a = some t ∧ y.1 = t.1 ∧ Conforms y.2 t.2) :

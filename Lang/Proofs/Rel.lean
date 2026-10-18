@@ -673,4 +673,11 @@ theorem run_rows_under {D : Type} {bytesOf : D → ByteArray} {digestOf : ByteAr
     obtain ⟨-, -, rfl, -⟩ := h
     exact runMeasured_rows_under hx
 
+/-- **A prefix of every field is the key** (PROTOCOL-51): `preBytes` at the key's full length is
+`keyBytes`, so a range's prefix and an edit's key are one encoding. -/
+theorem preBytes_full (d : RelDecl) (k : Data) : preBytes d d.key.length k = keyBytes d k := by
+  unfold preBytes keyBytes keyToWire
+  rw [List.take_length]
+  cases d.key.zipIdx.mapM (fun p => (k.field p.1.1).map fun x => ("k" ++ toString p.2, x)) <;> rfl
+
 end Nanodregg.Lang

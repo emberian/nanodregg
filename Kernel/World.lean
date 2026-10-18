@@ -934,6 +934,16 @@ def headOf (E : Env D) (r : Rows D) (parent : D) (rel : Nat) :
   | some (.head count sum limit cap width retract) => some (count, sum, limit, cap, width, retract)
   | _ => none
 
+/-- THE range read (LANG-44 (c)): relation `rel` under `parent`, its key width from its head, and
+`rangeRows` at that width (`none` inside: past `most`, refused, never truncated); `none` when the
+relation has no head. A method's range read (`Receive.rowView`) and a member's `read OBJ REL K`
+(PROTOCOL-51) are both this one function. -/
+def rangeOf (E : Env D) (r : Rows D) (parent : D) (rel : Nat) (pre : ByteArray) (most : Nat) :
+    Option (Nat × Option (List (RowSlot D × RowLeaf))) :=
+  match headOf E r parent rel with
+  | none => none
+  | some (_, _, _, _, width, _) => some (width, rangeRows E r parent rel width pre most)
+
 /-- Whether a row touch inserts into relation `rel` of `p` (1) or not (0). -/
 def insN1 (p : D) (rel : Nat) (x : RowTouch D) : Nat :=
   match x.slot, x.act with

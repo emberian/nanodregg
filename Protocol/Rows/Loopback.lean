@@ -75,6 +75,10 @@ structure Sys (D : Type) [Ord D] where
   rawSlots : Bool := false
   /-- a page refused `pageIo` ends the command `refused pageIo`, exit 1 (a plant, PROTOCOL-49) -/
   pageIoFatal : Bool := false
+  /-- `read OBJ REL K` drops its first row's line (a plant, PROTOCOL-51) -/
+  dropRow : Bool := false
+  /-- `read OBJ REL K` never checks K against the declared limit (a plant, PROTOCOL-51) -/
+  noReadLimit : Bool := false
 
 def skipJudge (X : Ctx D) : Ctx D :=
   { X with program := { X.program with judge := fun _ _ _ _ _ _ => .ok () } }
@@ -116,6 +120,8 @@ def sys (R : Rows.Params D) : Option Mutation → Sys D
   | some .lieBase => { writer := { R, X := R.ctx, lieBase := true }, follow := R.ctx }
   | some .rawSlots => { writer := { R, X := R.ctx }, follow := R.ctx, rawSlots := true }
   | some .pageIoFatal => { writer := { R, X := R.ctx }, follow := R.ctx, pageIoFatal := true }
+  | some .dropRow => { writer := { R, X := R.ctx }, follow := R.ctx, dropRow := true }
+  | some .noReadLimit => { writer := { R, X := R.ctx }, follow := R.ctx, noReadLimit := true }
 
 /-! ## Actors -/
 
@@ -780,7 +786,28 @@ def runAct (l : Line) : M D (Expect × String) := do
       | .error e => pure (.refused e, "")
       | .ok av =>
           let (o, out) ← command l.actor av l.fault 4
-          if !(← get).sys.rawSlots || o != .ok then return (o, out)
+          let sy := (← get).sys
+          if sy.dropRow || sy.noReadLimit then
+            let X ← X
+            match parse (D := D) X.digestOf (av.map String.toUTF8) with
+            | .ok (.rangeRead obj rel k pre) =>
+                -- the plants: a reader that loses its first row; one that never checks K
+                if sy.dropRow && o == .ok then
+                  return (o, "\n".intercalate ((out.splitOn "\n").drop 1))
+                if sy.noReadLimit && o == .refused "rangePastLimit" then
+                  let w := (← actor l.actor).follow.world
+                  match w.live X.env obj with
+                  | none => return (o, out)
+                  | some cell =>
+                    match relationOf X w obj cell rel with
+                    | .ok (i, d) =>
+                        match rowLines X w obj i d rel k pre with
+                        | .ok ts => return (.ok, String.join (ts.map (· ++ "\n")))
+                        | .error r => return (.refused r.name, "")
+                    | .error _ => return (o, out)
+                return (o, out)
+            | _ => return (o, out)
+          if !sy.rawSlots || o != .ok then return (o, out)
           -- the plant: the object's raw state slots, the shape before PROTOCOL-48
           let X ← X
           match parse (D := D) X.digestOf (av.map String.toUTF8) with
