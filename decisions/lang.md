@@ -2084,3 +2084,10 @@ hide whether the law bites. A package a person ships would refuse in the method 
 in the journey (like CappedTally's layer), not in `world/`. If a resident needs a shared setting or a
 rate, the Bell's critique (2) is where `windowed` lands for real.
 No theorem moves; no shipped byte moves.
+
+**LANG-54 addendum (LANG-3's named rows, all now through the receivers).** LQ2b a birth with an
+approval already counted: `shared: approvals at birth`; LQ9b with the quorum reached, a value other
+than the proposal (`force 77` where 5 was proposed): `shared: not the proposal` (the proposal
+binding); LQ11/LQ11b the relaw arm, on a DATA object governed by the same law: removing the law with
+no quorum: `shared: no quorum` (skip-judge plant admits it); LW2b a birth claiming an epoch other than
+its window's: `rate: epoch is not the call's window`.

@@ -1165,7 +1165,8 @@ def bellRows (mode : Mode) (r0 : Run) (a b : Sim.Member) (src : String) : Run :=
 /-! ## LQ / LW: the Std laws `quorum` and `windowed`, written as surface laws, through the receivers -/
 
 /-- A setting two members change together: `quorum value 2 #a #b` over a proposal, approvals by
-bit (member `i` sets bit `2^i`), and the change. The methods are permissive; the law judges. -/
+bit (member `i` sets bit `2^i`), and the change. The methods are permissive (`force` writes any value)
+so that the law is what judges. -/
 def quorumText (aHex bHex : String) : String := s!"
 (package
   (type Proposal (sum (laws bytes) (set nat)))
@@ -1174,6 +1175,7 @@ def quorumText (aHex bHex : String) : String := s!"
     (case state.proposal (laws _ (refuse \"notSet\"))
       (set v (done (with state (approvals 0) (value v))))))
   (method approve (arg (rec (bit nat))) (done (with state (approvals (+ state.approvals arg.bit)))))
+  (method force (arg (rec (v nat))) (done (with state (approvals 0) (value arg.v))))
   (method propose (arg (rec (v nat))) (done (with state (approvals 0) (proposal (Proposal set arg.v)))))
   (law shared (quorum value 2 #{aHex} #{bHex})))
 "
@@ -1209,14 +1211,20 @@ def quorumRows (mode : Mode) (r0 : Run) (a b : Sim.Member) : Run := Id.run do
   let some pb := Wire.encodePackage p | return note r "LQ1 no bytes" false
   let (r1, v1, t1) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id]) (.install pb))
   r := note r1 s!"LQ1 A installs a package whose law is the surface's (quorum value 2 #a #b) ({text.length} chars): {v1}"
-    (v1 == "admitted" && p.methods == ["apply", "approve", "propose"] && p.laws == ["shared"])
+    (v1 == "admitted" && p.methods == ["apply", "approve", "force", "propose"] && p.laws == ["shared"])
   let some pkg := t1.bind fun t => (createdIds t).head? | return note r "LQ1 no package id" false
-  let some seed := (match Read.readData p.state "(record (approvals 0) (proposal (set 0)) (value 0))" with
-    | .ok (.record ds) => stateSlots (recordRow p.state) ds 0 | _ => none) | return note r "LQ2 no seed" false
+  let seedOf (approvals : Nat) : Option Slots :=
+    match Read.readData p.state s!"(record (approvals {approvals}) (proposal (set 0)) (value 0))" with
+    | .ok (.record ds) => stateSlots (recordRow p.state) ds 0 | _ => none
+  let some seed := seedOf 0 | return note r "LQ2 no seed" false
+  let some seeded := seedOf 1 | return note r "LQ2 no seed" false
+  let (r2b, v2b, _) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id, pkg]) (.create (some pkg) [] seeded))
+  if mode != .skipJudge then
+    r := note { r2b with log := r.log, bad := r.bad } s!"LQ2b A creates it with an approval already counted: {v2b}" (deniedWith v2b "shared: approvals at birth")
   let (r2, v2, t2) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id, pkg]) (.create (some pkg) [] seed))
   let some obj := t2.bind fun t => (createdIds t).head? | return note r2 s!"LQ2 no object: {v2}" false
   r := note r2 s!"LQ2 A creates the shared setting: {v2}" (v2 == "admitted")
-  let (r3, v3, t3) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id, b.id, obj]) (.grant obj b.id [.invoke 0, .invoke 1, .invoke 2] none))
+  let (r3, v3, t3) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id, b.id, obj]) (.grant obj b.id [.invoke 0, .invoke 1, .invoke 2, .invoke 3] none))
   r := note r3 s!"LQ3 A grants B every method: {v3}" (v3 == "admitted")
   let some gr := t3.bind fun t => (createdIds t).head? | return note r "LQ3 no grant id" false
   let byA (r : Run) (m : Nat) (x : ByteArray) : Call D :=
@@ -1224,7 +1232,7 @@ def quorumRows (mode : Mode) (r0 : Run) (a b : Sim.Member) : Run := Id.run do
   let byB (r : Run) (m : Nat) (x : ByteArray) : Call D :=
     Sim.signed r.st b b.key (Sim.S.pinsFor r.st.host [b.id, obj, pkg, gr]) (.invoke obj m x 100000 (some gr))
   let valueOf (r : Run) := asNat (bellField p r.st.host obj "value")
-  let (r4, v4, _) := go prog r (byA r 2 (natArg "v" 5))
+  let (r4, v4, _) := go prog r (byA r 3 (natArg "v" 5))
   r := note r4 s!"LQ4 A proposes value 5: {v4}" (v4 == "admitted")
   let (r5, v5, _) := go prog r (byA r 0 unitArg)
   r := { r5 with log := r.log, bad := r.bad }
@@ -1245,9 +1253,22 @@ def quorumRows (mode : Mode) (r0 : Run) (a b : Sim.Member) : Run := Id.run do
     r := note { r8 with log := r.log, bad := r.bad } s!"LQ8 A applies with one approval of two: {v8}" (deniedWith v8 "shared: no quorum")
   let (r9, v9, _) := go prog r (byB r 1 (natArg "bit" 2))
   r := note r9 s!"LQ9 B approves (bit 2): {v9}" (v9 == "admitted")
+  let (r9b, v9b, _) := go prog r (byB r 2 (natArg "v" 77))
+  if mode != .skipJudge then
+    r := note { r9b with log := r.log, bad := r.bad } s!"LQ9b B, with the quorum, writes 77 where 5 was proposed: {v9b}" (deniedWith v9b "shared: not the proposal")
   let (r10, v10, _) := go prog r (byB r 0 unitArg)
   r := note r10 s!"LQ10 B applies with both approvals: {v10}; value {valueOf r10}, approvals {asNat (bellField p r10.st.host obj "approvals")}"
     (v10 == "admitted" && valueOf r10 == some 5 && asNat (bellField p r10.st.host obj "approvals") == some 0)
+  -- LQ11 the relaw arm: a DATA object governed by the same law; removing the law needs the quorum's laws proposal
+  let (r11, v11, t11) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id, pkg]) (.create none [pkg] seed))
+  r := note r11 s!"LQ11 A creates a data object under the shared law: {v11}" (v11 == "admitted")
+  let some dobj := t11.bind fun t => (createdIds t).head? | return note r "LQ11 no object" false
+  let (r11b, v11b, _) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id, dobj, pkg]) (.law dobj [] none))
+  r := { r11b with log := r.log, bad := r.bad }
+  if mode = .skipJudge then
+    r := note r s!"PLANT skip-judge: LQ11b removing the law with no quorum must now be admitted: {v11b}" (v11b == "admitted")
+  else
+    r := note r s!"LQ11b A removes the law with no quorum: {v11b}" (deniedWith v11b "shared: no quorum")
   return r
 
 /-- The LW rows: `windowed` through the receivers, every call signed with a window inside one epoch of
@@ -1268,8 +1289,14 @@ def windowedRows (mode : Mode) (r0 : Run) (a : Sim.Member) : Run := Id.run do
   let inEpoch (r : Run) (pins : List D) (body : Body D) : Call D :=
     let e := epochOf r
     signedAt r.st a (Sim.S.pinsFor r.st.host pins) body (e * rateW) (e * rateW + rateW - 1)
-  let some seed := (match Read.readData p.state s!"(record (count 0) (epoch {epochOf r}) (value 0))" with
-    | .ok (.record ds) => stateSlots (recordRow p.state) ds 0 | _ => none) | return note r "LW2 no seed" false
+  let seedAt (e : Nat) : Option Slots :=
+    match Read.readData p.state s!"(record (count 0) (epoch {e}) (value 0))" with
+    | .ok (.record ds) => stateSlots (recordRow p.state) ds 0 | _ => none
+  let some seed := seedAt (epochOf r) | return note r "LW2 no seed" false
+  let some stale := seedAt (epochOf r + 1) | return note r "LW2 no seed" false
+  let (r2b, v2b, _) := go prog r (inEpoch r [a.id, pkg] (.create (some pkg) [] stale))
+  if mode != .skipJudge then
+    r := note { r2b with log := r.log, bad := r.bad } s!"LW2b A creates it claiming the next epoch: {v2b}" (deniedWith v2b "rate: epoch is not the call's window")
   let (r2, v2, t2) := go prog r (inEpoch r [a.id, pkg] (.create (some pkg) [] seed))
   let some obj := t2.bind fun t => (createdIds t).head? | return note r2 s!"LW2 no object: {v2}" false
   r := note r2 s!"LW2 A creates it in epoch {epochOf r}: {v2}" (v2 == "admitted")
