@@ -3,7 +3,8 @@
 //! mirror of the layouts, not of HOST's machine: it is replaced by the run against `host serve` /
 //! `host follow` once HOST commits those executables (CLIENT-LOG, next 1). Follow asks: host(read "challenge?") → sign
 //! "observation" → submit "CALL" → done. The host answers the submit `uncertain`, so nd must look
-//! the SAME bytes up, and the lookup answers committed. Both children are confined away from the
+//! the SAME bytes up, and the lookup answers committed; nd then asks follow `receipt CALL`, whose
+//! three lines settle the call (PROTOCOL-46): the Host's word never does. Both children are confined away from the
 //! workspace and see only their python and the log directory (CLIENT-9); follow verifies nothing here — it is a script.
 #![allow(clippy::unwrap_used)] // a plant that cannot set up is a failed plant
 use std::process::Command;
@@ -25,12 +26,16 @@ def reply(conn, status, payload):
     out = conn + bytes([status]) + payload
     o.write(struct.pack('<I', len(out)) + out); o.flush()
 def bs(x): return struct.pack('<I', len(x)) + x
+# `receipt CALL` (the attempt's confirm): done, exit ok, the receipt, its head and the verdict.
+RECEIPT = bytes([0, 0]) + bs(b'receipt 00ab\nhead 7 3 cd\nsettle committed 3 77\n') + bs(b'')
 "#;
 
 // follow: k is one byte, the step index. Steps per the table: done 0, sign 1, host 2, submit 3.
 const FOLLOW: &str = r#"
 log = open(sys.argv[1], 'ab')
 for conn, op, p in frames():
+    if op == 5 and b'receipt' in p:
+        reply(conn, 0, RECEIPT); continue
     if op == 5:
         reply(conn, 0, bytes([2, 3]) + bs(b'challenge?') + bs(b'\x01')); continue
     n = struct.unpack('<I', p[:4])[0]; k = p[4:4+n]
@@ -45,6 +50,8 @@ for conn, op, p in frames():
 const ROTATE: &str = r#"
 log = open(sys.argv[1], 'ab')
 for conn, op, p in frames():
+    if op == 5 and b'receipt' in p:
+        reply(conn, 0, RECEIPT); continue
     if op == 5:
         reply(conn, 0, bytes([4]) + bs(b'\x01')); continue
     n = struct.unpack('<I', p[:4])[0]; k = p[4:4+n]
@@ -100,7 +107,12 @@ fn stand_in_follow_and_host_challenge_sign_submit_lookup_done_through_the_binari
         "nd failed: {}",
         String::from_utf8_lossy(&out.stderr)
     );
-    assert_eq!(out.stdout, b"settled 0 receipt\n");
+    let committed = nanodregg_client::generated::attempt::Action::Committed.code();
+    assert_eq!(
+        out.stdout,
+        format!("settled {committed} committed 3 77\n").into_bytes(),
+        "follow is told the table's end and its own verdict"
+    );
 
     // The host saw: read(challenge?), submit(CALL), lookup(CALL) — the same bytes, in that order.
     let h = std::fs::read(&hlog).unwrap();
@@ -133,11 +145,11 @@ fn stand_in_follow_and_host_challenge_sign_submit_lookup_done_through_the_binari
     key.verifying_key()
         .verify_strict(b"observation", &sig)
         .unwrap();
-    // The attempt is frozen and settled on disk.
+    // The attempt is frozen and settled on disk by follow's receipt, never the Host's reply.
     assert_eq!(std::fs::read(ws.join("attempts/0/call")).unwrap(), b"CALL");
     assert_eq!(
-        std::fs::read(ws.join("attempts/0/committed")).unwrap(),
-        b"receipt"
+        std::fs::read(ws.join("attempts/0/settled")).unwrap(),
+        b"receipt 00ab\nhead 7 3 cd\nsettle committed 3 77\n"
     );
     drop((_f, _h));
     std::fs::remove_dir_all(&root).unwrap();

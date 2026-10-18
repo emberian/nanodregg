@@ -87,6 +87,7 @@ pub enum CustodyRefusal {
     Io,
     EnvelopeOnly,
     NoRotation,
+    NotArmed,
 }
 
 impl CustodyRefusal {
@@ -102,6 +103,7 @@ impl CustodyRefusal {
             CustodyRefusal::Io => 7,
             CustodyRefusal::EnvelopeOnly => 8,
             CustodyRefusal::NoRotation => 9,
+            CustodyRefusal::NotArmed => 10,
         }
     }
 
@@ -117,6 +119,7 @@ impl CustodyRefusal {
             7 => Some(CustodyRefusal::Io),
             8 => Some(CustodyRefusal::EnvelopeOnly),
             9 => Some(CustodyRefusal::NoRotation),
+            10 => Some(CustodyRefusal::NotArmed),
             _ => None,
         }
     }
@@ -133,6 +136,7 @@ impl CustodyRefusal {
             CustodyRefusal::Io => "io",
             CustodyRefusal::EnvelopeOnly => "envelopeOnly",
             CustodyRefusal::NoRotation => "noRotation",
+            CustodyRefusal::NotArmed => "notArmed",
         }
     }
 }
@@ -144,7 +148,8 @@ pub mod step {
     pub const SUBMIT: u8 = 3;
     pub const PRECOMMIT: u8 = 4;
     pub const SIGN_NEXT: u8 = 5;
-    pub const ALL: &[u8] = &[0, 1, 2, 3, 4, 5];
+    pub const SIGN_INCOMING: u8 = 6;
+    pub const ALL: &[u8] = &[0, 1, 2, 3, 4, 5, 6];
 }
 
 pub mod supervisor_exit {
@@ -210,11 +215,12 @@ pub mod command_exit {
     pub const OK: u8 = 0;
     pub const REFUSED: u8 = 1;
     pub const UNCERTAIN: u8 = 2;
-    pub const ABSENT: u8 = 50;
     pub const BEHIND: u8 = 51;
     pub const CLIENT: u8 = 52;
     pub const DECLINED: u8 = 53;
-    pub const ALL: &[u8] = &[0, 1, 2, 50, 51, 52, 53];
+    pub const OPEN: u8 = 54;
+    pub const HOST_CONTRADICTED: u8 = 55;
+    pub const ALL: &[u8] = &[0, 1, 2, 51, 52, 53, 54, 55];
 }
 
 /// The read envelope's signing domain (Protocol.domEnvelope): an observer custody signs only
@@ -606,6 +612,10 @@ pub mod layout {
             message: Vec<u8>,
             k: Vec<u8>,
         },
+        SignIncoming {
+            message: Vec<u8>,
+            k: Vec<u8>,
+        },
     }
 
     impl Step {
@@ -647,6 +657,11 @@ pub mod layout {
                     let message = c.bytes(262144)?;
                     let k = c.bytes(262144)?;
                     Step::SignNext { message, k }
+                }
+                6 => {
+                    let message = c.bytes(262144)?;
+                    let k = c.bytes(262144)?;
+                    Step::SignIncoming { message, k }
                 }
                 tag => return Err(Refusal::BadTag { offset: at, tag }),
             };
@@ -692,6 +707,11 @@ pub mod layout {
                     put_bytes(&mut out, message, 262144)?;
                     put_bytes(&mut out, k, 262144)?;
                 }
+                Step::SignIncoming { message, k } => {
+                    out.push(6);
+                    put_bytes(&mut out, message, 262144)?;
+                    put_bytes(&mut out, k, 262144)?;
+                }
             }
             Ok(out)
         }
@@ -704,6 +724,8 @@ pub mod attempt {
     pub enum Request {
         Submit,
         Lookup,
+        Confirm,
+        Probe,
     }
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -714,16 +736,36 @@ pub mod attempt {
         Unknown,
         Absent,
         Lost,
+        Open,
+        Forgotten,
+    }
+
+    impl Seen {
+        pub fn name(self) -> &'static str {
+            match self {
+                Seen::Committed => "committed",
+                Seen::Refused => "refused",
+                Seen::Declined => "declined",
+                Seen::Unknown => "unknown",
+                Seen::Absent => "absent",
+                Seen::Lost => "lost",
+                Seen::Open => "open",
+                Seen::Forgotten => "forgotten",
+            }
+        }
     }
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub enum Action {
         Submit,
         Lookup,
+        Confirm,
+        Probe,
         Committed,
         Refused,
         Declined,
-        Absent,
+        Open,
+        Contradicted,
         BadReply,
         Uncertain,
     }
@@ -733,13 +775,45 @@ pub mod attempt {
             match self {
                 Action::Submit => "submit",
                 Action::Lookup => "lookup",
+                Action::Confirm => "confirm",
+                Action::Probe => "probe",
                 Action::Committed => "committed",
                 Action::Refused => "refused",
                 Action::Declined => "declined",
-                Action::Absent => "absent",
+                Action::Open => "open",
+                Action::Contradicted => "contradicted",
                 Action::BadReply => "badReply",
                 Action::Uncertain => "uncertain",
             }
+        }
+
+        /// The byte nd hands follow as step 4's result, before the payload.
+        pub fn code(self) -> u8 {
+            match self {
+                Action::Submit => 0,
+                Action::Lookup => 1,
+                Action::Confirm => 2,
+                Action::Probe => 3,
+                Action::Committed => 4,
+                Action::Refused => 5,
+                Action::Declined => 6,
+                Action::Open => 7,
+                Action::Contradicted => 8,
+                Action::BadReply => 9,
+                Action::Uncertain => 10,
+            }
+        }
+    }
+
+    /// What a confirm or probe saw: the first word of follow's `settle` line.
+    pub fn settle_seen(word: &str) -> Option<Seen> {
+        match word {
+            "committed" => Some(Seen::Committed),
+            "refused" => Some(Seen::Refused),
+            "expired" => Some(Seen::Refused),
+            "open" => Some(Seen::Open),
+            "forgotten" => Some(Seen::Forgotten),
+            _ => None,
         }
     }
 
@@ -747,31 +821,71 @@ pub mod attempt {
     pub fn next(sends_left: bool, last: Option<(Request, Seen)>) -> Action {
         match (sends_left, last) {
             (false, None) => Action::Submit,
-            (false, Some((Request::Submit, Seen::Committed))) => Action::Committed,
-            (false, Some((Request::Submit, Seen::Refused))) => Action::Refused,
+            (false, Some((Request::Submit, Seen::Committed))) => Action::Confirm,
+            (false, Some((Request::Submit, Seen::Refused))) => Action::Confirm,
             (false, Some((Request::Submit, Seen::Declined))) => Action::Declined,
             (false, Some((Request::Submit, Seen::Unknown))) => Action::Lookup,
             (false, Some((Request::Submit, Seen::Absent))) => Action::BadReply,
             (false, Some((Request::Submit, Seen::Lost))) => Action::Lookup,
-            (false, Some((Request::Lookup, Seen::Committed))) => Action::Committed,
-            (false, Some((Request::Lookup, Seen::Refused))) => Action::Refused,
+            (false, Some((Request::Submit, Seen::Open))) => Action::BadReply,
+            (false, Some((Request::Submit, Seen::Forgotten))) => Action::BadReply,
+            (false, Some((Request::Lookup, Seen::Committed))) => Action::Confirm,
+            (false, Some((Request::Lookup, Seen::Refused))) => Action::Confirm,
             (false, Some((Request::Lookup, Seen::Declined))) => Action::BadReply,
             (false, Some((Request::Lookup, Seen::Unknown))) => Action::Uncertain,
-            (false, Some((Request::Lookup, Seen::Absent))) => Action::Absent,
+            (false, Some((Request::Lookup, Seen::Absent))) => Action::Probe,
             (false, Some((Request::Lookup, Seen::Lost))) => Action::Uncertain,
+            (false, Some((Request::Lookup, Seen::Open))) => Action::BadReply,
+            (false, Some((Request::Lookup, Seen::Forgotten))) => Action::BadReply,
+            (false, Some((Request::Confirm, Seen::Committed))) => Action::Committed,
+            (false, Some((Request::Confirm, Seen::Refused))) => Action::Refused,
+            (false, Some((Request::Confirm, Seen::Declined))) => Action::BadReply,
+            (false, Some((Request::Confirm, Seen::Unknown))) => Action::BadReply,
+            (false, Some((Request::Confirm, Seen::Absent))) => Action::BadReply,
+            (false, Some((Request::Confirm, Seen::Lost))) => Action::Uncertain,
+            (false, Some((Request::Confirm, Seen::Open))) => Action::Contradicted,
+            (false, Some((Request::Confirm, Seen::Forgotten))) => Action::Contradicted,
+            (false, Some((Request::Probe, Seen::Committed))) => Action::Committed,
+            (false, Some((Request::Probe, Seen::Refused))) => Action::Refused,
+            (false, Some((Request::Probe, Seen::Declined))) => Action::BadReply,
+            (false, Some((Request::Probe, Seen::Unknown))) => Action::BadReply,
+            (false, Some((Request::Probe, Seen::Absent))) => Action::BadReply,
+            (false, Some((Request::Probe, Seen::Lost))) => Action::Uncertain,
+            (false, Some((Request::Probe, Seen::Open))) => Action::Open,
+            (false, Some((Request::Probe, Seen::Forgotten))) => Action::Uncertain,
             (true, None) => Action::Submit,
-            (true, Some((Request::Submit, Seen::Committed))) => Action::Committed,
-            (true, Some((Request::Submit, Seen::Refused))) => Action::Refused,
+            (true, Some((Request::Submit, Seen::Committed))) => Action::Confirm,
+            (true, Some((Request::Submit, Seen::Refused))) => Action::Confirm,
             (true, Some((Request::Submit, Seen::Declined))) => Action::Declined,
             (true, Some((Request::Submit, Seen::Unknown))) => Action::Lookup,
             (true, Some((Request::Submit, Seen::Absent))) => Action::BadReply,
             (true, Some((Request::Submit, Seen::Lost))) => Action::Lookup,
-            (true, Some((Request::Lookup, Seen::Committed))) => Action::Committed,
-            (true, Some((Request::Lookup, Seen::Refused))) => Action::Refused,
+            (true, Some((Request::Submit, Seen::Open))) => Action::BadReply,
+            (true, Some((Request::Submit, Seen::Forgotten))) => Action::BadReply,
+            (true, Some((Request::Lookup, Seen::Committed))) => Action::Confirm,
+            (true, Some((Request::Lookup, Seen::Refused))) => Action::Confirm,
             (true, Some((Request::Lookup, Seen::Declined))) => Action::BadReply,
             (true, Some((Request::Lookup, Seen::Unknown))) => Action::Uncertain,
             (true, Some((Request::Lookup, Seen::Absent))) => Action::Submit,
             (true, Some((Request::Lookup, Seen::Lost))) => Action::Uncertain,
+            (true, Some((Request::Lookup, Seen::Open))) => Action::BadReply,
+            (true, Some((Request::Lookup, Seen::Forgotten))) => Action::BadReply,
+            (true, Some((Request::Confirm, Seen::Committed))) => Action::Committed,
+            (true, Some((Request::Confirm, Seen::Refused))) => Action::Refused,
+            (true, Some((Request::Confirm, Seen::Declined))) => Action::BadReply,
+            (true, Some((Request::Confirm, Seen::Unknown))) => Action::BadReply,
+            (true, Some((Request::Confirm, Seen::Absent))) => Action::BadReply,
+            (true, Some((Request::Confirm, Seen::Lost))) => Action::Uncertain,
+            (true, Some((Request::Confirm, Seen::Open))) => Action::Contradicted,
+            (true, Some((Request::Confirm, Seen::Forgotten))) => Action::Contradicted,
+            (true, Some((Request::Probe, Seen::Committed))) => Action::Committed,
+            (true, Some((Request::Probe, Seen::Refused))) => Action::Refused,
+            (true, Some((Request::Probe, Seen::Declined))) => Action::BadReply,
+            (true, Some((Request::Probe, Seen::Unknown))) => Action::BadReply,
+            (true, Some((Request::Probe, Seen::Absent))) => Action::BadReply,
+            (true, Some((Request::Probe, Seen::Lost))) => Action::Uncertain,
+            (true, Some((Request::Probe, Seen::Open))) => Action::Open,
+            (true, Some((Request::Probe, Seen::Forgotten))) => Action::Uncertain,
         }
     }
 }

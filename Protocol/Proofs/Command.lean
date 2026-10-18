@@ -99,6 +99,66 @@ theorem describe_ne_submit {X : Ctx D} {w : World D} {obj : D} {call k : ByteArr
   · simp [refused]
   · split <;> simp [refused, printed]
 
+omit [Ord D] [DecidableEq D] in
+theorem envelopeSign_ne_submit {t : Nat} {m k' call k : ByteArray} : envelopeSign t m k' ≠ .submit call k := by
+  unfold envelopeSign; split <;> simp
+
+omit [Ord D] [DecidableEq D] in
+/-- The PROTOCOL-46 arms answer no submit: a refused envelope, the receipt lines, a settlement. -/
+theorem envelopeRefused_ne_submit {X : Ctx D} {me : Self D} {argv : List ByteArray} {cmd : Cmd D}
+    {a b c d p call k : ByteArray} : envelopeRefused X me argv cmd a b c d p ≠ .submit call k := by
+  intro h
+  unfold envelopeRefused next at h
+  repeat' split at h
+  all_goals first | exact refusedAt_ne_submit h | (simp [refused] at h; done) | ((try dsimp only at h); exact envelopeSign_ne_submit h)
+
+theorem receiptLines_ne_submit {X : Ctx D} {w : World D} {cb call k : ByteArray} :
+    receiptLines X w cb ≠ .submit call k := by
+  intro h
+  unfold receiptLines at h
+  repeat' split at h
+  all_goals simp [refused, printed] at h
+
+omit [Ord D] [DecidableEq D] in
+theorem settled_ne_submit {X : Ctx D} {out result call k : ByteArray} :
+    settled X out result ≠ .submit call k := by
+  intro h
+  unfold settled at h
+  repeat' split at h
+  all_goals first | exact refusedAt_ne_submit h | simp [refused, declined] at h
+
+/-- The writer's `unknownKey` states no height, so it is never read as `expired`. -/
+theorem expiredHeight_unknownKey : expiredHeight? ReadRefusal.unknownKey.payload = none := by decide
+
+omit [Ord D] [DecidableEq D] in
+/-- **The incoming key is asked ONCE per command** (PROTOCOL-46): with `tried`'s incoming bit set, a
+second `unknownKey` ends the command `refused unknownKey`, never another `signIncoming`. -/
+theorem envelopeRefused_once {X : Ctx D} {me : Self D} {argv : List ByteArray} {cmd : Cmd D}
+    {a b c d p : ByteArray} {h upTo t : Nat} (hs : Text.ofU64 a = some h) (hu : Text.ofU64 c = some upTo)
+    (ht : Text.ofU64 d = some t) (hb : t &&& incomingBit ≠ 0)
+    (hk : p = ReadRefusal.unknownKey.payload) :
+    envelopeRefused X me argv cmd a b c d p =
+      if readOnly cmd then refused (D := D) (.host "unknownKey") else refusedAt X (.host "unknownKey") := by
+  have hx : expiredHeight? p = none := hk ▸ expiredHeight_unknownKey
+  unfold envelopeRefused
+  rw [hx, hs, hu, ht]
+  simp only [hk, if_true]
+  have : (t &&& incomingBit == 0) = false := by simpa using hb
+  simp [this]
+
+omit [Ord D] [DecidableEq D] in
+/-- **A write is never retried by the incoming key**: its plan would be signed by the old key against
+an envelope the incoming key signed. It ends `refused unknownKey`, with the hint to sync. -/
+theorem envelopeRefused_write {X : Ctx D} {me : Self D} {argv : List ByteArray} {cmd : Cmd D}
+    {a b c d p : ByteArray} {h upTo t : Nat} (hs : Text.ofU64 a = some h) (hu : Text.ofU64 c = some upTo)
+    (ht : Text.ofU64 d = some t) (hw : readOnly cmd = false)
+    (hk : p = ReadRefusal.unknownKey.payload) :
+    envelopeRefused X me argv cmd a b c d p = refusedAt X (.host "unknownKey") := by
+  have hx : expiredHeight? p = none := hk ▸ expiredHeight_unknownKey
+  unfold envelopeRefused
+  rw [hx, hs, hu, ht]
+  simp [hk, hw]
+
 /-- Consent at the wire: the only call `step` hands the client to submit is a call over a `u`
 that `plan` produced on follow's own World (hence derived and admitted there, `plan_admits`). -/
 theorem step_submit_planned {X : Ctx D} {B : Thin.Base (World D)} {me : Self D}
@@ -107,7 +167,7 @@ theorem step_submit_planned {X : Ctx D} {B : Thin.Base (World D)} {me : Self D}
     f' = f ∧ p = .steps [] ∧ ∃ key b u sig, plan X me f.world key b = .ok u ∧ call = X.callBytes ⟨u, sig⟩ := by
   unfold step next at h
   repeat' split at h
-  all_goals (try simp only [refused, printed, behind, declined, Prod.mk.injEq, reduceCtorEq, and_false] at h)
+  all_goals (try simp only [refused, printed, behind, Prod.mk.injEq, reduceCtorEq, and_false] at h)
   all_goals (repeat' split at h)
   all_goals (try simp only [Prod.mk.injEq, reduceCtorEq, and_false] at h)
   all_goals (try (exfalso; obtain ⟨_, _, h⟩ := h; unfold render at h; repeat' split at h
@@ -115,6 +175,10 @@ theorem step_submit_planned {X : Ctx D} {B : Thin.Base (World D)} {me : Self D}
   all_goals (try (exfalso; obtain ⟨_, _, h⟩ := h; exact describe_ne_submit h))
   all_goals (try (exfalso; obtain ⟨_, _, h⟩ := h; exact refusedAt_ne_submit h))
   all_goals (try (exfalso; exact refusedAt_ne_submit h))
+  all_goals (try (exfalso; obtain ⟨_, _, h⟩ := h; exact envelopeRefused_ne_submit h))
+  all_goals (try (exfalso; obtain ⟨_, _, h⟩ := h; (try dsimp only at h); exact envelopeSign_ne_submit h))
+  all_goals (try (exfalso; obtain ⟨_, _, h⟩ := h; exact receiptLines_ne_submit h))
+  all_goals (try (exfalso; obtain ⟨_, _, h⟩ := h; exact settled_ne_submit h))
   all_goals (try (obtain ⟨h1, h0, h2⟩ := h; injection h2 with h3 h4; subst h1 h0 h3
                   exact ⟨rfl, rfl, _, _, _, _, ‹plan _ _ _ _ _ = _›, rfl⟩))
   done
@@ -231,7 +295,7 @@ theorem step_persists_admitted {X : Ctx D} {B : Thin.Base (World D)} {me : Self 
     World.RootedFold X.env f.world ts f'.world := by
   unfold step next at h
   repeat' split at h
-  all_goals (try simp only [refused, printed, behind, declined, Prod.mk.injEq, Persist.steps.injEq] at h)
+  all_goals (try simp only [refused, printed, behind, Prod.mk.injEq, Persist.steps.injEq] at h)
   all_goals (repeat' split at h)
   all_goals (try simp only [Prod.mk.injEq, Persist.steps.injEq, reduceCtorEq, false_and,
     and_false] at h)

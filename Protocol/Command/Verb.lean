@@ -79,9 +79,11 @@ inductive Verb
   inputs, which must make the member's own World), the pin of the member's World as it stands, and
   the member's id and key (PROTOCOL-42); prints `invite HEX` -/
   | invite
-  /-- `receipt TXID`: catch up, then print a RECEIPT for the transaction id against follow's World:
-  its roots and the trie paths that show it committed, refused or absent (`Protocol.Receipt`,
-  PROTOCOL-45); prints `receipt HEX` -/
+  /-- `receipt CALL`: catch up, then print a RECEIPT for the signed call's transaction id against
+  follow's World (its roots and the trie paths that show it committed, refused or absent,
+  `Protocol.Receipt`, PROTOCOL-45), the head it was built at, and the member's settlement of the
+  call (`Protocol.Settle.ofReceipt`, PROTOCOL-46): `receipt HEX`, `head STEPS HEIGHT ROOTS`,
+  `settle VERDICT`. The attempt store's `confirm` and `probe` (`Protocol.Attempt`) -/
   | receipt
   deriving DecidableEq, Repr
 
@@ -144,7 +146,8 @@ inductive Cmd (D : Type)
   | credit (well : D) (acct : AcctRef D) (amount : Nat) (via : Option D)
   /-- the World's origin inputs (`Receive.genesisInput` bytes) -/
   | invite (input : ByteArray)
-  | receipt (txId : D)
+  /-- the signed call's bytes (`Ctx.callBytes`), decoded by the machine -/
+  | receipt (call : ByteArray)
 
 /-- Every way an argv is refused. -/
 inductive ParseRefusal
@@ -195,7 +198,7 @@ def usage : Verb → String
   | .transfer => "transfer SRC DST AMOUNT [--via GRANT] [--once HEX]"
   | .credit => "credit WELL ACCT AMOUNT [--via GRANT]"
   | .invite => "invite INPUT"
-  | .receipt => "receipt TXID"
+  | .receipt => "receipt CALL"
 
 def argvSize (argv : List ByteArray) : Nat := 4 + (argv.map (4 + ·.size)).sum
 
@@ -330,7 +333,10 @@ def parseVerb (v : Verb) (args : List String) : Except ParseRefusal (Cmd D) :=
       | some inv, some key => .ok (.adopt inv key)
       | none, _ => .error (.badToken i)
       | _, none => .error (.badToken k)
-  | .receipt, [t] => .receipt <$> digestArg digestOf t
+  | .receipt, [c] =>
+      match Text.ofHex c with
+      | some call => .ok (.receipt call)
+      | none => .error (.badToken c)
   | .invite, [i] =>
       match Text.ofHex i with
       | some input => .ok (.invite input)

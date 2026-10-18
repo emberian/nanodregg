@@ -15,6 +15,8 @@
 import Protocol.Settle
 import Kernel.Proofs.Refusals
 import Kernel.Proofs.Fold
+import Kernel.Proofs.Receive
+import Kernel.Proofs.Journal
 
 namespace Nanodregg.Protocol.Settle
 
@@ -127,5 +129,130 @@ theorem declined_open {X : Ctx D} {w : World D} {c : Call D} {o : Outcome D} {n 
           · simp [hl] at hr
           · simp only [hl, ↓reduceIte, Option.some.injEq, Prod.mk.injEq, true_and] at hr
             exact ⟨⟨v, rfl, hr⟩, rfl, rfl, by omega⟩
+
+/-! ## The member's settlement (PROTOCOL-46)
+
+What `ofReceipt` says of a receipt follow built from its own World (`Receipt.build`):
+
+* `settle_committed`: `committed h td` is the World's journal entry at the id;
+* `settle_final_never_admits`: `refused` or `expired` is final: no World a later log reaches from it
+  admits the call (`submit`). Proved from the World alone: the recorded refusal stays below its prune
+  height (`Kernel.fold_refused_retains`) and the call's window has closed by then (the checkable arm
+  `validUntil ≤ h + 2 · windowMax`); `expired` by the window alone;
+* `settle_open_not_final`: every call some World would still admit settles `open` there, never final
+  and never "safe to run again": the old terminal `absent` said that of exactly these calls.
+-/
+
+section Member
+
+/-- What `build` answers, read from the World. -/
+theorem build_answer (E : Env D) (w : World D) (tx : D) :
+    (Receipt.build E w tx).answer = match w.journalAt E tx with
+      | some (h, td) => .committed h td
+      | none => match w.refusalAt E (.tx tx) with
+        | some (.refused h code) => .refused h code
+        | _ => .absent := rfl
+
+/-- **A committed settlement is the World's journal entry.** -/
+theorem settle_committed {E : Env D} {w : World D} {tx : D} {fg : Bool} {H vu h : Nat} {td : D}
+    (hv : ofReceipt fg H vu (Receipt.build E w tx).answer = .committed h td) :
+    w.journalAt E tx = some (h, td) := by
+  rw [build_answer] at hv
+  split at hv
+  · rename_i h' td' hj
+    simp only [ofReceipt, Verdict.committed.injEq] at hv
+    obtain ⟨rfl, rfl⟩ := hv
+    exact hj
+  · split at hv
+    · simp only [ofReceipt] at hv; split at hv <;> cases hv
+    · simp only [ofReceipt] at hv; split at hv
+      · cases hv
+      · split at hv <;> cases hv
+
+/-- An admitted call's World: nothing at its id, and its window contains the next height and closes
+within `windowMax` of its `notBefore`. -/
+theorem submit_facts {X : Ctx D} {w w' : World D} {c : Call D} {t : Turn D}
+    (hs : submit X w c = .ok (t, w')) :
+    w.journalAt X.env (txIdOf X c) = none ∧ refusedAnswer X w c = none ∧
+      w.height < c.unsigned.validUntil ∧ c.unsigned.validUntil ≤ c.unsigned.notBefore + Bounds.windowMax := by
+  obtain ⟨hj, hr, ha⟩ := submit_ok hs
+  have hra : refusedAnswer X w c = none := by
+    unfold submit at hs
+    rw [hj] at hs
+    simp only at hs
+    split at hs
+    · cases hs
+    · assumption
+  obtain ⟨_, _, _, _, _, _, hnb, hvu⟩ := receive_ok hr
+  have hw := admit_window ha
+  have hb := admit_bounded ha
+  unfold checkBounds at hb
+  simp only [except_bind_ok] at hb
+  obtain ⟨⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, hwm, _⟩ := hb
+  rw [req_ok, decide_eq_true_eq] at hwm
+  refine ⟨hj, hra, by omega, by omega⟩
+
+/-- **A final settlement is never admitted** (`refused` or `expired`, from the member's own World):
+no World any later log reaches from it admits the call. -/
+theorem settle_final_never_admits {X : Ctx D} {w w' : World D} {c : Call D} {l : List (Kernel.Step D)}
+    (hc : w.RefusalsCanon X.env) (hjc : w.JournalCanon X.env)
+    (hv : ofReceipt (journalForgets w.height c.unsigned.notBefore) w.height c.unsigned.validUntil
+        (Receipt.build X.env w (txIdOf X c)).answer = .expired ∨
+      ∃ code, ofReceipt (journalForgets w.height c.unsigned.notBefore) w.height c.unsigned.validUntil
+        (Receipt.build X.env w (txIdOf X c)).answer = .refused code)
+    (hf : World.fold X.env w l = .ok w') : ∀ out, submit X w' c ≠ .ok out := by
+  intro ⟨t, w''⟩ hs
+  obtain ⟨-, hra, hlt, -⟩ := submit_facts hs
+  have hh := fold_height hf
+  rw [build_answer] at hv
+  split at hv
+  · rcases hv with hv | ⟨_, hv⟩ <;> cases hv
+  · rename_i hj
+    split at hv
+    · rename_i hh₀ code hr
+      simp only [ofReceipt] at hv
+      split at hv
+      · rename_i hwin
+        by_cases hp : w'.height < hh₀ + 2 * Bounds.windowMax
+        · obtain ⟨hr', -⟩ := fold_refused_retains hc hjc hf hr hj hp
+          unfold refusedAnswer at hra
+          rw [hr'] at hra
+          cases hra
+        · omega
+      · rcases hv with hv | ⟨_, hv⟩ <;> cases hv
+    · simp only [ofReceipt] at hv
+      split at hv
+      · rcases hv with hv | ⟨_, hv⟩ <;> cases hv
+      · split at hv
+        · omega
+        · rcases hv with hv | ⟨_, hv⟩ <;> cases hv
+
+/-- **An admissible call settles `open`, never final**: wherever `submit` would still admit the call,
+the member's own settlement of it there is `open`. So a run that ends on `absent` with the call's
+window live must leave the attempt open: the signed bytes, held by the Host or any relay, may still
+be admitted, and a re-signed command would make a second call beside it (the deleted terminal
+`absent` said "running the command again is safe" of exactly these calls). -/
+theorem settle_open_not_final {X : Ctx D} {w w' : World D} {c : Call D} {t : Turn D}
+    (hs : submit X w c = .ok (t, w')) :
+    ofReceipt (journalForgets w.height c.unsigned.notBefore) w.height c.unsigned.validUntil
+      (Receipt.build X.env w (txIdOf X c)).answer = .open := by
+  obtain ⟨hj, hra, hlt, hwm⟩ := submit_facts hs
+  have hnf : journalForgets w.height c.unsigned.notBefore = false := by
+    simp only [journalForgets, decide_eq_false_iff_not]
+    rw [windowMax_eq] at hwm
+    rw [windowMax_eq]
+    omega
+  have hnot : ¬ c.unsigned.validUntil ≤ w.height := by omega
+  unfold refusedAnswer at hra
+  rw [build_answer]
+  simp only [hj]
+  cases hr : w.refusalAt X.env (.tx (txIdOf X c)) with
+  | none => simp [ofReceipt, hnf, hnot]
+  | some leaf =>
+      cases leaf with
+      | refused h code => simp [hr] at hra
+      | count n => simp [ofReceipt, hnf, hnot]
+
+end Member
 
 end Nanodregg.Protocol.Settle

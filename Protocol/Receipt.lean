@@ -19,7 +19,9 @@ only that its path verifies against the head's refusals root (`check_refused`): 
 refusals-trie soundness yet (cv 01a14dfa-200a). The head is the member's own folded World (its
 height and roots together); a relayed head would need its height bound to the roots.
 
-`build` is how a member's follow makes one from the World it folded (`receipt TXID`).
+`build` is how a member's follow makes one from the World it folded (`receipt CALL`), and
+`Protocol.Settle.ofReceipt` is how it settles the call from it (PROTOCOL-46; `check_build`: the
+built receipt checks against the member's own head).
 -/
 import Kernel.World
 import Protocol.Command.Text

@@ -341,6 +341,11 @@ fn a_stdio_custody_signs_but_never_rotates() {
         c.sign_next(b"rotate"),
         Err(CustodyError::NoRotation)
     ));
+    let envelope = [nanodregg_client::generated::ENVELOPE_DOMAIN, b"w"].concat();
+    assert!(matches!(
+        c.sign_incoming(&envelope),
+        Err(CustodyError::NoRotation)
+    ));
     assert_eq!(
         fs::metadata(ws2.join("keys")).unwrap().len(),
         64,
@@ -348,4 +353,52 @@ fn a_stdio_custody_signs_but_never_rotates() {
     );
     done(&ws);
     done(&ws2);
+}
+
+/// CLIENT-27 (PROTOCOL-46): once a rotation is signed and armed, its incoming key signs READ
+/// ENVELOPES, and nothing else, until it settles: `notArmed` before, `envelopeOnly` for a call,
+/// the incoming key (never the current one) for an envelope, also after an interrupted advance.
+#[test]
+fn an_armed_rotation_signs_read_envelopes_with_its_incoming_key_only() {
+    use nanodregg_client::generated::ENVELOPE_DOMAIN;
+    let (ws, h) = scratch("incoming");
+    Custody::create_separate(&ws, &h).unwrap();
+    let c = Custody::open(&ws, Some(h.clone())).unwrap();
+    let envelope = [ENVELOPE_DOMAIN, b"window"].concat();
+    assert!(matches!(
+        c.sign_incoming(&envelope),
+        Err(CustodyError::NotArmed)
+    ));
+    let old = c.public_key().unwrap();
+    c.precommit().unwrap();
+    let (_, r) = c.sign_next(b"rotate").unwrap();
+    assert!(
+        matches!(c.sign_incoming(&envelope), Err(CustodyError::NotArmed)),
+        "signed, not armed"
+    );
+    c.arm(0, &r).unwrap();
+    for call in [&b"a call's unsigned bytes"[..], &ENVELOPE_DOMAIN[1..], b""] {
+        assert!(matches!(
+            c.sign_incoming(call),
+            Err(CustodyError::EnvelopeOnly)
+        ));
+    }
+    let s = c.sign_incoming(&envelope).unwrap();
+    assert_eq!(
+        (s.key.as_slice(), s.next.as_slice()),
+        (&r.incoming[..], &r.pending[..])
+    );
+    assert_ne!(s.key, old);
+    assert!(verifies(&s.key, &envelope, &s.signature));
+    assert_eq!(c.public_key().unwrap(), old, "signing advances nothing");
+    // A settle interrupted after the seed moved: the incoming key is current, and still signs.
+    fs::write(ws.join("seed"), fs::read(h.join("next")).unwrap()).unwrap();
+    let s = c.sign_incoming(&envelope).unwrap();
+    assert!(verifies(&r.incoming, &envelope, &s.signature));
+    c.settle(true).unwrap();
+    assert!(
+        matches!(c.sign_incoming(&envelope), Err(CustodyError::NotArmed)),
+        "settled"
+    );
+    done(&ws);
 }

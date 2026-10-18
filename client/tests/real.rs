@@ -2,12 +2,15 @@
 //! (the member's own fold), both confined (CLIENT-9), on two Stores made by `host genesis` from
 //! custody's own public keys. create → write → read → a failing expectation → rotate → write under
 //! the rotated key → read. Every accept and refuse here is Lean's (Ed25519 verify, the receivers,
-//! follow's audit and rendering); the client only signs and moves bytes.
+//! follow's audit and rendering); the client only signs and moves bytes. The rotate is confirmed
+//! by the member's follow reading through the incoming key, and a Host that answers `refused` for
+//! a write that committed is overruled by the member's own receipt (PROTOCOL-46).
 //!
 //! It needs the Lean binary (`devtools::lean_bin("host")`: `$ND_LEAN_BIN/host`, else this tree's
 //! `.lake/build/bin/host`); missing, the test FAILS by name, it never skips.
 #![allow(clippy::unwrap_used, clippy::panic)] // a plant that cannot set up is a failed plant
-use std::path::Path;
+use std::os::unix::net::{UnixListener, UnixStream};
+use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 use nanodregg_devtools::Supervisor;
@@ -21,6 +24,34 @@ fn line<'a>(out: &'a str, key: &str) -> &'a str {
 fn supervise(sock: &Path, ws: &Path, store: &Path, args: &[&str]) -> Supervisor {
     let sup = Path::new(env!("CARGO_BIN_EXE_nd-supervise"));
     nanodregg_devtools::supervise_host(sup, sock, ws, store, args)
+}
+
+/// A Host that lies: every `submit` the writer answers `ok` reaches nd as `refused`. Everything
+/// else (lookups, the log pages follow reads) passes through unchanged.
+fn lying_host(listen: &Path, upstream: PathBuf) {
+    use nanodregg_client::{frame, generated as g, table::LIMITS};
+    let l = UnixListener::bind(listen).unwrap();
+    std::thread::spawn(move || {
+        for nd in l.incoming() {
+            let (Ok(mut nd), Ok(mut up)) = (nd, UnixStream::connect(&upstream)) else {
+                return;
+            };
+            while let Ok(req) = frame::read(&mut nd, LIMITS) {
+                if frame::write(&mut up, LIMITS, req.op, &req.payload).is_err() {
+                    break;
+                }
+                let Ok(mut reply) = frame::read(&mut up, LIMITS) else {
+                    break;
+                };
+                if req.op == g::host_op::SUBMIT && reply.op == g::status::OK {
+                    reply.op = g::status::REFUSED;
+                }
+                if frame::write(&mut nd, LIMITS, reply.op, &reply.payload).is_err() {
+                    break;
+                }
+            }
+        }
+    });
 }
 
 #[test]
@@ -226,6 +257,39 @@ fn real_host_create_write_read_rotate_write_read() {
         ok(&["read", &obj]),
         "1=hello\n2=after\n",
         "the refused write left nothing"
+    );
+
+    // PROTOCOL-46: a write that commits, through a Host that answers its submit `refused`. The
+    // member's own follow builds and checks the receipt; the write settles committed, and the
+    // settlement on disk is follow's receipt, head and verdict, never the Host's reply.
+    let lie = root.join("lie.sock");
+    lying_host(&lie, ws.join("host.sock"));
+    let lied = Command::new(env!("CARGO_BIN_EXE_nd"))
+        .env("ND_WORKSPACE", &ws)
+        .env("ND_HOLDING", &holding)
+        .env("ND_HOST_SOCK", &lie)
+        .args(["write", &obj, "3", "lied"])
+        .output()
+        .unwrap();
+    assert!(
+        lied.status.success(),
+        "{}",
+        String::from_utf8_lossy(&lied.stderr)
+    );
+    assert_eq!(ok(&["read", &obj]), "1=hello\n2=after\n3=lied\n");
+    let last = std::fs::read_dir(ws.join("attempts"))
+        .unwrap()
+        .filter_map(|e| e.unwrap().file_name().to_str()?.parse::<u64>().ok())
+        .max()
+        .unwrap();
+    let settled = std::fs::read_to_string(ws.join(format!("attempts/{last}/settled"))).unwrap();
+    let lines: Vec<&str> = settled.lines().collect();
+    assert!(
+        lines.len() == 3
+            && lines[0].starts_with("receipt ")
+            && lines[1].starts_with("head ")
+            && lines[2].starts_with("settle committed "),
+        "{settled}"
     );
     drop(_o);
     drop((_h, _f));

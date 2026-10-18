@@ -27,6 +27,7 @@ def Reply.frame : Reply → Option Step.Frame
   | .submit c k => do pure ⟨.submit, (← Text.fit _ c, ← Text.fit _ k, ())⟩
   | .precommit k => do pure ⟨.precommit, (← Text.fit _ k, ())⟩
   | .signNext m k => do pure ⟨.signNext, (← Text.fit _ m, ← Text.fit _ k, ())⟩
+  | .signIncoming m k => do pure ⟨.signIncoming, (← Text.fit _ m, ← Text.fit _ k, ())⟩
 
 def Reply.ofFrame : Step.Frame → Option Reply
   | ⟨.done, (e, o, r, ())⟩ => some (.done e o.1 r.1)
@@ -35,6 +36,7 @@ def Reply.ofFrame : Step.Frame → Option Reply
   | ⟨.submit, (c, k, ())⟩ => some (.submit c.1 k.1)
   | ⟨.precommit, (k, ())⟩ => some (.precommit k.1)
   | ⟨.signNext, (m, k, ())⟩ => some (.signNext m.1 k.1)
+  | ⟨.signIncoming, (m, k, ())⟩ => some (.signIncoming m.1 k.1)
 
 def Reply.bytes (r : Reply) : Option ByteArray := r.frame.map Step.frame.bytes
 

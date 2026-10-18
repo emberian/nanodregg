@@ -21,6 +21,7 @@ name. Theorems: `Protocol.Proofs.Settle` (`final_iff_recorded`, the rule restate
 -/
 import Kernel.Receive.Submit
 import Protocol.Table
+import Protocol.Receipt
 
 namespace Nanodregg.Protocol.Settle
 
@@ -48,5 +49,55 @@ def keptWorld (w : World D) : Outcome D → World D
 def recordedNow : Outcome D → Bool
   | .recorded .. => true
   | _ => false
+
+/-! ## The member's settlement (PROTOCOL-46)
+
+The Host's reply HINTS (`verdictReply` above drives the attempt loop); the member's own follow
+SETTLES. Follow catches up, builds the receipt for the call from its own World (`Receipt.build`)
+and decides it here:
+
+* `committed h td`: the journal holds it; final;
+* `refused code`: the refusals hold its recorded refusal, and the call's window closes before the
+  record can be pruned (`validUntil ≤ h + 2 · windowMax`); final. Otherwise the answer is `open`,
+  the safe side. The kernel records a refusal without checking the window's WIDTH
+  (`checkRefusal` checks only `notBefore ≤ height + 1 ≤ validUntil`), so a recorded call wider than
+  `windowMax` settles `open`, never final: a completeness gap, asked of KERNEL (width checked before
+  recording makes this arm dead);
+* `expired`: absent, and the head is at or past the call's `validUntil`; final (no later World
+  admits it: the kernel's window);
+* `open`: absent while the window is live. NOT final: whoever holds the signed bytes (the Host,
+  any relay) may still land them;
+* `forgotten`: absent past `journalForgets`: absence no longer says the call did not land.
+
+Theorems: `Protocol.Proofs.Settle` (`settle_committed`, `settle_final_never_admits`,
+`settle_open_not_final`) and `Protocol.Proofs.Receipt` (`check_build`).
+-/
+
+/-- What follow says happened to a call. -/
+inductive Verdict (D : Type)
+  | committed (height : Nat) (turn : D)
+  | refused (code : Nat)
+  | expired
+  | «open»
+  | forgotten
+  deriving DecidableEq
+
+/-- THE settlement: a receipt's answer at a head of height `height`, for a call valid until
+`validUntil`; `forgets` is `journalForgets height notBefore`. -/
+def ofReceipt (forgets : Bool) (height validUntil : Nat) : Receipt.Answer D → Verdict D
+  | .committed h td => .committed h td
+  | .refused h code => if validUntil ≤ h + 2 * Kernel.Bounds.windowMax then .refused code else .open
+  | .absent =>
+      if forgets then .forgotten
+      else if validUntil ≤ height then .expired
+      else .open
+
+/-- The `settle` line follow prints (`settle_seen` reads its first word). -/
+def Verdict.text (dbytes : D → ByteArray) : Verdict D → String
+  | .committed h td => s!"committed {h} {Text.toHex (dbytes td)}"
+  | .refused code => s!"refused {code}"
+  | .expired => "expired"
+  | .open => "open"
+  | .forgotten => "forgotten"
 
 end Nanodregg.Protocol.Settle

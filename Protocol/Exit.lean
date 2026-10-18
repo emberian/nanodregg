@@ -49,8 +49,8 @@ end SupervisorExit
 namespace CommandExit
 
 def cls : CommandExit → Host.ExitClass
-  | ok | absent => .done
-  | uncertain | behind | client | declined => .restart
+  | ok => .done
+  | uncertain | behind | client | declined | «open» | hostContradicted => .restart
   | refused => .fatal
 
 /-- The codes of one class, in table order. -/

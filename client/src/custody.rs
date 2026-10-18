@@ -1,5 +1,6 @@
 //! Custody of one member's keys (CLIENT-13, ruled by Ember 2026-10-16): the CURRENT key signs every
-//! call; the precommitted NEXT key signs only the `rotate` that makes it current (KERNEL-6). The
+//! call; the precommitted NEXT key signs the `rotate` that makes it current (KERNEL-6) and, once that
+//! rotate is signed and armed, read envelopes until the rotation settles (CLIENT-27). The
 //! next key is fresh OS randomness born at precommit, never derivable from the current one, held
 //! where a theft of the workspace does not reach it:
 //! - [`Separate`] (a member): `ws/seed` (current secret), `ws/next.pub` (next PUBLIC key), and the
@@ -53,6 +54,8 @@ pub enum CustodyError {
     NoPending,
     /// A rotation is already armed; it is settled first.
     RotationInFlight,
+    /// `signIncoming` with no rotation armed (PROTOCOL-46).
+    NotArmed,
     /// A key file disagrees with the keys the rotation or the workspace names.
     Mismatch(&'static str),
     /// The file system failed.
@@ -81,6 +84,7 @@ impl CustodyError {
             Self::HoldingAbsent => CustodyRefusal::HoldingAbsent,
             Self::NoPending => CustodyRefusal::NoPending,
             Self::RotationInFlight => CustodyRefusal::RotationInFlight,
+            Self::NotArmed => CustodyRefusal::NotArmed,
             Self::Mismatch(_) => CustodyRefusal::Mismatch,
             Self::Io(_) => CustodyRefusal::Io,
             Self::EnvelopeOnly => CustodyRefusal::EnvelopeOnly,
@@ -491,6 +495,35 @@ impl Custody {
             signature: next.sign(message).to_bytes().to_vec(),
         };
         Ok((result, r))
+    }
+
+    /// A `signIncoming` step's result (PROTOCOL-46, CLIENT-27): once a rotation is signed and
+    /// armed, its incoming key signs a READ ENVELOPE (by the emitted domain: never a call), so the
+    /// member's follow can read a World where that rotation already landed and the old key is
+    /// gone. Refused `notArmed` with nothing armed, `envelopeOnly` for any other message,
+    /// `noRotation` under `nd --stdio`.
+    pub fn sign_incoming(&self, message: &[u8]) -> Result<SignResult, CustodyError> {
+        if self.rotation_refused {
+            return Err(CustodyError::NoRotation);
+        }
+        if !message.starts_with(ENVELOPE_DOMAIN) {
+            return Err(CustodyError::EnvelopeOnly);
+        }
+        let (_, r) = self.armed()?.ok_or(CustodyError::NotArmed)?;
+        // A settle interrupted after the advance has already made the incoming key current.
+        let current = self.keys.current()?;
+        let k = match public(&current) == r.incoming {
+            true => current,
+            false => self.keys.next()?,
+        };
+        if public(&k) != r.incoming {
+            return Err(CustodyError::Mismatch("next ≠ the rotation's incoming key"));
+        }
+        Ok(SignResult {
+            key: r.incoming.to_vec(),
+            next: r.pending.to_vec(),
+            signature: k.sign(message).to_bytes().to_vec(),
+        })
     }
 
     /// Record that attempt `n` carries rotation `r`, durably, before the attempt is first sent.

@@ -19,8 +19,6 @@ inductive CommandExit where
   | refused
   /-- the Host's reply was `uncertain`: the attempt goes on by lookup -/
   | uncertain
-  /-- the lookup answered `absent`: the Host never saw the call -/
-  | absent
   /-- the catch-up read `Bounds.pagesPerCommandMax` pages and is still behind the writer's tip:
   what was absorbed is kept, run again (printed `behind HEIGHT TIP`) -/
   | behind
@@ -29,15 +27,25 @@ inductive CommandExit where
   | declined
   /-- nd itself could not run the command (its argv, a socket, the workspace) -/
   | client
+  /-- every send was answered `absent` and follow's own World says the call's window is still live
+  (PROTOCOL-46): the signed bytes may still land, so the attempt stays OPEN; running the command
+  again would sign a second call. A restart runs it again, which probes the same bytes (printed
+  `open`) -/
+  | «open»
+  /-- the Host said committed or refused and the member's own follow says otherwise (PROTOCOL-46):
+  the attempt stays open and the Host's word is named (printed `hostContradicted HOSTSAID
+  FOLLOWSAID`) -/
+  | hostContradicted
   deriving DecidableEq, Repr
 
 namespace CommandExit
 
-def all : List CommandExit := [ok, refused, uncertain, absent, behind, client, declined]
+def all : List CommandExit := [ok, refused, uncertain, behind, client, declined, «open», hostContradicted]
 
 def code : CommandExit → Nat
-  | ok => 0 | refused => 1 | uncertain => 2 | absent => 50 | behind => 51 | client => 52
-  | declined => 53
+  | ok => 0 | refused => 1 | uncertain => 2 | behind => 51 | client => 52
+  | declined => 53 | «open» => 54 | hostContradicted => 55
+  -- 50 was `absent` (deleted by PROTOCOL-46: `absent` is never the end of an attempt); never reused
 
 def ofCode? (n : Nat) : Option CommandExit := all.find? (·.code == n)
 

@@ -629,8 +629,10 @@ def custodyRefusalEnum : String :=
 /-! ## The attempt store's decision (Protocol.Attempt)
 
 `attempt::next` is `Attempt.table` printed as one Rust `match`, one arm per row: the client consults
-it and keeps no second copy of the rule. The 26 rows are every input (`Attempt.inputs`), so the
-`match` is exhaustive and `cargo check` refuses it if a row were missing. -/
+it and keeps no second copy of the rule. The 66 rows are every input (`Attempt.inputs`), so the
+`match` is exhaustive and `cargo check` refuses it if a row were missing. `Action::code` is the byte
+nd hands follow as step 4's result; `settle_seen` reads the first word of follow's `settle` line
+(`Attempt.settleSeen`, PROTOCOL-46); `Seen::name` names a contradiction's two sides. -/
 
 open Attempt in
 def attemptRow (row : (Bool × Option (Request × Seen)) × Action) : String :=
@@ -650,10 +652,21 @@ def attemptModule : String :=
      "pub mod attempt {"] ++
     enum "Request" (Request.all.map ctorName) ++ [""] ++
     enum "Seen" (Seen.all.map ctorName) ++ [""] ++
+    ["    impl Seen {", "        pub fn name(self) -> &'static str {", "            match self {"] ++
+    Seen.all.map (fun a => s!"                Seen::{ctorName a} => \"{a.name}\",") ++
+    ["            }", "        }", "    }", ""] ++
     enum "Action" (actions.map ctorName) ++
     ["", "    impl Action {", "        pub fn name(self) -> &'static str {", "            match self {"] ++
     actions.map (fun a => s!"                Action::{ctorName a} => \"{a.name}\",") ++
+    ["            }", "        }", "",
+     "        /// The byte nd hands follow as step 4's result, before the payload.",
+     "        pub fn code(self) -> u8 {", "            match self {"] ++
+    actions.map (fun a => s!"                Action::{ctorName a} => {a.code},") ++
     ["            }", "        }", "    }", "",
+     "    /// What a confirm or probe saw: the first word of follow's `settle` line.",
+     "    pub fn settle_seen(word: &str) -> Option<Seen> {", "        match word {"] ++
+    settleWords.map (fun w => s!"            \"{w}\" => Some(Seen::{(settleSeen w).elim "" ctorName}),") ++
+    ["            _ => None,", "        }", "    }", "",
      "    /// `sends_left` is `sends < SENDS_MAX`; `last` is the last request and what its reply said.",
      "    pub fn next(sends_left: bool, last: Option<(Request, Seen)>) -> Action {",
      "        match (sends_left, last) {"] ++

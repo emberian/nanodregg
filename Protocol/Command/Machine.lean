@@ -45,6 +45,8 @@ import Protocol.Envelope
 import Protocol.Invite
 import Protocol.Command.Describe
 import Protocol.Receipt
+import Protocol.Settle
+import Protocol.Attempt
 import Protocol.Command.Exit
 import Lang.Program
 
@@ -103,6 +105,8 @@ inductive Refusal (D : Type)
   /-- the writer refused the envelope `expired` at `height` after follow's one re-signed envelope
   of this command, or stated a height that a re-signed envelope would not cover (PROTOCOL-19) -/
   | expired (height : Nat)
+  /-- `receipt CALL` whose bytes do not decode as a signed call -/
+  | badCall
 
 /-- A step answered to the client. -/
 inductive Reply
@@ -112,6 +116,7 @@ inductive Reply
   | submit (call k : ByteArray)
   | precommit (k : ByteArray)
   | signNext (message k : ByteArray)
+  | signIncoming (message k : ByteArray)
   deriving Inhabited
 
 variable {D : Type} [Ord D] [DecidableEq D]
@@ -139,6 +144,7 @@ def Refusal.name : Refusal D → String
   | .invite r => r.name
   | .noText => "noText"
   | .expired _ => "expired"
+  | .badCall => "badCall"
 
 def refused (r : Refusal D) : Reply :=
   .done CommandExit.refused.code.toUInt8 ByteArray.empty s!"refused {r.name}\n".toUTF8
@@ -216,7 +222,8 @@ def Signed.bytes (s : Signed) : Option ByteArray := do
 def hostReply (b : ByteArray) : Option (Status × ByteArray) :=
   if h : 0 < b.size then (Status.ofCode? b[0]).map (·, b.extract 1 b.size) else none
 
-/-- The phases whose result is custody's: 1 (an envelope's or init's signature), 2 for `init`
+/-- The phases whose result is custody's: 1 (an envelope's or init's signature, by `sign` or
+`signIncoming`), 2 for `init`
 only (its possession signature; every other verb's phase 2 is a `log` reply), 3 (a call's
 signature, by `sign` or `signNext`), 5 (`precommit`), 6 (an adopt envelope's signature), 8 (an
 invitation's signature). -/
@@ -471,6 +478,7 @@ def hint (X : Ctx D) : Refusal D → Option String
   | .host "stale" => some "hint stale: the World moved before the call landed; run the command again (it re-plans)"
   | .thin (.baseMoved _) => some "hint baseMoved: the writer's newest base is not at the invitation's pin; ask your sponsor for a fresh invitation"
   | .host "lawDenied" => some "hint lawDenied: a law refused the call; `read OBJ ?` names the object's laws"
+  | .host "unknownKey" => some "hint unknownKey: run nd sync: a rotation may have landed"
   | _ => none
 
 /-- `refused r`, with its hint on stdout when it has one. -/
@@ -530,6 +538,91 @@ def inviteInput (X : Ctx D) (me : Self D) (input : ByteArray) : Except (Refusal 
     | some founders =>
       if originOf X name nonce allowance founders = me.world then .ok () else .error (.invite .otherWorld)
 
+/-! ## The incoming key (PROTOCOL-46, CLIENT-13 amended)
+
+A rotation can land while custody has not yet settled it (its `ok` lost): the writer then refuses
+the old key's envelope `unknownKey`, and the confirm that would settle custody could never read.
+So a command of a verb that signs no call (`readOnly`) asks custody ONCE to sign its envelope with
+the ARMED rotation's incoming key (`signIncoming`), and every later envelope of that command too.
+`tried`'s bit 0 is the one `expired` re-sign, bit 1 the incoming key. A second `unknownKey` ends the
+command `refused unknownKey`; so does custody's `notArmed` (no rotation in flight: the writer's word
+stands). A write is never retried: its plan would be signed by the old key against an envelope the
+incoming key signed; it ends `refused unknownKey` with the hint to sync. -/
+
+/-- The verbs that sign no call: the only ones whose envelope may be signed by the incoming key. -/
+def readOnly : Cmd D → Bool
+  | .read _ _ | .describe _ | .sync | .receipt _ => true
+  | _ => false
+
+def incomingBit : Nat := 2
+def expiredBit : Nat := 1
+
+/-- The envelope's signing step: by the incoming key once `tried` has bit 1. -/
+def envelopeSign (tried : Nat) (m k : ByteArray) : Reply :=
+  if tried &&& incomingBit = 0 then .sign m k else .signIncoming m k
+
+/-- The writer refused an envelope (phase 2): `expired` re-signs once (`reSign`); `unknownKey` to a
+verb that signs no call re-signs once by the incoming key; anything else ends the command by name. -/
+def envelopeRefused (X : Ctx D) (me : Self D) (argv : List ByteArray) (cmd : Cmd D)
+    (startB pagesB upToB triedB p : ByteArray) : Reply :=
+  match expiredHeight? p, Text.ofU64 startB, Text.ofU64 upToB, Text.ofU64 triedB with
+  | none, some h, some upTo, some tried =>
+      if p = ReadRefusal.unknownKey.payload then
+        if readOnly cmd && tried &&& incomingBit == 0 then
+          next (D := D) ⟨argv, 1, [startB, pagesB, upToB, Text.u64 (tried ||| incomingBit)]⟩ fun k =>
+            .signIncoming (envelopeMessage X me h upTo) k
+        else if readOnly cmd then refused (D := D) (.host "unknownKey")
+        else refusedAt X (.host "unknownKey")
+      else refused (D := D) (.host (hostName p))
+  | some height, some h, some upTo, some tried =>
+      match reSign (D := D) me (tried &&& expiredBit ≠ 0) upTo height with
+      | .error r => refused (D := D) r
+      | .ok upTo' =>
+          next (D := D) ⟨argv, 1, [startB, pagesB, Text.u64 upTo', Text.u64 (tried ||| expiredBit)]⟩ fun k =>
+            envelopeSign tried (envelopeMessage X me h upTo') k
+  | _, _, _, _ => refused (D := D) .badState
+
+/-- The `receipt CALL` lines: the receipt, the head it was built at, and the settlement. -/
+def receiptText (X : Ctx D) (w : World D) (c : Call D) : Option String :=
+  let r := Receipt.build X.env w (txIdOf X c)
+  let v := Settle.ofReceipt (journalForgets w.height c.unsigned.notBefore) w.height
+    c.unsigned.validUntil r.answer
+  (Receipt.bytes X.env r).map fun b =>
+    s!"receipt {Text.toHex b}\nhead {w.steps} {w.height} {hex X (w.roots X.env)}\nsettle {v.text X.env.bytes}\n"
+
+def receiptLines (X : Ctx D) (w : World D) (cb : ByteArray) : Reply :=
+  match X.decodeCall cb with
+  | none => refused (D := D) .badCall
+  | some c =>
+      match receiptText X w c with
+      | some t => printed t
+      | none => refused (D := D) .badState
+
+/-- The name a settled refusal prints: the recorded code's (`settle refused CODE`), or the one word
+the settlement is (`expired`). -/
+def settledName (txt : String) : String :=
+  match txt.splitOn " " with
+  | ["refused", c] => (c.toNat?.bind Receive.codeName).getD s!"code{c}"
+  | [w] => w
+  | _ => "refused"
+
+/-- Step 4's result is the attempt's end, `u8 Action.code ‖ payload` (PROTOCOL-46): committed and
+refused only as the member's follow settled them; `open` and `hostContradicted` restart. -/
+def settled (X : Ctx D) (out result : ByteArray) : Reply :=
+  if h : 0 < result.size then
+    let txt := (String.fromUTF8? (result.extract 1 result.size)).getD ""
+    match Attempt.Action.all.find? (·.code == result[0]) with
+    | some .committed => .done CommandExit.ok.code.toUInt8 out ByteArray.empty
+    | some .refused => refusedAt X (.host (settledName txt))
+    | some .declined => declined txt
+    | some .open => .done CommandExit.open.code.toUInt8 ByteArray.empty "open\n".toUTF8
+    | some .contradicted =>
+        .done CommandExit.hostContradicted.code.toUInt8 ByteArray.empty s!"hostContradicted {txt}\n".toUTF8
+    | some .uncertain => .done CommandExit.uncertain.code.toUInt8 ByteArray.empty "uncertain\n".toUTF8
+    | some .badReply => .done CommandExit.client.code.toUInt8 ByteArray.empty "badReply\n".toUTF8
+    | _ => refused (D := D) .badResult
+  else refused (D := D) .badResult
+
 def start (X : Ctx D) (me : Self D) (f : Follow D) (argv : List ByteArray) : Reply :=
   let w := f.world
   match parse X.digestOf argv with
@@ -574,6 +667,8 @@ def step (X : Ctx D) (B : Thin.Base (World D)) (me : Self D) (f : Follow D) (kb 
       -- a refusal ends the command by custody's name, an ok hands on its payload
       let isInit := match cmd with | .init _ => true | _ => false
       match stepResult (D := D) isInit st.phase result with
+      -- `notArmed` answers only `signIncoming`: no rotation in flight, the writer's word stands
+      | .error (.custody .notArmed) => same (refused (D := D) (.host "unknownKey"))
       | .error r => same (refused (D := D) r)
       | .ok result =>
       match cmd, st.phase, st.acc with
@@ -620,17 +715,17 @@ def step (X : Ctx D) (B : Thin.Base (World D)) (me : Self D) (f : Follow D) (kb 
                         -- behind by more than a window is not refused on every page
                         else moved w' ts (again 1 [Text.u64 pg.steps, Text.u64 (pages + 1),
                             Text.u64 (pg.tipHeight + me.window), triedB] fun k =>
-                          .sign (envelopeMessage X me pg.steps (pg.tipHeight + me.window)) k)
+                          envelopeSign ((Text.ofU64 triedB).getD 0)
+                            (envelopeMessage X me pg.steps (pg.tipHeight + me.window)) k)
                       else
                       match cmd, Signed.ofBytes signedB with
                       | .read obj ex, _ => moved w' ts (render X.env w' obj ex)
                       | .describe obj, _ => moved w' ts (describe X w' obj)
                       | .sync, _ => moved w' ts (printed
                           s!"height {w'.height}\nchain {hex X w'.chain}\nroots {hex X (w'.roots X.env)}\n")
-                      -- the receipt for a transaction id, against the World follow just caught up to
-                      | .receipt tx, _ => moved w' ts (match Receipt.bytes X.env (Receipt.build X.env w' tx) with
-                          | some b => printed s!"receipt {Text.toHex b}\n"
-                          | none => refused (D := D) .badState)
+                      -- the receipt for a signed call, against the World follow just caught up to,
+                      -- and the member's settlement of it (PROTOCOL-46)
+                      | .receipt cb, _ => moved w' ts (receiptLines X w' cb)
                       | .rotate, some _ => moved w' ts (again 5 [startB, signedB] fun k => .precommit k)
                       -- invite: the inputs make this World; pin it as it stands, sign with the
                       -- key the writer just took for this member's envelope
@@ -650,15 +745,7 @@ def step (X : Ctx D) (B : Thin.Base (World D)) (me : Self D) (f : Follow D) (kb 
                           | .ok u => moved w' ts (again 3 [startB, signedB, X.callMessage u] fun k =>
                               .sign (X.callMessage u) k)
                       | _, none => moved w' ts (refused (D := D) .badState)
-          | some (.refused, p) =>
-              match expiredHeight? p, Text.ofU64 startB, Text.ofU64 upToB, Text.ofU64 triedB with
-              | none, _, _, _ => same (refused (D := D) (.host (hostName p)))
-              | some height, some h, some upTo, some tried =>
-                  match reSign (D := D) me (tried ≠ 0) upTo height with
-                  | .error r => same (refused (D := D) r)
-                  | .ok upTo' => same (again 1 [startB, pagesB, Text.u64 upTo', Text.u64 1] fun k =>
-                      .sign (envelopeMessage X me h upTo') k)
-              | some _, _, _, _ => same (refused (D := D) .badState)
+          | some (.refused, p) => same (envelopeRefused X me st.argv cmd startB pagesB upToB triedB p)
           | _ => same (refused (D := D) .badResult)
       -- the call's signature: re-plan, compare with what was signed, submit
       | _, 3, [startB, signedB, ub] =>
@@ -691,15 +778,7 @@ def step (X : Ctx D) (B : Thin.Base (World D)) (me : Self D) (f : Follow D) (kb 
                       .signNext (X.callMessage u) k)
               | _, _ => same (refused (D := D) .badState)
       -- the settlement
-      | _, 4, [_, _, _, out] =>
-          match hostReply result with
-          | some (.ok, _) => same (.done CommandExit.ok.code.toUInt8 out ByteArray.empty)
-          | some (.refused, p) => same (refusedAt X (.host (hostName p)))
-          | some (.declined, p) => same (declined (hostName p))
-          | some (.absent, _) => same (.done CommandExit.absent.code.toUInt8 ByteArray.empty "absent\n".toUTF8)
-          | some (.uncertain, _) => same (.done CommandExit.uncertain.code.toUInt8 ByteArray.empty "uncertain\n".toUTF8)
-          -- a settlement is never `closed`: the client settles a closed connection by lookup
-          | some (.closed, _) | none => same (refused (D := D) .badResult)
+      | _, 4, [_, _, _, out] => same (settled X out result)
       -- adopt: the envelope for the page at `off`, signed; ask for the base page
       | .adopt _ _, 6, [offB, pagesB, upToB, triedB] =>
           match Signed.ofBytes result, Text.ofU64 offB, Text.ofU64 upToB with

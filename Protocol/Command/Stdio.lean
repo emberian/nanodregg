@@ -7,8 +7,8 @@
 `stdioVerbs`. nd checks the request's first word against them before follow sees it, so a flag, an
 empty argv and an excluded verb are all refused `notOnSurface` by one name. Excluded:
 - `init`: it mints a join token signed twice, and a resident's keys are the operator's;
-- `rotate`: rotation is the operator's, and custody in stdio mode refuses `precommit` and
-  `signNext` as `noRotation`, a second fence;
+- `rotate`: rotation is the operator's, and custody in stdio mode refuses `precommit`,
+  `signNext` and `signIncoming` as `noRotation`, a second fence;
 - `adopt`: it replaces follow's World with a downloaded base.
 - `invite`: an invitation is a person's word for the World (PROTOCOL-42); a resident vouches for no one.
 Theorems: `Protocol.Proofs.Stdio`.

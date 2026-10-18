@@ -1303,3 +1303,116 @@ than its docstring names. The `baseMoved` red caught it only because the expecta
   Open:
   - check_committed takes the journal heights fit below 2^64 as a premise, true of reached Worlds below 2^64 height; no lemma names it yet;
   - a relayed head must bind its height to its roots.
+
+## PROTOCOL-46 · a settlement is the member's word, never the Host's: the attempt store ends a call only on its own follow's `receipt CALL`; `absent` is never the end of an attempt (2026-10-18, PROTOCOL-10 proposed, PROTOCOL-11 built; ROOT APPROVED; cv 01a14dfa-1ffb, cv 01a14ade-0f69; CLIENT-6 the client half, CLIENT-27)
+
+**The defects (read in the client, not assumed).**
+- `reconcile` settled custody on the Host's status byte. A Host saying `ok` for an unlanded rotation moved custody to a key the World never installed. A Host saying `refused` for a committed one kept custody on a revoked key. Either way the member was locked out on the Host's word.
+- The terminal `absent` said "nothing committed; running the command again is safe". That is false while the call's window is live: any relay holding the signed bytes can still land them, and a re-run signs a SECOND call. No hostile Host is needed for this; an honest queue is enough.
+
+**Decision.**
+1. **The Host hints; follow settles.**
+   - The Host's `submit` / `lookup` status drives the loop and never ends it final.
+   - A Host reply of committed or refused leads to `confirm`. Sends exhausted with a lookup still `absent` leads to `probe`.
+   - Both requests are nd's own `follow.command(["receipt", CALLHEX])`.
+2. **`receipt CALL`** (it was `receipt TXID`; still 19 verbs).
+   - Follow catches up and builds the receipt from its own World. It prints `receipt HEX`, `head STEPS HEIGHT ROOTS` and `settle VERDICT`.
+   - The verdict is `Settle.ofReceipt (journalForgets H nb) H validUntil answer`, total over five cases:
+     - `committed H TD`;
+     - `refused CODE`: recorded, and `validUntil ≤ h + 2·windowMax`; otherwise it is `open`, the safe side;
+     - `expired`: absent, at a head with H ≥ validUntil;
+     - `open`: absent, with the window live; NOT final;
+     - `forgotten`.
+   - An undecodable call is `refused badCall`.
+3. **Attempt table.**
+   - Request is submit, lookup, confirm or probe.
+   - Seen gains `open` and `forgotten`, which `settle_seen` reads from the settle line's first word; `expired` reads as refused.
+   - Action is submit, lookup, confirm, probe, committed, refused, declined, open, contradicted, badReply or uncertain. `absent` is DELETED.
+   - Transitions:
+     - (submit|lookup, committed|refused) → confirm;
+     - (lookup, absent) with no send left → probe;
+     - (confirm|probe, committed) → committed;
+     - (confirm|probe, refused) → refused;
+     - (probe, open) → open;
+     - (confirm, open|forgotten) → contradicted;
+     - (probe, forgotten) → uncertain;
+     - (confirm|probe, lost) → uncertain;
+     - a settle word answering the Host's request, or a Host status answering follow's, → badReply.
+   - `Action.code` (u8) is emitted.
+4. **Step 4's result is the attempt's end**, `u8 Action.code ‖ payload`.
+   - The payload carries the settle text for committed and refused, the name for declined, and `HOSTSAID FOLLOWSAID` for contradicted.
+   - The Machine maps the end (`Command.settled`):
+     - committed → ok;
+     - refused → `refused NAME`, using codeName, or `expired`;
+     - declined → 53;
+     - open → **54** (new, restart);
+     - contradicted → **55** `hostContradicted` (new, restart; stderr `hostContradicted H F`);
+     - uncertain → 2;
+     - badReply → 52.
+   - `CommandExit.absent` (50) is DELETED and never reused.
+5. **Custody settles only on the attempt's end.** Committed advances it, refused drops the armed rotation, and anything else keeps it armed.
+6. **The incoming key** (custody step `signIncoming`, Table.Step code 6; CustodyRefusal `notArmed` code 10; CLIENT-13 amended).
+   - A rotation whose `ok` was lost has landed, so the old key's envelope is refused `unknownKey` and the confirm could never read. That would be a lockout worse than today's.
+   - A command of a verb that signs no call (read, describe, sync, receipt) therefore re-signs its envelope ONCE by the ARMED rotation's incoming key, and every later envelope of that command too (`tried` bit 1).
+   - A second `unknownKey` ends it `refused unknownKey`. So does custody's `notArmed`, because then the writer's word stands.
+   - A write is never retried: its plan would be signed by the old key against an incoming-signed envelope. It ends `refused unknownKey` with `hint unknownKey: run nd sync: a rotation may have landed`.
+   - Custody signs only an `ENVELOPE_DOMAIN` message (`envelopeOnly`), only while armed (`notArmed`), and never in stdio (`noRotation`).
+7. **HOST half: none** (declined, as argued in the proposal). The trigger to revisit is a member that holds a head but no World, the phone (cv 01a14d95-36b0).
+
+**Theorems.**
+- Proofs/Receipt:
+  - `check_build`: on a JournalCanon, RefusalsOk World whose journal heights fit a u64, the built receipt checks against the World's own head, answering what it states, unless it is absent past `journalForgets`.
+  - Tooth: `check_build_forgotten`, which shows that premise is exact.
+  - Its refusals twins, `refusals_prove_verifies` / `refusals_prove_absent`, are proved here. KERNEL-17's RefusalsHead lands the Kernel copies and these move.
+- Proofs/Settle:
+  - `settle_committed`: a committed settlement is the World's journal entry.
+  - `settle_final_never_admits`: `refused` or `expired`, from the member's own World, means NO World that a later log reaches admits the call (`submit`).
+    - Refused: by `fold_refused_retains` below the prune height, and beyond it by the window, which the checkable arm closes.
+    - Expired: by the window alone, with heights monotone.
+  - `settle_open_not_final`: every call that `submit` would still admit settles `open` there. These are exactly the calls the deleted `absent` called safe to re-run.
+  - `submit_facts`.
+- Proofs/Attempt:
+  - `next_final`: committed or refused only answers confirm or probe, never the Host.
+  - `next_host_final_confirms`, `next_absent_probes`, `next_after_follow`;
+  - `Action.code_injective`, `settleSeen_words`.
+- Proofs/Command:
+  - `envelopeRefused_once`: with the bit set, `unknownKey` is refused and never re-asked.
+  - `envelopeRefused_write`: a write is never retried.
+  - `expiredHeight_unknownKey`, plus the no-submit lemmas of the new arms.
+- Proofs/Exit re-checks disjointness over the new codes (decide).
+
+**Rows (27).**
+- Row `settle` (new):
+  - a committed call whose lookup the Host answers `refused stale` (fault `lieLookup`) settles committed;
+  - a never-forwarded call ends `open`, and a relay then LANDS it (`resubmit` ok), so open was not final, in a real run;
+  - a second never-forwarded call signed for a window of 2 is re-run (`rerun`: the attempt store's next run) past its window and settles `refused expired`;
+  - a rotation whose `ok` is lost confirms through `signIncoming`, custody advances, and the next write signs with the new key.
+  - Plant `trustLookup` (the store ends on the Host's status): line 6 reads the lie, `refused stale`.
+- Measured, not standing: Loopback custody that never signs incoming turns `rotate` line 7 and `settle` line 17 to `uncertain`. Every confirmed rotation needs it.
+- Row `rotate`:
+  - the never-forwarded rotation is `open`;
+  - plant `advanceOnSend` is now caught EARLIER, at line 11 (`uncertain`): custody on a key the World never installed cannot even read.
+- Rows `forgotten` and `receipt`: never-forwarded writes are `open`.
+- `retry` is the Host's lookup, read as a Host observation, and no longer settles custody.
+
+**Flag day (what breaks).**
+- The attempt table, the step-4 result and the command exits are re-cut. generated.rs is re-emitted: Request, Seen and Action change, with `Action::code`, `settle_seen`, `Step::SIGN_INCOMING`, `CustodyRefusal::NotArmed` and `command_exit::OPEN` / `HOST_CONTRADICTED`; `ABSENT` is gone.
+- `receipt TXID` → `receipt CALL`.
+- The settlement file format changes (CLIENT-27), so an old attempt directory refuses to load.
+- Ops/Units `commandAction` re-cut (OPS-4).
+
+**Critique.**
+- `settle_final_never_admits` is about `submit`, the writer's admission. A follower's audit admits only logged turns derived from calls, so it inherits the same window and journal facts. It is not stated here separately.
+- `refused`'s arm needs `validUntil ≤ h + 2·windowMax`. That is NOT true of every recorded call (the vacuity read found it): `checkRefusal` checks `notBefore ≤ height + 1 ≤ validUntil` but never the width, so a recorded call wider than `windowMax` settles `open`, then `forgotten`, and never final. This is a completeness gap, not unsoundness. Asked of KERNEL: check the width before recording, which makes this arm dead and provable.
+- Every final settlement costs one follow catch-up. An absent call is final only after its window, at most `windowMax` heights.
+
+**Status.** BUILT; rows ALL PASS 27.
+- Vacuity read (a second agent): no theorem is vacuous or collapses to a kernel one.
+- Taken from it:
+  - the false "true of every recorded call" sentence is corrected (above);
+  - `envelopeRefused_once` / `_write` derive their `expiredHeight?` premise (`expiredHeight_unknownKey`);
+  - `next_absent_probes` is stated for every `b`, and `next_ends_open` is added.
+- Open:
+  - a named reached-World lemma for `check_build`'s u64 height fit, and `deployed_*` compositions;
+  - the incoming bit's persistence across the step machine is not proved, only the local once;
+  - the Rust wiring (`settle_seen` reading follow's line) is CLIENT's tests, not a theorem.

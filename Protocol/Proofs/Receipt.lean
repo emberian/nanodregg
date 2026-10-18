@@ -12,6 +12,7 @@ establish: the path verifies against the head's refusals root.
 -/
 import Protocol.Receipt
 import Kernel.Proofs.JournalHead
+import Kernel.Proofs.Refusals
 
 namespace Nanodregg.Protocol.Receipt
 
@@ -123,5 +124,79 @@ theorem check_refused {E : Env D} {H : Nat} {roots txId : D} {nb : Nat} {r : Rec
   · split at ha
     · cases ha
     · split at ha <;> cases ha
+
+/-! ## Completeness: the member's own receipt checks (PROTOCOL-46) -/
+
+/-- **A World proves every refusals leaf it holds** (the refusals twin of
+`Kernel.journal_prove_verifies`). -/
+theorem refusals_prove_verifies {E : Env D} {w : World D} (hc : w.RefusalsCanon E) {k : RefusalSlot D}
+    {l : RefusalLeaf} (hg : w.refusalAt E k = some l) :
+    Trie.verifyInclusion (refusalSpec E) (w.refusalsRoot E) k (refusalDigest E l)
+      (w.refusals.prove (refusalSpec E) k) = true :=
+  Trie.prove_includes (refusalSpec E) hc.2.1 (Trie.shallow_of_shape _ 0 _ hc.2.2) hg
+
+/-- **A World proves every refusals key it does not hold** (the twin of
+`Kernel.journal_prove_absent`). -/
+theorem refusals_prove_absent {E : Env D} {w : World D} (hc : w.RefusalsCanon E) {k : RefusalSlot D}
+    (hg : w.refusalAt E k = none) :
+    Trie.verifyExclusion (refusalSpec E) (w.refusalsRoot E) k (w.refusals.prove (refusalSpec E) k) = true :=
+  Trie.prove_excludes (refusalSpec E) hc.2.1 (Trie.shallow_of_shape _ 0 _ hc.2.2) hg
+
+/-- **The receipt a World builds checks against that World's own head**, answering what it states,
+unless the answer is `absent` past `journalForgets` (where `check` refuses `forgotten`:
+`check_build_forgotten`). So follow, settling from `build`, settles exactly what `check` would
+accept; on a JournalCanon World whose journal heights fit a u64 and whose refusals are well formed
+(both hold of every World a checked genesis and a fold reach: `deployed_reach_journalOk`,
+`deployed_reach_refusalsOk`). -/
+theorem check_build {E : Env D} {w : World D} {tx : D} {nb : Nat} (hc : w.JournalCanon E)
+    (hr : w.RefusalsOk E) (hfit : ∀ k e, w.journalAt E k = some e → e.1 < 2 ^ 64)
+    (hnf : (build E w tx).answer ≠ .absent ∨ journalForgets w.height nb = false) :
+    check E w.height (w.roots E) tx nb (build E w tx) = .ok (build E w tx).answer := by
+  have hroots : rootsDigest E (build E w tx).root (build E w tx).jroot (build E w tx).rroot
+      (build E w tx).rowsroot = w.roots E := rfl
+  unfold check
+  rw [if_neg (by simp [build]), if_neg (by rw [hroots]; simp)]
+  unfold answerOf
+  cases hjx : w.journalAt E tx with
+  | some e =>
+      obtain ⟨h, td⟩ := e
+      have ha : (build E w tx).answer = .committed h td := by simp [build, hjx]
+      rw [ha]
+      simp only
+      rw [if_pos ⟨hfit _ _ hjx, journal_prove_verifies hc hjx⟩]
+  | none =>
+      cases hrx : w.refusalAt E (.tx tx) with
+      | some l =>
+          cases l with
+          | refused h code =>
+              have ha : (build E w tx).answer = .refused h code := by simp [build, hjx, hrx]
+              rw [ha]
+              simp only
+              rw [if_pos ⟨refusals_prove_verifies hr.1 hrx, journal_prove_absent hc hjx⟩]
+          | count n =>
+              have := hr.2 _ _ hrx
+              simp [refusalFits] at this
+      | none =>
+          have ha : (build E w tx).answer = .absent := by simp [build, hjx, hrx]
+          rw [ha]
+          simp only
+          have hf : journalForgets w.height nb = false := by
+            rcases hnf with h | h
+            · exact absurd ha h
+            · exact h
+          rw [if_neg (by simp [hf]), if_pos ⟨journal_prove_absent hc hjx, refusals_prove_absent hr.1 hrx⟩]
+
+/-- `check_build`'s premise is exact: the built `absent` past `journalForgets` is refused
+`forgotten`, never an answer. -/
+theorem check_build_forgotten {E : Env D} {w : World D} {tx : D} {nb : Nat}
+    (ha : (build E w tx).answer = .absent) (hf : journalForgets w.height nb = true) :
+    check E w.height (w.roots E) tx nb (build E w tx) = .error .forgotten := by
+  have hroots : rootsDigest E (build E w tx).root (build E w tx).jroot (build E w tx).rroot
+      (build E w tx).rowsroot = w.roots E := rfl
+  unfold check
+  rw [if_neg (by simp [build]), if_neg (by rw [hroots]; simp)]
+  unfold answerOf
+  rw [ha]
+  simp [hf]
 
 end Nanodregg.Protocol.Receipt

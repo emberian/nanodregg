@@ -26,7 +26,7 @@ namespace Nanodregg.Protocol
 inductive Expect
   | ok
   | refused (name : String)
-  /-- the attempt settles by lookup as absent: the Host never saw it -/
+  /-- the Host's lookup answers `absent` (`retry`, `resubmit`: the Host's word, never a settlement) -/
   | absent
   /-- the Host's reply was `uncertain` (a failed append): a real outcome, never a guess -/
   | uncertain
@@ -42,12 +42,18 @@ inductive Expect
   /-- the writer refused the call by name and did NOT record it (`Status.declined`, PROTOCOL-41): not
   final, the attempt stays open -/
   | declined (name : String)
+  /-- every send was answered `absent` and the member's own follow says the call's window is live
+  (`CommandExit.open`, PROTOCOL-46): the attempt stays open, the bytes may still land -/
+  | «open»
+  /-- the Host said committed or refused and the member's follow says otherwise
+  (`CommandExit.hostContradicted`): `HOSTSAID FOLLOWSAID` -/
+  | contradicted (said : String)
   deriving DecidableEq, Repr
 
 def Expect.text : Expect → String
   | .ok => "ok" | .refused n => s!"refused {n}" | .absent => "absent" | .uncertain => "uncertain"
   | .unsettled n => s!"uncertain {n}" | .hang => "hang" | .behind => "behind"
-  | .declined n => s!"declined {n}"
+  | .declined n => s!"declined {n}" | .open => "open" | .contradicted n => s!"hostContradicted {n}"
 
 /-- What a line does. A member command goes through the one command language; the others are the
 operator's and the attempt store's acts, which are not member commands. -/
@@ -72,7 +78,7 @@ inductive Act
   and used by another over every call the writer committed (`Protocol.Use.shared`, PROTOCOL-43):
   `ok` when there are at least `atLeast`, else `refused unshared:N` -/
   | used (atLeast : Nat)
-  /-- the actor runs `receipt TXID` for OWNER's last call (its frozen bytes' transaction id) -/
+  /-- the actor runs `receipt CALL` for OWNER's last call (its frozen bytes) -/
   | receiptOf (owner : String)
   /-- the actor, holding only its own head (its follow World's height and roots), checks the
   receipt bound to `receipt` for OWNER's last call (`Protocol.Receipt.check`); `ok` prints the
@@ -104,6 +110,10 @@ inductive Act
   /-- the actor's last call (its frozen bytes) is submitted again, byte-identical: a relay or a
   client that still holds the bytes. The outcome is the writer's answer -/
   | resubmit
+  /-- the attempt store's next run of the actor's open attempt (its last frozen call): "sent, outcome
+  lost", so it looks up, sends the same bytes again while sends remain, and settles by the member's
+  own follow (PROTOCOL-46); the outcome is the command's end, as the follow machine renders it -/
+  | rerun
   /-- the actor's client signs every later envelope for `n` heights (its own `Self.window`, a
   client's setting; the writer's read gate bounds it by `Bounds.windowMax`) -/
   | window (n : Nat)
@@ -137,6 +147,9 @@ inductive Fault
   /-- the receipt reaches the checker through a relay that states `absent` over the same paths (a
   host that says "not admitted") -/
   | forgeReceipt
+  /-- the Host commits the submit, the reply is lost, and its lookup lies: `refused stale` for the
+  committed call (PROTOCOL-46: the Host hints, follow settles) -/
+  | lieLookup
   deriving Repr
 
 /-- One line of a row. -/
@@ -225,6 +238,9 @@ inductive Mutation
   | guessMethod
   /-- the phone believes a receipt's stated answer with its roots matched, never checking the paths -/
   | trustReceipt
+  /-- the attempt store ends an attempt on the Host's status byte, never asking its own follow (the
+  shape before PROTOCOL-46) -/
+  | trustLookup
   deriving DecidableEq, Repr
 
 /-- A row's plant: the mutation, and the line that must catch it with the outcome it then gets. -/
@@ -384,7 +400,10 @@ def laws : Row where
 
 /-- JROT, JROTL: pre-rotation; a stolen daily key cannot rotate (the thief's custody does not hold
 the precommitted next key); a lost rotation reply is found by lookup; a rotation that never reached
-the writer leaves custody on the old key, which still signs (custody advances on settlement). -/
+the writer ends `open` (follow's own World says its window is live, PROTOCOL-46) and leaves custody
+on the old key, which still signs (custody advances on settlement). The plant is custody advancing
+when it signs: the rotation that never landed leaves it on a key the World never installed, so the
+probe cannot even read (`unknownKey`, and no rotation is armed) and line 11 is `uncertain`. -/
 def rotate : Row where
   name := "rotate"
   replaces := ["journey/JROT", "journey/JROTL"]
@@ -397,10 +416,10 @@ def rotate : Row where
     ok "newcomer" ["write", "@shared", "2", "4", "--via", "@g"],
     { actor := "newcomer", act := .cmd ["rotate"], expect := .ok, fault := .dropReply },
     { actor := "newcomer", act := .retry, expect := .ok },
-    { actor := "newcomer", act := .cmd ["rotate"], expect := .absent, fault := .neverForward },
+    { actor := "newcomer", act := .cmd ["rotate"], expect := .open, fault := .neverForward },
     ok "newcomer" ["write", "@shared", "2", "5", "--via", "@g"],
     ok "newcomer" ["read", "@shared", "2=5"]])
-  plant := .caught .advanceOnSend 12 (.refused "unknownKey")
+  plant := .caught .advanceOnSend 11 .uncertain
 
 /-- JAUDIT: a follower re-derives the Store from genesis, every Turn from its event, by the same
 receivers. A flipped byte in a copy of the Store's base is refused `baseCorrupt` by the Store's
@@ -580,7 +599,7 @@ def forgotten : Row where
   drive := .members (welcome ++ [
     { actor := "newcomer", act := .cmd ["write", "@shared", "2", "1", "--via", "@g"], expect := .ok,
       fault := .dropReply },
-    { actor := "sponsor", act := .cmd ["write", "@shared", "3", "1"], expect := .absent,
+    { actor := "sponsor", act := .cmd ["write", "@shared", "3", "1"], expect := .open,
       fault := .neverForward },
     okBind "operator" ["create", "@permit"] "own",
     { actor := "operator", act := .cmd ["write", "@own", "2", "1"], expect := .ok, times := 110 },
@@ -741,7 +760,7 @@ def describeRow : Row where
 
 /-- PROTOCOL-45 (cv 01a14ade-0f69; delvetalk's top thirst, "a receipt as proof"): a member proves to
 itself what happened to a call from the head it holds alone. The member's follow makes a RECEIPT
-(`receipt TXID`: the roots and the trie paths for the id) and a phone, which holds only its own head
+(`receipt CALL`: the roots and the trie paths for the call's id) and a phone, which holds only its own head
 (height and roots, as `sync` prints them), checks it (`Receipt.check`). A committed write checks
 `committed`; the same receipt relayed by a host that says "not admitted" (`absent` over the same
 paths) is refused `pathMismatch`; a call the writer refused and RECORDED checks `refused` with its
@@ -765,7 +784,7 @@ def receiptRow : Row where
     { actor := "newcomer", act := .receiptOf "newcomer", expect := .ok, bind := some "rc2" },
     ok "operator" ["read", "@shared", "2=5"],
     { actor := "operator", act := .verify "newcomer" "rc2", expect := .ok, prints := some "refused" },
-    { actor := "sponsor", act := .cmd ["write", "@shared", "3", "1"], expect := .absent,
+    { actor := "sponsor", act := .cmd ["write", "@shared", "3", "1"], expect := .open,
       fault := .neverForward },
     { actor := "sponsor", act := .receiptOf "sponsor", expect := .ok, bind := some "rc3" },
     { actor := "operator", act := .verify "sponsor" "rc3", expect := .ok, prints := some "absent" }])
@@ -960,8 +979,42 @@ def langJourney : Row where
   drive := .exe "lang-journey" [] "lang-journey: GREEN"
   plant := .internal "a program whose judge admits everything: L4 set 101 must be admitted"
 
+/-- PROTOCOL-46: a settlement is the member's word, never the Host's. The attempt store drives a
+frozen call by the Host's status and ends it only on its own follow's `receipt CALL`
+(`Settle.ofReceipt`). A committed call whose lookup the Host answers `refused stale` settles
+committed. A call that never reached the writer ends `open`, not "absent, safe to run again": a
+relay holding the bytes lands them. A second such call, signed for a window of 2, is re-run past
+its window and settles `refused expired`, final. A rotation whose `ok` is lost confirms through
+the ARMED rotation's incoming key (`signIncoming`: the writer refuses the old key `unknownKey`),
+and custody advances on that confirmation, so the next write signs with the new key. The plant is
+a store that takes the Host's status: line 6 reads the lie, `refused stale`. -/
+def settleRow : Row where
+  name := "settle"
+  replaces := []
+  ops := settled
+  kinds := ["enroll", "install", "create", "grant", "rotate", "write"]
+  drive := .members (welcome ++ [
+    { actor := "newcomer", act := .cmd ["write", "@shared", "2", "1", "--via", "@g"], expect := .ok,
+      fault := .lieLookup },
+    ok "operator" ["read", "@shared", "2=1"],
+    { actor := "sponsor", act := .cmd ["write", "@shared", "3", "1"], expect := .open,
+      fault := .neverForward },
+    { actor := "sponsor", act := .resubmit, expect := .ok },
+    ok "operator" ["read", "@shared", "3=1"],
+    { actor := "sponsor", act := .window 2, expect := .ok },
+    { actor := "sponsor", act := .cmd ["write", "@shared", "3", "2"], expect := .open,
+      fault := .neverForward },
+    okBind "operator" ["create", "@permit"] "own",
+    { actor := "operator", act := .cmd ["write", "@own", "2", "1"], expect := .ok, times := 3 },
+    { actor := "sponsor", act := .rerun, expect := .refused "expired" },
+    ok "operator" ["read", "@shared", "3=1"],
+    { actor := "newcomer", act := .cmd ["rotate"], expect := .ok, fault := .dropReply },
+    ok "newcomer" ["write", "@shared", "2", "6", "--via", "@g"],
+    ok "operator" ["read", "@shared", "2=6"]])
+  plant := .caught .trustLookup 6 (.refused "stale")
+
 def rows : List Row :=
-  [journey, reopen, laws, rotate, audit, paging, coldCatchUp, inflatedHeight, forgotten, refusedRow, inviteRow, useRow, describeRow, receiptRow, carry, thin, thinStale, wrongWorld, wrongWorldRead, pay, well, bounty, grain, hermes, bar,
+  [journey, reopen, laws, rotate, audit, paging, coldCatchUp, inflatedHeight, forgotten, refusedRow, inviteRow, useRow, describeRow, receiptRow, settleRow, carry, thin, thinStale, wrongWorld, wrongWorldRead, pay, well, bounty, grain, hermes, bar,
    langJourney]
 
 end Nanodregg.Protocol

@@ -33,6 +33,8 @@ pub const RUN: Table = Table {
     absent: g::status::ABSENT,
     uncertain: g::status::UNCERTAIN,
     declined: g::status::DECLINED,
+    exit_ok: g::command_exit::OK,
+    host_contradicted: g::command_exit::HOST_CONTRADICTED,
 };
 
 /// `Bounds.replyMsMax`: how long either socket waits for one reply (PROTOCOL-20).

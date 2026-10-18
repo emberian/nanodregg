@@ -150,7 +150,8 @@ code space holds both tables: `host` (Host.Status, below 64) and nd-supervise's 
 | 0 | ok | done | stays stopped (success) | nothing: the follower reached the writer's tip; the next run follows after the restart interval |
 | 1 | refused | fatal | stopped (RestartPreventExitStatus) | a refusal by name (stderr `refused NAME`): the follower's observe-only member or its grant is not live, or its envelope key is not the member's current key; re-enrol it (RUNBOOK §2b) and start the unit |
 | 2 | uncertain | restart | restarted after 2 s; failed past 5 starts in 120 s | automatic: the writer answered `uncertain`; the next run re-reads |
-| 50 | absent | done | stays stopped (success) | nothing: `sync` sends no call, so `absent` is a lookup's end; seen from sync, report to PROTOCOL |
 | 51 | behind | restart | restarted after 2 s; failed past 5 starts in 120 s | automatic: the catch-up read its page bound and is still behind; the next run continues from what was absorbed |
 | 52 | client | restart | restarted after 2 s; failed past 5 starts in 120 s | nd itself could not run (argv, a socket, the workspace; stderr names it): check /etc/nd/follow/LABEL and that both sockets exist; it is retried every interval |
 | 53 | declined | restart | restarted after 2 s; failed past 5 starts in 120 s | nothing: `sync` sends no call, so it is never `declined` (a submit's not-final refusal, PROTOCOL-41); seen from sync, report to PROTOCOL |
+| 54 | open | restart | restarted after 2 s; failed past 5 starts in 120 s | nothing: `sync` sends no call, so it never ends `open` (an attempt whose call may still land, PROTOCOL-46); seen from sync, report to PROTOCOL |
+| 55 | hostContradicted | restart | restarted after 2 s; failed past 5 starts in 120 s | nothing: `sync` sends no call, so the Host's word on a call is never contradicted (PROTOCOL-46); seen from sync, report to PROTOCOL |

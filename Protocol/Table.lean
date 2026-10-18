@@ -217,7 +217,9 @@ inductive Step
   | sign
   /-- send this frame to `host.sock` and resume with its reply -/
   | host
-  /-- freeze this call as an attempt, settle it by submit/lookup, resume with the settlement -/
+  /-- freeze this call as an attempt, drive it by submit/lookup, settle it by the member's own
+  follow (`receipt CALL`, PROTOCOL-46), and resume with the attempt's end: `u8 Action.code ‖
+  payload` (`Protocol.Attempt`) -/
   | submit
   /-- custody: make sure a PENDING key (the one after the next) exists, durably, before any rotate
   call is frozen; idempotent (a retried command never mints a second one). Result:
@@ -228,11 +230,18 @@ inductive Step
   step's attempt is the rotation attempt, and custody advances (current := next, next := pending)
   only on ITS OWN settlement of that attempt as committed, never on a follow step (CLIENT-13) -/
   | signNext
+  /-- custody: sign exactly these bytes, a read envelope's message (`ENVELOPE_DOMAIN`, never a
+  call), with the ARMED rotation's incoming key (the next key). Result: `signResultLayout` with
+  `key` = the incoming key. Follow asks it ONCE per command of a verb that signs no call, after the
+  writer refused its envelope `unknownKey`: the rotation landed and custody has not yet settled it
+  (PROTOCOL-46, CLIENT-13 amended). Refused `notArmed` with no armed rotation, `envelopeOnly` for
+  any other message, `noRotation` by a resident's custody -/
+  | signIncoming
   deriving DecidableEq, Repr
 
 namespace Step
 
-def all : List Step := [done, sign, host, submit, precommit, signNext]
+def all : List Step := [done, sign, host, submit, precommit, signNext, signIncoming]
 
 def code : Step → UInt8
   | done => 0
@@ -241,6 +250,7 @@ def code : Step → UInt8
   | submit => 3
   | precommit => 4
   | signNext => 5
+  | signIncoming => 6
 
 def ofCode? (b : UInt8) : Option Step := all.find? (·.code == b)
 
@@ -253,6 +263,7 @@ def layout : Step → Codec.Layout
   | submit => [.bytes "call", .bytes "k"]
   | precommit => [.bytes "k"]
   | signNext => [.bytes "message", .bytes "k"]
+  | signIncoming => [.bytes "message", .bytes "k"]
 
 end Step
 
@@ -260,8 +271,9 @@ end Step
 def commandLayout : Codec.Layout := [.list "argv"]
 
 /-- The `resume` payload: the continuation from the step, and that step's result. EVERY result is
-`u8 status ‖ payload` (`Status`): for `host` and `submit` the Host's reply; for the custody steps
-(`sign`, `signNext`, `precommit`) `ok ‖ signResultLayout` / `ok ‖ precommitResultLayout`, or
+`u8 status ‖ payload` (`Status`), but `submit`'s, which is `u8 Action.code ‖ payload` (the attempt's end,
+`Protocol.Attempt`, PROTOCOL-46): for `host` the Host's reply; for the custody steps
+(`sign`, `signNext`, `signIncoming`, `precommit`) `ok ‖ signResultLayout` / `ok ‖ precommitResultLayout`, or
 `refused ‖ custodyRefusalLayout` when custody refuses, so follow ends the command with the
 refusal's name instead of the client exiting with a code (CLIENT-2's ask). -/
 def resumeLayout : Codec.Layout := [.bytes "k", .bytes "result"]
@@ -301,22 +313,26 @@ inductive CustodyRefusal
   /-- custody opened by `nd --stdio` (a hosted resident) refuses `precommit` and `signNext`: a
   resident does not rotate its key (PROTOCOL-40) -/
   | noRotation
+  /-- `signIncoming` with no armed rotation: there is no incoming key to sign with -/
+  | notArmed
   deriving DecidableEq, Repr
 
 namespace CustodyRefusal
 
 def all : List CustodyRefusal :=
-  [fileRefused, .exists, shape, holdingAbsent, noPending, rotationInFlight, mismatch, io, envelopeOnly, noRotation]
+  [fileRefused, .exists, shape, holdingAbsent, noPending, rotationInFlight, mismatch, io, envelopeOnly, noRotation,
+   notArmed]
 
 def code : CustodyRefusal → UInt8
   | fileRefused => 0 | .exists => 1 | shape => 2 | holdingAbsent => 3 | noPending => 4
   | rotationInFlight => 5 | mismatch => 6 | io => 7 | envelopeOnly => 8 | noRotation => 9
+  | notArmed => 10
 
 def name : CustodyRefusal → String
   | fileRefused => "fileRefused" | .exists => "exists" | shape => "shape"
   | holdingAbsent => "holdingAbsent" | noPending => "noPending"
   | rotationInFlight => "rotationInFlight" | mismatch => "mismatch" | io => "io"
-  | envelopeOnly => "envelopeOnly" | noRotation => "noRotation"
+  | envelopeOnly => "envelopeOnly" | noRotation => "noRotation" | notArmed => "notArmed"
 
 def ofCode? (b : UInt8) : Option CustodyRefusal := all.find? (·.code == b)
 
