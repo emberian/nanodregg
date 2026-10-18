@@ -292,8 +292,8 @@ theorem refuse_refusals_listing_two {w w' : World D} {r : Refused D} (he : w.ref
   obtain ⟨_, rfl⟩ := refuse_ok h
   rw [commitRefusal_refusals, he]
   have h0 : Trie.Routed (refusalSpec X.env) 0 (Trie.T.empty : Refusals D) := (Trie.canon_empty _ 0).1
-  have p1 := Trie.toList_insert_perm (refusalSpec X.env) h0 (.tx r.txId) (.refused (w.height + 1) r.code)
-  have p2 := Trie.toList_insert_perm (refusalSpec X.env) (Trie.routed_insert (refusalSpec X.env) (.tx r.txId) (.refused (w.height + 1) r.code) h0)
+  have p1 := Trie.toList_insert_perm (refusalSpec X.env) h0 (.tx r.txId) (.refused (w.height + 1) r.code r.member)
+  have p2 := Trie.toList_insert_perm (refusalSpec X.env) (Trie.routed_insert (refusalSpec X.env) (.tx r.txId) (.refused (w.height + 1) r.code r.member) h0)
     (.count r.member (refusalWindow w.height)) (.count (refusalCount X.env w r.member + 1))
   rw [p2.length_eq, List.length_append, (p1.filter _).length_eq]
   simp [Trie.T.toList]

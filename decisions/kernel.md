@@ -2306,3 +2306,140 @@ plus the forgery tooth (plant `depth-unhashed`).
   - `proof-bit:refused`;
   - one per pin kind (cell, row, range: the pins equal a trie-free reference, and a perturbed read is caught);
   - CODEC's six ListingPin plants: the pre-day listing bytes reproduced by the compressed trie.
+
+## KERNEL-50 · A refusal's record names its member, and a World's window counts are a function of its records: `refusalsCounted` (KERNEL-19, 2026-10-19; cv 01a14da3-3e7a, CODEC-8's reviewer (C) deferred by KERNEL-14; ROOT ruled the per-member form)
+
+**The defect.** A window count leaf (`count member win ↦ n`) is a cache: `checkRefusal` reads it in one lookup so as not to scan the records. Nothing tied the cache to what it caches. A fold keeps them equal (`fold_member_refusals`), but a decoded base is not a fold. A base could:
+- lower a member's count, which resets its budget;
+- move one member's charge to another;
+- hold more records than its steps could have produced.
+CODEC's `kernel/refusals` (`refusalsFits`) checks each leaf alone, and none of these is visible leaf by leaf.
+
+**Why the member goes into the record.**
+- The per-member equation "M's count = M's records this window" cannot be stated while a `refused` leaf does not say whom it charged.
+- The cheaper form, Σ counts = this window's records, passes a base that moves a charge from M to N. That is a containment of the defect, not its fix, and ROOT refused it.
+- ROOT's second reason, recorded here: a receipt that names WHO was charged is what lets the member the budget bites audit that budget. PROTOCOL's refused answer now carries the member.
+
+**What it does not do.** The check makes the counts a function of the records. It does not authenticate the records. A forger who rewrites both a record's member and the counts passes it. Which member a record names is what the chain binds (the leaf digest commits it). The member's own receipt then shows a charge that is not theirs.
+
+**As built.**
+- `RefusalLeaf D`: `refused (h code : Nat) (member : D) | count (n : Nat)`.
+- `refusalLeafBytes E` appends `E.bytes member` after the two u64 counters. `domRefusal` is now `…/refusal-leaf/v2`.
+- `World.refuse` records `.refused (H + 1) r.code r.member`.
+- `refusalsCounted E w : Bool` (Kernel/World.lean) checks three things:
+  1. records + height ≤ steps;
+  2. every count leaf equals the tally of its member's records this window;
+  3. every member with a record this window has a count leaf.
+- The tally (`refusalTally`) is one pass over the listing into a trie under `tallySpec`. That spec routes as the refusals do but hashes nothing (a constant `hash`, empty `kbytes`/`dbytes`), and `get` after `insert` is exact for any `Spec`. So the check costs O(n · path) with no hash. A plain per-count scan would be O(n²) on an untrusted listing of up to `worldMax` entries.
+- A record of window w: its leaf holds `h = H + 1` for the height `H` it was recorded at, so the record belongs to window `(h − 1) / windowMax`.
+
+**Theorems (Kernel/Proofs/RefusalsCounted.lean, new).**
+- `World.CountedOk` (records + height ≤ steps; ∀ m, `refusalCount E w m` = Σ `refusedIn w.height m` over the listing).
+- `refusalsCounted_iff (hw : w.RefusalsOk E)`: the Bool decides it.
+- `refusalCount_eq_of_counted`: the reader a decoded base gets.
+- Preservation: `admit_countedOk` / `refuse_countedOk` / `step_countedOk` / `fold_countedOk`, then `fold_refusalsCounted`, `Receive.reach_refusalsCounted`, and `Receive.deployed_reach_refusalsCounted` (no premise).
+- Helpers: `tallyAt_foldl`, `tally_support`, `refusalTally_get`, `sumN_insert_count`, `refuse_sumN`, `refusalWindow_succ_ne` (consecutive windows have different UInt64 names: there is no wrap onto the predecessor, so no height premise).
+- TOOTH `refusalsCounted_moved`: on a World that passes the check, lower m's count by one and raise m′'s by one. Every leaf still fits (`RefusalsOk`, so `refusalsFits` and every earlier wire refusal admit it), and `refusalsCounted` refuses it. `refusalsCounted_moved_sum` proves the sum of the counts unchanged, so the refused sum form would have passed it. `refusalsCounted_moved_exists` is conditional: it builds the moved World from any World meeting the premises. The concrete instance is CODEC's `world_reads_counted_charges` (a counted World, member 2 holding 2 and member 5 holding 1) paired with `world_refuses_moved_charge`, which also passes the journal, disjoint and steps sites.
+- Sim arms (kernel-sim, in `plantedArms`): `refusals-counted:counted` (the Host's World passes) and the PLANT `refusals-counted-plant:refused` (the moved World passes `refusalsFits` and fails `refusalsCounted`).
+
+**Price, in premises on landed theorems.**
+- `refusalLeafBytes_inj` and `refusalDigest_inj` gain `hE : E.Lawful n`: the member's bytes must be injective. Every caller (`refusal_inclusion_sound` and its head/deployed forms) already held `hE`. No other theorem gains a premise.
+- Statements that only gain the member variable: every statement naming `.refused h code` (`checkRefusal_facts`, `refuse_facts`, `World.RefusalsDisjoint`, `fold_refused_retains`, `admit_refusedFinal`, `admit_not_refused`, `refuse_recorded`, `refuse_refusalAt`, `head_refused_retained` and the deployed forms, `refusalDigest_wraps` / `refusal_inclusion_unbounded`).
+- Cross-layer statement changes are listed in the commit.
+- CODEC's `world_decode_wire_ok` / `_overBudget` / `_rowsRefused` / `_headedRefused` / `_parentedRefused` gain `hct : refusalsCounted E (ofWire x) = true`. Their wires now pass the new site, which sits before theirs.
+- Protocol: `check_refused_uncommitted`, `check_refused_sound`, `check_refused` and `Settle.build_answer` gain the member as an implicit variable, with no premise.
+- Host: `Kept` gains a field `counted` (discharged at genesis, at carry, and per step). `refusals_entry_size` changes only its type.
+- Two structures gain a field, which every consumer then gets: `World.CodecFits.refusalsCounted` and Host's `Kept.counted`. Every constructor discharges it: `genesisWorld_codecFits`, `importWorld_codecFits`, `codecFits_of_kept`, `kept_admit`, `kept_refuse`, `kept_of_fits`.
+- No cell reader and no journal reader is touched (the reader K19-READER checked this against the diff).
+- A gap this day widens and does not close: the receipt wire now carries the member, and there is no `Receipt` bytes/ofBytes round-trip theorem (only `Reply.ofBytes_bytes`). It is filed for PROTOCOL as a cv task.
+
+**Flag day (one `kernel!` commit).**
+- The refusal leaf's wire gains the member, so its content-addressed tag moves, as do `kernel/refusal-order` and every World-wire tag.
+- The refusal digest changes (domain v2), so every refusals root changes and every Store re-geneses.
+- The receipt's refused answer gains the member: the receipt wire re-emits.
+- CODEC's new site `kernel/refusals-counted` (`countedWire`, `CountedWireFits`, `countedWire_lawfulOn`) sits AFTER `kernel/steps`. records + height ≤ steps implies height ≤ steps, so a site placed before `kernel/steps` would leave that site unable to refuse anything. The chain is journal → refusals → refusals-disjoint → steps → refusals-counted → rows → ….
+- `World.CodecFits` gains `refusalsCounted`. Decode direction: `world_decode_refusalsCounted`, `world_get_refusalsCounted`, the deployed twins, and `Host.Deployed.world_decode_countedOk`, which hands a decoded base `World.CountedOk`.
+- WorldTooth teeth: `world_reads_counted_charges`, `world_refuses_moved_charge`, `world_refuses_lowered_charge`, and `world_refuses_records_past_steps`, where `kernel/steps` passes and the new site refuses.
+- The vectors' drawn Worlds are counted. The boundary pair is a World with two charges for one member and one for another, then the same World with one charge moved; each is refused by its own site's name.
+- Vector families that moved: refusal-leaf, refusal-order, journal, refusals, refusals-disjoint, steps, world-budget, rows, rows-headed, rows-parented, host/base/index-count, and the new refusals-counted.
+- WASTE: no row moves. Refusal hash calls are counted calls, and the leaf is hashed once either way. `record-bytes-per-refusal` measures the log record, which is unchanged.
+
+**Critique.**
+- `kernel/steps` is now implied by `kernel/refusals-counted`: records + height ≤ steps gives height ≤ steps. It is kept on purpose. It is the earlier, cheaper check, and its name `steps` says exactly what a height-past-steps base got wrong. Under law 7 a refusal is answered by its own name, and `refusals-counted` would name the wrong thing. Both sites still refuse something: `world_refuses_height_past_steps` and `world_refuses_records_past_steps`.
+- The count leaves are now provably redundant with the records. They are kept as the O(1) read `checkRefusal` needs. The alternative, deriving a count by scanning the records, would put a scan on every recorded refusal. The check above is what keeps two shapes of one fact from drifting apart.
+- Vacuity read (K19-READER): LAND-WITH-FIXES, six items. Taken:
+  - (1) the `_exists` wording above;
+  - (2) `refusalsCounted_moved_sum`;
+  - (3) the tooth's docstring now claims only `RefusalsOk`;
+  - (4) the sim plant guards `f.id ≠ o`;
+  - (5) the price list above;
+  - (6) this critique's first bullet.
+
+## KERNEL-51 PROPOSED · The frame rule as one scheme: `Kernel/Proofs/Logic/Frame.lean` (KERNEL-19, 2026-10-19; ROOT, from PROOF-TECHNIQUE-20261019.md §3–4). DESIGN ONLY until ROOT rules.
+
+(Numbering: ROOT's message called this KERNEL-50. The refusalsCounted day took 50, so this is 51 and the head-read scheme is 52.)
+
+**Shape.** One proof-module (closure C3: the footprints are Props, never computable lists).
+- `inductive CellFoot (t : Turn D) : Slot D → Prop` with three constructors: `touched` (x ∈ t.touches, x.act ≠ .keep), `born` (c ∈ createdIds t), `spent` (n ∈ t.nullifiers).
+- `inductive RowFoot (t : Turn D) : RowSlot D → Prop` with three constructors: `slot` (x ∈ t.rows), `head` (the head of a touched row, a shared counter, inside the footprint), `dropped` (the heads of a retired parent: `dropHeads`).
+- `structure Frame E w w' t : Prop`:
+  - `cells : ∀ s, ¬ CellFoot t s → w'.trie.get s = w.trie.get s`, with NO premise;
+  - `rows : w.RowsCanon E → ∀ s, ¬ RowFoot t s → w'.rowAt E s = w.rowAt E s`;
+  - `journal : w.JournalCanon E → ∀ k, k ≠ t.txId → …` (`commit_journalAt`'s other half);
+  - `refusals : w.RefusalsCanon E → …` (the prune);
+  - `origin`, `allowance` / `height` / `steps` as equations.
+  Each trie-wide premise is a hypothesis of its own field, never of the structure: a flat conjunction would re-enact KERNEL-41 (a) one level up.
+- `admit_Frame : World.admit E w t = .ok w' → Frame E w w' t`.
+- `refuse_Frame`, with the empty cell and row footprints.
+- `not_cellFoot_iff`: the old inline hypotheses (`∀ x ∈ t.touches, x.cell = c → x.act = .keep` and `c ∉ createdIds t`) ↔ `¬ CellFoot t (.cell c)`. This is the reader's evidence that the footprint is not larger than the hand statements' hypotheses.
+
+**Verified, not assumed (read on main 8ad3982).**
+- The cells field needs zero premises. `commitTrie_entry` (Frame.lean:55) takes only the two footprint facts. Its proof is `commitTrie_cell` + `insertAll_get_of_not_mem`, which rest on `Trie.get_insert`, and that is premise-free because of KERNEL-49 amendment 1's `rep` check. Nullifier monotonicity (`commitTrie_spent`) is premise-free too.
+- The rows field needs `Canon (rowSpec E) 0` exactly where the landed lemma takes it: `rowStep_get_other` (Rows.lean:449), because retract and `dropHeads` are `retainAt`.
+- The journal field: `commit_journalAt` (Admit.lean:230) takes `JournalCanon`.
+- One correction to the scholar's sketch: `RowFoot.dropped` is right to name only heads, because `checkRowsRemain` refuses a retirement whose parent still holds a row. But that is a fact of `Checked`, so `admit_Frame` (which holds `Checked`) can use it, and a frame over bare `commit` could not.
+
+**Instances (statements and premise counts unchanged).**
+- Re-derived as one-liners from `admit_Frame`: `admit_frame`, `admit_rom`, `admit_nullifiers`.2 (0, 0, 0 invariants), and the ~22 hand restatements across Frame / RowsComm / RowsHead / Rows.
+- DELETED: RowsComm's private twins `commit_cell_frame`, `commitTrie_out`, `view_row_out`, plus the privates they carried.
+- `rowStep_get_other` stays as the per-step lemma the rows field is proved from.
+
+**Teeth.**
+- `cellFoot_needs_born`: with `born` removed, `.cells` is false on a concrete create turn.
+- `rowFoot_needs_head`: with `head` removed, `.rows` is false on a concrete insert.
+- Each is stated as a counterexample to the smaller footprint.
+
+**Price.**
+- No premise is added to any landed statement. `Lean proof-modules` +1 (a SIZE line). Theorems: net fall (−4 twins, −~9 RowsComm privates, +~7).
+- The module is a hub: it holds only the statements, the rule and the teeth, no corollaries, so that an edit to it rebuilds as little as possible.
+- The reader's check: no cells-side field takes a trie-wide premise.
+
+**Cost.** One lane, 1–2 days, serial.
+
+## KERNEL-52 PROPOSED · The head-read family as ONE authenticated-map scheme over `Trie.Spec`, instantiated per trie (KERNEL-19, 2026-10-19; ROOT, PROOF-TECHNIQUE §4.1 item 3). DESIGN ONLY.
+
+**Today.** The same chain of theorems is restated per trie:
+- `*_inclusion_sound`, `*_exclusion_sound`, `*_prove_verifies`, `*_prove_absent`;
+- `head_*_read`, `head_*_absent`, `*_coll_collision`, `*Digest_inj`;
+- the `deployed_*` forms.
+
+It appears in Cells.lean (cells), JournalHead.lean, RefusalsHead.lean (which calls itself "the twin of JournalHead"), RowsHead.lean, and RootedDeployed. The scholar counted three instances. There are FOUR: the rows' head reads in RowsHead.lean are the same chain.
+
+**Shape.**
+- `structure HeadInstance (E : Env D) where`:
+  - `K V`, `spec : Trie.Spec K V D`;
+  - `trieOf : World D → Trie.T K V D`;
+  - `rootIdx`: which of the four `rootsDigest` slots;
+  - `Fits : V → Prop`;
+  - `body_inj` (needs `hE`);
+  - `vdigest_inj : Fits v → Fits v' → vdigest v = vdigest v' → v = v' ∨ Collision`;
+  - `canonOf : World D → Prop`.
+- ONE family over it: inclusion/exclusion soundness at the World, prove_verifies / prove_absent, head read / head absent through `head_roots`, and the deployed forms through one `deployed_reach_*`.
+- The four tries become four records. The per-instance premises (`0 < n` for the journal, `RefusalLeaf.Fits`, the cell `InjOn`) stay in each record at the same strength.
+
+**Price.**
+- Every landed statement keeps its text as a one-line corollary (consumers in Protocol / Host / Client name them), so no premise spreads.
+- The theorem ratchet falls by roughly 45 → 8 + 4 records + the corollaries kept by name. The corollaries are a choice: deleting them moves every consumer's call site, which is a cross-layer day.
+- The reader reads eight statements once and four records.
+
+**Cost.** 2 lane-days. It should come AFTER KERNEL-51: both touch the head files and the hub metric.

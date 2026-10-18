@@ -152,25 +152,26 @@ def refusalSlot (dc : Stream D) : Stream (RefusalSlot D) :=
     (fun | ⟨0, i⟩ => some (.tx i) | ⟨1, (m, w)⟩ => some (.count m w))
     (fun | .tx i => ⟨0, i⟩ | .count m w => ⟨1, (m, w)⟩)
 
-abbrev RefusalLeafF : Fin 2 → Type
-  | 0 => Nat × Nat
+abbrev RefusalLeafF (D : Type) : Fin 2 → Type
+  | 0 => Nat × Nat × D
   | 1 => Nat
 
-def refusalLeafWire : (s : Fin 2) → Stream (RefusalLeafF s)
-  | 0 => product nat64 nat64
+def refusalLeafWire (dc : Stream D) : (s : Fin 2) → Stream (RefusalLeafF D s)
+  | 0 => product nat64 (product nat64 dc)
   | 1 => nat64
 
-/-- A refusals leaf: `refused h code` (0) or `count n` (1), its counters as u64. -/
-def refusalLeaf : Stream RefusalLeaf :=
-  refine "kernel/refusal-leaf" (choice 2 refusalLeafWire)
-    (fun | ⟨0, (h, c)⟩ => some (.refused h c) | ⟨1, n⟩ => some (.count n))
-    (fun | .refused h c => ⟨0, (h, c)⟩ | .count n => ⟨1, n⟩)
+/-- A refusals leaf: `refused h code member` (0: its counters as u64, then the charged member,
+KERNEL-50) or `count n` (1). -/
+def refusalLeaf (dc : Stream D) : Stream (RefusalLeaf D) :=
+  refine "kernel/refusal-leaf" (choice 2 (refusalLeafWire dc))
+    (fun | ⟨0, (h, c, m)⟩ => some (.refused h c m) | ⟨1, n⟩ => some (.count n))
+    (fun | .refused h c m => ⟨0, (h, c, m)⟩ | .count n => ⟨1, n⟩)
 
 /-- The refusals' trie, as its listing (`kernel/refusal-order`): at most `worldMax` entries on the wire
 (a reached World holds at most `Bounds.refusalsPerWindow` per member per window, three windows kept,
 and one count per member: KERNEL-44's bound, which the wire does not restate). -/
 def refusalsTrie [DecidableEq D] (E : Env D) (dc : Stream D) : Stream (Refusals D) :=
-  refine "kernel/refusal-order" (rawList worldMax (product (refusalSlot dc) refusalLeaf))
+  refine "kernel/refusal-order" (rawList worldMax (product (refusalSlot dc) (refusalLeaf dc)))
     (listingAccept (refusalSpec E)) Trie.T.toList
 
 /-! ## The rows (KERNEL-46/48)
@@ -232,13 +233,21 @@ def stepsWire [DecidableEq D] (E : Env D) (dc : Stream D) : Stream (WorldWire D)
   refine "kernel/steps" (disjointWire E dc)
     (fun x => if (ofWire x).height ≤ (ofWire x).steps then some x else none) id
 
+/-- The World's contents, refused by name unless its refusal counts are its records' (KERNEL-50's
+`refusalsCounted`: records plus height at most the step count, every count leaf the tally of its
+member's records this window, every member with a record this window counted; a fold never reaches
+another World, `fold_refusalsCounted`), so a decoded base cannot hold a lowered or moved charge. -/
+def countedWire [DecidableEq D] (E : Env D) (dc : Stream D) : Stream (WorldWire D) :=
+  refine "kernel/refusals-counted" (stepsWire E dc)
+    (fun x => if refusalsCounted E (ofWire x) then some x else none) id
+
 /-- The World's contents, refused by name unless every rows entry fits (KERNEL-48's `rowsFits`: each
 key holds the leaf of its kind, a relation below 256, a key of at most `Bounds.keyBytesMax` bytes, a
 head's limit at most `Bounds.rowsPerRelationMax`, its width at most `Bounds.keyBytesMax`, its count at
 most its limit, its sum at most its cap below 2^64, a row's amount below 2^64 and its value at most
 `Bounds.valueBytesMax`; the listing strictly ascending by `rowKeyBytes`). -/
 def rowsWire [DecidableEq D] (E : Env D) (dc : Stream D) : Stream (WorldWire D) :=
-  refine "kernel/rows" (stepsWire E dc)
+  refine "kernel/rows" (countedWire E dc)
     (fun x => if rowsFits E (ofWire x).rows.toList then some x else none) id
 
 /-- The World's contents, refused by name unless every row has its head, at the head's width, and
@@ -259,7 +268,7 @@ def parentedWire [DecidableEq D] (E : Env D) (dc : Stream D) : Stream (WorldWire
 /-- The checkpoint: the World's parts, in canonical order, refused `kernel/journal` unless its journal
 is the window's, `kernel/refusals` unless its refusals are, `kernel/refusals-disjoint` unless no
 transaction id is both refused and journaled, `kernel/steps` unless its height is at most
-its step count, `kernel/rows` unless every rows entry fits, `kernel/rows-headed` unless every head
+its step count, `kernel/refusals-counted` unless its refusal counts are its records', `kernel/rows` unless every rows entry fits, `kernel/rows-headed` unless every head
 counts its rows, `kernel/rows-parented` unless every relation's parent is live, and `kernel/world-budget` unless its storage (cells and rows, `World.weight`) plus
 allowance is below 2^64 (the bound genesis and carry check and admission conserves, KERNEL's
 `fold_budget_lt`; past it a retirement's credit would carry the allowance out of its `u64`, cv

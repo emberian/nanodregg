@@ -88,8 +88,8 @@ include hE hn in
 /-- **A refused receipt is not a committed call**: the id is absent from the World's journal, or a
 collision (a relay cannot turn a committed call into `refused`). -/
 theorem check_refused_uncommitted {w : World D} (hc : w.JournalCanon E)
-    {H : Nat} {txId : D} {nb : Nat} {r : Receipt D} {h code : Nat}
-    (hk : check E H (w.roots E) txId nb r = .ok (.refused h code)) :
+    {H : Nat} {txId : D} {nb : Nat} {r : Receipt D} {h code : Nat} {m : D}
+    (hk : check E H (w.roots E) txId nb r = .ok (.refused h code m)) :
     w.journalAt E txId = none ∨ Collision E.hash := by
   obtain ⟨-, hr, ha⟩ := check_ok hk
   unfold answerOf at ha
@@ -116,12 +116,12 @@ theorem refusalsOk_fits {w : World D} (hr : w.RefusalsOk E) :
     simp only [Codec.Kernel.RefusalLeaf.Fits] <;> (try cases hf) <;> omega
 
 include hE in
-/-- **A refused receipt is the World's recorded refusal**, its height and code, or a collision
+/-- **A refused receipt is the World's recorded refusal**, its height, code and charged member, or a collision
 (KERNEL's `refusal_inclusion_sound`): a relay cannot change what was recorded. -/
 theorem check_refused_sound {w : World D} (hr : w.RefusalsOk E)
-    {H : Nat} {txId : D} {nb : Nat} {r : Receipt D} {h code : Nat}
-    (hk : check E H (w.roots E) txId nb r = .ok (.refused h code)) :
-    w.refusalAt E (.tx txId) = some (.refused h code) ∨ Collision E.hash := by
+    {H : Nat} {txId : D} {nb : Nat} {r : Receipt D} {h code : Nat} {m : D}
+    (hk : check E H (w.roots E) txId nb r = .ok (.refused h code m)) :
+    w.refusalAt E (.tx txId) = some (.refused h code m) ∨ Collision E.hash := by
   obtain ⟨-, hrd, ha⟩ := check_ok hk
   unfold answerOf at ha
   split at ha
@@ -166,10 +166,10 @@ end Sound
 omit [Ord D] in
 /-- **A refused receipt's path verifies against the head's refusals root** for the recorded
 refusal it states, the head's roots opening to that root. -/
-theorem check_refused {E : Env D} {H : Nat} {roots txId : D} {nb : Nat} {r : Receipt D} {h code : Nat}
-    (hk : check E H roots txId nb r = .ok (.refused h code)) :
+theorem check_refused {E : Env D} {H : Nat} {roots txId : D} {nb : Nat} {r : Receipt D} {h code : Nat} {m : D}
+    (hk : check E H roots txId nb r = .ok (.refused h code m)) :
     rootsDigest E r.root r.jroot r.rroot r.rowsroot = roots ∧
-      Trie.verifyInclusion (refusalSpec E) r.rroot (.tx txId) (refusalDigest E (.refused h code)) r.rpath = true := by
+      Trie.verifyInclusion (refusalSpec E) r.rroot (.tx txId) (refusalDigest E (.refused h code m)) r.rpath = true := by
   obtain ⟨-, hr, ha⟩ := check_ok hk
   refine ⟨hr, ?_⟩
   unfold answerOf at ha
@@ -210,8 +210,8 @@ theorem check_build {E : Env D} {w : World D} {tx : D} {nb : Nat} (hc : w.Journa
       cases hrx : w.refusalAt E (.tx tx) with
       | some l =>
           cases l with
-          | refused h code =>
-              have ha : (build E w tx).answer = .refused h code := by simp [build, hjx, hrx]
+          | refused h code m =>
+              have ha : (build E w tx).answer = .refused h code m := by simp [build, hjx, hrx]
               rw [ha]
               simp only
               have hf := hr.2 _ _ hrx

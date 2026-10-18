@@ -1583,7 +1583,10 @@ def arm (st : State D) (name : String) (ok : Bool) (msg : String) : State D :=
   `refusal-rotate-plant`: classified by `keyRule` (which skips the key for `rotate`) it would be
   authenticated, and `World.refuse` would take one of the founder's slots.
 * `refusal-budget`: stale calls are recorded up to `Bounds.refusalsPerWindow`; the next is
-  `refusalBudget`, not recorded. -/
+  `refusalBudget`, not recorded.
+* `refusals-counted`: the Host's World passes `refusalsCounted` (KERNEL-50). PLANT
+  `refusals-counted-plant`: one of the founder's charges moved to another member, counts only; every
+  leaf still fits (`refusalsFits`) and `refusalsCounted` refuses it. -/
 def probeRefusals (P : Params D) (st : State D) (g : World D) : State D :=
   let X := P.ctx
   let E := P.env
@@ -1630,7 +1633,7 @@ def probeRefusals (P : Params D) (st : State D) (g : World D) : State D :=
     let (st, _) := submit P st (wr st o2 1 "x" (pinsNow st o2)) .ok "refusal-early-advance"
     let (st, _) := submit P st (wr st o2 1 "y" (pinsNow st o2)) .ok "refusal-early-advance"
     let earlyCode := (Verdict.rejected (D := D) .outsideWindow).code
-    let earlyRefusals := st.host.refusals.insert (refusalSpec E) (.tx (txIdOf X ce)) (.refused (H + 1) earlyCode)
+    let earlyRefusals := st.host.refusals.insert (refusalSpec E) (.tx (txIdOf X ce)) (.refused (H + 1) earlyCode (refusedOf X ce (.rejected .outsideWindow)).member)
     let early := { st.host with refusals := earlyRefusals }
     let st := match Receive.submit X early ce with
       | .error (.rejected (.refusedFinal _)) => meet st "refusal-early-plant:refusedFinal"
@@ -1669,6 +1672,20 @@ def probeRefusals (P : Params D) (st : State D) (g : World D) : State D :=
           arm st "refusal-budget:refusalBudget"
             (full && (st.host.refusalAt E (.tx (txIdOf X c17))).isNone) "the refusal past the budget was stored"
       | _ => failWith st "probe refusals: the refusal past the member's budget was not refused refusalBudget"
+    -- the counts are the records' (KERNEL-50): the Host's World passes `refusalsCounted`; the PLANT
+    -- moves one of the founder's charges to another member (counts only), which every leaf check
+    -- (`refusalsFits`) still admits and `refusalsCounted` refuses
+    let st := arm st "refusals-counted:counted" (refusalsCounted E st.host) "the Host's World fails refusalsCounted"
+    let w := st.host
+    let r₁ := w.refusals.insert (refusalSpec E) (.count f.id (refusalWindow w.height))
+      (.count (refusalCount E w f.id - 1))
+    let r₂ := r₁.insert (refusalSpec E) (.count o (refusalWindow w.height)) (.count (refusalCount E w o + 1))
+    let moved : World D := { w with refusals := r₂ }
+    let st := if f.id != o && 2 ≤ refusalCount E w f.id && refusalCount E w o < Bounds.refusalsPerWindow then
+        arm st "refusals-counted-plant:refused"
+          (refusalsFits moved.height moved.refusals.toList && !refusalsCounted E moved)
+          "a moved charge passed refusalsCounted (or the plant misfit refusalsFits)"
+      else failWith st "probe refusals: no member with two charges to move (the plant is blind)"
     st
   | _, _ => failWith st "probe refusals: the objects were not created"
 
@@ -2349,7 +2366,7 @@ def plantedArms : List String :=
    "refusal-early-refused:outsideWindow", "refusal-early:declined", "refusal-early-kernel:outsideWindow",
    "refusal-early-plant:refusedFinal", "refusal-early-window:ok", "refusal-rotate-stranger:notPrecommitted",
    "refusal-rotate-kept:declined", "refusal-rotate-plant:authenticated", "refusal-budget:refusalBudget",
-   "refusal-forged-code:eventMismatch",
+   "refusal-forged-code:eventMismatch", "refusals-counted:counted", "refusals-counted-plant:refused",
    "rows-insert:ok", "rows-keyTaken:keyTaken", "rows-relationCapped:relationCapped",
    "rows-relationFull:relationFull", "rows-retract:ok", "rows-retractForbidden:retractForbidden",
    "rows-rangeTooLong:rangeTooLong", "rows-range:ok", "rows-range-stale:stale", "rows-two-rains:both",

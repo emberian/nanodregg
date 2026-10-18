@@ -184,14 +184,16 @@ inductive RefusalSlot (D : Type)
   deriving DecidableEq
 
 /-- What the refusals trie holds: at a `tx` key, the height the call was refused AT (the World's
-height plus one, the height it would have been admitted at, as a journal entry's) and the
-refusal's code; at a `count` key, how many refusals the member has had recorded in that window. -/
-inductive RefusalLeaf
-  | refused (h code : Nat)
+height plus one, the height it would have been admitted at, as a journal entry's), the refusal's
+code, and the member it was charged to (KERNEL-50: so a window's count is a function of its
+records, `refusalsCounted`, and a receipt names WHO was charged); at a `count` key, how many
+refusals the member has had recorded in that window. -/
+inductive RefusalLeaf (D : Type)
+  | refused (h code : Nat) (member : D)
   | count (n : Nat)
   deriving DecidableEq
 
-abbrev Refusals (D : Type) := Trie.T (RefusalSlot D) RefusalLeaf D
+abbrev Refusals (D : Type) := Trie.T (RefusalSlot D) (RefusalLeaf D) D
 
 /-- The rows trie (KERNEL-46): heads and rows, under its own root. -/
 abbrev Rows (D : Type) := Trie.T (RowSlot D) RowLeaf D
@@ -290,7 +292,7 @@ def domLeaf : String := "nanodregg/kernel/trie-leaf/v1"
 digest is never a cell leaf's but by a collision. -/
 def domJournal : String := "nanodregg/kernel/journal-leaf/v1"
 /-- A refusals leaf's value digest (`refusalDigest`, KERNEL-44): a kind byte first. -/
-def domRefusal : String := "nanodregg/kernel/refusal-leaf/v1"
+def domRefusal : String := "nanodregg/kernel/refusal-leaf/v2"
 /-- A recorded refusal's digest in the chain (`refusedDigest`). -/
 def domRefused : String := "nanodregg/kernel/refused/v1"
 /-- The digest of a World's roots, the one value a head link commits of its state (KERNEL-46
@@ -405,16 +407,17 @@ def refusalKeyBytes (E : Env D) : RefusalSlot D → ByteArray
   | .count m win => ⟨#[1]⟩ ++ E.bytes m ++ Nanodregg.Codec.Stream.u64.bytes win
 
 /-- What a refusals leaf commits to: a kind byte (refused 0, count 1), then its counters as eight
-little-endian bytes each. -/
-def refusalLeafBytes : RefusalLeaf → ByteArray
-  | .refused h code => ⟨#[0]⟩ ++ Nanodregg.Codec.Stream.nat64.bytes h ++ Nanodregg.Codec.Stream.nat64.bytes code
+little-endian bytes each, then (refused) the charged member's bytes. -/
+def refusalLeafBytes (E : Env D) : RefusalLeaf D → ByteArray
+  | .refused h code m => ⟨#[0]⟩ ++ Nanodregg.Codec.Stream.nat64.bytes h ++ Nanodregg.Codec.Stream.nat64.bytes code ++
+      E.bytes m
   | .count n => ⟨#[1]⟩ ++ Nanodregg.Codec.Stream.nat64.bytes n
 
-def refusalDigest (E : Env D) (l : RefusalLeaf) : D := E.hash domRefusal (refusalLeafBytes l)
+def refusalDigest (E : Env D) (l : RefusalLeaf D) : D := E.hash domRefusal (refusalLeafBytes E l)
 
 /-- The refusals trie (KERNEL-44, KERNEL-47): routed by the key's bytes, most significant bit first,
 depth `Bounds.refusalDepth` (41 bytes); nodes in the one trie domain; leaves by `refusalDigest`. -/
-def refusalSpec (E : Env D) : Trie.Spec (RefusalSlot D) RefusalLeaf D where
+def refusalSpec (E : Env D) : Trie.Spec (RefusalSlot D) (RefusalLeaf D) D where
   bit k := byteBit (refusalKeyBytes E k)
   depth := Bounds.refusalDepth
   depth_lt := by decide
@@ -424,8 +427,8 @@ def refusalSpec (E : Env D) : Trie.Spec (RefusalSlot D) RefusalLeaf D where
   vdigest := refusalDigest E
 
 /-- A refusals key holds the leaf of its kind. -/
-def RefusalLeaf.fits {D : Type} : RefusalSlot D → RefusalLeaf → Bool
-  | .tx _, .refused _ _ => true
+def RefusalLeaf.fits {D : Type} : RefusalSlot D → RefusalLeaf D → Bool
+  | .tx _, .refused _ _ _ => true
   | .count _ _, .count _ => true
   | _, _ => false
 
@@ -617,7 +620,7 @@ def taken (E : Env D) (w : World D) (c : D) : Bool := (w.entry E c).isSome
 def journalAt (E : Env D) (w : World D) (k : D) : Option (Nat × D) := w.journal.get (journalSpec E) k
 
 /-- The refusals leaf at a key, if any. -/
-def refusalAt (E : Env D) (w : World D) (k : RefusalSlot D) : Option RefusalLeaf :=
+def refusalAt (E : Env D) (w : World D) (k : RefusalSlot D) : Option (RefusalLeaf D) :=
   w.refusals.get (refusalSpec E) k
 
 /-- Has the nullifier been spent? -/
@@ -749,7 +752,7 @@ def checkJournal (E : Env D) (w : World D) (t : Turn D) : Except (Reject D) Unit
   | some (h, _) => .error (.replayed h)
   | none =>
       match w.refusalAt E (.tx t.txId) with
-      | some (.refused _ code) => .error (.refusedFinal code)
+      | some (.refused _ code _) => .error (.refusedFinal code)
       | _ => .ok ()
 
 def noDup {α : Type} [Ord α] (l : List α) (e : α → Reject D) : Except (Reject D) Unit :=
@@ -1177,8 +1180,8 @@ def journalFits (height : Nat) (l : List (D × (Nat × D))) : Bool :=
 /-- One refusals leaf a World at `height` can hold (KERNEL-47): a refused call refused at a height at
 most `height + 1` and not yet due for pruning, a count of the current window between 1 and
 `Bounds.refusalsPerWindow`, every counter below `2^64`, and no other pairing. -/
-def refusalFits (height : Nat) : RefusalSlot D → RefusalLeaf → Bool
-  | .tx _, .refused h code => decide (1 ≤ h ∧ h ≤ height + 1 ∧
+def refusalFits (height : Nat) : RefusalSlot D → RefusalLeaf D → Bool
+  | .tx _, .refused h code _ => decide (1 ≤ h ∧ h ≤ height + 1 ∧
       height < h + 2 * Bounds.windowMax + height % Bounds.windowMax ∧ h < Bounds.counterLimit ∧
       code < Bounds.counterLimit)
   | .count _ win, .count n => decide (win = refusalWindow height ∧ 1 ≤ n ∧ n ≤ Bounds.refusalsPerWindow)
@@ -1190,7 +1193,7 @@ height at most `height + 1` (the World's height when it was recorded, plus one) 
 for pruning; a count is for the current window and between 1 and `Bounds.refusalsPerWindow`; every
 counter below `2^64`. It holds of every World a fold reaches (`fold_refusalsOk`), so a decoded base
 is refused unless it holds. One pass. -/
-def refusalsFits (height : Nat) (l : List (RefusalSlot D × RefusalLeaf)) : Bool :=
+def refusalsFits (height : Nat) (l : List (RefusalSlot D × RefusalLeaf D)) : Bool :=
   l.all fun p => refusalFits height p.1 p.2
 
 /-- No transaction id is both recorded refused and journaled (KERNEL-47; CODEC-8's ask): a fold never
@@ -1198,7 +1201,7 @@ reaches such a World (`fold_refusalsDisjoint`), so a decoded base is refused unl
 journal lookup per recorded refusal. -/
 def refusalsDisjoint (E : Env D) (w : World D) : Bool :=
   w.refusals.toList.all fun p => match p.1, p.2 with
-    | .tx id, .refused _ _ => (w.journalAt E id).isNone
+    | .tx id, .refused _ _ _ => (w.journalAt E id).isNone
     | _, _ => true
 
 /-- The journal after a checked turn: the turn's entry inserted at the new height, then pruned if
@@ -1209,9 +1212,9 @@ def commitJournal (E : Env D) (w : World D) (t : Turn D) : Journal D :=
 /-- Is a refusals leaf still kept at height `H` (KERNEL-44, KERNEL-47 amendment 5)? A refused call's
 leaf while `kept` (KERNEL-33's rule: it was refused at `h` inside its window, so it outlives every
 height it could be admitted at); a count only for the current window. -/
-def keptRefusal (H : Nat) : RefusalSlot D → RefusalLeaf → Bool
+def keptRefusal (H : Nat) : RefusalSlot D → RefusalLeaf D → Bool
   | .count _ win, _ => decide (win = refusalWindow H)
-  | _, .refused h _ => decide (H < h + 2 * Bounds.windowMax)
+  | _, .refused h _ _ => decide (H < h + 2 * Bounds.windowMax)
   | _, .count _ => false
 
 /-- The refusals at height `H`: pruned with the journal, at every multiple of `Bounds.windowMax`, by
@@ -1301,6 +1304,77 @@ def refusalCount (E : Env D) (w : World D) (m : D) : Nat :=
   | some (.count n) => n
   | _ => 0
 
+/-! ### The counts are a function of the records (KERNEL-50, cv 01a14da3-3e7a)
+
+A window's count leaves are a cache: what `checkRefusal` reads in one lookup instead of scanning
+the records. `refusalsCounted` is the check that the cache agrees with what it caches, so a decoded
+base cannot hold a count no history produces (a member's count lowered to reset its budget, or one
+member's charge moved to another). Every reached World passes it (`fold_refusalsCounted`), and a
+World that passes it has every count equal to its member's records this window
+(`refusalCount_eq_of_counted`). It does not authenticate the records themselves: which member a
+record names is what the chain binds, and what the member's receipt shows it. -/
+
+/-- 1 at a recorded refusal's entry, else 0: summed over a listing, the records it holds. -/
+def refusedOne : RefusalSlot D × RefusalLeaf D → Nat
+  | (.tx _, .refused _ _ _) => 1
+  | _ => 0
+
+/-- 1 at a refusal of `m` recorded in the window of height `H`, else 0. A leaf holds `h`, the height
+its World had plus one, so it was recorded in window `(h - 1) / windowMax`. -/
+def refusedIn [DecidableEq D] (H : Nat) (m : D) : RefusalSlot D × RefusalLeaf D → Nat
+  | (.tx _, .refused h _ m') =>
+      if m' = m ∧ (h - 1) / Bounds.windowMax = H / Bounds.windowMax then 1 else 0
+  | _ => 0
+
+/-- The map `refusalTally` counts in: the refusals' routing (so a lookup is one path), and no hash,
+no bytes (nothing reads its digests; `get` after `insert` is exact for any `Spec`). -/
+def tallySpec (E : Env D) (seed : D) : Trie.Spec (RefusalSlot D) (RefusalLeaf D) D where
+  bit := (refusalSpec E).bit
+  depth := (refusalSpec E).depth
+  depth_lt := (refusalSpec E).depth_lt
+  hash := fun _ => seed
+  dbytes := fun _ => ByteArray.empty
+  kbytes := fun _ => ByteArray.empty
+  vdigest := fun _ => seed
+
+/-- The count a tally holds at a key (0 where it holds none). -/
+def tallyAt [DecidableEq D] (E : Env D) (seed : D) (t : Refusals D) (k : RefusalSlot D) : Nat :=
+  match t.get (tallySpec E seed) k with
+  | some (.count n) => n
+  | _ => 0
+
+/-- One listed entry into the tally: a record of window `H / windowMax` bumps its member's count. -/
+def tallyStep [DecidableEq D] (E : Env D) (seed : D) (H : Nat) (t : Refusals D)
+    (p : RefusalSlot D × RefusalLeaf D) : Refusals D :=
+  match p with
+  | (.tx _, .refused h _ m) =>
+      if (h - 1) / Bounds.windowMax = H / Bounds.windowMax then
+        t.insert (tallySpec E seed) (.count m (refusalWindow H))
+          (.count (tallyAt E seed t (.count m (refusalWindow H)) + 1))
+      else t
+  | _ => t
+
+/-- Each member's records in the window of height `H`, counted from a listing: one pass, one path
+per record, no hash. -/
+def refusalTally [DecidableEq D] (E : Env D) (seed : D) (H : Nat) (l : List (RefusalSlot D × RefusalLeaf D)) :
+    Refusals D :=
+  l.foldl (tallyStep E seed H) .empty
+
+/-- **A World's refusal counts are its records'** (KERNEL-50): every record cost a step that did not
+raise the height (records + height ≤ steps); every count leaf is the tally of its member's records
+this window; and every member with a record this window has a count leaf. One pass to tally, one
+pass over the listing, one lookup per entry. CODEC's `kernel/refusals-counted` refusal. -/
+def refusalsCounted [DecidableEq D] (E : Env D) (w : World D) : Bool :=
+  let l := w.refusals.toList
+  let tally := refusalTally E w.chain w.height l
+  decide ((l.map refusedOne).sum + w.height ≤ w.steps) &&
+    l.all fun p => match p with
+      | (.count m win, .count n) => decide (tally.get (tallySpec E w.chain) (.count m win) = some (.count n))
+      | (.tx _, .refused h _ m) =>
+          !decide ((h - 1) / Bounds.windowMax = w.height / Bounds.windowMax) ||
+            (w.refusalAt E (.count m (refusalWindow w.height))).isSome
+      | _ => true
+
 /-- Every check a refusal record must pass, against the pre-state (KERNEL-44, KERNEL-47): bounded;
 the step counter below `2^64`; the call's window contains the height it would be admitted at (an
 early call's refusal is not final and is not recorded, a late call's is final by height); the
@@ -1316,13 +1390,13 @@ def checkRefusal (E : Env D) (w : World D) (r : Refused D) : Except (Reject D) U
   | some (h, _) => .error (.replayed h)
   | none =>
       match w.refusalAt E (.tx r.txId) with
-      | some (.refused _ code) => .error (.refusedFinal code)
+      | some (.refused _ code _) => .error (.refusedFinal code)
       | _ => req (refusalCount E w r.member < Bounds.refusalsPerWindow) .refusalBudget
 
 /-- The refusals after a checked refusal: its leaf at the transaction id, the member's count bumped.
 Two paths. -/
 def commitRefusals (E : Env D) (w : World D) (r : Refused D) : Refusals D :=
-  (w.refusals.insert (refusalSpec E) (.tx r.txId) (.refused (w.height + 1) r.code)).insert (refusalSpec E)
+  (w.refusals.insert (refusalSpec E) (.tx r.txId) (.refused (w.height + 1) r.code r.member)).insert (refusalSpec E)
     (.count r.member (refusalWindow w.height)) (.count (refusalCount E w r.member + 1))
 
 /-- The World after a checked refusal: only the refusals, the step counter and the chain move. The

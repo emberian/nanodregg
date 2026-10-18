@@ -24,7 +24,7 @@ variable {D : Type} [Ord D] [DecidableEq D]
 /-- Every check of a recorded refusal, as facts. -/
 theorem checkRefusal_facts {E : Env D} {w : World D} {r : Refused D} (h : checkRefusal E w r = .ok ()) :
     checkRefusedBounds r = .ok () ∧ r.notBefore ≤ w.height + 1 ∧ w.height + 1 ≤ r.validUntil ∧
-      w.journalAt E r.txId = none ∧ (∀ hh code, w.refusalAt E (.tx r.txId) ≠ some (.refused hh code)) ∧
+      w.journalAt E r.txId = none ∧ (∀ hh code mb, w.refusalAt E (.tx r.txId) ≠ some (.refused hh code mb)) ∧
       refusalCount E w r.member < Bounds.refusalsPerWindow := by
   unfold checkRefusal at h
   simp only [except_bind_ok] at h
@@ -39,19 +39,19 @@ theorem checkRefusal_facts {E : Env D} {w : World D} {r : Refused D} (h : checkR
       cases hr : w.refusalAt E (.tx r.txId) with
       | none =>
           rw [hr] at h
-          refine ⟨rfl, fun hh code he => ?_, by simpa using req_ok.mp h⟩
+          refine ⟨rfl, fun hh code mb he => ?_, by simpa using req_ok.mp h⟩
           simp at he
       | some l =>
           rw [hr] at h
           cases l with
-          | refused hh code => simp at h
+          | refused hh code mb => simp at h
           | count n =>
-              refine ⟨rfl, fun hh code he => ?_, by simpa using req_ok.mp h⟩
+              refine ⟨rfl, fun hh code mb he => ?_, by simpa using req_ok.mp h⟩
               simp at he
 
 theorem refuse_facts {E : Env D} {w w' : World D} {r : Refused D} (h : World.refuse E w r = .ok w') :
     checkRefusedBounds r = .ok () ∧ r.notBefore ≤ w.height + 1 ∧ w.height + 1 ≤ r.validUntil ∧
-      w.journalAt E r.txId = none ∧ (∀ hh code, w.refusalAt E (.tx r.txId) ≠ some (.refused hh code)) ∧
+      w.journalAt E r.txId = none ∧ (∀ hh code mb, w.refusalAt E (.tx r.txId) ≠ some (.refused hh code mb)) ∧
       refusalCount E w r.member < Bounds.refusalsPerWindow :=
   checkRefusal_facts (refuse_ok h).1
 
@@ -101,7 +101,7 @@ theorem refuse_refusalAt {E : Env D} {w w' : World D} {r : Refused D} (h : World
     (k : RefusalSlot D) :
     w'.refusalAt E k =
       if k = .count r.member (refusalWindow w.height) then some (.count (refusalCount E w r.member + 1))
-      else if k = .tx r.txId then some (.refused (w.height + 1) r.code)
+      else if k = .tx r.txId then some (.refused (w.height + 1) r.code r.member)
       else w.refusalAt E k := by
   obtain ⟨_, rfl⟩ := refuse_ok h
   unfold World.refusalAt
@@ -153,7 +153,7 @@ theorem windowMax_pos : 0 < Bounds.windowMax := by decide
 
 omit [Ord D] [DecidableEq D] in
 /-- One height on, a leaf that fits still fits, unless this height prunes it. -/
-theorem refusalFits_succ {H : Nat} {k : RefusalSlot D} {l : RefusalLeaf} (hf : refusalFits H k l = true)
+theorem refusalFits_succ {H : Nat} {k : RefusalSlot D} {l : RefusalLeaf D} (hf : refusalFits H k l = true)
     (hk : (H + 1) % Bounds.windowMax = 0 → keptRefusal (H + 1) k l = true) :
     refusalFits (H + 1) k l = true := by
   cases k <;> cases l <;> simp only [refusalFits, decide_eq_true_eq, Bool.false_eq_true] at hf ⊢
@@ -299,15 +299,15 @@ theorem fold_member_refusals_le {E : Env D} {w w' : World D} {l : List (Step D)}
 
 /-- Every recorded refusal's transaction id is unjournaled. -/
 def World.RefusalsDisjoint (E : Env D) (w : World D) : Prop :=
-  ∀ id hh code, w.refusalAt E (.tx id) = some (.refused hh code) → w.journalAt E id = none
+  ∀ id hh code mb, w.refusalAt E (.tx id) = some (.refused hh code mb) → w.journalAt E id = none
 
 theorem refusalsDisjoint_iff {E : Env D} {w : World D} (hc : w.RefusalsCanon E) :
     refusalsDisjoint E w = true ↔ w.RefusalsDisjoint E := by
   unfold refusalsDisjoint World.RefusalsDisjoint
   rw [List.all_eq_true]
   constructor
-  · intro h id hh code hr
-    have := h (.tx id, .refused hh code) ((Trie.mem_toList (refusalSpec E) 0 w.refusals hc.1 _ _).mpr hr)
+  · intro h id hh code mb hr
+    have := h (.tx id, .refused hh code mb) ((Trie.mem_toList (refusalSpec E) 0 w.refusals hc.1 _ _).mpr hr)
     simpa using this
   · intro h p hp
     obtain ⟨k, l⟩ := p
@@ -315,37 +315,37 @@ theorem refusalsDisjoint_iff {E : Env D} {w : World D} (hc : w.RefusalsCanon E) 
     | count m win => cases l <;> rfl
     | tx id =>
         cases l with
-        | refused hh code =>
+        | refused hh code mb =>
             have hg := (Trie.mem_toList (refusalSpec E) 0 w.refusals hc.1 _ _).mp hp
-            simp [h id hh code hg]
+            simp [h id hh code mb hg]
         | count n => rfl
 
 theorem genesis_refusalsDisjoint (E : Env D) (o : D) (a : Nat) : (World.genesis E o a).RefusalsDisjoint E :=
-  fun _ _ _ h => by simp [World.refusalAt, World.genesis, Trie.get_empty] at h
+  fun _ _ _ _ h => by simp [World.refusalAt, World.genesis, Trie.get_empty] at h
 
 theorem admit_refusalsDisjoint {E : Env D} {w w' : World D} {t : Turn D} (hc : w.RefusalsCanon E)
     (hjc : w.JournalCanon E) (hd : w.RefusalsDisjoint E) (h : World.admit E w t = .ok w') :
     w'.RefusalsDisjoint E := by
-  intro id hh code hr
-  have hr₀ : w.refusalAt E (.tx id) = some (.refused hh code) := by
+  intro id hh code mb hr
+  have hr₀ : w.refusalAt E (.tx id) = some (.refused hh code mb) := by
     rw [admit_refusalAt hc h] at hr
     split at hr
     · exact (Option.filter_eq_some_iff.mp hr).1
     · exact hr
-  have hne : id ≠ t.txId := fun he => by subst he; exact admit_not_refused h hh code hr₀
+  have hne : id ≠ t.txId := fun he => by subst he; exact admit_not_refused h hh code mb hr₀
   obtain ⟨_, _, rfl⟩ := admit_ok h
-  rw [commit_journalAt hjc, if_neg hne, hd id hh code hr₀]
+  rw [commit_journalAt hjc, if_neg hne, hd id hh code mb hr₀]
   split <;> rfl
 
 theorem refuse_refusalsDisjoint {E : Env D} {w w' : World D} {r : Refused D} (hd : w.RefusalsDisjoint E)
     (h : World.refuse E w r = .ok w') : w'.RefusalsDisjoint E := by
-  intro id hh code hr
+  intro id hh code mb hr
   obtain ⟨-, -, -, hj, -, -⟩ := refuse_facts h
   rw [refuse_journalAt h]
   rw [refuse_refusalAt h, if_neg (by simp)] at hr
   split at hr
   · rename_i he; cases he; exact hj
-  · exact hd id hh code hr
+  · exact hd id hh code mb hr
 
 /-- **A fold never reaches a World holding one transaction id both refused and journaled.** -/
 theorem fold_refusalsDisjoint {E : Env D} {w w' : World D} {l : List (Step D)} (hc : w.RefusalsCanon E)
@@ -366,7 +366,7 @@ private def plantRefusalKeyBytes (E : Env D) : RefusalSlot D → ByteArray
   | .tx id => E.bytes id ++ Nanodregg.Codec.Stream.nat64.bytes 0
   | .count m win => E.bytes m ++ Nanodregg.Codec.Stream.u64.bytes win
 
-private def plantRefusalSpec (E : Env D) : Trie.Spec (RefusalSlot D) RefusalLeaf D :=
+private def plantRefusalSpec (E : Env D) : Trie.Spec (RefusalSlot D) (RefusalLeaf D) D :=
   { refusalSpec E with bit := fun k => byteBit (plantRefusalKeyBytes E k), kbytes := plantRefusalKeyBytes E }
 
 omit [Ord D] [DecidableEq D] in
@@ -381,19 +381,19 @@ theorem plant_refusals_unseparated (E : Env D) (d : D) : ¬ Trie.Separates (plan
 
 /-- A recorded refusal stays, and its transaction id stays unjournaled, across a fold that stays
 below the refusal's prune height. -/
-theorem fold_refused_retains {E : Env D} {k : D} {hh code : Nat} :
+theorem fold_refused_retains {E : Env D} {k : D} {hh code : Nat} {mb : D} :
     ∀ {w w' : World D} {l : List (Step D)}, w.RefusalsCanon E → w.JournalCanon E →
-      World.fold E w l = .ok w' → w.refusalAt E (.tx k) = some (.refused hh code) →
+      World.fold E w l = .ok w' → w.refusalAt E (.tx k) = some (.refused hh code mb) →
       w.journalAt E k = none → w'.height < hh + 2 * Bounds.windowMax →
-      w'.refusalAt E (.tx k) = some (.refused hh code) ∧ w'.journalAt E k = none
+      w'.refusalAt E (.tx k) = some (.refused hh code mb) ∧ w'.journalAt E k = none
   | w, w', [], _, _, h, hr, hj, _ => by simp [World.fold] at h; subst h; exact ⟨hr, hj⟩
   | w, w', .turn t :: rest, hc, hjc, h, hr, hj, hlt => by
       obtain ⟨w₁, h₁, h₂⟩ := fold_cons_ok.mp h
       have hne : t.txId ≠ k := fun he => by
-        subst he; exact admit_not_refused h₁ hh code hr
+        subst he; exact admit_not_refused h₁ hh code mb hr
       have hh₂ := fold_height h₂
       have hh₁ := admit_height h₁
-      have hr₁ : w₁.refusalAt E (.tx k) = some (.refused hh code) := by
+      have hr₁ : w₁.refusalAt E (.tx k) = some (.refused hh code mb) := by
         rw [admit_refusalAt hc h₁, hr]
         split
         · simp only [Option.filter, keptRefusal, decide_eq_true_eq]
@@ -407,8 +407,8 @@ theorem fold_refused_retains {E : Env D} {k : D} {hh code : Nat} :
   | w, w', .refusal r :: rest, hc, hjc, h, hr, hj, hlt => by
       obtain ⟨w₁, h₁, h₂⟩ := fold_cons_ok.mp h
       obtain ⟨-, -, -, -, hnot, -⟩ := refuse_facts h₁
-      have hne : r.txId ≠ k := fun he => by subst he; exact hnot hh code hr
-      have hr₁ : w₁.refusalAt E (.tx k) = some (.refused hh code) := by
+      have hne : r.txId ≠ k := fun he => by subst he; exact hnot hh code mb hr
+      have hr₁ : w₁.refusalAt E (.tx k) = some (.refused hh code mb) := by
         rw [refuse_refusalAt h₁, if_neg (by simp), if_neg (by simp [Ne.symm hne]), hr]
       have hjc₁ : w₁.JournalCanon E := by
         unfold World.JournalCanon; rw [(refuse_frame h₁).2.1]; exact hjc

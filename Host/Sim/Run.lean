@@ -601,7 +601,7 @@ def refusalPlants (seed : Nat) (failures : IO.Ref Nat) : IO Unit := do
     (match opened with
      | .ok o => sameWorld o.opened.world w && o.opened.world.steps = 33 &&
          ids.all fun id => match o.opened.world.refusalAt env (.tx id) with
-           | some (.refused _ 3) => true
+           | some (.refused _ 3 _) => true
            | _ => false
      | .error _ => false) failures
   -- plant-steps-differ: the same reopen, its World's step count one off

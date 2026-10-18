@@ -228,7 +228,7 @@ theorem commit_refusals {E : Env D} {w : World D} {t : Turn D} {posts : List (Po
 
 theorem commitRefusal_refusals {E : Env D} {w : World D} {r : Refused D} :
     (commitRefusal E w r).refusals =
-      (w.refusals.insert (refusalSpec E) (.tx r.txId) (.refused (w.height + 1) r.code)).insert (refusalSpec E)
+      (w.refusals.insert (refusalSpec E) (.tx r.txId) (.refused (w.height + 1) r.code r.member)).insert (refusalSpec E)
         (.count r.member (refusalWindow w.height)) (.count (refusalCount E w r.member + 1)) := rfl
 
 theorem admit_refusalsCanon {E : Env D} {w w' : World D} {t : Turn D} (hc : w.RefusalsCanon E)
@@ -259,8 +259,8 @@ theorem genesis_refusalsCanon (E : Env D) (o : D) (a : Nat) : (World.genesis E o
 
 /-- **A transaction id that holds a recorded refusal is refused `refusedFinal`, never admitted**
 (KERNEL-44, KERNEL-47 amendment 6): whatever its pins now see (a pin that returned A→B→A included). -/
-theorem admit_refusedFinal {E : Env D} {w : World D} {t : Turn D} {h code : Nat}
-    (hr : w.refusalAt E (.tx t.txId) = some (.refused h code)) :
+theorem admit_refusedFinal {E : Env D} {w : World D} {t : Turn D} {h code : Nat} {mb : D}
+    (hr : w.refusalAt E (.tx t.txId) = some (.refused h code mb)) :
     ∀ w', World.admit E w t ≠ .ok w' := by
   intro w' ha
   obtain ⟨_, hc, _⟩ := admit_ok ha
@@ -272,13 +272,13 @@ theorem admit_refusedFinal {E : Env D} {w : World D} {t : Turn D} {h code : Nat}
 
 /-- An admitted transaction id held no recorded refusal. -/
 theorem admit_not_refused {E : Env D} {w w' : World D} {t : Turn D} (ha : World.admit E w t = .ok w') :
-    ∀ h code, w.refusalAt E (.tx t.txId) ≠ some (.refused h code) :=
-  fun _ _ hr => admit_refusedFinal hr w' ha
+    ∀ h code mb, w.refusalAt E (.tx t.txId) ≠ some (.refused h code mb) :=
+  fun _ _ _ hr => admit_refusedFinal hr w' ha
 
 /-- A recorded refusal is recorded: after `refuse`, its transaction id holds `refused (H + 1) code`
 (on any refusals trie: the two inserts are at different keys). -/
 theorem refuse_recorded {E : Env D} {w w' : World D} {r : Refused D} (h : World.refuse E w r = .ok w') :
-    w'.refusalAt E (.tx r.txId) = some (.refused (w.height + 1) r.code) := by
+    w'.refusalAt E (.tx r.txId) = some (.refused (w.height + 1) r.code r.member) := by
   obtain ⟨_, rfl⟩ := refuse_ok h
   unfold World.refusalAt
   rw [commitRefusal_refusals]

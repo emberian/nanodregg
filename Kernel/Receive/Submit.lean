@@ -23,7 +23,7 @@ variable {D : Type} [Ord D] [DecidableEq D]
 /-- A recorded refusal answers its transaction id with its code, without re-deriving (KERNEL-44). -/
 def refusedAnswer (X : Ctx D) (w : World D) (c : Call D) : Option Nat :=
   match w.refusalAt X.env (.tx (txIdOf X c)) with
-  | some (.refused _ code) => some code
+  | some (.refused _ code _) => some code
   | _ => none
 
 /-- Judge a signed call: journal first (an exact retry is `replayed`), then the recorded refusals (a

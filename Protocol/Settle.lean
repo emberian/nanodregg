@@ -91,7 +91,7 @@ inductive Verdict (D : Type)
 `validUntil`; `forgets` is `journalForgets height notBefore`. -/
 def ofReceipt (forgets : Bool) (height validUntil : Nat) : Receipt.Answer D → Verdict D
   | .committed h td => .committed h td
-  | .refused h code => if validUntil ≤ h + 2 * Kernel.Bounds.windowMax then .refused code else .open
+  | .refused h code _ => if validUntil ≤ h + 2 * Kernel.Bounds.windowMax then .refused code else .open
   | .absent =>
       if forgets then .forgotten
       else if validUntil ≤ height then .expired

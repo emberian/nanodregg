@@ -41,30 +41,35 @@ variable {D : Type} [Ord D] [DecidableEq D]
 theorem nat64_bytes_size (x : Nat) : (Nanodregg.Codec.Stream.nat64.bytes x).size = 8 := by
   rw [Nanodregg.Codec.Stream.nat64_bytes]; rfl
 
-/-- A refusals leaf's bytes determine it, on the leaf codec's domain (every counter below 2^64). -/
-theorem refusalLeafBytes_inj {v v' : RefusalLeaf} (hv : Codec.Kernel.RefusalLeaf.Fits v)
-    (hv' : Codec.Kernel.RefusalLeaf.Fits v') (h : refusalLeafBytes v = refusalLeafBytes v') : v = v' := by
+omit [DecidableEq D] in
+/-- A refusals leaf's bytes determine it, on the leaf codec's domain (every counter below 2^64) and
+a lawful `Env` (the charged member's bytes, KERNEL-50). -/
+theorem refusalLeafBytes_inj {E : Env D} {n : Nat} (hE : E.Lawful n) {v v' : RefusalLeaf D}
+    (hv : Codec.Kernel.RefusalLeaf.Fits v) (hv' : Codec.Kernel.RefusalLeaf.Fits v')
+    (h : refusalLeafBytes E v = refusalLeafBytes E v') : v = v' := by
   have h0 : (⟨#[0]⟩ : ByteArray).size = 1 := rfl
   have h1 : (⟨#[1]⟩ : ByteArray).size = 1 := rfl
   cases v with
-  | refused a c =>
+  | refused a c m =>
       cases v' with
-      | refused a' c' =>
+      | refused a' c' m' =>
           simp only [Codec.Kernel.RefusalLeaf.Fits] at hv hv'
           simp only [refusalLeafBytes] at h
-          obtain ⟨hh, hc⟩ := bytes_append_inj h (by simp only [ByteArray.size_append, nat64_bytes_size])
+          obtain ⟨hac, hm⟩ := bytes_append_inj h
+            (by simp only [ByteArray.size_append, nat64_bytes_size, h0])
+          obtain ⟨hh, hc⟩ := bytes_append_inj hac (by simp only [ByteArray.size_append, nat64_bytes_size])
           obtain ⟨-, ha⟩ := bytes_append_inj hh rfl
           rw [Nanodregg.Codec.Stream.nat64_lawfulOn.bytes_injective hv.1 hv'.1 ha,
-            Nanodregg.Codec.Stream.nat64_lawfulOn.bytes_injective hv.2 hv'.2 hc]
+            Nanodregg.Codec.Stream.nat64_lawfulOn.bytes_injective hv.2 hv'.2 hc, hE.bytes_inj hm]
       | count n' =>
           have := congrArg ByteArray.size h
-          simp only [refusalLeafBytes, ByteArray.size_append, nat64_bytes_size, h0, h1] at this
+          simp only [refusalLeafBytes, ByteArray.size_append, nat64_bytes_size, h0, h1, hE.size] at this
           omega
-  | count n =>
+  | count k =>
       cases v' with
-      | refused a' c' =>
+      | refused a' c' m' =>
           have := congrArg ByteArray.size h
-          simp only [refusalLeafBytes, ByteArray.size_append, nat64_bytes_size, h0, h1] at this
+          simp only [refusalLeafBytes, ByteArray.size_append, nat64_bytes_size, h0, h1, hE.size] at this
           omega
       | count n' =>
           simp only [Codec.Kernel.RefusalLeaf.Fits] at hv hv'
@@ -72,14 +77,14 @@ theorem refusalLeafBytes_inj {v v' : RefusalLeaf} (hv : Codec.Kernel.RefusalLeaf
           obtain ⟨-, hn⟩ := bytes_append_inj h rfl
           rw [Nanodregg.Codec.Stream.nat64_lawfulOn.bytes_injective hv hv' hn]
 
-omit [Ord D] [DecidableEq D] in
-/-- **A refusals leaf digest determines its leaf** on the leaf codec's domain, or the hash collides
-in `domRefusal`. No premise on the `Env`. -/
-theorem refusalDigest_inj {E : Env D} {v v' : RefusalLeaf} (hv : Codec.Kernel.RefusalLeaf.Fits v)
+omit [DecidableEq D] in
+/-- **A refusals leaf digest determines its leaf** on the leaf codec's domain and a lawful `Env`, or
+the hash collides in `domRefusal`. -/
+theorem refusalDigest_inj {E : Env D} {n : Nat} (hE : E.Lawful n) {v v' : RefusalLeaf D} (hv : Codec.Kernel.RefusalLeaf.Fits v)
     (hv' : Codec.Kernel.RefusalLeaf.Fits v') (h : refusalDigest E v = refusalDigest E v') :
     v = v' ∨ Collision E.hash := by
-  by_cases hb : refusalLeafBytes v = refusalLeafBytes v'
-  · exact .inl (refusalLeafBytes_inj hv hv' hb)
+  by_cases hb : refusalLeafBytes E v = refusalLeafBytes E v'
+  · exact .inl (refusalLeafBytes_inj hE hv hv' hb)
   · exact .inr ⟨domRefusal, _, _, hb, h⟩
 
 omit [DecidableEq D] in
@@ -136,7 +141,7 @@ theorem fold_refusalsCanon {E : Env D} {w w' : World D} {l : List (Step D)} (hc 
 
 /-- **A World proves every refusals leaf it holds.** -/
 theorem refusal_prove_verifies {E : Env D} {w : World D} (hc : w.RefusalsCanon E) {k : RefusalSlot D}
-    {v : RefusalLeaf} (hg : w.refusalAt E k = some v) :
+    {v : RefusalLeaf D} (hg : w.refusalAt E k = some v) :
     Trie.verifyInclusion (refusalSpec E) (w.refusalsRoot E) k (refusalDigest E v)
       (w.refusals.prove (refusalSpec E) k) = true :=
   Trie.prove_includes (refusalSpec E) hc.2.1 (Trie.shallow_of_shape _ 0 _ hc.2.2) hg
@@ -157,12 +162,12 @@ include hE in
 the World's leaf, or a collision. -/
 theorem refusal_inclusion_sound {w : World D} (hc : w.RefusalsCanon E)
     (hfit : ∀ k v, w.refusalAt E k = some v → Codec.Kernel.RefusalLeaf.Fits v) {k : RefusalSlot D}
-    {v : RefusalLeaf} (hv : Codec.Kernel.RefusalLeaf.Fits v) {p : Trie.Proof (RefusalSlot D) D}
+    {v : RefusalLeaf D} (hv : Codec.Kernel.RefusalLeaf.Fits v) {p : Trie.Proof (RefusalSlot D) D}
     (hp : Trie.verifyInclusion (refusalSpec E) (w.refusalsRoot E) k (refusalDigest E v) p = true) :
     w.refusalAt E k = some v ∨ Collision E.hash := by
   rcases Trie.inclusion_sound (refusalSpec E) (refusalBody_inj hE) (dbytes_pair_inj hE) hc.2.1 hc.1 hp
     with ⟨v', hg, hd⟩ | c
-  · rcases refusalDigest_inj (hfit k v' hg) hv hd with rfl | c
+  · rcases refusalDigest_inj hE (hfit k v' hg) hv hd with rfl | c
     · exact .inl hg
     · exact .inr c
   · exact .inr (refusal_coll_collision c)
@@ -186,7 +191,7 @@ in that World's refusals, or a collision. -/
 theorem head_refusal_read {w w' : World D} {s : Step D} (hw : w.RefusalsOk E)
     (h : World.step E w s = .ok w') {prev td rd root' jroot' rroot' wroot' : D} {g : UInt8}
     (hhead : headLink E prev g td rd = w'.chain) (hrd : rootsDigest E root' jroot' rroot' wroot' = rd)
-    {k : RefusalSlot D} {v : RefusalLeaf} (hv : Codec.Kernel.RefusalLeaf.Fits v)
+    {k : RefusalSlot D} {v : RefusalLeaf D} (hv : Codec.Kernel.RefusalLeaf.Fits v)
     {p : Trie.Proof (RefusalSlot D) D}
     (hp : Trie.verifyInclusion (refusalSpec E) rroot' k (refusalDigest E v) p = true) :
     w'.refusalAt E k = some v ∨ Collision E.hash := by
@@ -244,7 +249,7 @@ theorem head_refused_retained {w₀ w₁ w₂ : World D} {r : Refused D} {l : Li
     {prev td rd root' jroot' rroot' wroot' : D} {g : UInt8}
     (hhead : headLink E prev g td rd = w₂.chain) (hrd : rootsDigest E root' jroot' rroot' wroot' = rd) :
     (rroot' = w₂.refusalsRoot E ∧
-      Trie.verifyInclusion (refusalSpec E) rroot' (.tx r.txId) (refusalDigest E (.refused (w₀.height + 1) r.code))
+      Trie.verifyInclusion (refusalSpec E) rroot' (.tx r.txId) (refusalDigest E (.refused (w₀.height + 1) r.code r.member))
         (w₂.refusals.prove (refusalSpec E) (.tx r.txId)) = true) ∨ Collision E.hash := by
   obtain ⟨-, -, -, hj, -, -⟩ := refuse_facts h₁
   have hjc₁ : w₁.JournalCanon E := by
@@ -285,7 +290,7 @@ include hE in
 /-- TOOTH (`refusal_inclusion_sound`): **a verifier accepting a wrong leaf refutes**. If the World
 holds `v'` at `k`, a proof that verifies `v ≠ v'` at `k` against its root is a collision. -/
 theorem refusal_inclusion_wrong_leaf {w : World D} (hw : w.RefusalsOk E) {k : RefusalSlot D}
-    {v v' : RefusalLeaf} (hg : w.refusalAt E k = some v') (hne : v ≠ v')
+    {v v' : RefusalLeaf D} (hg : w.refusalAt E k = some v') (hne : v ≠ v')
     (hv : Codec.Kernel.RefusalLeaf.Fits v) {p : Trie.Proof (RefusalSlot D) D}
     (hp : Trie.verifyInclusion (refusalSpec E) (w.refusalsRoot E) k (refusalDigest E v) p = true) :
     Collision E.hash := by
@@ -298,7 +303,7 @@ include hE in
 World's own proof of its leaf at `k`, presented at a key `k'` the World does not hold, is a
 collision. -/
 theorem refusal_inclusion_other_key {w : World D} (hw : w.RefusalsOk E) {k k' : RefusalSlot D}
-    {v : RefusalLeaf} (hg : w.refusalAt E k = some v) (hg' : w.refusalAt E k' = none)
+    {v : RefusalLeaf D} (hg : w.refusalAt E k = some v) (hg' : w.refusalAt E k' = none)
     (hp : Trie.verifyInclusion (refusalSpec E) (w.refusalsRoot E) k' (refusalDigest E v)
       (w.refusals.prove (refusalSpec E) k) = true) : Collision E.hash := by
   rcases refusal_inclusion_sound hE hw.1 (refusalsOk_fits hw) (refusalsOk_fits hw k v hg) hp with h | c
@@ -308,7 +313,7 @@ theorem refusal_inclusion_other_key {w : World D} (hw : w.RefusalsOk E) {k k' : 
 include hE in
 /-- TOOTH (`refusal_exclusion_sound`): **a held key proved absent refutes.** -/
 theorem refusal_exclusion_held {w : World D} (hc : w.RefusalsCanon E) {k : RefusalSlot D}
-    {v : RefusalLeaf} (hg : w.refusalAt E k = some v) {p : Trie.Proof (RefusalSlot D) D}
+    {v : RefusalLeaf D} (hg : w.refusalAt E k = some v) {p : Trie.Proof (RefusalSlot D) D}
     (hp : Trie.verifyExclusion (refusalSpec E) (w.refusalsRoot E) k p = true) : Collision E.hash := by
   rcases refusal_exclusion_sound hE hc hp with h | c
   · rw [hg] at h; cases h
@@ -318,9 +323,9 @@ end Sound
 
 omit [Ord D] [DecidableEq D] in
 /-- PLANT (the claimed leaf's bound): past 2^64 a refusals leaf digest wraps, with no collision.
-`.refused (2^64) c` and `.refused 0 c` have one digest under any `Env`. -/
-theorem refusalDigest_wraps (E : Env D) (c : Nat) :
-    refusalDigest E (.refused (2 ^ 64) c) = refusalDigest E (.refused 0 c) := by
+`.refused (2^64) c m` and `.refused 0 c m` have one digest under any `Env`. -/
+theorem refusalDigest_wraps (E : Env D) (c : Nat) (m : D) :
+    refusalDigest E (.refused (2 ^ 64) c m) = refusalDigest E (.refused 0 c m) := by
   have : Nanodregg.Codec.Stream.nat64.bytes (2 ^ 64) = Nanodregg.Codec.Stream.nat64.bytes 0 := by
     rw [Nanodregg.Codec.Stream.nat64_bytes, Nanodregg.Codec.Stream.nat64_bytes]
     congr 1
@@ -332,10 +337,10 @@ canonical World holding `.refused 0 c` at `k`, the World's own proof verifies th
 `.refused (2^64) c` at `k`, which the World does not hold: dropping `hv`, the first disjunct is false
 with no collision in sight. -/
 theorem refusal_inclusion_unbounded {E : Env D} {w : World D} (hc : w.RefusalsCanon E)
-    {k : RefusalSlot D} {c : Nat} (hg : w.refusalAt E k = some (.refused 0 c)) :
-    Trie.verifyInclusion (refusalSpec E) (w.refusalsRoot E) k (refusalDigest E (.refused (2 ^ 64) c))
+    {k : RefusalSlot D} {c : Nat} {m : D} (hg : w.refusalAt E k = some (.refused 0 c m)) :
+    Trie.verifyInclusion (refusalSpec E) (w.refusalsRoot E) k (refusalDigest E (.refused (2 ^ 64) c m))
         (w.refusals.prove (refusalSpec E) k) = true ∧
-      w.refusalAt E k ≠ some (.refused (2 ^ 64) c) := by
+      w.refusalAt E k ≠ some (.refused (2 ^ 64) c m) := by
   refine ⟨by rw [refusalDigest_wraps]; exact refusal_prove_verifies hc hg, ?_⟩
   rw [hg]; intro h; cases h
 
@@ -356,7 +361,7 @@ theorem deployed_head_refusal_read (program : Program Digest) {name nonce : Byte
     (hg : genesis (ctx program) name nonce allowance founders = .ok g) (hl : World.fold env g l = .ok w)
     (h : World.step env w s = .ok w') {prev td rd root' jroot' rroot' wroot' : Digest} {tag : UInt8}
     (hhead : headLink env prev tag td rd = w'.chain)
-    (hrd : rootsDigest env root' jroot' rroot' wroot' = rd) {k : RefusalSlot Digest} {v : RefusalLeaf}
+    (hrd : rootsDigest env root' jroot' rroot' wroot' = rd) {k : RefusalSlot Digest} {v : RefusalLeaf Digest}
     (hv : Codec.Kernel.RefusalLeaf.Fits v) {p : Trie.Proof (RefusalSlot Digest) Digest}
     (hp : Trie.verifyInclusion (refusalSpec env) rroot' k (refusalDigest env v) p = true) :
     w'.refusalAt env k = some v ∨ Collision env.hash :=
@@ -386,7 +391,7 @@ theorem deployed_head_refused_retained (program : Program Digest) {name nonce : 
     (hrd : rootsDigest env root' jroot' rroot' wroot' = rd) :
     (rroot' = w₂.refusalsRoot env ∧
       Trie.verifyInclusion (refusalSpec env) rroot' (.tx r.txId)
-        (refusalDigest env (.refused (w₀.height + 1) r.code))
+        (refusalDigest env (.refused (w₀.height + 1) r.code r.member))
         (w₂.refusals.prove (refusalSpec env) (.tx r.txId)) = true) ∨ Collision env.hash :=
   head_refused_retained deployed_lawful (deployed_reach_refusalsOk program hg hl₀).1
     (deployed_reach_journalOk program hg hl₀).1 h₁ hf hlt hhead hrd

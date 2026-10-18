@@ -54,6 +54,7 @@ import Kernel.Proofs.RowsHead
 import Kernel.Proofs.JournalHead
 import Kernel.Proofs.Weight
 import Kernel.Proofs.Refusals
+import Kernel.Proofs.RefusalsCounted
 import Kernel.Proofs.TrieRetain
 import Codec.Proofs.Carried
 
@@ -256,6 +257,7 @@ theorem genesisWorld_codecFits {name nonce : ByteArray} {allowance : Nat}
              journalFits := journalFits_of_ok (genesisWorld_journalOk X name nonce allowance founders),
              refusalsFits := by simp [Receive.genesisWorld, World.genesis, Trie.T.toList, refusalsFits],
              refusalsDisjoint := by simp [Receive.genesisWorld, World.genesis, Trie.T.toList, refusalsDisjoint],
+             refusalsCounted := Receive.reach_refusalsCounted (X := X) (l := []) rfl,
              steps := by simp [Receive.genesisWorld, World.genesis],
              rows := ⟨⟨⟨by simp [Receive.genesisWorld, World.genesis, Trie.T.toList],
                  by simp [Receive.genesisWorld, World.genesis, Trie.T.toList]⟩, Trie.canon_empty _ 0⟩,
@@ -326,6 +328,8 @@ theorem importWorld_codecFits {name nonce : ByteArray} {want : Codec.Digest} {f 
           journalFits := hfit.journalFits, rows := hfit.rows,
           refusalsFits := by simp [carryWorld, Trie.T.toList, refusalsFits],
           refusalsDisjoint := by simp [carryWorld, Trie.T.toList, refusalsDisjoint],
+          refusalsCounted := (refusalsCounted_iff (refusalsOk_of_empty rfl)).mpr
+            (countedOk_of_empty rfl (Nat.le_refl _)),
           steps := Nat.le_refl _ }
 
 /-- **`host import`'s Store reopens to the World the import made, holding exactly the file's
@@ -371,6 +375,8 @@ structure Kept (w : World D) : Prop where
   refusalsOk : w.RefusalsOk X.env
   /-- no transaction id both refused and journaled (KERNEL-47) -/
   disjoint : w.RefusalsDisjoint X.env
+  /-- every refusal count is its member's records this window (KERNEL-50) -/
+  counted : w.CountedOk X.env
   /-- the height is at most the step count (every step moves the counter, a Turn the height too) -/
   steps : w.height ≤ w.steps
   stepsLt : w.steps < 2 ^ 64
@@ -381,6 +387,7 @@ theorem kept_admit {w w' : World D} {t : Turn D} (hk : Kept w) (h : World.admit 
     admit_height_lt h, by have := admit_conserves hk.canon hk.slotted hk.rowsCanon h; have := hk.budget; omega,
     admit_rowsCanon hk.rowsCanon h, admit_rowsOk Receive.deployed_lawful hk.rowsCanon hk.rowsOk h,
     admit_refusalsOk hk.refusalsOk h, admit_refusalsDisjoint hk.refusalsOk.1 hk.journalOk.1 hk.disjoint h,
+    admit_countedOk hk.refusalsOk hk.counted h,
     by have := admit_height h; have := admit_steps h; have := hk.steps; omega, admit_steps_lt h⟩
 
 theorem kept_refuse {w w' : World D} {r : Refused D} (hk : Kept w) (h : World.refuse X.env w r = .ok w') :
@@ -391,6 +398,7 @@ theorem kept_refuse {w w' : World D} {r : Refused D} (hk : Kept w) (h : World.re
     fun s l hg => hk.cellsFit s l (by rw [← ht]; exact hg), refuse_journalOk hk.journalOk h,
     by rw [hh]; exact hk.height, by rw [hw, ha]; exact hk.budget, refuse_rowsCanon hk.rowsCanon h,
     refuse_rowsOk hk.rowsOk h, refuse_refusalsOk hk.refusalsOk h, refuse_refusalsDisjoint hk.disjoint h,
+    refuse_countedOk hk.refusalsOk hk.counted h,
     by have := refuse_steps h; have := hk.steps; omega, refuse_steps_lt h⟩
 
 theorem kept_fold {w w' : World D} {l : List (Step D)} (hk : Kept w) (h : World.fold X.env w l = .ok w') : Kept w' :=
@@ -418,6 +426,7 @@ theorem kept_of_fits {w : World D} (hf : Codec.Kernel.World.CodecFits X.env (fun
       simp only [rowsFits, Bool.and_eq_true, List.all_eq_true] at this
       exact this.2 p hp, hf.rows.headed, hf.rows.parented⟩,
     refusalsOk_of_fits hf.refusals.2 hf.refusalsFits, (refusalsDisjoint_iff hf.refusals.2).mp hf.refusalsDisjoint,
+    (refusalsCounted_iff (refusalsOk_of_fits hf.refusals.2 hf.refusalsFits)).mp hf.refusalsCounted,
     hf.steps, hf.stepsLt⟩
   have hl := (hf.cells.1.1.2 (s, l) ((Trie.mem_toList (trieSpec X.env) 0 w.trie hf.cells.2.1 s l).mpr hg)).2
   cases l with
@@ -426,6 +435,13 @@ theorem kept_of_fits {w : World D} (hf : Codec.Kernel.World.CodecFits X.env (fun
     | live c => exact hl
     | tomb => trivial
   | spent => trivial
+
+/-- **A deployed decoded base's refusal counts are its records'** (KERNEL's `World.CountedOk`, from
+`kernel/refusals-counted` through `refusalsCounted_iff`): no base the codec reads holds a lowered or
+moved charge. -/
+theorem world_decode_countedOk {b : ByteArray} {w : World D}
+    (h : (Codec.Kernel.world X.env Codec.Deployed.digestCodec).decode b = .ok w) : w.CountedOk X.env :=
+  (kept_of_fits (Codec.Kernel.world_decode_fits Codec.Deployed.digestCodec_lawful.on h)).counted
 
 /-- **A `Kept` World whose three listings are within `worldMax` is in the World codec's domain.** -/
 theorem codecFits_of_kept {w : World D} (hk : Kept w) (hcount : w.trie.toList.length ≤ Codec.Kernel.worldMax)
@@ -438,11 +454,13 @@ theorem codecFits_of_kept {w : World D} (hk : Kept w) (hcount : w.trie.toList.le
   have hrf := refusalsFits_of_ok hk.refusalsOk
   refine { cells := ⟨⟨⟨hcount, fun p hp => ⟨trivial, ?_⟩⟩, fun p hp => hk.slotted _ _ (hmem p hp)⟩, hk.canon⟩,
            journal := ⟨⟨by unfold Bounds.journalMax; omega, fun p hp => ⟨trivial, ?_, trivial⟩⟩, hk.journalOk.1⟩,
-           refusals := ⟨⟨hfcount, fun p hp => ⟨?_, Codec.Kernel.refusalLeaf_fits_of_refusalsFits hrf p hp⟩⟩,
+           refusals := ⟨⟨hfcount, fun p hp => ⟨?_, Codec.Kernel.RefusalLeaf.wireFits_of_fits (fun _ => trivial)
+             (Codec.Kernel.refusalLeaf_fits_of_refusalsFits hrf p hp)⟩⟩,
              hk.refusalsOk.1⟩,
            height := hk.height, stepsLt := hk.stepsLt, chain := trivial, budget := hk.budget, origin := trivial,
            journalFits := journalFits_of_ok hk.journalOk, refusalsFits := hrf,
            refusalsDisjoint := (refusalsDisjoint_iff hk.refusalsOk.1).mpr hk.disjoint,
+           refusalsCounted := (refusalsCounted_iff hk.refusalsOk).mpr hk.counted,
            steps := hk.steps,
            rows := Codec.Deployed.rowsCodecFits_of_ok hk.rowsCanon hk.rowsOk hrcount }
   · have hl := hk.cellsFit _ _ (hmem p hp)
@@ -540,8 +558,8 @@ theorem rows_entry_size (x : RowSlot D × RowLeaf) :
 
 /-- Every refusals listing entry costs at least 33 bytes of the World's encoding (its kind byte and
 its transaction id or member, KERNEL-44). -/
-theorem refusals_entry_size (x : RefusalSlot D × RefusalLeaf) :
-    33 ≤ (Codec.Stream.product (Codec.Kernel.refusalSlot Codec.Deployed.digestCodec) Codec.Kernel.refusalLeaf).size x := by
+theorem refusals_entry_size (x : RefusalSlot D × RefusalLeaf D) :
+    33 ≤ (Codec.Stream.product (Codec.Kernel.refusalSlot Codec.Deployed.digestCodec) (Codec.Kernel.refusalLeaf Codec.Deployed.digestCodec)).size x := by
   obtain ⟨s, l⟩ := x
   cases s <;>
     simp [Codec.Stream.product, Codec.Kernel.refusalSlot, Codec.Kernel.refusalSlotWire, Codec.Stream.refine,
@@ -566,7 +584,7 @@ theorem world_size_listing (w : World D) :
         Codec.Kernel.rowLeaf).size x) 4 := rfl
   have h4 : (Codec.Kernel.refusalsTrie Codec.Deployed.env Codec.Deployed.digestCodec).size w.refusals =
       w.refusals.toList.foldl (fun n x => n + (Codec.Stream.product (Codec.Kernel.refusalSlot Codec.Deployed.digestCodec)
-        Codec.Kernel.refusalLeaf).size x) 4 := rfl
+        (Codec.Kernel.refusalLeaf Codec.Deployed.digestCodec)).size x) 4 := rfl
   rw [h2, h3, h4, foldl_add_eq, foldl_add_eq, foldl_add_eq] at h1
   have := sum_map_ge _ 33 listing_entry_size w.trie.toList
   have := sum_map_ge _ 33 rows_entry_size w.rows.toList
@@ -660,14 +678,14 @@ theorem refuse_refusals_listing {w w' : World D} {r : Refused D} (hc : w.Refusal
     (h : World.refuse X.env w r = .ok w') : w'.refusals.toList.length ≤ w.refusals.toList.length + 2 := by
   obtain ⟨_, rfl⟩ := refuse_ok h
   rw [commitRefusal_refusals]
-  have hr1 := Trie.routed_insert (refusalSpec X.env) (.tx r.txId) (.refused (w.height + 1) r.code) hc.1
-  have p1 := (Trie.toList_insert_perm (refusalSpec X.env) hc.1 (.tx r.txId) (.refused (w.height + 1) r.code)).length_eq
+  have hr1 := Trie.routed_insert (refusalSpec X.env) (.tx r.txId) (.refused (w.height + 1) r.code r.member) hc.1
+  have p1 := (Trie.toList_insert_perm (refusalSpec X.env) hc.1 (.tx r.txId) (.refused (w.height + 1) r.code r.member)).length_eq
   have p2 := (Trie.toList_insert_perm (refusalSpec X.env) hr1 (.count r.member (refusalWindow w.height))
     (.count (refusalCount X.env w r.member + 1))).length_eq
-  have f1 := List.length_filter_le (fun q : RefusalSlot D × RefusalLeaf => decide (q.1 ≠ RefusalSlot.tx r.txId)) w.refusals.toList
-  have f2 := List.length_filter_le (fun q : RefusalSlot D × RefusalLeaf =>
+  have f1 := List.length_filter_le (fun q : RefusalSlot D × RefusalLeaf D => decide (q.1 ≠ RefusalSlot.tx r.txId)) w.refusals.toList
+  have f2 := List.length_filter_le (fun q : RefusalSlot D × RefusalLeaf D =>
     decide (q.1 ≠ RefusalSlot.count r.member (refusalWindow w.height)))
-    (w.refusals.insert (refusalSpec X.env) (.tx r.txId) (.refused (w.height + 1) r.code)).toList
+    (w.refusals.insert (refusalSpec X.env) (.tx r.txId) (.refused (w.height + 1) r.code r.member)).toList
   simp only [List.length_append, List.length_singleton] at p1 p2
   omega
 

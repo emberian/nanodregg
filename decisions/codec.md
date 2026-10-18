@@ -1460,3 +1460,5 @@ ledger-sim and hosting-sim 1–3 report ALL PASS, including the byte-identity ro
 **Critique.** The boundary rows catch the NEXT tag only, so a Lang change that adds two tags flips one row; that is
 enough to go red. A change of meaning inside an existing tag (a field read differently) is caught only by the rows
 that use that tag, so each tag has one row, not a sweep of its payloads.
+
+- **2026-10-19, KERNEL-50 (KERNEL-19, ROOT for CODEC):** the World-wire refine chain is now journal → refusals → refusals-disjoint → steps → **refusals-counted** → rows → rows-headed → rows-parented → world-budget. `kernel/refusals-counted` (`countedWire`, `countedWire_lawfulOn`) refuses a base whose window counts are not its records (KERNEL-50 `refusalsCounted`). `kernel/refusal-leaf` gains the charged member (`refused h code member`), so its tag moves with the meaning. Vectors re-emitted for the moved families; the boundary pair is a counted World and the same World with one charge moved.

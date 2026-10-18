@@ -204,13 +204,13 @@ theorem bitLt_refusalSpec_iff {E : Env D} {n : Nat} (hE : E.Lawful n) (k k' : Re
       fun j _ hj => hpre j hj, h1, h2⟩
 
 /-- The refusals' key order, in bytes. -/
-def RefusalBefore (E : Env D) (p q : RefusalSlot D × RefusalLeaf) : Prop :=
+def RefusalBefore (E : Env D) (p q : RefusalSlot D × RefusalLeaf D) : Prop :=
   compare (refusalKeyBytes E p.1).data (refusalKeyBytes E q.1).data = .lt
 
 /-- **The refusals part accepts a listing strictly ascending by key bytes**, as `build` makes of it. -/
 theorem refusalsTrie_get_ok {E : Env D} {n : Nat} (hE : E.Lawful n) {dc : Stream D} {b : ByteArray}
-    {i j : Nat} {l : List (RefusalSlot D × RefusalLeaf)}
-    (h : (rawList worldMax (product (refusalSlot dc) refusalLeaf)).get b i = .ok (l, j))
+    {i j : Nat} {l : List (RefusalSlot D × RefusalLeaf D)}
+    (h : (rawList worldMax (product (refusalSlot dc) (refusalLeaf dc))).get b i = .ok (l, j))
     (ho : l.Pairwise (RefusalBefore E)) :
     (refusalsTrie E dc).get b i = .ok (Trie.build (refusalSpec E) (refusalSpec E).depth 0 l, j) :=
   trieListing_get_ok _ (refusals_separate hE) h
@@ -218,8 +218,8 @@ theorem refusalsTrie_get_ok {E : Env D} {n : Nat} (hE : E.Lawful n) {dc : Stream
 
 /-- **Every other refusals listing is refused `kernel/refusal-order` by name.** -/
 theorem refusalsTrie_get_refused {E : Env D} {n : Nat} (hE : E.Lawful n) {dc : Stream D} {b : ByteArray}
-    {i j : Nat} {l : List (RefusalSlot D × RefusalLeaf)}
-    (h : (rawList worldMax (product (refusalSlot dc) refusalLeaf)).get b i = .ok (l, j))
+    {i j : Nat} {l : List (RefusalSlot D × RefusalLeaf D)}
+    (h : (rawList worldMax (product (refusalSlot dc) (refusalLeaf dc))).get b i = .ok (l, j))
     (ho : ¬ l.Pairwise (RefusalBefore E)) :
     (refusalsTrie E dc).get b i = .error (.rejected i "kernel/refusal-order") :=
   trieListing_get_refused _ (refusals_separate hE) h fun h' =>
@@ -228,7 +228,7 @@ theorem refusalsTrie_get_refused {E : Env D} {n : Nat} (hE : E.Lawful n) {dc : S
 /-- What the refusals part accepts was strictly ascending by key bytes. -/
 theorem refusalsTrie_get_ordered {E : Env D} {n : Nat} (hE : E.Lawful n) {dc : Stream D} {b : ByteArray}
     {i j : Nat} {t : Refusals D} (h : (refusalsTrie E dc).get b i = .ok (t, j)) :
-    ∃ l, (rawList worldMax (product (refusalSlot dc) refusalLeaf)).get b i = .ok (l, j) ∧
+    ∃ l, (rawList worldMax (product (refusalSlot dc) (refusalLeaf dc))).get b i = .ok (l, j) ∧
       l.Pairwise (RefusalBefore E) ∧ t = Trie.build (refusalSpec E) (refusalSpec E).depth 0 l := by
   obtain ⟨l, hg, ho, ht⟩ := trieListing_get_ordered _ (refusals_separate hE) h
   exact ⟨l, hg, ho.imp fun hpq => (bitLt_refusalSpec_iff hE _ _).mp hpq, ht⟩

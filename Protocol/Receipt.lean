@@ -6,7 +6,8 @@ journal's, the refusals' and the rows' roots, which every head link commits, KER
 A RECEIPT for a transaction id carries the four roots and the trie paths that answer the id:
 
 * `committed h td`: the journal holds `(h, td)` at the id (an inclusion path, KERNEL-41);
-* `refused h code`: the refusals hold the recorded refusal at `.tx id` (KERNEL-44, PROTOCOL-41);
+* `refused h code member`: the refusals hold the recorded refusal at `.tx id`, charged to `member`
+  (KERNEL-44, KERNEL-50, PROTOCOL-41);
 * `absent`: neither does (two exclusion paths). That is an answer only while `journalForgets` is
   false at the head's height for the call's `notBefore`; past it absence says nothing (`forgotten`).
 
@@ -14,7 +15,7 @@ A RECEIPT for a transaction id carries the four roots and the trie paths that an
 `Proofs.Receipt.check_committed` / `check_absent` / `check_refused_uncommitted` say a receipt that
 checks against a World's roots tells the truth about that World's JOURNAL (the entry, its absence),
 or the hash collides: a relay cannot turn a committed call into `absent` or `refused`, nor change
-its entry. A `refused` receipt is the World's recorded refusal, its height and code, and an `absent`
+its entry. A `refused` receipt is the World's recorded refusal, its height, code and charged member, and an `absent`
 one shows no refusal recorded either (`check_refused_sound`, `check_absent_unrefused`, through
 KERNEL's refusals soundness, `Kernel.Proofs.RefusalsHead`). The head is the member's own folded World (its
 height and roots together); a relayed head would need its height bound to the roots.
@@ -37,7 +38,7 @@ variable {D : Type} [Ord D] [DecidableEq D]
 /-- What a receipt says happened to the call. -/
 inductive Answer (D : Type)
   | committed (height : Nat) (turn : D)
-  | refused (height code : Nat)
+  | refused (height code : Nat) (member : D)
   | absent
   deriving DecidableEq
 
@@ -70,7 +71,7 @@ def Refusal.name : Refusal → String
 
 def Answer.text (dbytes : D → ByteArray) : Answer D → String
   | .committed h td => s!"committed {h} {Text.toHex (dbytes td)}"
-  | .refused h code => s!"refused {h} {code}"
+  | .refused h code m => s!"refused {h} {code} {Text.toHex (dbytes m)}"
   | .absent => "absent"
 
 /-- The answer's own check: its path verifies for what it states, and `absent` is not forgotten. -/
@@ -80,12 +81,12 @@ def answerOf (E : Env D) (height : Nat) (txId : D) (notBefore : Nat) (r : Receip
   | .committed h td =>
       if h < 2 ^ 64 ∧ Trie.verifyInclusion (journalSpec E) r.jroot txId (journalDigest E (h, td)) r.jpath = true
       then .ok (.committed h td) else .error .pathMismatch
-  | .refused h code =>
+  | .refused h code m =>
       -- recorded refused AND not committed: the journal path must show the id absent
       if h < 2 ^ 64 ∧ code < 2 ^ 64 ∧
-          Trie.verifyInclusion (refusalSpec E) r.rroot (.tx txId) (refusalDigest E (.refused h code)) r.rpath = true ∧
+          Trie.verifyInclusion (refusalSpec E) r.rroot (.tx txId) (refusalDigest E (.refused h code m)) r.rpath = true ∧
           Trie.verifyExclusion (journalSpec E) r.jroot txId r.jpath = true
-      then .ok (.refused h code) else .error .pathMismatch
+      then .ok (.refused h code m) else .error .pathMismatch
   | .absent =>
       if journalForgets height notBefore = true then .error .forgotten
       else if Trie.verifyExclusion (journalSpec E) r.jroot txId r.jpath = true ∧
@@ -105,7 +106,7 @@ def build (E : Env D) (w : World D) (txId : D) : Receipt D :=
   let answer : Answer D := match w.journalAt E txId with
     | some (h, td) => .committed h td
     | none => match w.refusalAt E (.tx txId) with
-      | some (.refused h code) => .refused h code
+      | some (.refused h code m) => .refused h code m
       | _ => .absent
   { txId, root := w.root E, jroot := w.journalRoot E, rroot := w.refusalsRoot E,
     rowsroot := w.rowsRoot E, answer,
@@ -136,7 +137,7 @@ def bytes (E : Env D) (dc : Stream D) (r : Receipt D) : Option ByteArray := do
   let f := Text.fit Protocol.Bounds.frameBytesMax
   let (tag, a, b, turn) : UInt8 × Nat × Nat × ByteArray := match r.answer with
     | .committed h td => (0, h, 0, dc.bytes td)
-    | .refused h code => (1, h, code, ByteArray.empty)
+    | .refused h code m => (1, h, code, dc.bytes m)
     | .absent => (2, 0, 0, ByteArray.empty)
   pure (frame.bytes (tag, a.toUInt64, b.toUInt64, ← f turn, ← f (dc.bytes r.txId), ← f (dc.bytes r.root),
     ← f (dc.bytes r.jroot), ← f (dc.bytes r.rroot), ← f (dc.bytes r.rowsroot),
@@ -148,7 +149,7 @@ def ofBytes (E : Env D) (dc : Stream D) (b : ByteArray) : Option (Receipt D) :=
   | .error _ => none
   | .ok (tag, a, bb, turn, tx, root, jroot, rroot, rowsroot, jp, rp, ()) => do
     let answer ← if tag = 0 then (dig turn.1).map (.committed a.toNat)
-      else if tag = 1 then some (.refused a.toNat bb.toNat)
+      else if tag = 1 then (dig turn.1).map (.refused a.toNat bb.toNat)
       else if tag = 2 then some .absent else none
     pure { txId := ← dig tx.1, root := ← dig root.1, jroot := ← dig jroot.1,
            rroot := ← dig rroot.1, rowsroot := ← dig rowsroot.1, answer,

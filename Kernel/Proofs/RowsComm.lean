@@ -753,10 +753,10 @@ private theorem check_after {E : Env D} {w : World D} {t₁ t₂ : Turn D} {post
         if (w.height + 1) % Bounds.windowMax = 0 then (w.refusalAt E (.tx t₂.txId)).filter
           (keptRefusal (w.height + 1) (.tx t₂.txId)) else w.refusalAt E (.tx t₂.txId) :=
       pruneRefusals_get hrc _
-    have hw : ∀ hh code, w.refusalAt E (.tx t₂.txId) ≠ some (.refused hh code) := by
-      intro hh code he; rw [he] at h; simp at h
-    have hw1 : ∀ hh code, (commit E w t₁ posts₁).refusalAt E (.tx t₂.txId) ≠ some (.refused hh code) := by
-      intro hh code he
+    have hw : ∀ hh code mb, w.refusalAt E (.tx t₂.txId) ≠ some (.refused hh code mb) := by
+      intro hh code mb he; rw [he] at h; simp at h
+    have hw1 : ∀ hh code mb, (commit E w t₁ posts₁).refusalAt E (.tx t₂.txId) ≠ some (.refused hh code mb) := by
+      intro hh code mb he
       rw [hr] at he
       split at he
       · cases hra : w.refusalAt E (.tx t₂.txId) with
@@ -765,14 +765,14 @@ private theorem check_after {E : Env D} {w : World D} {t₁ t₂ : Turn D} {post
             rw [hra] at he
             simp only [Option.filter] at he
             split at he
-            · exact hw hh code (by rw [hra, he])
+            · exact hw hh code mb (by rw [hra, he])
             · simp at he
-      · exact hw hh code he
+      · exact hw hh code mb he
     cases hra : (commit E w t₁ posts₁).refusalAt E (.tx t₂.txId) with
     | none => rfl
     | some lf =>
         cases lf with
-        | refused hh code => exact absurd hra (hw1 hh code)
+        | refused hh code mb => exact absurd hra (hw1 hh code mb)
         | count n => rfl
   -- the nullifiers
   have hnul' : checkNullifiers E (commit E w t₁ posts₁) t₂ = .ok () := by

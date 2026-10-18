@@ -200,8 +200,8 @@ theorem journal_reads_ids_ascending :
 
 /-- **The deployed refusals listing is accepted exactly when strictly ascending by key bytes**
 (`refusalKeyBytes`: kind byte, the 32 digest bytes, the window's eight bytes). -/
-theorem refusalOrder_iff {b : ByteArray} {i j : Nat} {l : List (RefusalSlot Digest × RefusalLeaf)}
-    (h : (rawList worldMax (product (refusalSlot digestCodec) refusalLeaf)).get b i = .ok (l, j)) :
+theorem refusalOrder_iff {b : ByteArray} {i j : Nat} {l : List (RefusalSlot Digest × RefusalLeaf Digest)}
+    (h : (rawList worldMax (product (refusalSlot digestCodec) (refusalLeaf digestCodec))).get b i = .ok (l, j)) :
     (refusalsTrie env digestCodec).get b i = .ok (Trie.build (refusalSpec env) (refusalSpec env).depth 0 l, j) ↔
       l.Pairwise (RefusalBefore env) := by
   constructor
@@ -212,8 +212,8 @@ theorem refusalOrder_iff {b : ByteArray} {i j : Nat} {l : List (RefusalSlot Dige
   · exact refusalsTrie_get_ok Receive.deployed_lawful h
 
 /-- **Any other deployed refusals listing is refused `kernel/refusal-order` by name.** -/
-theorem refusalOrder_refuses {b : ByteArray} {i j : Nat} {l : List (RefusalSlot Digest × RefusalLeaf)}
-    (h : (rawList worldMax (product (refusalSlot digestCodec) refusalLeaf)).get b i = .ok (l, j))
+theorem refusalOrder_refuses {b : ByteArray} {i j : Nat} {l : List (RefusalSlot Digest × RefusalLeaf Digest)}
+    (h : (rawList worldMax (product (refusalSlot digestCodec) (refusalLeaf digestCodec))).get b i = .ok (l, j))
     (ho : ¬ l.Pairwise (RefusalBefore env)) :
     (refusalsTrie env digestCodec).get b i = .error (.rejected i "kernel/refusal-order") :=
   refusalsTrie_get_refused Receive.deployed_lawful h ho

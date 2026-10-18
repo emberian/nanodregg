@@ -107,6 +107,17 @@ theorem world_get_refusalsDisjoint {b : ByteArray} {i j : Nat} {w : World Digest
     (h : world.get b i = .ok (w, j)) : w.RefusalsDisjoint env :=
   Nanodregg.Codec.Kernel.world_get_refusalsDisjoint digestCodec_lawful.on h
 
+/-- **A deployed decoded base's refusal counts are its records'** (KERNEL-50, `kernel/refusals-counted`;
+`Host.Proofs.Deployed.world_decode_countedOk` reads it as KERNEL's `World.CountedOk`). -/
+theorem world_decode_refusalsCounted {b : ByteArray} {w : World Digest} (h : world.decode b = .ok w) :
+    refusalsCounted env w = true :=
+  Nanodregg.Codec.Kernel.world_decode_refusalsCounted digestCodec_lawful.on h
+
+/-- **A World the deployed codec reads at any offset has refusal counts that are its records'.** -/
+theorem world_get_refusalsCounted {b : ByteArray} {i j : Nat} {w : World Digest}
+    (h : world.get b i = .ok (w, j)) : refusalsCounted env w = true :=
+  Nanodregg.Codec.Kernel.world_get_refusalsCounted digestCodec_lawful.on h
+
 /-- **A deployed decoded base has height at most its step count** (KERNEL's `fold_height_le_steps`'
 premise). -/
 theorem world_decode_height_le_steps {b : ByteArray} {w : World Digest} (h : world.decode b = .ok w) :
