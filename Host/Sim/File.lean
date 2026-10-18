@@ -23,6 +23,8 @@
 7. plant-record-over-bound / plant-frame-over-bound (HOST-47, `boundPlants`): a record one byte over
    the derived `recordBytesMax` is refused `recordTooLarge` by the writer's append and `corrupt` by the
    open; at exactly the bound, appended / past the length gate.
+8. plant-empty-record (HOST-49, `emptyPlants`): a verifying frame of a record of no steps is refused
+   `emptyRecord` by both opens; the append of an empty batch writes nothing.
 Prints `FAIL <check>` per failure and `ALL PASS` when none.
 -/
 import Host.Store
@@ -435,6 +437,64 @@ def boundPlants (root : System.FilePath) (key : Digest) (keys : Keys) (failures 
     check s!"{q}{tag}: a verifying frame of a {n}-byte record is refused `{want}` and the file is unchanged ({name}, seg.log {before} -> {after})"
       (name == want && before == after) failures
 
+/-- plant-empty-record (HOST-49, HOST-21's adopt argument): every record a Store holds advances its
+step count, so a World at step 0 has no record past its base (`Host.Deployed.openWith_steps_zero`).
+Reader: a frame that VERIFIES under the Store key, holding the codec's own bytes of NO steps, appended
+to a fresh Store, is refused by the open as record 0's `emptyRecord`, and seg.log is unchanged (before
+HOST-49 it opened as one record at step 0: a Store at step 0 holding a record, the case adopt's
+`notAtGenesis` measure cannot see). Writer: the real `append` of an empty batch writes nothing and
+returns the resident unchanged; its control, one step, appends one frame. -/
+def emptyPlants (root : System.FilePath) (key : Digest) (keys : Keys) (failures : IO.Ref Nat) : IO Unit := do
+  let p := "plant-empty-record"
+  let dir := root / "reader"
+  let _ ← (Host.genesis dir key keys cadence world recorder.mark Sim.genesis : IO (Except Fault Unit))
+  let seg ← IO.FS.readBinFile (segmentPath dir)
+  let prev := seg.extract (seg.size - Log.tagBytes) seg.size
+  let rec0 := (Record.codec dc).bytes []
+  let f ← File.open (segmentPath dir) .append
+  f.writeAll (Log.frame keys.segment prev rec0)
+  f.sync
+  let before ← fileSize (segmentPath dir)
+  check s!"{p} fires: a verifying frame of the {rec0.size}-byte record of no steps follows the genesis base ({seg.size} -> {before})"
+    (before == seg.size + Log.frameMax rec0.size) failures
+  let o ← follow dir keys cadence
+  let w ← (openWriter dir keys cadence world recorder.mark originChain foldStep : IO (Except Fault _))
+  let after ← fileSize (segmentPath dir)
+  let isEmpty {α : Type} : Except Fault α → Bool
+    | .error (.log (.record 0 f)) => f.name == "emptyRecord"
+    | _ => false
+  let shown {α : Type} : Except Fault α → String
+    | .error (.log (.record i f)) => s!"record {i} {f.name}"
+    | .error e => e.name
+    | .ok _ => "opened"
+  check s!"{p}: the follower and writer opens refuse record 0 `emptyRecord` and the file is unchanged ({shown o}, {shown w}, seg.log {before} -> {after})"
+    (isEmpty o && isEmpty w && before == after) failures
+  -- the writer's side: the one append path writes nothing for an empty batch
+  for (tag, staged) in [("", (#[] : Array (Step Nat × Nat))),
+      ("-control", #[(.turn (mkTurn 4242 0 1024 [4242]), 0)])] do
+    let dir := root / s!"writer{tag}"
+    let _ ← (Host.genesis dir key keys cadence world recorder.mark Sim.genesis : IO (Except Fault Unit))
+    let before ← fileSize (segmentPath dir)
+    let res ← do
+      match ← (openWriter dir keys cadence world recorder.mark originChain foldStep : IO (Except Fault _)) with
+      | .error e => pure (Except.error s!"open {e.name}")
+      | .ok fwr =>
+        let r := fwr.opening.resident
+        let x ← append recorder keys.segment (fileCheckpoint dir keys cadence world recorder.mark originChain fwr.index)
+          cadence (fileStore fwr.segment) r r.world staged
+        fwr.segment.sync
+        pure (match x with
+          | .error e => Except.error e.name
+          | .ok r' => Except.ok (r'.pos.offset == r.pos.offset && r'.index.size == r.index.size))
+    let after ← fileSize (segmentPath dir)
+    let shownR := match res with | .ok b => s!"appended, resident unchanged={b}" | .error e => e
+    if tag == "" then
+      check s!"{p}-writer: the append of an empty batch writes nothing and leaves the resident unchanged ({shownR}, seg.log {before} -> {after})"
+        ((match res with | .ok b => b | .error _ => false) && before == after) failures
+    else
+      check s!"{p}-writer-control: one step appends one frame ({shownR}, seg.log {before} -> {after})"
+        ((match res with | .ok b => !b | .error _ => false) && before < after) failures
+
 def body (seed : Nat) (dirA dirB : System.FilePath) (control : Bool := false) : IO UInt32 := do
   let failures ← IO.mkRef 0
   let frames := (scenario seed 200).map (·.1)
@@ -532,6 +592,7 @@ def body (seed : Nat) (dirA dirB : System.FilePath) (control : Bool := false) : 
   restartPlants (dirB / "restart") key keys seed frames failures
   wideFollowPlant (dirB / "wide") key keys failures
   boundPlants (dirB / "bound") key keys failures
+  emptyPlants (dirB / "empty") key keys failures
   if control then check "harness-control: GATES-15's known-red control, an expectation nothing meets (this run must read RED)" false failures
   let n ← failures.get
   IO.println (if n = 0 then "ALL PASS" else s!"{n} FAILED")

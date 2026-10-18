@@ -532,21 +532,32 @@ theorem Record.runRooted_of_rooted {D F : Type} [Ord D] [DecidableEq D]
       simp only [← hr, if_true]
       exact Record.runRooted_of_rooted hrest
 
-/-- **HOST-29: a record that opens is a rooted run of the pairs it decodes to.** -/
-theorem Record.step_rooted {D F : Type} [Ord D] [DecidableEq D] {dc : Codec.Stream D}
+/-- A record that opens is a NONEMPTY rooted run (HOST-49: the reader refuses an empty record
+`empty`). -/
+theorem Record.step_nonempty {D F : Type} [Ord D] [DecidableEq D] {dc : Codec.Stream D}
     {admit : Kernel.World D → Kernel.Step D → Except F (Kernel.World D)} {root : Kernel.World D → D}
     {w w' : Kernel.World D} {r : ByteArray} (h : Record.step dc admit root w r = .ok w') :
-    ∃ ps, (Record.codec dc).decode r = .ok ps ∧ Kernel.Rooted admit root w ps w' := by
+    ∃ ps, (Record.codec dc).decode r = .ok ps ∧ ps ≠ [] ∧ Kernel.Rooted admit root w ps w' := by
   unfold Record.step Record.stepTurns at h
   split at h
   · cases h
-  · rename_i ps hd
+  · cases h
+  · rename_i ps hne hd
     split at h
     · cases h
     · rename_i w₁ hr
       simp only [Except.map, Except.ok.injEq] at h
       subst h
-      exact ⟨ps, hd, Record.runRooted_ok hr⟩
+      exact ⟨ps, hd, fun he => hne he, Record.runRooted_ok hr⟩
+
+/-- **HOST-29: a record that opens is a rooted run of the pairs it decodes to.** -/
+theorem Record.step_rooted {D F : Type} [Ord D] [DecidableEq D] {dc : Codec.Stream D}
+    {admit : Kernel.World D → Kernel.Step D → Except F (Kernel.World D)} {root : Kernel.World D → D}
+    {w w' : Kernel.World D} {r : ByteArray} (h : Record.step dc admit root w r = .ok w') :
+    ∃ ps, (Record.codec dc).decode r = .ok ps ∧ Kernel.Rooted admit root w ps w' := by
+  obtain ⟨ps, hd, -, hr⟩ := Record.step_nonempty h
+  exact ⟨ps, hd, hr⟩
+
 
 /-- **HOST-25, completeness past genesis.** A record the writer's reopen accepts keeps the World's
 origin (`Record.step_rooted`, then KERNEL's `fold_origin`), so every later base's World states the

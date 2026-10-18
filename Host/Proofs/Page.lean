@@ -222,16 +222,23 @@ open Nanodregg.Kernel Nanodregg.Codec
 
 variable {D : Type}
 
-/-- `encode` writes the codec's bytes of exactly the pairs it was given, and only for at most
-`recordTurnsMax` of them. -/
+/-- `encode` writes the codec's bytes of exactly the pairs it was given, and only for at least one
+and at most `recordTurnsMax` of them (HOST-49: an empty batch is no record). -/
 theorem encode_eq_some {dc : Stream D} {staged : Array (Step D × D)} {b : ByteArray} :
-    encode dc staged = some b ↔ staged.size ≤ recordTurnsMax ∧ b = (codec dc).bytes staged.toList := by
+    encode dc staged = some b ↔
+      0 < staged.size ∧ staged.size ≤ recordTurnsMax ∧ b = (codec dc).bytes staged.toList := by
   unfold encode
   split
   · rename_i hs
-    exact ⟨fun h => ⟨hs, (Option.some.inj h).symm⟩, fun ⟨_, hb⟩ => hb ▸ rfl⟩
+    exact ⟨fun h => ⟨hs.1, hs.2, (Option.some.inj h).symm⟩, fun ⟨_, _, hb⟩ => hb ▸ rfl⟩
   · rename_i hs
-    exact ⟨fun h => (by cases h), fun ⟨h, _⟩ => absurd h hs⟩
+    exact ⟨fun h => (by cases h), fun ⟨h0, h, _⟩ => absurd ⟨h0, h⟩ hs⟩
+
+/-- **The empty batch is no record** (HOST-49): `encode` refuses it, the record the reader refuses
+`empty`. -/
+theorem encode_empty {dc : Stream D} : encode dc (#[] : Array (Step D × D)) = none := by
+  unfold encode
+  rw [if_neg (by simp)]
 
 /-- **The tooth**: more than `recordTurnsMax` pairs are refused (`none`), never encoded; the append
 path names it `recordTooLarge` and writes nothing. -/
@@ -246,7 +253,7 @@ theorem encode_decode {PD : D → Prop} {dc : Stream D} (hd : Stream.LawfulOn PD
     {staged : Array (Step D × D)} {b : ByteArray} (h : encode dc staged = some b)
     (hf : ∀ p ∈ staged.toList, Kernel.Step.Fits PD p.1 ∧ PD p.2) :
     (codec dc).decode b = .ok staged.toList := by
-  obtain ⟨hs, rfl⟩ := encode_eq_some.mp h
+  obtain ⟨_, hs, rfl⟩ := encode_eq_some.mp h
   exact (Codec.Kernel.batch_lawfulOn hd recordTurnsMax (by decide)).decode_bytes
     ⟨by simpa using hs, hf⟩
 
@@ -257,10 +264,27 @@ theorem step_encode [Ord D] [DecidableEq D] {F : Type} {PD : D → Prop} {dc : S
     {staged : Array (Step D × D)} {b : ByteArray} (h : encode dc staged = some b)
     (hf : ∀ p ∈ staged.toList, Kernel.Step.Fits PD p.1 ∧ PD p.2) :
     step dc admit root w b = runRooted admit root 0 w staged.toList := by
+  obtain ⟨hpos, _, _⟩ := encode_eq_some.mp h
   unfold step stepTurns
   rw [encode_decode hd h hf]
-  dsimp only
-  cases runRooted admit root 0 w staged.toList <;> rfl
+  have hne : staged.toList ≠ [] := by
+    intro he
+    have := congrArg List.length he
+    simp only [Array.length_toList, List.length_nil] at this
+    omega
+  generalize staged.toList = l at hne ⊢
+  cases l with
+  | nil => exact absurd rfl hne
+  | cons p ps => dsimp only; cases runRooted admit root 0 w (p :: ps) <;> rfl
+
+/-- **The tooth of `empty`** (HOST-49): the record of no steps, the codec's own bytes of `[]`, is
+refused `empty` by the reopen's step, never folded as a record that advances nothing. -/
+theorem step_empty [Ord D] [DecidableEq D] {F : Type} {PD : D → Prop} {dc : Stream D} (hd : Stream.LawfulOn PD dc)
+    (admit : World D → Step D → Except F (World D)) (root : World D → D) (w : World D) :
+    step dc admit root w ((codec dc).bytes []) = .error .empty := by
+  unfold step stepTurns codec
+  rw [(Codec.Kernel.batch_lawfulOn hd recordTurnsMax (by decide)).decode_bytes ⟨by simp, by simp⟩]
+  rfl
 
 end Nanodregg.Host.Record
 

@@ -306,6 +306,9 @@ append through this, so both keep the same Store invariants. On a refusal nothin
 past what was synced, and the caller answers its requests `uncertain`. -/
 def append (rec : Recorder W T) (s : Log.Sealer) (ck : Checkpoint W) (c : Cadence) (store : Store)
     (r : Resident W) (w' : W) (staged : Array T) : IO (Except Exit (Resident W)) := do
+  -- an empty batch is no record (HOST-49: the reader refuses an empty one `empty`); nothing is
+  -- written and the resident is the disk's, unchanged
+  if staged.isEmpty then return .ok r
   let some record := rec.encode w' staged | return .error (.recordTooLarge staged.size none)
   if c.recordBytesMax < record.size then return .error (.recordTooLarge staged.size (some record.size))
   let r ← match ← makeRoom ck rec.mark c r (frameSize record) with

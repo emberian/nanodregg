@@ -32,20 +32,26 @@ inductive Fault (F : Type) where
   /-- the `index`-th step is taken, but the roots digest the record states beside it is not the one
   the World reached (HOST-29) -/
   | rootMismatch (index : Nat)
+  /-- the record holds no step (HOST-49): no writer writes one (`encode` refuses it, `Host.append`
+  writes nothing for an empty batch), so every record an open folds advances the step count, and a
+  Store that opens at step 0 has no record past its base (`Host.Deployed.openWith_steps_zero`) -/
+  | empty
 
 def Fault.name {F : Type} : Fault F → String
   | .undecodable _ => "undecodable"
   | .step _ _ => "step"
   | .rootMismatch _ => "rootMismatch"
+  | .empty => "emptyRecord"
 
 def codec (dc : Stream D) : Stream (List (Step D × D)) := Nanodregg.Codec.Kernel.batch recordTurnsMax dc
 
 /-- The record of `staged`: each step with the roots digest after it (`Machine.note`); `none` when
-`staged` holds more than `recordTurnsMax` pairs, the count `codec`'s decode refuses (`pastBound`).
-So a writer never writes a record its own reader refuses on its count (`Host.Record.encode_decode`);
-the append path refuses `none` as `recordTooLarge`. -/
+`staged` holds more than `recordTurnsMax` pairs, the count `codec`'s decode refuses (`pastBound`), or
+none at all, the record the reader refuses `empty` (HOST-49). So a writer never writes a record its own
+reader refuses on its count (`Host.Record.encode_decode`); the append path writes nothing for an
+empty batch and refuses an over-long one as `recordTooLarge`. -/
 def encode (dc : Stream D) (staged : Array (Step D × D)) : Option ByteArray :=
-  if staged.size ≤ recordTurnsMax then some ((codec dc).bytes staged.toList) else none
+  if 0 < staged.size ∧ staged.size ≤ recordTurnsMax then some ((codec dc).bytes staged.toList) else none
 
 /-- A World's position in its log: its STEP count and its chain (`Env.bytes`). The one `mark` every
 Store's index, pages and restarts read (`Loop.Recorder.mark`), deployed and simulated alike: a
@@ -70,6 +76,7 @@ def stepTurns {F : Type} (dc : Stream D) (step : World D → Step D → Except F
     (root : World D → D) (w : World D) (r : ByteArray) : Except (Fault F) (World D × List (Step D × D)) :=
   match (codec dc).decode r with
   | .error e => .error (.undecodable e)
+  | .ok [] => .error .empty
   | .ok ps =>
     match runRooted step root 0 w ps with
     | .error f => .error f

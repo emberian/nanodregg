@@ -312,6 +312,7 @@ theorem stepTurns_fold {E : Env D} {dc : Codec.Stream D} {root : World D → D} 
   unfold Nanodregg.Host.Record.stepTurns at h
   split at h
   · cases h
+  · cases h
   · split at h
     · cases h
     · rename_i hr

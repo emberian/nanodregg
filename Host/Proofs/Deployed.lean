@@ -921,7 +921,7 @@ theorem recorder_encode_size_le {w₀ w w' : World D} {staged : Array (Step D ×
     (h : recorder.encode w₀ staged = some b)
     (hr : World.RootedFold X.env w staged.toList w') :
     b.size ≤ c.recordBytesMax := by
-  obtain ⟨hs, hb⟩ := Record.encode_eq_some.mp h
+  obtain ⟨-, hs, hb⟩ := Record.encode_eq_some.mp h
   have hl := Codec.Kernel.batch_lawfulOn Codec.Deployed.digestCodec_lawful.on recordTurnsMax (by decide)
   have e : (Codec.Kernel.batch recordTurnsMax Codec.Deployed.digestCodec).size staged.toList =
       staged.toList.foldl (fun n x => n + (Codec.Stream.product (Codec.Kernel.step Codec.Deployed.digestCodec)
@@ -939,6 +939,72 @@ theorem recorder_encode_size_le {w₀ w w' : World D} {staged : Array (Step D ×
 
 /-- The derived bound's value: 16,779,332 bytes, about half the 32 MiB it replaced. -/
 theorem recordBytesMax_deployed : c.recordBytesMax = 16779332 := by decide
+
+/-! ## A follower at step 0 holds no record (HOST-49, HOST-21's adopt argument)
+
+PROTOCOL's adopt runs only when follow's World is at step 0 (`notAtGenesis`), and seals the adopted
+base with an empty index. That is sound only if a Store whose World is at step 0 holds no record past
+its base, and its base is itself at step 0. HOST-21 argued it from IO ("follow never appends an empty
+record"); here it is a theorem of the open: the reader refuses an empty record (`Record.Fault.empty`),
+so every record it folds advances the step count. -/
+
+/-- A rooted run of `World.step` moves the step counter by exactly its length (KERNEL's `step_steps`). -/
+theorem rooted_steps {E : Env D} {root : World D → D} :
+    ∀ {w w' : World D} {ps : List (Step D × D)},
+      Rooted (World.step E) root w ps w' → w'.steps = w.steps + ps.length
+  | w, w', [], h => by simp only [Rooted] at h; subst h; simp
+  | w, w', (t, n) :: rest, h => by
+    obtain ⟨w₁, ha, _, hr⟩ := h
+    have := step_steps ha
+    have := rooted_steps hr
+    simp only [List.length_cons]
+    omega
+
+/-- Every record the deployed reopen folds advances the step count (`Record.step_nonempty`). -/
+theorem foldStep_steps {w w' : World D} {r : ByteArray} (h : foldStep w r = .ok w') : w.steps < w'.steps := by
+  obtain ⟨ps, _, hne, hr⟩ := Record.step_nonempty h
+  have := rooted_steps hr
+  cases ps with
+  | nil => exact absurd rfl hne
+  | cons _ _ => simp only [List.length_cons] at this; omega
+
+theorem foldlM_steps : ∀ {w w' : World D} {rs : List ByteArray},
+    rs.foldlM foldStep w = .ok w' → w.steps + rs.length ≤ w'.steps
+  | w, w', [], h => by
+    simp only [List.foldlM_nil, pure, Except.pure, Except.ok.injEq] at h
+    subst h; simp
+  | w, w', r :: rs, h => by
+    simp only [List.foldlM_cons, bind, Except.bind] at h
+    split at h
+    · cases h
+    · rename_i w₁ h₁
+      have := foldStep_steps h₁
+      have := foldlM_steps h
+      simp only [List.length_cons]
+      omega
+
+/-- **An open's step count is at least its base's plus its records** (HOST-49). -/
+theorem openWith_steps_records {keys : Keys} {file I S : ByteArray} {o : Opening (World D)}
+    (h : Id.run (openWith keys c world recorder.mark originChain foldStep file S.size I.size
+      (segReader I) (segReader S)) = .ok o) :
+    ∃ (b : Base (World D)) (n : Nat) (d : ByteArray), Base.read keys c world file = .ok (b, n, d) ∧
+      b.world.steps + o.opened.records ≤ o.opened.world.steps := by
+  obtain ⟨b, n, d, rs, hb, hf, hn, -⟩ := openWith_world keys c world recorder.mark originChain foldStep file I S h
+  exact ⟨b, n, d, hb, by rw [hn]; exact foldlM_steps hf⟩
+
+/-- **HOST-21's adopt argument, proved**: a Store the deployed open opens at step 0 holds no record
+past its base, the loop holds no index entry after it, and the base itself is at step 0. So the
+measure PROTOCOL's adopt checks (`w.steps ≠ 0` refuses `notAtGenesis`) is "nothing past the image",
+and the adopted base's empty index drops nothing. -/
+theorem openWith_steps_zero {keys : Keys} {file I S : ByteArray} {o : Opening (World D)}
+    (h : Id.run (openWith keys c world recorder.mark originChain foldStep file S.size I.size
+      (segReader I) (segReader S)) = .ok o) (h0 : o.opened.world.steps = 0) :
+    o.opened.records = 0 ∧ o.index.size = 0 ∧
+      ∃ (b : Base (World D)) (n : Nat) (d : ByteArray), Base.read keys c world file = .ok (b, n, d) ∧
+        b.world.steps = 0 := by
+  obtain ⟨b, n, d, hb, hle⟩ := openWith_steps_records h
+  have hi := openWith_tail_entries keys c world recorder.mark originChain foldStep file I S h
+  exact ⟨by omega, by omega, b, n, d, hb, by omega⟩
 
 /-- The loop's request bound is one record's steps: with `drain`'s bound (`drainM_conserves`) and
 `Machine.staged_size_le` (at most one staged pair per request), the writer stages at most

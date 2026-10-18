@@ -2276,3 +2276,50 @@ returns `Option`/`Except` over the SAME bound its decode enforces, and a theorem
 - host-sim's `run` was at the elaborator's depth; the seed-only plant calls moved into `laterPlants` (a `set_option maxRecDepth` was refused by the set_option budget, rightly).
 
 **Meta-critique.** This took five lines of code and stood open for three decisions because it was filed as an "edge" in a table row. The table was the right place to find it and the wrong place to leave it. Every "an open edge" cell in decisions/host.md is a cv task or a fix, not a note.
+
+## HOST-49 · HOST-21's adopt argument is a theorem: the reader refuses a record of no steps (`emptyRecord`), so a Store at step 0 holds no record past a base at step 0 (2026-10-19, HOST-13; HOST-21's meta-critique, HOST-11's edge)
+
+**The defect.** PROTOCOL's adopt runs only when follow's World is at step 0. It refuses `notAtGenesis` otherwise; the measure was `w.height ≠ 0` at HOST-21 and is `w.steps ≠ 0` since the refusals day. Adopt then seals the adopted base with an EMPTY index (`Follow.loop`, `indexStart`). That is sound only if a Store at step 0 holds no record past its base. HOST-21 argued it from IO: "`Follow.loop` never appends `.steps []`, and every record holds at least one Turn". No theorem stated it, and the reader accepted a record of no steps: it opened as one record that moved nothing. The two facts could come apart silently, as HOST-21's meta-critique feared: a Store at step 0 holding a record, which adopt's measure cannot see.
+
+**Decision.** Make "every record advances the step count" a property of the one reader and the one writer, then prove the adopt fact from it.
+- Reader: `Record.stepTurns` refuses a record that decodes to no steps, as `Record.Fault.empty` ("emptyRecord"). Both opens, the tail and the follower's absorb go through it.
+- Writer: `Record.encode` returns `none` for an empty batch (`encode_empty`; the writer never writes what its reader refuses, HOST-41's law). `Host.append` writes nothing for an empty batch and returns the resident unchanged. Both callers already skipped the call (serve's `isEmpty`, Follow's `.steps []` arm); now the append path itself guarantees it.
+- Theorems:
+  - `Record.step_nonempty` (`Host.Proofs.Base`): a record that opens is a NONEMPTY rooted run. `step_rooted` now goes through it.
+  - `Record.step_empty` (`Host.Proofs.Page`, the tooth): the codec's own bytes of `[]` are refused `empty`.
+  - `Host.Proofs.Deployed`:
+    - `rooted_steps`: a rooted run moves `steps` by exactly its length, by KERNEL's `step_steps`;
+    - `foldStep_steps`: every folded record strictly advances `steps`;
+    - `foldlM_steps`;
+    - `openWith_steps_records`: base steps + records ≤ the opened World's steps;
+    - **`openWith_steps_zero`**: a Store the deployed open opens at step 0 has no record past its base, holds no index entry after it (`openWith_tail_entries`), and its base is at step 0. That is HOST-21's argument, as a theorem of the deployed open with no IO premise.
+
+**Plants.** host-file-sim `emptyPlants`:
+- `plant-empty-record`: a frame that VERIFIES under the Store key, holding the codec bytes of no steps, appended to a fresh Store, is refused `record 0 emptyRecord` by both the follower and the writer opens, and seg.log is unchanged.
+- `-writer`: the real `append` of an empty batch writes nothing and leaves the resident unchanged.
+- `-writer-control`: one step appends one frame.
+- Seen RED with the three changes reverted: `2 FAILED`. The reader plant read `opened, opened`; the writer plant appended 44 → 84.
+
+**Cross-layer.** `Hosting/Proofs/Allowance.lean` `stepTurns_fold` gains one `· cases h` arm for the new match arm. Its statement is unchanged. HOSTING-8 agreed.
+
+**Flag day.** None in bytes. No layout, codec or stamp moves, and no Store re-geneses. What refuses now that did not: a Store holding a record of no steps, as `record N emptyRecord`. No deployed writer wrote one (both callers skipped empty batches), so none exists.
+
+**Alternatives.**
+- (a) A Host-side check at adopt ("the segment past the base is empty"). That checks one fact twice (HOST-21's law-1 argument) and still leaves the reader accepting a record that advances nothing.
+- (b) A nonempty list in CODEC's batch codec. That is the same refusal at a lower layer, and CODEC's to make. The Host reader is where "a record" means "a step of the log". If CODEC wants it, this moves down and `Fault.empty` is deleted.
+- (c) Name the gap and stop. The fix was a refusal, three proofs and a plant.
+
+**Critique.**
+- `openWith_steps_zero` says the base is at step 0. It does not say the base's index COUNT is 0. That follows from "every index entry a base counts is a record before it, and every record advances the steps", but no theorem ties a base's count to the steps before it. At step 0 the only bases are genesis's (count 0) and a seal of a step-0 World, whose count is its predecessor's plus `r.index.size` = 0 (this theorem), so it holds by induction over seals that no theorem states. Named, not closed.
+- The theorem is about the moment of OPENING; adopt checks follow's live World later. Two links between them are theorems:
+  - Follow's `.steps []` arm keeps the World: `step_persists_admitted` at `ts = []` gives `RootedFold w [] w'`, so `w' = w`.
+  - Every append moves `steps` by its batch's length (`rooted_steps` over the run `append` is handed).
+
+  So a live follower at step 0 has appended nothing since its open. The sequencing of those facts inside the IO loop is read off, not proved (law 6's usual IO edge).
+- Adopt itself (PROTOCOL's `notAtGenesis` and Follow's seal of `w'` with an empty index) is read off too, not run against a Store at step 0 with a record. With the reader refusal no such Store opens.
+- Two other decoders of a record do not go through `stepTurns`: `Page.walk` (a page) and `Check.turnsOf` (`host check`). An empty record would walk there as zero events. That is unreachable today: open refuses such a Store, and both run only on an opened one. Still, it is a second reader whose acceptance differs. Named.
+- These are theorems of the pure `openWith` over `segReader`, like every open theorem here. The IO `openAt` is the same generic code instantiated over files.
+
+**Law-6 read (read-only reader): LAND.** No vacuity and no collapse: the open is the one Cli uses (`Cadence.deployed`, `Deployed.foldStep`), the premise is met at genesis, and `encode_eq_some`'s restatement only strengthens its `.mp` uses. Fixed: two docstrings (`encode_eq_some`, `Fault.empty`). Its WEAKs are in the critique above: the open-versus-live-World edge, the base-count gap (cv 01a14f2a-8c82), the second decoders, and pure versus IO.
+
+**Meta-critique.** HOST-21 closed this "by argument rather than by code" and said so. The honest label sat for two days because it read as finished. It was one refusal away from a theorem the whole time.
