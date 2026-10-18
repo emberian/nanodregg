@@ -2109,3 +2109,135 @@ def rowPin (E : Env D) : Option RowLeaf → D                -- the leaf digest,
 4. *Bounded reads (the KERNEL-48 critique).* `under S pre n` returns at most n entries and stops walking (`takeList n` past the prefix); `rangeRows` reads `most + 1`; `checkRowsRemain` reads 257 and refuses a full listing (more than 256 entries under a parent means a row). WASTE `rows-read-per-range-read` measures it.
 5. *Names.* `rejectNames` gains the 13 rows Rejects in constructor order and `refusalNames` LANG-14's 5 receive refusals: every recorded reject code shifts, so the vectors re-emit and old refusal records refuse by stamp.
 Not changed: rows_separate stays CODEC's (`rows_separateOn`, tooth `rows_kindByte_needed`); no Kernel twin.
+
+## KERNEL-49 PROPOSED · A row insert costs 564 hashes because the one trie is uncompressed, not because rows are in it: compress the one trie (K17-K49 for KERNEL-17, 2026-10-18; ROOT's ruling on WASTE `hashes-per-row-insert` 564.071). DESIGN ONLY until ROOT rules.
+
+**The measurement (read at 42c261b).** `hashes-per-row-insert` 564.071 and `hashes-per-row-retract` 569.000, against `hashes-per-touched-cell` 8.900. `rowStep`'s insert is `setHead (r.insert … (.row key) …)`: two path rebuilds. Every key under one relation shares `parent ‖ rel ‖ 1 ‖ width` (280 bits), and its head shares the first 271 of them (tag byte 0 vs 1). An uncompressed trie hashes one node per shared bit, so ~282 per path, two paths.
+
+**What the 564 is NOT bounded by.** ROOT's (c) names `rowsPerRelationMax` as the bound. That bounds the log2 term only. The path is bounded by the DEPTH: a row path is at most `rowDepth` + 1 = 1305 hashes, because Lang keys share bits too (two u64 counters share ~60 high bits; a 128-byte key with a common 127-byte stem shares 1016). The sim probe's keys are `"a0"`, `"a1"`, `"b0"` (16 bits, the first 14–15 shared). So the honest worst case is 2 · 1305 = 2610 per insert, × `rowsMax` 32 = 83,520 per turn. `dropHeads` adds up to 256 · 1305. (PREDICTED from the definitions; nothing ran.)
+
+**The same defect, measured elsewhere.** `refusals` `count` keys share kind ‖ member across windows, and `hashes-per-prune` reads 539.333. Every instance pays ~1 unary node per path on random keys, plus the 0.640 empty-sibling floor (KERNEL-35). The rows only made it loud.
+
+### (a) Path compression in the one trie type
+
+**Shape.**
+- `T.node (h : D) (b : Nat) (l r : T)`: `b` is the branching bit, the first bit `≥ d` where the subtree's keys differ.
+- `nodeHash b l r = H(2 ‖ u16 b ‖ l ‖ r)`. The depth MUST be in the hash. Without it, a proof can claim other depths and steer `k`'s walk to a leaf that `getAt k` never reaches; an exclusion proof then forges.
+- `Spec` gains `depth_lt : depth < 2^16`, a Prop field. Each of the four instances discharges it by `decide` (257, 256, 328, 1304).
+- `build` skips the bits where every key agrees, so a node always has two non-empty children.
+- `insAt` splits an edge at the first differing bit (one new node).
+- `join l r`: an empty side returns the other side whole, a node with its own `b`. Its cached hash is reused, because a node's hash commits its own `b`, not its position.
+- `getAt`, `proveAt`, `climb` and `retainAt` follow `b`, not `d + 1`.
+- `Proof.sibs : List (Nat × D)`. `verifyInclusion`/`verifyExclusion` check that the `b`s strictly increase and are `< depth`, and climb by `bit k b`.
+- `under` gains one representative-key check when a node's `b` jumps past the prefix end. The skipped bits are not on the path. That is one leaf read and no hash.
+- DELETED: the `EmptyDigest` parameter on `mkNode`, `build`, `insAt`, `proveAt`, `join`, `retainAt`, `rowStep`, `setHead`, `rowsRun` and `dropHeads`. No inner node has an empty child, so only an empty ROOT hashes `emptyHash`. KERNEL-35's thunk survives at the four roots only.
+
+**Premises first** (measured by grep at 42c261b; scripts in `logs/k49-spread.py` and `logs/k49-stmt.py`):
+- *New premise on any landed theorem: NONE*, if the depth bound is the `Spec` field. As a premise instead, `S.depth < 2^16` would land on `climb_sound`, `inclusion_sound`, `exclusion_sound` and `prove_includes`/`prove_excludes`. It would then spread to every **cell reader** that opens a proof: Cells.lean 6, JournalHead.lean 5, RootedDeployed.lean 10, and Protocol/Proofs/Receipt's `check_*`. ⚑ So the field is the design, and the premise form is refused.
+- *Definitions whose meaning changes, names kept*: `WF` (commits `b`), `Shape` (node `b` = first divergence, both children non-empty), `Shallow`, `Routed` (split at `b`), and so `Canon`. `World.Canon`, `JournalCanon`, `RefusalsCanon` and `RowsCanon` keep their text. Cell readers keep their premises by name, and the names now mean more.
+- *Statements that change text (mechanical: the `e` argument dropped, or `build`/`join` re-specified; no premise added)*, as theorems whose statement names a trie internal:
+  - Kernel/Proofs/Trie 20 of 46 (`getAt_build`, `getAt_insAt`, `build_split`, `shape_insAt`, `canon_build`, `build_toList`, `climb_proveAt`, `prove_includes`, `prove_excludes`, `length_insAt`, …);
+  - TrieRetain 8 of 8 (`toList_join`, `canon_join`, `retainAt_eq_build`, `get_retainAt`, …);
+  - TrieMap 1 (`build_perm`);
+  - Codec TrieOrder 8 (`build_listing_iff`, `listing_check_iff`, …);
+  - TrieOrderDeployed 7 (`trieOrder_iff` … `rowOrder_iff`);
+  - SlotOrder 6;
+  - RowOrder 2;
+  - Rows 11, RowsRange 5 (`takeList_eq`, `under_eq`, `under_needs_long`, `under_rows`, `filter_pairwise`), RowsHead 14, RowsComm 15. Most of these 45 rows hits are only the `e` argument.
+- *Proofs re-done, statements unchanged*: every theorem over `Canon`/`Routed` (Value 7, Weight 6, Cells 6, JournalHead 5, RootedDeployed 10). Their statements are text-identical. Whether their proofs survive depends on the `Canon` lemmas keeping their names: ASSUMED yes for the 34 that only cite `get_insert`/`canon_insert`/`mem_toList`.
+- Total: ~97 statements re-proved in place, 0 premises added, and 0 cell-reader premises.
+
+**Re-emits.**
+- Every root changes: cells, journal, refusals and rows. So `rootsDigest`, every chain head, genesis, the carried origin (it hashes the roots' bytes), every vector carrying a root, and every Store re-geneses.
+- The phone's proof wire changes. `Proof.sibs` gains a u16 per sibling, so Protocol/Receipt's `jsibs`/`rsibs` gain `jdepths`/`rdepths` (PROTOCOL re-cut), and an old receipt refuses on parse.
+- UNCHANGED, byte for byte: the World and carried LISTINGS (the wire is `toList`, which keeps its order), cell pins, row pins and range pins (`rangePinBytes` reads the listing, not the trie).
+- `Kernel/Trie.lean` is upstream of everything, so this is a serial day for KERNEL-17 alone, and the whole tree rebuilds once.
+
+**Cost (PREDICTED).**
+- *Row insert*, in the probe's rows trie (≤ 8 entries: 2 heads plus rows; branches at bit 263 (rel), 271 (head|rows) and ~294 (key)): the row path is ~3 nodes + 1 new node + 1 leaf, and `setHead` is 1 leaf + ~2 nodes. That gives **~8–10** (was 564.071).
+- In general: 2·(log2 N + 0.33) + 2 for N entries in the rows trie, with **no term in key length**.
+- *Retract*: the leaf goes, its node collapses for free (the sibling's hash is reused), plus ~2 ancestors and `setHead` ~3: **~6** (was 569.000).
+- *Touched cell*: −~1.0 per path, the uncompressed trie's path constant (~1.33 for random keys) against a compressed one's (~0.33). ASSUMED: textbook digital-trie constants, random ids. A further −0.640, because the empty-sibling floor goes. **8.900 → ~7.3.**
+- Nullifier, journal entry, refusal and prune all fall, by about one hash per path.
+- *Range read*: 0 trie-domain hashes before and after; `rangePin` is 1 + m digests (m rows listed), unchanged. `rows-read-per-range-read` 2.400: +≤1 leaf read per skipped prefix.
+
+**Effect on the rows theorems.**
+- `range_rows_exact`: same statement; `under_eq` is re-proved with the representative check.
+- `admit_comm` and `head_sum`: statements unchanged; they are stated over `rowAt`/`toList`.
+- `rowsParented` and `carry`: unchanged; they read `toList` and roots.
+- CODEC's refine sites (`listingAccept`, used by `cells`, `journalTrie`, `refusalsTrie` and `rowsTrie`): text unchanged. `build_listing_iff` is re-proved.
+
+### (b) Two levels: each relation's rows in their own subtrie under its head
+
+**Shape.**
+- `Rows D := T (HeadSlot D) Head D` with `Head := {count sum limit cap width retract, sub : T ByteArray RowVal D}`.
+- `relSpec` routes a row by `k ‖ u8 |k|`, with the length byte as a SUFFIX. That is injective under zero-padding, because the byte at position |k′| is 0 on the shorter key and ≥ 1 on the longer, so it is prefix-free with no World invariant (KERNEL-46 amendment 1 kept). Depth 8·(keyBytesMax + 1).
+- A head's digest is `H(domRowHead ‖ fields ‖ sub.hashOf)`.
+- `RowSlot`, `rowAt` and `rowPin` keep their API: two lookups.
+- ⚑ **The top key must be `rel ‖ parent`, not `parent ‖ rel`.** With `parent ‖ rel`, two relations under one parent share 263 bits. The probe declares two (rel 0 and rel 1 under one parent), so the head write alone would still cost ~264. That is (b) as ROOT worded it: PREDICTED ~276 per insert, half of today.
+- With `rel ‖ parent`, a parent's heads no longer sit under one prefix. `checkRowsRemain` and `dropHeads` become ≤ 256 point reads (`rel < 256`), not one prefix walk.
+
+**Premises first.**
+- No cell reader is touched, and `Kernel/Trie.lean` is unchanged.
+- `RowsCanon` gains a conjunct (every head's `sub` is `Canon relSpec`). Its name is kept, and it lands on exactly KERNEL-16's six (`admit_world_weight`, `admit_conserves`, `fold_conserves`, `fold_world_weight`, `fold_budget_lt`, `carry_fold_budget_lt`).
+- `WF` of the top no longer implies `WF` of a sub (the head digest reads a cached root). Any future rows inclusion theorem carries a nested `RowsWF`. No landed theorem opens a rows proof, so none gains it today.
+- Statements rewritten (the `Rows` type changes), counted as theorems naming rows defs:
+  - Rows 27, RowsHead 36 (`head_sum`, `fold_head_sum`, `rowsHeaded_iff`, `admit_rows_listing`: simpler, per head), RowsComm 21, RowsRange 24, RowsSep 5 (`rows_separateOn` splits into `heads_separate` and `relRows_separate`, both unconditional), RowsRangeDeployed 1;
+  - Codec RowOrder 7, Rows 5, RowsReached 4, World 13, Carried 9, WorldTooth 21;
+  - Host/Proofs/Deployed 10.
+  - ~180, ASSUMED most mechanical.
+
+**Re-emits.**
+- The rows root, `rootsDigest`, chains, genesis, carried origin and vectors re-genesis.
+- The cells, journal and refusals roots are unchanged.
+- The listing wire can stay flat and byte-identical: a head sorts before its rows. The `rowsTrie` refine then groups, and `listingAccept` gains a two-level twin. Range pins can stay byte-identical (keep emitting `rowKeyBytes`).
+
+**Cost (PREDICTED, `rel ‖ parent`, uncompressed).**
+- The top path, with 2 heads diverging at bit 7: 7 unary nodes + 1 + leaf = 9.
+- The sub path in the probe: 0 for a lone row, ~15 for "a0" against "a1": ~11 averaged, + leaf.
+- **~20 per insert, ~20 per retract**; cells 8.900 unchanged.
+- Key-structured relations keep paying: a u64-counter relation costs ~60 + 9. So (b) removes the 280-bit stem but not a key's own.
+
+**Effect on the rows theorems.**
+- `head_sum` becomes local, and orphan rows become UNREPRESENTABLE. `rowsHeaded`'s "a row needs its head" clause is deleted, not checked.
+- `range_rows_exact` walks one sub with `pre` alone.
+- `admit_comm_rows` needs one more `eq_of_get_eq` layer (sub canon) for root equality.
+- `rowsParented` iterates over heads only.
+- `Carried.rows` changes type; its wire does not.
+
+### (c) Accept the cost
+
+- Price: zero premises and zero re-emits.
+- The bound is not `rowsPerRelationMax`: it is 2·(`rowDepth` + 1) = 2610 per insert (above). The WASTE row must say that bound, and an arm must show it.
+- It keeps the 0.640 floor and the unary-path tax on every instance.
+
+### Teeth and WASTE rows that land with each
+
+- **(a)**
+  - Re-pin downward: `hashes-per-row-insert`, `-row-retract`, `-touched-cell`, `-nullifier`, `-journal-entry`, `-prune`, `refuse hashes-per-refusal`.
+  - NEW `hashes-per-row-insert-stem`: a probe relation of 64 u64-counter keys, PREDICTED ≈ the random-key figure.
+  - NEW `proof bytes-per-inclusion`.
+  - Plant `depth-unhashed`: `nodeHash` without `b`, with a forged exclusion that steers past `k`'s leaf. It must VERIFY under the plant and refuse at main.
+  - Theorem `canon_no_empty_child`, with its negative: a unary node is not `Canon`.
+- **(b)**
+  - Re-pin row insert/retract.
+  - NEW `hashes-per-row-insert-stem` (it will show ~70: the residual named).
+  - Plant `head-sub-unbound`: the head digest without `sub.hashOf`, a row swapped under an unchanged rows root.
+  - Plant `parent-major-heads`: the `parent ‖ rel` top key, whose WASTE row reds at ~276.
+- **(c)**
+  - `hashes-per-row-insert-worst`, a 128-byte stem relation, ceiling 2610.
+  - The WASTE source text names the depth bound, not `rowsPerRelationMax`.
+
+**Recommendation: (a).**
+- The defect is the trie's: it taxes four instances, and the fifth will pay it too.
+- (b) fixes one instance, only with a key order ROOT's wording did not have, and leaves each key's own stem.
+- (a)'s price is ~97 re-proofs, zero added premises and zero cell-reader premises. Every root re-geneses, and the phone's proof wire is re-cut, which is a rebuild. It also DELETES KERNEL-35's per-node thunk plumbing.
+- (b)'s structural wins (orphan rows unrepresentable, a local `head_sum`) are real and independent of cost. They deserve their own entry, not a ride on this one.
+
+**Open question for ROOT, Q49:** is the Patricia node's depth committed as a fixed u16 under a `Spec` field `depth_lt` (zero theorem premises), rather than as a premise on the 21+ cell-reader inclusion theorems? And may KERNEL-17 alone edit `Kernel/Trie.lean` for one serial day, every other lane parked on the rebuild?
+
+**Critique.**
+- A cheaper containment exists and is NOT offered. Fusing the row's and the head's writes into one pass shares the ~271 common levels, which gives ~290 per insert. It still lands 30× over a cell, and it would become the reason (a) never happens.
+- The cost figures are PREDICTED from definitions plus textbook trie constants; the probe is tiny (≤ 8 rows), so its figure flatters every option equally.
+- The ~97 and ~180 counts are statements naming internals (a regex over statements), not proof obligations. As KERNEL-47's meta-critique warns, the proofs are where the price hides: (a)'s `Shape` must state "first divergence", and `build_toList`'s induction changes measure from depth to fuel-with-skips.
+- (a) makes a node's hash 2 bytes longer: the hash count is unchanged, and the bytes hashed rise ~3%.
