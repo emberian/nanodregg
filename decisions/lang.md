@@ -1900,3 +1900,25 @@ meaning theorems are about the builders) is real, and the cost is a text and a b
 **Status.** PROPOSED (design only; ROOT rules on LANG-50 and LANG-51 separately). Build order if approved: LANG-51
 (core, its vacuity read) → `Lang/Surface.lean` + `Read.locate` + `ob` → the three `.ob` texts and rows → tally/
 CoAuthor re-cut → theorems 1–3 with teeth and the vacuity read.
+
+**LANG-51 · Built (2026-10-18; LANG-15; ROOT APPROVED both, with conditions).** `Term.refuse (ty : Ty) (why : ByteArray)`
+(wire tag 17, `why` the payload, `ty` the one child), `Fault.refused why`, `Prim.lenLe` (code 11; `bytes, nat → bool`,
+`a.size ≤ n`: `ByteArray.size`, O(1)). One amendment to the proposal, from the vacuity read: the reason is a LITERAL
+(not an evaluated term) and the checker requires `Bounds.reasonOk` (at most `reasonMax` = 256 bytes, UTF-8, no
+control character; `badReason` otherwise). A refusal is a name (law 7), so the program's data never chooses it, and
+what it wrote is exactly what every reader shows on one line (`reasonText` truncates at 256: no two names collide in
+display). `ob` prints `fault refused <reason>`.
+- *Reshaped statement (the only one):* `Sound.step_fault` gains a third disjunct, a state evaluating `refuse T w` with
+  `f = .refused w`. No premise added anywhere. `HasType`, `BigStep`, `Derives`, `Canon` gain one constructor each;
+  `RunOK`/`StepOK` (`f ≠ .stuck`), `checked_never_stuck`, `eval_sound` unchanged (vacuity reader: LAND-WITH-FIXES, no
+  HIGH; its two MEDIUMs fixed as above).
+- *New theorems:* `bigStep_refuse_iff`, `primEval_lenLe`; teeth per tag: `refuse_named`, `refuse_one_step`,
+  `refuse_lazy_field`, `refuse_untaken_arm`/`refuse_taken_arm`, `refuse_left_first`, `lenLe_at_bound`,
+  `lenLe_past_bound`, `lenLe_size_not_content`, `lenLe_empty_zero` (machine); `refuse_round_trip`,
+  `refuse_untyped_refused`, `lenLe_code` (wire); `refuse_prints`/`refuse_reads`, `refuse_typed`,
+  `refuse_unsorted_refused`, `refuse_newline_refused`, `refuse_long_refused`, `lenLe_typed`, `lenLe_nat_refused` (checker,
+  printer). Journey LR0–LR4 through the receivers: a method's refusal is `program "put: refused note 0..4"`, a law's
+  `lawDenied … "small: refused over 100"`, the four-byte note at the bound lands.
+- *Flag day:* none for shipped bytes. Lifecycle, Allowance and Escrow print byte-identical (G0/A0/E0 green); no
+  package id moves; THE BAR's programs use neither tag. New: term tag 17, prim code 11, `Fault.refused`,
+  `TypeError.badReason`, reader keyword `refuse` (a binder named `refuse` is now `reservedBinder`), `ReadRefusal.badRefuse`.

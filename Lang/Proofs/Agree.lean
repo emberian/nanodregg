@@ -207,6 +207,10 @@ theorem agrees (N : Nat) :
           rcases ihE n1 (by omega) body [] k d o ho h1 with ⟨e, rfl, hb⟩ | ⟨r, m1, hm1, hb, h2⟩
           · exact .inl ⟨e, rfl, .ref hi hb⟩
           · exact .inr ⟨r, m1, by omega, .ref hi hb, h2⟩
+      | refuse A w =>
+        have := h.inv_fault (f := .refused w) rfl
+        subst this
+        exact .inl ⟨_, rfl, .refuse⟩
     · intro n hn v ℓ k d o ho h
       cases v
       case record fs =>

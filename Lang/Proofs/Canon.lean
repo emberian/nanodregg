@@ -206,6 +206,7 @@ theorem hasType_wf (hΔ : ∀ A ∈ Δ, A.wf = true) :
   | _, _, _, hΓ, .fix ht => by
     have := hasType_wf hΔ hΓ ht; simp only [Ty.wf, Bool.and_eq_true] at this ⊢; exact this.1
   | _, _, _, _, .nat _ | _, _, _, _, .bool | _, _, _, _, .bytes _ | _, _, _, _, .digest _ => rfl
+  | _, _, _, _, .refuse hw _ => hw
   | _, _, _, _, .prim (p := p) _ _ => by cases p <;> rfl
   | _, _, _, hΓ, .record hasc hfs => by
     simp only [Ty.wf, Bool.and_eq_true]

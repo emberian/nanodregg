@@ -248,6 +248,9 @@ theorem termOf_termTree : (t : Term) → termWire t = true → termOf (termTree 
   | .ite c t e, h => by
     simp only [termWire, Bool.and_eq_true] at h
     simp [termTree, termOf, termOf_termTree c h.1.1, termOf_termTree t h.1.2, termOf_termTree e h.2]
+  | .refuse a w, h => by
+    simp only [termWire] at h
+    simp [termTree, termOf, tyOf_tyTree a h]
 
 theorem fieldsOf_fieldsTree : (fs : List (Label × Term)) → fieldsWire fs = true →
     fieldsOf (fieldsTree fs) = some fs
@@ -399,6 +402,11 @@ theorem termOf_inv (n : Nat) :
         obtain ⟨i, hi, rfl⟩ := h
         obtain ⟨e, w⟩ := u32Of_some hi
         simp [termTree, termWire, e, w]
+      · rename_i q a
+        simp only [Option.map_eq_some_iff] at h
+        obtain ⟨a1, ha, rfl⟩ := h
+        obtain ⟨ea, wa⟩ := tree_of_tyOf ha
+        simp [termTree, termWire, ea, wa]
     · intro cs hs fs h
       unfold fieldsOf at h
       split at h

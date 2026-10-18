@@ -34,6 +34,9 @@ inductive TypeError
   | bytesRange (size : Nat)
   /-- an id literal longer than `Bounds.digestBytesMax` -/
   | digestRange (size : Nat)
+  /-- a `refuse` reason that is not a name: past `Bounds.reasonMax` bytes, not UTF-8, or holding a
+  control character (LANG-51) -/
+  | badReason
   | operands (p : Prim) (left right : Ty)
   /-- a record literal's or an extension's labels are not strictly ascending -/
   | notCanonical
@@ -55,7 +58,7 @@ inductive TypeError
 def TypeError.name : TypeError → String
   | .unbound _ => "unbound" | .noPackage _ => "noPackage" | .badType _ => "badType"
   | .notFunction _ => "notFunction" | .argument _ _ => "argument" | .notSelfMap _ => "notSelfMap"
-  | .natRange _ => "natRange" | .bytesRange _ => "bytesRange" | .digestRange _ => "digestRange" | .operands _ _ _ => "operands"
+  | .natRange _ => "natRange" | .bytesRange _ => "bytesRange" | .digestRange _ => "digestRange" | .badReason => "badReason" | .operands _ _ _ => "operands"
   | .notCanonical => "notCanonical" | .notRecord _ => "notRecord" | .noField _ => "noField"
   | .notSum _ => "notSum" | .noArm _ => "noArm" | .payload _ _ => "payload" | .arms => "arms"
   | .armType _ _ => "armType" | .condition _ => "condition" | .branches _ _ => "branches"
@@ -160,6 +163,10 @@ def inferE (Δ Γ : List Ty) : Term → Except TypeErr Ty
       match Δ[i]? with
       | some T => .ok T
       | none => typeErr (.noPackage i)
+  | .refuse T why =>
+      if T.wf then
+        if Bounds.reasonOk why then .ok T else typeErr .badReason
+      else typeErr (.badType T)
 
 /-- The row of a list of fields, label for label (an error is under its field's label). -/
 def inferFields (Δ Γ : List Ty) : List (Label × Term) → Except TypeErr (List (Label × Ty))

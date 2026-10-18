@@ -124,6 +124,7 @@ def tyText (T : Ty) (h : (ty T).isSome = true := by decide) : String := (ty T).g
 def primWord : Prim → String
   | .add => "+" | .sub => "-" | .mul => "*" | .div => "/" | .mod => "%"
   | .eq => "==" | .lt => "<" | .le => "<=" | .beq => "beq" | .cat => "cat" | .deq => "deq"
+  | .lenLe => "len<="
 
 /-- The name of the variable bound at depth `d`. -/
 def name (d : Nat) : String := "x" ++ Nat.repr d
@@ -147,6 +148,7 @@ def termSx (d : Nat) : Term → Option SExp
   | .case t arms => do pure (list (atom "case" :: (← termSx d t) :: (← armsSx d arms)))
   | .ite c a b => do pure (list [atom "if", ← termSx d c, ← termSx d a, ← termSx d b])
   | .ref i => some (list [atom "ref", atom (Nat.repr i)])
+  | .refuse T w => do pure (list [atom "refuse", ← tySx T, bytesSx w])
 
 def fieldsSx (d : Nat) : List (Label × Term) → Option (List SExp)
   | [] => some []

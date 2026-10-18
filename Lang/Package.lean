@@ -454,6 +454,7 @@ def Term.relocate (f : Nat → Nat) : Term → Term
   | .case t arms => .case (t.relocate f) (Term.relocateRow f arms)
   | .ite c a b => .ite (c.relocate f) (a.relocate f) (b.relocate f)
   | .ref i => .ref (f i)
+  | .refuse T w => .refuse T w
 
 def Term.relocateRow (f : Nat → Nat) : List (Label × Term) → List (Label × Term)
   | [] => []
@@ -466,7 +467,7 @@ mutual
 /-- The digest literals of a term, in order. -/
 def Term.digestLits : Term → List ByteArray
   | .digest s => [s]
-  | .var _ | .nat _ | .bool _ | .bytes _ | .ref _ => []
+  | .var _ | .nat _ | .bool _ | .bytes _ | .ref _ | .refuse _ _ => []
   | .lam _ b | .fix b | .get b _ | .inj _ _ b => b.digestLits
   | .app f a | .prim _ f a => f.digestLits ++ a.digestLits
   | .record fs => Term.rowDigestLits fs

@@ -79,7 +79,15 @@ inductive Fault
   | ticks
   /-- the stack bound is reached -/
   | stack
-  deriving DecidableEq, Repr
+  /-- the program refused, by the name it wrote (`Term.refuse`, LANG-51) -/
+  | refused (why : ByteArray)
+  deriving DecidableEq
+
+instance : Repr Fault where
+  reprPrec f _ := match f with
+    | .stuck => "Fault.stuck" | .overflow => "Fault.overflow" | .underflow => "Fault.underflow"
+    | .divZero => "Fault.divZero" | .tooLarge => "Fault.tooLarge" | .ticks => "Fault.ticks"
+    | .stack => "Fault.stack" | .refused w => s!"Fault.refused {w.toList}"
 
 inductive Step
   | next (s : State)
@@ -102,6 +110,7 @@ def primEval : Prim → Val → Val → Except Fault Val
   | .le, .nat a, .nat b => .ok (.bool (decide (a ≤ b)))
   | .beq, .bytes a, .bytes b => .ok (.bool (decide (a = b)))
   | .deq, .digest a, .digest b => .ok (.bool (decide (a = b)))
+  | .lenLe, .bytes a, .nat n => .ok (.bool (decide (a.size ≤ n)))
   | .cat, .bytes a, .bytes b =>
       if a.size + b.size ≤ Bounds.bytesMax then .ok (.bytes (a ++ b)) else .error .tooLarge
   | _, _, _ => .error .stuck
@@ -141,6 +150,7 @@ def step (lib : List Term) (s : State) : Step :=
         match lib[i]? with
         | some body => .next { s with control := .eval body [] }
         | none => .fault .stuck
+    | .refuse _ why => .fault (.refused why)
   | .ret v =>
     match s.stack with
     | [] => .halt v

@@ -46,6 +46,7 @@ theorem relocate_typed (hf : ∀ i A, Δ[i]? = some A → Δ'[f i]? = some A) :
   | _, _, _, .case h ha => .case (relocate_typed hf h) (relocateArms_typed hf ha)
   | _, _, _, .ite h1 h2 h3 => .ite (relocate_typed hf h1) (relocate_typed hf h2) (relocate_typed hf h3)
   | _, _, _, .ref h => .ref (hf _ _ h)
+  | _, _, _, .refuse hw hn => .refuse hw hn
 
 theorem relocateFields_typed (hf : ∀ i A, Δ[i]? = some A → Δ'[f i]? = some A) :
     ∀ {Γ : List Ty} {fs : List (Label × Term)} {r : List (Label × Ty)},

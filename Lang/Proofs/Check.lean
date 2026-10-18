@@ -127,6 +127,14 @@ theorem inferE_sound : ∀ {Γ : List Ty} {t : Term} {T : Ty}, inferE Δ Γ t = 
       split at h
       · rename_i T' hT; cases h; exact .ref hT
       · simp [typeErr] at h
+  | Γ, .refuse A w, T, h => by
+      simp only [inferE] at h
+      split at h
+      · rename_i hw
+        split at h
+        · rename_i hn; cases h; exact .refuse hw hn
+        · simp [typeErr] at h
+      · simp [typeErr] at h
 
 theorem inferFields_sound :
     ∀ {Γ : List Ty} {fs : List (Label × Term)} {r : List (Label × Ty)},
@@ -187,6 +195,7 @@ theorem inferE_complete : ∀ {Γ : List Ty} {t : Term} {T : Ty}, HasType Δ Γ 
   | _, _, _, .ite hc ha hb => by
       simp [inferE, inferE_complete hc, inferE_complete ha, inferE_complete hb]
   | _, _, _, .ref h => by simp [inferE, h]
+  | _, _, _, .refuse hw hn => by simp [inferE, hw, hn]
 
 theorem inferFields_complete :
     ∀ {Γ : List Ty} {fs : List (Label × Term)} {r : List (Label × Ty)},

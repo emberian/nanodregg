@@ -32,7 +32,7 @@ open Nanodregg.Kernel.Receive
 /-- How deep a closure's import graph may be. -/
 def closureDepthMax : Nat := 8
 /-- The longest reason a law may give, in bytes. -/
-def reasonMax : Nat := 256
+def reasonMax : Nat := Bounds.reasonMax
 
 variable {D : Type} [DecidableEq D]
 
@@ -45,9 +45,14 @@ structure Loaded where
 /-- The interfaces of a closure's packages, in `lib` order: the types `ref` gives them. -/
 abbrev Loaded.ifaces (L : Loaded) : List Ty := L.pkgs.map (·.iface)
 
+def reasonText (r : ByteArray) : String :=
+  let r := r.extract 0 reasonMax
+  (String.fromUTF8? r).getD s!"{r.size} bytes"
+
 def faultText : Fault → String
   | .stuck => "stuck" | .overflow => "overflow" | .underflow => "underflow"
   | .divZero => "divZero" | .tooLarge => "tooLarge" | .ticks => "exhausted" | .stack => "stack"
+  | .refused why => s!"refused {reasonText why}"
 
 def decodeText (e : Codec.Refusal) : String := s!"decode {repr e}"
 
@@ -224,10 +229,6 @@ def apply4 (g : Nat) (ℓ : Label) : Term :=
 def recordRow : Ty → List (Label × Ty)
   | .record r => r
   | _ => []
-
-def reasonText (r : ByteArray) : String :=
-  let r := r.extract 0 reasonMax
-  (String.fromUTF8? r).getD s!"{r.size} bytes"
 
 /-- Every law of the package at closure index `g` (whose id is `law`) on `old → new`, each run by
 the one law runner `runLaw` on the package's field. -/

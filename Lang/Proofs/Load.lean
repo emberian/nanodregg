@@ -32,7 +32,7 @@ theorem Inv.empty : Inv ⟨[], [], []⟩ := ⟨rfl, rfl, by simp, by simp⟩
 
 mutual
 theorem relocate_id : ∀ t : Term, t.relocate (fun i => i) = t
-  | .var _ | .nat _ | .bool _ | .bytes _ | .digest _ | .ref _ => rfl
+  | .var _ | .nat _ | .bool _ | .bytes _ | .digest _ | .ref _ | .refuse _ _ => rfl
   | .lam _ b => by simp [Term.relocate, relocate_id b]
   | .app f a => by simp [Term.relocate, relocate_id f, relocate_id a]
   | .fix t => by simp [Term.relocate, relocate_id t]

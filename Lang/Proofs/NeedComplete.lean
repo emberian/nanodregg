@@ -39,7 +39,7 @@ theorem meaningful_of_ne {r : Except Fault Val} (h : r ≠ .error .stuck) : Need
   match r, h with
   | .ok _, _ => rfl
   | .error .overflow, _ | .error .underflow, _ | .error .divZero, _ | .error .tooLarge, _
-  | .error .ticks, _ | .error .stack, _ => rfl
+  | .error .ticks, _ | .error .stack, _ | .error (.refused _), _ => rfl
   | .error .stuck, h => exact absurd rfl h
 
 mutual
@@ -50,7 +50,7 @@ theorem need_complete : ∀ {env : Env} {t : Term} {r : Except Fault Val} {n : N
   | _, _, _, _, d, 0, h => absurd h (by have := derives_pos d; omega)
   | _, _, _, _, .var he, _ + 1, _ => by simp [Need.need, he]
   | _, _, _, _, .lam, _ + 1, _ | _, _, _, _, .nat, _ + 1, _ | _, _, _, _, .bool, _ + 1, _
-  | _, _, _, _, .bytes, _ + 1, _ | _, _, _, _, .digest, _ + 1, _
+  | _, _, _, _, .bytes, _ + 1, _ | _, _, _, _, .digest, _ + 1, _ | _, _, _, _, .refuse, _ + 1, _
   | _, _, _, _, .record, _ + 1, _ => by simp [Need.need]
   | _, _, _, _, .app hf ha hb, f + 1, h => by
     simp [Need.need, need_complete hf f (by omega), need_complete ha f (by omega),

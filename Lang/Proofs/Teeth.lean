@@ -94,4 +94,44 @@ theorem short_chain_fits :
       (.record chainFields))) "d")) = true := by
   decide
 
+/-! ### LANG-51: `refuse` and `len<=` -/
+
+/-- The bytes of `late`. -/
+private def late : ByteArray := ⟨#[108, 97, 116, 101]⟩
+
+/-- `refuse` ends the run with exactly the name it wrote, in one step. -/
+theorem refuse_named : isFault (.refused late) (eval [] 10 (.refuse .nat late)) = true := by decide
+
+/-- ... in ONE step: under a budget of one tick it is already refused, not out of ticks. -/
+theorem refuse_one_step : isFault (.refused late) (eval [] 1 (.refuse .nat late)) = true := by decide
+
+/-- A `refuse` in a field that is never selected never fires (fields are suspended). -/
+theorem refuse_lazy_field :
+    isNat 7 (eval [] 20 (.get (.record [("bad", .refuse .nat late), ("good", .nat 7)]) "good")) = true := by
+  decide
+
+/-- A `refuse` in the arm not taken never fires; in the arm taken, it does. -/
+theorem refuse_untaken_arm : isNat 1 (eval [] 20 (.ite (.bool true) (.nat 1) (.refuse .nat late))) = true := by
+  decide
+
+theorem refuse_taken_arm :
+    isFault (.refused late) (eval [] 20 (.ite (.bool false) (.nat 1) (.refuse .nat late))) = true := by
+  decide
+
+/-- Left operand first: a refusal on the left wins over an arithmetic fault on the right. -/
+theorem refuse_left_first :
+    isFault (.refused late) (eval [] 20 (.prim .add (.refuse .nat late) (.prim .div (.nat 1) (.nat 0)))) = true := by
+  decide
+
+/-- `len<=` at the bound is true, one past it false, and it reads the SIZE (not the content). -/
+theorem lenLe_at_bound : isBool true (eval [] 10 (.prim .lenLe (.bytes late) (.nat 4))) = true := by decide
+
+theorem lenLe_past_bound : isBool false (eval [] 10 (.prim .lenLe (.bytes late) (.nat 3))) = true := by decide
+
+/-- Four zero bytes against 4: the size counts, not the content. -/
+theorem lenLe_size_not_content : isBool true (eval [] 10 (.prim .lenLe (.bytes ⟨#[0, 0, 0, 0]⟩) (.nat 4))) = true := by
+  decide
+
+theorem lenLe_empty_zero : isBool true (eval [] 10 (.prim .lenLe (.bytes .empty) (.nat 0))) = true := by decide
+
 end Nanodregg.Lang.Teeth

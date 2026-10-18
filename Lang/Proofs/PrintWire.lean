@@ -118,6 +118,10 @@ theorem hasType_prints {Δ : List Ty} : ∀ {Γ : List Ty} {t : Term} {T : Ty} {
   | _, _, _, _, _, .digest _, _, hf => by
     obtain ⟨D', rfl, -⟩ := fits_node hf
     exact (prints_digest _ _).mono (by omega)
+  | _, _, _, _, _, .refuse _ _, hw, hf => by
+    simp only [Wire.termWire] at hw
+    obtain ⟨D', rfl, hc⟩ := fits_node hf
+    exact prints_refuse _ (tyWire_prints _ hw (hc _ (by simp)))
   | _, _, _, _, _, .prim ha hb, hw, hf => by
     simp only [Wire.termWire, Bool.and_eq_true] at hw
     obtain ⟨D', rfl, hc⟩ := fits_node hf

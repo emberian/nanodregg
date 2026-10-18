@@ -243,6 +243,7 @@ theorem step_lits {lib : List Term} {s : State} (hlib : LibLits P lib) (hs : Sta
       · rename_i body hb
         exact ⟨⟨hlib body (List.mem_of_getElem? hb), by simp [EnvLits]⟩, hk⟩
       · trivial
+    | refuse _ _ => simp only [step]; trivial
   | ret v =>
     cases k with
     | nil => exact hc
@@ -526,7 +527,8 @@ end
 
 mutual
 theorem relocate_digestLits (f : Nat → Nat) : ∀ t : Term, (t.relocate f).digestLits = t.digestLits
-  | .var _ | .nat _ | .bool _ | .bytes _ | .digest _ | .ref _ => by simp [Term.relocate, Term.digestLits]
+  | .var _ | .nat _ | .bool _ | .bytes _ | .digest _ | .ref _ | .refuse _ _ => by
+    simp [Term.relocate, Term.digestLits]
   | .lam _ b => by simp [Term.relocate, Term.digestLits, relocate_digestLits f b]
   | .app g a => by simp [Term.relocate, Term.digestLits, relocate_digestLits f g, relocate_digestLits f a]
   | .fix t => by simp [Term.relocate, Term.digestLits, relocate_digestLits f t]

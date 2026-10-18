@@ -37,6 +37,7 @@ open Print (hex)
 def faultName : Fault → String
   | .stuck => "stuck" | .overflow => "overflow" | .underflow => "underflow"
   | .divZero => "divZero" | .tooLarge => "tooLarge" | .ticks => "ticks" | .stack => "stack"
+  | .refused w => s!"refused {(String.fromUTF8? w).getD (Print.hex w)}"
 
 /-- An answer: the line, and whether it is a refusal (the exit status). -/
 structure Answer where

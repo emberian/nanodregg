@@ -1104,6 +1104,67 @@ def callRows (mode : Mode) (r0 : Run) (a : Sim.Member) : Run := Id.run do
     (vc6.startsWith "refused program" && (vc6.splitOn "badMethod go").length > 1)
   return r
 
+/-! ### LR: a method and a law refuse by name (LANG-51)
+
+`Gate` holds a natural. Its method `put {note, n}` refuses `note 0..4` unless the note is at most
+four bytes (`len<=`), and its law `small` refuses `over 100` by `refuse` rather than a `refused`
+verdict. Through the real receivers: a method's refusal is `program "put: refused note 0..4"`, a
+law's is `lawDenied … "small: refused over 100"`, and the four-byte note at the bound lands. -/
+
+def gateS : Ty := .record [("n", .nat)]
+def gateArg : Ty := .record [("n", .nat), ("note", .bytes)]
+def gateRes : String := tyS (resultTy gateS)
+
+def gateText : String := s!"
+(package (imports)
+  (state {tyS gateS})
+  (iface (rec (put (-> (rec) (-> {tyS gateS} (-> {tyS gateArg} (-> {rq} {gateRes})))))
+              (small (-> {tyS gateS} (-> {tyS gateS} (-> {rq} {verdictText}))))))
+  (methods put)
+  (laws small)
+  (rels)
+  (body
+    (record
+      (put (fn (v (rec)) (s {tyS gateS}) (a {tyS gateArg}) (r {rq})
+        (if (len<= (. a note) 4)
+            (record (calls (record)) (edits (record)) (state (record (n (. a n)))))
+            (refuse {gateRes} \"note 0..4\"))))
+      (small (fn (old {tyS gateS}) (new {tyS gateS}) (r {rq})
+        (if (<= (. new n) 100) (inj {verdictText} ok (record)) (refuse {verdictText} \"over 100\")))))))
+"
+
+def gateRows (mode : Mode) (r0 : Run) (a : Sim.Member) : Run := Id.run do
+  let prog := mode.program
+  let mut r := r0
+  let p ← match Read.readPackage gateText with
+    | .ok p => pure p
+    | .error e => return note r s!"LR0 read Gate: {e.text}" false
+  let some pb := Wire.encodePackage p | return note r "LR0 Gate has no bytes" false
+  let (r1, v1, t1) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id]) (.install pb))
+  r := note r1 s!"LR0 A installs Gate (a refusing method and law): {v1}" (v1 == "admitted")
+  let some pkg := t1.bind fun t => (createdIds t).head? | return note r "LR0 no package id" false
+  let some n0 := nat64 0 | return note r "LR no bytes" false
+  let (r2, v2, t2) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id, pkg])
+    (.create (some pkg) [] [(stateBase, n0)]))
+  r := note r2 s!"LR1 A creates a Gate at 0: {v2}" (v2 == "admitted")
+  let some obj := t2.bind fun t => (createdIds t).head? | return note r "LR1 no object id" false
+  let put (n : Nat) (txt : String) : Option ByteArray :=
+    Wire.encodeData gateArg (.record [("n", .nat n), ("note", .bytes txt.toUTF8)])
+  let call (args : ByteArray) : Call D :=
+    Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id, obj, pkg]) (.invoke obj 0 args 10000 none)
+  let some aLong := put 5 "fives" | return note r "LR no bytes" false
+  let (_, v3, _) := go prog r (call aLong)
+  r := note r s!"LR2 put with a five-byte note: {v3}"
+    (v3.startsWith "refused program" && (v3.splitOn "put: refused note 0..4").length > 1)
+  let some aBig := put 500 "ok" | return note r "LR no bytes" false
+  let (_, v4, _) := go prog r (call aBig)
+  r := note r s!"LR3 put 500: {v4}" (deniedWith v4 "small: refused over 100")
+  let some aFour := put 7 "four" | return note r "LR no bytes" false
+  let (r5, v5, _) := go prog r (call aFour)
+  r := note r5 s!"LR4 put 7 with a four-byte note (at the bound): {v5}; slot {slotOf Sim.env r5.st.host obj 0 |>.map (·.toList)}"
+    (v5 == "admitted" && slotOf Sim.env r5.st.host obj 0 == nat64 7)
+  return r
+
 def journey (mode : Mode) : Run := Id.run do
   let prog := mode.program
   let fk : List (ByteArray × ByteArray) :=
@@ -1359,6 +1420,8 @@ def journey (mode : Mode) : Run := Id.run do
   if mode = .honest || mode = .skipJudge then
     r := tallyRows mode r a b
     r := storyRows mode r a b
+  if mode = .honest then
+    r := gateRows mode r a
   r := callRows mode r a
   -- L7 follower and auditor
   match World.fold Sim.env g r.st.log with

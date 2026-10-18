@@ -24,4 +24,14 @@ different tick budgets agree on every final outcome (`Lang.Proofs.Run.run_agree`
 they share this bound. -/
 def stackMax : Nat := 4096
 
+/-- A refusal's name (`Term.refuse`, LANG-51): at most this many bytes, printable UTF-8 (no control
+character), so the name a program wrote is exactly the name every reader shows, on one line. -/
+def reasonMax : Nat := 256
+
+def reasonOk (w : ByteArray) : Bool :=
+  decide (w.size ≤ reasonMax) &&
+    match String.fromUTF8? w with
+    | some s => s.toList.all fun c => 32 ≤ c.toNat && c.toNat ≠ 127
+    | none => false
+
 end Nanodregg.Lang.Bounds

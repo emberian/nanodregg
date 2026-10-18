@@ -8,9 +8,9 @@ Not admission: a resident (or its client) reads text into a `Package`, checks it
 
     type  ::= nat | bool | bytes | digest | (-> T U) | (rec (l T)…) | (sum (l T)…)
     term  ::= x | 123 | true | false | "text" | #hex | (lam x T e) | (fn (x T)… e) | (let x T e e)
-            | (digest #hex) | (fix e) | (OP e e) with OP ∈ + - * / % == < <= beq cat deq
+            | (digest #hex) | (fix e) | (OP e e) with OP ∈ + - * / % == < <= beq cat deq len<=
             | (record (l e)…) | (. e l) | (extend e (l e)…) | (inj T l e)
-            | (case e (l x e)…) | (if e e e) | (ref i) | (e e…)
+            | (case e (l x e)…) | (if e e e) | (ref i) | (refuse T "why") | (e e…)
     package ::= (package (imports "hex"…) (state T) (iface T) (methods l…) (laws l…) (rels rel…) (body e))
     rel     ::= (l (key (l T)…) (val T) (limit n) (sum [l]) (cap n) (retract b) (guard [l]))
 
@@ -69,6 +69,8 @@ inductive ReadRefusal
   | badRef (pos : Nat)
   /-- `(digest #hex)` with something other than `#hex` -/
   | badDigest (pos : Nat)
+  /-- `(refuse T why)` with `why` not a `"text"` or `#hex` literal -/
+  | badRefuse (pos : Nat)
   | emptyApplication (pos : Nat)
   /-- `fn` takes `(name type)…` and a body -/
   | badBinder (pos : Nat)
@@ -90,13 +92,13 @@ def ReadRefusal.name : ReadRefusal → String
   | .tooDeep _ => "tooDeep" | .tooLong _ => "tooLong" | .unexpectedEnd _ => "unexpectedEnd" | .stray _ => "stray"
   | .unterminatedString _ => "unterminatedString" | .unclosed _ => "unclosed"
   | .trailing _ => "trailing" | .notAType _ => "notAType" | .badEntry _ => "badEntry"
-  | .unbound _ _ => "unbound" | .badRef _ => "badRef" | .badDigest _ => "badDigest" | .emptyApplication _ => "emptyApplication"
+  | .unbound _ _ => "unbound" | .badRef _ => "badRef" | .badDigest _ => "badDigest" | .badRefuse _ => "badRefuse" | .emptyApplication _ => "emptyApplication"
   | .badBinder _ => "badBinder" | .reservedBinder _ _ => "reservedBinder" | .badImport _ => "badImport" | .badLabel _ => "badLabel"
   | .notPackage _ => "notPackage" | .notOfType _ => "notOfType"
 
 def ReadRefusal.pos : ReadRefusal → Nat
   | .tooDeep p | .tooLong p | .unexpectedEnd p | .stray p | .unterminatedString p | .unclosed p | .trailing p
-  | .notAType p | .badEntry p | .unbound p _ | .badRef p | .badDigest p | .emptyApplication p | .badBinder p
+  | .notAType p | .badEntry p | .unbound p _ | .badRef p | .badDigest p | .badRefuse p | .emptyApplication p | .badBinder p
   | .reservedBinder p _
   | .badImport p | .badLabel p | .notPackage p | .notOfType p => p
 
@@ -172,7 +174,7 @@ def parse (text : String) : P SExp :=
 def primOf : String → Option Prim
   | "+" => some .add | "-" => some .sub | "*" => some .mul | "/" => some .div | "%" => some .mod
   | "==" => some .eq | "<" => some .lt | "<=" => some .le | "beq" => some .beq | "cat" => some .cat
-  | "deq" => some .deq
+  | "deq" => some .deq | "len<=" => some .lenLe
   | _ => none
 
 /-- The entries `(label x)…` of a row, each `x` read by `f`. -/
@@ -212,7 +214,7 @@ def isLiteral (a : String) : Bool := a = "true" || a = "false" || a.toNat?.isSom
 
 /-- The head words of the forms `term` reads (besides the primitives, `primOf`). -/
 def keywords : List String :=
-  ["lam", "fn", "let", "fix", ".", "record", "extend", "inj", "case", "if", "ref", "digest"]
+  ["lam", "fn", "let", "fix", ".", "record", "extend", "inj", "case", "if", "ref", "digest", "refuse"]
 
 /-- A name `term` reads as something other than a variable: a literal, a head word, a primitive. -/
 def isReserved (a : String) : Bool := isLiteral a || keywords.contains a || (primOf a).isSome
@@ -278,6 +280,14 @@ def term : Nat → List String → SExp → P Term
     match hexBytes? h with
     | some b => .ok (.digest b)
     | none => .error (.badDigest p)
+  | d + 1, _, .list p [.atom _ "refuse", t, w] =>
+    match w with
+    | .str _ s => do pure (.refuse (← ty d t) s.toUTF8)
+    | .atom _ a =>
+      match hexBytes? a with
+      | some b => do pure (.refuse (← ty d t) b)
+      | none => .error (.badRefuse p)
+    | _ => .error (.badRefuse p)
   | _ + 1, _, .list p [.atom _ "ref", .atom _ i] =>
     match i.toNat? with
     | some n => .ok (.ref n)

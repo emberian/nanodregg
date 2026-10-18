@@ -1,7 +1,7 @@
 /-
 # Lang.Term — the core term language (DECISIONS LANG-1)
 
-Sixteen constructors. De Bruijn variables; `lam` and `inj` carry their types so checking is a
+Seventeen constructors. De Bruijn variables; `lam` and `inj` carry their types so checking is a
 function with no inference of annotations. `fix t` ties the record knot: `t : R → R` for a record
 type `R`, and the knot is the final self of open recursion (`mix l u` is the lambda
 `λself. λsuper. u self (l self super)`, which the authoring tool writes; it is not a constructor).
@@ -19,19 +19,25 @@ inductive Prim
   | beq | cat
   /-- digest equality: the one primitive that consumes ids (LANG-38) -/
   | deq
+  /-- `a.size ≤ n` for bytes `a` and a natural `n`: the one byte length the core has, O(1)
+  (LANG-51; a bounded text argument is checked by it) -/
+  | lenLe
   deriving DecidableEq, Repr
 
 /-- The operand and result types of a primitive. -/
 def Prim.left : Prim → Ty
+  | .beq | .cat | .lenLe => .bytes
+  | .deq => .digest
+  | _ => .nat
+
+def Prim.right : Prim → Ty
   | .beq | .cat => .bytes
   | .deq => .digest
   | _ => .nat
 
-def Prim.right : Prim → Ty := Prim.left
-
 def Prim.result : Prim → Ty
   | .add | .sub | .mul | .div | .mod => .nat
-  | .eq | .lt | .le | .beq | .deq => .bool
+  | .eq | .lt | .le | .beq | .deq | .lenLe => .bool
   | .cat => .bytes
 
 inductive Term
@@ -56,6 +62,9 @@ inductive Term
   | case (scrutinee : Term) (arms : List (Label × Term))
   | ite (cond whenTrue whenFalse : Term)
   | ref (index : Nat)
+  /-- The run ends here, refused by the NAME `why` (LANG-51): a `Fault.refused why`. Typed at its
+  annotation, like `inj`; the reason is a literal, so a refusal's name is fixed in the text (law 7). -/
+  | refuse (ty : Ty) (why : ByteArray)
   deriving Inhabited
 
 end Nanodregg.Lang

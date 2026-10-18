@@ -59,6 +59,17 @@ theorem long_label_unencodable :
     encodePackage { tiny with methods := [String.ofList (List.replicate 65 'a')] } = none := by
   decide +kernel
 
+/-- LANG-51: `refuse` is tag 17 with its reason as the payload and its type as the one child, and
+reads back; a tag-17 node without its type child is refused. `len<=` is primitive code 11; 12 is
+no primitive. -/
+theorem refuse_round_trip :
+    termOf (termTree (.refuse .nat ⟨#[108, 97, 116, 101]⟩)) = some (.refuse .nat ⟨#[108, 97, 116, 101]⟩) :=
+  termOf_termTree _ (by decide +kernel)
+
+theorem refuse_untyped_refused : (termOf (.node 17 ⟨#[108]⟩ [])).isNone = true := by decide +kernel
+
+theorem lenLe_code : primOf 11 = some .lenLe ∧ primOf 12 = none := by decide
+
 /-- A type's tree is not a package's. -/
 theorem ty_tree_not_package : packageOf (tyTree .nat) = none := by decide +kernel
 

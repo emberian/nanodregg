@@ -2,7 +2,7 @@
 # Lang.Proofs.BigStep — the reference semantics: what a term MEANS, independent of the machine
 
 `BigStep lib env t r`: under the closure's bodies `lib` and the environment `env`, the term `t`
-evaluates to `r` — a value (`.ok v`) or an arithmetic fault (`.error e`). One rule per
+evaluates to `r` — a value (`.ok v`) or a fault (`.error e`): an arithmetic one, or a refusal by name. One rule per
 constructor (plus one per place a fault can arise), read off the language's meaning (LANG-1/2):
 call by value, record fields suspended and forced by `get` (`Sel`), `extend` overriding the row
 (`Ext`), and selection from a knot unrolling the knot (`fix`). Ticks and the stack bound are the
@@ -44,6 +44,8 @@ inductive BigStep (lib : List Term) : Env → Term → (Except Fault Val) → Pr
   | bool {env b} : BigStep lib env (.bool b) (.ok (.bool b))
   | bytes {env s} : BigStep lib env (.bytes s) (.ok (.bytes s))
   | digest {env s} : BigStep lib env (.digest s) (.ok (.digest s))
+  /-- `refuse T why` means the refusal by its name (LANG-51) -/
+  | refuse {env T w} : BigStep lib env (.refuse T w) (.error (.refused w))
   | prim {env p a b x y} : BigStep lib env a (.ok x) → BigStep lib env b (.ok y) →
       primEval p x y ≠ .error .stuck → BigStep lib env (.prim p a b) (primEval p x y)
   | primL {env p a b e} : BigStep lib env a (.error e) → BigStep lib env (.prim p a b) (.error e)
@@ -87,6 +89,15 @@ inductive Ext (lib : List Term) : Val → List (Label × Term) → Env → (Exce
       Ext lib (.knot b kenv) fs env (.error e)
 end
 
+/-- What `refuse T w` means (LANG-51): the refusal by exactly its name, and nothing else. -/
+theorem bigStep_refuse_iff {lib : List Term} {env : Env} {T : Ty} {w : ByteArray} {r : Except Fault Val} :
+    BigStep lib env (.refuse T w) r ↔ r = .error (.refused w) :=
+  ⟨fun h => by cases h; rfl, fun h => h ▸ .refuse⟩
+
+/-- What `len<=` means on its operand types (LANG-51): the byte string's size against the bound. -/
+theorem primEval_lenLe (a : ByteArray) (n : Nat) :
+    primEval .lenLe (.bytes a) (.nat n) = .ok (.bool (decide (a.size ≤ n))) := rfl
+
 mutual
 theorem bigStep_deterministic {lib : List Term} :
     ∀ {env : Env} {t : Term} {r r' : (Except Fault Val)}, BigStep lib env t r → BigStep lib env t r' → r = r'
@@ -118,7 +129,7 @@ theorem bigStep_deterministic {lib : List Term} :
     | fix ht' => cases bigStep_deterministic ht ht'
     | fixE ht' => exact bigStep_deterministic ht ht'
   | _, _, _, _, .nat, h' | _, _, _, _, .bool, h' | _, _, _, _, .bytes, h' | _, _, _, _, .digest, h'
-  | _, _, _, _, .record, h' => by cases h'; rfl
+  | _, _, _, _, .record, h' | _, _, _, _, .refuse, h' => by cases h'; rfl
   | _, _, _, _, .prim ha hb _, h' => by
     cases h' with
     | prim ha' hb' _ => cases bigStep_deterministic ha ha'; cases bigStep_deterministic hb hb'; rfl

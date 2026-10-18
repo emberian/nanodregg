@@ -112,7 +112,7 @@ mutual
 /-- `t` mentions no closure package: relocation cannot change it. -/
 def NoRef : Term → Prop
   | .ref _ => False
-  | .var _ | .nat _ | .bool _ | .bytes _ | .digest _ => True
+  | .var _ | .nat _ | .bool _ | .bytes _ | .digest _ | .refuse _ _ => True
   | .lam _ b => NoRef b
   | .app f a => NoRef f ∧ NoRef a
   | .fix t => NoRef t
@@ -131,7 +131,7 @@ end
 
 mutual
 theorem relocate_noRef (f : Nat → Nat) : ∀ t : Term, NoRef t → t.relocate f = t
-  | .var _, _ | .nat _, _ | .bool _, _ | .bytes _, _ | .digest _, _ => rfl
+  | .var _, _ | .nat _, _ | .bool _, _ | .bytes _, _ | .digest _, _ | .refuse _ _, _ => rfl
   | .ref _, h => h.elim
   | .lam _ b, h => by simp [Term.relocate, relocate_noRef f b h]
   | .app g a, h => by simp [Term.relocate, relocate_noRef f g h.1, relocate_noRef f a h.2]

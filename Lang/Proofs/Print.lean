@@ -305,6 +305,7 @@ inductive Canon : Term → Prop
       Canon (.case t arms)
   | ite {c a b : Term} : Canon c → Canon a → Canon b → Canon (.ite c a b)
   | ref {i : Nat} : Canon (.ref i)
+  | refuse {T : Ty} {w : ByteArray} : T.wf = true → Canon (.refuse T w)
 
 inductive CanonRow : List (Label × Term) → Prop
   | nil : CanonRow []
@@ -355,7 +356,7 @@ theorem isReserved_name (m : Nat) : isReserved (name m) = false := by
   have hk : ∀ w ∈ keywords, name m ≠ w := by
     intro w hw
     simp only [keywords, List.mem_cons, List.not_mem_nil, or_false] at hw
-    rcases hw with rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl <;> exact name_ne (by simp)
+    rcases hw with rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl <;> exact name_ne (by simp)
   have hp : primOf (name m) = none := by
     unfold primOf; split <;> first | rfl | (rename_i h; exact absurd h (name_ne (by simp)))
   simp only [isReserved, isLiteral_name, hp, Option.isSome_none, Bool.or_false, Bool.false_or]
@@ -388,7 +389,7 @@ theorem term_unreserved_head {d : Nat} {sc : List String} {p q i : Nat} {w : Str
   have hk2 : w ∉ keywords := fun h => by simp [h] at hk
   have hp2 : primOf w = none := by cases h : primOf w <;> simp_all
   simp only [keywords, List.mem_cons, List.not_mem_nil, or_false, not_or] at hk2
-  obtain ⟨k1, k2, k3, k4, k5, k6, k7, k8, k9, k10, k11, k12⟩ := hk2
+  obtain ⟨k1, k2, k3, k4, k5, k6, k7, k8, k9, k10, k11, k12, k13⟩ := hk2
   simp only [isLiteral, Bool.or_eq_false_iff, decide_eq_false_iff_not, Option.isSome_eq_false_iff,
     Option.isNone_iff_eq_none] at hl
   obtain ⟨⟨⟨ht, hf⟩, hn⟩, hh⟩ := hl
@@ -509,7 +510,7 @@ theorem head_not_kw {k : Nat} {f : Term} {F Y : SExp} (h : termSx k f = some F) 
         hd _ 'e' (by simp) (by decide), hd _ 'c' (by simp) (by decide), hd _ 'r' (by simp) (by decide),
         hd _ 'd' (by simp) (by decide)⟩
   | lam _ _ | app _ _ | fix _ | prim _ _ _ | record _ | get _ _ | extend _ _ | inj _ _ _ | case _ _
-  | ite _ _ _ | ref _ | digest _ =>
+  | ite _ _ _ | ref _ | digest _ | refuse _ _ =>
     simp only [termSx, bind, Option.bind_eq_some_iff, pure, Option.some.injEq] at h
     first
     | (obtain ⟨_, _, rfl⟩ := h; cases hs)
@@ -593,6 +594,26 @@ theorem term_termSx : ∀ (t : Term) (k d : Nat) {x y : SExp}, termSx k t = some
     cases d with
     | zero => simp [need, list] at hn
     | succ d => simp [Read.term]
+  | .refuse T w, k, d, x, y, h, hs, hn, .refuse hT => by
+    simp only [termSx, bind, Option.bind_eq_some_iff, pure, Option.some.injEq] at h
+    obtain ⟨xT, hxT, rfl⟩ := h
+    obtain ⟨q, ys, rfl, hl⟩ := same_list hs
+    obtain ⟨y0, ys, rfl, h0, hl⟩ := sameL_cons hl
+    obtain ⟨y1, ys, rfl, h1, hl⟩ := sameL_cons hl
+    obtain ⟨y2, ys, rfl, h2, hl⟩ := sameL_cons hl
+    cases sameL_nil hl
+    obtain ⟨r, rfl⟩ := same_atom h0
+    cases d with
+    | zero => simp [need, list] at hn
+    | succ d =>
+      simp only [need, needs, list, atom] at hn
+      have eT := ty_tySx T d hxT h1 (by omega) hT
+      rcases bytesSx_cases w with ⟨t, e, ht, _⟩ | e <;> rw [e] at h2
+      · obtain ⟨q', rfl⟩ := same_str h2
+        subst ht
+        simp [Read.term, eT]; rfl
+      · obtain ⟨q', rfl⟩ := same_atom h2
+        simp [Read.term, eT, hexBytes_hex]; rfl
   | .lam A b, k, d, x, y, h, hs, hn, .lam hA hb => by
     simp only [termSx, bind, Option.bind_eq_some_iff, pure, Option.some.injEq] at h
     obtain ⟨xa, ha, xb, hxb, rfl⟩ := h
@@ -908,6 +929,10 @@ theorem termSx_ok : ∀ (t : Term) (k : Nat) {x : SExp}, termSx k t = some x →
   | .ref i, _, _, h => by
     simp only [termSx, Option.some.injEq] at h; subst h
     exact .list (.cons (kw_ok _) (.cons (repr_ok i) .nil))
+  | .refuse T w, _, _, h => by
+    simp only [termSx, bind, Option.bind_eq_some_iff, pure, Option.some.injEq] at h
+    obtain ⟨xT, hT, rfl⟩ := h
+    exact .list (.cons (kw_ok _) (.cons (tySx_ok T hT) (.cons (bytesSx_ok w) .nil)))
   | .lam A b, k, _, h => by
     simp only [termSx, bind, Option.bind_eq_some_iff, pure, Option.some.injEq] at h
     obtain ⟨xa, ha, xb, hb, rfl⟩ := h
@@ -1361,6 +1386,7 @@ theorem hasType_canon {Δ : List Ty} (hΔ : ∀ A ∈ Δ, A.wf = true) :
       (armsTy_canon hΔ hΓ hw.2 ha)
   | _, _, _, hΓ, .ite hc ha hb => .ite (hasType_canon hΔ hΓ hc) (hasType_canon hΔ hΓ ha) (hasType_canon hΔ hΓ hb)
   | _, _, _, _, .ref _ => .ref
+  | _, _, _, _, .refuse hw _ => .refuse hw
 
 theorem fieldsTy_canon {Δ : List Ty} (hΔ : ∀ A ∈ Δ, A.wf = true) :
     ∀ {Γ : List Ty} {fs : List (Label × Term)} {r : List (Label × Ty)},

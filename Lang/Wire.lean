@@ -20,6 +20,9 @@ Tags (a type's and a term's tag spaces are read at different positions, so they 
     term  var 0 i · lam 1 [T b] · app 2 [f a] · fix 3 [t] · nat 4 n · bool 5 v · bytes 6 s
           prim 7 code [a b] · record 8 [field*] · get 9 ℓ [t] · extend 10 [t field*] · inj 11 ℓ [T t]
           case 12 [t field*] · ite 13 [c t e] · ref 14 i · field 15 ℓ [t] · digest 16 s
+          refuse 17 why [T]
+    prim codes add 0 · sub 1 · mul 2 · div 3 · mod 4 · eq 5 · lt 6 · le 7 · beq 8 · cat 9 · deq 10
+          lenLe 11
 -/
 import Codec.Tree
 import Lang.Term
@@ -71,12 +74,12 @@ def u64Bytes (n : Nat) : ByteArray := Stream.u64.bytes (UInt64.ofNat n)
 
 def primCode : Prim → UInt8
   | .add => 0 | .sub => 1 | .mul => 2 | .div => 3 | .mod => 4
-  | .eq => 5 | .lt => 6 | .le => 7 | .beq => 8 | .cat => 9 | .deq => 10
+  | .eq => 5 | .lt => 6 | .le => 7 | .beq => 8 | .cat => 9 | .deq => 10 | .lenLe => 11
 
 def primOf : UInt8 → Option Prim
   | 0 => some .add | 1 => some .sub | 2 => some .mul | 3 => some .div | 4 => some .mod
   | 5 => some .eq | 6 => some .lt | 7 => some .le | 8 => some .beq | 9 => some .cat
-  | 10 => some .deq
+  | 10 => some .deq | 11 => some .lenLe
   | _ => none
 
 def primOfBytes (p : ByteArray) : Option Prim :=
@@ -162,6 +165,7 @@ def termTree : Term → Tree
   | .case t arms => .node 12 .empty (termTree t :: fieldsTree arms)
   | .ite c t e => .node 13 .empty [termTree c, termTree t, termTree e]
   | .ref i => .node 14 (u32Bytes i) []
+  | .refuse T w => .node 17 w [tyTree T]
 
 def fieldsTree : List (Label × Term) → List Tree
   | [] => []
@@ -222,6 +226,7 @@ def termOf : Tree → Option Term
       | _, _, _ => none
     else none
   | .node 14 p [] => (u32Of p).map .ref
+  | .node 17 p [a] => (tyOf a).map (.refuse · p)
   | _ => none
 
 def fieldsOf : List Tree → Option (List (Label × Term))
@@ -249,6 +254,7 @@ def termWire : Term → Bool
   | .inj a ℓ t => tyWire a && labelOk ℓ && termWire t
   | .case t arms => termWire t && decide (arms.length ≤ rowMax) && fieldsWire arms
   | .ite c t e => termWire c && termWire t && termWire e
+  | .refuse T _ => tyWire T
 
 def fieldsWire : List (Label × Term) → Bool
   | [] => true

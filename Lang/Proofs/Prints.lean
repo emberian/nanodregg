@@ -55,6 +55,17 @@ theorem prints_digest (k : Nat) (s : ByteArray) : Prints 2 k (.digest s) :=
   ⟨list [atom "digest", digestSx s], by simp [termSx], by simp [need, needs, list, atom, digestSx],
     by simp [width, widths, list, atom, digestSx, listMax_eq]⟩
 
+theorem prints_refuse {N k : Nat} {T : Ty} (w : ByteArray) (hT : TyPrints N T) :
+    Prints (N + 1) k (.refuse T w) := by
+  obtain ⟨xT, hxT, hnT, hwT⟩ := hT
+  obtain ⟨xw, hxw, hnw, hww⟩ := prints_bytes k w
+  simp only [termSx, Option.some.injEq] at hxw
+  subst hxw
+  refine ⟨list [atom "refuse", xT, bytesSx w], by simp [termSx, hxT], ?_, ?_⟩
+  · have := need_pos xT
+    simp only [need, needs, list, atom]; omega
+  · simp only [width, widths, list, atom, List.length_cons, List.length_nil, listMax_eq] at hwT hww ⊢; omega
+
 theorem prints_get {N k : Nat} {t : Term} {ℓ : Label} (ht : Prints N k t) (hl : labelOk ℓ = true) :
     Prints (N + 1) k (.get t ℓ) := by
   obtain ⟨x, hx, hn, hw⟩ := ht

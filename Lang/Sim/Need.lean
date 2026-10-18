@@ -73,6 +73,7 @@ def need (lib : List Term) : Nat → Env → Term → Option (Except Fault Val �
     | .bool b => some (.ok (.bool b), 1)
     | .bytes s => some (.ok (.bytes s), 1)
     | .digest s => some (.ok (.digest s), 1)
+    | .refuse _ w => some (.error (.refused w), 1)
     | .prim p a b =>
       match need lib f env a with
       | some (.error e, n) => some (.error e, n + 1)

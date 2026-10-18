@@ -34,6 +34,7 @@ inductive HasType (Δ : List Ty) : List Ty → Term → Ty → Prop
   | ite {Γ c a b T} : HasType Δ Γ c .bool → HasType Δ Γ a T → HasType Δ Γ b T →
       HasType Δ Γ (.ite c a b) T
   | ref {Γ i T} : Δ[i]? = some T → HasType Δ Γ (.ref i) T
+  | refuse {Γ T w} : T.wf = true → Bounds.reasonOk w = true → HasType Δ Γ (.refuse T w) T
 
 /-- Fields and their row: same labels, in order, each field at its type. -/
 inductive FieldsTy (Δ : List Ty) : List Ty → List (Label × Term) → List (Label × Ty) → Prop

@@ -106,6 +106,10 @@ theorem primEval_sound {p : Prim} {a b : Val} (ha : ValTy Δ a p.left) (hb : Val
   | deq =>
     obtain ⟨x, rfl, _⟩ := ValTy.digest_inv ha; obtain ⟨y, rfl, _⟩ := ValTy.digest_inv hb
     exact .bool
+  | lenLe =>
+    obtain ⟨x, rfl, _⟩ := ValTy.bytes_inv ha
+    cases hb with
+    | nat hy => simp only [primEval]; exact .bool
   | cat =>
     obtain ⟨x, rfl, _⟩ := ValTy.bytes_inv ha; obtain ⟨y, rfl, _⟩ := ValTy.bytes_inv hb
     simp only [primEval]
@@ -165,6 +169,7 @@ theorem step_sound {lib : List Term} {s : State} {T : Ty} (hlib : LibTy Δ lib)
     | ref hi =>
       obtain ⟨body, hbody, hbt⟩ := hlib _ _ hi
       simp only [step, hbody]; exact .next (.eval .nil hbt hk)
+    | refuse _ _ => simp only [step]; exact .fault (by simp)
   | @ret v A k d T hv hk =>
     cases hk with
     | nil => exact .halt hv
@@ -255,21 +260,24 @@ theorem run_sound {lib : List Term} {cap : Nat} {T : Ty} (hlib : LibTy Δ lib) :
         · simp only [hc, if_false]; exact run_sound hlib n (u + 1) s' hs'
 
 /-- A checked program, run under any budget in a typed environment, never gets stuck: it ends
-with a value of its type or a named budget/arithmetic fault. -/
+with a value of its type or a named budget/arithmetic fault, or the refusal its program wrote. -/
 theorem eval_sound {lib : List Term} {b : Nat} {t : Term} {env : List Val} {Γ : List Ty}
     {T : Ty} (hlib : LibTy Δ lib) (he : EnvTy Δ env Γ) (ht : HasType Δ Γ t T) :
     RunOK Δ T (eval lib b t env) :=
   run_sound hlib _ _ _ (.eval he ht .nil)
 
-/-- Only a primitive faults: every other fault of `step` is `stuck`, so `ticks` and `stack`
-come only from `run`, and (with `step_progress`) a typed state faults only in arithmetic. -/
+/-- Only a primitive or a `refuse` faults: every other fault of `step` is `stuck`, so `ticks` and
+`stack` come only from `run`, and (with `step_progress`) a typed state faults only in arithmetic or
+by the refusal its program wrote (LANG-51). -/
 theorem step_fault {lib : List Term} {s : State} {f : Fault} (h : step lib s = .fault f) :
-    f = .stuck ∨ ∃ p a v k d, s = ⟨.ret v, .primR p a :: k, d⟩ ∧ primEval p a v = .error f := by
+    f = .stuck ∨ (∃ p a v k d, s = ⟨.ret v, .primR p a :: k, d⟩ ∧ primEval p a v = .error f) ∨
+      ∃ T w env k d, s = ⟨.eval (.refuse T w) env, k, d⟩ ∧ f = .refused w := by
   obtain ⟨c, k, d⟩ := s
   cases c with
   | eval t env =>
-    left
-    cases t <;> simp only [step, push] at h <;> (repeat' split at h) <;> simp_all
+    cases t with
+    | refuse T w => simp only [step, Step.fault.injEq] at h; exact .inr (.inr ⟨T, w, env, k, d, rfl, h.symm⟩)
+    | _ => left; simp only [step, push] at h <;> (repeat' split at h) <;> simp_all
   | ret v =>
     cases k with
     | nil => simp [step] at h
@@ -279,7 +287,7 @@ theorem step_fault {lib : List Term} {s : State} {f : Fault} (h : step lib s = .
         simp only [step] at h
         split at h
         · simp at h
-        · rename_i e he; cases h; exact .inr ⟨p, a, v, k, d, rfl, he⟩
+        · rename_i e he; cases h; exact .inr (.inl ⟨p, a, v, k, d, rfl, he⟩)
       | _ => left; simp only [step] at h <;> (repeat' split at h) <;> simp_all
 
 theorem checkLib_sound {lib : List Term} (h : checkLib Δ lib = true) : LibTy Δ lib := by

@@ -69,7 +69,7 @@ theorem derives_unique : ∀ {env : Env} {t : Term} {r r' : Except Fault Val} {n
     | fix ht' => cases (derives_unique ht ht').1
     | fixE ht' => obtain ⟨hr, rfl⟩ := derives_unique ht ht'; exact ⟨hr, rfl⟩
   | _, _, _, _, _, _, .nat, h' | _, _, _, _, _, _, .bool, h' | _, _, _, _, _, _, .bytes, h'
-  | _, _, _, _, _, _, .digest, h'
+  | _, _, _, _, _, _, .digest, h' | _, _, _, _, _, _, .refuse, h'
   | _, _, _, _, _, _, .record, h' => by cases h'; exact ⟨rfl, rfl⟩
   | _, _, _, _, _, _, .prim ha hb _, h' => by
     cases h' with
@@ -233,6 +233,8 @@ theorem need_derives_all : ∀ f : Nat,
         simp only [Need.need, Option.some.injEq, Prod.mk.injEq] at h; obtain ⟨rfl, rfl⟩ := h; exact .bytes
       | digest s =>
         simp only [Need.need, Option.some.injEq, Prod.mk.injEq] at h; obtain ⟨rfl, rfl⟩ := h; exact .digest
+      | refuse T w =>
+        simp only [Need.need, Option.some.injEq, Prod.mk.injEq] at h; obtain ⟨rfl, rfl⟩ := h; exact .refuse
       | prim p a b =>
         simp only [Need.need] at h
         repeat' split at h
