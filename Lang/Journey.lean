@@ -48,9 +48,16 @@ the owner and the owner never changes). Rows:
 * LD5 (LANG-41, a run's ids came from where ids enter) `Caller`, holding and taking nothing, calls the
   signing member as an object: the kernel refuses it `wrongKind` (a member is not an object), so
   `callsOf` read the call.
+* LT (LANG-45, NANO-VS-MINI §5) Mini's CappedTally ported by hand, as the text a resident writes:
+  LT0 it reads (its size printed); LT1 install; LT2a a start at 1001 refused by `cap`; LT2 a start at 0
+  with decider B; LT3 the grant; LT4 B replies 600 (required steps and ticks printed); LT5 B replies
+  500, refused by `cap`; LT6 the owner replies, refused by `decider`; LT7 two answers signed over one
+  view: the first admitted, the second `stale` (Mini's `add` deltas keep both); LT8 a tally that
+  closes before the answer's window ends refuses it `closed` (Mini's `timedOut`, as a height).
 * L7 the follower (`World.fold` from genesis) and the auditor reach the Host's World.
 * PLANT skip-judge: the same rows against a program whose `judge` admits everything: L4 must be
-  ADMITTED there (the row flips), proving the refusal in L4 came from the law, not from elsewhere.
+  ADMITTED there (the row flips), proving the refusal in L4 came from the law, not from elsewhere. LT5 too: its
+  refusal came from `cap`.
 * PLANT erase-occasion: the same rows against a program whose judge is told every act is a write
   (the judge before ID-1): L8b, L8e, L9d, L10c and L11c must be ADMITTED there, so their refusals came
   from the occasion.
@@ -74,6 +81,7 @@ import Lang.Program
 import Lang.Print
 import Lang.Resident
 import Lang.Std
+import Lang.Sim.Need
 
 namespace Nanodregg.Lang.Journey
 
@@ -463,6 +471,155 @@ def nextSlot (next : Option ByteArray) : Option ByteArray :=
     | some n => .inj "some" (.digest n)
     | none => .inj "none" (.record []))
 
+/-! ### LT: Mini's CappedTally ported by hand (LANG-45, NANO-VS-MINI §5's deciding experiment)
+
+Mini `tests/objective-native/CappedTally.obend` at 2c27b08b (71 lines): a tally whose owner starts it
+with an initial total and a decider, whose decider answers with amounts within a patience of 4
+heights, each answer an `add` DELTA the kernel applies to the current view (so concurrent answers
+are all kept), under two enforced laws, `cap: new.total <= 1000` and `grows: monotone(total)`.
+Here it is the text a resident writes (`cappedTallyText`, read by `Lang.Read`): no activity, so
+the decider answers by invoking `reply` through the owner's grant (KERNEL-25), the patience is a
+`closes` height that `decider` holds the signer's window to, and an answer is a pinned write, so two
+concurrent answers do NOT both land (LT7: the measurement LANG-44 waits on). -/
+
+/-- The tally's state as the resident writes it. -/
+def tallyStText : String := "(rec (closes nat) (decider digest) (total nat))"
+def tallyResText : String := "(rec (calls (rec)) (state (rec (closes nat) (decider digest) (total nat))))"
+def verdictText : String := "(sum (ok (rec)) (refused bytes))"
+
+/-- CappedTally as a resident writes it. -/
+def cappedTallyText : String := s!"
+(package (imports)
+  (state {tallyStText})
+  (iface (rec (cap (-> {tallyStText} (-> {tallyStText} (-> {rq} {verdictText}))))
+              (decider (-> {tallyStText} (-> {tallyStText} (-> {rq} {verdictText}))))
+              (grows (-> {tallyStText} (-> {tallyStText} (-> {rq} {verdictText}))))
+              (reply (-> {tallyStText} (-> (rec (amount nat)) (-> {rq} {tallyResText}))))))
+  (methods reply)
+  (laws cap grows decider)
+  (body
+    (record
+      (reply (fn (s {tallyStText}) (a (rec (amount nat))) (r {rq})
+        (record (calls (record))
+                (state (record (closes (. s closes)) (decider (. s decider))
+                               (total (+ (. s total) (. a amount))))))))
+      (cap (fn (old {tallyStText}) (new {tallyStText}) (r {rq})
+        (if (<= (. new total) 1000)
+            (inj {verdictText} ok (record))
+            (inj {verdictText} refused \"over 1000\"))))
+      (grows (fn (old {tallyStText}) (new {tallyStText}) (r {rq})
+        (if (<= (. old total) (. new total))
+            (inj {verdictText} ok (record))
+            (inj {verdictText} refused \"lowered\"))))
+      (decider (fn (old {tallyStText}) (new {tallyStText}) (r {rq})
+        (case (. r occasion)
+          (adopt x (inj {verdictText} ok (record)))
+          (birth x (inj {verdictText} ok (record)))
+          (invoke x
+            (if (deq (. r agent) (. old decider))
+                (if (<= (. r validUntil) (. old closes))
+                    (inj {verdictText} ok (record))
+                    (inj {verdictText} refused \"closed\"))
+                (inj {verdictText} refused \"not the decider\")))
+          (relaw x (inj {verdictText} ok (record)))
+          (write x (inj {verdictText} ok (record)))))))))
+"
+
+/-- The required steps and machine ticks of an invoke on the Host's World, counted as THE BAR's row
+counts them (`Protocol.Rows.Loopback.measureInvoke`): `Lang.Need.requiredOf` and `runMeasured`. -/
+def measure (w : World D) (c : Call D) : Except String (Nat × Nat) :=
+  let X := ctxWith langProgram
+  match c.unsigned.body with
+  | .invoke obj method args budget via =>
+    let look := pinned X.env w c.unsigned.pins
+    let text : Receive.Refusal D → String := fun | .program s => s | e => e.name
+    (do
+      let (cell, p, r) ← invokeRun X look c c.unsigned.member obj method via
+      let (_, _, ticks, _) ← Lang.runMeasured X.env.bytes X.digestOf look p (stateOf cell) method args r budget
+      let req ← Lang.Need.requiredOf X.env.bytes X.digestOf look p (stateOf cell) method args r budget
+      pure (req, ticks)).mapError text
+  | _ => .error "not an invoke"
+
+/-- A tally's `total` (state slot 2). -/
+def tallyTotal (w : World D) (obj : D) : Option Nat :=
+  match (slotOf Sim.env w obj 2).map (Wire.decodeData .nat) with
+  | some (.ok (.nat n)) => some n
+  | _ => none
+
+/-- The LT rows: CappedTally through the real receivers. `b` is the decider. -/
+def tallyRows (mode : Mode) (r0 : Run) (a b : Sim.Member) : Run := Id.run do
+  let prog := mode.program
+  let mut r := r0
+  let p ← match Read.readPackage cappedTallyText with
+    | .ok p => pure p
+    | .error e => return note r s!"LT0 read CappedTally: {e.text}" false
+  let some pb := Wire.encodePackage p | return note r "LT0 CappedTally has no bytes" false
+  let printed := (Print.package p).getD ""
+  r := note r s!"LT0 CappedTally read from text: {cappedTallyText.length} chars, {(cappedTallyText.splitOn "\n").length - 2} lines; {pb.size} package bytes; printed {printed.length} chars" (printed != "")
+  let (r1, v1, t1) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id]) (.install pb))
+  r := note r1 s!"LT1 A installs CappedTally: {v1}" (v1 == "admitted")
+  let some pkg := t1.bind fun t => (createdIds t).head? | return note r "LT1 no package id" false
+  let some decB := Wire.encodeData .digest (.digest (Sim.dc.bytes b.id)) | return note r "LT no decider bytes" false
+  -- a call's window ends `Sim.signed`'s 101 heights past the World: 200 leaves room, 50 does not (LT8)
+  let closes := r.st.host.height + 200
+  let some cl := nat64 closes | return note r "LT no closes bytes" false
+  let some n0 := nat64 0 | return note r "LT no bytes" false
+  let some n1001 := nat64 1001 | return note r "LT no bytes" false
+  -- LT2 start: the owner creates the tally with its decider; a seed over the cap is refused by `cap`
+  let (r2b, v2b, _) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id, pkg])
+    (.create (some pkg) [] [(stateBase, cl), (stateBase + 1, decB), (stateBase + 2, n1001)]))
+  r := { r2b with log := r.log, bad := r.bad }
+  unless mode = .skipJudge do
+    r := note r s!"LT2a A starts a tally at 1001: {v2b}" (deniedWith v2b "cap: over 1000")
+  let (r2, v2, t2) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id, pkg])
+    (.create (some pkg) [] [(stateBase, cl), (stateBase + 1, decB), (stateBase + 2, n0)]))
+  r := note r2 s!"LT2 A starts a tally at 0, decider B, closing at {closes}: {v2}" (v2 == "admitted")
+  let some obj := t2.bind fun t => (createdIds t).head? | return note r "LT2 no object id" false
+  let (rg, vg, tg) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id, b.id, obj]) (.grant obj b.id [.invoke 0] none))
+  r := note rg s!"LT3 A grants B invoke reply: {vg}" (vg == "admitted")
+  let some gr := tg.bind fun t => (createdIds t).head? | return note r "LT3 no grant id" false
+  let amount (n : Nat) : Option ByteArray := Wire.encodeData (.record [("amount", .nat)]) (.record [("amount", .nat n)])
+  let some a600 := amount 600 | return note r "LT no bytes" false
+  let some a500 := amount 500 | return note r "LT no bytes" false
+  let some a10 := amount 10 | return note r "LT no bytes" false
+  let some a20 := amount 20 | return note r "LT no bytes" false
+  -- LT4 the decider answers 600: admitted, and measured as THE BAR measures an invoke
+  let c4 := Sim.signed r.st b b.key (Sim.S.pinsFor r.st.host [b.id, obj, pkg, gr]) (.invoke obj 0 a600 10000 (some gr))
+  let m4 := measure r.st.host c4
+  let (r4, v4, _) := go prog r c4
+  r := note r4 s!"LT4 B replies 600: {v4}, total {tallyTotal r4.st.host obj}; required steps / ticks {match m4 with | .ok (q, t) => s!"{q} / {t}" | .error e => e}"
+    (v4 == "admitted" && tallyTotal r4.st.host obj == some 600 && m4.isOk)
+  -- LT5 600 + 500 is past the cap
+  let (r5, v5, _) := go prog r (Sim.signed r.st b b.key (Sim.S.pinsFor r.st.host [b.id, obj, pkg, gr]) (.invoke obj 0 a500 10000 (some gr)))
+  if mode = .skipJudge then
+    return note r5 s!"PLANT skip-judge: LT5 B replies 500 past the cap must now be admitted: {v5}" (v5 == "admitted")
+  r := note r5 s!"LT5 B replies 500: {v5}, total {tallyTotal r5.st.host obj}"
+    (deniedWith v5 "cap: over 1000" && tallyTotal r5.st.host obj == some 600)
+  -- LT6 the owner is not the decider (Mini: the await names exactly one subject)
+  let (r6, v6, _) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id, obj, pkg]) (.invoke obj 0 a10 10000 none))
+  r := note r6 s!"LT6 A replies 10: {v6}" (deniedWith v6 "decider: not the decider")
+  -- LT7 two answers signed over the same view: Mini keeps both (`add` deltas); here the second is stale
+  let pins7 := Sim.S.pinsFor r.st.host [b.id, obj, pkg, gr]
+  let c7a := Sim.signed r.st b b.key pins7 (.invoke obj 0 a10 10000 (some gr))
+  let c7b := Sim.signed r.st b b.key pins7 (.invoke obj 0 a20 10000 (some gr))
+  let (r7a, v7a, _) := go prog r c7a
+  r := note r7a s!"LT7a B replies 10: {v7a}" (v7a == "admitted")
+  let (r7b, v7b, _) := go prog r c7b
+  r := note r7b s!"LT7b B replies 20, signed over the same view as 10: {v7b} (Mini keeps both; total {tallyTotal r7b.st.host obj}, Mini's would be 630)"
+    (v7b.startsWith "rejected stale" && tallyTotal r7b.st.host obj == some 610)
+  -- LT8 patience: a tally closing before the answer's window ends refuses it (Mini's `timedOut`, as a height)
+  let some cl8 := nat64 (r.st.host.height + 50) | return note r "LT8 no bytes" false
+  let (r8, v8, t8) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id, pkg])
+    (.create (some pkg) [] [(stateBase, cl8), (stateBase + 1, decB), (stateBase + 2, n0)]))
+  r := note r8 s!"LT8a A starts a tally closing 50 heights on: {v8}" (v8 == "admitted")
+  let some obj8 := t8.bind fun t => (createdIds t).head? | return note r "LT8 no object id" false
+  let (r8g, v8g, t8g) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id, b.id, obj8]) (.grant obj8 b.id [.invoke 0] none))
+  r := note r8g s!"LT8b A grants B invoke reply: {v8g}" (v8g == "admitted")
+  let some gr8 := t8g.bind fun t => (createdIds t).head? | return note r "LT8 no grant id" false
+  let (r8c, v8c, _) := go prog r (Sim.signed r.st b b.key (Sim.S.pinsFor r.st.host [b.id, obj8, pkg, gr8]) (.invoke obj8 0 a10 10000 (some gr8)))
+  r := note r8c s!"LT8c B replies with a window 101 heights long: {v8c}" (deniedWith v8c "decider: closed")
+  return r
+
 /-- The install-closure rows (LI, LANG-35): `Top` imports `Mid` imports `Owned` (`pkg`). -/
 def installRows (mode : Mode) (r0 : Run) (a : Sim.Member) (pkg : D) : Run := Id.run do
   let prog := mode.program
@@ -840,6 +997,8 @@ def journey (mode : Mode) : Run := Id.run do
   r := { r11d with log := r.log, bad := r.bad }
   if mode = .honest then
     r := note r s!"L11d A keeps BirthOnly and adds Frozen: {v11d}" (v11d == "admitted")
+  if mode = .honest || mode = .skipJudge then
+    r := tallyRows mode r a b
   r := callRows mode r a
   -- L7 follower and auditor
   match World.fold Sim.env g r.st.log with

@@ -1422,3 +1422,73 @@ in both orders to equal cells and rows roots; the same key twice `keyTaken`; the
 another's author refused by the guard; a retract refused by declaration; plant: pinning the head on insert makes the
 second rain `stale`.
 **Status.** PROPOSED. Sent to ROOT and KERNEL-13 before any code.
+
+## LANG-45 The deciding experiment: Mini's CappedTally ported by hand to nano's core; what it needs first is a capped commuting COUNTER, which LANG-44's rows give once the head carries a declared sum (2026-10-18; NANO-VS-MINI §5, ROOT's order on LANG-44; journey rows LT0–LT8)
+**What was ported.** Mini `tests/objective-native/CappedTally.obend` at 2c27b08b is the smallest Mini program with
+state, laws and two members. It is a tally the owner starts with an initial total and a decider. The decider answers
+with amounts within a patience of 4 heights, and each answer is an `add` delta the kernel applies to the current view
+("a concurrent write … is kept, never overwritten"). Two enforced laws hold: `cap: new.total <= 1000` and
+`grows: monotone(total)`. The port is `Lang.Journey.cappedTallyText`, the s-expression a resident writes, read by
+`Lang.Read` and run through the real receivers:
+- The decider answers by invoking `reply {amount}` through the owner's grant (KERNEL-25).
+- The patience is a `closes` height. The law `decider` holds the signer's window to it (`req.validUntil ≤ closes`)
+  and refuses any agent but the decider.
+- `cap` and `grows` are ordinary laws.
+Rows:
+- LT2a: a start at 1001 is refused `cap`.
+- LT4: B replies 600 and is admitted.
+- LT5: 600 + 500 is refused `cap`. Plant skip-judge: LT5 is then admitted.
+- LT6: the owner's reply is refused by `decider`.
+- LT7: two answers signed over one view. The first is admitted and the second is `stale`. Mini keeps both.
+- LT8: a tally closing before the answer's window ends refuses it `closed`.
+**Measured** (deterministic counts, lang-journey on hbox at 189c201 + this row):
+| | Mini (.obend) | nano (core text) |
+|---|---|---|
+| lines | 71 (15 comment, 2 law lines) | 34 |
+| characters | 2506 (1269 without comments) | 3903 |
+| package bytes | (front-end artifact, not compared) | 2797 |
+| required steps / machine ticks of one `reply` | (call-by-need, not counted) | 33 / 47 (THE BAR's counter, `requiredOf` / `runMeasured`) |
+- Where nano's characters go: the state record is written 15 times (47 chars each), the request type 7 times
+  (interpolated from `Print.tyText reqTy`; a resident pastes it), and the verdict sum 13 times. About 2,200 of the
+  3,903 characters are repeated types: the authoring-surface need (DELVETALK §4.1), measured. Type aliases alone would
+  bring the text under Mini's.
+- Where Mini's lines go: 13 records and sums of activity plumbing (`Plan`, `Await`, `Source`, `Outcome`, `Resumed`,
+  `Step`, `View`, `EditNat`, `Write`, `Start`, `Ask`, `At`, `Reply`) and one recursive `ask`. With no activities,
+  nano needs none of them; the method is three lines.
+- Nothing was exponential: no record field reads `self` twice (LANG-2's case did not arise).
+**What could not be expressed, and what replaced it.**
+1. *Activities* (`perform`/`await`, resumed with a view). Replaced by the decider invoking a method through a grant.
+   This is cut on purpose (LANG-6), and the port lost nothing observable but the activity's return value. Mini's
+   `tally` returns the final total; nano's caller reads the state.
+2. *`timedOut`*: Mini's kernel ends the tally at the deadline with nobody signing. In nano no turn happens without
+   a signer, so "closed" is a law refusal of late answers, not an event (DELVETALK §4.6's point, met again).
+3. *The `add` delta*, the one real loss. Two answers over one view do not both land (LT7: total 610, Mini's 630).
+   This is the commuting counter LANG-44 left open, and it is THIS program's first need, ahead of rows.
+4. `grows` is implied by `reply` (the amount is a nat), so as a law it bites only on a non-method write. It is kept
+   for fidelity; no row reaches it.
+**The answer to LANG-44's open question (counters).** Rows alone do not give a capped counter: a relation's head
+carries a count, but `cap` bounds a SUM. Two ways to give it:
+- (i) An `Act.add` on a declared counter slot, admitted against a pin that excludes that slot. This WEAKENS a pin, so
+  it is a pause item.
+- (ii) LANG-44 as approved, plus ONE head field. A relation may declare a nat column `sum` and a `cap`. The row leaf
+  carries that column's value where the kernel can read it, the head keeps `sum` beside `count`, and an insert is
+  refused `relationCapped` when the current `sum + v > cap`. The tally becomes an insert-only relation of answers,
+  keyed `{agent, nonce}`. Its total is the head's sum, `grows` holds by construction (insert-only), and two answers
+  are two unpinned row births with disjoint footprints, so both land (`admit_comm` covers it unchanged).
+I recommend (ii). It weakens nothing, it is O(touched) (one head update per insert), and it is one field more in the
+kernel half, not a second commutation rule. Mini's other commuting edit, `set` (`EditNat.set`), is the blind write
+KERNEL-11 removed, and it stays removed.
+**Critique.** (1) One program is one sample. It is the smallest Mini program with a law, and the larger ones are
+list-shaped (`world/story/CoAuthor.obend` keeps `Proposals`, `Ballots` and `Chapters` as recursive sums: three
+relations), so "the counter is the first need" holds for this program, not for Mini. (2) The port moved the
+decider check into a law, where Mini had it in the await's named subject. A resident can now remove it by relaw
+unless the law freezes the laws. (3) Characters are a proxy for authoring cost; a resident pastes the request type,
+it does not type it. (4) The required/ticks figure counts one `reply` on a small record; it is not a BAR
+measurement. (5) A key `{agent, nonce}` makes the signer choose a nonce. A reused one is `keyTaken`, which binds,
+so a client must draw nonces fresh.
+**Meta-critique.** I chose the program that the counter question would decide, and it decided for the counter. A
+list-shaped program would have decided for rows. The independent check is that LANG-44's rows are the mechanism in
+both cases ((ii) is a head field, not a second design). Still, the order of building should follow the next
+program ported, not this one.
+**Status.** Rows LT0–LT8 built (lang-journey GREEN, including the skip-judge plant). (ii) goes to ROOT as an
+amendment to LANG-44's kernel half, and KERNEL-13 is told.
