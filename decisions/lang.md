@@ -2020,3 +2020,43 @@ back); LB7 busy; LB8 the owner answers: notResident; LB9 empty text: `text 1..20
 kernel's grantRight; LB10 B answers (answer read back); LB11 unrung again; LB12/12b closed; LB13 the
 takeover layer refused (`bell: resident`). Plants: skip-judge makes LB2 and LB13c admitted. No theorem
 moves; no shipped core byte moves (the three shipped texts and the two ports are untouched).
+
+## LANG-53 stepTo at run level: the generated method lands where its edge says (2026-10-18; LANG-16; cv 01a14b36-6da2, LANG-43's owed item)
+
+**What.** `Lang/Proofs/StdRun.lean` (new; its own module so Complete and Program do not widen `Lang.Proofs.Std`'s import cone): `stepTo_moves` — a method `stepTo` generates, installed as field `ℓm`
+of the package body at `lib[g]` and run as the receiver runs it (`apply4 g ℓm` over rows, state,
+argument, request: the env `runSetup` builds), from a state whose field `f` is `x`, means a result
+whose state field `f` is `y`, for every declared edge `(x, m, y)`. `stepTo_keeps`: every other field
+means what it meant. `stepTo_stays`: from a state no edge of `m` leaves, `f` stays `x` (then
+`machine_invoke` refuses the turn). `stepTo_run_moves`: the CEK machine returns exactly `inj y {}`
+under large enough bounds, and no other value under any (`bigStep_run`, `run_bigStep`, determinism).
+Helpers: `sel_toVal`, `find_keyed`, `sel_method`, `stepLaw_moves/keeps` (general over the closure's
+origin), `mapM_ok_each/back`, `resolveEdges_mem/_back`, `methodIndex_inj`.
+
+**How.** Over the reference semantics, compositionally: the `stepLaw` body is unfolded once, its
+`case` arm is found by `find_keyed` (every arm is a function of its label) and the edge's target is
+`stepTarget`, which `stepTo_takes_every_edge` pins to the declared `y` (the `ambiguousEdge` check makes
+it unique). No term is evaluated by `decide` in the general theorems.
+
+**Teeth (StdRun, kernel-evaluated machine runs of `apply4 0 m`).** `flip` (`a→b`, `b→a`): from `a` to
+`b` and from `b` to `a` (not a constant); `n = 7` kept; `backOnly` (`b→a`): from `c` stays `c` (no
+edge leaves `c` and none enters it); `fork` (`a -go→ b`, `a -stop→ c`): `go` lands `b`, `stop` lands `c` (the edge is the
+invoked method's). HOSTING's `method_iff_step` is the deployed Lifecycle's evaluated instance.
+
+**Critique.** (1) The bounds in `stepTo_run_moves` are existential: it does not say `Bounds.stackMax`
+suffices (stated in the docstring). The receiver's metered run is what decides that per turn, and a
+`stack` fault is a named refusal, never a wrong state. (2) The premise `lib[g]? = some (.record fs)`,
+`Row.find? ℓm fs = some t` is how a package body holds a method (`pkgOf` builds exactly that); a
+lemma deriving it from `pkgOf` and Load's relocation would close the chain to a loaded package
+(cv 01a14edf-6505; the teeth meet the premises at lib[0]). (3) `sd` need not be of
+type `S`: the theorem holds for any data with the field, which covers the receiver's `readState`
+output as a special case.
+**Meta-critique.** (1) could be closed by a derivation-depth bound (the derivation here is
+constant-depth). It is not closed because nothing consumes it: the per-turn metered run already
+refuses by name. If a consumer appears (a static admission that a machine method never faults
+`stack`), that is the work, and it goes in a cv task then, not now.
+
+Vacuity read (second agent, statements only, two passes): LAND-WITH-FIXES; fixed before landing: apply4
+restatement, bounds docstring, distinguishing teeth (fork; backOnly run from `c`), stepTo_stays; the LOW
+(premises from pkgOf/Load) is cv 01a14edf-6505. No
+existing statement changed; no new premise on an existing theorem. No shipped byte moves.
