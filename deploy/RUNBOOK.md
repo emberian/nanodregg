@@ -463,6 +463,8 @@ the stand-in.
 
     scripts/bar.sh --records 1000 [--record]
 
+- bar.sh refuses binaries that are not the tree's (PERF-7, ce23f2e): RED `binaries-stale` / `binaries-foreign`.
+  It prints `BAR built lean ...` and `BAR binaries <sha256s>`, and `--record` on a dirty tree is RED `dirty-tree`.
 - Run it from a checkout at the commit to be measured. It builds `host` and `bench-count` with lake, and
   `nd` and `nd-supervise` with `cargo --release`.
 - `--root DIR` puts the Stores on DIR's device. The default is `$HOME`. The write latency is that device's
@@ -517,12 +519,12 @@ The lines to read:
 
     bench-worstcut SCRATCH
 
-- Writes a deployed Store whose tail past its base fills tailMax: 28,928 one-slot writes, 18.85 MB of
-  18.88 MB.
-- Counts the reopen: 20.374 trie hashes and 0 verifies per step. A reopen verifies no signature
-  (HOST-22).
-- Counts the follower's re-derivation: 20.374 trie hashes and 1 verify per step.
-- About 2 min 16 s and 87 MB on hbox.
+- Writes a deployed Store whose tail past its base fills tailMax, in three tail shapes (PERF-6, 2d2189e):
+  writes (20.374 trie hashes per step), births (33.031) and retires (33.959, the worst, now pinned).
+  Verifies are 0 at reopen and 1 at audit in every shape. A reopen verifies no signature (HOST-22).
+- The writes shape is 28,928 one-slot writes, 18.85 MB of 18.88 MB. The WORST tail is retires: 32,256
+  revokes, 19.63 MB over a 5.76 MB base.
+- About 4 min 39 s and 168 MB on hbox for all three shapes.
 
 A bar.sh killed hard leaves its supervisors findable: its PID files live in `$HOME/.nd-bar/run.XXXXXX/NAME.pid`,
 outside the run root. Stop them by those files only (never by pattern).
@@ -537,3 +539,60 @@ outside the run root. Stop them by those files only (never by pattern).
   (`refusedAtLaunch`, EXITS 64: `RLIMIT_NOFILE N is below the M fds it may hold`, CLIENT-28; raise `LimitNOFILE`).
 - stale re-runs reaching `declined refusalBudget`: honest contention spent the budget (KERNEL-19's open
   question). The members re-run later, after the window moves.
+
+### THE BAR v2: two friends over ssh, the real resident, a cold cache. PENDING (PERF-2): HOSTING-27's resident, the box, and a person at each friend's machine; nothing here has been run
+
+What v1 (`scripts/bar.sh`, above) is NOT, and v2 is: v1 runs one box with no ssh, uses a hosted-custody
+STAND-IN for the resident, and reopens with a warm OS cache (`BAR scope`). v2 measures the same four limits
+(1000 records; each write ≤ 5 s; a cold writer reopen ≤ 60 s; a cold follow reopen ≤ 60 s) on the deployed
+shape of §2, §2a and §2b.
+
+Needs, each one RAN before the measure:
+- **The box.** One host running the §2 `host serve` unit, the §2a keybroker, and the §2b hosted follower and
+  grain-launch, with its Store on the device the operator means to run, named in the run's `device` line
+  (never tmpfs). The box is quiet: load1 < 2 before and after, as v1 requires.
+- **Two friends, two other machines.** Each friend has its own `nd --init` workspace, custody and
+  `host follow` Store under its own `$HOME` (custody's StrictModes chain). Each reaches the box through
+  CLIENT-12 B: its host.sock is `nd-supervise ws/host.sock … -- ssh -T box`, the box's authorized_keys line
+  is `restrict,command="nd-attach HOST_SOCK"`, and its follow grant is an envelope (PROTOCOL's row). No
+  StreamLocal forwarding, and no unix account per friend beyond the forced command.
+- **The resident.** The HOSTING-27 Lean resident runs as a grain under grain-launch. It writes through its
+  own member socket (HOSTING-25: MEMBER/<dirOf>/nd.sock served by `nd --stdio`) and asks through keybroker
+  (HOSTING-29: it receives `reply TEXT` and never a provider body). Its share of the writes is the resident's
+  own work, not argv. OPEN, HOSTING-27 decides (unconfirmed): each round it asks once and writes the reply's
+  digest into its object, so a provider answer is on the write path exactly as deployed. HOSTING-27 decides
+  what a round is. `use` must be 3 of 3 (PROTOCOL-43), as in v1.
+
+The run, in order:
+1. Genesis with three founders (§1); each actor creates an object and grants it `anyone mutate`.
+2. 500 writes round-robin: each friend alternates its own object and the next actor's through the grant,
+   and the resident takes its turn. Each write is timed at its spawner (the friend's `nd`, from exec to
+   exit, over ssh; the resident's write, from ask to its nd answer).
+3. The writer is stopped by its PID file (`systemctl stop`, seen gone), `host seal` runs, and the writer
+   starts again: the midpoint seal, as in v1 (PERF-4).
+4. 500 more writes.
+5. Every follow syncs; `host check W --anchor` holds each follow's head; `bench-count` re-derives the tail
+   (counts only: verifies 1.000 per step, trie hashes under the bar row).
+6. **Cold reopens.** Stop the writer and the friends' follows by their PID files. Drop the page cache on
+   each machine (`sync; echo 3 > /proc/sys/vm/drop_caches`, as root on EACH machine: the operator's act, unconfirmed whether each friend allows it; and a box
+   where that is not allowed cannot run v2), then time: the writer from unit start to its first reply, and
+   each friend's follow from start to its first `nd read` answered over ssh.
+
+Judging is v1's: limits from `gates/bar.tsv` (5000, 60000), judged only at load1 < 2 on the box AND on both
+friend machines, otherwise UNJUDGED (never a pass). A broken run is RED at any load: a refused connect, a
+`closed …` from nd-attach, a follow not at the writer's tip, use ≠ 3, or a resident `refused` other than a
+provider `status N` (v2 records those and re-asks once; a second refusal is RED, naming it).
+
+`--record` appends a `run` row with mode `v2`, the three machines' load lines, each machine's device line, the
+ssh RTT (median of 20 `ssh box true`, reported, never judged), and the wall-clock numbers. As in v1, the clock
+is reported and judged only against the CHARTER limits on a quiet run. It is never pinned. What v2 adds to
+v1's deterministic counts: nd-attach's per-connection fd count on the box (its WASTE row joins op `bar` at
+0.000 per command, as the supervisors' did after CLIENT-28).
+
+What the operator records if v2 fails a limit:
+- a write p99 over 5 s with a low ssh RTT is the box's fsync or the writer; compare v1 on the same box;
+- a cold follow reopen over 60 s: compare its bytes with `bench-worstcut`'s worst tail (19.6 MB, retires; PERF-6), read over
+  the friend's ssh link, since a remote follow pages its catch-up over the bridge (PROTOCOL's answer to
+  CLIENT-12);
+- the resident's writes slow but the friends' fast: the provider's latency is on the resident's write path,
+  by design, and its median ask time is in the run row.
