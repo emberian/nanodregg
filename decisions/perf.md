@@ -308,3 +308,65 @@ prove they are the most expensive per step for the fold. A tail of births grows 
 hashes per step.
 
 **Status.** open.
+
+## PERF-6 · The worst cut, measured in three tail shapes: the costliest is pinned, not assumed (2026-10-18)
+
+**Decision.** `bench-worstcut SCRATCH` builds three deployed Stores, one per tail shape, each filled to the
+same cut as PERF-5 (`withinTail` refuses the next frame; ≥ 99 % of tailMax or `FAIL not the worst cut`):
+- `writes`: one-slot writes to one object (PERF-5's tail);
+- `births`: one-slot data-object creates, so the World gains a cell per step;
+- `retires`: `revoke`s, one grant tombstoned per step. The grants are born before the base: a revoke
+  record is sampled on the World, and the grant count is re-derived from the sealed base's own tailMax
+  until it covers the tail (sealing whenever the pre-base tail is full), so the base the tail folds onto
+  holds every grant it retires.
+
+Per shape, the reopen (`foldStep`) and the follower re-derivation (`auditStep`) are counted, and each must
+reach the uncounted reopen's World. Each WASTE row pins the WORST shape (an exact cross-multiplied
+comparison), and the bench prints all three with `WORSTCUT worst <metric> …`. A refusal before the cut (an
+allowance or any other bound binding first) fails by name, and each shape prints the allowance it left, so
+"tailMax binds first" is printed from the run rather than assumed.
+
+The three Stores build at once, one dedicated task each. They share nothing but the process. The counts run
+one at a time, because each captures the process's stderr. `--harness-control` runs the full path and
+judges its impossible expectation (the cut exceeds tailMax) on the LAST shape counted (GATES-6). It reads
+red only once every shape is built and the count loop has reached its end: `FAIL retires: harness-control …`.
+
+Measured (deterministic: runs 2 and 3 identical in every count; hbox):
+
+| shape | base world bytes | tailMax | tail bytes | steps | reopen hashes/step | audit hashes/step | verifies/step (reopen, audit) | allowance left |
+|---|---|---|---|---|---|---|---|---|
+| writes | 588 | 18,876,520 | 18,850,208 | 28,928 | 20.374 | 20.374 | 0.000, 1.000 | 116,339,575 |
+| births | 588 | 18,876,520 | 18,847,752 | 33,088 | 33.031 | 33.031 | 0.000, 1.000 | 113,272,391 |
+| retires | 5,764,172 (32,384 grants) | 19,661,454 | 19,631,808 | 32,256 | **33.959** | **33.959** | 0.000, 1.000 | 93,469,319 |
+
+- tailMax binds first in every shape: the allowance (allowanceMax 134,217,728) is never close.
+- The two trie-hash rows rise once, 20.374 → 33.959. This is the first measurement of these tails (ROOT
+  2026-10-18: the one legitimate upward move, never again). Verifies are unchanged (0 and 1 in every shape).
+- Cost: 4 min 39 s and 168 MB for the honest run, and 4 min 38 s and 164 MB for the control (load1 11–12 on
+  24 cpus). Serially the honest run was 8 min 03 s. PERF-5's row was about 2 min 16 s per run.
+
+**Alternatives.**
+- (a) Three exes or three runs.tsv rows: three times the process start and the same total build, with no way
+  to name the worst in one place.
+- (b) Pin each shape in its own rows (12 rows): a regression in a cheaper shape would be pinned too. That is
+  more coverage, but the bar is the worst a restart pays, and each shape's figure is printed beside the row.
+- (c) Serial builds: 8 min instead of 4.5 min of standing, for nothing.
+
+**Why.** PERF-5's META-CRITIQUE: writes were the smallest Turn, never shown to be the costliest per step. They
+are not. A trie that grows (births), or that is already larger and is trimmed (retires), costs about 13 more
+hashes per step.
+
+**CRITIQUE.**
+- Trie hashes per step follow the World's size (the depth of the cells trie). Retires measure 33.959 over a
+  32,384-cell base sized to exactly what the tail retires. A base with more cells would cost more per step in
+  every shape. So this is the worst over shapes at the smallest World each shape needs, not the worst over
+  Worlds. The worst-World axis (a base at allowance exhaustion) is next, and it compounds this one.
+- Each shape is one kind of Turn. A tail that mixes them, or Turns touching several cells, is not measured;
+  a one-cell Turn has the most steps per byte, which is why it was chosen.
+- The concurrent build saves wall time on a shared box by using three cores at once.
+
+**META-CRITIQUE.** "The worst of three" is still a choice of three. I chose the kernel's three cell acts
+(write, birth, retire), and that is a reason. It is not a proof that no fourth shape (a row insert, a value
+transfer touching two cells) costs more per step.
+
+**Status.** open.
