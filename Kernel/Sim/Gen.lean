@@ -332,6 +332,8 @@ structure Marks where
   /-- signature verifies (`@`) of `judge` and of the two-verify plant on recorded refusals (`<G`, `<H`) -/
   verifyOnce : Nat := 0
   verifyTwice : Nat := 0
+  /-- signature verifies (`@`) of the follower's `auditRefusal` on recorded refusals (`<U`) -/
+  verifyAudit : Nat := 0
 
 /-- An `S` mark count and its `T` met: the insert's own hashes, kept if the most so far. -/
 def pairStem (m : Marks) : Marks :=
@@ -364,6 +366,7 @@ def countMarks (out : String) : Marks :=
     | some 'T' => pairStem { m with stemBase := m.stemBase + n, pendT := some n }
     | some 'G' => { m with verifyOnce := m.verifyOnce + v }
     | some 'H' => { m with verifyTwice := m.verifyTwice + v }
+    | some 'U' => { m with verifyAudit := m.verifyAudit + v }
     | _ => m) {}
 
 /-- The slots a turn changed, in `commitTrie`'s order: its non-`keep` touches, its born cells,
@@ -557,6 +560,11 @@ def countVerifies (X : Ctx D) (st : State D) (c : Call D) (r : Refused D) : Stat
   let vX := verifyingCtx X
   let once := dbgTrace "<G" fun _ => Receive.judge vX st.host c
   let twice := dbgTrace "<H" fun _ => judgeTwice vX st.host c
+  -- the follower's audit of the same record (`auditRefusal`: decode, then `judge`), in its own bracket
+  let audited := dbgTrace "<U" fun _ => Receive.auditRefusal vX st.host r
+  let st := match audited with
+    | .ok _ => st
+    | .error _ => failWith st "verify count: the counted audit refused the recorded refusal"
   let st := match once with
     | .recorded _ r' _ => if r' = r then st else failWith st "verify count: the counted judge recorded another refusal"
     | _ => failWith st "verify count: the counted judge did not record the refusal"
@@ -2461,6 +2469,7 @@ def report (P : Params D) (seeds : List Nat) (control : Bool := false) : IO UInt
   let mut proofBytes : Nat × Nat := (0, 0)
   -- PERF-1: signature verifies of `judge` re-run on each recorded refusal (`<G`)
   let mut verifies := 0
+  let mut auditVerifies := 0
   for seed in seeds do
     -- the run's trie hashes are counted off its stderr (`countingEnv`); nothing else writes there
     let buf ← IO.mkRef ({} : IO.FS.Stream.Buffer)
@@ -2477,9 +2486,13 @@ def report (P : Params D) (seeds : List Nat) (control : Bool := false) : IO UInt
         { st with seen := "verify-count:once" :: st.seen } else st
     -- exact, per seed: `judge` verifies at least once per recorded refusal (an authenticated call was
     -- verified somewhere), and the plant exactly once more per refusal whose verdict carried it
+    -- the follower audit of each record (decode, then the same judge) verifies exactly as judge does
+    let st := if m.verifyAudit = m.verifyOnce then st
+      else failWith st s!"verify count: the audit {m.verifyAudit} verifies, judge {m.verifyOnce}, over {st.recorded} recorded refusals"
     let st := if m.verifyOnce ≥ st.recorded && m.verifyTwice = m.verifyOnce + st.carried then st
       else failWith st s!"verify count: judge {m.verifyOnce} and the plant {m.verifyTwice} verifies over {st.recorded} recorded refusals, {st.carried} carried"
     verifies := verifies + m.verifyOnce
+    auditVerifies := auditVerifies + m.verifyAudit
     let (a, b) := maxWork st.log
     work := (max work.1 a, max work.2 b)
     admitted := admitted + st.admitted
@@ -2531,6 +2544,7 @@ def report (P : Params D) (seeds : List Nat) (control : Bool := false) : IO UInt
   IO.println s!"WASTE refuse record-bytes-per-refusal {showRatio (ratio rf.2.2.1 rf.2.1)}"
   IO.println s!"WASTE refuse refusals-per-member-window {showRatio (ratio rf.2.2.2.1 1)}"
   IO.println s!"WASTE refuse verifies-per-refusal {showRatio (ratio verifies rf.2.1)}"
+  IO.println s!"WASTE audit verifies-per-refusal {showRatio (ratio auditVerifies rf.2.1)}"
   IO.println s!"WASTE admit hashes-per-turn-rows-root {showRatio (ratio rowsRootMarks admitted)}"
   IO.println s!"WASTE admit hashes-per-row-insert {showRatio (ratio rw.1 rw.2.1)}"
   IO.println s!"WASTE admit hashes-per-row-retract {showRatio (ratio rw.2.2.1 rw.2.2.2.1)}"
