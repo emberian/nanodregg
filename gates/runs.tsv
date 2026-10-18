@@ -1,6 +1,9 @@
 # exe	runs	pass — gates/runs.py: every lean_exe has one row. runs are argument lists separated by ` ; `
 # ({host} = the built host exe, {fresh} = a fresh directory); `-` = not a verdict exe (pass says why).
 # cargo:CRATE:TEST rows: a Rust integration test driving the named Lean exes (gates/runs.py).
+# their 4th column is the known-red control (GATES-15): `nobin RED` = with ND_LEAN_BIN an empty directory the test
+# must fail (it drives the exes it names); `nobin ok` = it runs no exe (it reads a generated table; the named exe only
+# selects it) and must pass without them. Lean verdict rows gain their `--harness-control` column in landing B.
 # Measured 10-17 on hbox (standing tree, swarm-build): the whole set is ~17 s.
 kernel-sim	--seeds 64	ALL PASS
 host-sim	1 ; 2 ; 3	ALL PASS
@@ -21,14 +24,14 @@ emit-broker	-	a generator; gates/generated.tsv checks its output
 codec-vectors	-	a generator; gates/generated.tsv checks its output (a change of meaning under an unchanged tag is red, CODEC-28)
 live-calls	-	a generator of deploy/live/ inputs; deploy/live/harness.sh drives it against running units
 ob	-	LANG's resident check, an interactive tool: lang-journey and the rows drive the same code
-cargo:launcher:isolation	hosting-drive,hosting-controller	exit 0
-cargo:launcher:path_vectors	emit-hosting	exit 0
-cargo:launcher:broker	hosting-broker,host	exit 0
-cargo:launcher:resident	hosting-controller,hosting-broker,host,hosting-drive	exit 0
-cargo:launcher:grain	hosting-controller,host	exit 0
-cargo:devtools:workspace	host	exit 0
-cargo:client:join	host	exit 0
-cargo:client:real	host	exit 0
-cargo:client:stdio	host	exit 0
-cargo:client:supervise	host	exit 0
-cargo:attach:attach	host	exit 0
+cargo:launcher:isolation	hosting-drive,hosting-controller	exit 0	nobin RED
+cargo:launcher:path_vectors	emit-hosting	exit 0	nobin ok
+cargo:launcher:broker	hosting-broker,host	exit 0	nobin RED
+cargo:launcher:resident	hosting-controller,hosting-broker,host,hosting-drive	exit 0	nobin RED
+cargo:launcher:grain	hosting-controller,host	exit 0	nobin RED
+cargo:devtools:workspace	host	exit 0	nobin RED
+cargo:client:join	host	exit 0	nobin RED
+cargo:client:real	host	exit 0	nobin RED
+cargo:client:stdio	host	exit 0	nobin RED
+cargo:client:supervise	host	exit 0	nobin RED
+cargo:attach:attach	host	exit 0	nobin RED

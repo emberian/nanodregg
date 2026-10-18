@@ -1,0 +1,78 @@
+#!/usr/bin/env bash
+# scripts/plant — judge a planted mutation through scripts/pre-push, and READ the verdict (GATES-15).
+#
+#   scripts/plant [--build] [--with PATH]... NAME EXPECT [PATH=FILE]...
+#
+# The candidate is main + each `--with PATH` as this worktree has it (an unlanded gate under test)
+# + each PATH replaced by FILE's bytes (the plant). It is judged by this worktree's scripts/pre-push
+# against main (`--no-build` unless --build), never committed. EXPECT is a fixed string the
+# verdict must contain: the plant reads `PLANT NAME RED` when pre-push refuses (exit 1) and its
+# output names EXPECT; EXPECT `GREEN` is a control that must pass (exit 0). Anything else is
+# `PLANT NAME FAIL …` and exit 1; a judge killed by load (76) is `PLANT NAME NOT JUDGED` and exit 76.
+#
+# A harness that cannot read a failure is not a harness (CLIENT-6's mutation runner read every
+# mutation green behind `cargo test -q`; cv 01a14e41-d666). So before any plant is read, the
+# KNOWN-RED control runs: main + one conflict-marker line in gates/harness-control.txt, refused by
+# check.py's `paths` gate. If that does not read red by name the harness refuses everything:
+# `plant: harness: the known-red control passed`, exit 1. Mutated files are taken from MAIN by the
+# caller (a stale worktree copy plants two changes at once: GATES-2's allow-row incident).
+# Output and exit code are read from a file, never through a pipe (a pipeline's status is its last
+# stage's). Logs: <git-common-dir>/nanodregg-plant/NAME.out.
+set -uo pipefail
+here=$(cd "$(dirname "$0")/.." && pwd -P)
+common=$(cd "$here" && cd "$(git rev-parse --git-common-dir)" && pwd -P)
+P=$common/nanodregg-plant
+mkdir -p "$P"
+build=0 with=()
+while [ $# -gt 0 ]; do
+  case $1 in
+    --build) build=1 ;;
+    --with) with+=("$2"); shift ;;
+    *) break ;;
+  esac
+  shift
+done
+[ $# -ge 2 ] || { echo "usage: scripts/plant [--build] [--with PATH]... NAME EXPECT [PATH=FILE]..." >&2; exit 2; }
+name=$1 expect=$2; shift 2
+case $name in harness-control|*/*|'') echo "plant: bad NAME '$name'" >&2; exit 2 ;; esac
+
+# judge NAME EXPECT BUILD PATH=FILE... -> prints `PLANT NAME RED|GREEN|FAIL …|NOT JUDGED`; returns 0 when
+# the verdict is the expected one, 1 when not, 76 when killed.
+judge() {
+  local n=$1 want=$2 b=$3 kv p f m rc; shift 3
+  export GIT_INDEX_FILE=$P/$n.idx
+  git -C "$here" read-tree refs/heads/main || return 2
+  for p in "${with[@]}"; do
+    m=$(git -C "$here" ls-files -s -- "$p" | cut -c1-6)
+    git -C "$here" update-index --add --cacheinfo "${m:-100644},$(git -C "$here" hash-object -w "$here/$p"),$p" || return 2
+  done
+  for kv in "$@"; do
+    p=${kv%%=*} f=${kv#*=}
+    [ -f "$f" ] || { echo "plant: $n: no file $f" >&2; return 2; }
+    git -C "$here" update-index --add --cacheinfo "100644,$(git -C "$here" hash-object -w "$f"),$p" || return 2
+  done
+  printf 'gates: plant %s\n\nGATE-CHANGE: plant\nCROSS-LAYER: plant\n' "$n" > "$P/$n.msg"
+  local nb=()
+  [ "$b" = 1 ] || { printf 'NO-BUILD: plant\n' >> "$P/$n.msg"; nb=(--no-build); }
+  ( cd "$here" && scripts/pre-push --index --base refs/heads/main --message "$P/$n.msg" "${nb[@]}" ) > "$P/$n.out" 2>&1
+  rc=$?
+  unset GIT_INDEX_FILE
+  if [ $rc -eq 76 ]; then echo "PLANT $n NOT JUDGED (killed by load: re-run) — $P/$n.out"; return 76; fi
+  if [ "$want" = GREEN ]; then
+    if [ $rc -eq 0 ]; then echo "PLANT $n GREEN (control)"; return 0; fi
+    echo "PLANT $n FAIL: the control must pass, pre-push exit $rc: $(grep -m1 '^PRE-PUSH' "$P/$n.out")"; return 1
+  fi
+  if [ $rc -eq 1 ] && grep -qF -- "$want" "$P/$n.out"; then
+    echo "PLANT $n RED: $(grep -m1 -F -- "$want" "$P/$n.out" | sed 's/^ *//' | cut -c1-200)"; return 0
+  fi
+  if [ $rc -eq 0 ]; then echo "PLANT $n FAIL: pre-push passed it (exit 0), '$want' never read"
+  else echo "PLANT $n FAIL: pre-push exit $rc without '$want': $(grep -m1 '^PRE-PUSH' "$P/$n.out")"; fi
+  return 1
+}
+
+printf '<<<<<<< harness-control\n' > "$P/harness-control.txt"
+judge harness-control "gates/harness-control.txt:1: conflict marker" 0 gates/harness-control.txt="$P/harness-control.txt"
+rc=$?
+if [ $rc -eq 76 ]; then exit 76; fi
+if [ $rc -ne 0 ]; then echo "plant: harness: the known-red control passed — no plant is read (log $P/harness-control.out)"; exit 1; fi
+judge "$name" "$expect" "$build" "$@"

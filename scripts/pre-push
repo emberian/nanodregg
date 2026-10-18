@@ -88,13 +88,23 @@ git -C "$repo" diff --name-only "$base" "$cand" > "$G/changed"
 # ($G/judge, a copy), and print the red keys (`run EXE ARGS`, `waste OP METRIC`) judged against the
 # candidate's waste ceilings, so the parent is judged by exactly the candidate's runs and bars (a run
 # whose binary the parent lacks is ABSENT there, so its red is new). Returns runs.py's exit.
+# A runner with no verdict is red, never ok and never PRE-EXISTING (GATES-15): the reasons go to
+# OUT.crash. Before GATES-15 a crashed runs.py (a traceback, exit 1, no `run …: RED` line) read
+# `runs: ok`, because the keys were the only thing read.
 runs_reds() {
-  local t=$1 out=$2 rc
-  : > "$out.waste"
+  local t=$1 out=$2 rc wrc
+  : > "$out.waste"; : > "$out.crash"
   wrapped python3 "$G/judge/gates/runs.py" "$t" --table "$G/judge/gates/runs.tsv" --changed "$G/changed" --waste-out "$out.waste" > "$out" 2>> "$log"; rc=$?
-  python3 "$G/judge/gates/waste.py" "$G/judge" --measured "$out.waste" --partial > "$out.wred" 2>&1
+  python3 "$G/judge/gates/waste.py" "$G/judge" --measured "$out.waste" --partial > "$out.wred" 2>&1; wrc=$?
   { sed -n 's/^  run \(.*\): \(RED\|TIMEOUT\).*/run \1/p' "$out"
+    sed -n 's/^    red \(.*\)$/red \1/p' "$out"
     sed -n 's/^waste \([^ ]*\) \([^:]*\): measured.*/waste \1 \2/p' "$out.wred"; } > "$out.keys"
+  grep -q '^runs: ' "$out" || echo "runs.py printed no verdict line (exit $rc): see the log" >> "$out.crash"
+  case $rc in 0|3|76) ;; 1) grep -q '^run ' "$out.keys" || echo "runs.py exit 1 with no named red" >> "$out.crash" ;;
+    *) echo "runs.py exit $rc" >> "$out.crash" ;; esac
+  grep -q '^waste-measured: ' "$out.wred" || echo "waste.py printed no verdict line (exit $wrc): $(tail -1 "$out.wred")" >> "$out.crash"
+  case $wrc in 0) ;; 1) grep -q '^waste ' "$out.keys" || echo "waste.py exit 1 with no named red" >> "$out.crash" ;;
+    *) echo "waste.py exit $wrc" >> "$out.crash" ;; esac
   return $rc
 }
 
@@ -104,13 +114,21 @@ runs_reds() {
 # (lake's traces: the delta only) and run, and the slot is re-materialized at the candidate.
 judge_runs() {
   rm -rf "$G/judge"; mkdir -p "$G/judge/gates"
-  cp "$G/tree/gates/"{runs.py,runs.tsv,tree.py,waste.py} "$G/judge/gates/" || return 1
+  if ! cp "$G/tree/gates/"{runs.py,runs.tsv,tree.py,waste.py} "$G/judge/gates/"; then
+    echo "  runs: RED (the runner could not be copied)"; fail="$fail runs"; return
+  fi
   cp "$G/tree/gates/waste.tsv" "$G/judge/gates/" 2>/dev/null || : > "$G/judge/gates/waste.tsv"
   runs_reds "$G/tree" "$G/runs.cand"; local rc=$?
   cat "$G/runs.cand" "$G/runs.cand.wred" >> "$log"
-  grep '^  run ' "$G/runs.cand" | grep -v ': ok$' || true
+  grep -E '^  run |^    red ' "$G/runs.cand" | grep -vE ': ok(\(known-red control read red\))?$' || true
   grep '^waste .*measured' "$G/runs.cand.wred" || true
-  if [ $rc -eq 76 ]; then echo "  runs: KILLED(load) — re-run"; killed="$killed runs"; return; fi
+  if [ $rc -eq 76 ] && [ ! -s "$G/runs.cand.crash" ]; then echo "  runs: KILLED(load) — re-run"; killed="$killed runs"; return; fi
+  # No verdict is red, and so is a run whose binary is missing after a green build: neither has a
+  # parent to share it with (the candidate's own runner and build).
+  grep -E '^  run .*: ABSENT' "$G/runs.cand" | sed 's/^  run /run /' >> "$G/runs.cand.crash"
+  if [ -s "$G/runs.cand.crash" ]; then
+    sed 's/^/  runs: NO VERDICT /' "$G/runs.cand.crash"; echo "  runs: RED"; fail="$fail runs"; return
+  fi
   if [ ! -s "$G/runs.cand.keys" ]; then
     echo "  runs: ok$( [ $rc -eq 3 ] && echo ', with pending rows') ($(tail -1 "$G/runs.cand" | sed 's/^runs: [A-Za-z]* //'))"; return
   fi

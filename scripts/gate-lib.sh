@@ -70,11 +70,17 @@ rust_changed() {
   git -C "$repo" diff --name-only "$1" "$2" | python3 -c '
 import sys, subprocess, tomllib
 cand = sys.argv[1]
-try:
-    text = subprocess.run(["git", "-C", sys.argv[2], "show", cand + ":Cargo.toml"], capture_output=True, check=True).stdout
-    members = tomllib.loads(text.decode())["workspace"]["members"]
-except Exception:
-    members = []
+# No root Cargo.toml: no workspace. One that does not parse or names no members is judged whole
+# (cargo reds it), never skipped (GATES-15: an unreadable input is not "nothing changed").
+r = subprocess.run(["git", "-C", sys.argv[2], "cat-file", "-e", cand + ":Cargo.toml"], capture_output=True)
+members = []
+if r.returncode == 0:
+    try:
+        text = subprocess.run(["git", "-C", sys.argv[2], "show", cand + ":Cargo.toml"], capture_output=True, check=True).stdout
+        members = tomllib.loads(text.decode())["workspace"]["members"]
+        assert isinstance(members, list) and all(isinstance(m, str) for m in members)
+    except Exception:
+        print("workspace"); sys.exit(0)
 paths = sys.stdin.read().split()
 if any(p in ("Cargo.toml", "Cargo.lock") or any(p.startswith(m.rstrip("/") + "/") for m in members) for p in paths):
     print("workspace")' "$2" "$repo"
