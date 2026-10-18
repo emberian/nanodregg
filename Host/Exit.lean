@@ -132,7 +132,7 @@ inductive Status where
   was written -/
   | allowancePastBound
   /-- `host genesis` / `join` / `import`: the World's storage potential (`Kernel.potential`: weight and
-  allowance together) is past `Host.Cli.potentialMax`, so admitted turns could grow its weight past
+  allowance together) is past `Host.potentialMax`, so admitted turns could grow its weight past
   `potentialMax / 145`, the weight bound this budget admits (`Host.Cli.budget_reaches`, HOST-56).
   Nothing was written -/
   | potentialPastBound

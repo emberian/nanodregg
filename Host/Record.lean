@@ -45,6 +45,13 @@ def Fault.name {F : Type} : Fault F → String
 
 def codec (dc : Stream D) : Stream (List (Step D × D)) := Nanodregg.Codec.Kernel.batch recordTurnsMax dc
 
+/-- A step's own bytes in a record, beside its 33 bytes of framing (its tag and the roots digest
+beside it): a Turn's log weight (CODEC's `turn_size_logWeight`), a recorded refusal's bytes. A
+measure the size theorems read (`Host.Size.record_size_eq`), never computed on the request path. -/
+def stepBytes (dc : Stream D) : Step D → Nat
+  | .turn t => t.logWeight
+  | .refusal r => (Nanodregg.Codec.Kernel.refused dc).size r
+
 /-- The record of `staged`: each step with the roots digest after it (`Machine.note`); `none` when
 `staged` holds more than `recordTurnsMax` pairs, the count `codec`'s decode refuses (`pastBound`), or
 none at all, the record the reader refuses `empty` (HOST-49). So a writer never writes a record its own

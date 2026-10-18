@@ -17,6 +17,7 @@ HOST-22 (as ruled): an open re-verifies nothing. Writer and follower both reopen
 -/
 import Host.Log
 import Codec.Kernel
+import Codec.WorldSize
 
 namespace Nanodregg.Host
 
@@ -51,6 +52,43 @@ def stepBytesMax : Nat := 1 + max Kernel.Bounds.weightMax refusedBytesMax
 /-- The largest batch record of steps `World.step` took: 16,779,332 bytes (16 MiB + 2116). -/
 def recordBytesDerived : Nat := 4 + recordTurnsMax * (stepBytesMax + digestBytes)
 
+/-- The genesis allowance of a deployed Store, and the most a World this binary genesises, joins or
+imports may carry (`allowancePastBound`, HOST-56): KERNEL-15's useful life. PRIMARY (KERNEL-55, ROOT
+Q1 = B): the World bound is derived from it, never the other way. -/
+def allowanceMax : Nat := 1 <<< 27
+
+/-- The most weight a World this binary genesises, joins or imports may hold beside its allowance
+(HOST-56, HOST's choice): ~7,000 founders' cells at a genesis. Together with `allowanceMax` it fixes
+the most storage potential an admitted World carries (`Host.potentialMax`). -/
+def genesisWeightMax : Nat := 1 <<< 20
+
+/-- The most storage potential (`Kernel.potential`: weight and allowance by KERNEL's ratio, read by
+name) a World this binary writes may carry: one at `genesisWeightMax` holding `allowanceMax`
+(`Host.Cli.budgetFault`'s second arm, HOST-56). -/
+def potentialMax : Nat := Kernel.potentialRatio.2 * genesisWeightMax + Kernel.potentialRatio.1 * allowanceMax
+
+/-- The most weight a World this binary reaches from a budget-admitted World: `potentialMax` over
+KERNEL's denominator (`Host.Cli.budget_reaches`, from `allowance_bounds_world`). -/
+def worldWeightMax : Nat := potentialMax / Kernel.potentialRatio.2
+
+/-- The most journal bytes a reached World holds: 72 per entry (CODEC's `journalBytes`), fewer than
+three windows of entries (KERNEL's `journal_bounded`). -/
+def journalBytesMax : Nat := 72 * (3 * Kernel.Bounds.windowMax)
+
+/-- The most refusals bytes a reached World holds (KERNEL-55 R1): at most `3 C` transaction entries
+of 82 bytes and `C + 1` count and total entries of 50 (KERNEL's `refusals_bounded`, CODEC's
+`refusalsBytes_le_of_fits`), `C` = `refusalsPerWindowMax`. -/
+def refusalsBytesMax : Nat :=
+  82 * (3 * Kernel.Bounds.refusalsPerWindowMax) + 50 * (Kernel.Bounds.refusalsPerWindowMax + 1)
+
+/-- **The World bound, derived** (HOST-57, KERNEL-55 ROOT Q1 = B): CODEC's size bound
+(`world_size_le_div`: `entrySlack` of the weight, plus journal, refusals and fixed bytes) at the most
+weight, journal and refusals a reached World holds. 91,914,346 bytes. `Host.Size.reached_size_le`
+proves every World the deployed writer reaches encodes within it. -/
+def worldBytesDerived : Nat :=
+  Codec.Kernel.entrySlack.1 * worldWeightMax / Codec.Kernel.entrySlack.2 + journalBytesMax +
+    refusalsBytesMax + Codec.Kernel.worldFixed
+
 structure Cadence where
   /-- the fewest segment bytes between two seals -/
   sealMinBytes : Nat
@@ -79,30 +117,17 @@ def baseRecordMax (c : Cadence) : Nat := c.worldBytesMax + stampBytes + 2 * (8 +
 
 /-- `host serve`'s numbers. The base: `worldBytesMax` is the reader's bound on a base World (open
 refuses a larger base file `baseTooLarge` before decoding it) and the seal's encode twin
-(`worldTooLarge`). It is NOT yet derived: it is the old literal, which PERF-2 measured reopening in
-120.7 s against THE BAR's 60 s at its own size. KERNEL-55 (ROOT Q1 = B) is to derive it (HOST-57):
-`Host.Cli.budget_reaches` bounds the WEIGHT of every World a budget-admitted World folds to, under
-KERNEL's Canon, Slotted and RowsCanon premises (proved for genesis Worlds; composed for imported and
-joined ones by cv 01a150ed-7bf7), and CODEC's size equality (`world_size_le`, cv 01a150a3-2523, not yet
-a theorem) is to turn that weight into bytes. The derivation replaces this literal, never sits beside
-it. A record: 64 turns
+(`worldTooLarge`). It is `worldBytesDerived` (HOST-57): every World the writer reaches from a World
+genesis, join or import admits encodes within it (`Host.Size.reached_size_le`), so the seal's
+`worldTooLarge` is unreachable on the writer path, and the reader's bound is the honest writer's. The
+literal it replaced, 2^28, reopened in 120.7 s against THE BAR's 60 s (PERF-2). A record: 64 turns
 of steps `World.step` took, `recordBytesDerived` (HOST-47: it was 32 MiB, twice that, and the torn-tail
 window `Log.frameMax recordBytesMax` with it). -/
 def deployed : Cadence where
   sealMinBytes := 1 <<< 20
-  worldBytesMax := 1 <<< 28
+  worldBytesMax := worldBytesDerived
   recordBytesMax := recordBytesDerived
 
 end Cadence
-
-/-- The genesis allowance of a deployed Store, and the most a World this binary genesises, joins or
-imports may carry (`allowancePastBound`, HOST-56): KERNEL-15's useful life. PRIMARY (KERNEL-55, ROOT
-Q1 = B): the World bound is derived from it, never the other way. -/
-def allowanceMax : Nat := 1 <<< 27
-
-/-- The most weight a World this binary genesises, joins or imports may hold beside its allowance
-(HOST-56, HOST's choice): ~7,000 founders' cells at a genesis. Together with `allowanceMax` it fixes
-the most storage potential an admitted World carries (`Host.Cli.potentialMax`). -/
-def genesisWeightMax : Nat := 1 <<< 20
 
 end Nanodregg.Host

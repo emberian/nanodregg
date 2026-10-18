@@ -113,13 +113,9 @@ def genesisLines (w₀ : World D) (nonce : ByteArray) (n : Nat) : List String :=
     s!"founder {i} member {(Receive.founderId X w₀.origin i).toHex} grant {(Receive.founderGrantId X w₀.origin i).toHex}") ++
   [s!"chain {w₀.chain.toHex}"]
 
-/-- The most storage potential (`Kernel.potential`) a World this binary writes may carry: a World
-at `genesisWeightMax` holding `allowanceMax`, by KERNEL's ratio (read by name, never a literal). -/
-def potentialMax : Nat := potentialRatio.2 * genesisWeightMax + potentialRatio.1 * allowanceMax
-
 /-- The budget check every World this binary creates a Store from passes (HOST-56, KERNEL-55; `host
 genesis`, `host join`, `host import`, before anything is written): its allowance within
-`allowanceMax` (ROOT's Q3), and its potential within `potentialMax`. The second arm is what bounds the
+`allowanceMax` (ROOT's Q3), and its potential within `Host.potentialMax`. The second arm is what bounds the
 World a fold reaches (`Host.Cli.budget_reaches`): an allowance check alone admits a carried World
 heavy enough that admitted turns grow it past the derived World bound. -/
 def budgetFault (w : World D) : Option Status :=

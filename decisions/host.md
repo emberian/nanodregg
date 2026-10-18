@@ -2620,3 +2620,47 @@ Corollaries: `import_budget_reaches` and `join_budget_reaches`. With `genesis_bu
 **Law-6 read (second agent, read-only, with the DISJUNCT check): LAND-WITH-FIXES.** No disjunct and no vacuity; the premises are satisfiable (HOST-56's plant controls succeed through importWorld). `accept_premises` comes from the one success branch of `accept`. `carryWorld` keeps `c.trie` and `c.rows`, and the CodecFits fields mean what is claimed. Taken: the accept proof uses PROTOCOL's `accept_ok` rather than a split-and-simp, and "will consume".
 
 **Flag day.** None. Theorems only; no code moves.
+
+## HOST-57 · `worldBytesMax` is derived: 91,914,346 bytes, and every World the writer reaches encodes within it (2026-10-19, HOST-14; KERNEL-55 ROOT Q1 = B and Q5, the HOST half part 2)
+
+**Decision.** `Cadence.deployed.worldBytesMax := worldBytesDerived` (Host/Bounds.lean). The derivation is the def, built from named constants only:
+- `potentialMax = ratio.2 · genesisWeightMax + ratio.1 · allowanceMax`, through KERNEL's `potentialRatio` (moved here from Host.Cli);
+- `worldWeightMax = potentialMax / ratio.2` = 78,802,294;
+- `journalBytesMax = 72 · 3 · windowMax` = 221,184;
+- `refusalsBytesMax = 82 · 3C + 50 · (C + 1)` = 4,849,714, with C = `refusalsPerWindowMax` = 16,384 (R1);
+- `worldBytesDerived = entrySlack.1 · worldWeightMax / entrySlack.2 + journalBytesMax + refusalsBytesMax + worldFixed` = **91,914,346** (`worldBytesDerived_eq`, by decide), using CODEC's `entrySlack` (54/49) and `worldFixed` (104).
+
+It replaces the 2^28 literal, about 34% of it. Scaling PERF-2's 120.7 s clock (a loaded box, reported and never gated) by size, assuming the same 2.000 trie hashes per entry, gives ≈ 41 s, under THE BAR's 60 s. That is arithmetic, not a measurement; PERF-2 re-pins at this size.
+
+**Theorems** (Host/Proofs/Size.lean):
+- **`reached_size_le`**: from a World `budgetFault` admits and that is `Kept`, every admitted fold reaches a World whose World-codec bytes are within `worldBytesMax`, with no premise on the reached World. `reached_codecFits` gives it the codec's domain: each cell leaf weighs at least 32 and each rows entry at least 1, so the weight bound bounds those two listings, and R1 bounds the refusals. It composes:
+  - `budget_reaches` (weight);
+  - `journal_bounded` (journal);
+  - `refusals_bounded` (R1's counts);
+  - `refusalsBytes_le_of_fits` and `world_size_le_div` (CODEC's bytes).
+  
+  So `worldTooLarge` is unreachable on the writer path. The seal keeps it as the encode twin of the reader's bound (HOST-41's law), now a refusal no honest fold reaches. The genesis, join and import Worlds are `Kept` through KERNEL's genesis and carry theorems and HOST-59's lemmas.
+- `refusalItemTx_eq`: under `refusalsFits`, CODEC's transaction count is KERNEL's.
+- The framing half (KERNEL-55 Q5):
+  - `record_size_eq` / `frame_size_eq`: a record is exactly its count plus 33 bytes of framing and the step's own bytes per step; a frame adds 36.
+  - `turn_logWeight_ge`: a Turn is at least 80 log bytes.
+  - `turns_logWeight_le` (KERNEL's `fold_conserves`): log bytes are paid from the allowance and never credited back.
+  - `budget_store_le` and `store_turns_le`: every Store this binary creates holds, over its whole life, at most `genesisWeightMax + allowanceMax` bytes of Turns and an 80th of that many Turns.
+
+**The honest edge (ROOT's ruling).** Recorded refusals are not paid from the allowance. R1's kernel-wide cap bounds them per window: at most `refusalsPerWindowMax` World-wide per window, each its refused bytes plus 33 of framing. They are not bounded per life: a Store's disk over its life is the Turns' bound plus that per-window bound times the windows it lives through. `index.log` is `entryBytes` per record before the newest base (`entriesSeq_read`), and records are at most the steps (HOST-49).
+
+**Flag day.** A base file past `Log.frameMax (worldBytesDerived + 112)` refuses `baseTooLarge` (exit 21). A carried file past `carriedMax` refuses at import, and the follower's download bound falls with it. No Store holds a World that large: the largest measured is 44.7 MB, and R1's `kernel!` re-genesised the devnet. `openWith_listing_lt`'s `baseRecordMax` literal moves to 91,914,458 (`by decide`).
+
+**Critique.**
+- The bound is tight per term, not jointly. The 54/49 factor is attained only by empty live cells at version ≥ 2^63, the 84/145 ratio only by pinless declares, and a full refusals trie needs R1's cap reached. No World attains all three, so the reachable maximum is below 91.9 MB. A joint bound is a harder theorem for a few percent (KERNEL-20's critique, unchanged).
+- The constants 72, 82 and 50 in `journalBytesMax` and `refusalsBytesMax` restate CODEC's per-entry bytes (`journalBytes`, `refusalsBytes_le_of_fits`) as literals. `reached_size_le` would fail if they drifted below CODEC's, so the theorem is their check, but they are not read by name.
+- There is no runtime plant at the derived cap: a 91.9 MB adversarial World built through admitted turns is PERF-2's bench, not a judged plant. The teeth are per term: CODEC's `world_size_slack_tight`, KERNEL's `declare_growth_tight`, and HOST-56's two budget plants.
+
+**Law-6 read (second agent, read-only, with the DISJUNCT check): LAND-WITH-FIXES.**
+- No vacuity and no disjunct.
+- Every component carries weight: with `refusalsBytesMax = 0` the proof fails by about 4.85 MB, and cutting any term by more than 72 bytes breaks it.
+- The `simp only` unfolds definitions only.
+- `record_size_eq` is a true equality.
+- Taken: `reached_codecFits` discharges the reached World's `CodecFits` premise, which the "never fires" claim needed; the ≈ 41 s is reworded as arithmetic on PERF-2's clock; the literal constants are named in the critique.
+
+**Meta-critique.** HOST-14's original "256 MiB ≈ 900 BAR stores" was a division dressed as a reason. The number that replaces it is the composition of five theorems, and its prose says only what the def computes.

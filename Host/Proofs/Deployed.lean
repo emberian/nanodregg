@@ -817,7 +817,7 @@ theorem openWith_listing_lt {keys : Keys} {file I S : ByteArray} {o : Opening (W
   cases hb₂
   have hl := Record.foldlM_listing hk hf
   have hw := world_size_listing b.world
-  have e1 : c.baseRecordMax = 268435568 := rfl
+  have e1 : c.baseRecordMax = 91914458 := by decide
   have e2 : c.tailMax n = 2 * max 1048576 (n / 4) + (4 + 16779332 + 32) := rfl
   have hm : max 1048576 (n / 4) ≤ 1048576 + n / 4 :=
     Nat.max_le.mpr ⟨Nat.le_add_right _ _, Nat.le_add_left _ _⟩
