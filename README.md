@@ -15,17 +15,15 @@ such commit.
 
 ## What is true today
 
-Measured on 2026-10-17, from the standing verdict and the row runner on the build host:
+Measured on 2026-10-18, from the standing verdict and the row runner on the build host:
 
-- Eleven conformance rows pass against the real host process over sockets, including key
-  rotation, a cold follower catching up from two windows behind, log paging, audit, and a thin
-  member adopting a pinned checkpoint. Each row has a planted fault that turns it red by name.
-- Five rows are pending by name: `pay`, `well` and `bounty` wait on the ledger and the law
-  library; `grain` on hosting; `wrongWorld` on the kernel's world-origin field. Pending is never
-  reported as pass.
+- 22 conformance rows pass against the real host process over sockets, including key
+  rotation, a cold follower catching up from two windows behind, log paging, audit, a thin
+  member adopting a pinned checkpoint, and recorded refusals. Each row has a planted fault that
+  turns it red by name. No row is pending.
 - The kernel simulation runs 64 seeds under the deployed parameters (32-byte digests, cSHAKE256,
-  the real codecs, RFC 8032 Ed25519): 2,554 turns admitted, 5,979 refused by their expected names,
-  no failing seed, and all twelve planted refusal kinds met. Disabling the pin check, the credit,
+  the real codecs, RFC 8032 Ed25519): 4,395 turns admitted, 50,502 refused by their expected names,
+  no failing seed, and the planted refusal kinds met. Disabling the pin check, the credit,
   the chain walk or the signature check turns most seeds red.
 - The host simulations run the real loop over an in-memory disk and over a real file with
   `F_FULLFSYNC`, with crash cuts at every byte of an unsynced batch, thirty-one in-process fuel
@@ -92,7 +90,7 @@ scripts/standing.sh             # the one-line verdict for the checkout
 ```
 
 The standing verdict is `GREEN` only when every stage is a verdict and none is red. At the time of
-writing it is `INCOMPLETE`, for the five pending rows named above.
+writing it is `GREEN` (recorded at 2d76795; all 22 rows pass at 38d94e1).
 
 ## Working in the repository
 
