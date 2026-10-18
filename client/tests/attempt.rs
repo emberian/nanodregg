@@ -121,7 +121,8 @@ fn a_host_refused_for_a_committed_call_settles_committed() {
 }
 
 /// Sends exhausted and the Host has no record: the call's window is live, so a relay holding the
-/// bytes can still land them. The member's probe says `open`; the attempt stays open and the next
+/// bytes can still land them. Every absent lookup is probed before a resend (KERNEL-54); the last
+/// probe says `open`; the attempt stays open and the next
 /// run looks it up again (never a fresh call: no double effect).
 #[test]
 fn absent_with_sends_exhausted_and_a_live_window_stays_open() {
@@ -152,6 +153,7 @@ fn absent_with_sends_exhausted_and_a_live_window_stays_open() {
         [
             Request::Submit,
             Request::Lookup,
+            Request::Probe,
             Request::Submit,
             Request::Lookup,
             Request::Probe

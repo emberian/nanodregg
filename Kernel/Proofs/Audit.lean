@@ -105,15 +105,49 @@ theorem judge_recorded {X : Ctx D} {w w' : World D} {c : Call D} {v : Verdict D}
   · cases h
   · rename_i v' hs
     split at h
-    · rename_i ha
-      split at h
-      · rename_i w'' hr
-        simp only [Outcome.recorded.injEq] at h
-        obtain ⟨rfl, rfl, rfl⟩ := h
-        exact ⟨hs, ha, rfl, hr⟩
-      · cases h
-      · cases h
     · cases h
+    · split at h
+      · rename_i ha
+        split at h
+        · rename_i w'' hr
+          simp only [Outcome.recorded.injEq] at h
+          obtain ⟨rfl, rfl, rfl⟩ := h
+          exact ⟨hs, ha, rfl, hr⟩
+        · cases h
+        · cases h
+      · cases h
+
+/-! ## Stale is never recorded (KERNEL-54) -/
+
+omit [Ord D] [DecidableEq D] in
+/-- Only a stale verdict carries the stale code. -/
+private theorem code_ne_staleCode {v : Verdict D} (hv : v.isStale = false) : v.code ≠ staleCode := by
+  cases v with
+  | refused r =>
+    have := List.idxOf_le_length (l := refusalNames) (a := r.name)
+    simp only [Verdict.code, staleCode]
+    have h7 : rejectNames.idxOf "stale" = 7 := by decide
+    omega
+  | rejected r =>
+    simp only [Verdict.code, staleCode, ne_eq, Nat.add_left_cancel_iff]
+    cases r <;> first | (simp only [Reject.name]; decide) | simp [Verdict.isStale] at hv
+
+/-- **`judge` declines a stale verdict**: a call `submit` refuses `stale` is never recorded and spends
+no budget, whoever signed it. -/
+theorem judge_stale_declined {X : Ctx D} {w : World D} {c : Call D} {v : Verdict D}
+    (hs : submit X w c = .error v) (hv : v.isStale = true) : judge X w c = .declined v := by
+  simp [judge, judgeBy, hs, hv]
+
+/-- **What `judge` records is never stale.** -/
+theorem judge_recorded_not_stale {X : Ctx D} {w w' : World D} {c : Call D} {v : Verdict D} {r : Refused D}
+    (h : judge X w c = .recorded v r w') : v.isStale = false ∧ r.code ≠ staleCode := by
+  have hs := (judge_recorded h).1
+  have hv : v.isStale = false := by
+    cases hst : v.isStale
+    · rfl
+    · rw [judge_stale_declined hs hst] at h; cases h
+  obtain rfl := (judge_recorded h).2.2.1
+  exact ⟨hv, code_ne_staleCode hv⟩
 
 /-- A log every step of which is exactly what its own event is judged to, on the World before it: a
 Turn is what `receive` derives from its event, a recorded refusal is what `judge` records for its
@@ -177,19 +211,22 @@ theorem auditRefusal_ok {X : Ctx D} {w w' : World D} {r : Refused D} :
   · intro h
     split at h
     · simp at h
-    · rename_i c hd
-      split at h
-      · rename_i v r' w₁ hj
-        split at h
-        · rename_i hr
-          subst hr
-          simp only [Except.ok.injEq] at h
-          subst h
-          exact ⟨c, v, hd, hj⟩
-        · simp at h
+    · split at h
       · simp at h
+      · rename_i c hd
+        split at h
+        · rename_i v r' w₁ hj
+          split at h
+          · rename_i hr
+            subst hr
+            simp only [Except.ok.injEq] at h
+            subst h
+            exact ⟨c, v, hd, hj⟩
+          · simp at h
+        · simp at h
   · rintro ⟨c, v, hd, hj⟩
-    simp [hd, hj]
+    have hc : r.code ≠ staleCode := (judge_recorded_not_stale hj).2
+    simp [hc, hd, hj]
 
 /-- **The audit theorem.** A follower's audit accepts a log exactly when folding it succeeds and
 every step in it is what its own signed event is judged to: the writer's authority decided nothing
@@ -246,5 +283,24 @@ theorem audit_ok {X : Ctx D} :
             have hs : auditStep X w (.refusal r) = .ok w₂ := auditRefusal_ok.mpr ⟨c, v₀, hd, hj⟩
             have hr : audit X w₂ rest = .ok w' := audit_ok.mpr ⟨hf, hh w₂ hrf⟩
             simp [hs, hr]
+
+/-- **A recorded stale is refused by name**: the follower's audit refuses a log step recording a
+refusal with the stale code, `staleRecorded`, before decoding anything. -/
+theorem auditRefusal_stale {X : Ctx D} {w : World D} {r : Refused D} (hc : r.code = staleCode) :
+    auditRefusal X w r = .error (.refused .staleRecorded) := by
+  simp [auditRefusal, hc]
+
+/-! ## A pinned row effect on an unpinned row names the row (KERNEL-54 day, ROOT) -/
+
+/-- **`rowUnpinned` carries the row's key**: an upsert or a retract (`unpinned = false`) on a row the
+caller did not pin is refused with that row's parent, relation AND key bytes, so a client re-signs
+pinning exactly that row (`Protocol` derivePins). Before, the refusal named only the relation, and
+no client could learn which row to pin. -/
+theorem rowTouchesOf_unpinned_key {pins : List (RowSlot D × D)} {key : RowKey D} {a : RowAct}
+    {rest : List (RowSlot D × RowAct)} (ha : a.unpinned = false) (hp : ∀ p ∈ pins, p.1 ≠ .row key) :
+    rowTouchesOf pins ((.row key, a) :: rest) = .error (.rowUnpinned key.parent key.rel key.k) := by
+  have hany : (pins.any fun p => decide (p.1 = .row key)) = false := by
+    simp only [List.any_eq_false, decide_eq_true_eq]; exact hp
+  simp [rowTouchesOf, forEx, req, ha, hany, RowSlot.under, RowSlot.keyBytes, bind, Except.bind]
 
 end Nanodregg.Kernel.Receive

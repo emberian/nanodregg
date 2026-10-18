@@ -84,23 +84,26 @@ omit [Ord D] in
 /-- Writing a head over a head: the weight is unchanged (a head's size does not depend on its
 counters). -/
 theorem rowsWeight_setHead {E : Env D} {r : Rows D} (hr : Trie.Routed (rowSpec E) 0 r) {p : D} {rel : Nat}
-    {c s l cap wd : Nat} {rt : Bool} {c' s' : Nat}
-    (h : r.get (rowSpec E) (.head p rel) = some (.head c s l cap wd rt)) :
-    rowsWeight (setHead E r p rel c' s' l cap wd rt) = rowsWeight r := by
-  have := rowsWeight_insert_some hr (.head c' s' l cap wd rt) h
+    {c s l cap wd : Nat} {rt : Bool} {f c' s' f' : Nat}
+    (h : r.get (rowSpec E) (.head p rel) = some (.head c s l cap wd rt f)) :
+    rowsWeight (setHead E r p rel c' s' l cap wd rt f') = rowsWeight r := by
+  have := rowsWeight_insert_some hr (.head c' s' l cap wd rt f') h
   simp only [rowEntryWeight, RowLeaf.weight] at this
   unfold setHead
-  change rowsWeight (r.insert (rowSpec E) (.head p rel) (.head c' s' l cap wd rt)) = rowsWeight r
+  change rowsWeight (r.insert (rowSpec E) (.head p rel) (.head c' s' l cap wd rt f')) = rowsWeight r
   omega
 
 omit [Ord D] in
 theorem headOf_some {E : Env D} {r : Rows D} {p : D} {rel : Nat} {c s l cap wd : Nat} {rt : Bool}
     (h : headOf E r p rel = some (c, s, l, cap, wd, rt)) :
-    r.get (rowSpec E) (.head p rel) = some (.head c s l cap wd rt) := by
-  unfold headOf rowAt at h
+    r.get (rowSpec E) (.head p rel) = some (.head c s l cap wd rt (headFloor E r p rel)) := by
+  unfold headOf at h
   split at h
-  · rename_i hg; simp only [Option.some.injEq, Prod.mk.injEq] at h
-    obtain ⟨rfl, rfl, rfl, rfl, rfl, rfl⟩ := h; exact hg
+  · rename_i f hg
+    simp only [Option.some.injEq, Prod.mk.injEq] at h
+    obtain ⟨rfl, rfl, rfl, rfl, rfl, rfl⟩ := h
+    simp only [headFloor, hg]
+    exact hg
   · simp at h
 
 /-! ## One row touch -/
@@ -159,50 +162,55 @@ theorem rowStep_weight {E : Env D} {w : World D} {t : Turn D} {r r' : Rows D} {x
             subst h
             have hn : r.get (rowSpec E) (.row key) = none := by
               have := req_ok.mp hn; unfold rowAt at this; simpa [Option.isNone_iff_eq_none] using this
-            have hr1 := Trie.canon_insert (rowSpec E) (.row key) (.row amt v) hr
-            have hg1 : (r.insert (rowSpec E) (.row key) (.row amt v)).get (rowSpec E) (.head key.parent key.rel) =
-                some (.head count sum limit cap width retract) := by
+            have hr1 := Trie.canon_insert (rowSpec E) (.row key)
+              (.row amt v (headFloor E r key.parent key.rel)) hr
+            have hg1 : (r.insert (rowSpec E) (.row key) (.row amt v (headFloor E r key.parent key.rel))).get
+                (rowSpec E) (.head key.parent key.rel) =
+                some (.head count sum limit cap width retract (headFloor E r key.parent key.rel)) := by
               rw [Trie.get_insert_ne (rowSpec E) _ _ head_ne_row]; exact hg
             refine ⟨?_, Trie.canon_insert (rowSpec E) _ _ hr1⟩
             rw [rowsWeight_setHead hr1.1 hg1]
-            change rowsWeight (r.insert (rowSpec E) _ _) + _ = _
             rw [rowsWeight_insert_none hr.1 _ hn]
-            simp only [rowFreed, RowTouch.growth, rowEntryWeight, Nat.add_zero]
+            simp only [rowFreed, RowTouch.growth, rowEntryWeight, RowLeaf.weight, Nat.add_zero]
         | upsert amt v =>
             simp only [except_bind_ok] at h
-            obtain ⟨⟨⟩, -, ⟨⟩, -, ⟨⟩, -, ⟨⟩, -, h⟩ := h
+            obtain ⟨⟨⟩, -, ⟨⟩, -, ⟨⟩, -, ⟨⟩, -, ⟨⟩, -, h⟩ := h
             simp only [pure, Except.pure, Except.ok.injEq] at h
-            subst h
-            have hr1 := Trie.canon_insert (rowSpec E) (.row key) (.row amt v) hr
-            have hg1 : (r.insert (rowSpec E) (.row key) (.row amt v)).get (rowSpec E) (.head key.parent key.rel) =
-                some (.head count sum limit cap width retract) := by
+            obtain ⟨ver, c', s', rfl⟩ : ∃ ver c' s', r' = setHead E (r.insert (rowSpec E) (.row key)
+                (.row amt v ver)) key.parent key.rel c' s' limit cap width retract
+                (headFloor E r key.parent key.rel) := ⟨_, _, _, h.symm⟩
+            have hr1 := Trie.canon_insert (rowSpec E) (.row key) (.row amt v ver) hr
+            have hg1 : (r.insert (rowSpec E) (.row key) (.row amt v ver)).get (rowSpec E) (.head key.parent key.rel) =
+                some (.head count sum limit cap width retract (headFloor E r key.parent key.rel)) := by
               rw [Trie.get_insert_ne (rowSpec E) _ _ head_ne_row]; exact hg
             refine ⟨?_, Trie.canon_insert (rowSpec E) _ _ hr1⟩
             rw [rowsWeight_setHead hr1.1 hg1]
-            change rowsWeight (r.insert (rowSpec E) _ _) + _ = _
             cases hc : r.get (rowSpec E) (.row key) with
             | none =>
                 rw [rowsWeight_insert_none hr.1 _ hc]
                 simp only [rowFreed, rowAt, hc, Option.map_none, Option.getD_none, RowTouch.growth,
-                  rowEntryWeight, Nat.add_zero]
+                  rowEntryWeight, RowLeaf.weight, Nat.add_zero]
             | some old =>
-                have := rowsWeight_insert_some hr.1 (.row amt v) hc
+                have := rowsWeight_insert_some hr.1 (.row amt v ver) hc
                 simp only [rowFreed, rowAt, hc, Option.map_some, Option.getD_some, RowTouch.growth]
-                simp only [rowEntryWeight] at this ⊢
+                simp only [rowEntryWeight, RowLeaf.weight] at this ⊢
                 omega
         | retract =>
             simp only [except_bind_ok] at h
             obtain ⟨⟨⟩, -, ⟨⟩, -, h⟩ := h
             split at h
-            · rename_i a val hc
+            · rename_i a val u hc
+              simp only [except_bind_ok] at h
+              obtain ⟨⟨⟩, -, h⟩ := h
               simp only [pure, Except.pure, Except.ok.injEq] at h
               subst h
-              have hc' : r.get (rowSpec E) (.row key) = some (.row a val) := hc
+              have hc' : r.get (rowSpec E) (.row key) = some (.row a val u) := hc
               obtain ⟨hw, hcan, hget⟩ := rowsWeight_retain hr hc' (rowPath E (.row key)) (under_rowPath E (.row key))
               have hg1 := hget (.head key.parent key.rel)
               rw [if_neg head_ne_row, hg] at hg1
               refine ⟨?_, Trie.canon_insert (rowSpec E) _ _ hcan⟩
-              have hs := rowsWeight_setHead (c' := count - 1) (s' := sum - a) hcan.1 hg1
+              have hs := rowsWeight_setHead (c' := count - 1) (s' := sum - a)
+                (f' := max (headFloor E r key.parent key.rel) u + 1) hcan.1 hg1
               simp only [rowFreed, rowAt, hc', Option.map_some, Option.getD_some, RowTouch.growth]
               omega
             · simp at h
@@ -453,7 +461,7 @@ exists, its listing fit `most`, and its pin is the listing's in the pre-state. -
 theorem admit_range_pins {E : Env D} {w w' : World D} {t : Turn D} (h : World.admit E w t = .ok w') :
     ∀ q ∈ t.ranges, ∃ c s lim cap width rt l, headOf E w.rows q.parent q.rel = some (c, s, lim, cap, width, rt) ∧
       rangeRows E w.rows q.parent q.rel width q.pre q.most = some l ∧
-      rangePin E q.parent q.rel width q.pre l = q.seen := by
+      rangePin E q.parent q.rel width q.pre (headFloor E w.rows q.parent q.rel) l = q.seen := by
   obtain ⟨_, hk, _⟩ := admit_ok h
   intro q hq
   have hq' := (forEx_ok.mp hk.ranges) q hq
@@ -474,7 +482,7 @@ admitted by no World transition. -/
 theorem range_stale_refused {E : Env D} {w : World D} {t : Turn D} {q : RangeRead D} (hq : q ∈ t.ranges)
     (hstale : ∀ c s lim cap width rt l, headOf E w.rows q.parent q.rel = some (c, s, lim, cap, width, rt) →
       rangeRows E w.rows q.parent q.rel width q.pre q.most = some l →
-      rangePin E q.parent q.rel width q.pre l ≠ q.seen) :
+      rangePin E q.parent q.rel width q.pre (headFloor E w.rows q.parent q.rel) l ≠ q.seen) :
     ∀ w', World.admit E w t ≠ .ok w' := by
   intro w' h
   obtain ⟨c, s, lim, cap, width, rt, l, hh, hl, hp⟩ := admit_range_pins h q hq
@@ -484,7 +492,7 @@ theorem range_stale_refused {E : Env D} {w : World D} {t : Turn D} {q : RangeRea
 theorem rowStep_pin {E : Env D} {w : World D} {t : Turn D} {r r' : Rows D} {x : RowTouch D}
     {key : RowKey D} {s : D} (hs : x.slot = .row key) (hseen : x.seen = some s)
     (h : rowStep E w t r x = .ok r') :
-    rowPin E (rowAt E r (.row key)) = s := by
+    rowPin E (headFloor E w.rows key.parent key.rel) (rowAt E r (.row key)) = s := by
   obtain ⟨slot, seen, act⟩ := x
   simp only at hs hseen
   subst hs hseen
@@ -561,7 +569,7 @@ theorem rowStep_get_out {E : Env D} {w : World D} {t : Turn D} {r r' : Rows D} {
         | upsert amt v =>
             obtain ⟨hk, hh⟩ := hs fun e => by cases e
             simp only [except_bind_ok] at h
-            obtain ⟨⟨⟩, -, ⟨⟩, -, ⟨⟩, -, ⟨⟩, -, h⟩ := h
+            obtain ⟨⟨⟩, -, ⟨⟩, -, ⟨⟩, -, ⟨⟩, -, ⟨⟩, -, h⟩ := h
             simp only [pure, Except.pure, Except.ok.injEq] at h
             subst h
             unfold setHead
@@ -571,10 +579,12 @@ theorem rowStep_get_out {E : Env D} {w : World D} {t : Turn D} {r r' : Rows D} {
             simp only [except_bind_ok] at h
             obtain ⟨⟨⟩, -, ⟨⟩, -, h⟩ := h
             split at h
-            · rename_i a val hc
+            · rename_i a val u hc
+              simp only [except_bind_ok] at h
+              obtain ⟨⟨⟩, -, h⟩ := h
               simp only [pure, Except.pure, Except.ok.injEq] at h
               subst h
-              have hc' : r.get (rowSpec E) (.row k0) = some (.row a val) := hc
+              have hc' : r.get (rowSpec E) (.row k0) = some (.row a val u) := hc
               obtain ⟨-, -, hget⟩ := rowsWeight_retain hr hc' (rowPath E (.row k0)) (under_rowPath E (.row k0))
               unfold setHead
               rw [Trie.get_insert_ne (rowSpec E) _ _ (hh k0 rfl), hget, if_neg hk]
@@ -605,7 +615,7 @@ theorem foldRows_pins {E : Env D} {w : World D} {t : Turn D} :
     ∀ (l : List (RowTouch D)) (acc rr : Rows D × Nat), Trie.Canon (rowSpec E) 0 acc.1 →
       (l.map RowTouch.slot).Nodup →
       l.foldlM (rowStepFreed E w t) acc = .ok rr →
-      ∀ x ∈ l, ∀ key s, x.slot = .row key → x.seen = some s → rowPin E (rowAt E acc.1 (.row key)) = s
+      ∀ x ∈ l, ∀ key s, x.slot = .row key → x.seen = some s → rowPin E (headFloor E w.rows key.parent key.rel) (rowAt E acc.1 (.row key)) = s
   | [], _, _, _, _, _, x, hx, _, _, _, _ => by simp at hx
   | y :: rest, acc, rr, hc, hn, h, x, hx, key, s, hs, hseen => by
       rw [List.foldlM_cons, except_bind_ok] at h
@@ -646,7 +656,7 @@ pre-state, exactly the row the signer saw (slots are distinct, so no earlier tou
 it). -/
 theorem admit_row_pins {E : Env D} {w w' : World D} {t : Turn D} (hr : w.RowsCanon E)
     (h : World.admit E w t = .ok w') :
-    ∀ x ∈ t.rows, ∀ key s, x.slot = .row key → x.seen = some s → rowPin E (rowAt E w.rows (.row key)) = s := by
+    ∀ x ∈ t.rows, ∀ key s, x.slot = .row key → x.seen = some s → rowPin E (headFloor E w.rows key.parent key.rel) (rowAt E w.rows (.row key)) = s := by
   obtain ⟨_, hk, _⟩ := admit_ok h
   have hrun := hk.rows
   unfold rowsRun at hrun
@@ -663,5 +673,5 @@ theorem admit_row_pins {E : Env D} {w w' : World D} {t : Turn D} (hr : w.RowsCan
 admitted by no World transition. -/
 theorem rows_stale_refused {E : Env D} {w : World D} {t : Turn D} {x : RowTouch D} {key : RowKey D} {s : D}
     (hr : w.RowsCanon E) (hx : x ∈ t.rows) (hs : x.slot = .row key) (hseen : x.seen = some s)
-    (hstale : rowPin E (rowAt E w.rows (.row key)) ≠ s) : ∀ w', World.admit E w t ≠ .ok w' :=
+    (hstale : rowPin E (headFloor E w.rows key.parent key.rel) (rowAt E w.rows (.row key)) ≠ s) : ∀ w', World.admit E w t ≠ .ok w' :=
   fun _ h => hstale (admit_row_pins hr h x hx key s hs hseen)

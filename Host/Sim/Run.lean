@@ -601,9 +601,9 @@ def refusedAt (i : Nat) : Refused Nat :=
 * `plant-steps-differ`: a reopen whose World agrees on height and chain but not on steps is refused
   `reopenDiverged`; the same reopen judged by (height, chain), the position before this day, passes
   (the tooth: a position in heights is blind to a lost refusal step);
-* `plant-lookup-recorded`: a `lookup` of a recorded transaction id answers `refused stale` (the
+* `plant-lookup-recorded`: a `lookup` of a recorded transaction id answers `refused relationFull` (the
   recorded code's name), where the World without the record answers `absent` (the code before this
-  day); past `journalForgets` it still answers `refused stale` while the record is kept, and once the
+  day); past `journalForgets` it still answers `refused relationFull` while the record is kept, and once the
   prune at a multiple of `windowMax` drops it, `uncertain forgotten`, never `absent`. -/
 def refusalPlants (seed : Nat) (failures : IO.Ref Nat) : IO Unit := do
   let frames : List Frame := (List.range 33).map fun i =>
@@ -666,15 +666,15 @@ def refusalPlants (seed : Nat) (failures : IO.Ref Nat) : IO Unit := do
       else if s == Protocol.Status.absent.code then "absent" else "other"
     | _ => "other"
   let W := Kernel.Bounds.windowMax
-  match World.refuse kx.env kw (Receive.refusedOf kx c (.rejected (.stale 0))) with
+  match World.refuse kx.env kw (Receive.refusedOf kx c (.rejected (.relationFull 0))) with
   | .error e => check s!"plant-lookup-recorded: the refusal records ({e.name})" false failures
   | .ok w₁ =>
-    check "plant-lookup-recorded: a recorded txId answers `refused stale`" (lookupOn w₁ == "refused stale") failures
+    check "plant-lookup-recorded: a recorded txId answers `refused relationFull`" (lookupOn w₁ == "refused relationFull") failures
     check "plant-lookup-recorded fires: without the record (the code before KERNEL-44) it answers `absent`"
       (lookupOn kw == "absent") failures
     let w₂ := { w₁ with height := 3 * W - 1 }
-    check "plant-lookup-recorded: past journalForgets, while the record is kept, still `refused stale`"
-      (journalForgets w₂.height 0 && lookupOn w₂ == "refused stale") failures
+    check "plant-lookup-recorded: past journalForgets, while the record is kept, still `refused relationFull`"
+      (journalForgets w₂.height 0 && lookupOn w₂ == "refused relationFull") failures
     let t₀ : Turn Kernel.Sim.D := { txId := 424242, notBefore := 3 * W - 10, validUntil := 3 * W + 10, touches := [],
                                     creates := [], nullifiers := [], charge := 0, event := ByteArray.empty }
     match World.admit kx.env w₂ { t₀ with charge := t₀.weight } with
@@ -698,7 +698,7 @@ def rowsTurns {D : Type} [Ord D] [DecidableEq D] (E : Env D) (w : World D) : Exc
   let cell : Cell := ⟨2, .ram, [(16, ByteArray.empty)]⟩
   let t1 := rowsMk E w "create" [] [(p, cell)] [⟨.head p 0, none, .declare 3 10 2 true⟩]
   let w1 ← World.admit E w t1
-  let keep : Touch D := ⟨p, pinOf E (w1.live E p), .keep⟩
+  let keep : Touch D := ⟨p, pinOf E (w1.entry E p), .keep⟩
   let t2 := rowsMk E w1 "insert" [keep] [] [⟨.row ⟨p, 0, "a0".toUTF8⟩, none, .insert 2 "v-a0".toUTF8⟩]
   let w2 ← World.admit E w1 t2
   return ([t1, t2], w2)
@@ -732,7 +732,7 @@ def rowsPlants (seed : Nat) (failures : IO.Ref Nat) : IO Unit := do
       check "plant-rows-survive-reopen: the one open (from the base, no record replayed) reaches the same rows listing and root, the head counting its row"
         (o.opened.records = 0 && o.opened.world.rows.toList == w.rows.toList && o.opened.world.rowsRoot env == w.rowsRoot env &&
           (match headOf env o.opened.world.rows p 0 with | some (1, 2, 3, 10, 2, true) => true | _ => false) &&
-          rowAt env o.opened.world.rows (.row ⟨p, 0, "a0".toUTF8⟩) == some (.row 2 "v-a0".toUTF8)) failures
+          rowAt env o.opened.world.rows (.row ⟨p, 0, "a0".toUTF8⟩) == some (.row 2 "v-a0".toUTF8 0)) failures
   let kx := Kernel.Sim.ctx
   let kdc := Kernel.Sim.dc
   let kw₀ : World Kernel.Sim.D := World.genesis kx.env (kx.env.hash "nanodregg/host-sim/origin/v1" "rows".toUTF8) (2 ^ 40)
@@ -921,13 +921,13 @@ def judgePlant (failures : IO.Ref Nat) : IO Unit := do
       (match fold g o1.staged with | .ok w => Kernel.Sim.same w w1 | .error _ => false)) failures
   -- a call whose transaction id holds a recorded refusal
   let c2 := callOf w1 (.install Kernel.Sim.Gen.freeze)
-  match World.refuse kx.env w1 (Receive.refusedOf kx c2 (.rejected (.stale 0))) with
+  match World.refuse kx.env w1 (Receive.refusedOf kx c2 (.rejected (.relationFull 0))) with
   | .error e => check s!"{p}: the refusal records ({e.name})" false failures
   | .ok w2 =>
   let (_, o2) := (Host.machine kx).admitBatch w2 [⟨1, frameOf c2⟩]
   check s!"{p}: a recorded call answers `refused` and stages no Turn (reply {replyOf o2}, staged {o2.staged.size})"
     ((match o2.replies[0]? with
-      | some r => r.status == Protocol.Status.refused.code && r.payload == "stale".toUTF8
+      | some r => r.status == Protocol.Status.refused.code && r.payload == "relationFull".toUTF8
       | none => false) &&
       o2.staged.all (fun s => match s.1 with | Step.turn _ => false | _ => true)) failures
   -- the tooth: a writer that admits the recorded call on its World with the refusals forgotten
@@ -936,7 +936,7 @@ def judgePlant (failures : IO.Ref Nat) : IO Unit := do
         match kx.decodeCall f.payload with
         | some c =>
           match Receive.submit kx { w with refusals := .empty } c with
-          | .ok (t, w') => .commit (.turn t) { w' with refusals := w.refusals } Protocol.Status.refused.code "stale".toUTF8
+          | .ok (t, w') => .commit (.turn t) { w' with refusals := w.refusals } Protocol.Status.refused.code "relationFull".toUTF8
           | .error _ => Host.handle kx w f
         | none => Host.handle kx w f }
   let (_, o3) := liar.admitBatch w2 [⟨1, frameOf c2⟩]

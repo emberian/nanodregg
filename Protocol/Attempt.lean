@@ -19,16 +19,20 @@ verdict (`settle_seen` reads its first word). Sends exhausted and still `absent`
 * follow saying committed → over, `committed`; refused (recorded, or the window passed) → over,
   `refused`. Only these two are final, and only follow says them (`Proofs.Attempt.next_final`);
 * a probe follow answers `open` (absent, the window live: the Host or any relay holding the bytes
-  may still land them) → over, `open`: the attempt stays OPEN on disk; running the command again
-  would sign a NEW call that could land beside this one (`Proofs.Settle.settle_open_not_final`);
+  may still land them) → the same bytes again while sends remain; with none left → over, `open`:
+  the attempt stays OPEN on disk; running the command again would sign a NEW call that could land
+  beside this one (`Proofs.Settle.settle_open_not_final`);
 * a confirm follow answers `open` or `forgotten` after the Host said committed or refused → over,
   `contradicted`, named (`hostContradicted HOSTSAID FOLLOWSAID`); the attempt stays open;
 * a submit answered `declined` (refused by name, NOT recorded: unauthenticated, an early window, the
   member's refusal budget) → over for this run, `declined`, the attempt stays open (PROTOCOL-41);
 * a submit whose reply was lost or `uncertain` → `lookup`, never a second submit: the first may
   still be queued at the writer, and only a lookup can say;
-* a lookup that says `absent` → `submit` again (the same bytes; the journal makes a duplicate
-  commit impossible) while sends remain; with none left → `probe`;
+* a lookup that says `absent` → `probe` FIRST (KERNEL-54, PROTOCOL-15's condition 3): follow says
+  whether the call is dead before any resend. Follow's `refused` (a recorded refusal, the window
+  passed, or its own fold's stale BEHIND, `Settle.ofReceipt`) ends it; its `open` → `submit` again
+  (the same bytes; the journal makes a duplicate commit impossible) while sends remain, and with
+  none left over `open`;
 * a lookup whose reply was lost or `uncertain`, a probe past `journalForgets`, a confirm or probe
   follow did not answer → over, `uncertain`: this run stops and the attempt stays frozen and
   unsettled on disk; the next run starts from "sent, outcome lost" and looks up again;
@@ -116,11 +120,11 @@ def next (sendsLeft : Bool) : Option (Request × Seen) → Action
   | some (.submit, .declined) => .declined
   | some (.submit, .unknown) | some (.submit, .lost) => .lookup
   | some (.lookup, .unknown) | some (.lookup, .lost) => .uncertain
-  | some (.lookup, .absent) => if sendsLeft then .submit else .probe
+  | some (.lookup, .absent) => .probe
   -- follow's word
   | some (.confirm, .committed) | some (.probe, .committed) => .committed
   | some (.confirm, .refused) | some (.probe, .refused) => .refused
-  | some (.probe, .open) => .open
+  | some (.probe, .open) => if sendsLeft then .submit else .open
   | some (.confirm, .open) | some (.confirm, .forgotten) => .contradicted
   | some (.probe, .forgotten) => .uncertain
   | some (.confirm, .lost) | some (.probe, .lost) => .uncertain

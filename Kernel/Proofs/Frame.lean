@@ -28,8 +28,13 @@ theorem rom_keep {E : Env D} {w : World D} {t : Turn D} {posts : List (Post D)}
     (hrom : cell.discipline = .rom) : ∀ x ∈ t.touches, x.cell = c → x.act = .keep := by
   intro x hx hxc
   obtain ⟨r, hr⟩ := hk.touch x hx
+  obtain ⟨v, hv⟩ : ∃ v, w.entry E c = some (.live cell v) := by
+    unfold World.live at hlive
+    split at hlive
+    · rename_i v he; simp only [Option.some.injEq] at hlive; exact ⟨v, hlive ▸ he⟩
+    · simp at hlive
   unfold touchCheck at hr
-  rw [hxc, hlive] at hr
+  rw [hxc, hv] at hr
   simp only [except_bind_ok] at hr
   obtain ⟨⟨⟩, _, hr⟩ := hr
   cases ha : x.act with
@@ -37,7 +42,7 @@ theorem rom_keep {E : Env D} {w : World D} {t : Turn D} {posts : List (Post D)}
   | write ops =>
       rw [ha] at hr
       simp only [except_bind_ok] at hr
-      obtain ⟨_, hp, _⟩ := hr
+      obtain ⟨⟨⟩, _, _, hp, _⟩ := hr
       simp [postWrite, hrom] at hp
   | retire =>
       rw [ha] at hr
@@ -155,22 +160,24 @@ theorem entry_get {E : Env D} {w : World D} {c : D} {e : Entry} (h : w.entry E c
       | spent => simp at h
 
 theorem live_entry {E : Env D} {w : World D} {c : D} {cell : Cell} (h : w.live E c = some cell) :
-    w.entry E c = some (.live cell) := by
+    ∃ v, w.entry E c = some (.live cell v) := by
   unfold World.live at h
   cases he : w.entry E c with
   | none => rw [he] at h; simp at h
   | some e =>
       rw [he] at h
       cases e with
-      | live cell' => simp only [Option.some.injEq] at h; rw [h]
+      | live cell' v => simp only [Option.some.injEq] at h; exact ⟨v, by rw [h]⟩
       | tomb => simp at h
 
-theorem get_live {E : Env D} {w : World D} {c : D} {cell : Cell}
-    (h : w.trie.get (trieSpec E) (.cell c) = some (.entry (.live cell))) : w.live E c = some cell := by
+theorem get_live {E : Env D} {w : World D} {c : D} {cell : Cell} {v : Nat}
+    (h : w.trie.get (trieSpec E) (.cell c) = some (.entry (.live cell v))) : w.live E c = some cell := by
   unfold World.live World.entry; rw [h]
 
 theorem live_get {E : Env D} {w : World D} {c : D} {cell : Cell} (h : w.live E c = some cell) :
-    w.trie.get (trieSpec E) (.cell c) = some (.entry (.live cell)) := entry_get (live_entry h)
+    ∃ v, w.trie.get (trieSpec E) (.cell c) = some (.entry (.live cell v)) := by
+  obtain ⟨v, hv⟩ := live_entry h
+  exact ⟨v, entry_get hv⟩
 
 /-- Every slot of the World's map holds the leaf of its kind (`Leaf.fits`): a cell slot an entry,
 a nullifier slot `spent`. Genesis does (`genesis_slotted`), and every admitted turn keeps it

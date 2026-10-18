@@ -8,10 +8,11 @@ import Protocol.Attempt
 
 namespace Nanodregg.Protocol.Attempt
 
-/-- A submit is decided only for a call never sent, or after a lookup said `absent` with a send
-left: never after a submit whose outcome is unknown. -/
+/-- A submit is decided only for a call never sent, or after the member's OWN follow said `open`
+to a probe with a send left (KERNEL-54, PROTOCOL-15's condition 3): never after a submit whose
+outcome is unknown, and never on the Host's `absent` alone. -/
 theorem next_submit {b : Bool} {l : Option (Request × Seen)} (h : next b l = .submit) :
-    l = none ∨ (l = some (.lookup, .absent) ∧ b = true) := by
+    l = none ∨ (l = some (.probe, .open) ∧ b = true) := by
   rcases l with _ | ⟨r, s⟩
   · exact .inl rfl
   · cases r <;> cases s <;> cases b <;> simp [next] at h ⊢
@@ -37,11 +38,10 @@ theorem next_host_final_confirms (b : Bool) (r : Request) (s : Seen)
     next b (some (r, s)) = .confirm := by
   rcases hr with rfl | rfl <;> rcases hs with rfl | rfl <;> rfl
 
-/-- **`absent` is never the end of an attempt**: no input ends it saying the call did not land. With
-no send left, a lookup's `absent` asks follow (`probe`), whose `open` ends the run with the attempt
-OPEN. -/
-theorem next_absent_probes (b : Bool) :
-    next b (some (.lookup, .absent)) = if b then .submit else .probe := by cases b <;> rfl
+/-- **An absent lookup is confirmed with follow before any resend** (KERNEL-54, PROTOCOL-15's
+condition 3): a lookup's `absent` asks follow (`probe`) whatever the sends left; `absent` never ends
+an attempt and never resends on the Host's word. -/
+theorem next_absent_probes (b : Bool) : next b (some (.lookup, .absent)) = .probe := by cases b <;> rfl
 
 /-- **No end of an attempt says the call did not land**: every final action is follow's word on a
 confirm or probe (`next_final`), and the ends a run may stop on without it (declined, open,
@@ -53,19 +53,25 @@ theorem next_ends_open {b : Bool} {l : Option (Request × Seen)}
   generalize next b l = a at h ⊢
   cases a <;> simp_all
 
-/-- Follow's `open` to a probe ends the run open; to a confirm (the Host said final), contradicted. -/
-theorem next_open (b : Bool) : next b (some (.probe, .open)) = .open ∧ next b (some (.confirm, .open)) = .contradicted :=
-  ⟨rfl, rfl⟩
+/-- Follow's `open` to a probe sends the same bytes again while a send is left, else ends the run
+open; to a confirm (the Host said final), contradicted. -/
+theorem next_open (b : Bool) :
+    next b (some (.probe, .open)) = (if b then .submit else .open) ∧
+      next b (some (.confirm, .open)) = .contradicted := by
+  cases b <;> exact ⟨rfl, rfl⟩
 
 /-- A lookup is only ever decided right after a submit: a lookup that settles nothing ends the
 run, so one run's requests are at most two per send, plus one confirm or probe. -/
 theorem next_after_lookup (b : Bool) (s : Seen) : next b (some (.lookup, s)) ≠ .lookup := by
   cases s <;> cases b <;> simp [next]
 
-/-- Follow's answer never sends anything to the writer: after a confirm or a probe the run ends. -/
+/-- After follow's answer the only request to the writer is the resend a probe's `open` allows:
+a confirm or a probe never leads to a lookup, a confirm or a probe, and to a submit only from
+`(probe, open)` with a send left (`next_submit`). -/
 theorem next_after_follow (b : Bool) (r : Request) (s : Seen) (hr : r = .confirm ∨ r = .probe) :
-    next b (some (r, s)) ≠ .submit ∧ next b (some (r, s)) ≠ .lookup ∧
-      next b (some (r, s)) ≠ .confirm ∧ next b (some (r, s)) ≠ .probe := by
+    (next b (some (r, s)) = .submit → r = .probe ∧ s = .open ∧ b = true) ∧
+      next b (some (r, s)) ≠ .lookup ∧ next b (some (r, s)) ≠ .confirm ∧
+      next b (some (r, s)) ≠ .probe := by
   rcases hr with rfl | rfl <;> cases s <;> cases b <;> simp [next]
 
 /-- With no send left, no submit is ever decided. -/

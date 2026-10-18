@@ -120,7 +120,7 @@ def rangeRowData (ℓ : Label) (d : RelDecl) (rows : List (RowSlot D × RowLeaf)
     Except (Refusal D) (List Data) :=
   rows.mapM fun r => do
     match r with
-    | (.row key, .row _ v) =>
+    | (.row key, .row _ v _) =>
       let kd ← checked digestOf s!"rows: {ℓ}: key" (← liftS s!"rows: {ℓ}" (keyOf d d.key.length key.k))
       pure (Data.record [("key", kd), ("val", ← valOf digestOf d s!"rows: {ℓ}" v)])
     | _ => throw (.program s!"rows: {ℓ}: not a row")
@@ -136,7 +136,7 @@ def relReads (rv : RowView D) (self : D) (i : Nat) (ℓ : Label) (d : RelDecl) (
     let key ← checked digestOf s!"rows: {ℓ}: key" (← liftS s!"rows: {ℓ}" (keyOf d d.key.length p.1))
     let val ← match p.2 with
       | none => pure none
-      | some (.row _ v) => some <$> valOf digestOf d s!"rows: {ℓ}" v
+      | some (.row _ v _) => some <$> valOf digestOf d s!"rows: {ℓ}" v
       | some (.head ..) => throw (.program s!"rows: {ℓ}: not a row")
     pure (Data.record [("key", key), ("val", optD val)])
   let range ← match x.range with

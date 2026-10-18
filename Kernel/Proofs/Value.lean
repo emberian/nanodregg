@@ -197,7 +197,7 @@ omit [Std.TransOrd D] [Std.LawfulEqOrd D] in
 /-- A touch that changes its cell replaces a live cell, and its flows are that change. -/
 theorem touchCheck_flows {E : Env D} {w : World D} {x : Touch D} {p : Post D}
     (h : touchCheck E w x = .ok (some p)) :
-    p.cell = x.cell ∧ ∃ cell, w.trie.get (trieSpec E) (.cell x.cell) = some (.entry (.live cell)) ∧
+    p.cell = x.cell ∧ ∃ cell v, w.trie.get (trieSpec E) (.cell x.cell) = some (.entry (.live cell v)) ∧
       p.flows = flowsOf (some cell) p.entry.cell? := by
   unfold touchCheck at h
   simp only [except_bind_ok] at h
@@ -206,22 +206,28 @@ theorem touchCheck_flows {E : Env D} {w : World D} {x : Touch D} {p : Post D}
   | keep => rw [ha] at h; simp [pure, Except.pure] at h
   | write ops =>
       rw [ha] at h
-      cases hc : w.live E x.cell with
+      cases hc : w.entry E x.cell with
       | none => rw [hc] at h; simp at h
-      | some cell =>
-          rw [hc] at h
-          simp only [except_bind_ok, pure, Except.pure, Except.ok.injEq, Option.some.injEq] at h
-          obtain ⟨post, _, rfl⟩ := h
-          exact ⟨rfl, cell, live_get hc, rfl⟩
+      | some e =>
+          cases e with
+          | tomb => rw [hc] at h; simp at h
+          | live cell v =>
+              rw [hc] at h
+              simp only [except_bind_ok, pure, Except.pure, Except.ok.injEq, Option.some.injEq] at h
+              obtain ⟨⟨⟩, _, post, _, rfl⟩ := h
+              exact ⟨rfl, cell, v, entry_get hc, rfl⟩
   | retire =>
       rw [ha] at h
-      cases hc : w.live E x.cell with
+      cases hc : w.entry E x.cell with
       | none => rw [hc] at h; simp at h
-      | some cell =>
-          rw [hc] at h
-          simp only [except_bind_ok, pure, Except.pure, Except.ok.injEq, Option.some.injEq] at h
-          obtain ⟨_, _, rfl⟩ := h
-          exact ⟨rfl, cell, live_get hc, rfl⟩
+      | some e =>
+          cases e with
+          | tomb => rw [hc] at h; simp at h
+          | live cell v =>
+              rw [hc] at h
+              simp only [except_bind_ok, pure, Except.pure, Except.ok.injEq, Option.some.injEq] at h
+              obtain ⟨⟨⟩, _, rfl⟩ := h
+              exact ⟨rfl, cell, v, entry_get hc, rfl⟩
 
 omit [Std.TransOrd D] [Std.LawfulEqOrd D] in
 /-- The touches move each sum by exactly their flows. -/
@@ -252,8 +258,8 @@ theorem touches_sum {E : Env D} {w : World D} {g : Flow → Int} (hg : Linear g)
                   have := touches_sum hg d rest raw' m hrt hn.2 hr hm'
                   simpa [List.reduceOption, List.filterMap_cons] using this
               | some p =>
-                  obtain ⟨hp1, cell, hold, hfl⟩ := touchCheck_flows hx
-                  have hmx : m.get (trieSpec E) (.cell p.cell) = some (.entry (.live cell)) := by
+                  obtain ⟨hp1, cell, v, hold, hfl⟩ := touchCheck_flows hx
+                  have hmx : m.get (trieSpec E) (.cell p.cell) = some (.entry (.live cell v)) := by
                     rw [hp1, hm x (by simp), hold]
                   have hins := cellsSum_overwrite (entrySum g d) hrt (.entry p.entry) hmx
                   simp only [Leaf.sumOf] at hins
@@ -269,7 +275,7 @@ theorem touches_sum {E : Env D} {w : World D} {g : Flow → Int} (hg : Linear g)
                       exact List.mem_map_of_mem hy
                   have ih := touches_sum hg d rest raw' _ (Trie.routed_insert _ _ _ hrt) hn.2 hr hm''
                   have hdelta : sumBy g d p.flows =
-                      entrySum g d p.entry - entrySum g d (.live cell) := by
+                      entrySum g d p.entry - entrySum g d (.live cell v) := by
                     rw [hfl, sumBy_flowsOf hg]; rfl
                   simp only [List.reduceOption, List.filterMap_cons, id, List.map_cons,
                     List.flatMap_cons] at ih ⊢
@@ -284,12 +290,12 @@ omit [Ord D] in
 theorem born_sum (f : Entry → Int) {E : Env D} :
     ∀ (ps : List (D × Cell)) (m : Cells D), Trie.Routed (trieSpec E) 0 m → (ps.map Prod.fst).Nodup →
       (∀ p ∈ ps, ∀ e, m.get (trieSpec E) (.cell p.1) ≠ some (.entry e)) →
-      cellsSum f (insertAll E m (ps.map fun p => (p.1, Entry.live p.2))) =
-        cellsSum f m + (ps.map fun p => f (.live p.2)).sum
+      cellsSum f (insertAll E m (ps.map fun p => (p.1, Entry.live p.2 0))) =
+        cellsSum f m + (ps.map fun p => f (.live p.2 0)).sum
   | [], m, _, _, _ => by simp [insertAll]
   | p :: rest, m, hrt, hn, hf => by
       simp only [List.map_cons, List.nodup_cons] at hn
-      have hf' : ∀ q ∈ rest, ∀ e, (m.insert (trieSpec E) (.cell p.1) (.entry (.live p.2))).get
+      have hf' : ∀ q ∈ rest, ∀ e, (m.insert (trieSpec E) (.cell p.1) (.entry (.live p.2 0))).get
           (trieSpec E) (.cell q.1) ≠ some (.entry e) := by
         intro q hq e
         rw [Trie.get_insert_ne]
@@ -300,9 +306,9 @@ theorem born_sum (f : Entry → Int) {E : Env D} :
           rw [← he]
           exact List.mem_map_of_mem hq
       have ih := born_sum f rest _ (Trie.routed_insert _ _ _ hrt) hn.2 hf'
-      have h1 := cellsSum_write f hrt (Entry.live p.2) (hf p (by simp))
+      have h1 := cellsSum_write f hrt (Entry.live p.2 0) (hf p (by simp))
       simp only [List.map_cons, List.sum_cons]
-      show cellsSum f (insertAll E (m.insert (trieSpec E) (.cell p.1) (.entry (.live p.2))) _) = _
+      show cellsSum f (insertAll E (m.insert (trieSpec E) (.cell p.1) (.entry (.live p.2 0))) _) = _
       rw [ih, h1]; omega
 
 /-- **An admitted turn moves every sum by exactly its flows.** -/
@@ -351,7 +357,7 @@ theorem admit_sum {E : Env D} {w w' : World D} {t : Turn D} {g : Flow → Int} (
     simp [World.taken, he] at this
   have hb := born_sum (entrySum g d) t.creates (insertAll E w.trie (posts.map Post.pair))
     (insertAll_canon _ hc).1 (by rw [hids]; exact nb) hfr
-  have hbsum : (t.creates.map fun p => entrySum g d (.live p.2)) =
+  have hbsum : (t.creates.map fun p => entrySum g d (.live p.2 0)) =
       t.creates.map fun p => sumBy g d (flowsOf none (some p.2)) := rfl
   have hsp : ∀ (m : Cells D) (ns : List D), Trie.Routed (trieSpec E) 0 m →
       (∀ n ∈ ns, ∀ e, m.get (trieSpec E) (.nullifier n) ≠ some (.entry e)) →
@@ -508,18 +514,18 @@ theorem ofCell_value {cell : Cell} {v : Value} (h : Value.ofCell cell = some v) 
 
 omit [Ord D] [DecidableEq D] in
 /-- One entry: what it has outstanding is at most its floor plus its balance. -/
-theorem entry_outstanding {e : Entry} (hv : ∀ cell, e = .live cell → ValueOk cell) (d : ByteArray) :
+theorem entry_outstanding {e : Entry} (hv : ∀ cell v, e = .live cell v → ValueOk cell) (d : ByteArray) :
     entrySum (fun f => max f.balance 0) d e ≤ entrySum Flow.floor d e + entrySum Flow.balance d e := by
   cases e with
   | tomb => simp [entrySum, Entry.cell?, flowsOf, sumBy]
-  | live cell =>
+  | live cell ver =>
       unfold entrySum
       simp only [Entry.cell?, flowsOf, Option.bind_none, Option.map_none, Option.toList_none,
         List.nil_append, Option.bind_some]
       cases ho : Value.ofCell cell with
       | none => simp [sumBy]
       | some v =>
-          obtain ⟨v', hv', hw⟩ := hv cell rfl (ofCell_value ho)
+          obtain ⟨v', hv', hw⟩ := hv cell ver rfl (ofCell_value ho)
           rw [ho, Option.some.injEq] at hv'
           subst hv'
           simp only [Option.map_some, Option.toList_some, sumBy, List.map_cons, List.map_nil,
@@ -553,7 +559,7 @@ theorem outstanding_le_floors {E : Env D} {w : World D} (hc : w.Canon E) (hfit :
               cases s with
               | nullifier n => exact absurd (hfit _ _ hg) (by simp [Leaf.fits])
               | cell c =>
-                  exact entry_outstanding (fun cell he => hf c cell (by
+                  exact entry_outstanding (fun cell v he => hf c cell (by
                     unfold World.live World.entry; rw [hg, he])) d
         have := ih (fun q hq => hl q (by simp [hq]))
         simp only [List.map_cons, List.sum_cons]
@@ -615,7 +621,7 @@ theorem commit_taken {E : Env D} {w : World D} {t : Turn D} {posts : List (Post 
   · right
     unfold bornEntries
     rw [List.map_map]
-    have : (Prod.fst ∘ fun p : D × Cell => (p.1, Entry.live p.2)) = Prod.fst := rfl
+    have : (Prod.fst ∘ fun p : D × Cell => (p.1, Entry.live p.2 0)) = Prod.fst := rfl
     rw [this]
     exact h
 
@@ -709,7 +715,7 @@ omit [Ord D] in
 theorem cellsSum_noValue {E : Env D} {m : Cells D} {g : Flow → Int} {d : ByteArray}
     (hr : Trie.Routed (trieSpec E) 0 m)
     (h : ∀ (s : Slot D) (e : Entry), m.get (trieSpec E) s = some (.entry e) →
-      ∀ c : Cell, e = .live c → c.discipline ≠ .value) :
+      ∀ c : Cell, ∀ v, e = .live c v → c.discipline ≠ .value) :
     cellsSum (entrySum g d) m = 0 := by
   unfold cellsSum
   have key : ∀ l : List (Slot D × Leaf), (∀ p ∈ l, m.get (trieSpec E) p.1 = some p.2) →
@@ -726,8 +732,8 @@ theorem cellsSum_noValue {E : Env D} {m : Cells D} {g : Flow → Int} {d : ByteA
           | entry e =>
               cases he : e with
               | tomb => simp [Leaf.sumOf, entrySum, Entry.cell?, flowsOf, sumBy]
-              | live c =>
-                  have hnv := h s e (hl (s, .entry e) (by simp)) c he
+              | live c v =>
+                  have hnv := h s e (hl (s, .entry e) (by simp)) c v he
                   have : Value.ofCell c = none := by unfold Value.ofCell; simp [hnv]
                   simp [Leaf.sumOf, entrySum, Entry.cell?, flowsOf, this, sumBy]
         simp only [List.map_cons, List.sum_cons, hp, ih (fun q hq => hl q (by simp [hq]))]
@@ -737,10 +743,11 @@ theorem cellsSum_noValue {E : Env D} {m : Cells D} {g : Flow → Int} {d : ByteA
 omit [Std.TransOrd D] [Std.LawfulEqOrd D] in
 /-- Such a World is within its floors, trivially. -/
 theorem floorOk_noValue {E : Env D} {w : World D}
-    (h : ∀ (k : D) (e : Entry), w.entry E k = some e → ∀ c : Cell, e = .live c → c.discipline ≠ .value) :
+    (h : ∀ (k : D) (e : Entry), w.entry E k = some e → ∀ c : Cell, ∀ v, e = .live c v → c.discipline ≠ .value) :
     FloorOk E w := by
   intro k c hl hv
-  exact absurd hv (h k _ (live_entry hl) _ rfl)
+  obtain ⟨v, he⟩ := live_entry hl
+  exact absurd hv (h k _ he _ v rfl)
 
 end Turn
 

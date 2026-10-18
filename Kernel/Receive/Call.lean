@@ -177,8 +177,10 @@ inductive Refusal (D : Type)
   | tooManyCalls
   /-- a run reported more ticks than it was given: the kernel's assertion where `used` enters -/
   | overTicks
-  /-- a run read a row of relation `rel` under `parent` the caller did not pin (LANG-49) -/
-  | rowUnpinned (parent : D) (rel : Nat)
+  /-- a pinned row effect (an upsert or a retract) on a slot of relation `rel` under `parent` the
+  caller did not pin (LANG-49); `key` is the slot's row key bytes (empty for a head slot), so the
+  client learns WHICH row to pin (`Protocol` derivePins, KERNEL-54 day) -/
+  | rowUnpinned (parent : D) (rel : Nat) (key : ByteArray)
   /-- a run read a range of relation `rel` under `parent` the caller did not sign -/
   | rangeUnpinned (parent : D) (rel : Nat)
   /-- a signed range holds more rows than its `most` (refused, never truncated) -/
@@ -188,6 +190,9 @@ inductive Refusal (D : Type)
   | rowParent (obj : D)
   /-- a receiver gave one row slot two effects -/
   | duplicateRow (parent : D)
+  /-- a log records a `stale` refusal (KERNEL-54): `judge` never records one (a stale pin observed on
+  the fold is final without a record, `stale_behind_forever`), so the follower's audit refuses it -/
+  | staleRecorded
   deriving DecidableEq, Repr
 
 /-- The refusal's name on the wire (law 7): its constructor's, arguments dropped
@@ -230,11 +235,12 @@ def Refusal.name {D : Type} : Refusal D → String
   | .revisited _ => "revisited"
   | .tooManyCalls => "tooManyCalls"
   | .overTicks => "overTicks"
-  | .rowUnpinned _ _ => "rowUnpinned"
+  | .rowUnpinned _ _ _ => "rowUnpinned"
   | .rangeUnpinned _ _ => "rangeUnpinned"
   | .rangeTooLong _ => "rangeTooLong"
   | .rowParent _ => "rowParent"
   | .duplicateRow _ => "duplicateRow"
+  | .staleRecorded => "staleRecorded"
 
 /-- A receiver's only access to state: live cells at pinned ids. -/
 abbrev Pinned (D : Type) := D → Except (Refusal D) (Option Cell)
@@ -252,6 +258,11 @@ structure RowView (D : Type) where
 def _root_.Nanodregg.Kernel.RowSlot.under {D : Type} : RowSlot D → D × Nat
   | .head p rel => (p, rel)
   | .row k => (k.parent, k.rel)
+
+/-- A row slot's key bytes (a head has none). -/
+def _root_.Nanodregg.Kernel.RowSlot.keyBytes {D : Type} : RowSlot D → ByteArray
+  | .head _ _ => ByteArray.empty
+  | .row k => k.k
 
 /-- Which act the laws in force are judging. A law sees `old` and `new` state; without the
 occasion a birth (`create` judges the seed as `old = new`) and a law replacement (`law` judges the
@@ -494,7 +505,7 @@ def _root_.Nanodregg.Kernel.RowAct.unpinned : RowAct → Bool
 slot given two effects is `duplicateRow`. -/
 def rowTouchesOf [Ord D] [DecidableEq D] (pins : List (RowSlot D × D)) (rows : List (RowSlot D × RowAct)) :
     Except (Refusal D) (List (RowTouch D)) := do
-  forEx (fun e => req (e.2.unpinned || pins.any fun p => p.1 = e.1) (.rowUnpinned e.1.under.1 e.1.under.2)) rows
+  forEx (fun e => req (e.2.unpinned || pins.any fun p => p.1 = e.1) (.rowUnpinned e.1.under.1 e.1.under.2 e.1.keyBytes)) rows
   match dupBy (rows.map Prod.fst) with
   | some s => throw (.duplicateRow s.under.1)
   | none => pure ()

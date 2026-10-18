@@ -23,14 +23,16 @@ theorem rowSlotFits_of_rowFits {s : RowSlot D} {l : RowLeaf} (h : rowFits s l = 
   cases s with
   | head p rel =>
       cases l with
-      | head _ _ _ _ _ _ => simp only [rowFits, Bool.and_eq_true, decide_eq_true_eq] at h; exact h.1.1.1.1.1
-      | row _ _ => simp [rowFits] at h
+      | head _ _ _ _ _ _ _ =>
+          simp only [rowFits, Bool.and_eq_true, decide_eq_true_eq] at h
+          exact h.1.1.1.1.1.1
+      | row _ _ _ => simp [rowFits] at h
   | row key =>
       cases l with
-      | head _ _ _ _ _ _ => simp [rowFits] at h
-      | row _ _ =>
+      | head _ _ _ _ _ _ _ => simp [rowFits] at h
+      | row _ _ _ =>
           simp only [rowFits, Bool.and_eq_true, decide_eq_true_eq] at h
-          exact ⟨h.1.1.1, h.1.1.2⟩
+          exact ⟨h.1.1.1.1, h.1.1.1.2⟩
 
 /-! ## Byte lists -/
 

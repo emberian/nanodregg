@@ -219,7 +219,7 @@ def vname : Verdict D → String
   | .rejected r => s!"rejected {r.name}"
 
 def S.pinsFor (E : Env D) (w : World D) (ids : List D) : List (D × D) :=
-  ids.eraseDups.map fun c => (c, pinOf E (w.live E c))
+  ids.eraseDups.map fun c => (c, pinOf E (w.entry E c))
 
 def signed (P : Params D) (st : State D) (m : Member D) (key : ByteArray) (pins : List (D × D)) (body : Body D) :
     Call D :=
@@ -464,8 +464,8 @@ def checkRoot (P : Params D) (st : State D) (w w' : World D) (t : Turn D) : Stat
                 failWith st "root: a proof with a flipped sibling verified"
               else meet st "proof-sibling:refused"
             let other : Leaf := match l with
-              | .entry (.live _) => .entry .tomb
-              | _ => .entry (.live ⟨0, .ram, []⟩)
+              | .entry (.live _ _) => .entry .tomb
+              | _ => .entry (.live ⟨0, .ram, []⟩ 0)
             let st := if Trie.verifyInclusion S root s (leafDigest E other) p then
               failWith st "root: a proof verified a leaf the World does not hold"
             else meet st "proof-leaf:refused"
@@ -492,9 +492,9 @@ def checkRoot (P : Params D) (st : State D) (w w' : World D) (t : Turn D) : Stat
             | none => st
   -- a retired cell claimed live: its old cell against the tombstone's path
   let st := t.touches.foldl (fun st x =>
-    match x.act, w.live E x.cell with
-    | .retire, some old =>
-        if Trie.verifyInclusion S root (.cell x.cell) (leafDigest E (.entry (.live old))) (w'.trie.prove S (.cell x.cell))
+    match x.act, w.entry E x.cell with
+    | .retire, some (.live old v) =>
+        if Trie.verifyInclusion S root (.cell x.cell) (leafDigest E (.entry (.live old v))) (w'.trie.prove S (.cell x.cell))
         then failWith st "root: a tombstone was proved live"
         else meet st "proof-tomb-live:refused"
     | _, _ => st) st
@@ -681,10 +681,10 @@ def probeValue (P : Params D) (st : State D) : State D :=
   | [] => st
   | a0 :: _ =>
       let (acct, st) := pick st st.accounts a0
-      match w.live P.env acct.1 with
-      | none => st
-      | some cell =>
-          let seen := pinOf P.env (some cell)
+      match w.entry P.env acct.1 with
+      | none | some .tomb => st
+      | some (.live cell v) =>
+          let seen := pinOf P.env (some (.live cell v))
           let one (tag : String) (ops : List Op) := forgedTurn P w tag [⟨acct.1, seen, .write ops⟩] []
           let b := balOf st acct.1
           -- a credit with no debit: value from nothing
@@ -1226,7 +1226,7 @@ def act (P : Params D) (st : State D) : State D :=
                 (.refused "notIssuer") "revoke-not-issuer").1
             | none => st
           let w := st.host
-          let back := ((w.live P.env gid).map Cell.weight).getD 0
+          let back := ((w.entry P.env gid).map Entry.weight).getD 0
           let (st, t) := submit P st (signed P st issuer issuer.key (S.pinsFor P.env w [issuer.id, gid]) (.revoke gid))
             .ok "revoke"
           match t with
@@ -1616,12 +1616,13 @@ def arm (st : State D) (name : String) (ok : Bool) (msg : String) : State D :=
   if ok then meet st name else failWith st s!"probe refusals: {msg}"
 
 /-- The refusals probe, from the founder's fresh budget (it runs before the random acts):
-* `refusal-aba`: the A→B→A defect KERNEL-44 names. A call pinned to A is refused `stale` after a
-  write to B and RECORDED; the object is written back to A, so the call's pins see what its signer
-  saw; resubmitted, it is `refusedFinal`. PLANT `refusal-aba-plant:admitted`: the same World without
-  the record (the code before KERNEL-44) ADMITS it, after the client was told `refused`. And
-  `refusal-final-fold`: a Host that admits it anyway is refused `refusedFinal` by the follower's fold
-  at that step's index.
+* `refusal-aba`: the A→B→A defect KERNEL-44 names, closed by versions (KERNEL-54). A call pinned to A
+  is refused `stale` after a write to B and DECLINED (no record, no budget); the object is written back
+  to A, and its pin does NOT return (`refusal-aba-pin:moved`: the version moved), so resubmitted the
+  call is `stale` again. PLANT `refusal-aba-plant:returned`: the content did return to A, so the pin
+  before KERNEL-54 (a content digest) would have matched. `refusal-stale-fold`: a Host that admits the
+  call anyway is refused `stale` by the follower's fold at that step's index. `refusal-stale-audit`: a
+  log recording a stale refusal is refused `staleRecorded` by the follower's audit.
 * `refusal-early`: a call whose window has not opened is refused `outsideWindow` and NOT recorded
   (`World.refuse` itself refuses to: `refusal-early-kernel`); in its window it is admitted.
   PLANT `refusal-early-plant`: had it been recorded, its own window would refuse it `refusedFinal`.
@@ -1629,7 +1630,7 @@ def arm (st : State D) (name : String) (ok : Bool) (msg : String) : State D :=
   `notPrecommitted`, NOT recorded, the founder's count and the refusals root unmoved. PLANT
   `refusal-rotate-plant`: classified by `keyRule` (which skips the key for `rotate`) it would be
   authenticated, and `World.refuse` would take one of the founder's slots.
-* `refusal-budget`: stale calls are recorded up to `Bounds.refusalsPerWindow`; the next is
+* `refusal-budget`: `missingCell` calls are recorded up to `Bounds.refusalsPerWindow`; the next is
   `refusalBudget`, not recorded.
 * `refusals-counted`: the Host's World passes `refusalsCounted` (KERNEL-50). PLANT
   `refusals-counted-plant`: one of the founder's charges moved to another member, counts only; every
@@ -1646,28 +1647,40 @@ def probeRefusals (P : Params D) (st : State D) (g : World D) : State D :=
     let pinsNow := fun (st : State D) (x : D) => S.pinsFor E st.host [f.id, x]
     let wr := fun (st : State D) (x : D) (k : Nat) (v : String) (pins : List (D × D)) =>
       signed P st f f.key pins (.write x [(k, v.toUTF8)] none)
-    -- A → B → (a call pinned to A, refused stale, recorded) → A → the same call again
+    -- KERNEL-54: A → B → (a call pinned to A, refused stale, DECLINED: never recorded) → A → the same
+    -- call again, still stale: the object's pin names its version, so it never returns to A
     let (st, _) := submit P st (wr st o 1 "A" (pinsNow st o)) .ok "refusal-aba-a"
     let pinsA := pinsNow st o
+    let contentA := (st.host.live E o).map E.cellBytes
     let (st, _) := submit P st (wr st o 1 "B" (pinsNow st o)) .ok "refusal-aba-b"
     let c := wr st o 1 "C" pinsA
+    let root := st.host.refusalsRoot E
     let (st, _) := submit P st c (.rejected "stale") "refusal-aba-stale"
-    let wRec := st.host
-    let st := arm st "refusal-aba-recorded:recorded" (wRec.refusalAt E (.tx (txIdOf X c))).isSome
-      "the stale refusal of an authenticated in-window call was not recorded"
+    let st := arm st "refusal-aba-declined:declined"
+      ((st.host.refusalAt E (.tx (txIdOf X c))).isNone && st.host.refusalsRoot E == root)
+      "a stale refusal was recorded"
     let (st, _) := submit P st (wr st o 1 "A" (pinsNow st o)) .ok "refusal-aba-a2"
-    let st := arm st "refusal-aba-pin:returned" (pinsNow st o == pinsA) "the object's pin did not return to A"
-    let plantHost := { st.host with refusals := g.refusals }
-    let st := match Receive.submit X plantHost c with
-      | .ok (t, _) =>
-          let st := meet st "refusal-aba-plant:admitted"
+    -- the content returned to A (the pin before KERNEL-54, a content digest, would match again: the
+    -- PLANT), the versioned pin did not
+    let st := arm st "refusal-aba-plant:returned" ((st.host.live E o).map E.cellBytes == contentA)
+      "the object's content did not return to A (the plant is blind)"
+    let st := arm st "refusal-aba-pin:moved" (pinsNow st o != pinsA) "the object's pin returned to A"
+    let (st, _) := submit P st c (.rejected "stale") "refusal-aba"
+    -- a Host that admits the call anyway is refused `stale` by the follower's fold at that step
+    let st := match Receive.receive X st.host c with
+      | .ok t =>
           match World.fold E g (st.log ++ [.turn t]) with
-          | .error (i, .refusedFinal _) =>
-              arm st "refusal-final-fold:refusedFinal" (i == st.log.length) s!"the follower refused at {i}, not {st.log.length}"
-          | .error (_, r) => failWith st s!"probe refusals: the follower refused a recorded call's admission {r.name}"
-          | .ok _ => failWith st "probe refusals: the follower admitted a call the Host had recorded refused"
-      | .error v => failWith st s!"probe refusals: without the record the A→B→A call is {vname v}, not admitted (the plant is blind)"
-    let (st, _) := submit P st c (.rejected "refusedFinal") "refusal-aba"
+          | .error (i, .stale _) =>
+              arm st "refusal-stale-fold:stale" (i == st.log.length) s!"the follower refused at {i}, not {st.log.length}"
+          | .error (_, r) => failWith st s!"probe refusals: the follower refused the stale call's admission {r.name}"
+          | .ok _ => failWith st "probe refusals: the follower admitted a stale call"
+      | .error r => failWith st s!"probe refusals: the stale call did not derive ({r.name}): the fold plant is blind"
+    -- a log that records a stale refusal: the kernel takes the record, the follower's audit refuses it
+    let rs := refusedOf X c (.rejected (.stale o))
+    let st := match World.refuse E st.host rs, Receive.auditRefusal X st.host rs with
+      | .ok _, .error (.refused .staleRecorded) => meet st "refusal-stale-audit:staleRecorded"
+      | .error e, _ => failWith st s!"probe refusals: the kernel refused the planted stale record {e.name} (the plant is blind)"
+      | .ok _, _ => failWith st "probe refusals: the audit took a recorded stale"
     -- an early call: refused, not recorded, admitted in its window
     let H := st.host.height
     let ce := signedAt P st f f.key (pinsNow st o) (.write o [(2, "early".toUTF8)] none) (H + 3) (H + 50)
@@ -1704,18 +1717,20 @@ def probeRefusals (P : Params D) (st : State D) (g : World D) : State D :=
       | true, .ok w' => arm st "refusal-rotate-plant:authenticated" (refusalCount E w' f.id == cnt + 1)
           "the keyRule plant did not take a slot"
       | _, _ => failWith st "probe refusals: the keyRule plant would not record the stranger (the plant is blind)"
-    -- the budget: stale calls until the founder's window is full, then one more
+    -- the budget: writes to ids that hold nothing (pinned absent: `missingCell`, a recorded class;
+    -- KERNEL-54 took stale out of the record) until the founder's window is full, then one more
     let stale := fun (st : State D) (i : Nat) =>
-      wr st o 3 s!"s{i}" ((S.pinsFor E st.host [f.id]) ++ [(o, pinOf E none)])
+      let ghost := E.hash "nanodregg/sim/absent" (s!"g{i}".toUTF8 ++ E.bytes st.host.chain)
+      signed P st f f.key ((S.pinsFor E st.host [f.id]) ++ [(ghost, pinOf E none)]) (.write ghost [(3, s!"s{i}".toUTF8)] none)
     let st := (List.range (Bounds.refusalsPerWindow + 1)).foldl (fun st i =>
       if refusalCount E st.host f.id < Bounds.refusalsPerWindow then
-        (submit P st (stale st i) (.rejected "stale") "refusal-budget-fill").1
+        (submit P st (stale st i) (.refused "missingCell") "refusal-budget-fill").1
       else st) st
     let c17 := stale st 99
     let full := refusalCount E st.host f.id == Bounds.refusalsPerWindow
     let st := match Receive.judge X st.host c17 with
       | .declined (.rejected .refusalBudget) =>
-          let (st, _) := submit P st c17 (.rejected "stale") "refusal-budget-verdict"
+          let (st, _) := submit P st c17 (.refused "missingCell") "refusal-budget-verdict"
           arm st "refusal-budget:refusalBudget"
             (full && (st.host.refusalAt E (.tx (txIdOf X c17))).isNone) "the refusal past the budget was stored"
       | _ => failWith st "probe refusals: the refusal past the member's budget was not refused refusalBudget"
@@ -1738,9 +1753,9 @@ def probeRefusals (P : Params D) (st : State D) (g : World D) : State D :=
 
 /-- A forged turn that retires `id` (a live cell) and nothing else: the light turn of cv 01a14ba9-cbf4.
 Its charge is its own weight; its credit is the retired cell's whole weight. -/
-def retireTurn (P : Params D) (w : World D) (id : D) (cell : Cell) : Turn D :=
+def retireTurn (P : Params D) (w : World D) (id : D) : Turn D :=
   let txId := P.env.hash "nanodregg/sim/forge" ("retire-budget".toUTF8 ++ P.env.bytes w.chain)
-  let t0 : Turn D := ⟨txId, w.height + 1, w.height + 1, [⟨id, pinOf P.env (some cell), .retire⟩], [], [], 0,
+  let t0 : Turn D := ⟨txId, w.height + 1, w.height + 1, [⟨id, pinOf P.env (w.entry P.env id), .retire⟩], [], [], 0,
     ByteArray.empty, [], []⟩
   { t0 with charge := t0.weight }
 
@@ -1759,7 +1774,7 @@ def probeCarryBudget (P : Params D) (st : State D) : State D :=
   let w := st.host
   let top := 2 ^ 64
   let live := (w.trie.toList.filterMap fun p => match p with
-    | (.cell id, .entry (.live c)) => some (id, c)
+    | (.cell id, .entry (.live c _)) => some (id, c)
     | _ => none).mergeSort (fun a b => b.2.weight ≤ a.2.weight)
   let crafted : Carried D := { w.carried with allowance := top - 1 }
   let st := match carry X worldName (nonceOf 9) w.origin crafted with
@@ -1771,7 +1786,7 @@ def probeCarryBudget (P : Params D) (st : State D) : State D :=
   let st := match carry X worldName (nonceOf 9) w.origin { w.carried with allowance := top - 1 - w.weight } with
     | .error r => failWith st s!"probe carry-budget-edge: refused {r.name} at weight + allowance = 2^64 - 1"
     | .ok we =>
-        let after := live.filterMap fun (id, c) => match World.admit P.env we (retireTurn P we id c) with
+        let after := live.filterMap fun (id, _) => match World.admit P.env we (retireTurn P we id) with
           | .ok we' => some we'
           | .error _ => none
         if after.isEmpty then failWith st "probe carry-budget-edge: no light retire was admitted on the boundary carry"
@@ -1779,7 +1794,7 @@ def probeCarryBudget (P : Params D) (st : State D) : State D :=
           failWith st "probe carry-budget-edge: a retire carried storage plus allowance past 2^64"
         else { st with refusedAsExpected := st.refusedAsExpected + 1, seen := "carry-budget-edge:ok" :: st.seen }
   let unchecked := carryWorld X worldName (nonceOf 9) w.origin crafted
-  let reached := live.findSome? fun (id, c) => match World.admit P.env unchecked (retireTurn P unchecked id c) with
+  let reached := live.findSome? fun (id, _) => match World.admit P.env unchecked (retireTurn P unchecked id) with
     | .ok w' => if top ≤ w'.allowance then some w'.allowance else none
     | .error _ => none
   match reached with
@@ -1918,7 +1933,7 @@ def rowsDiff (E : Env D) (w : World D) (p : D) (model : RowModel) : Option Strin
     | none => some s!"relation {rel} has no head"
   let rows := model.filterMap fun m =>
     match rowAt E w.rows (.row ⟨p, m.1, m.2.1.toUTF8⟩) with
-    | some (.row a _) => if a = m.2.2 then none else some s!"row {m.2.1} holds amt {a}, the model {m.2.2}"
+    | some (.row a _ _) => if a = m.2.2 then none else some s!"row {m.2.1} holds amt {a}, the model {m.2.2}"
     | _ => some s!"row {m.2.1} is missing"
   let listed := (w.rows.toList.filter fun x => match x.1 with
     | .row k => decide (k.parent = p) | _ => false).length
@@ -1938,7 +1953,7 @@ def rowsAgree (E : Env D) (w : World D) (p : D) (model : RowModel) (what : Strin
 /-- The key of the listing's row with the greatest amt (the first, on a tie): a method's arg-max. -/
 def argMaxAmt (l : List (RowSlot D × RowLeaf)) : Option ByteArray :=
   (l.foldl (fun best x => match x with
-    | (.row k, .row a _) => match best with
+    | (.row k, .row a _ _) => match best with
         | some (_, b) => if b < a then some (k.k, a) else best
         | none => some (k.k, a)
     | _ => best) none).map (·.1)
@@ -2066,29 +2081,40 @@ def probeTrieShape (P : Params D) (st : State D) (seed : Nat) : State D :=
   -- the cell pin: cells (live and tombstones) and nullifiers with ids sharing their first byte or not
   let cell := fun (i : Nat) => ({ kind := kindObject, discipline := .ram, slots := [(stateBase, nat i)] } : Cell)
   let ws : List (Slot D × Leaf) := (List.range (seed % 9 + 3)).map (fun i =>
-      (Slot.cell (id "c" i), if i % 4 = 3 then Leaf.entry .tomb else .entry (.live (cell i)))) ++
-    ns.map (·, .spent) ++ [(Slot.cell (id "c" 0), .entry (.live (cell 100)))]
+      (Slot.cell (id "c" i), if i % 4 = 3 then Leaf.entry .tomb else .entry (.live (cell i) i))) ++
+    ns.map (·, .spent) ++ [(Slot.cell (id "c" 0), .entry (.live (cell 100) 7))]
   let m : Cells D := ws.foldl (fun m p => m.insert S p.1 p.2) .empty
   let w : World D := { World.genesis E P.zero 0 with trie := m }
-  let liveOf := fun (l : Option Leaf) => match l with
-    | some (.entry (.live c)) => some c
+  let entryOf := fun (l : Option Leaf) => match l with
+    | some (.entry e) => some e
     | _ => none
   let probes := (List.range (seed % 9 + 6)).map (id "c") ++ (List.range 3).map (id "absent")
-  let same := probes.all fun c => pinOf E (w.live E c) == pinOf E (liveOf (assoc ws (.cell c)))
-  let plantMoved := probes.any fun c => pinOf E (liveOf (plantGetByDepth S (.cell c) 0 m)) != pinOf E (liveOf (assoc ws (.cell c)))
+  let same := probes.all fun c => pinOf E (w.entry E c) == pinOf E (entryOf (assoc ws (.cell c)))
+  let plantMoved := probes.any fun c => pinOf E (entryOf (plantGetByDepth S (.cell c) 0 m)) != pinOf E (entryOf (assoc ws (.cell c)))
   let st := if same then meet st "pin-cell:same" else failWith st "probe shape: a cell pin differs from the association list's"
   if plantMoved then meet st "pin-cell-plant:caught" else st
 
 /-- The rows reference of the probe's parent: both heads and every modelled row, in key-byte order,
-built from the model alone (no trie). -/
+built from the model alone (no trie). Versions (KERNEL-54), from the probe's history: relation 0's
+floor is 2 (a1 retracted at version 0 raises it to 1, re-inserted at 1 and retracted again raises it
+to 2), relation 1's is 0 (never retracted); every modelled row was inserted and never upserted, so its
+version is its relation's floor when it landed, 0 for all of them (a0 and a2 landed before the first
+retract). -/
 def rowsReference (E : Env D) (p : D) (model : RowModel) : List (RowSlot D × RowLeaf) :=
   let ms := fun (rel : Nat) => model.filter (·.1 = rel)
   let heads : List (RowSlot D × RowLeaf) :=
-    [(.head p 0, .head (ms 0).length ((ms 0).map (·.2.2)).sum 3 10 2 true),
-     (.head p 1, .head (ms 1).length ((ms 1).map (·.2.2)).sum 8 1000 2 false)]
+    [(.head p 0, .head (ms 0).length ((ms 0).map (·.2.2)).sum 3 10 2 true 2),
+     (.head p 1, .head (ms 1).length ((ms 1).map (·.2.2)).sum 8 1000 2 false 0)]
   let rows : List (RowSlot D × RowLeaf) := model.map fun m =>
-    (.row ⟨p, m.1, m.2.1.toUTF8⟩, .row m.2.2 ("v-" ++ m.2.1).toUTF8)
+    (.row ⟨p, m.1, m.2.1.toUTF8⟩, .row m.2.2 ("v-" ++ m.2.1).toUTF8 0)
   (heads ++ rows).mergeSort fun a b => bytesLt (rowKeyBytes E a.1) (rowKeyBytes E b.1)
+
+/-- The floor a listing gives a row slot's relation (its head's), 0 where it holds no head. -/
+def listedFloor (l : List (RowSlot D × RowLeaf)) : RowSlot D → Nat
+  | .row k => match assoc l (.head k.parent k.rel) with
+    | some (.head _ _ _ _ _ _ f) => f
+    | _ => 0
+  | .head .. => 0
 
 /-- The row and range pins at `w` against the reference (`pin-row:same`, `pin-range:same`), and their
 plants caught (`pin-row-plant:caught`, `pin-range-plant:caught`). -/
@@ -2096,21 +2122,26 @@ def pinsAgree (E : Env D) (w : World D) (p : D) (model : RowModel) : RowsM D Uni
   let ref := rowsReference E p model
   let slots : List (RowSlot D) := ref.map (·.1) ++
     [.row ⟨p, 0, "zz".toUTF8⟩, .row ⟨p, 1, "b9".toUTF8⟩, .row ⟨p, 1, "a".toUTF8⟩, .head p 2]
-  hit "pin-row:same" (slots.all fun s => rowPin E (rowAt E w.rows s) == rowPin E (assoc ref s))
+  let wfl := fun (s : RowSlot D) => match s with
+    | .row k => headFloor E w.rows k.parent k.rel
+    | .head .. => 0
+  hit "pin-row:same" (slots.all fun s => rowPin E (wfl s) (rowAt E w.rows s) == rowPin E (listedFloor ref s) (assoc ref s))
     "a row pin differs from the reference listing's"
   hit "pin-row-plant:caught" (slots.any fun s =>
-    rowPin E (plantGetSwapped (rowSpec E) s w.rows) != rowPin E (assoc ref s)) "the swapped walk read every row pin right"
+    rowPin E (wfl s) (plantGetSwapped (rowSpec E) s w.rows) != rowPin E (listedFloor ref s) (assoc ref s))
+    "the swapped walk read every row pin right"
   let pres : List ByteArray := ["", "a", "b", "c", "d", "e", "f", "b0", "b1", "bz", "c0"].map String.toUTF8
   let refList := fun (rel : Nat) (pre : ByteArray) =>
     ref.filter fun x => startsWith (rowsPrefix E p rel 2 ++ pre) (rowKeyBytes E x.1)
   let honest := fun (rel : Nat) (pre : ByteArray) => (rangeRows E w.rows p rel 2 pre 100).getD []
   hit "pin-range:same" (pres.all fun pre => [0, 1].all fun rel =>
-      rangePin E p rel 2 pre (honest rel pre) == rangePin E p rel 2 pre (refList rel pre) &&
+      rangePin E p rel 2 pre (headFloor E w.rows p rel) (honest rel pre) ==
+        rangePin E p rel 2 pre (listedFloor ref (.row ⟨p, rel, pre⟩)) (refList rel pre) &&
         (rangeRows E w.rows p rel 2 pre 100).isSome)
     "a range pin differs from the reference listing's"
   hit "pin-range-plant:caught" (pres.any fun pre => [0, 1].any fun rel =>
-      rangePin E p rel 2 pre (plantUnder (rowSpec E) (rowsPrefix E p rel 2 ++ pre) 101 w.rows) !=
-        rangePin E p rel 2 pre (refList rel pre))
+      rangePin E p rel 2 pre (headFloor E w.rows p rel) (plantUnder (rowSpec E) (rowsPrefix E p rel 2 ++ pre) 101 w.rows) !=
+        rangePin E p rel 2 pre (listedFloor ref (.row ⟨p, rel, pre⟩)) (refList rel pre))
     "the listing without the rep check pinned every range right"
 
 /-- The stem probe (KERNEL-49 (a)): a parent born with one relation of key width 8, then 64 turns each
@@ -2125,7 +2156,7 @@ def probeStem (P : Params D) (w0 : World D) : RowsM D Unit := do
   let be := fun (i : Nat) => ByteArray.mk ((List.range 8).reverse.map fun j => (i >>> (8 * j)).toUInt8).toArray
   let wN ← (List.range 64).foldlM (fun w i => do
       let ins : RowTouch D := { slot := .row ⟨p, 0, be i⟩, seen := none, act := .insert 1 ByteArray.empty }
-      rowsOk P w (rowsTurn P w s!"stem-{i}" [⟨p, pinOf E (w.live E p), .keep⟩] [] [ins] []) s!"stem insert {i}" true) w1
+      rowsOk P w (rowsTurn P w s!"stem-{i}" [⟨p, pinOf E (w.entry E p), .keep⟩] [] [ins] []) s!"stem insert {i}" true) w1
   hit "rows-stem:ok" (headCS E wN p 0 == some (64, 64) &&
     (List.range 64).all fun i => (rowAt E wN.rows (.row ⟨p, 0, be i⟩)).isSome) "the 64 stem rows are not all there"
 
@@ -2165,7 +2196,8 @@ def probeRows (P : Params D) (seed : Nat) : RowsM D Unit := do
   let w1 ← rowsOk P w0 (rowsTurn P w0 "create" [] [(p, cell)] [decl 0 3 10 2 true, decl 1 8 1000 2 false] [])
     "the parent's birth with its relations"
   rowsAgree E w1 p [] "after the declares"
-  let keep := fun (w : World D) => (⟨p, pinOf E (w.live E p), .keep⟩ : Touch D)
+  let keep := fun (w : World D) => (⟨p, pinOf E (w.entry E p), .keep⟩ : Touch D)
+  let fl := fun (w : World D) (rel : Nat) => headFloor E w.rows p rel
   let key := fun (rel : Nat) (k : String) => (⟨p, rel, k.toUTF8⟩ : RowKey D)
   let ins := fun (rel : Nat) (k : String) (amt : Nat) =>
     ({ slot := .row (key rel k), seen := none, act := .insert amt ("v-" ++ k).toUTF8 } : RowTouch D)
@@ -2173,15 +2205,15 @@ def probeRows (P : Params D) (seed : Nat) : RowsM D Unit := do
   -- relation 0: insert, a taken key, the cap, the limit, a retract
   let w2 ← rowsOk P w1 (insT w1 "insert-a0" [ins 0 "a0" 2]) "rows-insert"
   hit "rows-insert:ok" (headCS E w1 p 0 == some (0, 0) && headCS E w2 p 0 == some (1, 2) &&
-    rowAt E w2.rows (.row (key 0 "a0")) == some (.row 2 "v-a0".toUTF8)) "the head or the row did not move"
+    rowAt E w2.rows (.row (key 0 "a0")) == some (.row 2 "v-a0".toUTF8 0)) "the head or the row did not move"
   let m2 : RowModel := [(0, "a0", 2)]
   rowsAgree E w2 p m2 "rows-insert"
   rowsRefused P w2 (insT w2 "taken" [ins 0 "a0" 1]) "rows-keyTaken" "keyTaken"
   -- PLANT (a): the same insert let through, as `rowStep` would commit it without `keyTaken`
   let planted := match headOf E w2.rows p 0 with
     | some (c, s, l, cap, wd, r) =>
-        let over := w2.rows.insert (rowSpec E) (.row (key 0 "a0")) (.row 1 "v-a0".toUTF8)
-        let rows := setHead E over p 0 (c + 1) (s + 1) l cap wd r
+        let over := w2.rows.insert (rowSpec E) (.row (key 0 "a0")) (.row 1 "v-a0".toUTF8 0)
+        let rows := setHead E over p 0 (c + 1) (s + 1) l cap wd r (fl w2 0)
         some { w2 with rows }
     | none => none
   hit "rows-taken-plant:caught"
@@ -2194,19 +2226,35 @@ def probeRows (P : Params D) (seed : Nat) : RowsM D Unit := do
   let m3 : RowModel := m2 ++ [(0, "a1", 3), (0, "a2", 1)]
   rowsAgree E w3 p m3 "rows-fill"
   rowsRefused P w3 (insT w3 "full" [ins 0 "a3" 0]) "rows-relationFull" "relationFull"
-  let pinA1 := rowPin E (rowAt E w3.rows (.row (key 0 "a1")))
+  let pinA1 := rowPin E (fl w3 0) (rowAt E w3.rows (.row (key 0 "a1")))
   let w4 ← rowsOk P w3 (rowsTurn P w3 "retract" [keep w3] []
     [{ slot := .row (key 0 "a1"), seen := some pinA1, act := .retract }] []) "rows-retract"
   hit "rows-retract:ok" (headCS E w4 p 0 == some (2, 3) && (rowAt E w4.rows (.row (key 0 "a1"))).isNone)
     "the retract left the row or the head"
   let m4 : RowModel := [(0, "a0", 2), (0, "a2", 1)]
   rowsAgree E w4 p m4 "rows-retract"
+  -- KERNEL-54: a row's absence recurs (re-insert, retract again), its pin does not: each retract
+  -- raises the relation's floor past the row it removes, so the first absence's pin is behind
+  let absA1 := rowPin E (fl w4 0) (rowAt E w4.rows (.row (key 0 "a1")))
+  let w4a ← rowsOk P w4 (insT w4 "reinsert-a1" [ins 0 "a1" 3]) "rows-aba's re-insert"
+  let pinA1b := rowPin E (fl w4a 0) (rowAt E w4a.rows (.row (key 0 "a1")))
+  let w4b ← rowsOk P w4a (rowsTurn P w4a "re-retract" [keep w4a] []
+    [{ slot := .row (key 0 "a1"), seen := some pinA1b, act := .retract }] []) "rows-aba's re-retract"
+  hit "rows-aba-floor:moved" (fl w4 0 == 1 && fl w4b 0 == 2 && (rowAt E w4b.rows (.row (key 0 "a1"))).isNone &&
+    absA1 != rowPin E (fl w4b 0) none) "the absence after the second retract pinned as the first"
+  rowsRefused P w4b (rowsTurn P w4b "aba-old-absence" [keep w4b] []
+    [{ slot := .row (key 0 "a1"), seen := some absA1, act := .keep }] []) "rows-aba" "stale"
+  rowsRefused P w4b (rowsTurn P w4b "retract-absent" [keep w4b] []
+    [{ slot := .row (key 0 "a1"), seen := some (rowPin E (fl w4b 0) none), act := .retract }] [])
+    "rows-missingRow" "missingRow"
+  let w4 := w4b
+  rowsAgree E w4 p m4 "rows-aba"
   -- relation 1: rows, a forbidden retract, range reads
   let w5 ← rowsOk P w4 (insT w4 "rel1" [ins 1 "b0" 5, ins 1 "b1" 7, ins 1 "c0" 1]) "rows-rel1"
   let m5 : RowModel := m4 ++ [(1, "b0", 5), (1, "b1", 7), (1, "c0", 1)]
   rowsAgree E w5 p m5 "rows-rel1"
   rowsRefused P w5 (rowsTurn P w5 "retract-forbidden" [keep w5] []
-    [{ slot := .row (key 1 "b0"), seen := some (rowPin E (rowAt E w5.rows (.row (key 1 "b0")))), act := .retract }] [])
+    [{ slot := .row (key 1 "b0"), seen := some (rowPin E (fl w5 1) (rowAt E w5.rows (.row (key 1 "b0")))), act := .retract }] [])
     "rows-retractForbidden" "retractForbidden"
   let pre := "b".toUTF8
   let listing := fun (w : World D) (most : Nat) => rangeRows E w.rows p 1 2 pre most
@@ -2214,14 +2262,14 @@ def probeRows (P : Params D) (seed : Nat) : RowsM D Unit := do
   let readT := fun (w : World D) (tag : String) (q : RangeRead D) => rowsTurn P w tag [keep w] [] [] [q]
   rowsRefused P w5 (readT w5 "range-long" (range 1 P.zero)) "rows-rangeTooLong" "rangeTooLong"
   let some l5 := listing w5 4 | throw "rows-range: the honest listing passed most"
-  let pin5 := rangePin E p 1 2 pre l5
+  let pin5 := rangePin E p 1 2 pre (fl w5 1) l5
   let w6 ← rowsOk P w5 (readT w5 "range" (range 4 pin5)) "rows-range"
   hit "rows-range:ok" (l5.length == 2) s!"the listing under b holds {l5.length} rows, not 2"
   rowsAgree E w6 p m5 "rows-range"
   -- PLANT (b): the listing with its arg-max row dropped
   let top := argMaxAmt l5
   let dropped := l5.filter fun x => match x.1 with | .row k => some k.k != top | _ => true
-  let pinD := rangePin E p 1 2 pre dropped
+  let pinD := rangePin E p 1 2 pre (fl w6 1) dropped
   match ← rowsStep P w6 (readT w6 "range-drop" (range 4 pinD)) with
   | .error "stale" =>
       hit "rows-range-drop-plant:stale" (pinD != pin5 && dropped.length + 1 == l5.length &&
@@ -2230,12 +2278,12 @@ def probeRows (P : Params D) (seed : Nat) : RowsM D Unit := do
   | .ok _ => throw "rows-range-drop-plant: a read under the dropped listing's pin was admitted"
   -- a range pin taken, then a row lands under its prefix
   let some l6 := listing w6 4 | throw "rows-range-stale: the honest listing passed most"
-  let pin6 := rangePin E p 1 2 pre l6
+  let pin6 := rangePin E p 1 2 pre (fl w6 1) l6
   let w7 ← rowsOk P w6 (insT w6 "lands" [ins 1 "b2" 2]) "rows-range-stale's insert"
   let m7 : RowModel := m5 ++ [(1, "b2", 2)]
   rowsRefused P w7 (readT w7 "range-old-pin" (range 4 pin6)) "rows-range-stale" "stale"
   let some l7 := listing w7 4 | throw "rows-range-stale: the new listing passed most"
-  let w8 ← rowsOk P w7 (readT w7 "range-new-pin" (range 4 (rangePin E p 1 2 pre l7))) "rows-range-stale's re-read"
+  let w8 ← rowsOk P w7 (readT w7 "range-new-pin" (range 4 (rangePin E p 1 2 pre (fl w7 1) l7))) "rows-range-stale's re-read"
   rowsAgree E w8 p m7 "rows-range-stale"
   pinsAgree E w8 p m7
   -- two rains on one World
@@ -2408,13 +2456,14 @@ def plantedArms : List String :=
    "journal-proof-cells-root:refused", "carry-name:nameTooLong", "carry-old-call:replayed",
    "carry-old-world:wrongWorld", "carry-new:ok", "sig-bare:badSignature", "hash-count:empty-per-root", "verify-count:once", "retain:canonical",
    "retain-plant:refuted", "carry-budget:allowanceTooLarge", "carry-budget-edge:ok", "carry-budget-plant:overflow",
-   "refusal-aba-stale:stale", "refusal-aba-recorded:recorded", "refusal-aba-pin:returned",
-   "refusal-aba-plant:admitted", "refusal-final-fold:refusedFinal", "refusal-aba:refusedFinal",
+   "refusal-aba-stale:stale", "refusal-aba-declined:declined", "refusal-aba-plant:returned",
+   "refusal-aba-pin:moved", "refusal-aba:stale", "refusal-stale-fold:stale", "refusal-stale-audit:staleRecorded",
    "refusal-early-refused:outsideWindow", "refusal-early:declined", "refusal-early-kernel:outsideWindow",
    "refusal-early-plant:refusedFinal", "refusal-early-window:ok", "refusal-rotate-stranger:notPrecommitted",
    "refusal-rotate-kept:declined", "refusal-rotate-plant:authenticated", "refusal-budget:refusalBudget",
    "refusal-forged-code:eventMismatch", "refusals-counted:counted", "refusals-counted-plant:refused",
-   "rows-insert:ok", "rows-keyTaken:keyTaken", "rows-relationCapped:relationCapped",
+   "rows-insert:ok", "rows-keyTaken:keyTaken", "rows-aba-floor:moved", "rows-aba:stale",
+   "rows-missingRow:missingRow", "rows-relationCapped:relationCapped",
    "rows-relationFull:relationFull", "rows-retract:ok", "rows-retractForbidden:retractForbidden",
    "rows-rangeTooLong:rangeTooLong", "rows-range:ok", "rows-range-stale:stale", "rows-two-rains:both",
    "rows-taken-plant:caught", "rows-range-drop-plant:stale", "rows-repin-plant:stale",

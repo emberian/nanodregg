@@ -30,9 +30,9 @@ theorem judge_admitted {X : Ctx D} {w w' : World D} {c : Call D} {t : Turn D}
   unfold judge judgeBy at h
   split at h
   · rename_i hs; cases h; exact hs
-  · split at h
-    · split at h <;> cases h
-    · cases h
+  · exfalso
+    repeat' split at h
+    all_goals cases h
 
 /-- What the receive layer and the kernel say about an admitted call: nothing recorded at its id
 before, and its window contains the next height. -/
@@ -155,8 +155,8 @@ theorem build_answer (E : Env D) (w : World D) (tx : D) :
         | _ => .absent := rfl
 
 /-- **A committed settlement is the World's journal entry.** -/
-theorem settle_committed {E : Env D} {w : World D} {tx : D} {fg : Bool} {H vu h : Nat} {td : D}
-    (hv : ofReceipt fg H vu (Receipt.build E w tx).answer = .committed h td) :
+theorem settle_committed {E : Env D} {w : World D} {tx : D} {fg b : Bool} {H vu h : Nat} {td : D}
+    (hv : ofReceipt fg b H vu (Receipt.build E w tx).answer = .committed h td) :
     w.journalAt E tx = some (h, td) := by
   rw [build_answer] at hv
   split at hv
@@ -166,9 +166,9 @@ theorem settle_committed {E : Env D} {w : World D} {tx : D} {fg : Bool} {H vu h 
     exact hj
   · split at hv
     · simp only [ofReceipt] at hv; split at hv <;> cases hv
-    · simp only [ofReceipt] at hv; split at hv
-      · cases hv
-      · split at hv <;> cases hv
+    · simp only [ofReceipt] at hv
+      repeat' split at hv
+      all_goals cases hv
 
 /-- An admitted call's World: nothing at its id, and its window contains the next height and closes
 within `windowMax` of its `notBefore`. -/
@@ -193,13 +193,16 @@ theorem submit_facts {X : Ctx D} {w w' : World D} {c : Call D} {t : Turn D}
   rw [req_ok, decide_eq_true_eq] at hwm
   refine ⟨hj, hra, by omega, by omega⟩
 
-/-- **A final settlement is never admitted** (`refused` or `expired`, from the member's own World):
-no World any later log reaches from it admits the call. -/
+/-- **A final settlement of the record and window arms is never admitted** (`refused CODE` from a
+recorded refusal, or `expired`, from the member's own World, at `behind = false`): no World any later
+log reaches from it admits the call. The stale arm (`behind = true`, `refused staleCode`, KERNEL-54)
+is NOT covered here: its finality rests on `Kernel.stale_behind_forever` (`settleOf_stale` says when
+it is said). -/
 theorem settle_final_never_admits {X : Ctx D} {w w' : World D} {c : Call D} {l : List (Kernel.Step D)}
     (hc : w.RefusalsCanon X.env) (hjc : w.JournalCanon X.env)
-    (hv : ofReceipt (journalForgets w.height c.unsigned.notBefore) w.height c.unsigned.validUntil
+    (hv : ofReceipt (journalForgets w.height c.unsigned.notBefore) false w.height c.unsigned.validUntil
         (Receipt.build X.env w (txIdOf X c)).answer = .expired ∨
-      ∃ code, ofReceipt (journalForgets w.height c.unsigned.notBefore) w.height c.unsigned.validUntil
+      ∃ code, ofReceipt (journalForgets w.height c.unsigned.notBefore) false w.height c.unsigned.validUntil
         (Receipt.build X.env w (txIdOf X c)).answer = .refused code)
     (hf : World.fold X.env w l = .ok w') : ∀ out, submit X w' c ≠ .ok out := by
   intro ⟨t, w''⟩ hs
@@ -221,7 +224,7 @@ theorem settle_final_never_admits {X : Ctx D} {w w' : World D} {c : Call D} {l :
           cases hra
         · omega
       · rcases hv with hv | ⟨_, hv⟩ <;> cases hv
-    · simp only [ofReceipt] at hv
+    · simp only [ofReceipt, Bool.false_eq_true, ↓reduceIte] at hv
       split at hv
       · rcases hv with hv | ⟨_, hv⟩ <;> cases hv
       · split at hv
@@ -235,7 +238,7 @@ be admitted, and a re-signed command would make a second call beside it (the del
 `absent` said "running the command again is safe" of exactly these calls). -/
 theorem settle_open_not_final {X : Ctx D} {w w' : World D} {c : Call D} {t : Turn D}
     (hs : submit X w c = .ok (t, w')) :
-    ofReceipt (journalForgets w.height c.unsigned.notBefore) w.height c.unsigned.validUntil
+    ofReceipt (journalForgets w.height c.unsigned.notBefore) false w.height c.unsigned.validUntil
       (Receipt.build X.env w (txIdOf X c)).answer = .open := by
   obtain ⟨hj, hra, hlt, hwm⟩ := submit_facts hs
   have hnf : journalForgets w.height c.unsigned.notBefore = false := by
@@ -261,13 +264,34 @@ end Member
 theorem settle_final_reached {X : Ctx D} {name nonce : ByteArray} {a : Nat} {fs : List (ByteArray × D)}
     {l₀ : List (Kernel.Step D)} {w w' : World D} {c : Call D} {l : List (Kernel.Step D)}
     (hw : World.fold X.env (genesisWorld X name nonce a fs) l₀ = .ok w)
-    (hv : ofReceipt (journalForgets w.height c.unsigned.notBefore) w.height c.unsigned.validUntil
+    (hv : ofReceipt (journalForgets w.height c.unsigned.notBefore) false w.height c.unsigned.validUntil
         (Receipt.build X.env w (txIdOf X c)).answer = .expired ∨
-      ∃ code, ofReceipt (journalForgets w.height c.unsigned.notBefore) w.height c.unsigned.validUntil
+      ∃ code, ofReceipt (journalForgets w.height c.unsigned.notBefore) false w.height c.unsigned.validUntil
         (Receipt.build X.env w (txIdOf X c)).answer = .refused code)
     (hf : World.fold X.env w l = .ok w') : ∀ out, submit X w' c ≠ .ok out :=
   settle_final_never_admits (fold_refusalsOk (genesisWorld_refusalsOk X name nonce a fs) hw).1
     (fold_journalOk (genesisWorld_journalOk X name nonce a fs) hw).1 hv hf
+
+/-- **The deployed settlement of an admissible call is `open`** (KERNEL-54): with `behind` follow's
+own `staleBehind`, wherever `submit` admits the call the settlement `receipt CALL` prints is `open`,
+never final (`settle_open_not_final` composed with `Command.staleBehind_admissible`). -/
+theorem settleOf_admissible_open {X : Ctx D} {me : Command.Self D} {w w' : World D} {c : Call D}
+    {t : Turn D} (hs : submit X w c = .ok (t, w')) : Command.settleOf X me w c = .open := by
+  unfold Command.settleOf
+  rw [Command.staleBehind_admissible hs]
+  exact settle_open_not_final hs
+
+/-- **`refused stale` without a record is said only of a stale-BEHIND call** (KERNEL-54): where the
+receipt finds neither a journal entry nor a recorded refusal at the id, the settlement is
+`refused staleCode` only when follow's own fold says `staleBehind` (`Command.staleBehind_spec`). -/
+theorem settleOf_stale {X : Ctx D} {me : Command.Self D} {w : World D} {c : Call D}
+    (ha : (Receipt.build X.env w (txIdOf X c)).answer = .absent)
+    (hv : Command.settleOf X me w c = .refused staleCode) : Command.staleBehind X me w c = true := by
+  unfold Command.settleOf at hv
+  rw [ha] at hv
+  simp only [ofReceipt] at hv
+  repeat' split at hv
+  all_goals first | assumption | cases hv
 
 /-! ## The refused arm never answers `open` on a World follow absorbed from a genesis (`Receive.genesisWorld`)
 
@@ -410,9 +434,9 @@ theorem windowedIn_refused {X : Ctx D} {S : List (Kernel.Step D)} {w : World D} 
 /-- **The refused arm's `open` is dead** on a `WindowedIn S` World: a receipt that refuses the member's
 own call settles `refused`, unless `S` carries a colliding call. -/
 theorem settle_refused_final {X : Ctx D} {S : List (Kernel.Step D)} {w : World D} {c : Call D}
-    {fg : Bool} {H h code : Nat} {m : D} (hw : WindowedIn X S w)
+    {fg b : Bool} {H h code : Nat} {m : D} (hw : WindowedIn X S w)
     (hr : (Receipt.build X.env w (txIdOf X c)).answer = .refused h code m) :
-    ofReceipt fg H c.unsigned.validUntil (Receipt.build X.env w (txIdOf X c)).answer = .refused code ∨
+    ofReceipt fg b H c.unsigned.validUntil (Receipt.build X.env w (txIdOf X c)).answer = .refused code ∨
       ∃ c' v, Kernel.Step.refusal (refusedOf X c' v) ∈ S ∧ txIdOf X c' = txIdOf X c ∧
         c'.unsigned.validUntil < c.unsigned.validUntil := by
   rcases windowedIn_refused hw hr with hv | hcol
@@ -441,10 +465,10 @@ theorem absorbed_windowedIn {X : Ctx D} {S₀ S : List (Kernel.Step D)} {w w' : 
 steps follow itself took: a receipt refusing the member's call settles `refused`, unless follow's own
 log carries a different call (a narrower window) under the member's transaction id. -/
 theorem settle_refused_absorbed {X : Ctx D} {name nonce : ByteArray} {a : Nat}
-    {fs : List (ByteArray × D)} {S : List (Kernel.Step D)} {w : World D} {c : Call D} {fg : Bool}
+    {fs : List (ByteArray × D)} {S : List (Kernel.Step D)} {w : World D} {c : Call D} {fg b : Bool}
     {H h code : Nat} {m : D} (ha : Absorbed X (genesisWorld X name nonce a fs) S w)
     (hr : (Receipt.build X.env w (txIdOf X c)).answer = .refused h code m) :
-    ofReceipt fg H c.unsigned.validUntil (Receipt.build X.env w (txIdOf X c)).answer = .refused code ∨
+    ofReceipt fg b H c.unsigned.validUntil (Receipt.build X.env w (txIdOf X c)).answer = .refused code ∨
       ∃ c' v, Kernel.Step.refusal (refusedOf X c' v) ∈ S ∧ txIdOf X c' = txIdOf X c ∧
         c'.unsigned.validUntil < c.unsigned.validUntil :=
   settle_refused_final (by simpa using absorbed_windowedIn (genesisWorld_windowedIn X [] name nonce a fs) ha) hr

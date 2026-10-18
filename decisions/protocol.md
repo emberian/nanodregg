@@ -1656,3 +1656,58 @@ than its docstring names. The `baseMoved` red caught it only because the expecta
 - A reply past `Bounds.frameBytesMax`: I first proposed a `pastFrame` refusal, on the claim that such a reply "has no bytes". That claim was wrong. `host follow` already answers an unframeable step `refused stepTooLarge` (Host/Follow.lean:64–66), so the member gets a name, not a silent failure. `pastFrame` was not added; two names for one bound would be the "two shapes" the doctrine deletes. A relation's rows can still outgrow a frame (64 rows × up to 64 KiB values), and then K or the prefix must narrow it.
 - The read lists at most K rows and refuses more. There is no cursor yet: a resident pages by prefix. A "rows after key X" form is the next ask if a queue needs it.
 - Plan-side range reads (a member INVOKING a method that declares a range) still sign no `ranges`: `plan` builds none. That is the next Protocol gap for a queue that reads itself.
+
+## PROTOCOL-52 · KERNEL-54's attempt side: a stale is settled from the member's own fold, never recorded; an absent lookup is confirmed with follow before any resend (2026-10-19, PROTOCOL-16; KERNEL-54 ruled, PROTOCOL-15's five conditions; routed through KERNEL-21's one `kernel!` commit)
+
+**The gap.** Under KERNEL-54 the writer DECLINES a stale and never records it (`judgeBy`). Before this change the attempt side depended on that record in three places:
+- `refused stale` was final only because it was recorded.
+- A→B→A was covered by the record.
+- The rows' budget teeth were seventeen recorded stales.
+Without the record, a stale call would stay `open` for ever, and the budget row would measure nothing.
+
+**Decision.**
+- **Stale BEHIND settles `refused`, from the fold** (conditions 1 and 2). `Command.staleBehind X me w c` decides it. It requires:
+  - the member's OWN call for its own World. Custody signs only what follow planned, and `plan` signs `notBefore` = the planning height with pins from that World, which is a World of follow's fold;
+  - a planning height follow has reached (`notBefore ≤ w.height`). Every World of one height holds the same entries, because refusal steps change none;
+  - follow's World derives the call's Turn and refuses it `stale`.
+  When all three hold, the pin was observed on the fold and is stale now, so it is stale at every World the fold reaches (`Kernel.stale_behind_forever`). `Settle.ofReceipt` takes it as a new `behind` argument: an absent receipt in a live window that the journal still answers settles `refused staleCode` when `behind`, else `open`. AHEAD (a planning height not reached) or another member's call (unplaceable) is never `behind`: it settles `open`.
+- **The Host's decline never ends an attempt.** `(submit, declined)` ends the RUN `declined` and leaves the attempt open on disk, as before. The next run settles it.
+- **An absent lookup is confirmed with follow before any resend** (condition 3):
+  - `(lookup, absent)` → `probe`, whatever the sends left;
+  - `(probe, open)` → `submit` while a send is left, else `open`.
+  So a run is at most three requests per send (attemptFuel `3·sendsMax + 3`). `client/src/generated.rs` is re-emitted (two arms change). The client's drive loop bound and its `absent_with_sends_exhausted…` sequence change to match; that is CLIENT-8's hunk, staged separately.
+- **The rows** (condition 4), `refused` re-cut:
+  - a write raced by the sponsor's write is `declined stale` (line 13);
+  - `rerun`: lookup `absent`, then probe, then follow's fold settles `refused stale`;
+  - A→B→A: the content returns, the version does not. `resubmit` is `declined stale` again, the Host's lookup is `absent` (nothing recorded), and `rerun` settles `refused stale` again;
+  - another member's `receipt` of that call prints `settle open` (unplaceable, never final from someone else's fold);
+  - the budget teeth move to a RECORDED class: sixteen forged posts at a taken key of a board (`keyTaken`, admit-level, authenticated, recorded), then `declined refusalBudget`;
+  - plant `settleDecline` (an attempt store that takes the Host's decline as final) is caught at line 13, `refused stale`.
+  - `journey`'s race line is now `declined stale`. `receipt`'s recorded refusal is a `keyTaken` post (a stale has no record to receive).
+- **Pin sites** (condition 5): `derivePins` pins `pinOf X.env (w.entry X.env c)`, which reads the Entry: absent, tomb and live-with-version are three distinct pins.
+- **Theorems:**
+  - `staleBehind_spec` (exactly what `staleBehind` asserts).
+  - `staleBehind_admissible`: a call `submit` would admit on `w` is never `staleBehind` there, so `refused stale` is never said of an admissible call.
+  - `settle_absent_stale` (the arm).
+  - The Attempt theorems re-stated: `next_submit` (a resend only after follow's `open`), `next_absent_probes`, `next_open`, `next_after_follow`.
+  - `Command.settleOf` is what `receipt CALL` prints. `Settle.settleOf_admissible_open`: wherever `submit` admits the call, the deployed settlement is `open`. `Settle.settleOf_stale`: an unrecorded `refused staleCode` is said only when `staleBehind` holds.
+  - `settle_final_never_admits` / `_reached` cover the RECORD and WINDOW arms only (`behind = false`). The stale arm's finality (no later World admits a `refused staleCode` call) is NOT proved; see the critique. `settle_committed` and the refused-arm theorems hold for every `behind`.
+  - Second-agent vacuity read (with the DISJUNCT check): no theorem is vacuous. Taken from it: the docstring overclaims are fixed, and the composition is stated (`settleOf_*`). It also confirms that the stale arm's finality is uncovered.
+
+- **Row pins from the plan** (ROOT approved the fourth change; the plan side of PROTOCOL-16's gap 4). Before this, `plan` signed no `rowPins`, so no pinned row effect (an upsert or a retract) was reachable through nd. KERNEL-21 gives `Receive.Refusal.rowUnpinned` the row's KEY bytes; `derivePins`, on `rowUnpinned parent rel k`, pins `Command.rowPinAt` = `(.row ⟨parent, rel, k⟩, rowPin E (headFloor E w.rows parent rel) (rowAt E w.rows (.row …)))` (the leaf's digest, or absence at the relation's floor, as follow's World holds them) and derives again. A row asked for twice is the receiver's refusal, never a loop. Theorems: `derivePins_rowPins` (every added row pin is `rowPinAt` of follow's World), `planUnchecked_rowPins` (every row pin `plan` signs is). Range pins (`ranges`) are still unsigned by `plan`: the other half of gap 4.
+
+**The `admitsRecorded` tooth stays (ROOT's ruling), re-cut on the live arm.** PROTOCOL-16 had deleted it, arguing that versioned pins leave no honest call admissible after its refusal was recorded. That holds for the PINNED-cell arm, which is dead by structure: every state-dependent verdict there re-pins. The UNPINNED-insert arm is live: a row birth (`insert`, KERNEL-46) is judged on the CURRENT World, so an insert refused `relationFull` (recorded) becomes derivable once a retract frees the slot, and only the record keeps the same signed bytes from landing. Row `refusedFinal` (new):
+  - a one-slot board (`slotSource`: limit 1, retract; `post`, `clear k`); the sponsor posts at key 1;
+  - the auditor forges a post at key 2: `refused relationFull`, recorded;
+  - the sponsor clears key 1 (a retract, pinned by `derivePins` on `rowUnpinned`: the first pinned row effect any row drives through nd);
+  - the auditor resubmits the same bytes: `refused relationFull` from the record; the sponsor's post at key 3 then lands (the slot stayed free);
+  - plant `admitsRecorded` (the writer code restored from main: commit a recorded call while answering its recorded name) leaves line 16 as it is (the lie is in the log, not the reply) and is caught at line 17: the sponsor's next command catches up through the logged Turn and its own follower refuses it `refusedFinal`, the line after the resubmit as in the old tooth (line 18 after 17).
+  `settleDecline` stays beside it on `refused`.
+
+**Critique.**
+- `staleBehind`'s premise, "the pins are the planning World's", is the planner's own: follow does not re-check it. A forged call signed with the member's stolen key, with an AHEAD pin and a low `notBefore`, would settle `refused` while it could still land. That is outside the model (a stolen key), and it is stated.
+- `refused staleCode` (the BEHIND arm) is final by fold structure, not yet final by theorem: the composed statement waits on KERNEL-56 (cv 01a15038). It is fail-safe meanwhile: `settleOf_stale` (said only of a `staleBehind` call) and `settleOf_admissible_open` (never said where `submit` admits the call) mean an unproved finality can only leave an attempt open.
+- The composed finality theorem (behind ⇒ no later World admits) is NOT stated here. It would rest on `Kernel.stale_behind_forever`, whose `∨ Collision E.hash` is vacuous by pigeonhole (KERNEL-21's finding; KERNEL-56 restates it as `CollidesAmong`). It lands when that statement does, with the five receipt theorems (cv 01a15038-6d1e).
+- Partner hunks: the client's drive bound and test are CLIENT-8's (agreed), in this patch; LANG's arity and floor hunks are in KERNEL-21's assembled tree.
+
+**Rows on 40879fa + KERNEL-21's kernel21-k54-snap2.patch + this patch (PROTOCOL-17's re-cut):** toy ALL PASS 34, deployed ALL PASS 33, every plant caught by name at its line (`refused`: settleDecline at 13 `refused stale`; `refusedFinal`: admitsRecorded at 17 `refused refusedFinal`).

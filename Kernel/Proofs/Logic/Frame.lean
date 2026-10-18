@@ -111,7 +111,7 @@ private def toothCell : Cell := ⟨0, .ram, []⟩
 /-- From genesis (height 0): bear `toothCell` at `c`, touch nothing, pay the exact weight. -/
 private def bornTurn (c : D) : Turn D :=
   { txId := c, notBefore := 1, validUntil := 1, touches := [], creates := [(c, toothCell)],
-    nullifiers := [], charge := 162, event := ByteArray.empty }
+    nullifiers := [], charge := 170, event := ByteArray.empty }
 
 /-- **Tooth: `born` is in the cells' footprint.** From genesis a turn bearing one cell is admitted,
 and the frame over the footprint without `born` (the cells of non-`keep` touches, and the
@@ -120,25 +120,25 @@ theorem cellFoot_needs_born (E : Env D) (o c : D) :
     ∃ w w' t, World.admit E w t = .ok w' ∧
       ¬ ∀ s, (∀ x ∈ t.touches, x.act ≠ .keep → s ≠ .cell x.cell) → (∀ n ∈ t.nullifiers, s ≠ .nullifier n) →
         w'.trie.get (trieSpec E) s = w.trie.get (trieSpec E) s := by
-  have hc : check E (World.genesis E o 162) (bornTurn c) = .ok [] := rfl
-  refine ⟨_, _, bornTurn c, show World.admit E _ _ = .ok (commit E (World.genesis E o 162) (bornTurn c) []) by
+  have hc : check E (World.genesis E o 170) (bornTurn c) = .ok [] := rfl
+  refine ⟨_, _, bornTurn c, show World.admit E _ _ = .ok (commit E (World.genesis E o 170) (bornTurn c) []) by
     unfold World.admit; rw [hc], fun hall => ?_⟩
   have h := hall (.cell c) (fun x hx => by simp [bornTurn] at hx) (fun n hn => by simp [bornTurn] at hn)
-  change (Trie.T.empty.insert (trieSpec E) (.cell c) (.entry (.live toothCell))).get (trieSpec E) (.cell c) =
+  change (Trie.T.empty.insert (trieSpec E) (.cell c) (.entry (.live toothCell 0))).get (trieSpec E) (.cell c) =
     none at h
   rw [Trie.get_insert_self] at h
   cases h
 
 /-- A World holding one live cell `p` with one declared relation `0` under it (no rows, limit 1). -/
 private def rowWorld (E : Env D) (o p : D) : World D :=
-  { World.genesis E o 242 with
-    trie := (Trie.T.empty : Cells D).insert (trieSpec E) (.cell p) (.entry (.live toothCell))
-    rows := (Trie.T.empty : Rows D).insert (rowSpec E) (.head p 0) (.head 0 0 1 0 0 false) }
+  { World.genesis E o 250 with
+    trie := (Trie.T.empty : Cells D).insert (trieSpec E) (.cell p) (.entry (.live toothCell 0))
+    rows := (Trie.T.empty : Rows D).insert (rowSpec E) (.head p 0) (.head 0 0 1 0 0 false 0) }
 
 /-- Pin `p` (`keep`) and insert one row into its relation `0`, paying the exact weight. -/
 private def rowTurn (E : Env D) (o p : D) : Turn D :=
-  { txId := o, notBefore := 1, validUntil := 1, touches := [⟨p, pinOf E (some toothCell), .keep⟩], creates := [],
-    nullifiers := [], charge := 242, event := ByteArray.empty,
+  { txId := o, notBefore := 1, validUntil := 1, touches := [⟨p, pinOf E (some (.live toothCell 0)), .keep⟩], creates := [],
+    nullifiers := [], charge := 250, event := ByteArray.empty,
     rows := [⟨.row ⟨p, 0, ByteArray.empty⟩, none, .insert 0 ByteArray.empty⟩] }
 
 /-- **Tooth: `head` is in the rows' footprint.** A turn inserting one row is admitted on canonical
@@ -149,16 +149,18 @@ theorem rowFoot_needs_head (E : Env D) (o p : D) :
       ¬ ∀ s, (∀ x ∈ t.rows, x.act ≠ .keep → s ≠ x.slot) →
           (∀ x ∈ t.touches, x.act = .retire → ∀ rel, s ≠ .head x.cell rel) →
         rowAt E w'.rows s = rowAt E w.rows s := by
-  have hr : (rowWorld E o p).rows = (Trie.T.empty : Rows D).insert (rowSpec E) (.head p 0) (.head 0 0 1 0 0 false) :=
+  have hr : (rowWorld E o p).rows = (Trie.T.empty : Rows D).insert (rowSpec E) (.head p 0) (.head 0 0 1 0 0 false 0) :=
     rfl
   have hlive : (rowWorld E o p).live E p = some toothCell := by
     simp [rowWorld, World.live, World.entry, Trie.get_insert_self]
+  have hentry : (rowWorld E o p).entry E p = some (.live toothCell 0) := by
+    simp [rowWorld, World.entry, Trie.get_insert_self]
   have hmap : mapEx (touchCheck E (rowWorld E o p)) (rowTurn E o p).touches = .ok [none] := by
-    simp [rowTurn, mapEx, touchCheck, hlive, req, Functor.map, Except.map]
+    simp [rowTurn, mapEx, touchCheck, hentry, req, Functor.map, Except.map]
   have hrun : rowsRun E (rowWorld E o p) (rowTurn E o p) =
-      .ok (setHead E (((Trie.T.empty : Rows D).insert (rowSpec E) (.head p 0) (.head 0 0 1 0 0 false)).insert
-        (rowSpec E) (.row ⟨p, 0, ByteArray.empty⟩) (.row 0 ByteArray.empty)) p 0 1 0 1 0 0 false, 0) := by
-    simp [rowsRun, rowTurn, rowStepFreed, rowStep, hlive, req, headOf, rowAt, hr, Trie.get_insert_self,
+      .ok (setHead E (((Trie.T.empty : Rows D).insert (rowSpec E) (.head p 0) (.head 0 0 1 0 0 false 0)).insert
+        (rowSpec E) (.row ⟨p, 0, ByteArray.empty⟩) (.row 0 ByteArray.empty 0)) p 0 1 0 1 0 0 false 0, 0) := by
+    simp [rowsRun, rowTurn, rowStepFreed, rowStep, hlive, req, headOf, headFloor, rowAt, hr, Trie.get_insert_self,
       Trie.get_insert_ne, Trie.get_empty, dropHeads, rowFreed, Bounds.rowsMax, Bounds.rangesMax, Bounds.keyBytesMax,
       bind, Except.bind, pure, Except.pure]
   have hc : check E (rowWorld E o p) (rowTurn E o p) = .ok [] := by

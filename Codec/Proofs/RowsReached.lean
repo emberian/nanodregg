@@ -123,7 +123,7 @@ theorem rowsCodecFits_of_ok {dc : Stream D} (hd : Stream.Lawful dc) {E : Env D} 
 
 /-- Two heads of one parent (relations 0 and 1), each declared empty: in key-byte order. -/
 private abbrev headsInOrder : List (RowSlot Sim.D × RowLeaf) :=
-  [(.head 0 0, .head 0 0 0 0 0 false), (.head 0 1, .head 0 0 0 0 0 false)]
+  [(.head 0 0, .head 0 0 0 0 0 false 0), (.head 0 1, .head 0 0 0 0 0 false 0)]
 
 /-- The same two heads swapped, as one leaf: not the canonical trie of its entries. -/
 private abbrev headsSwapped : Rows Sim.D := .leaf 0 headsInOrder.reverse

@@ -55,10 +55,12 @@ theorem judge_journaled {X : Ctx D} {w : World D} {c : Call D} {h : Nat} {d : D}
   rw [hs]
   simp only
   split
-  · obtain ⟨e, he⟩ := hr (.rejected (.replayed h))
-    rw [he]
-    cases e <;> exact ⟨_, rfl⟩
   · exact ⟨_, rfl⟩
+  · split
+    · obtain ⟨e, he⟩ := hr (.rejected (.replayed h))
+      rw [he]
+      cases e <;> exact ⟨_, rfl⟩
+    · exact ⟨_, rfl⟩
 
 /-- **The writer's machine commits only `World.step`'s steps**: a `submit` the handler commits is
 `judge`'s `admitted` (the Turn admits to the World committed) or `recorded` (the refusal records to

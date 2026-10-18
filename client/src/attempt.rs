@@ -217,8 +217,8 @@ impl Attempt {
 
     /// Advance from `state`, performing what `Attempt.next` names, until it names an end. Each
     /// request goes through `exchange`: `submit` / `lookup` to the Host, `confirm` / `probe` as
-    /// follow's `receipt CALL`. A run makes at most `2 · sends_max` Host requests and one follow
-    /// request (the table's bound), and the loop is bounded by that number again.
+    /// follow's `receipt CALL`. A run makes at most `2 · sends_max` Host and `sends_max + 1` follow
+    /// requests (KERNEL-54: an absent lookup is probed before a resend); the loop takes one more.
     pub fn drive<E: From<AttemptError>>(
         &self,
         state: State,
@@ -236,7 +236,7 @@ impl Attempt {
         // The Host's last payload (a declined refusal's name), the Host's last claim, follow's
         // last receipt.
         let (mut hinted, mut claimed, mut receipt) = (Vec::new(), None, None::<Receipt>);
-        for _ in 0..=2 * u64::from(sends_max) + 1 {
+        for _ in 0..=3 * u64::from(sends_max) + 1 {
             let request = match table::next(sends < sends_max, last) {
                 end @ (Action::Committed | Action::Refused) => {
                     let r = receipt.take().ok_or(AttemptError::Inconsistent)?;

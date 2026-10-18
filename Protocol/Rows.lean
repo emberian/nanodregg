@@ -235,8 +235,14 @@ inductive Mutation
   | importTrustsFile
   /-- the writer admits a call whose transaction id holds a recorded refusal (judged on its World
   with the refusals forgotten) and still answers it `refused NAME`: a writer that tells the client a
-  final no and commits the call anyway (the A→B→A defect, as a lie) -/
+  final no and commits the call anyway (the A→B→A defect, as a lie). Live under KERNEL-54 on the
+  unpinned-insert arm: an insert refused `relationFull` is recorded, a retract frees the slot, and
+  the same signed bytes would then derive and admit -/
   | admitsRecorded
+  /-- the attempt store takes the Host's `declined` as final and settles the attempt `refused`
+  (KERNEL-54: the writer declines a stale, never records it; only the member's own fold settles
+  it, PROTOCOL-15's condition 1) -/
+  | settleDecline
   /-- the joiner takes an invitation's inputs as they arrive, checking neither its signer nor its
   signature: trust on first use, the shape before PROTOCOL-42 -/
   | trustFirstUse
@@ -364,6 +370,46 @@ def ringsQueue : String :=
   | .ok p => (Lang.Print.package p).getD ""
   | .error _ => ""
 
+/-- A board of posts (KERNEL-54's recorded class for the rows that need one): `post` inserts its
+text at key `k` and leaves the state alone, so a post at a TAKEN key derives on any World and is
+refused by the kernel, `keyTaken`, authenticated and RECORDED (a stale is never recorded). -/
+def boardSource : String := "
+(package
+  (state (rec))
+  (rel posts (key (k nat)) (val (rec (text bytes))) (limit 64))
+  (method post (arg (rec (k nat) (text bytes))) (edits 1)
+    (done state (insert posts (record (k arg.k)) (record (text arg.text)))))
+  (law always (else ok)))
+"
+
+/-- `boardSource` as `install` reads it. -/
+def board : String :=
+  match Lang.Surface.readPackage boardSource with
+  | .ok p => (Lang.Print.package p).getD ""
+  | .error _ => ""
+
+/-- A board of ONE slot whose rows may be retracted (ROOT's instance for the `admitsRecorded`
+tooth under KERNEL-54): `post` inserts (unpinned, judged on the current World: `relationFull` once
+the slot is taken, authenticated and RECORDED), `clear` retracts a row (a PINNED row effect: the plan
+pins it from follow's World, `Command.derivePins` on `rowUnpinned`). The printed package orders its
+methods by name: `clear` is method 0, `post` method 1. -/
+def slotSource : String := "
+(package
+  (state (rec))
+  (rel posts (key (k nat)) (val (rec (text bytes))) (limit 1) (retract))
+  (method post (arg (rec (k nat) (text bytes))) (edits 1)
+    (done state (insert posts (record (k arg.k)) (record (text arg.text)))))
+  (method clear (arg (rec (k nat))) (edits 1)
+    (done state (retract posts (record (k arg.k)))))
+  (law always (else ok)))
+"
+
+/-- `slotSource` as `install` reads it. -/
+def slot : String :=
+  match Lang.Surface.readPackage slotSource with
+  | .ok p => (Lang.Print.package p).getD ""
+  | .error _ => ""
+
 /-! ## The rows -/
 
 /-- A newcomer joins: `init` (a join token for its sponsor), the sponsor `enroll`s it (spending one
@@ -381,6 +427,15 @@ def welcome : List Line :=
   [okBind "sponsor" ["install", permitAll] "permit",
    okBind "sponsor" ["create", "@permit"] "shared",
    okBind "sponsor" ["grant", "@shared", "@newcomer", "observe,mutate"] "g"]
+
+/-- The sponsor's board `posts` with its first post at key 1, public to `post` (`bpub`), and READER
+having read its description (binding `posts.post`): what a recorded `keyTaken` needs. -/
+def boardWith (reader : String) : List Line :=
+  [okBind "sponsor" ["install", board] "board",
+   okBind "sponsor" ["create", "--pkg", "@board", "(record)"] "posts",
+   okBind "sponsor" ["grant", "@posts", "anyone", "invoke:0"] "bpub",
+   ok "sponsor" ["invoke", "@posts", "0", "(record (k 1) (text \"first\"))"],
+   { actor := reader, act := .cmd ["read", "@posts", "?"], expect := .ok, bind := some "posts" }]
 
 /-- Every command reads through the member's own follow, which catches up from the writer's log
 (`log`) before it answers; a write is a `submit`. -/
@@ -404,7 +459,7 @@ def journey : Row where
     no "stranger" ["read", "@shared"] "unknownKey",
     no "stranger" ["write", "@shared", "2", "9"] "unknownKey",
     no "newcomer" ["write", "@shared", "2", "3"] "noGrant",
-    { actor := "sponsor", act := .cmd ["write", "@shared", "2", "9"], expect := .refused "stale",
+    { actor := "sponsor", act := .cmd ["write", "@shared", "2", "9"], expect := .declined "stale",
       fault := .race "newcomer" ["write", "@shared", "2", "8", "--via", "@g"] },
     ok "newcomer" ["read", "@shared", "2=8"]] ++
     -- a public object (KERNEL-26): a grant to `anyone` lets a member enrolled AFTER it mutate
@@ -733,44 +788,55 @@ def forgotten : Row where
     { actor := "newcomer", act := .retry, expect := .unsettled "forgotten" }])
   plant := .caught .forgottenRefused 13 (.refused "forgotten")
 
-/-- KERNEL-44's teeth over sockets (PROTOCOL-41): a refusal is a recorded system interaction,
-final for its transaction id within the window. A call planned on a World that then moved is
-refused `stale` and RECORDED; a lookup answers it by that name; the World's pin returns to the value
-the call saw (A→B→A), and the same bytes sent again are answered `refused stale` from the record,
-never re-derived and never admitted (before KERNEL-44 they were admitted: a final verdict reversed).
-A member's refusals in one window are bounded: the 17th authenticated refusal is `declined
-refusalBudget`, not recorded and not final (its lookup is `absent`). A thin member then adopts a
-base whose step count is past its height and catches up from its steps. Past the window the record is
-pruned and the first call's lookup is `uncertain forgotten`, never `refused`. The plant is a writer
-that commits a recorded call while answering it `refused stale`: the member's own follower catches
-the logged Turn by the kernel's name, `refusedFinal`. The counts are heights, so this row is not for
+/-- KERNEL-44's teeth over sockets (PROTOCOL-41), as KERNEL-54 re-cut them: a refusal of a class
+that is not structurally final is a recorded system interaction, final for its transaction id within
+the window; a STALE is never recorded. A write raced by another member's write is `declined stale`:
+the writer neither records it nor ends the attempt. The attempt store's next run looks it up
+(`absent`), confirms that with follow before any resend (PROTOCOL-15's condition 3), and follow's
+own fold settles it `refused stale` (BEHIND: the member's own call, planned at a height follow has
+reached, refused `stale` there, `Command.staleBehind`). The World's pin returns to the value the call
+saw (A→B→A): the same bytes sent again are still `declined stale` (the pin reads the entry and its
+version, KERNEL-54), the Host's lookup is `absent` (nothing recorded), and the next run settles
+`refused stale` again. Another member asking about the call it did not plan settles `open`
+(unplaceable: never final from someone else's fold). A member's refusals in one window are bounded:
+sixteen recorded `keyTaken` refusals (posts at a taken key of a board), then `declined refusalBudget`, not recorded
+and not final (its lookup is `absent`). A thin member then adopts a base whose step count is past its
+height and catches up from its steps. Past the window the journal forgets and the first call's
+lookup is `uncertain forgotten`, never `refused`. The plant is an attempt store that takes the
+Host's decline as final: line 13 is `refused stale`. The counts are heights, so this row is not for
 `rows --times` scaling. -/
 def refusedRow : Row where
   name := "refused"
   replaces := []
   ops := settled ++ [.read]
-  kinds := ["enroll", "install", "create", "grant", "write"]
+  kinds := ["enroll", "install", "create", "grant", "write", "invoke"]
   drive := .members (welcome ++ join "sponsor" "auditor" ++ [
     okBind "sponsor" ["grant", "@shared", "@auditor", "observe,mutate"] "g2",
     ok "sponsor" ["write", "@shared", "2", "1"],
     ok "newcomer" ["read", "@shared", "2=1"],
     ok "auditor" ["read", "@shared", "2=1"],
-    ok "sponsor" ["write", "@shared", "2", "5"],
-    -- planned on the World where 2=1: the writer refuses it stale and records it
-    { actor := "newcomer", act := .forge ["write", "@shared", "3", "7", "--via", "@g"],
-      expect := .refused "stale" },
-    { actor := "newcomer", act := .retry, expect := .refused "stale" },
-    -- A→B→A: the pin the call saw holds again, and the same bytes are still refused
+    -- signed on the World where 2=1, raced by the sponsor's write: the writer declines it stale
+    { actor := "newcomer", act := .cmd ["write", "@shared", "3", "7", "--via", "@g"],
+      expect := .declined "stale", fault := .race "sponsor" ["write", "@shared", "2", "5"] },
+    -- the next run: lookup `absent`, follow's own fold settles it
+    { actor := "newcomer", act := .rerun, expect := .refused "stale" },
+    -- A→B→A: the content the call saw holds again; its version does not
     ok "sponsor" ["write", "@shared", "2", "1"],
-    { actor := "newcomer", act := .resubmit, expect := .refused "stale" },
+    { actor := "newcomer", act := .resubmit, expect := .declined "stale" },
+    { actor := "newcomer", act := .retry, expect := .absent },
+    { actor := "newcomer", act := .rerun, expect := .refused "stale" },
     ok "newcomer" ["read", "@shared", "2=1"],
-    -- one member's window budget: sixteen recorded refusals, then `declined refusalBudget`
+    -- unplaceable: another member's follow did not plan the call, so it never settles it final
+    { actor := "auditor", act := .receiptOf "newcomer", expect := .ok, prints := some "settle open" },
+    ] ++ boardWith "auditor" ++ [
+    -- one member's window budget: sixteen recorded refusals (posts at a taken key), then
+    -- `declined refusalBudget`
     ok "sponsor" ["write", "@shared", "2", "9"]] ++
     (List.range Kernel.Bounds.refusalsPerWindow).map (fun i =>
-      { actor := "auditor", act := .forge ["write", "@shared", "3", toString (100 + i), "--via", "@g2"],
-        expect := .refused "stale" }) ++ [
-    { actor := "auditor", act := .forge ["write", "@shared", "3", "99", "--via", "@g2"],
-      expect := .declined "refusalBudget" },
+      { actor := "auditor", act := .forge ["invoke", "@posts", "@posts.post",
+          s!"(record (k 1) (text \"{i}\"))", "--via", "@bpub"], expect := .refused "keyTaken" }) ++ [
+    { actor := "auditor", act := .forge ["invoke", "@posts", "@posts.post",
+        "(record (k 1) (text \"over\"))", "--via", "@bpub"], expect := .declined "refusalBudget" },
     { actor := "auditor", act := .retry, expect := .absent }] ++
     -- a thin member adopts a base sealed after seventeen recorded refusals, where the World's step
     -- count is past its height: it pages the log from the base's STEPS (paging from its height
@@ -786,7 +852,39 @@ def refusedRow : Row where
     okBind "operator" ["create", "@permit"] "own",
     { actor := "operator", act := .cmd ["write", "@own", "2", "1"], expect := .ok, times := 3100 },
     { actor := "newcomer", act := .retry, expect := .unsettled "forgotten" }])
-  plant := .caught .admitsRecorded 18 (.refused "refusedFinal")
+  plant := .caught .settleDecline 13 (.refused "stale")
+
+/-- KERNEL-44's admit-after-refusal tooth on the arm KERNEL-54 leaves live (ROOT's ruling on
+PROTOCOL-52): an unpinned row birth is judged on the CURRENT World, so its refusal can stop being
+derivable. The sponsor's post fills a one-slot board; the auditor forges a post at another key,
+refused `relationFull` and RECORDED; the sponsor clears the slot (a retract, a pinned row effect,
+which `plan` pins from follow's World); the auditor sends the same signed bytes again, and they are
+answered `refused relationFull` from the record, never re-derived and never admitted, so the slot
+stays free for the sponsor's next post. The plant is a writer that commits a recorded call while
+answering it `refused relationFull` (line 16 reads the same either way: the lie is in the log, not
+the reply): the sponsor's next command catches up through the logged Turn, and its own follower
+refuses it by the kernel's name, `refusedFinal`, at line 17, as the old tooth was caught on the line
+after its resubmit. -/
+def refusedFinalRow : Row where
+  name := "refusedFinal"
+  replaces := []
+  ops := everyWrite
+  kinds := ["enroll", "install", "create", "grant", "invoke"]
+  drive := .members (welcome ++ join "sponsor" "auditor" ++ [
+    okBind "sponsor" ["install", slot] "slotPkg",
+    okBind "sponsor" ["create", "--pkg", "@slotPkg", "(record)"] "slot",
+    okBind "sponsor" ["grant", "@slot", "anyone", "invoke:1"] "spub",
+    ok "sponsor" ["invoke", "@slot", "1", "(record (k 1) (text \"first\"))"],
+    { actor := "auditor", act := .cmd ["read", "@slot", "?"], expect := .ok, bind := some "slot" },
+    -- the slot is taken: the kernel refuses the post `relationFull`, and the writer records it
+    { actor := "auditor", act := .forge ["invoke", "@slot", "@slot.post",
+        "(record (k 2) (text \"second\"))", "--via", "@spub"], expect := .refused "relationFull" },
+    -- a retract: the plan pins the row from follow's World (`derivePins` on `rowUnpinned`)
+    ok "sponsor" ["invoke", "@slot", "0", "(record (k 1))"],
+    -- the same signed bytes would now derive and admit; the record answers them
+    { actor := "auditor", act := .resubmit, expect := .refused "relationFull" },
+    ok "sponsor" ["invoke", "@slot", "1", "(record (k 3) (text \"third\"))"]])
+  plant := .caught .admitsRecorded 17 (.refused "refusedFinal")
 
 /-- PROTOCOL-42: a joiner derives the World it joins from an invitation its sponsor signed, never
 from the first bytes it sees. The sponsor signs one (`invite`, from the World's origin inputs, which
@@ -920,7 +1018,7 @@ def receiptRow : Row where
   name := "receipt"
   replaces := []
   ops := settled
-  kinds := ["enroll", "install", "create", "grant", "write"]
+  kinds := ["enroll", "install", "create", "grant", "write", "invoke"]
   drive := .members (welcome ++ [
     ok "newcomer" ["write", "@shared", "2", "1", "--via", "@g"],
     ok "operator" ["read", "@shared", "2=1"],
@@ -928,9 +1026,9 @@ def receiptRow : Row where
     { actor := "operator", act := .verify "newcomer" "rc1", expect := .ok, prints := some "committed" },
     { actor := "operator", act := .verify "newcomer" "rc1", expect := .refused "pathMismatch",
       fault := .forgeReceipt },
-    ok "sponsor" ["write", "@shared", "2", "5"],
-    { actor := "newcomer", act := .forge ["write", "@shared", "3", "7", "--via", "@g"],
-      expect := .refused "stale" },
+    ok "sponsor" ["write", "@shared", "2", "5"]] ++ boardWith "newcomer" ++ [
+    { actor := "newcomer", act := .forge ["invoke", "@posts", "@posts.post",
+        "(record (k 1) (text \"again\"))", "--via", "@bpub"], expect := .refused "keyTaken" },
     { actor := "newcomer", act := .receiptOf "newcomer", expect := .ok, bind := some "rc2" },
     ok "operator" ["read", "@shared", "2=5"],
     { actor := "operator", act := .verify "newcomer" "rc2", expect := .ok, prints := some "refused" },
@@ -1220,7 +1318,7 @@ def rangeLimitRow : Row where
   plant := .caught .noReadLimit 6 .ok
 
 def rows : List Row :=
-  [journey, reopen, laws, rotate, audit, paging, coldCatchUp, inflatedHeight, forgotten, refusedRow, inviteRow, useRow, describeRow, stateRow, receiptRow, settleRow, carry, thin, thinStale, sealRow, basePin, pageIoRow, wrongWorld, wrongWorldRead, pay, well, bounty, grain, hermes, bar,
+  [journey, reopen, laws, rotate, audit, paging, coldCatchUp, inflatedHeight, forgotten, refusedRow, refusedFinalRow, inviteRow, useRow, describeRow, stateRow, receiptRow, settleRow, carry, thin, thinStale, sealRow, basePin, pageIoRow, wrongWorld, wrongWorldRead, pay, well, bounty, grain, hermes, bar,
    langJourney, rangeRow, rangeLimitRow]
 
 end Nanodregg.Protocol

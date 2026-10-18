@@ -149,8 +149,8 @@ theorem render_cont {X : Ctx D} {w : World D} {obj : D} {ex : List (Nat × ByteA
   repeat' split
   all_goals simp [refused, printed, Reply.cont]
 
-theorem receiptLines_cont {X : Ctx D} {dc : Codec.Stream D} {w : World D} {cb : ByteArray} :
-    (receiptLines X dc w cb).cont = none := by
+theorem receiptLines_cont {X : Ctx D} {dc : Codec.Stream D} {me : Self D} {w : World D} {cb : ByteArray} :
+    (receiptLines X dc me w cb).cont = none := by
   unfold receiptLines
   repeat' split
   all_goals simp [refused, printed, Reply.cont]

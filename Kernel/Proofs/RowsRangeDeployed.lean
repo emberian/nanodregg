@@ -21,7 +21,7 @@ theorem fold_range_exact (program : Program Digest) {name nonce : ByteArray} {al
     ∀ q ∈ t.ranges, ∃ c s lim cap width rt rows,
       headOf env w.rows q.parent q.rel = some (c, s, lim, cap, width, rt) ∧ q.pre.size ≤ width ∧
       rangeRows env w.rows q.parent q.rel width q.pre q.most = some rows ∧
-      rangePin env q.parent q.rel width q.pre rows = q.seen ∧
+      rangePin env q.parent q.rel width q.pre (headFloor env w.rows q.parent q.rel) rows = q.seen ∧
       (∀ s v, (s, v) ∈ rows ↔ rowAt env w.rows s = some v ∧
         startsWith (rowsPrefix env q.parent q.rel width ++ q.pre) (rowKeyBytes env s) = true) ∧
       rows.Pairwise (fun a b => compare (rowKeyBytes env a.1).data (rowKeyBytes env b.1).data = .lt) := by

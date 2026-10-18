@@ -1462,3 +1462,58 @@ enough to go red. A change of meaning inside an existing tag (a field read diffe
 that use that tag, so each tag has one row, not a sweep of its payloads.
 
 - **2026-10-19, KERNEL-50 (KERNEL-19, ROOT for CODEC):** the World-wire refine chain is now journal → refusals → refusals-disjoint → steps → **refusals-counted** → rows → rows-headed → rows-parented → world-budget. `kernel/refusals-counted` (`countedWire`, `countedWire_lawfulOn`) refuses a base whose window counts are not its records (KERNEL-50 `refusalsCounted`). `kernel/refusal-leaf` gains the charged member (`refused h code member`), so its tag moves with the meaning. Vectors re-emitted for the moved families; the boundary pair is a counted World and the same World with one charge moved.
+
+## CODEC-37 · Versions on the wire: a u64 varint, the entry and rows leaf carry it, the pin preimages keep eight bytes (KERNEL-54 with KERNEL-21; CODEC-12, 2026-10-19)
+
+**The ask.** KERNEL-54 (ROOT, shape N) puts a per-cell write counter in `Entry.live`, a version in every row leaf and a
+floor in every relation head, each below `Bounds.counterLimit` = 2^64. The weight charges the 8-byte bound; the disk
+pays a varint. Today's `Stream.varint` stops at 2^32.
+
+**Decision.**
+- `Stream.varint64 : Stream Nat` (`Shape.varint64`, shape code 20): LEB128, shortest form, below 2^64, at most ten
+  bytes. It is `varintOf 10 (2^64)`; `varint` is now `varintOf 5 (2^32)`, the same reader (`getVarint width limit`) and
+  the same bytes and refusals as before, so no varint-carrying tag moved. One proof serves both
+  (`varintOf_lawfulOn`). Canonicity exact: `varint64_decode_iff` (`decode b = ok v ↔ v < 2^64 ∧ b = bytes v`).
+  Width: `varint64_size_le` (≤ 10, the number KERNEL-55's `worldBytesMax` reads) and `varint64_size_max` (2^64 − 1
+  is ten bytes: the bound is tight). So the World's bytes are bounded by its weight plus two bytes per version, not by
+  its weight.
+- `kernel/entry`: live = 0 ‖ version varint64 ‖ cell (the order of `leafBytes`), tomb = 1. `entry_lawfulOn`,
+  `entry_decode_iff`; tooth `leaf_decode_refuses_version` (no bytes decode to a live leaf at version 2^64) beside
+  `leaf_decode_refuses_misfit`.
+- `kernel/row-leaf` (the World's rows listing): a head's floor after its retract byte and a row's version after its
+  amt, both varint64; every other counter stays u64. `rowLeaf_lawfulOn`, `rowLeaf_decode_iff`.
+- `kernel/row-leaf-hashed` (new site): the same fields with the floor and version as u64, which is KERNEL's
+  `rowLeafBytes`, the row pin's preimage. `rowLeafBytes_eq`/`_inj`/`_decode` moved onto it (`rowLeafBytes_decode`'s
+  statement now names `rowLeafHashed`). Two codecs for one value is deliberate: the preimage is fixed-width so a
+  pin is a function of the eight-byte bound, the disk is what the counter reached; they share `rowLeafOfWire` /
+  `rowLeafToWire` and `RowLeafWireFits`, and differ only in the two counters' spelling.
+- `kernel/range-pin`: the relation's floor (u64, as `rangePinBytes`) after the prefix. `rangePinWire_lawfulOn`,
+  `rangePinBytes_eq`/`_inj`/`_decode` re-proved with the floor.
+- The 13 compile-only placeholders K20-K left in Codec/World.lean, Codec/Kernel.lean, Codec/Proofs/{Rows,World}.lean
+  are replaced; `ListingPin`'s cells and rows plants re-pinned by hand with versions 300 / floor 2 / versions 0, 128,
+  300 (the pre-day bytes with exactly the varint bytes inserted; the World and carried plants hold no live entry and
+  no row, so they are unchanged); WorldTooth/RowsReached take the new constructor arities at version and floor 0.
+
+**Vectors.** New sites `varint64` (8 rows: 0, 127, 128, 2^64 − 1 read back; 2^64 `pastBound`, an eleventh byte
+`pastBound 10 11`, `80 00` `varint/overlong`, `80` `truncated`) and `kernel/row-leaf-hashed` (3). Boundary rows
+through the codecs: `kernel/entry` (version 2^64 − 1 read back; 2^64, an eleventh byte and `80 00` refused at
+offset 1), `kernel/row-leaf` (2^64 − 1 as a row version and as a head floor read back; each spelled 2^64 or overlong
+refused, the version also eleven bytes long), `kernel/row-leaf-hashed` and `kernel/range-pin` (the floor at
+2^64 − 1 read back, the same input one byte short refused `truncated`: an eight-byte field has no larger value).
+`codec-vectors --write` into an empty file reproduces the table byte for byte. Re-pinned because their tags moved: entry, leaf, leaf-fit, trie-order, row-leaf,
+row-order, range-pin, rows, rows-headed, rows-parented, journal, refusals, refusals-disjoint, steps,
+refusals-counted, world-budget, carried, carried-journal, carried-rows, carried-rows-headed,
+carried-rows-parented, host/base/index-count. NOT re-pinned: touch, turn, unsigned, call, refused, step, proof — their
+shapes hold no leaf and `Kernel.Sim` draws their pins as digests, so their tags and rows are unchanged; the deployed
+pin VALUES change, which no vector pins. No kernel refusal name is generated into Rust (the names reach clients as
+strings from Lean), so `staleRecorded`, `missingRow` and `overBound .version` add no generated line; the five emits
+check unchanged.
+
+**Flag day (with KERNEL-54's `kernel!`).** Moves: the entry, leaf, row-leaf and range-pin shapes, so every World,
+carried and base tag; every Store and carried file stamped with the old tags refuses to open by its stamp (never
+reinterpreted); re-genesis.
+
+**Critique.** The disk and the preimage now spell the same leaf two ways; a future field added to one and not the
+other would be a twin. The guard is structural: both refine the one `RowLeafF` through the one `rowLeafOfWire`, so a new
+field must be added to both wires to type-check. The varint makes weight ≥ bytes false for versions at or past 2^56
+(nine and ten bytes); the bound that holds is `varint64_size_le`, and HOST's base rows measure the actual.

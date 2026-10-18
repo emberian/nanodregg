@@ -1,16 +1,18 @@
 import Codec.Kernel
 import Codec.Proofs.Raw
+import Codec.Proofs.Varint
 
 /-!
 # The rows codecs (KERNEL-46/48): lawful, and the kernel's own byte functions ARE their bytes
 
-* `rowKey_lawfulOn`, `rowLeaf_lawfulOn`, `rowAct_lawfulOn`, `rowTouch_lawfulOn`, `rangeRead_lawfulOn`,
+* `rowKey_lawfulOn`, `rowLeaf_lawfulOn` (the World's leaf, version and floor as u64 varints),
+  `rowLeafHashed_lawfulOn` (the row pin's preimage), `rowAct_lawfulOn`, `rowTouch_lawfulOn`, `rangeRead_lawfulOn`,
   `rangePinWire_lawfulOn`: each rows codec is lawful on the values within KERNEL's wire bounds (a
   relation below 256, a key and a prefix of at most `Bounds.keyBytesMax` bytes, a value of at most
   `Bounds.valueBytesMax`, counters below 2^64).
 * `rowKeyBytes_eq`, `rowLeafBytes_eq`, `rangePinBytes_eq`: KERNEL's `rowKeyBytes` (what the rows trie
   routes by), `rowLeafBytes` (what a row pin hashes) and `rangePinBytes` (what a range pin hashes) are
-  the bytes of `rowKey`, `rowLeaf` and `rangePinWire`, at any digest codec that writes `E.bytes`.
+  the bytes of `rowKey`, `rowLeafHashed` and `rangePinWire`, at any digest codec that writes `E.bytes`.
 * So each kernel function is injective on its domain and reads back (`rowKeyBytes_inj`,
   `rowKeyBytes_decode`, `rowLeafBytes_inj`, `rowLeafBytes_decode`, `rangePinBytes_inj`,
   `rangePinBytes_decode`): two rows keys with one routing are one key, two leaves with one pin preimage
@@ -106,64 +108,104 @@ theorem rowKeyBytes_decode {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD d
 
 /-! ## Leaves -/
 
-/-- A rows leaf within the wire's bounds: every counter below 2^64, a value of at most
-`Bounds.valueBytesMax` bytes. -/
+/-- A rows leaf within the wire's bounds: every counter below 2^64 (a head's floor and a row's version
+included, KERNEL-54), a value of at most `Bounds.valueBytesMax` bytes. -/
 def RowLeaf.Fits : RowLeaf → Prop
-  | .head c s l k w _ => c < 2 ^ 64 ∧ s < 2 ^ 64 ∧ l < 2 ^ 64 ∧ k < 2 ^ 64 ∧ w < 2 ^ 64
-  | .row a v => a < 2 ^ 64 ∧ v.size ≤ Bounds.valueBytesMax
+  | .head c s l k w _ f => c < 2 ^ 64 ∧ s < 2 ^ 64 ∧ l < 2 ^ 64 ∧ k < 2 ^ 64 ∧ w < 2 ^ 64 ∧ f < 2 ^ 64
+  | .row a v u => a < 2 ^ 64 ∧ v.size ≤ Bounds.valueBytesMax ∧ u < 2 ^ 64
 
+/-- A leaf's wire fields within bounds (the same for the World's wire and the pin's preimage: only the
+spelling of the floor and the version differs). -/
 abbrev RowLeafWireFits : (s : Fin 2) → RowLeafF s → Prop
-  | 0 => fun v => v.1 < 2 ^ 64 ∧ v.2.1 < 2 ^ 64 ∧ v.2.2.1 < 2 ^ 64 ∧ v.2.2.2.1 < 2 ^ 64 ∧ v.2.2.2.2.1 < 2 ^ 64 ∧ True
-  | 1 => fun v => v.1 < 2 ^ 64 ∧ v.2.size ≤ Bounds.valueBytesMax
+  | 0 => fun v => v.1 < 2 ^ 64 ∧ v.2.1 < 2 ^ 64 ∧ v.2.2.1 < 2 ^ 64 ∧ v.2.2.2.1 < 2 ^ 64 ∧ v.2.2.2.2.1 < 2 ^ 64 ∧
+      True ∧ v.2.2.2.2.2.2 < 2 ^ 64
+  | 1 => fun v => v.1 < 2 ^ 64 ∧ v.2.1 < 2 ^ 64 ∧ v.2.2.size ≤ Bounds.valueBytesMax
 
 theorem rowLeafWire_lawfulOn : ∀ s, LawfulOn (RowLeafWireFits s) (rowLeafWire s)
   | 0 => product_lawfulOn nat64_lawfulOn (product_lawfulOn nat64_lawfulOn (product_lawfulOn nat64_lawfulOn
-      (product_lawfulOn nat64_lawfulOn (product_lawfulOn nat64_lawfulOn bool_lawful.on))))
-  | 1 => product_lawfulOn nat64_lawfulOn (rawBytes_lawfulOn _ (by decide))
+      (product_lawfulOn nat64_lawfulOn (product_lawfulOn nat64_lawfulOn (product_lawfulOn bool_lawful.on
+        varint64_lawfulOn)))))
+  | 1 => product_lawfulOn nat64_lawfulOn (product_lawfulOn varint64_lawfulOn (rawBytes_lawfulOn _ (by decide)))
 
+theorem rowLeafHashedWire_lawfulOn : ∀ s, LawfulOn (RowLeafWireFits s) (rowLeafHashedWire s)
+  | 0 => product_lawfulOn nat64_lawfulOn (product_lawfulOn nat64_lawfulOn (product_lawfulOn nat64_lawfulOn
+      (product_lawfulOn nat64_lawfulOn (product_lawfulOn nat64_lawfulOn (product_lawfulOn bool_lawful.on
+        nat64_lawfulOn)))))
+  | 1 => product_lawfulOn nat64_lawfulOn (product_lawfulOn nat64_lawfulOn (rawBytes_lawfulOn _ (by decide)))
+
+theorem rowLeafOfWire_toWire (y : RowLeaf) : rowLeafOfWire (rowLeafToWire y) = some y := by
+  cases y <;> rfl
+
+theorem rowLeafToWire_of {x : (s : Fin 2) × RowLeafF s} {y : RowLeaf} (h : rowLeafOfWire x = some y) :
+    rowLeafToWire y = x := by
+  obtain ⟨s, v⟩ := x
+  match s, v, h with
+  | 0, (_, _, _, _, _, _, _), h => simp only [rowLeafOfWire, Option.some.injEq] at h; subst h; rfl
+  | 1, (_, _, _), h => simp only [rowLeafOfWire, Option.some.injEq] at h; subst h; rfl
+
+theorem rowLeafToWire_fits (y : RowLeaf) : RowLeafWireFits (rowLeafToWire y).1 (rowLeafToWire y).2 ↔ RowLeaf.Fits y := by
+  cases y with
+  | head c s l k w r f =>
+    simp only [rowLeafToWire, RowLeafWireFits, RowLeaf.Fits, true_and]
+  | row a v u =>
+    simp only [rowLeafToWire, RowLeafWireFits, RowLeaf.Fits]
+    exact ⟨fun h => ⟨h.1, h.2.2, h.2.1⟩, fun h => ⟨h.1, h.2.2, h.2.1⟩⟩
+
+/-- **The World's rows leaf codec is lawful on the leaves within bounds**: a floor or a version is read
+back only from its shortest varint, so every leaf has one spelling on the World wire. -/
 theorem rowLeaf_lawfulOn : LawfulOn RowLeaf.Fits rowLeaf := by
   unfold rowLeaf
-  refine (refine_lawfulOn (choice_lawfulOn 2 (by decide) rowLeafWire_lawfulOn) "kernel/row-leaf" ?_ ?_).mono ?_ ?_
-  · intro y _; cases y <;> rfl
-  · intro x y h
-    obtain ⟨s, v⟩ := x
-    match s, v, h with
-    | 0, (_, _, _, _, _, _), h => simp at h; subst h; rfl
-    | 1, (_, _), h => simp at h; subst h; rfl
-  · intro y h; cases y <;> simp_all [RowLeaf.Fits, RowLeafWireFits]
-  · intro y h; cases y <;> simp_all [RowLeaf.Fits, RowLeafWireFits]
+  refine (refine_lawfulOn (choice_lawfulOn 2 (by decide) rowLeafWire_lawfulOn) "kernel/row-leaf"
+    (fun y _ => rowLeafOfWire_toWire y) (fun _ _ h => rowLeafToWire_of h)).mono ?_ ?_
+  · intro y h; exact (rowLeafToWire_fits y).mp h
+  · intro y h; exact (rowLeafToWire_fits y).mpr h
 
-/-- **`rowLeafBytes` is `rowLeaf`'s bytes**, for every leaf. -/
-theorem rowLeafBytes_eq (l : RowLeaf) : rowLeafBytes l = rowLeaf.bytes l := by
-  have hk := choice_bytesOn rowLeafWire_lawfulOn (n := 2)
+/-- **Canonicity, exact**, for the World's rows leaf. -/
+theorem rowLeaf_decode_iff {b : ByteArray} {l : RowLeaf} :
+    rowLeaf.decode b = .ok l ↔ RowLeaf.Fits l ∧ b = rowLeaf.bytes l :=
+  rowLeaf_lawfulOn.decode_eq_ok_iff
+
+theorem rowLeafHashed_lawfulOn : LawfulOn RowLeaf.Fits rowLeafHashed := by
+  unfold rowLeafHashed
+  refine (refine_lawfulOn (choice_lawfulOn 2 (by decide) rowLeafHashedWire_lawfulOn) "kernel/row-leaf-hashed"
+    (fun y _ => rowLeafOfWire_toWire y) (fun _ _ h => rowLeafToWire_of h)).mono ?_ ?_
+  · intro y h; exact (rowLeafToWire_fits y).mp h
+  · intro y h; exact (rowLeafToWire_fits y).mpr h
+
+/-- **`rowLeafBytes` is `rowLeafHashed`'s bytes**, for every leaf. -/
+theorem rowLeafBytes_eq (l : RowLeaf) : rowLeafBytes l = rowLeafHashed.bytes l := by
+  have hk := choice_bytesOn rowLeafHashedWire_lawfulOn (n := 2)
   have n64 := @nat64_lawfulOn
   cases l with
-  | head c s lim k w r =>
-    unfold rowLeaf; rw [refine_bytes]; dsimp only
-    rw [hk]; simp only [rowLeafWire]
+  | head c s lim k w r f =>
+    unfold rowLeafHashed; rw [refine_bytes]; simp only [rowLeafToWire]
+    rw [hk]; simp only [rowLeafHashedWire]
     rw [product_bytesOn (product_lawfulOn n64 (product_lawfulOn n64 (product_lawfulOn n64
-        (product_lawfulOn n64 bool_lawful.on)))),
-      product_bytesOn (product_lawfulOn n64 (product_lawfulOn n64 (product_lawfulOn n64 bool_lawful.on))),
-      product_bytesOn (product_lawfulOn n64 (product_lawfulOn n64 bool_lawful.on)),
-      product_bytesOn (product_lawfulOn n64 bool_lawful.on), product_bytesOn bool_lawful.on]
+        (product_lawfulOn n64 (product_lawfulOn bool_lawful.on n64))))),
+      product_bytesOn (product_lawfulOn n64 (product_lawfulOn n64 (product_lawfulOn n64
+        (product_lawfulOn bool_lawful.on n64)))),
+      product_bytesOn (product_lawfulOn n64 (product_lawfulOn n64 (product_lawfulOn bool_lawful.on n64))),
+      product_bytesOn (product_lawfulOn n64 (product_lawfulOn bool_lawful.on n64)),
+      product_bytesOn (product_lawfulOn bool_lawful.on n64), product_bytesOn n64]
     cases r <;> simp only [rowLeafBytes, byte8, Stream.bool, ByteArray.append_assoc] <;> rfl
-  | row a v =>
-    unfold rowLeaf; rw [refine_bytes]; dsimp only
-    rw [hk]; simp only [rowLeafWire]
-    rw [product_bytesOn (rawBytes_lawfulOn _ (by decide))]
+  | row a v u =>
+    unfold rowLeafHashed; rw [refine_bytes]; simp only [rowLeafToWire]
+    rw [hk]; simp only [rowLeafHashedWire]
+    rw [product_bytesOn (product_lawfulOn n64 (rawBytes_lawfulOn _ (by decide))),
+      product_bytesOn (rawBytes_lawfulOn _ (by decide))]
     simp only [rowLeafBytes, byte8, ByteArray.append_assoc]
     rfl
 
 /-- **`rowLeafBytes` is injective on the leaves within bounds**: a row pin (`rowDigest`) binds one leaf,
-up to a collision of its hash. -/
+its floor or version included, up to a collision of its hash. -/
 theorem rowLeafBytes_inj {l l' : RowLeaf} (hl : RowLeaf.Fits l) (hl' : RowLeaf.Fits l')
     (h : rowLeafBytes l = rowLeafBytes l') : l = l' :=
-  rowLeaf_lawfulOn.bytes_injective hl hl' (by rw [← rowLeafBytes_eq, ← rowLeafBytes_eq, h])
+  rowLeafHashed_lawfulOn.bytes_injective hl hl' (by rw [← rowLeafBytes_eq, ← rowLeafBytes_eq, h])
 
-/-- **A leaf's bytes read back as the leaf**, and only bytes of a leaf within bounds read as one. -/
+/-- **A leaf's pin preimage reads back as the leaf**, and only bytes of a leaf within bounds read as one. -/
 theorem rowLeafBytes_decode {b : ByteArray} {l : RowLeaf} :
-    rowLeaf.decode b = .ok l ↔ RowLeaf.Fits l ∧ b = rowLeafBytes l := by
-  rw [rowLeafBytes_eq]; exact rowLeaf_lawfulOn.decode_eq_ok_iff
+    rowLeafHashed.decode b = .ok l ↔ RowLeaf.Fits l ∧ b = rowLeafBytes l := by
+  rw [rowLeafBytes_eq]; exact rowLeafHashed_lawfulOn.decode_eq_ok_iff
 
 /-! ## Acts, touches, range reads -/
 
@@ -234,24 +276,24 @@ theorem rangeRead_lawfulOn {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD d
 the relation and the width below 256, the prefix at most `Bounds.keyBytesMax` bytes, at most
 `Bounds.rowsPerRelationMax` rows, each key within bounds. -/
 def RangePinWire.Fits (PD : D → Prop) (x : RangePinWire D) : Prop :=
-  PD x.1 ∧ x.2.1 < 256 ∧ x.2.2.1 < 256 ∧ x.2.2.2.1.size ≤ Bounds.keyBytesMax ∧
-    (x.2.2.2.2.length ≤ Bounds.rowsPerRelationMax ∧ ∀ p ∈ x.2.2.2.2, RowSlot.Fits PD p.1 ∧ PD p.2)
+  PD x.1 ∧ x.2.1 < 256 ∧ x.2.2.1 < 256 ∧ x.2.2.2.1.size ≤ Bounds.keyBytesMax ∧ x.2.2.2.2.1 < 2 ^ 64 ∧
+    (x.2.2.2.2.2.length ≤ Bounds.rowsPerRelationMax ∧ ∀ p ∈ x.2.2.2.2.2, RowSlot.Fits PD p.1 ∧ PD p.2)
 
 theorem rangePinWire_lawfulOn {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc) :
     LawfulOn (RangePinWire.Fits PD) (rangePinWire dc) := by
   unfold rangePinWire
   refine (refine_lawfulOn (product_lawfulOn hd (product_lawfulOn nat8_lawfulOn (product_lawfulOn (oneOf_lawful _).on
-    (product_lawfulOn nat8_lawfulOn (product_lawfulOn (bytes8_lawfulOn _ (by decide))
-      (rawList_lawfulOn (product_lawfulOn (rowKey_lawfulOn hd) hd) _ (by decide)))))))
+    (product_lawfulOn nat8_lawfulOn (product_lawfulOn (bytes8_lawfulOn _ (by decide)) (product_lawfulOn nat64_lawfulOn
+      (rawList_lawfulOn (product_lawfulOn (rowKey_lawfulOn hd) hd) _ (by decide))))))))
     "kernel/range-pin" ?_ ?_).mono ?_ ?_
   · intro y _; rfl
   · intro x y h
-    obtain ⟨p, rel, ⟨t, ht⟩, w, pre, l⟩ := x
+    obtain ⟨p, rel, ⟨t, ht⟩, w, pre, f, l⟩ := x
     simp at h; subst h
     have : t = 1 := by simpa using ht
     subst this; rfl
-  · intro y h; exact ⟨h.1, h.2.1, h.2.2.2.1, h.2.2.2.2.1, h.2.2.2.2.2⟩
-  · intro y h; exact ⟨h.1, h.2.1, trivial, h.2.2.1, h.2.2.2.1, h.2.2.2.2⟩
+  · intro y h; exact ⟨h.1, h.2.1, h.2.2.2.1, h.2.2.2.2.1, h.2.2.2.2.2.1, h.2.2.2.2.2.2⟩
+  · intro y h; exact ⟨h.1, h.2.1, trivial, h.2.2.1, h.2.2.2.1, h.2.2.2.2.1, h.2.2.2.2.2⟩
 
 private theorem foldl_pin {E : Env D} {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc)
     (hb : ∀ d, dc.bytes d = E.bytes d) : ∀ (l : List (RowSlot D × RowLeaf)) (acc : ByteArray),
@@ -265,18 +307,19 @@ private theorem foldl_pin {E : Env D} {PD : D → Prop} {dc : Stream D} (hd : La
 
 /-- **`rangePinBytes` is `rangePinWire`'s bytes**, the listing taken as each row's key and leaf digest. -/
 theorem rangePinBytes_eq {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc) {E : Env D}
-    (hb : ∀ d, dc.bytes d = E.bytes d) (parent : D) (rel width : Nat) (pre : ByteArray)
+    (hb : ∀ d, dc.bytes d = E.bytes d) (parent : D) (rel width : Nat) (pre : ByteArray) (floor : Nat)
     (l : List (RowSlot D × RowLeaf)) :
-    rangePinBytes E parent rel width pre l =
-      (rangePinWire dc).bytes (parent, rel, width, pre, l.map fun q => (q.1, rowDigest E q.2)) := by
+    rangePinBytes E parent rel width pre floor l =
+      (rangePinWire dc).bytes (parent, rel, width, pre, floor, l.map fun q => (q.1, rowDigest E q.2)) := by
   have hl := rawList_lawfulOn (product_lawfulOn (rowKey_lawfulOn hd) hd) Bounds.rowsPerRelationMax (by decide)
-  have h5 := product_lawfulOn (bytes8_lawfulOn Bounds.keyBytesMax (by decide)) hl
+  have h6 := product_lawfulOn nat64_lawfulOn hl
+  have h5 := product_lawfulOn (bytes8_lawfulOn Bounds.keyBytesMax (by decide)) h6
   have h4 := product_lawfulOn nat8_lawfulOn h5
   have h3 := product_lawfulOn (oneOf_lawful #[1]).on h4
   have h2 := product_lawfulOn nat8_lawfulOn h3
   unfold rangePinWire
-  rw [refine_bytes, product_bytesOn h2, product_bytesOn h3, product_bytesOn h4, product_bytesOn h5, product_bytesOn hl,
-    rawList_bytes (product_lawfulOn (rowKey_lawfulOn hd) hd), bytes8_bytes, hb]
+  rw [refine_bytes, product_bytesOn h2, product_bytesOn h3, product_bytesOn h4, product_bytesOn h5, product_bytesOn h6,
+    product_bytesOn hl, rawList_bytes (product_lawfulOn (rowKey_lawfulOn hd) hd), bytes8_bytes, hb]
   simp only [rangePinBytes, rowsPrefix, byte8, nat8_bytes, u8_bytes, nat32_bytes, List.length_map]
   rw [foldl_pin hd hb, ByteArray.empty_append]
   simp only [ByteArray.append_assoc]
@@ -286,11 +329,11 @@ theorem rangePinBytes_eq {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc)
 relation, width and prefix, and one listing of (key, leaf digest). -/
 theorem rangePinBytes_inj {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc) {E : Env D}
     (hb : ∀ d, dc.bytes d = E.bytes d) {p p' : D} {rel rel' w w' : Nat} {pre pre' : ByteArray}
-    {l l' : List (RowSlot D × RowLeaf)}
-    (hx : RangePinWire.Fits PD (p, rel, w, pre, l.map fun q => (q.1, rowDigest E q.2)))
-    (hx' : RangePinWire.Fits PD (p', rel', w', pre', l'.map fun q => (q.1, rowDigest E q.2)))
-    (h : rangePinBytes E p rel w pre l = rangePinBytes E p' rel' w' pre' l') :
-    p = p' ∧ rel = rel' ∧ w = w' ∧ pre = pre' ∧
+    {f f' : Nat} {l l' : List (RowSlot D × RowLeaf)}
+    (hx : RangePinWire.Fits PD (p, rel, w, pre, f, l.map fun q => (q.1, rowDigest E q.2)))
+    (hx' : RangePinWire.Fits PD (p', rel', w', pre', f', l'.map fun q => (q.1, rowDigest E q.2)))
+    (h : rangePinBytes E p rel w pre f l = rangePinBytes E p' rel' w' pre' f' l') :
+    p = p' ∧ rel = rel' ∧ w = w' ∧ pre = pre' ∧ f = f' ∧
       l.map (fun q => (q.1, rowDigest E q.2)) = l'.map (fun q => (q.1, rowDigest E q.2)) := by
   have := (rangePinWire_lawfulOn hd).bytes_injective hx hx'
     (by rw [← rangePinBytes_eq hd hb, ← rangePinBytes_eq hd hb, h])
@@ -299,11 +342,11 @@ theorem rangePinBytes_inj {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc
 
 /-- **A range pin's input reads back**, and only an input within bounds reads as one. -/
 theorem rangePinBytes_decode {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc) {E : Env D}
-    (hb : ∀ d, dc.bytes d = E.bytes d) (parent : D) (rel width : Nat) (pre : ByteArray)
+    (hb : ∀ d, dc.bytes d = E.bytes d) (parent : D) (rel width : Nat) (pre : ByteArray) (floor : Nat)
     (l : List (RowSlot D × RowLeaf))
-    (hx : RangePinWire.Fits PD (parent, rel, width, pre, l.map fun q => (q.1, rowDigest E q.2))) :
-    (rangePinWire dc).decode (rangePinBytes E parent rel width pre l) =
-      .ok (parent, rel, width, pre, l.map fun q => (q.1, rowDigest E q.2)) := by
+    (hx : RangePinWire.Fits PD (parent, rel, width, pre, floor, l.map fun q => (q.1, rowDigest E q.2))) :
+    (rangePinWire dc).decode (rangePinBytes E parent rel width pre floor l) =
+      .ok (parent, rel, width, pre, floor, l.map fun q => (q.1, rowDigest E q.2)) := by
   rw [rangePinBytes_eq hd hb]; exact (rangePinWire_lawfulOn hd).decode_bytes hx
 
 end Nanodregg.Codec.Kernel

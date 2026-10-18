@@ -115,9 +115,10 @@ theorem deployed_slot_inclusion_sound (program : Program Digest) {name nonce : B
 theorem deployed_live_inclusion_sound (program : Program Digest) {name nonce : ByteArray} {allowance : Nat}
     {founders : List (ByteArray × Digest)} {g w : World Digest} {l : List (Step Digest)}
     (hg : genesis (ctx program) name nonce allowance founders = .ok g) (hl : World.fold env g l = .ok w)
-    {c : Digest} {cell : Cell} (hcf : Nanodregg.Codec.Kernel.Cell.Fits cell) {p : Trie.Proof (Slot Digest) Digest}
-    (hv : Trie.verifyInclusion (trieSpec env) (w.root env) (.cell c) (leafDigest env (.entry (.live cell))) p = true) :
-    w.live env c = some cell ∨ Collision env.hash :=
+    {c : Digest} {cell : Cell} {v : Nat} (hcf : (Leaf.entry (.live cell v)).CellFit Nanodregg.Codec.Kernel.Cell.Fits)
+    {p : Trie.Proof (Slot Digest) Digest}
+    (hv : Trie.verifyInclusion (trieSpec env) (w.root env) (.cell c) (leafDigest env (.entry (.live cell v))) p = true) :
+    w.entry env c = some (.live cell v) ∨ Collision env.hash :=
   live_inclusion_sound deployed_lawful (deployed_reach program hg hl).1 (deployed_reach program hg hl).2
     hcf hv
 

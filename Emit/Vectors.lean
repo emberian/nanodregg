@@ -68,6 +68,14 @@ def list1 {α : Type} (max : Nat) (g : G α) : G (List α) := do
 def opt {α : Type} (g : G α) : G (Option α) := do
   if (← below 2) = 0 then return none else return some (← g)
 
+/-- A version or a floor (KERNEL-54): one varint byte, two, three, or the whole u64 range (up to ten). -/
+def version : G Nat := do
+  match ← below 4 with
+  | 0 => below 128
+  | 1 => return 128 + (← below (2 ^ 14 - 128))
+  | 2 => return 2 ^ 14 + (← below (2 ^ 21 - 2 ^ 14))
+  | _ => nat64
+
 def discipline : G Discipline := do
   match ← below 4 with | 0 => return .rom | 1 => return .appendOnly | 2 => return .ram | _ => return .value
 def slots : G Slots := list 2 (do return (← nat32, ← bytes 4))
@@ -92,8 +100,9 @@ def rowSlot (k : Nat) : G (RowSlot Sim.D) := do
   if k = 0 then return .head (← dig) (← below 256)
   else return .row ⟨← dig, ← below 256, ← bytes 6⟩
 def rowLeaf (k : Nat) : G RowLeaf := do
-  if k = 0 then return .head (← below 9) (← below 900) (← below 4096) (← nat64) (← below 129) ((← below 2) = 0)
-  else return .row (← nat64) (← bytes 6)
+  if k = 0 then
+    return .head (← below 9) (← below 900) (← below 4096) (← nat64) (← below 129) ((← below 2) = 0) (← version)
+  else return .row (← nat64) (← bytes 6) (← version)
 def rowAct (k : Nat) : G RowAct := do
   match k with
   | 0 => return .keep
@@ -124,10 +133,10 @@ def rows (ps : List Sim.D) : G (List (RowSlot Sim.D × RowLeaf)) := do
     for k in uniq do
       let amt ← below 50
       sum := sum + amt
-      rs := rs ++ [(RowSlot.row ⟨p, rel, k⟩, RowLeaf.row amt (← bytes 6))]
+      rs := rs ++ [(RowSlot.row ⟨p, rel, k⟩, RowLeaf.row amt (← bytes 6) (← version))]
     let limit := uniq.length + (← below 3)
     let cap := sum + (← below 100)
-    out := out ++ (RowSlot.head p rel, RowLeaf.head uniq.length sum limit cap width ((← below 2) = 0)) :: rs
+    out := out ++ (RowSlot.head p rel, RowLeaf.head uniq.length sum limit cap width ((← below 2) = 0) (← version)) :: rs
   return out
 
 /-- The canonical rows trie of a listing (KERNEL-48). -/
@@ -168,7 +177,7 @@ def unsigned (k : Nat) : G (Unsigned Sim.D) := do
 def trie : G (Cells Sim.D) := do
   let ks ← list1 3 (do
     if (← below 2) = 0 then
-      let e : Entry ← if (← below 2) = 0 then (do return .live (← cell)) else pure .tomb
+      let e : Entry ← if (← below 2) = 0 then (do return .live (← cell) (← version)) else pure .tomb
       return ((Slot.cell (← dig) : Slot Sim.D), Leaf.entry e)
     else return (.nullifier (← dig), Leaf.spent))
   return Trie.build (trieSpec Sim.env) (trieSpec Sim.env).depth 0 ks
@@ -227,11 +236,11 @@ def refusalsOf (l : List (RefusalSlot Sim.D × RefusalLeaf Sim.D)) : Refusals Si
 
 /-- The live cells of a cells trie: the parents a relation may sit under. -/
 def liveIds (t : Cells Sim.D) : List Sim.D :=
-  t.toList.filterMap fun p => match p with | (.cell c, .entry (.live _)) => some c | _ => none
+  t.toList.filterMap fun p => match p with | (.cell c, .entry (.live _ _)) => some c | _ => none
 
 /-- A cells trie with one more live cell, `p`. -/
 def withLive (t : Cells Sim.D) (p : Sim.D) : Cells Sim.D :=
-  Trie.build (trieSpec Sim.env) (trieSpec Sim.env).depth 0 (t.toList ++ [(.cell p, .entry (.live ⟨0, .ram, []⟩))])
+  Trie.build (trieSpec Sim.env) (trieSpec Sim.env).depth 0 (t.toList ++ [(.cell p, .entry (.live ⟨0, .ram, []⟩ 0))])
 
 def world : G (World Sim.D) := do
   let h := (← below 1000) + 3
@@ -415,11 +424,22 @@ def rangeReadVecs : G (List (RangeRead Sim.D)) := do
 def rangePinVec : G (RangePinWire Sim.D) := do
   let l ← rows [← dig]
   match l with
-  | (.head p rel, .head _ _ _ _ width _) :: _ =>
+  | (.head p rel, .head _ _ _ _ width _ floor) :: _ =>
     let rs := (rowsOf l).toList.filter fun q => match q.1 with
       | .row k => decide (k.parent = p) && decide (k.rel = rel) | _ => false
-    return (p, rel, width, ByteArray.empty, rs.map fun q => (q.1, rowDigest Sim.env q.2))
-  | _ => return (← dig, 0, 0, ByteArray.empty, [])
+    return (p, rel, width, ByteArray.empty, floor, rs.map fun q => (q.1, rowDigest Sim.env q.2))
+  | _ => return (← dig, 0, 0, ByteArray.empty, 0, [])
+
+/-- `kernel/range-pin`'s vectors: two drawn, then the floor at its largest (2^64 − 1, KERNEL-54; the floor is
+eight bytes in the preimage, so every eight bytes read back and the bound is the counter limit's), and the
+same input one byte short, refused `truncated`. -/
+def rangePinVecs : G (List ByteArray) := do
+  let c := Codec.Kernel.rangePinWire Sim.dc
+  let drawn ← each 2 fun _ => do return c.bytes (← rangePinVec)
+  let (p, rel, w, pre, _, _) ← rangePinVec
+  -- the floor last before an empty listing: cut into the listing's count, the input is `truncated`
+  let top := c.bytes (p, rel, w, pre, 2 ^ 64 - 1, [])
+  return drawn ++ [top, top.extract 0 (top.size - 1)]
 
 /-- `kernel/rows`' vectors: two drawn Worlds, then the cap's boundary pair: a relation whose one row's amount
 is exactly its cap, its head counting and summing it (read back), and the same World one past it (refused
@@ -430,7 +450,7 @@ def rowsVecs : G (List (WorldWire Sim.D)) := do
   let p ← dig
   let k ← bytesN 2
   let at_ (sum : Nat) : World Sim.D :=
-    { w with rows := rowsOf (w.rows.toList ++ [(.head p 7, .head 1 sum 4 40 2 true), (.row ⟨p, 7, k⟩, .row sum ByteArray.empty)]) }
+    { w with rows := rowsOf (w.rows.toList ++ [(.head p 7, .head 1 sum 4 40 2 true 0), (.row ⟨p, 7, k⟩, .row sum ByteArray.empty 0)]) }
   return drawn ++ [toWire (at_ 40), toWire (at_ 41)]
 
 /-- `kernel/rows-headed`'s vectors: two drawn Worlds, then the count's boundary pair: a head counting
@@ -441,7 +461,7 @@ def headedVecs : G (List (WorldWire Sim.D)) := do
   let p ← dig
   let k ← bytesN 3
   let at_ (count : Nat) : World Sim.D :=
-    { w with rows := rowsOf (w.rows.toList ++ [(.head p 9, .head count 5 4 40 3 true), (.row ⟨p, 9, k⟩, .row 5 ByteArray.empty)]) }
+    { w with rows := rowsOf (w.rows.toList ++ [(.head p 9, .head count 5 4 40 3 true 0), (.row ⟨p, 9, k⟩, .row 5 ByteArray.empty 0)]) }
   return drawn ++ [toWire (at_ 1), toWire (at_ 2)]
 
 /-- `kernel/carried-rows` / `-headed`: two drawn carried states, then the World vectors' boundary rows. -/
@@ -451,7 +471,7 @@ def carriedRowsVecs (forCap : Bool) : G (List (CarriedWire Sim.D)) := do
   let p ← dig
   let k ← bytesN 3
   let at_ (count sum : Nat) : Carried Sim.D :=
-    { c with rows := rowsOf (c.rows.toList ++ [(.head p 9, .head count sum 4 40 3 true), (.row ⟨p, 9, k⟩, .row sum ByteArray.empty)]) }
+    { c with rows := rowsOf (c.rows.toList ++ [(.head p 9, .head count sum 4 40 3 true 0), (.row ⟨p, 9, k⟩, .row sum ByteArray.empty 0)]) }
   return drawn ++ (if forCap then [carriedToWire (at_ 1 40), carriedToWire (at_ 1 41)]
     else [carriedToWire (at_ 1 5), carriedToWire (at_ 2 5)])
 
@@ -462,7 +482,7 @@ def parentedVecs : G (List (WorldWire Sim.D)) := do
   let w ← Vectors.world
   let p ← dig
   let k ← bytesN 3
-  let r := rowsOf (w.rows.toList ++ [(.head p 9, .head 1 5 4 40 3 true), (.row ⟨p, 9, k⟩, .row 5 ByteArray.empty)])
+  let r := rowsOf (w.rows.toList ++ [(.head p 9, .head 1 5 4 40 3 true 0), (.row ⟨p, 9, k⟩, .row 5 ByteArray.empty 0)])
   return drawn ++ [toWire { w with trie := withLive w.trie p, rows := r }, toWire { w with rows := r }]
 
 /-- `kernel/carried-rows-parented`'s vectors: the same pair over a carried state. -/
@@ -471,7 +491,7 @@ def carriedParentedVecs : G (List (CarriedWire Sim.D)) := do
   let c ← Vectors.carried
   let p ← dig
   let k ← bytesN 3
-  let r := rowsOf (c.rows.toList ++ [(.head p 9, .head 1 5 4 40 3 true), (.row ⟨p, 9, k⟩, .row 5 ByteArray.empty)])
+  let r := rowsOf (c.rows.toList ++ [(.head p 9, .head 1 5 4 40 3 true 0), (.row ⟨p, 9, k⟩, .row 5 ByteArray.empty 0)])
   return drawn ++ [carriedToWire { c with trie := withLive c.trie p, rows := r }, carriedToWire { c with rows := r }]
 
 /-! ### A relation key (LANG-57)
@@ -500,6 +520,54 @@ def keyVecs : List ByteArray :=
   let full := keyVec 256 false 32
   [keyVec 0 false 32, keyVec 1 false 32, keyVec 255 false 32, full, keyVec (2 ^ 64 - 1) false 32,
     keyVec 1 false 31, keyVec 1 true 32, full.extract 0 (full.size - 1)]
+
+/-! ### Versions and floors (KERNEL-54)
+
+The u64 varint's own rows: 0, 127, 128 (the one-byte boundary pair), 2^64 − 1 (ten bytes, read back),
+then refused by name: 2^64 (nine `80` then a tenth byte of 2, `pastBound`), an eleventh byte (`pastBound 10 11`), a
+non-minimal spelling of 0 (`80 00`, `varint/overlong`) and a continuation with no next byte (`truncated`).
+The entry and the World's row leaf each carry the boundary through their own codec: the largest
+version (and floor) read back, and the same field spelled 2^64, eleven bytes long, or overlong refused. -/
+
+def varint64Vecs : List ByteArray :=
+  [Stream.varint64.bytes 0, Stream.varint64.bytes 127, Stream.varint64.bytes 128,
+    Stream.varint64.bytes (2 ^ 64 - 1),
+    ⟨#[0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x02]⟩,
+    ⟨#[0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x81, 0x00]⟩,
+    ⟨#[0x80, 0x00]⟩, ⟨#[0x80]⟩]
+
+/-- A live entry whose version is spelled `ver` (raw bytes), then `c`. -/
+def rawLive (ver : ByteArray) (c : Cell) : ByteArray :=
+  ⟨#[0]⟩ ++ ver ++ Codec.Kernel.cell.bytes c
+
+def entryVecs : G (List ByteArray) := do
+  let c ← cell
+  return [Codec.Kernel.entry.bytes (.live (← cell) (← version)), Codec.Kernel.entry.bytes .tomb,
+    Codec.Kernel.entry.bytes (.live c (2 ^ 64 - 1)),
+    rawLive ⟨#[0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x02]⟩ c,
+    rawLive ⟨#[0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x81, 0x00]⟩ c,
+    rawLive ⟨#[0x80, 0x00]⟩ c]
+
+def rowLeafVecs : G (List ByteArray) := do
+  let drawn ← each 2 fun k => do return Codec.Kernel.rowLeaf.bytes (← Vectors.rowLeaf k)
+  let amt ← nat64
+  let v ← bytes 6
+  let raw (ver : ByteArray) : ByteArray :=
+    ⟨#[1]⟩ ++ Stream.nat64.bytes amt ++ ver ++ (Stream.rawBytes Bounds.valueBytesMax).bytes v
+  let head := Codec.Kernel.rowLeaf.bytes (.head 1 2 3 4 5 true 0)
+  let rawHead (floor : ByteArray) : ByteArray := head.extract 0 (head.size - 1) ++ floor
+  return drawn ++ [Codec.Kernel.rowLeaf.bytes (.row amt v (2 ^ 64 - 1)),
+    raw ⟨#[0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x02]⟩,
+    raw ⟨#[0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x81, 0x00]⟩, raw ⟨#[0x80, 0x00]⟩,
+    Codec.Kernel.rowLeaf.bytes (.head 1 2 3 4 5 true (2 ^ 64 - 1)),
+    rawHead ⟨#[0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x02]⟩, rawHead ⟨#[0x80, 0x00]⟩]
+
+/-- The row pin's preimage: two drawn, then the floor at its largest (2^64 − 1, all eight bytes) and the same
+leaf one byte short (`truncated`: a fixed-width field has no larger value to refuse). -/
+def rowLeafHashedVecs : G (List ByteArray) := do
+  let drawn ← each 2 fun k => do return Codec.Kernel.rowLeafHashed.bytes (← Vectors.rowLeaf k)
+  let top := Codec.Kernel.rowLeafHashed.bytes (.head 1 2 3 4 5 false (2 ^ 64 - 1))
+  return drawn ++ [top, top.extract 0 (top.size - 1)]
 
 /-! ### A package (cv 01a14e58-1586, LANG-15's set)
 
@@ -585,11 +653,12 @@ def sites : List Site :=
     site "kernel/body" (Codec.Kernel.body Sim.dc) (each 13 Vectors.body) text,
     site "kernel/unsigned" (Codec.Kernel.unsigned Sim.dc) (each 2 fun k => Vectors.unsigned (k * 6)) text,
     site "kernel/call" (Codec.Kernel.call Sim.dc) (each 2 fun k => do return ⟨← Vectors.unsigned (k * 7), ← bytes 8⟩) text,
-    site "kernel/entry" Codec.Kernel.entry (each 2 fun k => if k = 0 then do return .live (← Vectors.cell) else pure .tomb) text,
+    ⟨"varint64", Tag.of "varint64" Stream.varint64, pure varint64Vecs, print Stream.varint64 text⟩,
+    ⟨"kernel/entry", Tag.of "kernel/entry" Codec.Kernel.entry, entryVecs, print Codec.Kernel.entry text⟩,
     site "kernel/slot" (Codec.Kernel.slot Sim.dc) (each 2 fun k => if k = 0 then do return .cell (← dig) else do return .nullifier (← dig))
       text,
     site "kernel/leaf" Codec.Kernel.leaf (each 3 fun k => match k with
-      | 0 => do return .entry (.live (← Vectors.cell)) | 1 => pure (.entry .tomb) | _ => pure .spent) text,
+      | 0 => do return .entry (.live (← Vectors.cell) (← version)) | 1 => pure (.entry .tomb) | _ => pure .spent) text,
     site "kernel/leaf-fit" (fitList Sim.dc) (each 2 fun _ => (·.toList) <$> trie) text,
     site "kernel/trie-order" (cells Sim.env Sim.dc) (each 2 fun _ => trie) (fun t => text t.toList),
     site "kernel/journal-order" (journalTrie Sim.env Sim.dc)
@@ -602,11 +671,14 @@ def sites : List Site :=
     site "kernel/refusal-order" (refusalsTrie Sim.env Sim.dc)
       (each 2 fun _ => do return refusalsOf (← refusals ((← below 1000) + 3))) (fun t => text t.toList),
     site "kernel/row-key" (Codec.Kernel.rowKey Sim.dc) rowKeyVecs text,
-    site "kernel/row-leaf" Codec.Kernel.rowLeaf (each 2 Vectors.rowLeaf) text,
+    ⟨"kernel/row-leaf", Tag.of "kernel/row-leaf" Codec.Kernel.rowLeaf, rowLeafVecs, print Codec.Kernel.rowLeaf text⟩,
+    ⟨"kernel/row-leaf-hashed", Tag.of "kernel/row-leaf-hashed" Codec.Kernel.rowLeafHashed, rowLeafHashedVecs,
+      print Codec.Kernel.rowLeafHashed text⟩,
     site "kernel/row-act" Codec.Kernel.rowAct (each 5 Vectors.rowAct) text,
     site "kernel/row-touch" (Codec.Kernel.rowTouch Sim.dc) (each 2 fun _ => Vectors.rowTouch) text,
     site "kernel/range-read" (Codec.Kernel.rangeRead Sim.dc) rangeReadVecs text,
-    site "kernel/range-pin" (Codec.Kernel.rangePinWire Sim.dc) (each 2 fun _ => rangePinVec) text,
+    ⟨"kernel/range-pin", Tag.of "kernel/range-pin" (Codec.Kernel.rangePinWire Sim.dc), rangePinVecs,
+      print (Codec.Kernel.rangePinWire Sim.dc) text⟩,
     site "kernel/row-order" (rowsTrie Sim.env Sim.dc) (each 2 fun _ => do return rowsOf (← rows [← dig]))
       (fun t => text t.toList),
     site "kernel/rows" (rowsWire Sim.env Sim.dc) rowsVecs printWire,

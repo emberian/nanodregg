@@ -5,7 +5,8 @@ A `Turn` is deterministic data: everything the follower needs to reproduce the W
 log with `World.admit` alone, and nothing it would have to trust. It carries
 
 * `touches` — every existing (or pinned-absent) cell the turn names, each ONCE: the digest of
-  what the signer saw (`pinOf (some cell)`, or `pinOf none` for "this cell does not exist") and
+  what the signer saw (`pinOf` of its entry: a live cell with its version, a tombstone, or `none` for
+  "this id holds nothing") and
   what the turn does to it (`keep`, `write ops`, `retire`). The pin is the one staleness refusal
   (`Reject.stale`); a turn writes or retires only a cell it observed, so its effect on every cell
   it changes is a function of the observation, and admit looks each cell up exactly once.
@@ -59,10 +60,16 @@ inductive RowSlot (D : Type)
 /-- What the rows trie holds: at a head, the relation's row count and `amt` sum (written by the
 kernel only, `head_sum`), its row `limit`, its sum `cap` (0: no sum column), the key `width`, and
 whether rows may be retracted; at a row, its `amt` (the declared sum column, a kernel field beside
-the bytes: the kernel never parses Lang data) and its value bytes. -/
+the bytes: the kernel never parses Lang data) and its value bytes.
+KERNEL-54: a row carries its version (its relation's floor at its insert, one more per upsert), and a
+head its floor (0 at its declare, raised by each retract past the version of the row it removes, by
+nothing else while its parent lives, so inserts commute). While the parent lives, a row slot's leaf and
+absence-at-floor never recur, so a row or range pin observed once and stale is behind for ever; a
+retired parent drops its heads (`dropHeads`, its floor reads 0 again), and its slots are dead: every
+row touch and range read under it is refused before a pin is read. -/
 inductive RowLeaf
-  | head (count sum limit cap width : Nat) (retract : Bool)
-  | row (amt : Nat) (val : ByteArray)
+  | head (count sum limit cap width : Nat) (retract : Bool) (floor : Nat)
+  | row (amt : Nat) (val : ByteArray) (ver : Nat)
   deriving DecidableEq
 
 /-- What a turn does to a row slot. `insert` is unpinned (it binds on the current World:
@@ -155,18 +162,19 @@ def RangeRead.weight {D : Type} (q : RangeRead D) : Nat :=
   2 * digestWeight + 2 + counterWeight + q.pre.size
 
 /-- What a rows leaf holds in the World beyond its key (`Kernel.rowEntryWeight`): a head its kind
-byte, five counters and the retract flag; a row its kind byte, its amt and its length-prefixed value. -/
+byte, five counters, the retract flag and its floor; a row its kind byte, its amt, its version and its
+length-prefixed value. -/
 def RowLeaf.weight : RowLeaf → Nat
-  | .head .. => 1 + 5 * counterWeight + 1
-  | .row _ v => 1 + counterWeight + headerWeight + v.size
+  | .head .. => 1 + 5 * counterWeight + 1 + counterWeight
+  | .row _ v _ => 1 + 2 * counterWeight + headerWeight + v.size
 
 /-- The most a row touch adds to the World (KERNEL-46 amendment 5): a declare its head, an insert or
 an upsert its whole row with its key. An upsert of a row that exists, and a retract, give back the
 row they replace or remove (`Kernel.rowFreed`), as a touch gives back what a cell does not grow. -/
 def RowTouch.growth {D : Type} (x : RowTouch D) : Nat :=
   match x.act with
-  | .declare l c w r => x.slot.weight + (RowLeaf.head 0 0 l c w r).weight
-  | .insert a v | .upsert a v => x.slot.weight + (RowLeaf.row a v).weight
+  | .declare l c w r => x.slot.weight + (RowLeaf.head 0 0 l c w r 0).weight
+  | .insert a v | .upsert a v => x.slot.weight + (RowLeaf.row a v 0).weight
   | _ => 0
 
 /-- A touch in the log: id, seen digest and the act. -/
@@ -192,7 +200,7 @@ amendment 5). A retirement and an overwrite only shrink or keep a cell; an upser
 row and a retract are credited back. Its journal entry is not growth: the journal is pruned to the
 window (KERNEL-33), a bounded overhead of every World. -/
 def Turn.growth {D : Type} (t : Turn D) : Nat :=
-  (t.creates.map fun p => digestWeight + p.2.weight).sum
+  (t.creates.map fun p => digestWeight + counterWeight + p.2.weight).sum
     + (t.touches.map fun x => x.act.opsWeight).sum
     + digestWeight * t.nullifiers.length
     + (t.rows.map RowTouch.growth).sum

@@ -345,14 +345,27 @@ def body (X : Ctx D) (me : Self D) (w : World D) (s : Signed) : Cmd D → Except
   | .credit wl acct n via => .ok (.credit wl acct n via)
   | .init _ | .read _ _ | .describe _ | .rangeRead .. | .adopt _ _ | .sync | .invite _ | .receipt _ => .error .badState
 
-/-- Derive with the signature not yet known, pinning each cell the derivation asks for. -/
+/-- The row pin follow states for a row slot of its World (KERNEL-54): the leaf's digest, or absence
+at its relation's floor, read from the rows trie it holds. -/
+def rowPinAt (E : Env D) (w : World D) (key : RowKey D) : RowSlot D × D :=
+  (.row key, rowPin E (headFloor E w.rows key.parent key.rel) (rowAt E w.rows (.row key)))
+
+/-- Derive with the signature not yet known, pinning each cell, and each row (KERNEL-54: the
+receiver's `rowUnpinned` names the row's key), the derivation asks for. A row already pinned and
+asked for again is the receiver's own refusal (a pinned act on a slot no row pin can name), never a
+loop. -/
 def derivePins (X : Ctx D) (w : World D) : Nat → Unsigned D → Except (Refusal D) (Unsigned D × Turn D)
   | 0, _ => .error .tooManyPins
   | fuel + 1, u =>
       let look := pinned X.env w u.pins
       match (do keyRule look u; deriveTurn X look (rowView X.env w u) ⟨u, ByteArray.empty⟩) with
       | .error (.unpinned c) =>
-          derivePins X w fuel { u with pins := u.pins ++ [(c, pinOf X.env (w.live X.env c))] }
+          derivePins X w fuel { u with pins := u.pins ++ [(c, pinOf X.env (w.entry X.env c))] }
+      | .error (.rowUnpinned parent rel k) =>
+          if u.rowPins.any (fun p => p.1 = .row ⟨parent, rel, k⟩) then
+            .error (.receive (.rowUnpinned parent rel k))
+          else
+            derivePins X w fuel { u with rowPins := u.rowPins ++ [rowPinAt X.env w ⟨parent, rel, k⟩] }
       | .error r => .error (.receive r)
       | .ok t => .ok (u, t)
 
@@ -776,19 +789,43 @@ def envelopeRefused (X : Ctx D) (me : Self D) (argv : List ByteArray) (cmd : Cmd
             envelopeSign tried (envelopeMessage X me h upTo') k
   | _, _, _, _ => refused (D := D) .badState
 
+/-- KERNEL-54, the attempt side (PROTOCOL-15's conditions 1 and 2): is the call stale BEHIND on
+follow's own fold? Only the member's OWN call for its own World (custody signs only what follow
+planned, and `plan` signs `notBefore` = the planning World's height and pins from that World, a
+World of follow's fold), planned at a height follow has reached (`notBefore ≤ w.height`: every World
+of one height holds the same entries, refusal steps change none), whose Turn follow's World now
+refuses `stale`. Then the pin was observed on the fold and is stale now, so it is stale at every
+World the fold reaches (`Kernel.stale_behind_forever`). A planning height follow has not reached
+(AHEAD), another member's call (unplaceable), or any other verdict: `false`, and the settlement
+stays `open`. -/
+def staleBehind (X : Ctx D) (me : Self D) (w : World D) (c : Call D) : Bool :=
+  decide (c.unsigned.member = me.member) && decide (c.unsigned.world = me.world) &&
+    decide (c.unsigned.notBefore ≤ w.height) &&
+    match receive X w c with
+    | .ok t =>
+      match World.admit X.env w t with
+      | .error (.stale _) => true
+      | _ => false
+    | .error _ => false
+
+/-- The member's settlement of a call on follow's World: the receipt's answer, the journal's
+reach, follow's own fold's `staleBehind` (KERNEL-54) and the window (`Settle.ofReceipt`). -/
+def settleOf (X : Ctx D) (me : Self D) (w : World D) (c : Call D) : Settle.Verdict D :=
+  Settle.ofReceipt (journalForgets w.height c.unsigned.notBefore) (staleBehind X me w c)
+    w.height c.unsigned.validUntil (Receipt.build X.env w (txIdOf X c)).answer
+
 /-- The `receipt CALL` lines: the receipt, the head it was built at, and the settlement. -/
-def receiptText (X : Ctx D) (dc : Stream D) (w : World D) (c : Call D) : Option String :=
+def receiptText (X : Ctx D) (dc : Stream D) (me : Self D) (w : World D) (c : Call D) : Option String :=
   let r := Receipt.build X.env w (txIdOf X c)
-  let v := Settle.ofReceipt (journalForgets w.height c.unsigned.notBefore) w.height
-    c.unsigned.validUntil r.answer
+  let v := settleOf X me w c
   (Receipt.bytes X.env dc r).map fun b =>
     s!"receipt {Text.toHex b}\nhead {w.steps} {w.height} {hex X (w.roots X.env)}\nsettle {v.text X.env.bytes}\n"
 
-def receiptLines (X : Ctx D) (dc : Stream D) (w : World D) (cb : ByteArray) : Reply :=
+def receiptLines (X : Ctx D) (dc : Stream D) (me : Self D) (w : World D) (cb : ByteArray) : Reply :=
   match X.decodeCall cb with
   | none => refused (D := D) .badCall
   | some c =>
-      match receiptText X dc w c with
+      match receiptText X dc me w c with
       | some t => printed t
       | none => refused (D := D) .badState
 
@@ -926,7 +963,7 @@ def step (X : Ctx D) (dc : Stream D) (B : Thin.Base (World D)) (me : Self D) (f 
                           s!"height {w'.height}\nchain {hex X w'.chain}\nroots {hex X (w'.roots X.env)}\n")
                       -- the receipt for a signed call, against the World follow just caught up to,
                       -- and the member's settlement of it (PROTOCOL-46)
-                      | .receipt cb, _ => moved w' ts (receiptLines X dc w' cb)
+                      | .receipt cb, _ => moved w' ts (receiptLines X dc me w' cb)
                       | .rotate, some _ => moved w' ts (again 5 [startB, signedB] fun k => .precommit k)
                       -- invite: the inputs make this World; pin the newest base follow verified
                       -- itself (`pinOf`), sign with the key the writer just took for this

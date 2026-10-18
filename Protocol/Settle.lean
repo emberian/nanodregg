@@ -68,6 +68,13 @@ and decides it here:
   keeps `settle_final_never_admits` free of any absorption premise;
 * `expired`: absent, and the head is at or past the call's `validUntil`; final (no later World
   admits it: the kernel's window);
+* `refused stale` (KERNEL-54): absent while the window is live, and follow's own fold says the
+  member's call is stale BEHIND (`behind`, `Command.staleBehind`): the member's own call, planned on
+  a World of follow's fold (its `notBefore` at most follow's height), whose pins follow's World now
+  refuses `stale`. A pin observed on the fold and stale now is stale at every World the fold reaches
+  (`Kernel.stale_behind_forever`), so the call never lands; final without a record (the writer
+  declines a stale, never records it). AHEAD (a planning height follow has not reached) or a call
+  follow did not plan is not `behind`: it settles `open`;
 * `open`: absent while the window is live. NOT final: whoever holds the signed bytes (the Host,
   any relay) may still land them;
 * `forgotten`: absent past `journalForgets`: absence no longer says the call did not land.
@@ -88,13 +95,16 @@ inductive Verdict (D : Type)
   deriving DecidableEq
 
 /-- THE settlement: a receipt's answer at a head of height `height`, for a call valid until
-`validUntil`; `forgets` is `journalForgets height notBefore`. -/
-def ofReceipt (forgets : Bool) (height validUntil : Nat) : Receipt.Answer D → Verdict D
+`validUntil`; `forgets` is `journalForgets height notBefore`; `behind` is follow's own fold saying
+the call is stale BEHIND (`Command.staleBehind`, KERNEL-54; a holder of a head but no World passes
+`false`). -/
+def ofReceipt (forgets behind : Bool) (height validUntil : Nat) : Receipt.Answer D → Verdict D
   | .committed h td => .committed h td
   | .refused h code _ => if validUntil ≤ h + 2 * Kernel.Bounds.windowMax then .refused code else .open
   | .absent =>
       if forgets then .forgotten
       else if validUntil ≤ height then .expired
+      else if behind then .refused staleCode
       else .open
 
 /-- The `settle` line follow prints (`settle_seen` reads its first word). -/

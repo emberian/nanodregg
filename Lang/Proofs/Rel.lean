@@ -195,7 +195,7 @@ private def pinD (d : RelDecl) (p : ByteArray × Option RowLeaf) : Option Data :
   | .ok k =>
     match p.2 with
     | none => some (.record [("key", k), ("val", optD none)])
-    | some (.row _ b) =>
+    | some (.row _ b _) =>
       match Wire.decodeData d.val b with
       | .ok w => some (.record [("key", k), ("val", optD (some w))])
       | .error _ => none

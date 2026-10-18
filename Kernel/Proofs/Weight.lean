@@ -104,24 +104,30 @@ theorem touchCheck_weight {E : Env D} {w : World D} {x : Touch D} {p : Post D}
   | keep => rw [ha] at h; simp [pure, Except.pure] at h
   | write ops =>
       rw [ha] at h
-      cases hc : w.live E x.cell with
+      cases hc : w.entry E x.cell with
       | none => rw [hc] at h; simp at h
-      | some cell =>
-          rw [hc] at h
-          simp only [except_bind_ok, pure, Except.pure, Except.ok.injEq, Option.some.injEq] at h
-          obtain ⟨post, hp, rfl⟩ := h
-          refine ⟨rfl, .live cell, live_get hc, ?_⟩
-          have := postWrite_weight hp
-          simp only [Entry.weight, Act.opsWeight]; omega
+      | some e =>
+          cases e with
+          | tomb => rw [hc] at h; simp at h
+          | live cell v =>
+              rw [hc] at h
+              simp only [except_bind_ok, pure, Except.pure, Except.ok.injEq, Option.some.injEq] at h
+              obtain ⟨⟨⟩, _, post, hp, rfl⟩ := h
+              refine ⟨rfl, .live cell v, entry_get hc, ?_⟩
+              have := postWrite_weight hp
+              simp only [Entry.weight, Act.opsWeight]; omega
   | retire =>
       rw [ha] at h
-      cases hc : w.live E x.cell with
+      cases hc : w.entry E x.cell with
       | none => rw [hc] at h; simp at h
-      | some cell =>
-          rw [hc] at h
-          simp only [except_bind_ok, pure, Except.pure, Except.ok.injEq, Option.some.injEq] at h
-          obtain ⟨_, _, rfl⟩ := h
-          exact ⟨rfl, .live cell, live_get hc, by simp [Entry.weight, Act.opsWeight]⟩
+      | some e =>
+          cases e with
+          | tomb => rw [hc] at h; simp at h
+          | live cell v =>
+              rw [hc] at h
+              simp only [except_bind_ok, pure, Except.pure, Except.ok.injEq, Option.some.injEq] at h
+              obtain ⟨⟨⟩, _, rfl⟩ := h
+              exact ⟨rfl, .live cell v, entry_get hc, by simp [Entry.weight, Act.opsWeight]⟩
 
 /-- A touch that changes nothing is a `keep`, and was charged for no ops. -/
 theorem touchCheck_none {E : Env D} {w : World D} {x : Touch D}
@@ -133,20 +139,26 @@ theorem touchCheck_none {E : Env D} {w : World D} {x : Touch D}
   | keep => rfl
   | write ops =>
       rw [ha] at h
-      cases hc : w.live E x.cell with
+      cases hc : w.entry E x.cell with
       | none => rw [hc] at h; simp at h
-      | some cell =>
-          rw [hc] at h
-          simp only [except_bind_ok, pure, Except.pure] at h
-          obtain ⟨_, _, h⟩ := h; simp at h
+      | some e =>
+          cases e with
+          | tomb => rw [hc] at h; simp at h
+          | live cell v =>
+              rw [hc] at h
+              simp only [except_bind_ok, pure, Except.pure] at h
+              obtain ⟨⟨⟩, _, _, _, h⟩ := h; simp at h
   | retire =>
       rw [ha] at h
-      cases hc : w.live E x.cell with
+      cases hc : w.entry E x.cell with
       | none => rw [hc] at h; simp at h
-      | some cell =>
-          rw [hc] at h
-          simp only [except_bind_ok, pure, Except.pure] at h
-          obtain ⟨_, _, h⟩ := h; simp at h
+      | some e =>
+          cases e with
+          | tomb => rw [hc] at h; simp at h
+          | live cell v =>
+              rw [hc] at h
+              simp only [except_bind_ok, pure, Except.pure] at h
+              obtain ⟨⟨⟩, _, h⟩ := h; simp at h
 
 omit [Ord D] [DecidableEq D] in
 theorem credit_cons (p : Post D) (l : List (Post D)) : credit (p :: l) = p.freed + credit l := by
@@ -211,7 +223,7 @@ theorem credit_retires {E : Env D} {w : World D} :
     ∀ (l : List (Touch D)) (raw : List (Option (Post D))),
       mapEx (touchCheck E w) l = .ok raw → (∀ x ∈ l, x.act = .keep ∨ x.act = .retire) →
       credit raw.reduceOption =
-        ((l.filter fun x => x.act == .retire).map fun x => ((w.live E x.cell).map Cell.weight).getD 0).sum
+        ((l.filter fun x => x.act == .retire).map fun x => ((w.entry E x.cell).map Entry.weight).getD 0).sum
   | [], raw, h, _ => by simp [mapEx] at h; subst h; simp [List.reduceOption, credit]
   | x :: rest, raw, h, ha => by
       unfold mapEx at h
@@ -236,18 +248,21 @@ theorem credit_retires {E : Env D} {w : World D} :
               · unfold touchCheck at hx
                 simp only [except_bind_ok, hk] at hx
                 obtain ⟨⟨⟩, _, hx⟩ := hx
-                cases hc : w.live E x.cell with
+                cases hc : w.entry E x.cell with
                 | none => rw [hc] at hx; simp at hx
-                | some cell =>
-                    rw [hc] at hx
-                    simp only [except_bind_ok, pure, Except.pure, Except.ok.injEq] at hx
-                    obtain ⟨_, _, rfl⟩ := hx
-                    simp only [List.reduceOption, List.filterMap_cons, id, List.filter_cons, hk,
-                      beq_self_eq_true, if_true, List.map_cons, List.sum_cons, hc, Option.map_some,
-                      Option.getD_some] at ih ⊢
-                    rw [credit_cons]
-                    dsimp only
-                    omega
+                | some e =>
+                    cases e with
+                    | tomb => rw [hc] at hx; simp at hx
+                    | live cell v =>
+                        rw [hc] at hx
+                        simp only [except_bind_ok, pure, Except.pure, Except.ok.injEq] at hx
+                        obtain ⟨_, _, rfl⟩ := hx
+                        simp only [List.reduceOption, List.filterMap_cons, id, List.filter_cons, hk,
+                          beq_self_eq_true, if_true, List.map_cons, List.sum_cons, hc, Option.map_some,
+                          Option.getD_some] at ih ⊢
+                        rw [credit_cons]
+                        simp only [Entry.weight]
+                        omega
 
 end Turn
 
@@ -265,12 +280,12 @@ omit [Ord D] in
 theorem born_weight {E : Env D} :
     ∀ (ps : List (D × Cell)) (m : Cells D), Trie.Routed (trieSpec E) 0 m → (ps.map Prod.fst).Nodup →
       (∀ p ∈ ps, m.get (trieSpec E) (.cell p.1) = none) →
-      cellsWeight (insertAll E m (ps.map fun p => (p.1, Entry.live p.2))) =
-        cellsWeight m + (ps.map fun p => digestWeight + p.2.weight).sum
+      cellsWeight (insertAll E m (ps.map fun p => (p.1, Entry.live p.2 0))) =
+        cellsWeight m + (ps.map fun p => digestWeight + counterWeight + p.2.weight).sum
   | [], m, _, _, _ => by simp [insertAll]
   | p :: rest, m, hrt, hn, hf => by
       simp only [List.map_cons, List.nodup_cons] at hn
-      have hf' : ∀ q ∈ rest, (m.insert (trieSpec E) (.cell p.1) (.entry (.live p.2))).get
+      have hf' : ∀ q ∈ rest, (m.insert (trieSpec E) (.cell p.1) (.entry (.live p.2 0))).get
           (trieSpec E) (.cell q.1) = none := by
         intro q hq
         rw [Trie.get_insert_ne]
@@ -281,9 +296,9 @@ theorem born_weight {E : Env D} :
           rw [← he]
           exact List.mem_map_of_mem hq
       have ih := born_weight rest _ (Trie.routed_insert _ _ _ hrt) hn.2 hf'
-      have h1 := cellsWeight_fresh hrt (.entry (.live p.2)) (hf p (by simp))
+      have h1 := cellsWeight_fresh hrt (.entry (.live p.2 0)) (hf p (by simp))
       simp only [List.map_cons, List.sum_cons]
-      show cellsWeight (insertAll E (m.insert (trieSpec E) (.cell p.1) (.entry (.live p.2))) _) = _
+      show cellsWeight (insertAll E (m.insert (trieSpec E) (.cell p.1) (.entry (.live p.2 0))) _) = _
       rw [ih, h1]; simp [Leaf.weight, Entry.weight]; omega
 
 omit [Ord D] in
@@ -381,7 +396,7 @@ theorem admit_world_weight {E : Env D} {w w' : World D} {t : Turn D} {posts : Li
   dsimp only
   have hcw : cellsWeight (insertAll E (insertAll E w.trie (posts.map Post.pair)) (bornEntries t)) +
       credit posts = cellsWeight w.trie + (t.touches.map fun x => x.act.opsWeight).sum +
-        (t.creates.map fun p => digestWeight + p.2.weight).sum := by
+        (t.creates.map fun p => digestWeight + counterWeight + p.2.weight).sum := by
     unfold bornEntries; rw [hb]; omega
   rw [show commitTrie E w t posts =
     spendAll E (insertAll E (insertAll E w.trie (posts.map Post.pair)) (bornEntries t)) t.nullifiers
@@ -414,7 +429,7 @@ theorem admit_retire {E : Env D} {w w' : World D} {t : Turn D}
     (h : World.admit E w t = .ok w') (ha : ∀ x ∈ t.touches, x.act = .keep ∨ x.act = .retire) :
     w'.allowance + t.charge = w.allowance +
       ((t.touches.filter fun x => x.act == .retire).map fun x =>
-        ((w.live E x.cell).map Cell.weight).getD 0).sum + (rowsAfter E w t).2 := by
+        ((w.entry E x.cell).map Entry.weight).getD 0).sum + (rowsAfter E w t).2 := by
   obtain ⟨_, posts, hk, _, hal⟩ := admit_charge h
   obtain ⟨raw, hm, rfl⟩ := hk.touches
   rw [hal, credit_retires t.touches raw hm ha]

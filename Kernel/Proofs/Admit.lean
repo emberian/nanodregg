@@ -58,7 +58,7 @@ theorem Checked.touch {E : Env D} {w : World D} {t : Turn D} {posts : List (Post
 
 /-- A touch that passes saw what the signer saw. -/
 theorem touchCheck_pin {E : Env D} {w : World D} {x : Touch D} {r : Option (Post D)}
-    (h : touchCheck E w x = .ok r) : pinOf E (w.live E x.cell) = x.seen := by
+    (h : touchCheck E w x = .ok r) : pinOf E (w.entry E x.cell) = x.seen := by
   unfold touchCheck at h
   simp only [except_bind_ok] at h
   obtain ⟨⟨⟩, hp, _⟩ := h
@@ -125,7 +125,7 @@ theorem admit_weight {E : Env D} {w w' : World D} {t : Turn D}
 /-- **Guards from the intent.** Every cell the turn touches is, in the pre-state, exactly what
 the signer saw. -/
 theorem admit_pins {E : Env D} {w w' : World D} {t : Turn D}
-    (h : World.admit E w t = .ok w') : ∀ x ∈ t.touches, pinOf E (w.live E x.cell) = x.seen := by
+    (h : World.admit E w t = .ok w') : ∀ x ∈ t.touches, pinOf E (w.entry E x.cell) = x.seen := by
   obtain ⟨_, hc, _⟩ := admit_ok h
   intro x hx
   obtain ⟨_, hr⟩ := hc.touch x hx
@@ -134,13 +134,13 @@ theorem admit_pins {E : Env D} {w w' : World D} {t : Turn D}
 /-- **The staleness refusal.** A turn whose pin disagrees with the World is admitted by no
 World transition. -/
 theorem stale_refused {E : Env D} {w : World D} {t : Turn D} {x : Touch D}
-    (hmem : x ∈ t.touches) (hstale : pinOf E (w.live E x.cell) ≠ x.seen) :
+    (hmem : x ∈ t.touches) (hstale : pinOf E (w.entry E x.cell) ≠ x.seen) :
     ∀ w', World.admit E w t ≠ .ok w' :=
   fun _ h => hstale (admit_pins h x hmem)
 
 /-- A stale touch is refused `stale` before anything about its write or retirement is judged. -/
 theorem touchCheck_stale {E : Env D} {w : World D} {x : Touch D}
-    (hstale : pinOf E (w.live E x.cell) ≠ x.seen) : touchCheck E w x = .error (.stale x.cell) := by
+    (hstale : pinOf E (w.entry E x.cell) ≠ x.seen) : touchCheck E w x = .error (.stale x.cell) := by
   unfold touchCheck
   simp [req, hstale, bind, Except.bind]
 
@@ -150,7 +150,7 @@ theorem stale_named {E : Env D} {w : World D} {t : Turn D} {pre post : List (Tou
     {x : Touch D} (hb : checkBounds t = .ok ()) (hj : checkJournal E w t = .ok ())
     (hs : checkShape t = .ok ()) (hw : checkWindow w t = .ok ())
     (ht : t.touches = pre ++ x :: post) (hpre : ∀ y ∈ pre, ∃ r, touchCheck E w y = .ok r)
-    (hstale : pinOf E (w.live E x.cell) ≠ x.seen) :
+    (hstale : pinOf E (w.entry E x.cell) ≠ x.seen) :
     World.admit E w t = .error (.stale x.cell) := by
   have hm : mapEx (touchCheck E w) t.touches = .error (.stale x.cell) := by
     rw [ht]; exact mapEx_error_at (touchCheck_stale hstale) post hpre
@@ -306,22 +306,22 @@ theorem touchCheck_some {E : Env D} {w : World D} {x : Touch D} {p : Post D}
   | keep => rw [ha] at h; simp [pure, Except.pure] at h
   | write ops =>
       rw [ha] at h
-      cases hc : w.live E x.cell with
-      | none => rw [hc] at h; simp at h
-      | some cell =>
-          rw [hc] at h
-          simp only [except_bind_ok, pure, Except.pure, Except.ok.injEq, Option.some.injEq] at h
-          obtain ⟨_, _, rfl⟩ := h
-          simp
+      rcases hc : w.entry E x.cell with _ | ⟨_ | _⟩
+      · rw [hc] at h; simp at h
+      · rw [hc] at h
+        simp only [except_bind_ok, pure, Except.pure, Except.ok.injEq, Option.some.injEq] at h
+        obtain ⟨⟨⟩, _, _, _, rfl⟩ := h
+        simp
+      · rw [hc] at h; simp at h
   | retire =>
       rw [ha] at h
-      cases hc : w.live E x.cell with
-      | none => rw [hc] at h; simp at h
-      | some cell =>
-          rw [hc] at h
-          simp only [except_bind_ok, pure, Except.pure, Except.ok.injEq, Option.some.injEq] at h
-          obtain ⟨_, _, rfl⟩ := h
-          simp
+      rcases hc : w.entry E x.cell with _ | ⟨_ | _⟩
+      · rw [hc] at h; simp at h
+      · rw [hc] at h
+        simp only [except_bind_ok, pure, Except.pure, Except.ok.injEq, Option.some.injEq] at h
+        obtain ⟨⟨⟩, _, rfl⟩ := h
+        simp
+      · rw [hc] at h; simp at h
 
 
 /-- What a checked turn changes is exactly at its non-`keep` touches. -/

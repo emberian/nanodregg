@@ -54,7 +54,7 @@ def refusalNames : List String :=
    "enrollSpent", "notIssuer", "grantTooDeep", "overPrice", "undecodableEvent", "eventMismatch",
    "duplicateEffect", "sameAccount", "zeroAmount", "assetMismatch", "overflow", "notWell",
    "notCallable", "callTooDeep", "revisited", "tooManyCalls", "overTicks", "rowUnpinned", "rangeUnpinned",
-   "rangeTooLong", "rowParent", "duplicateRow"]
+   "rangeTooLong", "rowParent", "duplicateRow", "staleRecorded"]
 
 /-- The wire names of the kernel's rejections, in constructor order (checked against `Reject.name`). -/
 def rejectNames : List String :=
@@ -63,7 +63,7 @@ def rejectNames : List String :=
    "bornTouched", "missingCell", "romWrite", "romRetire", "appendOnly", "valueMalformed", "belowFloor",
    "notConserved", "floorNotConserved", "refusedFinal", "refusalBudget", "keyTaken", "relationFull",
    "relationCapped", "rowParentUnpinned", "orphanRow", "rowsRemain", "keyWidth", "noRelation",
-   "retractForbidden", "declareLate", "rangeTooLong", "duplicateRow", "rowShape"]
+   "retractForbidden", "declareLate", "rangeTooLong", "duplicateRow", "rowShape", "missingRow"]
 
 /-- A verdict's wire name. -/
 def Verdict.name : Verdict D → String
@@ -74,6 +74,16 @@ def Verdict.name : Verdict D → String
 def Verdict.code : Verdict D → Nat
   | .refused r => refusalNames.idxOf r.name
   | .rejected r => refusalNames.length + rejectNames.idxOf r.name
+
+/-- Is the verdict a stale pin (KERNEL-54)? Such a refusal is never recorded (`judgeBy` declines it):
+a pin observed on the fold and stale now is stale at every World the fold reaches
+(`stale_behind_forever`), so the fold settles it without a record. -/
+def Verdict.isStale : Verdict D → Bool
+  | .rejected (.stale _) => true
+  | _ => false
+
+/-- The code a stale refusal would carry: what `auditRefusal` refuses by name in a log. -/
+def staleCode : Nat := refusalNames.length + rejectNames.idxOf "stale"
 
 /-- The name a recorded code answers with (`lookup`'s and a resubmit's `refused NAME`). -/
 def codeName (k : Nat) : Option String :=
@@ -125,19 +135,24 @@ such a refusal is charged to the member and recorded; any other is answered and 
 def authenticated (X : Ctx D) (w : World D) (c : Call D) : Bool := authenticatedBy X w c false
 
 /-- What the Host does with a signed call (KERNEL-44): admitted; refused and RECORDED (final within
-the window: `submit_refused_final`); or refused and NOT recorded (`declined`: unauthenticated, early,
-or over the member's `refusalBudget`, which is the verdict then; none of these is final). -/
+the window: `submit_refused_final`); or refused and NOT recorded (`declined`: stale (KERNEL-54), unauthenticated, early,
+or over the member's `refusalBudget`, which is the verdict then). None of these is final by a
+record; a stale whose pin the fold has moved past (BEHIND) is final by the fold instead
+(`stale_behind_forever`), and an AHEAD stale is not final. -/
 inductive Outcome (D : Type) [Ord D]
   | admitted (t : Turn D) (w' : World D)
   | recorded (v : Verdict D) (r : Refused D) (w' : World D)
   | declined (v : Verdict D)
 
 /-- `submit`, and for a refused call whether to record it, given how it is authenticated (`auth`
-of the verdict): recorded when authenticated and `World.refuse` takes it, declined otherwise. -/
+of the verdict): recorded when authenticated, not stale, and `World.refuse` takes it; declined
+otherwise. A stale verdict is declined before authentication (KERNEL-54: never recorded, spends no
+budget). -/
 def judgeBy (X : Ctx D) (w : World D) (c : Call D) (auth : Verdict D → Bool) : Outcome D :=
   match submit X w c with
   | .ok (t, w') => .admitted t w'
   | .error v =>
+      if v.isStale then .declined v else
       if auth v then
         match World.refuse X.env w (refusedOf X c v) with
         | .ok w' => .recorded v (refusedOf X c v) w'

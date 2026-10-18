@@ -28,25 +28,27 @@ attribute [local irreducible] rowPath
 def InsOnly (xs : List (RowTouch D)) : Prop :=
   ∀ x ∈ xs, ∃ key amt v, x.slot = .row key ∧ x.act = .insert amt v
 
-/-- What one insert does to the read at slot `s` (`o`: the read before it). -/
-private def view1 (x : RowTouch D) (s : RowSlot D) (o : Option RowLeaf) : Option RowLeaf :=
+/-- What one insert does to the read at slot `s` (`o`: the read before it), given its relations'
+floors `F` (KERNEL-54: an insert's row takes its relation's floor as its version, and no insert moves
+a floor, so `F` is the pre-state's for a whole list of inserts). -/
+private def view1 (F : D → Nat → Nat) (x : RowTouch D) (s : RowSlot D) (o : Option RowLeaf) : Option RowLeaf :=
   match x.slot, x.act with
   | .row key, .insert amt v =>
-      if s = .row key then some (.row amt v)
+      if s = .row key then some (.row amt v (F key.parent key.rel))
       else match s, o with
-        | .head p rel, some (.head c sm l cap wd rt) =>
-            if key.parent = p ∧ key.rel = rel then some (.head (c + 1) (sm + amt) l cap wd rt) else o
+        | .head p rel, some (.head c sm l cap wd rt fl) =>
+            if key.parent = p ∧ key.rel = rel then some (.head (c + 1) (sm + amt) l cap wd rt fl) else o
         | _, _ => o
   | _, _ => o
 
 /-- What a list of inserts does to the read at slot `s`, in order. -/
-private def view : List (RowTouch D) → RowSlot D → Option RowLeaf → Option RowLeaf
+private def view (F : D → Nat → Nat) : List (RowTouch D) → RowSlot D → Option RowLeaf → Option RowLeaf
   | [], _, o => o
-  | x :: rest, s, o => view rest s (view1 x s o)
+  | x :: rest, s, o => view F rest s (view1 F x s o)
 
-private theorem view1_head (x : RowTouch D) (p : D) (rel c sm l cap wd : Nat) (rt : Bool) :
-    view1 x (.head p rel) (some (.head c sm l cap wd rt)) =
-      some (.head (c + insN1 p rel x) (sm + insA1 p rel x) l cap wd rt) := by
+private theorem view1_head (F : D → Nat → Nat) (x : RowTouch D) (p : D) (rel c sm l cap wd : Nat) (rt : Bool) (fl : Nat) :
+    view1 F x (.head p rel) (some (.head c sm l cap wd rt fl)) =
+      some (.head (c + insN1 p rel x) (sm + insA1 p rel x) l cap wd rt fl) := by
   obtain ⟨slot, seen, act⟩ := x
   cases slot with
   | head _ _ => cases act <;> simp [view1, insN1, insA1]
@@ -61,18 +63,18 @@ private theorem view1_head (x : RowTouch D) (p : D) (rel c sm l cap wd : Nat) (r
       | _ => simp [view1, insN1, insA1]
 
 /-- **The head is additive**: after a list of inserts a head counts and sums them all. -/
-private theorem view_head (p : D) (rel : Nat) (l cap wd : Nat) (rt : Bool) :
-    ∀ (xs : List (RowTouch D)) (c sm : Nat), view xs (.head p rel) (some (.head c sm l cap wd rt)) =
-      some (.head (c + insN p rel xs) (sm + insA p rel xs) l cap wd rt)
+private theorem view_head (F : D → Nat → Nat) (p : D) (rel : Nat) (l cap wd : Nat) (rt : Bool) (fl : Nat) :
+    ∀ (xs : List (RowTouch D)) (c sm : Nat), view F xs (.head p rel) (some (.head c sm l cap wd rt fl)) =
+      some (.head (c + insN p rel xs) (sm + insA p rel xs) l cap wd rt fl)
   | [], c, sm => by simp [view, insN, insA]
   | x :: rest, c, sm => by
       simp only [view, view1_head, insN, insA]
-      rw [view_head p rel l cap wd rt rest]
+      rw [view_head F p rel l cap wd rt fl rest]
       simp only [Nat.add_assoc]
 
-private theorem view1_ne (x : RowTouch D) (s : RowSlot D) (o : Option RowLeaf)
+private theorem view1_ne (F : D → Nat → Nat) (x : RowTouch D) (s : RowSlot D) (o : Option RowLeaf)
     (hs : ∀ key, s = .row key → x.slot ≠ .row key)
-    (hh : ∀ p rel, s = .head p rel → insN1 p rel x = 0) : view1 x s o = o := by
+    (hh : ∀ p rel, s = .head p rel → insN1 p rel x = 0) : view1 F x s o = o := by
   obtain ⟨slot, seen, act⟩ := x
   cases slot with
   | head _ _ => cases act <;> rfl
@@ -91,30 +93,30 @@ private theorem view1_ne (x : RowTouch D) (s : RowSlot D) (o : Option RowLeaf)
               | none => rfl
               | some lf =>
                   cases lf with
-                  | row _ _ => rfl
-                  | head c sm l cap wd rt =>
+                  | row _ _ _ => rfl
+                  | head c sm l cap wd rt fl =>
                       simp only
                       rw [if_neg]
                       intro hk; rw [if_pos hk] at h0; exact absurd h0 (by decide)
       | _ => rfl
 
 /-- A row slot no touch of the list names reads as before. -/
-private theorem view_row_out (k : RowKey D) :
-    ∀ (xs : List (RowTouch D)) (o : Option RowLeaf), (∀ x ∈ xs, x.slot ≠ .row k) → view xs (.row k) o = o
+private theorem view_row_out (F : D → Nat → Nat) (k : RowKey D) :
+    ∀ (xs : List (RowTouch D)) (o : Option RowLeaf), (∀ x ∈ xs, x.slot ≠ .row k) → view F xs (.row k) o = o
   | [], _, _ => rfl
   | x :: rest, o, h => by
       simp only [view]
-      rw [view1_ne x (.row k) o (fun key e => by cases e; exact h x (by simp)) (fun _ _ e => by cases e)]
-      exact view_row_out k rest o (fun y hy => h y (by simp [hy]))
+      rw [view1_ne F x (.row k) o (fun key e => by cases e; exact h x (by simp)) (fun _ _ e => by cases e)]
+      exact view_row_out F k rest o (fun y hy => h y (by simp [hy]))
 
 /-- A head slot that does not hold a head reads as before. -/
-private theorem view_head_other (p : D) (rel : Nat) :
-    ∀ (xs : List (RowTouch D)) (o : Option RowLeaf), (∀ c sm l cap wd rt, o ≠ some (.head c sm l cap wd rt)) →
-      view xs (.head p rel) o = o
+private theorem view_head_other (F : D → Nat → Nat) (p : D) (rel : Nat) :
+    ∀ (xs : List (RowTouch D)) (o : Option RowLeaf), (∀ c sm l cap wd rt fl, o ≠ some (.head c sm l cap wd rt fl)) →
+      view F xs (.head p rel) o = o
   | [], _, _ => rfl
   | x :: rest, o, h => by
       simp only [view]
-      have e : view1 x (.head p rel) o = o := by
+      have e : view1 F x (.head p rel) o = o := by
         obtain ⟨slot, seen, act⟩ := x
         cases slot with
         | head _ _ => cases act <;> rfl
@@ -127,31 +129,44 @@ private theorem view_head_other (p : D) (rel : Nat) :
                 | none => rfl
                 | some lf =>
                     cases lf with
-                    | row _ _ => rfl
-                    | head c sm l cap wd rt => exact absurd rfl (h c sm l cap wd rt)
+                    | row _ _ _ => rfl
+                    | head c sm l cap wd rt fl => exact absurd rfl (h c sm l cap wd rt fl)
             | _ => rfl
-      rw [e]; exact view_head_other p rel rest o h
+      rw [e]; exact view_head_other F p rel rest o h
 
 /-- **Two lists of inserts commute on every read**, when no row slot is in both. -/
-private theorem view_comm {xs ys : List (RowTouch D)}
+private theorem view_comm {F : D → Nat → Nat} {xs ys : List (RowTouch D)}
     (hd : ∀ x ∈ xs, ∀ y ∈ ys, x.slot ≠ y.slot) (s : RowSlot D) (o : Option RowLeaf) :
-    view ys s (view xs s o) = view xs s (view ys s o) := by
+    view F ys s (view F xs s o) = view F xs s (view F ys s o) := by
   cases s with
   | row k =>
       by_cases h1 : ∃ x ∈ xs, x.slot = .row k
       · have h2 : ∀ y ∈ ys, y.slot ≠ .row k := by
           obtain ⟨x, hx', hxs⟩ := h1
           intro y hy' e; exact hd x hx' y hy' (hxs.trans e.symm)
-        rw [view_row_out k ys _ h2, view_row_out k ys _ h2]
+        rw [view_row_out F k ys _ h2, view_row_out F k ys _ h2]
       · have h1' : ∀ x ∈ xs, x.slot ≠ .row k := fun x hx' e => h1 ⟨x, hx', e⟩
-        rw [view_row_out k xs _ h1', view_row_out k xs _ h1']
+        rw [view_row_out F k xs _ h1', view_row_out F k xs _ h1']
   | head p rel =>
-      by_cases ho : ∃ c sm l cap wd rt, o = some (.head c sm l cap wd rt)
-      · obtain ⟨c, sm, l, cap, wd, rt, rfl⟩ := ho
+      by_cases ho : ∃ c sm l cap wd rt fl, o = some (.head c sm l cap wd rt fl)
+      · obtain ⟨c, sm, l, cap, wd, rt, fl, rfl⟩ := ho
         rw [view_head, view_head, view_head, view_head, Nat.add_right_comm c, Nat.add_right_comm sm]
-      · have ho' : ∀ c sm l cap wd rt, o ≠ some (.head c sm l cap wd rt) :=
-          fun c sm l cap wd rt e => ho ⟨c, sm, l, cap, wd, rt, e⟩
-        rw [view_head_other p rel xs o ho', view_head_other p rel ys o ho', view_head_other p rel xs o ho']
+      · have ho' : ∀ c sm l cap wd rt fl, o ≠ some (.head c sm l cap wd rt fl) :=
+          fun c sm l cap wd rt fl e => ho ⟨c, sm, l, cap, wd, rt, fl, e⟩
+        rw [view_head_other F p rel xs o ho', view_head_other F p rel ys o ho', view_head_other F p rel xs o ho']
+
+/-- A list of inserts leaves every relation's floor where it was. -/
+private theorem headFloor_view {E : Env D} {F : D → Nat → Nat} {xs : List (RowTouch D)} {r r' : Rows D}
+    (h : ∀ s, r'.get (rowSpec E) s = view F xs s (r.get (rowSpec E) s)) : headFloor E r' = headFloor E r := by
+  funext p rel
+  unfold headFloor rowAt
+  rw [h]
+  cases hg : r.get (rowSpec E) (.head p rel) with
+  | none => rw [view_head_other F p rel xs none (fun _ _ _ _ _ _ _ e => by cases e)]
+  | some lf =>
+      cases lf with
+      | row a b u => rw [view_head_other F p rel xs _ (fun _ _ _ _ _ _ _ e => by cases e)]
+      | head c sm l cap wd rt fl => rw [view_head]
 
 private theorem insA_zero (p : D) (rel : Nat) :
     ∀ xs : List (RowTouch D), insN p rel xs = 0 → insA p rel xs = 0
@@ -203,8 +218,8 @@ private theorem ins_step_ok {E : Env D} {w : World D} {t : Turn D} {r r' : Rows 
     (h : rowStep E w t r x = .ok r') :
     Stat E w t x key v ∧ rowAt E r (.row key) = none ∧ ∃ c sm l cap rt,
       headOf E r key.parent key.rel = some (c, sm, l, cap, key.k.size, rt) ∧ c < l ∧ sm + amt ≤ cap ∧
-      r' = setHead E (r.insert (rowSpec E) (.row key) (.row amt v)) key.parent key.rel (c + 1) (sm + amt)
-        l cap key.k.size rt := by
+      r' = setHead E (r.insert (rowSpec E) (.row key) (.row amt v (headFloor E r key.parent key.rel))) key.parent
+        key.rel (c + 1) (sm + amt) l cap key.k.size rt (headFloor E r key.parent key.rel) := by
   obtain ⟨slot, seen, act⟩ := x
   simp only at hs ha
   subst hs ha
@@ -230,8 +245,8 @@ private theorem ins_step_of {E : Env D} {w : World D} {t : Turn D} {r : Rows D} 
     (hst : Stat E w t x key v) (hrow : rowAt E r (.row key) = none) {c sm l cap : Nat} {rt : Bool}
     (hh : headOf E r key.parent key.rel = some (c, sm, l, cap, key.k.size, rt)) (hcl : c < l)
     (hcap : sm + amt ≤ cap) :
-    rowStep E w t r x = .ok (setHead E (r.insert (rowSpec E) (.row key) (.row amt v)) key.parent key.rel
-      (c + 1) (sm + amt) l cap key.k.size rt) := by
+    rowStep E w t r x = .ok (setHead E (r.insert (rowSpec E) (.row key) (.row amt v (headFloor E r key.parent key.rel)))
+      key.parent key.rel (c + 1) (sm + amt) l cap key.k.size rt (headFloor E r key.parent key.rel)) := by
   obtain ⟨slot, seen, act⟩ := x
   simp only at hs ha
   subst hs ha
@@ -241,19 +256,19 @@ private theorem ins_step_of {E : Env D} {w : World D} {t : Turn D} {r : Rows D} 
   simp [req, h1, h2, h3, hh, hrow, hcl, hcap, h5, bind, Except.bind, pure, Except.pure]
 
 omit [Ord D] in
-private theorem get_step {E : Env D} (r : Rows D) (key : RowKey D) (amt : Nat) (v : ByteArray)
-    (c sm l cap wd : Nat) (rt : Bool) (s : RowSlot D) :
-    (setHead E (r.insert (rowSpec E) (.row key) (.row amt v)) key.parent key.rel c sm l cap wd rt).get
+private theorem get_step {E : Env D} (r : Rows D) (key : RowKey D) (amt : Nat) (v : ByteArray) (u : Nat)
+    (c sm l cap wd : Nat) (rt : Bool) (fl : Nat) (s : RowSlot D) :
+    (setHead E (r.insert (rowSpec E) (.row key) (.row amt v u)) key.parent key.rel c sm l cap wd rt fl).get
         (rowSpec E) s =
-      if s = .head key.parent key.rel then some (.head c sm l cap wd rt)
-      else if s = .row key then some (.row amt v) else r.get (rowSpec E) s := by
+      if s = .head key.parent key.rel then some (.head c sm l cap wd rt fl)
+      else if s = .row key then some (.row amt v u) else r.get (rowSpec E) s := by
   unfold setHead
   rw [Trie.get_insert, Trie.get_insert]
 
 omit [Ord D] in
-private theorem headOf_step {E : Env D} (r : Rows D) (key : RowKey D) (amt : Nat) (v : ByteArray)
-    (c sm l cap wd : Nat) (rt : Bool) (p : D) (rel : Nat) :
-    headOf E (setHead E (r.insert (rowSpec E) (.row key) (.row amt v)) key.parent key.rel c sm l cap wd rt)
+private theorem headOf_step {E : Env D} (r : Rows D) (key : RowKey D) (amt : Nat) (v : ByteArray) (u : Nat)
+    (c sm l cap wd : Nat) (rt : Bool) (fl : Nat) (p : D) (rel : Nat) :
+    headOf E (setHead E (r.insert (rowSpec E) (.row key) (.row amt v u)) key.parent key.rel c sm l cap wd rt fl)
         p rel =
       if key.parent = p ∧ key.rel = rel then some (c, sm, l, cap, wd, rt) else headOf E r p rel := by
   unfold headOf rowAt
@@ -265,21 +280,40 @@ private theorem headOf_step {E : Env D} (r : Rows D) (key : RowKey D) (amt : Nat
     rw [if_neg h1, if_neg (by intro e; cases e), if_neg hk]
 
 omit [Ord D] in
-private theorem rowAt_step {E : Env D} (r : Rows D) (key k : RowKey D) (amt : Nat) (v : ByteArray)
-    (c sm l cap wd : Nat) (rt : Bool) (hk : k ≠ key) :
-    rowAt E (setHead E (r.insert (rowSpec E) (.row key) (.row amt v)) key.parent key.rel c sm l cap wd rt)
+private theorem rowAt_step {E : Env D} (r : Rows D) (key k : RowKey D) (amt : Nat) (v : ByteArray) (u : Nat)
+    (c sm l cap wd : Nat) (rt : Bool) (fl : Nat) (hk : k ≠ key) :
+    rowAt E (setHead E (r.insert (rowSpec E) (.row key) (.row amt v u)) key.parent key.rel c sm l cap wd rt fl)
         (.row k) = rowAt E r (.row k) := by
   unfold rowAt
   rw [get_step, if_neg (by intro e; cases e), if_neg (by intro e; injection e with e; exact hk e)]
 
 omit [Ord D] in
+/-- An insert leaves every relation's floor where it was. -/
+private theorem headFloor_step {E : Env D} (r : Rows D) (key : RowKey D) (amt : Nat) (v : ByteArray) (u : Nat)
+    (c sm l cap wd : Nat) (rt : Bool) :
+    headFloor E (setHead E (r.insert (rowSpec E) (.row key) (.row amt v u)) key.parent key.rel c sm l cap wd rt
+      (headFloor E r key.parent key.rel)) = headFloor E r := by
+  funext p rel
+  by_cases hk : key.parent = p ∧ key.rel = rel
+  · obtain ⟨rfl, rfl⟩ := hk
+    conv => lhs; unfold headFloor rowAt
+    rw [get_step, if_pos rfl]
+    rfl
+  · have h1 : (RowSlot.head p rel : RowSlot D) ≠ .head key.parent key.rel := by
+      intro e; injection e with e1 e2; exact hk ⟨e1.symm, e2.symm⟩
+    unfold headFloor rowAt
+    rw [get_step, if_neg h1, if_neg (by intro e; cases e)]
+
+omit [Ord D] in
 /-- One insert's rows, read anywhere, are `view1` of the rows before it. -/
 private theorem step_view {E : Env D} {r : Rows D} {x : RowTouch D} {key : RowKey D} {amt : Nat}
-    {v : ByteArray} (hs : x.slot = .row key) (ha : x.act = .insert amt v) {c sm l cap wd : Nat} {rt : Bool}
-    (hh : r.get (rowSpec E) (.head key.parent key.rel) = some (.head c sm l cap wd rt)) (s : RowSlot D) :
-    (setHead E (r.insert (rowSpec E) (.row key) (.row amt v)) key.parent key.rel (c + 1) (sm + amt) l cap wd rt).get (rowSpec E) s = view1 x s (r.get (rowSpec E) s) := by
+    {v : ByteArray} (hs : x.slot = .row key) (ha : x.act = .insert amt v) {c sm l cap wd : Nat} {rt : Bool} {fl : Nat}
+    (hh : r.get (rowSpec E) (.head key.parent key.rel) = some (.head c sm l cap wd rt fl)) (s : RowSlot D) :
+    (setHead E (r.insert (rowSpec E) (.row key) (.row amt v fl)) key.parent key.rel (c + 1) (sm + amt) l cap wd rt
+      fl).get (rowSpec E) s = view1 (headFloor E r) x s (r.get (rowSpec E) s) := by
+  have hf : headFloor E r key.parent key.rel = fl := by unfold headFloor rowAt; rw [hh]
   rw [get_step]
-  simp only [view1, hs, ha]
+  simp only [view1, hs, ha, hf]
   cases s with
   | row k =>
       rw [if_neg (by intro e; cases e)]
@@ -295,8 +329,8 @@ private theorem step_view {E : Env D} {r : Rows D} {x : RowTouch D} {key : RowKe
         | none => rfl
         | some lf =>
             cases lf with
-            | row _ _ => rfl
-            | head c' sm' l' cap' wd' rt' => simp only; rw [if_neg hk]
+            | row _ _ _ => rfl
+            | head c' sm' l' cap' wd' rt' fl' => simp only; rw [if_neg hk]
 
 /-! ## A list of inserts: what it needs of the rows it starts from, and what it leaves -/
 
@@ -305,7 +339,7 @@ of the read before, and the rows it started from met `Cond`. -/
 private theorem fold_fwd {E : Env D} {w : World D} {t : Turn D} :
     ∀ (xs : List (RowTouch D)) (acc rr : Rows D × Nat), InsOnly xs → (xs.map RowTouch.slot).Nodup →
       xs.foldlM (rowStepFreed E w t) acc = .ok rr →
-      rr.2 = acc.2 ∧ (∀ s, rr.1.get (rowSpec E) s = view xs s (acc.1.get (rowSpec E) s)) ∧
+      rr.2 = acc.2 ∧ (∀ s, rr.1.get (rowSpec E) s = view (headFloor E acc.1) xs s (acc.1.get (rowSpec E) s)) ∧
         Cond E w t acc.1 xs
   | [], acc, rr, _, _, h => by
       simp only [List.foldlM_nil, pure, Except.pure, Except.ok.injEq] at h
@@ -325,7 +359,7 @@ private theorem fold_fwd {E : Env D} {w : World D} {t : Turn D} :
       simp only [List.map_cons, List.nodup_cons] at hn
       have hirest : InsOnly rest := fun z hz => hi z (by simp [hz])
       obtain ⟨ih2, ihv, ihc1, ihc2⟩ := fold_fwd rest _ rr hirest hn.2 h2
-      simp only [hfr, Nat.add_zero] at ih2 ihv ihc1 ihc2
+      simp only [hfr, Nat.add_zero, headFloor_step] at ih2 ihv ihc1 ihc2
       have hnot : ∀ z ∈ rest, z.slot ≠ .row key := fun z hz e =>
         hn.1 (by rw [hs, ← e]; exact List.mem_map_of_mem hz)
       refine ⟨ih2, fun s => ?_, fun z hz kz amt' v' hzs hza => ?_, fun p rel hpos => ?_⟩
@@ -337,7 +371,7 @@ private theorem fold_fwd {E : Env D} {w : World D} {t : Turn D} :
           exact ⟨hst, hrow, c, sm, l, cap, rt, hh⟩
         · obtain ⟨hst', hrow', c', sm', l', cap', rt', hh'⟩ := ihc1 z hz' kz amt' v' hzs hza
           have hk : kz ≠ key := fun e => hnot z hz' (by rw [hzs, e])
-          refine ⟨hst', by rw [← rowAt_step acc.1 key kz amt v (c + 1) (sm + amt) l cap key.k.size rt hk]; exact hrow', ?_⟩
+          refine ⟨hst', by rw [← rowAt_step acc.1 key kz amt v _ (c + 1) (sm + amt) l cap key.k.size rt _ hk]; exact hrow', ?_⟩
           rw [headOf_step] at hh'
           split at hh'
           · rename_i hpr
@@ -389,12 +423,12 @@ private theorem fold_bwd {E : Env D} {w : World D} {t : Turn D} :
       have hirest : InsOnly rest := fun z hz => hi z (by simp [hz])
       have hnot : ∀ z ∈ rest, z.slot ≠ .row key := fun z hz e =>
         hn.1 (by rw [hs, ← e]; exact List.mem_map_of_mem hz)
-      have hcond : Cond E w t (setHead E (r.insert (rowSpec E) (.row key) (.row amt v)) key.parent key.rel
-          (c + 1) (sm + amt) l cap key.k.size rt) rest := by
+      have hcond : Cond E w t (setHead E (r.insert (rowSpec E) (.row key) (.row amt v (headFloor E r key.parent key.rel)))
+          key.parent key.rel (c + 1) (sm + amt) l cap key.k.size rt (headFloor E r key.parent key.rel)) rest := by
         refine ⟨fun z hz kz amt' v' hzs hza => ?_, fun p rel hpos => ?_⟩
         · obtain ⟨hst', hrow', c', sm', l', cap', rt', hh'⟩ := hc1 z (by simp [hz]) kz amt' v' hzs hza
           have hk : kz ≠ key := fun e => hnot z hz (by rw [hzs, e])
-          refine ⟨hst', by rw [rowAt_step r key kz amt v (c + 1) (sm + amt) l cap key.k.size rt hk]; exact hrow', ?_⟩
+          refine ⟨hst', by rw [rowAt_step r key kz amt v _ (c + 1) (sm + amt) l cap key.k.size rt _ hk]; exact hrow', ?_⟩
           rw [headOf_step]
           split
           · rename_i hpr
@@ -415,8 +449,9 @@ private theorem fold_bwd {E : Env D} {w : World D} {t : Turn D} :
             exact ⟨c', sm', l', cap', wd', rt', by rw [headOf_step, if_neg hpr]; exact hh', h1, h2⟩
       obtain ⟨r', hr'⟩ := fold_bwd rest _ f hirest hn.2 hcond
       refine ⟨r', ?_⟩
-      have h1 : rowStepFreed E w t (r, f) x = .ok (setHead E (r.insert (rowSpec E) (.row key) (.row amt v))
-          key.parent key.rel (c + 1) (sm + amt) l cap key.k.size rt, f) := by
+      have h1 : rowStepFreed E w t (r, f) x = .ok (setHead E (r.insert (rowSpec E) (.row key)
+          (.row amt v (headFloor E r key.parent key.rel))) key.parent key.rel (c + 1) (sm + amt) l cap key.k.size rt
+          (headFloor E r key.parent key.rel), f) := by
         unfold rowStepFreed; rw [hstep]; simp [rowFreed, ha, bind, Except.bind, pure, Except.pure]
       rw [List.foldlM_cons, h1]
       exact hr'
@@ -501,8 +536,8 @@ private theorem stat_live {E : Env D} {w w' : World D} {t : Turn D} {x : RowTouc
   exact ⟨h1, by rw [hl _ h1]; exact h2, h3, h4, h5⟩
 
 omit [Ord D] in
-private theorem get_headOf {E : Env D} {r : Rows D} {p : D} {rel c sm l cap wd : Nat} {rt : Bool}
-    (h : r.get (rowSpec E) (.head p rel) = some (.head c sm l cap wd rt)) :
+private theorem get_headOf {E : Env D} {r : Rows D} {p : D} {rel c sm l cap wd : Nat} {rt : Bool} {fl : Nat}
+    (h : r.get (rowSpec E) (.head p rel) = some (.head c sm l cap wd rt fl)) :
     headOf E r p rel = some (c, sm, l, cap, wd, rt) := by
   unfold headOf rowAt; rw [h]
 
@@ -529,7 +564,8 @@ private theorem rowsRun_after {E : Env D} {w w₁ : World D} {t₁ t₂ : Turn D
     (hrows : w₁.rows = rr₁.1)
     (hl : ∀ c, (t₂.touches.any fun y => decide (y.cell = c)) = true → w₁.live E c = w.live E c) :
     ∃ rr, rowsRun E w₁ t₂ = .ok rr ∧ rr.2 = 0 ∧
-      ∀ s, rr.1.get (rowSpec E) s = view t₂.rows s (view t₁.rows s (w.rows.get (rowSpec E) s)) := by
+      ∀ s, rr.1.get (rowSpec E) s =
+        view (headFloor E w.rows) t₂.rows s (view (headFloor E w.rows) t₁.rows s (w.rows.get (rowSpec E) s)) := by
   obtain ⟨hn₁, hf₁⟩ := rowsRun_fold hnr₁ h₁
   obtain ⟨hn₂, hf₂⟩ := rowsRun_fold hnr₂ h₂
   obtain ⟨-, hv₁, -⟩ := fold_fwd _ _ _ hi₁ hn₁ hf₁
@@ -541,7 +577,7 @@ private theorem rowsRun_after {E : Env D} {w w₁ : World D} {t₁ t₂ : Turn D
       have hout : ∀ x ∈ t₁.rows, x.slot ≠ .row kz := fun x hx e => hd x hx z hz (e.trans hzs.symm)
       refine ⟨stat_live hl hst, ?_, c + insN kz.parent kz.rel t₁.rows, sm + insA kz.parent kz.rel t₁.rows,
         l, cap, rt, ?_⟩
-      · unfold rowAt at hrow ⊢; rw [hrows, hv₁, view_row_out _ _ _ hout]; exact hrow
+      · unfold rowAt at hrow ⊢; rw [hrows, hv₁, view_row_out _ _ _ _ hout]; exact hrow
       · apply get_headOf; rw [hrows, hv₁, headOf_some hh, view_head]
     · obtain ⟨c, sm, l, cap, wd, rt, hh, -, -⟩ := hc2 p rel hpos
       obtain ⟨f1, f2⟩ := hfit p rel (by omega) c sm l cap wd rt hh
@@ -549,8 +585,9 @@ private theorem rowsRun_after {E : Env D} {w w₁ : World D} {t₁ t₂ : Turn D
       apply get_headOf; rw [hrows, hv₁, headOf_some hh, view_head]
   obtain ⟨r', hr'⟩ := fold_bwd _ w₁.rows 0 hi₂ hn₂ hcond
   obtain ⟨-, hv, -⟩ := fold_fwd _ _ _ hi₂ hn₂ hr'
+  have hF : headFloor E w₁.rows = headFloor E w.rows := headFloor_view (fun s => by rw [hrows, hv₁])
   refine ⟨(r', 0), rowsRun_of_fold hnr₂ h₂ hr', rfl, fun s => ?_⟩
-  rw [hv s]; simp only; rw [hrows, hv₁]
+  rw [hv s]; simp only; rw [hF, hrows, hv₁]
 
 /-- **The rows commute (the rows-level core of `admit_comm`).** Two turns that retire nothing and
 only insert, into disjoint row slots, whose inserts fit together in every relation, each run from
@@ -603,6 +640,11 @@ private theorem live_of_get {E : Env D} {w w' : World D} {c : D}
     w'.live E c = w.live E c ∧ w'.taken E c = w.taken E c := by
   unfold World.live World.taken World.entry; rw [h]; exact ⟨rfl, rfl⟩
 
+private theorem entry_of_get {E : Env D} {w w' : World D} {c : D}
+    (h : w'.trie.get (trieSpec E) (.cell c) = w.trie.get (trieSpec E) (.cell c)) :
+    w'.entry E c = w.entry E c := by
+  unfold World.entry; rw [h]
+
 /-! ## The footprint and the second admission -/
 
 /-- **Footprints disjoint outside the heads** (KERNEL-46 amendment 3): distinct transaction ids; a
@@ -654,7 +696,7 @@ private theorem mapEx_congr {α β ε : Type} {f g : α → Except ε β} :
       rw [h a (by simp), mapEx_congr (fun b hb => h b (by simp [hb]))]
 
 private theorem touchCheck_congr {E : Env D} {w w' : World D} {x : Touch D}
-    (h : w'.live E x.cell = w.live E x.cell) : touchCheck E w' x = touchCheck E w x := by
+    (h : w'.entry E x.cell = w.entry E x.cell) : touchCheck E w' x = touchCheck E w x := by
   unfold touchCheck; rw [h]
 
 /-- **The second admission**: after `t₁`, `t₂` passes every check with the touches' results it had
@@ -668,7 +710,7 @@ private theorem check_after {E : Env D} {w : World D} {t₁ t₂ : Turn D} {post
     (ha₁ : World.admit E w t₁ = .ok (commit E w t₁ posts₁)) :
     check E (commit E w t₁ posts₁) t₂ = .ok posts₂ ∧
       ∀ s, (rowsAfter E (commit E w t₁ posts₁) t₂).1.get (rowSpec E) s =
-        view t₂.rows s (view t₁.rows s (w.rows.get (rowSpec E) s)) := by
+        view (headFloor E w.rows) t₂.rows s (view (headFloor E w.rows) t₁.rows s (w.rows.get (rowSpec E) s)) := by
   obtain ⟨hid, hkp, hnr₁, hnr₂, hb₁, hb₂, hnul, hi₁, hi₂, hd, -, hq₂⟩ := hfoot
   -- every cell `t₂` touches or bears reads in `(commit E w t₁ posts₁)` as in `w`
   have hframe : ∀ c, (c ∈ t₂.touches.map Touch.cell ∨ c ∈ createdIds t₂) →
@@ -699,7 +741,7 @@ private theorem check_after {E : Env D} {w : World D} {t₁ t₂ : Turn D} {post
   obtain ⟨raw, hmap, hposts⟩ := hk₂.touches
   have hmap' : mapEx (touchCheck E (commit E w t₁ posts₁)) t₂.touches = .ok raw := by
     rw [← hmap]
-    exact mapEx_congr fun y hy => touchCheck_congr (live_of_get (hframe y.cell (.inl (List.mem_map_of_mem hy)))).1
+    exact mapEx_congr fun y hy => touchCheck_congr (entry_of_get (hframe y.cell (.inl (List.mem_map_of_mem hy))))
   -- the window
   have hwin' : checkWindow (commit E w t₁ posts₁) t₂ = .ok () := by
     have h := hk₂.window
@@ -911,7 +953,7 @@ private def plantStep (E : Env D) (w : World D) (t : Turn D) (r : Rows D) (x : R
     Except (Reject D) (Rows D) :=
   match x.slot, x.act with
   | .row key, .insert _ _ => do
-      req (decide (x.seen = some (rowPin E (rowAt E r (.head key.parent key.rel))))) (.stale key.parent)
+      req (decide (x.seen = some (rowPin E (headFloor E r key.parent key.rel) (rowAt E r (.head key.parent key.rel))))) (.stale key.parent)
       rowStep E w t r { x with seen := none }
   | _, _ => rowStep E w t r x
 
@@ -924,13 +966,14 @@ theorem plant_second_rain_stale {E : Env D} {w : World D} {t₁ t₂ : Turn D} {
     (hinj : ∀ l l' : RowLeaf, rowDigest E l = rowDigest E l' → l = l')
     (hs₁ : x₁.slot = .row k₁) (ha₁ : x₁.act = .insert a₁ v₁) (h₁ : rowStep E w t₁ r x₁ = .ok r₁)
     (hs₂ : x₂.slot = .row k₂) (ha₂ : x₂.act = .insert a₂ v₂) (hp : k₂.parent = k₁.parent) (hr : k₂.rel = k₁.rel)
-    (hseen : x₂.seen = some (rowPin E (rowAt E r (.head k₁.parent k₁.rel)))) :
+    (hseen : x₂.seen = some (rowPin E (headFloor E r k₁.parent k₁.rel) (rowAt E r (.head k₁.parent k₁.rel)))) :
     plantStep E w t₂ r₁ x₂ = .error (.stale k₂.parent) := by
-  obtain ⟨-, -, c, sm, l, cap, rt, hh, -, -, rfl⟩ := ins_step_ok hs₁ ha₁ h₁
+  obtain ⟨-, -, c, sm, l, cap, rt, hh, -, -, hr1⟩ := ins_step_ok hs₁ ha₁ h₁
   have hg := headOf_some hh
-  have hmoved : rowPin E (rowAt E (setHead E (r.insert (rowSpec E) (.row k₁) (.row a₁ v₁)) k₁.parent k₁.rel
-      (c + 1) (sm + a₁) l cap k₁.k.size rt) (.head k₁.parent k₁.rel)) ≠
-      rowPin E (rowAt E r (.head k₁.parent k₁.rel)) := by
+  have hmoved : ∀ f f', rowPin E f (rowAt E r₁ (.head k₁.parent k₁.rel)) ≠
+      rowPin E f' (rowAt E r (.head k₁.parent k₁.rel)) := by
+    intro f f'
+    rw [hr1]
     unfold rowAt
     rw [get_step, if_pos rfl, hg]
     intro e
@@ -942,10 +985,10 @@ theorem plant_second_rain_stale {E : Env D} {w : World D} {t₁ t₂ : Turn D} {
   subst hs₂ ha₂ hseen
   unfold plantStep
   simp only [hp, hr]
-  rw [show decide (some (rowPin E (rowAt E r (.head k₁.parent k₁.rel))) = some (rowPin E (rowAt E
-      (setHead E (r.insert (rowSpec E) (.row k₁) (.row a₁ v₁)) k₁.parent k₁.rel (c + 1) (sm + a₁) l cap
-        k₁.k.size rt) (.head k₁.parent k₁.rel)))) = false from
-    decide_eq_false fun e => hmoved (Option.some.inj e).symm]
+  have hne : ¬ (some (rowPin E (headFloor E r k₁.parent k₁.rel) (rowAt E r (.head k₁.parent k₁.rel))) =
+      some (rowPin E (headFloor E r₁ k₁.parent k₁.rel) (rowAt E r₁ (.head k₁.parent k₁.rel)))) :=
+    fun e => hmoved _ _ (Option.some.inj e).symm
+  rw [decide_eq_false hne]
   rfl
 
 /-- **Tooth 3: a written parent re-pins.** If the first turn WRITES a cell the second pins, and the
@@ -955,7 +998,7 @@ one parent. -/
 theorem write_repin_refused {E : Env D} {w w₁ w₂ : World D} {t₁ t₂ : Turn D} {x y : Touch D} {ops : List Op}
     (h₂ : World.admit E w t₂ = .ok w₂) (hx : x ∈ t₁.touches) (hxw : x.act = .write ops)
     (hy : y ∈ t₂.touches) (hxy : x.cell = y.cell)
-    (hmove : pinOf E (w₁.live E x.cell) ≠ pinOf E (w.live E x.cell)) :
+    (hmove : pinOf E (w₁.entry E x.cell) ≠ pinOf E (w.entry E x.cell)) :
     ¬ RowsCommFoot t₁ t₂ ∧ ∀ w', World.admit E w₁ t₂ ≠ .ok w' := by
   refine ⟨fun hf => ?_, stale_refused hy ?_⟩
   · have := (hf.2.1 x hx y hy hxy).1

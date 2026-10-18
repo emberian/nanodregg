@@ -667,7 +667,7 @@ def selfWrite (w : World D) (obj : D) : Call D :=
   let u : Unsigned D :=
     { world := w.origin, member := me, key := Founder.key, notBefore := 0,
       validUntil := Bounds.windowMax / 2 + 8,
-      pins := [(me, pinOf X.env (w.live X.env me)), (obj, pinOf X.env (w.live X.env obj))],
+      pins := [(me, pinOf X.env (w.entry X.env me)), (obj, pinOf X.env (w.entry X.env obj))],
       maxCharge := 1 <<< 40, body := .write obj [(stateBase, some "self".toUTF8)] none }
   { unsigned := u, signature := Codec.Ed25519.sign Founder.seed (X.callMessage u) }
 

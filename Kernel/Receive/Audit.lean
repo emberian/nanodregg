@@ -37,8 +37,10 @@ def auditTurn (X : Ctx D) (w : World D) (t : Turn D) : Except (Verdict D) (World
 `judge` records it, and records this very refusal (its id, signer, window and code). A Host that
 invents a refusal or records the wrong code is caught here exactly as one that invents a Turn. A
 refusal the Host answered but never logged is no step at all, so no audit sees it; what binds the
-Host to it is a proof of the record against a head it served (open: a refusal inclusion theorem). -/
+Host to it is a proof of the record against a head it served (open: a refusal inclusion theorem). A recorded stale is refused by name before anything is decoded
+(`staleRecorded`, KERNEL-54: `judge` never records one). -/
 def auditRefusal (X : Ctx D) (w : World D) (r : Refused D) : Except (Verdict D) (World D) :=
+  if r.code = staleCode then .error (.refused .staleRecorded) else
   match X.decodeCall r.event with
   | none => .error (.refused .undecodableEvent)
   | some c =>

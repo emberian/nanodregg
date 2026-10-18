@@ -156,22 +156,23 @@ theorem touchCheck_cellFit {E : Env D} {w : World D} {x : Touch D} {p : Post D}
   | keep => rw [ha] at h; simp [pure, Except.pure] at h
   | write ops =>
       rw [ha] at h hx
-      cases hc : w.live E x.cell with
-      | none => rw [hc] at h; simp at h
-      | some cell =>
-          rw [hc] at h
-          simp only [except_bind_ok, pure, Except.pure, Except.ok.injEq, Option.some.injEq] at h
-          obtain ⟨post, hp, rfl⟩ := h
-          exact postWrite_fits (hw _ _ (live_get hc)) hx.2 hp
+      rcases hc : w.entry E x.cell with _ | ⟨cell, v⟩ | _
+      · rw [hc] at h; simp at h
+      · rw [hc] at h
+        simp only [except_bind_ok, pure, Except.pure, Except.ok.injEq, Option.some.injEq] at h
+        obtain ⟨⟨⟩, hlim, post, hp, rfl⟩ := h
+        rw [req_ok, decide_eq_true_eq, counterLimit_eq] at hlim
+        exact ⟨postWrite_fits (hw _ _ (entry_get hc)).1 hx.2 hp, hlim⟩
+      · rw [hc] at h; simp at h
   | retire =>
       rw [ha] at h
-      cases hc : w.live E x.cell with
-      | none => rw [hc] at h; simp at h
-      | some cell =>
-          rw [hc] at h
-          simp only [except_bind_ok, pure, Except.pure, Except.ok.injEq, Option.some.injEq] at h
-          obtain ⟨_, _, rfl⟩ := h
-          trivial
+      rcases hc : w.entry E x.cell with _ | ⟨cell, v⟩ | _
+      · rw [hc] at h; simp at h
+      · rw [hc] at h
+        simp only [except_bind_ok, pure, Except.pure, Except.ok.injEq, Option.some.injEq] at h
+        obtain ⟨_, _, rfl⟩ := h
+        trivial
+      · rw [hc] at h; simp at h
 
 /-! ## The map under insertion -/
 
@@ -234,13 +235,13 @@ theorem genesis_cellsFit {X : Receive.Ctx D} {name nonce : ByteArray} {allowance
   obtain ⟨p, hp, ⟨_, he⟩ | ⟨_, he⟩⟩ := Receive.mem_founderEntries hq
   · subst he
     have hk := (hf.2.2.2.1 p.1 (List.fst_mem_of_mem_zipIdx hp)).1
-    refine ⟨kM, slotsOf_fits (by simpa using l2) fun q hq => ?_⟩
+    refine ⟨⟨kM, slotsOf_fits (by simpa using l2) fun q hq => ?_⟩, by decide⟩
     simp only [List.mem_cons, List.not_mem_nil, or_false] at hq
     rcases hq with rfl | rfl
     · exact ⟨k0, hv ▸ hk⟩
     · exact ⟨k1, hbd _⟩
   · subst he
-    refine ⟨kG, slotsOf_fits ?_ fun q hq => ?_⟩
+    refine ⟨⟨kG, slotsOf_fits ?_ fun q hq => ?_⟩, by decide⟩
     · rw [hr]; simpa using l5
     rw [hr] at hq
     simp only [List.cons_append, List.nil_append, List.mem_cons, List.not_mem_nil, or_false] at hq
@@ -260,7 +261,7 @@ theorem admit_cellsFit {E : Env D} {w w' : World D} {t : Turn D} (hw : w.CellsFi
     intro q hq
     simp only [bornEntries, List.mem_map] at hq
     obtain ⟨c, hc, rfl⟩ := hq
-    exact (hcf c hc).2
+    exact ⟨(hcf c hc).2, by decide⟩
   have hposts : ∀ p ∈ posts.map Post.pair, (Leaf.entry p.2).CellFit Cell.Fits := by
     intro q hq
     simp only [List.mem_map] at hq

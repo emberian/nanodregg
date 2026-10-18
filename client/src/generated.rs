@@ -868,7 +868,7 @@ pub mod attempt {
             (true, Some((Request::Lookup, Seen::Refused))) => Action::Confirm,
             (true, Some((Request::Lookup, Seen::Declined))) => Action::BadReply,
             (true, Some((Request::Lookup, Seen::Unknown))) => Action::Uncertain,
-            (true, Some((Request::Lookup, Seen::Absent))) => Action::Submit,
+            (true, Some((Request::Lookup, Seen::Absent))) => Action::Probe,
             (true, Some((Request::Lookup, Seen::Lost))) => Action::Uncertain,
             (true, Some((Request::Lookup, Seen::Open))) => Action::BadReply,
             (true, Some((Request::Lookup, Seen::Forgotten))) => Action::BadReply,
@@ -886,7 +886,7 @@ pub mod attempt {
             (true, Some((Request::Probe, Seen::Unknown))) => Action::BadReply,
             (true, Some((Request::Probe, Seen::Absent))) => Action::BadReply,
             (true, Some((Request::Probe, Seen::Lost))) => Action::Uncertain,
-            (true, Some((Request::Probe, Seen::Open))) => Action::Open,
+            (true, Some((Request::Probe, Seen::Open))) => Action::Submit,
             (true, Some((Request::Probe, Seen::Forgotten))) => Action::Uncertain,
         }
     }

@@ -41,12 +41,12 @@ private def parentOf : RowSlot D → D
 
 /-- 1 at a row of `(p, rel)`. -/
 private def gc (p : D) (rel : Nat) : RowSlot D × RowLeaf → Nat
-  | (.row key, .row _ _) => if key.parent = p ∧ key.rel = rel then 1 else 0
+  | (.row key, .row _ _ _) => if key.parent = p ∧ key.rel = rel then 1 else 0
   | _ => 0
 
 /-- Its `amt` at a row of `(p, rel)`. -/
 private def gs (p : D) (rel : Nat) : RowSlot D × RowLeaf → Nat
-  | (.row key, .row amt _) => if key.parent = p ∧ key.rel = rel then amt else 0
+  | (.row key, .row amt _ _) => if key.parent = p ∧ key.rel = rel then amt else 0
   | _ => 0
 
 omit [Ord D] in
@@ -81,47 +81,47 @@ private theorem len_eq {α : Type} : ∀ (l : List α), (l.map fun _ => 1).sum =
 omit [Ord D] [DecidableEq D] in
 /-- What a relation's rows count is, from a filterMap that lists them (`rowsHeaded`'s `rowsOf`). -/
 private theorem filterMap_rows [DecidableEq D] {p : D} {rel : Nat} {F : RowSlot D × RowLeaf → Option (RowKey D × Nat)}
-    (h1 : ∀ key amt v, F (.row key, .row amt v) =
+    (h1 : ∀ key amt v u, F (.row key, .row amt v u) =
       if key.parent = p ∧ key.rel = rel then some (key, amt) else none)
     (h2 : ∀ q r v, F (.head q r, v) = none)
-    (h3 : ∀ key c s l cap wd rt, F (.row key, .head c s l cap wd rt) = none) :
+    (h3 : ∀ key c s l cap wd rt fl, F (.row key, .head c s l cap wd rt fl) = none) :
     ∀ l : List (RowSlot D × RowLeaf),
       (l.filterMap F).length = (l.map (gc p rel)).sum ∧ ((l.filterMap F).map (·.2)).sum = (l.map (gs p rel)).sum
   | [] => ⟨rfl, rfl⟩
   | q :: l => by
       obtain ⟨ih1, ih2⟩ := filterMap_rows h1 h2 h3 l
-      obtain ⟨_ | key, ⟨c0, s0, l0, cap0, wd0, rt0⟩ | ⟨amt, v⟩⟩ := q
+      obtain ⟨_ | key, ⟨c0, s0, l0, cap0, wd0, rt0, fl0⟩ | ⟨amt, v, u⟩⟩ := q
       · simp only [List.filterMap_cons, h2, List.map_cons, List.sum_cons, gc_head, gs_head, Nat.zero_add]
         exact ⟨ih1, ih2⟩
       · simp only [List.filterMap_cons, h2, List.map_cons, List.sum_cons, gc_head, gs_head, Nat.zero_add]
         exact ⟨ih1, ih2⟩
-      · have e1 : gc p rel (.row key, .head c0 s0 l0 cap0 wd0 rt0) = 0 := rfl
-        have e2 : gs p rel (.row key, .head c0 s0 l0 cap0 wd0 rt0) = 0 := rfl
+      · have e1 : gc p rel (.row key, .head c0 s0 l0 cap0 wd0 rt0 fl0) = 0 := rfl
+        have e2 : gs p rel (.row key, .head c0 s0 l0 cap0 wd0 rt0 fl0) = 0 := rfl
         simp only [List.filterMap_cons, h3, List.map_cons, List.sum_cons, e1, e2, Nat.zero_add]
         exact ⟨ih1, ih2⟩
       · by_cases hk : key.parent = p ∧ key.rel = rel
-        · have e : F (.row key, .row amt v) = some (key, amt) := by rw [h1]; simp [hk.1, hk.2]
+        · have e : F (.row key, .row amt v u) = some (key, amt) := by rw [h1]; simp [hk.1, hk.2]
           simp only [List.filterMap_cons, e, List.length_cons, List.map_cons, List.sum_cons]
           simp only [gc, gs, hk, and_self, if_true]
           exact ⟨by omega, by omega⟩
-        · have e : F (.row key, .row amt v) = none := by rw [h1, if_neg hk]
+        · have e : F (.row key, .row amt v u) = none := by rw [h1, if_neg hk]
           simp only [List.filterMap_cons, e, List.map_cons, List.sum_cons, gc_row_ne hk, gs_row_ne hk, Nat.zero_add]
           exact ⟨ih1, ih2⟩
 
 omit [Ord D] [DecidableEq D] in
 private theorem filterMap_rows_len [DecidableEq D] {p : D} {rel : Nat} {F : RowSlot D × RowLeaf → Option (RowKey D × Nat)}
-    (h1 : ∀ key amt v, F (.row key, .row amt v) =
+    (h1 : ∀ key amt v u, F (.row key, .row amt v u) =
       if key.parent = p ∧ key.rel = rel then some (key, amt) else none)
     (h2 : ∀ q r v, F (.head q r, v) = none)
-    (h3 : ∀ key c s l cap wd rt, F (.row key, .head c s l cap wd rt) = none) (l : List (RowSlot D × RowLeaf)) :
+    (h3 : ∀ key c s l cap wd rt fl, F (.row key, .head c s l cap wd rt fl) = none) (l : List (RowSlot D × RowLeaf)) :
     (l.filterMap F).length = (l.map (gc p rel)).sum := (filterMap_rows h1 h2 h3 l).1
 
 omit [Ord D] [DecidableEq D] in
 private theorem filterMap_rows_sum [DecidableEq D] {p : D} {rel : Nat} {F : RowSlot D × RowLeaf → Option (RowKey D × Nat)}
-    (h1 : ∀ key amt v, F (.row key, .row amt v) =
+    (h1 : ∀ key amt v u, F (.row key, .row amt v u) =
       if key.parent = p ∧ key.rel = rel then some (key, amt) else none)
     (h2 : ∀ q r v, F (.head q r, v) = none)
-    (h3 : ∀ key c s l cap wd rt, F (.row key, .head c s l cap wd rt) = none) (l : List (RowSlot D × RowLeaf)) :
+    (h3 : ∀ key c s l cap wd rt fl, F (.row key, .head c s l cap wd rt fl) = none) (l : List (RowSlot D × RowLeaf)) :
     ((l.filterMap F).map (·.2)).sum = (l.map (gs p rel)).sum := (filterMap_rows h1 h2 h3 l).2
 
 omit [Ord D] in
@@ -129,14 +129,14 @@ omit [Ord D] in
 private theorem rowsHeaded_iff (l : List (RowSlot D × RowLeaf)) :
     rowsHeaded l = true ↔
       (∀ key v, (RowSlot.row key, v) ∈ l →
-        ∃ c s lim cap rt, (RowSlot.head key.parent key.rel, RowLeaf.head c s lim cap key.k.size rt) ∈ l) ∧
-      (∀ p rel c s lim cap wd rt, (RowSlot.head p rel, RowLeaf.head c s lim cap wd rt) ∈ l →
+        ∃ c s lim cap rt fl, (RowSlot.head key.parent key.rel, RowLeaf.head c s lim cap key.k.size rt fl) ∈ l) ∧
+      (∀ p rel c s lim cap wd rt fl, (RowSlot.head p rel, RowLeaf.head c s lim cap wd rt fl) ∈ l →
         (l.map (gc p rel)).sum = c ∧ (l.map (gs p rel)).sum = s) := by
   unfold rowsHeaded
   simp only [Bool.and_eq_true, List.all_eq_true]
   constructor
   · rintro ⟨hA, hB⟩
-    refine ⟨fun key v hm => ?_, fun p rel c s lim cap wd rt hm => ?_⟩
+    refine ⟨fun key v hm => ?_, fun p rel c s lim cap wd rt fl hm => ?_⟩
     · have := hA _ hm
       simp only [List.any_eq_true, Bool.and_eq_true, decide_eq_true_eq, List.mem_filterMap] at this
       obtain ⟨⟨hp, hr, c, s, wd⟩, ⟨⟨_ | _, _ | _⟩, hq, he⟩, ⟨e1, e2⟩, e3⟩ := this
@@ -144,7 +144,7 @@ private theorem rowsHeaded_iff (l : List (RowSlot D × RowLeaf)) :
         obtain ⟨rfl, rfl, rfl, rfl, rfl⟩ := he
         simp only at e1 e2 e3
         subst e1 e2 e3
-        exact ⟨_, _, _, _, _, hq⟩
+        exact ⟨_, _, _, _, _, _, hq⟩
       · simp at he
       · simp at he
       · simp at he
@@ -159,13 +159,14 @@ private theorem rowsHeaded_iff (l : List (RowSlot D × RowLeaf)) :
     refine ⟨fun q hq => ?_, fun h hh => ?_⟩
     · obtain ⟨_ | key, v⟩ := q
       · rfl
-      · obtain ⟨c, s, lim, cap, rt, hm⟩ := hA key v hq
+      · obtain ⟨c, s, lim, cap, rt, fl, hm⟩ := hA key v hq
         simp only [List.any_eq_true, Bool.and_eq_true, decide_eq_true_eq, List.mem_filterMap]
         exact ⟨(key.parent, key.rel, c, s, key.k.size), ⟨_, hm, rfl⟩, ⟨rfl, rfl⟩, rfl⟩
     · obtain ⟨⟨_ | _, _ | _⟩, hq, he⟩ := List.mem_filterMap.mp hh
       · simp only [Option.some.injEq] at he
         subst he
-        obtain ⟨hc, hs⟩ := hB _ _ _ _ _ _ _ _ hq
+        obtain ⟨hc, hs⟩ := hB _ _ _ _ _ _ _ _ _ hq
+
         simp only [decide_eq_true_eq]
         rw [filterMap_rows_len, filterMap_rows_sum]
         · exact ⟨hc, hs⟩
@@ -180,8 +181,8 @@ private theorem rowsHeaded_iff (l : List (RowSlot D × RowLeaf)) :
 private def Inv (E : Env D) (r : Rows D) : Prop :=
   (∀ k v, r.get (rowSpec E) k = some v → rowFits k v = true) ∧
   (∀ key v, r.get (rowSpec E) (.row key) = some v →
-    ∃ c s lim cap rt, r.get (rowSpec E) (.head key.parent key.rel) = some (.head c s lim cap key.k.size rt)) ∧
-  (∀ p rel c s lim cap wd rt, r.get (rowSpec E) (.head p rel) = some (.head c s lim cap wd rt) →
+    ∃ c s lim cap rt fl, r.get (rowSpec E) (.head key.parent key.rel) = some (.head c s lim cap key.k.size rt fl)) ∧
+  (∀ p rel c s lim cap wd rt fl, r.get (rowSpec E) (.head p rel) = some (.head c s lim cap wd rt fl) →
     (r.toList.map (gc p rel)).sum = c ∧ (r.toList.map (gs p rel)).sum = s)
 
 omit [Ord D] in
@@ -191,15 +192,15 @@ private theorem inv_iff {E : Env D} {r : Rows D} (hr : Trie.Routed (rowSpec E) 0
   rw [rowsHeaded_iff]
   constructor
   · rintro ⟨hF, h1, h2⟩
-    refine ⟨fun q hq => hF q.1 q.2 ((hm q.1 q.2).mp hq), fun key v hq => ?_, fun p rel c s lim cap wd rt hq => ?_⟩
-    · obtain ⟨c, s, lim, cap, rt, hg⟩ := h1 key v ((hm _ _).mp hq)
-      exact ⟨c, s, lim, cap, rt, (hm _ _).mpr hg⟩
-    · exact h2 p rel c s lim cap wd rt ((hm _ _).mp hq)
+    refine ⟨fun q hq => hF q.1 q.2 ((hm q.1 q.2).mp hq), fun key v hq => ?_, fun p rel c s lim cap wd rt fl hq => ?_⟩
+    · obtain ⟨c, s, lim, cap, rt, fl, hg⟩ := h1 key v ((hm _ _).mp hq)
+      exact ⟨c, s, lim, cap, rt, fl, (hm _ _).mpr hg⟩
+    · exact h2 p rel c s lim cap wd rt fl ((hm _ _).mp hq)
   · rintro ⟨hF, h1, h2⟩
-    refine ⟨fun k v hg => hF (k, v) ((hm k v).mpr hg), fun key v hg => ?_, fun p rel c s lim cap wd rt hg => ?_⟩
-    · obtain ⟨c, s, lim, cap, rt, hq⟩ := h1 key v ((hm _ _).mpr hg)
-      exact ⟨c, s, lim, cap, rt, (hm _ _).mp hq⟩
-    · exact h2 p rel c s lim cap wd rt ((hm _ _).mpr hg)
+    refine ⟨fun k v hg => hF (k, v) ((hm k v).mpr hg), fun key v hg => ?_, fun p rel c s lim cap wd rt fl hg => ?_⟩
+    · obtain ⟨c, s, lim, cap, rt, fl, hq⟩ := h1 key v ((hm _ _).mpr hg)
+      exact ⟨c, s, lim, cap, rt, fl, (hm _ _).mp hq⟩
+    · exact h2 p rel c s lim cap wd rt fl ((hm _ _).mpr hg)
 
 /-! ## Sums and lengths over a rows trie -/
 
@@ -316,22 +317,22 @@ private def NoRetL (E : Env D) (xs : List (Touch D)) (r : Rows D) : Prop :=
 
 /-- A row write's head update (`setHead` over the rows `r1` the write left) keeps the invariant. -/
 private theorem setHead_inv {E : Env D} {w : World D} {t : Turn D} {r r1 r' : Rows D} {key : RowKey D}
-    {count sum limit cap width : Nat} {retract : Bool} {c' s' : Nat}
+    {count sum limit cap width : Nat} {retract : Bool} {floor c' s' floor' : Nat}
     (hr : Trie.Canon (rowSpec E) 0 r) (hr1 : Trie.Canon (rowSpec E) 0 r1)
     (hi : Inv E r) (hp : Par E w t r) (hn : NoRetL E t.touches r)
-    (hg : r.get (rowSpec E) (.head key.parent key.rel) = some (.head count sum limit cap width retract))
+    (hg : r.get (rowSpec E) (.head key.parent key.rel) = some (.head count sum limit cap width retract floor))
     (hlive : (w.live E key.parent).isSome = true)
     (hret : ∀ x ∈ t.touches, x.cell = key.parent → x.act ≠ .retire)
     (h1 : ∀ k, k ≠ .row key → r1.get (rowSpec E) k = r.get (rowSpec E) k)
     (h2 : ∀ l, r1.get (rowSpec E) (.row key) = some l → rowFits (.row key) l = true ∧ key.k.size = width)
     (hc : (r1.toList.map (gc key.parent key.rel)).sum = c')
     (hs : (r1.toList.map (gs key.parent key.rel)).sum = s')
-    (hcl : c' ≤ limit) (hsc : s' ≤ cap)
-    (he : r' = setHead E r1 key.parent key.rel c' s' limit cap width retract) :
+    (hcl : c' ≤ limit) (hsc : s' ≤ cap) (hfl : floor' < Bounds.counterLimit)
+    (he : r' = setHead E r1 key.parent key.rel c' s' limit cap width retract floor') :
     Inv E r' ∧ Par E w t r' ∧ NoRetL E t.touches r' := by
   obtain ⟨hF, hH1, hH2⟩ := hi
   have hget : ∀ k, r'.get (rowSpec E) k =
-      if k = .head key.parent key.rel then some (.head c' s' limit cap width retract) else r1.get (rowSpec E) k := by
+      if k = .head key.parent key.rel then some (.head c' s' limit cap width retract floor') else r1.get (rowSpec E) k := by
     intro k; rw [he]; unfold setHead; exact Trie.get_insert (rowSpec E) r1 _ k _
   have hR' : Trie.Routed (rowSpec E) 0 r' := by
     rw [he]; unfold setHead; exact (Trie.canon_insert (rowSpec E) _ _ hr1).1
@@ -347,7 +348,7 @@ private theorem setHead_inv {E : Env D} {w : World D} {t : Turn D} {r r1 r' : Ro
     sum_congr_get (rowSpec E) hr1.1 hr.1 g (fun k => decide (k = .row key))
       (fun k v hk => by rw [of_decide_eq_true hk]; exact hg0 v)
       (fun k hk => h1 k (of_decide_eq_false hk))
-  refine ⟨⟨fun k v hkv => ?_, fun key' v hkv => ?_, fun p rel c s lim cap0 wd rt hkv => ?_⟩, fun q rel v hkv => ?_,
+  refine ⟨⟨fun k v hkv => ?_, fun key' v hkv => ?_, fun p rel c s lim cap0 wd rt fl hkv => ?_⟩, fun q rel v hkv => ?_,
     fun key' v hkv x hx hxc => ?_⟩
   · -- every entry fits
     rw [hget] at hkv
@@ -366,23 +367,23 @@ private theorem setHead_inv {E : Env D} {w : World D} {t : Turn D} {r r1 r' : Ro
     rw [hget, if_neg (hrh _ _ _)] at hkv
     by_cases hk : key' = key
     · subst hk
-      refine ⟨c', s', limit, cap, retract, ?_⟩
+      refine ⟨c', s', limit, cap, retract, floor', ?_⟩
       rw [hget, if_pos rfl, (h2 v hkv).2]
     · have hne : (RowSlot.row key' : RowSlot D) ≠ .row key := fun h => hk (by injection h)
       rw [h1 _ hne] at hkv
-      obtain ⟨c, s, lim, cap1, rt, hg'⟩ := hH1 key' v hkv
+      obtain ⟨c, s, lim, cap1, rt, fl1, hg'⟩ := hH1 key' v hkv
       by_cases hpr : (RowSlot.head key'.parent key'.rel : RowSlot D) = .head key.parent key.rel
       · rw [hpr, hg] at hg'
         simp only [Option.some.injEq, RowLeaf.head.injEq] at hg'
-        refine ⟨c', s', limit, cap, retract, ?_⟩
+        refine ⟨c', s', limit, cap, retract, floor', ?_⟩
         rw [hget, if_pos hpr, hg'.2.2.2.2.1]
-      · exact ⟨c, s, lim, cap1, rt, by rw [hget, if_neg hpr, h1 _ (hrh _ _ _).symm, hg']⟩
+      · exact ⟨c, s, lim, cap1, rt, fl1, by rw [hget, if_neg hpr, h1 _ (hrh _ _ _).symm, hg']⟩
   · -- every head counts its rows
     rw [hget] at hkv
     split at hkv
     · rename_i hk
       simp only [Option.some.injEq, RowLeaf.head.injEq] at hkv
-      obtain ⟨rfl, rfl, -, -, -, -⟩ := hkv
+      obtain ⟨rfl, rfl, -, -, -, -, -⟩ := hkv
       simp only [RowSlot.head.injEq] at hk
       obtain ⟨rfl, rfl⟩ := hk
       rw [hsum1 _ (gc_head _ _ _ _), hsum1 _ (gs_head _ _ _ _)]
@@ -391,7 +392,7 @@ private theorem setHead_inv {E : Env D} {w : World D} {t : Turn D} {r r1 r' : Ro
       rw [h1 _ (hrh _ _ _).symm] at hkv
       have hm : ¬(key.parent = p ∧ key.rel = rel) := fun ⟨e1, e2⟩ => hk (by rw [e1, e2])
       rw [hsum1 _ (gc_head _ _ _ _), hsum1 _ (gs_head _ _ _ _), hsum0 _ (gc_row_ne hm), hsum0 _ (gs_row_ne hm)]
-      exact hH2 p rel c s lim cap0 wd rt hkv
+      exact hH2 p rel c s lim cap0 wd rt fl hkv
   · -- every head's parent is live or born
     rw [hget] at hkv
     split at hkv
@@ -411,11 +412,11 @@ private theorem declare_inv {E : Env D} {w : World D} {t : Turn D} {r r' : Rows 
     {retract : Bool} (hr : Trie.Canon (rowSpec E) 0 r) (hi : Inv E r) (hp : Par E w t r) (hn : NoRetL E t.touches r)
     (hnone : r.get (rowSpec E) (.head p rel) = none) (hrel : rel < 256) (hlim : limit ≤ Bounds.rowsPerRelationMax)
     (hwd : width ≤ Bounds.keyBytesMax) (hcap : cap < Bounds.counterLimit) (hlate : p ∈ createdIds t)
-    (he : r' = setHead E r p rel 0 0 limit cap width retract) :
+    (he : r' = setHead E r p rel 0 0 limit cap width retract 0) :
     Inv E r' ∧ Par E w t r' ∧ NoRetL E t.touches r' := by
   obtain ⟨hF, hH1, hH2⟩ := hi
   have hget : ∀ k, r'.get (rowSpec E) k =
-      if k = .head p rel then some (.head 0 0 limit cap width retract) else r.get (rowSpec E) k := by
+      if k = .head p rel then some (.head 0 0 limit cap width retract 0) else r.get (rowSpec E) k := by
     intro k; rw [he]; unfold setHead; exact Trie.get_insert (rowSpec E) r _ k _
   have hR' : Trie.Routed (rowSpec E) 0 r' := by
     rw [he]; unfold setHead; exact (Trie.canon_insert (rowSpec E) _ _ hr).1
@@ -426,7 +427,7 @@ private theorem declare_inv {E : Env D} {w : World D} {t : Turn D} {r r' : Rows 
     sum_congr_get (rowSpec E) hR' hr.1 g (fun k => decide (k = .head p rel))
       (fun k v hk => by rw [of_decide_eq_true hk]; exact hg0 v)
       (fun k hk => by rw [hget, if_neg (of_decide_eq_false hk)])
-  refine ⟨⟨fun k v hkv => ?_, fun key' v hkv => ?_, fun q rl c s lim cap0 wd rt hkv => ?_⟩, fun q rl v hkv => ?_,
+  refine ⟨⟨fun k v hkv => ?_, fun key' v hkv => ?_, fun q rl c s lim cap0 wd rt fl hkv => ?_⟩, fun q rl v hkv => ?_,
     fun key' v hkv x hx hxc => ?_⟩
   · rw [hget] at hkv
     split at hkv
@@ -438,15 +439,15 @@ private theorem declare_inv {E : Env D} {w : World D} {t : Turn D} {r r' : Rows 
       omega
     · exact hF k v hkv
   · rw [hget, if_neg (hrh _ _ _)] at hkv
-    obtain ⟨c, s, lim, cap1, rt, hg'⟩ := hH1 key' v hkv
+    obtain ⟨c, s, lim, cap1, rt, fl1, hg'⟩ := hH1 key' v hkv
     have hne : (RowSlot.head key'.parent key'.rel : RowSlot D) ≠ .head p rel := fun h => by
       rw [h, hnone] at hg'; cases hg'
-    exact ⟨c, s, lim, cap1, rt, by rw [hget, if_neg hne, hg']⟩
+    exact ⟨c, s, lim, cap1, rt, fl1, by rw [hget, if_neg hne, hg']⟩
   · rw [hget] at hkv
     split at hkv
     · rename_i hk
       simp only [Option.some.injEq, RowLeaf.head.injEq] at hkv
-      obtain ⟨rfl, rfl, -, -, -, -⟩ := hkv
+      obtain ⟨rfl, rfl, -, -, -, -, -⟩ := hkv
       simp only [RowSlot.head.injEq] at hk
       obtain ⟨rfl, rfl⟩ := hk
       rw [hsum _ (gc_head _ _ _ _), hsum _ (gs_head _ _ _ _)]
@@ -459,7 +460,7 @@ private theorem declare_inv {E : Env D} {w : World D} {t : Turn D} {r r' : Rows 
         · exact hg2 _ _ _
         · apply hg1
           rintro ⟨e1, e2⟩
-          obtain ⟨c, s, lim, cap1, rt, hg'⟩ := hH1 key v (Trie.get_of_mem (rowSpec E) hr.1 hm)
+          obtain ⟨c, s, lim, cap1, rt, fl1, hg'⟩ := hH1 key v (Trie.get_of_mem (rowSpec E) hr.1 hm)
           rw [e1, e2, hnone] at hg'
           cases hg'
       exact ⟨hz _ (fun _ v h => gc_row_ne h v) (gc_head _ _), hz _ (fun _ v h => gs_row_ne h v) (gs_head _ _)⟩
@@ -467,7 +468,7 @@ private theorem declare_inv {E : Env D} {w : World D} {t : Turn D} {r r' : Rows 
       have hm : ∀ g : RowSlot D × RowLeaf → Nat, (∀ v, g (.head p rel, v) = 0) →
           (r'.toList.map g).sum = (r.toList.map g).sum := hsum
       rw [hm _ (gc_head _ _ _ _), hm _ (gs_head _ _ _ _)]
-      exact hH2 q rl c s lim cap0 wd rt hkv
+      exact hH2 q rl c s lim cap0 wd rt fl hkv
   · rw [hget] at hkv
     split at hkv
     · rename_i hk
@@ -523,22 +524,23 @@ private theorem rowStep_inv {E : Env D} {w : World D} {t : Turn D} {r r' : Rows 
         have hwd : key.k.size = width := of_decide_eq_true (req_ok.mp hwd)
         have hfh := hi.1 _ _ hg
         simp only [rowFits, Bool.and_eq_true, decide_eq_true_eq] at hfh
-        obtain ⟨hcnt, hsm⟩ := hi.2.2 _ _ _ _ _ _ _ _ hg
-        have hins : ∀ (amt : Nat) (v : ByteArray), ∀ k, k ≠ .row key →
-            (r.insert (rowSpec E) (.row key) (.row amt v)).get (rowSpec E) k = r.get (rowSpec E) k :=
-          fun amt v k hk => Trie.get_insert_ne (rowSpec E) _ _ hk
-        have hfit : ∀ (amt : Nat) (v : ByteArray), amt < Bounds.counterLimit → v.size ≤ Bounds.valueBytesMax →
-            ∀ l, (r.insert (rowSpec E) (.row key) (.row amt v)).get (rowSpec E) (.row key) = some l →
+        obtain ⟨hcnt, hsm⟩ := hi.2.2 _ _ _ _ _ _ _ _ _ hg
+        have hins : ∀ (amt : Nat) (v : ByteArray) (u : Nat), ∀ k, k ≠ .row key →
+            (r.insert (rowSpec E) (.row key) (.row amt v u)).get (rowSpec E) k = r.get (rowSpec E) k :=
+          fun amt v u k hk => Trie.get_insert_ne (rowSpec E) _ _ hk
+        have hfit : ∀ (amt : Nat) (v : ByteArray) (u : Nat), amt < Bounds.counterLimit →
+            v.size ≤ Bounds.valueBytesMax → u < Bounds.counterLimit →
+            ∀ l, (r.insert (rowSpec E) (.row key) (.row amt v u)).get (rowSpec E) (.row key) = some l →
               rowFits (.row key) l = true ∧ key.k.size = width := by
-          intro amt v ha hv l hl
+          intro amt v u ha hv hu l hl
           rw [Trie.get_insert_self] at hl
           simp only [Option.some.injEq] at hl
           subst hl
           refine ⟨?_, hwd⟩
           simp only [rowFits, Bool.and_eq_true, decide_eq_true_eq]
-          exact ⟨⟨⟨hbk.1, hbk.2⟩, ha⟩, hv⟩
-        have e1 : ∀ amt v, gc key.parent key.rel (.row key, .row amt v) = 1 := fun _ _ => by simp [gc]
-        have e2 : ∀ amt v, gs key.parent key.rel (.row key, .row amt v) = amt := fun _ _ => by simp [gs]
+          exact ⟨⟨⟨⟨hbk.1, hbk.2⟩, ha⟩, hv⟩, hu⟩
+        have e1 : ∀ amt v u, gc key.parent key.rel (.row key, .row amt v u) = 1 := fun _ _ _ => by simp [gc]
+        have e2 : ∀ amt v u, gs key.parent key.rel (.row key, .row amt v u) = amt := fun _ _ _ => by simp [gs]
         cases act with
         | keep =>
             simp only [except_bind_ok] at h
@@ -555,56 +557,62 @@ private theorem rowStep_inv {E : Env D} {w : World D} {t : Turn D} {r r' : Rows 
             have hlt : count < limit := of_decide_eq_true (req_ok.mp hlt)
             have hcap : sum + amt ≤ cap := of_decide_eq_true (req_ok.mp hcap)
             have hv : v.size ≤ Bounds.valueBytesMax := of_decide_eq_true (req_ok.mp hv)
-            refine setHead_inv hr (Trie.canon_insert (rowSpec E) (.row key) (.row amt v) hr) hi hp hn hg hlive hret
-              (hins amt v) (hfit amt v (by omega) hv) ?_ ?_ (by omega) hcap h.symm
-            · rw [Trie.sumN_insert_none (rowSpec E) (gc key.parent key.rel) hr.1 (.row amt v) hnone, hcnt, e1]
-            · rw [Trie.sumN_insert_none (rowSpec E) (gs key.parent key.rel) hr.1 (.row amt v) hnone, hsm, e2]
+            refine setHead_inv hr (Trie.canon_insert (rowSpec E) (.row key) (.row amt v _) hr) hi hp hn hg hlive hret
+              (hins amt v _) (hfit amt v _ (by omega) hv hfh.2) ?_ ?_ (by omega) hcap hfh.2 h.symm
+            · rw [Trie.sumN_insert_none (rowSpec E) (gc key.parent key.rel) hr.1 (.row amt v _) hnone, hcnt, e1]
+            · rw [Trie.sumN_insert_none (rowSpec E) (gs key.parent key.rel) hr.1 (.row amt v _) hnone, hsm, e2]
         | upsert amt v =>
             simp only [except_bind_ok] at h
-            obtain ⟨⟨⟩, -, ⟨⟩, hv, ⟨⟩, hfull, ⟨⟩, hcap, h⟩ := h
+            obtain ⟨⟨⟩, -, ⟨⟩, hv, ⟨⟩, hver, ⟨⟩, hfull, ⟨⟩, hcap, h⟩ := h
             simp only [pure, Except.pure, Except.ok.injEq] at h
             have hv : v.size ≤ Bounds.valueBytesMax := of_decide_eq_true (req_ok.mp hv)
+            have hver := of_decide_eq_true (req_ok.mp hver)
             have hfull := req_ok.mp hfull
             have hcap := of_decide_eq_true (req_ok.mp hcap)
-            unfold rowAt at hfull hcap h
+            unfold rowAt at hver hfull hcap h
             cases hc : r.get (rowSpec E) (.row key) with
             | none =>
                 simp only [hc, Option.isNone_none, Bool.not_true, Bool.false_or, decide_eq_true_eq,
-                  if_true, Nat.sub_zero] at hfull hcap h
-                refine setHead_inv hr (Trie.canon_insert (rowSpec E) (.row key) (.row amt v) hr) hi hp hn hg hlive hret
-                  (hins amt v) (hfit amt v (by omega) hv) ?_ ?_ (by omega) hcap h.symm
-                · rw [Trie.sumN_insert_none (rowSpec E) (gc key.parent key.rel) hr.1 (.row amt v) hc, hcnt, e1]
-                · rw [Trie.sumN_insert_none (rowSpec E) (gs key.parent key.rel) hr.1 (.row amt v) hc, hsm, e2]
+                  if_true, Nat.sub_zero] at hver hfull hcap h
+                refine setHead_inv hr (Trie.canon_insert (rowSpec E) (.row key) (.row amt v _) hr) hi hp hn hg hlive hret
+                  (hins amt v _) (hfit amt v _ (by omega) hv hver) ?_ ?_ (by omega) hcap hfh.2 h.symm
+                · rw [Trie.sumN_insert_none (rowSpec E) (gc key.parent key.rel) hr.1 (.row amt v _) hc, hcnt, e1]
+                · rw [Trie.sumN_insert_none (rowSpec E) (gs key.parent key.rel) hr.1 (.row amt v _) hc, hsm, e2]
             | some old =>
                 cases old with
-                | head c0 s0 l0 cap0 wd0 rt0 =>
+                | head c0 s0 l0 cap0 wd0 rt0 fl0 =>
                     have := hi.1 _ _ hc
                     simp [rowFits] at this
-                | row a val =>
-                    simp only [hc, Option.isNone_some, Bool.not_false, Bool.true_or, Bool.false_eq_true, ↓reduceIte] at hfull hcap h
+                | row a val u0 =>
+                    simp only [hc, Option.isNone_some, Bool.not_false, Bool.true_or, Bool.false_eq_true,
+                      ↓reduceIte] at hver hfull hcap h
                     have hsplit := Trie.sumN_split (gs key.parent key.rel) r.toList
                       (Trie.toList_nodup (rowSpec E) 0 r hr.1) ((Trie.mem_toList (rowSpec E) 0 r hr.1 _ _).mpr hc)
                     rw [hsm, e2] at hsplit
-                    have hc1 := Trie.sumN_insert_some (rowSpec E) (gc key.parent key.rel) hr.1 (.row amt v) hc
-                    have hs1 := Trie.sumN_insert_some (rowSpec E) (gs key.parent key.rel) hr.1 (.row amt v) hc
+                    have hc1 := Trie.sumN_insert_some (rowSpec E) (gc key.parent key.rel) hr.1 (.row amt v (u0 + 1)) hc
+                    have hs1 := Trie.sumN_insert_some (rowSpec E) (gs key.parent key.rel) hr.1 (.row amt v (u0 + 1)) hc
                     rw [hcnt, e1, e1] at hc1
                     rw [hsm, e2, e2] at hs1
-                    refine setHead_inv hr (Trie.canon_insert (rowSpec E) (.row key) (.row amt v) hr) hi hp hn hg hlive
-                      hret (hins amt v) (hfit amt v (by omega) hv) (by omega) (by omega) (by omega) hcap h.symm
+                    refine setHead_inv hr (Trie.canon_insert (rowSpec E) (.row key) (.row amt v _) hr) hi hp hn hg hlive
+                      hret (hins amt v _) (hfit amt v _ (by omega) hv hver) (by omega) (by omega) (by omega) hcap
+                      hfh.2 h.symm
         | retract =>
             simp only [except_bind_ok] at h
             obtain ⟨⟨⟩, -, ⟨⟩, -, h⟩ := h
             split at h
-            · rename_i a val hc
+            · rename_i a val u0 hc
+              simp only [except_bind_ok] at h
+              obtain ⟨⟨⟩, hver, h⟩ := h
+              have hver := of_decide_eq_true (req_ok.mp hver)
               simp only [pure, Except.pure, Except.ok.injEq] at h
-              have hc' : r.get (rowSpec E) (.row key) = some (.row a val) := hc
+              have hc' : r.get (rowSpec E) (.row key) = some (.row a val u0) := hc
               obtain ⟨-, hcan1, hget1⟩ := rowsWeight_retain hr hc' (rowPath E (.row key)) (under_rowPath E (.row key))
               have sc := sum_retain hr hc' (gc key.parent key.rel)
               have ss := sum_retain hr hc' (gs key.parent key.rel)
               rw [e1, hcnt] at sc
               rw [e2, hsm] at ss
               refine setHead_inv hr hcan1 hi hp hn hg hlive hret (fun k hk => by rw [hget1, if_neg hk]) ?_
-                (by omega) (by omega) (by omega) (by omega) h.symm
+                (by omega) (by omega) (by omega) (by omega) hver h.symm
               intro l hl
               rw [hget1, if_pos rfl] at hl
               cases hl
@@ -636,8 +644,8 @@ private theorem foldRows_inv {E : Env D} {w : World D} {t : Turn D} :
 
 omit [Ord D] in
 private theorem setHead_len {E : Env D} {r : Rows D} (hr : Trie.Routed (rowSpec E) 0 r) {p : D} {rel : Nat}
-    {old : RowLeaf} (h : r.get (rowSpec E) (.head p rel) = some old) (c s l cap wd : Nat) (rt : Bool) :
-    (setHead E r p rel c s l cap wd rt).toList.length =
+    {old : RowLeaf} (h : r.get (rowSpec E) (.head p rel) = some old) (c s l cap wd : Nat) (rt : Bool) (f : Nat) :
+    (setHead E r p rel c s l cap wd rt f).toList.length =
       r.toList.length := by
   unfold setHead; exact len_insert_some hr h _
 
@@ -670,10 +678,10 @@ private theorem rowStep_len {E : Env D} {w : World D} {t : Turn D} {r r' : Rows 
         have hg := headOf_some hhead
         simp only [except_bind_ok] at h
         obtain ⟨⟨⟩, -, h⟩ := h
-        have hins : ∀ (amt : Nat) (v : ByteArray),
-            (r.insert (rowSpec E) (.row key) (.row amt v)).get (rowSpec E) (.head key.parent key.rel) =
-              some (.head count sum limit cap width retract) :=
-          fun amt v => by rw [Trie.get_insert_ne (rowSpec E) _ _ head_ne_row]; exact hg
+        have hins : ∀ (amt : Nat) (v : ByteArray) (u : Nat),
+            (r.insert (rowSpec E) (.row key) (.row amt v u)).get (rowSpec E) (.head key.parent key.rel) =
+              some (.head count sum limit cap width retract (headFloor E r key.parent key.rel)) :=
+          fun amt v u => by rw [Trie.get_insert_ne (rowSpec E) _ _ head_ne_row]; exact hg
         cases act with
         | keep =>
             simp only [except_bind_ok] at h
@@ -685,23 +693,25 @@ private theorem rowStep_len {E : Env D} {w : World D} {t : Turn D} {r r' : Rows 
             obtain ⟨⟨⟩, -, ⟨⟩, -, ⟨⟩, -, ⟨⟩, -, ⟨⟩, -, h⟩ := h
             simp only [pure, Except.pure, Except.ok.injEq] at h
             subst h
-            rw [setHead_len (Trie.canon_insert (rowSpec E) (.row key) (.row amt v) hr).1 (hins amt v)]
+            rw [setHead_len (Trie.canon_insert (rowSpec E) (.row key) (.row amt v _) hr).1 (hins amt v _)]
             exact len_insert_le hr.1 _ _
         | upsert amt v =>
             simp only [except_bind_ok] at h
-            obtain ⟨⟨⟩, -, ⟨⟩, -, ⟨⟩, -, ⟨⟩, -, h⟩ := h
+            obtain ⟨⟨⟩, -, ⟨⟩, -, ⟨⟩, -, ⟨⟩, -, ⟨⟩, -, h⟩ := h
             simp only [pure, Except.pure, Except.ok.injEq] at h
             subst h
-            rw [setHead_len (Trie.canon_insert (rowSpec E) (.row key) (.row amt v) hr).1 (hins amt v)]
+            rw [setHead_len (Trie.canon_insert (rowSpec E) (.row key) (.row amt v _) hr).1 (hins amt v _)]
             exact len_insert_le hr.1 _ _
         | retract =>
             simp only [except_bind_ok] at h
             obtain ⟨⟨⟩, -, ⟨⟩, -, h⟩ := h
             split at h
-            · rename_i a val hc
+            · rename_i a val u0 hc
+              simp only [except_bind_ok] at h
+              obtain ⟨⟨⟩, -, h⟩ := h
               simp only [pure, Except.pure, Except.ok.injEq] at h
               subst h
-              have hc' : r.get (rowSpec E) (.row key) = some (.row a val) := hc
+              have hc' : r.get (rowSpec E) (.row key) = some (.row a val u0) := hc
               obtain ⟨-, hcan1, hget1⟩ := rowsWeight_retain hr hc' (rowPath E (.row key)) (under_rowPath E (.row key))
               have hg1 := hget1 (.head key.parent key.rel)
               rw [if_neg head_ne_row, hg] at hg1
@@ -988,13 +998,13 @@ private theorem inv_after {E : Env D} {t : Turn D} {r res : Rows D} (hr : Trie.R
         | head q rl => exact hg0 q rl v
         | row key => simp [retiredIn] at hk)
       (fun k hk => by rw [hchar, if_neg (by simp [hk])])
-  refine ⟨fun k v hkv => ?_, fun key v hkv => ?_, fun p rel c s lim cap wd rt hkv => ?_⟩
+  refine ⟨fun k v hkv => ?_, fun key v hkv => ?_, fun p rel c s lim cap wd rt fl hkv => ?_⟩
   · rw [hchar] at hkv; split at hkv
     · cases hkv
     · exact hF k v hkv
   · rw [hchar, if_neg (by simp [retiredIn])] at hkv
-    obtain ⟨c, s, lim, cap, rt, hg⟩ := hH1 key v hkv
-    refine ⟨c, s, lim, cap, rt, ?_⟩
+    obtain ⟨c, s, lim, cap, rt, fl, hg⟩ := hH1 key v hkv
+    refine ⟨c, s, lim, cap, rt, fl, ?_⟩
     rw [hchar, if_neg, hg]
     intro hret
     simp only [retiredIn, List.any_eq_true, Bool.and_eq_true, decide_eq_true_eq] at hret
@@ -1003,35 +1013,35 @@ private theorem inv_after {E : Env D} {t : Turn D} {r res : Rows D} (hr : Trie.R
   · rw [hchar] at hkv; split at hkv
     · cases hkv
     · rw [hsum _ (fun _ _ _ => gc_head _ _ _ _ _), hsum _ (fun _ _ _ => gs_head _ _ _ _ _)]
-      exact hH2 p rel c s lim cap wd rt hkv
+      exact hH2 p rel c s lim cap wd rt fl hkv
 
 /-! ## The cells after a turn: a parent that is live and not retired, or born, is live -/
 
 omit [Ord D] in
 private theorem insertAll_live {E : Env D} {c : D} :
-    ∀ {m : Cells D} {ps : List (D × Entry)}, (∀ q ∈ ps, q.1 = c → ∃ cell, q.2 = .live cell) →
-      ((∃ cell, m.get (trieSpec E) (.cell c) = some (.entry (.live cell))) ∨ c ∈ ps.map Prod.fst) →
-      ∃ cell, (insertAll E m ps).get (trieSpec E) (.cell c) = some (.entry (.live cell))
+    ∀ {m : Cells D} {ps : List (D × Entry)}, (∀ q ∈ ps, q.1 = c → ∃ cell v, q.2 = .live cell v) →
+      ((∃ cell v, m.get (trieSpec E) (.cell c) = some (.entry (.live cell v))) ∨ c ∈ ps.map Prod.fst) →
+      ∃ cell v, (insertAll E m ps).get (trieSpec E) (.cell c) = some (.entry (.live cell v))
   | m, [], _, h => by
       rcases h with h | h
       · exact h
       · simp at h
   | m, q :: rest, hq, h => by
-      show ∃ cell, (insertAll E (m.insert (trieSpec E) (.cell q.1) (.entry q.2)) rest).get _ _ = _
+      show ∃ cell v, (insertAll E (m.insert (trieSpec E) (.cell q.1) (.entry q.2)) rest).get _ _ = _
       apply insertAll_live (fun q' hq' => hq q' (List.mem_cons_of_mem _ hq'))
       by_cases hqc : q.1 = c
-      · obtain ⟨cell, hcell⟩ := hq q (by simp) hqc
-        left; exact ⟨cell, by rw [Trie.get_insert, if_pos (by rw [hqc]), hcell]⟩
-      · rcases h with ⟨cell, hm⟩ | h
+      · obtain ⟨cell, v, hcell⟩ := hq q (by simp) hqc
+        left; exact ⟨cell, v, by rw [Trie.get_insert, if_pos (by rw [hqc]), hcell]⟩
+      · rcases h with ⟨cell, v, hm⟩ | h
         · left
-          exact ⟨cell, by rw [Trie.get_insert, if_neg (fun he => hqc (by injection he with he; exact he.symm)), hm]⟩
+          exact ⟨cell, v, by rw [Trie.get_insert, if_neg (fun he => hqc (by injection he with he; exact he.symm)), hm]⟩
         · simp only [List.map_cons, List.mem_cons] at h
           rcases h with h | h
           · exact absurd h.symm hqc
           · right; exact h
 
 private theorem touchCheck_entry {E : Env D} {w : World D} {x : Touch D} {p : Post D}
-    (h : touchCheck E w x = .ok (some p)) : x.act = .retire ∨ ∃ cell, p.entry = .live cell := by
+    (h : touchCheck E w x = .ok (some p)) : x.act = .retire ∨ ∃ cell v, p.entry = .live cell v := by
   unfold touchCheck at h
   simp only [except_bind_ok] at h
   obtain ⟨⟨⟩, _, h⟩ := h
@@ -1039,27 +1049,30 @@ private theorem touchCheck_entry {E : Env D} {w : World D} {x : Touch D} {p : Po
   | keep => rw [ha] at h; simp [pure, Except.pure] at h
   | write ops =>
       rw [ha] at h
-      cases hc : w.live E x.cell with
+      cases hc : w.entry E x.cell with
       | none => rw [hc] at h; simp at h
-      | some cell =>
-          rw [hc] at h
-          simp only [except_bind_ok, pure, Except.pure, Except.ok.injEq, Option.some.injEq] at h
-          obtain ⟨post, _, rfl⟩ := h
-          exact .inr ⟨post, rfl⟩
+      | some e =>
+          cases e with
+          | tomb => rw [hc] at h; simp at h
+          | live cell ver =>
+              rw [hc] at h
+              simp only [except_bind_ok, pure, Except.pure, Except.ok.injEq, Option.some.injEq] at h
+              obtain ⟨⟨⟩, _, post, _, rfl⟩ := h
+              exact .inr ⟨post, ver + 1, rfl⟩
   | retire => exact .inl rfl
 
 /-- A parent live before the turn and not retired by it, or born by it, is live after it. -/
 private theorem commit_live {E : Env D} {w : World D} {t : Turn D} {posts : List (Post D)}
     (hk : Checked E w t posts) {c : D}
     (hc : ((w.live E c).isSome = true ∧ ∀ x ∈ t.touches, x.cell = c → x.act ≠ .retire) ∨ c ∈ createdIds t) :
-    ∃ cell, (commit E w t posts).trie.get (trieSpec E) (.cell c) = some (.entry (.live cell)) := by
-  show ∃ cell, (commitTrie E w t posts).get (trieSpec E) (.cell c) = _
+    ∃ cell v, (commit E w t posts).trie.get (trieSpec E) (.cell c) = some (.entry (.live cell v)) := by
+  show ∃ cell v, (commitTrie E w t posts).get (trieSpec E) (.cell c) = _
   rw [commitTrie_cell]
   apply insertAll_live
   · intro q hq _
     unfold bornEntries at hq
     obtain ⟨⟨_, cell⟩, _, rfl⟩ := List.mem_map.mp hq
-    exact ⟨cell, rfl⟩
+    exact ⟨cell, 0, rfl⟩
   · rcases hc with ⟨hl, hnr⟩ | hb
     · left
       apply insertAll_live
@@ -1074,7 +1087,8 @@ private theorem commit_live {E : Env D} {w : World D} {t : Turn D} {posts : List
         · exact he
       · left
         obtain ⟨cell, hcell⟩ := Option.isSome_iff_exists.mp hl
-        exact ⟨cell, live_get hcell⟩
+        obtain ⟨v, hv⟩ := live_get hcell
+        exact ⟨cell, v, hv⟩
     · right
       simpa [bornEntries, createdIds, List.map_map, Function.comp_def] using hb
 
@@ -1131,7 +1145,7 @@ theorem admit_rowsOk {E : Env D} {n : Nat} (hE : E.Lawful n) {w w' : World D} {t
             apply hnr
             simp only [retiredIn, List.any_eq_true, Bool.and_eq_true, decide_eq_true_eq]
             exact ⟨x, hx, hxa, hxc⟩
-          obtain ⟨cell, hcell⟩ := commit_live hk (by
+          obtain ⟨cell, ver, hcell⟩ := commit_live hk (by
             rcases hpa q rel v hg with hl | hb
             · exact .inl ⟨hl, hnr'⟩
             · exact .inr hb)
@@ -1155,7 +1169,7 @@ theorem refuse_rowsOk {E : Env D} {w w' : World D} {r : Refused D} (hok : w.Rows
 /-- **Tooth: a head whose count its rows do not reach is refused by `rowsHeaded`.** A listing with
 one head counting one row (sum 5) and no row. -/
 theorem rowsHeaded_head_bumped :
-    rowsHeaded ([(RowSlot.head (0 : Nat) 0, RowLeaf.head 1 5 4 10 2 false)] : List (RowSlot Nat × RowLeaf)) = false := by
+    rowsHeaded ([(RowSlot.head (0 : Nat) 0, RowLeaf.head 1 5 4 10 2 false 0)] : List (RowSlot Nat × RowLeaf)) = false := by
   decide
 
 omit [Ord D] in
@@ -1184,62 +1198,62 @@ theorem carry_rowsOk {X : Receive.Ctx D} {name nonce : ByteArray} {w w' : World 
 
 omit [Ord D] [DecidableEq D] in
 private theorem filterMap_amts [DecidableEq D] {p : D} {rel : Nat} {F : RowSlot D × RowLeaf → Option Nat}
-    (h1 : ∀ key amt v, F (.row key, .row amt v) = if key.parent = p ∧ key.rel = rel then some amt else none)
+    (h1 : ∀ key amt v u, F (.row key, .row amt v u) = if key.parent = p ∧ key.rel = rel then some amt else none)
     (h2 : ∀ q r v, F (.head q r, v) = none)
-    (h3 : ∀ key c s l cap wd rt, F (.row key, .head c s l cap wd rt) = none) :
+    (h3 : ∀ key c s l cap wd rt fl, F (.row key, .head c s l cap wd rt fl) = none) :
     ∀ l : List (RowSlot D × RowLeaf),
       (l.filterMap F).length = (l.map (gc p rel)).sum ∧ (l.filterMap F).sum = (l.map (gs p rel)).sum
   | [] => ⟨rfl, rfl⟩
   | q :: l => by
       obtain ⟨ih1, ih2⟩ := filterMap_amts h1 h2 h3 l
-      obtain ⟨_ | key, ⟨c0, s0, l0, cap0, wd0, rt0⟩ | ⟨amt, v⟩⟩ := q
+      obtain ⟨_ | key, ⟨c0, s0, l0, cap0, wd0, rt0, fl0⟩ | ⟨amt, v, u⟩⟩ := q
       · simp only [List.filterMap_cons, h2, List.map_cons, List.sum_cons, gc_head, gs_head, Nat.zero_add]
         exact ⟨ih1, ih2⟩
       · simp only [List.filterMap_cons, h2, List.map_cons, List.sum_cons, gc_head, gs_head, Nat.zero_add]
         exact ⟨ih1, ih2⟩
-      · have e1 : gc p rel (.row key, .head c0 s0 l0 cap0 wd0 rt0) = 0 := rfl
-        have e2 : gs p rel (.row key, .head c0 s0 l0 cap0 wd0 rt0) = 0 := rfl
+      · have e1 : gc p rel (.row key, .head c0 s0 l0 cap0 wd0 rt0 fl0) = 0 := rfl
+        have e2 : gs p rel (.row key, .head c0 s0 l0 cap0 wd0 rt0 fl0) = 0 := rfl
         simp only [List.filterMap_cons, h3, List.map_cons, List.sum_cons, e1, e2, Nat.zero_add]
         exact ⟨ih1, ih2⟩
       · by_cases hk : key.parent = p ∧ key.rel = rel
-        · have e : F (.row key, .row amt v) = some amt := by rw [h1, if_pos hk]
+        · have e : F (.row key, .row amt v u) = some amt := by rw [h1, if_pos hk]
           simp only [List.filterMap_cons, e, List.length_cons, List.map_cons, List.sum_cons]
           simp only [gc, gs, hk, and_self, if_true]
           exact ⟨by omega, by omega⟩
-        · have e : F (.row key, .row amt v) = none := by rw [h1, if_neg hk]
+        · have e : F (.row key, .row amt v u) = none := by rw [h1, if_neg hk]
           simp only [List.filterMap_cons, e, List.map_cons, List.sum_cons, gc_row_ne hk, gs_row_ne hk, Nat.zero_add]
           exact ⟨ih1, ih2⟩
 
 omit [Ord D] [DecidableEq D] in
 private theorem filterMap_amts_len [DecidableEq D] {p : D} {rel : Nat} {F : RowSlot D × RowLeaf → Option Nat}
-    (h1 : ∀ key amt v, F (.row key, .row amt v) = if key.parent = p ∧ key.rel = rel then some amt else none)
+    (h1 : ∀ key amt v u, F (.row key, .row amt v u) = if key.parent = p ∧ key.rel = rel then some amt else none)
     (h2 : ∀ q r v, F (.head q r, v) = none)
-    (h3 : ∀ key c s l cap wd rt, F (.row key, .head c s l cap wd rt) = none) (l : List (RowSlot D × RowLeaf)) :
+    (h3 : ∀ key c s l cap wd rt fl, F (.row key, .head c s l cap wd rt fl) = none) (l : List (RowSlot D × RowLeaf)) :
     (l.filterMap F).length = (l.map (gc p rel)).sum := (filterMap_amts h1 h2 h3 l).1
 
 omit [Ord D] [DecidableEq D] in
 private theorem filterMap_amts_sum [DecidableEq D] {p : D} {rel : Nat} {F : RowSlot D × RowLeaf → Option Nat}
-    (h1 : ∀ key amt v, F (.row key, .row amt v) = if key.parent = p ∧ key.rel = rel then some amt else none)
+    (h1 : ∀ key amt v u, F (.row key, .row amt v u) = if key.parent = p ∧ key.rel = rel then some amt else none)
     (h2 : ∀ q r v, F (.head q r, v) = none)
-    (h3 : ∀ key c s l cap wd rt, F (.row key, .head c s l cap wd rt) = none) (l : List (RowSlot D × RowLeaf)) :
+    (h3 : ∀ key c s l cap wd rt fl, F (.row key, .head c s l cap wd rt fl) = none) (l : List (RowSlot D × RowLeaf)) :
     (l.filterMap F).sum = (l.map (gs p rel)).sum := (filterMap_amts h1 h2 h3 l).2
 
 /-- **A head counts its rows** (`head_sum`): on canonical rows that keep the invariant, a head's
 count is the number of rows of its relation, its sum their `amt`s' sum, within its cap and limit,
 and every row of it has its key at the head's width. -/
 theorem head_sum {E : Env D} {w : World D} (hr : w.RowsCanon E) (hok : w.RowsOk E) {p : D}
-    {rel c s l cap wd : Nat} {rt : Bool} (h : rowAt E w.rows (.head p rel) = some (.head c s l cap wd rt)) :
+    {rel c s l cap wd : Nat} {rt : Bool} {fl : Nat} (h : rowAt E w.rows (.head p rel) = some (.head c s l cap wd rt fl)) :
     c = (w.rows.toList.filterMap fun q => match q with
-          | (.row key, .row amt _) => if key.parent = p ∧ key.rel = rel then some amt else none
+          | (.row key, .row amt _ _) => if key.parent = p ∧ key.rel = rel then some amt else none
           | _ => none).length ∧
       s = (w.rows.toList.filterMap fun q => match q with
-          | (.row key, .row amt _) => if key.parent = p ∧ key.rel = rel then some amt else none
+          | (.row key, .row amt _ _) => if key.parent = p ∧ key.rel = rel then some amt else none
           | _ => none).sum ∧
       s ≤ cap ∧ c ≤ l ∧
       ∀ key v, (RowSlot.row key, v) ∈ w.rows.toList → key.parent = p → key.rel = rel → key.k.size = wd := by
   have hi : Inv E w.rows := (inv_iff hr.1).mpr ⟨hok.1, hok.2.1⟩
-  have hg : w.rows.get (rowSpec E) (.head p rel) = some (.head c s l cap wd rt) := h
-  obtain ⟨hc, hs⟩ := hi.2.2 _ _ _ _ _ _ _ _ hg
+  have hg : w.rows.get (rowSpec E) (.head p rel) = some (.head c s l cap wd rt fl) := h
+  obtain ⟨hc, hs⟩ := hi.2.2 _ _ _ _ _ _ _ _ _ hg
   have hfit := hi.1 _ _ hg
   simp only [rowFits, Bool.and_eq_true, decide_eq_true_eq] at hfit
   refine ⟨?_, ?_, by omega, by omega, fun key v hm hp hrel => ?_⟩
@@ -1247,7 +1261,7 @@ theorem head_sum {E : Env D} {w : World D} (hr : w.RowsCanon E) (hok : w.RowsOk 
     all_goals first | (intro _ _ v; cases v <;> rfl) | (intros; rfl)
   · rw [filterMap_amts_sum, hs]
     all_goals first | (intro _ _ v; cases v <;> rfl) | (intros; rfl)
-  · obtain ⟨c', s', l', cap', rt', hg'⟩ := hi.2.1 key v (Trie.get_of_mem (rowSpec E) hr.1 hm)
+  · obtain ⟨c', s', l', cap', rt', fl', hg'⟩ := hi.2.1 key v (Trie.get_of_mem (rowSpec E) hr.1 hm)
     rw [hp, hrel, hg] at hg'
     simp only [Option.some.injEq, RowLeaf.head.injEq] at hg'
     exact hg'.2.2.2.2.1.symm
@@ -1256,12 +1270,12 @@ theorem head_sum {E : Env D} {w : World D} (hr : w.RowsCanon E) (hok : w.RowsOk 
 `Env`'s lawfulness (`Receive.deployed_lawful` at the deployed codec: `deployed_fold_head_sum`). -/
 theorem fold_head_sum {E : Env D} {n : Nat} (hE : E.Lawful n) {o : D} {a : Nat} {l : List (Step D)}
     {w : World D} (h : World.fold E (World.genesis E o a) l = .ok w) {p : D} {rel c s lim cap wd : Nat}
-    {rt : Bool} (hh : rowAt E w.rows (.head p rel) = some (.head c s lim cap wd rt)) :
+    {rt : Bool} {fl : Nat} (hh : rowAt E w.rows (.head p rel) = some (.head c s lim cap wd rt fl)) :
     c = (w.rows.toList.filterMap fun q => match q with
-          | (.row key, .row amt _) => if key.parent = p ∧ key.rel = rel then some amt else none
+          | (.row key, .row amt _ _) => if key.parent = p ∧ key.rel = rel then some amt else none
           | _ => none).length ∧
       s = (w.rows.toList.filterMap fun q => match q with
-          | (.row key, .row amt _) => if key.parent = p ∧ key.rel = rel then some amt else none
+          | (.row key, .row amt _ _) => if key.parent = p ∧ key.rel = rel then some amt else none
           | _ => none).sum ∧
       s ≤ cap ∧ c ≤ lim ∧
       ∀ key v, (RowSlot.row key, v) ∈ w.rows.toList → key.parent = p → key.rel = rel → key.k.size = wd :=
@@ -1285,17 +1299,17 @@ written. -/
 private def plantInsert (E : Env D) (r : Rows D) (key : RowKey D) (amt : Nat) : Rows D :=
   match headOf E r key.parent key.rel with
   | some (count, sum, limit, cap, width, retract) =>
-      setHead E r key.parent key.rel (count + 1) (sum + amt) limit cap width retract
+      setHead E r key.parent key.rel (count + 1) (sum + amt) limit cap width retract (headFloor E r key.parent key.rel)
   | none => r
 
 private theorem plant_breaks (E : Env D) (p : D) (cell : Cell) (w0 : World D)
-    (htrie : w0.trie = (Trie.T.empty : Cells D).insert (trieSpec E) (.cell p) (.entry (.live cell)))
-    (hrows : w0.rows = (Trie.T.empty : Rows D).insert (rowSpec E) (.head p 0) (.head 0 0 1 10 0 false)) :
+    (htrie : w0.trie = (Trie.T.empty : Cells D).insert (trieSpec E) (.cell p) (.entry (.live cell 0)))
+    (hrows : w0.rows = (Trie.T.empty : Rows D).insert (rowSpec E) (.head p 0) (.head 0 0 1 10 0 false 0)) :
     w0.RowsOk E ∧ ¬({ w0 with rows := plantInsert E w0.rows ⟨p, 0, ByteArray.empty⟩ 5 } : World D).RowsOk E := by
   have hr0 : Trie.Canon (rowSpec E) 0 w0.rows := by
     rw [hrows]; exact Trie.canon_insert (rowSpec E) _ _ (Trie.canon_empty _ 0)
   have hget0 : ∀ k, w0.rows.get (rowSpec E) k =
-      if k = .head p 0 then some (.head 0 0 1 10 0 false) else none := by
+      if k = .head p 0 then some (.head 0 0 1 10 0 false 0) else none := by
     intro k; rw [hrows, Trie.get_insert, Trie.get_empty]
   have hall0 : ∀ q ∈ w0.rows.toList, q.1 = .head p 0 := by
     rintro ⟨k, l⟩ hq
@@ -1305,12 +1319,12 @@ private theorem plant_breaks (E : Env D) (p : D) (cell : Cell) (w0 : World D)
     · assumption
     · cases this
   have hplant : plantInsert E w0.rows ⟨p, 0, ByteArray.empty⟩ 5 =
-      setHead E w0.rows p 0 (0 + 1) (0 + 5) 1 10 0 false := by
-    unfold plantInsert headOf rowAt
+      setHead E w0.rows p 0 (0 + 1) (0 + 5) 1 10 0 false 0 := by
+    unfold plantInsert headOf headFloor rowAt
     rw [hget0, if_pos rfl]
   refine ⟨?_, ?_⟩
   · have hi : Inv E w0.rows := by
-      refine ⟨fun k v hkv => ?_, fun key v hkv => ?_, fun q rl c s lim cap wd rt hkv => ?_⟩
+      refine ⟨fun k v hkv => ?_, fun key v hkv => ?_, fun q rl c s lim cap wd rt fl hkv => ?_⟩
       · rw [hget0] at hkv
         split at hkv
         · rename_i hk; subst hk
@@ -1341,14 +1355,14 @@ private theorem plant_breaks (E : Env D) (p : D) (cell : Cell) (w0 : World D)
     simp only at hf hh
     rw [hplant] at hf hh
     have hr1 : Trie.Canon (rowSpec E) 0
-        (setHead E w0.rows p 0 (0 + 1) (0 + 5) 1 10 0 false) := by
+        (setHead E w0.rows p 0 (0 + 1) (0 + 5) 1 10 0 false 0) := by
       unfold setHead; exact Trie.canon_insert (rowSpec E) _ _ hr0
     have hi := (inv_iff hr1.1).mpr ⟨hf, hh⟩
-    have hg1 : (setHead E w0.rows p 0 (0 + 1) (0 + 5) 1 10 0 false).get (rowSpec E) (.head p 0) =
-        some (.head (0 + 1) (0 + 5) 1 10 0 false) := by
+    have hg1 : (setHead E w0.rows p 0 (0 + 1) (0 + 5) 1 10 0 false 0).get (rowSpec E) (.head p 0) =
+        some (.head (0 + 1) (0 + 5) 1 10 0 false 0) := by
       unfold setHead; exact Trie.get_insert_self (rowSpec E) _ _ _
-    have hc := (hi.2.2 _ _ _ _ _ _ _ _ hg1).1
-    have hz : ((setHead E w0.rows p 0 (0 + 1) (0 + 5) 1 10 0 false).toList.map (gc p 0)).sum = 0 := by
+    have hc := (hi.2.2 _ _ _ _ _ _ _ _ _ hg1).1
+    have hz : ((setHead E w0.rows p 0 (0 + 1) (0 + 5) 1 10 0 false 0).toList.map (gc p 0)).sum = 0 := by
       apply sum_zero
       rintro ⟨k, v⟩ hq
       have := Trie.get_of_mem (rowSpec E) hr1.1 hq
@@ -1370,8 +1384,8 @@ theorem plantInsert_breaks_rowsOk (E : Env D) (o p : D) (cell : Cell) :
     ∃ w0 : World D, w0.RowsOk E ∧
       ¬({ w0 with rows := plantInsert E w0.rows ⟨p, 0, ByteArray.empty⟩ 5 } : World D).RowsOk E :=
   ⟨{ World.genesis E o 0 with
-      trie := (Trie.T.empty : Cells D).insert (trieSpec E) (.cell p) (.entry (.live cell))
-      rows := (Trie.T.empty : Rows D).insert (rowSpec E) (.head p 0) (.head 0 0 1 10 0 false) },
+      trie := (Trie.T.empty : Cells D).insert (trieSpec E) (.cell p) (.entry (.live cell 0))
+      rows := (Trie.T.empty : Rows D).insert (rowSpec E) (.head p 0) (.head 0 0 1 10 0 false 0) },
     plant_breaks E p cell _ rfl rfl⟩
 
 

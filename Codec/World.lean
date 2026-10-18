@@ -33,17 +33,20 @@ open Nanodregg.Kernel Nanodregg.Codec.Stream
 variable {D : Type} [Ord D]
 
 abbrev EntryF : Fin 2 → Type
-  | 0 => Cell
+  | 0 => Nat × Cell
   | 1 => Unit
 
 def entryWire : (s : Fin 2) → Stream (EntryF s)
-  | 0 => cell
+  | 0 => product varint64 cell
   | 1 => unit
 
+/-- A cell entry on the World wire: live (0) with its version (a u64 varint, KERNEL-54: one byte below
+128 writes, at most ten) then its cell, or a tombstone (1). The order is `leafBytes`'s (kind, version,
+cell); the leaf's hash preimage writes the version as eight bytes. -/
 def entry : Stream Entry :=
   refine "kernel/entry" (choice 2 entryWire)
-    (fun | ⟨0, c⟩ => some (.live c) | ⟨1, ()⟩ => some .tomb)
-    (fun | .live c => ⟨0, c⟩ | .tomb => ⟨1, ()⟩)
+    (fun | ⟨0, (v, c)⟩ => some (.live c v) | ⟨1, ()⟩ => some .tomb)
+    (fun | .live c v => ⟨0, (v, c)⟩ | .tomb => ⟨1, ()⟩)
 
 /-- A trie key: its kind (0 cell, 1 nullifier, as in `slotBytes`), then the id. -/
 def slot (dc : Stream D) : Stream (Slot D) :=
@@ -176,8 +179,10 @@ def refusalsTrie [DecidableEq D] (E : Env D) (dc : Stream D) : Stream (Refusals 
 
 /-! ## The rows (KERNEL-46/48)
 
-The fourth trie: relations' heads and rows under their parents, keyed and leafed by `rowKey` and
-`rowLeaf`, whose bytes are KERNEL's `rowKeyBytes` and `rowLeafBytes` (`Codec.Proofs.Rows`). Written as
+The fourth trie: relations' heads and rows under their parents, keyed by `rowKey` (whose bytes are
+KERNEL's `rowKeyBytes`) and leafed by `rowLeaf`, the leaf with its floor and version as u64 varints
+(KERNEL-54); the row pin hashes the same leaf as `rowLeafHashed`, KERNEL's `rowLeafBytes`
+(`Codec.Proofs.Rows`). Written as
 its listing and read back by `build` (`kernel/row-order`); which key holds which leaf, the bounds and the
 heads' counts are the World's `kernel/rows` and `kernel/rows-headed` refusals. -/
 

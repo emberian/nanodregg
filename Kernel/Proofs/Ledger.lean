@@ -101,42 +101,42 @@ theorem admit_written {E : Env D} {w w' : World D} {t : Turn D} {x : Touch D} {o
   unfold touchCheck at hr'
   simp only [except_bind_ok, ha] at hr'
   obtain ⟨⟨⟩, _, hr'⟩ := hr'
-  cases hc : w.live E x.cell with
-  | none => rw [hc] at hr'; simp at hr'
-  | some cell =>
-      rw [hc] at hr'
-      simp only [except_bind_ok, pure, Except.pure, Except.ok.injEq] at hr'
-      obtain ⟨post, hp, hre⟩ := hr'
-      refine ⟨cell, post, rfl, hp, ?_⟩
-      rw [← hre] at hr
-      have hin := mapEx_result_mem hm hx hr
-      have hpost : (⟨x.cell, .live post, cell.weight + (ops.map Op.weight).sum - post.weight,
-          flowsOf (some cell) (some post)⟩ : Post D) ∈ posts := by
-        rw [hposts]; simpa [List.reduceOption, List.mem_filterMap] using hin
-      have hshape := hk.shape
-      unfold checkShape at hshape
-      simp only [except_bind_ok] at hshape
-      obtain ⟨⟨⟩, hnt, _⟩ := hshape
-      have hnodup : ((posts.map Post.pair).map Prod.fst).Nodup := by
-        rw [List.map_map]
-        have : (Prod.fst ∘ Post.pair : Post D → D) = Post.cell := rfl
-        rw [this, hposts]
-        exact (posts_sublist t.touches raw hm).nodup (noDup_nodup hnt)
-      have hcr := hk.creates
-      unfold checkCreates at hcr
-      simp only [except_bind_ok] at hcr
-      obtain ⟨⟨⟩, _, ⟨⟩, _, ⟨⟩, hnbt, _⟩ := hcr
-      have hnb : x.cell ∉ (bornEntries t).map Prod.fst := by
-        intro hm'
-        unfold bornEntries at hm'
-        rw [List.map_map] at hm'
-        have : (Prod.fst ∘ fun p : D × Cell => (p.1, Entry.live p.2)) = Prod.fst := rfl
-        rw [this] at hm'
-        exact (List.nodup_append.mp (noDup_nodup hnbt)).2.2 _ (List.mem_map_of_mem hx) _ hm' rfl
-      apply get_live
-      rw [show (commit E w t posts).trie = commitTrie E w t posts from rfl, commitTrie_cell,
-        insertAll_get_of_not_mem hnb,
-        insertAll_get_of_mem hnodup (List.mem_map_of_mem (f := Post.pair) hpost)]
+  rcases hc : w.entry E x.cell with _ | ⟨cell, v⟩ | _
+  · rw [hc] at hr'; simp at hr'
+  · rw [hc] at hr'
+    simp only [except_bind_ok, pure, Except.pure, Except.ok.injEq] at hr'
+    obtain ⟨⟨⟩, _, post, hp, hre⟩ := hr'
+    refine ⟨cell, post, by unfold World.live; rw [hc], hp, ?_⟩
+    rw [← hre] at hr
+    have hin := mapEx_result_mem hm hx hr
+    have hpost : (⟨x.cell, .live post (v + 1), cell.weight + (ops.map Op.weight).sum - post.weight,
+        flowsOf (some cell) (some post)⟩ : Post D) ∈ posts := by
+      rw [hposts]; simpa [List.reduceOption, List.mem_filterMap] using hin
+    have hshape := hk.shape
+    unfold checkShape at hshape
+    simp only [except_bind_ok] at hshape
+    obtain ⟨⟨⟩, hnt, _⟩ := hshape
+    have hnodup : ((posts.map Post.pair).map Prod.fst).Nodup := by
+      rw [List.map_map]
+      have : (Prod.fst ∘ Post.pair : Post D → D) = Post.cell := rfl
+      rw [this, hposts]
+      exact (posts_sublist t.touches raw hm).nodup (noDup_nodup hnt)
+    have hcr := hk.creates
+    unfold checkCreates at hcr
+    simp only [except_bind_ok] at hcr
+    obtain ⟨⟨⟩, _, ⟨⟩, _, ⟨⟩, hnbt, _⟩ := hcr
+    have hnb : x.cell ∉ (bornEntries t).map Prod.fst := by
+      intro hm'
+      unfold bornEntries at hm'
+      rw [List.map_map] at hm'
+      have : (Prod.fst ∘ fun p : D × Cell => (p.1, Entry.live p.2 0)) = Prod.fst := rfl
+      rw [this] at hm'
+      exact (List.nodup_append.mp (noDup_nodup hnbt)).2.2 _ (List.mem_map_of_mem hx) _ hm' rfl
+    apply get_live (v := v + 1)
+    rw [show (commit E w t posts).trie = commitTrie E w t posts from rfl, commitTrie_cell,
+      insertAll_get_of_not_mem hnb,
+      insertAll_get_of_mem hnodup (List.mem_map_of_mem (f := Post.pair) hpost)]
+  · rw [hc] at hr'; simp at hr'
 
 end Written
 

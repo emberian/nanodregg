@@ -157,8 +157,8 @@ theorem insertAll_get_some {E : Env D} {k : D} {e : Entry} :
           exact ⟨fun h => hne (by rw [h]), hn⟩
 
 /-- A touch that leaves a live cell behind wrote it: from a live cell, by `postWrite`. -/
-theorem touchCheck_live {E : Env D} {w : World D} {x : Touch D} {p : Post D} {c' : Cell}
-    (h : touchCheck E w x = .ok (some p)) (he : p.entry = .live c') :
+theorem touchCheck_live {E : Env D} {w : World D} {x : Touch D} {p : Post D} {c' : Cell} {v' : Nat}
+    (h : touchCheck E w x = .ok (some p)) (he : p.entry = .live c' v') :
     p.cell = x.cell ∧ ∃ cell ops, w.live E x.cell = some cell ∧ x.act = .write ops ∧
       postWrite x.cell cell ops = .ok c' := by
   unfold touchCheck at h
@@ -168,24 +168,24 @@ theorem touchCheck_live {E : Env D} {w : World D} {x : Touch D} {p : Post D} {c'
   | keep => rw [ha] at h; simp [pure, Except.pure] at h
   | write ops =>
       rw [ha] at h
-      cases hc : w.live E x.cell with
-      | none => rw [hc] at h; simp at h
-      | some cell =>
-          rw [hc] at h
-          simp only [except_bind_ok, pure, Except.pure, Except.ok.injEq, Option.some.injEq] at h
-          obtain ⟨post, hp, rfl⟩ := h
-          simp only [Entry.live.injEq] at he
-          subst he
-          exact ⟨rfl, cell, ops, rfl, rfl, hp⟩
+      rcases hc : w.entry E x.cell with _ | ⟨cell, v⟩ | _
+      · rw [hc] at h; simp at h
+      · rw [hc] at h
+        simp only [except_bind_ok, pure, Except.pure, Except.ok.injEq, Option.some.injEq] at h
+        obtain ⟨⟨⟩, _, post, hp, rfl⟩ := h
+        injection he with he _
+        subst he
+        exact ⟨rfl, cell, ops, by unfold World.live; rw [hc], rfl, hp⟩
+      · rw [hc] at h; simp at h
   | retire =>
       rw [ha] at h
-      cases hc : w.live E x.cell with
-      | none => rw [hc] at h; simp at h
-      | some cell =>
-          rw [hc] at h
-          simp only [except_bind_ok, pure, Except.pure, Except.ok.injEq, Option.some.injEq] at h
-          obtain ⟨_, _, rfl⟩ := h
-          simp at he
+      rcases hc : w.entry E x.cell with _ | ⟨cell, v⟩ | _
+      · rw [hc] at h; simp at h
+      · rw [hc] at h
+        simp only [except_bind_ok, pure, Except.pure, Except.ok.injEq, Option.some.injEq] at h
+        obtain ⟨_, _, rfl⟩ := h
+        simp at he
+      · rw [hc] at h; simp at h
 
 /-- Every live cell after an admitted turn was born by it, or was live before and is either
 untouched or what a write of it left. -/
@@ -194,14 +194,14 @@ theorem admit_live {E : Env D} {w w' : World D} {t : Turn D} {id : D} {c' : Cell
     (id, c') ∈ t.creates ∨ ∃ cell, w.live E id = some cell ∧
       (c' = cell ∨ ∃ ops, postWrite id cell ops = .ok c') := by
   obtain ⟨posts, hk, rfl⟩ := admit_ok h
-  have hg := live_get hl
+  obtain ⟨v, hg⟩ := live_get hl
   rw [show (commit E w t posts).trie = commitTrie E w t posts from rfl, commitTrie_cell] at hg
   rcases insertAll_get_some hg with hb | ⟨_, hm⟩
   · left
     unfold bornEntries at hb
     obtain ⟨q, hq, hqe⟩ := List.mem_map.mp hb
     simp only [Prod.mk.injEq, Entry.live.injEq] at hqe
-    have : q = (id, c') := Prod.ext hqe.1 hqe.2
+    have : q = (id, c') := Prod.ext hqe.1 hqe.2.1
     exact this ▸ hq
   · right
     rcases insertAll_get_some hm with hp | ⟨_, hw⟩
@@ -213,7 +213,7 @@ theorem admit_live {E : Env D} {w w' : World D} {t : Turn D} {id : D} {c' : Cell
       obtain ⟨hpc, cell, ops, hc, _, hw⟩ := touchCheck_live hr hpe.2
       rw [← hpe.1, hpc]
       exact ⟨cell, hc, .inr ⟨ops, hw⟩⟩
-    · exact ⟨c', by unfold World.live World.entry; rw [hw], .inl rfl⟩
+    · exact ⟨c', get_live hw, .inl rfl⟩
 
 end Admit
 
@@ -547,18 +547,23 @@ section Genesis
 theorem genesis_live {X : Ctx D} {name nonce : ByteArray} {allowance : Nat}
     {founders : List (ByteArray × D)} {id : D} {cell : Cell}
     (hl : (genesisWorld X name nonce allowance founders).live X.env id = some cell) :
-    (id, Entry.live cell) ∈ founderEntries X (originOf X name nonce allowance founders) founders := by
-  have hg := live_get hl
+    (id, Entry.live cell 0) ∈ founderEntries X (originOf X name nonce allowance founders) founders := by
+  obtain ⟨v, hg⟩ := live_get hl
   rcases insertAll_get_some (m := Trie.T.empty)
       (ps := founderEntries X (originOf X name nonce allowance founders) founders) hg with h | ⟨_, h⟩
-  · exact h
+  · have hv : v = 0 := by
+      unfold founderEntries at h
+      obtain ⟨p, _, hm⟩ := List.mem_flatMap.mp h
+      simp only [List.mem_cons, Prod.mk.injEq, Entry.live.injEq, List.not_mem_nil, or_false] at hm
+      rcases hm with ⟨_, _, hv⟩ | ⟨_, _, hv⟩ <;> exact hv
+    exact hv ▸ h
   · exact absurd (h.symm.trans (Trie.get_empty _ _)) (by simp)
 
 omit [Ord D] [DecidableEq D] in
 theorem mem_founderEntries {X : Ctx D} {o : D} {founders : List (ByteArray × D)} {id : D} {e : Entry}
     (h : (id, e) ∈ founderEntries X o founders) :
-    ∃ p ∈ founders.zipIdx, (id = founderId X o p.2 ∧ e = .live (founderMember X p.1)) ∨
-      (id = founderGrantId X o p.2 ∧ e = .live (founderRoot X (founderId X o p.2))) := by
+    ∃ p ∈ founders.zipIdx, (id = founderId X o p.2 ∧ e = .live (founderMember X p.1) 0) ∨
+      (id = founderGrantId X o p.2 ∧ e = .live (founderRoot X (founderId X o p.2)) 0) := by
   unfold founderEntries at h
   obtain ⟨p, hp, hm⟩ := List.mem_flatMap.mp h
   simp only [List.mem_cons, Prod.mk.injEq] at hm
@@ -574,17 +579,18 @@ theorem genesis_rooted (X : Ctx D) (name nonce : ByteArray) (allowance : Nat)
       (genesisWorld X name nonce allowance founders) := by
   intro id cell hl hk
   obtain ⟨p, _, ⟨_, he⟩ | ⟨hid, he⟩⟩ := mem_founderEntries (genesis_live hl)
-  · simp only [Entry.live.injEq] at he
+  · injection he with he _
     subst he
     simp [founderMember, kindMember, kindGrant] at hk
-  · simp only [Entry.live.injEq] at he
+  · injection he with he _
     subst he
     exact ⟨rfl, by rw [founderRoot_target]; rfl, fun _ => .inr ⟨p.2, hid⟩⟩
 
 /-- The empty World holds no ROM cell at a wrong id: it holds none. -/
 theorem empty_romContent (E : Env D) (o : D) (a : Nat) : RomContent E (World.genesis E o a) := by
   intro id cell hl _
-  exact absurd ((live_get hl).symm.trans (Trie.get_empty _ _)) (by simp)
+  obtain ⟨v, hg⟩ := live_get hl
+  exact absurd (hg.symm.trans (Trie.get_empty _ _)) (by simp)
 
 /-- **Genesis bears no ROM cell**, so `fold_romContent` starts from it: the founders' cells are a
 RAM member and an append-only grant. -/
@@ -594,10 +600,10 @@ theorem genesis_romContent (X : Ctx D) (name nonce : ByteArray) (allowance : Nat
   intro id cell hl hrom
   exfalso
   obtain ⟨p, _, ⟨_, he⟩ | ⟨_, he⟩⟩ := mem_founderEntries (genesis_live hl)
-  · simp only [Entry.live.injEq] at he
+  · injection he with he _
     subst he
     simp [founderMember] at hrom
-  · simp only [Entry.live.injEq] at he
+  · injection he with he _
     subst he
     simp [founderRoot] at hrom
 

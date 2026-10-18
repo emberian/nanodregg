@@ -88,8 +88,8 @@ def founderRoot (X : Ctx D) (member : D) : Cell :=
 /-- Each founder's member cell, then its root World grant. -/
 def founderEntries (X : Ctx D) (o : D) (founders : List (ByteArray × D)) : List (D × Entry) :=
   founders.zipIdx.flatMap fun p =>
-    [(founderId X o p.2, .live (founderMember X p.1)),
-     (founderGrantId X o p.2, .live (founderRoot X (founderId X o p.2)))]
+    [(founderId X o p.2, .live (founderMember X p.1) 0),
+     (founderGrantId X o p.2, .live (founderRoot X (founderId X o p.2)) 0)]
 
 /-- The World a genesis builds, UNCHECKED: founders `(key, digest of next key)` as members, each
 with a root World grant; its origin commits to the name, HOST's `nonce`, the allowance and the

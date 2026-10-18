@@ -36,9 +36,15 @@ structure Env (D : Type) where
   turnBytes : Turn D → ByteArray
   cellBytes : Cell → ByteArray
 
-/-- A cell id's slot in the World: a live cell, or the tombstone of a retired one. -/
+/-- A cell id's slot in the World: a live cell with its version, or the tombstone of a retired one.
+The version (KERNEL-54) counts the cell's writes: 0 at its birth, one more per write (`touchCheck`),
+refused past `Bounds.counterLimit` by name (`overBound .version`). A pin names it, so a pin observed on
+the fold and stale now is BEHIND for ever: no World the fold reaches holds it again, up to a collision
+on the pin inputs (`stale_behind_forever`). A pin naming a FUTURE version (AHEAD) is stale now and may
+match later: it is not final.
+A tomb carries none: it is terminal (an id is never reborn, `checkCreates`; nothing removes an entry). -/
 inductive Entry
-  | live (cell : Cell)
+  | live (cell : Cell) (ver : Nat)
   | tomb
   deriving DecidableEq
 
@@ -54,7 +60,11 @@ inductive Reject (D : Type)
   | duplicateKey (cell : D) (key : Nat)
   | nonCanonicalCell (index : Nat)
   | outsideWindow
-  /-- the cell is not what the signer saw -/
+  /-- the cell is not what the signer saw: its entry's pin (`pinOf`, version included) differs. Never
+  recorded (KERNEL-54): a pin observed on the fold and stale now (BEHIND) is stale at every World the
+  fold reaches, up to a collision on the pin inputs (`stale_behind_forever`; for rows and ranges, or
+  the parent is retired), so it is final without a record; a pin naming a future version (AHEAD) is
+  declined too, and is not final -/
   | stale (cell : D)
   | spent (nullifier : D)
   | chargeMismatch (expected : Nat)
@@ -110,6 +120,8 @@ inductive Reject (D : Type)
   | duplicateRow (parent : D)
   /-- an act on the wrong slot kind, or a pin where none belongs or missing where one must be -/
   | rowShape (parent : D)
+  /-- a retract of a row that is absent, pinned absent (KERNEL-54: its pin matched; it was `stale`) -/
+  | missingRow (parent : D)
   deriving DecidableEq, Repr
 
 /-- The refusal's name on the wire (law 7): its constructor's, arguments dropped
@@ -152,6 +164,7 @@ def Reject.name {D : Type} : Reject D → String
   | .rangeTooLong _ => "rangeTooLong"
   | .duplicateRow _ => "duplicateRow"
   | .rowShape _ => "rowShape"
+  | .missingRow _ => "missingRow"
 
 variable {D : Type} [Ord D]
 
@@ -278,7 +291,11 @@ structure Carried (D : Type) [Ord D] where
 /-- The kernel's hash domains. -/
 def domGenesis : String := "nanodregg/kernel/genesis/v1"
 def domAbsent : String := "nanodregg/kernel/pin-absent/v1"
-def domCell : String := "nanodregg/kernel/pin-cell/v1"
+/-- A live cell's pin: its version, then its canonical bytes (KERNEL-54: v2, the version added). -/
+def domCell : String := "nanodregg/kernel/pin-cell/v2"
+/-- A tombstone's pin (KERNEL-54): distinct from absence, so never born → born → retired does not
+return the absent pin (`pinOf_old_recurs`, the tooth on the pin before KERNEL-54). -/
+def domTomb : String := "nanodregg/kernel/pin-tomb/v1"
 def domTurn : String := "nanodregg/kernel/turn/v1"
 def domChain : String := "nanodregg/kernel/chain/v1"
 def domCellId : String := "nanodregg/kernel/cell-id/v1"
@@ -287,7 +304,7 @@ def domRomId : String := "nanodregg/kernel/rom-id/v1"
 def domTrie : String := "nanodregg/kernel/trie/v1"
 /-- A trie leaf's value digest: ONE domain, a kind byte first, so two different leaves have one
 digest only by a collision in that domain (`Collision`), never across domains. -/
-def domLeaf : String := "nanodregg/kernel/trie-leaf/v1"
+def domLeaf : String := "nanodregg/kernel/trie-leaf/v2"
 /-- A journal leaf's value digest (`journalDigest`, KERNEL-41): its own domain, so a journal entry's
 digest is never a cell leaf's but by a collision. -/
 def domJournal : String := "nanodregg/kernel/journal-leaf/v1"
@@ -302,10 +319,12 @@ def domRoots : String := "nanodregg/kernel/roots/v1"
 /-- An index as CODEC's four little-endian bytes (indexes are below `Bounds.createsMax`). -/
 def index32 (n : Nat) : ByteArray := Nanodregg.Codec.Stream.u32.bytes (UInt32.ofNat n)
 
-/-- What a pin asserts about a cell: its digest, or the digest of absence. -/
-def pinOf (E : Env D) : Option Cell → D
+/-- What a pin asserts about a cell id's entry (KERNEL-54): absence, a tombstone, or a live cell's
+version and bytes, three distinct digests (one domain each). -/
+def pinOf (E : Env D) : Option Entry → D
   | none => E.hash domAbsent ByteArray.empty
-  | some c => E.hash domCell (E.cellBytes c)
+  | some .tomb => E.hash domTomb ByteArray.empty
+  | some (.live c v) => E.hash domCell (Nanodregg.Codec.Stream.nat64.bytes v ++ E.cellBytes c)
 
 def turnDigest (E : Env D) (t : Turn D) : D := E.hash domTurn (E.turnBytes t)
 
@@ -363,9 +382,10 @@ def slotBytes (E : Env D) (s : Slot D) : ByteArray :=
   ⟨#[if s.isNullifier then 1 else 0]⟩ ++ E.bytes s.id
 
 /-- The bytes a leaf's value digest is taken over: a kind byte (live 0, tombstone 1, spent 2), then
-a live cell's canonical bytes. -/
+a live cell's version (eight little-endian bytes: injective below `Bounds.counterLimit`, which
+admission keeps) and canonical bytes. -/
 def leafBytes (E : Env D) : Leaf → ByteArray
-  | .entry (.live c) => ⟨#[0]⟩ ++ E.cellBytes c
+  | .entry (.live c v) => ⟨#[0]⟩ ++ Nanodregg.Codec.Stream.nat64.bytes v ++ E.cellBytes c
   | .entry .tomb => ⟨#[1]⟩
   | .spent => ⟨#[2]⟩
 
@@ -435,9 +455,9 @@ def RefusalLeaf.fits {D : Type} : RefusalSlot D → RefusalLeaf D → Bool
 /-! ## Rows (KERNEL-46, LANG-44): the fourth instance of the one trie, and its two pin kinds -/
 
 
-def domRowLeaf : String := "nanodregg/kernel/row-leaf/v1"
-def domRowAbsent : String := "nanodregg/kernel/row-pin-absent/v1"
-def domRange : String := "nanodregg/kernel/range-pin/v1"
+def domRowLeaf : String := "nanodregg/kernel/row-leaf/v2"
+def domRowAbsent : String := "nanodregg/kernel/row-pin-absent/v2"
+def domRange : String := "nanodregg/kernel/range-pin/v2"
 
 /-- One byte of a small number (callers bound it below 256: `rel`, a key's length). -/
 def byte8 (n : Nat) : ByteArray := ⟨#[UInt8.ofNat n]⟩
@@ -455,14 +475,16 @@ def rowKeyBytes (E : Env D) : RowSlot D → ByteArray
   | .row key => rowsPrefix E key.parent key.rel key.k.size ++ key.k
 
 /-- What a rows leaf commits to: a kind byte (head 0, row 1), its counters as eight little-endian
-bytes each, the retract flag as one byte, a row's value last. -/
+bytes each, the retract flag as one byte, a head's floor and a row's version (KERNEL-54) as eight
+bytes, a row's value last. -/
 def rowLeafBytes : RowLeaf → ByteArray
-  | .head count sum limit cap width retract =>
+  | .head count sum limit cap width retract floor =>
       byte8 0 ++ Nanodregg.Codec.Stream.nat64.bytes count ++ Nanodregg.Codec.Stream.nat64.bytes sum ++
         Nanodregg.Codec.Stream.nat64.bytes limit ++ Nanodregg.Codec.Stream.nat64.bytes cap ++
-        Nanodregg.Codec.Stream.nat64.bytes width ++ byte8 (if retract then 1 else 0)
-  | .row amt val => byte8 1 ++ Nanodregg.Codec.Stream.nat64.bytes amt ++
-      (Nanodregg.Codec.Stream.rawBytes Bounds.valueBytesMax).bytes val
+        Nanodregg.Codec.Stream.nat64.bytes width ++ byte8 (if retract then 1 else 0) ++
+        Nanodregg.Codec.Stream.nat64.bytes floor
+  | .row amt val ver => byte8 1 ++ Nanodregg.Codec.Stream.nat64.bytes amt ++
+      Nanodregg.Codec.Stream.nat64.bytes ver ++ (Nanodregg.Codec.Stream.rawBytes Bounds.valueBytesMax).bytes val
 
 def rowDigest (E : Env D) (l : RowLeaf) : D := E.hash domRowLeaf (rowLeafBytes l)
 
@@ -486,9 +508,11 @@ def RowLeaf.fits {D : Type} : RowSlot D → RowLeaf → Bool
 /-- The leaf at a rows slot. -/
 def rowAt [DecidableEq D] (E : Env D) (r : Rows D) (s : RowSlot D) : Option RowLeaf := r.get (rowSpec E) s
 
-/-- What a row pin asserts (the first pin kind): the leaf's digest, or the digest of absence. -/
-def rowPin (E : Env D) : Option RowLeaf → D
-  | none => E.hash domRowAbsent ByteArray.empty
+/-- What a row pin asserts (the first pin kind): the leaf's digest (a row's version inside it), or
+absence AT its relation's `floor` (KERNEL-54: a retract removes the row, so absence recurs; the floor,
+which every retract raises past the row it removes, makes each absence a new pin). -/
+def rowPin (E : Env D) (floor : Nat) : Option RowLeaf → D
+  | none => E.hash domRowAbsent (Nanodregg.Codec.Stream.nat64.bytes floor)
   | some l => rowDigest E l
 
 /-- Whether `b` starts with the bytes `pre`. -/
@@ -528,18 +552,43 @@ def rangeRows (E : Env D) (r : Rows D) (parent : D) (rel width : Nat) (pre : Byt
   let l := under (rowSpec E) (rowsPrefix E parent rel width ++ pre) (most + 1) r
   if l.length ≤ most then some l else none
 
-/-- What a range pin asserts (the second pin kind): the relation, the width and the prefix, then
-the listing's length and each row's key bytes and leaf digest, in key order. A row moving, landing
-or leaving under the prefix changes it. -/
-def rangePinBytes (E : Env D) (parent : D) (rel width : Nat) (pre : ByteArray)
+/-- What a range pin asserts (the second pin kind): the relation, the width and the prefix, the
+relation's floor (KERNEL-54: a row leaving raises it, so a listing never returns to an old pin), then
+the listing's length and each row's key bytes and leaf digest (its version inside), in key order. A
+row moving, landing or leaving under the prefix changes it. -/
+def rangePinBytes (E : Env D) (parent : D) (rel width : Nat) (pre : ByteArray) (floor : Nat)
     (l : List (RowSlot D × RowLeaf)) : ByteArray :=
-  rowsPrefix E parent rel width ++ byte8 pre.size ++ pre ++
+  rowsPrefix E parent rel width ++ byte8 pre.size ++ pre ++ Nanodregg.Codec.Stream.nat64.bytes floor ++
     Nanodregg.Codec.Stream.nat32.bytes l.length ++
     (l.foldl (fun acc p => acc ++ rowKeyBytes E p.1 ++ E.bytes (rowDigest E p.2)) ByteArray.empty)
 
-def rangePin (E : Env D) (parent : D) (rel width : Nat) (pre : ByteArray)
+def rangePin (E : Env D) (parent : D) (rel width : Nat) (pre : ByteArray) (floor : Nat)
     (l : List (RowSlot D × RowLeaf)) : D :=
-  E.hash domRange (rangePinBytes E parent rel width pre l)
+  E.hash domRange (rangePinBytes E parent rel width pre floor l)
+
+/-! ### What each pin hashes (KERNEL-54/56): the (domain, bytes) input of `pinOf`, `rowPin`, a listing's
+row digests and `rangePin`, so a theorem's hash escape names the concrete inputs it compares
+(`Kernel.Proofs.Versions`: `pinOf_eq_pre`, `rowPin_eq_pre`, `CollidesAmong`). -/
+
+/-- What `pinOf` hashes: the domain (absent, tombstone, live) and the bytes. -/
+def pinPre (E : Env D) : Option Entry → String × ByteArray
+  | none => (domAbsent, ByteArray.empty)
+  | some .tomb => (domTomb, ByteArray.empty)
+  | some (.live c v) => (domCell, Nanodregg.Codec.Stream.nat64.bytes v ++ E.cellBytes c)
+
+/-- What `rowPin` hashes: an absent slot's floor (`domRowAbsent`) or the leaf's bytes (`domRowLeaf`). -/
+def rowPre (floor : Nat) : Option RowLeaf → String × ByteArray
+  | none => (domRowAbsent, Nanodregg.Codec.Stream.nat64.bytes floor)
+  | some l => (domRowLeaf, rowLeafBytes l)
+
+/-- The leaf inputs a listing embeds (each row's `rowDigest` input), in listing order. -/
+def leafPres (l : List (RowSlot D × RowLeaf)) : List (String × ByteArray) :=
+  l.map fun p => (domRowLeaf, rowLeafBytes p.2)
+
+/-- What `rangePin` hashes. -/
+def rangePre (E : Env D) (parent : D) (rel width : Nat) (pre : ByteArray) (floor : Nat)
+    (l : List (RowSlot D × RowLeaf)) : String × ByteArray :=
+  (domRange, rangePinBytes E parent rel width pre floor l)
 
 /-- The window a height counts refusals in. -/
 def refusalWindow (H : Nat) : UInt64 := UInt64.ofNat (H / Bounds.windowMax)
@@ -610,7 +659,7 @@ def entry (E : Env D) (w : World D) (c : D) : Option Entry :=
 /-- The live cell at an id, if any (a tombstone reads as absent). -/
 def live (E : Env D) (w : World D) (c : D) : Option Cell :=
   match w.entry E c with
-  | some (.live cell) => some cell
+  | some (.live cell _) => some cell
   | _ => none
 
 /-- Is the id taken (a live cell or a tombstone)? -/
@@ -636,9 +685,10 @@ def cellIds (w : World D) : List D :=
 
 end
 
-/-- What an entry costs in the World: a live cell its weight, a tombstone nothing beyond its id. -/
+/-- What an entry costs in the World: a live cell its version (a counter, KERNEL-54) and its weight,
+a tombstone nothing beyond its id. -/
 def _root_.Nanodregg.Kernel.Entry.weight : Entry → Nat
-  | .live c => c.weight
+  | .live c _ => counterWeight + c.weight
   | .tomb => 0
 
 /-- What a leaf costs: its slot's id, and a cell entry's weight. -/
@@ -669,7 +719,7 @@ end World
 
 /-- The cell an entry holds (a tombstone holds none). -/
 def Entry.cell? : Entry → Option Cell
-  | .live c => some c
+  | .live c _ => some c
   | .tomb => none
 
 /-- What a leaf contributes to a sum over cell entries (a spent nullifier: nothing). -/
@@ -816,22 +866,25 @@ structure Post (D : Type) where
 def Post.pair {D : Type} (p : Post D) : D × Entry := (p.cell, p.entry)
 
 /-- What a touch leaves at its cell (`none`: unchanged), or why not. The cell is looked up ONCE:
-the pin is checked against it (the one staleness refusal), then the act applies to it, and what it
-frees and the value it moves are computed from the same lookup. -/
+the pin is checked against its ENTRY (the one staleness refusal: absent, tombstone and live are three
+pins, and a live pin names the version, KERNEL-54), then the act applies to it, and what it frees and
+the value it moves are computed from the same lookup. A write bumps the version, refused by name past
+`Bounds.counterLimit` (`overBound .version`). -/
 def touchCheck (E : Env D) (w : World D) (x : Touch D) : Except (Reject D) (Option (Post D)) := do
-  let cur := w.live E x.cell
+  let cur := w.entry E x.cell
   req (pinOf E cur = x.seen) (.stale x.cell)
   match x.act, cur with
   | .keep, _ => pure none
-  | .write _, none => .error (.missingCell x.cell)
-  | .write ops, some cell => do
+  | .write ops, some (.live cell ver) => do
+      req (decide (ver + 1 < Bounds.counterLimit)) (.overBound .version)
       let post ← postWrite x.cell cell ops
-      pure (some ⟨x.cell, .live post, cell.weight + (ops.map Op.weight).sum - post.weight,
+      pure (some ⟨x.cell, .live post (ver + 1), cell.weight + (ops.map Op.weight).sum - post.weight,
         flowsOf (some cell) (some post)⟩)
-  | .retire, none => .error (.missingCell x.cell)
-  | .retire, some cell => do
+  | .write _, _ => .error (.missingCell x.cell)
+  | .retire, some (.live cell _) => do
       req (cell.discipline != .rom) (.romRetire x.cell)
-      pure (some ⟨x.cell, .tomb, cell.weight, flowsOf (some cell) none⟩)
+      pure (some ⟨x.cell, .tomb, counterWeight + cell.weight, flowsOf (some cell) none⟩)
+  | .retire, _ => .error (.missingCell x.cell)
 
 def checkNullifiers (E : Env D) (w : World D) (t : Turn D) : Except (Reject D) Unit :=
   forEx (fun n => req (!w.isSpent E n) (.spent n)) t.nullifiers
@@ -882,12 +935,13 @@ def ascendingBytes : List ByteArray → Bool
 
 /-- A rows key holds a leaf of its kind, within every bound admission keeps. -/
 def rowFits : RowSlot D → RowLeaf → Bool
-  | .head _ rel, .head count sum limit cap width _ =>
+  | .head _ rel, .head count sum limit cap width _ floor =>
       decide (rel < 256) && decide (limit ≤ Bounds.rowsPerRelationMax) && decide (width ≤ Bounds.keyBytesMax) &&
-        decide (count ≤ limit) && decide (sum ≤ cap) && decide (cap < Bounds.counterLimit)
-  | .row key, .row amt val =>
+        decide (count ≤ limit) && decide (sum ≤ cap) && decide (cap < Bounds.counterLimit) &&
+        decide (floor < Bounds.counterLimit)
+  | .row key, .row amt val ver =>
       decide (key.rel < 256) && decide (key.k.size ≤ Bounds.keyBytesMax) && decide (amt < Bounds.counterLimit) &&
-        decide (val.size ≤ Bounds.valueBytesMax)
+        decide (val.size ≤ Bounds.valueBytesMax) && decide (ver < Bounds.counterLimit)
   | _, _ => false
 
 /-- A rows listing: strictly ascending by key bytes, every pair fitting. -/
@@ -898,10 +952,10 @@ def rowsFits (E : Env D) (l : List (RowSlot D × RowLeaf)) : Bool :=
 rows' (the decode-side twin of `head_sum`). O(listing · heads) over a listing bounded by the limits. -/
 def rowsHeaded (l : List (RowSlot D × RowLeaf)) [DecidableEq D] : Bool :=
   let heads := l.filterMap fun p => match p with
-    | (.head parent rel, .head count sum _ _ width _) => some (parent, rel, count, sum, width)
+    | (.head parent rel, .head count sum _ _ width _ _) => some (parent, rel, count, sum, width)
     | _ => none
   let rowsOf (parent : D) (rel : Nat) := l.filterMap fun p => match p with
-    | (.row key, .row amt _) => if decide (key.parent = parent) && decide (key.rel = rel) then some (key, amt) else none
+    | (.row key, .row amt _ _) => if decide (key.parent = parent) && decide (key.rel = rel) then some (key, amt) else none
     | _ => none
   (l.all fun p => match p with
     | (.row key, _) => heads.any fun h => decide (h.1 = key.parent) && decide (h.2.1 = key.rel) && decide (h.2.2.2.2 = key.k.size)
@@ -916,7 +970,7 @@ Over the parts, so a carried file is judged as a World is (`rowsParented E w.tri
 def rowsParented [DecidableEq D] (E : Env D) (trie : Cells D) (rows : Rows D) : Bool :=
   rows.toList.all fun p => match p.1 with
     | .head parent _ => (match trie.get (trieSpec E) (.cell parent) with
-        | some (.entry (.live _)) => true
+        | some (.entry (.live _ _)) => true
         | _ => false)
     | .row _ => true
 
@@ -927,11 +981,11 @@ tombstone, KERNEL-46). -/
 def rowPath (E : Env D) (s : RowSlot D) : List Bool :=
   (List.range Bounds.rowDepth).map ((rowSpec E).bit s)
 
-/-- The head of a relation, as `(count, sum, limit, cap, width, retract)`. -/
+/-- The head of a relation, as `(count, sum, limit, cap, width, retract)` (its floor is `headFloor`). -/
 def headOf (E : Env D) (r : Rows D) (parent : D) (rel : Nat) :
     Option (Nat × Nat × Nat × Nat × Nat × Bool) :=
   match rowAt E r (.head parent rel) with
-  | some (.head count sum limit cap width retract) => some (count, sum, limit, cap, width, retract)
+  | some (.head count sum limit cap width retract _) => some (count, sum, limit, cap, width, retract)
   | _ => none
 
 /-- THE range read (LANG-44 (c)): relation `rel` under `parent`, its key width from its head, and
@@ -943,6 +997,13 @@ def rangeOf (E : Env D) (r : Rows D) (parent : D) (rel : Nat) (pre : ByteArray) 
   match headOf E r parent rel with
   | none => none
   | some (_, _, _, _, width, _) => some (width, rangeRows E r parent rel width pre most)
+
+/-- A relation's floor (KERNEL-54), 0 where it has no head: what an absent row's pin and a range
+pin name besides the rows. Only a retract raises it. -/
+def headFloor (E : Env D) (r : Rows D) (parent : D) (rel : Nat) : Nat :=
+  match rowAt E r (.head parent rel) with
+  | some (.head _ _ _ _ _ _ floor) => floor
+  | _ => 0
 
 /-- Whether a row touch inserts into relation `rel` of `p` (1) or not (0). -/
 def insN1 (p : D) (rel : Nat) (x : RowTouch D) : Nat :=
@@ -967,14 +1028,20 @@ def insA (p : D) (rel : Nat) : List (RowTouch D) → Nat
   | [] => 0
   | x :: rest => insA1 p rel x + insA p rel rest
 
-/-- Write a relation's head with a new count and sum, its declaration unchanged. -/
-def setHead (E : Env D) (r : Rows D) (parent : D) (rel count sum limit cap width : Nat) (retract : Bool) : Rows D :=
-  r.insert (rowSpec E) (.head parent rel) (.head count sum limit cap width retract)
+/-- Write a relation's head with a new count, sum and floor, its declaration unchanged. -/
+def setHead (E : Env D) (r : Rows D) (parent : D) (rel count sum limit cap width : Nat) (retract : Bool)
+    (floor : Nat) : Rows D :=
+  r.insert (rowSpec E) (.head parent rel) (.head count sum limit cap width retract floor)
 
 /-- One row touch, judged on the rows written so far this turn (slots are distinct, so a row's pin
 is judged against the pre-state; a head's count and sum accumulate: the head update is additive,
 never pinned, KERNEL-46 amendment 3). The parent must be pinned by the turn (`rowParentUnpinned`)
-and live (`orphanRow`), or, for `declare`, born by it (`declareLate`). -/
+and live (`orphanRow`), or, for `declare`, born by it (`declareLate`).
+Versions (KERNEL-54): an absent row's pin names its relation's floor IN THE WORLD BEFORE THE TURN
+(`w.rows`: an earlier retract of the same turn raises the floor in `r`, and must not stale a later
+pin of the same turn); an insert takes the floor as its version (inserts leave the floor alone, so two
+turns' inserts commute); an upsert bumps the row's version; a retract raises the floor past the
+version of the row it removes. Each refused by name past `Bounds.counterLimit` (`overBound .version`). -/
 def rowStep (E : Env D) (w : World D) (t : Turn D) (r : Rows D)
     (x : RowTouch D) : Except (Reject D) (Rows D) := do
   match x.slot, x.act with
@@ -986,7 +1053,7 @@ def rowStep (E : Env D) (w : World D) (t : Turn D) (r : Rows D)
       req (decide (limit ≤ Bounds.rowsPerRelationMax) && decide (width ≤ Bounds.keyBytesMax) &&
         decide (cap < Bounds.counterLimit)) (.overBound .rows)
       req (rowAt E r (.head p rel)).isNone (.keyTaken p)
-      pure (setHead E r p rel 0 0 limit cap width retract)
+      pure (setHead E r p rel 0 0 limit cap width retract 0)
   | .head p _, _ => .error (.rowShape p)
   | .row key, act => do
       let p := key.parent
@@ -999,9 +1066,10 @@ def rowStep (E : Env D) (w : World D) (t : Turn D) (r : Rows D)
       | some (count, sum, limit, cap, width, retract) => do
           req (decide (key.k.size = width)) (.keyWidth p)
           let cur := rowAt E r (.row key)
+          let floor := headFloor E r p key.rel
           let pinned : Except (Reject D) Unit :=
             match x.seen with
-            | some s => req (decide (rowPin E cur = s)) (.stale p)
+            | some s => req (decide (rowPin E (headFloor E w.rows p key.rel) cur = s)) (.stale p)
             | none => .error (.rowShape p)
           match act with
           | .keep => do pinned; pure r
@@ -1011,25 +1079,29 @@ def rowStep (E : Env D) (w : World D) (t : Turn D) (r : Rows D)
               req (decide (count < limit)) (.relationFull p)
               req (decide (sum + amt ≤ cap)) (.relationCapped p)
               req (decide (v.size ≤ Bounds.valueBytesMax)) (.overBound .valueBytes)
-              pure (setHead E (r.insert (rowSpec E) (.row key) (.row amt v)) p key.rel (count + 1)
-                (sum + amt) limit cap width retract)
+              pure (setHead E (r.insert (rowSpec E) (.row key) (.row amt v floor)) p key.rel (count + 1)
+                (sum + amt) limit cap width retract floor)
           | .upsert amt v => do
               pinned
               req (decide (v.size ≤ Bounds.valueBytesMax)) (.overBound .valueBytes)
-              let old := match cur with | some (.row a _) => a | _ => 0
+              let old := match cur with | some (.row a _ _) => a | _ => 0
+              let ver := match cur with | some (.row _ _ u) => u + 1 | _ => floor
+              req (decide (ver < Bounds.counterLimit)) (.overBound .version)
               let fresh := cur.isNone
               req (!fresh || decide (count < limit)) (.relationFull p)
               req (decide (sum - old + amt ≤ cap)) (.relationCapped p)
-              pure (setHead E (r.insert (rowSpec E) (.row key) (.row amt v)) p key.rel
-                (if fresh then count + 1 else count) (sum - old + amt) limit cap width retract)
+              pure (setHead E (r.insert (rowSpec E) (.row key) (.row amt v ver)) p key.rel
+                (if fresh then count + 1 else count) (sum - old + amt) limit cap width retract floor)
           | .retract => do
               pinned
               req retract (.retractForbidden p)
               match cur with
-              | some (.row a _) =>
+              | some (.row a _ u) => do
+                  req (decide (max floor u + 1 < Bounds.counterLimit)) (.overBound .version)
                   pure (setHead E (Trie.retainAt (rowSpec E) (fun k _ => decide (k ≠ .row key))
-                    (rowPath E (.row key)) r) p key.rel (count - 1) (sum - a) limit cap width retract)
-              | _ => .error (.stale p)
+                    (rowPath E (.row key)) r) p key.rel (count - 1) (sum - a) limit cap width retract
+                    (max floor u + 1))
+              | _ => .error (.missingRow p)
           | .declare .. => .error (.rowShape p)
 
 /-- What a row touch gives back of its growth, judged on the rows before it: an upsert or a
@@ -1094,7 +1166,8 @@ def checkRanges (E : Env D) (w : World D) (t : Turn D) : Except (Reject D) Unit 
         req (decide (q.pre.size ≤ width)) (.keyWidth q.parent)
         match rangeRows E w.rows q.parent q.rel width q.pre q.most with
         | none => .error (.rangeTooLong q.parent)
-        | some l => req (decide (rangePin E q.parent q.rel width q.pre l = q.seen)) (.stale q.parent))
+        | some l => req (decide (rangePin E q.parent q.rel width q.pre (headFloor E w.rows q.parent q.rel) l =
+            q.seen)) (.stale q.parent))
     t.ranges
 
 /-- A parent retired by the turn holds no rows (`rowsRemain`): a relation is cleared before its
@@ -1133,7 +1206,7 @@ def check (E : Env D) (w : World D) (t : Turn D) : Except (Reject D) (List (Post
   (checkWith E w t).map Prod.fst
 
 def bornEntries (t : Turn D) : List (D × Entry) :=
-  t.creates.map fun p => (p.1, .live p.2)
+  t.creates.map fun p => (p.1, .live p.2 0)
 
 /-- Write cell entries into the map, one path each. -/
 def insertAll (E : Env D) (m : Cells D) (ps : List (D × Entry)) : Cells D :=

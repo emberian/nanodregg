@@ -11,6 +11,8 @@ namespace Nanodregg.Kernel
 inductive Bound
   | touches | opsPerWrite | creates | nullifiers
   | event | slotsPerCell | slotKey | valueBytes | window | weight | counter | denoms | rows
+  /-- a cell's or row's version, or a relation's floor, would reach `Bounds.counterLimit` (KERNEL-54) -/
+  | version
   deriving DecidableEq, Repr
 
 namespace Bounds

@@ -57,7 +57,7 @@ the EXPORTED World's origin, while every call names the new World (`Unsigned.wor
 def callAs (me : D) (w : World D) (i : Nat) (pinned : List D) (body : Body D) : Call D :=
   let u : Unsigned D :=
     { world := w.origin, member := me, key, notBefore := 0, validUntil := Bounds.windowMax / 2 + i,
-      pins := pinned.map fun id => (id, pinOf X.env (w.live X.env id)), maxCharge := 1 <<< 40, body }
+      pins := pinned.map fun id => (id, pinOf X.env (w.entry X.env id)), maxCharge := 1 <<< 40, body }
   { unsigned := u, signature := Ed25519.sign seed (X.callMessage u) }
 
 def createAs (me : D) (w : World D) (i : Nat) (state : Slots := []) : Call D :=

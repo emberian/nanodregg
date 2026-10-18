@@ -1,4 +1,5 @@
 import Codec.Raw
+import Codec.Varint
 import Kernel.World
 import Kernel.Receive.Call
 
@@ -17,8 +18,9 @@ Layouts (all integers little-endian, every count a u32, every byte string `u32 l
 * `Act`: tag 0 (keep), tag 1 ‖ ops, or tag 2 (retire). `Touch`: cell ‖ seen ‖ act.
 * `Turn`: txId ‖ notBefore u64 ‖ validUntil u64 ‖ touches ‖ creates (id ‖ cell each, D5) ‖ nullifiers ‖ charge u64 ‖
   event ‖ rows ‖ ranges.
-* Rows (KERNEL-46/48): `RowSlot` as `rowKeyBytes` (parent ‖ rel u8 ‖ kind u8 [‖ u8 len ‖ key]); `RowLeaf` as
-  `rowLeafBytes`; `RowAct`: a tag ‖ its fields; `RowTouch`: slot ‖ option seen ‖ act; `RangeRead`: parent ‖ rel u8 ‖
+* Rows (KERNEL-46/48): `RowSlot` as `rowKeyBytes` (parent ‖ rel u8 ‖ kind u8 [‖ u8 len ‖ key]); `RowLeaf` on
+  the World wire with its version and floor as u64 varints (`rowLeaf`, KERNEL-54), and as `rowLeafBytes`, the
+  row pin's preimage, with both as u64 (`rowLeafHashed`); `RowAct`: a tag ‖ its fields; `RowTouch`: slot ‖ option seen ‖ act; `RangeRead`: parent ‖ rel u8 ‖
   u8 len ‖ prefix ‖ most u64 ‖ seen.
 * `Call`: unsigned ‖ signature. `Unsigned`: member ‖ key ‖ notBefore ‖ validUntil ‖ pins ‖ maxCharge ‖
   body. `Body`: a tag (its constructor's index) ‖ its fields.
@@ -87,9 +89,11 @@ def touch (dc : Stream D) : Stream (Touch D) :=
 
 /-! ## Rows (KERNEL-46/48): keys and leaves spelled as the kernel spells them
 
-`rowKey` writes exactly `rowKeyBytes` and `rowLeaf` exactly `rowLeafBytes`
+`rowKey` writes exactly `rowKeyBytes` and `rowLeafHashed` exactly `rowLeafBytes`
 (`Codec.Proofs.Rows.rowKeyBytes_eq`, `rowLeafBytes_eq`), so the bytes a rows trie routes and hashes
-by are the bytes of a lawful codec: each is injective on its domain and reads back. -/
+by are the bytes of a lawful codec: each is injective on its domain and reads back. The World wire
+writes a leaf as `rowLeaf`, the same fields with KERNEL-54's version and floor as u64 varints: the
+weight charges each the 8-byte bound, the disk pays what the counter has reached. -/
 
 abbrev RowKindF : Fin 2 → Type
   | 0 => Unit
@@ -107,20 +111,38 @@ def rowKey (dc : Stream D) : Stream (RowSlot D) :=
     (fun | .head p rel => (p, rel, ⟨0, ()⟩) | .row key => (key.parent, key.rel, ⟨1, key.k⟩))
 
 abbrev RowLeafF : Fin 2 → Type
-  | 0 => Nat × Nat × Nat × Nat × Nat × Bool
-  | 1 => Nat × ByteArray
+  | 0 => Nat × Nat × Nat × Nat × Nat × Bool × Nat
+  | 1 => Nat × Nat × ByteArray
 
+def rowLeafOfWire : (x : (s : Fin 2) × RowLeafF s) → Option RowLeaf
+  | ⟨0, (c, s, l, k, w, r, f)⟩ => some (.head c s l k w r f)
+  | ⟨1, (a, u, v)⟩ => some (.row a v u)
+
+def rowLeafToWire : RowLeaf → (s : Fin 2) × RowLeafF s
+  | .head c s l k w r f => ⟨0, (c, s, l, k, w, r, f)⟩
+  | .row a v u => ⟨1, (a, u, v)⟩
+
+/-- A rows leaf's fields as the World writes them: a head's floor and a row's version as u64 varints
+(KERNEL-54), every other counter u64. -/
 def rowLeafWire : (s : Fin 2) → Stream (RowLeafF s)
-  | 0 => product nat64 (product nat64 (product nat64 (product nat64 (product nat64 bool))))
-  | 1 => product nat64 (rawBytes Bounds.valueBytesMax)
+  | 0 => product nat64 (product nat64 (product nat64 (product nat64 (product nat64 (product bool varint64)))))
+  | 1 => product nat64 (product varint64 (rawBytes Bounds.valueBytesMax))
 
-/-- A rows leaf, as `rowLeafBytes`: a head (0) with its count, sum, limit, cap and width (u64 each)
-and its retract flag; a row (1) with its `amt` (u64) and its value (u32 length, at most
-`Bounds.valueBytesMax`). -/
+/-- A rows leaf on the World wire (`kernel/row-leaf`): a head (0) with its count, sum, limit, cap and
+width (u64 each), its retract flag and its floor (u64 varint, KERNEL-54); a row (1) with its `amt`
+(u64), its version (u64 varint) and its value (u32 length, at most `Bounds.valueBytesMax`). -/
 def rowLeaf : Stream RowLeaf :=
-  refine "kernel/row-leaf" (choice 2 rowLeafWire)
-    (fun | ⟨0, (c, s, l, k, w, r)⟩ => some (.head c s l k w r) | ⟨1, (a, v)⟩ => some (.row a v))
-    (fun | .head c s l k w r => ⟨0, (c, s, l, k, w, r)⟩ | .row a v => ⟨1, (a, v)⟩)
+  refine "kernel/row-leaf" (choice 2 rowLeafWire) rowLeafOfWire rowLeafToWire
+
+/-- A rows leaf's fields as the row pin hashes them (`rowLeafBytes`): every counter u64. -/
+def rowLeafHashedWire : (s : Fin 2) → Stream (RowLeafF s)
+  | 0 => product nat64 (product nat64 (product nat64 (product nat64 (product nat64 (product bool nat64)))))
+  | 1 => product nat64 (product nat64 (rawBytes Bounds.valueBytesMax))
+
+/-- A rows leaf as KERNEL's `rowLeafBytes`, the preimage of its row pin (`kernel/row-leaf-hashed`): the
+fields of `rowLeaf` in the same order, the floor and the version u64. -/
+def rowLeafHashed : Stream RowLeaf :=
+  refine "kernel/row-leaf-hashed" (choice 2 rowLeafHashedWire) rowLeafOfWire rowLeafToWire
 
 abbrev RowActF : Fin 5 → Type
   | 0 => Unit
@@ -164,20 +186,21 @@ def rangeRead (dc : Stream D) : Stream (RangeRead D) :=
   refine "kernel/range-read" (product dc (product nat8 (product (bytes8 Bounds.keyBytesMax) (product nat64 dc))))
     (fun (p, rel, pre, m, s) => some ⟨p, rel, pre, m, s⟩) (fun q => (q.parent, q.rel, q.pre, q.most, q.seen))
 
-/-- What a range pin hashes, as data: the parent, the relation, the width, the prefix, and each
-listed row's key with its leaf digest. -/
-abbrev RangePinWire (D : Type) := D × Nat × Nat × ByteArray × List (RowSlot D × D)
+/-- What a range pin hashes, as data: the parent, the relation, the width, the prefix, the relation's
+floor (KERNEL-54), and each listed row's key with its leaf digest. -/
+abbrev RangePinWire (D : Type) := D × Nat × Nat × ByteArray × Nat × List (RowSlot D × D)
 
 /-- The range pin's hash input, as `rangePinBytes` spells it: `rowsPrefix` (the parent, the
-relation, the row kind byte 1, the width), the prefix (a length byte), and the listing (a u32 count,
-then each row's key and leaf digest), at most `Bounds.rowsPerRelationMax` rows. The kind byte is read
+relation, the row kind byte 1, the width), the prefix (a length byte), the relation's floor (u64, read
+from the World before the turn: a retract raises it, so a range that returns to an old listing after a
+retract pins differently, KERNEL-54), and the listing (a u32 count, then each row's key and leaf digest), at most `Bounds.rowsPerRelationMax` rows. The kind byte is read
 as the one byte `oneOf #[1]` admits; every other byte is refused `badTag`. -/
 def rangePinWire (dc : Stream D) : Stream (RangePinWire D) :=
   refine "kernel/range-pin"
     (product dc (product nat8 (product (oneOf #[1]) (product nat8 (product (bytes8 Bounds.keyBytesMax)
-      (rawList Bounds.rowsPerRelationMax (product (rowKey dc) dc)))))))
-    (fun (p, rel, _, w, pre, l) => some (p, rel, w, pre, l))
-    (fun (p, rel, w, pre, l) => (p, rel, ⟨1, by simp⟩, w, pre, l))
+      (product nat64 (rawList Bounds.rowsPerRelationMax (product (rowKey dc) dc))))))))
+    (fun (p, rel, _, w, pre, f, l) => some (p, rel, w, pre, f, l))
+    (fun (p, rel, w, pre, f, l) => (p, rel, ⟨1, by simp⟩, w, pre, f, l))
 
 /-! ## Turns -/
 

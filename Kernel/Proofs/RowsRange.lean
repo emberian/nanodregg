@@ -458,7 +458,7 @@ omit [DecidableEq D] in
 /-- **What a listed key is**: with every digest `n` bytes and `E.bytes` injective, a rows key that
 fits and starts with the range prefix is a row of that parent and relation (its relation byte read
 mod 256) whose key has the relation's width. -/
-private theorem listed_key (E : Env D) {n : Nat} (hsize : ∀ d, (E.bytes d).size = n)
+theorem listed_key (E : Env D) {n : Nat} (hsize : ∀ d, (E.bytes d).size = n)
     (hinj : Function.Injective E.bytes) {parent : D} {rel width : Nat} {pre : ByteArray}
     {s : RowSlot D} {v : RowLeaf} (hfit : rowFits s v = true)
     (hs : startsWith (rowsPrefix E parent rel width ++ pre) (rowKeyBytes E s) = true) :
@@ -623,13 +623,13 @@ theorem rowFits_of_rowsFits {E : Env D} {l : List (RowSlot D × RowLeaf)} (h : r
 omit [DecidableEq D] in
 private theorem headOf_some {E : Env D} [DecidableEq D] {r : Rows D} {parent : D} {rel c s lim cap width : Nat}
     {rt : Bool} (h : headOf E r parent rel = some (c, s, lim, cap, width, rt)) :
-    rowAt E r (.head parent rel) = some (.head c s lim cap width rt) := by
+    rowAt E r (.head parent rel) = some (.head c s lim cap width rt (headFloor E r parent rel)) := by
   unfold headOf at h
   split at h
-  · rename_i heq
+  · rename_i f heq
     simp only [Option.some.injEq, Prod.mk.injEq] at h
     obtain ⟨rfl, rfl, rfl, rfl, rfl, rfl⟩ := h
-    exact heq
+    simp only [headFloor, heq]
   · cases h
 
 /-- `admit_range_exact` at the `Env` fields it uses: one digest size `n ≤ 32`, injective bytes. -/
@@ -640,7 +640,7 @@ theorem admit_range_exact_of [Ord D] {E : Env D} {n : Nat} (hsize : ∀ d, (E.by
     ∀ q ∈ t.ranges, ∃ c s lim cap width rt l,
       headOf E w.rows q.parent q.rel = some (c, s, lim, cap, width, rt) ∧ q.pre.size ≤ width ∧
       rangeRows E w.rows q.parent q.rel width q.pre q.most = some l ∧
-      rangePin E q.parent q.rel width q.pre l = q.seen ∧
+      rangePin E q.parent q.rel width q.pre (headFloor E w.rows q.parent q.rel) l = q.seen ∧
       (∀ s v, (s, v) ∈ l ↔ rowAt E w.rows s = some v ∧
         startsWith (rowsPrefix E q.parent q.rel width ++ q.pre) (rowKeyBytes E s) = true) ∧
       l.Pairwise (fun a b => compare (rowKeyBytes E a.1).data (rowKeyBytes E b.1).data = .lt) := by
@@ -675,7 +675,7 @@ theorem admit_range_exact [Ord D] {E : Env D} {n : Nat} (hE : E.Lawful n) {w w' 
     ∀ q ∈ t.ranges, ∃ c s lim cap width rt l,
       headOf E w.rows q.parent q.rel = some (c, s, lim, cap, width, rt) ∧ q.pre.size ≤ width ∧
       rangeRows E w.rows q.parent q.rel width q.pre q.most = some l ∧
-      rangePin E q.parent q.rel width q.pre l = q.seen ∧
+      rangePin E q.parent q.rel width q.pre (headFloor E w.rows q.parent q.rel) l = q.seen ∧
       (∀ s v, (s, v) ∈ l ↔ rowAt E w.rows s = some v ∧
         startsWith (rowsPrefix E q.parent q.rel width ++ q.pre) (rowKeyBytes E s) = true) ∧
       l.Pairwise (fun a b => compare (rowKeyBytes E a.1).data (rowKeyBytes E b.1).data = .lt) :=
@@ -695,9 +695,9 @@ private theorem nat32_ne_pred {m : Nat} (hm : 0 < m) :
 /-- **(a) The range pin sees a dropped row**: the listing with one of its rows erased has another
 pin preimage (its length field differs: `m - 1` and `m` differ mod 2^32 for every `m ≥ 1`, so no
 bound on the listing is needed). -/
-theorem rangePinBytes_erase_ne (E : Env D) (parent : D) (rel width : Nat) (pre : ByteArray)
+theorem rangePinBytes_erase_ne (E : Env D) (parent : D) (rel width : Nat) (pre : ByteArray) (floor : Nat)
     {l : List (RowSlot D × RowLeaf)} {p : RowSlot D × RowLeaf} (hp : p ∈ l) :
-    rangePinBytes E parent rel width pre (l.erase p) ≠ rangePinBytes E parent rel width pre l := by
+    rangePinBytes E parent rel width pre floor (l.erase p) ≠ rangePinBytes E parent rel width pre floor l := by
   intro he
   unfold rangePinBytes at he
   simp only [ByteArray.append_assoc, ByteArray.append_right_inj] at he
@@ -726,7 +726,7 @@ theorem range_rows_erase_not_exact {E : Env D} {n : Nat} (hsize : ∀ d, (E.byte
 
 /-- The amount column of a rows leaf. -/
 private def amtOf : RowLeaf → Nat
-  | .row a _ => a
+  | .row a _ _ => a
   | .head .. => 0
 
 /-- A seal a method might compute from a listing: the first row with the greatest amount. -/
@@ -755,12 +755,12 @@ private def toyS2 : RowSlot UInt8 := .row ⟨7, 3, ⟨#[1, 9]⟩⟩
 private def toyS3 : RowSlot UInt8 := .row ⟨7, 3, ⟨#[4, 4]⟩⟩
 
 private def toyRows : Rows UInt8 :=
-  (((Trie.T.empty.insert (rowSpec toyEnv) toyS2 (.row 9 ByteArray.empty)).insert (rowSpec toyEnv) toyS3
-    (.row 1 ByteArray.empty)).insert (rowSpec toyEnv) toyS1 (.row 5 ByteArray.empty)).insert (rowSpec toyEnv)
-    (.head 7 3) (.head 3 15 10 100 2 false)
+  (((Trie.T.empty.insert (rowSpec toyEnv) toyS2 (.row 9 ByteArray.empty 0)).insert (rowSpec toyEnv) toyS3
+    (.row 1 ByteArray.empty 0)).insert (rowSpec toyEnv) toyS1 (.row 5 ByteArray.empty 0)).insert (rowSpec toyEnv)
+    (.head 7 3) (.head 3 15 10 100 2 false 0)
 
 private def toyListing : List (RowSlot UInt8 × RowLeaf) :=
-  [(toyS1, .row 5 ByteArray.empty), (toyS2, .row 9 ByteArray.empty)]
+  [(toyS1, .row 5 ByteArray.empty 0), (toyS2, .row 9 ByteArray.empty 0)]
 
 private theorem toy_size (d : UInt8) : (toyEnv.bytes d).size = 1 := rfl
 
@@ -790,7 +790,7 @@ theorem range_rows_satisfiable :
         startsWith (rowsPrefix E 7 3 2 ++ ⟨#[1]⟩) (rowKeyBytes E s) = true) ∧
       l.Pairwise (fun a b => compare (rowKeyBytes E a.1).data (rowKeyBytes E b.1).data = .lt) :=
   ⟨toyEnv, toyRows, toyListing, toy_size, toy_inj, toy_canon, toy_fit, toy_range, rfl,
-    ⟨(toyS3, .row 1 ByteArray.empty), by decide, by decide⟩,
+    ⟨(toyS3, .row 1 ByteArray.empty 0), by decide, by decide⟩,
     range_rows_mem toy_size toy_canon (by decide) (by decide) toy_range,
     range_rows_sorted toy_size (by decide) toy_inj toy_canon toy_fit (by decide) (by decide) toy_range⟩
 
@@ -799,14 +799,14 @@ a method computes is `toyS1` — and `range_rows_erase_not_exact` refutes the dr
 range pin differs (`rangePinBytes_erase_ne`). -/
 theorem range_seal_tooth :
     argMaxAmt toyListing = some toyS2 ∧
-    argMaxAmt (toyListing.erase (toyS2, .row 9 ByteArray.empty)) = some toyS1 ∧
-    (¬ ∀ s v, (s, v) ∈ toyListing.erase (toyS2, .row 9 ByteArray.empty) ↔ rowAt toyEnv toyRows s = some v ∧
+    argMaxAmt (toyListing.erase (toyS2, .row 9 ByteArray.empty 0)) = some toyS1 ∧
+    (¬ ∀ s v, (s, v) ∈ toyListing.erase (toyS2, .row 9 ByteArray.empty 0) ↔ rowAt toyEnv toyRows s = some v ∧
       startsWith (rowsPrefix toyEnv 7 3 2 ++ ⟨#[1]⟩) (rowKeyBytes toyEnv s) = true) ∧
-    rangePinBytes toyEnv 7 3 2 ⟨#[1]⟩ (toyListing.erase (toyS2, .row 9 ByteArray.empty)) ≠
-      rangePinBytes toyEnv 7 3 2 ⟨#[1]⟩ toyListing :=
+    rangePinBytes toyEnv 7 3 2 ⟨#[1]⟩ 0 (toyListing.erase (toyS2, .row 9 ByteArray.empty 0)) ≠
+      rangePinBytes toyEnv 7 3 2 ⟨#[1]⟩ 0 toyListing :=
   ⟨by decide, by decide,
     range_rows_erase_not_exact toy_size toy_canon (by decide) (by decide) toy_range (by decide),
-    rangePinBytes_erase_ne _ _ _ _ _ (by decide)⟩
+    rangePinBytes_erase_ne _ _ _ _ _ _ (by decide)⟩
 
 /-! ## A turn with a range read is admitted (the admitted form is not vacuous)
 
@@ -824,12 +824,12 @@ private def admEnv : Env UInt8 where
 private def admCell : Cell := { kind := 0, discipline := .ram, slots := [] }
 
 private def admRows : Rows UInt8 :=
-  (((Trie.T.empty.insert (rowSpec admEnv) (.head 7 3) (.head 3 15 10 100 2 false)).insert (rowSpec admEnv) toyS1
-    (.row 5 ByteArray.empty)).insert (rowSpec admEnv) toyS2 (.row 9 ByteArray.empty)).insert (rowSpec admEnv) toyS3
-    (.row 1 ByteArray.empty)
+  (((Trie.T.empty.insert (rowSpec admEnv) (.head 7 3) (.head 3 15 10 100 2 false 0)).insert (rowSpec admEnv) toyS1
+    (.row 5 ByteArray.empty 0)).insert (rowSpec admEnv) toyS2 (.row 9 ByteArray.empty 0)).insert (rowSpec admEnv) toyS3
+    (.row 1 ByteArray.empty 0)
 
 private def admWorld : World UInt8 where
-  trie := Trie.T.empty.insert (trieSpec admEnv) (.cell 7) (.entry (.live admCell))
+  trie := Trie.T.empty.insert (trieSpec admEnv) (.cell 7) (.entry (.live admCell 0))
   journal := .empty
   refusals := .empty
   rows := admRows
@@ -840,10 +840,10 @@ private def admWorld : World UInt8 where
   origin := 0
 
 private def admRange (l : List (RowSlot UInt8 × RowLeaf)) : RangeRead UInt8 :=
-  { parent := 7, rel := 3, pre := ⟨#[1]⟩, most := 5, seen := rangePin admEnv 7 3 2 ⟨#[1]⟩ l }
+  { parent := 7, rel := 3, pre := ⟨#[1]⟩, most := 5, seen := rangePin admEnv 7 3 2 ⟨#[1]⟩ 0 l }
 
 private def admTurn0 (l : List (RowSlot UInt8 × RowLeaf)) : Turn UInt8 :=
-  { txId := 1, notBefore := 0, validUntil := 1, touches := [⟨7, pinOf admEnv (some admCell), .keep⟩],
+  { txId := 1, notBefore := 0, validUntil := 1, touches := [⟨7, pinOf admEnv (some (.live admCell 0)), .keep⟩],
     creates := [], nullifiers := [], charge := 0, event := ByteArray.empty, ranges := [admRange l] }
 
 private def admTurn (l : List (RowSlot UInt8 × RowLeaf)) : Turn UInt8 :=
@@ -864,7 +864,7 @@ private theorem adm_ok : (World.admit admEnv admWorld (admTurn toyListing)).isOk
 
 private theorem adm_stale :
     World.admit admEnv admWorld { admTurn toyListing with
-      ranges := [admRange (toyListing.erase (toyS2, .row 9 ByteArray.empty))] } = .error (.stale 7) :=
+      ranges := [admRange (toyListing.erase (toyS2, .row 9 ByteArray.empty 0))] } = .error (.stale 7) :=
   error_of_refusedWith (by decide)
 
 /-- **A turn with a range read is admitted, and what the admitted form says of it is not trivial.**
@@ -874,13 +874,13 @@ keeps cell 7 and reads relation 3 at prefix `[1]`, pinned at the World's own lis
 same turn (same charge) pinned at the listing with `toyS2`'s row dropped is refused `stale` at cell 7. -/
 theorem range_admit_satisfiable :
     ∃ (E : Env UInt8) (w w' : World UInt8) (t : Turn UInt8) (q : RangeRead UInt8),
-      w.live E q.parent = some admCell ∧ t.touches = [⟨q.parent, pinOf E (some admCell), .keep⟩] ∧
+      w.live E q.parent = some admCell ∧ t.touches = [⟨q.parent, pinOf E (some (.live admCell 0)), .keep⟩] ∧
       t.ranges = [q] ∧ World.admit E w t = .ok w' ∧
       (∃ width l, rangeRows E w.rows q.parent q.rel width q.pre q.most = some l ∧
-        rangePin E q.parent q.rel width q.pre l = q.seen ∧
-        (toyS1, .row 5 ByteArray.empty) ∈ l ∧ (toyS3, .row 1 ByteArray.empty) ∉ l) ∧
+        rangePin E q.parent q.rel width q.pre (headFloor E w.rows q.parent q.rel) l = q.seen ∧
+        (toyS1, .row 5 ByteArray.empty 0) ∈ l ∧ (toyS3, .row 1 ByteArray.empty 0) ∉ l) ∧
       (World.admit E w { t with ranges := [RangeRead.mk q.parent q.rel q.pre q.most
-        (rangePin E q.parent q.rel 2 q.pre (toyListing.erase (toyS2, .row 9 ByteArray.empty)))] }) =
+        (rangePin E q.parent q.rel 2 q.pre (headFloor E w.rows q.parent q.rel) (toyListing.erase (toyS2, .row 9 ByteArray.empty 0)))] }) =
         .error (.stale q.parent) := by
   have hc : Trie.Canon (rowSpec admEnv) 0 admRows :=
     Trie.canon_insert _ _ _ (Trie.canon_insert _ _ _ (Trie.canon_insert _ _ _

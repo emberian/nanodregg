@@ -1,5 +1,6 @@
 import Codec.World
 import Codec.Proofs.Kernel
+import Codec.Proofs.Varint
 import Kernel.Proofs.Cells
 import Kernel.Proofs.Trie
 import Kernel.Proofs.Journal
@@ -29,17 +30,19 @@ open Nanodregg.Kernel Nanodregg.Codec.Stream
 variable {D : Type} [Ord D]
 
 def Entry.Fits : Entry → Prop
-  | .live c => Cell.Fits c
+  | .live c v => Cell.Fits c ∧ v < 2 ^ 64
   | .tomb => True
 
 abbrev EntryWireFits : (s : Fin 2) → EntryF s → Prop
-  | 0 => Cell.Fits
+  | 0 => fun x => x.1 < 2 ^ 64 ∧ Cell.Fits x.2
   | 1 => fun _ => True
 
 theorem entryWire_lawfulOn : ∀ s, LawfulOn (EntryWireFits s) (entryWire s)
-  | 0 => cell_lawfulOn
+  | 0 => product_lawfulOn varint64_lawfulOn cell_lawfulOn
   | 1 => unit_lawful.on
 
+/-- **The entry codec is lawful on the entries within bounds** (a cell in the cell codec's domain, a
+version below 2^64), so a decoded entry has exactly one spelling: its version's varint is the shortest. -/
 theorem entry_lawfulOn : LawfulOn Entry.Fits entry := by
   unfold entry
   refine (refine_lawfulOn (choice_lawfulOn 2 (by decide) entryWire_lawfulOn) "kernel/entry" ?_ ?_).mono ?_ ?_
@@ -47,14 +50,19 @@ theorem entry_lawfulOn : LawfulOn Entry.Fits entry := by
   · intro x y h
     obtain ⟨s, v⟩ := x
     match s, v, h with
-    | 0, c, h => simp at h; subst h; rfl
+    | 0, (_, _), h => simp at h; subst h; rfl
     | 1, (), h => simp at h; subst h; rfl
   · intro y h; cases y with
-    | live c => exact h
+    | live c v => exact ⟨h.2, h.1⟩
     | tomb => trivial
   · intro y h; cases y with
-    | live c => exact h
+    | live c v => exact ⟨h.2, h.1⟩
     | tomb => exact trivial
+
+/-- **Canonicity, exact**: bytes decode to an entry iff the entry is within bounds and the bytes are
+its one spelling (so a live entry whose version is written in a non-minimal varint is refused). -/
+theorem entry_decode_iff {b : ByteArray} {e : Entry} : entry.decode b = .ok e ↔ Entry.Fits e ∧ b = entry.bytes e :=
+  entry_lawfulOn.decode_eq_ok_iff
 
 omit [Ord D] in
 
@@ -105,7 +113,7 @@ theorem leaf_lawfulOn : LawfulOn Leaf.Fits leaf := by
 
 /-- A leaf in the leaf codec's domain holds, if a live cell, a cell in the cell codec's domain. -/
 theorem leaf_fits_cellFit : ∀ {l : Leaf}, Leaf.Fits l → l.CellFit Cell.Fits
-  | .entry (.live _), h => h
+  | .entry (.live _ _), h => h
   | .entry .tomb, _ => trivial
   | .spent, _ => trivial
 
@@ -119,8 +127,14 @@ theorem leaf_decode_cellFit {b : ByteArray} {l : Leaf} (h : leaf.decode b = .ok 
 /-- Tooth: `CellFit Cell.Fits` excludes something — no bytes decode to a leaf holding a cell of kind
 `2^32` (outside the cell codec's domain), so `leaf_decode_cellFit` is not `True`. -/
 theorem leaf_decode_refuses_misfit (b : ByteArray) :
-    leaf.decode b ≠ .ok (.entry (.live ⟨2 ^ 32, .ram, []⟩)) := fun h =>
-  absurd (leaf_decode_cellFit h).1.1 (by decide)
+    leaf.decode b ≠ .ok (.entry (.live ⟨2 ^ 32, .ram, []⟩ 0)) := fun h =>
+  absurd (leaf_decode_cellFit h).1.1.1 (by decide)
+
+/-- Tooth: the version is bounded too — no bytes decode to a live leaf at version 2^64 (past the
+counter limit), so `CellFit`'s version conjunct is not `True` either. -/
+theorem leaf_decode_refuses_version (b : ByteArray) :
+    leaf.decode b ≠ .ok (.entry (.live ⟨0, .ram, []⟩ (2 ^ 64))) := fun h =>
+  absurd (leaf_decode_cellFit h).1.2 (by decide)
 
 section Leaves
 variable {K V D' : Type} [DecidableEq K] (S : Trie.Spec K V D')
@@ -689,7 +703,7 @@ theorem world_decode_cellsFit {E : Env D} {PD : D → Prop} {dc : Stream D} (hd 
   cases l with
   | entry e =>
     cases e with
-    | live c => exact hl
+    | live c v => exact hl
     | tomb => trivial
   | spent => trivial
 

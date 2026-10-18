@@ -51,8 +51,37 @@ theorem derivePins_keeps {X : Ctx D} {w : World D} :
       split at h
       · have := derivePins_keeps n _ u' t h
         simpa using this
+      · split at h
+        · cases h
+        · have := derivePins_keeps n _ u' t h
+          simpa using this
       · cases h
       · cases h; exact ⟨rfl, rfl, rfl⟩
+
+/-- **Every row pin `derivePins` adds is the planning World's** (KERNEL-54): a row pin of the result
+was the input's, or is `rowPinAt` of follow's World at some row key, the leaf's digest or absence at
+its relation's floor as `w` holds them. -/
+theorem derivePins_rowPins {X : Ctx D} {w : World D} :
+    ∀ (n : Nat) (u u' : Unsigned D) (t : Turn D), derivePins X w n u = .ok (u', t) →
+      ∀ p ∈ u'.rowPins, p ∈ u.rowPins ∨ ∃ key, p = rowPinAt X.env w key
+  | 0, _, _, _, h => by simp [derivePins] at h
+  | n + 1, u, u', t, h => by
+      simp only [derivePins] at h
+      split at h
+      · have := derivePins_rowPins n _ u' t h
+        exact this
+      · split at h
+        · cases h
+        · intro p hp
+          have ih := derivePins_rowPins n _ u' t h
+          rcases ih p hp with hm | hk
+          · simp only [List.mem_append, List.mem_singleton] at hm
+            rcases hm with hm | rfl
+            · exact .inl hm
+            · exact .inr ⟨_, rfl⟩
+          · exact .inr hk
+      · cases h
+      · cases h; intro p hp; exact .inl hp
 
 /-- `planUnchecked` derives `t` from `u` on follow's World, and `u` is the member's own call. -/
 theorem planUnchecked_derives {X : Ctx D} {me : Self D} {w : World D} {key : ByteArray} {b : Body D}
@@ -71,6 +100,26 @@ theorem planUnchecked_derives {X : Ctx D} {me : Self D} {w : World D} {key : Byt
     · rename_i t' ht
       cases h
       exact ⟨hk.1, hk.2.1, hk.2.2, ht⟩
+
+/-- **The call `planUnchecked` returns carries only row pins its own World holds** (KERNEL-54, the
+plan side of PROTOCOL-16's gap 4; `plan` returns the same call): every row pin of it is `rowPinAt`
+of follow's World at its key. -/
+theorem planUnchecked_rowPins {X : Ctx D} {me : Self D} {w : World D} {key : ByteArray} {b : Body D}
+    {u : Unsigned D} {t : Turn D} (h : planUnchecked X me w key b = .ok (u, t)) :
+    ∀ p ∈ u.rowPins, ∃ k, p = rowPinAt X.env w k := by
+  simp only [planUnchecked, bind, Except.bind] at h
+  split at h
+  · cases h
+  · rename_i p hp
+    obtain ⟨u1, t1⟩ := p
+    simp only at h
+    split at h
+    · cases h
+    · cases h
+      intro q hq
+      rcases derivePins_rowPins _ _ _ _ hp q hq with hm | hk
+      · simp at hm
+      · exact hk
 
 /-- `plan` offers `u` only if follow's World derives a Turn from it and admits that Turn. -/
 theorem plan_admits {X : Ctx D} {me : Self D} {w : World D} {key : ByteArray} {b : Body D}
@@ -123,8 +172,8 @@ theorem envelopeRefused_ne_submit {X : Ctx D} {me : Self D} {argv : List ByteArr
   repeat' split at h
   all_goals first | exact refusedAt_ne_submit h | (simp [refused] at h; done) | (simp [notServed] at h; done) | ((try dsimp only at h); exact envelopeSign_ne_submit h)
 
-theorem receiptLines_ne_submit {X : Ctx D} {dc : Codec.Stream D} {w : World D} {cb call k : ByteArray} :
-    receiptLines X dc w cb ≠ .submit call k := by
+theorem receiptLines_ne_submit {X : Ctx D} {dc : Codec.Stream D} {me : Self D} {w : World D}
+    {cb call k : ByteArray} : receiptLines X dc me w cb ≠ .submit call k := by
   intro h
   unfold receiptLines at h
   repeat' split at h
@@ -225,7 +274,7 @@ no signature verified at reopen; ROOT's ruling on HOST-22): every step `host fol
 re-derived from the writer's logged event and taken by follow's OWN `World.step` before the
 append. A Turn was admitted by `World.admit`; a refusal was recorded by `World.refuse` after
 follow's own `judge` recorded it. The follow-time teeth are the rows' `audit` row (plant
-`followVerifyAll`, line 13) and the `refused` row (plant `admitsRecorded`). -/
+`followVerifyAll`, line 13) and the `refusedFinal` row (plant `admitsRecorded`). -/
 
 /-- One absorbed step is a step of follow's own World. -/
 theorem absorbStep_step {X : Ctx D} {w w' : World D} {e : ByteArray} {s : Kernel.Step D}
@@ -515,6 +564,51 @@ theorem readText_reads {X : Ctx D} {w : World D} {obj : D} {cell : Cell}
     · cases ht
   · cases ht
 
+
+/-! ## Stale BEHIND, from the member's own fold (KERNEL-54, PROTOCOL-15's conditions 1 and 2) -/
+
+/-- **What `staleBehind` says**: the member's own call for its own World, planned at a height
+follow has reached, whose Turn follow's World derives and refuses `stale` by the kernel's name. -/
+theorem staleBehind_spec {X : Ctx D} {me : Self D} {w : World D} {c : Call D}
+    (h : staleBehind X me w c = true) :
+    c.unsigned.member = me.member ∧ c.unsigned.world = me.world ∧ c.unsigned.notBefore ≤ w.height ∧
+      ∃ t x, receive X w c = .ok t ∧ World.admit X.env w t = .error (.stale x) := by
+  unfold staleBehind at h
+  simp only [Bool.and_eq_true, decide_eq_true_eq] at h
+  obtain ⟨⟨⟨hm, hw⟩, hn⟩, hr⟩ := h
+  refine ⟨hm, hw, hn, ?_⟩
+  split at hr
+  · rename_i t ht
+    split at hr
+    · rename_i x hx
+      exact ⟨t, x, ht, hx⟩
+    · cases hr
+  · cases hr
+
+/-- **A call this World would admit is never stale BEHIND here** (the tooth of the settlement's
+stale arm): wherever `submit` admits the call, `staleBehind` is false, so its settlement there is
+never `refused stale`. -/
+theorem staleBehind_admissible {X : Ctx D} {me : Self D} {w w' : World D} {c : Call D} {t : Turn D}
+    (hs : submit X w c = .ok (t, w')) : staleBehind X me w c = false := by
+  obtain ⟨-, hr, ha⟩ := submit_ok hs
+  cases h : staleBehind X me w c with
+  | false => rfl
+  | true =>
+    obtain ⟨-, -, -, t', x, hr', ha'⟩ := staleBehind_spec h
+    rw [hr] at hr'
+    cases hr'
+    rw [ha] at ha'
+    cases ha'
+
+omit [Ord D] [DecidableEq D] in
+/-- **The settlement's stale arm** (`Settle.ofReceipt`): an absent receipt inside a live window
+that the journal still answers settles `refused staleCode` exactly when follow's fold says stale
+BEHIND, and `open` otherwise. With `b` = `staleBehind` (`Command.settleOf`, what `receipt CALL`
+prints): `Settle.settleOf_stale` and `Settle.settleOf_admissible_open`. -/
+theorem settle_absent_stale {fg b : Bool} {H vu : Nat} (hf : fg = false) (hv : ¬ vu ≤ H) :
+    Settle.ofReceipt (D := D) fg b H vu .absent = (if b then .refused staleCode else .open) := by
+  subst hf
+  cases b <;> simp [Settle.ofReceipt, hv]
 
 /-! ## `read OBJ REL K [PREFIX]` (PROTOCOL-51) -/
 

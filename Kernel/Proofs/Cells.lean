@@ -258,9 +258,10 @@ theorem coll_collision {E : Env D} (h : Trie.Coll (trieSpec E)) : Collision E.ha
   obtain ⟨a, b, hne, he⟩ := h; exact ⟨domTrie, a, b, hne, he⟩
 
 /-- A leaf whose cell (if any) satisfies `F`: the cells on which the cell codec is injective
-(deployed: `Codec.Cell.Fits`; the deployed codec is NOT injective on all cells, CODEC-12). -/
+(deployed: `Codec.Cell.Fits`; the deployed codec is NOT injective on all cells, CODEC-12), with its
+version below 2^64 (KERNEL-54: `leafBytes` spells it in eight bytes). -/
 def Leaf.CellFit (F : Cell → Prop) : Leaf → Prop
-  | .entry (.live c) => F c
+  | .entry (.live c v) => F c ∧ v < 2 ^ 64
   | _ => True
 
 /-- Every leaf the World holds satisfies `F`. -/
@@ -270,25 +271,26 @@ def World.CellsFit (F : Cell → Prop) (E : Env D) (w : World D) : Prop :=
 omit [Ord D] [DecidableEq D] in
 theorem leafBytes_inj {E : Env D} {F : Cell → Prop} (hcb : InjOn F E) {l l' : Leaf}
     (hf : l.CellFit F) (hf' : l'.CellFit F) (h : leafBytes E l = leafBytes E l') : l = l' := by
-  have tag : ∀ {a b : UInt8} {x y : ByteArray}, (⟨#[a]⟩ : ByteArray) ++ x = ⟨#[b]⟩ ++ y → a = b ∧ x = y := by
-    intro a b x y he
-    obtain ⟨h1, h2⟩ := bytes_append_inj he rfl
-    exact ⟨by simpa using congrArg (fun z : ByteArray => z.data) h1, h2⟩
   have one : ∀ {a b : UInt8}, (⟨#[a]⟩ : ByteArray) = ⟨#[b]⟩ → a = b := by
     intro a b he; simpa using congrArg (fun z : ByteArray => z.data) he
-  have lone : ∀ {a b : UInt8} {x : ByteArray}, (⟨#[a]⟩ : ByteArray) ++ x = ⟨#[b]⟩ → a = b := by
-    intro a b x he
+  have lone : ∀ {a b : UInt8} {x y : ByteArray}, (⟨#[a]⟩ : ByteArray) ++ x ++ y = ⟨#[b]⟩ → a = b := by
+    intro a b x y he
     have hd := congrArg (fun z : ByteArray => z.data.toList) he
     simp [ByteArray.data_append] at hd
     exact hd.1
   cases l with
   | entry e =>
       cases e with
-      | live c =>
+      | live c v =>
           cases l' with
           | entry e' =>
               cases e' with
-              | live c' => obtain ⟨_, hx⟩ := tag h; rw [hcb _ _ hf hf' hx]
+              | live c' v' =>
+                  obtain ⟨h1, hx⟩ := bytes_append_inj h
+                    (by simp only [ByteArray.size_append, nat64_size])
+                  obtain ⟨_, hn⟩ := bytes_append_inj h1 rfl
+                  have hv := Nanodregg.Codec.Stream.nat64_lawfulOn.bytes_injective hf.2 hf'.2 hn
+                  rw [hcb _ _ hf.1 hf'.1 hx, hv]
               | tomb => have := lone h; simp at this
           | spent => have := lone h; simp at this
       | tomb =>
@@ -341,12 +343,13 @@ theorem slot_exclusion_sound {w : World D} (hc : w.Canon E) {s : Slot D} {p : Tr
 
 /-- A live cell proved against the root is the World's live cell, or the hash collides. -/
 theorem live_inclusion_sound {w : World D} (hc : w.Canon E)
-    (hwf : w.CellsFit Codec.Kernel.Cell.Fits E) {c : D} {cell : Cell} (hcf : Codec.Kernel.Cell.Fits cell)
+    (hwf : w.CellsFit Codec.Kernel.Cell.Fits E) {c : D} {cell : Cell} {v : Nat}
+    (hcf : (Leaf.entry (.live cell v)).CellFit Codec.Kernel.Cell.Fits)
     {p : Trie.Proof (Slot D) D}
-    (hv : Trie.verifyInclusion (trieSpec E) (w.root E) (.cell c) (leafDigest E (.entry (.live cell))) p = true) :
-    w.live E c = some cell ∨ Collision E.hash := by
-  rcases slot_inclusion_sound hE hc hwf (l := .entry (.live cell)) hcf hv with hg | col
-  · left; unfold World.live World.entry; rw [hg]
+    (hv : Trie.verifyInclusion (trieSpec E) (w.root E) (.cell c) (leafDigest E (.entry (.live cell v))) p = true) :
+    w.entry E c = some (.live cell v) ∨ Collision E.hash := by
+  rcases slot_inclusion_sound hE hc hwf hcf hv with hg | col
+  · left; unfold World.entry; rw [hg]
   · exact .inr col
 
 /-- An unspent nullifier proved against the root is unspent in the World, or the hash collides. -/

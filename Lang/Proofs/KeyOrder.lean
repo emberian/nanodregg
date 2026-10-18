@@ -470,25 +470,25 @@ private def queueSlot (n : Nat) : RowSlot UInt8 := .row ⟨7, 3, queueKey n⟩
 
 /-- The queue's rows: its head (width 8), ring 256 inserted, then ring 1. -/
 private def queueRows : Rows UInt8 :=
-  ((Trie.T.empty.insert (rowSpec queueEnv) (queueSlot 256) (.row 0 ByteArray.empty)).insert (rowSpec queueEnv)
-    (queueSlot 1) (.row 0 ByteArray.empty)).insert (rowSpec queueEnv) (.head 7 3) (.head 2 0 8 0 8 false)
+  ((Trie.T.empty.insert (rowSpec queueEnv) (queueSlot 256) (.row 0 ByteArray.empty 0)).insert (rowSpec queueEnv)
+    (queueSlot 1) (.row 0 ByteArray.empty 0)).insert (rowSpec queueEnv) (.head 7 3) (.head 2 0 8 0 8 false 0)
 
 /-- The same trie written with the OLD little-endian key bytes. -/
 private def leRows : Rows UInt8 :=
-  ((Trie.T.empty.insert (rowSpec queueEnv) (.row ⟨7, 3, Stream.u64.bytes 256⟩) (.row 0 ByteArray.empty)).insert
-    (rowSpec queueEnv) (.row ⟨7, 3, Stream.u64.bytes 1⟩) (.row 0 ByteArray.empty)).insert (rowSpec queueEnv)
-    (.head 7 3) (.head 2 0 8 0 8 false)
+  ((Trie.T.empty.insert (rowSpec queueEnv) (.row ⟨7, 3, Stream.u64.bytes 256⟩) (.row 0 ByteArray.empty 0)).insert
+    (rowSpec queueEnv) (.row ⟨7, 3, Stream.u64.bytes 1⟩) (.row 0 ByteArray.empty 0)).insert (rowSpec queueEnv)
+    (.head 7 3) (.head 2 0 8 0 8 false 0)
 
 private theorem queue_lists_1_first :
     rangeRows queueEnv queueRows 7 3 8 ByteArray.empty 5 =
-      some [(queueSlot 1, .row 0 ByteArray.empty), (queueSlot 256, .row 0 ByteArray.empty)] := by decide
+      some [(queueSlot 1, .row 0 ByteArray.empty 0), (queueSlot 256, .row 0 ByteArray.empty 0)] := by decide
 
 /-- **Tooth, the old wire at the key level**: under little-endian key bytes the same queue lists ring 256
 before ring 1. -/
 private theorem le_queue_lists_256_first :
     rangeRows queueEnv leRows 7 3 8 ByteArray.empty 5 =
-      some [(.row ⟨7, 3, Stream.u64.bytes 256⟩, .row 0 ByteArray.empty),
-        (.row ⟨7, 3, Stream.u64.bytes 1⟩, .row 0 ByteArray.empty)] := by decide
+      some [(.row ⟨7, 3, Stream.u64.bytes 256⟩, .row 0 ByteArray.empty 0),
+        (.row ⟨7, 3, Stream.u64.bytes 1⟩, .row 0 ByteArray.empty 0)] := by decide
 
 /-- **`range_keys_ascend_read` is not vacuous**: every premise holds on the concrete queue (an
 installed relation, a canonical trie whose entries fit, one injective digest size), the read lists two

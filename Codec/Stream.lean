@@ -58,6 +58,9 @@ inductive Shape where
   /-- Eight bytes, BIG-endian (`Stream.u64be`): a Lang datum's natural, so a relation key's bytes compare as its
   numbers (LANG-57). -/
   | u64be
+  /-- LEB128, shortest form, below 2^64 in at most ten bytes (`Codec.Stream.varint64`, KERNEL-54's
+  versions). -/
+  | varint64
   deriving Repr
 
 /-- A byte string of at most `max` bytes. -/

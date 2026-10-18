@@ -490,7 +490,7 @@ private abbrev wr (l : List (RowSlot Sim.D × RowLeaf)) : Rows Sim.D :=
   Trie.build (rowSpec Sim.env) (rowSpec Sim.env).depth 0 l
 
 /-- The cells listing of a World holding one live cell, id 1 (the relations' parent). -/
-private abbrev parentCells : List (Slot Sim.D × Leaf) := [(.cell 1, .entry (.live ⟨0, .ram, []⟩))]
+private abbrev parentCells : List (Slot Sim.D × Leaf) := [(.cell 1, .entry (.live ⟨0, .ram, []⟩ 0))]
 
 /-- The cells trie holding the parent, at Sim's parameters. -/
 private abbrev pc (b : Bool) : Cells Sim.D :=
@@ -505,7 +505,7 @@ private theorem pc_fits (b : Bool) : CellsFits Sim.env (fun _ => True) (pc b) :=
       Trie.canon_empty _ 0⟩
   · refine ⟨⟨⟨by rw [pc_toList]; simp [worldMax], fun p hp => ?_⟩, fun p hp => ?_⟩, ?_⟩
     · rw [pc_toList] at hp; simp only [parentCells, List.mem_cons, List.mem_nil_iff, or_false] at hp; subst hp
-      exact ⟨trivial, by decide, by simp [Slots.Fits, Bounds.slotsPerCellMax]⟩
+      exact ⟨trivial, ⟨by decide, by simp [Slots.Fits, Bounds.slotsPerCellMax]⟩, by decide⟩
     · rw [pc_toList] at hp; simp only [parentCells, List.mem_cons, List.mem_nil_iff, or_false] at hp; subst hp; rfl
     · exact Trie.canon_build _ 0 _ (by simp [parentCells])
 
@@ -532,7 +532,7 @@ private theorem wx_wireFits (l : List (RowSlot Sim.D × RowLeaf)) (hl : l.length
   wxp_wireFits true l hl hn ht hp
 
 private abbrev capped (sum : Nat) : List (RowSlot Sim.D × RowLeaf) :=
-  [(.head 1 7, .head 1 sum 4 40 2 true), (.row ⟨1, 7, ⟨#[3, 4]⟩⟩, .row sum ByteArray.empty)]
+  [(.head 1 7, .head 1 sum 4 40 2 true 0), (.row ⟨1, 7, ⟨#[3, 4]⟩⟩, .row sum ByteArray.empty 0)]
 
 private theorem wr_capped40 : (wr (capped 40)).toList = capped 40 := by decide +kernel
 private theorem wr_capped41 : (wr (capped 41)).toList = capped 41 := by decide +kernel
@@ -575,7 +575,7 @@ theorem world_reads_sum_at_cap :
     (by show rowsHeaded (wr (capped 40)).toList = true
         rw [wr_capped40]; decide) (by decide +kernel) (by decide +kernel)
 
-private abbrev declared : List (RowSlot Sim.D × RowLeaf) := [(.head 1 7, .head 0 0 4 40 2 true)]
+private abbrev declared : List (RowSlot Sim.D × RowLeaf) := [(.head 1 7, .head 0 0 4 40 2 true 0)]
 
 private theorem wr_declared : (wr declared).toList = declared := by
   cases hd : (rowSpec Sim.env).depth <;> simp [wr, declared, Trie.build, Trie.mkLeaf, Trie.T.toList, hd]
@@ -595,7 +595,7 @@ theorem world_reads_declared_relation :
         rw [wr_declared]; decide) (by decide +kernel) (by decide +kernel)
 
 private abbrev headed (count : Nat) : List (RowSlot Sim.D × RowLeaf) :=
-  [(.head 1 7, .head count 5 4 40 2 true), (.row ⟨1, 7, ⟨#[3, 4]⟩⟩, .row 5 ByteArray.empty)]
+  [(.head 1 7, .head count 5 4 40 2 true 0), (.row ⟨1, 7, ⟨#[3, 4]⟩⟩, .row 5 ByteArray.empty 0)]
 
 private theorem wr_headed1 : (wr (headed 1)).toList = headed 1 := by decide +kernel
 private theorem wr_headed2 : (wr (headed 2)).toList = headed 2 := by decide +kernel

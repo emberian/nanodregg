@@ -882,7 +882,7 @@ def storyRow (w : World D) (obj : D) (rel : Nat) (d : RelDecl) (key : Data) : Op
   | none => none
   | some k =>
     match rowAt Sim.env w.rows (.row ⟨obj, rel, k⟩) with
-    | some (.row _ v) => (Wire.decodeData d.val v).toOption
+    | some (.row _ v _) => (Wire.decodeData d.val v).toOption
     | _ => none
 
 /-- A passage's text and votes. -/
@@ -935,14 +935,14 @@ def storyRows (mode : Mode) (r0 : Run) (a b : Sim.Member) : Run := Id.run do
   -- the proposal at `{round, slot}`, pinned at what the signer sees on `w`
   let pinP (w : World D) (round slot : Nat) : List (RowSlot D × D) :=
     match keyBytes proposalsDecl (.record [("round", .nat round), ("slot", .nat slot)]) with
-    | some k => let s : RowSlot D := .row ⟨obj, 3, k⟩; [(s, rowPin Sim.env (rowAt Sim.env w.rows s))]
+    | some k => let s : RowSlot D := .row ⟨obj, 3, k⟩; [(s, rowPin Sim.env (headFloor Sim.env w.rows obj 3) (rowAt Sim.env w.rows s))]
     | none => []
   -- the round's proposals as one range read, pinned at the listing the signer sees on `w`
   let rangeP (w : World D) (round : Nat) : List (RangeRead D) :=
     match Wire.encodeData (keyWireTy proposalsDecl 1) (.record [("k0", .nat round)]), headOf Sim.env w.rows obj 3 with
     | some pre, some (_, _, _, _, width, _) =>
       match rangeRows Sim.env w.rows obj 3 width pre 8 with
-      | some l => [{ parent := obj, rel := 3, pre, most := 8, seen := rangePin Sim.env obj 3 width pre l }]
+      | some l => [{ parent := obj, rel := 3, pre, most := 8, seen := rangePin Sim.env obj 3 width pre (headFloor Sim.env w.rows obj 3) l }]
       | none => []
     | _, _ => []
   let call (r : Run) (m : Sim.Member) (method : Nat) (x : ByteArray) (nb vu : Nat)

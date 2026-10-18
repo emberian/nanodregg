@@ -1,7 +1,11 @@
 import Codec.Varint
 import Codec.Proofs.Raw
 
-/-! # LEB128 is canonical below 2^32: one spelling per value, overlong spellings refused -/
+/-! # LEB128 is canonical: one spelling per value, overlong spellings refused
+
+Below 2^32 in at most five bytes (`varint_lawfulOn`) and below 2^64 in at most ten (`varint64_lawfulOn`,
+KERNEL-54), one reader `getVarint width limit` proved once for every width whose bytes reach the
+limit (`limit ≤ 128 ^ width`). -/
 
 namespace Nanodregg.Codec.Stream
 
@@ -42,10 +46,27 @@ theorem varint_size_le (n : Nat) (m : Nat) (h : n < 128 ^ (m + 1)) : (varint.byt
       have := ih (n / 128) (by rw [Nat.pow_succ] at h; omega)
       simp; omega
 
-theorem getVarint_of_occurs (b : ByteArray) (start : Nat) :
-    ∀ (fuel n i k acc : Nat), (varint.bytes n).size ≤ fuel → (k > 0 → n > 0) → acc + n * 128 ^ k < 2 ^ 32 →
+/-- A value of at least `128 ^ m` takes more than `m` bytes (the lower twin of `varint_size_le`). -/
+theorem varint_size_ge (n : Nat) (m : Nat) (h : 128 ^ m ≤ n) : m + 1 ≤ (varint.bytes n).size := by
+  induction m generalizing n with
+  | zero =>
+    by_cases hs : n < 128
+    · rw [varint_bytes_small hs]; simp
+    · rw [varint_bytes_large hs, ByteArray.size_append]; simp
+  | succ m ih =>
+    have hs : ¬ n < 128 := by
+      have : 128 ≤ 128 ^ (m + 1) := Nat.le_self_pow (by omega) _
+      omega
+    rw [varint_bytes_large hs, ByteArray.size_append]
+    have := ih (n / 128) (by
+      rw [Nat.pow_succ] at h
+      exact (Nat.le_div_iff_mul_le (by decide)).mpr h)
+    simp; omega
+
+theorem getVarint_of_occurs (width limit : Nat) (b : ByteArray) (start : Nat) :
+    ∀ (fuel n i k acc : Nat), (varint.bytes n).size ≤ fuel → (k > 0 → n > 0) → acc + n * 128 ^ k < limit →
       OccursAt b i (varint.bytes n) →
-      getVarint b start fuel i k acc = .ok (acc + n * 128 ^ k, i + (varint.bytes n).size)
+      getVarint width limit b start fuel i k acc = .ok (acc + n * 128 ^ k, i + (varint.bytes n).size)
   | 0, n, i, k, acc, hf, _, _, _ => by
     have : 0 < (varint.bytes n).size := by
       by_cases h : n < 128
@@ -85,14 +106,14 @@ theorem getVarint_of_occurs (b : ByteArray) (start : Nat) :
               rw [Nat.add_mul, Nat.pow_succ, Nat.mul_comm 128 (n / 128), Nat.mul_assoc,
                 Nat.mul_comm 128 (128 ^ k)]
         omega
-      rw [getVarint_of_occurs b start fuel (n / 128) (i + 1) (k + 1) _ (by omega) (fun _ => by omega)
+      rw [getVarint_of_occurs width limit b start fuel (n / 128) (i + 1) (k + 1) _ (by omega) (fun _ => by omega)
         (by rw [key]; exact hv) o2, key]
       congr 2
       omega
 
-theorem occurs_of_getVarint (b : ByteArray) (start : Nat) :
-    ∀ (fuel i k acc v j : Nat), getVarint b start fuel i k acc = .ok (v, j) →
-      ∃ n, v = acc + n * 128 ^ k ∧ (k > 0 → n > 0) ∧ v < 2 ^ 32 ∧ j = i + (varint.bytes n).size ∧
+theorem occurs_of_getVarint (width limit : Nat) (b : ByteArray) (start : Nat) :
+    ∀ (fuel i k acc v j : Nat), getVarint width limit b start fuel i k acc = .ok (v, j) →
+      ∃ n, v = acc + n * 128 ^ k ∧ (k > 0 → n > 0) ∧ v < limit ∧ j = i + (varint.bytes n).size ∧
         OccursAt b i (varint.bytes n)
   | 0, _, _, _, _, _, h => by simp [getVarint] at h
   | fuel + 1, i, k, acc, v, j, h => by
@@ -118,7 +139,7 @@ theorem occurs_of_getVarint (b : ByteArray) (start : Nat) :
               simp
           · cases h
       · rename_i hge
-        obtain ⟨n', hv, hk', hv32, hj, ho⟩ := occurs_of_getVarint b start fuel (i + 1) (k + 1) _ v j h
+        obtain ⟨n', hv, hk', hv32, hj, ho⟩ := occurs_of_getVarint width limit b start fuel (i + 1) (k + 1) _ v j h
         have hn'0 : n' > 0 := hk' (by omega)
         let n := ((b[i]'hi).toNat - 128) + 128 * n'
         have hn : ¬ n < 128 := by omega
@@ -140,17 +161,47 @@ theorem occurs_of_getVarint (b : ByteArray) (start : Nat) :
           simp
     · cases h
 
-theorem varint_lawfulOn : LawfulOn (· < 2 ^ 32) varint where
+/-- The reader of width `width` and limit `limit` is lawful below the limit when every value below it
+fits the width (`limit ≤ 128 ^ width`, a width of at least one byte): the one proof behind `varint` and `varint64`. -/
+theorem varintOf_lawfulOn {m limit : Nat} (hw : limit ≤ 128 ^ (m + 1)) (sh : Shape) :
+    LawfulOn (· < limit) (varintOf (m + 1) limit sh) where
   put_eq n buf := putVarint_eq n buf
   size_eq n := varintSize_eq n
   get_of_occurs n b i hn ho := by
-    have := getVarint_of_occurs b i 5 n i 0 0 (varint_size_le n 4 (by omega)) (fun h => by omega)
-      (by simpa using hn) ho
+    have hs : (varint.bytes n).size ≤ m + 1 := varint_size_le n m (by omega)
+    have := getVarint_of_occurs (m + 1) limit b i (m + 1) n i 0 0 hs (fun h => by omega) (by simpa using hn) ho
     simpa using this
   occurs_of_get {b i v j} h := by
-    obtain ⟨n, hv, _, hv32, hj, ho⟩ := occurs_of_getVarint b i 5 i 0 0 v j h
+    obtain ⟨n, hv, _, hvl, hj, ho⟩ := occurs_of_getVarint (m + 1) limit b i (m + 1) i 0 0 v j h
     simp only [Nat.pow_zero, Nat.mul_one, Nat.zero_add] at hv
     subst hv
-    exact ⟨hv32, hj, ho⟩
+    exact ⟨hvl, hj, ho⟩
+
+theorem varint_lawfulOn : LawfulOn (· < 2 ^ 32) varint := varintOf_lawfulOn (by decide) _
+
+/-- **The u64 varint is lawful below 2^64** (KERNEL-54's versions and floors). -/
+theorem varint64_lawfulOn : LawfulOn (· < 2 ^ 64) varint64 := varintOf_lawfulOn (by decide) _
+
+/-- `varint64` writes `varint`'s digits: the two differ only in where the reader stops. -/
+theorem varint64_bytes (n : Nat) : varint64.bytes n = varint.bytes n := rfl
+
+/-- **Canonicity, exact**: an input decodes to `v` iff `v` is below 2^64 and the input is `v`'s one
+spelling. So a non-minimal varint is refused: there is one encoding per value. -/
+theorem varint64_decode_iff {b : ByteArray} {v : Nat} :
+    varint64.decode b = .ok v ↔ v < 2 ^ 64 ∧ b = varint64.bytes v :=
+  varint64_lawfulOn.decode_eq_ok_iff
+
+/-- **The widest u64 varint is ten bytes** (KERNEL-55's `worldBytesMax` reads this width): a version
+costs at most ten bytes on the World wire, against the eight its weight charges, so the World's bytes
+are bounded by its weight plus two bytes per version, not by its weight. -/
+theorem varint64_size_le {v : Nat} (h : v < 2 ^ 64) : (varint64.bytes v).size ≤ 10 :=
+  varint_size_le v 9 (by omega)
+
+/-- And the size the codec reports is that width. -/
+theorem varint64_size_eq (v : Nat) : varint64.size v = (varint64.bytes v).size := varintSize_eq v
+
+/-- **2^64 − 1 is exactly ten bytes, so the bound is reached**: the width is tight. -/
+theorem varint64_size_max : (varint64.bytes (2 ^ 64 - 1)).size = 10 :=
+  Nat.le_antisymm (varint64_size_le (by decide)) (varint_size_ge _ 9 (by decide))
 
 end Nanodregg.Codec.Stream

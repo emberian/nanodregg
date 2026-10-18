@@ -67,6 +67,9 @@ structure Sys (D : Type) [Ord D] where
   guessMethod : Bool := false
   /-- the phone believes a receipt's stated answer (a plant) -/
   trustReceipt : Bool := false
+  /-- the attempt store takes the Host's `declined` as final: the attempt settled `refused` (a plant,
+  KERNEL-54: a stale is declined, and only follow's fold settles it) -/
+  settleDecline : Bool := false
   /-- the attempt store ends an attempt on the Host's status, never asking follow (a plant) -/
   trustLookup : Bool := false
   /-- the operator's seal skips `Host.sealNow`: a restart and nothing sealed (a plant) -/
@@ -111,6 +114,7 @@ def sys (R : Rows.Params D) : Option Mutation → Sys D
   | some .writerForgetsSpent => { writer := { R, X := R.ctx, forgetSpent := true }, follow := R.ctx }
   | some .importTrustsFile => { writer := { R, X := R.ctx }, follow := R.ctx, importTrustsFile := true }
   | some .admitsRecorded => { writer := { R, X := R.ctx, admitsRecorded := true }, follow := R.ctx }
+  | some .settleDecline => { writer := { R, X := R.ctx }, follow := R.ctx, settleDecline := true }
   | some .trustFirstUse => { writer := { R, X := R.ctx }, follow := R.ctx, trustFirstUse := true }
   | some .oneMember => { writer := { R, X := R.ctx }, follow := R.ctx, oneMember := true }
   | some .guessMethod => { writer := { R, X := R.ctx }, follow := R.ctx, guessMethod := true }
@@ -488,10 +492,11 @@ def classify (res : ByteArray) : Attempt.Seen :=
   -- the connection ended with the request unanswered: as if the reply were lost
   | some (.closed, _) | none => .lost
 
-/-- Requests one attempt may make in one run: every send, and at most one lookup after each
-(`Proofs.Attempt.next_after_lookup`), one confirm or probe, and one more for the decision that ends
-it. -/
-def attemptFuel : Nat := 2 * Bounds.sendsMax + 3
+/-- Requests one attempt may make in one run: every send, at most one lookup after each
+(`Proofs.Attempt.next_after_lookup`) and one probe after that lookup (an absent lookup is confirmed
+with follow before any resend, `Proofs.Attempt.next_absent_probes`), one confirm, and one more for
+the decision that ends it. -/
+def attemptFuel : Nat := 3 * Bounds.sendsMax + 3
 
 /-- Follow's `settle` line in a `receipt CALL` output: what the attempt store sees, and its text. -/
 def settleOf (out : String) : Option (Attempt.Seen × String) :=
@@ -683,7 +688,12 @@ def drive (name : String) (call : ByteArray) (fault : Fault) (depth : Nat) :
       | .refused => settle name call .refused; pure (.ok (ended .refused said))
       | .declined =>
           match reply.bind Command.hostReply with
-          | some (_, p) => pure (.ok (ended .declined (Command.hostName p)))
+          | some (_, p) =>
+              if (← get).sys.settleDecline then
+                -- the plant: the Host's decline taken as final, the attempt settled refused
+                settle name call .refused
+                pure (.ok (ended .refused s!"refused {(staleCode : Nat)}"))
+              else pure (.ok (ended .declined (Command.hostName p)))
           | none => pure (.error "noReply")
       | .contradicted =>
           let f := match last with | some (_, s) => s.name | none => ""
