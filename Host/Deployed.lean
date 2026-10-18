@@ -69,7 +69,7 @@ def pager (keys : Keys) (dir : System.FilePath) (seg idx : File) (r : Resident (
         r.sealed.index.count r.index)
       (r.sealed.index.count + r.index.size) r.pos.offset (recorder.mark r.world) start with
   | .error f => return named f.name
-  | .ok a => match Page.bytes a r.world.steps r.world.height with
+  | .ok a => match Page.bytes a r.world.steps r.world.height r.sealed.steps r.sealed.digest with
     | .ok b => return (Protocol.Status.ok.code, b)
     | .error f => return named f.name
 

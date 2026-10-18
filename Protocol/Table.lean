@@ -370,9 +370,14 @@ fold reached the same step count and chain (a pair assertion, law 4; the pair th
 `fold_reaches_host` binds): an omitted, truncated or reordered event is caught at the page. A page
 holds at most a frame of events (HOST-17), so it may end before the tip, even inside a writer batch:
 follow pages again from `steps` until `steps = tipSteps` (at most `Bounds.pagesPerCommandMax` pages a
-command). -/
+command). Last, the writer's newest DURABLE base when it built the page (PROTOCOL-47): its step
+count (`baseSteps`, at most `tipSteps`, else the page is refused) and its digest (`baseDigest`, the
+`read` header's and `host seal`'s). A seal racing the page leaves them stale; the follower trusts
+neither: it records its OWN World's digest where its fold sits at `baseSteps`, and `invite` pins
+that only when the stated digest agrees (`baseMismatch` otherwise). -/
 def logReplyLayout : Codec.Layout :=
-  [.list "events", .bytes "steps", .bytes "chain", .bytes "tipSteps", .bytes "tipHeight"]
+  [.list "events", .bytes "steps", .bytes "chain", .bytes "tipSteps", .bytes "tipHeight",
+   .bytes "baseSteps", .bytes "baseDigest"]
 
 /-- The `read` reply's payload: one page of the World bytes of the writer's NEWEST base (HOST-14,
 HOST-15), for a thin member (PROTOCOL-14, option A). The request is the read envelope, its `start`

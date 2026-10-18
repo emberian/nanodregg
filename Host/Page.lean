@@ -185,16 +185,21 @@ def build (E : Env D) (dc : Stream D) (digestOf : ByteArray → Option D) (s : L
       let a : Acc := { steps := e.steps, chain := e.chain }
       walk E dc s recordMax budget read endOff start (count - k) e.offset c a
 
-/-- The page on the wire: `logReplyLayout` (events, steps u64, chain, tipSteps u64, tipHeight u64):
-`tipSteps` and `tipHeight` the World's step count and height the page was built at (a member pages
-again until its step count reaches `tipSteps`; it signs its next envelope from `tipHeight`, since
-windows are in heights). -/
-def bytes (a : Acc) (tipSteps tipHeight : Nat) : Except Fault ByteArray :=
+/-- The page on the wire: `logReplyLayout` (events, steps u64, chain, tipSteps u64, tipHeight u64,
+baseSteps u64, baseDigest): `tipSteps` and `tipHeight` the World's step count and height the page
+was built at (a member pages again until its step count reaches `tipSteps`; it signs its next
+envelope from `tipHeight`, since windows are in heights); `baseSteps` and `baseDigest` the newest
+DURABLE base's when the page was built (`Sealed.steps`, `Sealed.digest`: the base a thin member
+adopts, PROTOCOL-47). A seal racing the page makes them stale; the inviter then refuses
+`noBase` or `baseMismatch`, never pins them. -/
+def bytes (a : Acc) (tipSteps tipHeight baseSteps : Nat) (baseDigest : ByteArray) : Except Fault ByteArray :=
   let f := Protocol.Text.fit Protocol.Bounds.frameBytesMax
   match Protocol.Text.fitList Protocol.Bounds.frameBytesMax a.events.toList,
-      f (Protocol.Text.u64 a.steps), f a.chain, f (Protocol.Text.u64 tipSteps), f (Protocol.Text.u64 tipHeight) with
-  | some l, some h, some c, some t, some th => .ok (Protocol.logReplyFrame.bytes (l, h, c, t, th, ()))
-  | _, _, _, _, _ => .error .tooLarge
+      f (Protocol.Text.u64 a.steps), f a.chain, f (Protocol.Text.u64 tipSteps), f (Protocol.Text.u64 tipHeight),
+      f (Protocol.Text.u64 baseSteps), f baseDigest with
+  | some l, some h, some c, some t, some th, some bs, some bd =>
+      .ok (Protocol.logReplyFrame.bytes (l, h, c, t, th, bs, bd, ()))
+  | _, _, _, _, _, _, _ => .error .tooLarge
 
 /-- A `read` page (HOST-15): the newest base's World bytes from byte `start`, at most `budget` of
 them, with the base's step count, total size, digest and chain (`readReplyLayout`). `readBase off len`

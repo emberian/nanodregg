@@ -334,7 +334,7 @@ def followVerb (store memberHex grantHex : String) : IO UInt32 := do
     match ← openWriter store keys c world recorder.mark originChain foldStep with
     | .error f => refuseStore f
     | .ok wr => serving do
-      let download ← IO.mkRef none
+      let download ← IO.mkRef ({} : Protocol.Command.Memory)
       let code ← runResident "follow" wr.opening.resident fun port =>
         -- the World this member was invited to: its own Store's genesis origin, never the writer's word
         restarts (Follow.loop keys ⟨wr.opening.opened.world.origin, member, grant, Follow.window⟩ (fileStore wr.segment)

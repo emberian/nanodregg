@@ -81,15 +81,15 @@ def answer {D : Type} [Ord D] [DecidableEq D] (X : Receive.Ctx D) (dc : Stream D
       stepOut fs' p r
   | some op => refused (.wrongSocket op)
 
-/-- The follower loop: one frame at a time, at most `fuel` frames. `dl` is the base download in
-progress, held in memory only, in a reference the caller owns, so it survives a fuel restart's
+/-- The follower loop: one frame at a time, at most `fuel` frames. `dl` is follow's memory (the base
+download in progress and the newest writer base it verified itself, PROTOCOL-47), held in memory only, in a reference the caller owns, so it survives a fuel restart's
 in-process reopen exactly as the port's queued frames do (a process restart starts it again). Absorbed steps are appended through
 `Host.append` BEFORE the step is answered; an adopted base is sealed as follow's own newest base
 at its segment position (no record before it belongs to the adopted World's history, so the index
 restarts empty: adopt runs only at genesis (PROTOCOL's `notAtGenesis`), where `index.log` is empty,
 so the base counts no entry and the seal writes none) BEFORE the step is answered. -/
 def loop (keys : Keys) (me : Command.Self D) (store : Store) (ck : Checkpoint (World D)) (port : Port)
-    (dl : IO.Ref (Option Protocol.Thin.Download)) : Nat → Resident (World D) → IO (Exit × Resident (World D))
+    (dl : IO.Ref Command.Memory) : Nat → Resident (World D) → IO (Exit × Resident (World D))
   | 0, r => finish .fuel r
   | fuel + 1, r => do
     let r ← match ← reap r with
@@ -97,10 +97,12 @@ def loop (keys : Keys) (me : Command.Self D) (store : Store) (ck : Checkpoint (W
       | .error f => return (.sealFailed f, { r with pending := none })
     let some f ← port.recv | finish .eof r
     let (fs', p, status, payload) :=
-      answer X Codec.Deployed.digestCodec ⟨world, World.steps, keys.worldDigest, c.worldBytesMax⟩ me ⟨r.world, ← dl.get⟩ f
-    dl.set fs'.download
+      answer X Codec.Deployed.digestCodec ⟨world, World.steps, keys.worldDigest, c.worldBytesMax⟩ me ⟨r.world, (← dl.get).download, (← dl.get).verified⟩ f
+    -- follow's memory moves only once the step's effects are durable: `verified` never names a base
+    -- the follower's own durable World has not crossed (PROTOCOL-47, HOST-12)
     match p with
     | .steps [] =>
+      dl.set fs'.memory
       port.send ⟨f.conn, status, payload⟩
       loop keys me store ck port dl fuel { r with world := fs'.world }
     | .steps ts =>
@@ -109,6 +111,7 @@ def loop (keys : Keys) (me : Command.Self D) (store : Store) (ck : Checkpoint (W
         port.send ⟨f.conn, Status.uncertain.code, ByteArray.empty⟩
         finish e r
       | .ok r =>
+        dl.set fs'.memory
         port.send ⟨f.conn, status, payload⟩
         loop keys me store ck port dl fuel r
     | .adopt w' =>
@@ -122,6 +125,7 @@ def loop (keys : Keys) (me : Command.Self D) (store : Store) (ck : Checkpoint (W
         port.send ⟨f.conn, Status.uncertain.code, ByteArray.empty⟩
         return (.sealFailed e, { r with pending := none })
       | .ok sealed =>
+        dl.set fs'.memory
         port.send ⟨f.conn, status, payload⟩
         loop keys me store ck port dl fuel
           { r with world := w', sealed, index := #[], pending := none }

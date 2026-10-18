@@ -241,50 +241,140 @@ theorem absorb_admits {X : Ctx D} :
       exact ⟨(s, World.roots X.env w₁) :: l, by simp [hl], ⟨w₁, absorbStep_step hs, rfl, hf⟩⟩
     · cases h
 
-theorem absorbPage_admits {X : Ctx D} {w w' : World D} {evs : List ByteArray} {steps : Nat}
-    {chain : ByteArray} {ts : List (Kernel.Step D × D)} (h : absorbPage X w evs steps chain = .ok (w', ts)) :
-    World.RootedFold X.env w ts w' := by
+/-- Rooted runs compose: a run to `wb`, then one from `wb`, is a run of both. -/
+theorem rooted_append {W T R N : Type} {admit : W → T → Except R W} {note : W → N} :
+    ∀ {w wb w' : W} {l₁ l₂ : List (T × N)}, Rooted admit note w l₁ wb → Rooted admit note wb l₂ w' →
+      Rooted admit note w (l₁ ++ l₂) w'
+  | w, wb, w', [], l₂, h₁, h₂ => by simp only [Rooted] at h₁; subst h₁; simpa using h₂
+  | w, wb, w', (t, n) :: rest, l₂, h₁, h₂ => by
+      obtain ⟨w₁, ha, hn, hr⟩ := h₁
+      exact ⟨w₁, ha, hn, rooted_append hr h₂⟩
+
+/-- What `absorbPage` accepted, unfolded: ONE fold of the page cut at the stated base (its prefix to
+the base, then the rest from where the prefix stopped), ending at the writer's stated pair, and the
+World at the cut returned exactly when the fold sits at the base there. -/
+theorem absorbPage_ok {X : Ctx D} {w w' : World D} {evs : List ByteArray} {steps base : Nat}
+    {chain : ByteArray} {ts : List (Kernel.Step D × D)} {wb? : Option (World D)}
+    (h : absorbPage X w evs steps chain base = .ok (w', ts, wb?)) :
+    ∃ wb tb ts', absorb X w #[] (evs.take (base - w.steps)) = .ok (wb, tb) ∧
+      absorb X wb tb (evs.drop (base - w.steps)) = .ok (w', ts') ∧ ts = ts'.toList ∧
+      (w'.steps = steps ∧ X.env.bytes w'.chain = chain) ∧
+      wb? = (if wb.steps = base then some wb else none) := by
   unfold absorbPage at h
   split at h
   · cases h
   simp only [bind, Except.bind] at h
   split at h
   · cases h
-  · rename_i p hp
-    obtain ⟨l, hl, hf⟩ := absorb_admits evs hp
+  · rename_i p₁ h₁
     split at h
-    · simp only [pure, Except.pure, Except.ok.injEq, Prod.mk.injEq] at h
-      obtain ⟨rfl, rfl⟩ := h
-      simpa [hl] using hf
     · cases h
+    · rename_i p₂ h₂
+      split at h
+      · rename_i hc
+        simp only [pure, Except.pure, Except.ok.injEq, Prod.mk.injEq] at h
+        obtain ⟨rfl, rfl, rfl⟩ := h
+        exact ⟨p₁.1, p₁.2, p₂.2, h₁, h₂, rfl, hc, rfl⟩
+      · cases h
+
+theorem absorbPage_admits {X : Ctx D} {w w' : World D} {evs : List ByteArray} {steps base : Nat}
+    {chain : ByteArray} {ts : List (Kernel.Step D × D)} {wb? : Option (World D)}
+    (h : absorbPage X w evs steps chain base = .ok (w', ts, wb?)) :
+    World.RootedFold X.env w ts w' := by
+  obtain ⟨wb, tb, ts', h₁, h₂, rfl, -, -⟩ := absorbPage_ok h
+  obtain ⟨l₁, hl₁, hf₁⟩ := absorb_admits _ h₁
+  obtain ⟨l₂, hl₂, hf₂⟩ := absorb_admits _ h₂
+  rw [hl₂, hl₁]
+  simpa using rooted_append hf₁ hf₂
 
 /-- **A page longer than one follower record is refused before any of it is absorbed** (HOST-41):
 `pageTooLong`, by name, with the page's count; `step` answers an `absorbPage` error with follow's
 state unchanged and nothing to persist (its `same` arm). -/
-theorem absorbPage_tooLong {X : Ctx D} {w : World D} {evs : List ByteArray} {steps : Nat}
+theorem absorbPage_tooLong {X : Ctx D} {w : World D} {evs : List ByteArray} {steps base : Nat}
     {chain : ByteArray} (h : Bounds.pageStepsMax < evs.length) :
-    absorbPage X w evs steps chain = .error (.pageTooLong evs.length) := by
+    absorbPage X w evs steps chain base = .error (.pageTooLong evs.length) := by
   unfold absorbPage
   exact if_pos h
 
 /-- What a page `absorbPage` accepts ends at the writer's stated step count: the pair the kernel's
 `fold_reaches_host` binds (with the chain), so an honest page leaves follow's World equal to the
 writer's, or exhibits a hash collision. -/
-theorem absorbPage_steps {X : Ctx D} {w w' : World D} {evs : List ByteArray} {steps : Nat}
-    {chain : ByteArray} {ts : List (Kernel.Step D × D)} (h : absorbPage X w evs steps chain = .ok (w', ts)) :
-    w'.steps = steps ∧ X.env.bytes w'.chain = chain := by
-  unfold absorbPage at h
+theorem absorbPage_steps {X : Ctx D} {w w' : World D} {evs : List ByteArray} {steps base : Nat}
+    {chain : ByteArray} {ts : List (Kernel.Step D × D)} {wb? : Option (World D)}
+    (h : absorbPage X w evs steps chain base = .ok (w', ts, wb?)) :
+    w'.steps = steps ∧ X.env.bytes w'.chain = chain :=
+  (absorbPage_ok h).choose_spec.choose_spec.choose_spec.2.2.2.1
+
+/-- **The World follow keeps for a writer's base is ON the page's chain-checked fold, at exactly the
+stated step count** (PROTOCOL-47): the steps follow persists split at it, a run of follow's own
+`World.step` from its World to it and on from it to the page's end (`absorbPage_steps`: the writer's
+stated pair). So the World whose digest `invite` may pin is one follow derived on the path it
+checked, never a fork of it and never bytes the writer sent. -/
+theorem absorbPage_base {X : Ctx D} {w w' wb : World D} {evs : List ByteArray} {steps base : Nat}
+    {chain : ByteArray} {ts : List (Kernel.Step D × D)}
+    (h : absorbPage X w evs steps chain base = .ok (w', ts, some wb)) :
+    wb.steps = base ∧ ∃ l₁ l₂, ts = l₁ ++ l₂ ∧ World.RootedFold X.env w l₁ wb ∧
+      World.RootedFold X.env wb l₂ w' := by
+  obtain ⟨wb', tb, ts', h₁, h₂, rfl, -, hw⟩ := absorbPage_ok h
+  obtain ⟨l₁, hl₁, hf₁⟩ := absorb_admits _ h₁
+  obtain ⟨l₂, hl₂, hf₂⟩ := absorb_admits _ h₂
+  split at hw
+  · rename_i hs
+    cases hw
+    refine ⟨hs, l₁, l₂, ?_, hf₁, hf₂⟩
+    rw [hl₂, hl₁]
+    simp
+  · cases hw
+
+/-! ## PROTOCOL-47: `invite` pins its own base -/
+
+/-- **What `invite` pins is the base follow verified itself, and the writer states that very
+base**: the step count and digest follow recorded (its own World's, `absorbPage_base`), equal to
+the step count and digest the writer's last page stated as its newest base. -/
+theorem pinOf_ok {v : Option (Nat × ByteArray)} {s : Nat} {d : ByteArray} {p : Thin.Pin}
+    (h : pinOf v s d = .ok p) : v = some (p.steps, p.digest) ∧ p.steps = s ∧ p.digest = d := by
+  unfold pinOf at h
   split at h
-  · cases h
-  simp only [bind, Except.bind] at h
-  split at h
-  · cases h
   · split at h
-    · rename_i hc
-      simp only [pure, Except.pure, Except.ok.injEq, Prod.mk.injEq] at h
-      obtain ⟨rfl, rfl⟩ := h
-      exact hc
     · cases h
+    · split at h
+      · cases h
+      · rename_i hs hd
+        cases h
+        exact ⟨rfl, Classical.not_not.mp hs, Classical.not_not.mp hd⟩
+  · cases h
+
+/-- Nothing verified: `noBase`, never a pin (a restarted follow, before its fold next sits at the
+writer's base). -/
+theorem pinOf_none (s : Nat) (d : ByteArray) : pinOf none s d = .error .noBase := rfl
+
+/-- The writer's newest base is at another step count than the one follow verified (a newer seal
+follow never crossed, or a page that raced a seal): `noBase`. -/
+theorem pinOf_other {s s' : Nat} {d d' : ByteArray} (hs : s' ≠ s) :
+    pinOf (some (s', d')) s d = .error .noBase := by
+  simp [pinOf, hs]
+
+/-- **The tooth**: the writer states a digest for the base that is not follow's own World there
+(a lie about where its base is, or a forged base): `baseMismatch`, by name. -/
+theorem pinOf_forged {s : Nat} {d d' : ByteArray} (hd : d' ≠ d) :
+    pinOf (some (s, d')) s d = .error .baseMismatch := by
+  simp [pinOf, hd]
+
+/-- A page the follower reads states its base at or below its tip: a base past the tip is no base
+of that log, and `logPage` reads no page from it (`step` answers a page it cannot read
+`badResult`, its `none` arm). -/
+theorem logPage_base_le {b : ByteArray} {p : LogPage} (h : logPage b = some p) :
+    p.baseSteps ≤ p.tipSteps := by
+  unfold logPage at h
+  split at h
+  · simp only [Option.bind_eq_bind, Option.bind_eq_some_iff] at h
+    obtain ⟨_, -, _, -, _, -, _, -, h⟩ := h
+    split at h
+    · rename_i hc
+      cases h
+      exact hc.2
+    · cases h
+  · cases h
 
 /-- **What follow persists, its own fold taken, each roots digest its own.** Every pair follow
 persists is a step its own `World.step` took, in order from its World, beside the roots digest of
@@ -309,6 +399,27 @@ theorem step_persists_folds {X : Ctx D} {dc : Codec.Stream D} {B : Thin.Base (Wo
     (h : step X dc B me f kb result = (f', .steps ts, r)) :
     World.fold X.env f.world (ts.map Prod.fst) = .ok f'.world :=
   RootedFold.fold (step_persists_admitted h)
+
+/-- **What follow remembers of a writer's base is its own** (PROTOCOL-47): after any step, follow's
+`verified` is what it was, or cleared (an adopt: another World), or follow's own digest of a World
+`absorbPage` accepted at the writer's stated base on a chain-checked page (`absorbPage_base`). No
+step stores a digest the writer stated. -/
+theorem step_verified {X : Ctx D} {dc : Codec.Stream D} {B : Thin.Base (World D)} {me : Self D}
+    {f f' : Follow D} {p : Persist D} {kb result : ByteArray} {r : Reply}
+    (h : step X dc B me f kb result = (f', p, r)) :
+    f'.verified = f.verified ∨ f'.verified = none ∨
+      ∃ evs steps chain base w' ts wb, absorbPage X f.world evs steps chain base = .ok (w', ts, some wb) ∧
+        f'.verified = some (wb.steps, B.digest (B.world.bytes wb)) := by
+  unfold step next at h
+  repeat' split at h
+  all_goals (try simp only [refused, printed, behind] at h)
+  all_goals (repeat' split at h)
+  all_goals (simp only [Prod.mk.injEq] at h)
+  all_goals (obtain ⟨rfl, -, -⟩ := h)
+  all_goals first
+    | (left; rfl)
+    | (right; left; rfl)
+    | (right; right; exact ⟨_, _, _, _, _, _, _, by assumption, rfl⟩)
 
 /-! ## A recorded refusal, as the follower meets it (KERNEL-44, PROTOCOL-41) -/
 

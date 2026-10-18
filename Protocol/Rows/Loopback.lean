@@ -63,6 +63,8 @@ structure Sys where
   trustReceipt : Bool := false
   /-- the attempt store ends an attempt on the Host's status, never asking follow (a plant) -/
   trustLookup : Bool := false
+  /-- the operator's seal skips `Host.sealNow`: a restart and nothing sealed (a plant) -/
+  sealIgnored : Bool := false
 
 def skipJudge (X : Ctx D) : Ctx D :=
   { X with program := { X.program with judge := fun _ _ _ _ _ _ => .ok () } }
@@ -99,6 +101,8 @@ def sys : Option Mutation → Sys
   | some .guessMethod => { writer := { X := Sim.ctx }, follow := Sim.ctx, guessMethod := true }
   | some .trustReceipt => { writer := { X := Sim.ctx }, follow := Sim.ctx, trustReceipt := true }
   | some .trustLookup => { writer := { X := Sim.ctx }, follow := Sim.ctx, trustLookup := true }
+  | some .sealIgnored => { writer := { X := Sim.ctx }, follow := Sim.ctx, sealIgnored := true }
+  | some .lieBase => { writer := { X := Sim.ctx, lieBase := true }, follow := Sim.ctx }
 
 /-! ## Actors -/
 
@@ -422,9 +426,9 @@ def editPage (f : List ByteArray → List ByteArray) (reply : ByteArray) : ByteA
   match Command.hostReply reply with
   | some (.ok, p) =>
       match logReplyFrame.decode p with
-      | .ok (l, n, c, t, th, ()) =>
+      | .ok (l, n, c, t, th, bs, bd, ()) =>
           match Text.fitList Bounds.frameBytesMax (f (Text.unlist l)) with
-          | some l' => ByteArray.mk #[Status.ok.code] ++ logReplyFrame.bytes (l', n, c, t, th, ())
+          | some l' => ByteArray.mk #[Status.ok.code] ++ logReplyFrame.bytes (l', n, c, t, th, bs, bd, ())
           | none => reply
       | .error _ => reply
   | _ => reply
@@ -658,14 +662,17 @@ end
 def nowNs : IO Nat := IO.monoNanosNow
 
 /-- Stop the loop, open the Store cold (its base and the tail after it), start the loop on what it
-opened to. The reopen's wall time is THE BAR's `reopen-ms`. -/
+opened to. The reopen's wall time is THE BAR's `reopen-ms`. With `sealFirst`, the stopped writer is
+sealed between the stop and the reopen by the deployed act, `Host.sealNow` over the in-memory
+Store's checkpoint: what `host seal STORE` does over the files (HOST-43), so the rows seal only as
+an operator can. -/
 def restart (sealFirst : Bool) : M Expect := do
   let st ← get
   match ← st.host.stop with
   | .error e => pure (.refused s!"writerFailed {e}")
   | .ok (.eof, r0) =>
-      if sealFirst then
-        match ← (Writer.checkpoint st.sys.writer st.mem).write r0.world r0.pos (Host.sealEntries r0.index) r0.sealed.index with
+      if sealFirst && !st.sys.sealIgnored then
+        match ← Host.sealNow (Writer.checkpoint st.sys.writer st.mem) (Writer.mark st.sys.writer) r0 with
         | .error f => return .refused f.name
         | .ok _ => pure ()
       let d ← st.mem.disk.get

@@ -27,6 +27,29 @@ fn err(o: &Output) -> String {
     String::from_utf8_lossy(&o.stderr).into_owned()
 }
 
+/// The value of `key` (`steps=`, `digest=`) on `host seal`'s `sealed` line.
+fn field<'a>(sealed: &'a str, key: &str) -> &'a str {
+    sealed
+        .split_whitespace()
+        .find_map(|w| w.strip_prefix(key))
+        .unwrap_or_else(|| panic!("no `{key}` in {sealed}"))
+}
+
+/// `host seal STORE` once the stopped writer has let go of the Store's lock: `locked` is retried
+/// (the killed supervisor's child exits on its stdin's end), any other refusal FAILS by name, and
+/// still `locked` after 20 s FAILS (`neverUnlocked`): a liveness deadline, not a measurement.
+fn seal_stopped(host: &Path, store: &Path) -> String {
+    for _ in 0..200 {
+        let o = Command::new(host).arg("seal").arg(store).output().unwrap();
+        if o.status.success() {
+            return line(&text(&o), "sealed ").to_owned();
+        }
+        assert!(err(&o).contains("locked"), "host seal: {}", err(&o));
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    panic!("plant: neverUnlocked: {}", store.display())
+}
+
 fn supervise(sock: &Path, ws: &Path, store: &Path, args: &[&str]) -> Supervisor {
     let sup = Path::new(env!("CARGO_BIN_EXE_nd-supervise"));
     nanodregg_devtools::supervise_host(sup, sock, ws, store, args)
@@ -89,7 +112,7 @@ impl Member {
 fn join_from_a_signed_invitation_refuses_forgeries_and_serves_a_write() {
     let host = nanodregg_devtools::lean_bin("host");
     let root = nanodregg_devtools::scratch(&format!("ndjoin-{}", std::process::id()));
-    for d in ["stores/B", "stores/C", "keys", "loose"] {
+    for d in ["stores/B", "stores/C", "stores/D", "keys", "loose"] {
         mkdirs(&root.join(d)).unwrap();
     }
     let root = root.canonicalize().unwrap();
@@ -227,9 +250,11 @@ fn join_from_a_signed_invitation_refuses_forgeries_and_serves_a_write() {
     std::fs::set_permissions(&b.ws, PermissionsExt::from_mode(0o700)).unwrap();
 
     // A thin joiner adopts from the invitation it kept, under the sponsor key file: Lean accepts
-    // the kept bytes under the key (a wrong key is `notSponsor`) and refuses `baseMoved`, since the
-    // deployed writer seals only at its cadence and its newest base is not at the pin. Sealing on
-    // demand is not a deployed act (the rows seal in the harness), so no real thin adopt is served.
+    // the kept bytes under the key (a wrong key is `notSponsor`). The sponsor's first invitation
+    // pinned the base its own follow verified then, the genesis base, which a thin joiner already
+    // holds: `notBehind`. The operator seals the stopped writer (`host seal STORE`, HOST-43), starts
+    // it again, and the sponsor's next `nd invite` pins that base, its own follow's digest of its
+    // own World there (PROTOCOL-47): the thin joiner adopts exactly the printed base.
     let c = Member::new(&root, "c", &host_sock);
     let store_c = root.join("stores/C");
     let joined = c.join(&key_file, &invitation, &store_c);
@@ -242,7 +267,7 @@ fn join_from_a_signed_invitation_refuses_forgeries_and_serves_a_write() {
         &id,
         line(&observe, "id "),
     ];
-    let _fc = supervise(&c.ws.join("follow.sock"), &c.ws, &store_c, &follow_c);
+    let fc = supervise(&c.ws.join("follow.sock"), &c.ws, &store_c, &follow_c);
     let o = c.nd(&["adopt", other.to_str().unwrap()]);
     assert_eq!(
         err(&o),
@@ -252,8 +277,33 @@ fn join_from_a_signed_invitation_refuses_forgeries_and_serves_a_write() {
     let o = c.nd(&["adopt", key_file.to_str().unwrap()]);
     assert_eq!(
         err(&o),
-        "refused baseMoved
+        "refused notBehind
 "
+    );
+    drop(fc);
+    drop(writer);
+    let sealed = seal_stopped(&host, &w);
+    let writer = supervise(&host_sock, &a.ws, &w, &["serve", w.to_str().unwrap()]);
+    let pinned = line(&a.ok(&["invite"]), "invite ").to_owned();
+    let d = Member::new(&root, "d", &host_sock);
+    let store_d = root.join("stores/D");
+    let joined = d.join(&key_file, &pinned, &store_d);
+    assert!(joined.status.success(), "{}", err(&joined));
+    let id = line(&a.ok(&["enroll", line(&text(&joined), "join ")]), "id ").to_owned();
+    let observe = a.ok(&["grant", "world", &id, "observe", "--via", grant]);
+    let follow_d = [
+        "follow",
+        store_d.to_str().unwrap(),
+        &id,
+        line(&observe, "id "),
+    ];
+    let _fd = supervise(&d.ws.join("follow.sock"), &d.ws, &store_d, &follow_d);
+    let adopted = d.ok(&["adopt", key_file.to_str().unwrap()]);
+    let (steps, digest) = (field(&sealed, "steps="), field(&sealed, "digest="));
+    assert_eq!(
+        line(&adopted, "adopted "),
+        format!("{steps} {digest}"),
+        "the thin joiner adopts the base the operator sealed: {sealed}"
     );
     drop(writer);
     std::fs::remove_dir_all(&root).unwrap();

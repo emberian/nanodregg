@@ -1416,3 +1416,89 @@ than its docstring names. The `baseMoved` red caught it only because the expecta
   - a named reached-World lemma for `check_build`'s u64 height fit, and `deployed_*` compositions;
   - the incoming bit's persistence across the step machine is not proved, only the local once;
   - the Rust wiring (`settle_seen` reading follow's line) is CLIENT's tests, not a theorem.
+
+## PROTOCOL-47 · a sponsor pins the base its own follow verified, never the Host's word: the log reply states the writer's newest durable base; `invite` pins follow's OWN digest at it; the rows seal by `Host.sealNow` (2026-10-18, PROTOCOL-12; HOST-43's condition (1), CLIENT-5's finding; HOST-12 agreed the Host half; ROOT APPROVED)
+
+**The gap.**
+- `invite` pinned the sponsor's World AS IT STOOD, its tip. A thin joiner adopts the writer's newest BASE, and the deployed writer seals only at its cadence. So every invitation made after a write past the base was refused `baseMoved` at the adopt.
+- The rows passed only because their `.seal` wrote a checkpoint directly: a harness act no operator had (HOST-43).
+
+**Decision.**
+- **(A) The `log` reply states the writer's newest durable base.**
+  - `logReplyLayout` gains `baseSteps` and `baseDigest`, trailing, so no earlier field moves.
+  - `Host.Page.bytes` takes them. `Host.Deployed.pager` passes `r.sealed.steps` / `r.sealed.digest`: the Resident's `Sealed`, post-sync state, so the stated base is always durable. The rows' `Writer.pager` does the same.
+  - A seal racing the page makes them stale, and the follower trusts neither.
+  - `logPage` refuses a page whose base is past its tip (`badResult`), before absorbing any of it.
+- **(B) Follow records its OWN digest of the base.** `absorbPage` cuts its one fold at the stated `baseSteps`: the prefix, then the rest from where the prefix stopped. Where follow's fold sits at that step count, at the page's start or after one of its steps, follow records `verified := (steps, B.digest (B.world.bytes wb))`.
+  - That is the same `Keys.worldDigest` over the same World codec that `host seal` prints and a pin names, through `Thin.Base`. There is no second digest path.
+  - It is recorded only from a page whose chain check passed, and the newest replaces the last.
+  - It lives in memory beside `download` (`Command.Memory`, `Host.Follow.loop`'s ref). A restarted follow has verified nothing until its fold next sits at the writer's base.
+  - An adopt resets it.
+- **`invite` pins `pinOf verified baseSteps baseDigest`.**
+  - It pins follow's own (steps, digest), and only when the last page states that very base with that very digest.
+  - `noBase`: nothing verified, or the writer's newest base is one follow never sat at. The hint: `host seal STORE`, then a catch-up.
+  - `baseMismatch`: same step count, a digest that is not follow's own.
+  - The sponsor never signs the Host's claim. `Invite.Refusal` gains `noBase` (5) and `baseMismatch` (6). The Thin download's `baseMismatch` means the same thing (bytes that do not hash to the digest expected), on the joiner's side.
+- **The rows seal as an operator can.** `Loopback.restart sealFirst` is stop → `Host.sealNow (Writer.checkpoint …) (Writer.mark …) r0` → reopen, the core of `host seal STORE`. The direct checkpoint write (the twin HOST-43 named) is deleted.
+
+**Rows (29; ALL PASS).**
+- New row `seal` (HOST-43 as members meet it):
+  - the operator seals by `sealNow` and invites;
+  - the log moves 12 writes past the base, fewer than the cadence;
+  - the operator invites again: the same base, its own digest;
+  - a thin member adopts the second invitation (before this decision, `baseMoved`), writes and reads;
+  - a second thin member adopts the first.
+  - Plant `sealIgnored` (the seal skips `sealNow`): the first invitation pins the genesis base, and line 22 is `refused notBehind`.
+- New row `basePin`: seal, invite, a write, invite again.
+  - Plant `lieBase` (the writer states its TIP as its base, with the sealed digest): follow's own digest at the stated step count is not the stated one, and line 11 is `refused baseMismatch`.
+- `thin`, `thinStale` and `refused` run their `.seal` through `sealNow`, with every plant at its old line. `paging`'s `lieTip` plant is a consistent liar: it hides bases after the page too, still line 11 `refused expect`.
+- CLIENT-26's adopt (client/tests/join.rs, --cross-layer "ROOT for CLIENT"), through the real exes:
+  - a thin joiner holding the sponsor's first invitation (the genesis base) is `refused notBehind`;
+  - the writer is stopped, `host seal STORE` (retried while `locked`, a 20 s liveness deadline), restarted;
+  - the sponsor's next `nd invite` makes a joiner whose `nd adopt` prints exactly the sealed `steps` and `digest`.
+
+**Theorems.**
+- Protocol/Proofs/Command.lean:
+  - `absorbPage_ok`: one fold, cut at the base.
+  - `absorbPage_admits` and `absorbPage_steps`, restated over the cut.
+  - `absorbPage_base`: the World recorded is at exactly the stated step count and ON the page's chain-checked fold. The persisted steps split at it into a run of follow's own `World.step` to it and one on to the page's end.
+  - `step_verified`: after ANY step, `verified` is unchanged, cleared (an adopt), or follow's own digest of an `absorbPage`-accepted World at the stated base. No step stores a digest the writer stated.
+  - `pinOf_ok`: a pin is `verified` and equals the stated base.
+  - `pinOf_none` / `pinOf_other`: `noBase`.
+  - `pinOf_forged`: `baseMismatch`, the tooth.
+  - `logPage_base_le`.
+  - `rooted_append`.
+- Protocol/Proofs/Page.lean:
+  - `bytes_reads`: a page `Host.Page.bytes` writes in range is read, with its step count, tip and base.
+  - `bytes_states_base`: the base read back is exactly the `(bs, bd)` written.
+  - `ofU64_u64`.
+- Read off the code, not theorems:
+  - the pager passes `r.sealed` (IO);
+  - `sealed.steps ≤ world.steps` (a Host invariant; if it failed, every page would be refused `badResult`, never misread);
+  - the invite arm passes `step`'s own `v` to `pinOf`.
+
+**Vacuity read (a second agent).**
+- Nothing vacuous.
+- Taken from it:
+  - `absorbPage_base` was existential and not tied to the persisted steps. It is now on the chain-checked path.
+  - No theorem was about `step`. Now there is `step_verified`.
+  - `bytes_states_base` held only if the page parsed. Now there is `bytes_reads`.
+  - `pinOf_older` is renamed `pinOf_other`, since a raced page has a newer step count too.
+  - `logPage_base_le`'s doc claimed a `step` fact, and that claim is now scoped.
+- Open:
+  - follow's memory is set before `append`, so after a failed append `verified` can sit ahead of the durable World until the restart. It is still a chain-checked derivation, so this is harmless.
+  - A writer that states its tip as its base WITH the tip's true digest gets that pin signed. It is still the sponsor's own true World, and the joiner's download then refuses `baseMoved`.
+
+**Flag day.**
+- `logReplyLayout` changes: an old follower against a new writer, and a new follower against an old writer, refuse every log page `badResult`, the name for an undecodable step result (PROTOCOL-21). That is a parse failure named as one, never a verdict.
+- No Store format changes and no re-genesis: `verified` is memory.
+- No codec vector covers the log reply; it is not a CODEC site.
+- `Host.Page.bytes`, `Host.Follow.loop`'s ref, `Host.Deployed.pager` and `Host.Cli`'s ref are re-cut (HOST-12 agreed).
+
+**Critique.**
+- A sponsor whose follow restarted cannot invite until its fold next crosses the writer's base, which is a seal away. RUNBOOK's flow (stop, `host seal`, start, invite) always crosses, because the inviter's follow is at or below the sealed tip.
+- Persisting `verified` would be a Store-format change; that is not done now.
+- One World encode and hash per crossing: bounded by the seal cadence, not per page.
+- No row restarts a follow, so `noBase` is held by `pinOf_none` / `pinOf_other`, not by a row line.
+
+**Meta-critique.** Pinning the tip looked like "the World as it stands", but the joiner can only ever receive a base. The pin was naming something no reader could fetch. A signed claim should name what its consumer can check.

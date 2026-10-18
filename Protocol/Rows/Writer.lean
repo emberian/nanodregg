@@ -56,6 +56,9 @@ structure Params where
   refusals forgotten) while answering it `refused NAME` (a plant: KERNEL-44's A→B→A defect, as a
   writer that lies to its client) -/
   admitsRecorded : Bool := false
+  /-- every page states its TIP as the newest base, with the sealed base's digest (a plant: a
+  writer that lies about where its base is, PROTOCOL-47) -/
+  lieBase : Bool := false
 
 /-- Small enough that a row of a few dozen turns seals bases; the deployed bounds on size. -/
 def cadence : Cadence :=
@@ -138,7 +141,7 @@ def checkpoint (P : Params) (m : Mem) : Checkpoint (World D) :=
 
 /-- HOST's pager (`Host.Page.build` + `Host.Page.bytes`) over the in-memory segment's synced bytes
 and `index.log` (`Host.Page.entryAt`): what `Host.Deployed.pager` does over the files. -/
-def pager (X : Ctx D) (lieTip forgeBase : Bool) (m : Mem) (r : Resident (World D)) :
+def pager (X : Ctx D) (lieTip forgeBase lieBase : Bool) (m : Mem) (r : Resident (World D)) :
     Deferred → IO (UInt8 × ByteArray)
   | .read start => do
     if !forgeBase then Host.Sim.memBasePage Page.budget m.bases r start else
@@ -157,7 +160,11 @@ def pager (X : Ctx D) (lieTip forgeBase : Bool) (m : Mem) (r : Resident (World D
       (r.sealed.index.count + r.index.size) r.pos.offset
       (r.world.steps, X.env.bytes r.world.chain) start) with
   | .error f => pure (Status.refused.code, f.name.toUTF8)
-  | .ok a => match Page.bytes a (if lieTip then a.steps else r.world.steps) r.world.height with
+  | .ok a =>
+    -- `lieTip` hides the log after the page, so a base after the page too (a consistent lie)
+    let baseSteps := if lieBase then r.world.steps
+      else if lieTip then min r.sealed.steps a.steps else r.sealed.steps
+    match Page.bytes a (if lieTip then a.steps else r.world.steps) r.world.height baseSteps r.sealed.digest with
     | .ok b => pure (Status.ok.code, b)
     | .error f => pure (Status.refused.code, f.name.toUTF8)
 
@@ -196,7 +203,7 @@ def start (P : Params) (m : Mem) (r : Resident (World D)) : IO Running := do
   let task ← IO.asTask (prio := .dedicated) do
     try
       serve (machine P) ⟨fun _ ts => Record.encode Sim.dc ts, mark P⟩ Host.Sim.keys.segment
-        (checkpoint P m) cadence (Host.Sim.memStore m.disk none) (pager P.X P.lieTip P.forgeBase m)
+        (checkpoint P m) cadence (Host.Sim.memStore m.disk none) (pager P.X P.lieTip P.forgeBase P.lieBase m)
         port limits fuel r
     finally
       discard <| (reps.close).toBaseIO

@@ -76,15 +76,22 @@ inductive Refusal
   /-- the inputs make another World than the member's own (`invite`), or the invitation is to
   another World (`adopt`); named apart from the envelope's and thin's `wrongWorld` -/
   | otherWorld
+  /-- `invite`: follow never sat at the writer's newest base, so it has no digest of its own to pin
+  (none since it started, or only an older base); `host seal STORE` then a catch-up gives one -/
+  | noBase
+  /-- `invite`: the writer states a base digest that is not follow's own World at that step count -/
+  | baseMismatch
   deriving DecidableEq, Repr
 
 def Refusal.name : Refusal → String
   | .badInvitation => "badInvitation" | .notSponsor => "notSponsor" | .pinMismatch => "pinMismatch"
-  | .inputs r => r.name | .otherWorld => "otherWorld"
+  | .inputs r => r.name | .otherWorld => "otherWorld" | .noBase => "noBase"
+  | .baseMismatch => "baseMismatch"
 
 /-- The constructor's index, the thing a name must determine (`Proofs.Invite.Refusal.name_injective`). -/
 def Refusal.tag : Refusal → Nat
-  | .badInvitation => 0 | .notSponsor => 1 | .pinMismatch => 2 | .inputs _ => 3 | .otherWorld => 4
+  | .badInvitation => 0 | .notSponsor => 1 | .pinMismatch => 2 | .inputs _ => 3 | .otherWorld => 4 | .noBase => 5
+  | .baseMismatch => 6
 
 /-- The founders with their next-key digests decoded, or `none` if one is not a digest. -/
 def foundersOf (X : Ctx D) : List (ByteArray × ByteArray) → Option (List (ByteArray × D))

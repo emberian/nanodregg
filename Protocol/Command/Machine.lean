@@ -19,9 +19,10 @@ height and re-signs ONCE a command for that height + window (`reSign`, PROTOCOL-
 (precommitting the digest of its PENDING key) and has it signed by `signNext`; custody advances on
 its own settlement of the submit (CLIENT-13).
 
-`invite INPUT` (PROTOCOL-42) catches up, checks that INPUT makes the member's own World, pins that
-World (its step count, the digest of its bytes) and has custody sign the invitation; it prints
-`invite HEX`.
+`invite INPUT` (PROTOCOL-42) catches up, checks that INPUT makes the member's own World, pins the
+writer's newest base as follow verified it itself (PROTOCOL-47, `pinOf`: follow's own World at the
+base's step count, the digest of its bytes; `noBase` / `baseMismatch` otherwise) and has custody
+sign the invitation; it prints `invite HEX`.
 
 `adopt INVITE KEY` (thin consent, PROTOCOL-14 A) takes its pin from an invitation `Invite.accept`
 accepts under the sponsor key KEY, and pages the writer's newest base with `read`, one
@@ -162,11 +163,23 @@ def declined (name : String) : Reply :=
 
 /-! ## Follow's state -/
 
-/-- What `host follow` holds between frames: its World, and a base download in progress (thin
-consent: in memory only, never persisted, so a restarted follow starts the download again). -/
+/-- What `host follow` holds between frames: its World, a base download in progress (thin
+consent), and the newest writer base follow verified ITSELF (PROTOCOL-47): the step count a log
+page stated as the writer's newest base, and the digest of follow's OWN World at that step count
+(`Thin.Base.digest` over `Thin.Base.world`, the one digest the Host seals and a pin names). The
+last two are memory only, never persisted: a restarted follow starts the download again, and has
+verified no base until its fold next sits at the writer's stated base. -/
 structure Follow (D : Type) [Ord D] where
   world : World D
   download : Option Thin.Download := none
+  verified : Option (Nat × ByteArray) := none
+
+/-- The part of `Follow` that lives in memory beside follow's Store (`Host.Follow.loop`'s ref). -/
+structure Memory where
+  download : Option Thin.Download := none
+  verified : Option (Nat × ByteArray) := none
+
+def Follow.memory {D : Type} [Ord D] (f : Follow D) : Memory := ⟨f.download, f.verified⟩
 
 /-- What a step asks follow to make durable before it answers: the steps it absorbed (re-derived,
 in log order; `[]` for most steps), or a base it adopted, which follow seals as its own newest base. -/
@@ -400,25 +413,52 @@ structure LogPage where
   chain : ByteArray
   tipSteps : Nat
   tipHeight : Nat
+  /-- the writer's newest durable base when it built the page: its step count and digest -/
+  baseSteps : Nat
+  baseDigest : ByteArray
 
+/-- A page's stated base past its stated tip is no base of that log: not a page. -/
 def logPage (b : ByteArray) : Option LogPage :=
   match logReplyFrame.decode b with
-  | .ok (l, n, c, t, th, ()) => do
+  | .ok (l, n, c, t, th, bs, bd, ()) => do
       let steps ← Text.ofU64 n.1
       let tipSteps ← Text.ofU64 t.1
       let tipHeight ← Text.ofU64 th.1
-      if steps ≤ tipSteps then some ⟨Text.unlist l, steps, c.1, tipSteps, tipHeight⟩ else none
+      let baseSteps ← Text.ofU64 bs.1
+      if steps ≤ tipSteps ∧ baseSteps ≤ tipSteps then
+        some ⟨Text.unlist l, steps, c.1, tipSteps, tipHeight, baseSteps, bd.1⟩
+      else none
   | .error _ => none
 
 /-- Absorb a page and require follow's fold to reach the writer's stated step count and chain (the
 pair the kernel's `fold_reaches_host` binds). A page of more steps than `Bounds.pageStepsMax` (one
-follower record) is refused `pageTooLong` before any of it is absorbed (HOST-41). -/
-def absorbPage (X : Ctx D) (w : World D) (evs : List ByteArray) (steps : Nat) (chain : ByteArray) :
-    Except (Refusal D) (World D × List (Kernel.Step D × D)) :=
+follower record) is refused `pageTooLong` before any of it is absorbed (HOST-41). The fold is cut
+at the writer's stated base step count `base` (PROTOCOL-47): the World follow's OWN fold sits at
+there, if it does on this page (at its start, or after one of its steps), is returned beside the
+page's end, from the one fold (`absorb` of the prefix, then of the rest from where it stopped). -/
+def absorbPage (X : Ctx D) (w : World D) (evs : List ByteArray) (steps : Nat) (chain : ByteArray)
+    (base : Nat) : Except (Refusal D) (World D × List (Kernel.Step D × D) × Option (World D)) :=
   if Bounds.pageStepsMax < evs.length then .error (.pageTooLong evs.length) else do
-  let (w', ts) ← absorb X w #[] evs
-  if w'.steps = steps ∧ X.env.bytes w'.chain = chain then pure (w', ts.toList)
+  let k := base - w.steps
+  let (wb, tb) ← absorb X w #[] (evs.take k)
+  let (w', ts) ← absorb X wb tb (evs.drop k)
+  if w'.steps = steps ∧ X.env.bytes w'.chain = chain then
+    pure (w', ts.toList, if wb.steps = base then some wb else none)
   else throw (.chainMismatch steps)
+
+/-- What `invite` pins (PROTOCOL-47): the newest base follow verified itself, and only when the
+writer's newest base, as the last page stated it, is that base with that digest. A base follow
+never sat at (nothing verified, or an older one) is `noBase`; one at the same step count whose
+stated digest is not follow's own is `baseMismatch`. The sponsor signs its OWN digest, never the
+Host's claim. -/
+def pinOf (verified : Option (Nat × ByteArray)) (baseSteps : Nat) (baseDigest : ByteArray) :
+    Except Invite.Refusal Thin.Pin :=
+  match verified with
+  | some (s, d) =>
+      if s ≠ baseSteps then .error .noBase
+      else if d ≠ baseDigest then .error .baseMismatch
+      else .ok ⟨s, d⟩
+  | none => .error .noBase
 
 def hostName (p : ByteArray) : String := (String.fromUTF8? p).getD "unnamed"
 
@@ -477,6 +517,8 @@ def hint (X : Ctx D) : Refusal D → Option String
   | .receive (.lawDenied l why) => some s!"hint lawDenied {hex X l}: {(why.replace "\n" " ").replace "\r" " "}"
   | .host "stale" => some "hint stale: the World moved before the call landed; run the command again (it re-plans)"
   | .thin (.baseMoved _) => some "hint baseMoved: the writer's newest base is not at the invitation's pin; ask your sponsor for a fresh invitation"
+  | .invite .noBase => some "hint noBase: follow has not verified the writer's newest base; the operator runs host seal STORE (writer stopped), then invite again"
+  | .invite .baseMismatch => some "hint baseMismatch: the writer states a base that is not this member's own World there; do not invite through this writer"
   | .host "lawDenied" => some "hint lawDenied: a law refused the call; `read OBJ ?` names the object's laws"
   | .host "unknownKey" => some "hint unknownKey: run nd sync: a rotation may have landed"
   | _ => none
@@ -655,8 +697,6 @@ def step (X : Ctx D) (dc : Stream D) (B : Thin.Base (World D)) (me : Self D) (f 
     Follow D × Persist D × Reply :=
   let w := f.world
   let same (r : Reply) : Follow D × Persist D × Reply := (f, .steps [], r)
-  let moved (w' : World D) (ts : List (Kernel.Step D × D)) (r : Reply) : Follow D × Persist D × Reply :=
-    ({ f with world := w' }, .steps ts, r)
   match State.ofBytes kb, parse X.digestOf ((State.ofBytes kb).map (·.argv) |>.getD []) with
   | none, _ => same (refused (D := D) .badState)
   | some _, .error r => same (refused (D := D) (.parse r))
@@ -705,9 +745,17 @@ def step (X : Ctx D) (dc : Stream D) (B : Thin.Base (World D)) (me : Self D) (f 
               | some pg, some pages =>
                   -- a page short of the tip that carries nothing would be asked for again forever
                   if pg.events.isEmpty && pg.steps < pg.tipSteps then same (refused (D := D) .badResult) else
-                  match absorbPage X w pg.events pg.steps pg.chain with
+                  match absorbPage X w pg.events pg.steps pg.chain pg.baseSteps with
                   | .error r => same (refused (D := D) r)
-                  | .ok (w', ts) =>
+                  | .ok (w', ts, wb) =>
+                      -- follow's own World at the writer's stated base, its digest by the one
+                      -- digest a pin names; the newest such base replaces the last (PROTOCOL-47)
+                      let v := match wb with
+                        | some wb => some (wb.steps, B.digest (B.world.bytes wb))
+                        | none => f.verified
+                      let moved (w' : World D) (ts : List (Kernel.Step D × D)) (r : Reply) :
+                          Follow D × Persist D × Reply :=
+                        ({ f with world := w', verified := v }, .steps ts, r)
                       if pg.steps < pg.tipSteps then
                         if Bounds.pagesPerCommandMax ≤ pages + 1 then
                           moved w' ts (behind pg.steps pg.tipSteps)
@@ -727,14 +775,17 @@ def step (X : Ctx D) (dc : Stream D) (B : Thin.Base (World D)) (me : Self D) (f 
                       -- and the member's settlement of it (PROTOCOL-46)
                       | .receipt cb, _ => moved w' ts (receiptLines X dc w' cb)
                       | .rotate, some _ => moved w' ts (again 5 [startB, signedB] fun k => .precommit k)
-                      -- invite: the inputs make this World; pin it as it stands, sign with the
-                      -- key the writer just took for this member's envelope
+                      -- invite: the inputs make this World; pin the newest base follow verified
+                      -- itself (`pinOf`), sign with the key the writer just took for this
+                      -- member's envelope
                       | .invite input, some s =>
                           match inviteInput X me input with
                           | .error r => moved w' ts (refused (D := D) r)
                           | .ok () =>
-                            match Invite.unsignedBytes X input ⟨w'.steps, B.digest (B.world.bytes w')⟩
-                                me.member s.key with
+                          match pinOf v pg.baseSteps pg.baseDigest with
+                          | .error r => moved w' ts (refusedAt X (.invite r))
+                          | .ok pin =>
+                            match Invite.unsignedBytes X input pin me.member s.key with
                             | none => moved w' ts (refused (D := D) .badState)
                             | some u => moved w' ts (again 8 [signedB, u] fun k => .sign (Invite.message u) k)
                       | _, some s => match body X me w' s cmd with
@@ -808,7 +859,7 @@ def step (X : Ctx D) (dc : Stream D) (B : Thin.Base (World D)) (me : Self D) (f 
                     | .ok (.done w') =>
                         -- the pin binds the World's bytes, origin included; this says so by name
                         if w'.origin ≠ me.world then drop .wrongWorld else
-                        ({ world := w', download := none }, .adopt w',
+                        ({ world := w', download := none, verified := none }, .adopt w',
                           printed s!"adopted {pin.steps} {Text.toHex pin.digest}\n")
                     | .ok (.more d) =>
                         let f' := { f with download := some d }

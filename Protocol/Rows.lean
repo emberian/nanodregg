@@ -241,6 +241,11 @@ inductive Mutation
   /-- the attempt store ends an attempt on the Host's status byte, never asking its own follow (the
   shape before PROTOCOL-46) -/
   | trustLookup
+  /-- the operator's seal is a restart that seals nothing (the rows' seal without `Host.sealNow`,
+  HOST-43's tooth) -/
+  | sealIgnored
+  /-- the writer states its tip as its newest base, with the sealed base's digest (PROTOCOL-47) -/
+  | lieBase
   deriving DecidableEq, Repr
 
 /-- A row's plant: the mutation, and the line that must catch it with the outcome it then gets. -/
@@ -547,6 +552,58 @@ def thinStale : Row where
     ok "thin" ["write", "@shared", "3", "7", "--via", "@gt"],
     ok "thin" ["read", "@shared", "2=1", "3=7"]])
   plant := .caught .unstatedExpiry 15 (.refused "expired")
+
+/-- HOST-43 as members meet it (PROTOCOL-47): the operator seals the stopped writer by the deployed
+act (`Host.sealNow`, `host seal STORE`'s core), and its `invite` pins the newest base its own follow
+verified, its OWN digest of its own World at the base's step count, never the writer's tip. So an
+invitation made after the log moved on past the base (twelve writes, fewer than the rows' seal
+cadence) still names the base, and a thin member adopts it; before PROTOCOL-47 `invite` pinned the
+tip, and this adopt was `baseMoved` (CLIENT-5's finding). A thin member that adopted an earlier pin
+of the same base adopts too. The plant is a seal that seals nothing (`sealIgnored`): the first
+invitation then pins the writer's genesis base (the newest base the operator's follow verified),
+which a thin member already holds, so its adopt (line 22) is refused `notBehind` by name. New in
+nanodregg. -/
+def sealRow : Row where
+  name := "seal"
+  replaces := []
+  ops := everyWrite ++ [.read]
+  kinds := ["enroll", "install", "create", "grant", "write"]
+  drive := .members (welcome ++ join "sponsor" "thin" ++ join "sponsor" "thin2" ++ [
+    okBind "sponsor" ["grant", "@shared", "@thin", "observe,mutate"] "gt",
+    ok "newcomer" ["write", "@shared", "2", "1", "--via", "@g"],
+    ok "operator" ["read", "@shared", "2=1"],
+    { actor := "operator", act := .seal, expect := .ok },
+    okBind "operator" ["invite", "@inputs"] "pin",
+    { actor := "newcomer", act := .cmd ["write", "@shared", "2", "2", "--via", "@g"], expect := .ok,
+      times := 12 },
+    okBind "operator" ["invite", "@inputs"] "pin2",
+    ok "thin" ["adopt", "@pin2", "@operator.key"],
+    ok "thin" ["write", "@shared", "3", "7", "--via", "@gt"],
+    ok "thin" ["read", "@shared", "2=2", "3=7"],
+    ok "thin2" ["adopt", "@pin", "@operator.key"]])
+  plant := .caught .sealIgnored 22 (.refused "notBehind")
+
+/-- PROTOCOL-47's tooth: a sponsor never signs the Host's word for where its base is. Every log
+page states the writer's newest durable base (its step count and digest); follow records its OWN
+World's digest where its fold sits at that step count, and `invite` pins it only when the stated
+digest is that one. Here the operator seals, invites (its fold sat at the base), the log moves on,
+and it invites again (the same base, the same pin). The plant is a writer that states its TIP as
+its base with the sealed base's digest: follow's fold sits at the stated "base" at every page's end,
+its own digest there is not the stated one once the log has moved past the seal, and the second
+invitation is refused `baseMismatch` by name. New in nanodregg. -/
+def basePin : Row where
+  name := "basePin"
+  replaces := []
+  ops := everyWrite
+  kinds := ["enroll", "install", "create", "grant", "write"]
+  drive := .members (welcome ++ [
+    ok "newcomer" ["write", "@shared", "2", "1", "--via", "@g"],
+    ok "operator" ["read", "@shared", "2=1"],
+    { actor := "operator", act := .seal, expect := .ok },
+    okBind "operator" ["invite", "@inputs"] "pin",
+    ok "newcomer" ["write", "@shared", "2", "2", "--via", "@g"],
+    okBind "operator" ["invite", "@inputs"] "pin2"])
+  plant := .caught .lieBase 11 (.refused "baseMismatch")
 
 /-- Cross-World replay (OPS, ASSEMBLY-ops D3; reproduced on 87c721e against the `host` exe): two
 `host genesis` runs with the same name and founders made two Worlds that admitted each other's
@@ -1014,7 +1071,7 @@ def settleRow : Row where
   plant := .caught .trustLookup 6 (.refused "stale")
 
 def rows : List Row :=
-  [journey, reopen, laws, rotate, audit, paging, coldCatchUp, inflatedHeight, forgotten, refusedRow, inviteRow, useRow, describeRow, receiptRow, settleRow, carry, thin, thinStale, wrongWorld, wrongWorldRead, pay, well, bounty, grain, hermes, bar,
+  [journey, reopen, laws, rotate, audit, paging, coldCatchUp, inflatedHeight, forgotten, refusedRow, inviteRow, useRow, describeRow, receiptRow, settleRow, carry, thin, thinStale, sealRow, basePin, wrongWorld, wrongWorldRead, pay, well, bounty, grain, hermes, bar,
    langJourney]
 
 end Nanodregg.Protocol
