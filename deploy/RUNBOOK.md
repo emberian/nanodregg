@@ -287,23 +287,41 @@ after the follower, `Wants=`/`After=`; PID files in its RuntimeDirectory `/run/n
 
     grain-launch /srv/nd-hosted /run/nd-broker /run/nd-member L /run/nd-grain-launch/L /opt/nd/bin/hosting-controller /srv/nd-hosted/worlds/L/store L
 
-The MEMBER socket, per resident grain (HOSTING-20/25), from `deploy/units/linux/nd-member@.service`
-(as nd; the instance is the grain's directory, its id in lowercase hex). nd-supervise serves
-`/run/nd-member/%i/nd.sock` (0660, group nd-hosted, only the hosted uid admitted: `--group` /
-`--peer`) and runs `nd --stdio` over the resident's own member workspace, the only path it writes;
-the operator's workspace (`/etc/nd`) and `/home` are hidden. The unit makes `/run/nd-member/%i` 02710
-first (nd-supervise makes no directory). Its environment file `/etc/nd/hosted/member-%i.env` (owner
-nd, 0600) holds the box's own values: `ND_GID`, `ND_PEER` (the nd-hosted gid and uid, as for
-keybroker), `ND_MEMBER_WS` (`/srv/nd-hosted/worlds/L/members/%i`), `ND_FOLLOW_SOCK` (that member's own
-follower socket, from `host follow` as that member) and `ND_HOST_SOCK` (`/run/nd/host.sock`). The child
-connects to exactly the last two, and a confined connector sees its socket's WHOLE parent directory
-(CLIENT-20): each of the two sockets must sit alone in its directory, never in a workspace that holds
-keys. `/run/nd` holds only `host.sock`; give the member's follower socket a directory of its own. The
-unit must be up before the grain starts: a launch whose member socket is missing is refused
-`pathMissing` and then crash-loops. How the unit learns of a grain's birth is HOSTING's open item;
-until it settles, the operator starts `nd-member@ID` before the resident's grain is born.
-`foreignPath` (69, fatal) is a defect in the controller's actions, not the box: keep the World's
-state, report to HOSTING. Not yet run under systemd (the live harness renders no member unit).
+The MEMBER sockets, one `nd-members` per World (HOSTING-30, CLIENT-29), from
+`deploy/units/linux/nd-members@.service` (as nd; the instance `L` is the World's label). It asks its decider
+which resident grains the World holds (every 200 ms, as keybroker does) and, for each one that is
+PROVISIONED, runs two nd-supervise children: the resident's OWN follower (`FOLLOW/<dirOf>/follow.sock`,
+`host follow`, one follower per resident: a follower plans in its own member's name, ROOT ruled (A)) and
+`nd --stdio` on `MEMBER/<dirOf>/nd.sock` (0660, the hosted group, only the hosted uid admitted), confined to
+write the resident's workspace and connect to `/run/nd/host.sock` and its own follow socket. There is no
+per-resident unit and no environment file; the unit reads `ND_OPERATOR` and `ND_PEER` from keybroker's
+`keybroker.env` (§2a). Roots, made by tmpfiles (`nd-member.conf` above; the follow root is its own file):
+
+    sudo install -m 0644 deploy/units/linux/tmpfiles/nd-member-follow.conf /etc/tmpfiles.d/nd-member-follow.conf
+    sudo systemd-tmpfiles --create /etc/tmpfiles.d/nd-member-follow.conf
+
+`/run/nd-member-follow` is nd's 0700 (short, for sun_path); each `FOLLOW/<dirOf>` and `MEMBER/<dirOf>` holds
+only its socket (a connector sees its socket's whole parent directory, CLIENT-20): `host.sock` therefore
+sits alone in `/run/nd`, never beside keys.
+
+PROVISIONING a resident replaces "start a unit before the birth": the name is the grain's id, so it may be
+done just after the birth, and nd-members binds the socket within a tick. Under
+`MEMBERS = /srv/nd-hosted/worlds/L/members`, owned by nd, 0700, with the StrictModes chain clean:
+- `MEMBERS/<dirOf id>/` holds the member's custody (`nd --init-hosted`, `nd init`, the operator's `enroll`
+  and `grant world … observe`);
+- `MEMBERS/<dirOf id>/store`, made by `host genesis` with the World's genesis arguments, or `host join`;
+- `MEMBERS/<dirOf id>/follow`, one line `MEMBER_HEX GRANT_HEX` and LF, mode 0600.
+A resident's own trouble is never an exit; it is a line in the journal and that resident unbound while the
+others are served: `memberMissing NAME …` (not provisioned yet; retried every tick), `socketDirShared NAME …`
+(its directory holds something other than its socket: remove it), `memberCrashLoop NAME ROLE` (5 starts in
+120 s; unbound until the World's resident set changes) and `memberSpawn NAME ROLE`. The unit's own ends are
+EXITS.md's nd-members table (150-159; only a signalled decider restarts; 7 is more than 1024 resident
+grains). A removed resident loses both children, sockets and directories.
+A launch whose member socket is missing is refused `pathMissing` and counted (as for the broker socket), so
+provision before the grain is started. `foreignPath` (69, fatal) is a defect in the controller's actions,
+not the box: keep the World's state, report to HOSTING. NOT run under systemd; the live harness renders
+no nd-members unit. Run by hand: the rendered ExecStart's argv, with its paths rebased, parses (no
+`usage` 150) and ends `memberRoot` (151) at a missing MEMBER.
 
 The controller reads only the follow Store (`Launcher.check_follower`: the render refuses a launcher
 whose Store is not its follower's, or whose user is not the follower's). Its exits and the

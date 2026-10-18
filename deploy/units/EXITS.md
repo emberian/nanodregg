@@ -119,6 +119,21 @@ code space holds both tables: `host` (Host.Status, below 64) and nd-supervise's 
 | 78 | io | fatal | stopped (RestartPreventExitStatus) | an IO error escaped the decider (the call and error are on stderr): check the Store's disk and permissions |
 | 7 | residentsPastBound | fatal | stopped (RestartPreventExitStatus) | the World holds more resident grains than one keybroker serves (1024, HOSTING-26; stderr names the count): remove resident grains, or run a second World |
 
+## nd-members (the nd-members@ unit; its decider's codes above are passed through)
+
+| code | name | class | systemd | operator |
+|---|---|---|---|---|
+| 150 | usage | fatal | stopped (RestartPreventExitStatus) | the unit's argv does not parse: compare ExecStart with this unit's rendered argv |
+| 151 | memberRoot | fatal | stopped (RestartPreventExitStatus) | MEMBER (/run/nd-member) is not nd's 02710 directory with a StrictModes-clean chain (fix the tmpfiles line, RUNBOOK §2b), or the decider answered a name that is not a grain directory name (a defect: report to HOSTING) |
+| 152 | membersRoot | fatal | stopped (RestartPreventExitStatus) | MEMBERS (/srv/nd-hosted/worlds/L/members) is not a 0700 nd directory with a clean chain (RUNBOOK §2b) |
+| 153 | followRoot | fatal | stopped (RestartPreventExitStatus) | FOLLOW (/run/nd-member-follow) is not a 0700 nd directory with a clean chain: fix the tmpfiles line (RUNBOOK §2b) |
+| 154 | fdLimit | fatal | stopped (RestartPreventExitStatus) | RLIMIT_NOFILE is below the fds each resident's nd-supervise may hold (71 at CONNECTIONS_MAX 64): set the unit's LimitNOFILE to at least the M in the stderr line |
+| 155 | deciderRefused | fatal | stopped (RestartPreventExitStatus) | the sandbox refused the decider's policy, or it could not be spawned: check the mechanism (deploy/live/README.md) and the decider path |
+| 156 | pidFile | fatal | stopped (RestartPreventExitStatus) | a PID file in PIDS could not be written: check the unit's RuntimeDirectory |
+| 157 | deciderSignaled | restart | restarted after 2 s; failed past 5 starts in 120 s | automatic; the decider was killed by a signal; a crash on every start stops at the start limit |
+| 158 | deciderLost | fatal | stopped (RestartPreventExitStatus) | the decider stopped answering `residents` and did not end: read its stderr in the journal, then start the unit by hand |
+| 159 | deciderMechanism | fatal | stopped (RestartPreventExitStatus) | the decider's process ended with a code DeciderExit does not name (bwrap setup, a missing program or library, the unit's RestrictAddressFamilies): a restart meets the same thing; fix the mechanism |
+
 ## grain-launch (the nd-grain-launch@ unit; its controller's codes below are passed through)
 
 | code | name | class | systemd | operator |
