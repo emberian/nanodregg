@@ -863,6 +863,71 @@ def sealCountPlant (seed : Nat) (frames : List Frame) (failures : IO.Ref Nat) : 
   check s!"{p}: a base counting one entry more than handed is refused `sealFailed io` ({e.name})"
     (match e with | .sealFailed (.io d) => d.startsWith "seal returned index count" | _ => false) failures
 
+/-- plant-judge-submit (HOST-51, HOST-42's named WEAK): the DEPLOYED `Host.machine` (its submit arm
+through `Receive.judge`) over Kernel.Sim's ctx (toy signatures, CODEC's call codec), driven by the
+loop's own `Machine.admitBatch`, and every batch's staged steps re-run by the follower's fold
+(`Record.runRooted` of `World.step`, what both reopens and `host follow` do). An admissible call commits
+one Turn that the fold reaches; a call whose transaction id holds a recorded refusal answers
+`refused` and stages no Turn. Its tooth: a writer that ADMITS the recorded call (judged on the World
+with its refusals forgotten, KERNEL-44's A→B→A defect) stages a Turn the follower's fold refuses. -/
+def judgePlant (failures : IO.Ref Nat) : IO Unit := do
+  let p := "plant-judge-submit"
+  let kx := Kernel.Sim.ctx
+  let key := "f0".toUTF8
+  let founders := [(key, Receive.nextKeyDigest kx "f0-next".toUTF8)]
+  match Receive.genesis kx Kernel.Sim.worldName (Kernel.Sim.nonceOf 1) 100000000 founders with
+  | .error r => check s!"{p}: genesis ({r.name})" false failures
+  | .ok g =>
+  let me := Receive.founderId kx g.origin 0
+  let callOf (w : World Kernel.Sim.D) (body : Receive.Body Kernel.Sim.D) : Receive.Call Kernel.Sim.D :=
+    let u : Receive.Unsigned Kernel.Sim.D :=
+      { world := w.origin, member := me, key, notBefore := 0, validUntil := w.height + 101,
+        pins := Kernel.Sim.S.pinsFor w [me], maxCharge := 1000000, body }
+    { unsigned := u, signature := Kernel.Sim.toySign key (kx.callMessage u) }
+  let frameOf (c : Receive.Call Kernel.Sim.D) : Frame := ⟨1, Protocol.Op.submit.code, kx.callBytes c⟩
+  let fold (w : World Kernel.Sim.D) (staged : Array (Step Kernel.Sim.D × Kernel.Sim.D)) :=
+    Record.runRooted (World.step kx.env) (World.roots kx.env) 0 w staged.toList
+  let replyOf (o : Out (Step Kernel.Sim.D × Kernel.Sim.D)) : String :=
+    match o.replies[0]? with
+    | some r => s!"{r.status} {(String.fromUTF8? r.payload).getD "?"}"
+    | none => "none"
+  -- the honest writer, an admissible call
+  let c1 := callOf g (.install Kernel.Sim.Gen.denyAll)
+  let (w1, o1) := (Host.machine kx).admitBatch g [⟨1, frameOf c1⟩]
+  check s!"{p}: an admissible call commits one Turn through judge, and the follower's fold reaches the writer's World (reply {replyOf o1}, staged {o1.staged.size})"
+    ((match o1.replies[0]? with | some r => r.status == Protocol.Status.ok.code | none => false) &&
+      o1.staged.size == 1 && (match o1.staged[0]? with | some (Step.turn _, _) => true | _ => false) &&
+      (match fold g o1.staged with | .ok w => Kernel.Sim.same w w1 | .error _ => false)) failures
+  -- a call whose transaction id holds a recorded refusal
+  let c2 := callOf w1 (.install Kernel.Sim.Gen.freeze)
+  match World.refuse kx.env w1 (Receive.refusedOf kx c2 (.rejected (.stale 0))) with
+  | .error e => check s!"{p}: the refusal records ({e.name})" false failures
+  | .ok w2 =>
+  let (_, o2) := (Host.machine kx).admitBatch w2 [⟨1, frameOf c2⟩]
+  check s!"{p}: a recorded call answers `refused` and stages no Turn (reply {replyOf o2}, staged {o2.staged.size})"
+    ((match o2.replies[0]? with
+      | some r => r.status == Protocol.Status.refused.code && r.payload == "stale".toUTF8
+      | none => false) &&
+      o2.staged.all (fun s => match s.1 with | Step.turn _ => false | _ => true)) failures
+  -- the tooth: a writer that admits the recorded call on its World with the refusals forgotten
+  let liar : Machine (World Kernel.Sim.D) (Step Kernel.Sim.D) Frame Kernel.Sim.D :=
+    { Host.machine kx with handle := fun w f =>
+        match kx.decodeCall f.payload with
+        | some c =>
+          match Receive.submit kx { w with refusals := .empty } c with
+          | .ok (t, w') => .commit (.turn t) { w' with refusals := w.refusals } Protocol.Status.refused.code "stale".toUTF8
+          | .error _ => Host.handle kx w f
+        | none => Host.handle kx w f }
+  let (_, o3) := liar.admitBatch w2 [⟨1, frameOf c2⟩]
+  check s!"{p} fires: the lying writer staged the recorded call as a Turn ({o3.staged.size} staged)"
+    (o3.staged.any fun s => match s.1 with | Step.turn _ => true | _ => false) failures
+  let shownF := match fold w2 o3.staged with
+    | .ok _ => "folded"
+    | .error (.step i r) => s!"step {i} {r.name}"
+    | .error f => f.name
+  check s!"{p}: the follower's fold refuses the lying writer's Turn at step 0 `refusedFinal` ({shownF})"
+    (match fold w2 o3.staged with | .error (.step 0 r) => r.name == "refusedFinal" | _ => false) failures
+
 /-- The plants that need only the seed and the scenario: one call in `run`, whose `do` block is at
 the elaborator's depth. -/
 def laterPlants (seed : Nat) (frames : List Frame) (failures : IO.Ref Nat) : IO Unit := do
@@ -872,6 +937,7 @@ def laterPlants (seed : Nat) (frames : List Frame) (failures : IO.Ref Nat) : IO 
   sealPlants seed frames failures
   pageIoPlant seed failures
   sealCountPlant seed frames failures
+  judgePlant failures
 
 /-- `host-sim [SEED] [--harness-control]`; any other argument is refused (exit 2), never read as seed 1.
 `--harness-control` (GATES-15) adds one check nothing meets to the ordinary run, so the run must end

@@ -2353,3 +2353,35 @@ A WEAK that only sits in a decision is a dropped obligation. Each one below is e
 **Critique.** Most of the "kept" items are kept because their only closure is an IO theorem this repo does not write. That is the same edge every open theorem here has, so naming it per item is repetitive. The repetition is the point: each says WHICH IO step and WHICH check sees it.
 
 **Meta-critique.** The reader of each landing names WEAKs and the decision records them. Nothing collected them until a queue item made someone. Next time a reader's WEAK is neither fixed nor triggered in its own landing, it becomes a cv task that same day.
+
+## HOST-51 · two of HOST-50's kept WEAKs get teeth: host-sim drives the deployed submit through `judge`, and `positionUnfit` has a runtime witness (2026-10-19, HOST-13; ROOT's ask on a2996f7)
+
+**Decision.**
+- **plant-judge-submit** (host-sim `judgePlant`; HOST-42's named WEAK "no sim plant drives `Host.handle`'s submit through `judge`").
+  - Setup: the DEPLOYED `Host.machine` over Kernel.Sim's ctx (toy signatures, CODEC's call codec, the real `Receive.genesis` with one founder), run by the loop's own `Machine.admitBatch`. Every batch's staged steps are re-run by the follower's fold (`Record.runRooted` of `World.step`, what both reopens and `host follow` run).
+  - An admissible call (`install`) commits ONE Turn through `judge`, and the fold reaches exactly the writer's World.
+  - A call whose transaction id holds a recorded refusal answers `refused stale` and stages no Turn.
+  - The tooth: a writer that ADMITS the recorded call (submitted on its World with the refusals forgotten, then put back: KERNEL-44's A→B→A defect, the same lie as PROTOCOL's rows `admitsRecorded`) stages it as a Turn ("fires": 1 staged). The follower's fold refuses that batch by name (`step`). So the Host layer's own sim now shows the honest arm and catches the lie, without going through PROTOCOL's rows.
+- **plant-position-unfit** (host-file-sim `positionPlant`; HOST-46's "`positionUnfit` has no runtime witness").
+  - The deployed file checkpoint (`fileCheckpoint`: `Base.seal` → base.tmp → sync → rename) is asked to seal at segment position 2^64. It refuses `positionUnfit` (offset 2^64) before writing: base.world and index.log are byte-identical afterwards, and the Store still opens. Its control, the same seal at the real position, installs.
+  - Seen RED with `Base.file`'s check removed: the base INSTALLED, its u64 position wrapped, and the next open refused `foreignSegment`. So the refusal is the only thing between a 2^64 position and a Store that does not reopen.
+  - An open cannot be shown such a base, because the layout has no spelling for it. That is exactly why the writer refuses first (HOST-41's law). The witness is therefore on the write side, through the real checkpoint and files.
+
+**The other five of HOST-50's kept WEAKs** stay named with their triggers there:
+- `build_badIndex` covers entry 0 only;
+- `mark_chain_width`'s steps/offset arms;
+- the sealNow/Base.seal bridge;
+- `refuse_refusals_listing_two` has no closed instance;
+- the Tail does not follow a rotation.
+
+**Law-6 read (read-only reader): LAND.** Both plants run the deployed code they claim. The recorded call takes the recorded-refusal path: `submit` answers `refusedFinal` before the signature check, `World.refuse` declines to record twice, and `verdictReply` names the recorded code `stale`. The liar's Turn is refused at `World.admit`'s `checkJournal` (`refusedFinal`). Its WEAKs are fixed: the plant now asserts the admissible reply's status `ok`, the recorded reply's name `stale`, and the fold's refusal as `step 0 refusedFinal` (not any error). Left: plant-position-unfit has no standing "fires" beyond its specific match and the red run above.
+
+No theorem changed. Both are plants over deployed code. The vacuity question is whether each plant's verdict can go red: plant-position-unfit was SEEN red with the check removed; plant-judge-submit's "fires" check asserts that the mutation (a staged Turn for a recorded call) happened before the fold verdict is read.
+
+**Flag day.** None.
+
+**Critique.**
+- plant-judge-submit records the refusal with `World.refuse` directly (as `plant-lookup-recorded` does), not by an earlier submit that `judge` recorded. The recording arm of `judge` (`.recorded`) is exercised by the kernel's own sim and by PROTOCOL's rows, not by this plant.
+- The liar is a function in the plant, not a mutation of `Host.handle`. It shows the fold catches the lie. It does not show that `Host.handle` can never tell it, which is `machine_commits`' job as a theorem.
+
+**Meta-critique.** Both teeth took a few dozen lines once someone asked. HOST-50 kept them as "kept, with a trigger" because each had a covering check elsewhere (PROTOCOL's rows; a theorem). "Covered elsewhere" was true and was still the wrong reason: the layer's own sim is where a later Host change is first judged.

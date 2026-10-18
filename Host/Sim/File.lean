@@ -495,6 +495,40 @@ def emptyPlants (root : System.FilePath) (key : Digest) (keys : Keys) (failures 
       check s!"{p}-writer-control: one step appends one frame ({shownR}, seg.log {before} -> {after})"
         ((match res with | .ok b => !b | .error _ => false) && before < after) failures
 
+/-- plant-position-unfit (HOST-51, HOST-46's runtime witness): the deployed file checkpoint
+(`fileCheckpoint`: `Base.seal` → base.tmp → sync → rename) asked to seal a base at segment position
+2^64, a position the base layout's u64 cannot spell, refuses `positionUnfit` by name BEFORE writing:
+base.world and index.log are byte-identical after it and the Store still opens. Its control, the same
+seal at the Store's real position, installs. (An OPEN cannot be shown such a base: the layout has no
+spelling for it, which is exactly why the writer must refuse first, HOST-41's law.) -/
+def positionPlant (root : System.FilePath) (key : Digest) (keys : Keys) (failures : IO.Ref Nat) : IO Unit := do
+  let p := "plant-position-unfit"
+  for (tag, far) in [("", true), ("-control", false)] do
+    let dir := root / s!"position{tag}"
+    let _ ← (Host.genesis dir key keys cadence world recorder.mark Sim.genesis : IO (Except Fault Unit))
+    match ← (openWriter dir keys cadence world recorder.mark originChain foldStep : IO (Except Fault _)) with
+    | .error e => check s!"{p}{tag}: open ({e.name})" false failures
+    | .ok fwr =>
+      let r := fwr.opening.resident
+      let base0 ← IO.FS.readBinFile (basePath dir)
+      let idx0 ← IO.FS.readBinFile (indexPath dir)
+      let ck := fileCheckpoint dir keys cadence world recorder.mark originChain fwr.index (async := false)
+      let pos : Position := if far then ⟨2 ^ 64, r.pos.tag⟩ else r.pos
+      let res ← ck.write r.world pos #[] r.sealed.index
+      fwr.segment.sync
+      let base1 ← IO.FS.readBinFile (basePath dir)
+      let idx1 ← IO.FS.readBinFile (indexPath dir)
+      let shown := match res with | .ok _ => "installed" | .error f => f.name
+      if far then
+        check s!"{p}: a seal at position 2^64 is refused `positionUnfit` and base.world and index.log are unchanged ({shown})"
+          ((match res with | .error (.positionUnfit o) => o == 2 ^ 64 | _ => false) && base1 == base0 && idx1 == idx0) failures
+        let re ← follow dir keys cadence
+        check s!"{p}: the Store still opens ({match re with | .ok _ => "opened" | .error e => e.name})"
+          (match re with | .ok _ => true | .error _ => false) failures
+      else
+        check s!"{p}-control: the same seal at the real position {r.pos.offset} installs ({shown})"
+          (match res with | .ok _ => true | .error _ => false) failures
+
 def body (seed : Nat) (dirA dirB : System.FilePath) (control : Bool := false) : IO UInt32 := do
   let failures ← IO.mkRef 0
   let frames := (scenario seed 200).map (·.1)
@@ -593,6 +627,7 @@ def body (seed : Nat) (dirA dirB : System.FilePath) (control : Bool := false) : 
   wideFollowPlant (dirB / "wide") key keys failures
   boundPlants (dirB / "bound") key keys failures
   emptyPlants (dirB / "empty") key keys failures
+  positionPlant (dirB / "position") key keys failures
   if control then check "harness-control: GATES-15's known-red control, an expectation nothing meets (this run must read RED)" false failures
   let n ← failures.get
   IO.println (if n = 0 then "ALL PASS" else s!"{n} FAILED")
