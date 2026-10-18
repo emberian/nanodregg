@@ -10,7 +10,8 @@ it was not.
   `journal_prove_verifies` / `journal_prove_absent`: the World proves every entry it holds, and
   every id it does not.
 * `head_journal_read` / `head_journal_absent`: the same against a head record
-  `(prev, turnDigest, root', jroot')` that hashes to the chain an admitted turn reached.
+  `(prev, kind, turnDigest, rd)` that hashes to the chain an admitted turn reached, with `rd` opened
+  to `(root', jroot', rroot')` (`rootsDigest`, KERNEL-47).
 * `head_absent_admitted`: exclusion is an answer exactly while `journalForgets` is false. A turn
   admitted from `w₀` cannot be shown absent against the head of any World its log reaches below
   `notBefore + 2 * windowMax` (`fold_answers`), but by a collision. Past it, an exclusion proof is
@@ -101,11 +102,11 @@ include hE hn in
 and an inclusion proof against the record's journal root, show the entry in that World's journal,
 or a collision. -/
 theorem head_journal_read {w w' : World D} {t : Turn D} (hw : w.JournalOk E)
-    (h : World.admit E w t = .ok w') {prev td root' jroot' : D}
-    (hhead : headLink E prev td root' jroot' = w'.chain) {k : D} {e : Nat × D} (he : e.1 < 2 ^ 64)
+    (h : World.admit E w t = .ok w') {prev td rd root' jroot' rroot' : D} {g : UInt8}
+    (hhead : headLink E prev g td rd = w'.chain) (hrd : rootsDigest E root' jroot' rroot' = rd) {k : D} {e : Nat × D} (he : e.1 < 2 ^ 64)
     {p : Trie.Proof D D} (hv : Trie.verifyInclusion (journalSpec E) jroot' k (journalDigest E e) p = true) :
     w'.journalAt E k = some e ∨ Collision E.hash := by
-  rcases head_roots hE h hhead with ⟨-, rfl⟩ | col
+  rcases head_roots hE (s := .turn t) h hhead hrd with ⟨-, rfl, -⟩ | col
   · exact journal_inclusion_sound hE hn (admit_journalCanon hw.1 h) (admit_journal_heights hw h) he hv
   · exact .inr col
 
@@ -113,11 +114,11 @@ include hE hn in
 /-- **The phone's journal absence** against a head: the id is not in that World's journal, or a
 collision. -/
 theorem head_journal_absent {w w' : World D} {t : Turn D} (hc : w.JournalCanon E)
-    (h : World.admit E w t = .ok w') {prev td root' jroot' : D}
-    (hhead : headLink E prev td root' jroot' = w'.chain) {k : D} {p : Trie.Proof D D}
+    (h : World.admit E w t = .ok w') {prev td rd root' jroot' rroot' : D} {g : UInt8}
+    (hhead : headLink E prev g td rd = w'.chain) (hrd : rootsDigest E root' jroot' rroot' = rd) {k : D} {p : Trie.Proof D D}
     (hv : Trie.verifyExclusion (journalSpec E) jroot' k p = true) :
     w'.journalAt E k = none ∨ Collision E.hash := by
-  rcases head_roots hE h hhead with ⟨-, rfl⟩ | col
+  rcases head_roots hE (s := .turn t) h hhead hrd with ⟨-, rfl, -⟩ | col
   · exact journal_exclusion_sound hE hn (admit_journalCanon hc h) hv
   · exact .inr col
 
@@ -125,10 +126,11 @@ include hE hn in
 /-- **Exclusion while `journalForgets` is false is a refutation of admission.** If `t` was admitted
 from `w₀` and its log reaches `w₂`, a World at a height where `journalForgets w₂.height t.notBefore`
 is false, no proof shows `t`'s transaction id absent against `w₂`'s head, but by a collision. -/
-theorem head_absent_admitted {w₀ w₁ w₂ : World D} {t : Turn D} {l : List (Turn D)}
+theorem head_absent_admitted {w₀ w₁ w₂ : World D} {t : Turn D} {l : List (Step D)}
     (hc : w₀.JournalCanon E) (h₁ : World.admit E w₀ t = .ok w₁) (hf : World.fold E w₁ l = .ok w₂)
-    (hnf : journalForgets w₂.height t.notBefore = false) {prev td root' jroot' : D}
-    (hhead : headLink E prev td root' jroot' = w₂.chain) {p : Trie.Proof D D}
+    (hnf : journalForgets w₂.height t.notBefore = false) {prev td rd root' jroot' rroot' : D} {g : UInt8}
+    (hhead : headLink E prev g td rd = w₂.chain) (hrd : rootsDigest E root' jroot' rroot' = rd)
+    {p : Trie.Proof D D}
     (hv : Trie.verifyExclusion (journalSpec E) jroot' t.txId p = true) : Collision E.hash := by
   have hin := fold_answers hc h₁ hf hnf
   have hc₂ := fold_journalCanon (admit_journalCanon hc h₁) hf
@@ -137,7 +139,7 @@ theorem head_absent_admitted {w₀ w₁ w₂ : World D} {t : Turn D} {l : List (
     cases l with
     | nil =>
         simp [World.fold] at hf; subst hf
-        rcases head_roots hE h₁ hhead with ⟨-, h⟩ | col
+        rcases head_roots hE (s := .turn t) h₁ hhead hrd with ⟨-, h, -⟩ | col
         · exact .inl h
         · exact .inr col
     | cons u us =>
@@ -147,7 +149,7 @@ theorem head_absent_admitted {w₀ w₁ w₂ : World D} {t : Turn D} {l : List (
           obtain ⟨w₃, _, h₃⟩ := fold_append.mp hf
           obtain ⟨w₄, h₄, h₅⟩ := fold_cons_ok.mp h₃
           simp [World.fold] at h₅; subst h₅
-          rcases head_roots hE h₄ hhead with ⟨-, h⟩ | col
+          rcases head_roots hE h₄ hhead hrd with ⟨-, h, -⟩ | col
           · exact .inl h
           · exact .inr col
   rcases hroot with rfl | col

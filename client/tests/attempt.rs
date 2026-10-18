@@ -1,5 +1,6 @@
 //! Attempt plants: a crash after the send marker reloads as uncertain; an uncertain attempt only
-//! looks up; absent permits a resend of the SAME bytes; the send bound holds; one call per attempt.
+//! looks up; absent permits a resend of the SAME bytes; the send bound holds; one call per attempt;
+//! a `declined` submit (PROTOCOL-41) leaves the attempt open; a `declined` lookup is `badReply`.
 #![allow(clippy::unwrap_used)] // a plant that cannot set up is a failed plant
 use std::fs;
 
@@ -126,5 +127,69 @@ fn a_gap_in_send_markers_is_inconsistent() {
     Attempt::freeze(&d, b"CALL").unwrap();
     fs::write(d.join("sent.1"), []).unwrap();
     assert!(matches!(Attempt::load(&d), Err(AttemptError::Inconsistent)));
+    fs::remove_dir_all(d.parent().unwrap()).unwrap();
+}
+
+/// PROTOCOL-41: `declined` is not final. The run ends with nothing written but the send marker, the
+/// attempt reloads as uncertain, and the next run LOOKS IT UP (the same bytes), never resubmits blind.
+#[test]
+fn declined_leaves_the_attempt_open_and_the_next_run_looks_up() {
+    let d = scratch("declined");
+    let a = Attempt::freeze(&d, b"CALL").unwrap();
+    let mut seen = Vec::new();
+    let s = a
+        .drive(State::Signed, 3, |r, b| {
+            seen.push((r, b.to_vec()));
+            Settlement::Declined(b"unknownKey".to_vec())
+        })
+        .unwrap();
+    assert_eq!(
+        s,
+        State::Declined {
+            sends: 1,
+            reply: b"unknownKey".to_vec()
+        }
+    );
+    assert_eq!(
+        seen,
+        vec![(Request::Submit, b"CALL".to_vec())],
+        "one send this run"
+    );
+    assert!(!d.join("committed").exists() && !d.join("not-committed").exists());
+    let (a, s) = Attempt::load(&d).unwrap();
+    assert_eq!(s, State::Uncertain { sends: 1 }, "open on disk");
+    let mut seen = Vec::new();
+    let s = a
+        .drive(s, 3, |r, b| {
+            seen.push((r, b.to_vec()));
+            Settlement::Committed(b"R".to_vec())
+        })
+        .unwrap();
+    assert_eq!(
+        seen,
+        vec![(Request::Lookup, b"CALL".to_vec())],
+        "the next run looks up"
+    );
+    assert!(matches!(
+        s,
+        State::Settled {
+            committed: true,
+            ..
+        }
+    ));
+    fs::remove_dir_all(d.parent().unwrap()).unwrap();
+}
+
+/// A lookup is never judged, so a `declined` answer to one cannot answer it: `badReply`.
+#[test]
+fn a_declined_lookup_is_a_bad_reply() {
+    let d = scratch("declined-lookup");
+    let a = Attempt::freeze(&d, b"CALL").unwrap();
+    let r = a.drive(State::Signed, 3, |r, _| match r {
+        Request::Submit => Settlement::Unknown,
+        Request::Lookup => Settlement::Declined(b"wrongWorld".to_vec()),
+    });
+    assert!(matches!(r, Err(AttemptError::Ended(Action::BadReply))));
+    assert_eq!(Attempt::load(&d).unwrap().1, State::Uncertain { sends: 1 });
     fs::remove_dir_all(d.parent().unwrap()).unwrap();
 }

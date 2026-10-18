@@ -144,13 +144,15 @@ theorem submit_ok {X : Ctx D} {w w' : World D} {c : Call D} {t : Turn D}
   · rename_i hj
     split at h
     · simp at h
-    · rename_i t' hr
-      split at h
+    · split at h
       · simp at h
-      · rename_i w'' ha
-        simp only [Except.ok.injEq, Prod.mk.injEq] at h
-        obtain ⟨rfl, rfl⟩ := h
-        exact ⟨hj, hr, ha⟩
+      · rename_i t' hr
+        split at h
+        · simp at h
+        · rename_i w'' ha
+          simp only [Except.ok.injEq, Prod.mk.injEq] at h
+          obtain ⟨rfl, rfl⟩ := h
+          exact ⟨hj, hr, ha⟩
 
 /-- **A retry is never re-judged.** A call already in the journal is `replayed` at its height,
 whatever the World and the call's own derivation would say now. -/

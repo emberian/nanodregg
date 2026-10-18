@@ -29,23 +29,23 @@ def world : Stream (World D) := Codec.Deployed.world
 /-- The deployed shape stamp (D2): the tags of the deployed base and batch record codecs. -/
 def shapes : Digest := Base.shapeStamp world (Record.codec Codec.Deployed.digestCodec)
 
-def recorder : Recorder (World D) (Turn D × (D × D)) where
+def recorder : Recorder (World D) (Step D × D) where
   encode _ staged := Record.encode Codec.Deployed.digestCodec staged
-  mark w := (w.height, w.chain.bytes)
+  mark := Record.mark X.env
 
 /-- The genesis chain of a World's origin (KERNEL's `World.genesisChain`), as `mark` writes a
 chain: what the origin frame of its Store holds, checked at every open (HOST-25). -/
 def originChain (w : World D) : ByteArray := (World.genesisChain X.env w.origin).bytes
 
-/-- The writer's reopen: its own records, each Turn admitted and its two stated roots checked
-(`Record.runRooted`, HOST-29). -/
+/-- The writer's reopen: its own records, each step taken (`World.step`: a Turn admitted, a refusal
+recorded) and its stated roots digest checked (`Record.runRooted`, HOST-29). -/
 def foldStep : World D → ByteArray → Except (Record.Fault (Reject D)) (World D) :=
-  Record.step Codec.Deployed.digestCodec (World.admit X.env) (World.roots X.env)
+  Record.step Codec.Deployed.digestCodec (World.step X.env) (World.roots X.env)
 
 /-- A tail's step (`Host.Tail`, HOSTING-7): the writer's reopen step, with each record's
-(Turn, roots) pairs. -/
-def tailStep : World D → ByteArray → Except (Record.Fault (Reject D)) (World D × List (Turn D × (D × D))) :=
-  Record.stepTurns Codec.Deployed.digestCodec (World.admit X.env) (World.roots X.env)
+(step, roots) pairs. -/
+def tailStep : World D → ByteArray → Except (Record.Fault (Reject D)) (World D × List (Step D × D)) :=
+  Record.stepTurns Codec.Deployed.digestCodec (World.step X.env) (World.roots X.env)
 
 
 /-- The loop's batch bounds: a record's Turns, and a megabyte of request payload. -/
@@ -69,7 +69,7 @@ def pager (keys : Keys) (dir : System.FilePath) (seg idx : File) (r : Resident (
         r.sealed.index.count r.index)
       (r.sealed.index.count + r.index.size) r.pos.offset (recorder.mark r.world) start with
   | .error f => return named f.name
-  | .ok a => match Page.bytes a r.world.height with
+  | .ok a => match Page.bytes a r.world.steps r.world.height with
     | .ok b => return (Protocol.Status.ok.code, b)
     | .error f => return named f.name
 

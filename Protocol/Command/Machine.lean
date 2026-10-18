@@ -5,15 +5,15 @@
 result of the step it asked for and answers the next one, with follow's World after absorbing
 any log the result carried. A write runs
 
-  sign(envelope) → host(log, envelope) → [absorb: every logged event re-derived, PROTOCOL-4]
-  → (page again, from the page's height, until it is the writer's tip)
+  sign(envelope) → host(log, envelope) → [absorb: every logged step re-derived, PROTOCOL-4]
+  → (page again, from the page's step count, until it is the writer's tip)
   → plan on the caught-up World → sign(callMessage u) → submit(call) → done
 
 and a `read` stops after the catch-up; `init` needs no World (sign twice, print a join token).
 The first envelope is valid for follow's own height + window, every later one for the tip the last
 page stated + window. A member more than a window behind is refused `expired` with the writer's
 height and re-signs ONCE a command for that height + window (`reSign`, PROTOCOL-19); a thin member's
-`adopt` envelopes do the same from the pin's height.
+`adopt` envelopes do the same, first for one window from height 0 (a pin names a step count).
 
 `rotate` asks custody to `precommit` after the catch-up, plans the rotation to custody's NEXT key
 (precommitting the digest of its PENDING key) and has it signed by `signNext`; custody advances on
@@ -23,7 +23,11 @@ its own settlement of the submit (CLIENT-13).
 signed envelope per page, `Protocol.Thin.accept` deciding each page; the download so far lives in
 follow's state (`Follow.download`, memory only), and an adopted base replaces follow's World and is
 handed back as `Persist.adopt` for follow to seal as its own newest base. From there every command
-catches up from the base's height like any other.
+catches up from the base's step count like any other.
+
+The log is a list of STEPS (KERNEL-47): admitted Turns and recorded refusals. Log positions count
+steps, and follow binds on (steps, chain), as the kernel's `fold_reaches_host` does. Envelope windows
+stay in heights: the page states the writer's tip in both units (PROTOCOL-41).
 
 `k` holds only the argv, the phase and the results so far; every plan is RE-DERIVED from follow's
 World at each step and the bytes it signs are compared with the ones custody signed (`planMoved`),
@@ -62,8 +66,10 @@ inductive Refusal (D : Type)
   | reject (r : Reject D)
   /-- the Host refused, by its name -/
   | host (name : String)
-  /-- the logged event at this height does not derive on follow's World -/
-  | eventMismatch (height : Nat)
+  /-- the logged step at this log position does not re-derive on follow's World: a Turn event that
+  does not derive, or a refusal event that `Receive.judge` does not record (a kernel rejection of a
+  derived Turn is refused by the kernel's own name, `reject`) -/
+  | eventMismatch (step : Nat)
   | badState
   | badResult
   /-- follow's World moved between the plan custody signed and the submit -/
@@ -71,8 +77,8 @@ inductive Refusal (D : Type)
   /-- read: a `KEY=VALUE` that does not hold -/
   | expect (key : Nat)
   | missingCell (cell : D)
-  /-- the writer's stated height and chain after a log page are not what follow's fold reached -/
-  | chainMismatch (height : Nat)
+  /-- the writer's stated step count and chain after a log page are not what follow's fold reached -/
+  | chainMismatch (steps : Nat)
   /-- the derivation asked for more cells than `Kernel.Bounds.touchesMax` -/
   | tooManyPins
   /-- a base download refused, by `Protocol.Thin`'s name -/
@@ -119,11 +125,16 @@ def Refusal.name : Refusal D → String
 def refused (r : Refusal D) : Reply :=
   .done CommandExit.refused.code.toUInt8 ByteArray.empty s!"refused {r.name}\n".toUTF8
 def printed (out : String) : Reply := .done CommandExit.ok.code.toUInt8 out.toUTF8 ByteArray.empty
-/-- The catch-up read `Bounds.pagesPerCommandMax` pages and follow is still at `height`, the
-writer at `tip`: what was absorbed is kept, and the member runs the command again. Not a refusal:
-its own end (`CommandExit.behind`, restart class), so a timer runs it again (PROTOCOL-38). -/
-def behind (height tip : Nat) : Reply :=
-  .done CommandExit.behind.code.toUInt8 ByteArray.empty s!"behind {height} {tip}\n".toUTF8
+/-- The catch-up read `Bounds.pagesPerCommandMax` pages and follow is still at log position
+`steps`, the writer at `tip` steps: what was absorbed is kept, and the member runs the command
+again. Not a refusal: its own end (`CommandExit.behind`, restart class), so a timer runs it again
+(PROTOCOL-38). -/
+def behind (steps tip : Nat) : Reply :=
+  .done CommandExit.behind.code.toUInt8 ByteArray.empty s!"behind {steps} {tip}\n".toUTF8
+/-- The writer refused the call by name and did NOT record it, so it is not final (PROTOCOL-41,
+`Status.declined`): the attempt stays open. Printed `declined NAME`. -/
+def declined (name : String) : Reply :=
+  .done CommandExit.declined.code.toUInt8 ByteArray.empty s!"declined {name}\n".toUTF8
 
 /-! ## Follow's state -/
 
@@ -133,11 +144,12 @@ structure Follow (D : Type) [Ord D] where
   world : World D
   download : Option Thin.Download := none
 
-/-- What a step asks follow to make durable before it answers: the Turns it absorbed (re-derived,
+/-- What a step asks follow to make durable before it answers: the steps it absorbed (re-derived,
 in log order; `[]` for most steps), or a base it adopted, which follow seals as its own newest base. -/
 inductive Persist (D : Type) [Ord D]
-  /-- the Turns follow admitted, each with the two roots (cells', journal's) of follow's World after it (HOST-29) -/
-  | turns (ts : List (Turn D × (D × D)))
+  /-- the steps follow took (admitted Turns, recorded refusals), each with the roots digest of
+  follow's World after it (`World.roots`: HOST-29, KERNEL-47), the shape of a batch record -/
+  | steps (ss : List (Kernel.Step D × D))
   | adopt (w : World D)
 
 /-! ## The continuation -/
@@ -313,37 +325,72 @@ def plan (X : Ctx D) (me : Self D) (w : World D) (key : ByteArray) (b : Body D) 
 
 /-! ## Catching up -/
 
-/-- Absorb logged events: each re-derived on follow's World by the Host's own decision function
-(`Receive.submit` = receive, then admit). A writer that logged an event which does not derive is
-caught here, at that height (PROTOCOL-4). Also returns the Turns it derived, in log order, so
-`host follow` persists exactly what it re-derived (HOST-3) rather than re-running this loop. -/
-def absorb (X : Ctx D) : World D → Array (Turn D × (D × D)) → List ByteArray →
-    Except (Refusal D) (World D × Array (Turn D × (D × D)))
+/-- The step a page event states: byte 0 then the signed call of an admitted Turn, byte 1 then
+the signed call of a recorded refusal (PROTOCOL-41). -/
+def eventTurn : UInt8 := 0
+def eventRefusal : UInt8 := 1
+
+/-- Re-derive one logged step on follow's World by the Host's own decision functions: a Turn event
+by `Receive.submit` (receive, then admit), a refusal event by `Receive.judge`, which must RECORD it
+(the follower's `auditRefusal` rule). A Turn that derives but the kernel rejects is refused by the
+kernel's name (a writer that admits a call it recorded refused is caught `refusedFinal`); anything
+else that does not re-derive is `eventMismatch` at its log position. -/
+def absorbStep (X : Ctx D) (w : World D) (e : ByteArray) : Except (Refusal D) (Kernel.Step D × World D) :=
+  let pos := w.steps + 1
+  if h : 0 < e.size then
+    match X.decodeCall (e.extract 1 e.size) with
+    | none => .error (.eventMismatch pos)
+    | some c =>
+        if e[0] = eventTurn then
+          match submit X w c with
+          | .ok (t, w') => .ok (.turn t, w')
+          | .error (.rejected r) => .error (.reject r)
+          | .error (.refused _) => .error (.eventMismatch pos)
+        else if e[0] = eventRefusal then
+          match judge X w c with
+          | .recorded _ r w' => .ok (.refusal r, w')
+          | _ => .error (.eventMismatch pos)
+        else .error (.eventMismatch pos)
+  else .error (.eventMismatch pos)
+
+/-- Absorb logged events, each re-derived (`absorbStep`, PROTOCOL-4). A writer that logged an event
+which does not re-derive is caught here, at that log position. Also returns the steps it took, in
+log order, each with the roots digest after it, so `host follow` persists exactly what it
+re-derived (HOST-3) rather than re-running this loop. -/
+def absorb (X : Ctx D) : World D → Array (Kernel.Step D × D) → List ByteArray →
+    Except (Refusal D) (World D × Array (Kernel.Step D × D))
   | w, ts, [] => .ok (w, ts)
   | w, ts, e :: es =>
-      match X.decodeCall e with
-      | none => .error (.eventMismatch (w.height + 1))
-      | some c => match submit X w c with
-        | .ok (t, w') => absorb X w' (ts.push (t, World.roots X.env w')) es
-        | .error _ => .error (.eventMismatch (w.height + 1))
+      match absorbStep X w e with
+      | .ok (s, w') => absorb X w' (ts.push (s, World.roots X.env w')) es
+      | .error r => .error r
 
+/-- A log page (`logReplyLayout`): the events, the writer's step count and chain after the last of
+them, and the writer's tip when it built the page, as a step count and a height. A tip below the
+page's own position is not a page. -/
+structure LogPage where
+  events : List ByteArray
+  steps : Nat
+  chain : ByteArray
+  tipSteps : Nat
+  tipHeight : Nat
 
-/-- A log page: the events, the writer's height and chain after the last of them, and the
-writer's tip when it built the page. A tip below the page's own height is not a page. -/
-def logPage (b : ByteArray) : Option (List ByteArray × Nat × ByteArray × Nat) :=
+def logPage (b : ByteArray) : Option LogPage :=
   match logReplyFrame.decode b with
-  | .ok (l, h, c, t, ()) => do
-      let n ← Text.ofU64 h.1
-      let tip ← Text.ofU64 t.1
-      if n ≤ tip then some (Text.unlist l, n, c.1, tip) else none
+  | .ok (l, n, c, t, th, ()) => do
+      let steps ← Text.ofU64 n.1
+      let tipSteps ← Text.ofU64 t.1
+      let tipHeight ← Text.ofU64 th.1
+      if steps ≤ tipSteps then some ⟨Text.unlist l, steps, c.1, tipSteps, tipHeight⟩ else none
   | .error _ => none
 
-/-- Absorb a page and require follow's fold to reach the writer's stated height and chain. -/
-def absorbPage (X : Ctx D) (w : World D) (evs : List ByteArray) (height : Nat) (chain : ByteArray) :
-    Except (Refusal D) (World D × List (Turn D × (D × D))) := do
+/-- Absorb a page and require follow's fold to reach the writer's stated step count and chain (the
+pair the kernel's `fold_reaches_host` binds). -/
+def absorbPage (X : Ctx D) (w : World D) (evs : List ByteArray) (steps : Nat) (chain : ByteArray) :
+    Except (Refusal D) (World D × List (Kernel.Step D × D)) := do
   let (w', ts) ← absorb X w #[] evs
-  if w'.height = height ∧ X.env.bytes w'.chain = chain then pure (w', ts.toList)
-  else throw (.chainMismatch height)
+  if w'.steps = steps ∧ X.env.bytes w'.chain = chain then pure (w', ts.toList)
+  else throw (.chainMismatch steps)
 
 def hostName (p : ByteArray) : String := (String.fromUTF8? p).getD "unnamed"
 
@@ -405,16 +452,19 @@ def start (X : Ctx D) (me : Self D) (f : Follow D) (argv : List ByteArray) : Rep
   | .error r => refused (D := D) (.parse r)
   | .ok (.init _) => next (D := D) ⟨argv, 1, []⟩ fun k => .sign whoami k
   | .ok (.adopt pin) =>
-      if w.height ≠ 0 then refused (D := D) (.thin (.notAtGenesis w.height)) else
-      if pin.height ≤ w.height then refused (D := D) (.thin (.notBehind w.height)) else
+      if w.steps ≠ 0 then refused (D := D) (.thin (.notAtGenesis w.steps)) else
+      if pin.steps ≤ w.steps then refused (D := D) (.thin (.notBehind w.steps)) else
       let off := Thin.offset pin f.download
-      let upTo := pin.height + me.window
+      -- the pin names a log position, not a height, and follow is at genesis: sign one window
+      -- from height 0; a writer further on refuses it `expired` with its height and follow
+      -- re-signs once (`reSign`)
+      let upTo := me.window
       next (D := D) ⟨argv, 6, [Text.u64 off, Text.u64 0, Text.u64 upTo, Text.u64 0]⟩ fun k =>
         .sign (adoptEnvelope X me upTo off) k
   | .ok _ =>
       let upTo := w.height + me.window
-      next (D := D) ⟨argv, 1, [Text.u64 w.height, Text.u64 0, Text.u64 upTo, Text.u64 0]⟩ fun k =>
-        .sign (envelopeMessage X me w.height upTo) k
+      next (D := D) ⟨argv, 1, [Text.u64 w.steps, Text.u64 0, Text.u64 upTo, Text.u64 0]⟩ fun k =>
+        .sign (envelopeMessage X me w.steps upTo) k
 
 /-- One step: the continuation, the result of the step it asked for, and follow's state. It
 answers follow's state after the step, what to persist (a log page's Turns, re-derived; a base it
@@ -423,9 +473,9 @@ adopted; `[]` for every other step), and the next reply. `B` is how an adopted b
 def step (X : Ctx D) (B : Thin.Base (World D)) (me : Self D) (f : Follow D) (kb result : ByteArray) :
     Follow D × Persist D × Reply :=
   let w := f.world
-  let same (r : Reply) : Follow D × Persist D × Reply := (f, .turns [], r)
-  let moved (w' : World D) (ts : List (Turn D × (D × D))) (r : Reply) : Follow D × Persist D × Reply :=
-    ({ f with world := w' }, .turns ts, r)
+  let same (r : Reply) : Follow D × Persist D × Reply := (f, .steps [], r)
+  let moved (w' : World D) (ts : List (Kernel.Step D × D)) (r : Reply) : Follow D × Persist D × Reply :=
+    ({ f with world := w' }, .steps ts, r)
   match State.ofBytes kb, parse X.digestOf ((State.ofBytes kb).map (·.argv) |>.getD []) with
   | none, _ => same (refused (D := D) .badState)
   | some _, .error r => same (refused (D := D) (.parse r))
@@ -469,20 +519,20 @@ def step (X : Ctx D) (B : Thin.Base (World D)) (me : Self D) (f : Follow D) (kb 
           | some (.ok, p) =>
               match logPage p, Text.ofU64 pagesB with
               | none, _ | _, none => same (refused (D := D) .badResult)
-              | some (evs, height, chain, tip), some pages =>
+              | some pg, some pages =>
                   -- a page short of the tip that carries nothing would be asked for again forever
-                  if evs.isEmpty && height < tip then same (refused (D := D) .badResult) else
-                  match absorbPage X w evs height chain with
+                  if pg.events.isEmpty && pg.steps < pg.tipSteps then same (refused (D := D) .badResult) else
+                  match absorbPage X w pg.events pg.steps pg.chain with
                   | .error r => same (refused (D := D) r)
                   | .ok (w', ts) =>
-                      if height < tip then
+                      if pg.steps < pg.tipSteps then
                         if Bounds.pagesPerCommandMax ≤ pages + 1 then
-                          moved w' ts (behind height tip)
+                          moved w' ts (behind pg.steps pg.tipSteps)
                         -- the next envelope covers the tip the writer stated, so a follower
                         -- behind by more than a window is not refused on every page
-                        else moved w' ts (again 1 [Text.u64 height, Text.u64 (pages + 1),
-                            Text.u64 (tip + me.window), triedB] fun k =>
-                          .sign (envelopeMessage X me height (tip + me.window)) k)
+                        else moved w' ts (again 1 [Text.u64 pg.steps, Text.u64 (pages + 1),
+                            Text.u64 (pg.tipHeight + me.window), triedB] fun k =>
+                          .sign (envelopeMessage X me pg.steps (pg.tipHeight + me.window)) k)
                       else
                       match cmd, Signed.ofBytes signedB with
                       | .read obj ex, _ => moved w' ts (render X.env w' obj ex)
@@ -541,6 +591,7 @@ def step (X : Ctx D) (B : Thin.Base (World D)) (me : Self D) (f : Follow D) (kb 
           match hostReply result with
           | some (.ok, _) => same (.done CommandExit.ok.code.toUInt8 out ByteArray.empty)
           | some (.refused, p) => same (refused (D := D) (.host (hostName p)))
+          | some (.declined, p) => same (declined (hostName p))
           | some (.absent, _) => same (.done CommandExit.absent.code.toUInt8 ByteArray.empty "absent\n".toUTF8)
           | some (.uncertain, _) => same (.done CommandExit.uncertain.code.toUInt8 ByteArray.empty "uncertain\n".toUTF8)
           -- a settlement is never `closed`: the client settles a closed connection by lookup
@@ -556,7 +607,7 @@ def step (X : Ctx D) (B : Thin.Base (World D)) (me : Self D) (f : Follow D) (kb 
       -- adopt: one base page, decided by `Thin.accept`; the next page, or the World adopted
       | .adopt pin, 7, [offB, pagesB, upToB, triedB] =>
           let drop (r : Thin.Refusal) : Follow D × Persist D × Reply :=
-            ({ f with download := none }, .turns [], refused (D := D) (.thin r))
+            ({ f with download := none }, .steps [], refused (D := D) (.thin r))
           match Text.ofU64 offB, Text.ofU64 pagesB, Text.ofU64 upToB, Text.ofU64 triedB with
           | some off, some pages, some upTo, some tried =>
             match hostReply result with
@@ -571,12 +622,12 @@ def step (X : Ctx D) (B : Thin.Base (World D)) (me : Self D) (f : Follow D) (kb 
                         -- the pin binds the World's bytes, origin included; this says so by name
                         if w'.origin ≠ me.world then drop .wrongWorld else
                         ({ world := w', download := none }, .adopt w',
-                          printed s!"adopted {pin.height} {Text.toHex pin.digest}\n")
+                          printed s!"adopted {pin.steps} {Text.toHex pin.digest}\n")
                     | .ok (.more d) =>
                         let f' := { f with download := some d }
                         if Bounds.pagesPerCommandMax ≤ pages + 1 then
-                          (f', .turns [], refused (D := D) (.thin (.incomplete d.got.size d.total)))
-                        else (f', .turns [], again 6 [Text.u64 d.got.size, Text.u64 (pages + 1), upToB, triedB]
+                          (f', .steps [], refused (D := D) (.thin (.incomplete d.got.size d.total)))
+                        else (f', .steps [], again 6 [Text.u64 d.got.size, Text.u64 (pages + 1), upToB, triedB]
                           fun k => .sign (adoptEnvelope X me upTo d.got.size) k)
             | some (.refused, p) =>
                 match expiredHeight? p with

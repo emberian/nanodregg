@@ -108,11 +108,19 @@ inductive Status
   name, and nothing follows on the connection. Not a verdict on any request: a request in flight
   is unsettled (for a frozen call, uncertain: its attempt goes on by lookup) -/
   | closed
+  /-- `submit` only: refused by name and NOT recorded, so NOT final (PROTOCOL-41, KERNEL-47
+  amendment 7). The payload is the name. The call was not authenticated for this World (an
+  unauthenticated code), or its window has not opened (an early `outsideWindow`), or its member's
+  refusals this window are spent (`refusalBudget`). The same bytes may still be admitted later (a
+  call signed with the precommitted next key is `unknownKey` until the rotate, and admissible after it),
+  so the attempt stays open. A `refused` reply is the final one: the refusal is recorded, or was
+  recorded before, or the call's window has passed -/
+  | declined
   deriving DecidableEq, Repr
 
 namespace Status
 
-def all : List Status := [ok, refused, uncertain, absent, closed]
+def all : List Status := [ok, refused, uncertain, absent, closed, declined]
 
 def code : Status → UInt8
   | ok => 0
@@ -120,6 +128,7 @@ def code : Status → UInt8
   | uncertain => 2
   | absent => 3
   | closed => 4
+  | declined => 5
 
 def ofCode? (b : UInt8) : Option Status := all.find? (·.code == b)
 
@@ -334,25 +343,31 @@ the Host is its name as UTF-8; this payload starts with the name's length (`u32`
 follow grant is live (`Envelope.check` checks expiry last). -/
 def expiredRefusalLayout : Codec.Layout := [.bytes "refusal", .u64 "height"]
 
-/-- The `log` reply's payload: the signed calls (events) logged from the requested height, in log
-order, then the writer's World height and log chain after the last of them, then `tip`, the
-writer's World height when the page was built. A follower re-derives every Turn from the events
-(PROTOCOL-4) and asserts that its own fold reached the same height and chain (a pair assertion,
-law 4): an omitted, truncated or reordered event is caught at the page. A page holds at most a
-frame of events (HOST-17), so it may end before the tip, even inside a writer batch: follow pages
-again from `height` until `height = tip` (at most `Bounds.pagesPerCommandMax` pages a command). -/
-def logReplyLayout : Codec.Layout := [.list "events", .bytes "height", .bytes "chain", .bytes "tip"]
+/-- The `log` reply's payload: the logged STEPS from the requested log position (a step count), in
+log order, then the writer's step count and log chain after the last of them, then the writer's tip
+when the page was built, as a step count (`tipSteps`) and a World height (`tipHeight`, which follow's
+next envelope window is signed from). Each event is a tag byte and a signed call: 0 an admitted Turn,
+1 a recorded refusal (KERNEL-44/47, PROTOCOL-41). A follower re-derives every step from its event
+(PROTOCOL-4: a Turn by `submit`, a refusal by `judge`, which must record it) and asserts that its own
+fold reached the same step count and chain (a pair assertion, law 4; the pair the kernel's
+`fold_reaches_host` binds): an omitted, truncated or reordered event is caught at the page. A page
+holds at most a frame of events (HOST-17), so it may end before the tip, even inside a writer batch:
+follow pages again from `steps` until `steps = tipSteps` (at most `Bounds.pagesPerCommandMax` pages a
+command). -/
+def logReplyLayout : Codec.Layout :=
+  [.list "events", .bytes "steps", .bytes "chain", .bytes "tipSteps", .bytes "tipHeight"]
 
 /-- The `read` reply's payload: one page of the World bytes of the writer's NEWEST base (HOST-14,
 HOST-15), for a thin member (PROTOCOL-14, option A). The request is the read envelope, its `start`
-read as a byte offset into those World bytes. `height` and `chain` are the base World's,
+read as a byte offset into those World bytes. `steps` (the base World's step count: its position in
+the log, KERNEL-47, PROTOCOL-41) and `chain` are the base World's,
 `total` its World bytes' length, `digest` = `Hash.digest "nanodregg/host/base-digest/v1"` of them, and
 `bytes` = World bytes `[start, start + chunk)`. All numbers are u64le. A seal between two pages
-changes `height` and `digest`, and the member starts its download again. The member trusts none of
+changes `steps` and `digest`, and the member starts its download again. The member trusts none of
 it: it accepts the assembled bytes only if they hash to a base digest it pinned out of band
 (`Protocol.Thin.accept`; a forged byte is `baseMismatch`). -/
 def readReplyLayout : Codec.Layout :=
-  [.bytes "height", .bytes "total", .bytes "digest", .bytes "chain", .bytes "bytes"]
+  [.bytes "steps", .bytes "total", .bytes "digest", .bytes "chain", .bytes "bytes"]
 
 /-! The bounds the client and the supervisor enforce before allocating. -/
 namespace Bounds

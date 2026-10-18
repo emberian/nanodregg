@@ -75,6 +75,7 @@ def sys : Option Mutation → Sys
       { writer := { X := accountByAsset Sim.ctx }, follow := accountByAsset Sim.ctx }
   | some .writerForgetsSpent => { writer := { X := Sim.ctx, forgetSpent := true }, follow := Sim.ctx }
   | some .importTrustsFile => { writer := { X := Sim.ctx }, follow := Sim.ctx, importTrustsFile := true }
+  | some .admitsRecorded => { writer := { X := Sim.ctx, admitsRecorded := true }, follow := Sim.ctx }
 
 /-! ## Actors -/
 
@@ -303,7 +304,7 @@ def custodyOf (name : String) (fault : Fault) : M (String × Actor × ByteArray)
   | _ => pure (name, a, a.key name)
 
 /-- Custody settles its armed rotation on the attempt's settlement: committed advances it,
-refused drops it, absent or uncertain keeps it armed (CLIENT-13). -/
+refused (final) drops it, declined, absent or uncertain keeps it armed (CLIENT-13, PROTOCOL-41). -/
 def settle (name : String) (call res : ByteArray) : M Unit := do
   let a ← actor name
   if a.armed = some call then
@@ -323,7 +324,7 @@ def ask (op : Op) (payload : ByteArray) : M (Option ByteArray) := do
 
 /-- How the rows' followers read a base: the Sim's World codec and the writer's own `worldDigest`. -/
 def base : Thin.Base (World D) :=
-  ⟨Sim.world, World.height, Host.Sim.keys.worldDigest, Writer.cadence.worldBytesMax⟩
+  ⟨Sim.world, World.steps, Host.Sim.keys.worldDigest, Writer.cadence.worldBytesMax⟩
 
 /-- Send one frame to the actor's `host follow` (`Host.Follow.answer`, the deployed per-frame
 decision, on the actor's follow state); the step's bytes, or the name follow refused it by. What
@@ -348,9 +349,9 @@ def editPage (f : List ByteArray → List ByteArray) (reply : ByteArray) : ByteA
   match Command.hostReply reply with
   | some (.ok, p) =>
       match logReplyFrame.decode p with
-      | .ok (l, h, c, t, ()) =>
+      | .ok (l, n, c, t, th, ()) =>
           match Text.fitList Bounds.frameBytesMax (f (Text.unlist l)) with
-          | some l' => ByteArray.mk #[Status.ok.code] ++ logReplyFrame.bytes (l', h, c, t, ())
+          | some l' => ByteArray.mk #[Status.ok.code] ++ logReplyFrame.bytes (l', n, c, t, th, ())
           | none => reply
       | .error _ => reply
   | _ => reply
@@ -377,6 +378,7 @@ def classify (res : ByteArray) : Attempt.Seen :=
   match Command.hostReply res with
   | some (.ok, _) => .committed
   | some (.refused, _) => .refused
+  | some (.declined, _) => .declined
   | some (.uncertain, _) => .unknown
   | some (.absent, _) => .absent
   -- the connection ended with the request unanswered: as if the reply were lost
@@ -418,6 +420,11 @@ def drive (name : String) (call : ByteArray) (fault : Fault) :
               settle name call r; pure (.ok r)
           | none => pure (.error "noReply")
       | .badReply => pure (.error Attempt.Action.badReply.name)
+      | .declined =>
+          -- the run stops and the attempt stays open: follow is told `declined NAME`
+          match reply with
+          | some r => pure (.ok r)
+          | none => pure (.error "noReply")
       | .uncertain =>
           -- the run stops unsettled: follow is told `uncertain`
           match reply with
@@ -434,6 +441,7 @@ def outcomeOf (exit : UInt8) (err : ByteArray) : Expect :=
   | some .uncertain => .uncertain
   | some .absent => .absent
   | some .behind => .behind
+  | some .declined => .declined (((e.trimAscii.toString.dropPrefix? "declined ").map (·.toString)).getD e)
   | some .client | none => .refused s!"exit{exit.toNat}"
 
 def statusOutcome (reply : ByteArray) : Expect :=
@@ -442,6 +450,7 @@ def statusOutcome (reply : ByteArray) : Expect :=
   | some (.absent, _) => .absent
   | some (.uncertain, p) => if p.isEmpty then .uncertain else .unsettled (Command.hostName p)
   | some (.refused, p) => .refused (Command.hostName p)
+  | some (.declined, p) => .declined (Command.hostName p)
   -- a closed connection is not a verdict on the call
   | some (.closed, _) => .uncertain
   | none => .refused "badReply"
@@ -643,6 +652,8 @@ def runAct (l : Line) : M (Expect × String) := do
           | .ok (u, _) =>
             let call := X.callBytes ⟨u, Sim.sign key (X.callMessage u)⟩
             sawCall l.actor call
+            -- the forged call is the actor's last: `retry` looks it up, `resubmit` sends it again
+            setActor l.actor { a with last := some call }
             match ← ask .submit call with
             | none => pure (.refused "writerStopped", "")
             | some res =>
@@ -712,9 +723,19 @@ def runAct (l : Line) : M (Expect × String) := do
   | .attest pin => do
       let w := (← actor l.actor).follow.world
       bind pin (Text.toHex (base.digest (Sim.world.bytes w)))
-      bind s!"{pin}.h" (toString w.height)
+      bind s!"{pin}.steps" (toString w.steps)
       pure (.ok, "")
   | .retry => pure (← retry l.actor, "")
+  | .resubmit => do
+      match (← actor l.actor).last with
+      | none => pure (.refused "noAttempt", "")
+      | some call =>
+          match ← ask .submit call with
+          | none => pure (.refused "writerStopped", "")
+          | some res =>
+              if classify res = .committed then
+                modify fun st => { st with committed := st.committed.push call }
+              pure (statusOutcome res, "")
   | .reopenFlipped off => pure (← reopenFlipped off, "")
 
 /-- Run a line `times` times; the first outcome that is not the declared one, else the declared

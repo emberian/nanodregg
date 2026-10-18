@@ -33,7 +33,8 @@ pub mod status {
     pub const UNCERTAIN: u8 = 2;
     pub const ABSENT: u8 = 3;
     pub const CLOSED: u8 = 4;
-    pub const ALL: &[u8] = &[0, 1, 2, 3, 4];
+    pub const DECLINED: u8 = 5;
+    pub const ALL: &[u8] = &[0, 1, 2, 3, 4, 5];
 }
 
 /// Why a connection was closed (Protocol.CloseReason); the `closed` frame's payload is `name()`.
@@ -160,7 +161,8 @@ pub mod command_exit {
     pub const ABSENT: u8 = 50;
     pub const BEHIND: u8 = 51;
     pub const CLIENT: u8 = 52;
-    pub const ALL: &[u8] = &[0, 1, 2, 50, 51, 52];
+    pub const DECLINED: u8 = 53;
+    pub const ALL: &[u8] = &[0, 1, 2, 50, 51, 52, 53];
 }
 
 /// The read envelope's signing domain (Protocol.domEnvelope): an observer custody signs only
@@ -656,6 +658,7 @@ pub mod attempt {
     pub enum Seen {
         Committed,
         Refused,
+        Declined,
         Unknown,
         Absent,
         Lost,
@@ -667,6 +670,7 @@ pub mod attempt {
         Lookup,
         Committed,
         Refused,
+        Declined,
         Absent,
         BadReply,
         Uncertain,
@@ -679,6 +683,7 @@ pub mod attempt {
                 Action::Lookup => "lookup",
                 Action::Committed => "committed",
                 Action::Refused => "refused",
+                Action::Declined => "declined",
                 Action::Absent => "absent",
                 Action::BadReply => "badReply",
                 Action::Uncertain => "uncertain",
@@ -692,22 +697,26 @@ pub mod attempt {
             (false, None) => Action::Submit,
             (false, Some((Request::Submit, Seen::Committed))) => Action::Committed,
             (false, Some((Request::Submit, Seen::Refused))) => Action::Refused,
+            (false, Some((Request::Submit, Seen::Declined))) => Action::Declined,
             (false, Some((Request::Submit, Seen::Unknown))) => Action::Lookup,
             (false, Some((Request::Submit, Seen::Absent))) => Action::BadReply,
             (false, Some((Request::Submit, Seen::Lost))) => Action::Lookup,
             (false, Some((Request::Lookup, Seen::Committed))) => Action::Committed,
             (false, Some((Request::Lookup, Seen::Refused))) => Action::Refused,
+            (false, Some((Request::Lookup, Seen::Declined))) => Action::BadReply,
             (false, Some((Request::Lookup, Seen::Unknown))) => Action::Uncertain,
             (false, Some((Request::Lookup, Seen::Absent))) => Action::Absent,
             (false, Some((Request::Lookup, Seen::Lost))) => Action::Uncertain,
             (true, None) => Action::Submit,
             (true, Some((Request::Submit, Seen::Committed))) => Action::Committed,
             (true, Some((Request::Submit, Seen::Refused))) => Action::Refused,
+            (true, Some((Request::Submit, Seen::Declined))) => Action::Declined,
             (true, Some((Request::Submit, Seen::Unknown))) => Action::Lookup,
             (true, Some((Request::Submit, Seen::Absent))) => Action::BadReply,
             (true, Some((Request::Submit, Seen::Lost))) => Action::Lookup,
             (true, Some((Request::Lookup, Seen::Committed))) => Action::Committed,
             (true, Some((Request::Lookup, Seen::Refused))) => Action::Refused,
+            (true, Some((Request::Lookup, Seen::Declined))) => Action::BadReply,
             (true, Some((Request::Lookup, Seen::Unknown))) => Action::Uncertain,
             (true, Some((Request::Lookup, Seen::Absent))) => Action::Submit,
             (true, Some((Request::Lookup, Seen::Lost))) => Action::Uncertain,

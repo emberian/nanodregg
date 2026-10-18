@@ -5,21 +5,21 @@ import Host.Check
 
 namespace Nanodregg.Host.Check
 
-/-- No verdict (exit 0) exactly when the Store is at or past the anchor's height and its chain
+/-- No verdict (exit 0) exactly when the Store is at or past the anchor's step count and its chain
 there is the anchor's. -/
 theorem Anchor.verdict_none_iff (a : Anchor) (now : Nat) (ch : ByteArray) :
-    a.verdict now ch = none ↔ a.height ≤ now ∧ ch = a.chain := by
+    a.verdict now ch = none ↔ a.steps ≤ now ∧ ch = a.chain := by
   unfold Anchor.verdict
-  by_cases h : now < a.height
+  by_cases h : now < a.steps
   · simp only [h, if_true, reduceCtorEq, false_iff, not_and]
     intro h'; omega
-  · have hle : a.height ≤ now := Nat.le_of_not_lt h
+  · have hle : a.steps ≤ now := Nat.le_of_not_lt h
     by_cases hc : ch = a.chain
     · simp [h, hc, hle]
     · simp [h, hc]
 
 /-- Below the anchor the verdict is `behindAnchor`, whatever chain was read. -/
-theorem Anchor.verdict_behind (a : Anchor) (now : Nat) (ch : ByteArray) (h : now < a.height) :
+theorem Anchor.verdict_behind (a : Anchor) (now : Nat) (ch : ByteArray) (h : now < a.steps) :
     a.verdict now ch = some .behindAnchor := by
   simp [Anchor.verdict, h]
 

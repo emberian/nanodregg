@@ -90,7 +90,8 @@ structure Follow where
   tail : Tail (World D)
   held : List (D × (ByteArray × Allowance))
 
-/-- Read what was appended until nothing is new, at most `n` reads; the Turns absorbed. -/
+/-- Read what was appended until nothing is new, at most `n` reads; the Turns absorbed (a recorded
+refusal moves no cell, `Kernel.refuse_frame`, so only the log's Turns are read). -/
 def catchUp (keys : Keys) (seg : File) : Nat → Tail (World D) → List (Turn D) →
     IO (Except Exit (Tail (World D) × List (Turn D)))
   | 0, _, _ => pure (.error .behind)
@@ -99,7 +100,7 @@ def catchUp (keys : Keys) (seg : File) : Nat → Tail (World D) → List (Turn D
     | .error f => pure (.error (.store f.name))
     | .ok (t', outs) =>
       if outs.isEmpty && t'.pos.offset == t.pos.offset then pure (.ok (t', acc))
-      else catchUp keys seg n t' (acc ++ outs.toList.flatten.map Prod.fst)
+      else catchUp keys seg n t' (acc ++ Step.turns (outs.toList.flatten.map Prod.fst))
 
 /-- Before an ask at `now`: catch up, re-read the touched ids, follow them. -/
 def refresh (f : Follow) (b : Broker) (now : Nat) : IO (Except Exit (Follow × Broker)) := do

@@ -173,7 +173,7 @@ theorem uncertainAll_conns (rs : Array Reply) :
 
 /-- The batch the loop cuts (`drain`'s frames, as `serve` hands them to the machine), answered
 after its sync: one reply per frame, each on the frame's own connection, in order. -/
-theorem served_conns {W T R N : Type} (m : Machine W T R Frame N) (w : W) (frames : Array Frame)
+theorem served_conns {W T N : Type} (m : Machine W T Frame N) (w : W) (frames : Array Frame)
     (built : Array (Nat × UInt8 × ByteArray)) :
     (applyPages (m.admitBatch w (frames.toList.map fun f => ⟨f.conn, f⟩)).2.replies built).toList.map (·.conn) =
       frames.toList.map (·.conn) := by
@@ -181,7 +181,7 @@ theorem served_conns {W T R N : Type} (m : Machine W T R Frame N) (w : W) (frame
 
 /-- The same batch when its append did not complete: one `uncertain` reply per frame, each on the
 frame's own connection, in order. -/
-theorem uncertain_conns {W T R N : Type} (m : Machine W T R Frame N) (w : W) (frames : Array Frame) :
+theorem uncertain_conns {W T N : Type} (m : Machine W T Frame N) (w : W) (frames : Array Frame) :
     (uncertainAll (m.admitBatch w (frames.toList.map fun f => ⟨f.conn, f⟩)).2.replies).toList.map (·.conn) =
       frames.toList.map (·.conn) ∧
     ∀ r ∈ (uncertainAll (m.admitBatch w (frames.toList.map fun f => ⟨f.conn, f⟩)).2.replies).toList,

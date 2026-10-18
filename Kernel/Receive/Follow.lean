@@ -163,8 +163,8 @@ def carryOriginOf (X : Ctx D) (name nonce : ByteArray) (fromOrigin : D) (c : Car
 keys sign the new World's calls (`Unsigned.world` = the new origin). -/
 def carryWorld (X : Ctx D) (name nonce : ByteArray) (fromOrigin : D) (c : Carried D) : World D :=
   let o := carryOriginOf X name nonce fromOrigin c
-  { trie := c.trie, journal := c.journal, height := c.height, chain := World.genesisChain X.env o,
-    allowance := c.allowance, origin := o }
+  { trie := c.trie, journal := c.journal, refusals := .empty, height := c.height, steps := c.height,
+    chain := World.genesisChain X.env o, allowance := c.allowance, origin := o }
 
 /-- Why a carry is refused (law 7): one constructor per clause of `CarryFits`, in its order. Past
 these bounds `carryInput`'s raw codec truncates, so two different carries would share an origin. -/

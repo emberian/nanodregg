@@ -145,20 +145,21 @@ theorem admit_journalOk {E : Env D} {w w' : World D} {t : Turn D} (hw : w.Journa
     · have := (hw.2.1 k₁ e₁ hk₁).1; simp at heq; omega
     · exact hw.2.2 k₁ k₂ e₁ e₂ hk₁ hk₂ heq
 
-theorem fold_journalOk {E : Env D} :
-    ∀ {w w' : World D} {l : List (Turn D)}, w.JournalOk E → World.fold E w l = .ok w' → w'.JournalOk E
-  | w, w', [], hw, h => by simp [World.fold] at h; subst h; exact hw
-  | w, w', t :: rest, hw, h => by
-      obtain ⟨w₁, h₁, h₂⟩ := fold_cons_ok.mp h
-      exact fold_journalOk (admit_journalOk hw h₁) h₂
+/-- A recorded refusal keeps `JournalOk`: it moves neither the journal nor the height. -/
+theorem refuse_journalOk {E : Env D} {w w' : World D} {r : Refused D} (hw : w.JournalOk E)
+    (h : World.refuse E w r = .ok w') : w'.JournalOk E := by
+  obtain ⟨_, hj, hh, _⟩ := refuse_frame h
+  unfold World.JournalOk World.JournalCanon World.journalAt at *
+  rw [hj, hh]; exact hw
 
-theorem fold_journalCanon {E : Env D} :
-    ∀ {w w' : World D} {l : List (Turn D)}, w.JournalCanon E → World.fold E w l = .ok w' →
-      w'.JournalCanon E
-  | w, w', [], hc, h => by simp [World.fold] at h; subst h; exact hc
-  | w, w', t :: rest, hc, h => by
-      obtain ⟨w₁, h₁, h₂⟩ := fold_cons_ok.mp h
-      exact fold_journalCanon (admit_journalCanon hc h₁) h₂
+theorem fold_journalOk {E : Env D} {w w' : World D} {l : List (Step D)} (hw : w.JournalOk E)
+    (h : World.fold E w l = .ok w') : w'.JournalOk E :=
+  fold_keeps (P := fun v => v.JournalOk E) admit_journalOk refuse_journalOk hw h
+
+theorem fold_journalCanon {E : Env D} {w w' : World D} {l : List (Step D)} (hc : w.JournalCanon E)
+    (h : World.fold E w l = .ok w') : w'.JournalCanon E :=
+  fold_keeps (P := fun v => v.JournalCanon E) admit_journalCanon
+    (fun hp hr => by show Trie.Canon _ 0 _; rw [(refuse_frame hr).2.1]; exact hp) hc h
 
 /-- The heights of a `JournalOk` journal's listing are distinct. -/
 theorem journal_heights_nodup {E : Env D} {w : World D} (hw : w.JournalOk E) :
@@ -301,19 +302,23 @@ theorem admit_retains {E : Env D} {w w' : World D} {t : Turn D} {k : D} {e : Nat
   split <;> simp [hk, Option.filter, hkept]
 
 theorem fold_retains {E : Env D} {k : D} {e : Nat × D} :
-    ∀ {w w' : World D} {l : List (Turn D)}, w.JournalCanon E → World.fold E w l = .ok w' →
+    ∀ {w w' : World D} {l : List (Step D)}, w.JournalCanon E → World.fold E w l = .ok w' →
       w.journalAt E k = some e → w'.height < e.1 + 2 * Bounds.windowMax → w'.journalAt E k = some e
   | w, w', [], _, h, hk, _ => by simp [World.fold] at h; subst h; exact hk
-  | w, w', t :: rest, hc, h, hk, hlt => by
+  | w, w', .turn t :: rest, hc, h, hk, hlt => by
       obtain ⟨w₁, h₁, h₂⟩ := fold_cons_ok.mp h
       have := fold_height h₂
       exact fold_retains (admit_journalCanon hc h₁) h₂ (admit_retains hc h₁ hk (by omega)) hlt
+  | w, w', .refusal r :: rest, hc, h, hk, hlt => by
+      obtain ⟨w₁, h₁, h₂⟩ := fold_cons_ok.mp h
+      have hc₁ : w₁.JournalCanon E := by unfold World.JournalCanon; rw [(refuse_frame h₁).2.1]; exact hc
+      exact fold_retains hc₁ h₂ ((refuse_journalAt h₁ k).trans hk) hlt
 
 /-- **Absence is an answer below `journalForgets`.** A turn admitted from `w₀` is still journaled
 in every later World of the log whose height is below its `notBefore + 2 * windowMax`. So an
 un-journaled transaction id at a height where `journalForgets` is false was never admitted by
 that log (HOST's `expired`); where it is true, absence says nothing (HOST's `forgotten`). -/
-theorem fold_answers {E : Env D} {w₀ w₁ w₂ : World D} {t : Turn D} {l : List (Turn D)}
+theorem fold_answers {E : Env D} {w₀ w₁ w₂ : World D} {t : Turn D} {l : List (Step D)}
     (hc : w₀.JournalCanon E) (h₁ : World.admit E w₀ t = .ok w₁) (hf : World.fold E w₁ l = .ok w₂)
     (hnf : journalForgets w₂.height t.notBefore = false) :
     w₂.journalAt E t.txId = some (w₀.height + 1, turnDigest E t) := by
@@ -323,7 +328,7 @@ theorem fold_answers {E : Env D} {w₀ w₁ w₂ : World D} {t : Turn D} {l : Li
 
 /-- **Spacing at bare `admit`.** Two admissions of one transaction id, from `w₀` and later from
 `w₂`, are more than `2 * windowMax` heights apart. -/
-theorem admit_spacing {E : Env D} {w₀ w₁ w₂ w₃ : World D} {t t' : Turn D} {l : List (Turn D)}
+theorem admit_spacing {E : Env D} {w₀ w₁ w₂ w₃ : World D} {t t' : Turn D} {l : List (Step D)}
     (hc : w₀.JournalCanon E) (h₁ : World.admit E w₀ t = .ok w₁) (hf : World.fold E w₁ l = .ok w₂)
     (h₂ : World.admit E w₂ t' = .ok w₃) (hid : t'.txId = t.txId) :
     w₀.height + 1 + 2 * Bounds.windowMax ≤ w₂.height := by
@@ -340,7 +345,7 @@ ended. Every deployed path reaches `World.admit` through `receive`: the writer t
 `Receive.submit` (`submit_ok`), the follower through the audit (`audit_ok`: every logged turn is
 what `receive` derives from its own event). Two turns derived from one call carry its digest and
 its window (`receive_ok`), so on both paths a call is admitted at most once. -/
-theorem admit_twice_window {E : Env D} {w₀ w₁ w₂ w₃ : World D} {t t' : Turn D} {l : List (Turn D)}
+theorem admit_twice_window {E : Env D} {w₀ w₁ w₂ w₃ : World D} {t t' : Turn D} {l : List (Step D)}
     (hc : w₀.JournalCanon E) (h₁ : World.admit E w₀ t = .ok w₁) (hf : World.fold E w₁ l = .ok w₂)
     (h₂ : World.admit E w₂ t' = .ok w₃) (hid : t'.txId = t.txId) (hv : t'.validUntil = t.validUntil) :
     False := by
@@ -361,22 +366,27 @@ World of an admitted log has it, a turn of that log carries `k` and a window sti
 ends at `v` and is absent stays absent, unless another call with a LATER window has the same
 transaction id — two different signed calls with one digest (`txIdOf`), a collision. -/
 theorem absent_final {E : Env D} {k : D} :
-    ∀ {w w' : World D} {l : List (Turn D)}, w.JournalCanon E → World.fold E w l = .ok w' →
+    ∀ {w w' : World D} {l : List (Step D)}, w.JournalCanon E → World.fold E w l = .ok w' →
       w.journalAt E k = none → w'.journalAt E k ≠ none →
-        ∃ t ∈ l, t.txId = k ∧ w.height < t.validUntil
+        ∃ t ∈ Step.turns l, t.txId = k ∧ w.height < t.validUntil
   | w, w', [], _, h, ha, hj => by simp [World.fold] at h; subst h; exact absurd ha hj
-  | w, w', t :: rest, hc, h, ha, hj => by
+  | w, w', .refusal r :: rest, hc, h, ha, hj => by
+      obtain ⟨w₁, h₁, h₂⟩ := fold_cons_ok.mp h
+      have hc₁ : w₁.JournalCanon E := by unfold World.JournalCanon; rw [(refuse_frame h₁).2.1]; exact hc
+      obtain ⟨u, hu, huk, hlt⟩ := absent_final hc₁ h₂ ((refuse_journalAt h₁ k).trans ha) hj
+      exact ⟨u, hu, huk, by rw [(refuse_frame h₁).2.2.1] at hlt; exact hlt⟩
+  | w, w', .turn t :: rest, hc, h, ha, hj => by
       obtain ⟨w₁, h₁, h₂⟩ := fold_cons_ok.mp h
       have hwin := (admit_window h₁).2
       have hc₁ := admit_journalCanon hc h₁
       by_cases hk : t.txId = k
-      · exact ⟨t, by simp, hk, by omega⟩
+      · exact ⟨t, by simp [Step.turns], hk, by omega⟩
       · have ha₁ : w₁.journalAt E k = none := by
           obtain ⟨_, _, rfl⟩ := admit_ok h₁
           rw [commit_journalAt hc, if_neg (Ne.symm hk), ha]
           split <;> rfl
         obtain ⟨u, hu, huk, hlt⟩ := absent_final hc₁ h₂ ha₁ hj
-        exact ⟨u, by simp [hu], huk, by rw [admit_height h₁] at hlt; omega⟩
+        exact ⟨u, by simp [Step.turns, hu], huk, by rw [admit_height h₁] at hlt; omega⟩
 
 /-- `check` reads the journal only at the turn's transaction id. -/
 theorem check_journal_congr {E : Env D} {w : World D} {t : Turn D} {j : Journal D}
@@ -386,6 +396,7 @@ theorem check_journal_congr {E : Env D} {w : World D} {t : Turn D} {j : Journal 
     unfold checkJournal
     rw [show ({ w with journal := j } : World D).journalAt E t.txId = j.get (journalSpec E) t.txId
       from rfl, hj]
+    rfl
   unfold check
   rw [h]
   rfl
@@ -536,25 +547,33 @@ From any World with a canonical journal that is `J` filtered at its last prune
 reaches, which inserted and pruned at every turn, holds exactly the entries of `shadowJournal` that
 are `kept` at its own `lastPrune` height. All the prunes of a history are one prune at the last
 multiple of `windowMax`, of the journal that never forgot. -/
-theorem fold_journal_filter {E : Env D} {l : List (Turn D)} :
+theorem fold_journal_filter {E : Env D} {l : List (Step D)} :
     ∀ {w w' : World D} {J : Journal D}, w.JournalCanon E →
       JournalFiltered E (lastPrune w.height) w.journal J → World.fold E w l = .ok w' →
       JournalFiltered E (lastPrune w'.height) w'.journal (shadowJournal E w.height J l) := by
   induction l with
   | nil => intro w w' J _ hj h; simp [World.fold] at h; subst h; exact hj
-  | cons t rest ih =>
+  | cons s rest ih =>
       intro w w' J hc hj h
       obtain ⟨w₁, h₁, h₂⟩ := fold_cons_ok.mp h
-      have hc₁ := admit_journalCanon hc h₁
-      obtain ⟨posts, _, rfl⟩ := admit_ok h₁
-      exact ih hc₁ (commit_filtered hc hj) h₂
+      cases s with
+      | turn t =>
+          have hc₁ := admit_journalCanon hc h₁
+          obtain ⟨posts, _, rfl⟩ := admit_ok h₁
+          exact ih hc₁ (commit_filtered hc hj) h₂
+      | refusal r =>
+          obtain ⟨_, hj₁, hh₁, _⟩ := refuse_frame h₁
+          have hc₁ : w₁.JournalCanon E := by unfold World.JournalCanon; rw [hj₁]; exact hc
+          have := ih (J := J) hc₁ (by rw [hj₁, hh₁]; exact hj) h₂
+          rw [hh₁] at this
+          exact this
 
 /-- **Pruning changed no check in a real history.** The World `w'` a fold reaches checks a
 turn exactly as the same World with the journal that was never pruned, whenever the turn's
 window ends by its transaction id's never-pruned entry height plus `windowMax` (a retry of the
 call that entry records). This is `check_journal_filter` at `lastPrune w'.height`, through
 `fold_journal_filter`. -/
-theorem fold_prune_check {E : Env D} {w w' : World D} {l : List (Turn D)}
+theorem fold_prune_check {E : Env D} {w w' : World D} {l : List (Step D)}
     {J : Journal D} {t : Turn D} (hc : w.JournalCanon E)
     (hj : JournalFiltered E (lastPrune w.height) w.journal J) (h : World.fold E w l = .ok w')
     (hv : ∀ e, (shadowJournal E w.height J l).get (journalSpec E) t.txId = some e →
@@ -575,7 +594,7 @@ World any later log reaches admits `c` again: while its entry is journaled `subm
 `replayed`, and by the time it is pruned (`admit_spacing`) the call's own window, fixed by the
 call, has ended. No collision disjunct: one call has one digest and one window. The premise is the
 journal trie's canonicity at `w₀` (every reached World's: `reach_submit_once`). -/
-theorem submit_once {X : Ctx D} {w₀ w₁ w₂ : World D} {c : Call D} {t : Turn D} {l : List (Turn D)}
+theorem submit_once {X : Ctx D} {w₀ w₁ w₂ : World D} {c : Call D} {t : Turn D} {l : List (Step D)}
     (hc : w₀.JournalCanon X.env) (h₁ : submit X w₀ c = .ok (t, w₁)) (hf : World.fold X.env w₁ l = .ok w₂) :
     ∀ r, submit X w₂ c ≠ .ok r := by
   intro ⟨t₂, w₃⟩ h₂
@@ -589,7 +608,7 @@ theorem submit_once {X : Ctx D} {w₀ w₁ w₂ : World D} {c : Call D} {t : Tur
 admitted from `w₀`, no later World of that log admits a turn `c` derives again. This is the
 follower's form: in an `Honest` log (`audit_ok`) every turn is `receive` of its own event's call
 on the World before it, so an audited log never holds one call twice. -/
-theorem derived_once {X : Ctx D} {w₀ w₁ w₂ w₃ : World D} {c : Call D} {t t' : Turn D} {l : List (Turn D)}
+theorem derived_once {X : Ctx D} {w₀ w₁ w₂ w₃ : World D} {c : Call D} {t t' : Turn D} {l : List (Step D)}
     (hc : w₀.JournalCanon X.env)
     (hr₁ : receive X w₀ c = .ok t) (h₁ : World.admit X.env w₀ t = .ok w₁)
     (hf : World.fold X.env w₁ l = .ok w₂)
@@ -623,14 +642,14 @@ theorem genesisWorld_journalOk (X : Ctx D) (name nonce : ByteArray) (allowance :
 
 /-- **Every World a genesis reaches holds `JournalOk`**, no premise. -/
 theorem reach_journalOk {X : Ctx D} {name nonce : ByteArray} {allowance : Nat}
-    {founders : List (ByteArray × D)} {w : World D} {l : List (Turn D)}
+    {founders : List (ByteArray × D)} {w : World D} {l : List (Step D)}
     (h : World.fold X.env (genesisWorld X name nonce allowance founders) l = .ok w) : w.JournalOk X.env :=
   fold_journalOk (genesisWorld_journalOk X name nonce allowance founders) h
 
 /-- **Every World a genesis reaches holds fewer than `3 * windowMax` journal entries**, whatever
 its history: no premise (law 4 at the World's journal). -/
 theorem reach_journal_bounded {X : Ctx D} {name nonce : ByteArray} {allowance : Nat}
-    {founders : List (ByteArray × D)} {w : World D} {l : List (Turn D)}
+    {founders : List (ByteArray × D)} {w : World D} {l : List (Step D)}
     (h : World.fold X.env (genesisWorld X name nonce allowance founders) l = .ok w) :
     w.journal.toList.length < 3 * Bounds.windowMax :=
   journal_bounded (reach_journalOk h)
@@ -638,7 +657,7 @@ theorem reach_journal_bounded {X : Ctx D} {name nonce : ByteArray} {allowance : 
 /-- **From genesis, a call is admitted at most once, ever** (`submit_once`, no premise): `w₀` is
 any World a genesis reaches. -/
 theorem reach_submit_once {X : Ctx D} {name nonce : ByteArray} {allowance : Nat}
-    {founders : List (ByteArray × D)} {l₀ l : List (Turn D)} {w₀ w₁ w₂ : World D} {c : Call D} {t : Turn D}
+    {founders : List (ByteArray × D)} {l₀ l : List (Step D)} {w₀ w₁ w₂ : World D} {c : Call D} {t : Turn D}
     (h₀ : World.fold X.env (genesisWorld X name nonce allowance founders) l₀ = .ok w₀)
     (h₁ : submit X w₀ c = .ok (t, w₁)) (hf : World.fold X.env w₁ l = .ok w₂) :
     ∀ r, submit X w₂ c ≠ .ok r :=
@@ -647,7 +666,7 @@ theorem reach_submit_once {X : Ctx D} {name nonce : ByteArray} {allowance : Nat}
 /-- **From genesis, one call, one admission on any path through `receive`** (`derived_once`, no
 premise). -/
 theorem reach_derived_once {X : Ctx D} {name nonce : ByteArray} {allowance : Nat}
-    {founders : List (ByteArray × D)} {l₀ l : List (Turn D)} {w₀ w₁ w₂ w₃ : World D} {c : Call D}
+    {founders : List (ByteArray × D)} {l₀ l : List (Step D)} {w₀ w₁ w₂ w₃ : World D} {c : Call D}
     {t t' : Turn D}
     (h₀ : World.fold X.env (genesisWorld X name nonce allowance founders) l₀ = .ok w₀)
     (hr₁ : receive X w₀ c = .ok t) (h₁ : World.admit X.env w₀ t = .ok w₁)
@@ -658,7 +677,7 @@ theorem reach_derived_once {X : Ctx D} {name nonce : ByteArray} {allowance : Nat
 /-- **From genesis, two admissions of one transaction id are more than `2 * windowMax` heights
 apart** (`admit_spacing`, no premise). -/
 theorem reach_admit_spacing {X : Ctx D} {name nonce : ByteArray} {allowance : Nat}
-    {founders : List (ByteArray × D)} {l₀ l : List (Turn D)} {w₀ w₁ w₂ w₃ : World D} {t t' : Turn D}
+    {founders : List (ByteArray × D)} {l₀ l : List (Step D)} {w₀ w₁ w₂ w₃ : World D} {t t' : Turn D}
     (h₀ : World.fold X.env (genesisWorld X name nonce allowance founders) l₀ = .ok w₀)
     (h₁ : World.admit X.env w₀ t = .ok w₁) (hf : World.fold X.env w₁ l = .ok w₂)
     (h₂ : World.admit X.env w₂ t' = .ok w₃) (hid : t'.txId = t.txId) :
@@ -669,7 +688,7 @@ theorem reach_admit_spacing {X : Ctx D} {name nonce : ByteArray} {allowance : Na
 window discharged): a World a genesis reaches checks each windowed retry exactly as the same
 World carrying the latest entry its log wrote under each transaction id, none pruned. -/
 theorem reach_prune_check {X : Ctx D} {name nonce : ByteArray} {allowance : Nat}
-    {founders : List (ByteArray × D)} {w : World D} {l : List (Turn D)} {t : Turn D}
+    {founders : List (ByteArray × D)} {w : World D} {l : List (Step D)} {t : Turn D}
     (h : World.fold X.env (genesisWorld X name nonce allowance founders) l = .ok w)
     (hv : ∀ e, (shadowJournal X.env (genesisWorld X name nonce allowance founders).height
         (genesisWorld X name nonce allowance founders).journal l).get (journalSpec X.env) t.txId = some e →

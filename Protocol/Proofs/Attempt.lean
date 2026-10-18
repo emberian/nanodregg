@@ -17,7 +17,8 @@ theorem next_submit {b : Bool} {l : Option (Request × Seen)} (h : next b l = .s
   | some (.lookup, .absent), true => exact .inr ⟨rfl, rfl⟩
   | some (.lookup, .absent), false => simp [next] at h
   | some (.submit, s), _ => cases s <;> simp [next] at h
-  | some (.lookup, .committed), _ | some (.lookup, .refused), _ | some (.lookup, .unknown), _
+  | some (.lookup, .committed), _ | some (.lookup, .refused), _ | some (.lookup, .declined), _
+  | some (.lookup, .unknown), _
   | some (.lookup, .lost), _ => simp [next] at h
 
 /-- After a submit whose reply was lost or `uncertain`, the next request is a lookup. -/
@@ -44,6 +45,28 @@ theorem next_no_send_left (l : Option (Request × Seen)) (h : l ≠ none) : next
 /-- The emitted table covers every input exactly once and agrees with `next`. -/
 theorem table_complete (b : Bool) (l : Option (Request × Seen)) : ((b, l), next b l) ∈ table := by
   cases b <;> rcases l with _ | ⟨r, s⟩ <;> (try cases r) <;> (try cases s) <;> decide
+
+/-- **Only a final reply ends an attempt as refused** (PROTOCOL-41): the status `refused`, which
+`Protocol.Settle.verdictReply` gives only to a recorded refusal or a passed window
+(`Settle.final_iff_recorded`). -/
+theorem next_refused_iff (b : Bool) (l : Option (Request × Seen)) :
+    next b l = .refused ↔ ∃ r, l = some (r, .refused) := by
+  constructor
+  · intro h
+    rcases l with _ | ⟨r, s⟩
+    · simp [next] at h
+    · cases r <;> cases s <;> cases b <;> simp [next] at h ⊢
+  · rintro ⟨r, rfl⟩; cases r <;> rfl
+
+/-- **A declined submit ends the run `declined`**, never `refused` (so the client writes no
+settlement: its plant is client/tests/attempt.rs `declined_leaves_the_attempt_open_and_the_next_run_looks_up`). -/
+theorem next_declined (b : Bool) : next b (some (.submit, .declined)) = .declined := rfl
+
+/-- A lookup is never answered `declined` (only a submit is judged): such a reply is `badReply`. -/
+theorem next_lookup_declined (b : Bool) : next b (some (.lookup, .declined)) = .badReply := rfl
+
+/-- The emitted `Action` enum is every action (a new one cannot be left out of the client's `match`). -/
+theorem Action.mem_all (a : Action) : a ∈ Action.all := by cases a <;> decide
 
 theorem inputs_nodup : inputs.Nodup := by decide
 

@@ -15,6 +15,7 @@ import Kernel.Proofs.Rooted
 import Kernel.Proofs.Fold
 import Kernel.Proofs.CellsFit
 import Kernel.Proofs.JournalHead
+import Kernel.Proofs.Refusals
 import Codec.Proofs.Deployed
 
 namespace Nanodregg.Kernel.Receive
@@ -43,7 +44,7 @@ theorem deployed_ctx_lawful (program : Program Digest) : (ctx program).Lawful :=
 
 /-- **Deployed: an audited World is rooted at its founders.** -/
 theorem deployed_audit_rooted (program : Program Digest) (name nonce : ByteArray) (allowance : Nat)
-    (founders : List (ByteArray × Digest)) {w' : World Digest} {l : List (Turn Digest)}
+    (founders : List (ByteArray × Digest)) {w' : World Digest} {l : List (Step Digest)}
     (h : audit (ctx program) (genesisWorld (ctx program) name nonce allowance founders) l = .ok w') :
     WorldRooted (ctx program) (GenesisRoot (ctx program) (originOf (ctx program) name nonce allowance founders)) w' :=
   audit_rooted deployed_lawful (genesis_rooted _ name nonce allowance founders) h
@@ -52,7 +53,7 @@ theorem deployed_audit_rooted (program : Program Digest) (name nonce : ByteArray
 a derived enrolment's grant chain ends at a founder's live genesis grant, issued by the founder the
 chain acts for. -/
 theorem deployed_enroll_founder (program : Program Digest) (name nonce : ByteArray) (allowance : Nat)
-    (founders : List (ByteArray × Digest)) {w : World Digest} {l : List (Turn Digest)}
+    (founders : List (ByteArray × Digest)) {w : World Digest} {l : List (Step Digest)}
     (hw : audit (ctx program) (genesisWorld (ctx program) name nonce allowance founders) l = .ok w)
     {c : Call Digest} {key : ByteArray} {next : Digest} {possession : ByteArray} {via : Digest}
     {base : Nat} {d : Draft Digest}
@@ -75,12 +76,13 @@ theorem deployed_enroll_founder (program : Program Digest) (name nonce : ByteArr
 
 /-- **Deployed: a follower at the host's head holds the host's World.** `fold_reaches_host` with
 every premise discharged at the deployed codec: 32-byte digests, injective digest bytes, and turn
-bytes injective on bounded turns (CODEC's `turnBytes_injective`; every admitted turn is bounded). -/
-theorem deployed_fold_reaches_host {g host follower : World Digest} {lh lf : List (Turn Digest)}
+bytes injective on bounded turns (CODEC's `turnBytes_injective`; every admitted turn is bounded). The
+follower compares `(steps, chain)` (KERNEL-47: a recorded refusal moves the steps, not the height). -/
+theorem deployed_fold_reaches_host {g host follower : World Digest} {lh lf : List (Step Digest)}
     (hh : World.fold env g lh = .ok host) (hf : World.fold env g lf = .ok follower)
-    (hht : follower.height = host.height) (hc : follower.chain = host.chain) :
+    (hst : follower.steps = host.steps) (hc : follower.chain = host.chain) :
     follower = host ∨ Collision env.hash :=
-  fold_reaches_host deployed_lawful hh hf hht hc
+  fold_reaches_host deployed_lawful hh hf hst hc
 
 /-! ## The phone's reads at the deployed codec (KERNEL-31) -/
 
@@ -91,7 +93,7 @@ theorem deployed_bytes_fit (d : Digest) : (env.bytes d).size ≤ Bounds.valueByt
 
 /-- **Deployed: a World a checked genesis and a fold reach is canonical, and its cells fit.** -/
 theorem deployed_reach (program : Program Digest) {name nonce : ByteArray} {allowance : Nat}
-    {founders : List (ByteArray × Digest)} {g w : World Digest} {l : List (Turn Digest)}
+    {founders : List (ByteArray × Digest)} {g w : World Digest} {l : List (Step Digest)}
     (hg : genesis (ctx program) name nonce allowance founders = .ok g) (hl : World.fold env g l = .ok w) :
     w.Canon env ∧ w.CellsFit Nanodregg.Codec.Kernel.Cell.Fits env := by
   obtain ⟨hf, rfl⟩ := genesis_ok.mp hg
@@ -100,7 +102,7 @@ theorem deployed_reach (program : Program Digest) {name nonce : ByteArray} {allo
 
 /-- **Deployed: inclusion is sound** on every World a checked genesis and a fold reach. -/
 theorem deployed_slot_inclusion_sound (program : Program Digest) {name nonce : ByteArray} {allowance : Nat}
-    {founders : List (ByteArray × Digest)} {g w : World Digest} {l : List (Turn Digest)}
+    {founders : List (ByteArray × Digest)} {g w : World Digest} {l : List (Step Digest)}
     (hg : genesis (ctx program) name nonce allowance founders = .ok g) (hl : World.fold env g l = .ok w)
     {s : Slot Digest} {leaf : Leaf} (hlf : leaf.CellFit Nanodregg.Codec.Kernel.Cell.Fits)
     {p : Trie.Proof (Slot Digest) Digest}
@@ -111,7 +113,7 @@ theorem deployed_slot_inclusion_sound (program : Program Digest) {name nonce : B
 
 /-- **Deployed: a live cell proved against the root is the World's live cell**, or a collision. -/
 theorem deployed_live_inclusion_sound (program : Program Digest) {name nonce : ByteArray} {allowance : Nat}
-    {founders : List (ByteArray × Digest)} {g w : World Digest} {l : List (Turn Digest)}
+    {founders : List (ByteArray × Digest)} {g w : World Digest} {l : List (Step Digest)}
     (hg : genesis (ctx program) name nonce allowance founders = .ok g) (hl : World.fold env g l = .ok w)
     {c : Digest} {cell : Cell} (hcf : Nanodregg.Codec.Kernel.Cell.Fits cell) {p : Trie.Proof (Slot Digest) Digest}
     (hv : Trie.verifyInclusion (trieSpec env) (w.root env) (.cell c) (leafDigest env (.entry (.live cell))) p = true) :
@@ -124,26 +126,28 @@ folded one): a head record that hashes to the chain the next admitted turn reach
 against the record's root, show a slot of that World, or a collision. -/
 theorem deployed_head_read_sound_from {w w' : World Digest} {t : Turn Digest} (hc : w.Canon env)
     (hwf : w.CellsFit Nanodregg.Codec.Kernel.Cell.Fits env) (h : World.admit env w t = .ok w')
-    {prev td root' jroot' : Digest}
-    (hhead : headLink env prev td root' jroot' = w'.chain)
+    {prev td rd root' jroot' rroot' : Digest} {tag : UInt8}
+    (hhead : headLink env prev tag td rd = w'.chain)
+    (hrd : rootsDigest env root' jroot' rroot' = rd)
     {s : Slot Digest} {leaf : Leaf} (hlf : leaf.CellFit Nanodregg.Codec.Kernel.Cell.Fits)
     {p : Trie.Proof (Slot Digest) Digest}
     (hv : Trie.verifyInclusion (trieSpec env) root' s (leafDigest env leaf) p = true) :
     w'.trie.get (trieSpec env) s = some leaf ∨ Collision env.hash :=
-  head_read_sound deployed_lawful hc h (admit_cellsFit hwf h) hhead hlf hv
+  head_read_sound deployed_lawful (s := .turn t) hc h (admit_cellsFit hwf h) hhead hrd hlf hv
 
 /-- **Deployed: the phone's read on a reopened base.** A World decoded from base bytes by the
 deployed World codec, then one admitted turn: `Canon` and `CellsFit` come from the decoder
 (`world_decode_canon`, `world_decode_cellsFit`), so no premise about the World is left. -/
 theorem deployed_head_read_sound_decoded {b : ByteArray} {w w' : World Digest} {t : Turn Digest}
     (hd : Codec.Deployed.world.decode b = .ok w) (h : World.admit env w t = .ok w')
-    {prev td root' jroot' : Digest}
-    (hhead : headLink env prev td root' jroot' = w'.chain)
+    {prev td rd root' jroot' rroot' : Digest} {tag : UInt8}
+    (hhead : headLink env prev tag td rd = w'.chain)
+    (hrd : rootsDigest env root' jroot' rroot' = rd)
     {s : Slot Digest} {leaf : Leaf} (hlf : leaf.CellFit Nanodregg.Codec.Kernel.Cell.Fits)
     {p : Trie.Proof (Slot Digest) Digest}
     (hv : Trie.verifyInclusion (trieSpec env) root' s (leafDigest env leaf) p = true) :
     w'.trie.get (trieSpec env) s = some leaf ∨ Collision env.hash :=
-  deployed_head_read_sound_from (world_decode_canon hd).1 (world_decode_cellsFit hd) h hhead hlf hv
+  deployed_head_read_sound_from (world_decode_canon hd).1 (world_decode_cellsFit hd) h hhead hrd hlf hv
 
 /-- **Deployed: the phone's read.** On a World a checked genesis and a fold reach, a head record
 that hashes to the chain the next admitted turn reached, and a proof that verifies against the
@@ -151,46 +155,49 @@ record's root, show a slot of the World after that turn, or a collision. Every p
 `head_read_sound` is discharged: 32-byte injective digests, `cellBytes` injective on `Cell.Fits`,
 the World canonical and fitting. -/
 theorem deployed_head_read_sound (program : Program Digest) {name nonce : ByteArray} {allowance : Nat}
-    {founders : List (ByteArray × Digest)} {g w w' : World Digest} {l : List (Turn Digest)} {t : Turn Digest}
+    {founders : List (ByteArray × Digest)} {g w w' : World Digest} {l : List (Step Digest)} {t : Turn Digest}
     (hg : genesis (ctx program) name nonce allowance founders = .ok g) (hl : World.fold env g l = .ok w)
-    (h : World.admit env w t = .ok w') {prev td root' jroot' : Digest}
-    (hhead : headLink env prev td root' jroot' = w'.chain)
+    (h : World.admit env w t = .ok w') {prev td rd root' jroot' rroot' : Digest} {tag : UInt8}
+    (hhead : headLink env prev tag td rd = w'.chain)
+    (hrd : rootsDigest env root' jroot' rroot' = rd)
     {s : Slot Digest} {leaf : Leaf} (hlf : leaf.CellFit Nanodregg.Codec.Kernel.Cell.Fits)
     {p : Trie.Proof (Slot Digest) Digest}
     (hv : Trie.verifyInclusion (trieSpec env) root' s (leafDigest env leaf) p = true) :
     w'.trie.get (trieSpec env) s = some leaf ∨ Collision env.hash :=
-  deployed_head_read_sound_from (deployed_reach program hg hl).1 (deployed_reach program hg hl).2 h hhead hlf hv
+  deployed_head_read_sound_from (deployed_reach program hg hl).1 (deployed_reach program hg hl).2 h hhead hrd hlf hv
 
 /-- **Deployed: the phone's read over the leaf's BYTES** (CLIENT-16). The leaf the phone shows is
 what CODEC's leaf decoder returns from the served bytes, so `CellFit` comes from the decoder
 (`Codec.Kernel.leaf_decode_cellFit`, toothed by `leaf_decode_refuses_misfit`) and no premise about
 the leaf is left: a reached World, one admitted turn, the head record, the proof. -/
 theorem deployed_head_read_sound_bytes (program : Program Digest) {name nonce : ByteArray} {allowance : Nat}
-    {founders : List (ByteArray × Digest)} {g w w' : World Digest} {l : List (Turn Digest)} {t : Turn Digest}
+    {founders : List (ByteArray × Digest)} {g w w' : World Digest} {l : List (Step Digest)} {t : Turn Digest}
     (hg : genesis (ctx program) name nonce allowance founders = .ok g) (hl : World.fold env g l = .ok w)
-    (h : World.admit env w t = .ok w') {prev td root' jroot' : Digest}
-    (hhead : headLink env prev td root' jroot' = w'.chain)
+    (h : World.admit env w t = .ok w') {prev td rd root' jroot' rroot' : Digest} {tag : UInt8}
+    (hhead : headLink env prev tag td rd = w'.chain)
+    (hrd : rootsDigest env root' jroot' rroot' = rd)
     {s : Slot Digest} {b : ByteArray} {lf : Leaf} (hd : Nanodregg.Codec.Kernel.leaf.decode b = .ok lf)
     {p : Trie.Proof (Slot Digest) Digest}
     (hv : Trie.verifyInclusion (trieSpec env) root' s (leafDigest env lf) p = true) :
     w'.trie.get (trieSpec env) s = some lf ∨ Collision env.hash :=
-  deployed_head_read_sound program hg hl h hhead (Nanodregg.Codec.Kernel.leaf_decode_cellFit hd).1 hv
+  deployed_head_read_sound program hg hl h hhead hrd (Nanodregg.Codec.Kernel.leaf_decode_cellFit hd).1 hv
 
 /-- **Deployed: the phone's read over leaf bytes, on a reopened base**: the World from the base
 decoder, the leaf from the leaf decoder; no premise about either. -/
 theorem deployed_head_read_sound_decoded_bytes {bw : ByteArray} {w w' : World Digest} {t : Turn Digest}
     (hdw : Codec.Deployed.world.decode bw = .ok w) (h : World.admit env w t = .ok w')
-    {prev td root' jroot' : Digest}
-    (hhead : headLink env prev td root' jroot' = w'.chain)
+    {prev td rd root' jroot' rroot' : Digest} {tag : UInt8}
+    (hhead : headLink env prev tag td rd = w'.chain)
+    (hrd : rootsDigest env root' jroot' rroot' = rd)
     {s : Slot Digest} {b : ByteArray} {lf : Leaf} (hd : Nanodregg.Codec.Kernel.leaf.decode b = .ok lf)
     {p : Trie.Proof (Slot Digest) Digest}
     (hv : Trie.verifyInclusion (trieSpec env) root' s (leafDigest env lf) p = true) :
     w'.trie.get (trieSpec env) s = some lf ∨ Collision env.hash :=
-  deployed_head_read_sound_decoded hdw h hhead (Nanodregg.Codec.Kernel.leaf_decode_cellFit hd).1 hv
+  deployed_head_read_sound_decoded hdw h hhead hrd (Nanodregg.Codec.Kernel.leaf_decode_cellFit hd).1 hv
 
 /-- Every World a checked genesis and a fold reach holds `JournalOk` at the deployed codec. -/
 theorem deployed_reach_journalOk (program : Program Digest) {name nonce : ByteArray} {allowance : Nat}
-    {founders : List (ByteArray × Digest)} {g w : World Digest} {l : List (Turn Digest)}
+    {founders : List (ByteArray × Digest)} {g w : World Digest} {l : List (Step Digest)}
     (hg : genesis (ctx program) name nonce allowance founders = .ok g) (hl : World.fold env g l = .ok w) :
     w.JournalOk env := by
   obtain ⟨_, rfl⟩ := genesis_ok.mp hg
@@ -201,38 +208,65 @@ record that hashes to the chain the next admitted turn reached, and an inclusion
 record's journal root, show the entry in that World's journal, or a collision. The one premise left
 is the claimed entry's: its height is below 2^64 (a `u64` on the wire). -/
 theorem deployed_head_journal_read (program : Program Digest) {name nonce : ByteArray} {allowance : Nat}
-    {founders : List (ByteArray × Digest)} {g w w' : World Digest} {l : List (Turn Digest)} {t : Turn Digest}
+    {founders : List (ByteArray × Digest)} {g w w' : World Digest} {l : List (Step Digest)} {t : Turn Digest}
     (hg : genesis (ctx program) name nonce allowance founders = .ok g) (hl : World.fold env g l = .ok w)
-    (h : World.admit env w t = .ok w') {prev td root' jroot' : Digest}
-    (hhead : headLink env prev td root' jroot' = w'.chain) {k : Digest} {e : Nat × Digest}
+    (h : World.admit env w t = .ok w') {prev td rd root' jroot' rroot' : Digest} {tag : UInt8}
+    (hhead : headLink env prev tag td rd = w'.chain)
+    (hrd : rootsDigest env root' jroot' rroot' = rd) {k : Digest} {e : Nat × Digest}
     (he : e.1 < 2 ^ 64) {p : Trie.Proof Digest Digest}
     (hv : Trie.verifyInclusion (journalSpec env) jroot' k (journalDigest env e) p = true) :
     w'.journalAt env k = some e ∨ Collision env.hash :=
-  head_journal_read deployed_lawful (by decide) (deployed_reach_journalOk program hg hl) h hhead he hv
+  head_journal_read deployed_lawful (by decide) (deployed_reach_journalOk program hg hl) h hhead hrd he hv
 
 /-- **Deployed: the phone's journal absence**, no premise: the id is not in the journal of the World
 after the turn, or a collision. -/
 theorem deployed_head_journal_absent (program : Program Digest) {name nonce : ByteArray} {allowance : Nat}
-    {founders : List (ByteArray × Digest)} {g w w' : World Digest} {l : List (Turn Digest)} {t : Turn Digest}
+    {founders : List (ByteArray × Digest)} {g w w' : World Digest} {l : List (Step Digest)} {t : Turn Digest}
     (hg : genesis (ctx program) name nonce allowance founders = .ok g) (hl : World.fold env g l = .ok w)
-    (h : World.admit env w t = .ok w') {prev td root' jroot' : Digest}
-    (hhead : headLink env prev td root' jroot' = w'.chain) {k : Digest} {p : Trie.Proof Digest Digest}
+    (h : World.admit env w t = .ok w') {prev td rd root' jroot' rroot' : Digest} {tag : UInt8}
+    (hhead : headLink env prev tag td rd = w'.chain)
+    (hrd : rootsDigest env root' jroot' rroot' = rd) {k : Digest} {p : Trie.Proof Digest Digest}
     (hv : Trie.verifyExclusion (journalSpec env) jroot' k p = true) :
     w'.journalAt env k = none ∨ Collision env.hash :=
-  head_journal_absent deployed_lawful (by decide) (deployed_reach_journalOk program hg hl).1 h hhead hv
+  head_journal_absent deployed_lawful (by decide) (deployed_reach_journalOk program hg hl).1 h hhead hrd hv
 
 /-- **Deployed: while `journalForgets` is false, an admitted turn cannot be shown absent**, no
 premise: a turn admitted on a reached World, and any World its log reaches below
 `notBefore + 2 * windowMax`, admit no exclusion proof of the turn's transaction id against that
 World's head but by a collision. -/
 theorem deployed_head_absent_admitted (program : Program Digest) {name nonce : ByteArray} {allowance : Nat}
-    {founders : List (ByteArray × Digest)} {g w₀ w₁ w₂ : World Digest} {l₀ l : List (Turn Digest)}
+    {founders : List (ByteArray × Digest)} {g w₀ w₁ w₂ : World Digest} {l₀ l : List (Step Digest)}
     {t : Turn Digest}
     (hg : genesis (ctx program) name nonce allowance founders = .ok g) (h₀ : World.fold env g l₀ = .ok w₀)
     (h₁ : World.admit env w₀ t = .ok w₁) (hf : World.fold env w₁ l = .ok w₂)
-    (hnf : journalForgets w₂.height t.notBefore = false) {prev td root' jroot' : Digest}
-    (hhead : headLink env prev td root' jroot' = w₂.chain) {p : Trie.Proof Digest Digest}
+    (hnf : journalForgets w₂.height t.notBefore = false) {prev td rd root' jroot' rroot' : Digest} {tag : UInt8}
+    (hhead : headLink env prev tag td rd = w₂.chain)
+    (hrd : rootsDigest env root' jroot' rroot' = rd) {p : Trie.Proof Digest Digest}
     (hv : Trie.verifyExclusion (journalSpec env) jroot' t.txId p = true) : Collision env.hash :=
-  head_absent_admitted deployed_lawful (by decide) (deployed_reach_journalOk program hg h₀).1 h₁ hf hnf hhead hv
+  head_absent_admitted deployed_lawful (by decide) (deployed_reach_journalOk program hg h₀).1 h₁ hf hnf hhead hrd hv
+
+/-! ## Recorded refusals at the deployed codec (KERNEL-44, KERNEL-47) -/
+
+/-- **Deployed: every World a checked genesis and a fold reach holds `RefusalsOk`**, no premise: a
+canonical refusals trie whose every leaf fits its height (with `fold_member_refusals_le`, no log
+records more than `Bounds.refusalsPerWindow` refusals of a member in a window). -/
+theorem deployed_reach_refusalsOk (program : Program Digest) {name nonce : ByteArray} {allowance : Nat}
+    {founders : List (ByteArray × Digest)} {g w : World Digest} {l : List (Step Digest)}
+    (hg : genesis (ctx program) name nonce allowance founders = .ok g) (hl : World.fold env g l = .ok w) :
+    w.RefusalsOk env := by
+  obtain ⟨_, rfl⟩ := genesis_ok.mp hg
+  exact fold_refusalsOk (genesisWorld_refusalsOk (ctx program) name nonce allowance founders) hl
+
+/-- **Deployed: a recorded refusal is final**, no premise but the height: on a World a checked
+genesis and a fold reach, after `judge` recorded call `c`'s refusal, every World a later log reaches
+below the prune height answers `c` `refusedFinal` with the recorded code (the A→B→A defect closed). -/
+theorem deployed_judge_recorded_final (program : Program Digest) {name nonce : ByteArray}
+    {allowance : Nat} {founders : List (ByteArray × Digest)} {g w₀ w₁ w₂ : World Digest}
+    {l₀ l : List (Step Digest)} {c : Call Digest} {v : Verdict Digest} {r : Refused Digest}
+    (hg : genesis (ctx program) name nonce allowance founders = .ok g) (h₀ : World.fold env g l₀ = .ok w₀)
+    (hj : judge (ctx program) w₀ c = .recorded v r w₁) (hf : World.fold env w₁ l = .ok w₂)
+    (hlt : w₂.height < w₀.height + 1 + 2 * Bounds.windowMax) :
+    submit (ctx program) w₂ c = .error (.rejected (.refusedFinal v.code)) :=
+  judge_recorded_final (deployed_reach_refusalsOk program hg h₀).1 (deployed_reach_journalOk program hg h₀).1 hj hf hlt
 
 end Nanodregg.Kernel.Receive

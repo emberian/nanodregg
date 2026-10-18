@@ -53,6 +53,12 @@ carries at most this many siblings, and a leaf holds two keys only past it. -/
 def trieDepth : Nat := 257
 /-- The journal trie's depth (KERNEL-41): the 256 bits of a transaction id (a 32-byte digest). -/
 def journalDepth : Nat := 256
+/-- The refusals trie's depth (KERNEL-47 amendment 4): its keys are 41 bytes (a kind byte, a 32-byte
+digest, eight bytes). -/
+def refusalDepth : Nat := 328
+/-- The authenticated, in-window refusals one member may have recorded per window of `windowMax`
+heights (KERNEL-44): a flood costs the flooder this many records per window, then `refusalBudget`. -/
+def refusalsPerWindow : Nat := 16
 /-- The calls one method run may return (LEDGER-5, LANG-23: LANG's `callsTy` has this arity). -/
 def callsMax : Nat := 8
 /-- How deep a tree of calls may nest below the signed call (an object's call is depth 1). -/

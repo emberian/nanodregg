@@ -1982,3 +1982,93 @@ def rowPin (E : Env D) : Option RowLeaf → D                -- the leaf digest,
 - With no tombstone a key can be re-inserted after a retract, so a row pin can see A→retract→A. That is the same content-addressed-pin behaviour cells have, and it is not new.
 
 **Meta-critique.** LANG-44's "no World invariant" was believed because the precedent (the journal) has fixed-width keys. The check that caught it was asking what `Separates` needs, not whether the shape matches a landed one.
+
+## KERNEL-47 · KERNEL-44's refusals as built: ONE fold over steps, a step counter, and seven amendments to the proposal (KERNEL-14, 2026-10-18; ROOT's question "World.fold over Step vs a second fold", settled before building)
+
+**The question.** A recorded refusal changes the World (its refusals trie, its chain) without being a Turn. Either `World.fold` folds `List (Step D)` with `Step D := turn t | refusal r`, or `World.fold : List (Turn D)` stays and a `World.foldSteps` sits beside it.
+
+**Chosen: ONE fold over steps.** `World.step E w : Step D → Except (Reject D) (World D)` (`.turn t` is `World.admit`, `.refusal r` is `World.refuse`); `World.fold` folds `List (Step D)`; `World.RootedFold` is the generic `Rooted` over `World.step` (its definition is already generic in the transition).
+
+**Why not a second fold.**
+- Law 1 ("one of everything; one admission path") forbids it in words.
+- A theorem over a turn-only fold never matches a real run once one refusal is logged: the host's open, the follower's audit, the backups and `fold_reaches_host` all fold the REAL log. Every reached-World theorem would have to be restated over `foldSteps` anyway, and the turn-only theorems would survive as a special case nothing deployed instantiates: the vacuity reader's "never matches a real run".
+- A projection lemma ("foldSteps of l reaches what fold of turns l reaches, refusals and chain erased") fails on the chain: every turn link commits the roots digest, which now includes the refusals root. Erasing it changes every later link.
+- The churn of the one-fold choice is mechanical and premise-free: measured at 7679aac, `World.fold` is named on 149 lines in 35 files. Every one changes `List (Turn D)` to `List (Step D)`; none gains a premise; each induction gains one `refuse_*` case.
+
+**Amendment 1 · a step counter, `World.steps`.** `chain_binds` needs the two logs to have equal length; today equal HEIGHT gives that. Refusals do not advance height (the DoS argument), so equal height no longer gives equal step counts, and a shorter log's chain equal to a longer one's is a hash CYCLE, not a `Collision`.
+- So the World gains `steps : Nat` (every step, turn or refusal, adds one; every step is refused `overBound .counter` past `counterLimit`: `checkSteps`, LAST in `check` so no admit-refusal-naming theorem gains a premise, and SECOND in `checkRefusal` (after its bounds; no theorem names a `checkRefusal` error today, so none gains a premise; a later one must place it); tooth `checkSteps_refuses` / `admit_refused_at_step_ceiling` / `refuse_refused_at_step_ceiling`; `step_steps_lt` / `fold_steps_lt`; a carry starts it at the carried height, so `height ≤ steps` everywhere).
+- `fold_head_binds`, `fold_reaches_host` and `deployed_fold_reaches_host`: the premise `follower.height = host.height` is REPLACED by `follower.steps = host.steps`. Replaced, not added. HOST's follower compares (steps, chain) where it compared (height, chain).
+- `fold_height` becomes `w'.height = w.height + (Step.turns l).length`; new `fold_steps`: `w'.steps = w.steps + l.length`.
+
+**Amendment 2 · one chain domain, a tag byte.** KERNEL-44 proposed a refusal link in its own domain. `Collision` is a same-domain collision; a turn link equal to a refusal link across two domains is not one, so `chain_binds` would gain a domain-separation premise. Instead both links are `domChain` with a tag byte first (`0` turn, `1` refusal), as `domLeaf` already does for leaf kinds: `headLink E prev tag d rootsDigest`. `chain_binds` keeps `Collision` as its only escape.
+
+**Amendment 3 · the `Roots` digest (KERNEL-46 amendment 4) arrives now.** `rootsDigest = H(domRoots ‖ cellsRoot ‖ journalRoot ‖ refusalsRoot)`; the rows day adds one field. `World.roots` is that digest; every `RootedFold` note is one digest.
+
+**Amendment 4 · the refusals trie's key needs no hash.** KERNEL-44 keyed counts by `H(domRefusalCount ‖ member ‖ win)` beside txIds and called the two "disjoint hash domains". A txId equal to a count key is a cross-domain equality, not a `Collision`, so `refusals_separate` would carry a premise. Instead `RefusalSlot D := tx (id : D) | count (member : D) (win : Nat)`, routed by a kind bit then the raw bytes (`count`: the member's 32 bytes, then `u64 win`). Fixed width per kind, so prefix-free by construction; `refusals_separate` is unconditional, as `slots_separate` is; and recording costs no key hash. Depth 1 + 256 + 64.
+
+**Amendment 5 · only an IN-WINDOW refusal is recorded (a defect in KERNEL-44 as proposed AND as ROOT approved it).**
+- As proposed, an early call (notBefore > H + 1, refused `outsideWindow`) would be recorded at h and pruned at h + 2W, while its window may open later (notBefore is bounded only by `counterLimit`). That is a final verdict later admitted, the A→B→A class again.
+- Rule: a refusal is recorded iff the call is authenticated AND `notBefore ≤ H + 1 ≤ validUntil`. The leaf is `refused (H + 1) code`, so `kept` and `journalForgets` are KERNEL-33's arithmetic verbatim: validUntil ≤ notBefore + W ≤ H + 1 + W, inside the kept range, so the record outlives every height at which the call could be admitted.
+- An EARLY call is answered `outsideWindow`, unrecorded and NOT final (it may be resubmitted in its window). A LATE call is final by monotone height and needs no record (`expired`, as today).
+
+**Amendment 6 · finality is a check of `World.admit`, not a host behaviour.** `checkJournal` also refuses `refusedFinal code` when the refusals trie holds `tx txId`. Every follower's fold then refuses a host that admits a call it recorded refused. `submit` consults it up front (journal, then refusals) and answers the recorded name without re-deriving. `submit_refused_final` follows from admission, and the A→B→A arm is its tooth.
+- `World.refuse` checks its own preconditions so a host cannot log garbage: in window, the txId neither journaled nor recorded, the member's count below `Bounds.refusalsPerWindow` (else `refusalBudget`), the step counter. It touches only `refusals`, `chain`, `steps`: not cells, journal, height, allowance or weight.
+- The refusals prune runs in the turn commit beside the journal prune (one `retainAt` at multiples of W each): `tx` leaves by `kept`, `count` leaves while `win = H / W`.
+
+**Amendment 7 · what is NOT final, named.** Authenticated means: the World matches, the signature verifies, and the key is the member's CURRENT key (`checkKey`), or for a rotate the PRECOMMITTED next key (KERNEL-44 said "after keyRule passes", but `keyRule` skips the key check for `rotate`: anyone could sign a rotate naming M with their own key and spend M's sixteen slots, so M's genuine refusals would become unrecorded). Non-final replies: every (U) code, an early `outsideWindow`, and `refusalBudget` ("not judged"). Example: a call signed with M's precommitted next key, sent before the rotate, is `unknownKey` now and admissible after the rotate. PROTOCOL/CLIENT's attempt store must keep these open; only a recorded refusal ends an attempt. That is a cross-layer item for ROOT.
+
+**Price, as premises on landed theorems (enumerated; the vacuity read re-checks at landing).**
+- Statement change, no premise: every theorem naming `World.fold`, `RootedFold`, `chainOf`, `chainNext`/`headLink` or `World.roots` (149 + 29 + 14 + 41 + 25 lines, ~40 files; most in Kernel/Proofs, plus Host/Proofs/{Deployed,Serve,Backup}, Protocol/Proofs/Command, the journeys).
+- Premise REPLACED: `fold_head_binds` / `fold_reaches_host` / `deployed_fold_reaches_host` (height → steps).
+- Conclusion gains a conjunct: `admit_ok`'s journal clause (no `tx txId` in refusals).
+- `lookup_expired_final` / `absent_final`: "not journaled" becomes "neither journaled nor recorded", discharged by the same reached-World facts.
+- Cell readers: NONE gains a premise. `refuse` leaves `trie` untouched, so `entry`/`live`/`taken`, the inclusion theorems and `CellsFit` read across it unchanged. `RefusalsCanon` falls only on refusal readers.
+- Carry: `Carried` is unchanged; a carried World starts with empty refusals and `steps` = the carried height.
+
+**Teeth (ROOT's conditions).** (1) Sim arm `refusal-aba`: a stale call refused, the pin restored, the call resubmitted. On 7679aac it is ADMITTED (red); here it is `refusedFinal stale`. (2) WASTE row `refusals-per-member-window` (max over seeds ≤ 16) plus plant `refusal-17`: the 17th authenticated in-window refusal is `refusalBudget` and is not stored. Also rows `admit hashes-per-refusal` and `log bytes-per-refusal`. (3) The cell-reader census at landing. (4) The early-window arm: an early call is refused and not recorded, then admitted in its window. Plant: recording it makes that admission `refusedFinal`, and the arm reds.
+
+**As built (what the code says, beyond the amendments).**
+- `World.step` / `World.refuse` / `checkRefusal` / `commitRefusal` in Kernel/World.lean. `Receive.judge` (admitted | recorded | declined), `authenticated`, `authKey`, `refusedOf`, `Verdict.code` / `codeName`, and `submit` consulting `refusedAnswer` after the journal: all in Kernel/Receive/Submit.lean. `auditRefusal` re-judges a logged refusal and requires the very same record.
+- `commit` hands ONE empty-digest thunk to all three tries (KERNEL-35's rule, now per step across tries). Before this, an empty refusals trie cost its root one hash per turn, and `hashes-per-nullifier` read 7.567.
+- `refusalsDisjoint` (CODEC-8's ask): no transaction id is both recorded refused and journaled. `fold_refusalsDisjoint` holds of every fold, and CODEC refuses a base without it.
+- Theorems:
+  - Kernel/Proofs/Refuse.lean: `refuse_frame`, `refuse_entry` / `refuse_live` / `refuse_isSpent` / `refuse_journalAt`, `step_*`, `fold_keeps`, `admit_refusedFinal`, `refuse_recorded`.
+  - Kernel/Proofs/Refusals.lean: `RefusalsOk` (`refusalsOk_of_fits` / `refusalsFits_of_ok`, `fold_refusalsOk`), `refusalCount_le`, `fold_refused_retains`, `submit_refused_final`, `refused_answers` (PROTOCOL-33's shape), `judge_recorded_final`, `judge_recorded_authenticated`, `codeName_code`, `plant_refusals_unseparated`.
+  - Kernel/Proofs/Fold.lean: `fold_steps`, `fold_steps_height`, `fold_height_le_steps`, `headLink_inj`, `refusedDigest_inj`, `stepLink_inj`.
+  - Kernel/Proofs/Cells.lean: `refusals_separate` (unconditional), `rootsDigest_inj`.
+  - Kernel/Proofs/RootedDeployed.lean: `deployed_reach_refusalsOk`, `deployed_judge_recorded_final`.
+- Statements whose SHAPE changed, beyond `List Turn → List Step`:
+  - `fold_head_binds` / `fold_reaches_host` / `deployed_fold_reaches_host`: height-equal is replaced by steps-equal.
+  - `fold_height`: the height grows by `Step.turns l`.
+  - `fold_charge`, `fold_conserves`, `fold_nullifiers`, `fold_floors`: over `Step.turns l`.
+  - `absent_final`: `∃ t ∈ Step.turns l`.
+  - `head_roots` / `head_root` / `head_read_sound` / `head_absent_sound`: over a Step, with the head record `headLink E prev tag td rd` and `(hrd : rootsDigest E root' jroot' rroot' = rd)`. The phone opens one more hash; that is the Roots digest's price, KERNEL-46 amendment 4.
+  - `head_journal_read` / `head_journal_absent` / `head_absent_admitted` and the deployed forms: the same `hrd`.
+  - `carry_check`: the carried World checks every turn as the exported one would `{ w with refusals := .empty, steps := w.height }`. That is exact: a carry carries no refusals and restarts the counter. `check_origin_blind` is no longer blind to steps (`checkSteps` reads it).
+  - `admitted_elsewhere_refused`: gains a third disjunct, `refusedFinal`, for a second World whose refusals hold the id.
+  - `receive_reorigin` / `check_origin_blind`: generalized over refusals/steps.
+  - No cell reader gained a premise.
+- Teeth (kernel-sim, every arm in plantedArms, 64/64 seeds ALL PASS):
+  - `refusal-aba:refusedFinal`, with the PLANT `refusal-aba-plant:admitted`: the World without the record, i.e. the code before this, admits the A→B→A call.
+  - `refusal-final-fold:refusedFinal`: the follower's fold refuses a Host that admits it, at that step's index.
+  - `refusal-early:declined`, `refusal-early-kernel:outsideWindow`, `refusal-early-window:ok`, and the PLANT `refusal-early-plant:refusedFinal`.
+  - `refusal-rotate-kept:declined`, and the PLANT `refusal-rotate-plant:authenticated`: by `keyRule`, a stranger takes a slot.
+  - `refusal-budget:refusalBudget`: the 17th, unstored.
+  - `refusal-forged-code:eventMismatch`: the audit names a forged code.
+- WASTE rows:
+  - refuse hashes-per-refusal 26.829 (two inserts);
+  - refuse record-bytes-per-refusal 519.202;
+  - refuse refusals-per-member-window 16.0;
+  - admit hashes-per-touched-cell re-pinned 8.969 → 8.887 and hashes-per-nullifier 3.336 → 3.221, from the workload and the shared thunk.
+- Vacuity read (second agent, read-only): HOLD on F1, `refusalCount_le` bounded the COUNTER, not the records (a `commitRefusals` writing `.count 1` kept every invariant). Closed: `refuse_refusalCount` / `admit_refusalCount`, `fold_member_refusals` (the count grows by exactly the log's refusals of that member within a window), `fold_member_refusals_le` (the DoS bound over the LOG). Also taken: F2 `submit_refused_never` / `judge_recorded_never` (a recorded call is never admitted, ever: below the prune height `refusedFinal`, past it its own window has ended); F5 `reach_height_le_steps`; F4/F6 docstrings (refusal records are rate-bounded, not budget-charged; an unlogged refusal is invisible to audit); F8 this entry's carry line. Filed: F3 refusal inclusion theorem (the phone's refusal receipt), the early plant's no-op shape. F7 (and CODEC-8's/HOST-12's same find) CLOSED by `checkSteps` on both arms. Re-read of the post-LAND deltas (checkSteps, Checked.steps, carry_check, check_origin_blind, refusalFits 1 ≤ h): LAND, no cell reader gained a premise; its (a) the checkRefusal placement is worded above, (b) the missing checkSteps tooth is added. CODEC-8's reviewer (B) taken: `refusalFits` requires `1 ≤ h` (a fold records `h = height + 1`). Its (C), counting invariants a decoded base could violate (tx leaves ≤ steps − height; counts = this window's tx leaves), is DEFERRED to a cv task: unreachable by any fold, a forged base is a trusted-input question, and the trie-cardinality lemmas it needs are real work; CODEC-32's critique names it.
+- Found, not caused here: `kernel-sim --toy` reds `carry-budget-plant` on 9/16 seeds with this patch's refusal probe disabled too. At an 8-byte toy digest, no live cell outweighs a retire turn, which charges 32 per digest field, so the toy has no overflow to find. The toy run is not gated (gates/runs.tsv runs the deployed sim only), so this is a vacuous plant at toy parameters and not a red on main. It is filed as a cv task.
+
+**Critique.**
+- Amendment 5 corrects a defect ROOT approved in KERNEL-44: the proposal recorded early refusals, which a later window would have admitted. The approval read the proposal's DoS argument and its premise price. It did not read the window arithmetic, and neither did I until the kept rule was written down beside the window bound.
+- The step counter is a fourth position number beside height, chain and the journal's heights. It exists only because heights must not count refusals and chain binding needs a length. The alternative, a separate refusals chain, would make two heads a phone must trust.
+- Amendment 5 makes `outsideWindow` sometimes final (late) and sometimes not (early) under one name. Splitting it into `early` and `expired` would be clearer on the wire, but it changes a landed `Reject` constructor that LEDGER and PROTOCOL match; I keep one name and let the record decide finality.
+- `refusedFinal` in `World.admit` costs one trie read per turn: a read, not a hash, so the hashes-per-turn WASTE rows do not move.
+
+**Meta-critique.** Every amendment here came from asking what a landed theorem's proof would need, rather than whether the shape resembled a landed one. KERNEL-44 was written by the same method one step removed: it priced statement lines, not proof obligations. Amendments 1 and 2 are proof obligations it could not have seen without opening `chain_binds`.
+
+**Flag day (on the one day with CODEC-8 and HOST-12).** The World, base and carried codecs gain `refusals` and `steps`; the head link changes (tag byte, roots digest); the batch record carries steps; every Store re-geneses; `kernel/world-budget` and the head tags move.

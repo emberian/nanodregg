@@ -1,19 +1,21 @@
 /-
 # Protocol.Thin — a member that starts from a pinned base, not from genesis (PROTOCOL-14, option A)
 
-A thin member holds a PIN: a height and the digest of the World bytes at that height
+A thin member holds a PIN: a log position (a step count, KERNEL-47) and the digest of the World
+bytes at that position
 (`Host.Keys.worldDigest`, deployed `Hash.digest "nanodregg/host/base-digest/v1"`, unkeyed, HOST-15), which
 it trusts out of
 band: its own earlier fold, or a full follower's word (that channel is Ember's, unbuilt). It pages
 the writer's newest base with `read` (`readReplyLayout`) and `accept` decides each page. It trusts
 NOTHING the page states: the assembled bytes are adopted only if they hash to the pin and decode to
-a World at the pinned height (`Protocol.Proofs.Thin.accept_done`). A forged byte anywhere in the
+a World at the pinned step count (`Protocol.Proofs.Thin.accept_done`). A forged byte anywhere in the
 served base is `baseMismatch`. From the adopted World on, the member is an ordinary follower: the
 same catch-up re-derives every event after the base (PROTOCOL-4), so consent is full from the pin
 on; what it trusts is the history before it.
 
-The pin binds the World's every byte, so its height AND its chain (both in the World bytes): the
-decoded World's height is checked against the pin's, and its chain is what the next `log` page
+The pin binds the World's every byte, so its step count, height AND chain (all in the World bytes):
+the decoded World's step count is checked against the pin's, and the member's log catch-up starts
+from it (never from the height: after a recorded refusal the two differ, PROTOCOL-41), and its chain is what the next `log` page
 must continue (`chainMismatch` otherwise). Bytes are checked against the pin BEFORE they are decoded: undecodable bytes that hash to the pin
 are the pin's fault (`baseUndecodable`), never a guess about the writer.
 -/
@@ -22,18 +24,19 @@ import Protocol.Command.Text
 
 namespace Nanodregg.Protocol.Thin
 
-/-- What a thin member trusts: the World at `height` has World bytes hashing to `digest`. -/
+/-- What a thin member trusts: the World at log position `steps` has World bytes hashing to
+`digest`. -/
 structure Pin where
-  height : Nat
+  steps : Nat
   digest : ByteArray
   deriving DecidableEq
 
-/-- How a base is read: the World codec, a World's height, the digest of World bytes a pin names
+/-- How a base is read: the World codec, a World's step count, the digest of World bytes a pin names
 (the writer's `Keys.worldDigest`: deployed, HOST-15's cSHAKE256; the Sim's, a toy), and the bound
 on a World's bytes. -/
 structure Base (W : Type) where
   world : Codec.Stream W
-  heightOf : W → Nat
+  stepsOf : W → Nat
   digest : ByteArray → ByteArray
   bytesMax : Nat
 
@@ -46,7 +49,7 @@ structure Download where
 
 /-- One `read` page, as decoded (`readReplyLayout`). -/
 structure Page where
-  height : Nat
+  steps : Nat
   total : Nat
   digest : ByteArray
   chain : ByteArray
@@ -55,25 +58,25 @@ structure Page where
 def Page.ofBytes (b : ByteArray) : Option Page :=
   match readReplyFrame.decode b with
   | .ok (h, t, d, c, x, ()) => do
-      pure { height := ← Text.ofU64 h.1, total := ← Text.ofU64 t.1, digest := d.1, chain := c.1,
+      pure { steps := ← Text.ofU64 h.1, total := ← Text.ofU64 t.1, digest := d.1, chain := c.1,
              bytes := x.1 }
   | .error _ => none
 
 /-- A page's wire bytes, or `none` when a field does not fit a frame. -/
 def Page.toBytes (p : Page) : Option ByteArray := do
   let f := Text.fit Bounds.frameBytesMax
-  pure (readReplyFrame.bytes (← f (Text.u64 p.height), ← f (Text.u64 p.total), ← f p.digest,
+  pure (readReplyFrame.bytes (← f (Text.u64 p.steps), ← f (Text.u64 p.total), ← f p.digest,
     ← f p.chain, ← f p.bytes, ()))
 
 /-- Why a base is not adopted (law 7). -/
 inductive Refusal
   /-- the `read` reply does not decode as a page -/
   | badPage
-  /-- the writer's newest base is at another height than the pin: a newer seal (get a fresh pin)
-  or a writer serving an older one -/
-  | baseMoved (height : Nat)
+  /-- the writer's newest base is at another log position than the pin: a newer seal (get a fresh
+  pin) or a writer serving an older one -/
+  | baseMoved (steps : Nat)
   /-- the page states another digest, or the assembled bytes do not hash to the pin, or they
-  decode to a World at another height: a forged or corrupted base -/
+  decode to a World at another step count: a forged or corrupted base -/
   | baseMismatch
   /-- a page that does not continue the download: another total, no bytes, or past the total -/
   | pageMismatch
@@ -82,11 +85,11 @@ inductive Refusal
   /-- bytes that hash to the pin do not decode as a World: the pin itself names no World -/
   | baseUndecodable
   /-- follow's World is already at or past the pin: nothing to adopt -/
-  | notBehind (height : Nat)
+  | notBehind (steps : Nat)
   /-- follow's own Store already holds Turns past genesis: an adopted base over them would leave
-  two histories in one Store, follow's own up to `height` and the writer's from the pin, with the
-  heights between in neither (HOST-3's review; law 1). A thin member adopts from a fresh Store. -/
-  | notAtGenesis (height : Nat)
+  two histories in one Store, follow's own up to `steps` and the writer's from the pin, with the
+  steps between in neither (HOST-3's review; law 1). A thin member adopts from a fresh Store. -/
+  | notAtGenesis (steps : Nat)
   /-- the command read its page budget; the download is kept and the member runs it again -/
   | incomplete (got total : Nat)
   /-- the adopted World is another World than the one the member was invited to (KERNEL-24) -/
@@ -129,17 +132,17 @@ def totalMoved (pin : Pin) (dl : Option Download) (total : Nat) : Bool :=
   | none => false
 
 /-- The last check of a download: the bytes hash to the pin, then decode to a World at the pinned
-height. -/
+step count. -/
 def finish (B : Base W) (pin : Pin) (got : ByteArray) : Except Refusal (Progress W) :=
   if B.digest got ≠ pin.digest then .error .baseMismatch else
   match B.world.decode got with
   | .error _ => .error .baseUndecodable
-  | .ok w => if B.heightOf w ≠ pin.height then .error .baseMismatch else .ok (.done w)
+  | .ok w => if B.stepsOf w ≠ pin.steps then .error .baseMismatch else .ok (.done w)
 
 /-- Decide one page of the base download for `pin`, given the download so far. -/
 def accept (B : Base W) (pin : Pin) (dl : Option Download) (p : Page) : Except Refusal (Progress W) :=
   let got := ((held pin dl).map (·.got)).getD ByteArray.empty
-  if p.height ≠ pin.height then .error (.baseMoved p.height)
+  if p.steps ≠ pin.steps then .error (.baseMoved p.steps)
   else if p.digest ≠ pin.digest then .error .baseMismatch
   else if B.bytesMax < p.total then .error (.baseTooLarge p.total)
   else if totalMoved pin dl p.total then .error .pageMismatch

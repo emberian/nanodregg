@@ -2,23 +2,24 @@
 # Host.Batch — the loop's whole decision, as one pure function
 
 `admitBatch` takes the World and the batch's requests, in arrival order, and returns the World
-after them, the Turns to append (`staged`) and one reply per request. Every request is either
-answered from the World (`reply`) or asks for a Turn to be admitted (`admit`); an admitted Turn
-advances the World the next request sees, a refused one leaves it unchanged (`admit` is
-fail-closed: it returns no World).
+after them, the steps to append (`staged`) and one reply per request. Every request is either
+answered from the World (`reply`), deferred past the sync (`defer`), or commits a step the handler
+has already taken (`commit`: the step and the World after it, from `Kernel.Receive.judge`, which
+admits a Turn or records a refusal, KERNEL-44); a committed step advances the World the next request
+sees, every other answer leaves it unchanged.
 
 The loop appends `staged` as one batch record, fsyncs, and only then sends `replies`.
 
-Generic in the World `W`, Turn `T`, refusal `R` and note `N`, so the simulation runs the same
-function the Host runs; the Host instantiates `admit` with `Kernel.World.admit E` and `note` with
-`Kernel.World.roots E` (the cells' and the journal's roots). Each staged Turn is paired with the note of the World right after it (HOST-29:
-a batch record states each Turn's roots, so a page reader advances the chain without admitting).
+Generic in the World `W`, step `T`, request `Q` and note `N`, so the simulation runs the same
+function the Host runs; the Host instantiates `T` with `Kernel.Step D` and `note` with
+`Kernel.World.roots E` (one digest of the cells', journal's and refusals' roots). Each staged step is
+paired with the note of the World right after it (HOST-29: a batch record states each step's roots,
+so a page reader advances the chain without taking any step).
 
-Theorems (`Host.Proofs.Batch`): `admitBatch_append` (batch boundaries do not change the state or
-the log), `staged_rooted` (the staged pairs are a `Kernel.Rooted` run from the starting World to
-exactly the World the Host keeps: every Turn admits and every note is the one admission reached;
-what the Host logs means what the Host holds), and `replies_size` (one reply per request, none
-dropped).
+Theorems (`Host.Proofs.Batch`): `run_append` (batch boundaries do not change the state or
+the log), `staged_rooted` (for a transition every committed step satisfies, the staged pairs are a
+`Kernel.Rooted` run from the starting World to exactly the World the Host keeps: what the Host logs
+means what the Host holds), and `replies_size` (one reply per request, none dropped).
 -/
 import Kernel.World
 
@@ -41,8 +42,9 @@ inductive Deferred where
 inductive Answer (W T : Type) where
   /-- answered from the World as it stands -/
   | reply (status : UInt8) (payload : ByteArray)
-  /-- admit this Turn; on success the reply is built from the World after it -/
-  | admit (turn : T) (receipt : W → ByteArray)
+  /-- commit this step, already taken: `w'` is the World after it, and the reply is
+  `(status, payload)` -/
+  | commit (step : T) (w' : W) (status : UInt8) (payload : ByteArray)
   /-- answered from the durable state after the batch's sync (so it holds only durable records,
   the batch's own included) -/
   | defer (d : Deferred)
@@ -52,47 +54,41 @@ structure Request (Q : Type) where
   conn : UInt32
   body : Q
 
-/-- What a batch produces besides the World: `staged` holds each admitted Turn with its note. -/
+/-- What a batch produces besides the World: `staged` holds each committed step with its note. -/
 structure Out (S : Type) where
   staged : Array S := #[]
   replies : Array Reply := #[]
   /-- the replies still to be filled after the sync: (reply index, what) -/
   pages : Array (Nat × Deferred) := #[]
 
-/-- The loop's parameters: the one transition, the note a staged Turn carries (the World's root
-after it), the request handler, and how a refusal is answered (a status byte and payload;
-`replayed` answers with the original receipt). -/
-structure Machine (W T R Q N : Type) where
-  admit : W → T → Except R W
+/-- The loop's parameters: the note a staged step carries (the World's roots after it), the request
+handler (which takes every step it commits: `Host.Proofs.Batch.staged_rooted` names the transition
+it must agree with), and the status of a deferred reply. -/
+structure Machine (W T Q N : Type) where
   note : W → N
   handle : W → Q → Answer W T
-  refuse : W → T → R → UInt8 × ByteArray
   ok : UInt8
 
-variable {W T R Q N : Type}
+variable {W T Q N : Type}
 
 /-- One request. -/
-def Machine.step (m : Machine W T R Q N) (acc : W × Out (T × N)) (q : Request Q) : W × Out (T × N) :=
+def Machine.step (m : Machine W T Q N) (acc : W × Out (T × N)) (q : Request Q) : W × Out (T × N) :=
   let (w, out) := acc
   match m.handle w q.body with
   | .reply status payload => (w, { out with replies := out.replies.push ⟨q.conn, status, payload⟩ })
   | .defer d =>
     (w, { out with replies := out.replies.push ⟨q.conn, m.ok, ByteArray.empty⟩,
                    pages := out.pages.push (out.replies.size, d) })
-  | .admit t receipt =>
-    match m.admit w t with
-    | .ok w' => (w', { out with staged := out.staged.push (t, m.note w'),
-                                replies := out.replies.push ⟨q.conn, m.ok, receipt w'⟩ })
-    | .error r =>
-      let (status, payload) := m.refuse w t r
-      (w, { out with replies := out.replies.push ⟨q.conn, status, payload⟩ })
+  | .commit t w' status payload =>
+    (w', { out with staged := out.staged.push (t, m.note w'),
+                    replies := out.replies.push ⟨q.conn, status, payload⟩ })
 
 /-- A batch, in arrival order, from an accumulator. -/
-def Machine.run (m : Machine W T R Q N) (acc : W × Out (T × N)) (qs : List (Request Q)) : W × Out (T × N) :=
+def Machine.run (m : Machine W T Q N) (acc : W × Out (T × N)) (qs : List (Request Q)) : W × Out (T × N) :=
   qs.foldl m.step acc
 
 /-- A batch from the World as it stands. -/
-def Machine.admitBatch (m : Machine W T R Q N) (w : W) (qs : List (Request Q)) : W × Out (T × N) :=
+def Machine.admitBatch (m : Machine W T Q N) (w : W) (qs : List (Request Q)) : W × Out (T × N) :=
   m.run (w, {}) qs
 
 end Nanodregg.Host

@@ -30,7 +30,7 @@ open Nanodregg.Kernel Nanodregg.Codec
 variable {D : Type} [Ord D] [DecidableEq D] [Std.TransOrd D] [Std.LawfulEqOrd D]
 
 /-- **A fold keeps the budget below 2^64**: storage plus allowance never grows (`fold_conserves`). -/
-theorem fold_budget_lt {E : Env D} {w w' : World D} {l : List (Turn D)} (hc : w.Canon E) (hs : w.Slotted E)
+theorem fold_budget_lt {E : Env D} {w w' : World D} {l : List (Step D)} (hc : w.Canon E) (hs : w.Slotted E)
     (hb : w.weight + w.allowance < 2 ^ 64) (h : World.fold E w l = .ok w') :
     w'.weight + w'.allowance < 2 ^ 64 := by
   have := fold_conserves hc hs h
@@ -52,7 +52,7 @@ theorem carry_budget {X : Ctx D} {name nonce : ByteArray} {f : D} {c : Carried D
 
 /-- **Every World a checked genesis reaches is below the budget**, no premise. -/
 theorem genesis_fold_budget_lt {X : Ctx D} {name nonce : ByteArray} {allowance : Nat}
-    {founders : List (ByteArray × D)} {g w : World D} {l : List (Turn D)}
+    {founders : List (ByteArray × D)} {g w : World D} {l : List (Step D)}
     (hg : genesis X name nonce allowance founders = .ok g) (hl : World.fold X.env g l = .ok w) :
     w.weight + w.allowance < 2 ^ 64 := by
   have hb := genesis_budget hg
@@ -70,7 +70,7 @@ theorem carry_slotted {X : Ctx D} {name nonce : ByteArray} {w w' : World D} (hs 
 /-- **Every World a checked carry reaches is below the budget**, given what the carried codec gives
 of the carried trie on import (canonical, every slot holding the leaf of its kind). -/
 theorem carry_fold_budget_lt {X : Ctx D} {name nonce : ByteArray} {f : D} {c : Carried D} {w w' : World D}
-    {l : List (Turn D)} (h : carry X name nonce f c = .ok w) (hc : w.Canon X.env) (hs : w.Slotted X.env)
+    {l : List (Step D)} (h : carry X name nonce f c = .ok w) (hc : w.Canon X.env) (hs : w.Slotted X.env)
     (hl : World.fold X.env w l = .ok w') : w'.weight + w'.allowance < 2 ^ 64 :=
   fold_budget_lt hc hs (carry_budget h) hl
 
@@ -80,10 +80,10 @@ so its allowance is inside the World codec's `u64` and every seal of it reads ba
 a World a genesis reached (`w₀`, the lineage); `host import` of a file reaches the same bound through
 the carried codec (`carry_fold_budget_lt`, HOST's `Kept`). No premise. -/
 theorem deployed_budget_lt (program : Program Digest) {name nonce : ByteArray} {allowance : Nat}
-    {founders : List (ByteArray × Digest)} {g w : World Digest} {l : List (Turn Digest)}
+    {founders : List (ByteArray × Digest)} {g w : World Digest} {l : List (Step Digest)}
     (hg : genesis (ctx program) name nonce allowance founders = .ok g) (hl : World.fold env g l = .ok w) :
     (w.weight + w.allowance < 2 ^ 64) ∧
-      ∀ {name' nonce' : ByteArray} {w₁ w₂ : World Digest} {l' : List (Turn Digest)},
+      ∀ {name' nonce' : ByteArray} {w₁ w₂ : World Digest} {l' : List (Step Digest)},
         carry (ctx program) name' nonce' w.origin w.carried = .ok w₁ → World.fold env w₁ l' = .ok w₂ →
           w₂.weight + w₂.allowance < 2 ^ 64 := by
   refine ⟨genesis_fold_budget_lt (X := ctx program) hg hl, fun {_ _ w₁ _ _} hc hl' => ?_⟩

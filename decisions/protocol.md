@@ -1009,3 +1009,61 @@ than its docstring names. The `baseMoved` red caught it only because the expecta
 **Meta-critique.** The filtered list was the shortest code, and it took writing the critique to see that it defaults open. Then the critique proposed fixing it "in the next commit", which is the containment-first sequencing CLAUDE.md names. It is fixed in this one.
 
 **Status.** BUILT (this commit): the surface, its theorems (incl. `mem_stdioWords_iff`, for any string nd receives) and the emitted names. `noRotation` and `peerRefused` are names only here; CLIENT's custody and nd-supervise enforce them, with their plants. A developer can still write `true` for a new verb; the total match makes that a decision, never a default. Rows ALL PASS 21.
+
+## PROTOCOL-41 · a reply is FINAL only when the refusal is recorded; `Status.declined` for every other refusal of a submit; the log is a list of steps, positioned by step count (2026-10-18, PROTOCOL-8; KERNEL-44/47, the refusals day, with HOST-12)
+**Decision.**
+- **Finality is read from the World, by one function** (`Protocol.Settle.verdictReply`, called by `Host.Serve`).
+  - A submit's refusal is FINAL (status `refused`) when:
+    - `Receive.judge` recorded it now (`refused NAME`);
+    - its transaction id already holds a recorded refusal (`refused NAME`, with the RECORDED name from `codeName`): the resubmit and the A→B→A case;
+    - or its window has passed (`validUntil ≤ height`: final by height, as `expired` already was).
+  - Every other refusal of a submit is `Status.declined` (5), `declined NAME`, NOT final:
+    - every unauthenticated code (wrongWorld, badSignature, unknownKey, unpinned at the key read, undecodableCall on a submit);
+    - an early `outsideWindow`;
+    - `refusalBudget`.
+  - A resubmit of a recorded call leaves `judge` as `declined (refusedFinal code)`, so finality cannot be read from the Outcome constructor or from the verdict's name. It is read from the record and the height.
+- **The attempt store (PROTOCOL-4 / PROTOCOL-17).**
+  - `Seen.declined` → `Action.declined`: the run ends, and the attempt stays OPEN (frozen, unsettled; the next run looks it up). Example: a call signed with the precommitted next key is `unknownKey` before the rotate and admissible after it.
+  - A lookup is never `declined`; one that is is `badReply`.
+  - `CommandExit.declined` = 53, restart class, printed `declined NAME`.
+  - Custody keeps an armed rotation armed on `declined`.
+  - Theorems:
+    - `Settle.final_iff_recorded`: status `refused` ↔ recorded now ∨ recorded before ∨ late;
+    - `Settle.final_recorded`: a final in-window reply leaves the call recorded in the World the Host keeps, under the reply's name. That record is what `Kernel.Receive.judge_recorded_final` / `fold_refused_retains` carry forward;
+    - `Settle.declined_open`: declined ⇒ nothing recorded, the World unchanged, the window not passed;
+    - `Attempt.next_refused_iff`: only a `refused` status ends an attempt as refused;
+    - `next_declined`, `next_lookup_declined`.
+- **The log is a list of steps (KERNEL-47).**
+  - A page event is a tag byte and a signed call: 0 an admitted Turn, 1 a recorded refusal.
+  - `logReplyLayout` = (events, steps, chain, tipSteps, tipHeight). Positions (`start`, a page's end) count steps. `tipHeight` is what follow's next envelope window is signed from (notBefore = upTo − window must not exceed the writer's height).
+  - Follow re-derives a Turn event by `submit`, and a kernel rejection of a derived Turn now surfaces by the kernel's name: a writer that commits a recorded call is caught `refusedFinal`.
+  - Follow re-derives a refusal event by `judge`, which must RECORD it (`auditRefusal`'s rule).
+  - `absorbPage` binds (steps, chain), the pair `fold_reaches_host` binds.
+  - `Persist.steps` carries (Step, roots digest), the shape of a batch record.
+  - Theorems:
+    - `absorbStep_step`, `absorb_admits`, `absorbPage_admits`, `step_persists_admitted`, `step_persists_folds`, restated over `RootedFold` of steps with no new premise;
+    - `absorbPage_steps`;
+    - `absorbStep_refusedFinal` (the plant's catch, by name);
+    - `absorbStep_refusal_recorded`: an absorbed refusal answers its call `refusedFinal` with the code whose name is the verdict's.
+- **Row `refused`** (22nd; rows ALL PASS 22 on the joint tree): stale-and-recorded; lookup by name; A→B→A resubmit still `refused stale`; sixteen recorded then `declined refusalBudget` (lookup `absent`); past the window `uncertain forgotten`. Plant `admitsRecorded` (a writer that commits a recorded call while answering `refused stale`) is caught at line 18 by the member's follower: `refused refusedFinal`.
+- Rows whose submit refusals were unauthenticated now read `declined NAME` (the cross-World replay, the forged call after a carry). This is a restatement of the same check under the new status, not a weakening.
+- **Pins and base pages count steps.** `readReplyLayout`'s first field is `steps`; `Thin.Pin` = {steps, digest}; `Thin.Base.stepsOf`; the verb is `adopt STEPS DIGEST`; `attest` binds `NAME.steps`. A thin member's catch-up starts from the adopted World's steps. Its first adopt envelope is signed for one window from height 0 (a pin no longer names a height), so a writer further on answers `expired H` and follow re-signs once (PROTOCOL-19's path; thinStale still catches its plant at 15).
+  - Row `refused` line 19 adopts a base whose steps exceed its height.
+  - Probe (not landed): paging from `w.height` instead of `w.steps` turns journey line 15 and refused line 19 red (`eventMismatch`).
+- **The client half** (cross-layer client, ROOT for CLIENT): CLIENT-25.
+- **Emit**: the emitted `Action` enum is `Attempt.Action.all` (`Action.mem_all`), no longer a list restated in Emit/Rust.lean.
+
+**Alternatives.**
+- Reuse `uncertain NAME` for the non-final refusals. Rejected: uncertain means "the writer cannot say whether it committed". Here the writer can say: it has not, and nothing is recorded. The attempt store would also lookup-then-resubmit in the same run, up to `sendsMax`, for no new information.
+- Classify finality by name, with a client-side list of non-final names. Rejected: `outsideWindow` is final when late and open when early, and a resubmit's name is `refusedFinal`. Only the World knows, and PROTOCOL-6's lesson stands: decide by status.
+- Keep heights as log positions and add a step count only for the check. Rejected: refusals do not advance height, so a position in heights cannot name the step after a refusal.
+
+**Critique.**
+- `declined` keeps open attempts that can never commit (a badSignature is deterministic). A timer re-running them burns lookups until the window passes and the lookup turns `expired`. That is bounded by the window and by `sendsMax` per run, but it is waste.
+- The late check is `validUntil ≤ height` at the writer's pre-state. A call judged at H with validUntil = H+1 is in-window and recorded, so the boundary agrees with `checkRefusal`. Still, it is two statements of one window (kernel and Settle), with no theorem tying them.
+- The row's 16 forges are all `stale`. The budget is exercised by one refusal kind only.
+- Two expectations moved from `refused wrongWorld` to `declined wrongWorld` (carry line 11, wrongWorld line 7). They are correct and not a weakening: the check still refuses by the same name at the same line. Only the status changes, because an unauthenticated refusal is recorded nowhere and so cannot be final.
+
+**Meta-critique.** The first sketch classified by the Outcome constructor (recorded ⇒ final). Reading `judge` showed that a resubmit of a recorded call comes out `declined`, and that sketch would have answered the A→B→A resubmit as NOT final: the defect this day exists to close, reintroduced at the wire.
+
+**Status.** BUILT in the refusals day (KERNEL-14's one commit). CLIENT owes the attempt store's `declined` arm (ROOT relays). The emitted status and command-exit tables move: `generated.rs` re-emits.

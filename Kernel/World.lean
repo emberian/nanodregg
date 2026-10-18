@@ -1,8 +1,11 @@
 /-
-# Kernel.World — the World, its one transition `World.admit`, and `fold`
+# Kernel.World — the World, its one transition `World.step`, and `fold`
 
-`World.admit` IS the receive path (law 1): the Host commits exactly what it returns, the
-follower and a reopening Host fold the log with it, and nothing else changes a World.
+`World.admit` IS the receive path (law 1): the Host commits exactly what it returns. A log is a
+list of steps (KERNEL-47): an admitted Turn, or a recorded refusal (`World.refuse`, KERNEL-44: an
+authenticated, in-window refusal, charged to its member's window budget, final for its transaction
+id). `World.step` is the one transition of a log; the follower and a reopening Host fold the log
+with it, and nothing else changes a World.
 
 The kernel is generic over the digest `D` and the hash (`Env`) so that theorems can state a
 hash collision as an explicit disjunct, and the simulation can run toy parameters through the
@@ -74,6 +77,13 @@ inductive Reject (D : Type)
   | notConserved (denom : ByteArray)
   /-- the turn changes a denomination's floor sum, and does not bear the denomination -/
   | floorNotConserved (denom : ByteArray)
+  /-- the transaction id holds a recorded refusal (KERNEL-44, KERNEL-47 amendment 6): a refused call
+  is final within its window, so it is never admitted later (a pin returning A→B→A changes nothing);
+  `code` is the recorded refusal's code -/
+  | refusedFinal (code : Nat)
+  /-- the member's authenticated, in-window refusals this window have reached
+  `Bounds.refusalsPerWindow`: the refusal is not recorded (it is NOT a verdict on the call) -/
+  | refusalBudget
   deriving DecidableEq, Repr
 
 /-- The refusal's name on the wire (law 7): its constructor's, arguments dropped
@@ -101,6 +111,8 @@ def Reject.name {D : Type} : Reject D → String
   | .belowFloor _ => "belowFloor"
   | .notConserved _ => "notConserved"
   | .floorNotConserved _ => "floorNotConserved"
+  | .refusedFinal _ => "refusedFinal"
+  | .refusalBudget => "refusalBudget"
 
 variable {D : Type} [Ord D]
 
@@ -124,13 +136,74 @@ abbrev Cells (D : Type) := Trie.T (Slot D) Leaf D
 the one trie type (`journalSpec`), routed by the id's bytes, under its own root. -/
 abbrev Journal (D : Type) := Trie.T D (Nat × D) D
 
+/-- A key of the World's refusals (KERNEL-44, KERNEL-47 amendment 4), the THIRD instance of the one
+trie type: a refused transaction id, or a member's refusal count for one window (`windowMax`
+heights). Routed by a kind byte and the raw bytes (`refusalKeyBytes`), fixed width, no hash. -/
+inductive RefusalSlot (D : Type)
+  | tx (id : D)
+  | count (member : D) (win : UInt64)
+  deriving DecidableEq
+
+/-- What the refusals trie holds: at a `tx` key, the height the call was refused AT (the World's
+height plus one, the height it would have been admitted at, as a journal entry's) and the
+refusal's code; at a `count` key, how many refusals the member has had recorded in that window. -/
+inductive RefusalLeaf
+  | refused (h code : Nat)
+  | count (n : Nat)
+  deriving DecidableEq
+
+abbrev Refusals (D : Type) := Trie.T (RefusalSlot D) RefusalLeaf D
+
+/-- A recorded refusal, as the log carries it (KERNEL-44): the call's transaction id, its signer,
+its window, the refusal's code, and the signed call's bytes (the follower's audit decodes them and
+re-derives the same refusal). -/
+structure Refused (D : Type) where
+  txId : D
+  member : D
+  notBefore : Nat
+  validUntil : Nat
+  code : Nat
+  event : ByteArray
+  deriving DecidableEq
+
+/-- One step of a log (KERNEL-47): an admitted Turn, or a recorded refusal. -/
+inductive Step (D : Type)
+  | turn (t : Turn D)
+  | refusal (r : Refused D)
+  deriving DecidableEq
+
+/-- The height a step reaches: one more after a Turn, the same after a refusal. -/
+def Step.dheight {D : Type} : Step D → Nat
+  | .turn _ => 1
+  | .refusal _ => 0
+
+/-- The Turns of a log, in order. -/
+def Step.turns {D : Type} : List (Step D) → List (Turn D)
+  | [] => []
+  | .turn t :: l => t :: Step.turns l
+  | .refusal _ :: l => Step.turns l
+
+/-- The recorded refusals of a log, in order. -/
+def Step.refusals {D : Type} : List (Step D) → List (Refused D)
+  | [] => []
+  | .turn _ :: l => Step.refusals l
+  | .refusal r :: l => r :: Step.refusals l
+
 structure World (D : Type) [Ord D] where
   /-- every cell entry (live or tombstone) and every spent nullifier, under one root -/
   trie : Cells D
   /-- transaction id ↦ (height, turn digest): the replay index, a trie with its own root, which the
   chain commits beside the cells' root (KERNEL-41) -/
   journal : Journal D
+  /-- the recorded refusals (KERNEL-44): refused transaction ids and per-member window counts, a
+  trie with its own root, committed beside the other two -/
+  refusals : Refusals D
   height : Nat
+  /-- every step the World has taken (KERNEL-47 amendment 1): one per admitted Turn and one per
+  recorded refusal. A refusal does not advance `height` (windows are in heights), so two logs of one
+  height can differ in length; `steps` is the length the chain binds. A genesis starts it at 0, a
+  carry at the carried height, so `height ≤ steps` everywhere. -/
+  steps : Nat
   /-- the log chain: `genesisChain origin` at the World's start (a genesis at height 0, or a carry
   at the carried height, KERNEL-29), then one link per admitted turn -/
   chain : D
@@ -169,6 +242,13 @@ def domLeaf : String := "nanodregg/kernel/trie-leaf/v1"
 /-- A journal leaf's value digest (`journalDigest`, KERNEL-41): its own domain, so a journal entry's
 digest is never a cell leaf's but by a collision. -/
 def domJournal : String := "nanodregg/kernel/journal-leaf/v1"
+/-- A refusals leaf's value digest (`refusalDigest`, KERNEL-44): a kind byte first. -/
+def domRefusal : String := "nanodregg/kernel/refusal-leaf/v1"
+/-- A recorded refusal's digest in the chain (`refusedDigest`). -/
+def domRefused : String := "nanodregg/kernel/refused/v1"
+/-- The digest of a World's roots, the one value a head link commits of its state (KERNEL-46
+amendment 4, KERNEL-47 amendment 3). -/
+def domRoots : String := "nanodregg/kernel/roots/v1"
 
 /-- An index as CODEC's four little-endian bytes (indexes are below `Bounds.createsMax`). -/
 def index32 (n : Nat) : ByteArray := Nanodregg.Codec.Stream.u32.bytes (UInt32.ofNat n)
@@ -180,17 +260,34 @@ def pinOf (E : Env D) : Option Cell → D
 
 def turnDigest (E : Env D) (t : Turn D) : D := E.hash domTurn (E.turnBytes t)
 
-/-- The head link over its four parts: the previous head, a turn digest, and the two roots after the
-turn (the cells' and the journal's). -/
-def headLink (E : Env D) (prev td root' jroot' : D) : D :=
-  E.hash domChain (E.bytes prev ++ E.bytes td ++ E.bytes root' ++ E.bytes jroot')
+/-- What a recorded refusal commits in the chain: every field, the counters as CODEC's eight
+little-endian bytes (injective below 2^64, which `World.refuse` checks), the event last. -/
+def refusedBytes (E : Env D) (r : Refused D) : ByteArray :=
+  E.bytes r.txId ++ E.bytes r.member ++ Nanodregg.Codec.Stream.nat64.bytes r.notBefore ++
+    Nanodregg.Codec.Stream.nat64.bytes r.validUntil ++ Nanodregg.Codec.Stream.nat64.bytes r.code ++ r.event
 
-/-- The next chain head commits to the previous one, the turn, and BOTH ROOTS AFTER the turn
-(KERNEL-23 (d), KERNEL-41): `roots'` is (the cells' root, the journal's root). A phone that trusts
-one head checks `(prev, turnDigest, root', jroot')` against it, then verifies cells against `root'`
-and transaction ids against `jroot'`. -/
-def chainNext (E : Env D) (prev : D) (t : Turn D) (roots' : D × D) : D :=
-  headLink E prev (turnDigest E t) roots'.1 roots'.2
+def refusedDigest (E : Env D) (r : Refused D) : D := E.hash domRefused (refusedBytes E r)
+
+/-- The one digest of a World's roots after a step: the cells', the journal's, the refusals'. -/
+def rootsDigest (E : Env D) (root jroot rroot : D) : D :=
+  E.hash domRoots (E.bytes root ++ E.bytes jroot ++ E.bytes rroot)
+
+/-- The head link: a kind byte (0 a Turn, 1 a recorded refusal: one domain, so a turn link equal to
+a refusal link is a `Collision`, KERNEL-47 amendment 2), the previous head, the step's digest, and
+the roots digest after the step. -/
+def headLink (E : Env D) (prev : D) (tag : UInt8) (d rd : D) : D :=
+  E.hash domChain (⟨#[tag]⟩ ++ E.bytes prev ++ E.bytes d ++ E.bytes rd)
+
+/-- The next chain head after an admitted Turn commits to the previous one, the Turn, and the ROOTS
+AFTER it (KERNEL-23 (d), KERNEL-41, KERNEL-47): `rd` is `rootsDigest` of the cells', journal's and
+refusals' roots. A phone that trusts one head checks `(prev, turnDigest, rd)` against it, opens `rd`
+to the three roots, then verifies cells, transaction ids or refusals against them. -/
+def chainNext (E : Env D) (prev : D) (t : Turn D) (rd : D) : D :=
+  headLink E prev 0 (turnDigest E t) rd
+
+/-- The next chain head after a recorded refusal (KERNEL-44): the same link, kind byte 1. -/
+def refusalLink (E : Env D) (prev : D) (r : Refused D) (rd : D) : D :=
+  headLink E prev 1 (refusedDigest E r) rd
 
 /-! ## The trie's parameters: how a slot routes and what a leaf commits -/
 
@@ -250,6 +347,40 @@ def journalSpec (E : Env D) : Trie.Spec D (Nat × D) D where
   kbytes := E.bytes
   vdigest := journalDigest E
 
+/-- A refusals key's bytes (KERNEL-47 amendment 4): a kind byte, the id's (or member's) bytes, then
+eight bytes (zero for `tx`, the window's little-endian for `count`). One width for both kinds, so
+the keys are prefix-free with no hash and no World invariant (`refusals_separate`). -/
+def refusalKeyBytes (E : Env D) : RefusalSlot D → ByteArray
+  | .tx id => ⟨#[0]⟩ ++ E.bytes id ++ Nanodregg.Codec.Stream.nat64.bytes 0
+  | .count m win => ⟨#[1]⟩ ++ E.bytes m ++ Nanodregg.Codec.Stream.u64.bytes win
+
+/-- What a refusals leaf commits to: a kind byte (refused 0, count 1), then its counters as eight
+little-endian bytes each. -/
+def refusalLeafBytes : RefusalLeaf → ByteArray
+  | .refused h code => ⟨#[0]⟩ ++ Nanodregg.Codec.Stream.nat64.bytes h ++ Nanodregg.Codec.Stream.nat64.bytes code
+  | .count n => ⟨#[1]⟩ ++ Nanodregg.Codec.Stream.nat64.bytes n
+
+def refusalDigest (E : Env D) (l : RefusalLeaf) : D := E.hash domRefusal (refusalLeafBytes l)
+
+/-- The refusals trie (KERNEL-44, KERNEL-47): routed by the key's bytes, most significant bit first,
+depth `Bounds.refusalDepth` (41 bytes); nodes in the one trie domain; leaves by `refusalDigest`. -/
+def refusalSpec (E : Env D) : Trie.Spec (RefusalSlot D) RefusalLeaf D where
+  bit k := byteBit (refusalKeyBytes E k)
+  depth := Bounds.refusalDepth
+  hash := E.hash domTrie
+  dbytes := E.bytes
+  kbytes := refusalKeyBytes E
+  vdigest := refusalDigest E
+
+/-- A refusals key holds the leaf of its kind. -/
+def RefusalLeaf.fits {D : Type} : RefusalSlot D → RefusalLeaf → Bool
+  | .tx _, .refused _ _ => true
+  | .count _ _, .count _ => true
+  | _, _ => false
+
+/-- The window a height counts refusals in. -/
+def refusalWindow (H : Nat) : UInt64 := UInt64.ofNat (H / Bounds.windowMax)
+
 /-- A slot holds the leaf of its kind. -/
 def Leaf.fits {D : Type} : Slot D → Leaf → Bool
   | .cell _, .entry _ => true
@@ -281,7 +412,7 @@ def genesisChain (E : Env D) (origin : D) : D := E.hash domGenesis (E.bytes orig
 
 /-- An empty World with identity `origin`, its chain at `genesisChain`. -/
 def genesis (E : Env D) (origin : D) (allowance : Nat) : World D :=
-  { trie := .empty, journal := .empty, height := 0,
+  { trie := .empty, journal := .empty, refusals := .empty, height := 0, steps := 0,
     chain := genesisChain E origin, allowance, origin }
 
 /-- The root of the World's map: its trie's cached digest, O(1). -/
@@ -290,8 +421,12 @@ def root (E : Env D) (w : World D) : D := w.trie.hashOf (trieSpec E)
 /-- The root of the World's journal, O(1). -/
 def journalRoot (E : Env D) (w : World D) : D := w.journal.hashOf (journalSpec E)
 
-/-- The two roots a head link commits (`chainNext`): the cells', then the journal's. -/
-def roots (E : Env D) (w : World D) : D × D := (w.root E, w.journalRoot E)
+/-- The root of the World's refusals, O(1). -/
+def refusalsRoot (E : Env D) (w : World D) : D := w.refusals.hashOf (refusalSpec E)
+
+/-- The one digest of the roots a head link commits (`chainNext`, `refusalLink`): the cells', the
+journal's and the refusals' (KERNEL-47 amendment 3). -/
+def roots (E : Env D) (w : World D) : D := rootsDigest E (w.root E) (w.journalRoot E) (w.refusalsRoot E)
 
 /-- What a carry takes from this World (KERNEL-29). -/
 def carried (w : World D) : Carried D := ⟨w.trie, w.allowance, w.height, w.journal⟩
@@ -316,6 +451,10 @@ def taken (E : Env D) (w : World D) (c : D) : Bool := (w.entry E c).isSome
 
 /-- The journal entry at a transaction id, if any: its height and turn digest. -/
 def journalAt (E : Env D) (w : World D) (k : D) : Option (Nat × D) := w.journal.get (journalSpec E) k
+
+/-- The refusals leaf at a key, if any. -/
+def refusalAt (E : Env D) (w : World D) (k : RefusalSlot D) : Option RefusalLeaf :=
+  w.refusals.get (refusalSpec E) k
 
 /-- Has the nullifier been spent? -/
 def isSpent (E : Env D) (w : World D) (n : D) : Bool :=
@@ -424,8 +563,11 @@ variable [DecidableEq D]
 /-- A transaction id is admitted at most once; a retry names the height it landed at. -/
 def checkJournal (E : Env D) (w : World D) (t : Turn D) : Except (Reject D) Unit :=
   match w.journalAt E t.txId with
-  | none => .ok ()
   | some (h, _) => .error (.replayed h)
+  | none =>
+      match w.refusalAt E (.tx t.txId) with
+      | some (.refused _ code) => .error (.refusedFinal code)
+      | _ => .ok ()
 
 def noDup {α : Type} [Ord α] (l : List α) (e : α → Reject D) : Except (Reject D) Unit :=
   match firstDup l with
@@ -441,6 +583,11 @@ def checkShape (t : Turn D) : Except (Reject D) Unit := do
 
 def checkWindow (w : World D) (t : Turn D) : Except (Reject D) Unit :=
   req (t.notBefore ≤ w.height + 1 && w.height + 1 ≤ t.validUntil) .outsideWindow
+
+/-- The step counter stays below `2^64` (KERNEL-47; every step, a Turn or a refusal, checks it), so
+every reached World's `steps` fits CODEC's `u64`. -/
+def checkSteps (w : World D) : Except (Reject D) Unit :=
+  req (w.steps + 1 < Bounds.counterLimit) (.overBound .counter)
 
 /-- A value cell a turn leaves behind decodes and is within its floor; any other cell passes. -/
 def checkValueCell (c : D) (cell : Cell) : Except (Reject D) Unit :=
@@ -551,6 +698,7 @@ def check (E : Env D) (w : World D) (t : Turn D) : Except (Reject D) (List (Post
   checkNullifiers E w t
   checkCharge w t (credit posts)
   checkCreates E w t
+  checkSteps w
   pure posts
 
 def bornEntries (t : Turn D) : List (D × Entry) :=
@@ -569,10 +717,10 @@ def spendAll (E : Env D) (m : Cells D) (ns : List D)
 
 /-- The map after a checked turn: its touches' entries, its born cells, its nullifiers. One lazy
 copy of the empty subtree's digest is handed down every path, so it is hashed at most once per turn
-and only if a path meets an empty sibling (KERNEL-35); with the `let` reduced this is the
-default-argument form every theorem states. -/
-def commitTrie (E : Env D) (w : World D) (t : Turn D) (posts : List (Post D)) : Cells D :=
-  let e : Trie.EmptyDigest D := Thunk.mk fun _ => Trie.emptyHash (trieSpec E)
+and only if a path meets an empty sibling (KERNEL-35); `commit` hands it the one copy it shares with
+the journal and the refusals (KERNEL-47). -/
+def commitTrie (E : Env D) (w : World D) (t : Turn D) (posts : List (Post D))
+    (e : Trie.EmptyDigest D := Thunk.mk fun _ => Trie.emptyHash (trieSpec E)) : Cells D :=
   spendAll E (insertAll E (insertAll E w.trie (posts.map Post.pair) e) (bornEntries t) e)
     t.nullifiers e
 
@@ -615,21 +763,69 @@ def journalFits (height : Nat) (l : List (D × (Nat × D))) : Bool :=
       height < p.2.1 + 2 * Bounds.windowMax + height % Bounds.windowMax)) &&
     ascendingNat ((l.map fun p => p.2.1).mergeSort)
 
+/-- One refusals leaf a World at `height` can hold (KERNEL-47): a refused call refused at a height at
+most `height + 1` and not yet due for pruning, a count of the current window between 1 and
+`Bounds.refusalsPerWindow`, every counter below `2^64`, and no other pairing. -/
+def refusalFits (height : Nat) : RefusalSlot D → RefusalLeaf → Bool
+  | .tx _, .refused h code => decide (1 ≤ h ∧ h ≤ height + 1 ∧
+      height < h + 2 * Bounds.windowMax + height % Bounds.windowMax ∧ h < Bounds.counterLimit ∧
+      code < Bounds.counterLimit)
+  | .count _ win, .count n => decide (win = refusalWindow height ∧ 1 ≤ n ∧ n ≤ Bounds.refusalsPerWindow)
+  | _, _ => false
+
+/-- A refusals listing a World at `height` can hold (KERNEL-47; the twin of `journalFits`, for CODEC's
+`kernel/refusals` refusal): every key holds the leaf of its kind; a refused call was refused at a
+height at most `height + 1` (the World's height when it was recorded, plus one) and is not yet due
+for pruning; a count is for the current window and between 1 and `Bounds.refusalsPerWindow`; every
+counter below `2^64`. It holds of every World a fold reaches (`fold_refusalsOk`), so a decoded base
+is refused unless it holds. One pass. -/
+def refusalsFits (height : Nat) (l : List (RefusalSlot D × RefusalLeaf)) : Bool :=
+  l.all fun p => refusalFits height p.1 p.2
+
+/-- No transaction id is both recorded refused and journaled (KERNEL-47; CODEC-8's ask): a fold never
+reaches such a World (`fold_refusalsDisjoint`), so a decoded base is refused unless it holds. One
+journal lookup per recorded refusal. -/
+def refusalsDisjoint (E : Env D) (w : World D) : Bool :=
+  w.refusals.toList.all fun p => match p.1, p.2 with
+    | .tx id, .refused _ _ => (w.journalAt E id).isNone
+    | _, _ => true
+
 /-- The journal after a checked turn: the turn's entry inserted at the new height, then pruned if
 that height is a multiple of `Bounds.windowMax`. One lazy copy of the empty subtree's digest serves
-the insert and the prune (KERNEL-35's rule); with the `let` reduced this is the default form. -/
-def commitJournal (E : Env D) (w : World D) (t : Turn D) : Journal D :=
-  let e : Trie.EmptyDigest D := Thunk.mk fun _ => Trie.emptyHash (journalSpec E)
+the insert and the prune (KERNEL-35's rule); `commit` hands it the one copy of the turn. -/
+def commitJournal (E : Env D) (w : World D) (t : Turn D)
+    (e : Trie.EmptyDigest D := Thunk.mk fun _ => Trie.emptyHash (journalSpec E)) : Journal D :=
   pruneJournal E (w.height + 1) (w.journal.insert (journalSpec E) t.txId (w.height + 1, turnDigest E t) e) e
+
+/-- Is a refusals leaf still kept at height `H` (KERNEL-44, KERNEL-47 amendment 5)? A refused call's
+leaf while `kept` (KERNEL-33's rule: it was refused at `h` inside its window, so it outlives every
+height it could be admitted at); a count only for the current window. -/
+def keptRefusal (H : Nat) : RefusalSlot D → RefusalLeaf → Bool
+  | .count _ win, _ => decide (win = refusalWindow H)
+  | _, .refused h _ => decide (H < h + 2 * Bounds.windowMax)
+  | _, .count _ => false
+
+/-- The refusals at height `H`: pruned with the journal, at every multiple of `Bounds.windowMax`, by
+the same canonical `Trie.retainAt`; unchanged between multiples. -/
+def pruneRefusals (E : Env D) (H : Nat) (r : Refusals D)
+    (e : Trie.EmptyDigest D := Thunk.mk fun _ => Trie.emptyHash (refusalSpec E)) : Refusals D :=
+  if H % Bounds.windowMax = 0 then Trie.retainAt (refusalSpec E) (keptRefusal H) [] r e else r
 
 /-- The World after a checked turn. Total: everything that can fail failed in `check`. -/
 def commit (E : Env D) (w : World D) (t : Turn D) (posts : List (Post D)) : World D :=
-  let trie := commitTrie E w t posts
-  let journal := commitJournal E w t
+  -- ONE lazy copy of the empty subtree's digest for the three tries (KERNEL-35's rule, per turn): all
+  -- three hash nodes in `domTrie`, so their empty digest is one value
+  let e : Trie.EmptyDigest D := Thunk.mk fun _ => Trie.emptyHash (trieSpec E)
+  let trie := commitTrie E w t posts e
+  let journal := commitJournal E w t e
+  let refusals := pruneRefusals E (w.height + 1) w.refusals e
   { trie
     journal
+    refusals
     height := w.height + 1
-    chain := chainNext E w.chain t (trie.hashOf (trieSpec E), journal.hashOf (journalSpec E))
+    steps := w.steps + 1
+    chain := chainNext E w.chain t
+      (rootsDigest E (trie.hashOf (trieSpec E) e) (journal.hashOf (journalSpec E) e) (refusals.hashOf (refusalSpec E) e))
     allowance := w.allowance + credit posts - t.charge
     origin := w.origin }
 
@@ -639,21 +835,85 @@ def World.admit (E : Env D) (w : World D) (t : Turn D) : Except (Reject D) (Worl
   | .ok posts => .ok (commit E w t posts)
   | .error r => .error r
 
-/-- The follower: a log means the World its fold reaches. A refusal names the turn's index. -/
-def World.fold (E : Env D) (w : World D) : List (Turn D) → Except (Nat × Reject D) (World D)
+/-- A recorded refusal's numbers are within `Bounds` (so `refusedBytes` is injective). -/
+def checkRefusedBounds (r : Refused D) : Except (Reject D) Unit := do
+  req (r.event.size ≤ Bounds.eventBytesMax) (.overBound .event)
+  req (r.notBefore < Bounds.counterLimit && r.validUntil < Bounds.counterLimit &&
+       r.code < Bounds.counterLimit) (.overBound .counter)
+
+/-- A member's recorded refusals in the window of height `H`. -/
+def refusalCount (E : Env D) (w : World D) (m : D) : Nat :=
+  match w.refusalAt E (.count m (refusalWindow w.height)) with
+  | some (.count n) => n
+  | _ => 0
+
+/-- Every check a refusal record must pass, against the pre-state (KERNEL-44, KERNEL-47): bounded;
+the step counter below `2^64`; the call's window contains the height it would be admitted at (an
+early call's refusal is not final and is not recorded, a late call's is final by height); the
+transaction id neither journaled (`replayed`) nor already recorded (`refusedFinal`); the member's
+count this window below `Bounds.refusalsPerWindow` (`refusalBudget`). Whether the call was
+authenticated and refused with this code is the receive layer's (`Receive.judge`), re-derived by the
+follower's audit; the kernel bounds what a log may record. -/
+def checkRefusal (E : Env D) (w : World D) (r : Refused D) : Except (Reject D) Unit := do
+  checkRefusedBounds r
+  checkSteps w
+  req (r.notBefore ≤ w.height + 1 && w.height + 1 ≤ r.validUntil) .outsideWindow
+  match w.journalAt E r.txId with
+  | some (h, _) => .error (.replayed h)
+  | none =>
+      match w.refusalAt E (.tx r.txId) with
+      | some (.refused _ code) => .error (.refusedFinal code)
+      | _ => req (refusalCount E w r.member < Bounds.refusalsPerWindow) .refusalBudget
+
+/-- The refusals after a checked refusal: its leaf at the transaction id, the member's count bumped.
+Two paths; one lazy empty digest as in `commitJournal`. -/
+def commitRefusals (E : Env D) (w : World D) (r : Refused D)
+    (e : Trie.EmptyDigest D := Thunk.mk fun _ => Trie.emptyHash (refusalSpec E)) : Refusals D :=
+  (w.refusals.insert (refusalSpec E) (.tx r.txId) (.refused (w.height + 1) r.code) e).insert (refusalSpec E)
+    (.count r.member (refusalWindow w.height)) (.count (refusalCount E w r.member + 1)) e
+
+/-- The World after a checked refusal: only the refusals, the step counter and the chain move. The
+cells, the journal, the height and the allowance are untouched (`refuse_frame`). -/
+def commitRefusal (E : Env D) (w : World D) (r : Refused D) : World D :=
+  let e : Trie.EmptyDigest D := Thunk.mk fun _ => Trie.emptyHash (refusalSpec E)
+  let refusals := commitRefusals E w r e
+  { w with
+    refusals
+    steps := w.steps + 1
+    chain := refusalLink E w.chain r
+      (rootsDigest E (w.trie.hashOf (trieSpec E) e) (w.journal.hashOf (journalSpec E) e) (refusals.hashOf (refusalSpec E) e)) }
+
+/-- Record a refusal (KERNEL-44). Fail-closed like `World.admit`. -/
+def World.refuse (E : Env D) (w : World D) (r : Refused D) : Except (Reject D) (World D) :=
+  match checkRefusal E w r with
+  | .ok () => .ok (commitRefusal E w r)
+  | .error e => .error e
+
+/-- THE transition of a log (KERNEL-47): a Turn is admitted, a refusal recorded. -/
+def World.step (E : Env D) (w : World D) : Step D → Except (Reject D) (World D)
+  | .turn t => World.admit E w t
+  | .refusal r => World.refuse E w r
+
+/-- The follower: a log means the World its fold reaches. A refusal names the step's index. -/
+def World.fold (E : Env D) (w : World D) : List (Step D) → Except (Nat × Reject D) (World D)
   | [] => .ok w
   | t :: rest =>
-      match World.admit E w t with
+      match World.step E w t with
       | .ok w' =>
           match World.fold E w' rest with
           | .ok w'' => .ok w''
           | .error (i, r) => .error (i + 1, r)
       | .error r => .error (0, r)
 
-/-- The chain a log reaches from `c`, each turn paired with the two roots after it (`World.roots`),
-without admitting it: what `World.fold` stamps (`fold_chain`). -/
-def chainOf (E : Env D) (c : D) : List (Turn D × (D × D)) → D
+/-- The link a step adds to the chain `c`, given the roots digest after it. -/
+def stepLink (E : Env D) (c : D) : Step D → D → D
+  | .turn t => chainNext E c t
+  | .refusal r => refusalLink E c r
+
+/-- The chain a log reaches from `c`, each step paired with the roots digest after it
+(`World.roots`), without admitting it: what `World.fold` stamps (`fold_chain`). -/
+def chainOf (E : Env D) (c : D) : List (Step D × D) → D
   | [] => c
-  | (t, r) :: rest => chainOf E (chainNext E c t r) rest
+  | (t, r) :: rest => chainOf E (stepLink E c t r) rest
 
 end Nanodregg.Kernel

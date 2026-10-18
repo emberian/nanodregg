@@ -66,6 +66,8 @@ pub struct Table {
     pub absent: u8,
     /// `Status.uncertain.code`.
     pub uncertain: u8,
+    /// `Status.declined.code` (PROTOCOL-41).
+    pub declined: u8,
 }
 
 /// Why a command stopped without follow's `done`.
@@ -110,6 +112,7 @@ fn settlement(t: &Table, reply: io::Result<(u8, Vec<u8>)>) -> Settlement {
     match reply {
         Ok((s, p)) if s == t.ok => Settlement::Committed(p),
         Ok((s, p)) if s == t.refused => Settlement::NotCommitted(p),
+        Ok((s, p)) if s == t.declined => Settlement::Declined(p),
         Ok((s, _)) if s == t.absent => Settlement::Absent,
         Ok((s, _)) if s == t.uncertain => Settlement::Unknown,
         // A transport failure, a timeout (replyMsMax), or a status the table does not name
@@ -226,6 +229,15 @@ pub fn run(
                             },
                         )
                     }
+                    // Not final (PROTOCOL-41): follow prints `declined NAME`; the attempt stays
+                    // open on disk and an armed rotation stays armed.
+                    State::Declined { reply, .. } => (
+                        k,
+                        Outcome {
+                            status: t.declined,
+                            payload: reply,
+                        },
+                    ),
                     State::Signed | State::Uncertain { .. } => {
                         return Err(RunError::Uncertain(dir));
                     }

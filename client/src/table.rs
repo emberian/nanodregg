@@ -32,6 +32,7 @@ pub const RUN: Table = Table {
     refused: g::status::REFUSED,
     absent: g::status::ABSENT,
     uncertain: g::status::UNCERTAIN,
+    declined: g::status::DECLINED,
 };
 
 /// `Bounds.replyMsMax`: how long either socket waits for one reply (PROTOCOL-20).

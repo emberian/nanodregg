@@ -30,7 +30,7 @@ open Nanodregg.Host.Log
 open Nanodregg.Codec (Stream)
 
 theorem Entry.fits_iff (w : Nat) (e : Entry) :
-    e.fits w = true ↔ e.height < 2 ^ 64 ∧ e.offset < 2 ^ 64 ∧ e.chain.size = w := by
+    e.fits w = true ↔ e.steps < 2 ^ 64 ∧ e.offset < 2 ^ 64 ∧ e.chain.size = w := by
   simp [Entry.fits, Bool.and_eq_true, decide_eq_true_eq, and_assoc]
 
 theorem nat64_size (n : Nat) : (Stream.nat64.bytes n).size = 8 :=
@@ -50,9 +50,9 @@ theorem Entry.bytes_size (keys : Keys) (k : Nat) (e : Entry) (he : e.chain.size 
 theorem Entry.read_bytes (keys : Keys) (k : Nat) (e : Entry) (he : e.fits keys.chainBytes = true) :
     Entry.read keys k (Entry.bytes keys k e) = some e := by
   obtain ⟨hh, ho, hc⟩ := (Entry.fits_iff _ e).mp he
-  have hA := nat64_size e.height
+  have hA := nat64_size e.steps
   have hB := nat64_size e.offset
-  have e1 : (Entry.bytes keys k e).extract 0 8 = Stream.nat64.bytes e.height := by
+  have e1 : (Entry.bytes keys k e).extract 0 8 = Stream.nat64.bytes e.steps := by
     simp only [Entry.bytes, Entry.body, ByteArray.append_assoc]
     exact ByteArray.extract_append_eq_left hA.symm
   have e2 : (Entry.bytes keys k e).extract 8 16 = Stream.nat64.bytes e.offset := by
@@ -286,12 +286,12 @@ theorem indexClean_go_none (keys : Keys) (bytes : ByteArray) (offs : List Nat) :
     | some e =>
       rw [hr] at hgo
       simp only at hgo
-      by_cases hc : e.offset = off ∧ h ≤ e.height
+      by_cases hc : e.offset = off ∧ h ≤ e.steps
       · rw [if_pos hc] at hgo
         cases i with
         | zero => exact ⟨e, by simpa using hr, by simpa using hc.1⟩
         | succ i =>
-          obtain ⟨e', he', ho'⟩ := ih (k + 1) e.height hgo i (by simpa using hi)
+          obtain ⟨e', he', ho'⟩ := ih (k + 1) e.steps hgo i (by simpa using hi)
           exact ⟨e', by rw [show k + (i + 1) = k + 1 + i by omega]; exact he', by simpa using ho'⟩
       · rw [if_neg hc] at hgo; cases hgo
 
@@ -300,7 +300,7 @@ theorem indexClean_go_rise (keys : Keys) (bytes : ByteArray) (offs : List Nat) :
       Entry.read keys (k + i) (bytes.extract ((k + i) * entryBytes keys)
         ((k + i) * entryBytes keys + entryBytes keys)) = some e →
       Entry.read keys (k + i + 1) (bytes.extract ((k + i + 1) * entryBytes keys)
-        ((k + i + 1) * entryBytes keys + entryBytes keys)) = some e' → e.height ≤ e'.height := by
+        ((k + i + 1) * entryBytes keys + entryBytes keys)) = some e' → e.steps ≤ e'.steps := by
   induction offs with
   | nil => intro _ _ _ i hi; exact absurd hi (by simp)
   | cons off rest ih =>
@@ -311,7 +311,7 @@ theorem indexClean_go_rise (keys : Keys) (bytes : ByteArray) (offs : List Nat) :
     | some e₀ =>
       rw [hr] at hgo
       simp only at hgo
-      by_cases hc : e₀.offset = off ∧ h ≤ e₀.height
+      by_cases hc : e₀.offset = off ∧ h ≤ e₀.steps
       · rw [if_pos hc] at hgo
         cases i with
         | zero =>
@@ -327,7 +327,7 @@ theorem indexClean_go_rise (keys : Keys) (bytes : ByteArray) (offs : List Nat) :
             · rename_i hc'; exact hc'.2
             · cases hgo
         | succ i =>
-          exact ih (k + 1) e₀.height hgo i (by simpa using hi) e e'
+          exact ih (k + 1) e₀.steps hgo i (by simpa using hi) e e'
             (by rw [show k + 1 + i = k + (i + 1) by omega]; exact he)
             (by rw [show k + 1 + i + 1 = k + (i + 1) + 1 by omega]; exact he')
       · rw [if_neg hc] at hgo; cases hgo
@@ -335,7 +335,7 @@ theorem indexClean_go_rise (keys : Keys) (bytes : ByteArray) (offs : List Nat) :
 /-- **`host check` reads every entry** (HOST-33 condition 1): when `indexClean` passes, the index
 holds exactly the `count` entries the base counts, one per record frame before the base, EVERY one
 reads back at its position under the Store's keys (its tag verified there) and names that record
-frame's offset, and heights never fall from one entry to the next. -/
+frame's offset, and step counts never fall from one entry to the next. -/
 theorem indexClean_none {keys : Keys} {bytes : ByteArray} {count : Nat} {offsets : List Nat}
     (h : indexClean keys bytes count offsets = none) :
     offsets.length = count ∧ bytes.size = count * entryBytes keys ∧
@@ -345,7 +345,7 @@ theorem indexClean_none {keys : Keys} {bytes : ByteArray} {count : Nat} {offsets
     (∀ (k : Nat) (_ : k + 1 < offsets.length) (e e' : Entry),
       Entry.read keys k (bytes.extract (k * entryBytes keys) (k * entryBytes keys + entryBytes keys)) = some e →
       Entry.read keys (k + 1) (bytes.extract ((k + 1) * entryBytes keys)
-        ((k + 1) * entryBytes keys + entryBytes keys)) = some e' → e.height ≤ e'.height) := by
+        ((k + 1) * entryBytes keys + entryBytes keys)) = some e' → e.steps ≤ e'.steps) := by
   unfold indexClean at h
   by_cases hc : offsets.length ≠ count ∨ bytes.size ≠ count * entryBytes keys
   · rw [if_pos hc] at h; cases h

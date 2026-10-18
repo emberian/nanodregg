@@ -86,4 +86,36 @@ theorem world_get_journalOk {b : ByteArray} {i j : Nat} {w : World Digest} (h : 
     w.JournalOk env :=
   Nanodregg.Codec.Kernel.world_get_journalOk digestCodec_lawful.on h
 
+/-- **Every deployed decoded base carries `World.RefusalsOk`** (KERNEL-44, KERNEL-47): no premise. -/
+theorem world_decode_refusalsOk {b : ByteArray} {w : World Digest} (h : world.decode b = .ok w) :
+    w.RefusalsOk env :=
+  Nanodregg.Codec.Kernel.world_decode_refusalsOk digestCodec_lawful.on h
+
+/-- **A World the deployed codec reads at any offset carries `World.RefusalsOk`** (HOST's base record). -/
+theorem world_get_refusalsOk {b : ByteArray} {i j : Nat} {w : World Digest} (h : world.get b i = .ok (w, j)) :
+    w.RefusalsOk env :=
+  Nanodregg.Codec.Kernel.world_get_refusalsOk digestCodec_lawful.on h
+
+/-- **No deployed decoded base holds a transaction id both refused and journaled** (KERNEL-47). -/
+theorem world_decode_refusalsDisjoint {b : ByteArray} {w : World Digest} (h : world.decode b = .ok w) :
+    w.RefusalsDisjoint env :=
+  Nanodregg.Codec.Kernel.world_decode_refusalsDisjoint digestCodec_lawful.on h
+
+/-- **A World the deployed codec reads at any offset holds no transaction id both refused and
+journaled.** -/
+theorem world_get_refusalsDisjoint {b : ByteArray} {i j : Nat} {w : World Digest}
+    (h : world.get b i = .ok (w, j)) : w.RefusalsDisjoint env :=
+  Nanodregg.Codec.Kernel.world_get_refusalsDisjoint digestCodec_lawful.on h
+
+/-- **A deployed decoded base has height at most its step count** (KERNEL's `fold_height_le_steps`'
+premise). -/
+theorem world_decode_height_le_steps {b : ByteArray} {w : World Digest} (h : world.decode b = .ok w) :
+    w.height ≤ w.steps :=
+  Nanodregg.Codec.Kernel.world_decode_height_le_steps digestCodec_lawful.on h
+
+/-- **A World the deployed codec reads at any offset has height at most its step count.** -/
+theorem world_get_height_le_steps {b : ByteArray} {i j : Nat} {w : World Digest}
+    (h : world.get b i = .ok (w, j)) : w.height ≤ w.steps :=
+  Nanodregg.Codec.Kernel.world_get_height_le_steps digestCodec_lawful.on h
+
 end Nanodregg.Codec.Deployed

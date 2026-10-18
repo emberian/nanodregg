@@ -22,6 +22,7 @@ structure Checked (E : Env D) (w : World D) (t : Turn D) (posts : List (Post D))
   journal : checkJournal E w t = .ok ()
   shape : checkShape t = .ok ()
   window : checkWindow w t = .ok ()
+  steps : checkSteps w = .ok ()
   touches : ∃ raw, mapEx (touchCheck E w) t.touches = .ok raw ∧ posts = raw.reduceOption
   value : checkValue E t posts = .ok ()
   nullifiers : checkNullifiers E w t = .ok ()
@@ -32,10 +33,10 @@ theorem check_ok {E : Env D} {w : World D} {t : Turn D} {posts : List (Post D)}
     (h : check E w t = .ok posts) : Checked E w t posts := by
   unfold check at h
   simp only [except_bind_ok] at h
-  obtain ⟨⟨⟩, h1, ⟨⟩, h2, ⟨⟩, h3, ⟨⟩, h4, raw, h5, ⟨⟩, hv, ⟨⟩, h6, ⟨⟩, h7, ⟨⟩, h8, h9⟩ := h
+  obtain ⟨⟨⟩, h1, ⟨⟩, h2, ⟨⟩, h3, ⟨⟩, h4, raw, h5, ⟨⟩, hv, ⟨⟩, h6, ⟨⟩, h7, ⟨⟩, h8, ⟨⟩, hs, h9⟩ := h
   simp only [pure, Except.pure, Except.ok.injEq] at h9
   subst h9
-  exact ⟨h1, h3, h4, h2, ⟨raw, h5, rfl⟩, hv, h6, h7, h8⟩
+  exact ⟨h1, h3, h4, h2, hs, ⟨raw, h5, rfl⟩, hv, h6, h7, h8⟩
 
 /-- Every touch of a checked turn passed `touchCheck`. -/
 theorem Checked.touch {E : Env D} {w : World D} {t : Turn D} {posts : List (Post D)}

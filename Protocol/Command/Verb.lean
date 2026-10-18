@@ -53,7 +53,7 @@ inductive Verb
   | read
   /-- `rotate`: move the member to custody's precommitted NEXT key, precommitting the one after -/
   | rotate
-  /-- `adopt HEIGHT DIGEST`: start follow from the writer's base at HEIGHT, accepted only if its
+  /-- `adopt STEPS DIGEST`: start follow from the writer's base at log position STEPS, accepted only if its
   World bytes hash to DIGEST, a pin the member trusts out of band (thin consent, PROTOCOL-14) -/
   | adopt
   /-- `sync`: catch up to the writer's tip and print the height and chain reached (a follower driven
@@ -171,7 +171,7 @@ def usage : Verb → String
   | .invoke => "invoke OBJ METHOD ARGS [--via GRANT]"
   | .grant => "grant TARGET|ACCOUNT|world MEMBER|anyone RIGHTS [--via PARENT]"
   | .revoke => "revoke GRANT" | .read => "read OBJ [KEY=VALUE...]" | .rotate => "rotate"
-  | .adopt => "adopt HEIGHT DIGEST" | .sync => "sync" | .issue => "issue CAP"
+  | .adopt => "adopt STEPS DIGEST" | .sync => "sync" | .issue => "issue CAP"
   | .account => "account ASSET [--owner OWNER]"
   | .transfer => "transfer SRC DST AMOUNT [--via GRANT] [--once HEX]"
   | .credit => "credit WELL ACCT AMOUNT [--via GRANT]"
@@ -304,9 +304,9 @@ def parseVerb (v : Verb) (args : List String) : Except ParseRefusal (Cmd D) :=
   | .rotate, [] => .ok .rotate
   | .sync, [] => .ok .sync
   | .adopt, [h, d] => do
-      let height ← numArg h
+      let steps ← numArg h
       match Text.ofHex d with
-      | some digest => pure (.adopt ⟨height, digest⟩)
+      | some digest => pure (.adopt ⟨steps, digest⟩)
       | none => throw (.badDigest d)
   | .issue, [c] => .issue <$> numArg c
   | .account, a :: fl => do

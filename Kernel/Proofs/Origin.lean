@@ -10,6 +10,7 @@
   either way never admitted).
 -/
 import Kernel.Proofs.Lawful
+import Kernel.Proofs.Refuse
 import Kernel.Proofs.Receive
 import Kernel.Receive.Follow
 import Codec.Proofs.Raw
@@ -31,17 +32,10 @@ theorem admit_origin {E : Env D} {w w' : World D} {t : Turn D} (h : World.admit 
   · cases h; rfl
   · cases h
 
-theorem fold_origin {E : Env D} : ∀ {w w' : World D} {l : List (Turn D)}, World.fold E w l = .ok w' →
-    w'.origin = w.origin
-  | _, _, [], h => by cases h; rfl
-  | w, w', t :: rest, h => by
-      unfold World.fold at h
-      split at h
-      · rename_i w₁ h₁
-        split at h
-        · cases h; rename_i h₂; exact (fold_origin h₂).trans (admit_origin h₁)
-        · cases h
-      · cases h
+theorem fold_origin {E : Env D} {w w' : World D} {l : List (Step D)} (h : World.fold E w l = .ok w') :
+    w'.origin = w.origin :=
+  fold_keeps (P := fun v => v.origin = w.origin) (fun hp ha => (admit_origin ha).trans hp)
+    (fun hp hr => (refuse_frame hr).2.2.2.2.trans hp) rfl h
 
 theorem genesis_origin (X : Ctx D) (name nonce : ByteArray) (allowance : Nat) (founders : List (ByteArray × D)) :
     (genesisWorld X name nonce allowance founders).origin = originOf X name nonce allowance founders := rfl
@@ -211,16 +205,20 @@ transaction id, rejected `replayed`. -/
 theorem admitted_elsewhere_refused {X : Ctx D} {w₁ w₁' w₂ : World D} {c : Call D} {t : Turn D}
     (h : submit X w₁ c = .ok (t, w₁')) (hne : w₂.origin ≠ w₁.origin) :
     submit X w₂ c = .error (.refused .wrongWorld) ∨
-      ∃ ht, submit X w₂ c = .error (.rejected (.replayed ht)) := by
+      (∃ ht, submit X w₂ c = .error (.rejected (.replayed ht))) ∨
+      ∃ code, submit X w₂ c = .error (.rejected (.refusedFinal code)) := by
   obtain ⟨_, hr, _⟩ := submit_ok h
   have hw : c.unsigned.world ≠ w₂.origin := by
     rw [(receive_ok_with hr).1]; exact fun e => hne e.symm
   cases hj : w₂.journalAt X.env (txIdOf X c) with
-  | some p => exact .inr ⟨p.1, submit_replayed hj⟩
+  | some p => exact .inr (.inl ⟨p.1, submit_replayed hj⟩)
   | none =>
-      left
-      unfold submit
-      rw [hj]
-      simp only [receive_wrongWorld hw]
+      cases hq : refusedAnswer X w₂ c with
+      | some code => exact .inr (.inr ⟨code, by unfold submit; rw [hj, hq]⟩)
+      | none =>
+          left
+          unfold submit
+          rw [hj, hq]
+          simp only [receive_wrongWorld hw]
 
 end Nanodregg.Kernel.Receive

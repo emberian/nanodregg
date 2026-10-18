@@ -134,7 +134,7 @@ structure State (D : Type) [Ord D] where
   rng : Rng
   /-- the Host's World and its admitted log -/
   host : World D
-  log : List (Turn D) := []
+  log : List (Step D) := []
   members : List (Member D)
   objects : List (D × D) := []
   /-- member ↦ its World grant (a member without one has none) -/
@@ -185,6 +185,12 @@ structure State (D : Type) [Ord D] where
   of the nullifier share -/
   probeInserts : Nat := 0
   prunes : Nat := 0
+  /-- KERNEL-44: refusals the Host recorded, the most any member had recorded in one window, the
+  calls declined `refusalBudget`, and the record bytes of the recorded ones -/
+  recorded : Nat := 0
+  refusalMax : Nat := 0
+  budgeted : Nat := 0
+  refusalBytes : Nat := 0
 
 def nameOf {α : Type} [Repr α] (a : α) : String :=
   match (reprStr a).splitOn " " with
@@ -245,8 +251,11 @@ def countTurn (E : Env D) (st : State D) (w w' : World D) (t : Turn D) : State D
   | .ok posts =>
       let t0 := { t with nullifiers := [] }
       let a := dbgTrace "<A" fun _ => World.admit cE w t
-      let c := dbgTrace "<C" fun _ => commitTrie cE w t0 posts
-      let j := dbgTrace "<J" fun _ => commitJournal cE w t
+      -- one empty-digest thunk for the cell and journal brackets, as `commit` shares one (KERNEL-47):
+      -- it is counted where it is first forced, so the two shares never both count it
+      let e : Trie.EmptyDigest D := Thunk.mk fun _ => Trie.emptyHash (trieSpec cE)
+      let c := dbgTrace "<C" fun _ => commitTrie cE w t0 posts e
+      let j := dbgTrace "<J" fun _ => commitJournal cE w t e
       let p := dbgTrace "<P" fun _ => plantCommitPerInsert cE w t posts
       let st := match a with
         | .ok w'' => if w''.root E == w'.root E then st
@@ -267,6 +276,7 @@ structure Marks where
   journal : Nat := 0
   probeInsert : Nat := 0
   prune : Nat := 0
+  refuse : Nat := 0
 
 /-- `report`'s side: the marks of one captured run, summed per bracket tag (`A`, `C`, `P`, `J`,
 `K`, `R`). -/
@@ -280,6 +290,7 @@ def countMarks (out : String) : Marks :=
     | some 'J' => { m with journal := m.journal + n }
     | some 'K' => { m with probeInsert := m.probeInsert + n }
     | some 'R' => { m with prune := m.prune + n }
+    | some 'F' => { m with refuse := m.refuse + n }
     | _ => m) {}
 
 /-- The slots a turn changed, in `commitTrie`'s order: its non-`keep` touches, its born cells,
@@ -381,7 +392,7 @@ def checkRoot (P : Params D) (st : State D) (w w' : World D) (t : Turn D) : Stat
   -- pre-turn exclusion proof against the new root, and the journal proof against the CELLS root
   let JS := journalSpec E
   let jroot := w'.journalRoot E
-  let st := if headLink E w.chain (turnDigest E t) root jroot == w'.chain then st
+  let st := if headLink E w.chain 0 (turnDigest E t) (rootsDigest E root jroot (w'.refusalsRoot E)) == w'.chain then st
     else failWith st "journal head: the head link over the two roots is not the admitted chain"
   let entry : Nat × D := (w.height + 1, turnDigest E t)
   let jp := w'.journal.prove JS t.txId
@@ -413,13 +424,44 @@ def checkRoot (P : Params D) (st : State D) (w w' : World D) (t : Turn D) : Stat
       failWith st "root: a spent nullifier's path with an empty end verified"
     else meet st "proof-spent-empty:refused") st
 
+/-- The Host's recording of a refused call (KERNEL-44: `Receive.judge`), checked against the verdict
+`submit` gave: a recorded refusal is that verdict, logged as a step and its hashes counted (`<F`);
+an admitted call is never recorded, a refused one never admitted. -/
+def record (P : Params D) (st : State D) (c : Call D) (verdict : Except (Verdict D) (Turn D × World D)) : State D :=
+  let X := P.ctx
+  match verdict, Receive.judge X st.host c with
+  | .error v, .recorded v' r w' =>
+      if v' ≠ v then failWith st s!"judge recorded {vname v'} for a call refused {vname v}"
+      else
+        let cE := countingEnv P.env
+        let counted := dbgTrace "<F" fun _ => World.refuse cE st.host r
+        let st := match counted with
+          | .ok w'' => if w''.refusalsRoot P.env == w'.refusalsRoot P.env then st
+              else failWith st "hash count: the counted refusal reached another refusals root"
+          | .error _ => failWith st "hash count: the counted refusal was refused"
+        { st with host := w', log := st.log ++ [.refusal r], recorded := st.recorded + 1,
+                  refusalMax := max st.refusalMax (refusalCount P.env w' r.member),
+                  refusalBytes := st.refusalBytes + (refusedBytes P.env r).size }
+  | .error _, .declined (.rejected .refusalBudget) => { st with budgeted := st.budgeted + 1 }
+  | .error _, .declined _ => st
+  | .error v, .admitted _ _ => failWith st s!"judge admitted a call submit refused {vname v}"
+  | .ok _, .admitted _ _ => st
+  | .ok _, _ => failWith st "judge refused a call submit admitted"
+
 /-- Submit a call on the Host path and judge the verdict. -/
 def submit (P : Params D) (st : State D) (c : Call D) (expect : Expect) (what : String) : State D × Option (Turn D) :=
   let X := P.ctx
   let st := { st with steps := st.steps + 1, lastCall := some c }
+  -- the generator signs the same call twice now and then (same bytes, same transaction id): once
+  -- its refusal is recorded, the second answer is that record (KERNEL-44), whatever it would derive
+  let (expect, what) := if (refusedAnswer X st.host c).isSome ∧ expect ≠ .rejected "refusedFinal" then
+      (Expect.rejected "refusedFinal", "refused-again")
+    else (expect, what)
+  let verdict := Receive.submit X st.host c
+  let st := record P st c verdict
   let fail := fun (got : String) =>
     ({ st with failures := s!"step {st.steps} {what}: expected {reprStr expect}, got {got}" :: st.failures }, none)
-  match Receive.submit X st.host c with
+  match verdict with
   | .error (.refused r) =>
       if expect = .refused r.name then
         ({ st with refusedAsExpected := st.refusedAsExpected + 1,
@@ -433,7 +475,7 @@ def submit (P : Params D) (st : State D) (c : Call D) (expect : Expect) (what : 
   | .ok (t, w') =>
       if expect = .ok then
         let st := checkLogWeight P (checkRoot P st st.host w' t) t
-        ({ st with host := w', log := st.log ++ [t], admitted := st.admitted + 1,
+        ({ st with host := w', log := st.log ++ [.turn t], admitted := st.admitted + 1,
                    seen := s!"{what}:ok" :: st.seen }, some t)
       else fail "admitted"
 
@@ -1067,7 +1109,7 @@ def act (P : Params D) (st : State D) : State D :=
               (submit P st c expect "write-via-grant").1
   | _ => -- a probe straight at admit: an admitted-shape turn with the wrong charge
       let st := probeSeal P st
-      match st.log.getLast? with
+      match (Step.turns st.log).getLast? with
       | none => st
       | some t =>
           let bad := { t with txId := P.env.hash "nanodregg/sim/probe" (P.env.bytes t.txId), charge := t.charge + 1 }
@@ -1120,14 +1162,16 @@ def turnWork (t : Turn D) : Nat × Nat :=
     (changed + ids.length + t.nullifiers.length + 1)
   (ratio cellLookups named, ratio ops (named + t.nullifiers.length + 1))
 
-def maxWork (log : List (Turn D)) : Nat × Nat :=
+def maxWork (log : List (Step D)) : Nat × Nat :=
+  let log := Step.turns log
   log.foldl (fun (a, b) t => let (x, y) := turnWork t; (max a x, max b y)) (0, 0)
 
 /-- Same contents and the same ROOTS (both tries are canonical, so the same listing is the same
 trie: KERNEL-41). -/
 def same (E : Env D) (a b : World D) : Bool :=
   a.trie.toList == b.trie.toList && a.root E == b.root E && a.journal.toList == b.journal.toList &&
-  a.journalRoot E == b.journalRoot E &&
+  a.journalRoot E == b.journalRoot E && a.refusals.toList == b.refusals.toList &&
+  a.refusalsRoot E == b.refusalsRoot E && a.steps == b.steps &&
   a.height == b.height && a.chain == b.chain && a.allowance == b.allowance && a.origin == b.origin
 
 /-- A World rebuilt from its own listings, as a checkpoint decode does (CODEC-19): both tries by
@@ -1135,7 +1179,8 @@ def same (E : Env D) (a b : World D) : Bool :=
 def reopened (E : Env D) (w : World D) : World D :=
   let trie := Trie.build (trieSpec E) (trieSpec E).depth 0 w.trie.toList
   let journal := Trie.build (journalSpec E) (journalSpec E).depth 0 w.journal.toList
-  { w with trie, journal }
+  let refusals := Trie.build (refusalSpec E) (refusalSpec E).depth 0 w.refusals.toList
+  { w with trie, journal, refusals }
 
 def worldName : ByteArray := "sim".toUTF8
 
@@ -1144,7 +1189,7 @@ def nonceOf (seed : Nat) : ByteArray := s!"sim-nonce-{seed}".toUTF8
 
 /-- The log up to its last write, that write's values replaced and its charge re-priced: a log
 `fold` accepts (later turns, which pinned the honest value, are cut) and no signed call derives. -/
-def forge (log : List (Turn D)) : Option (Nat × List (Turn D)) :=
+def forge (log : List (Step D)) : Option (Nat × List (Step D)) :=
   -- a value cell's kernel keys are not forged here: the kernel itself refuses a forged balance
   -- (`valueMalformed`, `notConserved`), so such a log is not one `fold` accepts
   let valueKey (k : Nat) : Bool := k == Value.denomKey || k == Value.balanceKey || k == Value.floorKey
@@ -1156,12 +1201,15 @@ def forge (log : List (Turn D)) : Option (Nat × List (Turn D)) :=
   let isWrite (t : Turn D) := t.touches.any fun x => match x.act with
     | .write ops => ops.any fun o => match o with | .set k _ => !valueKey k | _ => false
     | _ => false
-  match (log.zipIdx.filter fun (t, _) => isWrite t).getLast? with
+  let turnAt : Step D × Nat → Option (Turn D × Nat)
+    | (.turn t, i) => if isWrite t then some (t, i) else none
+    | _ => none
+  match (log.zipIdx.filterMap turnAt).getLast? with
   | none => none
   | some (t, i) =>
       let t0 := { t with touches := t.touches.map forged }
       let t1 := { t0 with charge := t0.weight }
-      some (i, log.take i ++ [t1])
+      some (i, log.take i ++ [.turn t1])
 
 /-- The genesis probe (KERNEL-31): past `Bounds.eventBytesMax` the raw codec truncates, so an
 oversize founder key would give two geneses one origin with no hash collision. A third founder
@@ -1254,7 +1302,7 @@ def probeJournal (P : Params D) (st : State D) (seed : Nat) : State D :=
         -- (`fold_journal_filter`), and the never-pruned World checks every windowed retry as the
         -- real one does (`fold_prune_check`); the fresh-window reuse is outside that premise and is
         -- the one place the two answer differently
-        let J := shadowJournal P.env g.height g.journal log.reverse
+        let J := shadowJournal P.env g.height g.journal (log.reverse.map .turn)
         let wS := { w with journal := J }
         -- the reference is `build` of the filtered never-pruned listing, not `retainAt`: so a prune
         -- that keeps the right entries in a non-canonical trie (no collapse) is red here by its root
@@ -1378,7 +1426,7 @@ def probeCarry (P : Params D) (st : State D) : State D :=
       failWith st "probe carry: the carried World differs"
     else if w'.origin == w.origin then failWith st "probe carry: the carried World kept the old origin"
     else
-      let st := match st.log.getLast? with
+      let st := match (Step.turns st.log).getLast? with
         | none => st
         | some t => match X.decodeCall t.event with
           | none => failWith st "probe carry: the last logged event does not decode"
@@ -1398,6 +1446,123 @@ def probeCarry (P : Params D) (st : State D) : State D :=
       let st := carryExpect P st w' old "carry-old-world" "wrongWorld"
       let fresh := signed P { st with host := w' } f f.key (S.pinsFor P.env w' [f.id]) (.create none [] [])
       carryExpect P st w' fresh "carry-new" "ok"
+
+/-! ### Refusals (KERNEL-44, KERNEL-47): recorded, final, bounded, and only when authenticated -/
+
+/-- A signed call with an explicit window (the generator's `signed` opens one at the next height). -/
+def signedAt (P : Params D) (st : State D) (m : Member D) (key : ByteArray) (pins : List (D × D))
+    (body : Body D) (nb vu : Nat) : Call D :=
+  let u : Unsigned D :=
+    { world := st.host.origin, member := m.id, key := P.pub key, notBefore := nb, validUntil := vu, pins,
+      maxCharge := 1000000, body }
+  { unsigned := u, signature := P.sign key (P.ctx.callMessage u) }
+
+def arm (st : State D) (name : String) (ok : Bool) (msg : String) : State D :=
+  if ok then meet st name else failWith st s!"probe refusals: {msg}"
+
+/-- The refusals probe, from the founder's fresh budget (it runs before the random acts):
+* `refusal-aba`: the A→B→A defect KERNEL-44 names. A call pinned to A is refused `stale` after a
+  write to B and RECORDED; the object is written back to A, so the call's pins see what its signer
+  saw; resubmitted, it is `refusedFinal`. PLANT `refusal-aba-plant:admitted`: the same World without
+  the record (the code before KERNEL-44) ADMITS it, after the client was told `refused`. And
+  `refusal-final-fold`: a Host that admits it anyway is refused `refusedFinal` by the follower's fold
+  at that step's index.
+* `refusal-early`: a call whose window has not opened is refused `outsideWindow` and NOT recorded
+  (`World.refuse` itself refuses to: `refusal-early-kernel`); in its window it is admitted.
+  PLANT `refusal-early-plant`: had it been recorded, its own window would refuse it `refusedFinal`.
+* `refusal-rotate-stranger`: a stranger signs a rotation naming the founder with its own key: refused
+  `notPrecommitted`, NOT recorded, the founder's count and the refusals root unmoved. PLANT
+  `refusal-rotate-plant`: classified by `keyRule` (which skips the key for `rotate`) it would be
+  authenticated, and `World.refuse` would take one of the founder's slots.
+* `refusal-budget`: stale calls are recorded up to `Bounds.refusalsPerWindow`; the next is
+  `refusalBudget`, not recorded. -/
+def probeRefusals (P : Params D) (st : State D) (g : World D) : State D :=
+  let X := P.ctx
+  let E := P.env
+  let f := founder0 P st
+  let mk := fun (st : State D) => submit P st (signed P st f f.key (S.pinsFor E st.host [f.id]) (.create none [] [])) .ok "refusal-object"
+  let (st, t1) := mk st
+  let (st, t2) := mk st
+  match t1.bind (fun t => (createdIds t).head?), t2.bind (fun t => (createdIds t).head?) with
+  | some o, some o2 =>
+    let pinsNow := fun (st : State D) (x : D) => S.pinsFor E st.host [f.id, x]
+    let wr := fun (st : State D) (x : D) (k : Nat) (v : String) (pins : List (D × D)) =>
+      signed P st f f.key pins (.write x [(k, v.toUTF8)] none)
+    -- A → B → (a call pinned to A, refused stale, recorded) → A → the same call again
+    let (st, _) := submit P st (wr st o 1 "A" (pinsNow st o)) .ok "refusal-aba-a"
+    let pinsA := pinsNow st o
+    let (st, _) := submit P st (wr st o 1 "B" (pinsNow st o)) .ok "refusal-aba-b"
+    let c := wr st o 1 "C" pinsA
+    let (st, _) := submit P st c (.rejected "stale") "refusal-aba-stale"
+    let wRec := st.host
+    let st := arm st "refusal-aba-recorded:recorded" (wRec.refusalAt E (.tx (txIdOf X c))).isSome
+      "the stale refusal of an authenticated in-window call was not recorded"
+    let (st, _) := submit P st (wr st o 1 "A" (pinsNow st o)) .ok "refusal-aba-a2"
+    let st := arm st "refusal-aba-pin:returned" (pinsNow st o == pinsA) "the object's pin did not return to A"
+    let plantHost := { st.host with refusals := g.refusals }
+    let st := match Receive.submit X plantHost c with
+      | .ok (t, _) =>
+          let st := meet st "refusal-aba-plant:admitted"
+          match World.fold E g (st.log ++ [.turn t]) with
+          | .error (i, .refusedFinal _) =>
+              arm st "refusal-final-fold:refusedFinal" (i == st.log.length) s!"the follower refused at {i}, not {st.log.length}"
+          | .error (_, r) => failWith st s!"probe refusals: the follower refused a recorded call's admission {r.name}"
+          | .ok _ => failWith st "probe refusals: the follower admitted a call the Host had recorded refused"
+      | .error v => failWith st s!"probe refusals: without the record the A→B→A call is {vname v}, not admitted (the plant is blind)"
+    let (st, _) := submit P st c (.rejected "refusedFinal") "refusal-aba"
+    -- an early call: refused, not recorded, admitted in its window
+    let H := st.host.height
+    let ce := signedAt P st f f.key (pinsNow st o) (.write o [(2, "early".toUTF8)] none) (H + 3) (H + 50)
+    let before := st.host.refusalsRoot E
+    let (st, _) := submit P st ce (.rejected "outsideWindow") "refusal-early-refused"
+    let st := arm st "refusal-early:declined" (st.host.refusalsRoot E == before) "an early refusal was recorded"
+    let st := match World.refuse E st.host (refusedOf X ce (.rejected .outsideWindow)) with
+      | .error .outsideWindow => meet st "refusal-early-kernel:outsideWindow"
+      | _ => failWith st "probe refusals: World.refuse recorded an early call"
+    let (st, _) := submit P st (wr st o2 1 "x" (pinsNow st o2)) .ok "refusal-early-advance"
+    let (st, _) := submit P st (wr st o2 1 "y" (pinsNow st o2)) .ok "refusal-early-advance"
+    let earlyCode := (Verdict.rejected (D := D) .outsideWindow).code
+    let earlyRefusals := st.host.refusals.insert (refusalSpec E) (.tx (txIdOf X ce)) (.refused (H + 1) earlyCode)
+    let early := { st.host with refusals := earlyRefusals }
+    let st := match Receive.submit X early ce with
+      | .error (.rejected (.refusedFinal _)) => meet st "refusal-early-plant:refusedFinal"
+      | _ => failWith st "probe refusals: a recorded early refusal did not finalize the call (the plant is blind)"
+    let (st, _) := submit P st ce .ok "refusal-early-window"
+    -- a stranger's rotation naming the founder
+    let (thief, st) := freshKey st "stranger"
+    let bad := signed P st f thief (S.pinsFor E st.host [f.id]) (.rotate (P.pub thief) (nextKeyDigest X (P.pub thief)))
+    let cnt := refusalCount E st.host f.id
+    let root := st.host.refusalsRoot E
+    let (st, _) := submit P st bad (.refused "notPrecommitted") "refusal-rotate-stranger"
+    let st := arm st "refusal-rotate-kept:declined"
+      (refusalCount E st.host f.id == cnt && st.host.refusalsRoot E == root) "a stranger's rotation took the founder's slot"
+    let plantAuth := match (do
+        req (bad.unsigned.world = st.host.origin) Refusal.wrongWorld
+        checkSignature X bad
+        keyRule (pinned E st.host bad.unsigned.pins) bad.unsigned : Except (Refusal D) Unit) with
+      | .ok () => true
+      | .error _ => false
+    let st := match plantAuth, World.refuse E st.host (refusedOf X bad (.refused (.notPrecommitted f.id))) with
+      | true, .ok w' => arm st "refusal-rotate-plant:authenticated" (refusalCount E w' f.id == cnt + 1)
+          "the keyRule plant did not take a slot"
+      | _, _ => failWith st "probe refusals: the keyRule plant would not record the stranger (the plant is blind)"
+    -- the budget: stale calls until the founder's window is full, then one more
+    let stale := fun (st : State D) (i : Nat) =>
+      wr st o 3 s!"s{i}" ((S.pinsFor E st.host [f.id]) ++ [(o, pinOf E none)])
+    let st := (List.range (Bounds.refusalsPerWindow + 1)).foldl (fun st i =>
+      if refusalCount E st.host f.id < Bounds.refusalsPerWindow then
+        (submit P st (stale st i) (.rejected "stale") "refusal-budget-fill").1
+      else st) st
+    let c17 := stale st 99
+    let full := refusalCount E st.host f.id == Bounds.refusalsPerWindow
+    let st := match Receive.judge X st.host c17 with
+      | .declined (.rejected .refusalBudget) =>
+          let (st, _) := submit P st c17 (.rejected "stale") "refusal-budget-verdict"
+          arm st "refusal-budget:refusalBudget"
+            (full && (st.host.refusalAt E (.tx (txIdOf X c17))).isNone) "the refusal past the budget was stored"
+      | _ => failWith st "probe refusals: the refusal past the member's budget was not refused refusalBudget"
+    st
+  | _, _ => failWith st "probe refusals: the objects were not created"
 
 /-- A forged turn that retires `id` (a live cell) and nothing else: the light turn of cv 01a14ba9-cbf4.
 Its charge is its own weight; its credit is the retired cell's whole weight. -/
@@ -1474,6 +1639,7 @@ def run (P : Params D) (seed : Nat) (steps : Nat) : State D :=
   let st := { st with freezePkg := t.bind fun t => (createdIds t).head? }
   let (st, t) := submit P st (signed P st f f.key (S.pinsFor P.env st.host [f.id]) (.install methods)) .ok "install"
   let st := { st with methodsPkg := t.bind fun t => (createdIds t).head? }
+  let st := probeRefusals P st g
   let st := (List.range steps).foldl (fun st _ =>
     let st := scanValue P (act P st)
     -- restart: the Host reopens by folding its own log from genesis
@@ -1498,7 +1664,7 @@ def run (P : Params D) (seed : Nat) (steps : Nat) : State D :=
         else
           -- the Host's proofs verify against the follower's root (KERNEL-23 (g))
           let S := trieSpec P.env
-          let ok := match st.log.getLast? with
+          let ok := match (Step.turns st.log).getLast? with
             | none => true
             | some t => (changedSlots t).all fun s => match st.host.trie.get S s with
                 | some l => Trie.verifyInclusion S (w.root P.env) s (leafDigest P.env l) (st.host.trie.prove S s)
@@ -1508,6 +1674,19 @@ def run (P : Params D) (seed : Nat) (steps : Nat) : State D :=
   let st := match audit P.ctx g st.log with
     | .ok w => if same P.env w st.host then st else { st with failures := "audit differs" :: st.failures }
     | .error (i, f) => { st with failures := s!"audit refused at {i}: {vname f}" :: st.failures }
+  -- a forged refusal record: its code changed; `fold` keeps it (the kernel cannot see the code was
+  -- not the call's), `audit` re-judges the call and names the step
+  let st := match (st.log.zipIdx.filterMap fun (s, i) => match s with
+      | .refusal r => some (r, i) | _ => none).head? with
+    | none => failWith st "refusals: the log recorded none"
+    | some (r, i) =>
+        let bad := st.log.set i (.refusal { r with code := r.code + 1 })
+        match World.fold P.env g bad, audit P.ctx g bad with
+        | .ok _, .error (j, .refused .eventMismatch) =>
+            arm st "refusal-forged-code:eventMismatch" (i == j) s!"forged refusal at {i} named at {j}"
+        | .ok _, .error (j, v) => failWith st s!"forged refusal at {i}: audit said {vname v} at {j}"
+        | .ok _, .ok _ => failWith st s!"forged refusal at {i}: audit accepted"
+        | .error _, _ => failWith st s!"forged refusal at {i}: fold refused it (not a forgery test)"
   let st := probeSigDomain P st
   let st := probeCarry P st
   let st := probeCarryBudget P st
@@ -1516,8 +1695,9 @@ def run (P : Params D) (seed : Nat) (steps : Nat) : State D :=
   match genesis X worldName (nonceOf (seed + 1000000)) 100000000 founders with
   | .error r => failWith st s!"second genesis refused {r.name}"
   | .ok g2 =>
-  let st := st.log.foldl (fun st t =>
-    match X.decodeCall t.event with
+  let st := st.log.foldl (fun st s =>
+    let event := match s with | .turn t => t.event | .refusal r => r.event
+    match X.decodeCall event with
     | none => { st with failures := "replay elsewhere: a logged event does not decode" :: st.failures }
     | some c =>
         match Receive.submit X g2 c with
@@ -1573,7 +1753,13 @@ def plantedArms : List String :=
    "journal-proof-height:refused", "journal-proof-admitted:refused", "journal-proof-stale:refused",
    "journal-proof-cells-root:refused", "carry-name:nameTooLong", "carry-old-call:replayed",
    "carry-old-world:wrongWorld", "carry-new:ok", "sig-bare:badSignature", "hash-count:empty-per-insert", "retain:canonical",
-   "retain-plant:refuted", "carry-budget:allowanceTooLarge", "carry-budget-edge:ok", "carry-budget-plant:overflow"]
+   "retain-plant:refuted", "carry-budget:allowanceTooLarge", "carry-budget-edge:ok", "carry-budget-plant:overflow",
+   "refusal-aba-stale:stale", "refusal-aba-recorded:recorded", "refusal-aba-pin:returned",
+   "refusal-aba-plant:admitted", "refusal-final-fold:refusedFinal", "refusal-aba:refusedFinal",
+   "refusal-early-refused:outsideWindow", "refusal-early:declined", "refusal-early-kernel:outsideWindow",
+   "refusal-early-plant:refusedFinal", "refusal-early-window:ok", "refusal-rotate-stranger:notPrecommitted",
+   "refusal-rotate-kept:declined", "refusal-rotate-plant:authenticated", "refusal-budget:refusalBudget",
+   "refusal-forged-code:eventMismatch"]
 
 /-- `--seeds N` runs seeds `0 … N-1`; otherwise each argument is a seed. -/
 def parseSeeds : List String → List Nat
@@ -1595,6 +1781,8 @@ def report (P : Params D) (seeds : List Nat) : IO UInt32 := do
   let mut journal : Nat × Nat × Nat := (0, 0, 0)
   -- KERNEL-41: (journal-insert marks, inserts, prune marks, prunes)
   let mut jhashes : Nat × Nat × Nat × Nat := (0, 0, 0, 0)
+  -- KERNEL-44: (refuse marks, recorded refusals, record bytes, most per member per window, budgeted)
+  let mut rf : Nat × Nat × Nat × Nat × Nat := (0, 0, 0, 0, 0)
   for seed in seeds do
     -- the run's trie hashes are counted off its stderr (`countingEnv`); nothing else writes there
     let buf ← IO.mkRef ({} : IO.FS.Stream.Buffer)
@@ -1618,6 +1806,8 @@ def report (P : Params D) (seeds : List Nat) : IO UInt32 := do
       hashes.2.2.2 + st.nullSlots)
     jhashes := (jhashes.1 + m.probeInsert, jhashes.2.1 + st.probeInserts, jhashes.2.2.1 + m.prune,
       jhashes.2.2.2 + st.prunes)
+    rf := (rf.1 + m.refuse, rf.2.1 + st.recorded, rf.2.2.1 + st.refusalBytes, max rf.2.2.2.1 st.refusalMax,
+      rf.2.2.2.2 + st.budgeted)
     seen := (st.seen ++ seen).eraseDups
     match st.failures.reverse with
     | [] => IO.println s!"PASS seed {seed}: admitted={st.admitted} refused-as-expected={st.refusedAsExpected} restarts={st.restarts}"
@@ -1626,6 +1816,7 @@ def report (P : Params D) (seeds : List Nat) : IO UInt32 := do
         IO.println s!"FAIL seed {seed}: {f}"
   IO.println s!"kernel-sim: seeds={seeds.length} admitted={admitted} refused-as-expected={refused} restarts={restarts} failing-seeds={bad}"
   IO.println s!"kernel-sim: record bytes = Turn.logWeight on {weighed} of {admitted} admitted turns"
+  IO.println s!"kernel-sim: refusals recorded={rf.2.1} declined-refusalBudget={rf.2.2.2.2}"
   if (P.env.bytes P.zero).size = digestWeight && weighed != admitted then
     bad := bad + 1
     IO.println s!"FAIL log weight compared on {weighed} of {admitted} admitted turns"
@@ -1642,6 +1833,12 @@ def report (P : Params D) (seeds : List Nat) : IO UInt32 := do
   IO.println s!"WASTE admit hashes-per-prune {showRatio (ratio jhashes.2.2.1 jhashes.2.2.2)}"
   IO.println s!"WASTE admit journal-entries-per-window {showRatio (ratio journal.1 Bounds.windowMax)}"
   IO.println s!"WASTE admit journal-scanned-per-turn {showRatio (ratio journal.2.1 journal.2.2)}"
+  IO.println s!"WASTE refuse hashes-per-refusal {showRatio (ratio rf.1 rf.2.1)}"
+  IO.println s!"WASTE refuse record-bytes-per-refusal {showRatio (ratio rf.2.2.1 rf.2.1)}"
+  IO.println s!"WASTE refuse refusals-per-member-window {showRatio (ratio rf.2.2.2.1 1)}"
+  if rf.2.2.2.1 > Bounds.refusalsPerWindow then
+    bad := bad + 1
+    IO.println s!"FAIL a member had {rf.2.2.2.1} refusals recorded in one window (bound {Bounds.refusalsPerWindow})"
   if bad = 0 then IO.println "ALL PASS"
   return if bad = 0 then 0 else 1
 

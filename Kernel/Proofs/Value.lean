@@ -407,25 +407,42 @@ theorem admit_floors {E : Env D} {w w' : World D} {t : Turn D} (hc : w.Canon E)
   unfold World.floorSum
   rw [hs, (checkValue_ok hk.value).2.2 d hd]; omega
 
+omit [Std.TransOrd D] [Std.LawfulEqOrd D] in
+/-- A recorded refusal moves no sum over the cells (it leaves the cells' trie as it was). -/
+theorem refuse_sumOf {E : Env D} {w w' : World D} {r : Refused D} (h : World.refuse E w r = .ok w')
+    (g : Flow → Int) (d : ByteArray) : w'.sumOf g d = w.sumOf g d := by
+  unfold World.sumOf; rw [refuse_trie h]
+
+omit [Std.TransOrd D] [Std.LawfulEqOrd D] in
+theorem refuse_taken {E : Env D} {w w' : World D} {r : Refused D} (h : World.refuse E w r = .ok w')
+    (c : D) : w'.taken E c = w.taken E c := by
+  unfold World.taken; rw [refuse_entry h]
+
 /-- **Value is conserved over a log.** -/
 theorem fold_value {E : Env D} (d : ByteArray) :
-    ∀ {w w' : World D} {l : List (Turn D)}, w.Canon E → World.fold E w l = .ok w' →
+    ∀ {w w' : World D} {l : List (Step D)}, w.Canon E → World.fold E w l = .ok w' →
       w'.valueSum d = w.valueSum d
   | w, w', [], _, h => by simp [World.fold] at h; subst h; rfl
-  | w, w', t :: rest, hc, h => by
+  | w, w', .turn t :: rest, hc, h => by
       obtain ⟨w₁, h₁, h₂⟩ := fold_cons_ok.mp h
       rw [fold_value d (admit_canon hc h₁) h₂, admit_value hc h₁ d]
+  | w, w', .refusal r :: rest, hc, h => by
+      obtain ⟨w₁, h₁, h₂⟩ := fold_cons_ok.mp h
+      rw [fold_value d (refuse_canon hc h₁) h₂]; exact refuse_sumOf h₁ _ d
 
 /-- **The cap is fixed after birth.** Over a log none of whose turns bears `d`, its floor sum
 does not move. -/
 theorem fold_floors {E : Env D} {d : ByteArray} :
-    ∀ {w w' : World D} {l : List (Turn D)}, w.Canon E → World.fold E w l = .ok w' →
-      (∀ t ∈ l, d ∉ (createdIds t).map E.bytes) → w'.floorSum d = w.floorSum d
+    ∀ {w w' : World D} {l : List (Step D)}, w.Canon E → World.fold E w l = .ok w' →
+      (∀ t ∈ Step.turns l, d ∉ (createdIds t).map E.bytes) → w'.floorSum d = w.floorSum d
   | w, w', [], _, h, _ => by simp [World.fold] at h; subst h; rfl
-  | w, w', t :: rest, hc, h, hn => by
+  | w, w', .turn t :: rest, hc, h, hn => by
       obtain ⟨w₁, h₁, h₂⟩ := fold_cons_ok.mp h
-      rw [fold_floors (admit_canon hc h₁) h₂ (fun u hu => hn u (by simp [hu])),
-        admit_floors hc h₁ (hn t (by simp))]
+      rw [fold_floors (admit_canon hc h₁) h₂ (fun u hu => hn u (by simp [Step.turns, hu])),
+        admit_floors hc h₁ (hn t (by simp [Step.turns]))]
+  | w, w', .refusal r :: rest, hc, h, hn => by
+      obtain ⟨w₁, h₁, h₂⟩ := fold_cons_ok.mp h
+      rw [fold_floors (refuse_canon hc h₁) h₂ hn]; exact refuse_sumOf h₁ _ d
 
 /-! ## Floors: every live value cell is within its floor -/
 
@@ -476,12 +493,10 @@ theorem admit_floorOk {E : Env D} {w w' : World D} {t : Turn D} (hf : FloorOk E 
   · exact postWrite_valueOk hw
 
 omit [Std.TransOrd D] [Std.LawfulEqOrd D] in
-theorem fold_floorOk {E : Env D} :
-    ∀ {w w' : World D} {l : List (Turn D)}, FloorOk E w → World.fold E w l = .ok w' → FloorOk E w'
-  | w, w', [], hf, h => by simp [World.fold] at h; subst h; exact hf
-  | w, w', t :: rest, hf, h => by
-      obtain ⟨w₁, h₁, h₂⟩ := fold_cons_ok.mp h
-      exact fold_floorOk (admit_floorOk hf h₁) h₂
+theorem fold_floorOk {E : Env D} {w w' : World D} {l : List (Step D)} (hf : FloorOk E w)
+    (h : World.fold E w l = .ok w') : FloorOk E w' :=
+  fold_keeps (P := fun v => FloorOk E v) admit_floorOk
+    (fun hp hr => fun c cell hl => hp c cell ((refuse_live hr c).symm.trans hl)) hf h
 
 omit [Ord D] [DecidableEq D] in
 theorem ofCell_value {cell : Cell} {v : Value} (h : Value.ofCell cell = some v) :
@@ -639,13 +654,14 @@ theorem admit_birth {E : Env D} {n : Nat} {w w' : World D} {t : Turn D} (hb : Fl
   rw [req_ok] at this
   simp [hc] at this
 
-theorem fold_floorsBorn {E : Env D} :
-    ∀ {w w' : World D} {l : List (Turn D)}, w.Canon E → FloorsBorn E w → World.fold E w l = .ok w' →
-      FloorsBorn E w'
-  | w, w', [], _, hb, h => by simp [World.fold] at h; subst h; exact hb
-  | w, w', t :: rest, hc, hb, h => by
-      obtain ⟨w₁, h₁, h₂⟩ := fold_cons_ok.mp h
-      exact fold_floorsBorn (admit_canon hc h₁) (admit_floorsBorn hc hb h₁) h₂
+theorem fold_floorsBorn {E : Env D} {w w' : World D} {l : List (Step D)} (hc : w.Canon E)
+    (hb : FloorsBorn E w) (h : World.fold E w l = .ok w') : FloorsBorn E w' :=
+  (fold_keeps (P := fun v => v.Canon E ∧ FloorsBorn E v)
+    (fun hp ha => ⟨admit_canon hp.1 ha, admit_floorsBorn hp.1 hp.2 ha⟩)
+    (fun hp hr => ⟨refuse_canon hp.1 hr, fun d hd => by
+      unfold World.floorSum at hd; rw [refuse_sumOf hr] at hd
+      obtain ⟨id, hcn, he⟩ := hp.2 d hd
+      exact ⟨id, (refuse_taken hr id).trans hcn, he⟩⟩) ⟨hc, hb⟩ h).2
 
 
 omit [Std.TransOrd D] [Std.LawfulEqOrd D] in
@@ -671,10 +687,14 @@ theorem admit_not_born {E : Env D} {n : Nat} {w w' : World D} {t : Turn D}
 from the turn that bore it on), no admitted log moves that denomination's floor sum. With
 `admit_birth` (0 before) and `dispatch_value_born` (the birth sets it to the signed cap). -/
 theorem fold_floors_held {E : Env D} {n : Nat} (hE : E.Lawful n) {id : D} :
-    ∀ {w w' : World D} {l : List (Turn D)}, w.Canon E → World.fold E w l = .ok w' →
+    ∀ {w w' : World D} {l : List (Step D)}, w.Canon E → World.fold E w l = .ok w' →
       w.taken E id = true → w'.floorSum (E.bytes id) = w.floorSum (E.bytes id)
   | w, w', [], _, h, _ => by simp [World.fold] at h; subst h; rfl
-  | w, w', t :: rest, hcn, h, hc => by
+  | w, w', .refusal r :: rest, hcn, h, hc => by
+      obtain ⟨w₁, h₁, h₂⟩ := fold_cons_ok.mp h
+      rw [fold_floors_held hE (refuse_canon hcn h₁) h₂ ((refuse_taken h₁ id).trans hc)]
+      exact refuse_sumOf h₁ _ _
+  | w, w', .turn t :: rest, hcn, h, hc => by
       obtain ⟨w₁, h₁, h₂⟩ := fold_cons_ok.mp h
       have hc₁ : w₁.taken E id = true := by
         obtain ⟨posts, _, rfl⟩ := admit_ok h₁

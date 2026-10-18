@@ -112,10 +112,9 @@ theorem carried_decode_journalCanon {E : Env D} {PD : D → Prop} {dc : Stream D
     Trie.Canon (journalSpec E) 0 c.journal :=
   ((carried_lawfulOn E hd).eq_bytes_of_decode h).1.2.2.2.1.2
 
-omit [DecidableEq D] in
 /-- The carried state of a fitting World is in the codec's domain. -/
 theorem carried_fits {E : Env D} {PD : D → Prop} {w : World D} (hw : World.CodecFits E PD w) :
     Carried.CodecFits E PD w.carried :=
-  ⟨hw.1, Nat.lt_of_le_of_lt (Nat.le_add_left _ _) hw.2.2.2.2.1, hw.2.2.1, hw.2.1, hw.2.2.2.2.2.2⟩
+  ⟨hw.cells, Nat.lt_of_le_of_lt (Nat.le_add_left _ _) hw.budget, hw.height, hw.journal, hw.journalFits⟩
 
 end Nanodregg.Codec.Kernel

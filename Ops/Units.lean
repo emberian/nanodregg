@@ -631,6 +631,7 @@ def commandAction : CommandExit → String
   | .absent => "nothing: `sync` sends no call, so `absent` is a lookup's end; seen from sync, report to PROTOCOL"
   | .behind => "automatic: the catch-up read its page bound and is still behind; the next run continues from what was absorbed"
   | .client => "nd itself could not run (argv, a socket, the workspace; stderr names it): check /etc/nd/follow/LABEL and that both sockets exist; it is retried every interval"
+  | .declined => "nothing: `sync` sends no call, so it is never `declined` (a submit's not-final refusal, PROTOCOL-41); seen from sync, report to PROTOCOL"
 
 /-- How often the driver runs `nd sync`: systemd's `RestartSec` of an always-restarting unit. -/
 def syncSeconds : Nat := 40

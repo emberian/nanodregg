@@ -190,7 +190,7 @@ theorem carry_journal_fits [DecidableEq D] {E : Env D} {w : World D} (hj : w.Jou
 /-- **Carry, then fold: still bounded.** Every World folded from a carry of a `JournalOk` World
 holds fewer than `3 * windowMax` journal entries, so a second carry passes `journalTooLong` too. -/
 theorem carry_fold_journal_bounded [DecidableEq D] {X : Ctx D}
-    {name nonce : ByteArray} {w w' w'' : World D} {l : List (Turn D)} (hj : w.JournalOk X.env)
+    {name nonce : ByteArray} {w w' w'' : World D} {l : List (Step D)} (hj : w.JournalOk X.env)
     (h : carry X name nonce w.origin w.carried = .ok w') (hf : World.fold X.env w' l = .ok w'') :
     w''.journal.toList.length < 3 * Bounds.windowMax :=
   journal_bounded (fold_journalOk (carry_journalOk hj h) hf)
@@ -214,8 +214,9 @@ World's origin only in its first check (`wrongWorld`), and admission never reads
 any new origin and chain: a call naming the new origin is derived from the OLD World's pinned
 state (`pinned` reads only the trie), whatever the origin and chain were. -/
 theorem receive_reorigin [DecidableEq D] {X : Ctx D} {w : World D} {c : Call D} {o ch : D}
-    (hc : c.unsigned.world = o) :
-    receive X { w with origin := o, chain := ch } c = receiveWith X (pinned X.env w c.unsigned.pins) c := by
+    {rf : Refusals D} {st : Nat} (hc : c.unsigned.world = o) :
+    receive X { w with origin := o, chain := ch, refusals := rf, steps := st } c =
+      receiveWith X (pinned X.env w c.unsigned.pins) c := by
   unfold receive
   simp only [req, decide_eq_true hc, if_true]
   rfl
@@ -242,11 +243,14 @@ theorem carry_receive [DecidableEq D] {X : Ctx D} {name nonce : ByteArray} {w w'
 theorem check_origin_blind [DecidableEq D] {E : Env D} {w : World D} {t : Turn D} {o ch : D} :
     check E { w with origin := o, chain := ch } t = check E w t := rfl
 
-/-- **A carry changes no admission**: the carried World checks every turn as the exported one. -/
+/-- **A carry changes no admission but the refusals it forgets**: the carried World checks every
+turn as the exported one would with its recorded refusals dropped and its step counter restarted at
+its height (KERNEL-44: a carry carries no refusals; a call refused in the old World is `wrongWorld`
+in the new, KERNEL-24). -/
 theorem carry_check [DecidableEq D] {X : Ctx D} {name nonce : ByteArray} {w w' : World D}
     (h : carry X name nonce w.origin w.carried = .ok w') (t : Turn D) :
-    check X.env w' t = check X.env w t := by
+    check X.env w' t = check X.env { w with refusals := .empty, steps := w.height } t := by
   obtain ⟨_, rfl⟩ := carry_ok.mp h
-  exact check_origin_blind
+  rfl
 
 end Nanodregg.Kernel.Receive

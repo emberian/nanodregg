@@ -94,7 +94,7 @@ def go (prog : Program D) (r : Run) (c : Call D) : Run × String × Option (Turn
   match Receive.submit X st.host c with
   | .error (.refused e) => (r, s!"refused {Kernel.Sim.nameOf e} {reprStr e}", none)
   | .error (.rejected e) => (r, s!"rejected {Kernel.Sim.nameOf e}", none)
-  | .ok (t, w') => ({ r with st := { st with host := w', log := st.log ++ [t] } }, "admitted", some t)
+  | .ok (t, w') => ({ r with st := { st with host := w', log := st.log ++ [.turn t] } }, "admitted", some t)
 
 /-- Refused by the kernel under name `n`, at its receivers or at `World.admit`. -/
 def refusedAs (v n : String) : Bool := v.startsWith s!"refused {n} " || v == s!"rejected {n}"

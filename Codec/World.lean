@@ -3,19 +3,23 @@ import Codec.Kernel
 /-!
 # Codec.World — the canonical bytes of a whole World (the checkpoint, HOST-14's base)
 
-`trie ‖ journal ‖ height u64 ‖ chain ‖ allowance u64 ‖ origin`. Both of the World's maps are tries
-(KERNEL-23 cells and spent nullifiers; KERNEL-41 the journal, under `journalSpec`), and each is written
+`trie ‖ journal ‖ refusals ‖ height u64 ‖ steps u64 ‖ chain ‖ allowance u64 ‖ origin`. The World's three maps are tries
+(KERNEL-23 cells and spent nullifiers; KERNEL-41 the journal, under `journalSpec`; KERNEL-44 the
+refusals, under `refusalSpec`), and each is written
 as its listing (`Trie.T.toList`, left to right by key bits) and read back by `Trie.build` over that
 listing (`listingAccept`): every node hash is recomputed, none is ever read from the wire (CODEC-19), and
 a listing is refused by name unless it is exactly the rebuilt trie's own (no key twice in a leaf).
 The cells' listing is refused `kernel/leaf-fit` unless every slot holds the leaf of its kind, and
 `kernel/trie-order` unless it is the canonical trie's; the journal's is refused
 `kernel/journal-order` unless it is the canonical journal trie's (at the deployed digest: strictly
-ascending by transaction id, `Codec.Deployed.journalOrder_iff`). So both maps read back EXACTLY
+ascending by transaction id, `Codec.Deployed.journalOrder_iff`); the refusals' `kernel/refusal-order`
+likewise. So every map reads back EXACTLY
 (`build_toList`), decode ∘ bytes is the identity (`world_lawfulOn`), and the bytes are a function of
 the contents. The World is refused `kernel/journal` unless its journal is the window's (KERNEL-39's
 `journalFits`, every entry at or below the height and inside the window, one entry per height), so a
-decoded base carries `World.JournalOk` (`world_decode_journalOk`).
+decoded base carries `World.JournalOk` (`world_decode_journalOk`); `kernel/refusals` unless its refusals
+are the window's (KERNEL-47's `refusalsFits`), so it carries `World.RefusalsOk`
+(`world_decode_refusalsOk`); and `kernel/steps` unless its height is at most its step count.
 `world.size w` is the encoded length, computed from the entries without encoding (HOST's
 `worldBytesMax`).
 -/
@@ -92,34 +96,128 @@ def journalTrie [DecidableEq D] (E : Env D) (dc : Stream D) : Stream (Journal D)
   refine "kernel/journal-order" (rawList Bounds.journalMax (product dc (product nat64 dc)))
     (listingAccept (journalSpec E)) Trie.T.toList
 
-/-- The World's contents, in canonical order. -/
-abbrev WorldWire (D : Type) := Cells D × Journal D × Nat × D × Nat × D
+/-! ## The refusals (KERNEL-44, KERNEL-47)
+
+The third trie: a refused transaction id (`tx`) holding the height and code it was refused at, or a
+member's refusal count for one window (`count`). Written as its listing and read back by `build`, as
+the other two (`kernel/refusal-order`); which key holds which leaf, and the window facts, are the
+World's `kernel/refusals` refusal (KERNEL's `refusalsFits`, which refuses a misfit pairing). -/
+
+abbrev RefusalSlotF (D : Type) : Fin 2 → Type
+  | 0 => D
+  | 1 => D × UInt64
+
+def refusalSlotWire (dc : Stream D) : (s : Fin 2) → Stream (RefusalSlotF D s)
+  | 0 => dc
+  | 1 => product dc u64
+
+/-- A refusals key: its kind (0 a refused transaction id, 1 a member's window count, as in
+`refusalKeyBytes`), then the id, or the member and the window. -/
+def refusalSlot (dc : Stream D) : Stream (RefusalSlot D) :=
+  refine "kernel/refusal-slot" (choice 2 (refusalSlotWire dc))
+    (fun | ⟨0, i⟩ => some (.tx i) | ⟨1, (m, w)⟩ => some (.count m w))
+    (fun | .tx i => ⟨0, i⟩ | .count m w => ⟨1, (m, w)⟩)
+
+abbrev RefusalLeafF : Fin 2 → Type
+  | 0 => Nat × Nat
+  | 1 => Nat
+
+def refusalLeafWire : (s : Fin 2) → Stream (RefusalLeafF s)
+  | 0 => product nat64 nat64
+  | 1 => nat64
+
+/-- A refusals leaf: `refused h code` (0) or `count n` (1), its counters as u64. -/
+def refusalLeaf : Stream RefusalLeaf :=
+  refine "kernel/refusal-leaf" (choice 2 refusalLeafWire)
+    (fun | ⟨0, (h, c)⟩ => some (.refused h c) | ⟨1, n⟩ => some (.count n))
+    (fun | .refused h c => ⟨0, (h, c)⟩ | .count n => ⟨1, n⟩)
+
+/-- The refusals' trie, as its listing (`kernel/refusal-order`): at most `worldMax` entries on the wire
+(a reached World holds at most `Bounds.refusalsPerWindow` per member per window, three windows kept,
+and one count per member: KERNEL-44's bound, which the wire does not restate). -/
+def refusalsTrie [DecidableEq D] (E : Env D) (dc : Stream D) : Stream (Refusals D) :=
+  refine "kernel/refusal-order" (rawList worldMax (product (refusalSlot dc) refusalLeaf))
+    (listingAccept (refusalSpec E)) Trie.T.toList
+
+/-- The World's contents, in canonical order: the three tries, the height, the step count, the
+chain, the allowance, the origin. -/
+abbrev WorldWire (D : Type) := Cells D × Journal D × Refusals D × Nat × Nat × D × Nat × D
 
 def worldWire [DecidableEq D] (E : Env D) (dc : Stream D) : Stream (WorldWire D) :=
-  product (cells E dc) (product (journalTrie E dc) (product nat64 (product dc (product nat64 dc))))
+  product (cells E dc) (product (journalTrie E dc) (product (refusalsTrie E dc)
+    (product nat64 (product nat64 (product dc (product nat64 dc))))))
 
 /-- The World's contents, refused by name unless the journal is the window's (KERNEL-39). -/
 def journalWire [DecidableEq D] (E : Env D) (dc : Stream D) : Stream (WorldWire D) :=
-  refine "kernel/journal" (worldWire E dc) (fun x => if journalFits x.2.2.1 x.2.1.toList then some x else none) id
+  refine "kernel/journal" (worldWire E dc)
+    (fun x => if journalFits x.2.2.2.1 x.2.1.toList then some x else none) id
+
+/-- The World's contents, refused by name unless its refusals are the window's (KERNEL-47's
+`refusalsFits`: each key holds the leaf of its kind, refused calls inside their kept window, counts for
+the current window and within `Bounds.refusalsPerWindow`). -/
+def refusalsWire [DecidableEq D] (E : Env D) (dc : Stream D) : Stream (WorldWire D) :=
+  refine "kernel/refusals" (journalWire E dc)
+    (fun x => if refusalsFits x.2.2.2.1 x.2.2.1.toList then some x else none) id
 
 def toWire (w : World D) : WorldWire D :=
-  (w.trie, w.journal, w.height, w.chain, w.allowance, w.origin)
+  (w.trie, w.journal, w.refusals, w.height, w.steps, w.chain, w.allowance, w.origin)
 
-def ofWire (x : WorldWire D) : World D := ⟨x.1, x.2.1, x.2.2.1, x.2.2.2.1, x.2.2.2.2.1, x.2.2.2.2.2⟩
+def ofWire (x : WorldWire D) : World D :=
+  ⟨x.1, x.2.1, x.2.2.1, x.2.2.2.1, x.2.2.2.2.1, x.2.2.2.2.2.1, x.2.2.2.2.2.2.1, x.2.2.2.2.2.2.2⟩
+
+/-- The World's contents, refused by name unless no transaction id is both recorded refused and
+journaled (KERNEL's `refusalsDisjoint`; a fold never reaches such a World, `fold_refusalsDisjoint`):
+one journal lookup per recorded refusal. -/
+def disjointWire [DecidableEq D] (E : Env D) (dc : Stream D) : Stream (WorldWire D) :=
+  refine "kernel/refusals-disjoint" (refusalsWire E dc)
+    (fun x => if refusalsDisjoint E (ofWire x) then some x else none) id
+
+/-- The World's contents, refused by name unless the World has taken at least as many steps as its
+height (KERNEL's `fold_height_le_steps`: every admitted Turn is a step, a refusal a step that does not
+advance the height; genesis starts both at 0, a carry both at the carried height). -/
+def stepsWire [DecidableEq D] (E : Env D) (dc : Stream D) : Stream (WorldWire D) :=
+  refine "kernel/steps" (disjointWire E dc)
+    (fun x => if x.2.2.2.1 ≤ x.2.2.2.2.1 then some x else none) id
+
 
 /-- The checkpoint: the World's parts, in canonical order, refused `kernel/journal` unless its journal
-is the window's, and `kernel/world-budget` unless its storage plus allowance is below 2^64 (the bound genesis
+is the window's, `kernel/refusals` unless its refusals are, `kernel/refusals-disjoint` unless no
+transaction id is both refused and journaled, `kernel/steps` unless its height is at most
+its step count, and `kernel/world-budget` unless its storage plus allowance is below 2^64 (the bound genesis
 and carry check and admission conserves, KERNEL's `fold_budget_lt`; past it a retirement's credit
 would carry the allowance out of its `u64`, cv 01a14ba9-cbf4). -/
 def world [DecidableEq D] (E : Env D) (dc : Stream D) : Stream (World D) :=
-  refine "kernel/world-budget" (journalWire E dc)
-    (fun x => if cellsWeight x.1 + x.2.2.2.2.1 < 2 ^ 64 then some (ofWire x) else none) toWire
+  refine "kernel/world-budget" (stepsWire E dc)
+    (fun x => if cellsWeight x.1 + x.2.2.2.2.2.2.1 < 2 ^ 64 then some (ofWire x) else none) toWire
 
-/-- A log segment's batch record: at most `max` turns, each with the two roots after it, the cells' and
-the journal's (HOST-29, KERNEL-41: `chainNext` commits both, so the record's end chain is derivable and
-not written). -/
-def batch (max : Nat) (dc : Stream D) : Stream (List (Turn D × (D × D))) :=
-  rawList max (product (turn dc) (product dc dc))
+/-- A recorded refusal as the log carries it (KERNEL-44): transaction id, signer, window, code, and the
+signed call's bytes (at most `callMax`, KERNEL's `checkRefusedBounds`), which the follower decodes and
+re-derives. -/
+def refused (dc : Stream D) : Stream (Refused D) :=
+  refine "kernel/refused"
+    (product dc (product dc (product nat64 (product nat64 (product nat64 (rawBytes callMax))))))
+    (fun (i, m, nb, vu, c, e) => some ⟨i, m, nb, vu, c, e⟩)
+    (fun r => (r.txId, r.member, r.notBefore, r.validUntil, r.code, r.event))
+
+abbrev StepF (D : Type) : Fin 2 → Type
+  | 0 => Turn D
+  | 1 => Refused D
+
+def stepWire (dc : Stream D) : (s : Fin 2) → Stream (StepF D s)
+  | 0 => turn dc
+  | 1 => refused dc
+
+/-- One step of a log (KERNEL-47): an admitted Turn (0) or a recorded refusal (1). -/
+def step (dc : Stream D) : Stream (Step D) :=
+  refine "kernel/step" (choice 2 (stepWire dc))
+    (fun | ⟨0, t⟩ => some (.turn t) | ⟨1, r⟩ => some (.refusal r))
+    (fun | .turn t => ⟨0, t⟩ | .refusal r => ⟨1, r⟩)
+
+/-- A log segment's batch record: at most `max` steps, each with the roots digest after it
+(`World.roots`, KERNEL-47: `chainNext` and `refusalLink` commit it, so the record's end chain is
+derivable and not written). -/
+def batch (max : Nat) (dc : Stream D) : Stream (List (Step D × D)) :=
+  rawList max (product (step dc) dc)
 
 /-! ## The carried state (CODEC-22, KERNEL-29)
 

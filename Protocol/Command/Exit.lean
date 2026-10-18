@@ -24,16 +24,20 @@ inductive CommandExit where
   /-- the catch-up read `Bounds.pagesPerCommandMax` pages and is still behind the writer's tip:
   what was absorbed is kept, run again (printed `behind HEIGHT TIP`) -/
   | behind
+  /-- the writer refused the call by name and did not record it (`Status.declined`, PROTOCOL-41):
+  not final, the attempt stays open (printed `declined NAME`) -/
+  | declined
   /-- nd itself could not run the command (its argv, a socket, the workspace) -/
   | client
   deriving DecidableEq, Repr
 
 namespace CommandExit
 
-def all : List CommandExit := [ok, refused, uncertain, absent, behind, client]
+def all : List CommandExit := [ok, refused, uncertain, absent, behind, client, declined]
 
 def code : CommandExit → Nat
   | ok => 0 | refused => 1 | uncertain => 2 | absent => 50 | behind => 51 | client => 52
+  | declined => 53
 
 def ofCode? (n : Nat) : Option CommandExit := all.find? (·.code == n)
 

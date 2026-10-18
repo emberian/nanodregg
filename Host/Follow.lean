@@ -5,14 +5,15 @@
       command(argv)      → Command.start on follow's World                     → a step
       resume(k, result)  → Command.step: absorbs any log page it carried, every event re-derived
                            (PROTOCOL-4)                                        → a step
-      Turns absorbed     → appended to follow's own segment as one batch record, durably, BEFORE
+      steps absorbed     → appended to follow's own segment as one batch record, durably, BEFORE
                            the step is answered (`Host.append`, the writer's own append path)
 
-Follow decides nothing the kernel does not: `Command.step` re-derives every logged event and
-admits it (`Receive.submit`) BEFORE anything is appended, so follow's Store holds only Turns its own
-`World.admit` accepted (`Protocol.Command.step_persists_admitted`). Its Store is the same format as
+Follow decides nothing the kernel does not: `Command.step` re-judges every logged event (a Turn by
+`Receive.submit`, a recorded refusal by `Receive.judge`, which must record the very same refusal)
+BEFORE anything is appended, so follow's Store holds only steps its own `World.step` took
+(`Protocol.Command.step_persists_admitted`). Its Store is the same format as
 the writer's (key, segment of batch records, sealed base) and is reopened EXACTLY as the writer's
-is: the one `openWriter`, folding with `World.fold` (`Deployed.foldStep`), no signature verified at
+is: the one `openWriter`, folding with `World.step` (`Deployed.foldStep`), no signature verified at
 reopen (HOST-22, ROOT ruling 2026-10-17: the base and the tail rest under one MAC and key, so a
 reopen re-audit distinguishes nothing the MAC does not). A logged event that does not re-derive is refused by the step
 (`eventMismatch`), and a page whose stated chain is not follow's fold by `chainMismatch`. Both are
@@ -55,7 +56,7 @@ toy digest. -/
 def answer {D : Type} [Ord D] [DecidableEq D] (X : Receive.Ctx D) (B : Protocol.Thin.Base (World D))
     (me : Command.Self D) (fs : Command.Follow D) (f : Frame) :
     Command.Follow D × Command.Persist D × UInt8 × ByteArray :=
-  let refused (r : Refusal) := (fs, .turns [], named r.name)
+  let refused (r : Refusal) := (fs, .steps [], named r.name)
   let stepOut (fs' : Command.Follow D) (p : Command.Persist D) (r : Command.Reply) :=
     match r.bytes with
     | some b => (fs', p, Status.ok.code, b)
@@ -63,12 +64,12 @@ def answer {D : Type} [Ord D] [DecidableEq D] (X : Receive.Ctx D) (B : Protocol.
   match Protocol.Op.ofCode? f.op with
   | none =>
     match hangUpAnswer f with
-    | some (s, p) => (fs, .turns [], s, p)
+    | some (s, p) => (fs, .steps [], s, p)
     | none => refused (.unknownOp f.op)
   | some .command =>
     match commandFrame.decode f.payload with
     | .error _ => refused .undecodableCommand
-    | .ok v => stepOut fs (.turns []) (Command.start X me fs (Text.unlist v.1.1))
+    | .ok v => stepOut fs (.steps []) (Command.start X me fs (Text.unlist v.1.1))
   | some .resume =>
     match resumeFrame.decode f.payload with
     | .error _ => refused .undecodableResume
@@ -79,7 +80,7 @@ def answer {D : Type} [Ord D] [DecidableEq D] (X : Receive.Ctx D) (B : Protocol.
 
 /-- The follower loop: one frame at a time, at most `fuel` frames. `dl` is the base download in
 progress, held in memory only, in a reference the caller owns, so it survives a fuel restart's
-in-process reopen exactly as the port's queued frames do (a process restart starts it again). Absorbed Turns are appended through
+in-process reopen exactly as the port's queued frames do (a process restart starts it again). Absorbed steps are appended through
 `Host.append` BEFORE the step is answered; an adopted base is sealed as follow's own newest base
 at its segment position (no record before it belongs to the adopted World's history, so the index
 restarts empty: adopt runs only at genesis (PROTOCOL's `notAtGenesis`), where `index.log` is empty,
@@ -93,13 +94,13 @@ def loop (keys : Keys) (me : Command.Self D) (store : Store) (ck : Checkpoint (W
       | .error f => return (.sealFailed f, { r with pending := none })
     let some f ← port.recv | finish .eof r
     let (fs', p, status, payload) :=
-      answer X ⟨world, World.height, keys.worldDigest, c.worldBytesMax⟩ me ⟨r.world, ← dl.get⟩ f
+      answer X ⟨world, World.steps, keys.worldDigest, c.worldBytesMax⟩ me ⟨r.world, ← dl.get⟩ f
     dl.set fs'.download
     match p with
-    | .turns [] =>
+    | .steps [] =>
       port.send ⟨f.conn, status, payload⟩
       loop keys me store ck port dl fuel { r with world := fs'.world }
-    | .turns ts =>
+    | .steps ts =>
       match ← append recorder keys.segment ck c store r fs'.world (recorder.encode fs'.world ts.toArray) with
       | .error e =>
         port.send ⟨f.conn, Status.uncertain.code, ByteArray.empty⟩

@@ -671,3 +671,28 @@ without `--group` refused. client/tests/custody.rs: a stdio custody signs, never
 rotates. Mutations, each red: the surface check, the op check, the peer check, the custody guards,
 `--connect` mapped to read, the stdio custody opened without `refusing_rotation`.
 **Status.** landed (this commit).
+
+## CLIENT-25 · `declined` is not final: the attempt stays OPEN (2026-10-18, written by PROTOCOL-8 with ROOT standing in for CLIENT; KERNEL-44/47, PROTOCOL-41; landed in the refusals day)
+**What changed.** The Host now has two kinds of refusal for a submit (PROTOCOL-41):
+- `refused` (1) is FINAL: the refusal is recorded in the World, or was recorded before (the name is the recorded one), or the call's window has passed.
+- `declined` (5, payload NAME) is NOT final: an unauthenticated code, an early `outsideWindow`, or `refusalBudget`. Nothing is recorded, and the same bytes may still be admitted later. Example: a call signed with the precommitted next key is `unknownKey` until the rotate.
+
+The emitted table carries it: `status::DECLINED`, `command_exit::DECLINED` (53, restart class) and `attempt::Seen::Declined` / `Action::Declined`. In `attempt::next`, (submit, declined) gives Declined and (lookup, declined) gives BadReply.
+
+The client half, all mechanical from the table:
+- `run::Table.declined`.
+- `run::settlement` classifies DECLINED as `Settlement::Declined(reply)`, and that maps to `Seen::Declined`.
+- `Attempt::drive` on `Action::Declined` returns the in-memory `State::Declined { sends, reply }`. It writes NO settlement file, so on disk the attempt is exactly `Uncertain` (its `sent.*` markers) and the next run looks it up.
+- `run::run`'s submit arm resumes follow with (DECLINED, reply), and follow prints `declined NAME` with exit 53. An armed rotation stays armed: custody is not settled.
+
+**Plants.**
+- `client/tests/attempt.rs`:
+  - `declined_leaves_the_attempt_open_and_the_next_run_looks_up`: one send; no settlement file; reloads as `Uncertain { sends: 1 }`; the next run's only request is a lookup of the same bytes.
+  - `a_declined_lookup_is_a_bad_reply`.
+- `client/tests/run.rs`: `a_declined_rotation_submit_stays_armed_and_open`. One submit, no lookup. Follow is told declined. Custody is not advanced and is still armed. The attempt is Uncertain on disk.
+
+**Why not reuse `uncertain`.** The Host can say the call did not commit and is not recorded, so `uncertain` would be a lie about what it knows. Treated as uncertain, the client would also look it up and resubmit inside the same run, up to `sendsMax`, learning nothing new.
+
+**Critique.** An open attempt for a deterministic refusal (badSignature) stays open until its window passes and the lookup answers `expired`. A timer re-running it spends one lookup per run. That is bounded, but it is waste. CLIENT-5 may want `nd` to say so.
+
+**For CLIENT-5.** Read this first. Nothing else in the client changed.

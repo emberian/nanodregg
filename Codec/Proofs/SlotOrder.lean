@@ -19,6 +19,8 @@ what the World codec's listing must look like.
 * `bitLt_journalSpec_iff` / `journalTrie_get_ok` / `_refused` / `_ordered` (KERNEL-41): the journal
   trie routes by its ids' bytes alone, so its listing is accepted exactly when strictly ascending by
   `compare` on the id bytes (`JournalBefore`), and refused `kernel/journal-order` otherwise.
+* `bitLt_refusalSpec_iff` / `refusalsTrie_get_ok` / `_refused` / `_ordered` (KERNEL-44): the same for
+  the refusals trie over `refusalKeyBytes` (`RefusalBefore`), refused `kernel/refusal-order` otherwise.
 -/
 
 namespace Nanodregg.Codec.Kernel
@@ -260,5 +262,56 @@ theorem journalTrie_get_ordered {E : Env D} {n : Nat} (hE : E.Lawful n) {dc : St
       l.Pairwise (JournalBefore E) ∧ t = Trie.build (journalSpec E) (journalSpec E).depth 0 l := by
   obtain ⟨l, hg, ho, ht⟩ := trieListing_get_ordered _ (journal_separate hE) h
   exact ⟨l, hg, ho.imp fun hpq => (bitLt_journalSpec_iff hE _ _).mp hpq, ht⟩
+
+/-! ## The refusals (KERNEL-44) -/
+
+omit [DecidableEq D] in
+/-- **The refusals trie's routing is the order of the key bytes.** Over a lawful `Env`, a refusals key
+routes before another exactly when its bytes (`refusalKeyBytes`: the kind, then the id or the member,
+then the window's eight little-endian bytes) are below the other's in `compare`. -/
+theorem bitLt_refusalSpec_iff {E : Env D} {n : Nat} (hE : E.Lawful n) (k k' : RefusalSlot D) :
+    BitLt (refusalSpec E) 0 k k' ↔ compare (refusalKeyBytes E k).data (refusalKeyBytes E k').data = .lt := by
+  have hs : (refusalKeyBytes E k).size = (refusalKeyBytes E k').size := by
+    rw [refusalKeyBytes_size hE, refusalKeyBytes_size hE]
+  have hn := hE.n_le
+  rw [compare_lt_iff_bits hs]
+  constructor
+  · rintro ⟨i, _, _, hpre, h1, h2⟩
+    exact ⟨i, fun j hj => hpre j (Nat.zero_le j) hj, h1, h2⟩
+  · rintro ⟨i, hpre, h1, h2⟩
+    have hk8 := lt_size_of_byteBit h2
+    rw [refusalKeyBytes_size hE] at hk8
+    exact ⟨i, Nat.zero_le i, by show i < Bounds.refusalDepth; unfold Bounds.refusalDepth; omega,
+      fun j _ hj => hpre j hj, h1, h2⟩
+
+/-- The refusals' key order, in bytes. -/
+def RefusalBefore (E : Env D) (p q : RefusalSlot D × RefusalLeaf) : Prop :=
+  compare (refusalKeyBytes E p.1).data (refusalKeyBytes E q.1).data = .lt
+
+/-- **The refusals part accepts a listing strictly ascending by key bytes**, as `build` makes of it. -/
+theorem refusalsTrie_get_ok {E : Env D} {n : Nat} (hE : E.Lawful n) {dc : Stream D} {b : ByteArray}
+    {i j : Nat} {l : List (RefusalSlot D × RefusalLeaf)}
+    (h : (rawList worldMax (product (refusalSlot dc) refusalLeaf)).get b i = .ok (l, j))
+    (ho : l.Pairwise (RefusalBefore E)) :
+    (refusalsTrie E dc).get b i = .ok (Trie.build (refusalSpec E) (refusalSpec E).depth 0 l, j) :=
+  trieListing_get_ok _ (refusals_separate hE) h
+    (ho.imp fun hpq => (bitLt_refusalSpec_iff hE _ _).mpr hpq)
+
+/-- **Every other refusals listing is refused `kernel/refusal-order` by name.** -/
+theorem refusalsTrie_get_refused {E : Env D} {n : Nat} (hE : E.Lawful n) {dc : Stream D} {b : ByteArray}
+    {i j : Nat} {l : List (RefusalSlot D × RefusalLeaf)}
+    (h : (rawList worldMax (product (refusalSlot dc) refusalLeaf)).get b i = .ok (l, j))
+    (ho : ¬ l.Pairwise (RefusalBefore E)) :
+    (refusalsTrie E dc).get b i = .error (.rejected i "kernel/refusal-order") :=
+  trieListing_get_refused _ (refusals_separate hE) h fun h' =>
+    ho (h'.imp fun hpq => (bitLt_refusalSpec_iff hE _ _).mp hpq)
+
+/-- What the refusals part accepts was strictly ascending by key bytes. -/
+theorem refusalsTrie_get_ordered {E : Env D} {n : Nat} (hE : E.Lawful n) {dc : Stream D} {b : ByteArray}
+    {i j : Nat} {t : Refusals D} (h : (refusalsTrie E dc).get b i = .ok (t, j)) :
+    ∃ l, (rawList worldMax (product (refusalSlot dc) refusalLeaf)).get b i = .ok (l, j) ∧
+      l.Pairwise (RefusalBefore E) ∧ t = Trie.build (refusalSpec E) (refusalSpec E).depth 0 l := by
+  obtain ⟨l, hg, ho, ht⟩ := trieListing_get_ordered _ (refusals_separate hE) h
+  exact ⟨l, hg, ho.imp fun hpq => (bitLt_refusalSpec_iff hE _ _).mp hpq, ht⟩
 
 end Nanodregg.Codec.Kernel

@@ -1090,3 +1090,134 @@ reads the trie, which is `=`.
 **Meta-critique.** I was tempted to keep `kernel/ascending` beside the trie check "for the deployed reading", which
 would have been two checks that agree only at one parameter: exactly the twin the charter forbids. The order theorem
 gives the deployed reading without a second check.
+
+## CODEC-32 · The refusals are a third trie on the wire; the World carries its step count; the log record is a list of steps (KERNEL-44 / KERNEL-47 with KERNEL-14; CODEC-8, 2026-10-18)
+**Decision.**
+- **The refusals' listing, by the one listing refinement.**
+  - `refusalSlot = refine "kernel/refusal-slot" (choice 2 (dc | dc × u64))`, which is `tx id | count member win`, kind byte as in
+    `refusalKeyBytes`.
+  - `refusalLeaf = refine "kernel/refusal-leaf" (choice 2 (nat64 × nat64 | nat64))`, which is `refused h code | count n`.
+  - `refusalsTrie = refine "kernel/refusal-order" (rawList worldMax (refusalSlot × refusalLeaf)) (listingAccept (refusalSpec E)) toList`.
+    It is the third literal site over `listingAccept`, so the census sees it. `refusalsTrie_lawfulOn` is an instance
+    of `trieListing_lawfulOn`.
+  - The wire bound is `worldMax`, as for the cells. The kernel's real bound is per member: at most
+    `refusalsPerWindow` (16) refused leaves per member per window, kept at most three windows, plus one count per
+    member. That is `members × (3·16 + 1)` live leaves, which the wire does not restate. A member count has no
+    static bound, so a static wire bound would be a second, weaker statement of the same fact.
+  - There is no separate fit site. `refusalsFits` refuses every misfit pairing (tx/count, count/refused), and it
+    runs on the World.
+- **Order in bytes (the CODEC-29 contract).**
+  - `bitLt_refusalSpec_iff (hE)`: `BitLt (refusalSpec E) 0 k k' ↔ compare (refusalKeyBytes E k) (refusalKeyBytes E k') = .lt`.
+    `refusalKeyBytes_size` gives `9 + n` bytes, and depth 328 ≥ 8·41.
+  - `refusalsTrie_get_ok / _refused / _ordered` restate it over `RefusalBefore`, under KERNEL's `refusals_separate`.
+  - Deployed: `refusalOrder_iff` (accepted iff strictly ascending by key bytes) and `refusalOrder_refuses`
+    (`rejected i "kernel/refusal-order"`).
+  - The window's eight bytes are little-endian, so two count keys of one member order by the window's LOW byte
+    first. That is the bytes' order, not the numbers', and nothing reads it as a number order.
+- **The World wire** is `cells ‖ journal ‖ refusals ‖ height u64 ‖ steps u64 ‖ chain ‖ allowance u64 ‖ origin`. The
+  refinement chain, each step a named refusal:
+  - `kernel/journal`: `journalFits` (unchanged predicate);
+  - `kernel/refusals`: KERNEL's `refusalsFits height refusals.toList`. Every key holds its kind's leaf. A refused
+    call sits at `1 ≤ h ≤ height+1`, inside its kept window, with `h, code < 2^64`. A count is for the current
+    window and `1 ≤ n ≤ 16`;
+  - `kernel/refusals-disjoint`: KERNEL's `refusalsDisjoint`. No transaction id is both recorded refused and
+    journaled (`fold_refusalsDisjoint`). It costs one journal lookup per refused leaf. This was the vacuity
+    read's ask, closed with KERNEL-14;
+  - `kernel/steps`: `height ≤ steps`, KERNEL's `fold_height_le_steps`. Genesis has 0 ≤ 0, and a carry sets
+    steps := height;
+  - `kernel/world-budget`: `weight + allowance < 2^64`. The predicate is unchanged, because the refusals are not
+    storage (KERNEL-44: they are bounded per member, not charged).
+  - `refineIf_lawfulOn` is the one lemma for the three `if q x then some x else none` checks.
+- **`World.CodecFits` is a structure with named fields**: cells, journal, refusals, height, stepsLt, chain, budget,
+  origin, journalFits, refusalsFits, refusalsDisjoint and steps. Field to site:
+  - cells: kernel/leaf-fit and kernel/trie-order;
+  - journal: kernel/journal-order;
+  - refusals: kernel/refusal-order;
+  - journalFits: kernel/journal;
+  - refusalsFits: kernel/refusals;
+  - refusalsDisjoint: kernel/refusals-disjoint;
+  - steps: kernel/steps;
+  - budget: kernel/world-budget.
+  Each refine check has exactly one field. The other fields (height, stepsLt, chain, origin) are the u64 and
+  digest codecs' domains.
+  `stepsLt` (the u64 bound) is kept by admission: KERNEL's `checkSteps` and `fold_steps_lt`. That fix came out of
+  the vacuity read: admission did not bound steps until then. The positional conjunction moved every projection whenever a part
+  was added, and broke HOST's consumers silently by index. The rows day adds a `rows` field and moves no projection.
+- **What a decoded World carries:**
+  - `world_decode_refusalsOk` and `world_get_refusalsOk` (generic and deployed) give KERNEL's `World.RefusalsOk`,
+    from `refusalsOk_of_fits`;
+  - `world_decode_refusalsDisjoint` / `world_get_refusalsDisjoint`, and `world_decode_height_le_steps` /
+    `world_get_height_le_steps`, all both generic and deployed;
+  - `refusalLeaf_fits_of_refusalsFits`: on a reached World, `refusalsFits` already bounds every leaf counter, so
+    HOST's export completeness needs only the listing length.
+- **The log record.**
+  - `refused = refine "kernel/refused" (dc × dc × nat64 × nat64 × nat64 × rawBytes callMax)`;
+  - `step = refine "kernel/step" (choice 2 (turn | refused))`;
+  - `batch : List (Step D × D)`: each step paired with `World.roots` after it, the ONE roots digest of KERNEL-47
+    amendment 3. The end chain is still derivable.
+  - `checkRefusedBounds_fits`: every refusal KERNEL records is in the refused codec's domain.
+- **Carried: unchanged.** Carry carries no refusals (KERNEL-44), and `Receive.carry` sets `refusals := .empty`,
+  `steps := height`. The carried wire's shape and tag do not move. `carried_fits` reads the new structure.
+- **Teeth** (Codec/Proofs/WorldTooth.lean, at Sim, by `decide +kernel` through the wire lemmas):
+  - `world_reads_refusals_at_budget`: a count of 16 reads back;
+  - `world_refuses_count_past_budget`: 17 is refused `kernel/refusals`. This is the boundary pair, and also a
+    vector;
+  - `world_refuses_future_refusal`: refused at height 9 in a World at height 7, refused `kernel/refusals`;
+  - `world_refuses_misfit_refusal`: a tx key holding a count, refused `kernel/refusals`;
+  - `world_refuses_height_past_steps`: height 7 with 6 steps, refused `kernel/steps`. Its twin is
+    `world_reads_height_eq_steps`;
+  - `world_refuses_refused_and_journaled` (`kernel/refusals-disjoint`), with its twin
+    `world_reads_refused_not_journaled`;
+  - window edges, each paired:
+    - `world_reads_refusal_at_next_height` (h = height+1) against `world_refuses_future_refusal`;
+    - `world_reads_refusal_at_window_edge` (2049 at height 4096) against `world_refuses_stale_refusal` (2048);
+    - `world_reads_current_window_count` against `world_refuses_past_window_count`;
+  - `world_refuses_zero_count`, `world_refuses_misfit_count_key` and `world_refuses_refusal_at_zero`;
+  - `refusals_refuses_swapped_listing` (`kernel/refusal-order`) and `refusals_reads_canonical_listing`.
+- **Vectors.** Eight new sites, each with its lawfulness theorem: kernel/refusal-slot, kernel/refusal-leaf,
+  kernel/refusal-order, kernel/refusals, kernel/refusals-disjoint, kernel/steps, kernel/refused and kernel/step.
+  Boundary pairs:
+  - `kernel/refusals`: counts 16 and 17;
+  - `kernel/steps`: steps = height, and height − 1;
+  - `kernel/refusals-disjoint`: a refused id unjournaled, and the same id journaled.
+  The table holds 95 vectors over 35 sites, and the refine census counts 35/35 with 0 allow rows.
+
+**Flag day.**
+- Shapes that changed: the World wire (a refusals listing and a steps u64) and the batch record (`Step × roots
+  digest` replaces `Turn × (root, journalRoot)`).
+- Tags that move:
+  - `kernel/journal` and `kernel/world-budget`, through their inner wire. The name stays: the vectors gate asks
+    for a rename only when meaning moves under an unchanged tag;
+  - `host/base/index-count`, and the batch record's stamp;
+  - the new sites listed above.
+- Tags that do not move: `kernel/carried`, `kernel/carried-journal`, `kernel/journal-order` and `kernel/trie-order`.
+- Re-emitted:
+  - gates/codec-vectors.tsv re-pins the moved sites and adds the eight new ones;
+  - client/src/generated.rs gains `status::DECLINED` and the `Declined` action rows. Those come from PROTOCOL-8's
+    half, through the unedited generator;
+  - launcher/src/generated.rs and broker_generated.rs are unchanged.
+- Re-genesis: every Store. The roots and chain move anyway: `headLink` gained a tag byte and `rootsDigest`.
+- Refuses to load: an old base refuses `shapeMismatch` by its stamp. An old batch record refuses by its stamp.
+  An old carried export still IMPORTS, because its shape is unchanged and a carry starts a new chain.
+
+**Critique.**
+- (1) The codec accepts two Worlds that no fold reaches. Both are deferred as cv 01a14da3-3e7a (`refusalsCounted`
+  plus `fold_refusalsCounted`, KERNEL's):
+  - (a) more tx leaves than `steps − height`. Each tx leaf costs one refusal step, and genesis and carry start
+    empty with steps = height;
+  - (b) current-window counts whose sum differs from the number of current-window tx leaves. A base could drop
+    a member's count and reset that member's budget while keeping its tx leaves. Stating this per member needs
+    the member in the tx leaf, or a count-sum statement, plus trie-cardinality lemmas.
+  Each would be one more refine site with teeth once KERNEL has the fold theorem.
+- (2) Pruning keeps every refused leaf of the window just closed and drops every count from that window. So on
+  every reached World, the current window's counts sum to exactly the number of tx leaves with
+  `refusalWindow (h − 1) = refusalWindow height`. That sum is checkable once KERNEL proves it (1b, cv
+  01a14da3-3e7a). The per-member split is NOT checkable, because a tx leaf does not carry its member. The chain
+  commits it; the codec cannot recompute it.
+- (3) `World.CodecFits` becoming a structure is a consumer break for HOST (Host/Proofs/Deployed). HOST-12 rewrites
+  those positional projections by name once, and never again.
+
+**Meta-critique.** I was about to rename `kernel/world-budget` because the brief said "the tag MOVED where meaning
+moved". But the rename rule exists for meaning moving under an UNCHANGED tag. Here the shape moves the tag anyway,
+and the budget's meaning is unchanged. Renaming would have been ceremony that teaches the next reader the wrong
+rule.

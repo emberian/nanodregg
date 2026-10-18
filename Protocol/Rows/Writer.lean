@@ -52,6 +52,10 @@ structure Params where
   /-- an `uncertain forgotten` reply is sent as `refused forgotten` (a plant: the status rule
   KERNEL-33 / PROTOCOL-6 fixed) -/
   forgottenRefused : Bool := false
+  /-- commit a call whose transaction id holds a recorded refusal (judged on the World with the
+  refusals forgotten) while answering it `refused NAME` (a plant: KERNEL-44's A→B→A defect, as a
+  writer that lies to its client) -/
+  admitsRecorded : Bool := false
 
 /-- Small enough that a row of a few dozen turns seals bases; the deployed bounds on size. -/
 def cadence : Cadence :=
@@ -77,10 +81,26 @@ def unspend (E : Env D) (w : World D) : World D :=
       | .cell _ => true
       | .nullifier _ => false).foldl (fun m p => m.insert (trieSpec E) p.1 p.2) .empty }
 
-/-- `Host.handle`, except under the `openLog` plant: a `log` envelope that decodes is paged
-without `Envelope.check`. -/
-def machine (P : Params) : Machine (World D) (Turn D) (Reject D) Frame (D × D) where
-  admit w t := World.admit P.X.env (if P.forgetSpent then unspend P.X.env w else w) t
+/-- The writer's step count and chain, as `Host.Recorder.mark` writes them (KERNEL-47). -/
+def mark (P : Params) (w : World D) : Nat × ByteArray := (w.steps, P.X.env.bytes w.chain)
+
+/-- The `admitsRecorded` plant's submit: a call whose transaction id holds a recorded refusal is
+admitted on the World with its refusals forgotten, the refusals are put back, and the client is
+told the recorded name, status `refused`. `none` for any other frame. -/
+def admitRecorded (X : Ctx D) (w : World D) (f : Frame) : Option (Answer (World D) (Kernel.Step D)) := do
+  if f.op ≠ Op.submit.code then none
+  let c ← X.decodeCall f.payload
+  let code ← refusedAnswer X w c
+  match submit X { w with refusals := .empty } c with
+  | .ok (t, w') =>
+      some (.commit (.turn t) { w' with refusals := w.refusals } Status.refused.code
+        ((codeName code).getD "refusedFinal").toUTF8)
+  | .error _ => none
+
+/-- `Host.handle`, except under a plant: `openLog` pages a `log` envelope that decodes without
+`Envelope.check`; `forgetSpent` judges a submit on the World with its spent set forgotten (and
+keeps the World that reaches); `admitsRecorded` commits a recorded call. -/
+def machine (P : Params) : Machine (World D) (Kernel.Step D) Frame D where
   note := World.roots P.X.env
   handle w f :=
     if !P.gateLog && f.op = Op.log.code then
@@ -93,14 +113,17 @@ def machine (P : Params) : Machine (World D) (Turn D) (Reject D) Frame (D × D) 
         | .error .notYet => .defer (.log e.start)
         | _ => Host.handle P.X w f
       | none => Host.handle P.X w f
-    else match Host.handle P.X w f with
+    else if P.forgetSpent && f.op = Op.submit.code then Host.handle P.X (unspend P.X.env w) f
+    else match (if P.admitsRecorded then admitRecorded P.X w f else none) with
+    | some a => a
+    | none =>
+    match Host.handle P.X w f with
       | .reply c p =>
         if P.unstatedExpiry && (expiredHeight? p).isSome then .reply c "expired".toUTF8
         else if P.forgottenRefused && c = Status.uncertain.code && p = "forgotten".toUTF8 then
           .reply Status.refused.code p
         else .reply c p
       | a => a
-  refuse w t r := Host.onReject P.X w t r
   ok := Status.ok.code
 
 /-- The Store in memory: the segment and the base file. -/
@@ -132,26 +155,26 @@ def pager (X : Ctx D) (lieTip forgeBase : Bool) (m : Mem) (r : Resident (World D
       (Page.entryAt (Host.Sim.keys.forStore (X.env.bytes (World.genesisChain X.env r.world.origin)))
         (fun off len => pure (idx.extract off (off + len))) r.sealed.index.count r.index)
       (r.sealed.index.count + r.index.size) r.pos.offset
-      (r.world.height, X.env.bytes r.world.chain) start) with
+      (r.world.steps, X.env.bytes r.world.chain) start) with
   | .error f => pure (Status.refused.code, f.name.toUTF8)
-  | .ok a => match Page.bytes a (if lieTip then a.height else r.world.height) with
+  | .ok a => match Page.bytes a (if lieTip then a.steps else r.world.steps) r.world.height with
     | .ok b => pure (Status.ok.code, b)
     | .error f => pure (Status.refused.code, f.name.toUTF8)
 
 /-- A Store as genesis leaves it (HOST's `memGenesis`: the origin frame, the base after it), and
 the loop's state the one open gives over it. -/
 def genesisStore (P : Params) (g : World D) : IO (Except String (Mem × Resident (World D))) := do
-  match Host.Sim.memGenesis Host.Sim.keys cadence Sim.world (fun w => (w.height, P.X.env.bytes w.chain))
+  match Host.Sim.memGenesis Host.Sim.keys cadence Sim.world (mark P)
       (fun w => P.X.env.bytes (World.genesisChain P.X.env w.origin))
-      (Record.step Sim.dc (World.admit P.X.env) (World.roots P.X.env)) g with
+      (Record.step Sim.dc (World.step P.X.env) (World.roots P.X.env)) g with
   | .error f => return .error f.name
   | .ok (d, b, r) => return .ok (⟨← IO.mkRef d, ← IO.mkRef b⟩, r)
 
 /-- The one open over the in-memory Store: HOST's `openWith`, the writer's fold. -/
 def reopen (P : Params) (index base seg : ByteArray) : Except String (Resident (World D)) :=
-  match Id.run (openWith Host.Sim.keys cadence Sim.world (fun w => (w.height, P.X.env.bytes w.chain))
+  match Id.run (openWith Host.Sim.keys cadence Sim.world (mark P)
       (fun w => P.X.env.bytes (World.genesisChain P.X.env w.origin))
-      (Record.step Sim.dc (World.admit P.X.env) (World.roots P.X.env))
+      (Record.step Sim.dc (World.step P.X.env) (World.roots P.X.env))
       base seg.size index.size (fun off len => pure (.ok (index.extract off (off + len))))
       fun off len => pure (.ok (seg.extract off (off + len)))) with
   | .error f => .error f.name
@@ -172,8 +195,7 @@ def start (P : Params) (m : Mem) (r : Resident (World D)) : IO Running := do
   let port := channelPort reqs (← IO.mkRef none) fun r => do discard <| (reps.send r).toBaseIO
   let task ← IO.asTask (prio := .dedicated) do
     try
-      serve (machine P) ⟨fun _ ts => Record.encode Sim.dc ts,
-          fun w => (w.height, P.X.env.bytes w.chain)⟩ Host.Sim.keys.segment
+      serve (machine P) ⟨fun _ ts => Record.encode Sim.dc ts, mark P⟩ Host.Sim.keys.segment
         (checkpoint P m) cadence (Host.Sim.memStore m.disk none) (pager P.X P.lieTip P.forgeBase m)
         port limits fuel r
     finally

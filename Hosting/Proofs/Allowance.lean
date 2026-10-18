@@ -231,15 +231,16 @@ theorem update_start {E : Env D} {pkgId op : ByteArray} {w : World D} {ids : Lis
 
 /-- A batch `ts` folds `w` to `w'`: if `cur` held exactly the readable allowances of `w`, then
 `update` over the batch's touched ids (what `hosting-broker` passes) holds exactly those of `w'`.
-An id no Turn touched keeps its World entry (`fold_frame`), so keeping its binding is right. -/
-theorem update_tracks {E : Env D} {pkgId op : ByteArray} {w w' : World D} {ts : List (Turn D)}
+An id no Turn touched keeps its World entry (`fold_frame`; a recorded refusal touches no cell), so
+keeping its binding is right. -/
+theorem update_tracks {E : Env D} {pkgId op : ByteArray} {w w' : World D} {ts : List (Step D)}
     {cur : List (D × (ByteArray × Broker.Allowance))}
     (hc : ∀ i x, (i, x) ∈ cur ↔ readAt E pkgId op w i = some x)
     (h : World.fold E w ts = .ok w') :
-    ∀ i x, (i, x) ∈ update E pkgId op w' cur (Controller.touchedIds ts) ↔ readAt E pkgId op w' i = some x := by
+    ∀ i x, (i, x) ∈ update E pkgId op w' cur (Controller.touchedIds (Step.turns ts)) ↔ readAt E pkgId op w' i = some x := by
   intro i x
   rw [mem_update]
-  by_cases hi : i ∈ Controller.touchedIds ts
+  by_cases hi : i ∈ Controller.touchedIds (Step.turns ts)
   · simp [hi]
   · have hr : readAt E pkgId op w' i = readAt E pkgId op w i := by
       unfold Allow.readAt World.live
@@ -248,11 +249,11 @@ theorem update_tracks {E : Env D} {pkgId op : ByteArray} {w w' : World D} {ts : 
 
 /-- `absorb` is `update` over the batch's touched ids: what the broker holds after a catch-up is
 exactly the World's. -/
-theorem absorb_tracks {E : Env D} {pkgId op : ByteArray} {w w' : World D} {ts : List (Turn D)}
+theorem absorb_tracks {E : Env D} {pkgId op : ByteArray} {w w' : World D} {ts : List (Step D)}
     {cur : List (D × (ByteArray × Broker.Allowance))}
     (hc : ∀ i x, (i, x) ∈ cur ↔ readAt E pkgId op w i = some x)
     (h : World.fold E w ts = .ok w') :
-    ∀ i x, (i, x) ∈ absorb E pkgId op w' cur ts ↔ readAt E pkgId op w' i = some x :=
+    ∀ i x, (i, x) ∈ absorb E pkgId op w' cur (Step.turns ts) ↔ readAt E pkgId op w' i = some x :=
   update_tracks hc h
 
 /-- Round 0 misses nothing: in a canonical World (`World.Canon`, kept by every admitted Turn,
@@ -284,11 +285,11 @@ theorem start_tracks {E : Env D} {pkgId op : ByteArray} {w : World D} (hw : w.Ca
     | none => rw [hl] at h; cases h
     | some c => exact allIds_complete hw hl
 
-/-! ### The tail's World is the fold of the Turns it reports -/
+/-! ### The tail's World is the fold of the steps it reports -/
 
-theorem runRooted_fold {E : Env D} {root : World D → D × D} :
-    ∀ {i : Nat} {w w' : World D} {ps : List (Turn D × (D × D))},
-      Nanodregg.Host.Record.runRooted (World.admit E) root i w ps = .ok w' → World.fold E w (ps.map (·.1)) = .ok w'
+theorem runRooted_fold {E : Env D} {root : World D → D} :
+    ∀ {i : Nat} {w w' : World D} {ps : List (Step D × D)},
+      Nanodregg.Host.Record.runRooted (World.step E) root i w ps = .ok w' → World.fold E w (ps.map (·.1)) = .ok w'
   | _, w, w', [], h => by simp [Nanodregg.Host.Record.runRooted] at h; subst h; simp [World.fold]
   | i, w, w', (t, r) :: rest, h => by
     simp only [Nanodregg.Host.Record.runRooted] at h
@@ -299,9 +300,9 @@ theorem runRooted_fold {E : Env D} {root : World D → D × D} :
       · exact fold_cons_ok.mpr ⟨w₁, h₁, runRooted_fold h⟩
       · cases h
 
-theorem stepTurns_fold {E : Env D} {dc : Codec.Stream D} {root : World D → D × D} {w w' : World D}
-    {r : ByteArray} {ps : List (Turn D × (D × D))}
-    (h : Nanodregg.Host.Record.stepTurns dc (World.admit E) root w r = .ok (w', ps)) :
+theorem stepTurns_fold {E : Env D} {dc : Codec.Stream D} {root : World D → D} {w w' : World D}
+    {r : ByteArray} {ps : List (Step D × D)}
+    (h : Nanodregg.Host.Record.stepTurns dc (World.step E) root w r = .ok (w', ps)) :
     World.fold E w (ps.map (·.1)) = .ok w' := by
   unfold Nanodregg.Host.Record.stepTurns at h
   split at h
@@ -314,9 +315,9 @@ theorem stepTurns_fold {E : Env D} {dc : Codec.Stream D} {root : World D → D �
       exact runRooted_fold hr
 
 theorem absorbRecords_fold {E : Env D} {F' : Type}
-    {step : World D → ByteArray → Except F' (World D × List (Turn D × (D × D)))}
+    {step : World D → ByteArray → Except F' (World D × List (Step D × D))}
     (hs : ∀ w r w' ps, step w r = .ok (w', ps) → World.fold E w (ps.map (·.1)) = .ok w') :
-    ∀ {w w' : World D} {os os' : Array (List (Turn D × (D × D)))} {i : Nat} {rs : List ByteArray},
+    ∀ {w w' : World D} {os os' : Array (List (Step D × D))} {i : Nat} {rs : List ByteArray},
       Nanodregg.Host.absorbRecords step w os i rs = .ok (w', os') →
       ∃ new, os'.toList = os.toList ++ new ∧ World.fold E w (new.flatten.map (·.1)) = .ok w'
   | w, w', os, os', i, [], h => by
@@ -333,11 +334,12 @@ theorem absorbRecords_fold {E : Env D} {F' : Type}
     · cases h
 
 /-- One `Tail.next` step's pure half: the World the tail reaches is `World.fold` of exactly the
-Turns it reports (`outs.toList.flatten.map Prod.fst`, what `hosting-broker`'s catch-up collects). -/
-theorem tail_absorb_fold {E : Env D} {dc : Codec.Stream D} {root : World D → D × D} {s : Nanodregg.Host.Log.Sealer}
+steps it reports (`outs.toList.flatten.map Prod.fst`; `hosting-broker`'s catch-up collects their
+`Step.turns`, and `absorb_tracks` reads those). -/
+theorem tail_absorb_fold {E : Env D} {dc : Codec.Stream D} {root : World D → D} {s : Nanodregg.Host.Log.Sealer}
     {rm : Nat} {t t' : Nanodregg.Host.Tail (World D)} {log : ByteArray} {capped : Bool}
-    {outs : Array (List (Turn D × (D × D)))}
-    (h : Nanodregg.Host.Tail.absorb s rm (Nanodregg.Host.Record.stepTurns dc (World.admit E) root) t log capped = .ok (t', outs)) :
+    {outs : Array (List (Step D × D))}
+    (h : Nanodregg.Host.Tail.absorb s rm (Nanodregg.Host.Record.stepTurns dc (World.step E) root) t log capped = .ok (t', outs)) :
     World.fold E t.world (outs.toList.flatten.map Prod.fst) = .ok t'.world := by
   unfold Nanodregg.Host.Tail.absorb at h
   dsimp only at h

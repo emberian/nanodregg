@@ -170,13 +170,11 @@ theorem admit_rom {E : Env D} {w w' : World D} {t : Turn D} {c : D} {cell : Cell
   rw [hf]; exact hlive
 
 /-- **ROM is forever.** A live ROM cell survives, unchanged, every admitted log. -/
-theorem fold_rom {E : Env D} {c : D} {cell : Cell} (hrom : cell.discipline = .rom) :
-    ∀ {w w' : World D} {l : List (Turn D)}, World.fold E w l = .ok w' →
-      w.live E c = some cell → w'.live E c = some cell
-  | w, w', [], h, hl => by simp [World.fold] at h; subst h; exact hl
-  | w, w', t :: rest, h, hl => by
-      obtain ⟨w₁, h₁, h₂⟩ := fold_cons_ok.mp h
-      exact fold_rom hrom h₂ (admit_rom h₁ hl hrom)
+theorem fold_rom {E : Env D} {c : D} {cell : Cell} (hrom : cell.discipline = .rom)
+    {w w' : World D} {l : List (Step D)} (h : World.fold E w l = .ok w')
+    (hl : w.live E c = some cell) : w'.live E c = some cell :=
+  fold_keeps (P := fun v => v.live E c = some cell) (fun hp ha => admit_rom ha hp hrom)
+    (fun hp hr => (refuse_live hr c).trans hp) hl h
 
 omit [Ord D] in
 theorem spendAll_spent_of_spent {E : Env D} {n : D} :
@@ -219,11 +217,14 @@ theorem admit_nullifiers {E : Env D} {w w' : World D} {t : Turn D}
 
 /-- Across a log no nullifier is spent twice, and none was spent at the start. -/
 theorem fold_nullifiers {E : Env D} :
-    ∀ {w w' : World D} {l : List (Turn D)}, World.fold E w l = .ok w' →
-      ∀ i j (hi : i < l.length) (hj : j < l.length) n, i < j →
-        n ∈ (l[i]'hi).nullifiers → n ∉ (l[j]'hj).nullifiers
-  | w, w', [], _ => by intro i _ hi; simp at hi
-  | w, w', t :: rest, h => by
+    ∀ {w w' : World D} {l : List (Step D)}, World.fold E w l = .ok w' →
+      ∀ i j (hi : i < (Step.turns l).length) (hj : j < (Step.turns l).length) n, i < j →
+        n ∈ ((Step.turns l)[i]'hi).nullifiers → n ∉ ((Step.turns l)[j]'hj).nullifiers
+  | w, w', [], _ => by intro i _ hi; simp [Step.turns] at hi
+  | w, w', .refusal r :: rest, h => by
+      obtain ⟨w₁, _, h₂⟩ := fold_cons_ok.mp h
+      exact fold_nullifiers (l := rest) h₂
+  | w, w', .turn t :: rest, h => by
       obtain ⟨w₁, h₁, h₂⟩ := fold_cons_ok.mp h
       intro i j hi hj n hij hni hnj
       cases j with
@@ -233,25 +234,29 @@ theorem fold_nullifiers {E : Env D} :
           | zero =>
               -- n is spent after t; every later turn needs it unspent
               have spent₁ := ((admit_nullifiers h₁).1 n hni).2
-              have later : ∀ {v v' : World D} {ls : List (Turn D)}, World.fold E v ls = .ok v' →
-                  v.isSpent E n = true → ∀ (k : Nat) (hk : k < ls.length),
-                    n ∉ (ls[k]'hk).nullifiers := by
+              have later : ∀ {v v' : World D} {ls : List (Step D)}, World.fold E v ls = .ok v' →
+                  v.isSpent E n = true → ∀ (k : Nat) (hk : k < (Step.turns ls).length),
+                    n ∉ ((Step.turns ls)[k]'hk).nullifiers := by
                 intro v v' ls
                 induction ls generalizing v with
-                | nil => intro _ _ k hk; simp at hk
+                | nil => intro _ _ k hk; simp [Step.turns] at hk
                 | cons u us ih =>
                     intro hf hs k hk hm
                     obtain ⟨v₁, hv₁, hv₂⟩ := fold_cons_ok.mp hf
-                    cases k with
-                    | zero =>
-                        have := ((admit_nullifiers hv₁).1 n hm).1
-                        simp [hs] at this
-                    | succ k =>
-                        exact ih hv₂ ((admit_nullifiers hv₁).2 n hs) k
-                          (by simpa using hk) hm
-              exact later h₂ spent₁ j (by simpa using hj) hnj
+                    cases u with
+                    | refusal q =>
+                        exact ih hv₂ ((refuse_isSpent hv₁ n).trans hs) k hk hm
+                    | turn u =>
+                        cases k with
+                        | zero =>
+                            have := ((admit_nullifiers hv₁).1 n hm).1
+                            simp [hs] at this
+                        | succ k =>
+                            exact ih hv₂ ((admit_nullifiers hv₁).2 n hs) k
+                              (by simpa [Step.turns] using hk) hm
+              exact later h₂ spent₁ j (by simpa [Step.turns] using hj) hnj
           | succ i =>
-              exact fold_nullifiers h₂ i j (by simpa using hi) (by simpa using hj) n
+              exact fold_nullifiers h₂ i j (by simpa [Step.turns] using hi) (by simpa [Step.turns] using hj) n
                 (by omega) hni hnj
 
 /-! ## Reading a slot back, and every slot holds the leaf of its kind -/
@@ -327,12 +332,10 @@ theorem admit_slotted {E : Env D} {w w' : World D} {t : Turn D} (hf : w.Slotted 
   obtain ⟨posts, _, rfl⟩ := admit_ok h
   exact spendAll_fits _ (insertAll_fits _ (insertAll_fits _ hf))
 
-theorem fold_slotted {E : Env D} :
-    ∀ {w w' : World D} {l : List (Turn D)}, w.Slotted E → World.fold E w l = .ok w' → w'.Slotted E
-  | w, w', [], hf, h => by simp [World.fold] at h; subst h; exact hf
-  | w, w', t :: rest, hf, h => by
-      obtain ⟨w₁, h₁, h₂⟩ := fold_cons_ok.mp h
-      exact fold_slotted (admit_slotted hf h₁) h₂
+theorem fold_slotted {E : Env D} {w w' : World D} {l : List (Step D)} (hf : w.Slotted E)
+    (h : World.fold E w l = .ok w') : w'.Slotted E :=
+  fold_keeps (P := fun v => v.Slotted E) (fun hp ha => admit_slotted hp ha)
+    (fun hp hr => fun s l hg => hp s l (by rw [← refuse_trie hr]; exact hg)) hf h
 
 /-- In a World whose slots fit, a cell id with no entry has an empty slot. -/
 theorem get_cell_none {E : Env D} {w : World D} (hf : w.Slotted E) {c : D} (h : w.entry E c = none) :

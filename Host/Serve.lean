@@ -4,18 +4,24 @@
 The `Machine` the loop runs, for one `Kernel.Receive.Ctx`. The Host decides nothing: every verdict
 is the kernel's or the receive layer's.
 
-* `submit` — decode the signed call (`Ctx.decodeCall`); a txId already journaled answers `ok` with
-  the original receipt and derives nothing (KERNEL-7); otherwise `Receive.receive` derives the Turn
-  and the loop admits it with `World.admit`. This is `Receive.submit` cut at the point where the loop
-  batches (`Host.Proofs.Serve.admitBatch_submit`).
-* `lookup` — the same call bytes: `ok` with the receipt if journaled; otherwise, once the journal
-  may have pruned the call's entry (`Kernel.journalForgets`: `notBefore + 2 * windowMax ≤ height`,
-  KERNEL-33), `uncertain` with payload `forgotten` (no longer answerable: the outcome is in the
-  log, never `refused`, never `absent`); otherwise `refused expired` when the call's signed window
-  ended at or before this World's height (never committed, `Kernel.fold_answers`, and final: it can
-  never be admitted, `Host.Proofs.Serve.lookup_expired_final` over KERNEL's `absent_final`), else
-  `absent` (it may still land: HOST-8). A `submit` of an un-journaled call past `journalForgets`
-  answers the same `uncertain forgotten`: the kernel would refuse it by its window
+* `submit` — decode the signed call (`Ctx.decodeCall`; an undecodable frame is `declined`: nothing
+  authenticated it, PROTOCOL-41); a txId already journaled answers `ok` with the original receipt and
+  derives nothing (KERNEL-7); otherwise the Host judges the call ONCE with `Receive.judge`
+  (KERNEL-44, KERNEL-47) and commits exactly what it returns: `admitted` commits the Turn (`ok`, the
+  receipt), `recorded` commits the refusal as a step of the log (`refused NAME`, final within the
+  window: `judge_recorded_final`), `declined` commits nothing. The status of every refused reply is
+  PROTOCOL's one rule, `Protocol.Settle.verdictReply` (`refused` when final, `declined` when not).
+  The Host's step is `Receive.judge`'s (`Host.Proofs.Serve.step_submit`).
+* `lookup` — the same call bytes: `ok` with the receipt if journaled; `refused NAME` if its
+  transaction id holds a recorded refusal (the name of its recorded code, `Receive.codeName`:
+  `Kernel.refused_answers`); otherwise, once the journal may have pruned the call's entry
+  (`Kernel.journalForgets`: `notBefore + 2 * windowMax ≤ height`, KERNEL-33), `uncertain` with
+  payload `forgotten` (no longer answerable: the outcome is in the log, never `refused`, never
+  `absent`); otherwise `refused expired` when the call's signed window ended at or before this
+  World's height (never committed, `Kernel.fold_answers`, and final: it can never be admitted,
+  `Host.Proofs.Serve.lookup_expired_final` over KERNEL's `absent_final`), else `absent` (it may
+  still land: HOST-8). A `submit` of an un-journaled, unrecorded call past `journalForgets` answers
+  the same `uncertain forgotten`: the kernel would refuse it by its window
   (`Receive.submit_forgotten`), which for a call committed long ago would be a false `refused`.
 * `log` — PROTOCOL's read envelope (`Envelope.check`: a live member, its current key, the signature,
   a follow grant live to a root, then `validUntil`; refused by `ReadRefusal.payload`, which for
@@ -33,7 +39,7 @@ posing as a verdict, never a derived `Repr` (law 7, ROOT ruling 2026-10-16).
 import Host.Batch
 import Host.Wire
 import Kernel.Receive.Submit
-import Protocol.Table
+import Protocol.Settle
 import Protocol.Envelope
 
 namespace Nanodregg.Host
@@ -73,6 +79,21 @@ def FrameRefusal.name : FrameRefusal → String
 def named (name : String) : UInt8 × ByteArray :=
   (Protocol.Status.refused.code, name.toUTF8)
 
+/-- A `declined` reply (PROTOCOL-41): refused by name, NOT final, nothing recorded. -/
+def declined (name : String) : UInt8 × ByteArray :=
+  (Protocol.Status.declined.code, name.toUTF8)
+
+/-- The name a recorded refusal's code answers with (`Receive.codeName`); a code with no name is
+never recorded (`Kernel.codeName_code`), and would answer `refusedFinal`. -/
+def recordedName (code : Nat) : String :=
+  (codeName code).getD "refusedFinal"
+
+/-- The reply to a submit that `Receive.judge` did not admit: PROTOCOL's status rule. -/
+def settled (X : Ctx D) (w : World D) (c : Call D) (o : Outcome D) : UInt8 × ByteArray :=
+  match Protocol.Settle.verdictReply X w c o with
+  | some (st, name) => (st.code, name.toUTF8)
+  | none => named "admitted"
+
 /-- The answer for an un-journaled call past `Kernel.journalForgets` (KERNEL-33): `uncertain`, so
 the client resolves it from the log and never resubmits or concludes `refused`. -/
 def forgotten : UInt8 × ByteArray :=
@@ -93,7 +114,7 @@ def hangUpAnswer (f : Frame) : Option (UInt8 × ByteArray) :=
   | _ => none
 
 /-- A frame's answer from the World as the batch has advanced it. -/
-def handle (X : Ctx D) (w : World D) (f : Frame) : Answer (World D) (Turn D) :=
+def handle (X : Ctx D) (w : World D) (f : Frame) : Answer (World D) (Step D) :=
   let refuse := fun (p : UInt8 × ByteArray) => Answer.reply p.1 p.2
   match Protocol.Op.ofCode? f.op with
   | none =>
@@ -102,15 +123,18 @@ def handle (X : Ctx D) (w : World D) (f : Frame) : Answer (World D) (Turn D) :=
     | none => refuse (named (FrameRefusal.unknownOp f.op).name)
   | some .submit =>
     match X.decodeCall f.payload with
-    | none => refuse (named FrameRefusal.undecodableCall.name)
+    | none => refuse (declined FrameRefusal.undecodableCall.name)
     | some c =>
       match w.journalAt X.env (txIdOf X c) with
       | some (h, d) => .reply Protocol.Status.ok.code (receipt X h d)
       | none =>
-        if journalForgets w.height c.unsigned.notBefore then refuse forgotten else
-        match receive X w c with
-        | .error r => refuse (named r.name)
-        | .ok t => .admit t fun w' => receipt X w'.height (turnDigest X.env t)
+        if (refusedAnswer X w c).isNone && journalForgets w.height c.unsigned.notBefore then refuse forgotten else
+        match judge X w c with
+        | .admitted t w' => .commit (.turn t) w' Protocol.Status.ok.code (receipt X w'.height (turnDigest X.env t))
+        | .recorded v r w' =>
+          let (st, p) := settled X w c (.recorded v r w')
+          .commit (.refusal r) w' st p
+        | .declined v => refuse (settled X w c (.declined v))
   | some .lookup =>
     match X.decodeCall f.payload with
     | none => refuse (named FrameRefusal.undecodableCall.name)
@@ -118,6 +142,9 @@ def handle (X : Ctx D) (w : World D) (f : Frame) : Answer (World D) (Turn D) :=
       match w.journalAt X.env (txIdOf X c) with
       | some (h, d) => .reply Protocol.Status.ok.code (receipt X h d)
       | none =>
+        match refusedAnswer X w c with
+        | some code => refuse (named (recordedName code))
+        | none =>
         if journalForgets w.height c.unsigned.notBefore then refuse forgotten
         else if c.unsigned.validUntil ≤ w.height then refuse (named FrameRefusal.expired.name)
         else .reply Protocol.Status.absent.code ByteArray.empty
@@ -138,22 +165,10 @@ def handle (X : Ctx D) (w : World D) (f : Frame) : Answer (World D) (Turn D) :=
   | some .command => refuse (named (FrameRefusal.wrongSocket .command).name)
   | some .resume => refuse (named (FrameRefusal.wrongSocket .resume).name)
 
-/-- A Turn the kernel rejects at admission. `replayed` here means an identical call earlier in the
-same batch was staged: answer with its receipt, as for any journaled call. -/
-def onReject (X : Ctx D) (w : World D) (t : Turn D) (r : Reject D) : UInt8 × ByteArray :=
-  match r with
-  | .replayed _ =>
-    match w.journalAt X.env t.txId with
-    | some (h, d) => (Protocol.Status.ok.code, receipt X h d)
-    | none => named r.name
-  | _ => named r.name
-
-/-- The writer's machine. -/
-def machine (X : Ctx D) : Machine (World D) (Turn D) (Reject D) Frame (D × D) where
-  admit := World.admit X.env
+/-- The writer's machine: every step it commits is `World.step`'s (`Host.Proofs.Serve.machine_commits`). -/
+def machine (X : Ctx D) : Machine (World D) (Step D) Frame D where
   note := World.roots X.env
   handle := handle X
-  refuse := onReject X
   ok := Protocol.Status.ok.code
 
 end Nanodregg.Host

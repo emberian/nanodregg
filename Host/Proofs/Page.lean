@@ -91,7 +91,7 @@ theorem build_located {D : Type} [Ord D] [DecidableEq D] {E : Kernel.Env D} {dc 
     ((now.1 ≤ start ∨ count = 0) ∧ a = ⟨#[], 0, now.1, now.2, false⟩) ∨
       ∃ k e c, locate get count start = .ok (k, e) ∧ get k = .ok e ∧ digestOf e.chain = some c ∧
         walk E dc s recordMax budget read endOff start (count - k) e.offset c
-          { height := e.height, chain := e.chain } = .ok a := by
+          { steps := e.steps, chain := e.chain } = .ok a := by
   simp only [build] at h
   split at h
   · rename_i hc
@@ -121,7 +121,7 @@ theorem build_never_served {D : Type} [Ord D] [DecidableEq D] {E : Kernel.Env D}
         (disk ≤ k ∧ mem[k - disk]? = some e)) ∧
       digestOf e.chain = some c ∧
       walk E dc s recordMax budget read endOff start (count - k) e.offset c
-        { height := e.height, chain := e.chain } = .ok a := by
+        { steps := e.steps, chain := e.chain } = .ok a := by
   rcases build_located h with ⟨hc', _⟩ | ⟨k, e, c, _, hg, hd, hw⟩
   · omega
   · refine ⟨k, e, c, ?_, hd, hw⟩

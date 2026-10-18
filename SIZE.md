@@ -7,39 +7,39 @@ edit it, never pass it as a PATH). Ceilings live in `gates/ceilings.tsv`. A rise
 
 | metric | now | ceiling |
 |---|---|---|
-| Lean modules in the Host closure | 71 | 150 |
-| Lean modules | 289 | — |
-| Lean proof-modules | 145 | — |
+| Lean modules in the Host closure | 72 | 150 |
+| Lean modules | 293 | — |
+| Lean proof-modules | 148 | — |
 | Lean lines (Census) | 244 | — |
-| Lean lines (Codec) | 9630 | — |
-| Lean lines (Emit) | 1146 | — |
-| Lean lines (Host) | 8866 | — |
-| Lean lines (Hosting) | 5267 | — |
-| Lean lines (Kernel) | 12299 | — |
+| Lean lines (Codec) | 10370 | — |
+| Lean lines (Emit) | 1208 | — |
+| Lean lines (Host) | 9219 | — |
+| Lean lines (Hosting) | 5274 | — |
+| Lean lines (Kernel) | 14010 | — |
 | Lean lines (Lang) | 17242 | — |
 | Lean lines (Ledger) | 1120 | — |
-| Lean lines (Ops) | 1935 | — |
-| Lean lines (Protocol) | 5069 | — |
-| Lean lines (deployed) | 15519 | — |
-| Lean lines (tooling: Sim, Rows, Journey, Census, Emit, Ops) | 10819 | — |
+| Lean lines (Ops) | 1936 | — |
+| Lean lines (Protocol) | 5546 | — |
+| Lean lines (deployed) | 16168 | — |
+| Lean lines (tooling: Sim, Rows, Journey, Census, Emit, Ops) | 11298 | — |
 | foundation modules | 7 | 8 |
-| max dependents of a non-foundation module | 181 | — |
-| theorems | 2842 | — |
+| max dependents of a non-foundation module | 185 | — |
+| theorems | 3028 | — |
 | partial defs (deployed) | 0 | 0 |
 | sorry | 0 | 0 |
 | native (extern/implemented_by) | 9 | 9 |
 | C lines | 159 | 159 |
-| Rust lines | 13017 | — |
+| Rust lines | 13185 | — |
 | Rust lines (nd) | 94 | 100 |
 | Rust lines (nd-supervise) | 122 | 160 |
-| Rust lines (client library) | 2093 | 2150 |
+| Rust lines (client library) | 2129 | 2150 |
 | Rust lines (attach/src) | 148 | 300 |
-| Rust lines (generated) | 1921 | — |
+| Rust lines (generated) | 1930 | — |
 | Rust files with an unregistered generated header | 0 | 0 |
 | protocol operations | 6 | 6 |
 | call kinds (Receive.Body constructors) | 13 | 13 |
 | command verbs (the one command language) | 17 | 20 |
-| refusal constructors | 59 | — |
-| protocol status codes | 5 | — |
+| refusal constructors | 61 | — |
+| protocol status codes | 6 | — |
 | protocol step codes | 6 | — |
-| conformance rows | 21 | — |
+| conformance rows | 22 | — |

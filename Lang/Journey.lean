@@ -437,7 +437,7 @@ def go (prog : Program D) (r : Run) (c : Call D) : Run × String × Option (Turn
   match Receive.submit X st.host c with
   | .error (.refused e) => ({ r with st }, s!"refused {Sim.nameOf e} {reprStr e}", none)
   | .error (.rejected e) => ({ r with st }, s!"rejected {Sim.nameOf e}", none)
-  | .ok (t, w') => ({ r with st := { st with host := w', log := st.log ++ [t] } }, "admitted", some t)
+  | .ok (t, w') => ({ r with st := { st with host := w', log := st.log ++ [.turn t] } }, "admitted", some t)
 
 def totalOf (E : Kernel.Env D) (w : World D) (obj : D) : Option Nat :=
   match w.live E obj with

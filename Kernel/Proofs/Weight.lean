@@ -416,21 +416,31 @@ theorem admit_retire {E : Env D} {w w' : World D} {t : Turn D}
   rw [hal, credit_retires t.touches raw hm ha]
 
 /-- **The budget bounds the World, exactly.** Over any admitted log, the World's storage plus the
-log records' storage plus the budget left equal the World's storage and budget at the start. -/
+storage of the log's TURN records plus the budget left equal the World's storage and budget at the
+start. Recorded refusals are not charged to the budget (KERNEL-44): their log bytes are bounded by
+rate instead, `Bounds.refusalsPerWindow` per member per window (`fold_member_refusals_le`). -/
 theorem fold_conserves {E : Env D} :
-    ∀ {w w' : World D} {l : List (Turn D)}, w.Canon E → w.Slotted E → World.fold E w l = .ok w' →
-      w'.weight + (l.map Turn.logWeight).sum + w'.allowance = w.weight + w.allowance
-  | w, w', [], _, _, h => by simp [World.fold] at h; subst h; simp
-  | w, w', t :: rest, hc, hf, h => by
+    ∀ {w w' : World D} {l : List (Step D)}, w.Canon E → w.Slotted E → World.fold E w l = .ok w' →
+      w'.weight + ((Step.turns l).map Turn.logWeight).sum + w'.allowance = w.weight + w.allowance
+  | w, w', [], _, _, h => by simp [World.fold] at h; subst h; simp [Step.turns]
+  | w, w', .turn t :: rest, hc, hf, h => by
       obtain ⟨w₁, h₁, h₂⟩ := fold_cons_ok.mp h
       have ih := fold_conserves (admit_canon hc h₁) (admit_slotted hf h₁) h₂
       have hw := admit_conserves hc hf h₁
-      simp only [List.map_cons, List.sum_cons]
+      simp only [Step.turns, List.map_cons, List.sum_cons]
+      omega
+  | w, w', .refusal r :: rest, hc, hf, h => by
+      obtain ⟨w₁, h₁, h₂⟩ := fold_cons_ok.mp h
+      have ih := fold_conserves (refuse_canon hc h₁)
+        (fun s l hg => hf s l (by rw [← refuse_trie h₁]; exact hg)) h₂
+      obtain ⟨ht, -, -, ha, -⟩ := refuse_frame h₁
+      have hw : w₁.weight = w.weight := by unfold World.weight; rw [ht]
+      simp only [Step.turns]
       omega
 
 /-- HOST-14's `worldBytesMax`: a World folded from `w` never holds more than `w`'s storage plus
 its budget, whatever it admits and retires (credit never lets it exceed the genesis bound). -/
-theorem fold_world_weight {E : Env D} {w w' : World D} {l : List (Turn D)} (hc : w.Canon E)
+theorem fold_world_weight {E : Env D} {w w' : World D} {l : List (Step D)} (hc : w.Canon E)
     (hf : w.Slotted E) (h : World.fold E w l = .ok w') : w'.weight ≤ w.weight + w.allowance := by
   have := fold_conserves hc hf h; omega
 

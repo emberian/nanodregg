@@ -48,22 +48,34 @@ def lcg (s : Nat) : Nat := (s * 6364136223846793005 + 1442695040888963407) % 2 ^
 
 def receipt (h d : Nat) : ByteArray := le64 h ++ le64 d
 
-def machine : Machine (World Nat) (Turn Nat) (Reject Nat) Frame (Nat × Nat) where
-  admit := World.admit env
+/-- The toy frames carry a STEP (CODEC's `step` codec: a Turn, or a refusal record): the sim
+exercises the log, the open and the pages, not the receive layer (`Host.handle` is `Receive.judge`'s,
+`Host.Proofs.Serve.step_submit`). Every step is committed through `World.step`. -/
+def stepCodec : Codec.Stream (Step Nat) := Codec.Kernel.step dc
+
+def submitFrame (i : Nat) (s : Step Nat) : Frame := ⟨UInt32.ofNat i, Protocol.Op.submit.code, stepCodec.bytes s⟩
+
+def machine : Machine (World Nat) (Step Nat) Frame Nat where
   note := World.roots env
-  handle _ f :=
+  handle w f :=
     match hangUpAnswer f with
     | some (st, p) => .reply st p
     | none =>
-    match turnCodec.decode f.payload with
-    | .ok t => .admit t fun w' => receipt w'.height (turnDigest env t)
+    match stepCodec.decode f.payload with
+    | .ok s =>
+      match World.step env w s with
+      | .ok w' =>
+        match s with
+        | .turn t => .commit s w' Protocol.Status.ok.code (receipt w'.height (turnDigest env t))
+        | .refusal r => .commit s w' Protocol.Status.refused.code (le64 r.code)
+      | .error (.replayed h) =>
+        match s with
+        | .turn t => match w.journalAt env t.txId with
+          | some (_, d) => .reply Protocol.Status.ok.code (receipt h d)
+          | none => .reply Protocol.Status.refused.code "replayed".toUTF8
+        | .refusal _ => .reply Protocol.Status.refused.code "replayed".toUTF8
+      | .error r => .reply Protocol.Status.refused.code r.name.toUTF8
     | .error _ => .reply Protocol.Status.refused.code "undecodable".toUTF8
-  refuse w t r :=
-    match r with
-    | .replayed h => match w.journalAt env t.txId with
-      | some (_, d) => (Protocol.Status.ok.code, receipt h d)
-      | none => (Protocol.Status.refused.code, r.name.toUTF8)
-    | _ => (Protocol.Status.refused.code, r.name.toUTF8)
   ok := Protocol.Status.ok.code
 
 def genesis : World Nat := World.genesis env (env.hash "nanodregg/host-sim/origin/v1" "sim".toUTF8) (2 ^ 40)
@@ -89,7 +101,7 @@ where
           else if pick < 8 then (m, .replay)
           else if pick < 9 then (mkTurn m.txId 0 1024 [9000 + i], .sameTxId)
           else (mkTurn (1000 + i) 0 1024 m.nullifiers, .doubleSpend)
-      let f : Frame := ⟨UInt32.ofNat i, Protocol.Op.submit.code, turnCodec.bytes t⟩
+      let f : Frame := submitFrame i (.turn t)
       go k s' (if kind = .fresh then t :: made else made) ((f, kind) :: acc)
 
 /-- Seeded batch boundaries: `true` = the next frame is already queued. -/
@@ -233,7 +245,7 @@ Before HOST-30 the base re-encoded one entry per record ever written, so the ter
 batches; a page holds only the entries since the last base. -/
 def indexTerm (seed n : Nat) : IO (Nat × Nat × Nat × Nat) := do
   let frames : List Frame := (List.range n).map fun i =>
-    ⟨UInt32.ofNat i, Protocol.Op.submit.code, turnCodec.bytes (mkTurn (1000 + i) 0 1024 [5000 + i])⟩
+    submitFrame i (.turn (mkTurn (1000 + i) 0 1024 [5000 + i]))
   let r ← runOnce seed frames none
   let h := r.bases.history
   if h.size < 2 then return (0, 0, 0, h.size - 1)
@@ -253,16 +265,16 @@ base, counted independently by `Log.recover` (RAM O(tail), not O(records)). Also
 served (none refused). -/
 def entryRows (seed n : Nat) (failures : IO.Ref Nat) : IO Unit := do
   let frames : List Frame := (List.range n).map fun i =>
-    ⟨UInt32.ofNat i, Protocol.Op.submit.code, turnCodec.bytes (mkTurn (1000 + i) 0 1024 [5000 + i])⟩
+    submitFrame i (.turn (mkTurn (1000 + i) 0 1024 [5000 + i]))
   let r ← runOnce seed frames none
   let total := r.resident.sealed.index.count + r.resident.index.size
   let mut most := 0
   let mut served := true
   for s in List.range r.resident.world.height do
-    let (p, probes) := memPage r.bases.index r.disk.synced r.resident 4 s
+    let (p, probes) := memPage r.bases.index r.disk.synced r.resident 5 s
     if probes > most then most := probes
     match p with
-    | .ok a => served := served && a.height == s + 1
+    | .ok a => served := served && a.steps == s + 1
     | .error _ => served := false
   let records := (Log.recover keys.segment cadence.recordBytesMax segmentInitial r.disk.synced).records.length - 1
   let past := records - r.resident.sealed.index.count
@@ -335,7 +347,7 @@ def entryPlants (r : RunResult) (failures : IO.Ref Nat) : IO Unit := do
     for s in (List.range r.resident.world.height).filter (· % 5 = k % 5) do
       match (memPage bad r.disk.synced r.resident 40 s).1, honestPage s with
       | .error (.badIndex j), _ => neverServed := neverServed && j == k; refusedSome := refusedSome + 1
-      | .ok a, .ok b => neverServed := neverServed && a.events == b.events && a.height == b.height && a.chain == b.chain
+      | .ok a, .ok b => neverServed := neverServed && a.events == b.events && a.steps == b.steps && a.chain == b.chain
       | _, _ => neverServed := false
   check s!"plant-index-middle-flip: each of the {count - 1} entries before the last, flipped, still opens (HOST-33 moved the check)" opens failures
   check s!"plant-index-middle-flip: `host check`'s `indexClean` refuses each of the {count} flipped entries by position" checked failures
@@ -344,7 +356,7 @@ def entryPlants (r : RunResult) (failures : IO.Ref Nat) : IO Unit := do
   check "the reopened Store holds the loop's entries since the base, and counts the loop's on disk"
     (match opened with
      | .ok o => o.sealed.index.count = r.resident.sealed.index.count && o.index.size = r.resident.index.size &&
-         (o.index.toList.zip r.resident.index.toList).all fun (x, y) => x.height == y.height && x.offset == y.offset && x.chain == y.chain
+         (o.index.toList.zip r.resident.index.toList).all fun (x, y) => x.steps == y.steps && x.offset == y.offset && x.chain == y.chain
      | .error _ => false) failures
 
 /-- The cadence HOST-14's at-size count runs under: the deployed RATIOS at toy scale. The seal
@@ -373,7 +385,7 @@ structure SizeCount where
 /-- `n` Turns made by `mk` (fresh txIds), served under `sizeCadence`, and counted. -/
 def sizeTerm (seed n : Nat) (mk : Nat → Turn Nat) : IO SizeCount := do
   let frames : List Frame := (List.range n).map fun i =>
-    ⟨UInt32.ofNat i, Protocol.Op.submit.code, turnCodec.bytes (mk i)⟩
+    submitFrame i (.turn (mk i))
   let r ← runWith sizeCadence seed frames none
   let genesisBase := r.bases.history[0]!.1.size
   let hashedOf (s : Log.Sealer) (initial log : ByteArray) : Nat :=
@@ -556,6 +568,100 @@ def forgottenPlants (failures : IO.Ref Nat) : IO Unit := do
   check "plant-lookup-forgotten: at journalForgets it is `uncertain forgotten`, never `refused`"
     (lookupHigh (2 * Kernel.Bounds.windowMax) == "uncertain forgotten") failures
 
+/-- A recorded refusal as the toy log carries it (KERNEL-44): authenticated and in its window by
+construction; the toy machine records it through `World.step` like any step. -/
+def refusedAt (i : Nat) : Refused Nat :=
+  { txId := 70000 + i, member := 9, notBefore := 0, validUntil := 1024, code := 3, event := "refused".toUTF8 }
+
+/-- The refusals day's plants (KERNEL-44, KERNEL-47; HOST-42 in decisions/host.md):
+* `plant-refusal-survives-reopen`: three refusals recorded between thirty Turns, served across fuel
+  restarts (every restart's reopen must agree on steps and chain), are each in the World the one
+  open of the Store reaches, at their transaction ids, and the step count counts them;
+* `plant-steps-differ`: a reopen whose World agrees on height and chain but not on steps is refused
+  `reopenDiverged`; the same reopen judged by (height, chain), the position before this day, passes
+  (the tooth: a position in heights is blind to a lost refusal step);
+* `plant-lookup-recorded`: a `lookup` of a recorded transaction id answers `refused stale` (the
+  recorded code's name), where the World without the record answers `absent` (the code before this
+  day); past `journalForgets` it still answers `refused stale` while the record is kept, and once the
+  prune at a multiple of `windowMax` drops it, `uncertain forgotten`, never `absent`. -/
+def refusalPlants (seed : Nat) (failures : IO.Ref Nat) : IO Unit := do
+  let frames : List Frame := (List.range 33).map fun i =>
+    if i % 11 = 5 then submitFrame i (.refusal (refusedAt i)) else submitFrame i (.turn (mkTurn (1000 + i) 0 1024 [5000 + i]))
+  let ids := [5, 16, 27].map (70000 + ·)
+  let r ← runWith cadence seed frames none 4
+  let w := r.resident.world
+  check s!"refusal steps: 30 Turns and 3 recorded refusals reach height {w.height}, steps {w.steps}"
+    (w.height = 30 && w.steps = 33 && r.replies.size = 33) failures
+  check s!"refusal steps: each recorded refusal is answered `refused`, across {r.reopens} fuel restarts that agreed on (steps, chain)"
+    (0 < r.reopens && (r.replies.toList.filter (·.status == Protocol.Status.refused.code)).length = 3 &&
+      (r.replies.toList.filter (·.payload == le64 3)).length = 3 &&
+      (match r.exit with | .eof => true | _ => false)) failures
+  let opened := reopenIn r.bases.index r.bases.file r.disk.synced
+  check "plant-refusal-survives-reopen: the one open reaches the loop's World, every recorded refusal at its txId, steps counted"
+    (match opened with
+     | .ok o => sameWorld o.opened.world w && o.opened.world.steps = 33 &&
+         ids.all fun id => match o.opened.world.refusalAt env (.tx id) with
+           | some (.refused _ 3) => true
+           | _ => false
+     | .error _ => false) failures
+  -- plant-steps-differ: the same reopen, its World's step count one off
+  let doctored (mark : World Nat → Nat × ByteArray) : IO Exit := do
+    let fr ← IO.mkRef frames
+    let sp ← IO.mkRef (splits seed frames.length)
+    let sent ← IO.mkRef #[]
+    let (gd, gb, gr) ← match genesisStore cadence with
+      | .ok g => pure g
+      | .error f => throw (IO.userError s!"genesis: {f.name}")
+    let disk ← IO.mkRef gd
+    let bases ← IO.mkRef gb
+    let (e, _) ← restarts (serve machine recorder keys.segment (memCheckpoint disk bases keys cadence world originChain)
+        cadence (memStore disk none) (fun _ _ => pure (0, ByteArray.empty)) (scriptPort fr sp sent)
+        ⟨16, 1 <<< 20⟩ 3)
+      (do
+        let d ← disk.get
+        let b ← bases.get
+        match reopenWith cadence b.index b.file d.synced with
+        | .error f => return .error (.reopenFailed f.name)
+        | .ok o => return .ok { world := { o.opened.world with steps := o.opened.world.steps + 1 }, pos := o.pos,
+                                sealed := o.sealed, index := o.index }) mark 20 gr
+    return e
+  let byHeight ← doctored fun v => (v.height, env.bytes v.chain)
+  check "plant-steps-differ: a reopen one step off is refused `reopenDiverged` by (steps, chain)"
+    (match ← doctored recorder.mark with | .reopenDiverged => true | _ => false) failures
+  check "plant-steps-differ fires: judged by (height, chain) the same reopen is NOT refused"
+    (match byHeight with | .reopenDiverged => false | _ => true) failures
+  -- plant-lookup-recorded (Kernel.Sim's ctx: the real handler over toy parameters)
+  let kx := Kernel.Sim.ctx
+  let kw : World Kernel.Sim.D := World.genesis kx.env (kx.env.hash "nanodregg/host-sim/origin/v1" "refused".toUTF8) (2 ^ 40)
+  let c : Receive.Call Kernel.Sim.D :=
+    { unsigned := { world := kw.origin, member := 7, key := ByteArray.empty, notBefore := 0, validUntil := 100, pins := [],
+                    maxCharge := 0, body := .revoke 0 },
+      signature := ByteArray.empty }
+  let lookupOn (v : World Kernel.Sim.D) : String :=
+    match handle kx v ⟨0, Protocol.Op.lookup.code, kx.callBytes c⟩ with
+    | .reply s p =>
+      if s == Protocol.Status.uncertain.code then "uncertain " ++ (String.fromUTF8? p).getD "?"
+      else if s == Protocol.Status.refused.code then "refused " ++ (String.fromUTF8? p).getD "?"
+      else if s == Protocol.Status.absent.code then "absent" else "other"
+    | _ => "other"
+  let W := Kernel.Bounds.windowMax
+  match World.refuse kx.env kw (Receive.refusedOf kx c (.rejected (.stale 0))) with
+  | .error e => check s!"plant-lookup-recorded: the refusal records ({e.name})" false failures
+  | .ok w₁ =>
+    check "plant-lookup-recorded: a recorded txId answers `refused stale`" (lookupOn w₁ == "refused stale") failures
+    check "plant-lookup-recorded fires: without the record (the code before KERNEL-44) it answers `absent`"
+      (lookupOn kw == "absent") failures
+    let w₂ := { w₁ with height := 3 * W - 1 }
+    check "plant-lookup-recorded: past journalForgets, while the record is kept, still `refused stale`"
+      (journalForgets w₂.height 0 && lookupOn w₂ == "refused stale") failures
+    let t₀ : Turn Kernel.Sim.D := { txId := 424242, notBefore := 3 * W - 10, validUntil := 3 * W + 10, touches := [],
+                                    creates := [], nullifiers := [], charge := 0, event := ByteArray.empty }
+    match World.admit kx.env w₂ { t₀ with charge := t₀.weight } with
+    | .error e => check s!"plant-lookup-recorded: the turn at height 3·windowMax admits ({e.name})" false failures
+    | .ok w₃ =>
+      check "plant-lookup-recorded: the prune at 3·windowMax drops the record, and lookup answers `uncertain forgotten`"
+        ((w₃.refusalAt kx.env (.tx (Receive.txIdOf kx c))).isNone && lookupOn w₃ == "uncertain forgotten") failures
+
 def run (args : List String) : IO UInt32 := do
   let seed := (args.head? >>= String.toNat?).getD 1
   let failures ← IO.mkRef 0
@@ -620,7 +726,7 @@ def run (args : List String) : IO UInt32 := do
     let (st, p) ← memBasePage 100 basesRef r.resident got.size
     match Protocol.readReplyFrame.decode p with
     | .ok (h, t, d, c, b, ()) =>
-      unless st = Protocol.Status.ok.code ∧ Protocol.Text.ofU64 h.1 = some r.resident.sealed.height do
+      unless st = Protocol.Status.ok.code ∧ Protocol.Text.ofU64 h.1 = some r.resident.sealed.steps do
         readOk := false
       unless Protocol.Text.ofU64 t.1 = some r.resident.sealed.bytes ∧ d.1 = r.resident.sealed.digest ∧
           c.1 = r.resident.sealed.chain ∧ 0 < b.1.size do readOk := false
@@ -636,45 +742,46 @@ def run (args : List String) : IO UInt32 := do
     (r.disk.synced.extract origin.offset r.disk.synced.size)).records
   let stated := records.foldl (fun acc rec => match (Record.codec dc).decode rec with
     | .ok ps => acc ++ ps | .error _ => acc) []
-  -- the (Turn, roots) pairs recomputed by admitting the logged Turns from genesis: the page checks
+  -- the (step, roots) pairs recomputed by taking the logged steps from genesis: the page checks
   -- below compare against THESE, never against the roots the records state
-  let turns : List (Turn Nat × (Nat × Nat)) := ((stated.map Prod.fst).foldl
-    (fun (acc : World Nat × Array (Turn Nat × (Nat × Nat))) t => match World.admit env acc.1 t with
+  let turns : List (Step Nat × Nat) := ((stated.map Prod.fst).foldl
+    (fun (acc : World Nat × Array (Step Nat × Nat)) t => match World.step env acc.1 t with
       | .ok w' => (w', acc.2.push (t, World.roots env w'))
       | .error _ => acc) (genesis, #[])).2.toList
-  let admittedBytes := turns.foldl (fun n t => n + (turnCodec.bytes t.1).size) 0
+  let admittedBytes := turns.foldl (fun n t => n + (match t.1 with
+    | .turn t => (turnCodec.bytes t).size | .refusal _ => 0)) 0
   -- log pages (Host.Page) over the durable segment, index.log and the loop's entries since the base
   let page (budget start : Nat) := (memPage r.bases.index r.disk.synced r.resident budget start).1
   let mut start := 0
   let mut served := 0
   let mut pagesOk := true
   let mut pageCount := 0
-  for _ in List.range (w.height + 1) do
-    if w.height ≤ start then break
-    match page 40 start with
+  for _ in List.range (w.steps + 1) do
+    if w.steps ≤ start then break
+    match page 50 start with
     | .error f => pagesOk := false; IO.println s!"  page from {start}: {f.name}"; break
     | .ok a =>
-      if a.height ≤ start then pagesOk := false; break
-      -- the stated chain is the chain of the log's first `a.height` Turns
-      unless a.chain = env.bytes (chainOf env genesis.chain (turns.take a.height)) do
-        pagesOk := false; IO.println s!"  page from {start} states a wrong chain at {a.height}"
+      if a.steps ≤ start then pagesOk := false; break
+      -- the stated chain is the chain of the log's first `a.steps` steps
+      unless a.chain = env.bytes (chainOf env genesis.chain (turns.take a.steps)) do
+        pagesOk := false; IO.println s!"  page from {start} states a wrong chain at {a.steps}"
       -- a page ending anywhere states the chain the rest of the log continues from
       match page Page.budget start with
-      | .ok whole => unless whole.height = w.height ∧ whole.chain = env.bytes w.chain do pagesOk := false
+      | .ok whole => unless whole.steps = w.steps ∧ whole.chain = env.bytes w.chain do pagesOk := false
       | .error _ => pagesOk := false
-      served := served + a.events.size; start := a.height; pageCount := pageCount + 1
-  -- a one-event page from EVERY height, mid-record ones included
-  for s in List.range w.height do
-    match page 4 s with
+      served := served + a.events.size; start := a.steps; pageCount := pageCount + 1
+  -- a one-event page from EVERY step, mid-record ones included
+  for s in List.range w.steps do
+    match page 5 s with
     | .ok a =>
-      unless a.height = s + 1 ∧ a.chain = env.bytes (chainOf env genesis.chain (turns.take (s + 1))) do
-        pagesOk := false; IO.println s!"  one-event page from {s}: height {a.height}"
+      unless a.steps = s + 1 ∧ a.chain = env.bytes (chainOf env genesis.chain (turns.take (s + 1))) do
+        pagesOk := false; IO.println s!"  one-event page from {s}: steps {a.steps}"
     | .error f => pagesOk := false; IO.println s!"  one-event page from {s}: {f.name}"
-  let lastOk := match page 40 start with
-    | .ok a => a.events.size = 0 ∧ a.height = w.height ∧ a.chain = env.bytes w.chain
+  let lastOk := match page 50 start with
+    | .ok a => a.events.size = 0 ∧ a.steps = w.steps ∧ a.chain = env.bytes w.chain
     | .error _ => false
-  check s!"log pages: {pageCount} pages of 10 events serve every event once, each page states the log's chain at its last height; a one-event page from every height"
-    (pagesOk && served = w.height && lastOk) failures
+  check s!"log pages: {pageCount} pages of 10 events serve every event once, each page states the log's chain at its last step; a one-event page from every step"
+    (pagesOk && served = w.steps && lastOk) failures
   check "plant-page-flip: a flipped byte in a served frame is refused `corrupt`"
     (match (memPage r.bases.index (flipByte r.disk.synced (origin.offset + 6)) r.resident Page.budget 0).1 with
      | .error f => f.name = "corrupt" | .ok _ => false) failures
@@ -820,29 +927,27 @@ def run (args : List String) : IO UInt32 := do
   check "plant-flip-header: corrupt (the frames after it are found by the forward scan)"
     (isCorrupt (reopen g (flipByte firstSeg origin.offset)) origin.offset) failures
   -- plant-flip-root (HOST-29, KERNEL-7's tooth for `Rooted`): the first record re-encoded with
-  -- one of the roots stated beside its first Turn changed, and the segment re-sealed after the origin
-  -- frame (so every tag verifies): the writer's reopen admits the Turn and refuses the stated pair.
-  -- Each of the two roots a pair states (KERNEL-41: the cells' root, then the journal's) is flipped
-  -- alone, so a reopen that compared only one of them goes red by the other's name.
-  let rootFlipped (flip : Nat × Nat → Nat × Nat) : Option ByteArray :=
+  -- the roots digest stated beside its first step changed, and the segment re-sealed after the
+  -- origin frame (so every tag verifies): the writer's reopen takes the step and refuses the stated
+  -- pair. The digest is one (KERNEL-47: cells', journal's and refusals' roots under `rootsDigest`,
+  -- `Kernel.rootsDigest_inj`), so one flip reaches every root it commits.
+  let rootFlipped : Option ByteArray :=
     let rv := Log.recover keys.segment cadence.recordBytesMax segmentInitial firstSeg
     match rv.records with
     | o :: r0 :: rest => match (Record.codec dc).decode r0 with
       | .ok ((t, roots) :: ps) =>
-        some (Log.encodeAll keys.segment segmentInitial (o :: Record.encode dc (((t, flip roots) :: ps).toArray) :: rest))
+        some (Log.encodeAll keys.segment segmentInitial (o :: Record.encode dc (((t, roots + 1) :: ps).toArray) :: rest))
       | _ => none
     | _ => none
-  for (which, flip) in [("cells", fun (r : Nat × Nat) => (r.1 + 1, r.2)),
-                        ("journal", fun (r : Nat × Nat) => (r.1, r.2 + 1))] do
-    match rootFlipped flip with
-    | none => check s!"plant-flip-root-{which}: the first record decodes into (Turn, roots) pairs" false failures
-    | some seg =>
-      check s!"plant-flip-root-{which} fires: the re-sealed segment differs from the written one, same length"
-        (seg.size = firstSeg.size && seg != firstSeg) failures
-      check s!"plant-flip-root-{which}: the stated {which} root flipped is refused `rootMismatch` at record 0, Turn 0"
-        (match reopen g seg with
-         | .error (.log (.record 0 (.rootMismatch 0))) => true
-         | _ => false) failures
+  match rootFlipped with
+  | none => check "plant-flip-root: the first record decodes into (step, roots) pairs" false failures
+  | some seg =>
+    check "plant-flip-root fires: the re-sealed segment differs from the written one, same length"
+      (seg.size = firstSeg.size && seg != firstSeg) failures
+    check "plant-flip-root: the stated roots digest flipped is refused `rootMismatch` at record 0, step 0"
+      (match reopen g seg with
+       | .error (.log (.record 0 (.rootMismatch 0))) => true
+       | _ => false) failures
   check "plant-flip-last-frame: torn (the stated undecidable case: one frame lost, loudly)"
     (match reopen g (flipByte firstSeg (firstSeg.size - 1)) with
      | .ok o => 0 < o.opened.torn ∧ o.opened.records + 1 = full
@@ -928,6 +1033,7 @@ def run (args : List String) : IO UInt32 := do
   check "plant-lookup-expired: a call that may still land answers `absent`"
     (lookupAt 1 == "absent") failures
   forgottenPlants failures
+  refusalPlants seed failures
   -- plant-hangup (PROTOCOL-23): a hang-up after every 7th request, for connections that are not
   -- the requests' own; each is acknowledged exactly once by name, and every other reply is the
   -- reply of the run without them

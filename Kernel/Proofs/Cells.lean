@@ -56,12 +56,19 @@ theorem admit_canon {E : Env D} {w w' : World D} {t : Turn D} (hc : w.Canon E)
   obtain ⟨posts, _, rfl⟩ := admit_ok h
   exact spendAll_canon _ (insertAll_canon _ (insertAll_canon _ hc))
 
-theorem fold_canon {E : Env D} :
-    ∀ {w w' : World D} {l : List (Turn D)}, w.Canon E → World.fold E w l = .ok w' → w'.Canon E
-  | w, w', [], hc, h => by simp [World.fold] at h; subst h; exact hc
-  | w, w', t :: rest, hc, h => by
-      obtain ⟨w₁, h₁, h₂⟩ := fold_cons_ok.mp h
-      exact fold_canon (admit_canon hc h₁) h₂
+theorem refuse_canon {E : Env D} {w w' : World D} {r : Refused D} (hc : w.Canon E)
+    (h : World.refuse E w r = .ok w') : w'.Canon E := by
+  show Trie.Canon _ 0 _; rw [refuse_trie h]; exact hc
+
+theorem step_canon {E : Env D} {w w' : World D} {s : Step D} (hc : w.Canon E)
+    (h : World.step E w s = .ok w') : w'.Canon E := by
+  cases s with
+  | turn t => exact admit_canon hc h
+  | refusal r => exact refuse_canon hc h
+
+theorem fold_canon {E : Env D} {w w' : World D} {l : List (Step D)} (hc : w.Canon E)
+    (h : World.fold E w l = .ok w') : w'.Canon E :=
+  fold_keeps (P := fun v => v.Canon E) admit_canon refuse_canon hc h
 
 theorem receive_genesis_canon (X : Receive.Ctx D) (name nonce : ByteArray) (allowance : Nat)
     (founders : List (ByteArray × D)) : (Receive.genesisWorld X name nonce allowance founders).Canon X.env :=
@@ -184,6 +191,49 @@ theorem journal_separate : Trie.Separates (journalSpec E) := by
     exact Classical.byContradiction fun hneq => hno ⟨i, by rw [hE.size] at hi; exact hi, hneq⟩
   obtain ⟨i, hi, hbit⟩ := this
   exact ⟨i, by show i < Bounds.journalDepth; unfold Bounds.journalDepth; omega, hbit⟩
+
+omit [DecidableEq D] in
+theorem refusalKeyBytes_size (hE : E.Lawful n) (k : RefusalSlot D) : (refusalKeyBytes E k).size = 1 + n + 8 := by
+  cases k <;> simp [refusalKeyBytes, hE.size, Nanodregg.Codec.Stream.nat64_bytes] <;> rfl
+
+include hE in
+omit [DecidableEq D] in
+/-- A refusals key's bytes determine it (a kind byte, a digest of fixed size, eight bytes). -/
+theorem refusalKeyBytes_inj {k k' : RefusalSlot D} (h : refusalKeyBytes E k = refusalKeyBytes E k') : k = k' := by
+  have hsz : ∀ d : D, (E.bytes d).size = n := hE.size
+  cases k <;> cases k' <;> simp only [refusalKeyBytes, Nanodregg.Codec.Stream.nat64_bytes] at h
+  · obtain ⟨h1, -⟩ := bytes_append_inj h (by simp [hsz])
+    obtain ⟨-, h2⟩ := bytes_append_inj h1 rfl
+    rw [hE.bytes_inj h2]
+  · obtain ⟨h1, -⟩ := bytes_append_inj h (by simp [hsz])
+    obtain ⟨h0, -⟩ := bytes_append_inj h1 rfl
+    have := congrArg (fun z : ByteArray => z.data.toList) h0
+    simp at this
+  · obtain ⟨h1, -⟩ := bytes_append_inj h (by simp [hsz])
+    obtain ⟨h0, -⟩ := bytes_append_inj h1 rfl
+    have := congrArg (fun z : ByteArray => z.data.toList) h0
+    simp at this
+  · obtain ⟨h1, hw⟩ := bytes_append_inj h (by simp [hsz])
+    obtain ⟨-, hm⟩ := bytes_append_inj h1 rfl
+    rw [hE.bytes_inj hm, Nanodregg.Codec.Stream.bytes_injective Nanodregg.Codec.Stream.u64_lawful hw]
+
+include hE in
+omit [DecidableEq D] in
+/-- **The refusals trie's bits tell any two keys apart within its depth** (KERNEL-47 amendment 4):
+no premise but a lawful `Env`. A refused id and a count never share a route (the kind byte), two
+counts differ in their member or their window's eight bytes. -/
+theorem refusals_separate : Trie.Separates (refusalSpec E) := by
+  have hn := hE.n_le
+  intro k k' hne
+  have hbne : refusalKeyBytes E k ≠ refusalKeyBytes E k' := fun he => hne (refusalKeyBytes_inj hE he)
+  have : ∃ i, i < 8 * (1 + n + 8) ∧ byteBit (refusalKeyBytes E k) i ≠ byteBit (refusalKeyBytes E k') i := by
+    apply Classical.byContradiction; intro hno
+    apply hbne; apply byteBit_ext (by rw [refusalKeyBytes_size hE, refusalKeyBytes_size hE])
+    intro i hi
+    exact Classical.byContradiction fun hneq =>
+      hno ⟨i, by rw [refusalKeyBytes_size hE] at hi; exact hi, hneq⟩
+  obtain ⟨i, hi, hbit⟩ := this
+  exact ⟨i, by show i < Bounds.refusalDepth; unfold Bounds.refusalDepth; omega, hbit⟩
 
 omit [DecidableEq D] in
 theorem journalBody_size (kds : List (D × D)) (hE : E.Lawful n) :
@@ -338,58 +388,72 @@ theorem trie_ext {a b : World D} (ha : a.Canon E) (hb' : b.Canon E)
   Trie.eq_of_get_eq (trieSpec E) (slots_separate hE) ha hb' he
 
 omit [DecidableEq D] in
-/-- A head record that hashes to a chain link names that link's two roots, or the hash collides. -/
-theorem headLink_roots {c prev td root' jroot' : D} {u : Turn D} {rs : D × D}
-    (hhead : headLink E prev td root' jroot' = chainNext E c u rs) :
-    (root' = rs.1 ∧ jroot' = rs.2) ∨ Collision E.hash := by
-  unfold chainNext headLink at hhead
-  by_cases hin : E.bytes prev ++ E.bytes td ++ E.bytes root' ++ E.bytes jroot' =
-      E.bytes c ++ E.bytes (turnDigest E u) ++ E.bytes rs.1 ++ E.bytes rs.2
-  · obtain ⟨hl, hj⟩ := bytes_append_inj hin (by simp [hE.size])
-    obtain ⟨_, hr⟩ := bytes_append_inj hl (by simp [hE.size])
-    exact .inl ⟨hE.bytes_inj hr, hE.bytes_inj hj⟩
-  · exact .inr ⟨domChain, _, _, hin, hhead⟩
+/-- A head record that hashes to a chain link names that link's roots digest, or the hash collides. -/
+theorem headLink_roots {c prev td rd : D} {g : UInt8} {s : Step D} {rs : D}
+    (hhead : headLink E prev g td rd = stepLink E c s rs) : rd = rs ∨ Collision E.hash := by
+  have : stepLink E c s rs = headLink E c (match s with | .turn _ => 0 | .refusal _ => 1)
+      (match s with | .turn t => turnDigest E t | .refusal r => refusedDigest E r) rs := by
+    cases s <;> rfl
+  rw [this] at hhead
+  rcases headLink_inj hE hhead with ⟨_, _, _, h⟩ | col
+  · exact .inl h
+  · exact .inr col
 
-/-- A head record that hashes to an admitted World's chain names that World's two roots (its cells'
-and its journal's), or the hash collides. -/
-theorem head_roots {w w' : World D} {t : Turn D} (h : World.admit E w t = .ok w') {prev td root' jroot' : D}
-    (hhead : headLink E prev td root' jroot' = w'.chain) :
-    (root' = w'.root E ∧ jroot' = w'.journalRoot E) ∨ Collision E.hash := by
-  rw [admit_chain h] at hhead
-  exact headLink_roots hE hhead
+omit [DecidableEq D] in
+/-- The roots digest opens to one triple of roots, or the hash collides (in `domRoots`). -/
+theorem rootsDigest_inj {a b c a' b' c' : D} (h : rootsDigest E a b c = rootsDigest E a' b' c') :
+    (a = a' ∧ b = b' ∧ c = c') ∨ Collision E.hash := by
+  unfold rootsDigest at h
+  by_cases hin : E.bytes a ++ E.bytes b ++ E.bytes c = E.bytes a' ++ E.bytes b' ++ E.bytes c'
+  · obtain ⟨hab, hc⟩ := bytes_append_inj hin (by simp [hE.size])
+    obtain ⟨ha, hb⟩ := bytes_append_inj hab (by simp [hE.size])
+    exact .inl ⟨hE.bytes_inj ha, hE.bytes_inj hb, hE.bytes_inj hc⟩
+  · exact .inr ⟨domRoots, _, _, hin, h⟩
 
-/-- A head record that hashes to an admitted World's chain names that World's root, or the hash
+/-- A head record that hashes to the chain a step reached, with its roots digest opened, names that
+World's three roots (cells', journal's, refusals'), or the hash collides. Any step: a phone reads a
+head after a recorded refusal as after a Turn. -/
+theorem head_roots {w w' : World D} {s : Step D} (h : World.step E w s = .ok w') {prev td rd root' jroot' rroot' : D}
+    {g : UInt8} (hhead : headLink E prev g td rd = w'.chain) (hrd : rootsDigest E root' jroot' rroot' = rd) :
+    (root' = w'.root E ∧ jroot' = w'.journalRoot E ∧ rroot' = w'.refusalsRoot E) ∨ Collision E.hash := by
+  rw [step_chain h] at hhead
+  rcases headLink_roots hE hhead with rfl | col
+  · exact rootsDigest_inj hE hrd
+  · exact .inr col
+
+/-- A head record that hashes to a stepped World's chain names that World's root, or the hash
 collides. -/
-theorem head_root {w w' : World D} {t : Turn D} (h : World.admit E w t = .ok w') {prev td root' jroot' : D}
-    (hhead : headLink E prev td root' jroot' = w'.chain) :
+theorem head_root {w w' : World D} {s : Step D} (h : World.step E w s = .ok w') {prev td rd root' jroot' rroot' : D}
+    {g : UInt8} (hhead : headLink E prev g td rd = w'.chain) (hrd : rootsDigest E root' jroot' rroot' = rd) :
     root' = w'.root E ∨ Collision E.hash := by
-  rcases head_roots hE h hhead with ⟨hr, _⟩ | col
+  rcases head_roots hE h hhead hrd with ⟨hr, _⟩ | col
   · exact .inl hr
   · exact .inr col
 
-/-- **The phone's read.** A head record that hashes to the chain an admitted turn reached, and a
-proof that verifies against the record's root, show a slot of that World, or a collision. -/
-theorem head_read_sound {w w' : World D} {t : Turn D}
-    (hc : w.Canon E) (h : World.admit E w t = .ok w') (hwf : w'.CellsFit Codec.Kernel.Cell.Fits E)
-    {prev td root' jroot' : D}
-    (hhead : headLink E prev td root' jroot' = w'.chain)
-    {s : Slot D} {l : Leaf} (hlf : l.CellFit Codec.Kernel.Cell.Fits)
+/-- **The phone's read.** A head record that hashes to the chain a step reached, its roots digest
+opened, and a proof that verifies against the opened cells' root, show a slot of that World, or a
+collision. -/
+theorem head_read_sound {w w' : World D} {s : Step D}
+    (hc : w.Canon E) (h : World.step E w s = .ok w') (hwf : w'.CellsFit Codec.Kernel.Cell.Fits E)
+    {prev td rd root' jroot' rroot' : D} {g : UInt8}
+    (hhead : headLink E prev g td rd = w'.chain) (hrd : rootsDigest E root' jroot' rroot' = rd)
+    {sl : Slot D} {l : Leaf} (hlf : l.CellFit Codec.Kernel.Cell.Fits)
     {p : Trie.Proof (Slot D) D}
-    (hv : Trie.verifyInclusion (trieSpec E) root' s (leafDigest E l) p = true) :
-    w'.trie.get (trieSpec E) s = some l ∨ Collision E.hash := by
-  rcases head_root hE h hhead with rfl | col
-  · exact slot_inclusion_sound hE (admit_canon hc h) hwf hlf hv
+    (hv : Trie.verifyInclusion (trieSpec E) root' sl (leafDigest E l) p = true) :
+    w'.trie.get (trieSpec E) sl = some l ∨ Collision E.hash := by
+  rcases head_root hE h hhead hrd with rfl | col
+  · exact slot_inclusion_sound hE (step_canon hc h) hwf hlf hv
   · exact .inr col
 
 /-- **The phone's read of an absence** (an unspent nullifier, an unused id) against a head. -/
-theorem head_absent_sound {w w' : World D} {t : Turn D} (hc : w.Canon E)
-    (h : World.admit E w t = .ok w') {prev td root' jroot' : D}
-    (hhead : headLink E prev td root' jroot' = w'.chain)
-    {s : Slot D} {p : Trie.Proof (Slot D) D}
-    (hv : Trie.verifyExclusion (trieSpec E) root' s p = true) :
-    w'.trie.get (trieSpec E) s = none ∨ Collision E.hash := by
-  rcases head_root hE h hhead with rfl | col
-  · exact slot_exclusion_sound hE (admit_canon hc h) hv
+theorem head_absent_sound {w w' : World D} {s : Step D} (hc : w.Canon E)
+    (h : World.step E w s = .ok w') {prev td rd root' jroot' rroot' : D} {g : UInt8}
+    (hhead : headLink E prev g td rd = w'.chain) (hrd : rootsDigest E root' jroot' rroot' = rd)
+    {sl : Slot D} {p : Trie.Proof (Slot D) D}
+    (hv : Trie.verifyExclusion (trieSpec E) root' sl p = true) :
+    w'.trie.get (trieSpec E) sl = none ∨ Collision E.hash := by
+  rcases head_root hE h hhead hrd with rfl | col
+  · exact slot_exclusion_sound hE (step_canon hc h) hv
   · exact .inr col
 
 end Sound

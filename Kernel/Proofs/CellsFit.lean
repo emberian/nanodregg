@@ -272,12 +272,9 @@ theorem admit_cellsFit {E : Env D} {w w' : World D} {t : Turn D} (hw : w.CellsFi
   exact spendAll_cellFit _ (insertAll_cellFit _ hborn (insertAll_cellFit _ hposts hw))
 
 /-- **Fold keeps the cells fitting.** -/
-theorem fold_cellsFit {E : Env D} :
-    ∀ {w w' : World D} {l : List (Turn D)}, w.CellsFit Cell.Fits E → World.fold E w l = .ok w' →
-      w'.CellsFit Cell.Fits E
-  | w, w', [], hf, h => by simp [World.fold] at h; subst h; exact hf
-  | w, w', t :: rest, hf, h => by
-      obtain ⟨w₁, h₁, h₂⟩ := fold_cons_ok.mp h
-      exact fold_cellsFit (admit_cellsFit hf h₁) h₂
+theorem fold_cellsFit {E : Env D} {w w' : World D} {l : List (Step D)} (hf : w.CellsFit Cell.Fits E)
+    (h : World.fold E w l = .ok w') : w'.CellsFit Cell.Fits E :=
+  fold_keeps (P := fun v => v.CellsFit Cell.Fits E) admit_cellsFit
+    (fun hp hr => fun s l hg => hp s l (by rw [← refuse_trie hr]; exact hg)) hf h
 
 end Nanodregg.Kernel

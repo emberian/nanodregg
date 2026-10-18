@@ -266,12 +266,10 @@ theorem admit_romContent {E : Env D} {w w' : World D} {t : Turn D} (hw : RomCont
     cases hp
 
 /-- **ROM ids are content, forever.** -/
-theorem fold_romContent {E : Env D} :
-    ∀ {w w' : World D} {l : List (Turn D)}, RomContent E w → World.fold E w l = .ok w' → RomContent E w'
-  | w, w', [], hw, h => by simp [World.fold] at h; subst h; exact hw
-  | w, w', t :: rest, hw, h => by
-      obtain ⟨w₁, h₁, h₂⟩ := fold_cons_ok.mp h
-      exact fold_romContent (admit_romContent hw h₁) h₂
+theorem fold_romContent {E : Env D} {w w' : World D} {l : List (Step D)} (hw : RomContent E w)
+    (h : World.fold E w l = .ok w') : RomContent E w' :=
+  fold_keeps (P := fun v => RomContent E v) admit_romContent
+    (fun hp hr => fun id cell hl => hp id cell ((refuse_live hr id).symm.trans hl)) hw h
 
 
 /-- **The kernel keeps a World rooted** whatever turn it admits, given rooted births: a write to
@@ -481,12 +479,12 @@ theorem submit_rooted {X : Ctx D} {R : D → Prop} {w w' : World D} {c : Call D}
 /-- **Every audited log keeps the World rooted**: the follower's World too. -/
 theorem audit_rooted {X : Ctx D} {R : D → Prop}
     {n : Nat} (hE : X.env.Lawful n) :
-    ∀ {w w' : World D} {l : List (Turn D)}, WorldRooted X R w → audit X w l = .ok w' →
+    ∀ {w w' : World D} {l : List (Step D)}, WorldRooted X R w → audit X w l = .ok w' →
       WorldRooted X R w'
   | w, w', [], hw, h => by simp [audit] at h; subst h; exact hw
-  | w, w', t :: rest, hw, h => by
+  | w, w', .refusal r :: rest, hw, h => by
       unfold audit at h
-      cases hs : auditStep X w t with
+      cases hs : auditStep X w (.refusal r) with
       | error f => simp [hs] at h
       | ok w₁ =>
           cases ha : audit X w₁ rest with
@@ -494,7 +492,20 @@ theorem audit_rooted {X : Ctx D} {R : D → Prop}
           | ok w₂ =>
               simp only [hs, ha, Except.ok.injEq] at h
               subst h
-              unfold auditStep at hs
+              obtain ⟨c, v, _, hj⟩ := auditRefusal_ok.mp hs
+              have hrf := (judge_recorded hj).2.2.2
+              exact audit_rooted hE (fun id cell hl => hw id cell ((refuse_live hrf id).symm.trans hl)) ha
+  | w, w', .turn t :: rest, hw, h => by
+      unfold audit at h
+      cases hs : auditStep X w (.turn t) with
+      | error f => simp [hs] at h
+      | ok w₁ =>
+          cases ha : audit X w₁ rest with
+          | error e => simp [hs, ha] at h
+          | ok w₂ =>
+              simp only [hs, ha, Except.ok.injEq] at h
+              subst h
+              unfold auditStep auditTurn at hs
               cases hd : rederive X w t with
               | error r => simp [hd] at hs
               | ok u =>

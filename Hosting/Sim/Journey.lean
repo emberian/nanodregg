@@ -72,7 +72,7 @@ def go (prog : Program D) (r : Run) (c : Call D) : Run × String × Option (Turn
   | .error (.refused (.lawDenied _ why)) => (r, s!"refused lawDenied {why}", none)
   | .error (.refused e) => (r, s!"refused {e.name}", none)
   | .error (.rejected e) => (r, s!"rejected {Kernel.Sim.nameOf e}", none)
-  | .ok (t, w') => ({ r with st := { r.st with host := w', log := r.st.log ++ [t] } }, "admitted", some t)
+  | .ok (t, w') => ({ r with st := { r.st with host := w', log := r.st.log ++ [.turn t] } }, "admitted", some t)
 
 def phaseAt (w : World D) (g : D) : Option Phase := (w.live Kernel.Sim.env g).bind fun c => phaseOf c.slots
 
@@ -177,7 +177,7 @@ def journey (plant : Plant) (pkg : Package) : Run := Id.run do
     (ctl r [] gr hx == [{ grain := hx, verdict := .launch want }])
   r := note r "G15 the ids of the log's Turns, reconciled, launch exactly the grain"
     (Controller.reconcile Kernel.Sim.env Kernel.Sim.dc.bytes label pkgId 0 [] r.st.host
-      (Controller.touchedIds r.st.log) == [{ grain := hx, verdict := .launch want }])
+      (Controller.touchedIds (Step.turns r.st.log)) == [{ grain := hx, verdict := .launch want }])
   r := note r "G15 controller, child running: nothing"
     ((ctl r [upLive hx] gr hx).isEmpty)
   -- G17 the controller's round

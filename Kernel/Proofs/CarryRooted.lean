@@ -30,7 +30,7 @@ carried, and audited again: every World grant has a parent or is one of the FIRS
 founder grants. The carried World's own origin roots nothing: its ids are the lineage's. -/
 theorem deployed_carry_rooted (program : Program Digest) (name nonce : ByteArray) (allowance : Nat)
     (founders : List (ByteArray × Digest)) {name' nonce' : ByteArray} {w w' w'' : World Digest}
-    {l l' : List (Turn Digest)}
+    {l l' : List (Step Digest)}
     (ha : audit (ctx program) (genesisWorld (ctx program) name nonce allowance founders) l = .ok w)
     (hc : carry (ctx program) name' nonce' w.origin w.carried = .ok w')
     (ha' : audit (ctx program) w' l' = .ok w'') :

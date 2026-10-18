@@ -34,6 +34,7 @@ import Host.Record
 import Kernel.Proofs.Origin
 import Kernel.Proofs.RootedFold
 import Kernel.Proofs.Journal
+import Kernel.Proofs.Refusals
 import Codec.Proofs.Raw
 import Host.Proofs.Index
 
@@ -497,11 +498,11 @@ theorem genesisImage_origin {W F : Type} (keys : Keys) (c : Cadence) (world : Co
     rw [hlen, hx, originFault_none_iff]
     exact ⟨_, hr, ho.symm⟩
 
-/-- A record's run (`Record.runRooted`) that succeeds is a `Kernel.Rooted` run: every Turn
-admitted, every stated pair of roots the one admission reached (HOST-29). -/
+/-- A record's run (`Record.runRooted`) that succeeds is a `Kernel.Rooted` run: every step
+taken, every stated roots digest the one the step reached (HOST-29). -/
 theorem Record.runRooted_ok {D F : Type} [Ord D] [DecidableEq D]
-    {admit : Kernel.World D → Kernel.Turn D → Except F (Kernel.World D)} {root : Kernel.World D → D × D} :
-    ∀ {i : Nat} {w w' : Kernel.World D} {ps : List (Kernel.Turn D × (D × D))},
+    {admit : Kernel.World D → Kernel.Step D → Except F (Kernel.World D)} {root : Kernel.World D → D} :
+    ∀ {i : Nat} {w w' : Kernel.World D} {ps : List (Kernel.Step D × D)},
       Record.runRooted admit root i w ps = .ok w' → Kernel.Rooted admit root w ps w'
   | i, w, w', [], h => by
       simp only [Record.runRooted] at h; cases h; rfl
@@ -517,7 +518,7 @@ theorem Record.runRooted_ok {D F : Type} [Ord D] [DecidableEq D]
 
 /-- **HOST-29: a record that opens is a rooted run of the pairs it decodes to.** -/
 theorem Record.step_rooted {D F : Type} [Ord D] [DecidableEq D] {dc : Codec.Stream D}
-    {admit : Kernel.World D → Kernel.Turn D → Except F (Kernel.World D)} {root : Kernel.World D → D × D}
+    {admit : Kernel.World D → Kernel.Step D → Except F (Kernel.World D)} {root : Kernel.World D → D}
     {w w' : Kernel.World D} {r : ByteArray} (h : Record.step dc admit root w r = .ok w') :
     ∃ ps, (Record.codec dc).decode r = .ok ps ∧ Kernel.Rooted admit root w ps w' := by
   unfold Record.step Record.stepTurns at h
@@ -536,21 +537,21 @@ origin (`Record.step_rooted`, then KERNEL's `fold_origin`), so every later base'
 same origin as the genesis World whose chain the origin frame holds. -/
 theorem Record.step_origin {D : Type} [Ord D] [DecidableEq D] {dc : Codec.Stream D}
     {E : Kernel.Env D} {w w' : Kernel.World D} {r : ByteArray}
-    (h : Record.step dc (Kernel.World.admit E) (Kernel.World.roots E) w r = .ok w') : w'.origin = w.origin := by
+    (h : Record.step dc (Kernel.World.step E) (Kernel.World.roots E) w r = .ok w') : w'.origin = w.origin := by
   obtain ⟨_, _, hr⟩ := Record.step_rooted h
   exact Kernel.Receive.fold_origin (Kernel.RootedFold.fold hr)
 
 
 /-- **The writer's reopen keeps the journal's invariant (KERNEL-41).** Folding records with the
-writer's step (`Record.step` over `World.admit` and `World.roots`) from a World whose journal is
+writer's step (`Record.step` over `World.step` and `World.roots`) from a World whose journal is
 `JournalOk` (a canonical trie, every entry inside its window, heights distinct) reaches a World
-whose journal is `JournalOk`: every record that opens is admitted Turns (`Record.step_rooted`,
+whose journal is `JournalOk`: every record that opens is steps taken (`Record.step_rooted`,
 `RootedFold.fold`), and KERNEL's `fold_journalOk` carries it. What the Host's journal lookups
 (`Host.Proofs.Serve`) rest on after an open. -/
 theorem Record.foldlM_journalOk {D : Type} [Ord D] [DecidableEq D] {dc : Codec.Stream D}
     {E : Kernel.Env D} :
     ∀ {w w' : Kernel.World D} {rs : List ByteArray}, w.JournalOk E →
-      rs.foldlM (Record.step dc (Kernel.World.admit E) (Kernel.World.roots E)) w = .ok w' → w'.JournalOk E
+      rs.foldlM (Record.step dc (Kernel.World.step E) (Kernel.World.roots E)) w = .ok w' → w'.JournalOk E
   | w, w', [], hw, h => by
     simp only [List.foldlM_nil, pure, Except.pure, Except.ok.injEq] at h
     exact h ▸ hw
@@ -561,5 +562,23 @@ theorem Record.foldlM_journalOk {D : Type} [Ord D] [DecidableEq D] {dc : Codec.S
     · rename_i w₁ h₁
       obtain ⟨_, _, hr⟩ := Record.step_rooted h₁
       exact Record.foldlM_journalOk (Kernel.fold_journalOk hw (Kernel.RootedFold.fold hr)) h
+
+/-- **The writer's reopen keeps the refusals' invariant (KERNEL-44)**, as `Record.foldlM_journalOk`
+keeps the journal's: every record that opens is steps taken, and KERNEL's `fold_refusalsOk` carries
+`RefusalsOk` (a canonical refusals trie, every leaf the window's). -/
+theorem Record.foldlM_refusalsOk {D : Type} [Ord D] [DecidableEq D] {dc : Codec.Stream D}
+    {E : Kernel.Env D} :
+    ∀ {w w' : Kernel.World D} {rs : List ByteArray}, w.RefusalsOk E →
+      rs.foldlM (Record.step dc (Kernel.World.step E) (Kernel.World.roots E)) w = .ok w' → w'.RefusalsOk E
+  | w, w', [], hw, h => by
+    simp only [List.foldlM_nil, pure, Except.pure, Except.ok.injEq] at h
+    exact h ▸ hw
+  | w, w', r :: rs, hw, h => by
+    simp only [List.foldlM_cons, bind, Except.bind] at h
+    split at h
+    · cases h
+    · rename_i w₁ h₁
+      obtain ⟨_, _, hr⟩ := Record.step_rooted h₁
+      exact Record.foldlM_refusalsOk (Kernel.fold_refusalsOk hw (Kernel.RootedFold.fold hr)) h
 
 end Nanodregg.Host

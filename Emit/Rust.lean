@@ -627,7 +627,7 @@ def custodyRefusalEnum : String :=
 /-! ## The attempt store's decision (Protocol.Attempt)
 
 `attempt::next` is `Attempt.table` printed as one Rust `match`, one arm per row: the client consults
-it and keeps no second copy of the rule. The 22 rows are every input (`Attempt.inputs`), so the
+it and keeps no second copy of the rule. The 26 rows are every input (`Attempt.inputs`), so the
 `match` is exhaustive and `cargo check` refuses it if a row were missing. -/
 
 open Attempt in
@@ -642,7 +642,7 @@ def attemptModule : String :=
   let enum (name : String) (cases : List String) : List String :=
     ["    #[derive(Debug, Clone, Copy, PartialEq, Eq)]", s!"    pub enum {name} \{"] ++
       cases.map (fun c => s!"        {c},") ++ ["    }"]
-  let actions : List Action := [.submit, .lookup, .committed, .refused, .absent, .badReply, .uncertain]
+  let actions : List Action := Action.all
   String.intercalate "\n" (
     ["/// What the attempt store does next with a frozen call (Protocol.Attempt.next, as its table).",
      "pub mod attempt {"] ++

@@ -69,19 +69,19 @@ def digestOf (b : ByteArray) : Option Nat :=
   | .error _ => none
 
 /-- How the loop records and indexes a batch. -/
-def recorder : Recorder (World Nat) (Turn Nat × (Nat × Nat)) where
+def recorder : Recorder (World Nat) (Step Nat × Nat) where
   encode _ staged := Record.encode dc staged
-  mark w := (w.height, env.bytes w.chain)
+  mark := Record.mark env
 
 /-- The genesis chain of a World's origin, as `mark` writes a chain: what the origin frame of
 its Store holds (HOST-25). -/
 def originChain (w : World Nat) : ByteArray := env.bytes (World.genesisChain env w.origin)
 
 /-- One batch record folded into the World: what open does per record (the writer's fold). -/
-def tailStep : World Nat → ByteArray → Except (Record.Fault (Reject Nat)) (World Nat × List (Turn Nat × (Nat × Nat))) :=
-  Record.stepTurns dc (World.admit env) (World.roots env)
+def tailStep : World Nat → ByteArray → Except (Record.Fault (Reject Nat)) (World Nat × List (Step Nat × Nat)) :=
+  Record.stepTurns dc (World.step env) (World.roots env)
 
 def foldStep : World Nat → ByteArray → Except (Record.Fault (Reject Nat)) (World Nat) :=
-  Record.step dc (World.admit env) (World.roots env)
+  Record.step dc (World.step env) (World.roots env)
 
 end Nanodregg.Host.Sim

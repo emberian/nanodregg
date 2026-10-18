@@ -76,9 +76,10 @@ STORE/base.world   the newest base: one frame of `world ‖ u64 offset ‖ tag32
 STORE/base.tmp     a seal in progress; never read
 ```
 
-Batch frame: `u32 len ‖ record ‖ tag32`, `record = CODEC's batch [(Turn, (cells root, journal root) after it)]`
-(`Host.Record`, HOST-29, KERNEL-41), `tag = KMAC(key, "segment", prevTag ‖ record)`. Open admits each Turn
-and asserts both stated roots (`rootMismatch`); the chain after a record is `chainOf` over its pairs.
+Batch frame: `u32 len ‖ record ‖ tag32`, `record = CODEC's batch [(step, roots digest after it)]`, a step
+an admitted Turn or a recorded refusal (`Host.Record`, HOST-29, KERNEL-47, HOST-42), `tag = KMAC(key, "segment",
+prevTag ‖ record)`. Open takes each step with `World.step` and asserts the stated roots digest (`rootMismatch`);
+the chain after a record is `chainOf` over its pairs. A log position is a step count, not a height.
 
 - **Append protocol:** encode the frame in memory; assert `decode (encode b) = b` on those bytes
   (the pair of `Log.decode_encode`); `writeAll`; `fsync`. A failed write or fsync makes every

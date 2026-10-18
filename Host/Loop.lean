@@ -106,18 +106,19 @@ structure Checkpoint (W : Type) where
   write : W → Position → Array Entry → IndexAt → IO (Except SealFault (Nat × ByteArray × IndexAt))
   async : Bool
 
-/-- How the loop writes a batch record and indexes it: the record of the staged entries (each Turn
-with the two roots after it, cells' and journal's, HOST-29) given the World after them, and the height and chain
-(`Env.bytes`) of a World. -/
+/-- How the loop writes a batch record and indexes it: the record of the staged entries (each step
+with the roots digest after it, HOST-29, KERNEL-47) given the World after them, and the log
+position of a World: its step count and chain (`Env.bytes`). The position is steps, not height: a
+recorded refusal is a step at an unchanged height. -/
 structure Recorder (W T : Type) where
   encode : W → Array T → ByteArray
   mark : W → Nat × ByteArray
 
-/-- A seal in flight: the offset it seals at, the sealed World's height and chain, the index
+/-- A seal in flight: the offset it seals at, the sealed World's step count and chain, the index
 entries its base will name, and its Task. -/
 structure Pending where
   offset : Nat
-  height : Nat
+  steps : Nat
   chain : ByteArray
   indexCount : Nat
   task : Task (Except IO.Error (Except SealFault (Nat × ByteArray × IndexAt)))
@@ -200,7 +201,7 @@ def settle (p : Pending) : IO (Except SealFault Sealed) := do
   match ← IO.wait p.task with
   | .error e => return .error (.io (toString e))
   | .ok (.error f) => return .error f
-  | .ok (.ok (bytes, digest, index)) => return .ok ⟨p.offset, bytes, p.height, p.chain, digest, index⟩
+  | .ok (.ok (bytes, digest, index)) => return .ok ⟨p.offset, bytes, p.steps, p.chain, digest, index⟩
 
 /-- Take up a settled base: it is the newest durable one, and the entries it counts leave the
 loop's memory (they are on disk), so the loop holds only the entries after it. O(entries held)
@@ -284,7 +285,7 @@ def append (rec : Recorder W T) (s : Log.Sealer) (ck : Checkpoint W) (c : Cadenc
 
 /-- The loop. `rec.encode after staged` is the batch record (`Host.Record.encode`); `pager r d`
 builds a deferred reply (a `log` or `read` page: status, payload) from the durable state `r`. -/
-def serve {N : Type} (m : Machine W T R Frame N) (rec : Recorder W (T × N)) (s : Log.Sealer) (ck : Checkpoint W)
+def serve {N : Type} (m : Machine W T Frame N) (rec : Recorder W (T × N)) (s : Log.Sealer) (ck : Checkpoint W)
     (c : Cadence) (store : Store) (pager : Resident W → Deferred → IO (UInt8 × ByteArray)) (port : Port)
     (limits : Limits) : Nat → Resident W → IO (Exit × Resident W)
   | 0, r => finish .fuel r
@@ -308,7 +309,7 @@ def serve {N : Type} (m : Machine W T R Frame N) (rec : Recorder W (T × N)) (s 
         (← fillPages pager r out).forM port.send
         serve m rec s ck c store pager port limits fuel r
 
-/-- What a reopened Store must agree with the loop on: the World's height and chain, the segment
+/-- What a reopened Store must agree with the loop on: the World's step count and chain, the segment
 position and its tag, the entries the newest base counts and its last tag, and the entries held
 after it. The pair assertion of every fuel restart. -/
 def agrees (mark : W → Nat × ByteArray) (a b : Resident W) : Bool :=

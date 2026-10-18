@@ -2,7 +2,7 @@
 # Protocol.Proofs.Thin — an adopted base is the pinned one
 
 `accept_done`: whatever the writer served, a World `accept` adopts re-encodes (under a canonical
-World codec) to bytes whose digest is the pin's, at the pinned height. So the only trust a thin member
+World codec) to bytes whose digest is the pin's, at the pinned step count. So the only trust a thin member
 places is in its pin; a forged base is never adopted unless it collides with the pin's digest.
 -/
 import Protocol.Thin
@@ -17,7 +17,7 @@ variable {W : Type}
 theorem finish_done {B : Base W} {pin : Pin} {got : ByteArray} {w : W}
     (canonical : ∀ b v, B.world.decode b = .ok v → B.world.bytes v = b)
     (h : finish B pin got = .ok (.done w)) :
-    B.digest (B.world.bytes w) = pin.digest ∧ B.heightOf w = pin.height := by
+    B.digest (B.world.bytes w) = pin.digest ∧ B.stepsOf w = pin.steps := by
   unfold finish at h
   split at h
   · cases h
@@ -32,20 +32,20 @@ theorem finish_done {B : Base W} {pin : Pin} {got : ByteArray} {w : W}
         exact ⟨by rw [canonical _ _ hv]; exact Classical.not_not.mp hd, Classical.not_not.mp hh⟩
 
 /-- An adopted World is the pinned one: its canonical bytes hash to the pin's digest and it is at
-the pin's height, whatever the pages stated. `canonical` is the World codec's one-pass canonicity
+the pin's step count, whatever the pages stated. `canonical` is the World codec's one-pass canonicity
 (CODEC's `eq_bytes_of_world_decode`). -/
 theorem accept_done {B : Base W} {pin : Pin} {dl : Option Download} {p : Page} {w : W}
     (canonical : ∀ b v, B.world.decode b = .ok v → B.world.bytes v = b)
     (h : accept B pin dl p = .ok (.done w)) :
-    B.digest (B.world.bytes w) = pin.digest ∧ B.heightOf w = pin.height := by
+    B.digest (B.world.bytes w) = pin.digest ∧ B.stepsOf w = pin.steps := by
   unfold accept at h
   dsimp only at h
   repeat' (split at h; · cases h)
   exact finish_done canonical h
 
-/-- A page that states another height than the pin is never adopted, whatever its bytes. -/
+/-- A page that states another step count than the pin is never adopted, whatever its bytes. -/
 theorem accept_moved {B : Base W} {pin : Pin} {dl : Option Download} {p : Page}
-    (h : p.height ≠ pin.height) : accept B pin dl p = .error (.baseMoved p.height) := by
+    (h : p.steps ≠ pin.steps) : accept B pin dl p = .error (.baseMoved p.steps) := by
   unfold accept
   exact if_pos h
 

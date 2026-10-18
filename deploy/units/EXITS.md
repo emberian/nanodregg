@@ -152,3 +152,4 @@ code space holds both tables: `host` (Host.Status, below 64) and nd-supervise's 
 | 50 | absent | done | stays stopped (success) | nothing: `sync` sends no call, so `absent` is a lookup's end; seen from sync, report to PROTOCOL |
 | 51 | behind | restart | restarted after 2 s; failed past 5 starts in 120 s | automatic: the catch-up read its page bound and is still behind; the next run continues from what was absorbed |
 | 52 | client | restart | restarted after 2 s; failed past 5 starts in 120 s | nd itself could not run (argv, a socket, the workspace; stderr names it): check /etc/nd/follow/LABEL and that both sockets exist; it is retried every interval |
+| 53 | declined | restart | restarted after 2 s; failed past 5 starts in 120 s | nothing: `sync` sends no call, so it is never `declined` (a submit's not-final refusal, PROTOCOL-41); seen from sync, report to PROTOCOL |

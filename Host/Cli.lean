@@ -7,11 +7,11 @@
                                                    only Lean computes: law 2)
     host serve STORE                               the writer loop on stdin/stdout
     host follow STORE MEMBER_HEX GRANT_HEX         the follower loop on stdin/stdout (Host.Follow)
-    host check STORE [--anchor HEIGHT:CHAIN_HEX]   open read-only, print one STATUS line, refuse a
+    host check STORE [--anchor STEPS:CHAIN_HEX]   open read-only, print one STATUS line, refuse a
                                                    Store behind or off the anchor (Host.Check)
     host export STORE OUT                          write the carried file of a STOPPED Store's World
                                                    (Host.Carry), print `carried DIGEST`, `from
-                                                   ORIGIN`, `anchor H:C`; writes nothing in STORE
+                                                   ORIGIN`, `anchor S:C`; writes nothing in STORE
     host import STORE NAME IN --digest HEX [--nonce HEX32]
                                                    a new Store from a carried file: the digest is
                                                    REQUIRED and checked, with the stamp and the
@@ -66,7 +66,7 @@ def refuse (status : Status) (name : String := status.name) : IO UInt32 := do
 def refuseStore {F : Type} (f : StoreFault F) : IO UInt32 := refuse f.status f.text
 
 def usage : String :=
-  "usage: host genesis STORE NAME [--nonce HEX32] [KEY_HEX NEXT_HEX]... | host serve STORE | host follow STORE MEMBER_HEX GRANT_HEX | host check STORE [--anchor HEIGHT:CHAIN_HEX] | host export STORE OUT | host import STORE NAME IN --digest HEX [--nonce HEX32]"
+  "usage: host genesis STORE NAME [--nonce HEX32] [KEY_HEX NEXT_HEX]... | host serve STORE | host follow STORE MEMBER_HEX GRANT_HEX | host check STORE [--anchor STEPS:CHAIN_HEX] | host export STORE OUT | host import STORE NAME IN --digest HEX [--nonce HEX32]"
 
 def hexDigest (s : String) : Option Digest := Protocol.Text.ofHex s >>= Digest.ofBytes?
 
@@ -127,7 +127,7 @@ def exportVerb (store out : String) : IO UInt32 := do
       writeNew out bytes
       IO.println s!"carried {(Carry.digestOf bytes).toHex}"
       IO.println s!"from {w.origin.toHex}"
-      IO.println s!"anchor {w.height}:{w.chain.toHex}"
+      IO.println s!"anchor {w.steps}:{w.chain.toHex}"
       return 0
 
 /-- The most bytes a carried file may have: its stamp and head, and a World's worth. -/
@@ -225,9 +225,9 @@ def status (verb : String) (fields : List (String × String)) : IO Unit :=
   IO.eprintln s!"STATUS {verb} {" ".intercalate (fields.map fun (k, v) => s!"{k}={v}")}"
 
 def residentFields (r : Resident (World D)) : List (String × String) :=
-  [("height", toString r.world.height), ("chain", r.world.chain.toHex),
+  [("height", toString r.world.height), ("steps", toString r.world.steps), ("chain", r.world.chain.toHex),
    ("offset", toString r.pos.offset), ("base_offset", toString r.sealed.offset),
-   ("base_height", toString r.sealed.height)]
+   ("base_steps", toString r.sealed.steps)]
 
 /-- Run a resident on stdin/stdout: prove the reader thread live, state the opened Store, run the
 rounds, and at the end answer every frame still queued `refused stopped`, then state the exit. -/

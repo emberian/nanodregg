@@ -15,8 +15,10 @@
 //! request with what its reply said. This module only performs the action it names and keeps the
 //! files. So a send whose reply did not arrive is never failed, only looked up; a lookup that
 //! answers absent permits another send of the same bytes while sends remain; a lookup the Host
-//! cannot answer ends the run uncertain (the next run looks up again). Nothing here re-signs or
-//! re-plans.
+//! cannot answer ends the run uncertain (the next run looks up again). A submit answered `declined`
+//! (refused by name and NOT recorded, so not final: PROTOCOL-41) ends the run with the attempt OPEN:
+//! no settlement file is written, so it reloads as uncertain and the next run looks it up. Nothing
+//! here re-signs or re-plans.
 
 use std::fs;
 use std::io;
@@ -35,8 +37,12 @@ const SENT_PREFIX: &str = "sent.";
 pub enum Settlement {
     /// The call is in the log.
     Committed(Vec<u8>),
-    /// The call is definitively not in the log and never will be (a named refusal).
+    /// The call is definitively not in the log and never will be (a FINAL named refusal: recorded,
+    /// or past its window).
     NotCommitted(Vec<u8>),
+    /// Submit only: refused by name and not recorded, so not final (`declined`, PROTOCOL-41). The
+    /// same bytes may still be admitted later.
+    Declined(Vec<u8>),
     /// The Host said it cannot say (`uncertain`: its append did not read back).
     Unknown,
     /// Lookup only: the Host has no record of these bytes.
@@ -50,6 +56,7 @@ impl Settlement {
         match self {
             Self::Committed(_) => Seen::Committed,
             Self::NotCommitted(_) => Seen::Refused,
+            Self::Declined(_) => Seen::Declined,
             Self::Unknown => Seen::Unknown,
             Self::Absent => Seen::Absent,
             Self::Lost => Seen::Lost,
@@ -66,6 +73,15 @@ pub enum State {
     Uncertain {
         /// How many sends have been started.
         sends: u32,
+    },
+    /// This run's submit was `declined` (PROTOCOL-41): not settled, the attempt stays open. Never
+    /// read from disk: on disk it is exactly [`State::Uncertain`] (its `sent.*` markers, no
+    /// settlement), so the next run looks it up.
+    Declined {
+        /// How many sends have been started.
+        sends: u32,
+        /// The Host's reply bytes (the refusal's name).
+        reply: Vec<u8>,
     },
     /// Settled by the Host.
     Settled {
@@ -191,7 +207,9 @@ impl Attempt {
             State::Settled { .. } => return Ok(state),
             State::Signed => (0, None),
             // Reloaded after a send: its reply is lost to this run.
-            State::Uncertain { sends } => (sends, Some((Request::Submit, Seen::Lost))),
+            State::Uncertain { sends } | State::Declined { sends, .. } => {
+                (sends, Some((Request::Submit, Seen::Lost)))
+            }
         };
         let mut reply = Vec::new();
         for _ in 0..=2 * u64::from(sends_max) {
@@ -199,6 +217,8 @@ impl Attempt {
                 Action::Committed => return self.settle(true, reply),
                 Action::Refused => return self.settle(false, reply),
                 Action::Uncertain => return Ok(State::Uncertain { sends }),
+                // Not final: nothing is written, so the attempt reloads as uncertain.
+                Action::Declined => return Ok(State::Declined { sends, reply }),
                 end @ (Action::Absent | Action::BadReply) => return Err(AttemptError::Ended(end)),
                 Action::Submit => {
                     // The marker is durable before a byte leaves: a crash from here on loads as
@@ -211,7 +231,10 @@ impl Attempt {
             };
             let s = exchange(request, &self.call);
             last = Some((request, s.seen()));
-            if let Settlement::Committed(r) | Settlement::NotCommitted(r) = s {
+            if let Settlement::Committed(r)
+            | Settlement::NotCommitted(r)
+            | Settlement::Declined(r) = s
+            {
                 reply = r;
             }
         }

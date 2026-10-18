@@ -39,11 +39,15 @@ inductive Expect
   | hang
   /-- the command's catch-up ended still behind the writer's tip (`CommandExit.behind`): run again -/
   | behind
+  /-- the writer refused the call by name and did NOT record it (`Status.declined`, PROTOCOL-41): not
+  final, the attempt stays open -/
+  | declined (name : String)
   deriving DecidableEq, Repr
 
 def Expect.text : Expect → String
   | .ok => "ok" | .refused n => s!"refused {n}" | .absent => "absent" | .uncertain => "uncertain"
   | .unsettled n => s!"uncertain {n}" | .hang => "hang" | .behind => "behind"
+  | .declined n => s!"declined {n}"
 
 /-- What a line does. A member command goes through the one command language; the others are the
 operator's and the attempt store's acts, which are not member commands. -/
@@ -60,7 +64,8 @@ inductive Act
   (the writer's newest base is then at its tip) -/
   | seal
   /-- the actor, a full follower, states the pin of its own World out of band (the channel is
-  Ember's, unbuilt): binds `NAME` to the digest of its World bytes and `NAME.h` to its height -/
+  Ember's, unbuilt): binds `NAME` to the digest of its World bytes and `NAME.steps` to its step
+  count (its log position) -/
   | attest (name : String)
   /-- every call the writer committed so far is submitted, byte-identical and in order, to a SECOND
   writer made by a second genesis with the same name, allowance and founders, and the same nonce
@@ -85,6 +90,9 @@ inductive Act
   sends it to a second writer made as `replayLog` makes one (PROTOCOL-29's cross-World read); the
   outcome is that writer's answer -/
   | readElsewhere (sameNonce : Bool)
+  /-- the actor's last call (its frozen bytes) is submitted again, byte-identical: a relay or a
+  client that still holds the bytes. The outcome is the writer's answer -/
+  | resubmit
   /-- the actor's client signs every later envelope for `n` heights (its own `Self.window`, a
   client's setting; the writer's read gate bounds it by `Bounds.windowMax`) -/
   | window (n : Nat)
@@ -182,6 +190,10 @@ inductive Mutation
   /-- the import is handed the file's OWN digest whatever the operator gave: no out-of-band link
   from the old Store to the bytes imported -/
   | importTrustsFile
+  /-- the writer admits a call whose transaction id holds a recorded refusal (judged on its World
+  with the refusals forgotten) and still answers it `refused NAME`: a writer that tells the client a
+  final no and commits the call anyway (the A→B→A defect, as a lie) -/
+  | admitsRecorded
   deriving DecidableEq, Repr
 
 /-- A row's plant: the mutation, and the line that must catch it with the outcome it then gets. -/
@@ -449,19 +461,19 @@ def thin : Row where
     ok "operator" ["read", "@shared", "2=1"],
     { actor := "operator", act := .seal, expect := .ok },
     { actor := "operator", act := .attest "pin", expect := .ok },
-    ok "thin" ["adopt", "@pin.h", "@pin"],
+    ok "thin" ["adopt", "@pin.steps", "@pin"],
     ok "newcomer" ["write", "@shared", "2", "2", "--via", "@g"],
     ok "thin" ["write", "@shared", "3", "7", "--via", "@gt"],
     ok "thin" ["read", "@shared", "2=2", "3=7"],
     { actor := "operator", act := .seal, expect := .ok },
-    no "late" ["adopt", "@pin.h", "@pin"] "baseMoved"])
+    no "late" ["adopt", "@pin.steps", "@pin"] "baseMoved"])
   plant := .caught .forgeBase 17 (.refused "baseMismatch")
 
 /-- A thin member whose pin is more than a window old (PROTOCOL-37; PROTOCOL-4's leftover, adopt's
 `reSign` path). The thin member's client signs for a window of 5 heights; the operator seals and
 states the pin, then the log runs 12 writes past it, fewer than the rows' seal cadence needs, so the
 newest base is still the pinned one (a deployed writer's seal cadence is in bytes, its window in
-heights: a pin a window old with the base unmoved is the ordinary case). `adopt`'s first envelope is signed for the pin's height + window. The
+heights: a pin a window old with the base unmoved is the ordinary case). `adopt`'s first envelope is signed for one window from height 0 (a pin names a step count, PROTOCOL-41). The
 writer refuses it `expired` and states its height, and follow re-signs ONCE for that height + window
 (`Command.reSign`, the same rule as a cold follower's, `reSign_ok`), then pages the base. Its first
 write after that catches up from the base's height, again more than a window behind (held by its
@@ -480,7 +492,7 @@ def thinStale : Row where
     { actor := "operator", act := .attest "pin", expect := .ok },
     { actor := "newcomer", act := .cmd ["write", "@shared", "2", "1", "--via", "@g"], expect := .ok,
       times := 12 },
-    ok "thin" ["adopt", "@pin.h", "@pin"],
+    ok "thin" ["adopt", "@pin.steps", "@pin"],
     ok "thin" ["write", "@shared", "3", "7", "--via", "@gt"],
     ok "thin" ["read", "@shared", "2=1", "3=7"]])
   plant := .caught .unstatedExpiry 15 (.refused "expired")
@@ -490,7 +502,8 @@ def thinStale : Row where
 calls. KERNEL-24 binds every call to its World's origin (`Unsigned.world`, checked first;
 `Kernel.Receive.admitted_elsewhere_refused`), and the origin commits to the genesis nonce. So the
 writer's whole log replayed into a Store whose genesis differs ONLY in its nonce is refused
-`wrongWorld`, every call, by that name. The same log into a Store of the same nonce is a restore of
+`wrongWorld`, every call, by that name (`declined`: an unauthenticated refusal, recorded nowhere and
+not final, PROTOCOL-41). The same log into a Store of the same nonce is a restore of
 the same World and is admitted, every call: the binding is the origin, not the process or the
 Store. Without the check, line 7 is `unknownKey` (founder ids are keyed by the origin), so the
 expectation by name holds the check; the plant holds the nonce. -/
@@ -501,7 +514,7 @@ def wrongWorld : Row where
   kinds := ["enroll", "install", "create", "grant", "write"]
   drive := .members (welcome ++ [
     ok "newcomer" ["write", "@shared", "2", "1", "--via", "@g"],
-    { actor := "operator", act := .replayLog false, expect := .refused "wrongWorld" },
+    { actor := "operator", act := .replayLog false, expect := .declined "wrongWorld" },
     { actor := "operator", act := .replayLog true, expect := .ok }])
   plant := .caught .nonceRepeats 7 .ok
 
@@ -546,11 +559,66 @@ def forgotten : Row where
     { actor := "newcomer", act := .retry, expect := .unsettled "forgotten" }])
   plant := .caught .forgottenRefused 13 (.refused "forgotten")
 
+/-- KERNEL-44's teeth over sockets (PROTOCOL-41): a refusal is a recorded system interaction,
+final for its transaction id within the window. A call planned on a World that then moved is
+refused `stale` and RECORDED; a lookup answers it by that name; the World's pin returns to the value
+the call saw (A→B→A), and the same bytes sent again are answered `refused stale` from the record,
+never re-derived and never admitted (before KERNEL-44 they were admitted: a final verdict reversed).
+A member's refusals in one window are bounded: the 17th authenticated refusal is `declined
+refusalBudget`, not recorded and not final (its lookup is `absent`). A thin member then adopts a
+base whose step count is past its height and catches up from its steps. Past the window the record is
+pruned and the first call's lookup is `uncertain forgotten`, never `refused`. The plant is a writer
+that commits a recorded call while answering it `refused stale`: the member's own follower catches
+the logged Turn by the kernel's name, `refusedFinal`. The counts are heights, so this row is not for
+`rows --times` scaling. -/
+def refusedRow : Row where
+  name := "refused"
+  replaces := []
+  ops := settled ++ [.read]
+  kinds := ["enroll", "install", "create", "grant", "write"]
+  drive := .members (welcome ++ join "sponsor" "auditor" ++ [
+    okBind "sponsor" ["grant", "@shared", "@auditor", "observe,mutate"] "g2",
+    ok "sponsor" ["write", "@shared", "2", "1"],
+    ok "newcomer" ["read", "@shared", "2=1"],
+    ok "auditor" ["read", "@shared", "2=1"],
+    ok "sponsor" ["write", "@shared", "2", "5"],
+    -- planned on the World where 2=1: the writer refuses it stale and records it
+    { actor := "newcomer", act := .forge ["write", "@shared", "3", "7", "--via", "@g"],
+      expect := .refused "stale" },
+    { actor := "newcomer", act := .retry, expect := .refused "stale" },
+    -- A→B→A: the pin the call saw holds again, and the same bytes are still refused
+    ok "sponsor" ["write", "@shared", "2", "1"],
+    { actor := "newcomer", act := .resubmit, expect := .refused "stale" },
+    ok "newcomer" ["read", "@shared", "2=1"],
+    -- one member's window budget: sixteen recorded refusals, then `declined refusalBudget`
+    ok "sponsor" ["write", "@shared", "2", "9"]] ++
+    (List.range Kernel.Bounds.refusalsPerWindow).map (fun i =>
+      { actor := "auditor", act := .forge ["write", "@shared", "3", toString (100 + i), "--via", "@g2"],
+        expect := .refused "stale" }) ++ [
+    { actor := "auditor", act := .forge ["write", "@shared", "3", "99", "--via", "@g2"],
+      expect := .declined "refusalBudget" },
+    { actor := "auditor", act := .retry, expect := .absent }] ++
+    -- a thin member adopts a base sealed after seventeen recorded refusals, where the World's step
+    -- count is past its height: it pages the log from the base's STEPS (paging from its height
+    -- would re-absorb recorded steps and be refused)
+    join "sponsor" "thinr" ++ [
+    ok "operator" ["read", "@shared", "2=9"],
+    { actor := "operator", act := .seal, expect := .ok },
+    { actor := "operator", act := .attest "pin", expect := .ok },
+    ok "thinr" ["adopt", "@pin.steps", "@pin"],
+    ok "sponsor" ["write", "@shared", "2", "4"],
+    ok "thinr" ["read", "@shared", "2=4"],
+    -- past the window: the record is pruned, and the answer is `forgotten`, never `refused`
+    okBind "operator" ["create", "@permit"] "own",
+    { actor := "operator", act := .cmd ["write", "@own", "2", "1"], expect := .ok, times := 3100 },
+    { actor := "newcomer", act := .retry, expect := .unsettled "forgotten" }])
+  plant := .caught .admitsRecorded 18 (.refused "refusedFinal")
+
 /-- OPS-P1's carry (KERNEL-29, HOST-28 at 6b89d6f): state crosses to a NEW World by export and
 import, never by history. A committed call; an import with a wrong digest is refused
 `carryMismatch` and the old writer still serves; the import with the file's digest makes the
 carried World the writer. There the last committed call is still answered `ok` by lookup (the
-journal is carried, PROTOCOL-30); a NEW call signed for the old origin is `wrongWorld`; a member
+journal is carried, PROTOCOL-30); a NEW call signed for the old origin is `wrongWorld` (`declined`, PROTOCOL-41); a member
 re-invited to the new origin writes on the carried cells, and a founder acting for the first time
 after the carry does so under the id the lineage's first genesis minted. -/
 def carry : Row where
@@ -565,7 +633,7 @@ def carry : Row where
     ok "newcomer" ["write", "@shared", "2", "2", "--via", "@g"],
     { actor := "operator", act := .carry true, expect := .ok },
     { actor := "newcomer", act := .retry, expect := .ok },
-    { actor := "sponsor", act := .forge ["write", "@shared", "3", "1"], expect := .refused "wrongWorld" },
+    { actor := "sponsor", act := .forge ["write", "@shared", "3", "1"], expect := .declined "wrongWorld" },
     { actor := "newcomer", act := .rejoin, expect := .ok },
     ok "newcomer" ["write", "@shared", "2", "3", "--via", "@g"],
     ok "newcomer" ["read", "@shared", "2=3"],
@@ -735,7 +803,7 @@ def langJourney : Row where
   plant := .internal "a program whose judge admits everything: L4 set 101 must be admitted"
 
 def rows : List Row :=
-  [journey, reopen, laws, rotate, audit, paging, coldCatchUp, inflatedHeight, forgotten, carry, thin, thinStale, wrongWorld, wrongWorldRead, pay, well, bounty, grain, hermes, bar,
+  [journey, reopen, laws, rotate, audit, paging, coldCatchUp, inflatedHeight, forgotten, refusedRow, carry, thin, thinStale, wrongWorld, wrongWorldRead, pay, well, bounty, grain, hermes, bar,
    langJourney]
 
 end Nanodregg.Protocol

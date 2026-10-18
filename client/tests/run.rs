@@ -18,6 +18,7 @@ const T: Table = Table {
     refused: 1,
     absent: 3,
     uncertain: 2,
+    declined: 5,
 };
 
 struct ScriptedFollow {
@@ -447,5 +448,62 @@ fn a_submit_whose_reply_is_lost_is_looked_up_never_resent() {
         host.asked,
         vec![(T.submit, b"CALL".to_vec()), (T.lookup, b"CALL".to_vec())]
     );
+    std::fs::remove_dir_all(&d).unwrap();
+}
+
+/// PROTOCOL-41: a rotation submit answered `declined` (not recorded, not final) is handed to
+/// follow as `declined`, leaves the rotation ARMED and custody on its current key, and leaves the
+/// attempt open on disk (uncertain), so the next run looks it up and never re-signs.
+#[test]
+fn a_declined_rotation_submit_stays_armed_and_open() {
+    use nanodregg_client::attempt::{Attempt, State};
+    let (d, custody) = setup("signnext-declined");
+    let before = custody.public_key().unwrap();
+    custody.precommit().unwrap();
+    let mut follow = ScriptedFollow {
+        steps: VecDeque::from([
+            Step::SignNext {
+                message: b"rotate".to_vec(),
+                k: b"k1".to_vec(),
+            },
+            Step::Submit {
+                call: b"ROTATE".to_vec(),
+                k: b"k2".to_vec(),
+            },
+            Step::Done {
+                exit: 53,
+                stdout: Vec::new(),
+                stderr: b"declined unknownKey\n".to_vec(),
+            },
+        ]),
+        seen: Vec::new(),
+    };
+    let mut host = ScriptedHost {
+        replies: VecDeque::from([Ok((T.declined, b"unknownKey".to_vec()))]),
+        asked: Vec::new(),
+    };
+    run::run(
+        &[],
+        &mut follow,
+        &mut host,
+        &custody,
+        &d.join("attempts"),
+        T,
+    )
+    .unwrap();
+    assert_eq!(
+        host.asked,
+        vec![(T.submit, b"ROTATE".to_vec())],
+        "one submit, no lookup"
+    );
+    assert_eq!(
+        follow.seen[1].1.status, T.declined,
+        "follow is told declined"
+    );
+    assert_eq!(follow.seen[1].1.payload, b"unknownKey".to_vec());
+    assert_eq!(custody.public_key().unwrap(), before, "never advanced");
+    assert!(custody.armed().unwrap().is_some(), "still armed: not final");
+    let (_, s) = Attempt::load(&d.join("attempts/0")).unwrap();
+    assert_eq!(s, State::Uncertain { sends: 1 }, "open on disk");
     std::fs::remove_dir_all(&d).unwrap();
 }

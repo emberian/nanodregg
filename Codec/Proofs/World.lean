@@ -3,6 +3,7 @@ import Codec.Proofs.Kernel
 import Kernel.Proofs.Cells
 import Kernel.Proofs.Trie
 import Kernel.Proofs.Journal
+import Kernel.Proofs.Refusals
 
 /-!
 # The World codec: canonical, both tries read back exactly, decode ∘ bytes the identity
@@ -56,9 +57,6 @@ theorem entry_lawfulOn : LawfulOn Entry.Fits entry := by
     | tomb => exact trivial
 
 omit [Ord D] in
-theorem batch_lawfulOn {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc) (max : Nat) (fits : max < 2 ^ 32) :
-    LawfulOn (fun v => v.length ≤ max ∧ ∀ p ∈ v, Turn.Fits PD p.1 ∧ PD p.2.1 ∧ PD p.2.2) (batch max dc) :=
-  rawList_lawfulOn (product_lawfulOn (turn_lawfulOn hd) (product_lawfulOn hd hd)) max fits
 
 /-! ## The trie's listing -/
 
@@ -160,6 +158,127 @@ theorem nodup_of_leavesNodup_build : ∀ (f d : Nat) (l : List (K × V)),
 
 end Leaves
 
+/-! ## The refusals' keys and leaves (KERNEL-44) -/
+
+/-- A refusals key in the digest codec's domain: its id, or its member. -/
+def RefusalSlot.Fits (PD : D → Prop) : RefusalSlot D → Prop
+  | .tx i => PD i
+  | .count m _ => PD m
+
+abbrev RefusalSlotWireFits (PD : D → Prop) : (s : Fin 2) → RefusalSlotF D s → Prop
+  | 0 => PD
+  | 1 => fun p => PD p.1 ∧ True
+
+omit [Ord D] in
+theorem refusalSlotWire_lawfulOn {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc) :
+    ∀ s, LawfulOn (RefusalSlotWireFits PD s) (refusalSlotWire dc s)
+  | 0 => hd
+  | 1 => product_lawfulOn hd u64_lawful.on
+
+omit [Ord D] in
+theorem refusalSlot_lawfulOn {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc) :
+    LawfulOn (RefusalSlot.Fits PD) (refusalSlot dc) := by
+  unfold refusalSlot
+  refine (refine_lawfulOn (choice_lawfulOn 2 (by decide) (refusalSlotWire_lawfulOn hd)) "kernel/refusal-slot"
+    ?_ ?_).mono ?_ ?_
+  · intro y _; cases y <;> rfl
+  · intro x y h
+    obtain ⟨s, v⟩ := x
+    match s, v, h with
+    | 0, i, h => simp at h; subst h; rfl
+    | 1, (m, w), h => simp at h; subst h; rfl
+  · intro y h; cases y with
+    | tx i => exact h
+    | count m w => exact h.1
+  · intro y h; cases y with
+    | tx i => exact h
+    | count m w => exact ⟨h, trivial⟩
+
+/-- A refusals leaf in the leaf codec's domain: every counter below 2^64. -/
+def RefusalLeaf.Fits : RefusalLeaf → Prop
+  | .refused h c => h < 2 ^ 64 ∧ c < 2 ^ 64
+  | .count n => n < 2 ^ 64
+
+abbrev RefusalLeafWireFits : (s : Fin 2) → RefusalLeafF s → Prop
+  | 0 => fun p => p.1 < 2 ^ 64 ∧ p.2 < 2 ^ 64
+  | 1 => fun n => n < 2 ^ 64
+
+theorem refusalLeafWire_lawfulOn : ∀ s, LawfulOn (RefusalLeafWireFits s) (refusalLeafWire s)
+  | 0 => product_lawfulOn nat64_lawfulOn nat64_lawfulOn
+  | 1 => nat64_lawfulOn
+
+theorem refusalLeaf_lawfulOn : LawfulOn RefusalLeaf.Fits refusalLeaf := by
+  unfold refusalLeaf
+  refine (refine_lawfulOn (choice_lawfulOn 2 (by decide) refusalLeafWire_lawfulOn) "kernel/refusal-leaf"
+    ?_ ?_).mono ?_ ?_
+  · intro y _; cases y <;> rfl
+  · intro x y h
+    obtain ⟨s, v⟩ := x
+    match s, v, h with
+    | 0, (a, c), h => simp at h; subst h; rfl
+    | 1, n, h => simp at h; subst h; rfl
+  · intro y h; cases y <;> exact h
+  · intro y h; cases y <;> exact h
+
+/-! ## The log's steps (KERNEL-47) -/
+
+/-- A recorded refusal in the codec's domain: both digests in the digest codec's, every counter below
+2^64, the call's bytes at most `callMax` (what KERNEL's `checkRefusedBounds` checks). -/
+def Refused.Fits (PD : D → Prop) (r : Refused D) : Prop :=
+  PD r.txId ∧ PD r.member ∧ r.notBefore < 2 ^ 64 ∧ r.validUntil < 2 ^ 64 ∧ r.code < 2 ^ 64 ∧
+    r.event.size ≤ callMax
+
+omit [Ord D] in
+theorem refused_lawfulOn {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc) :
+    LawfulOn (Refused.Fits PD) (refused dc) := by
+  unfold refused
+  refine (refine_lawfulOn
+    (product_lawfulOn hd (product_lawfulOn hd (product_lawfulOn nat64_lawfulOn (product_lawfulOn nat64_lawfulOn
+      (product_lawfulOn nat64_lawfulOn (rawBytes_lawfulOn _ (by decide)))))))
+    "kernel/refused" ?_ ?_).mono ?_ ?_
+  · intro y _; rfl
+  · intro x y h; simp at h; subst h; rfl
+  · intro y h; exact h
+  · intro y h; exact h
+
+omit [Ord D] in
+/-- Every refusal KERNEL records is in the codec's domain (at any digest codec total on `PD`). -/
+theorem checkRefusedBounds_fits (r : Refused D) (h : checkRefusedBounds r = .ok ()) :
+    Refused.Fits (fun _ => True) r := by
+  simp only [checkRefusedBounds, req, decide_eq_true_eq] at h
+  simp only [bind_req, ite_req, Bool.and_eq_true, decide_eq_true_eq] at h
+  obtain ⟨hE, ⟨hN, hV⟩, hC⟩ := h
+  exact ⟨trivial, trivial, by simpa [Bounds.counterLimit] using hN, by simpa [Bounds.counterLimit] using hV,
+    by simpa [Bounds.counterLimit] using hC, hE⟩
+
+def Step.Fits (PD : D → Prop) : Step D → Prop
+  | .turn t => Turn.Fits PD t
+  | .refusal r => Refused.Fits PD r
+
+abbrev StepWireFits (PD : D → Prop) : (s : Fin 2) → StepF D s → Prop
+  | 0 => Turn.Fits PD
+  | 1 => Refused.Fits PD
+
+omit [Ord D] in
+theorem stepWire_lawfulOn {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc) :
+    ∀ s, LawfulOn (StepWireFits PD s) (stepWire dc s)
+  | 0 => turn_lawfulOn hd
+  | 1 => refused_lawfulOn hd
+
+omit [Ord D] in
+theorem step_lawfulOn {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc) :
+    LawfulOn (Step.Fits PD) (step dc) := by
+  unfold step
+  refine (refine_lawfulOn (choice_lawfulOn 2 (by decide) (stepWire_lawfulOn hd)) "kernel/step" ?_ ?_).mono ?_ ?_
+  · intro y _; cases y <;> rfl
+  · intro x y h
+    obtain ⟨s, v⟩ := x
+    match s, v, h with
+    | 0, t, h => simp at h; subst h; rfl
+    | 1, r, h => simp at h; subst h; rfl
+  · intro y h; cases y <;> exact h
+  · intro y h; cases y <;> exact h
+
 variable [DecidableEq D]
 
 /-- The listing's domain: within the wire's bound, every id in the digest codec's domain, every
@@ -235,55 +354,143 @@ theorem journalTrie_lawfulOn (E : Env D) {PD : D → Prop} {dc : Stream D} (hd :
     ((rawList_lawfulOn (product_lawfulOn hd (product_lawfulOn nat64_lawfulOn hd)) _ (by decide)).mono
       (fun _ h => h) (fun _ h => h)) "kernel/journal-order"
 
+omit [Ord D] [DecidableEq D] in
+/-- A batch record: at most `max` steps, each in the step codec's domain, each roots digest in the
+digest codec's. -/
+theorem batch_lawfulOn {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc) (max : Nat) (fits : max < 2 ^ 32) :
+    LawfulOn (fun v => v.length ≤ max ∧ ∀ p ∈ v, Step.Fits PD p.1 ∧ PD p.2) (batch max dc) :=
+  rawList_lawfulOn (product_lawfulOn (step_lawfulOn hd) hd) max fits
+
+/-- The refusals listing's domain: within the wire's bound, every key and leaf in its codec's domain. -/
+def RefusalListFits (PD : D → Prop) (l : List (RefusalSlot D × RefusalLeaf)) : Prop :=
+  l.length ≤ worldMax ∧ ∀ p ∈ l, RefusalSlot.Fits PD p.1 ∧ RefusalLeaf.Fits p.2
+
+/-- The refusals codec's domain: a canonical refusals trie whose listing fits (KERNEL-44). -/
+def RefusalsTrieFits (E : Env D) (PD : D → Prop) (r : Refusals D) : Prop :=
+  RefusalListFits PD r.toList ∧ Trie.Canon (refusalSpec E) 0 r
+
+omit [Ord D] [DecidableEq D] in
+/-- Every leaf of a refusals listing `refusalsFits` admits is in the leaf codec's domain: the window
+check bounds every counter, so a reached World's refusals (KERNEL's `fold_refusalsOk`) need only the
+listing's length for the wire. -/
+theorem refusalLeaf_fits_of_refusalsFits {H : Nat} {l : List (RefusalSlot D × RefusalLeaf)}
+    (h : refusalsFits H l = true) : ∀ p ∈ l, RefusalLeaf.Fits p.2 := by
+  intro p hp
+  have hq := List.all_eq_true.mp h p hp
+  obtain ⟨k, v⟩ := p
+  cases k <;> cases v <;> simp_all [RefusalLeaf.Fits, refusalFits, Bounds.counterLimit, Bounds.refusalsPerWindow] <;>
+    omega
+
+omit [Ord D] in
+theorem refusalsTrie_lawfulOn (E : Env D) {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc) :
+    LawfulOn (RefusalsTrieFits E PD) (refusalsTrie E dc) :=
+  trieListing_lawfulOn (refusalSpec E)
+    ((rawList_lawfulOn (product_lawfulOn (refusalSlot_lawfulOn hd) refusalLeaf_lawfulOn) _ (by decide)).mono
+      (fun _ h => h) (fun _ h => h)) "kernel/refusal-order"
+
 /-! ## The World -/
 
 /-- The wire's domain, as the product of its parts. -/
 def WireFits (E : Env D) (PD : D → Prop) (x : WorldWire D) : Prop :=
-  CellsFits E PD x.1 ∧ JournalTrieFits E PD x.2.1 ∧
-  x.2.2.1 < 2 ^ 64 ∧ PD x.2.2.2.1 ∧ x.2.2.2.2.1 < 2 ^ 64 ∧ PD x.2.2.2.2.2
+  CellsFits E PD x.1 ∧ JournalTrieFits E PD x.2.1 ∧ RefusalsTrieFits E PD x.2.2.1 ∧
+  x.2.2.2.1 < 2 ^ 64 ∧ x.2.2.2.2.1 < 2 ^ 64 ∧ PD x.2.2.2.2.2.1 ∧ x.2.2.2.2.2.2.1 < 2 ^ 64 ∧
+  PD x.2.2.2.2.2.2.2
 
 omit [Ord D] in
 theorem worldWire_lawfulOn (E : Env D) {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc) :
     LawfulOn (WireFits E PD) (worldWire E dc) :=
   (product_lawfulOn (cells_lawfulOn E hd)
     (product_lawfulOn (journalTrie_lawfulOn E hd)
-      (product_lawfulOn nat64_lawfulOn (product_lawfulOn hd (product_lawfulOn nat64_lawfulOn hd))))).mono
+      (product_lawfulOn (refusalsTrie_lawfulOn E hd)
+        (product_lawfulOn nat64_lawfulOn (product_lawfulOn nat64_lawfulOn
+          (product_lawfulOn hd (product_lawfulOn nat64_lawfulOn hd))))))).mono
     (fun _ h => h) (fun _ h => h)
 
-/-- The refined wire's domain: the wire's, and a journal that is the window's. -/
-def JournalWireFits (E : Env D) (PD : D → Prop) (x : WorldWire D) : Prop :=
-  WireFits E PD x ∧ journalFits x.2.2.1 x.2.1.toList = true
-
-omit [Ord D] in
-/-- **`kernel/journal` is lawful on exactly the journals `journalFits` admits.** -/
-theorem journalWire_lawfulOn (E : Env D) {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc) :
-    LawfulOn (JournalWireFits E PD) (journalWire E dc) := by
-  unfold journalWire
-  refine (refine_lawfulOn_where (worldWire_lawfulOn E hd) "kernel/journal"
-    (Q := fun x : WorldWire D => journalFits x.2.2.1 x.2.1.toList = true) ?_ ?_ ?_).mono
-    (fun _ h => h) (fun _ h => h)
+/-- `refine name c (if q x then some x else none) id` is lawful on `c`'s domain where `q` holds: the
+shape of `kernel/journal`, `kernel/refusals` and `kernel/steps`, three checks over the World wire. -/
+theorem refineIf_lawfulOn {α : Type} {P : α → Prop} {c : Stream α} (hc : LawfulOn P c) (name : String)
+    (q : α → Prop) [DecidablePred q] :
+    LawfulOn (fun x => P x ∧ q x) (refine name c (fun x => if q x then some x else none) id) := by
+  refine (refine_lawfulOn_where hc name (Q := q) ?_ ?_ ?_).mono (fun _ h => h) (fun _ h => h)
   · intro y _ hq; simp [hq]
   · intro x y h; split at h <;> simp_all
   · intro x y h; split at h
     · rename_i hq; cases h; exact hq
     · cases h
 
-/-- A World within the wire's bounds and the kernel's invariants: a canonical cells trie whose slots
-hold the leaves of their kinds, a canonical journal trie of at most `Bounds.journalMax` entries,
-every digest in the digest codec's domain, the height below 2^64, storage plus allowance below 2^64
-(so the allowance is, and admission keeps it: KERNEL's `fold_budget_lt`), and a journal that is the
-window's (`journalFits`; every reached World's, by KERNEL's `journalFits_of_ok`). -/
-def World.CodecFits (E : Env D) (PD : D → Prop) (w : World D) : Prop :=
-  CellsFits E PD w.trie ∧ JournalTrieFits E PD w.journal ∧
-  w.height < 2 ^ 64 ∧ PD w.chain ∧ w.weight + w.allowance < 2 ^ 64 ∧ PD w.origin ∧
-  journalFits w.height w.journal.toList = true
+/-- The journal-checked wire's domain: the wire's, and a journal that is the window's. -/
+def JournalWireFits (E : Env D) (PD : D → Prop) (x : WorldWire D) : Prop :=
+  WireFits E PD x ∧ journalFits x.2.2.2.1 x.2.1.toList = true
+
+omit [Ord D] in
+/-- **`kernel/journal` is lawful on exactly the journals `journalFits` admits.** -/
+theorem journalWire_lawfulOn (E : Env D) {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc) :
+    LawfulOn (JournalWireFits E PD) (journalWire E dc) :=
+  refineIf_lawfulOn (worldWire_lawfulOn E hd) "kernel/journal" (fun x => journalFits x.2.2.2.1 x.2.1.toList = true)
+
+/-- The refusals-checked wire's domain: the journal-checked one's, and refusals that are the window's. -/
+def RefusalsWireFits (E : Env D) (PD : D → Prop) (x : WorldWire D) : Prop :=
+  JournalWireFits E PD x ∧ refusalsFits x.2.2.2.1 x.2.2.1.toList = true
+
+omit [Ord D] in
+/-- **`kernel/refusals` is lawful on exactly the refusals `refusalsFits` admits.** -/
+theorem refusalsWire_lawfulOn (E : Env D) {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc) :
+    LawfulOn (RefusalsWireFits E PD) (refusalsWire E dc) :=
+  refineIf_lawfulOn (journalWire_lawfulOn E hd) "kernel/refusals" (fun x => refusalsFits x.2.2.2.1 x.2.2.1.toList = true)
+
+/-- The disjointness-checked wire's domain: the refusals-checked one's, and no transaction id both
+refused and journaled. -/
+def DisjointWireFits (E : Env D) (PD : D → Prop) (x : WorldWire D) : Prop :=
+  RefusalsWireFits E PD x ∧ refusalsDisjoint E (ofWire x) = true
+
+/-- **`kernel/refusals-disjoint` is lawful on exactly the wires `refusalsDisjoint` admits.** -/
+theorem disjointWire_lawfulOn (E : Env D) {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc) :
+    LawfulOn (DisjointWireFits E PD) (disjointWire E dc) :=
+  refineIf_lawfulOn (refusalsWire_lawfulOn E hd) "kernel/refusals-disjoint"
+    (fun x => refusalsDisjoint E (ofWire x) = true)
+
+/-- The steps-checked wire's domain: the disjointness-checked one's, and a height at most the step
+count. -/
+def StepsWireFits (E : Env D) (PD : D → Prop) (x : WorldWire D) : Prop :=
+  DisjointWireFits E PD x ∧ x.2.2.2.1 ≤ x.2.2.2.2.1
+
+/-- **`kernel/steps` is lawful on exactly the wires whose height is at most their step count.** -/
+theorem stepsWire_lawfulOn (E : Env D) {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc) :
+    LawfulOn (StepsWireFits E PD) (stepsWire E dc) :=
+  refineIf_lawfulOn (disjointWire_lawfulOn E hd) "kernel/steps" (fun x => x.2.2.2.1 ≤ x.2.2.2.2.1)
+
+/-- A World within the wire's bounds and the kernel's invariants. Named fields, so a further part (the
+rows day, KERNEL-46) adds a field and moves no projection. -/
+structure World.CodecFits (E : Env D) (PD : D → Prop) (w : World D) : Prop where
+  /-- a canonical cells trie whose slots hold the leaves of their kinds, its listing within bounds -/
+  cells : CellsFits E PD w.trie
+  /-- a canonical journal trie of at most `Bounds.journalMax` entries -/
+  journal : JournalTrieFits E PD w.journal
+  /-- a canonical refusals trie whose listing fits the wire (KERNEL-44) -/
+  refusals : RefusalsTrieFits E PD w.refusals
+  height : w.height < 2 ^ 64
+  stepsLt : w.steps < 2 ^ 64
+  chain : PD w.chain
+  /-- storage plus allowance below 2^64 (so the allowance is, and admission keeps it: KERNEL's
+  `fold_budget_lt`) -/
+  budget : w.weight + w.allowance < 2 ^ 64
+  origin : PD w.origin
+  /-- the journal is the window's (every reached World's, by KERNEL's `journalFits_of_ok`) -/
+  journalFits : journalFits w.height w.journal.toList = true
+  /-- the refusals are the window's (every reached World's, KERNEL's `fold_refusalsOk`) -/
+  refusalsFits : refusalsFits w.height w.refusals.toList = true
+  /-- no transaction id both refused and journaled (every reached World's, KERNEL's
+  `fold_refusalsDisjoint`) -/
+  refusalsDisjoint : refusalsDisjoint E w = true
+  /-- the height is at most the step count (KERNEL's `fold_height_le_steps`; site `kernel/steps`) -/
+  steps : w.height ≤ w.steps
 
 /-- **The World codec is lawful on `World.CodecFits`**: decode ∘ bytes is the identity, and whatever
 decodes is exactly its bytes. -/
 theorem world_lawfulOn (E : Env D) {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc) :
     LawfulOn (World.CodecFits E PD) (world E dc) := by
   unfold world
-  refine (refine_lawfulOn_where (journalWire_lawfulOn E hd) "kernel/world-budget"
+  refine (refine_lawfulOn_where (stepsWire_lawfulOn E hd) "kernel/world-budget"
     (Q := fun w : World D => w.weight + w.allowance < 2 ^ 64) ?_ ?_ ?_).mono ?_ ?_
   · intro y _ hq
     show (if cellsWeight y.trie + y.allowance < 2 ^ 64 then some (ofWire (toWire y)) else none) = some y
@@ -296,13 +503,16 @@ theorem world_lawfulOn (E : Env D) {PD : D → Prop} {dc : Stream D} (hd : Lawfu
     split at h
     · rename_i hq; cases h; exact hq
     · cases h
-  · intro w h; exact ⟨h.1.1.1, h.1.1.2.1, h.1.1.2.2.1, h.1.1.2.2.2.1, h.2, h.1.1.2.2.2.2.2, h.1.2⟩
+  · intro w ⟨⟨⟨⟨⟨hx, hj⟩, hr⟩, hdj⟩, hs⟩, hb⟩
+    obtain ⟨hc, hjt, hrt, hh, hst, hch, ha, ho⟩ := hx
+    exact ⟨hc, hjt, hrt, hh, hst, hch, hb, ho, hj, hr, hdj, hs⟩
   · intro w h
-    exact ⟨⟨⟨h.1, h.2.1, h.2.2.1, h.2.2.2.1, Nat.lt_of_le_of_lt (Nat.le_add_left _ _) h.2.2.2.2.1,
-      h.2.2.2.2.2.1⟩, h.2.2.2.2.2.2⟩, h.2.2.2.2.1⟩
+    exact ⟨⟨⟨⟨⟨⟨h.cells, h.journal, h.refusals, h.height, h.stepsLt, h.chain,
+      Nat.lt_of_le_of_lt (Nat.le_add_left _ _) h.budget, h.origin⟩, h.journalFits⟩, h.refusalsFits⟩,
+      h.refusalsDisjoint⟩, h.steps⟩, h.budget⟩
 
 theorem world_bytes (E : Env D) (dc : Stream D) (w : World D) :
-    (world E dc).bytes w = (journalWire E dc).bytes (toWire w) := rfl
+    (world E dc).bytes w = (stepsWire E dc).bytes (toWire w) := rfl
 
 /-- A fitting World reads back from its bytes, exactly. -/
 theorem world_decode_bytes {E : Env D} {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc) {w : World D}
@@ -337,14 +547,14 @@ theorem world_get_canon {E : Env D} {PD : D → Prop} {dc : Stream D} (hd : Lawf
     {b : ByteArray} {i j : Nat} {w : World D} (h : (world E dc).get b i = .ok (w, j)) :
     w.Canon E ∧ ∀ p ∈ w.trie.toList, Leaf.fits p.1 p.2 = true :=
   let hf := world_get_fits hd h
-  ⟨hf.1.2, hf.1.1.2⟩
+  ⟨hf.cells.2, hf.cells.1.2⟩
 
 /-- A decoded World satisfies the kernel's trie invariant, and every slot holds the leaf of its kind. -/
 theorem world_decode_canon {E : Env D} {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc)
     {b : ByteArray} {w : World D} (h : (world E dc).decode b = .ok w) :
     w.Canon E ∧ ∀ p ∈ w.trie.toList, Leaf.fits p.1 p.2 = true :=
   let hf := world_decode_fits hd h
-  ⟨hf.1.2, hf.1.1.2⟩
+  ⟨hf.cells.2, hf.cells.1.2⟩
 
 /-- A decoded World has every slot holding the leaf of its kind (the kernel's `World.Slotted`). -/
 theorem world_decode_slotted {E : Env D} {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc)
@@ -359,8 +569,8 @@ theorem world_decode_cellsFit {E : Env D} {PD : D → Prop} {dc : Stream D} (hd 
     {b : ByteArray} {w : World D} (h : (world E dc).decode b = .ok w) : w.CellsFit Cell.Fits E := by
   have hf := world_decode_fits hd h
   intro s l hg
-  have hm := (Trie.mem_toList (trieSpec E) 0 w.trie hf.1.2.1 s l).mpr hg
-  have hl := (hf.1.1.1.2 (s, l) hm).2
+  have hm := (Trie.mem_toList (trieSpec E) 0 w.trie hf.cells.2.1 s l).mpr hg
+  have hl := (hf.cells.1.1.2 (s, l) hm).2
   cases l with
   | entry e =>
     cases e with
@@ -374,41 +584,124 @@ canonical (the decoder rebuilt it by `build`) and the decoder refused `kernel/jo
 theorem world_get_journalOk {E : Env D} {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc)
     {b : ByteArray} {i j : Nat} {w : World D} (h : (world E dc).get b i = .ok (w, j)) : w.JournalOk E :=
   let hf := world_get_fits hd h
-  journalOk_of_fits hf.2.1.2 hf.2.2.2.2.2.2
+  journalOk_of_fits hf.journal.2 hf.journalFits
 
 /-- **A decoded World carries `World.JournalOk`.** -/
 theorem world_decode_journalOk {E : Env D} {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc)
     {b : ByteArray} {w : World D} (h : (world E dc).decode b = .ok w) : w.JournalOk E :=
   let hf := world_decode_fits hd h
-  journalOk_of_fits hf.2.1.2 hf.2.2.2.2.2.2
+  journalOk_of_fits hf.journal.2 hf.journalFits
 
-/-- A wire value in the wire's domain whose journal is the window's and whose storage plus allowance is
-below 2^64 decodes to its World. -/
+/-- **A World read at any offset carries `World.RefusalsOk`** (KERNEL-44, KERNEL-47): its refusals trie
+is canonical (rebuilt by `build`) and the decoder refused `kernel/refusals` unless `refusalsFits`
+holds of that trie's own listing. -/
+theorem world_get_refusalsOk {E : Env D} {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc)
+    {b : ByteArray} {i j : Nat} {w : World D} (h : (world E dc).get b i = .ok (w, j)) : w.RefusalsOk E :=
+  let hf := world_get_fits hd h
+  refusalsOk_of_fits hf.refusals.2 hf.refusalsFits
+
+/-- **A decoded World carries `World.RefusalsOk`.** -/
+theorem world_decode_refusalsOk {E : Env D} {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc)
+    {b : ByteArray} {w : World D} (h : (world E dc).decode b = .ok w) : w.RefusalsOk E :=
+  let hf := world_decode_fits hd h
+  refusalsOk_of_fits hf.refusals.2 hf.refusalsFits
+
+/-- **A decoded World holds no transaction id both refused and journaled** (KERNEL's
+`World.RefusalsDisjoint`, from `kernel/refusals-disjoint` over the rebuilt, canonical refusals trie). -/
+theorem world_decode_refusalsDisjoint {E : Env D} {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc)
+    {b : ByteArray} {w : World D} (h : (world E dc).decode b = .ok w) : w.RefusalsDisjoint E :=
+  let hf := world_decode_fits hd h
+  (refusalsDisjoint_iff hf.refusals.2).mp hf.refusalsDisjoint
+
+/-- **A World read at any offset holds no transaction id both refused and journaled.** -/
+theorem world_get_refusalsDisjoint {E : Env D} {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc)
+    {b : ByteArray} {i j : Nat} {w : World D} (h : (world E dc).get b i = .ok (w, j)) : w.RefusalsDisjoint E :=
+  let hf := world_get_fits hd h
+  (refusalsDisjoint_iff hf.refusals.2).mp hf.refusalsDisjoint
+
+/-- **A World read at any offset has height at most its step count.** -/
+theorem world_get_height_le_steps {E : Env D} {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc)
+    {b : ByteArray} {i j : Nat} {w : World D} (h : (world E dc).get b i = .ok (w, j)) : w.height ≤ w.steps :=
+  (world_get_fits hd h).steps
+
+/-- **A decoded World's height is at most its step count** (the premise of KERNEL's
+`fold_height_le_steps`). -/
+theorem world_decode_height_le_steps {E : Env D} {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc)
+    {b : ByteArray} {w : World D} (h : (world E dc).decode b = .ok w) : w.height ≤ w.steps :=
+  (world_decode_fits hd h).steps
+
+omit [Ord D] in
+/-- The decoder's prefix: a wire value in the wire's domain reaches the World refinement's own check
+with every inner refusal decided by its predicate. -/
+private theorem world_decode_wire {E : Env D} {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc)
+    {x : WorldWire D} (hx : WireFits E PD x) :
+    (worldWire E dc).get ((worldWire E dc).bytes x) 0 = .ok (x, ((worldWire E dc).bytes x).size) := by
+  simpa using (worldWire_lawfulOn E hd).get_of_occurs x ((worldWire E dc).bytes x) 0 hx (occursAt_self _)
+
+/-- A wire value in the wire's domain whose journal and refusals are the window's, whose height is at
+most its step count, and whose storage plus allowance is below 2^64 decodes to its World. -/
 theorem world_decode_wire_ok {E : Env D} {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc)
-    {x : WorldWire D} (hx : WireFits E PD x) (hj : journalFits x.2.2.1 x.2.1.toList = true)
-    (hw : cellsWeight x.1 + x.2.2.2.2.1 < 2 ^ 64) :
+    {x : WorldWire D} (hx : WireFits E PD x) (hj : journalFits x.2.2.2.1 x.2.1.toList = true)
+    (hr : refusalsFits x.2.2.2.1 x.2.2.1.toList = true) (hdj : refusalsDisjoint E (ofWire x) = true)
+    (hs : x.2.2.2.1 ≤ x.2.2.2.2.1) (hw : cellsWeight x.1 + x.2.2.2.2.2.2.1 < 2 ^ 64) :
     (world E dc).decode ((worldWire E dc).bytes x) = .ok (ofWire x) := by
   have hb : (worldWire E dc).bytes x = (world E dc).bytes (ofWire x) := rfl
   rw [hb]
-  exact world_decode_bytes hd ⟨hx.1, hx.2.1, hx.2.2.1, hx.2.2.2.1, hw, hx.2.2.2.2.2, hj⟩
+  obtain ⟨hc, hjt, hrt, hh, hst, hch, ha, ho⟩ := hx
+  exact world_decode_bytes hd ⟨hc, hjt, hrt, hh, hst, hch, hw, ho, hj, hr, hdj, hs⟩
 
-/-- **The budget refusal** (cv 01a14ba9-cbf4): a wire value in the wire's domain, its journal the
-window's, whose storage plus allowance is 2^64 or more, is refused `kernel/world-budget` by name, at offset 0,
-although every counter in it fits its `u64`. -/
+/-- **The budget refusal** (cv 01a14ba9-cbf4): a wire value in the wire's domain that passes every
+other check, whose storage plus allowance is 2^64 or more, is refused `kernel/world-budget` by name, at
+offset 0, although every counter in it fits its `u64`. -/
 theorem world_decode_wire_overBudget {E : Env D} {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc)
-    {x : WorldWire D} (hx : WireFits E PD x) (hj : journalFits x.2.2.1 x.2.1.toList = true)
-    (hw : ¬ cellsWeight x.1 + x.2.2.2.2.1 < 2 ^ 64) :
+    {x : WorldWire D} (hx : WireFits E PD x) (hj : journalFits x.2.2.2.1 x.2.1.toList = true)
+    (hr : refusalsFits x.2.2.2.1 x.2.2.1.toList = true) (hdj : refusalsDisjoint E (ofWire x) = true)
+    (hs : x.2.2.2.1 ≤ x.2.2.2.2.1) (hw : ¬ cellsWeight x.1 + x.2.2.2.2.2.2.1 < 2 ^ 64) :
     (world E dc).decode ((worldWire E dc).bytes x) = .error (.rejected 0 "kernel/world-budget") := by
-  have hg := (worldWire_lawfulOn E hd).get_of_occurs x ((worldWire E dc).bytes x) 0 hx (occursAt_self _)
-  simp only [world, decode, journalWire, refine, hg, hj, ite_true, if_neg hw]
+  have hg := world_decode_wire hd hx
+  simp only [world, decode, stepsWire, disjointWire, refusalsWire, journalWire, refine, hg, hj, hr, hdj,
+    ite_true, if_pos hs]
+  simp [if_neg hw]
 
-/-- **The refusal**: the same wire value with a journal that is not the window's is refused
-`kernel/journal` by name, at offset 0. -/
+/-- **The journal refusal**: a wire value in the wire's domain whose journal is not the window's is
+refused `kernel/journal` by name, at offset 0. -/
 theorem world_decode_wire_refused {E : Env D} {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc)
-    {x : WorldWire D} (hx : WireFits E PD x) (hj : journalFits x.2.2.1 x.2.1.toList = false) :
+    {x : WorldWire D} (hx : WireFits E PD x) (hj : journalFits x.2.2.2.1 x.2.1.toList = false) :
     (world E dc).decode ((worldWire E dc).bytes x) = .error (.rejected 0 "kernel/journal") := by
-  have hg := (worldWire_lawfulOn E hd).get_of_occurs x ((worldWire E dc).bytes x) 0 hx (occursAt_self _)
-  simp only [world, decode, journalWire, refine, hg, hj]
+  have hg := world_decode_wire hd hx
+  simp only [world, decode, stepsWire, disjointWire, refusalsWire, journalWire, refine, hg, hj]
+  rfl
+
+/-- **The refusals refusal**: a wire value in the wire's domain whose journal is the window's and whose
+refusals are not is refused `kernel/refusals` by name, at offset 0. -/
+theorem world_decode_wire_refusalsRefused {E : Env D} {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc)
+    {x : WorldWire D} (hx : WireFits E PD x) (hj : journalFits x.2.2.2.1 x.2.1.toList = true)
+    (hr : refusalsFits x.2.2.2.1 x.2.2.1.toList = false) :
+    (world E dc).decode ((worldWire E dc).bytes x) = .error (.rejected 0 "kernel/refusals") := by
+  have hg := world_decode_wire hd hx
+  simp only [world, decode, stepsWire, disjointWire, refusalsWire, journalWire, refine, hg, hj, hr, ite_true]
+  rfl
+
+/-- **The steps refusal**: a wire value that passes the journal and refusals checks but whose height
+exceeds its step count is refused `kernel/steps` by name, at offset 0. -/
+theorem world_decode_wire_stepsRefused {E : Env D} {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc)
+    {x : WorldWire D} (hx : WireFits E PD x) (hj : journalFits x.2.2.2.1 x.2.1.toList = true)
+    (hr : refusalsFits x.2.2.2.1 x.2.2.1.toList = true) (hdj : refusalsDisjoint E (ofWire x) = true)
+    (hs : ¬ x.2.2.2.1 ≤ x.2.2.2.2.1) :
+    (world E dc).decode ((worldWire E dc).bytes x) = .error (.rejected 0 "kernel/steps") := by
+  have hg := world_decode_wire hd hx
+  simp only [world, decode, stepsWire, disjointWire, refusalsWire, journalWire, refine, hg, hj, hr, hdj,
+    ite_true, if_neg hs]
+
+/-- **The disjointness refusal**: a wire value that passes the journal and refusals checks but holds a
+transaction id both refused and journaled is refused `kernel/refusals-disjoint` by name, at offset 0. -/
+theorem world_decode_wire_disjointRefused {E : Env D} {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc)
+    {x : WorldWire D} (hx : WireFits E PD x) (hj : journalFits x.2.2.2.1 x.2.1.toList = true)
+    (hr : refusalsFits x.2.2.2.1 x.2.2.1.toList = true) (hdj : refusalsDisjoint E (ofWire x) = false) :
+    (world E dc).decode ((worldWire E dc).bytes x) = .error (.rejected 0 "kernel/refusals-disjoint") := by
+  have hg := world_decode_wire hd hx
+  simp only [world, decode, stepsWire, disjointWire, refusalsWire, journalWire, refine, hg, hj, hr, hdj,
+    ite_true]
   rfl
 
 end Nanodregg.Codec.Kernel

@@ -4,8 +4,8 @@
     STORE/base.world = one Log frame (under the base sealer) of
                        shapes32 ‖ world bytes ‖ u64 offset ‖ tag32 ‖ u64 indexCount ‖ indexLast32
     STORE/index.log  = fixed-width ENTRIES, one per record before the newest base, entry k at
-                       byte k · entryBytes: u64 height ‖ u64 offset ‖ chain ‖ tag32, the tag the
-                       index sealer over (origin chain ‖ u64 k ‖ height ‖ offset ‖ chain)
+                       byte k · entryBytes: u64 steps ‖ u64 offset ‖ chain ‖ tag32, the tag the
+                       index sealer over (origin chain ‖ u64 k ‖ steps ‖ offset ‖ chain)
                        (HOST-33, `Keys.forStore`)
 
 `shapes32` is the SHAPE STAMP (D2, HOST-20): the digest of the tags of the base codec (which holds
@@ -52,28 +52,30 @@ namespace Nanodregg.Host
 
 open Nanodregg.Codec
 
-/-- One record of the segment, as `log` finds it: the World's height and chain BEFORE the record
-(`chain` in `Env.bytes`), and the frame's offset. -/
+/-- One record of the segment, as `log` finds it: the World's step count and chain BEFORE the
+record (`chain` in `Env.bytes`), and the frame's offset. The log's position is its STEP count, not
+its height (KERNEL-47 amendment 1: a recorded refusal is a step that leaves the height as it was, so
+two records can begin at one height; they never begin at one step count). -/
 structure Entry where
-  height : Nat
+  steps : Nat
   offset : Nat
   chain : ByteArray
 
 /-- The widest chain the origin frame carries (the deployed digest is 32 bytes): `originMax`. -/
 def chainBytesMax : Nat := 64
 
-/-- An entry the index can hold: a u64 height and offset, and a chain of exactly `w` bytes (the
+/-- An entry the index can hold: a u64 step count and offset, and a chain of exactly `w` bytes (the
 Store's chain width, `Keys.chainBytes`). `Base.entries` refuses any other (`entryUnfit`), so
 every entry on disk reads back as the entry it was written from (`Host.Proofs.Base.Entry.read_bytes`). -/
 def Entry.fits (w : Nat) (e : Entry) : Bool :=
-  decide (e.height < 2 ^ 64) && decide (e.offset < 2 ^ 64) && decide (e.chain.size = w)
+  decide (e.steps < 2 ^ 64) && decide (e.offset < 2 ^ 64) && decide (e.chain.size = w)
 
 /-- The layout of an index entry, as a version the shape stamp covers: the entry is fixed-width
 bytes, not a CODEC stream, so its layout enters the stamp by name. -/
-def entryLayout : String := "host/index/entry/v2: u64 height, u64 offset, chain, mac32 over the Store's origin chain ++ u64 position ++ those"
+def entryLayout : String := "host/index/entry/v3: u64 steps, u64 offset, chain, mac32 over the Store's origin chain ++ u64 position ++ those"
 
 /-- What a base holds: the World, where the segment after it starts, and how many entries of
-`index.log` index the records before it (so `log` can page from any height without reading the
+`index.log` index the records before it (so `log` can page from any step without reading the
 segment from 0), with the last one's tag. -/
 structure Base (W : Type) where
   world : W
@@ -157,9 +159,9 @@ def Keys.forStore (keys : Keys) (sid : ByteArray) : Keys :=
 /-- The bytes of one index entry. -/
 def entryBytes (keys : Keys) : Nat := 16 + keys.chainBytes + Log.tagBytes
 
-/-- What an entry's tag covers, less its position: `u64 height ‖ u64 offset ‖ chain`. -/
+/-- What an entry's tag covers, less its position: `u64 steps ‖ u64 offset ‖ chain`. -/
 def Entry.body (e : Entry) : ByteArray :=
-  Stream.nat64.bytes e.height ++ Stream.nat64.bytes e.offset ++ e.chain
+  Stream.nat64.bytes e.steps ++ Stream.nat64.bytes e.offset ++ e.chain
 
 /-- Entry `k`'s tag: the index sealer over `u64 k ‖ body`, so the tag names the position. -/
 def Entry.tag (keys : Keys) (k : Nat) (e : Entry) : Digest :=
@@ -261,7 +263,7 @@ def Base.seal {W : Type} (keys : Keys) (c : Cadence) (world : Stream W) (w : W) 
 
 /-- A Store as genesis writes it, before any file exists: the segment holding ONE frame, the
 ORIGIN frame `Log.frame keys.segment segmentInitial origin` whose record is the genesis World's
-chain (`(mark w₀).2`: the Store's identity at height 0), and the base of `w₀` at that frame's end,
+chain (`(mark w₀).2`: the Store's identity at step 0), and the base of `w₀` at that frame's end,
 chained from its tag. So every base sits after a frame of its own segment, and the 32 bytes
 before any base's offset are that base's tag (HOST-18). Writers of a Store (`Host.genesis` on
 files, `Host.Sim.memGenesis` in memory) write exactly these bytes; the loop's start state is what
@@ -418,7 +420,7 @@ def indexNamed (keys : Keys) (count : Nat) (last : Digest) (bytes : ByteArray) :
 /-- `host check`'s whole-index audit (HOST-33 condition 1): `bytes` are the entries a base counts,
 `offsets` the offsets of the record frames before its offset (`Log.recover` of the history, the
 origin frame left out). There are as many as the base counts, `bytes` is exactly them, every
-entry reads back at its position (`Entry.read`), names its record's offset, and its height does
+entry reads back at its position (`Entry.read`), names its record's offset, and its step count does
 not fall. The first entry that fails, or none. -/
 def indexClean (keys : Keys) (bytes : ByteArray) (count : Nat) (offsets : List Nat) : Option Nat :=
   if offsets.length ≠ count ∨ bytes.size ≠ count * entryBytes keys then some (min count offsets.length) else
@@ -428,7 +430,7 @@ where
     | _, _, [] => none
     | k, h, off :: rest =>
       match Entry.read keys k (bytes.extract (k * entryBytes keys) (k * entryBytes keys + entryBytes keys)) with
-      | some e => if e.offset = off ∧ h ≤ e.height then go (k + 1) e.height rest else some k
+      | some e => if e.offset = off ∧ h ≤ e.steps then go (k + 1) e.steps rest else some k
       | none => some k
 
 /-- The offsets of the record frames `Log.recover` finds in a segment prefix, the origin frame
@@ -446,12 +448,12 @@ def tailRead (c : Cadence) (baseBytes offset size : Nat) : Except BaseFault Nat 
 /-! ## The seal policy: a pure function the loop calls -/
 
 /-- The newest durable base, as the loop counts it: the segment offset it starts from, its World's
-encoded size, height and chain (`Env.bytes`), and the digest of its World bytes (what `read`
-pages state, HOST-15). -/
+encoded size, step count (its position in the log, `Recorder.mark`) and chain (`Env.bytes`), and
+the digest of its World bytes (what `read` pages state, HOST-15). -/
 structure Sealed where
   offset : Nat
   bytes : Nat
-  height : Nat
+  steps : Nat
   chain : ByteArray
   digest : ByteArray
   /-- the entries of `index.log` this base counts, and the last one's tag: the next seal's

@@ -2,7 +2,7 @@
 # Ops.Plants — backup and restore, planted against the real `host` (ASSEMBLY-ops D6/D7)
 
 A backup is the Store's three files copied in the order `key`, `base.world`, `seg.log`; a restore
-is the copy put back and judged by `host check STORE --anchor HEIGHT:CHAIN`. Each plant below
+is the copy put back and judged by `host check STORE --anchor STEPS:CHAIN`. Each plant below
 builds a Store through the real `host genesis`/`host serve` (one record per serve run), copies or
 damages it, and asserts the exit code `host check` gives against `Host.Status.code` — the table,
 never a literal. The anchor is computed here, independently, by `Receive.submit` of the same
@@ -84,7 +84,7 @@ def expected (n : Nat) : Except String (List (Call D) × World D) := do
     | .ok (_, w') => .ok (cs ++ [c], w')
     | .error _ => .error s!"call {i} does not admit") ([], w₀)
 
-def anchorArg (w : World D) : String := s!"{w.height}:{w.chain.toHex}"
+def anchorArg (w : World D) : String := s!"{w.steps}:{w.chain.toHex}"
 
 structure Plant where
   label : String
@@ -143,7 +143,7 @@ def live (exe : String) (dir : System.FilePath) : IO Nat := do
   let originSeg ← IO.FS.readBinFile (l / "seg.log")
   -- the calls and their folds, in process; enough bytes for two seals
   let n := 48
-  -- anchors[h] is the kernel's own `HEIGHT:CHAIN` after the first h calls
+  -- anchors[h] is the kernel's own `STEPS:CHAIN` after the first h calls (each admitted: one step)
   let w0 ← match Founder.world name with
     | .ok w => pure w
     | .error r => do IO.eprintln s!"genesis refused {r.name}"; return 1
@@ -187,7 +187,7 @@ def live (exe : String) (dir : System.FilePath) : IO Nat := do
     fed := fed + 4
     sealed ← awaitStatus exe l fun st => field st "height" ≥ fed
     if let some st := sealed then
-      if field st "base_height" ≤ field st0 "base_height" then sealed := none
+      if field st "base_steps" ≤ field st0 "base_steps" then sealed := none
   -- the append-only files after the base, in `Host.Store.backupOrder` (HOST-30: index.log first)
   let indexCopied ← IO.FS.readBinFile (l / "index.log")
   IO.FS.writeBinFile (copy / "index.log") indexCopied
@@ -195,7 +195,7 @@ def live (exe : String) (dir : System.FilePath) : IO Nat := do
   IO.FS.writeBinFile (copy / "seg.log") segCopied
   let raced := sealed.isSome && (← IO.FS.readBinFile (l / "base.world")) != baseCopied
   say "live-copy-raced-a-seal" raced
-    s!"base_height {field st0 "base_height"} at the base copy, {(sealed.map (field · "base_height")).getD 0} at the segment copy; the copied base is {if raced then "no longer" else "STILL"} the Store's"
+    s!"base_steps {field st0 "base_steps"} at the base copy, {(sealed.map (field · "base_steps")).getD 0} at the segment copy; the copied base is {if raced then "no longer" else "STILL"} the Store's"
   unless raced do failed := failed + 1
   -- 3. the rest, then the writer ends at eof
   feed fed n
@@ -213,7 +213,7 @@ def live (exe : String) (dir : System.FilePath) : IO Nat := do
   let _ ← IO.ofExcept out.get
   let errText ← IO.ofExcept err.get
   unless code = 0 do IO.eprintln s!"live serve exit {code}: {errText}"; return failed + 1
-  let hCopy := (sealed.map (field · "height")).getD 0
+  let hCopy := (sealed.map (field · "steps")).getD 0
   let anchorAt (h : Nat) : List String := ["--anchor", anchors[h]!]
   let check (d : System.FilePath) (extra : List String := []) : IO Run :=
     host exe (["check", d.toString] ++ extra)
@@ -238,8 +238,8 @@ def live (exe : String) (dir : System.FilePath) : IO Nat := do
   -- the sealed Store: it must have a base past the origin, or the rows below test nothing
   let some stS ← status exe l | IO.eprintln "the finished live Store does not check"; return failed + 1
   let off := field stS "base_offset"
-  let hasBase := field stS "base_height" > 0 && off > originSeg.size
-  say "sealed-store-has-a-real-base" hasBase s!"base_height={field stS "base_height"} base_offset={off} origin={originSeg.size} seg_bytes={field stS "seg_bytes"}"
+  let hasBase := field stS "base_steps" > 0 && off > originSeg.size
+  say "sealed-store-has-a-real-base" hasBase s!"base_steps={field stS "base_steps"} base_offset={off} origin={originSeg.size} seg_bytes={field stS "seg_bytes"}"
   unless hasBase do return failed + 1
   failed := failed + (← plain "sealed-intact-anchor" .eof (check l (anchorAt n)))
   let seg ← IO.FS.readBinFile (l / "seg.log")
@@ -358,7 +358,7 @@ def indexMovedPlant (exe : String) (dir : System.FilePath) : IO Nat := do
   input.flush
   let some st ← awaitStatus exe m (field · "height" ≥ 2) | IO.eprintln "indexMoved writer never reached height 2"; return 1
   let idx0 := (← IO.FS.readBinFile (m / "index.log")).size
-  if field st "base_height" ≠ 0 then IO.eprintln "indexMoved: the writer sealed before the byte"; return 1
+  if field st "base_steps" ≠ 0 then IO.eprintln "indexMoved: the writer sealed before the byte"; return 1
   let h ← IO.FS.Handle.mk (m / "index.log") .append
   h.write (ByteArray.mk #[0x5a])
   h.flush
