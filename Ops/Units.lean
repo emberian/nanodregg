@@ -272,6 +272,7 @@ def hostAction : Status → String
   | .recordTooLarge | .worldTooLarge | .indexTooLarge =>
     "a defect or the HOST-14 design limit: report to HOST"
   | .entryUnfit => "a defect: a seal met an index entry the entry layout cannot spell (HOST-31); keep the Store untouched, report to HOST"
+  | .positionUnfit => "a defect: a seal at a segment position past u64, which a base cannot spell (HOST-46); nothing was written; keep the Store untouched, report to HOST"
   | .carryMismatch => "the carried file is not the one exported (digest), does not decode, or the imported Store reopened to other bytes (stderr names which): re-export from the STOPPED old Store and copy the printed digest exactly; remove a Store left by `carryMismatch reopen` and report it to HOST"
   | .inviteRefused => "the invitation does not verify against the key you trust (stderr names why): obtain a fresh invitation from your sponsor and check the sponsor key you were given; nothing was written"
   | .indexMoved => "automatic; index.log changed size under the writer (another process wrote or truncated it): the restart's open truncates orphan entries or refuses indexShort; if it repeats, find the other writer"

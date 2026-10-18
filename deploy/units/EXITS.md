@@ -53,6 +53,7 @@ code space holds both tables: `host` (Host.Status, below 64) and nd-supervise's 
 | 47 | entryUnfit | fatal | stopped (RestartPreventExitStatus) | a defect: a seal met an index entry the entry layout cannot spell (HOST-31); keep the Store untouched, report to HOST |
 | 48 | indexMoved | restart | restarted after 2 s; failed past 5 starts in 120 s | automatic; index.log changed size under the writer (another process wrote or truncated it): the restart's open truncates orphan entries or refuses indexShort; if it repeats, find the other writer |
 | 49 | carryMismatch | fatal | stopped (RestartPreventExitStatus) | the carried file is not the one exported (digest), does not decode, or the imported Store reopened to other bytes (stderr names which): re-export from the STOPPED old Store and copy the printed digest exactly; remove a Store left by `carryMismatch reopen` and report it to HOST |
+| 56 | positionUnfit | fatal | stopped (RestartPreventExitStatus) | a defect: a seal at a segment position past u64, which a base cannot spell (HOST-46); nothing was written; keep the Store untouched, report to HOST |
 
 ## nd-supervise
 

@@ -110,7 +110,7 @@ inductive Status where
   record's offset, or keep heights ascending -/
   | indexCorrupt
   /-- a seal was handed an index entry outside the entry layout (a chain not the Store's width, a
-  height or offset past u64): a defect (HOST-31, HOST-33) -/
+  height or offset past u64): a value the layout cannot spell, a defect (HOST-31, HOST-33) -/
   | entryUnfit
   /-- a seal found `index.log` at another size than the end of the entries the newest base counts:
   another process wrote or truncated it; the restart's open truncates orphans or refuses
@@ -124,6 +124,9 @@ inductive Status where
   trusts, or its signature does not verify over its bytes (`Protocol.Invite.accept`, PROTOCOL-42);
   stderr names which. Nothing was written -/
   | inviteRefused
+  /-- a seal at a segment position past u64: the base cannot spell where the log after it begins,
+  so the base would not read back; refused before anything is written, a defect (HOST-46) -/
+  | positionUnfit
   deriving DecidableEq, Repr
 
 namespace Status
@@ -134,7 +137,7 @@ def all : List Status :=
    segmentShort, tailTooLong, foreignSegment, corrupt, record, tagWidth, behindAnchor, chainMismatch,
    badIndex, pageTooLarge, pastEnd, shortBase, reopenFailed, reopenDiverged, lifetime, stream, noThreads,
    shapeMismatch, foreignOrigin, indexShort, indexCorrupt, entryUnfit, indexMoved, carryMismatch,
-   inviteRefused]
+   inviteRefused, positionUnfit]
 
 def code : Status → Nat
   | eof => 0
@@ -181,6 +184,7 @@ def code : Status → Nat
   | indexMoved => 48
   | carryMismatch => 49
   | inviteRefused => 44
+  | positionUnfit => 56
 
 def cls : Status → ExitClass
   | eof => .done
@@ -189,7 +193,7 @@ def cls : Status → ExitClass
   | locked | .exists | badKey | shortRead | missing | baseTooLarge | baseCorrupt | baseUndecodable
   | segmentShort | tailTooLong | foreignSegment | corrupt | record | tagWidth | behindAnchor | chainMismatch
   | badIndex | pageTooLarge | pastEnd | shortBase | reopenFailed | reopenDiverged | noThreads
-  | shapeMismatch | foreignOrigin | indexShort | indexCorrupt | entryUnfit | carryMismatch | inviteRefused => .fatal
+  | shapeMismatch | foreignOrigin | indexShort | indexCorrupt | entryUnfit | carryMismatch | inviteRefused | positionUnfit => .fatal
 
 /-- The name printed beside the code (`refused NAME` / `exit NAME` on stderr). -/
 def name (s : Status) : String := ((toString (repr s)).splitOn ".").getLast!
@@ -203,6 +207,7 @@ def SealFault.status : SealFault → Status
   | .worldTooLarge _ => .worldTooLarge
   | .indexTooLarge _ => .indexTooLarge
   | .entryUnfit _ => .entryUnfit
+  | .positionUnfit _ => .positionUnfit
   | .indexMoved _ _ => .indexMoved
   | .io _ => .sealIo
 

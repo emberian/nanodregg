@@ -16,10 +16,11 @@ and the `IndexAt` the seal returns).
 
 Premises: `hw`/`hP`, the World codec reads the opened World back; `horigin`, a fold step keeps
 `origin` (the origin frame is checked against the NEW base's World); `hcap`, the base record bound
-fits the u32 length field; `hpos`, the open's position is a u64 (it lies inside `seg.log`).
-`sealed_opens_deployed` discharges `hw`, `horigin` and `hcap` at the deployed instance
-(`Codec.Kernel.world_lawfulOn`, `foldStep_originChain`, `decide`); its `hfit` (the opened World is
-in the deployed World codec's domain, `World.CodecFits`) and `hpos` remain premises there.
+fits the u32 length field. The open's position is a u64 because the seal wrote it: `Base.file`
+refuses any other (`positionUnfit`, `Base.file_offset_lt`). `sealed_opens_deployed` discharges every
+premise at the deployed instance: `hP` by `Deployed.openWith_codecFits` (every World the deployed
+open returns is in the World codec's domain), `hw`, `horigin` and `hcap` by
+`Codec.Kernel.world_lawfulOn`, `foldStep_originChain` and `decide`.
 -/
 import Host.Proofs.Genesis
 import Host.Proofs.Deployed
@@ -75,7 +76,7 @@ private theorem seal_facts (keys : Keys) (c : Cadence) (world : Codec.Stream W)
     (horigin : ∀ w r w', step w r = .ok w' → origin w' = origin w)
     (hcap : c.baseRecordMax < 2 ^ 32) (file₀ I S : ByteArray) {o : Opening W}
     (h : Id.run (openWith keys c world mark origin step file₀ S.size I.size (segReader I) (segReader S)) = .ok o)
-    (hP : P o.opened.world) (hpos : o.pos.offset < 2 ^ 64)
+    (hP : P o.opened.world)
     {page file : ByteArray} {ix' : IndexAt}
     (hseal : Base.seal (keys.forStore (origin o.opened.world)) c world o.opened.world o.pos o.sealed.index
       (sealEntries o.index) I.size = .ok (page, ix', file)) :
@@ -96,7 +97,7 @@ private theorem seal_facts (keys : Keys) (c : Cadence) (world : Codec.Stream W)
   obtain ⟨hs, _⟩ := tailRead_ok hlen
   have hvl := openLog_validLen_le hop
   simp only [size_extract] at hvl
-  dsimp only at hP hpos hseal ⊢
+  dsimp only at hP hseal ⊢
   obtain ⟨rs, he, hf, hlt, _, _⟩ := open_sound_bounded keys.segment (indexed mark step) _ _ _ hop
   have hfold := indexed_foldlM_fst mark step rs _ _ _ hf
   have hor : origin op.world.1 = origin b.world := foldlM_origin horigin rs _ _ hfold
@@ -104,7 +105,7 @@ private theorem seal_facts (keys : Keys) (c : Cadence) (world : Codec.Stream W)
   obtain ⟨hI, hent, hfile⟩ := seal_at_end _ _ _ _ _ _ _ _ hseal
   obtain ⟨_, hcnt, hmax, _, _, _⟩ := entries_ok hent
   obtain ⟨hsz, hnamed⟩ := entries_named hent hI hix
-  obtain ⟨hfs, hrd⟩ := Base.read_file hw hfile hP hpos (by unfold indexMax at hmax; omega) hcap
+  obtain ⟨hfs, hrd⟩ := Base.read_file hw hfile hP (by unfold indexMax at hmax; omega) hcap
   have ht32 : tagBytes = 32 := rfl
   -- the anchor: the 32 bytes before the open's position are the tag it chains from
   have htagb : tag.bytes = op.lastTag := bytes_ofBytes htg
@@ -150,7 +151,7 @@ theorem sealed_opens (keys : Keys) (c : Cadence) (world : Codec.Stream W)
     (horigin : ∀ w r w', step w r = .ok w' → origin w' = origin w)
     (hcap : c.baseRecordMax < 2 ^ 32) (file₀ I S : ByteArray) {o : Opening W}
     (h : Id.run (openWith keys c world mark origin step file₀ S.size I.size (segReader I) (segReader S)) = .ok o)
-    (hP : P o.opened.world) (hpos : o.pos.offset < 2 ^ 64)
+    (hP : P o.opened.world)
     {page file : ByteArray} {ix' : IndexAt}
     (hseal : Base.seal (keys.forStore (origin o.opened.world)) c world o.opened.world o.pos o.sealed.index
       (sealEntries o.index) I.size = .ok (page, ix', file)) :
@@ -160,7 +161,7 @@ theorem sealed_opens (keys : Keys) (c : Cadence) (world : Codec.Stream W)
         ⟨o.pos.offset, world.size o.opened.world, (mark o.opened.world).1, (mark o.opened.world).2,
           keys.worldDigest (worldBytesOf file (world.size o.opened.world)), ix'⟩, o.pos, #[], 0⟩ := by
   obtain ⟨hfs, hrd, hoff, hle, hanchor, hof, hI, hcnt, hmax, hsz, hnamed⟩ :=
-    seal_facts keys c world mark origin step hw horigin hcap file₀ I S h hP hpos hseal
+    seal_facts keys c world mark origin step hw horigin hcap file₀ I S h hP hseal
   have hS' : (S.extract 0 o.pos.offset).size = o.pos.offset := by simp only [size_extract]; omega
   have ⟨q1, q2, q3⟩ := tail_read (S.extract 0 o.pos.offset) (len := 0) hoff (by omega)
   have htr : tailRead c (world.size o.opened.world) o.pos.offset (S.extract 0 o.pos.offset).size = .ok 0 := by
@@ -196,14 +197,14 @@ theorem sealed_opens_clean (keys : Keys) (c : Cadence) (world : Codec.Stream W)
     (hcap : c.baseRecordMax < 2 ^ 32) (file₀ I S : ByteArray) {o : Opening W}
     (h : Id.run (openWith keys c world mark origin step file₀ S.size I.size (segReader I) (segReader S)) = .ok o)
     (hclean : S.size = o.pos.offset)
-    (hP : P o.opened.world) (hpos : o.pos.offset < 2 ^ 64)
+    (hP : P o.opened.world)
     {page file : ByteArray} {ix' : IndexAt}
     (hseal : Base.seal (keys.forStore (origin o.opened.world)) c world o.opened.world o.pos o.sealed.index
       (sealEntries o.index) I.size = .ok (page, ix', file)) :
     ∃ o', Id.run (openWith keys c world mark origin step file S.size (I ++ page).size
         (segReader (I ++ page)) (segReader S)) = .ok o' ∧
       o'.opened.world = o.opened.world ∧ o'.opened.records = 0 ∧ o'.opened.torn = 0 ∧ o'.pos = o.pos := by
-  have hs := sealed_opens keys c world mark origin step hw horigin hcap file₀ I S h hP hpos hseal
+  have hs := sealed_opens keys c world mark origin step hw horigin hcap file₀ I S h hP hseal
   rw [← hclean, extract_zero_size] at hs
   exact ⟨_, hs, rfl, rfl, rfl, rfl⟩
 
@@ -216,7 +217,7 @@ theorem sealed_unindexed_refused (keys : Keys) (c : Cadence) (world : Codec.Stre
     (horigin : ∀ w r w', step w r = .ok w' → origin w' = origin w)
     (hcap : c.baseRecordMax < 2 ^ 32) (file₀ I S : ByteArray) {o : Opening W}
     (h : Id.run (openWith keys c world mark origin step file₀ S.size I.size (segReader I) (segReader S)) = .ok o)
-    (hP : P o.opened.world) (hpos : o.pos.offset < 2 ^ 64)
+    (hP : P o.opened.world)
     {page file : ByteArray} {ix' : IndexAt}
     (hseal : Base.seal (keys.forStore (origin o.opened.world)) c world o.opened.world o.pos o.sealed.index
       (sealEntries o.index) I.size = .ok (page, ix', file))
@@ -225,7 +226,7 @@ theorem sealed_unindexed_refused (keys : Keys) (c : Cadence) (world : Codec.Stre
         (segReader I) (segReader (S.extract 0 o.pos.offset))) =
       .error (.base (.indexShort I.size (ix'.count * entryBytes keys))) := by
   obtain ⟨hfs, hrd, hoff, hle, hanchor, hof, hI, hcnt, hmax, hsz, hnamed⟩ :=
-    seal_facts keys c world mark origin step hw horigin hcap file₀ I S h hP hpos hseal
+    seal_facts keys c world mark origin step hw horigin hcap file₀ I S h hP hseal
   have hS' : (S.extract 0 o.pos.offset).size = o.pos.offset := by simp only [size_extract]; omega
   have ⟨q1, q2, q3⟩ := tail_read (S.extract 0 o.pos.offset) (len := 0) hoff (by omega)
   have htr : tailRead c (world.size o.opened.world) o.pos.offset (S.extract 0 o.pos.offset).size = .ok 0 := by
@@ -253,16 +254,15 @@ namespace Deployed
 
 open Nanodregg.Kernel Nanodregg.Codec
 
-/-- `sealed_opens` at the deployed instance: the deployed open, the deployed seal under
-`keys.forStore (originChain w)` (what `fileCheckpoint` and `memCheckpoint` call with the deployed
-`originChain`). The codec premise is `Codec.Kernel.world_lawfulOn` over `digestCodec_lawful.on`
-(`P` = `World.CodecFits` with the digest predicate `fun _ => True`), `horigin` is
+/-- `sealed_opens` at the deployed instance, with no premise beyond the open's and the seal's
+success: the deployed open, the deployed seal under `keys.forStore (originChain w)` (what
+`fileCheckpoint` and `memCheckpoint` call with the deployed `originChain`). The codec premise is
+`Codec.Kernel.world_lawfulOn` over `digestCodec_lawful.on` (`P` = `World.CodecFits` with the digest
+predicate `fun _ => True`), which the opened World meets (`openWith_codecFits`); `horigin` is
 `foldStep_originChain`, and the u32 bound is decided. -/
 theorem sealed_opens_deployed (keys : Keys) (file₀ I S : ByteArray) {o : Opening (World D)}
     (h : Id.run (openWith keys c world recorder.mark originChain foldStep file₀ S.size I.size
       (segReader I) (segReader S)) = .ok o)
-    (hfit : Codec.Kernel.World.CodecFits X.env (fun _ => True) o.opened.world)
-    (hpos : o.pos.offset < 2 ^ 64)
     {page file : ByteArray} {ix' : IndexAt}
     (hseal : Base.seal (keys.forStore (originChain o.opened.world)) c world o.opened.world o.pos
       o.sealed.index (sealEntries o.index) I.size = .ok (page, ix', file)) :
@@ -274,7 +274,29 @@ theorem sealed_opens_deployed (keys : Keys) (file₀ I S : ByteArray) {o : Openi
           keys.worldDigest (worldBytesOf file (world.size o.opened.world)), ix'⟩, o.pos, #[], 0⟩ :=
   sealed_opens keys c world recorder.mark originChain foldStep
     (Codec.Kernel.world_lawfulOn X.env Codec.Deployed.digestCodec_lawful.on)
-    (fun _ _ _ hs => foldStep_originChain hs) (by decide) file₀ I S h hfit hpos hseal
+    (fun _ _ _ hs => foldStep_originChain hs) (by decide) file₀ I S h (openWith_codecFits h) hseal
+
+/-- The tooth of `Base.file_offset_lt`: a base whose World fits but whose position is at or past
+2^64 is refused `positionUnfit` by name, before anything is encoded. -/
+theorem file_positionUnfit (keys : Keys) {w : World D} {seg : Position} (ix : IndexAt)
+    (hsz : world.size w ≤ c.worldBytesMax) (hoff : 2 ^ 64 ≤ seg.offset) :
+    Base.file keys c world w seg ix = .error (.positionUnfit seg.offset) := by
+  unfold Base.file
+  rw [if_neg (by omega), if_pos hoff]
+
+/-- The tooth of `refuse_refusals_listing` (why a refusal weighs 64 in `openWith_listing_lt`): a
+refusal recorded on a World with no refusals lists exactly two entries, its transaction's leaf and
+its member's window count. -/
+theorem refuse_refusals_listing_two {w w' : World D} {r : Refused D} (he : w.refusals = .empty)
+    (h : World.refuse X.env w r = .ok w') : w'.refusals.toList.length = 2 := by
+  obtain ⟨_, rfl⟩ := refuse_ok h
+  rw [commitRefusal_refusals, he]
+  have h0 : Trie.Routed (refusalSpec X.env) 0 (Trie.T.empty : Refusals D) := (Trie.canon_empty _ 0).1
+  have p1 := Trie.toList_insert_perm (refusalSpec X.env) h0 (.tx r.txId) (.refused (w.height + 1) r.code)
+  have p2 := Trie.toList_insert_perm (refusalSpec X.env) (Trie.routed_insert (refusalSpec X.env) (.tx r.txId) (.refused (w.height + 1) r.code) h0)
+    (.count r.member (refusalWindow w.height)) (.count (refusalCount X.env w r.member + 1))
+  rw [p2.length_eq, List.length_append, (p1.filter _).length_eq]
+  simp [Trie.T.toList]
 
 end Deployed
 

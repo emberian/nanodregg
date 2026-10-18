@@ -197,6 +197,11 @@ inductive SealFault where
   height or offset, a chain of the Store's width): it would not read back as written.
   Unreachable at the deployed chain (32 bytes, `Kernel` digests); a defect -/
   | entryUnfit (index : Nat)
+  /-- the segment position the base would name is at or past 2^64: the base layout writes it as a
+  u64 its reader (`Base.read`) would refuse, so the writer refuses it first (HOST-41's law: every
+  encode on a write path refuses over the bound its decode enforces). Unreachable for a position
+  inside a segment the process could hold; a defect, the same class as `entryUnfit` -/
+  | positionUnfit (offset : Nat)
   /-- `index.log` is `size` bytes, not `offset`, the end of the entries the newest base counts:
   entries appended now would land elsewhere than the positions their tags name. Another process
   wrote or truncated the file; a restart's open truncates orphans or refuses `indexShort` -/
@@ -208,14 +213,17 @@ def SealFault.name : SealFault → String
   | .worldTooLarge _ => "worldTooLarge"
   | .indexTooLarge _ => "indexTooLarge"
   | .entryUnfit _ => "entryUnfit"
+  | .positionUnfit _ => "positionUnfit"
   | .indexMoved _ _ => "indexMoved"
   | .io _ => "io"
 
 /-- The base file's bytes for `w` at the segment position `seg`, counting the entries `index`
-names, or why not. The size is checked before anything is encoded. -/
+names, or why not. The size, then the position's u64 bound (`positionUnfit`, the bound `Base.read`
+enforces on the offset), are checked before anything is encoded. -/
 def Base.file {W : Type} (keys : Keys) (c : Cadence) (world : Stream W) (w : W) (seg : Position)
     (index : IndexAt) : Except SealFault ByteArray :=
   if c.worldBytesMax < world.size w then .error (.worldTooLarge (world.size w)) else
+  if 2 ^ 64 ≤ seg.offset then .error (.positionUnfit seg.offset) else
   .ok (Log.frame keys.base baseInitial
     (keys.shapes.bytes ++ (Base.codec world).bytes ⟨w, seg.offset, seg.tag, index.count, index.last⟩))
 

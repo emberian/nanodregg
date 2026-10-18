@@ -10,11 +10,13 @@ segment's end. So the loop's start state after `host genesis` is the World it wa
   it was written from, given the World codec reads that World back (`P`) and its u64 fields fit:
   the base record (stamp, World, two u64 and two tags) of a World `Base.file` admits
   (`world.size w ≤ c.worldBytesMax`) is within `c.baseRecordMax` (`Cadence.baseRecordMax` counts
-  each part), and `c.baseRecordMax` fits the frame's u32 length field (`hcap`);
+  each part), and `c.baseRecordMax` fits the frame's u32 length field (`hcap`); the offset's u64
+  bound is the writer's own refusal (`Base.file_offset_lt`, `positionUnfit`);
 * `openLog_empty` — an empty tail opens clean, to the base's World, with no record;
 * `tailRead_self`, `indexNamed_zero` — the genesis base's tail is empty and it names no entry.
 
-`genesisImage` itself refuses exactly `worldTooLarge` (a World over `c.worldBytesMax`); every image
+`genesisImage` itself refuses `worldTooLarge` (a World over `c.worldBytesMax`) and, unreachably for
+an origin frame, `positionUnfit`; every image
 it returns of a World the World codec reads back opens (`genesisImage_opens`). host-sim's `plant-world-at-cap` opens a World of exactly `worldBytesMax` bytes.
 -/
 import Host.Proofs.Backup
@@ -50,18 +52,32 @@ theorem Base.record_size {P : W → Prop} {world : Codec.Stream W} (hw : Codec.S
   show 32 + (world.size b.world + (8 + (32 + (8 + 32)))) = stampBytes + world.size b.world + 2 * (8 + tagBytes)
   unfold stampBytes tagBytes; omega
 
+/-- **A base `Base.file` writes names a u64 position**: it refuses any other (`positionUnfit`). -/
+theorem Base.file_offset_lt {keys : Keys} {c : Cadence} {world : Codec.Stream W} {w : W} {seg : Position}
+    {ix : IndexAt} {file : ByteArray} (h : Base.file keys c world w seg ix = .ok file) :
+    seg.offset < 2 ^ 64 := by
+  unfold Base.file at h
+  split at h
+  · cases h
+  split at h
+  · cases h
+  rename_i hoff
+  omega
+
 /-- **A base file reads back as the base it was written from.** -/
 theorem Base.read_file {P : W → Prop} {keys : Keys} {c : Cadence} {world : Codec.Stream W}
     (hw : Codec.Stream.LawfulOn P world) {w : W} {seg : Position} {ix : IndexAt} {file : ByteArray}
-    (h : Base.file keys c world w seg ix = .ok file) (hP : P w) (hoff : seg.offset < 2 ^ 64)
+    (h : Base.file keys c world w seg ix = .ok file) (hP : P w)
     (hcount : ix.count < 2 ^ 64) (hcap : c.baseRecordMax < 2 ^ 32) :
     file.size ≤ frameMax c.baseRecordMax ∧
       Base.read keys c world file = .ok (⟨w, seg.offset, seg.tag, ix.count, ix.last⟩, world.size w,
         keys.worldDigest (worldBytesOf file (world.size w))) := by
+  have hoff := Base.file_offset_lt h
   unfold Base.file at h
   split at h
   · cases h
   rename_i hfit
+  rw [if_neg (by omega)] at h
   cases h
   have hroom : stampBytes + world.size w + 2 * (8 + tagBytes) ≤ c.baseRecordMax := by
     unfold Cadence.baseRecordMax; omega
@@ -126,8 +142,7 @@ theorem genesisImage_opens (keys : Keys) (c : Cadence) (world : Codec.Stream W)
   generalize hch : (mark w₀).2 = ch at hf hor hsize
   generalize hseg : frame keys.segment segmentInitial ch = seg at hf hor
   have hss : seg.size = 4 + ch.size + tagBytes := by rw [← hseg, size_frame]
-  obtain ⟨hfs, hb⟩ := Base.read_file hw hf hP (by simp only; unfold chainBytesMax at hsize; unfold tagBytes at hss; omega)
-    (by simp [indexStart]) hcap
+  obtain ⟨hfs, hb⟩ := Base.read_file hw hf hP (by simp [indexStart]) hcap
   simp only [indexStart] at hb
   -- the 32 bytes before the base's offset are the origin frame's tag
   have htag : seg.extract (seg.size - tagBytes) (seg.size - tagBytes + (tagBytes + 0)) =
