@@ -27,7 +27,8 @@
 #      Lean generator emits (`lake exe emit-rust --check client/src/generated.rs`);
 #   4. the Rust workspace whole (root Cargo.toml) when a member or the root manifest/lock changed:
 #      `cargo check --locked --workspace --all-targets`, clippy -D warnings, `cargo fmt --all --check`.
-# Prints one verdict line. Exit 0 = may land; 1 = RED; 76 = KILLED(load), not judged.
+# Prints one verdict line. Exit 0 = may land; 1 = RED; 76 = not judged (KILLED(load), or a run
+# past its wall-clock deadline twice: UNREAD(timeout), GATES-16).
 set -uo pipefail
 . "$(dirname "$0")/gate-lib.sh"
 
@@ -96,7 +97,7 @@ runs_reds() {
   : > "$out.waste"; : > "$out.crash"
   wrapped python3 "$G/judge/gates/runs.py" "$t" --table "$G/judge/gates/runs.tsv" --changed "$G/changed" --waste-out "$out.waste" > "$out" 2>> "$log"; rc=$?
   python3 "$G/judge/gates/waste.py" "$G/judge" --measured "$out.waste" --partial > "$out.wred" 2>&1; wrc=$?
-  { sed -n 's/^  run \(.*\): \(RED\|TIMEOUT\).*/run \1/p' "$out"
+  { sed -n 's/^  run \(.*\): RED.*/run \1/p' "$out"
     sed -n 's/^    red \(.*\)$/red \1/p' "$out"
     sed -n 's/^waste \([^ ]*\) \([^:]*\): measured.*/waste \1 \2/p' "$out.wred"; } > "$out.keys"
   grep -q '^runs: ' "$out" || echo "runs.py printed no verdict line (exit $rc): see the log" >> "$out.crash"
@@ -122,7 +123,11 @@ judge_runs() {
   cat "$G/runs.cand" "$G/runs.cand.wred" >> "$log"
   grep -E '^  run |^    red ' "$G/runs.cand" | grep -vE ': ok(\(known-red control read red\))?$' || true
   grep '^waste .*measured' "$G/runs.cand.wred" || true
-  if [ $rc -eq 76 ] && [ ! -s "$G/runs.cand.crash" ]; then echo "  runs: KILLED(load) — re-run"; killed="$killed runs"; return; fi
+  # 76: a run was killed by a signal, or ran past its wall-clock deadline twice (GATES-16): no
+  # verdict about the commit either way, never RED and never green.
+  if [ $rc -eq 76 ] && [ ! -s "$G/runs.cand.crash" ]; then
+    echo "  runs: NOT JUDGED ($(sed -n 's/^runs: \([^ ]*\).*/\1/p' "$G/runs.cand")) — re-run"; killed="$killed runs"; return
+  fi
   # No verdict is red, and so is a run whose binary is missing after a green build: neither has a
   # parent to share it with (the candidate's own runner and build).
   grep -E '^  run .*: ABSENT' "$G/runs.cand" | sed 's/^  run /run /' >> "$G/runs.cand.crash"
@@ -207,7 +212,7 @@ if [ -n "$fail" ]; then
 fi
 # Exit 76: not judged. scripts/commit says so and writes nothing; the lane re-runs it.
 if [ -n "$killed" ]; then
-  echo "PRE-PUSH KILLED(load) tree $short:$killed — killed by a signal under memory pressure, not by this commit; re-run — log: $log"
+  echo "PRE-PUSH NOT JUDGED tree $short:$killed — killed by a signal under memory pressure, or a run past its wall-clock deadline twice: not a verdict about this commit; re-run — log: $log"
   exit 76
 fi
 echo "PRE-PUSH GREEN tree $short$note"

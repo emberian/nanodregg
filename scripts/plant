@@ -61,7 +61,7 @@ judge() {
   ( cd "$here" && scripts/pre-push --index --base refs/heads/main --message "$P/$n.msg" "${nb[@]}" ) > "$P/$n.out" 2>&1
   rc=$?
   unset GIT_INDEX_FILE
-  if [ $rc -eq 76 ]; then echo "PLANT $n NOT JUDGED (killed by load: re-run) — $P/$n.out"; return 76; fi
+  if [ $rc -eq 76 ]; then echo "PLANT $n NOT JUDGED (killed by load, or a run timed out twice: re-run) — $P/$n.out"; return 76; fi
   if [ "$want" = GREEN ]; then
     if [ $rc -eq 0 ]; then echo "PLANT $n GREEN (control)"; return 0; fi
     echo "PLANT $n FAIL: the control must pass, pre-push exit $rc: $(grep -m1 '^PRE-PUSH' "$P/$n.out")"; return 1

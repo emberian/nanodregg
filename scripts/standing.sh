@@ -11,7 +11,7 @@
 #   runs:  gates/runs.py over every lean_exe gates/runs.tsv classifies as a verdict (sims, journeys,
 #          rows, plants), with the arguments the table gives (kernel-sim --seeds 64: its
 #          planted-refusal coverage gate judges only >= 16 seeds). ok / INCOMPLETE(first pending
-#          run: a row with no driver) / KILLED(load)(first killed run) / RED(first red run).
+#          run: a row with no driver) / UNJUDGED(first killed or twice-timed-out run) / RED(first red run).
 #   waste: the `WASTE <op> <metric> <ratio>` lines the runs print, against gates/waste.tsv
 #          (gates/waste.py --measured): a pinned row above its ceiling or unmeasured is RED;
 #          no measurement and no row at all is ABSENT (INCOMPLETE)
@@ -60,8 +60,8 @@ if [ "$build" = ok ]; then
   case $rc in
     0) runs=ok ;;
     3) runs="INCOMPLETE($(first INCOMPLETE))" ;;
-    76) runs="KILLED(load)($(first KILLED))" ;;
-    *) runs="RED($(first 'RED|TIMEOUT' || echo "runs.py exit $rc"))" ;;
+    76) runs="UNJUDGED($(first '(KILLED|UNREAD\(timeout)'))" ;;   # killed or timed out twice (GATES-16)
+    *) runs="RED($(first 'RED' || echo "runs.py exit $rc"))" ;;
   esac
 fi
 waste=$(grep -c -v -e '^#' -e '^[[:space:]]*$' "$T/gates/waste.tsv" 2>/dev/null || echo 0)

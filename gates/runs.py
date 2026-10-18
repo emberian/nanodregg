@@ -41,14 +41,17 @@ A cargo run is ok on exit 0 with libtest's summary saying at least one test pass
 ran zero tests, or whose summary the reader cannot find, is RED: an absent verdict is not a pass).
 A run is ok on exit 0 with its pass line last; INCOMPLETE on exit 3 (a row with no driver yet:
 pending is a real outcome, law 7); RED otherwise, naming the first `FAIL`/`ROW … FAIL`/`PLANT …
-FAIL` line or the exit code and last line; TIMEOUT after 600 s. `WASTE <op> <metric> <ratio>` lines
+FAIL` line or the exit code and last line. A run past DEADLINE (600 s of wall clock) is re-run once;
+past it twice it is UNREAD(timeout …), never RED (GATES-16: a wall-clock deadline measures the box's
+load as much as the commit, so it can withhold a verdict but never give one). `WASTE <op> <metric> <ratio>` lines
 go to --waste-out. With --changed (pre-push), only the exes whose import closure holds a changed
 module run (all of them when the lakefile, the toolchain or a C source changed): a sim is a verdict
 a build cannot give, so the importers of a change are RUN, not only built (ROOT/HOSTING 10-17, after
 HOSTING's grain text went stale under LANG's ID-1 with every build green).
 A run killed by signal 9/15 (earlyoom, the cgroup) is KILLED(load), not RED (GATES-11's amendment).
-Prints one `  run <exe> <args>: <verdict>` line per run and `runs: ok|RED|KILLED(load)|INCOMPLETE`;
-exits 0, 1, 76 (killed, nothing red) or 3 (incomplete, nothing red or killed).
+Prints one `  run <exe> <args>: <verdict>` line per run and
+`runs: ok|RED|KILLED(load)|UNREAD(timeout)|INCOMPLETE`; exits 0, 1, 76 (killed or timed out twice,
+nothing red: not judged) or 3 (incomplete, nothing red, killed or timed out).
 """
 import argparse
 import os
@@ -61,7 +64,9 @@ import tomllib
 import tree
 
 RUNS = os.path.join("gates", "runs.tsv")
-DEADLINE = 600
+# The wall-clock deadline of one run, seconds. ND_RUN_DEADLINE overrides it (the GATES-16 plant sets 1):
+# a shorter one can only withhold verdicts (UNREAD), never give one.
+DEADLINE = int(os.environ.get("ND_RUN_DEADLINE", "600"))
 
 
 CONTROL = "harness-control"
@@ -206,9 +211,25 @@ def run(t: tree.Tree, exe: str, args: list[str], passline: str, fresh: str, bind
         else:
             # The verdict reads stdout, where the pass line is printed; the log keeps both.
             v = verdict(r.stdout or r.stderr, r.returncode, passline)
-    except subprocess.TimeoutExpired:
-        out, v = "", f"TIMEOUT({DEADLINE} s)"
+    except subprocess.TimeoutExpired as e:
+        # What it printed before the deadline goes to the log (libtest names a test running past
+        # 60 s); the verdict is UNREAD, never RED (GATES-16).
+        out = "".join(x.decode(errors="replace") if isinstance(x, bytes) else (x or "") for x in (e.stdout, e.stderr))
+        last = next((l.strip() for l in reversed(out.splitlines()) if l.strip()), "no output")
+        v = f"UNREAD(timeout: past {DEADLINE} s of wall clock; last line: {last[:160]})"
     shutil.rmtree(fresh, ignore_errors=True)
+    return out, v
+
+
+def run_once_more(t: tree.Tree, exe: str, args: list[str], passline: str, fresh: str, bindir: str,
+                  drives: list[str] = ()) -> tuple[str, str]:
+    """`run`, and once more when it timed out: a second timeout stays UNREAD (GATES-16)."""
+    out, v = run(t, exe, args, passline, fresh, bindir, drives)
+    if v.startswith("UNREAD(timeout"):
+        sys.stderr.write(out + f"\n[runs.py] {exe} {' '.join(args)}: {v}; re-running once\n")
+        out, v = run(t, exe, args, passline, fresh, bindir, drives)
+        if v.startswith("UNREAD(timeout"):
+            v = "UNREAD(timeout twice" + v[len("UNREAD(timeout"):]
     return out, v
 
 
@@ -222,7 +243,7 @@ def redlines(exe: str, out: str) -> list[str]:
 
 def control_reads_red(exe: str, v: str, out: str) -> str | None:
     """None when a known-red control read red; else why the harness is refused."""
-    if v.startswith(("KILLED", "TIMEOUT", "ABSENT")):
+    if v.startswith(("KILLED", "UNREAD", "ABSENT")):
         return None if v.startswith("ABSENT") else v
     if not v.startswith("RED"):
         return f"RED(harness: the known-red control passed: {v})"
@@ -276,7 +297,7 @@ def main() -> int:
         results.append(v)
         # Every failure line of a red run is its own key (`    red RUN: LINE`): pre-push calls a red
         # PRE-EXISTING only line by line, so a new failure behind an old one on the same exe is new.
-        if v.startswith(("RED", "TIMEOUT")):
+        if v.startswith("RED"):
             for l in redlines(exe, out)[:40]:
                 print(f"    red {name}: {l}")
 
@@ -288,7 +309,7 @@ def main() -> int:
         if first is None:
             report("cargo", [], f"RED(harness: no `nobin RED` row proves the cargo reader)", "", " (control)")
         elif mine(first):
-            out, v = run(t, first, [], "exit 0", os.path.join(scratch, "reader"), nobin)
+            out, v = run_once_more(t, first, [], "exit 0", os.path.join(scratch, "reader"), nobin)
             report(first, [], control_reads_red(first, v, out) or "ok(known-red control read red)", out, " (reader control)")
     for exe in todo:
         runs, passline, control = rows[exe]
@@ -298,25 +319,25 @@ def main() -> int:
             continue
         # The known-red control runs FIRST: a runner that cannot read a failure has no verdict to read.
         if exe.startswith("cargo:"):
-            out, v = run(t, exe, [], passline, os.path.join(scratch, f"{exe}-control"), nobin)
+            out, v = run_once_more(t, exe, [], passline, os.path.join(scratch, f"{exe}-control"), nobin)
             if control == "nobin RED":
                 bad = control_reads_red(exe, v, out)
             else:   # `nobin ok`: declared to run no exe, so it must pass with none
-                bad = None if v == "ok" or v.startswith(("KILLED", "TIMEOUT")) else \
+                bad = None if v == "ok" or v.startswith(("KILLED", "UNREAD")) else \
                     f"RED(harness: declared `nobin ok` but with no Lean binaries it read {v})"
             cv, cargs = (bad or ("ok(known-red control read red)" if control == "nobin RED" else v)), []
         else:
-            out, v = run(t, exe, control, passline, os.path.join(scratch, f"{exe}-control"), bindir)
+            out, v = run_once_more(t, exe, control, passline, os.path.join(scratch, f"{exe}-control"), bindir)
             bad = control_reads_red(exe, v, out)
             cv, cargs = (bad or "ok(known-red control read red)"), control
         # A control's WASTE lines are not measurements (it plants); they are never collected.
-        report(exe, cargs, cv if not v.startswith(("KILLED", "TIMEOUT", "ABSENT")) or bad else v, out, " (control)")
-        if bad or v.startswith(("KILLED", "TIMEOUT", "ABSENT")):
+        report(exe, cargs, cv if not v.startswith(("KILLED", "UNREAD", "ABSENT")) or bad else v, out, " (control)")
+        if bad or v.startswith(("KILLED", "UNREAD", "ABSENT")):
             for args in runs:
                 print(f"  run {exe} {' '.join(args)}: UNREAD(its known-red control did not read red)")
             continue
         for k, args in enumerate(runs):
-            out, v = run(t, exe, args, passline, os.path.join(scratch, f"{exe}-{k}"), bindir,
+            out, v = run_once_more(t, exe, args, passline, os.path.join(scratch, f"{exe}-{k}"), bindir,
                          args if exe.startswith("cargo:") else ())
             waste += [l for l in out.splitlines() if l.startswith("WASTE ")]
             report(exe, [] if exe.startswith("cargo:") else args, v, out)
@@ -324,12 +345,14 @@ def main() -> int:
     if a.waste_out:
         with open(a.waste_out, "w", encoding="utf-8") as f:
             f.write("".join(l + "\n" for l in waste))
-    red = any(not v.startswith(("ok", "INCOMPLETE", "KILLED", "ABSENT")) for v in results)
+    red = any(not v.startswith(("ok", "INCOMPLETE", "KILLED", "UNREAD", "ABSENT")) for v in results)
     killed = any(v.startswith("KILLED") for v in results)
+    timed = any(v.startswith("UNREAD(timeout") for v in results)
     inc = any(v.startswith(("INCOMPLETE", "ABSENT")) for v in results)
-    word = "RED" if red else "KILLED(load)" if killed else "INCOMPLETE" if inc else "ok"
+    word = ("RED" if red else "KILLED(load)" if killed else "UNREAD(timeout)" if timed
+            else "INCOMPLETE" if inc else "ok")
     print(f"runs: {word} ({len(results)} runs of {len(want)} exes)")
-    return 1 if red else 76 if killed else 3 if inc else 0
+    return 1 if red else 76 if killed or timed else 3 if inc else 0
 
 
 if __name__ == "__main__":

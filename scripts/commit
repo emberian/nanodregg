@@ -141,7 +141,7 @@ git -C "$repo" diff --stat "$base" "$cand"
 
 pp=(--index --base "$base" --message "$msg"); [ -n "$nobuild" ] && pp+=(--no-build)
 "$scripts/pre-push" "${pp[@]}"; rc=$?
-if [ $rc -eq 76 ]; then echo "scripts/commit: NOT JUDGED — the judge was killed under load (KILLED(load)); nothing written: re-run scripts/commit"; exit 76; fi
+if [ $rc -eq 76 ]; then echo "scripts/commit: NOT JUDGED — the judge was killed under load (KILLED(load)) or a run timed out twice (UNREAD(timeout), GATES-16); nothing written: re-run scripts/commit"; exit 76; fi
 [ $rc -eq 0 ] || { echo "scripts/commit: REFUSED by scripts/pre-push"; exit 1; }
 
 new=$(git -C "$repo" commit-tree "$cand" -p "$base" -F "$msg") || exit 2
