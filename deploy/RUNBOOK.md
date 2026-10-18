@@ -482,9 +482,7 @@ The lines to read:
   expectations fired (limits 0, use 4 of 3, follow one step past the writer, bench-count's own control),
   or the runner reads none of its verdicts.
 
-### The worst cut (a bench, not a bar run) — PENDING (PERF): `bench-worstcut` is not on main
-
-It lands as a standing-only row once GATES picks the mechanism; PERF sends the hash, and this paragraph then reads RAN.
+### The worst cut (a bench, not a bar run) — RAN (c392f51; standing only, `standing:bench-worstcut`, GATES-17, never in pre-push)
 
     bench-worstcut SCRATCH
 
@@ -494,6 +492,9 @@ It lands as a standing-only row once GATES picks the mechanism; PERF sends the h
   (HOST-22).
 - Counts the follower's re-derivation: 20.374 trie hashes and 1 verify per step.
 - About 2 min 16 s and 87 MB on hbox.
+
+A bar.sh killed hard leaves its supervisors findable: its PID files live in `$HOME/.nd-bar/run.XXXXXX/NAME.pid`,
+outside the run root. Stop them by those files only (never by pattern).
 
 ### What a bad number means
 
