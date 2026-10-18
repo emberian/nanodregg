@@ -204,7 +204,12 @@ def settle (p : Pending) : IO (Except SealFault Sealed) := do
   match ← IO.wait p.task with
   | .error e => return .error (.io (toString e))
   | .ok (.error f) => return .error f
-  | .ok (.ok (bytes, digest, index)) => return .ok ⟨p.offset, bytes, p.steps, p.chain, digest, index⟩
+  | .ok (.ok (bytes, digest, index)) =>
+    -- the pair assertion (HOST-50): the base counts exactly the entries the loop handed the seal,
+    -- so `Resident.install` drops exactly those (`Host.install_total`'s premise)
+    if index.count ≠ p.indexCount then
+      return .error (.io s!"seal returned index count {index.count}, handed {p.indexCount}")
+    return .ok ⟨p.offset, bytes, p.steps, p.chain, digest, index⟩
 
 /-- Take up a settled base: it is the newest durable one, and the entries it counts leave the
 loop's memory (they are on disk), so the loop holds only the entries after it. O(entries held)

@@ -831,6 +831,38 @@ def pageIoPlant (seed : Nat) (failures : IO.Ref Nat) : IO Unit := do
       ((match e, ce with | .eof, .eof => true | _, _ => false) && sent.size == frames.length &&
         csent.size == frames.length && others sent == others csent && sameWorld r.world cr.world) failures
 
+/-- plant-seal-count (HOST-50): a checkpoint whose base counts one entry more than the loop handed
+it. `settle`'s pair assertion refuses it (`sealFailed io`, a restart), so `Resident.install` never
+drops entries the base does not count (`Host.install_total`'s premise). Its control, the honest
+checkpoint over the same frames, seals and ends `eof`. -/
+def sealCountPlant (seed : Nat) (frames : List Frame) (failures : IO.Ref Nat) : IO Unit := do
+  let p := "plant-seal-count"
+  let go (lie : Bool) : IO (Exit × Nat) := do
+    let fr ← IO.mkRef frames
+    let sp ← IO.mkRef (splits seed frames.length)
+    let sent ← IO.mkRef #[]
+    let (gd, gb, gr) ← match genesisStore cadence with
+      | .ok g => pure g
+      | .error f => throw (IO.userError s!"genesis: {f.name}")
+    let disk ← IO.mkRef gd
+    let bases ← IO.mkRef gb
+    let seals ← IO.mkRef 0
+    let ck := memCheckpoint disk bases keys cadence world originChain
+    let ck' : Checkpoint (World Nat) := { ck with write := fun w seg es ip => do
+      seals.modify (· + 1)
+      match ← ck.write w seg es ip with
+      | .ok (b, d, ix) => return .ok (b, d, if lie then { ix with count := ix.count + 1 } else ix)
+      | .error f => return .error f }
+    let (e, _) ← serve machine recorder keys.segment ck' cadence (memStore disk none)
+      (fun _ _ => pure (0, ByteArray.empty)) (scriptPort fr sp sent) ⟨16, 1 <<< 20⟩ (frames.length + 1) gr
+    return (e, ← seals.get)
+  let (ce, cs) ← go false
+  check s!"{p}-control: the honest checkpoint seals {cs} times and the run ends `{ce.name}`"
+    (0 < cs && (match ce with | .eof => true | _ => false)) failures
+  let (e, _) ← go true
+  check s!"{p}: a base counting one entry more than handed is refused `sealFailed io` ({e.name})"
+    (match e with | .sealFailed (.io d) => d.startsWith "seal returned index count" | _ => false) failures
+
 /-- The plants that need only the seed and the scenario: one call in `run`, whose `do` block is at
 the elaborator's depth. -/
 def laterPlants (seed : Nat) (frames : List Frame) (failures : IO.Ref Nat) : IO Unit := do
@@ -839,6 +871,7 @@ def laterPlants (seed : Nat) (frames : List Frame) (failures : IO.Ref Nat) : IO 
   rowsPlants seed failures
   sealPlants seed frames failures
   pageIoPlant seed failures
+  sealCountPlant seed frames failures
 
 /-- `host-sim [SEED] [--harness-control]`; any other argument is refused (exit 2), never read as seed 1.
 `--harness-control` (GATES-15) adds one check nothing meets to the ordinary run, so the run must end

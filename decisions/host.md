@@ -2042,7 +2042,7 @@ label of "limit" on a premise is a claim, and it is checked like any other.
     pairs' fit, what encode returns decodes to exactly the pairs.
   - `Record.step_encode`.
   - At Deployed: `runRooted_fits` (pairs a rooted run admitted fit the codec: `admit` checks
-    bounds first), `limits_batchMax`, `recorder_encode_none`, and `foldStep_recorder_encode`. The
+    bounds first), `limits_batchMax`, `recorder_encode_none` (deleted in HOST-50), and `foldStep_recorder_encode`. The
     last says a record encoded from admitted pairs reopens to the World the run reached, with no
     premise beyond the admission.
 
@@ -2085,7 +2085,7 @@ Law-6 read of the rebase (read-only reader): LAND. Fixed: `limits_batchMax`'s do
 staged bound no theorem stated; `Machine.staged_size_le` (at most one staged pair per request) now
 states it. Left, named: `foldStep_recorder_encode` takes the rooted run as a premise (the writer's is
 `Machine.staged_rooted`, the follower's `Protocol.Command.step_persists_admitted`; no single theorem
-from `append` to reopen); `recorder_encode_none` is `Record.encode_none` at the deployed recorder,
+from `append` to reopen); `recorder_encode_none` (deleted in HOST-50) is `Record.encode_none` at the deployed recorder,
 an instance, not new evidence; a foreign page over the cap stops the follower `recordTooLarge`
 (safe: nothing written) until PROTOCOL's `pageTooLong` refuses it at the reader.
 
@@ -2323,3 +2323,33 @@ returns `Option`/`Except` over the SAME bound its decode enforces, and a theorem
 **Law-6 read (read-only reader): LAND.** No vacuity and no collapse: the open is the one Cli uses (`Cadence.deployed`, `Deployed.foldStep`), the premise is met at genesis, and `encode_eq_some`'s restatement only strengthens its `.mp` uses. Fixed: two docstrings (`encode_eq_some`, `Fault.empty`). Its WEAKs are in the critique above: the open-versus-live-World edge, the base-count gap (cv 01a14f2a-8c82), the second decoders, and pure versus IO.
 
 **Meta-critique.** HOST-21 closed this "by argument rather than by code" and said so. The honest label sat for two days because it read as finished. It was one refusal away from a theorem the whole time.
+
+## HOST-50 · the readers' named WEAKs of HOST-33..46, each closed or given its trigger (2026-10-19, HOST-13; ROOT's queue item 4)
+
+A WEAK that only sits in a decision is a dropped obligation. Each one below is either closed here, or given the condition under which it would become a defect (its trigger) and the check that would see it.
+
+**Closed.**
+- *HOST-41: `foldStep_recorder_encode` took a `Record.runRooted` premise no caller states.* It now takes `World.RootedFold`, which the writer's `Machine.staged_rooted` and the follower's `step_persists_admitted` both state, via HOST-47's `Record.runRooted_of_rooted`. Same conclusion, a premise the callers have.
+- *HOST-41: `recorder_encode_none` is `Record.encode_none` at the deployed recorder, an instance, not evidence.* DELETED. It had no users. The general theorem stands.
+- *HOST-33: `Resident.install`'s "count + held = total" was measured (WASTE `loop resident-entries-per-record-past-base`), not proved.* `install_total` (`Host.Proofs.Loop`) proves it: installing a base whose count is the old count plus `n ≤ held` keeps count + held unchanged, and drops exactly the first `n` held entries. Its premise is now enforced by code. `Pending.indexCount` (the count `spawnSeal` hands the Task) was never read, a dead field the reader found. `settle` now refuses, as `io` (sealIo, a restart), any base whose returned count is not that one. So every `Sealed` the loop installs meets the premise. What remains read off: `r.index` only grows (by `append`'s push) between the spawn and the install. The WASTE row stays as the measurement. Plant: host-sim `plant-seal-count` uses a checkpoint whose base counts one entry more than it was handed. It is refused `sealFailed io` ("seal returned index count …"); its honest control seals 6 times and ends `eof`. With the assertion removed the lie was still caught, but LATER and under another name (a later seal's `sealFailed`, not the count). The plant reads red on the name.
+- *HOST-35 critique, TRANSPORT's served_conns IO gap (a reply lost between staging and send).* The pager was the IO step that could throw between them for a reason other than the client's pipe. Since HOST-48 `fillPages` cannot throw out of a page. A failing `port.send` (stdout to nd-supervise gone) still escapes to `ioServing` and drops the rest of that batch's replies. That is not silent: the writer restarts, and every client recovers by lookup. `served_conns`/`uncertain_conns` cover both paths' connections. What remains is a process killed between sync and send, which the client recovers by lookup; `served_conns`' docstring already says so.
+
+**Kept, with the trigger.**
+- *HOST-33: `build_badIndex`'s tooth is at entry 0 only.* Every other position is planted (host-sim `plant-index-middle-flip`: every page that reads a flipped entry is refused `badIndex` at its position). Trigger: a change to `Page.locate`'s probe order. Then the plant's coverage is the check, and it reads every position by construction.
+- *HOST-33: `mark_chain_width` discharges only the chain arm of `entryUnfit`.* The steps and offset arms (`< 2^64`) are unreachable below 2^64 steps or bytes, and if crossed they REFUSE by name (`entryUnfit`, fatal): a named stop, not a hole. Trigger: any loop World past 2^64 steps. `Kept.stepsLt` already bounds every OPENED World, and a loop-level `Kept` would close the arm. Not built: it buys a theorem about an unreachable number.
+- *HOST-42: no sim plant drives `Host.handle`'s submit through `judge`.* The toy machine commits steps directly. The deployed arms are covered by `step_submit`/`machine_commits` (theorems) and by PROTOCOL's rows, which run the real `Host.handle` (the `refused` row among them). Trigger: a `Host.handle` change the rows do not exercise. The rows are the check.
+- *HOST-43: that `sealNow` calls exactly `Base.seal` (through `memCheckpoint`/`fileCheckpoint`'s `write`) is read off, not proved.* The checkpoints are IO. The host-sim `sealPlants` and store-plants' three seal rows run it end to end. Trigger: a third checkpoint.
+- *HOST-46 W1: `refuse_refusals_listing_two` (the +2 is attained) has no closed theorem instance.* Its witness is the runtime one (host-sim `plant-lookup-recorded` records a refusal on a genesis World). A closed instance at the deployed `X` would have to run the deployed hash under `decide`, a reduction bomb (minted 10-18). At the toy Ctx it would be an instance of a different `X`. Trigger: none needed. The theorem is an upper bound, the +2 is its tightness note, and nothing consumes the tightness.
+- *HOST-46: `positionUnfit` has no runtime witness beyond `file_positionUnfit`.* It is unreachable by design (2^64 bytes). The theorem is the witness.
+- *HOST-23 / decisions line ~640: the Tail does not follow a segment rotation.* No rotation exists: seg.log is append-only, and the writer's only truncation is the never-synced torn tail at open, which a tail never read past. Trigger: the first change that rewrites seg.log other than by append (rotation, compaction). That change must make `Tail` reopen at a base. A frame chained from another initial would not verify (HOST-18), so a tail would stop `corrupt` rather than read wrong. The silent case is a SHORTER rewritten segment, which a tail would see as "nothing new" forever.
+
+**Law-6 read (read-only reader): LAND.** `install_total` is non-vacuous and its premises match `spawnSeal`'s arithmetic. The restated `foldStep_recorder_encode` is equivalent in strength, its premise now the callers'. Deleting the instance loses nothing. Fixed:
+- the dead `Pending.indexCount`, now `settle`'s pair assertion (above);
+- the served_conns claim, which ignored a failing `port.send` (corrected above);
+- two older mentions of `recorder_encode_none`, now marked deleted.
+
+**Flag day.** None in bytes. One theorem deleted (an instance), one premise restated to what callers state, one theorem added. `settle` gains a pair assertion. A checkpoint whose base counts other than it was handed now ends `sealFailed io` (restart) instead of installing.
+
+**Critique.** Most of the "kept" items are kept because their only closure is an IO theorem this repo does not write. That is the same edge every open theorem here has, so naming it per item is repetitive. The repetition is the point: each says WHICH IO step and WHICH check sees it.
+
+**Meta-critique.** The reader of each landing names WEAKs and the decision records them. Nothing collected them until a queue item made someone. Next time a reader's WEAK is neither fixed nor triggered in its own landing, it becomes a cv task that same day.

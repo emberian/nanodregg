@@ -189,4 +189,21 @@ theorem uncertain_conns {W T N : Type} (m : Machine W T Frame N) (w : W) (frames
   obtain ⟨h1, h2⟩ := uncertainAll_conns (m.admitBatch w (frames.toList.map fun f => ⟨f.conn, f⟩)).2.replies
   exact ⟨by rw [h1, m.replies_conns]; simp, h2⟩
 
+/-- **`Resident.install` keeps count + held = total** (HOST-50, HOST-33's named WEAK): installing a
+base whose count is the old count plus `n` entries the loop holds (`n` at most what it holds: the
+entries a seal was handed are a prefix of the loop's, which only grows while the seal runs) leaves the
+base's count plus the entries still held unchanged, and drops exactly those `n`. The premise is what
+`spawnSeal` hands the Task (`indexCount := sealed.index.count + index.size`), and `settle` refuses a
+base whose count is not that (`.io`, a restart), so every `Sealed` the loop installs has it; that
+`r.index` only grew between the spawn and the install (`append`'s push) is read off the loop. -/
+theorem install_total {W : Type} (r : Resident W) (s : Sealed)
+    (hlo : r.sealed.index.count ≤ s.index.count)
+    (hhi : s.index.count ≤ r.sealed.index.count + r.index.size) :
+    (r.install s).sealed.index.count + (r.install s).index.size = r.sealed.index.count + r.index.size ∧
+      (r.install s).index.toList = r.index.toList.drop (s.index.count - r.sealed.index.count) := by
+  simp only [Resident.install, Array.size_extract, Array.toList_extract]
+  refine ⟨by omega, ?_⟩
+  rw [List.extract_eq_take_drop]
+  simp [List.take_of_length_le]
+
 end Nanodregg.Host

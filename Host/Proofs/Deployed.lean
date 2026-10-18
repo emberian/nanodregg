@@ -1011,21 +1011,16 @@ theorem openWith_steps_zero {keys : Keys} {file I S : ByteArray} {o : Opening (W
 `recordTurnsMax` pairs per batch. -/
 theorem limits_batchMax : limits.batchMax = recordTurnsMax := rfl
 
-/-- **The deployed recorder refuses more pairs than one record holds**: `Host.append` then stops
-`recordTooLarge` and writes nothing (the follower handed a page of more steps than `recordTurnsMax`). -/
-theorem recorder_encode_none {w : World D} {staged : Array (Step D × D)}
-    (h : recordTurnsMax < staged.size) : recorder.encode w staged = none :=
-  Record.encode_none h
-
 /-- **A record the writer or the follower appends reopens to the World its pairs reached**: a record
 the deployed recorder returns (at most `recordTurnsMax` pairs, `Record.encode_eq_some`), of pairs
-that a rooted run of `World.step` from `w` accepted (what `Protocol.Command.step` and the loop's
-`admitBatch` do before `Host.append`), is folded at reopen (`foldStep`, the one step of `openWriter`
-and `openFollower`) to the same World `w'`, never refused `undecodable`. -/
+that are a rooted run of `World.step` from `w` (`World.RootedFold`: the writer's
+`Machine.staged_rooted` at the deployed machine, the follower's `Protocol.Command.step_persists_admitted`;
+HOST-50), is folded at reopen (`foldStep`, the one step of `openWriter` and `openFollower`) to the
+same World `w'`, never refused `undecodable`. -/
 theorem foldStep_recorder_encode {w₀ w w' : World D} {staged : Array (Step D × D)} {b : ByteArray}
-    (h : recorder.encode w₀ staged = some b)
-    (hr : Record.runRooted (World.step X.env) (World.roots X.env) 0 w staged.toList = .ok w') :
+    (h : recorder.encode w₀ staged = some b) (hroot : World.RootedFold X.env w staged.toList w') :
     foldStep w b = .ok w' := by
+  have hr := Record.runRooted_of_rooted (i := 0) hroot
   have hf : ∀ p ∈ staged.toList, Codec.Kernel.Step.Fits (fun _ => True) p.1 ∧ True :=
     fun p hp => ⟨runRooted_fits hr p hp, trivial⟩
   show Record.step Codec.Deployed.digestCodec (World.step X.env) (World.roots X.env) w b = .ok w'
