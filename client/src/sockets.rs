@@ -133,10 +133,9 @@ impl Host for HostSocket {
     }
 }
 
-/// nd-supervise's socket (CLIENT-21). Bind, replacing only a socket file nobody is listening on: 0600, or with `group` 0660 in a
-/// shared directory of that group (`sharedDirRefused`, `groupMismatch` otherwise). The socket is
-/// born owner-only (umask 0177) and widened only after its group is checked.
-pub fn bind_supervised(path: &Path, group: Option<u32>) -> io::Result<UnixListener> {
+/// nd-supervise's socket (CLIENT-21), checked before its child launches: with `group`, in a shared
+/// directory of that group (`sharedDirRefused`, `groupMismatch`); live: refused; stale: removed.
+pub fn check_supervised(path: &Path, group: Option<u32>) -> io::Result<()> {
     let refused = |what: String| io::Error::other(what);
     if let Some(g) = group {
         let dir = path.parent().unwrap_or(Path::new("."));
@@ -165,6 +164,13 @@ pub fn bind_supervised(path: &Path, group: Option<u32>) -> io::Result<UnixListen
         Err(e) if e.kind() == io::ErrorKind::NotFound => {}
         Err(e) => return Err(e),
     }
+    Ok(())
+}
+
+/// Bind it once the child exists, so an accepted peer always has a child to reach (CLIENT-28):
+/// checked again, born owner-only (umask 0177), widened to 0660 only after its group is checked.
+pub fn bind_supervised(path: &Path, group: Option<u32>) -> io::Result<UnixListener> {
+    check_supervised(path, group)?;
     let umask = rustix::process::umask(rustix::fs::Mode::from_raw_mode(0o177));
     let bound = UnixListener::bind(path);
     rustix::process::umask(umask); // the child inherits the operator's umask, not ours

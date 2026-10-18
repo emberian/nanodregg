@@ -124,10 +124,14 @@ fn replies_route_by_connection_and_child_close_ends_serve() {
     let rb = ask(&mut b, L, 9, b"xy").unwrap();
     assert_eq!((ra.op, ra.payload), (8, b"cba".to_vec()));
     assert_eq!((rb.op, rb.payload), (10, b"yx".to_vec()));
-    // The child has answered its two and closed: serve ends and every connection sees EOF.
+    // The child has answered its two and closed: serve ends and every connection is told
+    // `unreachable` by name (law 7), never a bare EOF.
     assert!(matches!(server.join().unwrap(), MuxEnd::ChildClosed));
-    let mut rest = Vec::new();
-    assert_eq!(a.read_to_end(&mut rest).unwrap(), 0);
+    for s in [&mut a, &mut b] {
+        let f = frame::read(s, L).unwrap();
+        assert_eq!((f.op, f.payload), (status::CLOSED, b"unreachable".to_vec()));
+        assert!(matches!(frame::read(s, L), Err(FrameError::Closed)));
+    }
     let _ = std::fs::remove_file(&path);
 }
 

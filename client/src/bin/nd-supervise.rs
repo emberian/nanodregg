@@ -94,8 +94,8 @@ fn run() -> Result<ExitCode, String> {
             "nd-supervise: RLIMIT_NOFILE {have} is below the {need} fds it may hold (CLIENT-28)"
         ));
     }
-    let listener = sockets::bind_supervised(&a.socket, a.group)
-        .map_err(|e| format!("nd-supervise: {}: {e}", a.socket.display()))?;
+    let at = |e: std::io::Error| format!("nd-supervise: {}: {e}", a.socket.display());
+    sockets::check_supervised(&a.socket, a.group).map_err(at)?;
     let args: Vec<&std::ffi::OsStr> = a.args.iter().map(OsString::as_os_str).collect();
     let mut child = command(&a.policy, &a.program, &args)
         .map_err(|e| format!("nd-supervise: {e}"))?
@@ -106,6 +106,11 @@ fn run() -> Result<ExitCode, String> {
     let (Some(child_in), Some(child_out)) = (child.stdin.take(), child.stdout.take()) else {
         return Err("nd-supervise: child stdio missing".into());
     };
+    // Bound only now: every refusal above leaves no socket, and no peer waits on a missing child.
+    let listener = sockets::bind_supervised(&a.socket, a.group).map_err(|e| {
+        let _ = (child.kill(), child.wait());
+        at(e)
+    })?;
     let end = mux::serve_admitting(listener, child_in, child_out, table::MUX, a.peer);
     let _ = fs::remove_file(&a.socket);
     if let MuxEnd::ChildMalformed(ref e) = end {

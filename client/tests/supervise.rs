@@ -457,3 +457,83 @@ fn an_fd_limit_below_the_bound_is_refused_at_launch() {
         ))
     );
 }
+
+/// CLIENT-28 (ROOT, law 7): a child that dies leaves no peer with a bare EOF. The child answers A,
+/// then exits on B's request: A (idle) and B (in flight) both read `closed unreachable`.
+#[test]
+fn a_child_that_dies_is_named_unreachable_to_every_peer() {
+    const DIES: &str = r#"
+import struct, sys
+i, o = sys.stdin.buffer, sys.stdout.buffer
+asked = 0
+while True:
+    h = i.read(4)
+    if len(h) < 4: break
+    body = i.read(struct.unpack('<I', h)[0])
+    if body[4] == HANGUP: continue
+    asked += 1
+    if asked == 2: sys.exit(3)
+    out = body[:4] + bytes([body[4] + 1])
+    o.write(struct.pack('<I', len(out)) + out); o.flush()
+"#;
+    let ws = std::env::temp_dir().join(format!("nd-sup-dies-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&ws);
+    std::fs::create_dir(&ws).unwrap();
+    let sock = std::env::temp_dir().join(format!("nd-sup-dies-{}.sock", std::process::id()));
+    let _sup = common::supervise(&sock, &ws, &[], DIES, &[]);
+    let open = || {
+        let c = UnixStream::connect(&sock).unwrap();
+        c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+        c
+    };
+    let (mut a, mut b) = (open(), open());
+    frame::write(&mut a, table::LIMITS, 5, b"").unwrap();
+    assert_eq!(frame::read(&mut a, table::LIMITS).unwrap().op, 6);
+    frame::write(&mut b, table::LIMITS, 5, b"").unwrap();
+    for s in [&mut a, &mut b] {
+        let f = frame::read(s, table::LIMITS).unwrap();
+        assert_eq!(
+            (f.op, f.payload.as_slice()),
+            (
+                nanodregg_client::generated::status::CLOSED,
+                &b"unreachable"[..]
+            )
+        );
+    }
+    let _ = std::fs::remove_file(&sock);
+    let _ = std::fs::remove_dir_all(&ws);
+}
+
+/// CLIENT-28 (ROOT): the socket is bound only once the child exists, so a launch refused before
+/// it (here the policy: the hidden path is readable, `Exposed`) leaves no socket for a peer to wait on.
+#[test]
+fn a_launch_refused_before_the_child_leaves_no_socket() {
+    let ws = std::env::temp_dir().join(format!("nd-sup-exposed-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&ws);
+    std::fs::create_dir(&ws).unwrap();
+    let sock = std::env::temp_dir().join(format!("nd-sup-exposed-{}.sock", std::process::id()));
+    let out = Command::new(env!("CARGO_BIN_EXE_nd-supervise"))
+        .arg(&sock)
+        .arg("--hide")
+        .arg(&ws)
+        .arg("--read")
+        .arg(&ws)
+        .args(["--exec", "/usr/bin/cat", "--", "/usr/bin/cat"])
+        .output()
+        .unwrap();
+    let bound = sock.exists();
+    let _ = std::fs::remove_file(&sock);
+    let _ = std::fs::remove_dir_all(&ws);
+    assert_eq!(
+        out.status.code(),
+        Some(i32::from(
+            nanodregg_client::generated::supervisor_exit::REFUSED_AT_LAUNCH
+        )),
+        "{out:?}"
+    );
+    assert!(
+        !bound,
+        "refused at launch, yet {} was bound",
+        sock.display()
+    );
+}

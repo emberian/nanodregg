@@ -4,8 +4,8 @@
 //! Child side: the same frame whose body is `u32le conn ‖ op ‖ payload` toward the child and
 //! `u32le conn ‖ status ‖ payload` back. The mux parses no payload and decides nothing about a
 //! request: a reply for a connection that is gone is dropped (the client's recovery is lookup),
-//! and when the child closes its stdout every connection is closed and [`serve`] returns, so the
-//! supervisor exits and the service manager restarts the pair. There is exactly one restart path.
+//! and when the child closes its stdout every connection is closed `unreachable` and [`serve`]
+//! returns: the supervisor exits and the service manager restarts the pair (one restart path).
 //!
 //! What the mux does decide is when a CONNECTION ends, with Lean's numbers and Lean's names
 //! (`Protocol.Bounds`, `Protocol.CloseReason`, emitted into [`crate::generated`]):
@@ -219,7 +219,7 @@ where
         .map(|(i, c)| (*i, Arc::clone(c)))
         .collect();
     for (id, _) in &open {
-        shared.end(*id, Some(Vec::new()));
+        shared.end(*id, Some(close_frame(CloseReason::Unreachable)));
     }
     for (_, c) in open {
         if let Some(w) = lock(&c.writer).take() {
