@@ -1413,3 +1413,468 @@ theorem range_stale_behind_forever_sep [Std.TransOrd D] [Std.LawfulEqOrd D] {E :
         rangePin E parent rel width pre (headFloor E w₀.rows parent rel) l₀ ∨
       w'.entry E parent = some .tomb :=
   (range_stale_behind_forever hE hr hok h₁ h₂ hwd h0 hw hw' hstale).imp_right hs.elim
+
+/-! ## A relation's declaration is for ever (`headOf_width_fold`, PROTOCOL-21)
+
+A head is written with a new declaration (limit, cap, width, retract flag) only by `declare`, which
+the turn that bears the parent alone may run (`declareLate`) and only where no head stands
+(`keyTaken`); every row touch rewrites its relation's head with the declaration it read
+(`setHead`); `dropHeads` only removes, and only the heads of a parent the turn retires. A parent
+that is retired was live, and a parent that is born was absent (`checkCreates`: not `taken`, live or
+tombstone), and an entry never returns to absent (`admit_entryStep`). So along a fold a head that
+stands at both ends stands with the declaration it had: a tombstone is never reborn, and its
+relations are never declared again. No hash: the declaration is read, never compared through a
+digest, so no collision escape.
+
+`headOf_width_fold` assumes only that the first World's rows are canonical (`RowsCanon`, which
+`genesis_rowsCanon` and `fold_rowsCanon` give every World a fold from genesis reaches): no lawful
+`Env` (nothing is hashed), no `RowsOk` (a head whose parent is absent is guarded by `keyTaken`:
+the tooth `headOf_width_keyTaken`), no lawful `Ord` (a turn `[retire p, write p]` that an unlawful
+`Ord` admits drops `p`'s heads with `p` live, and `p` is then taken, so never declared again). -/
+
+omit [Ord D] in
+/-- What a relation's head declares: its limit, cap, width and retract flag (`none`: no head). -/
+private def declOf (E : Env D) (r : Rows D) (p : D) (rel : Nat) : Option (Nat × Nat × Nat × Bool) :=
+  match rowAt E r (.head p rel) with
+  | some (.head _ _ limit cap width retract _) => some (limit, cap, width, retract)
+  | _ => none
+
+omit [Ord D] in
+private theorem declOf_of_headOf {E : Env D} {r : Rows D} {p : D} {rel c s l cap w : Nat} {rt : Bool}
+    (h : headOf E r p rel = some (c, s, l, cap, w, rt)) : declOf E r p rel = some (l, cap, w, rt) := by
+  unfold headOf at h
+  unfold declOf
+  rcases hh : rowAt E r (.head p rel) with _ | (⟨c0, s0, l0, cap0, w0, rt0, f0⟩ | ⟨a, v, u⟩)
+  · rw [hh] at h; cases h
+  · simp only [hh, Option.some.injEq, Prod.mk.injEq] at h ⊢
+    exact h.2.2
+  · rw [hh] at h; cases h
+
+omit [Ord D] in
+private theorem declOf_setHead (E : Env D) (r : Rows D) (q : D) (rel' c s l cap w : Nat) (rt : Bool)
+    (fl : Nat) (p : D) (rel : Nat) :
+    declOf E (setHead E r q rel' c s l cap w rt fl) p rel =
+      if p = q ∧ rel = rel' then some (l, cap, w, rt) else declOf E r p rel := by
+  unfold declOf setHead rowAt
+  rw [Trie.get_insert]
+  by_cases h : p = q ∧ rel = rel'
+  · obtain ⟨rfl, rfl⟩ := h; simp
+  · rw [if_neg (by intro he; injection he with h1 h2; exact h ⟨h1, h2⟩), if_neg h]
+
+omit [Ord D] in
+private theorem rowAt_head_insert_row (E : Env D) (r : Rows D) (k : RowKey D) (L : RowLeaf) (p : D)
+    (rel : Nat) : rowAt E (r.insert (rowSpec E) (.row k) L) (.head p rel) = rowAt E r (.head p rel) := by
+  unfold rowAt; rw [Trie.get_insert, if_neg (by intro h; cases h)]
+
+omit [Ord D] in
+private theorem rowAt_head_retain_row {E : Env D} {r : Rows D} (hr : Trie.Canon (rowSpec E) 0 r)
+    (k : RowKey D) (p : D) (rel : Nat) :
+    rowAt E (Trie.retainAt (rowSpec E) (fun s _ => decide (s ≠ .row k)) (rowPath E (.row k)) r) (.head p rel) =
+      rowAt E r (.head p rel) := by
+  unfold rowAt; rw [get_retain_row hr, if_neg (by intro h; cases h)]
+
+omit [Ord D] in
+/-- A head rewritten with the declaration it had, over rows whose heads are those of `r`. -/
+private theorem declOf_setHead_keep {E : Env D} {r r0 : Rows D} {q : D} {rel' c s l cap w fl : Nat}
+    {rt : Bool} (h0 : ∀ p rel, rowAt E r0 (.head p rel) = rowAt E r (.head p rel))
+    (hd : declOf E r q rel' = some (l, cap, w, rt)) (p : D) (rel : Nat) :
+    declOf E (setHead E r0 q rel' c s l cap w rt fl) p rel = declOf E r p rel := by
+  rw [declOf_setHead]
+  split
+  · rename_i h; obtain ⟨rfl, rfl⟩ := h; exact hd.symm
+  · unfold declOf; rw [h0]
+
+/-- **One row touch keeps every declaration**, or declares a relation that had no head, of a parent
+the turn bears. -/
+private theorem rowStep_decl {E : Env D} {w : World D} {t : Turn D} {r r' : Rows D} {x : RowTouch D}
+    (hr : Trie.Canon (rowSpec E) 0 r) (h : rowStep E w t r x = .ok r') (p : D) (rel : Nat) :
+    declOf E r' p rel = declOf E r p rel ∨ (declOf E r p rel = none ∧ p ∈ createdIds t) := by
+  obtain ⟨slot, seen, act⟩ := x
+  cases slot with
+  | head q rel' =>
+      cases act with
+      | declare l cap w rt =>
+          simp only [rowStep, rowStepOn, setHeadOn_trie, except_bind_ok] at h
+          obtain ⟨⟨⟩, -, ⟨⟩, -, ⟨⟩, hcr, ⟨⟩, -, ⟨⟩, hn, h⟩ := h
+          simp only [pure, Except.pure, Except.ok.injEq] at h
+          subst h
+          rw [declOf_setHead]
+          by_cases hpq : p = q ∧ rel = rel'
+          · obtain ⟨rfl, rfl⟩ := hpq
+            refine .inr ⟨?_, by simpa using req_ok.mp hcr⟩
+            have hn' : rowAt E r (.head p rel) = none := by simpa using req_ok.mp hn
+            unfold declOf; rw [hn']
+          · exact .inl (if_neg hpq)
+      | keep => simp [rowStep, rowStepOn] at h
+      | insert _ _ => simp [rowStep, rowStepOn] at h
+      | upsert _ _ => simp [rowStep, rowStepOn] at h
+      | retract => simp [rowStep, rowStepOn] at h
+  | row key' =>
+      simp only [rowStep, rowStepOn, headOfOn_trie, headFloorOn_trie, setHeadOn_trie, except_bind_ok] at h
+      obtain ⟨⟨⟩, -, ⟨⟩, -, ⟨⟩, -, h⟩ := h
+      rcases hh : headOf E r key'.parent key'.rel with _ | ⟨count, sum, limit, cap, width, retract⟩
+      · rw [hh] at h; cases h
+      · rw [hh] at h
+        have hd := declOf_of_headOf hh
+        simp only [except_bind_ok] at h
+        obtain ⟨⟨⟩, -, h⟩ := h
+        cases act with
+        | keep =>
+            simp only [except_bind_ok] at h
+            obtain ⟨_, -, h⟩ := h
+            simp only [pure, Except.pure, Except.ok.injEq] at h
+            subst h; exact .inl rfl
+        | insert amt v =>
+            simp only [except_bind_ok] at h
+            obtain ⟨⟨⟩, -, ⟨⟩, -, ⟨⟩, -, ⟨⟩, -, ⟨⟩, -, h⟩ := h
+            simp only [pure, Except.pure, Except.ok.injEq] at h
+            subst h
+            exact .inl (declOf_setHead_keep (rowAt_head_insert_row E r key' _) hd p rel)
+        | upsert amt v =>
+            simp only [except_bind_ok] at h
+            obtain ⟨_, -, ⟨⟩, -, ⟨⟩, -, ⟨⟩, -, ⟨⟩, -, h⟩ := h
+            simp only [pure, Except.pure, Except.ok.injEq] at h
+            subst h
+            exact .inl (declOf_setHead_keep (rowAt_head_insert_row E r key' _) hd p rel)
+        | retract =>
+            simp only [except_bind_ok] at h
+            obtain ⟨_, -, ⟨⟩, -, h⟩ := h
+            rcases hc : rowAt E r (.row key') with _ | (⟨⟩ | ⟨a, val, u⟩)
+            · rw [hc] at h; cases h
+            · rw [hc] at h; cases h
+            · rw [hc] at h
+              simp only [except_bind_ok] at h
+              obtain ⟨⟨⟩, -, h⟩ := h
+              simp only [pure, Except.pure, Except.ok.injEq] at h
+              subst h
+              exact .inl (declOf_setHead_keep (rowAt_head_retain_row hr key') hd p rel)
+        | declare _ _ _ _ => simp at h
+
+/-- Every row touch of a turn, in order: each declaration is kept, or declared where there was no
+head, of a parent the turn bears. -/
+private theorem foldRows_decl {E : Env D} {w : World D} {t : Turn D} (p : D) (rel : Nat) :
+    ∀ (l : List (RowTouch D)) (acc rr : Rows D × Nat), Trie.Canon (rowSpec E) 0 acc.1 →
+      l.foldlM (rowStepFreed E w t) acc = .ok rr →
+      declOf E rr.1 p rel = declOf E acc.1 p rel ∨ (declOf E acc.1 p rel = none ∧ p ∈ createdIds t)
+  | [], acc, rr, _, h => by
+      simp only [List.foldlM_nil, pure, Except.pure, Except.ok.injEq] at h
+      subst h; exact .inl rfl
+  | x :: rest, acc, rr, hc, h => by
+      rw [List.foldlM_cons, except_bind_ok] at h
+      obtain ⟨acc', h1, h2⟩ := h
+      unfold rowStepFreed rowStepFreedOn at h1; simp only [rowStepOn_trie, rowFreedOn_trie] at h1
+      rw [except_bind_ok] at h1
+      obtain ⟨r1, hs, he⟩ := h1
+      simp only [pure, Except.pure, Except.ok.injEq] at he
+      subst he
+      have ih := foldRows_decl p rel rest _ rr (rowStep_weight hc hs).2 h2
+      rcases rowStep_decl hc hs p rel with h1 | h1
+      · rcases ih with ih | ih
+        · exact .inl (ih.trans h1)
+        · exact .inr ⟨h1.symm.trans ih.1, ih.2⟩
+      · exact .inr h1
+
+omit [Ord D] in
+/-- `dropHeads` keeps or removes each slot: nothing it reads is rewritten. -/
+private theorem dropHeads_get_sub {E : Env D} (t : Turn D) (s : RowSlot D) :
+    ∀ (acc : Rows D × Nat), Trie.Canon (rowSpec E) 0 acc.1 →
+      (dropHeads E t acc).1.get (rowSpec E) s = acc.1.get (rowSpec E) s ∨
+        (dropHeads E t acc).1.get (rowSpec E) s = none := by
+  unfold dropHeads
+  generalize t.touches = xs
+  induction xs with
+  | nil => intro acc _; exact .inl rfl
+  | cons x xs ih =>
+      intro acc hc
+      simp only [List.foldl_cons]
+      split
+      · have hsub : ((under (rowSpec E) (E.bytes x.cell) 257 acc.1).filter fun p => match p.1 with
+            | .head q _ => decide (q = x.cell)
+            | .row _ => false).Sublist acc.1.toList :=
+          List.filter_sublist.trans (under_sublist (rowSpec E) (E.bytes x.cell) 257 acc.1)
+        have hnod := List.Sublist.nodup (hsub.map Prod.fst) (Trie.toList_nodup (rowSpec E) 0 acc.1 hc.1)
+        have hmem : ∀ q ∈ ((under (rowSpec E) (E.bytes x.cell) 257 acc.1).filter fun p => match p.1 with
+            | .head q _ => decide (q = x.cell)
+            | .row _ => false), q ∈ acc.1.toList := fun q hq => hsub.subset hq
+        rcases ih _ (dropList_weight _ acc hc hnod hmem).2 with h | h
+        · have hg := dropList_get _ acc hc hnod hmem s
+          split at hg
+          · exact .inr (h.trans hg)
+          · exact .inl (h.trans hg)
+        · exact .inr h
+      · exact ih acc hc
+
+omit [Ord D] in
+/-- `dropHeads` keeps each declaration, or removes it, of a parent the turn retires. -/
+private theorem dropHeads_decl {E : Env D} (t : Turn D) (p : D) (rel : Nat) (acc : Rows D × Nat)
+    (hc : Trie.Canon (rowSpec E) 0 acc.1) :
+    declOf E (dropHeads E t acc).1 p rel = declOf E acc.1 p rel ∨
+      (declOf E (dropHeads E t acc).1 p rel = none ∧ ∃ x ∈ t.touches, x.act = .retire ∧ x.cell = p) := by
+  by_cases hret : ∃ x ∈ t.touches, x.act = .retire ∧ x.cell = p
+  · rcases dropHeads_get_sub (E := E) t (.head p rel) acc hc with h | h
+    · left; unfold declOf rowAt; rw [h]
+    · right; refine ⟨?_, hret⟩; unfold declOf rowAt; rw [h]
+  · left; unfold declOf rowAt
+    rw [dropHeads_get_out t (fun x hx hr rel' he => hret ⟨x, hx, hr, by injection he with h1; exact h1.symm⟩)
+      acc hc]
+
+/-- A touch that retires a cell was judged on a cell the World holds. -/
+private theorem touchCheck_retire_taken {E : Env D} {w : World D} {x : Touch D} {r : Option (Post D)}
+    (h : touchCheck E w x = .ok r) (hret : x.act = .retire) : w.entry E x.cell ≠ none := by
+  unfold touchCheck at h
+  simp only [except_bind_ok] at h
+  obtain ⟨⟨⟩, -, h⟩ := h
+  revert h
+  generalize w.entry E x.cell = cur
+  intro h
+  rw [hret] at h
+  rcases cur with _ | (⟨cell, ver⟩ | _)
+  · cases h
+  · exact Option.some_ne_none _
+  · cases h
+
+/-- A cell a checked turn bears was absent (`checkCreates`: not `taken`). -/
+private theorem created_absent {E : Env D} {w : World D} {t : Turn D} {posts : List (Post D)}
+    (hk : Checked E w t posts) {p : D} (hp : p ∈ createdIds t) : w.entry E p = none := by
+  have hcr := hk.creates
+  unfold checkCreates at hcr
+  simp only [except_bind_ok] at hcr
+  obtain ⟨⟨⟩, -, ⟨⟩, -, ⟨⟩, -, hf⟩ := hcr
+  have hn : w.taken E p = false := by simpa using req_ok.mp (forEx_ok.mp hf p hp)
+  unfold World.taken at hn
+  cases hw : w.entry E p with
+  | none => rfl
+  | some _ => rw [hw] at hn; cases hn
+
+/-- **An admitted turn keeps each declaration**; or declares a relation of a parent that was
+absent; or removes the head of a parent the World held. -/
+private theorem admit_decl {E : Env D} {w w' : World D} {t : Turn D} (hr : w.RowsCanon E)
+    (h : World.admit E w t = .ok w') (p : D) (rel : Nat) :
+    declOf E w'.rows p rel = declOf E w.rows p rel ∨
+      (declOf E w.rows p rel = none ∧ w.entry E p = none) ∨
+      (declOf E w'.rows p rel = none ∧ w.entry E p ≠ none) := by
+  obtain ⟨posts, hk, hrows⟩ := admit_rows h
+  have hrun := hk.rows
+  rw [rowsRun_eq] at hrun
+  simp only [except_bind_ok] at hrun
+  obtain ⟨⟨⟩, -, ⟨⟩, -, hrun⟩ := hrun
+  split at hrun
+  · cases hrun
+  · simp only [except_bind_ok] at hrun
+    obtain ⟨acc, hf, hd⟩ := hrun
+    simp only [pure, Except.pure, Except.ok.injEq] at hd
+    have hca := (foldRows_weight t.rows (w.rows, 0) acc hr hf).2
+    have hw' : w'.rows = (dropHeads E t acc).1 := by rw [hrows, ← hd]
+    rw [hw']
+    rcases dropHeads_decl t p rel acc hca with h2 | ⟨h2, x, hx, hret, rfl⟩
+    · rcases foldRows_decl p rel t.rows (w.rows, 0) acc hr hf with h1 | ⟨h1, hc⟩
+      · exact .inl (h2.trans h1)
+      · exact .inr (.inl ⟨h1, created_absent hk hc⟩)
+    · obtain ⟨raw, hm, -⟩ := hk.touches
+      obtain ⟨rx, -, hfx⟩ := mapEx_fwd hm x hx
+      exact .inr (.inr ⟨h2, touchCheck_retire_taken hfx hret⟩)
+
+private theorem eAdv_none {a : Option Entry} : ¬ EAdv a none := by
+  rcases a with _ | (⟨_, _⟩ | _) <;> simp [EAdv]
+
+/-- Along a fold, a relation with no head at the start that has one at the end belongs to a parent
+absent at the start: only its birth turn declares it. -/
+private theorem fold_decl_born {E : Env D} (p : D) (rel : Nat) :
+    ∀ {w w' : World D} {l : List (Step D)}, w.RowsCanon E → World.fold E w l = .ok w' →
+      declOf E w.rows p rel = none → declOf E w'.rows p rel ≠ none → w.entry E p = none
+  | w, w', [], _, h, h0, h' => by
+      simp only [World.fold, Except.ok.injEq] at h
+      subst h; exact absurd h0 h'
+  | w, w', s :: rest, hr, h, h0, h' => by
+      obtain ⟨w1, h1, h2⟩ := fold_cons_ok.mp h
+      cases s with
+      | turn t =>
+          by_cases hb : declOf E w1.rows p rel = none
+          · have h1e := fold_decl_born p rel (admit_rowsCanon hr h1) h2 hb h'
+            rcases admit_entryStep h1 p with heq | hadv
+            · rw [heq]; exact h1e
+            · rw [h1e] at hadv; exact absurd hadv eAdv_none
+          · rcases admit_decl hr h1 p rel with he | ⟨-, hn⟩ | ⟨hn, -⟩
+            · exact absurd (he.trans h0) hb
+            · exact hn
+            · exact absurd hn hb
+      | refusal r =>
+          rw [← refuse_entry h1 p]
+          exact fold_decl_born p rel (refuse_rowsCanon hr h1) h2 (by rw [refuse_rows h1]; exact h0) h'
+
+/-- Along a fold, a declaration standing at both ends is the same. -/
+private theorem fold_decl {E : Env D} (p : D) (rel : Nat) :
+    ∀ {w w' : World D} {l : List (Step D)}, w.RowsCanon E → World.fold E w l = .ok w' →
+      ∀ (d d' : Nat × Nat × Nat × Bool), declOf E w.rows p rel = some d →
+        declOf E w'.rows p rel = some d' → d' = d
+  | w, w', [], _, h, d, d', h0, h' => by
+      simp only [World.fold, Except.ok.injEq] at h
+      subst h; rw [h0] at h'; exact (Option.some.inj h').symm
+  | w, w', s :: rest, hr, h, d, d', h0, h' => by
+      obtain ⟨w1, h1, h2⟩ := fold_cons_ok.mp h
+      cases s with
+      | turn t =>
+          have hr1 := admit_rowsCanon hr h1
+          rcases admit_decl hr h1 p rel with he | ⟨hn, -⟩ | ⟨hn, hl⟩
+          · exact fold_decl p rel hr1 h2 d d' (he.trans h0) h'
+          · rw [h0] at hn; cases hn
+          · have hb := fold_decl_born p rel hr1 h2 hn (by rw [h']; exact Option.some_ne_none _)
+            rcases admit_entryStep h1 p with heq | hadv
+            · exact absurd (heq.trans hb) hl
+            · rw [hb] at hadv; exact absurd hadv eAdv_none
+      | refusal r =>
+          exact fold_decl p rel (refuse_rowsCanon hr h1) h2 d d' (by rw [refuse_rows h1]; exact h0) h'
+
+/-- **One step keeps a relation's declaration**: where the head stands before and after an admitted
+turn or a recorded refusal, its limit, cap, width and retract flag are the same. -/
+theorem step_headOf_decl {E : Env D} {w w' : World D} {s : Step D} (hr : w.RowsCanon E)
+    (h : World.step E w s = .ok w') {p : D} {rel c s₀ lim cap width c' s' lim' cap' width' : Nat}
+    {rt rt' : Bool} (h0 : headOf E w.rows p rel = some (c, s₀, lim, cap, width, rt))
+    (h' : headOf E w'.rows p rel = some (c', s', lim', cap', width', rt')) :
+    lim' = lim ∧ cap' = cap ∧ width' = width ∧ rt' = rt := by
+  have hd := declOf_of_headOf h0
+  have hd' := declOf_of_headOf h'
+  have he : (lim', cap', width', rt') = (lim, cap, width, rt) := by
+    cases s with
+    | turn t =>
+        rcases admit_decl hr h p rel with he | ⟨hn, -⟩ | ⟨hn, -⟩
+        · rw [hd, hd'] at he; exact Option.some.inj he
+        · rw [hd] at hn; cases hn
+        · rw [hd'] at hn; cases hn
+    | refusal r =>
+        have h1 : w'.rows = w.rows := refuse_rows h
+        rw [h1, hd] at hd'; exact (Option.some.inj hd').symm
+  simpa only [Prod.mk.injEq] using he
+
+/-- **Along a fold a relation's declaration is for ever**: where the head stands at both ends, its
+limit, cap, width and retract flag are the ones it had. A tombstone is never reborn, so a retired
+parent's relations are never declared again; no hash is read. -/
+theorem headOf_decl_fold {E : Env D} {w₀ w' : World D} {l : List (Step D)} (hr : w₀.RowsCanon E)
+    (h : World.fold E w₀ l = .ok w') {p : D} {rel c s lim cap width c' s' lim' cap' width' : Nat}
+    {rt rt' : Bool} (h0 : headOf E w₀.rows p rel = some (c, s, lim, cap, width, rt))
+    (h' : headOf E w'.rows p rel = some (c', s', lim', cap', width', rt')) :
+    lim' = lim ∧ cap' = cap ∧ width' = width ∧ rt' = rt := by
+  have he := fold_decl p rel hr h _ _ (declOf_of_headOf h0) (declOf_of_headOf h')
+  simpa only [Prod.mk.injEq] using he
+
+/-- **A relation's key width is for ever along a fold** (PROTOCOL-21: the open point of
+`staleBehind_final`'s range case, a range pin read at the width its head declares). -/
+theorem headOf_width_fold {E : Env D} {w₀ w' : World D} {l : List (Step D)} (hr : w₀.RowsCanon E)
+    (h : World.fold E w₀ l = .ok w') {p : D} {rel c s lim cap width c' s' lim' cap' width' : Nat}
+    {rt rt' : Bool} (h0 : headOf E w₀.rows p rel = some (c, s, lim, cap, width, rt))
+    (h' : headOf E w'.rows p rel = some (c', s', lim', cap', width', rt')) : width' = width :=
+  (headOf_decl_fold hr h h0 h').2.2.1
+
+/-! ### Teeth: what keeps a declaration
+
+Two guards carry `headOf_width_fold`, each shown on a concrete World (the `Env` and cell of the
+first tooth above) where, without it, a head that stood at width 1 stands again at width 2. -/
+
+/-- A turn that bears cell 7 and declares its relation 3 at width 2. -/
+private def wReborn₀ : Turn UInt8 :=
+  { txId := 4, notBefore := 0, validUntil := 4, touches := [], creates := [(7, vCell)], nullifiers := [],
+    charge := 0, event := ByteArray.empty, rows := [⟨.head 7 3, none, .declare 10 100 2 true⟩] }
+
+private def wReborn : Turn UInt8 := { wReborn₀ with charge := wReborn₀.weight }
+
+private def wCheck : Bool :=
+  decide (headOf vEnv dW0.rows 7 3 = some (0, 0, 10, 100, 1, true)) &&
+  match World.admit vEnv dW0 dT3 with
+  | .ok w₁ => decide (w₁.entry vEnv 7 = some .tomb) && (headOf vEnv w₁.rows 7 3).isNone &&
+      (match rowsRun vEnv w₁ wReborn with
+        | .ok rr => decide (headOf vEnv rr.1 7 3 = some (0, 0, 10, 100, 2, true))
+        | .error _ => false) &&
+      (match World.admit vEnv w₁ wReborn with
+        | .ok _ => false
+        | .error e => decide (e = .idTaken 7))
+  | .error _ => false
+
+private theorem wCheck_true : wCheck = true := by decide +kernel
+
+/-- **TOOTH: a tombstone reborn would redeclare its relation at a new width.** Cell 7 is live with
+relation 3 declared at width 1; a turn retires it (its head leaves with it, `dropHeads`); a turn
+that bears 7 again and declares relation 3 at width 2 has rows that pass (`rowsRun` reaches a head
+of width 2), and `World.admit` refuses it `idTaken 7` (`checkCreates`: a tombstone is never reborn).
+That check is the one `headOf_width_fold`'s proof uses across a retirement (`created_absent`). -/
+theorem headOf_width_reborn :
+    ∃ (E : Env UInt8) (w₀ w₁ : World UInt8) (t₁ t₂ : Turn UInt8) (rr : Rows UInt8 × Nat),
+      w₀.RowsCanon E ∧ World.admit E w₀ t₁ = .ok w₁ ∧
+      headOf E w₀.rows 7 3 = some (0, 0, 10, 100, 1, true) ∧
+      w₁.entry E 7 = some .tomb ∧ headOf E w₁.rows 7 3 = none ∧
+      rowsRun E w₁ t₂ = .ok rr ∧ headOf E rr.1 7 3 = some (0, 0, 10, 100, 2, true) ∧
+      World.admit E w₁ t₂ = .error (.idTaken 7) := by
+  have hc := wCheck_true
+  unfold wCheck at hc
+  cases h₁ : World.admit vEnv dW0 dT3 with
+  | error e => rw [h₁] at hc; simp at hc
+  | ok w₁ =>
+      rw [h₁] at hc
+      dsimp only at hc
+      cases h₂ : rowsRun vEnv w₁ wReborn with
+      | error e => rw [h₂] at hc; simp at hc
+      | ok rr =>
+          rw [h₂] at hc
+          cases h₃ : World.admit vEnv w₁ wReborn with
+          | ok v => rw [h₃] at hc; simp at hc
+          | error e =>
+              rw [h₃] at hc
+              simp only [Bool.and_eq_true, decide_eq_true_eq, Option.isNone_iff_eq_none] at hc
+              obtain ⟨h0, ⟨⟨ht, hn⟩, hrun⟩, he⟩ := hc
+              exact ⟨vEnv, dW0, w₁, dT3, wReborn, rr, Trie.canon_insert _ _ _ (Trie.canon_empty _ 0),
+                h₁, h0, ht, hn, h₂, hrun, by rw [h₃, he]⟩
+
+omit [Ord D] in
+/-- `rowStep`'s declare arm (`.head p rel`, `.declare limit cap width retract`, pin `seen`) with ONLY
+its `keyTaken` line removed: every other guard of the arm, in its order. -/
+private def declareLoose (E : Env D) (t : Turn D) (r : Rows D) (p : D) (rel : Nat) (seen : Option D)
+    (limit cap width : Nat) (retract : Bool) : Except (Reject D) (Rows D) := do
+  req (decide (rel < 256)) (.overBound .rows)
+  req seen.isNone (.rowShape p)
+  req ((createdIds t).contains p) (.declareLate p)
+  req (decide (limit ≤ Bounds.rowsPerRelationMax) && decide (width ≤ Bounds.keyBytesMax) &&
+    decide (cap < Bounds.counterLimit)) (.overBound .rows)
+  pure (setHead E r p rel 0 0 limit cap width retract 0)
+
+/-- A World whose rows hold relation 3 of cell 7 at width 1, with cell 7 absent (`RowsOk` fails:
+the head has no parent). -/
+private def kW0 : World UInt8 := { vW0 with rows := dW0.rows }
+
+private def kCheck : Bool :=
+  decide (kW0.entry vEnv 7 = none) && decide (headOf vEnv kW0.rows 7 3 = some (0, 0, 10, 100, 1, true)) &&
+  !(rowsParented vEnv kW0.trie kW0.rows) &&
+  (match World.admit vEnv kW0 wReborn with
+    | .ok _ => false
+    | .error e => decide (e = .keyTaken 7)) &&
+  (match declareLoose vEnv wReborn kW0.rows 7 3 none 10 100 2 true with
+    | .ok r => decide (headOf vEnv r 7 3 = some (0, 0, 10, 100, 2, true))
+    | .error _ => false)
+
+private theorem kCheck_true : kCheck = true := by decide +kernel
+
+/-- **TOOTH: without `keyTaken`, a head with no parent would be redeclared at a new width.** Why
+`headOf_width_fold` needs no `RowsOk`: on rows that hold relation 3 of an ABSENT cell 7 at width 1
+(canonical, not `RowsOk`), a turn bearing 7 and declaring relation 3 at width 2 is refused
+`keyTaken`; the same arm with only that guard removed (`declareLoose`) writes the head at width 2. -/
+theorem headOf_width_keyTaken :
+    ∃ (E : Env UInt8) (w₀ : World UInt8) (t : Turn UInt8) (r : Rows UInt8),
+      w₀.RowsCanon E ∧ ¬ w₀.RowsOk E ∧ w₀.entry E 7 = none ∧
+      headOf E w₀.rows 7 3 = some (0, 0, 10, 100, 1, true) ∧
+      World.admit E w₀ t = .error (.keyTaken 7) ∧
+      declareLoose E t w₀.rows 7 3 none 10 100 2 true = .ok r ∧ headOf E r 7 3 = some (0, 0, 10, 100, 2, true) := by
+  have hc := kCheck_true
+  unfold kCheck at hc
+  cases h₁ : World.admit vEnv kW0 wReborn with
+  | ok v => rw [h₁] at hc; simp at hc
+  | error e =>
+      rw [h₁] at hc
+      cases h₂ : declareLoose vEnv wReborn kW0.rows 7 3 none 10 100 2 true with
+      | error e' => rw [h₂] at hc; simp at hc
+      | ok r =>
+          rw [h₂] at hc
+          simp only [Bool.and_eq_true, decide_eq_true_eq, Bool.not_eq_true'] at hc
+          obtain ⟨⟨⟨⟨ha, h0⟩, hp⟩, he⟩, hr⟩ := hc
+          refine ⟨vEnv, kW0, wReborn, r, Trie.canon_insert _ _ _ (Trie.canon_empty _ 0), ?_, ha, h0,
+            by rw [h₁, he], h₂, hr⟩
+          intro hok
+          rw [hok.2.2] at hp
+          cases hp
