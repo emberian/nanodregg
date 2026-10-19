@@ -53,8 +53,9 @@ structure Params (D : Type) [Ord D] where
   log reaches, so a row would never see a page end before the tip. It must hold every event the
   kernel admits: `Kernel.Bounds.eventBytesMax + 5`, DERIVED from the kernel bound (a page's 4-byte
   event length and the event's 1-byte step tag, `Host.Page.stepEvent`). The theorem is
-  `Writer.walkTurnsAt_serves`: under such a budget a record's walk that has served nothing serves the
-  first step past its start. `Writer.walkTurnsAt_one_short` is the tooth at `+ 4`. An event past the budget is never served, the follower refuses the empty page short of
+  HOST's `Host.Page.walkTurnsAt_serves` (and `walk_serves`, through the segment): under such a budget a
+  record's walk that has served nothing serves the first step past its start.
+  `Host.Page.walkTurnsAt_one_short` is the tooth at `+ 4`. An event past the budget is never served, the follower refuses the empty page short of
   the tip `badResult`, and the attempt's confirm reads that as `uncertain`. A guess at the largest
   event the rows happen to log broke twice: 4096 (the grain row's lifecycle package) and 16384 (the
   queue Bell's install, 31.5 KB, PROTOCOL-18); the `bigEvent` row's plant is the old 16384. It still

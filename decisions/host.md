@@ -2664,3 +2664,47 @@ It replaces the 2^28 literal, about 34% of it. Scaling PERF-2's 120.7 s clock (a
 - Taken: `reached_codecFits` discharges the reached World's `CodecFits` premise, which the "never fires" claim needed; the ≈ 41 s is reworded as arithmetic on PERF-2's clock; the literal constants are named in the critique.
 
 **Meta-critique.** HOST-14's original "256 MiB ≈ 900 BAR stores" was a division dressed as a reason. The number that replaces it is the composition of five theorems, and its prose says only what the def computes.
+
+## HOST-60 · a page is never stopped for room before it serves: the budget is `eventBytesMax + 5`, and the serve is lifted through `walk` and `build` (2026-10-21, HOST-15; cv 01a150c0, PROTOCOL-18's finding)
+
+**The defect.** `budget_fits_event` stated `eventBytesMax + 4 ≤ budget`. `stepEvent` puts a 1-byte tag before every event, and the walk charges 4 bytes for its length on top, so an empty page needs `+ 5`. The claim held at HOST's budget (261,120) only through slack, and no theorem consumed it, yet its docstring claimed that a page short of the tip is never empty. PROTOCOL-18 proved the record-level fact over a `rfl` twin of the walk's fold step (`Protocol.Rows.Writer.walkStep`) and left the lift through `walk` and `build` unproved.
+
+**Decision.**
+- `Host.Page.walkStep` is now the named fold step, and `walkTurnsAt` folds it. The body is unchanged, so no byte moves.
+- Protocol's twin (`Writer.walkStep`, `Writer.eventSize`) is deleted. The record-level theorems move to the owner of the walk: `walkTurnsAt_serves` and `walkTurnsAt_one_short` are now in Host/Proofs/Page.lean. Their premise is `(stepEvent p.1).size ≤ eventBytesMax + 1` per step, and `stepEvent_size_le` derives it from the codec's `Step.Fits`.
+- `Params.toy_budget_serves` and `Params.deployed_budget_serves` stay in Protocol (its rows' budgets) and point to Host's names.
+- `budget_fits_event` is now `eventBytesMax + 5 ≤ budget`.
+
+**Theorems** (Host/Proofs/Page.lean):
+- `walkTurnsAt_serves`: one record's walk from an empty page (no events, no bytes, not full), with its count at or below `start` and reaching past it, serves at least one event.
+- `walkTurnsAt_empty`: a record's walk that leaves the page empty never marked it full, and the page holds no bytes.
+- `walk_serves`: the first record past `start` that `walk` reads (a verified frame before the durable end that decodes to steps reaching past `start`), the page serves from. The size premise is discharged from the record's decode (`decode_stepEvent_le`, through `batch_lawfulOn`).
+- `walk_empty` / `build_empty`: a page `walk` or `build` returns empty was never full and holds no bytes, so it ran out of segment or fuel before any step past `start`. `walk_empty` adds that its count is at most `max start acc.steps`.
+- Teeth: `walkTurnsAt_one_short` and `walk_one_short`: at `+ 4`, a first event past `start` of the codec's full size leaves the page full and empty. That contradicts each theorem above at `+ 4`. A mutation of `walkStep_empty`'s budget premise to `+ 4` goes red at the omega that rules out the full arm.
+
+**The honest edge (ROOT's ruling: stays named).** "A page short of the tip is non-empty" also needs the Store's index-segment coherence: the entry `locate` returns sits at or below `start`, and the segment from its offset to the durable end decodes to the steps after it up to the tip. No Host theorem states that coherence yet (cv 01a15180-9499). `build_empty` says what an empty page can be: one whose walk ran out.
+
+**Entry 0 past `start`: REACHABLE (checked as ROOT asked).** The loop pushes each record's entry as the World's mark before the record (Host/Loop.lean:324). So a Store that `host import` created from a World at step N > 0 has entry 0 at N. A full follower paging from `start < N` gets entry 0 from `locate`, and `build` serves steps N+1… with `a.steps = N + events`. Follow's `absorbPage` (Protocol/Command/Machine.lean:480) refuses the page `chainMismatch`, because its fold reaches `start + events ≠ a.steps`. That is fail-closed, but under a false name: the true one is "before this Store's log, adopt the base". HOST-61 is the named refusal in `build`, a `Page.Fault` with its own Status. It touches the exit table, deploy/units/EXITS.md and Ops/Units' operator text (OPS), and is recorded on cv 01a15180-9499.
+
+**Critique.**
+- `walk_serves` speaks of the FIRST record it reads past `start`. The steps before it are skipped by `walk` from the located entry, and that a record past `start` exists before the durable end is the coherence edge, not proved here.
+- `max start acc.steps` in `walk_empty` is the "≤ start or where it began" case. Neither side is provable from the premises alone, but the `acc.steps` side is exactly the entry-0-past-`start` case above, which is why it is named.
+- The theorems are over `Id`. `Host.Deployed.pager` runs the same `build` in `IO` over the files, as with the rest of this file.
+
+- The walk-level tooth is conditional: `walk_one_short` assumes a frame that verifies and decodes to a full-size step. No theorem exhibits a concrete segment. One is constructible from `Record.encode_decode` plus a framed segment, but it is not on disk.
+
+**Law-6 read (second agent, read-only, with the DISJUNCT check): LAND-WITH-FIXES.**
+- `walkStep`'s body matches main's fold lambda line for line.
+- The `+ 5` premise is used in exactly one place, the full arm of `walkStep_empty`, and every theorem's budget dependence runs through it. omega's `+ 4` counterexample is the tooth's own instance.
+- Every premise set is satisfiable. `build_empty` at `+ 4` is refuted through `walk_one_short` with count 1.
+- `max start acc.steps`: neither side is provable alone. It is needed because entry 0 can sit past `start`.
+- No deleted name is consumed anywhere.
+- Taken:
+  - the amendment bullet in decisions/protocol.md (PROTOCOL-55; also PROTOCOL-19's ask);
+  - the module header reworded to what `build_empty` gives, with the edge named;
+  - `walk_serves` splits `ts` into a cons before the simp, instead of leaning on simp's discharger reading `hne`.
+- Recorded: the conditional walk-level tooth (critique), and the edge's full statement: the per-entry ⟨mark before record i, offset of frame i⟩ lemma does not exist. `indexed_foldlM_off`, `_size` and `_steps` give the end offset, the count and the order only.
+
+**Meta-critique.** The `+ 4` stood because nothing consumed it: a fact no proof reads is a comment that compiles. The fix is not the digit. The serve now has a consumer chain (`walk_serves` and `build_empty` reading the walk itself), and the twin that kept the Protocol proof honest is gone, so a change to the walk breaks the proofs at their owner.
+
+**Flag day.** None. The theorems move, and `walkStep` is named with the same body.

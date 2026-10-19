@@ -83,23 +83,29 @@ def stepEvent : Step D → ByteArray
   | .turn t => ⟨#[0]⟩ ++ t.event
   | .refusal r => ⟨#[1]⟩ ++ r.event
 
-/-- One record's (step, roots) pairs: skip those at or below `start`, serve the rest while they fit
-`budget` and the page holds fewer than `recordTurnsMax` events (it is `full` once it holds that
-many); with the chain and step count after the last step walked. -/
+/-- One (step, roots) pair against what the page holds, the chain and the step count before it: a
+step at or below `start` is skipped (the count and chain move); past it, the step's event is served
+while it fits `budget` and the page holds fewer than `recordTurnsMax` events, else the page is
+`full` (nothing after is walked). -/
+def walkStep (E : Env D) (budget start : Nat) (st : Acc × D × Nat) (x : Step D × D) : Acc × D × Nat :=
+  let (a, c, h) := st
+  let (t, root) := x
+  if a.full then st else
+  let c' := stepLink E c t root
+  let h' := h + 1
+  let ev := stepEvent t
+  if h' ≤ start then ({ a with steps := h', chain := E.bytes c' }, c', h')
+  else if recordTurnsMax ≤ a.events.size ∨ budget < a.bytes + 4 + ev.size then
+    ({ a with full := true }, c, h)
+  else ({ a with events := a.events.push ev, bytes := a.bytes + 4 + ev.size,
+                 steps := h', chain := E.bytes c', full := recordTurnsMax ≤ a.events.size + 1 }, c', h')
+
+/-- One record's (step, roots) pairs walked in order (`walkStep`): skip those at or below `start`,
+serve the rest while they fit `budget` and the page holds fewer than `recordTurnsMax` events; with
+the chain and step count after the last step walked. -/
 def walkTurnsAt (E : Env D) (budget start : Nat) (chain₀ : D) (h₀ : Nat) (ts : List (Step D × D)) (acc : Acc) :
     Acc × D × Nat :=
-  ts.foldl (fun (st : Acc × D × Nat) (t, root) =>
-    let (a, c, h) := st
-    if a.full then st else
-    let c' := stepLink E c t root
-    let h' := h + 1
-    let ev := stepEvent t
-    if h' ≤ start then ({ a with steps := h', chain := E.bytes c' }, c', h')
-    else if recordTurnsMax ≤ a.events.size ∨ budget < a.bytes + 4 + ev.size then
-      ({ a with full := true }, c, h)
-    else ({ a with events := a.events.push ev, bytes := a.bytes + 4 + ev.size,
-                   steps := h', chain := E.bytes c', full := recordTurnsMax ≤ a.events.size + 1 }, c', h'))
-    (acc, chain₀, h₀)
+  ts.foldl (walkStep E budget start) (acc, chain₀, h₀)
 
 /-- One record's (step, roots) pairs walked (`walkTurnsAt`): what the page holds after it. -/
 def walkTurns (E : Env D) (budget start : Nat) (chain₀ : D) (h₀ : Nat) (ts : List (Step D × D)) (acc : Acc) : Acc :=
