@@ -181,6 +181,55 @@ theorem law_authorized {X : Ctx D} {look : Pinned D} {c : Call D} {a : At D} {ob
   | none => left; simp [principalOf] at hp; exact ⟨rfl, hp⟩
   | some g => right; exact ⟨g, rfl, walk_chain hp⟩
 
+omit [Ord D] in
+/-- **Adoption judges the state** (KERNEL-6 as built by KERNEL-27/LANG-24, KERNEL-57). A derived
+`law` turn was judged twice over the object's UNCHANGED state: by the laws in force, on
+`relaw laws'` (the authority to change laws), and by every ADDED law (`laws'` less the laws in
+force), on `adopt laws'` (each added law's base case: the state it is adopted over). A kept law is
+not re-judged on `adopt` (LANG-4's amendment). The authority half is `law_authorized`; the
+refusal half is `law_adopt_refused`; what `adopt` means for each Std law is LANG's
+(`Lang.Proofs.Std.bounded_spec`, `quorum_adopt_fresh`, `windowed_fresh`, `machine_adopt`), reached
+from a judge verdict by `Lang.Proofs.Receiver.judgeOne_admits`. -/
+theorem law_judged {X : Ctx D} {look : Pinned D} {c : Call D} {a : At D} {obj : D} {laws' : List D}
+    {via : Option D} {d : Draft D} (h : law X look c a obj laws' via = .ok d) :
+    ∃ cell principal laws, readKind look obj kindObject = .ok cell ∧
+      packageOf X obj cell = .ok none ∧
+      ownerAuthority X look a.actor obj cell .mutate via = .ok principal ∧
+      checkLaws look laws' = .ok () ∧ lawsOf X obj cell = .ok laws ∧
+      X.program.judge look none laws (stateOf cell) (stateOf cell)
+        (reqOf c.unsigned obj principal (.relaw laws')) = .ok () ∧
+      X.program.judge look none (laws'.filter fun l => decide (l ∉ laws)) (stateOf cell) (stateOf cell)
+        (reqOf c.unsigned obj principal (.adopt laws')) = .ok () ∧
+      d.effects = writeOf obj (diffOps (lawSlotsOf cell) (lawSlots X laws')) := by
+  unfold law at h
+  simp only [except_bind_ok] at h
+  obtain ⟨cell, hc, pkg, hp, ⟨⟩, hn, principal, ha, ⟨⟩, hcl, laws, hl, ⟨⟩, hrel, ⟨⟩, had, h⟩ := h
+  rw [req_ok] at hn
+  cases pkg with
+  | some _ => simp at hn
+  | none =>
+    simp only [pure, Except.pure, Except.ok.injEq] at h
+    subst h
+    exact ⟨cell, principal, laws, hc, hp, ha, hcl, hl, hrel, had, rfl⟩
+
+omit [Ord D] in
+/-- **An added law that refuses the state is never installed, by its own name** (the tooth of
+`law_judged`). Past the authority and the laws in force, a `law` turn whose ADDED laws refuse
+`adopt laws'` over the unchanged state is refused with exactly that refusal (for LANG's program,
+`lawDenied <law> <its reason>`: `Lang.Proofs.StdTeeth.bounded_adopt` is `bounded total ≤ 100`
+refusing adoption over a total of 500). -/
+theorem law_adopt_refused {X : Ctx D} {look : Pinned D} {c : Call D} {a : At D} {obj principal : D}
+    {laws laws' : List D} {via : Option D} {cell : Cell} {e : Refusal D}
+    (hc : readKind look obj kindObject = .ok cell) (hp : packageOf X obj cell = .ok none)
+    (ha : ownerAuthority X look a.actor obj cell .mutate via = .ok principal)
+    (hcl : checkLaws look laws' = .ok ()) (hl : lawsOf X obj cell = .ok laws)
+    (hrel : X.program.judge look none laws (stateOf cell) (stateOf cell)
+      (reqOf c.unsigned obj principal (.relaw laws')) = .ok ())
+    (had : X.program.judge look none (laws'.filter fun l => decide (l ∉ laws)) (stateOf cell)
+      (stateOf cell) (reqOf c.unsigned obj principal (.adopt laws')) = .error e) :
+    law X look c a obj laws' via = .error e := by
+  simp only [law, hc, hp, ha, hcl, hl, hrel, had, req, bind, Except.bind, Option.isNone_none, if_true]
+
 /-- **Current key.** Every derived call that is not a rotation is signed by a key its member cell
 holds as current. -/
 theorem key_current {X : Ctx D} {look : Pinned D} {rv : RowView D} {c : Call D} {t : Turn D}

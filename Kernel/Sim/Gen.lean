@@ -1189,6 +1189,9 @@ def act (P : Params D) (st : State D) : State D :=
           let denied := laws.any (· = deny) ∨ new = deny
           let c := signed P st owner owner.key (S.pinsFor P.env w (owner.id :: obj.1 :: new :: laws))
             (.law obj.1 [new] none)
+          -- `law-self` is the ADOPTION refusal (`law_judged`, `law_adopt_refused`): no object ever
+          -- has deny-all in force (a birth under it is refused, and so is every adoption of it), so
+          -- the laws in force admit the `relaw` and the refusal is the added law's own, on `adopt`
           (submit P st c (if denied then .refused "lawDenied" else .ok) (if d = 0 then "law-self" else "law")).1
       | _, _, _ => st
   | 2 => -- the owner writes; under deny-all it must be lawDenied
