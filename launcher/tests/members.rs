@@ -407,8 +407,9 @@ fn a_dead_follower_is_named_to_its_resident_and_started_again() {
 /// call and envelope in its own MEMBER's name). A resident's nd --stdio driven at ANOTHER
 /// resident's follower signs an envelope naming that member with its own key; the writer refuses
 /// it (Envelope.check: unknownKey), follow retries once by the incoming key (PROTOCOL-46), and
-/// nd --stdio's custody refuses that by name (noRotation). CONTROL: its own follower serves the
-/// same sync.
+/// nd --stdio's custody refuses that (noRotation); the command ends by the WRITER's word,
+/// `refused unknownKey` (PROTOCOL-56: custody's refusal of the incoming key never masks it).
+/// CONTROL: its own follower serves the same sync.
 #[test]
 fn another_residents_follower_is_refused_by_name() {
     let w = World::genesis("ndo");
@@ -460,7 +461,7 @@ fn another_residents_follower_is_refused_by_name() {
     w.run(&["create"]); // a Turn to catch up on
     let (e, t) = nd_via(&wrong, &["sync"]).unwrap();
     assert_eq!(e, command_exit::REFUSED, "another resident's follower: {t}");
-    assert!(t.contains("refused noRotation"), "not refused by name: {t}");
+    assert!(t.contains("refused unknownKey"), "not refused by name: {t}");
     let (e, t) = nd_via(&r.sock(&w.r1), &["sync"]).unwrap();
     assert_eq!(e, command_exit::OK, "control: its own follower: {t}");
 }

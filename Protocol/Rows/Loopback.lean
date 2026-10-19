@@ -85,6 +85,8 @@ structure Sys (D : Type) [Ord D] where
   /-- `nd`'s output for a method's refusal drops its reason: the bare `refused program` (a plant,
   cv 01a15039) -/
   flatProgram : Bool := false
+  /-- a custody refusal of `signIncoming` ends the command by custody's name (a plant, PROTOCOL-56) -/
+  maskIncoming : Bool := false
 
 def skipJudge (X : Ctx D) : Ctx D :=
   { X with program := { X.program with judge := fun _ _ _ _ _ _ => .ok () } }
@@ -130,6 +132,7 @@ def sys (R : Rows.Params D) : Option Mutation → Sys D
   | some .dropRow => { writer := { R, X := R.ctx }, follow := R.ctx, dropRow := true }
   | some .noReadLimit => { writer := { R, X := R.ctx }, follow := R.ctx, noReadLimit := true }
   | some .flatProgram => { writer := { R, X := R.ctx }, follow := R.ctx, flatProgram := true }
+  | some .maskIncoming => { writer := { R, X := R.ctx }, follow := R.ctx, maskIncoming := true }
   | some .guessedBudget => { writer := { R := { R with pageBudget := 16384 }, X := R.ctx }, follow := R.ctx }
 
 /-! ## Actors -/
@@ -399,6 +402,7 @@ def custodyOf (name : String) (fault : Fault) : M D (String × Actor D × ByteAr
 def selfOf (name : String) (fault : Fault) : M D (Self D) := do
   match fault with
   | .stolenKey v => pure (← actor v).self
+  | .wrongFollower o => pure (← actor o).self
   | _ => if (← get).sys.oneMember then pure (← actor "sponsor").self else pure (← actor name).self
 
 /-- Custody settles its armed rotation on the attempt's END, which only the member's own follow
@@ -599,7 +603,13 @@ def steps (name : String) (argv : List String) (fault : Fault) (depth : Nat) (b 
           setActor name (if (← get).sys.advanceOnSend then { a with gen := a.gen + 1 } else { a with arming := true })
           resume name argv fault depth k r fuel
       | some (.signIncoming msg k) =>
-          resume name argv fault depth k (← signIncoming name msg) fuel
+          -- `nd --stdio`'s custody refuses every rotation step (`client/src/custody.rs`)
+          let r ← match fault with
+            | .wrongFollower _ => pure (custodyRefused .noRotation)
+            | _ => signIncoming name msg
+          match (← get).sys.maskIncoming, Command.custodyResult (D := D) r with
+          | true, .error e => pure (.refused e.name, "")
+          | _, _ => resume name argv fault depth k r fuel
       | some (.host op p k) =>
           match ← ask op p with
           | none => pure (.refused "writerStopped", "")

@@ -14,6 +14,11 @@ the local fact was proved (`envelopeRefused_once`). Here, across the whole step 
   conclusion is its premise for the next step, so it holds along a command's whole run. With
   `envelopeRefused_once`, a second `unknownKey` is never answered by a third envelope.
 
+PROTOCOL-56 (ROOT's rule (a)): `custodyEnd` decides by `askedIncoming` of the state custody answers,
+and that test names the step custody was asked:
+* `step_signIncoming_asked` / `step_asked_signIncoming`: a state `step` hands on has the bit exactly
+  when the reply carrying it is `signIncoming`; `start_not_incoming`: `start` never asks it.
+
 Remark (prose, not a theorem): only a `readOnly` command ever gets the bit (`envelopeRefused`'s
 `readOnly cmd` guard), and it leaves phases 1 and 2 only by ending (`render`, `describe`, `sync`,
 `receiptLines`: no continuation). A write's continuations past phase 2 carry no `tried`.
@@ -130,6 +135,21 @@ omit [Ord D] [DecidableEq D] in
 theorem refusedAt_cont {X : Ctx D} {r : Refusal D} : (refusedAt X r).cont = none := by
   unfold refusedAt; split <;> simp [refused, Reply.cont]
 
+omit [Ord D] [DecidableEq D] in
+theorem unknownKeyEnd_cont {X : Ctx D} {cmd : Cmd D} : (unknownKeyEnd X cmd).cont = none := by
+  unfold unknownKeyEnd; split
+  · simp [refused, Reply.cont]
+  · exact refusedAt_cont
+
+omit [Ord D] [DecidableEq D] in
+theorem custodyEnd_cont {X : Ctx D} {cmd : Cmd D} {st : State} {r : Refusal D} :
+    (custodyEnd X cmd st r).cont = none := by
+  unfold custodyEnd; split
+  · split
+    · exact unknownKeyEnd_cont
+    · simp [refused, Reply.cont]
+  · simp [refused, Reply.cont]
+
 theorem describe_cont {X : Ctx D} {w : World D} {obj : D} : (describe X w obj).cont = none := by
   unfold describe
   split
@@ -193,9 +213,7 @@ theorem envelopeRefused_incoming {X : Ctx D} {me : Self D} {argv : List ByteArra
         cases hs
         exact ⟨rfl, ⟨t ||| incomingBit, by simp only [State.tried]; exact incoming_or (ofU64_lt htr) (by decide),
           incomingBit_or_self t⟩, _, hn⟩
-      · split at h
-        · simp [refused, Reply.cont] at h
-        · rw [refusedAt_cont] at h; cases h
+      · rw [unknownKeyEnd_cont] at h; cases h
     · split at h <;> simp [refused, notServed, Reply.cont] at h
   · split at h
     · simp [refused, Reply.cont] at h
@@ -239,6 +257,7 @@ theorem step_incoming_kept {X : Ctx D} {dc : Codec.Stream D} {B : Thin.Base (Wor
   all_goals (obtain ⟨-, -, rfl⟩ := h)
   all_goals (try (simp [refused, printed, behind, notServed, Reply.cont] at hk; done))
   all_goals (try (rw [refusedAt_cont] at hk; cases hk; done))
+  all_goals (try (rw [custodyEnd_cont] at hk; cases hk; done))
   all_goals (try (rw [render_cont] at hk; cases hk; done))
   all_goals (try (rw [describe_cont] at hk; cases hk; done))
   all_goals (try (rw [rangeRender_cont] at hk; cases hk; done))
@@ -254,3 +273,216 @@ theorem step_incoming_kept {X : Ctx D} {dc : Codec.Stream D} {B : Thin.Base (Wor
     obtain ⟨-, -, -, -, rfl⟩ := hacc
     obtain ⟨-, h1, m, h2⟩ := envelopeRefused_incoming he hb hk hs'
     exact ⟨fun _ => h1, fun _ => ⟨m, h2⟩⟩
+
+/-! ## `askedIncoming` names the step custody was asked (PROTOCOL-56) -/
+
+omit [Ord D] [DecidableEq D] in
+/-- The envelope is signed by the incoming key exactly when `tried` has the incoming bit. -/
+theorem envelopeSign_incoming {t : Nat} {m k : ByteArray} (ht : t &&& incomingBit ≠ 0) :
+    envelopeSign t m k = .signIncoming m k := by
+  simp [envelopeSign, ht]
+
+omit [Ord D] [DecidableEq D] in
+theorem envelopeSign_plain {t : Nat} {m k : ByteArray} (ht : t &&& incomingBit = 0) :
+    envelopeSign t m k = .sign m k := by
+  simp [envelopeSign, ht]
+
+omit [Ord D] [DecidableEq D] in
+theorem envelopeSign_signIncoming {t : Nat} {m m' k k' : ByteArray}
+    (h : envelopeSign t m k = .signIncoming m' k') : t &&& incomingBit ≠ 0 := by
+  unfold envelopeSign at h; split at h
+  · cases h
+  · assumption
+
+omit [Ord D] [DecidableEq D] in
+theorem askedIncoming_of_bit {argv : List ByteArray} {a b c d : ByteArray} {t : Nat}
+    (hd : Text.ofU64 d = some t) (hb : t &&& incomingBit ≠ 0) :
+    askedIncoming ⟨argv, 1, [a, b, c, d]⟩ = true := by
+  simp [askedIncoming, State.tried, hd, hb]
+
+omit [Ord D] [DecidableEq D] in
+/-- `envelopeRefused` asks `signIncoming` only with the incoming bit in the state it hands on. -/
+theorem envelopeRefused_signIncoming_asked {X : Ctx D} {me : Self D} {argv : List ByteArray}
+    {cmd : Cmd D} {startB pagesB upToB triedB p m k : ByteArray} {st' : State}
+    (h : envelopeRefused X me argv cmd startB pagesB upToB triedB p = .signIncoming m k)
+    (hs : State.ofBytes k = some st') : askedIncoming st' = true := by
+  unfold envelopeRefused at h
+  cases hte : expiredHeight? p <;> cases hs0 : Text.ofU64 startB <;> cases hu : Text.ofU64 upToB <;>
+    cases htr : Text.ofU64 triedB <;> simp only [hte, hs0, hu, htr] at h
+  all_goals (try (simp [refused] at h; done))
+  · rename_i t
+    split at h
+    · split at h
+      · have hc := congrArg Reply.cont h
+        rw [show (Reply.signIncoming m k).cont = some k from rfl] at hc
+        obtain ⟨_, hs1⟩ := next_spec (fun _ => rfl) hc
+        rw [hs1] at hs; cases hs
+        exact askedIncoming_of_bit (incoming_or (ofU64_lt htr) (by decide)) (incomingBit_or_self t)
+      · have := congrArg Reply.cont h; rw [unknownKeyEnd_cont] at this; cases this
+    · split at h <;> simp [refused, notServed] at h
+  · rename_i t
+    split at h
+    · simp [refused] at h
+    · have hc := congrArg Reply.cont h
+      rw [show (Reply.signIncoming m k).cont = some k from rfl] at hc
+      obtain ⟨hn, hs1⟩ := next_spec (fun _ => envelopeSign_cont) hc
+      rw [hs1] at hs; cases hs
+      rw [hn] at h
+      exact askedIncoming_of_bit (incoming_or (ofU64_lt htr) (by decide))
+        (incomingBit_or_left (envelopeSign_signIncoming h))
+
+/-- **Every `signIncoming` `step` asks is answered under `askedIncoming`** (PROTOCOL-56): the state
+the step hands on with a `signIncoming` reply is an envelope phase whose `tried` has the incoming
+bit. So a custody refusal of `signIncoming` always meets `custodyEnd`'s writer arm
+(`step_incoming_writer_word`): custody's name can never mask the writer's `unknownKey`. -/
+theorem step_signIncoming_asked {X : Ctx D} {dc : Codec.Stream D} {B : Thin.Base (World D)}
+    {me : Self D} {f f' : Follow D} {p : Persist D} {kb result m k : ByteArray} {st' : State}
+    (h : step X dc B me f kb result = (f', p, .signIncoming m k)) (hs' : State.ofBytes k = some st') :
+    askedIncoming st' = true := by
+  unfold step at h
+  simp only [stepResult] at h
+  cases hcr : custodyResult (D := D) result <;> simp only [hcr] at h
+  all_goals (repeat' (first | split at h | (revert h; split <;> intro h)))
+  all_goals (try simp only [Prod.mk.injEq] at h)
+  all_goals (try (obtain ⟨-, -, h⟩ := h))
+  all_goals (try (simp [refused, printed, behind, notServed] at h; done))
+  all_goals (try (have hc := congrArg Reply.cont h
+                  rw [show (Reply.signIncoming m k).cont = some k from rfl] at hc
+                  first
+                  | (rw [refusedAt_cont] at hc; cases hc)
+                  | (rw [custodyEnd_cont] at hc; cases hc)
+                  | (rw [render_cont] at hc; cases hc)
+                  | (rw [describe_cont] at hc; cases hc)
+                  | (rw [rangeRender_cont] at hc; cases hc)
+                  | (rw [receiptLines_cont] at hc; cases hc)
+                  | (rw [settled_cont] at hc; cases hc)
+                  done))
+  all_goals (try (exact envelopeRefused_signIncoming_asked h hs'))
+  all_goals (try (have hc := congrArg Reply.cont h
+                  rw [show (Reply.signIncoming m k).cont = some k from rfl] at hc
+                  obtain ⟨hn, hs0⟩ := next_spec (fun _ => rfl) hc
+                  rw [hn] at h; cases h; done))
+  all_goals (try (have hc := congrArg Reply.cont h
+                  rw [show (Reply.signIncoming m k).cont = some k from rfl] at hc
+                  obtain ⟨hn, hs0⟩ := next_spec (fun _ => envelopeSign_cont) hc
+                  rw [hs0] at hs'; cases hs'; rw [hn] at h
+                  have hb := envelopeSign_signIncoming h
+                  simp_all [askedIncoming, State.tried]; done))
+  -- what is left: a log page short of the tip, signed again with the `tried` it carries
+  all_goals (have hc := congrArg Reply.cont h
+             rw [show (Reply.signIncoming m k).cont = some k from rfl] at hc
+             obtain ⟨hn, hs0⟩ := next_spec (fun _ => envelopeSign_cont) hc
+             rw [hs0] at hs'; cases hs'; rw [hn] at h
+             have hb := envelopeSign_signIncoming h
+             simp only [Option.getD] at hb
+             split at hb
+             · rename_i heq; simp [askedIncoming, State.tried, heq, hb]
+             · simp at hb)
+
+omit [Ord D] [DecidableEq D] in
+theorem or_expired_incoming (t : Nat) : (t ||| expiredBit) &&& incomingBit = t &&& incomingBit := by
+  apply Nat.eq_of_testBit_eq; intro i
+  simp only [Nat.testBit_and, Nat.testBit_or]
+  rcases i with _ | _ | i
+  · simp [incomingBit]
+  · simp [expiredBit, show Nat.testBit 1 1 = false from by decide]
+  · simp [incomingBit, Nat.testBit_succ]
+
+omit [Ord D] [DecidableEq D] in
+/-- `envelopeRefused` hands on a state with the incoming bit only on a `signIncoming` reply. -/
+theorem envelopeRefused_asked_signIncoming {X : Ctx D} {me : Self D} {argv : List ByteArray}
+    {cmd : Cmd D} {startB pagesB upToB triedB p k : ByteArray} {st' : State}
+    (hc : (envelopeRefused X me argv cmd startB pagesB upToB triedB p).cont = some k)
+    (hs : State.ofBytes k = some st') (hin : askedIncoming st' = true) :
+    ∃ m, envelopeRefused X me argv cmd startB pagesB upToB triedB p = .signIncoming m k := by
+  unfold envelopeRefused at hc ⊢
+  cases hte : expiredHeight? p <;> cases hs0 : Text.ofU64 startB <;> cases hu : Text.ofU64 upToB <;>
+    cases htr : Text.ofU64 triedB <;> simp only [hte, hs0, hu, htr] at hc ⊢
+  all_goals (try (simp [refused, Reply.cont] at hc; done))
+  · split at hc
+    · rename_i hp
+      simp only [hp, if_true]
+      split at hc
+      · rename_i hr
+        simp only [hr, if_true]
+        obtain ⟨hn, _⟩ := next_spec (fun _ => rfl) hc
+        exact ⟨_, hn⟩
+      · rw [unknownKeyEnd_cont] at hc; cases hc
+    · split at hc <;> simp [refused, notServed, Reply.cont] at hc
+  · rename_i t
+    split at hc
+    · simp [refused, Reply.cont] at hc
+    · obtain ⟨hn, hs1⟩ := next_spec (fun _ => envelopeSign_cont) hc
+      rw [hs1] at hs; cases hs
+      rw [hn]
+      have hb : (t ||| expiredBit) &&& incomingBit ≠ 0 := by
+        simpa [askedIncoming, State.tried, incoming_or (b := expiredBit) (ofU64_lt htr) (by decide)] using hin
+      rw [or_expired_incoming] at hb
+      exact ⟨_, envelopeSign_incoming hb⟩
+
+/-- **A state with the incoming bit is only ever handed on by a `signIncoming` reply**
+(PROTOCOL-56): with `step_signIncoming_asked`, `askedIncoming` of the state custody answers holds
+EXACTLY when the step asked custody for `signIncoming`. So `custodyEnd`'s writer arm takes every
+refusal of `signIncoming` and no refusal of any other custody step (a `sign`'s refusal keeps
+custody's name). -/
+theorem step_asked_signIncoming {X : Ctx D} {dc : Codec.Stream D} {B : Thin.Base (World D)}
+    {me : Self D} {f f' : Follow D} {p : Persist D} {kb result k : ByteArray} {r : Reply} {st' : State}
+    (h : step X dc B me f kb result = (f', p, r)) (hk : r.cont = some k)
+    (hs' : State.ofBytes k = some st') (hin : askedIncoming st' = true) :
+    ∃ m, r = .signIncoming m k := by
+  unfold step at h
+  simp only [stepResult] at h
+  cases hcr : custodyResult (D := D) result <;> simp only [hcr] at h
+  all_goals (repeat' (first | split at h | (revert h; split <;> intro h)))
+  all_goals (try simp only [Prod.mk.injEq] at h)
+  all_goals (obtain ⟨-, -, rfl⟩ := h)
+  all_goals (try (simp [refused, printed, behind, notServed, Reply.cont] at hk; done))
+  all_goals (try (first
+                  | (rw [refusedAt_cont] at hk; cases hk)
+                  | (rw [custodyEnd_cont] at hk; cases hk)
+                  | (rw [render_cont] at hk; cases hk)
+                  | (rw [describe_cont] at hk; cases hk)
+                  | (rw [rangeRender_cont] at hk; cases hk)
+                  | (rw [receiptLines_cont] at hk; cases hk)
+                  | (rw [settled_cont] at hk; cases hk)
+                  done))
+  all_goals (try (exact envelopeRefused_asked_signIncoming hk hs' hin))
+  all_goals (try (obtain ⟨hn, hs0⟩ := next_spec (fun _ => rfl) hk
+                  rw [hs0] at hs'; cases hs'
+                  first | exact ⟨_, hn⟩ | (simp [askedIncoming] at hin)
+                  done))
+  -- what is left: a log page short of the tip, signed again with the `tried` it carries
+  all_goals (obtain ⟨hn, hs0⟩ := next_spec (fun _ => envelopeSign_cont) hk
+             rw [hs0] at hs'; cases hs'; rw [hn]
+             revert hin
+             simp only [askedIncoming, State.tried]
+             split
+             · rename_i heq
+               intro hin
+               simp only [heq, Option.getD_some]
+               exact ⟨_, envelopeSign_incoming (by simpa using hin)⟩
+             · intro hin; simp at hin)
+
+theorem start_ne_signIncoming {X : Ctx D} {me : Self D} {f : Follow D} {argv : List ByteArray}
+    {m k : ByteArray} : start X me f argv ≠ .signIncoming m k := by
+  unfold start next; dsimp only
+  repeat' split
+  all_goals simp [refused]
+
+/-- **`start` never asks the incoming key** (PROTOCOL-56): every state a command's first reply
+hands on fails `askedIncoming`, and that reply is never `signIncoming`. With the two step theorems,
+`askedIncoming` of any state this machine builds holds exactly when the reply that carried it
+asked `signIncoming`. (The state custody answers is the one a previous reply carried: the client
+hands it back, and any other bytes are `badState`.) -/
+theorem start_not_incoming {X : Ctx D} {me : Self D} {f : Follow D} {argv : List ByteArray}
+    {k : ByteArray} {st' : State} (hk : (start X me f argv).cont = some k)
+    (hs : State.ofBytes k = some st') :
+    askedIncoming st' = false ∧ ∀ m, start X me f argv ≠ .signIncoming m k := by
+  refine ⟨?_, fun _ => start_ne_signIncoming⟩
+  unfold start at hk
+  dsimp only at hk
+  repeat' split at hk
+  all_goals (try (simp [refused, Reply.cont] at hk; done))
+  all_goals (obtain ⟨_, hs0⟩ := next_spec (fun _ => rfl) hk
+             rw [hs0] at hs; cases hs
+             simp [askedIncoming, State.tried, ofU64_u64 (n := 0) (by decide)])

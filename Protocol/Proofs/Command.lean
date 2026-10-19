@@ -164,13 +164,29 @@ theorem envelopeSign_ne_submit {t : Nat} {m k' call k : ByteArray} : envelopeSig
   unfold envelopeSign; split <;> simp
 
 omit [Ord D] [DecidableEq D] in
+theorem unknownKeyEnd_ne_submit {X : Ctx D} {cmd : Cmd D} {call k : ByteArray} :
+    unknownKeyEnd X cmd ≠ .submit call k := by
+  intro h; unfold unknownKeyEnd at h; split at h
+  · simp [refused] at h
+  · exact refusedAt_ne_submit h
+
+omit [Ord D] [DecidableEq D] in
+theorem custodyEnd_ne_submit {X : Ctx D} {cmd : Cmd D} {st : State} {r : Refusal D} {call k : ByteArray} :
+    custodyEnd X cmd st r ≠ .submit call k := by
+  intro h; unfold custodyEnd at h; split at h
+  · split at h
+    · exact unknownKeyEnd_ne_submit h
+    · simp [refused] at h
+  · simp [refused] at h
+
+omit [Ord D] [DecidableEq D] in
 /-- The PROTOCOL-46 arms answer no submit: a refused envelope, the receipt lines, a settlement. -/
 theorem envelopeRefused_ne_submit {X : Ctx D} {me : Self D} {argv : List ByteArray} {cmd : Cmd D}
     {a b c d p call k : ByteArray} : envelopeRefused X me argv cmd a b c d p ≠ .submit call k := by
   intro h
   unfold envelopeRefused next at h
   repeat' split at h
-  all_goals first | exact refusedAt_ne_submit h | (simp [refused] at h; done) | (simp [notServed] at h; done) | ((try dsimp only at h); exact envelopeSign_ne_submit h)
+  all_goals first | exact refusedAt_ne_submit h | (simp [refused] at h; done) | (simp [notServed] at h; done) | exact unknownKeyEnd_ne_submit h | ((try dsimp only at h); exact envelopeSign_ne_submit h)
 
 theorem receiptLines_ne_submit {X : Ctx D} {dc : Codec.Stream D} {me : Self D} {w : World D}
     {cb call k : ByteArray} : receiptLines X dc me w cb ≠ .submit call k := by
@@ -197,8 +213,7 @@ theorem envelopeRefused_once {X : Ctx D} {me : Self D} {argv : List ByteArray} {
     {a b c d p : ByteArray} {h upTo t : Nat} (hs : Text.ofU64 a = some h) (hu : Text.ofU64 c = some upTo)
     (ht : Text.ofU64 d = some t) (hb : t &&& incomingBit ≠ 0)
     (hk : p = ReadRefusal.unknownKey.payload) :
-    envelopeRefused X me argv cmd a b c d p =
-      if readOnly cmd then refused (D := D) (.host "unknownKey") else refusedAt X (.host "unknownKey") := by
+    envelopeRefused X me argv cmd a b c d p = unknownKeyEnd X cmd := by
   have hx : expiredHeight? p = none := hk ▸ expiredHeight_unknownKey
   unfold envelopeRefused
   rw [hx, hs, hu, ht]
@@ -217,7 +232,52 @@ theorem envelopeRefused_write {X : Ctx D} {me : Self D} {argv : List ByteArray} 
   have hx : expiredHeight? p = none := hk ▸ expiredHeight_unknownKey
   unfold envelopeRefused
   rw [hx, hs, hu, ht]
-  simp [hk, hw]
+  simp [hk, hw, unknownKeyEnd]
+
+/-- **The writer's word survives custody's refusal of the incoming key** (ROOT's rule (a),
+PROTOCOL-56): when the step `step` resumes asked custody for `signIncoming` and custody refused it,
+by ANY name (`notArmed`, `noRotation` under `nd --stdio`, or another), the command ends as the
+writer's `unknownKey` ends it (`unknownKeyEnd`), never by custody's name. -/
+theorem step_incoming_writer_word {X : Ctx D} {dc : Codec.Stream D} {B : Thin.Base (World D)} {me : Self D}
+    {f : Follow D} {kb result : ByteArray} {st : State} {cmd : Cmd D} {c : CustodyRefusal}
+    (hst : State.ofBytes kb = some st) (hp : parse X.digestOf st.argv = .ok cmd)
+    (hin : askedIncoming st = true) (hres : custodyResult (D := D) result = .error (.custody c)) :
+    (step X dc B me f kb result).2.2 = unknownKeyEnd X cmd := by
+  have h1 : st.phase = 1 := by
+    simp only [askedIncoming, Bool.and_eq_true, beq_iff_eq] at hin; exact hin.1
+  have hsr : ∀ b : Bool, stepResult (D := D) b st.phase result = .error (.custody c) := by
+    intro b; simp [stepResult, custodyPhase, h1, hres]
+  unfold step
+  simp only [hst, Option.map_some, Option.getD_some, hp, hsr, custodyEnd, hin, if_true]
+
+omit [Ord D] [DecidableEq D] in
+/-- The tooth: a custody refusal of any OTHER step ends the command by custody's own name. -/
+theorem custodyEnd_own_word {X : Ctx D} {cmd : Cmd D} {st : State} {c : CustodyRefusal}
+    (hin : askedIncoming st = false) : custodyEnd X cmd st (.custody c) = refused (D := D) (.custody c) := by
+  simp [custodyEnd, hin]
+
+/-- **Custody's own word ends every other custody step** (the complement of
+`step_incoming_writer_word`, over `step` itself): when the state `step` resumes did NOT ask
+`signIncoming` and its phase is one custody answers, a custody refusal by any name ends the command
+by that name. With `step_asked_signIncoming` (a state with `askedIncoming` travels only with
+`signIncoming`), no refused `sign`, `signNext` or `precommit` is turned into the writer's word. -/
+theorem step_custody_own_word {X : Ctx D} {dc : Codec.Stream D} {B : Thin.Base (World D)} {me : Self D}
+    {f : Follow D} {kb result : ByteArray} {st : State} {cmd : Cmd D} {c : CustodyRefusal}
+    (hst : State.ofBytes kb = some st) (hp : parse X.digestOf st.argv = .ok cmd)
+    (hin : askedIncoming st = false) (hph : custodyPhase false st.phase = true)
+    (hres : custodyResult (D := D) result = .error (.custody c)) :
+    (step X dc B me f kb result).2.2 = refused (D := D) (.custody c) := by
+  have hsr : ∀ b : Bool, stepResult (D := D) b st.phase result = .error (.custody c) := by
+    intro b
+    have hb : custodyPhase b st.phase = true := by
+      cases b
+      · exact hph
+      · simp only [custodyPhase, Bool.false_and, Bool.or_false, Bool.true_and] at hph ⊢
+        simp [hph]
+    simp [stepResult, hb, hres]
+  unfold step
+  simp only [hst, Option.map_some, Option.getD_some, hp, hsr, custodyEnd, hin, Bool.false_eq_true,
+    if_false]
 
 /-- Consent at the wire: the only call `step` hands the client to submit is a call over a `u`
 that `plan` produced on follow's own World (hence derived and admitted there, `plan_admits`). -/
@@ -232,6 +292,7 @@ theorem step_submit_planned {X : Ctx D} {dc : Codec.Stream D} {B : Thin.Base (Wo
   all_goals (try simp only [Prod.mk.injEq, reduceCtorEq, and_false] at h)
   all_goals (try (exfalso; obtain ⟨_, _, h⟩ := h; unfold render at h; repeat' split at h
                   all_goals simp [refused, printed] at h))
+  all_goals (try (exfalso; obtain ⟨_, _, h⟩ := h; exact custodyEnd_ne_submit h))
   all_goals (try (exfalso; obtain ⟨_, _, h⟩ := h; exact describe_ne_submit h))
   all_goals (try (exfalso; obtain ⟨_, _, h⟩ := h; exact rangeRender_ne_submit h))
   all_goals (try (exfalso; obtain ⟨_, _, h⟩ := h; exact refusedAt_ne_submit h))

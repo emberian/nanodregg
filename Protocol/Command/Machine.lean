@@ -756,8 +756,10 @@ the old key's envelope `unknownKey`, and the confirm that would settle custody c
 So a command of a verb that signs no call (`readOnly`) asks custody ONCE to sign its envelope with
 the ARMED rotation's incoming key (`signIncoming`), and every later envelope of that command too.
 `tried`'s bit 0 is the one `expired` re-sign, bit 1 the incoming key. A second `unknownKey` ends the
-command `refused unknownKey`; so does custody's `notArmed` (no rotation in flight: the writer's word
-stands). A write is never retried: its plan would be signed by the old key against an envelope the
+command by the writer's word (`unknownKeyEnd`); so does ANY custody refusal of the `signIncoming`
+step (`custodyEnd`, ROOT's rule (a), PROTOCOL-56): custody's refusal only says why the retry could not
+happen (`notArmed`: no rotation in flight; `noRotation`: `nd --stdio`'s custody, which holds none),
+never what the writer said. A write is never retried: its plan would be signed by the old key against an envelope the
 incoming key signed; it ends `refused unknownKey` with the hint to sync. -/
 
 /-- The verbs that sign no call: the only ones whose envelope may be signed by the incoming key. -/
@@ -767,6 +769,11 @@ def readOnly : Cmd D → Bool
 
 def incomingBit : Nat := 2
 def expiredBit : Nat := 1
+
+/-- How the writer's `unknownKey` ends a command once the incoming key cannot help: a verb that signs
+no call by the bare name, a write with the hint to sync. -/
+def unknownKeyEnd (X : Ctx D) (cmd : Cmd D) : Reply :=
+  if readOnly cmd then refused (D := D) (.host "unknownKey") else refusedAt X (.host "unknownKey")
 
 /-- The envelope's signing step: by the incoming key once `tried` has bit 1. -/
 def envelopeSign (tried : Nat) (m k : ByteArray) : Reply :=
@@ -783,8 +790,7 @@ def envelopeRefused (X : Ctx D) (me : Self D) (argv : List ByteArray) (cmd : Cmd
         if readOnly cmd && tried &&& incomingBit == 0 then
           next (D := D) ⟨argv, 1, [startB, pagesB, upToB, Text.u64 (tried ||| incomingBit)]⟩ fun k =>
             .signIncoming (envelopeMessage X me h upTo) k
-        else if readOnly cmd then refused (D := D) (.host "unknownKey")
-        else refusedAt X (.host "unknownKey")
+        else unknownKeyEnd X cmd
       else if p = pageIoName.toUTF8 then notServed
       else refused (D := D) (.host (hostName p))
   | some height, some h, some upTo, some tried =>
@@ -884,6 +890,22 @@ def start (X : Ctx D) (me : Self D) (f : Follow D) (argv : List ByteArray) : Rep
       next (D := D) ⟨argv, 1, [Text.u64 w.steps, Text.u64 0, Text.u64 upTo, Text.u64 0]⟩ fun k =>
         .sign (envelopeMessage X me w.steps upTo) k
 
+/-- Did the state ask custody for `signIncoming`? An envelope phase (1) whose `tried` has the
+incoming bit. It holds EXACTLY when the step that handed the state on asked `signIncoming`:
+`Proofs.Incoming.step_signIncoming_asked` (every `signIncoming` comes with it) and
+`step_asked_signIncoming` (it comes only with `signIncoming`). -/
+def askedIncoming (st : State) : Bool :=
+  st.phase == 1 && match st.tried with
+    | some t => t &&& incomingBit != 0
+    | none => false
+
+/-- A refused custody step ends the command (ROOT's rule (a), PROTOCOL-56): a refusal of the
+`signIncoming` step hands back the writer's own refusal (`unknownKeyEnd`), whatever custody's name
+was; every other custody refusal ends it by custody's name. -/
+def custodyEnd (X : Ctx D) (cmd : Cmd D) (st : State) : Refusal D → Reply
+  | .custody c => if askedIncoming st then unknownKeyEnd X cmd else refused (D := D) (.custody c)
+  | r => refused (D := D) r
+
 /-- One step: the continuation, the result of the step it asked for, and follow's state. It
 answers follow's state after the step, what to persist (a log page's Turns, re-derived; a base it
 adopted; `[]` for every other step), and the next reply. `B` is how an adopted base is read
@@ -902,9 +924,7 @@ def step (X : Ctx D) (dc : Stream D) (B : Thin.Base (World D)) (me : Self D) (f 
       -- a refusal ends the command by custody's name, an ok hands on its payload
       let isInit := match cmd with | .init _ => true | _ => false
       match stepResult (D := D) isInit st.phase result with
-      -- `notArmed` answers only `signIncoming`: no rotation in flight, the writer's word stands
-      | .error (.custody .notArmed) => same (refused (D := D) (.host "unknownKey"))
-      | .error r => same (refused (D := D) r)
+      | .error r => same (custodyEnd X cmd st r)
       | .ok result =>
       match cmd, st.phase, st.acc with
       -- init: learn the key, sign the possession, print the token

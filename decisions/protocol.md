@@ -1751,3 +1751,28 @@ So a refusing confirm RENDERS as `uncertain` (the refusal-renders-as-the-verdict
 **Critique.**
 - The `uncertain` that cost a trace is still an `uncertain` with no reason. The confirm's own refusal name (`badResult`) could ride the attempt's end as a hint line. That is nd's surface, though: the Rust attempt store also ends `Uncertain` with an empty payload (`client/src/run.rs`, `client/src/attempt.rs`). A rows-only hint would be a twin of a surface nd does not print. It needs CLIENT and PROTOCOL together and is filed as a task, not done here.
 - The budget is now the kernel's bound, not a frame. A row still sees pages end before the tip, because `recordTurnsMax` ends them.
+
+## PROTOCOL-56 · a custody refusal of `signIncoming` hands back the writer's `unknownKey`: one rule over the step (2026-10-18, PROTOCOL-18; ROOT ruled (a), CLIENT-8's nd-members finding ecb02bf)
+
+**The gap.** A resident's `nd --stdio` bound to ANOTHER member's follower read `refused noRotation`. The sequence:
+- the writer refused the envelope `unknownKey`;
+- follow asked custody once for the incoming key (`signIncoming`, PROTOCOL-46);
+- the stdio custody refuses every rotation step `noRotation`;
+- `step` mapped only `notArmed` to the writer's word, so `noRotation` became the verdict.
+The writer's fact was masked by custody's reason (law 7).
+
+**Decision.** ONE rule, replacing the `notArmed` special case:
+- `custodyEnd`: a custody refusal of a step that asked `signIncoming` (`askedIncoming`: envelope phase 1 with `tried`'s incoming bit) ends the command as the writer's `unknownKey` ends it, whatever custody's name was. Any other custody refusal ends by custody's name.
+- `unknownKeyEnd` is the one shape of that end. A verb that signs no call gets the bare `refused unknownKey`; a write gets the hint to sync. `envelopeRefused`'s spent arm (a second `unknownKey`) and `custodyEnd` both use it, so the two routes to the writer's word cannot drift.
+- Theorems:
+  - `step_incoming_writer_word`: over `step` itself, a custody refusal by ANY name, when `askedIncoming` holds, ends as `unknownKeyEnd`.
+  - `step_signIncoming_asked` and `step_asked_signIncoming` (Proofs/Incoming.lean): `askedIncoming` of the state custody answers holds EXACTLY when the step that handed it on asked `signIncoming`. `start_not_incoming`: `start` never asks it, and no state it hands on has the bit. Every refusal of `signIncoming` therefore takes the writer arm, and no other custody refusal does. The one assumption, stated in prose and not enforced: the state custody answers is one a previous reply of this machine carried. `State.ofBytes` is a frame decode, not an authentication, so a client that forges a well-formed phase-1 frame with the incoming bit turns its own refused `sign` into `unknownKeyEnd`; it changes only the text of that client's own command.
+  - `step_custody_own_word` (PROTOCOL-19, after the vacuity read found the complement only as an unfolded lemma, `custodyEnd_own_word`): over `step`, a custody refusal of a custody phase whose state did not ask `signIncoming` ends by custody's own name.
+  - `unknownKeyEnd_ne_submit` and `custodyEnd_ne_submit` keep the consent theorem whole.
+- Row `wrongFollower` (new). The newcomer's `read @shared` runs with the sponsor's Self, its own key, and the stdio custody (fault `wrongFollower`). It reads `refused unknownKey`. Plant `maskIncoming` (custody's name ends a refused `signIncoming`, as the old machine did for every name but `notArmed`; it cuts in in the harness, before `step`) is caught at line 6 with `refused noRotation`.
+
+**Critique.**
+- ROOT's ruling said "`refused unknownKey` with its hint". The only verbs that ask `signIncoming` sign no call (`readOnly`), and the writer's `unknownKey` already ends those bare once the incoming key is spent. The rule hands back exactly that, so it gets no hint. Its hint ("run nd sync: a rotation may have landed") is also wrong advice for a socket bound to the wrong follower.
+- ROOT accepted this deviation (2026-10-20, PROTOCOL-19's landing); HOSTING-12 agreed the `launcher/tests/members.rs` assertion change.
+- The plant `maskIncoming` cuts in in the harness, so it shows the row's line 6 tells the two outcomes apart; what guards `step` itself is the row's unplanted expectation and the two theorems above.
+- (b), the stdio custody answering `signIncoming` with `notArmed`, is truer at the source. But it is a client line at the ceiling, and it would leave any other custody refusal masking.

@@ -158,6 +158,10 @@ inductive Fault
   /-- every `log` and `read` page this command asks for is refused by the writer's `pageIo` reply
   (`Host.pageIoReply`: its IO failed building that page, and it serves on, HOST-48) -/
   | pageIo
+  /-- the actor's command runs on member `other`'s follower (its Self) with the actor's own custody
+  under `nd --stdio`, which refuses every rotation step `noRotation` (CLIENT-8's nd-members finding:
+  a resident's socket bound to another member's follower) -/
+  | wrongFollower (other : String)
   deriving Repr
 
 /-- One line of a row. -/
@@ -280,6 +284,10 @@ inductive Mutation
   /-- the writer pages with 16384 bytes, the guess at the largest event the rows log that the queue
   Bell's install outgrew (PROTOCOL-18): an event past the budget is never served -/
   | guessedBudget
+  /-- a custody refusal of the `signIncoming` step ends the command by custody's name: `nd --stdio`'s
+  `noRotation` masks the writer's `unknownKey`. The machine before ROOT's rule (a) (PROTOCOL-56) did
+  that for every name but `notArmed`; the plant cuts in in the harness, before `step` -/
+  | maskIncoming
   deriving DecidableEq, Repr
 
 /-- A row's plant: the mutation, and the line that must catch it with the outcome it then gets. -/
@@ -1368,8 +1376,26 @@ def bigEventRow : Row where
     okBind "sponsor" ["create", "--pkg", "@bellPkg", "(record (open true) (resident #{@newcomer}))"] "bell"])
   plant := .caught .guessedBudget 6 .uncertain
 
+/-- A resident whose `nd --stdio` socket is bound to ANOTHER member's follower (CLIENT-8's
+nd-members finding, ecb02bf): the envelope names the other member and is signed by the resident's
+key, so the writer refuses it `unknownKey`; follow asks custody once for the incoming key, and the
+stdio custody refuses that `noRotation`. The command ends by the WRITER's word, `refused unknownKey`
+(ROOT's rule (a), PROTOCOL-56): custody's refusal only says why the retry could not happen. The
+plant ends a refused `signIncoming` by custody's name, as the machine before the rule did for
+`noRotation`: line 6 is `refused noRotation`. -/
+def wrongFollowerRow : Row where
+  name := "wrongFollower"
+  replaces := []
+  ops := everyWrite
+  kinds := ["enroll", "install", "create", "grant"]
+  drive := .members (welcome ++ [
+    { actor := "newcomer", act := .cmd ["read", "@shared"], expect := .refused "unknownKey",
+      fault := .wrongFollower "sponsor" },
+    ok "newcomer" ["read", "@shared"]])
+  plant := .caught .maskIncoming 6 (.refused "noRotation")
+
 def rows : List Row :=
   [journey, reopen, laws, rotate, audit, paging, coldCatchUp, inflatedHeight, forgotten, refusedRow, refusedFinalRow, inviteRow, useRow, describeRow, stateRow, receiptRow, settleRow, carry, thin, thinStale, sealRow, basePin, pageIoRow, wrongWorld, wrongWorldRead, pay, well, bounty, grain, hermes, bar,
-   langJourney, rangeRow, rangeLimitRow, bellRow, bigEventRow]
+   langJourney, rangeRow, rangeLimitRow, bellRow, bigEventRow, wrongFollowerRow]
 
 end Nanodregg.Protocol
