@@ -1,6 +1,7 @@
 """gates/land.py — the landing queue: which green lander may compare-and-swap main, and when (GATES-19).
 
   land.py --queue DIR --ticket FILE --repo DIR --ref REF --new COMMIT --base COMMIT [--deadline S]
+  land.py --charge --ticket FILE --before N
 
 Every lander holds a ticket, DIR/<seq>.<pid> (gate-lib.sh new_ticket), flock'd by the lander's
 outer scripts/commit for as long as it lives: a lander that dies, however it dies, releases its
@@ -17,9 +18,16 @@ The order is VERDICT READINESS with an AGE BOUND (ROOT 10-19), not arrival:
   twice-displaced landers go oldest ticket first. The bound: a lander lands within three passes
   unless another reached two displacements before it.
 The CAS stays the proof: `update-ref REF NEW BASE` writes only when REF is still BASE.
-Exit 0 = landed; 75 = not landed, re-read main and re-base (displaced, or the deadline passed waiting
-for a twice-displaced lander: then the count does not rise); 2 = a tool failure. Nothing is landed
-except by the CAS.
+Exit 0 = landed; 75 = not landed, re-read main and re-base (displaced, a refused CAS counted as one,
+or the deadline passed waiting for a twice-displaced lander: then the count does not rise); 2 = a
+tool failure. Nothing is landed except by the CAS.
+
+--charge (GATES-20b, LANG-21's finding): the outer scripts/commit asks, after an exit 75, whether it
+is charged to the lander's retry budget (COMMIT_RETRIES). Only a displacement while NOT head is: a
+lander displaced AGE_BOUND times is head regardless, and a head displaced again lost a tie to an
+older head (blockers() lets nothing else land), so it waits for the tie winners and never fails for
+them. LANG-21's c1166ce gave up after five displacements, three of them as head. A deadline wait
+(the count unchanged) is not charged either. Exit 0 = charged, 1 = not charged.
 """
 import argparse
 import fcntl
@@ -78,7 +86,26 @@ def blockers(q: str, me: str) -> list[str]:
     return out
 
 
+def charge(ticket: str, before: int) -> int:
+    now = count(ticket)
+    if before >= AGE_BOUND:
+        print(f"queue: not charged: displaced while head ({before} displacements before; an older head landed first, a tie)")
+        return 1
+    if now == before:
+        print("queue: not charged: no displacement (waited for a head past the deadline)")
+        return 1
+    print(f"queue: charged: displaced while not head (now {now} times)")
+    return 0
+
+
 def main() -> int:
+    if "--charge" in sys.argv[1:]:
+        cp = argparse.ArgumentParser()
+        cp.add_argument("--charge", action="store_true")
+        cp.add_argument("--ticket", required=True)
+        cp.add_argument("--before", required=True)
+        c = cp.parse_args()
+        return charge(c.ticket, int(c.before) if c.before.strip().isdigit() else 0)
     ap = argparse.ArgumentParser()
     for f in ("--queue", "--ticket", "--repo", "--ref", "--new", "--base"):
         ap.add_argument(f, required=True)
@@ -105,7 +132,10 @@ def main() -> int:
             if not b:
                 r = subprocess.run(["git", "-C", a.repo, "update-ref", a.ref, a.new, a.base], capture_output=True, text=True)
                 if r.returncode != 0:
-                    print(f"queue: the compare-and-swap refused: {r.stderr.strip()}")
+                    n = count(a.ticket) + 1
+                    with open(a.ticket, "w", encoding="utf-8") as fh:
+                        fh.write(f"{n}\n")
+                    print(f"queue: the compare-and-swap refused (displaced, now {n} times): {r.stderr.strip()}")
                     return 75
                 print(f"queue: head (displaced {count(a.ticket)} times); landed by compare-and-swap")
                 return 0
