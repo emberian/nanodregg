@@ -85,6 +85,22 @@ theorem mapEx_mem {α β ε : Type} {f : α → Except ε β} :
               · obtain ⟨a', ha', hfa⟩ := mapEx_mem hr x hx
                 exact ⟨a', by simp [ha'], hfa⟩
 
+/-- `forEx` reads its check only on the list: checks that agree there run alike. -/
+theorem forEx_congr {α ε : Type} {f g : α → Except ε Unit} :
+    ∀ {l : List α}, (∀ a ∈ l, f a = g a) → forEx f l = forEx g l
+  | [], _ => rfl
+  | a :: rest, h => by
+      unfold forEx
+      rw [h a (by simp), forEx_congr (fun b hb => h b (by simp [hb]))]
+
+/-- `mapEx` reads its function only on the list. -/
+theorem mapEx_congr {α β ε : Type} {f g : α → Except ε β} :
+    ∀ {l : List α}, (∀ a ∈ l, f a = g a) → mapEx f l = mapEx g l
+  | [], _ => rfl
+  | a :: rest, h => by
+      unfold mapEx
+      rw [h a (by simp), mapEx_congr (fun b hb => h b (by simp [hb]))]
+
 theorem firstDup_go_none {α : Type} [Ord α] [Std.TransOrd α] [Std.LawfulEqOrd α] :
     ∀ {seen : Std.TreeSet α compare} {l : List α}, firstDup.go seen l = none →
       l.Nodup ∧ ∀ a ∈ l, seen.contains a = false

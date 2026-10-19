@@ -13,6 +13,12 @@ namespace Nanodregg.Kernel
 
 variable {D : Type} [Ord D] [DecidableEq D]
 
+/-- A rows key within the bounds admission keeps (`rowFits`' key half; here, below
+`Kernel.Proofs.Logic.Frame`, whose `RowsAgree.read` takes it). -/
+def RowSlotFits {D : Type} : RowSlot D → Prop
+  | .head _ rel => rel < 256
+  | .row key => key.rel < 256 ∧ key.k.size ≤ Bounds.keyBytesMax
+
 -- `rowPath` is `List.range Bounds.rowDepth` mapped: whnf of a statement about it would build the
 -- 1304-element list, so it is unfolded only where a proof asks (`under_rowPath`)
 attribute [local irreducible] rowPath

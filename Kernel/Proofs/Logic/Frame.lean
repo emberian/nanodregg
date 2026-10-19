@@ -13,8 +13,16 @@ only what the prune drops. (The height, the steps and the origin are `admit_heig
 reader applying the rule discharges nothing. `not_cellFoot_iff`: at a cell the footprint is
 exactly the two hypotheses the hand-stated frames took. The teeth: without `born`, or without
 `head`, the frame is false.
+
+The locality half (cv 01a14f65): what `check` READS. `CellRead t` and `RowRead E t` are the read
+sets, each containing its footprint (`cellFoot_read`, `rowFoot_read`) and larger by what a turn reads
+without writing (a `keep` pin, a range, the head an insert counts against). `Agree E w w' t` is
+agreement there, with the scalars `check` reads; `Kernel.Proofs.Local.check_local` is the rule. The
+cells' field takes no premise; the rows' (`RowsAgree`) is either the same trie or a slot-wise
+agreement on canonical tries, because a listing (`under`) walks the trie's shape.
 -/
 import Kernel.Proofs.Rows
+import Kernel.Proofs.Lawful
 
 namespace Nanodregg.Kernel
 
@@ -102,6 +110,73 @@ theorem admit_Frame {E : Env D} {w w' : World D} {t : Turn D} (h : World.admit E
   · unfold World.refusalAt
     rw [commit_refusals]
     exact pruneRefusals_get hc k
+
+/-! ## The read set: what `check` reads (the locality half, `Kernel.Proofs.Local.check_local`) -/
+
+/-- What `check` reads in the cells' trie: the cell of EVERY touch (a `keep` too: its pin is
+checked), every born id (its freshness), every spent nullifier. -/
+inductive CellRead (t : Turn D) : Slot D → Prop
+  | touched {x : Touch D} (hx : x ∈ t.touches) : CellRead t (.cell x.cell)
+  | born {c : D} (hc : c ∈ createdIds t) : CellRead t (.cell c)
+  | spent {n : D} (hn : n ∈ t.nullifiers) : CellRead t (.nullifier n)
+
+/-- What `check` reads in the rows' trie: every row touch's slot (a `keep` too), the head of every
+row a touch names, the head of every range read and every key under its prefix (at every width: the
+width read is the head's), and every key under a parent the turn retires (`checkRowsRemain` lists
+them before the row touches, `dropHeads` after). -/
+inductive RowRead (E : Env D) (t : Turn D) : RowSlot D → Prop
+  | slot {x : RowTouch D} (hx : x ∈ t.rows) : RowRead E t x.slot
+  | head {x : RowTouch D} {key : RowKey D} (hx : x ∈ t.rows) (hs : x.slot = .row key) :
+      RowRead E t (.head key.parent key.rel)
+  | rangeHead {q : RangeRead D} (hq : q ∈ t.ranges) : RowRead E t (.head q.parent q.rel)
+  | ranged {q : RangeRead D} {s : RowSlot D} (hq : q ∈ t.ranges) (width : Nat)
+      (hs : startsWith (rowsPrefix E q.parent q.rel width ++ q.pre) (rowKeyBytes E s) = true) : RowRead E t s
+  | retired {x : Touch D} {s : RowSlot D} (hx : x ∈ t.touches) (hr : x.act = .retire)
+      (hs : startsWith (E.bytes x.cell) (rowKeyBytes E s) = true) : RowRead E t s
+
+/-- The rows agree on what `check E · t` reads: they are the same trie, or both are canonical over
+a lawful `Env`, the first's held slots fitting (`RowSlotFits`, what every reached World holds:
+`admit_rowsCanon`, `World.RowsOk`'s first part), and read the same at every `RowRead` slot. The second needs its
+premises because a listing (`under`) walks the trie's shape: two tries holding the same entries
+under a prefix list them alike when both are canonical and their keys separate. -/
+inductive RowsAgree (E : Env D) (w w' : World D) (t : Turn D) : Prop
+  | same (h : w'.rows = w.rows)
+  | read {n : Nat} (hE : E.Lawful n) (hc : w.RowsCanon E) (hc' : w'.RowsCanon E)
+      (hf : ∀ s, rowAt E w.rows s ≠ none → RowSlotFits s)
+      (h : ∀ s, RowRead E t s → rowAt E w'.rows s = rowAt E w.rows s)
+
+/-- **`w'` agrees with `w` on what `check E · t` reads**: the cells on `CellRead`, with no premise;
+the height (the window), the steps and the allowance (the charge); the journal at the turn's
+transaction id and the refusals at its `.tx` key (`checkJournal`); the rows (`RowsAgree`). -/
+structure Agree (E : Env D) (w w' : World D) (t : Turn D) : Prop where
+  cells : ∀ s, CellRead t s → w'.trie.get (trieSpec E) s = w.trie.get (trieSpec E) s
+  height : w'.height = w.height
+  steps : w'.steps = w.steps
+  allowance : w'.allowance = w.allowance
+  journal : w'.journalAt E t.txId = w.journalAt E t.txId
+  refusal : w'.refusalAt E (.tx t.txId) = w.refusalAt E (.tx t.txId)
+  rows : RowsAgree E w w' t
+
+omit [Ord D] [DecidableEq D] in
+/-- The cells' read set holds the footprint: a turn reads every cell it writes. -/
+theorem cellFoot_read {t : Turn D} {s : Slot D} (h : CellFoot t s) : CellRead t s := by
+  cases h with
+  | touched hx _ => exact .touched hx
+  | born hc => exact .born hc
+  | spent hn => exact .spent hn
+
+omit [Ord D] [DecidableEq D] in
+/-- The rows' read set holds the footprint: a turn reads every rows slot it writes (a retired
+parent's heads are listed under its bytes). -/
+theorem rowFoot_read {E : Env D} {t : Turn D} {s : RowSlot D} (h : RowFoot t s) : RowRead E t s := by
+  cases h with
+  | slot hx _ => exact .slot hx
+  | head hx _ hs => exact .head hx hs
+  | @dropped x hx hr rel =>
+      refine .retired hx hr ?_
+      show decide ((E.bytes x.cell ++ natBytes rel ++ byte8 0).extract 0 (E.bytes x.cell).size = E.bytes x.cell) = true
+      rw [ByteArray.append_assoc, ByteArray.extract_append_eq_left rfl]
+      exact decide_eq_true rfl
 
 /-! ## Teeth: a footprint smaller by one constructor makes the rule false -/
 

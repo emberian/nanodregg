@@ -14,7 +14,7 @@ import Kernel.Proofs.Rows
 import Kernel.Proofs.RowsHead
 import Kernel.Proofs.RowsSep
 import Kernel.Proofs.Cells
-import Kernel.Proofs.Logic.Frame
+import Kernel.Proofs.Local
 
 namespace Nanodregg.Kernel
 
@@ -635,16 +635,6 @@ private theorem commitTrie_congr {E : Env D} {w' w'' : World D} {t : Turn D} {po
     (commitTrie E w' t posts).get (trieSpec E) (.cell c) = (commitTrie E w'' t posts).get (trieSpec E) (.cell c) := by
   rw [commitTrie_cell, commitTrie_cell]; exact insertAll_congr (insertAll_congr h)
 
-private theorem live_of_get {E : Env D} {w w' : World D} {c : D}
-    (h : w'.trie.get (trieSpec E) (.cell c) = w.trie.get (trieSpec E) (.cell c)) :
-    w'.live E c = w.live E c ∧ w'.taken E c = w.taken E c := by
-  unfold World.live World.taken World.entry; rw [h]; exact ⟨rfl, rfl⟩
-
-private theorem entry_of_get {E : Env D} {w w' : World D} {c : D}
-    (h : w'.trie.get (trieSpec E) (.cell c) = w.trie.get (trieSpec E) (.cell c)) :
-    w'.entry E c = w.entry E c := by
-  unfold World.entry; rw [h]
-
 /-! ## The footprint and the second admission -/
 
 /-- **Footprints disjoint outside the heads** (KERNEL-46 amendment 3): distinct transaction ids; a
@@ -682,23 +672,6 @@ private theorem foot_cell_disjoint {t₁ t₂ : Turn D} {c : D} (hfoot : RowsCom
       exact not_cellFoot_iff.mpr ⟨fun y hy hyc => absurd (by rw [← hyc]; exact List.mem_map_of_mem hy) (hb₁ _ hc).1,
         (hb₁ _ hc).2⟩
 
-omit [Ord D] in
-private theorem forEx_ok_of {α ε : Type} {f g : α → Except ε Unit} {l : List α}
-    (h : forEx f l = .ok ()) (hfg : ∀ a ∈ l, f a = .ok () → g a = .ok ()) : forEx g l = .ok () :=
-  forEx_ok.mpr fun a ha => hfg a ha (forEx_ok.mp h a ha)
-
-omit [Ord D] in
-private theorem mapEx_congr {α β ε : Type} {f g : α → Except ε β} :
-    ∀ {l : List α}, (∀ a ∈ l, f a = g a) → mapEx f l = mapEx g l
-  | [], _ => rfl
-  | a :: rest, h => by
-      unfold mapEx
-      rw [h a (by simp), mapEx_congr (fun b hb => h b (by simp [hb]))]
-
-private theorem touchCheck_congr {E : Env D} {w w' : World D} {x : Touch D}
-    (h : w'.entry E x.cell = w.entry E x.cell) : touchCheck E w' x = touchCheck E w x := by
-  unfold touchCheck; rw [h]
-
 /-- **The second admission**: after `t₁`, `t₂` passes every check with the touches' results it had
 from `w`, and its rows run from `t₁`'s, reading `view` of both lists. -/
 private theorem check_after {E : Env D} {w : World D} {t₁ t₂ : Turn D} {posts₁ posts₂ : List (Post D)}
@@ -712,36 +685,31 @@ private theorem check_after {E : Env D} {w : World D} {t₁ t₂ : Turn D} {post
       ∀ s, (rowsAfter E (commit E w t₁ posts₁) t₂).1.get (rowSpec E) s =
         view (headFloor E w.rows) t₂.rows s (view (headFloor E w.rows) t₁.rows s (w.rows.get (rowSpec E) s)) := by
   obtain ⟨hid, hkp, hnr₁, hnr₂, hb₁, hb₂, hnul, hi₁, hi₂, hd, -, hq₂⟩ := hfoot
-  -- every cell `t₂` touches or bears reads in `(commit E w t₁ posts₁)` as in `w`
-  have hframe : ∀ c, (c ∈ t₂.touches.map Touch.cell ∨ c ∈ createdIds t₂) →
-      (commit E w t₁ posts₁).trie.get (trieSpec E) (.cell c) = w.trie.get (trieSpec E) (.cell c) := by
-    intro c hc
-    refine (admit_Frame ha₁).cells (.cell c) (not_cellFoot_iff.mpr ⟨?_, ?_⟩)
-    · intro x hx hxc
-      rcases hc with hc | hc
-      · obtain ⟨y, hy, rfl⟩ := List.mem_map.mp hc
-        exact (hkp x hx y hy hxc).1
-      · exact absurd (List.mem_map_of_mem hx) (hxc ▸ hb₂ c hc)
-    · intro hc1
-      rcases hc with hc | hc
-      · exact (hb₁ c hc1).1 hc
-      · exact (hb₁ c hc1).2 hc
-  have hlive : ∀ c, (t₂.touches.any fun y => decide (y.cell = c)) = true → (commit E w t₁ posts₁).live E c = w.live E c := by
-    intro c hc
-    obtain ⟨y, hy, hyc⟩ := List.any_eq_true.mp hc
-    have hyc := of_decide_eq_true hyc
-    exact (live_of_get (hframe c (.inl (hyc ▸ List.mem_map_of_mem hy)))).1
+  -- every cell `t₂` reads, in `(commit E w t₁ posts₁)` as in `w`
+  have hcells : ∀ s, CellRead t₂ s →
+      (commit E w t₁ posts₁).trie.get (trieSpec E) s = w.trie.get (trieSpec E) s := by
+    intro s hs
+    cases hs with
+    | @touched y hy =>
+        exact (admit_Frame ha₁).cells _ (not_cellFoot_iff.mpr
+          ⟨fun x hx hxc => (hkp x hx y hy hxc).1, fun hc1 => (hb₁ _ hc1).1 (List.mem_map_of_mem hy)⟩)
+    | @born c hc =>
+        exact (admit_Frame ha₁).cells _ (not_cellFoot_iff.mpr
+          ⟨fun x hx hxc => absurd (List.mem_map_of_mem hx) (hxc ▸ hb₂ c hc), fun hc1 => (hb₁ c hc1).2 hc⟩)
+    | @spent n hn =>
+        show (commitTrie E w t₁ posts₁).get _ _ = _
+        rw [commitTrie_nul, if_neg fun h1 => hnul n h1 hn]
   -- the rows
   have hrun₁ := hk₁.rows
   have hrun₂ := hk₂.rows
-  obtain ⟨rr, hrr, hrr0, hview⟩ := rowsRun_after hnr₁ hnr₂ hi₁ hi₂ hd hfit hrun₁ hrun₂ rfl hlive
+  obtain ⟨rr, hrr, hrr0, hview⟩ := rowsRun_after hnr₁ hnr₂ hi₁ hi₂ hd hfit hrun₁ hrun₂ rfl (live_local hcells)
   have hafter : rowsAfter E (commit E w t₁ posts₁) t₂ = rr := by unfold rowsAfter; rw [hrr]
   refine ⟨?_, by rw [hafter]; exact hview⟩
   -- the touches
   obtain ⟨raw, hmap, hposts⟩ := hk₂.touches
   have hmap' : mapEx (touchCheck E (commit E w t₁ posts₁)) t₂.touches = .ok raw := by
     rw [← hmap]
-    exact mapEx_congr fun y hy => touchCheck_congr (entry_of_get (hframe y.cell (.inl (List.mem_map_of_mem hy))))
+    exact touches_local hcells
   -- the window
   have hwin' : checkWindow (commit E w t₁ posts₁) t₂ = .ok () := by
     have h := hk₂.window
@@ -783,14 +751,7 @@ private theorem check_after {E : Env D} {w : World D} {t₁ t₂ : Turn D} {post
         | count n => rfl
   -- the nullifiers
   have hnul' : checkNullifiers E (commit E w t₁ posts₁) t₂ = .ok () := by
-    apply forEx_ok_of hk₂.nullifiers
-    intro n hn h
-    have hn1 : n ∉ t₁.nullifiers := fun h1 => hnul n h1 hn
-    have e : (commit E w t₁ posts₁).isSpent E n = w.isSpent E n := by
-      unfold World.isSpent
-      show ((commitTrie E w t₁ posts₁).get _ _).isSome = _
-      rw [commitTrie_nul, if_neg hn1]
-    rw [e]; exact h
+    rw [checkNullifiers_local hcells]; exact hk₂.nullifiers
   -- no retirement: no row remains to check
   have hremain : checkRowsRemain E (commit E w t₁ posts₁) t₂ = .ok () := by
     apply forEx_ok.mpr
@@ -810,12 +771,7 @@ private theorem check_after {E : Env D} {w : World D} {t₁ t₂ : Turn D} {post
     omega
   -- the births
   have hcreates : checkCreates E (commit E w t₁ posts₁) t₂ = .ok () := by
-    have h := hk₂.creates
-    unfold checkCreates at h ⊢
-    simp only [except_bind_ok] at h ⊢
-    obtain ⟨⟨⟩, h1, ⟨⟩, h2, ⟨⟩, h3, h4⟩ := h
-    refine ⟨(), h1, (), h2, (), h3, forEx_ok_of h4 fun c hc hok => ?_⟩
-    rw [(live_of_get (hframe c (.inr hc))).2]; exact hok
+    rw [checkCreates_local hcells]; exact hk₂.creates
   have hst : checkSteps (commit E w t₁ posts₁) = .ok () := by
     unfold checkSteps; rw [req_ok]; exact decide_eq_true (by show w.steps + 1 + 1 < _; omega)
   suffices hw : checkWith E (commit E w t₁ posts₁) t₂ = .ok (posts₂, rr) by unfold check; rw [hw]; rfl

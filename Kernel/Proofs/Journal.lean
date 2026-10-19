@@ -33,6 +33,7 @@ import Kernel.Proofs.Fold
 import Kernel.Proofs.Receive
 import Kernel.Receive.Follow
 import Kernel.Sim.Shadow
+import Kernel.Proofs.Local
 
 namespace Nanodregg.Kernel
 
@@ -388,19 +389,6 @@ theorem absent_final {E : Env D} {k : D} :
         obtain ⟨u, hu, huk, hlt⟩ := absent_final hc₁ h₂ ha₁ hj
         exact ⟨u, by simp [Step.turns, hu], huk, by rw [admit_height h₁] at hlt; omega⟩
 
-/-- `check` reads the journal only at the turn's transaction id. -/
-theorem check_journal_congr {E : Env D} {w : World D} {t : Turn D} {j : Journal D}
-    (hj : j.get (journalSpec E) t.txId = w.journalAt E t.txId) :
-    check E { w with journal := j } t = check E w t := by
-  have h : checkJournal E { w with journal := j } t = checkJournal E w t := by
-    unfold checkJournal
-    rw [show ({ w with journal := j } : World D).journalAt E t.txId = j.get (journalSpec E) t.txId
-      from rfl, hj]
-    rfl
-  unfold check checkWith
-  rw [h]
-  rfl
-
 /-- **A journal filtered by `kept H` changes no check** of a turn whose window ends by its
 transaction id's entry height plus `windowMax`, at any `H ≤ w.height`: the window is checked first,
 and inside it the entry is still kept. -/
@@ -422,7 +410,7 @@ theorem check_journal_filter {E : Env D} {w : World D} {t : Turn D} {H : Nat} {J
           have hkept : kept H e = true := by
             simp only [kept, decide_eq_true_eq]; rw [windowMax_eq] at *; omega
           simp [Option.filter, hkept]
-    exact (check_journal_congr hg).symm
+    exact (check_local (w := w) (w' := { w with journal := J }) (t := t) ⟨fun _ _ => rfl, rfl, rfl, rfl, hg, rfl, .same rfl⟩).symm
   · unfold check checkWith
     cases hb : checkBounds t with
     | error _ => simp [bind, Except.bind, Except.map]

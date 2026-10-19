@@ -17,11 +17,6 @@ namespace Nanodregg.Kernel
 
 variable {D : Type} [Ord D] [DecidableEq D]
 
-/-- A rows key within the bounds admission keeps (`rowFits`' key half). -/
-def RowSlotFits {D : Type} : RowSlot D → Prop
-  | .head _ rel => rel < 256
-  | .row key => key.rel < 256 ∧ key.k.size ≤ Bounds.keyBytesMax
-
 omit [Ord D] [DecidableEq D] in
 theorem rowSlotFits_of_rowFits {s : RowSlot D} {l : RowLeaf} (h : rowFits s l = true) : RowSlotFits s := by
   cases s with
