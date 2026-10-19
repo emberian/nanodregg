@@ -6,6 +6,7 @@
 ; sent back, and retired only once answered: the guard `rung` holds all of it for every method, a
 ; layer's included, from the row it replaces.
 (package
+  (doc "A ring is answered once, by the resident, with its text sent back; a ringer can backdate by at most the kernel's window (1024 heights); ties at one height go by ringer digest.")
   (state (rec (open bool) (resident digest)))
   (rel pending (key (notBefore nat) (ringer digest)) (val (rec (text bytes))) (limit 64) (retract) (guard queued))
   (rel rings (key (notBefore nat) (ringer digest)) (val (rec (answer (option bytes)) (text bytes))) (limit 1024)

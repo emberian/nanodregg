@@ -42,6 +42,9 @@ structure Package where
   laws : List Label
   /-- its relations, labels ascending; relation `i` is the `i`-th (LANG-49) -/
   rels : List (Label × RelDecl) := []
+  /-- what the package says of itself, one line (LANG-60): `Bounds.docOk` bytes, printed as `(doc "…")`
+  and on `read OBJ ?`'s `doc` line; never run, never judged -/
+  doc : ByteArray := .empty
   deriving Inhabited
 
 /-- Which act is judged (KERNEL's `Occasion`): a birth (the seed is `old = new`), a write, a law
@@ -556,32 +559,41 @@ def relWire (r : Label × RelDecl) : Bool :=
   labelOk r.1 && r.2.key.all (fun f => labelOk f.1 && tyWire f.2) && tyWire r.2.val &&
     decide (r.2.limit < 2 ^ 64) && decide (r.2.cap < 2 ^ 64) && r.2.sum.all labelOk && r.2.guard.all labelOk
 
-/-- `node 0 [imports state iface body methods laws rels]`; imports are `node 0 id` leaves under a
+/-- `node 0 [imports state iface body methods laws rels doc]`; imports are `node 0 id` leaves under a
 `node 0`, methods and laws `node 1 ℓ` leaves under a `node 1`, relations `relTree`s under a
-`node 2`. -/
+`node 2`, the doc a `node 0` leaf whose payload is its bytes (LANG-60). -/
 def packageTree (p : Package) : Tree :=
   .node 0 .empty
     [.node 0 .empty (p.imports.map fun d => .node 0 d []), tyTree p.state, tyTree p.iface,
      termTree p.body, .node 1 .empty (p.methods.map labelLeaf), .node 1 .empty (p.laws.map labelLeaf),
-     .node 2 .empty (p.rels.map relTree)]
+     .node 2 .empty (p.rels.map relTree), .node 0 p.doc []]
 
 def packageOf : Tree → Option Package
-  | .node 0 e [.node 0 ei is, s, i, b, .node 1 em ms, .node 1 el ls, .node 2 er rs] =>
-    if e = .empty ∧ ei = .empty ∧ em = .empty ∧ el = .empty ∧ er = .empty then
+  | .node 0 e [.node 0 ei is, s, i, b, .node 1 em ms, .node 1 el ls, .node 2 er rs, .node 0 doc []] =>
+    if e = .empty ∧ ei = .empty ∧ em = .empty ∧ el = .empty ∧ er = .empty ∧ Bounds.docOk doc = true then
       match importsOf is, tyOf s, tyOf i, termOf b, labelsOf ms, labelsOf ls, relsOf rs with
       | some imports, some state, some iface, some body, some methods, some laws, some rels =>
-        some { imports, state, iface, body, methods, laws, rels }
+        some { imports, state, iface, body, methods, laws, rels, doc }
       | _, _, _, _, _, _, _ => none
     else none
   | _ => none
 
 /-- The package has a tree that reads back to it. -/
 def packageWire (p : Package) : Bool :=
-  p.imports.all (fun d => decide (d.size ≤ importBytesMax)) && tyWire p.state && tyWire p.iface &&
-    termWire p.body && p.methods.all labelOk && p.laws.all labelOk && p.rels.all relWire
+  Bounds.docOk p.doc && p.imports.all (fun d => decide (d.size ≤ importBytesMax)) && tyWire p.state &&
+    tyWire p.iface && termWire p.body && p.methods.all labelOk && p.laws.all labelOk && p.rels.all relWire
 
-/-- The one codec of a package: the tree stream at the language's bounds. -/
-def packageStream : Stream (Tree.Fitting nodeMax depthMax) := Stream.tree nodeMax depthMax (by decide)
+/-- The package tree stream at the language's bounds. -/
+def treeStream : Stream (Tree.Fitting nodeMax depthMax) := Stream.tree nodeMax depthMax (by decide)
+
+/-- The version byte (LANG-60): exactly `Bounds.packageWireVersion`; any other byte is refused
+`lang/package-version` by name, so bytes written at another version are never read as a package. -/
+def packageVersion : Stream Unit :=
+  Stream.refine "lang/package-version" Stream.u8
+    (fun v => if v = Bounds.packageWireVersion then some () else none) (fun _ => Bounds.packageWireVersion)
+
+/-- The one stream of a package: its version byte, then its tree. -/
+def packageStream : Stream (Unit × Tree.Fitting nodeMax depthMax) := Stream.product packageVersion treeStream
 
 /-- A package's tree as the tree stream's value: `packageTree p` when it fits the language's bounds.
 The fallback (`.node 1 .empty []`, which `packageOf` refuses) is never written: `encodePackage` writes
@@ -589,11 +601,13 @@ only a package that is `packageWire` and fits, and `packageCodec_lawfulOn` is st
 def packageFit (p : Package) : Tree.Fitting nodeMax depthMax :=
   if h : (packageTree p).fits nodeMax depthMax then ⟨packageTree p, h⟩ else ⟨.node 1 .empty [], by decide⟩
 
-/-- The package codec: the tree stream refined by `packageOf`, refused `lang/package/2` by name (a refine
-site, so `gates/codec-vectors.tsv` pins what package bytes mean: a new term, type or primitive tag
-turns a refused boundary row into a read one, and the label must move; cv 01a14e58-1586). -/
+/-- The package codec: the version byte and the tree stream, refined by `packageOf`, refused
+`lang/package/3` by name (a refine site, so `gates/codec-vectors.tsv` pins what package bytes mean: a
+new term, type or primitive tag turns a refused boundary row into a read one, and the version must
+move, and with it this label, `lang/package/N` at version N: `Lang.Proofs.Wire.packageCodec_label`
+fails the build otherwise; cv 01a14e58-1586, LANG-60). -/
 def packageCodec : Stream Package :=
-  Stream.refine "lang/package/2" packageStream (fun t => packageOf t.val) packageFit
+  Stream.refine "lang/package/3" packageStream (fun t => packageOf t.2.val) fun p => ((), packageFit p)
 
 /-- The bytes of a package; `none` when it has no tree in bounds (a label, row, index or literal
 past its bound, or nested deeper than `depthMax`). -/
@@ -603,16 +617,17 @@ def encodePackage (p : Package) : Option ByteArray :=
     else none
   else none
 
-/-- Exactly one package tree, which reads as a package. `packageCodec`'s reading, with the tree
+/-- The version byte (any other refused `lang/package-version`), then exactly one package tree, which reads as
+a package. `packageCodec`'s reading, with the tree
 stream's whole-input check (trailing bytes) made before `packageOf`, as it always was: the accepted
 packages are `packageCodec.decode`'s exactly (`decodePackage_eq_codec`). -/
 def decodePackage (b : ByteArray) : Except Refusal Package :=
   match packageStream.decode b with
   | .error e => .error e
   | .ok t =>
-    match packageOf t.val with
+    match packageOf t.2.val with
     | some p => .ok p
-    | none => .error (.rejected 0 "lang/package/2")
+    | none => .error (.rejected 0 "lang/package/3")
 
 end Wire
 end Nanodregg.Lang

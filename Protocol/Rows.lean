@@ -334,7 +334,7 @@ def verdictTy : String := Lang.Print.tyText Lang.verdictTy
 
 /-- A law package over a data object, with one law `l` whose body is `verdict`. -/
 def lawPackage (l verdict : String) : String :=
-  s!"(package (imports) (state (rec)) (iface (rec ({l} (-> (rec) (-> (rec) (-> {reqTy} {verdictTy}))))))
+  s!"(package (imports) (doc) (state (rec)) (iface (rec ({l} (-> (rec) (-> (rec) (-> {reqTy} {verdictTy}))))))
     (methods) (laws {l}) (rels)
     (body (record ({l} (fn (old (rec)) (new (rec)) (r {reqTy}) {verdict})))))"
 
@@ -352,7 +352,7 @@ law `bounded` (total at most 10^6), so every invoke runs a method AND a law. -/
 def counter : String :=
   let S := "(rec (total nat))"
   let res := Lang.Print.tyText (Lang.resultTy (.record [("total", .nat)])) (by decide +kernel)
-  s!"(package (imports) (state {S})
+  s!"(package (imports) (doc) (state {S})
     (iface (rec (add (-> (rec) (-> {S} (-> nat (-> {reqTy} {res})))))
                 (bounded (-> {S} (-> {S} (-> {reqTy} {verdictTy}))))))
     (methods add) (laws bounded) (rels)

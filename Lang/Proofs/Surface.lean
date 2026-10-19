@@ -33,17 +33,17 @@ theorem read_print_surface {p : Package} {s : String} (h : Print.package p = som
     obtain ⟨hn, hw⟩ := fitsB_iff.mp hf
     simp only [pure, Option.some.injEq] at h; subst h
     simp only [sectionsSx, bind, Option.bind_eq_some_iff, pure, Option.some.injEq] at hxs
-    obtain ⟨xS, hS, xI, hI, xm, hm, xl, hlw, xR, hR, xB, hB, rfl⟩ := hxs
-    have hok : OkL (atom "package" :: [list (atom "imports" :: p.imports.map fun i => .str 0 (hex i)),
+    obtain ⟨xD, hD, xS, hS, xI, hI, xm, hm, xl, hlw, xR, hR, xB, hB, rfl⟩ := hxs
+    have hok : OkL (atom "package" :: [list (atom "imports" :: p.imports.map fun i => .str 0 (hex i)), xD,
         list [atom "state", xS], list [atom "iface", xI], list (atom "methods" :: xm),
         list (atom "laws" :: xl), list (atom "rels" :: xR), list [atom "body", xB]]) :=
-      .cons (kw_ok _) (.cons (.list (.cons (kw_ok _) (imports_ok _)))
+      .cons (kw_ok _) (.cons (.list (.cons (kw_ok _) (imports_ok _))) (.cons (docSx_ok hD)
         (.cons (.list (.cons (kw_ok _) (.cons (tySx_ok _ hS) .nil)))
         (.cons (.list (.cons (kw_ok _) (.cons (tySx_ok _ hI) .nil)))
         (.cons (.list (.cons (kw_ok _) (labels_ok _ hm)))
         (.cons (.list (.cons (kw_ok _) (labels_ok _ hlw)))
         (.cons (.list (.cons (kw_ok _) (rels_ok _ hR)))
-        (.cons (.list (.cons (kw_ok _) (.cons (termSx_ok _ 0 hB) .nil))) .nil)))))))
+        (.cons (.list (.cons (kw_ok _) (.cons (termSx_ok _ 0 hB) .nil))) .nil))))))))
     obtain ⟨ys, hy, hsame⟩ := parse_layout (sep := ['\n', ' ', ' ']) ⟨by decide, by decide⟩ hok hn hw
     obtain ⟨y0, ys', rfl, h0, hl⟩ := sameL_cons hsame
     obtain ⟨y1, ys'', rfl, h1, _⟩ := sameL_cons hl

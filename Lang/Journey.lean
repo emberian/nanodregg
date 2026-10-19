@@ -20,6 +20,8 @@ the owner and the owner never changes). Rows:
   reads back to the same bytes; one level deeper the reader refuses it `tooDeep`; a label with a
   space has no bytes.
 * L1 founder A installs `Owned` (a ROM cell, id `romIdOf`) — admitted.
+* LV (LANG-60) the package wire's version: `Owned`'s LANG-59 bytes (a fixture, no version byte) and
+  its current bytes at the previous version are refused `lang/package-version` at install and at decode.
 * L2 A creates an object owned by A, seed `{owner = A, total = 0}`, judged by both laws — admitted.
 * L3 A invokes `set 50` — admitted; the object's `total` slot decodes to 50.
 * L4 A invokes `set 101` — refused `lawDenied` by `bounded`, nothing written.
@@ -145,9 +147,54 @@ def rq : String := Print.tyText reqTy (by decide +kernel)
 def ownedRes : String := Print.tyText (resultTy S) (by decide +kernel)
 def noCalls : String := Print.noCallsText
 
+/-- A LANG-59-era package (LANG-60's fixture): `Owned`'s bytes exactly as LANG-59's `lang/package/2`
+wrote them (no version byte; 1,788 bytes, emitted at main 359e9e8). Under LANG-59 bytes of the
+LANG-58 wire read as a DIFFERENT package; under the versioned wire these are refused by name. -/
+def owned59Hex : String :=
+  "00000700000004000206056f776e6572010700000605746f74616c010000000400030607626f756e6465640103000204"
+    ++ "000206056f776e6572010700000605746f74616c0100000003000204000206056f776e6572010700000605746f74616c"
+    ++ "0100000003000204000606056167656e740107000006096e6f744265666f72650100000006086f63636173696f6e0105"
+    ++ "0005060561646f70740102000006056269727468010400000606696e766f6b6501000000060572656c61770102000006"
+    ++ "0577726974650104000006097072696e636970616c01070000060473656c6601070000060a76616c6964556e74696c01"
+    ++ "00000005000206026f6b010400000607726566757365640102000006096f776e65724f6e6c790103000204000206056f"
+    ++ "776e6572010700000605746f74616c0100000003000204000206056f776e6572010700000605746f74616c0100000003"
+    ++ "000204000606056167656e740107000006096e6f744265666f72650100000006086f63636173696f6e01050005060561"
+    ++ "646f70740102000006056269727468010400000606696e766f6b6501000000060572656c617701020000060577726974"
+    ++ "650104000006097072696e636970616c01070000060473656c6601070000060a76616c6964556e74696c010000000500"
+    ++ "0206026f6b010400000607726566757365640102000006037365740103000204000003000204000206056f776e657201"
+    ++ "0700000605746f74616c0100000003000200000003000204000606056167656e740107000006096e6f744265666f7265"
+    ++ "0100000006086f63636173696f6e01050005060561646f70740102000006056269727468010400000606696e766f6b65"
+    ++ "01000000060572656c617701020000060577726974650104000006097072696e636970616c01070000060473656c6601"
+    ++ "070000060a76616c6964556e74696c01000000040003060563616c6c7301040000060565646974730104000006057374"
+    ++ "6174650104000206056f776e6572010700000605746f74616c010000000800030f07626f756e64656401010002040002"
+    ++ "06056f776e6572010700000605746f74616c0100000001000204000206056f776e6572010700000605746f74616c0100"
+    ++ "000001000204000606056167656e740107000006096e6f744265666f72650100000006086f63636173696f6e01050005"
+    ++ "060561646f70740102000006056269727468010400000606696e766f6b6501000000060572656c617701020000060577"
+    ++ "726974650104000006097072696e636970616c01070000060473656c6601070000060a76616c6964556e74696c010000"
+    ++ "000d0003070107020905746f74616c010004010000000004080000000000000064000b026f6b0205000206026f6b0104"
+    ++ "0000060772656675736564010200000800000b07726566757365640205000206026f6b01040000060772656675736564"
+    ++ "0102000006086f76657220313030000f096f776e65724f6e6c790101000204000206056f776e6572010700000605746f"
+    ++ "74616c0100000001000204000206056f776e6572010700000605746f74616c0100000001000204000606056167656e74"
+    ++ "0107000006096e6f744265666f72650100000006086f63636173696f6e01050005060561646f70740102000006056269"
+    ++ "727468010400000606696e766f6b6501000000060572656c617701020000060577726974650104000006097072696e63"
+    ++ "6970616c01070000060473656c6601070000060a76616c6964556e74696c010000000d000307010a0209056167656e74"
+    ++ "010004000000000009056f776e657201000401000000000d000307010a0209056f776e6572010004020000000009056f"
+    ++ "776e657201000401000000000b026f6b0205000206026f6b01040000060772656675736564010200000800000b077265"
+    ++ "66757365640205000206026f6b0104000006077265667573656401020000060d6f776e6572206368616e676564000b07"
+    ++ "726566757365640205000206026f6b0104000006077265667573656401020000060d6e6f7420746865206f776e657200"
+    ++ "0f037365740101000204000001000204000206056f776e6572010700000605746f74616c010000000100020000000100"
+    ++ "0204000606056167656e740107000006096e6f744265666f72650100000006086f63636173696f6e0105000506056164"
+    ++ "6f70740102000006056269727468010400000606696e766f6b6501000000060572656c61770102000006057772697465"
+    ++ "0104000006097072696e636970616c01070000060473656c6601070000060a76616c6964556e74696c01000000080003"
+    ++ "0f0563616c6c73010800000f056564697473010800000f057374617465010800020f056f776e65720109056f776e6572"
+    ++ "01000402000000000f05746f74616c01000401000000000100010103736574000100020107626f756e6465640001096f"
+    ++ "776e65724f6e6c7900020000"
+
+def owned59 : ByteArray := (Read.unhex .empty owned59Hex.toList).getD .empty
+
 /-- `Owned`, as a resident writes it (Lang.Read): must read to exactly the package above. -/
 def ownedText : String := s!"
-(package (imports)
+(package (imports) (doc)
   (state (rec (owner digest) (total nat)))
   (iface (rec (set (-> (rec) (-> (rec (owner digest) (total nat))
                     (-> nat (-> {rq} {ownedRes})))))
@@ -545,7 +592,7 @@ def tallyOptEditText : String := tyS (optTy (editTy tallyRels))
 
 /-- CappedTally as a resident writes it. -/
 def cappedTallyText : String := s!"
-(package (imports)
+(package (imports) (doc)
   (state {tallyStText})
   (iface (rec (decider (-> {tallyStText} (-> {tallyStText} (-> {rq} {verdictText}))))
               (mine (-> {tallyStText} (-> {rq} (-> {tallyGuardInText} {verdictText}))))
@@ -1753,7 +1800,7 @@ def gateArg : Ty := .record [("n", .nat), ("note", .bytes)]
 def gateRes : String := tyS (resultTy gateS)
 
 def gateText : String := s!"
-(package (imports)
+(package (imports) (doc)
   (state {tyS gateS})
   (iface (rec (put (-> (rec) (-> {tyS gateS} (-> {tyS gateArg} (-> {rq} {gateRes})))))
               (small (-> {tyS gateS} (-> {tyS gateS} (-> {rq} {verdictText}))))))
@@ -1887,7 +1934,7 @@ def journey (bell : String) (mode : Mode) : Run := Id.run do
   let nestTy (n : Nat) : String := String.join (List.replicate n "(rec (f ") ++ "(rec)" ++ String.join (List.replicate n "))")
   let nestT (n : Nat) : String := String.join (List.replicate n "(record (f ") ++ "(record)" ++ String.join (List.replicate n "))")
   let deepText (n : Nat) : String :=
-    s!"(package\n  (imports)\n  (state (rec))\n  (iface {nestTy n})\n  (methods)\n  (laws)\n  (rels)\n  (body {nestT n}))\n"
+    s!"(package\n  (imports)\n  (doc)\n  (state (rec))\n  (iface {nestTy n})\n  (methods)\n  (laws)\n  (rels)\n  (body {nestT n}))\n"
   let deepOk := match Read.readPackage (deepText 511) with
     | .ok p => (p.checkWith []).toBool && (match Wire.encodePackage p, Print.package p with
       | some b, some t => (match Read.readPackage t with
@@ -1933,6 +1980,21 @@ def journey (bell : String) (mode : Mode) : Run := Id.run do
   let c6 := Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id]) (.install illBytes)
   let (r6, v6, _) := go prog r c6
   r := note r6 s!"L6 install ill-typed: {v6}" (v6.startsWith "refused program")
+  -- LV (LANG-60) the package wire's version: Owned's LANG-59 bytes (no version byte) and Owned's
+  -- current bytes at the previous version are each refused `lang/package-version` at install and at decode,
+  -- where the old bytes used to be read; the current bytes begin with the current version
+  let versionRefused (v : String) : Bool := v.startsWith "refused program" && (v.splitOn "lang/package-version").length > 1
+  let (rv1, vv1, _) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id]) (.install owned59))
+  r := note rv1 s!"LV1 install Owned's LANG-59 bytes ({owned59.size} bytes): {vv1}" (owned59.size == 1788 && versionRefused vv1)
+  let prev := ownedBytes.set! 0 (Bounds.packageWireVersion - 1)
+  let (rv2, vv2, _) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id]) (.install prev))
+  r := note rv2 s!"LV2 install Owned's bytes at version {Bounds.packageWireVersion - 1}: {vv2}" (versionRefused vv2)
+  let byName := fun (b : ByteArray) => match Wire.decodePackage b with
+    | .error (.rejected 0 "lang/package-version") => true
+    | _ => false
+  r := note r s!"LV3 decode refuses both lang/package-version; Owned's bytes begin with version {Bounds.packageWireVersion} and decode"
+    (byName owned59 && byName prev && ownedBytes[0]! == Bounds.packageWireVersion &&
+      (Wire.decodePackage ownedBytes).toBool)
   r := installRows mode r a pkg
   -- L2 create
   let some ownerBytes := Wire.encodeData .digest (.digest (Sim.dc.bytes a.id)) | return note r "L2 no owner bytes" false
@@ -2087,13 +2149,31 @@ def runAll (args : List String) : IO UInt32 := do
     | .ok want => Surface.shippedRow "LB0" bell bellCore want ("(limit 64)", "(limit 65)")
     | .error e => (s!"LB0 read {bellSourcePath}: {e.text bell}", false)
   IO.println s!"{if ok0 then "ok  " else "FAIL"} {l0}"
+  -- LB0d (LANG-60) the Bell states its clock and tie rule in its own doc: one line, printed by the one
+  -- printer, read back by the one reader as the same bytes; a doc past `docMax` is refused `badDoc`
+  let (ld, okd) := match Surface.readPackage bell with
+    | .ok p =>
+      let t := Print.bytesText p.doc
+      let back := match Read.parse t with
+        | .ok y => (match Read.doc 0 [y] with | .ok d => d == p.doc | .error _ => false)
+        | .error _ => false
+      let says := (t.splitOn "1024").length > 1 && (t.splitOn "ringer digest").length > 1
+      let oneLine := !t.contains '\n'
+      let long := bell.replace "(doc \"" ("(doc \"" ++ String.ofList (List.replicate Bounds.docMax 'x'))
+      let refused := match Surface.readPackage long with
+        | .error (.read (.badDoc _)) => true
+        | _ => false
+      (s!"LB0d the Bell's doc ({p.doc.size} bytes) prints as one line and reads back: {back && oneLine}; it states the window and the tie: {says}; one past docMax refused badDoc: {refused}",
+        !p.doc.isEmpty && back && oneLine && says && refused && long != bell)
+    | .error e => (s!"LB0d read {bellSourcePath}: {e.text bell}", false)
+  IO.println s!"{if okd then "ok  " else "FAIL"} {ld}"
   let runs := [Mode.honest, .skipJudge, .eraseOccasion, .erasePayload, .dropCalls, .rawInstall, .bytesIds,
     .skipLits, .totalDigest, .unlawfulCodec, .dropRangeRow, .foreignRow].map (journey bell)
   let runs := match control, runs with
     | true, r :: rest => note r "harness-control: GATES-15's known-red control, an expectation nothing meets (this run must read RED)" false :: rest
     | _, rs => rs
   for r in runs do for l in r.log do IO.println l
-  let bad := (runs.map (·.bad)).foldl (· + ·) (if ok0 then 0 else 1)
+  let bad := (runs.map (·.bad)).foldl (· + ·) ((if ok0 then 0 else 1) + (if okd then 0 else 1))
   IO.println s!"lang-journey: {if bad = 0 then "GREEN" else s!"RED ({bad})"}"
   return if bad = 0 then 0 else 1
 

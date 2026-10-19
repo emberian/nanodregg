@@ -8,6 +8,8 @@ the text says exactly what `invoke` will check:
     object HEX
     owner HEX
     package HEX                    (or `data`: an object with no package)
+    doc "TEXT"                     what the package says of itself (LANG-60; `Lang.Print.bytesText` of
+                                   its doc, one line, which `Lang.Read` reads back); no line when empty
     state TYPE
     method I LABEL ARGTYPE         one per method, I being the index `invoke OBJ I ARGS` names
     call I J TYPE                  method I's declared call slot J (LANG-23)
@@ -50,11 +52,16 @@ def methodLine (p : Lang.Package) (i : Nat) : Option (List String) :=
 def relLine (r : Lang.Label × Lang.RelDecl) : Option String :=
   ((Lang.Print.relSx r).bind Lang.Print.fits).map fun t => s!"rel {t}"
 
-/-- A package's description lines: its state, every method in index order, its laws, its relations. -/
+/-- The package's doc as a line (LANG-60): LANG's printer's text of it; none for the empty doc. -/
+def docLines (p : Lang.Package) : List String :=
+  if p.doc.isEmpty then [] else [s!"doc {Lang.Print.bytesText p.doc}"]
+
+/-- A package's description lines: its doc, its state, every method in index order, its laws, its
+relations. -/
 def packageLines (p : Lang.Package) : Option (List String) := do
   let st ← Lang.Print.ty p.state
   let ms ← (List.range p.methods.length).mapM (methodLine (D := D) p)
   let rs ← p.rels.mapM relLine
-  pure ((s!"state {st}" :: ms.flatten) ++ p.laws.map (fun ℓ => s!"law {ℓ}") ++ rs)
+  pure (docLines p ++ (s!"state {st}" :: ms.flatten) ++ p.laws.map (fun ℓ => s!"law {ℓ}") ++ rs)
 
 end Nanodregg.Protocol.Command

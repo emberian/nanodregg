@@ -209,9 +209,15 @@ def relSx (r : Label × RelDecl) : Option SExp := do
     list [atom "retract", atom (if d.retract then "true" else "false")],
     list (atom "guard" :: (← optLabelSx d.guard))])
 
-/-- The seven sections of `(package …)`, in the order `Read.package` requires. -/
+/-- A package's doc section (LANG-60): `(doc)` for the empty doc, `(doc "text")` otherwise; no text for
+a doc that is not `Bounds.docOk`. -/
+def docSx (w : ByteArray) : Option SExp :=
+  if Bounds.docOk w then some (list (atom "doc" :: if w.isEmpty then [] else [bytesSx w])) else none
+
+/-- The eight sections of `(package …)`, in the order `Read.package` requires. -/
 def sectionsSx (p : Package) : Option (List SExp) := do
   pure [list (atom "imports" :: p.imports.map fun i => .str 0 (hex i)),
+    ← docSx p.doc,
     list [atom "state", ← tySx p.state],
     list [atom "iface", ← tySx p.iface],
     list (atom "methods" :: (← p.methods.mapM label)),

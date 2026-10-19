@@ -617,10 +617,13 @@ def rowLeafHashedVecs : G (List ByteArray) := do
 
 One row per term tag (0–17; tag 15, a record's field, rides in the record row), per type tag (0–7; tag
 6, a row's field, rides in the record type), per primitive code (0–11), and per package section
-(imports, a relation with every option and one with none, methods and laws). Then the boundary: the
-first unused term tag (18), type tag (8) and primitive code (12), each refused `lang/package/2` by name.
-A Lang change that gives one of them a meaning flips its row from refused to read under an unchanged
-tag: the gate goes red, and the label moves. -/
+(imports, a relation with every option and one with none, methods and laws, a doc). Then the boundary:
+the first unused term tag (18), type tag (8) and primitive code (12), each refused `lang/package/3` by
+name. A Lang change that gives one of them a meaning flips its row from refused to read under an
+unchanged tag: the gate goes red, and `Bounds.packageWireVersion` moves (LANG-60). Then the doc's
+bound (a doc of `docMax` bytes read, one byte past it refused `lang/package/3`, a doc holding `"`
+refused, a doc holding a line feed and one that is not UTF-8 each refused), and the version: the current tree at the previous version byte, and a LANG-59-era
+package's bytes as they were written (no version byte), each refused `lang/package-version`. -/
 
 open Lang in
 /-- The empty package around a body and a state type. -/
@@ -665,14 +668,22 @@ def sectionRows : List Package :=
   [{ pkgOf (.record []) with imports := [⟨#[0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08]⟩] },
    { pkgOf (.record []) with rels := [("r", relAll)] },
    { pkgOf (.record []) with rels := [("r", relNone)] },
-   { pkgOf (.record []) with methods := ["m"], laws := ["l"] }]
+   { pkgOf (.record []) with methods := ["m"], laws := ["l"] },
+   { pkgOf (.record []) with doc := "one line about the package".toUTF8 }]
 
 open Lang Lang.Wire in
 /-- A package tree with `body` and `state` as given trees (the boundary rows: a node no reader knows). -/
-def rawPackage (body state : Tree) : ByteArray :=
+def rawPackage (body state : Tree) (doc : ByteArray := .empty) (version := Lang.Bounds.packageWireVersion) :
+    ByteArray :=
   let t : Tree := .node 0 .empty [.node 0 .empty [], state, tyTree (.record []), body, .node 1 .empty [],
-    .node 1 .empty [], .node 2 .empty []]
-  if h : t.fits nodeMax depthMax then packageStream.bytes ⟨t, h⟩ else ByteArray.empty
+    .node 1 .empty [], .node 2 .empty [], .node 0 doc []]
+  if h : t.fits nodeMax depthMax then ByteArray.mk #[version] ++ treeStream.bytes ⟨t, h⟩ else ByteArray.empty
+
+/-- A LANG-59-era package as it was written (`lang/package/2`, no version byte): `pkgOf (.var 0)`, the
+first row of that site's vectors. -/
+def lang59Package : ByteArray :=
+  ⟨#[0x00, 0x00, 0x07, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x02, 0x00, 0x00]⟩
 
 open Lang Lang.Wire in
 def packageVecs : List ByteArray :=
@@ -681,7 +692,14 @@ def packageVecs : List ByteArray :=
       (fun p => (encodePackage p).getD ByteArray.empty) ++
     [rawPackage (.node 18 .empty []) (tyTree (.record [])),
      rawPackage (termTree (.record [])) (.node 8 .empty []),
-     rawPackage (.node 7 (Stream.u8.bytes 12) [termTree (.nat 1), termTree (.nat 2)]) (tyTree (.record []))]
+     rawPackage (.node 7 (Stream.u8.bytes 12) [termTree (.nat 1), termTree (.nat 2)]) (tyTree (.record [])),
+     rawPackage (termTree (.record [])) (tyTree (.record [])) ⟨Array.replicate Lang.Bounds.docMax 0x61⟩,
+     rawPackage (termTree (.record [])) (tyTree (.record [])) ⟨Array.replicate (Lang.Bounds.docMax + 1) 0x61⟩,
+     rawPackage (termTree (.record [])) (tyTree (.record [])) "a \"quoted\" doc".toUTF8,
+     rawPackage (termTree (.record [])) (tyTree (.record [])) (version := Lang.Bounds.packageWireVersion - 1),
+     rawPackage (termTree (.record [])) (tyTree (.record [])) ⟨#[0x61, 0x0a, 0x62]⟩,
+     rawPackage (termTree (.record [])) (tyTree (.record [])) ⟨#[0x61, 0xff]⟩,
+     lang59Package]
 
 def sites : List Site :=
   [ site "i64" Stream.i64 (each 2 fun _ => (·.toInt64) <$> u64) text,
@@ -752,8 +770,11 @@ def sites : List Site :=
     site "host/base/index-count" (Host.Base.codec (Codec.Kernel.world Sim.env Sim.dc))
       (each 2 fun _ => do return ⟨← Vectors.world, ← nat64, ← digest, ← nat64, ← digest⟩) printBase,
     site "host/carried-head" (Host.Carry.head Sim.dc) (each 2 fun _ => do return ⟨← dig, ← nat64, ← dig⟩) text,
-    ⟨"lang/package/2", Tag.of "lang/package/2" Lang.Wire.packageCodec, pure packageVecs,
+    ⟨"lang/package/3", Tag.of "lang/package/3" Lang.Wire.packageCodec, pure packageVecs,
       print Lang.Wire.packageCodec text⟩,
+    ⟨"lang/package-version", Tag.of "lang/package-version" Lang.Wire.packageVersion,
+      pure [ByteArray.mk #[Lang.Bounds.packageWireVersion], ByteArray.mk #[Lang.Bounds.packageWireVersion - 1]],
+      print Lang.Wire.packageVersion fun () => "()"⟩,
     ⟨"lang/key", Tag.of "lang/key" (Lang.Wire.dataStream keyVecTy), pure keyVecs,
       print (Lang.Wire.dataStream keyVecTy) fun v => (Lang.Print.data (Lang.Wire.toData keyVecTy v)).getD "?"⟩,
     ⟨"lang/data: no value", Tag.of "lang/data: no value" Lang.Wire.noData, pure [ByteArray.empty],

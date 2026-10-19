@@ -8,6 +8,7 @@ method the text names, at the type the text prints. The printer's round trip (`L
 makes ARG the text `Lang.Read` reads back as that type.
 -/
 import Protocol.Command.Describe
+import Lang.Proofs.PrintLine
 
 namespace Nanodregg.Protocol.Command
 
@@ -68,8 +69,8 @@ theorem packageLines_methods {p : Lang.Package} {ls : List String}
         obtain ⟨ms, hms, hmem⟩ := mem_of_mapM hm i (List.mem_range.mpr hi)
         exact ⟨ms, hms, fun l hl => by
           rw [← h]
-          exact List.mem_append_left _ (List.mem_append_left _
-            (List.mem_cons_of_mem _ (List.mem_flatten.mpr ⟨ms, hmem, hl⟩)))⟩
+          exact List.mem_append_left _ (List.mem_append_left _ (List.mem_append_right _
+            (List.mem_cons_of_mem _ (List.mem_flatten.mpr ⟨ms, hmem, hl⟩))))⟩
 
 omit [Ord D] [DecidableEq D] in
 /-- **Every relation of the package has its line** (PROTOCOL-51): the description holds
@@ -92,5 +93,43 @@ theorem packageLines_rels {p : Lang.Package} {ls : List String}
           Option.some.injEq] at h
         obtain ⟨t, ht, hmem⟩ := mem_of_mapM hrs r hr
         exact ⟨t, ht, by rw [← h]; exact List.mem_append_right _ hmem⟩
+
+omit [Ord D] [DecidableEq D] in
+/-- **A package's doc has its line, and the line reads back as the doc** (LANG-60): the description's
+first line is `doc TEXT` with TEXT LANG's printer's text of the doc, one line (`doc_one_line`), which the one
+parser and `Lang.Read.doc` read as exactly the doc's bytes. So the Bell states its own clock and
+tie rule in text a member reads from `read OBJ ?`, and that text is the package's. -/
+theorem packageLines_doc {p : Lang.Package} {ls : List String}
+    (h : packageLines (D := D) p = some ls) (hd : Lang.Bounds.docOk p.doc = true)
+    (he : p.doc.isEmpty = false) :
+    ls.head? = some s!"doc {Lang.Print.bytesText p.doc}" ∧
+      (∀ c ∈ (Lang.Print.bytesText p.doc).toList, c ≠ '\n' ∧ c ≠ '\r') ∧
+      ∃ y, Lang.Read.parse (Lang.Print.bytesText p.doc) = .ok y ∧ Lang.Read.doc 0 [y] = .ok p.doc := by
+  refine ⟨?_, Lang.Print.doc_one_line hd, Lang.Print.doc_text_reads hd he⟩
+  unfold packageLines at h
+  cases hs : Lang.Print.ty p.state with
+  | none => simp [hs] at h
+  | some st =>
+    cases hm : (List.range p.methods.length).mapM (methodLine (D := D) p) with
+    | none => simp [hs, hm] at h
+    | some mss =>
+      cases hr : p.rels.mapM relLine with
+      | none => simp [hs, hm, hr] at h
+      | some rs =>
+        simp only [hs, hm, hr, Option.bind_eq_bind, Option.bind_some, Option.pure_def,
+          Option.some.injEq] at h
+        rw [← h]
+        simp [docLines, he]
+
+omit [Ord D] [DecidableEq D] in
+/-- The twin: a package with the empty doc describes exactly as before LANG-60 (state, methods, laws,
+relations; no doc line). -/
+theorem packageLines_no_doc {p : Lang.Package} (he : p.doc.isEmpty = true) :
+    packageLines (D := D) p = (do
+      let st ← Lang.Print.ty p.state
+      let ms ← (List.range p.methods.length).mapM (methodLine (D := D) p)
+      let rs ← p.rels.mapM relLine
+      pure ((s!"state {st}" :: ms.flatten) ++ p.laws.map (fun ℓ => s!"law {ℓ}") ++ rs)) := by
+  simp [packageLines, docLines, he]
 
 end Nanodregg.Protocol.Command

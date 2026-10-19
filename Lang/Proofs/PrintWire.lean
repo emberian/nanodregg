@@ -319,13 +319,24 @@ theorem checkFields_checkRels {p : Package} (h : p.checkFields = .ok ()) :
     · rename_i hr; exact ⟨_, hr⟩
   · cases h
 
-theorem package_fitsB {is : List ByteArray} {ms ls : List Label} {xs xi xb : Read.SExp}
+/-- A doc the wire admits has a text, two levels deep, at most two wide. -/
+theorem docSx_prints {w : ByteArray} (h : Bounds.docOk w = true) :
+    ∃ x, docSx w = some x ∧ need x ≤ 2 ∧ width x ≤ 2 := by
+  by_cases he : w.isEmpty = true
+  · refine ⟨list [atom "doc"], by simp [docSx, h, he], ?_⟩
+    simp [need, needs, width, widths, list, atom]
+  · refine ⟨list [atom "doc", bytesSx w], by simp [docSx, h, he], ?_⟩
+    rcases bytesSx_cases w with ⟨t, e, -⟩ | e <;>
+      simp [e, need, needs, width, widths, list, atom]
+
+theorem package_fitsB {is : List ByteArray} {ms ls : List Label} {xs xi xb xd : Read.SExp}
+    (hdn : need xd ≤ 2) (hdw : width xd ≤ 2)
     (hi : is.length ≤ importsMax) (hm : ms.length ≤ methodsMax) (hl : ls.length ≤ lawsMax)
     (hs : need xs ≤ Wire.depthMax) (hsw : width xs ≤ listMax) (hf : need xi ≤ Wire.depthMax) (hfw : width xi ≤ listMax)
     (hb : need xb ≤ Wire.depthMax) (hbw : width xb ≤ listMax)
     {xR : List Read.SExp} (hr : needs xR ≤ Wire.depthMax) (hrw : widths xR ≤ listMax) (hrl : xR.length ≤ relsMax) :
     fitsB (list (atom "package" ::
-      [list (atom "imports" :: is.map fun i => .str 0 (hex i)), list [atom "state", xs],
+      [list (atom "imports" :: is.map fun i => .str 0 (hex i)), xd, list [atom "state", xs],
        list [atom "iface", xi], list (atom "methods" :: ms.map atom),
        list (atom "laws" :: ls.map atom), list (atom "rels" :: xR), list [atom "body", xb]])) = true := by
   have him := needs_map (fun i : ByteArray => Read.SExp.str 0 (hex i)) (fun _ => rfl) is
@@ -348,7 +359,8 @@ theorem package_prints {ifaces : List Ty} {p : Package} (hw : Wire.packageWire p
   obtain ⟨hshape, T, hT⟩ := checkWith_parts hc
   obtain ⟨hni, hnm, hnl⟩ := checkShape_bounds hshape
   simp only [Wire.packageWire, Bool.and_eq_true] at hw
-  obtain ⟨⟨⟨⟨⟨⟨-, hws⟩, hwi⟩, hwb⟩, hwm⟩, hwl⟩, hwr⟩ := hw
+  obtain ⟨⟨⟨⟨⟨⟨⟨hwd, -⟩, hws⟩, hwi⟩, hwb⟩, hwm⟩, hwl⟩, hwr⟩ := hw
+  obtain ⟨xd, hxd, hnd, hwxd⟩ := docSx_prints hwd
   obtain ⟨D, hD, hcs⟩ := fits_node hf
   simp only [Wire.depthMax] at hD
   have hD' : D = 1023 := by omega
@@ -368,9 +380,9 @@ theorem package_prints {ifaces : List Ty} {p : Package} (hw : Wire.packageWire p
   obtain ⟨D2, hD2, hc2⟩ := fits_node (hcs (.node 2 .empty (p.rels.map Wire.relTree)) (by simp))
   obtain ⟨xR, hxR, hnR, hwR, hlR⟩ := rels_prints p.rels (fun r hr =>
     ⟨List.all_eq_true.mp hwr r hr, hc2 _ (List.mem_map.mpr ⟨r, hr, rfl⟩), hkl r hr⟩)
-  have hfit := package_fitsB (is := p.imports) (ms := p.methods) (ls := p.laws) hni hnm hnl hns hwxs hni' hwxi hnb hwxb
+  have hfit := package_fitsB (is := p.imports) (ms := p.methods) (ls := p.laws) hnd hwxd hni hnm hnl hns hwxs hni' hwxi hnb hwxb
     (xR := xR) (by simp only [Wire.depthMax] at hnR ⊢; omega) hwR (by omega)
-  simp [package, sectionsSx, hxs, hxi, hxb, labels_mapM_atoms _ hwm, labels_mapM_atoms _ hwl, hxR, hfit]
+  simp [package, sectionsSx, hxd, hxs, hxi, hxb, labels_mapM_atoms _ hwm, labels_mapM_atoms _ hwl, hxR, hfit]
 
 /-- Bytes the decoder accepts, of a package the install check accepts, have a text. -/
 theorem installed_prints {ifaces : List Ty} {b : ByteArray} {p : Package} (hd : Wire.decodePackage b = .ok p)
@@ -466,7 +478,7 @@ private def deepT : Nat → Term
   | n + 1 => .record [("f", deepT n)]
 
 /-- A package at the wire's depth bound: its body's and its interface's trees are 1023 deep. -/
-private def deepPkg : Package := ⟨[], .record [], deepTy 511, deepT 511, [], [], []⟩
+private def deepPkg : Package := ⟨[], .record [], deepTy 511, deepT 511, [], [], [], .empty⟩
 
 theorem deep_wire : Wire.packageWire deepPkg = true := by decide +kernel
 
@@ -492,12 +504,12 @@ theorem deep_needs_depthMax :
 
 /-- A label with a space is not one atom, so the wire refuses it as the printer does. -/
 theorem spaced_label_no_bytes :
-    (Wire.encodePackage ⟨[], .record [], .record [("a b", .nat)], .record [("a b", .nat 0)], [], [], []⟩).isNone = true := by
+    (Wire.encodePackage ⟨[], .record [], .record [("a b", .nat)], .record [("a b", .nat 0)], [], [], [], .empty⟩).isNone = true := by
   decide +kernel
 
 private def labelTree (ℓ : Label) : Tree :=
   .node 0 .empty [.node 0 .empty [], Wire.tyTree (.record []), .node 4 .empty [.node 6 ℓ.toUTF8 [.node 0 .empty []]],
-    Wire.termTree (.record []), .node 1 .empty [], .node 1 .empty [], .node 2 .empty []]
+    Wire.termTree (.record []), .node 1 .empty [], .node 1 .empty [], .node 2 .empty [], .node 0 .empty []]
 
 /-- The decoder's side of the narrowing: a package tree whose interface row holds the label `a b`
 reads as no package, and the same tree with `ab` reads. -/

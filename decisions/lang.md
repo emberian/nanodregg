@@ -2501,3 +2501,59 @@ guard; a guard written at the old type, `badRel` at install; the guards' own ref
 (Hosting/Resident, launcher/tests/resident_bell.rs) cuts over in the same commit (HOSTING-11), and
 bench-worstcut's rows tail (PERF-9) and PROTOCOL's bell row (an answer to a ring nobody rang is now
 `lawDenied` by `rung`, was `missingRow`) with it. Stores re-genesis.
+
+## LANG-60 The package wire has a version; a package says one line of itself (2026-10-20; ROOT ruled both parts into one lang!; LANG-19 found the reinterpretation, LANG-20 built; cv 01a15078-f528; CODEC-14 reviewed the codec hunks; PROTOCOL-19 the describe line)
+**Why.** Under LANG-59 an old (LANG-58) package's bytes DECODED as a different package (big-endian
+literals): a reinterpretation, which CLAUDE.md's rule forbids ("make the old shape refuse to load").
+Only a re-genesis made it moot. Now the wire itself refuses.
+
+**What (1): the version.** A package's bytes are `u8 packageWireVersion ‖ tree` (`Lang.Wire.packageStream
+= product packageVersion treeStream`). `Lang.Bounds.packageWireVersion = 3`, bumped by every `lang!` that
+changes what package bytes mean. Any other first byte is refused `lang/package-version` by name before
+a tree is read (`packageStream_get_wrong_version`, `decodePackage_wrong_version`, `_not_ok`,
+`packageCodec_wrong_version`), at install too (`checkInstall` decodes first: `refused program "decode …
+rejected 0 \"lang/package-version\""`). Every package written before LANG-60 was a node-0 tree (first byte 0)
+and no version may be 0 (`packageWireVersion_ne_zero`), so all of them refuse (`treeStream_bytes_node0`,
+`unversioned_package_refused`). The twin: `encodePackage_version` (what is written begins with the
+version). The package refine is `lang/package/N` at version N, a literal the refine census sees, tied
+to the constant by `packageCodec_label` (bump one without the other and the build is red), so the vectors'
+tag moves with the version (CODEC-14: a refine's shape carries its name, never its accept function).
+The labels `lang/package` (the unversioned pre-LANG-59 wire) and `lang/package/2` (LANG-59) are retired.
+
+**What (2): the doc.** `Package.doc : ByteArray` (default empty), `Bounds.docOk`: at most `docMax = 256`
+bytes of UTF-8 `docChar`s (printable, no control character, no `"`: the one printer's `plainChar`,
+`docChar_eq`), so a doc always prints as `"text"` on one line. Wire: an eighth child of the package tree,
+`node 0 doc []`; `packageOf` refuses a doc that is not `docOk` (`lang/package/N`). Text: a core package
+always has the section after imports, `(doc)` for the empty doc and `(doc "text")` otherwise; the reader
+refuses `(doc "")` and any doc that is not `docOk` as `badDoc` (one spelling per doc;
+`readPackage_package` holds with no new premise: printing succeeded means the doc is `docOk`). Surface:
+`(doc "text")`, once (`duplicate`); a layer's doc is its own. Describe (PROTOCOL's file, agreed):
+`read OBJ ?` prints `doc "TEXT"` first, before `state`, and no line for the empty doc
+(`packageLines_doc`: the line is there, one line, and `Read.parse` + `Read.doc` read it back as the doc;
+`docLines_empty`). The doc is never run and never judged: required steps do not move.
+
+**The Bell** now states what LANG-18 could not: `(doc "A ring is answered once, by the resident, with its
+text sent back; a ringer can backdate by at most the kernel's window (1024 heights); ties at one height go
+by ringer digest.")` (175 bytes; journey LB0d: prints as one line, reads back, names the window and the
+tie; one past docMax refused `badDoc`).
+
+**Flag day.** Every package re-ids (the version byte and the doc child): Escrow, Lifecycle, Allowance,
+CappedTally, CoAuthor, the Bell, THE BAR's counter, every journey and rows package. Re-emitted: the
+shipped cores (`ledger-sim --write-text`, `hosting-sim --write-text`; the Bell's core by its surface),
+`gates/codec-vectors.tsv` from an empty file (only `lang/package/2` → `lang/package/3` and the new
+`lang/package-version` moved). Refused: a package at any other version (`lang/package-version`), a doc
+past its bound or not `docOk` (`lang/package/N` on the wire, `badDoc` in text). A re-genesis is required
+for any World holding package cells.
+
+**Measured.** The Bell: 3,062 chars of surface (was 2,876), core 27,865 chars (was 27,679), 21,960 package
+bytes (was 21,780: +1 version, +175 doc, +4 framing). An empty doc costs 3 bytes and the version 1:
+`Owned` 1,788 → 1,792. Required steps unchanged everywhere (the doc is never run).
+
+**Read.** Second-agent vacuity read with the disjunct check: nothing vacuous, nothing weakened; WEAKs
+fixed: `packageLines_doc` now pins the doc line as the FIRST line (`ls.head?`); the empty-doc twin is
+`packageLines_no_doc` (the pre-LANG-60 list, exactly); `decodePackage_refused_label` ties the decoder's
+refusal name to the version as `packageCodec_label` ties the codec's; reader teeth (`(doc)` is empty;
+`(doc "")`, `#hex`, two strings refused `badDoc`) and decoder teeth (a doc with a line feed or not UTF-8
+is no package; a plain one reads). CODEC-14 agreed the codec hunks (and asked for the version-derived
+label, the general unversioned theorem, the control/non-UTF-8 teeth: all in); PROTOCOL-19 agreed the
+Describe/Rows hunks; HOSTING-12 confirmed the resident's shape parse ignores a `doc` line.

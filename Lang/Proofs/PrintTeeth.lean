@@ -55,12 +55,12 @@ theorem lenLe_typed : infer [] [] (.prim .lenLe (.bytes ⟨#[1]⟩) (.nat 3)) = 
 theorem lenLe_nat_refused : infer [] [] (.prim .lenLe (.nat 1) (.nat 3)) = none := by decide +kernel
 
 /-- The empty package (WireTeeth's `tiny`): `readPackage_package`'s premises are met. -/
-theorem empty_package_prints : (package (Package.mk [] (.record []) (.record []) (.record []) [] [] [])).isSome = true := by
+theorem empty_package_prints : (package (Package.mk [] (.record []) (.record []) (.record []) [] [] [] .empty)).isSome = true := by
   decide
 
 theorem empty_package_reads :
-    Read.readPackage ((package (Package.mk [] (.record []) (.record []) (.record []) [] [] [])).get empty_package_prints) =
-      .ok (Package.mk [] (.record []) (.record []) (.record []) [] [] []) :=
+    Read.readPackage ((package (Package.mk [] (.record []) (.record []) (.record []) [] [] [] .empty)).get empty_package_prints) =
+      .ok (Package.mk [] (.record []) (.record []) (.record []) [] [] [] .empty) :=
   readPackage_package rfl rfl rfl (.record rfl .nil) (Option.some_get _).symm
 
 /-- A relation whose value type is not canonical (a record with its fields descending): the
@@ -69,7 +69,7 @@ package prints, and reads back as a DIFFERENT package (the reader sorts the fiel
 private def badRel : Package :=
   Package.mk [] (.record []) (.record []) (.record []) [] []
     [("r", { key := [("k", .nat)], val := .record [("b", .nat), ("a", .nat)], limit := 1, sum := none,
-             cap := 0, retract := false, guard := none })]
+             cap := 0, retract := false, guard := none })] .empty
 
 theorem badRel_prints : (package badRel).isSome = true := by decide
 

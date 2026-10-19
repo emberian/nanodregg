@@ -116,4 +116,41 @@ theorem newline_bytes_print_hex : data (.bytes "a\nb".toUTF8) = some "#610a62" :
 /-- And its twin: plain text prints as itself. -/
 theorem plain_bytes_print_text : data (.bytes "a b".toUTF8) = some "\"a b\"" := by decide +kernel
 
+/-! ## A package's doc line (LANG-60: `read OBJ ?` prints `doc TEXT`) -/
+
+/-- **A doc prints as one line**: what the `doc` line of a description holds has no line break. -/
+theorem doc_one_line {w : ByteArray} (h : Bounds.docOk w = true) :
+    ∀ c ∈ (bytesText w).toList, c ≠ '\n' ∧ c ≠ '\r' := by
+  obtain ⟨t, e, -, hq, hp⟩ := bytesSx_doc_plain h
+  intro c hc
+  simp only [bytesText, e, text, String.toList_ofList] at hc
+  exact chars_noBreak (.str hq) (.str hp) c hc
+
+/-- **A doc's text reads back as the doc**: the one parser reads the printed text as a form that
+`Read.doc` reads as exactly the doc's bytes (a doc that is not empty; the empty doc has no line). -/
+theorem doc_text_reads {w : ByteArray} (h : Bounds.docOk w = true) (he : w.isEmpty = false) :
+    ∃ y, Read.parse (bytesText w) = .ok y ∧ Read.doc 0 [y] = .ok w := by
+  obtain ⟨t, e, htw, hq, -⟩ := bytesSx_doc_plain h
+  obtain ⟨y, hy, hs⟩ := parse_text (x := .str 0 t) (.str hq) (by simp only [need]; decide)
+    (by simp only [width]; decide)
+  refine ⟨y, by simpa [bytesText, e] using hy, ?_⟩
+  obtain ⟨q, rfl⟩ := same_str hs
+  simp only [Read.doc, htw, h, he, Bool.not_false, Bool.and_self, if_true]
+
+/-- The reader takes one spelling per doc: `(doc)` is the empty doc; `(doc "")`, a `#hex` doc and two
+strings are each refused `badDoc`. -/
+theorem read_doc_none : Read.doc 0 [] = .ok .empty := rfl
+theorem read_doc_empty_string_refused : Read.doc 0 [.str 0 ""] = .error (.badDoc 0) := by
+  first | rfl | simp [Read.doc]
+theorem read_doc_hex_refused : Read.doc 0 [.atom 0 "#6162"] = .error (.badDoc 0) := rfl
+theorem read_doc_two_refused : Read.doc 0 [.str 0 "a", .str 0 "b"] = .error (.badDoc 0) := rfl
+
+/-- The plant: a doc holding `"` has no `docOk`, so no package carries it (it would print as `#hex`). -/
+theorem quoted_doc_refused : Bounds.docOk "a \"b\"".toUTF8 = false := by decide +kernel
+/-- And its twin: a plain doc is one. -/
+theorem plain_doc_ok : Bounds.docOk "ties by digest".toUTF8 = true := by decide +kernel
+/-- A doc one byte past `docMax` is none, whatever its characters. -/
+theorem long_doc_refused : Bounds.docOk ⟨Array.replicate (Bounds.docMax + 1) 0x61⟩ = false := by
+  simp [Bounds.docOk, Bounds.docMax]
+
 end Nanodregg.Lang.Print

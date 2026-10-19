@@ -1269,6 +1269,71 @@ theorem rels_mapM : ∀ (rs : List (Label × RelDecl)) {xs ys : List SExp}, rs.m
     simp [List.mapM_cons, e1, e2]
     rfl
 
+/-! ## The doc (LANG-60): printed as `Read.doc` reads it -/
+
+theorem docChar_eq : Bounds.docChar = plainChar := rfl
+
+/-- A doc `Bounds.docOk` admits prints as a `"text"` holding exactly its bytes (never `#hex`). -/
+theorem bytesSx_doc {w : ByteArray} (h : Bounds.docOk w = true) : ∃ t, bytesSx w = .str 0 t ∧ t.toUTF8 = w := by
+  simp only [Bounds.docOk, Bool.and_eq_true] at h
+  obtain ⟨-, h⟩ := h
+  unfold bytesSx
+  split
+  · rename_i t ht
+    simp only [ht] at h
+    have h' : t.toList.all plainChar = true := h
+    simp only [h', if_true]
+    exact ⟨t, rfl, fromUTF8_toUTF8 ht⟩
+  · rename_i ht
+    simp [ht] at h
+
+/-- What it prints as: a quote-free string of plain characters (`bytesSx_cases`'s left case). -/
+theorem bytesSx_doc_plain {w : ByteArray} (h : Bounds.docOk w = true) :
+    ∃ t, bytesSx w = .str 0 t ∧ t.toUTF8 = w ∧ '"' ∉ t.toList ∧ ∀ c ∈ t.toList, plainChar c = true := by
+  obtain ⟨t, e, -⟩ := bytesSx_doc h
+  rcases bytesSx_cases w with hl | e'
+  · exact hl
+  · rw [e] at e'; simp [atom] at e'
+
+theorem docSx_ok {w : ByteArray} {x : SExp} (h : docSx w = some x) : Ok x := by
+  unfold docSx at h
+  split at h
+  · cases h
+    split
+    · exact .list (.cons (kw_ok _) .nil)
+    · exact .list (.cons (kw_ok _) (.cons (bytesSx_ok w) .nil))
+  · cases h
+
+theorem eq_empty_of_isEmpty {w : ByteArray} (h : w.isEmpty = true) : w = .empty := by
+  rcases w with ⟨d⟩
+  simp [ByteArray.isEmpty, ByteArray.size] at h
+  simp [h]; rfl
+
+/-- **A printed doc reads back as itself.** -/
+theorem doc_read {w : ByteArray} {x y : SExp} (h : docSx w = some x) (hs : Same x y) :
+    ∃ q r ds, y = .list q (.atom r "doc" :: ds) ∧ Read.doc q ds = .ok w := by
+  unfold docSx at h
+  split at h
+  · rename_i hd
+    cases h
+    obtain ⟨q, zs, rfl, hz⟩ := same_list hs
+    obtain ⟨z0, ds, rfl, h0, hds⟩ := sameL_cons hz
+    obtain ⟨r, rfl⟩ := same_atom h0
+    refine ⟨q, r, ds, rfl, ?_⟩
+    by_cases he : w.isEmpty = true
+    · rw [if_pos he] at hds
+      cases sameL_nil hds
+      rw [eq_empty_of_isEmpty he]; rfl
+    · rw [if_neg he] at hds
+      obtain ⟨t, ht, htw⟩ := bytesSx_doc hd
+      rw [ht] at hds
+      obtain ⟨z, zs, rfl, hz1, hnil⟩ := sameL_cons hds
+      cases sameL_nil hnil
+      obtain ⟨q', rfl⟩ := same_str hz1
+      have he' : w.isEmpty = false := by simpa using he
+      simp only [Read.doc, htw, hd, he', Bool.not_false, Bool.and_self, if_true]
+  · cases h
+
 /-- A package whose body is canonical and whose state, interface and relation types are canonical
 reads back from its text: `Read.readPackage` returns exactly the package that was printed. -/
 theorem readPackage_package {p : Package} {s : String} (hs : p.state.wf = true) (hi : p.iface.wf = true)
@@ -1280,22 +1345,24 @@ theorem readPackage_package {p : Package} {s : String} (hs : p.state.wf = true) 
     obtain ⟨hn, hw⟩ := fitsB_iff.mp hf
     simp only [pure, Option.some.injEq] at h; subst h
     simp only [sectionsSx, bind, Option.bind_eq_some_iff, pure, Option.some.injEq] at hxs
-    obtain ⟨xS, hS, xI, hI, xm, hm, xl, hlw, xR, hR, xB, hB, rfl⟩ := hxs
-    have hok : OkL (atom "package" :: [list (atom "imports" :: p.imports.map fun i => .str 0 (hex i)),
+    obtain ⟨xD, hD, xS, hS, xI, hI, xm, hm, xl, hlw, xR, hR, xB, hB, rfl⟩ := hxs
+    have hok : OkL (atom "package" :: [list (atom "imports" :: p.imports.map fun i => .str 0 (hex i)), xD,
         list [atom "state", xS], list [atom "iface", xI], list (atom "methods" :: xm),
         list (atom "laws" :: xl), list (atom "rels" :: xR), list [atom "body", xB]]) :=
-      .cons (kw_ok _) (.cons (.list (.cons (kw_ok _) (imports_ok _)))
+      .cons (kw_ok _) (.cons (.list (.cons (kw_ok _) (imports_ok _))) (.cons (docSx_ok hD)
         (.cons (.list (.cons (kw_ok _) (.cons (tySx_ok _ hS) .nil)))
         (.cons (.list (.cons (kw_ok _) (.cons (tySx_ok _ hI) .nil)))
         (.cons (.list (.cons (kw_ok _) (labels_ok _ hm)))
         (.cons (.list (.cons (kw_ok _) (labels_ok _ hlw)))
         (.cons (.list (.cons (kw_ok _) (rels_ok _ hR)))
-        (.cons (.list (.cons (kw_ok _) (.cons (termSx_ok _ 0 hB) .nil))) .nil)))))))
+        (.cons (.list (.cons (kw_ok _) (.cons (termSx_ok _ 0 hB) .nil))) .nil))))))))
     obtain ⟨ys, hy, hsame⟩ := parse_layout (sep := ['\n', ' ', ' ']) ⟨by decide, by decide⟩ hok hn hw
     simp only [readPackage, hy, bind, Except.bind]
     obtain ⟨y0, ys, rfl, h0, hl⟩ := sameL_cons hsame
     obtain ⟨y1, ys, rfl, h1, hl⟩ := sameL_cons hl
-    obtain ⟨y2, ys, rfl, h2, hl⟩ := sameL_cons hl
+    obtain ⟨yD, ys, rfl, hD', hlD⟩ := sameL_cons hl
+    obtain ⟨qd, rd, ds, rfl, eD⟩ := doc_read hD hD'
+    obtain ⟨y2, ys, rfl, h2, hl⟩ := sameL_cons hlD
     obtain ⟨y3, ys, rfl, h3, hl⟩ := sameL_cons hl
     obtain ⟨y4, ys, rfl, h4, hl⟩ := sameL_cons hl
     obtain ⟨y5, ys, rfl, h5, hl⟩ := sameL_cons hl
@@ -1355,7 +1422,7 @@ theorem readPackage_package {p : Package} {s : String} (hs : p.state.wf = true) 
     have eM := labels_mapM p.methods hm t4
     have eL := labels_mapM p.laws hlw t5
     have eR := rels_mapM p.rels hR t6 bR hr
-    simp only [Read.package, eS, eI, eB, eM, eL, eR]
+    simp only [Read.package, eD, eS, eI, eB, eM, eL, eR]
     rw [mapM_imports ?hf p.imports t1]
     · rfl
     · intro q i; simp [hex, unhex_hexChars]

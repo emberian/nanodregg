@@ -11,7 +11,8 @@ Not admission: a resident (or its client) reads text into a `Package`, checks it
             | (digest #hex) | (fix e) | (OP e e) with OP ∈ + - * / % == < <= beq cat deq len<=
             | (record (l e)…) | (. e l) | (extend e (l e)…) | (inj T l e)
             | (case e (l x e)…) | (if e e e) | (ref i) | (refuse T "why") | (e e…)
-    package ::= (package (imports "hex"…) (state T) (iface T) (methods l…) (laws l…) (rels rel…) (body e))
+    package ::= (package (imports "hex"…) (doc ["text"]) (state T) (iface T) (methods l…) (laws l…) (rels rel…)
+                (body e))
     rel     ::= (l (key (l T)…) (val T) (limit n) (sum [l]) (cap n) (retract b) (guard [l]))
 
 A binder (`lam`, `let`, `fn`, a `case` arm) may not be named like a literal, a head word or a
@@ -81,8 +82,11 @@ inductive ReadRefusal
   | badImport (pos : Nat)
   /-- `methods` and `laws` list labels -/
   | badLabel (pos : Nat)
-  /-- not `(package (imports …) (state T) (iface T) (methods …) (laws …) (rels …) (body e))` -/
+  /-- not `(package (imports …) (doc …) (state T) (iface T) (methods …) (laws …) (rels …) (body e))` -/
   | notPackage (pos : Nat)
+  /-- a doc that is not one `"text"` of `Bounds.docOk` bytes (at most `docMax`, printable, no `"`), or
+  is `(doc "")`: the empty doc is written `(doc)` (LANG-60) -/
+  | badDoc (pos : Nat)
   /-- a data literal that is not a value of the type it is read at (or out of the data bounds) -/
   | notOfType (pos : Nat)
   deriving DecidableEq, Repr
@@ -94,13 +98,13 @@ def ReadRefusal.name : ReadRefusal → String
   | .trailing _ => "trailing" | .notAType _ => "notAType" | .badEntry _ => "badEntry"
   | .unbound _ _ => "unbound" | .badRef _ => "badRef" | .badDigest _ => "badDigest" | .badRefuse _ => "badRefuse" | .emptyApplication _ => "emptyApplication"
   | .badBinder _ => "badBinder" | .reservedBinder _ _ => "reservedBinder" | .badImport _ => "badImport" | .badLabel _ => "badLabel"
-  | .notPackage _ => "notPackage" | .notOfType _ => "notOfType"
+  | .notPackage _ => "notPackage" | .notOfType _ => "notOfType" | .badDoc _ => "badDoc"
 
 def ReadRefusal.pos : ReadRefusal → Nat
   | .tooDeep p | .tooLong p | .unexpectedEnd p | .stray p | .unterminatedString p | .unclosed p | .trailing p
   | .notAType p | .badEntry p | .unbound p _ | .badRef p | .badDigest p | .badRefuse p | .emptyApplication p | .badBinder p
   | .reservedBinder p _
-  | .badImport p | .badLabel p | .notPackage p | .notOfType p => p
+  | .badImport p | .badLabel p | .notPackage p | .notOfType p | .badDoc p => p
 
 /-- `name @offset`, plus the unbound name: what a resident reads. -/
 def ReadRefusal.text (e : ReadRefusal) : String :=
@@ -328,9 +332,17 @@ def rel : SExp → P (Label × RelDecl)
     | _, _, _ => .error (.badEntry p)
   | y => .error (.badEntry y.pos)
 
+/-- A doc section's contents (LANG-60): none is the empty doc; one `"text"` is a doc that is
+`Bounds.docOk` and not empty (one spelling per doc). -/
+def doc (p : Nat) : List SExp → P ByteArray
+  | [] => .ok .empty
+  | [.str q t] => if Bounds.docOk t.toUTF8 && !t.toUTF8.isEmpty then .ok t.toUTF8 else .error (.badDoc q)
+  | _ => .error (.badDoc p)
+
 def package (x : SExp) : P Package :=
   match x with
-  | .list _ [.atom _ "package", .list _ (.atom _ "imports" :: is), .list _ [.atom _ "state", s],
+  | .list _ [.atom _ "package", .list _ (.atom _ "imports" :: is), .list q (.atom _ "doc" :: ds),
+      .list _ [.atom _ "state", s],
       .list _ [.atom _ "iface", i], .list _ (.atom _ "methods" :: ms), .list _ (.atom _ "laws" :: ls),
       .list _ (.atom _ "rels" :: rs), .list _ [.atom _ "body", b]] => do
     let imports ← is.mapM fun
@@ -338,8 +350,9 @@ def package (x : SExp) : P Package :=
         | some bs => .ok bs
         | none => .error (.badImport p)
       | y => .error (.badImport y.pos)
+    let doc ← doc q ds
     pure { imports, state := ← ty depthMax s, iface := ← ty depthMax i, body := ← term depthMax [] b,
-           methods := ← labels ms, laws := ← labels ls, rels := ← rs.mapM rel }
+           methods := ← labels ms, laws := ← labels ls, rels := ← rs.mapM rel, doc }
   | y => .error (.notPackage y.pos)
 
 /-! ## Data literals at a known type

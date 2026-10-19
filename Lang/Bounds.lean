@@ -34,4 +34,27 @@ def reasonOk (w : ByteArray) : Bool :=
     | some s => s.toList.all fun c => 32 ≤ c.toNat && c.toNat ≠ 127
     | none => false
 
+/-- A character a package's doc may hold: printable (no control character, so the doc is one line) and
+not `"` (so the one printer writes it as `"text"`, never `#hex`). The same test as `Print.plainChar`
+(`Lang.Proofs.Print.docChar_eq`). -/
+def docChar (c : Char) : Bool := decide (32 ≤ c.toNat) && c.toNat != 127 && c != '"'
+
+/-- A package's doc (LANG-60): at most this many bytes. What a describe prints on its `doc` line. -/
+def docMax : Nat := 256
+
+/-- A doc a package may carry: at most `docMax` bytes of UTF-8 doc characters. The empty doc is one. -/
+def docOk (w : ByteArray) : Bool :=
+  decide (w.size ≤ docMax) &&
+    match String.fromUTF8? w with
+    | some s => s.toList.all docChar
+    | none => false
+
+/-- The package wire's version (LANG-60): the first byte of every package's bytes. Bumped by every
+`lang!` that changes what package bytes mean, so a package written at another version is refused
+`lang/package-version` by name, never read as a different package. The package codec's label is
+`lang/package/N` at version N (`Lang.Proofs.Wire.packageCodec_label`), so the bump moves the vectors'
+tag too. 3: LANG-60 (a doc, and this byte); the unversioned wires before it were `lang/package` and
+`lang/package/2` (LANG-59), each a node-0 tree whose first byte is 0, which no version may be. -/
+def packageWireVersion : UInt8 := 3
+
 end Nanodregg.Lang.Bounds

@@ -10,7 +10,7 @@ program, which the checker and the laws judge like any other, never an unread on
 text (`(package (imports …) …)`) is read by `Read.package` unchanged (`read_print_surface`).
 
     package ::= (package decl…)
-    decl    ::= (type N T) | (state T) | (import N "hex") | (layer N)
+    decl    ::= (type N T) | (state T) | (import N "hex") | (layer N) | (doc "text")
               | (rel ℓ (key (f T)…) (val T) (limit n) [(sum f) (cap n)] [(retract)] [(guard g)])
               | (method ℓ [(reads (rel (points n) | (range m k))…)] [(arg A)] [(calls (kind…)…)] [(edits n)] body)
               | (law ℓ (on occ|(occ…) [x] body)… [(else body)]) | (law ℓ (bounded f max))
@@ -494,6 +494,7 @@ structure Decls where
   machines : List (Nat × String × String × List SExp × List SExp) := []
   imports : List (Nat × String × String) := []
   layer : Option (Nat × String) := none
+  doc : Option (Nat × String) := none
 
 def declsOf (d : Decls) : List SExp → P Decls
   | [] => .ok { d with types := d.types.reverse, rels := d.rels.reverse, methods := d.methods.reverse,
@@ -509,6 +510,8 @@ def declsOf (d : Decls) : List SExp → P Decls
   | .list p (.atom _ "machine" :: .atom _ f :: .atom _ i :: .list _ (.atom _ "methods" :: ms) :: es) :: rest =>
     declsOf { d with machines := (p, f, i, ms, es) :: d.machines } rest
   | .list p [.atom _ "import", .atom _ n, .str _ h] :: rest => declsOf { d with imports := (p, n, h) :: d.imports } rest
+  | .list p [.atom _ "doc", .str q t] :: rest =>
+    if d.doc.isSome then .error (.duplicate p "doc") else declsOf { d with doc := some (q, t) } rest
   | .list p [.atom _ "layer", .atom _ n] :: rest =>
     if d.layer.isSome then .error (.duplicate p "layer") else declsOf { d with layer := some (p, n) } rest
   | x :: _ => .error (.badDecl x.pos)
@@ -727,6 +730,10 @@ def layerOf (posOf : Label → Nat) (sid : ByteArray) (sup : Package) (adds : Li
 /-- Lower a surface package's declarations (`supers`: the packages a layer may name, by id). -/
 def lower (supers : List (ByteArray × Package)) (p : Nat) (ds : List SExp) : P Lowered := do
   let d ← declsOf {} ds
+  -- the doc, as `Read.doc` reads one (LANG-60): never empty when written, `Bounds.docOk`
+  let doc ← match d.doc with
+    | none => pure ByteArray.empty
+    | some (q, t) => liftR (Read.doc q [.str q t])
   -- type names, in order; a bounded form is kept as written (argument types only)
   let mut c : Ctx := {}
   for (q, n, t) in d.types do
@@ -816,8 +823,9 @@ def lower (supers : List (ByteArray × Package)) (p : Nat) (ds : List SExp) : P 
   let lawLabels := d.laws.map (·.2.1) ++ mlaws.map (·.1)
   match sup with
   | some (sid, P) =>
-    pure ⟨← layerOf (fun ℓ => ((Row.find? ℓ sxs).map (·.1.pos)).getD p) sid P fields lawLabels
-      (allMethods.drop P.methods.length), sxs⟩
+    -- a layer's doc is its own (the super's is the super's)
+    pure ⟨{ ← layerOf (fun ℓ => ((Row.find? ℓ sxs).map (·.1.pos)).getD p) sid P fields lawLabels
+      (allMethods.drop P.methods.length) with doc }, sxs⟩
   | none =>
     let imports ← d.imports.mapM fun (q, _, h) =>
       match Read.unhex .empty h.toList with
@@ -827,7 +835,7 @@ def lower (supers : List (ByteArray × Package)) (p : Nat) (ds : List SExp) : P 
             iface := .record (Row.sort (fields.map fun (ℓ, T, _) => (ℓ, T))),
             body := .record (Row.sort (fields.map fun (ℓ, _, t) => (ℓ, t))),
             methods := allMethods,
-            laws := (Row.sort (lawLabels.map (·, ()))).map (·.1) }, sxs⟩
+            laws := (Row.sort (lawLabels.map (·, ()))).map (·.1), doc }, sxs⟩
 
 /-- A core package text: `(package (imports …) …)`. -/
 def isCore : SExp → Bool

@@ -585,15 +585,15 @@ theorem map_of_relsOf : (ts : List Tree) → ∀ {rs : List (Label × RelDecl)},
 theorem packageOf_packageTree {p : Package} (h : packageWire p = true) :
     packageOf (packageTree p) = some p := by
   simp only [packageWire, Bool.and_eq_true] at h
-  obtain ⟨⟨⟨⟨⟨⟨hi, hs⟩, hf⟩, hb⟩, hm⟩, hl⟩, hr⟩ := h
-  simp only [packageTree, packageOf, and_self, if_true, importsOf_map _ hi, tyOf_tyTree _ hs,
+  obtain ⟨⟨⟨⟨⟨⟨⟨hd, hi⟩, hs⟩, hf⟩, hb⟩, hm⟩, hl⟩, hr⟩ := h
+  simp only [packageTree, packageOf, hd, and_self, if_true, importsOf_map _ hi, tyOf_tyTree _ hs,
     tyOf_tyTree _ hf, termOf_termTree _ hb, labelsOf_map _ hm, labelsOf_map _ hl, relsOf_map _ hr]
 
 theorem tree_of_packageOf {t : Tree} {p : Package} (h : packageOf t = some p) :
     packageTree p = t ∧ packageWire p = true := by
   unfold packageOf at h
   split at h
-  · rename_i e ei is s i b em ms el ls er rs
+  · rename_i e ei is s i b em ms el ls er rs doc
     split at h
     · rename_i he
       split at h
@@ -606,39 +606,128 @@ theorem tree_of_packageOf {t : Tree} {p : Package} (h : packageOf t = some p) :
         obtain ⟨em', wm⟩ := map_of_labelsOf ms hm
         obtain ⟨el', wl⟩ := map_of_labelsOf ls hl
         obtain ⟨er', wr⟩ := map_of_relsOf rs hr
-        obtain ⟨rfl, rfl, rfl, rfl, rfl⟩ := he
-        simp [packageTree, packageWire, ei', es, ef, eb, em', el', er', wi, ws, wf, wb, wm, wl, wr]
+        obtain ⟨rfl, rfl, rfl, rfl, rfl, hd⟩ := he
+        simp [packageTree, packageWire, ei', es, ef, eb, em', el', er', wi, ws, wf, wb, wm, wl, wr, hd]
       · simp at h
     · simp at h
   · simp at h
+
+/-! ### The version byte (LANG-60) -/
+
+/-- **The package codec's label is `lang/package/N` at version N**: bumping `packageWireVersion` without
+moving the label (or the reverse) fails here, so the vectors' tag moves with every version (a
+refine's shape carries its name, not its accept function). -/
+theorem packageCodec_label :
+    ∃ s, packageCodec.shape = .refine s!"lang/package/{Bounds.packageWireVersion.toNat}" s := ⟨_, rfl⟩
+
+/-- No version is 0: 0 is the first byte of every unversioned package. -/
+theorem packageWireVersion_ne_zero : Bounds.packageWireVersion ≠ 0 := by decide
+
+/-- **`lang/package-version` reads exactly the one byte `packageWireVersion`.** -/
+theorem packageVersion_lawful : Stream.Lawful packageVersion :=
+  Stream.refine_lawful Stream.u8_lawful "lang/package-version" (fun y => by cases y; exact if_pos rfl)
+    (fun x _ h => by
+      split at h
+      · rename_i hx; exact hx.symm
+      · cases h)
+
+theorem treeStream_lawful : Stream.Lawful treeStream := Stream.tree_lawful nodeMax depthMax (by decide)
+
+theorem packageStream_lawful : Stream.Lawful packageStream :=
+  Stream.product_lawful packageVersion_lawful treeStream_lawful
+
+/-- A package's bytes begin with the version byte. -/
+theorem packageStream_bytes (t : Tree.Fitting nodeMax depthMax) :
+    packageStream.bytes ((), t) = ByteArray.mk #[Bounds.packageWireVersion] ++ treeStream.bytes t := by
+  rw [packageStream, Stream.product_bytes treeStream_lawful]; rfl
+
+/-- **A byte other than `packageWireVersion` where a package starts is refused `lang/package-version` by
+name**, before any tree is read. -/
+theorem packageStream_get_wrong_version {b : ByteArray} {i : Nat} (hi : i < b.size)
+    (hv : b[i] ≠ Bounds.packageWireVersion) :
+    packageStream.get b i = .error (.rejected i "lang/package-version") := by
+  simp [packageStream, Stream.product, packageVersion, Stream.refine, Stream.u8, hi, hv]
+
+/-- **Bytes at the wrong version are never a package**: `decodePackage` refuses them
+`lang/package-version`, so bytes written under an earlier package wire are refused, never reinterpreted. -/
+theorem decodePackage_wrong_version {b : ByteArray} (h0 : 0 < b.size)
+    (hv : b[0] ≠ Bounds.packageWireVersion) :
+    decodePackage b = .error (.rejected 0 "lang/package-version") := by
+  simp [decodePackage, Stream.decode, packageStream_get_wrong_version h0 hv]
+
+/-- Every package written before LANG-60 was `treeStream.bytes` of a node-0 root: its first byte is 0. -/
+theorem treeStream_bytes_node0 {e : ByteArray} {cs : List Tree} (h : (Tree.node 0 e cs).fits nodeMax depthMax = true) :
+    ∃ h0 : 0 < (treeStream.bytes ⟨.node 0 e cs, h⟩).size, (treeStream.bytes ⟨.node 0 e cs, h⟩)[0] = 0 := by
+  have hb : treeStream.bytes ⟨.node 0 e cs, h⟩ = Tree.putD (1023 + 1) (.node 0 e cs) ByteArray.empty := rfl
+  rw [hb, Tree.putD_node]
+  refine ⟨by simp [ByteArray.size_append, Stream.u8, Stream.bytes]; omega, ?_⟩
+  simp [ByteArray.append_assoc, Stream.u8, Stream.bytes, ByteArray.getElem_append_left]
+  rfl
+
+/-- **Every unversioned package is refused `lang/package-version`**: the bytes of any node-0 package
+tree as `lang/package` and `lang/package/2` wrote them (no version byte) are never decoded, so no
+package of an earlier wire is read as a different one. -/
+theorem unversioned_package_refused {e : ByteArray} {cs : List Tree}
+    (h : (Tree.node 0 e cs).fits nodeMax depthMax = true) :
+    decodePackage (treeStream.bytes ⟨.node 0 e cs, h⟩) = .error (.rejected 0 "lang/package-version") := by
+  obtain ⟨h0, hb⟩ := treeStream_bytes_node0 h
+  exact decodePackage_wrong_version h0 (by rw [hb]; exact packageWireVersion_ne_zero.symm)
+
+theorem decodePackage_wrong_version_not_ok {b : ByteArray} (h0 : 0 < b.size)
+    (hv : b[0] ≠ Bounds.packageWireVersion) (p : Package) : decodePackage b ≠ .ok p := by
+  rw [decodePackage_wrong_version h0 hv]; simp
+
+/-- The codec refuses them by the same name. -/
+theorem packageCodec_wrong_version {b : ByteArray} (h0 : 0 < b.size)
+    (hv : b[0] ≠ Bounds.packageWireVersion) :
+    packageCodec.decode b = .error (.rejected 0 "lang/package-version") := by
+  simp [packageCodec, Stream.decode, Stream.refine, packageStream_get_wrong_version h0 hv]
 
 private theorem packageFit_eq {p : Package} (h : (packageTree p).fits nodeMax depthMax = true) :
     packageFit p = ⟨packageTree p, h⟩ := by
   simp [packageFit, h]
 
 private theorem packageCodec_bytes {p : Package} (h : (packageTree p).fits nodeMax depthMax = true) :
-    packageCodec.bytes p = packageStream.bytes ⟨packageTree p, h⟩ := by
-  show packageStream.put (packageFit p) ByteArray.empty = _
+    packageCodec.bytes p = packageStream.bytes ((), ⟨packageTree p, h⟩) := by
+  show packageStream.put ((), packageFit p) ByteArray.empty = _
   rw [packageFit_eq h]; rfl
 
-/-- **`lang/package/2` is lawful on exactly the packages that have a tree in bounds** (`packageWire` and
-`fits`): those round-trip, and whatever it reads is one of them, spelled one way. -/
+/-- **Every package's bytes begin with the current version** (the twin of
+`decodePackage_wrong_version`: what `encodePackage` writes is never refused `lang/package-version`). -/
+theorem encodePackage_version {p : Package} {b : ByteArray} (h : encodePackage p = some b) :
+    ∃ h0 : 0 < b.size, b[0] = Bounds.packageWireVersion := by
+  unfold encodePackage at h
+  split at h
+  · split at h
+    · rename_i hfit
+      cases h
+      rw [packageCodec_bytes hfit, packageStream_bytes]
+      refine ⟨by simp [ByteArray.size_append]; omega, ?_⟩
+      simp [ByteArray.getElem_append_left]
+    · cases h
+  · cases h
+
+/-- **`lang/package/3` is lawful on exactly the packages that have a tree in bounds** (`packageWire` and
+`fits`): those round-trip, and whatever it reads is one of them, spelled one way, at the current
+version. -/
 theorem packageCodec_lawfulOn :
     Stream.LawfulOn (fun p => packageWire p = true ∧ (packageTree p).fits nodeMax depthMax = true) packageCodec := by
-  refine (Stream.refine_lawfulOn_where (Stream.tree_lawful nodeMax depthMax (by decide)).on "lang/package/2"
+  refine (Stream.refine_lawfulOn_where packageStream_lawful.on "lang/package/3"
     (Q := fun p => packageWire p = true ∧ (packageTree p).fits nodeMax depthMax = true) ?_ ?_ ?_).mono
     (fun _ h => h.2) (fun _ h => ⟨trivial, h⟩)
   · intro y _ hq
+    show packageOf (packageFit y).val = some y
     rw [packageFit_eq hq.2]
     exact packageOf_packageTree hq.1
   · intro x y h
     obtain ⟨et, -⟩ := tree_of_packageOf h
-    have hfit : (packageTree y).fits nodeMax depthMax = true := et ▸ x.2
+    have hfit : (packageTree y).fits nodeMax depthMax = true := et ▸ x.2.2
+    show ((), packageFit y) = x
     rw [packageFit_eq hfit]
-    exact Subtype.ext et
+    exact Prod.ext rfl (Subtype.ext et)
   · intro x y h
     obtain ⟨et, wt⟩ := tree_of_packageOf h
-    exact ⟨wt, et ▸ x.2⟩
+    exact ⟨wt, et ▸ x.2.2⟩
 
 /-- The package codec is canonical: a package has exactly one byte string, and those bytes decode
 to it and to nothing else. -/
@@ -650,17 +739,17 @@ theorem decodePackage_eq_ok_iff {b : ByteArray} {p : Package} :
     cases ht : packageStream.decode b with
     | error _ => simp [ht] at h
     | ok t =>
-      cases hq : packageOf t.val with
+      cases hq : packageOf t.2.val with
       | none => simp [ht, hq] at h
       | some q =>
         simp only [ht, hq, Except.ok.injEq] at h
         subst h
         obtain ⟨et, wt⟩ := tree_of_packageOf hq
-        have hb := (Stream.decode_eq_ok_iff (Stream.tree_lawful nodeMax depthMax (by decide))).mp ht
-        have hfit : (packageTree q).fits nodeMax depthMax = true := et ▸ t.2
-        have htq : (⟨packageTree q, hfit⟩ : Tree.Fitting nodeMax depthMax) = t := Subtype.ext et
+        have hb := (Stream.decode_eq_ok_iff packageStream_lawful).mp ht
+        have hfit : (packageTree q).fits nodeMax depthMax = true := et ▸ t.2.2
+        have htq : (((), ⟨packageTree q, hfit⟩) : Unit × Tree.Fitting nodeMax depthMax) = t :=
+          Prod.ext rfl (Subtype.ext et)
         simp only [encodePackage, wt, if_true, hfit, packageCodec_bytes hfit, htq, hb]
-        rfl
   · intro h
     unfold encodePackage at h
     split at h
@@ -669,13 +758,13 @@ theorem decodePackage_eq_ok_iff {b : ByteArray} {p : Package} :
       · rename_i hfit
         cases h
         unfold decodePackage
-        rw [packageCodec_bytes hfit, packageStream, Stream.decode_bytes (Stream.tree_lawful nodeMax depthMax (by decide))]
+        rw [packageCodec_bytes hfit, Stream.decode_bytes packageStream_lawful]
         simp only [packageOf_packageTree hw]
       · simp at h
     · simp at h
 
 
-/-- `decodePackage` accepts exactly what the `lang/package/2` codec reads (they differ only in which
+/-- `decodePackage` accepts exactly what the `lang/package/3` codec reads (they differ only in which
 refusal names an input that is both a non-package tree and followed by trailing bytes). -/
 theorem decodePackage_eq_codec {b : ByteArray} {p : Package} :
     decodePackage b = .ok p ↔ packageCodec.decode b = .ok p := by
@@ -695,23 +784,48 @@ theorem decodePackage_eq_codec {b : ByteArray} {p : Package} :
 /-- A package tree around a body tree (the teeth below). -/
 private def bodyTree (body : Tree) : Tree :=
   .node 0 .empty [.node 0 .empty [], tyTree (.record []), tyTree (.record []), body, .node 1 .empty [],
-    .node 1 .empty [], .node 2 .empty []]
+    .node 1 .empty [], .node 2 .empty [], .node 0 .empty []]
 
-/-- **`lang/package/2` refuses by name every tree `packageOf` does not read.** -/
-theorem packageCodec_get_refused {b : ByteArray} {i j : Nat} {t : Tree.Fitting nodeMax depthMax}
-    (h : packageStream.get b i = .ok (t, j)) (hn : packageOf t.val = none) :
-    packageCodec.get b i = .error (.rejected i "lang/package/2") := by
+/-- `decodePackage`'s refusal of a tree that is no package carries the codec's label, `lang/package/N`
+at version N, like `packageCodec_label`: the decoder's spelling of the name moves with the version too. -/
+theorem decodePackage_refused_label {b : ByteArray} {t : Unit × Tree.Fitting nodeMax depthMax}
+    (h : packageStream.decode b = .ok t) (hn : packageOf t.2.val = none) :
+    decodePackage b = .error (.rejected 0 s!"lang/package/{Bounds.packageWireVersion.toNat}") := by
+  simp only [decodePackage, h, hn]; rfl
+
+/-- **`lang/package/3` refuses by name every tree `packageOf` does not read.** -/
+theorem packageCodec_get_refused {b : ByteArray} {i j : Nat} {t : Unit × Tree.Fitting nodeMax depthMax}
+    (h : packageStream.get b i = .ok (t, j)) (hn : packageOf t.2.val = none) :
+    packageCodec.get b i = .error (.rejected i "lang/package/3") := by
   simp [packageCodec, Stream.refine, h, hn]
 
-/-- The plant: a body node of term tag 18 (no term has it) is no package, so `lang/package/2` refuses it
+/-- The plant: a body node of term tag 18 (no term has it) is no package, so `lang/package/3` refuses it
 (`packageCodec_get_refused`; the codec vectors' boundary row is a tree of the same layout). -/
 theorem package_refuses_unknown_term_tag : (packageOf (bodyTree (.node 18 .empty []))).isNone = true := by
   decide +kernel
 
-/-- `lang/package/2`'s domain is inhabited: the empty package has a tree in bounds. -/
+/-- `lang/package/3`'s domain is inhabited: the empty package has a tree in bounds. -/
 theorem empty_package_fits :
-    packageWire ⟨[], .record [], .record [], .record [], [], [], []⟩ = true ∧
-      (packageTree ⟨[], .record [], .record [], .record [], [], [], []⟩).fits nodeMax depthMax = true := by
+    packageWire ⟨[], .record [], .record [], .record [], [], [], [], .empty⟩ = true ∧
+      (packageTree ⟨[], .record [], .record [], .record [], [], [], [], .empty⟩).fits nodeMax depthMax = true := by
+  decide +kernel
+
+/-- A doc holding a control character (a line feed) or bytes that are not UTF-8 is no doc. -/
+theorem newline_doc_refused : Bounds.docOk ⟨#[0x61, 0x0a, 0x62]⟩ = false := by decide +kernel
+theorem nonUtf8_doc_refused : Bounds.docOk ⟨#[0x61, 0xff]⟩ = false := by decide +kernel
+
+/-- A package tree around a doc leaf (the decoder's doc teeth). -/
+private def docTree (doc : ByteArray) : Tree :=
+  .node 0 .empty [.node 0 .empty [], tyTree (.record []), tyTree (.record []), termTree (.record []),
+    .node 1 .empty [], .node 1 .empty [], .node 2 .empty [], .node 0 doc []]
+
+/-- The decoder refuses a tree whose doc holds a line feed or is not UTF-8; its twin with a plain doc
+reads. -/
+theorem package_refuses_newline_doc : (packageOf (docTree ⟨#[0x61, 0x0a, 0x62]⟩)).isNone = true := by
+  decide +kernel
+theorem package_refuses_nonUtf8_doc : (packageOf (docTree ⟨#[0x61, 0xff]⟩)).isNone = true := by
+  decide +kernel
+theorem package_reads_plain_doc : (packageOf (docTree ⟨#[0x61, 0x62]⟩)).isSome = true := by
   decide +kernel
 
 /-- The twin: the same package with the body `record []` reads. -/
