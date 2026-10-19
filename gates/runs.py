@@ -40,7 +40,9 @@ skipped because its inputs are unknown).
 A row `standing:EXE` is a verdict row of the lean_exe EXE that runs in standing only (GATES-17: a
 bench whose run costs minutes). It is read exactly as an exe's row and needs a --harness-control
 control; `-` is refused. runs.py runs it only with --standing (scripts/standing.sh); a pre-push run
-prints `run standing:EXE: NOT RUN(standing-only)` and never runs it, whatever changed. An EXE has
+prints `run standing:EXE: NOT RUN(standing-only; its inputs are unchanged)` unless this commit changed its inputs (a data
+path, or a module of EXE's closure): then it runs in pre-push like any selected row (GATES-19, ROOT: standing-only is a
+cost choice, never a correctness one). An EXE has
 one row, plain or standing. Its WASTE rows are judged by standing's full waste check, where a pinned
 row with no measurement is red, so a standing row that stops running is red there.
 
@@ -52,15 +54,23 @@ FAIL` line or the exit code and last line. A run past DEADLINE (600 s of wall cl
 past it twice it is UNREAD(timeout …), never RED (GATES-16: a wall-clock deadline measures the box's
 load as much as the commit, so it can withhold a verdict but never give one). `WASTE <op> <metric> <ratio>` lines
 go to --waste-out. With --changed (pre-push), only the exes whose import closure holds a changed
-module run (all of them when the lakefile, the toolchain or a C source changed): a sim is a verdict
+module run (all of them when any changed path is not a .lean source, outside gates/doc-allow.tsv and SIZE.md:
+the lakefile, the toolchain, a C source, runs.tsv, world/ texts, deploy/, the Rust tree, the runner; GATES-19): a sim is a verdict
 a build cannot give, so the importers of a change are RUN, not only built (ROOT/HOSTING 10-17, after
 HOSTING's grain text went stale under LANG's ID-1 with every build green).
 A run killed by signal 9/15 (earlyoom, the cgroup) is KILLED(load), not RED (GATES-11's amendment).
+With --keys/--reuse/--record (pre-push on a lander's candidate; GATES-19): a row whose input key
+(gates/rebase.py, computed by the JUDGE's copy before the runs) is byte-identical to the key under
+which the lander's previous judge recorded it ok is not run: its lines and WASTE lines are carried,
+`  reuse EXE: reused (key …)`; a row whose key differs prints `  reuse EXE: re-run (key changed)` and
+runs. Every row that reads ok (its control and every run) is written to --record; nothing else is,
+so a red, INCOMPLETE, UNREAD, KILLED or ABSENT verdict is never carried.
 Prints one `  run <exe> <args>: <verdict>` line per run and
 `runs: ok|RED|KILLED(load)|UNREAD(timeout)|INCOMPLETE`; exits 0, 1, 76 (killed or timed out twice,
 nothing red: not judged) or 3 (incomplete, nothing red, killed or timed out).
 """
 import argparse
+import json
 import os
 import re
 import shutil
@@ -144,15 +154,44 @@ def check(t: tree.Tree) -> list[str]:
     return red
 
 
+def data_paths(root: str, changed: list[str]) -> list[str]:
+    """The changed paths a run may read at run time that no import closure tracks: every path that is
+    not a .lean source, not under gates/doc-allow.tsv's prefixes (absent file: none) and not SIZE.md (a
+    function of the other paths). GATES-19 / LANG-18: a re-emitted world/ package text (world/resident/Bell,
+    installed by cargo:launcher:resident_bell and the rows) selected no row, so a known red could land
+    GREEN and surface only in standing. No row declares what it reads, so such a path selects every row;
+    traced read-sets are what will narrow it."""
+    p = os.path.join(root, "gates", "doc-allow.tsv")
+    allow = tuple(l.strip() for l in open(p, encoding="utf-8") if l.strip() and not l.startswith("#")) if os.path.isfile(p) else ()
+    return [x for x in changed if not x.endswith(".lean") and x != "SIZE.md" and not (allow and x.startswith(allow))]
+
+
 def selected(t: tree.Tree, changed: list[str] | None, rows: dict) -> set[str]:
     cargo = {k: rows[k][0][0] for k in rows if k.startswith("cargo:")}
     script = {k for k in rows if k.startswith("script:")}
-    if changed is None or any(p in ("lakefile.lean", "lean-toolchain", RUNS) or p.endswith((".c", ".h")) for p in changed):
+    if changed is None or data_paths(t.root, changed):
         return set(t.exes) | set(cargo) | script
     mods = {p[:-5].replace("/", ".") for p in changed if p.endswith(".lean")}
     out = {e for e, r in t.exes.items() if t.closure([r]) & mods}
     return out | script | {k for k, drives in cargo.items()
                   if set(drives) & out or any(p.startswith(k.split(":")[1] + "/") for p in changed)}
+
+
+def standing_selected(t: tree.Tree, changed: list[str] | None, rows: dict) -> dict[str, str]:
+    """The standing rows this commit's change reaches, with why: a data path, or a module of the exe's closure."""
+    if changed is None:
+        return {k: "no change list" for k in rows if k.startswith(STANDING)}
+    mods = {p[:-5].replace("/", ".") for p in changed if p.endswith(".lean")}
+    d = data_paths(t.root, changed)
+    out = {}
+    for k in rows:
+        e = k.removeprefix(STANDING)
+        if not k.startswith(STANDING):
+            continue
+        hit = sorted(t.closure([t.exes[e]]) & mods) if e in t.exes else []
+        if d or hit:
+            out[k] = f"changed path {d[0]}" if d else f"changed module {hit[0]}"
+    return out
 
 
 def verdict(out: str, rc: int, want: str) -> str:
@@ -275,6 +314,9 @@ def main() -> int:
     ap.add_argument("--waste-out")
     ap.add_argument("--standing", action="store_true", help="also run the `standing:` rows (scripts/standing.sh\n"
                     "only; pre-push never passes it: GATES-17)")
+    ap.add_argument("--keys", help="unit<TAB>key per unit (gates/rebase.py keys), for --reuse/--record")
+    ap.add_argument("--reuse", help="the lander's previous judge's record (GATES-19)")
+    ap.add_argument("--record", help="write this judge's ok rows here (GATES-19)")
     ap.add_argument("--table", help="judge with this runs.tsv instead of TREE's (pre-push runs the\n"
                     "candidate's table over the parent tree, so both sides make the same runs)")
     a = ap.parse_args()
@@ -292,12 +334,24 @@ def main() -> int:
         own = {}
     changed = open(a.changed, encoding="utf-8").read().split() if a.changed else None
     want = selected(t, changed, rows)
+    if changed is not None and data_paths(t.root, changed):
+        d = data_paths(t.root, changed)
+        print(f"  selection: every row ({len(d)} changed path(s) a run may read: {', '.join(d[:3])}{' …' if len(d) > 3 else ''})")
     standing = sorted(k for k in rows if k.startswith(STANDING))
     if a.standing:
         want |= set(standing)
     else:
+        # Standing-only is a COST choice, never a correctness one (ROOT 10-19, LANG-18/PERF-9): a standing row
+        # whose inputs this commit changed (a data path, or a module of its exe's closure) runs here like
+        # any selected row, control included; only an unchanged one waits for standing.
+        sel = standing_selected(t, changed, rows)
         for k in standing:
-            print(f"  run {k}: NOT RUN(standing-only)")
+            why = sel.get(k)
+            if why:
+                want.add(k)
+                print(f"  run {k}: selected in pre-push (its inputs changed: {why}; a standing-only row costs minutes)")
+            else:
+                print(f"  run {k}: NOT RUN(standing-only; its inputs are unchanged)")
     bindir = os.path.join(t.root, ".lake", "build", "bin")
     nobin = os.path.join(t.root, ".lake", "runs", "nobin")
     scratch = os.path.join(t.root, ".lake", "runs")
@@ -312,11 +366,14 @@ def main() -> int:
             os.path.join(t.root, exe.split(":")[1], "tests", exe.split(":")[2] + ".rs"))) and (
             not exe.startswith("script:") or os.path.isfile(os.path.join(t.root, exe[len("script:"):])))
 
+    lines: list[tuple[str, str]] = []
+
     def report(exe: str, args: list[str], v: str, out: str, tag: str = "") -> None:
         sys.stderr.write(out)
         name = f"{exe} {' '.join(args)}{tag}"
         print(f"  run {name}: {v}")
         results.append(v)
+        lines.append((name, v))
         # Every failure line of a red run is its own key (`    red RUN: LINE`): pre-push calls a red
         # PRE-EXISTING only line by line, so a new failure behind an old one on the same exe is new.
         if v.startswith("RED"):
@@ -324,6 +381,28 @@ def main() -> int:
                 print(f"    red {name}: {l}")
 
     todo = sorted(e for e in want & set(rows) if rows[e][0])
+    keys = dict(l.rstrip("\n").split("\t", 1) for l in open(a.keys, encoding="utf-8") if "\t" in l) if a.keys else {}
+    prev = {}
+    if a.reuse and os.path.isfile(a.reuse):
+        for l in open(a.reuse, encoding="utf-8"):
+            f = l.rstrip("\n").split("\t", 3)
+            if len(f) == 4 and f[0].startswith("run:"):
+                prev[f[0][4:]] = (f[1], json.loads(f[3]))
+    record = open(a.record, "a", encoding="utf-8") if a.record else None
+    reused = set()
+    for exe in todo:
+        k = keys.get("run:" + exe)
+        if exe in prev and k is not None and prev[exe][0] == k and mine(exe):
+            reused.add(exe)
+            for name, v in prev[exe][1]["lines"]:
+                print(f"  run {name}: {v}")
+                results.append(v)
+            waste += prev[exe][1]["waste"]
+            print(f"  reuse {exe}: reused (key {k[:16]}, byte-identical to the previous judge's)")
+            record and record.write(f"run:{exe}\t{k}\treused\t{json.dumps(prev[exe][1])}\n")
+        elif exe in prev:
+            print(f"  reuse {exe}: re-run (key changed)")
+    todo = [e for e in todo if e not in reused]
     # The cargo reader's own control: whenever a cargo row runs, some `nobin RED` control runs first.
     cargo = [e for e in todo if e.startswith("cargo:")]
     if cargo and not any(rows[e][2] == "nobin RED" for e in cargo):
@@ -335,6 +414,8 @@ def main() -> int:
             report(first, [], control_reads_red(first, v, out) or "ok(known-red control read red)", out, " (reader control)")
     for exe in todo:
         runs, passline, control = rows[exe]
+        lines.clear()
+        w0 = len(waste)
         if not mine(exe):
             for args in runs:
                 print(f"  run {exe} {' '.join(args)}: NOT RUN(not in this tree's own table)")
@@ -363,6 +444,9 @@ def main() -> int:
                          args if exe.startswith("cargo:") else ())
             waste += [l for l in out.splitlines() if l.startswith("WASTE ")]
             report(exe, [] if exe.startswith("cargo:") else args, v, out)
+        if record and keys.get("run:" + exe) and lines and all(v.startswith("ok") for _, v in lines):
+            record.write(f"run:{exe}\t{keys['run:' + exe]}\trun\t{json.dumps({'lines': lines, 'waste': waste[w0:]})}\n")
+    record and record.close()
     shutil.rmtree(nobin, ignore_errors=True)
     if a.waste_out:
         with open(a.waste_out, "w", encoding="utf-8") as f:

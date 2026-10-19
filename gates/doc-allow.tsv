@@ -1,0 +1,3 @@
+# gates/rebase.py (GATES-19): the doc allow-list, path prefixes no judged unit reads at run time.
+# A path here is in no input key; gates/rebase.py check refuses any file outside it that names one in a string literal.
+decisions/

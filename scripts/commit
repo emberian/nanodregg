@@ -34,17 +34,24 @@ set -uo pipefail
 # from refs/heads/main: a worktree's scripts, OWNERS and gates may be behind main, and the
 # parent's gates are the judge. A moved main (exit 75) re-reads main and re-runs, up to
 # COMMIT_RETRIES (default 5) times.
+# The outer loop is the LANDER: it holds a landing-queue ticket for its whole life (fd 6, closed in
+# each attempt so no judge's child can keep a dead lander's ticket alive) and a directory of its own
+# that carries what one attempt leaves the next (the merge bases; GATES-19).
 if [ -z "${ND_COMMIT_ATTEMPT:-}" ]; then
+  new_ticket || exit 2
+  export ND_TICKET=$ticket ND_LANDER_DIR=$common/nanodregg-landers/${ticket##*/}
+  mkdir -p "$ND_LANDER_DIR" || exit 2
+  trap 'rm -rf "$ND_LANDER_DIR" "$ND_TICKET"' EXIT
   for attempt in $(seq 1 "${COMMIT_RETRIES:-5}"); do
     # A private copy per process: a running bash script must never be rewritten under it.
     M=$common/nanodregg-commit-main/$$
     rm -rf "$M"; materialize refs/heads/main "$M/tree" || exit 2
     if [ -x "$M/tree/scripts/commit" ]; then runner=$M/tree/scripts/commit; else runner=$0; fi
-    out=$(ND_COMMIT_ATTEMPT=$attempt ND_COMMIT_SCRIPTS="$M/tree/scripts" "$runner" "$@" 2>&1); rc=$?
+    out=$(ND_COMMIT_ATTEMPT=$attempt ND_COMMIT_SCRIPTS="$M/tree/scripts" "$runner" "$@" 2>&1 6>&-); rc=$?
     printf '%s\n' "$out"
     rm -rf "$M" "$M/tree.index"
     [ $rc -eq 75 ] || exit $rc
-    echo "scripts/commit: main moved (attempt $attempt); re-reading main"
+    echo "scripts/commit: main moved (attempt $attempt); re-reading main and re-basing onto it"
   done
   echo "scripts/commit: main kept moving; gave up after ${COMMIT_RETRIES:-5} attempts"; exit 1
 fi
@@ -92,10 +99,12 @@ if git symbolic-ref -q HEAD > /dev/null; then
   echo "scripts/commit: REFUSED — this checkout is on branch $(git symbolic-ref --short HEAD); a layer worktree is detached at main: git checkout --detach main"; exit 1
 fi
 # The candidate is CURRENT main plus exactly PATH... as this worktree holds them. A path whose
-# version at this worktree's HEAD differs from main's was edited on top of an older copy, and
-# taking it would silently revert whatever main changed there since (051a8cc reverted KERNEL-4's
-# 9e60d7f hunk in Protocol/Rows/Sim.lean exactly so). Refused by name, per file. `git checkout
-# --detach main` carries an edit along when main did not change that file, and refuses when it did.
+# version at this worktree's HEAD differs from main's was edited on top of an older copy: taken
+# whole it would silently revert whatever main changed there since (051a8cc reverted KERNEL-4's
+# 9e60d7f hunk in Protocol/Rows/Sim.lean exactly so). Until GATES-19 each such file was refused
+# (`worktree behind main on F`) and re-applied by hand; now gates/rebase.py merges main's change
+# into the worktree copy (3-way, base = the copy the lander edited) and the merged RESULT is what is
+# judged, or refuses the file by name with the conflicting hunks and writes nothing (ROOT 10-19).
 prefix=$(git rev-parse --show-prefix)
 rel=(); for p in "${paths[@]}"; do r=$prefix${p#./}; rel+=("${r%/}"); done
 for r in "${rel[@]}"; do
@@ -105,10 +114,9 @@ for r in "${rel[@]}"; do
 done
 behind=$(git -C "$repo" diff --name-only HEAD "$base" -- "${rel[@]/#/:(top,literal)}") || exit 2
 if [ -n "$behind" ]; then
-  printf '%s\n' "$behind" | while read -r f; do
-    echo "scripts/commit: REFUSED — worktree behind main on $f: git checkout --detach main, re-apply your edit"
-  done
-  exit 1
+  mapfile -t bf <<< "$behind"
+  python3 "$scripts/../gates/rebase.py" merge --repo "$repo" --head HEAD --main "$base" \
+    ${ND_LANDER_DIR:+--bases "$ND_LANDER_DIR/merged.tsv"} -- "${bf[@]}" || exit 1
 fi
 idx=$tmp/index
 export GIT_INDEX_FILE=$idx
@@ -140,14 +148,27 @@ if git -C "$repo" diff --quiet "$base" "$cand"; then echo "scripts/commit: nothi
 git -C "$repo" diff --stat "$base" "$cand"
 
 pp=(--index --base "$base" --message "$msg"); [ -n "$nobuild" ] && pp+=(--no-build)
+# GATES-19: the judge records each ok unit under its input key; a re-based attempt carries a unit of
+# the previous attempt's record only when its key is byte-identical (pre-push re-checks every key).
+[ -n "${ND_LANDER_DIR:-}" ] && pp+=(--record "$ND_LANDER_DIR/record.new" --reuse "$ND_LANDER_DIR/record.prev")
 "$scripts/pre-push" "${pp[@]}"; rc=$?
 if [ $rc -eq 76 ]; then echo "scripts/commit: NOT JUDGED — the judge was killed under load (KILLED(load)) or a run timed out twice (UNREAD(timeout), GATES-16); nothing written: re-run scripts/commit"; exit 76; fi
 [ $rc -eq 0 ] || { echo "scripts/commit: REFUSED by scripts/pre-push"; exit 1; }
 
 new=$(git -C "$repo" commit-tree "$cand" -p "$base" -F "$msg") || exit 2
-if ! git -C "$repo" update-ref refs/heads/main "$new" "$base"; then
-  echo "scripts/commit: main moved while this commit was judged; nothing written."; exit 75
-fi
+# The landing queue (gates/land.py, GATES-19): a green lander whose base is still main lands by
+# compare-and-swap unless a lander displaced twice is alive (that one is head regardless; this one
+# waits). Main moved: displaced, exit 75, and the outer loop re-bases. An outer loop older than
+# GATES-19 holds no ticket; then this attempt takes one of its own, which starts at zero.
+if [ -z "${ND_TICKET:-}" ]; then new_ticket || exit 2; ND_TICKET=$ticket; trap 'rm -rf "$tmp" "$ND_TICKET"' EXIT; fi
+python3 "$scripts/../gates/land.py" --queue "$common/nanodregg-queue" --ticket "$ND_TICKET" --repo "$repo" \
+  --ref refs/heads/main --new "$new" --base "$base"; rc=$?
+case $rc in
+  0) ;;
+  75) [ -n "${ND_LANDER_DIR:-}" ] && mv -f "$ND_LANDER_DIR/record.new" "$ND_LANDER_DIR/record.prev"
+      echo "scripts/commit: main moved while this commit was judged; nothing written."; exit 75 ;;
+  *) echo "scripts/commit: the landing queue failed (exit $rc); nothing written."; exit 1 ;;
+esac
 unset GIT_INDEX_FILE
 echo "scripts/commit: main = $(git -C "$repo" log --oneline -1 "$new")"
 # Leave this worktree on the new main: point the landed paths' index entries at it (the working

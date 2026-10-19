@@ -103,3 +103,21 @@ generated_check() {
     *) wrapped env -C "$dir" lake exe "$exe" --check "$out" ;;
   esac
 }
+
+# new_ticket [QUEUE]: take a landing-queue ticket (gates/land.py; GATES-19): QUEUE/<seq>.<pid>, seq
+# from a counter kept under QUEUE/seq.flock, the ticket flock'd on fd 6 by this process until it
+# exits, so a dead lander's ticket is released by the kernel. Sets ticket. Call it in the process
+# that must hold it, never in `$(…)`.
+new_ticket() {
+  flock_or_refuse || return 1
+  local q=${1:-$common/nanodregg-queue} s
+  mkdir -p "$q" || return 1
+  exec 7>> "$q/seq.flock"
+  flock -w 60 7 || { echo "gate: the queue counter lock was held for 60 s" >&2; exec 7>&-; return 1; }
+  s=$(( $(cat "$q/seq" 2>/dev/null || echo 0) + 1 ))
+  echo "$s" > "$q/seq"
+  ticket=$q/$(printf '%08d' "$s").$$
+  exec 6>> "$ticket"
+  flock -n 6 || { echo "gate: could not lock the new ticket $ticket" >&2; exec 7>&-; return 1; }
+  exec 7>&-
+}

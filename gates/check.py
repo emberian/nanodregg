@@ -7,6 +7,7 @@ import sys
 
 import closure
 import owners
+import rebase
 import refusals
 import runs
 import size
@@ -82,6 +83,7 @@ results = {
     "size": size.check(t, msg, tree.read(a.base_tree) if a.base_tree and has_lakefile(a.base_tree) else None),
     "paths": case_collisions(t.root) + conflict_markers(t.root),
     "runs": runs.check(t),
+    "rebase": rebase.check(t.root),
     "tcb": tcb.check(t.root),
     "vectors": vectors.check(t.root, a.base_tree if a.base_tree and has_lakefile(a.base_tree) else None),
     "waste": waste.check(read(os.path.join(t.root, "gates", "waste.tsv")) or "", read(a.base_waste), msg),
