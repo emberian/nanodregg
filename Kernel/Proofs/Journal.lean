@@ -28,7 +28,16 @@ theorem that reads the journal after an admission takes it of the World it start
 * `admit_prune_verdict`: pruning changes no verdict of any turn whose window ends by its
   transaction id's entry height plus `windowMax` (every call-derived retry): the window is
   checked before the journal, so an expired retry is `outsideWindow` with or without its entry.
+* `reach_prune_check_call` (KERNEL-38 (c)): from a genesis, on the log the follower's audit accepts,
+  pruning changed no check of a call's retry, with no window premise, or two of the events
+  `retryPres` names collide (`call_retry_window`: the never-pruned entry under a call's transaction
+  id is the same call's, or a different call with its digest). Its teeth: `_sep`, an instance where
+  the window disjunct carries the content, one where it is false, and one (`journal-shadow-reuse`'s
+  shape, a call's event under another window) where `hv` fails without the call-log premise, and
+  its `Honest` twin on a `Ctx` whose signatures verify, the retry a real `receive` output
+  (`honest_retry_window_needs_honest`).
 -/
+import Kernel.Proofs.Audit
 import Kernel.Proofs.Fold
 import Kernel.Proofs.Receive
 import Kernel.Receive.Follow
@@ -686,5 +695,537 @@ theorem reach_prune_check {X : Ctx D} {name nonce : ByteArray} {allowance : Nat}
       (genesisWorld X name nonce allowance founders).journal l) } t :=
   let hg := genesisWorld_journalOk X name nonce allowance founders
   fold_prune_check hg.1 (journalFiltered_self hg) h hv
+
+/-! ## A call's retry needs no window premise (KERNEL-38 (c))
+
+`fold_prune_check` takes `hv`: the retry's window ends by its transaction id's never-pruned entry
+height plus `windowMax`. At bare `admit` that premise cannot be dropped (the sim arm
+`journal-shadow-reuse:replayed`: a recycled id under a fresh window is admitted by the real fold and
+refused `replayed` against the never-pruned journal). On a log every turn of which is a call's turn
+(`CallLog`; every `Honest` log is one, `honest_callLog`), the never-pruned entry under a call's
+transaction id was written by a call with that digest: the retry's own call, whose window is the
+retry's, or a DIFFERENT call with the same digest, and then two of the events the theorem names
+(`retryPres`: the retry's event and every event of the log, under `domTx`) collide. A turn is a
+call's turn when its event decodes to that call and it carries the call's bytes, digest and window:
+what the audit re-reads of every logged turn (`rederive_ok`), and what `receive` gives
+(`callTurn_of_receive`). -/
+
+/-- `t` is call `c`'s turn as a follower re-reads it: its event decodes to `c`, and it carries `c`'s
+canonical bytes, `c`'s transaction id and `c`'s window end. -/
+def CallTurn (X : Ctx D) (t : Turn D) : Prop :=
+  ∃ c, X.decodeCall t.event = some c ∧ t.event = X.callBytes c ∧ t.txId = txIdOf X c ∧
+    t.validUntil = c.unsigned.validUntil
+
+/-- Every turn of the log is a call's turn. -/
+def CallLog (X : Ctx D) (l : List (Step D)) : Prop := ∀ u ∈ Step.turns l, CallTurn X u
+
+/-- A turn `receive` derives from a call its event decodes to is that call's turn. -/
+theorem callTurn_of_receive {X : Ctx D} {v : World D} {c : Call D} {t : Turn D}
+    (hd : X.decodeCall t.event = some c) (hr : receive X v c = .ok t) : CallTurn X t := by
+  obtain ⟨_, _, _, _, he, hid, _, hvu⟩ := receive_ok hr
+  exact ⟨c, hd, he, hid, hvu⟩
+
+/-- **An `Honest` log is a call log**: every turn in it is `receive` of the call its own event
+decodes to. -/
+theorem honest_callLog {X : Ctx D} : ∀ {w w' : World D} {l : List (Step D)},
+    Honest X w l → World.fold X.env w l = .ok w' → CallLog X l
+  | _, _, [], _, _ => fun u hu => by simp [Step.turns] at hu
+  | _, _, .turn t :: _, hh, h => by
+      obtain ⟨w₁, h₁, h₂⟩ := fold_cons_ok.mp h
+      obtain ⟨c, hd, hr, hrest⟩ := hh
+      intro u hu
+      simp only [Step.turns, List.mem_cons] at hu
+      rcases hu with rfl | hu
+      · exact callTurn_of_receive hd hr
+      · exact honest_callLog (hrest w₁ h₁) h₂ u hu
+  | _, _, .refusal _ :: _, hh, h => by
+      obtain ⟨w₁, h₁, h₂⟩ := fold_cons_ok.mp h
+      obtain ⟨_, _, _, _, _, hrest⟩ := hh
+      intro u hu
+      simp only [Step.turns] at hu
+      exact honest_callLog (hrest w₁ h₁) h₂ u hu
+
+omit [Ord D] [DecidableEq D] in
+/-- Two call turns under one transaction id carry one window, or their events are two different
+inputs with one `domTx` digest. -/
+theorem callTurn_window {X : Ctx D} {t u : Turn D} (ht : CallTurn X t) (hu : CallTurn X u)
+    (hid : t.txId = u.txId) :
+    t.validUntil = u.validUntil ∨ CollidesAmong X.env.hash [(domTx, t.event), (domTx, u.event)] := by
+  obtain ⟨c, hd, he, hti, hvu⟩ := ht
+  obtain ⟨c', hd', he', hui, hvu'⟩ := hu
+  by_cases hev : t.event = u.event
+  · left
+    rw [hev, hd'] at hd
+    cases hd
+    rw [hvu, hvu']
+  · right
+    refine CollidesAmong.pair (fun h => hev (Prod.mk.inj h).2) ?_
+    have : txIdOf X c = txIdOf X c' := hti.symm.trans (hid.trans hui)
+    unfold txIdOf at this
+    show X.env.hash domTx t.event = X.env.hash domTx u.event
+    rw [he, he']
+    exact this
+
+/-- An admitted turn's window ends within `windowMax` of the height it lands at. -/
+theorem admit_window_end {E : Env D} {w w' : World D} {t : Turn D} (h : World.admit E w t = .ok w') :
+    t.validUntil ≤ w.height + 1 + Bounds.windowMax := by
+  have hw := (admit_window h).1
+  have hb := admit_bounded h
+  unfold checkBounds at hb
+  simp only [except_bind_ok] at hb
+  obtain ⟨⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, hwm, _⟩ := hb
+  rw [req_ok, decide_eq_true_eq] at hwm
+  omega
+
+omit [Ord D] [DecidableEq D] in
+theorem retryPres_tail {t u : Turn D} {rest : List (Step D)} {x : String × ByteArray}
+    (hx : x ∈ retryPres t rest) : x ∈ retryPres t (.turn u :: rest) := by
+  simp only [retryPres, Step.turns, List.map_cons, List.mem_cons] at hx ⊢
+  rcases hx with h | h
+  · exact .inl h
+  · exact .inr (.inr h)
+
+/-- The induction behind `call_retry_window`, over any list `S` of inputs holding `retryPres`. -/
+theorem shadow_call_window {X : Ctx D} {t : Turn D} (ht : CallTurn X t) :
+    ∀ {w w' : World D} {J : Journal D} {l : List (Step D)} (S : List (String × ByteArray)),
+      (∀ x ∈ retryPres t l, x ∈ S) → World.fold X.env w l = .ok w' → CallLog X l →
+      ((∀ e, J.get (journalSpec X.env) t.txId = some e → t.validUntil ≤ e.1 + Bounds.windowMax) ∨
+        CollidesAmong X.env.hash S) →
+      (∀ e, (shadowJournal X.env w.height J l).get (journalSpec X.env) t.txId = some e →
+        t.validUntil ≤ e.1 + Bounds.windowMax) ∨ CollidesAmong X.env.hash S
+  | _, _, _, [], _, _, _, _, hJ => hJ
+  | _, _, J, .refusal _ :: rest, S, hS, h, hl, hJ => by
+      obtain ⟨w₁, h₁, h₂⟩ := fold_cons_ok.mp h
+      have hh := (refuse_frame h₁).2.2.1
+      have := shadow_call_window ht (J := J) (l := rest) S
+        (fun x hx => hS x (by simpa [retryPres, Step.turns] using hx)) h₂
+        (fun u hu => hl u (by simpa [Step.turns] using hu)) hJ
+      rw [hh] at this
+      exact this
+  | w, _, J, .turn u :: rest, S, hS, h, hl, hJ => by
+      obtain ⟨w₁, h₁, h₂⟩ := fold_cons_ok.mp h
+      have hh := admit_height h₁
+      have hu : CallTurn X u := hl u (by simp [Step.turns])
+      have hJ' : (∀ e, (J.insert (journalSpec X.env) u.txId (w.height + 1, turnDigest X.env u)).get
+            (journalSpec X.env) t.txId = some e → t.validUntil ≤ e.1 + Bounds.windowMax) ∨
+          CollidesAmong X.env.hash S := by
+        rcases hJ with hJ | hc
+        · by_cases hk : t.txId = u.txId
+          · rcases callTurn_window ht hu hk with hv | hc
+            · left
+              intro e he
+              rw [Trie.get_insert, if_pos hk] at he
+              cases he
+              have := admit_window_end h₁
+              show t.validUntil ≤ w.height + 1 + Bounds.windowMax
+              omega
+            · right
+              refine hc.mono fun x hx => hS x ?_
+              simp only [List.mem_cons, List.not_mem_nil, or_false] at hx
+              rcases hx with rfl | rfl <;> simp [retryPres, Step.turns]
+          · left
+            intro e he
+            rw [Trie.get_insert, if_neg hk] at he
+            exact hJ e he
+        · exact .inr hc
+      have := shadow_call_window ht (J := J.insert (journalSpec X.env) u.txId (w.height + 1, turnDigest X.env u))
+        (l := rest) S (fun x hx => hS x (retryPres_tail hx)) h₂
+        (fun v hv => hl v (by simp [Step.turns, hv])) hJ'
+      rw [hh] at this
+      exact this
+
+/-- **A call's retry is windowed on a call log.** On a log the fold admitted every turn of which is a
+call's turn, a call's turn `t` (a retry) ends its window by its transaction id's never-pruned entry
+height plus `windowMax` (`fold_prune_check`'s `hv`), or two of the events `retryPres t l` names have
+one `domTx` digest; given only that the starting journal `J` already meets the bound (true of every
+empty journal: the genesis's). -/
+theorem call_retry_window {X : Ctx D} {w w' : World D} {J : Journal D} {l : List (Step D)} {t : Turn D}
+    (h : World.fold X.env w l = .ok w') (hl : CallLog X l) (ht : CallTurn X t)
+    (hJ : ∀ e, J.get (journalSpec X.env) t.txId = some e → t.validUntil ≤ e.1 + Bounds.windowMax) :
+    (∀ e, (shadowJournal X.env w.height J l).get (journalSpec X.env) t.txId = some e →
+      t.validUntil ≤ e.1 + Bounds.windowMax) ∨ CollidesAmong X.env.hash (retryPres t l) :=
+  shadow_call_window ht _ (fun _ hx => hx) h hl (.inl hJ)
+
+/-- **`hv` on an `Honest` log** (the follower's: `audit_ok`), for a retry `receive` derives from the
+call its event decodes to (on any World `v`), up to a collision among `retryPres t l`. -/
+theorem honest_retry_window {X : Ctx D} {w w' v : World D} {J : Journal D} {l : List (Step D)}
+    {t : Turn D} {c : Call D} (hH : Honest X w l) (h : World.fold X.env w l = .ok w')
+    (hd : X.decodeCall t.event = some c) (hr : receive X v c = .ok t)
+    (hJ : ∀ e, J.get (journalSpec X.env) t.txId = some e → t.validUntil ≤ e.1 + Bounds.windowMax) :
+    (∀ e, (shadowJournal X.env w.height J l).get (journalSpec X.env) t.txId = some e →
+      t.validUntil ≤ e.1 + Bounds.windowMax) ∨ CollidesAmong X.env.hash (retryPres t l) :=
+  call_retry_window h (honest_callLog hH h) (callTurn_of_receive hd hr) hJ
+
+/-- **Pruning changed no check of a call's retry on an `Honest` log** (`fold_prune_check` with `hv`
+discharged by `honest_retry_window`), up to a collision among `retryPres t l`. -/
+theorem honest_prune_check {X : Ctx D} {w w' v : World D} {J : Journal D} {l : List (Step D)}
+    {t : Turn D} {c : Call D} (hc : w.JournalCanon X.env)
+    (hj : JournalFiltered X.env (lastPrune w.height) w.journal J) (h : World.fold X.env w l = .ok w')
+    (hH : Honest X w l) (hd : X.decodeCall t.event = some c) (hr : receive X v c = .ok t)
+    (hJ : ∀ e, J.get (journalSpec X.env) t.txId = some e → t.validUntil ≤ e.1 + Bounds.windowMax) :
+    check X.env w' t = check X.env { w' with journal := shadowJournal X.env w.height J l } t ∨
+      CollidesAmong X.env.hash (retryPres t l) :=
+  (honest_retry_window hH h hd hr hJ).imp (fold_prune_check hc hj h) id
+
+/-- **From genesis, pruning changed no check of a call's retry: no window premise.** A World `w` the
+follower's audit reaches from a genesis checks a call's retry (a turn `receive` derives, on any
+World, from the call its event decodes to) exactly as the same World carrying the journal its log
+never pruned, or two of the events `retryPres t l` names have one `domTx` digest. -/
+theorem reach_prune_check_call {X : Ctx D} {name nonce : ByteArray} {allowance : Nat}
+    {founders : List (ByteArray × D)} {w v : World D} {l : List (Step D)} {t : Turn D} {c : Call D}
+    (h : audit X (genesisWorld X name nonce allowance founders) l = .ok w)
+    (hd : X.decodeCall t.event = some c) (hr : receive X v c = .ok t) :
+    check X.env w t = check X.env { w with journal := (shadowJournal X.env
+      (genesisWorld X name nonce allowance founders).height
+      (genesisWorld X name nonce allowance founders).journal l) } t ∨
+      CollidesAmong X.env.hash (retryPres t l) :=
+  let hg := genesisWorld_journalOk X name nonce allowance founders
+  have hfh := audit_ok.mp h
+  honest_prune_check hg.1 (journalFiltered_self hg) hfh.1 hfh.2 hd hr (fun e he => by
+    rw [show (genesisWorld X name nonce allowance founders).journal = .empty from rfl,
+      Trie.get_empty] at he
+    cases he)
+
+/-- TOOTH (`reach_prune_check_call`): under a hash that separates the events `retryPres t l` names,
+pruning changed no check of a call's retry. -/
+theorem reach_prune_check_call_sep {X : Ctx D} {name nonce : ByteArray} {allowance : Nat}
+    {founders : List (ByteArray × D)} {w v : World D} {l : List (Step D)} {t : Turn D} {c : Call D}
+    (h : audit X (genesisWorld X name nonce allowance founders) l = .ok w)
+    (hd : X.decodeCall t.event = some c) (hr : receive X v c = .ok t)
+    (hsep : Separates X.env.hash (retryPres t l)) :
+    check X.env w t = check X.env { w with journal := (shadowJournal X.env
+      (genesisWorld X name nonce allowance founders).height
+      (genesisWorld X name nonce allowance founders).journal l) } t :=
+  hsep.elim (reach_prune_check_call h hd hr)
+
+/-! ### Teeth, on a concrete call log
+
+A toy `Ctx` over one-byte digests: a call's bytes are its window end in two little-endian bytes,
+decoded back to the canonical call with that window end; the hash is an input's first byte, so the
+events of windows `1` and `2049` (`[1, 0]`, `[1, 8]`) collide and those of `1025` and `2` (`[1, 4]`,
+`[2, 0]`) do not. Every turn below has no touches, its charge its weight, and is admitted (by
+`decide`) from an empty World at height 0. -/
+
+private def rtEnv : Env UInt8 where
+  hash _ b := b.data.getD 0 0
+  bytes d := ⟨#[d]⟩
+  turnBytes _ := ByteArray.empty
+  cellBytes _ := ByteArray.empty
+
+private def rtBytes (v : Nat) : ByteArray := ⟨#[UInt8.ofNat v, UInt8.ofNat (v / 256)]⟩
+
+private def rtCall (v : Nat) : Call UInt8 :=
+  let u : Unsigned UInt8 :=
+    { world := 0
+      member := 0
+      key := ByteArray.empty
+      notBefore := 0
+      validUntil := v
+      pins := []
+      maxCharge := 0
+      body := .revoke 0 }
+  { unsigned := u, signature := ByteArray.empty }
+
+private def rtCtx : Ctx UInt8 where
+  env := rtEnv
+  unsignedBytes _ := ByteArray.empty
+  callBytes c := rtBytes c.unsigned.validUntil
+  decodeCall b := if b.size = 2 then
+      some (rtCall ((b.data.getD 0 0).toNat + 256 * (b.data.getD 1 0).toNat)) else none
+  digestOf _ := none
+  verify _ _ _ := false
+  program :=
+    { checkInstall := fun _ _ => .error (.program "toy")
+      judge := fun _ _ _ _ _ _ => .error (.program "toy")
+      run := fun _ _ _ _ _ _ _ _ => .error (.program "toy")
+      rels := fun _ _ _ => .error (.program "toy") }
+
+/-- A turn under window `[nb, v]` carrying the event of the call with window end `ev`, its txId that
+event's digest, charging its weight. -/
+private def rtTurn (nb v ev : Nat) : Turn UInt8 :=
+  let t0 : Turn UInt8 :=
+    { txId := rtEnv.hash domTx (rtBytes ev)
+      notBefore := nb
+      validUntil := v
+      touches := []
+      creates := []
+      nullifiers := []
+      charge := 0
+      event := rtBytes ev }
+  { t0 with charge := t0.weight }
+
+private def rtWorld : World UInt8 where
+  trie := .empty
+  journal := .empty
+  refusals := .empty
+  rows := .empty
+  height := 0
+  steps := 0
+  chain := 0
+  allowance := 1000000
+  origin := 0
+
+private theorem rt_callTurn (nb v : Nat) (hd : rtCtx.decodeCall (rtBytes v) = some (rtCall v)) :
+    CallTurn rtCtx (rtTurn nb v v) :=
+  ⟨rtCall v, hd, rfl, rfl, rfl⟩
+
+private instance (hash : String → ByteArray → UInt8) (S : List (String × ByteArray)) :
+    Decidable (Separates hash S) := by
+  unfold Separates; infer_instance
+
+private theorem rt_fold_ok {l : List (Step UInt8)} (h : (World.fold rtEnv rtWorld l).isOk = true) :
+    ∃ w', World.fold rtCtx.env rtWorld l = .ok w' := by
+  cases hf : World.fold rtEnv rtWorld l with
+  | error e => rw [hf] at h; cases h
+  | ok w' => exact ⟨w', hf⟩
+
+/-- The retry and a second call: windows `[1, 1025]` and `[1, 2]`, at heights 1 and 2. -/
+private def sepLog : List (Step UInt8) := [.turn (rtTurn 1 1025 1025), .turn (rtTurn 1 2 2)]
+
+/-- **TOOTH (`_sep`, on an instance): the window disjunct carries the content.** On a call log the
+fold admits, from a World with an empty journal, the retry of the first call has a never-pruned entry
+(at height 1) and its window ends exactly at that height plus `windowMax`, while the hash separates
+the three events `retryPres` names (two of them distinct): the collision disjunct is false. -/
+theorem call_retry_window_sep_instance :
+    ∃ (X : Ctx UInt8) (w w' : World UInt8) (l : List (Step UInt8)) (t : Turn UInt8),
+      World.fold X.env w l = .ok w' ∧ CallLog X l ∧ CallTurn X t ∧ w.journal = .empty ∧
+      Separates X.env.hash (retryPres t l) ∧ ¬ CollidesAmong X.env.hash (retryPres t l) ∧
+      (∃ p ∈ retryPres t l, ∃ q ∈ retryPres t l, p ≠ q) ∧
+      (shadowJournal X.env w.height w.journal l).get (journalSpec X.env) t.txId =
+        some (1, turnDigest X.env t) ∧
+      t.validUntil = 1 + Bounds.windowMax := by
+  obtain ⟨w', hf⟩ := rt_fold_ok (l := sepLog) (by decide)
+  have hsep : Separates rtCtx.env.hash (retryPres (rtTurn 1 1025 1025) sepLog) := by decide
+  refine ⟨rtCtx, rtWorld, w', sepLog, rtTurn 1 1025 1025, hf, ?_, rt_callTurn 1 1025 (by decide), rfl,
+    hsep, hsep.not_collides, by decide, by decide, rfl⟩
+  intro u hu
+  simp only [sepLog, Step.turns, List.mem_cons, List.not_mem_nil, or_false] at hu
+  rcases hu with rfl | rfl
+  · exact rt_callTurn 1 1025 (by decide)
+  · exact rt_callTurn 1 2 (by decide)
+
+/-- A call log whose one call (window `[1, 1]`, event `[1, 0]`) shares its digest with the retry's
+call (window `[1025, 2049]`, event `[1, 8]`). -/
+private def colLog : List (Step UInt8) := [.turn (rtTurn 1 1 1)]
+
+/-- **DISJUNCT CHECK (the window disjunct is not provable from the premises).** On a call log the
+fold admits, from an empty journal, a call's retry whose window ends past its id's never-pruned entry
+height plus `windowMax`: the window disjunct is false, and the collision disjunct holds. -/
+theorem call_retry_window_collides_instance :
+    ∃ (X : Ctx UInt8) (w w' : World UInt8) (l : List (Step UInt8)) (t : Turn UInt8),
+      World.fold X.env w l = .ok w' ∧ CallLog X l ∧ CallTurn X t ∧ w.journal = .empty ∧
+      ¬ (∀ e, (shadowJournal X.env w.height w.journal l).get (journalSpec X.env) t.txId = some e →
+        t.validUntil ≤ e.1 + Bounds.windowMax) ∧
+      CollidesAmong X.env.hash (retryPres t l) := by
+  obtain ⟨w', hf⟩ := rt_fold_ok (l := colLog) (by decide)
+  refine ⟨rtCtx, rtWorld, w', colLog, rtTurn 1025 2049 2049, hf, ?_, rt_callTurn 1025 2049 (by decide),
+    rfl, ?_, ?_⟩
+  · intro u hu
+    simp only [colLog, Step.turns, List.mem_cons, List.not_mem_nil, or_false] at hu
+    subst hu
+    exact rt_callTurn 1 1 (by decide)
+  · intro hv
+    have := hv (1, turnDigest rtEnv (rtTurn 1 1 1)) (by decide)
+    revert this
+    decide
+  · exact ⟨_, List.mem_cons_self .., (domTx, rtBytes 1), List.mem_cons_of_mem _ (List.mem_cons_self ..),
+      by decide, by decide⟩
+
+/-- A log whose one turn carries the event of the call with window end `2049` (event `[1, 8]`) under
+the window `[1, 1]`: admitted at bare `admit`, but not that call's turn. -/
+private def rawLog : List (Step UInt8) := [.turn (rtTurn 1 1 2049)]
+
+/-- **TOOTH (`CallLog` is load-bearing in `call_retry_window`).** Drop the call-log premise and keep
+every other premise of `call_retry_window`: a log the fold admits, from an empty journal, whose one
+turn carries a call's event under a window not that call's (the `journal-shadow-reuse:replayed` shape:
+one transaction id, two windows), and that call's own turn as the retry. That log is no call log;
+`hv` fails, and the collision disjunct is false too (the only two events named are one). Its
+`¬ Honest` comes only through `honest_callLog`: `rtCtx` accepts no signature, so its `receive` derives
+nothing and this instance does not exercise the `hr` premise of the `Honest` forms
+(`honest_retry_window_needs_honest` does). -/
+theorem call_retry_window_needs_callLog :
+    ∃ (X : Ctx UInt8) (w w' : World UInt8) (l : List (Step UInt8)) (t : Turn UInt8),
+      World.fold X.env w l = .ok w' ∧ CallTurn X t ∧ w.journal = .empty ∧
+      ¬ CallLog X l ∧ ¬ Honest X w l ∧
+      ¬ (∀ e, (shadowJournal X.env w.height w.journal l).get (journalSpec X.env) t.txId = some e →
+        t.validUntil ≤ e.1 + Bounds.windowMax) ∧
+      ¬ CollidesAmong X.env.hash (retryPres t l) := by
+  obtain ⟨w', hf⟩ := rt_fold_ok (l := rawLog) (by decide)
+  have hnl : ¬ CallLog rtCtx rawLog := by
+    intro hl
+    obtain ⟨c, hd, -, -, hvu⟩ := hl (rtTurn 1 1 2049) (by simp [rawLog, Step.turns])
+    have hd' : rtCtx.decodeCall (rtTurn 1 1 2049).event = some (rtCall 2049) := by decide
+    rw [hd'] at hd
+    cases hd
+    revert hvu
+    decide
+  have hsep : Separates rtCtx.env.hash (retryPres (rtTurn 1025 2049 2049) rawLog) := by decide
+  refine ⟨rtCtx, rtWorld, w', rawLog, rtTurn 1025 2049 2049, hf, rt_callTurn 1025 2049 (by decide), rfl,
+    hnl, fun hH => hnl (honest_callLog hH hf), ?_, hsep.not_collides⟩
+  intro hv
+  have := hv (1, turnDigest rtEnv (rtTurn 1 1 2049)) (by decide)
+  revert this
+  decide
+
+/-! ### The same tooth on an `Honest` log: two signed rotations
+
+A toy `Ctx` whose calls are key rotations (`rotate` needs no current-key check and reads only the
+member's own pinned cell), with every signature accepted and a six-byte codec (window end, member,
+new key, next digest, pin) decoded back to the rotation it encodes. A World with two members, 7 and 8,
+each precommitted to its next key; the log is member 7's rotation (window `[1, 1025]`) then member
+8's (window `[1, 2]`), each `receive` of the call its event decodes to on the World before it. The
+retry is member 7's call derived again on the starting World. -/
+
+private def isOkAs {ε α : Type} [DecidableEq α] : Except ε α → α → Bool
+  | .ok b, a => decide (b = a)
+  | .error _, _ => false
+
+private theorem of_isOkAs {ε α : Type} [DecidableEq α] {x : Except ε α} {a : α}
+    (h : isOkAs x a = true) : x = .ok a := by
+  cases x with
+  | ok b => simp only [isOkAs, decide_eq_true_eq] at h; rw [h]
+  | error _ => cases h
+
+/-- `Honest`, decided for logs of turns: each turn is `receive` of the call its event decodes to. -/
+private def honestB (X : Ctx UInt8) : World UInt8 → List (Step UInt8) → Bool
+  | _, [] => true
+  | w, .turn t :: rest =>
+      match X.decodeCall t.event with
+      | none => false
+      | some c => isOkAs (receive X w c) t &&
+          match World.admit X.env w t with
+          | .ok w' => honestB X w' rest
+          | .error _ => true
+  | _, .refusal _ :: _ => false
+
+private theorem honest_of_honestB {X : Ctx UInt8} :
+    ∀ {w : World UInt8} {l : List (Step UInt8)}, honestB X w l = true → Honest X w l
+  | _, [], _ => trivial
+  | w, .turn t :: rest, h => by
+      simp only [honestB] at h
+      split at h
+      · cases h
+      · rename_i c hd
+        simp only [Bool.and_eq_true] at h
+        refine ⟨c, hd, of_isOkAs h.1, fun w' ha => ?_⟩
+        have h2 := h.2
+        rw [ha] at h2
+        exact honest_of_honestB h2
+  | _, .refusal _ :: _, h => by simp [honestB] at h
+
+private def hCall (m nk nn : UInt8) (vu : Nat) (p : UInt8) : Call UInt8 :=
+  let u : Unsigned UInt8 :=
+    { world := 0
+      member := m
+      key := ⟨#[nk]⟩
+      notBefore := 1
+      validUntil := vu
+      pins := [(m, p)]
+      maxCharge := 100000
+      body := .rotate ⟨#[nk]⟩ nn }
+  { unsigned := u, signature := ByteArray.empty }
+
+private def hBytes (c : Call UInt8) : ByteArray :=
+  ⟨#[UInt8.ofNat c.unsigned.validUntil, UInt8.ofNat (c.unsigned.validUntil / 256), c.unsigned.member,
+    c.unsigned.key.data.getD 0 0, (match c.unsigned.body with | .rotate _ n => n | _ => 0),
+    (c.unsigned.pins.head?.map Prod.snd).getD 0]⟩
+
+private def hCtx : Ctx UInt8 where
+  env := rtEnv
+  unsignedBytes _ := ByteArray.empty
+  callBytes := hBytes
+  decodeCall b := if b.size = 6 then
+      some (hCall (b.data.getD 2 0) (b.data.getD 3 0) (b.data.getD 4 0)
+        ((b.data.getD 0 0).toNat + 256 * (b.data.getD 1 0).toNat) (b.data.getD 5 0)) else none
+  digestOf b := if b.size = 1 then some (b.data.getD 0 0) else none
+  verify _ _ _ := true
+  program := rtCtx.program
+
+private def hMember (k nxt : UInt8) : Cell :=
+  { kind := kindMember, discipline := .ram, slots := [(slotKey, ⟨#[k]⟩), (slotNext, ⟨#[nxt]⟩)] }
+
+private def hWorld : World UInt8 :=
+  let t7 := Trie.T.empty.insert (trieSpec rtEnv) (.cell 7) (.entry (.live (hMember 10 20) 0))
+  let tr := t7.insert (trieSpec rtEnv) (.cell 8) (.entry (.live (hMember 11 21) 0))
+  { rtWorld with trie := tr }
+
+private def hCall1 : Call UInt8 := hCall 7 20 30 1025 (pinOf rtEnv (some (.live (hMember 10 20) 0)))
+private def hCall2 : Call UInt8 := hCall 8 21 31 2 (pinOf rtEnv (some (.live (hMember 11 21) 0)))
+
+private def hDummy : Turn UInt8 := rtTurn 0 0 0
+
+private def hTurn1 : Turn UInt8 := ((receive hCtx hWorld hCall1).toOption).getD hDummy
+private def hTurn2 : Turn UInt8 := ((receive hCtx hWorld hCall2).toOption).getD hDummy
+
+private def hLog : List (Step UInt8) := [.turn hTurn1, .turn hTurn2]
+
+/-- **TOOTH (`_sep`, on an `Honest` instance): every premise of `honest_retry_window` holds and the
+window disjunct carries the content.** On a two-call `Honest` log the fold admits from a World with
+an empty journal, member 7's call re-derived on the starting World (a turn `receive` derives from the
+call its event decodes to) has its never-pruned entry at height 1 and its window ends exactly at that
+height plus `windowMax`; the hash separates the events `retryPres` names, two of which differ, so the
+collision disjunct is false. -/
+theorem honest_retry_window_sep_instance :
+    ∃ (X : Ctx UInt8) (w w' v : World UInt8) (l : List (Step UInt8)) (t : Turn UInt8) (c : Call UInt8),
+      Honest X w l ∧ World.fold X.env w l = .ok w' ∧ X.decodeCall t.event = some c ∧
+      receive X v c = .ok t ∧ w.journal = .empty ∧
+      Separates X.env.hash (retryPres t l) ∧ ¬ CollidesAmong X.env.hash (retryPres t l) ∧
+      (∃ p ∈ retryPres t l, ∃ q ∈ retryPres t l, p ≠ q) ∧
+      (shadowJournal X.env w.height w.journal l).get (journalSpec X.env) t.txId =
+        some (1, turnDigest X.env t) ∧
+      t.validUntil = 1 + Bounds.windowMax := by
+  obtain ⟨w', hf⟩ : ∃ w', World.fold hCtx.env hWorld hLog = .ok w' := by
+    have h : (World.fold rtEnv hWorld hLog).isOk = true := by decide
+    cases hf : World.fold rtEnv hWorld hLog with
+    | error e => rw [hf] at h; cases h
+    | ok w' => exact ⟨w', hf⟩
+  have hsep : Separates hCtx.env.hash (retryPres hTurn1 hLog) := by decide
+  refine ⟨hCtx, hWorld, w', hWorld, hLog, hTurn1, hCall1, honest_of_honestB (by decide), hf,
+    by decide, of_isOkAs (by decide), rfl, hsep, hsep.not_collides, by decide, by decide, by decide⟩
+
+
+/-- Member 7's rotation with window end `2049`; its derived turn (window `[1, 2049]`) is the retry. -/
+private def hCallR : Call UInt8 := hCall 7 20 30 2049 (pinOf rtEnv (some (.live (hMember 10 20) 0)))
+private def hTurnR : Turn UInt8 := ((receive hCtx hWorld hCallR).toOption).getD hDummy
+
+/-- The logged turn: the retry's call event (and its touches and charge) under the window `[1, 1]`. -/
+private def hRawLog : List (Step UInt8) := [.turn { hTurnR with validUntil := 1 }]
+
+/-- **TOOTH (`Honest` is load-bearing in `honest_retry_window`; the in-Lean twin of the sim arm
+`journal-shadow-reuse:replayed`).** On `hCtx`, where every signature verifies, keep every premise of
+`honest_retry_window` but `Honest`: a one-turn log the fold admits from an empty journal, the turn
+carrying member 7's call event under the window `[1, 1]` where the call says `2049`, and as the retry
+that call's real `receive` output, whose event decodes to the call. The log is not `Honest` (the
+call derives another turn), `hv` fails (`2049 > 1 + windowMax`), and the collision disjunct is false
+(the two events `retryPres` names are one). So the window premise cannot be dropped for a log the
+audit would not accept. -/
+theorem honest_retry_window_needs_honest :
+    ∃ (X : Ctx UInt8) (w w' v : World UInt8) (l : List (Step UInt8)) (t : Turn UInt8) (c : Call UInt8),
+      World.fold X.env w l = .ok w' ∧ X.decodeCall t.event = some c ∧ receive X v c = .ok t ∧
+      w.journal = .empty ∧ ¬ Honest X w l ∧
+      ¬ (∀ e, (shadowJournal X.env w.height w.journal l).get (journalSpec X.env) t.txId = some e →
+        t.validUntil ≤ e.1 + Bounds.windowMax) ∧
+      ¬ CollidesAmong X.env.hash (retryPres t l) := by
+  obtain ⟨w', hf⟩ : ∃ w', World.fold hCtx.env hWorld hRawLog = .ok w' := by
+    have h : (World.fold rtEnv hWorld hRawLog).isOk = true := by decide
+    cases hf : World.fold rtEnv hWorld hRawLog with
+    | error e => rw [hf] at h; cases h
+    | ok w' => exact ⟨w', hf⟩
+  have hrt : receive hCtx hWorld hCallR = .ok hTurnR := of_isOkAs (by decide)
+  have hdt : hCtx.decodeCall hTurnR.event = some hCallR := by decide
+  have hnh : ¬ Honest hCtx hWorld hRawLog := by
+    rintro ⟨c, hd, hr, -⟩
+    rw [show ({ hTurnR with validUntil := 1 } : Turn UInt8).event = hTurnR.event from rfl, hdt] at hd
+    cases hd
+    rw [hrt] at hr
+    have := congrArg Turn.validUntil (Except.ok.inj hr)
+    revert this
+    decide
+  have hsep : Separates hCtx.env.hash (retryPres hTurnR hRawLog) := by decide
+  refine ⟨hCtx, hWorld, w', hWorld, hRawLog, hTurnR, hCallR, hf, hdt, hrt, rfl, hnh, ?_, hsep.not_collides⟩
+  intro hv
+  have := hv (1, turnDigest rtEnv { hTurnR with validUntil := 1 }) (by decide)
+  revert this
+  decide
 
 end Nanodregg.Kernel.Receive

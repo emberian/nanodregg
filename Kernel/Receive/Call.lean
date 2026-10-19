@@ -369,6 +369,13 @@ def enrollMax : Nat := 256
 def grantDepthMax : Nat := 8
 
 def domTx : String := "nanodregg/kernel/tx/v1"
+
+/-- The inputs whose `domTx` digests a retry's transaction id is compared against: the retry's own
+event and every event of the log (the explicit list `Kernel.Proofs.Journal`'s retry-window theorems escape
+through, `CollidesAmong E.hash (retryPres t l)`; KERNEL-38 (c)). -/
+def retryPres {D : Type} (t : Turn D) (l : List (Step D)) : List (String × ByteArray) :=
+  (domTx, t.event) :: (Step.turns l).map fun u => (domTx, u.event)
+
 def domWorld : String := "nanodregg/kernel/world/v1"
 def domNextKey : String := "nanodregg/kernel/next-key/v1"
 def tagPossession : ByteArray := "nanodregg/kernel/possession/v1".toUTF8
