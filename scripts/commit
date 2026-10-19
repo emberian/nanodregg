@@ -42,11 +42,33 @@ set -uo pipefail
 # The outer loop is the LANDER: it holds a landing-queue ticket for its whole life (fd 6, closed in
 # each attempt so no judge's child can keep a dead lander's ticket alive) and a directory of its own
 # that carries what one attempt leaves the next (the merge bases; GATES-19).
+# reap_dead (GATES-20f): a lander killed before its EXIT trap ran leaves its scratch behind for good
+# (PROTOCOL-21's 709572, 10-21): nanodregg-commit-main/<pid> and nanodregg-landers/<ticket>. Each is
+# reaped at a later lander's start ONLY by liveness, never by name: a pid dir whose pid no longer
+# exists (kill -0 and /proc both say so; a reused pid keeps its dir, which is the safe side), a lander
+# dir whose queue ticket nobody holds flock'd (the ticket itself is land.py's to remove).
+reap_dead() {
+  local d p t
+  for d in "$common"/nanodregg-commit-main/*; do
+    [ -d "$d" ] || continue
+    p=${d##*/}
+    case $p in ''|*[!0-9]*) continue ;; esac
+    { [ "$p" = $$ ] || kill -0 "$p" 2>/dev/null || [ -e "/proc/$p" ]; } && continue
+    rm -rf "$d" && echo "scripts/commit: reaped a dead lander's scratch $d (pid $p is gone)"
+  done
+  for d in "$common"/nanodregg-landers/*; do
+    [ -d "$d" ] || continue
+    t=$common/nanodregg-queue/${d##*/}
+    [ -e "$t" ] && ! flock -n "$t" true 2>/dev/null && continue
+    rm -rf "$d" && echo "scripts/commit: reaped a dead lander's directory $d (its ticket is not held)"
+  done
+}
 if [ -z "${ND_COMMIT_ATTEMPT:-}" ]; then
   new_ticket || exit 2
   export ND_TICKET=$ticket ND_LANDER_DIR=$common/nanodregg-landers/${ticket##*/}
   mkdir -p "$ND_LANDER_DIR" || exit 2
   trap 'rm -rf "$ND_LANDER_DIR" "$ND_TICKET"' EXIT
+  reap_dead
   attempt=0 charged=0
   while :; do
     attempt=$((attempt + 1))

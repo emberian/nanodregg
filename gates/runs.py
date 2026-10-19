@@ -474,7 +474,7 @@ def traced_selected(t: tree.Tree, changed: list[str], rows: dict, store: str, gi
         elif wchg and "W" not in rs:
             why[exe] = (f"waste row {sorted(wchg)[0].replace(chr(9), ' ')} changed (gates/waste.tsv, a judge input) "
                         f"and its read-set does not say what it measures")
-        elif wchg & set(rs["W"]):
+        elif wchg and wchg & set(rs["W"]):   # (a record without W was taken by the branch above)
             why[exe] = (f"its waste row {sorted(wchg & set(rs['W']))[0].replace(chr(9), ' ')} changed "
                         f"(gates/waste.tsv, a judge input)")
         else:
