@@ -2794,3 +2794,54 @@ The fault takes `Status.beforeLog`, exit 60, fatal. A writer answers the page `r
   - The chain field is named not proved.
 
 **Flag day.** None. The change is proof-only. `seal_facts` and `foldlM_origin` (Host/Proofs/Seal.lean) become public, because the seal theorem here reads them.
+
+## HOST-63 · the open checks the one entry it reads against its record: the base's last entry must name the frame that ends at the base (2026-10-21, HOST-16; cv 01a15180-9499, HOST-53's alternative (d))
+
+**The gap.** Open reads one index entry, the base's last, and checked its tag, its position and its step count (HOST-33, HOST-53). It did not check its offset. A validly tagged entry pointing one byte off its record, which only a writer defect can produce, opened. The first page walked from it was refused `corrupt`, and an entry at or past its own base read as coherent. HOST-53 rejected checking the offset as "the same class" and gave it a trigger. HOST-62 made coherence a theorem of every write, which left the one entry open reads as the only place where the bytes could still disagree with the invariant at open time.
+
+**Decision.** The one open reads the record that entry names and refuses `indexCorrupt` unless it is the frame ending at the base's offset.
+- `lastRange` is the range `[e.offset − 32, base offset)`, only when `32 ≤ e.offset < base offset` and the record is at most one frame (`frameMax recordBytesMax`) before the base.
+- `lastFrame` requires the frame after the range's first 32 bytes to verify against them under the segment sealer and to end exactly at the range's end.
+- `lastFrameFault` does one read, refuses `shortRead` on a short answer, and is nothing at count 0.
+- No new fault name, exit or operator text: it is `indexCorrupt`'s class, remedy and exit.
+
+**Theorems.**
+- The check's meaning. `openWith_lastFrame`: an open that succeeds over a base counting an entry read it at its position under the Store's index key, and its offset, past the origin frame's tag, holds a frame a page reads (`frameOf`) ending exactly at the base's offset. This is the last record before the base.
+- The check, both ways. `lastFrameFault_frame` (the check passes on such a frame) and `lastFrameFault_sound` (it passes only on one).
+- What open reads. `lastFrameFault_congr`: the check reads only bytes before the base's offset, so the cut and the live-backup theorems keep their statements. `openWith_reads` now states three ranges and at most one more, which ends at the base's offset and is at most a frame and a tag long (`lastFrameFault_reads`).
+- No Store this Host writes is refused (completeness).
+  - `indexed_last`: the last entry an open's fold makes is the frame that ends where the fold ends.
+  - `seal_facts` gains the new base's check, so `sealed_opens` (statement unchanged) still opens every seal of an opened World. With no record since the last base, the entry is the old one and the base did not move. Otherwise it is the fold's last entry.
+  - Genesis, import and adopt count no entry.
+- Teeth.
+  - `lastFrameFault_past`: an entry at or past its base is refused before anything is read.
+  - `lastFrame_short`: a frame that ends before the base is refused.
+  - host-sim `plant-index-offset`: the newest base re-sealed naming a last entry at offset ±1, every tag verifying, is refused `indexCorrupt`, and the honest offset opens. It is RED with the check disabled (`openWith` passing `none`): "a last entry one byte off its record … FAIL".
+
+**Module split.** `Host/Proofs/Coherence.lean` keeps `Page.Indexes`, the page theorems, the byte lemmas and HOST-63's. Seal imports it for `indexed_last`. `StoreIndexes`, its preservation and the deployed page theorems move to `Host/Proofs/StoreIndex.lean`, which imports Seal.
+
+**Critique.**
+- The check covers the last entry only. The interior entries stay checked by tag at page time (a wrong offset is refused `corrupt` by the walk) and by `host check` (`indexClean`). Their coherence is HOST-62's invariant, not an open-time read.
+- The step count and chain of the last entry are not checked against the record. That would need open to decode the record and fold `stepLink` from the entry's chain. The step count is bounded by HOST-53's `steps < before`. The chain is the follower's to check.
+- Open now reads up to one more frame (16.7 MB at the record bound, a few hundred bytes typically). The bound theorem says so.
+- The rows bar's `reopen-bytes-per-byte-past-base` (gates/waste.tsv, PROTOCOL-53's row) rose 1.017 -> 1.064: the bar seals often, so the one record frame the open now MAC-checks is a visible share of its bytes past the base. The judge refused it; ROOT ruled (A), re-pin to the measured 1.064, because a waste ceiling forbids waste, never a check. Refused alternatives: (B) checking only the entry's length field against the base offset (a non-cryptographic check is a false tooth: a forger who can place an entry can place a length), and (C) dropping the check (weakens). The staleBase plant still measures exactly 5.251.
+- store-plants' `sealed-flip-history-before-base` flipped the midpoint of [origin, base). Whether that byte fell inside the range the open now reads ([e.offset - 32, base)) depended on the run's record sizes, so judge 2 saw it refused `indexCorrupt` (want `corrupt`) while another run passed. The plant now locates the open's range from the index entries' offset fields. It keeps `corrupt` for a flip below that range (the history walk's) and adds `sealed-flip-base-last-frame`: a flip inside the range is refused `indexCorrupt` by the real exe. That row is RED without HOST-63's check, because the walk would answer `corrupt`. The name: open cannot tell a misplaced entry from a damaged last frame, and both are refused under the index check's one name.
+
+**Meta-critique.** HOST-53 wrote alternative (d) off as "the same class: not taken here" and gave it a trigger nobody would see fire. The class name was right, but the reason was a sequencing convenience, the move CLAUDE.md names. The check was a few hundred lines once coherence was a theorem.
+
+**Law-6 read (second agent, read-only, with the DISJUNCT check): LAND-WITH-FIXES.**
+- No check is weakened. No honest Store is refused:
+  - the loop's `append` pushes its entry only after `commitBatch` returns the frame's end;
+  - `sealNow` returns early with no record since the base;
+  - `install` keeps the seal race right;
+  - adopt, import and genesis count 0;
+  - the sims' direct `ck.write` calls seal an empty tail at a fresh open.
+- No disjunct. `openWith_lastFrame` and `lastFrameFault_sound` are pinned: `b` by `Base.read`, `e` by `Entry.read`, `r` by `frameOf`. `openWith_reads`' `extra` is pinned by the log.
+- Taken:
+  - the prose "past the origin frame's tag" said more than the check (≥ 32 bytes into the segment), and is restated;
+  - "the last record before the base" now says that it rests on the sealer's tags, not on `Log.recover`;
+  - the not-proved list names that a loop-made seal passes the new check only through the unproved push, so a wrong push now refuses `indexCorrupt` at the next open;
+  - `openWith_lastFrame` gains `b.offset = o.sealed.offset`.
+- Not taken, but named: `openWith_reads` could state the extra read exactly (`count = 0 ↔ none`). It states "at most one".
+
+**Flag day.** None on disk. Every Store this Host writes passes (completeness above). A Store whose last entry does not name the frame ending at its base, which no honest writer produces, now refuses to open `indexCorrupt` instead of failing its first page `corrupt`.

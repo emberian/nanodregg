@@ -345,6 +345,25 @@ def entryPlants (r : RunResult) (failures : IO.Ref Nat) : IO Unit := do
     (0 < baseSteps && lastSteps < baseSteps && verdict baseSteps = "indexCorrupt" &&
       verdict (baseSteps + 1) = "indexCorrupt" && verdict lastSteps = "opened" &&
       verdict (baseSteps - 1) = "opened") failures
+  -- plant-index-offset (HOST-63): the newest base re-sealed naming a last entry re-tagged one byte
+  -- off its record (offset + 1, offset - 1). Every tag verifies; open refuses `indexCorrupt` (the
+  -- frame there does not verify or does not end at the base, `lastFrameFault`). CONTROL through the
+  -- same forging path: the honest offset opens.
+  let shifted (off : Nat) : Option (ByteArray × ByteArray) :=
+    match Base.read keys cadence world r.bases.file, honest.getLast? with
+    | .ok (b, _, _), some last =>
+      let e : Entry := { last with offset := off }
+      match Base.file keys cadence world b.world ⟨b.offset, b.tag⟩ ⟨count, e.tag sk (count - 1)⟩ with
+      | .ok f => some (Entry.run sk 0 (honest.dropLast ++ [e]), f)
+      | .error _ => none
+    | _, _ => none
+  let lastOff := match honest.getLast? with | some e => e.offset | none => 0
+  let offVerdict (off : Nat) : String := match shifted off with
+    | some (i, f) => faultName (reopenIn i f r.disk.synced)
+    | none => "unforged"
+  check s!"plant-index-offset: a last entry one byte off its record ({lastOff + 1}, {lastOff - 1}; every tag verifying) is refused `indexCorrupt`; control: its honest {lastOff} opens"
+    (36 < lastOff && offVerdict (lastOff + 1) = "indexCorrupt" && offVerdict (lastOff - 1) = "indexCorrupt" &&
+      offVerdict lastOff = "opened") failures
   let raw := r.bases.index.extract eb (2 * eb) ++ r.bases.index.extract 0 eb ++ r.bases.index.extract (2 * eb) named
   let retagSwap := match honest with
     | a :: b :: rest => Entry.run sk 0 (b :: a :: rest) | _ => r.bases.index

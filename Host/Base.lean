@@ -38,8 +38,9 @@ it is refused `baseCorrupt` by name, and open does not fall back to folding the 
 
 Open reads the base (at most `Log.frameMax c.baseRecordMax` bytes), the origin frame at 0 (at most
 `originMax` bytes, checked against the base World's origin, HOST-25), the base's last index entry
-(`entryBytes`), and the segment from `offset`, and `tailRead` refuses a tail longer than
-`c.tailMax` by name (`tailTooLong`), so open reads one base, one entry and at most two cadences and
+(`entryBytes`), the record that entry names (at most a frame and a tag, checked to be the frame
+ending at `offset`, `lastFrame`, HOST-63), and the segment from `offset`, and `tailRead` refuses a tail longer than
+`c.tailMax` by name (`tailTooLong`), so open reads one base, one entry, its record, and at most two cadences and
 a frame of log (`Host.Proofs.Base.tailRead_le`). The loop never writes a longer tail
 (`Host.Loop.Tail`).
 -/
@@ -381,7 +382,8 @@ inductive BaseFault where
   /-- the last entry the base counts does not read back as an entry at its position under this
   Store's key (`Entry.read`), or its tag is not the `indexLast` the base names (HOST-33: the one
   entry open reads; `host check` reads them all), or its record does not begin before the base's
-  World (its step count is not below the base's, HOST-53) -/
+  World (its step count is not below the base's, HOST-53), or the record it names is not the frame
+  that ends at the base's offset (`lastFrame`, HOST-63) -/
   | indexCorrupt
   deriving Repr
 
@@ -429,6 +431,29 @@ def indexNamed (keys : Keys) (count : Nat) (last : Digest) (before : Nat) (bytes
   match Entry.read keys (count - 1) bytes with
   | none => some .indexCorrupt
   | some e => if e.tag keys (count - 1) = last ∧ e.steps < before then none else some .indexCorrupt
+
+/-- The last entry of `count`, as `lastAt`'s bytes hold it at its position: none at count 0 (and
+none when it does not read back, which `indexNamed` has already refused). -/
+def lastEntry (keys : Keys) (count : Nat) (bytes : ByteArray) : Option Entry :=
+  if count = 0 then none else Entry.read keys (count - 1) bytes
+
+/-- The segment range open reads for the base's last entry `e` (HOST-63): from the 32 bytes before
+the entry's offset (the tag its frame chains from) to the base's offset, or none when the entry
+does not name a place one frame before the base: its offset less than 32 bytes into the segment (no tag before it to chain from), at
+or past the base, or more than one frame (`Log.frameMax recordMax`) before it. -/
+def lastRange (recordMax offset : Nat) (e : Entry) : Option (Nat × Nat) :=
+  if Log.tagBytes ≤ e.offset ∧ e.offset < offset ∧ offset - e.offset ≤ Log.frameMax recordMax then
+    some (e.offset - Log.tagBytes, offset - e.offset + Log.tagBytes)
+  else none
+
+/-- The check open makes on the record the base's last entry names (HOST-63, HOST-53's alternative
+(d)), over the bytes `lastRange` read: the frame after their first 32 bytes verifies against them
+under the segment sealer and ends exactly at their end, the base's offset. So the one entry open
+reads names a frame that verifies and ends at the base's offset (`indexCorrupt` otherwise). -/
+def lastFrame (s : Log.Sealer) (recordMax : Nat) (bytes : ByteArray) : Option BaseFault :=
+  match Log.frameAt s recordMax bytes Log.tagBytes (bytes.extract 0 Log.tagBytes) with
+  | some rd => if rd.next = bytes.size then none else some .indexCorrupt
+  | none => some .indexCorrupt
 
 /-- `host check`'s whole-index audit (HOST-33 condition 1): `bytes` are the entries a base counts,
 `offsets` the offsets of the record frames before its offset (`Log.recover` of the history, the

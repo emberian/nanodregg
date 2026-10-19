@@ -1018,7 +1018,7 @@ theorem openWith_steps_zero {keys : Keys} {file I S : ByteArray} {o : Opening (W
   obtain ⟨b, n, d, hb, hle⟩ := openWith_steps_records h
   have hi := openWith_tail_entries keys c world recorder.mark originChain foldStep file I S h
   have hc : o.sealed.index.count = 0 := by
-    obtain ⟨b', _, _, _, _, _, hb', _, _, _, _, _, _, hix, _, _, ho⟩ :=
+    obtain ⟨b', _, _, _, _, _, hb', _, _, _, _, _, _, hix, _, _, _, ho⟩ :=
       openWith_seg_ok keys c world recorder.mark originChain foldStep file I S h
     have hbb : b = b' := by rw [hb] at hb'; cases hb'; rfl
     subst hbb

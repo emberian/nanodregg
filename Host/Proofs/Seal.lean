@@ -25,6 +25,7 @@ open returns is in the World codec's domain), `hw`, `horigin`, `hmono` and `hcap
 -/
 import Host.Proofs.Genesis
 import Host.Proofs.Deployed
+import Host.Proofs.Coherence
 
 namespace Nanodregg.Host
 
@@ -93,14 +94,18 @@ theorem seal_facts (keys : Keys) (c : Cadence) (world : Codec.Stream W)
     (I ++ page).size = ix'.count * entryBytes keys ∧
     indexNamed (keys.forStore (origin o.opened.world)) ix'.count ix'.last (mark o.opened.world).1
       ((I ++ page).extract (lastAt keys ix'.count).1
-        ((lastAt keys ix'.count).1 + (lastAt keys ix'.count).2)) = none := by
-  obtain ⟨b, baseBytes, digest, len, op, tag, hb, hlen, hoff, htag, hof, hwI, hi, hix, hop, htg, rfl⟩ :=
+        ((lastAt keys ix'.count).1 + (lastAt keys ix'.count).2)) = none ∧
+    Id.run (lastFrameFault (F := F) keys.segment c.recordBytesMax o.pos.offset
+      (lastEntry (keys.forStore (origin o.opened.world)) ix'.count ((I ++ page).extract (lastAt keys ix'.count).1
+        ((lastAt keys ix'.count).1 + (lastAt keys ix'.count).2)))
+      (segReader (S.extract 0 o.pos.offset))) = none := by
+  obtain ⟨b, baseBytes, digest, len, op, tag, hb, hlen, hoff, htag, hof, hwI, hi, hix, hlf, hop, htg, rfl⟩ :=
     openWith_seg_ok keys c world mark origin step file₀ I S h
   obtain ⟨hs, _⟩ := tailRead_ok hlen
   have hvl := openLog_validLen_le hop
   simp only [size_extract] at hvl
   dsimp only at hP hseal ⊢
-  obtain ⟨rs, he, hf, hlt, _, _⟩ := open_sound_bounded keys.segment (indexed mark step) _ _ _ hop
+  obtain ⟨rs, he, hf, hlt, _, hrs⟩ := open_sound_bounded keys.segment (indexed mark step) _ _ _ hop
   have hfold := indexed_foldlM_fst mark step rs _ _ _ hf
   have hor : origin op.world.1 = origin b.world := foldlM_origin horigin rs _ _ hfold
   rw [hor] at hseal ⊢
@@ -139,7 +144,63 @@ theorem seal_facts (keys : Keys) (c : Cadence) (world : Codec.Stream W)
     rw [extract_eq_extract_append_extract (originLen b.offset) (Nat.zero_le _) hle]
     exact frameAt_append hr
   have hes : (sealEntries op.world.2.1).size = op.world.2.1.size := by simp [sealEntries]
-  exact ⟨hfs, hrd, by omega, by omega, hanchor, hofn, hI, by rw [hcnt, hes], hmax, hsz, hnamed⟩
+  -- HOST-63: the new base's last entry is the frame that ends at the open's position
+  have hlast : Id.run (lastFrameFault (F := F) keys.segment c.recordBytesMax (b.offset + op.validLen)
+      (lastEntry (keys.forStore (origin b.world)) ix'.count ((I ++ page).extract (lastAt keys ix'.count).1
+        ((lastAt keys ix'.count).1 + (lastAt keys ix'.count).2)))
+      (segReader (S.extract 0 (b.offset + op.validLen)))) = none := by
+    obtain ⟨hfit, hcnt', -, hp, hnil, hlastTag⟩ := entries_ok hent
+    have hsz0 := indexed_foldlM_size mark step rs _ _ _ hf
+    simp only [Array.size_empty, Nat.zero_add] at hsz0
+    have hesl : (sealEntries op.world.2.1).toList = op.world.2.1.toList := by simp [sealEntries]
+    rw [lastFrameFault_congr (S' := S) _ (fun i j hj => extract_prefix S hj)]
+    have hencsz : (encodeAll keys.segment b.tag.bytes rs).size = op.validLen := by
+      rw [← hseg, size_extract]; omega
+    by_cases h0 : op.world.2.1.size = 0
+    · have hrs0 : rs = [] := List.eq_nil_of_length_eq_zero (by omega)
+      subst hrs0
+      have hv0 : op.validLen = 0 := by simp [encodeAll] at hencsz; omega
+      have hl0 : op.world.2.1.toList = [] := List.eq_nil_of_length_eq_zero (by rw [Array.length_toList]; exact h0)
+      have hix' := hnil (by rw [hesl]; exact hl0)
+      subst hix'
+      have hp0 : page = ByteArray.empty := by
+        rw [hp, hesl, hl0]; rfl
+      rw [hp0, ByteArray.append_empty, hv0, Nat.add_zero]
+      exact hlf
+    · have hne : rs ≠ [] := by intro hz; subst hz; simp at hsz0; exact h0 (by rw [hsz0]; rfl)
+      have hp1 : S.extract (b.offset - tagBytes) (b.offset - tagBytes + tagBytes) = b.tag.bytes := by
+        rw [show b.offset - tagBytes + tagBytes = b.offset by omega]; exact htag
+      have hseg' : S.extract b.offset (b.offset + (encodeAll keys.segment b.tag.bytes rs).size) =
+          encodeAll keys.segment b.tag.bytes rs := by rw [hencsz]; exact hseg
+      obtain ⟨e, r, hback, hge, hr, hr32, hfr, hend⟩ :=
+        indexed_last (rm := c.recordBytesMax) mark step rs b.world #[] b.offset b.tag.bytes hne hrs hp1 hseg' hf
+      have hend' : e.offset + frameSize r = b.offset + op.validLen := by
+        rw [hend, openLog_indexed_off keys.segment c.recordBytesMax mark step b.world #[] b.offset _ _ hop]
+      have hn : 0 < (sealEntries op.world.2.1).size := by rw [hes]; omega
+      have hcpos : 0 < ix'.count := by omega
+      have hentry : lastEntry (keys.forStore (origin b.world)) ix'.count ((I ++ page).extract
+          (lastAt keys ix'.count).1 ((lastAt keys ix'.count).1 + (lastAt keys ix'.count).2)) = some e := by
+        unfold lastEntry
+        rw [if_neg (by omega), lastAt_read keys _ hcpos]
+        have hoffe : (ix'.count - 1) * entryBytes keys =
+            I.size + ((sealEntries op.world.2.1).size - 1) * entryBytes keys := by
+          have hebf : entryBytes (keys.forStore (origin b.world)) = entryBytes keys := rfl
+          rw [hI, hcnt', hebf, ← Nat.add_mul]; congr 1; dsimp only; omega
+        rw [hoffe, Nat.add_assoc, ByteArray.extract_append_size_add, hp]
+        have hr' := run_read (keys.forStore (origin b.world)) b.indexCount
+          (sealEntries op.world.2.1).toList ((sealEntries op.world.2.1).size - 1) (by simp; omega) hfit
+        rw [show entryBytes (keys.forStore (origin b.world)) = entryBytes keys from rfl] at hr'
+        have hse : sealEntries op.world.2.1 = op.world.2.1 := by simp [sealEntries]
+        dsimp only at hcnt'
+        rw [show ix'.count - 1 = b.indexCount + ((sealEntries op.world.2.1).size - 1) by omega, hr']
+        rw [Array.back?_eq_getElem?] at hback
+        simp only [hse, Array.getElem_toList]
+        rw [Array.getElem?_eq_getElem (by omega)] at hback
+        exact hback
+      rw [hentry]
+      exact lastFrameFault_frame (by omega) hend' (by omega)
+        (by rw [show e.offset - tagBytes + tagBytes = e.offset by omega] at hfr; exact hfr) hr hr32
+  exact ⟨hfs, hrd, by omega, by omega, hanchor, hofn, hI, by rw [hcnt, hes], hmax, hsz, hnamed, hlast⟩
 
 /-- **A seal's bytes open to the World it sealed** (HOST-43). The one open of base file `file₀`,
 segment `S` and index bytes `I` returned `o`; the seal (`Base.seal` under this Store's index keys,
@@ -164,7 +225,7 @@ theorem sealed_opens (keys : Keys) (c : Cadence) (world : Codec.Stream W)
       .ok ⟨⟨o.opened.world, 0, 0, o.pos.tag.bytes, 0⟩,
         ⟨o.pos.offset, world.size o.opened.world, (mark o.opened.world).1, (mark o.opened.world).2,
           keys.worldDigest (worldBytesOf file (world.size o.opened.world)), ix'⟩, o.pos, #[], 0⟩ := by
-  obtain ⟨hfs, hrd, hoff, hle, hanchor, hof, hI, hcnt, hmax, hsz, hnamed⟩ :=
+  obtain ⟨hfs, hrd, hoff, hle, hanchor, hof, hI, hcnt, hmax, hsz, hnamed, hlast⟩ :=
     seal_facts keys c world mark origin step hw horigin hmono hcap file₀ I S h hP hseal
   have hS' : (S.extract 0 o.pos.offset).size = o.pos.offset := by simp only [size_extract]; omega
   have ⟨q1, q2, q3⟩ := tail_read (S.extract 0 o.pos.offset) (len := 0) hoff (by omega)
@@ -186,6 +247,10 @@ theorem sealed_opens (keys : Keys) (c : Cadence) (world : Codec.Stream W)
     if_neg (by simp only [size_extract, hS']; omega), extract_prefix S hol, hof]
   dsimp only
   rw [if_neg (by omega), if_neg (by omega), if_neg (by simp only [size_extract]; omega), hnamed]
+  dsimp only
+  simp only [Id.run] at hlast
+  rw [hlast, show (none : Id (Option (StoreFault F))) = (pure none : Id (Option (StoreFault F))) from rfl,
+    pure_bind]
   dsimp only
   rw [q3, openLog_empty keys.segment c.recordBytesMax (indexed mark step) _ _ _ hempty]
   dsimp only
@@ -231,7 +296,7 @@ theorem sealed_unindexed_refused (keys : Keys) (c : Cadence) (world : Codec.Stre
     Id.run (openWith keys c world mark origin step file (S.extract 0 o.pos.offset).size I.size
         (segReader I) (segReader (S.extract 0 o.pos.offset))) =
       .error (.base (.indexShort I.size (ix'.count * entryBytes keys))) := by
-  obtain ⟨hfs, hrd, hoff, hle, hanchor, hof, hI, hcnt, hmax, hsz, hnamed⟩ :=
+  obtain ⟨hfs, hrd, hoff, hle, hanchor, hof, hI, hcnt, hmax, hsz, hnamed, hlast⟩ :=
     seal_facts keys c world mark origin step hw horigin hmono hcap file₀ I S h hP hseal
   have hS' : (S.extract 0 o.pos.offset).size = o.pos.offset := by simp only [size_extract]; omega
   have ⟨q1, q2, q3⟩ := tail_read (S.extract 0 o.pos.offset) (len := 0) hoff (by omega)

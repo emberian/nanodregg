@@ -6,9 +6,10 @@
   `tailMax` long;
 * `openWith_reads` — the one open (`openWith`, generic in its monad: `IO` over the file for the
   Store, `Id` over bytes for the simulation, and here a reader that records its calls and answers
-  anything) reads a base file of at most one base frame and asks for EXACTLY two ranges of segment,
+  anything) reads a base file of at most one base frame and asks for two ranges of segment,
   `[base offset - 32, size)` (the base's tag and a tail of at most `tailMax` bytes) and
-  `[0, originLen offset)` (the origin frame, at most `originMax` bytes, HOST-25); the position it
+  `[0, originLen offset)` (the origin frame, at most `originMax` bytes, HOST-25), and at most one
+  more, the record the base's last entry names, ending at the base's offset (HOST-63); the position it
   opens to is within the tail (a short read is refused inside `openWith`, so no reader can bypass
   the bound);
 * `openWith_origin` / `openWith_originFault` (HOST-25) — an open that succeeds read a frame at 0
@@ -82,12 +83,64 @@ theorem tailRead_ok {c : Cadence} {baseBytes offset size n : Nat}
     · cases h
     · cases h; omega
 
-/-- The one open reads a base file of at most one base frame, and asks its readers for EXACTLY
-three ranges, in order: of the segment `[base offset - 32, size)`, the base's tag on disk and the
+theorem lastRange_some {rm B a len : Nat} {e : Entry} (h : lastRange rm B e = some (a, len)) :
+    Log.tagBytes ≤ e.offset ∧ e.offset < B ∧ B - e.offset ≤ Log.frameMax rm ∧ a = e.offset - Log.tagBytes ∧
+      len = B - e.offset + Log.tagBytes := by
+  unfold lastRange at h
+  split at h
+  · rename_i hc; cases h; exact ⟨hc.1, hc.2.1, hc.2.2, rfl, rfl⟩
+  · cases h
+
+/-- The last-entry check (HOST-63) reads only bytes before the base's offset. -/
+theorem lastFrameFault_congr {F : Type} {s : Log.Sealer} {rm B : Nat} {S S' : ByteArray} (e? : Option Entry)
+    (hS : ∀ i j, j ≤ B → S.extract i j = S'.extract i j) :
+    Id.run (lastFrameFault (F := F) s rm B e? (segReader S)) =
+      Id.run (lastFrameFault (F := F) s rm B e? (segReader S')) := by
+  cases e? with
+  | none => rfl
+  | some e =>
+    simp only [lastFrameFault, segReader, bind, pure]
+    split
+    · rfl
+    · rename_i a len hlr
+      obtain ⟨h32, hlt, -, rfl, rfl⟩ := lastRange_some hlr
+      rw [hS _ _ (by omega)]
+
+/-- The last-entry check (HOST-63) asks for at most ONE range, ending at the base's offset and at
+most a frame and a tag long, over a reader that records its calls. -/
+theorem lastFrameFault_reads {F : Type} (s : Log.Sealer) (rm B : Nat) (e? : Option Entry)
+    (answer : Nat → Nat → ByteArray) (st : List (Nat × Nat)) :
+    ∃ v extra, (lastFrameFault (F := F) (m := StateM (List (Nat × Nat))) s rm B e?
+        (fun off len => StateT.modifyGet fun l => (Except.ok (answer off len), l ++ [(off, len)]))) st =
+        (v, st ++ extra) ∧ extra.length ≤ 1 ∧
+      ∀ p ∈ extra, p.1 + p.2 = B ∧ p.2 ≤ Log.frameMax rm + Log.tagBytes := by
+  cases e? with
+  | none => exact ⟨none, [], by simp [lastFrameFault, pure, StateT.pure], by simp, by simp⟩
+  | some e =>
+    cases hlr : lastRange rm B e with
+    | none => exact ⟨some (.base .indexCorrupt), [], by simp [lastFrameFault, hlr, pure, StateT.pure], by simp, by simp⟩
+    | some p =>
+      obtain ⟨a, len⟩ := p
+      obtain ⟨h32, hlt, hmax, rfl, rfl⟩ := lastRange_some hlr
+      refine ⟨if (answer (e.offset - Log.tagBytes) (B - e.offset + Log.tagBytes)).size ≠ B - e.offset + Log.tagBytes
+          then some (.shortRead (answer (e.offset - Log.tagBytes) (B - e.offset + Log.tagBytes)).size
+            (B - e.offset + Log.tagBytes))
+          else (lastFrame s rm (answer (e.offset - Log.tagBytes) (B - e.offset + Log.tagBytes))).map .base,
+        [(e.offset - Log.tagBytes, B - e.offset + Log.tagBytes)], ?_, by simp, ?_⟩
+      · simp only [lastFrameFault, hlr, bind, StateT.bind, StateT.modifyGet, pure]
+        split <;> rfl
+      · intro q hq
+        simp only [List.mem_singleton] at hq
+        subst hq
+        constructor <;> simp only <;> omega
+
+/-- The one open reads a base file of at most one base frame, and asks its readers for
+three ranges, in order, and at most one more: of the segment `[base offset - 32, size)`, the base's tag on disk and the
 tail after it, the tail at most `tailMax` long; then `[0, originLen offset)`, the origin frame
 (HOST-25); then of `index.log` the ONE entry the base names last (`lastAt`: `entryBytes` bytes,
 none at count 0), with the count at most `indexMax` and every counted entry within the file
-(HOST-33: open reads one entry, not the index). The position it opens to lies in the tail, and
+(HOST-33: open reads one entry, not the index); then, for that entry, at most one more range of the
+segment, ending at the base's offset and at most a frame and a tag long (its record, HOST-63). The position it opens to lies in the tail, and
 the orphan bytes it reports are exactly the file's bytes past the counted entries, so the writer's
 truncation (`openWriter`) never drops a byte of an entry the base counts. Stated over
 readers that record every range they are asked for (in one log) and answer with arbitrary bytes
@@ -99,8 +152,9 @@ theorem openWith_reads {W F : Type} (keys : Keys) (c : Cadence) (world : Codec.S
       (fun off len => modifyGet fun l => (.ok (answerI off len), l ++ [(off, len)]))
       (fun off len => modifyGet fun l => (.ok (answer off len), l ++ [(off, len)]))).run [] = (.ok o, log)) :
     file.size ≤ Log.frameMax c.baseRecordMax ∧ Log.tagBytes ≤ o.sealed.offset ∧
-    ∃ len, log = [(o.sealed.offset - Log.tagBytes, Log.tagBytes + len), (0, originLen o.sealed.offset),
-        lastAt keys o.sealed.index.count] ∧
+    ∃ len extra, log = [(o.sealed.offset - Log.tagBytes, Log.tagBytes + len), (0, originLen o.sealed.offset),
+        lastAt keys o.sealed.index.count] ++ extra ∧ extra.length ≤ 1 ∧
+      (∀ p ∈ extra, p.1 + p.2 = o.sealed.offset ∧ p.2 ≤ Log.frameMax c.recordBytesMax + Log.tagBytes) ∧
       o.sealed.offset + len = size ∧
       len ≤ c.tailMax o.sealed.bytes ∧
       o.sealed.offset ≤ o.pos.offset ∧ o.pos.offset ≤ o.sealed.offset + len ∧
@@ -155,24 +209,33 @@ theorem openWith_reads {W F : Type} (keys : Keys) (c : Cadence) (world : Codec.S
               | none =>
               rw [hix] at h
               simp only at h
+              obtain ⟨v, extra, hrun, hx1, hx2⟩ := lastFrameFault_reads (F := F) keys.segment c.recordBytesMax
+                b.offset (lastEntry (keys.forStore (origin b.world)) b.indexCount
+                  (answerI (lastAt keys b.indexCount).1 (lastAt keys b.indexCount).2)) answer
+                ([(b.offset - Log.tagBytes, Log.tagBytes + len), (0, originLen b.offset)] ++
+                  [((lastAt keys b.indexCount).1, (lastAt keys b.indexCount).2)])
+              simp only [StateT.bind, hrun] at h
+              cases v with
+              | some f => simp only [pure] at h; injection h with h1; cases h1
+              | none =>
               generalize hop : openLog keys.segment c.recordBytesMax (indexed mark step)
                 (b.world, #[], b.offset) b.tag.bytes
                 ((answer (b.offset - Log.tagBytes) (Log.tagBytes + len)).extract Log.tagBytes
                   (answer (b.offset - Log.tagBytes) (Log.tagBytes + len)).size) = res at h
               cases res with
-              | error e => simp only [StateT.pure, pure] at h; injection h with h1; cases h1
+              | error e => simp only [pure] at h; injection h with h1; cases h1
               | ok op =>
                 simp only at h
                 cases htag : Codec.Digest.ofBytes? op.lastTag with
-                | none => rw [htag] at h; simp only [StateT.pure, pure] at h; injection h with h1; cases h1
+                | none => rw [htag] at h; simp only [pure] at h; injection h with h1; cases h1
                 | some tag =>
                   rw [htag] at h
-                  simp only [StateT.pure, pure] at h
+                  simp only [pure] at h
                   obtain ⟨rfl, rfl⟩ := h
                   have hv := openLog_validLen_le hop
                   have hsz' : (answer (b.offset - Log.tagBytes) (Log.tagBytes + len)).size = Log.tagBytes + len := by
                     simpa using hsz
-                  refine ⟨by omega, show Log.tagBytes ≤ b.offset by omega, len, by simp, hs, hle,
+                  refine ⟨by omega, show Log.tagBytes ≤ b.offset by omega, len, extra, by simp, hx1, hx2, hs, hle,
                     Nat.le_add_right _ _, ?_, show b.indexCount ≤ indexMax by omega,
                     show b.indexCount * entryBytes keys + (indexSize - b.indexCount * entryBytes keys) = indexSize by omega⟩
                   show b.offset + op.validLen ≤ b.offset + len
@@ -417,17 +480,25 @@ theorem openWith_verifies_named {W F : Type} (keys : Keys) (c : Cadence) (world 
                       · split at h
                         · cases h
                         · rename_i hnamed
-                          split at h
-                          · cases h
-                          · split at h
+                          cases hlf : lastFrameFault keys.segment c.recordBytesMax b.offset
+                              (lastEntry (keys.forStore (origin b.world)) b.indexCount
+                                (idx.extract (lastAt keys b.indexCount).1
+                                  ((lastAt keys b.indexCount).1 + (lastAt keys b.indexCount).2)))
+                              (segReader seg) with
+                          | some f => rw [hlf] at h; cases h
+                          | none =>
+                            rw [hlf] at h
+                            split at h
                             · cases h
-                            · cases h
-                              refine ⟨b, bb, dg, hb, by simpa using hshort, ?_⟩
-                              rcases indexNamed_none hnamed with ⟨h0, hl⟩ | ⟨hpos, e, he, ht⟩
-                              · exact Or.inl ⟨h0, hl⟩
-                              · refine Or.inr ⟨hpos, e, ?_, ht⟩
-                                rw [lastAt_read keys _ hpos] at he
-                                exact he
+                            · split at h
+                              · cases h
+                              · cases h
+                                refine ⟨b, bb, dg, hb, by simpa using hshort, ?_⟩
+                                rcases indexNamed_none hnamed with ⟨h0, hl⟩ | ⟨hpos, e, he, ht⟩
+                                · exact Or.inl ⟨h0, hl⟩
+                                · refine Or.inr ⟨hpos, e, ?_, ht⟩
+                                  rw [lastAt_read keys _ hpos] at he
+                                  exact he
 
 /-- **HOST-25, the plants' statement over the real `openWith`.** When the base reads, its tail is
 within bounds and its tag sits before its offset, a segment whose origin frame fails the check is

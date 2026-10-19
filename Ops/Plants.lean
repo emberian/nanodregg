@@ -251,9 +251,32 @@ def live (exe : String) (dir : System.FilePath) : IO Nat := do
     return d
   let short ← sealedCopy "sealed-short" fun d => damage d (seg.extract 0 (off - 1))
   failed := failed + (← plain "sealed-segment-cut-below-base" .segmentShort (check short))
-  let at_ := originSeg.size + (off - originSeg.size) / 2
-  let flipped ← sealedCopy "sealed-flip" fun d => damage d (seg.set! at_ (seg.get! at_ ^^^ 1))
-  failed := failed + (← plain "sealed-flip-history-before-base" .corrupt (check flipped))
+  -- the range the open reads for the base's last entry (HOST-63): [lastStart, off), the 32-byte
+  -- tag before the last record's frame and that frame. A flip there is refused at open
+  -- (`indexCorrupt`); a flip below it is the history walk's (`corrupt`). Both are planted.
+  let some key := Codec.Digest.ofBytes? (← IO.FS.readBinFile (l / "key"))
+    | IO.eprintln "L: key file is not a digest"; return failed + 1
+  let keys := Keys.ofKey key shapes
+  let idx ← IO.FS.readBinFile (l / "index.log")
+  let eb := entryBytes keys
+  -- each entry's offset field (bytes 8..16), read as a locator only, with no MAC: the verdicts
+  -- below are the real exe's refusals of the flipped copies, never this parse
+  let offs := (List.range (idx.size / eb)).filterMap fun k =>
+    (Codec.Stream.nat64.decode (idx.extract (k * eb + 8) (k * eb + 16))).toOption
+  let lastStart := (offs.filter (· < off)).foldl max 0 - Log.tagBytes
+  let deep := originSeg.size < lastStart
+  say "sealed-history-below-the-last-frame" deep
+    s!"origin={originSeg.size} last-frame range [{lastStart}, {off}) of {offs.length} entries"
+  -- the two flips need both ranges; a layout without them fails here and the later rows still run
+  if deep then
+    let at_ := originSeg.size + (lastStart - originSeg.size) / 2
+    let flipped ← sealedCopy "sealed-flip" fun d => damage d (seg.set! at_ (seg.get! at_ ^^^ 1))
+    failed := failed + (← plain "sealed-flip-history-before-base" .corrupt (check flipped))
+    let atLast := lastStart + (off - lastStart) / 2
+    let flippedLast ← sealedCopy "sealed-flip-last" fun d =>
+      damage d (seg.set! atLast (seg.get! atLast ^^^ 1))
+    failed := failed + (← plain "sealed-flip-base-last-frame" .indexCorrupt (check flippedLast))
+  else failed := failed + 1
   -- the wrong order: seg.log copied before a seal, base.world after it
   let wrong ← sealedCopy "wrong-order" fun d => damage d wrongOrderSeg
   -- (b) index.log copied BEFORE base.world, across seals: the newer base counts entries the copy lacks.

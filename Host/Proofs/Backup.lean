@@ -376,6 +376,10 @@ theorem openWith_seg_ok (keys : Keys) (c : Cadence) (world : Codec.Stream W) (ma
       b.indexCount ≤ indexMax ∧ b.indexCount * entryBytes keys ≤ I.size ∧
       indexNamed (keys.forStore (origin b.world)) b.indexCount b.indexLast (mark b.world).1
         (I.extract (lastAt keys b.indexCount).1 ((lastAt keys b.indexCount).1 + (lastAt keys b.indexCount).2)) = none ∧
+      Id.run (lastFrameFault (F := F) keys.segment c.recordBytesMax b.offset
+        (lastEntry (keys.forStore (origin b.world)) b.indexCount
+          (I.extract (lastAt keys b.indexCount).1 ((lastAt keys b.indexCount).1 + (lastAt keys b.indexCount).2)))
+        (segReader S)) = none ∧
       openLog keys.segment c.recordBytesMax (indexed mark step) (b.world, #[], b.offset) b.tag.bytes
         (S.extract b.offset S.size) = .ok op ∧
       Codec.Digest.ofBytes? op.lastTag = some tag ∧
@@ -418,6 +422,14 @@ theorem openWith_seg_ok (keys : Keys) (c : Cadence) (world : Codec.Stream W) (ma
   split at h
   · exact absurd h (by simp [Id.run, pure])
   rename_i hix
+  cases hlf : lastFrameFault (F := F) keys.segment c.recordBytesMax b.offset
+      (lastEntry (keys.forStore (origin b.world)) b.indexCount
+        (I.extract (lastAt keys b.indexCount).1 ((lastAt keys b.indexCount).1 + (lastAt keys b.indexCount).2)))
+      (segReader S) with
+  | some f => rw [hlf] at h; exact absurd h (by simp [Id.run, pure])
+  | none =>
+  rw [hlf, show (none : Id (Option (StoreFault F))) = (pure none : Id (Option (StoreFault F))) from rfl, pure_bind] at h
+  dsimp only at h
   rw [r3] at h
   split at h
   · exact absurd h (by simp [Id.run, pure])
@@ -427,7 +439,7 @@ theorem openWith_seg_ok (keys : Keys) (c : Cadence) (world : Codec.Stream W) (ma
   rename_i tag htg
   simp only [Id.run, pure, Except.ok.injEq] at h
   exact ⟨b, baseBytes, digest, len, op, tag, hb, hlen, by omega, by simpa using htag, hof,
-    by omega, by omega, hix, hop, htg, h.symm⟩
+    by omega, by omega, hix, hlf, hop, htg, h.symm⟩
 
 /-- What `Base.read` decodes (HOSTING-4's ask): the base file's one frame verifies under the base
 sealer, its head is the running shape stamp, and the base is the base codec's decode of the rest. -/
@@ -467,7 +479,7 @@ theorem openWith_world (keys : Keys) (c : Cadence) (world : Codec.Stream W) (mar
       o.opened.records = rs.length ∧ tagBytes ≤ b.offset ∧ o.sealed.offset = b.offset ∧
       (S.extract b.offset S.size).extract 0 (o.pos.offset - b.offset) =
         encodeAll keys.segment b.tag.bytes rs := by
-  obtain ⟨b, baseBytes, digest, _, op, _, hb, _, _, _, _, _, _, _, hop, _, rfl⟩ :=
+  obtain ⟨b, baseBytes, digest, _, op, _, hb, _, _, _, _, _, _, _, _, hop, _, rfl⟩ :=
     openWith_seg_ok keys c world mark origin step file I S h
   obtain ⟨rs, he, hf, _, hn⟩ := open_sound keys.segment (indexed mark step) _ _ _ hop
   refine ⟨b, baseBytes, digest, rs, hb, indexed_foldlM_fst mark step rs _ _ _ hf, hn, by omega, rfl, ?_⟩
@@ -482,7 +494,7 @@ theorem openWith_tail_entries (keys : Keys) (c : Cadence) (world : Codec.Stream 
     (origin : W → ByteArray) (step : W → ByteArray → Except F W) (file I S : ByteArray) {o : Opening W}
     (h : Id.run (openWith keys c world mark origin step file S.size I.size (segReader I) (segReader S)) = .ok o) :
     o.index.size = o.opened.records := by
-  obtain ⟨b, baseBytes, digest, _, op, _, hb, _, _, _, _, _, _, _, hop, _, rfl⟩ :=
+  obtain ⟨b, baseBytes, digest, _, op, _, hb, _, _, _, _, _, _, _, _, hop, _, rfl⟩ :=
     openWith_seg_ok keys c world mark origin step file I S h
   obtain ⟨rs, _, hf, _, hn⟩ := open_sound keys.segment (indexed mark step) _ _ _ hop
   have := indexed_foldlM_size mark step rs _ _ _ hf
@@ -526,7 +538,7 @@ theorem openWith_backup (keys : Keys) (c : Cadence) (world : Codec.Stream W) (ma
     (∃ j f, R = .error (.log (.record j f)) ∧ o.opened.records ≤ j) := by
   have hfile : ¬ frameMax c.baseRecordMax < file.size := by
     intro hf; unfold openWith at h; rw [if_pos hf] at h; exact absurd h (by simp [Id.run, pure])
-  obtain ⟨b, baseBytes, digest, len, op, tag, hb, hlen, hoff, htag, hof, hw, hi, hix, hop, htg, rfl⟩ :=
+  obtain ⟨b, baseBytes, digest, len, op, tag, hb, hlen, hoff, htag, hof, hw, hi, hix, hlf, hop, htg, rfl⟩ :=
     openWith_seg_ok keys c world mark origin step file I S h
   obtain ⟨hs, _⟩ := tailRead_ok hlen
   subst hR
@@ -553,6 +565,14 @@ theorem openWith_backup (keys : Keys) (c : Cadence) (world : Codec.Stream W) (ma
     have hla := lastAt_within keys b.indexCount
     rw [if_neg (by omega), if_neg (by rw [size_append]; omega), if_neg (by simp [size_append]; omega),
       extract_append_le (by omega), hix]
+    dsimp only
+    have hlf' := (lastFrameFault_congr (F := F) (s := keys.segment) (rm := c.recordBytesMax) (B := b.offset)
+      (S := S ++ y) (S' := S) (lastEntry (keys.forStore (origin b.world)) b.indexCount
+        (I.extract (lastAt keys b.indexCount).1 ((lastAt keys b.indexCount).1 + (lastAt keys b.indexCount).2)))
+      (fun i j hj => extract_append_le (by omega))).trans hlf
+    simp only [Id.run] at hlf'
+    rw [hlf', show (none : Id (Option (StoreFault F))) = (pure none : Id (Option (StoreFault F))) from rfl,
+      pure_bind]
     dsimp only
     rw [q3, extract_append_to_end S y (by omega)]
     rcases openLog_append keys.segment c.recordBytesMax (indexed mark step) (b.world, #[], b.offset)
@@ -671,7 +691,7 @@ theorem openWith_cut (keys : Keys) (c : Cadence) (world : Codec.Stream W) (mark 
       .ok { o with opened := { o.opened with torn := 0 }, orphan := 0 } := by
   have hfile : ¬ frameMax c.baseRecordMax < file.size := by
     intro hf; unfold openWith at h; rw [if_pos hf] at h; exact absurd h (by simp [Id.run, pure])
-  obtain ⟨b, baseBytes, digest, len, op, tag, hb, hlen, hoff, htag, hof, hw, hi, hix, hop, htg, rfl⟩ :=
+  obtain ⟨b, baseBytes, digest, len, op, tag, hb, hlen, hoff, htag, hof, hw, hi, hix, hlf, hop, htg, rfl⟩ :=
     openWith_seg_ok keys c world mark origin step file I S h
   obtain ⟨hs, hmax⟩ := tailRead_ok hlen
   have hvl := openLog_validLen_le hop
@@ -710,6 +730,14 @@ theorem openWith_cut (keys : Keys) (c : Cadence) (world : Codec.Stream W) (mark 
   dsimp only
   rw [if_neg (by omega), if_neg (by rw [hI']; omega), if_neg (by simp [hI']; omega),
     extract_prefix I (by omega), hix]
+  dsimp only
+  have hlf' := (lastFrameFault_congr (F := F) (s := keys.segment) (rm := c.recordBytesMax) (B := b.offset)
+    (S := S.extract 0 (b.offset + op.validLen)) (S' := S) (lastEntry (keys.forStore (origin b.world)) b.indexCount
+      (I.extract (lastAt keys b.indexCount).1 ((lastAt keys b.indexCount).1 + (lastAt keys b.indexCount).2)))
+    (fun i j hj => extract_prefix S (by omega))).trans hlf
+  simp only [Id.run] at hlf'
+  rw [hlf', show (none : Id (Option (StoreFault F))) = (pure none : Id (Option (StoreFault F))) from rfl,
+    pure_bind]
   dsimp only
   rw [q3, hcut, hopc]
   dsimp only
