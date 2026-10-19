@@ -2557,3 +2557,45 @@ refusal name to the version as `packageCodec_label` ties the codec's; reader tee
 is no package; a plain one reads). CODEC-14 agreed the codec hunks (and asked for the version-derived
 label, the general unversioned theorem, the control/non-UTF-8 teeth: all in); PROTOCOL-19 agreed the
 Describe/Rows hunks; HOSTING-12 confirmed the resident's shape parse ignores a `doc` line.
+
+## LANG-61 What extraction forces is the meaning: each field of an extracted record is its `get`'s value (2026-10-21; ROOT ruled it Lang's; LANG-21; LEDGER-4's hand-off, cv 01a152e3-9c8e)
+**Why.** LEDGER proves the escrow's calls on the reference evaluator, one field projection at a time
+(`slotField`: `.get (.get (methodAt ℓ) "calls") "c0"`); the receiver runs the whole method application
+and `extract`s the result at `resultTy`. Nothing related the two: an extracted field was a machine
+artefact of a budget, not a fact of the language.
+
+**What.** `Lang/Proofs/Extract.lean`. `Means lib T v d` (with `RowMeans`, `Unknots`): `d` is what `v`
+means at data type `T` by `BigStep`, with no machine and no budget. `extract_means`: whatever `extract`
+returns, at any budget, is the meaning (no premise at all: an ill-typed value is `stuck`, never data).
+`means_deterministic`: one meaning per value and type. `means_get` (the field lemma): if `t` means `v`
+and `v` means record data `d` at `rec row`, then for EVERY `w` that `.get t ℓ` means, `d.field ℓ` is
+`w`'s meaning at `ℓ`'s type (`means_get_exists`: such a `w` exists); `extract_get` is the one-extraction
+form. `runMeasured_means` strengthens `runMeasured_calls`: a successful run extracted the MEANING of
+`apply4 g ℓ` in the environment the setup built (request, arguments, state, rows, each named by its
+reading equation), and its calls are `callsOf` of that meaning's `calls` field. A consumer composes
+`means_get` twice (`calls`, then `c0`) with its own reference-semantics derivation of the projection and
+`means_deterministic`. The account step: `.inj "of" {asset, owner}` reads as `AcctRef.of` by `bodyOf`
+(`callData_bodyOf`/`bodyOf_callData`, Lang's, on main); `AcctRef.of o a ↦ accountId X o a` is KERNEL's
+resolver (`Kernel/Receive/Ledger.lean`), by definition.
+
+**The closure.** The receiver means `apply4 g ℓ` under `L.lib`; a consumer computes under a lib of its
+own. `bigStep_relib`: a derivation of a `NoRef` term over a no-ref environment (`NoRefVal`; every
+`Data.toVal` is one, `toVal4_noRef`) is a derivation under every lib, and its value holds no ref.
+`Relib` composes it (`relib_ref`, `relib_app`, `relib_get`, `relib_case`, `relib_apply4`): two libs
+holding one `NoRef` body give the method application, and every projection over it, one meaning.
+An INLINED method term (the escrow's `methodAt`, lib `[]`) is not that: its field closes over the
+run's environment where `.ref g` closes over `[]`, so values differ while data agree. The consumer
+restates projections over `apply4 0 ℓ` under `[body]`.
+
+**Teeth.** `extract_get_tooth`: the knot `fix (λself. {a = 1, g = self.a})` never extracts with `g = 2`,
+at any budget (its `g` means 1); `extract_knot_ok`: it does extract, to `g = 1` (by `rfl`).
+`relib_needs_one_body` and `relib_needs_noRef`: each premise of `relib_ref` is needed.
+
+**Read.** Second-agent vacuity read with the disjunct check, twice: nothing vacuous. Fixed from the first
+read: the field premise had no supplier (`means_field_exists`, `rowMeans_labels`); the projection
+route did not compose (the `Relib` half above). Fixed from the second: the `NoRef` tooth. What
+LEDGER discharges itself (none unsatisfiable): `readPackage look pkg = .ok escrow`, the digest
+round trip, `NoRef escrow.body` (not yet proved), the state's shape from `readState`, and restating
+`escrow_calls_payout` over `apply4 0 ℓ` with projections that keep the `well`/`none` tags.
+
+**Nothing moves.** No wire, no vector, no shipped text, no required step.
