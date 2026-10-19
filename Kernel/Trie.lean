@@ -23,7 +23,9 @@ exclusion proofs are as sound as inclusion ones (Kernel.Proofs.Trie). `Spec.dept
 branching bit inside a u16.
 
 Work per `insert`: one path from the root to the key's leaf is rebuilt, one hash per node on it,
-plus its leaf, plus at most one new node where the key's bits first leave the path's.
+plus its leaf, plus at most one new node where the key's bits first leave the path's. A one-entry
+leaf the new key splits keeps its cached digest: a leaf's hash commits its entries, not its
+position (cv 01a15107-2263; `Kernel.Proofs.Trie.insAt_eq_rebuild`: the same trie as re-hashing it).
 -/
 namespace Nanodregg.Kernel.Trie
 
@@ -157,9 +159,20 @@ branches between `k`'s leaf and the node, whose cached hash is kept. A node's `r
 `k` lands first in trie order. -/
 def insAt (k : K) (v : V) : Nat → T K V D → T K V D
   | _, .empty => mkLeaf S [(k, v)]
-  | d, .leaf _ kvs =>
+  | d, .leaf h kvs =>
       if kvs.any (fun p => p.1 = k) then mkLeaf S (kvs.map fun p => if p.1 = k then (k, v) else p)
-      else build S (S.depth - d) d (kvs ++ [(k, v)])
+      else
+        match kvs with
+        | [p] =>
+            -- a new key leaving a one-entry leaf: one node over the leaf, whose cached digest stands
+            -- (a leaf's hash commits its entries, not its position; cv 01a15107-2263)
+            match diverge S k p.1 d S.depth with
+            | some c =>
+                match S.bit k c with
+                | true => mkNode S c p.1 (.leaf h [p]) (mkLeaf S [(k, v)])
+                | false => mkNode S c k (mkLeaf S [(k, v)]) (.leaf h [p])
+            | none => build S (S.depth - d) d ([p] ++ [(k, v)])
+        | _ => build S (S.depth - d) d (kvs ++ [(k, v)])
   | d, .node h b rep l r =>
       match diverge S k rep d b with
       | some c =>

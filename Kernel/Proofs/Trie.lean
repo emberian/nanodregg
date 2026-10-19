@@ -404,15 +404,129 @@ theorem getAt_build :
               · simp only
                 rw [getAt_build f (c + 1), find_filter (q := fun x => S.bit x c)]; simp [hb]
 
-theorem getAt_insAt (k k' : K) (v : V) :
-    ∀ (d : Nat) (t : T K V D), getAt S k' d (insAt S k v d t) = if k' = k then some v else getAt S k' d t
+/-! ## The insert that re-hashed a split leaf (cv 01a15107-2263)
+
+`insAt` keeps the cached digest of a one-entry leaf a new key splits; before, it `build`t the pair
+and re-hashed that leaf. `insAtRebuild` is that insert, kept as the reference the theorems about
+`insAt` were first proved for: the two tries agree but for cached digests, unconditionally
+(`hashEq_insAt`), so every routing and shape fact transfers; and on a well-formed trie they are the
+SAME trie, digests included (`insAt_eq_rebuild`): no root, proof or head moves. -/
+
+/-- `insAt` before cv 01a15107-2263: a new key reaching a leaf `build`s the leaf's entries with it. -/
+private def insAtRebuild (k : K) (v : V) : Nat → T K V D → T K V D
+  | _, .empty => mkLeaf S [(k, v)]
+  | d, .leaf _ kvs =>
+      if kvs.any (fun p => p.1 = k) then mkLeaf S (kvs.map fun p => if p.1 = k then (k, v) else p)
+      else build S (S.depth - d) d (kvs ++ [(k, v)])
+  | d, .node h b rep l r =>
+      match diverge S k rep d b with
+      | some c =>
+          match S.bit k c with
+          | true => mkNode S c rep (.node h b rep l r) (mkLeaf S [(k, v)])
+          | false => mkNode S c k (mkLeaf S [(k, v)]) (.node h b rep l r)
+      | none =>
+          match S.bit k b with
+          | true => mkNode S b rep l (insAtRebuild k v (b + 1) r)
+          | false => mkNode S b (if precedes S k rep (b + 1) then k else rep) (insAtRebuild k v (b + 1) l) r
+
+omit [DecidableEq K] in
+/-- Two tries equal but for their cached digests. -/
+def HashEq : T K V D → T K V D → Prop
+  | .empty, .empty => True
+  | .leaf _ kvs, .leaf _ kvs' => kvs = kvs'
+  | .node _ b rep l r, .node _ b' rep' l' r' => b = b' ∧ rep = rep' ∧ HashEq l l' ∧ HashEq r r'
+  | _, _ => False
+
+omit [DecidableEq K] in
+theorem hashEq_refl : ∀ t : T K V D, HashEq t t
+  | .empty => trivial
+  | .leaf _ _ => rfl
+  | .node _ _ _ l r => ⟨rfl, rfl, hashEq_refl l, hashEq_refl r⟩
+
+/-- A lookup does not read cached digests. -/
+theorem getAt_hashEq (k : K) : ∀ (d : Nat) (t u : T K V D), HashEq t u → getAt S k d t = getAt S k d u
+  | _, .empty, .empty, _ => rfl
+  | _, .leaf _ _, .leaf _ _, h => by simp only [HashEq] at h; subst h; rfl
+  | d, .node _ b rep l r, .node _ b' rep' l' r', h => by
+      obtain ⟨rfl, rfl, hl, hr⟩ := h
+      simp only [getAt]; rw [getAt_hashEq k (b + 1) l l' hl, getAt_hashEq k (b + 1) r r' hr]
+  | _, .empty, .leaf .., h | _, .empty, .node .., h | _, .leaf .., .empty, h
+  | _, .leaf .., .node .., h | _, .node .., .empty, h | _, .node .., .leaf .., h => by simp [HashEq] at h
+
+omit [DecidableEq K] in
+/-- Nor does a listing. -/
+theorem toList_hashEq : ∀ (t u : T K V D), HashEq t u → t.toList = u.toList
+  | .empty, .empty, _ => rfl
+  | .leaf _ _, .leaf _ _, h => by simp only [HashEq] at h; subst h; rfl
+  | .node _ _ _ l r, .node _ _ _ l' r', h => by
+      obtain ⟨-, -, hl, hr⟩ := h
+      simp only [T.toList]; rw [toList_hashEq l l' hl, toList_hashEq r r' hr]
+  | .empty, .leaf .., h | .empty, .node .., h | .leaf .., .empty, h
+  | .leaf .., .node .., h | .node .., .empty, h | .node .., .leaf .., h => by simp [HashEq] at h
+
+omit [DecidableEq K] in
+theorem build_single (f d : Nat) (x : K × V) : build S f d [x] = mkLeaf S [x] := by cases f <;> rfl
+
+omit [DecidableEq K] in
+/-- `build` of a one-entry leaf's entry and a key that leaves it at `c`: one node over the two
+leaves, ordered by the key's bit `c`. -/
+theorem build_pair (d c : Nat) (p : K × V) (k : K) (v : V) (hc : diverge S k p.1 d S.depth = some c) :
+    build S (S.depth - d) d ([p] ++ [(k, v)]) =
+      match S.bit k c with
+      | true => mkNode S c p.1 (mkLeaf S [p]) (mkLeaf S [(k, v)])
+      | false => mkNode S c k (mkLeaf S [(k, v)]) (mkLeaf S [p]) := by
+  obtain ⟨hdc, hcd, hne, -⟩ := (diverge_some S).mp hc
+  obtain ⟨f, hf⟩ : ∃ f, S.depth - d = f + 1 := ⟨S.depth - d - 1, by omega⟩
+  have hs : splitBit S d ([p] ++ [(k, v)]) = some c := by
+    simp only [splitBit, List.cons_append, List.nil_append, List.any_cons, List.any_nil, Bool.or_false]
+    simp only [diverge] at hc
+    rw [← hc]
+  have hp : S.bit p.1 c = !S.bit k c := by
+    cases h1 : S.bit k c <;> cases h2 : S.bit p.1 c <;> simp_all
+  rw [hf]
+  simp only [List.cons_append, List.nil_append] at hs ⊢
+  rw [build_split S f d c p [(k, v)] hs]
+  cases hk : S.bit k c <;> simp only [hk, Bool.not_false, Bool.not_true] at hp <;>
+    simp [List.filter, hk, hp, mkLeaf, T.first, build_single]
+
+/-- **`insAt` is `insAtRebuild` but for cached digests**, on ANY trie: the same nodes, branching bits,
+`rep`s and entries. -/
+private theorem hashEq_insAt (k : K) (v : V) : ∀ (d : Nat) (t : T K V D), HashEq (insAt S k v d t) (insAtRebuild S k v d t)
+  | _, .empty => hashEq_refl _
+  | d, .leaf h kvs => by
+      simp only [insAt, insAtRebuild]
+      split
+      · exact hashEq_refl _
+      · match kvs with
+        | [p] =>
+            simp only
+            cases hc : diverge S k p.1 d S.depth with
+            | none => exact hashEq_refl _
+            | some c =>
+                simp only
+                rw [build_pair S d c p k v hc]
+                cases S.bit k c <;> exact ⟨rfl, rfl, rfl, rfl⟩
+        | [] => exact hashEq_refl _
+        | _ :: _ :: _ => exact hashEq_refl _
+  | d, .node h b rep l r => by
+      simp only [insAt, insAtRebuild]
+      cases diverge S k rep d b with
+      | some c => simp only; cases S.bit k c <;> exact hashEq_refl _
+      | none =>
+          simp only
+          cases S.bit k b
+          · exact ⟨rfl, rfl, hashEq_insAt k v (b + 1) l, hashEq_refl r⟩
+          · exact ⟨rfl, rfl, hashEq_refl l, hashEq_insAt k v (b + 1) r⟩
+
+private theorem getAt_insAtRebuild (k k' : K) (v : V) :
+    ∀ (d : Nat) (t : T K V D), getAt S k' d (insAtRebuild S k v d t) = if k' = k then some v else getAt S k' d t
   | d, .empty => by
-      simp only [insAt, mkLeaf, getAt, find_cons, find_nil]
+      simp only [insAtRebuild, mkLeaf, getAt, find_cons, find_nil]
       by_cases h : k' = k
       · subst h; simp
       · simp [h, Ne.symm h]
   | d, .leaf h kvs => by
-      simp only [insAt]
+      simp only [insAtRebuild]
       split
       · rename_i hany; simp only [mkLeaf, getAt]; exact find_replace hany
       · rename_i hany
@@ -421,7 +535,7 @@ theorem getAt_insAt (k k' : K) (v : V) :
         · subst hk; simp [find_none_of_not_any (Bool.eq_false_iff.mpr hany)]
         · simp [hk, Ne.symm hk]
   | d, .node h b rep l r => by
-      simp only [insAt]
+      simp only [insAtRebuild]
       cases hdk : diverge S k rep d b with
       | some c =>
           dsimp only
@@ -493,7 +607,7 @@ theorem getAt_insAt (k k' : K) (v : V) :
                 simp [hkk]
             | none =>
                 cases h2 : S.bit k' b
-                · simp only; rw [getAt_insAt k k' v (b + 1) l]
+                · simp only; rw [getAt_insAtRebuild k k' v (b + 1) l]
                 · have hkk : k' ≠ k := by rintro rfl; rw [hkb] at h2; cases h2
                   simp [hkk]
           · simp only [mkNode, getAt]
@@ -505,7 +619,12 @@ theorem getAt_insAt (k k' : K) (v : V) :
                 cases h2 : S.bit k' b
                 · have hkk : k' ≠ k := by rintro rfl; rw [hkb] at h2; cases h2
                   simp [hkk]
-                · simp only; rw [getAt_insAt k k' v (b + 1) r]
+                · simp only; rw [getAt_insAtRebuild k k' v (b + 1) r]
+
+/-- `getAt` after `insAt` (the cached digests do not route, `getAt_hashEq`). -/
+theorem getAt_insAt (k k' : K) (v : V) :
+    ∀ (d : Nat) (t : T K V D), getAt S k' d (insAt S k v d t) = if k' = k then some v else getAt S k' d t :=
+  fun d t => (getAt_hashEq S k' d _ _ (hashEq_insAt S k v d t)).trans (getAt_insAtRebuild S k k' v d t)
 
 /-- **The trie is a map.** -/
 theorem get_insert (t : T K V D) (k k' : K) (v : V) :
@@ -828,15 +947,77 @@ theorem shallow_build : ∀ (f d : Nat) (kvs : List (K × V)), f ≤ S.depth - d
   fun f d kvs _ => shallow_build' S f d kvs
 
 omit [DecidableEq D] in
-theorem wf_insAt (k : K) (v : V) : ∀ (d : Nat) (t : T K V D), WF S t → WF S (insAt S k v d t)
+/-- **`insAt` is `insAtRebuild`, digests included, on a well-formed trie** (cv 01a15107-2263): the
+split leaf it keeps carries the digest `insAtRebuild` recomputes, so the insert reaches the very
+same trie, and no root, proof or head moves; it only skips that one hash. -/
+private theorem insAt_eq_rebuild (k : K) (v : V) : ∀ (d : Nat) (t : T K V D), WF S t →
+    insAt S k v d t = insAtRebuild S k v d t
+  | _, .empty, _ => rfl
+  | d, .leaf h kvs, hw => by
+      simp only [insAt, insAtRebuild]
+      split
+      · rfl
+      · match kvs with
+        | [p] =>
+            simp only
+            cases hc : diverge S k p.1 d S.depth with
+            | none => rfl
+            | some c =>
+                simp only
+                rw [build_pair S d c p k v hc]
+                have hl : (T.leaf h [p] : T K V D) = mkLeaf S [p] := by
+                  simp only [WF] at hw; rw [hw]; rfl
+                cases hb : S.bit k c <;> simp only [hl]
+        | [] => rfl
+        | _ :: _ :: _ => rfl
+  | d, .node h b rep l r, hw => by
+      obtain ⟨-, -, hl, hr⟩ := hw
+      simp only [insAt, insAtRebuild]
+      cases diverge S k rep d b with
+      | some c => rfl
+      | none =>
+          simp only
+          cases S.bit k b
+          · rw [insAt_eq_rebuild k v (b + 1) l hl]
+          · rw [insAt_eq_rebuild k v (b + 1) r hr]
+
+omit [DecidableEq D] in
+/-- **The split leaf is kept, digest and all** (cv 01a15107-2263): a new key leaving a one-entry leaf
+gets one node over THAT leaf, whatever digest it carries; nothing re-hashes it. So `insAt_eq_rebuild`'s
+`WF` is load-bearing: a leaf carrying a digest other than `leafHash` of its entries keeps it, where
+`insAtRebuild` recomputed it. -/
+theorem insAt_split_keeps (k : K) (v : V) (d c : Nat) (h : D) (p : K × V)
+    (hc : diverge S k p.1 d S.depth = some c) :
+    insAt S k v d (.leaf h [p]) =
+      match S.bit k c with
+      | true => mkNode S c p.1 (.leaf h [p]) (mkLeaf S [(k, v)])
+      | false => mkNode S c k (mkLeaf S [(k, v)]) (.leaf h [p]) := by
+  have hk : p.1 ≠ k := fun he => ((diverge_some S).mp hc).2.2.1 (by rw [he])
+  simp only [insAt, List.any_cons, List.any_nil, Bool.or_false, decide_eq_true_eq, hk, if_false, hc]
+  cases S.bit k c <;> rfl
+
+omit [DecidableEq D] in
+/-- `insAt_eq_rebuild`'s `WF` is load-bearing: a split leaf carrying a digest other than its entries'
+`leafHash` keeps it under `insAt`, where `insAtRebuild` recomputed it. -/
+private theorem insAt_ne_rebuild_of_stale (k : K) (v : V) (d c : Nat) (h : D) (p : K × V)
+    (hh : h ≠ leafHash S (digests S [p])) (hc : diverge S k p.1 d S.depth = some c) :
+    insAt S k v d (.leaf h [p]) ≠ insAtRebuild S k v d (.leaf h [p]) := by
+  have hk : p.1 ≠ k := fun he => ((diverge_some S).mp hc).2.2.1 (by rw [he])
+  rw [insAt_split_keeps S k v d c h p hc]
+  simp only [insAtRebuild, List.any_cons, List.any_nil, Bool.or_false, decide_eq_true_eq, hk, if_false]
+  rw [build_pair S d c p k v hc]
+  cases S.bit k c <;> simp [mkNode, mkLeaf, hh]
+
+omit [DecidableEq D] in
+private theorem wf_insAtRebuild (k : K) (v : V) : ∀ (d : Nat) (t : T K V D), WF S t → WF S (insAtRebuild S k v d t)
   | _, .empty, _ => wf_mkLeaf S _
   | d, .leaf _ kvs, _ => by
-      simp only [insAt]; split
+      simp only [insAtRebuild]; split
       · exact wf_mkLeaf S _
       · exact wf_build S _ _ _
   | d, .node h b rep l r, hw => by
       obtain ⟨hb, hh, hl, hr⟩ := hw
-      simp only [insAt]
+      simp only [insAtRebuild]
       cases hdk : diverge S k rep d b with
       | some c =>
           dsimp only
@@ -846,20 +1027,24 @@ theorem wf_insAt (k : K) (v : V) : ∀ (d : Nat) (t : T K V D), WF S t → WF S 
           · exact wf_mkNode S (by omega) ⟨hb, hh, hl, hr⟩ (wf_mkLeaf S _)
       | none =>
           cases S.bit k b
-          · exact wf_mkNode S hb (wf_insAt k v (b + 1) l hl) hr
-          · exact wf_mkNode S hb hl (wf_insAt k v (b + 1) r hr)
+          · exact wf_mkNode S hb (wf_insAtRebuild k v (b + 1) l hl) hr
+          · exact wf_mkNode S hb hl (wf_insAtRebuild k v (b + 1) r hr)
 
 omit [DecidableEq D] in
-theorem shallow_insAt (k : K) (v : V) :
-    ∀ (d : Nat) (t : T K V D), Shallow S d t → Shallow S d (insAt S k v d t)
-  | _, .empty, _ => by simp [insAt, mkLeaf, Shallow]
+theorem wf_insAt (k : K) (v : V) : ∀ (d : Nat) (t : T K V D), WF S t → WF S (insAt S k v d t) :=
+  fun d t h => (insAt_eq_rebuild S k v d t h) ▸ wf_insAtRebuild S k v d t h
+
+omit [DecidableEq D] in
+private theorem shallow_insAtRebuild (k : K) (v : V) :
+    ∀ (d : Nat) (t : T K V D), Shallow S d t → Shallow S d (insAtRebuild S k v d t)
+  | _, .empty, _ => by simp [insAtRebuild, mkLeaf, Shallow]
   | d, .leaf _ kvs, _ => by
-      simp only [insAt]; split
+      simp only [insAtRebuild]; split
       · simp [mkLeaf, Shallow]
       · exact shallow_build' S _ _ _
   | d, .node h b rep l r, hs => by
       obtain ⟨hdb, hb, hl, hr⟩ := hs
-      simp only [insAt]
+      simp only [insAtRebuild]
       cases hdk : diverge S k rep d b with
       | some c =>
           dsimp only
@@ -871,8 +1056,25 @@ theorem shallow_insAt (k : K) (v : V) :
             exact ⟨hdc, by omega, ⟨by omega, hb, hl, hr⟩, trivial⟩
       | none =>
           cases S.bit k b
-          · exact ⟨hdb, hb, shallow_insAt k v (b + 1) l hl, hr⟩
-          · exact ⟨hdb, hb, hl, shallow_insAt k v (b + 1) r hr⟩
+          · exact ⟨hdb, hb, shallow_insAtRebuild k v (b + 1) l hl, hr⟩
+          · exact ⟨hdb, hb, hl, shallow_insAtRebuild k v (b + 1) r hr⟩
+
+omit [DecidableEq K] [DecidableEq D] in
+theorem shallow_hashEq : ∀ (d : Nat) (t u : T K V D), HashEq t u → Shallow S d u → Shallow S d t
+  | _, .empty, .empty, _, _ => trivial
+  | _, .leaf _ _, .leaf _ _, _, _ => trivial
+  | d, .node _ b _ l r, .node _ b' _ l' r', h, hs => by
+      obtain ⟨rfl, -, hl, hr⟩ := h
+      obtain ⟨h1, h2, h3, h4⟩ := hs
+      exact ⟨h1, h2, shallow_hashEq (b + 1) l l' hl h3, shallow_hashEq (b + 1) r r' hr h4⟩
+  | _, .empty, .leaf .., h, _ | _, .empty, .node .., h, _ | _, .leaf .., .empty, h, _
+  | _, .leaf .., .node .., h, _ | _, .node .., .empty, h, _ | _, .node .., .leaf .., h, _ => by
+      simp [HashEq] at h
+
+omit [DecidableEq D] in
+theorem shallow_insAt (k : K) (v : V) :
+    ∀ (d : Nat) (t : T K V D), Shallow S d t → Shallow S d (insAt S k v d t) :=
+  fun d t h => shallow_hashEq S d _ _ (hashEq_insAt S k v d t) (shallow_insAtRebuild S k v d t h)
 
 omit [DecidableEq D] in
 theorem wf_insert {t : T K V D} (k : K) (v : V) (h : WF S t) : WF S (t.insert S k v) :=
@@ -1061,11 +1263,11 @@ theorem mem_of_getAt : ∀ (d : Nat) (t : T K V D) (k : K) (v : V),
           · rw [hb] at h; exact List.mem_append_right _ (mem_of_getAt (b + 1) r k v h)
 
 omit [DecidableEq D] in
-theorem keys_insAt (k : K) (v : V) : ∀ (d : Nat) (t : T K V D) (p : K × V),
-    p ∈ (insAt S k v d t).toList → p ∈ t.toList ∨ p = (k, v)
-  | _, .empty, p, h => by simp [insAt, mkLeaf, T.toList] at h; exact .inr h
+private theorem keys_insAtRebuild (k : K) (v : V) : ∀ (d : Nat) (t : T K V D) (p : K × V),
+    p ∈ (insAtRebuild S k v d t).toList → p ∈ t.toList ∨ p = (k, v)
+  | _, .empty, p, h => by simp [insAtRebuild, mkLeaf, T.toList] at h; exact .inr h
   | d, .leaf _ kvs, p, h => by
-      simp only [insAt] at h
+      simp only [insAtRebuild] at h
       split at h
       · simp only [mkLeaf, T.toList, List.mem_map] at h
         obtain ⟨q, hq, he⟩ := h
@@ -1076,7 +1278,7 @@ theorem keys_insAt (k : K) (v : V) : ∀ (d : Nat) (t : T K V D) (p : K × V),
         simp only [List.mem_append, List.mem_singleton] at this
         exact this
   | d, .node h b rep l r, p, hp => by
-      simp only [insAt] at hp
+      simp only [insAtRebuild] at hp
       cases hdk : diverge S k rep d b with
       | some c =>
           rw [hdk] at hp; dsimp only at hp
@@ -1099,7 +1301,7 @@ theorem keys_insAt (k : K) (v : V) : ∀ (d : Nat) (t : T K V D) (p : K × V),
           · rw [hb] at hp
             simp only [mkNode, T.toList, List.mem_append] at hp ⊢
             rcases hp with hp | hp
-            · rcases keys_insAt k v (b + 1) l p hp with hp | hp
+            · rcases keys_insAtRebuild k v (b + 1) l p hp with hp | hp
               · exact .inl (.inl hp)
               · exact .inr hp
             · exact .inl (.inr hp)
@@ -1107,9 +1309,14 @@ theorem keys_insAt (k : K) (v : V) : ∀ (d : Nat) (t : T K V D) (p : K × V),
             simp only [mkNode, T.toList, List.mem_append] at hp ⊢
             rcases hp with hp | hp
             · exact .inl (.inl hp)
-            · rcases keys_insAt k v (b + 1) r p hp with hp | hp
+            · rcases keys_insAtRebuild k v (b + 1) r p hp with hp | hp
               · exact .inl (.inr hp)
               · exact .inr hp
+
+omit [DecidableEq D] in
+theorem keys_insAt (k : K) (v : V) : ∀ (d : Nat) (t : T K V D) (p : K × V),
+    p ∈ (insAt S k v d t).toList → p ∈ t.toList ∨ p = (k, v) :=
+  fun d t p h => keys_insAtRebuild S k v d t p (toList_hashEq _ _ (hashEq_insAt S k v d t) ▸ h)
 
 omit [DecidableEq D] in
 theorem map_fst_replace {k : K} {v : V} :
@@ -1120,11 +1327,11 @@ theorem map_fst_replace {k : K} {v : V} :
       by_cases h : p.1 = k <;> simp [h]
 
 omit [DecidableEq D] in
-theorem routed_insAt (k : K) (v : V) : ∀ (d : Nat) (t : T K V D), Routed S d t →
-    Routed S d (insAt S k v d t)
-  | _, .empty, _ => by simp [insAt, mkLeaf, Routed]
+private theorem routed_insAtRebuild (k : K) (v : V) : ∀ (d : Nat) (t : T K V D), Routed S d t →
+    Routed S d (insAtRebuild S k v d t)
+  | _, .empty, _ => by simp [insAtRebuild, mkLeaf, Routed]
   | d, .leaf _ kvs, h => by
-      simp only [insAt]
+      simp only [insAtRebuild]
       split
       · simp only [mkLeaf, Routed] at h ⊢; rw [map_fst_replace]; exact h
       · rename_i hany
@@ -1138,7 +1345,7 @@ theorem routed_insAt (k : K) (v : V) : ∀ (d : Nat) (t : T K V D), Routed S d t
         exact hany (List.any_eq_true.mpr ⟨q, hq, by simp⟩)
   | d, .node h b rep l r, hr => by
       obtain ⟨hdb, hag, hlb, hrb, hl, hrr⟩ := hr
-      simp only [insAt]
+      simp only [insAtRebuild]
       cases hdk : diverge S k rep d b with
       | some c =>
           dsimp only
@@ -1170,25 +1377,45 @@ theorem routed_insAt (k : K) (v : V) : ∀ (d : Nat) (t : T K V D), Routed S d t
               intro i hi hib; split
               · exact hagk i hi hib
               · rfl
-            refine ⟨hdb, fun p hp i hi hib => ?_, fun p hp => ?_, hrb, routed_insAt k v (b + 1) l hl, hrr⟩
+            refine ⟨hdb, fun p hp i hi hib => ?_, fun p hp => ?_, hrb, routed_insAtRebuild k v (b + 1) l hl, hrr⟩
             · rw [hrep i hi hib]
               rcases List.mem_append.mp hp with hp | hp
-              · rcases keys_insAt S k v (b + 1) l p hp with hp | rfl
+              · rcases keys_insAtRebuild S k v (b + 1) l p hp with hp | rfl
                 · exact hag p (List.mem_append_left _ hp) i hi hib
                 · exact hagk i hi hib
               · exact hag p (List.mem_append_right _ hp) i hi hib
-            · rcases keys_insAt S k v (b + 1) l p hp with hp | rfl
+            · rcases keys_insAtRebuild S k v (b + 1) l p hp with hp | rfl
               · exact hlb p hp
               · exact hkb
-          · refine ⟨hdb, fun p hp i hi hib => ?_, hlb, fun p hp => ?_, hl, routed_insAt k v (b + 1) r hrr⟩
+          · refine ⟨hdb, fun p hp i hi hib => ?_, hlb, fun p hp => ?_, hl, routed_insAtRebuild k v (b + 1) r hrr⟩
             · rcases List.mem_append.mp hp with hp | hp
               · exact hag p (List.mem_append_left _ hp) i hi hib
-              · rcases keys_insAt S k v (b + 1) r p hp with hp | rfl
+              · rcases keys_insAtRebuild S k v (b + 1) r p hp with hp | rfl
                 · exact hag p (List.mem_append_right _ hp) i hi hib
                 · exact hagk i hi hib
-            · rcases keys_insAt S k v (b + 1) r p hp with hp | rfl
+            · rcases keys_insAtRebuild S k v (b + 1) r p hp with hp | rfl
               · exact hrb p hp
               · exact hkb
+
+omit [DecidableEq K] [DecidableEq D] in
+theorem routed_hashEq : ∀ (d : Nat) (t u : T K V D), HashEq t u → Routed S d u → Routed S d t
+  | _, .empty, .empty, _, _ => trivial
+  | _, .leaf _ _, .leaf _ _, h, hr => by simp only [HashEq] at h; subst h; exact hr
+  | d, .node _ b rep l r, .node _ b' rep' l' r', h, hr => by
+      obtain ⟨rfl, rfl, hl, hr'⟩ := h
+      obtain ⟨h1, h2, h3, h4, h5, h6⟩ := hr
+      rw [← toList_hashEq l l' hl, ← toList_hashEq r r' hr'] at h2
+      rw [← toList_hashEq l l' hl] at h3
+      rw [← toList_hashEq r r' hr'] at h4
+      exact ⟨h1, h2, h3, h4, routed_hashEq (b + 1) l l' hl h5, routed_hashEq (b + 1) r r' hr' h6⟩
+  | _, .empty, .leaf .., h, _ | _, .empty, .node .., h, _ | _, .leaf .., .empty, h, _
+  | _, .leaf .., .node .., h, _ | _, .node .., .empty, h, _ | _, .node .., .leaf .., h, _ => by
+      simp [HashEq] at h
+
+omit [DecidableEq D] in
+theorem routed_insAt (k : K) (v : V) : ∀ (d : Nat) (t : T K V D), Routed S d t →
+    Routed S d (insAt S k v d t) :=
+  fun d t h => routed_hashEq S d _ _ (hashEq_insAt S k v d t) (routed_insAtRebuild S k v d t h)
 
 omit [DecidableEq D] in
 theorem routed_insert {t : T K V D} (k : K) (v : V) (h : Routed S 0 t) : Routed S 0 (t.insert S k v) :=
@@ -1362,15 +1589,15 @@ theorem shape_build : ∀ (f d : Nat) (kvs : List (K × V)), f = S.depth - d →
 
 omit [DecidableEq D] in
 /-- An insert never lists fewer entries. -/
-theorem length_insAt (k : K) (v : V) : ∀ (d : Nat) (t : T K V D),
-    t.toList.length ≤ (insAt S k v d t).toList.length
+private theorem length_insAtRebuild (k : K) (v : V) : ∀ (d : Nat) (t : T K V D),
+    t.toList.length ≤ (insAtRebuild S k v d t).toList.length
   | _, .empty => by simp [T.toList]
   | d, .leaf _ kvs => by
-      simp only [insAt]; split
+      simp only [insAtRebuild]; split
       · simp [mkLeaf, T.toList]
       · rw [(toList_build S _ _ _).length_eq]; simp [T.toList]
   | d, .node h b rep l r => by
-      simp only [insAt]
+      simp only [insAtRebuild]
       cases hdk : diverge S k rep d b with
       | some c =>
           dsimp only
@@ -1379,15 +1606,21 @@ theorem length_insAt (k : K) (v : V) : ∀ (d : Nat) (t : T K V D),
           dsimp only
           cases S.bit k b
           · simp only [mkNode, T.toList, List.length_append]
-            have := length_insAt k v (b + 1) l; omega
+            have := length_insAtRebuild k v (b + 1) l; omega
           · simp only [mkNode, T.toList, List.length_append]
-            have := length_insAt k v (b + 1) r; omega
+            have := length_insAtRebuild k v (b + 1) r; omega
+
+omit [DecidableEq D] in
+/-- An insert never lists fewer entries. -/
+theorem length_insAt (k : K) (v : V) : ∀ (d : Nat) (t : T K V D),
+    t.toList.length ≤ (insAt S k v d t).toList.length :=
+  fun d t => (toList_hashEq _ _ (hashEq_insAt S k v d t)) ▸ length_insAtRebuild S k v d t
 
 omit [DecidableEq D] in
 /-- Where an insert puts its key in trie order: first exactly when it `precedes` the old first key. -/
-theorem first_insAt (k : K) (v : V) : ∀ (d : Nat) (t : T K V D) (x : K), Routed S d t → Shape S d t →
+private theorem first_insAtRebuild (k : K) (v : V) : ∀ (d : Nat) (t : T K V D) (x : K), Routed S d t → Shape S d t →
     t.toList.head?.map Prod.fst = some x →
-    (insAt S k v d t).toList.head?.map Prod.fst = some (if precedes S k x d then k else x)
+    (insAtRebuild S k v d t).toList.head?.map Prod.fst = some (if precedes S k x d then k else x)
   | _, .empty, _, _, _, hx => by simp [T.toList] at hx
   | d, .leaf h kvs, x, _, hs, hx => by
       obtain ⟨_, hag⟩ := hs
@@ -1401,7 +1634,7 @@ theorem first_insAt (k : K) (v : V) : ∀ (d : Nat) (t : T K V D) (x : K), Route
         intro q hq i hi hid
         have hlen := List.length_pos_of_mem hq
         exact hag (by simp only [List.length_cons]; omega) q (List.mem_cons_of_mem _ hq) p (by simp) i hi hid
-      simp only [insAt]
+      simp only [insAtRebuild]
       split
       · rename_i hany
         have hpre : precedes S k p.1 d = false := by
@@ -1464,7 +1697,7 @@ theorem first_insAt (k : K) (v : V) : ∀ (d : Nat) (t : T K V D) (x : K), Route
       subst hxr
       obtain ⟨p0, hp0, hp0r⟩ := head_key hrep
       have hrepb : S.bit x b = false := by rw [← hp0r]; exact hlb p0 hp0
-      simp only [insAt]
+      simp only [insAtRebuild]
       cases hdk : diverge S k x d b with
       | some c =>
           dsimp only
@@ -1477,7 +1710,7 @@ theorem first_insAt (k : K) (v : V) : ∀ (d : Nat) (t : T K V D) (x : K), Route
           dsimp only
           have hagk := (diverge_none S).mp hdk
           cases hkb : S.bit k b
-          · have ih := first_insAt k v (b + 1) l x hlR hlS hrep
+          · have ih := first_insAtRebuild k v (b + 1) l x hlR hlS hrep
             have hsk : precedes S k x d = precedes S k x (b + 1) :=
               precedes_skip S (by omega) fun i hi hib =>
                 if h' : i < b then hagk i hi h' else by rw [show i = b by omega, hkb, hrepb]
@@ -1491,13 +1724,20 @@ theorem first_insAt (k : K) (v : V) : ∀ (d : Nat) (t : T K V D) (x : K), Route
             rw [head_append_of hrep]; simp
 
 omit [DecidableEq D] in
+/-- Where an insert puts its key in trie order: first exactly when it `precedes` the old first key. -/
+theorem first_insAt (k : K) (v : V) : ∀ (d : Nat) (t : T K V D) (x : K), Routed S d t → Shape S d t →
+    t.toList.head?.map Prod.fst = some x →
+    (insAt S k v d t).toList.head?.map Prod.fst = some (if precedes S k x d then k else x) :=
+  fun d t x hr hs hx => (toList_hashEq _ _ (hashEq_insAt S k v d t)) ▸ first_insAtRebuild S k v d t x hr hs hx
+
+omit [DecidableEq D] in
 /-- An insert keeps the canonical shape of a routed trie. (Routed: the new `rep` is chosen by
 `precedes` against the old one, which reads the order the keys are routed in.) -/
-theorem shape_insAt (k : K) (v : V) : ∀ (d : Nat) (t : T K V D), Routed S d t → Shape S d t →
-    Shape S d (insAt S k v d t)
-  | _, .empty, _, _ => by simp [insAt, mkLeaf, Shape]
+private theorem shape_insAtRebuild (k : K) (v : V) : ∀ (d : Nat) (t : T K V D), Routed S d t → Shape S d t →
+    Shape S d (insAtRebuild S k v d t)
+  | _, .empty, _, _ => by simp [insAtRebuild, mkLeaf, Shape]
   | d, .leaf _ kvs, _, hs => by
-      simp only [insAt]; split
+      simp only [insAtRebuild]; split
       · obtain ⟨hne, hag⟩ := hs
         simp only [mkLeaf, Shape]
         refine ⟨by simpa using hne, fun h2 p hp q hq i hi hid => ?_⟩
@@ -1514,7 +1754,7 @@ theorem shape_insAt (k : K) (v : V) : ∀ (d : Nat) (t : T K V D), Routed S d t 
       obtain ⟨hdb, hag, hlb, hrb, hlR, hrR⟩ := hr
       obtain ⟨_, hb, hrep, hrne, hlS, hrS⟩ := hs
       have hleaf : ∀ e, Shape S e (mkLeaf S [(k, v)] : T K V D) := fun e => ⟨by simp, fun h2 => by simp at h2⟩
-      simp only [insAt]
+      simp only [insAtRebuild]
       cases hdk : diverge S k rep d b with
       | some c =>
           dsimp only
@@ -1529,13 +1769,33 @@ theorem shape_insAt (k : K) (v : V) : ∀ (d : Nat) (t : T K V D), Routed S d t 
       | none =>
           dsimp only
           cases hkb : S.bit k b
-          · exact ⟨hdb, hb, first_insAt S k v (b + 1) l rep hlR hlS hrep, hrne,
-              shape_insAt k v (b + 1) l hlR hlS, hrS⟩
-          · refine ⟨hdb, hb, hrep, ?_, hlS, shape_insAt k v (b + 1) r hrR hrS⟩
+          · exact ⟨hdb, hb, first_insAtRebuild S k v (b + 1) l rep hlR hlS hrep, hrne,
+              shape_insAtRebuild k v (b + 1) l hlR hlS, hrS⟩
+          · refine ⟨hdb, hb, hrep, ?_, hlS, shape_insAtRebuild k v (b + 1) r hrR hrS⟩
             intro h0
-            have := length_insAt S k v (b + 1) r
+            have := length_insAtRebuild S k v (b + 1) r
             rw [h0, List.length_nil] at this
             exact hrne (List.eq_nil_of_length_eq_zero (Nat.le_zero.mp this))
+
+omit [DecidableEq K] [DecidableEq D] in
+theorem shape_hashEq : ∀ (d : Nat) (t u : T K V D), HashEq t u → Shape S d u → Shape S d t
+  | _, .empty, .empty, _, _ => trivial
+  | _, .leaf _ _, .leaf _ _, h, hs => by simp only [HashEq] at h; subst h; exact hs
+  | d, .node _ b rep l r, .node _ b' rep' l' r', h, hs => by
+      obtain ⟨rfl, rfl, hl, hr⟩ := h
+      obtain ⟨h1, h2, h3, h4, h5, h6⟩ := hs
+      rw [← toList_hashEq l l' hl] at h3
+      rw [← toList_hashEq r r' hr] at h4
+      exact ⟨h1, h2, h3, h4, shape_hashEq (b + 1) l l' hl h5, shape_hashEq (b + 1) r r' hr h6⟩
+  | _, .empty, .leaf .., h, _ | _, .empty, .node .., h, _ | _, .leaf .., .empty, h, _
+  | _, .leaf .., .node .., h, _ | _, .node .., .empty, h, _ | _, .node .., .leaf .., h, _ => by
+      simp [HashEq] at h
+
+omit [DecidableEq D] in
+/-- An insert keeps the canonical shape of a routed trie. -/
+theorem shape_insAt (k : K) (v : V) : ∀ (d : Nat) (t : T K V D), Routed S d t → Shape S d t →
+    Shape S d (insAt S k v d t) :=
+  fun d t hr hs => shape_hashEq S d _ _ (hashEq_insAt S k v d t) (shape_insAtRebuild S k v d t hr hs)
 
 omit [DecidableEq K] [DecidableEq D] in
 theorem canon_empty (d : Nat) : Canon S d (T.empty : T K V D) := ⟨trivial, trivial, trivial⟩

@@ -1453,7 +1453,7 @@ def probeJournal (P : Params D) (st : State D) (seed : Nat) : State D :=
           -- what they require (cv 01a14afe-7380), read off the uncounted journal before and after
           let JS := journalSpec P.env
           let insU := w.journal.insert JS t.txId (H, turnDigest P.env t)
-          let ri := ri + Required.insertReq JS w.journal insU t.txId
+          let ri := ri + Required.insertReq JS insU t.txId
           let rp := if H % W = 0 then rp + Required.fresh JS w'.journal insU else rp
           if after.hashOf (journalSpec P.env) != w'.journalRoot P.env then
             .error s!"the counted journal write at height {H} reached another journal root"
@@ -2706,6 +2706,9 @@ def report (P : Params D) (seeds : List Nat) (control : Bool := false) : IO UInt
   IO.println s!"WASTE admit row-retract-hashes-per-required {showRatio (ratioUp rw.2.2.1 reqs.2.2.2.2.1)}"
   IO.println s!"WASTE admit rows-read-per-range-read {showRatio (ratio rw.2.2.2.2.2 rw.2.2.2.2.1)}"
   IO.println s!"WASTE admit hashes-per-turn-empty-root {showRatio (ratioUp emptyRootMarks admitted)}"
+  -- the ABSOLUTE admission cost (ROOT, GATES-8): the per-required rows above move with the design
+  -- they measure; this one is over the fixed seeds, so a costlier trie reads above its ceiling
+  IO.println s!"WASTE admit trie-hashes-per-turn {showRatio (ratioUp counted admitted)}"
   IO.println s!"kernel-sim: plant hash-count:empty-per-root (the roots read with a hashOf per root) reads hashes-per-turn-empty-root {showRatio (ratioUp plantRootMarks admitted)}"
   IO.println s!"WASTE admit row-insert-stem-hashes-per-required {showRatio (ratioUp stem.1 reqs.2.2.2.2.2)}"
   if P.proofSize.isSome then

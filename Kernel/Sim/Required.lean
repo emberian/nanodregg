@@ -9,9 +9,9 @@ noise was invisible. The denominator here is instead what the design requires FO
 BUILT, counted from their shapes, never from `log2 n`:
 
 * an insert of `k` (`Trie.insAt`: one path rebuilt) requires, read off the trie after it: one hash
-  per node on `k`'s path (each node's digest covers the changed leaf), `k`'s leaf, and, where `k` is
-  new and its leaf's sibling is a leaf, that sibling again (`insAt` reaches a leaf and `build`s the
-  pair, re-hashing the leaf it moved): `insertReq`;
+  per node on `k`'s path (each node's digest covers the changed leaf) and `k`'s leaf; a one-entry
+  leaf the new key splits is NOT re-hashed (its digest commits its entries, not its position:
+  `insAt` puts one node over it, cv 01a15107-2263, `Kernel.Proofs.Trie.insAt_eq_rebuild`): `insertReq`;
 * a removal (`Trie.retainAt`, the canonical erase: the journal's and the refusals' prunes, a row
   retract, a retired parent's heads) requires one hash per node or leaf of the trie after it whose
   digest is not the digest of the subtree it replaced (a subtree that kept everything, or that
@@ -28,7 +28,10 @@ lists with the kernel's own `under`. Each replay must reach the root the real tr
 the requirement is refused (`.error`): an operation list that drifted from the kernel's is never a
 denominator.
 
-Exact by construction for the design as it stands: a kernel that hashes what `insertReq`, `fresh`
+Exact by construction for the design as it stands, but for one case the deployed tries never
+reach: a new key leaving a MULTI-entry leaf (`insAt` `build`s it again, one hash over the model,
+never under). A leaf holds two entries only for keys equal on every bit within `S.depth`, which the
+four key encodings (fixed-width or prefix-free within depth) rule out. With that: a kernel that hashes what `insertReq`, `fresh`
 and `emptyRoots` name, and nothing else, counts ratio 1.000 on every draw. A regression that hashes
 more (the plant `hash-required:empty-per-insert`, KERNEL-35's per-insert empty digest written on the
 compressed trie) reads above 1; a count BELOW the requirement fails the run (`Gen.countTurn`): the
@@ -50,29 +53,16 @@ def isEmpty : Trie.T K V D → Bool
   | .empty => true
   | _ => false
 
-/-- A leaf. -/
-def isLeaf : Trie.T K V D → Bool
-  | .leaf .. => true
-  | _ => false
-
-/-- `k`'s path in `t`: the nodes above the leaf it reaches, that leaf's entry count, and whether the
-deepest node's other child is a leaf. -/
-def pathShape (k : K) : Trie.T K V D → Nat × Nat × Bool
-  | .empty => (0, 0, false)
-  | .leaf _ kvs => (0, kvs.length, false)
-  | .node _ b _ l r =>
-      match S.bit k b with
-      | true => let p := pathShape k r; (p.1 + 1, p.2.1, if isLeaf r then isLeaf l else p.2.2)
-      | false => let p := pathShape k l; (p.1 + 1, p.2.1, if isLeaf l then isLeaf r else p.2.2)
+/-- `k`'s path depth in `t`: the nodes above the leaf it reaches. -/
+def pathDepth (k : K) : Trie.T K V D → Nat
+  | .node _ b _ l r => (match S.bit k b with | true => pathDepth k r | false => pathDepth k l) + 1
+  | _ => 0
 
 variable [DecidableEq K]
 
 /-- **What an insert of `k` requires**, read off the trie after it (`post`): a hash per node on
-`k`'s path, its leaf, and the moved leaf where `k` is new (absent from `pre`), alone in its leaf, and
-its sibling a leaf (`insAt`'s leaf case `build`s the pair). -/
-def insertReq (pre post : Trie.T K V D) (k : K) : Nat :=
-  let p := pathShape S k post
-  p.1 + 1 + (if (pre.get S k).isNone && p.2.1 == 1 && p.2.2 then 1 else 0)
+`k`'s path and its leaf. The leaf a new key splits keeps its cached digest (cv 01a15107-2263). -/
+def insertReq (post : Trie.T K V D) (k : K) : Nat := pathDepth S k post + 1
 
 /-- Below `t`'s nodes that branch before bit `b`, the subtree a key like `rep` reaches. -/
 def below (rep : K) (b : Nat) : Trie.T K V D → Trie.T K V D
@@ -124,7 +114,7 @@ inductive Op (K : Type) where
 
 /-- Apply `o` to `t` (an insert takes `val k`), adding what it requires to `n`. -/
 def apply (val : K → V) : Trie.T K V D × Nat → Op K → Trie.T K V D × Nat
-  | (t, n), .ins k => let t' := t.insert S k (val k); (t', n + insertReq S t t' k)
+  | (t, n), .ins k => let t' := t.insert S k (val k); (t', n + insertReq S t' k)
   | (t, n), .del k path =>
       let t' := Trie.retainAt S (fun k' _ => decide (k' ≠ k)) path t
       (t', n + fresh S t' t)
@@ -204,7 +194,7 @@ def admit (E : Env D) (w : World D) (t : Turn D) (w' : World D) : Except String 
   let RS := rowSpec E
   let (rows, nr) := rowsReq E w t fun k => (w'.rows.get RS k).getD rowDummy
   unless rows.hashOf RS == w'.rowsRoot E do throw "the row operations do not reach the admitted rows root"
-  pure { cells := nc, nullifiers := nn, journal := insertReq JS w.journal j1 t.txId + fresh JS j2 j1,
+  pure { cells := nc, nullifiers := nn, journal := insertReq JS j1 t.txId + fresh JS j2 j1,
          rows := nr, refusals := fresh (refusalSpec E) w'.refusals w.refusals, roots := emptyRoots w' }
 
 /-- **What recording a refusal `w → w'` requires**: its three inserts (the transaction's leaf, the
