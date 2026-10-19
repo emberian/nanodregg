@@ -12,6 +12,7 @@ and the next `invokeRun` reads the cell back through its pins. Proved here of th
   `duplicateKey`).
 * `admit_live_write`: an admitted turn whose every touch of a live cell writes `ops` (and which
   touches it) leaves it live with `applyOps` of its slots, and `ops`' keys distinct.
+* `invokeRun_live`: a successful `invokeRun` through `w`'s pins ran on the cell live in `w`.
 * `invoke_next_slots`: a signed invoke of `obj`, derived from `w` and admitted to `w'`, whose run
   returned `s`: `obj` is live in `w'` and its state reads `s` at every key. `invoke_next_run`: so
   the state the next invoke of `obj` on `w'` is handed (`stateOf` of `invokeRun`'s cell) is `Runs`'
@@ -423,6 +424,15 @@ private theorem readKind_pinned {E : Env D} {w : World D} {pins : List (D × D)}
         · cases h
   · rw [if_neg hp] at h; cases h
 
+/-- **An invoke runs on the live cell it read** (LEDGER-6): an `invokeRun` through the pins of `w`
+that succeeded handed the run the cell `obj` holds live in `w`. No premise: `pinned` answers only
+for a pinned id, and with `w.live` itself. -/
+theorem invokeRun_live {X : Ctx D} {w : World D} {pins : List (D × D)} {c : Call D} {actor obj : D}
+    {method : Nat} {via : Option D} {cell : Cell} {p : D} {r : Req D}
+    (h : invokeRun X (pinned X.env w pins) c actor obj method via = .ok (cell, p, r)) :
+    w.live X.env obj = some cell :=
+  (readKind_pinned (invokeRun_cell h)).1
+
 omit [Ord D] in
 private theorem actFor_head {obj : D} {a : Act} {l : List (D × Act)} : actFor ((obj, a) :: l) obj = a := by
   simp [actFor, List.find?]
@@ -506,7 +516,7 @@ theorem invoke_next_run {X : Ctx D} {w w' : World D} {c : Call D} {t : Turn D}
     (hr' : invokeRun X (pinned X.env w' pins') c' actor' obj method' via' = .ok (cell', p', r')) :
     ∀ k, (stateOf cell').get k = s.get k := by
   obtain ⟨cell'', hl, hk⟩ := invoke_next_slots hc ha hb hr hp
-  obtain ⟨hl', -⟩ := readKind_pinned (invokeRun_cell hr')
+  have hl' := invokeRun_live hr'
   rw [hl] at hl'
   cases hl'
   exact hk
