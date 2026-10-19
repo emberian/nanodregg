@@ -108,17 +108,22 @@ theorem actionOf_wire {a : Action} {w : ActionTy} (h : actionWire? a = some w) :
 
 /-- The wire value of a report reads back as the report. -/
 theorem reportOf_wire {e : Report} {w : ReportTy} (h : reportWire? e = some w) : reportOf w = e := by
-  rcases e with ⟨g, t⟩ | ⟨g, s, t⟩ | ⟨g, why, t⟩ <;>
-    simp only [reportWire?, bind, Option.bind] at h <;>
-    rcases hg : bytes? g with _ | gv <;> simp [hg] at h <;> subst h <;>
+  rcases e with ⟨g, t⟩ | ⟨g, s, t⟩ | ⟨g, why, t⟩ | t
+  · simp only [reportWire?, bind, Option.bind] at h
+    rcases hg : bytes? g with _ | gv <;> simp [hg] at h; subst h; simp [reportOf, bytes?_val hg]
+  · simp only [reportWire?, bind, Option.bind] at h
+    rcases hg : bytes? g with _ | gv <;> simp [hg] at h; subst h; simp [reportOf, bytes?_val hg]
+  · simp only [reportWire?, bind, Option.bind] at h
+    rcases hg : bytes? g with _ | gv <;> simp [hg] at h; subst h
     simp [reportOf, bytes?_val hg, failure_get]
+  · simp [reportWire?, pure] at h; subst h; rfl
 
 /-- A report of a grain name that fits a frame has a wire value (the launcher's names are the
 controller's, 64 bytes). -/
 theorem reportWire_some (e : Report) (hg : (match e with
-    | .started g _ | .exited g _ _ | .failed g _ _ => g).size ≤ Bounds.frameMax) :
+    | .started g _ | .exited g _ _ | .failed g _ _ => g | .tick _ => ByteArray.empty).size ≤ Bounds.frameMax) :
     (reportWire? e).isSome = true := by
-  rcases e with ⟨g, t⟩ | ⟨g, s, t⟩ | ⟨g, why, t⟩ <;>
+  rcases e with ⟨g, t⟩ | ⟨g, s, t⟩ | ⟨g, why, t⟩ | t <;>
     simp [reportWire?, bytes?, bind, Option.bind, hg] <;> simp_all
 
 /-- The bytes `encodeAction` hands the launcher decode, by the one codec, to the action. -/

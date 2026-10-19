@@ -45,7 +45,10 @@
 //!
 //! - the race (HOSTING-26, at nd-members): a resident started while nd-members is down is refused
 //!   `pathMissing` for its member socket alone, exactly `restartsMax` times, then `crashLoop`, and
-//!   never starts; nd-members' next life binds the socket and the owner's stop and start launch it.
+//!   does not start; nd-members' next life binds the socket, an unrelated Turn launches nothing, and
+//!   with NO owner act the grain starts by itself once its window passes on grain-launch's tick
+//!   (HOSTING-38): not before `RESTART_WINDOW_S / 2` after the crash loop, within the window plus
+//!   slack.
 //!
 //! Plants (HOSTING-31, each run by hand, red by name): answering an answered ring (decideTick
 //! without the pending check, with the kept answer not forgotten on delivery) → Q2 "an answer was
@@ -57,6 +60,9 @@
 //! client's `nd`/`nd-supervise`, and `hosting-residents`. A missing one fails by name.
 #![cfg(target_os = "linux")]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // a plant that cannot set up is a failed plant
+
+/// The controller's crash-loop window (Lean's `Controller.restartWindowMs`), in seconds.
+const RESTART_WINDOW_S: u64 = RESTART_WINDOW_MS as u64 / 1000;
 
 mod common;
 
@@ -71,6 +77,7 @@ use nanodregg_client::generated::layout::{Command as NdCommand, CommandReply};
 use nanodregg_client::generated::{follow_op, status};
 use nanodregg_client::{frame, table};
 use nanodregg_devtools::lean_bin;
+use nanodregg_launcher::generated::RESTART_WINDOW_MS;
 
 const LABEL: &str = "w";
 
@@ -633,9 +640,9 @@ fn the_resident_answers_every_ring_lowest_first_once_and_nothing_else() {
     // not learned its birth (here: nd-members is down) is launched before its member socket exists.
     // Its package, volume and broker socket exist, so each launch is refused `pathMissing` naming
     // the member socket's directory, and counted as an exit: `restartsMax` (5) of them, then
-    // `crashLoop`, and the grain never starts. nd-members' next life learns the birth and serves the
-    // socket; nothing relaunches the grain by itself; the owner's stop then start (the controller
-    // forgets a grain that neither runs nor desires to) launches it.
+    // `crashLoop`, and the grain does not start. nd-members' next life learns the birth and serves the
+    // socket. A Turn that touches no grain relaunches nothing; the window passes on grain-launch's
+    // idle tick and the controller relaunches the grain with no owner act (HOSTING-38).
     drop(members);
     let c2 = w.resident("resident");
     let c2dir = world.join("grains").join(&c2);
@@ -666,6 +673,7 @@ fn the_resident_answers_every_ring_lowest_first_once_and_nothing_else() {
         || log().contains(&refused),
         &log,
     );
+    let looped = std::time::Instant::now();
     // the sandbox names the socket's directory, MEMBER/<dirOf> (a connect grant is a view of it)
     let missing = format!(
         "grain-launch: {c2} failed pathMissing confine: {}:",
@@ -696,8 +704,12 @@ fn the_resident_answers_every_ring_lowest_first_once_and_nothing_else() {
     );
     let (exit, out, err) = member_cmd(&c2sock, &["sync"]);
     assert_eq!(exit, 0, "the late resident's member is served: {out}{err}");
-    // nothing relaunches it by itself: the World's next Turn (an unrelated one) touches no grain,
-    // and the crash-looped grain stays refused
+    // the World's next Turn (an unrelated one) touches no grain: the crash-looped grain stays refused
+    // (the control's premise: its window cannot have passed yet)
+    assert!(
+        looped.elapsed().as_secs() < RESTART_WINDOW_S / 2,
+        "plant: nd-members took past half the window to come back; the control would be moot"
+    );
     let refusals = log().matches(&refused).count();
     w.run(&["create"]);
     w.run(&["sync"]);
@@ -705,37 +717,29 @@ fn the_resident_answers_every_ring_lowest_first_once_and_nothing_else() {
     assert!(
         !log().contains(&format!("grain-launch: {c2} started"))
             && log().matches(&refused).count() == refusals,
-        "the race: the grain was relaunched without its owner:\n{}",
+        "the race: an unrelated Turn relaunched the grain:\n{}",
         log()
     );
-    let mut tries = 0;
+    // no owner act: the window passes on grain-launch's tick, and the controller relaunches it
     until(
-        "the late resident started by its owner's stop and start",
-        120,
-        || {
-            if log().contains(&format!("grain-launch: {c2} started")) {
-                return true;
-            }
-            // a stop and a start the controller read in ONE round leave the grain desiring
-            // `running` with its exits remembered: refused crashLoop again, by name; try again
-            tries += 1;
-            w.run(&["invoke", &c2, "2", "(record)"]);
-            w.run(&["sync"]);
-            w.run(&["invoke", &c2, "1", "(record)"]);
-            w.run(&["sync"]);
-            std::thread::sleep(std::time::Duration::from_millis(500));
-            false
-        },
+        "the late resident started by its window passing, with no owner act",
+        RESTART_WINDOW_S + 60,
+        || log().contains(&format!("grain-launch: {c2} started")),
         &log,
     );
-    assert!(tries >= 1, "the race: started before its owner acted");
+    let waited = looped.elapsed().as_secs();
+    assert!(
+        waited >= RESTART_WINDOW_S / 2,
+        "the race: started {waited} s after its crash loop, before its window could pass:\n{}",
+        log()
+    );
     assert_eq!(
         log().matches(&failed).count(),
         5,
         "the race: a launch failed once its member socket was bound:\n{}",
         log()
     );
-    eprintln!("the late resident started after {tries} stop/start pairs");
+    eprintln!("the late resident started {waited} s after its crash loop, with no owner act");
     w.run(&["invoke", &c2, "2", "(record)"]);
     w.run(&["sync"]);
     no_child();

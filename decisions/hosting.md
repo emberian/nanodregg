@@ -2136,3 +2136,67 @@ All six are fixed as above. Second pass: ACCEPT, with three small items, all tak
 **Still assumed, of the deployment.** Only this resident writes `kept-*` in its volume (HOSTING-37's single-writer assumption). The filesystem meets the contract.
 
 **Shape.** Nothing on a wire or in a persisted format changes; the kept file's name and text are as before. A new stderr line: `resident: resumed the kept answer` / `resumed nothing kept`.
+
+## HOSTING-38 A crash-loop window passes without a Turn: grain-launch reports its clock (`tick`, every `tickMs`), and the controller relaunches a crash-looped grain in the round whose clock passes its window (HOSTING-13, 2026-10-21; ROOT ruled (B) with conditions)
+
+**The defect (a liveness defect in the controller's own terms).**
+- The controller's clock is the latest `atMs` the launcher reported, and a round runs only on a Turn or a report.
+- A grain refused `crashLoop` whose only reports were its own failures gets no further report. So its window never passes, and nothing decides it again: recovery was the owner's stop and start.
+- HOSTING-26's race reaches it: with nd-members down at a birth there are 5 × `pathMissing` in milliseconds, then `crashLoop`, for ever. Planted in HOSTING-35's resident_bell.
+
+**The choice.**
+- (A) the World's height: REFUSED. Height counts admitted Turns (`Step.dheight`), so a window in Turns is a function of strangers' traffic. On a quiet World (a fresh devnet, the race's own case) it never passes. On a busy one it passes in milliseconds and stops throttling. It would also mix two units, since exit times are in ms.
+- (B) grain-launch's idle loop writes `tick atMs` (report case 4) every `tickMs` (1000, emitted as `TICK_MS`) of its own `Instant` clock: CHOSEN. That is the same clock every `atMs` already comes from (advisory, HOSTING-7), so the controller trusts nothing new. A tick is a report, so the decider stays a function of the World and the reports: neither the controller nor the plan reads a clock.
+
+**What changed.**
+- `Hosting/Wire.lean`:
+  - `Report.tick (atMs)` and `reportCases` gain ("tick", 4, [atMs]).
+  - `tickMs` is added.
+  - `launcher/src/generated.rs` is re-emitted with the case, `TICK_MS`, and `RESTART_WINDOW_MS` (the bell test waits out the window by it, never by a literal).
+- `Hosting/Loop.lean`:
+  - `Report.grain?` (a tick names no grain); `absorbOne` leaves a tick out.
+  - `State` gains `tickAt`. `clockOne`/`State.clock`: a tick moves the clock only when at least `tickMs` past the last accepted tick; a faster tick is ignored by that rule.
+  - `lifted`: the launched grains with no child, crash-looping at the previous clock and not at this round's, and none when the clock did not move.
+  - `roundIds` = touched ++ returning ++ lifted.
+- grain-launch: `tick` every `TICK_MS` in its serve loop.
+- hosting-drive: a tick is read and not printed; `reportsMax` 2^20.
+- hosting-sim: G18.
+
+**Theorems (`Proofs/Loop.lean`).**
+- `step_lifts`: a grain this process launched, whose cell qualifies and plans, with no child, crash-looping at the previous clock and not at this round's, is launched in that round, whatever was touched or reported. `tick_lifts` is its plain case: ONE tick, nothing touched, no exit report.
+- `lifts_eventually`: any accepted tick that is at least `restartWindowMs` past each kept exit relaunches the grain. So "the window passes" is a theorem; only "the launcher keeps ticking" is assumed.
+- `step_quiet`: a round of ticks only, nothing touched, no grain lifted: no action. `step_ticks_quiet`: a flood of ticks within `tickMs` of the last accepted one emits nothing.
+- `tick_ignored`, `tick_accepted`, `ticks_within`: any number of ticks within `tickMs` of the last accepted one is no clock movement at all.
+- `lifted_length`: at most one lifted id per launched grain; a flood of reports cannot make a round decide more than the memory holds.
+- `clock_mono`; `crashLooping_antitone`: once the window passed it stays passed until new exits, so "lifted in this round" is exact.
+- Re-proved over `Report.grain?` and `State.clock`: `absorb_stranger`, `returning_complete`, `step_decides`, `step_launch_complete`, `step_one_per_grain`. `Proofs/Wire`: `reportOf_wire`, `reportWire_some` gain the case.
+
+**Teeth (plants by hand, each RED by name).**
+- `lifted` dropped from `roundIds`: `step_lifts` fails, and resident_bell's race never starts by itself.
+- The "crash-looping at the previous clock" conjunct dropped: `lifted_nil`/`step_quiet` fail (every not-running known grain would be re-decided every tick).
+- The `tickMs` rule dropped from `clockOne`: `tick_ignored` fails, and the sim's G18 "a tick within tickMs is ignored" goes RED.
+- Determinism (ROOT's condition) is a fact of `step`'s type: it is pure, with no IO, so a replay on the same World and the same reports (ticks included) is the same by construction. A replay line was drafted in G18 and DELETED, because it could never go red (the reader's hole 1). No check is attached to determinism, because none could fail.
+
+**The plant (resident_bell's race, re-cut).**
+- nd-members comes back, and an unrelated Turn launches nothing (control).
+- With NO owner act, the grain starts by itself: not before half the window after its crash loop, and within the window plus 60 s. Measured: 59 s and 60 s.
+- The control's premise is asserted: the window cannot have passed yet when the unrelated Turn runs.
+
+**Critique.**
+- *A tick every second forever is idle traffic.* It is one frame per second and one controller round (a tail read and an O(launched) filter). The cheaper alternative, the controller asking for a wake-up at a time, would add an action kind and make the launcher hold timers for the decider. Refused: the launcher decides nothing.
+- *ROOT's rate rule ("a fast ticker cannot shorten a window").* The window is measured in the reported milliseconds, so tick frequency cannot shorten it at all. Only a false `atMs` can, and that is the launcher's advisory trust, unchanged since HOSTING-7. So the rule bounds WORK, not the window: an ignored tick moves no clock, and `lifted` is empty without computing anything. Implemented as ruled, and stated as what it buys.
+- *pathMissing option (B) is now moot.* The race costs one window (≤ 60 s), not an owner's act. It returns only if a deployment finds 60 s at a birth too long.
+
+**Meta-critique.**
+- `lifts_eventually` makes the window's passing a theorem. That the launcher keeps ticking, and that no accepted tick is ignored for good, is the pairing, not a theorem: grain-launch spaces its ticks by the same emitted `TICK_MS`, and a new launcher means a new controller (`launcherGone`) starting from `State.empty`. The bell plant measures it end to end.
+
+**Vacuity read.** ACCEPT, with 4 holes, all fixed:
+1. The G18 replay line could not go red. Deleted; determinism is stated as a fact of the type.
+2. Eventual relaunch rested on prose. Now `lifts_eventually`.
+3. The bell control's timing premise was implicit. Now asserted.
+4. "A fast ticker costs no decision" was two theorems. Now `step_ticks_quiet`.
+
+The reader checked `step_quiet`'s `hq`: no branch is trivially true, and it is equivalent to `lifted = []`. It found `tick_lifts`' premises satisfiable together (G18's own data), nothing reading a wall clock in the decider, and no way for an ignored tick to stall a lift.
+- The plan, `decideCell` and `crashLooping` are unchanged. The window's length and restartsMax are as HOSTING-7 set them.
+
+**Breaks.** The report wire gains a case: a controller without it refuses a tick `badReport`. Both ends come from one tree and re-emit together (generated.rs, ROOT for CODEC). `Loop.State` gains `tickAt`, in memory only; nothing is persisted.

@@ -8,8 +8,8 @@ A stand-in for `hosting-controller` that needs no Store: it plans ONE grain (an 
 `--resident` a resident, whose plan connects to its own broker socket, HOSTING-17) with the deployed
 `plan` (label, directory name, entry), writes that launch with the deployed `Wire.encodeAction`, then
 reads the launcher's reports and prints each on stderr (`report started`, `report exited STATUS`,
-`report failed NAME`), ending at the grain's first `exited` or `failed`. The plan is Lean's, never
-built in Rust (the launcher's test runs this exe).
+`report failed NAME`; a `tick` is read and not printed), ending at the grain's first `exited` or
+`failed`. The plan is Lean's, never built in Rust (the launcher's test runs this exe).
 
 `--exit-after-launch` ends the drive right after it writes the launch, with the code a controller's
 Store refusal has (`ControllerExit.store`, 109): the launcher's next report then meets a gone reader,
@@ -53,8 +53,9 @@ def Exit.code : Exit → UInt32
   | .abandoned => ControllerExit.store.code.toUInt32
   | _ => 1
 
-/-- Reports read at most (the probe starts once and exits once). -/
-def reportsMax : Nat := 16
+/-- Reports read at most: the probe starts once and exits once, and the launcher ticks every
+`tickMs` meanwhile (HOSTING-38), so this bounds the drive at about twelve days of ticks. -/
+def reportsMax : Nat := 1 <<< 20
 
 def readReports (input : IO.FS.Stream) (grain : ByteArray) : Nat → IO Exit
   | 0 => pure .rounds
@@ -65,6 +66,7 @@ def readReports (input : IO.FS.Stream) (grain : ByteArray) : Nat → IO Exit
     let some body ← Host.readExact input len | return .launcherGone
     match Wire.decodeReport body with
     | .error r => return .badReport (reprStr r)
+    | .ok (.tick _) => readReports input grain fuel
     | .ok (.started g _) =>
       IO.eprintln "report started"
       if g == grain then readReports input grain fuel else return .badReport "otherGrain"

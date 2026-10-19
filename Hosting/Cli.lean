@@ -10,7 +10,8 @@ read, never written: HOST's tail (`Host.Tail`), the open and then O(appended byt
 
 Round 0 decides every live cell id (`Loop.allIds`, once, at start). Each later round reads what was
 appended (`Tail.next`), drains the reports the reader task queued, and runs `Loop.step` on the
-touched ids and those reports; nothing new and no report sleeps `Host.tailPollMs`. A round's
+touched ids and those reports (the launcher's idle `tick` among them, so a crash-loop window
+passes with no Turn, HOSTING-38); nothing new and no report sleeps `Host.tailPollMs`. A round's
 actions are written and flushed before the next round. Every way it ends is an `Exit` by name on
 stderr; there is no unbounded loop (rounds and frames are bounded by `lifetime`, 2^48).
 -/

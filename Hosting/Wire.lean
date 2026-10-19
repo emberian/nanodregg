@@ -12,6 +12,7 @@ path rule (law 2). On the pipe each frame is `u32le len ‖ payload`, `1 ≤ len
     reports  started 1  grain, atMs
              exited  2  grain, status (the raw wait status), atMs
              failed  3  grain, launchFailure : LaunchFailure, atMs
+             tick    4  atMs (written while idle, every `tickMs` of the launcher's clock, HOSTING-38)
 
 `grain` is the grain's directory name (`Controller.dirOf`): the key a later kill and every report
 name the child by. Paths are relative to the operator's hosting root, except the two socket lists,
@@ -38,6 +39,11 @@ private theorem frameMax_fits : frameMax < 2 ^ 32 := by decide
 def grainsMax : Nat := 256
 
 end Bounds
+
+/-- How often the launcher's idle loop reports its clock (`Report.tick`), in its milliseconds;
+emitted as `TICK_MS` (HOSTING-38). The controller ignores a tick less than this past the last one it
+accepted (`Loop.clockOne`). -/
+def tickMs : Nat := 1000
 
 /-- A path below the hosting root, as components (`Codec.Path`: clean, joined by `/` on the wire). -/
 abbrev Path := List ByteArray
@@ -167,6 +173,9 @@ inductive Report
   | started (grain : ByteArray) (atMs : UInt64)
   | exited (grain : ByteArray) (status : UInt32) (atMs : UInt64)
   | failed (grain : ByteArray) (why : LaunchFailure) (atMs : UInt64)
+  /-- the launcher's clock, while nothing else happens: a crash-loop window passes without a Turn
+  (HOSTING-38) -/
+  | tick (atMs : UInt64)
   deriving DecidableEq
 
 namespace Wire
@@ -181,7 +190,8 @@ def reportCases : Tagged :=
   [("started", 1, [.bytes "grain", .u64 "atMs"]),
    ("exited", 2, [.bytes "grain", .u32 "status", .u64 "atMs"]),
    ("failed", 3, [.bytes "grain", .oneOf "launchFailure" (LaunchFailure.all.map fun r => (r.name, r.code)),
-     .u64 "atMs"])]
+     .u64 "atMs"]),
+   ("tick", 4, [.u64 "atMs"])]
 
 abbrev ActionTy := Tagged.Ty Bounds.frameMax actionCases
 abbrev ReportTy := Tagged.Ty Bounds.frameMax reportCases
@@ -255,12 +265,14 @@ def reportWire? : Report → Option ReportTy
   | .failed g why t => do
     let g ← bytes? g
     pure ⟨⟨2, by decide⟩, (g, ⟨why.code, contains_of_mem _ _ _ why (by cases why <;> decide)⟩, t, ())⟩
+  | .tick t => pure ⟨⟨3, by decide⟩, (t, ())⟩
 
 def reportOf : ReportTy → Report
   | ⟨⟨0, _⟩, (g, t, ())⟩ => .started g.val t
   | ⟨⟨1, _⟩, (g, s, t, ())⟩ => .exited g.val s t
   | ⟨⟨2, _⟩, (g, why, t, ())⟩ =>
     .failed g.val ((LaunchFailure.ofCode? why.val).get (failure_of_contains _ why.property)) t
+  | ⟨⟨3, _⟩, (t, ())⟩ => .tick t
 
 /-- The value of the `path` field named `n` in a layout value. -/
 def pathNamed (n : String) : (l : Layout) → Layout.Ty Bounds.frameMax l → Option Path

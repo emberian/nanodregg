@@ -24,6 +24,9 @@ grants `start` to).
   id launches exactly the grain; touched again before any report: nothing (the launch marks it
   running); `started`: nothing; `exited` while it still desires `running`: relaunched; four
   `failed` reports more (five exits in the window): refused `crashLoop`, never launched.
+* G18 the window passes on the launcher's `tick` (HOSTING-38): ticks inside the window decide
+  nothing, a tick under `tickMs` after the last accepted one moves no clock (a flood of 500 decides
+  nothing), and the tick past the window relaunches the grain with no Turn and no exit report.
 * G16 the controller over the removed grain with its child still running: `kill`.
 * G14 the follower (`World.fold`) and the auditor reach the Host's World.
 
@@ -200,7 +203,7 @@ def journey (plant : Plant) (pkg : Package) : Run := Id.run do
   let (s4, a4) := round s3 [] [.failed hx .programOutside 30]
   let (s5, a5) := round s4 [] [.failed hx .programOutside 40]
   let (s6, a6) := round s5 [] [.failed hx .programOutside 50]
-  let (_, a7) := round s6 [] [.failed hx .programOutside 60]
+  let (s7, a7) := round s6 [] [.failed hx .programOutside 60]
   let (sx, ax) := round Loop.State.empty [] [.started (lit "stranger") 1]
   let (_, ay) := round Loop.State.empty [gr] [.started hx 1]
   r := note r "G17 a report for a grain this process never launched is ignored (a stranger's `started` neither stops the grain's launch nor stays in memory)"
@@ -208,6 +211,20 @@ def journey (plant : Plant) (pkg : Package) : Run := Id.run do
   r := note r "G17 failed launches are exits: relaunched three times, then refused crashLoop"
     (a4 == launchA && a5 == launchA && a6 == launchA &&
       a7 == [{ grain := hx, verdict := .refuse .crashLoop }])
+  -- G18 the window passes on the launcher's tick, with no Turn and no exit (HOSTING-38)
+  let ticks : List (List Report) := [[.tick 30000], [.tick 30500], [.tick 60019], [.tick 61020]]
+  let replay := fun (st : Loop.State D) (rounds : List (List Report)) =>
+    rounds.foldl (fun (acc : Loop.State D × List (List Action)) rs =>
+      let (st', as) := round acc.1 [] rs
+      (st', acc.2 ++ [as])) (st, [])
+  let (s8, outs) := replay s7 ticks
+  r := note r "G18 ticks inside the window decide nothing; a tick under tickMs after the last moves no clock; the tick past the window relaunches the grain (no Turn, no exit report)"
+    (outs == [[], [], [], launchA] && s8.tickAt == 61020)
+  let (sA, _) := replay s7 [[.tick 30000], [.tick 30500]]
+  r := note r "G18 a tick within tickMs of the last accepted one is ignored (the clock stays at the accepted tick)"
+    (sA.now == 30000 && sA.tickAt == 30000)
+  let (_, flood) := round s7 [] ((List.range 500).map fun k => .tick (UInt64.ofNat (30000 + k)))
+  r := note r "G18 a flood of 500 ticks inside one tickMs decides nothing" flood.isEmpty
   let some lookBytes := lookAlike.bind Wire.encodePackage | return note r "G15 no look-alike bytes" false
   let (rl, vl, tl) := go prog r (call r a [a.id] (.install lookBytes))
   let some lp := created tl | return note rl s!"G15 look-alike install: {vl}" false

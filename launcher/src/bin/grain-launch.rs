@@ -13,7 +13,8 @@
 //! paths as joined, field for field (`plan_argv`, HOSTING-27). Each child gets a PID file
 //! `PIDS/<grain>.pid`, removed when the child is reaped. A kill stops the child by its own handle
 //! (the PID in that file). When the controller's pipe closes, every child is killed and reaped,
-//! then the launcher exits with a name on stderr. It decides nothing: a frame it cannot decode, or
+//! then the launcher exits with a name on stderr. While idle it reports its clock (`tick`, every
+//! `TICK_MS`, HOSTING-38). It decides nothing: a frame it cannot decode, or
 //! a frame that breaks a law, ends the run by name.
 
 use std::collections::BTreeMap;
@@ -28,7 +29,7 @@ use std::time::{Duration, Instant};
 
 use nanodregg_launcher::generated::wire::{Action, LaunchFailure, Report};
 use nanodregg_launcher::generated::{
-    FrameError, LAYOUT_HIDDEN, controller_exit, launch_exit, read_frame, write_frame,
+    FrameError, LAYOUT_HIDDEN, TICK_MS, controller_exit, launch_exit, read_frame, write_frame,
 };
 use nanodregg_launcher::{
     PlanPaths, Roots, failure_of, foreign_path, grain_name_ok, plan_argv, policy, roots_disjoint,
@@ -340,7 +341,20 @@ impl Launcher {
         }
     }
 
+    /// While idle, the clock: a `tick` every `TICK_MS` (Lean's `Hosting.tickMs`), so the
+    /// controller's crash-loop window passes without a Turn (HOSTING-38). The launcher decides
+    /// nothing by it.
+    fn tick(&mut self, last: &mut u64) -> Result<(), End> {
+        let at_ms = self.now();
+        if at_ms >= last.saturating_add(u64::from(TICK_MS)) {
+            *last = at_ms;
+            self.report(Report::Tick { at_ms })?;
+        }
+        Ok(())
+    }
+
     fn serve(&mut self, rx: &Receiver<Msg>) -> End {
+        let mut last_tick = 0;
         for _ in 0..LIFETIME_TICKS {
             match rx.recv_timeout(TICK) {
                 Ok(Msg::Action(a)) => {
@@ -353,6 +367,9 @@ impl Launcher {
                 Err(RecvTimeoutError::Disconnected) => return End::ControllerEnded(None),
             }
             if let Err(e) = self.reap() {
+                return e;
+            }
+            if let Err(e) = self.tick(&mut last_tick) {
                 return e;
             }
         }

@@ -2,6 +2,8 @@
 
 pub const FRAME_MAX: u32 = 4096;
 pub const GRAINS_MAX: u32 = 256;
+pub const TICK_MS: u32 = 1000;
+pub const RESTART_WINDOW_MS: u32 = 60000;
 
 /// Why a frame could not be read or written (the pipe framing: `u32le len ‖ payload`,
 /// `1 <= len <= FRAME_MAX`).
@@ -530,6 +532,9 @@ pub mod wire {
             launch_failure: LaunchFailure,
             at_ms: u64,
         },
+        Tick {
+            at_ms: u64,
+        },
     }
 
     impl Report {
@@ -561,6 +566,10 @@ pub mod wire {
                         launch_failure,
                         at_ms,
                     }
+                }
+                4 => {
+                    let at_ms = c.u64()?;
+                    Report::Tick { at_ms }
                 }
                 tag => return Err(Refusal::BadTag { offset: at, tag }),
             };
@@ -594,6 +603,10 @@ pub mod wire {
                     out.push(3);
                     put_bytes(&mut out, grain, 4096)?;
                     out.push(launch_failure.code());
+                    out.extend_from_slice(&at_ms.to_le_bytes());
+                }
+                Report::Tick { at_ms } => {
+                    out.push(4);
                     out.extend_from_slice(&at_ms.to_le_bytes());
                 }
             }

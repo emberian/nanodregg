@@ -2,15 +2,17 @@ import Emit.Rust
 import Hosting.Wire
 import Hosting.LaunchExit
 import Hosting.Plan
+import Hosting.Controller
 
 /-!
 # Emit.Hosting — the Rust copy of HOSTING's frames
 
 `launcher/src/generated.rs` is this function's output and nothing else (law 2): the controller's
 actions and the launcher's reports (`Hosting.Wire.actionCases`, `Hosting.Wire.reportCases`) as
-`wire::Action` and `wire::Report`, with `FRAME_MAX` (the frame and field bound) and `GRAINS_MAX`, and
-grain-launch's exit codes as `launch_exit` and its controller's as `controller_exit`
-(`Hosting.LaunchExit`, HOSTING-19).
+`wire::Action` and `wire::Report`, with `FRAME_MAX` (the frame and field bound), `GRAINS_MAX`,
+`TICK_MS` (the launcher's idle tick) and `RESTART_WINDOW_MS` (the controller's crash-loop window,
+which the bell test's race waits out), and grain-launch's exit codes as `launch_exit` and its
+controller's as `controller_exit` (`Hosting.LaunchExit`, HOSTING-19).
 -/
 
 namespace Nanodregg.Emit.Hosting
@@ -18,7 +20,8 @@ namespace Nanodregg.Emit.Hosting
 open Nanodregg.Hosting
 
 def file : Except String String :=
-  Rust.taggedFile "Hosting/Wire.lean" [("FRAME_MAX", Bounds.frameMax), ("GRAINS_MAX", Bounds.grainsMax)]
+  Rust.taggedFile "Hosting/Wire.lean" [("FRAME_MAX", Bounds.frameMax), ("GRAINS_MAX", Bounds.grainsMax),
+    ("TICK_MS", tickMs), ("RESTART_WINDOW_MS", Controller.restartWindowMs)]
     Bounds.frameMax [("Action", Wire.actionCases), ("Report", Wire.reportCases)]
   |>.map (· ++ "\n" ++ Rust.byteModule "launch_exit" LaunchExit.all (fun e => e.code.toUInt8) ++
     "\n\n" ++ Rust.byteModule "controller_exit" ControllerExit.all (fun e => e.code.toUInt8) ++
