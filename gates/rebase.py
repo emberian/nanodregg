@@ -26,8 +26,15 @@ from a1ca640 plus one line in a worktree at main, candidate `81 +++----`, CLIENT
 launch, a copy made from an older main). It runs on the FINAL candidate, after the merge, so a merge
 that lost a hunk is caught too. For every path the candidate changes, and every commit C of main's
 last REVERT_WINDOW first-parent commits that changed it: C's change is CONTAINED in a copy X when
-merging C's own change into X (`git merge-file X pre_C post_C`) is clean and leaves X as it is; it is
-LACKING when that merge is clean and changes X. A path whose candidate lacks C's change while main's
+merging C's own change into X (`git merge-file X pre_C post_C`) is clean and leaves X as it is, or when
+X holds C's change whatever its context (holds): every block of lines C added is in X, contiguous, and
+every block C removed is not; it is LACKING when that merge is clean, changes X, and X does not hold
+C's change. The second test is GATES-20b' (ROOT 10-21, PERF-6's false positive): 35daeab added the
+bench-worstworld block using the bench-worstcut lines as CONTEXT; PERF-12 deleted those lines and kept
+the block, so the merge, re-anchored on the surviving context, inserted the block a SECOND time and
+`stale` refused a copy that reverts nothing. A merge that would only duplicate lines X already holds is
+not a lack. (holds compares whole blocks: a removed block X still holds, or an added one it does not,
+reads LACKING, the refusing side.) A path whose candidate lacks C's change while main's
 copy contains it would revert C: refused `stale path: P`, unless the lander names it with `--reverts
 C`. A named revert of another layer's commit needs that layer named in a CROSS-LAYER line (reverting
 another layer's change is cross-layer by definition), and its hunk is appended to the message under
@@ -68,6 +75,7 @@ import argparse
 import hashlib
 import json
 import re
+import difflib
 import os
 import subprocess
 import sys
@@ -234,12 +242,33 @@ def window(repo: str, main: str, path: str) -> list[str]:
     return git(repo, "rev-list", "--first-parent", *rng, "--", f":(top,literal){path}", check=False).stdout.decode().split()
 
 
+def holds(x: bytes, pre: bytes, post: bytes) -> bool:
+    """X holds the change pre -> post whatever its context: each hunk's added lines are in X as one
+    contiguous block, and each hunk's removed lines are not (a hunk that only removes: its block absent).
+    Lines are compared whole (a block matches only at line boundaries)."""
+    a, b = pre.splitlines(keepends=True), post.splitlines(keepends=True)
+    hay = b"\n" + x + (b"" if x.endswith(b"\n") else b"\n")
+
+    def has(block: list[bytes]) -> bool:
+        body = b"".join(block)
+        return (b"\n" + body + (b"" if body.endswith(b"\n") else b"\n")) in hay
+
+    for op, i1, i2, j1, j2 in difflib.SequenceMatcher(None, a, b, autojunk=False).get_opcodes():
+        if op == "equal":
+            continue
+        if j2 > j1 and not has(b[j1:j2]):
+            return False
+        if i2 > i1 and has(a[i1:i2]):
+            return False
+    return True
+
+
 def lacks(x: bytes, pre: bytes, post: bytes) -> bool | None:
     """True: X lacks the change pre -> post; False: X contains it; None: neither (it conflicts)."""
     rc, data, _ = merge3(x, pre, post)
     if rc != 0:
         return None
-    return data != x
+    return data != x and not holds(x, pre, post)
 
 
 def layer_of(repo: str, c: str) -> str | None:
