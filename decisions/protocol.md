@@ -83,6 +83,11 @@ made; I may be wrong about how much a follower must see if KERNEL's `Pinned` vie
 the pinned cells only (consent needs only the pinned cells + a proof they are current — again (c)).
 **Status.** ruled by ROOT 2026-10-16: ACCEPTED for v0. `log` and `read` are served only to keys holding a FOLLOW GRANT; membership gates the whole log; per-cell hiding/blinding from members is a DECLARED ABSENCE for v1, tied to the blinding-key custody question open with Ember. J5/K10/KH hold: a key without a grant is refused at `log`/`read` by name.
 
+**Addendum (2026-10-21, PROTOCOL-21; cv 01a154ec-79cf): RULED, no longer open.** Ember ruled per-cell blinding on 10-18 at 04:25Z, the scope call (redregg STALL-WATCH:681): "the operator is a trusted vat → the privacy brief's (a) stands for v1 (no blinding; host sees every byte; stated with its threat model; the member-sealing design (b2) pre-committed behind its trigger)". The custody question this status named is closed.
+- *Threat model, v1.* The operator's Host is a trusted vat: it sees every byte of every cell, and so does every key holding a follow grant (it folds the whole log). Membership is the confidentiality boundary. Nothing is hidden from the operator or from a follower. J5/K10/KH hold as refusals at `log`/`read`, never as hiding.
+- *Why.* Nano is the semi-trusted single-node vat prototype. Hiding arrives only as a restated spec behind a named trigger. Every option that hides from the operator costs new premises (a blinded-slot-invariant judge, a `blindedState` refusal, value cells without blinded slots, a KEM wrap in Lean, key custody apart from the seed: PRIVACY-DESIGN-BRIEF §4(b)), and buys nothing for a hosted resident, whose key is on the operator's box.
+- *Trigger.* The first World in which a member who is not the operator writes, from a device that member controls, content they would not show the operator. The design held for it is (b2), per-object epoch keys wrapped to members. Ember's questions Q2/Q3 are filed with it in cv 01a154f6-9cc7.
+
 ## PROTOCOL-4 · follow must re-run the receiver on every logged event (2026-10-16)
 **Finding.** `World.fold` admits Turns; `World.admit` decides no authority ("`admit` decides none of
 them"). A follower that only folds Turns trusts the writer's receivers: a Host that logs a Turn no signed

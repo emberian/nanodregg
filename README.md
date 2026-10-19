@@ -35,7 +35,8 @@ Measured on 2026-10-18, from the standing verdict and the row runner on the buil
 What is not true yet: no deployment exists; THE BAR has not been judged (it is judged only on a
 quiet machine, and no wall-clock number is taken before the end of development); the authenticated
 cell root (the structure that lets a phone verify one cell) is designed and its trie is proved, but
-the World does not use it yet; per-cell hiding is not designed.
+the World does not use it yet; per-cell hiding is ruled out for v1 (the operator is a trusted vat and
+sees every byte; decisions/protocol.md PROTOCOL-3), with member sealing held behind a named trigger.
 
 ## Laws
 
