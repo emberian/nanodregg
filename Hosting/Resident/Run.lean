@@ -28,8 +28,8 @@ anything. It reads `pkg/resident.conf`, ONE Lang data value at `Bell.confTy`. Th
 A transport failure on either socket is logged and retried at the next tick: a not-sent ask costs
 nothing, a spent one is never repeated. Every line on stderr starts `resident: `.
 
-The tick is a tree of effects (`Prog`, HOSTING-35): `tickP` builds it, `Prog.run` performs it one
-node at a time. The order above is a theorem over every path of that tree, for every reply the
+The tick is a tree of effects (`Prog`, HOSTING-36): `tickP` builds it, `Prog.interp` performs it one
+node at a time (HOSTING-37: `interp_runs`). The order above is a theorem over every path of that tree, for every reply the
 sockets and the volume could give (`Proofs.ResidentRun.tick_order`, `tick_counts`): at most one
 describe, first, and only without a shape; one read; at most one ask, right after the intent was
 kept for its ring; at most one invoke, of the kept answer (no ask on that path) or of this tick's
@@ -146,35 +146,81 @@ structure Where where
   broker : String
   vol : System.FilePath
   kept : System.FilePath
-  keptTmp : System.FilePath
 
-/-- Forget the kept answer, durably (the directory entry is synced). -/
+/-- The kept file's fresh copy: its name with `.tmp` after it, so never the kept name itself
+(`Proofs.ResidentVolume.keptTmp_ne`). -/
+def Where.keptTmp (w : Where) : System.FilePath := ⟨w.kept.toString ++ ".tmp"⟩
+
+/-- One step on the volume, as `keep` and `forget` take them (HOSTING-37). Each is one POSIX call
+(`perform`); `Volume.apply` is the contract each is trusted to meet, and the theorems of
+`Proofs.ResidentVolume` are over exactly the lists `keepOps` and `forgetOps` below. -/
+inductive FsOp
+  /-- unlink the name when it is there -/
+  | removeIfExists (p : System.FilePath)
+  /-- create the name, which must not exist (`O_CREAT|O_EXCL`), and hold it open -/
+  | create (p : System.FilePath)
+  /-- write the text to the file held open (fresh and empty: its contents become exactly this) -/
+  | write (s : String)
+  /-- `fsync` the file held open -/
+  | sync
+  /-- rename the first name over the second -/
+  | rename (a b : System.FilePath)
+  /-- `fsync` the directory -/
+  | syncDir (d : System.FilePath)
+
+/-- Perform one step; the file held open, after it. -/
+def perform (h : Option Host.File) : FsOp → IO (Option Host.File)
+  | .removeIfExists p => do
+    if ← p.pathExists then IO.FS.removeFile p
+    pure h
+  | .create p => do pure (some (← Host.File.open p .createNew))
+  | .write s => match h with
+    | some f => do f.writeAll s.toUTF8; pure h
+    | none => throw (IO.userError "no file held open")
+  | .sync => match h with
+    | some f => do f.sync; pure h
+    | none => throw (IO.userError "no file held open")
+  | .rename a b => do IO.FS.rename a b; pure h
+  | .syncDir d => do Host.syncDir d.toString; pure h
+
+/-- Perform the steps in order. -/
+def performAll (ops : List FsOp) : IO Unit := do
+  let _ ← ops.foldlM perform none
+
+/-- Keeping the text `s`: a fresh `kept.tmp` written and synced, renamed over the kept file, the
+directory synced. -/
+def keepOps (w : Where) (s : String) : List FsOp :=
+  [.removeIfExists w.keptTmp, .create w.keptTmp, .write s, .sync, .rename w.keptTmp w.kept,
+   .syncDir w.vol]
+
+/-- Forgetting: the kept file unlinked, the directory synced. -/
+def forgetOps (w : Where) : List FsOp := [.removeIfExists w.kept, .syncDir w.vol]
+
+/-- Forget the kept answer, durably (`forgetOps`). -/
 def forget (w : Where) : IO Bool := do
-  let act : IO Unit := do
-    if ← w.kept.pathExists then
-      IO.FS.removeFile w.kept
-      Host.syncDir w.vol.toString
-  match ← act.toBaseIO with
+  match ← (performAll (forgetOps w)).toBaseIO with
   | .ok () => pure true
   | .error _ => pure false
 
-/-- Keep `(r, t)` durably before anything depends on it: written to a fresh file, synced
-(`Host.File`), renamed over the kept file, the directory synced, and read back; `false` unless what
-reads back is exactly `(r, t)` (the premise `Proofs.Resident.kept_reads` states, asserted where it
-enters). -/
+/-- Keep `(r, t)` durably before anything depends on it (`keepOps`), then read it back; `false`
+unless what reads back is exactly `(r, t)`. `Proofs.ResidentVolume.keep_durable`: under the
+volume's contract, once these steps ran a crash leaves exactly this text; `keep_atomic`: a crash at
+any step leaves the old kept text or this one, never another. -/
 def keep (w : Where) (r : Ring) (t : ByteArray) : IO Bool := do
   let some s := keptText r t | return false
   let act : IO (Option (Ring × ByteArray)) := do
-    if ← w.keptTmp.pathExists then IO.FS.removeFile w.keptTmp
-    let f ← Host.File.open w.keptTmp .createNew
-    f.writeAll s.toUTF8
-    f.sync
-    IO.FS.rename w.keptTmp w.kept
-    Host.syncDir w.vol.toString
+    performAll (keepOps w s)
     pure (keptRead (← IO.FS.readFile w.kept))
   match ← act.toBaseIO with
   | .ok back => pure (decide (back = some (r, t)))
   | .error _ => pure false
+
+/-- The first tick's kept answer from what the volume holds at the kept name: absent → none;
+unreadable → no seed (`volume`); a text → what it reads as, and no seed when it reads as nothing. -/
+def seedOf : Option (Option String) → Option (Option (Ring × ByteArray))
+  | none => some none
+  | some none => none
+  | some (some s) => (keptRead s).map some
 
 /-- A member command the tick sends, by what it is for. Its argv is a function of it (`Cmd.argv`):
 a node cannot carry one command's name and another's bytes. -/
@@ -198,8 +244,8 @@ def Cmd.argv (c : Conf) : Cmd → List ByteArray
     | none => []
 
 /-- One tick as a tree of effects (HOSTING-35): each node is ONE effect on the world outside the
-process, and its continuation is what the tick does with that effect's result. `Prog.run` performs
-it (the deployed path: `tick` below is `(tickP w m).run w`); `Proofs.ResidentRun.Runs` is every path
+process, and its continuation is what the tick does with that effect's result. `Prog.interp`
+performs it (the deployed path: `tick` below is `(tickP w m).interp (ioHandler w)`); `Proofs.ResidentRun.Runs` is every path
 through it, over every result each effect could have, and `tick_order` is the order of effects
 on every path. A continuation never returns into its caller: every node is in tail position, so the
 tree is the tick's whole control flow and nothing runs between two nodes but pure code. -/
@@ -216,14 +262,31 @@ inductive Prog (α : Type) where
   /-- one line on stderr -/
   | say (s : String) (k : Prog α)
 
-/-- Perform a tick's tree: each node's ONE effect, then its continuation on the result. -/
-def Prog.run {α : Type} (w : Where) : Prog α → IO α
+/-- What performs each kind of node, in a monad `M`. -/
+structure Handler (M : Type → Type) where
+  cmd : Cmd → M (Except String Reply)
+  keep : Ring → ByteArray → M Bool
+  forget : M Bool
+  ask : Ring → Broker.Ask → M AskEnd
+  say : String → M Unit
+
+/-- Perform a tree by a handler: each node's ONE call, then its continuation on the result
+(`Proofs.ResidentRun.interp_runs`: at the recording handler, the calls are exactly a path). -/
+def Prog.interp {M : Type → Type} [Monad M] {α : Type} (h : Handler M) : Prog α → M α
   | .done a => pure a
-  | .cmd c k => do let r ← Resident.command w.member (c.argv w.conf); (k r).run w
-  | .keep r t k => do let b ← Resident.keep w r t; (k b).run w
-  | .forget k => do let b ← Resident.forget w; (k b).run w
-  | .ask _ q k => do let e ← Resident.ask w.broker q; (k e).run w
-  | .say s k => do Resident.say s; k.run w
+  | .cmd c k => do let x ← h.cmd c; (k x).interp h
+  | .keep r t k => do let b ← h.keep r t; (k b).interp h
+  | .forget k => do let b ← h.forget; (k b).interp h
+  | .ask r q k => do let e ← h.ask r q; (k e).interp h
+  | .say s k => do h.say s; k.interp h
+
+/-- The deployed handler: the member socket, the volume, the broker socket, stderr. -/
+def ioHandler (w : Where) : Handler IO where
+  cmd c := Resident.command w.member (c.argv w.conf)
+  keep r t := Resident.keep w r t
+  forget := Resident.forget w
+  ask _ q := Resident.ask w.broker q
+  say s := Resident.say s
 
 /-- The intent kept before an ask: a restart that finds it answers the ring with it and never asks
 again. -/
@@ -323,7 +386,7 @@ def tickP (w : Where) (m : Mem) : Prog Tick :=
         | .error e => .say s!"bellShape {e}" (.done (.stop .bellShape "description"))
 
 /-- One tick, performed. -/
-def tick (w : Where) (m : Mem) : IO Tick := (tickP w m).run w
+def tick (w : Where) (m : Mem) : IO Tick := (tickP w m).interp (ioHandler w)
 
 /-- The resident: place itself, read its config, then tick. -/
 def run (args : List String) : IO UInt32 := do
@@ -345,13 +408,13 @@ def run (args : List String) : IO UInt32 := do
   -- the kept answer is named by the bell, so a config naming another bell never meets it
   let kname := s!"kept-{Lang.Print.hex conf.bell}"
   let w : Where := { conf, member := mem.toString, broker := b.toString, vol, kept := vol / kname,
-                     keptTmp := vol / (kname ++ ".tmp") }
-  let kept ← if ← w.kept.pathExists then
+}
+  let held ← if ← w.kept.pathExists then
       match ← (IO.FS.readFile w.kept).toBaseIO with
-      | .ok s => pure (keptRead s |>.map some)
-      | .error _ => pure none
-    else pure (some none)
-  let some kept := kept | stop .volume "kept unreadable"
+      | .ok s => pure (some (some s))
+      | .error _ => pure (some none)
+    else pure none
+  let some kept := seedOf held | stop .volume "kept unreadable"
   say s!"serving bell {Lang.Print.hex conf.bell}{if kept.isSome then " (an answer is kept)" else ""}"
   let mut m : Mem := { shape := none, kept }
   for _ in [0:lifetimeTicks] do

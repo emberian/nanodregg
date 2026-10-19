@@ -2021,3 +2021,60 @@ Accepted as stated (no fix): the set semantics of `unit_argv` (stricter than the
 **Critique.** The tree is written in continuation style, not do-notation, so a reader of Run.lean sees nodes rather than IO, and that costs some readability. It was chosen because the proofs invert each node by `cases`. A `Prog` monad with bind would read like the old code, but every proof would go through bind lemmas. The trust boundary moved and did not vanish: `Prog.run` is six lines nobody proves. A wrong `run` (say, performing a node twice) would leave every theorem true.
 
 **Meta-critique.** My first statement was a grammar over effect LABELS that dropped the replies, because that made the proofs short. It "proved" the brief's order while admitting an ask about any ring, a forget whatever was decided, and a second invoke under another label. Recording the replies is what made the grammar refer to the decision at all. The short proof was short because it said less.
+
+## HOSTING-37 The three gaps HOSTING-36 named, closed as theorems: the interpreter performs exactly a path; keep and forget are durable and atomic under the volume's stated contract; the restart's seed is what the volume holds (HOSTING-12, 2026-10-20; ROOT)
+
+**What changed.**
+- **The interpreter.** `Prog.run` is replaced by `Prog.interp` over a `Handler M` (five calls), and `tick := (tickP w m).interp (ioHandler w)` (`tick_def`, rfl).
+  - `interp_runs`, by induction over the tree: at the recording handler (`Trace.recorder`: each call takes its result from an oracle and appends itself), `interp` appends exactly one event per node it passes, in tree order, with the result it continued on, and ends with that path's end. So the trace is a `Runs` path for EVERY oracle.
+  - `interp_order`: the recorded trace is `TickCore`.
+- **The volume.** keep and forget are `performAll` over explicit step lists (`keepOps`: removeIfExists tmp, create tmp, write, sync, rename tmp over kept, syncDir; `forgetOps`: removeIfExists kept, syncDir), with `perform` mapping each step to its one POSIX call. `Where.keptTmp` is derived (`kept ++ ".tmp"`), so `keptTmp_ne` is a theorem, not a premise.
+  - The contract is a model (`Resident/Volume.lean`), and a crash is a RELATION (`Crash`):
+    - each entry comes back as ANY value it held since the last directory sync, independently of the others (a rename's two halves too);
+    - a synced file comes back with its contents, an unsynced one with ANY contents or unreadable.
+    - Nothing else is assumed. `Vol.read` distinguishes absent from present, so a torn file is present, as `run` sees it.
+  - Theorems (`Proofs/ResidentVolume.lean`), each over EVERY crash outcome:
+    - `keep_durable`: after every step, exactly the text.
+    - `keep_atomic`: after ANY prefix, the old text or the new; never torn, never another.
+    - `keep_live_atomic`: the same without a crash.
+    - `forget_durable` and `forget_atomic`: the old text, or nothing.
+  - **Premises as invariants.** `Fresh` and `Live` hold of the empty volume and are kept by every step and every crash. `Stable` holds after every crash, every completed keep and every completed forget.
+- **The seed.** `seedOf` reads `Vol.read`'s three cases exactly as `run` does.
+  - `seed_after_keep`: every crash after a completed keep whose read-back reported (r, t) restarts with (r, t).
+  - `seed_during_keep`: a crash at any step restarts from the old seed or that answer.
+  - `seed_after_forget`: from nothing.
+  - With `kept_follows` (per tick), the memory and the volume agree across ticks and across a crash.
+
+**Teeth.**
+- `interpTwice_no_path`: an interpreter that performs a node's call twice (`Prog.interpTwice`, kept only as the tooth's subject) records a trace that is no path.
+- `keep_without_sync_tears`: with no file fsync, SOME crash outcome holds an unreadable kept file.
+- `keep_without_syncDir_reverts`: with no directory sync, some outcome reverts to the old text.
+- `in_place_loses_both`: writing the kept name in place, some outcome holds neither text.
+
+**Plants (by hand, logs/hosting12-plant2.out).**
+- (A) `.sync` removed from keepOps: ResidentVolume is RED.
+- (B) `interp` performs a cmd node's call twice: ResidentRun is RED (interp_runs).
+- Restored: green. resident_bell 1/1 on the new exe (logs/hosting12-t-bell8.log).
+
+**Behaviour change.** forget syncs the directory even when the kept file was absent (before, it synced only after an unlink). So forget can now fail, and the resident stop `volume`, on a directory sync of an absent file. It also completes an earlier forget whose unlink happened but whose directory sync failed.
+
+**What stays trusted, named.**
+- `ioHandler`'s five fields ARE the five calls, and `perform`'s six arms ARE the six POSIX calls (definitions).
+- `interp_runs` is proved at one handler. That IO's bind sequences effects in order is the runtime's.
+- That the volume's filesystem meets `Vol.apply` is the operator's: a local POSIX filesystem; on Darwin, Host.File's sync is F_FULLFSYNC.
+- `keep` reporting true happens only after `performAll` returned and the read-back matched (code).
+- **Named gap:** a keep that FAILS part way without a crash (the rename done, the directory sync thrown) leaves the kept entry unstable. The resident stops `volume`, and its restart seeds the live text. A crash during the NEXT keep may then bring back the text from before the failed keep: an older answer re-delivered, a wasted answer, never a second ask. Likewise a forget that fails part way (the unlink done, the directory sync thrown): the restart seeds none, and a crash during the next keep may bring the forgotten text back, which is re-delivered, refused as no longer pending, and forgotten (a wasted invoke). `keep_atomic`'s `Stable` premise excludes both starts.
+- **Assumed of the deployment:** the volume's history is the empty volume followed only by keepOps, forgetOps and crashes; nothing but this resident writes `kept-*` in its volume (grain-launch gives the grain its own volume).
+
+**Vacuity read (VACUITY-READER-H12).** First pass NOT ACCEPTED, six holes:
+1. the model was not conservative (a deterministic crash; one lemma held only by that);
+2. nothing established Stable/Fresh (Fresh was not even preserved by syncDir);
+3. the seed's model merged torn and absent, unlike `run`;
+4. the double-call tooth tested Runs, not the interpreter;
+5. keep's true was not listed as code;
+6. the crash-free restart was not covered.
+All six are fixed as above. Second pass: ACCEPT, with three small items, all taken: `keep_without_syncDir_reverts` regained its premise that the old text differs, the failed-forget gap is named, and the single-writer assumption is stated. Disjunct check: no disjunct provable from the premises; in `keep_atomic` the old arm needs the prefix before the directory sync or an outcome keeping the old entry, and the new arm needs the rename.
+
+**Critique.** The model is mine, written for this proof. A model that is too strong makes every theorem vacuous about the real disk, and my first model was: its crash was a function, so one lemma ("exactly the old text before the directory sync") held only because of that. The reader caught it. The model is now a relation over every outcome I know a POSIX filesystem may produce. Teeth A and the tooth theorems show that dropping either sync breaks the statements, so neither sync is decorative. Not modelled: concurrent writers (only this process writes the volume) and a full disk (a failed write is an IO error, so keep reports false).
+
+**Meta-critique.** The pull was to call the interpreter "six lines by inspection" a second time. Writing `interp` over a handler cost one structure and made the six lines a theorem at the one handler that matters for the order proofs. The part left trusted is now genuinely the runtime's.

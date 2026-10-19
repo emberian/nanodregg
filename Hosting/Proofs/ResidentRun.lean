@@ -32,10 +32,13 @@ function of its name (`Cmd.argv`), so a name in a trace is the command sent.
   second ask, a forget after a refused answer whose ring the re-read still lists, a second
   describe, a describe with a shape known. Reach: `ask_path_exists`.
 
-What is code, not theorem: `Prog.run` performs each node's ONE effect (`command w.member (c.argv
-w.conf)`, `keep`, `forget`, `ask`, `say`) and continues on its result (six lines, by inspection);
-`keep` reports `true` only when the volume reads back exactly what it wrote (`keep`'s read-back,
-by inspection; `kept_reads` for the text); `run` seeds the first tick's `kept` from the volume.
+The interpreter (HOSTING-37): `tick` is `(tickP w m).interp (ioHandler w)` (`tick_def`), and
+`interp_runs` proves that `interp` performs exactly a path, one handler call per node in tree order,
+continuing on its result, at the recording handler for every oracle (`interp_order`: the recorded
+trace is `TickCore`). The volume: `Proofs.ResidentVolume` (keep and forget durable and atomic under
+the stated contract; the seed after a crash). What is code, not theorem: `ioHandler`'s five fields
+ARE the five calls (`command w.member (c.argv w.conf)`, `keep`, `forget`, `ask`, `say`), and
+`interp`'s proof is at one handler: that IO's bind sequences effects is the runtime's.
 -/
 import Hosting.Resident.Trace
 import Hosting.Proofs.Resident
@@ -683,5 +686,59 @@ theorem ask_path_exists {w : Where} {sh : Shape} {m : Mem} {p : List Ring} {r : 
   apply Runs.keep true
   simp only [if_true]
   exact deliver_runs harg
+
+/-! ## The interpreter performs exactly a path -/
+
+/-- `tick` is the tree performed by the deployed handler, by definition. -/
+theorem tick_def (w : Where) (m : Mem) : tick w m = (tickP w m).interp (ioHandler w) := rfl
+
+/-- **The interpreter performs exactly a path** (HOSTING-37): at the recording handler, whatever
+results the oracle gives, `interp` appends to the trace exactly one event per node it passes, in
+tree order, with the result it continued on, and ends with the path's end: the appended events
+and the value are a `Runs` path. A node performed twice, skipped, or continued on another result
+would append a trace that is no path (`two_calls_no_path`). -/
+theorem interp_runs (o : Oracle) {α : Type} (p : Prog α) (n : Nat) (es : List Ev) :
+    ∃ es', ((p.interp (recorder o)).run (n, es)).2.2 = es ++ es' ∧
+      Runs p es' ((p.interp (recorder o)).run (n, es)).1 := by
+  induction p generalizing n es with
+  | done a => exact ⟨[], by simp [Prog.interp]; rfl, Runs.done a⟩
+  | cmd c k ih =>
+    obtain ⟨es', h1, h2⟩ := ih (o.cmd n) (n + 1) (es ++ [.cmd c (o.cmd n)])
+    exact ⟨.cmd c (o.cmd n) :: es', by simpa [Prog.interp, recorder] using h1,
+      by simpa [Prog.interp, recorder] using Runs.cmd (o.cmd n) h2⟩
+  | keep r t k ih =>
+    obtain ⟨es', h1, h2⟩ := ih (o.keep n) (n + 1) (es ++ [.keep r t (o.keep n)])
+    exact ⟨.keep r t (o.keep n) :: es', by simpa [Prog.interp, recorder] using h1,
+      by simpa [Prog.interp, recorder] using Runs.keep (o.keep n) h2⟩
+  | forget k ih =>
+    obtain ⟨es', h1, h2⟩ := ih (o.forget n) (n + 1) (es ++ [.forget (o.forget n)])
+    exact ⟨.forget (o.forget n) :: es', by simpa [Prog.interp, recorder] using h1,
+      by simpa [Prog.interp, recorder] using Runs.forget (o.forget n) h2⟩
+  | ask r q k ih =>
+    obtain ⟨es', h1, h2⟩ := ih (o.ask n) (n + 1) (es ++ [.ask r q (o.ask n)])
+    exact ⟨.ask r q (o.ask n) :: es', by simpa [Prog.interp, recorder] using h1,
+      by simpa [Prog.interp, recorder] using Runs.ask (o.ask n) h2⟩
+  | say s k ih =>
+    obtain ⟨es', h1, h2⟩ := ih (n + 1) (es ++ [.say s])
+    exact ⟨.say s :: es', by simpa [Prog.interp, recorder] using h1,
+      by simpa [Prog.interp, recorder] using Runs.say h2⟩
+
+/-- So every order theorem holds of what the interpreter performs: the tick's recorded trace is
+`TickCore` (and `tick_counts`, `kept_follows` follow the same way). -/
+theorem interp_order (o : Oracle) (w : Where) (m : Mem) :
+    TickCore w.conf m (core (((tickP w m).interp (recorder o)).run (0, [])).2.2) := by
+  obtain ⟨es', h1, h2⟩ := interp_runs o (tickP w m) 0 []
+  rw [h1]
+  simpa using tick_order h2
+
+/-- Tooth: an interpreter that performs a node's call twice (`interpTwice`) records, for some tree
+and every oracle, a trace that is no path of that tree: `interp_runs` refutes it. -/
+theorem interpTwice_no_path (o : Oracle) :
+    ¬ Runs (Prog.cmd .describe fun _ => .done ())
+      (((Prog.cmd .describe fun _ => .done ()).interpTwice (recorder o)).run (0, [])).2.2 () := by
+  intro h
+  simp only [Prog.interpTwice, recorder] at h
+  cases h with
+  | cmd _ h => cases h
 
 end Nanodregg.Hosting.Proofs.ResidentRun

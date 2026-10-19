@@ -62,4 +62,30 @@ def keptAfter : Option (Ring × ByteArray) → List Ev → Option (Ring × ByteA
   | _, .forget true :: es => keptAfter none es
   | k, _ :: es => keptAfter k es
 
+/-- Every result an effect could have, by its place in the trace. -/
+structure Oracle where
+  cmd : Nat → Except String Reply
+  keep : Nat → Bool
+  forget : Nat → Bool
+  ask : Nat → AskEnd
+
+/-- The recording handler: each call takes its result from the oracle at its place and appends
+itself, with that result, to the trace. -/
+def recorder (o : Oracle) : Handler (StateM (Nat × List Ev)) where
+  cmd c := modifyGet fun (n, es) => (o.cmd n, (n + 1, es ++ [.cmd c (o.cmd n)]))
+  keep r t := modifyGet fun (n, es) => (o.keep n, (n + 1, es ++ [.keep r t (o.keep n)]))
+  forget := modifyGet fun (n, es) => (o.forget n, (n + 1, es ++ [.forget (o.forget n)]))
+  ask r q := modifyGet fun (n, es) => (o.ask n, (n + 1, es ++ [.ask r q (o.ask n)]))
+  say s := modify fun (n, es) => (n + 1, es ++ [.say s])
+
+/-- A wrong interpreter, kept only as the subject of a tooth (`interpTwice_no_path`): it performs a
+command node's call twice. Nothing calls it. -/
+def Prog.interpTwice {M : Type → Type} [Monad M] {α : Type} (h : Handler M) : Prog α → M α
+  | .done a => pure a
+  | .cmd c k => do let _ ← h.cmd c; let x ← h.cmd c; (k x).interpTwice h
+  | .keep r t k => do let b ← h.keep r t; (k b).interpTwice h
+  | .forget k => do let b ← h.forget; (k b).interpTwice h
+  | .ask r q k => do let e ← h.ask r q; (k e).interpTwice h
+  | .say s k => do h.say s; k.interpTwice h
+
 end Nanodregg.Hosting.Resident
