@@ -11,6 +11,9 @@ Every verdict run executes under `strace -f -qq -y --seccomp-bpf -e trace=%file,
       own fingerprint stats every source the crate's dep-info lists, so the sources stay in T).
   L = every tree directory it listed (an add or a remove in it can move the run);
   X = every binary under .lake/build/bin it exec'd.
+  W = the waste rows (`op<TAB>metric`) the run MEASURED (its `WASTE` lines; runs.py adds it): no trace
+      shows gates/waste.tsv, because the JUDGE reads it, not the run, yet its ceilings decide the row's
+      verdict (GATES-20e, PERF-4's finding at 41e041f). The key holds each W row's ceiling and measured.
 Excluded: .lake/runs/ (the run's own scratch, made fresh per run), .lake/cargo-target/ (cargo's
 cache: derived, and a source change reaches it only through T, which cargo stats), and everything under
 a directory the run itself created (mkdir = 0: its own output, e.g. host-file-sim's
@@ -32,7 +35,8 @@ import re
 import shutil
 import subprocess
 
-VERSION = b"GATES-20 traced key v2 (GATES-20d: compile reads C)"
+VERSION = b"GATES-20 traced key v3 (GATES-20e: the judge's waste rows W)"
+WASTE = "gates/waste.tsv"
 EXCL = (".lake/runs/", ".lake/cargo-target/")
 BIN = ".lake/build/bin/"
 RUNNER = ("gates/runs.py", "gates/tree.py", "gates/readset.py")
@@ -266,7 +270,36 @@ def key(rs: dict, root: str, row_line: str) -> str:
         put("L " + d + " " + ("\0".join(sorted(os.listdir(p))) if os.path.isdir(p) else "ABSENT"))
     for b in rs["X"]:
         put("X " + b + " " + _file(root, BIN + b))
+    if rs.get("W"):
+        rows = waste_rows(_text(root, WASTE))
+        for w in rs["W"]:
+            put("W " + w + " " + "\t".join(rows.get(w, ("ABSENT",))))
     return h.hexdigest()
+
+
+def _text(root: str, rel: str) -> str:
+    try:
+        return open(os.path.join(root, rel), encoding="utf-8").read()
+    except OSError:
+        return ""
+
+
+def waste_rows(text: str) -> dict[str, tuple[str, ...]]:
+    """gates/waste.tsv as the JUDGE reads it: `op<TAB>metric` -> (ceiling, measured). The source prose is
+    not a judge input (waste.py compares the numbers only)."""
+    out = {}
+    for line in text.splitlines():
+        f = line.split("\t")
+        if line.startswith("#") or len(f) < 4:
+            continue
+        out[f[0] + "\t" + f[1]] = (f[2], f[3])
+    return out
+
+
+def waste_changed(old: str, new: str) -> set[str]:
+    """The waste rows (`op<TAB>metric`) whose ceiling or measured value differs, or that were added or removed."""
+    a, b = waste_rows(old), waste_rows(new)
+    return {k for k in set(a) | set(b) if a.get(k) != b.get(k)}
 
 
 def touched_by(rs: dict, changed: list[str], added_or_deleted: set[str]) -> str | None:

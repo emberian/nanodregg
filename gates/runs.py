@@ -438,13 +438,23 @@ def traced_selected(t: tree.Tree, changed: list[str], rows: dict, store: str, gi
     static_standing = standing_selected(t, changed, rows)
     mods = {p[:-5].replace("/", ".") for p in changed if p.endswith(".lean")}
     ad = added_or_deleted(gitdir, base, tree_oid) if tree_oid else None
+    # GATES-20e: gates/waste.tsv is read by the JUDGE, never by a run, so no trace holds it; a changed
+    # ceiling or measured value selects every row that measured that waste row (its read-set's W), and
+    # a row whose read-set does not say what it measured (no W: a record from before GATES-20e).
+    wchg: set[str] = set()
+    if readset.WASTE in changed:
+        old = readset._text(os.path.dirname(os.path.dirname(base_table)), readset.WASTE) if base_table else ""
+        wchg = readset.waste_changed(old, readset._text(t.root, readset.WASTE))
     out, why = set(), {}
+    measured: set[str] = set()   # every waste row some valid read-set says its row measures
     for exe in sorted(rows):
         if not rows[exe][0]:
             continue
         line = row_line(t.root, table_path, exe)
         rs = valid_readset(t, exe, store, gitdir, base, row_line(t.root, base_table, exe) if base_table else line)
         is_static = exe in static or exe in static_standing
+        if rs is not None:
+            measured |= set(rs.get("W", []))
         if rs is None:
             if is_static:
                 out.add(exe); why[exe] = "no read-set valid for the parent: the static rule"
@@ -461,12 +471,27 @@ def traced_selected(t: tree.Tree, changed: list[str], rows: dict, store: str, gi
             why[exe] = f"its crate {crate} changed"
         elif exe.startswith("script:"):
             why[exe] = "a script row (no closure: every judge)"
+        elif wchg and "W" not in rs:
+            why[exe] = (f"waste row {sorted(wchg)[0].replace(chr(9), ' ')} changed (gates/waste.tsv, a judge input) "
+                        f"and its read-set does not say what it measures")
+        elif wchg & set(rs["W"]):
+            why[exe] = (f"its waste row {sorted(wchg & set(rs['W']))[0].replace(chr(9), ' ')} changed "
+                        f"(gates/waste.tsv, a judge input)")
         else:
             w = readset.touched_by(rs, changed, set(changed) if ad is None else ad)
             if not w:
                 continue
             why[exe] = w
         out.add(exe)
+    orphan = sorted(wchg - measured)
+    if orphan:
+        # a changed waste row no read-set claims (new, removed, or measured by a row whose record predates
+        # GATES-20e): which row it judges is unknown, so every row the static rule selects runs
+        for exe in sorted(set(static) | set(static_standing)):
+            if exe not in out:
+                out.add(exe)
+                why[exe] = (f"waste row {orphan[0].replace(chr(9), ' ')} changed (gates/waste.tsv, a judge input) "
+                            f"and no read-set says which row measures it")
     return out, why
 
 
@@ -664,6 +689,9 @@ def main() -> int:
             report(exe, [] if exe.startswith("cargo:") else args, v, out)
         ok_all = bool(lines) and all(v.startswith("ok") for _, v in lines)
         rs = readset.union(TRACING["sets"]) if TRACING["strace"] else None
+        if rs is not None:
+            # GATES-20e: the waste rows this row measured, a judge input no trace can show
+            rs["W"] = sorted({"\t".join(l.split()[1:3]) for l in waste[w0:] if len(l.split()) >= 4})
         if TRACING["strace"] and rs is None:
             # GATES-20d: a run whose trace could not be read: the static rules apply to this row, and
             # standing's re-trace check cannot run on it (standing counts these lines: INCOMPLETE).
