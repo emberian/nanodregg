@@ -668,9 +668,13 @@ fn a_held_removal_stalls_no_birth_and_is_killed_at_its_grace() {
         removed.elapsed() >= grace - std::time::Duration::from_secs(1),
         "killed before GRACE"
     );
-    assert!(
-        !Path::new(&format!("/proc/{pid}")).exists(),
-        "the held supervisor still runs"
+    // killed is not yet reaped: until nd-members' next tick waits it, the killed supervisor is a
+    // zombie whose /proc entry stands; it must be gone (killed AND reaped) within a few ticks
+    until(
+        "the held supervisor killed and reaped",
+        10,
+        || !Path::new(&format!("/proc/{pid}")).exists(),
+        &|| m.log(),
     );
     until("r2 bound again", 30, || served(&w.r2), &|| m.log());
     assert_eq!(starts(&m.log(), &w.r2, "stdio"), 2, "{}", m.log());

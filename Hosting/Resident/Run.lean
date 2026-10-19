@@ -215,6 +215,35 @@ def keep (w : Where) (r : Ring) (t : ByteArray) : IO Bool := do
   | .ok back => pure (decide (back = some (r, t)))
   | .error _ => pure false
 
+/-- What the start does before its first tick (HOSTING-39): what the volume holds at the kept name,
+made durable by running a whole keep of it again from its first step (absent: a whole forget), so
+a keep or a forget that failed part way in the last life (the rename or the unlink done, the
+directory sync not) can no longer be undone by a crash once this life acts on what it read. Over
+the volume's contract every crash outcome after these steps reads exactly what the start read
+(`Proofs.ResidentVolume.resume_durable`, with no premise on the volume but readability), and every
+keep or forget after them is atomic again (`next_keep_after_resume`, `next_forget_after_resume`);
+a keep stopped part way, then this, is as one completed keep or none (`keep_resumed`); and the
+resume may itself fail or crash at any step without wedging a later start (`resume_atomic`). An
+unreadable entry has no steps: the start ends `volume` before it. -/
+def resumeOps (w : Where) : Option (Option String) → List FsOp
+  | none => forgetOps w
+  | some (some s) => keepOps w s
+  | some none => []
+
+/-- Run `resumeOps`, then read the kept name back; `false` unless it reads as `held` again. Only
+then does it say `resumed` (the line the bell test counts at a restart). -/
+def resume (w : Where) (held : Option (Option String)) : IO Bool := do
+  let act : IO (Option (Option String)) := do
+    performAll (resumeOps w held)
+    if ← w.kept.pathExists then pure (some (some (← IO.FS.readFile w.kept))) else pure none
+  match ← act.toBaseIO with
+  | .ok back =>
+    if back = held then
+      say s!"resumed {if held.isSome then "the kept answer" else "nothing kept"}"
+      pure true
+    else pure false
+  | .error _ => pure false
+
 /-- The first tick's kept answer from what the volume holds at the kept name: absent → none;
 unreadable → no seed (`volume`); a text → what it reads as, and no seed when it reads as nothing. -/
 def seedOf : Option (Option String) → Option (Option (Ring × ByteArray))
@@ -415,6 +444,7 @@ def run (args : List String) : IO UInt32 := do
       | .error _ => pure (some none)
     else pure none
   let some kept := seedOf held | stop .volume "kept unreadable"
+  unless ← resume w held do return ← stop .volume "resume"
   say s!"serving bell {Lang.Print.hex conf.bell}{if kept.isSome then " (an answer is kept)" else ""}"
   let mut m : Mem := { shape := none, kept }
   for _ in [0:lifetimeTicks] do

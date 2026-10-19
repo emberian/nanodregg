@@ -2078,3 +2078,61 @@ All six are fixed as above. Second pass: ACCEPT, with three small items, all tak
 **Critique.** The model is mine, written for this proof. A model that is too strong makes every theorem vacuous about the real disk, and my first model was: its crash was a function, so one lemma ("exactly the old text before the directory sync") held only because of that. The reader caught it. The model is now a relation over every outcome I know a POSIX filesystem may produce. Teeth A and the tooth theorems show that dropping either sync breaks the statements, so neither sync is decorative. Not modelled: concurrent writers (only this process writes the volume) and a full disk (a failed write is an IO error, so keep reports false).
 
 **Meta-critique.** The pull was to call the interpreter "six lines by inspection" a second time. Writing `interp` over a handler cost one structure and made the six lines a theorem at the one handler that matters for the order proofs. The part left trusted is now genuinely the runtime's.
+
+## HOSTING-39 A keep or forget that failed part way is resumed at the restart: the start re-runs a whole keep (or forget) of what the volume holds before its first tick, so nothing a new life acts on can be undone by a crash (HOSTING-13, 2026-10-21; ROOT's item, HOSTING-37's named gap)
+
+**The gap (HOSTING-37's).** A keep that fails part way without a crash (the rename done, the directory sync thrown) ends the resident `volume`. Its restart seeds from the live text, which the volume has not made durable: the kept entry still remembers the text before the failed keep. A crash during the next keep can then bring that older text back, and it is re-delivered: a wasted answer, never a second ask. A forget that fails after its unlink can likewise bring back the forgotten text (a wasted invoke).
+
+**What changed.**
+- `Resident.resumeOps w held`: a whole `keepOps w s` when the start read the text `s`, `forgetOps w` when the kept name is absent, no steps when it is unreadable (the start already ends `volume` there, `seedOf`).
+- `Resident.resume`: performs the steps, reads the kept name back, and returns `true` only when it reads as `held` again. Only then does it say `resident: resumed the kept answer` (or `resumed nothing kept`).
+- `run`: seeds from `held`, performs `resume w held`, ends `volume "resume"` when that fails, and only then starts ticking. Every start costs one keep (a file write, two fsyncs, a rename) or one directory sync.
+
+**Theorems (`Proofs/ResidentVolume.lean`, "The resume").**
+- `resume_read`: without a crash, the kept name reads as it did.
+- `resume_durable`: for EVERY volume whose kept name is readable, every crash outcome after the resume reads exactly what the start read. There is no other premise: `keep_durable` and `forget_durable` hold of every volume.
+- `stable_after_resume`: `Stable` again at the kept name.
+- `next_keep_after_resume`, `next_forget_after_resume`: a crash at EVERY prefix of the next keep (forget) comes back with what the start read, or the new text (nothing). Never the text from before the failed keep.
+- `keep_resumed`: a keep of `s` stopped at ANY prefix without a crash, then the resume. Every crash outcome reads what the start read, and that is the text before the keep or `s`: as after one completed keep, or as before it began. `forget_resumed`: likewise, with the old text or nothing.
+- `live_applyAll`: the `Live` invariant over a step list.
+- **Every life stays readable.** `KeptSynced`: every inode the kept name has named since the last directory sync is synced and readable. It holds of the empty volume (`keptSynced_empty`) and is kept by every prefix of a keep, a forget and a resume, and by every crash (`keptSynced_keep`, `_forget`, `_resume`, `_crash`). So every reachable volume meets it, and `readable_of_keptSynced` discharges the readability premise above.
+- `resume_atomic`: a crash at ANY prefix of the resume comes back readable, `KeptSynced`, `Fresh` and `Live` again. So a resume that fails or crashes part way, any number of lives in a row, never wedges a later start at `kept unreadable`. And no life acts before its resume has read back.
+
+**Teeth.**
+- `unresumed_keep_reverts`: with no resume, a keep that failed after its rename leaves the start reading the new text, and some crash outcome reads another text (the old one).
+- `unresumed_forget_reverts`: with no resume, a forget that failed after its unlink leaves the start reading nothing, and some crash outcome brings the forgotten text back.
+
+**Plants (by hand).**
+- (A) `resumeOps` gives no steps for a text: ResidentVolume is RED at `resume_read` and `resume_durable` (logs/hosting13-plantA.log).
+- (B) the resume call is removed from `run`: resident_bell is RED, "Q6: the restart did not resume its kept intent" (logs/hosting13-t-plantB2.log).
+- A first plant B stayed GREEN: the line had been put on the `serving bell` line, which prints whether or not the resume ran. The line now comes from `resume` itself, after its read-back.
+- Restored: green, resident_bell 1/1 (logs/hosting13-t-bell2.log).
+
+**Critique.**
+- *The brief said "the resident's next tick re-runs an incomplete keep".* A failed keep or forget already ends the process (`volume`), so the "next tick" is the restart's first. The restart does not know which keep failed, but it does not need to: re-keeping what the volume holds covers a failed keep, a failed forget, and any start, with one mechanism in one place.
+- *Cheaper: resume with only `syncDir`.* Under the contract the live kept entry always names a synced file, because keepOps renames only after its fsync. So a directory sync alone would re-establish `Stable` on every reachable volume. REFUSED: its theorem would need a reachable-state invariant ("the live kept inode is synced") as a premise. The whole keep's durability needs no premise at all. The price of the stronger theorem is one file write and one fsync per start.
+- *Why not retry in-process instead of ending `volume`?* That would add a node to the tick's Prog and re-open HOSTING-36's order theorems (keep before ask, answer before invoke) for a failure that is rare and already handled by the supervisor's restart.
+
+**Meta-critique.**
+- The behavioural check sees that the resume RAN and read back. Q6 counts `resumed the kept answer` at the restart holding the intent, and `resumed nothing kept` at the start before it.
+- It cannot tell a real resume from one with no steps: with no steps the read-back still matches. That is plant A, which is RED in Lean, where `resume_durable` pins the steps.
+- It never exercises a thrown directory sync: there is no fault hook.
+- It cannot see the new inode: the restart delivers and forgets the kept file within its first tick.
+- It cannot see durability: an unsynced file and a synced one read back alike. Durability is the theorem's.
+- Still code, not theorem (named in the module header):
+  - `run` performs `resumeOps w held` with the very `held` it seeds from, before the first tick.
+  - `held` is `Vol.read` at the kept name.
+  - The text read is written back byte for byte.
+- The resume can itself fail part way. That is `resume_atomic`'s case: the process ends before acting, a crash returns a readable value, and the next start resumes again.
+
+**Vacuity reads.**
+- Reader pass 1: ACCEPT, with 4 holes, all addressed.
+  1. A resume failing or crashing part way across lives was covered by nothing. Fixed by `KeptSynced` and `resume_atomic`.
+  2. Doc texts credited the wrong theorems and over-claimed. Corrected.
+  3. The code assumptions of the resume were unnamed. Named in the header.
+  4. The Q6 plant sees the wiring only. The "nothing kept" branch is now counted; the inode and fault-hook limits are named above.
+- Pass 2: ACCEPT. One header overclaim was narrowed: `resume_atomic` excludes an unreadable FILE, not a text `keptRead` refuses (every kept text is `keptText`'s or passed `seedOf`). Optional: `resume_atomic` says "readable", not which text. Safety is `resume_durable`'s, since no life acts before its resume reads back.
+
+**Still assumed, of the deployment.** Only this resident writes `kept-*` in its volume (HOSTING-37's single-writer assumption). The filesystem meets the contract.
+
+**Shape.** Nothing on a wire or in a persisted format changes; the kept file's name and text are as before. A new stderr line: `resident: resumed the kept answer` / `resumed nothing kept`.

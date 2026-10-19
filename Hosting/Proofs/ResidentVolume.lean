@@ -21,13 +21,28 @@ text), `in_place_loses_both` (writing the kept name in place: some crash outcome
 What is code, not theorem: `perform` makes each step its one POSIX call (six arms); `keep` reports
 `true` only after `performAll` returned and the read-back matched; that the filesystem meets the
 contract is the operator's (a local POSIX filesystem; on Darwin Host.File's sync is F_FULLFSYNC).
-Named gap: a keep that FAILS part way without a crash (the rename done, the directory sync thrown)
-leaves the kept entry unstable; the resident stops `volume` and its restart seeds the live text; a
-crash during the NEXT keep may then bring back the text before the failed keep (an older answer,
-re-delivered: a wasted answer, never a second ask). Likewise a forget that fails part way (the
-unlink done, the directory sync thrown): the restart seeds none, and a crash during the next keep
-may bring the forgotten text back, which is re-delivered, refused as no longer pending, and
-forgotten (a wasted invoke, never a second ask). `keep_atomic`'s `Stable` excludes both starts.
+A keep or forget that FAILS part way without a crash (the rename or the unlink done, the
+directory sync thrown) ends the resident `volume`; its restart runs `resumeOps` before its first
+tick (HOSTING-39): a whole keep of what the volume holds, again from its first step (absent: a whole
+forget). `resume_durable`: every crash outcome after it reads exactly what the start read, for ANY
+readable volume; `stable_after_resume`: it re-establishes `Stable`; `keep_resumed`,
+`forget_resumed`: after a keep (forget) stopped at any prefix and the resume, every crash outcome is
+as after one completed keep (forget), or as before it began; `next_keep_after_resume`,
+`next_forget_after_resume`: a crash at every prefix of the next keep (forget) comes back with what
+the start read or the new text (nothing). So a text the new life acts on is never undone by a
+crash. `resume_atomic`: the resume itself may fail or crash at any prefix, any number of lives in a
+row: under `KeptSynced` (every inode the kept name has held since the last directory sync is synced
+and readable; it holds of the empty volume and is kept by every keep and forget prefix and every
+crash, `keptSynced_*`) every outcome is readable again (`readable_of_keptSynced`), so no start is
+wedged at an unreadable kept FILE, and no life acts before its resume read back. (That a readable
+text also reads as an answer, `keptRead`, is not this model's: every text kept is `keptText`'s, or a
+resumed one that already passed `seedOf`.) Teeth:
+`unresumed_keep_reverts`, `unresumed_forget_reverts` (without the resume, the start reads the new
+text, or nothing, and a crash comes back with the old one).
+Code, not theorem, of the resume: `held` (`pathExists`, then `readFile`) is `Vol.read` at the kept
+name; `readFile`'s text written back by `keepOps` is the bytes read (the kept text is the resident's
+own UTF-8, `keptText`); `resume`'s read-back can see a step that did not happen or another writer,
+never durability (by `resume_read` it always matches under the contract).
 Assumed of the deployment, not proved: the volume's history is the empty volume followed only by
 `keepOps`, `forgetOps` and crashes, i.e. nothing but this resident writes `kept-*` or `kept-*.tmp`
 in its volume (the grain's volume is its own: grain-launch's write grant).
@@ -368,5 +383,224 @@ theorem in_place_loses_both (v : Vol) (w : Where) (s : String) (hf : Fresh v) (h
       simp [u, Vol.applyAll, Vol.apply, Vol.set, upd] at hi
     simp [upd, this]
   · simp [u, Vol.settle, Vol.read, Vol.applyAll, Vol.apply, Vol.set, upd]
+
+/-! ## The resume (HOSTING-39) -/
+
+theorem live_applyAll {v : Vol} (ops : List FsOp) (hl : Live v) : Live (v.applyAll ops) := by
+  induction ops generalizing v with
+  | nil => exact hl
+  | cons op ops ih => exact ih (live_apply op hl)
+
+/-- Without a crash, the resume leaves the kept name reading as it did. -/
+theorem resume_read (v : Vol) (w : Where) :
+    (v.applyAll (resumeOps w (v.read w.kept))).read w.kept = v.read w.kept := by
+  have hne := keptTmp_ne w
+  cases h : v.read w.kept with
+  | none =>
+    simp [resumeOps, forgetOps, Vol.applyAll, Vol.apply, Vol.set, Vol.read, upd]
+  | some x =>
+    cases x with
+    | none => simp [resumeOps, Vol.applyAll, h]
+    | some s =>
+      simp [resumeOps, keepOps, Vol.applyAll, Vol.apply, Vol.set, Vol.read, upd, hne, hne.symm]
+
+/-- **The resume is durable, for every volume**: after it, every crash outcome reads exactly what
+the start read (an unreadable entry excepted: the start ends `volume` before resuming it). -/
+theorem resume_durable (v : Vol) (w : Where) (hu : v.read w.kept ≠ some none) (v' : Vol)
+    (hc : Crash (v.applyAll (resumeOps w (v.read w.kept))) v') : v'.read w.kept = v.read w.kept := by
+  cases h : v.read w.kept with
+  | none => rw [h] at hc; exact forget_durable v w v' hc
+  | some x =>
+    cases x with
+    | none => exact absurd h hu
+    | some s => rw [h] at hc; exact keep_durable v w s v' hc
+
+/-- The resume re-establishes `Stable` at the kept name. -/
+theorem stable_after_resume (v : Vol) (w : Where) (hu : v.read w.kept ≠ some none) :
+    Stable (v.applyAll (resumeOps w (v.read w.kept))) w.kept := by
+  cases h : v.read w.kept with
+  | none => exact stable_after_forget v w
+  | some x =>
+    cases x with
+    | none => exact absurd h hu
+    | some s => exact stable_after_keep v w s
+
+/-- A crash at every prefix of the keep after the resume comes back with what the start read or
+the keep's text. -/
+theorem next_keep_after_resume (v : Vol) (w : Where) (hu : v.read w.kept ≠ some none)
+    (hf : Fresh v) (hl : Live v) (s : String) (m : Nat) (v' : Vol)
+    (hc : Crash (((v.applyAll (resumeOps w (v.read w.kept))).applyAll ((keepOps w s).take m))) v') :
+    v'.read w.kept = v.read w.kept ∨ v'.read w.kept = some (some s) := by
+  obtain ⟨hf2, hl2⟩ := fresh_applyAll (resumeOps w (v.read w.kept)) hf hl
+  have h := keep_atomic _ w s (stable_after_resume v w hu) hf2 hl2 m v' hc
+  rwa [resume_read] at h
+
+/-- A crash at every prefix of the forget after the resume comes back with what the start read or
+nothing. -/
+theorem next_forget_after_resume (v : Vol) (w : Where) (hu : v.read w.kept ≠ some none) (m : Nat)
+    (v' : Vol) (hc : Crash (((v.applyAll (resumeOps w (v.read w.kept))).applyAll ((forgetOps w).take m))) v') :
+    v'.read w.kept = v.read w.kept ∨ v'.read w.kept = none := by
+  have h := forget_atomic _ w (stable_after_resume v w hu) m v' hc
+  rwa [resume_read] at h
+
+/-- **`keep_resumed`**: a keep of `s` stopped at ANY prefix without a crash (from a readable kept
+entry), then the restart's resume: every crash outcome reads what the start read, and that is
+the text before the keep or `s`, as after one completed keep or none. -/
+theorem keep_resumed (v : Vol) (w : Where) (s : String) (hf : Fresh v) (hl : Live v) (hr : v.read w.kept ≠ some none) (n : Nat) (v' : Vol)
+    (hc : Crash (let u := v.applyAll ((keepOps w s).take n); u.applyAll (resumeOps w (u.read w.kept))) v') :
+    v'.read w.kept = (v.applyAll ((keepOps w s).take n)).read w.kept ∧
+    (v'.read w.kept = v.read w.kept ∨ v'.read w.kept = some (some s)) := by
+  have hla := keep_live_atomic v w s hf hl n
+  have hu : (v.applyAll ((keepOps w s).take n)).read w.kept ≠ some none := by
+    rcases hla with h | h <;> rw [h]
+    · exact hr
+    · simp
+  have hd := resume_durable _ w hu v' hc
+  exact ⟨hd, by rw [hd]; exact hla⟩
+
+/-- **`forget_resumed`**: likewise for a forget stopped at any prefix: the text before it, or
+nothing. -/
+theorem forget_resumed (v : Vol) (w : Where) (hr : v.read w.kept ≠ some none)
+    (n : Nat) (v' : Vol)
+    (hc : Crash (let u := v.applyAll ((forgetOps w).take n); u.applyAll (resumeOps w (u.read w.kept))) v') :
+    v'.read w.kept = (v.applyAll ((forgetOps w).take n)).read w.kept ∧
+    (v'.read w.kept = v.read w.kept ∨ v'.read w.kept = none) := by
+  have hla : (v.applyAll ((forgetOps w).take n)).read w.kept = v.read w.kept ∨
+      (v.applyAll ((forgetOps w).take n)).read w.kept = none := by
+    rcases n with _ | _ | n
+    · exact .inl rfl
+    · exact .inr (by simp [forgetOps, Vol.applyAll, Vol.apply, Vol.set, Vol.read, upd])
+    · right; simp [forgetOps, Vol.applyAll, Vol.apply, Vol.set, Vol.read, upd]
+  have hu : (v.applyAll ((forgetOps w).take n)).read w.kept ≠ some none := by
+    rcases hla with h | h <;> rw [h]
+    · exact hr
+    · simp
+  have hd := resume_durable _ w hu v' hc
+  exact ⟨hd, by rw [hd]; exact hla⟩
+
+/-- Tooth: without the resume, a keep that failed after its rename (before its directory sync)
+leaves the start reading the new text, and a crash before anything else comes back with the old
+one: the start acted on a text the volume had not kept. -/
+theorem unresumed_keep_reverts (v : Vol) (w : Where) (s : String) (hs : Stable v w.kept)
+    (hf : Fresh v) (hl : Live v) (hold : v.read w.kept ≠ some (some s)) :
+    let u := v.applyAll ((keepOps w s).take 5)
+    u.read w.kept = some (some s) ∧ ∃ v', Crash u v' ∧ v'.read w.kept ≠ u.read w.kept := by
+  intro u
+  have hne := keptTmp_ne w
+  have hu : u.read w.kept = some (some s) := by
+    simp [u, keepOps, Vol.applyAll, Vol.apply, Vol.set, Vol.read, upd, hne, hne.symm]
+  obtain ⟨v', hc, hv⟩ := keep_without_syncDir_reverts v w s hs hf hl hold
+  exact ⟨hu, v', hc, hu ▸ hv⟩
+
+/-- Tooth: without the resume, a forget that failed after its unlink leaves the start reading
+nothing, and a crash comes back with the forgotten text. -/
+theorem unresumed_forget_reverts (v : Vol) (w : Where) (hs : Stable v w.kept) (hl : Live v)
+    (hold : v.read w.kept ≠ none) :
+    let u := v.applyAll ((forgetOps w).take 1)
+    u.read w.kept = none ∧ ∃ v', Crash u v' ∧ v'.read w.kept ≠ u.read w.kept := by
+  intro u
+  have hlu : Live u := live_applyAll ((forgetOps w).take 1) hl
+  have hu : u.read w.kept = none := by
+    simp [u, forgetOps, Vol.applyAll, Vol.apply, Vol.set, Vol.read, upd]
+  let L := upd u.live w.kept (v.live w.kept)
+  refine ⟨hu, u.settle L u.data, ⟨?_, fun p => rfl, fun i _ => rfl, fun _ => rfl, rfl, rfl⟩, ?_⟩
+  · intro p
+    simp only [Vol.settle, L, upd]
+    split
+    · subst_vars
+      show v.live w.kept ∈ u.hist w.kept
+      simp [u, forgetOps, Vol.applyAll, Vol.apply, Vol.set, upd, hs.1]
+    · exact hlu p
+  · rw [hu]
+    have hd : u.data = v.data := by simp [u, forgetOps, Vol.applyAll, Vol.apply, Vol.set]
+    simp only [Vol.settle, Vol.read, L, upd_same, hd]
+    simpa [Vol.read] using hold
+
+/-! ## Every life stays readable (HOSTING-39): the resume itself may fail or crash -/
+
+/-- Every inode the kept name has named since the last directory sync is synced and readable. -/
+def KeptSynced (v : Vol) (w : Where) : Prop :=
+  ∀ x ∈ v.hist w.kept, ∀ i, x = some i → v.synced i = true ∧ ∃ s, v.data i = some s
+
+theorem keptSynced_empty (w : Where) : KeptSynced Vol.empty w := by
+  intro x hx i he; simp [Vol.empty] at hx; subst hx; simp at he
+
+/-- A readable kept name: under `KeptSynced` the start never meets an unreadable kept file. -/
+theorem readable_of_keptSynced {v : Vol} {w : Where} (hk : KeptSynced v w) (hl : Live v) :
+    v.read w.kept ≠ some none := by
+  cases h : v.live w.kept with
+  | none => simp [Vol.read, h]
+  | some i =>
+    obtain ⟨-, s, hs⟩ := hk _ (h ▸ hl w.kept) i rfl
+    simp [Vol.read, h, hs]
+
+theorem keptSynced_keep (v : Vol) (w : Where) (s : String) (hk : KeptSynced v w) (hf : Fresh v)
+    (n : Nat) : KeptSynced (v.applyAll ((keepOps w s).take n)) w := by
+  intro x hx i he
+  rw [keep_hist] at hx
+  have hold : x ∈ v.hist w.kept → (v.applyAll ((keepOps w s).take n)).synced i = true ∧
+      ∃ t, (v.applyAll ((keepOps w s).take n)).data i = some t := by
+    intro hx'
+    obtain ⟨h1, t, h2⟩ := hk x hx' i he
+    obtain ⟨hd, hsy⟩ := keep_inode v w s n i (hf w.kept x i hx' he)
+    exact ⟨by rw [hsy]; exact h1, t, by rw [hd]; exact h2⟩
+  have hnew : 5 ≤ n → i = v.next → (v.applyAll ((keepOps w s).take n)).synced i = true ∧
+      ∃ t, (v.applyAll ((keepOps w s).take n)).data i = some t := by
+    intro hn hi; subst hi
+    obtain ⟨hd, hsy⟩ := keep_new v w s n hn
+    exact ⟨hsy, s, hd⟩
+  split at hx
+  · exact hold hx
+  · split at hx
+    · rcases List.mem_append.mp hx with hx | hx
+      · exact hold hx
+      · simp at hx; subst hx; exact hnew (by omega) (by simpa using he.symm)
+    · simp at hx; subst hx; exact hnew (by omega) (by simpa using he.symm)
+
+theorem keptSynced_forget (v : Vol) (w : Where) (hk : KeptSynced v w) (n : Nat) :
+    KeptSynced (v.applyAll ((forgetOps w).take n)) w := by
+  intro x hx i he
+  have hsame : (v.applyAll ((forgetOps w).take n)).synced = v.synced ∧
+      (v.applyAll ((forgetOps w).take n)).data = v.data := by
+    rcases n with _ | _ | n <;> simp [forgetOps, Vol.applyAll, Vol.apply, Vol.set]
+  rw [hsame.1, hsame.2]
+  rcases n with _ | _ | n
+  · exact hk x (by simpa [Vol.applyAll] using hx) i he
+  · simp [forgetOps, Vol.applyAll, Vol.apply, Vol.set, upd] at hx
+    rcases hx with hx | hx
+    · exact hk x hx i he
+    · subst hx; simp at he
+  · simp [forgetOps, Vol.applyAll, Vol.apply, Vol.set, upd] at hx
+    subst hx; simp at he
+
+theorem keptSynced_crash {v v' : Vol} {w : Where} (hk : KeptSynced v w) (hc : Crash v v') :
+    KeptSynced v' w := by
+  obtain ⟨hcl, hh, hcd, hcs, -, -⟩ := hc
+  intro x hx i he
+  rw [hh, List.mem_singleton] at hx
+  subst hx
+  obtain ⟨h1, s, h2⟩ := hk _ (hcl w.kept) i he
+  exact ⟨hcs i, s, (hcd i h1).trans h2⟩
+
+theorem keptSynced_resume (v : Vol) (w : Where) (hk : KeptSynced v w) (hf : Fresh v) (n : Nat) :
+    KeptSynced (v.applyAll ((resumeOps w (v.read w.kept)).take n)) w := by
+  cases h : v.read w.kept with
+  | none => exact keptSynced_forget v w hk n
+  | some x =>
+    cases x with
+    | none => simpa [resumeOps, Vol.applyAll] using hk
+    | some s => exact keptSynced_keep v w s hk hf n
+
+/-- **The resume is safe to interrupt**: a crash at ANY prefix of the resume (from a volume every
+life has kept `KeptSynced`) comes back readable and `KeptSynced` again, so a resume that fails or
+crashes part way, any number of lives in a row, never wedges a later start at an unreadable file;
+and no life acted on anything between (each ends before its first tick). -/
+theorem resume_atomic (v : Vol) (w : Where) (hk : KeptSynced v w) (hf : Fresh v) (hl : Live v)
+    (n : Nat) (v' : Vol)
+    (hc : Crash (v.applyAll ((resumeOps w (v.read w.kept)).take n)) v') :
+    v'.read w.kept ≠ some none ∧ KeptSynced v' w ∧ Fresh v' ∧ Live v' := by
+  have hk' := keptSynced_crash (keptSynced_resume v w hk hf n) hc
+  have hl' := live_crash hc
+  exact ⟨readable_of_keptSynced hk' hl', hk', fresh_crash hc (fresh_applyAll _ hf hl).1, hl'⟩
 
 end Nanodregg.Hosting.Proofs.ResidentVolume

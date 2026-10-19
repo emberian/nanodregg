@@ -35,7 +35,8 @@
 //!   rows are gone.
 //! - Q6, the intent: the resident is stopped after its ask reached the provider and before any
 //!   reply (the provider holds it back). Restarted, it answers that ring `(unanswered restart)` from
-//!   the intent it kept BEFORE the ask, and asks no more.
+//!   the intent it kept BEFORE the ask, and asks no more. Before its first tick the restart re-ran a
+//!   whole keep of that intent (`resident: resumed the kept answer`, said only once the keep read back, HOSTING-39).
 //! - Refused, each by name (HOSTING-27's, re-cut to the queue): the resident exe on a bell whose
 //!   resident is the operator ends `answerRefused program` after exactly one ask, restarts, answers
 //!   from its kept text and asks no more; on a bell whose grant lacks `invoke:0`, `answerRefused
@@ -491,6 +492,8 @@ fn the_resident_answers_every_ring_lowest_first_once_and_nothing_else() {
     no_child();
     ring_op(&b, "held");
     let before = asks();
+    let resumed_none = "resident: resumed nothing kept";
+    let nones = log().matches(resumed_none).count();
     hold.store(true, Ordering::SeqCst);
     start();
     until(
@@ -499,8 +502,16 @@ fn the_resident_answers_every_ring_lowest_first_once_and_nothing_else() {
         || asks() == before + 1,
         &log,
     );
+    assert_eq!(
+        log().matches(resumed_none).count(),
+        nones + 1,
+        "Q6: the start with nothing kept did not resume its forget:\n{}",
+        log()
+    );
     stop();
     no_child();
+    let resumed = "resident: resumed the kept answer";
+    let resumes = log().matches(resumed).count();
     hold.store(false, Ordering::SeqCst);
     start();
     until(
@@ -508,6 +519,13 @@ fn the_resident_answers_every_ring_lowest_first_once_and_nothing_else() {
         120,
         || rel(&b, "pending").is_empty(),
         &|| state(&b),
+    );
+    // HOSTING-39: the start re-ran a whole keep of the intent it read before its first tick
+    assert_eq!(
+        log().matches(resumed).count(),
+        resumes + 1,
+        "Q6: the restart did not resume its kept intent:\n{}",
+        log()
     );
     assert_eq!(
         (asks(), asked_about("held")),
