@@ -572,12 +572,12 @@ The lines to read:
     bench-worstcut SCRATCH
 
 - Writes a deployed Store whose tail past its base fills tailMax, in four tail shapes (PERF-6, PERF-9; numbers
-  measured at 359e9e8, PERF-10): writes (19.382 trie hashes per step), births (32.036), retires (32.938, the
-  worst, pinned) and rows (24.892: the Bell queue's ring, answer and retire cycles, LANG-59). Verifies are 0 at
-  reopen and 1 at audit in every shape. A reopen verifies no signature (HOST-22). A measurement above 32.938
+  measured at 258c273, PERF-11): writes (18.661 trie hashes per step), births (30.595), retires (32.217, the
+  worst, pinned) and rows (23.516: the Bell queue's ring, answer and retire cycles, LANG-59). Verifies are 0 at
+  reopen and 1 at audit in every shape. A reopen verifies no signature (HOST-22). A measurement above 32.217
   is RED.
 - The writes shape is 28,928 one-slot writes. The WORST tail is retires: 32,320 revokes over a 5,812,239 B base.
-- About 8 min and 751 MB on hbox for all four shapes.
+- About 8-11 min (load-dependent) and 751 MB on hbox for all four shapes.
 
 ### The worst World (a bench) — RAN (PERF-10, 359e9e8; standing row `worstworld`, the 200,000-entry form)
 

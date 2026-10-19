@@ -598,3 +598,65 @@ relaying it, and the ceiling moved under it. The same applies to every row text 
 it was true when measured, at that sha.
 
 **Status.** landed with this entry.
+
+## PERF-11 · The worst cut after the one-pass commit (2026-10-21, PERF-4; KERNEL-23 258c273)
+
+**Decision.** KERNEL-23's 258c273 commits a turn's cells, births and nullifiers as one batch per trie on a
+dirty overlay sealed once, so a path node two of the turn's keys pass through is hashed once. The four
+worst-cut shapes were re-measured on it, with worstworld and THE BAR's standing form beside them.
+- The two worst-cut hash ceilings fall 32.938 → 32.217 (retires is still the worst shape). The verify rows
+  stay 0.000 and 1.000.
+- `worstworld decode-trie-hashes-per-entry` stays 2.000. The genesis decode does not go through a turn's commit.
+- `bar trie-hashes-per-required` stays 1.000 exact. KERNEL-23 re-derived Required with the kernel
+  (`Required.batchReq`); this run is the measure on main.
+
+**Measured** (hbox, main 258c273, a clean tree, binaries the tree's; the load is beside each clock, so no
+clock here is a number):
+
+Worst cut (bench-worstcut, honest run 11:14, 746 MB, load1 13.6 → 29.3; control 9:15):
+
+| shape | steps | reopen h/step 359e9e8 → 258c273 | audit h/step | trie hashes (258c273) | verifies (reopen, audit) |
+|---|---|---|---|---|---|
+| writes | 28,928 | 19.382 → 18.661 | 18.661 | 539,816 | 0, 1.000 |
+| births | 33,088 | 32.036 → 30.595 | 30.595 | 1,012,318 | 0, 1.000 |
+| retires | 32,320 | 32.938 → **32.217** | **32.217** | 1,041,249 | 0, 1.000 |
+| rows (base 23,647 B) | 16,448 | 24.892 → 23.516 | 23.516 | 386,789 | 0, 1.000 |
+
+- Steps, records and tail bytes are the same as PERF-10's in every shape. The rows base grew 23,467 →
+  23,647 B (the installed Bell; 359e9e8..258c273 holds 1e90c0b's package version byte and 7c09186's rows key
+  encoding), so its allowance moves 540 B. The honest run and the control printed the same counts in every
+  shape they both reached.
+- Attribution: of the 31 commits in 359e9e8..258c273, 258c273 is the one that changes how many trie hashes a
+  commit makes, and its own admission count fell the same way (61851 → 60448). I did not run 258c273^ to
+  separate it. The rows shape also carries 7c09186's key change, so its −1.376 is not KERNEL-23's alone.
+- Every shape falls. births (−1.441/step) and retires (−0.721) gain most: a birth adds a cell and a nullifier
+  key, so the batch shares more path nodes.
+
+Worst World: synthetic 200000 → 400,003 / 200,002 = 2.000 (18.7 s, load1 5.7 → 6.5). The derived total at
+91,914,346 B is unchanged: 2,626,114 entries, 5,252,215 hashes.
+
+THE BAR, standing form (`scripts/bar.sh --records 60 --standing`), clean tree at 258c273: PASS. bench-count:
+27 steps past the base at step 33, trie-hashes 365, required 365, verifies 27 (402/402 at 359e9e8; KERNEL-23
+measured 374/374 on its own run). Hashes per step were 13.519, which depends on the draw and is reported only.
+Load1 7.7 → 8.1, write-p99 220 ms, reopen 12.3 ms. The writer's Store is now under `$HOME` on nvme0n1p4, not
+tank, so these clocks are not comparable to PERF-10's.
+
+Controls (all fire by name, at 258c273):
+- bench-worstcut `--harness-control`: `FAIL rows: harness-control: the cut fills 18815944 of tailMax 18876520,
+  and the control expects more than tailMax`.
+- bench-worstworld `--harness-control`: `FAIL harness-control: the decoded roots are not the planted ones`.
+- bar.sh `--harness-control`: RED by name with all four fired (limits 0; follow 60, want 61; use 3, want 4;
+  `bench-count harness-control`).
+
+**Alternatives.** Leave the ceiling at 32.938 as headroom. Not taken: a ceiling above the measured worst would
+let a 0.7 hash/step regression in the deployed reopen go unseen. These counts are deterministic: seeded
+identities, and the Store key moves only MAC bytes.
+
+**CRITIQUE.** The worst cut is still the worst of four hand-chosen shapes. A mixed tail (births interleaved
+with retires of the cells just born) was not tried, and the batch could share fewer nodes there than in any
+pure shape. That could put the real worst above 32.217.
+
+**META-CRITIQUE.** The brief named the before-numbers and said "re-measure". I took them from PERF-10's run
+log and re-ran on main 258c273 instead of on the brief's text.
+
+**Status.** landed with this entry.
