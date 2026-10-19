@@ -895,7 +895,9 @@ fn nd_members_ends_by_name() {
         "past the bound: {l}"
     );
     assert!(l.contains("residentsPastBound 1025"), "{l}");
-    // CONTROL: exactly the bound is served (no end within a few ticks)
+    // CONTROL: exactly the bound is served: all 1024 names are read (one `memberMissing` each) and
+    // the bound is not refused. Waited for by its outcome with a liveness deadline, never a fixed
+    // sleep: on a loaded box 2 s read 378 of the 1024 (KERNEL-25's judge).
     let at: Vec<Vec<u8>> = (0..1024)
         .map(|i| format!("{i:064x}").into_bytes())
         .collect();
@@ -904,7 +906,15 @@ fn nd_members_ends_by_name() {
         argv_over(&w, &r, me, &dir, &nd(), &sh, &[dir.as_os_str()]),
         r.base.0.join("bound.pid"),
     );
-    std::thread::sleep(std::time::Duration::from_secs(2));
+    until(
+        "1024 names read, or the bound refused",
+        120,
+        || {
+            let l = run.log();
+            l.contains("residentsPastBound") || l.matches("memberMissing").count() >= 1024
+        },
+        &|| run.log(),
+    );
     assert!(
         !run.log().contains("residentsPastBound"),
         "the bound itself refused: {}",
