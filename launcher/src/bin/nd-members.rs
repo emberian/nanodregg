@@ -33,7 +33,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::{OsStr, OsString};
-use std::io::{ErrorKind, Write};
+use std::io::ErrorKind;
 use std::os::unix::fs::{FileTypeExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Command, ExitCode, Stdio};
@@ -82,9 +82,9 @@ fn decider(e: DeciderEnd) -> End {
     }
 }
 
-/// One write per line: the children share this stderr.
+/// One write per line (`nanodregg_launcher::say`): the children share this stderr.
 fn say(line: &str) {
-    let _ = std::io::stderr().write_all(format!("nd-members: {line}\n").as_bytes());
+    nanodregg_launcher::say("nd-members", line);
 }
 
 fn now_ms() -> u64 {

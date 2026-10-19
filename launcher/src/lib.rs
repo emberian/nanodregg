@@ -25,6 +25,17 @@ use std::path::{Path, PathBuf};
 use generated::wire::LaunchFailure;
 use nanodregg_sandbox::{ConfineError, Policy};
 
+/// Write `WHO: LINE` to stderr in ONE write. Every launcher process shares its stderr with
+/// children of other languages (the controller, the deciders, nd-supervise), and `eprintln!` writes a
+/// line in pieces (prefix, body, newline) that another process's line can land between: GATES-6 read
+/// `keybroker: hosting-broker: keybrokerGone sockDir …`, GATES-9 `grain-launch: hosting-drive:
+/// launcherGone` then `foreignPath …`. A pipe write of at most `PIPE_BUF` bytes (4096 on Linux, where
+/// the launcher runs) is never interleaved; a line past it (a path near `PATH_MAX`) can be.
+pub fn say(who: &str, line: &str) {
+    use std::io::Write;
+    let _ = std::io::stderr().write_all(format!("{who}: {line}\n").as_bytes());
+}
+
 /// A plan path (the joined, Lean-checked bytes) under the operator's hosting root.
 pub fn under(root: &Path, rel: &[u8]) -> PathBuf {
     root.join(OsStr::from_bytes(rel))

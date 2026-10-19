@@ -94,9 +94,14 @@ impl End {
     }
 }
 
+/// One write per line (`nanodregg_launcher::say`): the controller and every child share this stderr.
+fn say(line: &str) {
+    nanodregg_launcher::say("grain-launch", line);
+}
+
 fn main() -> ExitCode {
     let end = run();
-    eprintln!("grain-launch: {}", end.describe());
+    say(&end.describe());
     use launch_exit as k;
     ExitCode::from(match end {
         End::Usage => k::USAGE,
@@ -179,11 +184,11 @@ impl Launcher {
     /// A launch refused: the Lean name, then what was refused (the path a confine check missed,
     /// the spawn's error), so a row can tell one missing socket from another.
     fn failed(&mut self, grain: Vec<u8>, why: LaunchFailure, what: &str) -> Result<(), End> {
-        eprintln!(
-            "grain-launch: {} failed {} {what}",
+        say(&format!(
+            "{} failed {} {what}",
             String::from_utf8_lossy(&grain),
             why.name()
-        );
+        ));
         let at_ms = self.now();
         self.report(Report::Failed {
             grain,
@@ -216,11 +221,11 @@ impl Launcher {
         // Each socket the plan lets this grain connect to, as joined onto its root (BROKER, then
         // MEMBER): the resident row reads its connect paths here, never computes them (PROTOCOL-7's R1).
         for c in &policy.connect {
-            eprintln!(
-                "grain-launch: {} connect {}",
+            say(&format!(
+                "{} connect {}",
                 String::from_utf8_lossy(&grain),
                 c.display()
-            );
+            ));
         }
         let argv: Vec<&std::ffi::OsStr> = argv.iter().map(OsString::as_os_str).collect();
         let mut cmd = match command(policy, program.as_os_str(), &argv) {
@@ -235,7 +240,7 @@ impl Launcher {
         let pid_file = self.pids.join(format!("{name}.pid"));
         std::fs::write(&pid_file, format!("{}\n", child.id()))
             .map_err(|e| End::Pid(e.to_string()))?;
-        eprintln!("grain-launch: {name} started pid {}", child.id());
+        say(&format!("{name} started pid {}", child.id()));
         self.children
             .insert(grain.clone(), Grain { child, pid_file });
         let at_ms = self.now();
@@ -264,10 +269,10 @@ impl Launcher {
             if let Some(g) = self.children.remove(&grain) {
                 let _ = std::fs::remove_file(&g.pid_file);
             }
-            eprintln!(
-                "grain-launch: {} exited {status}",
+            say(&format!(
+                "{} exited {status}",
                 String::from_utf8_lossy(&grain)
-            );
+            ));
             let at_ms = self.now();
             self.report(Report::Exited {
                 grain,
@@ -331,11 +336,11 @@ impl Launcher {
                 grain,
                 grain_refusal,
             } => {
-                eprintln!(
-                    "grain-launch: {} refused {}",
+                say(&format!(
+                    "{} refused {}",
                     String::from_utf8_lossy(&grain),
                     grain_refusal.name()
-                );
+                ));
                 Ok(())
             }
         }

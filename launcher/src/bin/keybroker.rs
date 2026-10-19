@@ -125,10 +125,8 @@ impl End {
 
 fn main() -> ExitCode {
     let end = run();
-    // One write: the decider shares this stderr, and `eprintln!` may write a line in pieces that
-    // its line interleaves (GATES-6 saw `keybroker: hosting-broker: keybrokerGone sockDir …`).
-    let line = format!("keybroker: {}\n", end.describe());
-    let _ = std::io::stderr().write_all(line.as_bytes());
+    // One write (`nanodregg_launcher::say`): the decider shares this stderr.
+    nanodregg_launcher::say("keybroker", &end.describe());
     ExitCode::from(match end {
         End::Usage => keybroker_exit::USAGE,
         End::File(_, code) => code,

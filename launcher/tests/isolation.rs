@@ -230,8 +230,10 @@ fn plant_a_plan_reading_worlds_is_refused_foreign_path() {
     // HOSTING-25: a read outside the grain's own directory is the frame's own defect, refused before
     // the sandbox resolves anything (the sandbox's `Exposed`, the next barrier, is its own test:
     // sandbox/tests/confine.rs)
+    // one line: the refusal names the planted `worlds` path itself
     assert!(
-        log.contains("grain-launch: foreignPath") && log.contains(" worlds"),
+        log.lines()
+            .any(|l| l.starts_with("grain-launch: foreignPath ") && l.ends_with(" worlds")),
         "a plan reading worlds/ was not refused by name:\n{log}"
     );
     assert!(verdicts(&t).is_empty(), "the planted plan ran the probe");
@@ -544,8 +546,11 @@ fn a_launch_naming_another_grains_socket_is_refused_foreign_path() {
     };
     for root in ["broker", "member"] {
         let (err, code) = run(&["--resident", "--plant-foreign", root, B]);
+        // a whole line: grain-launch writes each line in one write, so the drive's own end
+        // (`hosting-drive: launcherGone`) can never land inside it
+        let refused = format!("grain-launch: foreignPath {A} {B}/");
         assert!(
-            err.contains(&format!("grain-launch: foreignPath {A} {B}/")),
+            err.lines().any(|l| l.starts_with(&refused)),
             "{root}: stderr: {err}"
         );
         assert!(!err.contains("report started"), "{root}: launched: {err}");
