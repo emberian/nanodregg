@@ -128,7 +128,8 @@ inductive Refusal (D : Type)
   | lawDenied (law : D) (reason : String)
   /-- LANG refused for a reason that is not a law: type error, budget, method error -/
   | program (reason : String)
-  /-- a state slot below `stateBase`, or an edit key past `Bounds.slotKeyLimit` -/
+  /-- a state slot below `stateBase` or not above the one before it, or an edit key past
+  `Bounds.slotKeyLimit` -/
   | stateKey (key : Nat)
   | tooManyLaws
   /-- a write or law change on a programmed object (its state moves only by its methods) -/

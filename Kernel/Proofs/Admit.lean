@@ -16,6 +16,15 @@ omit [Ord D] [DecidableEq D] in
 theorem Reject.name_injective (a b : Reject D) (h : a.name = b.name) : a.ctorIdx = b.ctorIdx := by
   cases a <;> cases b <;> simp_all [Reject.name] <;> rfl
 
+omit [Ord D] [DecidableEq D] in
+/-- A passing `noDup` found no duplicate. -/
+theorem noDup_none {α : Type} [Ord α] {l : List α} {e : α → Reject D}
+    (h : noDup l e = .ok ()) : firstDup l = none := by
+  unfold noDup at h
+  cases hf : firstDup l with
+  | none => rfl
+  | some a => rw [hf] at h; cases h
+
 /-- Every check `admit` runs, as facts; `raw` is what each touch leaves (`none`: unchanged). -/
 structure Checked (E : Env D) (w : World D) (t : Turn D) (posts : List (Post D)) : Prop where
   bounds : checkBounds t = .ok ()
@@ -272,6 +281,25 @@ theorem insertAll_get_of_not_mem {E : Env D} {c : D} :
       show (insertAll E (m.insert (trieSpec E) (.cell p.1) (.entry p.2)) rest).get _ _ = _
       rw [insertAll_get_of_not_mem h.2, Trie.get_insert, if_neg]
       intro he; injection he with he; exact h.1 he
+
+omit [Ord D] in
+/-- Writing entries leaves at a written id one of the entries written there. -/
+theorem insertAll_get_mem {E : Env D} {c : D} :
+    ∀ {m : Cells D} {ps : List (D × Entry)}, c ∈ ps.map Prod.fst →
+      ∃ e, (c, e) ∈ ps ∧ (insertAll E m ps).get (trieSpec E) (.cell c) = some (.entry e)
+  | m, [], h => by simp at h
+  | m, p :: rest, h => by
+      by_cases hr : c ∈ rest.map Prod.fst
+      · obtain ⟨e, he, hg⟩ := insertAll_get_mem (m := m.insert (trieSpec E) (.cell p.1) (.entry p.2)) hr
+        exact ⟨e, List.mem_cons_of_mem _ he, hg⟩
+      · have hc : p.1 = c := by
+          simp only [List.map_cons, List.mem_cons] at h
+          rcases h with h | h
+          · exact h.symm
+          · exact absurd h hr
+        refine ⟨p.2, by rw [← hc]; exact List.mem_cons_self, ?_⟩
+        show (insertAll E (m.insert (trieSpec E) (.cell p.1) (.entry p.2)) rest).get _ _ = _
+        rw [insertAll_get_of_not_mem hr, hc, Trie.get_insert_self]
 
 omit [Ord D] in
 /-- Writing cell entries leaves every nullifier slot alone. -/

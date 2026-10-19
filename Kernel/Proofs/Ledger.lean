@@ -447,7 +447,7 @@ theorem derive_value_born {X : Ctx D} {look : Pinned D} {rv : RowView D} {c : Ca
   generalize hb : c.unsigned.body = b at hr
   cases b with
   | invoke obj method args budget via =>
-      obtain ⟨_, _, _, _, _, _, _, _, _, _, _, _, _, hd⟩ := invoke_ok hr
+      obtain ⟨_, _, _, _, _, _, _, _, _, _, _, _, _, _, _, hd⟩ := invoke_ok hr
       have hz : ZeroBorn r.1 := by
         refine foldCalls_all (P := ZeroBorn) ?_ (fun wk a b r h => tree_zeroBorn _ wk a b r h) _ _ ?_ hd
         · intro a b ha hb p hp

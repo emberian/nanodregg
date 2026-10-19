@@ -76,25 +76,6 @@ private theorem eStep_trans {a b c : Option Entry} (h₁ : EStep a b) (h₂ : ES
     · exact .inr h₁
     · exact .inr (eAdv_trans h₁ h₂)
 
-omit [Ord D] in
-/-- Writing entries leaves at a written id one of the entries written there. -/
-private theorem insertAll_get_mem {E : Env D} {c : D} :
-    ∀ {m : Cells D} {ps : List (D × Entry)}, c ∈ ps.map Prod.fst →
-      ∃ e, (c, e) ∈ ps ∧ (insertAll E m ps).get (trieSpec E) (.cell c) = some (.entry e)
-  | m, [], h => by simp at h
-  | m, p :: rest, h => by
-      by_cases hr : c ∈ rest.map Prod.fst
-      · obtain ⟨e, he, hg⟩ := insertAll_get_mem (m := m.insert (trieSpec E) (.cell p.1) (.entry p.2)) hr
-        exact ⟨e, List.mem_cons_of_mem _ he, hg⟩
-      · have hc : p.1 = c := by
-          simp only [List.map_cons, List.mem_cons] at h
-          rcases h with h | h
-          · exact h.symm
-          · exact absurd h hr
-        refine ⟨p.2, by rw [← hc]; exact List.mem_cons_self, ?_⟩
-        show (insertAll E (m.insert (trieSpec E) (.cell p.1) (.entry p.2)) rest).get _ _ = _
-        rw [insertAll_get_of_not_mem hr, hc, Trie.get_insert_self]
-
 /-- What a touch leaves behind is at its own cell and strictly past the entry it was judged on: a
 write one version on, a retirement the tombstone, both of a live cell. -/
 private theorem touchCheck_adv {E : Env D} {w : World D} {x : Touch D} {p : Post D}
@@ -592,33 +573,6 @@ only when `compare` is lawful (`firstDup_none`). Under an `Ord` that never answe
 `[retire c, write c]` passes, `dropHeads` drops `c`'s heads, and the write leaves `c` live: its
 relations' floors read 0 again with `c` alive. So the rows half needs `Std.TransOrd D` and
 `Std.LawfulEqOrd D`, which the deployed digest has. -/
-
-omit [Ord D] [DecidableEq D] in
-private theorem noDup_none {α : Type} [Ord α] {l : List α} {e : α → Reject D}
-    (h : noDup l e = .ok ()) : firstDup l = none := by
-  unfold noDup at h
-  cases hf : firstDup l with
-  | none => rfl
-  | some a => rw [hf] at h; cases h
-
-omit [Ord D] [DecidableEq D] in
-private theorem mapEx_fwd {α β ε : Type} {f : α → Except ε β} :
-    ∀ {l : List α} {bs : List β}, mapEx f l = .ok bs → ∀ a ∈ l, ∃ b ∈ bs, f a = .ok b
-  | [], _, _, a, ha => by simp at ha
-  | c :: rest, bs, h, a, ha => by
-      unfold mapEx at h
-      cases hc : f c with
-      | error e => simp [hc] at h
-      | ok b =>
-          cases hr : mapEx f rest with
-          | error e => simp [hc, hr] at h
-          | ok bs' =>
-              simp only [hc, hr, Except.ok.injEq] at h
-              subst h
-              rcases List.mem_cons.mp ha with rfl | ha
-              · exact ⟨b, List.mem_cons_self, hc⟩
-              · obtain ⟨b', hb', hfb⟩ := mapEx_fwd hr a ha
-                exact ⟨b', List.mem_cons_of_mem _ hb', hfb⟩
 
 private theorem touchCheck_retire {E : Env D} {w : World D} {x : Touch D} {r : Option (Post D)}
     (h : touchCheck E w x = .ok r) (hret : x.act = .retire) : ∃ p, r = some p ∧ p.entry = .tomb := by

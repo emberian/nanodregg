@@ -29,9 +29,13 @@ def diffOps (old new : Slots) : List Op :=
   (new.filter fun p => old.get p.1 != some p.2).map (fun p => .set p.1 p.2) ++
   (old.filter fun p => (new.get p.1).isNone).map (fun p => .erase p.1)
 
-/-- A write of `ops` to `cell`, or no effect when there are none. -/
+/-- The receiver's effect on its own cell: a write of `ops`, or the cell kept when there are
+none. A receiver that read its cell claims it either way, so the act the Turn carries there is this
+one (`actFor` finds the first effect at a cell, and a second is `duplicateEffect`), never another
+receiver's of the same tree (`Kernel.Proofs.InvokeNext.invoke_next_slots`). A kept cell is the
+default of a pin, so the sealed Turn is the same as with no effect. -/
 def writeOf (cell : D) (ops : List Op) : List (D × Act) :=
-  if ops.isEmpty then [] else [(cell, .write ops)]
+  [(cell, if ops.isEmpty then .keep else .write ops)]
 
 def stateOf (cell : Cell) : Slots := cell.slots.filter fun p => stateBase ≤ p.1
 
@@ -50,8 +54,19 @@ def packageOf (X : Ctx D) (obj : D) (cell : Cell) : Except (Refusal D) (Option D
     | none => .error (.malformedCell obj slotPackage)
     | some d => .ok (some d)
 
-def checkState (state : Slots) : Except (Refusal D) Unit :=
-  forEx (fun p => req (stateBase ≤ p.1) (.stateKey p.1)) state
+/-- A state's keys from `lo` on: each at least the one before it plus one, the first at least `lo`;
+the first key out of place is named. -/
+def checkStateFrom (lo : Nat) : Slots → Except (Refusal D) Unit
+  | [] => .ok ()
+  | p :: rest => do
+      req (decide (lo ≤ p.1)) (.stateKey p.1)
+      checkStateFrom (p.1 + 1) rest
+
+/-- A state (a run's, or a birth's) is canonical state: every key at least `stateBase`, strictly
+ascending, the form a cell holds (`Slots.ascending`). So `diffOps` of it is a write whose cell
+reads back, key by key, exactly this state (`Kernel.Proofs.InvokeNext.diffOps_next`); a run
+returning one key twice is refused here, not written as one of its two values. -/
+def checkState (state : Slots) : Except (Refusal D) Unit := checkStateFrom stateBase state
 
 def checkLaws (look : Pinned D) (laws : List D) : Except (Refusal D) Unit := do
   req (laws.length ≤ stateBase - lawBase) .tooManyLaws

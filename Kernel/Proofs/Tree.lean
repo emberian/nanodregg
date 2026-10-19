@@ -3,8 +3,9 @@
 
 * `invoke_ok`: an admitted invoke spent the owner's authority (as `actor`), ran the program on
   what the pool had left, its used ticks within that (`overTicks` otherwise), returned at most
-  `callsMax` calls, and derived each of them by `sub` AS THE OBJECT, from a walk that has the
-  object visited and the used ticks spent.
+  `callsMax` calls and a canonical state (`checkState`) that the laws in force admit over the old
+  (`judge`), and derived each call by `sub` AS THE OBJECT, from a walk that has the object visited
+  and the used ticks spent.
 * `effect_as_signed` (KERNEL-28 (b)): a call of the tree derives exactly as the same Body signed
   at top level would, with the calling object as the actor: the deriver one level down is
   `dispatch` itself, the receiver the signed call goes through, and a kind an object may not
@@ -32,15 +33,18 @@ theorem invoke_ok {X : Ctx D} {look : Pinned D} {rv : RowView D} {c : Call D} {s
       X.program.run look rv p (stateOf cell) method args rq (min budget wk.pool) =
         .ok (new, calls, rows, used) ∧
       used ≤ min budget wk.pool ∧ (∀ e ∈ rows, e.1.under.1 = obj) ∧ calls.length ≤ Bounds.callsMax ∧
+      checkState (D := D) new = .ok () ∧
+      (∃ laws, lawsOf X obj cell = .ok laws ∧ X.program.judge look (some p) laws (stateOf cell) new rq = .ok ()) ∧
       deriveCalls sub obj ⟨[], writeOf obj (diffOps (stateOf cell) new), [], rows⟩
         { wk with visited := obj :: wk.visited, pool := wk.pool - used } calls = .ok r := by
   unfold invoke at h
   simp only [except_bind_ok] at h
-  obtain ⟨⟨⟩, hv, ⟨cell, p, rq⟩, hrun, ⟨new, calls, rows, used⟩, hp, ⟨⟩, hu, ⟨⟩, hrp, ⟨⟩, _, laws, _,
-    ⟨⟩, _, ⟨⟩, hc, h⟩ := h
+  obtain ⟨⟨⟩, hv, ⟨cell, p, rq⟩, hrun, ⟨new, calls, rows, used⟩, hp, ⟨⟩, hu, ⟨⟩, hrp, ⟨⟩, hst, laws, hl,
+    ⟨⟩, hj, ⟨⟩, hc, h⟩ := h
   rw [req_ok] at hv
   rw [req_ok, decide_eq_true_eq] at hu hc
-  refine ⟨by simpa using hv, cell, p, rq, new, calls, rows, used, hrun, hp, hu, fun e he => ?_, hc, h⟩
+  refine ⟨by simpa using hv, cell, p, rq, new, calls, rows, used, hrun, hp, hu, fun e he => ?_, hc, hst,
+    ⟨laws, hl, hj⟩, h⟩
   have := (forEx_ok.mp hrp) e he
   rwa [req_ok, decide_eq_true_eq] at this
 
@@ -109,7 +113,7 @@ theorem dispatch_all {P : Draft D → Prop} (hP : ∀ a b, P a → P b → P (a.
     (h : dispatch X look rv c sub wk actor b = .ok r) : P r.1 := by
   cases b with
   | invoke obj method args budget via =>
-      obtain ⟨_, _, _, _, _, _, _, _, _, _, _, hrp, _, hd⟩ := invoke_ok h
+      obtain ⟨_, _, _, _, _, _, _, _, _, _, _, hrp, _, _, _, hd⟩ := invoke_ok h
       exact foldCalls_all hP hs _ _ (hown _ _ _ hrp) hd
   | _ => exact hbase sub wk actor _ r hq rfl h
 
@@ -200,7 +204,7 @@ theorem invoke_records {X : Ctx D} {look : Pinned D} {rv : RowView D} {c : Call 
     {args : ByteArray} {budget : Nat} {via : Option D} {r : Draft D × Walk D}
     (h : invoke X look rv c sub wk actor obj method args budget via = .ok r) :
     obj ∉ wk.visited ∧ obj ∈ r.2.visited ∧ Grows wk r := by
-  obtain ⟨hfresh, _, _, _, _, _, _, used, _, _, _, _, _, hd⟩ := invoke_ok h
+  obtain ⟨hfresh, _, _, _, _, _, _, used, _, _, _, _, _, _, _, hd⟩ := invoke_ok h
   obtain ⟨⟨l, hl⟩, hn, hp⟩ := foldCalls_grows hs _ _ hd
   simp only at hl hp
   refine ⟨hfresh, by rw [hl]; simp, ⟨⟨l ++ [obj], by rw [hl, List.append_assoc]; rfl⟩,

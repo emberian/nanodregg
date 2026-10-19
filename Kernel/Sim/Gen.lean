@@ -1615,6 +1615,42 @@ def probeSigDomain (P : Params D) (st : State D) : State D :=
   let bare : Call D := { c with signature := P.sign f.key (X.unsignedBytes c.unsigned) }
   carryExpect P st st.host bare "sig-bare" "badSignature"
 
+/-- Canonical state (cv 01a15412-44e2): a state's keys strictly ascend from `stateBase`
+(`checkState`). On the Host's World, through `Receive.submit`, a create whose state is out of order or
+repeats a key is refused `stateKey` (it used to be admitted: `slotsOf` sorted it, the last duplicate
+winning); the control, the same keys ascending, is admitted. PLANT: the owner's invoke of a
+programmed object under a program whose run returns its state out of order is refused `stateKey`;
+the same program returning it ascending is admitted. Nothing is committed. Arms
+`state-order-create:stateKey`, `state-dup-create:stateKey`, `state-order-control:ok`,
+`state-order-run:stateKey`, `state-order-run-control:ok`. -/
+def probeStateOrder (P : Params D) (st : State D) : State D :=
+  let f := founder0 P st
+  let mk := fun (state : Slots) =>
+    signed P st f f.key (S.pinsFor P.env st.host [f.id]) (.create none [] state)
+  let st := carryExpect P st st.host (mk [(stateBase + 1, nat 1), (stateBase, nat 0)])
+    "state-order-create" "stateKey"
+  let st := carryExpect P st st.host (mk [(stateBase, nat 0), (stateBase, nat 1)])
+    "state-dup-create" "stateKey"
+  let st := carryExpect P st st.host (mk [(stateBase, nat 0), (stateBase + 1, nat 1)])
+    "state-order-control" "ok"
+  match st.progs with
+  | [] => st
+  | (obj, owner) :: _ =>
+    match st.members.find? (fun m => m.id = owner) with
+    | none => failWith st "probe state-order: the object's owner is not a member"
+    | some m =>
+      let planted := fun (out : Slots) =>
+        { P with ctx := { P.ctx with program := { P.ctx.program with
+            run := fun look rv pkg state method args r budget =>
+              (P.ctx.program.run look rv pkg state method args r budget).map
+                fun (_, calls, rows, used) => (out, calls, rows, used) } } }
+      let c := signed P st m m.key (S.pinsFor P.env st.host [m.id, obj])
+        (.invoke obj 0 (nat st.steps) 1000 none)
+      let st := carryExpect (planted [(stateBase + 1, nat 1), (stateBase, nat 0)]) st st.host c
+        "state-order-run" "stateKey"
+      carryExpect (planted [(stateBase, nat 0), (stateBase + 1, nat 1)]) st st.host c
+        "state-order-run-control" "ok"
+
 /-- The carry probe (KERNEL-29), at the end of every seed: the Host's World is carried under a new
 nonce. The carried World holds the same trie, allowance, height and journal (`carry_carried`)
 under a new origin; the last logged call is answered `replayed` at its height (`carry_replayed`:
@@ -2491,6 +2527,7 @@ def run (P : Params D) (seed : Nat) (steps : Nat) : State D :=
         | .ok _, .ok _ => failWith st s!"forged refusal at {i}: audit accepted"
         | .error _, _ => failWith st s!"forged refusal at {i}: fold refused it (not a forgery test)"
   let st := probeSigDomain P st
+  let st := probeStateOrder P st
   let st := probeCarry P st
   let st := probeCarryBudget P st
   let st := match ((probeRows P seed).run).run st with
@@ -2577,7 +2614,9 @@ def plantedArms : List String :=
    "pin-cell:same", "pin-cell-plant:caught", "pin-row:same", "pin-row-plant:caught",
    "pin-range:same", "pin-range-plant:caught", "rows-stem:ok",
    "hash-required:empty-per-insert", "proof-required:extra-sibling", "proof-required:sibling-byte",
-   "hash-required:rewalk"]
+   "hash-required:rewalk",
+   "state-order-create:stateKey", "state-dup-create:stateKey", "state-order-control:ok",
+   "state-order-run:stateKey", "state-order-run-control:ok"]
 
 /-- `--seeds N` (N ≥ 1) runs seeds `0 … N-1`; otherwise each argument is a seed; none is 64 seeds.
 `--harness-control` may stand anywhere (GATES-15). Anything else is refused (`none`): an argument
