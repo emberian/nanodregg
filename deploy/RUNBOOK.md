@@ -26,6 +26,26 @@ signed for another World is refused `wrongWorld` before its key or signature is 
   rebuilds, and every call of the old one lands in it (`replay-same-nonce-admitted-control`).
   Never pass an old `--nonce` to a genesis meant to be a new World.
 
+### 1a. The custody fence, as Ember ratified it (2026-10-21; HOSTING-17 addendum, decisions/hosting.md)
+
+The deployed fence is the one built through HOSTING-17/20/25/26/32, CLIENT-26..32 and OPS-15 (DECISIONS-20261021.md
+card 5), ratified as built. What the operator may rely on: `nd` runs `host serve`, keybroker, nd-members and every
+nd-supervise child; `nd-hosted` runs grain-launch, the controller and every grain, and is in no group of `nd`'s; the
+provider key is read by keybroker alone; member seeds and resident follower Stores live under `/srv/nd-members/L`,
+nd 0700, outside the hosted tree. Two widenings are named and nothing else widened: `signIncoming` (CLIENT-27, bounded:
+while a rotation is armed the precommitted next key may sign READ envelopes, never a call), and the TCB's two
+unverified crates `signal-hook` and `signal-hook-registry` (gates/tcb.tsv, CLIENT-30).
+
+NEVER RUN: hbox has one uid, so the 0660 group peer check (`peerRefused` for another uid) and the grain's `/home` hide
+have not run with a real second uid. Both are proved and planted with a configured other uid only. The first box
+with the real `nd` / `nd-hosted` split is where they run (STAND-INS B1 and B6).
+
+DEPLOYMENT SHAPE (Ember, 2026-10-21): the deployment will be inside its own VMs. That changes STAND-INS B1: the
+"deployment box" is a VM, so B1's system-unit run (sysusers, tmpfiles, `User=`, `RuntimeDirectory=`, NoNewPrivileges,
+nd-bwrap and AppArmor userns) is run INSIDE a VM image with two real uids, not on a shared host; the box window is
+the VM's. Nothing in the rendered units changes for it. The VM is a boundary outside the nd / nd-hosted fence, not a
+replacement for it: this RUNBOOK still installs both uids.
+
 ## 2. Start — RAN as user units (deploy/live on burst5: host units OPS-2 runs 1–4; keybroker, hosted follower, grain-launch OPS-3 run 2)
 
 Writer's node (systemd system unit, `deploy/units/linux/nd-host-serve.service`, emitted by

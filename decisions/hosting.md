@@ -2200,3 +2200,44 @@ The reader checked `step_quiet`'s `hq`: no branch is trivially true, and it is e
 - The plan, `decideCell` and `crashLooping` are unchanged. The window's length and restartsMax are as HOSTING-7 set them.
 
 **Breaks.** The report wire gains a case: a controller without it refuses a tick `badReport`. Both ends come from one tree and re-emit together (generated.rs, ROOT for CODEC). `Loop.State` gains `tickAt`, in memory only; nothing is persisted.
+
+
+## HOSTING-17 ADDENDUM · Ember ratified the custody fence as built (2026-10-21; ROOT for HOSTING, no HOSTING lane live; cv 01a155a1-f440; OPS-6 wrote it)
+
+**Decision.** Ember ratified, on DECISIONS-20261021.md card 5, the custody bundle AS BUILT: CLIENT-26..32, OPS-15,
+HOSTING-20/25/26/32 on top of HOSTING-17 (ratified 10-17). The fence:
+- `nd` runs host serve, keybroker and its decider, nd-members and every nd-supervise child (`nd --stdio`, `host follow`);
+  `nd-hosted` runs grain-launch, the controller and every grain; `nd` is in no group of `nd-hosted`'s, so a sandbox
+  escape is the hosted uid and reads no key and writes no Store (HOSTING-17 §1).
+- The provider key (`/etc/nd/keybroker/provider.key`, nd 0600) is read by keybroker alone; a grain gets allowances.
+  Member seeds are `/srv/nd-members/L/members/<id>` and resident follower Stores `/srv/nd-members/L/follow/<id>/store`,
+  nd 0700 outside the hosted tree (HOSTING-32), hidden from every plan; the stdio child cannot reach its follower's
+  Store or `follow` file.
+- A grain connects to exactly `[BROKER/<g>/broker.sock, MEMBER/<g>/nd.sock]`, 0660 nd:nd-hosted inside setgid 02710
+  directories, SO_PEERCRED uid and gid checked (`peerRefused`). host.sock stays nd-only: the less-trusted side never
+  initiates to the writer (HOSTING-20).
+- Narrowing items: CLIENT-26 (one spawner, sponsor key a chain-checked file), CLIENT-27 settlement, CLIENT-28 (one fd
+  per connection, fds_max 73), HOSTING-32. Keeping items: CLIENT-29/31/32, OPS-15, HOSTING-25/26.
+
+**The widenings, named.** (1) `signIncoming` (CLIENT-27): while a rotation is ARMED the precommitted next key may sign
+READ envelopes, never a call (stdio custody refuses), so a landed rotation can confirm through a Host answering
+`unknownKey`. It is the one new key use in the bundle and it is bounded; the alternative was a lockout. (2) The TCB
+grows by two crates, `signal-hook` and `signal-hook-registry` (gates/tcb.tsv, trusted-unverified, CLIENT-30). Nothing
+else widened. HOSTING-20's second resident-initiated socket widened the surface by one, already the 4th point of the
+HOSTING-17 bundle.
+
+**Never run.** hbox has one uid. `peerRefused` for another uid and the grain's `/home` hide have never run with a real
+second uid; both are proved and planted with a configured other uid. The member follower's policy still comes from Rust
+and unit text, not a Lean plan (cv 01a14df6-0647). A real two-uid box is the first thing a deployment buys.
+
+**Deployment shape (Ember, same day).** "Deployment will be inside its own VMs." This changes STAND-INS B1 (the
+deployment box is a VM with the real nd / nd-hosted uids, so B1, B3 and B6 run in one VM window) and does not retire the
+uid split: the VM is a boundary outside the fence.
+
+**Design question filed (not decided).** Ember: "more seamless integration eventually." Question: with a VM per
+deployment, does the nd / nd-hosted split, the 02710 socket directories and the hand-run operator joins (OPS-15) stay
+as they are, or do they fold into the VM boundary and a provisioning step? Trigger (proposed by OPS-6, ROOT to confirm):
+the first B1 window run inside a VM, when the fence has been exercised with two real uids and the operator steps can be
+counted; file a `cv task` at that run. Until then nothing changes.
+
+**Flag day.** None. Documentation only.
