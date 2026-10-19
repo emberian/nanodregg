@@ -2708,3 +2708,41 @@ It replaces the 2^28 literal, about 34% of it. Scaling PERF-2's 120.7 s clock (a
 **Meta-critique.** The `+ 4` stood because nothing consumed it: a fact no proof reads is a comment that compiles. The fix is not the digit. The serve now has a consumer chain (`walk_serves` and `build_empty` reading the walk itself), and the twin that kept the Protocol proof honest is gone, so a change to the walk breaks the proofs at their owner.
 
 **Flag day.** None. The theorems move, and `walkStep` is named with the same body.
+
+## HOST-61 · a page from before the Store's log is refused `beforeLog` by name, never served under steps nobody asked for (2026-10-21, HOST-15; ROOT approved; cv 01a15180-9499, found in HOST-60)
+
+**The defect.** The loop indexes each record at the World's step count before it (Host/Loop.lean:324). KERNEL's carry sets an imported World's step count to its height (`carryWorld`, `Host.Cli.importWorld_steps`). So a Store `host import` makes from a World at step N indexes its first record at N. A `log` page from `start < N` got entry 0 from `locate` (none at or below `start`), and `build` served steps N+1… with step count N + events. Follow's `absorbPage` then refused it `chainMismatch`. With no record yet (`count = 0`), the page was the empty page at the World's step count N, which follow refuses the same way. `host check --anchor` at an anchor before N read that chain and judged a step it never saw. The same shape has a second source: follow's adopt seals with `index := indexStart` at the adopted base's step N > 0 (Host/Follow.lean:123, :131), so an adopted follower Store has count 0 and steps N. The empty page at N it served for `start < N` was refused the same way. All of this failed closed, but under a false name: the refusal-renders-as-the-verdict class.
+
+**Decision.** `build` refuses `Page.Fault.beforeLog start first` in two cases:
+- no index under a World past `start` (`first` = the World's step count);
+- a located entry past `start` (`first` = its step count).
+
+The fault takes `Status.beforeLog`, exit 60, fatal. A writer answers the page `refused beforeLog` and keeps serving; only `host check --anchor` exits with it. EXITS.md and the three Host unit files are re-emitted (`RestartPreventExitStatus` gains 60). The operator text is in Ops/Units.lean.
+
+**Theorems.**
+- `build_located`: its first arm is now `now.1 ≤ start` alone, and the walk arm adds `e.steps ≤ start`. Every page `build` serves is walked from an entry at or below `start`.
+- `build_empty` now also gives `a.steps ≤ start`: an empty page states no step past the one asked for. With HOST-60, an empty page was never full, holds no bytes, and moves no member.
+- `build_beforeLog` and `build_beforeLog_none`: the refusal by name, in each case.
+- `build_never_served` loses its now-unneeded `count ≠ 0` premise.
+- `Host.Cli.importWorld_steps`: `importWorld … = .ok (w, r) → w.steps = w.height`, over any Ctx.
+
+**Plant.** host-sim `plant-before-log` uses a Store at step 7, the shape import makes (`importWorld_steps`).
+- With no record yet, a page from step 3 is refused `beforeLog 3 7`; the control, from step 7, is the empty page at 7.
+- With one Turn served into it through the loop, the deployed `Page.build` from step 3 is refused `beforeLog`, and the control page from step 7 serves the one step. Each arm has a tooth: with the entry guard removed it goes RED with "served 1 events, steps 8" (the page before this change), and with the count-0 arm restored to the empty page it goes RED with "served 0 events, steps 7". host-sim seeds 1–3 and host-file-sim seed 1 pass.
+
+**Critique.**
+- The plant does not run `Cli.importWith`. That function is fixed at the deployed Ctx, whose calls need real signatures to append a step. The plant builds the World import makes, and `importWorld_steps` (over any Ctx) is the theorem that this is the shape. It is a theorem and a hand-built World, not one run. No proof composes `importWorld_steps` with genesis and Loop.lean:324 into "the first entry is at N"; that step is read off the code.
+- `Fault.beforeLog`'s status is fatal, like `pastEnd`. For a page it is a reply refusal, so the class matters only for `host check --anchor`.
+- Follow does not yet act on the name. A member that receives `beforeLog` reports it by the Host's name, rather than adopting the base on its own. PROTOCOL-19 files acting on it (adopt, then page) as its own cv task, after the BEHIND finality.
+
+**Law-6 read (second agent, read-only, with the DISJUNCT check): LAND-WITH-FIXES.**
+- No vacuity, and no disjunct provable alone. `build_beforeLog`'s premises force k = 0 (`locate` moves only to entries at or below `start`); the plant is an instance.
+- The count = 0 arm takes away no correct page. Seals keep the count cumulative (Host/Loop.lean:219); only genesis and follow's adopt reset it, and both are a log that begins at the World's step.
+- `chainAt`, both pagers and the rows carry row lose no correct page.
+- Taken:
+  - the adopted-follower shape is named everywhere the text said only import (Page, Exit, Ops/Units, EXITS.md, this decision);
+  - the `Fault.beforeLog` docstring no longer claims the member adopts (follow reports the name; PROTOCOL-19 files acting on it);
+  - this entry is in decisions/host.md;
+  - a count-0 check is in the plant.
+
+**Flag day.** A page that was served mislabeled is now refused by name. Exit 60 is new, and the deploy/units files are re-emitted. Nothing that was served correctly moves.

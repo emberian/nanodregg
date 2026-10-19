@@ -189,4 +189,23 @@ theorem join_budget_reaches {trusted inv : ByteArray} {i : Protocol.Invite.Invit
   let ⟨hc, hs, hr⟩ := accept_premises h
   budget_reaches hb hc hs hr hf
 
+/-- **An imported World's log begins at its carried height** (HOST-61): KERNEL's carry sets the
+step count to the height (`carryWorld`), so a Store `import` makes from a World at height N indexes
+its first record at step N, and a page from before N is refused `beforeLog`
+(`Host.Page.build_beforeLog`). Over any Ctx and digest codec. -/
+theorem importWorld_steps {T : Type} [Ord T] [DecidableEq T] {X : Receive.Ctx T} {dc : Codec.Stream T}
+    {name nonce : ByteArray} {want : Digest} {f : ByteArray} {w : World T} {r : Carry.Read T}
+    (h : Carry.importWorld X dc name nonce want f = .ok (w, r)) : w.steps = w.height := by
+  unfold Carry.importWorld at h
+  split at h
+  · cases h
+  · cases h
+  · split at h
+    · rename_i w₀ hw
+      cases h
+      unfold Carry.world at hw
+      obtain ⟨-, rfl⟩ := Receive.carry_ok.mp hw
+      rfl
+    all_goals cases h
+
 end Nanodregg.Host.Cli

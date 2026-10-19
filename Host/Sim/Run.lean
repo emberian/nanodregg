@@ -949,6 +949,39 @@ def judgePlant (failures : IO.Ref Nat) : IO Unit := do
   check s!"{p}: the follower's fold refuses the lying writer's Turn at step 0 `refusedFinal` ({shownF})"
     (match fold w2 o3.staged with | .error (.step 0 r) => r.name == "refusedFinal" | _ => false) failures
 
+/-- plant-before-log (HOST-61): a Store whose log begins at step 7, the shape `host import` makes
+from a World at height 7 (`Host.Cli.importWorld_steps`: the carry sets steps to the height), one
+Turn served into it through the loop, then paged through the deployed `Page.build` and
+`Page.budget`. A page from step 3 is refused `beforeLog` by name: before HOST-61 it was served as
+steps 8.. with the step count 8, which follow refuses `chainMismatch` (a false name). The control,
+the page from step 7, serves the one step. -/
+def beforeLogPlant (seed : Nat) (failures : IO.Ref Nat) : IO Unit := do
+  let p := "plant-before-log"
+  let n := 7
+  let w₀ : World Nat := { genesis with height := n, steps := n }
+  match memGenesis keys cadence world recorder.mark originChain foldStep w₀ with
+  | .error f => check s!"{p}: genesis at step {n} ({f.name})" false failures
+  | .ok (gd, gb, gr) =>
+    let shown (x : Except Page.Fault Page.Acc) : String := match x with
+      | .ok a => s!"served {a.events.size} events, steps {a.steps}"
+      | .error f => s!"refused {f.name}"
+    -- no record yet (count 0): the World is at step n
+    let none0 := (memPage gb.index gd.synced gr Page.budget 3).1
+    let at0 := (memPage gb.index gd.synced gr Page.budget n).1
+    check s!"{p}: with no record yet, a page from step 3 is refused `beforeLog` ({shown none0})"
+      (match none0 with | .error (.beforeLog 3 m) => m == n | _ => false) failures
+    check s!"{p}-control: with no record yet, the page from step {n} is the empty page at {n} ({shown at0})"
+      (match at0 with | .ok a => a.events.size == 0 && a.steps == n | _ => false) failures
+    let r ← serveFrom cadence seed [submitFrame 1 (.turn (mkTurn 4242 0 (n + 1000) []))] none gd gb gr
+    let early := (memPage r.bases.index r.disk.synced r.resident Page.budget 3).1
+    let atLog := (memPage r.bases.index r.disk.synced r.resident Page.budget n).1
+    check s!"{p}: the Store's World is at step {n + 1} with one record ({r.resident.world.steps}, {r.resident.sealed.index.count + r.resident.index.size} entries)"
+      (r.resident.world.steps == n + 1 && r.resident.sealed.index.count + r.resident.index.size == 1) failures
+    check s!"{p}: a page from step 3 of a Store whose log begins at step {n} is refused `beforeLog` ({shown early})"
+      (match early with | .error (.beforeLog 3 m) => m == n | _ => false) failures
+    check s!"{p}-control: the page from step {n} serves the one step ({shown atLog})"
+      (match atLog with | .ok a => a.events.size == 1 && a.steps == n + 1 | _ => false) failures
+
 /-- The plants that need only the seed and the scenario: one call in `run`, whose `do` block is at
 the elaborator's depth. -/
 def laterPlants (seed : Nat) (frames : List Frame) (failures : IO.Ref Nat) : IO Unit := do
@@ -958,6 +991,7 @@ def laterPlants (seed : Nat) (frames : List Frame) (failures : IO.Ref Nat) : IO 
   sealPlants seed frames failures
   pageIoPlant seed failures
   sealCountPlant seed frames failures
+  beforeLogPlant seed failures
   judgePlant failures
 
 /-- `host-sim [SEED] [--harness-control]`; any other argument is refused (exit 2), never read as seed 1.

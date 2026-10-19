@@ -54,6 +54,11 @@ inductive Fault where
   | pastEnd (start total : Nat)
   /-- the base file is shorter than its World: it changed under the read -/
   | shortBase
+  /-- a `log` page from `start` before `first`, the step count this Store's log begins at (a Store
+  `host import` made from a World at step `first`, or a follower Store that adopted a base there,
+  Host/Follow.lean): the steps through `first` are in no record here, so no page from `start` can be
+  served (HOST-61) -/
+  | beforeLog (start first : Nat)
   deriving Repr
 
 def Fault.name : Fault → String
@@ -62,6 +67,7 @@ def Fault.name : Fault → String
   | .tooLarge => "tooLarge"
   | .pastEnd _ _ => "pastEnd"
   | .shortBase => "shortBase"
+  | .beforeLog _ _ => "beforeLog"
 
 /-- The deployed page budget: a reply frame, less room for the counts, the positions and the chain. -/
 def budget : Nat := Protocol.Bounds.frameBytesMax - 1024
@@ -180,14 +186,20 @@ def walk (E : Env D) (dc : Stream D) (s : Log.Sealer) (recordMax budget : Nat) (
 /-- A page from `start`. `get`/`count` are the index (`entryAt` over `index.log` and the loop's
 entries), `endOff` the durable end of the segment, `now` the World's step count and chain (an
 empty page states them). The page is built from ONE entry, the one `locate` returns, and the segment
-bytes after it. -/
+bytes after it. A page from before the log is refused `beforeLog` by name (HOST-61): no index
+(`count = 0`) under a World past `start`, or a located entry past `start` (`locate` returns entry 0
+when none is at or below it). Both are a Store whose log begins after `start` (one `host import` made
+at a later step, or a follower Store that adopted a base there), and serving it would state steps
+the member never asked for. -/
 def build (E : Env D) (dc : Stream D) (digestOf : ByteArray → Option D) (s : Log.Sealer)
     (recordMax budget : Nat) (read : Nat → Nat → m ByteArray) (get : Nat → m (Except Fault Entry))
     (count endOff : Nat) (now : Nat × ByteArray) (start : Nat) : m (Except Fault Acc) := do
-  if now.1 ≤ start ∨ count = 0 then return .ok ⟨#[], 0, now.1, now.2, false⟩
+  if now.1 ≤ start then return .ok ⟨#[], 0, now.1, now.2, false⟩
+  if count = 0 then return .error (.beforeLog start now.1)
   match ← locate get count start with
   | .error f => return .error f
   | .ok (k, e) =>
+    if start < e.steps then return .error (.beforeLog start e.steps)
     match digestOf e.chain with
     | none => return .error (.badIndex k)
     | some c =>

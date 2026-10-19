@@ -301,6 +301,7 @@ def hostAction : Status → String
   | .badIndex => "an index.log entry a page read does not verify at its position (HOST-33); an exit only of `host check --anchor` (a writer answers that page `refused badIndex` and keeps serving): run `host check` on the stopped Store (it names the entry, indexCorrupt), restore index.log from this Store's own backup, and report to HOST"
   | .pageTooLarge | .pastEnd => "a page fault: report to HOST"
   | .shortBase => "the base changed under a read: run `host check`; if it repeats, report to HOST"
+  | .beforeLog => "a step before the one this Store's log begins at (a Store `host import` made, or a follower Store that adopted a base, at a later step); an exit only of `host check --anchor` with an anchor before that step (a writer answers such a page `refused beforeLog` and keeps serving): check against an anchor at or after the step the Store's log begins at"
   | .reopenFailed => "the in-process reopen after a fuel round refused: run `host check STORE`; restore if it refuses"
   | .reopenDiverged => "a defect in open or append: keep the Store untouched, report to HOST"
   | .lifetime => "automatic: the restart budget is spent (not reached before the reader's own lifetime)"

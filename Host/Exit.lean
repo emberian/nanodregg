@@ -85,6 +85,9 @@ inductive Status where
   | pastEnd
   /-- the base file is shorter than its World: it changed under the read -/
   | shortBase
+  /-- a `log` page or an anchor from before the step this Store's log begins at (a Store imported, or
+  a follower Store that adopted a base, at a later step; HOST-61) -/
+  | beforeLog
   /-- a fuel restart's in-process reopen refused (D4) -/
   | reopenFailed
   /-- a fuel restart reopened a state other than the one the loop held: a defect in open or append -/
@@ -146,7 +149,7 @@ def all : List Status :=
    segmentShort, tailTooLong, foreignSegment, corrupt, record, tagWidth, behindAnchor, chainMismatch,
    badIndex, pageTooLarge, pastEnd, shortBase, reopenFailed, reopenDiverged, lifetime, stream, noThreads,
    shapeMismatch, foreignOrigin, indexShort, indexCorrupt, entryUnfit, indexMoved, carryMismatch,
-   inviteRefused, positionUnfit, allowancePastBound, potentialPastBound]
+   inviteRefused, positionUnfit, allowancePastBound, potentialPastBound, beforeLog]
 
 def code : Status → Nat
   | eof => 0
@@ -196,6 +199,7 @@ def code : Status → Nat
   | positionUnfit => 56
   | allowancePastBound => 58
   | potentialPastBound => 59
+  | beforeLog => 60
 
 def cls : Status → ExitClass
   | eof => .done
@@ -205,7 +209,7 @@ def cls : Status → ExitClass
   | segmentShort | tailTooLong | foreignSegment | corrupt | record | tagWidth | behindAnchor | chainMismatch
   | badIndex | pageTooLarge | pastEnd | shortBase | reopenFailed | reopenDiverged | noThreads
   | shapeMismatch | foreignOrigin | indexShort | indexCorrupt | entryUnfit | carryMismatch | inviteRefused | positionUnfit
-  | allowancePastBound | potentialPastBound => .fatal
+  | allowancePastBound | potentialPastBound | beforeLog => .fatal
 
 /-- The name printed beside the code (`refused NAME` / `exit NAME` on stderr). -/
 def name (s : Status) : String := ((toString (repr s)).splitOn ".").getLast!
@@ -253,6 +257,7 @@ def Page.Fault.status : Page.Fault → Status
   | .tooLarge => .pageTooLarge
   | .pastEnd _ _ => .pastEnd
   | .shortBase => .shortBase
+  | .beforeLog _ _ => .beforeLog
 
 def Exit.status : Exit → Status
   | .eof => .eof

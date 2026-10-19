@@ -56,6 +56,7 @@ code space holds both tables: `host` (Host.Status, below 64) and nd-supervise's 
 | 56 | positionUnfit | fatal | stopped (RestartPreventExitStatus) | a defect: a seal at a segment position past u64, which a base cannot spell (HOST-46); nothing was written; keep the Store untouched, report to HOST |
 | 58 | allowancePastBound | fatal | stopped (RestartPreventExitStatus) | genesis/join/import refused before writing: the World's allowance is past this binary's allowanceMax (a forged or foreign lineage, or an invitation made with another budget); do not import it (nothing was written) |
 | 59 | potentialPastBound | fatal | stopped (RestartPreventExitStatus) | genesis/join/import refused before writing: the World's weight and allowance together (Kernel.potential) are past this binary's potentialMax, the weight bound its budget admits (a carried World heavier than a lineage that began under this budget can become, or a genesis past genesisWeightMax; rebuild the genesis with fewer or lighter founders) (nothing was written) |
+| 60 | beforeLog | fatal | stopped (RestartPreventExitStatus) | a step before the one this Store's log begins at (a Store `host import` made, or a follower Store that adopted a base, at a later step); an exit only of `host check --anchor` with an anchor before that step (a writer answers such a page `refused beforeLog` and keeps serving): check against an anchor at or after the step the Store's log begins at |
 
 ## nd-supervise
 

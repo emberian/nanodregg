@@ -208,9 +208,11 @@ pub mod host_status {
     pub const POSITION_UNFIT: u8 = 56;
     pub const ALLOWANCE_PAST_BOUND: u8 = 58;
     pub const POTENTIAL_PAST_BOUND: u8 = 59;
+    pub const BEFORE_LOG: u8 = 60;
     pub const ALL: &[u8] = &[
         0, 3, 4, 5, 8, 9, 10, 11, 12, 13, 6, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 29, 26, 27,
         28, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 30, 45, 46, 47, 48, 49, 44, 56, 58, 59,
+        60,
     ];
 }
 

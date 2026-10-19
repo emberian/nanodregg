@@ -19,6 +19,9 @@ built from ONE of them, the one `locate` returns.
   that one entry, so no page is built from an entry whose tag failed;
 * `build_badIndex` — the tooth: when the first entry a search reads does not read back, the page
   is refused `badIndex 0`, by name.
+* `build_beforeLog` / `build_beforeLog_none` — a page from before the Store's log (its first
+  record past `start`, or no record under a World past it) is refused `beforeLog`, by name, so a
+  page `build` serves is walked from an entry at or below `start` (`build_located`, HOST-61).
 
 A page and the record its follower writes from it (HOST-11 L41: a follower appends one page's
 Turns as ONE record, and a record's decode refuses more than `recordTurnsMax` Turns):
@@ -105,22 +108,28 @@ theorem build_located {D : Type} [Ord D] [DecidableEq D] {E : Kernel.Env D} {dc 
     {read : Nat → Nat → Id ByteArray} {get : Nat → Id (Except Fault Entry)} {count endOff : Nat}
     {now : Nat × ByteArray} {start : Nat} {a : Acc}
     (h : build E dc digestOf s recordMax budget read get count endOff now start = .ok a) :
-    ((now.1 ≤ start ∨ count = 0) ∧ a = ⟨#[], 0, now.1, now.2, false⟩) ∨
-      ∃ k e c, locate get count start = .ok (k, e) ∧ get k = .ok e ∧ digestOf e.chain = some c ∧
+    (now.1 ≤ start ∧ a = ⟨#[], 0, now.1, now.2, false⟩) ∨
+      ∃ k e c, locate get count start = .ok (k, e) ∧ get k = .ok e ∧ e.steps ≤ start ∧
+        digestOf e.chain = some c ∧
         walk E dc s recordMax budget read endOff start (count - k) e.offset c
           { steps := e.steps, chain := e.chain } = .ok a := by
   simp only [build] at h
   split at h
   · rename_i hc
     simp only [pure] at h; cases h; exact Or.inl ⟨hc, rfl⟩
-  · simp only [bind] at h
-    split at h
+  · split at h
     · simp only [pure] at h; cases h
-    · rename_i k e hl
+    · simp only [bind] at h
       split at h
       · simp only [pure] at h; cases h
-      · rename_i c hd
-        exact Or.inr ⟨k, e, c, hl, locate_got hl, hd, h⟩
+      · rename_i k e hl
+        split at h
+        · simp only [pure] at h; cases h
+        · rename_i hle
+          split at h
+          · simp only [pure] at h; cases h
+          · rename_i c hd
+            exact Or.inr ⟨k, e, c, hl, locate_got hl, Nat.not_lt.mp hle, hd, h⟩
 
 /-- **No page is built from an entry whose tag failed** (HOST-33, condition 2). A page `build`
 serves over `entryAt` (the deployed pager's getter) after `start` is the walk of the segment from
@@ -132,14 +141,14 @@ theorem build_never_served {D : Type} [Ord D] [DecidableEq D] {E : Kernel.Env D}
     {read : Nat → Nat → Id ByteArray} {keys : Keys} {rd : Nat → Nat → ByteArray} {disk : Nat}
     {mem : Array Entry} {count endOff : Nat} {now : Nat × ByteArray} {start : Nat} {a : Acc}
     (h : build E dc digestOf s recordMax budget read (entryAt keys (fun o l => pure (rd o l)) disk mem)
-      count endOff now start = .ok a) (hs : start < now.1) (hc : count ≠ 0) :
+      count endOff now start = .ok a) (hs : start < now.1) :
     ∃ k e c,
       ((k < disk ∧ Entry.bytes keys k e = rd (k * entryBytes keys) (entryBytes keys)) ∨
         (disk ≤ k ∧ mem[k - disk]? = some e)) ∧
       digestOf e.chain = some c ∧
       walk E dc s recordMax budget read endOff start (count - k) e.offset c
         { steps := e.steps, chain := e.chain } = .ok a := by
-  rcases build_located h with ⟨hc', _⟩ | ⟨k, e, c, _, hg, hd, hw⟩
+  rcases build_located h with ⟨hc', _⟩ | ⟨k, e, c, _, hg, _, hd, hw⟩
   · omega
   · refine ⟨k, e, c, ?_, hd, hw⟩
     rcases entryAt_ok hg with ⟨hk, hr⟩ | hm
@@ -157,7 +166,7 @@ theorem build_badIndex {D : Type} [Ord D] [DecidableEq D] (E : Kernel.Env D) (dc
     build E dc digestOf s recordMax budget read (entryAt keys (fun o l => pure (rd o l)) disk mem)
       count endOff now start = .error (.badIndex 0) := by
   simp only [build, locate, entryAt, bind, pure, Nat.zero_mul, if_pos hd, hr]
-  rw [if_neg (by omega)]
+  rw [if_neg (by omega), if_neg hc]
 
 /-! ## A page holds at most one record's steps -/
 
@@ -218,7 +227,7 @@ theorem build_events_le {D : Type} [Ord D] [DecidableEq D] {E : Kernel.Env D} {d
     {now : Nat × ByteArray} {start : Nat} {a : Acc}
     (h : build E dc digestOf s recordMax budget read get count endOff now start = .ok a) :
     a.events.size ≤ recordTurnsMax := by
-  rcases build_located h with ⟨_, rfl⟩ | ⟨k, e, c, _, _, _, hw⟩
+  rcases build_located h with ⟨_, rfl⟩ | ⟨k, e, c, _, _, _, _, hw⟩
   · show 0 ≤ recordTurnsMax; exact Nat.zero_le _
   · exact walk_events_le _ _ _ _ _ (Nat.zero_le _) hw
 
@@ -552,11 +561,34 @@ theorem build_empty {D : Type} [Ord D] [DecidableEq D] {E : Kernel.Env D} {dc : 
     {read : Nat → Nat → Id ByteArray} {get : Nat → Id (Except Fault Entry)} {count endOff : Nat}
     {now : Nat × ByteArray} {start : Nat} {a : Acc} (hB : Kernel.Bounds.eventBytesMax + 5 ≤ budget)
     (h : build E dc digestOf s recordMax budget read get count endOff now start = .ok a)
-    (he : a.events = #[]) : a.full = false ∧ a.bytes = 0 := by
-  rcases build_located h with ⟨_, rfl⟩ | ⟨k, e, c, _, _, _, hw⟩
-  · exact ⟨rfl, rfl⟩
-  · obtain ⟨hf, hb, _⟩ := walk_empty hd hB _ _ _ _ _ (fun _ => ⟨rfl, rfl⟩) hw he
-    exact ⟨hf, hb⟩
+    (he : a.events = #[]) : a.full = false ∧ a.bytes = 0 ∧ a.steps ≤ start := by
+  rcases build_located h with ⟨hn, rfl⟩ | ⟨k, e, c, _, _, hle, _, hw⟩
+  · exact ⟨rfl, rfl, hn⟩
+  · obtain ⟨hf, hb, hk⟩ := walk_empty hd hB _ _ _ _ _ (fun _ => ⟨rfl, rfl⟩) hw he
+    exact ⟨hf, hb, by simp only at hk; omega⟩
+
+/-- **A page from before the log is refused by name** (HOST-61): with no index under a World past
+`start`, `build` refuses `beforeLog start now.1`. -/
+theorem build_beforeLog_none {D : Type} [Ord D] [DecidableEq D] (E : Kernel.Env D) (dc : Codec.Stream D)
+    (digestOf : ByteArray → Option D) (s : Log.Sealer) (recordMax budget : Nat)
+    (read : Nat → Nat → Id ByteArray) (get : Nat → Id (Except Fault Entry)) (endOff : Nat)
+    (now : Nat × ByteArray) (start : Nat) (hs : start < now.1) :
+    build E dc digestOf s recordMax budget read get 0 endOff now start = .error (.beforeLog start now.1) := by
+  simp only [build, pure, if_neg (Nat.not_le.mpr hs), ↓reduceIte]
+  rfl
+
+/-- **A page from before the log is refused by name** (HOST-61): when the entry `locate` returns
+lies past `start` (entry 0, the log beginning after it), `build` refuses `beforeLog start e.steps`
+and walks nothing. -/
+theorem build_beforeLog {D : Type} [Ord D] [DecidableEq D] (E : Kernel.Env D) (dc : Codec.Stream D)
+    (digestOf : ByteArray → Option D) (s : Log.Sealer) (recordMax budget : Nat)
+    (read : Nat → Nat → Id ByteArray) (get : Nat → Id (Except Fault Entry)) (count endOff : Nat)
+    (now : Nat × ByteArray) (start k : Nat) (e : Entry) (hs : start < now.1) (hc : count ≠ 0)
+    (hl : locate get count start = .ok (k, e)) (he : start < e.steps) :
+    build E dc digestOf s recordMax budget read get count endOff now start = .error (.beforeLog start e.steps) := by
+  simp only [build, bind, pure, if_neg (Nat.not_le.mpr hs), if_neg hc]
+  rw [show (locate get count start : Id _) = .ok (k, e) from hl]
+  simp only [if_pos he]
 
 end Nanodregg.Host.Page
 
