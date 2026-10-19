@@ -5,9 +5,9 @@
 `eventBytesMax + 5` (`budget_fits_event` for the deployed one) that never happens to an empty
 page: the first record past `start` the walk reads, the page serves from (`walk_serves`), and a
 page `build` returns empty was never full and holds no bytes (`build_empty`). It ran out of segment.
-That a page short of the tip is non-empty also needs the Store's index-segment coherence, which
-this file does not prove (cv 01a15180-9499). PROTOCOL's follow refuses an empty page short of the
-tip `badResult`.
+That a page short of the tip is non-empty also needs the Store's index-segment coherence: that
+is `Host.Proofs.Coherence` (`Page.build_nonempty`, `Deployed.page_nonempty`; cv 01a15180-9499).
+PROTOCOL's follow refuses an empty page short of the tip `badResult`.
 
 HOST-33 (condition 2, never-served): a page meets index entries only through `entryAt`, and is
 built from ONE of them, the one `locate` returns.
@@ -245,9 +245,9 @@ to is at most `eventBytesMax` bytes (`Codec.Kernel.batch_lawfulOn`), and a page 
 * `walkTurnsAt_one_short` / `walk_one_short` — the tooth: at `+ 4`, a first event of the codec's
   full size leaves the page `full` and EMPTY.
 
-Not proved here: that the segment from the entry `locate` returns holds the step `start + 1` (the
-Store's index-segment coherence), which `build_empty` would need to conclude a page short of the tip
-is non-empty. -/
+That the segment from the entry `locate` returns holds the step `start + 1` (the Store's
+index-segment coherence), and so that a page short of the tip is non-empty, is
+`Host.Proofs.Coherence` (`Page.build_nonempty`). -/
 
 /-- **A page's event is at most the codec's bound and its tag**: an event a record decodes to
 (`Step.Fits`: a Turn's `event` at most `eventBytesMax`, a refusal's at most `callMax`, the same

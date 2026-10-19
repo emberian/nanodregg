@@ -2746,3 +2746,51 @@ The fault takes `Status.beforeLog`, exit 60, fatal. A writer answers the page `r
   - a count-0 check is in the plant.
 
 **Flag day.** A page that was served mislabeled is now refused by name. Exit 60 is new, and the deploy/units files are re-emitted. Nothing that was served correctly moves.
+
+## HOST-62 · every index entry points at its own record: the index-segment coherence, proved; a page short of the tip is non-empty (2026-10-21, HOST-16; cv 01a15180-9499)
+
+**The gap.** A page locates ONE entry and walks the segment from it. HOST-60's `build_empty` showed that an empty page was never stopped for room. It did not conclude that a page short of the tip is non-empty, because nothing proved that the entry `locate` returns points at a record holding step `start + 1`. HOST-61 refused the entry-0-past-`start` case by name, and its theorem did not say when that refusal fires. Both rested on a fact read off the code: each entry is the step count and chain before its record and the offset of its frame.
+
+**Decision.** State the coherence as a predicate over exactly what a page consumes, and prove that every Store written at an open has it.
+- `Page.Indexes dc s recordMax read L tip`: entry i's offset holds a frame that verifies against the 32 bytes before it (`Page.frameOf`, the page's own reader) and decodes to steps `ts`. The next entry, or the tip after the last, sits at that frame's end and at the entry's step count plus `|ts|`. The tip is the durable end and the World's step count.
+- `StoreIndexes keys c world mark origin dc file I S` (deployed: `Deployed.Coherent`): the base reads, its `indexCount` entries read back at their positions under the Store's index key as `L`, and `L` is a coherent run to the base.
+
+**Theorems.**
+- The page. `Page.build_nonempty`: over a coherent index whose reader answers `L[k]` at each k it answers, every page `build` serves from `start` < the World's step count holds at least one event. This is HOST-60's lift. `Page.build_beforeLog_first`: a page is refused `beforeLog` only from a `start` below the step count of entry 0, the entry the search reads first (HOST-61's entry-0 case; `entryAt` never refuses `beforeLog` itself, `entryAt_error`). It needs no coherence, because `locate` moves only to entries at or below `start`. Together with `build_nonempty`, a page from `start` in [entry 0's step count, the tip) is served non-empty or refused by another name. Both theorems are about a page `build` returns. Neither says a coherent Store's page is served rather than refused. The walk lemma is `walk_indexes` (a record skipped whole keeps the page empty, `foldl_walkStep_skip`); the search lemmas are `locate_le` and `locate_error`.
+- The deployed pager. `Deployed.page_nonempty` holds at the deployed open, with `Page.build` over `Page.entryAt` exactly as `Deployed.pager` calls it, over bytes. `Deployed.coherent_reader` builds the getter premise from `Coherent`. `Deployed.page_beforeLog_first` holds for the deployed pager over any Store.
+- The completeness side (every Store this Host writes):
+  - `openWith_indexes`: the open's entries since the base continue the base's run to the open's position and World. `indexed_indexes` shows each entry `Host.indexed` makes is the frame the open verified (`frameOf_frame`).
+  - `StoreIndexes.of_open_empty`, `Deployed.genesis_indexes` and `Deployed.import_indexes`: an empty `index.log` (genesis, import, a follower's adopted base).
+  - `StoreIndexes.append`: records and entries or orphans appended.
+  - `StoreIndexes.cut_open`: the writer's truncation at open.
+  - `sealed_indexes` and `Deployed.sealed_indexes_deployed`: a seal. The old base's entries are followed by the open's, each read back by `run_read`.
+  - `Page.Indexes.snoc`: the pure core of the loop's append.
+- Byte stability. `frameOf_congr` and `Indexes.congr`: coherence depends only on the bytes below the tip.
+
+**Teeth.**
+- `Page.build_empty_incoherent`: one entry at or below `start` that points at the durable end serves an EMPTY page short of the tip. The premise carries the conclusion.
+- `Page.Indexes.not_dup`: an index holding one entry twice in a row is not coherent. The predicate refutes.
+- `build_beforeLog_first` has no premise to test: it is an exact reading of `locate`. `Page.build_beforeLog` (HOST-61) is its converse: a first entry past `start` is refused.
+
+**Critique.**
+- Coherence is stated over `frameOf`, not over segment bytes. The walk then consumes it directly. The price is two byte lemmas: `frameOf_frame` (a written frame is what a page reads) and `frameOf_congr` (a read depends only on the bytes before the frame's end).
+- The loop between two opens is not proved. `Host.append` pushes `⟨steps, pos.offset, chain⟩` after the frame's sync (Host/Loop.lean), which is read off the code. `Indexes.snoc` is its pure core, and every open re-derives the loop's entries (`openWith_indexes`). The theorems hold at every state an open leaves, which is where a writer and a follower start. A seal the loop makes after appends (`makeRoom`'s and the cadence's `sealNow`, a member checkpoint) counts the loop's own entries. So a Store last sealed there is coherent only through that unproved push. This is the second agent's finding, and the header now says so.
+- `Indexes` pins each entry's offset and step count, not its chain, which is what a page states its chain from. A wrong chain field is caught by the follower's chain check. Not proved here.
+- That entry 0 is the Store's first record (step 0 at genesis, the import's step at import) is not proved. `StoreIndexes` ties each entry to a record, not entry 0 to the first record after the origin frame.
+- The open does not check coherence. It reads one entry and checks its tag and its step count. It does not check its offset (HOST-53's alternative (d), not taken then). A validly tagged but incoherent entry, which only a writer defect can produce, passes open. A page from it is refused `corrupt` when its frame does not verify. With a wrong step field it would be served under a wrong step count, and the follower's chain check refuses that. Next: HOST-63 has the open check that the last entry's frame verifies and ends at the base, with the plant (an entry one byte off refused at open).
+- `hget` asks the reader to answer `L[k]` at each k it answers. `coherent_reader` discharges it for `entryAt` over a coherent Store, so no deployed premise is left.
+
+**Meta-critique.**
+- HOST-60 named this gap as a cv task instead of proving it in its own landing. The cost was one more landing whose theorem stopped a step short. The rule from HOST-50 ("a WEAK becomes a cv task that same day") kept it from being dropped, but the right move was HOST-61's: the fact was already in reach (`frame_size_eq`, `indexed`).
+- "The page is non-empty" was one disjunction away from vacuity. An `∨ a.events = #[]`, or a conclusion over a Store no write produces, would read the same. The conclusion here has no disjunct. The premise is shown satisfiable by the completeness theorems and shown to carry the conclusion by its tooth.
+
+**Law-6 read (second agent, read-only, with the DISJUNCT check): LAND-WITH-FIXES, all four taken.**
+- No conclusion contains a disjunct. Every `∃` is pinned (`coherent_reader`'s `L` by its length, `Indexes` and the getter; `indexed_indexes`' `M` by the fold's array).
+- `hget` is discharged by the pager's own getter, argument by argument against Host/Deployed.lean:66-70. `Store.lean` builds the Resident from the opening field by field.
+- Taken:
+  - `build_beforeLog_first` and its deployed form carried a coherence premise that did no work. They are restated without it, and `build_beforeLog` is no longer listed as their tooth.
+  - "entry 0 is the first record" was unproved, and is now named not proved.
+  - "every Store this Host writes" became "every Store written at an open", with the loop-seal consequence named.
+  - The chain field is named not proved.
+
+**Flag day.** None. The change is proof-only. `seal_facts` and `foldlM_origin` (Host/Proofs/Seal.lean) become public, because the seal theorem here reads them.

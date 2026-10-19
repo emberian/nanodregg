@@ -57,7 +57,7 @@ private theorem encodeAll_ends (s : Sealer) : ∀ (prev : ByteArray) (rs : List 
       _ = prev ++ lenBytes r.size ++ r ++ X ++ lastTag s (s.tag (prev ++ r)) rs := by
           rw [hX]; simp only [ByteArray.append_assoc]
 
-private theorem foldlM_origin {step : W → ByteArray → Except F W} {origin : W → ByteArray}
+theorem foldlM_origin {step : W → ByteArray → Except F W} {origin : W → ByteArray}
     (ho : ∀ w r w', step w r = .ok w' → origin w' = origin w) :
     ∀ (rs : List ByteArray) (w w' : W), rs.foldlM step w = .ok w' → origin w' = origin w
   | [], w, w', h => by
@@ -71,7 +71,7 @@ private theorem foldlM_origin {step : W → ByteArray → Except F W} {origin : 
       rw [foldlM_origin ho rs w₁ w' h, ho w r w₁ h₁]
 
 /-- What the seal of an opened World holds, read off the old open and the seal. -/
-private theorem seal_facts (keys : Keys) (c : Cadence) (world : Codec.Stream W)
+theorem seal_facts (keys : Keys) (c : Cadence) (world : Codec.Stream W)
     (mark : W → Nat × ByteArray) (origin : W → ByteArray) (step : W → ByteArray → Except F W)
     {P : W → Prop} (hw : Codec.Stream.LawfulOn P world)
     (horigin : ∀ w r w', step w r = .ok w' → origin w' = origin w)
