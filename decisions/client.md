@@ -1000,3 +1000,16 @@ Mutations, each red: kept-file read unchecked; key-file read unchecked; the exis
 **Plant.** `members.rs nd_members_ends_by_name`: for each of MEMBER and FOLLOW, a root one byte too long is refused by name, with `socket path 108 bytes` on its line. CONTROL: at exactly 107 bytes the roots pass, and the run ends at its decider (`/usr/bin/false` → `deciderMechanism`). Both mutations are red: L1 (no check) and L2 (`>=` for `>`).
 **Critique.** The socket names `nd.sock` and `follow.sock` are still literals in nd-members (Lean's `memberSock`/`followSock` are ByteArrays, and the tagged emitter carries only numbers). The check assumes the longest name and does not measure the names answered. That is the right side to err on, since a name is at most GRAIN_NAME_MAX by `grain_name_ok`.
 **Size.** nd-members 623 → 639 (ROOT ruling). Status: landed (this commit).
+
+## CLIENT-32 · an `uncertain` attempt end carries follow's own words for a receipt it did not give (2026-10-20, CLIENT-9; cv 01a150b1, PROTOCOL-55's critique, PROTOCOL-58 the Lean half, ROOT ruling)
+**The defect.** run.rs `receipt()` read a `receipt CALL` that follow ended without ok (e.g. `refused badResult`, an empty page short of the tip) as `Reply::Lost`, which drops follow's stderr. `drive` then ended `uncertain` with an empty payload. So a refused confirm rendered exactly like the Host's failed append, and telling the two apart cost PROTOCOL-18 a trace (the refusal-renders-as-the-verdict class).
+**Decision.**
+- `Reply::Lost(Vec<u8>)`. `receipt()`'s non-ok arm carries that command's stderr VERBATIM; Rust parses nothing. A transport loss, a timeout or a status the table does not name carries none.
+- `drive` keeps the last non-empty one within `HINT_BYTES_MAX` (512, Lean's `Protocol.Bounds.hintBytesMax`, emitted). A longer one is no hint, never a cut one. Both uncertain ends carry it: the table's, and the loop bound's.
+- Lean (PROTOCOL-58, 0856ca3) prints `hint confirm: refused NAME` only when the first line equals a table name byte for byte, and the printed name is the table's string. So no unvalidated byte reaches the surface.
+**Plants.**
+- `client/tests/attempt.rs an_uncertain_end_carries_follows_last_words_within_the_bound`: refused carried; exactly 512 carried; 513 gives none; a transport loss gives none.
+- `client/tests/run.rs a_refused_confirm_hands_follow_its_own_words_with_uncertain`: follow's resume gets `uncertain ‖ refused badResult\n`.
+**Mutations** (`logs/client9-mut3.py` → `.out`): H1–H4 are RED. H5, the loop-bound end dropping the hint, is GREEN: 72 reply patterns probed, and Lean's table always ends first, so that end is a backstop no plant reaches. It carries `why` so both uncertain ends agree. It is declared, not claimed.
+**Critique.** "Last" is not separately planted: a drive makes one confirm or probe before its uncertain end. The rows' Loopback model (PROTOCOL-58's `dropHint`) cannot see this store regress; these two plants can.
+**Size.** client library 2520 → 2528 (ROOT ruling). Status: landed (this commit).

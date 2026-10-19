@@ -124,7 +124,7 @@ fn hint(t: &Table, reply: io::Result<(u8, Vec<u8>)>) -> Reply {
         Ok((s, _)) if s == t.uncertain => Seen::Unknown,
         // A transport failure, a timeout (replyMsMax), or a status the table does not name
         // (`closed`): no reply this run.
-        _ => return Reply::Lost,
+        _ => return Reply::Lost(Vec::new()),
     };
     Reply::Host(seen, reply.map(|(_, p)| p).unwrap_or_default())
 }
@@ -149,10 +149,12 @@ fn receipt(
         t,
     ) {
         Ok((exit, stdout, _)) if exit == t.exit_ok => {
-            Ok(Receipt::read(&stdout).map_or(Reply::Lost, Reply::Follow))
+            Ok(Receipt::read(&stdout).map_or(Reply::Lost(Vec::new()), Reply::Follow))
         }
-        Ok(_) | Err(RunError::Follow(_) | RunError::Host(_) | RunError::StepsExhausted) => {
-            Ok(Reply::Lost)
+        // follow's own words for a receipt it did not give (`refused badResult`): Lean reads them
+        Ok((_, _, stderr)) => Ok(Reply::Lost(stderr)),
+        Err(RunError::Follow(_) | RunError::Host(_) | RunError::StepsExhausted) => {
+            Ok(Reply::Lost(Vec::new()))
         }
         Err(e) => Err(e),
     }

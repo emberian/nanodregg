@@ -185,8 +185,10 @@ fn lost_reply_is_uncertain_and_only_looked_up() {
         payload: Vec::new(),
     };
     assert_eq!(
-        a.drive(State::Signed, 3, |_, _| -> R { Ok(Reply::Lost) })
-            .unwrap(),
+        a.drive(State::Signed, 3, |_, _| -> R {
+            Ok(Reply::Lost(Vec::new()))
+        })
+        .unwrap(),
         open(1)
     );
     // Crash: reload from disk.
@@ -215,13 +217,55 @@ fn lost_reply_is_uncertain_and_only_looked_up() {
         .drive(State::Signed, 3, |r, _| -> R {
             Ok(match r {
                 Request::Submit => host(Seen::Committed),
-                _ => Reply::Lost,
+                _ => Reply::Lost(Vec::new()),
             })
         })
         .unwrap();
     assert_eq!(s, open(1));
     done(&d);
     done(&d2);
+}
+
+/// cv 01a150b1 (PROTOCOL-58): a confirm follow did not settle ends `uncertain` carrying follow's own
+/// words, so a refusal never renders as the Host's failed append. The keep rule: the last non-empty
+/// within HINT_BYTES_MAX; one longer is no hint (never cut); a transport loss says nothing.
+#[test]
+fn an_uncertain_end_carries_follows_last_words_within_the_bound() {
+    use nanodregg_client::generated::HINT_BYTES_MAX;
+    let max = HINT_BYTES_MAX as usize;
+    let cases: [(&str, Vec<u8>, Vec<u8>); 4] = [
+        (
+            "refused",
+            b"refused badResult\n".to_vec(),
+            b"refused badResult\n".to_vec(),
+        ),
+        ("at-bound", vec![b'r'; max], vec![b'r'; max]),
+        ("past-bound", vec![b'r'; max + 1], Vec::new()),
+        ("transport", Vec::new(), Vec::new()),
+    ];
+    for (tag, said, want) in cases {
+        let d = scratch(&format!("hint-{tag}"));
+        let a = Attempt::freeze(&d, b"CALL").unwrap();
+        let s = a
+            .drive(State::Signed, 3, |r, _| -> R {
+                Ok(match r {
+                    Request::Submit => host(Seen::Committed),
+                    _ => Reply::Lost(said.clone()),
+                })
+            })
+            .unwrap();
+        let end = Action::Uncertain;
+        assert_eq!(
+            s,
+            State::Open {
+                sends: 1,
+                end,
+                payload: want
+            },
+            "{tag}"
+        );
+        done(&d);
+    }
 }
 
 #[test]

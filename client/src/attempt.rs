@@ -25,6 +25,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use crate::fsx;
+use crate::generated::HINT_BYTES_MAX;
 use crate::generated::attempt::{self as table, Action, Request, Seen};
 
 const CALL: &str = "call";
@@ -73,7 +74,8 @@ pub enum Reply {
     /// The member's own follow answered `receipt CALL`.
     Follow(Receipt),
     /// No answer: the transport failed, timed out (`replyMsMax`), or the answer was unreadable.
-    Lost,
+    /// Follow's stderr when its `receipt CALL` ended unsettled: the uncertain end's hint (PROTOCOL-58).
+    Lost(Vec<u8>),
 }
 
 impl Reply {
@@ -81,7 +83,7 @@ impl Reply {
         match self {
             Self::Host(s, _) => *s,
             Self::Follow(r) => r.seen,
-            Self::Lost => Seen::Lost,
+            Self::Lost(_) => Seen::Lost,
         }
     }
 }
@@ -233,9 +235,10 @@ impl Attempt {
                 (sends, Some((Request::Submit, Seen::Lost)))
             }
         };
-        // The Host's last payload (a declined refusal's name), the Host's last claim, follow's
-        // last receipt.
-        let (mut hinted, mut claimed, mut receipt) = (Vec::new(), None, None::<Receipt>);
+        // The Host's last payload (a declined refusal's name), follow's last unsettled words, the
+        // Host's last claim, follow's last receipt.
+        let (mut hinted, mut why, mut claimed) = (Vec::new(), Vec::new(), None);
+        let mut receipt = None::<Receipt>;
         for _ in 0..=3 * u64::from(sends_max) + 1 {
             let request = match table::next(sends < sends_max, last) {
                 end @ (Action::Committed | Action::Refused) => {
@@ -260,6 +263,7 @@ impl Attempt {
                             let host = claimed.map_or("", Seen::name);
                             format!("{host} {}", r.seen.name()).into_bytes()
                         }
+                        (Action::Uncertain, _) => why,
                         _ => Vec::new(),
                     };
                     return Ok(State::Open {
@@ -279,13 +283,15 @@ impl Attempt {
                     hinted = payload;
                 }
                 Reply::Follow(r) => receipt = Some(r),
-                Reply::Lost => {}
+                // the last within HINT_BYTES_MAX: a longer one is no hint, never a cut one
+                Reply::Lost(w) if !w.is_empty() && w.len() <= HINT_BYTES_MAX as usize => why = w,
+                Reply::Lost(_) => {}
             }
         }
         Ok(State::Open {
             sends,
             end: Action::Uncertain,
-            payload: Vec::new(),
+            payload: why,
         })
     }
 

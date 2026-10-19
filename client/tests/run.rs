@@ -163,6 +163,50 @@ fn round_trip_with_a_lost_submit_reply() {
     std::fs::remove_dir_all(&d).unwrap();
 }
 
+/// cv 01a150b1 (PROTOCOL-58): a confirm whose `receipt CALL` follow REFUSES reaches follow as
+/// `uncertain` carrying follow's own stderr, verbatim, so Lean can name it (`hint confirm: refused
+/// badResult`) and it never reads as the Host's failed append.
+#[test]
+fn a_refused_confirm_hands_follow_its_own_words_with_uncertain() {
+    let (d, custody) = setup("hint");
+    let said = b"refused badResult\n".to_vec();
+    let mut follow = ScriptedFollow {
+        steps: VecDeque::from([
+            Step::Submit {
+                call: b"CALL".to_vec(),
+                k: b"k1".to_vec(),
+            },
+            done_step(),
+        ]),
+        seen: vec![],
+        receipts: VecDeque::from([Step::Done {
+            exit: 1,
+            stdout: Vec::new(),
+            stderr: said.clone(),
+        }]),
+        asked: Vec::new(),
+    };
+    let mut host = ScriptedHost {
+        replies: VecDeque::from([Ok((T.ok, b"receipt".to_vec()))]),
+        asked: vec![],
+    };
+    run::run(
+        &[b"nd".to_vec()],
+        &mut follow,
+        &mut host,
+        &custody,
+        &d.join("attempts"),
+        T,
+    )
+    .unwrap();
+    let uncertain = Outcome {
+        status: Action::Uncertain.code(),
+        payload: said,
+    };
+    assert_eq!(follow.seen, vec![(b"k1".to_vec(), uncertain)]);
+    std::fs::remove_dir_all(&d).unwrap();
+}
+
 #[test]
 fn a_follow_that_never_finishes_is_stopped_by_the_bound() {
     let (d, custody) = setup("bound");
@@ -243,8 +287,10 @@ fn an_armed_rotation_is_settled_by_its_receipt_before_the_command() {
     let a = Attempt::freeze(&d.join("attempts/0"), b"ROTATE").unwrap();
     custody.arm(0, &r).unwrap();
     // Sent, and its reply lost: uncertain on disk.
-    a.drive(State::Signed, 1, |_, _| Ok::<_, AttemptError>(Reply::Lost))
-        .unwrap();
+    a.drive(State::Signed, 1, |_, _| {
+        Ok::<_, AttemptError>(Reply::Lost(Vec::new()))
+    })
+    .unwrap();
     let mut follow = ScriptedFollow {
         steps: VecDeque::from([Step::Done {
             exit: 0,
@@ -582,8 +628,10 @@ fn armed(name: &str) -> (std::path::PathBuf, Custody, [u8; 32], [u8; 32]) {
     let (_, r) = custody.sign_next(b"rotate").unwrap();
     let a = Attempt::freeze(&d.join("attempts/0"), b"ROTATE").unwrap();
     custody.arm(0, &r).unwrap();
-    a.drive(State::Signed, 1, |_, _| Ok::<_, AttemptError>(Reply::Lost))
-        .unwrap();
+    a.drive(State::Signed, 1, |_, _| {
+        Ok::<_, AttemptError>(Reply::Lost(Vec::new()))
+    })
+    .unwrap();
     (d, custody, old, next)
 }
 
