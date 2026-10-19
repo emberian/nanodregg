@@ -489,7 +489,7 @@ private theorem rowStep_inv {E : Env D} {w : World D} {t : Turn D} {r r' : Rows 
   | head p rel =>
       cases act with
       | declare limit cap width retract =>
-          unfold rowStep at h
+          unfold rowStep rowStepOn at h; simp only [setHeadOn_trie] at h
           simp only [except_bind_ok] at h
           obtain ⟨⟨⟩, hrel, ⟨⟩, -, ⟨⟩, hlate, ⟨⟩, hbd, ⟨⟩, hn0, hw⟩ := h
           simp only [pure, Except.pure, Except.ok.injEq] at hw
@@ -500,13 +500,13 @@ private theorem rowStep_inv {E : Env D} {w : World D} {t : Turn D} {r r' : Rows 
           simp only [Bool.and_eq_true, decide_eq_true_eq] at hbd
           have hlate : p ∈ createdIds t := by simpa using req_ok.mp hlate
           exact declare_inv hr hi hp hn hn0 hrel hbd.1.1 hbd.1.2 hbd.2 hlate hw.symm
-      | keep => simp [rowStep] at h
-      | insert _ _ => simp [rowStep] at h
-      | upsert _ _ => simp [rowStep] at h
-      | retract => simp [rowStep] at h
+      | keep => simp [rowStep, rowStepOn] at h
+      | insert _ _ => simp [rowStep, rowStepOn] at h
+      | upsert _ _ => simp [rowStep, rowStepOn] at h
+      | retract => simp [rowStep, rowStepOn] at h
   | row key =>
       have hbk := hb key rfl
-      unfold rowStep at h
+      unfold rowStep rowStepOn at h; simp only [headOfOn_trie, headFloorOn_trie, setHeadOn_trie] at h
       simp only [except_bind_ok] at h
       obtain ⟨⟨⟩, -, ⟨⟩, hlive, ⟨⟩, hret, h⟩ := h
       have hlive : (w.live E key.parent).isSome = true := req_ok.mp hlive
@@ -632,7 +632,7 @@ private theorem foldRows_inv {E : Env D} {w : World D} {t : Turn D} :
   | x :: rest, acc, rr, hc, hi, hp, hn, hb, h => by
       rw [List.foldlM_cons, except_bind_ok] at h
       obtain ⟨acc', h1, h2⟩ := h
-      unfold rowStepFreed at h1
+      unfold rowStepFreed rowStepFreedOn at h1; simp only [rowStepOn_trie, rowFreedOn_trie] at h1
       rw [except_bind_ok] at h1
       obtain ⟨r1, hs, he⟩ := h1
       simp only [pure, Except.pure, Except.ok.injEq] at he
@@ -657,19 +657,19 @@ private theorem rowStep_len {E : Env D} {w : World D} {t : Turn D} {r r' : Rows 
   | head p rel =>
       cases act with
       | declare limit cap width retract =>
-          unfold rowStep at h
+          unfold rowStep rowStepOn at h; simp only [setHeadOn_trie] at h
           simp only [except_bind_ok] at h
           obtain ⟨⟨⟩, -, ⟨⟩, -, ⟨⟩, -, ⟨⟩, -, ⟨⟩, -, hw⟩ := h
           simp only [pure, Except.pure, Except.ok.injEq] at hw
           subst hw
           unfold setHead
           exact len_insert_le hr.1 _ _
-      | keep => simp [rowStep] at h
-      | insert _ _ => simp [rowStep] at h
-      | upsert _ _ => simp [rowStep] at h
-      | retract => simp [rowStep] at h
+      | keep => simp [rowStep, rowStepOn] at h
+      | insert _ _ => simp [rowStep, rowStepOn] at h
+      | upsert _ _ => simp [rowStep, rowStepOn] at h
+      | retract => simp [rowStep, rowStepOn] at h
   | row key =>
-      unfold rowStep at h
+      unfold rowStep rowStepOn at h; simp only [headOfOn_trie, headFloorOn_trie, setHeadOn_trie] at h
       simp only [except_bind_ok] at h
       obtain ⟨⟨⟩, -, ⟨⟩, -, ⟨⟩, -, h⟩ := h
       split at h
@@ -731,7 +731,7 @@ private theorem foldRows_len {E : Env D} {w : World D} {t : Turn D} :
   | x :: rest, acc, rr, hc, h => by
       rw [List.foldlM_cons, except_bind_ok] at h
       obtain ⟨acc', h1, h2⟩ := h
-      unfold rowStepFreed at h1
+      unfold rowStepFreed rowStepFreedOn at h1; simp only [rowStepOn_trie, rowFreedOn_trie] at h1
       rw [except_bind_ok] at h1
       obtain ⟨r1, hs, he⟩ := h1
       simp only [pure, Except.pure, Except.ok.injEq] at he
@@ -784,7 +784,7 @@ theorem admit_rows_listing {E : Env D} {w w' : World D} {t : Turn D} (hr : w.Row
   obtain ⟨_, hk, he⟩ := admit_rows h
   rw [he]
   have hrun := hk.rows
-  unfold rowsRun at hrun
+  rw [rowsRun_eq] at hrun
   simp only [except_bind_ok] at hrun
   obtain ⟨⟨⟩, -, ⟨⟩, -, hrun⟩ := hrun
   split at hrun
@@ -1101,7 +1101,7 @@ theorem admit_rowsOk {E : Env D} {n : Nat} (hE : E.Lawful n) {w w' : World D} {t
   obtain ⟨posts, hk, hw'⟩ := admit_ok h
   have htrie : w'.trie = (commit E w t posts).trie := by rw [hw']
   have hrun := hk.rows
-  unfold rowsRun at hrun
+  rw [rowsRun_eq] at hrun
   simp only [except_bind_ok] at hrun
   obtain ⟨⟨⟩, -, ⟨⟩, hbd, hrun⟩ := hrun
   split at hrun

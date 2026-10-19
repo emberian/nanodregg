@@ -321,6 +321,102 @@ theorem spendAll_get_cell {E : Env D} {c : D} :
       show (spendAll E (m.insert (trieSpec E) (.nullifier x) .spent) rest).get _ _ = _
       rw [spendAll_get_cell, Trie.get_insert, if_neg]; intro he; cases he
 
+/-! ### The rows on the overlay are the rows on the trie (cv 01a153a5-0e09) -/
+
+omit [Ord D] in
+/-- The trie store's operations are the rows' trie functions (each by `rfl`): what a proof that unfolds
+`rowStepOn` at `trieStore` rewrites back to `rowAt`, `headOf`, `headFloor`, `setHead`, `T.insert`,
+`retainAt`, `rowFreed` and `rowStep`. -/
+theorem trieStore_get {E : Env D} {r : Rows D} {s : RowSlot D} : (trieStore E).get r s = rowAt E r s := rfl
+omit [Ord D] in
+theorem trieStore_ins {E : Env D} {r : Rows D} {k : RowSlot D} {v : RowLeaf} :
+    (trieStore E).ins r k v = r.insert (rowSpec E) k v := rfl
+omit [Ord D] in
+theorem trieStore_drop {E : Env D} {r : Rows D} {k : RowSlot D} :
+    (trieStore E).drop r k = Trie.retainAt (rowSpec E) (fun k' _ => decide (k' ≠ k)) (rowPath E k) r := rfl
+omit [Ord D] in
+theorem headOfOn_trie {E : Env D} {r : Rows D} {p : D} {rel : Nat} :
+    headOfOn (trieStore E) r p rel = headOf E r p rel := rfl
+omit [Ord D] in
+theorem headFloorOn_trie {E : Env D} {r : Rows D} {p : D} {rel : Nat} :
+    headFloorOn (trieStore E) r p rel = headFloor E r p rel := rfl
+omit [Ord D] in
+theorem setHeadOn_trie {E : Env D} {r : Rows D} {p : D} {rel count sum limit cap width : Nat} {retract : Bool}
+    {floor : Nat} : setHeadOn (trieStore E) r p rel count sum limit cap width retract floor =
+      setHead E r p rel count sum limit cap width retract floor := rfl
+omit [Ord D] in
+theorem rowFreedOn_trie {E : Env D} {r : Rows D} {x : RowTouch D} : rowFreedOn (trieStore E) r x = rowFreed E r x := rfl
+theorem rowStepOn_trie {E : Env D} {w : World D} {t : Turn D} {r : Rows D} {x : RowTouch D} :
+    rowStepOn (trieStore E) E w t r x = rowStep E w t r x := rfl
+
+private theorem fmap_error {ε β γ : Type} (f : β → γ) (e : ε) : f <$> (Except.error e : Except ε β) = .error e := rfl
+private theorem fmap_ok {ε β γ : Type} (f : β → γ) (b : β) : f <$> (Except.ok b : Except ε β) = .ok (f b) := rfl
+
+/-- **A row touch commutes with any map of stores that commutes with their reads, writes and
+removals**: no premise. At `U.seal` (`uStore → trieStore`) it is the overlay touch sealed. -/
+theorem rowStepOn_map {C C2 : Type} (st : RowStore D C) (st2 : RowStore D C2) (f : C → C2)
+    (hget : ∀ c s, st2.get (f c) s = st.get c s)
+    (hins : ∀ c k v, f (st.ins c k v) = st2.ins (f c) k v)
+    (hdrop : ∀ c k, f (st.drop c k) = st2.drop (f c) k)
+    (E : Env D) (w : World D) (t : Turn D) (c : C) (x : RowTouch D) :
+    f <$> rowStepOn st E w t c x = rowStepOn st2 E w t (f c) x := by
+  have hh : ∀ c p rel, headOfOn st2 (f c) p rel = headOfOn st c p rel := by
+    intro c p rel; simp only [headOfOn, hget]
+  have hf : ∀ c p rel, headFloorOn st2 (f c) p rel = headFloorOn st c p rel := by
+    intro c p rel; simp only [headFloorOn, hget]
+  unfold rowStepOn
+  rcases x with ⟨slot, seen, act⟩
+  cases slot <;> cases act <;>
+    simp only [map_bind, map_pure, fmap_error, hh, hf, hget] <;>
+    (repeat' split) <;> simp_all [setHeadOn, fmap_error, map_bind]
+
+theorem rowStepFreedOn_map {C C2 : Type} (st : RowStore D C) (st2 : RowStore D C2) (f : C → C2)
+    (hget : ∀ c s, st2.get (f c) s = st.get c s)
+    (hins : ∀ c k v, f (st.ins c k v) = st2.ins (f c) k v)
+    (hdrop : ∀ c k, f (st.drop c k) = st2.drop (f c) k)
+    (E : Env D) (w : World D) (t : Turn D) (acc : C × Nat) (x : RowTouch D) :
+    Prod.map f id <$> rowStepFreedOn st E w t acc x = rowStepFreedOn st2 E w t (Prod.map f id acc) x := by
+  have hm := rowStepOn_map st st2 f hget hins hdrop E w t acc.1 x
+  have hfr : rowFreedOn st2 (f acc.1) x = rowFreedOn st acc.1 x := by simp only [rowFreedOn, hget]
+  unfold rowStepFreedOn
+  simp only [Prod.map_fst, Prod.map_snd, id, hfr]
+  rw [← hm]
+  cases rowStepOn st E w t acc.1 x <;> rfl
+
+private theorem foldlM_fmap {α β γ ε : Type} (g : β → γ) (f1 : β → α → Except ε β) (f2 : γ → α → Except ε γ)
+    (h : ∀ b a, g <$> f1 b a = f2 (g b) a) : ∀ (xs : List α) (b : β), g <$> xs.foldlM f1 b = xs.foldlM f2 (g b)
+  | [], _ => rfl
+  | x :: xs, b => by
+      simp only [List.foldlM_cons]
+      rw [← h b x]
+      cases f1 b x with
+      | error e => rfl
+      | ok b' => exact foldlM_fmap g f1 f2 h xs b'
+
+/-- **The rows on the overlay are the rows on the trie** (cv 01a153a5-0e09): `rowsRun`'s touches on the
+dirty overlay, sealed once, are each touch on the trie in turn (`rowStepFreed`), as a `T` value. No
+premise. Every proof about a turn's rows reads this shape. -/
+theorem rowsRun_eq {E : Env D} {w : World D} {t : Turn D} :
+    rowsRun E w t = (do
+      req (decide (t.rows.length ≤ Bounds.rowsMax) && decide (t.ranges.length ≤ Bounds.rangesMax)) (.overBound .rows)
+      req (t.rows.all fun x => match x.slot with
+        | .row key => decide (key.rel < 256) && decide (key.k.size ≤ Bounds.keyBytesMax)
+        | .head _ rel => decide (rel < 256)) (.overBound .rows)
+      match t.rows.find? (fun x => decide (1 < (t.rows.filter fun y => decide (y.slot = x.slot)).length)) with
+      | some x => .error (.duplicateRow (match x.slot with | .head p _ => p | .row k => k.parent))
+      | none => do
+          let acc ← t.rows.foldlM (rowStepFreed E w t) (w.rows, 0)
+          pure (dropHeads E t acc)) := by
+  have hfold : Prod.map (fun u => Trie.U.seal (rowSpec E) u) id <$>
+      t.rows.foldlM (rowStepFreedOn (uStore E) E w t) (.clean w.rows, 0) =
+      t.rows.foldlM (rowStepFreed E w t) (w.rows, 0) :=
+    foldlM_fmap _ _ _ (fun acc x => rowStepFreedOn_map (uStore E) (trieStore E) _
+      (fun u s => (Trie.getAtU_seal (rowSpec E) s 0 u).symm)
+      (fun u k v => Trie.seal_insU (rowSpec E) k v 0 u) (fun _ _ => rfl) E w t acc x) _ _
+  unfold rowsRun
+  rw [← hfold]
+  cases t.rows.foldlM (rowStepFreedOn (uStore E) E w t) (.clean w.rows, 0) <;> rfl
+
 /-- **The batch is the sequential trie** (cv 01a15107-2281): `commitTrie`'s one pass on the dirty
 overlay is `spendAll` over `insertAll` over `insertAll`, each key in turn, as a `T` value (cached
 digests included). No premise. Every proof about the map after a turn reads this shape. -/

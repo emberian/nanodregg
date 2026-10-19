@@ -88,7 +88,7 @@ private theorem rowStep_world {E : Env D} {w w' : World D} {t : Turn D} {r : Row
   cases slot with
   | head p rel => cases act <;> rfl
   | row key =>
-      simp only [rowStep]
+      simp only [rowStep, rowStepOn, headOfOn_trie, headFloorOn_trie, setHeadOn_trie]
       rw [hfl key rfl]
       by_cases ht : (t.touches.any fun y => decide (y.cell = key.parent)) = true
       · rw [hl _ ht]
@@ -160,16 +160,19 @@ private theorem rowStep_local {E : Env D} {w : World D} {t : Turn D} {r r' : Row
       simp only at hs
       cases act with
       | declare limit cap width retract =>
-          simp only [rowStep, req_bind, hs]
+          simp only [rowStep, rowStepOn, setHeadOn_trie, req_bind, hs]
           repeat (refine exRel_ite (fun _ => ?_) (fun _ => ?_))
           all_goals simp only [ExRel, pure, Except.pure]
           intro s h; exact tr_insert _ _ h
-      | _ => simp [rowStep, ExRel]
+      | _ => simp [rowStep, rowStepOn, ExRel]
   | row key =>
       simp only at hs hh
       have hH := headOf_congr (hh key rfl)
       have hF := headFloor_congr (hh key rfl)
-      cases act <;> simp only [rowStep, req_bind, hH, hF, hs] <;>
+      cases act <;> unfold rowStep rowStepOn <;> (try dsimp only) <;>
+        (try rw [show (trieStore E).get r (.row key) = rowAt E r (.row key) from rfl]) <;>
+        (try rw [show (trieStore E).get r' (.row key) = rowAt E r' (.row key) from rfl]) <;>
+        simp only [headOfOn_trie, headFloorOn_trie, setHeadOn_trie, req_bind, hH, hF, hs] <;>
         rcases headOf E r key.parent key.rel with _ | ⟨c, sm, lim, cap, wd, rt⟩ <;>
         rcases seen with _ | sn <;>
         rcases rowAt E r (.row key) with _ | (⟨_, _, _, _, _, _, _⟩ | ⟨a, v, u⟩) <;>
@@ -186,7 +189,7 @@ private theorem rowStep_local {E : Env D} {w : World D} {t : Turn D} {r r' : Row
 omit [Ord D] in
 private theorem rowFreed_congr {E : Env D} {r r' : Rows D} {x : RowTouch D}
     (h : rowAt E r' x.slot = rowAt E r x.slot) : rowFreed E r' x = rowFreed E r x := by
-  unfold rowFreed; rw [h]
+  unfold rowFreed rowFreedOn; simp only [h]
 
 /-- A row touch writes only its slot and its row's head, so what it leaves fits if they do. -/
 private theorem rowStep_fits {E : Env D} {w : World D} {t : Turn D} {r a : Rows D} {x : RowTouch D}
@@ -230,7 +233,7 @@ private theorem fold_local {E : Env D} {w w' : World D} {t : Turn D} {A : RowSlo
         fun key hk => h.agree _ (hAh key hk).1
       have hxh : ∀ key, x.slot = .row key → RowSlotFits (.head key.parent key.rel : RowSlot D) := by
         intro key hk; rw [hk] at hfs; exact hfs.1
-      simp only [List.foldlM_cons, rowStepFreed, hw]
+      simp only [List.foldlM_cons, rowStepFreed, rowStepFreedOn, rowStepOn_trie, rowFreedOn_trie, hw]
       cases hR : rowStep E w t acc.1 x with
       | error e =>
           cases hR' : rowStep E w t acc'.1 x with
@@ -386,7 +389,7 @@ private theorem rowsRun_read {E : Env D} {n : Nat} (hE : E.Lawful n) {w w' : Wor
     (h : ∀ s, RowRead E t s → rowAt E w'.rows s = rowAt E w.rows s) :
     ExRel (fun rr rr' : Rows D × Nat => rr'.2 = rr.2) (rowsRun E w t) (rowsRun E w' t) := by
   have hinv : Inv E (RowRead E t) (w.rows, 0) (w'.rows, 0) := ⟨hc, hc', rfl, h, hf⟩
-  unfold rowsRun
+  rw [rowsRun_eq, rowsRun_eq]
   simp only [req_bind]
   refine exRel_ite (fun _ => ?_) (fun _ => rfl)
   refine exRel_ite (fun hall => ?_) (fun _ => rfl)
@@ -408,8 +411,8 @@ private theorem rowsRun_same {E : Env D} {w w' : World D} {t : Turn D}
     (hl : ∀ c, (t.touches.any fun y => decide (y.cell = c)) = true → w'.live E c = w.live E c)
     (h : w'.rows = w.rows) : rowsRun E w' t = rowsRun E w t := by
   have e : rowStepFreed E w' t = rowStepFreed E w t := by
-    funext acc x; unfold rowStepFreed; rw [rowStep_world hl fun key _ => by rw [h]]
-  unfold rowsRun; rw [e, h]
+    funext acc x; unfold rowStepFreed rowStepFreedOn; simp only [rowStepOn_trie, rowFreedOn_trie]; rw [rowStep_world hl fun key _ => by rw [h]]
+  rw [rowsRun_eq, rowsRun_eq, e, h]
 
 /-- **The rows' checks read the rows' read set**: on Worlds whose touched cells agree and whose rows
 `RowsAgree`, the rows-remaining check, the range reads and the run's verdict and give-back are the

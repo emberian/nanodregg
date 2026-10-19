@@ -716,6 +716,22 @@ theorem seal_foldl : ∀ (kvs : List (K × V)) (u : U K V D),
   | [], _ => rfl
   | p :: rest, u => by simp only [List.foldl]; rw [seal_foldl rest, seal_insU]; rfl
 
+/-- **A read of the overlay is the read of the sealed trie**: no premise (`getAt` never reads a
+digest). -/
+theorem getAtU_seal (k : K) : ∀ (d : Nat) (u : U K V D), U.getAt S k d u = getAt S k d (u.seal S)
+  | _, .clean _ => rfl
+  | _, .leaf _ => rfl
+  | d, .node b rep l r => by
+      show _ = getAt S k d (.node _ b rep (l.seal S) (r.seal S))
+      simp only [U.getAt, getAt]
+      cases diverge S k rep d b with
+      | some _ => rfl
+      | none =>
+          dsimp only
+          cases S.bit k b
+          · exact getAtU_seal k (b + 1) l
+          · exact getAtU_seal k (b + 1) r
+
 /-- **The batch is the sequential trie**: `insertAll` (one pass on the overlay, sealed once) is each
 key inserted in turn, as a `T` value, cached digests included. No premise. -/
 theorem insertAll_eq_foldl (t : T K V D) (kvs : List (K × V)) :

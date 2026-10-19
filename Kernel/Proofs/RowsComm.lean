@@ -223,7 +223,7 @@ private theorem ins_step_ok {E : Env D} {w : World D} {t : Turn D} {r r' : Rows 
   obtain ⟨slot, seen, act⟩ := x
   simp only at hs ha
   subst hs ha
-  unfold rowStep at h
+  unfold rowStep rowStepOn at h; simp only [headOfOn_trie, headFloorOn_trie, setHeadOn_trie] at h
   simp only [except_bind_ok] at h
   obtain ⟨⟨⟩, h1, ⟨⟩, h2, ⟨⟩, h3, h⟩ := h
   split at h
@@ -252,7 +252,7 @@ private theorem ins_step_of {E : Env D} {w : World D} {t : Turn D} {r : Rows D} 
   subst hs ha
   obtain ⟨h1, h2, h3, h4, h5⟩ := hst
   obtain rfl : seen = none := h4
-  unfold rowStep
+  unfold rowStep rowStepOn; simp only [headOfOn_trie, headFloorOn_trie, setHeadOn_trie]
   simp [req, h1, h2, h3, hh, hrow, hcl, hcap, h5, bind, Except.bind, pure, Except.pure]
 
 omit [Ord D] in
@@ -348,13 +348,13 @@ private theorem fold_fwd {E : Env D} {w : World D} {t : Turn D} :
   | x :: rest, acc, rr, hi, hn, h => by
       rw [List.foldlM_cons, except_bind_ok] at h
       obtain ⟨acc', h1, h2⟩ := h
-      unfold rowStepFreed at h1
+      unfold rowStepFreed rowStepFreedOn at h1; simp only [rowStepOn_trie, rowFreedOn_trie] at h1
       rw [except_bind_ok] at h1
       obtain ⟨r1, hstep, he⟩ := h1
       simp only [pure, Except.pure, Except.ok.injEq] at he
       subst he
       obtain ⟨key, amt, v, hs, ha⟩ := hi x (by simp)
-      have hfr : rowFreed E acc.1 x = 0 := by simp [rowFreed, ha]
+      have hfr : rowFreed E acc.1 x = 0 := by simp [rowFreed, rowFreedOn, ha]
       obtain ⟨hst, hrow, c, sm, l, cap, rt, hh, hcl, hcap, rfl⟩ := ins_step_ok hs ha hstep
       simp only [List.map_cons, List.nodup_cons] at hn
       have hirest : InsOnly rest := fun z hz => hi z (by simp [hz])
@@ -452,7 +452,7 @@ private theorem fold_bwd {E : Env D} {w : World D} {t : Turn D} :
       have h1 : rowStepFreed E w t (r, f) x = .ok (setHead E (r.insert (rowSpec E) (.row key)
           (.row amt v (headFloor E r key.parent key.rel))) key.parent key.rel (c + 1) (sm + amt) l cap key.k.size rt
           (headFloor E r key.parent key.rel), f) := by
-        unfold rowStepFreed; rw [hstep]; simp [rowFreed, ha, bind, Except.bind, pure, Except.pure]
+        unfold rowStepFreed rowStepFreedOn; simp only [rowStepOn_trie, rowFreedOn_trie]; rw [hstep]; simp [rowFreed, rowFreedOn, ha, bind, Except.bind, pure, Except.pure]
       rw [List.foldlM_cons, h1]
       exact hr'
 
@@ -501,7 +501,7 @@ World's rows, over distinct slots. -/
 private theorem rowsRun_fold {E : Env D} {w : World D} {t : Turn D} {rr : Rows D × Nat} (hnr : NoRetire t)
     (h : rowsRun E w t = .ok rr) :
     (t.rows.map RowTouch.slot).Nodup ∧ t.rows.foldlM (rowStepFreed E w t) (w.rows, 0) = .ok rr := by
-  unfold rowsRun at h
+  rw [rowsRun_eq] at h
   simp only [except_bind_ok] at h
   obtain ⟨⟨⟩, -, ⟨⟩, -, h⟩ := h
   split at h
@@ -519,7 +519,7 @@ private theorem rowsRun_of_fold {E : Env D} {w w' : World D} {t : Turn D} {rr rr
     (hnr : NoRetire t) (h : rowsRun E w t = .ok rr)
     (hf : t.rows.foldlM (rowStepFreed E w' t) (w'.rows, 0) = .ok rr') :
     rowsRun E w' t = .ok rr' := by
-  unfold rowsRun at h ⊢
+  rw [rowsRun_eq] at h ⊢
   simp only [except_bind_ok] at h ⊢
   obtain ⟨⟨⟩, h1, ⟨⟩, h2, h⟩ := h
   refine ⟨(), h1, (), h2, ?_⟩

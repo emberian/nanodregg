@@ -161,6 +161,21 @@ def apply (val : K → V) : Trie.T K V D × Nat → Op K → Trie.T K V D × Nat
       let t' := Trie.retainAt S (fun k' _ => decide (k' ≠ k)) path t
       (t', n + fresh S t' t)
 
+/-- Apply `o` to `t` on the dirty overlay's terms (cv 01a153a5-0e09): an insert joins the batch `ks`
+pending since the last removal; a removal first seals the batch (`batchReq ks`, read off the trie as it
+stands), then requires what `Trie.retainAt` re-hashes (`fresh`). -/
+def applySeg (val : K → V) : Trie.T K V D × Nat × List K → Op K → Trie.T K V D × Nat × List K
+  | (t, n, ks), .ins k => (t.insert S k (val k), n, ks ++ [k])
+  | (t, n, ks), .del k path =>
+      let t' := Trie.retainAt S (fun k' _ => decide (k' ≠ k)) path t
+      (t', n + batchReq S ks t + fresh S t' t, [])
+
+/-- `ops` in order from `t` as the overlay runs them: maximal runs of inserts between removals are one
+batch each, sealed at the next removal or at the end. -/
+def applyAllSeg (val : K → V) (t : Trie.T K V D) (ops : List (Op K)) : Trie.T K V D × Nat :=
+  let (t', n, ks) := ops.foldl (applySeg S val) (t, 0, [])
+  (t', n + batchReq S ks t')
+
 /-- `ops` in order from `t`: the trie they reach and what they require. -/
 def applyAll (val : K → V) (t : Trie.T K V D) (ops : List (Op K)) : Trie.T K V D × Nat :=
   ops.foldl (apply S val) (t, 0)
@@ -203,11 +218,13 @@ def rowOps (E : Env D) (x : RowTouch D) : List (Op (RowSlot D)) :=
   | .row key, .retract => [.del (.row key) (rowPath E (.row key)), .ins (.head key.parent key.rel)]
   | _, _ => []
 
-/-- The rows a turn writes, from `w`'s: each touch's operations in order, then each retired parent's
-heads removed (`dropHeads`, listed by the kernel's own `under` on the rows as they then stand). -/
+/-- The rows a turn writes, from `w`'s: each touch's operations in order on the dirty overlay
+(`World.uStore`, cv 01a153a5-0e09: a run of row and head writes between retracts is one batch,
+`applyAllSeg`), sealed, then each retired parent's heads removed (`dropHeads`, listed by the kernel's
+own `under` on the rows as they then stand). DEFINED as what `rowsRun` hashes. -/
 def rowsReq (E : Env D) (w : World D) (t : Turn D) (val : RowSlot D → RowLeaf) : Rows D × Nat :=
   let S := rowSpec E
-  let (r, n) := applyAll S val w.rows (t.rows.flatMap (rowOps E))
+  let (r, n) := applyAllSeg S val w.rows (t.rows.flatMap (rowOps E))
   t.touches.foldl (fun (acc : Rows D × Nat) x => match x.act with
     | .retire =>
         let heads := (under S (E.bytes x.cell) 257 acc.1).filterMap fun p => match p.1 with

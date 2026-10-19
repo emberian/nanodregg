@@ -299,6 +299,19 @@ a changed path is hashed once. -/
 def insertAll (t : T K V D) (kvs : List (K × V)) : T K V D :=
   (kvs.foldl (fun u p => insU S p.1 p.2 0 u) (.clean t)).seal S
 
+/-- The value at `k` on the overlay, as `getAt` reads it of the sealed trie (`Kernel.Proofs.Trie.getAtU_seal`,
+no premise): `getAt` reads branching bits, `rep`s and entries, never a digest, so nothing is hashed. -/
+def U.getAt (k : K) : Nat → U K V D → Option V
+  | d, .clean t => Trie.getAt S k d t
+  | _, .leaf kvs => find k kvs
+  | d, .node b rep l r =>
+      match diverge S k rep d b with
+      | some _ => none
+      | none =>
+          match S.bit k b with
+          | true => U.getAt k (b + 1) r
+          | false => U.getAt k (b + 1) l
+
 /-! ## Retain: the canonical erase (KERNEL-41)
 
 `retainAt path q` keeps, in the subtree `path` leads to, the entries `q` keeps. What it returns is

@@ -128,7 +128,7 @@ theorem rowStep_weight {E : Env D} {w : World D} {t : Turn D} {r r' : Rows D} {x
   | head p rel =>
       cases act with
       | declare limit cap width retract =>
-          unfold rowStep at h
+          unfold rowStep rowStepOn at h; simp only [setHeadOn_trie] at h
           simp only [except_bind_ok] at h
           obtain ⟨⟨⟩, -, ⟨⟩, -, ⟨⟩, -, ⟨⟩, -, ⟨⟩, hn, hw⟩ := h
           simp only [pure, Except.pure, Except.ok.injEq] at hw
@@ -139,13 +139,13 @@ theorem rowStep_weight {E : Env D} {w : World D} {t : Turn D} {r r' : Rows D} {x
           unfold setHead
           change rowsWeight (r.insert (rowSpec E) _ _) + _ = _
           rw [rowsWeight_insert_none hr.1 _ hn]
-          simp only [rowFreed, RowTouch.growth, rowEntryWeight, Nat.add_zero]
-      | keep => simp [rowStep] at h
-      | insert _ _ => simp [rowStep] at h
-      | upsert _ _ => simp [rowStep] at h
-      | retract => simp [rowStep] at h
+          simp only [rowFreed, rowFreedOn, RowTouch.growth, rowEntryWeight, Nat.add_zero]
+      | keep => simp [rowStep, rowStepOn] at h
+      | insert _ _ => simp [rowStep, rowStepOn] at h
+      | upsert _ _ => simp [rowStep, rowStepOn] at h
+      | retract => simp [rowStep, rowStepOn] at h
   | row key =>
-      unfold rowStep at h
+      unfold rowStep rowStepOn at h; simp only [headOfOn_trie, headFloorOn_trie, setHeadOn_trie] at h
       simp only [except_bind_ok] at h
       obtain ⟨⟨⟩, -, ⟨⟩, -, ⟨⟩, -, h⟩ := h
       split at h
@@ -160,7 +160,7 @@ theorem rowStep_weight {E : Env D} {w : World D} {t : Turn D} {r r' : Rows D} {x
             obtain ⟨⟨⟩, -, h⟩ := h
             simp only [pure, Except.pure, Except.ok.injEq] at h
             subst h
-            exact ⟨by simp only [rowFreed, RowTouch.growth, Nat.add_zero], hr⟩
+            exact ⟨by simp only [rowFreed, rowFreedOn, RowTouch.growth, Nat.add_zero], hr⟩
         | insert amt v =>
             simp only [except_bind_ok] at h
             obtain ⟨⟨⟩, -, ⟨⟩, hn, ⟨⟩, -, ⟨⟩, -, ⟨⟩, -, h⟩ := h
@@ -177,7 +177,7 @@ theorem rowStep_weight {E : Env D} {w : World D} {t : Turn D} {r r' : Rows D} {x
             refine ⟨?_, Trie.canon_insert (rowSpec E) _ _ hr1⟩
             rw [rowsWeight_setHead hr1.1 hg1]
             rw [rowsWeight_insert_none hr.1 _ hn]
-            simp only [rowFreed, RowTouch.growth, rowEntryWeight, RowLeaf.weight, Nat.add_zero]
+            simp only [rowFreed, rowFreedOn, RowTouch.growth, rowEntryWeight, RowLeaf.weight, Nat.add_zero]
         | upsert amt v =>
             simp only [except_bind_ok] at h
             obtain ⟨⟨⟩, -, ⟨⟩, -, ⟨⟩, -, ⟨⟩, -, ⟨⟩, -, h⟩ := h
@@ -194,11 +194,11 @@ theorem rowStep_weight {E : Env D} {w : World D} {t : Turn D} {r r' : Rows D} {x
             cases hc : r.get (rowSpec E) (.row key) with
             | none =>
                 rw [rowsWeight_insert_none hr.1 _ hc]
-                simp only [rowFreed, rowAt, hc, Option.map_none, Option.getD_none, RowTouch.growth,
+                simp only [rowFreed, rowFreedOn, rowAt, hc, Option.map_none, Option.getD_none, RowTouch.growth,
                   rowEntryWeight, RowLeaf.weight, Nat.add_zero]
             | some old =>
                 have := rowsWeight_insert_some hr.1 (.row amt v ver) hc
-                simp only [rowFreed, rowAt, hc, Option.map_some, Option.getD_some, RowTouch.growth]
+                simp only [rowFreed, rowFreedOn, rowAt, hc, Option.map_some, Option.getD_some, RowTouch.growth]
                 simp only [rowEntryWeight, RowLeaf.weight] at this ⊢
                 omega
         | retract =>
@@ -217,7 +217,7 @@ theorem rowStep_weight {E : Env D} {w : World D} {t : Turn D} {r r' : Rows D} {x
               refine ⟨?_, Trie.canon_insert (rowSpec E) _ _ hcan⟩
               have hs := rowsWeight_setHead (c' := count - 1) (s' := sum - a)
                 (f' := max (headFloor E r key.parent key.rel) u + 1) hcan.1 hg1
-              simp only [rowFreed, rowAt, hc', Option.map_some, Option.getD_some, RowTouch.growth]
+              simp only [rowFreed, rowFreedOn, rowAt, hc', Option.map_some, Option.getD_some, RowTouch.growth]
               omega
             · simp at h
         | declare _ _ _ _ => simp at h
@@ -235,7 +235,7 @@ theorem foldRows_weight {E : Env D} {w : World D} {t : Turn D} :
   | x :: rest, acc, rr, hc, h => by
       rw [List.foldlM_cons, except_bind_ok] at h
       obtain ⟨acc', h1, h2⟩ := h
-      unfold rowStepFreed at h1
+      unfold rowStepFreed rowStepFreedOn at h1; simp only [rowStepOn_trie, rowFreedOn_trie] at h1
       rw [except_bind_ok] at h1
       obtain ⟨r1, hs, he⟩ := h1
       simp only [pure, Except.pure, Except.ok.injEq] at he
@@ -407,7 +407,7 @@ theorem rowsRun_weight {E : Env D} {w : World D} {t : Turn D} {rr : Rows D × Na
     (hr : w.RowsCanon E) (h : rowsRun E w t = .ok rr) :
     rowsWeight rr.1 + rr.2 = rowsWeight w.rows + (t.rows.map RowTouch.growth).sum ∧
       Trie.Canon (rowSpec E) 0 rr.1 := by
-  unfold rowsRun at h
+  rw [rowsRun_eq] at h
   simp only [except_bind_ok] at h
   obtain ⟨⟨⟩, -, ⟨⟩, -, h⟩ := h
   split at h
@@ -502,7 +502,7 @@ theorem rowStep_pin {E : Env D} {w : World D} {t : Turn D} {r r' : Rows D} {x : 
   obtain ⟨slot, seen, act⟩ := x
   simp only at hs hseen
   subst hs hseen
-  unfold rowStep at h
+  unfold rowStep rowStepOn at h; simp only [headOfOn_trie, headFloorOn_trie, setHeadOn_trie] at h
   simp only [except_bind_ok] at h
   obtain ⟨⟨⟩, -, ⟨⟩, -, ⟨⟩, -, h⟩ := h
   split at h
@@ -540,18 +540,18 @@ theorem rowStep_get_out {E : Env D} {w : World D} {t : Turn D} {r r' : Rows D} {
   | head p rel =>
       cases act with
       | declare limit cap width retract =>
-          unfold rowStep at h
+          unfold rowStep rowStepOn at h; simp only [setHeadOn_trie] at h
           simp only [except_bind_ok] at h
           obtain ⟨⟨⟩, -, ⟨⟩, -, ⟨⟩, -, ⟨⟩, -, ⟨⟩, -, hw⟩ := h
           simp only [pure, Except.pure, Except.ok.injEq] at hw
           subst hw
           exact Trie.get_insert_ne (rowSpec E) _ _ (hs fun e => by cases e).1
-      | keep => simp [rowStep] at h
-      | insert _ _ => simp [rowStep] at h
-      | upsert _ _ => simp [rowStep] at h
-      | retract => simp [rowStep] at h
+      | keep => simp [rowStep, rowStepOn] at h
+      | insert _ _ => simp [rowStep, rowStepOn] at h
+      | upsert _ _ => simp [rowStep, rowStepOn] at h
+      | retract => simp [rowStep, rowStepOn] at h
   | row k0 =>
-      unfold rowStep at h
+      unfold rowStep rowStepOn at h; simp only [headOfOn_trie, headFloorOn_trie, setHeadOn_trie] at h
       simp only [except_bind_ok] at h
       obtain ⟨⟨⟩, -, ⟨⟩, -, ⟨⟩, -, h⟩ := h
       split at h
@@ -609,7 +609,7 @@ theorem foldRows_get_out {E : Env D} {w : World D} {t : Turn D} {s : RowSlot D} 
   | x :: rest, acc, rr, hc, h, hs => by
       rw [List.foldlM_cons, except_bind_ok] at h
       obtain ⟨acc', h1, h2⟩ := h
-      unfold rowStepFreed at h1
+      unfold rowStepFreed rowStepFreedOn at h1; simp only [rowStepOn_trie, rowFreedOn_trie] at h1
       rw [except_bind_ok] at h1
       obtain ⟨r1, hstep, he⟩ := h1
       simp only [pure, Except.pure, Except.ok.injEq] at he
@@ -626,7 +626,7 @@ theorem foldRows_pins {E : Env D} {w : World D} {t : Turn D} :
   | y :: rest, acc, rr, hc, hn, h, x, hx, key, s, hs, hseen => by
       rw [List.foldlM_cons, except_bind_ok] at h
       obtain ⟨acc', h1, h2⟩ := h
-      unfold rowStepFreed at h1
+      unfold rowStepFreed rowStepFreedOn at h1; simp only [rowStepOn_trie, rowFreedOn_trie] at h1
       rw [except_bind_ok] at h1
       obtain ⟨r1, hstep, he⟩ := h1
       simp only [pure, Except.pure, Except.ok.injEq] at he
@@ -665,7 +665,7 @@ theorem admit_row_pins {E : Env D} {w w' : World D} {t : Turn D} (hr : w.RowsCan
     ∀ x ∈ t.rows, ∀ key s, x.slot = .row key → x.seen = some s → rowPin E (headFloor E w.rows key.parent key.rel) (rowAt E w.rows (.row key)) = s := by
   obtain ⟨_, hk, _⟩ := admit_ok h
   have hrun := hk.rows
-  unfold rowsRun at hrun
+  rw [rowsRun_eq] at hrun
   simp only [except_bind_ok] at hrun
   obtain ⟨⟨⟩, -, ⟨⟩, -, hrun⟩ := hrun
   split at hrun

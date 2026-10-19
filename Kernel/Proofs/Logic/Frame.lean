@@ -90,7 +90,7 @@ theorem admit_Frame {E : Env D} {w w' : World D} {t : Turn D} (h : World.admit E
         · simpa [bornEntries, createdIds, List.map_map, Function.comp_def] using hm
     | nullifier n => rw [commitTrie_nul, if_neg (fun hn => hs (.spent hn))]
   · have hrun := hk.rows
-    unfold rowsRun at hrun
+    rw [rowsRun_eq] at hrun
     simp only [except_bind_ok] at hrun
     obtain ⟨⟨⟩, -, ⟨⟩, -, hrun⟩ := hrun
     split at hrun
@@ -237,8 +237,8 @@ theorem rowFoot_needs_head (E : Env D) (o p : D) :
   have hrun : rowsRun E (rowWorld E o p) (rowTurn E o p) =
       .ok (setHead E (((Trie.T.empty : Rows D).insert (rowSpec E) (.head p 0) (.head 0 0 1 0 0 false 0)).insert
         (rowSpec E) (.row ⟨p, 0, ByteArray.empty⟩) (.row 0 ByteArray.empty 0)) p 0 1 0 1 0 0 false 0, 0) := by
-    simp [rowsRun, rowTurn, rowStepFreed, rowStep, hlive, req, headOf, headFloor, rowAt, hr, Trie.get_insert_self,
-      Trie.get_insert_ne, Trie.get_empty, dropHeads, rowFreed, Bounds.rowsMax, Bounds.rangesMax, Bounds.keyBytesMax,
+    simp [rowsRun_eq, rowTurn, rowStepFreed, rowStepFreedOn, rowStepOn, rowFreedOn, headOfOn_trie, headFloorOn_trie, setHeadOn_trie, hlive, req, headOf, headFloor, rowAt, hr, Trie.get_insert_self,
+      Trie.get_insert_ne, Trie.get_empty, dropHeads, Bounds.rowsMax, Bounds.rangesMax, Bounds.keyBytesMax,
       bind, Except.bind, pure, Except.pure]
   have hc : check E (rowWorld E o p) (rowTurn E o p) = .ok [] := by
     unfold check checkWith; rw [hmap, hrun]; rfl

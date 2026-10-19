@@ -356,6 +356,9 @@ structure Marks where
   `hash-required:rewalk`'s, each key in turn (`<N`; cv 01a15107-2281) -/
   batch : Nat := 0
   rewalk : Nat := 0
+  /-- the insert turns' rows run (`<L`) and the plant `hash-required:rows-rewalk`'s (`<M`; cv 01a153a5-0e09) -/
+  rowsRun : Nat := 0
+  rowsRewalk : Nat := 0
   probeInsert : Nat := 0
   prune : Nat := 0
   refuse : Nat := 0
@@ -398,6 +401,8 @@ def countMarks (out : String) : Marks :=
     | some 'E' => { m with plantInsert := m.plantInsert + n }
     | some 'B' => { m with batch := m.batch + n }
     | some 'N' => { m with rewalk := m.rewalk + n }
+    | some 'L' => { m with rowsRun := m.rowsRun + n }
+    | some 'M' => { m with rowsRewalk := m.rowsRewalk + n }
     | some 'K' => { m with probeInsert := m.probeInsert + n }
     | some 'R' => { m with prune := m.prune + n }
     | some 'F' => { m with refuse := m.refuse + n }
@@ -1975,6 +1980,15 @@ def countRangeReads (E : Env D) (st : State D) (w : World D) (t : Turn D) : Stat
         else st
     | none => st) st
 
+/-- PLANT `hash-required:rows-rewalk` (cv 01a153a5-0e09): the rows run each touch on the trie in turn,
+`rowsRun` before the overlay (`Kernel.Proofs.Admit.rowsRun_eq`: the same rows), each row and head write
+rebuilding its path from the root. `report` requires it never to count below the real run (`<L`) and to
+reach the same rows, and the insert turns' rows share with it in place of the run to read above their
+requirement. -/
+def plantRowsRewalk (E : Env D) (w : World D) (t : Turn D) : Except (Reject D) (Rows D × Nat) := do
+  let acc ← t.rows.foldlM (rowStepFreed E w t) (w.rows, 0)
+  pure (dropHeads E t acc)
+
 /-- The counted hashes of one admitted rows turn `w → w'` whose row touches are all inserts, or all
 retracts, and which reads no range: the whole REAL `World.admit` under the counting Env (`<W` for
 inserts, `<X` for retracts), and everything its `commit` does besides the rows (`<V`, `<Y`: the cell
@@ -2002,6 +2016,15 @@ def countRowsTurn (E : Env D) (st : State D) (w w' : World D) (t : Turn D) (stem
         let refusals := pruneRefusals cE (w.height + 1) w.refusals
         (trie.rootWith (trieSpec cE) e, journal.rootWith (journalSpec cE) e, refusals.rootWith (refusalSpec cE) e)
       let b := if stem then dbgTrace "<T" base else if ins then dbgTrace "<V" base else dbgTrace "<Y" base
+      -- the rows run alone (`<L`) and the re-walk plant (`<M`), on the insert turns
+      let lm := if ins then
+          some (dbgTrace "<L" fun _ => rowsRun cE w t, dbgTrace "<M" fun _ => plantRowsRewalk cE w t)
+        else none
+      let st := match lm with
+        | some (.ok l, .ok m) => if l.1.hashOf (rowSpec E) == w'.rowsRoot E && m.1.hashOf (rowSpec E) == w'.rowsRoot E then st
+            else failWith st "rows hash count: the rows run or the re-walk plant reached another rows root"
+        | some _ => failWith st "rows hash count: the rows run or the re-walk plant refused an admitted turn"
+        | none => st
       let st := match a with
         | .ok w'' => if w''.rowsRoot E == w'.rowsRoot E then st
             else failWith st "rows hash count: the counted admission reached another rows root"
@@ -2614,7 +2637,7 @@ def plantedArms : List String :=
    "pin-cell:same", "pin-cell-plant:caught", "pin-row:same", "pin-row-plant:caught",
    "pin-range:same", "pin-range-plant:caught", "rows-stem:ok",
    "hash-required:empty-per-insert", "proof-required:extra-sibling", "proof-required:sibling-byte",
-   "hash-required:rewalk",
+   "hash-required:rewalk", "hash-required:rows-rewalk",
    "state-order-create:stateKey", "state-dup-create:stateKey", "state-order-control:ok",
    "state-order-run:stateKey", "state-order-run-control:ok"]
 
@@ -2654,6 +2677,10 @@ def report (P : Params D) (seeds : List Nat) (control : Bool := false) : IO UInt
   let mut plantCounted := 0
   -- cv 01a15107-2281: the admissions with the re-walk plant in place of the batch
   let mut rewalkCounted := 0
+  -- cv 01a153a5-0e09: the rows probe's insert turns (row and stem) with the rows re-walk plant in place
+  -- of the run, and what they require
+  let mut rowsRewalkCounted := 0
+  let mut rowsInsReqAll := 0
   -- (journal-probe inserts, prunes, refusals, row inserts, row retracts, stem inserts) required
   let mut reqs : Nat × Nat × Nat × Nat × Nat × Nat := (0, 0, 0, 0, 0, 0)
   let mut weighed := 0
@@ -2715,6 +2742,17 @@ def report (P : Params D) (seeds : List Nat) (control : Bool := false) : IO UInt
     let st := if ratioUp rewalkN st.required.total > ratioUp m.admit st.required.total then
         { st with seen := "hash-required:rewalk" :: st.seen } else st
     rewalkCounted := rewalkCounted + rewalkN
+    -- the rows re-walk plant: never below the run, and the insert turns' rows share with it in place of
+    -- the run reads above what they require
+    let st := if m.rowsRewalk < m.rowsRun then
+        failWith st s!"hash required: the rows re-walk plant counted {m.rowsRewalk}, below the run's {m.rowsRun}" else st
+    let insShare := (m.rowIns - m.rowInsBase) + (m.stemIns - m.stemBase)
+    let insReq := st.rowInsReq + st.stemReq
+    let rowsRewalkN := insShare - m.rowsRun + m.rowsRewalk
+    let st := if ratioUp rowsRewalkN insReq > ratioUp insShare insReq then
+        { st with seen := "hash-required:rows-rewalk" :: st.seen } else st
+    rowsRewalkCounted := rowsRewalkCounted + rowsRewalkN
+    rowsInsReqAll := rowsInsReqAll + insReq
     req := req.add st.required
     counted := counted + m.admit
     plantCounted := plantCounted + plantN
@@ -2782,6 +2820,7 @@ def report (P : Params D) (seeds : List Nat) (control : Bool := false) : IO UInt
   IO.println s!"WASTE fold work-per-turn {showRatio work.2}"
   IO.println s!"kernel-sim: trie hashes of the run turns' admissions counted={counted} required={req.total} (cells {req.cells}, nullifiers {req.nullifiers}, journal {req.journal}, rows {req.rows}, refusals prune {req.refusals}, empty root {req.roots})"
   IO.println s!"kernel-sim: plant hash-required:empty-per-insert counted={plantCounted}: hashes-per-required {showRatio (ratioUp plantCounted req.total)}"
+  IO.println s!"kernel-sim: plant hash-required:rows-rewalk (each row touch on the trie in turn, the rows run before cv 01a153a5-0e09) counted={rowsRewalkCounted} over the insert turns' rows requirement {rowsInsReqAll}: hashes-per-required {showRatio (ratioUp rowsRewalkCounted rowsInsReqAll)}"
   IO.println s!"kernel-sim: plant hash-required:rewalk (each key in turn, the fold before cv 01a15107-2281) counted={rewalkCounted}: hashes-per-required {showRatio (ratioUp rewalkCounted req.total)}"
   IO.println s!"kernel-sim: required: journal probe inserts {reqs.1} (counted {jhashes.1}), prunes {reqs.2.1} (counted {jhashes.2.2.1}), refusals {reqs.2.2.1} (counted {rf.1}), row inserts {reqs.2.2.2.1} (counted {rw.1}), row retracts {reqs.2.2.2.2.1} (counted {rw.2.2.1}), stem inserts {reqs.2.2.2.2.2} (counted {stem.1})"
   IO.println s!"WASTE admit hashes-per-required {showRatio (ratioUp counted req.total)}"

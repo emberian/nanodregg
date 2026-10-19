@@ -1134,7 +1134,49 @@ def setHead (E : Env D) (r : Rows D) (parent : D) (rel count sum limit cap width
     (floor : Nat) : Rows D :=
   r.insert (rowSpec E) (.head parent rel) (.head count sum limit cap width retract floor)
 
-/-- One row touch, judged on the rows written so far this turn (slots are distinct, so a row's pin
+/-- Where a turn's row touches read and write (cv 01a153a5-0e09): the rows as a `Trie.T` (`trieStore`,
+the specification every rows theorem reads) or as the dirty overlay `Trie.U` (`uStore`, what `rowsRun`
+runs: a turn's row and head writes hashed once, at the seal). `rowStepOn` is the ONE body of a row touch,
+over either; `Kernel.Proofs.Admit.rowStepOn_map`: any map between stores that commutes with the three
+operations commutes with it (no premise), so the overlay run sealed is the trie run (`rowsRun_eq`). -/
+structure RowStore (D C : Type) where
+  get : C → RowSlot D → Option RowLeaf
+  ins : C → RowSlot D → RowLeaf → C
+  /-- remove a key (`Trie.retainAt` along its `rowPath`) -/
+  drop : C → RowSlot D → C
+
+/-- `headOf` on a store. -/
+def headOfOn {C : Type} (st : RowStore D C) (r : C) (parent : D) (rel : Nat) :
+    Option (Nat × Nat × Nat × Nat × Nat × Bool) :=
+  match st.get r (.head parent rel) with
+  | some (.head count sum limit cap width retract _) => some (count, sum, limit, cap, width, retract)
+  | _ => none
+
+/-- `headFloor` on a store. -/
+def headFloorOn {C : Type} (st : RowStore D C) (r : C) (parent : D) (rel : Nat) : Nat :=
+  match st.get r (.head parent rel) with
+  | some (.head _ _ _ _ _ _ floor) => floor
+  | _ => 0
+
+/-- `setHead` on a store. -/
+def setHeadOn {C : Type} (st : RowStore D C) (r : C) (parent : D) (rel count sum limit cap width : Nat)
+    (retract : Bool) (floor : Nat) : C :=
+  st.ins r (.head parent rel) (.head count sum limit cap width retract floor)
+
+/-- The rows as a trie: `rowAt`, `T.insert`, `retainAt` along the key's path. -/
+abbrev trieStore (E : Env D) : RowStore D (Rows D) where
+  get r s := rowAt E r s
+  ins r k v := r.insert (rowSpec E) k v
+  drop r k := Trie.retainAt (rowSpec E) (fun k' _ => decide (k' ≠ k)) (rowPath E k) r
+
+/-- The rows as the dirty overlay: a read walks it (no hash), a write is unhashed (`Trie.insU`), a
+removal seals what is written and removes from the trie (a retract splits the batch). -/
+def uStore (E : Env D) : RowStore D (Trie.U (RowSlot D) RowLeaf D) where
+  get u s := Trie.U.getAt (rowSpec E) s 0 u
+  ins u k v := Trie.insU (rowSpec E) k v 0 u
+  drop u k := .clean (Trie.retainAt (rowSpec E) (fun k' _ => decide (k' ≠ k)) (rowPath E k) (u.seal (rowSpec E)))
+
+/-- One row touch, judged on the rows written so far this turn, on any store (`RowStore`) (slots are distinct, so a row's pin
 is judged against the pre-state; a head's count and sum accumulate: the head update is additive,
 never pinned, KERNEL-46 amendment 3). The parent must be pinned by the turn (`rowParentUnpinned`)
 and live (`orphanRow`), or, for `declare`, born by it (`declareLate`).
@@ -1143,8 +1185,8 @@ Versions (KERNEL-54): an absent row's pin names its relation's floor IN THE WORL
 pin of the same turn); an insert takes the floor as its version (inserts leave the floor alone, so two
 turns' inserts commute); an upsert bumps the row's version; a retract raises the floor past the
 version of the row it removes. Each refused by name past `Bounds.counterLimit` (`overBound .version`). -/
-def rowStep (E : Env D) (w : World D) (t : Turn D) (r : Rows D)
-    (x : RowTouch D) : Except (Reject D) (Rows D) := do
+def rowStepOn {C : Type} (st : RowStore D C) (E : Env D) (w : World D) (t : Turn D) (r : C)
+    (x : RowTouch D) : Except (Reject D) C := do
   match x.slot, x.act with
   | .head p rel, .declare limit cap width retract => do
       req (decide (rel < 256)) (.overBound .rows)
@@ -1153,8 +1195,8 @@ def rowStep (E : Env D) (w : World D) (t : Turn D) (r : Rows D)
       req ((createdIds t).contains p) (.declareLate p)
       req (decide (limit ≤ Bounds.rowsPerRelationMax) && decide (width ≤ Bounds.keyBytesMax) &&
         decide (cap < Bounds.counterLimit)) (.overBound .rows)
-      req (rowAt E r (.head p rel)).isNone (.keyTaken p)
-      pure (setHead E r p rel 0 0 limit cap width retract 0)
+      req (st.get r (.head p rel)).isNone (.keyTaken p)
+      pure (setHeadOn st r p rel 0 0 limit cap width retract 0)
   | .head p _, _ => .error (.rowShape p)
   | .row key, act => do
       let p := key.parent
@@ -1162,12 +1204,12 @@ def rowStep (E : Env D) (w : World D) (t : Turn D) (r : Rows D)
       req (w.live E p).isSome (.orphanRow p)
       -- a parent the turn retires takes no row: its heads go with it (`dropHeads`)
       req (!(t.touches.any fun x => decide (x.cell = p) && decide (x.act = .retire))) (.orphanRow p)
-      match headOf E r p key.rel with
+      match headOfOn st r p key.rel with
       | none => .error (.noRelation p)
       | some (count, sum, limit, cap, width, retract) => do
           req (decide (key.k.size = width)) (.keyWidth p)
-          let cur := rowAt E r (.row key)
-          let floor := headFloor E r p key.rel
+          let cur := st.get r (.row key)
+          let floor := headFloorOn st r p key.rel
           let pinned : Except (Reject D) Unit :=
             match x.seen with
             | some s => req (decide (rowPin E (headFloor E w.rows p key.rel) cur = s)) (.stale p)
@@ -1180,7 +1222,7 @@ def rowStep (E : Env D) (w : World D) (t : Turn D) (r : Rows D)
               req (decide (count < limit)) (.relationFull p)
               req (decide (sum + amt ≤ cap)) (.relationCapped p)
               req (decide (v.size ≤ Bounds.valueBytesMax)) (.overBound .valueBytes)
-              pure (setHead E (r.insert (rowSpec E) (.row key) (.row amt v floor)) p key.rel (count + 1)
+              pure (setHeadOn st (st.ins r (.row key) (.row amt v floor)) p key.rel (count + 1)
                 (sum + amt) limit cap width retract floor)
           | .upsert amt v => do
               pinned
@@ -1191,7 +1233,7 @@ def rowStep (E : Env D) (w : World D) (t : Turn D) (r : Rows D)
               let fresh := cur.isNone
               req (!fresh || decide (count < limit)) (.relationFull p)
               req (decide (sum - old + amt ≤ cap)) (.relationCapped p)
-              pure (setHead E (r.insert (rowSpec E) (.row key) (.row amt v ver)) p key.rel
+              pure (setHeadOn st (st.ins r (.row key) (.row amt v ver)) p key.rel
                 (if fresh then count + 1 else count) (sum - old + amt) limit cap width retract floor)
           | .retract => do
               pinned
@@ -1199,24 +1241,35 @@ def rowStep (E : Env D) (w : World D) (t : Turn D) (r : Rows D)
               match cur with
               | some (.row a _ u) => do
                   req (decide (max floor u + 1 < Bounds.counterLimit)) (.overBound .version)
-                  pure (setHead E (Trie.retainAt (rowSpec E) (fun k _ => decide (k ≠ .row key))
-                    (rowPath E (.row key)) r) p key.rel (count - 1) (sum - a) limit cap width retract
+                  pure (setHeadOn st (st.drop r (.row key)) p key.rel (count - 1) (sum - a) limit cap width retract
                     (max floor u + 1))
               | _ => .error (.missingRow p)
           | .declare .. => .error (.rowShape p)
 
+/-- One row touch on the rows as a trie: `rowStepOn` at `trieStore`, what every rows theorem reads. -/
+def rowStep (E : Env D) (w : World D) (t : Turn D) (r : Rows D) (x : RowTouch D) : Except (Reject D) (Rows D) :=
+  rowStepOn (trieStore E) E w t r x
+
 /-- What a row touch gives back of its growth, judged on the rows before it: an upsert or a
 retract the entry it replaces or removes (with its key); nothing otherwise. -/
-def rowFreed (E : Env D) (r : Rows D) (x : RowTouch D) : Nat :=
+def rowFreedOn {C : Type} (st : RowStore D C) (r : C) (x : RowTouch D) : Nat :=
   match x.act with
-  | .upsert .. | .retract => ((rowAt E r x.slot).map fun l => rowEntryWeight (x.slot, l)).getD 0
+  | .upsert .. | .retract => ((st.get r x.slot).map fun l => rowEntryWeight (x.slot, l)).getD 0
   | _ => 0
 
-/-- One row touch with what it gives back, accumulated. -/
+/-- `rowFreedOn` on the rows as a trie. -/
+def rowFreed (E : Env D) (r : Rows D) (x : RowTouch D) : Nat := rowFreedOn (trieStore E) r x
+
+/-- One row touch with what it gives back, accumulated, on any store. -/
+def rowStepFreedOn {C : Type} (st : RowStore D C) (E : Env D) (w : World D) (t : Turn D) (acc : C × Nat)
+    (x : RowTouch D) : Except (Reject D) (C × Nat) := do
+  let r ← rowStepOn st E w t acc.1 x
+  pure (r, acc.2 + rowFreedOn st acc.1 x)
+
+/-- `rowStepFreedOn` on the rows as a trie. -/
 def rowStepFreed (E : Env D) (w : World D) (t : Turn D) (acc : Rows D × Nat)
-    (x : RowTouch D) : Except (Reject D) (Rows D × Nat) := do
-  let r ← rowStep E w t acc.1 x
-  pure (r, acc.2 + rowFreed E acc.1 x)
+    (x : RowTouch D) : Except (Reject D) (Rows D × Nat) :=
+  rowStepFreedOn (trieStore E) E w t acc x
 
 /-- A retired parent's heads leave with it, and give their weight back. `checkRowsRemain` refused a
 retirement whose parent still holds a row, and `rowStep` refuses a row under a parent the turn
@@ -1233,7 +1286,10 @@ def dropHeads (E : Env D) (t : Turn D) (acc : Rows D × Nat) : Rows D × Nat :=
     | _ => acc) acc
 
 /-- Every row touch, in order, from the World's rows; slots distinct (`duplicateRow`). Returns the
-rows after the turn and the storage its row touches give back (`rowFreed`, summed). -/
+rows after the turn and the storage its row touches give back (`rowFreed`, summed). The touches run on
+the dirty overlay (`uStore`, cv 01a153a5-0e09), sealed once before the retired parents' heads leave: a
+node the turn's row and head writes share is hashed once. The same rows as each touch on the trie in
+turn (`Kernel.Proofs.Admit.rowsRun_eq`, no premise), which the proofs read. -/
 def rowsRun (E : Env D) (w : World D) (t : Turn D) :
     Except (Reject D) (Rows D × Nat) := do
   req (decide (t.rows.length ≤ Bounds.rowsMax) && decide (t.ranges.length ≤ Bounds.rangesMax)) (.overBound .rows)
@@ -1243,8 +1299,8 @@ def rowsRun (E : Env D) (w : World D) (t : Turn D) :
   match t.rows.find? (fun x => decide (1 < (t.rows.filter fun y => decide (y.slot = x.slot)).length)) with
   | some x => .error (.duplicateRow (match x.slot with | .head p _ => p | .row k => k.parent))
   | none => do
-      let acc ← t.rows.foldlM (rowStepFreed E w t) (w.rows, 0)
-      pure (dropHeads E t acc)
+      let acc ← t.rows.foldlM (rowStepFreedOn (uStore E) E w t) (.clean w.rows, 0)
+      pure (dropHeads E t (acc.1.seal (rowSpec E), acc.2))
 
 /-- The rows after a checked turn and what its row touches give back. `check` ran `rowsRun` to
 `.ok`, so the fallback is unreachable after it. -/

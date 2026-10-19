@@ -174,15 +174,14 @@ theorem rowStep_staleOnly (E : Env D) (w : World D) (t : Turn D) (r : Rows D) (x
       rowPin E (headFloor E w.rows key.parent key.rel) (rowAt E r (.row key)) ≠ s) (rowStep E w t r x) := by
   obtain ⟨slot, seen, act⟩ := x
   cases slot with
-  | head p rel => cases act <;> (unfold rowStep; stale_only)
+  | head p rel => cases act <;> (unfold rowStep rowStepOn; simp only [setHeadOn_trie]; stale_only)
   | row key =>
-    cases act <;> unfold rowStep <;> stale_only
+    cases act <;> unfold rowStep rowStepOn <;> simp only [headOfOn_trie, headFloorOn_trie, setHeadOn_trie] <;> stale_only
     all_goals
       apply StaleOnly.req
       intro y hy hb
       cases hy
-      rename_i hseen
-      exact ⟨key, _, rfl, rfl, hseen, by simpa using hb⟩
+      exact ⟨key, _, rfl, rfl, rfl, by simpa using hb⟩
 
 /-- The rows fold: a `stale` refusal is a pinned row touch whose pin disagrees with the rows the
 fold started from (slots are distinct, so no earlier touch of the turn moved its row). -/
@@ -197,13 +196,13 @@ theorem foldRows_staleOnly (E : Env D) (w : World D) (t : Turn D) :
       rw [List.foldlM_cons]
       simp only [List.map_cons, List.nodup_cons] at hn
       apply StaleOnly.bind
-      · unfold rowStepFreed
+      · unfold rowStepFreed rowStepFreedOn; simp only [rowStepOn_trie, rowFreedOn_trie]
         apply StaleOnly.bind
         · exact (rowStep_staleOnly E w t acc.1 z).mono fun y ⟨key, s, h1, h2, h3, h4⟩ =>
             ⟨z, List.mem_cons_self, key, s, h1, h2, h3, h4⟩
         · intros; exact StaleOnly.pure' _
       · intro acc' hacc'
-        unfold rowStepFreed at hacc'
+        unfold rowStepFreed rowStepFreedOn at hacc'; simp only [rowStepOn_trie, rowFreedOn_trie] at hacc'
         rw [except_bind_ok] at hacc'
         obtain ⟨r1, hstep, he⟩ := hacc'
         simp only [pure, Except.pure, Except.ok.injEq] at he
@@ -221,7 +220,7 @@ theorem foldRows_staleOnly (E : Env D) (w : World D) (t : Turn D) :
 theorem rowsRun_staleOnly (E : Env D) (w : World D) (t : Turn D) (hr : w.RowsCanon E) :
     StaleOnly (fun y => ∃ x ∈ t.rows, ∃ key s, x.slot = .row key ∧ key.parent = y ∧ x.seen = some s ∧
       rowPin E (headFloor E w.rows key.parent key.rel) (rowAt E w.rows (.row key)) ≠ s) (rowsRun E w t) := by
-  unfold rowsRun
+  rw [rowsRun_eq]
   apply StaleOnly.bind
   · apply StaleOnly.req; intro _ h; cases h
   · intro _ _

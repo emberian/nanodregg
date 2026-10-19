@@ -442,18 +442,18 @@ private theorem rowStep_mono {E : Env D} {w : World D} {t : Turn D} {r r' : Rows
   | head q rel' =>
       cases act with
       | declare l cap w rt =>
-          simp only [rowStep, except_bind_ok] at h
+          simp only [rowStep, rowStepOn, setHeadOn_trie, except_bind_ok] at h
           obtain ⟨⟨⟩, -, ⟨⟩, -, ⟨⟩, -, ⟨⟩, -, ⟨⟩, hn, h⟩ := h
           simp only [pure, Except.pure, Except.ok.injEq] at h
           subst h
           have hn' : rowAt E r (.head q rel') = none := by simpa using req_ok.mp hn
           exact mono_declare hn' key
-      | keep => simp [rowStep] at h
-      | insert _ _ => simp [rowStep] at h
-      | upsert _ _ => simp [rowStep] at h
-      | retract => simp [rowStep] at h
+      | keep => simp [rowStep, rowStepOn] at h
+      | insert _ _ => simp [rowStep, rowStepOn] at h
+      | upsert _ _ => simp [rowStep, rowStepOn] at h
+      | retract => simp [rowStep, rowStepOn] at h
   | row key' =>
-      simp only [rowStep, except_bind_ok] at h
+      simp only [rowStep, rowStepOn, headOfOn_trie, headFloorOn_trie, setHeadOn_trie, except_bind_ok] at h
       obtain ⟨⟨⟩, -, ⟨⟩, -, ⟨⟩, -, h⟩ := h
       rcases hh : headOf E r key'.parent key'.rel with _ | ⟨count, sum, limit, cap, width, retract⟩
       · rw [hh] at h; cases h
@@ -505,7 +505,7 @@ private theorem foldRows_mono {E : Env D} {w : World D} {t : Turn D} (key : RowK
   | x :: rest, acc, rr, hc, h => by
       rw [List.foldlM_cons, except_bind_ok] at h
       obtain ⟨acc', h1, h2⟩ := h
-      unfold rowStepFreed at h1
+      unfold rowStepFreed rowStepFreedOn at h1; simp only [rowStepOn_trie, rowFreedOn_trie] at h1
       rw [except_bind_ok] at h1
       obtain ⟨r1, hs, he⟩ := h1
       simp only [pure, Except.pure, Except.ok.injEq] at he
@@ -519,7 +519,7 @@ private theorem admit_rowsMono {E : Env D} {w w' : World D} {t : Turn D} (hr : w
     (hnr : ∀ x ∈ t.touches, x.act = .retire → x.cell ≠ key.parent) : Mono E w.rows w'.rows key := by
   obtain ⟨posts, hk, hrows⟩ := admit_rows h
   have hrun := hk.rows
-  unfold rowsRun at hrun
+  rw [rowsRun_eq] at hrun
   simp only [except_bind_ok] at hrun
   obtain ⟨⟨⟩, -, ⟨⟩, -, hrun⟩ := hrun
   split at hrun
@@ -1212,7 +1212,7 @@ theorem foldRows_each {E : Env D} {w : World D} {t : Turn D} :
       rw [List.foldlM_cons, except_bind_ok] at h
       obtain ⟨acc', h1, h2⟩ := h
       rcases List.mem_cons.mp hx with rfl | hx
-      · unfold rowStepFreed at h1
+      · unfold rowStepFreed rowStepFreedOn at h1; simp only [rowStepOn_trie, rowFreedOn_trie] at h1
         rw [except_bind_ok] at h1
         obtain ⟨r1, hs, -⟩ := h1
         exact ⟨_, _, hs⟩
@@ -1223,7 +1223,7 @@ theorem rowStep_dead {E : Env D} {w : World D} {t : Turn D} {r : Rows D} {x : Ro
     {key : RowKey D} (hx : x.slot = .row key) (hl : w.live E key.parent = none) :
     rowStep E w t r x = .error (.rowParentUnpinned key.parent) ∨
       rowStep E w t r x = .error (.orphanRow key.parent) := by
-  unfold rowStep
+  unfold rowStep rowStepOn; simp only [headOfOn_trie, headFloorOn_trie, setHeadOn_trie]
   rw [hx]
   by_cases ht : (t.touches.any fun y => decide (y.cell = key.parent)) = true
   · right
@@ -1239,7 +1239,7 @@ theorem admit_dead {E : Env D} {w w' : World D} {t : Turn D} {key : RowKey D}
   intro h
   obtain ⟨posts, hk, -⟩ := admit_ok h
   have hr := hk.rows
-  unfold rowsRun at hr
+  rw [rowsRun_eq] at hr
   simp only [except_bind_ok] at hr
   obtain ⟨⟨⟩, -, ⟨⟩, -, hr⟩ := hr
   split at hr
