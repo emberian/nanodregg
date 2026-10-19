@@ -87,6 +87,9 @@ structure Sys (D : Type) [Ord D] where
   flatProgram : Bool := false
   /-- a custody refusal of `signIncoming` ends the command by custody's name (a plant, PROTOCOL-56) -/
   maskIncoming : Bool := false
+  /-- the attempt store ends `uncertain` with no payload, the confirm's stderr dropped (a plant,
+  cv 01a150b1) -/
+  dropHint : Bool := false
 
 def skipJudge (X : Ctx D) : Ctx D :=
   { X with program := { X.program with judge := fun _ _ _ _ _ _ => .ok () } }
@@ -134,6 +137,7 @@ def sys (R : Rows.Params D) : Option Mutation → Sys D
   | some .flatProgram => { writer := { R, X := R.ctx }, follow := R.ctx, flatProgram := true }
   | some .maskIncoming => { writer := { R, X := R.ctx }, follow := R.ctx, maskIncoming := true }
   | some .guessedBudget => { writer := { R := { R with pageBudget := 16384 }, X := R.ctx }, follow := R.ctx }
+  | some .dropHint => { writer := { R, X := R.ctx }, follow := R.ctx, dropHint := true }
 
 /-! ## Actors -/
 
@@ -204,6 +208,11 @@ structure St (D : Type) [Ord D] where
   committed : Array ByteArray := #[]
   /-- the rows' founding invitation: the sponsor's, at genesis, pinning the genesis World -/
   invitation : ByteArray := ByteArray.empty
+  /-- the stderr of the command that ended last (`ByteArray.empty` if it ended in the harness) -/
+  lastErr : ByteArray := ByteArray.empty
+  /-- the attempt's hint: the last confirm or probe `receipt CALL` stderr that was not empty and at
+  most `Bounds.hintBytesMax` bytes, as nd's attempt store keeps it (cv 01a150b1) -/
+  hint : ByteArray := ByteArray.empty
 
 abbrev M (D : Type) [Ord D] := StateT (St D) IO
 
@@ -550,6 +559,7 @@ mutual
 def command (name : String) (argv : List String) (fault : Fault) : Nat → M D (Expect × String)
   | 0 => pure (.refused "tooDeep", "")
   | depth + 1 => do
+      modify fun st => { st with lastErr := ByteArray.empty }
       let a ← actor name
       let gw := (← get).genesis
       let a := if coldFault fault then { a with follow := { world := gw } } else a
@@ -590,6 +600,7 @@ def steps (name : String) (argv : List String) (fault : Fault) (depth : Nat) (b 
           -- the plant: `pageIo` read as the old final refusal, verbatim (exit 1, `refused pageIo`)
           let (exit, err) := if (← get).sys.pageIoFatal && exit.toNat == CommandExit.pageIo.code then
               (CommandExit.refused.code.toUInt8, s!"refused {pageIoName}\n".toUTF8) else (exit, err)
+          modify fun st => { st with lastErr := err }
           pure (outcomeOf exit err, (String.fromUTF8? out).getD "")
       | some (.sign msg k) =>
           let (n, a, key) ← custodyOf name fault
@@ -638,6 +649,7 @@ def steps (name : String) (argv : List String) (fault : Fault) (depth : Nat) (b 
               let _ ← ask .submit call
               command name argv .none depth
           | _, _ =>
+              modify fun st => { st with hint := ByteArray.empty }
               match ← drive name call fault depth attemptFuel 0 none none none "" with
               | .error e => pure (.refused e, "")
               | .ok res => resume name argv fault depth k res fuel
@@ -695,7 +707,11 @@ def drive (name : String) (call : ByteArray) (fault : Fault) (depth : Nat) :
             let (o, out) ← command name ["receipt", Text.toHex call] .none depth
             match (if o = .ok then settleOf out else none) with
             | some (s, txt) => drive name call fault depth fuel sends (some (req, s)) reply host txt
-            | none => drive name call fault depth fuel sends (some (req, .lost)) reply host said
+            | none =>
+                -- nd's attempt store keeps the receipt's stderr: the last one not empty and in bound
+                let e := (← get).lastErr
+                if !e.isEmpty && e.size ≤ Bounds.hintBytesMax then modify fun st => { st with hint := e }
+                drive name call fault depth fuel sends (some (req, .lost)) reply host said
       | .committed =>
           modify fun st => { st with committed := st.committed.push call }
           settle name call .committed
@@ -714,7 +730,9 @@ def drive (name : String) (call : ByteArray) (fault : Fault) (depth : Nat) :
           let f := match last with | some (_, s) => s.name | none => ""
           pure (.ok (ended .contradicted s!"{(host.getD .lost).name} {f}"))
       | .open => pure (.ok (ended .open ""))
-      | .uncertain => pure (.ok (ended .uncertain ""))
+      | .uncertain =>
+          let st ← get
+          pure (.ok (ByteArray.mk #[Attempt.Action.uncertain.code] ++ (if st.sys.dropHint then ByteArray.empty else st.hint)))
       | .badReply => pure (.ok (ended .badReply ""))
 termination_by fuel => (depth, 0, fuel + 1)
 end

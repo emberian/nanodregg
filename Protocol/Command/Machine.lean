@@ -860,8 +860,58 @@ def settledName (txt : String) : String :=
   | [w] => w
   | _ => "refused"
 
+/-- One refusal of every name follow's own machine prints but the Host's (`host`, a string Lean
+does not produce): a receive refusal and a kernel rejection are named by their owners' tables
+instead (`hintNames`). Arguments are placeholders; a name drops them. -/
+def hintReps : List (Refusal Nat) :=
+  [.eventMismatch 0, .badState, .badResult, .planMoved, .expect 0, .missingCell 0, .tooManyPins,
+   .chainMismatch 0, .pageTooLong 0, .noText, .expired 0, .badCall, .unknownRelation "",
+   .rangePastLimit 0, .badPrefix] ++
+  ([.argvPastBound 0, .notUtf8 0, .noVerb, .unknownVerb "", .usage "" "", .badDigest "", .badNumber "",
+    .badRight "", .badToken "", .badExpect "", .badPackage "", .badAccount "", .badOnce ""] :
+    List ParseRefusal).map Refusal.parse ++
+  ([.badPage, .baseMoved 0, .baseMismatch, .pageMismatch, .baseTooLarge 0, .baseUndecodable,
+    .notBehind 0, .notAtGenesis 0, .incomplete 0 0, .wrongWorld] : List Thin.Refusal).map Refusal.thin ++
+  CustodyRefusal.all.map Refusal.custody ++
+  (([.badInvitation, .notSponsor, .pinMismatch, .otherWorld, .noBase, .baseMismatch] : List Invite.Refusal) ++
+    ([.nameTooLong, .nonceTooLong, .tooManyFounders, .founderKeyTooLong 0, .founderNextTooLong 0,
+      .allowanceTooLarge] : List GenesisRefusal).map Invite.Refusal.inputs).map Refusal.invite
+
+/-- The names a hint may carry: every `refused NAME` follow's machine prints but the Host's word
+(`Proofs.Command.hintNames_complete`). -/
+def hintNames : List String :=
+  hintReps.map Refusal.name ++ Receive.refusalNames ++ Receive.rejectNames
+
+/-- Where the first line of `p` ends, scanning from `i` with `fuel` bytes left: the first newline's
+index, or the end. -/
+def lineEnd (p : ByteArray) : Nat → Nat → Nat
+  | 0, i => i
+  | fuel + 1, i => if h : i < p.size then (if p[i] == 10 then i else lineEnd p fuel (i + 1)) else i
+
+/-- A payload's first line: its bytes before the first newline. -/
+def firstLine (p : ByteArray) : ByteArray := p.extract 0 (lineEnd p p.size 0)
+
+/-- The hint an attempt's `uncertain` end carries (cv 01a150b1, PROTOCOL-55's finding): the payload
+is the stderr of follow's `receipt CALL` for the attempt's confirm or probe, as the attempt store
+handed it. It is read only when it is at most `Bounds.hintBytesMax` bytes and its first line is byte
+for byte `refused NAME` with NAME one of `hintNames`; anything else (another text, a Host name that
+is not in the table, none) is no hint. What is printed is the table's name, never the payload's
+bytes (`Proofs.Command.confirmHint_iff`); a Host name equal to a table name (`refused stale`
+relayed) is printed as that name. -/
+def confirmHint (p : ByteArray) : Option String :=
+  if p.size ≤ Bounds.hintBytesMax then
+    hintNames.find? fun n => decide (firstLine p = ("refused " ++ n).toUTF8)
+  else none
+
+/-- What an `uncertain` end prints on stdout beside `uncertain` on stderr: the hint, or nothing. -/
+def uncertainOut (p : ByteArray) : ByteArray :=
+  match confirmHint p with
+  | some n => s!"hint confirm: refused {n}\n".toUTF8
+  | none => ByteArray.empty
+
 /-- Step 4's result is the attempt's end, `u8 Action.code ‖ payload` (PROTOCOL-46): committed and
-refused only as the member's follow settled them; `open` and `hostContradicted` restart. -/
+refused only as the member's follow settled them; `open` and `hostContradicted` restart; an
+`uncertain` end prints the refusal that caused it when its payload names one (`uncertainOut`). -/
 def settled (X : Ctx D) (out result : ByteArray) : Reply :=
   if h : 0 < result.size then
     let txt := (String.fromUTF8? (result.extract 1 result.size)).getD ""
@@ -872,7 +922,8 @@ def settled (X : Ctx D) (out result : ByteArray) : Reply :=
     | some .open => .done CommandExit.open.code.toUInt8 ByteArray.empty "open\n".toUTF8
     | some .contradicted =>
         .done CommandExit.hostContradicted.code.toUInt8 ByteArray.empty s!"hostContradicted {txt}\n".toUTF8
-    | some .uncertain => .done CommandExit.uncertain.code.toUInt8 ByteArray.empty "uncertain\n".toUTF8
+    | some .uncertain =>
+        .done CommandExit.uncertain.code.toUInt8 (uncertainOut (result.extract 1 result.size)) "uncertain\n".toUTF8
     | some .badReply => .done CommandExit.client.code.toUInt8 ByteArray.empty "badReply\n".toUTF8
     | _ => refused (D := D) .badResult
   else refused (D := D) .badResult

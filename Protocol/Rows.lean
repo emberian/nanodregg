@@ -288,6 +288,9 @@ inductive Mutation
   `noRotation` masks the writer's `unknownKey`. The machine before ROOT's rule (a) (PROTOCOL-56) did
   that for every name but `notArmed`; the plant cuts in in the harness, before `step` -/
   | maskIncoming
+  /-- the attempt store ends `uncertain` with no payload: the confirm's `receipt CALL` stderr dropped,
+  the shape before cv 01a150b1 (nd's `Vec::new()`) -/
+  | dropHint
   deriving DecidableEq, Repr
 
 /-- A row's plant: the mutation, and the line that must catch it with the outcome it then gets. -/
@@ -312,6 +315,9 @@ structure Row where
   /-- a piece of the system the row needs that does not exist yet, with its owner: the row is
   PENDING by that name, never PASS and never a red that hides the others -/
   blockedOn : Option String := none
+  /-- the writer's page budget for this row, when the row drives a misconfigured writer on purpose
+  (a fault of the row, never the parameters' setting) -/
+  pageBudget : Option Nat := none
   deriving Repr
 
 def Row.lines (r : Row) : List Line :=
@@ -1394,8 +1400,26 @@ def wrongFollowerRow : Row where
     ok "newcomer" ["read", "@shared"]])
   plant := .caught .maskIncoming 6 (.refused "noRotation")
 
+/-- An attempt that ends `uncertain` because the member's own follow refused the confirm says which
+refusal (cv 01a150b1, PROTOCOL-55's finding): the writer pages with the old 16384-byte budget (the
+row's fault), so the queue Bell's install never fits a page, its confirm's `receipt CALL` is
+refused `badResult`, and line 6 ends `uncertain` printing `hint confirm: refused badResult`. The
+plant is the attempt store that drops the receipt's stderr (nd's `Vec::new()` before cv 01a150b1):
+line 6 is `refused unprinted`. -/
+def uncertainHintRow : Row where
+  name := "uncertainHint"
+  replaces := []
+  ops := everyWrite
+  kinds := ["enroll", "grant", "install", "create"]
+  pageBudget := some 16384
+  drive := .members (welcome ++ [
+    { actor := "sponsor", act := .cmd ["install", "<world/resident/Bell"], expect := .uncertain,
+      prints := some "hint confirm: refused badResult" }])
+  plant := .caught .dropHint 6 (.refused "unprinted")
+
 def rows : List Row :=
   [journey, reopen, laws, rotate, audit, paging, coldCatchUp, inflatedHeight, forgotten, refusedRow, refusedFinalRow, inviteRow, useRow, describeRow, stateRow, receiptRow, settleRow, carry, thin, thinStale, sealRow, basePin, pageIoRow, wrongWorld, wrongWorldRead, pay, well, bounty, grain, hermes, bar,
-   langJourney, rangeRow, rangeLimitRow, bellRow, bigEventRow, wrongFollowerRow]
+   langJourney, rangeRow, rangeLimitRow, bellRow, bigEventRow, wrongFollowerRow,
+   uncertainHintRow]
 
 end Nanodregg.Protocol

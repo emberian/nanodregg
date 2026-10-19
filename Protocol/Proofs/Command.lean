@@ -858,4 +858,96 @@ theorem step_pageIo_base {X : Ctx D} {dc : Codec.Stream D} {B : Thin.Base (World
   simp only [hst, Option.map_some, Option.getD_some, hp]
   simp [stepResult, custodyPhase, pageIo_hostReply, pageIo_not_expired, hi, ho, hpg, hu, ht]
 
+/-! ## The `uncertain` hint (cv 01a150b1) -/
+
+/-- A recorded code's name is one of the kernel's two name tables. -/
+theorem codeName_mem {k : Nat} {n : String} (h : codeName k = some n) :
+    n ∈ refusalNames ++ rejectNames := by
+  unfold codeName at h
+  split at h
+  · exact List.mem_append_left _ (List.mem_of_getElem? h)
+  · exact List.mem_append_right _ (List.mem_of_getElem? h)
+
+omit [Ord D] [DecidableEq D] in
+/-- **Every refusal follow's machine prints is in `hintNames`, but the Host's word**: the table a hint
+is read against misses no name Lean's own refusals produce. -/
+theorem hintNames_complete (r : Refusal D) (h : ∀ n, r ≠ .host n) : r.name ∈ hintNames := by
+  cases r with
+  | host n => exact absurd rfl (h n)
+  | receive r =>
+      have hm := codeName_mem (codeName_code (D := D) (.refused r))
+      simp only [Verdict.name] at hm
+      simp only [Refusal.name, hintNames, List.mem_append] at hm ⊢
+      rcases hm with hm | hm
+      · exact Or.inl (Or.inr hm)
+      · exact Or.inr hm
+  | reject r =>
+      have hm := codeName_mem (codeName_code (D := D) (.rejected r))
+      simp only [Verdict.name] at hm
+      simp only [Refusal.name, hintNames, List.mem_append] at hm ⊢
+      rcases hm with hm | hm
+      · exact Or.inl (Or.inr hm)
+      · exact Or.inr hm
+  | parse p =>
+      cases p <;> simp [Refusal.name, ParseRefusal.name, hintNames, hintReps]
+  | thin t =>
+      cases t <;> simp [Refusal.name, Thin.Refusal.name, hintNames, hintReps]
+  | custody c =>
+      cases c <;> simp [Refusal.name, CustodyRefusal.name, CustodyRefusal.all, hintNames, hintReps]
+  | invite i =>
+      cases i with
+      | inputs g => cases g <;> simp [Refusal.name, Invite.Refusal.name, GenesisRefusal.name, hintNames, hintReps]
+      | _ => simp [Refusal.name, Invite.Refusal.name, hintNames, hintReps]
+  | _ => simp [Refusal.name, hintNames, hintReps]
+
+/-- **The hint is read iff** the payload is at most `Bounds.hintBytesMax` bytes and its first line
+is byte for byte `refused NAME`, NAME in `hintNames`. -/
+theorem confirmHint_iff (p : ByteArray) (n : String) :
+    confirmHint p = some n ↔ p.size ≤ Bounds.hintBytesMax ∧ n ∈ hintNames ∧
+      firstLine p = ("refused " ++ n).toUTF8 := by
+  unfold confirmHint
+  constructor
+  · intro h
+    split at h
+    · rename_i hs
+      have h2 := List.find?_some h
+      simp only [decide_eq_true_eq] at h2
+      exact ⟨hs, List.mem_of_find?_eq_some h, h2⟩
+    · cases h
+  · rintro ⟨hs, hm, hl⟩
+    rw [if_pos hs]
+    obtain ⟨m, hfm⟩ : ∃ m, hintNames.find?
+        (fun n => decide (firstLine p = ("refused " ++ n).toUTF8)) = some m :=
+      Option.isSome_iff_exists.1 (List.find?_isSome.2 ⟨n, hm, decide_eq_true hl⟩)
+    rw [hfm]
+    have hl' := List.find?_some hfm
+    simp only [decide_eq_true_eq] at hl'
+    rw [hl] at hl'
+    simp only [String.toUTF8_eq_toByteArray] at hl'
+    rw [(String.append_right_inj "refused ").1 (String.toByteArray_inj.1 hl')]
+
+/-- The tooth: a NAME outside Lean's table (any other text, a Host name the table lacks) is never
+shown as a hint, whatever the payload. -/
+theorem confirmHint_foreign {p : ByteArray} {n : String} (h : n ∉ hintNames) : confirmHint p ≠ some n :=
+  fun hc => h ((confirmHint_iff p n).1 hc).2.1
+
+/-- Liveness: the refusal PROTOCOL-55 found, follow's `refused badResult` line, is read as its hint. -/
+theorem confirmHint_badResult : confirmHint "refused badResult\n".toUTF8 = some "badResult" := by
+  decide +kernel
+
+omit [Ord D] [DecidableEq D] in
+/-- **`settled`'s `uncertain` arm**: exit `uncertain`, `uncertain` on stderr, and on stdout the hint
+`confirmHint` reads from the attempt's payload, or nothing. -/
+theorem settled_uncertain (X : Ctx D) (out p : ByteArray) :
+    settled X out (ByteArray.mk #[Attempt.Action.uncertain.code] ++ p) =
+      .done CommandExit.uncertain.code.toUInt8 (uncertainOut p) "uncertain\n".toUTF8 := by
+  have hsz : (ByteArray.mk #[Attempt.Action.uncertain.code] ++ p).size = 1 + p.size := by
+    simp [ByteArray.size_append]
+  have hx : (ByteArray.mk #[Attempt.Action.uncertain.code] ++ p).extract 1
+      (ByteArray.mk #[Attempt.Action.uncertain.code] ++ p).size = p := by
+    rw [hsz]; exact ByteArray.extract_append_eq_right rfl (by simp)
+  unfold settled
+  rw [dif_pos (by omega), hx]
+  rfl
+
 end Nanodregg.Protocol.Command

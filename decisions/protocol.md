@@ -1798,3 +1798,24 @@ The writer's fact was masked by custody's reason (law 7).
 - The collision set is the union over every pin of the call. The proof uses only the stale pin's pair, so `_sep`'s premise is stronger than a per-pin form. It is still a collision on concrete inputs the two Worlds hold.
 - `w₀` is not required to be reachable from genesis. Its invariants are premises, and each has a genesis and fold propagator.
 - Once `plan` signs range pins, the range case needs `range_stale_behind_forever` in place of `u.ranges = []`.
+
+## PROTOCOL-58 · an attempt's `uncertain` names the refusal that caused it: `hint confirm: refused NAME` (2026-10-21, PROTOCOL-20; cv 01a150b1, PROTOCOL-55's critique; agreed with CLIENT-9, which lands the Rust half after this)
+
+**The gap.** PROTOCOL-55's red: a confirm whose `receipt CALL` follow REFUSES (`badResult`) is read as `lost`, and the attempt ends `uncertain` with an empty payload. On the member's screen that is the Host's failed-append `uncertain`, and telling the two apart cost a trace.
+
+**Decision.**
+- The attempt's `uncertain` end carries, as its payload, the stderr of follow's `receipt CALL` for the attempt's confirm or probe: the last one that was not empty and was at most `Bounds.hintBytesMax` = 512 bytes. A longer one is handed as none, never cut. CLIENT-9 lands this in nd's attempt store (`Reply::Lost(Vec<u8>)`); the bound is emitted as `HINT_BYTES_MAX` into client/src/generated.rs.
+- `settled`'s `uncertain` arm prints `uncertain` on stderr as before and, on stdout, `hint confirm: refused NAME` (`uncertainOut`). It does so only when the payload is within the bound and its first line is byte for byte `refused NAME` with NAME in `hintNames` (`confirmHint`). The name printed is the table's string, never the payload's bytes.
+- `hintNames` is every name follow's own machine prints but the Host's word: one representative per `Refusal` constructor (`hintReps`), plus the kernel's own `refusalNames` and `rejectNames` for a receive refusal and a kernel rejection. A Host name equal to a table name is printed as that name.
+- Theorems (Protocol/Proofs/Command.lean):
+  - `hintNames_complete`: every non-host refusal's name is in the table;
+  - `confirmHint_iff`: the hint is read exactly under the condition above;
+  - `confirmHint_foreign`, the tooth: a name outside the table is never shown;
+  - `confirmHint_badResult`: the condition is live (`decide +kernel`);
+  - `settled_uncertain`: `settled` over `uncertain.code ‖ p` is exit `uncertain`, `uncertainOut p` on stdout, `uncertain` on stderr.
+- Rows: `Loopback` keeps each command's stderr (`St.lastErr`), and its attempt store keeps the hint as nd's does (`St.hint`, reset per attempt). Row `uncertainHint`: the writer pages with the old 16384 (the row's fault, `Row.pageBudget`; a harness parameter, nothing in admission reads it), so the queue Bell's install's confirm is refused `badResult`, and line 6 is `uncertain` printing `hint confirm: refused badResult`. Plant `dropHint`, the attempt store's empty payload (nd's `Vec::new()` before this), is caught at line 6, `refused unprinted`.
+
+**Critique.**
+- The rows' attempt store is a Lean model of nd's (it always was: `drive` runs `Attempt.next`, the decision CLIENT-3 runs). The keep rule (last non-empty, within the bound) is restated in it. The plant mutates that model, so it cannot catch nd's Rust store going back to `Vec::new()`. CLIENT-9's half needs its own test of the store.
+- The label says `confirm` for a probe's receipt too. Both are follow's `receipt CALL` for the attempt.
+- Only one direction of the table is proved: every name Lean prints is in it. That every entry is some refusal's name holds by construction for `hintReps`, and for the kernel's lists by KERNEL's `codeName_code` ordering.

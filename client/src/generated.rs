@@ -12,6 +12,7 @@ pub const IDLE_MS_MAX: u32 = 300000;
 pub const FRAME_MS_MAX: u32 = 30000;
 pub const REPLY_MS_MAX: u32 = 120000;
 pub const REPLY_WRITE_MS_MAX: u32 = 30000;
+pub const HINT_BYTES_MAX: u32 = 512;
 
 pub mod host_op {
     pub const SUBMIT: u8 = 1;

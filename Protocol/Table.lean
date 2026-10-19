@@ -449,6 +449,10 @@ before it can append, plus a supervisor restart of the child, whose cold reopen 
 at 60 s), and below `idleMsMax`, so the supervisor never closes a connection a client is still
 waiting on (`Bounds.reply_within_idle`). -/
 def replyMsMax : Nat := 120000
+/-- The bytes of a confirm's `receipt CALL` stderr the attempt store hands follow with an
+`uncertain` end (cv 01a150b1): a longer one is handed as none, never cut, so the hint follow prints
+is the refusal's whole first line or nothing. 512: past every `refused NAME` line Lean prints. -/
+def hintBytesMax : Nat := 512
 
 end Bounds
 

@@ -99,7 +99,8 @@ def bounds : List (String × Nat) :=
    ("IDLE_MS_MAX", Bounds.idleMsMax),
    ("FRAME_MS_MAX", Bounds.frameMsMax),
    ("REPLY_MS_MAX", Bounds.replyMsMax),
-   ("REPLY_WRITE_MS_MAX", Bounds.replyWriteMsMax)]
+   ("REPLY_WRITE_MS_MAX", Bounds.replyWriteMsMax),
+   ("HINT_BYTES_MAX", Bounds.hintBytesMax)]
 
 /-- A `pub const NAME: u32 = n;` line, or the name of a bound that does not fit `u32`. -/
 def u32Const (entry : String × Nat) : Except String String :=

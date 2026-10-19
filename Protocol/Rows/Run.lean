@@ -155,6 +155,7 @@ def barLines (r : Row) (res : Loopback.Result) : IO (Option String) := do
 def drive {D : Type} [Ord D] [DecidableEq D] (R : Params D) (r : Row) (times : Option Nat)
     (control : Bool := false) (measures : Bool := true) : IO Ran :=
   if let some why := r.blockedOn then pure (.pending s!"blocked on {why}") else
+  let R := match r.pageBudget with | some b => { R with pageBudget := b } | none => R
   match r.drive with
   | .exe name args _ => runExe name args
   | .members ls => do
