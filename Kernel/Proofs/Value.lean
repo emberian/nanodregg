@@ -389,8 +389,9 @@ theorem admit_sum {E : Env D} {w w' : World D} {t : Turn D} {g : Flow → Int} (
     rw [req_ok] at this
     intro hg'
     simp [World.isSpent, hg'] at this
-  unfold World.sumOf commit commitWith valueFlows commitTrie
+  unfold World.sumOf commit commitWith valueFlows
   dsimp only
+  rw [commitTrie_eq]
   rw [hsp _ _ (insertAll_canon _ (insertAll_canon _ hc)).1 hun]
   unfold bornEntries
   rw [hb, ht, hbsum, sumBy_append, sumBy_flatMap g d (fun p => flowsOf none (some p.2)) t.creates]

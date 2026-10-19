@@ -281,9 +281,18 @@ hash per cell insert than the real cell write (`<E` = `<C` + inserts), and the a
 place of the cell write to read above the requirement (`hashes-per-required`). -/
 def plantEmptyPerInsert (E : Env D) (w : World D) (t : Turn D) (posts : List (Post D)) : Cells D × List D :=
   let S := trieSpec E
-  let step := fun (acc : Cells D × List D) (p : D × Entry) =>
-    (acc.1.insert S (.cell p.1) (.entry p.2), Trie.emptyHash S :: acc.2)
-  (bornEntries t).foldl step ((posts.map Post.pair).foldl step (w.trie, []))
+  -- the cell write as the kernel makes it (one batch, cv 01a15107-2281), then one empty digest per insert
+  let c := commitTrie E w { t with nullifiers := [] } posts
+  let step := fun (acc : Cells D × List D) (_ : D × Entry) => (acc.1, Trie.emptyHash S :: acc.2)
+  (bornEntries t).foldl step ((posts.map Post.pair).foldl step (c, []))
+
+/-- PLANT `hash-required:rewalk` (cv 01a15107-2281): the turn's map written each key in turn, the
+sequential fold `commitTrie` was before the batch (`Kernel.Proofs.Admit.commitTrie_eq`: the same trie),
+each insert rebuilding its path from the root, so a node two of the turn's keys pass through is hashed
+once per key. `report` requires it to reach the batch's root, never to count below the batch (`<B`), and
+the admission with it in place of the batch to read above the requirement over the run. -/
+def plantRewalk (E : Env D) (w : World D) (t : Turn D) (posts : List (Post D)) : Cells D :=
+  spendAll E (insertAll E (insertAll E w.trie (posts.map Post.pair)) (bornEntries t)) t.nullifiers
 
 /-- The counted calls for one admitted turn `w → w'`: the whole admission (`<A`), its trie write
 without the nullifiers (`<C`, the cell share), its rows write (`<Q`, KERNEL-46/48: the rows trie's
@@ -303,6 +312,8 @@ def countTurn (E : Env D) (st : State D) (w w' : World D) (t : Turn D) : State D
       let a := dbgTrace "<A" fun _ => World.admit cE w t
       let c := dbgTrace "<C" fun _ => commitTrie cE w t0 posts
       let e := dbgTrace "<E" fun _ => plantEmptyPerInsert cE w t posts
+      let b := dbgTrace "<B" fun _ => commitTrie cE w t posts
+      let n := dbgTrace "<N" fun _ => plantRewalk cE w t posts
       -- KERNEL-46/48: the rows' share, bracketed apart so the nullifier share is the nullifiers': as
       -- the compiled admission runs it (`World.admitImpl`, `@[csimp]`), `checkWith`'s ONE `rowsRun`
       let rq := dbgTrace "<Q" fun _ =>
@@ -325,6 +336,8 @@ def countTurn (E : Env D) (st : State D) (w w' : World D) (t : Turn D) : State D
       let st := match Required.admit E w t w' with
         | .ok q => { st with required := st.required.add q, cellInserts := st.cellInserts + inserts }
         | .error why => failWith st s!"hash required: {why}"
+      let st := if b.hashOf S == w'.root E && n.hashOf S == w'.root E then st
+        else failWith st "hash count: the batch or the re-walk plant reached another root"
       let st := if rq.map (·.hashOf (rowSpec E)) == some (w'.rowsRoot E) then st
         else failWith st "hash count: the counted rows write reached another rows root"
       let st := if o == roots then st
@@ -339,6 +352,10 @@ structure Marks where
   plant : Nat := 0
   /-- the plant `hash-required:empty-per-insert`'s cell write (`<E`) -/
   plantInsert : Nat := 0
+  /-- the turn's whole map write as the kernel makes it, one batch (`<B`), and the plant
+  `hash-required:rewalk`'s, each key in turn (`<N`; cv 01a15107-2281) -/
+  batch : Nat := 0
+  rewalk : Nat := 0
   probeInsert : Nat := 0
   prune : Nat := 0
   refuse : Nat := 0
@@ -379,6 +396,8 @@ def countMarks (out : String) : Marks :=
     | some 'C' => { m with cells := m.cells + n }
     | some 'P' => { m with plant := m.plant + n }
     | some 'E' => { m with plantInsert := m.plantInsert + n }
+    | some 'B' => { m with batch := m.batch + n }
+    | some 'N' => { m with rewalk := m.rewalk + n }
     | some 'K' => { m with probeInsert := m.probeInsert + n }
     | some 'R' => { m with prune := m.prune + n }
     | some 'F' => { m with refuse := m.refuse + n }
@@ -2557,7 +2576,8 @@ def plantedArms : List String :=
    "proof-bit:refused", "depth-unhashed-plant:caught", "shape-unary-plant:caught",
    "pin-cell:same", "pin-cell-plant:caught", "pin-row:same", "pin-row-plant:caught",
    "pin-range:same", "pin-range-plant:caught", "rows-stem:ok",
-   "hash-required:empty-per-insert", "proof-required:extra-sibling", "proof-required:sibling-byte"]
+   "hash-required:empty-per-insert", "proof-required:extra-sibling", "proof-required:sibling-byte",
+   "hash-required:rewalk"]
 
 /-- `--seeds N` (N ≥ 1) runs seeds `0 … N-1`; otherwise each argument is a seed; none is 64 seeds.
 `--harness-control` may stand anywhere (GATES-15). Anything else is refused (`none`): an argument
@@ -2593,6 +2613,8 @@ def report (P : Params D) (seeds : List Nat) (control : Bool := false) : IO UInt
   let mut req : Required.Parts := {}
   let mut counted := 0
   let mut plantCounted := 0
+  -- cv 01a15107-2281: the admissions with the re-walk plant in place of the batch
+  let mut rewalkCounted := 0
   -- (journal-probe inserts, prunes, refusals, row inserts, row retracts, stem inserts) required
   let mut reqs : Nat × Nat × Nat × Nat × Nat × Nat := (0, 0, 0, 0, 0, 0)
   let mut weighed := 0
@@ -2646,6 +2668,14 @@ def report (P : Params D) (seeds : List Nat) (control : Bool := false) : IO UInt
       else failWith st s!"hash required: the empty-per-insert plant counted {m.plantInsert}, the cell write {m.cells} over {st.cellInserts} inserts"
     let st := if st.cellInserts > 0 && ratioUp plantN st.required.total > ratioUp m.admit st.required.total then
         { st with seen := "hash-required:empty-per-insert" :: st.seen } else st
+    -- the re-walk plant: never below the batch, and the admission with it reads above the requirement
+    -- on a seed where two of a turn's keys shared a path node
+    let st := if m.rewalk < m.batch then
+        failWith st s!"hash required: the re-walk plant counted {m.rewalk}, below the batch's {m.batch}" else st
+    let rewalkN := m.admit - m.batch + m.rewalk
+    let st := if ratioUp rewalkN st.required.total > ratioUp m.admit st.required.total then
+        { st with seen := "hash-required:rewalk" :: st.seen } else st
+    rewalkCounted := rewalkCounted + rewalkN
     req := req.add st.required
     counted := counted + m.admit
     plantCounted := plantCounted + plantN
@@ -2713,6 +2743,7 @@ def report (P : Params D) (seeds : List Nat) (control : Bool := false) : IO UInt
   IO.println s!"WASTE fold work-per-turn {showRatio work.2}"
   IO.println s!"kernel-sim: trie hashes of the run turns' admissions counted={counted} required={req.total} (cells {req.cells}, nullifiers {req.nullifiers}, journal {req.journal}, rows {req.rows}, refusals prune {req.refusals}, empty root {req.roots})"
   IO.println s!"kernel-sim: plant hash-required:empty-per-insert counted={plantCounted}: hashes-per-required {showRatio (ratioUp plantCounted req.total)}"
+  IO.println s!"kernel-sim: plant hash-required:rewalk (each key in turn, the fold before cv 01a15107-2281) counted={rewalkCounted}: hashes-per-required {showRatio (ratioUp rewalkCounted req.total)}"
   IO.println s!"kernel-sim: required: journal probe inserts {reqs.1} (counted {jhashes.1}), prunes {reqs.2.1} (counted {jhashes.2.2.1}), refusals {reqs.2.2.1} (counted {rf.1}), row inserts {reqs.2.2.2.1} (counted {rw.1}), row retracts {reqs.2.2.2.2.1} (counted {rw.2.2.1}), stem inserts {reqs.2.2.2.2.2} (counted {stem.1})"
   IO.println s!"WASTE admit hashes-per-required {showRatio (ratioUp counted req.total)}"
   IO.println s!"WASTE admit journal-insert-hashes-per-required {showRatio (ratioUp jhashes.1 reqs.1)}"

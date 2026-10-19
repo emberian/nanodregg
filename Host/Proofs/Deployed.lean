@@ -640,8 +640,7 @@ theorem admit_cells_listing {w w' : World D} {t : Turn D} (hc : w.Canon X.env)
     (fun p => by show 32 ≤ digestWeight + p.2.weight; unfold digestWeight; omega) t.creates
   have he : (posts.map Post.pair).length = posts.length := List.length_map _
   have hg : (bornEntries t).length = t.creates.length := by simp [bornEntries]
-  show 32 * (spendAll X.env (insertAll X.env (insertAll X.env w.trie (posts.map Post.pair)) (bornEntries t))
-    t.nullifiers).toList.length ≤ _
+  rw [commit_trie_eq]
   omega
 
 /-- (ii') **An admission adds at most one cell leaf per touch, created cell and nullifier, and at

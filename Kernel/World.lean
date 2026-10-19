@@ -1309,19 +1309,25 @@ def check (E : Env D) (w : World D) (t : Turn D) : Except (Reject D) (List (Post
 def bornEntries (t : Turn D) : List (D × Entry) :=
   t.creates.map fun p => (p.1, .live p.2 0)
 
-/-- Write cell entries into the map, one path each. -/
+/-- Write cell entries into the map, each key in turn, one path each: the proofs' shape of
+`commitTrie` (`Kernel.Proofs.Admit.commitTrie_eq`), and the genesis founders' write. -/
 def insertAll (E : Env D) (m : Cells D) (ps : List (D × Entry)) : Cells D :=
   ps.foldl (fun m p => m.insert (trieSpec E) (.cell p.1) (.entry p.2)) m
 
-/-- Mark nullifiers spent, one path each. -/
+/-- Mark nullifiers spent, each in turn, one path each: the proofs' shape of `commitTrie`. -/
 def spendAll (E : Env D) (m : Cells D) (ns : List D) : Cells D :=
   ns.foldl (fun m n => m.insert (trieSpec E) (.nullifier n) .spent) m
 
-/-- The map after a checked turn: its touches' entries, its born cells, its nullifiers. No path
+/-- The map after a checked turn: its touches' entries, its born cells, its nullifiers, ONE batch on
+the dirty overlay (`Trie.insertAll`, cv 01a15107-2281): a node several of the turn's keys pass through
+is hashed once, not once per key. The same trie as writing each in turn, `spendAll` over `insertAll`
+over `insertAll` (`Kernel.Proofs.Admit.commitTrie_eq`, no premise), which the proofs read. No path
 reads an empty digest (no node has an empty child, KERNEL-49 (a)); only an empty ROOT does, in
 `commitWith` (`T.rootWith`, one lazy copy shared by the four roots). -/
 def commitTrie (E : Env D) (w : World D) (t : Turn D) (posts : List (Post D)) : Cells D :=
-  spendAll E (insertAll E (insertAll E w.trie (posts.map Post.pair)) (bornEntries t)) t.nullifiers
+  Trie.insertAll (trieSpec E) w.trie
+    ((posts.map Post.pair ++ bornEntries t).map (fun p => (.cell p.1, .entry p.2)) ++
+      t.nullifiers.map fun n => (.nullifier n, .spent))
 
 
 /-- A journal entry `(h, d)` is still kept at height `H`: fewer than `2 * Bounds.windowMax`
@@ -1612,11 +1618,14 @@ def checkRefusal (E : Env D) (w : World D) (r : Refused D) : Except (Reject D) U
           req (refusalTotal E w < Bounds.refusalsPerWindowMax) .refusalsFull
 
 /-- The refusals after a checked refusal: its leaf at the transaction id, the member's count bumped,
-the World's total bumped. Three paths. -/
+the World's total bumped. Three paths, one batch on the dirty overlay (`Trie.insertAll`, cv
+01a15107-2281: the nodes the three paths share are hashed once); the same trie as the three inserts in
+turn (`Kernel.Proofs.Refuse.commitRefusal_refusals`). -/
 def commitRefusals (E : Env D) (w : World D) (r : Refused D) : Refusals D :=
-  ((w.refusals.insert (refusalSpec E) (.tx r.txId) (.refused (w.height + 1) r.code r.member)).insert (refusalSpec E)
-    (.count r.member (refusalWindow w.height)) (.count (refusalCount E w r.member + 1))).insert (refusalSpec E)
-    (.total w.origin (refusalWindow w.height)) (.count (refusalTotal E w + 1))
+  Trie.insertAll (refusalSpec E) w.refusals
+    [(.tx r.txId, .refused (w.height + 1) r.code r.member),
+     (.count r.member (refusalWindow w.height), .count (refusalCount E w r.member + 1)),
+     (.total w.origin (refusalWindow w.height), .count (refusalTotal E w + 1))]
 
 /-- The World after a checked refusal: only the refusals, the step counter and the chain move. The
 cells, the journal, the height and the allowance are untouched (`refuse_frame`). -/

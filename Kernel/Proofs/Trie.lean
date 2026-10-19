@@ -640,6 +640,88 @@ theorem get_insert_ne (t : T K V D) {k k' : K} (v : V) (h : k' ≠ k) :
 
 theorem get_empty (k : K) : (T.empty : T K V D).get S k = none := rfl
 
+/-! ## The batch is the sequential trie (cv 01a15107-2281) -/
+
+theorem seal_insLeafU (k : K) (v : V) (d : Nat) (h : D) (kvs : List (K × V))
+    (keep : U K V D) (hk : keep.seal S = .leaf h kvs) :
+    (insLeafU S k v d keep kvs).seal S = insAt S k v d (.leaf h kvs) := by
+  by_cases ha : kvs.any (fun p => p.1 = k) = true
+  · simp only [insLeafU, insAt, ha, if_true]; rfl
+  · simp only [Bool.not_eq_true] at ha
+    rcases kvs with _ | ⟨p, _ | ⟨q, rest⟩⟩
+    · rfl
+    · have hp : p.1 ≠ k := by simpa using ha
+      cases hd : diverge S k p.1 d S.depth with
+      | none =>
+          simp only [insLeafU, insAt, List.any_cons, List.any_nil, Bool.or_false, decide_eq_true_eq, hp, if_false, hd]
+          rfl
+      | some c =>
+          simp only [insLeafU, insAt, List.any_cons, List.any_nil, Bool.or_false, decide_eq_true_eq, hp, if_false, hd]
+          cases hb : S.bit k c
+          · show mkNode S c k (mkLeaf S [(k, v)]) (keep.seal S) = _
+            rw [hk]
+          · show mkNode S c p.1 (keep.seal S) (mkLeaf S [(k, v)]) = _
+            rw [hk]
+    · simp only [insLeafU, insAt, ha, Bool.false_eq_true, if_false]
+      rfl
+
+/-- Sealing `insT` of a clean subtree is `insAt` of it: no premise. -/
+theorem seal_insT (k : K) (v : V) : ∀ (d : Nat) (t : T K V D),
+    (insT S k v d t).seal S = insAt S k v d t
+  | _, .empty => by simp only [insT, insAt, U.seal]
+  | d, .leaf h kvs => seal_insLeafU S k v d h kvs (.clean (.leaf h kvs)) rfl
+  | d, .node h b rep l r => by
+      simp only [insT, insAt]
+      cases hd : diverge S k rep d b
+      · dsimp only
+        cases hb : S.bit k b
+        · dsimp only
+          rw [show (U.node b (if precedes S k rep (b + 1) = true then k else rep) (insT S k v (b + 1) l) (.clean r)).seal S
+            = mkNode S b (if precedes S k rep (b + 1) = true then k else rep) ((insT S k v (b + 1) l).seal S) r from rfl,
+            seal_insT k v (b + 1) l]
+        · dsimp only
+          rw [show (U.node b rep (.clean l) (insT S k v (b + 1) r)).seal S
+            = mkNode S b rep l ((insT S k v (b + 1) r).seal S) from rfl,
+            seal_insT k v (b + 1) r]
+      · dsimp only
+        cases S.bit k _ <;> rfl
+
+/-- **Sealing an overlay insert is the insert of the sealed trie**, for ANY overlay, ANY bit function
+and ANY tree: no premise (unlike `insAt_eq_rebuild`, which needs `WF`: the overlay keeps every cached
+digest `insAt` keeps, and recomputes none). -/
+theorem seal_insU (k : K) (v : V) : ∀ (d : Nat) (u : U K V D),
+    (insU S k v d u).seal S = insAt S k v d (u.seal S)
+  | d, .clean t => seal_insT S k v d t
+  | d, .leaf kvs => seal_insLeafU S k v d (leafHash S (digests S kvs)) kvs (.leaf kvs) rfl
+  | d, .node b rep l r => by
+      have hs : (U.node b rep l r).seal S = .node (nodeHash S b ((l.seal S).hashOf S) ((r.seal S).hashOf S)) b rep (l.seal S) (r.seal S) := rfl
+      rw [hs]
+      simp only [insU, insAt]
+      cases hd : diverge S k rep d b
+      · dsimp only
+        cases hb : S.bit k b
+        · dsimp only
+          rw [show (U.node b (if precedes S k rep (b + 1) = true then k else rep) (insU S k v (b + 1) l) r).seal S
+            = mkNode S b (if precedes S k rep (b + 1) = true then k else rep) ((insU S k v (b + 1) l).seal S) (r.seal S) from rfl,
+            seal_insU k v (b + 1) l]
+        · dsimp only
+          rw [show (U.node b rep l (insU S k v (b + 1) r)).seal S
+            = mkNode S b rep (l.seal S) ((insU S k v (b + 1) r).seal S) from rfl,
+            seal_insU k v (b + 1) r]
+      · dsimp only
+        cases S.bit k _ <;> rfl
+
+theorem seal_foldl : ∀ (kvs : List (K × V)) (u : U K V D),
+    (kvs.foldl (fun u p => insU S p.1 p.2 0 u) u).seal S = kvs.foldl (fun t p => t.insert S p.1 p.2) (u.seal S)
+  | [], _ => rfl
+  | p :: rest, u => by simp only [List.foldl]; rw [seal_foldl rest, seal_insU]; rfl
+
+/-- **The batch is the sequential trie**: `insertAll` (one pass on the overlay, sealed once) is each
+key inserted in turn, as a `T` value, cached digests included. No premise. -/
+theorem insertAll_eq_foldl (t : T K V D) (kvs : List (K × V)) :
+    insertAll S t kvs = kvs.foldl (fun t p => t.insert S p.1 p.2) t :=
+  seal_foldl S kvs (.clean t)
+
 end Nanodregg.Kernel.Trie
 
 namespace Nanodregg.Kernel.Trie

@@ -462,9 +462,7 @@ theorem admit_world_weight {E : Env D} {w w' : World D} {t : Turn D} {posts : Li
       credit posts = cellsWeight w.trie + (t.touches.map fun x => x.act.opsWeight).sum +
         (t.creates.map fun p => digestWeight + counterWeight + p.2.weight).sum := by
     unfold bornEntries; rw [hb]; omega
-  rw [show commitTrie E w t posts =
-    spendAll E (insertAll E (insertAll E w.trie (posts.map Post.pair)) (bornEntries t)) t.nullifiers
-    from rfl, hs]
+  rw [commitTrie_eq, hs]
   have hrw := rowsAfter_weight hr hk
   omega
 

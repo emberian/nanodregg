@@ -199,6 +199,8 @@ theorem cellFoot_needs_born (E : Env D) (o c : D) :
   refine ⟨_, _, bornTurn c, show World.admit E _ _ = .ok (commit E (World.genesis E o 170) (bornTurn c) []) by
     unfold World.admit; rw [hc], fun hall => ?_⟩
   have h := hall (.cell c) (fun x hx => by simp [bornTurn] at hx) (fun n hn => by simp [bornTurn] at hn)
+  rw [show (commit E (World.genesis E o 170) (bornTurn c) []).trie = commitTrie E (World.genesis E o 170) (bornTurn c) []
+    from rfl, commitTrie_eq] at h
   change (Trie.T.empty.insert (trieSpec E) (.cell c) (.entry (.live toothCell 0))).get (trieSpec E) (.cell c) =
     none at h
   rw [Trie.get_insert_self] at h

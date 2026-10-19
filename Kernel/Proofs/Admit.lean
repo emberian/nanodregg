@@ -293,11 +293,26 @@ theorem spendAll_get_cell {E : Env D} {c : D} :
       show (spendAll E (m.insert (trieSpec E) (.nullifier x) .spent) rest).get _ _ = _
       rw [spendAll_get_cell, Trie.get_insert, if_neg]; intro he; cases he
 
+/-- **The batch is the sequential trie** (cv 01a15107-2281): `commitTrie`'s one pass on the dirty
+overlay is `spendAll` over `insertAll` over `insertAll`, each key in turn, as a `T` value (cached
+digests included). No premise. Every proof about the map after a turn reads this shape. -/
+theorem commitTrie_eq {E : Env D} {w : World D} {t : Turn D} {posts : List (Post D)} :
+    commitTrie E w t posts =
+      spendAll E (insertAll E (insertAll E w.trie (posts.map Post.pair)) (bornEntries t)) t.nullifiers := by
+  unfold commitTrie insertAll spendAll
+  simp only [Trie.insertAll_eq_foldl, List.map_append, List.foldl_append, List.foldl_map]
+
+/-- `commit`'s trie, in the proofs' shape. -/
+theorem commit_trie_eq {E : Env D} {w : World D} {t : Turn D} {posts : List (Post D)} :
+    (commit E w t posts).trie =
+      spendAll E (insertAll E (insertAll E w.trie (posts.map Post.pair)) (bornEntries t)) t.nullifiers :=
+  commitTrie_eq
+
 /-- A turn's map, read at a cell: its touches' and births' entries over the pre-state's. -/
 theorem commitTrie_cell {E : Env D} {w : World D} {t : Turn D} {posts : List (Post D)} {c : D} :
     (commitTrie E w t posts).get (trieSpec E) (.cell c) =
-      (insertAll E (insertAll E w.trie (posts.map Post.pair)) (bornEntries t)).get (trieSpec E) (.cell c) :=
-  spendAll_get_cell
+      (insertAll E (insertAll E w.trie (posts.map Post.pair)) (bornEntries t)).get (trieSpec E) (.cell c) := by
+  rw [commitTrie_eq]; exact spendAll_get_cell
 
 theorem commitTrie_entry {E : Env D} {w : World D} {t : Turn D} {posts : List (Post D)} {c : D}
     (hp : c ∉ (posts.map Post.pair).map Prod.fst) (hb : c ∉ (bornEntries t).map Prod.fst) :
@@ -384,7 +399,6 @@ theorem spendAll_get_nul {E : Env D} {n : D} :
 theorem commitTrie_nul {E : Env D} {w' : World D} {t : Turn D} {posts : List (Post D)} {n : D} :
     (commitTrie E w' t posts).get (trieSpec E) (.nullifier n) =
       if n ∈ t.nullifiers then some .spent else w'.trie.get (trieSpec E) (.nullifier n) := by
-  unfold commitTrie
-  rw [spendAll_get_nul, insertAll_get_nullifier, insertAll_get_nullifier]
+  rw [commitTrie_eq, spendAll_get_nul, insertAll_get_nullifier, insertAll_get_nullifier]
 
 end Nanodregg.Kernel

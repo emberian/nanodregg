@@ -26,6 +26,8 @@ Work per `insert`: one path from the root to the key's leaf is rebuilt, one hash
 plus its leaf, plus at most one new node where the key's bits first leave the path's. A one-entry
 leaf the new key splits keeps its cached digest: a leaf's hash commits its entries, not its
 position (cv 01a15107-2263; `Kernel.Proofs.Trie.insAt_eq_rebuild`: the same trie as re-hashing it).
+A batch (`insertAll`, cv 01a15107-2281) writes its keys on the dirty overlay `U` and hashes once at
+`U.seal`: a node several of its keys pass through is hashed once, not once per key.
 -/
 namespace Nanodregg.Kernel.Trie
 
@@ -218,8 +220,84 @@ def T.toList : T K V D → List (K × V)
   | .leaf _ kvs => kvs
   | .node _ _ _ l r => l.toList ++ r.toList
 
+/-! ## A batch: the dirty overlay (cv 01a15107-2281)
+
+`U` is a trie a batch is writing. It holds NO digest: a `clean` subtree is a `T` kept whole, with its
+cached digests, and a `leaf` or `node` is one the batch wrote and has not hashed. `U.seal` is its only
+reader: it hashes each written node and leaf once, over its children's digests, and returns the `T`.
+One `clean` subtree is the batch's own: `insLeafU`'s build fallback (a new key that does not leave a
+one-entry leaf below `depth`, or any multi-entry leaf) returns `.clean (build …)`, a `T` the batch wrote
+and hashed AT INSERT TIME, not at seal; a later key of the same batch entering it re-hashes its path.
+Unreachable under injective key bytes (every leaf holds one entry, no two keys share a full bit path),
+which the deployed specs have.
+`T` stays the only authenticated shape: nothing reads, proves, lists or encodes a `U`. The batch IS the
+sequential inserts (`Kernel.Proofs.Trie.seal_insU`, `insertAll_eq_foldl`: equal as `T` values, cached
+digests included, no premise); what the sequential fold hashed again (the nodes on a key's path an
+earlier insert of the same batch had already rebuilt) is hashed once. -/
+inductive U (K V D : Type) where
+  | clean (t : T K V D)
+  | leaf (kvs : List (K × V))
+  | node (b : Nat) (rep : K) (l r : U K V D)
+
+/-- The trie a batch wrote: each written node and leaf hashed once, over its children's digests. -/
+def U.seal : U K V D → T K V D
+  | .clean t => t
+  | .leaf kvs => mkLeaf S kvs
+  | .node b rep l r => mkNode S b rep (l.seal) (r.seal)
+
+/-- `insAt` at a leaf holding `kvs`, on the overlay: `keep` is the leaf as it stands (clean or written),
+kept whole under the node a new key splits it with. -/
+def insLeafU (k : K) (v : V) (d : Nat) (keep : U K V D) (kvs : List (K × V)) : U K V D :=
+  if kvs.any (fun p => p.1 = k) then .leaf (kvs.map fun p => if p.1 = k then (k, v) else p)
+  else
+    match kvs with
+    | [p] =>
+        match diverge S k p.1 d S.depth with
+        | some c =>
+            match S.bit k c with
+            | true => .node c p.1 keep (.leaf [(k, v)])
+            | false => .node c k (.leaf [(k, v)]) keep
+        | none => .clean (build S (S.depth - d) d ([p] ++ [(k, v)]))
+    | _ => .clean (build S (S.depth - d) d (kvs ++ [(k, v)]))
+
+/-- `insAt`, case for case, from a clean subtree: the path to `k` is written (unhashed), every
+subtree off it is kept as it stands, digest and all. Structural on `T`, so the kernel reduces it
+(`Codec.Proofs.ListingPin` decides listings through it). -/
+def insT (k : K) (v : V) : Nat → T K V D → U K V D
+  | _, .empty => .leaf [(k, v)]
+  | d, .leaf h kvs => insLeafU S k v d (.clean (.leaf h kvs)) kvs
+  | d, .node h b rep l r =>
+      match diverge S k rep d b with
+      | some c =>
+          match S.bit k c with
+          | true => .node c rep (.clean (.node h b rep l r)) (.leaf [(k, v)])
+          | false => .node c k (.leaf [(k, v)]) (.clean (.node h b rep l r))
+      | none =>
+          match S.bit k b with
+          | true => .node b rep (.clean l) (insT k v (b + 1) r)
+          | false => .node b (if precedes S k rep (b + 1) then k else rep) (insT k v (b + 1) l) (.clean r)
+
+/-- `insAt`, case for case, on the overlay: down the written nodes, then `insT` from the first clean
+subtree. `Kernel.Proofs.Trie.seal_insU`: sealing it is `insAt` of the sealed trie. -/
+def insU (k : K) (v : V) : Nat → U K V D → U K V D
+  | d, .clean t => insT S k v d t
+  | d, .leaf kvs => insLeafU S k v d (.leaf kvs) kvs
+  | d, .node b rep l r =>
+      match diverge S k rep d b with
+      | some c =>
+          match S.bit k c with
+          | true => .node c rep (.node b rep l r) (.leaf [(k, v)])
+          | false => .node c k (.leaf [(k, v)]) (.node b rep l r)
+      | none =>
+          match S.bit k b with
+          | true => .node b rep l (insU k v (b + 1) r)
+          | false => .node b (if precedes S k rep (b + 1) then k else rep) (insU k v (b + 1) l) r
+
+/-- Every entry of `kvs` set, in order, in one pass: the batch on the dirty overlay, sealed once. The
+same trie as inserting each in turn (`Kernel.Proofs.Trie.insertAll_eq_foldl`, no premise); each node on
+a changed path is hashed once. -/
 def insertAll (t : T K V D) (kvs : List (K × V)) : T K V D :=
-  kvs.foldl (fun t p => t.insert S p.1 p.2) t
+  (kvs.foldl (fun u p => insU S p.1 p.2 0 u) (.clean t)).seal S
 
 /-! ## Retain: the canonical erase (KERNEL-41)
 

@@ -58,7 +58,8 @@ theorem genesis_canon (E : Env D) (o : D) (a : Nat) : (World.genesis E o a).Cano
 theorem admit_canon {E : Env D} {w w' : World D} {t : Turn D} (hc : w.Canon E)
     (h : World.admit E w t = .ok w') : w'.Canon E := by
   obtain ⟨posts, _, rfl⟩ := admit_ok h
-  exact spendAll_canon _ (insertAll_canon _ (insertAll_canon _ hc))
+  have := spendAll_canon t.nullifiers (insertAll_canon (bornEntries t) (insertAll_canon (posts.map Post.pair) hc))
+  rwa [← commit_trie_eq (t := t)] at this
 
 theorem refuse_canon {E : Env D} {w w' : World D} {r : Refused D} (hc : w.Canon E)
     (h : World.refuse E w r = .ok w') : w'.Canon E := by

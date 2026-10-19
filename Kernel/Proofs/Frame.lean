@@ -92,12 +92,13 @@ theorem admit_nullifiers {E : Env D} {w w' : World D} {t : Turn D}
     (∀ n ∈ t.nullifiers, w.isSpent E n = false ∧ w'.isSpent E n = true) ∧
       ∀ n, w.isSpent E n = true → w'.isSpent E n = true := by
   obtain ⟨_, hk, rfl⟩ := admit_ok h
-  refine ⟨fun n hn => ⟨?_, spendAll_spent_of_mem hn⟩, fun n hn => ?_⟩
+  refine ⟨fun n hn => ⟨?_, by unfold World.isSpent; rw [commit_trie_eq]; exact spendAll_spent_of_mem hn⟩,
+    fun n hn => ?_⟩
   · have := (forEx_ok.mp hk.nullifiers) n hn
     rw [req_ok] at this
     simpa using this
   · by_cases hm : n ∈ t.nullifiers
-    · exact spendAll_spent_of_mem hm
+    · unfold World.isSpent; rw [commit_trie_eq]; exact spendAll_spent_of_mem hm
     · unfold World.isSpent
       rw [(admit_Frame h).cells (.nullifier n) fun f => by cases f with | spent hn' => exact hm hn']
       exact hn
@@ -219,7 +220,9 @@ theorem genesis_slotted (E : Env D) (o : D) (a : Nat) : (World.genesis E o a).Sl
 theorem admit_slotted {E : Env D} {w w' : World D} {t : Turn D} (hf : w.Slotted E)
     (h : World.admit E w t = .ok w') : w'.Slotted E := by
   obtain ⟨posts, _, rfl⟩ := admit_ok h
-  exact spendAll_fits _ (insertAll_fits _ (insertAll_fits _ hf))
+  intro s l
+  rw [commit_trie_eq]
+  exact spendAll_fits _ (insertAll_fits _ (insertAll_fits _ hf)) s l
 
 theorem fold_slotted {E : Env D} {w w' : World D} {l : List (Step D)} (hf : w.Slotted E)
     (h : World.fold E w l = .ok w') : w'.Slotted E :=

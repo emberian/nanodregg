@@ -12,6 +12,11 @@ BUILT, counted from their shapes, never from `log2 n`:
   per node on `k`'s path (each node's digest covers the changed leaf) and `k`'s leaf; a one-entry
   leaf the new key splits is NOT re-hashed (its digest commits its entries, not its position:
   `insAt` puts one node over it, cv 01a15107-2263, `Kernel.Proofs.Trie.insAt_eq_rebuild`): `insertReq`;
+* a BATCH of inserts (`Trie.insertAll` on the dirty overlay, sealed once: `commitTrie`'s cells, births
+  and nullifiers; `commitRefusals`' three; cv 01a15107-2281) requires, read off the trie after it: one
+  hash per node on some batch key's path and one per leaf a batch key reaches, each ONCE however many
+  of the batch's keys pass through it: `batchReq`. Not `fresh`: a key re-written to the same digest is
+  hashed again by the kernel (its leaf is written), and `fresh` would not count it;
 * a removal (`Trie.retainAt`, the canonical erase: the journal's and the refusals' prunes, a row
   retract, a retired parent's heads) requires one hash per node or leaf of the trie after it whose
   digest is not the digest of the subtree it replaced (a subtree that kept everything, or that
@@ -24,8 +29,9 @@ BUILT, counted from their shapes, never from `log2 n`:
 
 A transition's requirement is the sum over the trie operations it makes, in the order it makes them
 (an insert's path is the path in the trie as it stands after THAT insert; a later insert of the same
-turn can add a node above it). The operations are the kernel's: the cell keys from `check`'s posts,
-the born ids and the nullifiers (`commitTrie`'s order), the journal insert and `pruneJournal`, the
+turn can add a node above it; a batch's paths are read off the trie after the whole batch). The
+operations are the kernel's: the cell keys from `check`'s posts,
+the born ids and the nullifiers (one batch, `commitTrie`'s order), the journal insert and `pruneJournal`, the
 refusals' `pruneRefusals`, each row touch's row and head writes (`rowStep`) and the heads `dropHeads`
 lists with the kernel's own `under`. Each replay must reach the root the real transition reached, or
 the requirement is refused (`.error`): an operation list that drifted from the kernel's is never a
@@ -82,6 +88,23 @@ variable [DecidableEq K]
 /-- **What an insert of `k` requires**, read off the trie after it (`post`): a hash per node on
 `k`'s path and its leaf. The leaf a new key splits keeps its cached digest (cv 01a15107-2263). -/
 def insertReq (post : Trie.T K V D) (k : K) : Nat := pathDepth S k post + 1
+
+/-- **What a batch of inserts requires** (cv 01a15107-2281), read off the trie after it (`post`): one
+hash per node of `post` on some batch key's path, and one per leaf a batch key reaches, each once
+however many keys pass through it. What `Trie.insertAll`'s `U.seal` hashes: a node of `post` is
+written (unhashed, on the overlay) iff a batch key's path crosses it, and a leaf iff a batch key ends at
+it; a subtree no batch key enters is kept clean, digest and all. The keys route by their bits, as every
+key present in `post` does. One exception, outside the seal: `insLeafU`'s build fallback (`.clean (build
+…)`, a key that does not leave a one-entry leaf below `depth`, or any multi-entry leaf) hashes at insert
+time, and a later key of the batch entering that subtree hashes its path again, which this counts once.
+Unreachable under injective key bytes (the deployed specs); reached, it reads ABOVE the requirement
+(red), never below. -/
+def batchReq (keys : List K) : Trie.T K V D → Nat
+  | .empty => 0
+  | .leaf _ _ => if keys.isEmpty then 0 else 1
+  | .node _ b _ l r =>
+      if keys.isEmpty then 0
+      else 1 + batchReq (keys.filter fun k => !S.bit k b) l + batchReq (keys.filter fun k => S.bit k b) r
 
 /-- Below `t`'s nodes that branch before bit `b`, the subtree a key like `rep` reaches. -/
 def below (rep : K) (b : Nat) : Trie.T K V D → Trie.T K V D
@@ -201,10 +224,14 @@ def admit (E : Env D) (w : World D) (t : Turn D) (w' : World D) : Except String 
     | .error r => throw s!"the turn does not re-check ({r.name})"
   let S := trieSpec E
   let cval := fun s => (w'.trie.get S s).getD .spent
-  let (tc, nc) := applyAll S cval w.trie
-    ((posts.map fun p => Op.ins (Slot.cell p.cell)) ++ (createdIds t).map fun c => .ins (.cell c))
-  let (tn, nn) := applyAll S cval tc (t.nullifiers.map fun n => .ins (.nullifier n))
+  -- one batch (`commitTrie`): the cells' share is the nodes and leaves on the cell keys' paths, the
+  -- nullifiers' the rest of the batch's
+  let cellKeys := (posts.map fun p => Slot.cell p.cell) ++ (createdIds t).map .cell
+  let keys := cellKeys ++ t.nullifiers.map .nullifier
+  let tn := Trie.insertAll S w.trie (keys.map fun k => (k, cval k))
   unless tn.hashOf S == w'.root E do throw "the cell and nullifier inserts do not reach the admitted root"
+  let nc := batchReq S cellKeys tn
+  let nn := batchReq S keys tn - nc
   let JS := journalSpec E
   let H := w.height + 1
   let j1 := w.journal.insert JS t.txId (H, turnDigest E t)
@@ -216,16 +243,16 @@ def admit (E : Env D) (w : World D) (t : Turn D) (w' : World D) : Except String 
   pure { cells := nc, nullifiers := nn, journal := insertReq JS j1 t.txId + fresh JS j2 j1,
          rows := nr, refusals := fresh (refusalSpec E) w'.refusals w.refusals, roots := emptyRoots w' }
 
-/-- **What recording a refusal `w → w'` requires**: its three inserts (the transaction's leaf, the
-member's window count, then the World's window total, `commitRefusals`; KERNEL-55 R1) and the head's
-empty digest. -/
+/-- **What recording a refusal `w → w'` requires**: its three inserts as one batch (the transaction's
+leaf, the member's window count, then the World's window total, `commitRefusals`; KERNEL-55 R1; the
+nodes the three paths share once, cv 01a15107-2281) and the head's empty digest. -/
 def refuse (E : Env D) (w : World D) (r : Refused D) (w' : World D) : Except String Nat := do
   let RS := refusalSpec E
-  let (t, n) := applyAll RS (fun k => (w'.refusals.get RS k).getD (.count 0)) w.refusals
-    [.ins (.tx r.txId), .ins (.count r.member (refusalWindow w.height)),
-     .ins (.total w.origin (refusalWindow w.height))]
+  let keys : List (RefusalSlot D) :=
+    [.tx r.txId, .count r.member (refusalWindow w.height), .total w.origin (refusalWindow w.height)]
+  let t := Trie.insertAll RS w.refusals (keys.map fun k => (k, (w'.refusals.get RS k).getD (.count 0)))
   unless t.hashOf RS == w'.refusalsRoot E do throw "the refusal's inserts do not reach the recorded refusals root"
-  pure (n + emptyRoots w')
+  pure (batchReq RS keys t + emptyRoots w')
 
 /-- What one log step `w → w'` requires (`World.step`'s two kinds). -/
 def step (E : Env D) (w : World D) (s : Step D) (w' : World D) : Except String Nat :=

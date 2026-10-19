@@ -227,7 +227,10 @@ theorem commitRefusal_refusals {E : Env D} {w : World D} {r : Refused D} :
     (commitRefusal E w r).refusals =
       ((w.refusals.insert (refusalSpec E) (.tx r.txId) (.refused (w.height + 1) r.code r.member)).insert (refusalSpec E)
         (.count r.member (refusalWindow w.height)) (.count (refusalCount E w r.member + 1))).insert (refusalSpec E)
-        (.total w.origin (refusalWindow w.height)) (.count (refusalTotal E w + 1)) := rfl
+        (.total w.origin (refusalWindow w.height)) (.count (refusalTotal E w + 1)) := by
+  show commitRefusals E w r = _
+  unfold commitRefusals
+  rw [Trie.insertAll_eq_foldl]; rfl
 
 theorem admit_refusalsCanon {E : Env D} {w w' : World D} {t : Turn D} (hc : w.RefusalsCanon E)
     (h : World.admit E w t = .ok w') : w'.RefusalsCanon E := by

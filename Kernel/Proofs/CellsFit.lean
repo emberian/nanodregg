@@ -270,7 +270,9 @@ theorem admit_cellsFit {E : Env D} {w w' : World D} {t : Turn D} (hw : w.CellsFi
     have hp' : some p ∈ raw := by simpa [hpr, List.reduceOption, List.mem_filterMap] using hp
     obtain ⟨x, hx, hr⟩ := mapEx_mem hm (some p) hp'
     exact touchCheck_cellFit hw (htf x hx).2.2 hr
-  exact spendAll_cellFit _ (insertAll_cellFit _ hborn (insertAll_cellFit _ hposts hw))
+  have := spendAll_cellFit t.nullifiers (insertAll_cellFit (bornEntries t) hborn
+    (insertAll_cellFit (posts.map Post.pair) hposts hw))
+  rwa [← commit_trie_eq (t := t)] at this
 
 /-- **Fold keeps the cells fitting.** -/
 theorem fold_cellsFit {E : Env D} {w w' : World D} {l : List (Step D)} (hf : w.CellsFit Cell.Fits E)
