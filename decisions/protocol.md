@@ -1847,3 +1847,21 @@ The writer's fact was masked by custody's reason (law 7).
 **Critique.**
 - Frames count every frame of the row, the reads and the restart's included, over write commands only. It is a per-write cost of the whole workload, not of one write.
 - The plants mutate the rows' client model and the restart's input, not deployed code. They test that the counters see the work, which is what a counter's tooth must show.
+
+**Amendment (PERF-4, recorded by PROTOCOL-21).** ROOT's four-row ruling named `reopen-bytes-per-record`. The row as landed measures reopen bytes per BYTE past the base, not per record: a record's size varies with its event, so a per-record ratio would move with the workload's mix, while bytes read over bytes past the base is 1 plus the fixed framing for an honest reopen. This and the dropped entries row are the two departures from that ruling; PERF-4 (a6333c82ccd93eeac) agreed both.
+
+## PROTOCOL-59 · `invoke OBJ METHOD ARGS [--range REL K [PREFIX]]`: the plan signs the method's range read at follow's listing (2026-10-21, PROTOCOL-21; item 4, ROOT ruled (a) with K-first order; LANG-22 agreed the structured refusal)
+
+**The gap.** A method that reads a relation by range (`(reads (rel (range m k)))`) could not be invoked through nd: `plan` signed no `RangeRead`, so the receiver's `relReads` refused with the free text `program "rows: ℓ: no signed range"`, and `staleBehind_final` held only because the plan signed no range.
+
+**Decision.**
+- `invoke … --range REL K [PREFIX]` takes `read OBJ REL K [PREFIX]`'s arguments in its order (K first; ROOT accepted, as it needs no method lookup). `Cmd.invoke` carries `range : Option (String × Nat × Option String)`; `--via` is split off first.
+- `Command.rangeListing` is THE listing: prefix bytes, `Kernel.rangeOf`, the width check and the rows. `rowLines` (the read verb) and `rangesOf` (the plan) both use it. `rangesOf` signs `{parent, rel, pre, most := K, seen := rangePin … (headFloor …) l}` at follow's World, K within the declared `limit` (`rangePastLimit`), the same as the read verb.
+- `plan` / `planUnchecked` take the ranges explicitly, never as a default argument (a default would make every theorem about `plan` cover only `[]`). Rotate signs `[]`.
+- Lang/Rel.lean (LANG's, LANG-22 agreed): no signed range refuses `rangeUnpinned self i`. nd prints `hint rangeUnpinned: this method reads a relation by range; pass --range REL K [PREFIX]`.
+- Theorems: `rangeListing_ok`, `rangeOf_some`, `rangesOf_pins` (each signed range's parent is live at w₀ and its `seen` is THE pin admission recomputes at w₀); `plan_pins`' third conjunct is `u.ranges = rs`; `step_submit_planned` names the `body` and the `rangesOf` of ONE command the submitted call came from (the second agent's WEAK: `cmd` had been tied to neither); `staleBehind_final`'s range case goes through `Kernel.range_stale_behind_forever`, with `Kernel.headOf_width_fold` (KERNEL-23) for the width at w₀, w and w'. A parent tombed at w' is a collision between its live pin input at w₀ and its tomb input at w' (admission checks the parent's cell pin). `behindPres` gains each range's `rangePresAt` at w₀ and w'.
+- Rows `rangeInvoke` / `rangeFlag`, over a `tally` package whose `take` reads round 1 by range. Without the flag the take is refused `rangeUnpinned`, with the hint printed. With it the take commits. Plants at line 10: `staleRange` (signed at the sponsor's follow from before the newcomer's ring; `ring` writes no cell, so only the range moved) is caught `declined stale` (the writer's verdict by name; a stale is declined, KERNEL-54). `dropRange` is caught `refused rangeUnpinned`.
+
+**Critique.**
+- The prefix is read at the first key-field count whose prefix type reads the text (`prefixBytes`, the read verb's rule). A method declaring `range m k` with a different `m` is refused by the receiver's `keyOf`, by LANG's text, not here.
+- The hint names no relation: the refusal carries the relation's index, and `hint` has no World to look up its label.

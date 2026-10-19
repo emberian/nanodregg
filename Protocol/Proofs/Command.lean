@@ -84,8 +84,9 @@ theorem derivePins_rowPins {X : Ctx D} {w : World D} :
       · cases h; intro p hp; exact .inl hp
 
 /-- `planUnchecked` derives `t` from `u` on follow's World, and `u` is the member's own call. -/
-theorem planUnchecked_derives {X : Ctx D} {me : Self D} {w : World D} {key : ByteArray} {b : Body D}
-    {u : Unsigned D} {t : Turn D} (h : planUnchecked X me w key b = .ok (u, t)) :
+theorem planUnchecked_derives {X : Ctx D} {me : Self D} {w : World D} {key : ByteArray}
+    {rs : List (RangeRead D)} {b : Body D}
+    {u : Unsigned D} {t : Turn D} (h : planUnchecked X me w key rs b = .ok (u, t)) :
     u.member = me.member ∧ u.key = key ∧ u.body = b ∧
       deriveTurn X (pinned X.env w u.pins) (rowView X.env w u) ⟨u, ByteArray.empty⟩ = .ok t := by
   simp only [planUnchecked, bind, Except.bind] at h
@@ -104,8 +105,9 @@ theorem planUnchecked_derives {X : Ctx D} {me : Self D} {w : World D} {key : Byt
 /-- **The call `planUnchecked` returns carries only row pins its own World holds** (KERNEL-54, the
 plan side of PROTOCOL-16's gap 4; `plan` returns the same call): every row pin of it is `rowPinAt`
 of follow's World at its key. -/
-theorem planUnchecked_rowPins {X : Ctx D} {me : Self D} {w : World D} {key : ByteArray} {b : Body D}
-    {u : Unsigned D} {t : Turn D} (h : planUnchecked X me w key b = .ok (u, t)) :
+theorem planUnchecked_rowPins {X : Ctx D} {me : Self D} {w : World D} {key : ByteArray}
+    {rs : List (RangeRead D)} {b : Body D}
+    {u : Unsigned D} {t : Turn D} (h : planUnchecked X me w key rs b = .ok (u, t)) :
     ∀ p ∈ u.rowPins, ∃ k, p = rowPinAt X.env w k := by
   simp only [planUnchecked, bind, Except.bind] at h
   split at h
@@ -122,8 +124,9 @@ theorem planUnchecked_rowPins {X : Ctx D} {me : Self D} {w : World D} {key : Byt
       · exact hk
 
 /-- `plan` offers `u` only if follow's World derives a Turn from it and admits that Turn. -/
-theorem plan_admits {X : Ctx D} {me : Self D} {w : World D} {key : ByteArray} {b : Body D}
-    {u : Unsigned D} (h : plan X me w key b = .ok u) :
+theorem plan_admits {X : Ctx D} {me : Self D} {w : World D} {key : ByteArray}
+    {rs : List (RangeRead D)} {b : Body D}
+    {u : Unsigned D} (h : plan X me w key rs b = .ok u) :
     u.member = me.member ∧ u.key = key ∧ u.body = b ∧
     ∃ t w', deriveTurn X (pinned X.env w u.pins) (rowView X.env w u) ⟨u, ByteArray.empty⟩ = .ok t ∧
       World.admit X.env w t = .ok w' := by
@@ -280,11 +283,14 @@ theorem step_custody_own_word {X : Ctx D} {dc : Codec.Stream D} {B : Thin.Base (
     if_false]
 
 /-- Consent at the wire: the only call `step` hands the client to submit is a call over a `u`
-that `plan` produced on follow's own World (hence derived and admitted there, `plan_admits`). -/
+that `plan` produced on follow's own World (hence derived and admitted there, `plan_admits`), from
+the body and the range reads ONE command gives on that World (`body`, `rangesOf`). -/
 theorem step_submit_planned {X : Ctx D} {dc : Codec.Stream D} {B : Thin.Base (World D)} {me : Self D}
     {f f' : Follow D} {p : Persist D}
     {kb result call k : ByteArray} (h : step X dc B me f kb result = (f', p, .submit call k)) :
-    f' = f ∧ p = .steps [] ∧ ∃ key b u sig, plan X me f.world key b = .ok u ∧ call = X.callBytes ⟨u, sig⟩ := by
+    f' = f ∧ p = .steps [] ∧ ∃ cmd sg rs b u sig, body X me f.world sg cmd = .ok b ∧
+      rangesOf X f.world cmd = .ok rs ∧ plan X me f.world sg.key rs b = .ok u ∧
+      call = X.callBytes ⟨u, sig⟩ := by
   unfold step next at h
   repeat' split at h
   all_goals (try simp only [refused, printed, behind, notServed, Prod.mk.injEq, reduceCtorEq, and_false] at h)
@@ -302,7 +308,8 @@ theorem step_submit_planned {X : Ctx D} {dc : Codec.Stream D} {B : Thin.Base (Wo
   all_goals (try (exfalso; obtain ⟨_, _, h⟩ := h; exact receiptLines_ne_submit h))
   all_goals (try (exfalso; obtain ⟨_, _, h⟩ := h; exact settled_ne_submit h))
   all_goals (try (obtain ⟨h1, h0, h2⟩ := h; injection h2 with h3 h4; subst h1 h0 h3
-                  exact ⟨rfl, rfl, _, _, _, _, ‹plan _ _ _ _ _ = _›, rfl⟩))
+                  exact ⟨rfl, rfl, _, _, _, _, _, _, ‹body _ _ _ _ _ = _›, ‹rangesOf _ _ _ = _›,
+                    ‹plan _ _ _ _ _ _ = _›, rfl⟩))
   done
 
 omit [Ord D] [DecidableEq D] in
@@ -724,6 +731,32 @@ theorem relationOf_spec {X : Ctx D} {w : World D} {obj : D} {cell : Cell} {rel :
       exact ⟨pk, hp, hi, hd⟩
     · cases h
 
+/-- **`rangeListing` is THE range read's listing**: the prefix's bytes, `Kernel.rangeOf`'s rows (not
+refused past K), and a prefix no wider than the relation's keys. -/
+theorem rangeListing_ok {X : Ctx D} {w : World D} {obj : D} {i : Nat} {d : Lang.RelDecl} {most : Nat}
+    {pre : Option String} {pb : ByteArray} {width : Nat} {l : List (RowSlot D × RowLeaf)}
+    (h : rangeListing X w obj i d most pre = .ok (pb, width, l)) :
+    prefixBytes d pre = some pb ∧ rangeOf X.env w.rows obj i pb most = some (width, some l) ∧
+      pb.size ≤ width := by
+  unfold rangeListing at h
+  cases hpb : prefixBytes d pre with
+  | none => rw [hpb] at h; cases h
+  | some pb' =>
+    rw [hpb] at h
+    simp only at h
+    cases hro : rangeOf X.env w.rows obj i pb' most with
+    | none => rw [hro] at h; cases h
+    | some q =>
+      obtain ⟨width', lo⟩ := q
+      rw [hro] at h
+      simp only at h
+      by_cases hw : pb'.size ≤ width'
+      · rw [if_pos hw] at h
+        cases lo with
+        | none => cases h
+        | some l' => cases h; exact ⟨rfl, hro, hw⟩
+      · rw [if_neg hw] at h; cases h
+
 /-- **`read OBJ REL K [PREFIX]` prints exactly the range read's rows, each on a line `Lang.Read`
 reads back to its row** (PROTOCOL-51). Lines `ts` mean: the object's package declares REL (index `i`,
 declaration `d`); K is within the declared `limit`; PREFIX is the bytes `pb`, at most the key width;
@@ -753,45 +786,34 @@ theorem rangeLines_reads {X : Ctx D} {w : World D} {obj : D} {cell : Cell} {rel 
     by_cases hlim : most ≤ d.limit
     · rw [if_pos hlim] at h
       unfold rowLines at h
-      cases hpb : prefixBytes d pre with
-      | none => rw [hpb] at h; cases h
-      | some pb =>
-        rw [hpb] at h
+      cases hL : rangeListing X w obj i d most pre with
+      | error r => rw [hL] at h; cases h
+      | ok q =>
+        obtain ⟨pb, width, l⟩ := q
+        obtain ⟨hpb, hro, hw⟩ := rangeListing_ok hL
+        rw [hL] at h
         simp only at h
-        cases hro : rangeOf X.env w.rows obj i pb most with
-        | none => rw [hro] at h; cases h
-        | some q =>
-          obtain ⟨width, lo⟩ := q
-          rw [hro] at h
+        cases hds : Lang.rangeRowData X.digestOf rel d l with
+        | error r => rw [hds] at h; cases h
+        | ok ds =>
+          rw [hds] at h
           simp only at h
-          by_cases hw : pb.size ≤ width
-          · rw [if_pos hw] at h
-            cases lo with
-            | none => cases h
-            | some l =>
-              simp only at h
-              cases hds : Lang.rangeRowData X.digestOf rel d l with
-              | error r => rw [hds] at h; cases h
-              | ok ds =>
-                rw [hds] at h
-                simp only at h
-                by_cases hwf : (Lang.rowTy d).wf = true
-                · rw [if_pos hwf] at h
-                  cases hts : ds.mapM Lang.Print.data with
-                  | none => rw [hts] at h; cases h
-                  | some ts' =>
-                    rw [hts] at h
-                    cases h
-                    obtain ⟨hlen, hz⟩ := mapM_some_zip hts
-                    refine ⟨i, d, pb, width, l, ds, rfl, hlim, hpb, hro, hw, hds, ?_, hlen, ?_⟩
-                    · rw [hlen, Lang.rangeRowData_length hds]
-                    · intro p hp
-                      have hd := hz p hp
-                      exact ⟨Lang.Print.readData_data
-                          (Lang.rangeRowData_conforms hds p.2 (List.of_mem_zip hp).2) hwf hd,
-                        Lang.Print.data_one_line hd⟩
-                · rw [if_neg hwf] at h; cases h
-          · rw [if_neg hw] at h; cases h
+          by_cases hwf : (Lang.rowTy d).wf = true
+          · rw [if_pos hwf] at h
+            cases hts : ds.mapM Lang.Print.data with
+            | none => rw [hts] at h; cases h
+            | some ts' =>
+              rw [hts] at h
+              cases h
+              obtain ⟨hlen, hz⟩ := mapM_some_zip hts
+              refine ⟨i, d, pb, width, l, ds, rfl, hlim, hpb, hro, hw, hds, ?_, hlen, ?_⟩
+              · rw [hlen, Lang.rangeRowData_length hds]
+              · intro p hp
+                have hd := hz p hp
+                exact ⟨Lang.Print.readData_data
+                    (Lang.rangeRowData_conforms hds p.2 (List.of_mem_zip hp).2) hwf hd,
+                  Lang.Print.data_one_line hd⟩
+          · rw [if_neg hwf] at h; cases h
     · rw [if_neg hlim] at h; cases h
 
 /-- **K past the declared `limit` is refused by name** (PROTOCOL-51): `rangePastLimit`, before any

@@ -95,6 +95,16 @@ structure Sys (D : Type) [Ord D] where
   staleBase : Bool := false
   /-- the client runs every write command twice (a plant, PROTOCOL-53) -/
   twiceEach : Bool := false
+  /-- an invoke's range is signed at the listing the actor's follow held before it caught up (a
+  plant, item 4) -/
+  staleRange : Bool := false
+  /-- the client drops an invoke's `--range` (a plant, item 4) -/
+  dropRange : Bool := false
+  /-- follow takes the writer's first step as its base on a `beforeLog` and reads again (a plant,
+  cv 01a151bc-6ef3) -/
+  actOnBeforeLog : Bool := false
+  /-- `read OBJ ?` drops its `doc` line (a plant, cv 01a151bc-6f0b) -/
+  dropDoc : Bool := false
 
 def skipJudge (X : Ctx D) : Ctx D :=
   { X with program := { X.program with judge := fun _ _ _ _ _ _ => .ok () } }
@@ -145,6 +155,10 @@ def sys (R : Rows.Params D) : Option Mutation → Sys D
   | some .dropHint => { writer := { R, X := R.ctx }, follow := R.ctx, dropHint := true }
   | some .staleBase => { writer := { R, X := R.ctx }, follow := R.ctx, staleBase := true }
   | some .twiceEach => { writer := { R, X := R.ctx }, follow := R.ctx, twiceEach := true }
+  | some .staleRange => { writer := { R, X := R.ctx }, follow := R.ctx, staleRange := true }
+  | some .dropRange => { writer := { R, X := R.ctx }, follow := R.ctx, dropRange := true }
+  | some .actOnBeforeLog => { writer := { R, X := R.ctx }, follow := R.ctx, actOnBeforeLog := true }
+  | some .dropDoc => { writer := { R, X := R.ctx }, follow := R.ctx, dropDoc := true }
 
 /-! ## Actors -/
 
@@ -199,6 +213,8 @@ structure St (D : Type) [Ord D] where
   /-- the origin of the lineage's FIRST genesis: founder ids are names minted there, and a carry
   keeps them (KERNEL-40, opacity); never recompute them from a carried World's origin -/
   lineage : D
+  /-- the lineage's FIRST genesis World (height 0): what a follower Store from before a carry holds -/
+  first : World D
   actors : List (String × Actor D) := []
   binds : List (String × String) := []
   ops : List Op := []
@@ -835,6 +851,39 @@ def forgeInvite (R : Rows.Params D) (X : Ctx D) (resign : Bool) (b : ByteArray) 
       let sig := if resign then R.sign (secretOf "relay" 0) (Invite.message u) else i.signature
       (Invite.bytes u sig).getD b
 
+/-- An argv with `--range REL K [PREFIX]` removed (up to `--via`, or the end). -/
+def dropRangeFlag : List String → List String
+  | [] => []
+  | "--range" :: rest => rest.dropWhile (· ≠ "--via")
+  | a :: rest => a :: dropRangeFlag rest
+
+/-- The actor's command planned on its follow's World as it stands (no catching up: the World of its
+last command), signed and submitted WITHOUT follow's own admission (`planUnchecked`, with the range
+reads `rangesOf` lists there). The outcome is the writer's answer. -/
+def forged (who : String) (av : List String) : M D (Expect × String) := do
+  let a ← actor who
+  let X ← X
+  let w := a.follow.world
+  let R ← params
+  let key := R.pub (a.key who)
+  match parse (D := D) X.digestOf (av.map String.toUTF8) with
+  | .error r => pure (.refused r.name, "")
+  | .ok cmd =>
+    match body X a.self w ⟨key, R.pub (a.next who), ByteArray.empty⟩ cmd >>= fun b =>
+        rangesOf X w cmd >>= fun rs => planUnchecked X a.self w key rs b with
+    | .error r => pure (.refused r.name, "")
+    | .ok (u, _) =>
+      let call := X.callBytes ⟨u, R.sign (a.key who) (X.callMessage u)⟩
+      sawCall who call
+      -- the forged call is the actor's last: `retry` looks it up, `resubmit` sends it again
+      setActor who { a with last := some call }
+      match ← ask .submit call with
+      | none => pure (.refused "writerStopped", "")
+      | some res =>
+          if classify res = .committed then
+            modify fun st => { st with committed := st.committed.push call }
+          pure (statusOutcome res, "")
+
 /-- Run one act once; its outcome and what it printed. -/
 def runAct (l : Line) : M D (Expect × String) := do
   match l.act with
@@ -842,7 +891,21 @@ def runAct (l : Line) : M D (Expect × String) := do
       match ← subst argv with
       | .error e => pure (.refused e, "")
       | .ok av =>
+          -- the plants (item 4): an invoke's range signed at the actor's stale listing; the flag dropped
+          if (← get).sys.staleRange && av.contains "--range" then return ← forged l.actor av
+          let av := if (← get).sys.dropRange then dropRangeFlag av else av
           let (o, out) ← command l.actor av l.fault 4
+          -- the plant: follow acts on the writer's `beforeLog`, taking its first step (the carried
+          -- World) as the base on the writer's word, and reads again
+          let (o, out) ← if (← get).sys.actOnBeforeLog && o == .refused "beforeLog" then do
+              let a ← actor l.actor
+              setActor l.actor { a with follow := { world := (← get).genesis } }
+              command l.actor av l.fault 4
+            else pure (o, out)
+          -- the plant: a description with its `doc` line dropped
+          let out := if (← get).sys.dropDoc && av.length == 3 && av.getLast? == some "?" then
+              "\n".intercalate ((out.splitOn "\n").filter fun ln => !ln.startsWith "doc ")
+            else out
           -- the plant: a client that runs every write command again (the line's outcome, output
           -- and binds are the first run's; only the work doubles)
           if (← get).sys.twiceEach && av.head? ≠ some "read" then
@@ -905,29 +968,7 @@ def runAct (l : Line) : M D (Expect × String) := do
   | .forge argv => do
       match ← subst argv with
       | .error e => pure (.refused e, "")
-      | .ok av =>
-        let a ← actor l.actor
-        let X ← X
-        let w := a.follow.world
-        let R ← params
-        let key := R.pub (a.key l.actor)
-        match parse (D := D) X.digestOf (av.map String.toUTF8) with
-        | .error r => pure (.refused r.name, "")
-        | .ok cmd =>
-          match body X a.self w ⟨key, R.pub (a.next l.actor), ByteArray.empty⟩ cmd >>= fun b =>
-              planUnchecked X a.self w key b with
-          | .error r => pure (.refused r.name, "")
-          | .ok (u, _) =>
-            let call := X.callBytes ⟨u, R.sign (a.key l.actor) (X.callMessage u)⟩
-            sawCall l.actor call
-            -- the forged call is the actor's last: `retry` looks it up, `resubmit` sends it again
-            setActor l.actor { a with last := some call }
-            match ← ask .submit call with
-            | none => pure (.refused "writerStopped", "")
-            | some res =>
-                if classify res = .committed then
-                  modify fun st => { st with committed := st.committed.push call }
-                pure (statusOutcome res, "")
+      | .ok av => forged l.actor av
   | .carry rightDigest => do
       let st ← get
       match ← st.host.stop with
@@ -969,6 +1010,11 @@ def runAct (l : Line) : M D (Expect × String) := do
       let a ← actor l.actor
       let g := (← get).genesis
       setActor l.actor { a with self := { a.self with world := g.origin }, follow := { world := g } }
+      pure (.ok, "")
+  | .rejoinBehind => do
+      let a ← actor l.actor
+      let st ← get
+      setActor l.actor { a with self := { a.self with world := st.genesis.origin }, follow := { world := st.first } }
       pure (.ok, "")
   | .replayLog sameNonce => do
       -- a SECOND writer from a genesis of the same name, allowance and founders, and the writer's
@@ -1147,7 +1193,7 @@ def run (R : Rows.Params D) (m : Option Mutation) (lines : List Line) (times : O
      (n ++ ".grant", hex (founderGrantId s.writer.X g.origin i))]) ++
     [("inputs", Text.toHex inputs), ("otherInputs", Text.toHex other)] ++
     (founders ++ ["newcomer"]).map fun n => (n ++ ".key", Text.toHex (keyOf R n 0))
-  let (outcomes, st) ← go.run { sys := s, host, mem, genesis := g, lineage := g.origin, binds, invitation }
+  let (outcomes, st) ← go.run { sys := s, host, mem, genesis := g, lineage := g.origin, first := g, binds, invitation }
   let steps := match ← st.host.stop with
     | .ok (_, r) => r.world.steps
     | .error _ => 0

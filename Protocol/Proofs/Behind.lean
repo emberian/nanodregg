@@ -6,9 +6,12 @@ own call, as `plan` signed it at a World `w₀` of follow's fold, that follow's 
 `w₀` refuses `stale`, is admitted by no `submit` at any World the fold reaches from `w`, or the
 deployed hash collides among the call's pin inputs at `w₀` and there (`behindPres`, an explicit
 list). The pieces: `plan_pins` (the W0 premise: every pin `plan` signs is the planning World's, and
-it signs no range), `receive_pins` (a derived Turn checks every pin its call carries, at any World),
+the ranges it signs are the command's), `rangesOf_pins` (each such range is pinned at the planning
+World's listing), `receive_pins` (a derived Turn checks every pin its call carries, at any World),
 `Kernel.admit_stale_pin` (a `stale` refusal names a pin that disagrees), and
-`Kernel.stale_behind_forever` / `row_stale_behind_forever` (a pin stale on the fold stays stale).
+`Kernel.stale_behind_forever` / `row_stale_behind_forever` / `range_stale_behind_forever` (a pin
+stale on the fold stays stale), with `Kernel.headOf_width_fold` (a relation's key width is the one
+it was declared with, along the fold).
 -/
 import Protocol.Proofs.Command
 import Kernel.Proofs.StaleOnly
@@ -61,11 +64,12 @@ theorem derivePins_ranges {X : Ctx D} {w : World D} :
 
 /-- **The pins `plan` signs are the planning World's** (KERNEL-54, the W0 premise of the BEHIND
 finality): every cell pin is `pinOf` of `w`'s entry, every row pin is `rowPinAt` of `w`, and the
-call reads no range (the plan-side gap's second half). -/
-theorem plan_pins {X : Ctx D} {me : Self D} {w : World D} {key : ByteArray} {b : Body D}
-    {u : Unsigned D} (h : plan X me w key b = .ok u) :
+call's range reads are exactly the ones it was handed (`rangesOf`, whose pins `rangesOf_pins`
+states). -/
+theorem plan_pins {X : Ctx D} {me : Self D} {w : World D} {key : ByteArray} {rs : List (RangeRead D)}
+    {b : Body D} {u : Unsigned D} (h : plan X me w key rs b = .ok u) :
     (∀ p ∈ u.pins, p.2 = Kernel.pinOf X.env (w.entry X.env p.1)) ∧
-      (∀ p ∈ u.rowPins, ∃ k, p = rowPinAt X.env w k) ∧ u.ranges = [] := by
+      (∀ p ∈ u.rowPins, ∃ k, p = rowPinAt X.env w k) ∧ u.ranges = rs := by
   unfold plan at h
   split at h
   · cases h
@@ -97,6 +101,72 @@ theorem plan_pins {X : Ctx D} {me : Self D} {w : World D} {key : ByteArray} {b :
           · cases hp
           · cases hp
             exact derivePins_ranges _ _ _ _ hq
+
+omit [Ord D] in
+/-- `Kernel.rangeOf` listing rows is the relation's head at that width and `rangeRows` there. -/
+theorem rangeOf_some {E : Env D} {r : Rows D} {parent : D} {rel : Nat} {pre : ByteArray} {most width : Nat}
+    {l : List (RowSlot D × RowLeaf)} (h : rangeOf E r parent rel pre most = some (width, some l)) :
+    ∃ c s lim cap rt, headOf E r parent rel = some (c, s, lim, cap, width, rt) ∧
+      rangeRows E r parent rel width pre most = some l := by
+  unfold rangeOf at h
+  cases hh : headOf E r parent rel with
+  | none => simp [hh] at h
+  | some v =>
+    obtain ⟨c, s, lim, cap, width', rt⟩ := v
+    simp only [hh, Option.some.injEq, Prod.mk.injEq] at h
+    obtain ⟨rfl, h2⟩ := h
+    exact ⟨c, s, lim, cap, rt, rfl, h2⟩
+
+/-- **Every range `rangesOf` lists is pinned at the planning World's listing** (item 4, the W0
+premise's range half): its parent is live at `w`, its prefix is no wider than the relation's keys,
+and its `seen` is THE pin admission recomputes (`Kernel.rangePin` at the relation's width and floor
+over `rangeRows` at `w`), so the signer's range pin is `w`'s own. -/
+theorem rangesOf_pins {X : Ctx D} {w : World D} {cmd : Cmd D} {rs : List (RangeRead D)}
+    (h : rangesOf X w cmd = .ok rs) :
+    ∀ q ∈ rs, (∃ cell, w.live X.env q.parent = some cell) ∧ ∃ c s lim cap width rt l,
+      headOf X.env w.rows q.parent q.rel = some (c, s, lim, cap, width, rt) ∧ q.pre.size ≤ width ∧
+      rangeRows X.env w.rows q.parent q.rel width q.pre q.most = some l ∧
+      q.seen = rangePin X.env q.parent q.rel width q.pre (headFloor X.env w.rows q.parent q.rel) l := by
+  unfold rangesOf at h
+  split at h
+  · rename_i o _ _ rel most pre _
+    cases hl : w.live X.env o with
+    | none => rw [hl] at h; cases h
+    | some cell =>
+      rw [hl] at h
+      simp only at h
+      cases hr : relationOf X w o cell rel with
+      | error r => rw [hr] at h; cases h
+      | ok p =>
+        obtain ⟨i, d⟩ := p
+        rw [hr] at h
+        simp only at h
+        by_cases hlim : most ≤ d.limit
+        · rw [if_pos hlim] at h
+          cases hL : rangeListing X w o i d most pre with
+          | error r => rw [hL] at h; cases h
+          | ok v =>
+            obtain ⟨pb, width, l⟩ := v
+            rw [hL] at h
+            simp only [Except.ok.injEq] at h
+            subst h
+            obtain ⟨-, hro, hw⟩ := rangeListing_ok hL
+            obtain ⟨c, s, lim, cap, rt, hh, hrr⟩ := rangeOf_some hro
+            intro q hq
+            simp only [List.mem_singleton] at hq
+            subst hq
+            exact ⟨⟨cell, hl⟩, c, s, lim, cap, width, rt, l, hh, hw, hrr, rfl⟩
+        · rw [if_neg hlim] at h; cases h
+  · cases h
+    intro q hq
+    cases hq
+
+/-- A range read's pin inputs at a World whose relation lists `l` at the head's width. -/
+theorem rangePresAt_of {E : Env D} {w : World D} {q : RangeRead D} {c s lim cap width : Nat} {rt : Bool}
+    {l : List (RowSlot D × RowLeaf)} (hh : headOf E w.rows q.parent q.rel = some (c, s, lim, cap, width, rt))
+    (hl : rangeRows E w.rows q.parent q.rel width q.pre q.most = some l) :
+    rangePresAt E w q = rangePre E q.parent q.rel width q.pre (headFloor E w.rows q.parent q.rel) l :: leafPres l := by
+  simp [rangePresAt, hh, hl]
 
 /-- Every row pin of a call is a row touch of its Turn, at the digest the caller saw. -/
 theorem rowTouchesOf_pins {pins : List (RowSlot D × D)} {rows : List (RowSlot D × RowAct)}
@@ -143,14 +213,14 @@ theorem receive_pins {X : Ctx D} {v : World D} {c : Call D} {t : Turn D} (h : re
 /-- **A call refused stale BEHIND on follow's fold is never admitted later** (cv 01a15187; the
 settlement's `refused staleCode` arm, PROTOCOL-52's "final by fold structure" now by theorem). The
 member's own call, as `plan` signed it at a World `w₀` of follow's fold (the W0 premise: its pins
-are `w₀`'s, `plan_pins`), that follow's World `w` reached from `w₀` refuses `stale`
+are `w₀`'s, `plan_pins`, and its range reads are `rangesOf`'s at `w₀`, `rangesOf_pins`), that follow's World `w` reached from `w₀` refuses `stale`
 (`staleBehind`), is admitted by no `submit` at any World `w'` the fold reaches from `w`, unless the
 deployed hash collides among the call's pin inputs at `w₀` and `w'` (`behindPres`). -/
 theorem staleBehind_final [Std.TransOrd D] [Std.LawfulEqOrd D] {X : Ctx D} {n : Nat}
     (hE : X.env.Lawful n) {me : Self D} {w₀ w w' : World D} {l₁ l₂ : List (Kernel.Step D)}
-    {key : ByteArray} {b : Body D} {u : Unsigned D} {c : Call D}
+    {key : ByteArray} {cmd : Cmd D} {rs : List (RangeRead D)} {b : Body D} {u : Unsigned D} {c : Call D}
     (hf : w₀.CellsFit Cell.Fits X.env) (hr : w₀.RowsCanon X.env) (hok : w₀.RowsOk X.env)
-    (hplan : plan X me w₀ key b = .ok u) (hc : c.unsigned = u)
+    (hrs : rangesOf X w₀ cmd = .ok rs) (hplan : plan X me w₀ key rs b = .ok u) (hc : c.unsigned = u)
     (h₁ : World.fold X.env w₀ l₁ = .ok w) (h₂ : World.fold X.env w l₂ = .ok w')
     (hs : staleBehind X me w c = true) :
     (∀ r, submit X w' c ≠ .ok r) ∨ CollidesAmong X.env.hash (behindPres X.env w₀ w' u) := by
@@ -164,8 +234,8 @@ theorem staleBehind_final [Std.TransOrd D] [Std.LawfulEqOrd D] {X : Ctx D} {n : 
   obtain ⟨⟨t', v⟩, hsub⟩ := hsub
   right
   obtain ⟨-, hrt', hat'⟩ := submit_ok hsub
-  obtain ⟨htc', htr', -, -⟩ := receive_pins hrt'
-  rcases admit_stale_pin hrw hat with ⟨x, hx, -, hne⟩ | ⟨x, hx, k, s, hxs, -, hseen, hne⟩ | ⟨q, hq, -⟩
+  obtain ⟨htc', htr', -, htq'⟩ := receive_pins hrt'
+  rcases admit_stale_pin hrw hat with ⟨x, hx, -, hne⟩ | ⟨x, hx, k, s, hxs, -, hseen, hne⟩ | ⟨q, hq, -, c₁, s₁, lim₁, cap₁, width₁, rt₁, l₁, hh₁, hl₁, hne₁⟩
   · -- a cell pin
     have hm : (x.cell, x.seen) ∈ c.unsigned.pins := by
       rw [← htc]; exact List.mem_map_of_mem hx
@@ -180,7 +250,8 @@ theorem staleBehind_final [Std.TransOrd D] [Std.LawfulEqOrd D] {X : Ctx D} {n : 
     · exact (h hp').elim
     · refine CollidesAmong.mono ?_ h
       intro z hz
-      refine List.mem_append_left _ (List.mem_flatMap.mpr ⟨_, by rw [← hc]; exact hm, ?_⟩)
+      refine List.mem_append_left _ (List.mem_append_left _
+        (List.mem_flatMap.mpr ⟨_, by rw [← hc]; exact hm, ?_⟩))
       simpa using hz
   · -- a row pin
     have hm := htr x hx s hseen
@@ -198,22 +269,78 @@ theorem staleBehind_final [Std.TransOrd D] [Std.LawfulEqOrd D] {X : Ctx D} {n : 
       exact (admit_dead hl ⟨x', hx', hs'⟩ hat').elim
     · refine CollidesAmong.mono ?_ h
       intro z hz
-      refine List.mem_append_right _ (List.mem_flatMap.mpr ⟨_, hm, ?_⟩)
+      refine List.mem_append_left _ (List.mem_append_right _ (List.mem_flatMap.mpr ⟨_, hm, ?_⟩))
       simpa [hxs] using hz
-  · -- a range pin: `plan` signs none
-    rw [htq, hc, hpq] at hq
-    cases hq
+  · -- a range pin: `plan` signed it at `w₀`'s listing (`rangesOf_pins`)
+    have hq0 : q ∈ rs := by rw [htq, hc, hpq] at hq; exact hq
+    have hqu : q ∈ u.ranges := by rw [hpq]; exact hq0
+    have hq' : q ∈ t'.ranges := by rw [htq', hc]; exact hqu
+    obtain ⟨⟨cell₀, hlive₀⟩, c₀, s₀, lim₀, cap₀, width₀, rt₀, l₀, hh₀, hwd, hl₀, hseen₀⟩ :=
+      rangesOf_pins hrs q hq0
+    obtain ⟨c₂, s₂, lim₂, cap₂, width₂, rt₂, l', hh₂, hl', hpin'⟩ := admit_range_pins hat' q hq'
+    -- a relation's key width is its declaration's, along the fold
+    have hw₁ : width₁ = width₀ := headOf_width_fold hr h₁ hh₀ hh₁
+    have hw₂ : width₂ = width₀ :=
+      (headOf_width_fold hrw h₂ hh₁ hh₂).trans hw₁
+    subst hw₁ hw₂
+    rcases range_stale_behind_forever hE hr hok h₁ h₂ hwd hl₀ hl₁ hl' (by rw [← hseen₀]; exact hne₁)
+      with h | h | h
+    · exact (h (hpin'.trans hseen₀)).elim
+    · -- the parent tombed at `w'`: admission checked its cell pin (the parent is touched), which
+      -- `plan` signed at `w₀`, where it was live: the tomb's pin input and the live one collide
+      obtain ⟨_, hk, _⟩ := admit_ok hat'
+      have hq'' := (forEx_ok.mp hk.ranges) q hq'
+      simp only [except_bind_ok] at hq''
+      obtain ⟨⟨⟩, hreq, -⟩ := hq''
+      obtain ⟨x, hx, hxc⟩ := List.any_eq_true.mp (req_ok.mp hreq)
+      have hxc : x.cell = q.parent := of_decide_eq_true hxc
+      have hm' : (x.cell, x.seen) ∈ c.unsigned.pins := by rw [← htc']; exact List.mem_map_of_mem hx
+      have hseen : x.seen = Kernel.pinOf X.env (w₀.entry X.env x.cell) := by
+        rw [hc] at hm'; exact hpc _ hm'
+      have hp' := admit_pins hat' x hx
+      rw [hseen, hxc, h] at hp'
+      obtain ⟨v, he₀⟩ : ∃ v, w₀.entry X.env q.parent = some (.live cell₀ v) := by
+        cases he : w₀.entry X.env q.parent with
+        | none => simp [World.live, he] at hlive₀
+        | some e =>
+          cases e with
+          | tomb => simp [World.live, he] at hlive₀
+          | live c' v =>
+            simp only [World.live, he, Option.some.injEq] at hlive₀
+            exact ⟨v, by rw [hlive₀]⟩
+      rw [he₀, pinOf_eq_pre, pinOf_eq_pre] at hp'
+      have hne : pinPre X.env (some Entry.tomb) ≠ pinPre X.env (some (.live cell₀ v)) := fun he =>
+        absurd (congrArg Prod.fst he) (show domTomb ≠ domCell by unfold domTomb domCell; decide)
+      refine CollidesAmong.mono ?_ (CollidesAmong.pair hne hp')
+      intro z hz
+      refine List.mem_append_left _ (List.mem_append_left _
+        (List.mem_flatMap.mpr ⟨_, by rw [← hc]; exact hm', ?_⟩))
+      simp only [List.mem_cons, List.not_mem_nil, or_false] at hz
+      simp only [hxc, he₀, h, List.mem_cons, List.not_mem_nil, or_false]
+      rcases hz with rfl | rfl
+      · exact .inr rfl
+      · exact .inl rfl
+    · refine CollidesAmong.mono ?_ h
+      intro z hz
+      refine List.mem_append_right _ (List.mem_flatMap.mpr ⟨q, hqu, ?_⟩)
+      rw [rangePresAt_of hh₀ hl₀, rangePresAt_of hh₂ hl']
+      simp only [List.mem_cons, List.mem_append] at hz ⊢
+      rcases hz with hz | hz | hz | hz
+      · exact .inl (.inl hz)
+      · exact .inr (.inl hz)
+      · exact .inl (.inr hz)
+      · exact .inr (.inr hz)
 
 /-- TOOTH (`staleBehind_final`): where the hash separates the call's pin inputs at the two Worlds,
 a call refused stale BEHIND is admitted by no later World of the fold. -/
 theorem staleBehind_final_sep [Std.TransOrd D] [Std.LawfulEqOrd D] {X : Ctx D} {n : Nat}
     (hE : X.env.Lawful n) {me : Self D} {w₀ w w' : World D} {l₁ l₂ : List (Kernel.Step D)}
-    {key : ByteArray} {b : Body D} {u : Unsigned D} {c : Call D}
+    {key : ByteArray} {cmd : Cmd D} {rs : List (RangeRead D)} {b : Body D} {u : Unsigned D} {c : Call D}
     (hf : w₀.CellsFit Cell.Fits X.env) (hr : w₀.RowsCanon X.env) (hok : w₀.RowsOk X.env)
-    (hplan : plan X me w₀ key b = .ok u) (hc : c.unsigned = u)
+    (hrs : rangesOf X w₀ cmd = .ok rs) (hplan : plan X me w₀ key rs b = .ok u) (hc : c.unsigned = u)
     (h₁ : World.fold X.env w₀ l₁ = .ok w) (h₂ : World.fold X.env w l₂ = .ok w')
     (hsep : Separates X.env.hash (behindPres X.env w₀ w' u))
     (hs : staleBehind X me w c = true) : ∀ r, submit X w' c ≠ .ok r :=
-  hsep.elim (staleBehind_final hE hf hr hok hplan hc h₁ h₂ hs)
+  hsep.elim (staleBehind_final hE hf hr hok hrs hplan hc h₁ h₂ hs)
 
 end Nanodregg.Protocol.Command

@@ -38,8 +38,9 @@ inductive Verb
   | write
   /-- `law OBJ LAW… [--via GRANT]`: replace a data object's laws -/
   | law
-  /-- `invoke OBJ METHOD ARGS [--via GRANT]`: run a method; ARGS is read at the method's argument
-  type (LANG's reader, on follow's World) -/
+  /-- `invoke OBJ METHOD ARGS [--range REL K [PREFIX]] [--via GRANT]`: run a method; ARGS is read at
+  the method's argument type (LANG's reader, on follow's World); a method that reads a relation by
+  range is handed the range `--range` names, signed at follow's listing -/
   | invoke
   /-- `grant TARGET MEMBER RIGHTS [--via PARENT]`: TARGET is an object, a value account
   (`well:ASSET` | `of:OWNER:ASSET`: a mutate grant over it lends its balance, LEDGER-6), or `world` (the World,
@@ -130,8 +131,11 @@ inductive Cmd (D : Type)
   | create (pkg : Option (D × String)) (laws : List D)
   | write (obj : D) (key : Nat) (value : ByteArray) (via : Option D)
   | law (obj : D) (laws : List D) (via : Option D)
-  /-- `args` is TEXT, read at the method's argument type when the call is planned -/
-  | invoke (obj : D) (method : Nat) (args : String) (via : Option D)
+  /-- `args` is TEXT, read at the method's argument type when the call is planned; `range` is
+  `--range REL K [PREFIX]`: the relation, at most K rows and the prefix TEXT of the one range the
+  method reads, which the plan signs (`read OBJ REL K [PREFIX]`'s arguments, in its order) -/
+  | invoke (obj : D) (method : Nat) (args : String) (range : Option (String × Nat × Option String))
+      (via : Option D)
   /-- `grantee = none` is `anyone` (the World as grantee, KERNEL-26) -/
   | grant (target : GrantTarget D) (grantee : Option D) (rights : List Right) (via : Option D)
   | revoke (grant : D)
@@ -196,7 +200,7 @@ def usage : Verb → String
   | .init => "init SPONSOR" | .enroll => "enroll TOKEN"
   | .install => "install TEXT" | .create => "create [--pkg PKG STATE] LAW..."
   | .write => "write OBJ KEY VALUE [--via GRANT]" | .law => "law OBJ LAW... [--via GRANT]"
-  | .invoke => "invoke OBJ METHOD ARGS [--via GRANT]"
+  | .invoke => "invoke OBJ METHOD ARGS [--range REL K [PREFIX]] [--via GRANT]"
   | .grant => "grant TARGET|ACCOUNT|world MEMBER|anyone RIGHTS [--via PARENT]"
   | .revoke => "revoke GRANT" | .read => "read OBJ [KEY=VALUE...] | read OBJ ? | read OBJ REL K [PREFIX]" | .rotate => "rotate"
   | .adopt => "adopt INVITE KEY" | .sync => "sync" | .issue => "issue CAP"
@@ -297,6 +301,13 @@ def viaFlag (fs : List (String × String)) : Except ParseRefusal (Option D) :=
   | some g => (digestArg digestOf g).map some
   | none => .ok none
 
+/-- `invoke`'s `--range REL K [PREFIX]`, what is left of its tail once `--via` is split off. -/
+def rangeArg (v : Verb) : List String → Except ParseRefusal (Option (String × Nat × Option String))
+  | [] => .ok none
+  | ["--range", r, k] => do pure (some (r, ← numArg k, none))
+  | ["--range", r, k, p] => do pure (some (r, ← numArg k, some p))
+  | _ => .error (.usage v.word (usage v))
+
 /-- Split a trailing `--via GRANT` off a variable-length tail. -/
 def splitVia (args : List String) : List String × List String :=
   match args.reverse with
@@ -320,8 +331,10 @@ def parseVerb (v : Verb) (args : List String) : Except ParseRefusal (Cmd D) :=
   | .law, o :: rest =>
       let (ls, via) := splitVia rest
       do pure (.law (← digestArg digestOf o) (← mapEx (digestArg digestOf) ls) (← viaArg digestOf .law via))
-  | .invoke, o :: m :: a :: via => do
-      pure (.invoke (← digestArg digestOf o) (← numArg m) a (← viaArg digestOf .invoke via))
+  | .invoke, o :: m :: a :: rest =>
+      let (rg, via) := splitVia rest
+      do pure (.invoke (← digestArg digestOf o) (← numArg m) a (← rangeArg .invoke rg)
+        (← viaArg digestOf .invoke via))
   | .grant, t :: m :: rs :: via => do
       let target ← if t = "world" then pure GrantTarget.world
         else if t.startsWith "well:" || t.startsWith "of:" then GrantTarget.account <$> acctArg digestOf t

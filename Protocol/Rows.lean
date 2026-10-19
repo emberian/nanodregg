@@ -108,6 +108,10 @@ inductive Act
   /-- the actor is re-invited to the carried World: its `Self.world` is the new origin and its
   follow starts from the carried World (members, grants and accounts are carried cells) -/
   | rejoin
+  /-- the actor is re-invited to the carried World (its `Self.world` the new origin) but its follow
+  is the lineage's FIRST genesis, height 0: a follower Store from before the import's first step,
+  which never adopted the carried base -/
+  | rejoinBehind
   /-- the actor signs a `log` read envelope for ITS World (from height 0, one window from 0) and
   sends it to a second writer made as `replayLog` makes one (PROTOCOL-29's cross-World read); the
   outcome is that writer's answer -/
@@ -297,6 +301,17 @@ inductive Mutation
   /-- the client runs every write command twice (PROTOCOL-53: THE BAR's `rowbar frames-per-write`
   and `steps-per-write` must move) -/
   | twiceEach
+  /-- an invoke's `--range` is signed at the listing the actor's follow held at its LAST command, never
+  caught up (item 4: the plan's range pin must be the listing at the World it signs from) -/
+  | staleRange
+  /-- the client drops an invoke's `--range REL K [PREFIX]`: the plan signs no range (item 4, the shape
+  before it: the receiver's `rangeUnpinned`) -/
+  | dropRange
+  /-- follow ACTS on the writer's `beforeLog`: it takes the writer's first step as its base (the
+  carried World, on the writer's word) and reads again (cv 01a151bc-6ef3: follow reports it, never acts) -/
+  | actOnBeforeLog
+  /-- `read OBJ ?` prints no `doc` line (cv 01a151bc-6f0b: the description the Bell's doc line rides on) -/
+  | dropDoc
   deriving DecidableEq, Repr
 
 /-- A row's plant: the mutation, and the line that must catch it with the outcome it then gets. -/
@@ -1096,6 +1111,26 @@ def carry : Row where
     ok "operator" ["create", "@permit"]])
   plant := .caught .importTrustsFile 7 .ok
 
+/-- cv 01a151bc-6ef3 (HOST-61's `beforeLog`): a member re-invited to the carried World whose follow
+Store is from before the import's first step (`rejoinBehind`: the lineage's first genesis, height 0)
+asks the writer for a page from step 0; the carried Store's log begins at the carried height, so the
+writer refuses `beforeLog` by name. Follow REPORTS it, with the remedy (`hint beforeLog`: an
+invitation that pins that base, nd adopt) and never acts on it: adopting a base on the writer's word
+is what an invitation's pin exists to refuse. The plant is a follow that acts (takes the writer's
+first step as its base and reads again): line 9 is `ok`. -/
+def beforeLogRow : Row where
+  name := "beforeLog"
+  replaces := []
+  ops := everyWrite
+  kinds := ["enroll", "install", "create", "grant", "write"]
+  drive := .members (welcome ++ [
+    ok "newcomer" ["write", "@shared", "2", "1", "--via", "@g"],
+    { actor := "operator", act := .carry true, expect := .ok },
+    { actor := "newcomer", act := .rejoinBehind, expect := .ok },
+    { actor := "newcomer", act := .cmd ["read", "@shared", "2=1"], expect := .refused "beforeLog",
+      prints := some "hint beforeLog: the writer's log starts at a base; join it with an invitation that pins that base (nd adopt)" }])
+  plant := .caught .actOnBeforeLog 9 .ok
+
 /-- JPAY (the payment half): a transfer spends a once-only key of its source (`--once`), and the
 same key again is `spent`, whether the client checks it (follow's own admission, line 3) or a
 hostile client skips that check and the WRITER refuses it (line 4). Another key pays again. -/
@@ -1289,6 +1324,67 @@ def settleRow : Row where
     ok "operator" ["read", "@shared", "2=6"]])
   plant := .caught .trustLookup 6 (.refused "stale")
 
+/-- A tally of rings by round whose `take` reads a round's rings as ONE signed range (item 4): `ring`
+inserts its text at key `(round, ringer)` and leaves the state alone (it writes no cell: two rings
+touch disjoint rows, so a ring moves only the range); `take` reads the range over the key's first
+field (the round, up to 8 rows) and refuses `empty` on an empty one. -/
+def tallySource : String := "
+(package
+  (state (rec))
+  (rel rings (key (round nat) (ringer digest)) (val (rec (text bytes))) (limit 64))
+  (method ring (arg (rec (round nat) (text bytes))) (edits 1)
+    (done state (insert rings (record (round arg.round) (ringer req.agent)) (record (text arg.text)))))
+  (method take (reads (rings (range 1 8)))
+    (case rows.rings.range.rows.r0 (none _ (refuse \"empty\")) (some _ (done state))))
+  (law always (else ok)))
+"
+
+/-- `tallySource` as `install` reads it. -/
+def tally : String :=
+  match Lang.Surface.readPackage tallySource with
+  | .ok p => (Lang.Print.package p).getD ""
+  | .error _ => ""
+
+/-- Item 4 (ROOT ruled): a method that reads a relation by range is invoked through nd with
+`--range REL K [PREFIX]`, `read OBJ REL K [PREFIX]`'s arguments, and the plan signs that range at
+follow's listing (`Command.rangesOf`, the read verb's `rangeListing`). The sponsor and the newcomer
+ring round 1; without `--range` the sponsor's take is refused `rangeUnpinned` (LANG's structured
+refusal, with the hint naming the flag); the newcomer rings round 1 (so the sponsor's follow is one
+ring behind); with `--range` the take commits, its range signed at the two-ring listing the
+sponsor's follow caught up to. -/
+def rangeInvokeLines : List Line :=
+  join "sponsor" "newcomer" ++ [
+    okBind "operator" ["install", tally] "tallyPkg",
+    okBind "sponsor" ["create", "--pkg", "@tallyPkg", "(record)"] "t",
+    okBind "sponsor" ["grant", "@t", "anyone", "invoke:0"] "tpub",
+    { actor := "sponsor", act := .cmd ["read", "@t", "?"], expect := .ok, bind := some "t" },
+    ok "sponsor" ["invoke", "@t", "@t.ring", "(record (round 1) (text \"a\"))"],
+    { actor := "sponsor", act := .cmd ["invoke", "@t", "@t.take", "(record)"],
+      expect := .refused "rangeUnpinned", prints := some "hint rangeUnpinned: this method reads a relation by range; pass --range REL K [PREFIX]" },
+    ok "newcomer" ["invoke", "@t", "@t.ring", "(record (round 1) (text \"b\"))", "--via", "@tpub"],
+    ok "sponsor" ["invoke", "@t", "@t.take", "(record)", "--range", "rings", "8", "(record (round 1))"]]
+
+/-- Item 4's plant (i): the take's range signed at the sponsor's stale listing (one ring, its follow
+before the newcomer's ring) is `declined stale` by the writer, by name, at the last line (KERNEL-54: a
+stale is declined, never recorded; only the range moved, as `ring` writes no cell). -/
+def rangeInvokeRow : Row where
+  name := "rangeInvoke"
+  replaces := []
+  ops := everyWrite
+  kinds := ["enroll", "grant", "install", "create", "invoke"]
+  drive := .members rangeInvokeLines
+  plant := .caught .staleRange 10 (.declined "stale")
+
+/-- Item 4's plant (ii): the client that drops `--range` signs no range, and the last line is
+refused `rangeUnpinned` by name. -/
+def rangeFlagRow : Row where
+  name := "rangeFlag"
+  replaces := []
+  ops := everyWrite
+  kinds := ["enroll", "grant", "install", "create", "invoke"]
+  drive := .members rangeInvokeLines
+  plant := .caught .dropRange 10 (.refused "rangeUnpinned")
+
 /-- The queue every range row starts from: a newcomer, the operator's `rings` package, the sponsor's
 queue `q` and its public `ring` grant `pub`. -/
 def queue : List Line :=
@@ -1345,6 +1441,25 @@ def rangeLimitRow : Row where
       prints := some "" }])
   plant := .caught .noReadLimit 6 .ok
 
+/-- The Bell's lines (`bellRow`, `bellDocRow`). The newcomer's description of the Bell carries the
+Bell's own `doc` line (LANG-60, cv 01a151bc-6f0b). -/
+def bellLines : List Line :=
+  welcome ++ [
+    okBind "sponsor" ["install", "<world/resident/Bell"] "bellPkg",
+    okBind "sponsor" ["create", "--pkg", "@bellPkg", "(record (open true) (resident #{@newcomer}))"] "bell",
+    okBind "sponsor" ["grant", "@bell", "@newcomer", "invoke:0"] "ga",
+    { actor := "newcomer", act := .cmd ["read", "@bell", "?"], expect := .ok, bind := some "bell",
+      prints := some "doc \"A ring is answered once, by the resident, with its text sent back;" },
+    { actor := "sponsor", act := .cmd ["invoke", "@bell", "@bell.answer",
+        "(record (notBefore 1) (ringText \"hi\") (ringer #{@sponsor}) (text \"me\"))"],
+      expect := .refused "program", prints := some "refused notResident" },
+    { actor := "newcomer", act := .cmd ["invoke", "@bell", "@bell.answer",
+        "(record (notBefore 1) (ringText \"hi\") (ringer #{@sponsor}) (text \"nobody rang\"))", "--via", "@ga"],
+      expect := .refused "lawDenied", prints := some "rung: unrung" },
+    ok "sponsor" ["invoke", "@bell", "@bell.ring", "(record (text \"hello\"))"],
+    { actor := "newcomer", act := .cmd ["read", "@bell", "pending", "64"], expect := .ok,
+      prints := some "hello" }]
+
 /-- cv 01a15039: a member reads WHY a method refused it, in the method's own words (LANG-51's
 `refuse`). The sponsor installs the shipped Bell (`world/resident/Bell`, LANG-58's queue of rings,
 LANG-59's answers in `rings`) with the newcomer as its resident and grants it `answer`. The sponsor, not
@@ -1357,21 +1472,19 @@ def bellRow : Row where
   replaces := []
   ops := everyWrite
   kinds := ["enroll", "grant", "install", "create", "invoke"]
-  drive := .members (welcome ++ [
-    okBind "sponsor" ["install", "<world/resident/Bell"] "bellPkg",
-    okBind "sponsor" ["create", "--pkg", "@bellPkg", "(record (open true) (resident #{@newcomer}))"] "bell",
-    okBind "sponsor" ["grant", "@bell", "@newcomer", "invoke:0"] "ga",
-    { actor := "newcomer", act := .cmd ["read", "@bell", "?"], expect := .ok, bind := some "bell" },
-    { actor := "sponsor", act := .cmd ["invoke", "@bell", "@bell.answer",
-        "(record (notBefore 1) (ringText \"hi\") (ringer #{@sponsor}) (text \"me\"))"],
-      expect := .refused "program", prints := some "refused notResident" },
-    { actor := "newcomer", act := .cmd ["invoke", "@bell", "@bell.answer",
-        "(record (notBefore 1) (ringText \"hi\") (ringer #{@sponsor}) (text \"nobody rang\"))", "--via", "@ga"],
-      expect := .refused "lawDenied", prints := some "rung: unrung" },
-    ok "sponsor" ["invoke", "@bell", "@bell.ring", "(record (text \"hello\"))"],
-    { actor := "newcomer", act := .cmd ["read", "@bell", "pending", "64"], expect := .ok,
-      prints := some "hello" }])
+  drive := .members bellLines
   plant := .caught .flatProgram 10 (.refused "unprinted")
+
+/-- cv 01a151bc-6f0b: the Bell's description pins its doc line (`read @bell ?` prints
+`doc "A ring is answered once…"`). The plant is a describe that drops the doc line: line 9 is
+`refused unprinted`. -/
+def bellDocRow : Row where
+  name := "bellDoc"
+  replaces := []
+  ops := everyWrite
+  kinds := ["enroll", "grant", "install", "create", "invoke"]
+  drive := .members bellLines
+  plant := .caught .dropDoc 9 (.refused "unprinted")
 
 /-- The writer serves every event the kernel admits (PROTOCOL-18): the largest a row logs is the
 install of the shipped queue Bell (27.7 KB printed). Its submit commits and its confirm, the
@@ -1426,6 +1539,6 @@ def uncertainHintRow : Row where
 def rows : List Row :=
   [journey, reopen, laws, rotate, audit, paging, coldCatchUp, inflatedHeight, forgotten, refusedRow, refusedFinalRow, inviteRow, useRow, describeRow, stateRow, receiptRow, settleRow, carry, thin, thinStale, sealRow, basePin, pageIoRow, wrongWorld, wrongWorldRead, pay, well, bounty, grain, hermes, bar,
    langJourney, rangeRow, rangeLimitRow, bellRow, bigEventRow, wrongFollowerRow,
-   uncertainHintRow]
+   uncertainHintRow, rangeInvokeRow, rangeFlagRow, beforeLogRow, bellDocRow]
 
 end Nanodregg.Protocol

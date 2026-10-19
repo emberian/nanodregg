@@ -127,7 +127,7 @@ def rangeRowData (ℓ : Label) (d : RelDecl) (rows : List (RowSlot D × RowLeaf)
 
 /-- One relation's reads: the caller's pins under it in pin order (at most `x.points`, else
 refused), and its one signed range, if the method declares one (its `most` at most the method's
-slots; exactly one signed range, else refused). -/
+slots; exactly one signed range, else refused: none signed is `rangeUnpinned`, naming the relation). -/
 def relReads (rv : RowView D) (self : D) (i : Nat) (ℓ : Label) (d : RelDecl) (x : RelRead) :
     Except (Refusal D) Data := do
   let pts := rv.points self i
@@ -148,7 +148,8 @@ def relReads (rv : RowView D) (self : D) (i : Nat) (ℓ : Label) (d : RelDecl) (
         let p ← checked digestOf s!"rows: {ℓ}: prefix" (← liftS s!"rows: {ℓ}: prefix" (keyOf d m pre))
         let rs ← rangeRowData digestOf ℓ d rows
         pure [("range", Data.record [("pre", p), ("rows", .record (slotsD "r" k rs))])]
-      | [] => throw (.program s!"rows: {ℓ}: no signed range")
+      -- no range signed: the structured refusal, naming the relation (LANG-22 agreed, item 4)
+      | [] => throw (.rangeUnpinned self i)
       | _ => throw (.program s!"rows: {ℓ}: two signed ranges")
   pure (.record (slotsD "p" x.points ps ++ range))
 

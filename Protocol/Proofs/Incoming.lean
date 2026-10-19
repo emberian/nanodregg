@@ -214,7 +214,7 @@ theorem envelopeRefused_incoming {X : Ctx D} {me : Self D} {argv : List ByteArra
         exact ⟨rfl, ⟨t ||| incomingBit, by simp only [State.tried]; exact incoming_or (ofU64_lt htr) (by decide),
           incomingBit_or_self t⟩, _, hn⟩
       · rw [unknownKeyEnd_cont] at h; cases h
-    · split at h <;> simp [refused, notServed, Reply.cont] at h
+    · split at h <;> first | (simp [notServed, Reply.cont] at h; done) | (rw [refusedAt_cont] at h; cases h) | (have hc0 := congrArg Reply.cont h; rw [refusedAt_cont] at hc0; cases hc0)
   · split at h
     · simp [refused, Reply.cont] at h
     · -- `split at h` split the goal's `match reSign …` with it
@@ -319,7 +319,7 @@ theorem envelopeRefused_signIncoming_asked {X : Ctx D} {me : Self D} {argv : Lis
         rw [hs1] at hs; cases hs
         exact askedIncoming_of_bit (incoming_or (ofU64_lt htr) (by decide)) (incomingBit_or_self t)
       · have := congrArg Reply.cont h; rw [unknownKeyEnd_cont] at this; cases this
-    · split at h <;> simp [refused, notServed] at h
+    · split at h <;> first | (simp [notServed] at h; done) | (rw [refusedAt_cont] at h; cases h) | (have hc0 := congrArg Reply.cont h; rw [refusedAt_cont] at hc0; cases hc0)
   · rename_i t
     split at h
     · simp [refused] at h
@@ -408,7 +408,7 @@ theorem envelopeRefused_asked_signIncoming {X : Ctx D} {me : Self D} {argv : Lis
         obtain ⟨hn, _⟩ := next_spec (fun _ => rfl) hc
         exact ⟨_, hn⟩
       · rw [unknownKeyEnd_cont] at hc; cases hc
-    · split at hc <;> simp [refused, notServed, Reply.cont] at hc
+    · split at hc <;> first | (simp [notServed, Reply.cont] at hc; done) | (rw [refusedAt_cont] at hc; cases hc) | (have hc0 := congrArg Reply.cont hc; rw [refusedAt_cont] at hc0; cases hc0)
   · rename_i t
     split at hc
     · simp [refused, Reply.cont] at hc
