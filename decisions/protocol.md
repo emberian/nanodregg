@@ -1819,3 +1819,26 @@ The writer's fact was masked by custody's reason (law 7).
 - The rows' attempt store is a Lean model of nd's (it always was: `drive` runs `Attempt.next`, the decision CLIENT-3 runs). The keep rule (last non-empty, within the bound) is restated in it. The plant mutates that model, so it cannot catch nd's Rust store going back to `Vec::new()`. CLIENT-9's half needs its own test of the store.
 - The label says `confirm` for a probe's receipt too. Both are follow's `receipt CALL` for the attempt.
 - Only one direction of the table is proved: every name Lean prints is in it. That every entry is some refusal's name holds by construction for `hintReps`, and for the kernel's lists by KERNEL's `codeName_code` ordering.
+
+## PROTOCOL-53 · THE BAR's per-unit counts are judged: `WASTE rowbar frames-per-write`, `steps-per-write`, `reopen-bytes-per-byte-past-base` (2026-10-21, PROTOCOL-20; agreed with PERF-2 as PROTOCOL-16's spec, re-scoped by ROOT for PERF; GATES-8 for gates/waste.tsv)
+
+**The gap.** The `bar` row's `LIVE … ms` lines are wall clock and judge nothing (no wall-clock verdict). THE BAR's work per unit had no deterministic count beside `invoke ticks-per-required-step`.
+
+**Decision.**
+- `Run.rowbarCounts` over the `bar` row's own run, each a numerator over a unit of work:
+  - `frames-per-write`: frames on either socket ÷ write commands run (every `.cmd` line but `read`, each repetition);
+  - `steps-per-write`: the writer's steps ÷ write commands run. It is below 1: the `lawDenied` invoke is refused by follow's own `plan` and never steps;
+  - `reopen-bytes-per-byte-past-base`: segment bytes the restart's reopen read ÷ segment bytes past the newest base. `Writer.reopenCounted` is HOST's generic `openWith` run in a counting `StateM`, so nothing in Host and no dbgTrace; `Writer.reopen` is its first component, one open. The excess is the origin frame and the tag.
+- Printed on the toy run only, pinned in gates/waste.tsv at ceiling = measured (10.977, 0.992, 1.017).
+- Plants, each at a STATED value above the honest one, each asserted to have happened (`Run.rowbarPlants`; MOVED and BLIND are red by name):
+  - `twiceEach`, a client that runs every write command again after the real run (the line's outcome, output and binds are the first run's): frames-per-write 21.871, steps-per-write 1.977;
+  - `staleBase`, the reopen handed the genesis base instead of the newest: reopen-bytes-per-byte-past-base 5.251, with a measured reopen required to have been handed an older base.
+- The `LIVE … ms` lines stay unjudged notes.
+
+**Refused.**
+- A writer-side trie-hash count and verify count (PROTOCOL-16's spec). PERF-3's bench-count measures `WASTE bar trie-hashes-per-required` and `WASTE bar audit-verifies-per-step` on THE BAR's own deployed Store. A rowbar copy would be a second instrument of the same quantity at toy widths, a twin (ROOT ruled).
+- `reopen-entries`: `openWith` reads exactly one `index.log` entry by construction (HOST-33), so no plant can move it without changing Host. A row nothing can turn red is not a gate.
+
+**Critique.**
+- Frames count every frame of the row, the reads and the restart's included, over write commands only. It is a per-write cost of the whole workload, not of one write.
+- The plants mutate the rows' client model and the restart's input, not deployed code. They test that the counters see the work, which is what a counter's tooth must show.

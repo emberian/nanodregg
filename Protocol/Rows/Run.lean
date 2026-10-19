@@ -106,6 +106,50 @@ exactly this much (both above the waste.tsv ceiling 1.546). -/
 def plantAppStated : String := "1.885"
 def plantExtractStated : String := "2.154"
 
+/-- THE BAR's deterministic per-unit counts (PROTOCOL-53), each a numerator and its unit of work:
+frames sent on either socket and the writer's steps, per write command run (every `.cmd` line but
+`read`, each repetition counted); the segment bytes the measured reopens read, per byte past the
+newest base they had to read. What bench-count measures on THE BAR's own Store (trie hashes per
+required hash, verifies per step) is not counted here: a second instrument of one quantity. -/
+def rowbarCounts (r : Row) (res : Loopback.Result) : Except String (List (String × Nat × Nat)) := do
+  let writes := res.times.toList.foldl (fun n t => match r.lines[t.line]? with
+    | some { act := .cmd (v :: _), .. } => if v = "read" then n else n + t.ns.length
+    | _ => n) 0
+  if writes = 0 then throw "bar: no write command ran (a ratio over nothing)"
+  let (read, need) := res.reopenReads.foldl (fun (a, b) (x, y, _) => (a + x, b + y)) (0, 0)
+  if need = 0 then throw "bar: no reopen with bytes past a base was measured (a ratio over nothing)"
+  pure [("frames-per-write", res.frames, writes), ("steps-per-write", res.steps, writes),
+    ("reopen-bytes-per-byte-past-base", read, need)]
+
+/-- Each rowbar plant's ratio on THE BAR's workload, stated: a tooth only while it bites by exactly
+this much, above the honest ratio. -/
+def rowbarStated : List (Mutation × String × String) :=
+  [(.twiceEach, "frames-per-write", "21.871"), (.twiceEach, "steps-per-write", "1.977"),
+   (.staleBase, "reopen-bytes-per-byte-past-base", "5.251")]
+
+/-- THE BAR under each rowbar plant: its counts must move to their stated values, above the honest
+ones, and the mutation must have happened (`staleBase`: a measured reopen was handed an older base). -/
+def rowbarPlants {D : Type} [Ord D] [DecidableEq D] (R : Params D) (r : Row) (ls : List Line)
+    (times : Option Nat) (honest : List (String × Nat × Nat)) : IO (Option String) := do
+  for m in [Mutation.twiceEach, .staleBase] do
+    let p ← match ← runMembers R (some m) ls times with
+      | .error e => return some s!"bar: plant {repr m}: {e}"
+      | .ok p => pure p
+    if m = .staleBase && !p.reopenReads.any (·.2.2) then
+      return some s!"bar: plant {repr m} did not happen: no measured reopen was handed an older base"
+    let counts ← match rowbarCounts r p with
+      | .error e => return some s!"bar: plant {repr m}: {e}"
+      | .ok c => pure c
+    for (pm, metric, stated) in rowbarStated do
+      if pm ≠ m then continue
+      let some (_, n, d) := counts.find? (·.1 = metric) | return some s!"bar: plant {repr m}: no {metric}"
+      let some (_, hn, hd) := honest.find? (·.1 = metric) | return some s!"bar: no honest {metric}"
+      IO.println s!"PLANT {repr m} {metric} {ratio n d}"
+      if ratio n d ≠ stated then return some s!"bar: plant {repr m} {metric} MOVED {ratio n d}≠{stated}"
+      if n * hd ≤ hn * d then
+        return some s!"bar: plant {repr m} {metric} BLIND: {ratio n d} is not above {ratio hn hd}"
+  return none
+
 /-- Nanoseconds as milliseconds with three decimals. -/
 def ms (ns : Nat) : String :=
   let f := toString ((ns / 1000) % 1000)
@@ -135,6 +179,9 @@ def barLines (r : Row) (res : Loopback.Result) : IO (Option String) := do
   let planted := ms.foldl (· + ·.planted) 0
   if n = 0 then return some "bar: no invoke was measured"
   if required = 0 then return some "bar: the invokes required no steps (a ratio over nothing)"
+  match rowbarCounts r res with
+  | .error e => return some e
+  | .ok cs => for (metric, n, d) in cs do IO.println s!"WASTE rowbar {metric} {ratio n d}"
   IO.println s!"WASTE invoke ticks-per-required-step {ratio ticks required}"
   IO.println s!"WASTE invoke packages-checked-per-call {ratio (ms.foldl (· + ·.pkgs) 0) n}"
   -- the ratio's teeth, each at its STATED value (a plant whose waste shrank is red, MOVED) and above
@@ -165,6 +212,9 @@ def drive {D : Type} [Ord D] [DecidableEq D] (R : Params D) (r : Row) (times : O
           IO.println s!"COST {r.name} frames {res.frames} steps {res.steps}"
           if r.name = "bar" && measures then
             if let some e ← barLines r res then return .broken e
+            match rowbarCounts r res with
+            | .error e => return .broken e
+            | .ok cs => if let some e ← rowbarPlants R r ls times cs then return .broken e
           let t := String.intercalate "\n" res.log.toList
           match judge r res.observed, r.plant with
           | .pass, .caught m line got =>

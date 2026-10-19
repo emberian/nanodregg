@@ -173,18 +173,36 @@ def genesisStore (P : Params D) (g : World D) : IO (Except String (Mem × Reside
   | .error f => return .error f.name
   | .ok (d, b, r) => return .ok (⟨← IO.mkRef d, ← IO.mkRef b⟩, r)
 
-/-- The one open over the in-memory Store: HOST's `openWith`, the writer's fold. -/
-def reopen (P : Params D) (index base seg : ByteArray) : Except String (Resident (World D)) :=
-  match Id.run (openWith P.R.keys (cadence P) P.R.world (mark P)
+/-- What one open read of the Store besides the base file it is handed: `index.log` bytes and
+segment bytes (THE BAR's `rowbar reopen-…` numerators, PROTOCOL-53). -/
+structure Reads where
+  index : Nat := 0
+  tail : Nat := 0
+
+/-- The one open over the in-memory Store, HOST's `openWith` with the writer's fold, its reads
+counted: the same generic open run in a reader monad that adds each read's bytes. -/
+def reopenCounted (P : Params D) (index base seg : ByteArray) : Except String (Resident (World D)) × Reads :=
+  let (o, n) := (openWith (m := StateM Reads) P.R.keys (cadence P) P.R.world (mark P)
       (fun w => P.X.env.bytes (World.genesisChain P.X.env w.origin))
       (Record.step P.R.dc (World.step P.X.env) (World.roots P.X.env))
-      base seg.size index.size (fun off len => pure (.ok (index.extract off (off + len))))
-      fun off len => pure (.ok (seg.extract off (off + len)))) with
-  | .error f => .error f.name
+      base seg.size index.size
+      (fun off len => do
+        let b := index.extract off (off + len)
+        modify fun r => { r with index := r.index + b.size }
+        pure (.ok b))
+      fun off len => do
+        let b := seg.extract off (off + len)
+        modify fun r => { r with tail := r.tail + b.size }
+        pure (.ok b)).run {}
+  match o with
+  | .error f => (.error f.name, n)
   | .ok o =>
       let w := if P.forgetJournal then { o.opened.world with journal := .empty } else o.opened.world
-      .ok { world := w, pos := o.pos, sealed := o.sealed,
-            index := o.index }
+      (.ok { world := w, pos := o.pos, sealed := o.sealed, index := o.index }, n)
+
+/-- The one open over the in-memory Store (`reopenCounted`, its counts dropped). -/
+def reopen (P : Params D) (index base seg : ByteArray) : Except String (Resident (World D)) :=
+  (reopenCounted P index base seg).1
 
 /-- A loop running on its own thread. -/
 structure Running (D : Type) [Ord D] where

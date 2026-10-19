@@ -90,6 +90,11 @@ structure Sys (D : Type) [Ord D] where
   /-- the attempt store ends `uncertain` with no payload, the confirm's stderr dropped (a plant,
   cv 01a150b1) -/
   dropHint : Bool := false
+  /-- the reopen is handed the GENESIS base, not the newest, and replays the whole log (a plant,
+  PROTOCOL-53) -/
+  staleBase : Bool := false
+  /-- the client runs every write command twice (a plant, PROTOCOL-53) -/
+  twiceEach : Bool := false
 
 def skipJudge (X : Ctx D) : Ctx D :=
   { X with program := { X.program with judge := fun _ _ _ _ _ _ => .ok () } }
@@ -138,6 +143,8 @@ def sys (R : Rows.Params D) : Option Mutation → Sys D
   | some .maskIncoming => { writer := { R, X := R.ctx }, follow := R.ctx, maskIncoming := true }
   | some .guessedBudget => { writer := { R := { R with pageBudget := 16384 }, X := R.ctx }, follow := R.ctx }
   | some .dropHint => { writer := { R, X := R.ctx }, follow := R.ctx, dropHint := true }
+  | some .staleBase => { writer := { R, X := R.ctx }, follow := R.ctx, staleBase := true }
+  | some .twiceEach => { writer := { R, X := R.ctx }, follow := R.ctx, twiceEach := true }
 
 /-! ## Actors -/
 
@@ -200,6 +207,9 @@ structure St (D : Type) [Ord D] where
   log : Array String := #[]
   times : Array Timed := #[]
   reopenNs : List Nat := []
+  /-- each measured reopen: the segment bytes it read, the segment bytes past the newest base it
+  had to read, and whether it was handed a base older than the newest -/
+  reopenReads : List (Nat × Nat × Bool) := []
   /-- each invoke a client froze whose run the receiver admits: what it cost (`Invoked`), or why
   its required count failed (THE BAR is then broken by that name, never short one sample) -/
   invokes : Array (Except String Invoked) := #[]
@@ -757,15 +767,19 @@ def restart (sealFirst : Bool) : M D Expect := do
         | .ok _ => pure ()
       let d ← st.mem.disk.get
       let bs ← st.mem.bases.get
+      -- the plant: the open handed the genesis base, the newest one ignored
+      let base := if st.sys.staleBase then (bs.history[0]?.map (·.1)).getD bs.file else bs.file
       let t0 ← nowNs
-      match Writer.reopen st.sys.writer bs.index bs.file d.synced with
-      | .error f => pure (.refused f)
-      | .ok r =>
+      match Writer.reopenCounted st.sys.writer bs.index base d.synced with
+      | (.error f, _) => pure (.refused f)
+      | (.ok r, n) =>
           let t1 ← nowNs
           st.mem.disk.set { synced := d.synced.extract 0 r.pos.offset }
           let h ← Writer.start st.sys.writer st.mem r
           let ns := if sealFirst then [] else [t1 - t0]
-          modify fun st => { st with host := h, reopenNs := st.reopenNs ++ ns }
+          let rd := if sealFirst then [] else [(n.tail, d.synced.size - r0.sealed.offset, base != bs.file)]
+          modify fun st => { st with host := h, reopenNs := st.reopenNs ++ ns,
+                                     reopenReads := st.reopenReads ++ rd }
           pure .ok
   | .ok (exit, _) => pure (.refused s!"writer{exit.name}")
 
@@ -829,6 +843,10 @@ def runAct (l : Line) : M D (Expect × String) := do
       | .error e => pure (.refused e, "")
       | .ok av =>
           let (o, out) ← command l.actor av l.fault 4
+          -- the plant: a client that runs every write command again (the line's outcome, output
+          -- and binds are the first run's; only the work doubles)
+          if (← get).sys.twiceEach && av.head? ≠ some "read" then
+            discard <| command l.actor av l.fault 4
           let sy := (← get).sys
           -- the plant: the output of a method's refusal flattened to its verdict, the reason dropped
           if sy.flatProgram && o == .refused "program" then
@@ -1090,6 +1108,7 @@ structure Result where
   log : Array String
   times : Array Timed
   reopenNs : List Nat
+  reopenReads : List (Nat × Nat × Bool)
   invokes : Array (Except String Invoked)
   /-- the run's cost in deterministic units: frames sent on either socket, and the steps of the
   writer's World when it stopped -/
@@ -1132,7 +1151,7 @@ def run (R : Rows.Params D) (m : Option Mutation) (lines : List Line) (times : O
   let steps := match ← st.host.stop with
     | .ok (_, r) => r.world.steps
     | .error _ => 0
-  pure ⟨{ outcomes, ops := st.ops, kinds := st.kinds }, st.log, st.times, st.reopenNs, st.invokes,
+  pure ⟨{ outcomes, ops := st.ops, kinds := st.kinds }, st.log, st.times, st.reopenNs, st.reopenReads, st.invokes,
     st.conn, steps⟩
 
 end Nanodregg.Protocol.Rows.Loopback

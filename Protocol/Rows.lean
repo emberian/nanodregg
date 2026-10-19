@@ -291,6 +291,12 @@ inductive Mutation
   /-- the attempt store ends `uncertain` with no payload: the confirm's `receipt CALL` stderr dropped,
   the shape before cv 01a150b1 (nd's `Vec::new()`) -/
   | dropHint
+  /-- the writer's reopen is handed the genesis base instead of the newest, so it replays the whole
+  log (PROTOCOL-53: THE BAR's `rowbar reopen-bytes-per-byte-past-base` must move) -/
+  | staleBase
+  /-- the client runs every write command twice (PROTOCOL-53: THE BAR's `rowbar frames-per-write`
+  and `steps-per-write` must move) -/
+  | twiceEach
   deriving DecidableEq, Repr
 
 /-- A row's plant: the mutation, and the line that must catch it with the outcome it then gets. -/
