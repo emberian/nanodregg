@@ -1,4 +1,5 @@
 (package
+  (doc "The depositor deposits amount of asset into an account the escrow owns; release pays it to the beneficiary (the depositor or arbiter asks), refund back to the depositor (the beneficiary or arbiter asks); exactly one payout.")
   (type Phase (enum held open refunded released))
   (state (rec (amount nat) (arbiter digest) (asset digest) (beneficiary digest) (depositor digest)
               (nonce bytes) (phase Phase)))

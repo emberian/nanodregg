@@ -138,7 +138,12 @@ def methods : List (Label × Ty × List Ty × Term) :=
    ("release", unit, [T], .lam (.record []) (.lam stateTy (.lam unit (.lam reqTy
       (resultT (callsT [someCallT T (payoutCall "beneficiary")]) (.record (keep "released")))))))]
 
-def escrow : Package := Std.pkgOf stateTy [("escrow", law)] methods
+/-- What the escrow says of itself (LANG-60's `doc`, `read OBJ ?`'s first line); `Escrow.ob` carries the
+same line, and E0s / E0 refuse the two apart. -/
+def escrowDoc : String :=
+  "The depositor deposits amount of asset into an account the escrow owns; release pays it to the beneficiary (the depositor or arbiter asks), refund back to the depositor (the beneficiary or arbiter asks); exactly one payout."
+
+def escrow : Package := { Std.pkgOf stateTy [("escrow", law)] methods with doc := escrowDoc.toUTF8 }
 
 /-- The method indices `invoke` names. -/
 def deposit : Nat := 0

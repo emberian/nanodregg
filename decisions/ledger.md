@@ -599,3 +599,29 @@ LEDGER-6 (c) bought.
 **Re-emits.** world/escrow/Escrow (new state type, new id). The bounty row's seed gains
 `(nonce …)` and its ids are digests (PROTOCOL-7's lines). Nothing on chain: a re-genesis is LANG's
 day anyway.
+
+## LEDGER-12 · The escrow says what it does: one doc line, in the surface source and the Lean package alike (LEDGER-4, 2026-10-19; on LANG-60's `doc`)
+**Decision.** LANG-60 gave every package a one-line `doc` (`Bounds.docOk`: at most 256 bytes of doc
+characters, printed `(doc "…")` and on `read OBJ ?`'s first line) and re-emitted world/escrow/Escrow
+with an empty `(doc)`. The escrow now carries: "The depositor deposits amount of asset into an
+account the escrow owns; release pays it to the beneficiary (the depositor or arbiter asks), refund
+back to the depositor (the beneficiary or arbiter asks); exactly one payout." (223 bytes). It is
+written twice, as `(doc …)` in world/escrow/Escrow.ob and as `escrowDoc` in Ledger/Escrow.lean
+(`escrow := { pkgOf … with doc := escrowDoc.toUTF8 }`), and the core text is re-emitted by
+`ledger-sim --write-text` from the surface source.
+**Why the line says this.** Each clause is a checked fact of the package, not a hope: who may ask
+for each method is the law's `notParty` arms (escrow_invoke's three cases); "an account the escrow
+owns" is LEDGER-6's `accountId self asset`; "exactly one payout" is the law's `settled` plus the
+kernel's `once "payout"` (escrow_one_payout, and the skip-judge plant's second release refused by the
+kernel). The line names no parameter a creator may vary beyond the state's own fields.
+**Critique.** Two copies of one string is the shape the doctrine warns about. They cannot drift
+silently: E0 refuses a core text that is not `Print.package escrow`, and E0s refuses a surface
+source that does not lower to the core byte for byte; with the core stale both read FAIL (measured:
+ledger-sim RED (2) before the re-emit). A doc is never run or judged, so a wrong doc misleads a
+reader without moving a verdict; nothing proves the sentence true of the methods.
+**Meta-critique.** I considered leaving the Lean side to read the doc out of the .ob at build time
+(one copy); the escrow's Lean value is what its theorems are about, and making it depend on a file
+read would put IO under the proofs. The copy tied by two rows is the cheaper truth.
+**Re-emits.** world/escrow/Escrow (the doc section; the package re-ids). The bounty row installs it
+by path (`<world/escrow/Escrow`), pins no id, and passes (`rows bounty`). Nothing else holds the old
+id.
