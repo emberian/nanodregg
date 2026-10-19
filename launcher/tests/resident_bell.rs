@@ -7,7 +7,10 @@
 //! - a real Store, with the operator's follower Store under the hosting root;
 //! - keybroker on the emitted unit's argv;
 //! - grain-launch on ITS unit's argv over the real `hosting-controller`;
-//! - the resident's member, served by `nd --stdio` under nd-supervise on MEMBER/<dirOf>/nd.sock;
+//! - the resident's member, provisioned as the operator does (`World::provision`) and served by
+//!   nd-members on ITS unit's argv (HOSTING-30, CLIENT-29): `nd --stdio` and the member's own
+//!   follower, bound on MEMBER/<dirOf>/nd.sock from the World's `residents` answer, never by the
+//!   test;
 //! - a second founder, C, a member with its own `nd --stdio`, granted `ring` on the bell;
 //! - the operator's Bell object, `resident` = the resident's member, with `observe,invoke:0`
 //!   granted to it (the config names the grant; `invoke … --via` it).
@@ -39,6 +42,10 @@
 //!   grantRight`; an argv that is not its plan, `argvNotPlan` (CONTROL: its true argv reaches the
 //!   config).
 //!
+//! - the race (HOSTING-26, at nd-members): a resident started while nd-members is down is refused
+//!   `pathMissing` for its member socket alone, exactly `restartsMax` times, then `crashLoop`, and
+//!   never starts; nd-members' next life binds the socket and the owner's stop and start launch it.
+//!
 //! Plants (HOSTING-31, each run by hand, red by name): answering an answered ring (decideTick
 //! without the pending check, with the kept answer not forgotten on delivery) → Q2 "an answer was
 //! refused"; answering out of order (the highest pending) → Q2 "lowest first"; the intent dropped
@@ -46,14 +53,13 @@
 //! resident check and guard) → Q4 "a stranger's answer landed".
 //!
 //! Needs the built Lean exes (`resident`, `hosting-controller`, `hosting-broker`, `host`) and the
-//! client's `nd`/`nd-supervise`. A missing one fails by name.
+//! client's `nd`/`nd-supervise`, and `hosting-residents`. A missing one fails by name.
 #![cfg(target_os = "linux")]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // a plant that cannot set up is a failed plant
 
 mod common;
 
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::process::Command;
@@ -189,28 +195,26 @@ fn the_resident_answers_every_ring_lowest_first_once_and_nothing_else() {
     let hosting = &hosting.0;
     let world = hosting.join("worlds").join(LABEL);
     nanodregg_devtools::mkdirs(&world).unwrap();
-    // the member workspaces: outside the hosted tree, under nd's own root (HOSTING-32)
-    let members = Gone(nanodregg_devtools::scratch(&format!(
-        "ndb{}",
-        std::process::id()
-    )));
-    nanodregg_devtools::mkdirs(&members.0).unwrap();
-    let mroot = Short::new("n");
-    let mroot = &mroot.0;
+    // nd-members' roots: MEMBER, FOLLOW, and the member workspaces and follower state outside the
+    // hosted tree (HOSTING-32)
+    let roots = Roots::new('b');
+    let (uid, _) = me(sock);
     let w = World::genesis_following("bel", Some(world.join("store")));
     let g = w.resident("resident");
     w.allowance(&g, "claude-m", 7, 100_000);
-    nanodregg_devtools::mkdirs(&mroot.join(&g)).unwrap();
-    fs::set_permissions(mroot.join(&g), fs::Permissions::from_mode(0o700)).unwrap();
-    let mfollow = Short::new("e");
-    let member = w.member(
-        &members.0.join(&g),
-        &mfollow.0.join("follow.sock"),
-        &w.root.join("stores/R"),
-        &mroot.join(&g).join("nd.sock"),
-        &d.join("pids"),
+    // the resident's member: provisioned, then served by nd-members from the World's `residents`
+    // answer (its own follower, `nd --stdio` on MEMBER/<dirOf>/nd.sock)
+    let m = w.provision(&roots, &g);
+    let members = Members::start(&w, &roots, uid);
+    let msock = roots.sock(&g);
+    until(
+        "nd-members binds the resident's member socket",
+        60,
+        || msock.exists(),
+        &|| members.log(),
     );
-    let m = member.id.clone();
+    let (exit, out, err) = member_cmd(&msock, &["sync"]);
+    assert_eq!(exit, 0, "the resident's member syncs: {out}{err}");
     let op = w.operator.clone();
     // C, the second founder: a member of its own, with its own `nd --stdio`
     let (cfollow, csock) = (Short::new("f"), Short::new("c"));
@@ -251,7 +255,6 @@ fn the_resident_answers_every_ring_lowest_first_once_and_nothing_else() {
     place_exe(&lean_bin("resident"), &pkg.join("resident"));
     fs::write(pkg.join("resident.conf"), conf(&b, &gb)).unwrap();
 
-    let (uid, _) = me(sock);
     let kb = start_residents(
         sock,
         &d.join("pids"),
@@ -271,7 +274,7 @@ fn the_resident_answers_every_ring_lowest_first_once_and_nothing_else() {
         grain_launch_rendered(&[
             ("/srv/nd-hosted", hosting.as_os_str()),
             ("/run/nd-broker", sock.as_os_str()),
-            ("/run/nd-member", mroot.as_os_str()),
+            ("/run/nd-member", roots.member.0.as_os_str()),
             ("%i", LABEL.as_ref()),
             ("/run/nd-grain-launch/%i", gl_pids.as_os_str()),
             ("/opt/nd/bin/hosting-controller", controller.as_os_str()),
@@ -418,7 +421,7 @@ fn the_resident_answers_every_ring_lowest_first_once_and_nothing_else() {
     // Q3: a second answer to an answered ring, through the resident's own member: the rings
     // guard reads the row as it is and refuses it (LANG-59: "rung: answered")
     let (exit, out, err) = member_cmd(
-        &member.sock,
+        &msock,
         &[
             "invoke",
             &b,
@@ -608,10 +611,121 @@ fn the_resident_answers_every_ring_lowest_first_once_and_nothing_else() {
         "another resident's broker socket"
     );
 
+    // THE RACE (HOSTING-26's, at nd-members): a resident grain born and started while nd-members has
+    // not learned its birth (here: nd-members is down) is launched before its member socket exists.
+    // Its package, volume and broker socket exist, so each launch is refused `pathMissing` naming
+    // the member socket's directory, and counted as an exit: `restartsMax` (5) of them, then
+    // `crashLoop`, and the grain never starts. nd-members' next life learns the birth and serves the
+    // socket; nothing relaunches the grain by itself; the owner's stop then start (the controller
+    // forgets a grain that neither runs nor desires to) launches it.
+    drop(members);
+    let c2 = w.resident("resident");
+    let c2dir = world.join("grains").join(&c2);
+    for p in ["pkg", "vol"] {
+        nanodregg_devtools::mkdirs(&c2dir.join(p)).unwrap();
+    }
+    place_exe(&lean_bin("resident"), &c2dir.join("pkg/resident"));
+    fs::write(c2dir.join("pkg/resident.conf"), conf(&b, &gb)).unwrap();
+    w.provision(&roots, &c2);
+    let c2broker = sock.join(&c2).join("broker.sock");
+    until(
+        "keybroker binds the late resident's broker socket",
+        60,
+        || c2broker.exists(),
+        &log,
+    );
+    let c2sock = roots.sock(&c2);
+    assert!(
+        !c2sock.exists(),
+        "plant: the late resident has a member socket with nd-members down"
+    );
+    w.run(&["invoke", &c2, "1", "(record)"]);
+    w.run(&["sync"]);
+    let refused = format!("grain-launch: {c2} refused crashLoop");
+    until(
+        "the race's crash loop",
+        60,
+        || log().contains(&refused),
+        &log,
+    );
+    // the sandbox names the socket's directory, MEMBER/<dirOf> (a connect grant is a view of it)
+    let missing = format!(
+        "grain-launch: {c2} failed pathMissing confine: {}:",
+        roots.member.0.join(&c2).display()
+    );
+    let failed = format!("grain-launch: {c2} failed ");
+    assert_eq!(
+        (
+            log().matches(&missing).count(),
+            log().matches(&failed).count(),
+            log().contains(&format!("grain-launch: {c2} started")),
+        ),
+        (5, 5, false),
+        "the race: restartsMax launches refused pathMissing for the member socket alone, none \
+         started:\n{}",
+        log()
+    );
+    assert!(
+        c2broker.exists(),
+        "control: the broker socket stood through the race"
+    );
+    let members = Members::start(&w, &roots, uid);
+    until(
+        "nd-members' next life binds the late resident's member socket",
+        60,
+        || c2sock.exists(),
+        &|| members.log(),
+    );
+    let (exit, out, err) = member_cmd(&c2sock, &["sync"]);
+    assert_eq!(exit, 0, "the late resident's member is served: {out}{err}");
+    // nothing relaunches it by itself: the World's next Turn (an unrelated one) touches no grain,
+    // and the crash-looped grain stays refused
+    let refusals = log().matches(&refused).count();
+    w.run(&["create"]);
+    w.run(&["sync"]);
+    member_cmd(&c2sock, &["sync"]);
+    assert!(
+        !log().contains(&format!("grain-launch: {c2} started"))
+            && log().matches(&refused).count() == refusals,
+        "the race: the grain was relaunched without its owner:\n{}",
+        log()
+    );
+    let mut tries = 0;
+    until(
+        "the late resident started by its owner's stop and start",
+        120,
+        || {
+            if log().contains(&format!("grain-launch: {c2} started")) {
+                return true;
+            }
+            // a stop and a start the controller read in ONE round leave the grain desiring
+            // `running` with its exits remembered: refused crashLoop again, by name; try again
+            tries += 1;
+            w.run(&["invoke", &c2, "2", "(record)"]);
+            w.run(&["sync"]);
+            w.run(&["invoke", &c2, "1", "(record)"]);
+            w.run(&["sync"]);
+            std::thread::sleep(std::time::Duration::from_millis(500));
+            false
+        },
+        &log,
+    );
+    assert!(tries >= 1, "the race: started before its owner acted");
+    assert_eq!(
+        log().matches(&failed).count(),
+        5,
+        "the race: a launch failed once its member socket was bound:\n{}",
+        log()
+    );
+    eprintln!("the late resident started after {tries} stop/start pairs");
+    w.run(&["invoke", &c2, "2", "(record)"]);
+    w.run(&["sync"]);
+    no_child();
+
     eprintln!("{}", log());
     drop(gl);
     drop(kb);
-    drop(member);
+    drop(members);
     drop(founder_c);
     drop(w);
 }

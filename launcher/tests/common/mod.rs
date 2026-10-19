@@ -1,4 +1,5 @@
-//! What the launcher's integration tests share (`broker.rs`, `resident.rs`): a real Store under the
+//! What the launcher's integration tests share (`broker.rs`, `resident.rs`, `resident_bell.rs`,
+//! `members.rs`): a real Store under the
 //! operator's custody (`World`), the test's own PKI and fake TLS provider, keybroker started with
 //! the emitted unit's argv, and a resident stand-in. Each test crate uses its own subset.
 #![allow(dead_code)]
@@ -532,12 +533,12 @@ impl Drop for World {
     }
 }
 
-/// A resident's member (HOSTING-20, HOSTING-25): an observe-on-the-World member enrolled by the
-/// operator, its one-record hosted custody in `ws` (the member workspace `/srv/nd-members/<l>/members/<dirOf>` when deployed,
-/// hidden from every grain), its own follower Store, and `nd --stdio` served on `sock` by
-/// nd-supervise, confined to write `ws` and connect [host.sock, its follow socket] (CLIENT-24). One
-/// uid here: nd-supervise binds 0600 with no `--group`/`--peer` (the deployment's 0660 group socket
-/// with its peer check is CLIENT-21/24's, declared unrun across uids).
+/// A founder's own member (not a resident's: a resident's member socket is nd-members', `Members`):
+/// an observe-on-the-World member enrolled by the operator, its one-record hosted custody in `ws`,
+/// its own follower Store, and `nd --stdio` served on `sock` by nd-supervise, confined to write
+/// `ws` and connect [host.sock, its follow socket] (CLIENT-24). One uid here: nd-supervise binds
+/// 0600 with no `--group`/`--peer` (the deployment's 0660 group socket with its peer check is
+/// CLIENT-21/24's, declared unrun across uids).
 pub struct Member {
     /// the member's id (hex), the resident's identity in the World
     pub id: String,
@@ -548,7 +549,52 @@ pub struct Member {
 }
 
 impl World {
-    /// Enrol a resident's member in `ws` and serve its `nd --stdio` on `sock` (whose directory must
+    /// A hosted member's custody made in `ws` (`nd --init-hosted`, `init`; `holding` its holding),
+    /// enrolled by the operator and granted `observe` on the World: its id and that grant.
+    pub fn enrol(&self, ws: &Path, holding: &Path) -> (String, String) {
+        for d in [ws, holding] {
+            nanodregg_devtools::mkdirs(d).unwrap();
+            fs::set_permissions(d, fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let (op_follow, host) = (self.ws.join("follow.sock"), self.host_sock.clone());
+        let o = member_nd(ws, holding, &op_follow, &host, &["--init-hosted"]);
+        assert!(o.status.success(), "nd --init-hosted: {}", both(&o));
+        let o = member_nd(ws, holding, &op_follow, &host, &["init", &self.operator]);
+        assert!(o.status.success(), "nd init: {}", both(&o));
+        let token = line(&text(&o), "join ").to_owned();
+        let id = line(&self.run(&["enroll", &token]), "id ").to_owned();
+        let observe = line(
+            &self.run(&["grant", "world", &id, "observe", "--via", &self.grant]),
+            "id ",
+        )
+        .to_owned();
+        (id, observe)
+    }
+
+    /// Provision resident `name`'s member as the operator's provisioning step does (HOSTING-30,
+    /// HOSTING-32): its custody in `MEMBERS/<name>` (`enrol`), its follower Store
+    /// `STATE/<name>/store` from the World's genesis, and `STATE/<name>/follow` (`MEMBER GRANT`,
+    /// 0600). The member's id. nd-members serves it from the next `residents` answer naming it.
+    pub fn provision(&self, r: &Roots, name: &str) -> String {
+        let holding = r.base.0.join(format!("{}.holding", &name[..8]));
+        let (id, observe) = self.enrol(&r.members().join(name), &holding);
+        let st = r.state().join(name);
+        nanodregg_devtools::mkdirs(&st).unwrap();
+        fs::set_permissions(&st, fs::Permissions::from_mode(0o700)).unwrap();
+        let o = Command::new(lean_bin("host"))
+            .arg("genesis")
+            .arg(st.join("store"))
+            .args(&self.genesis_args)
+            .output()
+            .unwrap();
+        assert_eq!(text(&o), self.genesis_out, "one genesis, another Store");
+        let f = st.join("follow");
+        fs::write(&f, format!("{id} {observe}\n")).unwrap();
+        fs::set_permissions(&f, fs::Permissions::from_mode(0o600)).unwrap();
+        id
+    }
+
+    /// Enrol a founder's member in `ws` and serve its `nd --stdio` on `sock` (whose directory must
     /// exist); its follower Store at `store`, its follow socket `follow`, PID files in `pids`.
     pub fn member(
         &self,
@@ -558,27 +604,8 @@ impl World {
         sock: &Path,
         pids: &Path,
     ) -> Member {
-        nanodregg_devtools::mkdirs(ws).unwrap();
-        fs::set_permissions(ws, fs::Permissions::from_mode(0o700)).unwrap();
-        let holding = ws.with_extension("holding");
-        nanodregg_devtools::mkdirs(&holding).unwrap();
-        fs::set_permissions(&holding, fs::Permissions::from_mode(0o700)).unwrap();
-        let (op_follow, host) = (self.ws.join("follow.sock"), self.host_sock.clone());
-        let o = member_nd(ws, &holding, &op_follow, &host, &["--init-hosted"]);
-        assert!(
-            o.status.success(),
-            "resident nd --init-hosted: {}",
-            both(&o)
-        );
-        let o = member_nd(ws, &holding, &op_follow, &host, &["init", &self.operator]);
-        assert!(o.status.success(), "resident nd init: {}", both(&o));
-        let token = line(&text(&o), "join ").to_owned();
-        let id = line(&self.run(&["enroll", &token]), "id ").to_owned();
-        let observe = line(
-            &self.run(&["grant", "world", &id, "observe", "--via", &self.grant]),
-            "id ",
-        )
-        .to_owned();
+        let (id, observe) = self.enrol(ws, &ws.with_extension("holding"));
+        let host = self.host_sock.clone();
         let follow_s = self.follower(store, follow, ws, &id, &observe);
         let nd_exe = nd().canonicalize().unwrap();
         let child = Command::new(nd_supervise())
@@ -644,34 +671,46 @@ impl Drop for Broker {
     }
 }
 
-/// keybroker's argv as the emitted unit renders it (deploy/units/linux/nd-keybroker.service, from
-/// Ops/Units.lean), every rendered word replaced by this test's value for that word: the ORDER is
-/// the unit's, so a unit and a parser that disagree on it are red here (ROOT, 10-18; OPS-2's
-/// fd1d4b2 class). A word with no test value, or a test value no word asks for, is red too.
-pub fn rendered(values: &[(&str, &std::ffi::OsStr)]) -> Command {
-    let unit = fs::read_to_string(repo().join("deploy/units/linux/nd-keybroker.service")).unwrap();
-    let line = unit
+/// The ExecStart of the emitted unit `deploy/units/linux/<unit>` (from Ops/Units.lean), which must
+/// run `/opt/nd/bin/<exe>`, as a Command of `bin` with every rendered word after the program
+/// replaced by this test's value for that word: the ORDER is the unit's, so a unit and a parser
+/// that disagree on it are red here (ROOT, 10-18; OPS-2's fd1d4b2 class). A word with no test value,
+/// or a test value no word asks for, is red too. A word the unit says twice takes one value.
+pub fn unit_argv(unit: &str, exe: &str, bin: &str, values: &[(&str, &std::ffi::OsStr)]) -> Command {
+    let text = fs::read_to_string(repo().join("deploy/units/linux").join(unit)).unwrap();
+    let line = text
         .lines()
         .find_map(|l| l.strip_prefix("ExecStart="))
         .expect("the unit has an ExecStart");
     let mut words = line.split(' ');
-    assert_eq!(
-        words.next(),
-        Some("/opt/nd/bin/keybroker"),
-        "the unit runs keybroker"
-    );
-    let mut c = Command::new(env!("CARGO_BIN_EXE_keybroker"));
-    let mut used = 0;
+    let prog = format!("/opt/nd/bin/{exe}");
+    assert_eq!(words.next(), Some(prog.as_str()), "{unit} runs {exe}");
+    let mut c = Command::new(bin);
+    let mut used = std::collections::BTreeSet::new();
     for w in words {
-        let (_, v) = values
+        let (k, v) = values
             .iter()
             .find(|(k, _)| *k == w)
-            .unwrap_or_else(|| panic!("the unit's word {w} has no test value"));
+            .unwrap_or_else(|| panic!("{unit}'s word {w} has no test value"));
         c.arg(v);
-        used += 1;
+        used.insert(*k);
     }
-    assert_eq!(used, values.len(), "a test value the unit never asks for");
+    assert_eq!(
+        used.len(),
+        values.len(),
+        "a test value {unit} never asks for"
+    );
     c
+}
+
+/// keybroker's argv as its emitted unit renders it (`unit_argv`).
+pub fn rendered(values: &[(&str, &std::ffi::OsStr)]) -> Command {
+    unit_argv(
+        "nd-keybroker.service",
+        "keybroker",
+        env!("CARGO_BIN_EXE_keybroker"),
+        values,
+    )
 }
 
 /// The test's values for the unit's words. PINS is `pins` beside `anchors` (`Pki::anchors` writes
@@ -940,38 +979,138 @@ pub fn until(what: &str, secs: u64, mut ok: impl FnMut() -> bool, log: &dyn Fn()
     }
 }
 
-/// grain-launch's argv as its emitted unit renders it, each rendered word replaced by this test's
-/// value (a word with no value, or a value no word asks for, is red: the unit and the launcher's
-/// parser cannot drift, as broker.rs does for keybroker).
+/// grain-launch's argv as its emitted unit renders it (`unit_argv`).
 pub fn grain_launch_rendered(values: &[(&str, &std::ffi::OsStr)]) -> Command {
-    let unit =
-        fs::read_to_string(repo().join("deploy/units/linux/nd-grain-launch@.service")).unwrap();
-    let line = unit
-        .lines()
-        .find_map(|l| l.strip_prefix("ExecStart="))
-        .expect("the unit has an ExecStart");
-    let mut words = line.split(' ');
-    assert_eq!(
-        words.next(),
-        Some("/opt/nd/bin/grain-launch"),
-        "the unit runs grain-launch"
-    );
-    let mut c = Command::new(env!("CARGO_BIN_EXE_grain-launch"));
-    let mut used = std::collections::BTreeSet::new();
-    for w in words {
-        let (k, v) = values
-            .iter()
-            .find(|(k, _)| *k == w)
-            .unwrap_or_else(|| panic!("the unit's word {w} has no test value"));
-        c.arg(v);
-        used.insert(*k);
+    unit_argv(
+        "nd-grain-launch@.service",
+        "grain-launch",
+        env!("CARGO_BIN_EXE_grain-launch"),
+        values,
+    )
+}
+
+/// The roots one nd-members runs over, removed on drop: MEMBER (02710, this uid's) and FOLLOW
+/// (0700), short enough for a socket path under a 64-digit name; MEMBERS, STATE (0700) and PIDS in
+/// a scratch tree of their own, disjoint from the World's and the hosted tree (HOSTING-32).
+pub struct Roots {
+    pub member: Short,
+    pub follow: Short,
+    pub base: Gone,
+}
+
+impl Roots {
+    pub fn new(tag: char) -> Roots {
+        let member = Short::new(&format!("M{tag}"));
+        sockdir(&member.0);
+        let follow = Short::new(&format!("F{tag}"));
+        fs::set_permissions(&follow.0, fs::Permissions::from_mode(0o700)).unwrap();
+        let base = Gone(nanodregg_devtools::scratch(&format!(
+            "ndm{}{tag}",
+            std::process::id()
+        )));
+        for d in ["members", "state", "pids"] {
+            nanodregg_devtools::mkdirs(&base.0.join(d)).unwrap();
+        }
+        fs::set_permissions(base.0.join("state"), fs::Permissions::from_mode(0o700)).unwrap();
+        Roots {
+            member,
+            follow,
+            base,
+        }
     }
-    assert_eq!(
-        used.len(),
-        values.len(),
-        "a test value the unit never asks for"
-    );
-    c
+    pub fn members(&self) -> PathBuf {
+        self.base.0.join("members")
+    }
+    pub fn state(&self) -> PathBuf {
+        self.base.0.join("state")
+    }
+    pub fn pids(&self) -> PathBuf {
+        self.base.0.join("pids")
+    }
+    pub fn sock(&self, name: &str) -> PathBuf {
+        self.member.0.join(name).join("nd.sock")
+    }
+    pub fn follow_sock(&self, name: &str) -> PathBuf {
+        self.follow.0.join(name).join("follow.sock")
+    }
+}
+
+/// nd-members' argv as its emitted unit renders it (deploy/units/linux/nd-members@.service), over
+/// `w` and `r`, serving uid `peer`, its decider the real `hosting-residents` over the writer's
+/// Store. The unit hides the operator's custody (`/etc/nd`) and `/home`: here the operator's
+/// workspace and its holding (this test's scratch lives under `/home`).
+pub fn members_rendered(w: &World, r: &Roots, peer: u32) -> Command {
+    let peer = peer.to_string();
+    let (residents, nd_exe) = (lean_bin("hosting-residents"), nd());
+    let (supervise, host) = (nd_supervise(), lean_bin("host"));
+    let (members, state, pids) = (r.members(), r.state(), r.pids());
+    unit_argv(
+        "nd-members@.service",
+        "nd-members",
+        env!("CARGO_BIN_EXE_nd-members"),
+        &[
+            ("/run/nd-member", r.member.0.as_os_str()),
+            ("/srv/nd-members/%i/members", members.as_os_str()),
+            ("/srv/nd-members/%i/follow", state.as_os_str()),
+            ("/run/nd-member-follow", r.follow.0.as_os_str()),
+            ("/run/nd-members-%i", pids.as_os_str()),
+            ("/run/nd/host.sock", w.host_sock.as_os_str()),
+            ("${ND_PEER}", std::ffi::OsStr::new(&peer)),
+            ("/opt/nd/bin/nd-supervise", supervise.as_os_str()),
+            ("/opt/nd/bin/nd", nd_exe.as_os_str()),
+            ("/opt/nd/bin/host", host.as_os_str()),
+            ("/srv/nd/store", w.store.as_os_str()),
+            ("--hide", std::ffi::OsStr::new("--hide")),
+            ("/etc/nd", w.ws.as_os_str()),
+            ("/home", w.holding.as_os_str()),
+            ("--", std::ffi::OsStr::new("--")),
+            ("/opt/nd/bin/hosting-residents", residents.as_os_str()),
+        ],
+    )
+}
+
+/// A running nd-members. Dropped: nd-members stopped by its handle, then each child it left by
+/// the pid in its PID file (a SIGKILLed nd-members cleans nothing up).
+pub struct Members {
+    pub run: Option<Logged>,
+    pub pids: PathBuf,
+}
+
+impl Members {
+    /// nd-members on its rendered unit's argv (`members_rendered`).
+    pub fn start(w: &World, r: &Roots, peer: u32) -> Members {
+        Members::spawn(members_rendered(w, r, peer), r)
+    }
+    /// nd-members on the argv `c`, its PID file and children's PID files under `r`.
+    pub fn spawn(c: Command, r: &Roots) -> Members {
+        Members {
+            run: Some(Logged::spawn(c, r.base.0.join("nd-members.pid"))),
+            pids: r.pids(),
+        }
+    }
+    pub fn log(&self) -> String {
+        self.run.as_ref().map(Logged::log).unwrap_or_default()
+    }
+    pub fn pid(&self, file: &str) -> Option<i32> {
+        fs::read_to_string(self.pids.join(file))
+            .ok()
+            .and_then(|s| s.trim().parse().ok())
+    }
+}
+
+impl Drop for Members {
+    fn drop(&mut self) {
+        drop(self.run.take());
+        for e in fs::read_dir(&self.pids).into_iter().flatten().flatten() {
+            if let Some(pid) = fs::read_to_string(e.path())
+                .ok()
+                .and_then(|s| s.trim().parse::<i32>().ok())
+                .and_then(rustix::process::Pid::from_raw)
+            {
+                let _ = rustix::process::kill_process(pid, rustix::process::Signal::KILL);
+            }
+        }
+    }
 }
 
 /// A child whose stderr is collected as it arrives (grain-launch's: its launch and report lines).

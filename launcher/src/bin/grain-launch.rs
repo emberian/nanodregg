@@ -175,9 +175,11 @@ impl Launcher {
             .map_err(|e| End::ReportPipe(format!("{e:?}")))
     }
 
-    fn failed(&mut self, grain: Vec<u8>, why: LaunchFailure) -> Result<(), End> {
+    /// A launch refused: the Lean name, then what was refused (the path a confine check missed,
+    /// the spawn's error), so a row can tell one missing socket from another.
+    fn failed(&mut self, grain: Vec<u8>, why: LaunchFailure, what: &str) -> Result<(), End> {
         eprintln!(
-            "grain-launch: {} failed {}",
+            "grain-launch: {} failed {} {what}",
             String::from_utf8_lossy(&grain),
             why.name()
         );
@@ -204,8 +206,9 @@ impl Launcher {
         }
         // The plan's writable directories exist before the sandbox checks its paths.
         for w in &policy.write {
-            if std::fs::create_dir_all(w).is_err() {
-                return self.failed(grain, LaunchFailure::PathMissing);
+            if let Err(e) = std::fs::create_dir_all(w) {
+                let what = format!("{}: {e}", w.display());
+                return self.failed(grain, LaunchFailure::PathMissing, &what);
             }
         }
         let program = under(&self.root, program);
@@ -221,11 +224,11 @@ impl Launcher {
         let argv: Vec<&std::ffi::OsStr> = argv.iter().map(OsString::as_os_str).collect();
         let mut cmd = match command(policy, program.as_os_str(), &argv) {
             Ok(c) => c,
-            Err(e) => return self.failed(grain, failure_of(&e)),
+            Err(e) => return self.failed(grain, failure_of(&e), &e.to_string()),
         };
         let child = match cmd.stdin(Stdio::null()).spawn() {
             Ok(c) => c,
-            Err(_) => return self.failed(grain, LaunchFailure::SpawnFailed),
+            Err(e) => return self.failed(grain, LaunchFailure::SpawnFailed, &e.to_string()),
         };
         let name = String::from_utf8_lossy(&grain).into_owned();
         let pid_file = self.pids.join(format!("{name}.pid"));

@@ -30,90 +30,9 @@ use nanodregg_devtools::{lean_bin, nd, nd_supervise};
 use nanodregg_launcher::broker_generated::wire::Verdict;
 use nanodregg_launcher::broker_generated::{decider_exit, members_exit, write_frame};
 
-/// The roots one nd-members runs over, removed on drop.
-struct Roots {
-    member: Short,
-    follow: Short,
-    base: Gone,
-}
-
-impl Roots {
-    /// MEMBER (02710, this uid's) and FOLLOW (0700) short enough for a socket path under a 64-digit
-    /// name; MEMBERS, STATE and PIDS in a scratch tree of their own.
-    fn new(tag: char) -> Roots {
-        let member = Short::new(&format!("M{tag}"));
-        sockdir(&member.0);
-        let follow = Short::new(&format!("F{tag}"));
-        fs::set_permissions(&follow.0, fs::Permissions::from_mode(0o700)).unwrap();
-        let base = Gone(nanodregg_devtools::scratch(&format!(
-            "ndm{}{tag}",
-            std::process::id()
-        )));
-        for d in ["members", "state", "pids"] {
-            nanodregg_devtools::mkdirs(&base.0.join(d)).unwrap();
-        }
-        fs::set_permissions(base.0.join("state"), fs::Permissions::from_mode(0o700)).unwrap();
-        Roots {
-            member,
-            follow,
-            base,
-        }
-    }
-    fn members(&self) -> PathBuf {
-        self.base.0.join("members")
-    }
-    fn state(&self) -> PathBuf {
-        self.base.0.join("state")
-    }
-    fn pids(&self) -> PathBuf {
-        self.base.0.join("pids")
-    }
-    fn sock(&self, name: &str) -> PathBuf {
-        self.member.0.join(name).join("nd.sock")
-    }
-    fn follow_sock(&self, name: &str) -> PathBuf {
-        self.follow.0.join(name).join("follow.sock")
-    }
-}
-
-/// Provision resident `name`'s member as the operator's provisioning step does: `nd
-/// --init-hosted` in `MEMBERS/<name>`, `init`, the operator's `enroll` and `grant world … observe`,
-/// its follower Store `STATE/<name>/store` from the World's genesis, and `STATE/<name>/follow`
-/// (`MEMBER GRANT`, 0600). The member's id.
-fn provision(w: &World, r: &Roots, name: &str) -> String {
-    let ws = r.members().join(name);
-    nanodregg_devtools::mkdirs(&ws).unwrap();
-    let holding = r.base.0.join(format!("{}.holding", &name[..8]));
-    nanodregg_devtools::mkdirs(&holding).unwrap();
-    let (op_follow, host) = (w.ws.join("follow.sock"), w.host_sock.clone());
-    let o = member_nd(&ws, &holding, &op_follow, &host, &["--init-hosted"]);
-    assert!(o.status.success(), "nd --init-hosted: {}", both(&o));
-    let o = member_nd(&ws, &holding, &op_follow, &host, &["init", &w.operator]);
-    assert!(o.status.success(), "nd init: {}", both(&o));
-    let token = line(&text(&o), "join ").to_owned();
-    let id = line(&w.run(&["enroll", &token]), "id ").to_owned();
-    let observe = line(
-        &w.run(&["grant", "world", &id, "observe", "--via", &w.grant]),
-        "id ",
-    )
-    .to_owned();
-    let st = r.state().join(name);
-    nanodregg_devtools::mkdirs(&st).unwrap();
-    fs::set_permissions(&st, fs::Permissions::from_mode(0o700)).unwrap();
-    let o = Command::new(lean_bin("host"))
-        .arg("genesis")
-        .arg(st.join("store"))
-        .args(&w.genesis_args)
-        .output()
-        .unwrap();
-    assert_eq!(text(&o), w.genesis_out, "one genesis, another Store");
-    let f = st.join("follow");
-    fs::write(&f, format!("{id} {observe}\n")).unwrap();
-    fs::set_permissions(&f, fs::Permissions::from_mode(0o600)).unwrap();
-    id
-}
-
-/// nd-members' argv over `w` and `r`, serving uid `peer`, with `decider` and its arguments.
+/// nd-members' argv over `w` and `r`, serving uid `peer`, with `decider` and its arguments: the
+/// plants' argv. With the real decider it is exactly the emitted unit's (`members_rendered`;
+/// checked in `each_resident_grain_gets_its_member_socket_and_a_removed_one_loses_it`).
 fn argv(w: &World, r: &Roots, peer: u32, decider: &Path, dargs: &[&std::ffi::OsStr]) -> Command {
     argv_over(w, r, peer, &w.store, &nd(), decider, dargs)
 }
@@ -142,6 +61,8 @@ fn argv_over(
         .arg(store)
         .arg("--hide")
         .arg(&w.ws)
+        .arg("--hide")
+        .arg(&w.holding)
         .arg("--")
         .arg(decider)
         .args(dargs);
@@ -151,48 +72,6 @@ fn argv_over(
 /// The real decider's argv after DECIDER (`hosting-residents STORE`, HOSTING-33): the Store alone.
 fn broker_args(w: &World) -> Vec<std::ffi::OsString> {
     vec![w.store.clone().into()]
-}
-
-/// A running nd-members. Dropped: nd-members stopped by its handle, then each child it left by
-/// the pid in its PID file (a SIGKILLed nd-members cleans nothing up).
-struct Members {
-    run: Option<Logged>,
-    pids: PathBuf,
-}
-
-impl Members {
-    fn start(w: &World, r: &Roots, peer: u32) -> Members {
-        let args = broker_args(w);
-        let args: Vec<&std::ffi::OsStr> = args.iter().map(|a| a.as_os_str()).collect();
-        let c = argv(w, r, peer, &lean_bin("hosting-residents"), &args);
-        Members {
-            run: Some(Logged::spawn(c, r.base.0.join("nd-members.pid"))),
-            pids: r.pids(),
-        }
-    }
-    fn log(&self) -> String {
-        self.run.as_ref().map(Logged::log).unwrap_or_default()
-    }
-    fn pid(&self, file: &str) -> Option<i32> {
-        fs::read_to_string(self.pids.join(file))
-            .ok()
-            .and_then(|s| s.trim().parse().ok())
-    }
-}
-
-impl Drop for Members {
-    fn drop(&mut self) {
-        drop(self.run.take());
-        for e in fs::read_dir(&self.pids).into_iter().flatten().flatten() {
-            if let Some(pid) = fs::read_to_string(e.path())
-                .ok()
-                .and_then(|s| s.trim().parse::<i32>().ok())
-                .and_then(rustix::process::Pid::from_raw)
-            {
-                let _ = rustix::process::kill_process(pid, rustix::process::Signal::KILL);
-            }
-        }
-    }
 }
 
 /// One nd command through a member socket: the reply's exit and its stdout (OK) or stderr.
@@ -252,10 +131,7 @@ fn signal(file: &Path, sig: rustix::process::Signal) -> i32 {
 fn each_resident_grain_gets_its_member_socket_and_a_removed_one_loses_it() {
     let w = World::genesis("ndm");
     let r = Roots::new('a');
-    let ids: Vec<String> = [&w.r1, &w.r2]
-        .iter()
-        .map(|g| provision(&w, &r, g))
-        .collect();
+    let ids: Vec<String> = [&w.r1, &w.r2].iter().map(|g| w.provision(&r, g)).collect();
     let obj = line(&w.run(&["create"]), "id ").to_owned();
     w.run(&["write", &obj, "1", "operator"]);
     for id in &ids {
@@ -271,6 +147,24 @@ fn each_resident_grain_gets_its_member_socket_and_a_removed_one_loses_it() {
         "id ",
     )
     .to_owned();
+    // the plants' argv is the emitted unit's (the unit and the plants cannot drift)
+    let bargs = broker_args(&w);
+    let bargs: Vec<&std::ffi::OsStr> = bargs.iter().map(|a| a.as_os_str()).collect();
+    let (unit, plant) = (
+        members_rendered(&w, &r, uid(&r.member.0)),
+        argv(
+            &w,
+            &r,
+            uid(&r.member.0),
+            &lean_bin("hosting-residents"),
+            &bargs,
+        ),
+    );
+    assert_eq!(
+        (unit.get_program(), unit.get_args().collect::<Vec<_>>()),
+        (plant.get_program(), plant.get_args().collect::<Vec<_>>()),
+        "the plants' argv is not the emitted unit's"
+    );
     let m = Members::start(&w, &r, uid(&r.member.0));
     for g in [&w.r1, &w.r2] {
         until(
@@ -319,7 +213,7 @@ fn each_resident_grain_gets_its_member_socket_and_a_removed_one_loses_it() {
     let before = fds(pid);
     // a birth while it runs, provisioned only after the birth (the grain's name is its id)
     let r3 = w.resident("r3");
-    let id3 = provision(&w, &r, &r3);
+    let id3 = w.provision(&r, &r3);
     w.run(&["grant", &obj, &id3, "observe"]);
     until(
         "the born resident's member socket",
@@ -388,7 +282,7 @@ fn each_resident_grain_gets_its_member_socket_and_a_removed_one_loses_it() {
 fn a_stranger_on_the_member_socket_is_refused_by_name() {
     let w = World::genesis("ndp");
     let r = Roots::new('p');
-    provision(&w, &r, &w.r1);
+    w.provision(&r, &w.r1);
     let m = Members::start(&w, &r, uid(&r.member.0) + 1);
     let sock = r.sock(&w.r1);
     until(
@@ -412,8 +306,8 @@ fn a_stranger_on_the_member_socket_is_refused_by_name() {
 fn an_unprovisioned_member_or_a_shared_socket_directory_is_named_and_the_others_served() {
     let w = World::genesis("ndq");
     let r = Roots::new('q');
-    provision(&w, &r, &w.r1);
-    provision(&w, &r, &w.r2);
+    w.provision(&r, &w.r1);
+    w.provision(&r, &w.r2);
     // r2's follow directory holds a stray file: a connect grant would show it to nd --stdio
     nanodregg_devtools::mkdirs(&r.follow.0.join(&w.r2)).unwrap();
     fs::write(r.follow.0.join(&w.r2).join("stray"), b"x").unwrap();
@@ -463,7 +357,7 @@ fn a_dead_follower_is_named_to_its_resident_and_started_again() {
     use rustix::process::Signal;
     let w = World::genesis("ndf");
     let r = Roots::new('f');
-    provision(&w, &r, &w.r1);
+    w.provision(&r, &w.r1);
     let m = Members::start(&w, &r, uid(&r.member.0));
     let sock = r.sock(&w.r1);
     let got = std::cell::RefCell::new(Err::<(u8, String), String>(String::new()));
@@ -519,8 +413,8 @@ fn a_dead_follower_is_named_to_its_resident_and_started_again() {
 fn another_residents_follower_is_refused_by_name() {
     let w = World::genesis("ndo");
     let r = Roots::new('o');
-    provision(&w, &r, &w.r1);
-    provision(&w, &r, &w.r2);
+    w.provision(&r, &w.r1);
+    w.provision(&r, &w.r2);
     let m = Members::start(&w, &r, uid(&r.member.0));
     for g in [&w.r1, &w.r2] {
         until(
@@ -587,7 +481,7 @@ fn starts(log: &str, name: &str, role: &str) -> usize {
 fn a_member_that_always_crashes_is_named_crash_loop_and_left_unbound() {
     let w = World::genesis("ndc");
     let r = Roots::new('c');
-    provision(&w, &r, &w.r1);
+    w.provision(&r, &w.r1);
     let store = r.state().join(&w.r1).join("store");
     fs::remove_dir_all(&store).unwrap();
     nanodregg_devtools::mkdirs(&store).unwrap();
@@ -815,7 +709,7 @@ fn the_stdio_child_writes_its_workspace_and_no_follower_store() {
     let w = World::genesis("nds");
     let r = Roots::new('s');
     let g = w.r1.clone();
-    provision(&w, &r, &g);
+    w.provision(&r, &g);
     let ws = r.members().join(&g);
     let st = r.state().join(&g);
     let targets = |tag: &str| {
@@ -864,10 +758,7 @@ fn the_stdio_child_writes_its_workspace_and_no_follower_store() {
         &lean_bin("hosting-residents"),
         &args,
     );
-    let m = Members {
-        run: Some(Logged::spawn(c, r.base.0.join("nd-members.pid"))),
-        pids: r.pids(),
-    };
+    let m = Members::spawn(c, &r);
     until(
         "the probe's four lines",
         60,

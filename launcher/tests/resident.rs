@@ -14,8 +14,10 @@
 //! - R1: the launch's connect entries are read from grain-launch's report of the plan (one line per
 //!   socket, `grain-launch: <g> connect <path>`), and must be exactly BROKER/<dirOf>/broker.sock then
 //!   MEMBER/<dirOf>/nd.sock (HOSTING-25: the typed member root).
-//! - W (HOSTING-25): the resident's member (enrolled by the operator, its custody in the hidden
-//!   member workspace `worlds/w/members/<dirOf>`) is served by `nd --stdio` on MEMBER/<dirOf>/nd.sock.
+//! - W (HOSTING-25, HOSTING-30): the resident's member (provisioned by the operator, its custody in
+//!   the hidden member workspace `MEMBERS/<dirOf>`) is served by nd-members on its emitted unit's
+//!   argv: `nd --stdio` and the member's own follower, MEMBER/<dirOf>/nd.sock bound from the World's
+//!   `residents` answer. The other resident is served the same way.
 //!   Inside, the resident `write`s the operator's data object it holds a mutate grant on, and the
 //!   operator `read`s the value over its own sockets. Its write to an object it holds no grant on is
 //!   refused, and the operator reads that object unchanged. An off-surface verb (`rotate`) is refused
@@ -51,7 +53,7 @@ mod common;
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
-use std::os::unix::net::UnixListener;
+use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::Path;
 use std::process::{Command, Stdio};
 
@@ -81,15 +83,11 @@ fn a_resident_is_granted_through_its_own_socket_and_reaches_nothing_else() {
     let hosting = &hosting.0;
     let world = hosting.join("worlds").join(LABEL);
     nanodregg_devtools::mkdirs(&world).unwrap();
-    // the member workspaces: outside the hosted tree, under nd's own root (HOSTING-32)
-    let members = Gone(nanodregg_devtools::scratch(&format!(
-        "ndr{}",
-        std::process::id()
-    )));
-    nanodregg_devtools::mkdirs(&members.0).unwrap();
-    // the member root (HOSTING-25): a short scratch of its own, disjoint from the other two roots
-    let mroot = Short::new("m");
-    let mroot = &mroot.0;
+    // nd-members' roots (HOSTING-25, HOSTING-32): MEMBER, FOLLOW, and the member workspaces and
+    // follower state outside the hosted tree, disjoint from the other roots
+    let roots = Roots::new('r');
+    let mroot = &roots.member.0;
+    let (uid, _) = me(sock);
     let w = World::genesis_following("res", Some(world.join("store")));
     let lifecycle = w.lifecycle.clone();
     // the other resident: a resident grain of the World (born at genesis, never started), so
@@ -113,30 +111,25 @@ fn a_resident_is_granted_through_its_own_socket_and_reaches_nothing_else() {
         "plant: a grain id is not 64 lowercase hex digits: {g}"
     );
     w.allowance(&g, "claude-m", 7, 100_000);
-    // the resident's member, served on MEMBER/<g>/nd.sock (it must exist before the launch resolves
-    // it), and a second resident's member socket on the host, for no grain here
+    // the resident's member and the other resident's, provisioned as the operator does and served
+    // by nd-members on its unit's argv from the World's `residents` answer (HOSTING-30): each
+    // socket exists before the launch resolves it
+    let mid = w.provision(&roots, &g);
+    w.provision(&roots, other);
+    let members = Members::start(&w, &roots, uid);
     for r in [g.as_str(), other] {
-        nanodregg_devtools::mkdirs(&mroot.join(r)).unwrap();
-        fs::set_permissions(mroot.join(r), fs::Permissions::from_mode(0o700)).unwrap();
+        until(
+            "nd-members binds a resident's member socket",
+            60,
+            || roots.sock(r).exists(),
+            &|| members.log(),
+        );
     }
-    let other_m = mroot.join(other).join("nd.sock");
-    let _other_m = UnixListener::bind(&other_m).unwrap();
-    fs::set_permissions(&other_m, fs::Permissions::from_mode(0o600)).unwrap();
-    let mfollow = Short::new("f");
-    let member = w.member(
-        &members.0.join(&g),
-        &mfollow.0.join("follow.sock"),
-        &w.root.join("stores/R"),
-        &mroot.join(&g).join("nd.sock"),
-        &d.join("pids"),
-    );
+    let other_m = roots.sock(other);
+    let mws = roots.members().join(&g);
     // the operator's objects: one the resident may mutate, one it holds no grant on
     let obj = line(&w.run(&["create"]), "id ").to_owned();
-    let rm = line(
-        &w.run(&["grant", &obj, &member.id, "observe,mutate"]),
-        "id ",
-    )
-    .to_owned();
+    let rm = line(&w.run(&["grant", &obj, &mid, "observe,mutate"]), "id ").to_owned();
     let bare = line(&w.run(&["create"]), "id ").to_owned();
     w.run(&["write", &bare, "1", "operator"]);
     // the grain's package: the probe and its targets (the paths it tries are the host's)
@@ -146,7 +139,7 @@ fn a_resident_is_granted_through_its_own_socket_and_reaches_nothing_else() {
     nanodregg_devtools::mkdirs(&vol).unwrap();
     place_exe(Path::new(env!("CARGO_BIN_EXE_probe")), &pkg.join("probe"));
     let own = sock.join(&g).join("broker.sock");
-    let ms = member.sock.display().to_string();
+    let ms = roots.sock(&g).display().to_string();
     let targets = [
         ("go1", "wait", vol.join("go1")),
         ("ask1", "ask", own.clone()),
@@ -172,7 +165,7 @@ fn a_resident_is_granted_through_its_own_socket_and_reaches_nothing_else() {
         ("member-rotate", "nd", format!("{ms} rotate").into()),
         ("member-other", "connect", other_m.clone()),
         ("member-list", "list", mroot.join(&g)),
-        ("member-key", "list", member.ws.clone()),
+        ("member-key", "list", mws.clone()),
         ("go2", "wait", vol.join("go2")),
         ("ask2", "ask", own.clone()),
         ("own-list2", "list", sock.join(&g)),
@@ -186,7 +179,6 @@ fn a_resident_is_granted_through_its_own_socket_and_reaches_nothing_else() {
     // CONTROL for R4/R5: the paths the resident must not reach exist on the host
     assert!(keys.is_file() && fs::metadata(&own).is_err());
 
-    let (uid, _) = me(sock);
     let residents = [g.as_str(), other];
     let kb = start_residents(
         sock,
@@ -341,6 +333,10 @@ fn a_resident_is_granted_through_its_own_socket_and_reaches_nothing_else() {
         "denied ENOENT",
         "W: another resident's member socket"
     );
+    assert!(
+        UnixStream::connect(&other_m).is_ok(),
+        "control: nd-members serves the other resident's member socket on the host"
+    );
     assert_eq!(
         v("member-list"),
         "ok nd.sock",
@@ -352,7 +348,7 @@ fn a_resident_is_granted_through_its_own_socket_and_reaches_nothing_else() {
         "W-key: the member workspace (its custody) inside the sandbox"
     );
     assert!(
-        member.ws.join("keys").exists() || fs::read_dir(&member.ws).unwrap().next().is_some(),
+        mws.join("keys").is_file(),
         "control: the member workspace holds its custody on the host"
     );
 
@@ -377,11 +373,13 @@ fn a_resident_is_granted_through_its_own_socket_and_reaches_nothing_else() {
         &cdir.join("pkg/probe"),
     );
     fs::write(cdir.join("pkg/probe.targets"), b"").unwrap();
-    nanodregg_devtools::mkdirs(&mroot.join(&c)).unwrap();
-    fs::set_permissions(mroot.join(&c), fs::Permissions::from_mode(0o700)).unwrap();
-    let cm = mroot.join(&c).join("nd.sock");
-    let _cm = UnixListener::bind(&cm).unwrap();
-    fs::set_permissions(&cm, fs::Permissions::from_mode(0o600)).unwrap();
+    w.provision(&roots, &c);
+    until(
+        "nd-members binds the late resident's member socket",
+        60,
+        || roots.sock(&c).exists(),
+        &|| members.log(),
+    );
     w.run(&["invoke", &c, "1", "(record)"]);
     w.run(&["sync"]);
     until(
@@ -455,6 +453,7 @@ fn a_resident_is_granted_through_its_own_socket_and_reaches_nothing_else() {
     );
     drop(gl);
     drop(kb);
+    drop(members);
     drop(w);
 }
 
