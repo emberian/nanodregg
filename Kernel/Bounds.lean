@@ -84,9 +84,10 @@ def treeTicksMax : Nat := 131072
 
 /-- A row key's width bound (LANG-44 (e) said 64; KERNEL-48 raises it to 128: a key of two digests in Lang's data encoding, each with CODEC's length byte, is 66 bytes, and CoAuthor's ballots are keyed {pick, voter}). -/
 def keyBytesMax : Nat := 128
-/-- The rows trie's depth (KERNEL-46 amendment 1): a 32-byte parent, the relation, the tag and the
-length bytes, then at most `keyBytesMax` key bytes. -/
-def rowDepth : Nat := 256 + 24 + 8 * keyBytesMax
+/-- The rows trie's depth (KERNEL-46 amendment 1, cv 01a14f7e): a 32-byte parent, the relation (a
+LEB128 below 256: at most two bytes), the tag, the length (LEB128 of at most `keyBytesMax` = 128: at
+most two bytes), then at most `keyBytesMax` key bytes. -/
+def rowDepth : Nat := 256 + 40 + 8 * keyBytesMax
 /-- A relation's row limit (LANG-44 (e), delvetalk's). -/
 def rowsPerRelationMax : Nat := 4096
 /-- Row touches per turn, and range reads per turn (KERNEL-48). -/

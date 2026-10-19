@@ -61,6 +61,10 @@ inductive Shape where
   /-- LEB128, shortest form, below 2^64 in at most ten bytes (`Codec.Stream.varint64`, KERNEL-54's
   versions). -/
   | varint64
+  /-- A byte string of at most `max` bytes behind a LEB128 length (`Codec.Stream.bytesV`): a rows key's
+  bytes and a range prefix, as KERNEL's `natBytes` length writes them (cv 01a14f7e: prefix-free for
+  every length). -/
+  | bytesV (max : Nat)
   deriving Repr
 
 /-- A byte string of at most `max` bytes. -/

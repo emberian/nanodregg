@@ -20,10 +20,10 @@ leaf digest is the kernel's hash of `vpre v`, and `vpre` is injective on `Fits`.
 `cells_headSound` (`Kernel.Proofs.Cells`: `Fits` is `Leaf.CellFit Cell.Fits`, where
 `hE.cellBytes_injOn` makes the cell codec injective), `journal_headSound`
 (`Kernel.Proofs.JournalHead`: needs `0 < n`; `Fits` is a height below 2^64), `refusal_headSound`
-(`Kernel.Proofs.RefusalsHead`: `Fits` is `RefusalLeaf.Fits`). The rows are not an instance: their
-key bytes are not injective outside `rowFits` (`byte8` wraps both the relation byte and the
-key-length byte at 256), so `Trie.inclusion_sound`'s unconditional `hL` fails for them
-(decisions/kernel.md KERNEL-52). Teeth: `inclusion_sep`, `exclusion_sep`, `head_read_sep`,
+(`Kernel.Proofs.RefusalsHead`: `Fits` is `RefusalLeaf.Fits`), `row_headSound`
+(`Kernel.Proofs.RowsHeadRead`: `Fits` is `RowLeaf.Fits`; no bound on the keys, whose relation and
+length are LEB128 since cv 01a14f7e: one byte each wrapped at 256 and made the rows no instance,
+decisions/kernel.md KERNEL-52). Teeth: `inclusion_sep`, `exclusion_sep`, `head_read_sep`,
 `head_absent_sep`: under `Separates` the read is its binding fact alone.
 -/
 import Kernel.Proofs.Fold

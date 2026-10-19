@@ -12,7 +12,8 @@ ROOT's condition (a), KERNEL-46/48:
   `under_needs_long`: the length premise is needed; `under_needs_rep`: the `rep` check is (without
   it a row that does not start with the prefix is listed); `under_needs_shape`: the canonical shape
   is (a routed tree whose `rep` is not one of its keys misses rows). `range_prefix_long` discharges
-  the length premise for the range prefix from one digest size and `pre.size ≤ width < 256`;
+  the length premise for the range prefix from one digest size and `pre.size ≤ width` (no bound on
+  the width: cv 01a14f7e);
   `under_rows` is the instance.
 * `range_rows_exact` ((i) exactly the rows under the prefix, (ii) strictly ascending key bytes,
   (iii) at most `most`), with `range_rows_none` (refused iff more than `most`), and the admitted form
@@ -266,73 +267,72 @@ private theorem byte_of_bits {a b : ByteArray} {m j : Nat} (hj : j < m) (ha : j 
   rw [← getElem_toList ha, ← getElem_toList hb]
   exact byte_eq_of_bits ha hb fun t ht => h _ (by omega)
 
-private theorem toNat_byte (x : Nat) : (UInt8.ofNat x).toNat = x % 256 := by
-  simp [UInt8.toNat_ofNat']
-
 section Rows
 
-private theorem list_row (E : Env D) (key : RowKey D) :
-    (rowKeyBytes E (.row key)).data.toList =
-      (E.bytes key.parent).data.toList ++ UInt8.ofNat key.rel :: UInt8.ofNat 1 :: UInt8.ofNat key.k.size ::
-        key.k.data.toList := by
-  simp [rowKeyBytes, rowsPrefix, byte8]
-
-private theorem list_head (E : Env D) (p : D) (rel : Nat) :
-    (rowKeyBytes E (.head p rel)).data.toList = (E.bytes p).data.toList ++ [UInt8.ofNat rel, UInt8.ofNat 0] := by
-  simp [rowKeyBytes, byte8]
-
-private theorem list_pre (E : Env D) (parent : D) (rel width : Nat) (pre : ByteArray) :
-    (rowsPrefix E parent rel width ++ pre).data.toList =
-      (E.bytes parent).data.toList ++ UInt8.ofNat rel :: UInt8.ofNat 1 :: UInt8.ofNat width :: pre.data.toList := by
-  simp [rowsPrefix, byte8]
-
-/-- **The range prefix is long enough** (`under_eq`'s premise, discharged): with every digest `n`
-bytes and `pre.size ≤ width < 256`, a rows key whose bits agree with the range prefix's is at least
-as long. A head is excluded by its tag byte (0 against the prefix's 1), a row by its length byte
-(`|k| ≡ width` mod 256, so `|k| ≥ width ≥ pre.size`). -/
-theorem range_prefix_long (E : Env D) {n : Nat} (hsize : ∀ d, (E.bytes d).size = n) {parent : D}
-    {rel width : Nat} {pre : ByteArray} (hw : pre.size ≤ width) (hw' : width < 256) (s : RowSlot D)
-    (h : ∀ i, i < 8 * (rowsPrefix E parent rel width ++ pre).size →
-      byteBit (rowKeyBytes E s) i = byteBit (rowsPrefix E parent rel width ++ pre) i) :
-    (rowsPrefix E parent rel width ++ pre).size ≤ (rowKeyBytes E s).size := by
-  have hP : (rowsPrefix E parent rel width ++ pre).size = n + 3 + pre.size := by
-    simp [rowsPrefix, byte8, hsize]
-  have lP := list_pre E parent rel width pre
-  have hn := hsize parent
+/-- **What a key against a range prefix is** (cv 01a14f7e): with every digest `n` bytes, if a rows
+key's bytes followed by `Y` are the range prefix followed by `X`, the key is a row of that relation at
+that width, under a parent with the parent's bytes, and its own bytes followed by `Y` are `pre`
+followed by `X`. A head is told apart by its tag byte; the relation and the width by `natBytes` being
+prefix-free (`natBytes_append_inj`), for every relation and width. -/
+theorem rowKey_against_prefix (E : Env D) {n : Nat} (hsize : ∀ d, (E.bytes d).size = n)
+    {parent : D} {rel width : Nat} {pre : ByteArray} {s : RowSlot D} {X Y : ByteArray}
+    (h : rowKeyBytes E s ++ Y = rowsPrefix E parent rel width ++ pre ++ X) :
+    ∃ p k, s = .row ⟨p, rel, k⟩ ∧ E.bytes p = E.bytes parent ∧ k.size = width ∧ k ++ Y = pre ++ X := by
   cases s with
   | head p r =>
       exfalso
-      have hs : (rowKeyBytes E (.head p r)).size = n + 2 := by simp [rowKeyBytes, byte8, hsize]
-      have hb := byte_of_bits (j := n + 1) (by omega) (by omega) (by omega) h
-      simp only [list_head, lP] at hb
-      have hl : (E.bytes p).data.toList.length = n := by simp [hsize]
-      have hl' : (E.bytes parent).data.toList.length = n := by simp [hsize]
-      rw [List.getElem_append_right (by omega), List.getElem_append_right (by omega)] at hb
-      simp [hl, hl'] at hb
+      simp only [rowKeyBytes, rowsPrefix, ByteArray.append_assoc] at h
+      obtain ⟨-, h1⟩ := bytes_append_inj h (by rw [hsize, hsize])
+      obtain ⟨-, h2⟩ := natBytes_append_inj h1
+      exact absurd (Nanodregg.Codec.head_inj h2).1 (by decide)
   | row key =>
-      have hs : (rowKeyBytes E (.row key)).size = n + 3 + key.k.size := by
-        simp [rowKeyBytes, rowsPrefix, byte8, hsize]
-      have hb := byte_of_bits (j := n + 2) (by omega) (by omega) (by omega) h
-      simp only [list_row, lP] at hb
-      have hl : (E.bytes key.parent).data.toList.length = n := by simp [hsize]
-      have hl' : (E.bytes parent).data.toList.length = n := by simp [hsize]
-      rw [List.getElem_append_right (by omega), List.getElem_append_right (by omega)] at hb
-      simp only [hl, hl', Nat.add_sub_cancel_left, List.getElem_cons_succ, List.getElem_cons_zero] at hb
-      have := congrArg UInt8.toNat hb
-      rw [toNat_byte, toNat_byte] at this
-      rw [hP, hs]
-      omega
+      obtain ⟨p, r, k⟩ := key
+      simp only [rowKeyBytes, rowsPrefix, ByteArray.append_assoc] at h
+      obtain ⟨hp, h1⟩ := bytes_append_inj h (by rw [hsize, hsize])
+      obtain ⟨hr, h2⟩ := natBytes_append_inj h1
+      obtain ⟨-, h3⟩ := Nanodregg.Codec.head_inj h2
+      obtain ⟨hl, h4⟩ := natBytes_append_inj h3
+      exact ⟨p, k, by rw [hr], hp, hl, h4⟩
+
+/-- Bits that agree below `8 * b.size` make the shorter string a byte prefix of the longer. -/
+private theorem prefix_of_bits {a b : ByteArray} (hab : a.size ≤ b.size)
+    (h : ∀ i, i < 8 * b.size → byteBit a i = byteBit b i) : a.data.toList <+: b.data.toList := by
+  rw [List.prefix_iff_getElem]
+  refine ⟨by simpa using hab, fun j hj => ?_⟩
+  have hja : j < a.size := by simpa using hj
+  exact byte_of_bits (m := b.size) (by omega) hja (by omega) h
+
+/-- **The range prefix is long enough** (`under_eq`'s premise, discharged): with every digest `n`
+bytes and `pre.size ≤ width`, a rows key whose bits agree with the range prefix's is at least as
+long. A shorter one would be a byte prefix of it (`prefix_of_bits`), so a row of the relation at that
+width (`rowKey_against_prefix`) whose `width` key bytes are a proper prefix of `pre`: longer than
+`width`. No bound on the width (cv 01a14f7e: under the one-byte length it needed `width < 256`). -/
+theorem range_prefix_long (E : Env D) {n : Nat} (hsize : ∀ d, (E.bytes d).size = n) {parent : D}
+    {rel width : Nat} {pre : ByteArray} (hw : pre.size ≤ width) (s : RowSlot D)
+    (h : ∀ i, i < 8 * (rowsPrefix E parent rel width ++ pre).size →
+      byteBit (rowKeyBytes E s) i = byteBit (rowsPrefix E parent rel width ++ pre) i) :
+    (rowsPrefix E parent rel width ++ pre).size ≤ (rowKeyBytes E s).size := by
+  refine Nat.le_of_not_lt fun hlt => ?_
+  obtain ⟨t, ht⟩ := prefix_of_bits (Nat.le_of_lt hlt) h
+  have he : rowKeyBytes E s ++ ⟨t.toArray⟩ = rowsPrefix E parent rel width ++ pre ++ ByteArray.empty := by
+    apply ba_eq_of_toList
+    simpa [ByteArray.data_append] using ht
+  have hsz := congrArg ByteArray.size he
+  obtain ⟨p, k, rfl, -, hk, hkp⟩ := rowKey_against_prefix E hsize he
+  have hkp' := congrArg ByteArray.size hkp
+  simp only [ByteArray.size_append, ByteArray.size_empty] at hsz hkp' hlt
+  omega
 
 /-- **The listing lemma for a range read**: on a canonical rows trie (every digest `n` bytes,
-`pre.size ≤ width < 256`), `under` at the range prefix is the trie's listing filtered by the prefix,
+`pre.size ≤ width`), `under` at the range prefix is the trie's listing filtered by the prefix,
 cut at `m`. -/
 theorem under_rows (E : Env D) {n : Nat} (hsize : ∀ d, (E.bytes d).size = n) {r : Rows D}
     (hc : Trie.Canon (rowSpec E) 0 r) {parent : D} {rel width : Nat} {pre : ByteArray}
-    (hw : pre.size ≤ width) (hw' : width < 256) (m : Nat) :
+    (hw : pre.size ≤ width) (m : Nat) :
     under (rowSpec E) (rowsPrefix E parent rel width ++ pre) m r =
       (r.toList.filter fun p => startsWith (rowsPrefix E parent rel width ++ pre) (rowKeyBytes E p.1)).take m :=
   under_eq (rowSpec E) (fun _ _ => rfl) _ m 0 r hc.1 hc.2.2 (fun _ _ _ _ _ hi => absurd hi (Nat.not_lt_zero _))
-    (fun p _ hb => range_prefix_long E hsize hw hw' p.1 hb)
+    (fun p _ hb => range_prefix_long E hsize hw p.1 hb)
 
 end Rows
 
@@ -455,58 +455,42 @@ private theorem fits_row {key : RowKey D} {v : RowLeaf} (h : rowFits (.row key) 
   cases v <;> simp_all [rowFits]
 
 omit [DecidableEq D] in
-/-- **What a listed key is**: with every digest `n` bytes and `E.bytes` injective, a rows key that
-fits and starts with the range prefix is a row of that parent and relation (its relation byte read
-mod 256) whose key has the relation's width. -/
-theorem listed_key (E : Env D) {n : Nat} (hsize : ∀ d, (E.bytes d).size = n)
-    (hinj : Function.Injective E.bytes) {parent : D} {rel width : Nat} {pre : ByteArray}
-    {s : RowSlot D} {v : RowLeaf} (hfit : rowFits s v = true)
+/-- **A key under a range prefix**, with every digest `n` bytes: a row of that relation at that width,
+under a parent with the parent's bytes, for every key (cv 01a14f7e: under the one-byte encoding the
+relation and the width were read mod 256, and only for keys that fit). -/
+theorem key_under_prefix (E : Env D) {n : Nat} (hsize : ∀ d, (E.bytes d).size = n) {parent : D}
+    {rel width : Nat} {pre : ByteArray} {s : RowSlot D}
     (hs : startsWith (rowsPrefix E parent rel width ++ pre) (rowKeyBytes E s) = true) :
-    ∃ k : ByteArray, s = .row ⟨parent, rel % 256, k⟩ ∧ k.size = width % 256 := by
+    ∃ p k, s = .row ⟨p, rel, k⟩ ∧ E.bytes p = E.bytes parent ∧ k.size = width := by
   obtain ⟨t, ht⟩ := prefix_of_startsWith hs
-  rw [list_pre] at ht
-  have hl' : (E.bytes parent).data.toList.length = n := by simp [hsize]
-  cases s with
-  | head p r =>
-      exfalso
-      rw [list_head] at ht
-      have hl : (E.bytes p).data.toList.length = n := by simp [hsize]
-      simp only [List.append_assoc, List.cons_append] at ht
-      have := (List.append_inj ht (by rw [hl, hl'])).2
-      simp at this
-  | row key =>
-      obtain ⟨hr, hk⟩ := fits_row hfit
-      rw [list_row] at ht
-      have hl : (E.bytes key.parent).data.toList.length = n := by simp [hsize]
-      simp only [List.append_assoc, List.cons_append] at ht
-      obtain ⟨hp, hrest⟩ := List.append_inj ht (by rw [hl, hl'])
-      simp only [List.cons.injEq] at hrest
-      obtain ⟨hrel, -, hw, -⟩ := hrest
-      have hpar : parent = key.parent := hinj (ByteArray.ext (Array.toList_inj.mp hp))
-      have e1 := congrArg UInt8.toNat hrel
-      have e2 := congrArg UInt8.toNat hw
-      rw [toNat_byte, toNat_byte] at e1 e2
-      refine ⟨key.k, ?_, ?_⟩
-      · obtain ⟨kp, kr, kk⟩ := key
-        simp only at hpar e1 ⊢
-        subst hpar
-        congr
-        simp [Bounds.keyBytesMax] at hr hk
-        omega
-      · simp [Bounds.keyBytesMax] at hk
-        omega
+  have he : rowKeyBytes E s ++ ByteArray.empty = rowsPrefix E parent rel width ++ pre ++ ⟨t.toArray⟩ := by
+    apply ba_eq_of_toList
+    simpa [ByteArray.data_append] using ht.symm
+  obtain ⟨p, k, hk, hp, hw, -⟩ := rowKey_against_prefix E hsize he
+  exact ⟨p, k, hk, hp, hw⟩
+
+omit [DecidableEq D] in
+/-- **What a listed key is**: with every digest `n` bytes and `E.bytes` injective, a rows key that
+starts with the range prefix is a row of that parent and relation whose key has the relation's width
+(`key_under_prefix`). -/
+theorem listed_key (E : Env D) {n : Nat} (hsize : ∀ d, (E.bytes d).size = n)
+    (hinj : Function.Injective E.bytes) {parent : D} {rel width : Nat} {pre : ByteArray} {s : RowSlot D}
+    (hs : startsWith (rowsPrefix E parent rel width ++ pre) (rowKeyBytes E s) = true) :
+    ∃ k : ByteArray, s = .row ⟨parent, rel, k⟩ ∧ k.size = width := by
+  obtain ⟨p, k, rfl, hp, hk⟩ := key_under_prefix E hsize hs
+  exact ⟨k, by rw [hinj hp], hk⟩
 
 omit [DecidableEq D] in
 /-- The rows under a range prefix: the trie's listing, filtered by the prefix. -/
 private theorem rangeRows_some {E : Env D} {n : Nat} (hsize : ∀ d, (E.bytes d).size = n) {r : Rows D}
     (hc : Trie.Canon (rowSpec E) 0 r) {parent : D} {rel width : Nat} {pre : ByteArray}
-    (hw : pre.size ≤ width) (hw' : width < 256) {most : Nat} {l : List (RowSlot D × RowLeaf)}
+    (hw : pre.size ≤ width) {most : Nat} {l : List (RowSlot D × RowLeaf)}
     (h : rangeRows E r parent rel width pre most = some l) :
     l = r.toList.filter (fun p => startsWith (rowsPrefix E parent rel width ++ pre) (rowKeyBytes E p.1)) ∧
       l.length ≤ most := by
   unfold rangeRows at h
   simp only at h
-  rw [under_rows E hsize hc hw hw'] at h
+  rw [under_rows E hsize hc hw] at h
   split at h
   · rename_i hle
     cases h
@@ -519,23 +503,23 @@ omit [DecidableEq D] in
 /-- **(iii) A range read is refused exactly when more than `most` rows are under its prefix.** -/
 theorem range_rows_none {E : Env D} {n : Nat} (hsize : ∀ d, (E.bytes d).size = n) {r : Rows D}
     (hc : Trie.Canon (rowSpec E) 0 r) {parent : D} {rel width : Nat} {pre : ByteArray}
-    (hw : pre.size ≤ width) (hw' : width < 256) (most : Nat) :
+    (hw : pre.size ≤ width) (most : Nat) :
     rangeRows E r parent rel width pre most = none ↔
       most < (r.toList.filter fun p =>
         startsWith (rowsPrefix E parent rel width ++ pre) (rowKeyBytes E p.1)).length := by
   unfold rangeRows
   simp only
-  rw [under_rows E hsize hc hw hw', List.length_take]
+  rw [under_rows E hsize hc hw, List.length_take]
   split <;> simp <;> omega
 
 /-- **(i) The rows a range read lists are exactly the rows under its prefix.** -/
 theorem range_rows_mem {E : Env D} {n : Nat} (hsize : ∀ d, (E.bytes d).size = n) {r : Rows D}
     (hc : Trie.Canon (rowSpec E) 0 r) {parent : D} {rel width : Nat} {pre : ByteArray}
-    (hw : pre.size ≤ width) (hw' : width < 256) {most : Nat} {l : List (RowSlot D × RowLeaf)}
+    (hw : pre.size ≤ width) {most : Nat} {l : List (RowSlot D × RowLeaf)}
     (h : rangeRows E r parent rel width pre most = some l) (s : RowSlot D) (v : RowLeaf) :
     (s, v) ∈ l ↔ rowAt E r s = some v ∧
       startsWith (rowsPrefix E parent rel width ++ pre) (rowKeyBytes E s) = true := by
-  rw [(rangeRows_some hsize hc hw hw' h).1, List.mem_filter, Trie.mem_toList (rowSpec E) 0 r hc.1]
+  rw [(rangeRows_some hsize hc hw h).1, List.mem_filter, Trie.mem_toList (rowSpec E) 0 r hc.1]
   rfl
 
 omit [DecidableEq D] in
@@ -545,25 +529,25 @@ digests of at most 32 bytes, and every entry of the rows fits (`rowFits`, what a
 theorem range_rows_sorted {E : Env D} {n : Nat} (hsize : ∀ d, (E.bytes d).size = n) (hn : n ≤ 32)
     (hinj : Function.Injective E.bytes) {r : Rows D} (hc : Trie.Canon (rowSpec E) 0 r)
     (hfit : ∀ p ∈ r.toList, rowFits p.1 p.2 = true) {parent : D} {rel width : Nat} {pre : ByteArray}
-    (hw : pre.size ≤ width) (hw' : width < 256) {most : Nat} {l : List (RowSlot D × RowLeaf)}
+    (hw : pre.size ≤ width) {most : Nat} {l : List (RowSlot D × RowLeaf)}
     (h : rangeRows E r parent rel width pre most = some l) :
     l.Pairwise fun a b => compare (rowKeyBytes E a.1).data (rowKeyBytes E b.1).data = .lt := by
-  rw [(rangeRows_some hsize hc hw hw' h).1]
+  rw [(rangeRows_some hsize hc hw h).1]
   have hkey : ∀ p ∈ r.toList,
       startsWith (rowsPrefix E parent rel width ++ pre) (rowKeyBytes E p.1) = true →
-      ∃ k : ByteArray, p.1 = .row ⟨parent, rel % 256, k⟩ ∧ k.size = width % 256 ∧ k.size ≤ Bounds.keyBytesMax ∧
-        (rowKeyBytes E p.1).size = n + 3 + k.size := by
+      ∃ k : ByteArray, p.1 = .row ⟨parent, rel, k⟩ ∧ k.size = width ∧ k.size ≤ Bounds.keyBytesMax ∧
+        rel < 256 ∧ (rowKeyBytes E p.1).size = n + (natBytes rel).size + 1 + (natBytes width).size + k.size := by
     intro p hp hs
-    obtain ⟨k, hk, hks⟩ := listed_key E hsize hinj (hfit p hp) hs
-    refine ⟨k, hk, hks, ?_, ?_⟩
-    · have := fits_row (v := p.2) (by rw [← hk]; exact hfit p hp); exact this.2
-    · rw [hk]; simp [rowKeyBytes, rowsPrefix, byte8, hsize]
+    obtain ⟨k, hk, hks⟩ := listed_key E hsize hinj hs
+    have hf := fits_row (v := p.2) (by rw [← hk]; exact hfit p hp)
+    refine ⟨k, hk, hks, hf.2, hf.1, ?_⟩
+    rw [hk]; simp only [rowKeyBytes, rowsPrefix, ByteArray.size_append, hsize, byte8_size, hks]
   have hpw := filter_pairwise (rowSpec E)
     (fun p => startsWith (rowsPrefix E parent rel width ++ pre) (rowKeyBytes E p.1)) 0 r hc.1 hc.2.2
     (fun _ _ _ _ _ hj => absurd hj (Nat.not_lt_zero _))
     (fun p hp q hq hps hqs hne => by
-      obtain ⟨k, hk, hks, hkm, hsz⟩ := hkey p hp hps
-      obtain ⟨k', hk', hks', -, hsz'⟩ := hkey q hq hqs
+      obtain ⟨k, hk, hks, hkm, hrel, hsz⟩ := hkey p hp hps
+      obtain ⟨k', hk', hks', -, -, hsz'⟩ := hkey q hq hqs
       have hb : rowKeyBytes E p.1 ≠ rowKeyBytes E q.1 := by
         intro he
         apply hne
@@ -574,12 +558,14 @@ theorem range_rows_sorted {E : Env D} {n : Nat} (hsize : ∀ d, (E.bytes d).size
       obtain ⟨i, hi, hd⟩ := bit_diff (by rw [hsz, hsz', hks, hks']) hb
       refine ⟨i, ?_, hd⟩
       show i < Bounds.rowDepth
+      have h1 := natBytes_size_le_two hrel
+      have h2 := natBytes_size_le_two (r := width) (by simp [Bounds.keyBytesMax] at hkm; omega)
       simp [Bounds.rowDepth, Bounds.keyBytesMax] at hkm ⊢
       omega)
   refine List.Pairwise.imp_of_mem (fun ha hb hab => ?_) hpw
   obtain ⟨i, -, -, hpre, h1, h2⟩ := hab
-  obtain ⟨k, -, hks, -, hsz⟩ := hkey _ (List.mem_filter.mp ha).1 (List.mem_filter.mp ha).2
-  obtain ⟨k', -, hks', -, hsz'⟩ := hkey _ (List.mem_filter.mp hb).1 (List.mem_filter.mp hb).2
+  obtain ⟨k, -, hks, -, -, hsz⟩ := hkey _ (List.mem_filter.mp ha).1 (List.mem_filter.mp ha).2
+  obtain ⟨k', -, hks', -, -, hsz'⟩ := hkey _ (List.mem_filter.mp hb).1 (List.mem_filter.mp hb).2
   exact compare_lt_of_bits (by rw [hsz, hsz', hks, hks']) (fun j hj => hpre j (Nat.zero_le j) hj) h1 h2
 
 
@@ -587,29 +573,29 @@ theorem range_rows_sorted {E : Env D} {n : Nat} (hsize : ∀ d, (E.bytes d).size
 theorem range_rows_exact_of {E : Env D} {n : Nat} (hsize : ∀ d, (E.bytes d).size = n) (hn : n ≤ 32)
     (hinj : Function.Injective E.bytes) {r : Rows D}
     (hc : Trie.Canon (rowSpec E) 0 r) (hfit : ∀ p ∈ r.toList, rowFits p.1 p.2 = true) {parent : D}
-    {rel width : Nat} {pre : ByteArray} (hw : pre.size ≤ width) (hw' : width < 256) {most : Nat}
+    {rel width : Nat} {pre : ByteArray} (hw : pre.size ≤ width) {most : Nat}
     {l : List (RowSlot D × RowLeaf)} (h : rangeRows E r parent rel width pre most = some l) :
     (∀ s v, (s, v) ∈ l ↔ rowAt E r s = some v ∧
       startsWith (rowsPrefix E parent rel width ++ pre) (rowKeyBytes E s) = true) ∧
     l.Pairwise (fun a b => compare (rowKeyBytes E a.1).data (rowKeyBytes E b.1).data = .lt) ∧
     l.length ≤ most :=
-  ⟨range_rows_mem hsize hc hw hw' h, range_rows_sorted hsize hn hinj hc hfit hw hw' h,
-    (rangeRows_some hsize hc hw hw' h).2⟩
+  ⟨range_rows_mem hsize hc hw h, range_rows_sorted hsize hn hinj hc hfit hw h,
+    (rangeRows_some hsize hc hw h).2⟩
 
 /-- **`range_rows_exact`** (ROOT's condition (a), KERNEL-46/48): over a lawful `Env`, on canonical rows
-whose entries fit, a range read at `pre.size ≤ width < 256` that is not refused lists (i) exactly
+whose entries fit, a range read at `pre.size ≤ width` that is not refused lists (i) exactly
 the rows whose key starts with the range prefix, (ii) in strictly ascending key-byte order, (iii)
 at most `most` of them; and it is refused (`none`) exactly when more than `most` rows are under the
 prefix (`range_rows_none`). -/
 theorem range_rows_exact [Ord D] {E : Env D} {n : Nat} (hE : E.Lawful n) {r : Rows D}
     (hc : Trie.Canon (rowSpec E) 0 r) (hfit : ∀ p ∈ r.toList, rowFits p.1 p.2 = true) {parent : D}
-    {rel width : Nat} {pre : ByteArray} (hw : pre.size ≤ width) (hw' : width < 256) {most : Nat}
+    {rel width : Nat} {pre : ByteArray} (hw : pre.size ≤ width) {most : Nat}
     {l : List (RowSlot D × RowLeaf)} (h : rangeRows E r parent rel width pre most = some l) :
     (∀ s v, (s, v) ∈ l ↔ rowAt E r s = some v ∧
       startsWith (rowsPrefix E parent rel width ++ pre) (rowKeyBytes E s) = true) ∧
     l.Pairwise (fun a b => compare (rowKeyBytes E a.1).data (rowKeyBytes E b.1).data = .lt) ∧
     l.length ≤ most :=
-  range_rows_exact_of hE.size hE.n_le hE.bytes_inj hc hfit hw hw' h
+  range_rows_exact_of hE.size hE.n_le hE.bytes_inj hc hfit hw h
 
 omit [DecidableEq D] in
 /-- The `hfit` premise is what a decoded base already checks: `rowsFits` (CODEC-9's
@@ -655,15 +641,10 @@ theorem admit_range_exact_of [Ord D] {E : Env D} {n : Nat} (hsize : ∀ d, (E.by
     simp only [except_bind_ok] at hq'
     obtain ⟨⟨⟩, hpw, hq'⟩ := hq'
     have hpw' : q.pre.size ≤ width := of_decide_eq_true (req_ok.mp hpw)
-    have hmem := (Trie.mem_toList (rowSpec E) 0 w.rows hc.1 _ _).mpr (headOf_some hh)
-    have hw' : width < 256 := by
-      have := hfit _ hmem
-      simp [rowFits, Bounds.keyBytesMax] at this
-      omega
     split at hq'
     · simp at hq'
     · rename_i l hl
-      obtain ⟨hi, hii, -⟩ := range_rows_exact_of hsize hn hinj hc hfit hpw' hw' hl
+      obtain ⟨hi, hii, -⟩ := range_rows_exact_of hsize hn hinj hc hfit hpw' hl
       exact ⟨c, s, lim, cap, width, rt, l, hh, hpw', hl, of_decide_eq_true (req_ok.mp hq'), hi, hii⟩
 
 /-- **The admitted form**: for an admitted turn on canonical rows whose entries fit, over a lawful
@@ -712,15 +693,15 @@ of (i)) and a row `p` of it, `l.erase p` does NOT list exactly the rows under th
 of them and it is gone. -/
 theorem range_rows_erase_not_exact {E : Env D} {n : Nat} (hsize : ∀ d, (E.bytes d).size = n) {r : Rows D}
     (hc : Trie.Canon (rowSpec E) 0 r) {parent : D} {rel width : Nat} {pre : ByteArray}
-    (hw : pre.size ≤ width) (hw' : width < 256) {most : Nat} {l : List (RowSlot D × RowLeaf)}
+    (hw : pre.size ≤ width) {most : Nat} {l : List (RowSlot D × RowLeaf)}
     (h : rangeRows E r parent rel width pre most = some l) {p : RowSlot D × RowLeaf} (hp : p ∈ l) :
     ¬ ∀ s v, (s, v) ∈ l.erase p ↔ rowAt E r s = some v ∧
       startsWith (rowsPrefix E parent rel width ++ pre) (rowKeyBytes E s) = true := by
   intro hx
   have hnd : l.Nodup := by
-    rw [(rangeRows_some hsize hc hw hw' h).1]
+    rw [(rangeRows_some hsize hc hw h).1]
     exact (Trie.nodup_of_map_fst (Trie.toList_nodup (rowSpec E) 0 r hc.1)).filter _
-  have hin := (hx p.1 p.2).mpr ((range_rows_mem hsize hc hw hw' h p.1 p.2).mp hp)
+  have hin := (hx p.1 p.2).mpr ((range_rows_mem hsize hc hw h p.1 p.2).mp hp)
   rw [hnd.mem_erase_iff] at hin
   exact hin.1 rfl
 
@@ -778,7 +759,7 @@ private theorem toy_fit : ∀ p ∈ toyRows.toList, rowFits p.1 p.2 = true := by
 private theorem toy_range : rangeRows toyEnv toyRows 7 3 2 ⟨#[1]⟩ 5 = some toyListing := by decide
 
 /-- **The range theorems are not vacuous**: on a concrete canonical rows trie whose entries fit,
-under an `Env` with one digest size and injective bytes, at `pre.size = 1 ≤ width = 2 < 256`, the
+under an `Env` with one digest size and injective bytes, at `pre.size = 1 ≤ width = 2`, the
 range read lists two rows — not every row of the trie (`toyS3` is in it and not listed) — and (i),
 (ii) and the length bound hold of that listing. -/
 theorem range_rows_satisfiable :
@@ -791,8 +772,8 @@ theorem range_rows_satisfiable :
       l.Pairwise (fun a b => compare (rowKeyBytes E a.1).data (rowKeyBytes E b.1).data = .lt) :=
   ⟨toyEnv, toyRows, toyListing, toy_size, toy_inj, toy_canon, toy_fit, toy_range, rfl,
     ⟨(toyS3, .row 1 ByteArray.empty 0), by decide, by decide⟩,
-    range_rows_mem toy_size toy_canon (by decide) (by decide) toy_range,
-    range_rows_sorted toy_size (by decide) toy_inj toy_canon toy_fit (by decide) (by decide) toy_range⟩
+    range_rows_mem toy_size toy_canon (by decide) toy_range,
+    range_rows_sorted toy_size (by decide) toy_inj toy_canon toy_fit (by decide) toy_range⟩
 
 /-- **(c) The seal tooth**: on that listing, the arg-max seal is `toyS2`; drop its row and the seal
 a method computes is `toyS1` — and `range_rows_erase_not_exact` refutes the dropped listing, and its
@@ -805,7 +786,7 @@ theorem range_seal_tooth :
     rangePinBytes toyEnv 7 3 2 ⟨#[1]⟩ 0 (toyListing.erase (toyS2, .row 9 ByteArray.empty 0)) ≠
       rangePinBytes toyEnv 7 3 2 ⟨#[1]⟩ 0 toyListing :=
   ⟨by decide, by decide,
-    range_rows_erase_not_exact toy_size toy_canon (by decide) (by decide) toy_range (by decide),
+    range_rows_erase_not_exact toy_size toy_canon (by decide) toy_range (by decide),
     rangePinBytes_erase_ne _ _ _ _ _ _ (by decide)⟩
 
 /-! ## A turn with a range read is admitted (the admitted form is not vacuous)

@@ -101,13 +101,16 @@ abbrev RowKindF : Fin 2 → Type
 
 def rowKindWire : (s : Fin 2) → Stream (RowKindF s)
   | 0 => unit
-  | 1 => bytes8 Bounds.keyBytesMax
+  | 1 => bytesV Bounds.keyBytesMax
 
-/-- A rows key, as `rowKeyBytes`: the parent, the relation (one byte), the kind (0 a head, 1 a row),
-and a row's key (its length byte, then its bytes, at most `Bounds.keyBytesMax`). -/
+/-- A rows key, as `rowKeyBytes` (cv 01a14f7e): the parent, the relation (a LEB128 varint, KERNEL's
+`natBytes`), the kind (0 a head, 1 a row), and a row's key (a varint length, then its bytes, at most
+`Bounds.keyBytesMax`). A relation at or past 256 is refused `kernel/row-key` (KERNEL's bound: a parent
+holds at most 256 relations; the encoding itself is injective for every relation). -/
 def rowKey (dc : Stream D) : Stream (RowSlot D) :=
-  refine "kernel/row-key" (product dc (product nat8 (choice 2 rowKindWire)))
-    (fun | (p, rel, ⟨0, ()⟩) => some (.head p rel) | (p, rel, ⟨1, k⟩) => some (.row ⟨p, rel, k⟩))
+  refine "kernel/row-key" (product dc (product varint (choice 2 rowKindWire)))
+    (fun | (p, rel, ⟨0, ()⟩) => if rel < 256 then some (.head p rel) else none
+         | (p, rel, ⟨1, k⟩) => if rel < 256 then some (.row ⟨p, rel, k⟩) else none)
     (fun | .head p rel => (p, rel, ⟨0, ()⟩) | .row key => (key.parent, key.rel, ⟨1, key.k⟩))
 
 abbrev RowLeafF : Fin 2 → Type
@@ -191,15 +194,17 @@ floor (KERNEL-54), and each listed row's key with its leaf digest. -/
 abbrev RangePinWire (D : Type) := D × Nat × Nat × ByteArray × Nat × List (RowSlot D × D)
 
 /-- The range pin's hash input, as `rangePinBytes` spells it: `rowsPrefix` (the parent, the
-relation, the row kind byte 1, the width), the prefix (a length byte), the relation's floor (u64, read
+relation as a varint, the row kind byte 1, the width as a varint), the prefix (a varint length, cv
+01a14f7e), the relation's floor (u64, read
 from the World before the turn: a retract raises it, so a range that returns to an old listing after a
 retract pins differently, KERNEL-54), and the listing (a u32 count, then each row's key and leaf digest), at most `Bounds.rowsPerRelationMax` rows. The kind byte is read
-as the one byte `oneOf #[1]` admits; every other byte is refused `badTag`. -/
+as the one byte `oneOf #[1]` admits; every other byte is refused `badTag`. A relation or a width at or
+past 256 is refused `kernel/range-pin` (KERNEL's bounds). -/
 def rangePinWire (dc : Stream D) : Stream (RangePinWire D) :=
   refine "kernel/range-pin"
-    (product dc (product nat8 (product (oneOf #[1]) (product nat8 (product (bytes8 Bounds.keyBytesMax)
+    (product dc (product varint (product (oneOf #[1]) (product varint (product (bytesV Bounds.keyBytesMax)
       (product nat64 (rawList Bounds.rowsPerRelationMax (product (rowKey dc) dc))))))))
-    (fun (p, rel, _, w, pre, f, l) => some (p, rel, w, pre, f, l))
+    (fun (p, rel, _, w, pre, f, l) => if rel < 256 ∧ w < 256 then some (p, rel, w, pre, f, l) else none)
     (fun (p, rel, w, pre, f, l) => (p, rel, ⟨1, by simp⟩, w, pre, f, l))
 
 /-! ## Turns -/

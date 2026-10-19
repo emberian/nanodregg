@@ -528,19 +528,21 @@ def domRowLeaf : String := "nanodregg/kernel/row-leaf/v2"
 def domRowAbsent : String := "nanodregg/kernel/row-pin-absent/v2"
 def domRange : String := "nanodregg/kernel/range-pin/v2"
 
-/-- One byte of a small number (callers bound it below 256: `rel`, a key's length). -/
+/-- One byte: a constant tag (a kind, a flag). Never a number that can reach 256: those are
+`natBytes`. -/
 def byte8 (n : Nat) : ByteArray := ⟨#[UInt8.ofNat n]⟩
 
 /-- The bytes of a relation's rows, before the key's own bytes: the parent, the relation, the row
 tag (1) and the key width. A range read's prefix is this followed by the key prefix. -/
 def rowsPrefix (E : Env D) (parent : D) (rel width : Nat) : ByteArray :=
-  E.bytes parent ++ byte8 rel ++ byte8 1 ++ byte8 width
+  E.bytes parent ++ natBytes rel ++ byte8 1 ++ natBytes width
 
-/-- A rows key's bytes (KERNEL-46 amendment 1): a head is `parent ‖ rel ‖ 0`; a row is
-`parent ‖ rel ‖ 1 ‖ |k| ‖ k`. The length byte makes the encoding prefix-free by itself, so
-`rows_separate` needs no World invariant. -/
+/-- A rows key's bytes (KERNEL-46 amendment 1, cv 01a14f7e): a head is `parent ‖ rel ‖ 0`; a row is
+`parent ‖ rel ‖ 1 ‖ |k| ‖ k`, the relation and the length as `natBytes`. The encoding is injective and
+prefix-free for every key (`Kernel.Proofs.RowsSep.rowKeyBytes_append_inj`); only the trie's
+separation within its depth needs the key bounds (`rows_separateOn`). -/
 def rowKeyBytes (E : Env D) : RowSlot D → ByteArray
-  | .head p rel => E.bytes p ++ byte8 rel ++ byte8 0
+  | .head p rel => E.bytes p ++ natBytes rel ++ byte8 0
   | .row key => rowsPrefix E key.parent key.rel key.k.size ++ key.k
 
 /-- What a rows leaf commits to: a kind byte (head 0, row 1), its counters as eight little-endian
@@ -556,6 +558,9 @@ def rowLeafBytes : RowLeaf → ByteArray
       Nanodregg.Codec.Stream.nat64.bytes ver ++ (Nanodregg.Codec.Stream.rawBytes Bounds.valueBytesMax).bytes val
 
 def rowDigest (E : Env D) (l : RowLeaf) : D := E.hash domRowLeaf (rowLeafBytes l)
+
+/-- What a rows leaf digest hashes (`rowDigest`): `rowLeafBytes` in `domRowLeaf`. -/
+def rowLeafPre (l : RowLeaf) : String × ByteArray := (domRowLeaf, rowLeafBytes l)
 
 /-- The rows trie: routed by the key's bytes, most significant bit first, depth `Bounds.rowDepth`;
 nodes in the one trie domain; leaves by `rowDigest`. -/
@@ -627,7 +632,7 @@ the listing's length and each row's key bytes and leaf digest (its version insid
 row moving, landing or leaving under the prefix changes it. -/
 def rangePinBytes (E : Env D) (parent : D) (rel width : Nat) (pre : ByteArray) (floor : Nat)
     (l : List (RowSlot D × RowLeaf)) : ByteArray :=
-  rowsPrefix E parent rel width ++ byte8 pre.size ++ pre ++ Nanodregg.Codec.Stream.nat64.bytes floor ++
+  rowsPrefix E parent rel width ++ natBytes pre.size ++ pre ++ Nanodregg.Codec.Stream.nat64.bytes floor ++
     Nanodregg.Codec.Stream.nat32.bytes l.length ++
     (l.foldl (fun acc p => acc ++ rowKeyBytes E p.1 ++ E.bytes (rowDigest E p.2)) ByteArray.empty)
 

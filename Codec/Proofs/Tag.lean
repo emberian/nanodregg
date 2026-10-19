@@ -53,7 +53,7 @@ mutual
 theorem Shape.put_eq : ∀ (s : Shape) (b : ByteArray), s.put b = b ++ s.put ByteArray.empty
   | .unit, b | .u8, b | .u32, b | .u64, b | .varint, b | .digest, b | .u16, b | .u64be, b | .varint64, b => by
     simp only [Shape.put, push_eq_append, ByteArray.empty_append]
-  | .bytes max, b | .oneOf _, b | .bytes8 max, b => by
+  | .bytes max, b | .oneOf _, b | .bytes8 max, b | .bytesV max, b => by
     simp only [Shape.put]
     rw [putVarint_eq _ (b.push _), putVarint_eq _ (ByteArray.empty.push _), push_eq_append, push_eq_append,
       ByteArray.empty_append]
@@ -108,10 +108,10 @@ private def Shape.code : Shape → UInt8
   | .unit => 0 | .u8 => 1 | .u32 => 2 | .u64 => 3 | .varint => 4 | .digest => 5 | .bytes _ => 6
   | .option _ => 7 | .product _ _ => 8 | .sum _ _ => 9 | .array _ _ => 10 | .refine _ _ => 11
   | .framed _ _ => 12 | .tagged _ => 13 | .tree _ _ => 14 | .oneOf _ => 15 | .within _ _ => 16
-  | .bytes8 _ => 17 | .u16 => 18 | .u64be => 19 | .varint64 => 20
+  | .bytes8 _ => 17 | .u16 => 18 | .u64be => 19 | .varint64 => 20 | .bytesV _ => 21
 
 private def Shape.tail : Shape → ByteArray
-  | .bytes m | .bytes8 m => Stream.varint.bytes m
+  | .bytes m | .bytes8 m | .bytesV m => Stream.varint.bytes m
   | .option s => s.put ByteArray.empty
   | .product x y | .sum x y => x.put ByteArray.empty ++ y.put ByteArray.empty
   | .array m s | .within m s => Stream.varint.bytes m ++ s.put ByteArray.empty
@@ -127,7 +127,7 @@ private theorem Shape.put_cons (s : Shape) : s.put ByteArray.empty = ⟨#[s.code
   have e1 : ∀ k : UInt8, ByteArray.empty.push k = ⟨#[k]⟩ := fun k => rfl
   cases s with
   | unit | u8 | u32 | u64 | varint | digest | u16 | u64be | varint64 => rfl
-  | bytes m | bytes8 m => simp only [Shape.put, Shape.code, Shape.tail, pv, e1]
+  | bytes m | bytes8 m | bytesV m => simp only [Shape.put, Shape.code, Shape.tail, pv, e1]
   | option x => simp only [Shape.put, Shape.code, Shape.tail, e1]; rw [Shape.put_eq]
   | product x y | sum x y =>
     simp only [Shape.put, Shape.code, Shape.tail, e1]; rw [Shape.put_eq y, Shape.put_eq x, ByteArray.append_assoc]
@@ -198,6 +198,8 @@ theorem Shape.put_prefix : ∀ (s t : Shape) (x y : ByteArray),
     · obtain ⟨rfl, h2⟩ := varint_prefix _ _ _ _ hr
       obtain ⟨rfl, hx⟩ := Shape.put_prefix _ _ _ _ h2; exact ⟨rfl, hx⟩
     -- bytes8
+    · obtain ⟨rfl, hx⟩ := varint_prefix _ _ _ _ hr; exact ⟨rfl, hx⟩
+    -- bytesV
     · obtain ⟨rfl, hx⟩ := varint_prefix _ _ _ _ hr; exact ⟨rfl, hx⟩
 
 theorem Shape.putCases_prefix : ∀ (cs ds : List (UInt8 × Shape)) (x y : ByteArray), cs.length = ds.length →

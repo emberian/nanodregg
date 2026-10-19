@@ -105,14 +105,20 @@ theorem compare_lt_iff_bits_differIn {a b : ByteArray} (h : DifferIn a b) :
 variable {D : Type} [Ord D]
 
 omit [Ord D] in
-/-- A rows key within bounds is at most `n + 3 + Bounds.keyBytesMax` bytes, at a digest of `n`. -/
+/-- A rows key within bounds is at most `n + 5 + Bounds.keyBytesMax` bytes, at a digest of `n` (the
+relation and the length are LEB128 below 256: at most two bytes each, cv 01a14f7e). -/
 theorem rowKeyBytes_size_le {PD : D → Prop} {E : Env D} {n : Nat} (hs : ∀ d, (E.bytes d).size = n)
-    {s : RowSlot D} (hf : RowSlot.Fits PD s) : (rowKeyBytes E s).size ≤ n + 3 + Bounds.keyBytesMax := by
+    {s : RowSlot D} (hf : RowSlot.Fits PD s) : (rowKeyBytes E s).size ≤ n + 5 + Bounds.keyBytesMax := by
+  have hkb : Bounds.keyBytesMax = 128 := rfl
   cases s with
-  | head p rel => simp [rowKeyBytes, byte8, ByteArray.size_append, hs]; omega
+  | head p rel =>
+    have := natBytes_size_le_two hf.2
+    simp only [rowKeyBytes, ByteArray.size_append, hs, byte8_size]; omega
   | row key =>
+    have h1 := natBytes_size_le_two hf.2.1
+    have h2 := natBytes_size_le_two (r := key.k.size) (by have := hf.2.2; omega)
     have := hf.2.2
-    simp [rowKeyBytes, rowsPrefix, byte8, ByteArray.size_append, hs]; omega
+    simp only [rowKeyBytes, rowsPrefix, ByteArray.size_append, hs, byte8_size]; omega
 
 omit [Ord D] in
 /-- **Two different rows keys within bounds differ at a byte inside both**: the rows key codec is
@@ -144,7 +150,7 @@ theorem rowKeyBytes_differIn {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD
   · exact pre hs hs' hle hagree
   · exact (pre hs' hs hle fun m h1 h2 => (hagree m h2 h1).symm).symm
 
-theorem rowDepth_bound {k n : Nat} (hn : n ≤ 32) (hk : k / 8 < n + 3 + Bounds.keyBytesMax) : k < Bounds.rowDepth := by
+theorem rowDepth_bound {k n : Nat} (hn : n ≤ 32) (hk : k / 8 < n + 5 + Bounds.keyBytesMax) : k < Bounds.rowDepth := by
   unfold Bounds.rowDepth Bounds.keyBytesMax at *; omega
 
 omit [Ord D] in
@@ -157,8 +163,8 @@ theorem rowSlotFits_of_fits {PD : D → Prop} {s : RowSlot D} (h : RowSlot.Fits 
 `rows_separateOn`. -/
 theorem rows_sepAt {E : Env D} {n : Nat} (hE : E.Lawful n) {l : List (RowSlot D × RowLeaf)}
     (hl : ∀ p ∈ l, RowSlotFits p.1) : Trie.SepAt (rowSpec E) 0 l :=
-  fun p hp q hq hne =>
-    let ⟨i, hi, h⟩ := rows_separateOn hE (hl p hp) (hl q hq) hne
+  fun p hp _ _ hne =>
+    let ⟨i, hi, h⟩ := rows_separateOn hE (hl p hp) hne
     ⟨i, Nat.zero_le i, hi, h⟩
 
 /-- **The rows trie's routing is the order of the key bytes.** Over a lawful `Env` and a digest codec

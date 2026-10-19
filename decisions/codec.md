@@ -1595,3 +1595,46 @@ HOST-14, who reads it in `reached_size_le`, and with KERNEL-22, who accepted the
   ratio; the docstrings cite the kernel bound rather than restating it; the measures and the witness `slackWorld` live in a def-module (C3), so HOST can name them.
 
 **Flag day:** none. No wire, tag or vector moves, and nothing re-geneses.
+
+## CODEC-40 · The rows encoding is a varint: relation and width as LEB128, key and prefix behind a varint length (cv 01a14f7e with KERNEL-22's K22-ROWS; CODEC-13, 2026-10-19)
+
+**Shape.** KERNEL replaced `byte8` with `natBytes` (LEB128, proved equal to `varint.bytes`) for the relation and the
+key length in `rowKeyBytes`, and for the width and the prefix length in `rangePinBytes`. A relation of 256 used to
+wrap to 0; every key is now injective by construction. The codecs follow, or `rowKeyBytes_eq` would be false.
+- New Shape `bytesV max` (code 21) and stream `Stream.bytesV`: a varint length, then the bytes, at most `max`.
+  `bytesV_bytes` and `bytesV_lawfulOn` (max < 2^32). The Tag proofs take the constructor (put_eq, code, tail,
+  put_cons, put_prefix).
+- `kernel/row-key` = parent ‖ varint rel ‖ kind ‖ (row: bytesV keyBytesMax). A relation at or past 256 is refused
+  `kernel/row-key` by name, through refine_lawfulOn_where with Q = rel < 256. `RowSlot.Fits` is unchanged, so the
+  check is as strict as the one-byte field was.
+- `kernel/range-pin`: the relation and the width are varints and the prefix is bytesV. A relation or width at or
+  past 256 is refused `kernel/range-pin` by name.
+- `rowKeyBytes_eq` and `rangePinBytes_eq` are re-proved on `natBytes_eq`.
+- `rowKey_size` still equals `RowSlot.weight` exactly, because KERNEL's weight counts `(natBytes rel).size` and
+  `(natBytes |k|).size`. So `turn_size_logWeight` (record bytes = `Turn.logWeight`) holds unchanged.
+- RowOrder takes KERNEL-22's advisory hunk: `rowKeyBytes_size_le` is n + 5 + keyBytesMax, `rowDepth_bound` follows,
+  and `rows_sepAt` uses the one-sided `rows_separateOn`.
+- `rangeRead` (the turn's log field) keeps `nat8` and `bytes8`. It is a bounded wire field that is refused at decode
+  past its bound and is never a hash preimage, and `RangeRead.weight` is KERNEL's, unchanged.
+- ListingPin's rows plant is re-pinned by hand: relation 140 is now `8c 01`, one byte more per key (4 keys). The
+  World and carried plants hold no rows and are unchanged.
+- WorldSize: `rowItem_slack`'s slot-weight floor (≥ 34) now reads `natBytes_size_pos`. No statement changed.
+- Teeth (WorldTooth): `rowKey_refuses_wide_key` now spells 129 as `81 01`. `rowKey_refuses_relation_256` (`80 02`) is
+  refused `kernel/row-key` by name, where the one-byte field wrapped it to relation 0. `rowKey_reads_relation_255` is
+  the accepted twin.
+
+**Vectors.** New site `bytesV`, 6 rows: empty, 127 bytes and 128 bytes (a two-byte length) read back; refused are a
+length of 129 (`pastBound`), `80 00` (`varint/overlong`) and a short body (`truncated`). `kernel/row-key` gains the
+relation's varint edge (127 and 128, read back) and its boundary pair (255 read back, 256 refused by name).
+`kernel/range-pin` gains the relation's and the width's pairs (255 read back, 256 refused). 242 vectors over 55
+sites. `--write` into an empty file gives the table byte for byte, and no row under an unchanged tag changed.
+Re-pinned because their tags moved (23): row-key, row-touch, range-pin, turn, unsigned, call, step, row-order, rows,
+rows-headed, rows-parented, journal, refusals, refusals-disjoint, steps, refusals-counted, world-budget, carried,
+carried-journal, carried-rows, carried-rows-headed, carried-rows-parented, host/base/index-count. No Rust table
+carries these tags, and the five emits check unchanged.
+
+**Flag day (with KERNEL-22's `kernel!`).**
+- Shapes moved: rowKey, so every turn, unsigned call, call, step, World, carried and base tag moves. A signed call
+  under the old tag refuses, as does a Store or carried file stamped with the old tags. Re-genesis.
+- Bytes are identical below 128. Every rows key with relation or key length ≥ 128, and every range pin with relation,
+  width or prefix length ≥ 128, changes bytes, and with them its trie path or pin.

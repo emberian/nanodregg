@@ -283,9 +283,18 @@ omit [Ord D] [DecidableEq D] in
 /-- A row touch adds to the World at most `84/61` of its log bytes. -/
 theorem RowTouch.growth_le_weight (x : RowTouch D) : 61 * x.growth ≤ 84 * x.weight := by
   rcases x with ⟨slot, seen, act⟩
-  cases slot <;> cases act <;>
-    simp only [RowTouch.growth, RowTouch.weight, RowSlot.weight, RowLeaf.weight, RowAct.logWeight,
-      digestWeight, counterWeight, headerWeight] <;> split <;> omega
+  cases slot with
+  | head p rel =>
+      have := natBytes_size_pos rel
+      cases act <;>
+        simp only [RowTouch.growth, RowTouch.weight, RowSlot.weight, RowLeaf.weight, RowAct.logWeight,
+          digestWeight, counterWeight, headerWeight] <;> split <;> omega
+  | row key =>
+      have := natBytes_size_pos key.rel
+      have := natBytes_size_pos key.k.size
+      cases act <;>
+        simp only [RowTouch.growth, RowTouch.weight, RowSlot.weight, RowLeaf.weight, RowAct.logWeight,
+          digestWeight, counterWeight, headerWeight] <;> split <;> omega
 
 omit [Ord D] [DecidableEq D] in
 /-- **A turn adds to the World at most `84/61` of its log record** (KERNEL-55): term by term, a
@@ -306,14 +315,18 @@ theorem Turn.growth_le_logWeight (t : Turn D) : 61 * t.growth ≤ 84 * t.logWeig
   omega
 
 omit [Ord D] [DecidableEq D] in
-/-- **The tooth: `84/61` is attained** by a row touch, a declare at a head with no pin (growth 84, log
-61), so `RowTouch.growth_le_weight`'s ratio cannot be lowered. At turn level (80 fixed log bytes per
-turn) 84/61 is the supremum over unboundedly many such declares, not an attained value. -/
-theorem RowTouch.declare_growth_tight (p : D) (rel limit cap width : Nat) (retract : Bool) :
+/-- **The tooth: `84/61` is attained** by a row touch, a declare at a head of a relation below 128 (a
+one-byte `natBytes`) with no pin (growth 84, log 61), so `RowTouch.growth_le_weight`'s ratio cannot be
+lowered. A relation of 128 or more has a two-byte slot on both sides, and a lower ratio. At turn level
+(80 fixed log bytes per turn) 84/61 is the supremum over unboundedly many such declares, not an
+attained value. -/
+theorem RowTouch.declare_growth_tight (p : D) {rel : Nat} (hrel : rel < 128) (limit cap width : Nat)
+    (retract : Bool) :
     61 * (RowTouch.mk (.head p rel) none (.declare limit cap width retract)).growth =
       84 * (RowTouch.mk (.head p rel) none (.declare limit cap width retract)).weight := by
+  have h1 : (natBytes rel).size = 1 := by rw [natBytes_eq, Nanodregg.Codec.Stream.varint_bytes_small hrel]; rfl
   simp [RowTouch.growth, RowTouch.weight, RowSlot.weight, RowLeaf.weight, RowAct.logWeight,
-    digestWeight, counterWeight]
+    digestWeight, counterWeight, h1]
 
 end Turn
 

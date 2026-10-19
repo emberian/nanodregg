@@ -414,8 +414,9 @@ theorem cell_size (c : Cell) : cell.size c = c.weight := by
 
 theorem rowKey_size {dc : Stream D} (hdc : ∀ d, dc.size d = 32) (s : RowSlot D) :
     (rowKey dc).size s = s.weight := by
-  cases s <;> simp [rowKey, RowSlot.weight, digestWeight, refine, product, nat8, choice, tagged, unit, bytes8,
-    rowKindWire, hdc] <;> omega
+  have hv : ∀ x, (natBytes x).size = varintSize x := fun x => by rw [natBytes_eq, varintSize_eq]
+  cases s <;> simp [rowKey, RowSlot.weight, digestWeight, refine, product, varint, varintOf, choice, tagged, unit,
+    bytesV, rowKindWire, hdc, hv] <;> omega
 
 theorem rowAct_size (a : RowAct) : rowAct.size a = a.logWeight := by
   cases a <;> simp [rowAct, rowActWire, RowAct.logWeight, counterWeight, headerWeight, refine, choice, tagged, unit,

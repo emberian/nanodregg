@@ -1,6 +1,7 @@
 import Codec.Kernel
 import Codec.Proofs.Raw
 import Codec.Proofs.Varint
+import Kernel.Proofs.Bytes
 
 /-!
 # The rows codecs (KERNEL-46/48): lawful, and the kernel's own byte functions ARE their bytes
@@ -8,7 +9,7 @@ import Codec.Proofs.Varint
 * `rowKey_lawfulOn`, `rowLeaf_lawfulOn` (the World's leaf, version and floor as u64 varints),
   `rowLeafHashed_lawfulOn` (the row pin's preimage), `rowAct_lawfulOn`, `rowTouch_lawfulOn`, `rangeRead_lawfulOn`,
   `rangePinWire_lawfulOn`: each rows codec is lawful on the values within KERNEL's wire bounds (a
-  relation below 256, a key and a prefix of at most `Bounds.keyBytesMax` bytes, a value of at most
+  relation below 256, refused by name past it since the relation is a varint (cv 01a14f7e), a key and a prefix of at most `Bounds.keyBytesMax` bytes, a value of at most
   `Bounds.valueBytesMax`, counters below 2^64).
 * `rowKeyBytes_eq`, `rowLeafBytes_eq`, `rangePinBytes_eq`: KERNEL's `rowKeyBytes` (what the rows trie
   routes by), `rowLeafBytes` (what a row pin hashes) and `rangePinBytes` (what a range pin hashes) are
@@ -53,27 +54,36 @@ abbrev RowKindWireFits : (s : Fin 2) → RowKindF s → Prop
 
 theorem rowKindWire_lawfulOn : ∀ s, LawfulOn (RowKindWireFits s) (rowKindWire s)
   | 0 => unit_lawful.on
-  | 1 => bytes8_lawfulOn _ (by decide)
+  | 1 => bytesV_lawfulOn _ (by decide)
 
 theorem rowKey_lawfulOn {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc) :
     LawfulOn (RowSlot.Fits PD) (rowKey dc) := by
   unfold rowKey
-  refine (refine_lawfulOn (product_lawfulOn hd (product_lawfulOn nat8_lawfulOn
-    (choice_lawfulOn 2 (by decide) rowKindWire_lawfulOn))) "kernel/row-key" ?_ ?_).mono ?_ ?_
-  · intro y _; cases y <;> rfl
+  refine (refine_lawfulOn_where (product_lawfulOn hd (product_lawfulOn varint_lawfulOn
+    (choice_lawfulOn 2 (by decide) rowKindWire_lawfulOn))) "kernel/row-key"
+    (Q := fun y : RowSlot D => match y with | .head _ rel => rel < 256 | .row k => k.rel < 256) ?_ ?_ ?_).mono ?_ ?_
+  · intro y _ hq
+    cases y with
+    | head p rel => exact if_pos hq
+    | row k => exact if_pos hq
   · intro x y h
     obtain ⟨p, rel, s, v⟩ := x
     match s, v, h with
-    | 0, (), h => simp at h; subst h; rfl
-    | 1, k, h => simp at h; subst h; rfl
+    | 0, (), h => by_cases hr : rel < 256 <;> simp [hr] at h; subst h; rfl
+    | 1, k, h => by_cases hr : rel < 256 <;> simp [hr] at h; subst h; rfl
+  · intro x y h
+    obtain ⟨p, rel, s, v⟩ := x
+    match s, v, h with
+    | 0, (), h => by_cases hr : rel < 256 <;> simp [hr] at h; subst h; exact hr
+    | 1, k, h => by_cases hr : rel < 256 <;> simp [hr] at h; subst h; exact hr
   · intro y h
     cases y with
-    | head p rel => exact ⟨h.1, h.2.1⟩
-    | row k => exact ⟨h.1, h.2.1, h.2.2⟩
+    | head p rel => exact ⟨h.1.1, h.2⟩
+    | row k => exact ⟨h.1.1, h.2, h.1.2.2⟩
   · intro y h
     cases y with
-    | head p rel => exact ⟨h.1, h.2, trivial⟩
-    | row k => exact ⟨h.1, h.2.1, h.2.2⟩
+    | head p rel => exact ⟨⟨h.1, Nat.lt_trans h.2 (by decide), trivial⟩, h.2⟩
+    | row k => exact ⟨⟨h.1, Nat.lt_trans h.2.1 (by decide), h.2.2⟩, h.2.1⟩
 
 /-- **`rowKeyBytes` is `rowKey`'s bytes**, at any digest codec that writes `E.bytes`. -/
 theorem rowKeyBytes_eq {dc : Stream D} {E : Env D}
@@ -82,15 +92,15 @@ theorem rowKeyBytes_eq {dc : Stream D} {E : Env D}
   cases s with
   | head p rel =>
     unfold rowKey; rw [refine_bytes]; dsimp only
-    rw [product_bytesOn (product_lawfulOn nat8_lawfulOn (choice_lawfulOn 2 (by decide) rowKindWire_lawfulOn)),
+    rw [product_bytesOn (product_lawfulOn varint_lawfulOn (choice_lawfulOn 2 (by decide) rowKindWire_lawfulOn)),
       product_bytesOn (choice_lawfulOn 2 (by decide) rowKindWire_lawfulOn), hk, hb]
-    simp only [rowKeyBytes, byte8, nat8_bytes, u8_bytes, ByteArray.append_assoc]
+    simp only [rowKeyBytes, byte8, natBytes_eq, ByteArray.append_assoc]
     rfl
   | row key =>
     unfold rowKey; rw [refine_bytes]; dsimp only
-    rw [product_bytesOn (product_lawfulOn nat8_lawfulOn (choice_lawfulOn 2 (by decide) rowKindWire_lawfulOn)),
+    rw [product_bytesOn (product_lawfulOn varint_lawfulOn (choice_lawfulOn 2 (by decide) rowKindWire_lawfulOn)),
       product_bytesOn (choice_lawfulOn 2 (by decide) rowKindWire_lawfulOn), hk, hb]
-    simp only [rowKeyBytes, rowsPrefix, byte8, nat8_bytes, u8_bytes, rowKindWire, ByteArray.append_assoc]
+    simp only [rowKeyBytes, rowsPrefix, byte8, natBytes_eq, rowKindWire, ByteArray.append_assoc]
     rfl
 
 /-- **`rowKeyBytes` is injective on the rows keys within bounds** (what the rows trie's separation
@@ -282,18 +292,31 @@ def RangePinWire.Fits (PD : D → Prop) (x : RangePinWire D) : Prop :=
 theorem rangePinWire_lawfulOn {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc) :
     LawfulOn (RangePinWire.Fits PD) (rangePinWire dc) := by
   unfold rangePinWire
-  refine (refine_lawfulOn (product_lawfulOn hd (product_lawfulOn nat8_lawfulOn (product_lawfulOn (oneOf_lawful _).on
-    (product_lawfulOn nat8_lawfulOn (product_lawfulOn (bytes8_lawfulOn _ (by decide)) (product_lawfulOn nat64_lawfulOn
+  refine (refine_lawfulOn_where (product_lawfulOn hd (product_lawfulOn varint_lawfulOn (product_lawfulOn (oneOf_lawful _).on
+    (product_lawfulOn varint_lawfulOn (product_lawfulOn (bytesV_lawfulOn _ (by decide)) (product_lawfulOn nat64_lawfulOn
       (rawList_lawfulOn (product_lawfulOn (rowKey_lawfulOn hd) hd) _ (by decide))))))))
-    "kernel/range-pin" ?_ ?_).mono ?_ ?_
-  · intro y _; rfl
+    "kernel/range-pin" (Q := fun y : RangePinWire D => y.2.1 < 256 ∧ y.2.2.1 < 256) ?_ ?_ ?_).mono ?_ ?_
+  · intro y _ hq; exact if_pos hq
   · intro x y h
     obtain ⟨p, rel, ⟨t, ht⟩, w, pre, f, l⟩ := x
-    simp at h; subst h
-    have : t = 1 := by simpa using ht
-    subst this; rfl
-  · intro y h; exact ⟨h.1, h.2.1, h.2.2.2.1, h.2.2.2.2.1, h.2.2.2.2.2.1, h.2.2.2.2.2.2⟩
-  · intro y h; exact ⟨h.1, h.2.1, trivial, h.2.2.1, h.2.2.2.1, h.2.2.2.2.1, h.2.2.2.2.2⟩
+    dsimp only at h
+    by_cases hq : rel < 256 ∧ w < 256
+    · rw [if_pos hq, Option.some.injEq] at h
+      subst h
+      have : t = 1 := by simpa using ht
+      subst this; rfl
+    · rw [if_neg hq] at h; cases h
+  · intro x y h
+    obtain ⟨p, rel, ⟨t, ht⟩, w, pre, f, l⟩ := x
+    dsimp only at h
+    by_cases hq : rel < 256 ∧ w < 256
+    · rw [if_pos hq, Option.some.injEq] at h
+      subst h; exact hq
+    · rw [if_neg hq] at h; cases h
+  · intro y h; exact ⟨h.1.1, h.2.1, h.2.2, h.1.2.2.2.2.1, h.1.2.2.2.2.2.1, h.1.2.2.2.2.2.2⟩
+  · intro y h
+    exact ⟨⟨h.1, Nat.lt_trans h.2.1 (by decide), trivial, Nat.lt_trans h.2.2.1 (by decide), h.2.2.2.1, h.2.2.2.2.1,
+      h.2.2.2.2.2⟩, h.2.1, h.2.2.1⟩
 
 private theorem foldl_pin {E : Env D} {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc)
     (hb : ∀ d, dc.bytes d = E.bytes d) : ∀ (l : List (RowSlot D × RowLeaf)) (acc : ByteArray),
@@ -313,14 +336,14 @@ theorem rangePinBytes_eq {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc)
       (rangePinWire dc).bytes (parent, rel, width, pre, floor, l.map fun q => (q.1, rowDigest E q.2)) := by
   have hl := rawList_lawfulOn (product_lawfulOn (rowKey_lawfulOn hd) hd) Bounds.rowsPerRelationMax (by decide)
   have h6 := product_lawfulOn nat64_lawfulOn hl
-  have h5 := product_lawfulOn (bytes8_lawfulOn Bounds.keyBytesMax (by decide)) h6
-  have h4 := product_lawfulOn nat8_lawfulOn h5
+  have h5 := product_lawfulOn (bytesV_lawfulOn Bounds.keyBytesMax (by decide)) h6
+  have h4 := product_lawfulOn varint_lawfulOn h5
   have h3 := product_lawfulOn (oneOf_lawful #[1]).on h4
-  have h2 := product_lawfulOn nat8_lawfulOn h3
+  have h2 := product_lawfulOn varint_lawfulOn h3
   unfold rangePinWire
   rw [refine_bytes, product_bytesOn h2, product_bytesOn h3, product_bytesOn h4, product_bytesOn h5, product_bytesOn h6,
-    product_bytesOn hl, rawList_bytes (product_lawfulOn (rowKey_lawfulOn hd) hd), bytes8_bytes, hb]
-  simp only [rangePinBytes, rowsPrefix, byte8, nat8_bytes, u8_bytes, nat32_bytes, List.length_map]
+    product_bytesOn hl, rawList_bytes (product_lawfulOn (rowKey_lawfulOn hd) hd), bytesV_bytes, hb]
+  simp only [rangePinBytes, rowsPrefix, byte8, natBytes_eq, nat32_bytes, List.length_map]
   rw [foldl_pin hd hb, ByteArray.empty_append]
   simp only [ByteArray.append_assoc]
   rfl

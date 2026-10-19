@@ -71,9 +71,12 @@ theorem rowItem_size {dc : Stream D} (hdc : ∀ d, dc.size d = 32) (p : RowSlot 
     (product (rowKey dc) rowLeaf).size p + 8 = rowEntryWeight p + rowItemVersion p := by
   obtain ⟨s, l⟩ := p
   have hk := rowKey_size hdc s
-  cases l <;>
-    simp [product, rowLeaf, rowLeafWire, rowLeafToWire, refine, choice, tagged, nat64, Stream.bool, u8,
-      rawBytes, rowEntryWeight, RowLeaf.weight, counterWeight, headerWeight, rowItemVersion, hk] <;> omega
+  have hl : rowLeaf.size l + 8 = l.weight + rowItemVersion (s, l) := by
+    cases l <;>
+      simp [rowLeaf, rowLeafWire, rowLeafToWire, refine, choice, tagged, product, nat64, Stream.bool, u8, rawBytes,
+        RowLeaf.weight, counterWeight, headerWeight, rowItemVersion] <;> omega
+  show (rowKey dc).size s + rowLeaf.size l + 8 = s.weight + l.weight + rowItemVersion (s, l)
+  omega
 
 omit [Ord D] in
 theorem journalItem_size {dc : Stream D} (hdc : ∀ d, dc.size d = 32) (p : D × (Nat × D)) :
@@ -169,7 +172,10 @@ theorem rowItem_slack {dc : Stream D} (hdc : ∀ d, dc.size d = 32) (p : RowSlot
     entrySlack.2 * (product (rowKey dc) rowLeaf).size p ≤ entrySlack.1 * rowEntryWeight p := by
   have h := rowItem_size hdc p
   obtain ⟨s, l⟩ := p
-  have hs : 34 ≤ s.weight := by cases s <;> simp [RowSlot.weight, digestWeight] <;> omega
+  have hs : 34 ≤ s.weight := by
+    cases s with
+    | head _ rel => have := natBytes_size_pos rel; simp only [RowSlot.weight, digestWeight]; omega
+    | row k => have := natBytes_size_pos k.rel; simp only [RowSlot.weight, digestWeight]; omega
   cases l with
   | head c su li k wd r f =>
     have hv : varint64.size f ≤ 10 := by rw [varint64_size_eq]; exact varint64_size_le hp.2.2.2.2.2

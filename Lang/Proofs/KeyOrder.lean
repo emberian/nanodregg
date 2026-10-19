@@ -334,36 +334,24 @@ private theorem listed_prefix {D : Type} {E : Kernel.Env D} {n : Nat} (hsize : �
     (hs : startsWith (rowsPrefix E parent rel width ++ pre) (rowKeyBytes E (.row key)) = true) :
     (rowKeyBytes E (.row key)).data.toList =
       (rowsPrefix E parent rel width).data.toList ++ key.k.data.toList := by
-  have hsz : ∀ p r w, (rowsPrefix E p r w).size = n + 3 := fun p r w => by
-    simp [rowsPrefix, byte8, hsize]
-  unfold startsWith at hs
-  rw [decide_eq_true_iff] at hs
-  have hl := congrArg (fun b : ByteArray => b.data.toList.take (n + 3)) hs
-  simp only [rowKeyBytes, ByteArray.data_extract, Array.toList_extract, ByteArray.data_append,
-    Array.toList_append, List.drop_zero, List.take_take] at hl
-  have e1 : (rowsPrefix E key.parent key.rel key.k.size).data.toList.length = n + 3 := by
-    simpa using hsz key.parent key.rel key.k.size
-  have e2 : (rowsPrefix E parent rel width).data.toList.length = n + 3 := by
-    simpa using hsz parent rel width
-  rw [Nat.min_eq_left (by simp [ByteArray.size_append, hsz]), List.take_append_of_le_length (by omega),
-    List.take_of_length_le (by omega), List.take_append_of_le_length (by omega),
-    List.take_of_length_le (by omega)] at hl
-  simp only [rowKeyBytes, ByteArray.data_append, Array.toList_append, hl]
+  obtain ⟨p, k, hk, hp, hw⟩ := key_under_prefix E hsize hs
+  cases hk
+  simp only [rowKeyBytes, rowsPrefix, ByteArray.data_append, Array.toList_append, hp, hw]
 
 /-- **A range read lists its rows in the relation's declared key order** (LANG-57): on the kernel's
 own premises for `range_rows_exact` (one digest size `n ≤ 32`, injective digest bytes, a canonical
-rows trie whose entries fit, `pre.size ≤ width < 256`), for a relation whose key fields are
+rows trie whose entries fit, `pre.size ≤ width`), for a relation whose key fields are
 fixed-width, any two rows the read lists, the earlier first, whose key bytes are `keyBytes` of keys
 `k` and `k'`, have `k` strictly before `k'` in declared order. -/
 theorem range_keys_ascend {D : Type} [DecidableEq D] {E : Kernel.Env D} {n : Nat}
     (hsize : ∀ d, (E.bytes d).size = n) (hn : n ≤ 32) (hinj : Function.Injective E.bytes)
     {r : Rows D} (hc : Trie.Canon (rowSpec E) 0 r) (hfit : ∀ p ∈ r.toList, rowFits p.1 p.2 = true)
-    {parent : D} {rel width : Nat} {pre : ByteArray} (hw : pre.size ≤ width) (hw' : width < 256) {most : Nat}
+    {parent : D} {rel width : Nat} {pre : ByteArray} (hw : pre.size ≤ width) {most : Nat}
     {l : List (RowSlot D × RowLeaf)} (h : rangeRows E r parent rel width pre most = some l)
     {d : RelDecl} (hfix : d.key.all (fun f => keyFixed f.2) = true) :
     l.Pairwise fun a b => ∀ (ka kb : RowKey D) (k k' : Data), a.1 = .row ka → b.1 = .row kb →
       keyBytes d k = some ka.k → keyBytes d k' = some kb.k → keyOrder d.key k k' = .lt := by
-  obtain ⟨hmem, hsort, -⟩ := range_rows_exact_of hsize hn hinj hc hfit hw hw' h
+  obtain ⟨hmem, hsort, -⟩ := range_rows_exact_of hsize hn hinj hc hfit hw h
   refine List.Pairwise.imp_of_mem (fun {a b} ha hb hab => ?_) hsort
   intro ka kb k k' hka hkb hk hk'
   have hsa := ((hmem a.1 a.2).1 ha).2
@@ -383,7 +371,7 @@ it). `keyBytes_keyOf` turns the reader's keys into the writer's bytes. -/
 theorem range_keys_ascend_read {D : Type} [DecidableEq D] {E : Kernel.Env D} {n : Nat}
     (hsize : ∀ d, (E.bytes d).size = n) (hn : n ≤ 32) (hinj : Function.Injective E.bytes)
     {r : Rows D} (hc : Trie.Canon (rowSpec E) 0 r) (hfit : ∀ p ∈ r.toList, rowFits p.1 p.2 = true)
-    {parent : D} {rel width : Nat} {pre : ByteArray} (hw : pre.size ≤ width) (hw' : width < 256) {most : Nat}
+    {parent : D} {rel width : Nat} {pre : ByteArray} (hw : pre.size ≤ width) {most : Nat}
     {l : List (RowSlot D × RowLeaf)} (h : rangeRows E r parent rel width pre most = some l)
     {S : Ty} {row : List (Label × Ty)} {ℓ : Label} {d : RelDecl} (hd : checkRel S row (ℓ, d) = .ok ()) :
     l.Pairwise fun a b => ∀ (ka kb : RowKey D) (k k' : Data), a.1 = .row ka → b.1 = .row kb →
@@ -405,7 +393,7 @@ theorem range_keys_ascend_read {D : Type} [DecidableEq D] {E : Kernel.Env D} {n 
       simp only [Bool.and_eq_true, decide_eq_true_eq] at hk
       exact hk.1.2
     · cases hd
-  refine (range_keys_ascend hsize hn hinj hc hfit hw hw' h hfix).imp ?_
+  refine (range_keys_ascend hsize hn hinj hc hfit hw h hfix).imp ?_
   intro a b hab ka kb k k' hka hkb hk hk'
   exact hab ka kb k k' hka hkb (keyBytes_keyOf hwf hk) (keyBytes_keyOf hwf hk')
 
@@ -503,7 +491,7 @@ private theorem range_keys_ascend_read_satisfiable :
     Trie.canon_insert _ _ _ (Trie.canon_insert _ _ _ (Trie.canon_insert _ _ _ (Trie.canon_empty _ 0)))
   have hfit : ∀ p ∈ queueRows.toList, rowFits p.1 p.2 = true := by decide
   have hd : checkRel (.record []) [] ("rings", queueDecl) = .ok () := rfl
-  have hp := range_keys_ascend_read (fun _ => rfl) (by decide) hinj hc hfit (by decide) (by decide)
+  have hp := range_keys_ascend_read (fun _ => rfl) (by decide) hinj hc hfit (by decide)
     queue_lists_1_first hd
   exact (List.pairwise_pair.1 hp) _ _ _ _ rfl rfl rfl rfl
 

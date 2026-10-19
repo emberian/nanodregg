@@ -747,12 +747,26 @@ theorem rows_reads_canonical_listing :
      | .ok t => t.toList == headed 1
      | .error _ => false) = true := by decide +kernel
 
-/-- **The plant**: a row key whose length byte claims 129 bytes, one past `Bounds.keyBytesMax`, is
-refused `pastBound` at that byte, before any key byte is read. -/
+/-- **The plant**: a row key whose length varint claims 129 bytes (`81 01`, cv 01a14f7e), one past
+`Bounds.keyBytesMax`, is refused `pastBound` at that length, before any key byte is read. -/
 theorem rowKey_refuses_wide_key :
-    (match (rowKey Sim.dc).decode (Sim.dc.bytes 1 ++ ⟨#[7, 1, 129]⟩) with
+    (match (rowKey Sim.dc).decode (Sim.dc.bytes 1 ++ ⟨#[7, 1, 0x81, 0x01]⟩) with
      | .error (.pastBound _ 128 129) => true
      | _ => false) = true := by decide +kernel
+
+/-- **The plant** (cv 01a14f7e): relation 256 as its varint (`80 02`) is refused `kernel/row-key` by
+name. Under the one-byte relation it wrapped to relation 0; as a varint it is its own number, and the
+kernel's bound refuses it. -/
+theorem rowKey_refuses_relation_256 :
+    (match (rowKey Sim.dc).decode (Sim.dc.bytes 1 ++ ⟨#[0x80, 0x02, 0]⟩) with
+     | .error (.rejected _ "kernel/row-key") => true
+     | _ => false) = true := by decide +kernel
+
+/-- The twin: relation 255 (`ff 01`, two bytes) reads back as the head of relation 255. -/
+theorem rowKey_reads_relation_255 :
+    (match (rowKey Sim.dc).decode (Sim.dc.bytes 1 ++ ⟨#[0xff, 0x01, 0]⟩) with
+     | .ok s => decide (s = .head 1 255)
+     | .error _ => false) = true := by decide +kernel
 
 /-- The twin: a key of exactly `Bounds.keyBytesMax` bytes is within the codec's domain, so it reads back. -/
 theorem rowKey_reads_widest_key (k : ByteArray) (hk : k.size = Bounds.keyBytesMax) :

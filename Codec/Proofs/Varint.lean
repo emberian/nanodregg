@@ -204,4 +204,39 @@ theorem varint64_size_eq (v : Nat) : varint64.size v = (varint64.bytes v).size :
 theorem varint64_size_max : (varint64.bytes (2 ^ 64 - 1)).size = 10 :=
   Nat.le_antisymm (varint64_size_le (by decide)) (varint_size_ge _ 9 (by decide))
 
+/-! ## A byte string behind a LEB128 length (cv 01a14f7e) -/
+
+theorem bytesV_bytes (max : Nat) (v : ByteArray) : (bytesV max).bytes v = varint.bytes v.size ++ v := rfl
+
+/-- **`bytesV` is lawful on the strings of at most `max` bytes.** -/
+theorem bytesV_lawfulOn (max : Nat) (fits : max < 2 ^ 32) : LawfulOn (·.size ≤ max) (bytesV max) where
+  put_eq v buf := by
+    rw [bytesV_bytes]
+    show putVarint v.size buf ++ v = _
+    rw [putVarint_eq, ByteArray.append_assoc]; rfl
+  size_eq v := by rw [bytesV_bytes, ByteArray.size_append, ← varintSize_eq]; rfl
+  get_of_occurs v b i hv h := by
+    rw [bytesV_bytes] at h ⊢
+    obtain ⟨h1, ⟨hs, he⟩⟩ := occursAt_append.mp h
+    have hget := varint_lawfulOn.get_of_occurs _ _ _ (by omega) h1
+    simp only [bytesV, hget, hv, ↓reduceIte, hs, ByteArray.size_append, ← Nat.add_assoc, he]
+  occurs_of_get {b i v j} h := by
+    simp only [bytesV] at h
+    split at h
+    · cases h
+    · rename_i n k hk
+      split at h
+      · rename_i hmax
+        split at h
+        · rename_i hb
+          cases h
+          obtain ⟨-, rfl, o1⟩ := varint_lawfulOn.occurs_of_get hk
+          have hsz : (b.extract (i + (varint.bytes n).size) (i + (varint.bytes n).size + n)).size = n := by
+            rw [ByteArray.size_extract]; omega
+          rw [bytesV_bytes, hsz]
+          refine ⟨by omega, by simp only [ByteArray.size_append, hsz]; omega, occursAt_append.mpr ⟨o1, ?_⟩⟩
+          exact ⟨by rw [hsz]; exact hb, by rw [hsz]⟩
+        · cases h
+      · cases h
+
 end Nanodregg.Codec.Stream

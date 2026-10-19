@@ -434,13 +434,15 @@ def countedVecs : G (List (WorldWire Sim.D)) := do
 
 /-- `kernel/row-key`'s vectors: a head and a drawn row, then the key width's boundary pair: a row key of
 exactly `Bounds.keyBytesMax` (128) bytes reads back, one of 129 is refused by the codec (`pastBound` at
-the length byte; admission's own refusal of a wider key is `overBound rows`, and of a key not at its
-relation's width `keyWidth`). -/
+the length varint; admission's own refusal of a wider key is `overBound rows`, and of a key not at its
+relation's width `keyWidth`); then the relation's varint edge, 127 in one byte and 128 in two (read
+back, cv 01a14f7e), and the relation's boundary pair, 255 read back and 256 refused `kernel/row-key` by
+name (under the one-byte relation 256 wrapped to 0). -/
 def rowKeyVecs : G (List (RowSlot Sim.D)) := do
   let p ← dig
   let rel ← below 256
   return [← rowSlot 0, ← rowSlot 1, .row ⟨p, rel, ← bytesN Bounds.keyBytesMax⟩,
-    .row ⟨p, rel, ← bytesN (Bounds.keyBytesMax + 1)⟩]
+    .row ⟨p, rel, ← bytesN (Bounds.keyBytesMax + 1)⟩, .head p 127, .head p 128, .head p 255, .head p 256]
 
 /-- `kernel/range-read`'s vectors: two drawn, then the prefix's boundary pair (128 bytes read back, 129
 refused `pastBound`). -/
@@ -461,14 +463,16 @@ def rangePinVec : G (RangePinWire Sim.D) := do
 
 /-- `kernel/range-pin`'s vectors: two drawn, then the floor at its largest (2^64 − 1, KERNEL-54; the floor is
 eight bytes in the preimage, so every eight bytes read back and the bound is the counter limit's), and the
-same input one byte short, refused `truncated`. -/
+same input one byte short, refused `truncated`; then the relation's and the width's boundary pairs
+(cv 01a14f7e: each a varint, 255 read back, 256 refused `kernel/range-pin` by name). -/
 def rangePinVecs : G (List ByteArray) := do
   let c := Codec.Kernel.rangePinWire Sim.dc
   let drawn ← each 2 fun _ => do return c.bytes (← rangePinVec)
   let (p, rel, w, pre, _, _) ← rangePinVec
   -- the floor last before an empty listing: cut into the listing's count, the input is `truncated`
   let top := c.bytes (p, rel, w, pre, 2 ^ 64 - 1, [])
-  return drawn ++ [top, top.extract 0 (top.size - 1)]
+  return drawn ++ [top, top.extract 0 (top.size - 1), c.bytes (p, 255, w, pre, 0, []), c.bytes (p, 256, w, pre, 0, []),
+    c.bytes (p, rel, 255, pre, 0, []), c.bytes (p, rel, 256, pre, 0, [])]
 
 /-- `kernel/rows`' vectors: two drawn Worlds, then the cap's boundary pair: a relation whose one row's amount
 is exactly its cap, its head counting and summing it (read back), and the same World one past it (refused
@@ -564,6 +568,17 @@ def varint64Vecs : List ByteArray :=
     ⟨#[0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x02]⟩,
     ⟨#[0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x81, 0x00]⟩,
     ⟨#[0x80, 0x00]⟩, ⟨#[0x80]⟩]
+
+/-! ### A byte string behind a varint length (cv 01a14f7e)
+
+`bytesV keyBytesMax`'s own rows: the empty string, 127 bytes (a one-byte length) and 128 (the widest,
+a two-byte length `80 01`), read back; then refused: a length of 129 (`81 01`, `pastBound`), a
+non-minimal length (`80 00`, `varint/overlong`), and a length of 3 over two bytes (`truncated`). -/
+
+def bytesVVecs : List ByteArray :=
+  let c := Stream.bytesV Bounds.keyBytesMax
+  [c.bytes ByteArray.empty, c.bytes ⟨Array.replicate 127 7⟩, c.bytes ⟨Array.replicate 128 9⟩,
+    ⟨#[0x81, 0x01]⟩ ++ ⟨Array.replicate 129 9⟩, ⟨#[0x80, 0x00]⟩, ⟨#[0x03, 0x01, 0x02]⟩]
 
 /-- A live entry whose version is spelled `ver` (raw bytes), then `c`. -/
 def rawLive (ver : ByteArray) (c : Cell) : ByteArray :=
@@ -683,6 +698,8 @@ def sites : List Site :=
     site "kernel/unsigned" (Codec.Kernel.unsigned Sim.dc) (each 2 fun k => Vectors.unsigned (k * 6)) text,
     site "kernel/call" (Codec.Kernel.call Sim.dc) (each 2 fun k => do return ⟨← Vectors.unsigned (k * 7), ← bytes 8⟩) text,
     ⟨"varint64", Tag.of "varint64" Stream.varint64, pure varint64Vecs, print Stream.varint64 text⟩,
+    ⟨"bytesV", Tag.of "bytesV" (Stream.bytesV Bounds.keyBytesMax), pure bytesVVecs,
+      print (Stream.bytesV Bounds.keyBytesMax) text⟩,
     ⟨"kernel/entry", Tag.of "kernel/entry" Codec.Kernel.entry, entryVecs, print Codec.Kernel.entry text⟩,
     site "kernel/slot" (Codec.Kernel.slot Sim.dc) (each 2 fun k => if k = 0 then do return .cell (← dig) else do return .nullifier (← dig))
       text,

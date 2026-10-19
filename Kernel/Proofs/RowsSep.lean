@@ -1,11 +1,15 @@
 /-
-# Kernel.Proofs.RowsSep — the rows trie separates its keys within bounds (KERNEL-48 `rows_separateOn`)
+# Kernel.Proofs.RowsSep — the rows key encoding is injective; the trie separates its keys within bounds
 
-A rows key's bytes are `parent ‖ rel ‖ tag` (a head) or `parent ‖ rel ‖ tag ‖ |k| ‖ k` (a row). On a
-lawful `Env` (fixed-width, injective digest bytes) and keys within bounds (`RowSlotFits`: `rel < 256`,
-`|k| ≤ Bounds.keyBytesMax`), no key's bytes begin another's, so two different keys differ at a byte
-inside both, hence at a bit below `Bounds.rowDepth` (`rows_separateOn`). With it, two canonical rows
-tries holding one leaf at every slot are one trie (`rows_ext`): one rows root.
+A rows key's bytes are `parent ‖ rel ‖ tag` (a head) or `parent ‖ rel ‖ tag ‖ |k| ‖ k` (a row), the
+relation and the length as `natBytes` (LEB128, cv 01a14f7e). On a lawful `Env` (fixed-width, injective
+digest bytes) the encoding is prefix-free and injective for EVERY key (`rowKeyBytes_append_inj`,
+`rowKeyBytes_injective`; teeth `rowKeyBytes_rel_wrap_ne`, `rowKeyBytes_len_wrap_ne`: the one-byte
+encoding before it wrapped both at 256). Within bounds (`RowSlotFits`: `rel < 256`,
+`|k| ≤ Bounds.keyBytesMax`) a key is at most `n + 5 + Bounds.keyBytesMax` bytes, so two different keys
+differ at a bit below `Bounds.rowDepth` (`rows_separateOn`): the bound is the trie's depth, not the
+encoding's. With it, two canonical rows tries holding one leaf at every slot are one trie
+(`rows_ext`): one rows root.
 -/
 import Kernel.Proofs.Cells
 
@@ -34,15 +38,10 @@ theorem rowSlotFits_of_rowFits {s : RowSlot D} {l : RowLeaf} (h : rowFits s l = 
           simp only [rowFits, Bool.and_eq_true, decide_eq_true_eq] at h
           exact ⟨h.1.1.1.1, h.1.1.1.2⟩
 
-/-! ## Byte lists -/
+/-! ## The rows key encoding is prefix-free and injective, for every key (cv 01a14f7e) -/
 
 private theorem toList_length (a : ByteArray) : a.data.toList.length = a.size := by
   exact Array.length_toList
-
-private theorem ba_eq_of_toList {a b : ByteArray} (h : a.data.toList = b.data.toList) : a = b := by
-  cases a; cases b
-  simp only [ByteArray.mk.injEq]
-  exact Array.toList_inj.mp h
 
 private theorem ofNat_inj {r r' : Nat} (hr : r < 256) (hr' : r' < 256) (h : UInt8.ofNat r = UInt8.ofNat r') :
     r = r' := by
@@ -50,16 +49,80 @@ private theorem ofNat_inj {r r' : Nat} (hr : r < 256) (hr' : r' < 256) (h : UInt
   rw [UInt8.toNat_ofNat_of_lt' (by unfold UInt8.size; omega), UInt8.toNat_ofNat_of_lt' (by unfold UInt8.size; omega)] at this
   exact this
 
-omit [Ord D] [DecidableEq D] in
-private theorem toList_head (E : Env D) (p : D) (rel : Nat) :
-    (rowKeyBytes E (.head p rel)).data.toList = (E.bytes p).data.toList ++ [UInt8.ofNat rel, UInt8.ofNat 0] := by
-  simp [rowKeyBytes, byte8]
+private theorem byte8_append_inj {a b : Nat} {x y : ByteArray} (ha : a < 256) (hb : b < 256)
+    (h : byte8 a ++ x = byte8 b ++ y) : a = b ∧ x = y := by
+  obtain ⟨h1, h2⟩ := Nanodregg.Codec.head_inj h
+  exact ⟨ofNat_inj ha hb h1, h2⟩
 
-omit [Ord D] [DecidableEq D] in
-private theorem toList_row (E : Env D) (key : RowKey D) :
-    (rowKeyBytes E (.row key)).data.toList = (E.bytes key.parent).data.toList ++
-      ([UInt8.ofNat key.rel, UInt8.ofNat 1, UInt8.ofNat key.k.size] ++ key.k.data.toList) := by
-  simp [rowKeyBytes, rowsPrefix, byte8]
+omit [DecidableEq D] in
+/-- **The rows key encoding is prefix-free and injective, for every key** (cv 01a14f7e): on a lawful
+`Env`, two keys whose bytes, each followed by anything, are equal are one key, and the remainders are
+equal. No bound on the relation or the key's length: both are `natBytes` (LEB128), prefix-free over
+all of `Nat` (`natBytes_append_inj`); the parent's bytes have one size, the tag is one byte, and the
+length then fixes the key's bytes. -/
+theorem rowKeyBytes_append_inj {E : Env D} {n : Nat} (hE : E.Lawful n) {s s' : RowSlot D}
+    {x y : ByteArray} (h : rowKeyBytes E s ++ x = rowKeyBytes E s' ++ y) : s = s' ∧ x = y := by
+  have par : ∀ {p p' : D} {X Y : ByteArray}, E.bytes p ++ X = E.bytes p' ++ Y → p = p' ∧ X = Y :=
+    fun h => by
+      obtain ⟨h1, h2⟩ := bytes_append_inj h (by rw [hE.size, hE.size])
+      exact ⟨hE.bytes_inj h1, h2⟩
+  cases s with
+  | head p rel =>
+      cases s' with
+      | head p' rel' =>
+          simp only [rowKeyBytes, ByteArray.append_assoc] at h
+          obtain ⟨hp, h1⟩ := par h
+          obtain ⟨hr, h2⟩ := natBytes_append_inj h1
+          exact ⟨by rw [hp, hr], (byte8_append_inj (by decide) (by decide) h2).2⟩
+      | row key' =>
+          simp only [rowKeyBytes, rowsPrefix, ByteArray.append_assoc] at h
+          obtain ⟨-, h1⟩ := par h
+          obtain ⟨-, h2⟩ := natBytes_append_inj h1
+          exact absurd (byte8_append_inj (by decide) (by decide) h2).1 (by decide)
+  | row key =>
+      cases s' with
+      | head p' rel' =>
+          simp only [rowKeyBytes, rowsPrefix, ByteArray.append_assoc] at h
+          obtain ⟨-, h1⟩ := par h
+          obtain ⟨-, h2⟩ := natBytes_append_inj h1
+          exact absurd (byte8_append_inj (by decide) (by decide) h2).1 (by decide)
+      | row key' =>
+          obtain ⟨p, r, k⟩ := key
+          obtain ⟨p', r', k'⟩ := key'
+          simp only [rowKeyBytes, rowsPrefix, ByteArray.append_assoc] at h
+          obtain ⟨hp, h1⟩ := par h
+          obtain ⟨hr, h2⟩ := natBytes_append_inj h1
+          obtain ⟨-, h3⟩ := byte8_append_inj (by decide) (by decide) h2
+          obtain ⟨hl, h4⟩ := natBytes_append_inj h3
+          obtain ⟨hk, h5⟩ := bytes_append_inj h4 hl
+          exact ⟨by rw [hp, hr, hk], h5⟩
+
+omit [DecidableEq D] in
+/-- **The rows key bytes determine the key, for every key** (cv 01a14f7e). -/
+theorem rowKeyBytes_injective {E : Env D} {n : Nat} (hE : E.Lawful n) {s s' : RowSlot D}
+    (h : rowKeyBytes E s = rowKeyBytes E s') : s = s' :=
+  (rowKeyBytes_append_inj hE (x := ByteArray.empty) (y := ByteArray.empty)
+    (by rw [ByteArray.append_empty, ByteArray.append_empty, h])).1
+
+omit [DecidableEq D] in
+/-- TOOTH (`rowKeyBytes_injective`, the defect cv 01a14f7e closed): relation 256 and relation 0
+under one parent are two keys of the rows trie. Under the one-byte relation they were one. -/
+theorem rowKeyBytes_rel_wrap_ne {E : Env D} {n : Nat} (hE : E.Lawful n) (p : D) :
+    rowKeyBytes E (.head p 256) ≠ rowKeyBytes E (.head p 0) :=
+  fun h => absurd (rowKeyBytes_injective hE h) (by simp)
+
+omit [DecidableEq D] in
+/-- TOOTH (`rowKeyBytes_append_inj`, its length half): the bytes of a 256-byte key are no continuation
+of the empty key's, one relation, whatever follows. Under the one-byte length both read
+`parent ‖ rel ‖ 1 ‖ 0`, so the empty key's bytes followed by 256 zero bytes WERE the long key's. -/
+theorem rowKeyBytes_len_wrap_ne {E : Env D} {n : Nat} (hE : E.Lawful n) (p : D) (rel : Nat) (X : ByteArray) :
+    rowKeyBytes E (.row ⟨p, rel, ByteArray.empty⟩) ++ X ≠ rowKeyBytes E (.row ⟨p, rel, ⟨Array.replicate 256 0⟩⟩) := by
+  intro h
+  have h' : rowKeyBytes E (.row ⟨p, rel, ByteArray.empty⟩) ++ X =
+      rowKeyBytes E (.row ⟨p, rel, ⟨Array.replicate 256 0⟩⟩) ++ ByteArray.empty := by
+    rw [ByteArray.append_empty]; exact h
+  have := congrArg (fun s => match s with | RowSlot.row k => k.k.size | _ => 0) (rowKeyBytes_append_inj hE h').1
+  simp at this
 
 /-- Two lists neither of which begins the other differ at an index inside both. -/
 private theorem exists_ne_of_not_prefix {α : Type} [DecidableEq α] :
@@ -76,56 +139,29 @@ private theorem exists_ne_of_not_prefix {α : Type} [DecidableEq α] :
       · exact ⟨0, by simp, by simp, by simpa using hab⟩
 
 omit [DecidableEq D] in
-/-- No key within bounds has bytes beginning another's (the rows key encoding is prefix-free). -/
-private theorem rowKey_prefix {E : Env D} {n : Nat} (hE : E.Lawful n) {s s' : RowSlot D} (hs : RowSlotFits s)
-    (hs' : RowSlotFits s') (hp : (rowKeyBytes E s).data.toList <+: (rowKeyBytes E s').data.toList) : s = s' := by
+/-- No key's bytes begin another's (the list form `rows_separateOn` reads), for every key. -/
+private theorem rowKey_prefix {E : Env D} {n : Nat} (hE : E.Lawful n) {s s' : RowSlot D}
+    (hp : (rowKeyBytes E s).data.toList <+: (rowKeyBytes E s').data.toList) : s = s' := by
   obtain ⟨t, ht⟩ := hp
-  have hlen : ∀ p : D, (E.bytes p).data.toList.length = n := fun p => by rw [toList_length, hE.size]
-  have split : ∀ {p p' : D} {X Y : List UInt8}, (E.bytes p).data.toList ++ X ++ t = (E.bytes p').data.toList ++ Y →
-      p = p' ∧ X ++ t = Y := by
-    intro p p' X Y h
-    rw [List.append_assoc] at h
-    obtain ⟨h1, h2⟩ := List.append_inj h (by rw [hlen, hlen])
-    exact ⟨hE.bytes_inj (ba_eq_of_toList h1), h2⟩
+  refine (rowKeyBytes_append_inj hE (x := ⟨t.toArray⟩) (y := ByteArray.empty) (ba_eq_of_toList ?_)).1
+  simpa [ByteArray.data_append] using ht
+
+omit [DecidableEq D] in
+/-- A rows key within bounds is at most `n + 5 + Bounds.keyBytesMax` bytes. -/
+theorem rowKeyBytes_size_bound {E : Env D} {n : Nat} (hE : E.Lawful n) {s : RowSlot D} (hs : RowSlotFits s) :
+    (rowKeyBytes E s).size ≤ n + 5 + Bounds.keyBytesMax := by
+  have hkb : Bounds.keyBytesMax = 128 := rfl
   cases s with
   | head p rel =>
-      cases s' with
-      | head p' rel' =>
-          rw [toList_head, toList_head] at ht
-          obtain ⟨rfl, h⟩ := split ht
-          simp only [List.cons_append, List.nil_append, List.cons.injEq] at h
-          rw [ofNat_inj hs hs' h.1]
-      | row key' =>
-          rw [toList_head, toList_row] at ht
-          obtain ⟨-, h⟩ := split ht
-          simp only [List.cons_append, List.nil_append, List.cons.injEq] at h
-          exact absurd h.2.1 (by decide)
+      have := natBytes_size_le_two (r := rel) hs
+      simp only [rowKeyBytes, ByteArray.size_append, hE.size, byte8_size]
+      omega
   | row key =>
-      cases s' with
-      | head p' rel' =>
-          rw [toList_row, toList_head] at ht
-          obtain ⟨-, h⟩ := split ht
-          simp only [List.cons_append, List.nil_append, List.cons.injEq] at h
-          exact absurd h.2.1 (by decide)
-      | row key' =>
-          rw [toList_row, toList_row] at ht
-          obtain ⟨hpp, h⟩ := split ht
-          simp only [List.cons_append, List.nil_append, List.cons.injEq] at h
-          obtain ⟨hr, -, hl, hk⟩ := h
-          have hrel := ofNat_inj hs.1 hs'.1 hr
-          have hk1 := hs.2
-          have hk2 := hs'.2
-          have hkb : Bounds.keyBytesMax = 128 := rfl
-          have hsz := ofNat_inj (by omega) (by omega) hl
-          have hlk := congrArg List.length hk
-          rw [List.length_append, toList_length, toList_length, hsz] at hlk
-          have ht0 : t = [] := List.eq_nil_of_length_eq_zero (by omega)
-          rw [ht0, List.append_nil] at hk
-          obtain ⟨p, r, k⟩ := key
-          obtain ⟨p', r', k'⟩ := key'
-          simp only at hpp hrel hk
-          subst hpp hrel
-          rw [ba_eq_of_toList hk]
+      have h1 := natBytes_size_le_two (r := key.rel) hs.1
+      have h2 := natBytes_size_le_two (r := key.k.size) (by have := hs.2; omega)
+      have h3 := hs.2
+      simp only [rowKeyBytes, rowsPrefix, ByteArray.size_append, hE.size, byte8_size]
+      omega
 
 /-- A byte that differs gives a bit that differs, in that byte. -/
 private theorem bit_of_byte_ne {a b : ByteArray} {m : Nat} (ha : m < a.size) (hb : m < b.size)
@@ -146,32 +182,24 @@ private theorem bit_of_byte_ne {a b : ByteArray} {m : Nat} (ha : m < a.size) (hb
   · rw [testBit_byte (by omega), testBit_byte (by omega)]
 
 omit [DecidableEq D] in
-/-- **The rows trie separates its keys within bounds**: on a lawful `Env`, two different rows keys
-within bounds are told apart at a bit below `Bounds.rowDepth`. -/
+/-- **The rows trie separates its keys within bounds**: on a lawful `Env`, a rows key within bounds
+and any other key are told apart at a bit below `Bounds.rowDepth` (the other key needs no bound: the
+encoding is prefix-free for every key, so they differ inside the bounded key's bytes). -/
 theorem rows_separateOn {E : Env D} {n : Nat} (hE : E.Lawful n) {s s' : RowSlot D} (hs : RowSlotFits s)
-    (hs' : RowSlotFits s') (hne : s ≠ s') :
+    (hne : s ≠ s') :
     ∃ i, i < (rowSpec E).depth ∧ (rowSpec E).bit s i ≠ (rowSpec E).bit s' i := by
-  obtain ⟨m, h1, h2, hm⟩ := exists_ne_of_not_prefix _ _ (fun hp => hne (rowKey_prefix hE hs hs' hp))
-    (fun hp => hne (rowKey_prefix hE hs' hs hp).symm)
+  obtain ⟨m, h1, h2, hm⟩ := exists_ne_of_not_prefix _ _ (fun hp => hne (rowKey_prefix hE hp))
+    (fun hp => hne (rowKey_prefix hE hp).symm)
   rw [toList_length] at h1 h2
   have hb : (rowKeyBytes E s)[m] ≠ (rowKeyBytes E s')[m] := by
     simpa [ByteArray.getElem_eq_getElem_data, Array.getElem_toList] using hm
   obtain ⟨i, hi, hbit⟩ := bit_of_byte_ne h1 h2 hb
-  have hsize : (rowKeyBytes E s).size ≤ n + 3 + Bounds.keyBytesMax := by
-    rw [← toList_length]
-    cases s with
-    | head p rel =>
-        rw [toList_head]; simp only [List.length_append, toList_length, hE.size, List.length_cons,
-          List.length_nil]; omega
-    | row key =>
-        rw [toList_row]; simp only [List.length_append, toList_length, hE.size, List.length_cons,
-          List.length_nil]
-        have := hs.2; omega
+  have hsize := rowKeyBytes_size_bound hE hs
   have hn := hE.n_le
   refine ⟨i, ?_, hbit⟩
   show i < Bounds.rowDepth
   have hkb : Bounds.keyBytesMax = 128 := rfl
-  have hrd : Bounds.rowDepth = 256 + 24 + 8 * 128 := rfl
+  have hrd : Bounds.rowDepth = 256 + 40 + 8 * 128 := rfl
   omega
 
 omit [Ord D] [DecidableEq D] in
@@ -196,7 +224,7 @@ read the same at every slot are equal. -/
 theorem rows_ext {E : Env D} {n : Nat} (hE : E.Lawful n) {r r' : Rows D} (hc : Trie.Canon (rowSpec E) 0 r)
     (hc' : Trie.Canon (rowSpec E) 0 r') (hok : ∀ p ∈ r.toList, rowFits p.1 p.2 = true)
     (he : ∀ s, r.get (rowSpec E) s = r'.get (rowSpec E) s) : r = r' :=
-  Trie.eq_of_get_eq_on (rowSpec E) RowSlotFits (fun _ _ hs hs' hne => rows_separateOn hE hs hs' hne) hc hc'
+  Trie.eq_of_get_eq_on (rowSpec E) RowSlotFits (fun _ _ hs _ hne => rows_separateOn hE hs hne) hc hc'
     (fun p hp => rowSlotFits_of_rowFits (hok p hp)) he
 
 end Nanodregg.Kernel

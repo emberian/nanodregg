@@ -27,9 +27,10 @@ separates the domains.
   tombstone is never reborn: still final). Both assume a lawful `Ord D` (`Std.TransOrd`,
   `Std.LawfulEqOrd`, as `Budget` and `Ledger` do): under an `Ord` that never answers `.eq`,
   `checkShape` admits `[retire p, write p]`, `dropHeads` resets `p`'s floor while `p` stays live, and
-  the old absent pin recurs. The range theorem reads only ranges `checkRanges` admits (`rel < 256`,
-  `pre.size ≤ width < 256`): at `rel = 259` the listing is relation 3's (`byte8 rel`) but the floor
-  is relation 259's, 0 for ever, so insert then retract returns the pin with the parent live.
+  the old absent pin recurs. The range theorem reads every range with `pre.size ≤ width`, at any
+  relation and width (cv 01a14f7e: the relation and the width are LEB128 in the keys and the pin, so
+  relation 259 is not relation 3, which the one-byte encoding made it, with relation 259's floor 0
+  for ever, and insert then retract returned the pin with the parent live).
 * `pinOf_old_recurs` — the TOOTH: under the pin before KERNEL-54 (a content digest of `w.live`, which
   reads a tombstone as absent), never born → born → retired returns the absent pin; under `pinOf`
   it does not. `rowPin_old_floor_recurs` — the second: a retired parent's floor reads 0 again, so
@@ -825,8 +826,8 @@ theorem row_stale_behind_forever [Std.TransOrd D] [Std.LawfulEqOrd D] {E : Env D
 
 /-! ## Ranges: a listing and its floor never return together
 
-Under a range prefix (`rel < 256`, `pre.size ≤ width < 256`: what `checkRanges` admits), every listed
-row is a row of the relation (`listed`), so its floor is the range's. If the range pin at `w'` equals
+Under a range prefix (`pre.size ≤ width`, what `checkRanges` admits; any relation and width,
+cv 01a14f7e), every listed row is a row of the relation (`listed`), so its floor is the range's. If the range pin at `w'` equals
 `w₀`'s, the floor and the listing are `w₀`'s (one domain, `rangePin_dec`); the floor is monotone, so it
 was the same all along, and with the floor fixed each row slot only moves forward: a slot that moved
 by `w` has not come back at `w'`, so neither has the listing. -/
@@ -840,15 +841,13 @@ omit [Ord D] in
 private theorem listed {E : Env D} {n : Nat} (hsize : ∀ d, (E.bytes d).size = n)
     (hinj : Function.Injective E.bytes) {r : Rows D} (hc : Trie.Canon (rowSpec E) 0 r)
     (hfit : ∀ p ∈ r.toList, rowFits p.1 p.2 = true) {parent : D} {rel width : Nat} {pre : ByteArray}
-    (hrel : rel < 256) (hw : pre.size ≤ width) (hw' : width < 256) {most : Nat}
+    (hw : pre.size ≤ width) {most : Nat}
     {l : List (RowSlot D × RowLeaf)} (h : rangeRows E r parent rel width pre most = some l) :
     ∀ p ∈ l, Listed parent rel width p := by
   intro ⟨s, v⟩ hp
-  obtain ⟨hg, hs⟩ := (range_rows_mem hsize hc hw hw' h s v).mp hp
+  obtain ⟨hg, hs⟩ := (range_rows_mem hsize hc hw h s v).mp hp
   have hf := rowFits_get hc hfit hg
-  obtain ⟨k, rfl, hk⟩ := listed_key E hsize hinj hf hs
-  rw [Nat.mod_eq_of_lt hrel]
-  rw [Nat.mod_eq_of_lt hw'] at hk
+  obtain ⟨k, rfl, hk⟩ := listed_key E hsize hinj hs
   cases v with
   | head c s lim cap wd rt fl => simp [rowFits] at hf
   | row amt val ver =>
@@ -883,12 +882,13 @@ private theorem listBytes_cons (E : Env D) (p : RowSlot D × RowLeaf) (l : List 
 omit [Ord D] [DecidableEq D] in
 private theorem listBytes_size {E : Env D} {n : Nat} (hsize : ∀ d, (E.bytes d).size = n) {parent : D}
     {rel width : Nat} : ∀ {l : List (RowSlot D × RowLeaf)}, (∀ p ∈ l, Listed parent rel width p) →
-      (listBytes E l).size = l.length * (n + 3 + width + n)
+      (listBytes E l).size = l.length * (n + (natBytes rel).size + 1 + (natBytes width).size + width + n)
   | [], _ => by simp [listBytes]
   | p :: l, h => by
       rw [listBytes_cons, ByteArray.size_append, listBytes_size hsize (fun q hq => h q (List.mem_cons_of_mem _ hq))]
       obtain ⟨k, amt, val, ver, rfl, hk, -⟩ := h p List.mem_cons_self
-      simp [rowKeyBytes, rowsPrefix, byte8, hsize, hk, Nat.succ_mul]
+      simp only [rowKeyBytes, rowsPrefix, ByteArray.size_append, byte8_size, hsize, hk, List.length_cons,
+        Nat.succ_mul]
       omega
 
 omit [Ord D] [DecidableEq D] in
@@ -908,14 +908,14 @@ private theorem listBytes_inj {E : Env D} {n : Nat} (hE : E.Lawful n) {parent : 
       rw [listBytes_size hE.size h'] at this
       have h0 : (listBytes E ([] : List (RowSlot D × RowLeaf))).size = 0 := rfl
       rw [h0, List.length_cons, Nat.succ_mul] at this
-      generalize l'.length * (n + 3 + width + n) = A at this
+      generalize l'.length * (n + (natBytes rel).size + 1 + (natBytes width).size + width + n) = A at this
       omega
   | p :: l, [], h, _, he => by
       have := congrArg ByteArray.size he
       rw [listBytes_size hE.size h] at this
       have h0 : (listBytes E ([] : List (RowSlot D × RowLeaf))).size = 0 := rfl
       rw [h0, List.length_cons, Nat.succ_mul] at this
-      generalize l.length * (n + 3 + width + n) = A at this
+      generalize l.length * (n + (natBytes rel).size + 1 + (natBytes width).size + width + n) = A at this
       omega
   | p :: l, q :: l', h, h', he => by
       obtain ⟨k, amt, val, ver, rfl, hk, ha, hv, hs⟩ := h p List.mem_cons_self
@@ -996,15 +996,15 @@ private theorem ps_floor {o o' : Option RowLeaf} {f : Nat} : PS o f = PS o' f �
 the hash collides among the inputs compared: the two range-pin inputs (`w₀`'s and `w'`'s) and the
 leaf inputs of both listings (a range pin embeds its rows' leaf digests). The listing under a prefix
 (each row's leaf digest with its version) and the relation's floor never return together to what
-`w₀` held. Under a lawful `Ord D` (as for rows), at a range `checkRanges` admits (`rel < 256`,
-`pre.size ≤ width < 256`): at `rel = 259` the listing is relation 3's (`byte8 rel`) but the floor is
-relation 259's, 0 for ever, so insert then retract returns the pin with the parent live. -/
+`w₀` held. Under a lawful `Ord D` (as for rows), at a range with `pre.size ≤ width`, any relation and
+width (cv 01a14f7e removed `rel < 256` and `width < 256`: under the one-byte encoding relation 259's
+listing was relation 3's while its floor was relation 259's, 0 for ever). -/
 theorem range_stale_behind_forever [Std.TransOrd D] [Std.LawfulEqOrd D] {E : Env D} {n : Nat}
     (hE : E.Lawful n) {w₀ w w' : World D}
     {l₁ l₂ : List (Step D)} (hr : w₀.RowsCanon E) (hok : w₀.RowsOk E)
     (h₁ : World.fold E w₀ l₁ = .ok w) (h₂ : World.fold E w l₂ = .ok w')
     {parent : D} {rel width most : Nat} {pre : ByteArray} {l₀ l l' : List (RowSlot D × RowLeaf)}
-    (hrel : rel < 256) (hwd : pre.size ≤ width) (hwd' : width < 256)
+    (hwd : pre.size ≤ width)
     (h0 : rangeRows E w₀.rows parent rel width pre most = some l₀)
     (hw : rangeRows E w.rows parent rel width pre most = some l)
     (hw' : rangeRows E w'.rows parent rel width pre most = some l')
@@ -1040,9 +1040,9 @@ theorem range_stale_behind_forever [Std.TransOrd D] [Std.LawfulEqOrd D] {E : Env
         rangePinBytes E parent rel width pre (headFloor E w₀.rows parent rel) l₀
     · have hfit0 := (sFit_of_fits hr hok.1 ⟨parent, rel, ByteArray.empty⟩).1
       have hfit' := (sFit_of_fits hr' hok'.1 ⟨parent, rel, ByteArray.empty⟩).1
-      have hL₀ := listed hE.size hE.bytes_inj hr hok.1 hrel hwd hwd' h0
-      have hL := listed hE.size hE.bytes_inj hrw hokw.1 hrel hwd hwd' hw
-      have hL' := listed hE.size hE.bytes_inj hr' hok'.1 hrel hwd hwd' hw'
+      have hL₀ := listed hE.size hE.bytes_inj hr hok.1 hwd h0
+      have hL := listed hE.size hE.bytes_inj hrw hokw.1 hwd hw
+      have hL' := listed hE.size hE.bytes_inj hr' hok'.1 hwd hw'
       rcases rangePin_dec hE hfit' hfit0 hL' hL₀ hb with ⟨hF, hll⟩ | hc
       · exfalso
         simp only [st] at hF
@@ -1058,14 +1058,14 @@ theorem range_stale_behind_forever [Std.TransOrd D] [Std.LawfulEqOrd D] {E : Env
             rw [Std.OrientedCmp.eq_swap (cmp := compare)] at h
             rw [h'] at h; cases h
           exact hne (pairwise_ext hasym
-            (range_rows_sorted hE.size hE.n_le hE.bytes_inj hrw hokw.1 hwd hwd' hw)
-            (range_rows_sorted hE.size hE.n_le hE.bytes_inj hr hok.1 hwd hwd' h0) hall)
+            (range_rows_sorted hE.size hE.n_le hE.bytes_inj hrw hokw.1 hwd hw)
+            (range_rows_sorted hE.size hE.n_le hE.bytes_inj hr hok.1 hwd h0) hall)
         apply hmem
         intro ⟨s, v⟩
         -- a slot under the prefix reads at `w` what it reads at `w₀`
-        have hmw := range_rows_mem hE.size hrw hwd hwd' hw
-        have hm0 := range_rows_mem hE.size hr hwd hwd' h0
-        have hm' := range_rows_mem hE.size hr' hwd hwd' hw'
+        have hmw := range_rows_mem hE.size hrw hwd hw
+        have hm0 := range_rows_mem hE.size hr hwd h0
+        have hm' := range_rows_mem hE.size hr' hwd hw'
         by_cases hsw : startsWith (rowsPrefix E parent rel width ++ pre) (rowKeyBytes E s) = true
         · have hsame : rowAt E w.rows s = rowAt E w₀.rows s := by
             apply Classical.byContradiction; intro hdiff
@@ -1073,13 +1073,13 @@ theorem range_stale_behind_forever [Std.TransOrd D] [Std.LawfulEqOrd D] {E : Env
             obtain ⟨key, rfl, hkp, hkr⟩ : ∃ key : RowKey D, s = .row key ∧ key.parent = parent ∧ key.rel = rel := by
               cases hs1 : rowAt E w.rows s with
               | some v1 =>
-                  obtain ⟨k, rfl, -⟩ := listed_key E hE.size hE.bytes_inj (rowFits_get hrw hokw.1 hs1) hsw
-                  exact ⟨_, rfl, rfl, Nat.mod_eq_of_lt hrel⟩
+                  obtain ⟨k, rfl, -⟩ := listed_key E hE.size hE.bytes_inj hsw
+                  exact ⟨_, rfl, rfl, rfl⟩
               | none =>
                   cases hs0 : rowAt E w₀.rows s with
                   | some v0 =>
-                      obtain ⟨k, rfl, -⟩ := listed_key E hE.size hE.bytes_inj (rowFits_get hr hok.1 hs0) hsw
-                      exact ⟨_, rfl, rfl, Nat.mod_eq_of_lt hrel⟩
+                      obtain ⟨k, rfl, -⟩ := listed_key E hE.size hE.bytes_inj hsw
+                      exact ⟨_, rfl, rfl, rfl⟩
                   | none => exact absurd (hs1.trans hs0.symm) hdiff
             have e0 : (st E w₀.rows key).2 = headFloor E w₀.rows parent rel := by simp [st, hkp, hkr]
             have e1 : (st E w.rows key).2 = headFloor E w₀.rows parent rel := by simp [st, hkp, hkr, hFw]
@@ -1371,7 +1371,7 @@ private def rCheck : Bool :=
 private theorem rCheck_true : rCheck = true := by decide +kernel
 
 /-- **The floor is what makes `range_stale_behind_forever` true.** Every premise of that theorem
-holds (a lawful `Ord UInt8`, `rel < 256`, `pre.size ≤ width < 256`, the range pin stale at `w`), the
+holds (a lawful `Ord UInt8`, `pre.size ≤ width`, the range pin stale at `w`), the
 parent is LIVE at `w'` (so the parent-gone disjunct is false), the listing at `w'` is the listing at
 `w₀`, and the floorless pin, which moved at `w`, is again `w₀`'s at `w'`; the pin with the floor is
 not. -/
@@ -1380,7 +1380,7 @@ theorem rangePin_floorless_recurs :
       (rel width most : Nat) (pre : ByteArray) (L₀ L L' : List (RowSlot UInt8 × RowLeaf)),
       w₀.RowsCanon E ∧ w₀.RowsOk E ∧
       World.fold E w₀ l₁ = .ok w ∧ World.fold E w l₂ = .ok w' ∧
-      rel < 256 ∧ pre.size ≤ width ∧ width < 256 ∧
+      pre.size ≤ width ∧
       rangeRows E w₀.rows parent rel width pre most = some L₀ ∧
       rangeRows E w.rows parent rel width pre most = some L ∧
       rangeRows E w'.rows parent rel width pre most = some L' ∧
@@ -1410,7 +1410,7 @@ theorem rangePin_floorless_recurs :
           obtain ⟨⟨hL', hlive⟩, hne⟩ := hc
           exact ⟨vEnv, dW0, w, w', [.turn dT1], [.turn dT2], 7, 3, 1, 5, ByteArray.empty, [], rL, [],
             Trie.canon_insert _ _ _ (Trie.canon_empty _ 0), by unfold World.RowsOk; decide, h₁, h₂,
-            by decide, by decide, by decide, h0, hL, hL', hst, ⟨_, _, hlive⟩, rfl, hfl, rfl, hne⟩
+            by decide, h0, hL, hL', hst, ⟨_, _, hlive⟩, rfl, hfl, rfl, hne⟩
 
 /-! ## Teeth (KERNEL-56): under a hash that separates the inputs compared, the collision arm is gone -/
 
@@ -1447,7 +1447,7 @@ theorem range_stale_behind_forever_sep [Std.TransOrd D] [Std.LawfulEqOrd D] {E :
     {l₁ l₂ : List (Step D)} (hr : w₀.RowsCanon E) (hok : w₀.RowsOk E)
     (h₁ : World.fold E w₀ l₁ = .ok w) (h₂ : World.fold E w l₂ = .ok w')
     {parent : D} {rel width most : Nat} {pre : ByteArray} {l₀ l l' : List (RowSlot D × RowLeaf)}
-    (hrel : rel < 256) (hwd : pre.size ≤ width) (hwd' : width < 256)
+    (hwd : pre.size ≤ width)
     (h0 : rangeRows E w₀.rows parent rel width pre most = some l₀)
     (hw : rangeRows E w.rows parent rel width pre most = some l)
     (hw' : rangeRows E w'.rows parent rel width pre most = some l')
@@ -1458,4 +1458,4 @@ theorem range_stale_behind_forever_sep [Std.TransOrd D] [Std.LawfulEqOrd D] {E :
     rangePin E parent rel width pre (headFloor E w'.rows parent rel) l' ≠
         rangePin E parent rel width pre (headFloor E w₀.rows parent rel) l₀ ∨
       w'.entry E parent = some .tomb :=
-  (range_stale_behind_forever hE hr hok h₁ h₂ hrel hwd hwd' h0 hw hw' hstale).imp_right hs.elim
+  (range_stale_behind_forever hE hr hok h₁ h₂ hwd h0 hw hw' hstale).imp_right hs.elim

@@ -2,6 +2,8 @@
 # Kernel.Proofs.Bytes — byte strings: concatenation, bits, and `compare`
 
 * `bytes_append_inj`: when two concatenations are equal.
+* `natBytes` (the rows encoding's numbers, cv 01a14f7e) is LEB128 (`natBytes_eq`) and prefix-free
+  over all of `Nat` (`natBytes_append_inj`).
 * `byteBit` at an index (`byteBit_of_lt`, `byteBit_of_ge`, `lt_size_of_byteBit`), a byte from its
   eight bits (`byte_eq_of_bits`, `byteBit_ext`).
 * The first differing bit decides `compare` on the bytes (`compare_lt_of_bits_at`, at any sizes when
@@ -10,6 +12,7 @@
   (`Kernel.Proofs.RowsRange`) cite these.
 -/
 import Kernel.World
+import Codec.Proofs.Tag
 
 namespace Nanodregg.Kernel
 
@@ -19,6 +22,43 @@ theorem bytes_append_inj {x y x' y' : ByteArray} (h : x ++ y = x' ++ y') (hs : x
     rw [← ByteArray.data_append, ← ByteArray.data_append, h]
   obtain ⟨h₁, h₂⟩ := Array.append_inj hd hs
   exact ⟨ByteArray.ext h₁, ByteArray.ext h₂⟩
+
+/-- Two byte strings with one byte list are one. -/
+theorem ba_eq_of_toList {a b : ByteArray} (h : a.data.toList = b.data.toList) : a = b := by
+  cases a; cases b
+  simp only [ByteArray.mk.injEq]
+  exact Array.toList_inj.mp h
+
+/-! ## The rows encoding's numbers (cv 01a14f7e) -/
+
+theorem natBytesFuel_eq : ∀ fuel n, n < fuel → natBytesFuel fuel n = Nanodregg.Codec.Stream.varint.bytes n
+  | 0, _, h => absurd h (Nat.not_lt_zero _)
+  | fuel + 1, n, h => by
+      simp only [natBytesFuel]
+      by_cases hn : n < 128
+      · rw [if_pos hn, Nanodregg.Codec.Stream.varint_bytes_small hn]
+      · rw [if_neg hn, Nanodregg.Codec.Stream.varint_bytes_large hn, natBytesFuel_eq fuel (n / 128) (by omega)]
+
+/-- **`natBytes` is LEB128**: `Codec.Stream.varint`'s bytes, for every `Nat`. -/
+theorem natBytes_eq (n : Nat) : natBytes n = Nanodregg.Codec.Stream.varint.bytes n :=
+  natBytesFuel_eq (n + 1) n (Nat.lt_succ_self n)
+
+/-- `natBytes` is never empty. -/
+theorem natBytes_size_pos (n : Nat) : 0 < (natBytes n).size := by
+  simp only [natBytes, natBytesFuel]
+  split <;> simp [ByteArray.size_append] <;> omega
+
+/-- **`natBytes` is prefix-free over all of `Nat`** (`Codec.varint_prefix`). -/
+theorem natBytes_append_inj {m n : Nat} {x y : ByteArray} (h : natBytes m ++ x = natBytes n ++ y) :
+    m = n ∧ x = y := by
+  rw [natBytes_eq, natBytes_eq] at h
+  exact Nanodregg.Codec.varint_prefix _ _ _ _ h
+
+/-- A number below 256 is at most two `natBytes`. -/
+theorem natBytes_size_le_two {r : Nat} (hr : r < 256) : (natBytes r).size ≤ 2 := by
+  rw [natBytes_eq]; exact Nanodregg.Codec.Stream.varint_size_le r 1 (by omega)
+
+theorem byte8_size (c : Nat) : (byte8 c).size = 1 := rfl
 
 /-! ## Bits -/
 

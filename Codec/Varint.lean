@@ -58,4 +58,21 @@ floor, each below `Bounds.counterLimit`). The tenth byte carries bit 63 alone, s
 more is a value past 2^64 − 1 and refused `pastBound`; an eleventh byte is refused `pastBound 10 11`. -/
 def varint64 : Stream Nat := varintOf 10 (2 ^ 64) .varint64
 
+/-- `varint len ‖ bytes`, at most `max` bytes (`max < 2^32`): KERNEL's rows encoding of a key or a
+prefix (`natBytes k.size ++ k`, cv 01a14f7e), so its bytes are `rowKeyBytes`' and `rangePinBytes'`.
+A length past `max` is refused `pastBound`, an overlong length `varint/overlong`, a short input
+`truncated`. -/
+def bytesV (max : Nat) : Stream ByteArray where
+  shape := .bytesV max
+  size v := varintSize v.size + v.size
+  put v buf := putVarint v.size buf ++ v
+  get b i :=
+    match varint.get b i with
+    | .error e => .error e
+    | .ok (n, j) =>
+      if n ≤ max then
+        if j + n ≤ b.size then .ok (b.extract j (j + n), j + n)
+        else .error (.truncated j n)
+      else .error (.pastBound i max n)
+
 end Nanodregg.Codec.Stream

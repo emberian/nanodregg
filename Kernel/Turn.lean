@@ -139,11 +139,25 @@ def Act.logWeight : Act → Nat
   | .write ops => 1 + headerWeight + (ops.map Op.weight).sum
   | _ => 1
 
-/-- A rows slot in the log, exactly `rowKeyBytes`: the parent, the relation byte, the kind byte,
-and a row's length byte and key (CODEC-9). -/
+/-- LEB128 in at most `fuel` bytes, by structural recursion on the fuel, so the kernel reduces it
+(`decide` over rows keys); `natBytes` gives it fuel `n + 1`, more than it uses. -/
+def natBytesFuel : Nat → Nat → ByteArray
+  | 0, _ => ByteArray.empty
+  | fuel + 1, n =>
+      if n < 128 then ⟨#[n.toUInt8]⟩ else ⟨#[(n % 128 + 128).toUInt8]⟩ ++ natBytesFuel fuel (n / 128)
+
+/-- A number in the rows encoding (a relation, a key's length, a width, a prefix's length): LEB128,
+shortest form, for EVERY `Nat` (`Codec.Stream.varint`'s bytes, which never truncate:
+`Kernel.Proofs.Bytes.natBytes_eq`). Prefix-free over all of `Nat` (`natBytes_append_inj`), so the
+rows keys and the range pin are injective by construction, with no bound (cv 01a14f7e: one byte
+wrapped relation 0 and 256 together). One byte below 128, two below 2^14. -/
+def natBytes (n : Nat) : ByteArray := natBytesFuel (n + 1) n
+
+/-- A rows slot in the log, exactly `rowKeyBytes`: the parent, the relation (`natBytes`), the kind
+byte, and a row's length (`natBytes`) and key (CODEC-9, cv 01a14f7e). -/
 def RowSlot.weight {D : Type} : RowSlot D → Nat
-  | .head _ _ => digestWeight + 2
-  | .row key => digestWeight + 3 + key.k.size
+  | .head _ rel => digestWeight + (natBytes rel).size + 1
+  | .row key => digestWeight + (natBytes key.rel).size + 1 + (natBytes key.k.size).size + key.k.size
 
 /-- A row act in the log: a tag byte; insert and upsert their amt (u64) and value (u32 length);
 declare its limit, cap and width (u64 each) and the retract flag. -/
