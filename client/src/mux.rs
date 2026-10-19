@@ -58,10 +58,10 @@ pub struct MuxLimits {
 }
 
 impl MuxLimits {
-    /// The supervisor process's open fds at most: stdin, stdout, stderr, the listener and the
-    /// child's two pipes; one per counted connection; and the one accepted to be answered `full`.
+    /// The supervisor process's open fds at most: stdin, stdout, stderr, the listener, the child's
+    /// two pipes and SIGTERM's pair (CLIENT-30); one per counted connection; one answered `full`.
     pub const fn fds_max(&self) -> u64 {
-        6 + self.connections_max as u64 + 1
+        8 + self.connections_max as u64 + 1
     }
 }
 

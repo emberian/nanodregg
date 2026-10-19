@@ -125,7 +125,8 @@ fn signal(file: &Path, sig: rustix::process::Signal) -> i32 {
 }
 
 /// Born → bound and served; born while running (provisioned after the birth) → bound within the
-/// tick loop; removed → both sockets, directories and PID files gone, a connect refused ENOENT;
+/// tick loop; removed → a peer waiting on each of its sockets reads `closed unreachable` (CLIENT-30),
+/// both sockets, directories and PID files gone, a connect refused ENOENT;
 /// an app grain → nothing. nd-members' own fds do not grow with the residents it serves.
 #[test]
 fn each_resident_grain_gets_its_member_socket_and_a_removed_one_loses_it() {
@@ -239,6 +240,29 @@ fn each_resident_grain_gets_its_member_socket_and_a_removed_one_loses_it() {
         "nd-members' own fds grew with a resident:\n{}",
         m.log()
     );
+    // a peer waits on each of r2's sockets (the member one served once) as r2 is removed (CLIENT-30)
+    let waiting: Vec<UnixStream> = [r.sock(&w.r2), r.follow_sock(&w.r2)]
+        .iter()
+        .map(|p| {
+            let s = UnixStream::connect(p).unwrap();
+            s.set_read_timeout(Some(table::MUX.reply_write)).unwrap();
+            s
+        })
+        .collect();
+    let read = NdCommand {
+        argv: vec![b"read".to_vec(), obj.as_bytes().to_vec()],
+    };
+    frame::write(
+        &mut &waiting[0],
+        table::LIMITS,
+        follow_op::COMMAND,
+        &read.encode().unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        frame::read(&mut &waiting[0], table::LIMITS).unwrap().op,
+        status::OK
+    );
     // the operator removes r2 (lifecycle method 0)
     w.run(&["invoke", &w.r2, "0", "(record)"]);
     until(
@@ -247,16 +271,29 @@ fn each_resident_grain_gets_its_member_socket_and_a_removed_one_loses_it() {
         || !r.member.0.join(&w.r2).exists() && !r.follow.0.join(&w.r2).exists(),
         &|| m.log(),
     );
+    for mut s in waiting {
+        let f = frame::read(&mut s, table::LIMITS);
+        let f = f.unwrap_or_else(|e| panic!("a bare end ({e}) for r2's peer:\n{}", m.log()));
+        assert_eq!(
+            (f.op, f.payload.as_slice()),
+            (status::CLOSED, &b"unreachable"[..]),
+            "a peer of the removed resident"
+        );
+    }
     let e = UnixStream::connect(r.sock(&w.r2)).unwrap_err();
     assert_eq!(
         e.kind(),
         std::io::ErrorKind::NotFound,
         "a connect to the removed resident's socket"
     );
+    // its supervisors are reaped on a later tick (CLIENT-30: the tick never waits on a stop)
     for role in ["follow", "stdio"] {
-        assert!(
-            m.pid(&format!("{}.{role}.pid", w.r2)).is_none(),
-            "the removed resident's {role} PID file stayed"
+        let file = format!("{}.{role}.pid", w.r2);
+        until(
+            "the removed resident's PID file to go",
+            10,
+            || m.pid(&file).is_none(),
+            &|| m.log(),
         );
     }
     // each child started once: the stdio child waits for its follow socket (its connect grant
@@ -529,6 +566,113 @@ fn a_member_that_always_crashes_is_named_crash_loop_and_left_unbound() {
         5,
         "started after the crash loop"
     );
+}
+
+/// A decider answering whatever `DIR/frame` holds at each ask (a stub: python, one frame per
+/// request), so the test moves the World's answer between ticks by renaming one file.
+fn steered(r: &Roots, names: &[&String]) -> (PathBuf, PathBuf) {
+    let dir = r.base.0.join("steer");
+    nanodregg_devtools::mkdirs(&dir).unwrap();
+    steer(&dir, names);
+    let sh = r.base.0.join("steer.sh");
+    let py = "import struct,sys\ni,o=sys.stdin.buffer,sys.stdout.buffer\nwhile True:\n h=i.read(4)\n if len(h)<4: break\n i.read(struct.unpack('<I',h)[0])\n o.write(open(sys.argv[1]+'/frame','rb').read()); o.flush()\n";
+    fs::write(
+        &sh,
+        format!("#!/bin/sh\nexec /usr/bin/python3 -I -c \"{py}\" \"$1\"\n"),
+    )
+    .unwrap();
+    fs::set_permissions(&sh, fs::Permissions::from_mode(0o700)).unwrap();
+    (sh, dir)
+}
+
+/// The steered decider's next answer: `names`.
+fn steer(dir: &Path, names: &[&String]) {
+    let names = names.iter().map(|n| n.as_bytes().to_vec()).collect();
+    let mut f = Vec::new();
+    write_frame(&mut f, &Verdict::Residents { names }.encode().unwrap()).unwrap();
+    fs::write(dir.join("frame.new"), f).unwrap();
+    fs::rename(dir.join("frame.new"), dir.join("frame")).unwrap();
+}
+
+/// CLIENT-30 (ROOT ruling): a removal never stalls the tick. r2's stdio supervisor is held (SIGSTOP:
+/// a supervisor that cannot end, which no slow peer makes for long, since its writers give up within
+/// `reply_write`) while r2 is removed and r3 born in one answer: r3 is bound and served at once.
+/// r2 answered again while its supervisor stops is `memberStopping`, and gets no second supervisor;
+/// at GRACE the held one is SIGKILLed (`memberStopForced`) and r2 is bound again. r1 is served
+/// throughout.
+#[test]
+fn a_held_removal_stalls_no_birth_and_is_killed_at_its_grace() {
+    use rustix::process::Signal;
+    let w = World::genesis("ndg");
+    let r = Roots::new('g');
+    let r3 = w.resident("r3");
+    for g in [&w.r1, &w.r2, &r3] {
+        w.provision(&r, g);
+    }
+    let (sh, dir) = steered(&r, &[&w.r1, &w.r2]);
+    let c = argv_over(
+        &w,
+        &r,
+        uid(&r.member.0),
+        &dir,
+        &nd(),
+        &sh,
+        &[dir.as_os_str()],
+    );
+    let m = Members::spawn(c, &r);
+    let served = |g: &str| nd_via(&r.sock(g), &["sync"]).is_ok_and(|(e, _)| e == command_exit::OK);
+    for g in [&w.r1, &w.r2] {
+        until("a born resident served", 30, || served(g), &|| m.log());
+    }
+    let held = r.pids().join(format!("{}.stdio.pid", w.r2));
+    let pid = signal(&held, Signal::STOP);
+    steer(&dir, &[&w.r1, &r3]);
+    until(
+        "r2 removed",
+        10,
+        || m.log().contains(&format!("removed {}", w.r2)),
+        &|| m.log(),
+    );
+    let removed = std::time::Instant::now();
+    until("r3 born while r2 is held", 10, || served(&r3), &|| m.log());
+    assert!(
+        removed.elapsed() < std::time::Duration::from_secs(10),
+        "the birth waited on the held removal:\n{}",
+        m.log()
+    );
+    steer(&dir, &[&w.r1, &w.r2, &r3]);
+    let stopping = format!("memberStopping {}", w.r2);
+    until(
+        "r2's rebirth named waiting",
+        10,
+        || m.log().contains(&stopping),
+        &|| m.log(),
+    );
+    assert_eq!(
+        starts(&m.log(), &w.r2, "stdio"),
+        1,
+        "a second r2 supervisor:\n{}",
+        m.log()
+    );
+    assert!(served(&w.r1), "control: r1 while r2 stops");
+    let forced = format!("memberStopForced {}", w.r2);
+    let grace = table::MUX.reply_write * 3;
+    until(
+        "the held supervisor killed at GRACE",
+        grace.as_secs() + 30,
+        || m.log().contains(&forced),
+        &|| m.log(),
+    );
+    assert!(
+        removed.elapsed() >= grace - std::time::Duration::from_secs(1),
+        "killed before GRACE"
+    );
+    assert!(
+        !Path::new(&format!("/proc/{pid}")).exists(),
+        "the held supervisor still runs"
+    );
+    until("r2 bound again", 30, || served(&w.r2), &|| m.log());
+    assert_eq!(starts(&m.log(), &w.r2, "stdio"), 2, "{}", m.log());
 }
 
 /// Run nd-members to its end: its stderr and exit code. Not ended within 30 s FAILS by name (a

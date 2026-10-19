@@ -928,3 +928,66 @@ Mutations, each red: kept-file read unchecked; key-file read unchecked; the exis
 - Nothing persisted changes.
 
 **Status.** landed (this commit). The decider becomes `hosting-residents` when HOSTING ships it, and the resident row moves onto nd-members (HOSTING-10).
+**Amended (CLIENT-30).** A removed resident's nd-supervise children are SIGTERMed and reaped on later ticks, so every open peer reads `closed unreachable`; the CRITIQUE bullet "a removed resident's open connection gets a bare EOF" is closed there.
+
+## CLIENT-30 · SIGTERM ends no connection bare: nd-supervise names every close, nd-members stops a removed resident without stalling the tick (2026-10-20, CLIENT-9; cv 01a1507c-722d, ROOT rulings, HOSTING-12 agreed)
+**The defect (CLIENT-8 finding (a), CLIENT-29's critique).** nd-members stopped a removed resident's two nd-supervise children with SIGKILL, through their handles. nd-supervise had no SIGTERM handling either, so the default action killed it. Either way a peer with an open connection read a bare EOF, against CLIENT-28's law 7. A unit's stop (systemd sends SIGTERM to the whole control group) did the same to every supervisor.
+
+**Decision.**
+- **nd-supervise catches SIGTERM** before its child exists (`signal_hook::iterator::Signals`, a self-pipe). Its thread kills the child through the handle the main thread keeps in a `Mutex`. The child's stdout closes, so `serve` ends every connection `closed unreachable` (Lean's name; its docstring already says "at nd-supervise, its child's stdout closed"; no Protocol change). The supervisor then ends by SIGTERM's own default action (`emulate_default_handler`), so systemd and nd-members see exactly the end they saw before.
+  - If the thread cannot take the lock, the main thread is past `serve` and every peer is already named, so the thread applies the default action at once.
+  - A SIGTERM that arrives before the registration is the default death, and no socket is bound yet (bind-after-child, CLIENT-28).
+- **`MuxLimits::fds_max` = 8 + connections_max + 1 = 73.** The SIGTERM pipe pair is two more fds of the supervisor's own (was 6 + 64 + 1 = 71). The operator sentences (Ops/Units.lean refusedAtLaunch and fdLimit, deploy/units/EXITS.md) read 73 (ROOT ruling, for OPS).
+- **nd-members stops a removed resident without waiting.** `Pair::stop` removes both sockets and both directories (a connect is `ENOENT` at once) and SIGTERMs both children. Each child goes into `stopping` with a deadline of `GRACE` = 3·`reply_write` (90 s): CLIENT-28's writer bound, a queued reply and the close each within `reply_write`, plus one `reply_write` for the child's death and the supervisor's exit. Every tick reaps the children that ended and SIGKILLs and reaps each one past its deadline (`memberStopForced <name>`). Its PID file goes when it is seen gone. The tick never waits (ROOT ruling (4)).
+  - **The static bound holds:** a stopping child stays counted. Before a birth is bound, `reap` keeps at most 2·(RESIDENTS_MAX − live − 1) stopping children and SIGKILLs the oldest beyond that (`memberStopForced`). So live plus stopping supervisors ≤ 2·RESIDENTS_MAX, and processes ≤ 2 + 4·RESIDENTS_MAX, as CLIENT-29 states and TasksMax was derived.
+  - **A rebirth of a name that is still stopping waits** (`memberStopping <name>`, named once). Its old supervisor would remove the new socket path on its way out, so the name never gets a second supervisor.
+  - At nd-members' own end every child is SIGTERMed and `stopping` is drained under the same deadlines.
+- **The dependency (ROOT ruling (1)).** `signal-hook =0.3.18` (feature `iterator` only) and `signal-hook-registry 1.4.8`, both pinned in Cargo.lock. They are trusted and unverified, with two rows in gates/tcb.tsv, because the sigaction lives in the registry and the self-pipe in signal-hook. gates/tcb.py lists them by name in `UNSAFE_HOLDERS`, so a locked holder without a row is red by name. std and rustix give no safe handler, and SIGTERM handling is unavoidable: a unit stops by SIGTERM whatever nd-members does.
+
+**Plants.**
+- `client/tests/supervise.rs sigterm_names_every_peer_unreachable_and_ends_by_sigterm`: A answered and idle, B with a request the child holds. On SIGTERM both read `closed unreachable`, the socket is gone, and the supervisor's status is signal 15.
+- `every_connection_gives_back_its_fds_and_threads` now bounds the peak by 73: 72 with 64 open, red at 71.
+- `launcher/tests/members.rs`:
+  - `each_resident_…`: a peer on each of r2's sockets (the member one served once) reads `closed unreachable` when r2 is removed, and the PID files go on a later tick.
+  - `a_held_removal_stalls_no_birth_and_is_killed_at_its_grace`, with a steered stub decider that answers a file the test renames between ticks:
+    - r2's stdio supervisor is held (SIGSTOP) while r2 is removed and r3 born in one answer, and r3 is served within 10 s;
+    - r2 answered again is `memberStopping` and gets no second stdio start; r1 is served meanwhile;
+    - at GRACE the held one is SIGKILLed (`memberStopForced`, not before GRACE, its /proc entry gone) and r2 is bound again (a second start). About 95 s.
+- SIGSTOP stands for "a peer that never reads". No slow peer holds a supervisor past GRACE, because its writers give up within `reply_write`, so a supervisor that cannot end is the only way to reach the kill.
+
+**Mutations, each red** (`logs/client9-mut.py` → `logs/client9-mut.out`):
+- S1 SIGTERM not caught (both plants);
+- S2 never flagged (ends `childSignaled` 66);
+- S3 the default action while serving (no named close);
+- S4 fds_max without the pair;
+- M1 SIGKILL at once;
+- M2 no grace;
+- M3 the tick drains `stopping` (the birth waits);
+- M4 no rebirth guard (a second supervisor);
+- M5 no kill at the deadline.
+
+**Declared unplanted:** the room eviction before a birth (needs RESIDENTS_MAX live residents); macOS.
+
+**Alternatives.**
+- (a) Close the child's stdin on SIGTERM and let it drain: graceful for a request in flight, but its length is the child's (up to `REPLY_MS_MAX`), past any grace nd-members can hold.
+- (b) Watch nd-supervise's stdin as a stop pipe instead of a signal: no crate, but a unit's SIGTERM still kills it bare.
+- (c) A flag handler (`signal_hook::flag`) with a polling thread: no fds, but 2048 supervisors waking on a timer.
+- (d) nd-members blocking on its stops (the first build): a removed resident's stuck peer would stall every birth for up to 90 s. HOSTING-12 measured that a birth nd-members has not bound yet crash-loops its grain (`pathMissing` ×5 in milliseconds). ROOT ruled it a defect.
+
+**CRITIQUE.**
+- A peer that does not read within `reply_write` still gets no name. Its close cannot be written, as with CLIENT-28's `replyWriteFailed`. A supervisor SIGKILLed at GRACE ends its peers bare, and that is named on nd-members' stderr instead.
+- The kill of the child is abrupt: a request in flight gets `closed unreachable`, not its reply. The member's attempt store owns that recovery (CLIENT-27).
+- signal-hook adds two trusted crates with unsafe to a TCB whose own crates forbid unsafe.
+- `GRACE`'s third `reply_write` is a margin for process exit, not a measured number.
+- The over-bound eviction is reached only by churn past RESIDENTS_MAX removals within GRACE, and no plant reaches it.
+
+**META-CRITIQUE.** I first built the blocking stop and called its stall a trade-off in my own critique. It was the defect CLIENT-29 already named ("one resident must not stop the others"), so it was not a trade-off. HOSTING-12's measurement of what a stalled birth costs, and ROOT's ruling, turned it.
+
+**Size.** nd-supervise 132 → 160 of 160. Client library unchanged at 2520. nd-members 578 → 623 (ROOT ruling, gates/ceilings.tsv).
+
+**Flag day.**
+- fds_max goes from 71 to 73: a unit whose LimitNOFILE is exactly 71 now refuses at launch (none is rendered at 71).
+- nd-supervise's end on SIGTERM is unchanged (signal 15).
+- Nothing persisted changes.
+
+**Status.** landed (this commit).

@@ -61,7 +61,7 @@ code space holds both tables: `host` (Host.Status, below 64) and nd-supervise's 
 
 | code | name | class | systemd | operator |
 |---|---|---|---|---|
-| 64 | refusedAtLaunch | fatal | stopped (RestartPreventExitStatus) | refused before the child ran (nothing hidden, an unreadable argument, a socket it cannot bind, the sandbox's policy or mechanism, a soft open-file limit below what the supervisor may hold): fix the unit or the box; the reason is on stderr. For `RLIMIT_NOFILE N is below the M fds it may hold` (CLIENT-28) raise the unit's LimitNOFILE (or `ulimit -n`) to at least M (71 at CONNECTIONS_MAX 64: its stdio, its socket, the child's two pipes, one per connection, one being refused `full`) |
+| 64 | refusedAtLaunch | fatal | stopped (RestartPreventExitStatus) | refused before the child ran (nothing hidden, an unreadable argument, a socket it cannot bind, the sandbox's policy or mechanism, a soft open-file limit below what the supervisor may hold): fix the unit or the box; the reason is on stderr. For `RLIMIT_NOFILE N is below the M fds it may hold` (CLIENT-28) raise the unit's LimitNOFILE (or `ulimit -n`) to at least M (73 at CONNECTIONS_MAX 64: its stdio, its socket, the child's two pipes, its SIGTERM pair, one per connection, one being refused `full`) |
 | 65 | childUnroutable | fatal | stopped (RestartPreventExitStatus) | the child wrote a frame the mux cannot route: a defect in the child, report to HOST and CLIENT |
 | 66 | childSignaled | restart | restarted after 2 s; failed past 5 starts in 120 s | automatic; the child was killed by a signal (the OOM killer, an operator; on Linux any mechanism exit of 128 or more, bwrap's 128+N); a crash on every start stops at the start limit |
 
@@ -129,7 +129,7 @@ code space holds both tables: `host` (Host.Status, below 64) and nd-supervise's 
 | 151 | memberRoot | fatal | stopped (RestartPreventExitStatus) | MEMBER (/run/nd-member) is not nd's 02710 directory with a StrictModes-clean chain (fix the tmpfiles line, RUNBOOK §2b), or the decider answered a name that is not a grain directory name (a defect: report to HOSTING) |
 | 152 | membersRoot | fatal | stopped (RestartPreventExitStatus) | MEMBERS (/srv/nd-members/L/members) is not a 0700 nd directory with a clean chain (RUNBOOK §2b) |
 | 153 | followRoot | fatal | stopped (RestartPreventExitStatus) | FOLLOW (/run/nd-member-follow) is not a 0700 nd directory with a clean chain: fix the tmpfiles line (RUNBOOK §2b) |
-| 154 | fdLimit | fatal | stopped (RestartPreventExitStatus) | RLIMIT_NOFILE is below the fds each resident's nd-supervise may hold (71 at CONNECTIONS_MAX 64): set the unit's LimitNOFILE to at least the M in the stderr line |
+| 154 | fdLimit | fatal | stopped (RestartPreventExitStatus) | RLIMIT_NOFILE is below the fds each resident's nd-supervise may hold (73 at CONNECTIONS_MAX 64): set the unit's LimitNOFILE to at least the M in the stderr line |
 | 155 | deciderRefused | fatal | stopped (RestartPreventExitStatus) | the sandbox refused the decider's policy, or it could not be spawned: check the mechanism (deploy/live/README.md) and the decider path |
 | 156 | pidFile | fatal | stopped (RestartPreventExitStatus) | a PID file in PIDS could not be written: check the unit's RuntimeDirectory |
 | 157 | deciderSignaled | restart | restarted after 2 s; failed past 5 starts in 120 s | automatic; the decider was killed by a signal; a crash on every start stops at the start limit |

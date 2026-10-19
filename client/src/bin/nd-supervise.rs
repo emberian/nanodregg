@@ -9,16 +9,23 @@
 //! the socket's connections and the child's stdio (`mux`). It exits when the child does, with the
 //! child's status, or with one of its own (`Protocol.Exit`, emitted: refusedAtLaunch,
 //! childUnroutable, childSignaled); the service manager restarts the pair. Nothing is parsed but frame headers.
+//! SIGTERM (nd-members removing a resident, a unit's stop) stops the child, so every peer reads
+//! `closed unreachable` (CLIENT-30), and then ends the supervisor as SIGTERM's default action would.
 
 use std::ffi::OsString;
 use std::fs;
 use std::path::PathBuf;
 use std::process::{ExitCode, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use nanodregg_client::generated::supervisor_exit as exit;
 use nanodregg_client::mux::{self, MuxEnd};
 use nanodregg_client::{sockets, table};
 use nanodregg_sandbox::{Policy, command};
+use signal_hook::consts::SIGTERM;
+use signal_hook::iterator::Signals;
+use signal_hook::low_level::emulate_default_handler;
 
 const USAGE: &str = "usage: nd-supervise SOCKET [--group GID [--peer UID]] (--hide|--read|--write|--exec|--connect PATH)... -- /ABS/PROGRAM [ARG]...";
 
@@ -96,6 +103,8 @@ fn run() -> Result<ExitCode, String> {
     }
     let at = |e: std::io::Error| format!("nd-supervise: {}: {e}", a.socket.display());
     sockets::check_supervised(&a.socket, a.group).map_err(at)?;
+    // Caught before the child exists, so no peer is ever served by a supervisor SIGTERM ends unheard.
+    let mut term = Signals::new([SIGTERM]).map_err(|e| format!("nd-supervise: SIGTERM: {e}"))?;
     let args: Vec<&std::ffi::OsStr> = a.args.iter().map(OsString::as_os_str).collect();
     let mut child = command(&a.policy, &a.program, &args)
         .map_err(|e| format!("nd-supervise: {e}"))?
@@ -111,8 +120,23 @@ fn run() -> Result<ExitCode, String> {
         let _ = (child.kill(), child.wait());
         at(e)
     })?;
+    let child = Arc::new(Mutex::new(child));
+    let termed = Arc::new(AtomicBool::new(false));
+    let (held, said) = (Arc::clone(&child), Arc::clone(&termed));
+    std::thread::spawn(move || {
+        if term.forever().next().is_some() {
+            said.store(true, Ordering::SeqCst);
+            eprintln!("nd-supervise: SIGTERM: stopping the child");
+            // serving: the child's stdout closes, `serve` names every close; past it: the default
+            match held.try_lock() {
+                Ok(mut c) => drop(c.kill()),
+                Err(_) => drop(emulate_default_handler(SIGTERM)),
+            }
+        }
+    });
     let end = mux::serve_admitting(listener, child_in, child_out, table::MUX, a.peer);
     let _ = fs::remove_file(&a.socket);
+    let mut child = child.lock().unwrap_or_else(PoisonError::into_inner);
     if let MuxEnd::ChildMalformed(ref e) = end {
         // A child that writes unroutable frames is broken; stop it (we hold its handle).
         let _ = child.kill();
@@ -122,6 +146,10 @@ fn run() -> Result<ExitCode, String> {
         .wait()
         .map_err(|e| format!("nd-supervise: wait: {e}"))?;
     eprintln!("nd-supervise: {end:?}; child {status}");
+    if termed.load(Ordering::SeqCst) {
+        // stopped by SIGTERM: end as it would have ended us, the service manager's clean stop
+        let _ = emulate_default_handler(SIGTERM);
+    }
     // How a signal death reaches us is the mechanism's (sandbox::killed_by_signal).
     Ok(match (end, status.code()) {
         (MuxEnd::ChildMalformed(_), _) => ExitCode::from(exit::CHILD_UNROUTABLE),

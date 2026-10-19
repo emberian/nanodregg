@@ -316,7 +316,7 @@ def supervisorName : SupervisorExit → String
 
 /-- What the operator does when nd-supervise ends on its own account. -/
 def supervisorAction : SupervisorExit → String
-  | .refusedAtLaunch => "refused before the child ran (nothing hidden, an unreadable argument, a socket it cannot bind, the sandbox's policy or mechanism, a soft open-file limit below what the supervisor may hold): fix the unit or the box; the reason is on stderr. For `RLIMIT_NOFILE N is below the M fds it may hold` (CLIENT-28) raise the unit's LimitNOFILE (or `ulimit -n`) to at least M (71 at CONNECTIONS_MAX 64: its stdio, its socket, the child's two pipes, one per connection, one being refused `full`)"
+  | .refusedAtLaunch => "refused before the child ran (nothing hidden, an unreadable argument, a socket it cannot bind, the sandbox's policy or mechanism, a soft open-file limit below what the supervisor may hold): fix the unit or the box; the reason is on stderr. For `RLIMIT_NOFILE N is below the M fds it may hold` (CLIENT-28) raise the unit's LimitNOFILE (or `ulimit -n`) to at least M (73 at CONNECTIONS_MAX 64: its stdio, its socket, the child's two pipes, its SIGTERM pair, one per connection, one being refused `full`)"
   | .childUnroutable => "the child wrote a frame the mux cannot route: a defect in the child, report to HOST and CLIENT"
   | .childSignaled => "automatic; the child was killed by a signal (the OOM killer, an operator; on Linux any mechanism exit of 128 or more, bwrap's 128+N); a crash on every start stops at the start limit"
 
@@ -544,14 +544,15 @@ def followTmpfiles : String :=
 open Nanodregg.Hosting (MembersExit)
 
 /-- What the operator does when nd-members ends on its own account (a resident's own trouble is never
-an end: a name in the journal, `memberMissing` / `socketDirShared` / `memberCrashLoop` / `memberSpawn`,
+an end: a name in the journal, `memberMissing` / `socketDirShared` / `memberCrashLoop` / `memberSpawn` / `memberStopping` /
+`memberStopForced`,
 and that resident unbound while the others are served). Exhaustive. -/
 def membersAction : MembersExit → String
   | .usage => "the unit's argv does not parse: compare ExecStart with this unit's rendered argv"
   | .memberRoot => "MEMBER (/run/nd-member) is not nd's 02710 directory with a StrictModes-clean chain (fix the tmpfiles line, RUNBOOK §2b), or the decider answered a name that is not a grain directory name (a defect: report to HOSTING)"
   | .membersRoot => "MEMBERS (/srv/nd-members/L/members) is not a 0700 nd directory with a clean chain (RUNBOOK §2b)"
   | .followRoot => "FOLLOW (/run/nd-member-follow) is not a 0700 nd directory with a clean chain: fix the tmpfiles line (RUNBOOK §2b)"
-  | .fdLimit => "RLIMIT_NOFILE is below the fds each resident's nd-supervise may hold (71 at CONNECTIONS_MAX 64): set the unit's LimitNOFILE to at least the M in the stderr line"
+  | .fdLimit => "RLIMIT_NOFILE is below the fds each resident's nd-supervise may hold (73 at CONNECTIONS_MAX 64): set the unit's LimitNOFILE to at least the M in the stderr line"
   | .deciderRefused => "the sandbox refused the decider's policy, or it could not be spawned: check the mechanism (deploy/live/README.md) and the decider path"
   | .pidFile => "a PID file in PIDS could not be written: check the unit's RuntimeDirectory"
   | .deciderSignaled => "automatic; the decider was killed by a signal; a crash on every start stops at the start limit"

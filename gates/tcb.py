@@ -6,7 +6,7 @@ trusted-unverified | verified | platform-fact; owner is a layer named in gates/O
 Red, by name, on:
   - a malformed row, an unknown kind or owner, or two rows for one component;
   - a crate of the root Cargo.lock on the crypto/TLS list below (CRATES/PREFIXES: a primitive, TLS, a
-    certificate or key parser, trust anchors, randomness) with no row whose component is the crate's
+    certificate or key parser, trust anchors, randomness; UNSAFE_HOLDERS: the unsafe a forbid-unsafe crate delegates) with no row whose component is the crate's
     name, or whose pin does not list every locked version of it (a version bump re-reads the row);
     the list is the lock, not one platform's build graph: a locked crate is one feature away from built;
   - a row naming a crate that is on the list and no longer locked (stale);
@@ -36,6 +36,9 @@ CRATES = {
     "rcgen", "x509-parser", "x509-cert", "rand", "rand_core", "rand_chacha", "getrandom", "native-tls",
     "p256", "p384", "p521", "rsa", "ecdsa", "elliptic-curve", "argon2", "scrypt", "pbkdf2", "bcrypt",
 }
+# Crates that hold the unsafe a forbid(unsafe_code) crate delegates, admitted by name (ROOT ruling,
+# CLIENT-30): signal dispositions (sigaction) for nd-supervise SIGTERM.
+UNSAFE_HOLDERS = {"signal-hook", "signal-hook-registry"}
 PREFIXES = ("rustls", "webpki", "ed25519", "ed448", "curve25519", "x25519", "aes", "chacha20", "poly1305",
             "aws-lc", "openssl", "boring", "asn1-rs", "schannel", "security-framework")
 NATIVE_AXIOMS = {"Lean.ofReduceBool", "Lean.ofReduceNat", "Lean.trustCompiler"}
@@ -43,7 +46,7 @@ NATIVE_AUX = re.compile(r"\._native\.native_decide\.ax_\d+(_\d+)*$")
 
 
 def matches(crate: str) -> bool:
-    return crate in CRATES or crate.startswith(PREFIXES)
+    return crate in CRATES or crate in UNSAFE_HOLDERS or crate.startswith(PREFIXES)
 
 
 def _tsv(path: str) -> list[list[str]]:

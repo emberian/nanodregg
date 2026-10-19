@@ -23,9 +23,11 @@
 //! started again at most every `RESTART_AFTER`; past `STARTS_MAX` starts in `STARTS_WINDOW` the name
 //! is `memberCrashLoop`, left unbound until the answer changes. A member not yet provisioned is
 //! retried every tick and named once (`memberMissing`), so provisioning just after the birth
-//! binds it within a tick. A name no longer answered loses both children, both sockets and both
-//! directories. A resident's own trouble is a name on stderr and that resident unbound, never an end
-//! (`memberMissing`, `socketDirShared`, `memberCrashLoop`, `memberSpawn`): one resident must not stop the others.
+//! binds it within a tick. A name no longer answered loses both sockets, both directories and both
+//! children, each SIGTERMed to name every peer's close (CLIENT-30), reaped on later ticks, SIGKILLed
+//! past `GRACE`, counted until gone; a rebirth of its name waits. A resident's own trouble is a name
+//! on stderr and that resident unbound, never an end (`memberMissing`, `socketDirShared`,
+//! `memberCrashLoop`, `memberSpawn`, `memberStopping`, `memberStopForced`): one resident must not stop the others.
 //! Its own ends are `members_exit` (Lean's `Hosting.MembersExit`); the decider's own end is passed
 //! through, and a World past `RESIDENTS_MAX` ends it with the decider's code for that fact (7).
 
@@ -42,6 +44,7 @@ use nanodregg_launcher::residents::{self, DeciderEnd};
 use nanodregg_launcher::{grain_name_ok, pairwise_apart};
 use nanodregg_sandbox::custody;
 use nanodregg_sandbox::{Policy, command};
+use rustix::process::{Pid, Signal, kill_process};
 
 const USAGE: &str = "usage: nd-members MEMBER MEMBERS STATE FOLLOW PIDS HOST_SOCK PEER SUPERVISE ND HOST STORE [--hide PATH]... -- /ABS/DECIDER [ARG]...";
 /// How often the decider is asked (keybroker's tick): liveness only.
@@ -56,6 +59,9 @@ const STARTS_MAX: usize = 5;
 const STARTS_WINDOW: Duration = Duration::from_secs(120);
 /// The largest `follow` file read: two digests in hex, a space and LF.
 const FOLLOW_MAX: usize = 256;
+/// After SIGTERM, an nd-supervise's writers deliver a queued reply and the close, each within
+/// `reply_write` (CLIENT-28); one more for its child's death and its own exit. Then SIGKILL.
+const GRACE: Duration = nanodregg_client::table::MUX.reply_write.saturating_mul(3);
 
 /// How nd-members ends: the line on stderr (a Lean name first) and the exit code.
 struct End(String, u8);
@@ -243,10 +249,14 @@ fn run() -> End {
         stop(&mut child, None);
         return End(format!("pidFile {e}"), exit::PID_FILE);
     }
-    let mut served: BTreeMap<String, Pair> = BTreeMap::new();
-    let end = serve(&conf, &mut child, din, dout, &mut served);
-    for (name, pair) in &mut served {
-        pair.stop(&conf, name);
+    let (mut served, mut stopping) = (BTreeMap::new(), Vec::new());
+    let end = serve(&conf, &mut child, din, dout, &mut served, &mut stopping);
+    for (n, p) in &mut served {
+        p.stop(&conf, n, &mut stopping);
+    }
+    while !stopping.is_empty() {
+        reap(&mut stopping, usize::MAX);
+        std::thread::sleep(Duration::from_millis(10));
     }
     stop(&mut child, Some(&pid_file));
     end
@@ -261,6 +271,30 @@ fn stop(c: &mut Child, pid_file: Option<&Path>) {
     }
 }
 
+/// nd-supervise children sent SIGTERM, each with its resident's name and its SIGKILL deadline. They
+/// stay counted against the 2·RESIDENTS_MAX supervisors (law 4) until each is seen gone.
+type Stopping = Vec<(String, Proc, Instant)>;
+
+/// Reap the stopping children that ended. SIGKILL and reap each past its deadline, and the oldest
+/// while more than `keep` are held (a birth's room); each named `memberStopForced`.
+fn reap(stopping: &mut Stopping, keep: usize) {
+    let mut over = stopping.len().saturating_sub(keep);
+    stopping.retain_mut(|(name, p, until)| {
+        if over > 0 || Instant::now() >= *until {
+            over = over.saturating_sub(1);
+            if let Ok(None) = p.child.try_wait() {
+                say(&format!("memberStopForced {name}"));
+            }
+            let _ = (p.child.kill(), p.child.wait());
+        }
+        let gone = matches!(p.child.try_wait(), Ok(Some(_)));
+        if gone {
+            let _ = std::fs::remove_file(&p.pid_file);
+        }
+        !gone
+    });
+}
+
 /// The decider's life: ask, serve exactly the names answered, until it ends.
 fn serve(
     conf: &Conf,
@@ -268,6 +302,7 @@ fn serve(
     mut din: ChildStdin,
     mut dout: ChildStdout,
     served: &mut BTreeMap<String, Pair>,
+    stopping: &mut Stopping,
 ) -> End {
     // names not provisioned, retried every tick and reported once until they are; names left
     // unbound after a crash loop until the answer changes; the answer they were for
@@ -313,15 +348,25 @@ fn serve(
             .collect();
         for g in gone {
             if let Some(mut pair) = served.remove(&g) {
-                pair.stop(conf, &g);
+                pair.stop(conf, &g, stopping);
                 say(&format!("removed {g}"));
             }
         }
+        reap(stopping, usize::MAX);
         for name in &now {
             if looped.contains(name) {
                 continue;
             }
+            // a rebirth waits for its stopping supervisors: never a second one on its socket path
+            if stopping.iter().any(|s| s.0 == *name) {
+                if reported.insert(name.clone()) {
+                    say(&format!("memberStopping {name}"));
+                }
+                continue;
+            }
             if !served.contains_key(name) {
+                let room = (RESIDENTS_MAX as usize).saturating_sub(served.len() + 1);
+                reap(stopping, 2 * room);
                 match provision(conf, name) {
                     Ok(id) => {
                         reported.remove(name);
@@ -339,7 +384,7 @@ fn serve(
                 continue;
             };
             if let Err(why) = pair.tend(conf, name) {
-                pair.stop(conf, name);
+                pair.stop(conf, name, stopping);
                 served.remove(name);
                 say(&why);
                 looped.insert(name.clone());
@@ -473,12 +518,6 @@ impl Slot {
         self.starts.push(Instant::now());
         Ok(())
     }
-
-    fn stop(&mut self) {
-        if let Some(mut p) = self.proc.take() {
-            stop(&mut p.child, Some(&p.pid_file));
-        }
-    }
 }
 
 /// A resident's two children.
@@ -544,10 +583,9 @@ impl Pair {
         Ok(())
     }
 
-    /// Stop both children by their own handles; remove both sockets and both directories.
-    fn stop(&mut self, conf: &Conf, name: &str) {
-        self.stdio.stop();
-        self.follow.stop();
+    /// Remove both sockets and both directories (a connect is then `ENOENT`), and SIGTERM both
+    /// children, so each names every peer's close (CLIENT-30): `stopping` holds them, the tick goes on.
+    fn stop(&mut self, conf: &Conf, name: &str, stopping: &mut Stopping) {
         let msock = conf.member.join(name).join("nd.sock");
         let fsock = conf.follow.join(name).join("follow.sock");
         for s in [msock, fsock] {
@@ -555,6 +593,13 @@ impl Pair {
             if let Some(d) = s.parent() {
                 let _ = std::fs::remove_dir(d);
             }
+        }
+        for p in [self.stdio.proc.take(), self.follow.proc.take()]
+            .into_iter()
+            .flatten()
+        {
+            let _ = kill_process(Pid::from_child(&p.child), Signal::TERM);
+            stopping.push((name.to_owned(), p, Instant::now() + GRACE));
         }
     }
 }

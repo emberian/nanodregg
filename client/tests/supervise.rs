@@ -504,6 +504,72 @@ while True:
     let _ = std::fs::remove_dir_all(&ws);
 }
 
+/// CLIENT-30 (cv 01a1507c-722d): SIGTERM, as nd-members sends a removed resident's supervisor and a
+/// unit's stop sends every process, leaves no peer with a bare EOF. The child answers A and holds
+/// B's request: on SIGTERM A (idle) and B (in flight) both read `closed unreachable`, the socket
+/// is gone, and the supervisor ends by SIGTERM itself, as before it handled the signal.
+#[test]
+fn sigterm_names_every_peer_unreachable_and_ends_by_sigterm() {
+    use std::os::unix::process::ExitStatusExt;
+    const HOLDS: &str = r#"
+import struct, sys
+i, o = sys.stdin.buffer, sys.stdout.buffer
+asked = 0
+while True:
+    h = i.read(4)
+    if len(h) < 4: break
+    body = i.read(struct.unpack('<I', h)[0])
+    if body[4] == HANGUP: continue
+    asked += 1
+    if asked == 2: continue
+    out = body[:4] + bytes([body[4] + 1])
+    o.write(struct.pack('<I', len(out)) + out); o.flush()
+"#;
+    let ws = std::env::temp_dir().join(format!("nd-sup-term-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&ws);
+    std::fs::create_dir(&ws).unwrap();
+    let sock = std::env::temp_dir().join(format!("nd-sup-term-{}.sock", std::process::id()));
+    let mut sup = common::supervise(&sock, &ws, &[], HOLDS, &[]);
+    let open = || {
+        let c = UnixStream::connect(&sock).unwrap();
+        c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+        c
+    };
+    let (mut a, mut b) = (open(), open());
+    frame::write(&mut a, table::LIMITS, 5, b"").unwrap();
+    assert_eq!(frame::read(&mut a, table::LIMITS).unwrap().op, 6);
+    frame::write(&mut b, table::LIMITS, 5, b"").unwrap();
+    std::thread::sleep(Duration::from_millis(300));
+    let pid = sup.child().id().to_string();
+    assert!(
+        Command::new("kill")
+            .args(["-TERM", &pid])
+            .status()
+            .unwrap()
+            .success()
+    );
+    for s in [&mut a, &mut b] {
+        let f = frame::read(s, table::LIMITS).unwrap();
+        assert_eq!(
+            (f.op, f.payload.as_slice()),
+            (
+                nanodregg_client::generated::status::CLOSED,
+                &b"unreachable"[..]
+            )
+        );
+    }
+    let status = sup.child().wait().unwrap();
+    let bound = sock.exists();
+    let _ = std::fs::remove_file(&sock);
+    let _ = std::fs::remove_dir_all(&ws);
+    assert_eq!(
+        status.signal(),
+        Some(15),
+        "the supervisor's own end: {status}"
+    );
+    assert!(!bound, "{} outlived the supervisor", sock.display());
+}
+
 /// CLIENT-28 (ROOT): the socket is bound only once the child exists, so a launch refused before
 /// it (here the policy: the hidden path is readable, `Exposed`) leaves no socket for a peer to wait on.
 #[test]
