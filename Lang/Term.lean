@@ -12,7 +12,8 @@ import Lang.Ty
 
 namespace Nanodregg.Lang
 
-/-- The strict binary primitives. Each is O(1) on bounded operands. -/
+/-- The strict binary primitives. Each is charged its `Lang.primTicks`: one tick, or one per word
+of bytes it walks (`beq`, `deq`, `cat`; LANG-64). -/
 inductive Prim
   | add | sub | mul | div | mod
   | eq | lt | le

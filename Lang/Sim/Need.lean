@@ -6,7 +6,10 @@ by the work the program requires. That denominator is the number of rule instanc
 derivation of the run's meaning (Lang.Proofs.BigStep), plus, for extraction, the derivations of
 the suspensions it forces. It is computed here by `need`, a fuel-bounded evaluator with one clause
 per `BigStep`/`Sel`/`Ext` rule. Each clause adds 1 for its own rule instance to the counts of its
-premises. It never reads the machine: no `step`, no `run`, no tick.
+premises, except a primitive's, which adds its `primTicks` (LANG-64): the language's price for it,
+one per word of bytes its operands hold, computed from the operand values (the machine charges the
+same price list). It never reads the machine: no `step`, no
+`run`, no tick.
 `Lang.Proofs.Need.need_derives` says the count IS the derivation's size (`Derives`, BigStep
 carrying its size, `derives_bigStep`/`bigStep_derives`, the size unique by
 `derives_size_unique`).
@@ -81,7 +84,7 @@ def need (lib : List Term) : Nat → Env → Term → Option (Except Fault Val �
         match need lib f env b with
         | some (.error e, m) => some (.error e, n + m + 1)
         | some (.ok y, m) =>
-          if meaningful (primEval p x y) then some (primEval p x y, n + m + 1) else none
+          if meaningful (primEval p x y) then some (primEval p x y, n + m + primTicks p x y) else none
         | none => none
       | none => none
     | .record fs => some (.ok (.record (suspend env fs)), 1)
@@ -312,7 +315,18 @@ bytes as a DIGEST: a primitive that makes an id from bytes, which the language h
 `Lang.Proofs.Provenance.run_lits` rules out for the deployed step. -/
 def forgeStep (lib : List Term) (s : State) : Step :=
   match s.control, s.stack with
-  | .ret (.bytes b), .primR .cat (.bytes a) :: k => .next ⟨.ret (.digest (a ++ b)), k, s.depth - 1⟩
+  | .ret (.bytes b), .primR .cat (.bytes a) _ :: k => .next ⟨.ret (.digest (a ++ b)), k, s.depth - 1⟩
+  | _, _ => step lib s
+
+/-- PLANT (LANG-64's tooth): the deployed step, except that a primitive computes on its first tick
+whatever bytes it walks. That is the machine before LANG-64, where a 64 KiB `cat` was one tick;
+`Lang.Proofs.CostTeeth.cat64_flat` shows `walked_le` and `derives_lt_used` false for it. -/
+def flatStep (lib : List Term) (s : State) : Step :=
+  match s.control, s.stack with
+  | .ret v, .primR p a _ :: k =>
+    match primEval p a v with
+    | .ok r => .next ⟨.ret r, k, s.depth - 1⟩
+    | .error e => .fault e
   | _, _ => step lib s
 
 end Nanodregg.Lang.Need

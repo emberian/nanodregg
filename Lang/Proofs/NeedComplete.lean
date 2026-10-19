@@ -25,7 +25,7 @@ variable {lib : List Term}
 
 theorem derives_pos {env : Env} {t : Term} {r : Except Fault Val} {n : Nat}
     (h : Derives lib env t r n) : 0 < n := by
-  cases h <;> omega
+  cases h <;> first | omega | exact Nat.lt_of_lt_of_le primTicks_pos (Nat.le_add_left _ _)
 
 theorem dsel_pos {v : Val} {ℓ : Label} {r : Except Fault Val} {n : Nat}
     (h : DSel lib v ℓ r n) : 0 < n := by
@@ -60,7 +60,8 @@ theorem need_complete : ∀ {env : Env} {t : Term} {r : Except Fault Val} {n : N
     simp [Need.need, need_complete hf f (by omega), need_complete ha f (by omega)]
   | _, _, _, _, .fix ht, f + 1, h => by simp [Need.need, need_complete ht f (by omega)]
   | _, _, _, _, .fixE ht, f + 1, h => by simp [Need.need, need_complete ht f (by omega)]
-  | _, _, _, _, .prim ha hb hp, f + 1, h => by
+  | _, _, _, _, .prim (p := p) (x := x) (y := y) ha hb hp, f + 1, h => by
+    have := primTicks_pos (p := p) (x := x) (y := y)
     simp [Need.need, need_complete ha f (by omega), need_complete hb f (by omega), meaningful_of_ne hp]
   | _, _, _, _, .primL ha, f + 1, h => by simp [Need.need, need_complete ha f (by omega)]
   | _, _, _, _, .primR ha hb, f + 1, h => by

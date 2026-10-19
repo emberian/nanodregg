@@ -181,9 +181,11 @@ theorem step_sound {lib : List Term} {s : State} {T : Ty} (hlib : LibTy Δ lib)
       obtain ⟨b, cenv, Γ, rfl, hce, hb⟩ := hv.fn_inv
       exact .next (.ret (.knot hce hb) hk)
     | primL he hb hk => exact .next (.eval he hb (.primR hv hk))
-    | @primR p a k T ha hk =>
+    | @primR p a j k T ha hk =>
       have hp := primEval_sound ha hv
-      simp only [step]
+      simp only [step, primStep]
+      split
+      · exact .next (.ret hv (.primR ha hk))
       revert hp
       cases primEval p a v with
       | ok r => intro hp; exact .next (.ret hp hk)
@@ -234,7 +236,7 @@ theorem step_depth {lib : List Term} {s s' : State} (hd : DepthOK s) (h : step l
     cases k with
     | nil => simp [step] at h
     | cons f k =>
-      cases f <;> simp only [step] at h <;>
+      cases f <;> simp only [step, primStep] at h <;>
         (repeat' split at h) <;> (try simp at h) <;> (try (cases h; simp))
 
 /-- What a typed run may end with: a value of its type, or a named fault other than `stuck`. -/
@@ -270,7 +272,7 @@ theorem eval_sound {lib : List Term} {b : Nat} {t : Term} {env : List Val} {Γ :
 `stack` come only from `run`, and (with `step_progress`) a typed state faults only in arithmetic or
 by the refusal its program wrote (LANG-51). -/
 theorem step_fault {lib : List Term} {s : State} {f : Fault} (h : step lib s = .fault f) :
-    f = .stuck ∨ (∃ p a v k d, s = ⟨.ret v, .primR p a :: k, d⟩ ∧ primEval p a v = .error f) ∨
+    f = .stuck ∨ (∃ p a j v k d, s = ⟨.ret v, .primR p a j :: k, d⟩ ∧ primEval p a v = .error f) ∨
       ∃ T w env k d, s = ⟨.eval (.refuse T w) env, k, d⟩ ∧ f = .refused w := by
   obtain ⟨c, k, d⟩ := s
   cases c with
@@ -283,11 +285,13 @@ theorem step_fault {lib : List Term} {s : State} {f : Fault} (h : step lib s = .
     | nil => simp [step] at h
     | cons fr k =>
       cases fr with
-      | primR p a =>
-        simp only [step] at h
+      | primR p a j =>
+        simp only [step, primStep] at h
         split at h
         · simp at h
-        · rename_i e he; cases h; exact .inr (.inl ⟨p, a, v, k, d, rfl, he⟩)
+        split at h
+        · simp at h
+        · rename_i e he; cases h; exact .inr (.inl ⟨p, a, j, v, k, d, rfl, he⟩)
       | _ => left; simp only [step] at h <;> (repeat' split at h) <;> simp_all
 
 theorem checkLib_sound {lib : List Term} (h : checkLib Δ lib = true) : LibTy Δ lib := by

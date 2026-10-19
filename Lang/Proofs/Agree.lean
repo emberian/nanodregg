@@ -49,6 +49,21 @@ theorem Ends.inv_halt {s : State} {v : Val} {o : (Except Fault Val)} {n : Nat} (
 theorem Ends.pos {s : State} {o : (Except Fault Val)} {n : Nat} (h : Ends lib s o n) : 0 < n := by
   cases h <;> omega
 
+/-- A primitive's frame pays its ticks (LANG-64) until the tick that computes it: a run from the
+frame with `j` paid passes, no later, through the frame with some `j'` paid at which the next tick
+computes (`primTicks ≤ j' + 1`). -/
+theorem Ends.paid {p : Prim} {a v : Val} {k : List Frame} {d : Nat} {o : Except Fault Val} :
+    ∀ (i j n : Nat), primTicks p a v ≤ j + 1 + i → Ends lib ⟨.ret v, .primR p a j :: k, d⟩ o n →
+      ∃ j' n', n' ≤ n ∧ primTicks p a v ≤ j' + 1 ∧ Ends lib ⟨.ret v, .primR p a j' :: k, d⟩ o n'
+  | 0, j, n, hi, h => ⟨j, n, Nat.le_refl _, by omega, h⟩
+  | i + 1, j, n, hi, h => by
+    by_cases hj : j + 1 < primTicks p a v
+    · obtain ⟨n1, rfl, h1⟩ := h.inv_next (s' := ⟨.ret v, .primR p a (j + 1) :: k, d⟩)
+        (by simp [step, primStep, hj])
+      obtain ⟨j', n', hn, hj', h'⟩ := Ends.paid i (j + 1) n1 (by omega) h1
+      exact ⟨j', n', by omega, hj', h'⟩
+    · exact ⟨j, n, Nat.le_refl _, by omega, h⟩
+
 /-- A run from `eval t env` on stack `k` ends in `t`'s faulting meaning, or returns `t`'s value. -/
 def EvalAgrees (lib : List Term) (n : Nat) : Prop :=
   ∀ (t : Term) (env : Env) (k : List Frame) (d : Nat) (o : (Except Fault Val)), o ≠ .error .stuck →
@@ -138,12 +153,14 @@ theorem agrees (N : Nat) :
         obtain ⟨m2, rfl, h3⟩ := h2.inv_next rfl
         rcases ihE m2 (by omega) b env _ _ o ho h3 with ⟨e, rfl, hb⟩ | ⟨y, m3, hm3, hb, h4⟩
         · exact .inl ⟨e, rfl, .primR ha hb⟩
+        obtain ⟨j, m4', hm4, hj, h4⟩ := Ends.paid (primTicks p x y) 0 _ (by omega) h4
+        have hj' : ¬ j + 1 < primTicks p x y := by omega
         cases hp : primEval p x y with
         | ok r =>
-          obtain ⟨m4, rfl, h5⟩ := h4.inv_next (s' := ⟨.ret r, k, d⟩) (by simp [step, hp])
+          obtain ⟨m4, rfl, h5⟩ := h4.inv_next (s' := ⟨.ret r, k, d⟩) (by simp [step, primStep, hj', hp])
           exact .inr ⟨r, m4, by omega, hp ▸ .prim ha hb (by rw [hp]; simp), h5⟩
         | error e =>
-          have := h4.inv_fault (f := e) (by simp [step, hp])
+          have := h4.inv_fault (f := e) (by simp [step, primStep, hj', hp])
           subst this
           have hne : primEval p x y ≠ .error .stuck := by rw [hp]; exact ho
           exact .inl ⟨e, rfl, hp ▸ .prim ha hb hne⟩

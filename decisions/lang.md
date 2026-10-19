@@ -2673,3 +2673,103 @@ run's own `s` and `ds`, and needs the run's own setup, run and extraction. The t
 the component: it shows the `readState` step needs the premise. It does not show a whole run under
 an unlawful codec writing an unreadable state; that run-level tooth is optional and not done.
 **Nothing moves.** No wire, vector, shipped text or required step.
+
+## LANG-64 A tick walks at most one word: the byte primitives are charged per 32 bytes, paid before they walk (2026-10-21; LANG-23; DECISIONS-20261021 card 6, ID-4, ROOT's lean α; cv 01a14805-3d32)
+**The defect (measured by the scholar, restated).** LANG-L reads the tick as a unit of work (every step
+O(1)). `cat` copied `a.size + b.size ≤ bytesMax` = 65,536 bytes in one tick and `beq` compared up to
+two 64 KiB operands in one tick (Lang/Eval.lean:111-115 before this entry). So one tick could be
+128 KiB of work, and one law run under `lawTicks` = 100,000 could copy about 6.5 GB inside the
+writer's admission loop. The bound was on values, not on work.
+**The honest unit, read off the compiled machine.** `beq` and `deq` are `decide (a = b)` on
+`ByteArray`: `ByteArray.ext_iff` reduces it to `a.data = b.data`, and each `.data` is
+`lean_byte_array_data`, which builds an `Array UInt8` from the byte string. Both operands are copied
+whatever their sizes, so `beq` walks |a| + |b| bytes, not the shorter one. `cat` is `copySlice`
+(a shared `a` is copied first, then `b`): |a| + |b|. A `cat` past `bytesMax` refuses on the sizes
+alone and walks nothing. Every other primitive walks no bytes: naturals are below 2^64 and `lenLe`
+reads a size field.
+**Decision.** `primBytes p x y` is those walked bytes. `primTicks p x y = (primBytes p x y - 1) / 32 + 1`:
+one tick per `Bounds.wordBytes` = 32 bytes, rounded up, and one tick for a primitive that walks none.
+A primitive on at most one word costs one tick, as before; a 64 KiB `cat` costs 2048 and a `beq` of
+two 64 KiB strings 4096. The frame `primR p left paid` counts the ticks paid, and `primStep` pays one
+per transition and computes on the LAST one. So a tick stays a transition, `run` is unchanged, and
+a budget that runs out while a primitive is paying has walked none of its bytes. `stepBytesBy st s`
+measures a transition by what it does: a transition from a primitive's frame that does anything but
+pay one more tick (`Step.pays`: a frame with `paid + 1` over the same frames below) walks the
+operands, and every other transition walks none. `walkedBy st` sums that along a run of the
+stepper `st`, and `walked lib` is `walkedBy (step lib)`. (The other order,
+computing first and charging after, lets a run with one tick left copy 64 KiB; that would break the
+bound at the budget's edge.) The reference derivation charges the same price: `Derives`' prim rule
+adds `primTicks` for its instance, not 1, and so does `Need.need`. The price is read off the operands,
+not off the machine, so LANG-34's rule holds: the denominator reads no machine. A 64 KiB `cat` is
+required work, not waste, so THE BAR's ratio does not count it as waste.
+**Theorems (Lang/Proofs/Cost.lean, CostTeeth.lean).** `primBytes_le`: a primitive walks at most
+`wordBytes` bytes per tick it is charged. `walked_le`: a run from `State.init` walks at most
+`wordBytes × used` primitive operand bytes, under every budget and stack bound and however it ends. `walked_le_paid`
+is the general form, from any state, with the ticks already paid on its stack. This is LANG-L made a
+theorem for the byte primitives. `law_walks_le`: no run under `lawTicks` walks more than 3,200,000
+primitive operand bytes. `primTicks_word`, `primTicks_nat` and `primTicks_lenLe`: nothing else moved. `primBytes_cat`:
+the bytes `cat` is charged for are the size of what it writes. `primBytes_beq` and `primBytes_deq`:
+both operands. So every row of the price list is a named fact. Simulation: `Ends.paid` (Agree) and
+`prim_leads` (Complete). `derives_lt_used`, `bigStep_run` and `run_bigStep` keep their statements.
+**Plant.** `cat64_price`: for every a, b with |a| + |b| = 65,536, `cat` of their literals returns
+under 2053 ticks (2048 + 5) and is refused `ticks` under 2052. `cat64_walks`: that run walks exactly
+65,536 bytes, so `walked` does not read 0 by construction. `cat64_flat`: `Need.flatStep` (the
+deployed step, except that a primitive computes on its first tick: the machine before this entry)
+returns the same value in 6 ticks while `walkedBy` counts its 65,536 bytes, so `walked_le` is false
+for it. The cat's reference size is 2050, above 6, so `derives_lt_used` is false for it too.
+**Required steps, before and after.** Every journey row that prints required steps / ticks is unchanged:
+LT4 40/63, LS4 102/152, LS6 111/159, LS9 270/339, LB4 79/120, LB7 96/143 (and their repeats). THE BAR
+`invoke ticks-per-required-step` 1.577 (plants waste-app 1.885, waste-extract 2.154) is unchanged too,
+as is every other WASTE/PLANT line of `rows`. `rows --deployed`, `ledger-sim 1`, `hosting-sim 1` and
+`host-sim 1` are byte-identical. Control: the same tree with `wordBytes` set to 2^30 (`primTicks` ≡ 1,
+exactly the old transitions) reproduces main's journey and rows output byte for byte, apart from the
+wall-clock LIVE lines. Why nothing moves: no shipped package, in the Sim, applies a byte primitive
+to more than 32 bytes. Its texts and names are short, and the Sim digest is 8 bytes. DEPLOYED, a `deq` of
+two 32-byte digests walks 64 bytes and now costs 2 ticks where it cost 1. No printed measurement runs
+deployed digests through the machine, so that rise is stated here, not measured.
+**Read.** A second-agent vacuity read with the disjunct check. Its first pass found one VACUOUS item:
+`stepBytes` copied `primStep`'s guard, so on the flat machine (`paid` stays 0) a computing tick read
+0, and `walked_le` held there too. It found the plant OVERSTATED (its second conjunct was about
+the instance alone, the conjunct form of the disjunct check) and the computing-tick tooth WEAK (it
+checked hand-built states, not the run). All three are fixed above: the measure reads the
+transition, and `cat64_flat`/`cat64_walks` are run-level. It also found docstrings counting "bytes"
+where only primitive operands are counted (reworded), and asked for a separate reference unit
+`wordRef` pinned equal to `wordBytes`. I refused that one: two constants pinned equal are a twin.
+`wordBytes` is the language's price list, shared by the reference and the machine as `primEval` is,
+and a machine that pays twice per word still raises the ratio.
+A second pass over the fixes found F1 to F4 OK for the deployed step. It found one hole in the
+price list: `beq` and `deq` were priced by nothing but a docstring, so an under-pricing would have
+moved the charge, the denominator and the measure together, silently. Fixed by `primBytes_beq` and
+`primBytes_deq`. The refutation of `derives_lt_used` for the plant is now a named conjunct
+(`¬ 2050 < used`). Left as named residue: `Step.pays` matches the SHAPE of a paying transition (a
+`primR` frame with `paid + 1` over the same number of frames below), not its identity. A generic
+stepper could compute and fake that shape, which would give a plant tooth a false negative. It is not a
+hole in `walked_le`: for the deployed `step`, a computing transition never has that shape.
+**Not a wire.** Ticks are a budget, not a byte any message carries. Nothing re-ids, nothing re-emits,
+and nothing re-geneses: a `lang:`. What changes is what a budget buys. A program that walks more than
+32 bytes per primitive costs more ticks, and one that fit `lawTicks` may now be refused `ticks`. No
+shipped program is one.
+**Alternatives.** β, a second meter (`bytesTouched`): two meters for one resource, and THE BAR's tick
+row would stop measuring work. γ, the status quo: 6.5 GB per law run on the request path, refused.
+Charging over the shorter operand for `beq` (the card's draft): the machine copies both operands, so
+that is below the work. A unit of 64 bytes, which would keep `deq` at one tick: no rule picks it; the
+card's word is 32, and the rule stays one rule for every byte primitive.
+**Critique.** (1) The bytes are still walked in ONE transition: the ticks are paid first, and the
+transition that computes does up to 128 KiB. The bound is per tick of the run, from its start, not
+per transition. Walking a word per transition would need a chunked `cat`/`beq` and ByteArray slice
+lemmas core does not have; it is possible and not done. (2) `primBytes` is a model of the runtime,
+read from Lean's sources (`lean_byte_array_data`, `copySlice`), not proved about it. Only `cat`'s count
+is tied to an output (`primBytes_cat`). (3) The other non-constant work in a transition (`env[i]?` is
+O(i), `Row.merge`, label comparison in `Row.find?`) is bounded by Wire constants, not charged; Eval's
+header says so. (4) `beq` pays for `lean_byte_array_data`'s copies. A size-first loop over the two
+byte strings would walk min(|a|, |b|) and allocate nothing. That is an evaluator change, and with it
+`primBytes` for `beq` may FALL, which needs its own entry.
+**Meta-critique.** The first draft charged after the work, because that order is the natural place
+for a debt frame. Writing `walked_le` exposed the edge: the theorem is false for a run cut off right
+after a 64 KiB `cat`. That is why the frame counts ticks PAID, not owed. The before/after table is
+empty because the Sim workload has no long bytes. The plant, not the table, is this entry's evidence.
+**len/take/drop.** Not added (δ): no package needs them. When one does, `len` is one tick
+(`primBytes` 0), and `take`/`drop n` fall under `primBytes` = n.
+**Also (cv 01a15456-b411).** `readState_get` (readState reads slots only by key) moves from
+Ledger/Proofs/EscrowRun.lean to Lang/Proofs/Invoke.lean, beside `readState_conforms`. The Ledger copy
+is deleted (ROOT for LEDGER, cross-layer).

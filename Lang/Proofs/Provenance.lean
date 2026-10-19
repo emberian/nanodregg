@@ -67,7 +67,7 @@ def FrameLits : Frame → Prop
   | .appR fn => ValLits P fn
   | .fix | .get _ | .inj _ => True
   | .primL _ b env => TermLits P b ∧ EnvLits P env
-  | .primR _ a => ValLits P a
+  | .primR _ a _ => ValLits P a
   | .extend fs env | .case fs env => RowLits P fs ∧ EnvLits P env
   | .ite a b env => TermLits P a ∧ TermLits P b ∧ EnvLits P env
 
@@ -265,8 +265,10 @@ theorem step_lits {lib : List Term} {s : State} (hlib : LibLits P lib) (hs : Sta
           | clo hb hce => exact ⟨.knot hb hce, hk'⟩
         | _ => trivial
       | primL p b env => exact ⟨hf, frames_cons P hc hk'⟩
-      | primR p a =>
-        simp only [step]
+      | primR p a j =>
+        simp only [step, primStep]
+        split
+        · exact ⟨hc, frames_cons P hf hk'⟩
         split
         · rename_i r hr; exact ⟨primEval_lits P hr, hk'⟩
         · trivial

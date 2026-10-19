@@ -33,7 +33,7 @@ two meet, through LANG-61 (`Lang.Proofs.Extract`):
   of runs the receiver commits on one escrow (`Runs`: each a successful run in its own view whose
   package cell reads as `escrow`, judged by the package's law and the cell's laws over the slots
   before and after, the next run reading slots that hold, key by key, what this one wrote (read by
-  `readState` through `readState_get`), read back by LANG-63's
+  `readState` through Lang's `readState_get`), read back by LANG-63's
   `runMeasured_means`), at most one returned call is a payout (`payoutCalls`: a transfer through
   no grant). `escrow_runs_after_payout`: a run that pays out is the last the receiver commits
   (`escrow_judge_settled`: the judge refuses everything out of `released` and `refunded`).
@@ -316,15 +316,6 @@ inductive Runs (prog : Program D) (pkg : D) (p : Package) : Slots → List (List
       Runs prog pkg p next rest → Runs prog pkg p state (calls :: rest)
 
 variable {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D}
-
-/-- `readState` reads slots only by key. -/
-theorem readState_get {row : List (Label × Ty)} {a b : Slots} (h : ∀ k, a.get k = b.get k) :
-    readState digestOf row a = readState digestOf row b := by
-  unfold readState
-  generalize 0 = i
-  induction row generalizing i with
-  | nil => rfl
-  | cons x row ih => obtain ⟨ℓ, t⟩ := x; simp only [readState.go, h, ih]
 
 private theorem run_of_program {look : Pinned D} {rv : RowView D} {pkg : D} {state : Slots} {method : Nat}
     {args : ByteArray} {r : Req D} {budget : Nat} {s : Slots} {calls : List (Body D)}

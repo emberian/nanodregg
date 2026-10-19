@@ -1,9 +1,11 @@
 /-
 # Lang.Bounds — the static bounds of the language (law 4)
 
-Every value a program can build is bounded, so one machine step is bounded work: a natural is
-below `2^64`, a byte string fits one kernel slot. An arithmetic result outside a bound is a named
-fault (`Lang.Fault`), never a wrap and never an unbounded allocation.
+Every value a program can build is bounded: a natural is below `2^64`, a byte string fits one
+kernel slot. An arithmetic result outside a bound is a named fault (`Lang.Fault`), never a wrap and
+never an unbounded allocation. A bound on a value is not a bound on the work of one tick: a byte
+string may be 64 KiB, so a primitive that walks one is charged a tick per `wordBytes` it walks
+(`Lang.primTicks`, LANG-64).
 -/
 import Kernel.Bounds
 
@@ -18,6 +20,11 @@ def bytesMax : Nat := Kernel.Bounds.valueBytesMax
 /-- A digest is at most 32 bytes: the deployed digest is 32, the Sim's 8. Whether bytes of that
 size ARE a digest is the World's `digestOf`, asked where an id enters a run (LANG-38). -/
 def digestBytesMax : Nat := 32
+
+/-- The bytes one tick may walk (LANG-64): a primitive that reads or writes `n` operand bytes is
+charged `⌈n / wordBytes⌉` ticks, at least one (`Lang.primTicks`), so a run walks at most
+`wordBytes` primitive operand bytes per tick it is charged (`Lang.Proofs.Cost.walked_le`). -/
+def wordBytes : Nat := 32
 
 /-- The machine's stack bound. A consensus constant, not part of a budget: two executors given
 different tick budgets agree on every final outcome (`Lang.Proofs.Run.run_agree`) only because

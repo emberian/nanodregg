@@ -3,11 +3,14 @@
 
 `Derives lib env t r n` is `BigStep lib env t r` with the number `n` of rule instances in the
 derivation (`DSel`, `DExt` for `Sel`, `Ext`): every constructor adds exactly 1 for itself to its
-premises' sizes. `derives_bigStep` erases the size; `bigStep_derives` gives every derivation one.
+premises' sizes, except `prim`, which adds the primitive's `primTicks` (LANG-64: the language's price
+for it, one per word of bytes its operands hold, 1 for every primitive on at most a word). The
+price list is shared with the machine, as `primEval` is; the machine's control is not. `derives_bigStep` erases the size; `bigStep_derives` gives every derivation one.
 `Lang.Proofs.Complete` counts the machine against it (`derives_leads`); `Lang.Proofs.Need` shows
 the BAR's counter computes it.
 -/
 import Lang.Proofs.BigStep
+import Lang.Proofs.Cost
 
 namespace Nanodregg.Lang
 
@@ -31,7 +34,8 @@ inductive Derives (lib : List Term) : Env → Term → Except Fault Val → Nat 
   | digest {env s} : Derives lib env (.digest s) (.ok (.digest s)) 1
   | refuse {env T w} : Derives lib env (.refuse T w) (.error (.refused w)) 1
   | prim {env p a b x y n m} : Derives lib env a (.ok x) n → Derives lib env b (.ok y) m →
-      primEval p x y ≠ .error .stuck → Derives lib env (.prim p a b) (primEval p x y) (n + m + 1)
+      primEval p x y ≠ .error .stuck →
+      Derives lib env (.prim p a b) (primEval p x y) (n + m + primTicks p x y)
   | primL {env p a b e n} : Derives lib env a (.error e) n →
       Derives lib env (.prim p a b) (.error e) (n + 1)
   | primR {env p a b x e n m} : Derives lib env a (.ok x) n → Derives lib env b (.error e) m →

@@ -92,6 +92,22 @@ theorem Leads.lift {cap : Nat} {s : State} {k k' : List Frame} {d d' : Nat} {e :
 theorem Leads.now {cap : Nat} {s : State} {k : List Frame} {d : Nat} {e : Fault}
     (hs : step lib s = .fault e) : Leads lib cap s k d (.error e) 1 := .err .refl hs
 
+/-- From a primitive's frame with `j` of its ticks paid, the machine pays the rest and then computes
+it (LANG-64): `primTicks - j` transitions, ending in the primitive's meaning. -/
+theorem prim_leads {cap : Nat} {p : Prim} {a v : Val} {k : List Frame} {d : Nat} (hd : d + 1 ≤ cap) :
+    ∀ (i j : Nat), j + 1 + i = primTicks p a v →
+      Leads lib cap ⟨.ret v, .primR p a j :: k, d + 1⟩ k d (primEval p a v) (i + 1)
+  | 0, j, hi => by
+    have hj : ¬ j + 1 < primTicks p a v := by omega
+    cases hp : primEval p a v with
+    | ok r =>
+      exact .cons (s1 := ⟨.ret r, k, d⟩) (by simp [step, primStep, hj, hp]) (by dsimp only; omega) (.ok .refl)
+    | error e => exact .now (by simp [step, primStep, hj, hp])
+  | i + 1, j, hi => by
+    have hj : j + 1 < primTicks p a v := by omega
+    exact .cons (s1 := ⟨.ret v, .primR p a (j + 1) :: k, d + 1⟩) (by simp [step, primStep, hj])
+      (by dsimp only; omega) (prim_leads hd i (j + 1) (by omega))
+
 /-! ## The machine takes at least as many transitions as the meaning has rule instances
 
 `derives_leads`: a derivation of size `n` (`Derives`, Lang.Proofs.Derives) is followed by the
@@ -133,11 +149,13 @@ theorem derives_leads : ∀ {env : Env} {t : Term} {r : (Except Fault Val)} {n :
     exact ⟨Dt + 1, _, by omega, .cons rfl (by dsimp only; omega) (lt.mono (by omega)).lift⟩
   | _, _, _, _, .prim (env := env) (p := p) (b := b) (x := x) (y := y) ha hb _, k, d => by
     obtain ⟨Da, ma, ha', la⟩ := derives_leads ha (.primL p b env :: k) (d + 1)
-    obtain ⟨Db, mb, hb', lb⟩ := derives_leads hb (.primR p x :: k) (d + 1)
-    have hlast : Leads lib (d + (Da + Db + 1)) ⟨.ret y, .primR p x :: k, d + 1⟩ k d (primEval p x y) 1 := by
-      cases hp : primEval p x y with
-      | ok r => exact .cons (s1 := ⟨.ret r, k, d⟩) (by simp [step, hp]) (by dsimp only; omega) (.ok .refl)
-      | error e => exact .now (by simp [step, hp])
+    obtain ⟨Db, mb, hb', lb⟩ := derives_leads hb (.primR p x 0 :: k) (d + 1)
+    have hpos : primTicks p x y = (primBytes p x y - 1) / Bounds.wordBytes + 1 := rfl
+    have hi : 0 + 1 + (primTicks p x y - 1) = primTicks p x y := by
+      rw [hpos, Nat.add_sub_cancel, Nat.zero_add, Nat.add_comm]
+    have hlast : Leads lib (d + (Da + Db + 1)) ⟨.ret y, .primR p x 0 :: k, d + 1⟩ k d (primEval p x y)
+        (primTicks p x y - 1 + 1) :=
+      prim_leads (p := p) (a := x) (v := y) (by omega) _ 0 hi
     refine ⟨Da + Db + 1, _, ?_, .cons rfl (by dsimp only; omega) (.bind (la.mono (by omega))
       (.cons rfl (by dsimp only; omega) (.bind (lb.mono (by omega)) hlast)))⟩
     omega
@@ -146,7 +164,7 @@ theorem derives_leads : ∀ {env : Env} {t : Term} {r : (Except Fault Val)} {n :
     exact ⟨Da + 1, _, by omega, .cons rfl (by dsimp only; omega) (la.mono (by omega)).lift⟩
   | _, _, _, _, .primR (env := env) (p := p) (b := b) (x := x) ha hb, k, d => by
     obtain ⟨Da, ma, ha', la⟩ := derives_leads ha (.primL p b env :: k) (d + 1)
-    obtain ⟨Db, mb, hb', lb⟩ := derives_leads hb (.primR p x :: k) (d + 1)
+    obtain ⟨Db, mb, hb', lb⟩ := derives_leads hb (.primR p x 0 :: k) (d + 1)
     refine ⟨Da + Db + 1, _, ?_, .cons rfl (by dsimp only; omega) (.bind (la.mono (by omega))
       (.cons rfl (by dsimp only; omega) (lb.mono (by omega)).lift))⟩
     omega

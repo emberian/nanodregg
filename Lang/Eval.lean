@@ -7,9 +7,15 @@ is `7`. `fix t` with `t : R → R` evaluates to the knot `knot body env`; select
 applies `t`'s body to the knot itself, so the knot is the final self of open recursion. There is
 no heap and no update: a field is re-evaluated at every selection (the known cost, LANG-2).
 
-`step` is one transition. Its work is bounded by the term node it looks at (a `record` suspends
-its fields in one step), the environment index it reads (`env[i]?` is O(i)) and, for `extend`,
-the two rows it merges; all three are bounded by `Wire.depthMax`/`Wire.rowMax`, not by a theorem. `run` is the only loop: at most `fuel` steps, a stack
+`step` is one transition, and one transition is one tick. Its work is bounded by the term node it
+looks at (a `record` suspends its fields in one step), the environment index it reads (`env[i]?` is
+O(i)) and, for `extend`, the two rows it merges; all three are bounded by
+`Wire.depthMax`/`Wire.rowMax`, not by a theorem. A primitive that walks bytes (`beq`, `deq`, `cat`)
+walks up to 128 KiB, so it is charged per word (LANG-64): its `primR` frame counts the ticks paid
+(`primTicks`, one per `Bounds.wordBytes` its operands hold), and only the last of them computes it.
+A budget that runs out while a primitive is paying for its bytes has walked none of them, and a run
+walks at most `wordBytes` primitive operand bytes per tick it is charged (`Lang.Proofs.Cost.walked_le`,
+measured by `walked`). `run` is the only loop: at most `fuel` steps, a stack
 of at most `stackMax` frames (carried as `depth`, so the bound costs nothing per step), and it
 reports the exact number of steps it took. Every way a run can end is a named `Fault` or a value;
 `Lang.Proofs.Sound` proves a checked program never reaches `stuck` and that only a primitive faults;
@@ -44,7 +50,9 @@ inductive Frame
   | appR (fn : Val)
   | fix
   | primL (p : Prim) (right : Term) (env : Env)
-  | primR (p : Prim) (left : Val)
+  /-- the right operand is being computed; then the primitive, after `paid` of its `primTicks`
+  are paid (LANG-64) -/
+  | primR (p : Prim) (left : Val) (paid : Nat)
   | get (label : Label)
   | extend (fields : List (Label × Term)) (env : Env)
   | inj (label : Label)
@@ -115,6 +123,23 @@ def primEval : Prim → Val → Val → Except Fault Val
       if a.size + b.size ≤ Bounds.bytesMax then .ok (.bytes (a ++ b)) else .error .tooLarge
   | _, _, _ => .error .stuck
 
+/-- The operand bytes a primitive walks (LANG-64), read off the compiled machine: `beq` and `deq`
+decide `a = b` on `ByteArray`, which compares the two `data` arrays, and each `data` is built from
+its byte string (`lean_byte_array_data`): both operands are copied whatever their sizes. `cat`
+copies both into the result (`a ++ b` is `copySlice`; a shared `a` is copied first). A `cat` past
+`bytesMax` refuses on the sizes alone and walks nothing. Every other primitive walks no bytes:
+naturals are below `2^64` and `lenLe` reads a size. -/
+def primBytes : Prim → Val → Val → Nat
+  | .beq, .bytes a, .bytes b | .deq, .digest a, .digest b => a.size + b.size
+  | .cat, .bytes a, .bytes b => if a.size + b.size ≤ Bounds.bytesMax then a.size + b.size else 0
+  | _, _, _ => 0
+
+/-- The ticks a primitive is charged (LANG-64): one per `Bounds.wordBytes` it walks, rounded up
+(`⌈n / 32⌉` for `n ≥ 1` bytes), and one when it walks none. A primitive on at most one word of
+bytes costs one tick, as every primitive did before LANG-64; a 64 KiB `cat` costs 2048. -/
+def primTicks (p : Prim) (x y : Val) : Nat :=
+  (primBytes p x y - 1) / Bounds.wordBytes + 1
+
 /-- Suspend each field in one environment. -/
 def suspend (env : Env) (fs : List (Label × Term)) : List (Label × (Term × Env)) :=
   fs.map fun f => (f.1, (f.2, env))
@@ -122,6 +147,16 @@ def suspend (env : Env) (fs : List (Label × Term)) : List (Label × (Term × En
 /-- Push a frame; the depth moves with the stack. -/
 @[inline] def push (s : State) (c : Control) (f : Frame) : Step :=
   .next ⟨c, f :: s.stack, s.depth + 1⟩
+
+/-- The transition at a primitive with operands `a` and `v`, `paid` of its ticks paid, on the
+stack `k` below its frame: before its last tick it pays one more and waits; on its last it
+computes. So its bytes are walked only once every tick for them is paid. -/
+def primStep (k : List Frame) (d : Nat) (p : Prim) (a v : Val) (paid : Nat) : Step :=
+  if paid + 1 < primTicks p a v then .next ⟨.ret v, .primR p a (paid + 1) :: k, d⟩
+  else
+    match primEval p a v with
+    | .ok r => .next ⟨.ret r, k, d - 1⟩
+    | .error e => .fault e
 
 /-- One transition. `lib` is the closure's package bodies, indexed by `ref`. -/
 def step (lib : List Term) (s : State) : Step :=
@@ -166,11 +201,8 @@ def step (lib : List Term) (s : State) : Step :=
           match v with
           | .clo body cenv => pop (.ret (.knot body cenv))
           | _ => .fault .stuck
-      | .primL p b env => .next ⟨.eval b env, .primR p v :: k, s.depth⟩
-      | .primR p a =>
-          match primEval p a v with
-          | .ok r => pop (.ret r)
-          | .error e => .fault e
+      | .primL p b env => .next ⟨.eval b env, .primR p v 0 :: k, s.depth⟩
+      | .primR p a paid => primStep k s.depth p a v paid
       | .get ℓ =>
           match v with
           | .record fs =>
@@ -218,6 +250,35 @@ def run (lib : List Term) (stackMax : Nat) : (fuel used : Nat) → State → Out
       | .next s' =>
           if stackMax < s'.depth then .fault .stack (used + 1)
           else run lib stackMax fuel (used + 1) s'
+
+/-- Whether a transition from a primitive's frame with `paid` ticks paid, over `below` frames, only
+paid one more: it left a primitive's frame with `paid + 1` on top of `below` frames. -/
+def Step.pays (paid below : Nat) : Step → Bool
+  | .next ⟨.ret _, .primR _ _ j :: k, _⟩ => j == paid + 1 && k.length == below
+  | _ => false
+
+/-- The bytes the transition of `st` from `s` walks (LANG-64), read off what the transition does: a
+transition from a primitive's frame that does anything but pay one more tick (it computes, faults,
+or pops) walks the primitive's operands; every other transition walks none. A measure for
+`Lang.Proofs.Cost`, not run by the machine. -/
+def stepBytesBy (st : State → Step) (s : State) : Nat :=
+  match s with
+  | ⟨.ret v, .primR p a paid :: k, _⟩ => if (st s).pays paid k.length then 0 else primBytes p a v
+  | _ => 0
+
+/-- The primitive operand bytes a run of the stepper `st` walks within `fuel` transitions from `s`,
+under the stack bound: `stepBytesBy` summed along the transitions `run`'s loop takes. -/
+def walkedBy (st : State → Step) (stackMax : Nat) : (fuel : Nat) → State → Nat
+  | 0, _ => 0
+  | fuel + 1, s =>
+      stepBytesBy st s +
+        match st s with
+        | .next s' => if stackMax < s'.depth then 0 else walkedBy st stackMax fuel s'
+        | _ => 0
+
+/-- The primitive operand bytes the deployed machine walks: `walkedBy (step lib)`. -/
+abbrev walked (lib : List Term) (stackMax : Nat) : (fuel : Nat) → State → Nat :=
+  walkedBy (step lib) stackMax
 
 /-- The machine about to evaluate a closed term. -/
 def State.init (t : Term) (env : Env := []) : State := ⟨.eval t env, [], 0⟩

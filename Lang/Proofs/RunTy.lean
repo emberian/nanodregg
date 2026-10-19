@@ -50,8 +50,8 @@ inductive StackTy (Δ : List Ty) : List Frame → Ty → Ty → Prop
       StackTy Δ (.fix :: k) (.fn (.record r) (.record r)) T
   | primL {p b env Γ k T} : EnvTy Δ env Γ → HasType Δ Γ b p.right → StackTy Δ k p.result T →
       StackTy Δ (.primL p b env :: k) p.left T
-  | primR {p a k T} : ValTy Δ a p.left → StackTy Δ k p.result T →
-      StackTy Δ (.primR p a :: k) p.right T
+  | primR {p a j k T} : ValTy Δ a p.left → StackTy Δ k p.result T →
+      StackTy Δ (.primR p a j :: k) p.right T
   | get {ℓ r A k T} : Row.find? ℓ r = some A → StackTy Δ k A T →
       StackTy Δ (.get ℓ :: k) (.record r) T
   | extend {fs env Γ r r2 k T} : EnvTy Δ env Γ → FieldsTy Δ Γ fs r2 →

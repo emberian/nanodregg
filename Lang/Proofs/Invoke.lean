@@ -45,6 +45,15 @@ theorem readState_conforms {D : Type} {digestOf : ByteArray → Option D} {row :
     {d : Data} (h : readState digestOf row s = .ok d) : Conforms d (.record row) :=
   readState_go_conforms row 0 h
 
+/-- `readState` reads slots only by key: two slot lists that agree at every key read as one state. -/
+theorem readState_get {D : Type} {digestOf : ByteArray → Option D} {row : List (Label × Ty)} {a b : Slots}
+    (h : ∀ k, a.get k = b.get k) : readState digestOf row a = readState digestOf row b := by
+  unfold readState
+  generalize 0 = i
+  induction row generalizing i with
+  | nil => rfl
+  | cons x row ih => obtain ⟨ℓ, t⟩ := x; simp only [readState.go, h, ih]
+
 theorem reqOk_conforms {D : Type} {bytesOf : D → ByteArray} {r : Req D} (h : reqOk bytesOf r = true) :
     Conforms (reqData bytesOf r) reqTy := by
   simp only [reqOk, Bool.and_eq_true, decide_eq_true_eq] at h
