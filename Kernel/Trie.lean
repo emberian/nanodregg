@@ -358,6 +358,60 @@ def retainAt (q : K → V → Bool) (path : List Bool) : T K V D → T K V D
       | some false => join S b (retainAt q path l) r
       | none => (retainAll S q (.node h b rep l r)).1
 
+/-! ### Retain on the overlay (cv 01a15460-e096): a removal joins the batch instead of sealing it -/
+
+/-- The first key of an overlay, as `T.first` reads the sealed trie (`Kernel.Proofs.Trie.first_seal`). -/
+def U.first : U K V D → Option K
+  | .clean t => t.first
+  | .leaf kvs => kvs.head?.map (·.1)
+  | .node _ rep _ _ => some rep
+
+/-- `join` on the overlay: an empty side (`.clean .empty`, the one overlay that seals to `.empty`)
+yields the other side whole, as it stands; else a written node, unhashed. -/
+def joinU (b : Nat) (l r : U K V D) : U K V D :=
+  match l, r with
+  | .clean .empty, r => r
+  | l, .clean .empty => l
+  | l, r =>
+      match l.first with
+      | some x => .node b x l r
+      | none => r
+
+/-- `retainAll` at a leaf holding `kvs`, on the overlay: `keep` is the leaf as it stands (clean or
+written) where nothing is dropped; the kept entries written, unhashed, where some are. -/
+def retainLeafU (q : K → V → Bool) (keep : U K V D) (kvs : List (K × V)) : U K V D :=
+  if kvs.all (fun p => q p.1 p.2) then keep
+  else
+    let kept := kvs.filter fun p => q p.1 p.2
+    if kept.isEmpty then .clean .empty else .leaf kept
+
+/-- `retainAt`, case for case, from a clean subtree: the nodes above the path's end re-joined on the
+overlay (written, unhashed; one whose other side is empty gives way to that side whole), every
+subtree off the path kept as it stands, digest and all. The `none` arm (a node branching at a bit the
+path has no entry for) filters the sealed subtree whole, as `retainAt` does; it is there for
+totality only: the kernel's paths (`rowPath`, `Bounds.rowDepth` entries = the rows spec's `depth`)
+have a bit for every `b < depth`, and a node of a canonical trie branches at `b < depth`. -/
+def retainAtT (q : K → V → Bool) (path : List Bool) : T K V D → U K V D
+  | .empty => .clean .empty
+  | .leaf h kvs => retainLeafU q (.clean (.leaf h kvs)) kvs
+  | .node h b rep l r =>
+      match path[b]? with
+      | some true => joinU b (.clean l) (retainAtT q path r)
+      | some false => joinU b (retainAtT q path l) (.clean r)
+      | none => .clean (retainAll S q (.node h b rep l r)).1
+
+/-- `retainAt` on the overlay: down the written nodes, then `retainAtT` from the first clean subtree.
+`Kernel.Proofs.Trie.seal_retainAtU`: sealing it is `retainAt` of the sealed trie, no premise, so a
+removal joins the batch instead of sealing it (`World.uStore`). The `none` arm is `retainAtT`'s. -/
+def retainAtU (q : K → V → Bool) (path : List Bool) : U K V D → U K V D
+  | .clean t => retainAtT S q path t
+  | .leaf kvs => retainLeafU q (.leaf kvs) kvs
+  | .node b rep l r =>
+      match path[b]? with
+      | some true => joinU b l (retainAtU q path r)
+      | some false => joinU b (retainAtU q path l) r
+      | none => .clean (retainAll S q ((U.node b rep l r).seal S)).1
+
 /-- The siblings' branching bits ascend from `d` and stay below `depth`: a path is at most `depth`
 long, and every bit it claims fits the u16 a node commits. -/
 def ascends : Nat → List (Nat × D) → Bool

@@ -732,6 +732,87 @@ theorem getAtU_seal (k : K) : ∀ (d : Nat) (u : U K V D), U.getAt S k d u = get
           · exact getAtU_seal k (b + 1) l
           · exact getAtU_seal k (b + 1) r
 
+/-! ## A removal on the overlay is the removal of the sealed trie (cv 01a15460-e096) -/
+
+omit [DecidableEq K] in
+theorem first_seal : ∀ (u : U K V D), (u.seal S).first = u.first
+  | .clean _ => rfl
+  | .leaf _ => rfl
+  | .node .. => rfl
+
+omit [DecidableEq K] in
+/-- Sealing an overlay join is the join of the sealed sides: `.clean .empty` is the one overlay that
+seals to `.empty`, and `U.first` is `T.first` of the sealed side. -/
+theorem seal_joinU (b : Nat) (l r : U K V D) : (joinU b l r).seal S = join S b (l.seal S) (r.seal S) := by
+  cases l with
+  | clean t =>
+      cases t with
+      | empty => cases r with
+        | clean t' => cases t' <;> rfl
+        | leaf _ => rfl
+        | node _ _ _ _ => rfl
+      | leaf h kvs => cases kvs <;> cases r with
+        | clean t' => cases t' <;> rfl
+        | leaf _ => rfl
+        | node _ _ _ _ => rfl
+      | node _ _ _ _ => cases r with
+        | clean t' => cases t' <;> rfl
+        | leaf _ => rfl
+        | node _ _ _ _ => rfl
+  | leaf kvs => cases kvs <;> cases r with
+      | clean t' => cases t' <;> rfl
+      | leaf _ => rfl
+      | node _ _ _ _ => rfl
+  | node _ _ _ _ => cases r with
+      | clean t' => cases t' <;> rfl
+      | leaf _ => rfl
+      | node _ _ _ _ => rfl
+
+omit [DecidableEq K] in
+theorem seal_retainLeafU (q : K → V → Bool) (h : D) (kvs : List (K × V)) (keep : U K V D)
+    (hk : keep.seal S = .leaf h kvs) :
+    (retainLeafU q keep kvs).seal S = (retainAll S q (.leaf h kvs)).1 := by
+  simp only [retainLeafU, retainAll]
+  by_cases ha : (kvs.all fun p => q p.1 p.2) = true
+  · rw [if_pos ha, if_pos ha]; exact hk
+  · rw [if_neg ha, if_neg ha]
+    split <;> rfl
+
+omit [DecidableEq K] in
+/-- Sealing `retainAtT` of a clean subtree is `retainAt` of it: no premise. -/
+theorem seal_retainAtT (q : K → V → Bool) (path : List Bool) :
+    ∀ (t : T K V D), (retainAtT S q path t).seal S = retainAt S q path t
+  | .empty => rfl
+  | .leaf h kvs => seal_retainLeafU S q h kvs (.clean (.leaf h kvs)) rfl
+  | .node h b rep l r => by
+      simp only [retainAtT, retainAt]
+      cases path[b]? with
+      | none => rfl
+      | some side =>
+          cases side
+          · rw [seal_joinU, seal_retainAtT q path l]; rfl
+          · rw [seal_joinU, seal_retainAtT q path r]; rfl
+
+omit [DecidableEq K] in
+/-- **Sealing an overlay removal is the removal of the sealed trie**, for ANY overlay, ANY bit function
+and ANY path: no premise (as `seal_insU`). A retract on the rows overlay joins the batch
+(`World.uStore`), and the batch sealed once is each touch on the trie in turn (`Admit.rowsRun_eq`). -/
+theorem seal_retainAtU (q : K → V → Bool) (path : List Bool) :
+    ∀ (u : U K V D), (retainAtU S q path u).seal S = retainAt S q path (u.seal S)
+  | .clean t => seal_retainAtT S q path t
+  | .leaf kvs => seal_retainLeafU S q (leafHash S (digests S kvs)) kvs (.leaf kvs) rfl
+  | .node b rep l r => by
+      have hs : (U.node b rep l r).seal S =
+          .node (nodeHash S b ((l.seal S).hashOf S) ((r.seal S).hashOf S)) b rep (l.seal S) (r.seal S) := rfl
+      rw [hs]
+      simp only [retainAtU, retainAt]
+      cases path[b]? with
+      | none => rfl
+      | some side =>
+          cases side
+          · rw [seal_joinU, seal_retainAtU q path l]
+          · rw [seal_joinU, seal_retainAtU q path r]
+
 /-- **The batch is the sequential trie**: `insertAll` (one pass on the overlay, sealed once) is each
 key inserted in turn, as a `T` value, cached digests included. No premise. -/
 theorem insertAll_eq_foldl (t : T K V D) (kvs : List (K × V)) :

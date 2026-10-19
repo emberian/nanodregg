@@ -412,7 +412,8 @@ theorem rowsRun_eq {E : Env D} {w : World D} {t : Turn D} :
       t.rows.foldlM (rowStepFreed E w t) (w.rows, 0) :=
     foldlM_fmap _ _ _ (fun acc x => rowStepFreedOn_map (uStore E) (trieStore E) _
       (fun u s => (Trie.getAtU_seal (rowSpec E) s 0 u).symm)
-      (fun u k v => Trie.seal_insU (rowSpec E) k v 0 u) (fun _ _ => rfl) E w t acc x) _ _
+      (fun u k v => Trie.seal_insU (rowSpec E) k v 0 u)
+      (fun u k => Trie.seal_retainAtU (rowSpec E) (fun k' _ => decide (k' ≠ k)) (rowPath E k) u) E w t acc x) _ _
   unfold rowsRun
   rw [← hfold]
   cases t.rows.foldlM (rowStepFreedOn (uStore E) E w t) (.clean w.rows, 0) <;> rfl

@@ -1170,11 +1170,12 @@ abbrev trieStore (E : Env D) : RowStore D (Rows D) where
   drop r k := Trie.retainAt (rowSpec E) (fun k' _ => decide (k' ≠ k)) (rowPath E k) r
 
 /-- The rows as the dirty overlay: a read walks it (no hash), a write is unhashed (`Trie.insU`), a
-removal seals what is written and removes from the trie (a retract splits the batch). -/
+removal re-joins the row's path unhashed (`Trie.retainAtU`, cv 01a15460-e096: a retract joins the
+batch; before it, the removal sealed what was written and the batch split at every retract). -/
 def uStore (E : Env D) : RowStore D (Trie.U (RowSlot D) RowLeaf D) where
   get u s := Trie.U.getAt (rowSpec E) s 0 u
   ins u k v := Trie.insU (rowSpec E) k v 0 u
-  drop u k := .clean (Trie.retainAt (rowSpec E) (fun k' _ => decide (k' ≠ k)) (rowPath E k) (u.seal (rowSpec E)))
+  drop u k := Trie.retainAtU (rowSpec E) (fun k' _ => decide (k' ≠ k)) (rowPath E k) u
 
 /-- One row touch, judged on the rows written so far this turn, on any store (`RowStore`) (slots are distinct, so a row's pin
 is judged against the pre-state; a head's count and sum accumulate: the head update is additive,
@@ -1288,7 +1289,8 @@ def dropHeads (E : Env D) (t : Turn D) (acc : Rows D × Nat) : Rows D × Nat :=
 /-- Every row touch, in order, from the World's rows; slots distinct (`duplicateRow`). Returns the
 rows after the turn and the storage its row touches give back (`rowFreed`, summed). The touches run on
 the dirty overlay (`uStore`, cv 01a153a5-0e09), sealed once before the retired parents' heads leave: a
-node the turn's row and head writes share is hashed once. The same rows as each touch on the trie in
+node the turn's row and head writes and its retracts' re-joins share is hashed once (a retract joins
+the batch since cv 01a15460-e096). The same rows as each touch on the trie in
 turn (`Kernel.Proofs.Admit.rowsRun_eq`, no premise), which the proofs read. -/
 def rowsRun (E : Env D) (w : World D) (t : Turn D) :
     Except (Reject D) (Rows D × Nat) := do

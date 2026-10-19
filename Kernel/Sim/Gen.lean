@@ -359,6 +359,9 @@ structure Marks where
   /-- the insert turns' rows run (`<L`) and the plant `hash-required:rows-rewalk`'s (`<M`; cv 01a153a5-0e09) -/
   rowsRun : Nat := 0
   rowsRewalk : Nat := 0
+  /-- the retract turns' rows run (`<J`) and the plant `hash-required:rows-retract-seal`'s (`<Z`; cv 01a15460-e096) -/
+  rowsRetRun : Nat := 0
+  rowsRetSeal : Nat := 0
   probeInsert : Nat := 0
   prune : Nat := 0
   refuse : Nat := 0
@@ -388,7 +391,7 @@ def pairStem (m : Marks) : Marks :=
   | _, _ => m
 
 /-- `report`'s side: the marks of one captured run, summed per bracket tag (`A`, `C`, `P`, `E`,
-`K`, `R`, `F`, `Q`, `O`, the verify counter's `G`, `H` (counting `@`), and the rows probe's `W`, `V`, `X`, `Y`, `S`, `T`). An `S` and its `T` are one
+`K`, `R`, `F`, `Q`, `O`, the verify counter's `G`, `H` (counting `@`), and the rows probe's `W`, `V`, `X`, `Y`, `S`, `T`, `L`, `M`, `J`, `Z`). An `S` and its `T` are one
 stem insert turn: their difference is that insert's hashes, the most of which is `stemWorst`. -/
 def countMarks (out : String) : Marks :=
   (out.splitOn "<").foldl (fun m seg =>
@@ -403,6 +406,8 @@ def countMarks (out : String) : Marks :=
     | some 'N' => { m with rewalk := m.rewalk + n }
     | some 'L' => { m with rowsRun := m.rowsRun + n }
     | some 'M' => { m with rowsRewalk := m.rowsRewalk + n }
+    | some 'J' => { m with rowsRetRun := m.rowsRetRun + n }
+    | some 'Z' => { m with rowsRetSeal := m.rowsRetSeal + n }
     | some 'K' => { m with probeInsert := m.probeInsert + n }
     | some 'R' => { m with prune := m.prune + n }
     | some 'F' => { m with refuse := m.refuse + n }
@@ -1992,6 +1997,21 @@ def plantRowsRewalk (E : Env D) (w : World D) (t : Turn D) : Except (Reject D) (
   let acc ← t.rows.foldlM (rowStepFreed E w t) (w.rows, 0)
   pure (dropHeads E t acc)
 
+/-- PLANT `hash-required:rows-retract-seal` (cv 01a15460-e096): the rows overlay whose removal seals
+the batch before it removes (`World.uStore.drop` before this cv: `.clean (retainAt … (u.seal))`), so a
+retract splits the batch, and the nodes its re-join and the head write after it share are hashed again. -/
+def sealStore (E : Env D) : RowStore D (Trie.U (RowSlot D) RowLeaf D) where
+  get u s := Trie.U.getAt (rowSpec E) s 0 u
+  ins u k v := Trie.insU (rowSpec E) k v 0 u
+  drop u k := .clean (Trie.retainAt (rowSpec E) (fun k' _ => decide (k' ≠ k)) (rowPath E k) (u.seal (rowSpec E)))
+
+/-- The rows run on `sealStore`. `report` requires it never to count below the real run (`<J`) and to
+reach the same rows, and the retract turns' rows share with it in place of the run to read above their
+requirement. -/
+def plantRowsRetractSeal (E : Env D) (w : World D) (t : Turn D) : Except (Reject D) (Rows D × Nat) := do
+  let acc ← t.rows.foldlM (rowStepFreedOn (sealStore E) E w t) (.clean w.rows, 0)
+  pure (dropHeads E t (acc.1.seal (rowSpec E), acc.2))
+
 /-- The counted hashes of one admitted rows turn `w → w'` whose row touches are all inserts, or all
 retracts, and which reads no range: the whole REAL `World.admit` under the counting Env (`<W` for
 inserts, `<X` for retracts), and everything its `commit` does besides the rows (`<V`, `<Y`: the cell
@@ -2027,6 +2047,15 @@ def countRowsTurn (E : Env D) (st : State D) (w w' : World D) (t : Turn D) (stem
         | some (.ok l, .ok m) => if l.1.hashOf (rowSpec E) == w'.rowsRoot E && m.1.hashOf (rowSpec E) == w'.rowsRoot E then st
             else failWith st "rows hash count: the rows run or the re-walk plant reached another rows root"
         | some _ => failWith st "rows hash count: the rows run or the re-walk plant refused an admitted turn"
+        | none => st
+      -- the rows run alone (`<J`) and the retract-seal plant (`<Z`), on the retract turns (cv 01a15460-e096)
+      let jz := if ret then
+          some (dbgTrace "<J" fun _ => rowsRun cE w t, dbgTrace "<Z" fun _ => plantRowsRetractSeal cE w t)
+        else none
+      let st := match jz with
+        | some (.ok l, .ok m) => if l.1.hashOf (rowSpec E) == w'.rowsRoot E && m.1.hashOf (rowSpec E) == w'.rowsRoot E then st
+            else failWith st "rows hash count: the rows run or the retract-seal plant reached another rows root"
+        | some _ => failWith st "rows hash count: the rows run or the retract-seal plant refused an admitted turn"
         | none => st
       let st := match a with
         | .ok w'' => if w''.rowsRoot E == w'.rowsRoot E then st
@@ -2640,7 +2669,7 @@ def plantedArms : List String :=
    "pin-cell:same", "pin-cell-plant:caught", "pin-row:same", "pin-row-plant:caught",
    "pin-range:same", "pin-range-plant:caught", "rows-stem:ok",
    "hash-required:empty-per-insert", "proof-required:extra-sibling", "proof-required:sibling-byte",
-   "hash-required:rewalk", "hash-required:rows-rewalk",
+   "hash-required:rewalk", "hash-required:rows-rewalk", "hash-required:rows-retract-seal",
    "state-order-create:stateKey", "state-dup-create:stateKey", "state-order-control:ok",
    "state-order-run:stateKey", "state-order-run-control:ok"]
 
@@ -2684,6 +2713,8 @@ def report (P : Params D) (seeds : List Nat) (control : Bool := false) : IO UInt
   -- of the run, and what they require
   let mut rowsRewalkCounted := 0
   let mut rowsInsReqAll := 0
+  -- cv 01a15460-e096: the retract turns with the retract-seal plant in place of the run
+  let mut retSealCounted := 0
   -- (journal-probe inserts, prunes, refusals, row inserts, row retracts, stem inserts) required
   let mut reqs : Nat × Nat × Nat × Nat × Nat × Nat := (0, 0, 0, 0, 0, 0)
   let mut weighed := 0
@@ -2756,6 +2787,15 @@ def report (P : Params D) (seeds : List Nat) (control : Bool := false) : IO UInt
         { st with seen := "hash-required:rows-rewalk" :: st.seen } else st
     rowsRewalkCounted := rowsRewalkCounted + rowsRewalkN
     rowsInsReqAll := rowsInsReqAll + insReq
+    -- the retract-seal plant: never below the run, and the retract turns' rows share with it in place
+    -- of the run reads above what they require (cv 01a15460-e096)
+    let st := if m.rowsRetSeal < m.rowsRetRun then
+        failWith st s!"hash required: the retract-seal plant counted {m.rowsRetSeal}, below the run's {m.rowsRetRun}" else st
+    let retShare := m.rowRet - m.rowRetBase
+    let retSealN := retShare - m.rowsRetRun + m.rowsRetSeal
+    let st := if st.rowRetracts > 0 && ratioUp retSealN st.rowRetReq > ratioUp retShare st.rowRetReq then
+        { st with seen := "hash-required:rows-retract-seal" :: st.seen } else st
+    retSealCounted := retSealCounted + retSealN
     req := req.add st.required
     counted := counted + m.admit
     plantCounted := plantCounted + plantN
@@ -2825,6 +2865,7 @@ def report (P : Params D) (seeds : List Nat) (control : Bool := false) : IO UInt
   IO.println s!"kernel-sim: plant hash-required:empty-per-insert counted={plantCounted}: hashes-per-required {showRatio (ratioUp plantCounted req.total)}"
   IO.println s!"kernel-sim: plant hash-required:rows-rewalk (each row touch on the trie in turn, the rows run before cv 01a153a5-0e09) counted={rowsRewalkCounted} over the insert turns' rows requirement {rowsInsReqAll}: hashes-per-required {showRatio (ratioUp rowsRewalkCounted rowsInsReqAll)}"
   IO.println s!"kernel-sim: plant hash-required:rewalk (each key in turn, the fold before cv 01a15107-2281) counted={rewalkCounted}: hashes-per-required {showRatio (ratioUp rewalkCounted req.total)}"
+  IO.println s!"kernel-sim: plant hash-required:rows-retract-seal (a retract seals the batch before it removes, uStore.drop before cv 01a15460-e096) counted={retSealCounted} over the retract turns' rows requirement {reqs.2.2.2.2.1}: hashes-per-required {showRatio (ratioUp retSealCounted reqs.2.2.2.2.1)}"
   IO.println s!"kernel-sim: required: journal probe inserts {reqs.1} (counted {jhashes.1}), prunes {reqs.2.1} (counted {jhashes.2.2.1}), refusals {reqs.2.2.1} (counted {rf.1}), row inserts {reqs.2.2.2.1} (counted {rw.1}), row retracts {reqs.2.2.2.2.1} (counted {rw.2.2.1}), stem inserts {reqs.2.2.2.2.2} (counted {stem.1})"
   IO.println s!"WASTE admit hashes-per-required {showRatio (ratioUp counted req.total)}"
   IO.println s!"WASTE admit journal-insert-hashes-per-required {showRatio (ratioUp jhashes.1 reqs.1)}"

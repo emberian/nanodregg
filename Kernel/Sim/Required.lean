@@ -17,10 +17,15 @@ BUILT, counted from their shapes, never from `log2 n`:
   hash per node on some batch key's path and one per leaf a batch key reaches, each ONCE however many
   of the batch's keys pass through it: `batchReq`. Not `fresh`: a key re-written to the same digest is
   hashed again by the kernel (its leaf is written), and `fresh` would not count it;
-* a removal (`Trie.retainAt`, the canonical erase: the journal's and the refusals' prunes, a row
-  retract, a retired parent's heads) requires one hash per node or leaf of the trie after it whose
+* a removal (`Trie.retainAt`, the canonical erase: the journal's and the refusals' prunes, a
+  retired parent's heads) requires one hash per node or leaf of the trie after it whose
   digest is not the digest of the subtree it replaced (a subtree that kept everything, or that
   `join` promoted whole, is not re-hashed): `fresh`;
+* a BATCH with removals in it (a turn's row touches: `rowsRun` on the overlay, where a retract joins
+  the batch, cv 01a15460-e096) requires one hash per node or leaf of the trie after it that the batch
+  WROTE, each once: `writtenReq` over the ids its operations mark (`applyMark`: an insert its key's
+  route after it, a removal the nodes of its key's route before it that still stand), each id a
+  position no operation moves (`nodeId`);
 * an inclusion proof of `k` (`Trie.proveAt`) requires, on the wire, the bytes of the end of
   `k`'s path (its leaf's entries) and of one sibling per node on the path, both sized by the proof
   codec itself (cv 01a15107-2290): `proofReq`;
@@ -161,20 +166,64 @@ def apply (val : K → V) : Trie.T K V D × Nat → Op K → Trie.T K V D × Nat
       let t' := Trie.retainAt S (fun k' _ => decide (k' ≠ k)) path t
       (t', n + fresh S t' t)
 
-/-- Apply `o` to `t` on the dirty overlay's terms (cv 01a153a5-0e09): an insert joins the batch `ks`
-pending since the last removal; a removal first seals the batch (`batchReq ks`, read off the trie as it
-stands), then requires what `Trie.retainAt` re-hashes (`fresh`). -/
-def applySeg (val : K → V) : Trie.T K V D × Nat × List K → Op K → Trie.T K V D × Nat × List K
-  | (t, n, ks), .ins k => (t.insert S k (val k), n, ks ++ [k])
-  | (t, n, ks), .del k path =>
-      let t' := Trie.retainAt S (fun k' _ => decide (k' ≠ k)) path t
-      (t', n + batchReq S ks t + fresh S t' t, [])
+/-- **The id of a node's place** (cv 01a15460-e096): its branching bit and the bits every key below it
+shares (its `rep`'s, below `b`). No operation of a batch moves it: `join` promotes a subtree whole
+(same `b`, same `rep`); a split above it keeps it whole (`insT`'s `diverge` arm, a new node at a
+smaller bit over it); a rewrite of its `rep` (`insU`, the new key preceding the old `rep`) is to a key
+with the same bits below `b`, since both route under the node. In a canonical trie no two nodes share
+an id (the id is the path from the root to the node). A leaf's id is `S.depth` with the bits of its first
+key below it (`leafId`; every key of a leaf agrees on them). `writtenReq_overlay` checks the ids
+against the overlay itself on a toy trie. -/
+def nodeId (b : Nat) (rep : K) : Nat × List Bool := (b, (List.range b).map (S.bit rep))
 
-/-- `ops` in order from `t` as the overlay runs them: maximal runs of inserts between removals are one
-batch each, sealed at the next removal or at the end. -/
-def applyAllSeg (val : K → V) (t : Trie.T K V D) (ops : List (Op K)) : Trie.T K V D × Nat :=
-  let (t', n, ks) := ops.foldl (applySeg S val) (t, 0, [])
-  (t', n + batchReq S ks t')
+def leafId (kvs : List (K × V)) : Nat × List Bool :=
+  match kvs with
+  | (k, _) :: _ => nodeId S S.depth k
+  | [] => (S.depth, [])
+
+/-- The ids on `k`'s route in `t` (by `k`'s bits) and of the leaf it ends at. -/
+def routeIds (k : K) : Trie.T K V D → List (Nat × List Bool)
+  | .empty => []
+  | .leaf _ kvs => [leafId S kvs]
+  | .node _ b rep l r => nodeId S b rep :: (match S.bit k b with | true => routeIds k r | false => routeIds k l)
+
+/-- **What a batch wrote**, read off the trie after it (`post`): one hash per node or leaf of `post`
+whose id is in `ids`, each once however many of the batch's operations passed through it. What
+`U.seal` hashes of the overlay the batch built: each written node and leaf, once; a clean subtree none. -/
+def writtenReq (ids : List (Nat × List Bool)) : Trie.T K V D → Nat
+  | .empty => 0
+  | .leaf _ kvs => if leafId S kvs ∈ ids then 1 else 0
+  | .node _ b rep l r => (if nodeId S b rep ∈ ids then 1 else 0) + writtenReq ids l + writtenReq ids r
+
+/-- Apply `o` to `t`, marking what the overlay writes (cv 01a15460-e096): an insert writes `k`'s route in
+the trie after it (`insU`: the nodes it passes, a split node, `k`'s leaf; a one-entry leaf it splits is
+kept clean, off the route); a removal marks `k`'s route in the trie before it: the nodes of it that
+still stand after it are re-joined, written (`retainAtU`, `joinU`), and the ones that are gone (`k`'s
+leaf; a node one side of which emptied, its other side promoted whole and clean) are not in the
+trie after the batch, so their marks count nothing. Marked, not counted: `writtenReq` counts the
+marked ids of the trie after the whole batch, once each. -/
+def applyMark (val : K → V) : Trie.T K V D × List (Nat × List Bool) → Op K → Trie.T K V D × List (Nat × List Bool)
+  | (t, ids), .ins k => let t' := t.insert S k (val k); (t', ids ++ routeIds S k t')
+  | (t, ids), .del k path =>
+      (Trie.retainAt S (fun k' _ => decide (k' ≠ k)) path t, ids ++ routeIds S k t)
+
+/-- `ops` in order from `t` as ONE batch on the overlay, sealed once: the trie they reach and what
+sealing requires. -/
+def applyAllBatch (val : K → V) (t : Trie.T K V D) (ops : List (Op K)) : Trie.T K V D × Nat :=
+  let (t', ids) := ops.foldl (applyMark S val) (t, [])
+  (t', writtenReq S ids t')
+
+/-- What `U.seal` hashes of an overlay: each written node and leaf, once (the check's side of
+`writtenReq_overlay`; nothing deployed reads it). -/
+def overlayWritten : Trie.U K V D → Nat
+  | .clean _ => 0
+  | .leaf _ => 1
+  | .node _ _ l r => 1 + overlayWritten l + overlayWritten r
+
+/-- `o` on the overlay, as `World.uStore` runs it. -/
+def applyU (val : K → V) (u : Trie.U K V D) : Op K → Trie.U K V D
+  | .ins k => Trie.insU S k (val k) 0 u
+  | .del k path => Trie.retainAtU S (fun k' _ => decide (k' ≠ k)) path u
 
 /-- `ops` in order from `t`: the trie they reach and what they require. -/
 def applyAll (val : K → V) (t : Trie.T K V D) (ops : List (Op K)) : Trie.T K V D × Nat :=
@@ -219,12 +268,12 @@ def rowOps (E : Env D) (x : RowTouch D) : List (Op (RowSlot D)) :=
   | _, _ => []
 
 /-- The rows a turn writes, from `w`'s: each touch's operations in order on the dirty overlay
-(`World.uStore`, cv 01a153a5-0e09: a run of row and head writes between retracts is one batch,
-`applyAllSeg`), sealed, then each retired parent's heads removed (`dropHeads`, listed by the kernel's
-own `under` on the rows as they then stand). DEFINED as what `rowsRun` hashes. -/
+(`World.uStore`, cv 01a153a5-0e09; since cv 01a15460-e096 a retract joins the batch, so the turn's row
+touches are ONE batch, `applyAllBatch`), sealed, then each retired parent's heads removed (`dropHeads`,
+listed by the kernel's own `under` on the rows as they then stand). DEFINED as what `rowsRun` hashes. -/
 def rowsReq (E : Env D) (w : World D) (t : Turn D) (val : RowSlot D → RowLeaf) : Rows D × Nat :=
   let S := rowSpec E
-  let (r, n) := applyAllSeg S val w.rows (t.rows.flatMap (rowOps E))
+  let (r, n) := applyAllBatch S val w.rows (t.rows.flatMap (rowOps E))
   t.touches.foldl (fun (acc : Rows D × Nat) x => match x.act with
     | .retire =>
         let heads := (under S (E.bytes x.cell) 257 acc.1).filterMap fun p => match p.1 with
@@ -276,5 +325,47 @@ def step (E : Env D) (w : World D) (s : Step D) (w' : World D) : Except String N
   match s with
   | .turn t => (admit E w t w').map Parts.total
   | .refusal r => refuse E w r w'
+
+/-! ## The written-id model against the overlay itself, on a toy trie (cv 01a15460-e096)
+
+Keys are naturals routed by their low bits, depth 4, a one-byte digest: `writtenReq` over the ids the
+replay marks equals what `U.seal` hashes of the overlay the same operations build, and the sealed
+overlay is the replay's trie. The operations exercise a split above a standing node (`ins 5` puts a
+node at bit 2 over the one at bit 3, kept clean), a removal that collapses a node and promotes its
+sibling (`del 9`), an insert through a node an earlier operation wrote (`ins 11` through the root),
+and a removal whose re-join reaches a written node (`del 5`); the second list is the rows' shape, a
+removal then a write under the same prefix (`del 3`, `ins 7`), and a removal collapsing to a lone
+leaf; the third (K23-READER-E096) a write then the removal of its neighbour. -/
+
+private def toyS : Trie.Spec Nat Nat UInt8 where
+  bit k i := k.testBit i
+  depth := 4
+  depth_lt := by decide
+  hash b := UInt8.ofNat (b.size + (b.data.toList.map UInt8.toNat).sum)
+  dbytes d := ⟨#[d]⟩
+  kbytes k := ⟨#[k.toUInt8]⟩
+  vdigest v := v.toUInt8
+
+private def toyPath (k : Nat) : List Bool := (List.range 4).map (toyS.bit k)
+
+private def toyT0 : Trie.T Nat Nat UInt8 := [1, 3, 9].foldl (fun t k => t.insert toyS k k) .empty
+
+private def toyOps1 : List (Op Nat) := [.ins 5, .del 9 (toyPath 9), .ins 11, .del 5 (toyPath 5)]
+private def toyOps2 : List (Op Nat) := [.del 3 (toyPath 3), .ins 7, .del 9 (toyPath 9), .ins 1]
+/-- K23-READER-E096's list: a write then a removal of a neighbour, which told four wrong models apart. -/
+private def toyOps3 : List (Op Nat) := [.ins 0, .del 1 (toyPath 1)]
+
+private def toyAgrees (ops : List (Op Nat)) : Bool :=
+  let u := ops.foldl (applyU toyS id) (.clean toyT0)
+  let (t, n) := applyAllBatch toyS id toyT0 ops
+  decide (n = overlayWritten u) && decide ((u.seal toyS).toList = t.toList) &&
+    decide ((u.seal toyS).hashOf toyS = t.hashOf toyS) && decide (0 < n)
+
+/-- **The written ids are what the overlay writes**: on the toy trie, over both operation lists, the
+requirement read off the replay equals the written nodes and leaves of the overlay the same
+operations build, which seals to the replay's trie (its listing and its root); no requirement is 0. -/
+private theorem writtenReq_overlay :
+    toyAgrees toyOps1 = true ∧ toyAgrees toyOps2 = true ∧ toyAgrees toyOps3 = true := by
+  decide +kernel
 
 end Nanodregg.Kernel.Sim.Required
