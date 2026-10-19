@@ -625,3 +625,79 @@ read would put IO under the proofs. The copy tied by two rows is the cheaper tru
 **Re-emits.** world/escrow/Escrow (the doc section; the package re-ids). The bounty row installs it
 by path (`<world/escrow/Escrow`), pins no id, and passes (`rows bounty`). Nothing else holds the old
 id.
+
+## LEDGER-13 · The escrow's payout theorem is of what the receiver runs: `RunCalls` of every successful `runMeasured` of the escrow package (LEDGER-5, 2026-10-21; on LANG-61)
+**Decision.** `Ledger.Proofs.EscrowRun.escrow_run_calls`: if `readPackage look pkg = .ok escrow` and
+`∀ x, digestOf (bytesOf x) = some x`, then every `runMeasured bytesOf digestOf look rv pkg state method
+args r budget = .ok (s, calls, rows, t, n)` satisfies `RunCalls digestOf state method args r.self calls`:
+the state slots read (`readState`) as `stateOf amount arb asset ben dep nk p`, `digestOf asset = some a`,
+and exactly one of: `method = 0` and the arguments decode to `{grant = gb}`, `digestOf gb = some gd`,
+`digestOf dep = some d`, `calls = [transfer (of d a) (of r.self a) amount (some gd) (some nk)]`;
+`method = 1`, `digestOf dep = some d`, `calls = [transfer (of r.self a) (of d a) amount none (some
+"payout")]`; `method = 2`, the same to `digestOf ben`. `escrow_program_calls` states it at `invoke`'s
+call `X.program.run` (premises `X.Lawful`, `X.program = Lang.program X.env.bytes X.digestOf`);
+`escrow_run_deployed` at the node's `Ctx` (`Host.Deployed.X`) with only the package premise left.
+KERNEL's `AcctRef.resolve` sends `of r.self a` to `accountId X r.self a` by definition, so a payout's
+source is the account whose one `once "payout"` nullifier both payouts spend.
+**The spec moved to the receiver's term.** `EscrowSpec.methodResult ℓ`: `apply4 0 ℓ` under
+`[escrow.body]`, extracted WHOLE at `resultOf`, replaces `methodAt` (an inlined method term under
+lib `[]`, which LANG-61 showed is not the receiver's value) and the fourteen projections
+(`slotField`, `ownerOf`, `assetOf`, `someOf`, `valueOf`, `callOfMethod`, `stateOfMethod`).
+`escrow_method_results` (one theorem, by `rfl`, for every term value, every other request field,
+every argument of a payout and every rows record) replaces `escrow_calls_payout` and
+`escrow_method_state`; the `of`/`none`/`some` tags are in the data. `spends` (over the result) replaces
+`spendsB`; `callAt`, `spendCount`, `escrow_one_payout` count `methodResult`, statement unchanged.
+**Proof.** `runMeasured_means` (LANG-61) gives the run's BigStep of `apply4 g ℓ` under `L.lib` and the
+Means of the extracted result. `load_top` with the two premises gives `L.pkgs[g]? = some escrow` and
+`L.lib[g]? = some (escrow.body.relocate f)`; `escrow_noRef` (proved here, LANG-61's named need) and
+`relocate_noRef` make it `escrow.body`. `escrow_resolve`: the indices are 0, 1, 2 at `resultOf`, else
+refused. `escrow_state_shape` (from `readState_conforms`) and `deposit_arg_shape` fix the data's
+shape. `run_result`: `methodResult`'s eval is a BigStep under `[escrow.body]` (`run_bigStep`),
+`relib_apply4` carries it to `L.lib`, `bigStep_deterministic` makes the two values one, a no-ref
+meaning is lib-free (`means_relib`), and `means_deterministic` with `extract_means` makes the
+receiver's result `methodResult`'s. `callsOf` then reads the transfer; each digest it needs is
+either `r.self` (the round trip) or an existential pinned by `digestOf … = some …`.
+**Premises, against the code.** (1) the round trip: `Ctx.Lawful.digestOf_bytes`; at the node
+`Receive.deployed_ctx_lawful` (`Codec.Deployed.digestOf_bytes`), discharged in `escrow_run_deployed`.
+(2) `X.program = Lang.program X.env.bytes X.digestOf`: `Host.Deployed.X`'s definition, `rfl`. (3)
+`readPackage look pkg = .ok escrow`: the object's package cell holds install bytes of `escrow`
+(`Wire.encodePackage escrow`, which decode to it: `escrow_decodes`); which package an object runs is
+the statement's subject, so it stays a premise. (4) the run succeeded: `invoke`'s step
+(`Kernel/Receive/Derive.lean`). No premise was added to any existing theorem.
+**Teeth.** `run_calls_pins_payee` (for `escrow_run_calls`): over a decoder naming one id per bytes,
+from a state whose beneficiary and depositor differ, a release paying the depositor is not
+`RunCalls`. `run_result_needs_body`: a body differing in one field (`release` holding `refund`'s
+term) means a different result (the depositor paid, `refunded`) than `methodResult "release"` (the
+beneficiary, `released`), so `run_result`'s body premise bites. `escrow_run_spends` (for
+`escrow_method_results` and the chain's count): `spends` is true of a release's result and false of
+a deposit's (depositor ≠ escrow), so `escrow_one_payout` is not true by a constant count.
+**Read.** Second-agent vacuity read with the disjunct check: nothing vacuous, nothing weaker than
+HEAD. The three disjuncts carry `method = 0/1/2` (exclusive; none follows from the premises without
+the run's `resolveMethod`); each `calls` equation binds the run's own output; every existential is
+pinned (the seven terms by the `readState` equation, `stateOf` injective; `a`, `gd`, `d`, `b` by
+`digestOf … = some …`; `gb` by the `decodeData` equation). `escrow_method_results` is strictly more
+general than `escrow_calls_payout` (any request, any payout argument, any rows) and subsumes
+`escrow_method_state`. Fixed from the read: the label of `escrow_run_spends` (it teeths the spec's
+count, not the run theorem), and `run_calls_pins_payee` added as the run theorem's own tooth. The
+reader's probe: `escrow.imports = []`, `escrow.body.digestLits = []` and `stateSlots` of a released
+state is `some`, by `decide +kernel`; nothing in the premises is contradictory.
+**Critique.** (a) No kernel-checked witness that the premises of `escrow_run_calls` hold together: a
+`decide +kernel` of a concrete Sim run is stuck in `runSetup` (each piece reduces alone: load,
+readPackage, readState, decodeData, resolveMethod, reqOk, readsData); `ledger-sim` runs the real
+receiver on the escrow (E rows, ALL PASS), which is behavioural evidence only. (b) The state the run
+WRITES is not in the theorem: `runMeasured_means` does not expose `stateSlots row ds 0 = some s`, so
+the receiver-side twin of `escrow_method_results`' state half needs that conjunct (Lang's). (c) The
+chain theorems still count `methodResult` over states `stateOf … phase`, not a chain of receiver runs
+over the slots each wrote; (b) is its first step. (d) `means_relib` (a no-ref value's meaning is
+lib-free) is a Lang fact proved privately here; it belongs beside `bigStep_relib` in
+`Lang/Proofs/Extract.lean`. (e) Lang's parsimony remark, recorded and not acted on: `Means` walks the
+same path as `Lang/Proofs/Need.lean`'s `Forces` (LANG-21); they stay apart, Lang's to merge or not.
+**Meta-critique.** I first planned LANG-61's route literally: `means_get` twice, then invert sum
+meanings down to base fields, each projection derived under `[body]` and carried by `Relib`. That
+is seven projections deep per call and repeats the spec's own shape; extracting the whole result
+under `[body]` by `rfl` and comparing meanings once is shorter and states more (the whole result,
+state included). It cost one lemma Lang lacked (`means_relib`), which is the right trade: the lemma
+is general, the projections were the escrow's. `RunCalls` is a named statement so the three
+theorems (run, program, deployed) share one conclusion instead of three copies.
+**Nothing moves.** No wire, vector, shipped text or package byte: world/escrow is untouched,
+`escrow` is the same value.
