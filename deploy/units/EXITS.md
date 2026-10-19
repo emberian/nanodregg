@@ -17,7 +17,7 @@ code space holds both tables: `host` (Host.Status, below 64) and nd-supervise's 
 | 8 | usage | fatal | stopped (RestartPreventExitStatus) | fix the unit's argv |
 | 9 | entropy | fatal | stopped (RestartPreventExitStatus) | the OS random source failed: do not genesis on this box |
 | 10 | recordTooLarge | fatal | stopped (RestartPreventExitStatus) | a defect or the HOST-14 design limit: report to HOST |
-| 11 | worldTooLarge | fatal | stopped (RestartPreventExitStatus) | a defect or the HOST-14 design limit: report to HOST |
+| 11 | worldTooLarge | fatal | stopped (RestartPreventExitStatus) | a defect: the World would encode past worldBytesMax (HOST-57, a bound derived from the budget), which no World this binary's budget admits can reach by admitted turns; keep the Store untouched, report to HOST |
 | 12 | indexTooLarge | fatal | stopped (RestartPreventExitStatus) | a defect or the HOST-14 design limit: report to HOST |
 | 13 | io | fatal | stopped (RestartPreventExitStatus) | the STORE path or the IN file is absent, a Store file is unreadable (EACCES, EIO), or a file was removed between the open's check and its open: check the path and permissions (the call and errno are on stderr) |
 | 16 | locked | fatal | stopped (RestartPreventExitStatus) | another writer holds the Store: find its unit; never start a second |

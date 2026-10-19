@@ -272,8 +272,10 @@ def hostAction : Status → String
   | .sealIo => "automatic; check the disk's space and errors"
   | .usage => "fix the unit's argv"
   | .entropy => "the OS random source failed: do not genesis on this box"
-  | .recordTooLarge | .worldTooLarge | .indexTooLarge =>
+  | .recordTooLarge | .indexTooLarge =>
     "a defect or the HOST-14 design limit: report to HOST"
+  | .worldTooLarge =>
+    "a defect: the World would encode past worldBytesMax (HOST-57, a bound derived from the budget), which no World this binary's budget admits can reach by admitted turns; keep the Store untouched, report to HOST"
   | .entryUnfit => "a defect: a seal met an index entry the entry layout cannot spell (HOST-31); keep the Store untouched, report to HOST"
   | .allowancePastBound => "genesis/join/import refused before writing: the World's allowance is past this binary's allowanceMax (a forged or foreign lineage, or an invitation made with another budget); do not import it (nothing was written)"
   | .potentialPastBound => "genesis/join/import refused before writing: the World's weight and allowance together (Kernel.potential) are past this binary's potentialMax, the weight bound its budget admits (a carried World heavier than a lineage that began under this budget can become, or a genesis past genesisWeightMax; rebuild the genesis with fewer or lighter founders) (nothing was written)"

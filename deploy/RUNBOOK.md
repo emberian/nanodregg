@@ -269,7 +269,9 @@ both as arguments, the operator's shell is the only reader, and to re-make the S
 after a `store` refusal, §5) the operator runs the same line with a fresh `nd invite`. It prints the
 genesis lines, then `sponsor HEX` (the operator's member id: OPERATOR_MEMBER in the observer's
 `nd init` below) and `input HEX`. A forged invitation is `refused inviteRefused pinMismatch` (44), a
-key other than the signer's `refused inviteRefused notSponsor` (44), both writing nothing; a join
+key other than the signer's `refused inviteRefused notSponsor` (44), both writing nothing, as is an invitation
+whose World's budget this binary does not admit (`refused allowancePastBound` 58 / `potentialPastBound` 59,
+HOST-56: the sponsor's binary has another budget; do not join it); a join
 into a Store that exists is `refused exists` (17). If the follower unit is started over the empty
 directory a refused join left, `host follow` ends `missing` (20, fatal: the unit stops by name and
 is not restarted; it never follows a World nobody accepted). Planted through the real host with
@@ -294,8 +296,10 @@ PROVISIONED, runs two nd-supervise children: the resident's OWN follower (`FOLLO
 `host follow`, one follower per resident: a follower plans in its own member's name, ROOT ruled (A)) and
 `nd --stdio` on `MEMBER/<dirOf>/nd.sock` (0660, the hosted group, only the hosted uid admitted), confined to
 write the resident's workspace and connect to `/run/nd/host.sock` and its own follow socket. There is no
-per-resident unit and no environment file; the unit reads `ND_OPERATOR` and `ND_PEER` from keybroker's
-`keybroker.env` (§2a). Roots, made by tmpfiles (`nd-member.conf` above; the follow root is its own file):
+per-resident unit and no environment file; the unit reads `ND_PEER` from keybroker's
+`keybroker.env` (§2a). Its decider is `hosting-residents /srv/nd/store` (HOSTING-33), which answers only the
+residents question: no clock, no key slots and no operator id reach nd-members. Install `nd-members`,
+`hosting-residents`, `nd-supervise`, `nd` and `host` in `/opt/nd/bin`. Roots, made by tmpfiles (`nd-member.conf` above; the follow root is its own file):
 
     sudo install -m 0644 deploy/units/linux/tmpfiles/nd-member-follow.conf /etc/tmpfiles.d/nd-member-follow.conf
     sudo systemd-tmpfiles --create /etc/tmpfiles.d/nd-member-follow.conf
@@ -321,12 +325,18 @@ StrictModes chain clean (`nd-members.conf` makes `/srv/nd-members`; the rest is 
   arguments; written only by the `host follow` child;
 - `STATE/<dirOf id>/follow`, one line `MEMBER_HEX GRANT_HEX` and LF, mode 0600: the member and grant the
   follower acts as, so the stdio child cannot rewrite it either.
-The five roots (MEMBER, MEMBERS, STATE, FOLLOW, and the hosted tree) must be pairwise disjoint trees: nd-members
-ends `rootsOverlap` (161) otherwise, and `stateRoot` (160) if STATE is not a 0700 nd directory with a clean chain.
+MEMBER, MEMBERS, STATE and FOLLOW must be pairwise disjoint trees (after canonicalizing): nd-members ends
+`rootsOverlap` (161) otherwise, and `stateRoot` (160) if STATE is not a 0700 nd directory with a clean chain.
+The hosted tree is kept apart from them by the grain plans (`roots_disjoint`), not by this check.
 A resident's own trouble is never an exit; it is a line in the journal and that resident unbound while the
 others are served: `memberMissing NAME …` (not provisioned yet; retried every tick), `socketDirShared NAME …`
 (its directory holds something other than its socket: remove it), `memberCrashLoop NAME ROLE` (5 starts in
-120 s; unbound until the World's resident set changes) and `memberSpawn NAME ROLE`. The unit's own ends are
+120 s; unbound until the World's resident set changes) and `memberSpawn NAME ROLE`. A removed resident's two
+supervisors are sent SIGTERM (each names every open connection's close, `closed unreachable`, CLIENT-30) and
+reaped on later ticks; `memberStopping NAME` says its rebirth waits for them (automatic: nothing to do), and
+`memberStopForced NAME` says one did not end within its grace period and was SIGKILLed (some peer may have
+seen the connection end without the named close; if it repeats for one resident, report to CLIENT). The
+unit's own ends are
 EXITS.md's nd-members table (150-161; only a signalled decider restarts; 7 is more than 1024 resident
 grains). A removed resident loses both children, sockets and directories.
 A launch whose member socket is missing is refused `pathMissing` and counted (as for the broker socket), so
@@ -458,7 +468,10 @@ crosses: every old call and receipt is for the old World.
 4. With the NEW binary: `host import STORE NAME OUT --digest HEX` (the `carried` digest; a fresh
    nonce is drawn unless `--nonce`). Refused by name, before any Store file is written:
    no `--digest` → `refused digest` (8); a wrong digest or a byte changed in transit →
-   `refused carryMismatch digest` (49); a file written under another carried shape →
+   `refused carryMismatch digest` (49); a carried World whose allowance, or whose weight and allowance
+   together, are past what this binary's budget admits → `refused allowancePastBound` (58) /
+   `refused potentialPastBound` (59) (HOST-56: exported by a binary of another budget; do not import it);
+   a file written under another carried shape →
    `refused carried` (43, shapeMismatch): that flag day changed the carried shape and cannot
    carry, so it is a plain re-genesis (§1) and the old Store stays aside; `carryMismatch decode`,
    `anchor`, `tooLarge`, `carry NAME`. A `carryMismatch reopen` may leave a Store: move it aside.
@@ -551,12 +564,25 @@ The lines to read:
 
     bench-worstcut SCRATCH
 
-- Writes a deployed Store whose tail past its base fills tailMax, in three tail shapes (PERF-6, 2d2189e):
-  writes (20.374 trie hashes per step), births (33.031) and retires (33.959, the worst, now pinned).
-  Verifies are 0 at reopen and 1 at audit in every shape. A reopen verifies no signature (HOST-22).
-- The writes shape is 28,928 one-slot writes, 18.85 MB of 18.88 MB. The WORST tail is retires: 32,256
-  revokes, 19.63 MB over a 5.76 MB base.
-- About 4 min 39 s and 168 MB on hbox for all three shapes.
+- Writes a deployed Store whose tail past its base fills tailMax, in four tail shapes (PERF-6, PERF-9; numbers
+  measured at 359e9e8, PERF-10): writes (19.382 trie hashes per step), births (32.036), retires (32.938, the
+  worst, pinned) and rows (24.892: the Bell queue's ring, answer and retire cycles, LANG-59). Verifies are 0 at
+  reopen and 1 at audit in every shape. A reopen verifies no signature (HOST-22). A measurement above 32.938
+  is RED.
+- The writes shape is 28,928 one-slot writes. The WORST tail is retires: 32,320 revokes over a 5,812,239 B base.
+- About 8 min and 751 MB on hbox for all four shapes.
+
+### The worst World (a bench) — RAN (PERF-10, 359e9e8; standing row `worstworld`, the 200,000-entry form)
+
+    bench-worstworld synthetic N
+
+- A Store whose base holds N one-slot entries. A reopen decodes 2·entries - 1 trie hashes (2.000 per entry),
+  exactly, at 200,002, 2,626,114 and 7,669,002 entries.
+- The bound is `worldBytesMax` = 91,914,346 B (HOST-57, derived): 2,626,114 entries, 5,252,227 hashes. By hand at
+  the bound the reopen took 56.3 s on a loaded hbox (load1 12-15; reported, never judged; THE BAR's 60 s is a
+  quiet-box limit, v2, so the margin there is unmeasured). One entry more (synthetic 2626113) is refused at the
+  seal, `Host.genesis worldTooLarge`; no World an admitted turn reaches comes near it. A base file past
+  91,914,458 B is refused `baseTooLarge` (21) by a reader.
 
 A bar.sh killed hard leaves its supervisors findable: its PID files live in `$HOME/.nd-bar/run.XXXXXX/NAME.pid`,
 outside the run root. Stop them by those files only (never by pattern).

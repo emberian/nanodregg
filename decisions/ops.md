@@ -519,3 +519,23 @@ The tooth swaps the function, not journald. Neither script has run under systemd
 OPS-3 fixed that script and did not carry the lesson to harness.sh, OPS-2's. Same pattern as OPS-14:
 the new file audited, the inherited one trusted.
 **Status.** landed (this commit); systemd re-run PENDING a box window.
+
+
+## OPS-18 · the owner's audit of the six OPS-path landings made without an OPS lane (OPS-6, 2026-10-20)
+
+**Decision.** e1e8084 (HOSTING-33), cfdb08d (HOST-56), c0cd535 (CLIENT-30), bfdff2d (PERF-10) were read hunk by
+hunk against the code each sentence describes (Host/Exit.lean, Hosting/BrokerExit.lean, client/src/mux.rs
+`fds_max`, launcher/src/bin/nd-members.rs, keybroker.rs `parse_pins`). The operator sentences were right: 58/59,
+the 73 fds (8 + 64 + 1), the decider `hosting-residents /srv/nd/store`. Stale prose that no landing touched is
+corrected here:
+- `worldTooLarge` (11) said "the HOST-14 design limit"; since HOST-57 no admitted World reaches
+  `worldBytesMax`, so it is a defect (its own arm; EXITS.md re-rendered).
+- RUNBOOK §2b still said nd-members reads `ND_OPERATOR` (HOSTING-33 removed it), named four roots as five, and had
+  no word for the journal names `memberStopping` / `memberStopForced` (CLIENT-30), now there.
+- RUNBOOK §2b join and §6 import list `allowancePastBound` 58 / `potentialPastBound` 59 (HOST-56).
+- RUNBOOK §8 worst cut carried the numbers from before 16f3b9f and LANG-59 (20.374 / 33.031 / 33.959, three
+  shapes); now PERF-10's, with the fourth shape, and the worst-World bench is stated.
+**Breaks.** Only EXITS.md row 11 re-renders; no unit file changes.
+**CRITIQUE.** The sentences are checked against the code's names and constants, not run: no unit has run under
+systemd since 5771c74.
+**Status.** landed (this commit).
