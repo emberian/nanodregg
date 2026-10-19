@@ -16,6 +16,9 @@ BUILT, counted from their shapes, never from `log2 n`:
   retract, a retired parent's heads) requires one hash per node or leaf of the trie after it whose
   digest is not the digest of the subtree it replaced (a subtree that kept everything, or that
   `join` promoted whole, is not re-hashed): `fresh`;
+* an inclusion proof of `k` (`Trie.proveAt`) requires, on the wire, the bytes of the end of
+  `k`'s path (its leaf's entries) and of one sibling per node on the path, both sized by the proof
+  codec itself (cv 01a15107-2290): `proofReq`;
 * a head forces the empty trie's digest once when one of its four roots is empty (ONE lazy copy
   shared by the roots, KERNEL-35 at the roots only since KERNEL-49 (a)): `emptyRoots`.
 
@@ -57,6 +60,22 @@ def isEmpty : Trie.T K V D → Bool
 def pathDepth (k : K) : Trie.T K V D → Nat
   | .node _ b _ l r => (match S.bit k b with | true => pathDepth k r | false => pathDepth k l) + 1
   | _ => 0
+
+/-- What `k`'s path in `t` ends at, as a proof states it (`Trie.Proof.term`): `none` at the empty
+trie, else the entries of the leaf it reaches, each as its key and value digest. -/
+def termAt (k : K) : Trie.T K V D → Option (List (K × D))
+  | .empty => none
+  | .leaf _ kvs => some (Trie.digests S kvs)
+  | .node _ b _ l r => match S.bit k b with | true => termAt k r | false => termAt k l
+
+/-- **What a proof of `k` in `t` requires on the wire** (cv 01a15107-2290), at a proof codec's
+`size`: the path's end with no sibling, and one sibling's bytes per node on the path (`pathDepth`).
+A sibling's bytes are the codec's own: its size with the one sibling `sib` less its size with none,
+so a layout change moves the requirement with it, and `74 + 34n` is nowhere written here. Exact for a
+codec whose siblings are all one width (CODEC's `sibling`: a `nat16` bit and a fixed-width digest). -/
+def proofReq (size : Trie.Proof K D → Nat) (sib : Nat × D) (k : K) (t : Trie.T K V D) : Nat :=
+  let bare := size ⟨termAt S k t, []⟩
+  bare + pathDepth S k t * (size ⟨termAt S k t, [sib]⟩ - bare)
 
 variable [DecidableEq K]
 

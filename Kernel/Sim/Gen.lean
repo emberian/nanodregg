@@ -219,6 +219,12 @@ structure State (D : Type) [Ord D] where
   /-- the wire bytes of the changed cells' inclusion proofs (`Params.proofSize`), and how many -/
   proofBytes : Nat := 0
   proofs : Nat := 0
+  /-- what those proofs require on the wire (`Required.proofReq`, cv 01a15107-2290), and the two
+  plants' wire bytes: each proof with one sibling more than its path (`extra-sibling`), and each
+  sibling one byte wider than CODEC's layout (`sibling-byte`) -/
+  proofReq : Nat := 0
+  proofPlantSib : Nat := 0
+  proofPlantByte : Nat := 0
 
 def nameOf {α : Type} [Repr α] (a : α) : String :=
   match (reprStr a).splitOn " " with
@@ -453,7 +459,11 @@ def checkRoot (P : Params D) (st : State D) (w w' : World D) (t : Turn D) : Stat
     | some l =>
         let pr := w'.trie.prove S s
         let st := match s, P.proofSize with
-          | .cell _, some size => { st with proofBytes := st.proofBytes + size pr, proofs := st.proofs + 1 }
+          | .cell _, some size =>
+              { st with proofBytes := st.proofBytes + size pr, proofs := st.proofs + 1
+                        proofReq := st.proofReq + Required.proofReq S size (0, P.zero) s w'.trie
+                        proofPlantSib := st.proofPlantSib + size ⟨pr.term, pr.sibs ++ [(0, P.zero)]⟩
+                        proofPlantByte := st.proofPlantByte + size pr + pr.sibs.length }
           | _, _ => st
         if Trie.verifyInclusion S root s (leafDigest E l) pr then st
         else failWith st "root: a slot's inclusion proof does not verify"
@@ -2547,7 +2557,7 @@ def plantedArms : List String :=
    "proof-bit:refused", "depth-unhashed-plant:caught", "shape-unary-plant:caught",
    "pin-cell:same", "pin-cell-plant:caught", "pin-row:same", "pin-row-plant:caught",
    "pin-range:same", "pin-range-plant:caught", "rows-stem:ok",
-   "hash-required:empty-per-insert"]
+   "hash-required:empty-per-insert", "proof-required:extra-sibling", "proof-required:sibling-byte"]
 
 /-- `--seeds N` (N ≥ 1) runs seeds `0 … N-1`; otherwise each argument is a seed; none is 64 seeds.
 `--harness-control` may stand anywhere (GATES-15). Anything else is refused (`none`): an argument
@@ -2602,6 +2612,8 @@ def report (P : Params D) (seeds : List Nat) (control : Bool := false) : IO UInt
   let mut plantRootMarks := 0
   let mut stem : Nat × Nat × Nat := (0, 0, 0)
   let mut proofBytes : Nat × Nat := (0, 0)
+  -- cv 01a15107-2290: (required, extra-sibling plant, sibling-byte plant) proof bytes
+  let mut proofReqs : Nat × Nat × Nat := (0, 0, 0)
   -- PERF-1: signature verifies of `judge` re-run on each recorded refusal (`<G`)
   let mut verifies := 0
   let mut auditVerifies := 0
@@ -2666,9 +2678,20 @@ def report (P : Params D) (seeds : List Nat) (control : Bool := false) : IO UInt
     emptyRootMarks := emptyRootMarks + m.emptyRoot
     plantRootMarks := plantRootMarks + m.plant
     proofBytes := (proofBytes.1 + st.proofBytes, proofBytes.2 + st.proofs)
+    proofReqs := (proofReqs.1 + st.proofReq, proofReqs.2.1 + st.proofPlantSib, proofReqs.2.2 + st.proofPlantByte)
     stem := (stem.1 + (m.stemIns - m.stemBase), stem.2.1 + st.stemInserts, max stem.2.2 m.stemWorst)
     rw := (rw.1 + (m.rowIns - m.rowInsBase), rw.2.1 + st.rowInserts, rw.2.2.1 + (m.rowRet - m.rowRetBase),
       rw.2.2.2.1 + st.rowRetracts, rw.2.2.2.2.1 + st.rangeReads, rw.2.2.2.2.2 + st.rowsRead)
+    -- cv 01a15107-2290: the proofs' wire bytes against what their paths require, never below it
+    -- (a wire below the requirement means the layout changed and `Required.proofReq` must follow),
+    -- and each plant above it where the real proofs read at it
+    let st := if st.proofBytes < st.proofReq then
+        failWith st s!"proof required: the proofs' wire bytes {st.proofBytes}, below the {st.proofReq} their paths require"
+      else st
+    let st := if st.proofs > 0 && ratioUp st.proofPlantSib st.proofReq > ratioUp st.proofBytes st.proofReq then
+        { st with seen := "proof-required:extra-sibling" :: st.seen } else st
+    let st := if st.proofs > 0 && ratioUp st.proofPlantByte st.proofReq > ratioUp st.proofBytes st.proofReq then
+        { st with seen := "proof-required:sibling-byte" :: st.seen } else st
     seen := (st.seen ++ seen).eraseDups
     match st.failures.reverse with
     | [] => IO.println s!"PASS seed {seed}: admitted={st.admitted} refused-as-expected={st.refusedAsExpected} restarts={st.restarts}"
@@ -2712,6 +2735,10 @@ def report (P : Params D) (seeds : List Nat) (control : Bool := false) : IO UInt
   IO.println s!"kernel-sim: plant hash-count:empty-per-root (the roots read with a hashOf per root) reads hashes-per-turn-empty-root {showRatio (ratioUp plantRootMarks admitted)}"
   IO.println s!"WASTE admit row-insert-stem-hashes-per-required {showRatio (ratioUp stem.1 reqs.2.2.2.2.2)}"
   if P.proofSize.isSome then
+    IO.println s!"kernel-sim: proofs {proofBytes.2}: wire bytes {proofBytes.1}, required {proofReqs.1}; plant extra-sibling {proofReqs.2.1} ({showRatio (ratioUp proofReqs.2.1 proofReqs.1)}), plant sibling-byte {proofReqs.2.2} ({showRatio (ratioUp proofReqs.2.2 proofReqs.1)}, bytes-per-inclusion {showRatio (ratio proofReqs.2.2 proofBytes.2)})"
+    IO.println s!"WASTE proof bytes-per-required {showRatio (ratioUp proofBytes.1 proofReqs.1)}"
+    -- the ABSOLUTE proof size: bytes-per-required moves with the layout it reads, so a fatter
+    -- layout still reads 1.000 there; over the fixed seeds this one reads above its ceiling
     IO.println s!"WASTE proof bytes-per-inclusion {showRatio (ratio proofBytes.1 proofBytes.2)}"
   IO.println s!"kernel-sim: stem probe: {stem.2.1} inserts, the most one insert hashed {stem.2.2} (KERNEL-49 (c)'s bound 2·(rowDepth+1) = {2 * (Bounds.rowDepth + 1)})"
   if rf.2.2.2.1 > Bounds.refusalsPerWindow then
