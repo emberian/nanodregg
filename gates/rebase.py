@@ -448,6 +448,20 @@ def read_record(path: str | None) -> dict[str, tuple[str, str, str]]:
     return out
 
 
+def traced_now(unit: str, payload: str, root: str, table: str) -> str | None:
+    """GATES-20: a run recorded under a TRACED key (`t:…`) is re-keyed from the read-set its payload
+    carries, by this (the judge's) gates/readset.py, on the candidate as it is now."""
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import readset
+    try:
+        rs = json.loads(payload).get("readset")
+    except ValueError:
+        return None
+    exe = unit[len("run:"):]
+    line = next((l.rstrip("\n") for l in open(table, encoding="utf-8") if l.split("\t", 1)[0] == exe), None)
+    return "t:" + readset.key(rs, root, line) if rs and line else None
+
+
 def verify(listing_file: str, root: str, table: str, record: str, reuse: str | None, skip_runs: bool) -> int:
     now = compute(listing_file, root, table)
     prev = read_record(reuse)
@@ -456,12 +470,13 @@ def verify(listing_file: str, root: str, table: str, record: str, reuse: str | N
         print(f"stale verdict: no record {record} to verify")
         return 1
     bad = []
-    for unit, (key, how, _payload) in sorted(rec.items()):
+    for unit, (key, how, payload) in sorted(rec.items()):
         if skip_runs and unit.startswith("run:"):
             continue
-        if now.get(unit) != key:
+        nk = traced_now(unit, payload, root, table) if key.startswith("t:") else now.get(unit)
+        if nk != key:
             bad.append(f"stale verdict: {unit} (recorded key {key[:16]}, the candidate's key now "
-                       f"{(now.get(unit) or 'none')[:16]})")
+                       f"{(nk or 'none')[:16]})")
         elif how == "reused" and prev.get(unit, ("",))[0] != key:
             bad.append(f"stale verdict: {unit} (claimed reused, but the previous judge's record holds no ok verdict "
                        f"under key {key[:16]})")

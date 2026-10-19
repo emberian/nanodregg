@@ -462,6 +462,8 @@ Measured before the column was written: 10 of the 11 cargo rows go red with no L
 **Critique.** (a) The static key re-runs ~90% of runs on a re-base: the over-approximation (every non-.lean path, every binary) is sound and nearly useless for reuse; its value today is the record and the re-check, ready for traced keys. (b) The merge edits a lander's worktree without asking; a lane that reads its file afterwards sees main's lines in it. That is ROOT's ruling and the message names each merged file. (c) The age bound makes every ready lander wait behind a twice-displaced one still judging, up to a full judge (a KERNEL re-genesis judge is long). (d) Displacements are counted whoever moved main, older landers included: the bound bites sooner than the ruling's "loses the head to a later one". Counting only younger winners would need land.py to record who landed, and only delays the bound. (e) `rebase.py check` reads string literals; a run that walks the tree from its cwd (runs start in the tree) would read decisions/ without naming it. No exe does so today; traced read-sets would see it.
 **Meta-critique.** The design's headline number (42.9% reuse) was a replay of a key that was never sound, and I nearly built to it. The replay that matters is of the key as built; it says the reuse half of this commit is groundwork, and that traced read-sets are the next GATES item, not an optional one.
 
+**Measured first day (GATES-8, 2026-10-19, every scripts/commit log on hbox under the new queue).** 13 landers logged `queue: head (displaced N)`: N=0: 5, N=1: 1, N=2: 6, N=3: 1 (HOST-61, bd39f78). Reaching the bound is the common case (6 of 13). Every pass beyond 3 was a TIE, which the age bound allows: two landers twice-displaced at once (tickets 21, 22 at c7f455e), then four (28, 33, 35, 36 at bd39f78 → 224e9fe; OPS-18 oldest). k tied landers landing serially onto each other's tips cost the youngest k−1 more re-bases by construction (each is judged on the tip it lands onto), so no ordering rule bounds that below 2 + k; ROOT withdrew a 4-pass rule on this. What shortens a tie re-base is reuse (GATES-20); a merge-train is GATES-21, PROPOSED (redregg/work/GATES-21-PROPOSED.md), built only if the measured tail stays long under GATES-20. Admission control (refusing entry while ties stand) is refused: it shortens nothing a lander can see and starves the newest.
+
 ## GATES-20a · A run is selected by every binary it runs, not only its own: spawning rows, declared drives, and names in the static key (2026-10-20, ROOT ruling; found by GATES-8's traced read-sets)
 
 **Finding (fail-open in pre-push, measured).** Every runs.tsv row was traced under `strace -f --seccomp-bpf -e trace=%file,execve` on the standing tree at 1a6163b (hbox logs/gates8-trace.py, traces in logs/gates8-traces; the traced run read `runs: ok (57 runs of 43 exes)`, as untraced). Each trace's execve set was then compared with what selection assumes (logs/gates8-replay.py, gates8-extra2.py, gates8-drives.py, over main's last 150 first-parent landings and the real `runs.selected`):
@@ -508,3 +510,69 @@ Measured before the column was written: 10 of the 11 cargo rows go red with no L
 
 **Critique.** (a) The window is a count. A copy made from a main older than 300 commits is not caught by `stale`, though its recorded base still merges it when HEAD is right. (b) `stale` is per commit and needs a CLEAN merge of C's change. A stale copy that also edited inside C's lines conflicts and is not seen. (c) 9.3% of landings pay one flag. That is the visible price of an invisible defect, and the escape writes the deletion into the message where it was silent before. (d) The record is taken at the first attempt that runs this code, so a lander launched before this lands records at its next attempt. (e) A head lander may now re-judge without bound while ties keep landing. Each re-judge is bounded by the heads alive, and a lander that dies releases its ticket.
 **Meta-critique.** GATES-19 trusted HEAD as "the copy the lander edited" and its plants never moved HEAD. The defect lived in what the plants held fixed. This decision's own blind spot is the window; the measure that would expose it is the age of the oldest copy a lane copies in, which nothing records.
+
+## GATES-20 · Traced read-sets select the runs and key the reuse; the judge's code is main's, the candidate supplies only its table (2026-10-20, landed 10-21 after GATES-20b; ROOT rulings F1/F2 and "the judge's CODE is main's"; design redregg/work/GATES-20-DESIGN.md)
+
+**The rule.**
+- **Every judge traces every run (F1).** runs.py runs each verdict run under `strace -f -qq -y --seccomp-bpf -e trace=%file,execve,getdents64` (gates/readset.py). The trace is reduced to a read-set: T, the tree paths the run touched by name; L, the tree directories it listed; X, the binaries it exec'd from .lake/build/bin. T covers opens, execs, stats, accesses and readlinks, including absent probes (ENOENT is a read of absence). Excluded from the read-set: .lake/runs/, .lake/cargo-target/, and anything under a directory the run itself created. strace -y's fd annotations place a name relative to a directory fd or a chdir'd cwd where it was really opened.
+- **A traced key** hashes the row line, the runner's bytes (runs.py, tree.py, readset.py), each T path's bytes, each L directory's sorted names, and each X binary's bytes, all read off the materialized tree. **A stat is keyed by content, like an open**: cargo's fingerprint compares mtime and size, so a stat is a proxy for the bytes. (The design's mode-only stat key was unsound and was not built.)
+- **Selection.** A row is selected iff any of:
+  1. its reach (GATES-20a) meets the changed .lean modules;
+  2. it holds no read-set valid for the parent; or
+  3. its valid read-set touched a changed path, or listed a directory where a path was added or deleted.
+
+  A read-set is valid for the parent iff, between the tree it was traced on and the parent, no path it touched changed, no listed directory gained or lost a path, no .lean of its reach changed, no runner file changed, and its row line is the same. A script row is selected on every judge, as before, and so is a cargo row whose crate changed.
+- **No valid read-set falls back to the static rules (fail-closed).** That covers no strace on the box (`trace: strace unavailable`), an unparsable or missing trace, and one untraced run in a row.
+- **Reuse.** A lander's previous judge records each ok row under `t:<traced key>`, with the read-set in the payload. On the re-based candidate the read-set is re-keyed, and the verdict is carried only when the key is byte-identical. `rebase.py verify` re-keys every `t:` unit from its payload with the JUDGE's readset.py.
+- **The judge's code is main's.** pre-push runs `$J/runs.py` and `$J/waste.py` (J = the judging scripts' tree: main's copy under scripts/commit). The candidate supplies only its runs.tsv and waste.tsv; a candidate's gates/*.py is never executed by its own judge. Consequence (ROOT): a new row KIND and the first rows that use it are two commits, runner first. Why: GATES-19 (1a6163b) and GATES-20a (6527d9f) both changed gates/runs.py and were judged by their own runner. Standing on each read GREEN (1a6163beb767, 6527d9f146e0), and that was the only check after the fact.
+- **Standing's re-trace check.** Standing traces every row. Each stored read-set whose own key re-computes equal on the standing tree must contain the fresh one (fresh ⊆ stored: cargo with a warm cache reads less, never more). Anything more is RED `trace: the run touched P …`. That catches a forged or narrowed record, a nondeterministic run, and an input no key covers. The first version compared only records whose key equalled the FRESH read-set's key, which is vacuous: a differing read-set always has a differing key. It was rebuilt before landing.
+- **Reads outside the tree (F2) are reported, not RED.** runs.py prints `outside EXE: home N, tmp M`, and standing's line carries `outside=N(traced|untraced)`. **GATES-20c** turns it RED. Trigger: the census below is sorted. Dated: 2026-10-27.
+
+**Measured.**
+- Replay of main's last 150 first-parent landings, with the read-sets as built (logs/gates8-replay3.py over two traced standings):
+  - selected runs 3025 (static, GATES-20a) → **1922**;
+  - re-base reuse **41.8%** (803 of 1922), against **10.4%** for the static key;
+  - re-runs: **804 from the binary-closure floor** (a .lean of a run binary's reach, which no binary-byte key avoids), 130 touched paths, 91 runner, 46 script rows, 44 crate, 4 row lines.
+- The design's figures (2994 → 1672 runs, 53.4% reuse, a 512-run floor) came from a mode-only stat key and own-closure reach. Both are corrected here: content-keyed stats, and 20a's reach, which makes the spawning rows reach every exe.
+- Determinism (plant 8): two traced standing passes on the same tree. 24 of 25 rows came back with fresh ⊆ stored. host-file-sim read RED, touching `.lake/host-file-sim/run-<random>` (+675 more): its own scratch outside .lake/runs. That was fixed by the run-created-directory exclusion, then re-measured: two passes of host-file-sim alone gave one stored read-set and no re-trace red.
+- Census of outside reads (store over two passes, by prefix):
+  - ~/.cache/nd-t: 472 (test temp roots);
+  - LD_LIBRARY_PATH and PATH probes into ~/src/hacl-star, ~/src/HOL, ~/r05, ~/.local/share/solana: 176 + 54, mostly ENOENT;
+  - ~/.nd-bar/run.* and ~/ndbar.*: bar.sh scratch;
+  - /tmp/nd-attach-*: tempdirs;
+  - **real inputs no key covers**: ~/.gitconfig and ~/.config/git (git, inside tests), and ~/.lake/config.toml (lake).
+
+  GATES-20c's first item is to sort those three: key them, or make the runs not read them, with HOME pointed at the run's fresh dir.
+- strace cost, as a count rather than wall clock: every row stayed inside its 600 s deadline under tracing on hbox, in both standing passes and in every plant judge.
+
+**Plants.**
+- logs/gates8-g20plant.py, function-level, over real read-sets:
+  - S1: .gitignore, read only by cargo:devtools:workspace, selects it (and the script row). Control: rows that never read it, holding valid read-sets, are not selected; the static rule selects every row for it.
+  - S2: `.cargo`, probed absent by cargo:attach:attach, once added selects it.
+  - S3: a file added to Bench/, which devtools lists, selects it.
+  - S4: with no strace on PATH, `available()` is None, so every key and every selection is static.
+  - S5: an unparsable or missing trace leaves no read-set.
+  - S6: a parent that changed .gitignore since the trace invalidates devtools' read-set, so it falls back to static.
+- logs/gates8-g20e2e.sh, through scripts/plant and this judge:
+  - R1 `g20-evil-runner`: a candidate runs.py that prints `runs: ok` and exits 0, plus one byte of world/resident/Bell, reads `PLANT g20-evil-runner RED: runs: NEW RED run cargo:launcher:resident_bell`. Before this commit the candidate's runner was the one executed (pre-push judge_runs copied `$G/tree/gates/*.py`).
+  - R2 `g20-data`: B0 = main plus world/plant-g20.txt (a file nothing reads), M = one comment line of Ledger/Sim/Journey.lean. Result: `PLANT g20-data GREEN (control)`, 24 units reused and 2 re-run. The re-runs were census and cargo:devtools:workspace, which lists world/ and saw the added path. GATES-19's static key re-ran every row (g19-data).
+  - R3 `g20-forge`: the C1 record of cargo:devtools:workspace (re-run, key changed) is made to claim C0's traced key. Result: `PLANT g20-forge RED: stale verdict: run:cargo:devtools:workspace (recorded key t:355e479e97b07d, the candidate's key now t:1823186b82597d)`.
+  - R2 and R3 were re-run with the final readset.py (logs/gates8-g20e2e-b.out), which adds the toolchain to the key.
+
+**Not weaker.**
+- Selection narrows only through a read-set validated against the parent, and every gap in it falls back to the static rules.
+- Reuse is carried only under a byte-identical traced key, which the judge re-computes.
+- The candidate no longer runs its own runner.
+- The re-trace check is new red. The outside report is new information, and RED is dated as GATES-20c.
+
+**Critique.**
+- (a) The binary-closure floor (804 of 1119 re-runs) dominates. A finer key needs a deterministic per-module link map, which is not proposed.
+- (b) Validity on the parent checks only the git-tracked part; .lake products are taken as functions of the .lean sources and the toolchain, covered by reach. The toolchain outside the tree is in the traced key as `rustc -Vv`, `cargo -V` and the Python version (found while writing this: the first traced key had none of them, so a rustc upgrade would have carried a cargo verdict); the Lean toolchain is lean-toolchain (a tree path lake touches) and the X binaries' bytes. Selection validity does not see a toolchain change at all; a toolchain upgrade is a box event, and standing's re-trace is the check.
+- (c) A read-set stored by a judge of a candidate that never landed may later validate for a parent. That is sound by the validity argument, but the store grows without bound. Pruning is a follow-up and is not needed for correctness.
+- (d) The outside census found three real inputs no key covers. Until GATES-20c, a change to ~/.gitconfig can move a verdict that a re-base then carries.
+
+**Meta-critique.**
+- The design's two soundness claims both failed when built: a mode-only stat, and a re-trace check keyed on the fresh read-set. Each would have been a quiet false reuse.
+- They were found by building and running the check, not by reading the design. The determinism plant found a third defect, run-created scratch.
+- The design's number (53.4%) was the flattering one. As built it is 41.8%.
+- Built by GATES-8 on 6527d9f and saved uncommitted while GATES-20b (8c2c5fd) landed first (ROOT: the silent revert outranked it); re-applied --3way by GATES-9 onto main with no conflict. runs.py, pre-push and standing.sh are byte-identical to the planted copies (logs/gates9-saved-20/), and rebase.py differs only by GATES-20b, which does not touch keys or verify. So the plants above stand for the landed code. The outside-reads RED, called GATES-20b in ROOT's ruling, is renumbered GATES-20c because GATES-20b is the landed copy.

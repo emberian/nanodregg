@@ -145,8 +145,9 @@ step() {
 
 git -C "$repo" diff --name-only "$base" "$cand" > "$G/changed"
 
-# runs_reds TREE OUT: run TREE's selected verdict exes with the CANDIDATE's runner and table
-# ($G/judge, a copy), and print the red keys (`run EXE ARGS`, `waste OP METRIC`) judged against the
+# runs_reds TREE OUT: run TREE's selected verdict exes with the JUDGE's runner ($J: this script's tree,
+# main's copy under scripts/commit) over the CANDIDATE's table ($G/judge, a copy of its runs.tsv and
+# waste.tsv: data only), and print the red keys (`run EXE ARGS`, `waste OP METRIC`) judged against the
 # candidate's waste ceilings, so the parent is judged by exactly the candidate's runs and bars (a run
 # whose binary the parent lacks is ABSENT there, so its red is new). Returns runs.py's exit.
 # A runner with no verdict is red, never ok and never PRE-EXISTING (GATES-15): the reasons go to
@@ -155,8 +156,8 @@ git -C "$repo" diff --name-only "$base" "$cand" > "$G/changed"
 runs_reds() {
   local t=$1 out=$2 rc wrc; shift 2
   : > "$out.waste"; : > "$out.crash"
-  wrapped python3 "$G/judge/gates/runs.py" "$t" --table "$G/judge/gates/runs.tsv" --changed "$G/changed" --waste-out "$out.waste" "$@" > "$out" 2>> "$log"; rc=$?
-  python3 "$G/judge/gates/waste.py" "$G/judge" --measured "$out.waste" --partial > "$out.wred" 2>&1; wrc=$?
+  wrapped python3 "$J/runs.py" "$t" --table "$G/judge/gates/runs.tsv" --changed "$G/changed" --waste-out "$out.waste" "$@" > "$out" 2>> "$log"; rc=$?
+  python3 "$J/waste.py" "$G/judge" --measured "$out.waste" --partial > "$out.wred" 2>&1; wrc=$?
   { sed -n 's/^  run \(.*\): RED.*/run \1/p' "$out"
     sed -n 's/^    red \(.*\)$/red \1/p' "$out"
     sed -n 's/^waste \([^ ]*\) \([^:]*\): measured.*/waste \1 \2/p' "$out.wred"; } > "$out.keys"
@@ -175,18 +176,24 @@ runs_reds() {
 # (lake's traces: the delta only) and run, and the slot is re-materialized at the candidate.
 judge_runs() {
   rm -rf "$G/judge"; mkdir -p "$G/judge/gates"
-  if ! cp "$G/tree/gates/"*.py "$G/tree/gates/runs.tsv" "$G/judge/gates/"; then
-    echo "  runs: RED (the runner could not be copied)"; fail="$fail runs"; return
+  # GATES-20 (ROOT 10-20): the candidate supplies DATA (runs.tsv, waste.tsv), never the runner's code:
+  # a candidate's gates/*.py is never executed by its own judge, so a runs.py change lands under main's
+  # runner (a new row KIND and its first rows are two commits). Before, its own runs.py judged it.
+  if ! cp "$G/tree/gates/runs.tsv" "$G/judge/gates/"; then
+    echo "  runs: RED (the table could not be copied)"; fail="$fail runs"; return
   fi
   cp "$G/tree/gates/waste.tsv" "$G/judge/gates/" 2>/dev/null || : > "$G/judge/gates/waste.tsv"
   local ka=()
   keyed && [ -s "$G/keys" ] && ka=(--keys "$G/keys" --record "$record" ${reuse:+--reuse "$reuse"})
+  # GATES-20 (ROOT F1): every judge traces every run; the read-sets narrow selection and key reuse.
+  # The parent run below is untraced and statically selected (a red the parent did not run is NEW).
+  ka+=(--traces "$common/nanodregg-traces" --git-dir "$repo" --base "$base" --base-table "$G/base/gates/runs.tsv" --tree-oid "$cand")
   runs_reds "$G/tree" "$G/runs.cand" "${ka[@]}"; local rc=$?
   cat "$G/runs.cand" "$G/runs.cand.wred" >> "$log"
   # The final re-check of every carried and recorded key, while the slot still holds the
   # candidate's binaries (a parent judge below rebuilds them).
   verify_keys
-  grep -E '^  run |^    red |^  reuse |^  selection: ' "$G/runs.cand" | grep -vE ': ok(\(known-red control read red\))?$' || true
+  grep -E '^  run |^    red |^  reuse |^  selection: |^  select |^  trace: |^  outside ' "$G/runs.cand" | grep -vE ': ok(\(known-red control read red\))?$' || true
   grep '^waste .*measured' "$G/runs.cand.wred" || true
   # 76: a run was killed by a signal, or ran past its wall-clock deadline twice (GATES-16): no
   # verdict about the commit either way, never RED and never green.
