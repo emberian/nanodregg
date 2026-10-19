@@ -10,7 +10,7 @@ history. Two modes, both on the deployed path (`Host.genesis`'s seal and MAC, `o
   N tombstones (the smallest cell entry: an id and a tag) at uniformly hashed ids are put in the
   genesis World's cells trie, written as a Store's base and reopened. The reopen's World must be the
   one written (its roots), and the base decode is counted under countingEnv: trie hashes per entry,
-  which is scale-free (2.000 at 200k and at 7,669,000 entries = worldBytesMax, PERF-8). Prints that,
+  which is scale-free (2·entries − 1 at 200k, at the bound, PERF-10, and past it at 2^28, PERF-8). Prints that,
   `WASTE worstworld decode-trie-hashes-per-entry R`, and the total DERIVED at worldBytesMax (the
   entries a base of that size holds at this run's bytes per entry, times R), beside it.
 - `bench-worstworld SCRATCH honest [STATE_BYTES] [--harness-control]` (by hand, RUNBOOK; minutes):
@@ -159,7 +159,7 @@ def synthetic (scratch : System.FilePath) (n : Nat) (control : Bool) : IO UInt32
   let derived := (dh * maxEntries + entries / 2) / entries
   IO.println s!"WORSTWORLD synthetic {n} tombstones, base world bytes {host.sealed.bytes} (genesis {size0}, {perEntry} per entry; decode {dbytes} bytes), {entries} trie entries"
   IO.println s!"WORSTWORLD decode trie-hashes {dh} ({ratio dh entries} per entry)"
-  IO.println s!"WORSTWORLD derived at worldBytesMax {c.worldBytesMax}: {maxEntries} entries, decode trie-hashes {derived} (measured once by hand at 7669000 entries: 15338003, PERF-8)"
+  IO.println s!"WORSTWORLD derived at worldBytesMax {c.worldBytesMax}: {maxEntries} entries, decode trie-hashes {derived} (measured by hand at 2626112 tombstones, a base at the bound: 5252227, PERF-10)"
   IO.println s!"WORSTWORLD clock (reported, never gated): build+write {t1 - t0} ms, reopen {t2 - t1} ms, counted decode {t3 - t2} ms"
   IO.println s!"WASTE worstworld decode-trie-hashes-per-entry {ratio dh entries}"
   IO.println "BENCH-WORSTWORLD PASS"

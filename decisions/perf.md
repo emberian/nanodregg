@@ -440,7 +440,7 @@ byte flipped. A non-number argument gets the usage line and exit 2.
 | run | entries | base bytes | decode hashes (per entry) | reopen | build | RSS | load1 (24 cpus) |
 |---|---|---|---|---|---|---|---|
 | synthetic 200k (the row) | 200,002 | 7,000,416 | 400,003 (2.000) | 2.2 s | 13 s | 178 MB | 10.5–12 |
-| **synthetic at worldBytesMax (by hand)** | 7,669,002 | 268,415,416 (1.000) | 15,338,003 (2.000) | **120.7 s** | 13.8 min | 10.1 GB | 12–15 |
+| **synthetic at 2^28 (by hand; past the derived bound since HOST-57, PERF-10)** | 7,669,002 | 268,415,416 (1.000) | 15,338,003 (2.000) | **120.7 s** | 13.8 min | 10.1 GB | 12–15 |
 | honest, 16-byte births (by hand) | 204,288 births | 22,247,840 (0.083) | — | 2.3 s | 11 min | 547 MB | 10–14 |
 | honest, 60 KB births (by hand) | 743 births | 44,702,268 (0.167) | — | 0.78 s | 27 s | 793 MB | ~11 |
 
@@ -516,4 +516,85 @@ which is now `rows` (GATES-6's rule).
 and it is not. The worst-cut rows now cover the three cell acts (write, birth, retire) and the row acts (insert,
 retract). A value transfer, which touches two cells, enrol and install are not measured as tails.
 
-**Status.** open.
+**Status.** landed da63f5b.
+
+## PERF-10 · The worst World at the derived bound; the worst cut after the shared empty digest (2026-10-20, PERF-3; HOST-57 359e9e8, KERNEL-22 16f3b9f, LANG-59 c100be5)
+
+**Decision.** Three measures on main 359e9e8, each with its control, and the rows they move.
+- `worstworld decode-trie-hashes-per-entry` stays 2.000. Its text names the bound HOST-57 derived:
+  `worldBytesMax = worldBytesDerived = 91,914,346 B` (Host/Proofs/Size.lean `worldBytesDerived_eq`;
+  `reached_size_le`: every World the deployed writer reaches encodes within it; open refuses a base file past
+  `Log.frameMax` of `baseRecordMax` 91,914,458, `baseTooLarge`). The derived total is re-pinned there.
+- The two worst-cut hash ceilings fall 33.938 → 32.938.
+- THE BAR's `bar trie-hashes-per-required` reads 1.000 on a clean standing run. Its four controls fire.
+
+**Measured** (hbox, main 359e9e8, a clean tree, binaries the tree's; load1 12–18 on 24 cpus, so no clock
+here is a number):
+
+Worst World:
+
+| run | entries | base bytes | decode hashes | reopen | total | RSS |
+|---|---|---|---|---|---|---|
+| synthetic 200000 (the row) | 200,002 | 7,000,418 | 400,003 (2.000) | 4.9 s | 40 s | 773 MB |
+| synthetic 2626112 (by hand, at the bound) | 2,626,114 | 91,914,338 | 5,252,227 (2.000) | **56.3 s** | 5:36 | 2.9 GB |
+| synthetic 2626113 (by hand, one past) | — | — | — | — | — | — |
+
+- One tombstone past the bound is refused at the seal: `FAIL Host.genesis worldTooLarge`. The bound is exact
+  at the writer, so the reader's `baseTooLarge` is reached only by a base the writer did not write.
+- The 200k row derives 2,626,114 entries and 5,252,215 hashes at the bound. The at-bound run measured
+  5,252,227. Decode is 2·entries − 1 exactly at all three sizes measured (200,002; 2,626,114; 7,669,002), so
+  the proportional derivation reads 12 low.
+- PERF-8's 256 MiB run (7,669,002 entries, reopen 120.7 s) was at the old literal 2^28. It is now a base PAST
+  the bound: 2.9× the World the deployed reader accepts.
+- The reopen at the bound took 56.3 s against THE BAR's 60 s, while hbox ran bench-worstcut beside it at
+  load1 ~13. A quiet box should be well below that, but this was not measured here. The decode alone was
+  40.7 s of it.
+
+Worst cut (bench-worstcut, honest run 7:59, 751 MB):
+
+| shape | base world B | steps | reopen h/step | audit h/step | verifies (reopen, audit) |
+|---|---|---|---|---|---|
+| writes | 591 | 28,928 | 19.382 | 19.382 | 0, 1.000 |
+| births | 591 | 33,088 | 32.036 | 32.036 | 0, 1.000 |
+| retires | 5,812,239 | 32,320 | **32.938** | **32.938** | 0, 1.000 |
+| rows | 23,467 | 16,448 | 24.892 | 24.892 | 0, 1.000 |
+
+- The three cell shapes fall by exactly 1.000 hash per step: 16f3b9f's `rootsOf` shares one empty digest,
+  and these tails' refusals and rows roots are both empty. The rows tail is unchanged by it, since its rows
+  root is never empty. Its 28.804 → 24.892 is LANG-59 (c100be5), as LANG-19 measured by hand; this run
+  agrees with it. LANG-19's "the worst stays 33.938" predates 16f3b9f.
+- Both hash ceilings fall 33.938 → 32.938. The verify rows stay 0.000 and 1.000.
+
+THE BAR, standing form (`scripts/bar.sh --records 60 --standing`), clean tree at 359e9e8:
+- PASS. bench-count: 27 steps past the base at step 33, trie-hashes 402, required 402, verifies 27, so
+  `trie-hashes-per-required 1.000` and `audit-verifies-per-step 1.000`. Hashes per step were 14.889; that
+  figure depends on the draw and is reported only. The other WASTE bar lines equal their rows.
+- `--harness-control`: RED by name with all four planted expectations fired: limit (each clock against 0),
+  use (3, want 4), at-tip (each follow at 60, want 61) and `bench-count harness-control`.
+- The instrument (KERNEL-22, 3467955 / 16f3b9f, cv 01a14afe-7380): the denominator is the hashes the design
+  requires for the tries the run built (`Kernel.Sim.Required.step` per step, plus `Required.emptyRoots` for
+  the record's roots check). The numerator is the trie-domain hashes counted under `countingEnv`. A
+  requirement refused, or a count below it, is `FAIL required`. Before 16f3b9f the excess was exactly one
+  hash per step (World.roots' second empty digest), so the row read 1 + steps/required. It now reads 1.000,
+  and one extra hash anywhere in a 60-record run reads 1.003 or more.
+
+**Alternatives.**
+- Derive the worstworld total as `dh + 2·(max − entries)`, which is exact here. Not taken: it states the
+  per-entry marginal instead of measuring it, and the at-bound run already records the exact figure.
+- Put the at-bound run in standing: 5.6 min and 2.9 GB, for a ratio the 40 s row already pins.
+
+**CRITIQUE.**
+- 56.3 s at the bound sits within 7 % of THE BAR's 60 s reopen limit on a loaded box. The limit belongs to a
+  quiet box (v2), so this is a margin I could not measure, not a pass. If v2's cold-cache reopen at the bound
+  is slower, the bound is the knob, and the derivation says what it would cost.
+- The worst World is still tombstones at hashed ids. Live cells and spent nullifiers were not tried at the
+  bound (PERF-8's critique stands).
+- The two bench controls, re-run by hand at 359e9e8, fire by name. bench-worstworld: `FAIL harness-control: the decoded
+  roots are not the planted ones`. bench-worstcut, on the last shape: `FAIL rows: harness-control: the cut fills 18815944
+  of tailMax 18876520, and the control expects more than tailMax`. Both are controls, not tests of the bound itself.
+
+**META-CRITIQUE.** LANG-19's message said the worst cut "still retires 33.938". I measured instead of
+relaying it, and the ceiling moved under it. The same applies to every row text I quote from another layer:
+it was true when measured, at that sha.
+
+**Status.** landed with this entry.
