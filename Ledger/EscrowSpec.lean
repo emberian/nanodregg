@@ -5,8 +5,9 @@ What `Ledger.Proofs.Escrow` counts and reads, as functions: which method an act 
 (`invoked`, `isPayout`, `payouts`), an escrow state and request with arbitrary values
 (`stateOf`, `reqAt`, `reqWith`), what a method returns (`methodResult`: the method application
 the receiver runs, `apply4 0 ℓ` under the closure `[escrow.body]`, extracted whole at the
-methods' result type `resultOf`, as `Lang.runMeasured` extracts it), and a chain of acts on one
-escrow with the calls its acts make (`Act`, `stepsOf`, `callAt`, `spendCount`, `depositFirst`).
+methods' result type `resultOf`, as `Lang.runMeasured` extracts it), the order of acts
+(`depositFirst`), and what a sequence of the receiver's runs pays out (`isPayoutCall`,
+`payoutCalls`).
 Nothing here is deployed: the kernel runs the package itself, and `Ledger.Proofs.EscrowRun`
 proves that its run extracts `methodResult`.
 -/
@@ -74,49 +75,16 @@ def transferD (src dst : Data) (amount : Nat) (via once : Data) : Data :=
 def resultD (call state : Data) : Data :=
   .record [("calls", .record [("c0", optSome call)]), ("edits", .record []), ("state", state)]
 
-/-- A method result whose slot is a transfer out of the escrow's own account `of self asset`
-spending the payout key. -/
-def spends (self asset : ByteArray) (r : Option Data) : Bool :=
-  match (r.bind (·.field "calls")).bind (·.field "c0") with
-  | some (.inj "some" (.inj "transfer" f)) =>
-    match f.field "src", f.field "once" with
-    | some (.inj "of" (.record [("asset", .digest a), ("owner", .digest s)])), some (.inj "some" (.bytes k)) =>
-      decide (s = self) && decide (a = asset) && decide (k = payoutKey)
-    | _, _ => false
+/-- A call is a payout: a transfer through no grant (`via = none`), which the kernel authorizes
+only out of the calling object's own account. `refund` and `release` each return one; `deposit`
+returns one through its grant, so none (`escrow_run_calls`). -/
+def isPayoutCall {D : Type} : Kernel.Receive.Body D → Bool
+  | .transfer _ _ _ none _ => true
   | _ => false
 
-/-- One act on escrow `self`: its signer, its occasion, the grant a deposit names, and the phase it
-leaves. The terms never change (`escrow_method_results`), so the chain's states differ by phase. -/
-structure Act where
-  agent : ByteArray
-  occ : Data
-  grant : ByteArray
-  phase : Label
-
-/-- A method's argument as the receiver decodes it at the method's argument type. -/
-def argFor (m : Nat) (g : ByteArray) : Data := if m = deposit then .record [("grant", .digest g)] else .record []
-
-section
-variable (amount : Nat) (arb asset ben dep nk self : ByteArray)
-
-def stepsOf (acts : List Act) : List (Data × Data) :=
-  acts.map fun a => (reqWith a.agent self a.occ, stateOf amount arb asset ben dep nk a.phase)
-
-/-- What act `a` returns from phase `p`: method `escrow.methods[m]` for an invoke of `m` (how
-KERNEL's invoke resolves it; the escrow reads no rows), none otherwise. -/
-def callAt (p : Label) (a : Act) : Option Data :=
-  match invoked (reqWith a.agent self a.occ) with
-  | some m => methodResult ((escrow.methods[m]?).getD "") (stateOf amount arb asset ben dep nk p) (argFor m a.grant)
-      (reqWith a.agent self a.occ) (.record [])
-  | none => none
-
-/-- How many acts of the chain from phase `p` make a call spending the payout key out of the
-escrow's own account. -/
-def spendCount : Label → List Act → Nat
-  | _, [] => 0
-  | p, a :: as => (if spends self asset (callAt amount arb asset ben dep nk self p a) then 1 else 0) +
-      spendCount a.phase as
-end
+/-- How many payouts a sequence of runs returned: each run's calls, in order. -/
+def payoutCalls {D : Type} (runs : List (List (Kernel.Receive.Body D))) : Nat :=
+  (runs.map fun cs => (cs.filter isPayoutCall).length).sum
 
 /-- Whether, along a chain of acts, the first that is a deposit or a payout is a deposit. -/
 def depositFirst : List (Data × Data) → Bool

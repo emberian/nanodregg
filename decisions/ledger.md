@@ -701,3 +701,73 @@ is general, the projections were the escrow's. `RunCalls` is a named statement s
 theorems (run, program, deployed) share one conclusion instead of three copies.
 **Nothing moves.** No wire, vector, shipped text or package byte: world/escrow is untouched,
 `escrow` is the same value.
+
+## LEDGER-14 · The one-payout theorem is of the receiver's runs: a chain of committed runs, each reading the slots the last wrote, pays out at most once; two kernel-evaluated runs meet its premise (LEDGER-6, 2026-10-21; on LANG-62/63)
+**Decision.** `Ledger.Proofs.EscrowRun.escrow_runs_one_payout`: under `∀ x, digestOf (bytesOf x) = some x`,
+every `Runs (Lang.program bytesOf digestOf) pkg escrow state runs` has `payoutCalls runs ≤ 1`. `Runs prog
+pkg p` is the sequence `invoke` commits on one object: each step, in its own pinned view `look` with
+`readPackage look pkg = .ok p`, is `prog.run look rv pkg state method args r budget = .ok (s, calls,
+rows, used)` with `prog.judge look (some pkg) laws state s r = .ok ()` (the package's law, then the
+cell's laws, over the slots before and after), and the next step runs on any `next` with
+`∀ k, next.get k = s.get k` (the cell `invoke`'s write leaves holds what the run wrote key by key,
+not necessarily as the same list; `readState_get`: `readState` reads only by key); method, arguments,
+request, budget, rows view and laws are free per step. `payoutCalls` counts the returned calls that
+are a transfer through no grant (`isPayoutCall`: `via = none`). Forms: `escrow_program_one_payout`
+(a lawful `Ctx` whose program is `Lang.program` over its own codec), `escrow_runs_deployed`
+(`Host.Deployed.X`'s program; premise: the runs only, each carrying its package read).
+`escrow_runs_after_payout`: a run that returns a payout is the last of every `Runs` it starts.
+`escrow_judge_settled`: the judge refuses every transition out of slots that read `released` or
+`refunded`. `RunCalls` gains the written slots: each method's case also says `readState … s = .ok
+(stateOf … held|refunded|released)` (LANG-63's read-back conjunct of `runMeasured_means`).
+**Deleted.** `escrow_one_payout`, `spends_is_payout`, `spendCount_le` (Proofs/Escrow) and `spends`,
+`Act`, `argFor`, `stepsOf`, `callAt`, `spendCount` (EscrowSpec), and the tooth `escrow_run_spends`:
+they counted `methodResult` over states `stateOf … phase` that the spec chose, not the slots a
+run wrote. The run theorem needs no `dep ≠ self` premise (a deposit names its grant, so it is never
+a payout call, whoever the depositor). `escrow_law_payout_once` (the law alone, over `Chain`) stays.
+**(a) The witness, in the kernel.** `Ledger.Proofs.EscrowWitness.escrow_runs_witness`: on the node's
+codec an object whose cell holds `encodePackage escrow`, born `open`, deposited into and then released
+by its depositor, is a `Runs` of `Host.Deployed.X`'s program with `payoutCalls = 1`. Both runs and
+both judges are evaluated by `decide +kernel`; no `native_decide`, no allow or tcb row. Why LEDGER-13's
+probe stuck, corrected: `load`/`loadAll` are mutual well-founded recursion (`termination_by`), which
+the kernel does not unfold, and `Wire.decodePackage` of the package bytes in the kernel exceeds a 6G
+cap (LEDGER-5's "each piece reduces alone" was wrong: those probe runs were OOM-killed with no output,
+exit 143). Route: `load` by its equation (`load_one`: one package, no imports), the package read from
+its install bytes (`readPackage_installed`, no decode), `runSetup` assembled from its pieces
+(`setup_eq`), and only the machine run, extraction, `stateSlots`, `callsOf` and the law left to the
+kernel: the module checks in ~10 s, 2.7 GB.
+**Teeth.** `escrow_second_release_refused` (deployed, kernel-evaluated): a third run, release again
+from the `released` slots, succeeds and returns a payout; the judge refuses every transition out of
+them. So the bound is the judge's, not the runs'. `escrow_judge_bites` (spec, all values): from
+`released` the method still pays and the law admits nothing. `payout_call_tells`: a grant-named
+transfer is not a payout, a grantless one is, so the count is not constant. `run_calls_pins_payee`,
+`run_result_needs_body` kept.
+**Critique.** (1) `Runs` omits checks `invoke` makes (`overTicks`, `rowParent`, `checkState`,
+`tooManyCalls`, the derivation of the calls): each omission makes the theorem cover MORE sequences,
+so it is stronger, not weaker; but it says nothing about whether the payout call then commits (that
+is KERNEL's `transfer_once` on the one `"payout"` nullifier, a second, independent bound). (2) That
+the slots `invoke` hands the next run hold, key by key, what this run wrote is `invoke`'s `writeOf
+obj (diffOps old new)` and KERNEL's state reading, not composed here; KERNEL's `hasMethods` (state changes only
+by methods) remains the named gap of LEDGER-10. (3) `isPayoutCall` counts grantless transfers, which
+the kernel authorizes only out of the calling object's own account; the one escrow transfer out
+of its own account it does not count is a deposit by the object itself (`of self` to `of self`,
+through a grant), which KERNEL refuses `sameAccount` at derivation, outside `Runs`; counting by
+source `of self` would need `DecidableEq D` and either `dep ≠ self` or a model of `deriveCalls`.
+(4) `readState_get` is a Lang fact proved here; it belongs in Lang/Proofs beside `readState_conforms`.
+**Meta-critique.** The first plan restated the spec chain with the run substituted per step; it would
+have kept `spends`, `callAt` and `Act` beside the run and needed `dep ≠ self` and an occasion premise
+linking the run's method to the law's. Reading `invoke` showed the judge already runs on the run's
+own slots, so the chain needs only: a payout run writes a settled state (RunCalls' new conjunct) and
+the judge refuses out of it. Both premises vanished, and so did the spec chain. The witness first
+looked like it needed a Lang change (structural `load`); proving through `load`'s equation lemma
+from the outside avoided touching Lang.
+**Read.** Second-agent vacuity read with the disjunct check (probes logs/ledger6-vac-1.lean,
+-vac-2.lean): nothing vacuous, nothing weaker than main. Each `RunCalls` disjunct carries its own
+`method = 0/1/2` and pins `calls` and the written slots; `¬ RunCalls … []` holds; the witness makes
+`Runs` satisfiable at length two with the bound attained; `escrow_judge_settled`'s premise is not
+empty (the judge admits from `open` and `held`). Axioms of every new theorem: propext,
+Classical.choice, Quot.sound. Against main's `escrow_one_payout`: no `hne` premise, and under `hne`
+the counts agree on escrow outputs. Fixed from the read: `Runs` chained the written list itself to
+the next step, which a real `invoke` sequence need not match (its cell's slot list may be ordered
+differently); it now takes key-wise equal slots. Recorded, not acted on: the self-deposit (critique 3).
+**Nothing moves.** No wire, vector, shipped text or package byte; `escrow` is the same value;
+world/escrow untouched. ledger-sim 1 ALL PASS; --harness-control RED (1).

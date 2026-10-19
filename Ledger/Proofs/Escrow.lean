@@ -21,9 +21,9 @@ the package field produces exactly `Admits` (`Std.runLaw_ref_admits`).
   `nonce`; each carries the terms unchanged and sets its target phase. What the RECEIVER's run
   extracts is this result (`Ledger.Proofs.EscrowRun.escrow_run_calls`).
   `escrow_slots`: each method's signature has exactly one call slot, a transfer.
-* `escrow_one_payout`, the package's statement: along any chain of law-admitted ACTS on an escrow
-  (its states the ones the methods write), at most one act's call, the call of
-  `escrow.methods[m]` for its invoke of `m`, spends the payout key out of the escrow's own account.
+* the package's statement, over the receiver's own runs, is `escrow_runs_one_payout`
+  (Ledger.Proofs.EscrowRun): along any sequence of runs the receiver commits, at most one payout;
+  `Ledger.Proofs.EscrowWitness` meets its premise and reaches the bound by kernel evaluation.
   `escrow_deposit_first`: from `open`, a deposit comes before any payout. The kernel's own guard
   behind it is `Kernel.Proofs.Ledger.transfer_once` on the ONE nullifier `onceNullifier
   (accountId e asset) "payout"`, which both payouts spend (LEDGER-6 (d)).
@@ -39,11 +39,6 @@ the package field produces exactly `Admits` (`Std.runLaw_ref_admits`).
 Not proved here, and why (the gaps at Deployed, each named):
 * that between two invokes a programmed object's state changes only by its methods is KERNEL's
   (`hasMethods`); the chain theorems do not need it, since the law refuses writes and relaws itself;
-* the chain theorems count `methodResult` (the receiver's term under `[escrow.body]`), not a run
-  of the receiver on slots: `escrow_run_calls` (Ledger.Proofs.EscrowRun) gives one run's calls,
-  and a chain of receiver runs (each state the slots the last run wrote) is not composed here;
-* the toy-digest run of the slots (`Lang.program`'s run then judge on codec bytes, as HOSTING's
-  `invoke_slots` does by native_decide) is exercised end to end by `ledger-sim`, not proved;
 * the verdict NAMES are an instance (parties distinct, amount 5); the admitted/refused facts are
   general (`escrow_invoke` …).
 -/
@@ -265,62 +260,6 @@ theorem escrow_method_results (amount : Nat) (arb asset ben dep nk self g : Byte
       some (resultD (transferD (ofD self asset) (ofD ben asset) amount optNone (optSome (.bytes payoutKey)))
         (stateOf amount arb asset ben dep nk "released")) := by
   refine ⟨?_, ?_, ?_⟩ <;> rfl
-
-/-! ## One payout, as the calls the chain's acts make -/
-
-/-- An admitted act whose call spends the payout key is a payout. -/
-theorem spends_is_payout {amount : Nat} {arb asset ben dep nk self : ByteArray} {p : Label} {a : Act}
-    (hne : dep ≠ self)
-    (ha : Admits lib law (reqWith a.agent self a.occ) (stateOf amount arb asset ben dep nk a.phase)
-      (stateOf amount arb asset ben dep nk p))
-    (hs : spends self asset (callAt amount arb asset ben dep nk self p a) = true) :
-    isPayout (reqWith a.agent self a.occ) = true := by
-  cases hinv : invoked (reqWith a.agent self a.occ) with
-  | none => simp [callAt, hinv, spends] at hs
-  | some m =>
-    have ho := invoked_some hinv
-    have hocc : a.occ = .inj "invoke" (.nat m) := by
-      simpa [reqWith, reqAt, Data.field, Row.find?] using ho
-    rcases escrow_invoke ha ho with ⟨hx, _⟩ | ⟨hx, _⟩ | ⟨hx, _⟩ <;> injection hx with hx <;> subst hx
-    · obtain ⟨agent, occ, g, q⟩ := a
-      simp only at hocc hinv hs; subst hocc
-      have h0 := (escrow_method_results amount arb asset ben dep nk self g p (.digest agent) (.nat 0)
-        (.inj "invoke" (.nat 0)) (.digest agent) (.nat 0) (.record []) (.record [])).1
-      simp only [callAt, hinv] at hs
-      change spends self asset (methodResult "deposit" (stateOf amount arb asset ben dep nk p)
-        (.record [("grant", .digest g)]) (reqWith agent self (.inj "invoke" (.nat 0))) (.record [])) = true at hs
-      rw [reqWith, h0] at hs
-      simp [spends, resultD, transferD, ofD, optSome, Data.field, Row.find?, hne] at hs
-    · simp [isPayout, hinv, refund, release]
-    · simp [isPayout, hinv, refund, release]
-
-theorem spendCount_le {amount : Nat} {arb asset ben dep nk self : ByteArray} (hne : dep ≠ self) :
-    ∀ {p : Label} {acts : List Act},
-      Chain lib (stateOf amount arb asset ben dep nk p) (stepsOf amount arb asset ben dep nk self acts) →
-      spendCount amount arb asset ben dep nk self p acts ≤ payouts (stepsOf amount arb asset ben dep nk self acts)
-  | _, [], _ => by simp [spendCount, payouts, stepsOf]
-  | p, a :: as, h => by
-    cases h with
-    | cons ha hr =>
-      have ih := spendCount_le hne hr
-      simp only [spendCount, payouts, stepsOf, List.map_cons, List.filter_cons] at ih ⊢
-      by_cases hs : spends self asset (callAt amount arb asset ben dep nk self p a) = true
-      · rw [if_pos hs, if_pos (spends_is_payout hne ha hs)]
-        simp only [List.length_cons]; omega
-      · rw [if_neg hs]
-        split <;> (try simp only [List.length_cons]) <;> omega
-
-/-- **One payout, the package's statement**: along any chain of law-admitted acts on an escrow
-(its states those the methods write: the terms fixed, the phase moving), at most ONE act makes a
-call that spends the payout key out of the escrow's own account `of self asset`, for every value of
-the terms, the object, the signers, the grants and the phases (a depositor that IS the object is
-excluded: KERNEL refuses that deposit `sameAccount`). Each act's call is the one method
-`escrow.methods[m]` makes, as KERNEL's invoke resolves the index. -/
-theorem escrow_one_payout {amount : Nat} {arb asset ben dep nk self : ByteArray} {p : Label} {acts : List Act}
-    (hne : dep ≠ self)
-    (h : Chain lib (stateOf amount arb asset ben dep nk p) (stepsOf amount arb asset ben dep nk self acts)) :
-    spendCount amount arb asset ben dep nk self p acts ≤ 1 :=
-  Nat.le_trans (spendCount_le hne h) (escrow_law_payout_once h)
 
 /-- **No payout before the deposit**: along a chain of law-admitted acts from an `open` escrow,
 the first act that is a deposit or a payout is a deposit (`held` is entered only by method 0). -/

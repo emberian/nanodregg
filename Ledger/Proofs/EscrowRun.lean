@@ -29,10 +29,23 @@ two meet, through LANG-61 (`Lang.Proofs.Extract`):
   program is `Lang.program` over its own codec; `escrow_run_deployed`: at the node's `Ctx`
   (`Host.Deployed.X`), both discharged (`Receive.deployed_ctx_lawful`, `rfl`).
 
+* `escrow_runs_one_payout`, the package's statement over the receiver's runs: along any sequence
+  of runs the receiver commits on one escrow (`Runs`: each a successful run in its own view whose
+  package cell reads as `escrow`, judged by the package's law and the cell's laws over the slots
+  before and after, the next run reading slots that hold, key by key, what this one wrote (read by
+  `readState` through `readState_get`), read back by LANG-63's
+  `runMeasured_means`), at most one returned call is a payout (`payoutCalls`: a transfer through
+  no grant). `escrow_runs_after_payout`: a run that pays out is the last the receiver commits
+  (`escrow_judge_settled`: the judge refuses everything out of `released` and `refunded`).
+  `escrow_program_one_payout` and `escrow_runs_deployed`: at a lawful `Ctx` over its own codec
+  and at the node's, premise only the runs (`Ledger.Proofs.EscrowWitness.escrow_runs_witness`: a
+  deposit then a release there, evaluated by the kernel, is a `Runs` with exactly one payout).
+
 Teeth: `run_result_needs_body` (another body at `g` gives the release another result: the body
 premise is not idle); `run_calls_pins_payee` (a release paying the depositor, from a state whose
-beneficiary is another, is not `RunCalls`); `escrow_run_spends` (`spends` tells a release's result
-from a deposit's, so the chain's count is not constant).
+beneficiary is another, is not `RunCalls`); `escrow_judge_bites` (from `released` the method still
+pays, the law admits nothing: the bound is the judge's); `payout_call_tells` (the count is not
+constant: a deposit's grant-named transfer is not a payout).
 -/
 import Ledger.Proofs.Escrow
 import Lang.Proofs.Extract
@@ -166,36 +179,45 @@ private theorem reqData_eq (r : Req D) :
       (.digest (bytesOf r.principal)) (bytesOf r.self) (.nat r.validUntil) := rfl
 
 /-- **What a run of the escrow returned**, read off its inputs: the state slots read as seven terms
-(`stateOf`), the asset is a digest of the World, and the calls are exactly the method's one
-transfer: `deposit` (0) from `of depositor asset` into `of self asset` through the grant its
-argument names, spending the nonce; `refund` (1) and `release` (2) out of `of self asset` to the
-depositor and to the beneficiary, through no grant, spending `"payout"`. Each case names its
-method, so the three are exclusive, and no other index is one. -/
+(`stateOf`), the asset is a digest of the World, the slots the run wrote read back as the same
+terms in the method's target phase, and the calls are exactly the method's one transfer: `deposit`
+(0, to `held`) from `of depositor asset` into `of self asset` through the grant its argument
+names, spending the nonce; `refund` (1, to `refunded`) and `release` (2, to `released`) out of
+`of self asset` to the depositor and to the beneficiary, through no grant, spending `"payout"`.
+Each case names its method, so the three are exclusive, and no other index is one. -/
 def RunCalls (digestOf : ByteArray → Option D) (state : Slots) (method : Nat) (args : ByteArray) (self : D)
-    (calls : List (Body D)) : Prop :=
+    (calls : List (Body D)) (s : Slots) : Prop :=
   ∃ (amount : Nat) (arb asset ben dep nk : ByteArray) (p : Label) (a : D),
     readState digestOf (recordRow escrow.state) state = .ok (stateOf amount arb asset ben dep nk p) ∧
     digestOf asset = some a ∧
-    ((method = deposit ∧ ∃ (gb : ByteArray) (gd d : D),
+    ((method = deposit ∧
+        readState digestOf (recordRow escrow.state) s = .ok (stateOf amount arb asset ben dep nk "held") ∧
+        ∃ (gb : ByteArray) (gd d : D),
         Wire.decodeData depositArg args = .ok (.record [("grant", .digest gb)]) ∧ digestOf gb = some gd ∧
         digestOf dep = some d ∧ calls = [.transfer (.of d a) (.of self a) amount (some gd) (some nk)]) ∨
-     (method = refund ∧ ∃ d : D, digestOf dep = some d ∧
+     (method = refund ∧
+        readState digestOf (recordRow escrow.state) s = .ok (stateOf amount arb asset ben dep nk "refunded") ∧
+        ∃ d : D, digestOf dep = some d ∧
         calls = [.transfer (.of self a) (.of d a) amount none (some payoutKey)]) ∨
-     (method = release ∧ ∃ b : D, digestOf ben = some b ∧
+     (method = release ∧
+        readState digestOf (recordRow escrow.state) s = .ok (stateOf amount arb asset ben dep nk "released") ∧
+        ∃ b : D, digestOf ben = some b ∧
         calls = [.transfer (.of self a) (.of b a) amount none (some payoutKey)]))
 
 /-- **The escrow's calls are what the receiver's run returns.** A successful `runMeasured` of the
 escrow package (the pinned package cell reads as `escrow`; the World's digest decoder reads every
-id's bytes back) is `RunCalls` of its state, method, arguments, request object and calls, for every
-value of the terms, of the rest of the request and of the rows. -/
+id's bytes back) is `RunCalls` of its state, method, arguments, request object, calls and written
+slots, for every value of the terms, of the rest of the request and of the rows. -/
 theorem escrow_run_calls (hdig : ∀ x, digestOf (bytesOf x) = some x)
     {look : Pinned D} {rv : RowView D} {pkg : D} {state : Slots} {method : Nat} {args : ByteArray}
     {r : Req D} {budget : Nat} {s : Slots} {calls : List (Body D)} {rows : List (RowSlot D × RowAct)}
     {t n : Nat}
     (hpkg : readPackage look pkg = .ok escrow)
     (h : runMeasured bytesOf digestOf look rv pkg state method args r budget = .ok (s, calls, rows, t, n)) :
-    RunCalls digestOf state method args r.self calls := by
-  obtain ⟨L, g, p, x, sd, ad, wd, v, c, e, ds, hl, hp, hres, hsd, had, -, hb, hm, hc, -, -, -⟩ := runMeasured_means h
+    RunCalls digestOf state method args r.self calls s := by
+  obtain ⟨L, g, p, x, sd, ad, wd, v, c, e, ds, hl, hp, hres, hsd, had, -, hb, hm, hc, -, -, hrb⟩ :=
+    runMeasured_means h
+  have hrb := hrb fun x => by rw [hdig]; rfl
   obtain ⟨hpe, f, hlib⟩ := load_top bytesOf digestOf (fuel := closureDepthMax - 1) (hdig pkg) hpkg hl
   rw [hp] at hpe
   cases hpe
@@ -210,27 +232,27 @@ theorem escrow_run_calls (hdig : ∀ x, digestOf (bytesOf x) = some x)
     have hd := run_result hlib hb hm (escrow_method_results amount arb asset ben dep nk (bytesOf r.self) gb ph
       _ _ _ _ _ (.record []) wd).1
     simp only [resultD, Data.record.injEq, List.cons.injEq, Prod.mk.injEq, and_true, true_and] at hd
-    obtain ⟨rfl, -, -⟩ := hd
+    obtain ⟨rfl, -, hds⟩ := hd
     cases ha : digestOf asset <;> cases hg : digestOf gb <;> cases hdp : digestOf dep <;>
       simp [callsOf, callsOf.go, bodyOf, acctRefOf, Lang.digestAt, natOf, optOf, bytesAt, hdig, ha, hg, hdp,
         transferD, ofD, optSome, bind, Except.bind, pure, Except.pure, Except.map] at hc
-    exact ⟨_, hsd, rfl, .inl ⟨rfl, gb, _, _, had, hg, rfl, hc.symm⟩⟩
+    exact ⟨_, hsd, rfl, .inl ⟨rfl, hds ▸ hrb, gb, _, _, had, hg, rfl, hc.symm⟩⟩
   · have hd := run_result hlib hb hm (escrow_method_results amount arb asset ben dep nk (bytesOf r.self) .empty ph
       _ _ _ _ _ ad wd).2.1
     simp only [resultD, Data.record.injEq, List.cons.injEq, Prod.mk.injEq, and_true, true_and] at hd
-    obtain ⟨rfl, -, -⟩ := hd
+    obtain ⟨rfl, -, hds⟩ := hd
     cases ha : digestOf asset <;> cases hdp : digestOf dep <;>
       simp [callsOf, callsOf.go, bodyOf, acctRefOf, Lang.digestAt, natOf, optOf, bytesAt, hdig, ha, hdp,
         transferD, ofD, optSome, optNone, bind, Except.bind, pure, Except.pure, Except.map] at hc
-    exact ⟨_, hsd, rfl, .inr (.inl ⟨rfl, _, rfl, hc.symm⟩)⟩
+    exact ⟨_, hsd, rfl, .inr (.inl ⟨rfl, hds ▸ hrb, _, rfl, hc.symm⟩)⟩
   · have hd := run_result hlib hb hm (escrow_method_results amount arb asset ben dep nk (bytesOf r.self) .empty ph
       _ _ _ _ _ ad wd).2.2
     simp only [resultD, Data.record.injEq, List.cons.injEq, Prod.mk.injEq, and_true, true_and] at hd
-    obtain ⟨rfl, -, -⟩ := hd
+    obtain ⟨rfl, -, hds⟩ := hd
     cases ha : digestOf asset <;> cases hbn : digestOf ben <;>
       simp [callsOf, callsOf.go, bodyOf, acctRefOf, Lang.digestAt, natOf, optOf, bytesAt, hdig, ha, hbn,
         transferD, ofD, optSome, optNone, bind, Except.bind, pure, Except.pure, Except.map] at hc
-    exact ⟨_, hsd, rfl, .inr (.inr ⟨rfl, _, rfl, hc.symm⟩)⟩
+    exact ⟨_, hsd, rfl, .inr (.inr ⟨rfl, hds ▸ hrb, _, rfl, hc.symm⟩)⟩
 
 /-- **At the kernel's call**: `invoke` runs `X.program.run` on the object's package; where that
 program is the language over the World's own codec and the `Ctx` is lawful, a successful run of the
@@ -241,7 +263,7 @@ theorem escrow_program_calls {X : Ctx D} (hX : X.Lawful) (hp : X.program = Lang.
     {used : Nat}
     (hpkg : readPackage look pkg = .ok escrow)
     (h : X.program.run look rv pkg state method args r budget = .ok (s, calls, rows, used)) :
-    RunCalls X.digestOf state method args r.self calls := by
+    RunCalls X.digestOf state method args r.self calls s := by
   rw [hp] at h
   change (runMeasured X.env.bytes X.digestOf look rv pkg state method args r budget).map _ = _ at h
   cases hm : runMeasured X.env.bytes X.digestOf look rv pkg state method args r budget with
@@ -266,8 +288,141 @@ theorem escrow_run_deployed
     (hpkg : readPackage look pkg = .ok escrow)
     (h : (Codec.Deployed.ctx (Lang.program Codec.Digest.bytes Codec.Digest.ofBytes?)).program.run look rv pkg
       state method args r budget = .ok (s, calls, rows, used)) :
-    RunCalls Codec.Digest.ofBytes? state method args r.self calls :=
+    RunCalls Codec.Digest.ofBytes? state method args r.self calls s :=
   escrow_program_calls (deployed_ctx_lawful _) rfl hpkg h
+
+/-! ## The chain: the runs the receiver commits on one escrow -/
+
+section
+variable {D : Type}
+
+/-- **A sequence of runs the receiver commits** on one object of package `pkg`, from the state slots
+`state`, under the program `prog` (the `Ctx`'s, what `invoke` calls): each step, in its own pinned
+view `look` (whose package cell reads as `p`), is a successful `prog.run` of any method on any
+arguments, request and budget, whose written slots `prog.judge` admits over the slots before (the
+package's own law first, then the cell's laws `laws`: what `invoke` checks before it derives the
+calls), and the next step reads slots that hold, key by key, what it wrote (`Slots.get`: the cell
+`invoke`'s write leaves need not be the same list, only the same contents). The list holds each
+step's calls. -/
+inductive Runs (prog : Program D) (pkg : D) (p : Package) : Slots → List (List (Body D)) → Prop
+  | nil (state : Slots) : Runs prog pkg p state []
+  | cons {look : Pinned D} {rv : RowView D} {state : Slots} {method : Nat} {args : ByteArray} {r : Req D}
+      {budget : Nat} {s : Slots} {calls : List (Body D)} {rows : List (RowSlot D × RowAct)} {used : Nat}
+      {laws : List D} {next : Slots} {rest : List (List (Body D))} :
+      readPackage look pkg = .ok p →
+      prog.run look rv pkg state method args r budget = .ok (s, calls, rows, used) →
+      prog.judge look (some pkg) laws state s r = .ok () →
+      (∀ k, next.get k = s.get k) →
+      Runs prog pkg p next rest → Runs prog pkg p state (calls :: rest)
+
+variable {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D}
+
+/-- `readState` reads slots only by key. -/
+theorem readState_get {row : List (Label × Ty)} {a b : Slots} (h : ∀ k, a.get k = b.get k) :
+    readState digestOf row a = readState digestOf row b := by
+  unfold readState
+  generalize 0 = i
+  induction row generalizing i with
+  | nil => rfl
+  | cons x row ih => obtain ⟨ℓ, t⟩ := x; simp only [readState.go, h, ih]
+
+private theorem run_of_program {look : Pinned D} {rv : RowView D} {pkg : D} {state : Slots} {method : Nat}
+    {args : ByteArray} {r : Req D} {budget : Nat} {s : Slots} {calls : List (Body D)}
+    {rows : List (RowSlot D × RowAct)} {used : Nat}
+    (h : (Lang.program bytesOf digestOf).run look rv pkg state method args r budget = .ok (s, calls, rows, used)) :
+    ∃ t n, runMeasured bytesOf digestOf look rv pkg state method args r budget = .ok (s, calls, rows, t, n) := by
+  change (runMeasured bytesOf digestOf look rv pkg state method args r budget).map _ = _ at h
+  cases hm : runMeasured bytesOf digestOf look rv pkg state method args r budget with
+  | error _ => rw [hm] at h; cases h
+  | ok y =>
+    obtain ⟨s', calls', rows', t', n'⟩ := y
+    rw [hm] at h
+    simp only [Except.map, Except.ok.injEq, Prod.mk.injEq] at h
+    obtain ⟨rfl, rfl, rfl, -⟩ := h
+    exact ⟨_, _, rfl⟩
+
+/-- **A settled escrow admits no run**: the receiver's judge of the escrow package (and any further
+laws) refuses every transition out of slots that read as a `released` or `refunded` state, whatever
+the new slots and the request (`judgeOne_ok`, `escrow_judge_admits`, `escrow_absorbing`). -/
+theorem escrow_judge_settled (hdig : ∀ x, digestOf (bytesOf x) = some x)
+    {look : Pinned D} {pkg : D} {laws : List D} {old new : Slots} {r : Req D} {o : Data}
+    (hpkg : readPackage look pkg = .ok escrow)
+    (ho : readState digestOf (recordRow escrow.state) old = .ok o) (hs : Settled o)
+    (h : Lang.judge bytesOf digestOf look (some pkg) laws old new r = .ok ()) : False := by
+  have h1 : judgeOne bytesOf digestOf look pkg old new r = .ok () := by
+    unfold Lang.judge at h
+    simp only [bind, Except.bind] at h
+    split at h
+    · cases h
+    · rename_i u hj
+      cases u
+      exact hj
+  obtain ⟨L, g, p, o', n, hload, hpg, ho', -, hall⟩ := judgeOne_ok bytesOf digestOf h1
+  obtain ⟨hpg', f, hlib⟩ := load_top bytesOf digestOf (fuel := closureDepthMax - 1) (hdig pkg) hpkg hload
+  rw [hpg'] at hpg
+  cases hpg
+  rw [relocate_noRef f _ escrow_noRef] at hlib
+  rw [ho] at ho'
+  cases ho'
+  exact escrow_absorbing hs (escrow_judge_admits hlib (hall "escrow" (by rw [escrow_laws]; simp)))
+
+/-- **After a payout, the receiver commits nothing more** on the escrow: a run that returned a
+payout (`isPayoutCall`) is the last step of every sequence of committed runs it starts. -/
+theorem escrow_runs_after_payout (hdig : ∀ x, digestOf (bytesOf x) = some x) {pkg : D} {state : Slots}
+    {calls : List (Body D)} {rest : List (List (Body D))}
+    (h : Runs (Lang.program bytesOf digestOf) pkg escrow state (calls :: rest))
+    (hp : 0 < payoutCalls [calls]) : rest = [] := by
+  cases h with
+  | cons hpkg hrun _ hnext hr =>
+    obtain ⟨t, n, hm⟩ := run_of_program hrun
+    obtain ⟨amount, arb, asset, ben, dep, nk, ph, a, -, -, hx⟩ := escrow_run_calls hdig hpkg hm
+    rcases hx with ⟨-, -, gb, gd, d, -, -, -, rfl⟩ | ⟨-, hs, -⟩ | ⟨-, hs, -⟩
+    · simp [payoutCalls, isPayoutCall] at hp
+    all_goals
+      cases hr with
+      | nil => rfl
+      | cons hpkg' _ hj _ _ =>
+        exact (escrow_judge_settled hdig hpkg' ((readState_get hnext).trans hs)
+          (by first | exact .inr ⟨_, rfl⟩ | exact .inl ⟨_, rfl⟩) hj).elim
+
+/-- **The escrow pays out at most once, over the receiver's own runs.** Along any sequence of runs
+the receiver commits on an object whose package cell reads as `escrow` (each a successful
+`runMeasured`, the next one reading slots that hold what it wrote, each admitted by the judge),
+from any state, of any methods on any arguments, requests and budgets, at most one call the runs
+return is a payout (a transfer through no grant), under a decoder that reads every id's bytes
+back. -/
+theorem escrow_runs_one_payout (hdig : ∀ x, digestOf (bytesOf x) = some x) {pkg : D} {state : Slots}
+    {runs : List (List (Body D))} (h : Runs (Lang.program bytesOf digestOf) pkg escrow state runs) :
+    payoutCalls runs ≤ 1 := by
+  induction h with
+  | nil => simp [payoutCalls]
+  | @cons look rv state method args r budget s calls rows used laws next rest hpkg hrun hj hnext hr ih =>
+    obtain ⟨t, n, hm⟩ := run_of_program hrun
+    obtain ⟨amount, arb, asset, ben, dep, nk, ph, a, -, -, hx⟩ := escrow_run_calls hdig hpkg hm
+    have hrest := escrow_runs_after_payout hdig (.cons hpkg hrun hj hnext hr)
+    rcases hx with ⟨-, -, gb, gd, d, -, -, -, rfl⟩ | ⟨-, -, d, -, rfl⟩ | ⟨-, -, b, -, rfl⟩
+    · simpa [payoutCalls, isPayoutCall] using ih
+    · rw [hrest (by simp [payoutCalls, isPayoutCall])]; simp [payoutCalls, isPayoutCall]
+    · rw [hrest (by simp [payoutCalls, isPayoutCall])]; simp [payoutCalls, isPayoutCall]
+
+/-- **At the kernel's program**: the same for the runs and judges of a lawful `Ctx` whose program
+is the language over the World's own codec. -/
+theorem escrow_program_one_payout {X : Ctx D} (hX : X.Lawful) (hp : X.program = Lang.program X.env.bytes X.digestOf)
+    {pkg : D} {state : Slots} {runs : List (List (Body D))} (h : Runs X.program pkg escrow state runs) :
+    payoutCalls runs ≤ 1 := by
+  rw [hp] at h
+  exact escrow_runs_one_payout hX.digestOf_bytes h
+
+end
+
+/-- **Deployed**: along any sequence of runs the node's receiver (`Host.Deployed.X`) commits on an
+object whose package cell reads as `escrow` in each run's view, at most one call is a payout; no
+premise but the runs (each carrying its package read). -/
+theorem escrow_runs_deployed {pkg : Codec.Digest} {state : Slots} {runs : List (List (Body Codec.Digest))}
+    (h : Runs (Codec.Deployed.ctx (Lang.program Codec.Digest.bytes Codec.Digest.ofBytes?)).program pkg escrow
+      state runs) :
+    payoutCalls runs ≤ 1 :=
+  escrow_program_one_payout (deployed_ctx_lawful _) rfl h
 
 /-! ## Teeth -/
 
@@ -301,38 +456,44 @@ theorem run_result_needs_body : ∃ v d dE,
     Data.digest.injEq, true_and, and_true] at hd
   exact absurd hd.1 (by decide)
 
-/-- **Tooth for `escrow_method_results` and the chain's count**: `spends` tells the results apart:
-a release's spends the payout key out of the escrow's own account, a deposit's (by a depositor that
-is not the escrow) does not, so `escrow_one_payout` does not hold by `spends` being constant. -/
-theorem escrow_run_spends (amount : Nat) (arb asset ben dep nk self g : ByteArray) (p : Label)
-    (agent nb occ pr vu arg rows : Data) (hne : dep ≠ self) :
-    spends self asset (methodResult "release" (stateOf amount arb asset ben dep nk p) arg
-      (reqAt agent nb occ pr self vu) rows) = true ∧
-    spends self asset (methodResult "deposit" (stateOf amount arb asset ben dep nk p) (.record [("grant", .digest g)])
-      (reqAt agent nb occ pr self vu) rows) = false := by
-  obtain ⟨h0, -, h2⟩ := escrow_method_results amount arb asset ben dep nk self g p agent nb occ pr vu arg rows
-  rw [h0, h2]
-  simp [spends, resultD, transferD, ofD, optSome, Data.field, Row.find?, hne, payoutKey]
-
 /-- **Tooth for `escrow_run_calls`: `RunCalls` pins the payee.** Over a decoder that names one id per
 bytes, from a state whose beneficiary and depositor differ, a release whose call pays the depositor
 is not `RunCalls`: the conclusion is not satisfied by any call to the escrow's own asset. -/
 theorem run_calls_pins_payee {D : Type} {digestOf : ByteArray → Option D}
     (hinj : ∀ x y z, digestOf x = some z → digestOf y = some z → x = y)
-    {state : Slots} {amount : Nat} {arb asset ben dep nk : ByteArray} {p : Label} {args : ByteArray}
+    {state s : Slots} {amount : Nat} {arb asset ben dep nk : ByteArray} {p : Label} {args : ByteArray}
     {self a d : D} (hst : readState digestOf (recordRow escrow.state) state = .ok (stateOf amount arb asset ben dep nk p))
     (hne : ben ≠ dep) (hd : digestOf dep = some d) :
-    ¬ RunCalls digestOf state release args self [.transfer (.of self a) (.of d a) amount none (some payoutKey)] := by
+    ¬ RunCalls digestOf state release args self [.transfer (.of self a) (.of d a) amount none (some payoutKey)] s := by
   rintro ⟨amount', arb', asset', ben', dep', nk', p', a', hst', -, hc⟩
   rw [hst] at hst'
   simp only [Escrow.stateOf, Except.ok.injEq, Data.record.injEq, List.cons.injEq, Prod.mk.injEq, Data.nat.injEq,
     Data.digest.injEq, Data.bytes.injEq, true_and, and_true] at hst'
   obtain ⟨-, -, -, rfl, -⟩ := hst'
-  rcases hc with ⟨hm, -⟩ | ⟨hm, -⟩ | ⟨-, b, hb, hcs⟩
+  rcases hc with ⟨hm, -⟩ | ⟨hm, -⟩ | ⟨-, -, b, hb, hcs⟩
   · cases hm
   · cases hm
   · simp only [List.cons.injEq, Body.transfer.injEq, AcctRef.of.injEq, and_true] at hcs
     obtain ⟨-, ⟨rfl, -⟩, -⟩ := hcs
     exact hne (hinj _ _ _ hb hd)
+
+/-- **Tooth for `escrow_runs_one_payout`: the judge premise bites.** From a `released` state the
+receiver's term still returns a payout (the method does not read its phase), and the law admits no
+act out of that state: a sequence of runs without the judge (release, then release again) would
+return two payouts, so the bound is the judge's, not the method's. -/
+theorem escrow_judge_bites {lib : List Term} (amount : Nat) (arb asset ben dep nk self : ByteArray)
+    (agent nb occ pr vu arg rows : Data) :
+    methodResult "release" (stateOf amount arb asset ben dep nk "released") arg (reqAt agent nb occ pr self vu) rows =
+      some (resultD (transferD (ofD self asset) (ofD ben asset) amount optNone (optSome (.bytes payoutKey)))
+        (stateOf amount arb asset ben dep nk "released")) ∧
+    ∀ rq n, ¬ Std.Admits lib law rq n (stateOf amount arb asset ben dep nk "released") :=
+  ⟨(escrow_method_results amount arb asset ben dep nk self .empty "released" agent nb occ pr vu arg rows).2.2,
+    fun _ _ => escrow_absorbing (.inl ⟨_, rfl⟩)⟩
+
+/-- **Tooth for the count**: `isPayoutCall` tells a payout's call from a deposit's (which names its
+grant), so `payoutCalls` is not constant over what `RunCalls` allows. -/
+theorem payout_call_tells {D : Type} (src dst : AcctRef D) (amount : Nat) (g : D) (once : Option ByteArray) :
+    isPayoutCall (.transfer src dst amount none once) = true ∧
+      isPayoutCall (.transfer src dst amount (some g) once) = false := ⟨rfl, rfl⟩
 
 end Nanodregg.Ledger.Proofs
