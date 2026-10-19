@@ -162,7 +162,7 @@ theorem requiredOf_total {look : Pinned D} {rv : RowView D} {pkg : D} {state : S
     ∃ N, Need.requiredOf bytesOf digestOf look rv pkg state method args r budget = .ok N ∧ N < ticks := by
   obtain ⟨S, v, used, d, left, hs, hr, he, rfl⟩ := runMeasured_setup hm
   obtain ⟨n, hd⟩ := bigStep_derives (run_bigStep hr)
-  obtain ⟨m, hf⟩ := extract_forces S.ty he
+  obtain ⟨m, hf⟩ := means_forces (extract_means _ S.ty he)
   obtain ⟨h1, h2⟩ := derives_lt_used hd hr
   have h3 := forces_le hf he
   have hq : Need.requiredOf bytesOf digestOf look rv pkg state method args r budget = .ok (n + m) := by

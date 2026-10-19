@@ -2599,3 +2599,57 @@ round trip, `NoRef escrow.body` (not yet proved), the state's shape from `readSt
 `escrow_calls_payout` over `apply4 0 ℓ` with projections that keep the `well`/`none` tags.
 
 **Nothing moves.** No wire, no vector, no shipped text, no required step.
+
+## LANG-62 The run's state is the record it extracted; a no-ref meaning is lib-free, in Lang; `Forces` is `Means` with sizes (2026-10-21; LANG-22; LEDGER-13's open (b) and (d); cv 01a153a2-6489)
+**Why.** LEDGER-13 proved what the escrow's receiver run CALLS, not what it WRITES: `runMeasured_means`
+named the extracted `state` field `st` and said nothing of the slots `s` the run returned, so the
+receiver-side state half and the chain over receiver runs had no first step (LEDGER-13 critique (b),
+(c)). LEDGER also proved `means_relib`, a Lang fact, privately (critique (d)). LANG-21 left the
+parsimony question: `Means` (Extract, data) and `Forces` (Need, `Derives` sizes) walk one path.
+
+**What.** (1) `runMeasured_means` now concludes the extracted result is
+`.record [("calls", c), ("edits", e), ("state", .record ds)]`, `stateSlots (recordRow p.state) ds 0 = some s`
+for the run's own `s`, and `RowConforms ds (recordRow p.state)` (`stateSlots_conforms`: written
+fields decode back, so they conform; `means_state_labels`: the meaning carries the row's labels),
+with no new premise. It is the brief's `st = .record ds ∧ …` with `st` substituted. A consumer reads
+the slots back with `readState_go_stateSlots` given one more fact: every digest in `ds` passes
+`digestsOk`. The run does not check it and no theorem gives it (cv 01a153b1-dc52, below). (2) `means_relib` (with `unrolls_relib`, `rowMeans_relib`) is public in
+`Lang/Proofs/Extract.lean` beside `bigStep_relib`; LEDGER's private copy is deleted in the same
+commit; EscrowRun's one use is unchanged. (3) The relations stay two, bridged as `Derives` is to
+`BigStep`: `means_forces` (Means → ∃ n, Forces) and `forces_means` (Forces → ∃ d, Means), with
+`unrolls_unknots`/`unknots_unrolls` and the row forms, in `Lang/Proofs/Need.lean`. The machine walk
+that gave `extract_forces` (`force_derives`, `unknot_unknots`, `extract_forces`, `extractArm_forces`,
+`extractRow_forces`, ~100 lines) is deleted: every completed extraction's `Forces` is
+`means_forces (extract_means …)`, so the walk over `Machine.extract` is proved once.
+
+**Why two relations, and not one.** A merged `Forces lib T v d n` (data and size) would make every
+`Means` consumer carry a size it never reads, and every `Forces` consumer (`forces_le`,
+`forces_unique`, `needExtract_forces`, NeedComplete's counter) carry data it never reads; the repo
+already holds that pair for terms (`Derives`/`BigStep`, bridged by `derives_bigStep`/`bigStep_derives`).
+What two relations risk is drifting apart; the bridge in both directions makes a drift a red build,
+and the deleted walk removes the one place they were each proved against the machine separately.
+
+**Teeth.** `run_state_tooth`: the `stateSlots` conjunct is not implied by the `Means` one: `{a = natLimit}`
+is a meaning at `rec {a : nat}` (a meaning has no bounds) and `stateSlots` writes nothing of it;
+`{a = 1}` it writes. `means_relib_needs_noRef`: the knot `knot (ref 0) []` means `{a = 1}` under `[{a = 1}]` and
+not under `[{a = 2}]`, so `means_relib`'s `NoRefVal` premise is needed.
+
+**Read.** Second-agent vacuity read with the disjunct check, twice: no disjunction anywhere; nothing
+vacuous, nothing weaker than main (`runMeasured_means` strictly stronger; `means_relib` identical to
+the deleted private copy; the bridge loses nothing `extract_forces` gave). Fixed from the first read:
+the state tooth tested only constructor disjointness and what `Means` already excludes (now the
+`natLimit` tooth); the docstring promised a read-back that needs two facts it did not give (now
+`RowConforms` is a conjunct and the digest fact is named as missing). The second read: no fixes.
+
+**Critique.** The read-back of the written slots lacks `digestsOk` of `ds`. `runMeasured` checks it on
+the arguments and `readState` on the state it reads, but nothing on the state a run writes. No prim
+makes a digest (`primEval` only compares them), so every digest of a run's value is a literal
+(`checkLits`) or from the checked environment: probably an invariant, unproved. If it is false, a run
+writes a state the next run refuses (an object wedges). cv 01a153b1-dc52: the provenance theorem
+over `BigStep`, then a `digestsOk` conjunct here; the fallback is a named refusal in `runMeasured`.
+LEDGER's escrow does not wait on it: its `ds` is a concrete `methodResult`, whose digests are the
+read state's. **Meta-critique.** I considered merging the relations
+first (the doctrine prefers deleting a twin); the merge deletes no theorem a bridge cannot, and costs
+every consumer a field; the bridge plus the deleted duplicate walk is the deletion that matters.
+
+**Nothing moves.** No wire, vector, shipped text or required step.

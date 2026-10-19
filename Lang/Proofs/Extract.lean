@@ -6,8 +6,9 @@
 data type `T` under the reference semantics (`BigStep`, Lang.Proofs.BigStep) — a base value is its
 own data; a record value unknots by its body's meaning (`Unrolls`) and each field's suspension means
 a value whose data is the field's; an injection's payload means at its label's type.
-It is the walk `Lang.Proofs.Need.Forces` makes (there carrying derivation sizes, here the data);
-the two are kept apart because `Forces` sums `Derives` sizes and this needs none.
+It is the walk `Lang.Proofs.Need.Forces` makes: `Forces` is this relation with `Derives` sizes and
+without the data, as `Derives` is `BigStep` with sizes (`means_forces` and
+`forces_means` in `Lang.Proofs.Need`: one has an instance exactly when the other does).
 
 * `extract_means`: whatever extraction returns, at any budget, is the meaning of the value
   (no premise: not typing, not a budget). `means_deterministic`: a value has at most one meaning
@@ -22,7 +23,8 @@ the two are kept apart because `Forces` sums `Derives` sizes and this needs none
 * `runMeasured_means`: the receiver's run of a method (`runMeasured`) extracted, at the method's
   own result type, the MEANING of the method application `apply4 g ℓ` under the loaded closure
   `L.lib`, in the run's environment (the request, arguments, state and rows data the setup read);
-  its calls are `callsOf` of that meaning's `calls` field.
+  its calls are `callsOf` of that meaning's `calls` field, its `state` field is a record conforming
+  to the package's state row whose `stateSlots` there are the slots the run returned.
 * `relib_apply4`: what the method application means does not depend on the closure beyond the
   package body: two libs holding one `NoRef` body at their indices give `apply4 g ℓ` and
   `apply4 g' ℓ` one meaning over every no-ref environment (`toVal4_noRef`: the receiver's is one).
@@ -30,13 +32,16 @@ the two are kept apart because `Forces` sums `Derives` sizes and this needs none
   projection a consumer computes under `[body]` at index 0 is the projection under `L.lib` at `g`
   (`load_top`, under its premises `digestOf (bytesOf pkg) = some pkg` and `readPackage look pkg = .ok p`,
   with `relocate_noRef` give `L.lib[g]? = some p.body` for a `NoRef` body). Underneath: `bigStep_relib`, a
-  derivation of a no-ref term over a no-ref environment is one under every lib.
+  derivation of a no-ref term over a no-ref environment is one under every lib, and `means_relib`, a
+  no-ref value's meaning is one under every lib.
 * Teeth: `extract_get_tooth`: a record whose field is not its `get`'s meaning is never what
   extraction returns (a knot whose `g` is `self.a`, extracted with `g = 2`, at every budget);
   `extract_knot_ok`: the same value does extract, to `g = 1` (the premise is satisfiable).
   `relib_needs_one_body`: `ref 0` under `[1]` and under `[2]` mean differently, so `relib_ref`'s
   one-body premise is needed; `relib_needs_noRef`: one body `ref 1` at index 0 is not enough, so its
-  `NoRef` premise is needed.
+  `NoRef` premise is needed; `means_relib_needs_noRef`: a knot whose body is `ref 0` means `a = 1`
+  under one lib and not under another. `run_state_tooth`: the `stateSlots` conjunct is not implied by
+  the meaning: a field meaning `natLimit` at `nat` writes no slots.
 
 The account step is not here: the data `.inj "of" {asset, owner}` reads as `AcctRef.of owner asset`
 by `bodyOf` (`callData_bodyOf`, `bodyOf_callData`, needing `digestOf (bytesOf x) = some x`: Lang's
@@ -308,19 +313,56 @@ theorem extract_get {m : Machine} {env : Env} {t : Term} {v : Val} {row : List (
 
 /-! ## The receiver's run extracts the method application's meaning -/
 
+/-- Slots `stateSlots` wrote are of data conforming to the row, field by field (each field's bytes
+decode back to it), when the data carries the row's labels. -/
+theorem stateSlots_conforms : ∀ (row : List (Label × Ty)) (ds : List (Label × Data)) (i : Nat) (s : Slots),
+    ds.map Prod.fst = row.map Prod.fst → stateSlots row ds i = some s → RowConforms ds row
+  | [], [], _, _, _, _ => .nil
+  | (ℓ, T) :: row, (ℓ', d) :: ds, i, s, hl, hs => by
+    simp only [List.map_cons, List.cons.injEq] at hl
+    obtain ⟨rfl, hl⟩ := hl
+    unfold stateSlots at hs
+    split at hs
+    · rename_i b s' he hs'
+      exact .cons (decodeData_conforms (Wire.decodeData_eq_ok_iff.mpr he)) (stateSlots_conforms row ds (i + 1) s' hl hs')
+    · cases hs
+  | [], _ :: _, _, _, hl, _ => by simp at hl
+  | _ :: _, [], _, _, hl, _ => by simp at hl
+
+/-- A meaning at a method's result type whose `state` field is a record carries the state row's labels. -/
+theorem means_state_labels {S : Ty} {ks : List Ty} {E : Ty} {es : Nat} {v : Val} {c e : Data}
+    {ds : List (Label × Data)} (h : Means lib (resultTy S ks E es) v (.record [("calls", c), ("edits", e), ("state", .record ds)])) :
+    ds.map Prod.fst = (recordRow S).map Prod.fst := by
+  unfold resultTy at h
+  cases h with
+  | record _ hr =>
+    cases hr with
+    | cons _ _ hr =>
+      cases hr with
+      | cons _ _ hr =>
+        cases hr with
+        | cons _ hm _ =>
+          cases hm with
+          | record _ hr' => exact rowMeans_labels hr'
+
 section
 variable {D : Type}
 
 /-- **What the receiver's run extracts is a meaning**: a successful `runMeasured` loaded the closure,
 resolved the method, read the state, decoded the arguments and built the rows; the method application
 `apply4 g ℓ`, in the environment of those, means a value `v` (`BigStep`); the result extracted at the
-method's own result type is `v`'s meaning there; the calls are `callsOf` of its `calls` field. -/
+method's own result type is `v`'s meaning there; the calls are `callsOf` of its `calls` field; its
+`state` field is a record `ds` conforming to the package's state row, and the slots the run returned
+are what `stateSlots` writes of `ds` there. `readState_go_stateSlots` reads them back to `ds` given
+one more fact this does not state: every digest in `ds` passes `digestsOk` (the run does not
+check it; that a run's digests come only from its checked inputs and literals is unproved). -/
 theorem runMeasured_means {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D}
     {look : Pinned D} {rv : RowView D} {pkg : D} {state : Slots} {method : Nat} {args : ByteArray}
     {r : Req D} {budget : Nat} {s : Slots} {calls : List (Body D)} {rows : List (RowSlot D × RowAct)}
     {t n : Nat}
     (h : runMeasured bytesOf digestOf look rv pkg state method args r budget = .ok (s, calls, rows, t, n)) :
-    ∃ (L : Loaded) (g : Nat) (p : Package) (x : Label × Sig) (sd ad wd : Data) (v : Val) (c e st : Data),
+    ∃ (L : Loaded) (g : Nat) (p : Package) (x : Label × Sig) (sd ad wd : Data) (v : Val) (c e : Data)
+      (ds : List (Label × Data)),
       load digestOf look closureDepthMax (bytesOf pkg) ⟨[], [], []⟩ = .ok (L, g) ∧
       L.pkgs[g]? = some p ∧ resolveMethod (D := D) p method = .ok x ∧
       readState digestOf (recordRow p.state) state = .ok sd ∧
@@ -328,8 +370,9 @@ theorem runMeasured_means {bytesOf : D → ByteArray} {digestOf : ByteArray → 
       readsData digestOf p.rels rv r.self x.2.reads = .ok wd ∧
       BigStep L.lib [(reqData bytesOf r).toVal, ad.toVal, sd.toVal, wd.toVal] (apply4 g x.1) (.ok v) ∧
       Means L.lib (resultTy p.state x.2.calls (editTy p.rels) x.2.edits) v
-        (.record [("calls", c), ("edits", e), ("state", st)]) ∧
-      callsOf digestOf c = .ok calls := by
+        (.record [("calls", c), ("edits", e), ("state", .record ds)]) ∧
+      callsOf digestOf c = .ok calls ∧ stateSlots (recordRow p.state) ds 0 = some s ∧
+      RowConforms ds (recordRow p.state) := by
   unfold runMeasured at h
   simp only [bind, Except.bind, pure, Except.pure] at h
   split at h
@@ -340,9 +383,11 @@ theorem runMeasured_means {bytesOf : D → ByteArray} {digestOf : ByteArray → 
   repeat' split at h
   all_goals first | (simp at h; done) | skip
   simp only [Except.ok.injEq, Prod.mk.injEq] at h
-  obtain ⟨-, rfl, -, -, -⟩ := h
+  obtain ⟨rfl, rfl, -, -, -⟩ := h
+  rename_i hext _ _ hss _ _ _ _ _ _ _ _ _
+  have hm := extract_means _ _ hext
   exact ⟨L, g, p, (ℓ, sg), sd, ad, wd, _, _, _, _, hl, hp, hres, hsd, had, hwd, run_bigStep (by assumption),
-    extract_means _ _ (by assumption), by assumption⟩
+    hm, by assumption, hss, stateSlots_conforms _ _ _ _ (means_state_labels hm) hss⟩
 
 end
 
@@ -538,6 +583,43 @@ theorem ext_relib {lib' : List Term} : ∀ {v : Val} {fs : List (Label × Term)}
       exact ⟨.knotE (bigStep_relib hb hbn henv).1, fun w hw => by cases hw⟩
 end
 
+/-- A no-ref value unknots to the same suspensions under every lib, and they hold no reference. -/
+theorem unrolls_relib {lib' : List Term} : ∀ {v : Val} {fs : List (Label × (Term × Env))},
+    Unrolls lib v fs → NoRefVal v →
+      Unrolls lib' v fs ∧ ∀ p ∈ fs, NoRef p.2.1 ∧ ∀ u ∈ p.2.2, NoRefVal u
+  | _, _, .record, hv => by
+    cases hv with
+    | record hn he => exact ⟨.record, fun p hp => ⟨hn p hp, he p hp⟩⟩
+  | _, _, .knot hb hu, hv => by
+    cases hv with
+    | knot hbn hen =>
+      obtain ⟨hb', hbv⟩ := bigStep_relib (lib' := lib') hb hbn (knot_env_noRef hbn hen)
+      obtain ⟨hu', hf⟩ := unrolls_relib hu (hbv _ rfl)
+      exact ⟨.knot hb' hu', hf⟩
+
+mutual
+/-- **A no-ref value's meaning is the closure's to ignore**: what a value holding no reference
+means at a type under one lib, it means under every lib. -/
+theorem means_relib {lib' : List Term} : ∀ {T : Ty} {v : Val} {d : Data},
+    Means lib T v d → NoRefVal v → Means lib' T v d
+  | _, _, _, .nat, _ => .nat
+  | _, _, _, .bool, _ => .bool
+  | _, _, _, .bytes, _ => .bytes
+  | _, _, _, .digest, _ => .digest
+  | _, _, _, .record hu hr, hv =>
+    .record (unrolls_relib hu hv).1 (rowMeans_relib hr (unrolls_relib (lib' := lib') hu hv).2)
+  | _, _, _, .inj hf hm, .inj hw => .inj hf (means_relib hm hw)
+
+theorem rowMeans_relib {lib' : List Term} : ∀ {row : List (Label × Ty)}
+    {fs : List (Label × (Term × Env))} {ds : List (Label × Data)},
+    RowMeans lib row fs ds → (∀ p ∈ fs, NoRef p.2.1 ∧ ∀ u ∈ p.2.2, NoRefVal u) → RowMeans lib' row fs ds
+  | _, _, _, .nil, _ => .nil
+  | _, _, _, .cons hb hm hr, hf =>
+    have h0 := hf _ (List.mem_cons_self ..)
+    have hb' := bigStep_relib (lib' := lib') hb h0.1 h0.2
+    .cons hb'.1 (means_relib hm (hb'.2 _ rfl)) (rowMeans_relib hr (fun p hp => hf p (List.mem_cons_of_mem _ hp)))
+end
+
 /-- `t` under `lib` and `t'` under `lib'` have one meaning over every no-ref environment, and it
 holds no reference. -/
 def Relib (lib lib' : List Term) (t t' : Term) : Prop :=
@@ -629,6 +711,25 @@ theorem relib_needs_noRef : ¬ Relib [.ref 1, .nat 1] [.ref 1, .nat 2] (.ref 0) 
   have h2 : BigStep [.ref 1, .nat 2] [] (.ref 0) (.ok (.nat 2)) := .ref rfl (.ref rfl .nat)
   have := bigStep_deterministic h1 h2
   cases this
+
+/-- **Tooth**: `means_relib` needs its value to hold no reference: the knot `knot (ref 0) []`
+means `{a = 1}` under `[{a = 1}]` and not under `[{a = 2}]`. -/
+theorem means_relib_needs_noRef :
+    Means [.record [("a", .nat 1)]] (.record [("a", .nat)]) (.knot (.ref 0) []) (.record [("a", .nat 1)]) ∧
+      ¬ Means [.record [("a", .nat 2)]] (.record [("a", .nat)]) (.knot (.ref 0) []) (.record [("a", .nat 1)]) := by
+  refine ⟨.record (.knot (.ref rfl .record) .record) (.cons .nat .nat .nil), fun h => ?_⟩
+  have h2 : Means [.record [("a", .nat 2)]] (.record [("a", .nat)]) (.knot (.ref 0) []) (.record [("a", .nat 2)]) :=
+    .record (.knot (.ref rfl .record) .record) (.cons .nat .nat .nil)
+  cases means_deterministic h h2
+
+/-- **Tooth** (for `runMeasured_means`' `stateSlots` conjunct): it is not implied by the `Means`
+conjunct. The record `{a = natLimit}` is a meaning at `rec {a : nat}` (a meaning has no bounds), and
+`stateSlots` writes no slots of it; `{a = 1}` it writes. -/
+theorem run_state_tooth :
+    Means [] (.record [("a", .nat)]) (.record [("a", (.nat Bounds.natLimit, []))]) (.record [("a", .nat Bounds.natLimit)]) ∧
+      stateSlots [("a", .nat)] [("a", .nat Bounds.natLimit)] 0 = none ∧
+      ∃ s, stateSlots [("a", .nat)] [("a", .nat 1)] 0 = some s :=
+  ⟨.record .record (.cons .nat .nat .nil), by decide, ⟨_, rfl⟩⟩
 
 /-! ## Teeth -/
 

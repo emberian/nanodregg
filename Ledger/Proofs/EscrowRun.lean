@@ -131,43 +131,6 @@ theorem deposit_arg_shape {d : Data} (h : Conforms d depositArg) : ∃ g, d = .r
     cases h1
     exact ⟨_, rfl⟩
 
-/-! ## A meaning with no closure reference is the closure's to ignore -/
-
-private theorem unrolls_relib {lib lib' : List Term} : ∀ {v : Val} {fs : List (Label × (Term × Env))},
-    Unrolls lib v fs → NoRefVal v →
-      Unrolls lib' v fs ∧ ∀ p ∈ fs, NoRef p.2.1 ∧ ∀ u ∈ p.2.2, NoRefVal u
-  | _, _, .record, hv => by
-    cases hv with
-    | record hn he => exact ⟨.record, fun p hp => ⟨hn p hp, he p hp⟩⟩
-  | _, _, .knot hb hu, hv => by
-    cases hv with
-    | knot hbn hen =>
-      obtain ⟨hb', hbv⟩ := bigStep_relib (lib' := lib') hb hbn (knot_env_noRef hbn hen)
-      obtain ⟨hu', hf⟩ := unrolls_relib hu (hbv _ rfl)
-      exact ⟨.knot hb' hu', hf⟩
-
-mutual
-/-- A meaning of a no-ref value is a meaning under every closure. -/
-private theorem means_relib {lib lib' : List Term} : ∀ {T : Ty} {v : Val} {d : Data},
-    Means lib T v d → NoRefVal v → Means lib' T v d
-  | _, _, _, .nat, _ => .nat
-  | _, _, _, .bool, _ => .bool
-  | _, _, _, .bytes, _ => .bytes
-  | _, _, _, .digest, _ => .digest
-  | _, _, _, .record hu hr, hv =>
-    .record (unrolls_relib hu hv).1 (rowMeans_relib hr (unrolls_relib (lib' := lib') hu hv).2)
-  | _, _, _, .inj hf hm, .inj hw => .inj hf (means_relib hm hw)
-
-private theorem rowMeans_relib {lib lib' : List Term} : ∀ {row : List (Label × Ty)}
-    {fs : List (Label × (Term × Env))} {ds : List (Label × Data)},
-    RowMeans lib row fs ds → (∀ p ∈ fs, NoRef p.2.1 ∧ ∀ u ∈ p.2.2, NoRefVal u) → RowMeans lib' row fs ds
-  | _, _, _, .nil, _ => .nil
-  | _, _, _, .cons hb hm hr, hf =>
-    have h0 := hf _ (List.mem_cons_self ..)
-    have hb' := bigStep_relib (lib' := lib') hb h0.1 h0.2
-    .cons hb'.1 (means_relib hm (hb'.2 _ rfl)) (rowMeans_relib hr (fun p hp => hf p (List.mem_cons_of_mem _ hp)))
-end
-
 /-! ## The receiver's result is `methodResult` -/
 
 /-- **What the receiver extracts is `methodResult`**: under any closure holding the escrow's body at
@@ -232,7 +195,7 @@ theorem escrow_run_calls (hdig : ∀ x, digestOf (bytesOf x) = some x)
     (hpkg : readPackage look pkg = .ok escrow)
     (h : runMeasured bytesOf digestOf look rv pkg state method args r budget = .ok (s, calls, rows, t, n)) :
     RunCalls digestOf state method args r.self calls := by
-  obtain ⟨L, g, p, x, sd, ad, wd, v, c, e, st, hl, hp, hres, hsd, had, -, hb, hm, hc⟩ := runMeasured_means h
+  obtain ⟨L, g, p, x, sd, ad, wd, v, c, e, ds, hl, hp, hres, hsd, had, -, hb, hm, hc, -, -⟩ := runMeasured_means h
   obtain ⟨hpe, f, hlib⟩ := load_top bytesOf digestOf (fuel := closureDepthMax - 1) (hdig pkg) hpkg hl
   rw [hp] at hpe
   cases hpe

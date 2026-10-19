@@ -12,7 +12,9 @@ Extraction: `Forces lib T v n` holds when the derivations extraction must perfor
 from `v` (the unfoldings of knots, then each record field in row order) have sizes summing to
 `n`. `forces_le` ties it to `Machine.extract`: the deployed extraction forces those suspensions and
 pays at least their sizes. `forces_unique` shows the sum is one number, and `needExtract_forces` is its
-counter's spec.
+counter's spec. `Forces` is `Lang.Proofs.Extract`'s `Means` with sizes, as `Derives` is `BigStep`
+with sizes: `means_forces` and `forces_means` (a value has a `Forces` size at a type exactly when it
+has a meaning there), so every completed extraction has one (`extract_means`, then `means_forces`).
 
 `requiredOf_spec` and `runMeasured_setup` give the whole count: for an invoke that `runMeasured`
 admits, `requiredOf` counts the derivation of the very value the deployed machine computed
@@ -25,6 +27,7 @@ import Lang.Sim.Need
 import Lang.Proofs.Agree
 import Lang.Proofs.Derives
 import Lang.Proofs.Complete
+import Lang.Proofs.Extract
 
 namespace Nanodregg.Lang
 
@@ -334,8 +337,8 @@ inductive Unknots (lib : List Term) : Val → List (Label × (Term × Env)) → 
 mutual
 /-- The derivations extraction must perform at type `T` from `v`: unfold knots until a record
 appears, then each field's suspension in row order, then inside each field's value. The sizes
-are summed. It is defined independently of the machine; `extract_forces` (every completed
-extraction has a `Forces`) and `forces_le` (extraction pays at least its size) tie it to
+are summed. It is defined independently of the machine; `means_forces` over `extract_means` (every
+completed extraction has a `Forces`) and `forces_le` (extraction pays at least its size) tie it to
 `Machine.extract`. `forces_unique` shows the size is one number. -/
 inductive Forces (lib : List Term) : Ty → Val → Nat → Prop
   | nat {k} : Forces lib .nat (.nat k) 0
@@ -582,109 +585,74 @@ theorem forcesRow_le : ∀ {row : List (Label × Ty)} {fs : List (Label × (Term
 end
 
 
-theorem force_derives {fuel fuel' : Nat} {t : Term} {env : Env} {v : Val}
-    (h : (Machine.mk lib).force fuel t env = .ok (v, fuel')) : ∃ n, Derives lib env t (.ok v) n := by
-  unfold Machine.force at h
-  split at h
-  · rename_i w used hr
-    simp only [Except.ok.injEq, Prod.mk.injEq] at h
-    obtain ⟨rfl, rfl⟩ := h
-    exact bigStep_derives (run_bigStep hr)
-  · cases h
+/-! ## `Forces` is `Means` with sizes
 
-theorem unknot_unknots : ∀ (rounds : Nat) {fuel fuel' : Nat} {v : Val} {fs : List (Label × (Term × Env))},
-    (Machine.mk lib).unknot rounds fuel v = .ok (fs, fuel') → ∃ n, Unknots lib v fs n
-  | rounds, _, _, .record gs, fs, h => by
-    cases rounds <;> simp only [Machine.unknot, Except.ok.injEq, Prod.mk.injEq] at h <;>
-      obtain ⟨rfl, rfl⟩ := h <;> exact ⟨0, .record⟩
-  | 0, _, _, .knot _ _, _, h => by simp [Machine.unknot] at h
-  | r + 1, _, _, .knot body env, fs, h => by
-    simp only [Machine.unknot] at h
-    split at h
-    · rename_i v1 f1 hf
-      obtain ⟨n, hd⟩ := force_derives hf
-      obtain ⟨m, hu⟩ := unknot_unknots r h
-      exact ⟨n + m, .knot hd hu⟩
-    · cases h
-  | _, _, _, .nat _, _, h | _, _, _, .bool _, _, h | _, _, _, .bytes _, _, h | _, _, _, .digest _, _, h
-  | _, _, _, .clo _ _, _, h
-  | _, _, _, .inj _ _, _, h => by cases ‹Nat› <;> simp [Machine.unknot] at h
+`Forces` (sizes) and `Lang.Proofs.Extract`'s `Means` (data) walk one path: the knot unfoldings, then
+each field's suspension in row order, then inside each field's value. They are the size-carrying
+and the size-erased forms of one relation, as `Derives` is of `BigStep`: `means_forces` and
+`forces_means` say a value has a `Forces` size at a type exactly when it has a meaning there, so the
+two cannot come apart without a red build. Whatever the deployed extraction returns has a `Forces`
+size through its meaning (`extract_means`, then `means_forces`); the machine walk is proved once. -/
+
+theorem unrolls_unknots : ∀ {v : Val} {fs : List (Label × (Term × Env))},
+    Unrolls lib v fs → ∃ n, Unknots lib v fs n
+  | _, _, .record => ⟨0, .record⟩
+  | _, _, .knot hb hu => by
+    obtain ⟨n, hd⟩ := bigStep_derives hb
+    obtain ⟨m, hu'⟩ := unrolls_unknots hu
+    exact ⟨n + m, .knot hd hu'⟩
+
+theorem unknots_unrolls : ∀ {v : Val} {fs : List (Label × (Term × Env))} {n : Nat},
+    Unknots lib v fs n → Unrolls lib v fs
+  | _, _, _, .record => .record
+  | _, _, _, .knot hd hu => .knot (derives_bigStep hd) (unknots_unrolls hu)
 
 mutual
-/-- **Extraction's meaning is `Forces`**: every extraction the deployed machine completes performs
-derivations `Forces` names, so `forces_le` applies to every admitted extraction. -/
-theorem extract_forces : ∀ (T : Ty) {fuel left : Nat} {v : Val} {d : Data},
-    (Machine.mk lib).extract T fuel v = .ok (d, left) → ∃ n, Forces lib T v n
-  | .nat, _, _, .nat _, _, _ => ⟨0, .nat⟩
-  | .bool, _, _, .bool _, _, _ => ⟨0, .bool⟩
-  | .bytes, _, _, .bytes _, _, _ => ⟨0, .bytes⟩
-  | .digest, _, _, .digest _, _, _ => ⟨0, .digest⟩
-  | .record row, fuel, left, v, d, h => by
-    simp only [Machine.extract] at h
-    split at h
-    · rename_i fs f1 hk
-      split at h
-      · rename_i ds f2 hx
-        obtain ⟨n, hu⟩ := unknot_unknots fuel hk
-        obtain ⟨m, hr⟩ := extractRow_forces row hx
-        exact ⟨n + m, .record hu hr⟩
-      · cases h
-    · cases h
-  | .sum row, fuel, left, .inj ℓ w, d, h => by
-    simp only [Machine.extract] at h
-    split at h
-    · rename_i d' f1 hx
-      obtain ⟨A, hA, n, hf⟩ := extractArm_forces row hx
-      exact ⟨n, .sum hA hf⟩
-    · cases h
-  | .nat, _, _, .bool _, _, h | .nat, _, _, .bytes _, _, h | .nat, _, _, .digest _, _, h | .nat, _, _, .clo _ _, _, h
-  | .nat, _, _, .record _, _, h | .nat, _, _, .knot _ _, _, h | .nat, _, _, .inj _ _, _, h
-  | .bool, _, _, .nat _, _, h | .bool, _, _, .bytes _, _, h | .bool, _, _, .digest _, _, h | .bool, _, _, .clo _ _, _, h
-  | .bool, _, _, .record _, _, h | .bool, _, _, .knot _ _, _, h | .bool, _, _, .inj _ _, _, h
-  | .bytes, _, _, .nat _, _, h | .bytes, _, _, .bool _, _, h | .bytes, _, _, .digest _, _, h | .bytes, _, _, .clo _ _, _, h
-  | .bytes, _, _, .record _, _, h | .bytes, _, _, .knot _ _, _, h | .bytes, _, _, .inj _ _, _, h
-  | .digest, _, _, .nat _, _, h | .digest, _, _, .bool _, _, h | .digest, _, _, .bytes _, _, h | .digest, _, _, .clo _ _, _, h
-  | .digest, _, _, .record _, _, h | .digest, _, _, .knot _ _, _, h | .digest, _, _, .inj _ _, _, h
-  | .sum _, _, _, .nat _, _, h | .sum _, _, _, .bool _, _, h | .sum _, _, _, .bytes _, _, h | .sum _, _, _, .digest _, _, h
-  | .sum _, _, _, .clo _ _, _, h | .sum _, _, _, .record _, _, h | .sum _, _, _, .knot _ _, _, h
-  | .fn _ _, _, _, _, _, h => by simp [Machine.extract] at h
+/-- **A meaning has a `Forces` size**: what a value means at a type, extraction forces with sizes. -/
+theorem means_forces : ∀ {T : Ty} {v : Val} {d : Data}, Means lib T v d → ∃ n, Forces lib T v n
+  | _, _, _, .nat => ⟨0, .nat⟩
+  | _, _, _, .bool => ⟨0, .bool⟩
+  | _, _, _, .bytes => ⟨0, .bytes⟩
+  | _, _, _, .digest => ⟨0, .digest⟩
+  | _, _, _, .record hu hr => by
+    obtain ⟨n, hu'⟩ := unrolls_unknots hu
+    obtain ⟨m, hr'⟩ := rowMeans_forcesRow hr
+    exact ⟨n + m, .record hu' hr'⟩
+  | _, _, _, .inj hf hm => by
+    obtain ⟨n, h⟩ := means_forces hm
+    exact ⟨n, .sum hf h⟩
 
-theorem extractArm_forces : ∀ (row : List (Label × Ty)) {ℓ : Label} {fuel left : Nat} {w : Val} {d : Data},
-    (Machine.mk lib).extractArm row ℓ fuel w = .ok (d, left) →
-      ∃ A, Row.find? ℓ row = some A ∧ ∃ n, Forces lib A w n
-  | [], _, _, _, _, _, h => by simp [Machine.extractArm] at h
-  | (k, A) :: row, ℓ, _, _, _, _, h => by
-    simp only [Machine.extractArm] at h
-    split at h
-    · exact ⟨A, by simp [Row.find?, *], extract_forces A h⟩
-    · obtain ⟨B, hB, hf⟩ := extractArm_forces row h
-      exact ⟨B, by simp [Row.find?, *], hf⟩
+theorem rowMeans_forcesRow : ∀ {row : List (Label × Ty)} {fs : List (Label × (Term × Env))}
+    {ds : List (Label × Data)}, RowMeans lib row fs ds → ∃ n, ForcesRow lib row fs n
+  | _, _, _, .nil => ⟨0, .nil⟩
+  | _, _, _, .cons hb hm hr => by
+    obtain ⟨n, hd⟩ := bigStep_derives hb
+    obtain ⟨m, hf⟩ := means_forces hm
+    obtain ⟨k, hr'⟩ := rowMeans_forcesRow hr
+    exact ⟨n + m + k, .cons hd hf hr'⟩
+end
 
-theorem extractRow_forces : ∀ (row : List (Label × Ty)) {fuel left : Nat}
-    {fs : List (Label × (Term × Env))} {ds : List (Label × Data)},
-    (Machine.mk lib).extractRow row fuel fs = .ok (ds, left) → ∃ n, ForcesRow lib row fs n
-  | [], _, _, [], _, _ => ⟨0, .nil⟩
-  | [], _, _, _ :: _, _, h => by simp [Machine.extractRow] at h
-  | _ :: _, _, _, [], _, h => by simp [Machine.extractRow] at h
-  | (ℓ, A) :: row, fuel, left, (ℓ', (t, env)) :: fs, ds, h => by
-    simp only [Machine.extractRow] at h
-    split at h
-    · rename_i hl
-      subst hl
-      split at h
-      · rename_i v1 f1 hfo
-        split at h
-        · rename_i d f2 hx
-          split at h
-          · rename_i ds' f3 hrest
-            obtain ⟨n, hd⟩ := force_derives hfo
-            obtain ⟨m, hf⟩ := extract_forces A hx
-            obtain ⟨k, hr⟩ := extractRow_forces row hrest
-            exact ⟨n + m + k, .cons hd hf hr⟩
-          · cases h
-        · cases h
-      · cases h
-    · cases h
+mutual
+/-- **A `Forces` size has a meaning**: what extraction forces with sizes at a type, the value means. -/
+theorem forces_means : ∀ {T : Ty} {v : Val} {n : Nat}, Forces lib T v n → ∃ d, Means lib T v d
+  | _, _, _, .nat => ⟨_, .nat⟩
+  | _, _, _, .bool => ⟨_, .bool⟩
+  | _, _, _, .bytes => ⟨_, .bytes⟩
+  | _, _, _, .digest => ⟨_, .digest⟩
+  | _, _, _, .record hu hr => by
+    obtain ⟨ds, h⟩ := forcesRow_rowMeans hr
+    exact ⟨_, .record (unknots_unrolls hu) h⟩
+  | _, _, _, .sum hf h => by
+    obtain ⟨d, hm⟩ := forces_means h
+    exact ⟨_, .inj hf hm⟩
+
+theorem forcesRow_rowMeans : ∀ {row : List (Label × Ty)} {fs : List (Label × (Term × Env))} {n : Nat},
+    ForcesRow lib row fs n → ∃ ds, RowMeans lib row fs ds
+  | _, _, _, .nil => ⟨[], .nil⟩
+  | _, _, _, .cons hd hf hr => by
+    obtain ⟨d, hm⟩ := forces_means hf
+    obtain ⟨ds, hr'⟩ := forcesRow_rowMeans hr
+    exact ⟨_, .cons (derives_bigStep hd) hm hr'⟩
 end
 
 
