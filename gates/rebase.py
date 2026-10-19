@@ -27,8 +27,8 @@ base is the main copy this one took (B0's), not HEAD's, so the lander's own edit
 INPUT KEYS. A judged unit's verdict may be carried from the lander's previous judge to its re-based
 candidate only when the unit's input key is byte-identical (ROOT 10-19; design §2c). A key is a
 SHA-256 over what the unit can read, over-approximated where that is not known:
-- `run:EXE` (a gates/runs.tsv verdict row, its control with it): the row's text, every tree path that
-  is neither a `.lean` source nor under DOC_ALLOW (data the run may open: world/, deploy/, gates/*.tsv,
+- `run:EXE` (a gates/runs.tsv verdict row, its control with it): the row's text, the NAMES of the
+  `.lean` and DOC_ALLOW paths (a tree walk lists them: GATES-8), every other tree path's bytes (data the run may open: world/, deploy/, gates/*.tsv,
   the runner, the scripts, the Rust tree, lean-toolchain, the lakefile), the bytes of EVERY executable
   in the built bin directory, and the Python and rustc versions. Every binary, not the exe's own: a
   verdict exe may drive any other (the rows exe runs `lake exe NAME` for its rows; store-plants runs
@@ -157,7 +157,7 @@ DOC_ALLOW = doc_allow()
 # exactly what gates/size.py writes from them (`SIZE.md is not the generated view` otherwise), so a key
 # over the rest already determines it. It is outside every key; every landing changes it.
 DERIVED = ("SIZE.md",)
-KEY_VERSION = b"GATES-19 input key v1"
+KEY_VERSION = b"GATES-19 input key v2 (GATES-8: names of doc and .lean paths)"
 
 
 def listing(path: str) -> list[tuple[str, str, str]]:
@@ -181,8 +181,12 @@ def digest(*parts: str | bytes) -> str:
 
 
 def paths_digest(ls: list[tuple[str, str, str]], lean: bool) -> str:
-    keep = sorted(f"{m} {o} {p}" for m, o, p in ls
-                  if not p.startswith(DOC_ALLOW) and p not in DERIVED and (lean or not p.endswith(".lean")))
+    """Every path's mode, blob and name, except: a DOC_ALLOW path, and (lean=False) a .lean source, by
+    NAME and mode only. A tree walk sees names without reading contents (cargo:devtools:workspace stats
+    every entry under the root, decisions/ included: GATES-8's trace), so an add or a remove re-keys
+    while a prose edit still reuses. SIZE.md (DERIVED) not at all."""
+    keep = sorted(f"{m} name {p}" if p.startswith(DOC_ALLOW) or (not lean and p.endswith(".lean")) else f"{m} {o} {p}"
+                  for m, o, p in ls if p not in DERIVED)
     return digest("\n".join(keep))
 
 

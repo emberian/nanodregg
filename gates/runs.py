@@ -149,6 +149,11 @@ def check(t: tree.Tree) -> list[str]:
         if not os.path.isfile(os.path.join(t.root, crate, "tests", test + ".rs")):
             red.append(f"{RUNS} row {k}: no {crate}/tests/{test}.rs")
         red += [f"{RUNS} row {k}: drives {e}, which is no lean_exe" for e in rows[k][0][0] if e not in exes]
+        red += [f"{RUNS} row {k}: {f} names lean_exe {e}, which its drives column omits (a drive no row "
+                f"declares selects nothing: declare it, GATES-8)"
+                for e, f in sorted(named_exes(t, crate, test).items()) if e not in rows[k][0][0]]
+    if cargo:
+        red += no_second_door(t.root)
     if cargo and not any(rows[k][2] == "nobin RED" for k in cargo):
         red.append(f"{RUNS}: no cargo row has the control `nobin RED`, so nothing proves the cargo reader reads a failure")
     return red
@@ -166,13 +171,71 @@ def data_paths(root: str, changed: list[str]) -> list[str]:
     return [x for x in changed if not x.endswith(".lean") and x != "SIZE.md" and not (allow and x.startswith(allow))]
 
 
+# A module that spawns a process (`IO.Process.spawn`/`output`/`run`): Ops.Plants runs {host}, and
+# Protocol.Rows.Run runs `lake exe NAME` for names its row files hold. Read on the blanked code, so a
+# comment or a string naming it does not count.
+SPAWN = re.compile(r"\bIO\.Process\b|\bProcess\.(?:spawn|output|run)\b")
+
+
+def reach(t: tree.Tree, e: str) -> set[str]:
+    """The modules whose change can move a run of exe `e`: its import closure, and, when that closure
+    holds a module that spawns a process, EVERY exe's closure (what it spawns is data, so it is taken
+    as every exe). GATES-8: store-plants (runs {host}) and rows (runs `lake exe lang-journey`) were
+    selected by their own closure only; ten of main's last 150 landings changed a module only a driven
+    binary links and judged pre-push GREEN without the run (standing was the backstop)."""
+    c = t.closure([t.exes[e]])
+    if any(SPAWN.search(t.modules[m].code) for m in c if m in t.modules):
+        return set().union(*(t.closure([r]) for r in t.exes.values()))
+    return c
+
+
+def named_exes(t: tree.Tree, crate: str, test: str) -> dict[str, str]:
+    """lean_exe -> the first file that resolves it through the one door, `devtools::lean_bin("NAME")` or
+    `lean_bin_in(DIR, "NAME")` (no_second_door keeps it the one), over the cargo test's sources:
+    CRATE/tests/TEST.rs, CRATE/tests/common/ when it says `mod common`, and CRATE/src/. What a test may
+    run, over-approximated by what its sources resolve (GATES-8: the resident rows ran hosting-residents
+    through tests/common, undeclared, so a change only it links selected neither)."""
+    first = os.path.join(crate, "tests", test + ".rs")
+    files = [first]
+    body = open(os.path.join(t.root, first), encoding="utf-8").read()
+    dirs = [os.path.join(crate, "src")] + ([os.path.join(crate, "tests", "common")]
+                                           if re.search(r"(?m)^\s*(?:pub\s+)?mod common\b", body) else [])
+    for d in dirs:
+        for top, _, names in sorted(os.walk(os.path.join(t.root, d))):
+            files += sorted(os.path.relpath(os.path.join(top, n), t.root) for n in names if n.endswith(".rs"))
+    out: dict[str, str] = {}
+    for f in files:
+        text = open(os.path.join(t.root, f), encoding="utf-8").read()
+        for e in sorted(t.exes):
+            if re.search(r"\blean_bin(?:_in\s*\([^()]*?,|\s*\()\s*\"" + re.escape(e) + r"\"\s*\)", text):
+                out.setdefault(e, f)
+    return out
+
+
+def no_second_door(root: str) -> list[str]:
+    """named_exes reads the lean_bin door only, so a Rust file outside devtools/src that reaches the
+    Lean bin directory itself (the `"ND_LEAN_BIN"` variable or a `".lake/build/bin` path, as string
+    literals) is a drive no scan sees: RED."""
+    red = []
+    for top, dirs, names in os.walk(root):
+        dirs[:] = sorted(d for d in dirs if not d.startswith(".") and d != "target")
+        for n in sorted(names):
+            f = os.path.relpath(os.path.join(top, n), root)
+            if n.endswith(".rs") and not f.startswith("devtools/src/"):
+                text = open(os.path.join(root, f), encoding="utf-8", errors="replace").read()
+                if '"ND_LEAN_BIN"' in text or '".lake/build/bin' in text:
+                    red.append(f"{f}: reaches the Lean bin directory itself; resolve a Lean exe with "
+                               f"devtools::lean_bin(NAME), the door gates/runs.py reads drives from (GATES-8)")
+    return red
+
+
 def selected(t: tree.Tree, changed: list[str] | None, rows: dict) -> set[str]:
     cargo = {k: rows[k][0][0] for k in rows if k.startswith("cargo:")}
     script = {k for k in rows if k.startswith("script:")}
     if changed is None or data_paths(t.root, changed):
         return set(t.exes) | set(cargo) | script
     mods = {p[:-5].replace("/", ".") for p in changed if p.endswith(".lean")}
-    out = {e for e, r in t.exes.items() if t.closure([r]) & mods}
+    out = {e for e in t.exes if reach(t, e) & mods}
     return out | script | {k for k, drives in cargo.items()
                   if set(drives) & out or any(p.startswith(k.split(":")[1] + "/") for p in changed)}
 
@@ -188,7 +251,7 @@ def standing_selected(t: tree.Tree, changed: list[str] | None, rows: dict) -> di
         e = k.removeprefix(STANDING)
         if not k.startswith(STANDING):
             continue
-        hit = sorted(t.closure([t.exes[e]]) & mods) if e in t.exes else []
+        hit = sorted(reach(t, e) & mods) if e in t.exes else []
         if d or hit:
             out[k] = f"changed path {d[0]}" if d else f"changed module {hit[0]}"
     return out

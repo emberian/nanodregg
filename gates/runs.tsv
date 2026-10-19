@@ -1,6 +1,8 @@
 # exe	runs	pass — gates/runs.py: every lean_exe has one row. runs are argument lists separated by ` ; `
 # ({host} = the built host exe, {fresh} = a fresh directory); `-` = not a verdict exe (pass says why).
-# cargo:CRATE:TEST rows: a Rust integration test driving the named Lean exes (gates/runs.py).
+# cargo:CRATE:TEST rows: a Rust integration test driving the named Lean exes (gates/runs.py); the names are every exe
+# its sources may run: each `lean_bin("NAME")` in tests/TEST.rs, tests/common/ (when it says `mod common`) and src/ must be
+# named, or runs.py check is RED (GATES-8: an undeclared drive selected nothing).
 # their 4th column is the known-red control (GATES-15): `nobin RED` = with ND_LEAN_BIN an empty directory the test
 # must fail (it drives the exes it names); `nobin ok` = it runs no exe (it reads a generated table; the named exe only
 # selects it) and must pass without them. A Lean verdict row's 4th column is its known-red control: arguments with
@@ -29,14 +31,14 @@ emit-pins	-	a generator; gates/generated.tsv checks its output	-
 codec-vectors	-	a generator; gates/generated.tsv checks its output (a change of meaning under an unchanged tag is red, CODEC-28)	-
 live-calls	-	a generator of deploy/live/ inputs; deploy/live/harness.sh drives it against running units	-
 ob	-	LANG's resident check, an interactive tool: lang-journey and the rows drive the same code	-
-cargo:launcher:isolation	hosting-drive,hosting-controller	exit 0	nobin RED
+cargo:launcher:isolation	hosting-drive,hosting-controller,host,hosting-broker,hosting-residents	exit 0	nobin RED
 cargo:launcher:path_vectors	emit-hosting	exit 0	nobin ok
-cargo:launcher:broker	hosting-broker,host	exit 0	nobin RED
-cargo:launcher:resident	hosting-controller,hosting-broker,host,hosting-drive	exit 0	nobin RED
-cargo:launcher:grain	hosting-controller,host	exit 0	nobin RED
+cargo:launcher:broker	hosting-broker,host,hosting-residents	exit 0	nobin RED
+cargo:launcher:resident	hosting-controller,hosting-broker,host,hosting-drive,hosting-residents	exit 0	nobin RED
+cargo:launcher:grain	hosting-controller,host,hosting-broker,hosting-residents	exit 0	nobin RED
 cargo:launcher:sock	host-sock-probe	exit 0	nobin RED
-cargo:launcher:resident_bell	resident,hosting-controller,hosting-broker,host	exit 0	nobin RED
-cargo:launcher:members	hosting-residents,host	exit 0	nobin RED
+cargo:launcher:resident_bell	resident,hosting-controller,hosting-broker,host,hosting-residents	exit 0	nobin RED
+cargo:launcher:members	hosting-residents,host,hosting-broker	exit 0	nobin RED
 cargo:devtools:workspace	host	exit 0	nobin RED
 cargo:client:join	host	exit 0	nobin RED
 cargo:client:real	host	exit 0	nobin RED

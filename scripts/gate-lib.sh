@@ -39,7 +39,9 @@ lock() {
 # elsewhere); each slot is a directory with its own tree, base, .lake and cargo target. Sets G to
 # the slot directory; fd 9 holds the slot until this process exits (call it in the judging shell
 # itself, never in `$(…)`: a subshell's lock dies with the subshell). The first free slot is taken
-# at once; when all are busy, this process waits on one (pid mod N) for at most 30 min.
+# at once; when all are busy, this process tries every slot again each 5 s, for at most 30 min, and
+# takes whichever frees first. (It waited on one fixed slot, pid mod N, until GATES-8: a judge sat
+# ~10 min behind a busy slot while two others stood free, 10-18.)
 gate_slot() {
   flock_or_refuse || return 1
   local n k
@@ -47,14 +49,21 @@ gate_slot() {
   if [ -z "$n" ]; then
     if [ "$(git -C "$repo" config --bool nanodregg.landing || true)" = true ]; then n=4; else n=1; fi
   fi
-  for k in $(seq 1 "$n"); do
-    exec 9> "$common/nanodregg-gate-$k.flock"
-    if flock -n 9; then G=$common/nanodregg-gate-$k; return 0; fi
+  local end=$(( $(date +%s) + 1800 )) said=
+  while :; do
+    for k in $(seq 1 "$n"); do
+      exec 9> "$common/nanodregg-gate-$k.flock"
+      if flock -n 9; then
+        G=$common/nanodregg-gate-$k
+        [ -z "$said" ] || echo "gate: slot $k freed; judging in it" >&2
+        return 0
+      fi
+    done
+    exec 9>&-
+    [ "$(date +%s)" -lt "$end" ] || { echo "gate: every judge slot busy for 30 min; refusing" >&2; return 1; }
+    [ -n "$said" ] || { echo "gate: all $n judge slots busy; waiting for the first to free (30 min)" >&2; said=1; }
+    sleep 5
   done
-  k=$(( $$ % n + 1 ))
-  exec 9> "$common/nanodregg-gate-$k.flock"
-  flock -w 1800 9 || { echo "gate: every judge slot busy for 30 min; refusing" >&2; return 1; }
-  G=$common/nanodregg-gate-$k
 }
 
 # lean_targets DIR: every lean_lib and lean_exe name in DIR's lakefile.lean.
