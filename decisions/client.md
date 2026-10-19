@@ -991,3 +991,12 @@ Mutations, each red: kept-file read unchecked; key-file read unchecked; the exis
 - Nothing persisted changes.
 
 **Status.** landed (this commit).
+
+## CLIENT-31 · nd-members refuses at start a socket root its residents' sockets would not fit in sun_path; the name and path bounds are emitted (2026-10-20, CLIENT-9; CLIENT-8 item 10, ROOT ruling)
+**The gap.** `Hosting.Proofs.Plan.sockets_fit` proves that every socket a resident gets fits sun_path (107 bytes), for every grain name of at most 64 bytes, under the DEPLOYED roots. nd-members takes MEMBER and FOLLOW as arguments, though, and checked no length. A root that is too long showed up per resident: the bind fails, `refusedAtLaunch` follows, and then `memberCrashLoop`. That fails closed, but under a misleading name and only once a resident exists. The Rust side also wrote the 64 as a literal in `grain_name_ok`.
+**Decision.**
+- `Emit.Broker` now emits `GRAIN_NAME_MAX` (`Codec.Path.componentMax`) and `SOCK_PATH_MAX` (`Hosting.sockPathMax`) into broker_generated.rs. `grain_name_ok` reads `GRAIN_NAME_MAX`, and `sockets_fit`'s premise is `n.size ≤ componentMax`, so the theorem and both Rust readers share one number.
+- At start, after the directory checks, nd-members refuses `memberRoot` / `followRoot` (codes unchanged) when `ROOT/<GRAIN_NAME_MAX bytes>/SOCK` would pass `SOCK_PATH_MAX`. The stderr line gives the length. The Ops sentences for both codes name the case (EXITS.md mirrored).
+**Plant.** `members.rs nd_members_ends_by_name`: for each of MEMBER and FOLLOW, a root one byte too long is refused by name, with `socket path 108 bytes` on its line. CONTROL: at exactly 107 bytes the roots pass, and the run ends at its decider (`/usr/bin/false` → `deciderMechanism`). Both mutations are red: L1 (no check) and L2 (`>=` for `>`).
+**Critique.** The socket names `nd.sock` and `follow.sock` are still literals in nd-members (Lean's `memberSock`/`followSock` are ByteArrays, and the tagged emitter carries only numbers). The check assumes the longest name and does not measure the names answered. That is the right side to err on, since a name is at most GRAIN_NAME_MAX by `grain_name_ok`.
+**Size.** nd-members 623 → 639 (ROOT ruling). Status: landed (this commit).

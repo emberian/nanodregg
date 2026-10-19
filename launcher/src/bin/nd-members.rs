@@ -39,7 +39,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Command, ExitCode, Stdio};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use nanodregg_launcher::broker_generated::{RESIDENTS_MAX, decider_exit, members_exit as exit};
+use nanodregg_launcher::broker_generated::{GRAIN_NAME_MAX, RESIDENTS_MAX, SOCK_PATH_MAX};
+use nanodregg_launcher::broker_generated::{decider_exit, members_exit as exit};
 use nanodregg_launcher::residents::{self, DeciderEnd};
 use nanodregg_launcher::{grain_name_ok, pairwise_apart};
 use nanodregg_sandbox::custody;
@@ -174,6 +175,21 @@ fn run() -> End {
     }
     if let Err(e) = custody::check_private_dir(&follow) {
         return root("followRoot", exit::FOLLOW_ROOT, &follow, &e);
+    }
+    // ROOT/<name>/SOCK for the longest grain name must fit sun_path (Lean's sockets_fit, any root)
+    for (n, c, r, sock) in [
+        ("memberRoot", exit::MEMBER_ROOT, &member, "nd.sock"),
+        ("followRoot", exit::FOLLOW_ROOT, &follow, "follow.sock"),
+    ] {
+        let len = r.as_os_str().len() + GRAIN_NAME_MAX as usize + sock.len() + 2;
+        if len > SOCK_PATH_MAX as usize {
+            return root(
+                n,
+                c,
+                r,
+                &format!("socket path {len} bytes > {SOCK_PATH_MAX}"),
+            );
+        }
     }
     // the stdio child writes MEMBERS/<n> and the follower STATE/<n>/store: nested roots would put a
     // Store in a workspace (or a socket directory in either), so they must be disjoint trees

@@ -552,9 +552,9 @@ an end: a name in the journal, `memberMissing` / `socketDirShared` / `memberCras
 and that resident unbound while the others are served). Exhaustive. -/
 def membersAction : MembersExit → String
   | .usage => "the unit's argv does not parse: compare ExecStart with this unit's rendered argv"
-  | .memberRoot => "MEMBER (/run/nd-member) is not nd's 02710 directory with a StrictModes-clean chain (fix the tmpfiles line, RUNBOOK §2b), or the decider answered a name that is not a grain directory name (a defect: report to HOSTING)"
+  | .memberRoot => "MEMBER (/run/nd-member) is not nd's 02710 directory with a StrictModes-clean chain (fix the tmpfiles line, RUNBOOK §2b), or is so long that a resident's socket path would pass sun_path's 107 bytes (the stderr line gives the length; use /run/nd-member), or the decider answered a name that is not a grain directory name (a defect: report to HOSTING)"
   | .membersRoot => "MEMBERS (/srv/nd-members/L/members) is not a 0700 nd directory with a clean chain (RUNBOOK §2b)"
-  | .followRoot => "FOLLOW (/run/nd-member-follow) is not a 0700 nd directory with a clean chain: fix the tmpfiles line (RUNBOOK §2b)"
+  | .followRoot => "FOLLOW (/run/nd-member-follow) is not a 0700 nd directory with a clean chain, or is so long that a follower's socket path would pass sun_path's 107 bytes (the stderr line gives the length): fix the tmpfiles line (RUNBOOK §2b)"
   | .fdLimit => "RLIMIT_NOFILE is below the fds each resident's nd-supervise may hold (73 at CONNECTIONS_MAX 64): set the unit's LimitNOFILE to at least the M in the stderr line"
   | .deciderRefused => "the sandbox refused the decider's policy, or it could not be spawned: check the mechanism (deploy/live/README.md) and the decider path"
   | .pidFile => "a PID file in PIDS could not be written: check the unit's RuntimeDirectory"

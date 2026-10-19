@@ -248,10 +248,11 @@ theorem bytes_size (p : Path) : (Path.bytes p).size = p.textBytes := by
     omega
 
 /-- **Every socket a resident's processes connect to fits `sun_path`** (HOST-52: `pathTooLong` at
-108), for every grain directory name the launcher accepts (`grain_name_ok`: at most 64 bytes) and
+108), for every grain directory name the launcher accepts (`grain_name_ok`: at most `componentMax` = 64 bytes, emitted as
+`GRAIN_NAME_MAX`, beside `sockPathMax` as `SOCK_PATH_MAX`) and
 every label: no socket root holds a label, so no label can push one past the bound. The longest is
 the follower's, 98 bytes at 64. -/
-theorem sockets_fit (n : ByteArray) (hn : n.size ≤ 64) :
+theorem sockets_fit (n : ByteArray) (hn : n.size ≤ Codec.Path.componentMax) :
     (brokerRoot ++ [n, brokerSock]).textBytes ≤ sockPathMax ∧
       (memberRoot ++ [n, memberSock]).textBytes ≤ sockPathMax ∧
       (followSockRoot ++ [n, followSock]).textBytes ≤ sockPathMax := by
@@ -264,7 +265,7 @@ theorem sockets_fit (n : ByteArray) (hn : n.size ≤ 64) :
   have h7 : followSock.size = 11 := by decide
   simp only [brokerRoot, memberRoot, followSockRoot, Path.textBytes, List.cons_append,
     List.nil_append, List.map_cons, List.map_nil, List.sum_cons, List.sum_nil, h1, h2, h3, h4, h5,
-    h6, h7, sockPathMax]
+    h6, h7, sockPathMax, Codec.Path.componentMax] at hn ⊢
   omega
 
 /-- A label is at most `componentMax` (64) bytes: one clean component. Every path rendered from

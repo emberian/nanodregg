@@ -133,7 +133,7 @@ pub fn foreign_path<'a>(
 /// premise where the bytes enter rather than trusting it.
 pub fn grain_name_ok(g: &[u8]) -> bool {
     !g.is_empty()
-        && g.len() <= 64
+        && g.len() <= broker_generated::GRAIN_NAME_MAX as usize
         && g.iter()
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || *b == b'-')
 }

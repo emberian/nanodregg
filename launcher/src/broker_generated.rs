@@ -2,6 +2,8 @@
 
 pub const FRAME_MAX: u32 = 131072;
 pub const RESIDENTS_MAX: u32 = 1024;
+pub const GRAIN_NAME_MAX: u32 = 64;
+pub const SOCK_PATH_MAX: u32 = 107;
 
 /// Why a frame could not be read or written (the pipe framing: `u32le len ‖ payload`,
 /// `1 <= len <= FRAME_MAX`).

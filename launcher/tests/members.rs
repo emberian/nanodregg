@@ -28,6 +28,7 @@ use nanodregg_client::generated::{command_exit, follow_op, status};
 use nanodregg_client::{frame, table};
 use nanodregg_devtools::{lean_bin, nd, nd_supervise};
 use nanodregg_launcher::broker_generated::wire::Verdict;
+use nanodregg_launcher::broker_generated::{GRAIN_NAME_MAX, SOCK_PATH_MAX};
 use nanodregg_launcher::broker_generated::{decider_exit, members_exit, write_frame};
 
 /// nd-members' argv over `w` and `r`, serving uid `peer`, with `decider` and its arguments: the
@@ -757,6 +758,75 @@ fn nd_members_ends_by_name() {
         fs::set_permissions(&root, fs::Permissions::from_mode(was)).unwrap();
         assert_eq!(c, Some(i32::from(code)), "{name}: {l}");
         assert!(l.contains(name), "{name}: {l}");
+    }
+    // a socket root so long that ROOT/<64-byte name>/SOCK would pass sun_path is refused at start, by
+    // name and length, never per resident (bind → refusedAtLaunch → memberCrashLoop); CONTROL: at
+    // exactly SOCK_PATH_MAX the roots pass and the run ends at its decider (/usr/bin/false)
+    for (short, code, name, sock) in [
+        (
+            r.member.0.clone(),
+            members_exit::MEMBER_ROOT,
+            "memberRoot",
+            "nd.sock",
+        ),
+        (
+            r.follow.0.clone(),
+            members_exit::FOLLOW_ROOT,
+            "followRoot",
+            "follow.sock",
+        ),
+    ] {
+        for over in [1, 0] {
+            let want = SOCK_PATH_MAX as usize + over;
+            // a sibling of the short root, named to make the root exactly want - 2 - name - sock
+            let target = want - (GRAIN_NAME_MAX as usize + sock.len() + 2);
+            let (parent, base) = (short.parent().unwrap(), short.file_name().unwrap());
+            let n = target - parent.as_os_str().len() - 1;
+            assert!(
+                n >= base.len(),
+                "plant: {} is past the root being planted",
+                short.display()
+            );
+            let mut leaf = base.to_owned();
+            leaf.push("l".repeat(n - base.len()));
+            let long = parent.join(leaf);
+            let made = long != short;
+            if made {
+                fs::create_dir(&long).unwrap();
+                let mode = fs::metadata(&short).unwrap().permissions().mode() & 0o7777;
+                fs::set_permissions(&long, fs::Permissions::from_mode(mode)).unwrap();
+            }
+            assert_eq!(long.as_os_str().len(), target);
+            let a = argv(&w, &r, me, Path::new("/usr/bin/false"), &[]);
+            let args: Vec<std::ffi::OsString> = a
+                .get_args()
+                .map(|x| {
+                    if x == short.as_os_str() {
+                        long.clone().into()
+                    } else {
+                        x.to_owned()
+                    }
+                })
+                .collect();
+            let (l, c) = ends(Command::new(a.get_program()).args(&args));
+            if made {
+                fs::remove_dir(&long).unwrap();
+            }
+            if over == 1 {
+                assert_eq!(c, Some(i32::from(code)), "{name} too long: {l}");
+                assert!(
+                    l.contains(&format!("{name} "))
+                        && l.contains(&format!("socket path {want} bytes")),
+                    "{l}"
+                );
+            } else {
+                assert_eq!(
+                    c,
+                    Some(i32::from(members_exit::DECIDER_MECHANISM)),
+                    "{name} at the bound: {l}"
+                );
+            }
+        }
     }
     // STATE inside MEMBERS: a follower Store would sit in a workspace the stdio child writes
     let inner = r.members().join("state");

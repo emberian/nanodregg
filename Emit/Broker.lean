@@ -1,6 +1,7 @@
 import Emit.Rust
 import Hosting.BrokerWire
 import Hosting.BrokerExit
+import Hosting.Plan
 
 /-!
 # Emit.Broker — the Rust copy of the provider-key broker's frames
@@ -11,7 +12,9 @@ ask, keybroker's decide request, the decider's verdict and keybroker's answer
 `wire::Request`, `wire::Verdict` and `wire::Answer`, with `FRAME_MAX` (`Broker.Bounds.frameMax`, the
 frame and every field bound) and the refusal table as `wire::BrokerRefusal`, and keybroker's own
 exit codes as `keybroker_exit`, its decider's as `decider_exit` (`Hosting.BrokerExit`, HOSTING-16) and
-nd-members' as `members_exit` (HOSTING-30, CLIENT-29), with `RESIDENTS_MAX` (`Broker.Bounds.residentsMax`). It is a second file beside
+nd-members' as `members_exit` (HOSTING-30, CLIENT-29), with `RESIDENTS_MAX` (`Broker.Bounds.residentsMax`),
+`GRAIN_NAME_MAX` (`Codec.Path.componentMax`, a grain directory name's bound) and `SOCK_PATH_MAX`
+(`Hosting.sockPathMax`, sun_path's: nd-members refuses a socket root its residents' sockets would pass). It is a second file beside
 `generated.rs` because one tagged file carries one bound, and Hosting.Wire's is 4096.
 -/
 
@@ -20,7 +23,8 @@ namespace Nanodregg.Emit.Broker
 open Nanodregg.Hosting.Broker
 
 def file : Except String String :=
-  Rust.taggedFile "Hosting/BrokerWire.lean" [("FRAME_MAX", Bounds.frameMax), ("RESIDENTS_MAX", Bounds.residentsMax)] Bounds.frameMax
+  Rust.taggedFile "Hosting/BrokerWire.lean" [("FRAME_MAX", Bounds.frameMax), ("RESIDENTS_MAX", Bounds.residentsMax),
+     ("GRAIN_NAME_MAX", Codec.Path.componentMax), ("SOCK_PATH_MAX", Hosting.sockPathMax)] Bounds.frameMax
     [("Ask", Wire.askCases), ("Request", Wire.requestCases), ("Verdict", Wire.verdictCases),
      ("Answer", Wire.answerCases)]
   |>.map (· ++ "\n" ++ Rust.byteModule "keybroker_exit" Hosting.KeybrokerExit.all (fun e => e.code.toUInt8) ++
