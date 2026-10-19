@@ -771,3 +771,48 @@ the next step, which a real `invoke` sequence need not match (its cell's slot li
 differently); it now takes key-wise equal slots. Recorded, not acted on: the self-deposit (critique 3).
 **Nothing moves.** No wire, vector, shipped text or package byte; `escrow` is the same value;
 world/escrow untouched. ledger-sim 1 ALL PASS; --harness-control RED (1).
+
+## LEDGER-15 · The one-payout theorem over the history the World admits: KERNEL's next-run link turns an admitted history around one object into a `Runs` (LEDGER-6, 2026-10-21; on KERNEL-23's 5807a47 and 628a8b9)
+**Decision.** `Ledger.Proofs.EscrowInvokes.escrow_invokes_one_payout`: for a lawful `Ctx` whose program is
+`Lang.program` over its own codec, every `Invokes X obj pkg escrow w invs` has `payoutCalls invs ≤ 1`;
+`escrow_invokes_deployed` at `Host.Deployed.X`, premise only the history. `Invokes X obj pkg p w` is a
+history of admitted turns around one object, each step one of:
+- `invoke`: a signed top-level invoke of `obj`. Its premises are `receive X w c = .ok t`,
+  `World.admit X.env w t = .ok w'`, `c.unsigned.body = .invoke obj …`, `invokeRun … = .ok (cell, pkg, r)`,
+  `readPackage (pinned X.env w c.unsigned.pins) pkg = .ok p`, and the program's run on `stateOf cell` at
+  `min budget (poolOf …)` returning `calls`, which are counted.
+- `other`: any admitted turn that neither touches nor creates `obj` (`∀ x ∈ t.touches, x.cell ≠ obj`,
+  `obj ∉ createdIds t`). It runs no method of `obj`, and nothing is counted.
+
+`invokes_runs` shows such a history is a `Runs` (LEDGER-14) from the state the object holds. Each link
+is a KERNEL lemma:
+- `admit_frame`: an `other` turn leaves the object's entry;
+- `invokeRun_live`: an invoke runs on the live cell;
+- `invoke_next_judged`: the judge admitted the run;
+- `invoke_next_slots`: the next live state holds the run's slots key by key.
+
+This closes LEDGER-14 critique (2) for top-level invokes.
+**Teeth** (EscrowWitness, node's program, kernel-evaluated):
+- `escrow_link_bites`: the witness's release from `held` is a successful run that the judge admits and
+  that returns a payout. Taken twice on the same `held` slots it would pay twice; only the next-state
+  link rules that out (what it wrote differs from what it read at the phase key).
+- `escrow_second_release_refused`: the judge's half of the same point.
+**Read.** Second-agent vacuity read with the disjunct check: nothing vacuous; no new disjunctions;
+axioms propext, Classical.choice, Quot.sound. It found and I fixed: the first draft allowed only
+consecutive top-level invokes of `obj` (any interleaved turn broke the chain), so the `other` step was
+added; the header named a tooth that did not exist. It flagged, and KERNEL-23 closed in 628a8b9
+(Kernel/Proofs/InvokeWitness.lean): nothing showed `receive` + `World.admit` ever accept an invoke of
+a programmed object, which `invoke_next_*`'s premises (and so `Invokes.invoke`'s) needed.
+**Critique.**
+(1) No escrow-specific `Invokes.invoke` witness. KERNEL's witness is the `counter` package. An admitted
+escrow release needs its transfer derived (an account, a funded balance, the payout once key). It is
+cv 01a1553b-2765, sequenced after KERNEL-28's amount right, which changes the grants and the
+transfer's derivation. The `Runs` it reduces to is witnessed (`escrow_runs_witness`).
+(2) A turn that touches `obj` other than as its top-level invoke is not a step. That includes an
+invoke of `obj` nested in another object's call tree (KERNEL's cv 01a15430-0f62) and any other touch;
+a history containing one is not an instance.
+(3) `readPackage` per invoke stays a premise. Which package the object runs is the statement's
+subject; that the package cell never changes is KERNEL's (ROM), not composed.
+(4) The self-deposit remark of LEDGER-14 (3) stands.
+**Nothing moves.** No wire, vector, shipped text or package byte. ledger-sim 1 ALL PASS; --harness-control
+RED (1).

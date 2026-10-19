@@ -11,6 +11,8 @@ the premise is met and the bound attained, by kernel reduction, not by a sim. On
 * `escrow_second_release_refused` (tooth): releasing again from the `released` slots is still a
   successful run returning a payout; the judge refuses every transition out of those slots. The
   bound is the judge's.
+* `escrow_link_bites` (tooth): the admitted release from `held`, repeated on the same `held` slots,
+  would pay twice; only the link (the next run reads what the last wrote) rules it out.
 
 How the kernel reaches it: `load` is mutual well-founded recursion (`load`/`loadAll`,
 `termination_by`), which `decide +kernel` cannot unfold, and decoding the package bytes in the
@@ -223,5 +225,30 @@ theorem escrow_second_release_refused : ∃ (look : Pinned Codec.Digest) (rv : R
     simp [payoutCalls, isPayoutCall]
   · intro laws new r' hj
     exact escrow_judge_settled (fun d => Codec.Deployed.digestOf_bytes d) hread hs2 (.inl ⟨_, rfl⟩) hj
+
+/-- **Tooth for the link: an admitted payout step repeated is two payouts.** The witness's release
+(from `held`, by the depositor) is a successful run of the node's program that the judge admits and
+that returns a payout; taken twice, as a sequence whose second step reads the same `held` slots
+again, it would pay twice. What rules that sequence out of `Runs` is the link alone: the slots the
+first release wrote are not, key by key, the slots the second reads (they differ at the phase). So
+`Runs`' `∀ k, next.get k = s.get k` (KERNEL's `invoke_next_run` for admitted invokes) is not idle. -/
+theorem escrow_link_bites : ∃ (look : Pinned Codec.Digest) (rv : RowView Codec.Digest) (pkg : Codec.Digest)
+    (state s : Slots) (args : ByteArray) (r : Req Codec.Digest) (calls : List (Body Codec.Digest))
+    (rows : List (RowSlot Codec.Digest × RowAct)) (used : Nat),
+    readPackage look pkg = .ok escrow ∧
+    (Codec.Deployed.ctx (Lang.program Codec.Digest.bytes Codec.Digest.ofBytes?)).program.run look rv pkg state
+      release args r 100000 = .ok (s, calls, rows, used) ∧
+    (Codec.Deployed.ctx (Lang.program Codec.Digest.bytes Codec.Digest.ofBytes?)).program.judge look (some pkg)
+      [] state s r = .ok () ∧
+    payoutCalls [calls, calls] = 2 ∧ ¬ ∀ k, state.get k = s.get k := by
+  obtain ⟨c, w, u, h⟩ := run_ok run2
+  refine ⟨look, noRows, pid, slotsAt "held", slotsAt "released", a2, r2, c, w, u, hread, h, judge2, ?_, ?_⟩
+  · obtain ⟨_, _, _, _, _, _, _, _, _, _, hx⟩ := escrow_run_deployed hread h
+    rcases hx with ⟨h, -⟩ | ⟨h, -⟩ | ⟨-, -, _, -, rfl⟩ <;> try cases h
+    simp [payoutCalls, isPayoutCall]
+  · intro hk
+    have := hk (stateBase + 6)
+    revert this
+    decide +kernel
 
 end Nanodregg.Ledger.Proofs
