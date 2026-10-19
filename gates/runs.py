@@ -72,7 +72,7 @@ its reach and by a change its read-set touched; a row with none falls to the sta
 (fail-closed). A lander's verdict is carried under the traced key of its own previous run's read-set
 when that key is byte-identical on the candidate. Standing (--standing) re-traces every row and reads
 RED when a fresh read-set exceeds the stored one under an equal key, and reports reads outside the
-tree (F2; RED is GATES-20b).
+tree (F2; RED is GATES-20c).
 Prints one `  run <exe> <args>: <verdict>` line per run and
 `runs: ok|RED|KILLED(load)|UNREAD(timeout)|INCOMPLETE`; exits 0, 1, 76 (killed or timed out twice,
 nothing red: not judged) or 3 (incomplete, nothing red, killed or timed out).
@@ -664,13 +664,18 @@ def main() -> int:
             report(exe, [] if exe.startswith("cargo:") else args, v, out)
         ok_all = bool(lines) and all(v.startswith("ok") for _, v in lines)
         rs = readset.union(TRACING["sets"]) if TRACING["strace"] else None
+        if TRACING["strace"] and rs is None:
+            # GATES-20d: a run whose trace could not be read: the static rules apply to this row, and
+            # standing's re-trace check cannot run on it (standing counts these lines: INCOMPLETE).
+            print(f"  untraced {exe}: no read-set ({readset.WHY[0] if readset.WHY else 'a run held none'}); "
+                  f"the static rules apply")
         line = row_line(t.root, a.table, exe)
         tk = readset.key(rs, t.root, line) if rs and line else None
         if rs and a.traces:
             o = {c: n for c, n in rs["outside"].items() if c in ("tmp", "home")}
             if o:
                 print(f"  outside {exe}: " + ", ".join(f"{c} {n}" for c, n in sorted(o.items()))
-                      + " (F2: reported; RED is GATES-20b)")
+                      + " (F2: reported; RED is GATES-20c)")
             # The stored read-sets VALID on this tree: each one's own key, re-computed here, equals the key
             # it was stored under (a run on this tree consults exactly what it consulted there).
             same = [rec for k2, rec in readset.stored(a.traces, exe)
@@ -678,7 +683,7 @@ def main() -> int:
             if a.standing:
                 # The re-trace check: under an equal key a fresh read-set lies inside the stored one.
                 for rec in same:
-                    bad = readset.subset_violation(rs, rec.get("readset") or {"T": [], "L": [], "X": []})
+                    bad = readset.subset_violation(rs, rec.get("readset") or {"T": [], "L": [], "X": []}, t.root)
                     if bad:
                         report(exe, [], f"RED(trace: the run {bad}, which a stored read-set valid on this tree "
                                         f"omits: a forged or narrowed record, a nondeterministic run, or an input no "

@@ -56,7 +56,8 @@ if [ "$build" = ok ]; then
   # runs: every verdict exe as gates/runs.tsv says (sims, journeys, rows, plants), gates/runs.py.
   # --standing: the `standing:` rows (minutes-long benches) run here and nowhere else (GATES-17)
   # GATES-20: every run traced; the re-trace check reds a fresh read-set the stored one (same key) omits;
-  # reads outside the tree are REPORTED (`outside=N` below; RED is GATES-20b, trigger: the census sorted).
+  # reads outside the tree are REPORTED (`outside=N` below; RED is GATES-20c, trigger: the census sorted);
+  # a row whose trace could not be read (`untraced=N`, GATES-20d) leaves its re-trace unjudged: INCOMPLETE.
   wrapped python3 "$T/gates/runs.py" "$T" --standing --waste-out "$G/waste.measured" \
     --traces "$common/nanodregg-traces" --tree-oid "$(git -C "$repo" rev-parse "$sha^{tree}")" > "$G/runs.out" 2>> "$log"; rc=$?
   cat "$G/runs.out" >> "$log"
@@ -76,6 +77,7 @@ fi
 unpinned=$(grep -c '^unpinned' "$log" || true)
 outside=$(grep -c '^  outside ' "$G/runs.out" 2>/dev/null || true)
 traced=$(grep -q '^  trace: strace unavailable' "$G/runs.out" 2>/dev/null && echo untraced || echo traced)
+untraced=$(grep -c '^  untraced ' "$G/runs.out" 2>/dev/null || true)
 # GREEN only when every stage is the verdict `ok` and no ceiling is unmeasured; any stage that is
 # RED makes the line RED; anything else (ABSENT, INCOMPLETE, or a value that is not a verdict) is
 # INCOMPLETE.
@@ -88,7 +90,8 @@ for v in "$gates" "$build" "$census" "$runs" "$wastev"; do
   esac
 done
 [ $verdict = GREEN ] && [ "$unmeasured" -gt 0 ] && verdict=INCOMPLETE
-line="STANDING ${sha:0:12} gates=$gates build=$build census=$census runs=$runs waste=$wastev(pinned $waste, unpinned $unpinned) unmeasured=$unmeasured outside=${outside:-0}($traced) => $verdict"
+[ $verdict = GREEN ] && [ "${untraced:-0}" -gt 0 ] && verdict=INCOMPLETE
+line="STANDING ${sha:0:12} gates=$gates build=$build census=$census runs=$runs waste=$wastev(pinned $waste, unpinned $unpinned) unmeasured=$unmeasured outside=${outside:-0}($traced) untraced=${untraced:-0} => $verdict"
 echo "$line" | tee -a "$G/verdicts.log"
 echo "log: $log"
 [ "$verdict" = RED ] && exit 1
