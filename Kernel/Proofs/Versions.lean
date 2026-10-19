@@ -1250,7 +1250,7 @@ private def dCheck : Bool :=
 private theorem dCheck_true : dCheck = true := by decide +kernel
 
 /-- Every row touch of an admitted turn passed `rowStep` on the rows it was judged on. -/
-private theorem foldRows_each {E : Env D} {w : World D} {t : Turn D} :
+theorem foldRows_each {E : Env D} {w : World D} {t : Turn D} :
     ∀ (l : List (RowTouch D)) (acc rr : Rows D × Nat), l.foldlM (rowStepFreed E w t) acc = .ok rr →
       ∀ x ∈ l, ∃ r r', rowStep E w t r x = .ok r'
   | [], _, _, _, x, hx => by simp at hx
@@ -1265,7 +1265,7 @@ private theorem foldRows_each {E : Env D} {w : World D} {t : Turn D} :
       · exact foldRows_each rest acc' rr h2 x hx
 
 /-- A row touch under a parent that is not live is refused before its pin is read. -/
-private theorem rowStep_dead {E : Env D} {w : World D} {t : Turn D} {r : Rows D} {x : RowTouch D}
+theorem rowStep_dead {E : Env D} {w : World D} {t : Turn D} {r : Rows D} {x : RowTouch D}
     {key : RowKey D} (hx : x.slot = .row key) (hl : w.live E key.parent = none) :
     rowStep E w t r x = .error (.rowParentUnpinned key.parent) ∨
       rowStep E w t r x = .error (.orphanRow key.parent) := by
@@ -1279,7 +1279,7 @@ private theorem rowStep_dead {E : Env D} {w : World D} {t : Turn D} {r : Rows D}
     simp [req, ht, bind, Except.bind]
 
 /-- A row touch under a parent that is not live: no turn naming it is admitted. -/
-private theorem admit_dead {E : Env D} {w w' : World D} {t : Turn D} {key : RowKey D}
+theorem admit_dead {E : Env D} {w w' : World D} {t : Turn D} {key : RowKey D}
     (hl : w.live E key.parent = none) (hx : ∃ x ∈ t.rows, x.slot = .row key) :
     World.admit E w t ≠ .ok w' := by
   intro h

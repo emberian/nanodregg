@@ -1706,7 +1706,7 @@ Without the record, a stale call would stay `open` for ever, and the budget row 
 
 **Critique.**
 - `staleBehind`'s premise, "the pins are the planning World's", is the planner's own: follow does not re-check it. A forged call signed with the member's stolen key, with an AHEAD pin and a low `notBefore`, would settle `refused` while it could still land. That is outside the model (a stolen key), and it is stated.
-- `refused staleCode` (the BEHIND arm) is final by fold structure, not yet final by theorem: the composed statement waits on KERNEL-56 (cv 01a15038). It is fail-safe meanwhile: `settleOf_stale` (said only of a `staleBehind` call) and `settleOf_admissible_open` (never said where `submit` admits the call) mean an unproved finality can only leave an attempt open.
+- `refused staleCode` (the BEHIND arm) was final by fold structure, not yet by theorem, when this landed; it is final BY THEOREM since PROTOCOL-57 (`staleBehind_final`, below). It is fail-safe meanwhile: `settleOf_stale` (said only of a `staleBehind` call) and `settleOf_admissible_open` (never said where `submit` admits the call) mean an unproved finality can only leave an attempt open.
 - The composed finality theorem (behind ⇒ no later World admits) is NOT stated here. It would rest on `Kernel.stale_behind_forever`, whose `∨ Collision E.hash` is vacuous by pigeonhole (KERNEL-21's finding; KERNEL-56 restates it as `CollidesAmong`). It lands when that statement does, with the five receipt theorems (cv 01a15038-6d1e).
 - Partner hunks: the client's drive bound and test are CLIENT-8's (agreed), in this patch; LANG's arity and floor hunks are in KERNEL-21's assembled tree.
 
@@ -1776,3 +1776,25 @@ The writer's fact was masked by custody's reason (law 7).
 - ROOT accepted this deviation (2026-10-20, PROTOCOL-19's landing); HOSTING-12 agreed the `launcher/tests/members.rs` assertion change.
 - The plant `maskIncoming` cuts in in the harness, so it shows the row's line 6 tells the two outcomes apart; what guards `step` itself is the row's unplanted expectation and the two theorems above.
 - (b), the stdio custody answering `signIncoming` with `notArmed`, is truer at the source. But it is a client line at the ceiling, and it would leave any other custody refusal masking.
+
+## PROTOCOL-57 · a call refused stale BEHIND is never admitted later: the settlement's `refused staleCode` is final by theorem (2026-10-21, PROTOCOL-19; cv 01a15187; KERNEL-23 agreed the kernel statement)
+
+**The gap.** PROTOCOL-52 settled a member's call `refused staleCode` when follow's own fold says it is stale BEHIND, and called that final "by fold structure, not yet by theorem". Nothing proved that no later World admits it.
+
+**Decision.** Two theorems and the facts under them.
+- `Kernel.admit_stale_pin` (Kernel/Proofs/StaleOnly.lean): `World.admit` refuses `.stale y` only where a pin of the turn disagrees with the World: a touch's cell pin at `y`, a pinned row touch under `y`, or a range read under `y`. It is the converse of `stale_refused`, `rows_stale_refused` and `range_stale_refused`. `.stale` is built at three places only; `StaleOnly P x` (every `.stale y` refusal of `x` satisfies `P y`) shows every other check never yields it.
+  - Each disjunct is live: `stale_pin_cell_live`, `stale_pin_row_live` and `stale_pin_range_live` are three concrete turns, each refused `stale 7` with exactly its own disjunct holding.
+  - The tooth `admit_not_stale`: a turn whose every pin agrees is never refused `stale`.
+- `staleBehind_final` (Protocol/Proofs/Behind.lean). Its premises:
+  - the W0 premise: `plan X me w₀ key b = .ok u`, `c.unsigned = u`;
+  - the fold `w₀ → w → w'`, with `w₀`'s invariants (`CellsFit`, `RowsCanon`, `RowsOk`, each kept from genesis by fold);
+  - `staleBehind X me w c`.
+  Its conclusion: no `submit X w' c` is ok, or `CollidesAmong X.env.hash (behindPres X.env w₀ w' u)`. `behindPres` is an explicit list: each pinned cell's `pinPre` at `w₀` and `w'`, and each pinned row's `rowPre` at both.
+  - `_sep`: where the hash separates that list, never admitted.
+- `plan_pins`: every cell pin `plan` signs is `pinOf` of the planning World, every row pin is `rowPinAt`, and it signs no range. So the range disjunct is closed structurally, until plan signs ranges (the plan-side gap's second half). `receive_pins`: a Turn derived from the call at ANY World checks every one of its pins.
+- `Kernel/Proofs/Versions.lean`: `foldRows_each`, `rowStep_dead` and `admit_dead` lose `private`; their statements are unchanged. A row pin's retired-parent disjunct ends in `admit_dead`.
+
+**Critique.**
+- The collision set is the union over every pin of the call. The proof uses only the stale pin's pair, so `_sep`'s premise is stronger than a per-pin form. It is still a collision on concrete inputs the two Worlds hold.
+- `w₀` is not required to be reachable from genesis. Its invariants are premises, and each has a genesis and fold propagator.
+- Once `plan` signs range pins, the range case needs `range_stale_behind_forever` in place of `u.ranges = []`.

@@ -820,6 +820,17 @@ def staleBehind (X : Ctx D) (me : Self D) (w : World D) (c : Call D) : Bool :=
       | _ => false
     | .error _ => false
 
+/-- The pin preimages the BEHIND finality names: for every cell the call pins, its entry's pin
+input at the planning World and at the later one; for every row it pins, its row pin input at
+both. An explicit list: a collision among these is a collision of the deployed hash on inputs the
+two Worlds hold. -/
+def behindPres (E : Env D) (w₀ w' : World D) (u : Unsigned D) : List (String × ByteArray) :=
+  u.pins.flatMap (fun p => [pinPre E (w₀.entry E p.1), pinPre E (w'.entry E p.1)]) ++
+    u.rowPins.flatMap fun p => match p.1 with
+      | .row key => [rowPre (headFloor E w₀.rows key.parent key.rel) (rowAt E w₀.rows (.row key)),
+          rowPre (headFloor E w'.rows key.parent key.rel) (rowAt E w'.rows (.row key))]
+      | .head .. => []
+
 /-- The member's settlement of a call on follow's World: the receipt's answer, the journal's
 reach, follow's own fold's `staleBehind` (KERNEL-54) and the window (`Settle.ofReceipt`). -/
 def settleOf (X : Ctx D) (me : Self D) (w : World D) (c : Call D) : Settle.Verdict D :=
