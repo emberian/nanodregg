@@ -24,7 +24,9 @@ without the data, as `Derives` is `BigStep` with sizes (`means_forces` and
   own result type, the MEANING of the method application `apply4 g ℓ` under the loaded closure
   `L.lib`, in the run's environment (the request, arguments, state and rows data the setup read);
   its calls are `callsOf` of that meaning's `calls` field, its `state` field is a record conforming
-  to the package's state row whose `stateSlots` there are the slots the run returned.
+  to the package's state row whose `stateSlots` there are the slots the run returned, and which
+  those slots read back to under a codec that reads its own ids back. Tooth
+  `reads_back_needs_ids`: without that codec premise a written digest field does not read back.
 * `relib_apply4`: what the method application means does not depend on the closure beyond the
   package body: two libs holding one `NoRef` body at their indices give `apply4 g ℓ` and
   `apply4 g' ℓ` one meaning over every no-ref environment (`toVal4_noRef`: the receiver's is one).
@@ -55,6 +57,7 @@ import Lang.Proofs.Agree
 import Lang.Proofs.CallLive
 import Lang.Proofs.Receiver
 import Lang.Proofs.Canon
+import Lang.Proofs.Provenance
 
 namespace Nanodregg.Lang
 
@@ -353,9 +356,10 @@ resolved the method, read the state, decoded the arguments and built the rows; t
 `apply4 g ℓ`, in the environment of those, means a value `v` (`BigStep`); the result extracted at the
 method's own result type is `v`'s meaning there; the calls are `callsOf` of its `calls` field; its
 `state` field is a record `ds` conforming to the package's state row, and the slots the run returned
-are what `stateSlots` writes of `ds` there. `readState_go_stateSlots` reads them back to `ds` given
-one more fact this does not state: every digest in `ds` passes `digestsOk` (the run does not
-check it; that a run's digests come only from its checked inputs and literals is unproved). -/
+are what `stateSlots` writes of `ds` there, and under a codec that reads its own ids back they READ
+BACK, at that row, to `ds` (`readState_go_stateSlots`; every digest of the result is accepted:
+`runSetup_accepted_of`, Lang.Proofs.Provenance), so the next run of the object reads the state this
+one wrote. -/
 theorem runMeasured_means {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D}
     {look : Pinned D} {rv : RowView D} {pkg : D} {state : Slots} {method : Nat} {args : ByteArray}
     {r : Req D} {budget : Nat} {s : Slots} {calls : List (Body D)} {rows : List (RowSlot D × RowAct)}
@@ -372,7 +376,9 @@ theorem runMeasured_means {bytesOf : D → ByteArray} {digestOf : ByteArray → 
       Means L.lib (resultTy p.state x.2.calls (editTy p.rels) x.2.edits) v
         (.record [("calls", c), ("edits", e), ("state", .record ds)]) ∧
       callsOf digestOf c = .ok calls ∧ stateSlots (recordRow p.state) ds 0 = some s ∧
-      RowConforms ds (recordRow p.state) := by
+      RowConforms ds (recordRow p.state) ∧
+      ((∀ x, (digestOf (bytesOf x)).isSome = true) →
+        readState digestOf (recordRow p.state) s = .ok (.record ds)) := by
   unfold runMeasured at h
   simp only [bind, Except.bind, pure, Except.pure] at h
   split at h
@@ -384,10 +390,17 @@ theorem runMeasured_means {bytesOf : D → ByteArray} {digestOf : ByteArray → 
   all_goals first | (simp at h; done) | skip
   simp only [Except.ok.injEq, Prod.mk.injEq] at h
   obtain ⟨rfl, rfl, -, -, -⟩ := h
-  rename_i hext _ _ hss _ _ _ _ _ _ _ _ _
+  rename_i _ _ hrun _ _ _ _ _ hext _ _ hss _ _ _ _ _ _ _ _ _
   have hm := extract_means _ _ hext
-  exact ⟨L, g, p, (ℓ, sg), sd, ad, wd, _, _, _, _, hl, hp, hres, hsd, had, hwd, run_bigStep (by assumption),
-    hm, by assumption, hss, stateSlots_conforms _ _ _ _ (means_state_labels hm) hss⟩
+  have hc := stateSlots_conforms _ _ _ _ (means_state_labels hm) hss
+  refine ⟨L, g, p, (ℓ, sg), sd, ad, wd, _, _, _, _, hl, hp, hres, hsd, had, hwd, run_bigStep hrun,
+    hm, by assumption, hss, hc, fun hdig => ?_⟩
+  have hacc := runSetup_accepted_of hdig hS hrun hext
+  have hgo := readState_go_stateSlots (digestOf := digestOf) _ _ 0 _ [] hc hss (by simp)
+    (List.all_eq_true.mpr fun b hb => hacc b (by
+      simp only [Data.digests, Data.rowDigests, List.mem_append, List.append_nil]
+      exact .inr (.inr hb)))
+  simpa [readState] using hgo
 
 end
 
@@ -730,6 +743,14 @@ theorem run_state_tooth :
       stateSlots [("a", .nat)] [("a", .nat Bounds.natLimit)] 0 = none ∧
       ∃ s, stateSlots [("a", .nat)] [("a", .nat 1)] 0 = some s :=
   ⟨.record .record (.cons .nat .nat .nil), by decide, ⟨_, rfl⟩⟩
+
+/-- **Tooth** (for `runMeasured_means`' read-back conjunct): its premise, a codec that reads its own
+ids back, is needed: a digest field `stateSlots` writes, read by a decoder that names no id, is
+refused, so the slots do not read back. -/
+theorem reads_back_needs_ids :
+    ∃ s, stateSlots [("a", .digest)] [("a", .digest (ByteArray.mk #[1]))] 0 = some s ∧
+      readState (D := Unit) (fun _ => none) [("a", .digest)] s = .error "state field a: not a digest" :=
+  ⟨_, rfl, rfl⟩
 
 /-! ## Teeth -/
 

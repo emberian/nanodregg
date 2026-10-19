@@ -2653,3 +2653,23 @@ first (the doctrine prefers deleting a twin); the merge deletes no theorem a bri
 every consumer a field; the bridge plus the deleted duplicate walk is the deletion that matters.
 
 **Nothing moves.** No wire, vector, shipped text or required step.
+
+## LANG-63 The slots a run writes read back to the state it extracted (2026-10-21; LANG-22; corrects LANG-62's critique; cv 01a153b1-dc52)
+**Why.** LANG-62 said that the written state passing `digestsOk` was unproved. That was wrong. LANG-41
+(`Lang/Proofs/Provenance.lean`) proves that no primitive makes a digest, and that every digest of a
+run's extracted result is one `digestOf` accepts under a codec that reads its own ids back
+(`runSetup_accepted_of`). It was private, and LANG-62 did not compose it.
+**What.** `runSetup_accepted_of` is now public. `runMeasured_means` gains a final conjunct:
+`(∀ x, (digestOf (bytesOf x)).isSome = true) → readState digestOf (recordRow p.state) s = .ok (.record ds)`.
+The proof composes `stateSlots_conforms`, `runSetup_accepted_of` and `readState_go_stateSlots`. The
+next run of the object therefore reads the state this run wrote. The premise is the codec law
+(`Ctx.Lawful.digestOf_bytes` implies it), and it sits inside the conjunct, so `runMeasured_means` still
+takes no premise. `Lang/Proofs/Extract.lean` now imports `Lang.Proofs.Provenance`.
+**Tooth.** `reads_back_needs_ids`: a digest field that `stateSlots` writes, read by a decoder that
+names no id, is refused (`state field a: not a digest`). So the codec premise is not idle.
+**Read.** A second-agent vacuity read with the disjunct check found nothing vacuous. There is no
+disjunction. The premise is satisfiable (EscrowRun's `hdig` implies it). The conclusion is about the
+run's own `s` and `ds`, and needs the run's own setup, run and extraction. The tooth is honest about
+the component: it shows the `readState` step needs the premise. It does not show a whole run under
+an unlawful codec writing an unreadable state; that run-level tooth is optional and not done.
+**Nothing moves.** No wire, vector, shipped text or required step.

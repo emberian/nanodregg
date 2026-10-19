@@ -195,7 +195,7 @@ theorem escrow_run_calls (hdig : ∀ x, digestOf (bytesOf x) = some x)
     (hpkg : readPackage look pkg = .ok escrow)
     (h : runMeasured bytesOf digestOf look rv pkg state method args r budget = .ok (s, calls, rows, t, n)) :
     RunCalls digestOf state method args r.self calls := by
-  obtain ⟨L, g, p, x, sd, ad, wd, v, c, e, ds, hl, hp, hres, hsd, had, -, hb, hm, hc, -, -⟩ := runMeasured_means h
+  obtain ⟨L, g, p, x, sd, ad, wd, v, c, e, ds, hl, hp, hres, hsd, had, -, hb, hm, hc, -, -, -⟩ := runMeasured_means h
   obtain ⟨hpe, f, hlib⟩ := load_top bytesOf digestOf (fuel := closureDepthMax - 1) (hdig pkg) hpkg hl
   rw [hp] at hpe
   cases hpe

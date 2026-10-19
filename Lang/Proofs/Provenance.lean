@@ -849,7 +849,7 @@ theorem runSetup_sources {look : Pinned D} {rv : RowView D} {pkg : D} {state : K
 checks, the rows by `readsData`'s `checked` (`readsData_digests`), the closure's literals by
 `checkLits` at load, and the request's ids because they are the World's own (`hdig`, the World's
 codec reads its ids back). So every digest a method run returns is one `digestOf` accepts. -/
-private theorem runSetup_accepted_of (hdig : ∀ x, (digestOf (bytesOf x)).isSome = true) {look : Pinned D}
+theorem runSetup_accepted_of (hdig : ∀ x, (digestOf (bytesOf x)).isSome = true) {look : Pinned D}
     {rv : RowView D} {pkg : D}
     {state : Kernel.Slots} {method : Nat} {args : ByteArray} {r : Req D} {S : RunSetup}
     {budget used fuel left : Nat} {v : Val} {d : Data}
