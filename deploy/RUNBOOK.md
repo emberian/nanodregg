@@ -389,6 +389,13 @@ hidden path is `layoutMissing` at start, `pathMissing` at a launch, then `crashL
 makes it. Since HOSTING-32 the hosted tree holds no member workspace: those are nd's, under
 `/srv/nd-members/L` (§2b, provisioning).
 
+A grain refused `crashLoop` (`restartsMax` = 5 exits inside `restartWindowMs` = 60 s) is relaunched by the
+controller BY ITSELF once 60 s have passed since those exits, with no owner act: grain-launch reports its
+clock every second (`tick`, `tickMs` = 1000; HOSTING-38). Fix the cause (for example a missing path, or
+nd-members not yet serving the grain's member socket), then wait one window. An owner's stop and start is
+no longer needed. While the cause stands, the grain retries in a burst of 5 once per window. Upgrade
+grain-launch and the controller together: a controller without `tick` refuses it `badReport`.
+
 ## 3. Status — RAN
 
     host check STORE
