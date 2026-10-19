@@ -288,6 +288,197 @@ theorem carry_receive [DecidableEq D] {X : Ctx D} {name nonce : ByteArray} {w w'
   obtain ⟨_, rfl⟩ := carry_ok.mp h
   exact receive_reorigin (w := w) hc
 
+/-! ### The call's own world field (KERNEL-40)
+
+`receive_reorigin` is about the World's origin. The call's own `Unsigned.world` is, after a carry,
+the NEW origin, so a derivation that recomputed an id from it (`founderId X c.unsigned.world i`)
+would still pass `carry_receive`, whose two sides take the same call. Past the `wrongWorld` check,
+the derivation reads the call's world only through the call's two encodings: `callBytes` (the
+transaction id, so the births' ids, the event and its weight) and `unsignedBytes` (the signed
+message). Fix those two values to the call's own and give the call any other world: the result is
+the same, refusal or Turn. The tooth `receiveWith_world_sep` is the hazard: a key rule that reads
+the signer's id as `founderId X c.unsigned.world 0` makes the same statement false. -/
+
+omit [Ord D] in
+private theorem dispatch_world [DecidableEq D] (X : Ctx D) (U : Unsigned D → ByteArray) (look : Pinned D)
+    (rv : RowView D) (c : Call D) (o : D) (sub : Sub D) :
+    dispatch X look rv c sub =
+      dispatch { X with callBytes := fun _ => X.callBytes c, unsignedBytes := U } look rv
+        { c with unsigned := { c.unsigned with world := o } } sub := by
+  funext wk a b
+  cases b <;> rfl
+
+omit [Ord D] in
+private theorem tree_world [DecidableEq D] (X : Ctx D) (U : Unsigned D → ByteArray) (look : Pinned D)
+    (rv : RowView D) (c : Call D) (o : D) (n : Nat) :
+    tree X look rv c n =
+      tree { X with callBytes := fun _ => X.callBytes c, unsignedBytes := U } look rv
+        { c with unsigned := { c.unsigned with world := o } } n := by
+  induction n with
+  | zero => rfl
+  | succ n ih =>
+    funext wk obj b
+    simp only [tree]
+    rw [ih, dispatch_world X U look rv c o]
+
+private theorem deriveTurn_world' [DecidableEq D] (X : Ctx D) (U : Unsigned D → ByteArray) (look : Pinned D)
+    (rv : RowView D) (c : Call D) (o : D) :
+    deriveTurn X look rv c =
+      deriveTurn { X with callBytes := fun _ => X.callBytes c, unsignedBytes := U } look rv
+        { c with unsigned := { c.unsigned with world := o } } := by
+  unfold deriveTurn derive
+  rw [tree_world X U look rv c o, dispatch_world X U look rv c o]
+  rfl
+
+/-- **The derived Turn reads the call's world only through `callBytes`.** With `callBytes` fixed to
+the call's own bytes, the call given any other world derives the same Turn or the same refusal:
+no receiver of the call's tree reads `c.unsigned.world`. -/
+theorem deriveTurn_world [DecidableEq D] (X : Ctx D) (look : Pinned D) (rv : RowView D) (c : Call D) (o : D) :
+    deriveTurn X look rv c =
+      deriveTurn { X with callBytes := fun _ => X.callBytes c } look rv
+        { c with unsigned := { c.unsigned with world := o } } :=
+  deriveTurn_world' X X.unsignedBytes look rv c o
+
+/-- **`receiveWith` reads the call's world only through the call's two encodings.** With
+`callBytes` and `unsignedBytes` fixed to the call's own, the call given any other world is derived
+the same, signature check, key rule and tree: `receiveWith`'s own body reads the world only in
+the bytes the signature covers and the transaction id hashes. (The views `receive` hands it are
+`rowView_world`'s and `carry_receive_world`'s.) -/
+theorem receiveWith_world [DecidableEq D] (X : Ctx D) (look : Pinned D) (rv : RowView D) (c : Call D) (o : D) :
+    receiveWith X look rv c =
+      receiveWith
+        { X with
+          callBytes := fun _ => X.callBytes c
+          unsignedBytes := fun _ => X.unsignedBytes c.unsigned }
+        look rv { c with unsigned := { c.unsigned with world := o } } := by
+  unfold receiveWith
+  rw [deriveTurn_world' X (fun _ => X.unsignedBytes c.unsigned) look rv c o]
+  rfl
+
+/-- **The row view is blind to the call's world**: `rowView` reads the caller's row pins and
+ranges, never `Unsigned.world` (`pinned` reads only the pins, which a world update keeps). -/
+theorem rowView_world [DecidableEq D] (E : Env D) (w : World D) (u : Unsigned D) (o : D) :
+    rowView E w { u with world := o } = rowView E w u := rfl
+
+/-- **A carry changes no derivation but the call's bytes** (KERNEL-40, end to end). The carried
+World derives a call naming its new origin exactly as the exported World derives the same call
+naming the OLD origin, with the call's two encodings fixed to the new call's own. So nothing on the
+receive path, the pinned view and the row view included, reads the world the call names but the
+`wrongWorld` check and the bytes. -/
+theorem carry_receive_world [DecidableEq D] {X : Ctx D} {name nonce : ByteArray} {w w' : World D}
+    (h : carry X name nonce w.origin w.carried = .ok w') {c : Call D} (hc : c.unsigned.world = w'.origin) :
+    receive X w' c =
+      receive
+        { X with
+          callBytes := fun _ => X.callBytes c
+          unsignedBytes := fun _ => X.unsignedBytes c.unsigned }
+        w { c with unsigned := { c.unsigned with world := w.origin } } := by
+  rw [carry_receive h hc, receiveWith_world X _ _ c w.origin, receive_named rfl, rowView_world]
+  rfl
+
+/-! #### Tooth: a derivation that recomputes an id from the call's world
+
+`leakyReceiveWith` is `receiveWith` with the hazard: its key rule looks the signer up at
+`founderId X c.unsigned.world 0`. On one toy context (a byte-sum hash, no pins, every signature
+verifying) its two sides refuse `unpinned` at the founder ids of worlds 0 and 1, which differ, so
+`receiveWith_world`'s statement is false for it. Toy parameters only. -/
+
+private def leakyKeyRule [DecidableEq D] (X : Ctx D) (look : Pinned D) (u : Unsigned D) : Except (Refusal D) Unit :=
+  match u.body with
+  | .rotate _ _ => .ok ()
+  | _ => checkKey look { u with member := founderId X u.world 0 }
+
+private def leakyReceiveWith [DecidableEq D] (X : Ctx D) (look : Pinned D) (rv : RowView D) (c : Call D) :
+    Except (Refusal D) (Turn D) := do
+  checkSignature X c
+  leakyKeyRule X look c.unsigned
+  deriveTurn X look rv c
+
+private def wCtx : Ctx UInt8 where
+  env :=
+    { hash := fun d b => UInt8.ofNat (d.length + b.size + (b.data.toList.map UInt8.toNat).sum)
+      bytes := fun d => ⟨#[d]⟩
+      turnBytes := fun _ => ByteArray.empty
+      cellBytes := fun _ => ByteArray.empty }
+  unsignedBytes _ := ByteArray.empty
+  callBytes _ := ByteArray.empty
+  decodeCall _ := none
+  digestOf _ := none
+  verify _ _ _ := true
+  program :=
+    { checkInstall := fun _ _ => .ok ()
+      judge := fun _ _ _ _ _ _ => .ok ()
+      run := fun _ _ _ s _ _ _ _ => .ok (s, [], [], 0)
+      rels := fun _ _ _ => .ok [] }
+
+private def wLook : Pinned UInt8 := fun i => .error (.unpinned i)
+
+private def wRv : RowView UInt8 := ⟨fun _ _ => [], fun _ _ => .ok []⟩
+
+private def wCall : Call UInt8 :=
+  { unsigned :=
+      { world := 0, member := 9, key := ByteArray.empty, notBefore := 0, validUntil := 1, pins := [],
+        maxCharge := 0, body := .revoke 3 }
+    signature := ByteArray.empty }
+
+private def unpinnedAt : Except (Refusal UInt8) (Turn UInt8) → Option UInt8
+  | .error (.unpinned i) => some i
+  | _ => none
+
+private theorem leaky_sides :
+    unpinnedAt (leakyReceiveWith wCtx wLook wRv wCall) = some (founderId wCtx 0 0) ∧
+      unpinnedAt (leakyReceiveWith
+        { wCtx with
+          callBytes := fun _ => wCtx.callBytes wCall
+          unsignedBytes := fun _ => wCtx.unsignedBytes wCall.unsigned }
+        wLook wRv { wCall with unsigned := { wCall.unsigned with world := 1 } }) =
+        some (founderId wCtx 1 0) ∧
+      founderId wCtx 0 0 ≠ founderId wCtx 1 0 := by
+  decide +kernel
+
+/-- **Tooth of `receiveWith_world`**: the statement is false for a derivation whose key rule reads
+the signer's id as `founderId X c.unsigned.world 0`. -/
+theorem receiveWith_world_sep :
+    ¬ ∀ (X : Ctx UInt8) (look : Pinned UInt8) (rv : RowView UInt8) (c : Call UInt8) (o : UInt8),
+      leakyReceiveWith X look rv c =
+        leakyReceiveWith
+          { X with
+            callBytes := fun _ => X.callBytes c
+            unsignedBytes := fun _ => X.unsignedBytes c.unsigned }
+          look rv { c with unsigned := { c.unsigned with world := o } } := by
+  intro h
+  obtain ⟨h0, h1, hne⟩ := leaky_sides
+  have := congrArg unpinnedAt (h wCtx wLook wRv wCall 1)
+  rw [h0, h1] at this
+  exact hne (Option.some.inj this)
+
+/-- `deriveTurn` with the hazard in the tree's half: it first reads the member cell at
+`founderId X c.unsigned.world 0`. -/
+private def leakyDeriveTurn [DecidableEq D] (X : Ctx D) (look : Pinned D) (rv : RowView D) (c : Call D) :
+    Except (Refusal D) (Turn D) := do
+  let _ ← readKind look (founderId X c.unsigned.world 0) kindMember
+  deriveTurn X look rv c
+
+private theorem leakyDerive_sides :
+    unpinnedAt (leakyDeriveTurn wCtx wLook wRv wCall) = some (founderId wCtx 0 0) ∧
+      unpinnedAt (leakyDeriveTurn { wCtx with callBytes := fun _ => wCtx.callBytes wCall } wLook wRv
+        { wCall with unsigned := { wCall.unsigned with world := 1 } }) = some (founderId wCtx 1 0) ∧
+      founderId wCtx 0 0 ≠ founderId wCtx 1 0 := by
+  decide +kernel
+
+/-- **Tooth of `deriveTurn_world`**: the statement is false for a derivation that reads a cell at
+`founderId X c.unsigned.world 0`. -/
+theorem deriveTurn_world_sep :
+    ¬ ∀ (X : Ctx UInt8) (look : Pinned UInt8) (rv : RowView UInt8) (c : Call UInt8) (o : UInt8),
+      leakyDeriveTurn X look rv c =
+        leakyDeriveTurn { X with callBytes := fun _ => X.callBytes c } look rv
+          { c with unsigned := { c.unsigned with world := o } } := by
+  intro h
+  obtain ⟨h0, h1, hne⟩ := leakyDerive_sides
+  have := congrArg unpinnedAt (h wCtx wLook wRv wCall 1)
+  rw [h0, h1] at this
+  exact hne (Option.some.inj this)
+
 /-- **Admission is blind to the origin and the chain.** -/
 theorem check_origin_blind [DecidableEq D] {E : Env D} {w : World D} {t : Turn D} {o ch : D} :
     check E { w with origin := o, chain := ch } t = check E w t := rfl
