@@ -19,8 +19,9 @@ The kernel never evaluates the package decoder or `Lang.load` (both well-founded
 `decide +kernel` on the decode of the empty package is stuck, measured). They enter through their
 equations (`Lang.Wire.decodePackage_eq_ok_iff`, `load`'s and `loadAll`'s unfoldings); every other
 step of both derivations, both runs, the law and both admissions is evaluated by the kernel. The
-encoder is evaluated once (`counter_encodes`, about 20 s of the module's ~25 s); the package cell's
-reads are closed by definitional unfolding, never by comparing its bytes.
+encoder is evaluated once (`counter_encodes`); the module's kernel time is about 22 s (hbox,
+`-Dprofiler=true`); the package cell's reads are closed by definitional unfolding, never by comparing
+its bytes (a 985-byte literal compare cost 60–120 s per theorem, measured).
 
 Toy, and only toy: the hash, so a pin binds nothing here, and `verify`. The program, the
 derivation, the sealing and the admission are the deployed definitions.
@@ -71,28 +72,30 @@ variable {D : Type} [Ord D] [DecidableEq D]
 
 omit [Ord D] in
 /-- `invoke` from its steps: the cell read, the run, its ticks, the state's form, the laws, the
-judgement, no calls returned. -/
-private theorem invoke_of {X : Ctx D} {look : Pinned D} {rv : RowView D} {c : Call D} {sub : Sub D}
+judgement, the count of the calls it returned, and their derivation (`rfl` when it returned none). -/
+theorem invoke_of {X : Ctx D} {look : Pinned D} {rv : RowView D} {c : Call D} {sub : Sub D}
     {wk : Walk D} {actor obj : D} {method : Nat} {args : ByteArray} {budget : Nat} {via : Option D}
-    {cell : Cell} {p : D} {r : Req D} {new : Slots} {used : Nat} {laws : List D}
+    {cell : Cell} {p : D} {r : Req D} {new : Slots} {calls : List (Body D)} {used : Nat} {laws : List D}
+    {out : Draft D × Walk D}
     (hv : obj ∉ wk.visited)
     (hr : invokeRun X look c actor obj method via = .ok (cell, p, r))
-    (hp : X.program.run look rv p (stateOf cell) method args r (min budget wk.pool) = .ok (new, [], [], used))
+    (hp : X.program.run look rv p (stateOf cell) method args r (min budget wk.pool) = .ok (new, calls, [], used))
     (hu : used ≤ min budget wk.pool) (hs : checkState (D := D) new = .ok ())
-    (hl : lawsOf X obj cell = .ok laws) (hj : X.program.judge look (some p) laws (stateOf cell) new r = .ok ()) :
-    invoke X look rv c sub wk actor obj method args budget via =
-      .ok (⟨[], writeOf obj (diffOps (stateOf cell) new), [], []⟩,
-        { wk with visited := obj :: wk.visited, pool := wk.pool - used }) := by
+    (hl : lawsOf X obj cell = .ok laws) (hj : X.program.judge look (some p) laws (stateOf cell) new r = .ok ())
+    (hcl : calls.length ≤ Bounds.callsMax)
+    (hd : deriveCalls sub obj ⟨[], writeOf obj (diffOps (stateOf cell) new), [], []⟩
+      { wk with visited := obj :: wk.visited, pool := wk.pool - used } calls = .ok out) :
+    invoke X look rv c sub wk actor obj method args budget via = .ok out := by
   unfold invoke
   have h0 : req (!wk.visited.contains obj) (Refusal.revisited obj) = (Except.ok () : Except (Refusal D) Unit) := by
     simp [req, hv]
   simp only [h0, hr, hp, hs, hl, hj, bind, Except.bind]
-  simp only [req, decide_eq_true hu, forEx, deriveCalls, List.foldlM_nil]
-  rfl
+  simp only [req, decide_eq_true hu, decide_eq_true hcl, forEx]
+  exact hd
 
 /-- `receive` of a signed invoke from its steps: the World, the signature, the member's key, and the
 invoke's Draft, sealed. -/
-private theorem receive_of {X : Ctx D} {w : World D} {c : Call D} {obj : D} {method : Nat}
+theorem receive_of {X : Ctx D} {w : World D} {c : Call D} {obj : D} {method : Nat}
     {args : ByteArray} {budget : Nat} {via : Option D} {d : Draft D} {wk : Walk D}
     (hw : c.unsigned.world = w.origin) (hs : checkSignature X c = .ok ())
     (hk : checkKey (pinned X.env w c.unsigned.pins) c.unsigned = .ok ())
@@ -253,7 +256,7 @@ private theorem c1_judge :
 private theorem c1_receive : receive wCtx w0 c1 = .ok t1 := by
   rw [receive_of rfl (of_isOkAs (by decide +kernel)) (of_isOkAs (by decide +kernel)) rfl
     (invoke_of (by decide) c1_invokeRun c1_run (by decide) (of_isOkAs (by decide +kernel))
-      (of_isOkAs (by decide +kernel)) c1_judge)]
+      (of_isOkAs (by decide +kernel)) c1_judge (by decide) rfl)]
   exact of_isOkAs (by decide +kernel)
 
 private theorem c1_admit : World.admit wCtx.env w0 t1 = .ok w1 := by
@@ -309,7 +312,7 @@ private theorem c2_judge :
 private theorem c2_receive : receive wCtx w1 c2 = .ok t2 := by
   rw [receive_of rfl (of_isOkAs (by decide +kernel)) (of_isOkAs (by decide +kernel)) rfl
     (invoke_of (by decide +kernel) c2_invokeRun c2_run (by decide) (of_isOkAs (by decide +kernel))
-      (of_isOkAs (by decide +kernel)) c2_judge)]
+      (of_isOkAs (by decide +kernel)) c2_judge (by decide) rfl)]
   exact of_isOkAs (by decide +kernel)
 
 private theorem c2_admit : World.admit wCtx.env w1 t2 = .ok w2 := by
