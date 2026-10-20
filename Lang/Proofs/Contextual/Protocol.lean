@@ -959,3 +959,10 @@ theorem nano_interp_runs (o : Oracle) {α : Type} (p : Prog α) (n : Nat) (es : 
 end Nano
 
 end Nanodregg.Lang.Contextual.Protocol
+
+/-- From-scratch consistency of fragment verdicts under declared read-set locality.
+Stein–Chang–Sridharan, Demanded Abstract Interpretation (2021), Thm.6.1, PDF p.10;
+Mokhov–Mitchell–Peyton Jones, Build Systems à la Carte (2018), Def.3.1 p.79:11.
+This original protocol result assumes Frag.ReadsOnly and agreement outside changed keys;
+the new Trace guard constructs its finite observation instead. No premise or name changed. -/
+add_decl_doc Nanodregg.Lang.Contextual.Protocol.repair_agrees_from_scratch

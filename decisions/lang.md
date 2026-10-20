@@ -3357,3 +3357,108 @@ passed an independent scoped build under 6G/two threads and default maxHeartbeat
 control/mutant outputs read whole and all ten saved source mutations inspected; the failures are
 semantic Lean failures, with no harness error. No theorem correction required. Finite-domain,
 nullable-model and refusal-safety limits above remain explicit.
+
+## LANG-P10 Declared verifying traces, complete observations and early cutoff (2026-10-20 real; CX-P10)
+**Decision.** A demonstration Mini can take. New Trace data/proof modules factor the existing
+candidate judgment through a finite observation: the guard's declared environment values,
+missing effective supports (including used context hypotheses), and live blockers.
+Guard.run receives only the projected values; it never receives the ambient environment.
+Guard.install constructs that interface. It is not an assertion that an arbitrary pre-existing
+opaque guard obeys a declaration. evaluate_observe identifies the entire verdict with the
+landed judge on this constructed interface, including typing, guard, blockers, supports and cost.
+
+Cached binds a candidate to its trace; Valid equates its stored status to evaluation of that
+trace. seed establishes Valid, refresh and repair preserve it, and from_scratch_consistency
+equates every resulting status with fresh judgment at the new world. These are exact values,
+not hashes, so there is no collision premise. Equal-valued edits are clean. repair_minimal
+identifies exactly the candidate indices with changed traces; repair_once makes the log Nodup.
+This is minimality relative to the declared reads and fixed candidate/interface/guard definitions,
+not synthesis of the globally smallest dependency set or a dynamic transitive scheduler.
+
+A pass separately records changed statuses. early_cutoff proves that a reader of a selected
+candidate's status is not dirtied when fresh judgment equals its previous status. Concrete
+sessions include a changed guard input with the same result, a changed result propagating to
+its reader, and a second pass that stays clean because the new trace was saved. Selection
+identity is fixed across this pass; the function does not choose alternatives or repair history.
+Clients reading behavior, cost, or choice changes need their corresponding Boundary observation.
+
+**Complete package observations.** checkedJudge collects every declared environment key,
+effective support and blocker before computing a verdict. Missing.environment / Missing.token
+are distinct refusals. A pinned-absent row is some false; an omitted pin is none. capture_sound
+and checkedJudge_sound assume only authenticity of PROVIDED observations, and derive agreement
+with the complete world's judgment; there is no complete-pin-set hypothesis. checkedJudge_total
+shows success is inhabited. This directly addresses the missing-negative-observation mechanism
+identified by the activities reader. The adapter is executable Lean; the concurrent Std.hole
+generator is not present on this worktree's main and does not yet call it. This change does not
+claim to repair that generator or establish its whole-Receive simulation. Its integration must
+preserve the omitted/pinned-absent distinction at the real row-view lookup boundary.
+
+**Literature.** Mokhov, Mitchell and Peyton Jones, Build Systems à la Carte (ICFP 2018),
+Def.2.1 p.79:3, Def.3.1 p.79:11, §4.2.2 pp.79:14–15:
+https://simon.peytonjones.org/assets/pdfs/build-systems-original.pdf .
+The guard construction strengthens the existing Protocol.Frag.ReadsOnly pattern by preventing
+undeclared reads at its interface. Static per-filling read sets are intentionally distinct from
+the paper's dynamic traces. Append-only add_decl_doc commands attach the requested literature
+to Candidate, box_ambient_free, reissue_never_reenables, and both repair_agrees_from_scratch
+theorems. The latter retain their names and explicitly say from-scratch consistency
+(Stein–Chang–Sridharan, PLDI 2021, Thm.6.1 PDF p.10).
+AGM recovery (1985 p.513, postulate −6) is rejected as a policy of recovery by identifier,
+not refuted mathematically: a re-versioned token is not AGM's same proposition.
+
+**Price premises.** Landed theorems gaining a hypothesis: none. Landed theorems restated: none.
+All landed declarations and proofs remain byte-identical; five old files receive only trailing
+documentation commands. New consistency statements price cache coherence, established by seed
+and preserved by repair. New checked-boundary statements price authenticity of supplied values,
+as the receiver already must; complete observation is established by collection, not assumed.
+No wire, Store, gate, pin, refusal or existing admission path changes. Four new modules.
+No foreign ownership path is edited; SIZE.md is the shared generated view.
+
+**Alternatives.** An annotation beside an arbitrary E -> Term -> Bool guard would merely move the
+old completeness premise into a law callers might never establish. The projected guard removes
+that escape. Defaulting absent supplied observations to false recreates the blocker omission
+defect. Hashing the observations adds collision assumptions without helping this bounded
+demonstration, so values remain exact. Comparing output statuses only would miss changed inputs
+and could reuse a stale success. Dirtying every reader on input change loses early cutoff.
+
+**Critique.** The trace declaration can overapproximate semantic dependencies: a guard may ignore
+one supplied value, and static typing failure may render guard/token values irrelevant. The
+minimality claim is about the declared task graph, not semantic optimality. Trace verification
+still scans declared reads, and the pass scans its candidate list; this is not an O(edited)
+reverse-indexed deployed scheduler. Candidate, guard or interface changes require reseeding;
+no self-tracking claim is made. There are no hole-to-hole support cycles here. Authentication
+of supplied observations must connect to real Receive pins before this adapter certifies a
+deployed package. All concrete teeth use the actual landed CMTT calculus.
+
+**Meta-critique.** The tempting shortcut was to rename locality as minimality, or call an
+extra equality hypothesis complete observation. The exact work log, structural guard input,
+checked missing reads and changed-output log provide separate mechanisms. The remaining risk
+is overstating the adapter as a deployed-package fix: that consumer connection is explicitly
+not claimed. No theorem says equality of status implies arbitrary contextual behavior equality.
+
+**Verification.** Scoped build of all four new modules and all five documentation appendices is
+GREEN (logs/CX-P10-docbuild.log); default 200000 maxHeartbeats, 6G/two threads. There are
+34 new theorems: 20 generic statements and 14 concrete teeth/invariant statements. Eight real
+definition mutations each built, then the actual Lean kernel rejected the executable tooth.
+Missing-blocker omission: logs/CX-P10-plant-missing-blocker.log:1, Tactic rfl failed on the
+named missing-token refusal; guard/support/blocker observation deletion, always/never dirty,
+no cutoff and stale traces: logs/CX-P10-plant-*.log:1, Tactic decide proved the proposition false.
+All eight complete outputs and mutant-build logs were read, including error/unbound/missing-file/
+Traceback control scan. There are no harness failures. Restoring source is GREEN. Source gates
+with explicit changed paths and message are GREEN (CX-P10-gates1.log); final metadata check and
+each theorem's disjunct read are in the lane report. ROOT's independent reader must review before
+landing. No landing was launched by CX-P10.
+
+**Independent second reader (CX-READER-P10, 2026-10-20 real).** LAND. All 34 statements
+and their definitions/proofs read with the disjunct check: no escape alternative or changed
+landed hypothesis. The five existing Lean files preserve every byte of main's prefix and
+append only add_decl_doc. Def.2.1 minimality is specialized to fixed candidate-index tasks
+over declared finite reads; repair_once and the actual refresh branch supply at-most-once
+evaluation. Early cutoff uses equality of status after a genuinely changed input, for readers
+whose observable is that selected status. These are the paper's properties on this explicit
+one-level graph, not claims of semantic dependency optimality or a dynamic scheduler.
+All eight saved mutant definitions, successful mutant builds, entire tooth outputs and
+restored control were read: semantic kernel failures, no harness failures. An independent
+fresh rebuild of all nine affected source modules passed at 6G/two threads and 200000
+maxHeartbeats (logs/CX-READER-P10-rebuild.log). No source correction was needed. The
+complete-observation adapter still requires the separately owned Std.hole receive-path
+integration; the decision above accurately retains that boundary.

@@ -1193,3 +1193,9 @@ theorem uses_shiftAt (x : Nat) (t : Tm) : uses x (shiftAt x t) = false := by
     split at e <;> omega
 
 end Nanodregg.Lang.Contextual
+
+/-- Ambient-context independence of a contextual box. Davies–Pfenning, A Modal Analysis of
+Staged Computation (2001), §2.3, PDF p.7: modal introduction clears the ordinary context.
+Here the body may use its explicitly declared Ψ, but cannot capture Γ; Ψ = [] recovers the
+closed-code special case. This statement is unchanged. -/
+add_decl_doc Nanodregg.Lang.Contextual.box_ambient_free

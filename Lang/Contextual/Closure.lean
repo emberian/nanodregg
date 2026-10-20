@@ -569,3 +569,9 @@ def countRun (R : List Rule) (F : Nat → Bool) (A : Nat → Bool) : Nat → Nat
   | n + 1 => fun x => countRun R F A n x && decide (0 < supportCount R F (countRun R F A n) x)
 
 end Nanodregg.Lang.Contextual
+
+/-- A retained candidate filling, with its last recorded judgment.
+The positive supports and negative blockers follow Doyle's support-list (SL) justifications,
+IN-list and OUT-list: A Truth Maintenance System, Artificial Intelligence 12 (1979), pp.231–272.
+These are one-level versioned tokens; the closure does not implement Doyle's recursive TMS. -/
+add_decl_doc Nanodregg.Lang.Contextual.Candidate

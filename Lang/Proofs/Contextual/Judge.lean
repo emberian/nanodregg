@@ -218,3 +218,10 @@ theorem find_some {cl : Closure D E} {u : Nat} {I : Iface D E} (h : cl.find u = 
 
 
 end Nanodregg.Lang.Contextual
+
+/-- Immutable versioned premises: reissuing an identifier never revives its old token.
+This deliberately rejects recovery BY IDENTIFIER: Alchourrón–Gärdenfors–Makinson,
+On the Logic of Theory Change (1985), p.513, postulate (−6), recovers an old theory after
+re-adding the SAME proposition. A new token version is a different premise, so this is a
+boundary of that analogy, not a counterexample to AGM's theorem. -/
+add_decl_doc Nanodregg.Lang.Contextual.reissue_never_reenables

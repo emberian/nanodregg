@@ -241,3 +241,12 @@ theorem repair_rejudged_eq_touched {w : World E} {e : Edit E} {cl : Closure D E}
 
 
 end Nanodregg.Lang.Contextual
+
+/-- From-scratch consistency: on a coherent closure, repairing an edit produces exactly the
+candidate-status observation of full recomputation on the same retained problem.
+Stein–Chang–Sridharan, Demanded Abstract Interpretation (2021), Thm.6.1, PDF p.10 names this
+property; Mokhov–Mitchell–Peyton Jones, Build Systems à la Carte (2018), Def.3.1 p.79:11
+gives its build-system analogue. Selection and accepted history are not this observable.
+This is correctness, not Def.2.1 minimality; Trace.repair_minimal supplies the latter for
+declared finite reads. The landed name and coherence premise are unchanged. -/
+add_decl_doc Nanodregg.Lang.Contextual.repair_agrees_from_scratch
