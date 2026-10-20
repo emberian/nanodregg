@@ -1025,3 +1025,15 @@ Mutations, each red: kept-file read unchecked; key-file read unchecked; the exis
 **Critique.** A test that deliberately hands its scratch path to an unjoined thread outliving the creator will see the directory removed. The existing tests use the path within the creating test's lifetime; such a handoff would need an explicit owner.
 
 **Meta-critique.** Thread-local cleanup is attractive because it preserves the PathBuf API. The plant tests the actual destructor boundary rather than assuming that a successful test assertion implies cleanup.
+
+## CLIENT-34 · Scratch plant obeys the standing Clippy rule (2026-10-20, CX-GATES; follow-up to CLIENT-33)
+
+**Premise price.** Landed theorems gaining a hypothesis: none. Landed theorems restated: none.
+
+**Evidence.** Convergence ed34b1b read `cargo clippy` RED at four `expect()` calls in the new scratch-count plant. The file already explicitly permits `clippy::unwrap_used` for failed plant setup. The filtered scratch test had passed; the full standing Clippy lane, which covers all targets, caught this style gate.
+
+**Decision.** Use `unwrap()` at those four setup and join sites. Each failure still fails the test, while the existing file-level lint boundary applies. No assertion, cleanup action or tested behavior changes.
+
+**Critique.** `unwrap()` gives less site-specific panic text than `expect()`. The source line and Rust backtrace still identify the failed setup; keeping the whole-workspace Clippy gate green is worth that diagnostic reduction.
+
+**Meta-critique.** The fast landing judge reached the CLIENT package but did not run the standing Clippy lane. Future test-only changes should run the narrow Clippy target before landing when the crate has stricter workspace lints.
