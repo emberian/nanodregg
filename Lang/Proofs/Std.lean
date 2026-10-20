@@ -747,7 +747,7 @@ theorem windowed_fresh {S T : Ty} {W limit : Nat} {g : Label} {rq n o x : Data} 
 for a change of `guarded` (and at most `limit`) within the old epoch, or restarts at that one
 change in a later epoch, at most `limit` either way. A per-STEP fact: "at most `limit` changes
 per epoch" is its induction over a history, with KERNEL's admission landing each Turn inside its
-signed window; no theorem here states that induction. -/
+signed window: `Lang.Proofs.StdChain.windowed_per_epoch`. -/
 theorem windowed_counts {S T : Ty} {W limit : Nat} {g : Label} {rq n o x : Data} {ℓ : Label}
     (h : Admits lib (windowedLaw S T W limit g) rq n o)
     (ho : rq.field "occasion" = some (.inj ℓ x)) (hl : ℓ = "write" ∨ ℓ = "invoke") :

@@ -11,8 +11,9 @@ the package field produces exactly `Admits` (`Std.runLaw_ref_admits`).
   the arbiter. `escrow_start`: a birth or adoption is at `open`. `escrow_frozen`: no write, no
   law change.
 * `escrow_absorbing`: from `released` or `refunded` nothing is admitted.
-* `escrow_law_payout_once`: along ANY chain of law-admitted acts, from any state, at most one is a
-  payout (an invoke of method 1 or 2).
+* `escrow_law_payout_once`: along ANY chain of law-admitted acts (`Lang.Proofs.Chain`'s `Chain`),
+  from any state, at most one is a payout (an invoke of method 1 or 2): `chain_count` of
+  `payout_settles` (a payout leaves the escrow settled) and `escrow_absorbing`.
 * `escrow_method_results`: what each method returns, whole (`methodResult`: the receiver's method
   application `apply4 0 ℓ` under `[escrow.body]`, extracted at its result type), for every value
   of every term (amount, parties, asset, the object itself, the grant, the phase) and of every
@@ -47,6 +48,7 @@ import Lang.Print
 import Lang.Read
 import Lang.Eval
 import Lang.Proofs.Std
+import Lang.Proofs.Chain
 import Lang.Proofs.Print
 import Lang.Proofs.Wire
 import Ledger.EscrowSpec
@@ -54,7 +56,7 @@ import Ledger.EscrowSpec
 namespace Nanodregg.Ledger.Proofs
 
 open Nanodregg.Lang
-open Nanodregg.Lang.Std (At Admits LawEnv)
+open Nanodregg.Lang.Std (At Admits LawEnv Chain chain_count)
 open Nanodregg.Ledger.Escrow
 
 variable {lib : List Term}
@@ -75,15 +77,6 @@ theorem phase_unique {d : Data} {p q : Label} (hp : PhaseIs d p) (hq : PhaseIs d
   obtain ⟨z, hz⟩ := hq
   rw [hy] at hz
   injection hz with h; injection h
-
-theorem find_mem {α : Type} {ℓ : Label} {b : α} :
-    ∀ {row : List (Label × α)}, Row.find? ℓ row = some b → ℓ ∈ row.map Prod.fst
-  | [], h => by simp [Row.find?] at h
-  | (k, a) :: rest, h => by
-    simp only [Row.find?] at h
-    split at h
-    · rename_i hk; subst hk; simp
-    · exact List.mem_cons_of_mem _ (find_mem h)
 
 /-! ## The clauses -/
 
@@ -165,16 +158,12 @@ theorem escrow_frozen {rq n o : Data} {ℓ : Label} {x : Data}
   obtain ⟨body, hf, hbody⟩ := Std.lawCase5_arm rfl ho hb
   rcases hℓ with rfl | rfl <;> (simp [Row.find?] at hf; subst hf; exact Std.refusedT_not_ok hbody)
 
-/-- An admitted act names one of the five occasions. -/
+/-- An admitted act names one of the five occasions (`Std.lawOf5_occasion`: the escrow's law is a
+`lawOf5`). -/
 theorem escrow_occasion {rq n o : Data} (h : Admits lib law rq n o) :
     ∃ ℓ x, rq.field "occasion" = some (.inj ℓ x) ∧
-      (ℓ = "adopt" ∨ ℓ = "birth" ∨ ℓ = "invoke" ∨ ℓ = "relaw" ∨ ℓ = "write") := by
-  obtain ⟨cenv, w, hb⟩ := h
-  simp only [law, Std.lawOf5, Std.lawBody, Std.lawCase5] at hb
-  obtain ⟨ℓ, y, body, hd, hf, _⟩ := Std.case_field (d := rq) (i := 0) rfl hb
-  have hm := find_mem hf
-  simp at hm
-  exact ⟨ℓ, y, hd, hm⟩
+      (ℓ = "adopt" ∨ ℓ = "birth" ∨ ℓ = "invoke" ∨ ℓ = "relaw" ∨ ℓ = "write") :=
+  Std.lawOf5_occasion h
 
 /-- **Settled is absorbing**: from `released` or `refunded` the law admits nothing. -/
 theorem escrow_absorbing {rq n o : Data} (hs : Settled o) : ¬ Admits lib law rq n o := by
@@ -196,13 +185,6 @@ theorem escrow_absorbing {rq n o : Data} (hs : Settled o) : ¬ Admits lib law rq
 
 /-! ## At most one payout -/
 
-/-- A chain of acts on one escrow, each admitted by the law over the state the previous one left:
-`(request, new state)` pairs from `o`. -/
-inductive Chain (lib : List Term) : Data → List (Data × Data) → Prop
-  | nil (o : Data) : Chain lib o []
-  | cons {o rq n : Data} {rest : List (Data × Data)} :
-      Admits lib law rq n o → Chain lib n rest → Chain lib o ((rq, n) :: rest)
-
 theorem invoked_some {rq : Data} {m : Nat} (h : invoked rq = some m) :
     rq.field "occasion" = some (.inj "invoke" (.nat m)) := by
   unfold invoked at h
@@ -219,23 +201,11 @@ theorem payout_settles {rq n o : Data} (h : Admits lib law rq n o) (hp : isPayou
     · first | exact .inr b | (injection hx with hx; simp [deposit, refund, release] at hx)
     · first | exact .inl b | (injection hx with hx; simp [deposit, refund, release] at hx)
 
-theorem settled_chain {o : Data} {steps : List (Data × Data)} (hs : Settled o) (h : Chain lib o steps) :
-    steps = [] := by
-  cases h with
-  | nil => rfl
-  | cons ha _ => exact (escrow_absorbing hs ha).elim
-
 /-- **The law admits at most one payout in any chain of acts**, from any state. -/
-theorem escrow_law_payout_once {o : Data} {steps : List (Data × Data)} (h : Chain lib o steps) :
-    payouts steps ≤ 1 := by
-  induction h with
-  | nil => simp [payouts]
-  | @cons o rq n rest ha hr ih =>
-    by_cases hp : isPayout rq = true
-    · rw [settled_chain (payout_settles ha hp) hr]
-      simp [payouts, hp]
-    · simp only [payouts, List.filter_cons, hp] at ih ⊢
-      simpa using ih
+theorem escrow_law_payout_once {o : Data} {steps : List (Data × Data)} (h : Chain (Admits lib law) o steps) :
+    payouts steps ≤ 1 :=
+  chain_count (fun s => isPayout s.1) Settled (fun _ _ _ hs hp => payout_settles hs hp)
+    (fun _ _ _ hs ha => escrow_absorbing hs ha) h
 
 /-! ## The calls the methods make, for every value of the terms -/
 
@@ -263,7 +233,7 @@ theorem escrow_method_results (amount : Nat) (arb asset ben dep nk self g : Byte
 
 /-- **No payout before the deposit**: along a chain of law-admitted acts from an `open` escrow,
 the first act that is a deposit or a payout is a deposit (`held` is entered only by method 0). -/
-theorem escrow_deposit_first {o : Data} {steps : List (Data × Data)} (h : Chain lib o steps)
+theorem escrow_deposit_first {o : Data} {steps : List (Data × Data)} (h : Chain (Admits lib law) o steps)
     (ho : PhaseIs o "open") : depositFirst steps = true := by
   induction h with
   | nil => rfl

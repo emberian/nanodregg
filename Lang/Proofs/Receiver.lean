@@ -63,6 +63,34 @@ theorem judgeOne_ok {look : Pinned D} {law : D} {old new : Kernel.Slots} {r : Re
       · cases h
   · cases h
 
+/-- **A faulting law never admits** (the polarity tooth, PROOF-ENGINEERING Q3: sp over the law).
+If law `ℓ` of the package the closure loads faults on the states the judge reads (`runLaw … =
+.error f`: ticks, stack, an arithmetic fault; `runLaw_never_stuck` shows that arm is live and is
+never `stuck`), the judge refuses the transition. `Admits` is a derivation TO `ok`, and a fault is
+none, so a fault is never read as admittance. The tooth: `Std.fault_law` (Lang.Proofs.StdChain) is a law
+the checker accepts at `lawTy` whose run faults. -/
+theorem fault_never_admits {look : Pinned D} {law : D} {old new : Kernel.Slots} {r : Req D}
+    {L : Loaded} {g : Nat} {p : Package} {ℓ : Label} {od nd : Data} {f : Fault}
+    (hload : load digestOf look closureDepthMax (bytesOf law) ⟨[], [], []⟩ = .ok (L, g))
+    (hp : L.pkgs[g]? = some p) (hl : ℓ ∈ p.laws)
+    (hold : readState digestOf (recordRow p.state) old = .ok od)
+    (hnew : readState digestOf (recordRow p.state) new = .ok nd)
+    (hf : runLaw L.lib (.get (.ref g) ℓ) od nd (reqData bytesOf r) = .error f) :
+    judgeOne bytesOf digestOf look law old new r ≠ .ok () := by
+  intro h
+  obtain ⟨L', g', p', o', n', hload', hp', ho', hn', hall⟩ := judgeOne_ok bytesOf digestOf h
+  rw [hload] at hload'
+  cases hload'
+  rw [hp] at hp'
+  cases hp'
+  rw [hold] at ho'
+  cases ho'
+  rw [hnew] at hn'
+  cases hn'
+  have hℓ := hall ℓ hl
+  rw [hf] at hℓ
+  cases hℓ
+
 /-! ## Link 2: a package with no imports loads as itself, at index 0 -/
 
 /-- **What the receiver loads is what the cell holds**: a closure loaded for `law` has, at the index
