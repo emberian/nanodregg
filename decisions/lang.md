@@ -3204,3 +3204,82 @@ under 6G/two threads and maxHeartbeats 200000. Read all five real mutation outpu
 whole, their successful mutant builds, controls, and restored runs; each refusal
 is the expected kernel decide failure. No Lean correction required. The finite
 reference-analyzer and caller-supplied incompatibility limits above remain explicit.
+
+## LANG-73 First-class repair values, composed residuals, policy selection and checked transport (2026-10-20 real; CX-P4)
+**Decision.** New `Lang/Contextual/RepairObjects.lean` and two proof modules
+(`RepairObjects`, `RepairExperiments`) extend LANG-66..69 without changing any landed declaration.
+A `Change E w v` indexes a `Repair D e` value from `State D w` to `Result D v`.
+Atomic repairs call the existing incremental pass. Composition threads state and concatenates
+residual checkpoints, exact inspection logs and named transport refusals. Each residual retains
+its world, template, alternatives and history; its obligations combine the closure's outstanding
+obligations with the full suspended outcomes, without duplicates. It resumes through another edit.
+
+The law `Repair.Sound` separates coherence from conservation of the retained analysis problem
+at every world. `atomic_sound`, `ofChange_sound` and `compose_sound` establish it for the
+actual interpreter and arbitrary sound constituent repairs. `repair_correctness` compares the
+final observation against from-scratch analysis of the ORIGINAL retained problem at the final
+world; conditional soundness and exact-work locality remain independently named results.
+`compose_keeps_obligation` preserves intermediate obligations even when later edits resolve them.
+
+`select policy` minimizes a supplied cost function among intent-eligible candidates that judge
+verified NOW; ties choose the leftmost candidate. It calls the landed select for authority,
+accepted history and final checking. The generic index, eligibility, minimality and selection
+theorems connect the result to the actual retained candidate. Policy is not an input to judge.
+The existing hard budget remains enforced: moving a preference out of the judge does not permit
+silently weakening its established cost guarantee.
+
+A `Correspondence` stores source/target interfaces and forward/backward term maps.
+`Correspondence.Checked : Prop` certifies typing both ways and both inverses on checked
+fillings; `Registry.Sound` certifies every certificate lookup. This follows the existing
+Data/Laws boundary, including LANG-67's explicit guard hypothesis, not an executable claim to
+decide arbitrary function equivalence. `transport` verifies the certificate lookup and source
+typing, conserves every effective source dependency, computes the image and freshly judges the
+destination, including its independent guard, supports, blockers and hard budget. Its evidence
+names the exact registry entry and retains the old term and image. The old five outcome values
+embed unchanged in a type with a sixth semantic case, `transported`. `withTransport` makes
+the offer part of a repair value's result. Transport offers do not change a template or accepted
+selection; the example image reaches ordinary propose/select in an explicitly new template.
+
+**Price premises.** Landed theorems gaining a hypothesis: none. Landed theorems restated: none.
+No wire/Store change, package re-id or re-genesis. Three modules, two proof modules, 719 Lean
+lines (188 deployed), 33 theorems. No existing source module or import is modified.
+
+**Evidence.** Scoped build of `Lang.Proofs.Contextual.RepairExperiments`: GREEN, 14 jobs,
+6G/two threads, Lean's finite default maxHeartbeats 200000. Concrete sessions computed by decide cover withdrawal of
+the last support, resumption and preserved intermediate residuals; minimum-cost vs intent choice;
+wrong chooser, accepted prefix and hard-budget refusal; a representation change, unknown
+certificate, ill-typed source, destination guard/support/cost refusal; distinct transport output
+and normal selection of its image. The world-repair session uses cmttData. The representation
+experiment is deliberately a data-only tagged-Nat checker, NOT a purported CalculusLaws instance:
+its registry equivalence is proved for every Nat payload, and `transport_typing` is the generic
+bridge over any lawful calculus. The concrete session's coherence is proved from the session
+preservation theorem, so the main repair correctness premise is inhabited.
+
+Nine real mutation builds refute omitted intent/current judgment, reversed cost order, ignored
+certificate ID, omitted source/destination checks, lost source hypotheses, discarded intermediate
+residuals and a false backward map. Complete logs were read under lane-prefixed hbox logs; each
+failed in Lean's named contract, not in the driver. Restored source builds GREEN. The certificate
+binding was made explicit in transport_sound after reviewing the certificate mutation.
+
+**Alternatives.** Editing the five-constructor landed Outcome would break every exhaustive match
+and violate this wave's append-only rule; embedding it preserves those proofs while extending
+the result. Treating a forward function alone as an equivalence would accept arbitrary replacement
+and fails the inverse plant. Automatically rewriting the old template would require a theorem
+about all its clients and could violate accepted history; this operation offers a checked filling
+to an explicitly supplied destination, just as replacement is an offer.
+
+**Critique.** Equality of transported terms is syntactic; quotient or observational equivalences
+need a separately stated relation and its laws. A raw caller can supply an unsound registry:
+transport_sound requires Registry.Sound, as the existing calculus and replan theories require
+their laws. This is a Lean-level demonstration, not a new wire certificate format or solver.
+Repair correctness deliberately compares candidate statuses, not history-dependent selections.
+The composition trace retains entire snapshots; this exposes obligations but is not yet a
+space-efficient deployed history representation.
+
+**Meta-critique.** A wrapper called Repair could falsely imply an algebra; the test here is
+compose_sound over arbitrary sound implementations and agreement with the original retained
+problem, alongside a mutation that actually loses an intermediate obligation. Likewise a
+transport tag alone proves nothing: the certificate is tied to a checked two-sided map, the
+destination is rejudged, and the image has a real selection consumer. The remaining temptation
+is to present a tagged-value demonstration as a deployed-language equivalence engine; it is
+explicitly labelled as a checker-only experiment.
