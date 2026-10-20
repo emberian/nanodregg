@@ -31,7 +31,7 @@ open Nanodregg.Lang Nanodregg.Kernel Nanodregg.Kernel.Receive Nanodregg.Ledger.E
 section
 variable {D : Type} {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D}
 
-private theorem load_one {look : Pinned D} {fuel : Nat} {idb : ByteArray} {id : D} {p : Package} {r : Loaded × Nat}
+theorem load_one {look : Pinned D} {fuel : Nat} {idb : ByteArray} {id : D} {p : Package} {r : Loaded × Nat}
     (hid : digestOf idb = some id) (hp : readPackage look id = .ok p) (himp : p.imports = [])
     (hadm : admitPackage digestOf idb p ⟨[], [], []⟩ [] = .ok r) :
     load digestOf look (fuel + 1) idb ⟨[], [], []⟩ = .ok r := by
@@ -40,7 +40,7 @@ private theorem load_one {look : Pinned D} {fuel : Nat} {idb : ByteArray} {id : 
   rw [loadAll]
   exact hadm
 
-private theorem admit_one {idb : ByteArray} {p : Package} (hc : p.checkWith [] = .ok ())
+theorem admit_one {idb : ByteArray} {p : Package} (hc : p.checkWith [] = .ok ())
     (hl : checkLits digestOf p = .ok ()) :
     admitPackage digestOf idb p ⟨[], [], []⟩ [] =
       .ok (⟨[idb], [p.body.relocate fun i => ([] : List Nat).getD i 0], [p]⟩, 0) := by

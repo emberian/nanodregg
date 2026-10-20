@@ -23,7 +23,9 @@ The history covers every invoke of the object, signed or NESTED in another objec
 covered only signed top-level invokes, is deleted: it was this instance). The teeth are
 `Ledger.Proofs.EscrowWitness`'s: `escrow_link_bites` (without the next-state link an admitted
 payout repeats) and `escrow_second_release_refused` (without the judge a release from `released`
-pays again).
+pays again). The premises hold together, with the bound attained, through the real `receive` and
+`World.admit`: `Ledger.Proofs.EscrowAdmitted.escrow_history_witnessed` (a deposit through a grant
+capped at the escrow's amount, then a release; LEDGER-18).
 -/
 import Ledger.Proofs.EscrowWitness
 import Kernel.Proofs.Logic.History

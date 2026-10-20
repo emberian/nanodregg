@@ -15,8 +15,10 @@ denomination), B (the beneficiary), Z (a stranger).
 * E5 A grants P `invoke 0` (deposit) and `invoke 2` (release), B `invoke 1` (refund), Z `invoke 2`.
 * E6 an UNFUNDED deposit (the grant named is not P's grant to the escrow): the whole call is
   refused, the phase stays `open`, no balance moves.
-* E7 P grants the escrow object `transfer 30` on P's account: exactly the deposit, so the kernel, not
-  the package text, bounds what the deposit can move (KERNEL-60, LEDGER-16).
+* E7 P reads the escrow's amount off its live cell (`amountOf`) and grants the escrow object
+  `transfer amount` on P's account: the cap IS the amount, derived from the escrow's own term, not
+  written beside it, so the kernel, not the package text, bounds what the deposit can move
+  (KERNEL-60, LEDGER-16, LEDGER-18).
 * E8 P deposits through it: admitted; `held`; the escrow holds 30, P 70.
 * E9 a second deposit: `notOpen`. E10 Z releases through A's grant: `notParty` (the law checks the
   signer; KERNEL's grant let it reach the law).
@@ -26,16 +28,18 @@ denomination), B (the beneficiary), Z (a stranger).
 * E15 the follower (`World.fold`) and the auditor reach the Host's World.
 
 Plants (each must flip its lines, or the run is RED):
-* skip-judge (the judge admits everything): E3b admitted; E9 is the kernel's `transferSpent` (the
-  grant lent exactly one deposit and E8 spent it; the deposit's once key would refuse it next); E10 admitted (Z pays B: the parties are the law's); E13 and E14 are refused
+* skip-judge (the judge admits everything): E3b admitted; E9 is the kernel's `transferSpent` of
+  E7's grant, by its id (the grant lent exactly one deposit and E8 spent it; the deposit's once key
+  would refuse it next); E10 admitted (Z pays B: the parties are the law's); E13 and E14 are refused
   `spent` (the ONE payout nullifier: the kernel's second line holds without the law).
 * two-keys + skip-judge (refund spends `"refund"`, not `"payout"`, AND no law): E14 is ADMITTED,
   the escrow pays twice (B by release, P by refund): the shared key is what the second line needs.
 * drop-calls (a method's calls never reach the kernel): E6's unfunded deposit is ADMITTED, so the
   escrow is `held` with nothing in it (E8 is then `notOpen`); E11's release is admitted and moves
   nothing.
-* short-cap (P's grant lends one less than the deposit moves: the package asking for `amount + 1` of
-  what it was lent): E8 is refused `transferSpent`, the escrow stays `open` and empty (KERNEL-60).
+* short-cap (P's grant lends `amount - 1`, one less than the deposit moves: the package asking for
+  `amount + 1` of what it was lent): E8 is refused `transferSpent` of E7's grant, by its id, the
+  escrow stays `open` and empty, P keeps all 100 (KERNEL-60, LEDGER-18).
 
 Deterministic: a SEED argument changes nothing. It ends `ALL PASS`.
 -/
@@ -116,6 +120,12 @@ def deniedWith (v why : String) : Bool := v.startsWith "refused lawDenied" && (v
 
 def balanceAt (w : World D) (id : D) : Option Int :=
   (w.live Kernel.Sim.env id).bind fun c => (c.slots.get Value.balanceKey).bind Value.balanceOf
+
+def amountAt (w : World D) (id : D) : Option Nat :=
+  (w.live Kernel.Sim.env id).bind fun c => Escrow.amountOf c.slots
+
+/-- Refused `transferSpent g` by the kernel: the name AND the grant (the verdict's `reprStr`). -/
+def spentOf (v : String) (g : D) : Bool := v == s!"refused transferSpent {reprStr (Refusal.transferSpent g)}"
 
 def phaseAt (w : World D) (id : D) : Option Label :=
   (w.live Kernel.Sim.env id).bind fun c => Escrow.phaseOf c.slots
@@ -216,31 +226,35 @@ def journey (mode : Mode) : Run := Id.run do
     r := note r6 s!"E6 an unfunded deposit: {v6}; phase {phaseAt r6.st.host e}, P {balanceAt r6.st.host acctP}"
       (v6.startsWith "refused" && phaseAt r6.st.host e == some "open" && balanceAt r6.st.host acctP == some 100 &&
         balanceAt r6.st.host acctE == some 0)
-  -- E7 P lends the escrow object exactly the deposit out of its account (short-cap: one less)
-  let cap := if mode == .shortCap then 29 else 30
+  -- E7 P reads the escrow's amount and lends the escrow object exactly that out of its account
+  -- (short-cap: one less)
+  let some amt := amountAt r.st.host e | return note r "E7 the escrow's cell holds no amount" false
+  let cap := if mode == .shortCap then amt - 1 else amt
   let (r7, v7, t7) := call r p [acctP, e] (.grant acctP e [.transfer cap] none)
   let gm := gid t7
-  r := note r7 s!"E7 P grants the escrow transfer {cap} on its account: {v7}" (v7 == "admitted")
+  r := note r7 s!"E7 P reads the escrow's amount {amt} and grants the escrow transfer {cap} on its account: {v7}"
+    (v7 == "admitted" && amt == terms.amount)
   -- E8 deposit
   let some argsDep := depositArgs (bytesOf gm) | return note r "E8 no args" false
   let (r8, v8, _) := invoke r p deposit argsDep gDep [gm]
   r := r8
   let held := phaseAt r.st.host e == some "held"
   if mode == .shortCap then
-    return note r s!"E8 P deposits 30 through a grant of 29: {v8}; phase {phaseAt r.st.host e}, escrow {balanceAt r.st.host acctE}"
-      (refusedAs v8 "transferSpent" && phaseAt r.st.host e == some "open" && balanceAt r.st.host acctE == some 0)
+    return note r s!"E8 P deposits {amt} through a grant of {cap}: {v8}; phase {phaseAt r.st.host e}, escrow {balanceAt r.st.host acctE}, P {balanceAt r.st.host acctP}"
+      (spentOf v8 gm && phaseAt r.st.host e == some "open" && balanceAt r.st.host acctE == some 0 &&
+        balanceAt r.st.host acctP == some 100)
   if mode == .dropCalls then
     r := note r s!"E8 deposit, calls dropped (already held by E6): {v8}; escrow {balanceAt r.st.host acctE}"
       (deniedWith v8 "notOpen" && held && balanceAt r.st.host acctE == some 0)
   else
     r := note r s!"E8 P deposits: {v8}; held {held}, escrow {balanceAt r.st.host acctE}, P {balanceAt r.st.host acctP}"
-      (v8 == "admitted" && held && balanceAt r.st.host acctE == some 30 && balanceAt r.st.host acctP == some 70)
+      (v8 == "admitted" && held && balanceAt r.st.host acctE == some amt && balanceAt r.st.host acctP == some (100 - amt))
   -- E9 deposit again
   let (r9, v9, _) := invoke r p deposit argsDep gDep [gm]
   r := r9
   match mode with
   | .honest | .dropCalls => r := note r s!"E9 a second deposit: {v9}" (deniedWith v9 "notOpen")
-  | _ => r := note r s!"E9 a second deposit, no law: the grant's cap is spent: {v9}" (refusedAs v9 "transferSpent")
+  | _ => r := note r s!"E9 a second deposit, no law: the grant's cap is spent: {v9}" (spentOf v9 gm)
   -- E10 the stranger through A's grant
   let some noA := noArgs | return note r "E10 no args" false
   let (r10, v10, _) := invoke r z release noA gRelZ []

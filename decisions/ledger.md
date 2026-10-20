@@ -836,3 +836,75 @@ no code, wire or package byte changes.
 
 ## LEDGER-16 · LEDGER-6 (c)'s v0 whole-balance grant is superseded by KERNEL-60's `transfer (cap)` (KERNEL-24 with LEDGER-6's agreement, 2026-10-21)
 The depositor grants the escrow object `transfer amount` on its own account, no longer `mutate`. The kernel spends each transfer through the grant from the grant's ledger: `transferSpent` past the cap. So what a deposit can move is bounded by the grant, not by the package text. `mutate` moves no value at all now. The package bytes are unchanged (`escrowDoc` and the methods; E0 stays byte for byte). Only the Escrow header comment changed. ledger-sim: E7 grants `transfer 30`. In the skip-judge plants a second deposit is now refused by the spent cap (`transferSpent`) before the once key. The new plant short-cap grants 29 for a deposit of 30, so the package asks for `amount + 1` of what it was lent: E8 is refused `transferSpent`, and the escrow stays `open` and empty. `ledger-sim 1` ends ALL PASS. `ledger-sim --harness-control 1` reads RED.
+
+## LEDGER-18 · The deposit's authority is exactly its amount: the cap is read off the escrow, and a deposit then a release are an admitted history (LEDGER-7, 2026-10-22; on KERNEL-60's `Right.transfer (cap)`, KERNEL-59's `ObjectHistory`; cv 01a1553b-2765)
+**Decision.** The escrow's deposit is the first real user of `Right.transfer (cap)`. Its grant's cap
+is the escrow's own `amount`, READ, not written beside it. `Escrow.amountOf` decodes the amount term
+from an escrow's slots. ledger-sim's E7 depositor reads it off the live escrow cell and grants
+`transfer amount`, and E7 also checks that the read equals the terms the escrow was born with. The
+short-cap plant grants `amount - 1`. The deposit then moves `amount` through a grant with `amount - 1`
+left, and it is refused `transferSpent` OF THAT GRANT, by its id (`spentOf`, which compares the whole
+refusal, not its name); P keeps all 100. Skip-judge's E9 is pinned the same way. Kernel side:
+`Ledger.Proofs.EscrowAdmitted`.
+- `escrow_history_witnessed`: a signed deposit, then a signed release, of one escrow object. Each is
+  derived by the REAL `receive` (the deposit's transfer through the grant, its ledger append and
+  once nullifier; the release's payout) and admitted by `World.admit`, at a lawful `Ctx` running
+  `Lang.program`. Together they are an `ObjectHistory` whose steps read the package as `escrow`, with
+  `payoutCalls = 1`. So `escrow_invokes_one_payout`'s premises hold together and its bound is reached.
+  This closes LEDGER-15 critique (1).
+- `escrow_deposit_spends_cap`: at a lawful `Ctx` running the language, the deposit is an admitted
+  `ObjectStep` of an object whose package reads as `escrow`, and its one call moves the `amount`
+  its own old state holds (`amountOf`) through grant `g`. `g`'s ledger reads `(1, amount)`
+  before and `(2, 0)` after. The source balance falls by exactly `amount`. On the World it left, the
+  same transfer through `g` is `transferSpent g`.
+- Tooth `escrow_short_cap_refused`: the same admitted deposit's transfer is `transferSpent g` when
+  read in a view equal to its own pinned view except that `g` lends `amount - 1`.
+
+**The instance** (KERNEL's `InvokeWitness` shape): one-byte digests, toy hash `64 + 8·b₀ + b₁`,
+signatures accepted, a hand-built World (member, escrow object, package, three accounts, the grant),
+not reached from a genesis. The witnessed theorems carry no reachability premise. The package is
+read from its install bytes (`readPackage_installed`) and the closure through `load`'s equation
+(`load_one`, now public in EscrowWitness). Everything else, both derivations, runs, judgements and
+admissions, is `decide +kernel`, with no `native_decide`. The module checks in about 70 s of kernel
+time. One pitfall, measured: a `decide +kernel` of `readKind … = .ok pkgCell` compares the package
+literal and did not finish in 25 minutes; `rfl` closes it at once (KERNEL's c1_pkg route).
+
+**Statements kept.** `escrow_runs_one_payout`, `escrow_runs_after_payout`, `escrow_invokes_one_payout`
+and `escrow_invokes_deployed` keep their statements: the deposit's call shape (`via = some grant`)
+did not change, only the grant's right did.
+
+**Owner's read of KERNEL-60's five shape changes** (sent to ROOT first): no statement is weaker.
+- transfer/effect_transfer/credit_authorized: the chain is over `.transfer 0` / `.credit 0`.
+  `rightKey` ignores the cap, so the 0 is a kind marker. Each gains the leaf grant's spend
+  conjuncts.
+- transfer/credit_exact: the frame excludes only `via = some k`, and that `g` is described whole by
+  the new conjunct.
+- Disjunct check: neither authority disjunct follows from the premise or the instance alone.
+
+FINDING: no theorem READS BACK a spend. ROOT ruled: KERNEL-30 proves `LedgerContiguous` over the fold
+and `spend_reads_back`; LEDGER owns `grant_moves_le_cap` on top of it.
+
+**Read.** Second-agent vacuity read with the disjunct check (LEDGER-7-READER; probe
+logs/ledger7r-axioms.lean): LAND-WITH-FIXES, and every fix was taken. There are no disjuncts. Every
+variable is tied: `amt` is both the call's amount and the old state's `amountOf`, and the ledger
+reads are on the `g` the call names. `transferSpent` has the one source `spendVia`, and a missing
+pin is `unpinned`, never `transferSpent`. `payoutCalls = 1` is attained. Axioms are propext,
+Classical.choice and Quot.sound. Fixed from the read:
+(1) `escrow_deposit_spends_cap` did not state that the program is the language, that the Ctx is
+lawful, or that the package reads as `escrow`, so a made-up program met it. It now states all three.
+(2) The short-cap tooth's amount and call were not tied to the escrow. It is now over the admitted
+deposit step, in a view differing from its own only at `g`.
+(3) ledger-sim's honest E8 compared the literals 30/70. It now compares `amt`/`100 - amt`.
+`spentOf` was confirmed to compare the whole refusal, and so the grant id.
+
+**Critique.** (1) The witness World is hand-built, as KERNEL's is. A genesis-reached instance
+needs the toy Env to run ledger-sim's own births, which the kernel evaluator cannot do with FNV over
+the codecs. (2) "Exactly its amount" is shown for this instance. Over every history it is
+`grant_moves_le_cap`, which waits on KERNEL-30. (3) The self-deposit remark (LEDGER-14 (3)) stands.
+The chain over receiver runs is KERNEL-59's `object_history_chain` (LEDGER-14 open (c), done).
+**Meta-critique.** The brief asked for the Escrow package or method to change. Nothing in the
+package can read a grant cell, and a package-side check would be a second, weaker statement of the
+kernel's cap. So the package bytes stand and the derivation lives with the depositor, where the
+grant is made.
+**Nothing moves.** No wire, vector, shipped text or package byte. `escrow` is the same value, and E0
+and E0s pass byte for byte. ledger-sim 1 ALL PASS; --harness-control RED (1).

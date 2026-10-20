@@ -186,6 +186,15 @@ def depositArgs (g : ByteArray) : Option ByteArray := Wire.encodeData depositArg
 
 def noArgs : Option ByteArray := Wire.encodeData unit unitD
 
+/-- The amount an escrow's slots hold (its first term, fixed at birth): what a depositor reads
+before granting the escrow `transfer amount` (LEDGER-18: the cap is the amount, read, not chosen). -/
+def amountOf (s : Kernel.Slots) : Option Nat :=
+  match s.get Kernel.Receive.stateBase with
+  | none => none
+  | some b => match Wire.decodeData .nat b with
+    | .ok (.nat n) => some n
+    | _ => none
+
 /-- The phase an escrow's slots hold. -/
 def phaseOf (s : Kernel.Slots) : Option Label :=
   match s.get (Kernel.Receive.stateBase + 6) with
