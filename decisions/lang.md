@@ -3562,3 +3562,118 @@ read whole; failures are semantic, not harness errors. Worlds source and proof b
 are unchanged. The finite fixed-environment scope, no deployed caller, and distinction
 from Stein's full widening/fixed-point framework remain explicit. Alternative (A)'s
 absorptive-carrier task is OPEN. No source correction or weakened check was required.
+
+## LANG-P11b Material guards, change laws, context morphisms and the modal boundary (2026-10-20 real; Codex CX-P11b)
+
+**Decision.** A demonstration Mini can take, in eleven new LANG leaf modules.
+Existing declarations, including LANG-70..73, remain byte-identical. No wire, Store,
+pin, gate, budget or refusal policy changes. ROOT integrates after independent review.
+
+Material implements a finite address-based specialization of Fouquere–Quatrini
+Def 5.1 (PDF p24). Tests choose paths through a finite filling; material records the
+actual terminal addresses visited, with prefixes implicit and repeated visits retained.
+A successful receipt carries the EXACT test objects and the computed fragment.
+withMaterial conjoins completion interactions with the ORIGINAL interface guard;
+inspectCandidate pairs the existing candidate judge with that receipt. candidate_verified
+and candidate_gaveUp_refused connect the record to the actual judge.
+
+The paper corrects the digest: Def 5.5 (p26) explicitly closes incarnation under
+daimon. Materiality alone therefore does NOT establish successful repair. Completion
+is a separate admission requirement, retaining P1's existing gaveUp refusal. inspect
+distinguishes incomplete visited material from a completed but rejected answer.
+The constructor is spelled incomplete because the existing source gate rejects the
+token partial even as a constructor. No gate was changed.
+
+RepairChanges supplies Cai et al. Def 2.1's data/laws split and lawful replacement
+deltas for decidable observations, with nil, update, difference and associative
+composition. repair_derivative proves the Def 2.4 equation for the ACTUAL Repair
+interpreter from landed from-scratch consistency. composed_derivative consumes the
+landed compose_sound without modifying it. Full Repair result associativity and both
+identity sides additionally preserve residuals, inspection logs and transport refusals.
+Nil keeps the entire state and emits no synthetic recheck or residual.
+
+TransportKinds distinguishes rechecked and internal claims by data constructors.
+Validity is a separate indexed Prop; constructing a tag alone grants nothing.
+recheck uses the landed transport's fresh destination judgment (Ringer et al. p7).
+Observed quotients support internally proved map preservation and inverse laws
+(Viola et al. pp1–2). internal_from_quotient combines quotient equality with a value
+guard, source admission, and explicit checker/dependency/cost preservation to derive
+destination admission. Those are NEW theorem premises, not additional premises on
+any landed result. A genuine many-to-one flag representation has inverse quotient
+maps for all representatives. Internal beta transport reaches the ordinary
+propose/select consumer through Claim.destination.
+
+ContextMorphisms represents substitution values indexed by source and destination
+contexts, with a separate Valid judgment mapping declared variables to same-typed
+terms. Application and composition reuse landed capture-avoiding substFn and its
+typing laws; identity, weakening, heterogeneous exchange and checked strengthening
+are covered. Strengthening is a partial inverse on unused variables, not a total
+substitution for an unavailable variable. Token withdrawal has no constructor in
+this API. This is the context-morphism scope of Cave–Pientka pp1–2.
+
+ModalBoundary provides intrinsically scoped, simply-typed Code and typed syntax
+patterns. Erasure has a HasTy derivation in the actual CMTT calculus; raw_erase
+connects pattern execution to the raw extension installed at an existing Boundary.
+The original candidate checker still protects that extension's domain. A real
+typed beta step preserves the declared beta observation and cost while changing
+the syntax guard: the exact reopened boundary obligation is logicalContract.
+Extensional consumers preserve any declared behavior through congruence. These are
+the two sides of Kavvos's split (p1), using a simply-typed contextual pattern
+fragment inspired by Moebius (pp1–2).
+
+**Price premises.** LANDED theorems gaining hypotheses: none. LANDED theorems
+restated: none. All additions are in new modules; no existing import is edited.
+The extra context, value-guard and evidence conditions appear only on new results.
+No cross-layer ownership exception is required; SIZE.md is the standard SHARED
+generated view.
+
+**Validation.** Scoped build Lang.Proofs.Contextual.P11bExperiments reaches all
+eleven modules under 6G/two threads and the default 200000 heartbeat cap.
+Ten source mutations in lane scratch individually suppress trace capture,
+completion admission, answer acceptance, preservation of the old guard,
+incomplete classification, strengthening's unused-variable check, typed syntax
+refusal, difference reconstruction, requested-cost forwarding and internal
+destination binding. Each mutated definition builds; its concrete Lean probe
+fails; restored definitions/probes succeed. Logs use the hbox
+logs/CX-P11b-plant-<name>-{control,build,red,restore,restored-control}.log names.
+The expected rejection strings were captured from these actual runs, not planted
+by a fake tool. Source gates and the per-theorem disjunct read are in the private
+lane report. No lander was launched.
+
+**Alternatives and critique.** Equating materiality with daimon-freedom is refuted
+by the cited paper itself. Replacing the existing guard would silently weaken
+admission, so the new guard is conjunctive and has a specific mutation tooth.
+The material model is finite and uses explicit interaction paths; it is not full
+ludics, an interpreter-instrumentation system, or a biorthogonal closure algorithm.
+The Cai structure is on observed repair results, NOT a claim that arbitrary
+function-valued Worlds admit a finite edit difference. Replacement deltas are
+lawful but do not promise compact changes or automatic differentiation. Residual
+histories remain explicit; their full associativity is proved separately.
+Quotient evidence only transports the DECLARED observable, and cannot remove the
+other guard/checker/support/cost conditions. This is not a mechanization of
+PUMPKIN Pi's whole algorithm or of the Cubical Agda correctness development.
+The context-morphism API does not implement dependent CTTs substitution-variable
+normal forms. Typed Code is the variable/lambda/application fragment, not the full
+polymorphic/multilevel Moebius language. betaObservation is one explicit contraction,
+not normalization or a global observational-equivalence decision procedure.
+Private data examples are demonstrations; none claim new CalculusLaws instances.
+
+**Meta-critique.** The main temptation was to rename old records after papers and
+call the result their metatheory. Concrete guard, candidate, Repair and boundary
+consumers, complete-result composition laws, quotient inverse maps, and the mutation
+probes supply narrower, executable claims instead. The remaining risk is reading
+these finite fragments as the full cited calculi; their limits are explicit above.
+
+**Independent second reader (Codex CX-READER-P11b, 2026-10-20 real): LAND.**
+Read all 54 theorem statements and their definitions, applying the disjunct check;
+no escape disjunct, no changed landed signature and no additional landed premise.
+Directly checked Fouquere–Quatrini pp24–26, Cai pp2–4, Kavvos pp1–2,
+Moebius pp1–2, Cave–Pientka pp1–2, Ringer p7 and Viola pp1–2.
+The correction above is essential: incarnation is daimon-closed; completion is
+our separate admission requirement. The change structure is on repair observations;
+the recomputation-style derivative does not claim efficient automatic differentiation.
+The typed syntax fragment and quotient transfer do not claim the full cited calculi.
+All ten actual mutation failures and their restored controls were read whole, and
+all saved mutants inspected. Independent scoped build and separate elaboration of
+all eleven added source files passed at 6G/two threads, maxHeartbeats 200000.
+No theorem correction was required; the critique and meta-critique above stand.
